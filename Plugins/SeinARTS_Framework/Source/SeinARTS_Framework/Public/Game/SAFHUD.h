@@ -7,8 +7,8 @@
 
 // Framework includes
 #include "GameFramework/HUD.h"
-#include "Objects/SAFObject.h"
-#include "Objects/SAFUnitMember.h"
+#include "SAFObject.h"
+#include "SAFUnitMember.h"
 
 // Generated includes
 #include "SAFHUD.generated.h"

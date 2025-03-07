@@ -10,10 +10,11 @@ public class SeinARTS_Framework : ModuleRules
 		
 		PublicIncludePaths.AddRange(
 			new string[] {
-				"Game",
-				"GameState",
-				"Objects",
-                "Interfaces"
+				ModuleDirectory + "/Public",
+                ModuleDirectory + "/Public/Game",
+                ModuleDirectory + "/Public/GameState",
+                ModuleDirectory + "/Public/Objects",
+                ModuleDirectory + "/Public/Interfaces",
 				// ... add public include paths required here ...
 			}
 			);

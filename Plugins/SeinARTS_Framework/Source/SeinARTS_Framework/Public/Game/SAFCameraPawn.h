@@ -9,8 +9,8 @@
 #include "Camera/CameraComponent.h"
 
 // Framework includes
-#include "Game/SAFGameModeBase.h"
-#include "Objects/SAFObject.h"
+#include "SAFGameModeBase.h"
+#include "SAFObject.h"
 
 // Generated includes
 #include "SAFCameraPawn.generated.h"

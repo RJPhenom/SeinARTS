@@ -9,11 +9,10 @@
 #include "EnhancedInputSubsystems.h"
 
 // Framework includes
-#include "Framework/SAFCore.h"
-#include "Objects/SAFObject.h"
+#include "SAFObject.h"
 #include "SAFHUD.h"
-#include "Interfaces/SAFISelection.h"
-#include "Interfaces/SAFIOrder.h"
+#include "SAFISelection.h"
+#include "SAFIOrder.h"
 
 
 // Generated includes

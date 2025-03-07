@@ -6,7 +6,6 @@
 #include "CoreMinimal.h"
 
 // Framework includes
-#include "Framework/SAFCore.h"
 
 // Generated includes
 #include "SAFGameInstance.generated.h"

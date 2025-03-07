@@ -7,11 +7,15 @@
 #include "GameFramework/GameModeBase.h"
 
 // Framework includes
-#include "Framework/SAFCore.h"
-#include "Framework/SAFAssetManager.h"
 
 // Generated includes
 #include "SAFGameModeBase.generated.h"
+
+UENUM(BlueprintType)
+enum SAFEnumerator_MapBoundsType {
+	Rect,
+	Radial
+};
 
 /**
  * 
@@ -48,10 +52,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Game Mode|Map & Level Properties")
 	float ZBounds;
 
-	// SeinARTS Properties:
-	// --------------------
-	UPROPERTY(BlueprintReadOnly)
-	ASAFAssetManager* SAFAssetManager;
 
 	// ===============================
 	//      MAP & LEVEL FUNCTIONS
