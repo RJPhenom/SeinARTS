@@ -10,6 +10,10 @@ public class SeinARTS_Framework : ModuleRules
 		
 		PublicIncludePaths.AddRange(
 			new string[] {
+				"Game",
+				"GameState",
+				"Objects",
+				"Interfaces"
 				// ... add public include paths required here ...
 			}
 			);
@@ -36,6 +40,7 @@ public class SeinARTS_Framework : ModuleRules
 			{
 				"CoreUObject",
 				"Engine",
+				"EnhancedInput",
 				"Slate",
 				"SlateCore",
 				// ... add private dependencies that you statically link with here ...	
