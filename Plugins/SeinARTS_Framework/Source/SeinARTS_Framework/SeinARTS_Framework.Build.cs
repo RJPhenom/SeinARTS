@@ -13,7 +13,7 @@ public class SeinARTS_Framework : ModuleRules
 				"Game",
 				"GameState",
 				"Objects",
-				"Interfaces"
+                "Interfaces"
 				// ... add public include paths required here ...
 			}
 			);
