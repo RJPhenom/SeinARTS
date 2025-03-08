@@ -2,11 +2,8 @@
 
 #pragma once
 
-// Engine includes
 #include "CoreMinimal.h"
 #include "UObject/Interface.h"
-
-// Generated includes
 #include "SAFIPlacement.generated.h"
 
 // This class does not need to be modified.

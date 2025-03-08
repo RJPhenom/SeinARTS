@@ -2,11 +2,8 @@
 
 #pragma once
 
-// Engine includes
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
-
-// Generated includes
 #include "SAFUnitMember.generated.h"
 
 

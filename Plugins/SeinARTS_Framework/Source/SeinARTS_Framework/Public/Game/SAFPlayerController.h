@@ -2,20 +2,10 @@
 
 #pragma once
 
-// Engine includes
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerController.h"
 #include "EnhancedInput/Public/EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
-
-// Framework includes
-#include "SAFObject.h"
-#include "SAFHUD.h"
-#include "SAFISelection.h"
-#include "SAFIOrder.h"
-
-
-// Generated includes
 #include "SAFPlayerController.generated.h"
 
 /**
@@ -32,17 +22,18 @@ private:
 	//      ENHANCED INPUT SYSTEM
 	// ===============================
 
-	TWeakObjectPtr<UEnhancedInputComponent> CachedEnhancedInputComponent;
+	FEnhancedInputActionValueBinding* ShiftCommandBinding;
+	FEnhancedInputActionValueBinding* AlternateBinding;
+	FEnhancedInputActionValueBinding* ControlBinding;
 
-	FEnhancedInputActionValueBinding* ShiftCommandActionBinding;
-	FEnhancedInputActionValueBinding* AlternateActionBinding;
-	FEnhancedInputActionValueBinding* ControlActionBinding;
 
 	// ===============================
 	//      SELECTION PROPERTIES
 	// ===============================
 
 	TArray<TWeakObjectPtr<ASAFObject>> Selection;
+	TWeakObjectPtr<ASAFObject> Selected;
+
 
 protected:
 
@@ -80,10 +71,17 @@ public:
 	// Returns the selection as a blueprint accessible array.
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Selection")
 	TArray<ASAFObject*> GetSelection();
+
+	// Returns the currently selected object. Gets the active selected unit if multiple
+	// are selected.
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Selection")
+	ASAFObject* GetSelected();
+
 	// Sets the selection to the provides blueprint-providable array. Returns true if the
 	// operation was successful. Returns false if aborted (invalid object in input array).
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Selection")
 	bool SetSelection(TArray<ASAFObject*> InSelection);
+
 	// Select add the objects in the input array to selection, given:
 	//		i)		The input array has one item, OR
 	//		ii)		The input array items AND the current selection array items 
@@ -94,6 +92,7 @@ public:
 	// is appended.
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Selection")
 	void Select(TArray<ASAFObject*> Targets, bool Additive = false);
+
 	// Deselect removes the units in the input array from selection, if present.
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Selection")
 	void Deselect(TArray<ASAFObject*> Targets);

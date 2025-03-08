@@ -4,6 +4,9 @@
 #include "Game/SAFHUD.h"
 #include "Engine/Canvas.h"
 #include "Engine/Font.h"
+#include "GameFramework/HUD.h"
+#include "SAFObject.h"
+#include "SAFUnitMember.h"
 
 void ASAFHUD::DrawHUD()
 {

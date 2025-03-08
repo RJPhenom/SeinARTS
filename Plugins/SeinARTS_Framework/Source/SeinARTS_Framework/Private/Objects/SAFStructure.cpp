@@ -1,8 +1,7 @@
 
 
 
-#include "Objects/SAFStructure.h"
-
+#include "SAFStructure.h"
 
 // Sets default values
 ASAFStructure::ASAFStructure()

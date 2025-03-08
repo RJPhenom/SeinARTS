@@ -2,12 +2,7 @@
 
 #pragma once
 
-// Engine includes
 #include "CoreMinimal.h"
-
-// Framework includes
-
-// Generated includes
 #include "SAFGameInstance.generated.h"
 
 /**

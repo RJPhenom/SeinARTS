@@ -4,8 +4,6 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerState.h"
-
-// Generated includes
 #include "SAFPlayerState.generated.h"
 
 /**

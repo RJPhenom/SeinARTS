@@ -3,7 +3,8 @@
 
 #include "Game/SAFCameraPawn.h"
 #include "Kismet/KismetMathLibrary.h"
-
+#include "SAFGameModeBase.h"
+#include "SAFPlayerController.h"
 
 ASAFCameraPawn::ASAFCameraPawn()
 {
@@ -33,15 +34,99 @@ void ASAFCameraPawn::Tick(float DeltaTime)
 
 	// Following is handle in tick because its inexpensive.
 	if (GetFollowMode()) {
+		if (!FollowTarget.IsValid()) {
+			ASAFPlayerController* controller = Cast<ASAFPlayerController>(GetController());
+			if (controller) SetFollowTarget(controller->GetSelected());
+		}
+
 		SetActorLocation(FollowTarget->GetActorLocation());
 	}
-
 }
+
+
+// ===============================
+//         ENHANCED INPUT
+// ===============================
 
 void ASAFCameraPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
 
+	if (UEnhancedInputComponent* EnhancedInputComponent = Cast<UEnhancedInputComponent>(InputComponent)) {
+
+		// Action Bindings
+		EnhancedInputComponent->BindAction(MousePanAction, ETriggerEvent::Triggered, this, &ASAFCameraPawn::PanCamera);
+		EnhancedInputComponent->BindAction(MouseRotateAction, ETriggerEvent::Triggered, this, &ASAFCameraPawn::RotateCamera);
+		EnhancedInputComponent->BindAction(MouseZoomAction, ETriggerEvent::Triggered, this, &ASAFCameraPawn::ZoomCamera);
+		EnhancedInputComponent->BindAction(KeyPanAction, ETriggerEvent::Triggered, this, &ASAFCameraPawn::PanCamera);
+		EnhancedInputComponent->BindAction(KeyRotateAction, ETriggerEvent::Triggered, this, &ASAFCameraPawn::RotateCamera);
+		EnhancedInputComponent->BindAction(KeyZoomAction, ETriggerEvent::Triggered, this, &ASAFCameraPawn::ZoomCamera);
+
+		EnhancedInputComponent->BindAction(ToggleMapModeAction, ETriggerEvent::Completed, this, &ASAFCameraPawn::MapModeToggle);
+		EnhancedInputComponent->BindAction(ToggleFollowModeAction, ETriggerEvent::Completed, this, &ASAFCameraPawn::FollowModeToggle);
+
+		// Action Values
+		ActivateMousePanningBinding = &EnhancedInputComponent->BindActionValue(ActivateMousePanningAction);
+		ActivateMouseRotationBinding = &EnhancedInputComponent->BindActionValue(ActivateMouseRotationAction);
+		ActivateFastPanningBinding = &EnhancedInputComponent->BindActionValue(ActivateFastPanningAction);
+
+		HoldFollowModeBinding = &EnhancedInputComponent->BindActionValue(HoldFollowModeAction);
+	}
+}
+
+void ASAFCameraPawn::PanCamera(const FInputActionValue& value) {
+	FVector2D panValue = value.Get<FVector2D>();
+	bool fastPan = (bool)ActivateFastPanningBinding;
+
+	if (value.GetValueType() != EInputActionValueType::Axis2D) {
+		UE_LOG(LogTemp, Error, TEXT("PanCamera action aborted: Expected Axis2D but got a different type!"));
+		return;
+	}
+
+	PanCamera(panValue.X, panValue.Y, fastPan);
+}
+
+void ASAFCameraPawn::RotateCamera(const FInputActionValue& value) {
+	FVector2D rotValue = value.Get<FVector2D>();
+
+	if (value.GetValueType() != EInputActionValueType::Axis2D) {
+		UE_LOG(LogTemp, Error, TEXT("RotateCamera action aborted: Expected Axis2D but got a different type!"));
+		return;
+	}
+
+	RotateCamera(rotValue.X, rotValue.Y);
+}
+
+void ASAFCameraPawn::ZoomCamera(const FInputActionValue& value) {
+	FVector2D zoomValue = value.Get<FVector2D>();
+
+	if (value.GetValueType() != EInputActionValueType::Axis1D) {
+		UE_LOG(LogTemp, Error, TEXT("ZoomCamera action aborted: Expected Axis1D but got a different type!"));
+		return;
+	}
+
+	ZoomCamera(zoomValue);
+}
+
+void ASAFCameraPawn::MapModeToggle(const FInputActionValue& value) {
+	ToggleMapMode();
+}
+
+void ASAFCameraPawn::FollowModeToggle(const FInputActionValue& value) {
+	if (!following) {
+		ASAFPlayerController* controller = Cast<ASAFPlayerController>(GetController());
+
+		if (controller) {
+			SetFollowTarget(controller->GetSelected());
+		}
+
+		else {
+			UE_LOG(LogTemp, Error, TEXT("Follow Mode Toggle failed: player controller is incorrect type! (Requires SAFPlayerController)"));
+			return;
+		}
+	}
+
+	following = !following;
 }
 
 
@@ -84,7 +169,7 @@ void ASAFCameraPawn::PanCamera(float PanX, float PanY, bool Fast) {
 	AddMovementInput(ForwardVector, ScaleY);
 
 	// Consume and wrap in bounds, then move
-	FVector MovementVector = ConsumeMovementInputVector();
+	FVector MovementVector = ConsumeMovementInputVector() + GetActorLocation();
 	FVector SafeMovementVector = Cast<ASAFGameModeBase>(GetWorld()->GetAuthGameMode())->GetSafeVectorWithinMapBounds(MovementVector);
 
 	SetActorLocation(SafeMovementVector);
@@ -102,7 +187,7 @@ void ASAFCameraPawn::PanCameraAltitude(float PanZ, bool Fast) {
 	AddMovementInput(FVector::UpVector, ScaleZ);
 
 	// Consume and wrap in bounds
-	FVector MovementVector = ConsumeMovementInputVector();
+	FVector MovementVector = ConsumeMovementInputVector() + GetActorLocation();
 	FVector SafeMovementVector = Cast<ASAFGameModeBase>(GetWorld()->GetAuthGameMode())->GetSafeVectorWithinMapBounds(MovementVector);
 
 	SetActorLocation(SafeMovementVector);

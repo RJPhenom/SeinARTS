@@ -2,17 +2,12 @@
 
 #pragma once
 
-// Engine includes
 #include "CoreMinimal.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/SpringArmComponent.h"
+#include "EnhancedInput/Public/EnhancedInputComponent.h"
 #include "Camera/CameraComponent.h"
-
-// Framework includes
-#include "SAFGameModeBase.h"
 #include "SAFObject.h"
-
-// Generated includes
 #include "SAFCameraPawn.generated.h"
 
 // Dispatchers (these are useful for users who will be scripting events
@@ -30,6 +25,26 @@ class SEINARTS_FRAMEWORK_API ASAFCameraPawn : public APawn
 private:
 
     bool isFreeCam;
+    bool following;
+
+    // ===============================
+    //      ENHANCED INPUT SYSTEM
+    // ===============================
+
+    // Action Bindings
+    void PanCamera(const FInputActionValue& value);
+    void RotateCamera(const FInputActionValue& value);
+    void ZoomCamera(const FInputActionValue& value);
+
+    void MapModeToggle(const FInputActionValue& value);
+    void FollowModeToggle(const FInputActionValue& value);
+
+    // Action Values
+    FEnhancedInputActionValueBinding* ActivateMousePanningBinding;
+    FEnhancedInputActionValueBinding* ActivateMouseRotationBinding;
+    FEnhancedInputActionValueBinding* ActivateFastPanningBinding;
+
+    FEnhancedInputActionValueBinding* HoldFollowModeBinding;
 
 
 protected:
@@ -43,6 +58,37 @@ public:
 
     virtual void Tick(float DeltaTime) override;
     virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
+
+
+    // ===============================
+    //      ENHANCED INPUT SYSTEM
+    // ===============================
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Input")
+    UInputAction* ActivateMousePanningAction;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Input")
+    UInputAction* ActivateMouseRotationAction;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Input")
+    UInputAction* ActivateFastPanningAction;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Input")
+    UInputAction* MousePanAction;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Input")
+    UInputAction* MouseRotateAction;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Input")
+    UInputAction* MouseZoomAction;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Input")
+    UInputAction* KeyPanAction;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Input")
+    UInputAction* KeyRotateAction;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Input")
+    UInputAction* KeyZoomAction;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Input")
+    UInputAction* ToggleMapModeAction;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Input")
+    UInputAction* ToggleFollowModeAction;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Input")
+    UInputAction* HoldFollowModeAction;
 
     // ===============================
     //        EVENT DISPATCHERS
@@ -78,7 +124,7 @@ public:
     bool MapMode = false;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Toggles & Modes")
-    float MapModeOffset;
+    float MapModeOffset = 100.0f;
 
     // Toggles the FreeCam setting: FreeCam is for when the desired control scheme is for a
     // "floating head in space", otherwise the camera is the default "anchored pivot point"
@@ -112,19 +158,20 @@ public:
     
     // Controls the zoom speed.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Zoom")
-    float ZoomSpeed;
+    float ZoomSpeed = 10.0f;
 
     // Controls the zoom speed amplification when in MapMode
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Zoom")
-    float ZoomCoefficient;
+    float ZoomCoefficient = 10.0f;
 
     // Minimum zoom Level (no effect if FreeCam)
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Zoom")
-    float ZoomMin;
+    float ZoomMin = 10.0f;
 
     // Maximum zoom level (no effect if FreeCam)
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Zoom")
-    float ZoomMax;
+    float ZoomMax = 100.0f;
+
 
     // ===============================
     //       MOVEMENT PROPERTIES
@@ -132,16 +179,16 @@ public:
 
     // Controls the base camera movement speed.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement")
-    float MoveSpeed;
+    float MoveSpeed = 10.0f;
 
     // Controls movement speed amplification when in MapMode
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement")
-    float MoveCoefficient;
+    float MoveCoefficient = 10.0f;
 
     // Controls movement speed amplification when "shift-panning" or fast-scrolling.
     // To disable/not use fast scrolling, set to 1.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement")
-    float MoveFastCoefficient;
+    float MoveFastCoefficient = 2.0f;
 
 
     // ===============================
@@ -150,7 +197,7 @@ public:
 
     // Controls rotation speed of the camera.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Rotation")
-    float RotationSpeed;
+    float RotationSpeed = 10.0f;
 
 
     // ===============================
@@ -212,7 +259,7 @@ public:
     // Returns if there is a follow target, which indicates the camera is in
     // follow mode (if confused as to why, see ToggleFollow implementation).
     UFUNCTION(BlueprintPure, Category = "SeinARTS|Toggles & Modes")
-    bool GetFollowMode() const { return FollowTarget.IsValid(); };
+    bool GetFollowMode() const { return following || (bool)HoldFollowModeBinding; };
 
     // Returns the current follow target.
     UFUNCTION(BlueprintPure, Category = "SeinARTS|Toggles & Modes")

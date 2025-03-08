@@ -2,14 +2,9 @@
 
 #pragma once
 
-// Engine includes
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
-
-// Framework includes
 #include "SAFObject.h"
-
-// Generated includes
 #include "SAFUnit.generated.h"
 
 UCLASS()

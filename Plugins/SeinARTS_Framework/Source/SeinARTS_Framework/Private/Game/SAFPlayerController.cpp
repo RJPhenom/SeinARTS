@@ -3,6 +3,10 @@
 
 #include "Game/SAFPlayerController.h"
 #include "EnhancedInput/Public/InputActionValue.h"
+#include "SAFObject.h"
+#include "SAFHUD.h"
+#include "SAFISelection.h"
+#include "SAFIOrder.h"
 
 ASAFPlayerController::ASAFPlayerController()
 {
@@ -20,7 +24,6 @@ void ASAFPlayerController::SetupInputComponent() {
 	Super::SetupInputComponent();
 
 	if (UEnhancedInputComponent* EnhancedInputComponent = Cast<UEnhancedInputComponent>(InputComponent)) {
-		CachedEnhancedInputComponent = EnhancedInputComponent;
 
 		// Action Bindings
 		EnhancedInputComponent->BindAction(SelectionAction, ETriggerEvent::Started, this, &ASAFPlayerController::StartSelector);
@@ -31,9 +34,9 @@ void ASAFPlayerController::SetupInputComponent() {
 		EnhancedInputComponent->BindAction(ControlAction, ETriggerEvent::Started, this, &ASAFPlayerController::StartSelector);
 
 		// Action Values
-		ShiftCommandActionBinding = &EnhancedInputComponent->BindActionValue(ShiftCommandAction);
-		AlternateActionBinding = &EnhancedInputComponent->BindActionValue(AlternateAction);
-		ControlActionBinding = &EnhancedInputComponent->BindActionValue(ControlAction);
+		ShiftCommandBinding = &EnhancedInputComponent->BindActionValue(ShiftCommandAction);
+		AlternateBinding = &EnhancedInputComponent->BindActionValue(AlternateAction);
+		ControlBinding = &EnhancedInputComponent->BindActionValue(ControlAction);
 	}
 
 }
@@ -46,6 +49,21 @@ TArray<ASAFObject*> ASAFPlayerController::GetSelection() {
 	}
 
 	return SelectedSAFObjects;
+}
+
+ASAFObject* ASAFPlayerController::GetSelected() {
+	if (!Selected.Get()) {
+		if (Selection.Num() <= 0) {
+			UE_LOG(LogTemp, Error, TEXT("Could not retrieve active selected unit because selection is empty!"));
+			return nullptr;
+		}
+
+		else {
+			Selected = Selection[0];
+		}
+	}
+
+	return Selected.Get();
 }
 
 bool ASAFPlayerController::SetSelection(TArray<ASAFObject*> InSelection) {
@@ -127,7 +145,7 @@ void ASAFPlayerController::EndSelector(const FInputActionValue& value) {
 		);
 	}
 
-	bool Additive = ShiftCommandActionBinding->GetValue().Get<bool>();
+	bool Additive = ShiftCommandBinding->GetValue().Get<bool>();
 	Select(SelectedItems, Additive);
 }
 

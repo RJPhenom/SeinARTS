@@ -2,9 +2,15 @@
 
 
 #include "Game/SAFGameModeBase.h"
+#include "SAFPlayerController.h"
+#include "SAFHUD.h"
+#include "SAFCameraPawn.h"
+#include "SAFPlayerState.h"
 
 ASAFGameModeBase::ASAFGameModeBase() {
-	
+    DefaultPawnClass = ASAFCameraPawn::StaticClass();
+    HUDClass = ASAFHUD::StaticClass();
+    PlayerControllerClass = ASAFPlayerController::StaticClass();
 }
 
 bool ASAFGameModeBase::CheckVectorWithinMapBounds(FVector Vector) {

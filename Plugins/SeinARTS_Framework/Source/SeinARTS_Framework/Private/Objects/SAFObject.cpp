@@ -1,7 +1,7 @@
 
 
 
-#include "Objects/SAFObject.h"
+#include "SAFObject.h"
 
 
 // Sets default values

@@ -2,15 +2,8 @@
 
 #pragma once
 
-// Engine includes
 #include "CoreMinimal.h"
-
-// Framework includes
 #include "GameFramework/HUD.h"
-#include "SAFObject.h"
-#include "SAFUnitMember.h"
-
-// Generated includes
 #include "SAFHUD.generated.h"
 
 /**
