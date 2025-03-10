@@ -28,10 +28,8 @@ void ASAFPlayerController::SetupInputComponent() {
 		// Action Bindings
 		EnhancedInputComponent->BindAction(SelectionAction, ETriggerEvent::Started, this, &ASAFPlayerController::StartSelector);
 		EnhancedInputComponent->BindAction(SelectionAction, ETriggerEvent::Completed, this, &ASAFPlayerController::EndSelector);
+		EnhancedInputComponent->BindAction(SelectionAction, ETriggerEvent::Canceled, this, &ASAFPlayerController::EndSelector);
 		EnhancedInputComponent->BindAction(OrderAction, ETriggerEvent::Started, this, &ASAFPlayerController::StartSelector);
-		EnhancedInputComponent->BindAction(ShiftCommandAction, ETriggerEvent::Started, this, &ASAFPlayerController::StartSelector);
-		EnhancedInputComponent->BindAction(AlternateAction, ETriggerEvent::Started, this, &ASAFPlayerController::StartSelector);
-		EnhancedInputComponent->BindAction(ControlAction, ETriggerEvent::Started, this, &ASAFPlayerController::StartSelector);
 
 		// Action Values
 		ShiftCommandBinding = &EnhancedInputComponent->BindActionValue(ShiftCommandAction);
@@ -135,7 +133,7 @@ void ASAFPlayerController::EndSelector(const FInputActionValue& value) {
 	TArray<ASAFObject*> SelectedItems;
 
 	if (HUD) {
-		 //SelectedItems = HUD->ReceiveSelectorEnded(); TODO: fix
+		 SelectedItems = HUD->ReceiveSelectorEnded(); //TODO: fix
 	}
 
 	else {

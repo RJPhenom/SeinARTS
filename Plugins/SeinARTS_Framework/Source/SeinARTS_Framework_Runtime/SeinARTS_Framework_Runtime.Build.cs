@@ -2,9 +2,9 @@
 
 using UnrealBuildTool;
 
-public class SeinARTS_Framework : ModuleRules
+public class SeinARTS_Framework_Runtime : ModuleRules
 {
-	public SeinARTS_Framework(ReadOnlyTargetRules Target) : base(Target)
+	public SeinARTS_Framework_Runtime(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
 		

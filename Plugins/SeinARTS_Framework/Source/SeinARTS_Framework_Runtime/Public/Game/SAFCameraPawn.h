@@ -6,6 +6,7 @@
 #include "GameFramework/Pawn.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "EnhancedInput/Public/EnhancedInputComponent.h"
+#include "InputMappingContext.h"
 #include "Camera/CameraComponent.h"
 #include "SAFObject.h"
 #include "SAFCameraPawn.generated.h"
@@ -16,20 +17,23 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FCameraSnapDispatcher);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FCameraPanDispatcher);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FCameraRotateDispatcher);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FCameraZoomDispatcher);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FToggleMapModeDispatcher);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FToggleFollowModeDispatcher);
 
 UCLASS()
-class SEINARTS_FRAMEWORK_API ASAFCameraPawn : public APawn
+class SEINARTS_FRAMEWORK_RUNTIME_API ASAFCameraPawn : public APawn
 {
 	GENERATED_BODY()
 
 private:
 
     bool isFreeCam;
-    bool following;
 
     // ===============================
     //      ENHANCED INPUT SYSTEM
     // ===============================
+
+    FVector2D GetMouseDelta();
 
     // Action Bindings
     void PanCamera(const FInputActionValue& value);
@@ -40,9 +44,9 @@ private:
     void FollowModeToggle(const FInputActionValue& value);
 
     // Action Values
-    FEnhancedInputActionValueBinding* ActivateMousePanningBinding;
-    FEnhancedInputActionValueBinding* ActivateMouseRotationBinding;
-    FEnhancedInputActionValueBinding* ActivateFastPanningBinding;
+    FEnhancedInputActionValueBinding* MousePanBinding;
+    FEnhancedInputActionValueBinding* MouseRotateBinding;
+    FEnhancedInputActionValueBinding* FastPanBinding;
 
     FEnhancedInputActionValueBinding* HoldFollowModeBinding;
 
@@ -65,12 +69,6 @@ public:
     // ===============================
 
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Input")
-    UInputAction* ActivateMousePanningAction;
-    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Input")
-    UInputAction* ActivateMouseRotationAction;
-    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Input")
-    UInputAction* ActivateFastPanningAction;
-    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Input")
     UInputAction* MousePanAction;
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Input")
     UInputAction* MouseRotateAction;
@@ -82,7 +80,8 @@ public:
     UInputAction* KeyRotateAction;
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Input")
     UInputAction* KeyZoomAction;
-
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Input")
+    UInputAction* FastPanAction;
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Input")
     UInputAction* ToggleMapModeAction;
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Input")
@@ -90,27 +89,33 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Input")
     UInputAction* HoldFollowModeAction;
 
+
+
     // ===============================
     //        EVENT DISPATCHERS
     // ===============================
 
     UPROPERTY(BlueprintAssignable, BlueprintCallable, Category = "SeinARTS|Event Dispatchers")
-    FCameraSnapDispatcher OnCameraSnap;
+    FCameraSnapDispatcher CameraSnapDispatcher;
     UPROPERTY(BlueprintAssignable, BlueprintCallable, Category = "SeinARTS|Event Dispatchers")
-    FCameraPanDispatcher OnCameraPan;
+    FCameraPanDispatcher CameraPanDispatcher;
     UPROPERTY(BlueprintAssignable, BlueprintCallable, Category = "SeinARTS|Event Dispatchers")
-    FCameraRotateDispatcher OnCameraRotate;
+    FCameraRotateDispatcher CameraRotateDispatcher;
     UPROPERTY(BlueprintAssignable, BlueprintCallable, Category = "SeinARTS|Event Dispatchers")
-    FCameraZoomDispatcher OnCameraZoom;
+    FCameraZoomDispatcher CameraZoomDispatcher;
+    UPROPERTY(BlueprintAssignable, BlueprintCallable, Category = "SeinARTS|Event Dispatchers")
+    FToggleMapModeDispatcher ToggleMapModeDispatcher;
+    UPROPERTY(BlueprintAssignable, BlueprintCallable, Category = "SeinARTS|Event Dispatchers")
+    FToggleFollowModeDispatcher ToggleFollowModeDispatcher;
 
 
     // ===============================
     //           COMPONENTS
     // ===============================
 
-    UPROPERTY(VisibleAnywhere, BlueprintReadWrite, Category = "SeinARTS|Components")
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "SeinARTS|Components")
     USpringArmComponent* SpringArmComponent;
-    UPROPERTY(VisibleAnywhere, BlueprintReadWrite, Category = "SeinARTS|Components")
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "SeinARTS|Components")
     UCameraComponent* CameraComponent;
 
 
@@ -120,8 +125,14 @@ public:
 
     // If the camera is in Map Mode: Map Mode is a zoomed-out macro-view that is not
     // necessary to utilize. Returns if false if the camera is in Local Mode (default).
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Toggles & Modes")
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Toggles & Modes")
     bool MapMode = false;
+
+    // If the camera is in Follow Mode: Follow Mode is when the camera follows an object
+    // in the game world, keeping it centered. Requires FollowTarget to be set in order
+    // to work.
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Toggles & Modes")
+    bool FollowMode = false;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Toggles & Modes")
     float MapModeOffset = 100.0f;
@@ -130,7 +141,7 @@ public:
     // "floating head in space", otherwise the camera is the default "anchored pivot point"
     // Where the camera follows, rotates, and tilts relative to a position in view, usually
     // following a ground plane.
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Toggles & Modes")
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Toggles & Modes")
     bool FreeCam = false;
 
     // Stored values for toggling back to LocalMode from MapMode.
@@ -158,7 +169,7 @@ public:
     
     // Controls the zoom speed.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Zoom")
-    float ZoomSpeed = 10.0f;
+    float ZoomSpeed = 100.0f;
 
     // Controls the zoom speed amplification when in MapMode
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Zoom")
@@ -170,7 +181,15 @@ public:
 
     // Maximum zoom level (no effect if FreeCam)
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Zoom")
-    float ZoomMax = 100.0f;
+    float ZoomMax = 1000.0f;
+
+    // Zoom is smoothed using linear interpolation. This controls the alpha input of the
+    // interpolation. 
+    //      0 = 100% current value (no zoom) 
+    //    0.5 = 50% (default)
+    //      1 = 100% target value (no smoothing)
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Zoom")
+    float ZoomInterpFactor = 0.5f;
 
 
     // ===============================
@@ -190,6 +209,14 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement")
     float MoveFastCoefficient = 2.0f;
 
+    // Movement is smoothed using linear interpolation. This controls the alpha input of 
+    // the interpolation. 
+    //      0 = 100% current value (no panning) 
+    //    0.5 = 50% (default)
+    //      1 = 100% target value (no smoothing)
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Zoom")
+    float MoveInterpFactor = 0.5f;
+
 
     // ===============================
     //       ROTATION PROPERTIES
@@ -197,7 +224,17 @@ public:
 
     // Controls rotation speed of the camera.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Rotation")
-    float RotationSpeed = 10.0f;
+    float RotationSpeed = 1.0f;
+
+    // Inverts the Y input. This effects pitch rotation, and is on by default.
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Rotation")
+    bool InvertYAxis = true;
+
+    // Requires the mouse panning button (Default: MMB) to be pressed in order to
+    // trigger mouse rotation. This action then blacks panning until the Activate
+    // Mouse Rotation action (Default: Left Alt). Off by default.
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Rotation")
+    bool RequiresMousePanAction = false;
 
 
     // ===============================
@@ -223,7 +260,7 @@ public:
     // Rotates the camera (Roll rotation omitted as its not generally used, 
     // and this simplifies rotations controls greatly).
     UFUNCTION(BlueprintCallable, Category = "SeinARTS|Rotation")
-    void RotateCamera(float Pitch, float Yaw);
+    void RotateCamera(float Yaw, float Pitch);
 
     // Snaps camera rotation to look at the given vector. Optionally uses a 
     // rotator.
@@ -256,22 +293,34 @@ public:
     UFUNCTION(BlueprintCallable, Category = "SeinARTS|Toggles & Modes")
     void ToggleMapMode();
 
-    // Returns if there is a follow target, which indicates the camera is in
-    // follow mode (if confused as to why, see ToggleFollow implementation).
-    UFUNCTION(BlueprintPure, Category = "SeinARTS|Toggles & Modes")
-    bool GetFollowMode() const { return following || (bool)HoldFollowModeBinding; };
+    // Toggles the camera into follow mode. See FollowMode property for more info.
+    UFUNCTION(BlueprintCallable, Category = "SeinARTS|Toggles & Modes")
+    void ToggleFollowMode();
+
+    // Returns if follow mode is active. Follow mode is active when either following OR 
+    // HoldFollowModeBinding is true.
+    UFUNCTION(BlueprintCallable, Category = "SeinARTS|Toggles & Modes")
+    bool GetFollowMode() const { return FollowMode || (bool)HoldFollowModeBinding; };
 
     // Returns the current follow target.
-    UFUNCTION(BlueprintPure, Category = "SeinARTS|Toggles & Modes")
+    UFUNCTION(BlueprintCallable, Category = "SeinARTS|Toggles & Modes")
     ASAFObject* GetFollowTarget() const { return FollowTarget.Get(); };
 
     // Sets the object to follow in follow mode.
     UFUNCTION(BlueprintCallable, Category = "SeinARTS|Toggles & Modes")
     void SetFollowTarget(ASAFObject* Target) { FollowTarget = Target; };
 
-    // Clears the object to follow, thus deactivating follow mode.
+    // Clears the object to follow. This will also deactive following.
     UFUNCTION(BlueprintCallable, Category = "SeinARTS|Toggles & Modes")
-    void ClearFollowTarget() { FollowTarget = nullptr; };
+    void ClearFollowTarget() { FollowTarget = nullptr; FollowMode = false; };
 
+    // Toggles default functionality for when map toggles.
+    UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Toggles & Modes")
+    void OnToggleMapMode();
+    virtual void OnToggleMapMode_Implementation();
 
+    // Toggles default functionality for when follow mode toggles.
+    UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Toggles & Modes")
+    void OnToggleFollowMode();
+    virtual void OnToggleFollowMode_Implementation();
 };

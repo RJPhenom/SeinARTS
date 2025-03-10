@@ -9,7 +9,7 @@
  * 
  */
 UCLASS()
-class SEINARTS_FRAMEWORK_API USAFGameInstance : public UGameInstance
+class SEINARTS_FRAMEWORK_RUNTIME_API USAFGameInstance : public UGameInstance
 {
 	GENERATED_BODY()
 

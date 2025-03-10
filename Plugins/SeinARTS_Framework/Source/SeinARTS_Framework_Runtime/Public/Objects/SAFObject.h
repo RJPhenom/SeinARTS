@@ -4,17 +4,16 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
-#include "SAFObject.h"
-#include "SAFStructure.generated.h"
+#include "SAFObject.generated.h"
 
 UCLASS()
-class SEINARTS_FRAMEWORK_API ASAFStructure : public ASAFObject
+class SEINARTS_FRAMEWORK_RUNTIME_API ASAFObject : public AActor
 {
 	GENERATED_BODY()
 	
 public:	
 	// Sets default values for this actor's properties
-	ASAFStructure();
+	ASAFObject();
 
 protected:
 	// Called when the game starts or when spawned
@@ -24,5 +23,5 @@ public:
 	// Called every frame
 	virtual void Tick(float DeltaTime) override;
 
-	
+
 };

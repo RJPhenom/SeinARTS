@@ -16,7 +16,7 @@ class USAFIConstruction : public UInterface
 /**
  * 
  */
-class SEINARTS_FRAMEWORK_API ISAFIConstruction
+class SEINARTS_FRAMEWORK_RUNTIME_API ISAFIConstruction
 {
 	GENERATED_BODY()
 

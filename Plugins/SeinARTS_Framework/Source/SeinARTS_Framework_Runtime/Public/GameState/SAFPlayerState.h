@@ -10,7 +10,7 @@
  * 
  */
 UCLASS()
-class SEINARTS_FRAMEWORK_API ASAFPlayerState : public APlayerState
+class SEINARTS_FRAMEWORK_RUNTIME_API ASAFPlayerState : public APlayerState
 {
 	GENERATED_BODY()
 	

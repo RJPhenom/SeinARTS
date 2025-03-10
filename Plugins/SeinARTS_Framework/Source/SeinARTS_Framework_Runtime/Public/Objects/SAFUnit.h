@@ -8,7 +8,7 @@
 #include "SAFUnit.generated.h"
 
 UCLASS()
-class SEINARTS_FRAMEWORK_API ASAFUnit : public ASAFObject
+class SEINARTS_FRAMEWORK_RUNTIME_API ASAFUnit : public ASAFObject
 {
 	GENERATED_BODY()
 	
@@ -31,5 +31,6 @@ protected:
 public:	
 	// Called every frame
 	virtual void Tick(float DeltaTime) override;
+
 
 };

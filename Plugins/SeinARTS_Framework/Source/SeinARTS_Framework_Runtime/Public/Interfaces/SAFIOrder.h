@@ -16,7 +16,7 @@ class USAFIOrder : public UInterface
 /**
  *
  */
-class SEINARTS_FRAMEWORK_API ISAFIOrder
+class SEINARTS_FRAMEWORK_RUNTIME_API ISAFIOrder
 {
 	GENERATED_BODY()
 

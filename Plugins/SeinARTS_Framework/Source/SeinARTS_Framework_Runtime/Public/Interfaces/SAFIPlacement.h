@@ -16,7 +16,7 @@ class USAFIPlacement : public UInterface
 /**
  * 
  */
-class SEINARTS_FRAMEWORK_API ISAFIPlacement
+class SEINARTS_FRAMEWORK_RUNTIME_API ISAFIPlacement
 {
 	GENERATED_BODY()
 

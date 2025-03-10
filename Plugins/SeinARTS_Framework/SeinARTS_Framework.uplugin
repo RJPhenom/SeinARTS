@@ -1,24 +1,34 @@
 {
-	"FileVersion": 3,
-	"Version": 1,
-	"VersionName": "1.0",
-	"FriendlyName": "SeinARTS_Framework",
-	"Description": "Implements an Action-RTS Gameplay Framework for Unreal Engine.",
-	"Category": "Other",
-	"CreatedBy": "RJ Macklem",
-	"CreatedByURL": "https://github.com/RJPhenom",
-	"DocsURL": "",
-	"MarketplaceURL": "",
-	"SupportURL": "",
-	"CanContainContent": true,
-	"IsBetaVersion": true,
-	"IsExperimentalVersion": false,
-	"Installed": false,
-	"Modules": [
-		{
-			"Name": "SeinARTS_Framework",
-			"Type": "Runtime",
-			"LoadingPhase": "Default"
-		}
-	]
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "1.0",
+  "Modules": [
+    {
+      "Name": "SeinARTS_Framework_Runtime",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    },
+    {
+      "Name": "SeinARTS_Framework_Editor",
+      "Type": "Editor",
+      "LoadingPhase": "PostEngineInit"
+    }
+  ],
+  "FriendlyName": "SeinARTS_Framework",
+  "Description": "Implements an Action-RTS Gameplay Framework for Unreal Engine.",
+  "Category": "Other",
+  "CreatedBy": "RJ Macklem",
+  "CreatedByURL": "https://github.com/RJPhenom",
+  "DocsURL": "",
+  "MarketplaceURL": "",
+  "SupportURL": "",
+  "CanContainContent": "true",
+  "Installed": true,
+  "IsBetaVersion": true,
+  "Plugins": [
+    {
+      "Name": "EnhancedInput",
+      "Enabled": true
+    }
+  ]
 }

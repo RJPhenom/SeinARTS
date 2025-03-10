@@ -16,7 +16,7 @@ class USAFISelection : public UInterface
 /**
  * 
  */
-class SEINARTS_FRAMEWORK_API ISAFISelection
+class SEINARTS_FRAMEWORK_RUNTIME_API ISAFISelection
 {
 	GENERATED_BODY()
 

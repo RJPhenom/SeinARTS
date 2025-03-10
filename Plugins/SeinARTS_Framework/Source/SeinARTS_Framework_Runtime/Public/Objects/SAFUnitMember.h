@@ -8,7 +8,7 @@
 
 
 UCLASS( ClassGroup=(Custom), meta=(BlueprintSpawnableComponent) )
-class SEINARTS_FRAMEWORK_API USAFUnitMember : public USceneComponent
+class SEINARTS_FRAMEWORK_RUNTIME_API USAFUnitMember : public USceneComponent
 {
 	GENERATED_BODY()
 

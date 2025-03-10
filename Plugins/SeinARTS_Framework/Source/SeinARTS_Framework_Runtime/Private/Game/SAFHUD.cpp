@@ -2,6 +2,7 @@
 
 
 #include "Game/SAFHUD.h"
+
 #include "Engine/Canvas.h"
 #include "Engine/Font.h"
 #include "GameFramework/HUD.h"
@@ -26,10 +27,17 @@ void ASAFHUD::DrawHUD()
             DrawLine(SelectorX, SelectorH, SelectorW, SelectorH, SelectorBorderColour); // bottom
 
             // Fill
-            DrawRect(SelectorFillColour, SelectorX, SelectorY, SelectorW, SelectorH);
-        }
-        
+            bool invertW = SelectorX < SelectorW;
+            bool invertH = SelectorY < SelectorH;
 
+            float rectStartX = invertW ? SelectorW : SelectorX;
+            float rectStartY = invertH ? SelectorH : SelectorY;
+
+            float rectW = invertW ? (SelectorX - SelectorW) : (SelectorW - SelectorX);
+            float rectH = invertH ? (SelectorY - SelectorH) : (SelectorH - SelectorY);
+
+            DrawRect(SelectorFillColour, rectStartX, rectStartY, rectW, rectH);
+        }
     }
 
 }
@@ -37,12 +45,10 @@ void ASAFHUD::DrawHUD()
 void ASAFHUD::ReceiveSelectorStarted() {
     DrawSelector = true;
     GetOwningPlayerController()->GetMousePosition(SelectorX, SelectorY);
-
-
 }
 
-TArray<UObject*> ASAFHUD::ReceiveSelectorEnded() {
-    TArray<UObject*> SelectorItems;
+TArray<ASAFObject*> ASAFHUD::ReceiveSelectorEnded() {
+    TArray<ASAFObject*> SelectorItems;
 
     if (DrawSelectorRect) {
         SelectorItems = GetSAFUnitsInSelectorRect();
@@ -61,7 +67,7 @@ TArray<UObject*> ASAFHUD::ReceiveSelectorEnded() {
         UPrimitiveComponent* HitComponent = Hit.GetComponent();
         if (HitComponent && (HitComponent->GetOwner()->IsA(ASAFObject::StaticClass())))
         {
-            SelectorItems.Add(Hit.GetComponent());
+            SelectorItems.Add(HitComponent->GetOwner<ASAFObject>());
         }
     }
 
@@ -69,8 +75,8 @@ TArray<UObject*> ASAFHUD::ReceiveSelectorEnded() {
     return SelectorItems;
 }
 
-TArray<UObject*> ASAFHUD::GetSAFUnitsInSelectorRect() {
-    TArray<UObject*> Objects;
+TArray<ASAFObject*> ASAFHUD::GetSAFUnitsInSelectorRect() {
+    TArray<ASAFObject*> Objects;
 
     return Objects;
 }

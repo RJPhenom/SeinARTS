@@ -4,7 +4,7 @@
 
 #include "Modules/ModuleManager.h"
 
-class FSeinARTS_FrameworkModule : public IModuleInterface
+class FSeinARTS_Framework_RuntimeModule : public IModuleInterface
 {
 public:
 

@@ -12,7 +12,7 @@
  * 
  */
 UCLASS()
-class SEINARTS_FRAMEWORK_API ASAFPlayerController : public APlayerController
+class SEINARTS_FRAMEWORK_RUNTIME_API ASAFPlayerController : public APlayerController
 {
 	GENERATED_BODY()
 
