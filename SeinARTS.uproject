@@ -17,6 +17,10 @@
 			"TargetAllowList": [
 				"Editor"
 			]
+		},
+		{
+			"Name": "SeinARTS_Framework",
+			"Enabled": true
 		}
 	]
 }
