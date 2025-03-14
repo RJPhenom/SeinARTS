@@ -28,9 +28,7 @@ void ASAFCameraPawn::BeginPlay()
 {
 	Super::BeginPlay();
 
-	isFreeCam = FreeCam;
-	if (isFreeCam) SpringArmComponent->TargetArmLength = 0.0f;
-
+	SetCameraType(CameraType);
 	AddControllerPitchInput(DefaultAngle);
 }
 
@@ -40,6 +38,79 @@ void ASAFCameraPawn::Tick(float DeltaTime)
 
 	// Following is handle in tick because its inexpensive.
 	if (GetFollowMode() && FollowTarget.IsValid()) SetActorLocation(FollowTarget->GetActorLocation());
+}
+
+
+// ===============================
+//			  CONTROLS
+// ===============================
+
+void ASAFCameraPawn::SetCameraType(TEnumAsByte<SAFEnumerator_CameraPawnType> Type) {
+	camType = Type.GetValue();
+
+	// Setup for each type of camera
+	if (camType == SAFEnumerator_CameraPawnType::PivotPoint) {
+		SpringArmComponent->TargetArmLength = ZoomMax;
+	}
+
+	else if (camType == SAFEnumerator_CameraPawnType::FloatingHead) {
+		SpringArmComponent->TargetArmLength = 0.0f;
+	}
+}
+
+void ASAFCameraPawn::ToggleMapMode() {
+	MapMode = !MapMode;
+	ToggleMapModeDispatcher.Broadcast();
+}
+
+// Default response to the above broadcast
+void ASAFCameraPawn::OnToggleMapMode_Implementation() {
+
+	switch (camType) {
+	case SAFEnumerator_CameraPawnType::PivotPoint:
+		if (MapMode) {
+			StoredLocalZoom = SpringArmComponent->TargetArmLength;
+			SpringArmComponent->TargetArmLength = MapModeOffset;
+		}
+
+		else {
+			SpringArmComponent->TargetArmLength = StoredLocalZoom;
+		}
+
+		break;
+
+	case SAFEnumerator_CameraPawnType::FloatingHead:
+		ZoomCamera(MapMode ? MapModeOffset * -1 : MapModeOffset);
+		break;
+
+	default:
+		UE_LOG(LogTemp, Error, TEXT("Unknown camera type."));
+		return;
+
+	}
+}
+
+void ASAFCameraPawn::ToggleFollowMode() {
+	FollowMode = !FollowMode;
+	ToggleFollowModeDispatcher.Broadcast();
+}
+
+// Default response to the above broadcast
+void ASAFCameraPawn::OnToggleFollowMode_Implementation() {
+	if (!FollowMode) {
+		ASAFPlayerController* controller = Cast<ASAFPlayerController>(GetController());
+
+		if (controller) {
+			SetFollowTarget(controller->GetSelected());
+		}
+
+		else {
+			UE_LOG(LogTemp, Error, TEXT("Follow Mode Toggle failed: player controller is incorrect type! (Requires SAFPlayerController)"));
+			return;
+		}
+	}
+
+	FollowMode = !FollowMode;
 }
 
 
@@ -77,38 +148,11 @@ void ASAFCameraPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 		// Action Values
 		MousePanBinding = &EnhancedInputComponent->BindActionValue(MousePanAction);
 		MouseRotateBinding = &EnhancedInputComponent->BindActionValue(MouseRotateAction);
+		AltitudePanBinding = &EnhancedInputComponent->BindActionValue(AltitudePanAction);
 		FastPanBinding = &EnhancedInputComponent->BindActionValue(FastPanAction);
 
 		HoldFollowModeBinding = &EnhancedInputComponent->BindActionValue(HoldFollowModeAction);
 	}
-}
-
-void ASAFCameraPawn::PanCamera(const FInputActionValue& Value) {
-	FVector2D panValue = (Value.GetValueType() == EInputActionValueType::Axis2D) ? Value.Get<FVector2D>() : GetMouseDelta();
-	bool fastPan = FastPanBinding->GetValue().Get<bool>();
-
-	if (!RequiresMousePanAction || !MouseRotateBinding->GetValue().Get<bool>()) {
-		PanCamera(panValue.X, panValue.Y, fastPan);
-	}
-}
-
-void ASAFCameraPawn::RotateCamera(const FInputActionValue& Value) {
-	FVector2D rotValue = (Value.GetValueType() == EInputActionValueType::Axis2D) ? Value.Get<FVector2D>() : GetMouseDelta();
-
-	if (!RequiresMousePanAction || MousePanBinding->GetValue().Get<bool>()) {
-		RotateCamera(rotValue.X, rotValue.Y);
-	}
-}
-
-void ASAFCameraPawn::ZoomCamera(const FInputActionValue& Value) {
-	float zoomValue = Value.Get<float>();
-
-	if (Value.GetValueType() != EInputActionValueType::Axis1D) {
-		UE_LOG(LogTemp, Error, TEXT("ZoomCamera action aborted: Expected Axis1D but got %s"), *UEnum::GetValueAsString((Value.GetValueType())));
-		return;
-	}
-
-	ZoomCamera(zoomValue);
 }
 
 void ASAFCameraPawn::MapModeToggle(const FInputActionValue& Value) {
@@ -121,7 +165,7 @@ void ASAFCameraPawn::FollowModeToggle(const FInputActionValue& Value) {
 
 
 // ===============================
-//       CAMERA CONTROLS
+//       MOVEMENT CONTROLS
 // ===============================
 
 void ASAFCameraPawn::SnapCamera(FVector Vector, FVector LookAtVector, float Zoom) {
@@ -132,6 +176,21 @@ void ASAFCameraPawn::SnapCamera(FVector Vector, FVector LookAtVector, float Zoom
 	if (Zoom != 0.0f) SnapCameraZoom(Zoom);
 
 	CameraSnapDispatcher.Broadcast();
+}
+
+
+void ASAFCameraPawn::PanCamera(const FInputActionValue& Value) {
+	FVector2D panValue = (Value.GetValueType() == EInputActionValueType::Axis2D) ? Value.Get<FVector2D>() : GetMouseDelta();
+	bool fastPan = FastPanBinding->GetValue().Get<bool>();
+	bool altitudePan = AltitudePanBinding->GetValue().Get<bool>();
+
+	if (altitudePan) {
+		PanCameraAltitude(panValue.Y, fastPan);
+	}
+	
+	else if (!RequiresMousePanAction || !MouseRotateBinding->GetValue().Get<bool>()) {
+		PanCamera(panValue.X, panValue.Y, fastPan);
+	}
 }
 
 void ASAFCameraPawn::PanCamera(float PanX, float PanY, bool Fast) {
@@ -185,6 +244,11 @@ void ASAFCameraPawn::PanCameraAltitude(float PanZ, bool Fast) {
 	SetActorLocation(safeMovementVector);
 }
 
+
+// ===============================
+//       ROTATION CONTROLS
+// ===============================
+
 void ASAFCameraPawn::SnapCameraRotation(FVector LookAtVector, FRotator Rotator) {
 	if (Rotator != FRotator::ZeroRotator) {
 		GetController()->SetControlRotation(Rotator);
@@ -198,6 +262,14 @@ void ASAFCameraPawn::SnapCameraRotation(FVector LookAtVector, FRotator Rotator) 
 	CameraSnapDispatcher.Broadcast();
 }
 
+void ASAFCameraPawn::RotateCamera(const FInputActionValue& Value) {
+	FVector2D rotValue = (Value.GetValueType() == EInputActionValueType::Axis2D) ? Value.Get<FVector2D>() : GetMouseDelta();
+
+	if (!RequiresMousePanAction || MousePanBinding->GetValue().Get<bool>()) {
+		RotateCamera(rotValue.X, rotValue.Y);
+	}
+}
+
 void ASAFCameraPawn::RotateCamera(float Yaw, float Pitch) {
 	float scaleYaw = Yaw * RotationSpeed;
 	float scalePitch = Pitch * RotationSpeed * (InvertYAxis) ? -Pitch : Pitch;
@@ -205,6 +277,11 @@ void ASAFCameraPawn::RotateCamera(float Yaw, float Pitch) {
 	AddControllerYawInput(scaleYaw);
 	AddControllerPitchInput(scalePitch);
 }
+
+
+// ===============================
+//          ZOOM CONTROLS
+// ===============================
 
 FVector2d ASAFCameraPawn::GetCameraZoomBounds() {
 	float minZoom = (MapMode) ? ZoomMin * ZoomCoefficient : ZoomMin;
@@ -225,91 +302,49 @@ void ASAFCameraPawn::SnapCameraZoom(float Zoom) {
 	CameraSnapDispatcher.Broadcast();
 }
 
+void ASAFCameraPawn::ZoomCamera(const FInputActionValue& Value) {
+	float zoomValue = Value.Get<float>();
+
+	if (Value.GetValueType() != EInputActionValueType::Axis1D) {
+		UE_LOG(LogTemp, Error, TEXT("ZoomCamera action aborted: Expected Axis1D but got %s"), *UEnum::GetValueAsString((Value.GetValueType())));
+		return;
+	}
+
+	ZoomCamera(zoomValue);
+}
+
 void ASAFCameraPawn::ZoomCamera(float Zoom) {
 	float scaleZoom = Zoom * ZoomSpeed;
 	if (MapMode) scaleZoom *= ZoomCoefficient;
 
-	// Default Mode
-	if (!isFreeCam) {
-		scaleZoom *= -1; // Inverted because we subtract from springarm length as we 'zoom in'
+	switch (camType) {
+		case SAFEnumerator_CameraPawnType::PivotPoint : {
+			scaleZoom *= -1; // Inverted because we subtract from springarm length as we 'zoom in'
 
-		float zoomCurrent = SpringArmComponent->TargetArmLength;
-		float zoomTarget = scaleZoom + zoomCurrent;
+			float zoomCurrent = SpringArmComponent->TargetArmLength;
+			float zoomTarget = scaleZoom + zoomCurrent;
 
-		if (CheckZoomWithinBounds(zoomTarget)) {
-			float newZoom = FMath::Lerp(zoomCurrent, zoomTarget, ZoomInterpFactor);
-			SpringArmComponent->TargetArmLength = newZoom;
-		}
-	}
-
-	// FreeCam
-	else {
-		FRotator controlRot = GetControlRotation();
-		FVector ZoomVector = UKismetMathLibrary::GetForwardVector(controlRot);
-
-		AddMovementInput(ZoomVector, scaleZoom);
-
-		// Consume and wrap in bounds, then move
-		FVector movementVector = ConsumeMovementInputVector() + GetActorLocation();
-		FVector safeMovementVector = Cast<ASAFGameModeBase>(GetWorld()->GetAuthGameMode())->GetSafeVectorWithinMapBounds(movementVector);
-
-		FVector newLocation = FMath::Lerp(GetActorLocation(), safeMovementVector, MoveInterpFactor);
-
-		SetActorLocation(newLocation);
-	}
-}
-
-
-// ===============================
-//     TOGGLES & CAMERA MODES 
-// ===============================
-
-void ASAFCameraPawn::ToggleMapMode() {
-	MapMode = !MapMode;
-	ToggleMapModeDispatcher.Broadcast();
-}
-
-// Default response to the above broadcast
-void ASAFCameraPawn::OnToggleMapMode_Implementation() {
-	// Default mode
-	if (!isFreeCam) {
-
-		if (MapMode) {
-			StoredLocalZoom = SpringArmComponent->TargetArmLength;
-			SpringArmComponent->TargetArmLength = MapModeOffset;
+			if (CheckZoomWithinBounds(zoomTarget)) {
+				float newZoom = FMath::Lerp(zoomCurrent, zoomTarget, ZoomInterpFactor);
+				SpringArmComponent->TargetArmLength = newZoom;
+			}
+			break;
 		}
 
-		else {
-			SpringArmComponent->TargetArmLength = StoredLocalZoom;
-		}
+		case SAFEnumerator_CameraPawnType::FloatingHead: {
+			FRotator controlRot = GetControlRotation();
+			FVector ZoomVector = UKismetMathLibrary::GetForwardVector(controlRot);
 
-	}
+			AddMovementInput(ZoomVector, scaleZoom);
 
-	// FreeCam
-	else {
-		ZoomCamera(MapMode ? MapModeOffset * -1 : MapModeOffset);
-	}
-}
+			// Consume and wrap in bounds, then move
+			FVector movementVector = ConsumeMovementInputVector() + GetActorLocation();
+			FVector safeMovementVector = Cast<ASAFGameModeBase>(GetWorld()->GetAuthGameMode())->GetSafeVectorWithinMapBounds(movementVector);
 
-void ASAFCameraPawn::ToggleFollowMode() {
-	FollowMode = !FollowMode;
-	ToggleFollowModeDispatcher.Broadcast();
-}
+			FVector newLocation = FMath::Lerp(GetActorLocation(), safeMovementVector, MoveInterpFactor);
 
-// Default response to the above broadcast
-void ASAFCameraPawn::OnToggleFollowMode_Implementation() {
-	if (!FollowMode) {
-		ASAFPlayerController* controller = Cast<ASAFPlayerController>(GetController());
-
-		if (controller) {
-			SetFollowTarget(controller->GetSelected());
-		}
-
-		else {
-			UE_LOG(LogTemp, Error, TEXT("Follow Mode Toggle failed: player controller is incorrect type! (Requires SAFPlayerController)"));
-			return;
+			SetActorLocation(newLocation);
+			break;
 		}
 	}
-
-	FollowMode = !FollowMode;
 }

@@ -4,13 +4,28 @@ public class SeinARTS_Framework_Editor: ModuleRules
 {
     public SeinARTS_Framework_Editor(ReadOnlyTargetRules Target) : base(Target)
     {
-        PrivateDependencyModuleNames.AddRange(new string[] {
-            "Core", 
-            "CoreUObject", 
+        PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
+
+        PublicIncludePaths.AddRange(new string[] {
+            ModuleDirectory + "/Public",
+            ModuleDirectory + "/Public/Game",
+            ModuleDirectory + "/Public/GameState",
+            ModuleDirectory + "/Public/Objects",
+        });
+
+        PublicDependencyModuleNames.AddRange(new string[]
+        {
+            "Core",
+            "CoreUObject",
             "Engine",
+            "UnrealEd",
             "Slate",
             "SlateCore",
-            "UnrealEd",
+            "EditorStyle",
+            "PropertyEditor",
+            "InputCore",
+            "Projects",
+            "ApplicationCore",
             "SeinARTS_Framework_Runtime"
         });
     }

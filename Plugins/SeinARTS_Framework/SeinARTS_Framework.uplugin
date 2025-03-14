@@ -11,7 +11,7 @@
     {
       "Name": "SeinARTS_Framework_Editor",
       "Type": "Editor",
-      "LoadingPhase": "PostEngineInit"
+      "LoadingPhase": "Default"
     }
   ],
   "FriendlyName": "SeinARTS_Framework",

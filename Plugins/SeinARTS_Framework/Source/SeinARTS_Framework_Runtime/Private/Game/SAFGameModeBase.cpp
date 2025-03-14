@@ -13,17 +13,26 @@ ASAFGameModeBase::ASAFGameModeBase() {
     PlayerControllerClass = ASAFPlayerController::StaticClass();
 }
 
+void ASAFGameModeBase::BeginPlay() {
+    Super::BeginPlay();
+}
+
+
+// ===============================
+//      MAP FUNCTIONS
+// ===============================
+
 bool ASAFGameModeBase::CheckVectorWithinMapBounds(FVector Vector) {
     switch (MapBoundsType) {
 
     case SAFEnumerator_MapBoundsType::Rect:
-        return Vector.X <= RectBounds.X && Vector.Y <= RectBounds.Y && Vector.Z <= ZBounds;
+        return FMath::Abs(Vector.X) <= RectBounds.X && FMath::Abs(Vector.Y) <= RectBounds.Y && FMath::Abs(Vector.Z) <= ZBounds;
 
     case SAFEnumerator_MapBoundsType::Radial:
-        return Vector.X <= RadialBounds && Vector.Y <= RadialBounds && Vector.Z <= ZBounds;
+        return FMath::Abs(FVector2D::Distance(FVector2D::ZeroVector, FVector2D(Vector.X, Vector.Y))) <= RadialBounds && FMath::Abs(Vector.Z) <= ZBounds;
 
     default:
-        UE_LOG(LogTemp, Warning, TEXT("Unknown map boundaries type. Invalidating Vector."));
+        UE_LOG(LogTemp, Error, TEXT("Unknown map boundaries type. Invalidating Vector."));
         return false;
     }
 }
@@ -47,7 +56,7 @@ FVector ASAFGameModeBase::GetSafeVectorWithinMapBounds(FVector Vector) {
         break;
 
     default:
-        UE_LOG(LogTemp, Warning, TEXT("Unknown map boundaries type. Zeroing Vector."));
+        UE_LOG(LogTemp, Error, TEXT("Unknown map boundaries type. Zeroing Vector."));
         return FVector::ZeroVector;
     }
 
