@@ -11,17 +11,35 @@ class SEINARTS_FRAMEWORK_RUNTIME_API ASAFObject : public AActor
 {
 	GENERATED_BODY()
 	
+// =========================================================================================
+//                                      PROPERTIES
+// =========================================================================================
 public:	
-	// Sets default values for this actor's properties
-	ASAFObject();
+
 
 protected:
-	// Called when the game starts or when spawned
+
+
+
+private:
+
+
+// =========================================================================================
+//                                      METHODS
+// =========================================================================================
+public:	
+
+	ASAFObject();
+
+	virtual void Tick(float DeltaTime) override;
+
+
+protected:
+
 	virtual void BeginPlay() override;
 
-public:	
-	// Called every frame
-	virtual void Tick(float DeltaTime) override;
+
+private:
 
 
 };

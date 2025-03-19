@@ -30,6 +30,14 @@ void ASAFCameraPawn::BeginPlay()
 
 	SetCameraType(CameraType);
 	AddControllerPitchInput(DefaultAngle);
+
+	// Debug
+	bool DefaultAngleOutOfRange = DefaultAngle < MinAngle || DefaultAngle > MaxAngle;
+
+	if (GEngine && DefaultAngleOutOfRange) {
+		FString Msg = FString::Printf(TEXT("Warninng: Default Camera Angle is outside Min/Max tilt range. Camera rotation may be unresponsive!"));
+		GEngine->AddOnScreenDebugMessage(-1, 10.f, FColor::Yellow, Msg);
+	}
 }
 
 void ASAFCameraPawn::Tick(float DeltaTime)
@@ -105,7 +113,12 @@ void ASAFCameraPawn::OnToggleFollowMode_Implementation() {
 		}
 
 		else {
-			UE_LOG(LogTemp, Error, TEXT("Follow Mode Toggle failed: player controller is incorrect type! (Requires SAFPlayerController)"));
+			// Debug
+			if (GEngine) {
+				FString Msg = FString::Printf(TEXT("Follow Mode Toggle failed: player controller is incorrect type! (Requires SAFPlayerController)"));
+				GEngine->AddOnScreenDebugMessage(-1, 10.f, FColor::Yellow, Msg);
+			}
+
 			return;
 		}
 	}
@@ -274,6 +287,9 @@ void ASAFCameraPawn::RotateCamera(float Yaw, float Pitch) {
 	float scaleYaw = Yaw * RotationSpeed;
 	float scalePitch = Pitch * RotationSpeed * (InvertYAxis) ? -Pitch : Pitch;
 
+	FRotator currentRot = GetControlRotation();
+	scalePitch = FMath::Clamp(currentRot.Pitch + scalePitch, MinAngle, MaxAngle) - currentRot.Pitch;
+
 	AddControllerYawInput(scaleYaw);
 	AddControllerPitchInput(scalePitch);
 }
@@ -306,7 +322,11 @@ void ASAFCameraPawn::ZoomCamera(const FInputActionValue& Value) {
 	float zoomValue = Value.Get<float>();
 
 	if (Value.GetValueType() != EInputActionValueType::Axis1D) {
-		UE_LOG(LogTemp, Error, TEXT("ZoomCamera action aborted: Expected Axis1D but got %s"), *UEnum::GetValueAsString((Value.GetValueType())));
+		if (GEngine) {
+			FString Msg = FString::Printf(TEXT("ZoomCamera action aborted: Expected Axis1D but got %s"), *UEnum::GetValueAsString(Value.GetValueType()));
+			GEngine->AddOnScreenDebugMessage(-1, 10.f, FColor::Yellow, Msg);
+		}
+
 		return;
 	}
 

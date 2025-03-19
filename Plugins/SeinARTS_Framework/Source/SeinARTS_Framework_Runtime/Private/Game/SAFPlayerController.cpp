@@ -3,7 +3,7 @@
 
 #include "Game/SAFPlayerController.h"
 #include "EnhancedInput/Public/InputActionValue.h"
-#include "SAFObject.h"
+#include "SAFSelectionComponent.h"
 #include "SAFHUD.h"
 #include "SAFISelection.h"
 #include "SAFIOrder.h"
@@ -16,8 +16,10 @@ ASAFPlayerController::ASAFPlayerController()
 void ASAFPlayerController::BeginPlay() {
 	Super::BeginPlay();
 
-	if (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(GetLocalPlayer()))
-		Subsystem->AddMappingContext(DefaultMappingContext, 0);
+	UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(GetLocalPlayer());
+	if (IsValid(Subsystem)) Subsystem->AddMappingContext(DefaultMappingContext, 0);
+
+	SetShowMouseCursor(true);
 }
 
 void ASAFPlayerController::SetupInputComponent() {
@@ -39,118 +41,96 @@ void ASAFPlayerController::SetupInputComponent() {
 
 }
 
-TArray<ASAFObject*> ASAFPlayerController::GetSelection() {
-	TArray<ASAFObject*> SelectedSAFObjects;
+void ASAFPlayerController::Select(TArray<AActor*> Targets, bool Additive, bool Subtractive) {
+	if (!Additive && !Subtractive) EmptySelection();
 
-	for (TWeakObjectPtr<ASAFObject> SAFObject : Selection) {
-		if (SAFObject.IsValid()) SelectedSAFObjects.Add(SAFObject.Get());
-	}
+	TArray<AActor*> SelectableActors;
+	for (AActor* Actor : Targets) {
+		USAFSelectionComponent* SelectionComponent = nullptr;
+		if (IsValid(Actor)) SelectionComponent = Actor->FindComponentByClass<USAFSelectionComponent>();
 
-	return SelectedSAFObjects;
-}
+		if (SelectionComponent) {
+			SelectableActors.Add(Actor);
+			SelectionComponent->OnSelect(this);
 
-ASAFObject* ASAFPlayerController::GetSelected() {
-	if (!Selected.Get()) {
-		if (Selection.Num() <= 0) {
-			UE_LOG(LogTemp, Error, TEXT("Could not retrieve active selected unit because selection is empty!"));
-			return nullptr;
-		}
-
-		else {
-			Selected = Selection[0];
-		}
-	}
-
-	return Selected.Get();
-}
-
-bool ASAFPlayerController::SetSelection(TArray<ASAFObject*> InSelection) {
-	TArray<TWeakObjectPtr<ASAFObject>> SAFObjects;
-
-	for (ASAFObject* SAFObject : InSelection) {
-		if (SAFObject 
-			&& SAFObject->Implements<USAFISelection>() 
-			&& ISAFISelection::Execute_GetSelectable(SAFObject)) 
-		{
-			SAFObjects.Add(SAFObject);
-		}
-
-		else {
-			return false;
-		}
-	}
-
-	Deselect(GetSelection());
-	Selection = SAFObjects;
-
-	return true;
-}
-
-void ASAFPlayerController::Select(TArray<ASAFObject*> Targets, bool Additive) {
-	if (!Additive) Deselect(GetSelection());
-
-	TArray<TWeakObjectPtr<ASAFObject>> SAFObjectsToAppend;
-	for (ASAFObject* SAFObject : Targets) {
-		if (SAFObject 
-			&& SAFObject->Implements<USAFISelection>() 
-			&& ISAFISelection::Execute_GetSelectable(SAFObject)) 
-		{
-			SAFObjectsToAppend.Add(TWeakObjectPtr<ASAFObject>(SAFObject));
+			// Debug
+			if (GEngine && EnableSelectorDebugMessages) {
+				FString Msg = FString::Printf(TEXT("Added actor '%s' to the selection."), *Actor->GetName());
+				GEngine->AddOnScreenDebugMessage(-1, 10.0f, FColor::Cyan, Msg);
+			}
 		}
 	};
 
-	// TODO: run check if Targ is uniform array of owned units, or singlur unowned unit
-
-	for (TWeakObjectPtr<ASAFObject> SAFObject : SAFObjectsToAppend) {
-		ISAFISelection::Execute_OnSelect(SAFObject.Get(), this);
-	}
+	if (Subtractive) Deselect(SelectableActors);
+	else if (Additive) Selection.Append(SelectableActors);
+	else Selection = SelectableActors;
 }
 
-void ASAFPlayerController::Deselect(TArray<ASAFObject*> Targets) {
-	for (ASAFObject* SAFObject : Targets) {
-		if (SAFObject && SAFObject->Implements<USAFISelection>()) ISAFISelection::Execute_OnDeselect(SAFObject, this);
-		Selection.Remove(TWeakObjectPtr<ASAFObject>(SAFObject));
+void ASAFPlayerController::Deselect(TArray<AActor*> Targets) {
+	for (AActor* Actor : Targets) {
+		USAFSelectionComponent* SelectionComponent = nullptr;
+		if (IsValid(Actor)) SelectionComponent = Actor->FindComponentByClass<USAFSelectionComponent>();
+
+		if (SelectionComponent) {
+			SelectionComponent->OnDeselect(this);
+			Selection.Remove(Actor);
+
+			// Debug
+			if (GEngine && EnableSelectorDebugMessages) {
+				FString Msg = FString::Printf(TEXT("Removed actor '%s' from the selection."), *Actor->GetName());
+				GEngine->AddOnScreenDebugMessage(-1, 10.0f, FColor::Cyan, Msg);
+			}
+		}
 	};
+}
+
+void ASAFPlayerController::EmptySelection() {
+	Deselect(Selection);
+
+	// Debug
+	if (GEngine && EnableSelectorDebugMessages) {
+		FString Msg = FString(TEXT("Selection Cleared."));
+		GEngine->AddOnScreenDebugMessage(-1, 10.0f, FColor::Cyan, Msg);
+	}
 }
 
 void ASAFPlayerController::StartSelector(const FInputActionValue& value) {
 	ASAFHUD* HUD = Cast<ASAFHUD>(GetHUD());
 
-	if (HUD) {
+	if (IsValid(HUD)) {
 		HUD->ReceiveSelectorStarted();
 	}
 
 	else {
 		UE_LOG(LogTemp, Warning,
-			TEXT("Cast to SAFHUD Failed. Your HUD Class may be inheriting from the base class. ")
-			TEXT("Please check class settings for your HUD and ensure the parent class is set to 'SAFHUD'.")
-		);
+		TEXT("Cast to SAFHUD Failed. Your HUD Class may be inheriting from the base class. "
+		"Please check class settings for your HUD and ensure the parent class is set to 'SAFHUD'."));
 	}
 }
 
 void ASAFPlayerController::EndSelector(const FInputActionValue& value) {
 	ASAFHUD* HUD = Cast<ASAFHUD>(GetHUD());
-	TArray<ASAFObject*> SelectedItems;
+	TArray<AActor*> SelectedActors;
 
-	if (HUD) {
-		 SelectedItems = HUD->ReceiveSelectorEnded(); //TODO: fix
+	if (IsValid(HUD)) {
+		SelectedActors = HUD->ReceiveSelectorEnded();
 	}
 
 	else {
 		UE_LOG(LogTemp, Warning,
-			TEXT("Cast to SAFHUD Failed. Your HUD Class may be inheriting from the base class. ")
-			TEXT("Please check class settings for your HUD and ensure the parent class is set to 'SAFHUD'.")
-		);
+		TEXT("Cast to SAFHUD Failed. Your HUD Class may be inheriting from the base class. "
+		"Please check class settings for your HUD and ensure the parent class is set to 'SAFHUD'."));
 	}
 
 	bool Additive = ShiftCommandBinding->GetValue().Get<bool>();
-	Select(SelectedItems, Additive);
+	bool Subtractive = ControlBinding->GetValue().Get<bool>();
+	Select(SelectedActors, Additive, Subtractive);
 }
 
-void ASAFPlayerController::Server_IssueOrder_Implementation(const TArray<ASAFObject*>& Recipients, FVector PayloadPos, ASAFObject* PayloadTarg, bool Additive) {
+void ASAFPlayerController::Server_IssueOrder_Implementation(const TArray<AActor*>& Recipients, FVector PayloadPos, AActor* PayloadTarg, bool Additive) {
 
 }
 
-bool ASAFPlayerController::Server_IssueOrder_Validate(const TArray<ASAFObject*>& Recipients, FVector PayloadPos, ASAFObject* PayloadTarg, bool Additive) {
+bool ASAFPlayerController::Server_IssueOrder_Validate(const TArray<AActor*>& Recipients, FVector PayloadPos, AActor* PayloadTarg, bool Additive) {
 	return true;
 }

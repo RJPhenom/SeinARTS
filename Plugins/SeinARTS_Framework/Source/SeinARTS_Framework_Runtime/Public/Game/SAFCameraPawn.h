@@ -8,7 +8,6 @@
 #include "EnhancedInput/Public/EnhancedInputComponent.h"
 #include "InputMappingContext.h"
 #include "Camera/CameraComponent.h"
-#include "SAFObject.h"
 #include "SAFCameraPawn.generated.h"
 
 // Enumerates the different types of camera pawns supported under the
@@ -49,7 +48,7 @@ private:
     SAFEnumerator_CameraPawnType camType;
 
     // Reference to the object to follow if camera is in follow mode.
-    TWeakObjectPtr<ASAFObject> FollowTarget;
+    TWeakObjectPtr<AActor> FollowTarget;
 
     // Stored values for toggling back to LocalMode from MapMode.
     float StoredLocalZoom;
@@ -142,6 +141,19 @@ public:
     // 22.5f.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
     float DefaultAngle = 22.5f;
+
+    // The minimum tilt the camera can rotate to. -90 indicates the camera has a full 90'
+    // downwards tilt range (can look straight up). 0 means the camera can at most tilt flat,
+    // parallel with the unsloped ground plane. Default is 0.
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
+    float MinAngle = 0;
+
+    // The maximum tilt the camera can rotate to. 90 indicates the camera has a full 90'
+    // upwards tilt range (can look straight down). 0 means the camera can at most tilt flat,
+    // parallel with the unsloped ground plane. Default is 90.
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
+    float MaxAngle = 90;
+
 
     // Select the supported camera type this camera pawn should be used. Pawn type can be
     // edited at runtime using SetCameraType(). Editing this value directly will have no
@@ -252,21 +264,6 @@ public:
 // =========================================================================================
 //                                        METHODS
 // =========================================================================================
-private:
-
-    // Action Bindings
-    void PanCamera(const FInputActionValue& value);
-    void RotateCamera(const FInputActionValue& value);
-    void ZoomCamera(const FInputActionValue& value);
-
-    void MapModeToggle(const FInputActionValue& value);
-    void FollowModeToggle(const FInputActionValue& value);
-
-protected:
-
-    virtual void BeginPlay() override;
-
-
 public:
 
     ASAFCameraPawn();
@@ -297,11 +294,11 @@ public:
 
     // Returns the current follow target.
     UFUNCTION(BlueprintCallable, Category = "SeinARTS|Toggles & Modes")
-    ASAFObject* GetFollowTarget() const { return FollowTarget.Get(); };
+    AActor* GetFollowTarget() const { return FollowTarget.Get(); };
 
     // Sets the object to follow in follow mode.
     UFUNCTION(BlueprintCallable, Category = "SeinARTS|Toggles & Modes")
-    void SetFollowTarget(ASAFObject* Target) { FollowTarget = Target; };
+    void SetFollowTarget(AActor* Target) { FollowTarget = Target; };
 
     // Clears the object to follow. This will also deactive following.
     UFUNCTION(BlueprintCallable, Category = "SeinARTS|Toggles & Modes")
@@ -372,4 +369,22 @@ public:
     // Snaps the zoom level to the specified amount, if within bounds.
     UFUNCTION(BlueprintCallable, Category = "SeinARTS|Zoom")
     void SnapCameraZoom(float Zoom);
+
+
+protected:
+
+    virtual void BeginPlay() override;
+
+
+private:
+
+    // Action Bindings
+    void PanCamera(const FInputActionValue& value);
+    void RotateCamera(const FInputActionValue& value);
+    void ZoomCamera(const FInputActionValue& value);
+
+    void MapModeToggle(const FInputActionValue& value);
+    void FollowModeToggle(const FInputActionValue& value);
+
+
 };

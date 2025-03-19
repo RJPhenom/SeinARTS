@@ -6,6 +6,7 @@
 #include "SAFHUD.h"
 #include "SAFCameraPawn.h"
 #include "SAFPlayerState.h"
+#include "NavigationSystem.h"
 
 ASAFGameModeBase::ASAFGameModeBase() {
     DefaultPawnClass = ASAFCameraPawn::StaticClass();
@@ -32,7 +33,7 @@ bool ASAFGameModeBase::CheckVectorWithinMapBounds(FVector Vector) {
         return FMath::Abs(FVector2D::Distance(FVector2D::ZeroVector, FVector2D(Vector.X, Vector.Y))) <= RadialBounds && FMath::Abs(Vector.Z) <= ZBounds;
 
     default:
-        UE_LOG(LogTemp, Error, TEXT("Unknown map boundaries type. Invalidating Vector."));
+        UE_LOG(LogTemp, Warning, TEXT("Unknown map boundaries type. Invalidating Vector."));
         return false;
     }
 }
@@ -61,4 +62,38 @@ FVector ASAFGameModeBase::GetSafeVectorWithinMapBounds(FVector Vector) {
     }
 
     return SafeVector;
+}
+
+
+// ===============================
+//           NAVIGATION
+// ===============================
+
+void ASAFGameModeBase::ResizeNavVolume(FVector inSize) {
+    if (NavMeshVolume) NavMeshVolume->SetActorScale3D(inSize / 100.0f);
+    else {
+        UE_LOG(LogTemp, Warning, TEXT("Warning: Attempted to resize nav volume, but nav volume does not exist!"));
+    }
+}
+
+void ASAFGameModeBase::SizeNavVolumeToMapBounds() {
+    FVector NavExtent = FVector::ZeroVector;
+    switch (MapBoundsType) {
+
+    case SAFEnumerator_MapBoundsType::Rect:
+        NavExtent = FVector(RectBounds.X, RectBounds.Y, ZBounds);
+        break;
+
+    case SAFEnumerator_MapBoundsType::Radial:
+        NavExtent = FVector(RadialBounds, RadialBounds, ZBounds);
+        break;
+
+    default:
+        break;
+    }
+
+    if (NavExtent != FVector::ZeroVector) ResizeNavVolume(NavExtent);
+    else {
+        UE_LOG(LogTemp, Warning, TEXT("Warning: Attempted to resize nav volume to map bounds, but detected map bounds were zero! (0,0,0)"));
+    }
 }

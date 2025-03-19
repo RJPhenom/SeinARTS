@@ -16,33 +16,31 @@ class SEINARTS_FRAMEWORK_RUNTIME_API ASAFPlayerController : public APlayerContro
 {
 	GENERATED_BODY()
 
-private:
-
-	// ===============================
-	//      ENHANCED INPUT SYSTEM
-	// ===============================
-
-	FEnhancedInputActionValueBinding* ShiftCommandBinding;
-	FEnhancedInputActionValueBinding* AlternateBinding;
-	FEnhancedInputActionValueBinding* ControlBinding;
-
+// =========================================================================================
+//                                      PROPERTIES
+// =========================================================================================
+public:
 
 	// ===============================
 	//      SELECTION PROPERTIES
 	// ===============================
 
-	TArray<TWeakObjectPtr<ASAFObject>> Selection;
-	TWeakObjectPtr<ASAFObject> Selected;
+	// The array of selection units.
+	UPROPERTY(BlueprintReadOnly, EditInstanceOnly, Category = "SeinARTS")
+	TArray<AActor*> Selection;
 
+	// The index of the highlighted selected unit in the array.
+	UPROPERTY(BlueprintReadOnly, EditInstanceOnly, Category = "SeinARTS")
+	int Selected;
 
-protected:
+	// If enabled, selector will subtract highlighted actors from the selection while
+	// the Control action is being triggered when the Selection action is released.
+	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "SeinARTS")
+	bool EnableCtrlSubtractiveSelect = false;
 
-	virtual void BeginPlay() override;
-
-public:
-
-	ASAFPlayerController();
-	virtual void SetupInputComponent() override;
+	// Enables certain on-screen debug messages related to class functions.
+	UPROPERTY(BlueprintReadOnly, EditAnywhere, Category = "SeinARTS")
+	bool EnableSelectorDebugMessages = true;
 
 
 	// ===============================
@@ -63,39 +61,48 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Input")
 	UInputAction* ControlAction;
 
+private:
+
+	// ===============================
+	//      ENHANCED INPUT SYSTEM
+	// ===============================
+
+	FEnhancedInputActionValueBinding* ShiftCommandBinding;
+	FEnhancedInputActionValueBinding* AlternateBinding;
+	FEnhancedInputActionValueBinding* ControlBinding;
+
+
+// =========================================================================================
+//                                      METHODS
+// =========================================================================================
+public:
+
+	ASAFPlayerController();
+	virtual void SetupInputComponent() override;
+
 
 	// ===============================
 	//      SELECTION FUNCTIONS
 	// ===============================
 
-	// Returns the selection as a blueprint accessible array.
-	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Selection")
-	TArray<ASAFObject*> GetSelection();
-
 	// Returns the currently selected object. Gets the active selected unit if multiple
 	// are selected.
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Selection")
-	ASAFObject* GetSelected();
+	AActor* GetSelected() { return (Selection.IsValidIndex(Selected)) ? Selection[Selected] : nullptr; };
 
-	// Sets the selection to the provides blueprint-providable array. Returns true if the
-	// operation was successful. Returns false if aborted (invalid object in input array).
+	// Select attempts to add the actors in the input array to selection. It will only add
+	// Actors who do not belong to the player if they are the sole actor being added, and
+	// the addition mode is not additive.
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Selection")
-	bool SetSelection(TArray<ASAFObject*> InSelection);
-
-	// Select add the objects in the input array to selection, given:
-	//		i)		The input array has one item, OR
-	//		ii)		The input array items AND the current selection array items 
-	//				share a common owner, and that owner is the player associated 
-	//				with this controller.
-	// Additionally takes in a bool to determine if selection is additive. If true, appends
-	// the input array to the selection. Otherwise, selection is cleared, then input array
-	// is appended.
-	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Selection")
-	void Select(TArray<ASAFObject*> Targets, bool Additive = false);
+	void Select(TArray<AActor*> Targets, bool Additive = false, bool Subtractive = false);
 
 	// Deselect removes the units in the input array from selection, if present.
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Selection")
-	void Deselect(TArray<ASAFObject*> Targets);
+	void Deselect(TArray<AActor*> Targets);
+
+	// Deselectall units in the selection, if any.
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Selection")
+	void EmptySelection();
 
 	void StartSelector(const FInputActionValue& value);
 	void EndSelector(const FInputActionValue& value);
@@ -107,7 +114,17 @@ public:
 	// Tells the server to issue an order to SAFObjects. Payloads are 
 	// generic, units handle order response depending on payload contents.
 	UFUNCTION(Server, Reliable, WithValidation)
-	void Server_IssueOrder(const TArray<ASAFObject*>& Recipients, FVector PayloadPos, ASAFObject* PayloadTarget, bool Additive = false);
-	void Server_IssueOrder_Implementation(const TArray<ASAFObject*>& Targets, FVector Location, ASAFObject* OrderIssuer, bool Additive = false);
-	bool Server_IssueOrder_Validate(const TArray<ASAFObject*>& Targets, FVector Location, ASAFObject* OrderIssuer, bool Additive = false);
+	void Server_IssueOrder(const TArray<AActor*>& Recipients, FVector PayloadPos, AActor* PayloadTarget, bool Additive = false);
+	void Server_IssueOrder_Implementation(const TArray<AActor*>& Targets, FVector Location, AActor* OrderIssuer, bool Additive = false);
+	bool Server_IssueOrder_Validate(const TArray<AActor*>& Targets, FVector Location, AActor* OrderIssuer, bool Additive = false);
+
+
+protected:
+
+	virtual void BeginPlay() override;
+
+
+private:
+
+
 };

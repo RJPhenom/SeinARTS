@@ -13,6 +13,7 @@ public class SeinARTS_Framework_Runtime : ModuleRules
             ModuleDirectory + "/Public/Game",
             ModuleDirectory + "/Public/GameState",
             ModuleDirectory + "/Public/Objects",
+            ModuleDirectory + "/Public/Components",
             ModuleDirectory + "/Public/Interfaces",
 		});
 					
@@ -23,6 +24,8 @@ public class SeinARTS_Framework_Runtime : ModuleRules
 			"EnhancedInput",
 			"Slate",
 			"SlateCore",
-		});
+            "NavigationSystem",
+			"UMG"
+        });
 	}
 }

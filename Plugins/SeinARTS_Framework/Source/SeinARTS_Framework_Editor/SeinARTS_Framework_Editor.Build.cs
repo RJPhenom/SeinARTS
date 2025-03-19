@@ -26,6 +26,7 @@ public class SeinARTS_Framework_Editor: ModuleRules
             "InputCore",
             "Projects",
             "ApplicationCore",
+            "NavigationSystem",
             "SeinARTS_Framework_Runtime"
         });
     }
