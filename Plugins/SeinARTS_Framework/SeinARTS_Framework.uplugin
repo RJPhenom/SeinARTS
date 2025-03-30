@@ -23,7 +23,7 @@
   "MarketplaceURL": "",
   "SupportURL": "",
   "CanContainContent": "true",
-  "Installed": true,
+  "Installed": false,
   "IsBetaVersion": true,
   "Plugins": [
     {

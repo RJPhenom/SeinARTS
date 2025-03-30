@@ -9,8 +9,8 @@
 class UWidgetComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FBlueprintHighlight);
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FBlueprintHighlight, AController*, Controller);
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FBlueprintHighlight, AController*, Controller);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FBlueprintOnSelect, AController*, Controller);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FBlueprintOnDeselect, AController*, Controller);
 
 UENUM(BlueprintType)
 enum SAFEnumerator_SelectedGUIMode {
@@ -36,10 +36,10 @@ public:
 	FBlueprintHighlight OnHighlight;
 
 	UPROPERTY(BlueprintAssignable)
-	FBlueprintHighlight OnSelect;
+	FBlueprintOnSelect OnSelect;
 
 	UPROPERTY(BlueprintAssignable)
-	FBlueprintHighlight OnDeselect;
+	FBlueprintOnDeselect OnDeselect;
 
 	// Toggle the selectability of the parent actor through this property.
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "SeinARTS")
@@ -88,18 +88,18 @@ public:
 
 	// Triggered when the actor is highlight by the Selector box or cursor.
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "SeinARTS|Selection")
-	void OnHighlight();
-	void OnHighlight_Implementation();
+	void Highlight();
+	void Highlight_Implementation();
 
 	// Triggers when the actor is selected. This gets called by the selecting controller.
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "SeinARTS|Selection")
-	void OnSelect(AController* Controller);
-	void OnSelect_Implementation(AController* Controller);
+	void Select(AController* Controller);
+	void Select_Implementation(AController* Controller);
 
 	// Triggers when the actor is deselected. This gets called by the selecting controller.
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "SeinARTS|Selection")
-	void OnDeselect(AController* Controller);
-	void OnDeselect_Implementation(AController* Controller);
+	void Deselect(AController* Controller);
+	void Deselect_Implementation(AController* Controller);
 		
 
 protected:

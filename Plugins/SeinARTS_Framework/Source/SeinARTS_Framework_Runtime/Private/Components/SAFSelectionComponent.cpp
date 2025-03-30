@@ -13,15 +13,15 @@ void USAFSelectionComponent::BeginPlay() {
 	Super::BeginPlay();	
 }
 
-void USAFSelectionComponent::OnHighlight_Implementation() {
-
+void USAFSelectionComponent::Highlight_Implementation() {
+	OnHighlight.Broadcast();
 }
 
-void USAFSelectionComponent::OnSelect_Implementation(AController* Controller) {
-
+void USAFSelectionComponent::Select_Implementation(AController* Controller) {
+	OnSelect.Broadcast(Controller);
 }
 
-void USAFSelectionComponent::OnDeselect_Implementation(AController* Controller) {
-
+void USAFSelectionComponent::Deselect_Implementation(AController* Controller) {
+	OnDeselect.Broadcast(Controller);
 }
 

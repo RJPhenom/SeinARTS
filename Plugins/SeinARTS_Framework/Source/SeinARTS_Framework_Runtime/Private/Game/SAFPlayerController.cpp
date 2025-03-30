@@ -51,7 +51,7 @@ void ASAFPlayerController::Select(TArray<AActor*> Targets, bool Additive, bool S
 
 		if (SelectionComponent) {
 			SelectableActors.Add(Actor);
-			SelectionComponent->OnSelect(this);
+			SelectionComponent->Select(this);
 
 			// Debug
 			if (GEngine && EnableSelectorDebugMessages) {
@@ -72,7 +72,7 @@ void ASAFPlayerController::Deselect(TArray<AActor*> Targets) {
 		if (IsValid(Actor)) SelectionComponent = Actor->FindComponentByClass<USAFSelectionComponent>();
 
 		if (SelectionComponent) {
-			SelectionComponent->OnDeselect(this);
+			SelectionComponent->Deselect(this);
 			Selection.Remove(Actor);
 
 			// Debug
