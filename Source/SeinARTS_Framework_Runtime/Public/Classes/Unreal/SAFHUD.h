@@ -4,10 +4,8 @@
 #include "GameFramework/HUD.h"
 #include "SAFHUD.generated.h"
 
-// ===========================================================================
-//                               Event Delegates
-// ===========================================================================
-
+// Event Delegates
+// ==========================================================================================================
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnMaruqeeStarted, FVector2D, MarqueeStart);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnMaruqeeEnded, FVector2D, MarqueeEnd, bool, bMarqueeWasDrawn);
 
@@ -39,111 +37,105 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnMaruqeeEnded, FVector2D, Marquee
 UCLASS(ClassGroup=(SeinARTS), Blueprintable, BlueprintType, meta=(DisplayName="SeinARTS HUD"))
 class SEINARTS_FRAMEWORK_RUNTIME_API ASAFHUD : public AHUD {
 
-  GENERATED_BODY()
+	GENERATED_BODY()
 
 public:
 
-  ASAFHUD();
+	ASAFHUD();
 
-  // ===========================================================================
-	//                           Blueprint Events
-	// ===========================================================================
-  
-  UPROPERTY(BlueprintAssignable, BlueprintCallable, Category="SeinARTS|Marquee")
-  FOnMaruqeeStarted OnMarqueeStarted;
-  UPROPERTY(BlueprintAssignable, BlueprintCallable, Category="SeinARTS|Marquee")
-  FOnMaruqeeEnded OnMarqueeEnded;
+	// Event Bindings
+	// =================================================================================
+	UPROPERTY(BlueprintAssignable, BlueprintCallable, Category="SeinARTS|Marquee")
+	FOnMaruqeeStarted OnMarqueeStarted;
+	UPROPERTY(BlueprintAssignable, BlueprintCallable, Category="SeinARTS|Marquee")
+	FOnMaruqeeEnded OnMarqueeEnded;
 
-  // Begin a drag-marquee at screen position.
-  UFUNCTION(BlueprintNativeEvent, Category="SeinARTS|Marquee")
-  void BeginMarquee(const FVector2D InStart);
-  virtual void BeginMarquee_Implementation(const FVector2D InStart);
+	/** Begin a drag-marquee at screen position. */
+	UFUNCTION(BlueprintNativeEvent, Category="SeinARTS|Marquee")
+	void BeginMarquee(const FVector2D InStart);
+	virtual void BeginMarquee_Implementation(const FVector2D InStart);
 
-  // End the marquee; perform selection (marquee vs single).
-  UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category="SeinARTS|Marquee")
-  void EndMarquee(const FVector2D InEnd);
-  virtual void EndMarquee_Implementation(const FVector2D InEnd);
+	/** End the marquee; perform selection (marquee vs single). */
+	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category="SeinARTS|Marquee")
+	void EndMarquee(const FVector2D InEnd);
+	virtual void EndMarquee_Implementation(const FVector2D InEnd);
 
-  // Draws points in the world where the current selected actor(s) will go if issued
-  // a move order, particularly to show how SAFSquads will move into cover. Defaults 
-  // to DrawDebugPoint but intended to be replaced with decals or other UI/UX by the 
-  // designers. Note: this does the drawing, but when and what to draw is governed
-  // by the Player Controller. The PlayerController calls this by default on tick
-  // while the selection contains one and only one ASAFSquad.
-  UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category="SeinARTS|UI")
-  void DrawDestinations(const TArray<FVector>& Destinations);
-  virtual void DrawDestinations_Implementation(const TArray<FVector>& Destinations);
+	/** Draws points in the world where the current selected actor(s) will go if issued
+	 * a move order, particularly to show how SAFSquads will move into cover. Defaults
+	 * to DrawDebugPoint but intended to be replaced with decals or other UI/UX by the
+	 * designers. Note: this does the drawing, but when and what to draw is governed
+	 * by the Player Controller. The PlayerController calls this by default on tick
+	 * while the selection contains one and only one ASAFSquad. */
+	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category="SeinARTS|UI")
+	void DrawDestinations(const TArray<FVector>& Destinations);
+	virtual void DrawDestinations_Implementation(const TArray<FVector>& Destinations);
 
 protected:
 
-  virtual void BeginPlay() override;
-  virtual void DrawHUD() override;
+	virtual void BeginPlay() override;
+	virtual void DrawHUD() override;
 
-  // ===========================================================================
-	//                             Drawing Props
-	// ===========================================================================
+	// Drawing Properties
+	// ========================================================================================
+	/** Color used when drawing the selection rectangle. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Marquee")
+	FLinearColor MarqueeColor = FLinearColor(0.f, 1.f, 1.f, 0.2f);
 
-  // Color used when drawing the selection rectangle.
-  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Marquee")
-  FLinearColor MarqueeColor = FLinearColor(0.f, 1.f, 1.f, 0.2f);
+	/** Color used when drawing the selection rectangle. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Marquee")
+	FLinearColor MarqueeBorderColor = FLinearColor(0.f, 1.f, 1.f, 1.f);
 
-  // Color used when drawing the selection rectangle.
-  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Marquee")
-  FLinearColor MarqueeBorderColor = FLinearColor(0.f, 1.f, 1.f, 1.f);
+	/** Color used when drawing the selection rectangle. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Marquee")
+	float MarqueeBorderThickness = 1.f;
 
-  // Color used when drawing the selection rectangle.
-  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Marquee")
-  float MarqueeBorderThickness = 1.f;
+	// Marquee Management
+	// ========================================================================================
+	/** Tracks if we are updating the select action this frame. */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadWrite, Category="SeinARTS|Marquee")
+	bool bSelecting;
 
-  // ===========================================================================
-  //                           Marquee Management
-	// ===========================================================================
+	/** Whether to draw the marquee this frame. */
+	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category="SeinARTS|Marquee")
+	bool bDrawMarquee = false;
 
-  // Tracks if we are updating the select action this frame.
-  UPROPERTY(VisibleInstanceOnly, BlueprintReadWrite, Category="SeinARTS|Marquee")
-  bool bSelecting;
+	/** Whether to include non-colliding components when doing marquee selection. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Marquee")
+	bool bMarqueeIncludesNonCollidingComponents = false;
 
-  // Whether to draw the marquee this frame.
-  UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category="SeinARTS|Marquee")
-  bool bDrawMarquee = false;
+	/** Whether to require actors be fully enclosed when doing marquee selection. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Marquee")
+	bool bMarqueeRequiresActorsBeFullyInclosed = false;
 
-  // Whether to include non-colliding components when doing marquee selection.
-  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Marquee")
-  bool bMarqueeIncludesNonCollidingComponents = false;
+	/** If the drag distance (|End-Start|) is below this, treat it as a single-select.
+	 *
+	 * Note: this is managed separately from the DragThreshold property on the
+	 * SAFPlayerController, as that manages actions whereas this manages drawing only.
+	 * However, it is a good idea to keep these values in sync as it is the most intuitive. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Marquee")
+	float MarqueeThreshold = 10.f;
 
-  // Whether to require actors be fully enclosed when doing marquee selection.
-  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Marquee")
-  bool bMarqueeRequiresActorsBeFullyInclosed = false;
+	/** Class filter used by selection-rectangle queries (optional). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Marquee")
+	TSubclassOf<AActor> MarqueeClassFilter = nullptr;
 
-  // If the drag distance (|End-Start|) is below this, treat it as a single-select.
-  // 
-  // Note: this is managed separately from the DragThreshold property on the 
-  // SAFPlayerController, as that manages actions whereas this manages drawing only. 
-  // However, it is a good idea to keep these values in sync as it is the most intuitive.
-  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Marquee")
-  float MarqueeThreshold = 10.f;
+	/** Drag start (screen space). */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category="SeinARTS|Marquee")
+	FVector2D MarqueeStart = FVector2D::ZeroVector;
 
-  // Class filter used by selection-rectangle queries (optional).
-  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Marquee")
-  TSubclassOf<AActor> MarqueeClassFilter = nullptr;
+	/** Drag end / current cursor (screen space). */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category="SeinARTS|Marquee")
+	FVector2D MarqueeEnd = FVector2D::ZeroVector;
 
-  // Drag start (screen space).
-  UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category="SeinARTS|Marquee")
-  FVector2D MarqueeStart = FVector2D::ZeroVector;
+	/** Cached rect params (computed each update). */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category="SeinARTS|Marquee")
+	float MarqueeWidth = 0.f;
 
-  // Drag end / current cursor (screen space).
-  UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category="SeinARTS|Marquee")
-  FVector2D MarqueeEnd = FVector2D::ZeroVector;
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category="SeinARTS|Marquee")
+	float MarqueeHeight = 0.f;
 
-  // Cached rect params (computed each update).
-  UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category="SeinARTS|Marquee")
-  float MarqueeWidth = 0.f;
-
-  UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category="SeinARTS|Marquee")
-  float MarqueeHeight = 0.f;
-
-  // Container for marquee results (to be passed and handled by a SAFPlayerController).
-  UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category="SeinARTS|Marquee")
-  TArray<AActor*> MarqueeSelectionResults;
-  
+	/** Container for marquee results (to be passed and handled by a SAFPlayerController). */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category="SeinARTS|Marquee")
+	TArray<AActor*> MarqueeSelectionResults;
+	
 };

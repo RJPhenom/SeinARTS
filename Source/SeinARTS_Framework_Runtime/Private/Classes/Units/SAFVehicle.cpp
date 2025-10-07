@@ -10,10 +10,8 @@ ASAFVehicle::ASAFVehicle() {
 	// Intentionally empty – inherits behavior from ASAFUnit
 }
 
-// ===========================================================================
-//                            SAFUnitInterface
-// ===========================================================================
-
+// Unit Interface / API
+// =================================================================================================================================
 // Overide adds additional initalization steps
 void ASAFVehicle::InitAsset_Implementation(USAFAsset* InAsset, ASAFPlayerState* InOwner) {
 	USAFAsset* InitAsset = InAsset ? InAsset : SAFAssetResolver::ResolveAsset(Asset);
@@ -24,16 +22,14 @@ void ASAFVehicle::InitAsset_Implementation(USAFAsset* InAsset, ASAFPlayerState* 
 	InitVehicle(VehicleAsset);
 }
 
-// ===========================================================================
-//                                 Vehicle
-// ===========================================================================
-
+// Vehicle API
+// =================================================================================================================================
 // Initializes the vehicle (generates members and positions)
 void ASAFVehicle::InitVehicle_Implementation(USAFVehicleAsset* VehicleAsset) {
 	if (!HasAuthority()) return;
-  if (bInitialized) { SAFDEBUG_WARNING(FORMATSTR("InitVehicle called twice on Vehicle '%s'. Discarding.", *GetName())); return; }
+	if (bInitialized) { SAFDEBUG_WARNING(FORMATSTR("InitVehicle called twice on Vehicle '%s'. Discarding.", *GetName())); return; }
 	if (!VehiclePawnClass 
-		|| !VehiclePawnClass->ImplementsInterface(USAFAssetInterface::StaticClass())
+		|| !VehiclePawnClass->ImplementsInterface(USAFActorInterface::StaticClass())
 		|| !VehiclePawnClass->ImplementsInterface(USAFVehiclePawnInterface::StaticClass())
 	) { SAFDEBUG_ERROR("InitVehicle aborted: invalid VehiclePawnClass."); return;	}
 	if (!VehicleAsset) { SAFDEBUG_ERROR("InitVehicle aborted: null VehicleAsset."); return; }
@@ -43,28 +39,26 @@ void ASAFVehicle::InitVehicle_Implementation(USAFVehicleAsset* VehicleAsset) {
 	FActorSpawnParameters Params;
 	Params.Owner = this;
 	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
-  VehiclePawn = World->SpawnActor<APawn>(VehiclePawnClass, GetActorLocation(), GetActorRotation(), Params);
-  if (!VehiclePawn) { SAFDEBUG_WARNING("InitVehicle failed to spawn vehicle pawn. Culling."); Destroy(); return; }
-  if (!SAFLibrary::IsPawnPtrValidSeinARTSVehiclePawn(VehiclePawn)) { 
+	VehiclePawn = World->SpawnActor<APawn>(VehiclePawnClass, GetActorLocation(), GetActorRotation(), Params);
+	if (!VehiclePawn) { SAFDEBUG_WARNING("InitVehicle failed to spawn vehicle pawn. Culling."); Destroy(); return; }
+	if (!SAFLibrary::IsPawnPtrValidSeinARTSVehiclePawn(VehiclePawn)) { 
 		SAFDEBUG_WARNING(FORMATSTR("InitVehicle spawned an invalid vehicle pawn, culling.")); 
 		VehiclePawn->Destroy(); 
 		Destroy(); 
 		return; 
 	}
 
-  ISAFVehiclePawnInterface::Execute_InitVehiclePawn(VehiclePawn.Get(), VehicleAsset, this);
+	ISAFVehiclePawnInterface::Execute_InitVehiclePawn(VehiclePawn.Get(), VehicleAsset, this);
 	ISAFUnitInterface::Execute_AttachToPawn(this, VehiclePawn.Get());
-  SAFDEBUG_SUCCESS(FORMATSTR("VehiclePawn '%s' initialized for Vehicle '%s'.", *VehiclePawn->GetName(), *GetName()));
-  bInitialized = true;
+	SAFDEBUG_SUCCESS(FORMATSTR("VehiclePawn '%s' initialized for Vehicle '%s'.", *VehiclePawn->GetName(), *GetName()));
+	bInitialized = true;
 }
 
-// ===========================================================================
-//                              Replication
-// ===========================================================================
-
+// Replication
+// =================================================================================================================================
 void ASAFVehicle::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const {
-  Super::GetLifetimeReplicatedProps(OutLifetimeProps);
-  DOREPLIFETIME(ASAFVehicle, VehiclePawn);
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(ASAFVehicle, VehiclePawn);
 }
 
 

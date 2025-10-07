@@ -28,5 +28,5 @@ public:
 	/** AnimBP class (AnimInstance subclass). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Visual")
 	TSoftClassPtr<UAnimInstance> AnimClass;
-  
+	
 };

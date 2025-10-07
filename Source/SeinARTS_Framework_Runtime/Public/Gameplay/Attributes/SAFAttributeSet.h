@@ -26,7 +26,10 @@ public:
 
 protected:
 
+	/** Seed from a UStruct instance (works for ANY struct). */
 	void SeedFromUStruct(const UScriptStruct* RowStruct, const uint8* RowData, bool bPreserveCurrentIfOnlyMaxProvided);
+
+	/** Helper to get a numeric field from a UStruct instance. */
 	static bool TryGetNumericField(const UStruct* RowStruct, const uint8* RowData, const FName& FieldName, double& OutValue);
 
 };

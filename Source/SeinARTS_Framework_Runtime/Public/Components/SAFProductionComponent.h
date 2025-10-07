@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Assets/SAFAsset.h"
@@ -28,94 +28,96 @@ public:
 
 	USAFProductionComponent();
 
-	// ===========================================================================
-	//                                Production
-	// ===========================================================================
-
-	// Replicated Catalogue of production recipes this component can produce.
+	// Catalogue + Queue
+	// =======================================================================================================
+	/** Replicated Catalogue of production recipes this component can produce. */
 	UPROPERTY(VisibleInstanceOnly, ReplicatedUsing=OnRep_ProductionCatalogue, Category="SeinARTS|Production")
 	TArray<FSAFProductionRecipe> ProductionCatalogue;
 
-	// Replicated production queue (0 = head).
+	/** Replicated production queue (0 = head). */
 	UPROPERTY(VisibleInstanceOnly, ReplicatedUsing=OnRep_ProductionQueue, Category="SeinARTS|Production")
 	TArray<FSAFProductionQueueItem> ProductionQueue;
 
-	// Remaining time (seconds) on the head-of-line item (server authoritative).
+	/** Remaining time (seconds) on the head-of-line item (server authoritative). */
 	UPROPERTY(Replicated, VisibleInstanceOnly, Category="SeinARTS|Production")
 	float CurrentRemainingTime = 0.f;
 
-	// Optionally override the base arrow transform with a new spawn transform. 
-	// Useful for off-map ingress, hologram placement system, etc...
+	// Spawning / Rally Point
+	// =======================================================================================================
+	/** Optionally override the base arrow transform with a new spawn transform.
+	 * Useful for off-map ingress, hologram placement system, etc... */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Production")
 	FTransform SpawnTransformOverride;
 
-	// Optional rally point for spawned units; if unset, uses the arrow's end/direction.
+	/** Optional rally point for spawned units; if unset, uses the arrow's end/direction. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Production")
 	FVector RallyPoint = FVector::ZeroVector;
 
-	// Seeds ProductionCatalogue from UnitData.
+	// Production API
+	// =======================================================================================================
+	/** Seeds ProductionCatalogue from UnitData. */
 	UFUNCTION(BlueprintCallable, Category="SeinARTS|Production")
 	void InitProductionCatalogue(const TArray<FSAFProductionRecipe>& Recipes);
 
-	// True if the given UnitData is currently unlocked (exists in the ProductionCatalogue) and the 
-	// production recipe is enabled.
+	/** True if the given UnitData is currently unlocked (exists in the ProductionCatalogue) and the
+	 * production recipe is enabled. */
 	UFUNCTION(BlueprintPure, Category="SeinARTS|Production")
 	bool CanProduceAsset(const TSoftObjectPtr<USAFAsset>& Asset) const;
 
-	// Returns the active spawn transform of this component. The default transform is this component's
-	// transform offset to position at the end of the arrow. If SpawnTransformOverride is set, it
-	// will return it instead.
-  UFUNCTION(BlueprintPure, Category="SeinARTS|Production")
+	/** Returns the active spawn transform of this component. The default transform is this component's
+	 * transform offset to position at the end of the arrow. If SpawnTransformOverride is set, it
+	 * will return it instead. */
+	UFUNCTION(BlueprintPure, Category="SeinARTS|Production")
 	FTransform GetSpawnTransform() const;
 
-	// Sets the spawn point override of this component, to overide the default spawn transform.
-	// If this is set, all FSAFQueueItems will use SpawnTransformOverride as their SpawnTransform
-	// fallback, instead of the arrow's end transform.
+	/** Sets the spawn point override of this component, to overide the default spawn transform.
+	 * If this is set, all FSAFQueueItems will use SpawnTransformOverride as their SpawnTransform
+	 * fallback, instead of the arrow's end transform. */
 	UFUNCTION(BlueprintCallable, Category="SeinARTS|Production")
 	void SetSpawnTransformOverride(FTransform InTransform);
 
-	// Returns the spawn transform for a queue item in the queue at the index, if it exists. Useful 
-	// for getting where an item will spawn if its spawn is overridden at queue time.
-  UFUNCTION(BlueprintPure, Category="SeinARTS|Production")
+	/** Returns the spawn transform for a queue item in the queue at the index, if it exists. Useful
+	 * for getting where an item will spawn if its spawn is overridden at queue time. */
+	UFUNCTION(BlueprintPure, Category="SeinARTS|Production")
 	FSAFProductionQueueItem GetQueueItemByIndex(int32 Index) const;
 
-	// Returns the active rally point.
-  UFUNCTION(BlueprintPure, Category="SeinARTS|Production")
+	/** Returns the active rally point. */
+	UFUNCTION(BlueprintPure, Category="SeinARTS|Production")
 	FVector GetRallyPoint() const;
 
-	// Sets the active rally point. (projects to navmesh by default)
+	/** Sets the active rally point. (projects to navmesh by default) */
 	UFUNCTION(BlueprintCallable, Category="SeinARTS|Production")
 	void SetRallyPoint(FVector InRallyPoint, bool bProjectToNavMesh = true);
 
-	// Get the UnitData soft reference for a Catalogue index (nullptr soft ref if out of range).
+	/** Get the UnitData soft reference for a Catalogue index (nullptr soft ref if out of range). */
 	UFUNCTION(BlueprintCallable, Category="SeinARTS|Production")
 	FSAFProductionRecipe GetCatalogueRecipeByIndex(int32 CatalogueIndex) const;
 
-	// Enable (unlock) a recipe by its Catalogue index.
+	/** Enable (unlock) a recipe by its Catalogue index. */
 	UFUNCTION(BlueprintCallable, Category="SeinARTS|Production")
 	void EnableRecipeByIndex(int32 CatalogueIndex);
 
-	// Disable (lock) a recipe by its Catalogue index; removes queued entries for that unit.
+	/** Disable (lock) a recipe by its Catalogue index; removes queued entries for that unit. */
 	UFUNCTION(BlueprintCallable, Category="SeinARTS|Production")
 	void DisableRecipeByIndex(int32 CatalogueIndex);
 
-	// Enable (unlock) a recipe by UnitData reference.
+	/** Enable (unlock) a recipe by UnitData reference. */
 	UFUNCTION(BlueprintCallable, Category="SeinARTS|Production")
 	void EnableRecipeByData(const TSoftObjectPtr<USAFAsset>& Asset);
 
-	// Disable (lock) a recipe by UnitData reference; removes queued entries for that unit.
+	/** Disable (lock) a recipe by UnitData reference; removes queued entries for that unit. */
 	UFUNCTION(BlueprintCallable, Category="SeinARTS|Production")
 	void DisableRecipeByData(const TSoftObjectPtr<USAFAsset>& Asset);
 
-	// Client/UI call. Server validates and enqueues if allowed.
-	// This allows clients to set custom per-item spanw transforms (for placement systems, etc.).
-	// If spawn transform isn't set, it will fallback to the classes transform or its override.
-	// Use third param to tell the unit to route to rally point (if set & able) on spawn. If rally
-	// point is not set at time of spawn, nothing will happen.
+	/** Client/UI call. Server validates and enqueues if allowed.
+	 * This allows clients to set custom per-item spanw transforms (for placement systems, etc.).
+	 * If spawn transform isn't set, it will fallback to the classes transform or its override.
+	 * Use third param to tell the unit to route to rally point (if set & able) on spawn. If rally
+	 * point is not set at time of spawn, nothing will happen. */
 	UFUNCTION(BlueprintCallable, Category="SeinARTS|Production", meta=(AutoCreateRefTerm="SpawnTransform", AdvancedDisplay="SpawnTransform"))
 	void RequestEnqueue(TSoftObjectPtr<USAFAsset> Asset, const FTransform& SpawnTransform, bool bRouteToRallyPoint = true);
 
-	// Client/UI call to cancel the queue entry at Index (0=head).
+	/** Client/UI call to cancel the queue entry at Index (0=head). */
 	UFUNCTION(BlueprintCallable, Category="SeinARTS|Production")
 	void RequestCancellation(int32 Index);
 
@@ -123,12 +125,10 @@ protected:
 
 	virtual void BeginPlay() override;
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
-  virtual void OnUnregister() override;
+	virtual void OnUnregister() override;
 
-	// ===========================================================================
-	//                                Internals
-	// ===========================================================================
-
+	// Internals
+	// =========================================================================================================
 	// Internal (server): progress the head-of-line item (wire to timer/tick as desired).
 	void AdvanceBuild(float DeltaSeconds);
 
@@ -153,10 +153,8 @@ protected:
 	// Gets the SAFPlayerState of the owning actor's owning controller, if any.
 	ASAFPlayerState* GetSAFPlayerState() const;
 
-	// ===========================================================================
-	//                              Replication
-	// ===========================================================================
-
+	// Replication
+	// ======================================================================================================================================================
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	UFUNCTION() void OnRep_ProductionCatalogue();
 	UFUNCTION() void OnRep_ProductionQueue();

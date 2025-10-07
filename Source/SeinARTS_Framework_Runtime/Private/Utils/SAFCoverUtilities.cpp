@@ -17,89 +17,89 @@
 namespace SAFCoverUtilities {
 
 	// Cover Check Helpers
-	// =================================================================================================================================================================
-  /** Does a sphere collision check at point Point with radius Radius for cover and returns both the nearest cover collider and its parent actor. */
-  bool FindNearestCover(UWorld* World, FVector Point, float Radius, AActor*& OutActor, UPrimitiveComponent*& OutComponent, ESAFCoverType& OutCoverType) {
-    if (!World) { SAFDEBUG_ERROR("FindNEarestCover aborted: World is nullptr."); return false; }
+	// =====================================================================================================================================================
+	/** Does a sphere collision check at point Point with radius Radius for cover and returns both the nearest cover collider and its parent actor. */
+	bool FindNearestCover(UWorld* World, FVector Point, float Radius, AActor*& OutActor, UPrimitiveComponent*& OutComponent, ESAFCoverType& OutCoverType) {
+		if (!World) { SAFDEBUG_ERROR("FindNEarestCover aborted: World is nullptr."); return false; }
 
-    OutActor 			= nullptr;
-    OutComponent 	= nullptr;
-    OutCoverType 	= ESAFCoverType::Neutral;
+		OutActor 			= nullptr;
+		OutComponent 	= nullptr;
+		OutCoverType 	= ESAFCoverType::Neutral;
 
-    // Overlap everything; any Actor could carry a USAFCoverCollider.
-    TArray<FOverlapResult> Overlaps;
-    const FCollisionShape Sphere = FCollisionShape::MakeSphere(Radius);
-    const FCollisionObjectQueryParams ObjectParams = FCollisionObjectQueryParams::AllObjects;
-    FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(FindNearestCover), false);
+		// Overlap everything; any Actor could carry a USAFCoverCollider.
+		TArray<FOverlapResult> Overlaps;
+		const FCollisionShape Sphere = FCollisionShape::MakeSphere(Radius);
+		const FCollisionObjectQueryParams ObjectParams = FCollisionObjectQueryParams::AllObjects;
+		FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(FindNearestCover), false);
 
-    if (!World->OverlapMultiByObjectType(Overlaps, Point, FQuat::Identity, ObjectParams, Sphere, QueryParams)) return false;
+		if (!World->OverlapMultiByObjectType(Overlaps, Point, FQuat::Identity, ObjectParams, Sphere, QueryParams)) return false;
 
-    // Use DistSquared to find the nearest cover collider/actor
-    float BestDistSq = TNumericLimits<float>::Max();
-    for (const FOverlapResult& Hit : Overlaps) {
-      UPrimitiveComponent* Component = Hit.Component.Get();
-      USAFCoverCollider* CoverCollider = Component ? Cast<USAFCoverCollider>(Component) : nullptr;
-      if (!CoverCollider) continue;
+		// Use DistSquared to find the nearest cover collider/actor
+		float BestDistSq = TNumericLimits<float>::Max();
+		for (const FOverlapResult& Hit : Overlaps) {
+			UPrimitiveComponent* Component = Hit.Component.Get();
+			USAFCoverCollider* CoverCollider = Component ? Cast<USAFCoverCollider>(Component) : nullptr;
+			if (!CoverCollider) continue;
 
-      const float DistSq = FVector::DistSquared(Point, CoverCollider->GetComponentLocation());
-      if (DistSq < BestDistSq) {
-        BestDistSq 		= DistSq;
-        OutComponent 	= CoverCollider;
-        OutActor 			= CoverCollider->GetOwner();
-        OutCoverType 	= CoverCollider->CoverType;
-      }
-    }
+			const float DistSq = FVector::DistSquared(Point, CoverCollider->GetComponentLocation());
+			if (DistSq < BestDistSq) {
+				BestDistSq 		= DistSq;
+				OutComponent 	= CoverCollider;
+				OutActor 			= CoverCollider->GetOwner();
+				OutCoverType 	= CoverCollider->CoverType;
+			}
+		}
 
-    // Return true if we found both actor and collider
-    return OutComponent != nullptr && OutActor != nullptr;
-  }
+		// Return true if we found both actor and collider
+		return OutComponent != nullptr && OutActor != nullptr;
+	}
 
-  /** Checks if the vector is within a USAFCoverCollider collider box. If bProjectToNavmesh (defaults true), 
+	/** Checks if the vector is within a USAFCoverCollider collider box. If bProjectToNavmesh (defaults true), 
 	 * it projects the point to the nearest navigable point on the NavMesh first. */
-  ESAFCoverType GetCoverAtPoint(UWorld* World, FVector Point, bool bProjectToNavmesh, bool bShowDebugMessages) {
-    if (!World) return ESAFCoverType::Neutral;
+	ESAFCoverType GetCoverAtPoint(UWorld* World, FVector Point, bool bProjectToNavmesh, bool bShowDebugMessages) {
+		if (!World) return ESAFCoverType::Neutral;
 
-    // Use ProjectedPoint, if bool option is enabled it will be projected first. 
-    // Otherwise is just Point.
-    FVector ProjectedPoint = Point;
+		// Use ProjectedPoint, if bool option is enabled it will be projected first. 
+		// Otherwise is just Point.
+		FVector ProjectedPoint = Point;
 		UNavigationSystemV1* NavSys = FNavigationSystem::GetCurrent<UNavigationSystemV1>(World);
 
-    if (bProjectToNavmesh && NavSys) {
-      FNavLocation Projected;
-      if (NavSys->ProjectPointToNavigation(Point, Projected, FVector(50.f, 50.f, 200.f))) ProjectedPoint = Projected.Location;
-      else if (bShowDebugMessages) SAFDEBUG_WARNING("GetCoverAtPoint failed to project point onto navigation. Using raw input vector instead.");
-    }
+		if (bProjectToNavmesh && NavSys) {
+			FNavLocation Projected;
+			if (NavSys->ProjectPointToNavigation(Point, Projected, FVector(50.f, 50.f, 200.f))) ProjectedPoint = Projected.Location;
+			else if (bShowDebugMessages) SAFDEBUG_WARNING("GetCoverAtPoint failed to project point onto navigation. Using raw input vector instead.");
+		}
 
-    // Overlap at the point then confirm actual containment via box math
-    TArray<FOverlapResult> Overlaps;
-    const FCollisionShape Sphere = FCollisionShape::MakeSphere(5.f);
-    const FCollisionObjectQueryParams ObjectParams = FCollisionObjectQueryParams::AllObjects;
-    FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(GetCoverAtPoint), false);
-    if (!World->OverlapMultiByObjectType(Overlaps, ProjectedPoint, FQuat::Identity, ObjectParams, Sphere, QueryParams)) return ESAFCoverType::Neutral;
+		// Overlap at the point then confirm actual containment via box math
+		TArray<FOverlapResult> Overlaps;
+		const FCollisionShape Sphere = FCollisionShape::MakeSphere(5.f);
+		const FCollisionObjectQueryParams ObjectParams = FCollisionObjectQueryParams::AllObjects;
+		FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(GetCoverAtPoint), false);
+		if (!World->OverlapMultiByObjectType(Overlaps, ProjectedPoint, FQuat::Identity, ObjectParams, Sphere, QueryParams)) return ESAFCoverType::Neutral;
 
-    // Compare all cover types found and return the best cover type found 
-    // (Negative is higher than neutral in terms of information about cover)
-    ESAFCoverType BestCoverType = ESAFCoverType::Neutral;
-    for (const FOverlapResult& Result : Overlaps) {
-      UPrimitiveComponent* Component = Result.GetComponent();
-      USAFCoverCollider* Cover = Component ? Cast<USAFCoverCollider>(Component) : nullptr;
-      if (!Cover) continue;
-      if (!UKismetMathLibrary::IsPointInBoxWithTransform(ProjectedPoint, Cover->GetComponentTransform(), Cover->GetScaledBoxExtent())) continue;
+		// Compare all cover types found and return the best cover type found 
+		// (Negative is higher than neutral in terms of information about cover)
+		ESAFCoverType BestCoverType = ESAFCoverType::Neutral;
+		for (const FOverlapResult& Result : Overlaps) {
+			UPrimitiveComponent* Component = Result.GetComponent();
+			USAFCoverCollider* Cover = Component ? Cast<USAFCoverCollider>(Component) : nullptr;
+			if (!Cover) continue;
+			if (!UKismetMathLibrary::IsPointInBoxWithTransform(ProjectedPoint, Cover->GetComponentTransform(), Cover->GetScaledBoxExtent())) continue;
 
-      ESAFCoverType FoundType = Cover->CoverType;
-      if (FoundType == ESAFCoverType::Heavy) return ESAFCoverType::Heavy;
-      else if (FoundType == ESAFCoverType::Light) BestCoverType = ESAFCoverType::Light;
-      else if (FoundType == ESAFCoverType::Negative && BestCoverType == ESAFCoverType::Neutral) BestCoverType = ESAFCoverType::Negative;
-    }
+			ESAFCoverType FoundType = Cover->CoverType;
+			if (FoundType == ESAFCoverType::Heavy) return ESAFCoverType::Heavy;
+			else if (FoundType == ESAFCoverType::Light) BestCoverType = ESAFCoverType::Light;
+			else if (FoundType == ESAFCoverType::Negative && BestCoverType == ESAFCoverType::Neutral) BestCoverType = ESAFCoverType::Negative;
+		}
 
-    return BestCoverType;
-  }
-  
+		return BestCoverType;
+	}
+	
 	// Squad Cover Positions Builders (the actual positions to take up)
-	// ===================================================================================================================================================================
-  /** Build Cover Positions Around Cover Box 
-	 * Generates an array of world positions aligned to the edges of a rectangular cover object (defined by corners A–D). Squad members are distributed along the edges in 
-	 * rows, respecting spacing/offset modifiers and whether the cover should wrap around all sides. 
+	// ============================================================================================================================================================
+	/** Build Cover Positions Around Cover Box 
+	 * Generates an array of world positions aligned to the edges of a rectangular cover object (defined by corners A–D). Squad members are distributed along the 
+	 * edges in rows, respecting spacing/offset modifiers and whether the cover should wrap around all sides. 
 	 * 
 	 * ⚠ Caution:
 	 * - Requires a valid navmesh under each generated point; results are only as accurate as the provided navigation system.
@@ -107,14 +107,14 @@ namespace SAFCoverUtilities {
 	 * - Best suited for walls, sandbags, and other long cover shapes. Avoid using on small/irregular meshes.
 	 * 
 	 * This is a complex function, if you are encountering undesired or frustrating behaviour please reach out on the SeinARTS Framework support Discord. */
-  TArray<FVector> BuildCoverPositionsAroundCoverBox(
-    const FVector& A, const FVector& B, const FVector& C, const FVector& D, const FVector& Point, 
-    const TArray<AActor*>& SquadMembers, const UNavigationSystemV1* NavSys,
-    const bool bScattersInCover, const bool bWrapsCover, 
+	TArray<FVector> BuildCoverPositionsAroundCoverBox(
+		const FVector& A, const FVector& B, const FVector& C, const FVector& D, const FVector& Point, 
+		const TArray<AActor*>& SquadMembers, const UNavigationSystemV1* NavSys,
+		const bool bScattersInCover, const bool bWrapsCover, 
 		const float CoverSearchRadius, const float CoverSpacingModifier, const float CoverRowOffsetModifier, const float LateralStaggerModifier
-  ) {
-    TArray<FVector> OutPositions;
-    struct FEdge { FVector Start, End; };
+	) {
+		TArray<FVector> OutPositions;
+		struct FEdge { FVector Start, End; };
 		FEdge Edges[4] = { {A,B}, {B,C}, {C,D}, {D,A} };
 		const int32 NumEdges = UE_ARRAY_COUNT(Edges);
 
@@ -208,13 +208,13 @@ namespace SAFCoverUtilities {
 		for (int32 i = 1; i < SquadMembers.Num(); i++) {
 			if (!SAFLibrary::IsActorPtrValidSeinARTSActor(SquadMembers[i])) continue;
 
-      float BaseSpacing = 150.f;
-      if (AActor* Member = SquadMembers[i]) {
-        if (const UCapsuleComponent* Capsule = Member->FindComponentByClass<UCapsuleComponent>()) 
-          BaseSpacing = Capsule->GetScaledCapsuleRadius() * CoverSpacingModifier;
-        else if (Member->GetRootComponent()) 
-          BaseSpacing = Member->GetRootComponent()->Bounds.SphereRadius * 0.5f * CoverSpacingModifier;
-      }
+			float BaseSpacing = 150.f;
+			if (AActor* Member = SquadMembers[i]) {
+				if (const UCapsuleComponent* Capsule = Member->FindComponentByClass<UCapsuleComponent>()) 
+					BaseSpacing = Capsule->GetScaledCapsuleRadius() * CoverSpacingModifier;
+				else if (Member->GetRootComponent()) 
+					BaseSpacing = Member->GetRootComponent()->Bounds.SphereRadius * 0.5f * CoverSpacingModifier;
+			}
 
 			// Deterministic random scatter, if active
 			if (bScattersInCover) {
@@ -324,10 +324,10 @@ namespace SAFCoverUtilities {
 			OutPositions.Add(NewNavProjection.Location);
 		}
 
-    return OutPositions;
-  }
+		return OutPositions;
+	}
 
-  /** Build Cover Positions Around Cover Point 
+	/** Build Cover Positions Around Cover Point 
 	 * Generates an array of world positions spiraling outward from a central point of cover. Each successive squad member is staggered around the point, 
 	 * offset by the spacing modifier, until all members are assigned positions.
 	 * 
@@ -355,23 +355,23 @@ namespace SAFCoverUtilities {
 		const FVector ClusterCenter = CenterNav.Location;
 
 		// Average capsule radius -> target neighbor distance (diameter) we want in the clump
-    float SumRadii = 0.f;
-    int32 Count = 0;
+		float SumRadii = 0.f;
+		int32 Count = 0;
 
-    for (int32 s = 0; s < SquadMembers.Num(); ++s) {
-      if (!SAFLibrary::IsActorPtrValidSeinARTSActor(SquadMembers[s])) continue;
-      if (AActor* Member = SquadMembers[s]) {
-        if (const UCapsuleComponent* Capsule = Member->FindComponentByClass<UCapsuleComponent>()) {
-          SumRadii += Capsule->GetScaledCapsuleRadius();
-          ++Count;
-        } else if (Member->GetRootComponent()) {
-          SumRadii += Member->GetRootComponent()->Bounds.SphereRadius * 0.5f;
-          ++Count;
-        }
-      }
-    }
+		for (int32 s = 0; s < SquadMembers.Num(); ++s) {
+			if (!SAFLibrary::IsActorPtrValidSeinARTSActor(SquadMembers[s])) continue;
+			if (AActor* Member = SquadMembers[s]) {
+				if (const UCapsuleComponent* Capsule = Member->FindComponentByClass<UCapsuleComponent>()) {
+					SumRadii += Capsule->GetScaledCapsuleRadius();
+					++Count;
+				} else if (Member->GetRootComponent()) {
+					SumRadii += Member->GetRootComponent()->Bounds.SphereRadius * 0.5f;
+					++Count;
+				}
+			}
+		}
 
-    const float AvgCapsule = (Count > 0) ? (SumRadii / Count) : 50.f;
+		const float AvgCapsule = (Count > 0) ? (SumRadii / Count) : 50.f;
 
 		// Desired neighbor distance (approx) and conversion to Vogel-scale:
 		// For hex packing the area per point is A = (√3/2) * d^2, so r = sqrt(n*A/π) = d * sqrt((√3/2π) * n).

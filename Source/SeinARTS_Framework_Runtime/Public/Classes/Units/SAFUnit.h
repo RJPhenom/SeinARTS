@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "AbilitySystemInterface.h"
@@ -46,28 +46,28 @@ public:
 	virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override { return AbilitySystem; }
 
 	// Asset Interface Overrides
-	// ========================================================================================================================================
-	virtual void 									InitAsset_Implementation(USAFAsset* InAsset, ASAFPlayerState* InOwner) 															override;
-	virtual void 									SetAsset_Implementation(USAFAsset* InAsset)																													override;
+	// =================================================================================================================
+	virtual void 						InitAsset_Implementation(USAFAsset* InAsset, ASAFPlayerState* InOwner) override;
+	virtual void 						SetAsset_Implementation(USAFAsset* InAsset) override;
 
 	// Unit Interface / API
-	// ========================================================================================================================================
-	virtual void 									AttachToPawn_Implementation(APawn* Pawn);
-	virtual void 									DetachFromPawn_Implementation();
-	virtual void 									OnAttachedPawnDestroyed_Implementation(AActor* DestroyedPawn);
+	// ==================================================================================================================================
+	virtual void 						AttachToPawn_Implementation(APawn* Pawn);
+	virtual void 						DetachFromPawn_Implementation();
+	virtual void 						OnAttachedPawnDestroyed_Implementation(AActor* DestroyedPawn);
 
-	virtual ASAFFormationManager*	GetFormation_Implementation() const 																		 	{ return CurrentFormation.Get(); }
-	virtual void            			SetFormation_Implementation(ASAFFormationManager* InFormation) 						{ CurrentFormation = InFormation; }
+	virtual ASAFFormationManager*		GetFormation_Implementation() const { return CurrentFormation.Get(); }
+	virtual void            			SetFormation_Implementation(ASAFFormationManager* InFormation) { CurrentFormation = InFormation; }
 	virtual float           			GetFormationSpacing_Implementation() const;	
 
-	virtual bool            			GetOrderable_Implementation() const 																			{ return bOrderable; }
-	virtual void            			SetOrderable_Implementation(bool bNewOrderable) 													{ bOrderable = bNewOrderable; }
+	virtual bool            			GetOrderable_Implementation() const { return bOrderable; }
+	virtual void            			SetOrderable_Implementation(bool bNewOrderable) { bOrderable = bNewOrderable; }
 	virtual bool            			Order_Implementation(FSAFOrder Order);
 	virtual bool            			NotifyOrderCompleted_Implementation();
 	virtual void            			GetOrderTags_Implementation(TArray<FGameplayTag>& OutTags) const;
 
-	// Proxy to bind delegates
-  UFUNCTION() void OnAttachedPawnDestroyedProxy(AActor* DestroyedPawn);
+	/** Proxy to bind delegates */
+	UFUNCTION() void OnAttachedPawnDestroyedProxy(AActor* DestroyedPawn);
 
 	/** A reference to this Unit Actor's pawn representation. In the SeinARTS Framework some units represented by and attached 
 	 * to a pawn rather than using its own mesh 	component and interface. This is to keep some units lightweight on the server.
@@ -94,10 +94,10 @@ public:
 	float FormationSpacing = 50.f;
 
 	// Production Component
-	// ==========================================================================================================================
+	// ==================================================================================================
 	/** A reference to the SAFProductionComponent on this unit. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Replicated, Category="SeinARTS|Abilities")
-  TObjectPtr<USAFProductionComponent> ProductionComponent = nullptr;
+	TObjectPtr<USAFProductionComponent> ProductionComponent = nullptr;
 
 protected:
 
@@ -106,10 +106,10 @@ protected:
 	virtual void OnSubobjectCreatedFromReplication(UObject* NewSubobject) override;
 
 	// GAS Helpers / API
-	// ====================================================================================
+	// ==================================================================================================
 	/** A reference to the ASC on this unit. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="SeinARTS|Abilities")
-  TObjectPtr<UAbilitySystemComponent> AbilitySystem = nullptr;
+	TObjectPtr<UAbilitySystemComponent> AbilitySystem = nullptr;
 
 	/** Initializes the ability system component */
 	void InitAbilitySystem();
@@ -134,7 +134,7 @@ protected:
 	void InitDesignerAttributes();
 		
 	// Replication
-	// ====================================================================================================
+	// ==================================================================================================
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	UFUNCTION() void OnRep_AttachedPawn();
 	UFUNCTION()	void OnRep_CurrentFormation();

@@ -17,14 +17,17 @@
 UCLASS(Abstract)
 class SEINARTS_FRAMEWORK_RUNTIME_API USAFAbility : public UGameplayAbility {
 
-  GENERATED_BODY()
+	GENERATED_BODY()
 
 public:
 
-  /** Constructor sets defaults on replication policies for SAFAbility GAS Blueprints */
-  USAFAbility(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
+	/** Constructor sets defaults on replication policies for SAFAbility GAS Blueprints */
+	USAFAbility(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 
-  UPROPERTY(BlueprintReadWrite) FSAFOrder OrderPayload;
-  UFUNCTION(BlueprintCallable) virtual void SetOrderPayload(const FSAFOrder& In) { OrderPayload = In; }
-  
+  /** Order payload for the ability. */
+	UPROPERTY(BlueprintReadWrite) FSAFOrder OrderPayload;
+
+  /** Sets the order payload for the ability. */
+	UFUNCTION(BlueprintCallable) virtual void SetOrderPayload(const FSAFOrder& In) { OrderPayload = In; }
+	
 };

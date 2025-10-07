@@ -88,15 +88,15 @@ bool USAFCoverCollider::GetCoverNavBounds(FVector& OutA, FVector& OutB, FVector&
 
 // Handler function for when a new actor enters this cover collider (by default called the EntersCover on that object, if it implements the SAFCoverInterface).
 void USAFCoverCollider::HandleBeginOverlap(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult) {
-  if (OtherActor == GetOwner()) return;
+	if (OtherActor == GetOwner()) return;
 	if (!SAFLibrary::IsActorPtrValidSeinARTSActor(OtherActor)) return;
-  if (!OtherActor->GetClass()->ImplementsInterface(USAFCoverInterface::StaticClass())) return;
+	if (!OtherActor->GetClass()->ImplementsInterface(USAFCoverInterface::StaticClass())) return;
 	ISAFCoverInterface::Execute_EnterCover(OtherActor, GetOwner(), CoverType);
 }
 
 // Handler function for when a new actor exits this cover collider (by default called the ExitCover on that object, if it implements the SAFCoverInterface).
 void USAFCoverCollider::HandleEndOverlap(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex) {
-  if (OtherActor == GetOwner()) return;
+	if (OtherActor == GetOwner()) return;
 	if (!SAFLibrary::IsActorPtrValidSeinARTSActor(OtherActor)) return;
 	if (!OtherActor->GetClass()->ImplementsInterface(USAFCoverInterface::StaticClass())) return;
 	ISAFCoverInterface::Execute_ExitCover(OtherActor, GetOwner(), CoverType);

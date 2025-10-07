@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Assets/Units/SAFSquadAsset.h"
@@ -30,12 +30,12 @@ public:
 	USAFSquadAsset* GetSquadAsset() { return Cast<USAFSquadAsset>(SAFAssetResolver::ResolveAsset(Asset)); }
 
 	// Asset Interface Overrides
-	// ====================================================================================================================
-	virtual void 				InitAsset_Implementation(USAFAsset* InAsset, ASAFPlayerState* InOwner) 										override;
-	virtual float 			GetFormationSpacing_Implementation() const 																								override;
+	// ===========================================================================================================
+	virtual void 		InitAsset_Implementation(USAFAsset* InAsset, ASAFPlayerState* InOwner)			override;
+	virtual float 		GetFormationSpacing_Implementation() const										override;
 
 	// Squad Cover API
-	// ====================================================================================================================
+	// ===========================================================================================================
 	/** Tracks the highest state of current cover, for UI/UX purposes.
 	(actual cover value for gameplay logic is tracked on individual squad members). */
 	UPROPERTY(VisibleAnywhere, BlueprintReadWrite, ReplicatedUsing=OnRep_CurrentCover, Category="SeinARTS|Cover")
@@ -160,14 +160,14 @@ public:
 	virtual void CullSquadAndMembers_Implementation();
 
 	// Attcahed Pawn Override
-	// ====================================================================================================================
+	// ==================================================================================================
 	/** Override the basic on destroy implementation from ASAFUnit */
-  virtual void OnAttachedPawnDestroyed_Implementation(AActor* DestroyedPawn) override;
+	virtual void OnAttachedPawnDestroyed_Implementation(AActor* DestroyedPawn) override;
 
 protected:
 
 	// Asset Interface Overrides
-	// ====================================================================================================================
+	// ==================================================================================================
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	UFUNCTION()	void OnRep_CurrentCover();
 	UFUNCTION()	void OnRep_SquadMembers();

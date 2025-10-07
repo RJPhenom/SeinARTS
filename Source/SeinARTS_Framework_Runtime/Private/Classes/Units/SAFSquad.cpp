@@ -20,10 +20,8 @@ ASAFSquad::ASAFSquad() {
 	SquadMemberClass = ASAFSquadMember::StaticClass();
 }
 
-// ===========================================================================
-//                            SAFUnitInterface
-// ===========================================================================
-
+// Asset Interface Overrides
+// ============================================================================================================================================
 // Overide adds additional initalization steps
 void ASAFSquad::InitAsset_Implementation(USAFAsset* InAsset, ASAFPlayerState* InOwner) {
 	if (!HasAuthority()) return;
@@ -43,29 +41,27 @@ void ASAFSquad::InitAsset_Implementation(USAFAsset* InAsset, ASAFPlayerState* In
 // pulled from the FormationSpacing prop. Prefers instance positions, but will fallback on the
 // data asset and then finally just the unit prop if all else fails.
 float ASAFSquad::GetFormationSpacing_Implementation() const {
-  const TArray<FVector>* SourcePositions = &Positions;
-  if (SourcePositions->Num() == 0) {
+	const TArray<FVector>* SourcePositions = &Positions;
+	if (SourcePositions->Num() == 0) {
 		const USAFSquadAsset* SquadAsset = Cast<USAFSquadAsset>(SAFAssetResolver::ResolveAsset(Asset));
 		if (SquadAsset) SourcePositions = &SquadAsset->Positions;
 	}
 
-  if (SourcePositions->Num() == 0) return FormationSpacing;
-  const FVector Center = (*SourcePositions)[0];
-  float MaxDistSq = 0.f;
+	if (SourcePositions->Num() == 0) return FormationSpacing;
+	const FVector Center = (*SourcePositions)[0];
+	float MaxDistSq = 0.f;
 
-  for (int32 i = 1; i < SourcePositions->Num(); ++i) {
-    const float DistSq = FVector::DistSquared((*SourcePositions)[i], Center);
-    if (DistSq > MaxDistSq) MaxDistSq = DistSq;
-  }
+	for (int32 i = 1; i < SourcePositions->Num(); ++i) {
+		const float DistSq = FVector::DistSquared((*SourcePositions)[i], Center);
+		if (DistSq > MaxDistSq) MaxDistSq = DistSq;
+	}
 
-  const float Radius = FMath::Sqrt(MaxDistSq);
-  return Radius + FormationSpacing;
+	const float Radius = FMath::Sqrt(MaxDistSq);
+	return Radius + FormationSpacing;
 }
 
-// ===========================================================================
-//                                  Squad
-// ===========================================================================
-
+// Squad API
+// ========================================================================================================================================================
 // Initializes the squad (generates members and positions)
 void ASAFSquad::InitSquad_Implementation(USAFSquadAsset* SquadAsset) {
 	if (!HasAuthority()) return;
@@ -73,7 +69,7 @@ void ASAFSquad::InitSquad_Implementation(USAFSquadAsset* SquadAsset) {
 	
 	UClass* MemberClass = SquadMemberClass.LoadSynchronous();
 	if (!MemberClass 
-		|| !MemberClass->ImplementsInterface(USAFAssetInterface::StaticClass())
+		|| !MemberClass->ImplementsInterface(USAFActorInterface::StaticClass())
 		|| !MemberClass->ImplementsInterface(USAFSquadMemberInterface::StaticClass())
 	) { SAFDEBUG_ERROR("InitSquad aborted: invalid SquadMemberClass."); return;	}
 	if (!SquadAsset) { SAFDEBUG_ERROR("InitSquad aborted: null SquadAsset."); return; }
@@ -158,13 +154,13 @@ void ASAFSquad::SetSquadLeader_Implementation(APawn* InSquadLeader) {
 // Find the next leader for the squad when needed. (e.g. when SquadLeader dies)
 APawn* ASAFSquad::FindNextSquadLeader_Implementation() {
 	UClass* MemberClass = SquadMemberClass.LoadSynchronous();
-  for (const TObjectPtr<APawn>& Member : SquadMembers) {
-    if (!Member) continue;
+	for (const TObjectPtr<APawn>& Member : SquadMembers) {
+		if (!Member) continue;
 		if (!MemberClass || !Member->IsA(MemberClass)) continue;
 		if (IsValid(Member) && Member != AttachedPawn && !Member->IsActorBeingDestroyed()) return Member;
-  }
+	}
 
-  return nullptr;
+	return nullptr;
 }
 
 // Returns whoever is at index 0 in the SquadMembers array. This can change dynamically
@@ -295,10 +291,10 @@ TArray<FVector> ASAFSquad::GetCoverPositionsAtPoint_Implementation(const FVector
 // CullSquadAndMembers(). Leave Positions input blank to query the current Positions array 
 // on the squad.
 void ASAFSquad::CullSquad_Implementation() {
-  if (SquadMembers.Num() <= 0 && HasAuthority()) {
-    SAFDEBUG_INFO(FORMATSTR("Squad '%s' has been emptied: destroying squad.", *GetName()));
-    Destroy();
-  }
+	if (SquadMembers.Num() <= 0 && HasAuthority()) {
+		SAFDEBUG_INFO(FORMATSTR("Squad '%s' has been emptied: destroying squad.", *GetName()));
+		Destroy();
+	}
 }
 
 // Calls Destroy() on each SquadMember and then destroys itself. Leave Positions input blank 
@@ -311,10 +307,8 @@ void ASAFSquad::CullSquadAndMembers_Implementation() {
 	Destroy();
 }
 
-// ===========================================================================
-//                                 Pawn
-// ===========================================================================
-
+// Pawn Attachment Handling
+// ========================================================================================================================================================
 // Override the basic on destroy implementation from ASAFUnit
 void ASAFSquad::OnAttachedPawnDestroyed_Implementation(AActor* DestroyedPawn) {
 	if (!HasAuthority()) return;
@@ -326,17 +320,15 @@ void ASAFSquad::OnAttachedPawnDestroyed_Implementation(AActor* DestroyedPawn) {
 	ISAFUnitInterface::Execute_AttachToPawn(this, NewLeader);
 }
 
-// ===========================================================================
-//                              Replication
-// ===========================================================================
-
+// Replication
+// =================================================================================================
 void ASAFSquad::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const {
-  Super::GetLifetimeReplicatedProps(OutLifetimeProps);
-  DOREPLIFETIME(ASAFSquad, CurrentCover);
-  DOREPLIFETIME(ASAFSquad, CoverSearchRadius);
-  DOREPLIFETIME(ASAFSquad, SquadMembers);
-  DOREPLIFETIME(ASAFSquad, SquadLeader);
-  DOREPLIFETIME(ASAFSquad, Positions);
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(ASAFSquad, CurrentCover);
+	DOREPLIFETIME(ASAFSquad, CoverSearchRadius);
+	DOREPLIFETIME(ASAFSquad, SquadMembers);
+	DOREPLIFETIME(ASAFSquad, SquadLeader);
+	DOREPLIFETIME(ASAFSquad, Positions);
 }
 
 void ASAFSquad::OnRep_CurrentCover() {

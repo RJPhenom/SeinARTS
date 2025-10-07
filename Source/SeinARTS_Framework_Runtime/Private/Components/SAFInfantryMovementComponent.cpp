@@ -12,8 +12,8 @@ USAFInfantryMovementComponent::USAFInfantryMovementComponent() {
 	SetPlaneConstraintNormal(FVector::UpVector);
 	bSnapToPlaneAtStart = true;
 
-  Acceleration = 3000.f;
-  Deceleration = 4000.f;
+	Acceleration = 3000.f;
+	Deceleration = 4000.f;
 	MaxSpeed = MaxGroundSpeed;
 }
 

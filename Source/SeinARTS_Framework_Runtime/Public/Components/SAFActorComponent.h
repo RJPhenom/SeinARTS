@@ -2,7 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
-#include "Interfaces/SAFAssetInterface.h"
+#include "Interfaces/SAFActorInterface.h"
 #include "SAFActorComponent.generated.h"
 
 class ASAFPlayerState;
@@ -26,10 +26,10 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnSAFDeath);
  * 
  * A composition-first replacement for SAFActor’s “framework state”.
  * Attach to any AActor/APawn to make it a selectable, ownable SAF object.
- * Implements SAFAssetInterface so code can bind to component or host.
+ * Implements SAFActorInterface so code can bind to component or host.
  */
 UCLASS(ClassGroup=(SeinARTS), Blueprintable, BlueprintType, meta=(BlueprintSpawnableComponent))
-class SEINARTS_FRAMEWORK_RUNTIME_API USAFActorComponent : public UActorComponent, public ISAFAssetInterface {
+class SEINARTS_FRAMEWORK_RUNTIME_API USAFActorComponent : public UActorComponent, public ISAFActorInterface {
 
 	GENERATED_BODY()
 
@@ -130,6 +130,7 @@ public:
 	FOnSAFDeath OnDeath;
 
 	// Replication
+	// =================================================================================================
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 protected:

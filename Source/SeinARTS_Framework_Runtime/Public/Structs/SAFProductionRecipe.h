@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Structs/SAFResources.h"
@@ -15,11 +15,7 @@ class USAFAsset;
  */
 USTRUCT(BlueprintType)
 struct FSAFProductionRecipe {
-    GENERATED_BODY()
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
-    TSoftObjectPtr<USAFAsset> Asset;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
-    bool bEnabled = false;
+	GENERATED_BODY()
+	UPROPERTY(EditAnywhere, BlueprintReadWrite) TSoftObjectPtr<USAFAsset> Asset;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite) bool bEnabled = false;
 };

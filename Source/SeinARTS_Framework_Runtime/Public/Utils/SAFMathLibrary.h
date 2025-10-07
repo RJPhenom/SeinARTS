@@ -22,16 +22,16 @@ namespace SAFMathLibrary {
 
 // Interpolation
 // ==========================================================================================================================================
-float SmoothClamp(float A, float B, float Min, float Max);
-float ReverseSmoothClamp(float A, float B, float Min, float Max);
-float SmoothStepForwardVelocity(float DeltaTime, float CurrSignedSpeed, float TargetSignedSpeed, float InAcceleration, float InDeceleration);
+float 	SmoothClamp(float A, float B, float Min, float Max);
+float 	ReverseSmoothClamp(float A, float B, float Min, float Max);
+float 	SmoothStepForwardVelocity(float DeltaTime, float CurrSignedSpeed, float TargetSignedSpeed, float InAcceleration, float InDeceleration);
     
 // Geometry / Nav
 // =====================================================================================================================
 FVector VectorIntersect(const FVector& A1, const FVector& A2, const FVector& B1, const FVector& B2);
 FVector EdgeOutwardNormal2D(const FVector& EdgeStart, const FVector& EdgeEnd, const FVector& ShapeCenter);
-float ComputeActorStandoff(const AActor* Actor, float Min = 20.f, float Multiplier = 0.6f, float FallbackRadius = 50.f);
-bool CheckPointOverlapsPositions(const FVector& Point, float Radius, const TArray<FVector>& Positions);
+float 	ComputeActorStandoff(const AActor* Actor, float Min = 20.f, float Multiplier = 0.6f, float FallbackRadius = 50.f);
+bool 	CheckPointOverlapsPositions(const FVector& Point, float Radius, const TArray<FVector>& Positions);
 
 }
 

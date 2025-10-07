@@ -22,12 +22,12 @@ class SEINARTS_FRAMEWORK_RUNTIME_API USAFVehicleAsset : public USAFUnitAsset {
 
 public:
 
-	// Skeletal mesh to use for the vehicle pawn.
+	/** Skeletal mesh to use for the vehicle pawn. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Visual")
 	TSoftObjectPtr<USkeletalMesh> SkeletalMesh;
 
-	// AnimBP class (AnimInstance subclass).
+	/** AnimBP class (AnimInstance subclass). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Visual")
 	TSoftClassPtr<UAnimInstance> AnimClass;
-  
+	
 };

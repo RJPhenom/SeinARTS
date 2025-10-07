@@ -20,22 +20,20 @@ ASAFCameraPawn::ASAFCameraPawn() {
 void ASAFCameraPawn::BeginPlay() {
 	Super::BeginPlay();
 	ResetCamera();
-  MoveSpeed = BaseMoveSpeed;
+	MoveSpeed = BaseMoveSpeed;
 }
 
 void ASAFCameraPawn::Tick(float DeltaSeconds) {
 	Super::Tick(DeltaSeconds);
 	if (FollowTarget) {
-    const FVector TargetLocation = FollowTarget->GetActorLocation();
-    const FVector BoundedLocation = GetBoundedLocation(TargetLocation);
-    SetActorLocation(BoundedLocation);
-  }
+		const FVector TargetLocation = FollowTarget->GetActorLocation();
+		const FVector BoundedLocation = GetBoundedLocation(TargetLocation);
+		SetActorLocation(BoundedLocation);
+	}
 }
 
-// ===========================================================================
-//                               Camera Control
-// ===========================================================================
-
+// Camera Controls
+// =================================================================================================================================
 // Sets the follow target safely
 void ASAFCameraPawn::Follow(AActor* Actor) {
 	if (SAFLibrary::IsActorPtrValidSeinARTSActor(Actor)) {
@@ -98,9 +96,9 @@ void ASAFCameraPawn::RotateCamera(FVector2D Input) {
 // Zoom is immediately set, so no need to call this every Tick.
 void ASAFCameraPawn::ZoomCamera(float AxisValue) {
 	if (!Camera) {
-    SAFDEBUG_ERROR("ZoomCamera failed: Camera component is nullptr.");
-    return;
-  }
+		SAFDEBUG_ERROR("ZoomCamera failed: Camera component is nullptr.");
+		return;
+	}
 
 	const FVector CurrRelativeLocation = Camera->GetRelativeLocation();
 	const float DesiredX = CurrRelativeLocation.X + (-AxisValue * ZoomSpeed);

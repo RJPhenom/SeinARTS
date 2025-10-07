@@ -8,7 +8,7 @@
 
 // Pre change override helps keep % when max changes; clamp current to new max.
 void USAFAttributes::PreAttributeChange(const FGameplayAttribute& Attribute, float& NewValue) {
-  // Health
+	// Health
 	if (Attribute == GetMaxHealthAttribute())	{
 		NewValue = FMath::Max(0.f, NewValue);
 		const float OldMax = GetMaxHealth();
@@ -18,9 +18,9 @@ void USAFAttributes::PreAttributeChange(const FGameplayAttribute& Attribute, flo
 		}	else {
 			SetHealth(FMath::Clamp(GetHealth(), 0.f, NewValue));
 		}
-  }
+	}
 
-  // Shields
+	// Shields
 	else if (Attribute == GetMaxShieldsAttribute()) {
 		NewValue = FMath::Max(0.f, NewValue);
 		const float OldMax = GetMaxShields();
@@ -30,9 +30,9 @@ void USAFAttributes::PreAttributeChange(const FGameplayAttribute& Attribute, flo
 		}	else {
 			SetShields(FMath::Clamp(GetShields(), 0.f, NewValue));
 		}
-  }
+	}
 
-  // Morale
+	// Morale
 	else if (Attribute == GetMaxMoraleAttribute()) {
 		NewValue = FMath::Max(0.f, NewValue);
 		const float OldMax = GetMaxMorale();
@@ -62,35 +62,35 @@ void USAFAttributes::PostGameplayEffectExecute(const FGameplayEffectModCallbackD
 
 // Returns the cost attributes as a FSAFResources bundle.
 FSAFResources USAFAttributes::BundleResources(ESAFResourceRoundingPolicy Policy) const {
-  FSAFResources Out;
+	FSAFResources Out;
 
-  const float C1  = Cost1.GetCurrentValue();
-  const float C2  = Cost2.GetCurrentValue();
-  const float C3  = Cost3.GetCurrentValue();
-  const float C4  = Cost4.GetCurrentValue();
-  const float C5  = Cost5.GetCurrentValue();
-  const float C6  = Cost6.GetCurrentValue();
-  const float C7  = Cost7.GetCurrentValue();
-  const float C8  = Cost8.GetCurrentValue();
-  const float C9  = Cost9.GetCurrentValue();
-  const float C10 = Cost10.GetCurrentValue();
-  const float C11 = Cost11.GetCurrentValue();
-  const float C12 = Cost12.GetCurrentValue();
+	const float C1  = Cost1.GetCurrentValue();
+	const float C2  = Cost2.GetCurrentValue();
+	const float C3  = Cost3.GetCurrentValue();
+	const float C4  = Cost4.GetCurrentValue();
+	const float C5  = Cost5.GetCurrentValue();
+	const float C6  = Cost6.GetCurrentValue();
+	const float C7  = Cost7.GetCurrentValue();
+	const float C8  = Cost8.GetCurrentValue();
+	const float C9  = Cost9.GetCurrentValue();
+	const float C10 = Cost10.GetCurrentValue();
+	const float C11 = Cost11.GetCurrentValue();
+	const float C12 = Cost12.GetCurrentValue();
 
-  Out.Resource1  = FSAFResources::ToIntByPolicy(C1,  Policy);
-  Out.Resource2  = FSAFResources::ToIntByPolicy(C2,  Policy);
-  Out.Resource3  = FSAFResources::ToIntByPolicy(C3,  Policy);
-  Out.Resource4  = FSAFResources::ToIntByPolicy(C4,  Policy);
-  Out.Resource5  = FSAFResources::ToIntByPolicy(C5,  Policy);
-  Out.Resource6  = FSAFResources::ToIntByPolicy(C6,  Policy);
-  Out.Resource7  = FSAFResources::ToIntByPolicy(C7,  Policy);
-  Out.Resource8  = FSAFResources::ToIntByPolicy(C8,  Policy);
-  Out.Resource9  = FSAFResources::ToIntByPolicy(C9,  Policy);
-  Out.Resource10 = FSAFResources::ToIntByPolicy(C10, Policy);
-  Out.Resource11 = FSAFResources::ToIntByPolicy(C11, Policy);
-  Out.Resource12 = FSAFResources::ToIntByPolicy(C12, Policy);
+	Out.Resource1  = FSAFResources::ToIntByPolicy(C1,  Policy);
+	Out.Resource2  = FSAFResources::ToIntByPolicy(C2,  Policy);
+	Out.Resource3  = FSAFResources::ToIntByPolicy(C3,  Policy);
+	Out.Resource4  = FSAFResources::ToIntByPolicy(C4,  Policy);
+	Out.Resource5  = FSAFResources::ToIntByPolicy(C5,  Policy);
+	Out.Resource6  = FSAFResources::ToIntByPolicy(C6,  Policy);
+	Out.Resource7  = FSAFResources::ToIntByPolicy(C7,  Policy);
+	Out.Resource8  = FSAFResources::ToIntByPolicy(C8,  Policy);
+	Out.Resource9  = FSAFResources::ToIntByPolicy(C9,  Policy);
+	Out.Resource10 = FSAFResources::ToIntByPolicy(C10, Policy);
+	Out.Resource11 = FSAFResources::ToIntByPolicy(C11, Policy);
+	Out.Resource12 = FSAFResources::ToIntByPolicy(C12, Policy);
 
-  return Out;
+	return Out;
 }
 
 // ===========================================================================

@@ -25,44 +25,49 @@ public:
 	virtual void InitGameState() override;
 	virtual void PostLogin(APlayerController* NewPlayer) override;
 
+	/** Number of teams in the match. */
 	UPROPERTY(EditDefaultsOnly, Category="SeinARTS|Teams")
-  int32 NumTeams = 4;
+	int32 NumTeams = 4;
 
+	/** Number of players per team in the match. */
 	UPROPERTY(EditDefaultsOnly, Category="SeinARTS|Teams")
-  int32 NumPlayers = 4;
+	int32 NumPlayers = 4;
 
+	/** Number of players per team in the match. */
 	UPROPERTY(EditDefaultsOnly, Category="SeinARTS|Teams")
-  int32 NumPlayersPerTeam = 1;
+	int32 NumPlayersPerTeam = 1;
 
+	/** If true, all players on the same team share resources 
+	 * (default: false). */
 	UPROPERTY(EditDefaultsOnly, Category="SeinARTS|Teams")
-  bool bResourceSharingEnabled = false;
+	bool bResourceSharingEnabled = false;
 
 private:
 
 	int32 NextTeam = 0;
 
-	// Chooses the next logical team of a player to join by iterating over the teams,
-	// finding the team with the fewest players, and assigning that team.
+	/** Chooses the next logical team of a player to join by iterating over the teams,
+	 * finding the team with the fewest players, and assigning that team. */
 	int32 ChooseTeam(ASAFGameState* SAFGameState) const;
 
-	// Add a player to the next team selected by ChooseTeam().
+	/** Add a player to the next team selected by ChooseTeam(). */
 	bool AddPlayer(ASAFGameState* SAFGameState, ASAFPlayerState* SAFPlayerState);
 
-	// Adds a player to the associated team with the passed in ID, if able.
+	/** Adds a player to the associated team with the passed in ID, if able. */
 	bool AddPlayerToTeam(ASAFGameState* SAFGameState, ASAFPlayerState* SAFPlayerState, int32 TeamID);
 
-	// Add a player to a specific team at a specific player slot on that team (useful for fixed spawn modes).
+	/** Add a player to a specific team at a specific player slot on that team (useful for fixed spawn modes). */
 	bool AddPlayerToTeamAtSlot(ASAFGameState* SAFGameState, ASAFPlayerState* SAFPlayerState, int32 DesiredTeamID, int32 DesiredPlayerID);
 
-	// Handles the event when a player broadcasts they are ready on the server.
+	/** Handles the event when a player broadcasts they are ready on the server. */
 	UFUNCTION()
 	void HandlePlayerReady(ASAFPlayerController* PlayerController);
 
-	// Sets the resource sharing mode for this game mode instance.
+	/** Sets the resource sharing mode for this game mode instance. */
 	UFUNCTION(BlueprintCallable, Category="SeinARTS|Economy")
 	void SetResourceSharingEnabled(bool bEnabled);	
 
-	// Tries to start the match after all players reported ready. 
+	/** Tries to start the match after all players reported ready. */
 	bool TryStartSAFMatch();
 
 	// Starts the SeinARTS Framework match (runs SAF Inits).

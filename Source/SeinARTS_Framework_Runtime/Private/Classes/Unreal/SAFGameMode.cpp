@@ -5,7 +5,7 @@
 #include "Classes/Unreal/SAFHUD.h"
 #include "Classes/Unreal/SAFCameraPawn.h"
 #include "Interfaces/SAFPlayerInterface.h"
-#include "Interfaces/SAFAssetInterface.h"
+#include "Interfaces/SAFActorInterface.h"
 #include "Utils/SAFLibrary.h"
 #include "EngineUtils.h"
 #include "Debug/SAFDebugTool.h"
@@ -20,34 +20,34 @@ ASAFGameMode::ASAFGameMode() {
 
 // Init override handles building the array of teams
 void ASAFGameMode::InitGameState() {
-  Super::InitGameState();
+	Super::InitGameState();
 
 	// Compute max players per team
 	int32 Remainder = NumPlayers % NumTeams;
 	NumPlayersPerTeam = NumPlayers / NumTeams;
 	if (Remainder != 0) SAFDEBUG_WARNING("Uneven players per team, excess players will not be able to play!");
 
-  ASAFGameState* SAFGameState = GetGameState<ASAFGameState>();
-  if (!IsValid(SAFGameState)) return;
+	ASAFGameState* SAFGameState = GetGameState<ASAFGameState>();
+	if (!IsValid(SAFGameState)) return;
 
 	SAFGameState->bResourceSharingEnabled = bResourceSharingEnabled;
-  SAFGameState->Teams.Reset();
-  for (int32 i = 0; i < NumTeams; ++i) {
-    FSAFTeam Team; 
+	SAFGameState->Teams.Reset();
+	for (int32 i = 0; i < NumTeams; ++i) {
+		FSAFTeam Team; 
 		Team.Players.SetNumZeroed(NumPlayersPerTeam);
-    SAFGameState->Teams.Add(Team);
-  }
+		SAFGameState->Teams.Add(Team);
+	}
 
 	SAFGameState->ForceNetUpdate();
 }
 
 // Override handles team assignments on player login.
 void ASAFGameMode::PostLogin(APlayerController* NewPlayer) {
-  Super::PostLogin(NewPlayer);
+	Super::PostLogin(NewPlayer);
 	ASAFGameState* SAFGameState = GetGameState<ASAFGameState>();
 	ASAFPlayerState* SAFPlayerState = Cast<ASAFPlayerState>(NewPlayer->PlayerState);
 	ASAFPlayerController* SAFPlayerController = Cast<ASAFPlayerController>(NewPlayer);
-  if (!IsValid(SAFGameState) || !IsValid(SAFPlayerState) || !IsValid(SAFPlayerController)) return;
+	if (!IsValid(SAFGameState) || !IsValid(SAFPlayerState) || !IsValid(SAFPlayerController)) return;
 
 	SAFGameState->bResourceSharingEnabled = bResourceSharingEnabled;
 	int32 DesiredTeam = SAFPlayerController->DesiredTeamID;
@@ -61,39 +61,41 @@ void ASAFGameMode::PostLogin(APlayerController* NewPlayer) {
 	SAFPlayerController->OnServerReady.AddDynamic(this, &ASAFGameMode::HandlePlayerReady);
 }
 
+// Player Login, Init / Choose Team Helpers
+// =================================================================================================================================
 // Chooses the next logical team of a player to join by iterating over the teams,
 // finding the team with the fewest players, and assigning that team.
 int32 ASAFGameMode::ChooseTeam(ASAFGameState* SAFGameState) const {
-  int32 TeamID = 0;
-  int32 TeamCount  = INT_MAX;
+	int32 TeamID = 0;
+	int32 TeamCount  = INT_MAX;
 
-  for (int32 i = 1; i <= SAFGameState->Teams.Num(); ++i) {
-    const FSAFTeam* Team = SAFGameState->FindTeam(i);
-    if (!Team) continue;
+	for (int32 i = 1; i <= SAFGameState->Teams.Num(); ++i) {
+		const FSAFTeam* Team = SAFGameState->FindTeam(i);
+		if (!Team) continue;
 
-    int32 Occupied = 0;
-    for (APlayerState* PlayerState : Team->Players) if (IsValid(PlayerState)) ++Occupied;
+		int32 Occupied = 0;
+		for (APlayerState* PlayerState : Team->Players) if (IsValid(PlayerState)) ++Occupied;
 
-    if (Occupied < TeamCount && Occupied < NumPlayersPerTeam) {
-      TeamCount  = Occupied;
-      TeamID = i;
-    }
-  }
+		if (Occupied < TeamCount && Occupied < NumPlayersPerTeam) {
+			TeamCount  = Occupied;
+			TeamID = i;
+		}
+	}
 
-  return TeamID;
+	return TeamID;
 }
 
 // Add a player to the next team selected by ChooseTeam().
 bool ASAFGameMode::AddPlayer(ASAFGameState* SAFGameState, ASAFPlayerState* SAFPlayerState) {
 	const int32 TeamID = ChooseTeam(SAFGameState);
 	if (TeamID == 0) { SAFDEBUG_WARNING("AddPlayerToTeam failed: all teams are full."); return false; }
-  return AddPlayerToTeam(SAFGameState, SAFPlayerState, TeamID);
+	return AddPlayerToTeam(SAFGameState, SAFPlayerState, TeamID);
 }
 
 // Adds a player to the associated team with the passed in ID, if able.
 bool ASAFGameMode::AddPlayerToTeam(ASAFGameState* SAFGameState, ASAFPlayerState* SAFPlayerState, int32 DesiredTeamID) {
-  if (!IsValid(SAFGameState) || !IsValid(SAFPlayerState)) return false;
-  if (FSAFTeam* Team = SAFGameState->FindTeam(DesiredTeamID)) {
+	if (!IsValid(SAFGameState) || !IsValid(SAFPlayerState)) return false;
+	if (FSAFTeam* Team = SAFGameState->FindTeam(DesiredTeamID)) {
 		if (!Team) return false;
 		for (int32 i = 0; i < Team->Players.Num(); i++) {
 			if (!IsValid(Team->Players[i])) {
@@ -140,44 +142,46 @@ void ASAFGameMode::HandlePlayerReady(ASAFPlayerController* PlayerController) {
 
 // Sets the resource sharing mode for this game mode instance.
 void ASAFGameMode::SetResourceSharingEnabled(bool bEnabled) {
-  if (!HasAuthority()) return;
-  bResourceSharingEnabled = bEnabled;
+	if (!HasAuthority()) return;
+	bResourceSharingEnabled = bEnabled;
 
-  if (ASAFGameState* SAFGameState = GetGameState<ASAFGameState>()) {
-    if (SAFGameState->bResourceSharingEnabled != bEnabled) {
-      SAFGameState->bResourceSharingEnabled = bEnabled;
-      SAFGameState->ForceNetUpdate();
-    }
-  }
+	if (ASAFGameState* SAFGameState = GetGameState<ASAFGameState>()) {
+		if (SAFGameState->bResourceSharingEnabled != bEnabled) {
+			SAFGameState->bResourceSharingEnabled = bEnabled;
+			SAFGameState->ForceNetUpdate();
+		}
+	}
 }
 
+// Try/Start Match
+// =================================================================================================================
 // Tries to start the match after all players reported ready. 
 bool ASAFGameMode::TryStartSAFMatch() {
 	if (bSAFMatchStarted) { SAFDEBUG_WARNING("TryStartSAFMatch: match already started. Discarding."); return false; }
 	if (!HasAuthority()) { SAFDEBUG_WARNING("TryStartSAFMatch: called on non-authority."); return false; } // Line 140
 
-  ASAFGameState* SAFGameState = GetGameState<ASAFGameState>();
-  if (!IsValid(SAFGameState)) { SAFDEBUG_ERROR("StartSAFMatch aborted: GameState is incorrect type."); return false; }
+	ASAFGameState* SAFGameState = GetGameState<ASAFGameState>();
+	if (!IsValid(SAFGameState)) { SAFDEBUG_ERROR("StartSAFMatch aborted: GameState is incorrect type."); return false; }
 
-  int32 ReadyCount = 0;
-  int32 ConnectedCount = 0;
-  for (APlayerState* PlayerState : SAFGameState->PlayerArray) {
+	int32 ReadyCount = 0;
+	int32 ConnectedCount = 0;
+	for (APlayerState* PlayerState : SAFGameState->PlayerArray) {
 		// Check connected
-    if (!IsValid(PlayerState)) continue;
-    ++ConnectedCount;
+		if (!IsValid(PlayerState)) continue;
+		++ConnectedCount;
 
 		// Check ready
 		const ASAFPlayerState* SAFPlayerState = Cast<ASAFPlayerState>(PlayerState);
-    if (IsValid(SAFPlayerState) && SAFPlayerState->bIsReady) ++ReadyCount;
-  }	SAFDEBUG_INFO(FORMATSTR("Player readiness: %d/%d (connected: %d)", ReadyCount, NumPlayers, ConnectedCount));
-  
+		if (IsValid(SAFPlayerState) && SAFPlayerState->bIsReady) ++ReadyCount;
+	}	SAFDEBUG_INFO(FORMATSTR("Player readiness: %d/%d (connected: %d)", ReadyCount, NumPlayers, ConnectedCount));
+	
 	// If all players are ready, start init
-  if (ReadyCount == NumPlayers) {
-    SAFDEBUG_SUCCESS("All expected players are ready. Starting SAF match...");
+	if (ReadyCount == NumPlayers) {
+		SAFDEBUG_SUCCESS("All expected players are ready. Starting SAF match...");
 		bSAFMatchStarted = StartSAFMatch();
 		if (bSAFMatchStarted) { SAFDEBUG_SUCCESS("SeinARTS match started successfully."); return true; }
 		else { SAFDEBUG_ERROR("SeinARTS match failed to start."); return false; }
-  } else if (ReadyCount < NumPlayers) { SAFDEBUG_INFO("TryStartSAFMatch failed: not all players are ready yet."); return false; }
+	} else if (ReadyCount < NumPlayers) { SAFDEBUG_INFO("TryStartSAFMatch failed: not all players are ready yet."); return false; }
 	else SAFDEBUG_ERROR("TryStartSAFMatch aborted: ReadyCount exceeds NumPlayers (unexpected).");
 	return false;
 }
@@ -192,11 +196,11 @@ bool ASAFGameMode::TryStartSAFMatch() {
 bool ASAFGameMode::StartSAFMatch() {
 	if (bSAFMatchStarted) { SAFDEBUG_WARNING("StartSAFMatch: match already started. Discarding."); return false; }
 	if (!HasAuthority()) { SAFDEBUG_WARNING("StartSAFMatch: called on non-authority."); return false; }
-  ASAFGameState* SAFGameState = GetGameState<ASAFGameState>();
-  if (!IsValid(SAFGameState)) { SAFDEBUG_ERROR("StartSAFMatch aborted: GameState is incorrect type."); return false; }
+	ASAFGameState* SAFGameState = GetGameState<ASAFGameState>();
+	if (!IsValid(SAFGameState)) { SAFDEBUG_ERROR("StartSAFMatch aborted: GameState is incorrect type."); return false; }
 
 	// Init players
-  for (FConstPlayerControllerIterator PlayerItr = GetWorld()->GetPlayerControllerIterator(); PlayerItr; ++PlayerItr) {
+	for (FConstPlayerControllerIterator PlayerItr = GetWorld()->GetPlayerControllerIterator(); PlayerItr; ++PlayerItr) {
 		ASAFPlayerController* SAFPlayerController = Cast<ASAFPlayerController>(PlayerItr->Get());
 		if (IsValid(SAFPlayerController)) ISAFPlayerInterface::Execute_InitPlayer(SAFPlayerController);
 	}
@@ -204,7 +208,7 @@ bool ASAFGameMode::StartSAFMatch() {
 	// Init extant units
 	for (TActorIterator<AActor> ActorItr(GetWorld()); ActorItr; ++ActorItr) { 
 		AActor* Actor = *ActorItr;
-		if (SAFLibrary::IsActorPtrValidSeinARTSActor(Actor)) ISAFAssetInterface::Execute_InitAsset(Actor, nullptr, nullptr);
+		if (SAFLibrary::IsActorPtrValidSeinARTSActor(Actor)) ISAFActorInterface::Execute_InitAsset(Actor, nullptr, nullptr);
 	}
 
 	// Return success flag

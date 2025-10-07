@@ -20,19 +20,19 @@ class SEINARTS_FRAMEWORK_RUNTIME_API ISAFVehiclePawnInterface {
 
 public:
 
-  /** Initializes the squad member actor. */
+	/** Initializes the squad member actor. */
 	UFUNCTION(BlueprintNativeEvent, Category="SeinARTS|Vehicle")
 	void InitVehiclePawn(USAFVehicleAsset* InVehicleAsset, ASAFVehicle* InVehicle);
 
-  /** Returns a reference to the parent Vehicle unit's data asset. */
+	/** Returns a reference to the parent Vehicle unit's data asset. */
 	UFUNCTION(BlueprintNativeEvent, Category="SeinARTS|Vehicle")
 	USAFVehicleAsset* GetVehicleAsset() const;
 
-  /** Returns a reference to the parent Vehicle unit. */
+	/** Returns a reference to the parent Vehicle unit. */
 	UFUNCTION(BlueprintNativeEvent, Category="SeinARTS|Vehicle")
 	ASAFVehicle* GetVehicle() const;
 
-  /** Sets the parent Vehicle unit for this pawn. */
+	/** Sets the parent Vehicle unit for this pawn. */
 	UFUNCTION(BlueprintNativeEvent, Category="SeinARTS|Vehicle")
 	void SetVehicle(ASAFVehicle* InVehicle);
 };

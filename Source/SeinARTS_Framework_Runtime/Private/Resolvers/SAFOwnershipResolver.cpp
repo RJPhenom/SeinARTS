@@ -17,36 +17,36 @@ using namespace SAFOwnershipResolver;
  *  - Returns false otherwise. Some failure paths log warnings/errors as noted below.
  */
 bool SAFOwnershipResolver::ResolveOwner(
-  const UWorld* World, 
-  int32 TeamID, int32 PlayerID, 
-  ASAFPlayerState*& OutPlayer
+	const UWorld* World, 
+	int32 TeamID, int32 PlayerID, 
+	ASAFPlayerState*& OutPlayer
 ) {
-  OutPlayer = nullptr;
+	OutPlayer = nullptr;
 
-  // Neutral/unowned requested: no owner, no log.
-  if (TeamID == 0 && PlayerID == 0) return false;
+	// Neutral/unowned requested: no owner, no log.
+	if (TeamID == 0 && PlayerID == 0) return false;
 
-  // Partial specification is considered a designer error: warn and stop.
-  if (TeamID == 0 || PlayerID == 0) {
-    SAFDEBUG_WARNING(
-      "ResolveOwner called with only one of TeamID/PlayerID set. "
-      "(You must change BOTH PlayerID and TeamID at design time or the unit will be initialized as neutral)");
-    return false;
-  }
+	// Partial specification is considered a designer error: warn and stop.
+	if (TeamID == 0 || PlayerID == 0) {
+		SAFDEBUG_WARNING(
+			"ResolveOwner called with only one of TeamID/PlayerID set. "
+			"(You must change BOTH PlayerID and TeamID at design time or the unit will be initialized as neutral)");
+		return false;
+	}
 
-  // Validation
-  if (!World) { SAFDEBUG_ERROR("ResolveOwner failed: World was null."); return false; }
+	// Validation
+	if (!World) { SAFDEBUG_ERROR("ResolveOwner failed: World was null."); return false; }
 
-  const AGameStateBase* const GameState = World->GetGameState();
-  if (!GameState) { SAFDEBUG_ERROR("ResolveOwner failed: could not retrieve GameState."); return false; }
+	const AGameStateBase* const GameState = World->GetGameState();
+	if (!GameState) { SAFDEBUG_ERROR("ResolveOwner failed: could not retrieve GameState."); return false; }
 
-  const ASAFGameState* const SAFGameState = Cast<ASAFGameState>(GameState);
-  if (!SAFGameState) { SAFDEBUG_ERROR("ResolveOwner failed: SAFGameState was invalid."); return false; }
+	const ASAFGameState* const SAFGameState = Cast<ASAFGameState>(GameState);
+	if (!SAFGameState) { SAFDEBUG_ERROR("ResolveOwner failed: SAFGameState was invalid."); return false; }
 
-  const ASAFPlayerState* const Found = SAFGameState->FindPlayer(TeamID, PlayerID);
-  if (Found == nullptr) { SAFDEBUG_ERROR("ResolveOwner failed: could not find owner."); return false; }
+	const ASAFPlayerState* const Found = SAFGameState->FindPlayer(TeamID, PlayerID);
+	if (Found == nullptr) { SAFDEBUG_ERROR("ResolveOwner failed: could not find owner."); return false; }
 
-  // Out
-  OutPlayer = const_cast<ASAFPlayerState*>(Found);
-  return true;
+	// Out
+	OutPlayer = const_cast<ASAFPlayerState*>(Found);
+	return true;
 }

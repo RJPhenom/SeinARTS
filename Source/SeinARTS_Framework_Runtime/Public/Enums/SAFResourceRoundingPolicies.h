@@ -11,7 +11,7 @@
  */
 UENUM(BlueprintType)
 enum class ESAFResourceRoundingPolicy : uint8 {
-  Floor UMETA(DisplayName="Floor"),
-  Round UMETA(DisplayName="Round"),
-  Ceil  UMETA(DisplayName="Ceil")
+	Floor UMETA(DisplayName="Floor"),
+	Round UMETA(DisplayName="Round"),
+	Ceil  UMETA(DisplayName="Ceil")
 };

@@ -29,36 +29,36 @@ public:
 	}
 
 	// Asset Identity
-	// ====================================================================================================================
-	/* The display name for UI, e.g. "Rifleman". */
+	// ==================================================================================================
+	/** The display name for UI, e.g. "Rifleman". */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Identity")
 	FText DisplayName;
 
-	/* Tooltip text. */
+	/** Tooltip text. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Identity", meta=(MultiLine="true"))
 	FText Tooltip;
 
-	/* Icon (small). */
+	/** Icon (small). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Identity")
 	TSoftObjectPtr<UTexture2D> Icon;
 
-	/* Portrait (large). */
+	/** Portrait (large). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Identity")
 	TSoftObjectPtr<UTexture2D> Portait;
 
-	/* Gameplay tags associated with the identification of this asset. */
+	/** Gameplay tags associated with the identification of this asset. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Identity")
 	FGameplayTagContainer Tags;
 
 	// Logic Properties
-	// ====================================================================================================================
-	/* What class should this asset spawn as? SeinARTS Framework assets seed runtime
+	// ==================================================================================================
+	/** What class should this asset spawn as? SeinARTS Framework assets seed runtime
 	instances (actors), this setting tells the framework init function which class
 	this asset seeds. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Gameplay Logic")
 	TSoftClassPtr<AActor> InstanceClass;
 
-	/* Sets the formation spacing fallback, if this is needed and this is not a SAFUnitAsset. */
+	/** Sets the formation spacing fallback, if this is needed and this is not a SAFUnitAsset. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Gameplay Logic")
 	float FallbackSpacing = 50.f;
 

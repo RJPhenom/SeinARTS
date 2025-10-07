@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Assets/SAFAsset.h"
@@ -36,21 +36,21 @@ public:
 	USAFUnitAsset(const FObjectInitializer& ObjectInitializer);
 
 	// Production Flags / Recipes
-	// ====================================================================================================================
-	/* Can this unit ever produce another unit or tech? Use this to enable the spawning of an SAFProductionComponent on 
+	// =================================================================================================================
+	/** Can this unit ever produce another unit or tech? Use this to enable the spawning of an SAFProductionComponent on 
 	initialization. The SAFProductionComponent is what is used by	default to handle production (either unit queues, or 
 	builder units building structures). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Production")
 	bool bCanEverProduce = false;
 
-	/* Catalogue of production recipes this unit can produce by default. */
+	/** Catalogue of production recipes this unit can produce by default. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Production")
 	TArray<FSAFProductionRecipe> ProductionRecipes;
 
 	// GAS Properties
-	// ====================================================================================================================	
+	// ======================================================================================================
 	/** Contains a list of startup effects for this unit. */
-  UPROPERTY(EditAnywhere, Category="GAS") 
+	UPROPERTY(EditAnywhere, Category="GAS") 
 	TArray<TSubclassOf<UGameplayEffect>> StartupEffects;
 
 	/** Contains a list of the abilites this unit can do. */
@@ -63,7 +63,7 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="GAS")
 	TArray<TSubclassOf<UAttributeSet>> AttributeSets;
 
-  /** Data table rows to easily manage attribute sets. */
+	/** Data table rows to easily manage attribute sets. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="GAS")
 	TArray<FDataTableRowHandle> AttributeTableRows;
 

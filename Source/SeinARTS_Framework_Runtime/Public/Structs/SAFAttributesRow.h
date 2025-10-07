@@ -11,13 +11,13 @@ struct FSAFAttributesRow : public FTableRowBase {
 	GENERATED_BODY()
 
 	// Armour
-	// =======================================================================================
+	// ==================================================================================================
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Armour") 		float FrontArmour = 0.f;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Armour") 		float SideArmour  = 0.f;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Armour") 		float RearArmour  = 0.f;
 
 	// Defense
-	// =======================================================================================
+	// ==================================================================================================
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Defense") 		float MaxHealth  = 100.f;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Defense") 		float MaxShields = 100.f;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Defense") 		float MaxMorale  = 100.f;
@@ -28,7 +28,7 @@ struct FSAFAttributesRow : public FTableRowBase {
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Defense") 		float Defense    = 0.f;
 
 	// Combat
-	// ==========================================================================================
+	// ==================================================================================================
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Combat") 		float Accuracy       = 1.f;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Combat") 		float Evasion        = 0.f;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Combat") 		float WeaponHandling = 0.f;
@@ -38,7 +38,7 @@ struct FSAFAttributesRow : public FTableRowBase {
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Combat") 		float Luck           = 0.f;
 
 	// Movement
-	// ===============================================================================================
+	// ==================================================================================================
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Movement") 	float MoveSpeed         = 600.f;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Movement") 	float SprintModifier    = 1.3f;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Movement") 	float Speed             = 0.f;
@@ -46,7 +46,7 @@ struct FSAFAttributesRow : public FTableRowBase {
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Movement") 	float FormationSpacing  = 50.f;
 
 	// Production
-	// =======================================================================================
+	// ==================================================================================================
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Production") float BuildTime  = 10.f;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Production") float BuildSpeed = 1.f;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Production") float Cost1  = 0.f;
@@ -63,7 +63,7 @@ struct FSAFAttributesRow : public FTableRowBase {
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Production") float Cost12 = 0.f;
 	
 	// Ranges
-	// ===========================================================================================
+	// ==================================================================================================
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Ranges") 		float FieldOfView   = 900.f;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Ranges") 		float DefenseRange  = 600.f;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Ranges") 		float ChaseRange    = 1200.f;

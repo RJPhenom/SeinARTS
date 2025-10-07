@@ -7,36 +7,24 @@ static bool IsGameplayAttributeDataStruct(const FStructProperty* StructProp) {
 	return StructProp && StructProp->Struct && StructProp->Struct->GetFName() == TBaseStructure<FGameplayAttributeData>::Get()->GetFName();
 }
 
-bool USAFAttributeSet::TryGetNumericField(const UStruct* RowStruct, const uint8* RowData, const FName& FieldName, double& OutValue) {
-	for (TFieldIterator<FProperty> It(RowStruct); It; ++It) {
-		const FProperty* Prop = *It;
-		if (Prop->GetFName() != FieldName) continue;
-		if (const FFloatProperty* FloatProp = CastField<FFloatProperty>(Prop)) { OutValue = FloatProp->GetFloatingPointPropertyValue(Prop->ContainerPtrToValuePtr<void>(RowData)); return true; }
-		if (const FDoubleProperty* DoubleProp = CastField<FDoubleProperty>(Prop)) { OutValue = DoubleProp->GetFloatingPointPropertyValue(Prop->ContainerPtrToValuePtr<void>(RowData)); return true; }
-		if (const FIntProperty* IntProp = CastField<FIntProperty>(Prop)) { OutValue = static_cast<double>(IntProp->GetSignedIntPropertyValue(Prop->ContainerPtrToValuePtr<void>(RowData))); return true; }
-		if (const FInt64Property* I64Prop = CastField<FInt64Property>(Prop)) { OutValue = static_cast<double>(I64Prop->GetSignedIntPropertyValue(Prop->ContainerPtrToValuePtr<void>(RowData))); return true; }
-		if (const FUInt32Property* U32Prop = CastField<FUInt32Property>(Prop)) { OutValue = static_cast<double>(U32Prop->GetUnsignedIntPropertyValue(Prop->ContainerPtrToValuePtr<void>(RowData))); return true; }
-	}
-
-	return false;
-}
-
+/** Seed from a DataTable row handle (works for ANY row struct). */
 void USAFAttributeSet::SeedFromRowHandle(const FDataTableRowHandle& RowHandle, bool bMaintianMaxRatios) {
-  if (!RowHandle.DataTable || RowHandle.RowName.IsNone()) return;
+	if (!RowHandle.DataTable || RowHandle.RowName.IsNone()) return;
 
-  // Get the row UScriptStruct from the DataTable (not from the handle).
-  const UScriptStruct* RowStruct = RowHandle.DataTable->GetRowStruct();
-  if (!RowStruct) return;
+	// Get the row UScriptStruct from the DataTable (not from the handle).
+	const UScriptStruct* RowStruct = RowHandle.DataTable->GetRowStruct();
+	if (!RowStruct) return;
 
-  // Get the raw row memory without a templated type.
-  const TMap<FName, uint8*>& RowMap = RowHandle.DataTable->GetRowMap();
-  const uint8* const* Found = RowMap.Find(RowHandle.RowName);
-  const uint8* RowData = Found ? *Found : nullptr;
-  if (!RowData) return;
+	// Get the raw row memory without a templated type.
+	const TMap<FName, uint8*>& RowMap = RowHandle.DataTable->GetRowMap();
+	const uint8* const* Found = RowMap.Find(RowHandle.RowName);
+	const uint8* RowData = Found ? *Found : nullptr;
+	if (!RowData) return;
 
-  SeedFromUStruct(RowStruct, RowData, bMaintianMaxRatios);
+	SeedFromUStruct(RowStruct, RowData, bMaintianMaxRatios);
 }
 
+/** Seed from a UStruct instance (works for ANY struct). */
 void USAFAttributeSet::SeedFromUStruct(const UScriptStruct* RowStruct, const uint8* RowData, bool bMaintianMaxRatios) {
 	TMap<FName, float> OldMaxByBaseName;
 	TMap<FName, float> NewMaxByBaseName;
@@ -108,7 +96,7 @@ void USAFAttributeSet::SeedFromUStruct(const UScriptStruct* RowStruct, const uin
 		}
 
 		// If row did not provide this value, but a paired Max* 
-    // changed and we want to preserve ratio
+		// changed and we want to preserve ratio
 		if (bMaintianMaxRatios) {
 			const FName BaseName = PropName;
 			if (const float* OldMax = OldMaxByBaseName.Find(BaseName)) {
@@ -122,4 +110,19 @@ void USAFAttributeSet::SeedFromUStruct(const UScriptStruct* RowStruct, const uin
 			}
 		}
 	}
+}
+
+/** Helper to get a numeric field from a UStruct instance. */
+bool USAFAttributeSet::TryGetNumericField(const UStruct* RowStruct, const uint8* RowData, const FName& FieldName, double& OutValue) {
+	for (TFieldIterator<FProperty> It(RowStruct); It; ++It) {
+		const FProperty* Prop = *It;
+		if (Prop->GetFName() != FieldName) continue;
+		if (const FFloatProperty* FloatProp = CastField<FFloatProperty>(Prop)) { OutValue = FloatProp->GetFloatingPointPropertyValue(Prop->ContainerPtrToValuePtr<void>(RowData)); return true; }
+		if (const FDoubleProperty* DoubleProp = CastField<FDoubleProperty>(Prop)) { OutValue = DoubleProp->GetFloatingPointPropertyValue(Prop->ContainerPtrToValuePtr<void>(RowData)); return true; }
+		if (const FIntProperty* IntProp = CastField<FIntProperty>(Prop)) { OutValue = static_cast<double>(IntProp->GetSignedIntPropertyValue(Prop->ContainerPtrToValuePtr<void>(RowData))); return true; }
+		if (const FInt64Property* I64Prop = CastField<FInt64Property>(Prop)) { OutValue = static_cast<double>(I64Prop->GetSignedIntPropertyValue(Prop->ContainerPtrToValuePtr<void>(RowData))); return true; }
+		if (const FUInt32Property* U32Prop = CastField<FUInt32Property>(Prop)) { OutValue = static_cast<double>(U32Prop->GetUnsignedIntPropertyValue(Prop->ContainerPtrToValuePtr<void>(RowData))); return true; }
+	}
+
+	return false;
 }

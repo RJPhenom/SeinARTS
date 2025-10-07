@@ -5,7 +5,7 @@
 #include "Gameplay/Attributes/SAFUnitAttributes.h"
 #include "Gameplay/Attributes/SAFProductionAttributes.h"
 #include "Engine/World.h"
-#include "Interfaces/SAFAssetInterface.h"
+#include "Interfaces/SAFActorInterface.h"
 #include "AbilitySystemInterface.h"
 #include "AbilitySystemComponent.h"  
 #include "GameFramework/Actor.h"
@@ -154,10 +154,8 @@ void USAFProductionComponent::RequestCancellation(int32 Index) {
 	Server_CancelAtIndex(Index);
 }
 
-// ===========================================================================
-//                               Internals
-// ===========================================================================
-
+// Internals
+// ===================================================================================================================================
 // Internal (server): progress the head-of-line item (wire to timer/tick as desired).
 void USAFProductionComponent::AdvanceBuild(float DeltaSeconds) {
 	if (GetOwnerRole() != ROLE_Authority || ProductionQueue.Num() == 0) return;
@@ -216,8 +214,8 @@ void USAFProductionComponent::CompleteBuild(FSAFProductionQueueItem CompletedIte
 
 	AActor* Owner = GetOwner();
 	if (SAFLibrary::IsActorPtrValidSeinARTSUnit(Owner)) { 
-		ASAFPlayerState* MyOwner = ISAFAssetInterface::Execute_GetOwningPlayer(Owner);
-		ISAFAssetInterface::Execute_InitAsset(NewActor, ResolvedData, MyOwner);
+		ASAFPlayerState* MyOwner = ISAFActorInterface::Execute_GetOwningPlayer(Owner);
+		ISAFActorInterface::Execute_InitAsset(NewActor, ResolvedData, MyOwner);
 	}	else SAFDEBUG_WARNING("CompleteBuild: Component owner is not a valid unit. NewActor will have no owner set.");
 
 	if (CompletedItem.bRouteToRallyPoint) {
@@ -265,7 +263,7 @@ float USAFProductionComponent::ResolveBuildSpeed() const {
 FSAFResources USAFProductionComponent::ResolveCostsByData(USAFAsset* Asset) const {
 	AActor* Actor = GetOwner();
 	if (!SAFLibrary::IsActorPtrValidSeinARTSUnit(Actor)) return FSAFResources{}; //Asset->GetDefaultCosts();
-	const APlayerState* PlayerState = ISAFAssetInterface::Execute_GetOwningPlayer(GetOwner());
+	const APlayerState* PlayerState = ISAFActorInterface::Execute_GetOwningPlayer(GetOwner());
 	return FSAFResources{}; //Asset->GetRuntimeCosts(PlayerState);
 }
 
@@ -274,16 +272,14 @@ ASAFPlayerState* USAFProductionComponent::GetSAFPlayerState() const {
 	AActor* Owner = GetOwner();
 
 	if (!SAFLibrary::IsActorPtrValidSeinARTSUnit(Owner)) return nullptr;
-	APlayerState* PlayerState = ISAFAssetInterface::Execute_GetOwningPlayer(Owner);
+	APlayerState* PlayerState = ISAFActorInterface::Execute_GetOwningPlayer(Owner);
 
 	if (!PlayerState) return nullptr;
 	return Cast<ASAFPlayerState>(PlayerState);
 }
 
-// ===========================================================================
-//                               Replication
-// ===========================================================================
-
+// Replication
+// ===========================================================================================================================================================
 void USAFProductionComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(USAFProductionComponent, ProductionCatalogue);

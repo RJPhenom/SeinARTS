@@ -5,9 +5,11 @@
 
 class USAFAsset;
 
+/** SAFAssetResolver
+ * 
+ * Template resolver for resolving TSoftObjectPtrsany UObject type (works for USAFAsset subclasses, 
+ * eliminates deprecated soft-ptr conversion warnings). */
 namespace SAFAssetResolver {
-	// Template resolver for any UObject type (works for USAFAsset subclasses,
-	// eliminates deprecated soft-ptr conversion warnings).
 	template<typename T>
 	FORCEINLINE T* ResolveAsset(const TSoftObjectPtr<T>& Asset)	{
 		if (T* Loaded = Asset.Get()) return Loaded;

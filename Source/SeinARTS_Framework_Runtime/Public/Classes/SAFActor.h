@@ -1,8 +1,8 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Classes/SAFFormationManager.h"
-#include "Interfaces/SAFAssetInterface.h"
+#include "Interfaces/SAFActorInterface.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/PlayerState.h"
 #include "Resolvers/SAFAssetResolver.h"
@@ -31,14 +31,14 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnDeath);
  * SAFActor
  * 
  * Abstract class which all concrete classes inherit from under the SeinARTS Framework. 
- * Implements the SAFAssetInterface by default.
+ * Implements the SAFActorInterface by default.
  * 
  * For any object that represents a SAFAsset, and should be able to report on its SAFAsset 
  * identity, you should be subclassing it with this base class.
  */
 UCLASS(Abstract, ClassGroup=(SeinARTS), Blueprintable, BlueprintType, meta=(DisplayName="SeinARTS Framework Class"))
 class SEINARTS_FRAMEWORK_RUNTIME_API ASAFActor : public AActor, 
-  public ISAFAssetInterface {
+  public ISAFActorInterface {
 
 	GENERATED_BODY()
 
@@ -70,40 +70,40 @@ public:
 	FOnDeath OnDeath;
 
 	// Asset Interface / API
-	// ======================================================================================================================================================
-	virtual USAFAsset*      			GetAsset_Implementation() const 																					{ return SAFAssetResolver::ResolveAsset(Asset); }
-  virtual void            			SetAsset_Implementation(USAFAsset* InAsset);
-  virtual void            			InitAsset_Implementation(USAFAsset* InAsset, ASAFPlayerState* InOwner);
+	// ==============================================================================================================================================================
+	virtual USAFAsset*      			GetAsset_Implementation() const 											{ return SAFAssetResolver::ResolveAsset(Asset); }
+	virtual void            			SetAsset_Implementation(USAFAsset* InAsset);
+	virtual void            			InitAsset_Implementation(USAFAsset* InAsset, ASAFPlayerState* InOwner);
 
-	virtual ASAFPlayerState*			GetOwningPlayer_Implementation() const 																		{ return OwningPlayer.Get(); }
+	virtual ASAFPlayerState*			GetOwningPlayer_Implementation() const 										{ return OwningPlayer.Get(); }
 	virtual void            			SetOwningPlayer_Implementation(ASAFPlayerState* InOwner);
 
 	virtual FText           			GetDisplayName_Implementation() const;
 	virtual UTexture2D*     			GetIcon_Implementation() const;
 	virtual UTexture2D*     			GetPortrait_Implementation() const;															
 
-	virtual bool            			GetSelectable_Implementation() const 																			{ return bSelectable; }
-	virtual void            			SetSelectable_Implementation(bool bNewSelectable) 												{ bSelectable = bNewSelectable; }
-	virtual bool            			GetMultiSelectable_Implementation() const 																{ return bMultiSelectable; }
-	virtual void            			SetMultiSelectable_Implementation(bool bNewMultiSelectable) 							{ bMultiSelectable = bNewMultiSelectable; }
+	virtual bool            			GetSelectable_Implementation() const 										{ return bSelectable; }
+	virtual void            			SetSelectable_Implementation(bool bNewSelectable) 							{ bSelectable = bNewSelectable; }
+	virtual bool            			GetMultiSelectable_Implementation() const 									{ return bMultiSelectable; }
+	virtual void            			SetMultiSelectable_Implementation(bool bNewMultiSelectable) 				{ bMultiSelectable = bNewMultiSelectable; }
 	virtual bool            			Select_Implementation(AActor*& OutSelectedActor);
 	virtual bool            			QueueSelect_Implementation(AActor*& OutQueueSelectedActor);
 	virtual void            			Deselect_Implementation();
 	virtual void            			DequeueSelect_Implementation();
 
-	virtual bool            			GetPingable_Implementation() const 																				{ return bPingable; }
-	virtual void            			SetPingable_Implementation(bool bNewPingable) 														{ bPingable = bNewPingable; }
+	virtual bool            			GetPingable_Implementation() const 											{ return bPingable; }
+	virtual void            			SetPingable_Implementation(bool bNewPingable) 								{ bPingable = bNewPingable; }
 
 	virtual void            			Place_Implementation(FVector Location, FRotator Rotation);
 	virtual void            			QueuePlace_Implementation() {}
 
-  // The SAFAsset this class was seeded from.
-  UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Replicated, Category="SeinARTS|Data")
+	/** The SAFAsset this class was seeded from. */
+	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Replicated, Category="SeinARTS|Data")
 	TSoftObjectPtr<USAFAsset> Asset = nullptr;
 
 	// Ownership
 	// =========================================================================================================================
-  /** Use to assign the desired team of this instance for actors placed at design-time. 
+	/** Use to assign the desired team of this instance for actors placed at design-time. 
 	 * 	Examples: 
 	 * 		Team 1 / Player 1 assigns to Players[0] on Teams[0] in the GameState Teams array 
 	 * 		Team 1 / Player 0 will cause this instance to be assigned neutral, same as 0 / 0 
@@ -125,7 +125,7 @@ public:
 	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category="SeinARTS|Data")
 	int32 InitPlayerID = 0;
 
-	/* Owning player (set on spawn by PC, replicated for game logic) */
+	/** Owning player (set on spawn by PC, replicated for game logic) */
 	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, ReplicatedUsing=OnRep_OwningPlayer, Category="SeinARTS|Data")
 	TObjectPtr<ASAFPlayerState> OwningPlayer = nullptr;
 	
@@ -145,7 +145,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Selection")
 	bool bIsQueueSelected = false;
 
-  /** If the actor is actively selected (not just queued) */
+	/** If the actor is actively selected (not just queued) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Selection")
 	bool bIsSelected = false;
 	
@@ -157,7 +157,10 @@ public:
 
 	// Replication
 	// =======================================================================================
-	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const  ;
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const;
+
+protected:
+
 	UFUNCTION()	void OnRep_OwningPlayer();
 
 };

@@ -21,7 +21,7 @@ FSAFResources SAFCostResolver::ResolveCosts(
 	// 1. Try live ASC attributes
 	if (AbilitySystem)
 		if (const USAFAttributes* Attr = AbilitySystem->GetSet<USAFAttributes>())
-      return Attr->BundleResources(Policy);
+			return Attr->BundleResources(Policy);
 
 	// 2. Fall back to UnitAsset runtime costs
 	if (UnitAsset && PlayerState) return FSAFResources{}; //UnitAsset->GetRuntimeCosts(PlayerState, Policy);
