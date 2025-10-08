@@ -411,7 +411,7 @@ void ASAFPlayerController::OnOrderEndedHandler_Implementation(FVector2D OrderEnd
 	bool bValidTarget = SAFLibrary::IsActorPtrValidSeinARTSActor(TargetActor);
 	FSAFOrder Order(
 		bValidTarget ? TargetActor : nullptr, 
-		bValidTarget ? ISAFActorInterface::Execute_GetAsset(TargetActor) : nullptr,
+		bValidTarget ? Cast<USAFAsset>(ISAFActorInterface::Execute_GetAsset(TargetActor)) : nullptr,
 		OrderVectors.Start, 
 		OrderVectors.End);
 	bool bQueueMode = ISAFPlayerInterface::Execute_IsQueueButtonDown(this);

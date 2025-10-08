@@ -25,7 +25,7 @@ class SEINARTS_FRAMEWORK_RUNTIME_API ISAFActorInterface {
 public:
 
 	// Asset API
-	// ==================================================================================================
+	// ==============================================================================================================
 	/** Gets the data asset on an instance. */
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category="SeinARTS|Asset Interface")
 	USAFAsset* GetAsset() const;
@@ -36,10 +36,10 @@ public:
 
 	/** Initializes this instance with the asset seed data. */
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category="SeinARTS|Asset Interface")
-	void InitAsset(USAFAsset* InAsset = nullptr, ASAFPlayerState* InOwner = nullptr);	
+	void InitFromAsset(USAFAsset* InAsset = nullptr, ASAFPlayerState* InOwner = nullptr, bool bReinitialize = false);	
 
 	// Ownership
-	// ==================================================================================================
+	// ==============================================================================================================
 	/** Sets the owning player */
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category="SeinARTS|Asset Interface")
 	void SetOwningPlayer(ASAFPlayerState* InOwner);
@@ -49,7 +49,7 @@ public:
 	ASAFPlayerState* GetOwningPlayer() const;
 
 	// Identity
-	// ==================================================================================================
+	// =====================================================================================
 	/** Gets asset display name. */
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category="SeinARTS|Asset Interface")
 	FText GetDisplayName() const;
@@ -67,13 +67,13 @@ public:
 	UTexture2D* GetPortrait() const;
 
 	// Instance Getter
-	// ==================================================================================================
+	// =====================================================================================
 	/** The desired runtime actor class this asset seeds (must be ASAFActor). */
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category="SeinARTS|Asset Interface")
 	TSubclassOf<AActor> GetInstanceClass() const;
 
 	// Selection
-	// ==================================================================================================
+	// =====================================================================================
 	/** Returns true if this is currently selectable. */
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category="SeinARTS|Asset Interface")
 	bool GetSelectable() const;
@@ -109,7 +109,7 @@ public:
 	void DequeueSelect();
 
 	// Pinging
-	// ==================================================================================================
+	// =====================================================================================
 	/** Returns true if this is currently pingable. */
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category="SeinARTS|Asset Interface")
 	bool GetPingable() const;
@@ -119,7 +119,7 @@ public:
 	void SetPingable(bool bNewPingable);
 
 	// Placement
-	// ==================================================================================================
+	// =====================================================================================
 	/** Called when the SAFPlayerController attempts to place this when it is queued for 
 	 * placement */
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category="SeinARTS|Asset Interface")

@@ -1,95 +1,142 @@
 ﻿#pragma once
 
 #include "CoreMinimal.h"
-#include "GameFramework/FloatingPawnMovement.h"
+#include "Components/SAFMovementComponent.h"
 #include "Engine/EngineTypes.h"
 #include "SAFInfantryMovementComponent.generated.h"
 
 /**
  * USAFInfantryMovementComponent
  *
- * Lightweight infantry-flavored movement that mimics CMC feel
- * while staying on UFloatingPawnMovement for RTS use.
+ * Infantry-specific movement component designed for RTS-style squad-based movement.
+ * Inspired by Company of Heroes and Dawn of War, providing responsive infantry movement
+ * with formation support, unit separation, and tactical movement features.
+ * 
+ * Features:
+ * - Responsive acceleration/deceleration for quick formation changes
+ * - Unit separation to prevent overlap
+ * - Strafe movement and facing control for tactical positioning
+ * - Formation-aware movement for squad cohesion
  */
 UCLASS(ClassGroup=(SeinARTS), BlueprintType, Blueprintable, meta=(BlueprintSpawnableComponent))
-class SEINARTS_FRAMEWORK_RUNTIME_API USAFInfantryMovementComponent : public UFloatingPawnMovement {
+class SEINARTS_FRAMEWORK_RUNTIME_API USAFInfantryMovementComponent : public USAFMovementComponent {
 	GENERATED_BODY()
 
 public:
 
 	USAFInfantryMovementComponent();
 
-	// Move
+	// Infantry Movement Properties
 	// ==================================================================================================
-	/** Max ground speed (cm/s). */
+	
+	/** Braking friction factor for quick stops (higher = more responsive). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Infantry Movement", meta=(ClampMin="0"))
-	float MaxGroundSpeed = 600.f;
+	float BrakingFriction = 8.0f;
 
-	/** Braking friction factor (CMC-like). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Infantry Movement", meta=(ClampMin="0"))
-	float BrakingFriction = 2.0f;
-
-	/** Lock movement to XY plane. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Infantry Movement")
-	bool bLockToXY = true;
-
-	// Strafe / Facing
-	// ==================================================================================================
-	/** Can this infantryman strafe? */
+	/** Whether this unit can strafe (move without changing facing direction). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Infantry Movement")
 	bool bAllowStrafe = true;
 
-	/** If true, this infantryman will use its velocity to determine its facing.
-	 * (as opposed to decoupled facing, which is used when walking away from where you want to face) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Infantry Movement")
+	// Facing Control
+	// ==================================================================================================
+	
+	/** Whether to use a specific desired facing direction instead of movement direction. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Infantry Facing")
 	bool bUseDesiredFacing = false;
 
-	/** Desired facing yaw rotation. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Infantry Movement")
-	float DesiredFacingYaw = 0.f;
+	/** Desired facing direction (yaw in degrees). Only used if bUseDesiredFacing is true. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Infantry Facing")
+	float DesiredFacingYaw = 0.0f;
 
-	/** Aim rotation rate (degrees per second). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Infantry Movement", meta=(ClampMin="1"))
-	float AimRotationRateDeg = 720.f;
+	/** How fast the unit rotates to face the desired direction (degrees per second). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Infantry Facing", meta=(ClampMin="1"))
+	float FacingRotationRate = 720.0f;
 
-	/** Set the desired facing yaw rotation. */
-	UFUNCTION(BlueprintCallable, Category="SeinARTS|Infantry Movement")
-	void SetDesiredFacingYaw(float InYaw) { DesiredFacingYaw = InYaw; bUseDesiredFacing = true; }
-
-	/** Aim rotation rate (degrees per second). */
-	UFUNCTION(BlueprintCallable, Category="SeinARTS|Infantry Movement")
-	void ClearDesiredFacing() { bUseDesiredFacing = false; }
-
-	// Separation
+	// Unit Separation
 	// ==================================================================================================
-	/** Enable separation behavior. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Infantry Movement")
+	
+	/** Enable separation behavior to prevent units from overlapping. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Infantry Separation")
 	bool bEnableSeparation = true;
 
-	/** Separation radius (cm). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Infantry Movement", meta=(ClampMin="0"))
-	float SeparationRadius = 120.f;
+	/** Distance at which separation forces begin to apply (cm). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Infantry Separation", meta=(ClampMin="0"))
+	float SeparationRadius = 120.0f;
 
-	/** Separation acceleration scale (cm/s^2). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Infantry Movement", meta=(ClampMin="0"))
-	float SeparationStrength = 1500.f;
+	/** Strength of separation forces (cm/s²). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Infantry Separation", meta=(ClampMin="0"))
+	float SeparationStrength = 2000.0f;
 
-	/** Max separation velocity delta per tick (cm/s). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Infantry Movement", meta=(ClampMin="0"))
-	float SeparationMaxPush = 300.f;
+	/** Maximum speed at which separation can push units (cm/s). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Infantry Separation", meta=(ClampMin="0"))
+	float MaxSeparationSpeed = 400.0f;
 
-	/** Separation channel (for collision checks). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Infantry Movement")
+	/** Collision channel used for separation queries. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Infantry Separation")
 	TEnumAsByte<ECollisionChannel> SeparationChannel = ECC_Pawn;
+
+	// Formation Support
+	// ==================================================================================================
+	
+	/** Enable formation-aware movement (slower when not in formation). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Infantry Formation")
+	bool bUseFormationMovement = true;
+
+	/** Speed multiplier when moving out of formation (0.0-1.0). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Infantry Formation", 
+		meta=(ClampMin="0.1", ClampMax="1.0", EditCondition="bUseFormationMovement"))
+	float OutOfFormationSpeedMultiplier = 0.7f;
+
+	/** Distance from desired formation position considered "in formation" (cm). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Infantry Formation", 
+		meta=(ClampMin="0", EditCondition="bUseFormationMovement"))
+	float FormationTolerance = 100.0f;
+
+	// Blueprint Interface
+	// ==================================================================================================
+	
+	/** Set the desired facing direction (in world yaw degrees). */
+	UFUNCTION(BlueprintCallable, Category="SeinARTS|Infantry Movement")
+	void SetDesiredFacing(float InYaw);
+
+	/** Clear desired facing and return to movement-based facing. */
+	UFUNCTION(BlueprintCallable, Category="SeinARTS|Infantry Movement")
+	void ClearDesiredFacing();
+
+	/** Returns true if the unit is currently in formation. */
+	UFUNCTION(BlueprintPure, Category="SeinARTS|Infantry Movement")
+	bool IsInFormation() const { return bIsInFormation; }
+
+	/** Set the desired formation position for this unit. */
+	UFUNCTION(BlueprintCallable, Category="SeinARTS|Infantry Movement")
+	void SetFormationPosition(const FVector& InFormationPosition);
+
+	/** Clear the formation position. */
+	UFUNCTION(BlueprintCallable, Category="SeinARTS|Infantry Movement")
+	void ClearFormationPosition();
 
 protected:
 
-	virtual void TickComponent(float DeltaTime, enum ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
+	// Formation state
+	bool bHasFormationPosition = false;
+	bool bIsInFormation = true;
+	FVector FormationPosition = FVector::ZeroVector;
 
-	// Helpers
-	// ==================================================================================================
-	FVector ConsumeWorldInput();
-	FVector ComputeAcceleration(const FVector& InputWorld, float DeltaTime) const;
-	void ApplySeparation(FVector& OutAccel, float DeltaTime);
-	void ApplyRotation(float DeltaTime);
+	// Override base movement implementation for infantry-specific behavior
+	virtual void PerformMovement(float DeltaTime) override;
+	virtual void PerformRotation(float DeltaTime) override;
+
+	// Infantry-specific movement functions
+	virtual void ApplyInfantryMovement(float DeltaTime);
+	virtual void ApplySeparation(FVector& OutAcceleration, float DeltaTime);
+	virtual void ApplyFormationLogic(float DeltaTime);
+
+	// Movement calculations
+	virtual FVector CalculateMovementAcceleration(const FVector& InputDirection, float DeltaTime) const;
+	virtual float CalculateCurrentMaxSpeed() const;
+
+	// Utility functions
+	virtual FVector GetInputDirection() const;
+	virtual bool ShouldApplyBraking() const;
+
 };

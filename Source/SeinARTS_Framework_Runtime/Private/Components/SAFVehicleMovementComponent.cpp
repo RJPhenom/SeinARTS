@@ -6,29 +6,33 @@
 #include "Debug/SAFDebugTool.h"
 
 USAFVehicleMovementComponent::USAFVehicleMovementComponent() {
-	PrimaryComponentTick.bCanEverTick = true;
-	PrimaryComponentTick.bStartWithTickEnabled = true;
-	TurningBoost = 0.f;
-	MaxSpeed     = 500.f;
-	Acceleration = 250.f;
-	Deceleration = 500.f;
+	// Set vehicle-specific defaults directly to inherited properties
+	MaxSpeed = 500.0f;
+	Acceleration = 250.0f;
+	Deceleration = 500.0f;
+	MaxRotationRate = 60.0f; // Slower rotation for vehicles
+	TurningBoost = 0.0f;
 }
 
 void USAFVehicleMovementComponent::RequestDirectMove(const FVector& MoveVelocity, bool bForceMaxSpeed) {
-	DesiredMoveDir = MoveVelocity.GetSafeNormal2D();
-	DesiredSpeed   = MoveVelocity.Size2D(); 
+	// Call base implementation to handle standard movement request
+	Super::RequestDirectMove(MoveVelocity, bForceMaxSpeed);
 }
 
 void USAFVehicleMovementComponent::StopActiveMovement() {
-	DesiredMoveDir = FVector::ZeroVector;
-	DesiredSpeed   = 0.f;
-	Velocity       = FVector::ZeroVector;
+	// Call base implementation and reset vehicle-specific state
+	Super::StopActiveMovement();
+	CurrentSteerDeg = 0.0f;
 }
 
-void USAFVehicleMovementComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* TickFunction) {
-	Super::TickComponent(DeltaTime, TickType, TickFunction);
+void USAFVehicleMovementComponent::PerformMovement(float DeltaTime) {
 	SAFDEBUG_DRAWARROWSPHERE(25.f, FColor::Turquoise);
 	if (!UpdatedComponent) return;
+
+	// Use base class movement state instead of local variables
+	const FVector& DesiredMoveDir = GetDesiredMoveDirection();
+	const float& DesiredSpeed = GetDesiredMoveSpeed();
+	const bool bHasInput = HasMoveRequest();
 
 	// Resolve directions
 	const FVector Forward = UpdatedComponent->GetForwardVector().GetSafeNormal2D();
@@ -50,8 +54,13 @@ void USAFVehicleMovementComponent::TickComponent(float DeltaTime, ELevelTick Tic
 	switch (DriveType) {
 		case ESAFVehicleDriveType::Tracked: TickTrackedMovement(DeltaTime, bUseReverse, Forward, Desired, Yaw); break;
 		case ESAFVehicleDriveType::Wheeled: TickWheeledMovement(DeltaTime, bUseReverse, Forward, Desired, Yaw); break;
-		default: SAFDEBUG_ERROR("TickComponent: encountered invalid DriveType."); break;
+		default: SAFDEBUG_ERROR("PerformMovement: encountered invalid DriveType."); break;
 	}
+}
+
+void USAFVehicleMovementComponent::PerformRotation(float DeltaTime) {
+	// Rotation is handled within the drive-specific movement methods
+	// This is intentionally empty as vehicles handle rotation differently than the base class
 }
 
 // Steering
@@ -92,9 +101,9 @@ void USAFVehicleMovementComponent::TickTrackedMovement(float DeltaTime, bool bUs
 	const float AngDeg = FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(CosA, -1.f, 1.f)));
 	const float TargetSpeedUnsignedRaw = bUseReverse ? FMath::Min(ReverseMaxSpeed, MaxSpeed) : MaxSpeed * EvalTrackedThrottle(AngDeg);
 
-	// *** CHANGED: if no input yet, target 0 speed (prevents creeping at game start) ***
-	const bool  bHasInput = !DesiredMoveDir.IsNearlyZero() && DesiredSpeed > KINDA_SMALL_NUMBER;
-	const float TargetSpeedUnsigned = bHasInput ? FMath::Min(TargetSpeedUnsignedRaw, DesiredSpeed) : 0.f;
+	// *** Use base class movement state instead of local variables ***
+	const bool bHasInput = HasMoveRequest() && GetDesiredMoveSpeed() > KINDA_SMALL_NUMBER;
+	const float TargetSpeedUnsigned = bHasInput ? FMath::Min(TargetSpeedUnsignedRaw, GetDesiredMoveSpeed()) : 0.f;
 
 	MoveUpdatedComponent(FVector::ZeroVector, NewRot, false);
 	ApplyTickMovement(DeltaTime, NewRot, bUseReverse, TargetSpeedUnsigned);
@@ -115,9 +124,9 @@ void USAFVehicleMovementComponent::TickWheeledMovement(float DeltaTime, bool bUs
 	const float YawStep = FMath::Clamp(YawRateDeg, -MaxTurnRateDeg, MaxTurnRateDeg) * DeltaTime;
 	const float TargetSpeedUnsignedRaw = bUseReverse ? ReverseMaxSpeed : MaxSpeed;
 
-	// If no input yet, target 0 speed
-	const bool  bHasInput = !DesiredMoveDir.IsNearlyZero() && DesiredSpeed > KINDA_SMALL_NUMBER;
-	const float TargetSpeedUnsigned = bHasInput ? FMath::Min(TargetSpeedUnsignedRaw, DesiredSpeed) : 0.f;
+	// Use base class movement state
+	const bool bHasInput = HasMoveRequest() && GetDesiredMoveSpeed() > KINDA_SMALL_NUMBER;
+	const float TargetSpeedUnsigned = bHasInput ? FMath::Min(TargetSpeedUnsignedRaw, GetDesiredMoveSpeed()) : 0.f;
 
 	const FRotator NewRot(0.f, Yaw + YawStep, 0.f);
 	MoveUpdatedComponent(FVector::ZeroVector, NewRot, false);

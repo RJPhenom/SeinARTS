@@ -4,7 +4,6 @@
 #include "Assets/Units/SAFSquadMemberAsset.h"
 #include "Classes/Units/SAFSquad.h"
 #include "Enums/SAFCoverTypes.h"
-#include "GameFramework/Pawn.h"
 #include "GameFramework/Character.h"
 #include "Interfaces/SAFActorInterface.h"
 #include "Interfaces/Units/SAFSquadMemberInterface.h"
@@ -24,7 +23,7 @@ class USAFSquadMemberAsset;
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnSquadChanged, AActor*, NewSquad);
 
 /* 
-* SAFSquadMember 
+* ASAFSquadMember 
 *
 * The class that represents a single member of a SAFSquad.
 * (Converted to APawn + USAFInfantryMovement.)

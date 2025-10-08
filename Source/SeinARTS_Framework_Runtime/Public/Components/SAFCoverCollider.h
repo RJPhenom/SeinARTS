@@ -39,14 +39,18 @@ protected:
 
 	virtual void OnRegister() override;
 
-	/** Handler function for when a new actor enters this cover collider (by default called the EnterCover on that object, if it implements the SAFCoverInterface). */
+	/** Handler function for when a new actor enters this cover collider 
+	 * (by default called the EnterCover on that object, if it implements 
+	 * the SAFCoverInterface). */
 	UFUNCTION() void HandleBeginOverlap(
 		UPrimitiveComponent* OverlappedComponent, 
 		AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, 
 		bool bFromSweep, const FHitResult& SweepResult
 	);
 	
-	/** Handler function for when a new actor exits this cover collider (by default called the ExitCover on that object, if it implements the SAFCoverInterface). */
+	/** Handler function for when a new actor exits this cover collider 
+	 * (by default called the ExitCover on that object, if it implements 
+	 * the SAFCoverInterface). */
 	UFUNCTION() void HandleEndOverlap(
 		UPrimitiveComponent* OverlappedComponent, 
 		AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex

@@ -70,32 +70,32 @@ public:
 	FOnDeath OnDeath;
 
 	// Asset Interface / API
-	// ==============================================================================================================================================================
-	virtual USAFAsset*      			GetAsset_Implementation() const 											{ return SAFAssetResolver::ResolveAsset(Asset); }
-	virtual void            			SetAsset_Implementation(USAFAsset* InAsset);
-	virtual void            			InitAsset_Implementation(USAFAsset* InAsset, ASAFPlayerState* InOwner);
+	// ===============================================================================================================================================================
+	virtual USAFAsset*      		GetAsset_Implementation() const 												 { return SAFAssetResolver::ResolveAsset(Asset); }
+	virtual void            		SetAsset_Implementation(USAFAsset* InAsset);
+	virtual void            		InitFromAsset_Implementation(USAFAsset* InAsset, ASAFPlayerState* InOwner, bool bReinitialize);
 
-	virtual ASAFPlayerState*			GetOwningPlayer_Implementation() const 										{ return OwningPlayer.Get(); }
-	virtual void            			SetOwningPlayer_Implementation(ASAFPlayerState* InOwner);
+	virtual ASAFPlayerState*		GetOwningPlayer_Implementation() const 																{ return OwningPlayer.Get(); }
+	virtual void            		SetOwningPlayer_Implementation(ASAFPlayerState* InOwner);
 
-	virtual FText           			GetDisplayName_Implementation() const;
-	virtual UTexture2D*     			GetIcon_Implementation() const;
-	virtual UTexture2D*     			GetPortrait_Implementation() const;															
+	virtual FText           		GetDisplayName_Implementation() const;
+	virtual UTexture2D*     		GetIcon_Implementation() const;
+	virtual UTexture2D*     		GetPortrait_Implementation() const;															
 
-	virtual bool            			GetSelectable_Implementation() const 										{ return bSelectable; }
-	virtual void            			SetSelectable_Implementation(bool bNewSelectable) 							{ bSelectable = bNewSelectable; }
-	virtual bool            			GetMultiSelectable_Implementation() const 									{ return bMultiSelectable; }
-	virtual void            			SetMultiSelectable_Implementation(bool bNewMultiSelectable) 				{ bMultiSelectable = bNewMultiSelectable; }
-	virtual bool            			Select_Implementation(AActor*& OutSelectedActor);
-	virtual bool            			QueueSelect_Implementation(AActor*& OutQueueSelectedActor);
-	virtual void            			Deselect_Implementation();
-	virtual void            			DequeueSelect_Implementation();
+	virtual bool            		GetSelectable_Implementation() const 																		{ return bSelectable; }
+	virtual void            		SetSelectable_Implementation(bool bNewSelectable) 												  { bSelectable = bNewSelectable; }
+	virtual bool            		GetMultiSelectable_Implementation() const 															   { return bMultiSelectable; }
+	virtual void            		SetMultiSelectable_Implementation(bool bNewMultiSelectable) 							{ bMultiSelectable = bNewMultiSelectable; }
+	virtual bool            		Select_Implementation(AActor*& OutSelectedActor);
+	virtual bool            		QueueSelect_Implementation(AActor*& OutQueueSelectedActor);
+	virtual void            		Deselect_Implementation();
+	virtual void            		DequeueSelect_Implementation();
 
-	virtual bool            			GetPingable_Implementation() const 											{ return bPingable; }
-	virtual void            			SetPingable_Implementation(bool bNewPingable) 								{ bPingable = bNewPingable; }
+	virtual bool            		GetPingable_Implementation() const 																			  { return bPingable; }
+	virtual void            		SetPingable_Implementation(bool bNewPingable) 														  { bPingable = bNewPingable; }
 
-	virtual void            			Place_Implementation(FVector Location, FRotator Rotation);
-	virtual void            			QueuePlace_Implementation() {}
+	virtual void            		Place_Implementation(FVector Location, FRotator Rotation);
+	virtual void            		QueuePlace_Implementation() {}
 
 	/** The SAFAsset this class was seeded from. */
 	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Replicated, Category="SeinARTS|Data")
@@ -160,6 +160,11 @@ public:
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const;
 
 protected:
+
+	/** Flags if an init has been applied. 
+	 * If you want to re-initialize, pass 
+	 * bReinitialize=true to the InitAsset 
+	 * call. */ bool bInitialized = false;
 
 	UFUNCTION()	void OnRep_OwningPlayer();
 

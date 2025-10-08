@@ -8,149 +8,260 @@
 #include "Engine/World.h"
 
 USAFInfantryMovementComponent::USAFInfantryMovementComponent() {
-	bConstrainToPlane = true;
-	SetPlaneConstraintNormal(FVector::UpVector);
-	bSnapToPlaneAtStart = true;
+	// Set infantry-specific defaults directly to inherited properties
+	MaxSpeed = 600.0f;
+	Acceleration = 3000.0f;  // High acceleration for responsive movement
+	Deceleration = 4000.0f;  // High deceleration for quick stops
+	MaxRotationRate = 720.0f;        // Fast rotation for infantry
 
-	Acceleration = 3000.f;
-	Deceleration = 4000.f;
-	MaxSpeed = MaxGroundSpeed;
+	// Enable XY plane constraint by default for RTS movement (use inherited property)
+	bConstrainToPlane = true;
 }
 
-void USAFInfantryMovementComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) {
-	if (!PawnOwner || !UpdatedComponent || ShouldSkipUpdate(DeltaTime)) {
-		Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+void USAFInfantryMovementComponent::SetDesiredFacing(float InYaw) {
+	DesiredFacingYaw = InYaw;
+	bUseDesiredFacing = true;
+}
+
+void USAFInfantryMovementComponent::ClearDesiredFacing() {
+	bUseDesiredFacing = false;
+}
+
+void USAFInfantryMovementComponent::SetFormationPosition(const FVector& InFormationPosition) {
+	FormationPosition = InFormationPosition;
+	bHasFormationPosition = true;
+}
+
+void USAFInfantryMovementComponent::ClearFormationPosition() {
+	bHasFormationPosition = false;
+	bIsInFormation = true; // Reset to in-formation when no formation is set
+}
+
+void USAFInfantryMovementComponent::PerformMovement(float DeltaTime) {
+	if (!UpdatedComponent || !PawnOwner) {
 		return;
 	}
 
-	const FVector InputWorld = ConsumeWorldInput();
-	FVector Accel = ComputeAcceleration(InputWorld, DeltaTime);
-	if (bEnableSeparation)  ApplySeparation(Accel, DeltaTime);
-	FVector NewVel = Velocity + Accel * DeltaTime;
+	// Apply formation logic first
+	ApplyFormationLogic(DeltaTime);
 
-	const bool bHasInput = !InputWorld.IsNearlyZero(1e-3f);
-	if (!bHasInput) {
-		const float Fric = FMath::Max(BrakingFriction, 0.f);
-		const float Drag = Fric * DeltaTime;
-		NewVel *= 1.f / (1.f + Drag);
-	}
-
-	if (bLockToXY) NewVel.Z = 0.f;
-
-	const float MaxSpd = FMath::Max(MaxGroundSpeed, 1.f);
-	const float NewSpeed = NewVel.Size();
-	if (NewSpeed > MaxSpd) {
-		NewVel *= (MaxSpd / NewSpeed);
-	}
-
-	const FVector Delta = NewVel * DeltaTime;
-
-	FHitResult Hit;
-	SafeMoveUpdatedComponent(Delta, UpdatedComponent->GetComponentQuat(), true, Hit);
-	if (Hit.IsValidBlockingHit()) {
-		SlideAlongSurface(Delta, 1.f - Hit.Time, Hit.Normal, Hit);
-	}
-
-	Velocity = (UpdatedComponent->GetComponentLocation() - PawnOwner->GetActorLocation()) / FMath::Max(DeltaTime, KINDA_SMALL_NUMBER);
-	if (bLockToXY) Velocity.Z = 0.f;
-	ApplyRotation(DeltaTime);
-	UpdateComponentVelocity();
+	// Apply infantry-specific movement
+	ApplyInfantryMovement(DeltaTime);
 }
 
-FVector USAFInfantryMovementComponent::ConsumeWorldInput() {
-	FVector Input = GetPendingInputVector();
-	ConsumeInputVector();
-	if (bLockToXY) Input.Z = 0.f;
-	return Input;
+void USAFInfantryMovementComponent::PerformRotation(float DeltaTime) {
+	if (!PawnOwner) {
+		return;
+	}
+
+	const FRotator CurrentRotation = GetCurrentRotation();
+	FRotator TargetRotation = CurrentRotation;
+
+	// Determine target rotation based on movement mode
+	if (bUseDesiredFacing) {
+		// Use specific desired facing
+		TargetRotation = FRotator(0.0f, DesiredFacingYaw, 0.0f);
+	} else if (!bAllowStrafe && !Velocity.IsNearlyZero(1.0f)) {
+		// Face movement direction when not strafing
+		const FVector MovementDir = ConstrainToPlane(Velocity).GetSafeNormal();
+		if (!MovementDir.IsNearlyZero()) {
+			TargetRotation = MovementDir.Rotation();
+		}
+	}
+	// If bAllowStrafe is true and no desired facing, maintain current rotation
+
+	// Apply rotation interpolation
+	const float RotationStep = FacingRotationRate * DeltaTime;
+	const float YawDelta = FMath::FindDeltaAngleDegrees(CurrentRotation.Yaw, TargetRotation.Yaw);
+	const float ClampedYawDelta = FMath::Clamp(YawDelta, -RotationStep, RotationStep);
+
+	const FRotator NewRotation = FRotator(0.0f, CurrentRotation.Yaw + ClampedYawDelta, 0.0f);
+	PawnOwner->SetActorRotation(NewRotation);
 }
 
-FVector USAFInfantryMovementComponent::ComputeAcceleration(const FVector& InputWorld, float /*DeltaTime*/) const {
-	FVector Out = FVector::ZeroVector;
+void USAFInfantryMovementComponent::ApplyInfantryMovement(float DeltaTime) {
+	const FVector InputDirection = GetInputDirection();
+	
+	// Calculate base acceleration
+	FVector BaseAcceleration = CalculateMovementAcceleration(InputDirection, DeltaTime);
 
-	if (!InputWorld.IsNearlyZero(1e-3f)) {
-		Out = InputWorld.GetSafeNormal() * Acceleration;
-	} else if (!Velocity.IsNearlyZero(1e-3f)) {
-		Out = -Velocity.GetSafeNormal() * Deceleration;
+	// Apply separation forces
+	if (bEnableSeparation) {
+		ApplySeparation(BaseAcceleration, DeltaTime);
+	}
 
-		const float StopTime = Velocity.Size() / FMath::Max(Deceleration, 1.f);
-		if (StopTime <= GetWorld()->DeltaTimeSeconds) {
-			Out = -Velocity / GetWorld()->DeltaTimeSeconds;
+	// Apply acceleration to velocity
+	FVector NewVelocity = Velocity + BaseAcceleration * DeltaTime;
+
+	// Apply braking when no input
+	if (ShouldApplyBraking()) {
+		const float BrakingDecel = BrakingFriction * Deceleration * DeltaTime;
+		if (NewVelocity.SizeSquared() > 0.0f) {
+			const FVector BrakingForce = -NewVelocity.GetSafeNormal() * BrakingDecel;
+			NewVelocity += BrakingForce * DeltaTime;
+
+			// Stop if we would overshoot zero
+			if (FVector::DotProduct(Velocity, NewVelocity) <= 0.0f) {
+				NewVelocity = FVector::ZeroVector;
+			}
 		}
 	}
 
-	if (bLockToXY) Out.Z = 0.f;
-	return Out;
+	// Constrain to XY plane
+	NewVelocity = ConstrainToPlane(NewVelocity);
+
+	// Apply speed limits
+	const float CurrentMaxSpeed = CalculateCurrentMaxSpeed();
+	const float CurrentSpeed = NewVelocity.Size();
+	if (CurrentSpeed > CurrentMaxSpeed) {
+		NewVelocity = NewVelocity * (CurrentMaxSpeed / CurrentSpeed);
+	}
+
+	// Apply movement
+	if (!NewVelocity.IsNearlyZero()) {
+		const FVector MovementDelta = NewVelocity * DeltaTime;
+		const FRotator CurrentRotation = GetCurrentRotation();
+
+		// Use collision-aware movement
+		FHitResult Hit;
+		SafeMoveUpdatedComponent(MovementDelta, CurrentRotation.Quaternion(), true, Hit);
+		
+		if (Hit.IsValidBlockingHit()) {
+			// Slide along surfaces when hitting obstacles
+			SlideAlongSurface(MovementDelta, 1.0f - Hit.Time, Hit.Normal, Hit);
+		}
+
+		// Update velocity based on actual movement
+		const FVector ActualDelta = UpdatedComponent->GetComponentLocation() - (UpdatedComponent->GetComponentLocation() - MovementDelta);
+		Velocity = ActualDelta / FMath::Max(DeltaTime, KINDA_SMALL_NUMBER);
+		Velocity = ConstrainToPlane(Velocity);
+	} else {
+		Velocity = FVector::ZeroVector;
+	}
+
+	// Update component velocity for networking
+	UpdateComponentVelocity();
 }
 
-void USAFInfantryMovementComponent::ApplySeparation(FVector& OutAccel, float DeltaTime) {
-	if (!UpdatedComponent) return;
+void USAFInfantryMovementComponent::ApplySeparation(FVector& OutAcceleration, float DeltaTime) {
+	if (!UpdatedComponent || SeparationRadius <= 0.0f || SeparationStrength <= 0.0f) {
+		return;
+	}
 
 	UWorld* World = GetWorld();
-	if (!World || SeparationRadius <= 0.f || SeparationStrength <= 0.f) return;
+	if (!World) {
+		return;
+	}
 
-	const FVector MyLoc = UpdatedComponent->GetComponentLocation();
+	const FVector MyLocation = UpdatedComponent->GetComponentLocation();
 
-	FCollisionObjectQueryParams ObjParams;
-	ObjParams.AddObjectTypesToQuery(SeparationChannel);
+	// Set up collision query
+	FCollisionObjectQueryParams ObjectParams;
+	ObjectParams.AddObjectTypesToQuery(SeparationChannel);
 
 	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(SAFInfantrySeparation), false, PawnOwner);
 	QueryParams.bTraceComplex = false;
 	QueryParams.AddIgnoredActor(PawnOwner);
-	QueryParams.AddIgnoredComponent(Cast<UPrimitiveComponent>(UpdatedComponent));
 
-	const FCollisionShape Sphere = FCollisionShape::MakeSphere(SeparationRadius);
+	const FCollisionShape SphereShape = FCollisionShape::MakeSphere(SeparationRadius);
 
-	TArray<FOverlapResult> Hits;
-	World->OverlapMultiByObjectType(Hits, MyLoc, FQuat::Identity, ObjParams, Sphere, QueryParams);
+	// Query for nearby units
+	TArray<FOverlapResult> OverlapResults;
+	World->OverlapMultiByObjectType(OverlapResults, MyLocation, FQuat::Identity, ObjectParams, SphereShape, QueryParams);
 
-	FVector Sum = FVector::ZeroVector;
-	int32 Count = 0;
+	// Calculate separation force
+	FVector SeparationForce = FVector::ZeroVector;
+	int32 NeighborCount = 0;
 
-	for (const FOverlapResult& Res : Hits) {
-		const UPrimitiveComponent* OtherComp = Res.Component.Get();
-		const AActor* OtherActor = Res.GetActor();
-		if (!OtherComp || !OtherActor || OtherActor == PawnOwner) continue;
-
-		const FVector Dir = MyLoc - OtherComp->GetComponentLocation();
-		const float DistSq = FMath::Max(Dir.SizeSquared(), 1.f);
-		Sum += Dir * FMath::InvSqrt(DistSq);
-		++Count;
-	}
-
-	if (Count > 0) {
-		FVector PushDir = Sum / float(Count);
-		if (bLockToXY) PushDir.Z = 0.f;
-
-		FVector SepAccel = PushDir.GetSafeNormal() * SeparationStrength;
-
-		const float MaxVelDelta = SeparationMaxPush;
-		const FVector SepVelDelta = SepAccel * DeltaTime;
-		if (SepVelDelta.Size() > MaxVelDelta) {
-			SepAccel = SepVelDelta.GetSafeNormal() * (MaxVelDelta / FMath::Max(DeltaTime, KINDA_SMALL_NUMBER));
+	for (const FOverlapResult& Result : OverlapResults) {
+		const UPrimitiveComponent* OtherComponent = Result.Component.Get();
+		const AActor* OtherActor = Result.GetActor();
+		
+		if (!OtherComponent || !OtherActor || OtherActor == PawnOwner) {
+			continue;
 		}
 
-		OutAccel += SepAccel;
+		// Calculate separation direction and strength
+		const FVector OtherLocation = OtherComponent->GetComponentLocation();
+		const FVector SeparationDirection = MyLocation - OtherLocation;
+		const float Distance = FMath::Max(SeparationDirection.Size(), 1.0f);
+		
+		// Stronger force when closer
+		const float ForceMultiplier = FMath::Max(0.0f, 1.0f - (Distance / SeparationRadius));
+		SeparationForce += SeparationDirection.GetSafeNormal() * ForceMultiplier;
+		++NeighborCount;
+	}
+
+	// Apply average separation force
+	if (NeighborCount > 0) {
+		SeparationForce /= static_cast<float>(NeighborCount);
+		SeparationForce = ConstrainToPlane(SeparationForce);
+
+		// Scale by separation strength
+		FVector SeparationAcceleration = SeparationForce * SeparationStrength;
+
+		// Limit maximum separation speed
+		const FVector SeparationVelocityDelta = SeparationAcceleration * DeltaTime;
+		const float SeparationSpeed = SeparationVelocityDelta.Size();
+		if (SeparationSpeed > MaxSeparationSpeed) {
+			SeparationAcceleration = SeparationVelocityDelta.GetSafeNormal() * (MaxSeparationSpeed / FMath::Max(DeltaTime, KINDA_SMALL_NUMBER));
+		}
+
+		OutAcceleration += SeparationAcceleration;
 	}
 }
 
-void USAFInfantryMovementComponent::ApplyRotation(float DeltaTime) {
-	if (!PawnOwner) return;
-
-	FRotator Current = PawnOwner->GetActorRotation();
-	FRotator Target = Current;
-
-	if (bUseDesiredFacing) {
-		Target = FRotator(0.f, DesiredFacingYaw, 0.f);
-	} else if (!bAllowStrafe) {
-		if (!Velocity.IsNearlyZero(1e-2f)) {
-			const FVector Dir = FVector(Velocity.X, Velocity.Y, 0.f).GetSafeNormal();
-			Target = Dir.Rotation();
-		}
-	} else {
-		Target = FRotator(0.f, Current.Yaw, 0.f);
+void USAFInfantryMovementComponent::ApplyFormationLogic(float DeltaTime) {
+	if (!bUseFormationMovement || !bHasFormationPosition) {
+		bIsInFormation = true;
+		return;
 	}
 
-	const float Step = AimRotationRateDeg * DeltaTime;
-	const float NewYaw = FMath::FixedTurn(Current.Yaw, Target.Yaw, Step);
-	PawnOwner->SetActorRotation(FRotator(0.f, NewYaw, 0.f));
+	// Check if we're in formation
+	const FVector CurrentLocation = UpdatedComponent ? UpdatedComponent->GetComponentLocation() : FVector::ZeroVector;
+	const float DistanceToFormation = FVector::Dist2D(CurrentLocation, FormationPosition);
+	bIsInFormation = DistanceToFormation <= FormationTolerance;
+}
+
+FVector USAFInfantryMovementComponent::CalculateMovementAcceleration(const FVector& InputDirection, float DeltaTime) const {
+	if (InputDirection.IsNearlyZero(1e-3f)) {
+		// No input - apply deceleration if moving
+		if (!Velocity.IsNearlyZero(1e-3f)) {
+			FVector DecelerationVector = -Velocity.GetSafeNormal() * Deceleration;
+			
+			// Check if we should stop completely this frame
+			const float StopTime = Velocity.Size() / Deceleration;
+			if (StopTime <= DeltaTime) {
+				// Stop completely
+				DecelerationVector = -Velocity / DeltaTime;
+			}
+			
+			return ConstrainToPlane(DecelerationVector);
+		}
+		return FVector::ZeroVector;
+	}
+
+	// Apply acceleration in input direction
+	return ConstrainToPlane(InputDirection.GetSafeNormal() * Acceleration);
+}
+
+float USAFInfantryMovementComponent::CalculateCurrentMaxSpeed() const {
+	float CurrentMaxSpeed = MaxSpeed;
+
+	// Reduce speed when out of formation
+	if (bUseFormationMovement && !bIsInFormation) {
+		CurrentMaxSpeed *= OutOfFormationSpeedMultiplier;
+	}
+
+	return CurrentMaxSpeed;
+}
+
+FVector USAFInfantryMovementComponent::GetInputDirection() const {
+	// Use the desired movement direction from base class
+	return GetDesiredMoveDirection();
+}
+
+bool USAFInfantryMovementComponent::ShouldApplyBraking() const {
+	// Apply braking when no movement input
+	return !HasMoveRequest() || GetDesiredMoveDirection().IsNearlyZero(1e-3f);
 }

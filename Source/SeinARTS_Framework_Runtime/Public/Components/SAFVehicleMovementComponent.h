@@ -1,11 +1,18 @@
 ﻿#pragma once
 
 #include "Enums/SAFVehicleDriveTypes.h"
-#include "GameFramework/FloatingPawnMovement.h"
+#include "Components/SAFMovementComponent.h"
 #include "SAFVehicleMovementComponent.generated.h"
 
+/**
+ * USAFVehicleMovementComponent
+ *
+ * Vehicle-specific movement component that provides realistic vehicle steering behavior.
+ * Supports multiple drive types (Tracked, Wheeled) with appropriate physics simulation.
+ * Includes advanced features like reverse movement logic and steering curves.
+ */
 UCLASS(ClassGroup=(SeinARTS), BlueprintType, Blueprintable)
-class SEINARTS_FRAMEWORK_RUNTIME_API USAFVehicleMovementComponent : public UFloatingPawnMovement {
+class SEINARTS_FRAMEWORK_RUNTIME_API USAFVehicleMovementComponent : public USAFMovementComponent {
 
 	GENERATED_BODY()
 
@@ -84,19 +91,21 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|VehicleMovementComponent|Wheeled", meta=(ClampMin="0.1", ClampMax="10"))
 	float SteerResponse = 3.f;
 
-	// AI path following entry point
+	// AI path following entry point - override base implementation for vehicle-specific behavior
 	virtual void RequestDirectMove(const FVector& MoveVelocity, bool bForceMaxSpeed) override;
 	virtual void StopActiveMovement() override;
-	virtual void TickComponent(float DeltaTime, enum ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
+
+protected:
+
+	// Override base movement implementation for vehicle-specific behavior
+	virtual void PerformMovement(float DeltaTime) override;
+	virtual void PerformRotation(float DeltaTime) override;
 
 private:
 
-	bool      bMoveRequested    = false;
+	// Vehicle-specific state (different from base class movement state)
 	bool      bHasReverseGoal   = false;
 	float     CurrentSteerDeg   = 0.f;
-	float     DesiredSpeed      = 0.f;
-	float     StopSpeedEpsilon  = 1.f;
-	FVector   DesiredMoveDir    = FVector::ZeroVector;
 	FVector   ReverseGoal       = FVector::ZeroVector;
 
 	// Internals
