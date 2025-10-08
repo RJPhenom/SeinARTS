@@ -13,12 +13,12 @@ ASAFVehicle::ASAFVehicle() {
 // Unit Interface / API
 // =================================================================================================================================
 // Overide adds additional initalization steps
-void ASAFVehicle::InitAsset_Implementation(USAFAsset* InAsset, ASAFPlayerState* InOwner) {
-	USAFAsset* InitAsset = InAsset ? InAsset : SAFAssetResolver::ResolveAsset(Asset);
-	USAFVehicleAsset* VehicleAsset = Cast<USAFVehicleAsset>(InitAsset);
+void ASAFVehicle::InitFromAsset_Implementation(USAFAsset* InAsset, ASAFPlayerState* InOwner, bool bReinitialize) {
+	USAFAsset* InitFromAsset = InAsset ? InAsset : SAFAssetResolver::ResolveAsset(Asset);
+	USAFVehicleAsset* VehicleAsset = Cast<USAFVehicleAsset>(InitFromAsset);
 	if (!VehicleAsset) { SAFDEBUG_WARNING(FORMATSTR("InitUnit: invalid Data Asset Type on actor '%s'. Culling.", *GetName())); Destroy(); return; }
 
-	Super::InitAsset_Implementation(VehicleAsset, InOwner);
+	Super::InitFromAsset_Implementation(VehicleAsset, InOwner, bReinitialize);
 	InitVehicle(VehicleAsset);
 }
 

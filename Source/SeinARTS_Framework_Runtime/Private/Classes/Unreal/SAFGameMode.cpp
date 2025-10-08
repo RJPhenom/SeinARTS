@@ -208,7 +208,7 @@ bool ASAFGameMode::StartSAFMatch() {
 	// Init extant units
 	for (TActorIterator<AActor> ActorItr(GetWorld()); ActorItr; ++ActorItr) { 
 		AActor* Actor = *ActorItr;
-		if (SAFLibrary::IsActorPtrValidSeinARTSActor(Actor)) ISAFActorInterface::Execute_InitAsset(Actor, nullptr, nullptr);
+		if (SAFLibrary::IsActorPtrValidSeinARTSActor(Actor)) ISAFActorInterface::Execute_InitFromAsset(Actor, nullptr, nullptr, true /** Force reinit */);
 	}
 
 	// Return success flag

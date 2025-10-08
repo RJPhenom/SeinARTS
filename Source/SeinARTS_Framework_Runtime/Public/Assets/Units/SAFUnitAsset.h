@@ -77,12 +77,12 @@ public:
 	// ===============================================================================================================================
 	/** If this unit has multiple pawns, if they have bUsesCover enabled, this flag sets wether or not they will wrap around corners 
 	 * when finding cover positions. If off, pawns will stack in flat rows along the edge of cover. Defaults to on. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Replicated, Category="Cover", meta=(EditCondition="bSquadUnit", EditConditionHides))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Cover", meta=(EditCondition="bSquadUnit", EditConditionHides))
 	bool bWrapsCover = true;
 
 	/** If this unit has multiple pawns, if they have bUsesCover enabled, this flag adds a tiny amount of scatter to spacing while 
 	 * multiple pawns are in cover for a more organic look and feel. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Replicated, Category="Cover", meta=(EditCondition="bSquadUnit", EditConditionHides))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Cover", meta=(EditCondition="bSquadUnit", EditConditionHides))
 	bool bScattersInCover = true;
 
 	// Production Flags / Recipes

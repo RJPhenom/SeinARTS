@@ -46,25 +46,25 @@ public:
 	virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override { return AbilitySystem; }
 
 	// Asset Interface Overrides
-	// ===================================================================================================================================
-	virtual void 						InitAsset_Implementation(USAFAsset* InAsset, ASAFPlayerState* InOwner) 					 override;
-	virtual void 						SetAsset_Implementation(USAFAsset* InAsset) 											 override;
+	// ==========================================================================================================================================
+	virtual void 					InitFromAsset_Implementation(USAFAsset* InAsset, ASAFPlayerState* InOwner, bool bReinitialize) 		override;
+	virtual void 					SetAsset_Implementation(USAFAsset* InAsset) 											 			override;
 
 	// Unit Interface / API
-	// ===================================================================================================================================
-	virtual void 						AttachToPawn_Implementation(APawn* Pawn);
-	virtual void 						DetachFromPawn_Implementation();
-	virtual void 						OnAttachedPawnDestroyed_Implementation(AActor* DestroyedPawn);
+	// ==========================================================================================================================================
+	virtual void 					AttachToPawn_Implementation(APawn* Pawn);
+	virtual void 					DetachFromPawn_Implementation();
+	virtual void 					OnAttachedPawnDestroyed_Implementation(AActor* DestroyedPawn);
 
-	virtual ASAFFormationManager*		GetFormation_Implementation() const								{ return CurrentFormation.Get(); }
-	virtual void            			SetFormation_Implementation(ASAFFormationManager* InFormation) { CurrentFormation = InFormation; }
-	virtual float           			GetFormationSpacing_Implementation() const;	
+	virtual ASAFFormationManager*	GetFormation_Implementation() const										   { return CurrentFormation.Get(); }
+	virtual void            		SetFormation_Implementation(ASAFFormationManager* InFormation)			  { CurrentFormation = InFormation; }
+	virtual float           		GetFormationSpacing_Implementation() const;	
 
-	virtual bool            			GetOrderable_Implementation() const											{ return bOrderable; }
-	virtual void            			SetOrderable_Implementation(bool bNewOrderable)					   { bOrderable = bNewOrderable; }
-	virtual bool            			Order_Implementation(FSAFOrder Order);
-	virtual bool            			NotifyOrderCompleted_Implementation();
-	virtual void            			GetOrderTags_Implementation(TArray<FGameplayTag>& OutTags) const;
+	virtual bool            		GetOrderable_Implementation() const													   { return bOrderable; }
+	virtual void            		SetOrderable_Implementation(bool bNewOrderable)								  { bOrderable = bNewOrderable; }
+	virtual bool            		Order_Implementation(FSAFOrder Order);
+	virtual bool            		NotifyOrderCompleted_Implementation();
+	virtual void            		GetOrderTags_Implementation(TArray<FGameplayTag>& OutTags) const;
 
 	/** Proxy to bind delegates */
 	UFUNCTION() void OnAttachedPawnDestroyedProxy(AActor* DestroyedPawn);

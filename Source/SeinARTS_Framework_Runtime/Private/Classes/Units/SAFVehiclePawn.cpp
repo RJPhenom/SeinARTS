@@ -51,7 +51,7 @@ void ASAFVehiclePawn::PostInitializeComponents() {
 // ===============================================================================================================================
 /** Empty initializer prevents manual inits on this pawn class. 
  * (Initialization is handled by the owning vehicle class). */
-void ASAFVehiclePawn::InitAsset_Implementation(USAFAsset* InAsset, ASAFPlayerState* InOwner) {}
+void ASAFVehiclePawn::InitFromAsset_Implementation(USAFAsset* InAsset, ASAFPlayerState* InOwner, bool bReinitialize) {}
 
 /** Handles asset getter by forwarding to the managing vehicle unit, if any */
 USAFAsset* ASAFVehiclePawn::GetAsset_Implementation() const {

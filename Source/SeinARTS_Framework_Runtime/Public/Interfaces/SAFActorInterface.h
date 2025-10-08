@@ -25,7 +25,7 @@ class SEINARTS_FRAMEWORK_RUNTIME_API ISAFActorInterface {
 public:
 
 	// Asset API
-	// ==============================================================================================================
+	// =====================================================================================
 	/** Gets the data asset on an instance. */
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category="SeinARTS|Asset Interface")
 	USAFAsset* GetAsset() const;
@@ -36,10 +36,10 @@ public:
 
 	/** Initializes this instance with the asset seed data. */
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category="SeinARTS|Asset Interface")
-	void InitFromAsset(USAFAsset* InAsset = nullptr, ASAFPlayerState* InOwner = nullptr, bool bReinitialize = false);	
+	void InitFromAsset(USAFAsset* InAsset, ASAFPlayerState* InOwner, bool bReinitialize);	
 
 	// Ownership
-	// ==============================================================================================================
+	// =====================================================================================
 	/** Sets the owning player */
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category="SeinARTS|Asset Interface")
 	void SetOwningPlayer(ASAFPlayerState* InOwner);

@@ -64,17 +64,17 @@ void ASAFUnit::SetAsset_Implementation(USAFAsset* InAsset) {
 	
 	Asset = InAsset;
 	ASAFPlayerState* InOwner = ISAFActorInterface::Execute_GetOwningPlayer(this);
-	ISAFActorInterface::Execute_InitAsset(this, InAsset, InOwner);
+	ISAFActorInterface::Execute_InitFromAsset(this, InAsset, InOwner, true);
 }
 
-void ASAFUnit::InitAsset_Implementation(USAFAsset* InAsset, ASAFPlayerState* InOwner) {
+void ASAFUnit::InitFromAsset_Implementation(USAFAsset* InAsset, ASAFPlayerState* InOwner, bool bReinitialize) {
 	if (!HasAuthority()) return;
 
 	// Type validation + Super
 	USAFAsset* InitAsset = InAsset ? InAsset : SAFAssetResolver::ResolveAsset(Asset);
 	USAFUnitAsset* UnitAsset = Cast<USAFUnitAsset>(InitAsset);
-	if (!UnitAsset) { SAFDEBUG_WARNING(FORMATSTR("InitAsset: invalid Data Asset Type on actor '%s'. Culling.", *GetName())); Destroy(); return; }
-	Super::InitAsset_Implementation(InAsset, InOwner);
+	if (!UnitAsset) { SAFDEBUG_WARNING(FORMATSTR("InitFromAsset: invalid Data Asset Type on actor '%s'. Culling.", *GetName())); Destroy(); return; }
+	Super::InitFromAsset_Implementation(InAsset, InOwner, bReinitialize);
 
 	// GAS
 	InitAbilitySystem();

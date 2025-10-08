@@ -54,7 +54,7 @@ void ASAFSquadMember::PostInitializeComponents() {
 
 // Asset Interface / API
 // ==================================================================================================
-void ASAFSquadMember::InitAsset_Implementation(USAFAsset* InAsset, ASAFPlayerState* InOwner) {}
+void ASAFSquadMember::InitFromAsset_Implementation(USAFAsset* InAsset, ASAFPlayerState* InOwner, bool bReinitialize) {}
 
 USAFAsset* ASAFSquadMember::GetAsset_Implementation() const {
 	ASAFSquad* MySquad = ISAFSquadMemberInterface::Execute_GetSquad(this);

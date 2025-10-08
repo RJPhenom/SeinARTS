@@ -215,8 +215,8 @@ void USAFProductionComponent::CompleteBuild(FSAFProductionQueueItem CompletedIte
 	AActor* Owner = GetOwner();
 	if (SAFLibrary::IsActorPtrValidSeinARTSUnit(Owner)) { 
 		ASAFPlayerState* MyOwner = ISAFActorInterface::Execute_GetOwningPlayer(Owner);
-		ISAFActorInterface::Execute_InitAsset(NewActor, ResolvedData, MyOwner);
-	}	else SAFDEBUG_WARNING("CompleteBuild: Component owner is not a valid unit. NewActor will have no owner set.");
+		ISAFActorInterface::Execute_InitFromAsset(NewActor, ResolvedData, MyOwner, true /** Force reinit */);
+	} else SAFDEBUG_WARNING("CompleteBuild: Component owner is not a valid unit. NewActor will have no owner set.");
 
 	if (CompletedItem.bRouteToRallyPoint) {
 		FSAFOrder Order(nullptr, nullptr, GetComponentLocation(), GetRallyPoint(), FGameplayTag::RequestGameplayTag(TEXT("SeinARTS.Order.Move")));

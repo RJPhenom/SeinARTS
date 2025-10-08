@@ -33,7 +33,7 @@ public:
 	// Asset Interface Overrides
 	// ==========================================================================================================================
 	virtual USAFAsset* 						GetAsset_Implementation() const;
-	virtual void 							InitAsset_Implementation(USAFAsset* InData, ASAFPlayerState* InOwner);
+	virtual void 							InitFromAsset_Implementation(USAFAsset* InData, ASAFPlayerState* InOwner, bool bReinitialize);
 	
 	virtual ASAFPlayerState* 				GetOwningPlayer_Implementation() const;
 

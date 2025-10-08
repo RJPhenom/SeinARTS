@@ -42,10 +42,10 @@ ASAFActor::ASAFActor() {
 void ASAFActor::SetAsset_Implementation(USAFAsset* InAsset) {
 	Asset = InAsset;
 	ASAFPlayerState* MyOwner = ISAFActorInterface::Execute_GetOwningPlayer(this);
-	ISAFActorInterface::Execute_InitAsset(this, InAsset, MyOwner);
+	ISAFActorInterface::Execute_InitFromAsset(this, InAsset, MyOwner, false);
 }
 
-void ASAFActor::InitAsset_Implementation(USAFAsset* InAsset, ASAFPlayerState* InOwner) {
+void ASAFActor::InitFromAsset_Implementation(USAFAsset* InAsset, ASAFPlayerState* InOwner, bool bReinitialize) {
 	// Initialization happens on the server
 	if (!HasAuthority()) return;
 
@@ -58,7 +58,7 @@ void ASAFActor::InitAsset_Implementation(USAFAsset* InAsset, ASAFPlayerState* In
 	ASAFPlayerState* ResolvedOwner = nullptr;
 	if (!InOwner) {
 		if (!SAFOwnershipResolver::ResolveOwner(GetWorld(), InitTeamID, InitPlayerID, ResolvedOwner)) 
-			SAFDEBUG_ERROR("InitAsset: could not resolve owner.");
+			SAFDEBUG_ERROR("InitFromAsset: could not resolve owner.");
 	} else ResolvedOwner = InOwner;
 	
 	ISAFActorInterface::Execute_SetOwningPlayer(this, ResolvedOwner);

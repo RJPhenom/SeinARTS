@@ -18,11 +18,11 @@ public:
 	USAFVehicleAsset* 	GetVehicleAsset() { return Cast<USAFVehicleAsset>(SAFAssetResolver::ResolveAsset(Asset)); }
 
 	// Asset Interface Overrides
-	// ==============================================================================================================
-	virtual void 				InitAsset_Implementation(USAFAsset* InAsset, ASAFPlayerState* InOwner) 		override;
+	// ======================================================================================================================================
+	virtual void 				InitFromAsset_Implementation(USAFAsset* InAsset, ASAFPlayerState* InOwner, bool bReinitialize) 		override;
 
 	// Vehicle API
-	// ==============================================================================================================
+	// ======================================================================================================================================
 	/** Contains references to the pawn this unit class governs. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, ReplicatedUsing=OnRep_VehiclePawn, Category="SeinARTS|Vehicle")
 	TObjectPtr<APawn> VehiclePawn;

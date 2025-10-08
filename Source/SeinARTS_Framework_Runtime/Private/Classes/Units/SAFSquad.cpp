@@ -23,14 +23,14 @@ ASAFSquad::ASAFSquad() {
 // Asset Interface Overrides
 // ============================================================================================================================================
 // Overide adds additional initalization steps
-void ASAFSquad::InitAsset_Implementation(USAFAsset* InAsset, ASAFPlayerState* InOwner) {
+void ASAFSquad::InitFromAsset_Implementation(USAFAsset* InAsset, ASAFPlayerState* InOwner, bool bReinitialize) {
 	if (!HasAuthority()) return;
 
 	// Type validation + Super
-	USAFAsset* InitAsset = InAsset ? InAsset : SAFAssetResolver::ResolveAsset(Asset);
-	USAFSquadAsset* SquadAsset = Cast<USAFSquadAsset>(InitAsset);
+	USAFAsset* InitFromAsset = InAsset ? InAsset : SAFAssetResolver::ResolveAsset(Asset);
+	USAFSquadAsset* SquadAsset = Cast<USAFSquadAsset>(InitFromAsset);
 	if (!SquadAsset) { SAFDEBUG_WARNING(FORMATSTR("InitUnit: invalid Data Asset Type on actor '%s'. Culling.", *GetName())); Destroy(); return; }
-	Super::InitAsset_Implementation(SquadAsset, InOwner);
+	Super::InitFromAsset_Implementation(SquadAsset, InOwner, bReinitialize);
 
 	// InitSquad
 	InitSquad(GetSquadAsset());
