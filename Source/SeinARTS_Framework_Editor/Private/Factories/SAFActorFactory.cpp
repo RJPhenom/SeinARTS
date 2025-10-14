@@ -2,6 +2,7 @@
 #include "Classes/SAFActor.h"
 #include "Engine/Blueprint.h"
 #include "SeinARTS_Framework_Editor.h"
+#include "Dialogs/SSAFActorPickerDialog.h"
 
 USAFActorFactory::USAFActorFactory() {
 	bCreateNew    = true;
@@ -12,8 +13,15 @@ USAFActorFactory::USAFActorFactory() {
 }
 
 bool USAFActorFactory::ConfigureProperties() {
-	if (!ParentClass || !ParentClass->IsChildOf<AActor>()) ParentClass = ASAFActor::StaticClass();
-	return true;
+	TSubclassOf<ASAFActor> ChosenClass = SSAFActorPickerDialog::OpenDialog(NSLOCTEXT("SeinARTS", "CreateSAFActor", "Create SeinARTS Class"));
+	
+	if (ChosenClass)
+	{
+		ParentClass = ChosenClass;
+		return true;
+	}
+	
+	return false;
 }
 
 FText USAFActorFactory::GetDisplayName() const {

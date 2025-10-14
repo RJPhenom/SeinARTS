@@ -9,6 +9,7 @@
 #include "Structs/SAFTaggedAbility.h"
 #include "Structs/SAFProductionRecipe.h"
 #include "Structs/SAFResources.h"
+#include "Assets/Units/SAFPawnAsset.h"
 #include "SAFUnitAsset.generated.h"
 
 class AActor;
@@ -17,7 +18,6 @@ class UTexture2D;
 class UAttributeSet;
 class UGameplayEffect;
 class USAFAbility;
-class USAFPawnAsset;
 
 /**
  * SAFUnitAsset

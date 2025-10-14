@@ -1,20 +1,27 @@
 #include "Factories/SAFAssetFactory.h"
 #include "Assets/SAFAsset.h"
 #include "SeinARTS_Framework_Editor.h"
+#include "Dialogs/SSAFAssetPickerDialog.h"
 
 USAFAssetFactory::USAFAssetFactory() {
 	bCreateNew    = true;
 	bEditAfterNew = true;
 	SupportedClass = USAFAsset::StaticClass();
+	ParentClass = USAFAsset::StaticClass();
 	Formats.Add(TEXT("safasset;SeinARTS Asset"));
+}
+
+bool USAFAssetFactory::ConfigureProperties()
+{
+	ParentClass = SSAFAssetPickerDialog::OpenDialog(NSLOCTEXT("SeinARTS", "CreateSAFAsset", "Create SeinARTS Asset"));
+	return ParentClass != nullptr;
 }
 
 UObject* USAFAssetFactory::FactoryCreateNew(
 	UClass* InClass, UObject* InParent, FName Name,
 	EObjectFlags Flags, UObject* /*Context*/, FFeedbackContext* /*Warn*/
 ) {
-	UClass* ClassToUse = (InClass != nullptr) ? InClass : SupportedClass.Get();
-	if (!ClassToUse) ClassToUse = USAFAsset::StaticClass();
+	UClass* ClassToUse = ParentClass ? ParentClass.Get() : USAFAsset::StaticClass();
 	return NewObject<UObject>(InParent, ClassToUse, Name, Flags | RF_Transactional);
 }
 

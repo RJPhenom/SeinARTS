@@ -35,7 +35,10 @@ public class SeinARTS_Framework_Editor : ModuleRules
 			"AssetRegistry",
 			"EditorStyle",
 			"EditorWidgets",
-			"DesktopPlatform"
+			"DesktopPlatform",
+			"ClassViewer",
+			"ToolWidgets",
+			"ApplicationCore"
 		});
 		
 		DynamicallyLoadedModuleNames.AddRange(new string[] {

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Assets/Units/SAFUnitAsset.h"
+#include "Assets/SAFAsset.h"
 #include "Engine/EngineTypes.h"
 #include "SAFPawnAsset.generated.h"
 
