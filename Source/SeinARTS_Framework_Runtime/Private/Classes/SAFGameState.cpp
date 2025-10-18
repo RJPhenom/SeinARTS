@@ -1,5 +1,5 @@
-#include "Classes/Unreal/SAFGameState.h"
-#include "Classes/Unreal/SAFPlayerState.h"
+#include "Classes/SAFGameState.h"
+#include "Classes/SAFPlayerState.h"
 #include "Net/UnrealNetwork.h"
 #include "Debug/SAFDebugTool.h"
 

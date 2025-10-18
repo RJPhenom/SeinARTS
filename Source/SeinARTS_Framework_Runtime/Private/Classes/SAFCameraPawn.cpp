@@ -1,4 +1,4 @@
-#include "Classes/Unreal/SAFCameraPawn.h"
+#include "Classes/SAFCameraPawn.h"
 #include "Camera/CameraComponent.h"
 #include "Components/SceneComponent.h"
 #include "Utils/SAFMathLibrary.h"
@@ -15,12 +15,15 @@ ASAFCameraPawn::ASAFCameraPawn() {
 	// Build hierarchy
 	RootComponent = Pivot;
 	Camera->SetupAttachment(Pivot);
+	
+	// Initialize internal values from editor values
+	UpdateInternalValues();
 }
 
 void ASAFCameraPawn::BeginPlay() {
 	Super::BeginPlay();
 	ResetCamera();
-	MoveSpeed = BaseMoveSpeed;
+	SetScrollSpeed(BaseScrollSpeed);
 }
 
 void ASAFCameraPawn::Tick(float DeltaSeconds) {
@@ -34,7 +37,7 @@ void ASAFCameraPawn::Tick(float DeltaSeconds) {
 
 // Camera Controls
 // =================================================================================================================================
-// Sets the follow target safely
+/** Sets the follow target safely */
 void ASAFCameraPawn::Follow(AActor* Actor) {
 	if (SAFLibrary::IsActorPtrValidSeinARTSActor(Actor)) {
 		SAFDEBUG_SUCCESS(FORMATSTR("Set new follow target '%s'!", *Actor->GetName()));
@@ -42,9 +45,7 @@ void ASAFCameraPawn::Follow(AActor* Actor) {
 	} else SAFDEBUG_WARNING("Follow failed: invalid actor.");
 }
 
-// Reset actor rotation and zoom: 
-//  pitch = DefaultAngle, yaw = 0, roll = 0 and
-//  camera location = (MaxZoom, 0, 0) relative to Pivot.
+/** Resets camera to default zoom and angle. */
 void ASAFCameraPawn::ResetCamera() {
 	const FRotator NewRotation(DefaultAngle, 0.f, 0.f);
 	SetActorRotation(NewRotation);
@@ -55,10 +56,7 @@ void ASAFCameraPawn::ResetCamera() {
 	}
 }
 
-// Pans the camera based on Input vector (X=right, Y=forward)
-// Sets FollowTarget to nullptr to disable following, then gets the lateral movement using 
-// Camera yaw (ignoring pitch/roll) and adds movement input. Input is immediately consumed 
-// with bounding applied, so no need to call this every Tick.
+/** Pans the camera. Disables follow mode, if set. */
 void ASAFCameraPawn::PanCamera(FVector2D Input) {
 	FollowTarget = nullptr;
 
@@ -68,8 +66,8 @@ void ASAFCameraPawn::PanCamera(FVector2D Input) {
 	const FVector Forward = FRotationMatrix(YawOnly).GetUnitAxis(EAxis::X);
 
 	if (!Input.IsNearlyZero()) {
-		AddMovementInput(Right,   Input.X * MoveSpeed, false);
-		AddMovementInput(Forward, Input.Y * MoveSpeed, false);
+		AddMovementInput(Right,   Input.X * ScrollSpeed, false);
+		AddMovementInput(Forward, Input.Y * ScrollSpeed, false);
 	}
 
 	const FVector PendingLocation = ConsumeMovementInputVector();
@@ -80,8 +78,7 @@ void ASAFCameraPawn::PanCamera(FVector2D Input) {
 	}
 }
 
-// Rotates / Tilts the camera based on Input vector (X=yaw, Y=pitch) with interpolation.
-// Rotation is immediately set, so no need to call this every Tick.
+/** Rotates / Tilts the camera around the pivot. */
 void ASAFCameraPawn::RotateCamera(FVector2D Input) {
 	const float CurPitch = GetCameraPitch();
 	const float CurYaw   = GetCameraYaw();
@@ -92,8 +89,7 @@ void ASAFCameraPawn::RotateCamera(FVector2D Input) {
 	SetActorRotation(FRotator(NewPitch, NewYaw, 0.f));
 }
 
-// Controls zooming in/out of the camera based on AxisValue input with interpolation.
-// Zoom is immediately set, so no need to call this every Tick.
+/** Controls zooming in/out of the camera. */
 void ASAFCameraPawn::ZoomCamera(float AxisValue) {
 	if (!Camera) {
 		SAFDEBUG_ERROR("ZoomCamera failed: Camera component is nullptr.");
@@ -107,8 +103,73 @@ void ASAFCameraPawn::ZoomCamera(float AxisValue) {
 	Camera->SetRelativeLocation(FVector(NewX, CurrRelativeLocation.Y, CurrRelativeLocation.Z), false, nullptr, ETeleportType::None);
 }
 
-// Converts a desired world location to a bounded location within map limits.
+/** Converts a desired world location to a bounded location within map limits. */
 FVector ASAFCameraPawn::GetBoundedLocation(const FVector& DesiredWorldLocation) const {
 	// TODO
 	return DesiredWorldLocation;
 }
+
+/** Update internal negative values from editor positive values */
+void ASAFCameraPawn::UpdateInternalValues() {
+	ZoomSpeed 		= -FMath::Abs(ZoomSpeedEditor);
+	MinZoom 		= -FMath::Abs(MinZoomEditor);
+	MaxZoom 		= -FMath::Abs(MaxZoomEditor);
+	DefaultAngle 	= -FMath::Abs(DefaultAngleEditor);
+	MinAngle 		= -FMath::Abs(MinAngleEditor);
+	MaxAngle 		= -FMath::Abs(MaxAngleEditor);
+}
+
+/** Set zoom speed using positive value. */
+void ASAFCameraPawn::SetZoomSpeed(float NewZoomSpeed) {
+	ZoomSpeedEditor = FMath::Abs(NewZoomSpeed);
+	ZoomSpeed = -ZoomSpeedEditor;
+}
+
+/** Set min zoom distance using positive value. */
+void ASAFCameraPawn::SetMinZoom(float NewMinZoom) {
+	MinZoomEditor = FMath::Abs(NewMinZoom);
+	MinZoom = -MinZoomEditor;
+}
+
+/** Set max zoom distance using positive value. */
+void ASAFCameraPawn::SetMaxZoom(float NewMaxZoom) {
+	MaxZoomEditor = FMath::Abs(NewMaxZoom);
+	MaxZoom = -MaxZoomEditor;
+}
+
+/** Set default angle using positive value (0-90 degrees). */
+void ASAFCameraPawn::SetDefaultAngle(float NewDefaultAngle) {
+	DefaultAngleEditor = FMath::Clamp(FMath::Abs(NewDefaultAngle), 0.f, 90.f);
+	DefaultAngle = -DefaultAngleEditor;
+}
+
+/** Set min angle using positive value (0-90 degrees). */
+void ASAFCameraPawn::SetMinAngle(float NewMinAngle) {
+	MinAngleEditor = FMath::Clamp(FMath::Abs(NewMinAngle), 0.f, 90.f);
+	MinAngle = -MinAngleEditor;
+}
+
+/** Set max angle using positive value (0-90 degrees). */
+void ASAFCameraPawn::SetMaxAngle(float NewMaxAngle) {
+	MaxAngleEditor = FMath::Clamp(FMath::Abs(NewMaxAngle), 0.f, 90.f);
+	MaxAngle = -MaxAngleEditor;
+}
+
+#if WITH_EDITOR
+void ASAFCameraPawn::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) {
+	Super::PostEditChangeProperty(PropertyChangedEvent);
+	if (PropertyChangedEvent.Property) {
+		const FName PropertyName = PropertyChangedEvent.Property->GetFName();
+		
+		// Update internal values when editor values change
+		if (PropertyName == GET_MEMBER_NAME_CHECKED(ASAFCameraPawn, ZoomSpeedEditor) ||
+			PropertyName == GET_MEMBER_NAME_CHECKED(ASAFCameraPawn, MinZoomEditor) ||
+			PropertyName == GET_MEMBER_NAME_CHECKED(ASAFCameraPawn, MaxZoomEditor) ||
+			PropertyName == GET_MEMBER_NAME_CHECKED(ASAFCameraPawn, DefaultAngleEditor) ||
+			PropertyName == GET_MEMBER_NAME_CHECKED(ASAFCameraPawn, MinAngleEditor) ||
+			PropertyName == GET_MEMBER_NAME_CHECKED(ASAFCameraPawn, MaxAngleEditor)) {
+			UpdateInternalValues();
+		}
+	}
+}
+#endif

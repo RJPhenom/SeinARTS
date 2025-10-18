@@ -61,7 +61,7 @@ void USAFAttributes::PostGameplayEffectExecute(const FGameplayEffectModCallbackD
 // ===========================================================================
 
 // Returns the cost attributes as a FSAFResources bundle.
-FSAFResources USAFAttributes::BundleResources(ESAFResourceRoundingPolicy Policy) const {
+FSAFResources USAFAttributes::BundleResources() const {
 	FSAFResources Out;
 
 	const float C1  = Cost1.GetCurrentValue();
@@ -77,18 +77,18 @@ FSAFResources USAFAttributes::BundleResources(ESAFResourceRoundingPolicy Policy)
 	const float C11 = Cost11.GetCurrentValue();
 	const float C12 = Cost12.GetCurrentValue();
 
-	Out.Resource1  = FSAFResources::ToIntByPolicy(C1,  Policy);
-	Out.Resource2  = FSAFResources::ToIntByPolicy(C2,  Policy);
-	Out.Resource3  = FSAFResources::ToIntByPolicy(C3,  Policy);
-	Out.Resource4  = FSAFResources::ToIntByPolicy(C4,  Policy);
-	Out.Resource5  = FSAFResources::ToIntByPolicy(C5,  Policy);
-	Out.Resource6  = FSAFResources::ToIntByPolicy(C6,  Policy);
-	Out.Resource7  = FSAFResources::ToIntByPolicy(C7,  Policy);
-	Out.Resource8  = FSAFResources::ToIntByPolicy(C8,  Policy);
-	Out.Resource9  = FSAFResources::ToIntByPolicy(C9,  Policy);
-	Out.Resource10 = FSAFResources::ToIntByPolicy(C10, Policy);
-	Out.Resource11 = FSAFResources::ToIntByPolicy(C11, Policy);
-	Out.Resource12 = FSAFResources::ToIntByPolicy(C12, Policy);
+	Out.Resource1  = FSAFResources::ToInt(C1);
+	Out.Resource2  = FSAFResources::ToInt(C2);
+	Out.Resource3  = FSAFResources::ToInt(C3);
+	Out.Resource4  = FSAFResources::ToInt(C4);
+	Out.Resource5  = FSAFResources::ToInt(C5);
+	Out.Resource6  = FSAFResources::ToInt(C6);
+	Out.Resource7  = FSAFResources::ToInt(C7);
+	Out.Resource8  = FSAFResources::ToInt(C8);
+	Out.Resource9  = FSAFResources::ToInt(C9);
+	Out.Resource10 = FSAFResources::ToInt(C10);
+	Out.Resource11 = FSAFResources::ToInt(C11);
+	Out.Resource12 = FSAFResources::ToInt(C12);
 
 	return Out;
 }

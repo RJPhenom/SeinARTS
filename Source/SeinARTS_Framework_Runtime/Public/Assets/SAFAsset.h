@@ -7,7 +7,6 @@
 #include "SAFAsset.generated.h"
 
 class UTexture2D;
-class ASAFActor;
 
 /**
  * SAFAsset
@@ -31,36 +30,35 @@ public:
 	// Asset Identity
 	// ==================================================================================================
 	/** The display name for UI, e.g. "Rifleman". */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Identity")
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Asset Identity")
 	FText DisplayName;
 
 	/** Tooltip text. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Identity", meta=(MultiLine="true"))
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Asset Identity", meta=(MultiLine="true"))
 	FText Tooltip;
 
 	/** Icon (small). */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Identity")
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Asset Identity")
 	TSoftObjectPtr<UTexture2D> Icon;
 
 	/** Portrait (large). */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Identity")
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Asset Identity")
 	TSoftObjectPtr<UTexture2D> Portait;
 
 	/** Gameplay tags associated with the identification of this asset. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Identity")
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Asset Identity")
 	FGameplayTagContainer Tags;
 
-	/** What class should this asset spawn as? SeinARTS Framework assets seed runtime
-	instances (actors), this setting tells the framework init function which class
-	this asset seeds. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Identity")
+	/** Set the class that this asset should use when spawned as an instance in the world.
+	 * 
+	 * By default the SeinARTS Framework assets seed SAFActor runtime instances, but this setting 
+	 * allows for custom overrides (you will still be expected to implement the necessary actor 
+	 * interface and logic in your custom class). 
+	 * 
+	 * For SeinARTS Unit Assets, this defaults to the SeinARTS Unit class.*/
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Asset Identity", 
+	meta=(MustImplement="SAFActorInterface", AllowAbstract="false"))
 	TSoftClassPtr<AActor> InstanceClass;
-
-	// Fallback Spacing
-	// ==================================================================================================
-	/** Sets the formation spacing fallback, if this is needed and this is not a SAFUnitAsset. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fallback Spacing")
-	float FallbackSpacing = 50.f;
 
 protected:
 

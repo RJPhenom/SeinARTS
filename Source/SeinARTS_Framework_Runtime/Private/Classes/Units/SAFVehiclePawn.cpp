@@ -2,7 +2,7 @@
 #include "Classes/Units/SAFVehicle.h" 
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
-#include "Components/SAFVehicleMovementComponent.h"
+#include "Components/SAFMovementComponent.h"
 #include "Animation/AnimInstance.h"
 #include "Assets/Units/SAFVehicleAsset.h"
 #include "Net/UnrealNetwork.h"
@@ -31,7 +31,8 @@ ASAFVehiclePawn::ASAFVehiclePawn() {
 	VehicleMeshComponent->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
 
 	// Vehicle movement
-	VehicleMovementComponent = CreateDefaultSubobject<USAFVehicleMovementComponent>(TEXT("Vehicle Movement Component"));
+	VehicleMovementComponent = CreateDefaultSubobject<USAFMovementComponent>(TEXT("Vehicle Movement Component"));
+	VehicleMovementComponent->MovementMode = ESAFMovementMode::Tracked;
 	VehicleMovementComponent->UpdatedComponent = RootComponent;
 	SyncNavAgentWithCapsule();
 }

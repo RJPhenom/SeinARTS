@@ -217,20 +217,20 @@ void ASAFSquad::InvertPositions_Implementation() {
 // provided is zero, function will get the LookAtRotation from squad to point, and use that.
 // Use bTriggerInversion to tell the squad if it should actually invert its positions (for a
 // move order) or if thequery is information-only.
-TArray<FVector> ASAFSquad::GetPositionsAtPoint_Implementation(const FVector& Point, const FRotator& Rotation, bool bTriggersInversion) {
+TArray<FVector> ASAFSquad::GetPositionsAtPoint_Implementation(const FVector& Point, bool bTriggersInversion) {
 	TArray<FVector> OutPositions;
 	const FVector Location = GetActorLocation();
 	const FVector PointWithFlattenedZ = FVector(Point.X, Point.Y, 0.f);
 	const FVector LocationFlattenedZ = FVector(Location.X, Location.Y, 0.f);
-	const FRotator InRot = (Rotation == FRotator::ZeroRotator) ? UKismetMathLibrary::FindLookAtRotation(LocationFlattenedZ, PointWithFlattenedZ) : Rotation;
-	const float Dot = FVector::DotProduct(GetActorForwardVector(), InRot.Vector());
+	const FRotator Rotation = UKismetMathLibrary::FindLookAtRotation(LocationFlattenedZ, PointWithFlattenedZ);
+	const float Dot = FVector::DotProduct(GetActorForwardVector(), Rotation.Vector());
 	UNavigationSystemV1* NavSys = FNavigationSystem::GetCurrent<UNavigationSystemV1>(GetWorld());
 	if (!NavSys) { SAFDEBUG_ERROR("GetPositionsAtPoint failed: no NavSys."); return Positions; }
 	OutPositions.Reserve(Positions.Num());
 
 	if (Dot < 0.f && bTriggersInversion) InvertPositions();
 	for (const FVector& Position : Positions) {
-		FVector RotatedPosition = InRot.RotateVector(Position) + Point;
+		FVector RotatedPosition = Rotation.RotateVector(Position) + Point;
 		FNavLocation NavProjection;
 		const FVector QueryExtent(250.f, 250.f, 250.f);
 		NavSys->ProjectPointToNavigation(RotatedPosition, NavProjection, QueryExtent);
@@ -250,16 +250,16 @@ TArray<FVector> ASAFSquad::GetCoverPositionsAtPoint_Implementation(const FVector
 	AActor* NearestCoverActor = nullptr;
 	UPrimitiveComponent* NearestCoverComponent;
 	USAFCoverCollider* NearestCoverCollider;
-	ESAFCoverType NearestCoverType = ESAFCoverType::Neutral;
+	ESAFCoverType NearestCoverType = ESAFCoverType::None;
 	SAFCoverUtilities::FindNearestCover(GetWorld(), Point, CoverSearchRadius, NearestCoverActor, NearestCoverComponent, NearestCoverType);
 	NearestCoverCollider = IsValid(NearestCoverComponent) ? Cast<USAFCoverCollider>(NearestCoverComponent) : nullptr;
 	UNavigationSystemV1* NavSys = FNavigationSystem::GetCurrent<UNavigationSystemV1>(GetWorld());
 	if (NearestCoverType == ESAFCoverType::Negative 
-		|| NearestCoverType == ESAFCoverType::Neutral 
+		|| NearestCoverType == ESAFCoverType::None 
 		|| !IsValid(NearestCoverActor) 
 		|| !IsValid(NearestCoverCollider) 
 		|| !NavSys
-	) return GetPositionsAtPoint(Point, bTriggersInversion);
+	) return ISAFUnitInterface::Execute_GetPositionsAtPoint(this, Point, bTriggersInversion);
 
 	// Build an array for SAFLib that is const
 	TArray<AActor*> MembersAsActors;
@@ -324,14 +324,14 @@ void ASAFSquad::OnAttachedPawnDestroyed_Implementation(AActor* DestroyedPawn) {
 // =================================================================================================
 void ASAFSquad::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
-	DOREPLIFETIME(ASAFSquad, CurrentCover);
+	DOREPLIFETIME(ASAFSquad, CurrentCoverDeprecated);
 	DOREPLIFETIME(ASAFSquad, CoverSearchRadius);
 	DOREPLIFETIME(ASAFSquad, SquadMembers);
 	DOREPLIFETIME(ASAFSquad, SquadLeader);
 	DOREPLIFETIME(ASAFSquad, Positions);
 }
 
-void ASAFSquad::OnRep_CurrentCover() {
+void ASAFSquad::OnRep_CurrentCoverDeprecated() {
 	SAFDEBUG_INFO(TEXT("OnRep_CurrentCover triggered."));
 }
 

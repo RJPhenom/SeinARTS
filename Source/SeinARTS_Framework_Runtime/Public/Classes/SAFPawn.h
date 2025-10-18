@@ -1,15 +1,15 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Classes/Units/SAFUnit.h"
+#include "Classes/SAFUnit.h"
+#include "Components/SAFMovementComponent.h"
 #include "GameFramework/Pawn.h"
-#include "Interfaces/Units/SAFPawnInterface.h"
+#include "Interfaces/SAFPawnInterface.h"
 #include "Resolvers/SAFAssetResolver.h"
 #include "SAFPawn.generated.h"
 
 class UCapsuleComponent;
 class USkeletalMeshComponent;
-class USAFMovementComponent;
 class USAFPawnAsset;
 
 /**
@@ -27,50 +27,52 @@ class USAFPawnAsset;
  * This replaces the need for separate ASAFSquadMember and ASAFVehiclePawn classes.
  */
 UCLASS(ClassGroup=(SeinARTS), Blueprintable, BlueprintType, meta=(DisplayName="SeinARTS Pawn"))
-class SEINARTS_FRAMEWORK_RUNTIME_API ASAFPawn : public APawn, public ISAFPawnInterface {
+class SEINARTS_FRAMEWORK_RUNTIME_API ASAFPawn : public APawn, 
+	public ISAFPawnInterface,
+	public ISAFActorInterface {
+
 	GENERATED_BODY()
 
 public:
 
 	ASAFPawn(const FObjectInitializer& ObjectInitializer);
 
-	// Configuration
-	// ==========================================================================================
-	/** 
-	 * Configure this pawn from a data asset.
-	 * This sets up the mesh, animations, collision, movement component, 
-     * and all movement parameters.
-	 */
-	UFUNCTION(BlueprintCallable, Category="SeinARTS|Pawn")
-	void ConfigureFromAsset(USAFPawnAsset* InPawnAsset);
-
 	// Components
 	// ==========================================================================================
 	/** Get the capsule collision component. */
 	UFUNCTION(BlueprintPure, Category="SeinARTS|Pawn")
-	UCapsuleComponent* GetCapsuleComponent() const { return CapsuleComponent; }
+	UCapsuleComponent* GetPawnCapsule() const { return PawnCapsule; }
 
 	/** Get the skeletal mesh component. */
 	UFUNCTION(BlueprintPure, Category="SeinARTS|Pawn")
-	USkeletalMeshComponent* GetMeshComponent() const { return MeshComponent; }
+	USkeletalMeshComponent* GetPawnMesh() const { return PawnMesh; }
 
 	/** Get the movement component (returns base class, cast to specific type as needed). */
 	UFUNCTION(BlueprintPure, Category="SeinARTS|Pawn")
-	USAFMovementComponent* GetSAFMovementComponent() const { return SAFMovementComponent; }
-
-	// APawn Overrides
+	USAFMovementComponent* GetPawnMovement() const { return PawnMovement; }
+	
+	// Actor Interface Overrides
 	// =================================================================================================================================
-	virtual UPawnMovementComponent* GetMovementComponent() const override;
-	virtual void 					BeginPlay() override;
-	virtual void 					SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
+	virtual USAFAsset* 				GetAsset_Implementation() const; /** Gets the owner asset */
+	virtual void 					InitFromAsset_Implementation(USAFAsset* InAsset, ASAFPlayerState* InOwner, bool bReinitialize);
+
+	virtual ASAFPlayerState* 		GetOwningPlayer_Implementation() const;
+
+	virtual bool 					GetMultiSelectable_Implementation() const;
+	virtual void 					SetMultiSelectable_Implementation(bool bNewMultiSelectable);
+	virtual bool 					Select_Implementation(AActor*& OutSelectedActor);
+	virtual bool 					QueueSelect_Implementation(AActor*& OutQueueSelectedActor);
+	virtual void 					Deselect_Implementation();
+	virtual void 					DequeueSelect_Implementation();
 
 	// Pawn Interface Implementation
 	// =================================================================================================================================
 	virtual void            		InitPawn_Implementation(USAFPawnAsset* InPawnAsset, ASAFUnit* InOwningUnit);
-	virtual void            		SetOwningUnit_Implementation(ASAFUnit* InOwningUnit);
+	virtual USAFPawnAsset*  		GetPawnAsset_Implementation() const            { return SAFAssetResolver::ResolveAsset(PawnAsset); }
+
+	virtual void            		SetOwningUnit_Implementation(ASAFUnit* InOwningUnit) 				  { OwningUnit = InOwningUnit; }
 	virtual ASAFUnit*       		GetOwningUnit_Implementation() const                                    { return OwningUnit.Get(); }
 	virtual bool            		HasOwningUnit_Implementation() const  { return OwningUnit && !OwningUnit->IsActorBeingDestroyed(); }
-	virtual USAFPawnAsset*  		GetPawnAsset_Implementation() const            { return SAFAssetResolver::ResolveAsset(PawnAsset); }
 
     // Simple helpers / getters
 	// =================================================================================================================================
@@ -80,42 +82,49 @@ public:
 
 protected:
 
+	virtual void PostInitializeComponents() override;
+
 	// Core Components
 	// =================================================================================================================
 	/** Collision capsule for this pawn. */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components")
-	TObjectPtr<UCapsuleComponent> CapsuleComponent;
+	UPROPERTY(EditAnywhere,BlueprintReadOnly, Category="Components")
+	TObjectPtr<UCapsuleComponent> PawnCapsule;
 
 	/** Skeletal mesh component for visual representation. */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components")
-	TObjectPtr<USkeletalMeshComponent> MeshComponent;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Components")
+	TObjectPtr<USkeletalMeshComponent> PawnMesh;
 
 	/** Movement component (type determined by PawnAsset). */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components")
-	TObjectPtr<USAFMovementComponent> SAFMovementComponent;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Components")
+	TObjectPtr<USAFMovementComponent> PawnMovement;
 
 	// Configuration
 	// =================================================================================================================
 	/** The data asset used to configure this pawn. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Configuration")
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Replicated, Category="SeinARTS")
 	TSoftObjectPtr<USAFPawnAsset> PawnAsset;
 
 	/** Reference to the unit that owns and manages this pawn */
-	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category="SeinARTS|Unit")
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, ReplicatedUsing=OnRep_OwningUnit, Category="SeinARTS")
 	TObjectPtr<ASAFUnit> OwningUnit;
 
-	// Helper Methods
+	// Private Helpers
 	// =================================================================================================================
+	/** Apply collision configuration from the pawn asset. */
+	void ApplyCapsuleConfiguration();
+
 	/** Apply visual configuration from the pawn asset. */
 	void ApplyVisualConfiguration();
 
-	/** Apply collision configuration from the pawn asset. */
-	void ApplyCollisionConfiguration();
-
-	/** Create and configure the movement component from the pawn asset. */
-	void CreateMovementComponent();
-
 	/** Apply movement configuration to the movement component. */
 	void ApplyMovementConfiguration();
+
+	/** Sync the navigation agent's capsule size with the pawn's capsule component. */
+	void SyncNavAgentWithCapsule();
+	
+	// Replication
+	// ==================================================================================================
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+	UFUNCTION()	void OnRep_OwningUnit();
 
 };

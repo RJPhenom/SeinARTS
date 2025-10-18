@@ -13,8 +13,8 @@ USTRUCT(BlueprintType)
 
 struct FSAFVectorSet {
 	GENERATED_BODY()
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Vectors") FVector Start = FVector::ZeroVector;
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Vectors") FVector2D Start2D = FVector2D::ZeroVector;
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Vectors") FVector End = FVector::ZeroVector;
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Vectors") FVector2D End2D = FVector2D::ZeroVector;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Vectors", meta=(DisplayName="World Start")) FVector Start = FVector::ZeroVector;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Vectors", meta=(DisplayName="World End")) FVector End = FVector::ZeroVector;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Vectors", meta=(DisplayName="Screen Space Start")) FVector2D Start2D = FVector2D::ZeroVector;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Vectors", meta=(DisplayName="Screen Space End")) FVector2D End2D = FVector2D::ZeroVector;
 };

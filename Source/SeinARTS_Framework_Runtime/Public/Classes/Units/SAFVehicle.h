@@ -1,7 +1,7 @@
 ﻿#pragma once
 
 #include "CoreMinimal.h"
-#include "Classes/Units/SAFUnit.h"
+#include "Classes/SAFUnit.h"
 #include "Assets/Units/SAFVehicleAsset.h"
 #include "Data/SAFVehicleData.h"
 #include "SAFVehicle.generated.h"

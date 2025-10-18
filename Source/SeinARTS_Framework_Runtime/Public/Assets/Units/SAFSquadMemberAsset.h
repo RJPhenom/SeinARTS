@@ -1,6 +1,6 @@
 #pragma once
 #include "CoreMinimal.h"
-#include "Assets/Units/SAFUnitAsset.h"
+#include "Assets/SAFUnitAsset.h"
 #include "Engine/EngineTypes.h"
 #include "SAFSquadMemberAsset.generated.h"
 

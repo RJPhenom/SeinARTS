@@ -57,7 +57,7 @@ public:
 
 	/** Returns the cost attributes as a FSAFResources bundle. */
 	UFUNCTION(BlueprintPure, Category="SeinARTS|Production")
-	FSAFResources BundleResources(ESAFResourceRoundingPolicy Policy = ESAFResourceRoundingPolicy::Ceil) const;
+	FSAFResources BundleResources() const;
 
 	// Replication
 	// ==================================================================================================

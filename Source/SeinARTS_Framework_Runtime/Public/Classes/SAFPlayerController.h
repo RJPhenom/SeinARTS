@@ -100,7 +100,7 @@ public:
 	virtual ECollisionChannel           GetCursorTraceChannel_Implementation() const;
 	
 	virtual ASAFFormationManager*       GetCurrentFormation_Implementation(const TArray<AActor*>& SelectionSnapshot);
-	virtual ASAFFormationManager*       CreateNewFormation_Implementation(const TArray<AActor*>& InActors);
+	virtual ASAFFormationManager*       CreateNewFormation_Implementation(const TArray<AActor*>& InUnits);
 
 	virtual bool                        IsMySelectionFriendly_Implementation() const;
 	virtual TArray<AActor*>             GetSelection_Implementation() const;
@@ -141,38 +141,38 @@ public:
 	// Player Data / Properties
 	// ========================================================================================================
 	/** Set the desired player slot for multiplayer games. If 0, slot will be random.
-	Note: player slots are downstream of teams (Team 1 has slot 1,2,3...) so if 
-	DesiredTeamID is not set, this will do nothing. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Input")
+	 * Note: player slots are downstream of teams (Team 1 has slot 1,2,3...) so if 
+	 * DesiredTeamID is not set, this will do nothing. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS", meta=(ClampMin="0", ClampMax="8"))
 	int32 DesiredPlayerID = 0;
 
 	/** Set the desired team slot for multiplayer games. If 0, team will be random. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Input")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS", meta=(ClampMin="0", ClampMax="8"))
 	int32 DesiredTeamID = 0;
 
 	/** Defines the distance from start and end points on a Select/Order/Ping action to 
 	determine wether that action was a 'drag' action. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Input")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS", meta=(ClampMin="1", ClampMax="100"))
 	float DragThreshold = 10.f;
 
 	/** Defines far a line trace will go before ending without hitting anything. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Input")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS", meta=(ClampMin="1000", UIMin="1000", ClampMax="10000000", UIMax="10000000"))
 	float TraceDistance = 1000000.f;
 
 	/** Which collision channel to use when tracing under cursor. */
-	UPROPERTY(EditDefaultsOnly, Category="SeinARTS|Input")
+	UPROPERTY(EditAnywhere, Category="SeinARTS")
 	TEnumAsByte<ECollisionChannel> CursorTraceChannel = ECC_Visibility;
 
 	/** Contains the vector set corresponding to an ongoing or previous select action. */
-	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category="SeinARTS|Selection")
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadWrite, Category="SeinARTS")
 	FSAFVectorSet SelectVectors;
 
 	/** Contains the vector set corresponding to an ongoing or previous order action. */
-	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category="SeinARTS|Order")
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadWrite, Category="SeinARTS")
 	FSAFVectorSet OrderVectors;
 
 	/** Contains the vector set corresponding to an ongoing or previous ping action. */
-	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category="SeinARTS|Ping")
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadWrite, Category="SeinARTS")
 	FSAFVectorSet PingVectors;
 
 	// Internal Helpers

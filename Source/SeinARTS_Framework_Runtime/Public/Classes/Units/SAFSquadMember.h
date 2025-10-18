@@ -14,7 +14,7 @@
 class UCapsuleComponent;
 class USkeletalMesh;
 class USkeletalMeshComponent;
-class USAFInfantryMovementComponent;
+class USAFMovementComponent;
 class ASAFSquad;
 class ASAFCover;
 class ASAFPlayerState;
@@ -52,7 +52,7 @@ public:
 
 	/** Movement component for infantry units */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="SeinARTS|Components")
-	TObjectPtr<USAFInfantryMovementComponent> InfantryMovementComponent = nullptr;
+	TObjectPtr<USAFMovementComponent> InfantryMovementComponent = nullptr;
 
 	/** Event OnSquadChanged binding */
 	UPROPERTY(BlueprintAssignable, BlueprintCallable, Category="SeinARTS|Selection")

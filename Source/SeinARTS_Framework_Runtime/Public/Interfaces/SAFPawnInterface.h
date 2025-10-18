@@ -24,6 +24,8 @@ class SEINARTS_FRAMEWORK_RUNTIME_API ISAFPawnInterface {
 
 public:
 
+	// Pawn Asset API
+	// =========================================================================
 	/** Initializes the pawn with its data asset and owning unit. */
 	UFUNCTION(BlueprintNativeEvent, Category="SeinARTS|Pawn")
 	void InitPawn(USAFPawnAsset* InPawnAsset, ASAFUnit* InOwningUnit);
@@ -32,6 +34,8 @@ public:
 	UFUNCTION(BlueprintNativeEvent, Category="SeinARTS|Pawn")
 	USAFPawnAsset* GetPawnAsset() const;
 
+	// Ownership API
+	// =========================================================================
 	/** Sets the owning unit for this pawn (server-authoritative). */
 	UFUNCTION(BlueprintNativeEvent, Category="SeinARTS|Pawn")
 	void SetOwningUnit(ASAFUnit* InOwningUnit);

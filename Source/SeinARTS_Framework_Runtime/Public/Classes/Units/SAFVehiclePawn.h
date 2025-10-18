@@ -9,7 +9,7 @@
 
 class UCapsuleComponent;
 class USkeletalMeshComponent;
-class USAFVehicleMovementComponent;
+class USAFMovementComponent;
 
 /* 
 * SAFVehiclePawn 
@@ -71,7 +71,7 @@ protected:
 
 	/** The movement component that drives default SeinARTS Framework vehicles. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="SeinARTS|Vehicle")
-	TObjectPtr<USAFVehicleMovementComponent> VehicleMovementComponent;
+	TObjectPtr<USAFMovementComponent> VehicleMovementComponent;
 
 
 	// Internal Helpers

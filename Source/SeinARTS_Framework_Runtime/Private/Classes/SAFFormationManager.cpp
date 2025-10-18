@@ -1,7 +1,7 @@
 #include "Classes/SAFFormationManager.h"
 #include "Classes/SAFActor.h"
 #include "Interfaces/SAFActorInterface.h"
-#include "Interfaces/Units/SAFUnitInterface.h"
+#include "Interfaces/SAFUnitInterface.h"
 #include "Utils/SAFLibrary.h"
 #include "Engine/World.h"
 #include "GameplayTagContainer.h"
@@ -17,64 +17,64 @@ void ASAFFormationManager::BeginPlay() {
 
 // Formation Interface Overrides
 // ==============================================================================================================================================================
-// Gets the actors in the formation
-TArray<AActor*> ASAFFormationManager::GetActors_Implementation() const {
-	TArray<AActor*> OutActors; 
-	OutActors.Reserve(Actors.Num());
-	for (const TObjectPtr<AActor>& Actor : Actors) 
-		OutActors.Add(Actor.Get());
+// Gets the units in the formation
+TArray<AActor*> ASAFFormationManager::GetUnits_Implementation() const {
+	TArray<AActor*> OutUnits; 
+	OutUnits.Reserve(Units.Num());
+	for (const TObjectPtr<AActor>& Unit : Units) 
+		OutUnits.Add(Unit.Get());
 
-	return OutActors;
+	return OutUnits;
 }
 
-// Adds a single actors to the formation
-bool ASAFFormationManager::AddActor_Implementation(AActor* Actor) {
-	if (!SAFLibrary::IsActorPtrValidSeinARTSUnit(Actor)) { SAFDEBUG_WARNING(FORMATSTR("Aborted adding actor '%s': Actor was invalid", Actor ? *Actor->GetName() : TEXT("nullptr"))); return false; }
-	if (Actors.Contains(Actor)) { SAFDEBUG_INFO(FORMATSTR("Aborted adding actor '%s': actor was already in the formation", Actor ? *Actor->GetName() : TEXT("nullptr"))); return false; }
-	SAFDEBUG_SUCCESS(FORMATSTR("Formation '%s' added actors '%s'.", *this->GetName(), *Actor->GetName()));
-	Actors.Add(Actor);
+// Adds a single unit to the formation
+bool ASAFFormationManager::AddUnit_Implementation(AActor* Unit) {
+	if (!SAFLibrary::IsActorPtrValidSeinARTSUnit(Unit)) { SAFDEBUG_WARNING(FORMATSTR("Aborted adding unit '%s': Unit was invalid", Unit ? *Unit->GetName() : TEXT("nullptr"))); return false; }
+	if (Units.Contains(Unit)) { SAFDEBUG_INFO(FORMATSTR("Aborted adding unit '%s': unit was already in the formation", Unit ? *Unit->GetName() : TEXT("nullptr"))); return false; }
+	SAFDEBUG_SUCCESS(FORMATSTR("Formation '%s' added units '%s'.", *this->GetName(), *Unit->GetName()));
+	Units.Add(Unit);
 
 	// Ensure removal script runs on stale formation, if any
-	if (ASAFFormationManager* OldFormation = ISAFUnitInterface::Execute_GetFormation(Actor))
+	if (ASAFFormationManager* OldFormation = ISAFUnitInterface::Execute_GetFormation(Unit))
 		if (OldFormation->GetClass()->ImplementsInterface(USAFFormationInterface::StaticClass())) 
-			ISAFFormationInterface::Execute_RemoveActor(OldFormation, Actor);
+			ISAFFormationInterface::Execute_RemoveUnit(OldFormation, Unit);
 
 	// Run setter, return success
-	ISAFUnitInterface::Execute_SetFormation(Actor, this);
+	ISAFUnitInterface::Execute_SetFormation(Unit, this);
 	return true;
 }
 
-// Adds a set of Actors to the formation
-bool ASAFFormationManager::AddActors_Implementation(const TArray<AActor*>& InActors) {
+// Adds a set of units to the formation
+bool ASAFFormationManager::AddUnits_Implementation(const TArray<AActor*>& InUnits) {
 	int32 Added = 0;
-	for (AActor* Actor : InActors) {
-		if (SAFLibrary::IsActorPtrValidSeinARTSUnit(Actor)) {
-			Added += ISAFFormationInterface::Execute_AddActor(this, Actor) ? 1 : 0;
-		} else SAFDEBUG_ERROR(FORMATSTR("Skipped actor '%s' while adding actors: Actor was invalid", Actor ? *Actor->GetName() : TEXT("nullptr")));
+	for (AActor* Unit : InUnits) {
+		if (SAFLibrary::IsActorPtrValidSeinARTSUnit(Unit)) {
+			Added += ISAFFormationInterface::Execute_AddUnit(this, Unit) ? 1 : 0;
+		} else SAFDEBUG_ERROR(FORMATSTR("Skipped actor '%s' while adding units: Unit was invalid", Unit ? *Unit->GetName() : TEXT("nullptr")));
 	}
 
-	if (Added > 0) SAFDEBUG_SUCCESS(FORMATSTR("Succeeded in adding %d actors out of %d.", Added, InActors.Num()));
-	else SAFDEBUG_WARNING(FORMATSTR("Formation added 0 Actors out of %d. There may have been an issue with InActors param.", InActors.Num()));
+	if (Added > 0) SAFDEBUG_SUCCESS(FORMATSTR("Succeeded in adding %d units out of %d.", Added, InUnits.Num()));
+	else SAFDEBUG_WARNING(FORMATSTR("Formation added 0 Units out of %d. There may have been an issue with InUnits param.", InUnits.Num()));
 	return Added > 0;
 }
 
-// Removes a single actor from the formation
-bool ASAFFormationManager::RemoveActor_Implementation(AActor* Actor) {
-	if (!SAFLibrary::IsActorPtrValidSeinARTSUnit(Actor)) { SAFDEBUG_ERROR("RemoveActor aborted: invalid actor"); return false; }
+// Removes a single unit from the formation
+bool ASAFFormationManager::RemoveUnit_Implementation(AActor* Unit) {
+	if (!SAFLibrary::IsActorPtrValidSeinARTSUnit(Unit)) { SAFDEBUG_ERROR("RemoveUnit aborted: invalid unit"); return false; }
 
-	bool bRemoved = Actors.Remove(Actor) > 0;
+	bool bRemoved = Units.Remove(Unit) > 0;
 	if (bRemoved) {
-		SAFDEBUG_SUCCESS(FORMATSTR("Succeeded in removing actor '%s'.", *Actor->GetName()));
-		ISAFUnitInterface::Execute_SetFormation(Actor, nullptr);
-		if (Actors.Num() <= 0) ISAFFormationInterface::Execute_CullFormation(this);
+		SAFDEBUG_SUCCESS(FORMATSTR("Succeeded in removing unit '%s'.", *Unit->GetName()));
+		ISAFUnitInterface::Execute_SetFormation(Unit, nullptr);
+		if (Units.Num() <= 0) ISAFFormationInterface::Execute_CullFormation(this);
 	}
 	
 	return bRemoved;
 }
 
-// Handles self-culling on emptying out the formaiton
+// Handles self-culling on emptying out the formation
 void ASAFFormationManager::CullFormation_Implementation() {
-	if (Actors.Num() == 0 && HasAuthority() && !IsActorBeingDestroyed()) {
+	if (Units.Num() == 0 && HasAuthority() && !IsActorBeingDestroyed()) {
 		SAFDEBUG_INFO(FORMATSTR("Formation '%s' has been emptied: culling formation.", *GetName()));
 		Destroy();
 	}
@@ -90,7 +90,7 @@ bool ASAFFormationManager::ReceiveOrder_Implementation(bool bQueueMode, FSAFOrde
 		OrderQueue.Add(Order);
 		bool bExecuted = ISAFFormationInterface::Execute_ExecuteOrder(this, Order);
 		if (bExecuted) SAFDEBUG_SUCCESS(FORMATSTR("Order successfully received by formation '%s'!", *GetName()));
-		else SAFDEBUG_WARNING(FORMATSTR("Order received by formation '%s', but actor is not orderable. Execution failed.", *GetName()));
+		else SAFDEBUG_WARNING(FORMATSTR("Order received by formation '%s', but unit is not orderable. Execution failed.", *GetName()));
 		return true;
 	} else {
 		OrderQueue.Add(Order);
@@ -111,31 +111,31 @@ bool ASAFFormationManager::ReceiveOrders_Implementation(bool bQueueMode, const T
 	return Received > 0;
 }
 
-// Executes an order passed in directly by dispatching individual orders to each actor.
+// Executes an order passed in directly by dispatching individual orders to each unit.
 bool ASAFFormationManager::ExecuteOrder_Implementation(FSAFOrder Order) {
-	if (Actors.Num() == 0) {
-		SAFDEBUG_INFO(FORMATSTR("ExecutedOrder aborted: formation '%s' has no actors, formation will be culled.", *GetName()));
+	if (Units.Num() == 0) {
+		SAFDEBUG_INFO(FORMATSTR("ExecutedOrder aborted: formation '%s' has no units, formation will be culled.", *GetName()));
 		ISAFFormationInterface::Execute_CullFormation(this);
 		return false;
 	}
 	
 	// Manage the pending orders
-	UnbindAllActorDelegates();
-	PendingActors.Reset();
+	UnbindAllUnitDelegates();
+	PendingUnits.Reset();
 
 	// Execute/dispatch
 	int32 Executed = 0;
-	for (const TObjectPtr<AActor>& Actor : Actors) {
-		if (SAFLibrary::IsActorPtrValidSeinARTSUnit(Actor)) {
-			PendingActors.Add(Actor);
-			BindActorDelegates(Actor);
-			ISAFUnitInterface::Execute_Order(Actor, Order);
+	for (const TObjectPtr<AActor>& Unit : Units) {
+		if (SAFLibrary::IsActorPtrValidSeinARTSUnit(Unit)) {
+			PendingUnits.Add(Unit);
+			BindUnitDelegates(Unit);
+			ISAFUnitInterface::Execute_Order(Unit, Order);
 			++Executed;
-		} else SAFDEBUG_WARNING(FORMATSTR("Formation '%s' skipped Order execution on an invalid actor.", *GetName()));
+		} else SAFDEBUG_WARNING(FORMATSTR("Formation '%s' skipped Order execution on an invalid unit.", *GetName()));
 	}
 
-	if (Executed > 0) SAFDEBUG_SUCCESS(FORMATSTR("Formation '%s' successfully executed %d order(s) on %d actor(s).", *GetName(), Executed, Actors.Num()));
-	else SAFDEBUG_WARNING(FORMATSTR("Formation executed 0 orders on %d actor(s). It is possible the actors do not implement this order tag.", Actors.Num()));
+	if (Executed > 0) SAFDEBUG_SUCCESS(FORMATSTR("Formation '%s' successfully executed %d order(s) on %d unit(s).", *GetName(), Executed, Units.Num()));
+	else SAFDEBUG_WARNING(FORMATSTR("Formation executed 0 orders on %d unit(s). It is possible the units do not implement this order tag.", Units.Num()));
 	return Executed > 0;
 }
 
@@ -154,10 +154,10 @@ bool ASAFFormationManager::CompleteOrder_Implementation() {
 	return true;
 }
 
-// Call to mark an actor in Actors complete for the current order at the top of the stack.
-bool ASAFFormationManager::CompleteOrderOnActor_Implementation(AActor* Actor) {
-	if (!SAFLibrary::IsActorPtrValidSeinARTSUnit(Actor)) { SAFDEBUG_ERROR("CompleteOrderOnActor failed: invalid actor."); return false; }
-	if (OrderQueue.Num() == 0) { SAFDEBUG_ERROR("CompleteOrderOnActor failed: no active order."); return false; }
+// Call to mark a unit in Units complete for the current order at the top of the stack.
+bool ASAFFormationManager::CompleteOrderOnUnit_Implementation(AActor* Unit) {
+	if (!SAFLibrary::IsActorPtrValidSeinARTSUnit(Unit)) { SAFDEBUG_ERROR("CompleteOrderOnUnit failed: invalid unit."); return false; }
+	if (OrderQueue.Num() == 0) { SAFDEBUG_ERROR("CompleteOrderOnUnit failed: no active order."); return false; }
 	return true;
 }
 
@@ -166,53 +166,54 @@ FGameplayTag ASAFFormationManager::ResolveOrderTag_Implementation(const FSAFOrde
 	return FGameplayTag::RequestGameplayTag(TEXT("SeinARTS.Order.Move"));
 }
 
-// Handler that is called when a formation is notified by a actor that it has completed its
-// pending order (when all Actors finish notifying, the next order is executed).
-void ASAFFormationManager::HandleActorOrderCompleted_Implementation(AActor* Actor, FSAFOrder Order) {
-	if (OrderQueue.Num() == 0) { SAFDEBUG_WARNING("Actor completed order but no active order is present."); return; }
-	if (Order.Id != OrderQueue[0].Id) { SAFDEBUG_WARNING("Actor completed an order, but that order is not the active order (order may be stale or expired."); return; }
+// Handler that is called when a formation is notified by a unit that it has completed its
+// pending order (when all Units finish notifying, the next order is executed).
+void ASAFFormationManager::HandleUnitOrderCompleted_Implementation(AActor* Unit, FSAFOrder Order) {
+	if (OrderQueue.Num() == 0) { SAFDEBUG_WARNING("Unit completed order but no active order is present."); return; }
+	if (Order.Id != OrderQueue[0].Id) { SAFDEBUG_WARNING("Unit completed an order, but that order is not the active order (order may be stale or expired."); return; }
 
-	// Handle the actor completion
-	const bool bRemoved = PendingActors.Remove(Actor) > 0;
-	if (bRemoved) SAFDEBUG_SUCCESS(FORMATSTR("Formation '%s': Actor '%s' completed the active order. Remaining=%d", *GetName(), Actor ? *Actor->GetName() : TEXT("nullptr"), PendingActors.Num()));
-	else SAFDEBUG_WARNING("HandleActorOrderCompleted called, but no actor removed from PendingActors.");
-	UnbindActorDelegates(Actor);
+	// Handle the unit completion
+	const bool bRemoved = PendingUnits.Remove(Unit) > 0;
+	if (bRemoved) SAFDEBUG_SUCCESS(FORMATSTR("Formation '%s': Unit '%s' completed the active order. Remaining=%d", *GetName(), Unit ? *Unit->GetName() : TEXT("nullptr"), PendingUnits.Num()));
+	else SAFDEBUG_WARNING("HandleUnitOrderCompleted called, but no unit removed from PendingUnits.");
+	UnbindUnitDelegates(Unit);
 
 	// Handle formation completion
-	if (PendingActors.Num() == 0) { ISAFFormationInterface::Execute_CompleteOrder(this); }
+	if (PendingUnits.Num() == 0) { ISAFFormationInterface::Execute_CompleteOrder(this); }
 }
 
-// Handler for when a actor is destroyed while within a formation
-void ASAFFormationManager::HandleActorDestroyed_Implementation(AActor* Actor) {
-	if (OrderQueue.Num() == 0) { SAFDEBUG_INFO("Actor was destroyed, no active order is present."); return; }
-	if (PendingActors.Remove(Actor) > 0) {
-		SAFDEBUG_WARNING(FORMATSTR("Formation '%s': Actor '%s' destroyed during active order. Remaining=%d", *GetName(), Actor ? *Actor->GetName() : TEXT("nullptr"), PendingActors.Num()));
-		UnbindActorDelegates(Actor);
-		if (PendingActors.Num() == 0) ISAFFormationInterface::Execute_CompleteOrder(this);
-	} else SAFDEBUG_WARNING("HandleActorDestroyed called, but no actor removed from PendingActors.");
+// Handler for when a unit is destroyed while within a formation
+void ASAFFormationManager::HandleUnitDestroyed_Implementation(AActor* Unit) {
+	if (OrderQueue.Num() == 0) { SAFDEBUG_INFO("Unit was destroyed, no active order is present."); return; }
+	if (PendingUnits.Remove(Unit) > 0) {
+		SAFDEBUG_WARNING(FORMATSTR("Formation '%s': Unit '%s' destroyed during active order. Remaining=%d", *GetName(), Unit ? *Unit->GetName() : TEXT("nullptr"), PendingUnits.Num()));
+		UnbindUnitDelegates(Unit);
+		if (PendingUnits.Num() == 0) ISAFFormationInterface::Execute_CompleteOrder(this);
+	} else SAFDEBUG_WARNING("HandleUnitDestroyed called, but no unit removed from PendingUnits.");
 }
 
 // Proxy Functions for binding/unbinding delegates
 // =========================================================================================================================================================================
-void ASAFFormationManager::HandleActorOrderCompletedProxy(AActor* Actor, FSAFOrder Order) { ISAFFormationInterface::Execute_HandleActorOrderCompleted(this, Actor, Order); }
-void ASAFFormationManager::HandleActorDestroyedProxy(AActor* Actor) { ISAFFormationInterface::Execute_HandleActorDestroyed(this, Actor); }
+void ASAFFormationManager::HandleUnitOrderCompletedProxy(AActor* Unit, FSAFOrder Order) { ISAFFormationInterface::Execute_HandleUnitOrderCompleted(this, Unit, Order); }
+void ASAFFormationManager::HandleUnitDestroyedProxy(AActor* Unit) { ISAFFormationInterface::Execute_HandleUnitDestroyed(this, Unit); }
 
-// Binding/Unbinding Actor Delegates Helpers
+// Binding/Unbinding Unit Delegates Helpers
 // ==============================================================================================================================================================
-void ASAFFormationManager::BindActorDelegates(AActor* Actor) {
-	if (!SAFLibrary::IsActorPtrValidSeinARTSUnit(Actor)) { SAFDEBUG_ERROR("BindActorDelegates aborted: invalid actor"); return; }
-	ASAFActor* SAFActor = Cast<ASAFActor>(Actor);
-	SAFActor->OnOrderCompleted.AddDynamic(this, &ASAFFormationManager::HandleActorOrderCompletedProxy);
-	SAFActor->OnDestroyed.AddDynamic(this, &ASAFFormationManager::HandleActorDestroyedProxy);
+void ASAFFormationManager::BindUnitDelegates(AActor* Unit) {
+	if (!SAFLibrary::IsActorPtrValidSeinARTSUnit(Unit)) { SAFDEBUG_ERROR("BindUnitDelegates aborted: invalid unit"); return; }
+	ASAFActor* SAFActor = Cast<ASAFActor>(Unit);
+	SAFActor->OnOrderCompleted.AddDynamic(this, &ASAFFormationManager::HandleUnitOrderCompletedProxy);
+	SAFActor->OnDestroyed.AddDynamic(this, &ASAFFormationManager::HandleUnitDestroyedProxy);
 }
 
-void ASAFFormationManager::UnbindActorDelegates(AActor* Actor) {
-	if (!SAFLibrary::IsActorPtrValidSeinARTSUnit(Actor)) { SAFDEBUG_ERROR("UnbindActorDelegates aborted: invalid actor"); return; }
-	ASAFActor* SAFActor = Cast<ASAFActor>(Actor);
-	SAFActor->OnOrderCompleted.RemoveDynamic(this, &ASAFFormationManager::HandleActorOrderCompletedProxy);
-	SAFActor->OnDestroyed.RemoveDynamic(this, &ASAFFormationManager::HandleActorDestroyedProxy);
+void ASAFFormationManager::UnbindUnitDelegates(AActor* Unit) {
+	if (!SAFLibrary::IsActorPtrValidSeinARTSUnit(Unit)) { SAFDEBUG_ERROR("UnbindUnitDelegates aborted: invalid unit"); return; }
+	ASAFActor* SAFActor = Cast<ASAFActor>(Unit);
+	SAFActor->OnOrderCompleted.RemoveDynamic(this, &ASAFFormationManager::HandleUnitOrderCompletedProxy);
+	SAFActor->OnDestroyed.RemoveDynamic(this, &ASAFFormationManager::HandleUnitDestroyedProxy);
 }
 
-void ASAFFormationManager::UnbindAllActorDelegates() {
-	for (const TObjectPtr<AActor>& Actor : Actors) if (ASAFActor* SAFActor = Cast<ASAFActor>(Actor.Get())) UnbindActorDelegates(SAFActor);
+void ASAFFormationManager::UnbindAllUnitDelegates() {
+	for (const TObjectPtr<AActor>& Unit : Units) if (ASAFActor* SAFActor = Cast<ASAFActor>(Unit.Get())) UnbindUnitDelegates(SAFActor);
 }
+	

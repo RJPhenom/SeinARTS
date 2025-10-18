@@ -33,19 +33,19 @@ public:
 	// Teams and Match Settings
 	// ================================================================================================
 	/** Replicated teams array. */
-	UPROPERTY(VisibleAnywhere, Replicated)
+	UPROPERTY(VisibleAnywhere, Replicated, Category="SeinARTS")
 	TArray<FSAFTeam> Teams;
 
 	/** Replicated flag showing match is set ready. */
-	UPROPERTY(VisibleAnywhere, Replicated)
+	UPROPERTY(VisibleAnywhere, Replicated, Category="SeinARTS")
 	bool MatchReady = false;
 
 	/** Shared-resource mode (mirrors server-authoritative flag from GameMode). */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Replicated)
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Replicated, Category="SeinARTS")
 	bool bResourceSharingEnabled = false;
 
 	/** Checks if the bResourceSharingEnabled flag is set to on. */
-	UFUNCTION(BlueprintPure, Category="SeinARTS|Economy")
+	UFUNCTION(BlueprintPure, Category="SeinARTS|Resource Sharing")
 	bool IsResourceSharingEnabled() const { return bResourceSharingEnabled; }
 
 	/** Debug utility, for logging GameState 'Teams' which tracks logged in/initalized players on each team. */

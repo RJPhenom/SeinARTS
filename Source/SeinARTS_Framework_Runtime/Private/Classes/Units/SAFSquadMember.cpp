@@ -1,10 +1,9 @@
 #include "Classes/Units/SAFSquadMember.h"
 #include "Classes/Units/SAFSquad.h" 
-#include "Classes/Unreal/SAFPlayerState.h"
+#include "Classes/SAFPlayerState.h"
 #include "Assets/Units/SAFSquadMemberAsset.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
-#include "Components/SAFInfantryMovementComponent.h"
 #include "Net/UnrealNetwork.h"
 #include "AIController.h"
 #include "DetourCrowdAIController.h"
@@ -115,7 +114,7 @@ void ASAFSquadMember::EnterCover_Implementation(AActor* CoverObject, ESAFCoverTy
 		case ESAFCoverType::Heavy:    DebugColor = FColor::Green;  break;
 		case ESAFCoverType::Light:    DebugColor = FColor::Yellow; break;
 		case ESAFCoverType::Negative: DebugColor = FColor::Red;    break;
-		case ESAFCoverType::Neutral:  DebugColor = FColor::Silver; break;
+		case ESAFCoverType::None:  DebugColor = FColor::Silver; break;
 		default: break;
 	} DrawDebugString(GetWorld(),	GetActorLocation() + FVector(0.f, 0.f, 15.f),	TEXT("Entered cover!"),	nullptr, DebugColor,	5.0f,	true);
 }
@@ -127,7 +126,7 @@ void ASAFSquadMember::ExitCover_Implementation(AActor* CoverObject, ESAFCoverTyp
 		case ESAFCoverType::Heavy:    DebugColor = FColor::Green;  break;
 		case ESAFCoverType::Light:    DebugColor = FColor::Yellow; break;
 		case ESAFCoverType::Negative: DebugColor = FColor::Red;    break;
-		case ESAFCoverType::Neutral:  DebugColor = FColor::Silver; break;
+		case ESAFCoverType::None:  DebugColor = FColor::Silver; break;
 		default: break;
 	} DrawDebugString(GetWorld(),	GetActorLocation() + FVector(0.f, 0.f, 15.f),	TEXT("Exited cover!"),	nullptr, DebugColor,	5.0f,	true);
 }

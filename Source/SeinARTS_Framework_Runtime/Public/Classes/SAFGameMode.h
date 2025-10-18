@@ -26,20 +26,20 @@ public:
 	virtual void PostLogin(APlayerController* NewPlayer) override;
 
 	/** Number of teams in the match. */
-	UPROPERTY(EditDefaultsOnly, Category="SeinARTS|Teams")
+	UPROPERTY(EditDefaultsOnly, Category="SeinARTS", meta=(ClampMin="2", UIMin="2", ClampMax="8", UIMax="8"))
 	int32 NumTeams = 4;
 
-	/** Number of players per team in the match. */
-	UPROPERTY(EditDefaultsOnly, Category="SeinARTS|Teams")
+	/** Number of players in the match. */
+	UPROPERTY(EditDefaultsOnly, Category="SeinARTS", meta=(ClampMin="2", UIMin="2", ClampMax="8", UIMax="8"))
 	int32 NumPlayers = 4;
 
 	/** Number of players per team in the match. */
-	UPROPERTY(EditDefaultsOnly, Category="SeinARTS|Teams")
+	UPROPERTY(EditDefaultsOnly, Category="SeinARTS", meta=(ClampMin="1", UIMin="1", ClampMax="4", UIMax="4"))
 	int32 NumPlayersPerTeam = 1;
 
 	/** If true, all players on the same team share resources 
 	 * (default: false). */
-	UPROPERTY(EditDefaultsOnly, Category="SeinARTS|Teams")
+	UPROPERTY(EditDefaultsOnly, Category="SeinARTS")
 	bool bResourceSharingEnabled = false;
 
 private:
@@ -64,7 +64,7 @@ private:
 	void HandlePlayerReady(ASAFPlayerController* PlayerController);
 
 	/** Sets the resource sharing mode for this game mode instance. */
-	UFUNCTION(BlueprintCallable, Category="SeinARTS|Economy")
+	UFUNCTION(BlueprintCallable, Category="SeinARTS|Resource Sharing")
 	void SetResourceSharingEnabled(bool bEnabled);	
 
 	/** Tries to start the match after all players reported ready. */

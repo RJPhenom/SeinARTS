@@ -1,7 +1,6 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Enums/SAFResourceRoundingPolicies.h"
 #include "Structs/SAFResources.h"
 
 class UAbilitySystemComponent;
@@ -22,7 +21,6 @@ namespace SAFCostResolver {
 	SEINARTS_FRAMEWORK_RUNTIME_API FSAFResources ResolveCosts(
 		const UAbilitySystemComponent* AbilitySystem,
 		const USAFUnitAsset* UnitAsset,
-		const APlayerState* PlayerState,
-		ESAFResourceRoundingPolicy Policy = ESAFResourceRoundingPolicy::Ceil
+		const APlayerState* PlayerState
 	);
 }

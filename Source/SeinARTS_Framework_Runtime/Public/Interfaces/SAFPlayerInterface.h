@@ -63,7 +63,7 @@ public:
 
 	/** SERVER ONLY: Creates a new formation for the current selection. */
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category="SeinARTS|Formation")
-	ASAFFormationManager* CreateNewFormation(const TArray<AActor*>& InActors);
+	ASAFFormationManager* CreateNewFormation(const TArray<AActor*>& InUnits);
 
 	// Selection
 	// =====================================================================================

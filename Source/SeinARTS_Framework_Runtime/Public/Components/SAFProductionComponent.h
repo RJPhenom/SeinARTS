@@ -20,7 +20,8 @@ class ASAFPlayerState;
  *
  * Clients/UI call RequestEnqueue(UnitData); server validates against the live unlocked list.
  */
-UCLASS(ClassGroup=(SeinARTS), meta=(BlueprintSpawnableComponent))
+UCLASS(ClassGroup=(SeinARTS), BlueprintType, Blueprintable, 
+meta=(BlueprintSpawnableComponent, DisplayName="SeinARTS Production Component"))
 class SEINARTS_FRAMEWORK_RUNTIME_API USAFProductionComponent : public UArrowComponent {
 	GENERATED_BODY()
 
@@ -31,26 +32,26 @@ public:
 	// Catalogue + Queue
 	// =======================================================================================================
 	/** Replicated Catalogue of production recipes this component can produce. */
-	UPROPERTY(VisibleInstanceOnly, ReplicatedUsing=OnRep_ProductionCatalogue, Category="SeinARTS|Production")
+	UPROPERTY(VisibleInstanceOnly, ReplicatedUsing=OnRep_ProductionCatalogue, Category="SeinARTS")
 	TArray<FSAFProductionRecipe> ProductionCatalogue;
 
 	/** Replicated production queue (0 = head). */
-	UPROPERTY(VisibleInstanceOnly, ReplicatedUsing=OnRep_ProductionQueue, Category="SeinARTS|Production")
+	UPROPERTY(VisibleInstanceOnly, ReplicatedUsing=OnRep_ProductionQueue, Category="SeinARTS")
 	TArray<FSAFProductionQueueItem> ProductionQueue;
 
 	/** Remaining time (seconds) on the head-of-line item (server authoritative). */
-	UPROPERTY(Replicated, VisibleInstanceOnly, Category="SeinARTS|Production")
+	UPROPERTY(Replicated, VisibleInstanceOnly, Category="SeinARTS")
 	float CurrentRemainingTime = 0.f;
 
 	// Spawning / Rally Point
 	// =======================================================================================================
 	/** Optionally override the base arrow transform with a new spawn transform.
 	 * Useful for off-map ingress, hologram placement system, etc... */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Production")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Spawn & Rally Point")
 	FTransform SpawnTransformOverride;
 
 	/** Optional rally point for spawned units; if unset, uses the arrow's end/direction. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Production")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Spawn & Rally Point")
 	FVector RallyPoint = FVector::ZeroVector;
 
 	// Production API

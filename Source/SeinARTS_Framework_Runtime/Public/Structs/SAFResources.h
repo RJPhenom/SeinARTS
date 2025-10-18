@@ -1,7 +1,6 @@
 ﻿#pragma once
 
 #include "CoreMinimal.h"
-#include "Enums/SAFResourceRoundingPolicies.h"
 #include "SAFResources.generated.h"
 
 /**
@@ -105,15 +104,8 @@ public:
 	}
 
 	/** Helper for converting float costs to non-negative ints per policy. */
-	FORCEINLINE static int32 ToIntByPolicy(float Value, ESAFResourceRoundingPolicy Policy) {
-		int32 Out = 0;
-		switch (Policy) {
-			case ESAFResourceRoundingPolicy::Floor: Out = FMath::FloorToInt(Value); break;
-			case ESAFResourceRoundingPolicy::Round: Out = FMath::RoundToInt(Value); break;
-			case ESAFResourceRoundingPolicy::Ceil:  Out = FMath::CeilToInt(Value);  break;
-			default: Out = FMath::RoundToInt(Value); break;
-		}
-
+	FORCEINLINE static int32 ToInt(float Value) {
+		int32 Out = FMath::CeilToInt(Value);
 		return FMath::Max(0, Out);
 	}
 };

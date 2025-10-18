@@ -1,9 +1,10 @@
-#include "Classes/Unreal/SAFHUD.h"
-#include "Classes/Unreal/SAFPlayerController.h"
+#include "Classes/SAFHUD.h"
+#include "Classes/SAFPlayerController.h"
 #include "Blueprint/WidgetLayoutLibrary.h"
 #include "Enums/SAFCoverTypes.h"
 #include "GameFramework/PlayerController.h"
 #include "Interfaces/SAFPlayerInterface.h"
+#include "Interfaces/SAFUnitInterface.h"
 #include "Utils/SAFLibrary.h"
 #include "Utils/SAFCoverUtilities.h"
 #include "Debug/SAFDebugTool.h"
@@ -118,16 +119,21 @@ void ASAFHUD::EndMarquee_Implementation(const FVector2D InEnd) {
 
 // Drawing Functions
 // ===================================================================================
-void ASAFHUD::DrawDestinations_Implementation(const TArray<FVector>& Destinations) {
+void ASAFHUD::DrawDestination_Implementation(const FVector& Destination, bool bUseCover) {
 	UWorld* World = GetWorld();
 	if (!World) return;
 
-	for (const FVector& Destination : Destinations) {
-		FColor Color = FColor::Magenta;
+	FColor Color = FColor::White;
+	if (bUseCover) {
 		ESAFCoverType CoverType = SAFCoverUtilities::GetCoverAtPoint(World, Destination);
 		if (CoverType == ESAFCoverType::Negative) Color = FColor::Red;
 		if (CoverType == ESAFCoverType::Light) Color = FColor::Yellow;
 		if (CoverType == ESAFCoverType::Heavy) Color = FColor::Green;
-		DrawDebugPoint(World, Destination, 15.f, Color, false, 0.f);
 	}
+
+	DrawDebugPoint(World, Destination, 15.f, Color, false, 0.f);
+}
+
+void ASAFHUD::DrawDestinations_Implementation(const TArray<FVector>& Destinations, bool bUseCover) {
+	for (const FVector& Destination : Destinations) DrawDestination(Destination, bUseCover);
 }

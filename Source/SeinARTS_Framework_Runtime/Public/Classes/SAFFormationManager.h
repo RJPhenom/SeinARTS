@@ -16,7 +16,7 @@ class ASAFUnit;
  * 
  * A default class for SeinARTS Framework formation handling. Formations are the
  * intermediary manager class between the SAFPlayerController (who sends orders)
- * and groups of actors (who receives them).
+ * and groups of units (who can receive and be ordered).
  */
 UCLASS(ClassGroup=(SeinARTS), Blueprintable, BlueprintType, meta=(DisplayName="SeinARTS Formation Manager"))
 class SEINARTS_FRAMEWORK_RUNTIME_API ASAFFormationManager : public AActor, 
@@ -29,10 +29,10 @@ public:
 
 	// Formation Interface / API
 	// ==================================================================================================
-	virtual TArray<AActor*>       GetActors_Implementation() const;
-	virtual bool                  AddActor_Implementation(AActor* Actor);
-	virtual bool                  AddActors_Implementation(const TArray<AActor*>& InActors);
-	virtual bool                  RemoveActor_Implementation(AActor* Actor);
+	virtual TArray<AActor*>       GetUnits_Implementation() const;
+	virtual bool                  AddUnit_Implementation(AActor* Unit);
+	virtual bool                  AddUnits_Implementation(const TArray<AActor*>& InUnits);
+	virtual bool                  RemoveUnit_Implementation(AActor* Unit);
 	virtual void                  CullFormation_Implementation();
 
 	virtual bool                  ReceiveOrder_Implementation(bool bQueueMode, FSAFOrder Order);
@@ -40,27 +40,27 @@ public:
 	virtual bool                  ExecuteOrder_Implementation(FSAFOrder Order);
 	virtual bool                  ExecuteNextOrder_Implementation();
 	virtual bool                  CompleteOrder_Implementation();
-	virtual bool                  CompleteOrderOnActor_Implementation(AActor* Actor);
+	virtual bool                  CompleteOrderOnUnit_Implementation(AActor* Unit);
 	virtual FGameplayTag          ResolveOrderTag_Implementation(const FSAFOrder& InOrder) const;
-	
-	virtual void                  HandleActorOrderCompleted_Implementation(AActor* Actor, FSAFOrder Order);
-	virtual void                  HandleActorDestroyed_Implementation(AActor* Actor);
+
+	virtual void                  HandleUnitOrderCompleted_Implementation(AActor* Unit, FSAFOrder Order);
+	virtual void                  HandleUnitDestroyed_Implementation(AActor* Unit);
 
 	/** Proxy Functions to bind delegates */
-	UFUNCTION() void HandleActorOrderCompletedProxy(AActor* Actor, FSAFOrder Order);
-	UFUNCTION() void HandleActorDestroyedProxy(AActor* Actor);
+	UFUNCTION() void HandleUnitOrderCompletedProxy(AActor* Unit, FSAFOrder Order);
+	UFUNCTION() void HandleUnitDestroyedProxy(AActor* Unit);
 
-	/** Maintains the list of actors this formation manager controls. */
-	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category="SeinARTS|Formation", meta=(AllowPrivateAccess="true"))
-	TArray<TObjectPtr<AActor>> Actors;
+	/** Maintains the list of units this formation manager controls. */
+	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category="SeinARTS", meta=(AllowPrivateAccess="true"))
+	TArray<TObjectPtr<AActor>> Units;
 
 	/** Queue of orders that have been issued to this formation. */
-	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category="SeinARTS|Formation")
+	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category="SeinARTS")
 	TArray<FSAFOrder> OrderQueue;
 
-	/** Contains actors still pending completion on their current orders */
-	UPROPERTY(VisibleInstanceOnly, Category="SeinARTS|Formation") 
-	TSet<TWeakObjectPtr<AActor>> PendingActors;
+	/** Contains units still pending completion on their current orders */
+	UPROPERTY(VisibleInstanceOnly, Category="SeinARTS") 
+	TSet<TWeakObjectPtr<AActor>> PendingUnits;
 
 protected:
 
@@ -68,8 +68,8 @@ protected:
 
 	// Internal helpers for managing delegates
 	// ==================================================================================================
-	void BindActorDelegates(AActor* Actor);
-	void UnbindActorDelegates(AActor* Actor);
-	void UnbindAllActorDelegates();
+	void BindUnitDelegates(AActor* Unit);
+	void UnbindUnitDelegates(AActor* Unit);
+	void UnbindAllUnitDelegates();
 
 };

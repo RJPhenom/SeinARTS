@@ -1,14 +1,14 @@
-#include "Classes/Unreal/SAFPlayerController.h"
-#include "Classes/Unreal/SAFPlayerState.h"
-#include "Classes/Unreal/SAFHUD.h"
-#include "Classes/Unreal/SAFCameraPawn.h"
+#include "Classes/SAFPlayerController.h"
+#include "Classes/SAFPlayerState.h"
+#include "Classes/SAFHUD.h"
+#include "Classes/SAFCameraPawn.h"
 #include "Classes/SAFFormationManager.h"
 #include "Classes/Units/SAFSquad.h"
 #include "CollisionQueryParams.h"
 #include "InputCoreTypes.h"
 #include "Interfaces/SAFActorInterface.h"
 #include "Interfaces/SAFPlayerInterface.h"
-#include "Interfaces/Units/SAFUnitInterface.h"
+#include "Interfaces/SAFUnitInterface.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerState.h"
 #include "Kismet/KismetMathLibrary.h"
@@ -39,14 +39,16 @@ void ASAFPlayerController::Tick(float DeltaSeconds) {
 	if (Selection.Num() <= 0) return;
 	if (!ISAFPlayerInterface::Execute_IsMySelectionFriendly(this)) return;
 	if (!ISAFPlayerInterface::Execute_IsActiveActorValid(this)) return;
+	if (!SAFLibrary::IsActorPtrValidSeinARTSUnit(Selection[0].Get())) return;
 
-	ASAFSquad* Squad = Cast<ASAFSquad>(Selection[0].Get());
-	if (!SAFLibrary::IsActorPtrValidSeinARTSUnit(Squad)) return;
-
-	if(ASAFHUD* SAFHUD = Cast<ASAFHUD>(GetHUD())) {
+	if (ASAFHUD* SAFHUD = Cast<ASAFHUD>(GetHUD())) {
 		const FVector Point = LineTraceUnderCursor();
-		TArray<FVector> Destinations =  Squad->GetCoverPositionsAtPoint(Point, false);
-		SAFHUD->DrawDestinations(Destinations);
+		bool bUsesCover = ISAFUnitInterface::Execute_UsesCover(Selection[0].Get());
+		TArray<FVector> Destinations = bUsesCover 
+			? ISAFUnitInterface::Execute_GetCoverPositionsAtPoint(Selection[0].Get(), Point, false)
+			: ISAFUnitInterface::Execute_GetPositionsAtPoint(Selection[0].Get(), Point, false);
+			
+		SAFHUD->DrawDestinations(Destinations, bUsesCover);
 	}
 }
 
@@ -92,42 +94,42 @@ ASAFFormationManager* ASAFPlayerController::GetCurrentFormation_Implementation(c
 	if (!HasAuthority()) { SAFDEBUG_WARNING("WARNING: GetCurrentFormation called on client. Formations exist only on the server, you should not be calling this on the client. Returning nullptr."); return nullptr; }
 	if (SelectionSnapshot.Num() <= 0) { SAFDEBUG_WARNING("GetCurrentFormation failed: no units in current selection."); return nullptr; }
 
-	// Collect valid unit actors that will make up the formation. 
-	TArray<AActor*> SelectionActors;
-	SelectionActors.Reserve(SelectionSnapshot.Num());
-	for (AActor* Actor : SelectionSnapshot) if (SAFLibrary::IsActorPtrValidSeinARTSActor(Actor)) SelectionActors.Add(Actor);
-	if (SelectionActors.Num() <= 0) { SAFDEBUG_WARNING("GetCurrentFormation failed: selection contains no valid units."); return nullptr; }
-	else SAFDEBUG_INFO(FORMATSTR("GetCurrentFormation proceeding with check on %d units.", SelectionActors.Num()));
+	// Collect valid units that will make up the formation. 
+	TArray<AActor*> SelectionUnits;
+	SelectionUnits.Reserve(SelectionSnapshot.Num());
+	for (AActor* Unit : SelectionSnapshot) if (SAFLibrary::IsActorPtrValidSeinARTSUnit(Unit)) SelectionUnits.Add(Unit);
+	if (SelectionUnits.Num() <= 0) { SAFDEBUG_WARNING("GetCurrentFormation failed: selection contains no valid units."); return nullptr; }
+	else SAFDEBUG_INFO(FORMATSTR("GetCurrentFormation proceeding with check on %d units.", SelectionUnits.Num()));
 
 	// Find existing common formation (if any) and check if it matches 1:1 the selection, if so use that
-	ASAFFormationManager* FoundFormation = Cast<ASAFFormationManager>(ISAFUnitInterface::Execute_GetFormation(SelectionActors[0]));
-	TArray<AActor*> FoundActors = IsValid(FoundFormation) ? ISAFFormationInterface::Execute_GetActors(FoundFormation) : TArray<AActor*>();
-	bool bActorCountsMatch = FoundActors.Num() == SelectionActors.Num();
-	if (IsValid(FoundFormation) && bActorCountsMatch) {
-		for (AActor* Actor : SelectionActors) {
-			ASAFFormationManager* OldFormation = Cast<ASAFFormationManager>(ISAFUnitInterface::Execute_GetFormation(Actor));
+	ASAFFormationManager* FoundFormation = Cast<ASAFFormationManager>(ISAFUnitInterface::Execute_GetFormation(SelectionUnits[0]));
+	TArray<AActor*> FoundUnits = IsValid(FoundFormation) ? ISAFFormationInterface::Execute_GetUnits(FoundFormation) : TArray<AActor*>();
+	bool bCountsMatch = FoundUnits.Num() == SelectionUnits.Num();
+	if (IsValid(FoundFormation) && bCountsMatch) {
+		for (AActor* Unit : SelectionUnits) {
+			ASAFFormationManager* OldFormation = Cast<ASAFFormationManager>(ISAFUnitInterface::Execute_GetFormation(Unit));
 			if (IsValid(OldFormation) && OldFormation == FoundFormation) continue;
-			if (IsValid(OldFormation)) ISAFFormationInterface::Execute_RemoveActor(OldFormation, Actor);      
-			ISAFFormationInterface::Execute_AddActor(FoundFormation, Actor);
+			if (IsValid(OldFormation)) ISAFFormationInterface::Execute_RemoveUnit(OldFormation, Unit);
+			ISAFFormationInterface::Execute_AddUnit(FoundFormation, Unit);
 		}
 
 		return FoundFormation;
 	}
 
 	// Else, create a new formation with the selected units
-	return ISAFPlayerInterface::Execute_CreateNewFormation(this, SelectionActors);
+	return ISAFPlayerInterface::Execute_CreateNewFormation(this, SelectionUnits);
 }
 
 // Creates a new formation for the current selection.
-ASAFFormationManager* ASAFPlayerController::CreateNewFormation_Implementation(const TArray<AActor*>& InActors) {
+ASAFFormationManager* ASAFPlayerController::CreateNewFormation_Implementation(const TArray<AActor*>& InUnits) {
 	if (!HasAuthority()) { SAFDEBUG_WARNING("WARNING: GetCurrentFormation called on client. Formations exist only on the server, you should not be calling this on the client. Returning nullptr."); return nullptr; }
 	UWorld* World = GetWorld(); if (!World) { SAFDEBUG_ERROR("CreateNewFormation aborted: World was nullptr."); return nullptr; } 
-	if (InActors.Num() <= 0) { SAFDEBUG_ERROR("CreateNewFormation aborted: no actors were provided."); return nullptr; } 
+	if (InUnits.Num() <= 0) { SAFDEBUG_ERROR("CreateNewFormation aborted: no units were provided."); return nullptr; } 
 
 	// Spawn new manager at selection centroid
 	FVector Center(0.f); 
-	for (AActor* Actor : InActors) Center += Actor->GetActorLocation(); 
-	Center /= InActors.Num();
+	for (AActor* Unit : InUnits) Center += Unit->GetActorLocation(); 
+	Center /= InUnits.Num();
 	FActorSpawnParameters Params;
 	Params.Owner = this;
 	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
@@ -135,10 +137,10 @@ ASAFFormationManager* ASAFPlayerController::CreateNewFormation_Implementation(co
 	if (!IsValid(NewFormation)) { SAFDEBUG_ERROR("CreateNewFormation failed: spawn returned nullptr."); return nullptr; }
 
 	// Transfer membership
-	for (AActor* Actor : InActors) {
-		ASAFFormationManager* OldFormation = Cast<ASAFFormationManager>(ISAFUnitInterface::Execute_GetFormation(Actor));
-		if (IsValid(OldFormation)) ISAFFormationInterface::Execute_RemoveActor(OldFormation, Actor);
-		ISAFFormationInterface::Execute_AddActor(NewFormation, Actor);
+	for (AActor* Unit : InUnits) {
+		ASAFFormationManager* OldFormation = Cast<ASAFFormationManager>(ISAFUnitInterface::Execute_GetFormation(Unit));
+		if (IsValid(OldFormation)) ISAFFormationInterface::Execute_RemoveUnit(OldFormation, Unit);
+		ISAFFormationInterface::Execute_AddUnit(NewFormation, Unit);
 	}
 
 	return NewFormation;

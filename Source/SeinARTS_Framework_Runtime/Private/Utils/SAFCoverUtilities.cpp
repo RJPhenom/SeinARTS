@@ -24,7 +24,7 @@ namespace SAFCoverUtilities {
 
 		OutActor 			= nullptr;
 		OutComponent 	= nullptr;
-		OutCoverType 	= ESAFCoverType::Neutral;
+		OutCoverType 	= ESAFCoverType::None;
 
 		// Overlap everything; any Actor could carry a USAFCoverCollider.
 		TArray<FOverlapResult> Overlaps;
@@ -57,7 +57,7 @@ namespace SAFCoverUtilities {
 	/** Checks if the vector is within a USAFCoverCollider collider box. If bProjectToNavmesh (defaults true), 
 	 * it projects the point to the nearest navigable point on the NavMesh first. */
 	ESAFCoverType GetCoverAtPoint(UWorld* World, FVector Point, bool bProjectToNavmesh, bool bShowDebugMessages) {
-		if (!World) return ESAFCoverType::Neutral;
+		if (!World) return ESAFCoverType::None;
 
 		// Use ProjectedPoint, if bool option is enabled it will be projected first. 
 		// Otherwise is just Point.
@@ -75,11 +75,11 @@ namespace SAFCoverUtilities {
 		const FCollisionShape Sphere = FCollisionShape::MakeSphere(5.f);
 		const FCollisionObjectQueryParams ObjectParams = FCollisionObjectQueryParams::AllObjects;
 		FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(GetCoverAtPoint), false);
-		if (!World->OverlapMultiByObjectType(Overlaps, ProjectedPoint, FQuat::Identity, ObjectParams, Sphere, QueryParams)) return ESAFCoverType::Neutral;
+		if (!World->OverlapMultiByObjectType(Overlaps, ProjectedPoint, FQuat::Identity, ObjectParams, Sphere, QueryParams)) return ESAFCoverType::None;
 
 		// Compare all cover types found and return the best cover type found 
 		// (Negative is higher than neutral in terms of information about cover)
-		ESAFCoverType BestCoverType = ESAFCoverType::Neutral;
+		ESAFCoverType BestCoverType = ESAFCoverType::None;
 		for (const FOverlapResult& Result : Overlaps) {
 			UPrimitiveComponent* Component = Result.GetComponent();
 			USAFCoverCollider* Cover = Component ? Cast<USAFCoverCollider>(Component) : nullptr;
@@ -89,7 +89,7 @@ namespace SAFCoverUtilities {
 			ESAFCoverType FoundType = Cover->CoverType;
 			if (FoundType == ESAFCoverType::Heavy) return ESAFCoverType::Heavy;
 			else if (FoundType == ESAFCoverType::Light) BestCoverType = ESAFCoverType::Light;
-			else if (FoundType == ESAFCoverType::Negative && BestCoverType == ESAFCoverType::Neutral) BestCoverType = ESAFCoverType::Negative;
+			else if (FoundType == ESAFCoverType::Negative && BestCoverType == ESAFCoverType::None) BestCoverType = ESAFCoverType::Negative;
 		}
 
 		return BestCoverType;

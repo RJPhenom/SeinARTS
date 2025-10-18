@@ -12,7 +12,8 @@
  * Place on any actor to mark an area that provides cover. Default shape is a box; 
  * resize in editor. Overlap events can be used to apply cover/remove cover.
  */
-UCLASS(ClassGroup=(SeinARTS), Blueprintable, BlueprintType, meta=(BlueprintSpawnableComponent, DisplayName="Cover Collider"))
+UCLASS(ClassGroup=(SeinARTS), Blueprintable, BlueprintType, 
+meta=(BlueprintSpawnableComponent, DisplayName="Cover Collider"))
 class SEINARTS_FRAMEWORK_RUNTIME_API USAFCoverCollider : public UBoxComponent {
 
 	GENERATED_BODY()
@@ -21,9 +22,9 @@ public:
 
 	USAFCoverCollider();
 
-	/** The class of cover this collider provides. Defaults to neutral. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Cover")
-	ESAFCoverType CoverType = ESAFCoverType::Neutral;
+	/** The class of cover this collider provides. Defaults to none. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS Cover Collider")
+	ESAFCoverType CoverType = ESAFCoverType::None;
 	
 	/** Returns the first navmesh-blocking mesh component on the owner (if any). */
 	UFUNCTION(BlueprintCallable, Category="SeinARTS|Cover")

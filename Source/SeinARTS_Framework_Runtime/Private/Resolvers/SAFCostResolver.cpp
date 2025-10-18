@@ -1,7 +1,7 @@
 #include "Resolvers/SAFCostResolver.h"
 #include "AbilitySystemComponent.h"
 #include "Data/SAFAttributes.h"
-#include "Assets/Units/SAFUnitAsset.h"
+#include "Assets/SAFUnitAsset.h"
 
 /**
  * SAFCostResolver
@@ -15,16 +15,15 @@
 FSAFResources SAFCostResolver::ResolveCosts(
 	const UAbilitySystemComponent* AbilitySystem,
 	const USAFUnitAsset* UnitAsset,
-	const APlayerState* PlayerState,
-	ESAFResourceRoundingPolicy Policy
+	const APlayerState* PlayerState
 ) {
 	// 1. Try live ASC attributes
 	if (AbilitySystem)
 		if (const USAFAttributes* Attr = AbilitySystem->GetSet<USAFAttributes>())
-			return Attr->BundleResources(Policy);
+			return Attr->BundleResources();
 
 	// 2. Fall back to UnitAsset runtime costs
-	if (UnitAsset && PlayerState) return FSAFResources{}; //UnitAsset->GetRuntimeCosts(PlayerState, Policy);
+	if (UnitAsset && PlayerState) return FSAFResources{}; //UnitAsset->GetRuntimeCosts(PlayerState);
 
 	// 3. Fallback: empty bundle
 	return FSAFResources{};

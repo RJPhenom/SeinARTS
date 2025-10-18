@@ -4,7 +4,7 @@
 
 class UAbilitySystemComponent;
 class USAFAttributes;
-class USAFAsset;
+class USAFUnitAsset;
 struct FSAFAttributesRow;
 
 /**
@@ -17,5 +17,5 @@ struct FSAFAttributesRow;
  *   3. Falls back to 50.f if none valid.
  */
 namespace SAFSpacingResolver {
-	SEINARTS_FRAMEWORK_RUNTIME_API float ResolveSpacing(const UAbilitySystemComponent* AbilitySystem, const USAFAsset* Asset);
+	SEINARTS_FRAMEWORK_RUNTIME_API float ResolveSpacing(const UAbilitySystemComponent* AbilitySystem, const USAFUnitAsset* Asset);
 }

@@ -1,5 +1,6 @@
 #include "Components/SAFProductionComponent.h"
-#include "Classes/Unreal/SAFPlayerState.h"
+#include "Classes/SAFActor.h"
+#include "Classes/SAFPlayerState.h"
 #include "Structs/SAFOrder.h"
 #include "Assets/SAFAsset.h"
 #include "Gameplay/Attributes/SAFUnitAttributes.h"
@@ -181,9 +182,9 @@ void USAFProductionComponent::CompleteBuild(FSAFProductionQueueItem CompletedIte
 	if (!ResolvedData) { SAFDEBUG_WARNING("CompleteBuild called on null Asset. Discarding."); return; }
 	if (!World) { SAFDEBUG_WARNING("CompleteBuild called on null world. Discarding."); return; }
 
-	// Check valid spawn class
-	UClass* InstanceClass = ResolvedData->InstanceClass.LoadSynchronous();
-	if (!InstanceClass) { SAFDEBUG_WARNING("CompletedBuild called, but Asset has invalid class. Spawning aborted."); return; }
+	// Choose base spawn class / override if set
+	UClass* InstanceClass = ResolvedData->InstanceClass ? 
+		ResolvedData->InstanceClass.LoadSynchronous() : ASAFActor::StaticClass();
 
 	// Compute spawn transform (override if provided, else use arrow transform)
 	const FTransform SpawnTransform = !CompletedItem.SpawnTransform.Equals(FTransform::Identity)

@@ -69,7 +69,7 @@ public:
 	UPROPERTY(BlueprintAssignable, BlueprintCallable, Category="SeinARTS|Lifecycle")
 	FOnDeath OnDeath;
 
-	// Asset Interface / API
+	// Actor Interface / API
 	// ===============================================================================================================================================================
 	virtual USAFAsset*      		GetAsset_Implementation() const 												 { return SAFAssetResolver::ResolveAsset(Asset); }
 	virtual void            		SetAsset_Implementation(USAFAsset* InAsset);
@@ -84,7 +84,7 @@ public:
 
 	virtual bool            		GetSelectable_Implementation() const 																		{ return bSelectable; }
 	virtual void            		SetSelectable_Implementation(bool bNewSelectable) 												  { bSelectable = bNewSelectable; }
-	virtual bool            		GetMultiSelectable_Implementation() const 															   { return bMultiSelectable; }
+	virtual bool            		GetMultiSelectable_Implementation() const 												{ return bSelectable && bMultiSelectable; }
 	virtual void            		SetMultiSelectable_Implementation(bool bNewMultiSelectable) 							{ bMultiSelectable = bNewMultiSelectable; }
 	virtual bool            		Select_Implementation(AActor*& OutSelectedActor);
 	virtual bool            		QueueSelect_Implementation(AActor*& OutQueueSelectedActor);
@@ -98,7 +98,7 @@ public:
 	virtual void            		QueuePlace_Implementation() {}
 
 	/** The SAFAsset this class was seeded from. */
-	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Replicated, Category="SeinARTS|Data")
+	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Replicated, Category="SeinARTS")
 	TSoftObjectPtr<USAFAsset> Asset = nullptr;
 
 	// Ownership
@@ -109,7 +109,7 @@ public:
 	 * 		Team 1 / Player 0 will cause this instance to be assigned neutral, same as 0 / 0 
 	 * 		Team 0 / Player 1 will cause this instance to be assigned neutral, same as 0 / 0 
 	 * 		Team 0 / Player 0 is a neutral team/player  (Unit will be 'unowned'). */
-	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category="SeinARTS|Data")
+	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category="SeinARTS", meta=(ClampMin="0", ClampMax="8"))
 	int32 InitTeamID = 0;
 
 	/** Use to assign the desired owner for actors placed at design-time. 
@@ -122,37 +122,37 @@ public:
 	 * 		Team 1 / Player 0 will cause this instance to be assigned neutral, same as 0 / 0 
 	 * 		Team 0 / Player 1 will cause this instance to be assigned neutral, same as 0 / 0 
 	 * 		Team 0 / Player 0 is a neutral team/player  (Unit will be 'unowned'). */
-	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category="SeinARTS|Data")
+	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category="SeinARTS", meta=(ClampMin="0", ClampMax="8"))
 	int32 InitPlayerID = 0;
 
 	/** Owning player (set on spawn by PC, replicated for game logic) */
-	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, ReplicatedUsing=OnRep_OwningPlayer, Category="SeinARTS|Data")
+	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, ReplicatedUsing=OnRep_OwningPlayer, Category="SeinARTS")
 	TObjectPtr<ASAFPlayerState> OwningPlayer = nullptr;
 	
 	// Selection
 	// =======================================================================================
 	/** Toggles if the actor is able to be selected under the default selection flow. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Replicated, Category="SeinARTS|Selection")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Replicated, Category="SeinARTS")
 	bool bSelectable = true;
 
 	/** Controls if this actor can be selected alongside other actors, or only single-selected.
 	Useful for distinguishing assets eligible for marquee select (units) against ones that
 	are not (structures, environment assets). */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="SeinARTS|Selection")
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="SeinARTS")
 	bool bMultiSelectable = true;
 
 	/** If the actor is queued for selection (i.e. under the marquee, but not yet selected) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Selection")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS")
 	bool bIsQueueSelected = false;
 
 	/** If the actor is actively selected (not just queued) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Selection")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS")
 	bool bIsSelected = false;
 	
 	// Pings
 	// =======================================================================================
 	/** Toggles if the actor is able to be pinged under the default ping flow. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Replicated, Category="SeinARTS|Pings")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Replicated, Category="SeinARTS")
 	bool bPingable = true;
 
 	// Replication

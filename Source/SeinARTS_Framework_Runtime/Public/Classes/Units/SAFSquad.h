@@ -2,7 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Assets/Units/SAFSquadAsset.h"
-#include "Classes/Units/SAFUnit.h"
+#include "Classes/SAFUnit.h"
 #include "Enums/SAFCoverTypes.h"
 #include "SAFSquad.generated.h"
 
@@ -38,17 +38,17 @@ public:
 	// ==========================================================================================================================
 	/** Tracks the highest state of current cover, for UI/UX purposes.
 	(actual cover value for gameplay logic is tracked on individual squad members). */
-	UPROPERTY(VisibleAnywhere, BlueprintReadWrite, ReplicatedUsing=OnRep_CurrentCover, Category="SeinARTS|Cover")
-	ESAFCoverType CurrentCover = ESAFCoverType::Neutral;
+	UPROPERTY(VisibleAnywhere, BlueprintReadWrite, ReplicatedUsing=OnRep_CurrentCoverDeprecated, Category="SeinARTS|Cover")
+	ESAFCoverType CurrentCoverDeprecated = ESAFCoverType::None;
 
 	/** The default query radius around a point that this squad's members will use to check for or find cover. 
 	Also used when querying points for cover during navigation. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Replicated, Category="SeinARTS|Cover")
-	float CoverSearchRadius = 50.f;
+	float CoverSearchRadiusDeprecated = 50.f;
 
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category="SeinARTS|Cover")
 	void UpdateCurrentCover(ESAFCoverType NewCover);
-	virtual void UpdateCurrentCover_Implementation(ESAFCoverType NewCover) { CurrentCover = NewCover; }
+	virtual void UpdateCurrentCover_Implementation(ESAFCoverType NewCover) { CurrentCoverDeprecated = NewCover; }
 
 
 	// Squad Properties / API
@@ -70,7 +70,7 @@ public:
 	(Note: if you want your squad to be able to change formations, 
 	you can call ReinitPositions() and pass in newly set positions). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Replicated, Category="SeinARTS|Squad")
-	TArray<FVector> Positions;
+	TArray<FVector> PositionsDeprecated;
 
 	/** Wether or not this squad shoudl wrap around corners when finding cover positions.
 	If off, SquadMembers will stack in flat rows along the edge of cover. Defaults to on. */
@@ -131,22 +131,7 @@ public:
 	void InvertPositions();
 	virtual void InvertPositions_Implementation();
 
-	/** Returns the positions adjusted an input vector, pivoted around a rotation. If the rotation
-	provided is zero, function will get the LookAtRotation from squad to point, and use that.
-	Use bTriggerInversion to tell the squad if it should actually invert its positions (for a
-	move order) or if thequery is information-only. */
-	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category="SeinARTS|Squad", meta=(AutoCreateRefTerm="Point,Rotation", CPP_Default_Point="0,0,0", CPP_Default_Rotation="0,0,0"))
-	TArray<FVector> GetPositionsAtPoint(const FVector& Point, const FRotator& Rotation, bool bTriggerInversion = true);
-	virtual TArray<FVector> GetPositionsAtPoint_Implementation(const FVector& Point, const FRotator& Rotation, bool bTriggerInversion);
-	FORCEINLINE TArray<FVector> GetPositionsAtPoint(const FVector& Point, bool bTriggersInversion = true) {
-		return GetPositionsAtPoint(Point, FRotator::ZeroRotator, bTriggersInversion);
-	}
-
-	/** Returns an array of positions that is reactive to if there is cover near the point or not.
-	Use bTriggerInversion to tell the squad if it should actually invert its positions (for a
-	move order) or if thequery is information-only. */
-	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category="SeinARTS|Squad", meta=(AutoCreateRefTerm="Point", CPP_Default_Point="0,0,0"))
-	TArray<FVector> GetCoverPositionsAtPoint(const FVector& Point, bool bTriggerInversion = true);
+	virtual TArray<FVector> GetPositionsAtPoint_Implementation(const FVector& Point, bool bTriggerInversion);
 	TArray<FVector> GetCoverPositionsAtPoint_Implementation(const FVector& Point, bool bTriggerInversion);
 
 	/** Safely deletes this squad actor. Does not delete the squad's SquadMembers. For that, use	CullSquadAndMembers(). */
@@ -169,7 +154,7 @@ protected:
 	// Asset Interface Overrides
 	// ==================================================================================================
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
-	UFUNCTION()	void OnRep_CurrentCover();
+	UFUNCTION()	void OnRep_CurrentCoverDeprecated();
 	UFUNCTION()	void OnRep_SquadMembers();
 	UFUNCTION()	void OnRep_SquadLeader();
 

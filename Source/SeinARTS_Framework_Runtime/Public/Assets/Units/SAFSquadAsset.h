@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Assets/Units/SAFUnitAsset.h"
+#include "Assets/SAFUnitAsset.h"
 #include "SAFSquadAsset.generated.h"
 
 class USAFSquadMemberAsset;
@@ -27,25 +27,25 @@ public:
 	 * (Note: if you want your squad to be able to change formations, you can
 	 * need to write to the live instance Positions, not the read-only data). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Squad")
-	TArray<FVector> Positions;
+	TArray<FVector> PositionsDeprecated;
 
 	/** Modifies how far back the next row will be when stacking multiple rows
 	 * in cover behind a cover object. Calculate based on SquadMember bounds
 	 * extent * modifiers. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Squad")
-	float CoverRowOffsetModifier = 1.f;
+	float CoverRowOffsetModifierDeprecated= 1.f;
 
 	/** Modifies how far back the next row will be when stacking multiple rows
 	 * in cover behind a cover object. Calculate based on SquadMember bounds
 	 * extent * modifiers. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Squad")
-	float LateralStaggerModifier = 1.f;
+	float LateralStaggerModifierDeprecated = 1.f;
 
 	/** Modifies how far apart the next SquadMember will be when in cover behind
 	 * a cover object. Default is 3. Calculated using:
 	 *
 	 * SquadCharacter->GetCapsuleComponent()->GetScaledCapsuleRadius() * modifier. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Squad")
-	float CoverSpacingModifier = 2.f;
+	float CoverSpacingModifierDeprecated = 2.f;
 	
 };

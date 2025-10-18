@@ -1,5 +1,5 @@
 #include "Resolvers/SAFOwnershipResolver.h"
-#include "Classes/Unreal/SAFGameState.h"
+#include "Classes/SAFGameState.h"
 #include "Engine/World.h"
 #include "GameFramework/GameStateBase.h"
 #include "Debug/SAFDebugTool.h"

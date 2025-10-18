@@ -1,7 +1,7 @@
 #include "Resolvers/SAFSpacingResolver.h"
 #include "AbilitySystemComponent.h"
 #include "Gameplay/Attributes/SAFUnitAttributes.h"
-#include "Assets/Units/SAFUnitAsset.h"
+#include "Assets/SAFUnitAsset.h"
 #include "Structs/SAFAttributesRow.h"
 
 /**
@@ -13,7 +13,7 @@
  *   2. Value from the AttributeRow on the Asset.
  *   3. Falls back to 50.f if none valid.
  */
-float SAFSpacingResolver::ResolveSpacing(const UAbilitySystemComponent* AbilitySystem, const USAFAsset* Asset) {
+float SAFSpacingResolver::ResolveSpacing(const UAbilitySystemComponent* AbilitySystem, const USAFUnitAsset* Asset) {
 	if (AbilitySystem) {
 		if (const USAFUnitAttributes* Attribute = AbilitySystem->GetSet<USAFUnitAttributes>()) {
 			const float Value = Attribute->GetFormationSpacing();

@@ -26,7 +26,7 @@ public:
 	// Match Readiness
 	// =======================================================================================
 	/** Use to track if this player is ready on the server */
-	UPROPERTY(VisibleInstanceOnly, BlueprintReadWrite, Replicated, Category="SeinARTS|Networking")
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadWrite, Replicated, Category="SeinARTS")
 	bool bIsReady = false;
 
 	UFUNCTION(BlueprintCallable, Category="SeinARTS|Networking")
@@ -35,12 +35,12 @@ public:
 	// Team
 	// =======================================================================================
 	/** Use to track the team of this player */
-	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Replicated, Category="SeinARTS|Teams")
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadWrite, Replicated, Category="SeinARTS")
 	int32 TeamID = 0;
 	
 	// Production
 	// =======================================================================================
-	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Replicated, Category="SeinARTS|Production")
+	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Replicated, Category="SeinARTS")
 	FSAFResources Resources;
 
 	/** Gets this player's resources. */
