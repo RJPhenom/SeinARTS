@@ -6,7 +6,7 @@
 
 [![Unreal Engine](https://img.shields.io/badge/Unreal%20Engine-5.3%2B-blue?style=for-the-badge&logo=unrealengine)](https://unrealengine.com)
 [![License](https://img.shields.io/badge/License-Proprietary-red?style=for-the-badge)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.0-green?style=for-the-badge)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-Alpha-orange?style=for-the-badge)](CHANGELOG.md)
 [![Developer](https://img.shields.io/badge/Developer-Phenom%20Studios-purple?style=for-the-badge)](https://phenomstudios.ca)
 
 **A comprehensive, data-driven framework for creating professional Action-RTS games in Unreal Engine 5**
