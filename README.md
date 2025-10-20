@@ -1,6 +1,6 @@
 <div align="center">
 
-![SeinARTS Framework](Resources/BrandKit/SeinARTS_Wordmark_Black_Large.png)
+![SeinARTS Framework](Resources/BrandKit/SeinARTS_Wordmark_White_Large.png)
 
 # SeinARTS Framework
 
