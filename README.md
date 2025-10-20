@@ -2,8 +2,6 @@
 
 ![SeinARTS Framework](Resources/BrandKit/SeinARTS_Wordmark_White_Large.png)
 
-# SeinARTS Framework
-
 ### _Professional Action-RTS Framework for Unreal Engine 5_
 
 [![Unreal Engine](https://img.shields.io/badge/Unreal%20Engine-5.3%2B-blue?style=for-the-badge&logo=unrealengine)](https://unrealengine.com)
