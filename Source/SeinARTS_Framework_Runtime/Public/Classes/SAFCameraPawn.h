@@ -217,8 +217,8 @@ protected:
 	float MaxAngle = -90.f;
 	
 	#if WITH_EDITOR
-		/** Called when a property is changed in the editor */
-		virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+	/** Called when a property is changed in the editor */
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 	#endif
 
 };

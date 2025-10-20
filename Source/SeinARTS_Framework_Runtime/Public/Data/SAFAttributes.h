@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Structs/SAFResources.h"
+#include "Structs/SAFResourceBundle.h"
 #include "AttributeSet.h"
 #include "AbilitySystemComponent.h"
 #include "Net/UnrealNetwork.h"
@@ -146,9 +146,9 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category="SeinARTS|Production", ReplicatedUsing=OnRep_Cost12)
 	FGameplayAttributeData Cost12;                   SAF_ATTR_ACCESSORS(USAFAttributes, Cost12)
 
-	/** Returns the cost attributes as a FSAFResources bundle. */
+	/** Returns the cost attributes as a FSAFResourceBundle bundle. */
 	UFUNCTION(BlueprintPure, Category="SeinARTS|Production")
-	FSAFResources BundleResources() const;
+	FSAFResourceBundle BundleResources() const;
 
 	/** ===========================================================================
 	 * Ranges

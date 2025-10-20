@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Structs/SAFResources.h"
+#include "Structs/SAFResourceBundle.h"
 #include "SAFProductionQueueItem.generated.h"
 
 class USAFAsset;
@@ -16,8 +16,16 @@ class USAFAsset;
 USTRUCT(BlueprintType)
 struct FSAFProductionQueueItem {
 	GENERATED_BODY()
+
+	/** The asset being produced or researched. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite) TSoftObjectPtr<USAFAsset> Asset;
+
+	/** The transform to spawn the asset at. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite) FTransform SpawnTransform = FTransform::Identity;
+
+	/** Whether to route the produced unit to a rally point after spawning. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite) bool bRouteToRallyPoint = true;
-	UPROPERTY(EditAnywhere, BlueprintReadWrite) FSAFResources CostsBundle = FSAFResources{};
+
+	/** The resource costs associated with this production item. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite) FSAFResourceBundle CostsBundle = FSAFResourceBundle{};
 };

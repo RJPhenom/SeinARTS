@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameplayTagContainer.h"
+#include "Structs/SAFVectorSet.h"
 #include "SAFOrder.generated.h"
 
 class AActor;
@@ -17,14 +18,23 @@ class USAFAsset;
 USTRUCT(BlueprintType)
 struct SEINARTS_FRAMEWORK_RUNTIME_API FSAFOrder {
 	GENERATED_BODY()
+
+	/** Unique identifier for this order instance. */
 	UPROPERTY(BlueprintReadOnly) FGuid Id;
+
+	/** The target actor of this order, if any. */
 	UPROPERTY(BlueprintReadWrite) TObjectPtr<AActor> Target = nullptr;
+
+	/** Additional target data asset associated with this order, if any. */
 	UPROPERTY(BlueprintReadWrite) TSoftObjectPtr<USAFAsset> TargetData = nullptr;
-	UPROPERTY(BlueprintReadWrite) FVector Start = FVector::ZeroVector;
-	UPROPERTY(BlueprintReadWrite) FVector End = FVector::ZeroVector;
+
+	/** A vector set representing start and end locations of the order. */
+	UPROPERTY(BlueprintReadWrite) FSAFVectorSet Vectors = FSAFVectorSet();
+
+	/** An optional gameplay tag associated with this order. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite) FGameplayTag Tag;
 
 	FSAFOrder() {}
-	FSAFOrder(AActor* InTarget, TSoftObjectPtr<USAFAsset> InTargetData, const FVector& InStart, const FVector& InEnd, FGameplayTag Tag = FGameplayTag())
-		: Id(FGuid::NewGuid()), Target(InTarget), TargetData(InTargetData), Start(InStart), End(InEnd), Tag(Tag) {}
+	FSAFOrder(AActor* InTarget, TSoftObjectPtr<USAFAsset> InTargetData, const FSAFVectorSet& InVectors, FGameplayTag Tag = FGameplayTag())
+		: Id(FGuid::NewGuid()), Target(InTarget), TargetData(InTargetData), Vectors(InVectors), Tag(Tag) {}
 };

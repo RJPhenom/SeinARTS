@@ -1,7 +1,6 @@
 ﻿#pragma once
 
 #include "CoreMinimal.h"
-#include "Structs/SAFResources.h"
 #include "SAFProductionRecipe.generated.h"
 
 class USAFAsset;
@@ -16,6 +15,13 @@ class USAFAsset;
 USTRUCT(BlueprintType)
 struct FSAFProductionRecipe {
 	GENERATED_BODY()
-	UPROPERTY(EditAnywhere, BlueprintReadWrite) TSoftObjectPtr<USAFAsset> Asset;
-	UPROPERTY(EditAnywhere, BlueprintReadWrite) bool bEnabled = false;
+
+	/** The asset this recipe produces/researches. Can be USAFUnitAsset, USAFTechnologyAsset, or other SAFAsset types. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Production Recipe") 
+	TSoftObjectPtr<USAFAsset> Asset;
+
+	/** Whether this recipe is enabled and can be produced/researched. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Production Recipe") 
+	bool bEnabled = false;
+	
 };

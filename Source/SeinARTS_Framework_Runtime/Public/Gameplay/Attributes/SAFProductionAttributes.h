@@ -4,8 +4,8 @@
 #include "AbilitySystemComponent.h"
 #include "Gameplay/Attributes/SAFAttributeSet.h"
 #include "Net/UnrealNetwork.h"
+#include "Structs/SAFResourceBundle.h"
 #include "Utils/SAFAttributeMacros.h"
-#include "Structs/SAFResources.h"
 #include "SAFProductionAttributes.generated.h"
 
 struct FSAFAttributesRow;
@@ -55,9 +55,9 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category="SeinARTS|Production", ReplicatedUsing=OnRep_Cost12)
 	FGameplayAttributeData Cost12;                   SAF_ATTR_ACCESSORS(USAFProductionAttributes, Cost12)
 
-	/** Returns the cost attributes as a FSAFResources bundle. */
+	/** Returns the cost attributes as a FSAFResourceBundle bundle. */
 	UFUNCTION(BlueprintPure, Category="SeinARTS|Production")
-	FSAFResources BundleResources() const;
+	FSAFResourceBundle BundleResources() const;
 
 	// Replication
 	// ==================================================================================================

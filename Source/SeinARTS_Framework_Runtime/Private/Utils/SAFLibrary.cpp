@@ -124,13 +124,13 @@ namespace SAFLibrary {
 		FGameplayAbilityTargetingLocationInfo Src;
 		Src.LocationType = EGameplayAbilityTargetingLocationType::LiteralTransform;
 		Src.SourceActor = Source;
-		Src.LiteralTransform = FTransform(Order.Start);
+		Src.LiteralTransform = FTransform(Order.Vectors.Start);
 		LocData->SourceLocation = Src;
 
 		FGameplayAbilityTargetingLocationInfo Dst;
 		Dst.LocationType = EGameplayAbilityTargetingLocationType::LiteralTransform;
 		Dst.SourceActor  = Source;
-		Dst.LiteralTransform = FTransform(Order.End);
+		Dst.LiteralTransform = FTransform(Order.Vectors.End);
 		LocData->TargetLocation = Dst;
 
 		Out.Add(LocData);

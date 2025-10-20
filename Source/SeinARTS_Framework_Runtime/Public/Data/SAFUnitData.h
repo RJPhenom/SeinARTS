@@ -4,12 +4,11 @@
 #include "Structs/SAFTaggedAbility.h"
 #include "Structs/SAFProductionQueueItem.h"
 #include "Structs/SAFProductionRecipe.h"
-#include "Structs/SAFResources.h"
+#include "Structs/SAFResourceBundle.h"
 #include "Enums/SAFArmourTypes.h"
 #include "Enums/SAFStances.h"
 #include "Engine/DataAsset.h"
 #include "GameplayTagContainer.h"
-#include "Gameplay/Abilities/SAFAbility.h"
 #include "SAFUnitData.generated.h"
 
 class AActor;
@@ -87,15 +86,15 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Production")
 	TArray<FSAFProductionRecipe> ProductionRecipes;
 	
-	// // Returns an FSAFResources bundle for the default cost profile of the associated unit, using
+	// // Returns an FSAFResourceBundle bundle for the default cost profile of the associated unit, using
 	// // the associated data table row if set, a zero-bundle if not.
 	// UFUNCTION(BlueprintPure, Category="SeinARTS|Production")
-	// FSAFResources GetDefaultCosts(ESAFResourceRoundingPolicy Policy = ESAFResourceRoundingPolicy::Ceil) const;
+	// FSAFResourceBundle GetDefaultCosts(ESAFResourceRoundingPolicy Policy = ESAFResourceRoundingPolicy::Ceil) const;
 	
-	// // Returns an FSAFResources bundle for the runtime (GAS-modified) cost profile of the associated
+	// // Returns an FSAFResourceBundle bundle for the runtime (GAS-modified) cost profile of the associated
 	// // unit, falling back to the associated data table row if unable to resolve attributes.
 	// UFUNCTION(BlueprintPure, Category="SeinARTS|Production")
-	// FSAFResources GetRuntimeCosts(const APlayerState* Playerstate, ESAFResourceRoundingPolicy Policy = ESAFResourceRoundingPolicy::Ceil) const;
+	// FSAFResourceBundle GetRuntimeCosts(const APlayerState* Playerstate, ESAFResourceRoundingPolicy Policy = ESAFResourceRoundingPolicy::Ceil) const;
 
 	// ===========================================================================
 	//                           	      GAS

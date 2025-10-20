@@ -137,8 +137,10 @@ FVector ASAFPawn::GetPawnVelocity() const {
 /** Apply collision configuration from the pawn asset. */
 void ASAFPawn::ApplyCapsuleConfiguration() {
 	if (!PawnAsset || !PawnCapsule) return;
+
 	PawnCapsule->SetCapsuleRadius(PawnAsset->CapsuleRadius);
 	PawnCapsule->SetCapsuleHalfHeight(PawnAsset->CapsuleHalfHeight);
+
 	SetRootComponent(PawnCapsule);
 	SyncNavAgentWithCapsule();
 }
@@ -168,52 +170,37 @@ void ASAFPawn::ApplyVisualConfiguration() {
 void ASAFPawn::ApplyMovementConfiguration() {
 	if (!PawnAsset || !PawnMovement) return;
 
-	// Core movement properties
-	PawnMovement->MovementMode          = PawnAsset->MovementMode;
-	PawnMovement->MaxSpeed              = PawnAsset->MaxSpeed;
-	PawnMovement->Acceleration          = PawnAsset->Acceleration;
-	PawnMovement->Deceleration          = PawnAsset->Deceleration;
-	PawnMovement->TurningBoost          = PawnAsset->TurningBoost;
-	PawnMovement->bConstrainToPlane     = PawnAsset->bConstrainToPlane;
-	PawnMovement->bSnapToPlaneAtStart   = PawnAsset->bSnapToPlaneAtStart;
+	// Core movement properties								// Seed values from asset
+	PawnMovement->MovementMode          					= PawnAsset->MovementMode;
+	PawnMovement->MaxSpeed              					= PawnAsset->MaxSpeed;
+	PawnMovement->Acceleration          					= PawnAsset->Acceleration;
+	PawnMovement->Deceleration          					= PawnAsset->Deceleration;
+	PawnMovement->ReverseEngageDotThreshold 				= PawnAsset->ReverseEngageDotThreshold;
+	PawnMovement->ReverseEngageDistanceThreshold 			= PawnAsset->ReverseEngageDistanceThreshold;
+	PawnMovement->ReverseMaxSpeed 							= PawnAsset->ReverseMaxSpeed;
+	PawnMovement->TurningBoost          					= PawnAsset->TurningBoost;
+	PawnMovement->bConstrainToPlane     					= PawnAsset->bConstrainToPlane;
+	PawnMovement->bSnapToPlaneAtStart   					= PawnAsset->bSnapToPlaneAtStart;
+
 	PawnMovement->SetPlaneConstraintNormal(PawnAsset->PlaneConstraintNormal);
 	PawnMovement->SetMaxRotationRate(PawnAsset->MaxRotationRate);
 
 	// Navigation properties
-	PawnMovement->bProjectToNavMesh = PawnAsset->bProjectToNavMesh;
-	PawnMovement->NavProjectionExtent = PawnAsset->NavProjectionExtent;
-	PawnMovement->StopSpeedThreshold = PawnAsset->StopSpeedThreshold;
+	PawnMovement->bProjectToNavMesh 						= PawnAsset->bProjectToNavMesh;
+	PawnMovement->NavProjectionExtent 						= PawnAsset->NavProjectionExtent;
+	PawnMovement->StopSpeedThreshold 						= PawnAsset->StopSpeedThreshold;
 
-	// Infantry-specific properties
-	PawnMovement->Infantry_bAllowStrafe = PawnAsset->Infantry_bAllowStrafe;
-	PawnMovement->Infantry_bUseDesiredFacing = PawnAsset->Infantry_bUseDesiredFacing;
-	PawnMovement->Infantry_DesiredFacingYaw = PawnAsset->Infantry_DesiredFacingYaw;
-	PawnMovement->Infantry_FacingRotationRate = PawnAsset->Infantry_FacingRotationRate;
+	// Infantry mode properties
+	PawnMovement->Infantry_bAllowStrafe 					= PawnAsset->Infantry_bAllowStrafe;
+	PawnMovement->Infantry_StrafingDotThreshold				= PawnAsset->Infantry_StrafingDotThreshold;
 
-	// Tracked vehicle properties
-	PawnMovement->Tracked_MaxTurnRateDeg = PawnAsset->Tracked_MaxTurnRateDeg;
-	PawnMovement->Tracked_ReverseEngageDotThreshold = PawnAsset->Tracked_ReverseEngageDotThreshold;
-	PawnMovement->Tracked_ReverseEngageDistanceThreshold = PawnAsset->Tracked_ReverseEngageDistanceThreshold;
-	PawnMovement->Tracked_ReverseMaxSpeed = PawnAsset->Tracked_ReverseMaxSpeed;
-	PawnMovement->Tracked_ThrottleVsMisalignmentDeg = PawnAsset->Tracked_ThrottleVsMisalignmentDeg;
+	// Tracked mode properties
+	PawnMovement->Tracked_ThrottleVsMisalignmentDeg 		= PawnAsset->Tracked_ThrottleVsMisalignmentDeg;
 
-	// Wheeled vehicle properties
-	PawnMovement->Wheeled_MaxTurnRateDeg = PawnAsset->Wheeled_MaxTurnRateDeg;
-	PawnMovement->Wheeled_ReverseEngageDotThreshold = PawnAsset->Wheeled_ReverseEngageDotThreshold;
-	PawnMovement->Wheeled_ReverseEngageDistanceThreshold = PawnAsset->Wheeled_ReverseEngageDistanceThreshold;
-	PawnMovement->Wheeled_ReverseMaxSpeed = PawnAsset->Wheeled_ReverseMaxSpeed;
-	PawnMovement->Wheeled_Wheelbase = PawnAsset->Wheeled_Wheelbase;
-	PawnMovement->Wheeled_MaxSteerAngleDeg = PawnAsset->Wheeled_MaxSteerAngleDeg;
-	PawnMovement->Wheeled_SteerResponse = PawnAsset->Wheeled_SteerResponse;
-
-	// Hover vehicle properties
-	PawnMovement->Hover_MaxTurnRateDeg = PawnAsset->Hover_MaxTurnRateDeg;
-	PawnMovement->Hover_ReverseEngageDotThreshold = PawnAsset->Hover_ReverseEngageDotThreshold;
-	PawnMovement->Hover_ReverseEngageDistanceThreshold = PawnAsset->Hover_ReverseEngageDistanceThreshold;
-	PawnMovement->Hover_ReverseMaxSpeed = PawnAsset->Hover_ReverseMaxSpeed;
-
-	// Apply movement mode defaults to ensure proper base settings
-	PawnMovement->ApplyMovementModeDefaults();
+	// Wheeled mode properties
+	PawnMovement->Wheeled_Wheelbase 						= PawnAsset->Wheeled_Wheelbase;
+	PawnMovement->Wheeled_MaxSteerAngleDeg 					= PawnAsset->Wheeled_MaxSteerAngleDeg;
+	PawnMovement->Wheeled_SteerResponse 					= PawnAsset->Wheeled_SteerResponse;
 }
 
 /** Sync the navigation agent's capsule size with the pawn's capsule component. */

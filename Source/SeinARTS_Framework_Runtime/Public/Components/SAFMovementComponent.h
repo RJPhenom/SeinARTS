@@ -38,7 +38,7 @@ public:
 
 	/** Maximum rotation rate (degrees per second). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS", meta=(ClampMin="0"))
-	float MaxRotationRate = 720.0f;
+	float MaxRotationRate = 300.0f;
 
 	/** Whether to project movement to navigation mesh to prevent units from falling off nav edges. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS")
@@ -47,6 +47,23 @@ public:
 	/** Extent used for navigation mesh projection queries. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS", meta=(EditCondition="bProjectToNavMesh"))
 	FVector NavProjectionExtent = FVector(100.0f, 100.0f, 500.0f);
+
+	/** If a movement point is below this Dot threshold and within the Distance threshold, 
+	 * then reverse to that point rather than rotate and move to it. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Wheeled", 
+	meta=(EditCondition="MovementMode==ESAFMovementMode::Wheeled", EditConditionHides, ClampMin="-1.0", ClampMax="1.0"))
+	float ReverseEngageDotThreshold;
+
+	/** If a movement point is within this Distance threshold and below the Dot threshold, 
+	 * then reverse to that point rather than rotate and move to it. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Wheeled", 
+	meta=(EditCondition="MovementMode==ESAFMovementMode::Wheeled", EditConditionHides, ClampMin="0"))
+	float ReverseEngageDistanceThreshold;
+
+	/** Max speed when reversing, differs from overall max speed. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Wheeled", 
+	meta=(EditCondition="MovementMode==ESAFMovementMode::Wheeled", EditConditionHides, ClampMin="0"))
+	float ReverseMaxSpeed;
 
 	/** Threshold below which the unit is considered to have stopped (cm/s). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS", meta=(ClampMin="0"))
@@ -57,47 +74,16 @@ public:
 	/** Whether this unit can strafe (move without changing facing direction). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Infantry", 
 	meta=(EditCondition="MovementMode==ESAFMovementMode::Infantry", EditConditionHides))
-	bool Infantry_bAllowStrafe = true;
-
-	/** Whether to use a specific desired facing direction instead of movement direction. */
+	bool Infantry_bAllowStrafe;
+	
+	/** Dot product threshold by which the unit can no longer strafe, and must turn away from its target
+	 * to keep moving in the desired direction (0 = directly to the left/right, defaults to 0.3). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Infantry", 
 	meta=(EditCondition="MovementMode==ESAFMovementMode::Infantry", EditConditionHides))
-	bool Infantry_bUseDesiredFacing = false;
-
-	/** Desired facing direction (yaw in degrees). Only used if bUseDesiredFacing is true. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Infantry", 
-	meta=(EditCondition="MovementMode==ESAFMovementMode::Infantry", EditConditionHides))
-	float Infantry_DesiredFacingYaw = 0.0f;
-
-	/** How fast the unit rotates to face the desired direction (degrees per second). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Infantry", 
-	meta=(EditCondition="MovementMode==ESAFMovementMode::Infantry", EditConditionHides, ClampMin="1"))
-	float Infantry_FacingRotationRate = 1440.0f;
+	float Infantry_StrafingDotThreshold;
 
 	// Tracked Mode Properties
 	// ==================================================================================================
-	/** Maximum turn rate in degrees for tracked mode. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Tracked", 
-	meta=(EditCondition="MovementMode==ESAFMovementMode::Tracked", EditConditionHides))
-	float Tracked_MaxTurnRateDeg = 60.0f;
-
-	/** If a movement point is below this Dot threshold and within the Distance threshold, 
-	 * then reverse to that point rather than rotate and move to it. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Tracked", 
-	meta=(EditCondition="MovementMode==ESAFMovementMode::Tracked", EditConditionHides, ClampMin="-1.0", ClampMax="1.0"))
-	float Tracked_ReverseEngageDotThreshold = -0.5f;
-
-	/** If a movement point is within this Distance threshold and below the Dot threshold, 
-	 * then reverse to that point rather than rotate and move to it. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Tracked", 
-	meta=(EditCondition="MovementMode==ESAFMovementMode::Tracked", EditConditionHides, ClampMin="0"))
-	float Tracked_ReverseEngageDistanceThreshold = 2500.0f;
-
-	/** Max speed when reversing, differs from overall max speed. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Tracked", 
-	meta=(EditCondition="MovementMode==ESAFMovementMode::Tracked", EditConditionHides, ClampMin="0"))
-	float Tracked_ReverseMaxSpeed = 300.0f;
-
 	/** Curve representing forward throttle vs. direction misalignment for tracked mode. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Tracked", 
 	meta=(EditCondition="MovementMode==ESAFMovementMode::Tracked", EditConditionHides))
@@ -105,66 +91,20 @@ public:
 
 	// Wheeled Mode Properties
 	// ==================================================================================================
-	/** Maximum turn rate in degrees for wheeled mode. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Wheeled", 
-	meta=(EditCondition="MovementMode==ESAFMovementMode::Wheeled", EditConditionHides))
-	float Wheeled_MaxTurnRateDeg = 60.0f;
-
-	/** If a movement point is below this Dot threshold and within the Distance threshold, 
-	 * then reverse to that point rather than rotate and move to it. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Wheeled", 
-	meta=(EditCondition="MovementMode==ESAFMovementMode::Wheeled", EditConditionHides, ClampMin="-1.0", ClampMax="1.0"))
-	float Wheeled_ReverseEngageDotThreshold = -0.5f;
-
-	/** If a movement point is within this Distance threshold and below the Dot threshold, 
-	 * then reverse to that point rather than rotate and move to it. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Wheeled", 
-	meta=(EditCondition="MovementMode==ESAFMovementMode::Wheeled", EditConditionHides, ClampMin="0"))
-	float Wheeled_ReverseEngageDistanceThreshold = 2500.0f;
-
-	/** Max speed when reversing, differs from overall max speed. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Wheeled", 
-	meta=(EditCondition="MovementMode==ESAFMovementMode::Wheeled", EditConditionHides, ClampMin="0"))
-	float Wheeled_ReverseMaxSpeed = 300.0f;
-
 	/** Represents the distance between axels (cm), affects turn radius. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Wheeled", 
 	meta=(EditCondition="MovementMode==ESAFMovementMode::Wheeled", EditConditionHides, ClampMin="1"))
-	float Wheeled_Wheelbase = 220.0f;
+	float Wheeled_Wheelbase;
 
 	/** Maximum front wheel steering angle. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Wheeled", 
 	meta=(EditCondition="MovementMode==ESAFMovementMode::Wheeled", EditConditionHides, ClampMin="1", ClampMax="60"))
-	float Wheeled_MaxSteerAngleDeg = 60.0f;
+	float Wheeled_MaxSteerAngleDeg;
 
 	/** How fast we approach desired steer angle. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Wheeled", 
 	meta=(EditCondition="MovementMode==ESAFMovementMode::Wheeled", EditConditionHides, ClampMin="0.1", ClampMax="10"))
-	float Wheeled_SteerResponse = 3.0f;
-
-	// Hover Mode Properties
-	// ==================================================================================================
-	/** Maximum turn rate in degrees for hover mode. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Hover", 
-	meta=(EditCondition="MovementMode==ESAFMovementMode::Hover", EditConditionHides))
-	float Hover_MaxTurnRateDeg = 60.0f;
-
-	/** If a movement point is below this Dot threshold and within the Distance threshold, 
-	 * then reverse to that point rather than rotate and move to it. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Hover", 
-	meta=(EditCondition="MovementMode==ESAFMovementMode::Hover", EditConditionHides, ClampMin="-1.0", ClampMax="1.0"))
-	float Hover_ReverseEngageDotThreshold = -0.5f;
-
-	/** If a movement point is within this Distance threshold and below the Dot threshold, 
-	 * then reverse to that point rather than rotate and move to it. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Hover", 
-	meta=(EditCondition="MovementMode==ESAFMovementMode::Hover", EditConditionHides, ClampMin="0"))
-	float Hover_ReverseEngageDistanceThreshold = 2500.0f;
-
-	/** Max speed when reversing, differs from overall max speed. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Hover", 
-	meta=(EditCondition="MovementMode==ESAFMovementMode::Hover", EditConditionHides, ClampMin="0"))
-	float Hover_ReverseMaxSpeed = 300.0f;
+	float Wheeled_SteerResponse;
 
 	// Movement Blueprint API
 	// ==================================================================================================
@@ -196,11 +136,11 @@ public:
 
 	/** Set the desired facing direction (in world yaw degrees). Infantry mode only. */
 	UFUNCTION(BlueprintCallable, Category="SeinARTS|Infantry Movement")
-	void SetDesiredFacing(float InYaw);
+	void SetDesiredFacing(float InYaw) { DesiredFacingYaw = InYaw; bUseDesiredFacing = true; }
 
 	/** Clear desired facing and return to movement-based facing. Infantry mode only. */
 	UFUNCTION(BlueprintCallable, Category="SeinARTS|Infantry Movement")
-	void ClearDesiredFacing();
+	void ClearDesiredFacing() { bUseDesiredFacing = false;}
 
 	/** Returns true if the unit is currently in formation. Infantry mode only. */
 	UFUNCTION(BlueprintPure, Category="SeinARTS|Infantry Movement")
@@ -208,11 +148,13 @@ public:
 
 	/** Set the desired formation position for this unit. Infantry mode only. */
 	UFUNCTION(BlueprintCallable, Category="SeinARTS|Infantry Movement")
-	void SetFormationPosition(const FVector& InFormationPosition);
+	void SetFormationPosition(const FVector& InFormationPosition) 
+	{ FormationPosition = InFormationPosition; bHasFormationPosition = true; }
 
 	/** Clear the formation position. Infantry mode only. */
 	UFUNCTION(BlueprintCallable, Category="SeinARTS|Infantry Movement")
-	void ClearFormationPosition();
+	void ClearFormationPosition() 
+	{ bHasFormationPosition = false; bIsInFormation = true; }
 
 	/** Sets the world-space goal used by the "close & behind" auto-reverse rule.. */
 	UFUNCTION(BlueprintCallable, Category="SeinARTS|Vehicle Movement")
@@ -230,6 +172,12 @@ protected:
 	// ==================================================================================================
 	/** Whether a move request is currently active. */
 	bool bHasMoveRequest = false;
+
+	/** Whether to use a specific desired facing direction instead of movement direction. */
+	bool bUseDesiredFacing = false;
+
+	/** Desired facing direction (yaw in degrees). Only used if bUseDesiredFacing is true. */
+	float DesiredFacingYaw = 0.0f;
 
 	/** The desired movement direction (normalized, in world space). */
 	FVector DesiredMoveDirection = FVector::ZeroVector;
@@ -289,5 +237,10 @@ protected:
 	/** Constrain a vector to XY plane if bConstrainToXYPlane is true. */
 	virtual FVector ConstrainToPlane(const FVector& Vector) const
 	{ return bConstrainToPlane ? FVector(Vector.X, Vector.Y, 0.0f) : Vector; }
+
+	#if WITH_EDITOR
+	/** Reapply mode defaults when movement mode changes in the editor */
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+	#endif
 
 };

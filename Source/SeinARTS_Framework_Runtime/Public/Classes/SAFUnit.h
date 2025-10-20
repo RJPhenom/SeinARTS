@@ -8,7 +8,7 @@
 #include "Interfaces/SAFUnitInterface.h"
 #include "GameFramework/Actor.h"
 #include "Structs/SAFOrder.h"
-#include "Structs/SAFResources.h"
+#include "Structs/SAFResourceBundle.h"
 #include "SAFUnit.generated.h"
 
 class APawn;
@@ -45,6 +45,10 @@ public:
 	ASAFUnit();
 	USAFUnitAsset* GetUnitAsset() const { return Cast<USAFUnitAsset>(SAFAssetResolver::ResolveAsset(Asset)); }
 	virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override { return AbilitySystem; }
+
+	/** Gets the technology component for this unit. */
+	UFUNCTION(BlueprintPure, Category="SeinARTS|Technology")
+	class USAFTechnologyComponent* GetTechnologyComponent() const { return TechnologyComponent; }
 
 	// Actor Interface Overrides
 	// ==========================================================================================================================================
@@ -157,6 +161,12 @@ protected:
 	UPROPERTY(BlueprintReadOnly, Replicated, Category="SeinARTS", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<USAFProductionComponent> ProductionComponent = nullptr;
 
+	// Technology Component
+	// ==============================================================================================================
+	/** A reference to the SAFTechnologyComponent on this unit for receiving technology modifications. */
+	UPROPERTY(BlueprintReadOnly, Category="SeinARTS", meta=(AllowPrivateAccess="true"))
+	TObjectPtr<class USAFTechnologyComponent> TechnologyComponent = nullptr;
+
 	// GAS Helpers / API
 	// ==================================================================================================
 	/** A reference to the ASC on this unit. */
@@ -192,9 +202,5 @@ protected:
 	UFUNCTION() void OnRep_SquadPawns();
 	UFUNCTION()	void OnRep_CurrentFormation();
 	UFUNCTION() void OnRep_CurrentCover();
-	
-	// virtual bool ReplicateSubobjects(class UActorChannel* Channel, class FOutBunch* Bunch, FReplicationFlags* RepFlags) override;
-	// virtual void GetSubobjectsWithStableNamesForNetworking(TArray<UObject*>& Objs) override;
-	// virtual void OnSubobjectCreatedFromReplication(UObject* NewSubobject) override;
 
 };

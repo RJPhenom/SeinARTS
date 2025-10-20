@@ -8,7 +8,6 @@
 #include "GameplayTagContainer.h"
 #include "Structs/SAFTaggedAbility.h"
 #include "Structs/SAFProductionRecipe.h"
-#include "Structs/SAFResources.h"
 #include "Assets/SAFPawnAsset.h"
 #include "SAFUnitAsset.generated.h"
 

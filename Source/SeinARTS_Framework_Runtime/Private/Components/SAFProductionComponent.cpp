@@ -1,4 +1,7 @@
 #include "Components/SAFProductionComponent.h"
+#include "Components/SAFPlayerTechnologyComponent.h"
+#include "Assets/SAFTechnologyAsset.h"
+#include "Assets/SAFUnitAsset.h"
 #include "Classes/SAFActor.h"
 #include "Classes/SAFPlayerState.h"
 #include "Structs/SAFOrder.h"
@@ -15,7 +18,7 @@
 #include "Net/UnrealNetwork.h"
 #include "Resolvers/SAFAssetResolver.h"
 #include "Structs/SAFAttributesRow.h"
-#include "Structs/SAFResources.h"
+#include "Structs/SAFResourceBundle.h"
 #include "Utils/SAFLibrary.h"
 #include "Debug/SAFDebugTool.h"
 #include "DrawDebugHelpers.h"
@@ -134,19 +137,21 @@ void USAFProductionComponent::RequestEnqueue(TSoftObjectPtr<USAFAsset> Asset, co
 	if (Asset.IsNull()) { SAFDEBUG_WARNING("RequestEnqueue called on null Asset. Discarding."); return; }
 	if (!CanProduceAsset(Asset)) { SAFDEBUG_WARNING("RequestEnqueue called on Asset that is not in catalogue. Discarding."); return; }
 
-	USAFAsset* ResolvedAsset = SAFAssetResolver::ResolveAsset(Asset);
+	const USAFAsset* ResolvedAsset = SAFAssetResolver::ResolveAsset(Asset);
 	if (!ResolvedAsset) { SAFDEBUG_WARNING("RequestEnqueue called, but Asset could not be resolved. Aborting."); return; }
 
-	// Check if there are enough resources/resources are present, does not mutates player state resources.
-	FSAFResources Costs = ResolveCostsByData(ResolvedAsset);
+	// Check if there are enough resources using technology-aware cost calculation
+	FSAFResourceBundle EffectiveCosts = ResolveEffectiveResourceCosts(ResolvedAsset);
 	ASAFPlayerState* SAFPlayerState = GetSAFPlayerState();
-	if (!SAFPlayerState) { SAFDEBUG_WARNING("Server_Enqueue called, but the Owner's player state is the wrong type. Aborting."); return; }
-	if (!SAFPlayerState->CheckResourcesAvailable(Costs)) { 
-		SAFDEBUG_INFO(FORMATSTR("RequestEnqueue: Actor '%s' requesting enqueue: '%s' failed: not enough resources.", *GetName(), *ResolvedAsset->DisplayName.ToString())); 
+	if (!SAFPlayerState) { SAFDEBUG_WARNING("RequestEnqueue called, but the Owner's player state is the wrong type. Aborting."); return; }
+	if (!SAFPlayerState->CheckResourcesAvailable(EffectiveCosts)) { 
+		SAFDEBUG_INFO(FORMATSTR("RequestEnqueue: Actor '%s' requesting enqueue: '%s' failed: not enough resources (need %s).", 
+			*GetName(), *ResolvedAsset->DisplayName.ToString(), *EffectiveCosts.ToString())); 
 		return; 
 	}
 	
-	SAFDEBUG_INFO(FORMATSTR("RequestEnqueue: Actor '%s' requesting enqueue: '%s' succeed. Sending request to server.", *GetName(), *ResolvedAsset->DisplayName.ToString()));
+	SAFDEBUG_INFO(FORMATSTR("RequestEnqueue: Actor '%s' requesting enqueue: '%s' succeed. Sending request to server.", 
+		*GetName(), *ResolvedAsset->DisplayName.ToString()));
 	Server_Enqueue(Asset, SpawnTransform, bRouteToRallyPoint);
 }
 
@@ -169,9 +174,12 @@ void USAFProductionComponent::AdvanceBuild(float DeltaSeconds) {
 		CompleteBuild(CompletedItem);
 
 		// Move to next item
-		if (ProductionQueue.Num() > 0)
-			if (USAFAsset* NextAsset = SAFAssetResolver::ResolveAsset(ProductionQueue[0].Asset))
-				CurrentRemainingTime = FMath::Max(0.f, ResolveBuildTime(NextAsset));
+		if (ProductionQueue.Num() > 0) {
+			if (USAFAsset* NextAsset = SAFAssetResolver::ResolveAsset(ProductionQueue[0].Asset)) {
+				// Use technology-aware build time resolution
+				CurrentRemainingTime = FMath::Max(0.f, ResolveEffectiveBuildTime(NextAsset));
+			}
+		}
 	}
 }
 
@@ -181,6 +189,12 @@ void USAFProductionComponent::CompleteBuild(FSAFProductionQueueItem CompletedIte
 	UWorld* World = GetWorld();
 	if (!ResolvedData) { SAFDEBUG_WARNING("CompleteBuild called on null Asset. Discarding."); return; }
 	if (!World) { SAFDEBUG_WARNING("CompleteBuild called on null world. Discarding."); return; }
+
+	// Check if this is a technology research completion
+	if (Cast<USAFTechnologyAsset>(ResolvedData)) {
+		CompleteTechnologyResearch(CompletedItem);
+		return;
+	}
 
 	// Choose base spawn class / override if set
 	UClass* InstanceClass = ResolvedData->InstanceClass ? 
@@ -220,7 +234,11 @@ void USAFProductionComponent::CompleteBuild(FSAFProductionQueueItem CompletedIte
 	} else SAFDEBUG_WARNING("CompleteBuild: Component owner is not a valid unit. NewActor will have no owner set.");
 
 	if (CompletedItem.bRouteToRallyPoint) {
-		FSAFOrder Order(nullptr, nullptr, GetComponentLocation(), GetRallyPoint(), FGameplayTag::RequestGameplayTag(TEXT("SeinARTS.Order.Move")));
+		FSAFVectorSet InVectors;
+		InVectors.Start = GetComponentLocation();
+		InVectors.End = GetRallyPoint();
+
+		FSAFOrder Order(nullptr, nullptr, InVectors, FGameplayTag::RequestGameplayTag(TEXT("SeinARTS.Order.Move")));
 		// TODO: issue move order to rally point
 	}
 }
@@ -261,11 +279,11 @@ float USAFProductionComponent::ResolveBuildSpeed() const {
 }
 
 // Safely resolves the costs for a unit via unit data (runtime preferred, fallback to defaults).
-FSAFResources USAFProductionComponent::ResolveCostsByData(USAFAsset* Asset) const {
+FSAFResourceBundle USAFProductionComponent::ResolveCostsByData(USAFAsset* Asset) const {
 	AActor* Actor = GetOwner();
-	if (!SAFLibrary::IsActorPtrValidSeinARTSUnit(Actor)) return FSAFResources{}; //Asset->GetDefaultCosts();
+	if (!SAFLibrary::IsActorPtrValidSeinARTSUnit(Actor)) return FSAFResourceBundle{}; //Asset->GetDefaultCosts();
 	const APlayerState* PlayerState = ISAFActorInterface::Execute_GetOwningPlayer(GetOwner());
-	return FSAFResources{}; //Asset->GetRuntimeCosts(PlayerState);
+	return FSAFResourceBundle{}; //Asset->GetRuntimeCosts(PlayerState);
 }
 
 // Gets the SAFPlayerState of the owning actor's owning controller, if any.
@@ -277,6 +295,119 @@ ASAFPlayerState* USAFProductionComponent::GetSAFPlayerState() const {
 
 	if (!PlayerState) return nullptr;
 	return Cast<ASAFPlayerState>(PlayerState);
+}
+
+// Technology Integration
+// =======================================================================================================
+FSAFResourceBundle USAFProductionComponent::ResolveEffectiveResourceCosts(const USAFAsset* Asset) const {
+	if (!Asset) return FSAFResourceBundle{};
+	
+	// Get base costs from asset
+	FSAFResourceBundle BaseCosts = ResolveCostsByData(const_cast<USAFAsset*>(Asset));
+	
+	// Apply technology modifications through player technology component
+	if (USAFPlayerTechnologyComponent* PlayerTechComp = GetPlayerTechnologyComponent()) {
+		// For technology assets, let the technology component handle it directly
+		if (Cast<USAFTechnologyAsset>(Asset)) return PlayerTechComp->ResolveEffectiveResourceCosts(Asset);
+		
+		// For unit assets, combine base costs with technology modifiers
+		FGameplayTagContainer AssetTypeTags;
+		if (const USAFUnitAsset* UnitAsset = Cast<USAFUnitAsset>(Asset)) AssetTypeTags = UnitAsset->Tags;
+		
+		// Calculate technology-based cost multiplier
+		float CostMultiplier = PlayerTechComp->CalculateCostMultiplier(AssetTypeTags);
+		
+		// Apply multiplier to base costs
+		FSAFResourceBundle ModifiedCosts = BaseCosts;
+		ModifiedCosts.Resource1 = FSAFResourceBundle::ToInt(ModifiedCosts.Resource1 * CostMultiplier);
+		ModifiedCosts.Resource2 = FSAFResourceBundle::ToInt(ModifiedCosts.Resource2 * CostMultiplier);
+		ModifiedCosts.Resource3 = FSAFResourceBundle::ToInt(ModifiedCosts.Resource3 * CostMultiplier);
+		ModifiedCosts.Resource4 = FSAFResourceBundle::ToInt(ModifiedCosts.Resource4 * CostMultiplier);
+		ModifiedCosts.Resource5 = FSAFResourceBundle::ToInt(ModifiedCosts.Resource5 * CostMultiplier);
+		ModifiedCosts.Resource6 = FSAFResourceBundle::ToInt(ModifiedCosts.Resource6 * CostMultiplier);
+		ModifiedCosts.Resource7 = FSAFResourceBundle::ToInt(ModifiedCosts.Resource7 * CostMultiplier);
+		ModifiedCosts.Resource8 = FSAFResourceBundle::ToInt(ModifiedCosts.Resource8 * CostMultiplier);
+		ModifiedCosts.Resource9 = FSAFResourceBundle::ToInt(ModifiedCosts.Resource9 * CostMultiplier);
+		ModifiedCosts.Resource10 = FSAFResourceBundle::ToInt(ModifiedCosts.Resource10 * CostMultiplier);
+		ModifiedCosts.Resource11 = FSAFResourceBundle::ToInt(ModifiedCosts.Resource11 * CostMultiplier);
+		ModifiedCosts.Resource12 = FSAFResourceBundle::ToInt(ModifiedCosts.Resource12 * CostMultiplier);
+		
+		return ModifiedCosts;
+	}
+	
+	return BaseCosts;
+}
+
+float USAFProductionComponent::ResolveEffectiveBuildTime(const USAFAsset* Asset) const {
+	if (!Asset) return 0.f;
+	
+	// Get base build time
+	float BaseBuildTime = ResolveBuildTime(const_cast<USAFAsset*>(Asset));
+	
+	// Apply technology modifications through player technology component
+	if (USAFPlayerTechnologyComponent* PlayerTechComp = GetPlayerTechnologyComponent()) {
+		// For technology assets, let the technology component handle it directly
+		if (Cast<USAFTechnologyAsset>(Asset)) return PlayerTechComp->ResolveEffectiveBuildTime(Asset);
+		
+		// For unit assets, combine base time with technology modifiers
+		FGameplayTagContainer AssetTypeTags;
+		if (const USAFUnitAsset* UnitAsset = Cast<USAFUnitAsset>(Asset)) AssetTypeTags = UnitAsset->Tags;
+		
+		// Calculate technology-based time multiplier
+		float TimeMultiplier = PlayerTechComp->CalculateTimeMultiplier(AssetTypeTags);
+		
+		// Apply multiplier to base time
+		float ModifiedBuildTime = BaseBuildTime * TimeMultiplier;
+		
+		// Ensure minimum build time
+		return FMath::Max(ModifiedBuildTime, 0.1f);
+	}
+	
+	return BaseBuildTime;
+}
+
+USAFPlayerTechnologyComponent* USAFProductionComponent::GetPlayerTechnologyComponent() const {
+	ASAFPlayerState* PlayerState = GetSAFPlayerState();
+	if (!PlayerState) return nullptr;
+	return PlayerState->GetComponentByClass<USAFPlayerTechnologyComponent>();
+}
+
+void USAFProductionComponent::CompleteTechnologyResearch(FSAFProductionQueueItem CompletedItem) {
+	USAFTechnologyAsset* TechAsset = Cast<USAFTechnologyAsset>(SAFAssetResolver::ResolveAsset(CompletedItem.Asset));
+	if (!TechAsset) { SAFDEBUG_WARNING("CompleteTechnologyResearch called but asset is not a technology asset."); return; }
+	
+	// Research the technology through the player technology component
+	if (USAFPlayerTechnologyComponent* PlayerTechComp = GetPlayerTechnologyComponent()) {
+		if (PlayerTechComp->ResearchTechnology(TechAsset)) 
+			SAFDEBUG_SUCCESS(FORMATSTR("Successfully completed research of technology '%s'.", *TechAsset->GetName()));
+		else SAFDEBUG_WARNING(FORMATSTR("Failed to complete research of technology '%s'.", *TechAsset->GetName()));
+	} else SAFDEBUG_WARNING("CompleteTechnologyResearch: No player technology component found.");
+}
+
+void USAFProductionComponent::AddOrEnableProductionRecipes(const TArray<FSAFProductionRecipe>& NewRecipes) {
+	if (GetOwnerRole() != ROLE_Authority) return;
+	
+	for (FSAFProductionRecipe NewRecipe : NewRecipes) {
+		if (NewRecipe.Asset.IsNull()) continue;
+		
+		// Check if recipe already exists, enable it
+		bool bFound = false;
+		for (FSAFProductionRecipe& ExistingRecipe : ProductionCatalogue) {
+			if (SAFLibrary::SoftEqual(ExistingRecipe.Asset, NewRecipe.Asset)) {
+				ExistingRecipe.bEnabled = true;
+				bFound = true;
+				break;
+			}
+		}
+		
+		// Add new recipe if not found
+		if (!bFound) {
+			NewRecipe.bEnabled = true;
+			ProductionCatalogue.Add(NewRecipe);
+		}
+	}
+	
+	SAFDEBUG_SUCCESS(FORMATSTR("Added/enabled %d production recipes from technology unlock.", NewRecipes.Num()));
 }
 
 // Replication
@@ -297,7 +428,7 @@ void USAFProductionComponent::OnRep_ProductionQueue() {
 }
 
 void USAFProductionComponent::Server_Enqueue_Implementation(const TSoftObjectPtr<USAFAsset>& Asset, const FTransform& SpawnTransform, bool bRouteToRallyPoint) {
-	USAFAsset* ResolvedData = SAFAssetResolver::ResolveAsset(Asset);
+	const USAFAsset* ResolvedData = SAFAssetResolver::ResolveAsset(Asset);
 	if (!ResolvedData) { SAFDEBUG_WARNING("Server_Enqueue called, but Asset could not be resolved. Aborting."); return; }
 
 	// Confirm allowed (is in the catalogue)
@@ -306,12 +437,13 @@ void USAFProductionComponent::Server_Enqueue_Implementation(const TSoftObjectPtr
 		if (Recipe.bEnabled && SAFLibrary::SoftEqual(Recipe.Asset, Asset)) { bAllowed = true;	break; }
 	if (!bAllowed) { SAFDEBUG_INFO("Server_Enqueue called on absent or disabled Asset. Discarding."); return; }
 
-	// Request resources, mutate player state resources (handle deductions/refunds).	
-	FSAFResources Costs = ResolveCostsByData(ResolvedData);
+	// Request resources using technology-aware cost calculation
+	FSAFResourceBundle EffectiveCosts = ResolveEffectiveResourceCosts(ResolvedData);
 	ASAFPlayerState* SAFPlayerState = GetSAFPlayerState();
 	if (!SAFPlayerState) { SAFDEBUG_WARNING("Server_Enqueue called, but the Owner's player state is the wrong type. Aborting."); return; }
-	if (!SAFPlayerState->RequestResources(Costs)) { 
-		SAFDEBUG_INFO(FORMATSTR("Server_Enqueue: Actor '%s' requesting enqueue: '%s' failed on: not enough resources.", *GetName(), *Asset.Get()->DisplayName.ToString())); 
+	if (!SAFPlayerState->RequestResources(EffectiveCosts)) { 
+		SAFDEBUG_INFO(FORMATSTR("Server_Enqueue: Actor '%s' requesting enqueue: '%s' failed on: not enough resources (need %s).", 
+			*GetName(), *ResolvedData->DisplayName.ToString(), *EffectiveCosts.ToString())); 
 		return; 
 	}
 
@@ -321,12 +453,17 @@ void USAFProductionComponent::Server_Enqueue_Implementation(const TSoftObjectPtr
 		Asset,
 		SpawnTransform.Equals(FTransform::Identity) ? SpawnTransform : GetSpawnTransform(),
 		bRouteToRallyPoint,
-		Costs
+		EffectiveCosts
 	);
 
-	SAFDEBUG_SUCCESS(FORMATSTR("Server_Enqueue: Validation successful. Accepting enqueue request for: '%s'", *Asset.Get()->DisplayName.ToString()));
+	SAFDEBUG_SUCCESS(FORMATSTR("Server_Enqueue: Validation successful. Accepting enqueue request for: '%s' (effective costs: %s)", 
+		*ResolvedData->DisplayName.ToString(), *EffectiveCosts.ToString()));
 	ProductionQueue.Add(QueueItem);
-	if (ProductionQueue.Num() == 1) CurrentRemainingTime = FMath::Max(0.f, ResolveBuildTime(ResolvedData));
+	
+	// Use technology-aware build time for the first item in queue
+	if (ProductionQueue.Num() == 1) {
+		CurrentRemainingTime = FMath::Max(0.f, ResolveEffectiveBuildTime(ResolvedData));
+	}
 }
 
 void USAFProductionComponent::Server_CancelAtIndex_Implementation(int32 Index) {
@@ -334,7 +471,7 @@ void USAFProductionComponent::Server_CancelAtIndex_Implementation(int32 Index) {
 
 	// Grab item and refund (if any) then remove the item from the queue
 	FSAFProductionQueueItem QueueItem = ProductionQueue[Index];
-	FSAFResources Refund = QueueItem.CostsBundle;
+	FSAFResourceBundle Refund = QueueItem.CostsBundle;
 	const bool bHead = (Index == 0);
 	ProductionQueue.RemoveAt(Index);
 

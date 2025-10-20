@@ -4,6 +4,7 @@
 #include "Components/CapsuleComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SAFProductionComponent.h"
+#include "Components/SAFTechnologyComponent.h"
 #include "Assets/SAFUnitAsset.h"
 #include "Assets/SAFPawnAsset.h"
 #include "AbilitySystemComponent.h"
@@ -41,6 +42,9 @@ ASAFUnit::ASAFUnit() {
 	AbilitySystem = CreateDefaultSubobject<UAbilitySystemComponent>(TEXT("AbilitySystem"));
 	AbilitySystem->SetIsReplicated(true);
 	AbilitySystem->SetReplicationMode(EGameplayEffectReplicationMode::Mixed);
+	
+	// Create technology component for receiving technology modifications
+	TechnologyComponent = CreateDefaultSubobject<USAFTechnologyComponent>(TEXT("TechnologyComponent"));
 }
 
 // Actor Interface Overrides
@@ -77,6 +81,11 @@ void ASAFUnit::InitFromAsset_Implementation(USAFAsset* InAsset, ASAFPlayerState*
 		AddInstanceComponent(ProductionComponent);
 		ProductionComponent->RegisterComponent();
 		ProductionComponent->InitProductionCatalogue(GetUnitAsset()->ProductionRecipes);
+	}
+
+	// Technology - Apply technology bundle after GAS is initialized
+	if (TechnologyComponent) {
+		TechnologyComponent->ApplyTechnologyBundleAtSpawn(UnitAsset);
 	}
 
 	// Initialize based on unit mode
@@ -556,11 +565,10 @@ bool ASAFUnit::Order_Implementation(FSAFOrder Order) {
 	UAbilitySystemBlueprintLibrary::SendGameplayEventToActor(this, Order.Tag, Data);
 
 	SAFDEBUG_SUCCESS(FORMATSTR( //174
-		"Unit '%s' dispatched GameplayEvent tagged '%s' at Actor '%s' with Start (%s) and End (%s).", 
+		"Unit '%s' dispatched GameplayEvent tagged '%s' at Actor '%s' with Vectors: %s.", 
 		*GetName(), *TagStr, 
 		Order.Target.Get() ? *Order.Target->GetName() : TEXT("<None>"), 
-		*Order.Start.ToString(), 
-		*Order.End.ToString()
+		*Order.Vectors.ToString()
 	));
 	
 	return true;
@@ -603,7 +611,8 @@ void ASAFUnit::GiveAbilitiesFromAsset() {
 
 	for (const auto& Ability : GetUnitAsset()->Abilities) {
 		if (!Ability.AbilityClass) { SAFDEBUG_WARNING("Ability skipped: An ability in the UnitData was null or invalid."); continue; }
-		FGameplayAbilitySpec Spec(Ability.AbilityClass, Ability.Level, Ability.InputID);
+		TSubclassOf<UGameplayAbility> AbilityClass = Ability.AbilityClass.Get();
+		FGameplayAbilitySpec Spec(AbilityClass, Ability.Level, Ability.InputID);
 		Spec.GetDynamicSpecSourceTags().AppendTags(Ability.AbilityTags);
 		AbilitySystem->GiveAbility(Spec);
 	}

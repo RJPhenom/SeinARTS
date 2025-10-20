@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Structs/SAFResources.h"
+#include "Structs/SAFResourceBundle.h"
 #include "GameFramework/PlayerState.h"
 #include "SAFPlayerState.generated.h"
 
@@ -41,11 +41,11 @@ public:
 	// Production
 	// =======================================================================================
 	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Replicated, Category="SeinARTS")
-	FSAFResources Resources;
+	FSAFResourceBundle Resources;
 
 	/** Gets this player's resources. */
 	UFUNCTION(BlueprintCallable, Category="SeinARTS|Production")
-	FSAFResources GetResources() const { return Resources; }
+	FSAFResourceBundle GetResources() const { return Resources; }
 
 	/** Adds an individual resource, via index of the resource in the standard bundle. */
 	UFUNCTION(BlueprintCallable, Category="SeinARTS|Production")
@@ -53,14 +53,26 @@ public:
 
 	/** Adds a resources bundle to this player's resources. */
 	UFUNCTION(BlueprintCallable, Category="SeinARTS|Production")
-	void AddResources(const FSAFResources& Delta);
+	void AddResources(const FSAFResourceBundle& Delta);
 
 	/** Returns true if current resources cover 'Cost' (no mutation). */
 	UFUNCTION(BlueprintCallable, Category="SeinARTS|Production")
-	bool CheckResourcesAvailable(const FSAFResources& Cost) const;
+	bool CheckResourcesAvailable(const FSAFResourceBundle& Cost) const;
 
 	/** Atomically deducts if affordable; returns true on success. */
 	UFUNCTION(BlueprintCallable, Category="SeinARTS|Production")
-	bool RequestResources(const FSAFResources& Cost);
+	bool RequestResources(const FSAFResourceBundle& Cost);
+
+	// Technology System
+	// =======================================================================================
+	/** Gets the player's technology component for research and technology state management. */
+	UFUNCTION(BlueprintPure, Category="SeinARTS|Technology")
+	class USAFPlayerTechnologyComponent* GetTechnologyComponent() const { return TechnologyComponent; }
+
+protected:
+
+	/** Technology component that manages this player's research and technology state. */
+	UPROPERTY(BlueprintReadOnly, Replicated, Category="SeinARTS")
+	TObjectPtr<class USAFPlayerTechnologyComponent> TechnologyComponent = nullptr;
 	
 };

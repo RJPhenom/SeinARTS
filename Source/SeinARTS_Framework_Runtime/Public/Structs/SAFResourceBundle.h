@@ -1,35 +1,35 @@
 ﻿#pragma once
 
 #include "CoreMinimal.h"
-#include "SAFResources.generated.h"
+#include "SAFResourceBundle.generated.h"
 
 /**
- * FSAFResources
+ * FSAFResourceBundle
  *
  * Fixed-size bundle for 12 resource slots.
  * Use helper methods to do safe math and indexed access. 
  */
 USTRUCT(BlueprintType)
-struct SEINARTS_FRAMEWORK_RUNTIME_API FSAFResources {
+struct SEINARTS_FRAMEWORK_RUNTIME_API FSAFResourceBundle {
 	GENERATED_BODY()
 
 public:
 
 	static constexpr int32 NumSlots = 12;
 
-	/** Designer-friendly verbose fields (replicate cleanly via owning UPROPERTY). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Production") int32 Resource1  = 0;
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Production") int32 Resource2  = 0;
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Production") int32 Resource3  = 0;
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Production") int32 Resource4  = 0;
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Production") int32 Resource5  = 0;
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Production") int32 Resource6  = 0;
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Production") int32 Resource7  = 0;
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Production") int32 Resource8  = 0;
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Production") int32 Resource9  = 0;
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Production") int32 Resource10 = 0;
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Production") int32 Resource11 = 0;
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SeinARTS|Production") int32 Resource12 = 0;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 Resource1  = 0;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 Resource2  = 0;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 Resource3  = 0;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 Resource4  = 0;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 Resource5  = 0;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 Resource6  = 0;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 Resource7  = 0;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 Resource8  = 0;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 Resource9  = 0;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 Resource10 = 0;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 Resource11 = 0;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 Resource12 = 0;
+
 
 	/** Indexed getter (out of ranges indices return zero). */
 	FORCEINLINE int32 Get(int32 Slot) const {
@@ -76,21 +76,21 @@ public:
 	}
 
 	/** Compares values against another bundle, returns true if this bundle is entirely greater or equal to the other bundle. */
-	FORCEINLINE bool AllGreaterOrEqualTo(const FSAFResources& Other) const {
+	FORCEINLINE bool AllGreaterOrEqualTo(const FSAFResourceBundle& Other) const {
 		return Resource1>=Other.Resource1 && Resource2>=Other.Resource2 && Resource3>=Other.Resource3 && Resource4>=Other.Resource4 &&
 		Resource5>=Other.Resource5 && Resource6>=Other.Resource6 && Resource7>=Other.Resource7 && Resource8>=Other.Resource8 &&
 		Resource9>=Other.Resource9 && Resource10>=Other.Resource10 && Resource11>=Other.Resource11 && Resource12>=Other.Resource12;
 	}
 
 	/** Adds a bundle to this bundle. */
-	FORCEINLINE void Add(const FSAFResources& Other) {
+	FORCEINLINE void Add(const FSAFResourceBundle& Other) {
 		Resource1+=Other.Resource1; Resource2+=Other.Resource2; Resource3+=Other.Resource3; Resource4+=Other.Resource4;
 		Resource5+=Other.Resource5; Resource6+=Other.Resource6; Resource7+=Other.Resource7; Resource8+=Other.Resource8;
 		Resource9+=Other.Resource9; Resource10+=Other.Resource10; Resource11+=Other.Resource11; Resource12+=Other.Resource12;
 	}
 
 	/** Subtracts a bundle from this bundle. */
-	FORCEINLINE void Sub(const FSAFResources& Other) {
+	FORCEINLINE void Sub(const FSAFResourceBundle& Other) {
 		Resource1-=Other.Resource1; Resource2-=Other.Resource2; Resource3-=Other.Resource3; Resource4-=Other.Resource4;
 		Resource5-=Other.Resource5; Resource6-=Other.Resource6; Resource7-=Other.Resource7; Resource8-=Other.Resource8;
 		Resource9-=Other.Resource9; Resource10-=Other.Resource10; Resource11-=Other.Resource11; Resource12-=Other.Resource12;
@@ -107,5 +107,34 @@ public:
 	FORCEINLINE static int32 ToInt(float Value) {
 		int32 Out = FMath::CeilToInt(Value);
 		return FMath::Max(0, Out);
+	}
+
+	/** Returns a string representation of the resource bundle. */
+	FORCEINLINE FString ToString() const {
+		return FString::Printf(TEXT(
+			"Cost One: %d, "
+			"Cost Two: %d, "
+			"Cost Three: %d, "
+			"Cost Four: %d, "
+			"Cost Five: %d, "
+			"Cost Six: %d, "
+			"Cost Seven: %d, "
+			"Cost Eight: %d, "
+			"Cost Nine: %d, "
+			"Cost Ten: %d, "
+			"Cost Eleven: %d, "
+			"Cost Twelve: %d"
+		),	Resource1, 
+			Resource2, 
+			Resource3, 
+			Resource4, 
+			Resource5, 
+			Resource6, 
+			Resource7, 
+			Resource8, 
+			Resource9, 
+			Resource10, 
+			Resource11, 
+			Resource12);
 	}
 };

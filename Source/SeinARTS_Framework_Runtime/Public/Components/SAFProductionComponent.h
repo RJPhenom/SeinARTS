@@ -110,6 +110,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category="SeinARTS|Production")
 	void DisableRecipeByData(const TSoftObjectPtr<USAFAsset>& Asset);
 
+	/** Add or enable production recipes from technology unlock. */
+	UFUNCTION(BlueprintCallable, Category="SeinARTS|Technology Integration")
+	void AddOrEnableProductionRecipes(const TArray<FSAFProductionRecipe>& NewRecipes);
+
 	/** Client/UI call. Server validates and enqueues if allowed.
 	 * This allows clients to set custom per-item spanw transforms (for placement systems, etc.).
 	 * If spawn transform isn't set, it will fallback to the classes transform or its override.
@@ -121,6 +125,16 @@ public:
 	/** Client/UI call to cancel the queue entry at Index (0=head). */
 	UFUNCTION(BlueprintCallable, Category="SeinARTS|Production")
 	void RequestCancellation(int32 Index);
+
+	// Technology Integration
+	// =======================================================================================================
+	/** Resolves effective resource costs for an asset, accounting for technology modifications. */
+	UFUNCTION(BlueprintCallable, Category="SeinARTS|Technology Integration")
+	FSAFResourceBundle ResolveEffectiveResourceCosts(const USAFAsset* Asset) const;
+
+	/** Resolves effective build time for an asset, accounting for technology modifications. */
+	UFUNCTION(BlueprintCallable, Category="SeinARTS|Technology Integration")
+	float ResolveEffectiveBuildTime(const USAFAsset* Asset) const;
 
 protected:
 
@@ -149,10 +163,16 @@ protected:
 	float ResolveBuildSpeed() const;
 
 	// Safely resolves the costs for a unit via unit data (runtime preferred, fallback to defaults).
-	FSAFResources ResolveCostsByData(USAFAsset* Asset) const;
+	FSAFResourceBundle ResolveCostsByData(USAFAsset* Asset) const;
 
 	// Gets the SAFPlayerState of the owning actor's owning controller, if any.
 	ASAFPlayerState* GetSAFPlayerState() const;
+
+	// Gets the player technology component for technology-aware cost/time resolution.
+	class USAFPlayerTechnologyComponent* GetPlayerTechnologyComponent() const;
+
+	// Handles completion of technology research (different from unit production).
+	void CompleteTechnologyResearch(FSAFProductionQueueItem CompletedItem);
 
 	// Replication
 	// ======================================================================================================================================================

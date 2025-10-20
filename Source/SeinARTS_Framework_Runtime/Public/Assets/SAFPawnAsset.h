@@ -65,7 +65,7 @@ public:
 	
 	/** Maximum movement speed for this pawn (cm/s). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Movement Configuration")
-	float MaxSpeed = 200.0f;
+	float MaxSpeed = 250.0f;
 
 	/** Acceleration rate for movement (cm/s²). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Movement Configuration")
@@ -77,7 +77,7 @@ public:
 
 	/** Maximum rotation rate (degrees per second). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Movement Configuration")
-	float MaxRotationRate = 1440.0f;
+	float MaxRotationRate = 300.0f;
 
 	/** Turning boost multiplier (0 = no turning boost, higher = more responsive turning). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Movement Configuration")
@@ -96,7 +96,7 @@ public:
 	bool bSnapToPlaneAtStart = true;
 
 	// Navigation Properties
-	// =================================================================================================================
+	// =============================================================================================================================================
 	/** Whether to project movement to navigation mesh to prevent units from falling off nav edges. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Movement Configuration")
 	bool bProjectToNavMesh = true;
@@ -105,130 +105,74 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Movement Configuration", meta=(EditCondition="bProjectToNavMesh", EditConditionHides))
 	FVector NavProjectionExtent = FVector(100.0f, 100.0f, 500.0f);
 
+	/** If a movement point is below this Dot threshold and within the Distance threshold, 
+	 * then this vehicle will reverse to that point rather than rotate and drive to it. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Movement Configuration", 
+	meta=(EditCondition="MovementMode==ESAFMovementMode::Tracked || MovementMode==ESAFMovementMode::Wheeled || MovementMode==ESAFMovementMode::Hover", 
+	EditConditionHides, ClampMin="-1.0", ClampMax="1.0", DisplayName="Reverse Engage Dot Threshold"))
+	float ReverseEngageDotThreshold = -0.5f;
+
+	/** If a movement point is within this Distance threshold and below the Dot threshold, 
+	 * then this vehicle will reverse to that point rather than rotate and drive to it. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Movement Configuration", 
+	meta=(EditCondition="MovementMode==ESAFMovementMode::Tracked || MovementMode==ESAFMovementMode::Wheeled || MovementMode==ESAFMovementMode::Hover", 
+	EditConditionHides, ClampMin="0", DisplayName="Reverse Engage Distance Threshold"))
+	float ReverseEngageDistanceThreshold = 2500.0f;
+
+	/** Max speed when reversing, differs from overall max speed. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Movement Configuration", 
+	meta=(EditCondition="MovementMode==ESAFMovementMode::Tracked || MovementMode==ESAFMovementMode::Wheeled || MovementMode==ESAFMovementMode::Hover", 
+	EditConditionHides, ClampMin="0", DisplayName="Reverse Max Speed"))
+	float ReverseMaxSpeed = 100.0f;
+
 	/** Threshold below which the unit is considered to have stopped (cm/s). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Movement Configuration", meta=(ClampMin="0"))
 	float StopSpeedThreshold = 1.0f;
 
 	// Infantry Mode Properties
-	// =================================================================================================================
-	
+	// =============================================================================================================================================
 	/** Whether this unit can strafe (move without changing facing direction). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Movement Configuration", 
-		meta=(EditCondition="MovementMode==ESAFMovementMode::Infantry", EditConditionHides, DisplayName="Infantry | Allow Strafe"))
+	meta=(EditCondition="MovementMode==ESAFMovementMode::Infantry", EditConditionHides, DisplayName="Allow Strafing"))
 	bool Infantry_bAllowStrafe = true;
 
-	/** Whether to use a specific desired facing direction instead of movement direction. */
+	/** Dot product threshold by which the unit can no longer strafe, and must turn away from its target
+	 * to keep moving in the desired direction (0 = directly to the left/right, defaults to 0.3). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Movement Configuration", 
-		meta=(EditCondition="MovementMode==ESAFMovementMode::Infantry", EditConditionHides))
-	bool Infantry_bUseDesiredFacing = false;
-
-	/** Desired facing direction (yaw in degrees). Only used if bUseDesiredFacing is true. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Movement Configuration", 
-		meta=(EditCondition="MovementMode==ESAFMovementMode::Infantry", EditConditionHides))
-	float Infantry_DesiredFacingYaw = 0.0f;
-
-	/** How fast the unit rotates to face the desired direction (degrees per second). */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Movement Configuration", 
-		meta=(EditCondition="MovementMode==ESAFMovementMode::Infantry", EditConditionHides, ClampMin="1"))
-	float Infantry_FacingRotationRate = 1440.0f;
+	meta=(EditCondition="MovementMode==ESAFMovementMode::Infantry && Infantry_bAllowStrafe", EditConditionHides, DisplayName="Strafing Dot Threshold"))
+	float Infantry_StrafingDotThreshold = 0.3f;
 
 	// Tracked Mode Properties
 	// =================================================================================================================
-
-	/** Maximum turn rate in degrees for tracked vehicles. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Movement Configuration", 
-		meta=(EditCondition="MovementMode==ESAFMovementMode::Tracked", EditConditionHides))
-	float Tracked_MaxTurnRateDeg = 60.0f;
-
-	/** If a movement point is below this Dot threshold and within the Distance threshold, 
-	 * then this vehicle will reverse to that point rather than rotate and drive to it. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Movement Configuration", 
-		meta=(EditCondition="MovementMode==ESAFMovementMode::Tracked", EditConditionHides, ClampMin="-1.0", ClampMax="1.0"))
-	float Tracked_ReverseEngageDotThreshold = -0.5f;
-
-	/** If a movement point is within this Distance threshold and below the Dot threshold, 
-	 * then this vehicle will reverse to that point rather than rotate and drive to it. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Movement Configuration", 
-		meta=(EditCondition="MovementMode==ESAFMovementMode::Tracked", EditConditionHides, ClampMin="0"))
-	float Tracked_ReverseEngageDistanceThreshold = 2500.0f;
-
-	/** Max speed when reversing, differs from overall max speed. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Movement Configuration", 
-		meta=(EditCondition="MovementMode==ESAFMovementMode::Tracked", EditConditionHides, ClampMin="0"))
-	float Tracked_ReverseMaxSpeed = 300.0f;
-
 	/** Curve representing forward throttle vs. direction misalignment for tracked vehicles. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Movement Configuration", 
-		meta=(EditCondition="MovementMode==ESAFMovementMode::Tracked", EditConditionHides))
+	meta=(EditCondition="MovementMode==ESAFMovementMode::Tracked", EditConditionHides, DisplayName="Throttle Vs Misalignment Deg"))
 	FRuntimeFloatCurve Tracked_ThrottleVsMisalignmentDeg;
 
 	// Wheeled Mode Properties
 	// =================================================================================================================
-
-	/** Maximum turn rate in degrees for wheeled vehicles. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Movement Configuration", 
-		meta=(EditCondition="MovementMode==ESAFMovementMode::Wheeled", EditConditionHides))
-	float Wheeled_MaxTurnRateDeg = 60.0f;
-
-	/** If a movement point is below this Dot threshold and within the Distance threshold, 
-	 * then this vehicle will reverse to that point rather than rotate and drive to it. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Movement Configuration", 
-		meta=(EditCondition="MovementMode==ESAFMovementMode::Wheeled", EditConditionHides, ClampMin="-1.0", ClampMax="1.0"))
-	float Wheeled_ReverseEngageDotThreshold = -0.5f;
-
-	/** If a movement point is within this Distance threshold and below the Dot threshold, 
-	 * then this vehicle will reverse to that point rather than rotate and drive to it. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Movement Configuration", 
-		meta=(EditCondition="MovementMode==ESAFMovementMode::Wheeled", EditConditionHides, ClampMin="0"))
-	float Wheeled_ReverseEngageDistanceThreshold = 2500.0f;
-
-	/** Max speed when reversing, differs from overall max speed. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Movement Configuration", 
-		meta=(EditCondition="MovementMode==ESAFMovementMode::Wheeled", EditConditionHides, ClampMin="0"))
-	float Wheeled_ReverseMaxSpeed = 300.0f;
-
 	/** Represents the distance between axels (cm), affects turn radius. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Movement Configuration", 
-		meta=(EditCondition="MovementMode==ESAFMovementMode::Wheeled", EditConditionHides, ClampMin="1"))
+	meta=(EditCondition="MovementMode==ESAFMovementMode::Wheeled", EditConditionHides, ClampMin="1", DisplayName="Wheelbase"))
 	float Wheeled_Wheelbase = 220.0f;
 
 	/** Maximum front wheel steering angle. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Movement Configuration", 
-		meta=(EditCondition="MovementMode==ESAFMovementMode::Wheeled", EditConditionHides, ClampMin="1", ClampMax="60"))
+	meta=(EditCondition="MovementMode==ESAFMovementMode::Wheeled", EditConditionHides, ClampMin="1", ClampMax="60", DisplayName="Max Steer Angle Deg"))
 	float Wheeled_MaxSteerAngleDeg = 60.0f;
 
 	/** How fast we approach desired steer angle. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Movement Configuration", 
-		meta=(EditCondition="MovementMode==ESAFMovementMode::Wheeled", EditConditionHides, ClampMin="0.1", ClampMax="10"))
+	meta=(EditCondition="MovementMode==ESAFMovementMode::Wheeled", EditConditionHides, ClampMin="0.1", ClampMax="10", DisplayName="Steer Response"))
 	float Wheeled_SteerResponse = 3.0f;
-
-	// Hover Mode Properties
-	// =================================================================================================================
-
-	/** Maximum turn rate in degrees for hover vehicles. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Movement Configuration", 
-		meta=(EditCondition="MovementMode==ESAFMovementMode::Hover", EditConditionHides))
-	float Hover_MaxTurnRateDeg = 60.0f;
-
-	/** If a movement point is below this Dot threshold and within the Distance threshold, 
-	 * then this vehicle will reverse to that point rather than rotate and drive to it. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Movement Configuration", 
-		meta=(EditCondition="MovementMode==ESAFMovementMode::Hover", EditConditionHides, ClampMin="-1.0", ClampMax="1.0"))
-	float Hover_ReverseEngageDotThreshold = -0.5f;
-
-	/** If a movement point is within this Distance threshold and below the Dot threshold, 
-	 * then this vehicle will reverse to that point rather than rotate and drive to it. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Movement Configuration", 
-		meta=(EditCondition="MovementMode==ESAFMovementMode::Hover", EditConditionHides, ClampMin="0"))
-	float Hover_ReverseEngageDistanceThreshold = 2500.0f;
-
-	/** Max speed when reversing, differs from overall max speed. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Movement Configuration", 
-		meta=(EditCondition="MovementMode==ESAFMovementMode::Hover", EditConditionHides, ClampMin="0"))
-	float Hover_ReverseMaxSpeed = 300.0f;
 
 protected:
 
 	virtual void PostLoad() override;
+
+	#if WITH_EDITOR
+	/** Reapply mode defaults when movement mode changes in the editor */
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+	#endif
 
 };

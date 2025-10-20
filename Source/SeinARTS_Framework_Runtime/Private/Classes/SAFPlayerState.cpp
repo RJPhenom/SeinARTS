@@ -1,9 +1,11 @@
 #include "Classes/SAFPlayerState.h"
-#include "Structs/SAFResources.h"
+#include "Components/SAFPlayerTechnologyComponent.h"
+#include "Structs/SAFResourceBundle.h"
 #include "Net/UnrealNetwork.h"
 
 ASAFPlayerState::ASAFPlayerState(){
-	//CreateDefaultSubobject<USAFTechModifiersComponent>(TEXT("TechModifiers"));
+	// Create the technology component for this player
+	TechnologyComponent = CreateDefaultSubobject<USAFPlayerTechnologyComponent>(TEXT("TechnologyComponent"));
 }
 
 // Production
@@ -11,7 +13,7 @@ ASAFPlayerState::ASAFPlayerState(){
 // Adds an individual resource, via index of the resource in the standard bundle.
 void ASAFPlayerState::AddResource(int32 ResourceNumber, int32 Amount) {
 	if (!HasAuthority()) return;
-	if (ResourceNumber < 1 || ResourceNumber > FSAFResources::NumSlots) return;
+	if (ResourceNumber < 1 || ResourceNumber > FSAFResourceBundle::NumSlots) return;
 
 	const int32 current = Resources.Get(ResourceNumber);
 	int64 newVal64 = static_cast<int64>(current) + static_cast<int64>(Amount);
@@ -21,10 +23,10 @@ void ASAFPlayerState::AddResource(int32 ResourceNumber, int32 Amount) {
 }
 
 // Adds a resources bundle to this player's resources.
-void ASAFPlayerState::AddResources(const FSAFResources& Delta) {
+void ASAFPlayerState::AddResources(const FSAFResourceBundle& Delta) {
 	if (!HasAuthority()) return;
 
-	FSAFResources TempBundle = Resources;
+	FSAFResourceBundle TempBundle = Resources;
 	TempBundle.Add(Delta);
 	TempBundle.ClampNonNegative();
 	Resources = TempBundle;
@@ -32,12 +34,12 @@ void ASAFPlayerState::AddResources(const FSAFResources& Delta) {
 }
 
 // Returns true if current resources cover 'Cost' (no mutation).
-bool ASAFPlayerState::CheckResourcesAvailable(const FSAFResources& Cost) const {
+bool ASAFPlayerState::CheckResourcesAvailable(const FSAFResourceBundle& Cost) const {
 	return Resources.AllGreaterOrEqualTo(Cost);
 }
 
 // Atomically deducts if affordable; returns true on success.
-bool ASAFPlayerState::RequestResources(const FSAFResources& Cost) {
+bool ASAFPlayerState::RequestResources(const FSAFResourceBundle& Cost) {
 	if (!HasAuthority()) return false;
 	if (!Resources.AllGreaterOrEqualTo(Cost)) return false;
 
@@ -54,4 +56,5 @@ void ASAFPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
 	DOREPLIFETIME(ASAFPlayerState, bIsReady);
 	DOREPLIFETIME(ASAFPlayerState, TeamID);
 	DOREPLIFETIME(ASAFPlayerState, Resources);
+	DOREPLIFETIME(ASAFPlayerState, TechnologyComponent);
 }

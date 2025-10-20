@@ -60,9 +60,9 @@ void USAFAttributes::PostGameplayEffectExecute(const FGameplayEffectModCallbackD
 //                                Production
 // ===========================================================================
 
-// Returns the cost attributes as a FSAFResources bundle.
-FSAFResources USAFAttributes::BundleResources() const {
-	FSAFResources Out;
+// Returns the cost attributes as a FSAFResourceBundle bundle.
+FSAFResourceBundle USAFAttributes::BundleResources() const {
+	FSAFResourceBundle Out;
 
 	const float C1  = Cost1.GetCurrentValue();
 	const float C2  = Cost2.GetCurrentValue();
@@ -77,18 +77,18 @@ FSAFResources USAFAttributes::BundleResources() const {
 	const float C11 = Cost11.GetCurrentValue();
 	const float C12 = Cost12.GetCurrentValue();
 
-	Out.Resource1  = FSAFResources::ToInt(C1);
-	Out.Resource2  = FSAFResources::ToInt(C2);
-	Out.Resource3  = FSAFResources::ToInt(C3);
-	Out.Resource4  = FSAFResources::ToInt(C4);
-	Out.Resource5  = FSAFResources::ToInt(C5);
-	Out.Resource6  = FSAFResources::ToInt(C6);
-	Out.Resource7  = FSAFResources::ToInt(C7);
-	Out.Resource8  = FSAFResources::ToInt(C8);
-	Out.Resource9  = FSAFResources::ToInt(C9);
-	Out.Resource10 = FSAFResources::ToInt(C10);
-	Out.Resource11 = FSAFResources::ToInt(C11);
-	Out.Resource12 = FSAFResources::ToInt(C12);
+	Out.Resource1  = FSAFResourceBundle::ToInt(C1);
+	Out.Resource2  = FSAFResourceBundle::ToInt(C2);
+	Out.Resource3  = FSAFResourceBundle::ToInt(C3);
+	Out.Resource4  = FSAFResourceBundle::ToInt(C4);
+	Out.Resource5  = FSAFResourceBundle::ToInt(C5);
+	Out.Resource6  = FSAFResourceBundle::ToInt(C6);
+	Out.Resource7  = FSAFResourceBundle::ToInt(C7);
+	Out.Resource8  = FSAFResourceBundle::ToInt(C8);
+	Out.Resource9  = FSAFResourceBundle::ToInt(C9);
+	Out.Resource10 = FSAFResourceBundle::ToInt(C10);
+	Out.Resource11 = FSAFResourceBundle::ToInt(C11);
+	Out.Resource12 = FSAFResourceBundle::ToInt(C12);
 
 	return Out;
 }

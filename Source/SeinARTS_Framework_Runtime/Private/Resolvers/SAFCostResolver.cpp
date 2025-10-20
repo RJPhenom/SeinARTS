@@ -10,9 +10,9 @@
  * Order of resolution:
  *   1. If AbilitySystem has USAFAttributes, return live bundle from ASC.
  *   2. Else, fall back to the UnitAsset’s RuntimeCosts (requires PlayerState).
- *   3. Returns empty FSAFResources if both fail.
+ *   3. Returns empty FSAFResourceBundle if both fail.
  */
-FSAFResources SAFCostResolver::ResolveCosts(
+FSAFResourceBundle SAFCostResolver::ResolveCosts(
 	const UAbilitySystemComponent* AbilitySystem,
 	const USAFUnitAsset* UnitAsset,
 	const APlayerState* PlayerState
@@ -23,8 +23,8 @@ FSAFResources SAFCostResolver::ResolveCosts(
 			return Attr->BundleResources();
 
 	// 2. Fall back to UnitAsset runtime costs
-	if (UnitAsset && PlayerState) return FSAFResources{}; //UnitAsset->GetRuntimeCosts(PlayerState);
+	if (UnitAsset && PlayerState) return FSAFResourceBundle{}; //UnitAsset->GetRuntimeCosts(PlayerState);
 
 	// 3. Fallback: empty bundle
-	return FSAFResources{};
+	return FSAFResourceBundle{};
 }

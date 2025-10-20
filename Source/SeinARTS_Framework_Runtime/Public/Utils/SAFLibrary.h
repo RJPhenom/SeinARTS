@@ -4,6 +4,7 @@
 #include "Abilities/GameplayAbilityTypes.h"
 #include "AbilitySystemBlueprintLibrary.h"
 #include "Kismet/BlueprintFunctionLibrary.h"
+#include "Resolvers/SAFAssetResolver.h"
 #include "Structs/SAFOrder.h"
 #include "SAFLibrary.generated.h"
 
@@ -29,6 +30,7 @@ namespace SAFLibrary {
 // Validation
 // ==================================================================================================
 bool SoftEqual(const TSoftObjectPtr<USAFAsset>& A, const TSoftObjectPtr<USAFAsset>& B);
+template <typename T> bool SoftCastCheck(const TSoftObjectPtr<USAFAsset>& Asset);
 bool IsPlayerControllerPtrValidSeinARTSPlayer(APlayerController* InPtr);
 bool IsPlayerStatePtrValidSeinARTSPlayer(APlayerState* InPtr);
 bool IsActorPtrValidSeinARTSActor(AActor* InPtr);
@@ -36,6 +38,15 @@ bool IsActorPtrValidSeinARTSUnit(AActor* InPtr);
 bool IsActorPtrValidSeinARTSCover(AActor* InPtr);
 bool IsPawnPtrValidSeinARTSSquadMember(APawn* InPtr);
 bool IsPawnPtrValidSeinARTSVehiclePawn(APawn* InPtr);
+
+// Template Implementations
+// ==================================================================================================
+template<typename T>
+inline bool SAFLibrary::SoftCastCheck(const TSoftObjectPtr<USAFAsset>& Asset) {
+	if (USAFAsset* ResolvedAsset = SAFAssetResolver::ResolveAsset(Asset)) 
+		return Cast<T>(ResolvedAsset) != nullptr;
+	else return false;
+}
 
 // Controller Helpers
 // ==================================================================================================
