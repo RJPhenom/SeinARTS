@@ -35,6 +35,11 @@
 #include "Debug/SAFDebugTool.h"
 #include "DrawDebugHelpers.h"
 
+#if WITH_EDITOR
+#include "Components/SkeletalMeshComponent.h"
+#include "Components/CapsuleComponent.h"
+#endif
+
 ASAFUnit::ASAFUnit() {
 	PrimaryActorTick.bCanEverTick = false;
 	bReplicates = true;
@@ -45,6 +50,10 @@ ASAFUnit::ASAFUnit() {
 	
 	// Create technology component for receiving technology modifications
 	TechnologyComponent = CreateDefaultSubobject<USAFTechnologyComponent>(TEXT("TechnologyComponent"));
+}
+
+void ASAFUnit::PreInitializeComponents() {
+	Super::PreInitializeComponents();  // This calls SAFActor::PreInitializeComponents which clears editor previews
 }
 
 // Actor Interface Overrides
@@ -707,3 +716,89 @@ void ASAFUnit::OnRep_AttachedPawn() {}
 void ASAFUnit::OnRep_SquadPawns() {}
 void ASAFUnit::OnRep_CurrentFormation() {}
 void ASAFUnit::OnRep_CurrentCover() {}
+
+#if WITH_EDITOR
+void ASAFUnit::OnConstruction(const FTransform& Transform) {
+	Super::OnConstruction(Transform);
+	
+	// Always clear preview before any runtime initialization
+	if (GetWorld() && GetWorld()->IsGameWorld()) {
+		ClearEditorPreview();
+	}
+}
+
+void ASAFUnit::UpdateEditorPreview() {
+	// Only run in editor, not in PIE or game
+	if (!GetWorld() || GetWorld()->IsGameWorld()) {
+		return;
+	}
+
+	ClearEditorPreview();
+
+	USAFUnitAsset* UnitAsset = GetUnitAsset();
+	if (!UnitAsset) {
+		return;
+	}
+
+	// Create root for preview components
+	EditorPreviewRoot = NewObject<USceneComponent>(this, USceneComponent::StaticClass(), TEXT("EditorPreviewRoot"));
+	EditorPreviewRoot->SetupAttachment(RootComponent);
+	EditorPreviewRoot->SetIsReplicated(false);
+	EditorPreviewRoot->bIsEditorOnly = true;
+	EditorPreviewRoot->CreationMethod = EComponentCreationMethod::UserConstructionScript;
+	EditorPreviewRoot->RegisterComponent();
+
+	// Handle squad units with multiple pawns
+	if (UnitAsset->bSquadUnit && UnitAsset->Pawns.Num() > 0) {
+		for (int32 i = 0; i < UnitAsset->Pawns.Num(); i++) {
+			USAFPawnAsset* PawnAsset = SAFAssetResolver::ResolveAsset(UnitAsset->Pawns[i]);
+			if (!PawnAsset || PawnAsset->SkeletalMesh.IsNull()) {
+				continue;
+			}
+
+			USkeletalMesh* Mesh = PawnAsset->SkeletalMesh.LoadSynchronous();
+			if (!Mesh) {
+				continue;
+			}
+
+			// Create preview mesh for this squad member
+			FString ComponentName = FString::Printf(TEXT("EditorPreviewMesh_%d"), i);
+			USkeletalMeshComponent* PreviewMesh = NewObject<USkeletalMeshComponent>(this, USkeletalMeshComponent::StaticClass(), FName(*ComponentName));
+			PreviewMesh->SetSkeletalMesh(Mesh);
+			PreviewMesh->SetupAttachment(EditorPreviewRoot);
+			PreviewMesh->SetIsReplicated(false);
+			PreviewMesh->bIsEditorOnly = true;
+			PreviewMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+			PreviewMesh->CreationMethod = EComponentCreationMethod::UserConstructionScript;
+
+			// Apply mesh offset
+			PreviewMesh->SetRelativeTransform(PawnAsset->MeshOffset);
+
+			// Apply squad position
+			if (UnitAsset->Positions.IsValidIndex(i)) {
+				PreviewMesh->AddRelativeLocation(UnitAsset->Positions[i]);
+			}
+
+			PreviewMesh->RegisterComponent();
+		}
+	}
+	// Handle single pawn units
+	else if (!UnitAsset->Pawn.IsNull()) {
+		USAFPawnAsset* PawnAsset = SAFAssetResolver::ResolveAsset(UnitAsset->Pawn);
+		if (PawnAsset && !PawnAsset->SkeletalMesh.IsNull()) {
+			USkeletalMesh* Mesh = PawnAsset->SkeletalMesh.LoadSynchronous();
+			if (Mesh) {
+				USkeletalMeshComponent* PreviewMesh = NewObject<USkeletalMeshComponent>(this, USkeletalMeshComponent::StaticClass(), TEXT("EditorPreviewMesh"));
+				PreviewMesh->SetSkeletalMesh(Mesh);
+				PreviewMesh->SetupAttachment(EditorPreviewRoot);
+				PreviewMesh->SetIsReplicated(false);
+				PreviewMesh->bIsEditorOnly = true;
+				PreviewMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+				PreviewMesh->SetRelativeTransform(PawnAsset->MeshOffset);
+				PreviewMesh->CreationMethod = EComponentCreationMethod::UserConstructionScript;
+				PreviewMesh->RegisterComponent();
+			}
+		}
+	}
+}
+#endif

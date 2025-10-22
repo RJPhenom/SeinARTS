@@ -51,6 +51,17 @@ void ASAFPawn::PostInitializeComponents() {
 	ApplyMovementConfiguration();
 }
 
+void ASAFPawn::PreInitializeComponents() {
+	Super::PreInitializeComponents();
+	
+#if WITH_EDITOR
+	// CRITICAL: Clean up editor preview components before runtime initialization
+	if (GetWorld() && GetWorld()->IsGameWorld()) {
+		ClearEditorPreview();
+	}
+#endif
+}
+
 // Actor Interface Implementation
 // =================================================================================================================================================
 /** Empty on purpose to skip parent init from running (pawns own their own initialization) */
@@ -232,3 +243,90 @@ void ASAFPawn::OnRep_OwningUnit() {
 	ApplyVisualConfiguration();
 	ApplyMovementConfiguration();
 }
+
+#if WITH_EDITOR
+void ASAFPawn::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) {
+	Super::PostEditChangeProperty(PropertyChangedEvent);
+
+	if (PropertyChangedEvent.Property && PropertyChangedEvent.Property->GetFName() == GET_MEMBER_NAME_CHECKED(ASAFPawn, PawnAsset)) {
+		UpdateEditorPreview();
+	}
+}
+
+void ASAFPawn::PostLoad() {
+	Super::PostLoad();
+	
+	// Create preview when loading from disk (editor only)
+	if (GetWorld() && !GetWorld()->IsGameWorld()) {
+		UpdateEditorPreview();
+	}
+}
+
+void ASAFPawn::OnConstruction(const FTransform& Transform) {
+	Super::OnConstruction(Transform);
+	
+	// Handle editor vs runtime
+	if (GetWorld() && GetWorld()->IsGameWorld()) {
+		// Runtime - clear any editor preview components
+		ClearEditorPreview();
+	} else {
+		// Editor - update preview
+		UpdateEditorPreview();
+	}
+}
+
+void ASAFPawn::UpdateEditorPreview() {
+	// Only run in editor, not in PIE or game
+	if (!GetWorld() || GetWorld()->IsGameWorld()) {
+		return;
+	}
+
+	ClearEditorPreview();
+
+	// For pawns, we get the asset from the soft object pointer
+	USAFPawnAsset* ResolvedPawnAsset = SAFAssetResolver::ResolveAsset(PawnAsset);
+	if (!ResolvedPawnAsset || ResolvedPawnAsset->SkeletalMesh.IsNull()) {
+		return;
+	}
+
+	USkeletalMesh* Mesh = ResolvedPawnAsset->SkeletalMesh.LoadSynchronous();
+	if (!Mesh) {
+		return;
+	}
+
+	// Create root for preview
+	EditorPreviewRoot = NewObject<USceneComponent>(this, USceneComponent::StaticClass(), TEXT("EditorPreviewRoot"));
+	EditorPreviewRoot->SetupAttachment(RootComponent);
+	EditorPreviewRoot->SetIsReplicated(false);
+	EditorPreviewRoot->bIsEditorOnly = true;
+	EditorPreviewRoot->CreationMethod = EComponentCreationMethod::UserConstructionScript;
+	EditorPreviewRoot->RegisterComponent();
+
+	// Create preview mesh
+	USkeletalMeshComponent* PreviewMesh = NewObject<USkeletalMeshComponent>(this, USkeletalMeshComponent::StaticClass(), TEXT("EditorPreviewMesh"));
+	PreviewMesh->SetSkeletalMesh(Mesh);
+	PreviewMesh->SetupAttachment(EditorPreviewRoot);
+	PreviewMesh->SetIsReplicated(false);
+	PreviewMesh->bIsEditorOnly = true;
+	PreviewMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	PreviewMesh->SetRelativeTransform(ResolvedPawnAsset->MeshOffset);
+	PreviewMesh->CreationMethod = EComponentCreationMethod::UserConstructionScript;
+	PreviewMesh->RegisterComponent();
+}
+
+void ASAFPawn::ClearEditorPreview() {
+	if (EditorPreviewRoot) {
+		EditorPreviewRoot->DestroyComponent();
+		EditorPreviewRoot = nullptr;
+	}
+	
+	// Also clean up any child components marked as editor-only
+	TArray<UActorComponent*> Components;
+	GetComponents(Components);
+	for (UActorComponent* Component : Components) {
+		if (Component && Component->bIsEditorOnly) {
+			Component->DestroyComponent();
+		}
+	}
+}
+#endif

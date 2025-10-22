@@ -69,6 +69,16 @@ public:
 	UPROPERTY(BlueprintAssignable, BlueprintCallable, Category="SeinARTS|Lifecycle")
 	FOnDeath OnDeath;
 
+#if WITH_EDITOR
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+	virtual void PostLoad() override;
+	virtual void OnConstruction(const FTransform& Transform) override;
+	virtual void UpdateEditorPreview();
+	virtual void ClearEditorPreview();
+#endif
+
+	virtual void PreInitializeComponents() override;
+
 	// Actor Interface / API
 	// ===============================================================================================================================================================
 	virtual USAFAsset*      		GetAsset_Implementation() const 												 { return SAFAssetResolver::ResolveAsset(Asset); }
@@ -165,6 +175,12 @@ protected:
 	 * If you want to re-initialize, pass 
 	 * bReinitialize=true to the InitAsset 
 	 * call. */ bool bInitialized = false;
+
+#if WITH_EDITORONLY_DATA
+	/** Editor-only preview component (used to show unit visuals in editor before runtime init). */
+	UPROPERTY(Transient)
+	TObjectPtr<USceneComponent> EditorPreviewRoot;
+#endif
 
 	UFUNCTION()	void OnRep_OwningPlayer();
 

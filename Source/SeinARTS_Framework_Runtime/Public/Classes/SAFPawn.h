@@ -80,6 +80,16 @@ public:
     float                   		GetPawnSpeed() const                                            { return GetPawnVelocity().Size(); }
     bool                    		IsPawnMoving() const                                                { return GetPawnSpeed() > .1f; }
 
+#if WITH_EDITOR
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+	virtual void PostLoad() override;
+	virtual void OnConstruction(const FTransform& Transform) override;
+	void UpdateEditorPreview();
+	void ClearEditorPreview();
+#endif
+
+	virtual void PreInitializeComponents() override;
+
 protected:
 
 	virtual void PostInitializeComponents() override;
@@ -121,6 +131,12 @@ protected:
 
 	/** Sync the navigation agent's capsule size with the pawn's capsule component. */
 	void SyncNavAgentWithCapsule();
+
+#if WITH_EDITORONLY_DATA
+	/** Editor-only preview component (used to show pawn visuals in editor before runtime init). */
+	UPROPERTY(Transient)
+	TObjectPtr<USceneComponent> EditorPreviewRoot;
+#endif
 	
 	// Replication
 	// ==================================================================================================

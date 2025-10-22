@@ -153,6 +153,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Replicated, Category="SeinARTS|Cover")
 	float CoverSearchRadius = 50.f;
 
+#if WITH_EDITOR
+	virtual void OnConstruction(const FTransform& Transform) override;
+	virtual void UpdateEditorPreview() override;
+#endif
+
+	virtual void PreInitializeComponents() override;
+
 protected:
 
 	// Production Component

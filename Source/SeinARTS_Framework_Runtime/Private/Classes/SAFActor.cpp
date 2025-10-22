@@ -10,6 +10,10 @@
 #include "Utils/SAFLibrary.h"
 #include "Debug/SAFDebugTool.h"
 
+#if WITH_EDITOR
+#include "Components/StaticMeshComponent.h"
+#endif
+
 ASAFActor::ASAFActor() {
 
 	// Selection probes on units.
@@ -35,6 +39,19 @@ ASAFActor::ASAFActor() {
 	SelectionProbe->PrimaryComponentTick.bCanEverTick = false;
 	SelectionProbe->bUseAttachParentBound = false;  
 
+}
+
+void ASAFActor::PreInitializeComponents() {
+	Super::PreInitializeComponents();
+	
+#if WITH_EDITOR
+	// CRITICAL: Clean up editor preview components before runtime initialization
+	// This is called BEFORE components initialize, so we can destroy editor components
+	// before they affect gameplay
+	if (GetWorld() && GetWorld()->IsGameWorld()) {
+		ClearEditorPreview();
+	}
+#endif
 }
 
 // Actor Interface Overrides
@@ -152,3 +169,67 @@ void ASAFActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetim
 void ASAFActor::OnRep_OwningPlayer() {
 	SAFDEBUG_INFO(TEXT("OnRep_OwningPlayer triggered."));
 }
+
+#if WITH_EDITOR
+void ASAFActor::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) {
+	Super::PostEditChangeProperty(PropertyChangedEvent);
+
+	if (PropertyChangedEvent.Property && PropertyChangedEvent.Property->GetFName() == GET_MEMBER_NAME_CHECKED(ASAFActor, Asset)) {
+		UpdateEditorPreview();
+	}
+}
+
+void ASAFActor::PostLoad() {
+	Super::PostLoad();
+	
+	// Create preview when loading from disk (editor only)
+	if (GetWorld() && !GetWorld()->IsGameWorld()) {
+		UpdateEditorPreview();
+	}
+}
+
+void ASAFActor::OnConstruction(const FTransform& Transform) {
+	Super::OnConstruction(Transform);
+	
+	// Handle editor vs runtime
+	if (GetWorld() && GetWorld()->IsGameWorld()) {
+		// Runtime - clear any editor preview components
+		ClearEditorPreview();
+	} else {
+		// Editor - update preview
+		UpdateEditorPreview();
+	}
+}
+
+void ASAFActor::UpdateEditorPreview() {
+	// Only run in editor, not in PIE or game
+	if (!GetWorld() || GetWorld()->IsGameWorld()) {
+		return;
+	}
+
+	ClearEditorPreview();
+
+	USAFAsset* ResolvedAsset = SAFAssetResolver::ResolveAsset(Asset);
+	if (!ResolvedAsset) {
+		return;
+	}
+
+	// Base implementation does nothing - override in subclasses
+}
+
+void ASAFActor::ClearEditorPreview() {
+	if (EditorPreviewRoot) {
+		EditorPreviewRoot->DestroyComponent();
+		EditorPreviewRoot = nullptr;
+	}
+	
+	// Also clean up any child components marked as editor-only
+	TArray<UActorComponent*> Components;
+	GetComponents(Components);
+	for (UActorComponent* Component : Components) {
+		if (Component && Component->bIsEditorOnly) {
+			Component->DestroyComponent();
+		}
+	}
+}
+#endif
