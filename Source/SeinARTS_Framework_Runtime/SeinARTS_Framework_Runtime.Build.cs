@@ -23,5 +23,9 @@ public class SeinARTS_Framework_Runtime : ModuleRules {
 			"SlateCore",
 			"InputCore",
 		});
+		
+		if (Target.bBuildEditor) {
+			PrivateDependencyModuleNames.Add("UnrealEd");
+		}
 	}
 }

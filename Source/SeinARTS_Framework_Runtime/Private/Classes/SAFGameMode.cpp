@@ -10,12 +10,39 @@
 #include "EngineUtils.h"
 #include "Debug/SAFDebugTool.h"
 
+#if WITH_EDITOR
+#include "Editor.h"
+#include "UnrealEdMisc.h"
+#endif
+
 ASAFGameMode::ASAFGameMode() {
 	GameStateClass = ASAFGameState::StaticClass();
 	PlayerControllerClass = ASAFPlayerController::StaticClass();
 	PlayerStateClass = ASAFPlayerState::StaticClass();
 	HUDClass = ASAFHUD::StaticClass();
 	DefaultPawnClass = ASAFCameraPawn::StaticClass();
+}
+
+void ASAFGameMode::InitGame(const FString& MapName, const FString& Options, FString& ErrorMessage) {
+	Super::InitGame(MapName, Options, ErrorMessage);
+
+#if WITH_EDITOR
+	// In PIE mode, read the "Number of Players" setting from editor preferences
+	if (GetWorld() && GetWorld()->IsPlayInEditor()) {
+		ULevelEditorPlaySettings* PlaySettings = GetMutableDefault<ULevelEditorPlaySettings>();
+		if (PlaySettings) {
+			int32 PIENumPlayers = 1;
+			PlaySettings->GetPlayNumberOfClients(PIENumPlayers);
+			
+			EPlayNetMode NetMode;
+			PlaySettings->GetPlayNetMode(NetMode);			
+			if (PIENumPlayers > 1) {
+				NumPlayers = PIENumPlayers;
+				SAFDEBUG_SUCCESS(FORMATSTR("PIE Mode: Overriding NumPlayers to match editor setting: %d", NumPlayers));
+			}
+		}
+	}
+#endif
 }
 
 // Init override handles building the array of teams
@@ -173,16 +200,32 @@ bool ASAFGameMode::TryStartSAFMatch() {
 		// Check ready
 		const ASAFPlayerState* SAFPlayerState = Cast<ASAFPlayerState>(PlayerState);
 		if (IsValid(SAFPlayerState) && SAFPlayerState->bIsReady) ++ReadyCount;
-	}	SAFDEBUG_INFO(FORMATSTR("Player readiness: %d/%d (connected: %d)", ReadyCount, NumPlayers, ConnectedCount));
+	}
+
+	// Determine if we should start: this will depend on standalone vs networked mode,
+	// if in standalone we start as soon as one player is ready, in networked we wait for 
+	// all expected players.
+	bool bShouldStart = false;
 	
-	// If all players are ready, start init
-	if (ReadyCount == NumPlayers) {
+	// In standalone mode, start as soon as the player is ready
+	if (GetNetMode() == NM_Standalone) if (ReadyCount > 0) bShouldStart = true;
+
+	// Networked mode - wait for all expected players
+	else {
+		SAFDEBUG_INFO(FORMATSTR("Player readiness: %d/%d (connected: %d)", ReadyCount, NumPlayers, ConnectedCount));
+		if (ReadyCount == NumPlayers) bShouldStart = true;
+		else if (ReadyCount < NumPlayers) return false;
+		else return false;
+	}
+	
+	// Start the match if conditions are met
+	if (bShouldStart) {
 		SAFDEBUG_SUCCESS("All expected players are ready. Starting SAF match...");
 		bSAFMatchStarted = StartSAFMatch();
 		if (bSAFMatchStarted) { SAFDEBUG_SUCCESS("SeinARTS match started successfully."); return true; }
 		else { SAFDEBUG_ERROR("SeinARTS match failed to start."); return false; }
-	} else if (ReadyCount < NumPlayers) { SAFDEBUG_INFO("TryStartSAFMatch failed: not all players are ready yet."); return false; }
-	else SAFDEBUG_ERROR("TryStartSAFMatch aborted: ReadyCount exceeds NumPlayers (unexpected).");
+	}
+	
 	return false;
 }
 

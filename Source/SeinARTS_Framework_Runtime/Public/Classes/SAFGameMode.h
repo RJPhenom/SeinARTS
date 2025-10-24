@@ -22,16 +22,17 @@ class SEINARTS_FRAMEWORK_RUNTIME_API ASAFGameMode : public AGameModeBase {
 public:
 
 	ASAFGameMode();
+	virtual void InitGame(const FString& MapName, const FString& Options, FString& ErrorMessage) override;
 	virtual void InitGameState() override;
 	virtual void PostLogin(APlayerController* NewPlayer) override;
 
 	/** Number of teams in the match. */
 	UPROPERTY(EditDefaultsOnly, Category="SeinARTS", meta=(ClampMin="2", UIMin="2", ClampMax="8", UIMax="8"))
-	int32 NumTeams = 4;
+	int32 NumTeams = 2;
 
 	/** Number of players in the match. */
 	UPROPERTY(EditDefaultsOnly, Category="SeinARTS", meta=(ClampMin="2", UIMin="2", ClampMax="8", UIMax="8"))
-	int32 NumPlayers = 4;
+	int32 NumPlayers = 2;
 
 	/** Number of players per team in the match. */
 	UPROPERTY(EditDefaultsOnly, Category="SeinARTS", meta=(ClampMin="1", UIMin="1", ClampMax="4", UIMax="4"))
