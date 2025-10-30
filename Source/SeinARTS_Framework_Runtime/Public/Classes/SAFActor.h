@@ -69,13 +69,13 @@ public:
 	UPROPERTY(BlueprintAssignable, BlueprintCallable, Category="SeinARTS|Lifecycle")
 	FOnDeath OnDeath;
 
-#if WITH_EDITOR
+	#if WITH_EDITOR
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 	virtual void PostLoad() override;
 	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void UpdateEditorPreview();
 	virtual void ClearEditorPreview();
-#endif
+	#endif
 
 	virtual void PreInitializeComponents() override;
 
@@ -140,7 +140,7 @@ public:
 	TObjectPtr<ASAFPlayerState> OwningPlayer = nullptr;
 	
 	// Selection
-	// =======================================================================================
+	// =================================================================================================
 	/** Toggles if the actor is able to be selected under the default selection flow. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Replicated, Category="SeinARTS")
 	bool bSelectable = true;
@@ -160,14 +160,10 @@ public:
 	bool bIsSelected = false;
 	
 	// Pings
-	// =======================================================================================
+	// =================================================================================================
 	/** Toggles if the actor is able to be pinged under the default ping flow. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Replicated, Category="SeinARTS")
 	bool bPingable = true;
-
-	// Replication
-	// =======================================================================================
-	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const;
 
 protected:
 
@@ -175,13 +171,16 @@ protected:
 	 * If you want to re-initialize, pass 
 	 * bReinitialize=true to the InitAsset 
 	 * call. */ bool bInitialized = false;
+	 
+	// Replication
+	// =================================================================================================
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+	UFUNCTION()	void OnRep_OwningPlayer();
 
-#if WITH_EDITORONLY_DATA
+	#if WITH_EDITORONLY_DATA
 	/** Editor-only preview component (used to show unit visuals in editor before runtime init). */
 	UPROPERTY(Transient)
 	TObjectPtr<USceneComponent> EditorPreviewRoot;
-#endif
-
-	UFUNCTION()	void OnRep_OwningPlayer();
+	#endif
 
 };

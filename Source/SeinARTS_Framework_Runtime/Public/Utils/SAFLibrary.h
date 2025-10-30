@@ -32,12 +32,10 @@ namespace SAFLibrary {
 bool SoftEqual(const TSoftObjectPtr<USAFAsset>& A, const TSoftObjectPtr<USAFAsset>& B);
 template <typename T> bool SoftCastCheck(const TSoftObjectPtr<USAFAsset>& Asset);
 bool IsPlayerControllerPtrValidSeinARTSPlayer(APlayerController* InPtr);
-bool IsPlayerStatePtrValidSeinARTSPlayer(APlayerState* InPtr);
 bool IsActorPtrValidSeinARTSActor(AActor* InPtr);
 bool IsActorPtrValidSeinARTSUnit(AActor* InPtr);
+bool IsPawnPtrValidSeinARTSPawn(APawn* InPtr);
 bool IsActorPtrValidSeinARTSCover(AActor* InPtr);
-bool IsPawnPtrValidSeinARTSSquadMember(APawn* InPtr);
-bool IsPawnPtrValidSeinARTSVehiclePawn(APawn* InPtr);
 
 // Template Implementations
 // ==================================================================================================
@@ -84,17 +82,17 @@ public:
 	UFUNCTION(BlueprintCallable, Category="SeinARTS|Utilities")
 	static bool IsActorValidSeinARTSActor(AActor* Actor) { return SAFLibrary::IsActorPtrValidSeinARTSActor(Actor); }
 
+	/** Checks if an actor is valid, implements the unit interface and not marked for destruction. */
+	UFUNCTION(BlueprintCallable, Category="SeinARTS|Utilities")
+	static bool IsActorValidSeinARTSUnit(AActor* Actor) { return SAFLibrary::IsActorPtrValidSeinARTSUnit(Actor); }
+
+	/** Checks if a pawn is valid, implements the pawn interface and not marked for destruction. */
+	UFUNCTION(BlueprintCallable, Category="SeinARTS|Utilities")
+	static bool IsPawnValidSeinARTSPawn(APawn* Pawn) { return SAFLibrary::IsPawnPtrValidSeinARTSPawn(Pawn); }
+
 	/** Checks if an actor is valid, implements the cover interface and not marked for destruction. */
 	UFUNCTION(BlueprintCallable, Category="SeinARTS|Utilities")
 	static bool IsActorValidCover(AActor* Actor) { return SAFLibrary::IsActorPtrValidSeinARTSCover(Actor); }
-
-	/** Checks if a pawn is valid, implements unit & squad member interfaces, and not marked for destruction. */
-	UFUNCTION(BlueprintCallable, Category="SeinARTS|Utilities")
-	static bool IsPawnValidSeinARTSSquadMember(APawn* Pawn) { return SAFLibrary::IsPawnPtrValidSeinARTSSquadMember(Pawn); }
-
-	/** Checks if a pawn is valid, implements unit & vehicle pawn interfaces, and not marked for destruction. */
-	UFUNCTION(BlueprintCallable, Category="SeinARTS|Utilities")
-	static bool IsPawnValidSeinARTSVehiclePawn(APawn* Pawn) { return SAFLibrary::IsPawnPtrValidSeinARTSVehiclePawn(Pawn); }
 
 	// Controller Helpers
 	// ==================================================================================================

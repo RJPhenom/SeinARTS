@@ -3,7 +3,6 @@
 #include "Classes/SAFHUD.h"
 #include "Classes/SAFCameraPawn.h"
 #include "Classes/SAFFormationManager.h"
-#include "Classes/Units/SAFSquad.h"
 #include "CollisionQueryParams.h"
 #include "InputCoreTypes.h"
 #include "Interfaces/SAFActorInterface.h"

@@ -6,6 +6,8 @@
 
 class ASAFGameState;
 class ASAFPlayerState;
+class AActor;
+class AController;
 
 /**
  * SAFGameMdoe
@@ -24,6 +26,7 @@ public:
 	ASAFGameMode();
 	virtual void InitGameState() override;
 	virtual void PostLogin(APlayerController* NewPlayer) override;
+	virtual void RestartPlayerAtPlayerStart(AController* NewPlayer, AActor* StartSpot) override;
 
 	/** Number of teams in the match. */
 	UPROPERTY(EditDefaultsOnly, Category="SeinARTS", meta=(ClampMin="2", UIMin="2", ClampMax="8", UIMax="8"))

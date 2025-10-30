@@ -61,6 +61,13 @@ void ASAFGameMode::PostLogin(APlayerController* NewPlayer) {
 	SAFPlayerController->OnServerReady.AddDynamic(this, &ASAFGameMode::HandlePlayerReady);
 }
 
+void ASAFGameMode::RestartPlayerAtPlayerStart(AController* NewPlayer, AActor* StartSpot) {
+	const FTransform StartTransform = IsValid(StartSpot) ? StartSpot->GetTransform() : FTransform::Identity;
+	Super::RestartPlayerAtPlayerStart(NewPlayer, StartSpot);
+	if (!IsValid(NewPlayer)) return;
+	if (ASAFCameraPawn* CameraPawn = Cast<ASAFCameraPawn>(NewPlayer->GetPawn())) { CameraPawn->StartTransform = StartTransform; }
+}
+
 // Player Login, Init / Choose Team Helpers
 // =================================================================================================================================
 // Chooses the next logical team of a player to join by iterating over the teams,

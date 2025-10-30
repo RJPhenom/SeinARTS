@@ -36,8 +36,6 @@ public:
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
 
-public:
-
 	// Components
 	// =========================================================================================================
 	/** Pivot for yaw/pitch; parent of Camera. */
@@ -49,7 +47,7 @@ public:
 	TObjectPtr<UCameraComponent> Camera;
 
 	// Camera Control API
-	// =========================================================================================================
+	// ===================================================================================================================================
 	/** Convenience to get current camera yaw. */
 	UFUNCTION(BlueprintPure, Category="SeinARTS|Camera")
 	float GetCameraYaw() const { return GetActorRotation().Yaw; }
@@ -90,20 +88,23 @@ public:
 	UPROPERTY(EditAnywhere, Category="SeinARTS", meta=(ClampMin="0", DisplayName="Max Zoom Distance"))
 	float MaxZoomEditor = 3000.f;
 
-	/** Default pitch angle. Enter as positive value (0-90 degrees). */
-	UPROPERTY(EditAnywhere, Category="SeinARTS", meta=(ClampMin="0", ClampMax="90", DisplayName="Default Angle"))
+	/** Default pitch angle. Enter as positive value (-90 to 90 degrees). 
+	 * 
+	 * NOTE: This is additive with the PlayerStart's rotation that this camera pawn spawns at. 
+	 * To override completely with the PlayerStart's rotation, simply set the DefaultAngle to 0. */
+	UPROPERTY(EditAnywhere, Category="SeinARTS", meta=(ClampMin="-90", ClampMax="90", DisplayName="Default Camera Angle"))
 	float DefaultAngleEditor = 30.f;
 
-	/** Minimum pitch angle. Enter as positive value (0-90 degrees). */
-	UPROPERTY(EditAnywhere, Category="SeinARTS", meta=(ClampMin="0", ClampMax="90", DisplayName="Min Camera Angle"))
+	/** Minimum pitch angle. Enter as positive value (-90 to 90 degrees). */
+	UPROPERTY(EditAnywhere, Category="SeinARTS", meta=(ClampMin="-90", ClampMax="90", DisplayName="Min Camera Angle"))
 	float MinAngleEditor = 10.f;
 
-	/** Maximum pitch angle. Enter as positive value (0-90 degrees). */
-	UPROPERTY(EditAnywhere, Category="SeinARTS", meta=(ClampMin="0", ClampMax="90", DisplayName="Max Camera Angle"))
+	/** Maximum pitch angle. Enter as positive value (-90 to 90 degrees). */
+	UPROPERTY(EditAnywhere, Category="SeinARTS", meta=(ClampMin="-90", ClampMax="90", DisplayName="Max Camera Angle"))
 	float MaxAngleEditor = 90.f;
 
 	// Blueprint Getters/Setters (User-Friendly Positive Values)
-	// =========================================================================================================
+	// ===================================================================================================================================
 	/** Get scroll speed as positive value. */
 	UFUNCTION(BlueprintPure, Category="SeinARTS|Camera")
 	float GetScrollSpeed() const { return ScrollSpeed; }
@@ -187,38 +188,34 @@ public:
 	/** Converts a desired world location to a bounded location within map limits. */
 	UFUNCTION(BlueprintPure, Category="SeinARTS|Camera")
 	FVector GetBoundedLocation(const FVector& DesiredWorldLocation) const;
+	
+	/** Start transform tracker. Used to properly align the camera start with the player start. 
+	 * 
+	 * NOTE: This is visible anywhere for debugging, but is set once and only once by the SAFGameMode 
+	 * during player RestartPlayerAtPlayerStart().  Do not modify this value elsewhere. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadWrite, Replicated, Category="SeinARTS")
+	FTransform StartTransform = FTransform::Identity;
 
 protected:
 
+	// Internal Values (Always Negative/Correct for Logic)
+	// =================================================================================================
 	/** Update internal negative values from editor positive values */
 	void UpdateInternalValues();
-
-	// Internal Values (Always Negative/Correct for Logic)
-	// =========================================================================================================
-	/** Internal scroll speed. */
 	float ScrollSpeed = 0.f;
-
-	/** Internal zoom speed (always negative) */
 	float ZoomSpeed = -250.f;
-
-	/** Internal min zoom (always negative) */
 	float MinZoom = -1000.f;
-
-	/** Internal max zoom (always negative) */
 	float MaxZoom = -3000.f;
-
-	/** Internal default angle (always negative) */
 	float DefaultAngle = -30.f;
-
-	/** Internal min angle (always negative) */
 	float MinAngle = -10.f;
-
-	/** Internal max angle (always negative) */
 	float MaxAngle = -90.f;
+
+	// Replication
+	// =================================================================================================
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	
 	#if WITH_EDITOR
 	/** Called when a property is changed in the editor */
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 	#endif
-
 };

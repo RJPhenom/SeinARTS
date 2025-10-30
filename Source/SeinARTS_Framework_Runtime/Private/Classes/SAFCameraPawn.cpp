@@ -4,19 +4,15 @@
 #include "Utils/SAFMathLibrary.h"
 #include "Utils/SAFLibrary.h"
 #include "Debug/SAFDebugTool.h"
+#include "Net/UnrealNetwork.h"
 
 ASAFCameraPawn::ASAFCameraPawn() {
 	PrimaryActorTick.bCanEverTick = true;
-
-	// Create default components
+	bReplicates = true;
 	Pivot  = CreateDefaultSubobject<USceneComponent>(TEXT("Pivot"));
 	Camera = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera"));
-
-	// Build hierarchy
 	RootComponent = Pivot;
 	Camera->SetupAttachment(Pivot);
-	
-	// Initialize internal values from editor values
 	UpdateInternalValues();
 }
 
@@ -48,12 +44,17 @@ void ASAFCameraPawn::Follow(AActor* Actor) {
 /** Resets camera to default zoom and angle. */
 void ASAFCameraPawn::ResetCamera() {
 	const FRotator NewRotation(DefaultAngle, 0.f, 0.f);
-	SetActorRotation(NewRotation);
+	const FRotator FinalRotation = NewRotation + StartTransform.GetRotation().Rotator();
+
+	SAFDEBUG_INFO("Resetting camera...");
+	SAFDEBUG_INFO(FORMATSTR("StartRot = %s", *StartTransform.GetRotation().Rotator().ToString()));
+	SAFDEBUG_INFO(FORMATSTR("NewRotation = %s", *NewRotation.ToString()));
+	SAFDEBUG_INFO(FORMATSTR("FinalRotation = %s", *FinalRotation.ToString()));
+
+	SetActorRotation(FinalRotation);
 
 	// Place the camera along its local X axis at MaxZoom
-	if (Camera) {
-		Camera->SetRelativeLocation(FVector(MaxZoom, 0.f, 0.f));
-	}
+	if (Camera) Camera->SetRelativeLocation(FVector(MaxZoom, 0.f, 0.f));
 }
 
 /** Pans the camera. Disables follow mode, if set. */
@@ -137,22 +138,29 @@ void ASAFCameraPawn::SetMaxZoom(float NewMaxZoom) {
 	MaxZoom = -MaxZoomEditor;
 }
 
-/** Set default angle using positive value (0-90 degrees). */
+/** Set default angle using positive value (-90 to 90 degrees). */
 void ASAFCameraPawn::SetDefaultAngle(float NewDefaultAngle) {
-	DefaultAngleEditor = FMath::Clamp(FMath::Abs(NewDefaultAngle), 0.f, 90.f);
+	DefaultAngleEditor = FMath::Clamp(NewDefaultAngle, MinAngle, MaxAngle);
 	DefaultAngle = -DefaultAngleEditor;
 }
 
-/** Set min angle using positive value (0-90 degrees). */
+/** Set min angle using positive value (-90 to 90 degrees). */
 void ASAFCameraPawn::SetMinAngle(float NewMinAngle) {
-	MinAngleEditor = FMath::Clamp(FMath::Abs(NewMinAngle), 0.f, 90.f);
+	MinAngleEditor = FMath::Clamp(NewMinAngle, -90.f, 90.f);
 	MinAngle = -MinAngleEditor;
 }
 
-/** Set max angle using positive value (0-90 degrees). */
+/** Set max angle using positive value (-90 to 90 degrees). */
 void ASAFCameraPawn::SetMaxAngle(float NewMaxAngle) {
-	MaxAngleEditor = FMath::Clamp(FMath::Abs(NewMaxAngle), 0.f, 90.f);
+	MaxAngleEditor = FMath::Clamp(NewMaxAngle, -90.f, 90.f);
 	MaxAngle = -MaxAngleEditor;
+}
+
+// Replication
+// ==================================================================================================
+void ASAFCameraPawn::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const {
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(ASAFCameraPawn, StartTransform);
 }
 
 #if WITH_EDITOR

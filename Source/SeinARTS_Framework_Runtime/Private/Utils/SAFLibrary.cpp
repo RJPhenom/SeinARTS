@@ -1,8 +1,6 @@
 #include "Utils/SAFLibrary.h"
 #include "Classes/SAFActor.h"
 #include "Classes/SAFUnit.h"
-#include "Classes/Units/SAFSquadMember.h"
-#include "Classes/Units/SAFVehiclePawn.h"
 #include "Classes/SAFPlayerController.h"
 #include "Classes/SAFPlayerState.h"
 #include "Classes/SAFPlayerController.h"
@@ -15,8 +13,7 @@
 #include "Interfaces/SAFActorInterface.h"
 #include "Interfaces/SAFPlayerInterface.h"
 #include "Interfaces/SAFUnitInterface.h"
-#include "Interfaces/Units/SAFSquadMemberInterface.h"
-#include "Interfaces/Units/SAFVehiclePawnInterface.h"
+#include "Interfaces/SAFPawnInterface.h"
 #include "Components/SAFCoverCollider.h"
 #include "Structs/SAFOrder.h"
 #include "Debug/SAFDebugTool.h"
@@ -37,45 +34,35 @@ namespace SAFLibrary {
 		&& !InPtr->IsActorBeingDestroyed();
 	}
 
-	/** Checks if an actor is valid, implements the SeinARTS asset interface 
-	 * and not marked for destruction. */
+	/** Checks if an actor is valid, implements the SeinARTS actor interface 
+	 * and is not marked for destruction. */
 	bool IsActorPtrValidSeinARTSActor(AActor* InPtr) {
 		return IsValid(InPtr) 
 		&& InPtr->GetClass()->ImplementsInterface(USAFActorInterface::StaticClass()) 
 		&& !InPtr->IsActorBeingDestroyed();
 	}
 
-	/** Checks if an actor is valid, is a child or instance of class ASAFUnit, 
-	 * implements the SeinARTS asset interface and not marked for destruction. */
+	/** Checks if an actor is valid, implements the SeinARTS unit interface, 
+	 * and is not marked for destruction. */
 	bool IsActorPtrValidSeinARTSUnit(AActor* InPtr) {
 		return IsValid(InPtr) 
 		&& InPtr->GetClass()->ImplementsInterface(USAFUnitInterface::StaticClass())
 		&& !InPtr->IsActorBeingDestroyed();
 	}
 
-	/** Checks if an actor is valid, implements the cover interface and not 
-	 * marked for destruction. */
+	/** Checks if an actor is valid, implements the SeinARTS pawn interface, 
+	 * and is not marked for destruction. */
+	bool IsPawnPtrValidSeinARTSPawn(APawn* InPtr) {
+		return IsValid(InPtr) 
+		&& InPtr->GetClass()->ImplementsInterface(USAFPawnInterface::StaticClass())
+		&& !InPtr->IsActorBeingDestroyed();
+	}
+
+	/** Checks if an actor is valid, implements the cover interface, 
+	 * and is not marked for destruction. */
 	bool IsActorPtrValidSeinARTSCover(AActor* InPtr) {
 		return IsValid(InPtr) 
 		&& InPtr->FindComponentByClass<USAFCoverCollider>() != nullptr 
-		&& !InPtr->IsActorBeingDestroyed();
-	}
-	
-	/** Checks if a pawn is valid, implements the unit and squad member interfaces, 
-	 * and not marked for destruction. */
-	bool IsPawnPtrValidSeinARTSSquadMember(APawn* InPtr) {
-		return IsValid(InPtr) 
-		&& InPtr->GetClass()->ImplementsInterface(USAFActorInterface::StaticClass()) 
-		&& InPtr->GetClass()->ImplementsInterface(USAFSquadMemberInterface::StaticClass()) 
-		&& !InPtr->IsActorBeingDestroyed();
-	}
-	
-	/** Checks if a pawn is valid, implements the unit and vehicle pawn interfaces, 
-	 * and not marked for destruction. */
-	bool IsPawnPtrValidSeinARTSVehiclePawn(APawn* InPtr) {
-		return IsValid(InPtr) 
-		&& InPtr->GetClass()->ImplementsInterface(USAFActorInterface::StaticClass()) 
-		&& InPtr->GetClass()->ImplementsInterface(USAFVehiclePawnInterface::StaticClass()) 
 		&& !InPtr->IsActorBeingDestroyed();
 	}
 	
