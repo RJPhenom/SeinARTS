@@ -10,12 +10,33 @@
 #include "DetailCategoryBuilder.h"
 #include "DetailLayoutBuilder.h"
 #include "DetailWidgetRow.h"
+#include "PropertyHandle.h"
+#include "PropertyCustomizationHelpers.h"
+#include "IPropertyUtilities.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/SBoxPanel.h"
+#include "Widgets/Colors/SColorBlock.h"
+#include "Widgets/Layout/SBox.h"
+#include "Widgets/SNullWidget.h"
 #include "Misc/MessageDialog.h"
+#include "Settings/PluginSettings.h"
 
 #define LOCTEXT_NAMESPACE "SeinARTSEditor"
+
+namespace
+{
+	/** Human-readable label for a collision response (used by the reserved-Default row). */
+	FText SeinCollisionResponseToText(ESeinCollisionResponse Response)
+	{
+		switch (Response)
+		{
+		case ESeinCollisionResponse::Ignore:  return LOCTEXT("RespIgnore",  "Ignore");
+		case ESeinCollisionResponse::Overlap: return LOCTEXT("RespOverlap", "Overlap");
+		default:                              return LOCTEXT("RespBlock",   "Block");
+		}
+	}
+}
 
 TSharedRef<IDetailCustomization> FSeinARTSCoreSettingsDetails::MakeInstance()
 {
@@ -92,6 +113,173 @@ void FSeinARTSCoreSettingsDetails::CustomizeDetails(IDetailLayoutBuilder& Detail
 			SNew(STextBlock).Text(LOCTEXT("ForceRegenBtn", "Force Regenerate All Tags"))
 		]
 	];
+
+	// --- Collision Channels table. The default UE array widget (+ at the header,
+	// element delete via a per-row dropdown) doesn't match the desired UX, so the
+	// underlying CollisionChannels array is HIDDEN and rendered as a custom table:
+	// a greyed read-only "Default" row pinned at the top (reserved — can't be
+	// edited or removed), one editable row per ADDITIONAL channel (Name / Default
+	// Response / Color) with a trash button on the right, and an Add (+) button at
+	// the bottom. The array is driven via its IPropertyHandleArray. ---
+	{
+		IDetailCategoryBuilder& CollisionCategory = DetailBuilder.EditCategory(
+			TEXT("Collision"), FText::GetEmpty(), ECategoryPriority::Default);
+
+		const TSharedRef<IPropertyHandle> ChannelsHandle =
+			DetailBuilder.GetProperty(GET_MEMBER_NAME_CHECKED(USeinARTSCoreSettings, CollisionChannels));
+		DetailBuilder.HideProperty(ChannelsHandle);  // replaced by the custom table below
+
+		const TSharedPtr<IPropertyUtilities> PropUtils = DetailBuilder.GetPropertyUtilities();
+		const TSharedPtr<IPropertyHandleArray> ChannelsArray = ChannelsHandle->AsArray();
+
+		// Column headers (bold), aligned to the row columns below.
+		CollisionCategory.AddCustomRow(LOCTEXT("ChannelHeaderFilter", "Collision Channels"))
+		.NameContent()
+		[
+			SNew(STextBlock)
+			.Text(LOCTEXT("ChannelHeaderName", "Name"))
+			.Font(IDetailLayoutBuilder::GetDetailFontBold())
+		]
+		.ValueContent()
+		.MinDesiredWidth(280.f)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center).Padding(0.f, 0.f, 8.f, 0.f)
+			[
+				SNew(STextBlock)
+				.Text(LOCTEXT("ChannelHeaderResponse", "Default Response"))
+				.Font(IDetailLayoutBuilder::GetDetailFontBold())
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(STextBlock)
+				.Text(LOCTEXT("ChannelHeaderColor", "Debug Extents Color"))
+				.Font(IDetailLayoutBuilder::GetDetailFontBold())
+			]
+		];
+
+		// Reserved "Default" row — greyed, read-only, no trash. Always first.
+		if (const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>())
+		{
+			const TArray<FSeinCollisionChannelDefinition> AllChannels = Settings->GetAllCollisionChannels();
+			if (AllChannels.Num() > 0)
+			{
+				const FSeinCollisionChannelDefinition& Reserved = AllChannels[0]; // Default is always first
+				CollisionCategory.AddCustomRow(LOCTEXT("ReservedDefaultFilter", "Default Collision Channel"))
+				.NameContent()
+				[
+					SNew(STextBlock)
+					.IsEnabled(false)
+					.Text(FText::FromName(Reserved.Name))
+					.Font(IDetailLayoutBuilder::GetDetailFont())
+					.ToolTipText(LOCTEXT("ReservedDefaultTip",
+						"Reserved framework collision channel: always present, cannot be edited or removed (like the nav Default layer / vision Normal layer). Add ADDITIONAL channels below."))
+				]
+				.ValueContent()
+				.MinDesiredWidth(280.f)
+				[
+					SNew(SHorizontalBox)
+					.IsEnabled(false)
+					+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center).Padding(0.f, 0.f, 8.f, 0.f)
+					[
+						SNew(STextBlock)
+						.Text(FText::Format(LOCTEXT("ReservedDefaultValue", "{0}  (reserved)"),
+							SeinCollisionResponseToText(Reserved.DefaultResponse)))
+						.Font(IDetailLayoutBuilder::GetDetailFont())
+					]
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+					[
+						SNew(SColorBlock).Color(Reserved.DebugColor).Size(FVector2D(18.0f, 14.0f))
+					]
+				];
+			}
+		}
+
+		// One editable row per additional channel: Name | Default Response | Color | [trash].
+		uint32 NumChannels = 0;
+		if (ChannelsArray.IsValid())
+		{
+			ChannelsArray->GetNumElements(NumChannels);
+		}
+		for (uint32 ChannelIdx = 0; ChannelIdx < NumChannels; ++ChannelIdx)
+		{
+			const TSharedRef<IPropertyHandle> Element = ChannelsArray->GetElement(static_cast<int32>(ChannelIdx));
+			const TSharedPtr<IPropertyHandle> NameHandle  = Element->GetChildHandle(TEXT("Name"));
+			const TSharedPtr<IPropertyHandle> RespHandle  = Element->GetChildHandle(TEXT("DefaultResponse"));
+			const TSharedPtr<IPropertyHandle> ColorHandle = Element->GetChildHandle(TEXT("DebugColor"));
+
+			const TSharedRef<SWidget> NameWidget  = NameHandle.IsValid()  ? NameHandle->CreatePropertyValueWidget(false)  : SNullWidget::NullWidget;
+			const TSharedRef<SWidget> RespWidget  = RespHandle.IsValid()  ? RespHandle->CreatePropertyValueWidget(false)  : SNullWidget::NullWidget;
+			const TSharedRef<SWidget> ColorWidget = ColorHandle.IsValid() ? ColorHandle->CreatePropertyValueWidget(false) : SNullWidget::NullWidget;
+
+			CollisionCategory.AddCustomRow(FText::FromString(TEXT("Collision Channel")))
+			.NameContent()
+			[
+				NameWidget
+			]
+			.ValueContent()
+			.MinDesiredWidth(280.f)
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center).Padding(0.f, 0.f, 8.f, 0.f)
+				[
+					RespWidget
+				]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 8.f, 0.f)
+				[
+					SNew(SBox).WidthOverride(48.f)
+					[
+						ColorWidget
+					]
+				]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+				[
+					PropertyCustomizationHelpers::MakeDeleteButton(
+						FSimpleDelegate::CreateLambda([ChannelsArray, ChannelIdx, PropUtils]()
+						{
+							if (ChannelsArray.IsValid())
+							{
+								ChannelsArray->DeleteItem(static_cast<int32>(ChannelIdx));
+							}
+							if (PropUtils.IsValid())
+							{
+								PropUtils->ForceRefresh();
+							}
+						}),
+						LOCTEXT("DeleteChannelTip", "Remove this collision channel"))
+				]
+			];
+		}
+
+		// Add (+) button at the bottom.
+		CollisionCategory.AddCustomRow(LOCTEXT("AddChannelFilter", "Add Collision Channel"))
+		.WholeRowContent()
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				PropertyCustomizationHelpers::MakeAddButton(
+					FSimpleDelegate::CreateLambda([ChannelsArray, PropUtils]()
+					{
+						if (ChannelsArray.IsValid())
+						{
+							ChannelsArray->AddItem();
+						}
+						if (PropUtils.IsValid())
+						{
+							PropUtils->ForceRefresh();
+						}
+					}),
+					LOCTEXT("AddChannelLabel", "Add a collision channel"))
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(6.f, 0.f, 0.f, 0.f)
+			[
+				SNew(STextBlock)
+				.Text(LOCTEXT("AddChannelText", "Add Collision Channel"))
+				.Font(IDetailLayoutBuilder::GetDetailFont())
+			]
+		];
+	}
 }
 
 #undef LOCTEXT_NAMESPACE

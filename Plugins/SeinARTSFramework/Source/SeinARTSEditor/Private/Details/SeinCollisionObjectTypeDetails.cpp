@@ -66,7 +66,7 @@ namespace SeinCollisionObjectTypeDetailsLocal
 		AddEntry(LOCTEXT("None", "None"), NAME_None);
 		if (const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>())
 		{
-			for (const FSeinCollisionChannelDefinition& Def : Settings->CollisionChannels)
+			for (const FSeinCollisionChannelDefinition& Def : Settings->GetAllCollisionChannels())
 			{
 				if (Def.Name.IsNone()) continue;
 				AddEntry(FText::FromName(Def.Name), Def.Name);

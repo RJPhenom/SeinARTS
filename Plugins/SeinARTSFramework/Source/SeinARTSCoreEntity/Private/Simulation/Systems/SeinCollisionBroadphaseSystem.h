@@ -7,9 +7,9 @@
  *          navigation component and existed only to feed penetration. This one
  *          is purely collision-driven and has NO navigation dependency.
  *
- *          Each tick: rebuild the dynamic tier from every enabled Movable
- *          collider; rebuild the static tier too, but only on ticks where the
- *          static set changed (Hash.IsStaticDirty()). A collider is any entity
+ *          Each tick: rebuild the dynamic tier from every enabled Movable or
+ *          Stationary collider; rebuild the static tier too, but only on ticks
+ *          where the static set changed (Hash.IsStaticDirty()). A collider is any entity
  *          whose FSeinExtentsComponent has bCollisionEnabled, at least one
  *          Shape, and a non-None ObjectType.
  */
@@ -22,6 +22,8 @@
 #include "Collision/SeinCollisionSpatialHash.h"
 #include "Components/SeinExtentsComponent.h"
 #include "Components/SeinExtentsHelpers.h"  // GetColliderBoundingRadius — shared with the resolver
+#include "Components/SeinIdentityComponent.h"  // (dev diagnostic only) DisplayName for the collider-gate log
+#include "Settings/PluginSettings.h"           // (dev diagnostic only) channel registry for the stale-channel check
 
 /**
  * System: Collision Broadphase Rebuild
@@ -49,6 +51,63 @@ public:
 		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, FSeinEntity& Entity)
 		{
 			const FSeinExtentsComponent* Extents = World.GetComponent<FSeinExtentsComponent>(Handle);
+
+#if !UE_BUILD_SHIPPING
+			// Mis-config warning: an entity with Extents shapes that won't actually
+			// collide — collision off, no Object Type, OR an Object Type naming a
+			// channel absent from the settings registry (every response then falls
+			// through to Ignore). All three silently phase through. Warn once per
+			// entity, against the SPAWNED runtime data — catches the stale-BP,
+			// unset-ObjectType, and renamed/removed-channel traps. Stripped in shipping.
+			if (Extents && Extents->Shapes.Num() > 0)
+			{
+				static TSet<int32> SeinLoggedColliderGate;
+				if (!SeinLoggedColliderGate.Contains(Handle.Index))
+				{
+					SeinLoggedColliderGate.Add(Handle.Index);
+
+					FString Why;
+					if (!Extents->bCollisionEnabled)
+					{
+						Why = TEXT("Collision Enabled is off");
+					}
+					else if (Extents->ObjectType.Channel.IsNone())
+					{
+						Why = TEXT("Object Type is None");
+					}
+					else
+					{
+						bool bChannelRegistered = false;
+						if (const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>())
+						{
+							for (const FSeinCollisionChannelDefinition& Ch : Settings->GetAllCollisionChannels())
+							{
+								if (Ch.Name == Extents->ObjectType.Channel) { bChannelRegistered = true; break; }
+							}
+						}
+						if (!bChannelRegistered)
+						{
+							Why = FString::Printf(TEXT("Object Type '%s' is not a registered collision channel"),
+								*Extents->ObjectType.Channel.ToString());
+						}
+					}
+
+					if (!Why.IsEmpty())
+					{
+						FString Name(TEXT("(no identity)"));
+						if (const FSeinIdentityComponent* Ident = World.GetComponent<FSeinIdentityComponent>(Handle))
+						{
+							Name = Ident->DisplayName.IsEmptyOrWhitespace()
+								? Ident->IdentityTag.ToString() : Ident->DisplayName.ToString();
+						}
+						UE_LOG(LogTemp, Warning,
+							TEXT("[SeinCollision] '%s' (entity %d) has Extents shapes but won't collide — %s. Fix on the entity's Extents > Collision section (channels live in Project Settings > Plugins > SeinARTS > Collision)."),
+							*Name, Handle.Index, *Why);
+					}
+				}
+			}
+#endif
+
 			if (!Extents || !Extents->bCollisionEnabled) return;
 			if (Extents->Shapes.Num() == 0 || Extents->ObjectType.Channel.IsNone()) return;
 
@@ -64,6 +123,9 @@ public:
 			}
 			else
 			{
+				// Movable AND Stationary live in the per-tick dynamic tier — both
+				// can change position (Stationary is unpushable, but script/ability-
+				// moved), so neither can be cached in the static tier like Static.
 				Hash.InsertDynamic(Handle, Pos, Radius);
 			}
 		});

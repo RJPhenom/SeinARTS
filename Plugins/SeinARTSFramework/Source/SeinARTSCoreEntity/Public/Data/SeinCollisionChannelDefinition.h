@@ -31,7 +31,7 @@
  *
  *  - Name            the stable identifier authored colliders reference (their
  *                    Object Type, and their per-channel response overrides).
- *                    Use project nouns: "StaticEntity", "DynamicEntity", etc.
+ *                    Use project nouns: "Default", "Pawn", "Vehicle", etc.
  *  - DefaultResponse the response every collider gives this channel UNLESS it
  *                    authors an override. UE convention: most channels default
  *                    to Block; channels like projectiles often default to

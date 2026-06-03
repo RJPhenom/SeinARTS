@@ -63,7 +63,7 @@ namespace SeinEntityVisualizerLocal
 			{
 				if (const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>())
 				{
-					for (const FSeinCollisionChannelDefinition& Def : Settings->CollisionChannels)
+					for (const FSeinCollisionChannelDefinition& Def : Settings->GetAllCollisionChannels())
 					{
 						if (Def.Name == Data.ObjectType.Channel)
 						{

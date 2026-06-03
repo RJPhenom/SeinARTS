@@ -36,7 +36,7 @@ namespace SeinCollisionResponseDetailsLocal
 	{
 		if (const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>())
 		{
-			for (const FSeinCollisionChannelDefinition& Def : Settings->CollisionChannels)
+			for (const FSeinCollisionChannelDefinition& Def : Settings->GetAllCollisionChannels())
 			{
 				if (Def.Name == Channel)
 				{
@@ -189,7 +189,7 @@ void FSeinCollisionResponseDetails::CustomizeChildren(
 	bool bAnyChannel = false;
 	if (Settings)
 	{
-		for (const FSeinCollisionChannelDefinition& Def : Settings->CollisionChannels)
+		for (const FSeinCollisionChannelDefinition& Def : Settings->GetAllCollisionChannels())
 		{
 			if (Def.Name.IsNone()) continue;
 			bAnyChannel = true;

@@ -40,26 +40,38 @@ enum class ESeinCollisionResponse : uint8
 };
 
 /**
- * Whether a collider's transform can change at runtime.
+ * Whether — and how — a collider's transform changes at runtime. Three modes
+ * mirroring Unreal's Static / Stationary / Movable, but here the meaning is
+ * about COLLISION MASS + broadphase tiering, not lighting:
  *
- *   Static  — the transform will NOT change after spawn. Treated as infinite
- *             mass (never displaced by a push) and cached in the broadphase's
- *             persistent tier, so static geometry costs nothing per tick and
- *             static↔static pairs are skipped entirely. Use for walls,
- *             buildings, fixed scenery. Destructible-but-fixed counts as Static
- *             (it's removed from the broadphase when destroyed, never moved).
- *   Movable — the transform may change (units, pushable props, doors, turrets,
- *             ability-teleported entities). Rebuilt into the broadphase each
- *             tick; finite mass; participates in mass-weighted separation.
+ *   Static     — transform NEVER changes after spawn. Infinite mass (never
+ *                displaced) AND cached in the broadphase's persistent tier, so
+ *                static geometry costs nothing per tick and Static↔Static pairs
+ *                are skipped. Walls, buildings, fixed scenery. Destructible-but-
+ *                fixed counts as Static (removed from the broadphase on death,
+ *                never moved).
+ *   Stationary — CAN move, but is NOT pushable. For bodies whose motion is owned
+ *                by script/abilities — doors, drawbridges, moving platforms,
+ *                shifting cover. Infinite mass like Static (a movable that hits
+ *                it is ejected; it is never displaced), but its position is
+ *                rebuilt into the broadphase every tick so its motion is tracked.
+ *                It never initiates a push and isn't itself constrained by Static
+ *                / other Stationary colliders — its path is the driver's job.
+ *   Movable    — transform changes via movement; finite mass (radius²);
+ *                participates in mass-weighted separation. Units, pushable props.
  *
- * This is NOT inferred from the presence of a movement component — a thing can
- * change location at runtime without one. Author it explicitly.
+ * NOT inferred from a movement component — a thing can change location without
+ * one (a scripted platform). Author it explicitly. Implementation note: the
+ * mass/initiation checks key off `== Movable` and only the broadphase-cache
+ * decision keys off `== Static`, so Stationary needs no special-casing — it
+ * falls out as "infinite mass, dynamic broadphase tier."
  */
 UENUM(BlueprintType)
 enum class ESeinCollisionMobility : uint8
 {
-	Static  UMETA(DisplayName = "Static"),
-	Movable UMETA(DisplayName = "Movable")
+	Static     UMETA(DisplayName = "Static"),
+	Stationary UMETA(DisplayName = "Stationary"),
+	Movable    UMETA(DisplayName = "Movable")
 };
 
 /**
@@ -76,7 +88,7 @@ struct SEINARTSCOREENTITY_API FSeinCollisionObjectType
 	GENERATED_BODY()
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Collision")
-	FName Channel = NAME_None;
+	FName Channel = FName(TEXT("Default"));
 };
 
 FORCEINLINE uint32 GetTypeHash(const FSeinCollisionObjectType& ObjectType)

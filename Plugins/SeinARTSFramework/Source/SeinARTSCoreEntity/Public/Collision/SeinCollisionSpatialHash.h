@@ -11,8 +11,8 @@
  *                             set changes (a Static collider spawned/died →
  *                             MarkStaticDirty). Walls/buildings cost nothing per
  *                             tick.
- *            - Dynamic tier : rebuilt every tick from Movable colliders (their
- *                             positions change).
+ *            - Dynamic tier : rebuilt every tick from Movable AND Stationary
+ *                             colliders (their positions can change).
  *          A query unions both tiers. The collision resolver iterates only
  *          Movable colliders as "self" and finds neighbours (Static + Movable)
  *          via QueryRadius, so static geometry is never iterated as a mover and

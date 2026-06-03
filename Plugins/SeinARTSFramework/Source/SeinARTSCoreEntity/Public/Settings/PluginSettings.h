@@ -453,12 +453,26 @@ public:
 	 * Colliders (FSeinExtentsComponent's collision section) reference channels by
 	 * Name: renaming a channel is safe; reordering is cosmetic for authored data
 	 * (the runtime rebuilds its index layout from this list each session, identically
-	 * on every peer). Ships two channels — StaticEntity + DynamicEntity — that
-	 * designers add to or rename per game.
+	 * on every peer). Holds ADDITIONAL channels only — the reserved "Default"
+	 * channel lives outside this array (always present, can't be removed; like the
+	 * nav "Default" layer / vision "Normal"). Enumerate via GetAllCollisionChannels().
+	 * Object Type is a separate axis from Mobility (what a collider IS vs how it moves).
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Collision",
 		meta = (TitleProperty = "Name"))
 	TArray<FSeinCollisionChannelDefinition> CollisionChannels;
+
+	/** Framework-reserved collision channel — always present and NOT stored in the
+	 *  CollisionChannels array (so it can't be removed), like the nav "Default"
+	 *  layer / vision "Normal" layer. Block-responds by default. */
+	static FName GetDefaultCollisionChannelName() { return FName(TEXT("Default")); }
+
+	/** All collision channels: the reserved "Default" first, then the designer-
+	 *  authored CollisionChannels (unnamed / duplicate-"Default" entries skipped).
+	 *  Use everywhere channels are enumerated (resolver defaults, response matrix,
+	 *  Object Type dropdown, debug tint) so "Default" is always available even when
+	 *  the editable array is empty. */
+	TArray<FSeinCollisionChannelDefinition> GetAllCollisionChannels() const;
 
 	// Network / Lockstep Settings (DESIGN §TBD — Phase 0 spike)
 	// ====================================================================================================

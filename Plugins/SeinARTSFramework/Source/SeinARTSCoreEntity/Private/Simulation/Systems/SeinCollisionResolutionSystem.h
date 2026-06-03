@@ -226,7 +226,7 @@ private:
 		Out.Reset();
 		const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
 		if (!Settings) return;
-		for (const FSeinCollisionChannelDefinition& Channel : Settings->CollisionChannels)
+		for (const FSeinCollisionChannelDefinition& Channel : Settings->GetAllCollisionChannels())
 		{
 			if (!Channel.Name.IsNone())
 			{
@@ -252,8 +252,9 @@ private:
 		{
 			const FSeinExtentsComponent* SelfExt = World.GetComponent<FSeinExtentsComponent>(SelfHandle);
 			if (!IsCollider(SelfExt)) return;
-			// Statics never move — they're resolved only as the queried neighbour
-			// of a movable, so skip them as "self".
+			// Non-movable colliders (Static + Stationary) never initiate a push —
+			// they're only resolved as the queried neighbour of a movable, so skip
+			// them as "self".
 			if (SelfExt->Mobility != ESeinCollisionMobility::Movable) return;
 
 			const FFixedPoint SelfRadius = SeinExtentsHelpers::GetColliderBoundingRadius(*SelfExt);
@@ -274,11 +275,11 @@ private:
 				const FSeinExtentsComponent* OtherExt = World.GetComponent<FSeinExtentsComponent>(OtherHandle);
 				if (!IsCollider(OtherExt)) continue;
 
-				const bool bOtherStatic = (OtherExt->Mobility != ESeinCollisionMobility::Movable);
+				const bool bOtherImmovable = (OtherExt->Mobility != ESeinCollisionMobility::Movable);
 
 				// Process each movable-movable pair once (from the lower index).
-				// Static neighbours are only ever seen here, so never skip them.
-				if (!bOtherStatic && OtherHandle.Index <= SelfHandle.Index) continue;
+				// Immovable (Static/Stationary) neighbours are only ever seen here, so never skip them.
+				if (!bOtherImmovable && OtherHandle.Index <= SelfHandle.Index) continue;
 
 				// Effective response = weaker of the two sides (Block needs both).
 				const ESeinCollisionResponse DefSelfToOther = ChannelDefaults.FindRef(OtherExt->ObjectType.Channel);
@@ -299,11 +300,11 @@ private:
 				if (!ComputeDeepestContact(*SelfExt, SelfEntity.Transform, *OtherExt, OtherEntity->Transform, Normal, Depth)) continue;
 				if (Depth <= FFixedPoint::Zero) continue;
 
-				// Mass-weighted split. Static other = infinite mass → the movable
-				// self absorbs the entire separation (it can't push a wall).
+				// Mass-weighted split. Immovable other (Static/Stationary) = infinite mass → the movable
+				// self absorbs the entire separation (can't shove a wall or stationary platform).
 				FFixedPoint SelfShare;
 				FFixedPoint OtherShare;
-				if (bOtherStatic)
+				if (bOtherImmovable)
 				{
 					SelfShare = FFixedPoint::One;
 					OtherShare = FFixedPoint::Zero;
@@ -324,7 +325,7 @@ private:
 				SelfEntity.Transform.SetLocation(SelfNew);
 
 				// Other moves along +Normal, unless it's an immovable static.
-				if (!bOtherStatic)
+				if (!bOtherImmovable)
 				{
 					const FFixedVector OtherPosNow = OtherEntity->Transform.GetLocation();
 					FFixedVector OtherNew = OtherPosNow + Normal * (Depth * OtherShare);
@@ -379,8 +380,8 @@ private:
 				const FSeinExtentsComponent* OtherExt = World.GetComponent<FSeinExtentsComponent>(OtherHandle);
 				if (!IsCollider(OtherExt)) continue;
 
-				const bool bOtherStatic = (OtherExt->Mobility != ESeinCollisionMobility::Movable);
-				if (!bOtherStatic && OtherHandle.Index <= SelfHandle.Index) continue;
+				const bool bOtherImmovable = (OtherExt->Mobility != ESeinCollisionMobility::Movable);
+				if (!bOtherImmovable && OtherHandle.Index <= SelfHandle.Index) continue;
 
 				const ESeinCollisionResponse DefSelfToOther = ChannelDefaults.FindRef(OtherExt->ObjectType.Channel);
 				const ESeinCollisionResponse DefOtherToSelf = ChannelDefaults.FindRef(SelfExt->ObjectType.Channel);
