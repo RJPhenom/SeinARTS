@@ -64,6 +64,12 @@ struct FSeinMovementContext
 	USeinNavigation* Nav;
 	USeinWorldSubsystem* World;     // gives access to spatial hash + components
 	FSeinEntityHandle SelfHandle;   // self-exclusion in spatial queries
+
+	/** True when the move's final destination (Path's last waypoint) is an
+	 *  AUTHORITATIVE position — a cover slot that overrules the coarse nav bake.
+	 *  The mover may step onto / occupy it even if its cell is bake-blocked.
+	 *  Set by USeinMoveToAction from the AuthoritativeDestinationResolver. */
+	bool bAuthoritativeDestination = false;
 };
 
 /**
@@ -476,7 +482,8 @@ protected:
 	FFixedVector ResolveNavCollision(
 		const FFixedVector& OldPos,
 		const FFixedVector& NewPos,
-		USeinNavigation* Nav) const;
+		USeinNavigation* Nav,
+		const FFixedVector* AuthoritativeDest = nullptr) const;
 
 	/** Footprint-aware passability check at a candidate position. True iff
 	 *  the candidate's center AND every cached ring sample land on passable

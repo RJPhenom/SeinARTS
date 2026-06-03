@@ -154,6 +154,22 @@ extension can use the Squad extension but treats it as optional at the plugin le
    Designers can author custom components: Right-click → Component creates a `SeinDeterministic`-
    marked `UUserDefinedStruct` that the picker accepts as a valid `ComponentData` entry.
 
+6. **Destination preview === the command's first path request. Sacred — treated as absolute.** The
+   destination/formation preview (formation decals, cover-snapped slots, nearest-reachable fallbacks)
+   MUST be identical to the destination(s) a movement command would submit on its **first path
+   request** for the same cursor/click inputs. It is a pure dry-run of the command's destination
+   computation through the **same shared resolver** the commit runs (`SeinComputeFormationPreview` →
+   `ResolveFormationLayout` → `PostProcessPositions`). **A destination is an INPUT, not an opinion nav
+   may relocate.** No stage silently moves a destination between the preview and that first request;
+   reachability resolution (nearest-reachable projection of a genuinely-unreachable raw click;
+   cover-slot authority) happens ONCE, in that shared path — never downstream in per-member pathing
+   (A* partial best-H, `PushWaypointsAwayFromWalls`) where the preview can't see it. *Scope:* binds
+   the **initial** submission only — once a unit is moving, interval repaths may legitimately
+   re-resolve a destination the changing world made unreachable; that is not a violation. **Cover
+   slots are authoritative**: a designer-authored slot overrules the coarse nav bake (a blocked/"red"
+   cell under a slot is a low-resolution false-negative, not a reason to move the slot); the unit is
+   delivered to the exact slot and the preview shows the exact slot.
+
 ---
 
 ## Code conventions (all plugins)

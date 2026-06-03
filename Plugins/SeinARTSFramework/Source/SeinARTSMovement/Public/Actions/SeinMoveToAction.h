@@ -81,10 +81,12 @@ private:
 	int32 CurrentWaypointIndex = 0;
 	bool bPathResolved = false;
 
-	/** Position-keeping: set once this action has claimed its Destination as the
-	 *  owner's DesiredPosition ("home"). See the claim/supersede block in
-	 *  TickAction — the newest move for an entity always wins. */
-	bool bHomeClaimed = false;
+	/** True when this move's Destination is an AUTHORITATIVE position (a cover slot)
+	 *  that overrules the coarse nav bake. Queried ONCE at first-tick setup from
+	 *  USeinWorldSubsystem::AuthoritativeDestinationResolver and carried on the
+	 *  movement tick context so ResolveNavCollision lets the unit stand on it even
+	 *  when its cell is bake-blocked. See root CLAUDE.md invariant #6. */
+	bool bAuthoritativeDestination = false;
 
 	/** Agent's position at the moment the current `Path` was committed
 	 *  (initial FindPath or a successful repath). Used by OffPathOnly
@@ -131,6 +133,36 @@ private:
 	bool bInEscapeMode = false;
 	FFixedPoint EscapeTimer = FFixedPoint::Zero;
 	FFixedVector EscapeStartPos = FFixedVector::ZeroVector;
+
+	/** Near-goal stall settle (failsafe). A unit can get pinned a footprint-width
+	 *  short of a final waypoint it can never physically occupy — a nav-reachable
+	 *  cell whose body footprint is blocked by an adjacent wall (the nav/collision
+	 *  seam). The movement's own arrival can't fire there: it's never within
+	 *  AcceptanceRadius, and the overshoot graceful-stop needs `heading AWAY` while
+	 *  a pinned unit heads straight INTO the obstacle. So it seeks that point
+	 *  forever — and for face-velocity movements (infantry weld facing to seek
+	 *  direction) "seek forever" renders as "spin in place forever."
+	 *
+	 *  This is the missing exit: once the agent is within `StallVicinityRadiusSq`
+	 *  of the final waypoint AND makes no further radial progress for
+	 *  `StallSettleDuration` (see TickAction), the move arrives — this spot is as
+	 *  close as the body can get. Class-agnostic (lives on the action, not a
+	 *  movement subclass, so it protects every mode) and complements the
+	 *  escape-nudge fallback above: escape handles stuck-at-START (can't plan from
+	 *  the start cell); this handles stuck-at-GOAL (plans + approaches fine, but
+	 *  can't physically finish).
+	 *
+	 *  `StallVicinityRadiusSq` is resolved once at first-tick setup from acceptance
+	 *  + footprint. `BestDistToFinalSq` is the closest planar distance² to the
+	 *  final waypoint reached within the current near-goal approach — a monotonic
+	 *  high-water mark, so jitter/orbit around the closest reachable point never
+	 *  resets the stall clock; only genuine fresh closing does. It re-arms (resets
+	 *  to the live distance) whenever the agent is OUTSIDE the vicinity, so a
+	 *  detour / repath / escape that moves it away measures a clean fresh approach.
+	 *  `TimeStalledNearGoal` accumulates while near + not improving. */
+	FFixedPoint StallVicinityRadiusSq = FFixedPoint::Zero;
+	FFixedPoint BestDistToFinalSq = FFixedPoint::FromInt(1000000);
+	FFixedPoint TimeStalledNearGoal = FFixedPoint::Zero;
 
 	/** Instantiated on first tick from FSeinMovementComponent::MovementClass
 	 *  (or USeinBasicMovement if the soft class is null/unresolved). Owns the

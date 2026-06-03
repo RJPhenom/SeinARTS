@@ -250,6 +250,21 @@ DECLARE_DELEGATE_RetVal_TwoParams(bool, FSeinNavProjectResolver,
 	const FFixedVector& /*InWorld*/, FFixedVector& /*OutPassable*/);
 
 /**
+ * Delegate the sim uses to ask whether a world position is an AUTHORITATIVE
+ * destination — one that OVERRULES the coarse nav bake (a cover slot). Registered
+ * by USeinCoverSubsystem (SeinARTSCover) at world begin-play; unbound when the
+ * cover extension is absent (→ no authoritative destinations, default behavior).
+ *
+ * When true, the path/movement layer delivers the unit to the EXACT position even
+ * if its cell is bake-blocked: a cover slot is a valid standing spot, and a
+ * blocked ("red") cell under it is a low-resolution false-negative, not a reason
+ * to relocate the destination (root CLAUDE.md invariant #6 — the destination is an
+ * INPUT, not an opinion nav may move).
+ */
+DECLARE_DELEGATE_RetVal_OneParam(bool, FSeinAuthoritativeDestinationResolver,
+	const FFixedVector& /*WorldPos*/);
+
+/**
  * Delegate sim uses to query ground height at a world position. Registered by
  * USeinNavigationSubsystem (SeinARTSNavigation) at OnWorldBeginPlay.
  *
@@ -497,6 +512,12 @@ public:
 	 *  terrain. Registered by USeinNavigationSubsystem at OnWorldBeginPlay.
 	 *  If unbound, projection is a no-op (slot stays where it was). */
 	FSeinNavProjectResolver NavProjectResolver;
+
+	/** Cross-module resolver: "is this world position an AUTHORITATIVE destination
+	 *  (a cover slot) that overrules the coarse nav bake?" Bound by
+	 *  USeinCoverSubsystem. Unbound → no authoritative destinations (default: nav
+	 *  decides reachability; partial paths stop at the nearest reachable cell). */
+	FSeinAuthoritativeDestinationResolver AuthoritativeDestinationResolver;
 
 	/** Cross-module ground-height resolver — used by penetration resolution
 	 *  to gate pushes against step-height violations (wall-top cells

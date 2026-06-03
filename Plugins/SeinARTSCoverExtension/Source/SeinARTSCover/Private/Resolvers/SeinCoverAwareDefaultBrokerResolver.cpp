@@ -200,6 +200,14 @@ void USeinCoverAwareDefaultBrokerResolver::PostProcessPositions(
 
 	if (NearbySlots.Num() == 0) return;
 
+	// NOTE: cover slots are deliberately NOT nav-projected. They are authoritative
+	// destinations that OVERRULE the coarse nav bake — a "red"/blocked cell under a
+	// slot is a low-resolution false-negative, not a reason to relocate the slot.
+	// (An earlier version projected here; it fed slots into the 30-cell ring-scan
+	// and sent destinations dozens of cells away. See root CLAUDE.md invariant #6.)
+	// Reachability is handled by the authoritative-destination path: the unit is
+	// delivered to the exact slot, and the preview shows the exact slot.
+
 	// Tag check before allocation so we can see who's eligible.
 	for (int32 i = 0; i < Members.Num(); ++i)
 	{

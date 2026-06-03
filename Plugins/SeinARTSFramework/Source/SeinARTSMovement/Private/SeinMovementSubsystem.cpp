@@ -5,35 +5,19 @@
  */
 
 #include "SeinMovementSubsystem.h"
-#include "Simulation/SeinPositionKeepSystem.h"
-#include "Simulation/SeinWorldSubsystem.h"
-#include "Engine/World.h"
 
 void USeinMovementSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 {
 	Super::OnWorldBeginPlay(InWorld);
 
-	USeinWorldSubsystem* Sim = InWorld.GetSubsystem<USeinWorldSubsystem>();
-	if (!Sim) { return; }
-
-	PositionKeepSystem = new FSeinPositionKeepSystem();
-	Sim->RegisterSystem(PositionKeepSystem);
+	// No movement sim systems are registered at present. The passive re-seek
+	// (FSeinPositionKeepSystem) was stripped 2026-06-03 pending a ground-up
+	// redesign after local avoidance lands. Future movement systems (avoidance,
+	// re-seek v2) register here against the USeinWorldSubsystem tick loop,
+	// mirroring USeinSquadSubsystem's create + RegisterSystem pattern.
 }
 
 void USeinMovementSubsystem::Deinitialize()
 {
-	if (PositionKeepSystem)
-	{
-		if (UWorld* World = GetWorld())
-		{
-			if (USeinWorldSubsystem* Sim = World->GetSubsystem<USeinWorldSubsystem>())
-			{
-				Sim->UnregisterSystem(PositionKeepSystem);
-			}
-		}
-		delete PositionKeepSystem;
-		PositionKeepSystem = nullptr;
-	}
-
 	Super::Deinitialize();
 }

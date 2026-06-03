@@ -100,6 +100,20 @@ void USeinCoverSubsystem::HookSimWorldEvents()
 	DestroyedHandle = WorldSub->OnEntityDestroyed.AddUObject(
 		this, &USeinCoverSubsystem::HandleEntityDestroyed);
 
+	// Authoritative-destination resolver: tell the sim's path/movement layer that a
+	// cover slot is a valid destination that OVERRULES the coarse nav bake (root
+	// CLAUDE.md invariant #6 — the destination is an INPUT, not an opinion nav may
+	// relocate). No FoW gating (invalid observer) — a cover slot is a valid standing
+	// spot regardless of who can see it. Tiny radius = "is this exact position a
+	// registered slot?" (the cover snap dispatches the exact slot world position).
+	WorldSub->AuthoritativeDestinationResolver.BindWeakLambda(this,
+		[this](const FFixedVector& WorldPos) -> bool
+		{
+			if (!CoverSystem) return false;
+			const FFixedPoint Eps = FFixedPoint::FromInt(10); // 10cm — exact-ish match
+			return CoverSystem->FindNearbySlots(WorldPos, Eps, FSeinPlayerID()).Num() > 0;
+		});
+
 	UE_LOG(LogSeinCoverSubsystem, Log,
 		TEXT("HookSimWorldEvents: subscribed to OnEntitySpawned + OnEntityDestroyed"));
 }

@@ -147,21 +147,6 @@ struct SEINARTSCOREENTITY_API FSeinMovementComponent : public FSeinComponent
 	FFixedPoint ReverseEngageDistanceThreshold = FFixedPoint::FromInt(500);
 
 	// =========================================================================
-	// Position keeping (passive re-seek) — opt-in, infantry-oriented
-	// =========================================================================
-
-	/** When true, this unit passively holds its position: if it goes idle and
-	 *  gets shoved off its last move target (`DesiredPosition`) — a formation slot,
-	 *  cover slot, or a plain move point — it re-paths back on its own. Intended
-	 *  for infantry (formation / cover keeping); leave OFF for vehicles, which
-	 *  shouldn't auto-return when bumped. Off by default — designers opt in per
-	 *  unit type (same convention as `bCanReverse`). When false the position-keep
-	 *  system skips this entity entirely: no `DesiredPosition` claim and no
-	 *  re-seek, so it costs nothing. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement")
-	bool bMaintainPosition = false;
-
-	// =========================================================================
 	// Runtime state (BlueprintReadWrite, not authored)
 	// =========================================================================
 
@@ -215,19 +200,6 @@ struct SEINARTSCOREENTITY_API FSeinMovementComponent : public FSeinComponent
 	 *  SmoothedPitch — see that field's comment. */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Movement")
 	FFixedPoint SmoothedRoll = FFixedPoint::Zero;
-
-	/** Persistent "home" the unit passively returns to when it's idle and gets
-	 *  displaced (its formation slot / cover slot / last move target). Set when a
-	 *  move starts; the position-keeping pass re-seeks it after penetration or
-	 *  collision bumps the unit off. Also the hook for AI "hold this cover" — set
-	 *  it to a slot and the unit settles there and stays. */
-	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Movement")
-	FFixedVector DesiredPosition = FFixedVector::ZeroVector;
-
-	/** True once DesiredPosition is meaningful (a move has established a home).
-	 *  The position-keeper ignores units that have never been ordered anywhere. */
-	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Movement")
-	bool bHasDesiredPosition = false;
 };
 
 FORCEINLINE uint32 GetTypeHash(const FSeinMovementComponent& C)
@@ -241,15 +213,12 @@ FORCEINLINE uint32 GetTypeHash(const FSeinMovementComponent& C)
 	Hash = HashCombine(Hash, GetTypeHash(C.ReverseTopSpeed));
 	Hash = HashCombine(Hash, GetTypeHash(C.ReverseEngageDotThreshold));
 	Hash = HashCombine(Hash, GetTypeHash(C.ReverseEngageDistanceThreshold));
-	Hash = HashCombine(Hash, GetTypeHash(C.bMaintainPosition));
 	Hash = HashCombine(Hash, GetTypeHash(C.TargetLocation));
 	Hash = HashCombine(Hash, GetTypeHash(C.bHasTarget));
 	Hash = HashCombine(Hash, GetTypeHash(C.Velocity));
 	Hash = HashCombine(Hash, GetTypeHash(C.bArrivalImminent));
 	Hash = HashCombine(Hash, GetTypeHash(C.SmoothedPitch));
 	Hash = HashCombine(Hash, GetTypeHash(C.SmoothedRoll));
-	Hash = HashCombine(Hash, GetTypeHash(C.DesiredPosition));
-	Hash = HashCombine(Hash, GetTypeHash(C.bHasDesiredPosition));
 	// MovementClassData is hashed by the framework attribute resolver's
 	// reflection walk; skipped here (FInstancedStruct doesn't expose a
 	// stable GetTypeHash for arbitrary inner structs).

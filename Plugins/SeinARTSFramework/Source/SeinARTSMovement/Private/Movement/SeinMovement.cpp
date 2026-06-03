@@ -533,9 +533,27 @@ bool USeinMovement::IsFootprintPassable(const FFixedVector& Pos, USeinNavigation
 FFixedVector USeinMovement::ResolveNavCollision(
 	const FFixedVector& OldPos,
 	const FFixedVector& NewPos,
-	USeinNavigation* Nav) const
+	USeinNavigation* Nav,
+	const FFixedVector* AuthoritativeDest) const
 {
 	if (!Nav) return NewPos;
+
+	// Authoritative-destination overrule: when the candidate sits within reach of
+	// an authoritative destination (a cover slot), let the unit move there even
+	// though the cell is bake-blocked. The slot is a valid standing spot; the
+	// blocked ("red") cell under it is a coarse-resolution false-negative, not a
+	// wall (root CLAUDE.md #6). Scoped tightly to the slot's immediate vicinity so
+	// it never lets the body clip walls anywhere else along the path.
+	if (AuthoritativeDest)
+	{
+		FFixedVector ToDest = NewPos - *AuthoritativeDest;
+		ToDest.Z = FFixedPoint::Zero;
+		const FFixedPoint ExemptRadius = CachedCollisionRadius + FFixedPoint::FromInt(50);
+		if (ToDest.SizeSquared() <= ExemptRadius * ExemptRadius)
+		{
+			return NewPos;
+		}
+	}
 
 	// Combined check: footprint passability AND step-height gate. The step-
 	// height gate prevents units from stepping onto passable cells whose
@@ -808,6 +826,15 @@ ESeinPathResult USeinMovement::PlanPath(const FSeinPlanPathContext& Ctx, FSeinPa
 	// corners because A* planned for the (smaller) NavComp fallback
 	// radius while the runtime body was the (larger) Extents radius.
 	Req.AgentFootprintRadius = ResolveCollisionRadius(Ctx.World, Ctx.SelfHandle, Ctx.NavData);
+
+	// Authoritative destination — ask the cover (or any) extension whether End is a
+	// position that OVERRULES the coarse nav bake (a cover slot). When true, the
+	// planner honors End as the exact final waypoint even on a partial path and
+	// skips the wall-push on it (root CLAUDE.md #6). Unbound (cover absent / no-nav
+	// games) → false, i.e. the default nearest-reachable behavior.
+	Req.bAuthoritativeDestination = Ctx.World
+		&& Ctx.World->AuthoritativeDestinationResolver.IsBound()
+		&& Ctx.World->AuthoritativeDestinationResolver.Execute(Ctx.Destination);
 
 	return Ctx.NavSub->RequestPath(Req, OutPath);
 }

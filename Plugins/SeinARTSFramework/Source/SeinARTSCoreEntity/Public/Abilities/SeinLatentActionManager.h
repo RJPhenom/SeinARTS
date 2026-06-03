@@ -45,8 +45,8 @@ public:
 	int32 GetActiveActionCount() const;
 
 	/** True if the entity has any active (not completed/cancelled) latent action.
-	 *  The position-keeper uses this to tell "idle" from "executing an order" so it
-	 *  never re-seeks a unit that's already moving. */
+	 *  Callers use this to tell "idle" from "executing an order" — e.g. gating a
+	 *  system-initiated order so it doesn't stack on a unit already moving. */
 	bool HasActiveActionForEntity(FSeinEntityHandle Handle) const;
 
 private:

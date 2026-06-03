@@ -102,6 +102,16 @@ struct SEINARTSNAVIGATION_API FSeinPathRequest
 	 *  interact) zero this field on their move data so the push is a no-op. */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Navigation|Path")
 	int32 AgentWallPaddingCells = 0;
+
+	/** When true, `End` is an AUTHORITATIVE destination (e.g. a cover slot) that
+	 *  OVERRULES the coarse nav bake. The planner honors `End` as the exact final
+	 *  waypoint even on a partial path (when a reachable cell is adjacent to it),
+	 *  and skips the wall-push on that final waypoint; the mover is allowed to
+	 *  stand on it even if its cell is bake-blocked. Default false — nav decides
+	 *  reachability and a partial path stops at the nearest reachable cell. The
+	 *  destination is an INPUT, not an opinion nav may relocate (root CLAUDE.md #6). */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Navigation|Path")
+	bool bAuthoritativeDestination = false;
 };
 
 /** Kind of motion a path segment represents. Growing the enum is additive;

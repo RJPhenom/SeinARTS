@@ -149,8 +149,13 @@ bool USeinInfantryMovement::Tick(const FSeinMovementContext& Ctx)
 	}
 
 	// Hard nav-collision resolve before Z-snap so axis-slide chooses the right
-	// XY first, then Z reflects the actual cell we end up at.
-	NewPos = ResolveNavCollision(PrePos, NewPos, Nav);
+	// XY first, then Z reflects the actual cell we end up at. When the move's final
+	// waypoint is an authoritative destination (cover slot), pass it so the unit can
+	// step onto it even though its cell is bake-blocked — the slot overrules the
+	// coarse bake (root CLAUDE.md #6).
+	const FFixedVector AuthDest = (N > 0) ? Path.Waypoints[N - 1] : FFixedVector::ZeroVector;
+	NewPos = ResolveNavCollision(PrePos, NewPos, Nav,
+		Ctx.bAuthoritativeDestination ? &AuthDest : nullptr);
 
 	// Z-snap to nav ground + Altitude offset (default 0 = ground; non-zero =
 	// jump/vault arc).

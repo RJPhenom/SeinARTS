@@ -107,11 +107,15 @@ void USeinMoveToAction::Initialize(const FFixedVector& InDestination)
 	AcceptanceRadiusSq = FFixedPoint::Zero;
 	CurrentWaypointIndex = 0;
 	bPathResolved = false;
+	bAuthoritativeDestination = false;
 	TimeSinceLastRepath = FFixedPoint::Zero;
 	ConsecutiveRepathFailures = 0;
 	bInEscapeMode = false;
 	EscapeTimer = FFixedPoint::Zero;
 	EscapeStartPos = FFixedVector::ZeroVector;
+	StallVicinityRadiusSq = FFixedPoint::Zero;
+	BestDistToFinalSq = FFixedPoint::FromInt(1000000);
+	TimeStalledNearGoal = FFixedPoint::Zero;
 	Path.Clear();
 	Movement = nullptr;
 }
@@ -140,31 +144,6 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		return true;
 	}
 	const FSeinNavigationComponent* NavComp = World.GetComponent<FSeinNavigationComponent>(OwnerEntity);
-
-	// Position-keeping home claim + supersede. On the first tick this action
-	// records its Destination as the unit's DesiredPosition ("home"). A newer move
-	// — a fresh player order OR a keeper re-seek — overwrites DesiredPosition with
-	// its OWN Destination; THIS action then detects the mismatch and bows out. Net
-	// effect: the newest move for an entity always wins, with no tug-of-war, and
-	// the rule is identical for player orders and the passive re-seek.
-	//
-	// Gated on bMaintainPosition (opt-in, infantry): vehicles never claim a home,
-	// so there's zero DesiredPosition churn and no supersede for them — behaviour
-	// identical to before the position-keeping feature.
-	if (MoveComp->bMaintainPosition)
-	{
-		if (!bHomeClaimed)
-		{
-			MoveComp->DesiredPosition = Destination;
-			MoveComp->bHasDesiredPosition = true;
-			bHomeClaimed = true;
-		}
-		else if (!(MoveComp->DesiredPosition == Destination))
-		{
-			Cancel();   // fires OnCancel → observer Cancelled + cleanup; superseded, not arrived.
-			return true;
-		}
-	}
 
 	// Mark "actively driven" each tick. Idempotent set rather than first-tick-
 	// only because cheap and survives reorders to TickAction's early structure.
@@ -326,6 +305,28 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 			? NavComp->AcceptanceRadius
 			: FFixedPoint::FromInt(50);
 		AcceptanceRadiusSq = Acceptance * Acceptance;
+
+		// Near-goal stall-settle vicinity (see StallVicinityRadiusSq in the
+		// header). Sized to absorb footprint-pinning: a body of radius R held off
+		// a wall-embedded goal can never get its center closer than ~R, so the
+		// band must reach past the acceptance ring by a couple of footprints to
+		// recognise "this is as close as the body fits." Uses the SAME footprint
+		// cascade as runtime collision + path planning (Extents → NavComp → 0).
+		// Floored at 2×Acceptance so zero-footprint (intangible) units still get a
+		// meaningful band — harmless there since a point body never pins.
+		const FFixedPoint StallFootprint =
+			USeinMovement::ResolveCollisionRadius(&World, OwnerEntity, NavComp);
+		FFixedPoint StallVicinityRadius = Acceptance + StallFootprint * FFixedPoint::Two;
+		const FFixedPoint MinStallVicinity = Acceptance * FFixedPoint::Two;
+		if (StallVicinityRadius < MinStallVicinity) StallVicinityRadius = MinStallVicinity;
+		StallVicinityRadiusSq = StallVicinityRadius * StallVicinityRadius;
+
+		// Authoritative destination: is this move's target a position that overrules
+		// the coarse nav bake (a cover slot)? Queried ONCE here (not per-tick) and
+		// carried on the movement tick context so ResolveNavCollision lets the unit
+		// stand on it. Unbound (cover absent) → false. See root CLAUDE.md #6.
+		bAuthoritativeDestination = World.AuthoritativeDestinationResolver.IsBound()
+			&& World.AuthoritativeDestinationResolver.Execute(Destination);
 
 		FSeinMovementContext BeginCtx{
 			*Entity,
@@ -749,7 +750,10 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		&World,
 		OwnerEntity
 	};
-	const bool bReachedEnd = Movement->Tick(TickCtx);
+	TickCtx.bAuthoritativeDestination = bAuthoritativeDestination;
+	// Non-const: the near-goal stall-settle below can promote this to true to
+	// force arrival when the unit is pinned short of an unreachable goal.
+	bool bReachedEnd = Movement->Tick(TickCtx);
 
 	// Under-reports if the movement consumed multiple waypoints in one tick
 	// (only the latest advance fires the notify). Acceptable for MVP; if
@@ -778,6 +782,67 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 	else
 	{
 		MoveComp->bArrivalImminent = false;
+	}
+
+	// ----------------------------------------------------------------------
+	// Near-goal stall settle. See StallVicinityRadiusSq in the header. A unit
+	// pinned a footprint short of a final waypoint it can't physically occupy
+	// (nav-reachable cell, collision-blocked body) satisfies neither the
+	// movement's within-acceptance nor its overshoot arrival, so it would seek
+	// — and, for face-velocity movements, SPIN — that point forever. Convert
+	// "near the goal and unable to get any closer for a while" into arrival.
+	// Skipped while escaping (that path owns Path and aims at a nudge cell, not
+	// the goal) and once the movement already reported arrival this tick.
+	// ----------------------------------------------------------------------
+	if (!bReachedEnd && !bInEscapeMode && Path.Waypoints.Num() > 0
+		&& StallVicinityRadiusSq > FFixedPoint::Zero)
+	{
+		const FFixedVector AgentPos = Entity->Transform.GetLocation();
+		FFixedVector ToFinal = Path.Waypoints.Last() - AgentPos;
+		ToFinal.Z = FFixedPoint::Zero;
+		const FFixedPoint DistFinalSq = ToFinal.SizeSquared();
+
+		if (DistFinalSq > StallVicinityRadiusSq)
+		{
+			// Outside the near-goal band — re-arm the high-water mark to here so a
+			// fresh approach (after a detour / repath / escape that moved us away)
+			// measures progress from this point, not a stale earlier best.
+			BestDistToFinalSq = DistFinalSq;
+			TimeStalledNearGoal = FFixedPoint::Zero;
+		}
+		else
+		{
+			// Within the band. BestDistToFinalSq only DECREASES here, so jitter or
+			// orbit around the closest reachable point never resets the clock —
+			// only genuine fresh closing does. ProgressEpsilon keeps fixed-point
+			// noise from registering as progress.
+			const FFixedPoint ProgressEpsilonSq = FFixedPoint::FromInt(4); // ~(2cm)²
+			if (DistFinalSq + ProgressEpsilonSq < BestDistToFinalSq)
+			{
+				BestDistToFinalSq = DistFinalSq;
+				TimeStalledNearGoal = FFixedPoint::Zero;
+			}
+			else
+			{
+				TimeStalledNearGoal = TimeStalledNearGoal + DeltaTime;
+				// 0.75s — long enough that legitimate near-goal maneuvering (rounding
+				// a neighbour, a brief brake) keeps closing and resets the clock;
+				// short enough that a true pin stops spinning promptly.
+				const FFixedPoint StallSettleDuration =
+					FFixedPoint::FromInt(3) / FFixedPoint::FromInt(4);
+				if (TimeStalledNearGoal >= StallSettleDuration)
+				{
+					UE_LOG(LogSeinMove, Log,
+						TEXT("MoveAction near-goal settle: pinned %.1fcm from final for "
+						     "%.2fs — arriving (entity %s)"),
+						SeinMath::Sqrt(DistFinalSq).ToFloat(),
+						TimeStalledNearGoal.ToFloat(),
+						*OwnerEntity.ToString());
+					MoveComp->Velocity = FFixedVector::ZeroVector;
+					bReachedEnd = true;
+				}
+			}
+		}
 	}
 
 	if (bReachedEnd)

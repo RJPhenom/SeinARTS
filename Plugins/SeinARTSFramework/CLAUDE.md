@@ -89,7 +89,7 @@ phases and ordered by priority within a phase:
 Built-in systems in CoreEntity: AbilityTick, CommandBroker, CollisionBroadphase (PreTick),
 CollisionResolution (PostTick), Cooldown, EffectTick, Lifespan, Production, StateHash. Other
 modules register their own systems into the loop (e.g. `SeinNavBlockerStampSystem` from Nav;
-`FSeinPositionKeepSystem` from Movement; `FSeinSquadSystem` from the Squad extension).
+`FSeinSquadSystem` from the Squad extension).
 
 **Collision (extent-vs-extent)** is a deterministic layer **independent of navigation** — it never
 consults `bBlocksNav` / the nav grid, and nav never consults it. Authored on `FSeinExtentsComponent`'s
@@ -204,15 +204,14 @@ exposes AnimBP-shaped movement state. Selection is per unit via `FSeinMovementCo
 **`FSoftClassPath` `MovementClass`** (resolved at runtime via `TryLoadClass`) plus a polymorphic
 `MovementClassData`.
 
-**Passive re-seek (position keeping).** Idle units hold formation / cover slots without a standing
-order. `USeinMoveToAction` records its destination as `FSeinMovementComponent::DesiredPosition`
-("home") on its first tick; `FSeinPositionKeepSystem` (registered by `USeinMovementSubsystem`,
-PostTick / priority 60) re-issues a real pathed move home for any unit that is **idle** (no active
-latent action — `USeinLatentActionManager::HasActiveActionForEntity`) and has drifted past a
-threshold (~150 uu) off `DesiredPosition`, e.g. after collision resolution shoves it. **Newest
-move wins:** a fresh order (or another re-seek) overwrites `DesiredPosition`, and the in-flight
-action self-cancels on the mismatch — so a re-seek never fights a live order. Re-seek is sim-side and
-deterministic; the threshold lives in `SeinPositionKeepSystem.h`.
+**Passive re-seek (position keeping) — REMOVED 2026-06-03.** The earlier `FSeinPositionKeepSystem`
+(idle keeper units re-pathing back to a `DesiredPosition` "home" after being shoved) was stripped
+wholesale — the system, its `USeinMovementSubsystem` registration, the `USeinMoveToAction`
+home-claim/supersede, and the `FSeinMovementComponent` `bMaintainPosition` / `DesiredPosition` /
+`bHasDesiredPosition` fields are all gone. Deliberate clean slate pending a ground-up redesign
+**after local avoidance lands** — do not reintroduce piecemeal. The movement module currently
+registers **no** sim systems; `USeinMovementSubsystem::OnWorldBeginPlay` is the empty hook where the
+redesign (and avoidance) will re-register.
 
 The **concrete modes** — Infantry, Wheeled, Tracked, Hover, Flight — and their per-class data structs
 live in the opt-in **SeinARTSMovementPlus** extension, not here. They derive from the base classes

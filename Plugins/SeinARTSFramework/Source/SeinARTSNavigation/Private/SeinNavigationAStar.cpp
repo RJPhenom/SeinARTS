@@ -2045,11 +2045,33 @@ bool USeinNavigationAStar::FindCellPath(const FSeinPathRequest& Request, FSeinPa
 
 	// Replace last waypoint with the requested end position (within the cell)
 	// so unit actually arrives at the ordered point, not the cell center.
-	// Partial paths keep the cell-center final waypoint — the destination is
-	// literally unreachable, so snapping to it would put the unit inside a wall.
-	if (OutPath.Waypoints.Num() > 0 && !OutPath.bIsPartial)
+	// Partial paths normally keep the cell-center final waypoint — the destination
+	// is unreachable, so snapping to it would put the unit inside a wall.
+	if (OutPath.Waypoints.Num() > 0)
 	{
-		OutPath.Waypoints.Last() = Request.End;
+		if (!OutPath.bIsPartial)
+		{
+			OutPath.Waypoints.Last() = Request.End;
+		}
+		else if (Request.bAuthoritativeDestination)
+		{
+			// AUTHORITATIVE destination (cover slot): the goal cell is bake-blocked,
+			// but the slot is a valid standing spot that overrules the coarse bake
+			// (root CLAUDE.md #6). If the best-H cell we reached is ADJACENT to the
+			// goal cell (the slot sits at the edge of a blocked cell with a reachable
+			// neighbour), honor the exact destination and mark the path complete so
+			// the mover walks the last step onto the slot. If best-H is far (goal
+			// genuinely sealed deep in a wall), keep the cell-center stop so we never
+			// path the unit through the wall.
+			int32 GoalX, GoalY, LastX, LastY;
+			if (WorldToGrid(Request.End, GoalX, GoalY)
+				&& WorldToGrid(OutPath.Waypoints.Last(), LastX, LastY)
+				&& FMath::Max(FMath::Abs(GoalX - LastX), FMath::Abs(GoalY - LastY)) <= 1)
+			{
+				OutPath.Waypoints.Last() = Request.End;
+				OutPath.bIsPartial = false;
+			}
+		}
 	}
 
 	// Derive the typed segment list from the cell polyline. One Straight
@@ -2084,6 +2106,14 @@ bool USeinNavigationAStar::FindPath(const FSeinPathRequest& Request, FSeinPath& 
 	if (Request.AgentFootprintRadius > FFixedPoint::Zero || Request.AgentWallPaddingCells > 0)
 	{
 		PushWaypointsAwayFromWalls(OutPath, Request.AgentFootprintRadius, Request.AgentWallPaddingCells);
+
+		// The wall-push must NOT relocate an authoritative destination (cover slot)
+		// off its slot — the slot belongs AT the wall. Restore the exact End that
+		// FindCellPath committed as the final waypoint (root CLAUDE.md #6).
+		if (Request.bAuthoritativeDestination && OutPath.Waypoints.Num() > 0)
+		{
+			OutPath.Waypoints.Last() = Request.End;
+		}
 		OutPath.DeriveSegmentsFromWaypoints();
 	}
 
