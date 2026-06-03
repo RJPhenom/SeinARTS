@@ -63,16 +63,17 @@ public:
 	/**
 	 * Compute the formation's anchor-facing for a move/attack order.
 	 *
-	 * Default behavior (`bInvertWhenBackward = false`): rotate the formation so
-	 * its forward axis points from `CurrentCentroid` → `TargetLocation`. When
-	 * the move is to where the formation already stands (zero direction), keeps
-	 * `CurrentFacing` rather than degenerating to identity.
+	 * Facing ALWAYS rotates the formation so its forward axis points from
+	 * `CurrentCentroid` → `TargetLocation` — every move, including a straight 180°
+	 * reverse; the formation pivots to face where it's going. (Move to where the
+	 * formation already stands → keeps `CurrentFacing` rather than degenerating
+	 * to identity.)
 	 *
-	 * Backward-walk behavior (`bInvertWhenBackward = true` AND move dot current
-	 * forward < 0): keeps `CurrentFacing` and flags `bIsBackwardWalk = true`. The
-	 * squad resolver applies this flag to mirror authored slot offsets across
-	 * the anchor's forward axis so the front row ends up at the leading edge of
-	 * the destination — CoH-style natural-feel reverse-walk.
+	 * Anti-cross flag (`bInvertWhenBackward = true` AND move dot current forward
+	 * < 0): sets `bAntiCrossReorder = true`. This does NOT touch facing — it tells
+	 * the squad resolver to re-match members to slots by current left/right rank
+	 * so a reverse move doesn't make members cross paths. Default resolver's
+	 * symmetric grid ignores it.
 	 *
 	 * Pure compute — no world state read or written. Static so preview consumers
 	 * (no resolver instance) can call it directly without instantiating.

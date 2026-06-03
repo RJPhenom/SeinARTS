@@ -61,7 +61,7 @@ bool USeinBasicMovement::Tick(const FSeinMovementContext& Ctx)
 		RemainingStep = RemainingStep - StepLen;
 	}
 
-	Pos = ResolveNavCollision(InitialPos, Pos, Nav, Ctx);
+	Pos = ResolveNavCollision(InitialPos, Pos, Nav);
 
 	ApplyGroundSnapAndAltitude(Pos, Ctx.MovementData, Nav, DeltaTime);
 

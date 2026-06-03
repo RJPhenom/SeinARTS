@@ -386,7 +386,7 @@ bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 	// -------------------------------------------------------------------
 	// 12. Footprint-aware nav collision floor + ground snap.
 	// -------------------------------------------------------------------
-	NewPos = ResolveNavCollision(AgentPos, NewPos, Nav, Ctx);
+	NewPos = ResolveNavCollision(AgentPos, NewPos, Nav);
 	ApplyGroundSnapAndAltitude(NewPos, Ctx.MovementData, Nav, DeltaTime);
 
 	{

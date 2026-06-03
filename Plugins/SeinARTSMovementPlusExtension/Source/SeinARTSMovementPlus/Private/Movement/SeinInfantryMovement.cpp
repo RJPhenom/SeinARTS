@@ -150,7 +150,7 @@ bool USeinInfantryMovement::Tick(const FSeinMovementContext& Ctx)
 
 	// Hard nav-collision resolve before Z-snap so axis-slide chooses the right
 	// XY first, then Z reflects the actual cell we end up at.
-	NewPos = ResolveNavCollision(PrePos, NewPos, Nav, Ctx);
+	NewPos = ResolveNavCollision(PrePos, NewPos, Nav);
 
 	// Z-snap to nav ground + Altitude offset (default 0 = ground; non-zero =
 	// jump/vault arc).

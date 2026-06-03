@@ -18,31 +18,55 @@ DEFINE_LOG_CATEGORY_STATIC(LogSeinSquadDispatch, Log, All);
 
 namespace SeinSquadDispatchLocal
 {
-	/** Mirror the per-slot positions across the anchor's forward axis â€”
-	 *  fires when the squad is walking backwards (formation kept its current
-	 *  facing) and authored slot offsets need to be flipped front-to-back so
-	 *  the front row ends up at the leading edge of the destination. Without
-	 *  this, the front row stays at the trailing edge and units' paths cross
-	 *  through their squadmates. The Y axis (wings) already inverts naturally
-	 *  through the kept 180Â° facing rotation, so left-right flanks swap in
-	 *  world space; this only addresses the X axis. */
-	static void ApplyBackwardWalkSlotMirror(
+	/** Anti-cross slot assignment for backward moves. The formation always
+	 *  rotates to face the move direction (ComputeFormationFacing), so the slot
+	 *  POSITIONS are fixed — this only decides WHICH member fills WHICH slot, so
+	 *  nobody crosses. Members are matched to slots by their CURRENT left/right
+	 *  rank across the move axis: the member that is leftmost right now takes the
+	 *  leftmost slot, and so on. Depending only on where members are this instant
+	 *  (not authored slot identity, not how the squad got here) makes it path-
+	 *  independent: it never crosses on the perpendicular axis and consecutive
+	 *  backward moves don't oscillate — which a fixed geometric reflection can't
+	 *  guarantee, because the no-cross flip depends on the squad's live layout.
+	 *  Gated by FSeinSquadComponent::bInvertSlotOrderWhenMovingBackward — leave
+	 *  that FALSE to keep strict slot identity (roles pinned; a hard reverse may
+	 *  then cross). */
+	static void ReassignSlotsByCurrentOrder(
+		USeinWorldSubsystem* World,
+		const TArray<FSeinEntityHandle>& Members,
 		TArray<FFixedVector>& Positions,
-		FFixedQuaternion FormationFacing,
-		FFixedVector TargetLocation)
+		FFixedQuaternion FormationFacing)
 	{
-		const FFixedVector ForwardAxis = FormationFacing.RotateVector(FFixedVector::ForwardVector);
-		for (FFixedVector& Pos : Positions)
+		const int32 N = Positions.Num();
+		if (N <= 1 || !World || Members.Num() < N) return;
+
+		const FFixedVector RightAxis = FormationFacing.RotateVector(FFixedVector::RightVector);
+
+		// Perp coordinate (along the move's right axis) of each member's CURRENT
+		// position and of each slot; then match by sorted rank.
+		TArray<int32> MemberOrder; TArray<int32> SlotOrder;
+		TArray<FFixedPoint> MemberPerp; TArray<FFixedPoint> SlotPerp;
+		MemberOrder.Reserve(N); SlotOrder.Reserve(N);
+		MemberPerp.SetNum(N); SlotPerp.SetNum(N);
+		for (int32 i = 0; i < N; ++i)
 		{
-			FFixedVector Offset = Pos - TargetLocation;
-			const FFixedPoint TargetZ = Offset.Z;     // preserve Z (terrain snap)
-			Offset.Z = FFixedPoint::Zero;
-			const FFixedPoint AlongForward = FFixedVector::DotProduct(Offset, ForwardAxis);
-			// Reflect: new_offset = offset - 2 * (offset Â· forward) * forward.
-			Offset = Offset - ForwardAxis * (AlongForward * FFixedPoint::Two);
-			Offset.Z = TargetZ;
-			Pos = TargetLocation + Offset;
+			const FSeinEntity* Entity = World->GetEntity(Members[i]);
+			const FFixedVector Cur = Entity ? Entity->Transform.GetLocation() : Positions[i];
+			MemberPerp[i] = FFixedVector::DotProduct(Cur, RightAxis);
+			SlotPerp[i]   = FFixedVector::DotProduct(Positions[i], RightAxis);
+			MemberOrder.Add(i);
+			SlotOrder.Add(i);
 		}
+		MemberOrder.Sort([&MemberPerp](int32 A, int32 B) { return MemberPerp[A] < MemberPerp[B]; });
+		SlotOrder.Sort([&SlotPerp](int32 A, int32 B) { return SlotPerp[A] < SlotPerp[B]; });
+
+		// k-th member by left/right rank takes the k-th slot by the same rank.
+		TArray<FFixedVector> NewPositions; NewPositions.SetNum(N);
+		for (int32 k = 0; k < N; ++k)
+		{
+			NewPositions[MemberOrder[k]] = Positions[SlotOrder[k]];
+		}
+		Positions = MoveTemp(NewPositions);
 	}
 
 }
@@ -390,7 +414,7 @@ FSeinFormationLayout USeinSquadDispatchResolver::ResolveFormationLayout_Implemen
 
 	FSeinFormationLayout Layout;
 	Layout.Facing = FacingResult.Facing;
-	Layout.bIsBackwardWalk = FacingResult.bIsBackwardWalk;
+	Layout.bAntiCrossReorder = FacingResult.bAntiCrossReorder;
 	Layout.Positions = ResolvePositions(World, Members, TargetLocation, FacingResult.Facing);
 
 	// Slot-mirror for backward walk â€” only meaningful when authored slot offsets
@@ -398,10 +422,10 @@ FSeinFormationLayout USeinSquadDispatchResolver::ResolveFormationLayout_Implemen
 	// default-grid fallback inside ResolvePositions is symmetric, so mirroring
 	// is a no-op for the unauthored case; we apply unconditionally for the
 	// backward-walk path to keep this branch simple.
-	if (FacingResult.bIsBackwardWalk)
+	if (FacingResult.bAntiCrossReorder)
 	{
-		SeinSquadDispatchLocal::ApplyBackwardWalkSlotMirror(
-			Layout.Positions, FacingResult.Facing, TargetLocation);
+		SeinSquadDispatchLocal::ReassignSlotsByCurrentOrder(
+			World, Members, Layout.Positions, FacingResult.Facing);
 	}
 
 	// Hook subclasses (cover-aware squad resolver, etc.) to mutate positions

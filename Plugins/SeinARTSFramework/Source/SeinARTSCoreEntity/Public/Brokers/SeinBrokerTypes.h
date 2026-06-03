@@ -238,11 +238,11 @@ struct SEINARTSCOREENTITY_API FSeinBrokerDispatchPlan
  * by both the dispatch path (writes Facing back to broker data) and the
  * preview path (reads Facing for cursor-driven decal placement).
  *
- * `bIsBackwardWalk` is set when `bInvertWhenBackward` was on and the move
- * heading was roughly opposite the squad's current facing — the formation
- * keeps its prior facing and slot offsets get mirrored across the anchor's
- * forward axis (squad resolver only; default resolver's grid is symmetric and
- * doesn't mirror).
+ * `bAntiCrossReorder` is set when `bInvertWhenBackward` was on and the move
+ * heading was roughly opposite the squad's current facing. Facing ALWAYS rotates
+ * to face the move target; this flag just tells the squad resolver to re-match
+ * members to slots by current left/right rank so a reverse move doesn't make
+ * members cross paths. Default resolver's symmetric grid ignores it.
  */
 USTRUCT(BlueprintType, meta = (SeinDeterministic))
 struct SEINARTSCOREENTITY_API FSeinFormationFacing
@@ -253,7 +253,7 @@ struct SEINARTSCOREENTITY_API FSeinFormationFacing
 	FFixedQuaternion Facing;
 
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker|Formation")
-	bool bIsBackwardWalk = false;
+	bool bAntiCrossReorder = false;
 };
 
 /**
@@ -263,8 +263,8 @@ struct SEINARTSCOREENTITY_API FSeinFormationFacing
  *     target locations and Facing to write back to broker data)
  *   - the preview path (`USeinWorldSubsystem::ComputeFormationPreview` reads
  *     Positions to render destination decals under the cursor for hover preview;
- *     Facing + bIsBackwardWalk are exposed for previews that want to render
- *     facing arrows or differentiate forward / backward walk visuals).
+ *     Facing + bAntiCrossReorder are exposed for previews that want to render
+ *     facing arrows or an anti-cross-reorder indicator).
  *
  * Same data, two consumers — keeps preview and commit in lockstep with no
  * "actually move" bool flag on a single function.
@@ -278,18 +278,17 @@ struct SEINARTSCOREENTITY_API FSeinFormationLayout
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker|Formation")
 	TArray<FFixedVector> Positions;
 
-	/** Formation's facing at the anchor — direction the front rank should face.
-	 *  When `bIsBackwardWalk` is true this is the SQUAD'S CURRENT facing (kept,
-	 *  not rotated) so backward walks don't spin the formation 180° around its
-	 *  centroid. */
+	/** Formation's facing at the anchor — the direction the front rank faces.
+	 *  Always rotated to point from the centroid toward the move target (even a
+	 *  straight 180° reverse): the formation pivots to face where it's going. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker|Formation")
 	FFixedQuaternion Facing;
 
-	/** True when the squad is walking roughly backwards (move heading dot
-	 *  current forward < 0) AND the squad has bInvertSlotOrderWhenMovingBackward
-	 *  enabled. Squad resolver mirrors authored slot offsets across the anchor's
-	 *  forward axis in that case so the front row ends up at the leading edge of
-	 *  the destination. Default resolver's symmetric grid ignores this. */
+	/** True when the move heads roughly backwards (move heading dot current
+	 *  forward < 0) AND the squad has bInvertSlotOrderWhenMovingBackward enabled.
+	 *  The squad resolver then re-matches members to slots by current left/right
+	 *  rank so a reverse move doesn't make members cross paths. Default resolver's
+	 *  symmetric grid ignores this. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker|Formation")
-	bool bIsBackwardWalk = false;
+	bool bAntiCrossReorder = false;
 };

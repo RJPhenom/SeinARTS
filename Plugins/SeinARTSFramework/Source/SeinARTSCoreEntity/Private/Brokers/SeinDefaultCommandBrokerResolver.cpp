@@ -51,7 +51,7 @@ FSeinFormationFacing USeinDefaultCommandBrokerResolver::ComputeFormationFacing(
 	bool bInvertWhenBackward)
 {
 	FSeinFormationFacing Result;
-	Result.bIsBackwardWalk = false;
+	Result.bAntiCrossReorder = false;
 
 	FFixedVector ToTarget = TargetLocation - CurrentCentroid;
 	ToTarget.Z = FFixedPoint::Zero;       // 2D — RTS top-down, ignore vertical
@@ -67,22 +67,28 @@ FSeinFormationFacing USeinDefaultCommandBrokerResolver::ComputeFormationFacing(
 	const FFixedVector ToTargetN = FFixedVector::GetSafeNormal(ToTarget);
 	const FFixedQuaternion TargetFacing = SeinDefaultBrokerLocal::YawFacingFromXY(ToTargetN);
 
+	// Facing ALWAYS rotates to face the move direction — the formation pivots to
+	// align with where it's going, every move, including a straight 180° backpedal.
+	// (The old path kept current facing on backward moves, which read as the
+	// formation losing all rotation and sliding sideways once the heading crossed
+	// 90° off current facing — that boundary flip is the bug this replaces.)
+	Result.Facing = TargetFacing;
+
+	// Backward detection is now a pure SLOT-ASSIGNMENT signal, decoupled from
+	// facing. When the move heads behind the squad's current facing AND the squad
+	// opted in (bInvertWhenBackward = FSeinSquadComponent::
+	// bInvertSlotOrderWhenMovingBackward), flag it so the squad resolver flips the
+	// formation's flanks across the move axis. Rotating to face the target swaps
+	// each member's left/right side once the turn passes 90°; the flank flip undoes
+	// exactly that, so members march straight in instead of crossing. The flag no
+	// longer touches facing — it only gates the anti-cross flip.
 	if (bInvertWhenBackward)
 	{
-		// Threshold = 0 → "any backward at all triggers reverse-walk." Tighter
-		// thresholds (e.g. -0.5) would only invert for strict 180° turns. Per
-		// CoH-style natural-feel: even shallow backward components keep facing.
 		const FFixedVector CurrentForward = CurrentFacing.RotateVector(FFixedVector::ForwardVector);
 		const FFixedPoint Dot = FFixedVector::DotProduct(CurrentForward, ToTargetN);
-		if (Dot < FFixedPoint::Zero)
-		{
-			Result.Facing = CurrentFacing;
-			Result.bIsBackwardWalk = true;
-			return Result;
-		}
+		Result.bAntiCrossReorder = (Dot < FFixedPoint::Zero);
 	}
 
-	Result.Facing = TargetFacing;
 	return Result;
 }
 
@@ -99,7 +105,7 @@ FSeinFormationLayout USeinDefaultCommandBrokerResolver::ResolveFormationLayout_I
 
 	FSeinFormationLayout Layout;
 	Layout.Facing = FacingResult.Facing;
-	Layout.bIsBackwardWalk = FacingResult.bIsBackwardWalk;
+	Layout.bAntiCrossReorder = FacingResult.bAntiCrossReorder;
 	Layout.Positions = ResolvePositions(World, Members, TargetLocation, FacingResult.Facing);
 	// Default resolver's grid is symmetric — backward-walk slot mirroring is a
 	// squad-resolver concern (authored slot offsets are asymmetric). The flag

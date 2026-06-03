@@ -248,7 +248,7 @@ FSeinFormationLayout USeinCommandBrokerResolver::ResolveFormationLayout_Implemen
 	// resolvers override with real layout logic.
 	FSeinFormationLayout Layout;
 	Layout.Facing = CurrentFacing;
-	Layout.bIsBackwardWalk = false;
+	Layout.bAntiCrossReorder = false;
 	Layout.Positions = ResolvePositions(World, Members, TargetLocation, CurrentFacing);
 	return Layout;
 }

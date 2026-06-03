@@ -472,19 +472,11 @@ protected:
 	 *  Static-only by design — `Nav->IsPassable` reads the bake, not the
 	 *  dynamic blocker overlay (that lives on a per-FindPath path); blocking
 	 *  vehicles against each other is penetration resolution's job. So this
-	 *  is "don't walk through walls", not "don't walk through tanks."
-	 *
-	 *  Final-settle exemption: on the last leg, within a small radius of the EXACT
-	 *  commanded destination (the path's last waypoint = Request.End), the
-	 *  footprint veto is skipped so the unit reaches the literal goal point — e.g.
-	 *  a validated cover slot snug to a wall — instead of stopping a footprint
-	 *  short. Hence the FSeinMovementContext param (gives the path + waypoint
-	 *  cursor to detect the final approach). */
+	 *  is "don't walk through walls", not "don't walk through tanks." */
 	FFixedVector ResolveNavCollision(
 		const FFixedVector& OldPos,
 		const FFixedVector& NewPos,
-		USeinNavigation* Nav,
-		const FSeinMovementContext& Ctx) const;
+		USeinNavigation* Nav) const;
 
 	/** Footprint-aware passability check at a candidate position. True iff
 	 *  the candidate's center AND every cached ring sample land on passable

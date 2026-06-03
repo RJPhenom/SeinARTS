@@ -533,34 +533,9 @@ bool USeinMovement::IsFootprintPassable(const FFixedVector& Pos, USeinNavigation
 FFixedVector USeinMovement::ResolveNavCollision(
 	const FFixedVector& OldPos,
 	const FFixedVector& NewPos,
-	USeinNavigation* Nav,
-	const FSeinMovementContext& Ctx) const
+	USeinNavigation* Nav) const
 {
 	if (!Nav) return NewPos;
-
-	// Final-settle exemption. The path's last waypoint is the EXACT commanded
-	// destination (USeinNavigationAStar overwrites Waypoints.Last() = Request.End
-	// for non-partial paths) — e.g. a validated cover slot deliberately placed
-	// snug to a wall. Once on that final leg AND within a small settle radius of
-	// the goal, return the step unchecked so the unit reaches the literal point
-	// instead of being held a footprint-radius short by the wall-cell veto below.
-	// Bounded to the final approach (never relaxes mid-path); any body-vs-wall
-	// overlap at the destination is the collision layer's concern, not nav's.
-	const int32 LastWp = Ctx.Path.Waypoints.Num() - 1;
-	if (LastWp >= 0 && Ctx.CurrentWaypointIndex >= LastWp)
-	{
-		FFixedVector ToGoal = NewPos - Ctx.Path.Waypoints[LastWp];
-		ToGoal.Z = FFixedPoint::Zero;
-		// Cover the footprint standoff (collision radius) plus a cell of rounding
-		// so the unit doesn't stall just outside the relaxed zone.
-		const FFixedPoint SettleRadius = (CachedCollisionRadius > FFixedPoint::Zero)
-			? CachedCollisionRadius + Nav->GetCellSize()
-			: Nav->GetCellSize();
-		if (ToGoal.SizeSquared() <= SettleRadius * SettleRadius)
-		{
-			return NewPos;
-		}
-	}
 
 	// Combined check: footprint passability AND step-height gate. The step-
 	// height gate prevents units from stepping onto passable cells whose

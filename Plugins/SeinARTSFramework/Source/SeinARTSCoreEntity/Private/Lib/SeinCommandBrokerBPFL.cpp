@@ -192,17 +192,18 @@ FSeinFormationLayout USeinCommandBrokerBPFL::SeinComputeFormationPreview(
 	FFixedVector CurrentCentroid = FFixedVector::ZeroVector;
 	FFixedQuaternion CurrentFacing = FFixedQuaternion::Identity;
 
-	// Preview ALWAYS passes bInvertWhenBackward = false to the resolver. The
-	// squad's bInvertSlotOrderWhenMovingBackward toggle is a movement-layer /
-	// dispatch concern — it changes how members are routed to slots when the
-	// move heading is opposite the squad's current facing. The hover-preview
-	// decals always show "where will the formation land if I click here,"
-	// which is the always-rotate-to-cursor geometry regardless of squad
-	// config. Reading the flag here was wrong and produced an inverted
-	// preview that didn't match player expectation. Movement (the real
-	// ResolveDispatch path) still reads the flag and applies the mirror
-	// for the actual unit walk — preview just doesn't honor it.
-	const bool bInvertWhenBackward = false;
+	// Mirror the commit's invert flag — the preview is a read-only dry-run of the
+	// dispatch, so it MUST feed ComputeFormationFacing the same input the real
+	// order will. The squad's bInvertSlotOrderWhenMovingBackward toggle drives
+	// backward-walk detection (keep current facing + mirror slot order when the
+	// heading is behind the squad). USeinSquadDispatchResolver::ResolveDispatch
+	// reads it from FSeinSquadComponent; if the preview passes a different value
+	// it renders a forward layout for a move the squad will actually walk
+	// backward into — the preview≠destinations bug. Set from SquadData below;
+	// stays false for the non-squad / default-grid fallback, whose symmetric
+	// grid makes the flag a no-op anyway (matching the base resolver's dispatch,
+	// which also hardcodes false).
+	bool bInvertWhenBackward = false;
 
 	if (CommonSquad.IsValid())
 	{
@@ -221,6 +222,11 @@ FSeinFormationLayout USeinCommandBrokerBPFL::SeinComputeFormationPreview(
 		}
 		if (SquadData)
 		{
+			// Same source the commit reads (ResolveDispatch fetches SquadData on
+			// the broker handle, which IS this squad entity) — keeps preview and
+			// commit in lockstep on backward-walk detection.
+			bInvertWhenBackward = SquadData->bInvertSlotOrderWhenMovingBackward;
+
 			// Fallback centroid for squads where the broker centroid hasn't been
 			// computed yet (very-first-tick edge case): compute from live members.
 			if (!Broker || Broker->Centroid.IsNearlyZero())
@@ -271,7 +277,25 @@ FSeinFormationLayout USeinCommandBrokerBPFL::SeinComputeFormationPreview(
 		*GetNameSafe(Resolver), Members.Num(),
 		CommonSquad.IsValid() ? TEXT("yes") : TEXT("no"));
 
-	return Resolver->ResolveFormationLayout(
+	// Nav-project the cursor target to the nearest pathable cell — byte-for-byte
+	// the snap ProcessCommands applies to a committed move order (the
+	// NavProjectResolver call in the BrokerOrder path). A move order's real
+	// destinations are computed from the PROJECTED target, so a preview built on
+	// the raw cursor drifts whenever the cursor sits on or near a blocked cell.
+	// No-nav games / tests: resolver unbound → raw target passes through,
+	// matching the commit's bypass.
+	if (World->NavProjectResolver.IsBound())
+	{
+		FFixedVector ProjectedTarget;
+		if (World->NavProjectResolver.Execute(TargetLocation, ProjectedTarget))
+		{
+			TargetLocation = ProjectedTarget;
+		}
+	}
+
+	const FSeinFormationLayout PreviewLayout = Resolver->ResolveFormationLayout(
 		World, Members, CurrentCentroid, CurrentFacing,
 		TargetLocation, bInvertWhenBackward);
+
+	return PreviewLayout;
 }
