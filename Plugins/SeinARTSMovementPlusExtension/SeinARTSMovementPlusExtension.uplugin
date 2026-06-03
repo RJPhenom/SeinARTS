@@ -1,0 +1,23 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "SeinARTS Movement+",
+	"Description": "Movement modes extension for SeinARTS Framework — Infantry, Wheeled, Tracked, Hover, and Flight movement classes plus their per-class tuning data. Strippable; the framework ships Basic and Basic Unit movement on its own.",
+	"Category": "Gameplay",
+	"CreatedBy": "Phenom Studios",
+	"CanContainContent": false,
+	"Modules": [
+		{
+			"Name": "SeinARTSMovementPlus",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "SeinARTSFramework",
+			"Enabled": true
+		}
+	]
+}

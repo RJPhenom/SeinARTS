@@ -1,0 +1,49 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"Modules": [
+		{
+			"Name": "SeinARTSCover",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "SeinARTSCoverEditor",
+			"Type": "Editor",
+			"LoadingPhase": "PostEngineInit"
+		},
+		{
+			"Name": "SeinARTSCoverSquad",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	],
+	"FriendlyName": "SeinARTS Cover",
+	"Description": "Cover system extension for SeinARTS Framework — cover components, cover-aware dispatch resolvers, formation preview.",
+	"Category": "Other",
+	"CreatedBy": "Phenom Studios",
+	"CreatedByURL": "",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"SupportURL": "",
+	"CanContainContent": false,
+	"Installed": false,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Plugins": [
+		{
+			"Name": "SeinARTSFramework",
+			"Enabled": true
+		},
+		{
+			"Name": "SeinARTSSquadExtension",
+			"Enabled": true,
+			"Optional": true
+		},
+		{
+			"Name": "EnhancedInput",
+			"Enabled": true
+		}
+	]
+}

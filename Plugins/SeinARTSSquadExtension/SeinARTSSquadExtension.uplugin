@@ -1,0 +1,23 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "SeinARTS Squads",
+	"Description": "Squad system extension for SeinARTS Framework — persistent squads with heterogeneous slots, formation dispatch, and reinforcement.",
+	"Category": "Gameplay",
+	"CreatedBy": "Phenom Studios",
+	"CanContainContent": false,
+	"Modules": [
+		{
+			"Name": "SeinARTSSquad",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "SeinARTSFramework",
+			"Enabled": true
+		}
+	]
+}

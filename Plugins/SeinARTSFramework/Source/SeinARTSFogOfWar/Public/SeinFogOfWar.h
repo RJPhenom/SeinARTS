@@ -1,0 +1,266 @@
+/**
+ * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
+ * @file    SeinFogOfWar.h
+ * @brief   Abstract base class for pluggable fog-of-war implementations.
+ *
+ *          USeinFogOfWar owns the end-to-end vision problem for one world:
+ *          bake pipeline, baked-asset storage, runtime source/blocker
+ *          registration, per-player VisionGroup grid state, stamp-delta
+ *          recomputation, and visibility queries. It is the ONLY thing the
+ *          framework's reader BPFL and cross-module LOS delegate talk to.
+ *
+ *          Configured via plugin settings (`USeinARTSCoreSettings::FogOfWarClass`).
+ *          The framework ships `USeinFogOfWarDefault` as a minimal 2D-grid +
+ *          symmetric shadowcasting reference implementation; game teams can
+ *          subclass or replace it entirely without touching any other
+ *          framework code.
+ *
+ *          Decoupling contract (mirrors USeinNavigation):
+ *          - The reader BPFL, volume actor, and cross-module LOS delegate
+ *            call into this class's virtual surface only.
+ *          - Concrete subclasses own their own data storage + bake strategy.
+ *          - Baked data is stored in a USeinFogOfWarAsset subclass (impl-
+ *            specific); ASeinFogOfWarVolume holds a polymorphic reference.
+ *          - Fog-of-war is wholly independent of navigation. The two systems
+ *            share no data, no grid, no volume. A project may ship its own
+ *            nav, its own fog, or both.
+ */
+
+#pragma once
+
+#include "CoreMinimal.h"
+#include "UObject/Object.h"
+#include "Types/FixedPoint.h"
+#include "Types/Vector.h"
+#include "Core/SeinEntityHandle.h"
+#include "Core/SeinPlayerID.h"
+#include "SeinFogOfWarTypes.h"
+#include "SeinFogOfWar.generated.h"
+
+class UWorld;
+class USeinFogOfWarAsset;
+class USeinWorldSubsystem;
+class ASeinFogOfWarVolume;
+class IDetailLayoutBuilder;
+
+/** Fired when the fog-of-war's baked or runtime state mutates (bake
+ *  finished, asset swap, dynamic blocker change). Debug viz + cached UI
+ *  reads re-query on this signal. */
+DECLARE_MULTICAST_DELEGATE(FSeinOnFogOfWarMutated);
+
+UCLASS(Abstract, BlueprintType, meta = (DisplayName = "Sein Fog Of War"))
+class SEINARTSFOGOFWAR_API USeinFogOfWar : public UObject
+{
+	GENERATED_BODY()
+
+public:
+
+	// ----------------------------------------------------------------------
+	// Lifecycle — called by USeinFogOfWarSubsystem
+	// ----------------------------------------------------------------------
+
+	/** Called once when the subsystem instantiates this impl. Default: no-op. */
+	virtual void OnFogOfWarInitialized(UWorld* World) {}
+
+	/** Called once when the subsystem is tearing down this impl. Default: no-op. */
+	virtual void OnFogOfWarDeinitialized() {}
+
+	// ----------------------------------------------------------------------
+	// Bake (editor / dev-loop)
+	// ----------------------------------------------------------------------
+
+	/** The UDataAsset class this impl produces when baking. Subclasses return
+	 *  their concrete USeinFogOfWarAsset subclass. Default: the abstract base. */
+	virtual TSubclassOf<USeinFogOfWarAsset> GetAssetClass() const;
+
+	/** Begin an async bake covering every ASeinFogOfWarVolume in World. Return
+	 *  true if the bake kicked off (false if already running or no volumes
+	 *  found). Subclasses own the async strategy. */
+	virtual bool BeginBake(UWorld* World) { return false; }
+
+	/** True while an async bake is in progress. */
+	virtual bool IsBaking() const { return false; }
+
+	/** Request bake cancellation. Safe to call when not baking (no-op). */
+	virtual void RequestCancelBake() {}
+
+	// ----------------------------------------------------------------------
+	// Runtime load — called on level begin-play
+	// ----------------------------------------------------------------------
+
+	/** Swap the loaded baked asset. Passing nullptr clears runtime state.
+	 *  Subclasses should call Super then broadcast OnFogOfWarMutated once
+	 *  their own runtime arrays are populated. */
+	virtual void LoadFromAsset(USeinFogOfWarAsset* Asset) { LoadedAsset = Asset; }
+
+	/** The currently-loaded baked asset, or nullptr if never loaded. */
+	USeinFogOfWarAsset* GetLoadedAsset() const { return LoadedAsset; }
+
+	/** True if the impl has usable runtime data (grid dims populated, bake
+	 *  loaded or procedurally initialized). Queries return no-visibility when
+	 *  false. */
+	virtual bool HasRuntimeData() const { return LoadedAsset != nullptr; }
+
+	// ----------------------------------------------------------------------
+	// Vision source management — sim-side, called by the actor bridge /
+	// subsystem as entities spawn, move, change props, or despawn.
+	// ----------------------------------------------------------------------
+
+	/** Register a new vision source. Impl is responsible for stamping on the
+	 *  next tick. Safe to call with a handle that was never registered (no
+	 *  double-register). */
+	virtual void RegisterSource(FSeinEntityHandle Entity, const FSeinVisionSourceParams& Params) {}
+
+	/** Update an already-registered source (position/radius/owner changed).
+	 *  Impl should diff against prior state + apply refcount deltas only to
+	 *  affected cells. No-op if the entity isn't registered. */
+	virtual void UpdateSource(FSeinEntityHandle Entity, const FSeinVisionSourceParams& Params) {}
+
+	/** Unregister a source + roll back its last stamp footprint. No-op if the
+	 *  entity isn't registered. */
+	virtual void UnregisterSource(FSeinEntityHandle Entity) {}
+
+	// ----------------------------------------------------------------------
+	// Dynamic blocker management — runtime only. Static blockers bake into
+	// the asset and aren't driven through this surface.
+	// ----------------------------------------------------------------------
+
+	virtual void RegisterBlocker(FSeinEntityHandle Entity, const FSeinVisionBlockerParams& Params) {}
+	virtual void UpdateBlocker(FSeinEntityHandle Entity, const FSeinVisionBlockerParams& Params) {}
+	virtual void UnregisterBlocker(FSeinEntityHandle Entity) {}
+
+	// ----------------------------------------------------------------------
+	// Runtime grid initialization — called by the subsystem on OnWorldBeginPlay
+	// when no baked asset is available. Impls that require a bake may leave
+	// this as a no-op; the MVP default impl auto-sizes a grid from the level's
+	// ASeinFogOfWarVolumes so designers get stamping + debug viz before the
+	// bake pipeline lands.
+	// ----------------------------------------------------------------------
+
+	virtual void InitGridFromVolumes(UWorld* World) {}
+
+	// ----------------------------------------------------------------------
+	// Tick — refreshes per-cell visibility from current sources + blockers.
+	// Subsystem ticks this at its configured cadence. Impls may compute
+	// stamp-delta (fast path) or recompute from scratch (simple path). World
+	// is passed in so impls can reach the ECS for source iteration without
+	// needing to plumb a GetWorld() override.
+	// ----------------------------------------------------------------------
+
+	virtual void TickStamps(UWorld* World) {}
+
+	// ----------------------------------------------------------------------
+	// Queries — reader BPFL + LOS delegate route through these.
+	// ----------------------------------------------------------------------
+
+	/** Full EVNNNNNN byte at the cell containing `WorldPos`, from `Observer`'s
+	 *  VisionGroup. Returns 0 if the position is outside the grid or the impl
+	 *  has no runtime data. */
+	virtual uint8 GetCellBitfield(FSeinPlayerID Observer, const FFixedVector& WorldPos) const { return 0; }
+
+	/** Convenience: true if any of `LayerMask`'s bits are set in the cell's
+	 *  bitfield. Caller passes SEIN_FOW_BIT_NORMAL, SEIN_FOW_MASK_VISIBLE,
+	 *  or a custom mask. */
+	bool IsCellVisible(FSeinPlayerID Observer, const FFixedVector& WorldPos, uint8 LayerMask = SEIN_FOW_BIT_NORMAL) const
+	{
+		return (GetCellBitfield(Observer, WorldPos) & LayerMask) != 0;
+	}
+
+	/** Convenience: true if the Explored bit is set. Sticky — once true for
+	 *  a cell, stays true for the rest of the match. */
+	bool IsCellExplored(FSeinPlayerID Observer, const FFixedVector& WorldPos) const
+	{
+		return (GetCellBitfield(Observer, WorldPos) & SEIN_FOW_BIT_EXPLORED) != 0;
+	}
+
+	/** Whether the entity `Target` is currently visible to `Observer`. Single
+	 *  source of truth for the fog visibility decision — same check the
+	 *  `USeinFogOfWarVisibilitySubsystem` uses to toggle actor visibility,
+	 *  and the same check cover queries / minimap / UI should use to gate
+	 *  per-player information leakage.
+	 *
+	 *  Logic, in order:
+	 *    1. Observer is invalid → permissive (true). Caller hasn't specified
+	 *       a viewer; no filtering.
+	 *    2. Target's owner == Observer → visible. Owner always sees their
+	 *       own units / buildings / deployments regardless of fog.
+	 *    3. `FSeinFogVisibilityComponent::FogVisibilityPolicy`:
+	 *       - `AlwaysVisible` → true.
+	 *       - `VisibleOnceExplored` → visible iff any cell in the entity's
+	 *         footprint has the sticky Explored bit set for `Observer`.
+	 *       - `VisionLayersOnly` (default) → visible iff a vision source on
+	 *         a matching emission layer is currently stamping the cell.
+	 *
+	 *  Implementation lives in the cpp so subclasses can override if they
+	 *  want different per-player policy. Base impl reads
+	 *  `FSeinFogVisibilityComponent` from sim storage for both the emission
+	 *  mask AND the persistence policy (single component, two fields —
+	 *  authored on `USeinEntityComponent`'s top-level visibility fields and
+	 *  auto-injected at spawn by `InjectAuthoredComponents`). */
+	virtual bool IsEntityVisibleToObserver(FSeinPlayerID Observer,
+		USeinWorldSubsystem& Sim, FSeinEntityHandle Target) const;
+
+	/** Compute the OR of EVNNNNNN bits visible to `Observer` across the
+	 *  target entity's volumetric footprint. Replaces the legacy single-
+	 *  point check at the entity's transform — a wide tank whose center sits
+	 *  one cell off from a watching infantry would otherwise read as
+	 *  invisible despite being right there.
+	 *
+	 *  Subclasses iterate the entity's `FSeinExtentsComponent::Stamps` (if
+	 *  present) and OR the bitfields of every covered cell. This base impl
+	 *  falls back to a single-point query at the entity transform —
+	 *  preserves correctness for entities without an extents component
+	 *  (props, projectiles, etc. that don't need volumetric checks). */
+	virtual uint8 GetEntityVisibleBits(FSeinPlayerID Observer,
+		USeinWorldSubsystem& Sim, FSeinEntityHandle Target) const;
+
+	// ----------------------------------------------------------------------
+	// Debug
+	// ----------------------------------------------------------------------
+
+	/** Per-frame debug draw hook. Called each tick while the fog show flag is
+	 *  on. Default: no-op — the framework's shipped cell viz goes through a
+	 *  scene-proxy debug component (lands with the debug pass). */
+	virtual void DrawDebug(UWorld* World) const {}
+
+	/** Collect cell geometry for scene-proxy rendering, for one observer's
+	 *  VisionGroup. `VisibleBitIndex` in [0, 7] selects which EVNNNNNN bit
+	 *  paints as "visible" (0 = E, 1 = V, 2..7 = N0..N5); driven by
+	 *  `Sein.FogOfWar.Show.Layer`. Default impls emit
+	 *  one quad per cell with per-cell color derived from which bits are
+	 *  set (visible / blocker / default). Default virtual: no cells. */
+	virtual void CollectDebugCellQuads(FSeinPlayerID Observer,
+		int32 VisibleBitIndex,
+		TArray<FVector>& OutCenters,
+		TArray<FColor>& OutColors,
+		float& OutHalfExtent) const {}
+
+	// ----------------------------------------------------------------------
+	// Editor extensibility
+	// ----------------------------------------------------------------------
+
+#if WITH_EDITOR
+	/** Optional hook for subclasses to extend ASeinFogOfWarVolume's details
+	 *  panel. Called by the framework's `FSeinFogOfWarVolumeDetails` after it
+	 *  has added its own "Bake Fog Of War" row. Subclasses may add custom rows
+	 *  (per-bake options, layer-mask presets, etc.). Default: no-op. The
+	 *  framework's bake button is unconditional — the abstract `BeginBake`
+	 *  virtual dispatches to whatever subclass is active, so designers see the
+	 *  same button regardless of which fog impl is selected. */
+	virtual void CustomizeVolumeDetails(IDetailLayoutBuilder& /*DetailBuilder*/, ASeinFogOfWarVolume* /*Volume*/) {}
+#endif
+
+	// ----------------------------------------------------------------------
+	// Events
+	// ----------------------------------------------------------------------
+
+	/** Broadcast after bake completion, asset swap, dynamic blocker mutation. */
+	FSeinOnFogOfWarMutated OnFogOfWarMutated;
+
+protected:
+
+	/** The currently-loaded baked asset. Ownership stays with the volume /
+	 *  asset registry — this is a non-owning pointer. */
+	UPROPERTY(Transient)
+	TObjectPtr<USeinFogOfWarAsset> LoadedAsset;
+};

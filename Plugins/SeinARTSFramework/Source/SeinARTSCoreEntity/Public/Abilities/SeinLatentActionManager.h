@@ -1,0 +1,55 @@
+#pragma once
+
+#include "CoreMinimal.h"
+#include "Types/FixedPoint.h"
+#include "Core/SeinEntityHandle.h"
+#include "SeinLatentActionManager.generated.h"
+
+class USeinLatentAction;
+class USeinAbility;
+class USeinWorldSubsystem;
+
+/**
+ * Manages all active latent actions in the simulation.
+ * Ticked during the AbilityExecution phase of the sim loop.
+ * Provides entity-level and ability-level cancellation.
+ */
+UCLASS()
+class SEINARTSCOREENTITY_API USeinLatentActionManager : public UObject
+{
+	GENERATED_BODY()
+
+public:
+	/** Register a new latent action to be ticked */
+	void RegisterAction(USeinLatentAction* Action);
+
+	/** Tick all active actions and clean up completed ones */
+	void TickAll(FFixedPoint DeltaTime, USeinWorldSubsystem& World);
+
+	/** Cancel all latent actions belonging to the given entity */
+	void CancelActionsForEntity(FSeinEntityHandle Handle);
+
+	/** Cancel all latent actions belonging to the given ability */
+	void CancelActionsForAbility(USeinAbility* Ability);
+
+	/** Cancel every active latent action across the entire sim. Used by the
+	 *  snapshot-restore path to drop in-flight latent state before the
+	 *  ability pool is rebuilt — without this, latent actions hold stale
+	 *  refs into the about-to-be-replaced ability instances. */
+	void CancelAllActions();
+
+	/** Remove completed and cancelled actions from the active list */
+	void CleanupCompleted();
+
+	/** Get the number of currently active actions */
+	int32 GetActiveActionCount() const;
+
+	/** True if the entity has any active (not completed/cancelled) latent action.
+	 *  The position-keeper uses this to tell "idle" from "executing an order" so it
+	 *  never re-seeks a unit that's already moving. */
+	bool HasActiveActionForEntity(FSeinEntityHandle Handle) const;
+
+private:
+	UPROPERTY()
+	TArray<TObjectPtr<USeinLatentAction>> ActiveActions;
+};

@@ -1,0 +1,52 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# SeinARTS — project-wide .gitignore (monorepo: host project + all plugins)
+# Bare directory patterns (no leading slash) match at ANY depth, so a single rule
+# covers the project root AND every plugin (e.g. Plugins/*/Binaries/).
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Unreal build / cache artifacts ──
+Binaries/
+Intermediate/
+DerivedDataCache/
+Saved/
+
+# ── Baked SeinARTS data (regenerable build artifacts — re-bake after clone) ──
+# Nav + Fog-of-War bakes are derived from level geometry + plugin code and run
+# hundreds of MB each (the NavData_*.uasset are ~573 MB apiece). After clone,
+# open each level once and click "Bake Navigation" / "Bake Fog Of War" on the
+# volumes. Bake destinations are configured in plugin settings (defaults below).
+# The **/ prefix is required so these match inside Plugins/.../Content, not just root.
+**/Content/Levels/Data/
+**/Content/NavData/
+**/Content/FogOfWarData/
+
+# ── IDE / build tooling ──
+.vs/
+# .vscode/ is UE-regenerated with absolute paths; un-ignore if you keep custom tasks/launch
+.vscode/
+.idea/
+*.sln
+*.suo
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.opendb
+*.vcxproj*
+*.xcodeproj/
+*.xcworkspace/
+
+# ── OS junk ──
+Thumbs.db
+ehthumbs.db
+.DS_Store
+
+# ── Python (UE editor scripting / tooling) ──
+__pycache__/
+*.pyc
+
+# ── Claude Code local state (settings.local, worktrees, transcripts, etc.) ──
+.claude/
+
+# NOTE (tracked on purpose): *.uproject, *.uplugin, Config/, Source/, Content/
+# (minus baked data above), Build.ps1, .vsconfig, and the per-plugin CLAUDE.md
+# files are all version-controlled.

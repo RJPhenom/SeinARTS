@@ -1,0 +1,340 @@
+/**
+ * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
+ * @file    SeinSquadComponent.h
+ * @brief   Squad component for the persistent squad entity that owns
+ *          a heterogeneous slot list (CoH-style). Slots are canonical;
+ *          the live member list is derived from non-invalid occupants.
+ */
+
+#pragma once
+
+#include "CoreMinimal.h"
+#include "Engine/DataTable.h"
+#include "GameplayTagContainer.h"
+#include "Types/FixedPoint.h"
+#include "Types/Vector.h"
+#include "Types/Quat.h"
+#include "Types/Transform.h"
+#include "Core/SeinEntityHandle.h"
+#include "Actor/SeinActor.h"
+#include "Components/SeinComponent.h"
+#include "Data/SeinResourceTypes.h"
+#include "SeinSquadComponent.generated.h"
+
+class USeinCommandBrokerResolver;
+
+/**
+ * Whether the squad enters a container as a single entity (one occupant
+ * contributing Size = SlotCount to the container's CurrentLoad â€” the squad
+ * actor itself enters, members hide) or as N entities (each member enters
+ * individually). Designer-chosen per squad. DESIGN Â§14.
+ */
+UENUM(BlueprintType)
+enum class ESeinSquadContainmentMode : uint8
+{
+	/** Squad enters as one entity. Squad actor occupies the container; members
+	 *  are hidden / parked relative to it. CoH garrison style. */
+	AsOne,
+
+	/** Each squad member enters the container individually. Container sees N
+	 *  occupants. Useful for large transports that load each soldier discretely. */
+	AsN,
+};
+
+
+// NOTE: per-squad ability dispatch policy was relocated to USeinAbility
+// (its own DispatchMode / DispatchSelector / DispatchPreferredTag /
+// DispatchFallback fields, plus the ApplyAbilityDispatchPolicy helper on
+// USeinCommandBrokerResolver). Authoring lives on the ability itself so the
+// same policy works uniformly in squad brokers and selection brokers — the
+// "Grenade is thrown by one member" decision is a property of the ability,
+// not of each squad that grants it. See ESeinAbilityDispatchMode in
+// SeinAbility.h for the new home.
+
+
+/**
+ * One slot in a squad's canonical recipe + runtime occupancy. Heterogeneous:
+ * each slot defines its own entity class, formation offset, reinforce cost and
+ * timings. Identified by its `SlotTags` container â€” designers ensure each
+ * slot carries at least one tag unique within the squad (e.g.,
+ * `Squad.Slot.Sergeant`, `Squad.Slot.Rifle.0`, `Squad.Slot.Rifle.1`, â€¦),
+ * which doubles as the discriminator for member back-refs and as descriptive
+ * metadata for promotion priority, reinforce ordering, ability dispatch.
+ */
+USTRUCT(BlueprintType, meta = (SeinDeterministic))
+struct SEINARTSCOREENTITY_API FSeinSquadSlot
+{
+	GENERATED_BODY()
+
+	/** Tag container identifying this slot. Each slot must carry at least one
+	 *  tag unique within the squad's slot list â€” that tag is the stable
+	 *  back-reference key (`FSeinSquadMemberComponent::SlotTag`,
+	 *  `FSeinSquadReinforceEntry::SlotTag`). Additional tags are descriptive:
+	 *  e.g., a sergeant slot might carry `Squad.Slot.Sergeant` (unique) plus
+	 *  `Squad.Slot.Leader` (shared / role marker). Lookup walks slots and
+	 *  matches the first slot whose container has the queried tag. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Squad")
+	FGameplayTagContainer SlotTags;
+
+	/** Entity Blueprint class spawned to fill this slot at squad-create time
+	 *  and at reinforce time. Heterogeneous squads pick different classes per
+	 *  slot (one sergeant, four riflemen, one machine-gunner).
+	 *
+	 *  Renamed from `Archetype` (2026-05-19) â€” "archetype" was outdated
+	 *  legacy nomenclature from the pre-Phase-5 USeinArchetypeDefinition
+	 *  pattern. The new naming reflects the post-refactor reality: each slot
+	 *  spawns a SeinARTS entity (the BP-class instance is "the unit"). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Squad")
+	TSubclassOf<ASeinActor> Entity;
+
+	/** Formation offset relative to the squad centroid + facing. Position +
+	 *  rotation. Squad dispatch resolver rotates by anchor facing and adds to
+	 *  the squad's anchor when computing per-member move targets. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Squad")
+	FFixedTransform OffsetTransform;
+
+	/** Resource cost to reinforce this slot. Tag-keyed (matches the framework
+	 *  cost convention used on `USeinAbility::ResourceCost` etc.). Heterogeneous
+	 *  â€” a sergeant slot may cost more manpower than a rifleman slot. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Squad")
+	FSeinResourceCost ReinforceCost;
+
+	/** Time (sim-seconds) to build a reinforcement for this slot once queued.
+	 *  Indexed per-slot â€” special members can take longer. Default 0 = instant. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Squad")
+	FFixedPoint ReinforceBuildTime = FFixedPoint::Zero;
+
+	/** Cooldown (sim-seconds) gating subsequent reinforces of THIS slot after a
+	 *  member arrives. Default 0 = no cooldown (CoH2 default behavior). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Squad")
+	FFixedPoint ReinforceCooldown = FFixedPoint::Zero;
+
+	/** Runtime: handle of the entity currently occupying this slot. Invalid =
+	 *  empty (eligible for reinforce if `bCanReinforce` is true on the squad). */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
+	FSeinEntityHandle CurrentOccupant;
+
+	/** Runtime: cooldown remaining before this slot can be queued for reinforce.
+	 *  Decremented by FSeinSquadSystem each tick. Zero = ready. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
+	FFixedPoint CurrentCooldown = FFixedPoint::Zero;
+};
+
+FORCEINLINE uint32 GetTypeHash(const FSeinSquadSlot& Slot)
+{
+	uint32 Hash = GetTypeHash(Slot.Entity.Get());
+	Hash = HashCombine(Hash, GetTypeHash(Slot.CurrentOccupant));
+	Hash = HashCombine(Hash, GetTypeHash(Slot.CurrentCooldown));
+	Hash = HashCombine(Hash, GetTypeHash(Slot.ReinforceCost));
+	for (const FGameplayTag& Tag : Slot.SlotTags)
+	{
+		Hash = HashCombine(Hash, GetTypeHash(Tag));
+	}
+	return Hash;
+}
+
+/**
+ * One pending reinforcement on the squad's reinforce queue. Build progress
+ * ticked by FSeinSquadSystem; on completion, the slot's entity class is spawned
+ * at the squad's transform and walks to its slot offset.
+ */
+USTRUCT(BlueprintType, meta = (SeinDeterministic))
+struct SEINARTSCOREENTITY_API FSeinSquadReinforceEntry
+{
+	GENERATED_BODY()
+
+	/** Discriminator tag â€” the unique-per-squad tag carried by the slot this
+	 *  entry will fill on completion. Resolved against the squad's slot list
+	 *  via `IndexOfSlotByTag(SlotTag)`. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
+	FGameplayTag SlotTag;
+
+	/** Build progress in sim-seconds (0 â†’ TotalBuildTime). */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
+	FFixedPoint BuildProgress = FFixedPoint::Zero;
+
+	/** Snapshot of the slot's ReinforceBuildTime at enqueue. Mid-build
+	 *  modifier changes don't affect already-queued entries (matches the
+	 *  production system's snapshot-at-enqueue convention). */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
+	FFixedPoint TotalBuildTime = FFixedPoint::Zero;
+
+	/** Snapshot of the cost actually deducted from the player at enqueue.
+	 *  Drives refund-on-cancel without re-resolving cost at cancel time. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
+	FSeinResourceCost DeductedCost;
+};
+
+FORCEINLINE uint32 GetTypeHash(const FSeinSquadReinforceEntry& Entry)
+{
+	uint32 Hash = GetTypeHash(Entry.SlotTag);
+	Hash = HashCombine(Hash, GetTypeHash(Entry.BuildProgress));
+	Hash = HashCombine(Hash, GetTypeHash(Entry.TotalBuildTime));
+	Hash = HashCombine(Hash, GetTypeHash(Entry.DeductedCost));
+	return Hash;
+}
+
+/**
+ * Persistent squad component. Lives on the squad entity (a real lightweight
+ * `ASeinActor` â€” not abstract â€” so widget components can follow the squad
+ * centroid for banners / nameplates). Slots are the canonical member list;
+ * the live members array is derived via `GetLiveMembers()`.
+ *
+ * The squad reuses the existing CommandBroker primitive for member dispatch
+ * by carrying `FSeinCommandBrokerData` alongside this component, with the
+ * broker's `bSelfCullOnEmpty` flag flipped off so the squad persists past
+ * member-list emptiness (squad is destroyed by `FSeinSquadSystem` when its
+ * last slot empties AND no reinforces are pending).
+ */
+USTRUCT(BlueprintType, meta = (SeinDeterministic))
+struct SEINARTSCOREENTITY_API FSeinSquadComponent : public FSeinComponent
+{
+	GENERATED_BODY()
+
+	/** Canonical slot list. Each slot is heterogeneous (own entity class, cost,
+	 *  formation offset). Mutating this array at runtime requires routing
+	 *  through the mutation BPFL so member SlotID back-refs stay consistent. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Squad")
+	TArray<FSeinSquadSlot> Slots;
+
+	/** Handle of the current squad leader. Single source of truth â€” members
+	 *  query their leadership status via `World->GetSquadLeader(SquadEntity) == MyHandle`.
+	 *  Auto-promoted by `FSeinSquadSystem` on leader death (next live occupant
+	 *  in slot order, or the first slot tagged `Squad.Slot.Leader` if any). */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
+	FSeinEntityHandle Leader;
+
+	/** Designer toggle: can this squad currently be reinforced? Game-side logic
+	 *  flips this (in/out of friendly territory, locked by mission script, etc.).
+	 *  Reinforce ability checks this in its CanActivate gate. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Squad")
+	bool bCanReinforce = true;
+
+	/** Generic squad-level opt-in for ANY preview/visualization system that
+	 *  wants to render "where would members land if I clicked here" decals
+	 *  while the squad is selected (the SeinARTSCover module's destination
+	 *  preview is the framework's reference consumer; other plugins are free
+	 *  to read this flag too).
+	 *
+	 *  Lives here on the squad component â€” not on each member's
+	 *  FSeinNavigationComponent â€” because squad selection is at the SQUAD
+	 *  level (per the framework rule: clicking a squad member selects the
+	 *  squad, not the member). A squad opting out via this flag suppresses
+	 *  previews for ALL of its members in one place; designers don't have to
+	 *  flip every member's per-unit nav-preview opt-out. Members selected
+	 *  outside a squad context (lone units / mixed selections that include
+	 *  non-squad units) still respect their own
+	 *  FSeinNavigationComponent::bShowNavigationPreview.
+	 *
+	 *  Default true â€” most squads benefit from the hover preview. Set false
+	 *  for ambient/scripted squads where the visualization noise hurts more
+	 *  than it helps (spawning waves, scenario-driven garrisons, etc.). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Squad")
+	bool bShowFormationPreview = true;
+
+	/** How this squad enters containers. AsOne = squad actor enters as a single
+	 *  occupant contributing Size = SlotCount. AsN = each member enters
+	 *  individually. DESIGN Â§14. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Squad")
+	ESeinSquadContainmentMode ContainmentMode = ESeinSquadContainmentMode::AsOne;
+
+	/** Pathing-only coherency hint. Members further than this from the squad
+	 *  centroid are nudged back during pathing. Gameplay effects of being out
+	 *  of coherency are designer-side (effects keyed off a tag the squad system
+	 *  applies). Zero = no coherency enforcement. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Squad")
+	FFixedPoint CoherencyRadius = FFixedPoint::Zero;
+
+	/** CoH-style natural-feel toggle. When the squad is asked to move to a
+	 *  destination roughly opposite its current facing (dot product < 0
+	 *  with current forward), the formation KEEPS its current facing
+	 *  rather than rotating 180Â° around its centroid. Result: each member
+	 *  walks roughly straight to its new slot â€” the back row becomes the
+	 *  front row of the new arrival without anyone having to walk past
+	 *  their squadmates. Visually: the squad "backs up" in formation
+	 *  rather than spinning around.
+	 *
+	 *  Without this, a 180Â° rotation reshuffles slot positions across the
+	 *  centroid (the right-flank becomes the new left-flank in world space)
+	 *  and units' paths cross each other in the middle as they trade
+	 *  places â€” visible spaghetti.
+	 *
+	 *  Default false. Designers opt in per-squad. The movement system
+	 *  decides whether to play a backward-walk animation when the move
+	 *  direction disagrees with the unit's facing â€” this flag only
+	 *  controls slot assignment. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Squad")
+	bool bInvertSlotOrderWhenMovingBackward = false;
+
+	/** Per-squad override for the dispatch resolver class used by this squad's
+	 *  CommandBroker. Defaults to the framework's `USeinSquadDispatchResolver`
+	 *  (leader-first dispatch + per-slot transform formations). Designers
+	 *  override per-squad for project-specific dispatch policy. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Squad")
+	TSubclassOf<USeinCommandBrokerResolver> DispatchResolverClass;
+
+	// Per-ability dispatch policy moved to USeinAbility (DispatchMode /
+	// DispatchSelector / DispatchPreferredTag / DispatchFallback). The squad
+	// no longer carries a per-tag override table. See the migration note at
+	// the top of this file.
+
+	/** Pending reinforcements. Ticked by `FSeinSquadSystem`; on entry build
+	 *  completion, the slot's entity class spawns at the squad's transform and the
+	 *  member walks to its slot offset. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
+	TArray<FSeinSquadReinforceEntry> ReinforceQueue;
+
+	// â”€â”€â”€ Helpers (pure read; routed-mutations live in the mutation BPFL) â”€â”€â”€
+
+	/** All currently-occupied slots' member handles. Walks Slots, skips invalid
+	 *  occupants. Stable order = slot declaration order. */
+	TArray<FSeinEntityHandle> GetLiveMembers() const;
+
+	/** Count of slots with a valid occupant. */
+	int32 GetLiveMemberCount() const;
+
+	/** Total slot count (regardless of occupancy). */
+	int32 GetMaxSquadSize() const { return Slots.Num(); }
+
+	bool HasLeader() const { return Leader.IsValid(); }
+
+	/** Linear lookup â€” slots are short, no need for a map. Returns INDEX_NONE if
+	 *  no slot has the given tag in its `SlotTags` container. Designers must
+	 *  ensure each slot has at least one tag unique within this squad for
+	 *  back-ref roundtrips to be deterministic. */
+	int32 IndexOfSlotByTag(FGameplayTag SlotTag) const;
+
+	/** Find which slot a member occupies. INDEX_NONE if the member isn't in
+	 *  any slot of this squad. */
+	int32 IndexOfSlotByMember(FSeinEntityHandle Member) const;
+
+	/** First empty slot in declaration order. INDEX_NONE if all slots are
+	 *  occupied. Used as the default reinforce target. */
+	int32 FindFirstEmptySlotIndex() const;
+
+	/** Centroid of all live members in the slot list. Returns the squad's last
+	 *  known position when the squad has no live members (caller decides what to
+	 *  do with that â€” typically destroy the squad entity). */
+	FFixedVector ComputeCentroid(const FFixedVector& Fallback) const;
+
+};
+
+FORCEINLINE uint32 GetTypeHash(const FSeinSquadComponent& Component)
+{
+	uint32 Hash = GetTypeHash(Component.Leader);
+	Hash = HashCombine(Hash, GetTypeHash(Component.bCanReinforce));
+	Hash = HashCombine(Hash, GetTypeHash(Component.bShowFormationPreview));
+	Hash = HashCombine(Hash, GetTypeHash(static_cast<uint8>(Component.ContainmentMode)));
+	Hash = HashCombine(Hash, GetTypeHash(Component.CoherencyRadius));
+	Hash = HashCombine(Hash, GetTypeHash(Component.bInvertSlotOrderWhenMovingBackward));
+	Hash = HashCombine(Hash, GetTypeHash(Component.Slots.Num()));
+	for (const FSeinSquadSlot& Slot : Component.Slots)
+	{
+		Hash = HashCombine(Hash, GetTypeHash(Slot));
+	}
+	for (const FSeinSquadReinforceEntry& Entry : Component.ReinforceQueue)
+	{
+		Hash = HashCombine(Hash, GetTypeHash(Entry));
+	}
+	return Hash;
+}
