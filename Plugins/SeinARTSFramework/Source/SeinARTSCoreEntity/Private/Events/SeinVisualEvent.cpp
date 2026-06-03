@@ -27,6 +27,24 @@ FSeinVisualEvent FSeinVisualEvent::MakeDestroyEvent(FSeinEntityHandle Entity)
 	return Event;
 }
 
+FSeinVisualEvent FSeinVisualEvent::MakeCollisionOverlapBeginEvent(FSeinEntityHandle A, FSeinEntityHandle B)
+{
+	FSeinVisualEvent Event;
+	Event.Type = ESeinVisualEventType::CollisionOverlapBegin;
+	Event.PrimaryEntity = A;
+	Event.SecondaryEntity = B;
+	return Event;
+}
+
+FSeinVisualEvent FSeinVisualEvent::MakeCollisionOverlapEndEvent(FSeinEntityHandle A, FSeinEntityHandle B)
+{
+	FSeinVisualEvent Event;
+	Event.Type = ESeinVisualEventType::CollisionOverlapEnd;
+	Event.PrimaryEntity = A;
+	Event.SecondaryEntity = B;
+	return Event;
+}
+
 FSeinVisualEvent FSeinVisualEvent::MakeDamageAppliedEvent(FSeinEntityHandle Target, FSeinEntityHandle Source, FFixedPoint Amount, FGameplayTag DamageType)
 {
 	FSeinVisualEvent Event;

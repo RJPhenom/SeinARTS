@@ -46,6 +46,9 @@
 // pattern. Each module registers its own customization at StartupModule under
 // `#if WITH_EDITOR`, so the editor module never imports their headers.
 #include "Details/SeinVisionStampDetails.h"
+#include "Details/SeinCollisionResponseDetails.h"
+#include "Details/SeinCollisionChannelDetails.h"
+#include "Details/SeinCollisionObjectTypeDetails.h"
 #include "Visualizers/SeinEntityComponentVisualizer.h"
 #include "Actor/SeinEntityComponent.h"
 #include "UnrealEdGlobals.h"
@@ -231,6 +234,21 @@ void FSeinARTSEditorModule::StartupModule()
 		PropertyModule.RegisterCustomPropertyTypeLayout(
 			TEXT("SeinVisionStamp"),
 			FOnGetPropertyTypeCustomizationInstance::CreateStatic(&FSeinVisionStampDetails::MakeInstance));
+
+		// Collision response matrix — Unreal-style Ignore/Overlap/Block per channel.
+		PropertyModule.RegisterCustomPropertyTypeLayout(
+			TEXT("SeinCollisionResponseContainer"),
+			FOnGetPropertyTypeCustomizationInstance::CreateStatic(&FSeinCollisionResponseDetails::MakeInstance));
+
+		// Collision channel registry — flat Name | Default Response | Debug Color rows.
+		PropertyModule.RegisterCustomPropertyTypeLayout(
+			TEXT("SeinCollisionChannelDefinition"),
+			FOnGetPropertyTypeCustomizationInstance::CreateStatic(&FSeinCollisionChannelDetails::MakeInstance));
+
+		// Object Type — dropdown of channel names from settings.
+		PropertyModule.RegisterCustomPropertyTypeLayout(
+			TEXT("SeinCollisionObjectType"),
+			FOnGetPropertyTypeCustomizationInstance::CreateStatic(&FSeinCollisionObjectTypeDetails::MakeInstance));
 
 		// Auto-tag-generation customizers — per-BP "Reset to Auto" buttons +
 		// settings-page Regenerate buttons. See SeinAutoTagDetails.h.

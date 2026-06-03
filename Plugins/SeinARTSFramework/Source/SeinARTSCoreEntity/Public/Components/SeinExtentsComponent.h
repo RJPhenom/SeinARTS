@@ -29,6 +29,7 @@
 #include "Stamping/SeinStampShape.h"
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
+#include "Collision/SeinCollisionTypes.h"
 #include "SeinExtentsComponent.generated.h"
 
 UENUM(BlueprintType)
@@ -307,6 +308,60 @@ struct SEINARTSCOREENTITY_API FSeinExtentsComponent : public FSeinComponent
 	uint8 BlockedFogOfWarLayerMask = 0xFE;
 
 	// =========================================================================
+	// Collision (extent-vs-extent)
+	// =========================================================================
+	//
+	// The collision layer pushes overlapping bodies apart so two colliders never
+	// occupy the same space — and, crucially, so a unit can never be shoved
+	// THROUGH another solid collider (a wall especially). It reuses the Shapes
+	// above as the entity's physical body and is INDEPENDENT of navigation: this
+	// section never consults bBlocksNav or the nav grid, and nav never consults
+	// these fields. A collider need not block nav; a nav blocker need not be a
+	// collider. All opt-in (bCollisionEnabled default OFF), same as the nav/FoW
+	// flags.
+
+	/** Master switch for this entity's participation in the collision layer.
+	 *  OFF (default) → invisible to collision: not inserted into the collision
+	 *  broadphase, never pushed, never generates overlap events (the cheap path).
+	 *  ON → the Shapes above act as colliders per the channel model below. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Collision")
+	bool bCollisionEnabled = false;
+
+	/** Whether this collider's transform can change at runtime.
+	 *  Static  → never displaced (infinite mass), cached in the broadphase's
+	 *            persistent tier, and Static↔Static pairs are skipped. Use for
+	 *            walls, buildings, fixed scenery — this is what makes "can't be
+	 *            pushed through a wall" hold. A destructible-but-fixed building
+	 *            is still Static (removed from the broadphase on death, never
+	 *            moved).
+	 *  Movable → may move (units, pushable props, doors, turrets); finite mass;
+	 *            rebuilt into the broadphase each tick.
+	 *  NOT inferred from the presence of a movement component — author explicitly. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Collision",
+		meta = (EditCondition = "bCollisionEnabled", EditConditionHides))
+	ESeinCollisionMobility Mobility = ESeinCollisionMobility::Movable;
+
+	/** Which collision channel this collider IS (its object type). Other
+	 *  colliders' response to this channel decides whether they Block, Overlap,
+	 *  or Ignore it. Picked from the channel registry in
+	 *  Project Settings > Plugins > SeinARTS > Collision — the details panel
+	 *  shows a dropdown of channel names. None = no object type → the collider
+	 *  is inert even with collision enabled. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Collision",
+		meta = (EditCondition = "bCollisionEnabled", EditConditionHides))
+	FSeinCollisionObjectType ObjectType;
+
+	/** Per-channel response overrides (Ignore / Overlap / Block). Sparse — any
+	 *  channel without an entry uses that channel's DefaultResponse from
+	 *  settings. The pairwise outcome is the weaker of the two colliders'
+	 *  responses to each other, so Block requires BOTH to Block. The details
+	 *  panel renders this as the Unreal-style response matrix; the runtime
+	 *  resolves it to a flat per-channel table once when the collider registers. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Collision",
+		meta = (EditCondition = "bCollisionEnabled", EditConditionHides))
+	FSeinCollisionResponseContainer CollisionResponses;
+
+	// =========================================================================
 	// Fog-of-war post-reveal visibility was moved off this struct in Phase-5+
 	// (2026-05-19). It now lives on `FSeinFogVisibilityComponent` in
 	// SeinARTSFogOfWar — top-level so entities WITHOUT a physical body
@@ -330,5 +385,9 @@ FORCEINLINE uint32 GetTypeHash(const FSeinExtentsComponent& Component)
 	Hash = HashCombine(Hash, GetTypeHash(Component.BlockedFogOfWarLayerMask));
 	Hash = HashCombine(Hash, GetTypeHash(Component.bBakesIntoNav));
 	Hash = HashCombine(Hash, GetTypeHash(Component.bBakesIntoFogOfWar));
+	Hash = HashCombine(Hash, GetTypeHash(Component.bCollisionEnabled));
+	Hash = HashCombine(Hash, GetTypeHash(static_cast<uint8>(Component.Mobility)));
+	Hash = HashCombine(Hash, GetTypeHash(Component.ObjectType));
+	Hash = HashCombine(Hash, GetTypeHash(Component.CollisionResponses));
 	return Hash;
 }

@@ -17,6 +17,31 @@
 // Extension's resolver (this repo's DefaultGame.ini does exactly that). The
 // base settings no longer name any cover class — full extension decoupling.
 
+namespace
+{
+	// Seeds the default collision-channel set. Shared by the settings ctor
+	// (fresh-project defaults) and PostInitProperties (recovery if a config
+	// somehow loaded an empty registry). Authored colliders reference these by
+	// Name; designers add/rename per game. Ships two channels — a static and a
+	// dynamic entity class — both defaulting to Block (solid bodies block one
+	// another); tune per project.
+	void SeedDefaultCollisionChannels(TArray<FSeinCollisionChannelDefinition>& Channels)
+	{
+		Channels.Reset();
+		auto Add = [&Channels](const TCHAR* InName, ESeinCollisionResponse InDefault, const TCHAR* InHexColor)
+		{
+			FSeinCollisionChannelDefinition Def;
+			Def.Name            = FName(InName);
+			Def.DefaultResponse = InDefault;
+			Def.DebugColor      = FLinearColor(FColor::FromHex(InHexColor));
+			Channels.Add(Def);
+		};
+		//        Name                   Default response               Debug color (sRGB hex)
+		Add(TEXT("StaticEntity"),        ESeinCollisionResponse::Block, TEXT("8C8C8C")); // grey  — walls, buildings, fixed scenery
+		Add(TEXT("DynamicEntity"),       ESeinCollisionResponse::Block, TEXT("3CB043")); // green — units, movable bodies
+	}
+}
+
 USeinARTSCoreSettings::USeinARTSCoreSettings()
 	: SimulationTickRate(30)
 	, MaxTicksPerFrame(5)
@@ -132,6 +157,12 @@ USeinARTSCoreSettings::USeinARTSCoreSettings()
 	PrefixCategoryMappings.Add(FSeinTagPrefixMapping(TEXT("SR"),  TEXT("Research")));
 	PrefixCategoryMappings.Add(FSeinTagPrefixMapping(TEXT("ST"),  TEXT("Tech")));
 	PrefixCategoryMappings.Add(FSeinTagPrefixMapping(TEXT("SBP"), TEXT("Entity")));
+
+	// Collision channels: ships StaticEntity + DynamicEntity. Growable — designers
+	// add/rename per game. Config load after the ctor replaces this only if the
+	// INI carries the array; fresh projects keep these. See
+	// SeedDefaultCollisionChannels above.
+	SeedDefaultCollisionChannels(CollisionChannels);
 }
 
 namespace
@@ -203,6 +234,14 @@ void USeinARTSCoreSettings::PostInitProperties()
 		{
 			NavLayers[i].DebugColor = DefaultNavLayerColors[i];
 		}
+	}
+
+	// Collision channels are growable (not fixed-size), so there's no slot-count
+	// to enforce. Only recover from an empty registry — a config that loaded zero
+	// channels would leave collision unusable; re-seed the defaults in that case.
+	if (CollisionChannels.Num() == 0)
+	{
+		SeedDefaultCollisionChannels(CollisionChannels);
 	}
 
 	// DefaultBrokerResolverClass is intentionally left at whatever the config

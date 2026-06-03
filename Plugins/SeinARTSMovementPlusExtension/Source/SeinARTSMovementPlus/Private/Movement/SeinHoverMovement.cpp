@@ -142,7 +142,7 @@ bool USeinHoverMovement::Tick(const FSeinMovementContext& Ctx)
 	NewPos.Y = NewPos.Y + SinY * StepLen;
 
 	// XY nav collision — hover still respects ground nav for XY positioning.
-	NewPos = ResolveNavCollision(AgentPos, NewPos, Nav);
+	NewPos = ResolveNavCollision(AgentPos, NewPos, Nav, Ctx);
 
 	// Altitude target: max(cruise, clearance floor). Smooth toward it at
 	// AltitudeChangeRate. The current altitude lives on the polymorphic

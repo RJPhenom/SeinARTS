@@ -7,7 +7,7 @@
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Simulation/ComponentStorage.h"
 
-DEFINE_LOG_CATEGORY_STATIC(LogSeinBPFL, Log, All);
+#include "SeinARTSCoreEntityLog.h"  // LogSeinBPFL (module-shared)
 
 USeinWorldSubsystem* USeinComponentBPFL::GetWorldSubsystem(const UObject* WorldContextObject)
 {

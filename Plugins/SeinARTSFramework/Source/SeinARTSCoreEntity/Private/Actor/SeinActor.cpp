@@ -10,7 +10,7 @@
 #include "Actor/SeinActor.h"
 #include "Actor/SeinEntityComponent.h"
 
-DEFINE_LOG_CATEGORY_STATIC(LogSeinSim, Log, All);
+#include "SeinARTSCoreEntityLog.h"  // LogSeinSim (module-shared)
 
 ASeinActor::ASeinActor()
 {

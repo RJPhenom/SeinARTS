@@ -14,7 +14,7 @@
 #include "Components/SeinCommandBrokerData.h"
 #include "Events/SeinVisualEvent.h"
 
-DEFINE_LOG_CATEGORY_STATIC(LogSeinBPFL, Log, All);
+#include "SeinARTSCoreEntityLog.h"  // LogSeinBPFL (module-shared)
 
 USeinWorldSubsystem* USeinSimMutationBPFL::GetWorldSubsystem(const UObject* WorldContextObject)
 {
@@ -124,7 +124,7 @@ bool USeinSimMutationBPFL::SeinSetCurrentBuildProgress(const UObject* WCO, FSein
 
 namespace
 {
-	constexpr int32 MaxParentChainDepth = 32;
+	constexpr int32 MaxParentChainDepthMutation = 32;
 
 	/** Linear find by tag (mutable). */
 	FSeinChildTransform* FindByTagMutable(TArray<FSeinChildTransform>& Nodes, FGameplayTag Tag)
@@ -160,7 +160,7 @@ namespace
 		TArray<const FSeinChildTransform*, TInlineAllocator<8>> Chain;
 		const FSeinChildTransform* Cursor = FindByTagConst(Nodes, Leaf->ParentTag);
 		int32 Depth = 0;
-		while (Cursor && Depth < MaxParentChainDepth)
+		while (Cursor && Depth < MaxParentChainDepthMutation)
 		{
 			Chain.Add(Cursor);
 			if (!Cursor->ParentTag.IsValid()) break;

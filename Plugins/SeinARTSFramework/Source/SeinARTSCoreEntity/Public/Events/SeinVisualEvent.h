@@ -67,6 +67,12 @@ enum class ESeinVisualEventType : uint8
 	VoteStarted,
 	VoteProgress,
 	VoteResolved,
+
+	/** Two Overlap-responding colliders began overlapping this tick.
+	 *  PrimaryEntity = A, SecondaryEntity = B (canonical: A.Index < B.Index). */
+	CollisionOverlapBegin,
+	/** Two colliders stopped overlapping (separated, or one was destroyed). */
+	CollisionOverlapEnd,
 };
 
 /**
@@ -234,6 +240,13 @@ struct SEINARTSCOREENTITY_API FSeinVisualEvent
 
 	/** Create a VoteResolved event. `Tag` = VoteType; `Value` = 1 if passed, 0 if failed. */
 	static FSeinVisualEvent MakeVoteResolvedEvent(FGameplayTag VoteType, bool bPassed);
+
+	/** Create a CollisionOverlapBegin event — two Overlap-responding colliders
+	 *  started overlapping. PrimaryEntity = A, SecondaryEntity = B. */
+	static FSeinVisualEvent MakeCollisionOverlapBeginEvent(FSeinEntityHandle A, FSeinEntityHandle B);
+
+	/** Create a CollisionOverlapEnd event — counterpart to begin. */
+	static FSeinVisualEvent MakeCollisionOverlapEndEvent(FSeinEntityHandle A, FSeinEntityHandle B);
 };
 
 /**

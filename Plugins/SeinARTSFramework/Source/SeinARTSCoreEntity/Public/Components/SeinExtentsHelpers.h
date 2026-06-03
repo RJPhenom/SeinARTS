@@ -93,6 +93,27 @@ namespace SeinExtentsHelpers
 	}
 
 	/**
+	 * Planar bounding radius of a whole collider, measured from the ENTITY
+	 * centre (not each shape's own centre): max over shapes of
+	 * (|Shape.LocalOffset.XY| + BoundingRadius(Shape)). Accounts for shapes
+	 * offset away from the entity origin, so a compound body's true reach is
+	 * covered. Used by the collision broadphase (footprint cell-stamping +
+	 * query radius) and the collision resolver (neighbour query + mass), which
+	 * must agree on collider size. Returns 0 for an empty shape set. */
+	inline FFixedPoint GetColliderBoundingRadius(const FSeinExtentsComponent& Extents)
+	{
+		FFixedPoint MaxRadius = FFixedPoint::Zero;
+		for (const FSeinExtentsShape& Shape : Extents.Shapes)
+		{
+			FFixedVector OffsetXY = Shape.LocalOffset;
+			OffsetXY.Z = FFixedPoint::Zero;
+			const FFixedPoint R = OffsetXY.Size() + BoundingRadius(Shape);
+			if (R > MaxRadius) MaxRadius = R;
+		}
+		return MaxRadius;
+	}
+
+	/**
 	 * Compute a "stand here" point just outside a target entity's footprint,
 	 * on the surface CLOSEST to `ApproachFrom`. Used by AutoMoveThen so a
 	 * unit walking up to a building stops at the building's edge instead of

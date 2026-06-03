@@ -9,8 +9,9 @@
  *          AI, scenario scripts) that needs to find entities in space.
  *
  *          These helpers are O(N) over the entity pool — fine for incidental
- *          queries; perf-sensitive hot paths should use the framework's
- *          spatial hash directly (USeinSpatialHashSystem).
+ *          queries. (There is no general-purpose proximity index to lean on:
+ *          the framework's spatial hash is the collision broadphase and is
+ *          collision-only.)
  */
 
 #pragma once

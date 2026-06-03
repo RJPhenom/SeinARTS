@@ -86,10 +86,22 @@ phases and ordered by priority within a phase:
    system ticks active primary + passive abilities (movement runs here).
 4. **PostTick** — command-broker dispatch resolution, deferred destroy cleanup, state hash.
 
-Built-in systems in CoreEntity: AbilityTick, CommandBroker, Cooldown, EffectTick, Lifespan,
-PenetrationResolution, Production, SpatialHash, StateHash. Other modules register their own systems
-into the loop (e.g. `SeinNavBlockerStampSystem` from Nav; `FSeinPositionKeepSystem` from Movement;
-`FSeinSquadSystem` from the Squad extension).
+Built-in systems in CoreEntity: AbilityTick, CommandBroker, CollisionBroadphase (PreTick),
+CollisionResolution (PostTick), Cooldown, EffectTick, Lifespan, Production, StateHash. Other
+modules register their own systems into the loop (e.g. `SeinNavBlockerStampSystem` from Nav;
+`FSeinPositionKeepSystem` from Movement; `FSeinSquadSystem` from the Squad extension).
+
+**Collision (extent-vs-extent)** is a deterministic layer **independent of navigation** — it never
+consults `bBlocksNav` / the nav grid, and nav never consults it. Authored on `FSeinExtentsComponent`'s
+collision section (`bCollisionEnabled` / `Mobility` / `ObjectType` / response matrix) against a
+settings-driven channel registry (`USeinARTSCoreSettings::CollisionChannels`). Broadphase =
+`FSeinCollisionSpatialHash` (two-tier: cached static + per-tick dynamic, footprint cell-stamped,
+rebuilt by `FSeinCollisionBroadphaseSystem`); narrowphase = MTV queries in
+`SeinARTSCore/Math/CollisionQueries.h` (planar 2D disc/OBB SAT). `FSeinCollisionResolutionSystem`
+Block-separates with infinite-mass statics (a unit can't be pushed through a wall) and emits
+`CollisionOverlapBegin/End` visual events for Overlap responses. Editor matrix UX (Ignore/Overlap/
+Block per channel) = `FSeinCollisionResponseDetails`. (This replaced the old circle-only
+`PenetrationResolution` + generic `SpatialHash`, which were retired.)
 
 > **`TimeAccumulator` is a `float` on purpose** — it's a wall-clock scheduler, not sim state. The
 > delta fed into `TickSystems` is fixed-point (`FFixedPoint::One / FromInt(TickRate)`). Clients can
@@ -197,7 +209,7 @@ order. `USeinMoveToAction` records its destination as `FSeinMovementComponent::D
 ("home") on its first tick; `FSeinPositionKeepSystem` (registered by `USeinMovementSubsystem`,
 PostTick / priority 60) re-issues a real pathed move home for any unit that is **idle** (no active
 latent action — `USeinLatentActionManager::HasActiveActionForEntity`) and has drifted past a
-threshold (~150 uu) off `DesiredPosition`, e.g. after penetration resolution shoves it. **Newest
+threshold (~150 uu) off `DesiredPosition`, e.g. after collision resolution shoves it. **Newest
 move wins:** a fresh order (or another re-seek) overwrites `DesiredPosition`, and the in-flight
 action self-cancels on the mismatch — so a re-seek never fights a live order. Re-seek is sim-side and
 deterministic; the threshold lives in `SeinPositionKeepSystem.h`.

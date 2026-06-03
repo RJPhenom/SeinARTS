@@ -319,7 +319,7 @@ bool USeinTrackedVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 	NewPos.X = NewPos.X + CosY * StepLen;
 	NewPos.Y = NewPos.Y + SinY * StepLen;
 
-	NewPos = ResolveNavCollision(AgentPos, NewPos, Nav);
+	NewPos = ResolveNavCollision(AgentPos, NewPos, Nav, Ctx);
 	ApplyGroundSnapAndAltitude(NewPos, Ctx.MovementData, Nav, DeltaTime);
 
 	{

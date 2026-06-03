@@ -19,6 +19,7 @@
 #include "Data/SeinResourceTypes.h"
 #include "Data/SeinVisionLayerDefinition.h"
 #include "Data/SeinNavLayerDefinition.h"
+#include "Data/SeinCollisionChannelDefinition.h"
 #include "Data/SeinLobbyMapEntry.h"
 #include "Data/SeinTagPrefixMapping.h"
 #include "StructUtils/InstancedStruct.h"
@@ -437,6 +438,27 @@ public:
 		return Path == TEXT("/Script/SeinARTSNavigation.SeinNavigationAStar");
 		// Future: || Path == TEXT("/Script/SeinARTSNavigation.SeinNavigationPlannerAStar");
 	}
+
+	// Collision Settings — Channel Registry
+	// ====================================================================================================
+
+	/**
+	 * Project-wide collision-channel registry (object types). Each entry declares
+	 * a channel a collider can BE (its Object Type) and can RESPOND to (its
+	 * response matrix), with a per-channel DefaultResponse. Analogous to Unreal's
+	 * object channels (WorldStatic, Pawn, Vehicle, …) but fully data-driven and
+	 * **independent of navigation** — a nav blocker need not be a collider, and a
+	 * collider need not block nav.
+	 *
+	 * Colliders (FSeinExtentsComponent's collision section) reference channels by
+	 * Name: renaming a channel is safe; reordering is cosmetic for authored data
+	 * (the runtime rebuilds its index layout from this list each session, identically
+	 * on every peer). Ships two channels — StaticEntity + DynamicEntity — that
+	 * designers add to or rename per game.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Collision",
+		meta = (TitleProperty = "Name"))
+	TArray<FSeinCollisionChannelDefinition> CollisionChannels;
 
 	// Network / Lockstep Settings (DESIGN §TBD — Phase 0 spike)
 	// ====================================================================================================

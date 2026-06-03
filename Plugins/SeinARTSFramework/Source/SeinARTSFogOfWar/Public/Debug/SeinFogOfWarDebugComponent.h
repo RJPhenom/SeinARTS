@@ -44,6 +44,14 @@ private:
 	/** Called whenever the active fog impl broadcasts OnFogOfWarMutated. */
 	void HandleFogMutated();
 
+	/** In editor (pre-PIE) the world subsystem doesn't auto-load fog volume
+	 *  assets — LoadBakedAssetIntoFogOfWar only runs on OnWorldBeginPlay, which
+	 *  never fires for an editor world. This hook grabs the owning volume's
+	 *  baked asset and pushes it into the active fog impl so the scene proxy
+	 *  draws the real baked grid instead of the all-red bounds fallback.
+	 *  Mirrors USeinNavDebugComponent::EnsureNavLoaded. */
+	void EnsureFogLoaded();
+
 	TWeakObjectPtr<USeinFogOfWar> SubscribedFog;
 	FDelegateHandle FogMutatedHandle;
 };

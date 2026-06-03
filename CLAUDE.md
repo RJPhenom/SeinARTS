@@ -24,8 +24,13 @@ nothing and adds synchronization overhead.
 - Parallelism is still encouraged — just spawn parallel agents against the **main checkout**.
   Feature work is naturally module-scoped, so conflicts between parallel agents are rare.
 
-> Note: the project root is **not** currently a git repository. Don't assume `git` commands work
-> from here; ask before introducing version control.
+> Note: as of 2026-06-02 the project root **is** a git repository — a single project-wide monorepo
+> (`main`, initial commit `ecf6068`) tracking the host project and all four plugins, with **Git LFS**
+> for binary assets (`*.uasset`/`*.umap` + common media). Baked Nav/FoW data (`**/Content/Levels/Data/`)
+> is gitignored as a regenerable build artifact — **re-bake levels after a fresh clone**. History
+> starts fresh from the plugin split; the framework's pre-split history is archived at
+> `https://github.com/RJPhenom/SeinARTSFramework`. No remote is configured on the monorepo yet, and
+> `gh` is not installed. The no-worktree HARD RULE above still applies.
 
 ---
 

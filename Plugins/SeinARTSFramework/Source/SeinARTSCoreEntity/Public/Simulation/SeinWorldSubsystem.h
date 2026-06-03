@@ -19,7 +19,7 @@
 #include "Core/SeinPlayerState.h"
 #include "Core/SeinTickPhase.h"
 #include "Simulation/ComponentStorage.h"
-#include "Simulation/SeinSpatialHash.h"
+#include "Collision/SeinCollisionSpatialHash.h"
 #include "Input/SeinCommand.h"
 #include "Events/SeinVisualEvent.h"
 #include "Components/SeinContainmentTypes.h"
@@ -594,11 +594,12 @@ public:
 	FSeinEntityPool& GetEntityPool() { return EntityPool; }
 	const FSeinEntityPool& GetEntityPool() const { return EntityPool; }
 
-	/** Spatial hash for proximity queries. Rebuilt each tick by
-	 *  `FSeinSpatialHashSystem` (PreTick phase). Used by avoidance + future
-	 *  cross-cutting systems that need "find entities near point P." */
-	FSeinSpatialHash& GetSpatialHash() { return SpatialHash; }
-	const FSeinSpatialHash& GetSpatialHash() const { return SpatialHash; }
+	/** Collision broadphase (two-tier static/dynamic bucket grid). Rebuilt each
+	 *  tick by `FSeinCollisionBroadphaseSystem` (PreTick); queried by
+	 *  `FSeinCollisionResolutionSystem` (PostTick). Collision-only — navigation
+	 *  owns its own (A*-grid) structures and does not use this. */
+	FSeinCollisionSpatialHash& GetCollisionSpatialHash() { return CollisionSpatialHash; }
+	const FSeinCollisionSpatialHash& GetCollisionSpatialHash() const { return CollisionSpatialHash; }
 
 	/** Get the Blueprint actor class stored for an entity (for actor bridge spawning). */
 	TSubclassOf<ASeinActor> GetEntityActorClass(FSeinEntityHandle Handle) const;
@@ -1052,11 +1053,11 @@ private:
 	// Entity pool (replaces TMap<FSeinID, FSeinEntity>)
 	FSeinEntityPool EntityPool;
 
-	// Spatial hash — pure C++, rebuilt each tick by FSeinSpatialHashSystem.
-	// Lives next to the entity pool because its lifetime is identical and
-	// its callers (sim systems + movements) need a stable, world-scoped
-	// query surface. Initialized in Initialize().
-	FSeinSpatialHash SpatialHash;
+	// Collision broadphase — pure C++, rebuilt each tick by
+	// FSeinCollisionBroadphaseSystem. Lives next to the entity pool because its
+	// lifetime is identical and the collision systems need a stable, world-scoped
+	// query surface. Initialized in Initialize(). Collision-only (not navigation).
+	FSeinCollisionSpatialHash CollisionSpatialHash;
 
 	// Component storage registry (slot-indexed, keyed by UScriptStruct*)
 	TMap<UScriptStruct*, ISeinComponentStorage*> ComponentStorages;

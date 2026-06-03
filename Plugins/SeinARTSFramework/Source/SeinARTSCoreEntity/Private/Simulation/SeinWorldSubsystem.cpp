@@ -51,14 +51,14 @@
 #include "Simulation/Systems/SeinAbilityTickSystem.h"
 #include "Simulation/Systems/SeinCommandBrokerSystem.h"
 #include "Simulation/Systems/SeinProductionSystem.h"
-#include "Simulation/Systems/SeinPenetrationResolutionSystem.h"
-#include "Simulation/Systems/SeinSpatialHashSystem.h"
+#include "Simulation/Systems/SeinCollisionResolutionSystem.h"
+#include "Simulation/Systems/SeinCollisionBroadphaseSystem.h"
 #include "Simulation/Systems/SeinStateHashSystem.h"
 #include "Simulation/Systems/SeinLifespanSystem.h"
 
 #include "Brokers/SeinBrokerTypes.h"
 
-DEFINE_LOG_CATEGORY_STATIC(LogSeinSim, Log, All);
+#include "SeinARTSCoreEntityLog.h"  // LogSeinSim (module-shared)
 
 void USeinWorldSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
@@ -76,20 +76,27 @@ void USeinWorldSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
 	FixedDeltaTimeSeconds = 1.0f / static_cast<float>(Settings->SimulationTickRate);
 
-	// Spatial hash — cell size 200 cm balances bucket fan-out cost against
-	// query precision. Origin = world (0,0,0); levels offset from origin
+	// Collision broadphase — cell size 200 cm balances bucket fan-out cost
+	// against query precision. Origin = world (0,0,0); levels offset from origin
 	// just produce sparse buckets at high indices, no correctness impact.
-	SpatialHash.Initialize(FFixedPoint::FromInt(200), FFixedVector::ZeroVector);
+	CollisionSpatialHash.Initialize(FFixedPoint::FromInt(200), FFixedVector::ZeroVector);
+
+	// A collider spawning/dying changes the static set; flag the broadphase's
+	// static tier for rebuild (cheap bool; the broadphase system rebuilds it on
+	// the next PreTick if set). These delegates are multicast, so this composes
+	// with other spawn/destroy listeners (e.g. extension subsystems).
+	OnEntitySpawned.AddLambda([this](FSeinEntityHandle) { CollisionSpatialHash.MarkStaticDirty(); });
+	OnEntityDestroyed.AddLambda([this](FSeinEntityHandle) { CollisionSpatialHash.MarkStaticDirty(); });
 
 	// Register built-in systems
 	BuiltInSystems.Add(new FSeinEffectTickSystem());
-	BuiltInSystems.Add(new FSeinSpatialHashSystem());
+	BuiltInSystems.Add(new FSeinCollisionBroadphaseSystem());
 	BuiltInSystems.Add(new FSeinCooldownSystem());
 	BuiltInSystems.Add(new FSeinAbilityTickSystem());
 	BuiltInSystems.Add(new FSeinProductionSystem());
 	BuiltInSystems.Add(new FSeinLifespanSystem());
 	BuiltInSystems.Add(new FSeinCommandBrokerSystem());
-	BuiltInSystems.Add(new FSeinPenetrationResolutionSystem());
+	BuiltInSystems.Add(new FSeinCollisionResolutionSystem());
 	BuiltInSystems.Add(new FSeinStateHashSystem());
 
 	for (ISeinSystem* Sys : BuiltInSystems)

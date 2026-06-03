@@ -21,7 +21,7 @@
 // Inlined SeinDeterministic meta key — same name the factory uses. K2 nodes
 // can't dep on SeinARTSEditor (Editor module type) because they live in an
 // UncookedOnly module, so we duplicate the constant.
-namespace { static const FName GSeinDeterministicMetaKey(TEXT("SeinDeterministic")); }
+namespace { static const FName GSeinDeterministicMetaKeySet(TEXT("SeinDeterministic")); }
 
 #define LOCTEXT_NAMESPACE "K2Node_SeinSetComponent"
 
@@ -43,7 +43,7 @@ namespace SeinK2SetCompLocal
 			UScriptStruct* S = *It;
 			if (!S || S == Base) continue;
 			if (S->IsChildOf(Base)) { Out.Add(S); continue; }
-			if (S->IsA<UUserDefinedStruct>() && S->HasMetaData(GSeinDeterministicMetaKey))
+			if (S->IsA<UUserDefinedStruct>() && S->HasMetaData(GSeinDeterministicMetaKeySet))
 			{
 				Out.Add(S);
 			}

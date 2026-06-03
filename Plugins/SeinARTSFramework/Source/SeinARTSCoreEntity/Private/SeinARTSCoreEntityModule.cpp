@@ -12,6 +12,16 @@
  */
 
 #include "SeinARTSCoreEntityModule.h"
+#include "SeinARTSCoreEntityLog.h"
+
+// Module-shared log categories. Declared extern in SeinARTSCoreEntityLog.h and
+// defined ONCE here — previously each was DEFINE_LOG_CATEGORY_STATIC in several
+// .cpp files, which collided whenever the adaptive unity build packed two of
+// those files into the same translation unit. Defined unconditionally (UE_LOG
+// resolves them in every build config).
+DEFINE_LOG_CATEGORY(LogSeinSim);
+DEFINE_LOG_CATEGORY(LogSeinBridge);
+DEFINE_LOG_CATEGORY(LogSeinBPFL);
 
 #if !UE_BUILD_SHIPPING
 #include "HAL/IConsoleManager.h"

@@ -16,7 +16,7 @@
 #include "Input/SeinCommand.h"
 #include "Lib/SeinResourceBPFL.h"
 
-DEFINE_LOG_CATEGORY_STATIC(LogSeinBPFL, Log, All);
+#include "SeinARTSCoreEntityLog.h"  // LogSeinBPFL (module-shared)
 
 USeinWorldSubsystem* USeinAbilityBPFL::GetWorldSubsystem(const UObject* WorldContextObject)
 {

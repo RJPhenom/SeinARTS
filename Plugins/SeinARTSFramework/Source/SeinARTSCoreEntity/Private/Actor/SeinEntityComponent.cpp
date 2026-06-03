@@ -33,8 +33,7 @@
 // added, it MUST live outside this component to avoid the BP-reinstantiation
 // root-component-swap class of bug we tripped on.
 
-DEFINE_LOG_CATEGORY_STATIC(LogSeinBridge, Log, All);
-DEFINE_LOG_CATEGORY_STATIC(LogSeinSim, Log, All);
+#include "SeinARTSCoreEntityLog.h"  // LogSeinBridge, LogSeinSim (module-shared)
 DEFINE_LOG_CATEGORY_STATIC(LogSeinEntityComp, Log, All);
 
 USeinEntityComponent::USeinEntityComponent()

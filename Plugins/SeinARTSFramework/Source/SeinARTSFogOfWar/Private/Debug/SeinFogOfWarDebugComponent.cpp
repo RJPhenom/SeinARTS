@@ -24,6 +24,7 @@
 
 #include "Debug/SeinFogOfWarDebugComponent.h"
 #include "SeinFogOfWar.h"
+#include "SeinFogOfWarAsset.h"
 #include "SeinFogOfWarSubsystem.h"
 #include "SeinFogOfWarTypes.h"
 #include "SeinARTSFogOfWarModule.h"
@@ -476,6 +477,12 @@ void USeinFogOfWarDebugComponent::OnRegister()
 	Super::OnRegister();
 
 #if UE_ENABLE_DEBUG_DRAWING
+	// Editor-preview parity: pull the owning volume's baked asset into the impl
+	// before subscribing, so a freshly-opened editor world shows the real baked
+	// grid instead of the all-red bounds fallback (the subsystem only loads on
+	// OnWorldBeginPlay, which editor worlds never reach).
+	EnsureFogLoaded();
+
 	UWorld* World = GetWorld();
 	if (!World) return;
 	if (USeinFogOfWarSubsystem* Sub = World->GetSubsystem<USeinFogOfWarSubsystem>())
@@ -487,6 +494,26 @@ void USeinFogOfWarDebugComponent::OnRegister()
 		}
 	}
 	MarkRenderStateDirty();
+#endif
+}
+
+void USeinFogOfWarDebugComponent::EnsureFogLoaded()
+{
+#if UE_ENABLE_DEBUG_DRAWING
+	UWorld* World = GetWorld();
+	if (!World) return;
+	USeinFogOfWarSubsystem* Sub = World->GetSubsystem<USeinFogOfWarSubsystem>();
+	if (!Sub) return;
+	USeinFogOfWar* Fog = Sub->GetFogOfWar();
+	if (!Fog || Fog->HasRuntimeData()) return;
+
+	if (ASeinFogOfWarVolume* Vol = Cast<ASeinFogOfWarVolume>(GetOwner()))
+	{
+		if (USeinFogOfWarAsset* Asset = Vol->BakedAsset)
+		{
+			Fog->LoadFromAsset(Asset);
+		}
+	}
 #endif
 }
 

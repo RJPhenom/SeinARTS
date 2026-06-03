@@ -14,7 +14,7 @@
 #include "Engine/World.h"
 #include "EngineUtils.h"
 
-DEFINE_LOG_CATEGORY_STATIC(LogSeinBridge, Log, All);
+#include "SeinARTSCoreEntityLog.h"  // LogSeinBridge (module-shared)
 
 namespace SeinBridgeLocal
 {
