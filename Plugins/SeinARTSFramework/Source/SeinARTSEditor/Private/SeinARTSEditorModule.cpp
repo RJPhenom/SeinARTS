@@ -47,7 +47,6 @@
 // `#if WITH_EDITOR`, so the editor module never imports their headers.
 #include "Details/SeinVisionStampDetails.h"
 #include "Details/SeinCollisionResponseDetails.h"
-#include "Details/SeinCollisionChannelDetails.h"
 #include "Details/SeinCollisionObjectTypeDetails.h"
 #include "Visualizers/SeinEntityComponentVisualizer.h"
 #include "Actor/SeinEntityComponent.h"
@@ -239,11 +238,6 @@ void FSeinARTSEditorModule::StartupModule()
 		PropertyModule.RegisterCustomPropertyTypeLayout(
 			TEXT("SeinCollisionResponseContainer"),
 			FOnGetPropertyTypeCustomizationInstance::CreateStatic(&FSeinCollisionResponseDetails::MakeInstance));
-
-		// Collision channel registry — flat Name | Default Response | Debug Color rows.
-		PropertyModule.RegisterCustomPropertyTypeLayout(
-			TEXT("SeinCollisionChannelDefinition"),
-			FOnGetPropertyTypeCustomizationInstance::CreateStatic(&FSeinCollisionChannelDetails::MakeInstance));
 
 		// Object Type — dropdown of channel names from settings.
 		PropertyModule.RegisterCustomPropertyTypeLayout(
