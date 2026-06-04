@@ -200,6 +200,24 @@ struct SEINARTSCOREENTITY_API FSeinMovementComponent : public FSeinComponent
 	 *  SmoothedPitch — see that field's comment. */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Movement")
 	FFixedPoint SmoothedRoll = FFixedPoint::Zero;
+
+	/** Local-avoidance steering strength. The soft steering layer
+	 *  (FSeinAvoidanceSystem, PreTick) scales each unit's computed lateral nudge by
+	 *  this before the movement Tick consumes it. **0 = opt out** — the unit ignores
+	 *  avoidance entirely and its motion is bit-identical to a world with no
+	 *  avoidance (the hard penetration floor still applies). Per-class override:
+	 *  tune low for ponderous units, higher for nimble ones. Default 1. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement|Avoidance",
+		meta = (ClampMin = "0.0", DisplayName = "Avoidance Strength"))
+	FFixedPoint AvoidanceStrength = FFixedPoint::FromInt(1);
+
+	/** Per-tick lateral avoidance nudge (planar XY, strength-scaled, temporally
+	 *  smoothed) written by FSeinAvoidanceSystem at PreTick and consumed by the
+	 *  movement Tick via USeinMovement::ApplyAvoidanceSteer. Runtime sim state;
+	 *  hashed as a desync canary. Stays exactly zero for AvoidanceStrength = 0
+	 *  units, which is what makes them a true no-op. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Movement")
+	FFixedVector AvoidanceSteer = FFixedVector::ZeroVector;
 };
 
 FORCEINLINE uint32 GetTypeHash(const FSeinMovementComponent& C)
@@ -219,6 +237,8 @@ FORCEINLINE uint32 GetTypeHash(const FSeinMovementComponent& C)
 	Hash = HashCombine(Hash, GetTypeHash(C.bArrivalImminent));
 	Hash = HashCombine(Hash, GetTypeHash(C.SmoothedPitch));
 	Hash = HashCombine(Hash, GetTypeHash(C.SmoothedRoll));
+	Hash = HashCombine(Hash, GetTypeHash(C.AvoidanceStrength));
+	Hash = HashCombine(Hash, GetTypeHash(C.AvoidanceSteer));
 	// MovementClassData is hashed by the framework attribute resolver's
 	// reflection walk; skipped here (FInstancedStruct doesn't expose a
 	// stable GetTypeHash for arbitrary inner structs).

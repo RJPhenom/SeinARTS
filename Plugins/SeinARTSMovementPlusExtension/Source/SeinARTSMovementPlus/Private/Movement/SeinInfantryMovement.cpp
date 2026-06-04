@@ -96,6 +96,11 @@ bool USeinInfantryMovement::Tick(const FSeinMovementContext& Ctx)
 	if (DistToTargetSq > FFixedPoint::Epsilon)
 	{
 		Dir = FFixedVector::GetSafeNormal(ToTarget);
+		// Local avoidance — bend the desired direction around nearby units (steer
+		// precomputed one-sided at PreTick by FSeinAvoidanceSystem). Soft layer; the
+		// penetration floor still guarantees no overlap. Arrival + waypoint advance use
+		// the true geometry (DistToTargetSq / ToTarget), not Dir, so they're unaffected.
+		Dir = ApplyAvoidanceSteer(Ctx, Dir);
 	}
 
 	// Alignment-scaled target speed. The unit walks along its CURRENT

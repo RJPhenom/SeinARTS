@@ -235,12 +235,19 @@ public:
 	 *  at the call site. No-op when FootprintRadius <= 0 (intangible units
 	 *  opt out of viz by design).
 	 *
+	 *  Draws the footprint ring + two arrows: the final-output (velocity) vector in
+	 *  ORANGE (matching the ring) and the local-avoidance contribution in RED — so
+	 *  steering tuning reads "where it's going" vs "how hard avoidance is pushing" at
+	 *  a glance. The avoidance arrow is the velocity-space contribution (AvoidanceSteer
+	 *  scaled by speed) and skips when the unit isn't avoiding.
+	 *
 	 *  Pure draw — no sim mutation, safe to call off the sim tick. */
 	static void DrawSteeringDebugViz(
 		UWorld* World,
 		const FFixedVector& EntityPos,
 		float FootprintRadius,
-		const FFixedVector& Velocity);
+		const FFixedVector& Velocity,
+		const FFixedVector& AvoidanceSteer = FFixedVector::ZeroVector);
 #endif // UE_ENABLE_DEBUG_DRAWING
 
 	/** Populate the footprint cache used by `ResolveNavCollision`. Called by
@@ -494,6 +501,21 @@ protected:
 	 *  wall. When `CachedNumFootprintSamples == 0` (no Extents + no
 	 *  FallbackFootprintRadius), degrades to legacy point-only check. */
 	bool IsFootprintPassable(const FFixedVector& Pos, USeinNavigation* Nav) const;
+
+	/** Bend a NORMALIZED desired direction by this unit's precomputed local-
+	 *  avoidance steer (`FSeinMovementComponent::AvoidanceSteer`, written one-sided
+	 *  at PreTick by `FSeinAvoidanceSystem`). This is the single integration point
+	 *  every movement mode calls, so the general avoidance system applies across
+	 *  all of them. Soft layer — the hard penetration floor remains the no-overlap
+	 *  guarantee.
+	 *
+	 *  PURE READ: never query the spatial hash or read neighbour state here.
+	 *  Movement runs through the insertion-ordered latent-action manager, so a
+	 *  neighbour read at this point would be order-dependent → desync. Bit-exact
+	 *  no-op when the steer is ~zero (returns the input direction UNCHANGED), so an
+	 *  opted-out unit moves identically to a world with no avoidance. Input is
+	 *  assumed unit-length; the steer is sized in that same unit space. */
+	FFixedVector ApplyAvoidanceSteer(const FSeinMovementContext& Ctx, const FFixedVector& DesiredDir) const;
 
 	// CacheFootprintFromContext is declared in the public section below —
 	// called by USeinMoveToAction's first-tick setup.

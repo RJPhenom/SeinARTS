@@ -5,19 +5,36 @@
  */
 
 #include "SeinMovementSubsystem.h"
+#include "Simulation/SeinAvoidanceSystem.h"
+#include "Simulation/SeinWorldSubsystem.h"
 
 void USeinMovementSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 {
 	Super::OnWorldBeginPlay(InWorld);
 
-	// No movement sim systems are registered at present. The passive re-seek
-	// (FSeinPositionKeepSystem) was stripped 2026-06-03 pending a ground-up
-	// redesign after local avoidance lands. Future movement systems (avoidance,
-	// re-seek v2) register here against the USeinWorldSubsystem tick loop,
-	// mirroring USeinSquadSubsystem's create + RegisterSystem pattern.
+	// Local avoidance — the soft steering layer above the penetration floor. Mirrors
+	// USeinSquadSubsystem's create + RegisterSystem lifecycle. (The passive re-seek
+	// stripped 2026-06-03 is deliberately NOT re-added.)
+	USeinWorldSubsystem* Sim = InWorld.GetSubsystem<USeinWorldSubsystem>();
+	if (!Sim) return;
+
+	AvoidanceSystem = new FSeinAvoidanceSystem();
+	Sim->RegisterSystem(AvoidanceSystem);
 }
 
 void USeinMovementSubsystem::Deinitialize()
 {
+	if (AvoidanceSystem)
+	{
+		if (UWorld* World = GetWorld())
+		{
+			if (USeinWorldSubsystem* Sim = World->GetSubsystem<USeinWorldSubsystem>())
+			{
+				Sim->UnregisterSystem(AvoidanceSystem);
+			}
+		}
+		delete AvoidanceSystem;
+		AvoidanceSystem = nullptr;
+	}
 	Super::Deinitialize();
 }

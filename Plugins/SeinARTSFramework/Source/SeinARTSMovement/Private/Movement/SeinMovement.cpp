@@ -592,12 +592,33 @@ FFixedVector USeinMovement::ResolveNavCollision(
 	return OldPos;
 }
 
+FFixedVector USeinMovement::ApplyAvoidanceSteer(const FSeinMovementContext& Ctx, const FFixedVector& DesiredDir) const
+{
+	// PURE READ — never query the spatial hash or read neighbour state here.
+	// Movement runs through the insertion-ordered latent-action manager (live
+	// neighbour transforms), so any neighbour read at this point would be
+	// order-dependent → desync. The steer was computed ONE-SIDED at PreTick by
+	// FSeinAvoidanceSystem; here we only consume our own already-written field.
+	if (!Ctx.MovementData) return DesiredDir;
+	const FFixedVector& Steer = Ctx.MovementData->AvoidanceSteer;
+
+	// Bit-exact no-op when not avoiding: return the input direction UNCHANGED (no
+	// renormalize), so AvoidanceStrength = 0 / no-neighbour units move identically
+	// to a world with no avoidance.
+	if (Steer.SizeSquared() <= FFixedPoint::Epsilon) return DesiredDir;
+
+	// Bend the (unit) desired direction by the lateral steer, then renormalize.
+	return FFixedVector::GetSafeNormal(
+		FFixedVector(DesiredDir.X + Steer.X, DesiredDir.Y + Steer.Y, DesiredDir.Z));
+}
+
 #if UE_ENABLE_DEBUG_DRAWING
 void USeinMovement::DrawSteeringDebugViz(
 	UWorld* World,
 	const FFixedVector& EntityPos,
 	float FootprintRadius,
-	const FFixedVector& Velocity)
+	const FFixedVector& Velocity,
+	const FFixedVector& AvoidanceSteer)
 {
 	if (!World || FootprintRadius <= 0.0f) return;
 
@@ -608,29 +629,32 @@ void USeinMovement::DrawSteeringDebugViz(
 	const float DrawLifetime = 0.0f;
 	const float ZLift = 25.0f;
 
-	const FVector Center(
+	const FVector EntityPosFloat(
 		EntityPos.X.ToFloat(),
 		EntityPos.Y.ToFloat(),
-		EntityPos.Z.ToFloat() + ZLift);
+		EntityPos.Z.ToFloat());
+	const FVector Center(EntityPosFloat.X, EntityPosFloat.Y, EntityPosFloat.Z + ZLift);
 
-	const FColor RingColor(255, 220, 0, 255); // yellow
-	const FColor VelocityColor(0, 220, 255, 255); // cyan
+	// ORANGE for the footprint ring AND the final-output (velocity) arrow, so they
+	// read as one "this unit" group; RED for the avoidance contribution so the force
+	// avoidance is adding stands out against the output.
+	const FColor OrangeColor(255, 220, 0, 255); // footprint ring + final-output vector
+	const FColor AvoidColor(255, 0, 0, 255);    // avoidance-contribution vector
 
 	// Footprint ring. DrawDebugCircle's default orientation is in the XZ plane
 	// — we want it in the XY plane so it lies flat on the ground, hence the
 	// explicit Y axis + Z axis pair.
 	DrawDebugCircle(
 		World, Center, FootprintRadius, /*Segments*/ 32,
-		RingColor, /*PersistentLines*/ false, DrawLifetime, /*DepthPriority*/ 0,
+		OrangeColor, /*PersistentLines*/ false, DrawLifetime, /*DepthPriority*/ 0,
 		/*Thickness*/ 5.0f,
 		/*YAxis*/ FVector(1, 0, 0),
 		/*ZAxis*/ FVector(0, 1, 0),
 		/*DrawAxis*/ false);
 
-	// Velocity arrow. Scale by a horizon (1s of projected travel) so the
-	// arrow length reads as speed-in-units-per-second at a glance — at typical
-	// sim speeds (5–25 units/sec) this lands a visible-but-not-overwhelming
-	// arrow. Skip when speed is essentially zero.
+	// Final-output (velocity) arrow — ORANGE, matching the ring. Scale by a horizon
+	// (1s of projected travel) so the arrow length reads as speed at a glance. Skip
+	// when speed is essentially zero (idle units show the ring only).
 	const FVector VelocityFloat(
 		Velocity.X.ToFloat(),
 		Velocity.Y.ToFloat(),
@@ -638,18 +662,35 @@ void USeinMovement::DrawSteeringDebugViz(
 	const float VelocitySize = static_cast<float>(VelocityFloat.Size());
 	if (VelocitySize > KINDA_SMALL_NUMBER)
 	{
-		// Offset the arrow's ORIGIN along the velocity direction by
-		// FootprintRadius so it starts at the chassis edge, not the center —
-		// otherwise short arrows disappear inside large units. Endpoint
-		// preserves magnitude (origin + velocity).
+		// Offset the arrow's ORIGIN along its direction by FootprintRadius so it
+		// starts at the chassis edge, not the center — otherwise short arrows
+		// disappear inside large units. Endpoint preserves magnitude.
 		const FVector Origin = UE::SeinARTSMovement::DebugDraw::ComputeFootprintOriginAlong(
-			FVector(EntityPos.X.ToFloat(), EntityPos.Y.ToFloat(), EntityPos.Z.ToFloat()),
-			VelocityFloat, FootprintRadius, ZLift);
+			EntityPosFloat, VelocityFloat, FootprintRadius, ZLift);
 		const FVector Tip = Origin + VelocityFloat;
 		DrawDebugDirectionalArrow(World, Origin, Tip,
-			/*ArrowSize*/ 20.0f, VelocityColor,
+			/*ArrowSize*/ 20.0f, OrangeColor,
 			/*PersistentLines*/ false, DrawLifetime, /*DepthPriority*/ 0,
 			/*Thickness*/ 5.0f);
+
+		// Avoidance-contribution arrow — RED. AvoidanceSteer is a lateral nudge in
+		// unit-direction space; scaling it by the current speed expresses it as the
+		// velocity-space sideways push avoidance added this tick, directly comparable
+		// in scale to the orange output arrow above. Skips when not avoiding.
+		const FVector AvoidFloat(
+			AvoidanceSteer.X.ToFloat() * VelocitySize,
+			AvoidanceSteer.Y.ToFloat() * VelocitySize,
+			0.0f);
+		if (AvoidFloat.Size() > KINDA_SMALL_NUMBER)
+		{
+			const FVector AvoidOrigin = UE::SeinARTSMovement::DebugDraw::ComputeFootprintOriginAlong(
+				EntityPosFloat, AvoidFloat, FootprintRadius, ZLift);
+			const FVector AvoidTip = AvoidOrigin + AvoidFloat;
+			DrawDebugDirectionalArrow(World, AvoidOrigin, AvoidTip,
+				/*ArrowSize*/ 20.0f, AvoidColor,
+				/*PersistentLines*/ false, DrawLifetime, /*DepthPriority*/ 0,
+				/*Thickness*/ 5.0f);
+		}
 	}
 }
 #endif // UE_ENABLE_DEBUG_DRAWING

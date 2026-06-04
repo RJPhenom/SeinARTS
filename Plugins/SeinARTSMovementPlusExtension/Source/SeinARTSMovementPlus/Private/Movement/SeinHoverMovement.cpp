@@ -107,6 +107,14 @@ bool USeinHoverMovement::Tick(const FSeinMovementContext& Ctx)
 	FFixedVector ToTarget = LookAheadPoint - AgentPos;
 	ToTarget.Z = FFixedPoint::Zero;
 
+	// Local avoidance — bend the carrot direction around nearby units. Normalized
+	// in/out (angular effect independent of look-ahead distance); only the yaw target
+	// below consumes ToTarget. Soft layer; the floor still guarantees no overlap.
+	if (ToTarget.SizeSquared() > FFixedPoint::Epsilon)
+	{
+		ToTarget = ApplyAvoidanceSteer(Ctx, FFixedVector::GetSafeNormal(ToTarget));
+	}
+
 	const FFixedPoint CurrentYaw = YawFromRotation(Entity.Transform.Rotation);
 
 	// Smooth turn-to-target at TurnRate. Hover has no bicycle turning

@@ -30,6 +30,8 @@ bool USeinBasicMovement::Tick(const FSeinMovementContext& Ctx)
 	const FFixedVector InitialPos = Entity.Transform.GetLocation();
 	FFixedVector Pos = InitialPos;
 	FFixedPoint RemainingStep = MovementData.TopSpeed * DeltaTime;
+	// Local avoidance applies to this tick's FIRST movement step only.
+	bool bAvoidanceApplied = false;
 
 	while (RemainingStep > FFixedPoint::Zero && CurrentWaypointIndex < Path.Waypoints.Num())
 	{
@@ -53,7 +55,11 @@ bool USeinBasicMovement::Tick(const FSeinMovementContext& Ctx)
 		const FFixedPoint Dist = Delta.Size();
 		const FFixedPoint StepLen = (Dist < RemainingStep) ? Dist : RemainingStep;
 
-		const FFixedVector Dir = FFixedVector::GetSafeNormal(Delta);
+		FFixedVector Dir = FFixedVector::GetSafeNormal(Delta);
+		// Local avoidance — bend only this tick's first step (the primary steering
+		// direction); later sub-steps consuming close waypoints use true geometry.
+		// Soft layer; the penetration floor still guarantees no overlap.
+		if (!bAvoidanceApplied) { Dir = ApplyAvoidanceSteer(Ctx, Dir); bAvoidanceApplied = true; }
 
 		Pos.X = Pos.X + Dir.X * StepLen;
 		Pos.Y = Pos.Y + Dir.Y * StepLen;

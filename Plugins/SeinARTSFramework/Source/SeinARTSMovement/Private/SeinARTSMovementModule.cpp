@@ -31,6 +31,7 @@
 #include "Components/SeinNavigationComponent.h"
 #include "Components/SeinExtentsComponent.h"
 #include "Components/SeinExtentsHelpers.h"  // editor-world cascade: BoundingRadius
+#include "Settings/PluginSettings.h"  // channel DebugColor lookup (GetAllCollisionChannels)
 #include "Actor/SeinEntityComponent.h"  // editor-world Extents viz: walks Bridge->ComponentData
 #include "SeinARTSNavigationModule.h"
 #include "SeinNavigation.h"
@@ -564,7 +565,8 @@ namespace
 				}
 
 				USeinMovement::DrawSteeringDebugViz(
-					World, EntityPosFixed, FootprintRadius, MovementData->Velocity);
+					World, EntityPosFixed, FootprintRadius, MovementData->Velocity,
+					MovementData->AvoidanceSteer);
 			});
 		}
 		else
@@ -691,6 +693,27 @@ namespace
 	static TMap<FObjectKey, bool> GLastSteeringOnByWorld;
 #endif
 
+	/** Resolve a collider's wireframe color from its ObjectType channel's
+	 *  DebugColor in plugin settings — the SAME tint the BP-editor visualizer
+	 *  uses. Returns false for non-colliders (collision off / no Object Type),
+	 *  which fall back to the per-shape default (yellow box / cyan capsule). */
+	static bool ResolveExtentsChannelColor(const FSeinExtentsComponent& Extents, FColor& OutColor)
+	{
+		if (!Extents.bCollisionEnabled || Extents.ObjectType.Channel.IsNone()) return false;
+		if (const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>())
+		{
+			for (const FSeinCollisionChannelDefinition& Def : Settings->GetAllCollisionChannels())
+			{
+				if (Def.Name == Extents.ObjectType.Channel)
+				{
+					OutColor = Def.DebugColor.ToFColor(/*bSRGB*/ true);
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
 	/** Helper — draws each shape in `Shapes` at the world-space pose
 	 *  (Origin, Rotation). Used by both the PIE entity-pool path and the
 	 *  editor actor-iterator path so they emit identical visuals.
@@ -701,14 +724,19 @@ namespace
 		UWorld* World,
 		const FVector& Origin,
 		const FQuat& Rotation,
-		const TArray<FSeinExtentsShape>& Shapes)
+		const FSeinExtentsComponent& Extents)
 	{
-		const FColor BoxColor(255, 217, 0);       // yellow — matches BP visualizer
-		const FColor CapsuleColor(0, 217, 255);   // cyan  — matches BP visualizer
+		const FColor BoxColor(255, 217, 0);       // yellow — non-collider box default
+		const FColor CapsuleColor(0, 217, 255);   // cyan  — non-collider capsule default
 		const float Thickness = 3.0f;
 		const float DrawLifetime = 0.0f;
 
-		for (const FSeinExtentsShape& Shape : Shapes)
+		// Colliders draw in their ObjectType channel color (matches the BP-editor
+		// visualizer); non-colliders fall back to the per-shape defaults above.
+		FColor ChannelColor;
+		const bool bHasChannelColor = ResolveExtentsChannelColor(Extents, ChannelColor);
+
+		for (const FSeinExtentsShape& Shape : Extents.Shapes)
 		{
 			// Per-shape local offset rotated into world space by entity yaw.
 			const FVector LocalOffset(
@@ -737,7 +765,7 @@ namespace
 					FMath::Max(0.0f, Shape.HalfExtentY.ToFloat()),
 					Height * 0.5f);
 				DrawDebugBox(World, ShapeCenter, HalfExtents, ShapeQuat,
-					BoxColor, /*bPersistent*/ false, DrawLifetime, /*DepthPriority*/ 0, Thickness);
+					bHasChannelColor ? ChannelColor : BoxColor, /*bPersistent*/ false, DrawLifetime, /*DepthPriority*/ 0, Thickness);
 				break;
 			}
 			case ESeinExtentsShape::Capsule:
@@ -749,7 +777,7 @@ namespace
 				// as a sphere — matches the BP visualizer.
 				const float HalfHeight = FMath::Max(Height * 0.5f, Radius);
 				DrawDebugCapsule(World, ShapeCenter, HalfHeight, Radius, ShapeQuat,
-					CapsuleColor, /*bPersistent*/ false, DrawLifetime, /*DepthPriority*/ 0, Thickness);
+					bHasChannelColor ? ChannelColor : CapsuleColor, /*bPersistent*/ false, DrawLifetime, /*DepthPriority*/ 0, Thickness);
 				break;
 			}
 			}
@@ -797,7 +825,7 @@ namespace
 					EntityRotFixed.X.ToFloat(), EntityRotFixed.Y.ToFloat(),
 					EntityRotFixed.Z.ToFloat(), EntityRotFixed.W.ToFloat());
 
-				DrawExtentsShapesAt(World, EntityPos, EntityQuat, Extents->Shapes);
+				DrawExtentsShapesAt(World, EntityPos, EntityQuat, *Extents);
 			});
 		}
 		else
@@ -829,7 +857,7 @@ namespace
 					if (Entry.GetScriptStruct() != FSeinExtentsComponent::StaticStruct()) continue;
 					const FSeinExtentsComponent& Extents = Entry.Get<FSeinExtentsComponent>();
 					if (Extents.Shapes.Num() == 0) continue;
-					DrawExtentsShapesAt(World, ActorPos, ActorQuat, Extents.Shapes);
+					DrawExtentsShapesAt(World, ActorPos, ActorQuat, Extents);
 				}
 			}
 		}
@@ -957,7 +985,7 @@ void FSeinARTSMovementModule::StartupModule()
 	{
 		GShowExtentsCmd = IConsoleManager::Get().RegisterConsoleCommand(
 			TEXT("Sein.Show.Extents"),
-			TEXT("Toggle ShowFlags.SeinExtents across all viewports. When on, each entity's FSeinExtentsComponent shapes draw at runtime — box = yellow wire box, capsule = cyan wire capsule. Matches the BP-viewport extents visualizer's colors. Usage: Sein.Show.Extents [0|1|on|off]."),
+			TEXT("Toggle ShowFlags.SeinExtents across all viewports. When on, each entity's FSeinExtentsComponent shapes draw at runtime — each collider draws in its ObjectType channel color (matching the BP viewport); non-colliders fall back to a yellow wire box / cyan wire capsule. Usage: Sein.Show.Extents [0|1|on|off]."),
 			FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&OnShowExtentsCommand),
 			ECVF_Default);
 	}

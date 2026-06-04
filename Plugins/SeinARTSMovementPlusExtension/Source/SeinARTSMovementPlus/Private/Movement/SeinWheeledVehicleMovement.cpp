@@ -171,6 +171,16 @@ bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 	FFixedVector ToTarget = LookAheadPoint - AgentPos;
 	ToTarget.Z = FFixedPoint::Zero;
 
+	// Local avoidance — bend the carrot direction around nearby units in the FORWARD
+	// frame, BEFORE the auto-reverse yaw-flip below (step 5), so the dodge isn't
+	// inverted when backing up. Normalized in/out: only the carrot ANGLE is consumed
+	// downstream (Atan2), its magnitude is unused. Soft layer; the penetration floor
+	// still guarantees no overlap.
+	if (ToTarget.SizeSquared() > FFixedPoint::Epsilon)
+	{
+		ToTarget = ApplyAvoidanceSteer(Ctx, FFixedVector::GetSafeNormal(ToTarget));
+	}
+
 #if UE_ENABLE_DEBUG_DRAWING
 	// Carrot debug viz. Gated on Sein.Nav.Show.SteeringVectors. Green dot =
 	// carrot point, green line = agent -> carrot.
