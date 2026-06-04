@@ -341,6 +341,20 @@ struct SEINARTSCOREENTITY_API FSeinExtentsComponent : public FSeinComponent
 		meta = (EditCondition = "bCollisionEnabled", EditConditionHides))
 	ESeinCollisionMobility Mobility = ESeinCollisionMobility::Movable;
 
+	/** Relative push mass for Block separation — how hard this collider is to
+	 *  shove. When two Movable colliders overlap, the heavier absorbs less of the
+	 *  separation (split is mass-weighted: a body of mass M vs mass m moves
+	 *  m/(M+m) of the overlap). Beyond the project's Collision Mass Ratio Cutoff
+	 *  (Project Settings > Plugins > SeinARTS > Collision) a much-heavier collider
+	 *  isn't pushed AT ALL by a much-lighter one — so a mob of infantry can't shove
+	 *  a tank. Purely a collision property: NOTHING to do with footprint size, nav,
+	 *  or movement. Irrelevant for Static / Stationary (those are infinite mass
+	 *  regardless). Values are relative — only ratios matter; 100 is a baseline. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Collision",
+		meta = (EditCondition = "bCollisionEnabled && Mobility == ESeinCollisionMobility::Movable", EditConditionHides,
+		        ClampMin = "0.0", DisplayName = "Mass"))
+	FFixedPoint Mass = FFixedPoint::FromInt(100);
+
 	/** Which collision channel this collider IS (its object type). Other
 	 *  colliders' response to this channel decides whether they Block, Overlap,
 	 *  or Ignore it. Picked from the channel registry in
@@ -387,6 +401,7 @@ FORCEINLINE uint32 GetTypeHash(const FSeinExtentsComponent& Component)
 	Hash = HashCombine(Hash, GetTypeHash(Component.bBakesIntoFogOfWar));
 	Hash = HashCombine(Hash, GetTypeHash(Component.bCollisionEnabled));
 	Hash = HashCombine(Hash, GetTypeHash(static_cast<uint8>(Component.Mobility)));
+	Hash = HashCombine(Hash, GetTypeHash(Component.Mass));
 	Hash = HashCombine(Hash, GetTypeHash(Component.ObjectType));
 	Hash = HashCombine(Hash, GetTypeHash(Component.CollisionResponses));
 	return Hash;

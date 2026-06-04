@@ -564,9 +564,14 @@ namespace
 					return;
 				}
 
+				// Steering arrows only while under an active move order — at rest the stored Velocity
+				// / AvoidanceSteer can be stale, so pass zero → the unit shows the ring only. During a
+				// move both are live: orange = world velocity (entity → velocity), red = avoidance.
+				const bool bActiveMove = MovementData->bHasTarget;
 				USeinMovement::DrawSteeringDebugViz(
-					World, EntityPosFixed, FootprintRadius, MovementData->Velocity,
-					MovementData->AvoidanceSteer);
+					World, EntityPosFixed, FootprintRadius,
+					bActiveMove ? MovementData->Velocity : FFixedVector::ZeroVector,
+					bActiveMove ? MovementData->AvoidanceSteer : FFixedVector::ZeroVector);
 			});
 		}
 		else
@@ -617,8 +622,8 @@ namespace
 					FFixedPoint::FromFloat(ActorPos.X),
 					FFixedPoint::FromFloat(ActorPos.Y),
 					FFixedPoint::FromFloat(ActorPos.Z));
-				// Zero velocity → DrawSteeringDebugViz skips the arrow, just
-				// draws the yellow footprint ring.
+				// Editor (no sim): no move target and no avoidance, so pass a zero direction —
+				// DrawSteeringDebugViz then draws the footprint ring only.
 				USeinMovement::DrawSteeringDebugViz(
 					World, EntityPosFixed, FootprintRadius, FFixedVector::ZeroVector);
 			}

@@ -235,11 +235,12 @@ public:
 	 *  at the call site. No-op when FootprintRadius <= 0 (intangible units
 	 *  opt out of viz by design).
 	 *
-	 *  Draws the footprint ring + two arrows: the final-output (velocity) vector in
-	 *  ORANGE (matching the ring) and the local-avoidance contribution in RED — so
-	 *  steering tuning reads "where it's going" vs "how hard avoidance is pushing" at
-	 *  a glance. The avoidance arrow is the velocity-space contribution (AvoidanceSteer
-	 *  scaled by speed) and skips when the unit isn't avoiding.
+	 *  Draws the footprint ring + two WORLD-SPACE arrows straight from the entity (NOT rotated
+	 *  by the chassis transform — both inputs are already world vectors): ORANGE = the VELOCITY
+	 *  vector (entity → velocity, at true magnitude); RED = the local-avoidance steer expressed
+	 *  as the sideways velocity it adds (AvoidanceSteer × speed), comparable to the velocity
+	 *  arrow. Both skip when ~zero. Callers pass zero while a unit has no active move order, so a
+	 *  unit at rest shows the ring only (its stored Velocity / AvoidanceSteer may be stale).
 	 *
 	 *  Pure draw — no sim mutation, safe to call off the sim tick. */
 	static void DrawSteeringDebugViz(

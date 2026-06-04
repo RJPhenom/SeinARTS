@@ -264,6 +264,33 @@ void FSeinARTSCoreSettingsDetails::CustomizeDetails(IDetailLayoutBuilder& Detail
 						if (ChannelsArray.IsValid())
 						{
 							ChannelsArray->AddItem();
+
+								// New channels are born white (FSeinCollisionChannelDefinition's
+								// default), which reads invisibly in the extents debug viz. Assign a
+								// distinct, non-white color from a palette (mirrors the nav/vision
+								// layer convention) so a freshly-added channel shows up immediately.
+								// Avoids green (the reserved "Default" channel) and white.
+								uint32 NewCount = 0;
+								ChannelsArray->GetNumElements(NewCount);
+								if (NewCount > 0)
+								{
+									static const FLinearColor ChannelPalette[] = {
+										FLinearColor(FColor::FromHex(TEXT("0000FF"))), // blue
+										FLinearColor(FColor::FromHex(TEXT("9100FF"))), // purple
+										FLinearColor(FColor::FromHex(TEXT("E700D6"))), // magenta
+										FLinearColor(FColor::FromHex(TEXT("FF5A72"))), // pink-red
+										FLinearColor(FColor::FromHex(TEXT("FFA500"))), // orange
+										FLinearColor(FColor::FromHex(TEXT("00FFA1"))), // teal
+									};
+									const int32 NewIdx = static_cast<int32>(NewCount) - 1;
+									const FLinearColor Picked = ChannelPalette[NewIdx % static_cast<int32>(UE_ARRAY_COUNT(ChannelPalette))];
+									const TSharedRef<IPropertyHandle> NewElem = ChannelsArray->GetElement(NewIdx);
+									const TSharedPtr<IPropertyHandle> ColorHandle = NewElem->GetChildHandle(TEXT("DebugColor"));
+									if (ColorHandle.IsValid())
+									{
+										ColorHandle->SetValueFromFormattedString(Picked.ToString());
+									}
+								}
 						}
 						if (PropUtils.IsValid())
 						{

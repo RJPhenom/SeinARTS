@@ -63,10 +63,16 @@ public:
 		// Fixed relaxation passes: each pass fully separates any pair it touches;
 		// repeating settles clusters (units packed against a wall) without the
 		// cost or nondeterminism risk of an open-ended converge loop.
+		// Mass-ratio cutoff (Project Settings > Plugins > SeinARTS > Collision).
+		// Integer ratio → exact fixed-point; read once per tick, constant across peers.
+		const USeinARTSCoreSettings* MassSettings = GetDefault<USeinARTSCoreSettings>();
+		const int32 RawCutoff = MassSettings ? MassSettings->CollisionMassRatioCutoff : 8;
+		const FFixedPoint MassRatioCutoff = FFixedPoint::FromInt(RawCutoff > 1 ? RawCutoff : 1);
+
 		constexpr int32 NumPasses = 4;
 		for (int32 Pass = 0; Pass < NumPasses; ++Pass)
 		{
-			ResolvePass(World, ChannelDefaults);
+			ResolvePass(World, ChannelDefaults, MassRatioCutoff);
 		}
 
 		// Overlap events run on the SETTLED positions (after Block separation),
@@ -242,7 +248,15 @@ private:
 		return Ext && Ext->bCollisionEnabled && Ext->Shapes.Num() > 0 && !Ext->ObjectType.Channel.IsNone();
 	}
 
-	static void ResolvePass(USeinWorldSubsystem& World, const TMap<FName, ESeinCollisionResponse>& ChannelDefaults)
+	/** A collider's authored push mass, floored to a small positive so the ratio
+	 *  test and the mass-weighted split never divide by zero. Pure collision data —
+	 *  never derived from footprint, nav, or movement. */
+	static FFixedPoint ResolveColliderMass(const FSeinExtentsComponent& Ext)
+	{
+		return (Ext.Mass > FFixedPoint::Epsilon) ? Ext.Mass : FFixedPoint::Epsilon;
+	}
+
+	static void ResolvePass(USeinWorldSubsystem& World, const TMap<FName, ESeinCollisionResponse>& ChannelDefaults, const FFixedPoint MassRatioCutoff)
 	{
 		const FSeinCollisionSpatialHash& Hash = World.GetCollisionSpatialHash();
 		const FFixedPoint CellSize = Hash.GetCellSize();
@@ -259,7 +273,7 @@ private:
 
 			const FFixedPoint SelfRadius = SeinExtentsHelpers::GetColliderBoundingRadius(*SelfExt);
 			if (SelfRadius <= FFixedPoint::Zero) return;
-			const FFixedPoint MassSelf = SelfRadius * SelfRadius;
+			const FFixedPoint MassSelf = ResolveColliderMass(*SelfExt);
 
 			const FFixedVector SelfQueryPos = SelfEntity.Transform.GetLocation();
 			// Footprint-stamped broadphase means a query radius covering self's
@@ -311,11 +325,27 @@ private:
 				}
 				else
 				{
-					const FFixedPoint OtherRadius = SeinExtentsHelpers::GetColliderBoundingRadius(*OtherExt);
-					const FFixedPoint MassOther = OtherRadius * OtherRadius;
-					const FFixedPoint MassSum = MassSelf + MassOther;
-					SelfShare = (MassSum > FFixedPoint::Epsilon) ? (MassOther / MassSum) : FFixedPoint::Half;
-					OtherShare = FFixedPoint::One - SelfShare;
+					const FFixedPoint MassOther = ResolveColliderMass(*OtherExt);
+					// Mass-ratio cutoff: a collider at least Cutoff× the other's mass is
+					// immovable for THIS pair — the lighter body absorbs the entire
+					// separation (a mob of infantry can't shove a tank). Cross-multiply
+					// so the ratio test needs no division.
+					if (MassSelf >= MassOther * MassRatioCutoff)
+					{
+						SelfShare = FFixedPoint::Zero;  // self much heavier → unpushable here
+						OtherShare = FFixedPoint::One;
+					}
+					else if (MassOther >= MassSelf * MassRatioCutoff)
+					{
+						SelfShare = FFixedPoint::One;   // other much heavier → unpushable here
+						OtherShare = FFixedPoint::Zero;
+					}
+					else
+					{
+						const FFixedPoint MassSum = MassSelf + MassOther;
+						SelfShare = (MassSum > FFixedPoint::Epsilon) ? (MassOther / MassSum) : FFixedPoint::Half;
+						OtherShare = FFixedPoint::One - SelfShare;
+					}
 				}
 
 				// Self moves along -Normal (away from other); preserve Z.

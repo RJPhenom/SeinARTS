@@ -474,6 +474,15 @@ public:
 	 *  the editable array is empty. */
 	TArray<FSeinCollisionChannelDefinition> GetAllCollisionChannels() const;
 
+	/** Mass-ratio cutoff for Block separation. When two Movable colliders overlap
+	 *  and the heavier one's Mass is at least this many times the lighter one's,
+	 *  the heavier is treated as IMMOVABLE for that pair — the lighter body absorbs
+	 *  the entire separation (so infantry can never shove a tank, however many pile
+	 *  on). Below the cutoff the push is mass-weighted. Integer ratio (8 = 8:1);
+	 *  set very high to effectively disable the cutoff and always mass-weight. */
+	UPROPERTY(Config, EditAnywhere, Category = "Collision", meta = (ClampMin = "1"))
+	int32 CollisionMassRatioCutoff = 8;
+
 	// Network / Lockstep Settings (DESIGN §TBD — Phase 0 spike)
 	// ====================================================================================================
 

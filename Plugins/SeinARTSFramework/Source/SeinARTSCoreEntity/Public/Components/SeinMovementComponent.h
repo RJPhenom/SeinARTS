@@ -211,6 +211,27 @@ struct SEINARTSCOREENTITY_API FSeinMovementComponent : public FSeinComponent
 		meta = (ClampMin = "0.0", DisplayName = "Avoidance Strength"))
 	FFixedPoint AvoidanceStrength = FFixedPoint::FromInt(1);
 
+	/** Avoidance priority WEIGHT. A unit's local-avoidance steer (FSeinAvoidanceSystem) only
+	 *  YIELDS to neighbours whose weight QUALIFIES — equal-or-higher by default (see
+	 *  bAvoidSameWeights). So a heavier unit plows straight through lighter ones: the lighter
+	 *  ones dodge it, it ignores them. Set tanks high and infantry low for the classic
+	 *  "infantry scatter, the tank doesn't flinch" feel. Higher = harder to push around. A
+	 *  neighbour with no movement component carries no weight (a static obstacle) and is always
+	 *  avoided. Default 0 (all units equal). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement|Avoidance",
+		meta = (DisplayName = "Avoidance Weight"))
+	int32 AvoidanceWeight = 0;
+
+	/** Whether a unit also avoids EQUAL-weight neighbours, or only strictly-heavier ones.
+	 *  **true (default):** avoid weight ≥ self — equal-weight peers steer around each other
+	 *  (everyone in a crowd gives way). **false:** avoid weight > self only — equal-weight peers
+	 *  STOP dodging one another and resolve through the penetration floor instead, which kills
+	 *  the same-class mutual-avoidance orbits that show up as spinning blobs. Pair with equal
+	 *  AvoidanceWeight across a unit class to use it as a per-class "don't circle each other" switch. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement|Avoidance",
+		meta = (DisplayName = "Avoid Same Weights"))
+	bool bAvoidSameWeights = true;
+
 	/** Per-tick lateral avoidance nudge (planar XY, strength-scaled, temporally
 	 *  smoothed) written by FSeinAvoidanceSystem at PreTick and consumed by the
 	 *  movement Tick via USeinMovement::ApplyAvoidanceSteer. Runtime sim state;
@@ -238,6 +259,8 @@ FORCEINLINE uint32 GetTypeHash(const FSeinMovementComponent& C)
 	Hash = HashCombine(Hash, GetTypeHash(C.SmoothedPitch));
 	Hash = HashCombine(Hash, GetTypeHash(C.SmoothedRoll));
 	Hash = HashCombine(Hash, GetTypeHash(C.AvoidanceStrength));
+	Hash = HashCombine(Hash, GetTypeHash(C.AvoidanceWeight));
+	Hash = HashCombine(Hash, GetTypeHash(C.bAvoidSameWeights));
 	Hash = HashCombine(Hash, GetTypeHash(C.AvoidanceSteer));
 	// MovementClassData is hashed by the framework attribute resolver's
 	// reflection walk; skipped here (FInstancedStruct doesn't expose a

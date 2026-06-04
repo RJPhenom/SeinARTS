@@ -6,8 +6,11 @@
  *
  *          Per MOVING unit, reads neighbours from the collision spatial hash (a
  *          start-of-tick snapshot, since this runs BEFORE movement) and accumulates
- *          a purely-LATERAL steering nudge that bends the unit around others before
- *          they collide. The nudge is written to FSeinMovementComponent::AvoidanceSteer;
+ *          a purely-LATERAL steering nudge that bends the unit around other MOVABLE
+ *          UNITS before they collide. UNIT-TO-UNIT ONLY — a neighbour with no movement
+ *          component (walls and other static geometry) contributes nothing; nav blocking
+ *          already keeps units clear of those, so avoidance is a pure cohesion tool, never
+ *          a pathing tool. The nudge is written to FSeinMovementComponent::AvoidanceSteer;
  *          the movement Tick consumes it via USeinMovement::ApplyAvoidanceSteer. The
  *          floor still guarantees no overlap — this just makes crowds FLOW (around
  *          moving AND standing units) instead of grind into the floor.
@@ -81,7 +84,9 @@ public:
 			// Opted out → leave AvoidanceSteer untouched (stays its default zero), so the
 			// unit's motion is bit-identical to a world with no avoidance.
 			if (Move->AvoidanceStrength <= FFixedPoint::Zero) return;
-			if (!Move->bHasTarget) return; // only steer while under a move order
+			// No active move order → clear any lingering steer (so it can't go stale at rest, in the
+			// state hash or the debug viz) and bail. Avoidance only runs while a unit is moving.
+			if (!Move->bHasTarget) { Move->AvoidanceSteer = FFixedVector::ZeroVector; return; }
 
 			// Heading from end-of-last-tick velocity (the same snapshot value for every
 			// unit at PreTick). Stopped/too-slow → clear and bail.
@@ -95,7 +100,6 @@ public:
 			const FSeinNavigationComponent* SelfNav = World.GetComponent<FSeinNavigationComponent>(SelfHandle);
 			const FFixedPoint SelfRadius = USeinMovement::ResolveCollisionRadius(&World, SelfHandle, SelfNav);
 			if (SelfRadius <= FFixedPoint::Zero) { Move->AvoidanceSteer = FFixedVector::ZeroVector; return; }
-			const FFixedPoint SelfMass = SelfRadius * SelfRadius;
 
 			const FFixedVector SelfPos = SelfEntity.Transform.GetLocation();
 
@@ -122,6 +126,27 @@ public:
 			{
 				const FSeinEntity* OtherEntity = World.GetEntityPool().Get(OtherHandle);
 				if (!OtherEntity) continue;
+
+				// UNIT-TO-UNIT ONLY. Avoidance is a cohesion tool, never a pathing tool: only other
+				// MOVABLE units (entities with a movement component) contribute a steering force. A
+				// neighbour with no movement component is static geometry — a wall, a building, a prop
+				// — and nav blocking already routes units clear of those, so it is skipped entirely,
+				// never avoided. (The spatial hash this queries holds ALL colliders, walls included,
+				// which is why the filter must live here.) Fetched once and reused for head-on below.
+				const FSeinMovementComponent* OtherMove = World.GetComponent<FSeinMovementComponent>(OtherHandle);
+				if (!OtherMove) continue;
+
+				// WEIGHT-PRIORITY GATE. This unit only yields to a neighbour whose AvoidanceWeight
+				// qualifies: equal-or-higher when bAvoidSameWeights, strictly higher otherwise. So a
+				// heavier unit never dodges a lighter one (the lighter one dodges it), and with the
+				// bool off, equal-weight peers stop avoiding each other and fall through to the
+				// penetration floor — killing same-class mutual-avoidance orbits. Integer compare on
+				// authored config → deterministic.
+				const bool bQualifies = Move->bAvoidSameWeights
+					? (OtherMove->AvoidanceWeight >= Move->AvoidanceWeight)
+					: (OtherMove->AvoidanceWeight >  Move->AvoidanceWeight);
+				if (!bQualifies) continue;
+
 				FFixedVector ToOther = OtherEntity->Transform.GetLocation() - SelfPos;
 				ToOther.Z = FFixedPoint::Zero;
 				const FFixedPoint DistSq = ToOther.SizeSquared();
@@ -146,23 +171,17 @@ public:
 
 				// Head-on weight: a neighbour moving AGAINST us weighs strong, one moving
 				// WITH us weak; a stationary (or slow) neighbour gets the moderate base.
+				// (OtherMove is guaranteed non-null — non-unit neighbours were skipped above.)
 				FFixedPoint HeadOn = FFixedPoint::One + HeadOnBase;
-				if (const FSeinMovementComponent* OtherMove = World.GetComponent<FSeinMovementComponent>(OtherHandle))
+				const FFixedVector OtherVel = OtherMove->Velocity;
+				const FFixedPoint OtherSpeed = OtherVel.Size();
+				if (OtherSpeed > MovingSpeedFloor)
 				{
-					const FFixedVector OtherVel = OtherMove->Velocity;
-					const FFixedPoint OtherSpeed = OtherVel.Size();
-					if (OtherSpeed > MovingSpeedFloor)
-					{
-						// cos(angle) = Heading · OtherVel / |OtherVel|. Same dir → 1 (weak),
-						// head-on → -1 (strong).
-						const FFixedPoint CosA = (Heading.X * OtherVel.X + Heading.Y * OtherVel.Y) / OtherSpeed;
-						HeadOn = (FFixedPoint::One - CosA) + HeadOnBase;
-					}
+					// cos(angle) = Heading · OtherVel / |OtherVel|. Same dir → 1 (weak),
+					// head-on → -1 (strong).
+					const FFixedPoint CosA = (Heading.X * OtherVel.X + Heading.Y * OtherVel.Y) / OtherSpeed;
+					HeadOn = (FFixedPoint::One - CosA) + HeadOnBase;
 				}
-
-				const FFixedPoint OtherMass = OtherRadius * OtherRadius;
-				const FFixedPoint MassSum = SelfMass + OtherMass;
-				const FFixedPoint MassScale = (MassSum > FFixedPoint::Epsilon) ? (OtherMass / MassSum) : FFixedPoint::Half;
 
 				// Dodge AWAY from the neighbour's side. SideDot = how far the neighbour sits
 				// to our right (world units). Inside a "dead-ahead" band the side is
@@ -175,7 +194,14 @@ public:
 				else if (SideDot < -LateralBand)  { TurnSign =  FFixedPoint::One; } // neighbour on left  → steer right
 				else { TurnSign = (SelfHandle.Index < OtherHandle.Index) ? FFixedPoint::One : -FFixedPoint::One; }
 
-				const FFixedPoint W = HeadOn * Falloff * MassScale * TurnSign;
+				// Steer weight is PURE STEERING — NO mass term. HeadOn (encounter angle) × Falloff
+				// (proximity, whose range ∝ combined footprint, so it is size-proportional) × TurnSign.
+				// With no radius-derived mass, equal-AvoidanceStrength units of ANY size bend by the
+				// same angle and react from proportionally-farther → they avoid proportionately the
+				// same relative to their footprint. AvoidanceStrength (applied below) is the magnitude
+				// knob; AvoidanceWeight (gated above) is the priority. Do NOT reintroduce a mass factor
+				// here — mass physics belong to the collision floor, not this steering layer.
+				const FFixedPoint W = HeadOn * Falloff * TurnSign;
 				Accum.X += Right.X * W;
 				Accum.Y += Right.Y * W;
 			}
