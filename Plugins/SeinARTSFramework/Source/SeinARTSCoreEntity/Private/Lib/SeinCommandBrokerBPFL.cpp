@@ -122,37 +122,6 @@ void USeinCommandBrokerBPFL::SeinIssueBrokerOrder(
 
 namespace SeinFormationPreviewLocal
 {
-	/** Walk Members, return the squad entity that all Members are a part of, or
-	 *  Invalid if Members come from different squads / mix squad and non-squad
-	 *  entities. Used by the preview to decide whether to dispatch to the squad's
-	 *  pooled resolver instance (single-squad case) or fall through to the
-	 *  default resolver CDO (everything else). */
-	static FSeinEntityHandle FindCommonSquadParent(
-		USeinWorldSubsystem* World,
-		const TArray<FSeinEntityHandle>& Members)
-	{
-		if (!World || Members.Num() == 0) return FSeinEntityHandle::Invalid();
-
-		FSeinEntityHandle CommonSquad;
-		for (const FSeinEntityHandle& Member : Members)
-		{
-			const FSeinSquadMemberComponent* MemberData = World->GetComponent<FSeinSquadMemberComponent>(Member);
-			if (!MemberData || !MemberData->SquadEntity.IsValid())
-			{
-				return FSeinEntityHandle::Invalid();    // not a squad member — mixed selection
-			}
-			if (!CommonSquad.IsValid())
-			{
-				CommonSquad = MemberData->SquadEntity;
-			}
-			else if (CommonSquad != MemberData->SquadEntity)
-			{
-				return FSeinEntityHandle::Invalid();    // members come from different squads
-			}
-		}
-		return CommonSquad;
-	}
-
 	/** Resolve the framework's default broker resolver class — settings override
 	 *  if present, USeinDefaultCommandBrokerResolver::StaticClass() otherwise.
 	 *  Returns the CDO of the chosen class for stateless preview dispatch.
@@ -176,6 +145,82 @@ namespace SeinFormationPreviewLocal
 	}
 }
 
+TArray<FFixedVector> USeinCommandBrokerBPFL::ComputeMultiBrokerAnchors(
+	USeinWorldSubsystem& World,
+	const TArray<FSeinEntityHandle>& Brokers,
+	FFixedVector ClickTarget)
+{
+	// Exact replica of the multi-broker lateral spacing in
+	// USeinWorldSubsystem::ProcessCommands (BrokerOrder path) — kept in this one
+	// place so the commit and the preview can never diverge. Single / no broker →
+	// anchor == click (no offset).
+	const int32 N = Brokers.Num();
+	TArray<FFixedVector> Anchors;
+	Anchors.Init(ClickTarget, N);
+	if (N <= 1) return Anchors;
+
+	// 1. Per-broker lateral width from FormationWidth, clamped to a visible minimum.
+	const FFixedPoint MinBrokerWidth = FFixedPoint::FromInt(300);
+	TArray<FFixedPoint> BrokerWidths;
+	BrokerWidths.Reserve(N);
+	FFixedPoint TotalBrokerWidth = FFixedPoint::Zero;
+	for (const FSeinEntityHandle& BrokerHandle : Brokers)
+	{
+		FFixedPoint Width = FFixedPoint::Zero;
+		if (const FSeinCommandBrokerData* BrokerData = World.GetComponent<FSeinCommandBrokerData>(BrokerHandle))
+		{
+			Width = BrokerData->FormationWidth;
+		}
+		if (Width < MinBrokerWidth) { Width = MinBrokerWidth; }
+		BrokerWidths.Add(Width);
+		TotalBrokerWidth += Width;
+	}
+
+	// 2. Selection centroid + move direction (XY only — RTS plane).
+	FFixedVector SelCentroid = FFixedVector::ZeroVector;
+	int32 CentroidCount = 0;
+	for (const FSeinEntityHandle& BrokerHandle : Brokers)
+	{
+		if (const FSeinEntity* BrokerEnt = World.GetEntity(BrokerHandle))
+		{
+			SelCentroid = SelCentroid + BrokerEnt->Transform.GetLocation();
+			++CentroidCount;
+		}
+	}
+	SelCentroid = (CentroidCount > 0) ? (SelCentroid / FFixedPoint::FromInt(CentroidCount)) : ClickTarget;
+
+	FFixedVector MoveDir = ClickTarget - SelCentroid;
+	MoveDir.Z = FFixedPoint::Zero;
+	FFixedVector RightAxis;
+	if (MoveDir.IsNearlyZero())
+	{
+		RightAxis = FFixedVector::RightVector;
+	}
+	else
+	{
+		const FFixedVector ForwardN = FFixedVector::GetSafeNormal(MoveDir);
+		// UE convention: Right = Forward rotated +90 around +Z -> (-Y, X, 0)
+		RightAxis = FFixedVector(-ForwardN.Y, ForwardN.X, FFixedPoint::Zero);
+	}
+
+	// 3. Gap budget: span = sum(widths) + (N-1)*gap; gap-per-edge = avg width / 2.
+	const FFixedPoint AvgWidth = TotalBrokerWidth / FFixedPoint::FromInt(N);
+	const FFixedPoint GapPerEdge = AvgWidth / FFixedPoint::Two;
+	const FFixedPoint TotalSpan = TotalBrokerWidth + GapPerEdge * FFixedPoint::FromInt(N - 1);
+	const FFixedPoint HalfSpan = TotalSpan / FFixedPoint::Two;
+
+	// 4. Walk anchors along RightAxis around ClickTarget.
+	FFixedPoint Cursor = -HalfSpan;
+	for (int32 i = 0; i < N; ++i)
+	{
+		const FFixedPoint Width = BrokerWidths[i];
+		const FFixedPoint AnchorOffset = Cursor + Width / FFixedPoint::Two;
+		Anchors[i] = ClickTarget + RightAxis * AnchorOffset;
+		Cursor = Cursor + Width + GapPerEdge;
+	}
+	return Anchors;
+}
+
 FSeinFormationLayout USeinCommandBrokerBPFL::SeinComputeFormationPreview(
 	const UObject* WorldContextObject,
 	const TArray<FSeinEntityHandle>& Members,
@@ -185,105 +230,11 @@ FSeinFormationLayout USeinCommandBrokerBPFL::SeinComputeFormationPreview(
 	USeinWorldSubsystem* World = GetWorldSubsystem(WorldContextObject);
 	if (!World || Members.Num() == 0) return Empty;
 
-	const FSeinEntityHandle CommonSquad =
-		SeinFormationPreviewLocal::FindCommonSquadParent(World, Members);
-
-	USeinCommandBrokerResolver* Resolver = nullptr;
-	FFixedVector CurrentCentroid = FFixedVector::ZeroVector;
-	FFixedQuaternion CurrentFacing = FFixedQuaternion::Identity;
-
-	// Mirror the commit's invert flag — the preview is a read-only dry-run of the
-	// dispatch, so it MUST feed ComputeFormationFacing the same input the real
-	// order will. The squad's bInvertSlotOrderWhenMovingBackward toggle drives
-	// backward-walk detection (keep current facing + mirror slot order when the
-	// heading is behind the squad). USeinSquadDispatchResolver::ResolveDispatch
-	// reads it from FSeinSquadComponent; if the preview passes a different value
-	// it renders a forward layout for a move the squad will actually walk
-	// backward into — the preview≠destinations bug. Set from SquadData below;
-	// stays false for the non-squad / default-grid fallback, whose symmetric
-	// grid makes the flag a no-op anyway (matching the base resolver's dispatch,
-	// which also hardcodes false).
-	bool bInvertWhenBackward = false;
-
-	if (CommonSquad.IsValid())
-	{
-		// Single-squad selection — match the squad's authored slot offsets via
-		// its pooled resolver instance. The squad's CommandBroker carries the
-		// live centroid + facing; we use those to stay in lockstep with the
-		// dispatch path's centroid/facing read.
-		const FSeinCommandBrokerData* Broker = World->GetComponent<FSeinCommandBrokerData>(CommonSquad);
-		const FSeinSquadComponent* SquadData = World->GetComponent<FSeinSquadComponent>(CommonSquad);
-
-		if (Broker)
-		{
-			Resolver = World->GetCommandBrokerResolver(Broker->ResolverID);
-			CurrentCentroid = Broker->Centroid;
-			CurrentFacing = Broker->AnchorFacing;
-		}
-		if (SquadData)
-		{
-			// Same source the commit reads (ResolveDispatch fetches SquadData on
-			// the broker handle, which IS this squad entity) — keeps preview and
-			// commit in lockstep on backward-walk detection.
-			bInvertWhenBackward = SquadData->bInvertSlotOrderWhenMovingBackward;
-
-			// Fallback centroid for squads where the broker centroid hasn't been
-			// computed yet (very-first-tick edge case): compute from live members.
-			if (!Broker || Broker->Centroid.IsNearlyZero())
-			{
-				const FSeinEntity* SquadEntity = World->GetEntity(CommonSquad);
-				const FFixedVector Fallback = SquadEntity
-					? SquadEntity->Transform.GetLocation() : FFixedVector::ZeroVector;
-				CurrentCentroid = SquadData->ComputeCentroid(Fallback);
-			}
-		}
-	}
-
-	if (!Resolver)
-	{
-		// Multi-entity / non-squad / unconfigured-squad fallback: default
-		// resolver CDO. The default resolver's grid layout is stateless apart
-		// from BlueprintReadWrite UPROPERTYs (InterUnitSpacing) which the CDO
-		// carries verbatim.
-		Resolver = SeinFormationPreviewLocal::ResolveDefaultResolverCDO();
-
-		// Compute centroid from member transforms when no broker exists yet.
-		// Identity facing is the right default — the formation will rotate to
-		// face the target (since centroid != target in the non-degenerate case).
-		FFixedVector Sum = FFixedVector::ZeroVector;
-		int32 Count = 0;
-		for (const FSeinEntityHandle& Member : Members)
-		{
-			const FSeinEntity* Entity = World->GetEntity(Member);
-			if (!Entity) continue;
-			Sum = Sum + Entity->Transform.GetLocation();
-			++Count;
-		}
-		if (Count > 0)
-		{
-			CurrentCentroid = Sum / FFixedPoint::FromInt(Count);
-		}
-	}
-
-	if (!Resolver)
-	{
-		UE_LOG(LogSeinBroker, Warning,
-			TEXT("ComputeFormationPreview: failed to resolve a broker resolver instance — returning empty layout."));
-		return Empty;
-	}
-
-	UE_LOG(LogSeinBroker, Verbose,
-		TEXT("ComputeFormationPreview: resolver=%s, members=%d, common-squad=%s"),
-		*GetNameSafe(Resolver), Members.Num(),
-		CommonSquad.IsValid() ? TEXT("yes") : TEXT("no"));
-
-	// Nav-project the cursor target to the nearest pathable cell — byte-for-byte
-	// the snap ProcessCommands applies to a committed move order (the
-	// NavProjectResolver call in the BrokerOrder path). A move order's real
-	// destinations are computed from the PROJECTED target, so a preview built on
-	// the raw cursor drifts whenever the cursor sits on or near a blocked cell.
-	// No-nav games / tests: resolver unbound → raw target passes through,
-	// matching the commit's bypass.
+	// Nav-project the cursor target ONCE up front. The commit projects
+	// Order.TargetLocation before computing per-broker anchors, and every squad's
+	// anchor derives from the projected click — so we project here too (not
+	// per-squad) to stay byte-identical. No-nav games: resolver unbound, raw target
+	// passes through, matching the commit's bypass.
 	if (World->NavProjectResolver.IsBound())
 	{
 		FFixedVector ProjectedTarget;
@@ -293,9 +244,128 @@ FSeinFormationLayout USeinCommandBrokerBPFL::SeinComputeFormationPreview(
 		}
 	}
 
-	const FSeinFormationLayout PreviewLayout = Resolver->ResolveFormationLayout(
-		World, Members, CurrentCentroid, CurrentFacing,
-		TargetLocation, bInvertWhenBackward);
+	// Group members by owning squad, PRESERVING each member's original index so the
+	// returned Positions stay index-aligned with the input Members (the
+	// FSeinFormationLayout contract + the preview's decal mapping both rely on it).
+	// Mirrors the commit's persistent-broker partition (ProcessCommands): each squad
+	// is its own broker and lays out its members independently; non-squad members
+	// form one residual "loose" group. A flat parallel array (not a TMap) keeps this
+	// independent of FSeinEntityHandle hashability; squad counts are tiny.
+	TArray<FSeinEntityHandle> SquadOrder;          // distinct squads, first-seen order
+	TArray<TArray<int32>> SquadMemberIndices;       // parallel to SquadOrder
+	TArray<int32> LooseIndices;
+	for (int32 i = 0; i < Members.Num(); ++i)
+	{
+		const FSeinSquadMemberComponent* MemberData =
+			World->GetComponent<FSeinSquadMemberComponent>(Members[i]);
+		if (MemberData && MemberData->SquadEntity.IsValid())
+		{
+			int32 SquadIdx = SquadOrder.IndexOfByKey(MemberData->SquadEntity);
+			if (SquadIdx == INDEX_NONE)
+			{
+				SquadIdx = SquadOrder.Add(MemberData->SquadEntity);
+				SquadMemberIndices.AddDefaulted();
+			}
+			SquadMemberIndices[SquadIdx].Add(i);
+		}
+		else
+		{
+			LooseIndices.Add(i);
+		}
+	}
 
-	return PreviewLayout;
+	FSeinFormationLayout Out;
+	Out.Positions.SetNum(Members.Num());
+
+	// Per-squad laterally-offset anchors — the SAME helper the commit uses, so the
+	// squads spread side-by-side in the preview exactly as when ordered.
+	const TArray<FFixedVector> SquadAnchors =
+		ComputeMultiBrokerAnchors(*World, SquadOrder, TargetLocation);
+
+	for (int32 s = 0; s < SquadOrder.Num(); ++s)
+	{
+		const FSeinEntityHandle Squad = SquadOrder[s];
+		const TArray<int32>& Indices = SquadMemberIndices[s];
+
+		TArray<FSeinEntityHandle> SquadMembers;
+		SquadMembers.Reserve(Indices.Num());
+		for (const int32 Idx : Indices) { SquadMembers.Add(Members[Idx]); }
+
+		// Identical reads to USeinSquadDispatchResolver::ResolveDispatch: the squad's
+		// own pooled resolver, broker centroid + facing, and per-squad invert flag.
+		const FSeinCommandBrokerData* Broker = World->GetComponent<FSeinCommandBrokerData>(Squad);
+		const FSeinSquadComponent* SquadData = World->GetComponent<FSeinSquadComponent>(Squad);
+
+		USeinCommandBrokerResolver* Resolver = Broker
+			? World->GetCommandBrokerResolver(Broker->ResolverID) : nullptr;
+		FFixedVector Centroid = Broker ? Broker->Centroid : FFixedVector::ZeroVector;
+		const FFixedQuaternion Facing = Broker ? Broker->AnchorFacing : FFixedQuaternion::Identity;
+		const bool bInvertWhenBackward = SquadData ? SquadData->bInvertSlotOrderWhenMovingBackward : false;
+
+		// First-tick fallback centroid (broker centroid not yet computed).
+		if (SquadData && (!Broker || Broker->Centroid.IsNearlyZero()))
+		{
+			const FSeinEntity* SquadEntity = World->GetEntity(Squad);
+			const FFixedVector Fallback = SquadEntity
+				? SquadEntity->Transform.GetLocation() : FFixedVector::ZeroVector;
+			Centroid = SquadData->ComputeCentroid(Fallback);
+		}
+
+		if (!Resolver) { Resolver = SeinFormationPreviewLocal::ResolveDefaultResolverCDO(); }
+		if (!Resolver) { continue; }
+
+		const FFixedVector SquadAnchor =
+			SquadAnchors.IsValidIndex(s) ? SquadAnchors[s] : TargetLocation;
+
+		const FSeinFormationLayout SquadLayout = Resolver->ResolveFormationLayout(
+			World, SquadMembers, Centroid, Facing, SquadAnchor, bInvertWhenBackward);
+
+		// Scatter the squad's positions back to the ORIGINAL member indices.
+		for (int32 k = 0; k < Indices.Num(); ++k)
+		{
+			Out.Positions[Indices[k]] = SquadLayout.Positions.IsValidIndex(k)
+				? SquadLayout.Positions[k] : SquadAnchor;
+		}
+		// Representative facing for any consumer that draws a facing arrow (the
+		// preview renders per-cell decals from Positions; Facing is advisory).
+		if (s == 0) { Out.Facing = SquadLayout.Facing; Out.bAntiCrossReorder = SquadLayout.bAntiCrossReorder; }
+	}
+
+	// Loose (non-squad) members → default resolver, one grid at the click target —
+	// mirrors the commit's ephemeral-broker path (loose units dispatch to
+	// Order.TargetLocation, NOT a laterally-offset anchor).
+	if (LooseIndices.Num() > 0)
+	{
+		if (USeinCommandBrokerResolver* Resolver = SeinFormationPreviewLocal::ResolveDefaultResolverCDO())
+		{
+			TArray<FSeinEntityHandle> LooseMembers;
+			LooseMembers.Reserve(LooseIndices.Num());
+			FFixedVector Sum = FFixedVector::ZeroVector;
+			int32 Count = 0;
+			for (const int32 Idx : LooseIndices)
+			{
+				LooseMembers.Add(Members[Idx]);
+				if (const FSeinEntity* Entity = World->GetEntity(Members[Idx]))
+				{
+					Sum = Sum + Entity->Transform.GetLocation();
+					++Count;
+				}
+			}
+			const FFixedVector LooseCentroid = (Count > 0)
+				? (Sum / FFixedPoint::FromInt(Count)) : TargetLocation;
+
+			const FSeinFormationLayout LooseLayout = Resolver->ResolveFormationLayout(
+				World, LooseMembers, LooseCentroid, FFixedQuaternion::Identity,
+				TargetLocation, /*bInvertWhenBackward*/ false);
+
+			for (int32 k = 0; k < LooseIndices.Num(); ++k)
+			{
+				Out.Positions[LooseIndices[k]] = LooseLayout.Positions.IsValidIndex(k)
+					? LooseLayout.Positions[k] : TargetLocation;
+			}
+			if (SquadOrder.Num() == 0) { Out.Facing = LooseLayout.Facing; Out.bAntiCrossReorder = LooseLayout.bAntiCrossReorder; }
+		}
+	}
+
+	return Out;
 }

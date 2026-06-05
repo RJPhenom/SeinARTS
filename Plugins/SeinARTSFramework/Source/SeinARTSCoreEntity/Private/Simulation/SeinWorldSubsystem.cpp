@@ -41,6 +41,7 @@
 #include "Effects/SeinEffect.h"
 #include "Lib/SeinAbilityBPFL.h"   // for runtime Grant/Revoke during effect fan-out
 #include "Lib/SeinResourceBPFL.h"
+#include "Lib/SeinCommandBrokerBPFL.h"   // ComputeMultiBrokerAnchors (shared with the preview)
 #include "Tags/SeinARTSGameplayTags.h"
 #include "Containers/Ticker.h"
 #include "StructUtils/InstancedStruct.h"
@@ -788,87 +789,23 @@ void USeinWorldSubsystem::ProcessCommands()
 			// Single persistent broker → no offset, anchor = click point as before.
 			if (PersistentBrokerEntities.Num() > 0)
 			{
-				// 1. Compute per-broker lateral width from FormationWidth on the
-				// broker data. Clamp to a sensible minimum so spacing is still
-				// visible for brokers with zero or small formation widths.
-				const FFixedPoint MinBrokerWidth = FFixedPoint::FromInt(300);
-				TArray<FFixedPoint> BrokerWidths;
-				BrokerWidths.Reserve(PersistentBrokerEntities.Num());
-				FFixedPoint TotalBrokerWidth = FFixedPoint::Zero;
-				for (const FSeinEntityHandle& BrokerHandle : PersistentBrokerEntities)
-				{
-					FFixedPoint Width = FFixedPoint::Zero;
-					if (const FSeinCommandBrokerData* BrokerData = GetComponent<FSeinCommandBrokerData>(BrokerHandle))
-					{
-						Width = BrokerData->FormationWidth;
-					}
-					if (Width < MinBrokerWidth) { Width = MinBrokerWidth; }
-					BrokerWidths.Add(Width);
-					TotalBrokerWidth += Width;
-				}
+				// Per-broker laterally-offset anchors so multiple squads march
+				// side-by-side instead of stacking on the click point. Extracted to a
+				// shared helper (USeinCommandBrokerBPFL::ComputeMultiBrokerAnchors) so
+				// the destination preview computes byte-identical anchors so preview ==
+				// commit for multi-squad moves. Single broker = click point.
+				const TArray<FFixedVector> BrokerAnchors =
+					USeinCommandBrokerBPFL::ComputeMultiBrokerAnchors(
+						*this, PersistentBrokerEntities, Order.TargetLocation);
 
-				// 2. Compute selection centroid + move direction (XY only — RTS plane).
-				FFixedVector SelCentroid = FFixedVector::ZeroVector;
-				int32 CentroidCount = 0;
-				for (const FSeinEntityHandle& BrokerHandle : PersistentBrokerEntities)
-				{
-					if (const FSeinEntity* BrokerEnt = GetEntity(BrokerHandle))
-					{
-						SelCentroid = SelCentroid + BrokerEnt->Transform.GetLocation();
-						++CentroidCount;
-					}
-				}
-				if (CentroidCount > 0)
-				{
-					SelCentroid = SelCentroid / FFixedPoint::FromInt(CentroidCount);
-				}
-				else
-				{
-					SelCentroid = Order.TargetLocation;
-				}
-
-				FFixedVector MoveDir = Order.TargetLocation - SelCentroid;
-				MoveDir.Z = FFixedPoint::Zero;
-				FFixedVector RightAxis;
-				if (MoveDir.IsNearlyZero())
-				{
-					// Move target == current centroid — degenerate. Use world-Y as right.
-					RightAxis = FFixedVector::RightVector;
-				}
-				else
-				{
-					const FFixedVector ForwardN = FFixedVector::GetSafeNormal(MoveDir);
-					// UE convention: Right = Forward rotated +90° around +Z → (-Y, X, 0)
-					RightAxis = FFixedVector(-ForwardN.Y, ForwardN.X, FFixedPoint::Zero);
-				}
-
-				// 3. Compute gap budget. Total layout span = sum(widths) + (N-1)*gap.
-				// Gap-per-edge = avg width / 2. With N persistent brokers, the layout
-				// center sits at 0; cursor starts at -span/2 and walks +span.
-				const int32 NumBrokers = PersistentBrokerEntities.Num();
-				const FFixedPoint AvgWidth = (NumBrokers > 0) ? TotalBrokerWidth / FFixedPoint::FromInt(NumBrokers) : MinBrokerWidth;
-				const FFixedPoint GapPerEdge = AvgWidth / FFixedPoint::Two;
-				FFixedPoint TotalSpan = TotalBrokerWidth;
-				if (NumBrokers > 1)
-				{
-					TotalSpan = TotalSpan + GapPerEdge * FFixedPoint::FromInt(NumBrokers - 1);
-				}
-				const FFixedPoint HalfSpan = TotalSpan / FFixedPoint::Two;
-
-				// 4. Lay out anchors along RightAxis around Order.TargetLocation.
-				FFixedPoint Cursor = -HalfSpan;
 				for (int32 i = 0; i < PersistentBrokerEntities.Num(); ++i)
 				{
 					const FSeinEntityHandle BrokerHandle = PersistentBrokerEntities[i];
 					FSeinCommandBrokerData* PersistentBroker = GetComponent<FSeinCommandBrokerData>(BrokerHandle);
 					if (!PersistentBroker) { continue; }
 
-					const FFixedPoint Width = BrokerWidths.IsValidIndex(i) ? BrokerWidths[i] : MinBrokerWidth;
-					const FFixedPoint AnchorOffset = Cursor + Width / FFixedPoint::Two;
-					const FFixedVector BrokerAnchor = (NumBrokers > 1)
-						? (Order.TargetLocation + RightAxis * AnchorOffset)
-						: Order.TargetLocation;
-					Cursor = Cursor + Width + GapPerEdge;
+					const FFixedVector BrokerAnchor = BrokerAnchors.IsValidIndex(i)
+						? BrokerAnchors[i] : Order.TargetLocation;
 
 					if (!Cmd.bQueueCommand)
 					{

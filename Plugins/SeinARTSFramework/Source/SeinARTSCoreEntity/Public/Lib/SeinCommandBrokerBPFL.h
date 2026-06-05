@@ -128,6 +128,19 @@ public:
 		const TArray<FSeinEntityHandle>& Members,
 		FFixedVector TargetLocation);
 
+	/** Multi-broker lateral-spacing anchors (internal C++ helper, NOT BP-exposed).
+	 *  Given a set of persistent-broker (squad) entities and a click target, returns
+	 *  each broker's laterally-offset anchor so multiple squads march side-by-side
+	 *  instead of stacking on the click — offset derived from each broker's
+	 *  FormationWidth along the move direction's right axis. N <= 1 → anchor ==
+	 *  ClickTarget; index-aligned with `Brokers`. Shared by the commit
+	 *  (USeinWorldSubsystem::ProcessCommands) and SeinComputeFormationPreview so the
+	 *  two can never drift. */
+	static TArray<FFixedVector> ComputeMultiBrokerAnchors(
+		USeinWorldSubsystem& World,
+		const TArray<FSeinEntityHandle>& Brokers,
+		FFixedVector ClickTarget);
+
 private:
 	static USeinWorldSubsystem* GetWorldSubsystem(const UObject* WorldContextObject);
 };
