@@ -36,8 +36,6 @@
  *                    authors an override. UE convention: most channels default
  *                    to Block; channels like projectiles often default to
  *                    Overlap or Ignore for things they should pass through.
- *  - DebugColor      tint used by the entity-bridge visualizer to color a
- *                    collider's wireframe by its Object Type.
  */
 USTRUCT(BlueprintType)
 struct SEINARTSCOREENTITY_API FSeinCollisionChannelDefinition
@@ -53,9 +51,4 @@ struct SEINARTSCOREENTITY_API FSeinCollisionChannelDefinition
 	 *  no explicit override for it. */
 	UPROPERTY(Config, EditAnywhere, Category = "SeinARTS|Collision|Channel")
 	ESeinCollisionResponse DefaultResponse = ESeinCollisionResponse::Block;
-
-	/** Wireframe tint for colliders whose Object Type is this channel, in the
-	 *  entity-bridge visualizer. */
-	UPROPERTY(Config, EditAnywhere, Category = "SeinARTS|Collision|Channel")
-	FLinearColor DebugColor = FLinearColor::White;
 };

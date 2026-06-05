@@ -20,7 +20,6 @@
 #include "Components/SeinExtentsComponent.h"
 #include "Components/SeinNavigationComponent.h"
 #include "Components/SeinProductionComponent.h"
-#include "Settings/PluginSettings.h"  // USeinARTSCoreSettings + FSeinCollisionChannelDefinition (channel DebugColor)
 #include "SeinARTSEditorModule.h"  // FSeinARTSEditorModule + per-component draw registry
 
 #include "GameFramework/Actor.h"
@@ -41,8 +40,7 @@ namespace SeinEntityVisualizerLocal
 		const FQuat& ActorQuat, const FVector& ActorPos,
 		FPrimitiveDrawInterface* PDI)
 	{
-		const FLinearColor BoxColor     = FLinearColor(1.0f, 0.85f, 0.0f);  // yellow
-		const FLinearColor CapsuleColor = FLinearColor(0.0f, 0.85f, 1.0f);  // cyan
+		const FColor WireColor = FColor::Red;  // all extents draw red
 		const float Thickness = 1.5f;
 
 		for (const FInstancedStruct& Entry : ComponentData)
@@ -52,28 +50,6 @@ namespace SeinEntityVisualizerLocal
 
 			const FSeinExtentsComponent& Data = Entry.Get<FSeinExtentsComponent>();
 			if (Data.Shapes.Num() == 0) continue;
-
-			// If this entity is a collider, tint its wireframe by the ObjectType
-			// channel's DebugColor (from settings). Otherwise keep the per-shape
-			// default (Box yellow / Capsule cyan) so non-collider extents — used
-			// for nav / FoW / visibility-as-target — read exactly as before.
-			bool bHasChannelColor = false;
-			FLinearColor ChannelColor = FLinearColor::White;
-			if (Data.bCollisionEnabled && !Data.ObjectType.Channel.IsNone())
-			{
-				if (const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>())
-				{
-					for (const FSeinCollisionChannelDefinition& Def : Settings->GetAllCollisionChannels())
-					{
-						if (Def.Name == Data.ObjectType.Channel)
-						{
-							ChannelColor = Def.DebugColor;
-							bHasChannelColor = true;
-							break;
-						}
-					}
-				}
-			}
 
 			for (const FSeinExtentsShape& Shape : Data.Shapes)
 			{
@@ -95,9 +71,6 @@ namespace SeinEntityVisualizerLocal
 				const float Height = FMath::Max(0.0f, Shape.Height.ToFloat());
 				const FVector ShapeCenter = ShapeBase + AxisZ * (Height * 0.5f);
 
-				// Collider → channel color; otherwise per-shape default.
-				const FLinearColor ShapeDefault = (Shape.Shape == ESeinExtentsShape::Box) ? BoxColor : CapsuleColor;
-				const FColor WireColor = (bHasChannelColor ? ChannelColor : ShapeDefault).ToFColor(true);
 
 				switch (Shape.Shape)
 				{

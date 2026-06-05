@@ -12,18 +12,11 @@
 #include "KismetCompiler.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Styling/SlateIconFinder.h"
-#include "UObject/UObjectIterator.h"
-#include "StructUtils/UserDefinedStruct.h"
 
 #include "Components/SeinComponent.h"
 #include "Core/SeinEntityHandle.h"
+#include "Graph/SeinComponentNodeMenuCache.h"   // shared candidate-struct enumeration
 #include "Lib/SeinComponentBPFL.h"
-
-// Inlined SeinDeterministic meta key — same name the factory uses for UDS
-// tagging. K2 nodes can't dep on SeinARTSEditor (Editor module type) because
-// they live in an UncookedOnly module, so we duplicate the constant. If the
-// factory's key ever changes, this needs to stay in sync.
-namespace { static const FName GSeinDeterministicMetaKey(TEXT("SeinDeterministic")); }
 
 #define LOCTEXT_NAMESPACE "K2Node_SeinGetComponent"
 
@@ -33,42 +26,6 @@ namespace SeinK2GetCompLocal
 	static const FName PN_EntityHandle(TEXT("EntityHandle"));
 	static const FName PN_OutStruct(TEXT("OutStruct"));
 	static const FName PN_Success(TEXT("ReturnValue"));
-
-	/** Discover all FSeinComponent-derived structs the user might want to read.
-	 *  Walks every native UScriptStruct (filtered by IsChildOf) plus every
-	 *  UDS whose meta carries `SeinDeterministic` (UDS can't IsChildOf reliably —
-	 *  see comments in FSeinInstancedStructFilter). One menu action per unique
-	 *  type, sorted stable by name so the action menu stays consistent across
-	 *  reloads. */
-	static void GatherCandidateStructs(TArray<UScriptStruct*>& Out)
-	{
-		const UScriptStruct* Base = FSeinComponent::StaticStruct();
-		for (TObjectIterator<UScriptStruct> It; It; ++It)
-		{
-			UScriptStruct* S = *It;
-			if (!S || S == Base) continue;
-
-			// Native USTRUCT derived from FSeinComponent.
-			if (S->IsChildOf(Base))
-			{
-				Out.Add(S);
-				continue;
-			}
-
-			// UDS path: IsChildOf is unreliable for UDS (the compiler clears
-			// SuperStruct), so gate via the SeinDeterministic meta key the
-			// factory stamps at UDS creation.
-			if (S->IsA<UUserDefinedStruct>() && S->HasMetaData(GSeinDeterministicMetaKey))
-			{
-				Out.Add(S);
-			}
-		}
-
-		Out.Sort([](const UScriptStruct& A, const UScriptStruct& B)
-		{
-			return A.GetFName().LexicalLess(B.GetFName());
-		});
-	}
 
 	/** Strip leading "FSein" / "F" from a struct name and append " Data" if
 	 *  not already present — produces consistent menu labels like
@@ -205,7 +162,7 @@ void UK2Node_SeinGetComponent::GetMenuActions(FBlueprintActionDatabaseRegistrar&
 	}
 
 	TArray<UScriptStruct*> Candidates;
-	SeinK2GetCompLocal::GatherCandidateStructs(Candidates);
+	SeinComponentNodeMenu::GetCandidateStructs(Candidates);
 
 	for (UScriptStruct* S : Candidates)
 	{

@@ -417,8 +417,30 @@ FPrimitiveSceneProxy* USeinFogOfWarDebugComponent::CreateSceneProxy()
 
 	if (AllCenters.Num() == 0)
 	{
-		// Fallback: rasterize volume bounds — all red (no vision, no bake).
-		RasterizeVolumeCells(World, Volume, AllCenters, HalfExtent);
+		// Fallback: rasterize volume bounds — all red (no vision, no bake). This
+		// traces up to ~20k synchronous complex rays, so cache the result and
+		// re-trace only when the inputs that determine it — the volume's world
+		// bounds + resolved cell size — actually change, instead of on every
+		// proxy rebuild (re-register / undo / fog-mutation). See CachedFallback*.
+		const FBox CurBounds = Volume->GetVolumeWorldBounds();
+		const float CurCellSize = Volume->GetResolvedCellSize().ToFloat();
+		if (bHasFallbackCache
+			&& CurCellSize == CachedFallbackCellSize
+			&& CurBounds.Min.Equals(CachedFallbackBounds.Min)
+			&& CurBounds.Max.Equals(CachedFallbackBounds.Max))
+		{
+			AllCenters = CachedFallbackCenters;   // copy — the cache must survive
+			HalfExtent = CachedFallbackHalfExtent;
+		}
+		else
+		{
+			RasterizeVolumeCells(World, Volume, AllCenters, HalfExtent);
+			CachedFallbackCenters = AllCenters;
+			CachedFallbackHalfExtent = HalfExtent;
+			CachedFallbackBounds = CurBounds;
+			CachedFallbackCellSize = CurCellSize;
+			bHasFallbackCache = true;
+		}
 		// No colors array → treat everything as unseen (red).
 	}
 

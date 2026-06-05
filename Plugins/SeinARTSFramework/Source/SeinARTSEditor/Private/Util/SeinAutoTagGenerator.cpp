@@ -12,6 +12,7 @@
 #include "Components/SeinIdentityComponent.h"
 #include "Actor/SeinActor.h"
 #include "Actor/SeinEntityComponent.h"
+#include "Core/SeinAssetTagKeys.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
@@ -61,6 +62,44 @@ namespace SeinAutoTagLocal
 			return Name.LeftChop(2);
 		}
 		return Name;
+	}
+
+	/** Read the live (in-memory) CDO of a loaded Sein BP and test whether its
+	 *  identity tag equals `Tag`. Mirrors the per-class shape of the old
+	 *  always-load scan (and, for actors, checks every FSeinIdentityComponent
+	 *  entry). Used for assets already in memory — so their possibly-unsaved
+	 *  value is authoritative — and as the fallback for assets whose registry
+	 *  tag isn't populated yet. */
+	static bool CDOHasMatchingTag(const UBlueprint* BP, const FGameplayTag& Tag)
+	{
+		if (!BP || !BP->GeneratedClass) return false;
+		const UObject* CDO = BP->GeneratedClass->GetDefaultObject();
+		if (!CDO) return false;
+
+		if (const USeinAbility* Ability = Cast<USeinAbility>(CDO))
+		{
+			return Ability->AbilityTag == Tag;
+		}
+		if (const USeinEffect* Effect = Cast<USeinEffect>(CDO))
+		{
+			return Effect->EffectTag == Tag;
+		}
+		if (const ASeinActor* SeinActor = Cast<ASeinActor>(CDO))
+		{
+			TArray<USeinEntityComponent*> Bridges;
+			SeinActor->GetComponents<USeinEntityComponent>(Bridges);
+			for (const USeinEntityComponent* Bridge : Bridges)
+			{
+				if (!Bridge) continue;
+				for (const FInstancedStruct& Entry : Bridge->ComponentData)
+				{
+					if (!Entry.IsValid()) continue;
+					if (Entry.GetScriptStruct() != FSeinIdentityComponent::StaticStruct()) continue;
+					if (Entry.Get<FSeinIdentityComponent>().IdentityTag == Tag) return true;
+				}
+			}
+		}
+		return false;
 	}
 }
 
@@ -207,19 +246,23 @@ FString SeinAutoTag::FindCollidingAssetPath(
 		FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
 	IAssetRegistry& AssetRegistry = AssetRegistryModule.Get();
 
-	const FString TagString = Tag.ToString();
+	const FString TargetTagStr = Tag.ToString();
 
-	// We can't query asset registry by an in-asset UPROPERTY directly, so
-	// the scan loads the CDO for each candidate BP and reads the tag field.
-	// Cost: O(N) BPs of the relevant base classes, each load triggers a
-	// soft asset load. Fine for the rare collision-check path; if it ever
-	// becomes hot, cache tag → asset path in the editor module.
+	// The tag value each candidate carries is surfaced onto its FAssetData by the
+	// USeinAbility / USeinEffect / ASeinActor GetAssetRegistryTags overrides, so
+	// the common case reads it straight from the registry with NO asset load —
+	// the previous implementation soft-loaded every candidate BP + CDO here,
+	// which was the dominant cost of renames and regenerate sweeps. Two carve-
+	// outs keep behavior identical to that always-load scan:
+	//   1. Already-loaded assets are read live from their CDO, so unsaved
+	//      in-memory edits win (the registry only reflects the last save).
+	//   2. Assets with no surfaced tag yet (saved before this surfacing existed)
+	//      fall back to a load — no real collision is ever missed; the fast path
+	//      takes over once the asset is next saved/loaded.
 	//
-	// Three base-class buckets to scan:
-	//   1. USeinAbility (AbilityTag)
-	//   2. USeinEffect (EffectTag)
-	//   3. ASeinActor with FSeinIdentityComponent on the entity bridge
-	//      (IdentityTag) — checked via the BP CDO
+	// Three base-class buckets, same as before:
+	//   1. USeinAbility (AbilityTag)        2. USeinEffect (EffectTag)
+	//   3. ASeinActor  (IdentityTag, nested in the entity bridge's ComponentData)
 
 	TArray<FAssetData> Candidates;
 	FARFilter Filter;
@@ -239,53 +282,41 @@ FString SeinAutoTag::FindCollidingAssetPath(
 		const FString ParentClass = Asset.GetTagValueRef<FString>(FBlueprintTags::ParentClassPath);
 		if (ParentClass.IsEmpty()) continue;
 
-		const bool bIsSeinTaggable =
-			ParentClass.Contains(TEXT("SeinAbility")) ||
-			ParentClass.Contains(TEXT("SeinEffect")) ||
-			ParentClass.Contains(TEXT("SeinActor"));
-		if (!bIsSeinTaggable) continue;
+		const bool bIsAbility = ParentClass.Contains(TEXT("SeinAbility"));
+		const bool bIsEffect  = ParentClass.Contains(TEXT("SeinEffect"));
+		const bool bIsActor   = ParentClass.Contains(TEXT("SeinActor"));
+		if (!bIsAbility && !bIsEffect && !bIsActor) continue;
 
-		const UBlueprint* BP = Cast<UBlueprint>(Asset.GetAsset());
-		if (!BP || !BP->GeneratedClass) continue;
-		const UObject* CDO = BP->GeneratedClass->GetDefaultObject();
-		if (!CDO) continue;
+		bool bCollides = false;
 
-		// Read whichever tag field matches the class.
-		if (const USeinAbility* Ability = Cast<USeinAbility>(CDO))
+		if (const UBlueprint* LoadedBP = Cast<UBlueprint>(Asset.FastGetAsset(/*bLoad*/ false)))
 		{
-			if (Ability->AbilityTag == Tag)
+			// Already in memory — read the live CDO so unsaved edits are honored.
+			bCollides = SeinAutoTagLocal::CDOHasMatchingTag(LoadedBP, Tag);
+		}
+		else
+		{
+			// Not loaded — read the surfaced tag straight from the registry.
+			const FName TagKey = bIsAbility ? SeinAssetTagKeys::AbilityTag()
+			                   : bIsEffect  ? SeinAssetTagKeys::EffectTag()
+			                                : SeinAssetTagKeys::IdentityTag();
+			FString AssetTagStr;
+			if (Asset.GetTagValue<FString>(TagKey, AssetTagStr))
 			{
-				return Asset.PackageName.ToString();
+				bCollides = (AssetTagStr == TargetTagStr);
+			}
+			else
+			{
+				// No surfaced tag (asset predates the surfacing override) — fall
+				// back to a load so a real collision is never missed.
+				bCollides = SeinAutoTagLocal::CDOHasMatchingTag(
+					Cast<UBlueprint>(Asset.GetAsset()), Tag);
 			}
 		}
-		else if (const USeinEffect* Effect = Cast<USeinEffect>(CDO))
+
+		if (bCollides)
 		{
-			if (Effect->EffectTag == Tag)
-			{
-				return Asset.PackageName.ToString();
-			}
-		}
-		else if (const ASeinActor* SeinActor = Cast<ASeinActor>(CDO))
-		{
-			// Check the entity bridge's FSeinIdentityComponent::IdentityTag.
-			// The bridge subobject is `EntityBridge` on ASeinActor; the
-			// IdentityComponent lives in its ComponentData array.
-			TArray<USeinEntityComponent*> Bridges;
-			SeinActor->GetComponents<USeinEntityComponent>(Bridges);
-			for (USeinEntityComponent* Bridge : Bridges)
-			{
-				if (!Bridge) continue;
-				for (const FInstancedStruct& Entry : Bridge->ComponentData)
-				{
-					if (!Entry.IsValid()) continue;
-					if (Entry.GetScriptStruct() != FSeinIdentityComponent::StaticStruct()) continue;
-					const FSeinIdentityComponent& Identity = Entry.Get<FSeinIdentityComponent>();
-					if (Identity.IdentityTag == Tag)
-					{
-						return Asset.PackageName.ToString();
-					}
-				}
-			}
+			return Asset.PackageName.ToString();
 		}
 	}
 

@@ -11,17 +11,11 @@
 #include "K2Node_CallFunction.h"
 #include "KismetCompiler.h"
 #include "Styling/SlateIconFinder.h"
-#include "UObject/UObjectIterator.h"
-#include "StructUtils/UserDefinedStruct.h"
 
 #include "Components/SeinComponent.h"
 #include "Core/SeinEntityHandle.h"
+#include "Graph/SeinComponentNodeMenuCache.h"   // shared candidate-struct enumeration
 #include "Lib/SeinComponentBPFL.h"
-
-// Inlined SeinDeterministic meta key — same name the factory uses. K2 nodes
-// can't dep on SeinARTSEditor (Editor module type) because they live in an
-// UncookedOnly module, so we duplicate the constant.
-namespace { static const FName GSeinDeterministicMetaKeySet(TEXT("SeinDeterministic")); }
 
 #define LOCTEXT_NAMESPACE "K2Node_SeinSetComponent"
 
@@ -32,27 +26,9 @@ namespace SeinK2SetCompLocal
 	static const FName PN_InStruct(TEXT("InStruct"));
 	static const FName PN_Success(TEXT("ReturnValue"));
 
-	// Mirror the Get-node helpers so the menu actions stay in sync. Inlined
-	// instead of shared to keep the two K2 nodes loosely coupled — each one
-	// can evolve its filtering policy independently.
-	static void GatherCandidateStructs(TArray<UScriptStruct*>& Out)
-	{
-		const UScriptStruct* Base = FSeinComponent::StaticStruct();
-		for (TObjectIterator<UScriptStruct> It; It; ++It)
-		{
-			UScriptStruct* S = *It;
-			if (!S || S == Base) continue;
-			if (S->IsChildOf(Base)) { Out.Add(S); continue; }
-			if (S->IsA<UUserDefinedStruct>() && S->HasMetaData(GSeinDeterministicMetaKeySet))
-			{
-				Out.Add(S);
-			}
-		}
-		Out.Sort([](const UScriptStruct& A, const UScriptStruct& B)
-		{
-			return A.GetFName().LexicalLess(B.GetFName());
-		});
-	}
+	// Candidate structs come from the shared SeinComponentNodeMenu cache (same set
+	// as the Get node, de-duplicated to one scan per action-DB rebuild). Inline a
+	// local scan again here if this node ever needs a different filtering policy.
 
 	static FString PrettyName(const UScriptStruct* S)
 	{
@@ -161,7 +137,7 @@ void UK2Node_SeinSetComponent::GetMenuActions(FBlueprintActionDatabaseRegistrar&
 	}
 
 	TArray<UScriptStruct*> Candidates;
-	SeinK2SetCompLocal::GatherCandidateStructs(Candidates);
+	SeinComponentNodeMenu::GetCandidateStructs(Candidates);
 
 	for (UScriptStruct* S : Candidates)
 	{

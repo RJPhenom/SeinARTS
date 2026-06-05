@@ -27,6 +27,8 @@
 #include "Events/SeinVisualEvent.h"
 #include "Effects/SeinEffect.h"
 #include "Actor/SeinActor.h"
+#include "Core/SeinAssetTagKeys.h"
+#include "UObject/AssetRegistryTagsContext.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinAbilityImpl, Log, All);
 
@@ -46,6 +48,22 @@ void USeinAbility::PostEditChangeProperty(FPropertyChangedEvent& PropertyChanged
 	}
 }
 #endif
+
+void USeinAbility::GetAssetRegistryTags(FAssetRegistryTagsContext Context) const
+{
+	Super::GetAssetRegistryTags(Context);
+
+	// Surface AbilityTag onto the asset's FAssetData so the editor auto-tag
+	// collision check reads it without loading this CDO. Bare ToString() form so
+	// a string compare against another tag's ToString() is a valid equality test.
+	if (AbilityTag.IsValid())
+	{
+		Context.AddTag(FAssetRegistryTag(
+			SeinAssetTagKeys::AbilityTag(),
+			AbilityTag.ToString(),
+			FAssetRegistryTag::TT_Alphabetical));
+	}
+}
 
 void USeinAbility::EnqueueProduction(TSubclassOf<ASeinActor> ProducibleClass)
 {

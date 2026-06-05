@@ -54,4 +54,20 @@ private:
 
 	TWeakObjectPtr<USeinFogOfWar> SubscribedFog;
 	FDelegateHandle FogMutatedHandle;
+
+	// Cached no-bake fallback rasterization. The fallback CreateSceneProxy path
+	// traces one ray per (strided) cell down onto world static geometry — up to
+	// ~20k synchronous complex line traces — to position the debug cells. That
+	// output is a pure function of the volume's world bounds + resolved cell
+	// size, so it is cached and only recomputed when those inputs change, rather
+	// than on every proxy rebuild (re-register / undo / fog-mutation). Persisted
+	// across re-registers so undo, unrelated edits, and recompiles that
+	// re-register the component don't re-pay the trace. The cache auto-
+	// invalidates when bounds / cell size change (the compare in CreateSceneProxy).
+	// Editor-debug-viz only; plain transient members, never serialized.
+	TArray<FVector> CachedFallbackCenters;
+	float CachedFallbackHalfExtent = 0.0f;
+	FBox CachedFallbackBounds = FBox(ForceInit);
+	float CachedFallbackCellSize = 0.0f;
+	bool bHasFallbackCache = false;
 };

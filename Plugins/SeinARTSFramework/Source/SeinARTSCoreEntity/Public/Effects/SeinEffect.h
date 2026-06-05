@@ -280,4 +280,11 @@ public:
 	 *  the designer is now the owner of this tag. */
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
+
+	/** Surfaces `EffectTag` onto this asset's FAssetData (key
+	 *  `SeinAssetTagKeys::EffectTag`, bare `ToString()` form) so editor tooling
+	 *  — the auto-tag collision check in particular — can read it WITHOUT loading
+	 *  the Blueprint + CDO. Additive: chains Super first, never replaces engine
+	 *  tags. Harvested at save / FAssetData construction. */
+	virtual void GetAssetRegistryTags(FAssetRegistryTagsContext Context) const override;
 };

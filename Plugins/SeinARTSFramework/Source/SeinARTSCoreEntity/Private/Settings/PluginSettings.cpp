@@ -225,7 +225,6 @@ TArray<FSeinCollisionChannelDefinition> USeinARTSCoreSettings::GetAllCollisionCh
 	FSeinCollisionChannelDefinition DefaultChannel;
 	DefaultChannel.Name            = GetDefaultCollisionChannelName();
 	DefaultChannel.DefaultResponse = ESeinCollisionResponse::Block;
-	DefaultChannel.DebugColor      = FLinearColor(FColor::FromHex(TEXT("3CB043"))); // green
 	Result.Add(DefaultChannel);
 
 	// Additional designer channels — skip unnamed entries and any duplicate of

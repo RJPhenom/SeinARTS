@@ -22,10 +22,8 @@
 
 #if WITH_EDITOR
 #include "Editor.h"                       // GEditor for viewport redraw
-#include "Engine/World.h"
-#include "EngineUtils.h"                  // TActorIterator
-#include "GameFramework/Actor.h"
-#include "UObject/UObjectIterator.h"      // TObjectIterator<UWorld>
+#include "Engine/World.h"                 // UWorld / EWorldType (per-instance world filter)
+#include "GameFramework/Actor.h"          // AActor / GetComponents
 #endif
 
 // NOTE: editor-preview code (in-editor squad-slot mesh previews) was removed
@@ -208,62 +206,84 @@ void USeinEntityComponent::PropagateComponentDataEntryToInstances(int32 ChangedA
 	if (!ComponentData.IsValidIndex(ChangedArrayIndex)) return;
 	if (!IsTemplate()) return;
 
-	UClass* OwnerActorClass = GetTypedOuter<UClass>();
-	if (!OwnerActorClass) return;
+	// Enumerate placed instances via the engine's archetype-instance machinery
+	// rather than scanning every actor in every loaded editor world. This is the
+	// same path UE's own Details-panel value propagation uses
+	// (FPropertyNode::PropagatePropertyChange → UObject::GetArchetypeInstances):
+	// a class-bucketed lookup (UObjectHash ClassToObjectListMap) instead of an
+	// O(worlds × all-actors) sweep. We call it on the OWNER ACTOR CDO — which is
+	// guaranteed RF_ClassDefaultObject (GetArchetypeInstances keys off the flag
+	// on the object itself) — and pull the bridge off each returned instance.
+	// This also reaches bridges on subclass-actor owners that the previous
+	// TActorIterator<OwnerActorClass> filter could miss, while the per-instance
+	// archetype check below keeps the propagation scoped to exactly this CDO.
+	AActor* OwnerActorCDO = GetTypedOuter<AActor>();
+	if (!OwnerActorCDO) return;
+	UClass* OwnerActorClass = OwnerActorCDO->GetClass();
 
 	const FInstancedStruct& CDOEntry = ComponentData[ChangedArrayIndex];
+
+	TArray<UObject*> ArchetypeInstances;
+	OwnerActorCDO->GetArchetypeInstances(ArchetypeInstances);
 
 	int32 InstancesUpdated = 0;
 	int32 InstancesScanned = 0;
 	TSet<UPackage*> DirtiedPackages;
 
-	// Walk loaded editor / preview worlds. The editor process keeps multiple
-	// alive simultaneously (level editor, BP previews, persistent sub-levels).
-	// PIE / Game worlds are intentionally skipped — propagation is an editor
-	// authoring concern, not a runtime sync.
-	for (TObjectIterator<UWorld> WorldIt; WorldIt; ++WorldIt)
+	for (UObject* InstanceObj : ArchetypeInstances)
 	{
-		UWorld* World = *WorldIt;
-		if (!World) continue;
-		const EWorldType::Type WT = World->WorldType;
+		AActor* Instance = Cast<AActor>(InstanceObj);
+		if (!Instance) continue;
+
+		// Editor-authoring only. GetArchetypeInstances is world-agnostic, so we
+		// apply the old Editor + EditorPreview filter per-instance here. PIE /
+		// Game instances are skipped (propagation is an authoring concern, not a
+		// runtime sync), and CDOs / archetypes — which have a null world — drop
+		// out too.
+		const UWorld* InstanceWorld = Instance->GetWorld();
+		if (!InstanceWorld) continue;
+		const EWorldType::Type WT = InstanceWorld->WorldType;
 		if (WT != EWorldType::Editor && WT != EWorldType::EditorPreview) continue;
 
-		for (TActorIterator<AActor> ActorIt(World, OwnerActorClass); ActorIt; ++ActorIt)
+		// Find the placed instance's bridge component. Most BPs have exactly one
+		// USeinEntityComponent — we walk all just in case (defensive, no real
+		// cost since the count is small).
+		TArray<USeinEntityComponent*> InstanceBridges;
+		Instance->GetComponents<USeinEntityComponent>(InstanceBridges);
+		for (USeinEntityComponent* InstBridge : InstanceBridges)
 		{
-			AActor* Instance = *ActorIt;
-			if (!Instance) continue;
+			if (!InstBridge || InstBridge == this) continue;
+			// Match by archetype — only propagate to bridges that inherit from
+			// THIS specific CDO (not unrelated bridges, and not bridges belonging
+			// to a subclass BP whose archetype is its own CDO bridge).
+			if (InstBridge->GetArchetype() != this) continue;
+			if (!InstBridge->ComponentData.IsValidIndex(ChangedArrayIndex)) continue;
+			++InstancesScanned;
 
-			// Find the placed instance's bridge component. Most BPs have
-			// exactly one USeinEntityComponent — we walk all just in case
-			// (defensive, no real cost since the count is small).
-			TArray<USeinEntityComponent*> InstanceBridges;
-			Instance->GetComponents<USeinEntityComponent>(InstanceBridges);
-			for (USeinEntityComponent* InstBridge : InstanceBridges)
+			// Skip instances already equal to the CDO entry. Without this, an
+			// unconditional Modify() records a spurious undo snapshot and
+			// MarkPackageDirty() flags packages that didn't actually change — the
+			// over-dirtying that made CDO edits slow to save. The engine's own
+			// propagation likewise only writes + dirties on a real value change
+			// (FInstancedStruct::operator== is type- and null-safe). Instances
+			// that genuinely differ are still clobbered: the CDO stays
+			// authoritative for the whole entry, exactly as before.
+			if (InstBridge->ComponentData[ChangedArrayIndex] == CDOEntry) continue;
+
+			InstBridge->Modify();
+			InstBridge->ComponentData[ChangedArrayIndex] = CDOEntry;
+
+			if (UPackage* Pkg = InstBridge->GetPackage())
 			{
-				if (!InstBridge || InstBridge == this) continue;
-				// Match by archetype — only propagate to bridges that
-				// inherit from THIS specific CDO (not unrelated bridges
-				// from other BP classes that happen to be in the same
-				// world).
-				if (InstBridge->GetArchetype() != this) continue;
-				if (!InstBridge->ComponentData.IsValidIndex(ChangedArrayIndex)) continue;
-				++InstancesScanned;
-
-				InstBridge->Modify();
-				InstBridge->ComponentData[ChangedArrayIndex] = CDOEntry;
-
-				if (UPackage* Pkg = InstBridge->GetPackage())
-				{
-					Pkg->MarkPackageDirty();
-					DirtiedPackages.Add(Pkg);
-				}
-				if (UPackage* APkg = Instance->GetPackage())
-				{
-					APkg->MarkPackageDirty();
-					DirtiedPackages.Add(APkg);
-				}
-				++InstancesUpdated;
+				Pkg->MarkPackageDirty();
+				DirtiedPackages.Add(Pkg);
 			}
+			if (UPackage* APkg = Instance->GetPackage())
+			{
+				APkg->MarkPackageDirty();
+				DirtiedPackages.Add(APkg);
+			}
+			++InstancesUpdated;
 		}
 	}
 

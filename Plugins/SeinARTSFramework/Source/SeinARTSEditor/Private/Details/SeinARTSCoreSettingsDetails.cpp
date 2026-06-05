@@ -16,7 +16,6 @@
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/SBoxPanel.h"
-#include "Widgets/Colors/SColorBlock.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/SNullWidget.h"
 #include "Misc/MessageDialog.h"
@@ -150,12 +149,6 @@ void FSeinARTSCoreSettingsDetails::CustomizeDetails(IDetailLayoutBuilder& Detail
 				.Text(LOCTEXT("ChannelHeaderResponse", "Default Response"))
 				.Font(IDetailLayoutBuilder::GetDetailFontBold())
 			]
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-			[
-				SNew(STextBlock)
-				.Text(LOCTEXT("ChannelHeaderColor", "Debug Extents Color"))
-				.Font(IDetailLayoutBuilder::GetDetailFontBold())
-			]
 		];
 
 		// Reserved "Default" row — greyed, read-only, no trash. Always first.
@@ -187,10 +180,6 @@ void FSeinARTSCoreSettingsDetails::CustomizeDetails(IDetailLayoutBuilder& Detail
 							SeinCollisionResponseToText(Reserved.DefaultResponse)))
 						.Font(IDetailLayoutBuilder::GetDetailFont())
 					]
-					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-					[
-						SNew(SColorBlock).Color(Reserved.DebugColor).Size(FVector2D(18.0f, 14.0f))
-					]
 				];
 			}
 		}
@@ -206,11 +195,9 @@ void FSeinARTSCoreSettingsDetails::CustomizeDetails(IDetailLayoutBuilder& Detail
 			const TSharedRef<IPropertyHandle> Element = ChannelsArray->GetElement(static_cast<int32>(ChannelIdx));
 			const TSharedPtr<IPropertyHandle> NameHandle  = Element->GetChildHandle(TEXT("Name"));
 			const TSharedPtr<IPropertyHandle> RespHandle  = Element->GetChildHandle(TEXT("DefaultResponse"));
-			const TSharedPtr<IPropertyHandle> ColorHandle = Element->GetChildHandle(TEXT("DebugColor"));
 
 			const TSharedRef<SWidget> NameWidget  = NameHandle.IsValid()  ? NameHandle->CreatePropertyValueWidget(false)  : SNullWidget::NullWidget;
 			const TSharedRef<SWidget> RespWidget  = RespHandle.IsValid()  ? RespHandle->CreatePropertyValueWidget(false)  : SNullWidget::NullWidget;
-			const TSharedRef<SWidget> ColorWidget = ColorHandle.IsValid() ? ColorHandle->CreatePropertyValueWidget(false) : SNullWidget::NullWidget;
 
 			CollisionCategory.AddCustomRow(FText::FromString(TEXT("Collision Channel")))
 			.NameContent()
@@ -224,13 +211,6 @@ void FSeinARTSCoreSettingsDetails::CustomizeDetails(IDetailLayoutBuilder& Detail
 				+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center).Padding(0.f, 0.f, 8.f, 0.f)
 				[
 					RespWidget
-				]
-				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 8.f, 0.f)
-				[
-					SNew(SBox).WidthOverride(48.f)
-					[
-						ColorWidget
-					]
 				]
 				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 				[
@@ -264,33 +244,6 @@ void FSeinARTSCoreSettingsDetails::CustomizeDetails(IDetailLayoutBuilder& Detail
 						if (ChannelsArray.IsValid())
 						{
 							ChannelsArray->AddItem();
-
-								// New channels are born white (FSeinCollisionChannelDefinition's
-								// default), which reads invisibly in the extents debug viz. Assign a
-								// distinct, non-white color from a palette (mirrors the nav/vision
-								// layer convention) so a freshly-added channel shows up immediately.
-								// Avoids green (the reserved "Default" channel) and white.
-								uint32 NewCount = 0;
-								ChannelsArray->GetNumElements(NewCount);
-								if (NewCount > 0)
-								{
-									static const FLinearColor ChannelPalette[] = {
-										FLinearColor(FColor::FromHex(TEXT("0000FF"))), // blue
-										FLinearColor(FColor::FromHex(TEXT("9100FF"))), // purple
-										FLinearColor(FColor::FromHex(TEXT("E700D6"))), // magenta
-										FLinearColor(FColor::FromHex(TEXT("FF5A72"))), // pink-red
-										FLinearColor(FColor::FromHex(TEXT("FFA500"))), // orange
-										FLinearColor(FColor::FromHex(TEXT("00FFA1"))), // teal
-									};
-									const int32 NewIdx = static_cast<int32>(NewCount) - 1;
-									const FLinearColor Picked = ChannelPalette[NewIdx % static_cast<int32>(UE_ARRAY_COUNT(ChannelPalette))];
-									const TSharedRef<IPropertyHandle> NewElem = ChannelsArray->GetElement(NewIdx);
-									const TSharedPtr<IPropertyHandle> ColorHandle = NewElem->GetChildHandle(TEXT("DebugColor"));
-									if (ColorHandle.IsValid())
-									{
-										ColorHandle->SetValueFromFormattedString(Picked.ToString());
-									}
-								}
 						}
 						if (PropUtils.IsValid())
 						{

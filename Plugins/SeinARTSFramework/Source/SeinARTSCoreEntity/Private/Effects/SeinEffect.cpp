@@ -8,6 +8,8 @@
  */
 
 #include "Effects/SeinEffect.h"
+#include "Core/SeinAssetTagKeys.h"
+#include "UObject/AssetRegistryTagsContext.h"
 
 #if WITH_EDITOR
 void USeinEffect::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
@@ -24,3 +26,19 @@ void USeinEffect::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedE
 	}
 }
 #endif
+
+void USeinEffect::GetAssetRegistryTags(FAssetRegistryTagsContext Context) const
+{
+	Super::GetAssetRegistryTags(Context);
+
+	// Surface EffectTag onto the asset's FAssetData so the editor auto-tag
+	// collision check reads it without loading this CDO. See USeinAbility for the
+	// rationale + string-form contract.
+	if (EffectTag.IsValid())
+	{
+		Context.AddTag(FAssetRegistryTag(
+			SeinAssetTagKeys::EffectTag(),
+			EffectTag.ToString(),
+			FAssetRegistryTag::TT_Alphabetical));
+	}
+}

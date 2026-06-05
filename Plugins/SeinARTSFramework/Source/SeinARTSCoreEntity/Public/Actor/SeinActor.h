@@ -46,6 +46,15 @@ public:
 	virtual void PostEditMove(bool bFinished) override;
 #endif
 
+	/** Surfaces this entity's IdentityTag — which lives nested in an
+	 *  `FSeinIdentityComponent` inside the bridge's `ComponentData` array, so
+	 *  `AssetRegistrySearchable` can't reach it — onto this asset's FAssetData
+	 *  (key `SeinAssetTagKeys::IdentityTag`, bare `ToString()` form). Lets the
+	 *  editor auto-tag collision check read it WITHOUT loading the Blueprint +
+	 *  CDO. Additive: chains Super first. Harvested at save / FAssetData
+	 *  construction, so the registry value is the last-saved tag. */
+	virtual void GetAssetRegistryTags(FAssetRegistryTagsContext Context) const override;
+
 	/**
 	 * Initialize this actor with a simulation entity.
 	 * Called automatically when spawned via USeinWorldSubsystem::SpawnEntity.

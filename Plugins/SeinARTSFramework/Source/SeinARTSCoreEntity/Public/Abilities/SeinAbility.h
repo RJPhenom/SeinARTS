@@ -400,6 +400,15 @@ public:
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
 
+	/** Surfaces `AbilityTag` onto this asset's FAssetData (key
+	 *  `SeinAssetTagKeys::AbilityTag`, bare `ToString()` form) so editor tooling
+	 *  — the auto-tag collision check in particular — can read it WITHOUT loading
+	 *  the Blueprint + CDO. Additive: chains Super first, never replaces engine
+	 *  tags. Harvested at save / FAssetData construction; the registry value is
+	 *  therefore the last-saved tag (callers that need in-memory edits read the
+	 *  loaded CDO directly). */
+	virtual void GetAssetRegistryTags(FAssetRegistryTagsContext Context) const override;
+
 	// ─── Lifecycle (Blueprint implementable) ───
 
 	/** Override to add custom activation checks beyond the declarative target

@@ -156,6 +156,16 @@ void FSeinInstancedStructDetails::CustomizeHeader(
 	StructProperty = PropertyHandle;
 	PropUtils = CustomizationUtils.GetPropertyUtilities();
 
+	// Resolve the current struct once now, and refresh the cache whenever the
+	// property value changes (edit / undo / reset-to-default). The paint-time
+	// header getters read the cache instead of re-running EnumerateConstRawData
+	// every paint. A struct *type* pick rebuilds this whole customization via
+	// ForceRefresh (OnStructPicked), which re-runs CustomizeHeader and re-primes
+	// the cache, so it can never describe a stale type.
+	RefreshCachedScriptStruct();
+	PropertyHandle->SetOnPropertyValueChanged(
+		FSimpleDelegate::CreateSP(this, &FSeinInstancedStructDetails::RefreshCachedScriptStruct));
+
 	UE_LOG(LogSeinEditorPicker, Verbose,
 		TEXT("CustomizeHeader invoked. Property=%s  BaseStructMeta=%s"),
 		*PropertyHandle->GetPropertyDisplayName().ToString(),
@@ -248,20 +258,25 @@ const UScriptStruct* FSeinInstancedStructDetails::GetCurrentScriptStruct() const
 	return Found;
 }
 
+void FSeinInstancedStructDetails::RefreshCachedScriptStruct()
+{
+	CachedScriptStruct = GetCurrentScriptStruct();
+}
+
 FText FSeinInstancedStructDetails::GetDisplayValueString() const
 {
-	if (const UScriptStruct* Current = GetCurrentScriptStruct())
+	if (CachedScriptStruct)
 	{
-		return Current->GetDisplayNameText();
+		return CachedScriptStruct->GetDisplayNameText();
 	}
 	return LOCTEXT("NoneOption", "None");
 }
 
 FText FSeinInstancedStructDetails::GetTooltipText() const
 {
-	if (const UScriptStruct* Current = GetCurrentScriptStruct())
+	if (CachedScriptStruct)
 	{
-		return Current->GetToolTipText();
+		return CachedScriptStruct->GetToolTipText();
 	}
 	return LOCTEXT("PickerTooltip",
 		"Select a struct type. BP-authored structs (inheriting from the "
@@ -270,9 +285,9 @@ FText FSeinInstancedStructDetails::GetTooltipText() const
 
 const FSlateBrush* FSeinInstancedStructDetails::GetDisplayValueIcon() const
 {
-	if (const UScriptStruct* Current = GetCurrentScriptStruct())
+	if (CachedScriptStruct)
 	{
-		return FSlateIconFinder::FindIconBrushForClass(Current, "ClassIcon.Object");
+		return FSlateIconFinder::FindIconBrushForClass(CachedScriptStruct, "ClassIcon.Object");
 	}
 	return nullptr;
 }

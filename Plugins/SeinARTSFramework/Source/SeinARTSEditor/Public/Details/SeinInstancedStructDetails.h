@@ -48,4 +48,14 @@ private:
 	FText GetDisplayValueString() const;
 	FText GetTooltipText() const;
 	const struct FSlateBrush* GetDisplayValueIcon() const;
+
+	/** Cached result of GetCurrentScriptStruct(). The header's value widgets bind
+	 *  paint-time Slate attribute getters (text / icon / tooltip); resolving the
+	 *  current struct via EnumerateConstRawData on every paint is wasteful when it
+	 *  only changes on an edit. We resolve once in CustomizeHeader and refresh via
+	 *  the property's value-changed delegate (covers edit / undo / reset). A struct
+	 *  *type* pick additionally rebuilds the whole customization (ForceRefresh), so
+	 *  the cache can never outlive the struct it describes. */
+	const UScriptStruct* CachedScriptStruct = nullptr;
+	void RefreshCachedScriptStruct();
 };
