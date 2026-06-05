@@ -209,10 +209,35 @@ TArray<FFixedVector> USeinCommandBrokerBPFL::ComputeMultiBrokerAnchors(
 	const FFixedPoint TotalSpan = TotalBrokerWidth + GapPerEdge * FFixedPoint::FromInt(N - 1);
 	const FFixedPoint HalfSpan = TotalSpan / FFixedPoint::Two;
 
-	// 4. Walk anchors along RightAxis around ClickTarget.
-	FFixedPoint Cursor = -HalfSpan;
+	// 3.5 ANTI-CROSS: order the brokers by their CURRENT position along RightAxis (left→right), so the
+	// leftmost squad fills the leftmost anchor and squads don't cross to a worse-ranked slot — the
+	// formation-level equivalent of the within-squad slot re-match. Without this, brokers fill anchors
+	// by array index, so a selection whose array order doesn't match its live left/right layout crosses
+	// (the X when moving a group of squads). Deterministic: perpendicular coordinate, then entity-handle
+	// index tie-break (TOTAL order → no unstable-sort desync). Commit and preview both call this, so they
+	// stay byte-identical.
+	TArray<FFixedPoint> BrokerPerp; BrokerPerp.SetNum(N);
+	TArray<int32> RankOrder; RankOrder.Reserve(N);
 	for (int32 i = 0; i < N; ++i)
 	{
+		const FSeinEntity* BrokerEnt = World.GetEntity(Brokers[i]);
+		const FFixedVector Pos = BrokerEnt ? BrokerEnt->Transform.GetLocation() : ClickTarget;
+		BrokerPerp[i] = FFixedVector::DotProduct(Pos, RightAxis);
+		RankOrder.Add(i);
+	}
+	RankOrder.Sort([&BrokerPerp, &Brokers](int32 A, int32 B)
+	{
+		if (BrokerPerp[A] != BrokerPerp[B]) return BrokerPerp[A] < BrokerPerp[B];
+		return Brokers[A].Index < Brokers[B].Index;
+	});
+
+	// 4. Walk anchors along RightAxis around ClickTarget, in left→right RANK order — each broker keeps
+	// its own width, and the anchor is stored back at the broker's ORIGINAL index so the returned array
+	// stays index-aligned with the input Brokers.
+	FFixedPoint Cursor = -HalfSpan;
+	for (int32 k = 0; k < N; ++k)
+	{
+		const int32 i = RankOrder[k]; // the k-th broker from the left
 		const FFixedPoint Width = BrokerWidths[i];
 		const FFixedPoint AnchorOffset = Cursor + Width / FFixedPoint::Two;
 		Anchors[i] = ClickTarget + RightAxis * AnchorOffset;

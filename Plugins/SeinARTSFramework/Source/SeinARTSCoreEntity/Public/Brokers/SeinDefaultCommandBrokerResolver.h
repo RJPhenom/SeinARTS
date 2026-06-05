@@ -85,4 +85,23 @@ public:
 		FFixedQuaternion CurrentFacing,
 		FFixedVector TargetLocation,
 		bool bInvertWhenBackward);
+
+protected:
+	/** Re-match members to formation slots by 1-D axis projection so a ROTATING formation doesn't
+	 *  make units cross paths. Projects each member's CURRENT position and each slot onto the
+	 *  formation's right axis, sorts both, and assigns by rank — the leftmost member fills the
+	 *  leftmost slot, and so on. Path-independent (depends only on current positions, not slot
+	 *  identity), so it never crosses on the perpendicular axis and consecutive moves don't
+	 *  oscillate. The base resolver applies it UNCONDITIONALLY (its grid is symmetric — no roles to
+	 *  pin); the squad resolver gates it on its authored-role opt-in. Permutes `Positions` in place
+	 *  so `Positions[i]` becomes member i's slot.
+	 *
+	 *  DETERMINISTIC: the sorts tie-break equal projections by entity-handle index (members) / slot
+	 *  index (slots), giving a TOTAL order, so the assignment is bit-identical across clients. A
+	 *  plain magnitude-only sort is unstable on ties → order-dependent → lockstep desync. */
+	static void ReassignSlotsByAxisProjection(
+		USeinWorldSubsystem* World,
+		const TArray<FSeinEntityHandle>& Members,
+		TArray<FFixedVector>& Positions,
+		FFixedQuaternion FormationFacing);
 };

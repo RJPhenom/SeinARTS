@@ -156,6 +156,21 @@ public:
 				const FFixedPoint Ahead = ToOther.X * Heading.X + ToOther.Y * Heading.Y;
 				if (Ahead <= FFixedPoint::Zero) continue;
 
+				// CLOSING-VELOCITY GATE — group cohesion (the refinement this file's docstring names).
+				// Only avoid a neighbour we are actually CLOSING distance with. Units moving in PARALLEL —
+				// a cohesive group walking together, or a column flowing along a wall — have a ~zero
+				// closing rate, so they SKIP here and stop shoving each other out of the cluster. Genuine
+				// collision courses (crossing, head-on, an overtake) ARE closing and are still avoided.
+				// ClosingDot = ToOther · (SelfVel − OtherVel) > 0 means the gap is shrinking this tick.
+				// Snapshot velocities → deterministic, one-sided. (A stationary unit ahead still has a
+				// positive closing dot because we move toward it, so units in your path are still avoided.)
+				const FFixedVector RelVel(
+					Vel.X - OtherMove->Velocity.X,
+					Vel.Y - OtherMove->Velocity.Y,
+					FFixedPoint::Zero);
+				const FFixedPoint ClosingDot = ToOther.X * RelVel.X + ToOther.Y * RelVel.Y;
+				if (ClosingDot <= FFixedPoint::Zero) continue;
+
 				// Past-goal gate: ignore neighbours farther than the goal.
 				if (GoalDistSq > FFixedPoint::Zero && DistSq >= GoalDistSq) continue;
 

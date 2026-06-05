@@ -16,61 +16,6 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinSquadDispatch, Log, All);
 
-namespace SeinSquadDispatchLocal
-{
-	/** Anti-cross slot assignment for backward moves. The formation always
-	 *  rotates to face the move direction (ComputeFormationFacing), so the slot
-	 *  POSITIONS are fixed — this only decides WHICH member fills WHICH slot, so
-	 *  nobody crosses. Members are matched to slots by their CURRENT left/right
-	 *  rank across the move axis: the member that is leftmost right now takes the
-	 *  leftmost slot, and so on. Depending only on where members are this instant
-	 *  (not authored slot identity, not how the squad got here) makes it path-
-	 *  independent: it never crosses on the perpendicular axis and consecutive
-	 *  backward moves don't oscillate — which a fixed geometric reflection can't
-	 *  guarantee, because the no-cross flip depends on the squad's live layout.
-	 *  Gated by FSeinSquadComponent::bInvertSlotOrderWhenMovingBackward — leave
-	 *  that FALSE to keep strict slot identity (roles pinned; a hard reverse may
-	 *  then cross). */
-	static void ReassignSlotsByCurrentOrder(
-		USeinWorldSubsystem* World,
-		const TArray<FSeinEntityHandle>& Members,
-		TArray<FFixedVector>& Positions,
-		FFixedQuaternion FormationFacing)
-	{
-		const int32 N = Positions.Num();
-		if (N <= 1 || !World || Members.Num() < N) return;
-
-		const FFixedVector RightAxis = FormationFacing.RotateVector(FFixedVector::RightVector);
-
-		// Perp coordinate (along the move's right axis) of each member's CURRENT
-		// position and of each slot; then match by sorted rank.
-		TArray<int32> MemberOrder; TArray<int32> SlotOrder;
-		TArray<FFixedPoint> MemberPerp; TArray<FFixedPoint> SlotPerp;
-		MemberOrder.Reserve(N); SlotOrder.Reserve(N);
-		MemberPerp.SetNum(N); SlotPerp.SetNum(N);
-		for (int32 i = 0; i < N; ++i)
-		{
-			const FSeinEntity* Entity = World->GetEntity(Members[i]);
-			const FFixedVector Cur = Entity ? Entity->Transform.GetLocation() : Positions[i];
-			MemberPerp[i] = FFixedVector::DotProduct(Cur, RightAxis);
-			SlotPerp[i]   = FFixedVector::DotProduct(Positions[i], RightAxis);
-			MemberOrder.Add(i);
-			SlotOrder.Add(i);
-		}
-		MemberOrder.Sort([&MemberPerp](int32 A, int32 B) { return MemberPerp[A] < MemberPerp[B]; });
-		SlotOrder.Sort([&SlotPerp](int32 A, int32 B) { return SlotPerp[A] < SlotPerp[B]; });
-
-		// k-th member by left/right rank takes the k-th slot by the same rank.
-		TArray<FFixedVector> NewPositions; NewPositions.SetNum(N);
-		for (int32 k = 0; k < N; ++k)
-		{
-			NewPositions[MemberOrder[k]] = Positions[SlotOrder[k]];
-		}
-		Positions = MoveTemp(NewPositions);
-	}
-
-}
-
 FSeinBrokerDispatchPlan USeinSquadDispatchResolver::ResolveDispatch_Implementation(
 	USeinWorldSubsystem* World,
 	FSeinEntityHandle BrokerHandle,
@@ -422,10 +367,12 @@ FSeinFormationLayout USeinSquadDispatchResolver::ResolveFormationLayout_Implemen
 	// default-grid fallback inside ResolvePositions is symmetric, so mirroring
 	// is a no-op for the unauthored case; we apply unconditionally for the
 	// backward-walk path to keep this branch simple.
+	// Now uses the SHARED, deterministic base implementation (ReassignSlotsByAxisProjection); the
+	// non-squad path runs the same match unconditionally, while the squad keeps it gated on the
+	// authored-role opt-in so a hard reverse re-ranks instead of crossing.
 	if (FacingResult.bAntiCrossReorder)
 	{
-		SeinSquadDispatchLocal::ReassignSlotsByCurrentOrder(
-			World, Members, Layout.Positions, FacingResult.Facing);
+		ReassignSlotsByAxisProjection(World, Members, Layout.Positions, FacingResult.Facing);
 	}
 
 	// Hook subclasses (cover-aware squad resolver, etc.) to mutate positions

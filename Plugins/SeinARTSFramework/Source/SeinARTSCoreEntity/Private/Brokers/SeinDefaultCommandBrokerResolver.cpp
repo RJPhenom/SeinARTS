@@ -26,6 +26,7 @@
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Tags/SeinARTSGameplayTags.h"
 #include "Math/MathLib.h"
+#include "Types/Entity.h" // FSeinEntity — current member positions for the slot match
 
 namespace SeinDefaultBrokerLocal
 {
@@ -92,6 +93,55 @@ FSeinFormationFacing USeinDefaultCommandBrokerResolver::ComputeFormationFacing(
 	return Result;
 }
 
+void USeinDefaultCommandBrokerResolver::ReassignSlotsByAxisProjection(
+	USeinWorldSubsystem* World,
+	const TArray<FSeinEntityHandle>& Members,
+	TArray<FFixedVector>& Positions,
+	FFixedQuaternion FormationFacing)
+{
+	const int32 N = Positions.Num();
+	if (N <= 1 || !World || Members.Num() < N) return;
+
+	const FFixedVector RightAxis = FormationFacing.RotateVector(FFixedVector::RightVector);
+
+	// Perp coordinate (along the formation right axis) of each member's CURRENT position and of each
+	// slot; then match by sorted rank so left/right order is preserved → nobody crosses.
+	TArray<int32> MemberOrder; TArray<int32> SlotOrder;
+	TArray<FFixedPoint> MemberPerp; TArray<FFixedPoint> SlotPerp;
+	MemberOrder.Reserve(N); SlotOrder.Reserve(N);
+	MemberPerp.SetNum(N); SlotPerp.SetNum(N);
+	for (int32 i = 0; i < N; ++i)
+	{
+		const FSeinEntity* Entity = World->GetEntity(Members[i]);
+		const FFixedVector Cur = Entity ? Entity->Transform.GetLocation() : Positions[i];
+		MemberPerp[i] = FFixedVector::DotProduct(Cur, RightAxis);
+		SlotPerp[i]   = FFixedVector::DotProduct(Positions[i], RightAxis);
+		MemberOrder.Add(i);
+		SlotOrder.Add(i);
+	}
+
+	// DETERMINISTIC total order: perpendicular coordinate, then a handle/slot-index tie-break. Without
+	// the tie-break, two equal-perp entries sort by unstable introsort internals → cross-client desync.
+	MemberOrder.Sort([&MemberPerp, &Members](int32 A, int32 B)
+	{
+		if (MemberPerp[A] != MemberPerp[B]) return MemberPerp[A] < MemberPerp[B];
+		return Members[A].Index < Members[B].Index;
+	});
+	SlotOrder.Sort([&SlotPerp](int32 A, int32 B)
+	{
+		if (SlotPerp[A] != SlotPerp[B]) return SlotPerp[A] < SlotPerp[B];
+		return A < B;
+	});
+
+	// k-th member by left/right rank takes the k-th slot by the same rank.
+	TArray<FFixedVector> NewPositions; NewPositions.SetNum(N);
+	for (int32 k = 0; k < N; ++k)
+	{
+		NewPositions[MemberOrder[k]] = Positions[SlotOrder[k]];
+	}
+	Positions = MoveTemp(NewPositions);
+}
+
 FSeinFormationLayout USeinDefaultCommandBrokerResolver::ResolveFormationLayout_Implementation(
 	USeinWorldSubsystem* World,
 	const TArray<FSeinEntityHandle>& Members,
@@ -107,10 +157,14 @@ FSeinFormationLayout USeinDefaultCommandBrokerResolver::ResolveFormationLayout_I
 	Layout.Facing = FacingResult.Facing;
 	Layout.bAntiCrossReorder = FacingResult.bAntiCrossReorder;
 	Layout.Positions = ResolvePositions(World, Members, TargetLocation, FacingResult.Facing);
-	// Default resolver's grid is symmetric — backward-walk slot mirroring is a
-	// squad-resolver concern (authored slot offsets are asymmetric). The flag
-	// is still surfaced in the layout so previews can render a backward-walk
-	// indicator if they want to.
+
+	// 1-D ANTI-CROSS SLOT MATCH. The grid is symmetric and these are roleless units, so ALWAYS
+	// re-match members to the nearest slots by left/right rank — a rotating formation otherwise makes
+	// everyone cross to their old INDEX slot (the cross-cutting-paths bug). Deterministic. (The squad
+	// resolver overrides ResolveFormationLayout and gates this SAME call on its authored-role opt-in;
+	// here there are no roles to preserve, so it is unconditional.) The bAntiCrossReorder flag is
+	// still surfaced in the layout so previews can render a backward-walk indicator if they want.
+	ReassignSlotsByAxisProjection(World, Members, Layout.Positions, FacingResult.Facing);
 
 	// Hook subclasses (e.g. cover-aware resolvers) to mutate positions before
 	// the layout returns. Empty default impl on the base class — no-op for
