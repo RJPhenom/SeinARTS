@@ -239,6 +239,15 @@ struct SEINARTSCOREENTITY_API FSeinMovementComponent : public FSeinComponent
 	 *  units, which is what makes them a true no-op. */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Movement")
 	FFixedVector AvoidanceSteer = FFixedVector::ZeroVector;
+
+	/** One-time spawn floor-snap latch. False on a freshly spawned/placed entity;
+	 *  set true after FSeinInitialSnapSystem (Movement module, PreTick) performs the
+	 *  initial ground + slope snap, so a placed unit rests on the floor with correct
+	 *  pitch/roll BEFORE its first move order instead of snapping only on first
+	 *  movement. The movement Tick re-snaps every tick and ignores this flag — it
+	 *  exists purely to make the spawn-time snap run exactly once per entity. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Movement")
+	bool bInitialGroundSnapDone = false;
 };
 
 FORCEINLINE uint32 GetTypeHash(const FSeinMovementComponent& C)
@@ -262,6 +271,7 @@ FORCEINLINE uint32 GetTypeHash(const FSeinMovementComponent& C)
 	Hash = HashCombine(Hash, GetTypeHash(C.AvoidanceWeight));
 	Hash = HashCombine(Hash, GetTypeHash(C.bAvoidSameWeights));
 	Hash = HashCombine(Hash, GetTypeHash(C.AvoidanceSteer));
+	Hash = HashCombine(Hash, GetTypeHash(C.bInitialGroundSnapDone));
 	// MovementClassData is hashed by the framework attribute resolver's
 	// reflection walk; skipped here (FInstancedStruct doesn't expose a
 	// stable GetTypeHash for arbitrary inner structs).

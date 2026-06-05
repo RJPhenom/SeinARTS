@@ -81,6 +81,20 @@ protected:
 	void DrawCommandDragLine();
 	void DrawCommandLogPanel();
 
+	/**
+	 * Smarter replacement for AHUD::GetActorsInSelectionRectangle. For every
+	 * selectable ASeinActor, build a screen-space CONVEX POLYGON from its
+	 * authored sim geometry (FSeinExtentsComponent shapes; falls back to the
+	 * actor's component bounds) and test that polygon against the marquee
+	 * rectangle with SAT. The engine routine instead unions an actor's full 3D
+	 * bounds into a loose screen-space AABB — coarse, and it drifts from the
+	 * real silhouette for tall/large/animated actors, over-selecting units the
+	 * box never touched. Projection goes through AHUD::Project (canvas space) so
+	 * the coordinates match the marquee rect (built from GetMousePosition).
+	 * P0/P1 are the marquee's two screen-space corners (any order).
+	 */
+	void CollectActorsInMarquee(const FVector2D& P0, const FVector2D& P1, TArray<ASeinActor*>& OutActors);
+
 	ASeinPlayerController* GetSeinPlayerController() const;
 
 private:

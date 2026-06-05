@@ -515,6 +515,31 @@ void USeinMovement::ApplyGroundSnapAndAltitude(
 	// across wall slivers.
 }
 
+void USeinMovement::SnapToGroundImmediate(
+	FSeinEntity& Entity,
+	FSeinMovementComponent& MovementData,
+	USeinNavigation* Nav) const
+{
+	if (!Nav) return;
+
+	// Instant ground snap: DeltaTime 0 makes ApplyGroundSnapAndAltitude take its
+	// snap-to-target branch (no rate limit). Z is left untouched if the nav can't
+	// sample here (out of bounds / blocked sliver).
+	FFixedVector Pos = Entity.Transform.GetLocation();
+	ApplyGroundSnapAndAltitude(Pos, &MovementData, Nav, FFixedPoint::Zero);
+
+	// Slope pitch/roll under the entity's current facing — set directly (no
+	// smoothing; this is the initial pose). Mirrors the movement Tick's snap.
+	const FFixedPoint Yaw   = YawFromRotation(Entity.Transform.Rotation);
+	const FFixedPoint Pitch = ComputeSlopePitch(Pos, Yaw, Nav);
+	const FFixedPoint Roll  = ComputeSlopeRoll(Pos, Yaw, Nav);
+	MovementData.SmoothedPitch = Pitch;
+	MovementData.SmoothedRoll  = Roll;
+
+	Entity.Transform.SetLocation(Pos);
+	Entity.Transform.Rotation = YawPitchRoll(Yaw, Pitch, Roll);
+}
+
 bool USeinMovement::IsFootprintPassable(const FFixedVector& Pos, USeinNavigation* Nav) const
 {
 	if (!Nav) return true;

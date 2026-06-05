@@ -157,6 +157,17 @@ public:
 	 *  sub-struct. */
 	virtual FFixedPoint GetAltitude(const FSeinMovementComponent* MovementData) const { return FFixedPoint::Zero; }
 
+	/** One-time immediate ground + slope snap for a spawned/placed entity that has
+	 *  not yet moved. Snaps the entity's Z to the nav reference height (+ this
+	 *  movement's GetAltitude) and sets pitch/roll to match the terrain slope under
+	 *  the entity's current facing — the same result the movement Tick produces, but
+	 *  instant (no smoothing). Writes Entity.Transform (Z + rotation) and
+	 *  MovementData.SmoothedPitch/Roll. Safe no-op when Nav is null or can't sample
+	 *  (out of bounds / no bake). Const and routes through the virtual
+	 *  QueryReferenceZ / GetAltitude, so it can be called on a class CDO
+	 *  (FSeinInitialSnapSystem does exactly that). */
+	void SnapToGroundImmediate(FSeinEntity& Entity, FSeinMovementComponent& MovementData, USeinNavigation* Nav) const;
+
 	/** Plan a path from the entity's current position to `Ctx.Destination`.
 	 *  Called once at move start, and again on each repath (Interval or
 	 *  OffPathOnly drift).

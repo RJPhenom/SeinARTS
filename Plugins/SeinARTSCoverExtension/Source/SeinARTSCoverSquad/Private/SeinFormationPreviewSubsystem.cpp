@@ -353,33 +353,17 @@ TArray<FSeinEntityHandle> USeinFormationPreviewSubsystem::ResolveSelectionToMemb
 	USeinWorldSubsystem* WorldSub = World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
 	if (!WorldSub) return Out;
 
-	// Iterate the live selection (post-stale-purge). Two distinct paths:
-	//
-	//   A. SQUAD-FIRST: if the selected entity carries FSeinSquadComponent it
-	//      IS a squad (per the framework rule: selecting any member resolves
-	//      up to the squad). Squad entities themselves don't carry a nav
-	//      component — the squad doesn't move, its members do — so applying
-	//      a nav-preview gate at the squad level would kill every preview
-	//      (the early failure mode this rewrite fixes).
-	//      Squad opt-in instead lives on FSeinSquadComponent::
-	//      bShowFormationPreview, a generic flag any preview consumer can
-	//      read (not a cover-module concept). When the squad opts in, we
-	//      expand to live members and apply each member's own
-	//      bShowNavigationPreview as a per-member veto — so a designer who
-	//      explicitly opts an individual member out of previews still sees
-	//      that respected even when the squad opts in.
-	//
-	//   B. LONE-UNIT (no FSeinSquadComponent): the actor is a unit selected
-	//      directly (e.g. a vehicle, a hero unit, or a non-squad infantry
-	//      controlled solo). Apply the existing nav-component gate:
-	//      bShowNavigationPreview false → skip; missing nav component → skip
-	//      (entity can't move; nothing meaningful to preview).
-	//
-	// The squad path INTENTIONALLY does not consult per-member nav components
-	// as a hard gate — they're a soft veto on the member-level only, layered
-	// after the squad's opt-in. Most members WILL have a nav component (they
-	// have to, to move); the rare squad with a non-movable member type (e.g.
-	// a turret slot) still contributes its other members to the preview.
+	// Iterate the live selection (post-stale-purge), expanding squads to members.
+	// ALL-OR-NOTHING preview opt-in: the moment ANY entity that would be in the
+	// formation is opted out, return an empty list to suppress the WHOLE preview
+	// (no mixed preview + non-preview members). "Opted out" means:
+	//   - a selected squad with FSeinSquadComponent::bShowFormationPreview == false, OR
+	//   - any member/lone unit with FSeinNavigationComponent::bShowNavigationPreview == false, OR
+	//   - any member/lone unit with NO FSeinNavigationComponent (can't move, so no
+	//     destination opinion — counts as opted out, per design).
+	//   A. SQUAD: a selected entity carrying FSeinSquadComponent resolves to its
+	//      live members (selecting any member resolves up to the squad).
+	//   B. LONE-UNIT (no FSeinSquadComponent): a directly-selected movable unit.
 	for (const TWeakObjectPtr<ASeinActor>& Weak : PC->SelectedActors)
 	{
 		ASeinActor* Actor = Weak.Get();
@@ -390,59 +374,29 @@ TArray<FSeinEntityHandle> USeinFormationPreviewSubsystem::ResolveSelectionToMemb
 		// Path A: squad-level dispatch.
 		if (const FSeinSquadComponent* SquadData = WorldSub->GetComponent<FSeinSquadComponent>(Handle))
 		{
-			if (!SquadData->bShowFormationPreview)
+			// ALL-OR-NOTHING: the squad must opt in (bShowFormationPreview) AND
+			// every live member must have a nav component and opt in
+			// (bShowNavigationPreview). If any one fails, suppress the WHOLE
+			// preview (return empty — RefreshPreview hides on an empty list). A
+			// member with NO nav component counts as opted out: it can't move, so
+			// it has no destination opinion.
+			if (!SquadData->bShowFormationPreview) return {};
+			for (const FSeinEntityHandle& Member : SquadData->GetLiveMembers())
 			{
-				UE_LOG(LogSeinFormationPreviewSubsystem, Verbose,
-					TEXT("ResolveSelectionToMembers: squad %s opted out via bShowFormationPreview=false"),
-					*Handle.ToString());
-				continue;
-			}
-
-			const TArray<FSeinEntityHandle> Live = SquadData->GetLiveMembers();
-			int32 Added = 0, VetoedByMember = 0;
-			for (const FSeinEntityHandle& Member : Live)
-			{
-				// Per-member soft veto: a member that explicitly opted itself
-				// out of previews (FSeinNavigationComponent::bShowNavigationPreview
-				// = false) is dropped from the layout. Missing nav component
-				// is OK here — the member just won't be assigned a preview
-				// position by the resolver, no harm done.
 				const FSeinNavigationComponent* MemberNav =
 					WorldSub->GetComponent<FSeinNavigationComponent>(Member);
-				if (MemberNav && !MemberNav->bShowNavigationPreview)
-				{
-					++VetoedByMember;
-					continue;
-				}
+				if (!MemberNav || !MemberNav->bShowNavigationPreview) return {};
 				Out.Add(Member);
-				++Added;
 			}
-
-			UE_LOG(LogSeinFormationPreviewSubsystem, Verbose,
-				TEXT("ResolveSelectionToMembers: squad %s expanded to %d/%d members (vetoedByMember=%d)"),
-				*Handle.ToString(), Added, Live.Num(), VetoedByMember);
 			continue;
 		}
 
 		// Path B: lone-unit dispatch.
+		// Lone unit — ALL-OR-NOTHING: must have a nav component AND opt in. No nav
+		// component or opted out → suppress the whole preview.
 		const FSeinNavigationComponent* NavComp =
 			WorldSub->GetComponent<FSeinNavigationComponent>(Handle);
-		if (!NavComp)
-		{
-			// No nav component authored — entity has no destination-preview
-			// opinion (and likely can't move at all). Skip.
-			UE_LOG(LogSeinFormationPreviewSubsystem, Verbose,
-				TEXT("ResolveSelectionToMembers: lone unit %s has no FSeinNavigationComponent — skipping"),
-				*Handle.ToString());
-			continue;
-		}
-		if (!NavComp->bShowNavigationPreview)
-		{
-			UE_LOG(LogSeinFormationPreviewSubsystem, Verbose,
-				TEXT("ResolveSelectionToMembers: lone unit %s opted out via bShowNavigationPreview=false"),
-				*Handle.ToString());
-			continue;
-		}
+		if (!NavComp || !NavComp->bShowNavigationPreview) return {};
 		Out.Add(Handle);
 	}
 
