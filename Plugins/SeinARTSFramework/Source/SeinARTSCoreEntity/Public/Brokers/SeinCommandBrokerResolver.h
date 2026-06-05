@@ -119,13 +119,15 @@ public:
 	 * back to broker data itself after calling.
 	 *
 	 * Default resolver: facing rotates so forward axis points centroid → target;
-	 * positions come from the symmetric grid layout. Squad resolver: same plus
-	 * authored slot offsets and (when `bInvertWhenBackward` is set + dot < 0)
-	 * the keep-current-facing + slot-mirror "backward walk" feel.
+	 * positions come from the symmetric grid layout, then members are re-matched to
+	 * slots per the two re-assign flags. Squad resolver: same, plus authored slot
+	 * offsets via its ResolvePositions override.
 	 *
-	 * `bInvertWhenBackward` is the caller's read of the broker's
-	 * `FSeinSquadComponent::bInvertSlotOrderWhenMovingBackward`. Default resolver
-	 * ignores it (symmetric grid); squad resolver consumes it.
+	 * `bReassignLateral` / `bReassignDepth` select the anti-cross slot re-match (see
+	 * `ReassignSlots`): lateral = left/right rank, depth = front/back rank, both =
+	 * 2-D nearest-slot, neither = raw index order. The caller passes the formation-
+	 * level opt-OUT flags (non-squad selections) or the squad's per-squad opt-IN
+	 * flags (FSeinSquadComponent).
 	 */
 	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Broker", meta = (DisplayName = "Resolve Formation Layout"))
 	FSeinFormationLayout ResolveFormationLayout(
@@ -134,14 +136,16 @@ public:
 		FFixedVector CurrentCentroid,
 		FFixedQuaternion CurrentFacing,
 		FFixedVector TargetLocation,
-		bool bInvertWhenBackward);
+		bool bReassignLateral,
+		bool bReassignDepth);
 	virtual FSeinFormationLayout ResolveFormationLayout_Implementation(
 		USeinWorldSubsystem* World,
 		const TArray<FSeinEntityHandle>& Members,
 		FFixedVector CurrentCentroid,
 		FFixedQuaternion CurrentFacing,
 		FFixedVector TargetLocation,
-		bool bInvertWhenBackward);
+		bool bReassignLateral,
+		bool bReassignDepth);
 
 	/**
 	 * Optional post-process pass on the per-member positions computed by

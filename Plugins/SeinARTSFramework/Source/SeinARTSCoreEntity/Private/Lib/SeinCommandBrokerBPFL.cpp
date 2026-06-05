@@ -216,6 +216,15 @@ TArray<FFixedVector> USeinCommandBrokerBPFL::ComputeMultiBrokerAnchors(
 	// (the X when moving a group of squads). Deterministic: perpendicular coordinate, then entity-handle
 	// index tie-break (TOTAL order → no unstable-sort desync). Commit and preview both call this, so they
 	// stay byte-identical.
+	// Gated on the formation-level OPT-OUT lateral flag (default true) read off the default resolver
+	// CDO — the squad-group is a 1-D row, so only the lateral toggle is meaningful here.
+	bool bLateralReassign = true;
+	if (const USeinDefaultCommandBrokerResolver* DefCDO =
+		Cast<USeinDefaultCommandBrokerResolver>(SeinFormationPreviewLocal::ResolveDefaultResolverCDO()))
+	{
+		bLateralReassign = DefCDO->bReassignSlotsLateral;
+	}
+
 	TArray<FFixedPoint> BrokerPerp; BrokerPerp.SetNum(N);
 	TArray<int32> RankOrder; RankOrder.Reserve(N);
 	for (int32 i = 0; i < N; ++i)
@@ -225,11 +234,16 @@ TArray<FFixedVector> USeinCommandBrokerBPFL::ComputeMultiBrokerAnchors(
 		BrokerPerp[i] = FFixedVector::DotProduct(Pos, RightAxis);
 		RankOrder.Add(i);
 	}
-	RankOrder.Sort([&BrokerPerp, &Brokers](int32 A, int32 B)
+	if (bLateralReassign)
 	{
-		if (BrokerPerp[A] != BrokerPerp[B]) return BrokerPerp[A] < BrokerPerp[B];
-		return Brokers[A].Index < Brokers[B].Index;
-	});
+		// Leftmost-by-current-position fills the leftmost anchor. Skip → RankOrder stays identity
+		// (raw array/index order, the pre-anti-cross behavior).
+		RankOrder.Sort([&BrokerPerp, &Brokers](int32 A, int32 B)
+		{
+			if (BrokerPerp[A] != BrokerPerp[B]) return BrokerPerp[A] < BrokerPerp[B];
+			return Brokers[A].Index < Brokers[B].Index;
+		});
+	}
 
 	// 4. Walk anchors along RightAxis around ClickTarget, in left→right RANK order — each broker keeps
 	// its own width, and the anchor is stored back at the broker's ORIGINAL index so the returned array
@@ -317,7 +331,7 @@ FSeinFormationLayout USeinCommandBrokerBPFL::SeinComputeFormationPreview(
 		for (const int32 Idx : Indices) { SquadMembers.Add(Members[Idx]); }
 
 		// Identical reads to USeinSquadDispatchResolver::ResolveDispatch: the squad's
-		// own pooled resolver, broker centroid + facing, and per-squad invert flag.
+		// own pooled resolver, broker centroid + facing, and per-squad re-match flags.
 		const FSeinCommandBrokerData* Broker = World->GetComponent<FSeinCommandBrokerData>(Squad);
 		const FSeinSquadComponent* SquadData = World->GetComponent<FSeinSquadComponent>(Squad);
 
@@ -325,7 +339,8 @@ FSeinFormationLayout USeinCommandBrokerBPFL::SeinComputeFormationPreview(
 			? World->GetCommandBrokerResolver(Broker->ResolverID) : nullptr;
 		FFixedVector Centroid = Broker ? Broker->Centroid : FFixedVector::ZeroVector;
 		const FFixedQuaternion Facing = Broker ? Broker->AnchorFacing : FFixedQuaternion::Identity;
-		const bool bInvertWhenBackward = SquadData ? SquadData->bInvertSlotOrderWhenMovingBackward : false;
+		const bool bReassignLateral = SquadData ? SquadData->bReassignSlotsLateral : false;
+		const bool bReassignDepth   = SquadData ? SquadData->bReassignSlotsDepth   : false;
 
 		// First-tick fallback centroid (broker centroid not yet computed).
 		if (SquadData && (!Broker || Broker->Centroid.IsNearlyZero()))
@@ -343,7 +358,7 @@ FSeinFormationLayout USeinCommandBrokerBPFL::SeinComputeFormationPreview(
 			SquadAnchors.IsValidIndex(s) ? SquadAnchors[s] : TargetLocation;
 
 		const FSeinFormationLayout SquadLayout = Resolver->ResolveFormationLayout(
-			World, SquadMembers, Centroid, Facing, SquadAnchor, bInvertWhenBackward);
+			World, SquadMembers, Centroid, Facing, SquadAnchor, bReassignLateral, bReassignDepth);
 
 		// Scatter the squad's positions back to the ORIGINAL member indices.
 		for (int32 k = 0; k < Indices.Num(); ++k)
@@ -353,7 +368,7 @@ FSeinFormationLayout USeinCommandBrokerBPFL::SeinComputeFormationPreview(
 		}
 		// Representative facing for any consumer that draws a facing arrow (the
 		// preview renders per-cell decals from Positions; Facing is advisory).
-		if (s == 0) { Out.Facing = SquadLayout.Facing; Out.bAntiCrossReorder = SquadLayout.bAntiCrossReorder; }
+		if (s == 0) { Out.Facing = SquadLayout.Facing; }
 	}
 
 	// Loose (non-squad) members → default resolver, one grid at the click target —
@@ -379,16 +394,25 @@ FSeinFormationLayout USeinCommandBrokerBPFL::SeinComputeFormationPreview(
 			const FFixedVector LooseCentroid = (Count > 0)
 				? (Sum / FFixedPoint::FromInt(Count)) : TargetLocation;
 
+			// Non-squad selection → the default resolver's formation-level opt-OUT flags (default both
+			// on → 2-D). Mirrors the commit, where the ephemeral broker's default resolver reads the
+			// same instance flags.
+			bool bLooseLateral = true, bLooseDepth = true;
+			if (const USeinDefaultCommandBrokerResolver* DefCDO = Cast<USeinDefaultCommandBrokerResolver>(Resolver))
+			{
+				bLooseLateral = DefCDO->bReassignSlotsLateral;
+				bLooseDepth   = DefCDO->bReassignSlotsDepth;
+			}
 			const FSeinFormationLayout LooseLayout = Resolver->ResolveFormationLayout(
 				World, LooseMembers, LooseCentroid, FFixedQuaternion::Identity,
-				TargetLocation, /*bInvertWhenBackward*/ false);
+				TargetLocation, bLooseLateral, bLooseDepth);
 
 			for (int32 k = 0; k < LooseIndices.Num(); ++k)
 			{
 				Out.Positions[LooseIndices[k]] = LooseLayout.Positions.IsValidIndex(k)
 					? LooseLayout.Positions[k] : TargetLocation;
 			}
-			if (SquadOrder.Num() == 0) { Out.Facing = LooseLayout.Facing; Out.bAntiCrossReorder = LooseLayout.bAntiCrossReorder; }
+			if (SquadOrder.Num() == 0) { Out.Facing = LooseLayout.Facing; }
 		}
 	}
 

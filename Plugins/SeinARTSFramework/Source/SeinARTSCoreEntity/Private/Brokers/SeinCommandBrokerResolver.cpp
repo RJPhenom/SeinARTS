@@ -241,14 +241,14 @@ FSeinFormationLayout USeinCommandBrokerResolver::ResolveFormationLayout_Implemen
 	FFixedVector /*CurrentCentroid*/,
 	FFixedQuaternion CurrentFacing,
 	FFixedVector TargetLocation,
-	bool /*bInvertWhenBackward*/)
+	bool /*bReassignLateral*/,
+	bool /*bReassignDepth*/)
 {
 	// Abstract base default: keep current facing, place every member at the
 	// target. Trivial — useful for very simple subclasses; default + squad
 	// resolvers override with real layout logic.
 	FSeinFormationLayout Layout;
 	Layout.Facing = CurrentFacing;
-	Layout.bAntiCrossReorder = false;
 	Layout.Positions = ResolvePositions(World, Members, TargetLocation, CurrentFacing);
 	return Layout;
 }

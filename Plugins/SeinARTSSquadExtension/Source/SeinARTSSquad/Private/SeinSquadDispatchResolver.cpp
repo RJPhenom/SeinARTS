@@ -119,26 +119,23 @@ FSeinBrokerDispatchPlan USeinSquadDispatchResolver::ResolveDispatch_Implementati
 	// the same entity. Their own ability handles "get in range" â€” formation
 	// positions don't apply because the target moves.
 	//
-	// Formation orientation: by default, the formation rotates so its forward
-	// axis aligns with the direction from current centroid â†’ target. With
-	// the squad's `bInvertSlotOrderWhenMovingBackward` flag enabled and the
-	// move heading roughly opposite the squad's current facing, we KEEP the
-	// current facing â€” the squad walks backwards and slot offsets stay in
-	// their current world orientation. CoH-style natural-feel. Toggle is on
-	// FSeinSquadComponent (per-squad designer toggle), NOT the resolver. Logic
-	// lives in ResolveFormationLayout â€” same entry point preview consumers
-	// call, so commit + preview never drift.
+	// Formation orientation: the formation always rotates so its forward axis aligns with the
+	// direction from current centroid -> target (ComputeFormationFacing). The per-squad slot RE-MATCH
+	// toggles (Reassign Slots Lateral / Depth) live on FSeinSquadComponent and are passed into
+	// ResolveFormationLayout below -- the SAME entry point preview consumers call, so commit + preview
+	// never drift. Both default OFF: authored slot roles stay pinned unless the designer opts in.
 	FSeinCommandBrokerData* BrokerData = World->GetComponent<FSeinCommandBrokerData>(BrokerHandle);
 	const FSeinSquadComponent* SquadData = World->GetComponent<FSeinSquadComponent>(BrokerHandle);
 	const FSeinEntity* SquadEntity = World->GetEntity(BrokerHandle);
 	const FFixedVector CurrentCentroid = BrokerData ? BrokerData->Centroid
 		: (SquadEntity ? SquadEntity->Transform.GetLocation() : FFixedVector::ZeroVector);
 	const FFixedQuaternion CurrentFacing = BrokerData ? BrokerData->AnchorFacing : FFixedQuaternion::Identity;
-	const bool bInvertWhenBackward = SquadData ? SquadData->bInvertSlotOrderWhenMovingBackward : false;
+	const bool bReassignLateral = SquadData ? SquadData->bReassignSlotsLateral : false;
+	const bool bReassignDepth   = SquadData ? SquadData->bReassignSlotsDepth   : false;
 
 	const FSeinFormationLayout Layout = ResolveFormationLayout(
 		World, Effective, CurrentCentroid, CurrentFacing,
-		Order.TargetLocation, bInvertWhenBackward);
+		Order.TargetLocation, bReassignLateral, bReassignDepth);
 	const FFixedQuaternion FormationFacing = Layout.Facing;
 	const TArray<FFixedVector>& Positions = Layout.Positions;
 
@@ -342,44 +339,4 @@ TArray<FFixedVector> USeinSquadDispatchResolver::ResolvePositions_Implementation
 	}
 
 	return Out;
-}
-
-FSeinFormationLayout USeinSquadDispatchResolver::ResolveFormationLayout_Implementation(
-	USeinWorldSubsystem* World,
-	const TArray<FSeinEntityHandle>& Members,
-	FFixedVector CurrentCentroid,
-	FFixedQuaternion CurrentFacing,
-	FFixedVector TargetLocation,
-	bool bInvertWhenBackward)
-{
-	// Facing computation lives on the parent â€” single source of truth shared
-	// between commit + preview paths.
-	const FSeinFormationFacing FacingResult = ComputeFormationFacing(
-		CurrentCentroid, CurrentFacing, TargetLocation, bInvertWhenBackward);
-
-	FSeinFormationLayout Layout;
-	Layout.Facing = FacingResult.Facing;
-	Layout.bAntiCrossReorder = FacingResult.bAntiCrossReorder;
-	Layout.Positions = ResolvePositions(World, Members, TargetLocation, FacingResult.Facing);
-
-	// Slot-mirror for backward walk â€” only meaningful when authored slot offsets
-	// are asymmetric (the squad has a real "front row vs back row"). The
-	// default-grid fallback inside ResolvePositions is symmetric, so mirroring
-	// is a no-op for the unauthored case; we apply unconditionally for the
-	// backward-walk path to keep this branch simple.
-	// Now uses the SHARED, deterministic base implementation (ReassignSlotsByAxisProjection); the
-	// non-squad path runs the same match unconditionally, while the squad keeps it gated on the
-	// authored-role opt-in so a hard reverse re-ranks instead of crossing.
-	if (FacingResult.bAntiCrossReorder)
-	{
-		ReassignSlotsByAxisProjection(World, Members, Layout.Positions, FacingResult.Facing);
-	}
-
-	// Hook subclasses (cover-aware squad resolver, etc.) to mutate positions
-	// after geometry + slot-mirror. Empty default impl on the base â€” no-op
-	// for non-overriding subclasses. Runs AFTER the mirror so cover-snap sees
-	// the final geometric positions.
-	PostProcessPositions(World, Members, Layout.Positions, TargetLocation);
-
-	return Layout;
 }

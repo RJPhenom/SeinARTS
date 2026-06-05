@@ -36,11 +36,10 @@ class SEINARTSSQUAD_API USeinSquadDispatchResolver : public USeinDefaultCommandB
 	GENERATED_BODY()
 
 public:
-	/** NOTE: the "invert slot order when moving backward" toggle moved to
-	 *  FSeinSquadComponent::bInvertSlotOrderWhenMovingBackward — it's a
-	 *  per-squad behavioral feature, not a resolver tunable. The resolver
-	 *  reads that flag from the squad's component data at dispatch time.
-	 *  Designers configure it on the Squad Component in the BP editor. */
+	/** NOTE: the per-squad slot RE-MATCH toggles (Reassign Slots Lateral / Depth)
+	 *  live on FSeinSquadComponent, not on the resolver — they're per-squad
+	 *  behavioral features. ResolveDispatch reads them from the squad's component
+	 *  data and passes them into the (inherited) ResolveFormationLayout. */
 
 	virtual FSeinBrokerDispatchPlan ResolveDispatch_Implementation(
 		USeinWorldSubsystem* World,
@@ -52,20 +51,4 @@ public:
 		const TArray<FSeinEntityHandle>& Members,
 		FFixedVector Anchor,
 		FFixedQuaternion Facing) override;
-
-	/** Overrides the default impl to apply the squad's authored slot-mirror
-	 *  for backward-walk: when bInvertWhenBackward is set AND the move heading
-	 *  is roughly opposite the squad's current facing, the formation keeps its
-	 *  current facing (handled by ComputeFormationFacing) AND the per-member
-	 *  positions are mirrored across the anchor's forward axis so the squad's
-	 *  authored "front row" ends up on the leading edge of the destination.
-	 *  Without the mirror the kept-facing path would walk the squad's BACK row
-	 *  to the leading edge — visible spaghetti. */
-	virtual FSeinFormationLayout ResolveFormationLayout_Implementation(
-		USeinWorldSubsystem* World,
-		const TArray<FSeinEntityHandle>& Members,
-		FFixedVector CurrentCentroid,
-		FFixedQuaternion CurrentFacing,
-		FFixedVector TargetLocation,
-		bool bInvertWhenBackward) override;
 };

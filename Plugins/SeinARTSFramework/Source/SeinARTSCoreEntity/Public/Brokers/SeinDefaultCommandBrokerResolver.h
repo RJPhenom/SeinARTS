@@ -31,6 +31,22 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Broker|Formation")
 	FFixedPoint InterUnitSpacing = FFixedPoint::FromInt(150);
 
+	/** Formation-level slot RE-MATCH on the LATERAL (left/right) axis. OPT-OUT, default true.
+	 *  When a non-squad selection moves, members are re-matched to the grid slots by left/right rank
+	 *  so a rotating formation doesn't make everyone cross to their old index slot. Clear to fall back
+	 *  to raw index order. (Squads carry their OWN per-squad opt-IN flags on FSeinSquadComponent.) */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Broker|Formation",
+		meta = (DisplayName = "Reassign Slots Lateral"))
+	bool bReassignSlotsLateral = true;
+
+	/** Formation-level slot RE-MATCH on the DEPTH (front/back) axis. OPT-OUT, default true.
+	 *  With Lateral (the default), the grid gets a full 2-D nearest-slot assignment so a deep block
+	 *  converges without crossing front-to-back as well as left-to-right. Clear to drop back to a 1-D
+	 *  (lateral-only) match, or clear both for raw index order. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Broker|Formation",
+		meta = (DisplayName = "Reassign Slots Depth"))
+	bool bReassignSlotsDepth = true;
+
 	/** Ability tag dispatched for members whose own DefaultCommands table doesn't
 	 *  resolve the click context (ResolveMemberAbility returned invalid). Targets
 	 *  the formation slot, not the order target — "tag along with the group" for
@@ -58,7 +74,8 @@ public:
 		FFixedVector CurrentCentroid,
 		FFixedQuaternion CurrentFacing,
 		FFixedVector TargetLocation,
-		bool bInvertWhenBackward) override;
+		bool bReassignLateral,
+		bool bReassignDepth) override;
 
 	/**
 	 * Compute the formation's anchor-facing for a move/attack order.
@@ -69,39 +86,37 @@ public:
 	 * formation already stands → keeps `CurrentFacing` rather than degenerating
 	 * to identity.)
 	 *
-	 * Anti-cross flag (`bInvertWhenBackward = true` AND move dot current forward
-	 * < 0): sets `bAntiCrossReorder = true`. This does NOT touch facing — it tells
-	 * the squad resolver to re-match members to slots by current left/right rank
-	 * so a reverse move doesn't make members cross paths. Default resolver's
-	 * symmetric grid ignores it.
-	 *
 	 * Pure compute — no world state read or written. Static so preview consumers
 	 * (no resolver instance) can call it directly without instantiating.
 	 */
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "SeinARTS|Broker|Formation",
 		meta = (DisplayName = "Compute Formation Facing"))
-	static FSeinFormationFacing ComputeFormationFacing(
+	static FFixedQuaternion ComputeFormationFacing(
 		FFixedVector CurrentCentroid,
 		FFixedQuaternion CurrentFacing,
-		FFixedVector TargetLocation,
-		bool bInvertWhenBackward);
+		FFixedVector TargetLocation);
 
 protected:
-	/** Re-match members to formation slots by 1-D axis projection so a ROTATING formation doesn't
-	 *  make units cross paths. Projects each member's CURRENT position and each slot onto the
-	 *  formation's right axis, sorts both, and assigns by rank — the leftmost member fills the
-	 *  leftmost slot, and so on. Path-independent (depends only on current positions, not slot
-	 *  identity), so it never crosses on the perpendicular axis and consecutive moves don't
-	 *  oscillate. The base resolver applies it UNCONDITIONALLY (its grid is symmetric — no roles to
-	 *  pin); the squad resolver gates it on its authored-role opt-in. Permutes `Positions` in place
-	 *  so `Positions[i]` becomes member i's slot.
+	/** Re-match members to formation slots so a rotating/translating formation doesn't make units
+	 *  cross paths. Per-axis, driven by the two designer flags:
+	 *    - bLateral only → 1-D rank match on the formation RIGHT axis (preserve left/right order;
+	 *                      front/back untouched — the wedge/arrow behavior).
+	 *    - bDepth only   → 1-D rank match on the formation FORWARD axis (preserve front/back order).
+	 *    - both          → 2-D nearest-slot assignment (greedy min-distance in centroid-aligned local
+	 *                      space; non-crossing for deep grids — the line/block behavior).
+	 *    - neither       → no-op (keep ResolvePositions' index order / authored slots as-is).
+	 *  Reads each member's CURRENT position and permutes `Positions` in place so `Positions[i]` becomes
+	 *  member i's slot — path-independent, so consecutive moves don't oscillate.
 	 *
-	 *  DETERMINISTIC: the sorts tie-break equal projections by entity-handle index (members) / slot
-	 *  index (slots), giving a TOTAL order, so the assignment is bit-identical across clients. A
-	 *  plain magnitude-only sort is unstable on ties → order-dependent → lockstep desync. */
-	static void ReassignSlotsByAxisProjection(
+	 *  DETERMINISTIC: every sort carries a handle/slot-index tie-break (TOTAL order → bit-identical
+	 *  across clients). A magnitude-only sort is unstable on ties → order-dependent → lockstep desync.
+	 *  The 2-D path aligns the member/slot clouds by their own centroids before squaring distances, so
+	 *  the bulk move translation cancels (a unit half a map from its slot can't overflow 32.32). */
+	static void ReassignSlots(
 		USeinWorldSubsystem* World,
 		const TArray<FSeinEntityHandle>& Members,
 		TArray<FFixedVector>& Positions,
-		FFixedQuaternion FormationFacing);
+		FFixedQuaternion FormationFacing,
+		bool bLateral,
+		bool bDepth);
 };

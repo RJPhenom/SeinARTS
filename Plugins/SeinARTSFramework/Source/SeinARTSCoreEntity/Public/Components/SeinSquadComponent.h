@@ -245,26 +245,30 @@ struct SEINARTSCOREENTITY_API FSeinSquadComponent : public FSeinComponent
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Squad")
 	FFixedPoint CoherencyRadius = FFixedPoint::Zero;
 
-	/** CoH-style natural-feel toggle. When the squad is asked to move to a
-	 *  destination roughly opposite its current facing (dot product < 0
-	 *  with current forward), the formation KEEPS its current facing
-	 *  rather than rotating 180Â° around its centroid. Result: each member
-	 *  walks roughly straight to its new slot â€” the back row becomes the
-	 *  front row of the new arrival without anyone having to walk past
-	 *  their squadmates. Visually: the squad "backs up" in formation
-	 *  rather than spinning around.
+	/** Per-squad slot RE-MATCH on the LATERAL (left/right) axis. OPT-IN, default false.
 	 *
-	 *  Without this, a 180Â° rotation reshuffles slot positions across the
-	 *  centroid (the right-flank becomes the new left-flank in world space)
-	 *  and units' paths cross each other in the middle as they trade
-	 *  places â€” visible spaghetti.
+	 *  When the squad moves and the formation rotates, members are re-matched to their slots by
+	 *  current left/right rank so nobody crosses paths trading flanks â€” the leftmost member fills
+	 *  the leftmost slot, etc. Front/back ordering is left untouched, so a wedge/arrow keeps its tip
+	 *  (its authored front-vs-back roles) while only the flanks re-rank. This is the "1-D" behavior.
 	 *
-	 *  Default false. Designers opt in per-squad. The movement system
-	 *  decides whether to play a backward-walk animation when the move
-	 *  direction disagrees with the unit's facing â€” this flag only
-	 *  controls slot assignment. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Squad")
-	bool bInvertSlotOrderWhenMovingBackward = false;
+	 *  Leave OFF to pin authored slot roles to their members (each member always walks to its own
+	 *  authored slot, even if that means crossing a squadmate on a hard turn). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Squad",
+		meta = (DisplayName = "Reassign Slots Lateral"))
+	bool bReassignSlotsLateral = false;
+
+	/** Per-squad slot RE-MATCH on the DEPTH (front/back) axis. OPT-IN, default false.
+	 *
+	 *  Enable ALONGSIDE Reassign Slots Lateral to get a full 2-D nearest-slot assignment: any member
+	 *  can take any slot, picked to minimise crossing as the squad converges. Good for a wide
+	 *  line/block (Napoleonic ranks) where slot roles are interchangeable. Enabling depth ALONE
+	 *  re-ranks front/back only (left/right pinned) â€” a niche mirror of the lateral case.
+	 *
+	 *  Slot assignment only; the movement system decides backward-walk animation independently. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Squad",
+		meta = (DisplayName = "Reassign Slots Depth"))
+	bool bReassignSlotsDepth = false;
 
 	/** Per-squad override for the dispatch resolver class used by this squad's
 	 *  CommandBroker. Defaults to the framework's `USeinSquadDispatchResolver`
@@ -326,7 +330,8 @@ FORCEINLINE uint32 GetTypeHash(const FSeinSquadComponent& Component)
 	Hash = HashCombine(Hash, GetTypeHash(Component.bShowFormationPreview));
 	Hash = HashCombine(Hash, GetTypeHash(static_cast<uint8>(Component.ContainmentMode)));
 	Hash = HashCombine(Hash, GetTypeHash(Component.CoherencyRadius));
-	Hash = HashCombine(Hash, GetTypeHash(Component.bInvertSlotOrderWhenMovingBackward));
+	Hash = HashCombine(Hash, GetTypeHash(Component.bReassignSlotsLateral));
+	Hash = HashCombine(Hash, GetTypeHash(Component.bReassignSlotsDepth));
 	Hash = HashCombine(Hash, GetTypeHash(Component.Slots.Num()));
 	for (const FSeinSquadSlot& Slot : Component.Slots)
 	{

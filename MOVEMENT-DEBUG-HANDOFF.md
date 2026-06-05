@@ -144,8 +144,9 @@ Code-side readouts:
   `SeinARTS.Cover.UsesCover`; FoW-observer-gated. A vestigial "wrong-side penalty radius" appears in
   comments but no longer exists.
 - **Squad formation** — `ResolveFormationLayout` computes facing (`ComputeFormationFacing`), applies
-  a backward-walk slot mirror (`bInvertSlotOrderWhenMovingBackward`), then calls `PostProcessPositions`
-  (where Cover snaps). If member offsets are all-identity/unresolved it falls back to a parent grid.
+  the per-axis slot re-match (`ReassignSlots`, gated by the squad's `bReassignSlotsLateral` /
+  `bReassignSlotsDepth`), then calls `PostProcessPositions` (where Cover snaps). If member offsets are
+  all-identity/unresolved it falls back to a parent grid.
 - **Targeter drag / point-facing are scaffolded** (point-target spec is complete). If drag-issued or
   facing-issued move orders misbehave, suspect the targeter, not the movement code.
 - **Nav bake is synchronous**; dynamic blockers are stamped PreTick (`SeinNavBlockerStampSystem`).

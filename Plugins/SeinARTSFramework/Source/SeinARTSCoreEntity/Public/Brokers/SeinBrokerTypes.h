@@ -234,37 +234,13 @@ struct SEINARTSCOREENTITY_API FSeinBrokerDispatchPlan
 };
 
 /**
- * Result of `USeinDefaultCommandBrokerResolver::ComputeFormationFacing`. Used
- * by both the dispatch path (writes Facing back to broker data) and the
- * preview path (reads Facing for cursor-driven decal placement).
- *
- * `bAntiCrossReorder` is set when `bInvertWhenBackward` was on and the move
- * heading was roughly opposite the squad's current facing. Facing ALWAYS rotates
- * to face the move target; this flag just tells the squad resolver to re-match
- * members to slots by current left/right rank so a reverse move doesn't make
- * members cross paths. Default resolver's symmetric grid ignores it.
- */
-USTRUCT(BlueprintType, meta = (SeinDeterministic))
-struct SEINARTSCOREENTITY_API FSeinFormationFacing
-{
-	GENERATED_BODY()
-
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker|Formation")
-	FFixedQuaternion Facing;
-
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker|Formation")
-	bool bAntiCrossReorder = false;
-};
-
-/**
  * Full formation layout returned by `USeinCommandBrokerResolver::ResolveFormationLayout`.
  * Used by:
  *   - the dispatch path (`ResolveDispatch` consumes Positions for per-member
  *     target locations and Facing to write back to broker data)
  *   - the preview path (`USeinWorldSubsystem::ComputeFormationPreview` reads
  *     Positions to render destination decals under the cursor for hover preview;
- *     Facing + bAntiCrossReorder are exposed for previews that want to render
- *     facing arrows or an anti-cross-reorder indicator).
+ *     Facing is exposed for previews that want to render facing arrows).
  *
  * Same data, two consumers — keeps preview and commit in lockstep with no
  * "actually move" bool flag on a single function.
@@ -283,12 +259,4 @@ struct SEINARTSCOREENTITY_API FSeinFormationLayout
 	 *  straight 180° reverse): the formation pivots to face where it's going. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker|Formation")
 	FFixedQuaternion Facing;
-
-	/** True when the move heads roughly backwards (move heading dot current
-	 *  forward < 0) AND the squad has bInvertSlotOrderWhenMovingBackward enabled.
-	 *  The squad resolver then re-matches members to slots by current left/right
-	 *  rank so a reverse move doesn't make members cross paths. Default resolver's
-	 *  symmetric grid ignores this. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker|Formation")
-	bool bAntiCrossReorder = false;
 };

@@ -43,103 +43,196 @@ namespace SeinDefaultBrokerLocal
 		const FFixedPoint Yaw = SeinMath::Atan2(Flat.Y, Flat.X);
 		return FFixedQuaternion::FromAxisAndAngle(FFixedVector::UpVector, Yaw);
 	}
+
+	/** 1-D rank match along a single unit axis: project each member's CURRENT position and each slot
+	 *  onto Axis, sort both (with a handle/slot-index tie-break → deterministic total order), pair by
+	 *  rank. Translation-invariant — rank ignores the common offset, so no centroid subtraction is
+	 *  needed and the linear projection can't overflow on large world coordinates. */
+	static void Reassign1D(
+		const TArray<FSeinEntityHandle>& Members,
+		const TArray<FFixedVector>& MemberPos,
+		TArray<FFixedVector>& Positions,
+		const FFixedVector& Axis)
+	{
+		const int32 N = Positions.Num();
+		TArray<int32> MemberOrder; TArray<int32> SlotOrder;
+		TArray<FFixedPoint> MemberProj; TArray<FFixedPoint> SlotProj;
+		MemberOrder.Reserve(N); SlotOrder.Reserve(N);
+		MemberProj.SetNum(N); SlotProj.SetNum(N);
+		for (int32 i = 0; i < N; ++i)
+		{
+			MemberProj[i] = FFixedVector::DotProduct(MemberPos[i], Axis);
+			SlotProj[i]   = FFixedVector::DotProduct(Positions[i], Axis);
+			MemberOrder.Add(i);
+			SlotOrder.Add(i);
+		}
+		MemberOrder.Sort([&MemberProj, &Members](int32 A, int32 B)
+		{
+			if (MemberProj[A] != MemberProj[B]) return MemberProj[A] < MemberProj[B];
+			return Members[A].Index < Members[B].Index;
+		});
+		SlotOrder.Sort([&SlotProj](int32 A, int32 B)
+		{
+			if (SlotProj[A] != SlotProj[B]) return SlotProj[A] < SlotProj[B];
+			return A < B;
+		});
+		TArray<FFixedVector> NewPositions; NewPositions.SetNum(N);
+		for (int32 k = 0; k < N; ++k) NewPositions[MemberOrder[k]] = Positions[SlotOrder[k]];
+		Positions = MoveTemp(NewPositions);
+	}
+
+	/** 2-D nearest-slot match: greedily pair the globally-closest free (member, slot) first, in
+	 *  centroid-ALIGNED local space (so the bulk move translation cancels — squared distances stay
+	 *  formation-scale and the assignment is translation-invariant). Deterministic total order:
+	 *  squared distance, then member handle index, then slot index. Min-squared-distance matching is
+	 *  non-crossing, and this greedy closely approximates it for the blob → grid convergence that
+	 *  formations produce. */
+	static void Reassign2D(
+		const TArray<FSeinEntityHandle>& Members,
+		const TArray<FFixedVector>& MemberPos,
+		TArray<FFixedVector>& Positions)
+	{
+		const int32 N = Positions.Num();
+
+		// Align both clouds by their own centroids: only the relative arrangement drives the match, and
+		// squared distances stay small (no 32.32 overflow for a unit half a map from its slot).
+		FFixedVector MCentroid = FFixedVector::ZeroVector;
+		FFixedVector SCentroid = FFixedVector::ZeroVector;
+		for (int32 i = 0; i < N; ++i) { MCentroid = MCentroid + MemberPos[i]; SCentroid = SCentroid + Positions[i]; }
+		const FFixedPoint FN = FFixedPoint::FromInt(N);
+		MCentroid = MCentroid / FN;
+		SCentroid = SCentroid / FN;
+
+		TArray<FFixedVector> MLocal; MLocal.SetNum(N);
+		TArray<FFixedVector> SLocal; SLocal.SetNum(N);
+		for (int32 i = 0; i < N; ++i)
+		{
+			MLocal[i] = MemberPos[i] - MCentroid; MLocal[i].Z = FFixedPoint::Zero;
+			SLocal[i] = Positions[i]  - SCentroid; SLocal[i].Z = FFixedPoint::Zero;
+		}
+
+		struct FPair { FFixedPoint DistSq; int32 M; int32 S; };
+		TArray<FPair> Pairs; Pairs.Reserve(N * N);
+		for (int32 m = 0; m < N; ++m)
+		{
+			for (int32 s = 0; s < N; ++s)
+			{
+				const FFixedVector D = MLocal[m] - SLocal[s];
+				Pairs.Add({ D.X * D.X + D.Y * D.Y, m, s });
+			}
+		}
+		Pairs.Sort([&Members](const FPair& A, const FPair& B)
+		{
+			if (A.DistSq != B.DistSq) return A.DistSq < B.DistSq;
+			if (Members[A.M].Index != Members[B.M].Index) return Members[A.M].Index < Members[B.M].Index;
+			return A.S < B.S;
+		});
+
+		TArray<int32> MemberSlot; MemberSlot.Init(INDEX_NONE, N);
+		TArray<bool> SlotTaken;   SlotTaken.Init(false, N);
+		int32 Assigned = 0;
+		for (const FPair& P : Pairs)
+		{
+			if (Assigned >= N) break;
+			if (MemberSlot[P.M] != INDEX_NONE || SlotTaken[P.S]) continue;
+			MemberSlot[P.M] = P.S;
+			SlotTaken[P.S] = true;
+			++Assigned;
+		}
+
+		// 2-OPT UN-CROSS. Greedy nearest-pair is a heuristic and can leave crossed paths — most visibly
+		// along DEPTH, where a shallow/clumped source cloud gives it little to separate front-from-back,
+		// so it resolves near-equidistant slots by tie-break (a unit "routes into the middle"). Sweep
+		// every member pair and swap their two slots whenever that lowers the summed squared distance.
+		// Each swap STRICTLY lowers total cost over a finite assignment set, so this converges; a
+		// converged (no-improving-swap) assignment is monotone in every direction = no crossings.
+		// Deterministic: fixed (i, j) iteration order, fixed-point costs, run-to-stable.
+		auto LocalDistSq = [](const FFixedVector& A, const FFixedVector& B)
+		{
+			const FFixedVector D = A - B;
+			return D.X * D.X + D.Y * D.Y;
+		};
+		bool bImproved = true;
+		while (bImproved)
+		{
+			bImproved = false;
+			for (int32 i = 0; i < N; ++i)
+			{
+				for (int32 j = i + 1; j < N; ++j)
+				{
+					const int32 Si = MemberSlot[i];
+					const int32 Sj = MemberSlot[j];
+					const FFixedPoint Now     = LocalDistSq(MLocal[i], SLocal[Si]) + LocalDistSq(MLocal[j], SLocal[Sj]);
+					const FFixedPoint Swapped  = LocalDistSq(MLocal[i], SLocal[Sj]) + LocalDistSq(MLocal[j], SLocal[Si]);
+					if (Swapped < Now)
+					{
+						MemberSlot[i] = Sj;
+						MemberSlot[j] = Si;
+						bImproved = true;
+					}
+				}
+			}
+		}
+
+		TArray<FFixedVector> NewPositions; NewPositions.SetNum(N);
+		for (int32 m = 0; m < N; ++m) NewPositions[m] = Positions[MemberSlot[m]];
+		Positions = MoveTemp(NewPositions);
+	}
 }
 
-FSeinFormationFacing USeinDefaultCommandBrokerResolver::ComputeFormationFacing(
+FFixedQuaternion USeinDefaultCommandBrokerResolver::ComputeFormationFacing(
 	FFixedVector CurrentCentroid,
 	FFixedQuaternion CurrentFacing,
-	FFixedVector TargetLocation,
-	bool bInvertWhenBackward)
+	FFixedVector TargetLocation)
 {
-	FSeinFormationFacing Result;
-	Result.bAntiCrossReorder = false;
-
 	FFixedVector ToTarget = TargetLocation - CurrentCentroid;
 	ToTarget.Z = FFixedPoint::Zero;       // 2D — RTS top-down, ignore vertical
 
-	if (ToTarget.IsNearlyZero())
-	{
-		// Move-to-where-we-are: keep current facing rather than degenerate-quat'ing.
-		// Matches the prior in-line behavior in the squad/default dispatch paths.
-		Result.Facing = CurrentFacing;
-		return Result;
-	}
+	// Move-to-where-we-are: keep current facing rather than degenerate-quat'ing.
+	if (ToTarget.IsNearlyZero()) return CurrentFacing;
 
+	// Facing ALWAYS rotates to face the move direction — the formation pivots to align with where it's
+	// going, every move, including a straight 180° backpedal. Slot crossing on a hard turn is handled
+	// separately by ReassignSlots (the per-axis re-match), not by withholding the facing rotation.
 	const FFixedVector ToTargetN = FFixedVector::GetSafeNormal(ToTarget);
-	const FFixedQuaternion TargetFacing = SeinDefaultBrokerLocal::YawFacingFromXY(ToTargetN);
-
-	// Facing ALWAYS rotates to face the move direction — the formation pivots to
-	// align with where it's going, every move, including a straight 180° backpedal.
-	// (The old path kept current facing on backward moves, which read as the
-	// formation losing all rotation and sliding sideways once the heading crossed
-	// 90° off current facing — that boundary flip is the bug this replaces.)
-	Result.Facing = TargetFacing;
-
-	// Backward detection is now a pure SLOT-ASSIGNMENT signal, decoupled from
-	// facing. When the move heads behind the squad's current facing AND the squad
-	// opted in (bInvertWhenBackward = FSeinSquadComponent::
-	// bInvertSlotOrderWhenMovingBackward), flag it so the squad resolver flips the
-	// formation's flanks across the move axis. Rotating to face the target swaps
-	// each member's left/right side once the turn passes 90°; the flank flip undoes
-	// exactly that, so members march straight in instead of crossing. The flag no
-	// longer touches facing — it only gates the anti-cross flip.
-	if (bInvertWhenBackward)
-	{
-		const FFixedVector CurrentForward = CurrentFacing.RotateVector(FFixedVector::ForwardVector);
-		const FFixedPoint Dot = FFixedVector::DotProduct(CurrentForward, ToTargetN);
-		Result.bAntiCrossReorder = (Dot < FFixedPoint::Zero);
-	}
-
-	return Result;
+	return SeinDefaultBrokerLocal::YawFacingFromXY(ToTargetN);
 }
 
-void USeinDefaultCommandBrokerResolver::ReassignSlotsByAxisProjection(
+void USeinDefaultCommandBrokerResolver::ReassignSlots(
 	USeinWorldSubsystem* World,
 	const TArray<FSeinEntityHandle>& Members,
 	TArray<FFixedVector>& Positions,
-	FFixedQuaternion FormationFacing)
+	FFixedQuaternion FormationFacing,
+	bool bLateral,
+	bool bDepth)
 {
 	const int32 N = Positions.Num();
 	if (N <= 1 || !World || Members.Num() < N) return;
+	if (!bLateral && !bDepth) return; // nothing opted in → keep ResolvePositions' index order
 
-	const FFixedVector RightAxis = FormationFacing.RotateVector(FFixedVector::RightVector);
-
-	// Perp coordinate (along the formation right axis) of each member's CURRENT position and of each
-	// slot; then match by sorted rank so left/right order is preserved → nobody crosses.
-	TArray<int32> MemberOrder; TArray<int32> SlotOrder;
-	TArray<FFixedPoint> MemberPerp; TArray<FFixedPoint> SlotPerp;
-	MemberOrder.Reserve(N); SlotOrder.Reserve(N);
-	MemberPerp.SetNum(N); SlotPerp.SetNum(N);
+	// Snapshot each member's CURRENT position. Fallback to the slot if the entity vanished mid-resolve
+	// — keeps the arrays index-aligned without a special case downstream.
+	TArray<FFixedVector> MemberPos; MemberPos.SetNum(N);
 	for (int32 i = 0; i < N; ++i)
 	{
 		const FSeinEntity* Entity = World->GetEntity(Members[i]);
-		const FFixedVector Cur = Entity ? Entity->Transform.GetLocation() : Positions[i];
-		MemberPerp[i] = FFixedVector::DotProduct(Cur, RightAxis);
-		SlotPerp[i]   = FFixedVector::DotProduct(Positions[i], RightAxis);
-		MemberOrder.Add(i);
-		SlotOrder.Add(i);
+		MemberPos[i] = Entity ? Entity->Transform.GetLocation() : Positions[i];
 	}
 
-	// DETERMINISTIC total order: perpendicular coordinate, then a handle/slot-index tie-break. Without
-	// the tie-break, two equal-perp entries sort by unstable introsort internals → cross-client desync.
-	MemberOrder.Sort([&MemberPerp, &Members](int32 A, int32 B)
+	if (bLateral && bDepth)
 	{
-		if (MemberPerp[A] != MemberPerp[B]) return MemberPerp[A] < MemberPerp[B];
-		return Members[A].Index < Members[B].Index;
-	});
-	SlotOrder.Sort([&SlotPerp](int32 A, int32 B)
-	{
-		if (SlotPerp[A] != SlotPerp[B]) return SlotPerp[A] < SlotPerp[B];
-		return A < B;
-	});
-
-	// k-th member by left/right rank takes the k-th slot by the same rank.
-	TArray<FFixedVector> NewPositions; NewPositions.SetNum(N);
-	for (int32 k = 0; k < N; ++k)
-	{
-		NewPositions[MemberOrder[k]] = Positions[SlotOrder[k]];
+		// Both axes → full 2-D nearest-slot assignment.
+		SeinDefaultBrokerLocal::Reassign2D(Members, MemberPos, Positions);
 	}
-	Positions = MoveTemp(NewPositions);
+	else
+	{
+		// One axis → 1-D rank match along it. Lateral = the formation RIGHT axis (left/right order);
+		// Depth = the formation FORWARD axis (front/back order).
+		const FFixedVector Axis = bLateral
+			? FormationFacing.RotateVector(FFixedVector::RightVector)
+			: FormationFacing.RotateVector(FFixedVector::ForwardVector);
+		SeinDefaultBrokerLocal::Reassign1D(Members, MemberPos, Positions, Axis);
+	}
 }
 
 FSeinFormationLayout USeinDefaultCommandBrokerResolver::ResolveFormationLayout_Implementation(
@@ -148,23 +241,21 @@ FSeinFormationLayout USeinDefaultCommandBrokerResolver::ResolveFormationLayout_I
 	FFixedVector CurrentCentroid,
 	FFixedQuaternion CurrentFacing,
 	FFixedVector TargetLocation,
-	bool bInvertWhenBackward)
+	bool bReassignLateral,
+	bool bReassignDepth)
 {
-	const FSeinFormationFacing FacingResult = ComputeFormationFacing(
-		CurrentCentroid, CurrentFacing, TargetLocation, bInvertWhenBackward);
+	const FFixedQuaternion Facing = ComputeFormationFacing(CurrentCentroid, CurrentFacing, TargetLocation);
 
 	FSeinFormationLayout Layout;
-	Layout.Facing = FacingResult.Facing;
-	Layout.bAntiCrossReorder = FacingResult.bAntiCrossReorder;
-	Layout.Positions = ResolvePositions(World, Members, TargetLocation, FacingResult.Facing);
+	Layout.Facing = Facing;
+	Layout.Positions = ResolvePositions(World, Members, TargetLocation, Facing);
 
-	// 1-D ANTI-CROSS SLOT MATCH. The grid is symmetric and these are roleless units, so ALWAYS
-	// re-match members to the nearest slots by left/right rank — a rotating formation otherwise makes
-	// everyone cross to their old INDEX slot (the cross-cutting-paths bug). Deterministic. (The squad
-	// resolver overrides ResolveFormationLayout and gates this SAME call on its authored-role opt-in;
-	// here there are no roles to preserve, so it is unconditional.) The bAntiCrossReorder flag is
-	// still surfaced in the layout so previews can render a backward-walk indicator if they want.
-	ReassignSlotsByAxisProjection(World, Members, Layout.Positions, FacingResult.Facing);
+	// ANTI-CROSS SLOT MATCH. Re-match members to the grid slots so a rotating/translating formation
+	// doesn't make everyone cross to their old INDEX slot (the cross-cutting-paths bug). Per-axis via
+	// the two flags — the default resolver passes its formation-level opt-OUT flags (default both on →
+	// 2-D); the squad resolver passes the squad's per-squad opt-IN flags. Both paths run THROUGH this
+	// shared call, so preview and commit stay byte-identical. Deterministic.
+	ReassignSlots(World, Members, Layout.Positions, Facing, bReassignLateral, bReassignDepth);
 
 	// Hook subclasses (e.g. cover-aware resolvers) to mutate positions before
 	// the layout returns. Empty default impl on the base class — no-op for
@@ -273,7 +364,7 @@ FSeinBrokerDispatchPlan USeinDefaultCommandBrokerResolver::ResolveDispatch_Imple
 	// preview never drift.
 	const FSeinFormationLayout Layout = ResolveFormationLayout(
 		World, Effective, Broker->Centroid, Broker->AnchorFacing,
-		Order.TargetLocation, /*bInvertWhenBackward=*/false);
+		Order.TargetLocation, bReassignSlotsLateral, bReassignSlotsDepth);
 	Broker->AnchorFacing = Layout.Facing;
 	const TArray<FFixedVector>& Positions = Layout.Positions;
 

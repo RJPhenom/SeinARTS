@@ -20,7 +20,7 @@ core; the behavior lives in this extension.**
 
 Defined in **`SeinARTSFramework/SeinARTSCoreEntity`** (NOT here):
 `FSeinSquadComponent` (slots, leader, reinforce queue; fields incl. `DispatchResolverClass`,
-`bInvertSlotOrderWhenMovingBackward`; helpers `GetLiveMembers`, `ComputeCentroid`,
+`bReassignSlotsLateral`/`bReassignSlotsDepth`; helpers `GetLiveMembers`, `ComputeCentroid`,
 `IndexOfSlotByTag/ByMember`), `FSeinSquadMemberComponent`, `FSeinSquadSlot`,
 `FSeinSquadReinforceEntry`, `ESeinSquadContainmentMode`, and the squad visual-event factories.
 
