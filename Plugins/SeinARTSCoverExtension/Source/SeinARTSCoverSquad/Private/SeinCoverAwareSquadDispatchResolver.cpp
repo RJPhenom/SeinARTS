@@ -102,7 +102,7 @@ void USeinCoverAwareSquadDispatchResolver::PostProcessPositions(
 	// is read here.
 	const USeinARTSCoverSettings* Settings = GetDefault<USeinARTSCoverSettings>();
 	const FFixedPoint CoverSnapRadius =
-		FFixedPoint::FromFloat(Settings ? Settings->CoverSnapRadius : 500.f);
+		(Settings ? Settings->CoverSnapRadius : FFixedPoint::FromInt(500));
 
 	UE_LOG(LogSeinCoverSquadResolver, Verbose,
 		TEXT("[SquadCoverAware::PostProcessPositions] called; Members=%d, Positions=%d, Target=(%.1f, %.1f, %.1f), Radius=%.1f"),

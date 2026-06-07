@@ -1424,6 +1424,9 @@ FSeinEntityHandle USeinWorldSubsystem::SpawnEntity(
 	// NB: AActor::GetComponents() on a CDO only sees native CreateDefaultSubobject
 	// components — BP-editor-added components live on the SCS. The helper below
 	// walks native components + SCS nodes up the BP hierarchy in a stable order.
+	// Walk the BP CDO's USeinEntityComponent ONCE here; the resolved bridge
+	// (BridgeCDO) is reused for BaseTags seeding below instead of walking twice.
+	const USeinEntityComponent* BridgeCDO = nullptr;
 	if (CDO)
 	{
 		TArray<const USeinEntityComponent*> EntityComps;
@@ -1436,7 +1439,8 @@ FSeinEntityHandle USeinWorldSubsystem::SpawnEntity(
 		}
 		if (EntityComps.Num() > 0 && EntityComps[0])
 		{
-			EntityComps[0]->InjectAuthoredComponents(*this, Handle);
+			BridgeCDO = EntityComps[0];
+			BridgeCDO->InjectAuthoredComponents(*this, Handle);
 		}
 	}
 
@@ -1457,14 +1461,19 @@ FSeinEntityHandle USeinWorldSubsystem::SpawnEntity(
 	{
 		FSeinEntityTagState& TagState = EntityTagStates.FindOrAdd(Handle);
 
-		// Seed from the entity bridge's authored BaseTags. The bridge is the
-		// default subobject on ASeinActor; read its UPROPERTY via the CDO walk
-		// we already did above (EntityComps[0] if non-null).
-		TArray<const USeinEntityComponent*> EntityComps;
-		AActor::GetActorClassDefaultComponents<USeinEntityComponent>(ActorClass, EntityComps);
-		if (EntityComps.Num() > 0 && EntityComps[0])
+		// Seed from the entity bridge's authored BaseTags, reusing the single CDO
+		// walk above (BridgeCDO). Falls back to a fresh walk only if injection
+		// didn't run (CDO was null); preserves the original unconditional seed.
+		const USeinEntityComponent* TagBridge = BridgeCDO;
+		if (!TagBridge)
 		{
-			TagState.BaseTags.AppendTags(EntityComps[0]->BaseTags);
+			TArray<const USeinEntityComponent*> EntityComps;
+			AActor::GetActorClassDefaultComponents<USeinEntityComponent>(ActorClass, EntityComps);
+			if (EntityComps.Num() > 0) TagBridge = EntityComps[0];
+		}
+		if (TagBridge)
+		{
+			TagState.BaseTags.AppendTags(TagBridge->BaseTags);
 		}
 
 		// Resolve the identity tag from the entity's FSeinIdentityComponent
@@ -3360,7 +3369,17 @@ void USeinWorldSubsystem::SortSystemsIfNeeded()
 			{
 				return static_cast<uint8>(A->GetPhase()) < static_cast<uint8>(B->GetPhase());
 			}
-			return A->GetPriority() < B->GetPriority();
+			if (A->GetPriority() != B->GetPriority())
+			{
+				return A->GetPriority() < B->GetPriority();
+			}
+			// Total-order tiebreak: equal (phase, priority) systems must sort
+			// identically on every client. Algo::Sort is unstable, so a priority
+			// collision between cross-module systems (Nav/Squad/Cover/Movement)
+			// would otherwise have unspecified — potentially divergent — tick
+			// order. LexicalLess is a deterministic by-string compare (FName
+			// index order is NOT stable across runs/builds).
+			return A->GetSystemName().LexicalLess(B->GetSystemName());
 		});
 		bSystemsSorted = true;
 	}

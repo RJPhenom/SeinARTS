@@ -562,6 +562,16 @@ void USeinFogOfWarDefault::InitGridFromVolumes(UWorld* World)
 
 	const bool bTracePerCell = NumCells <= InitTraceCellCap;
 	const FFixedPoint FallbackZ = FFixedPoint::FromFloat((MinZF + MaxZF) * 0.5f);
+	if (!bTracePerCell)
+	{
+		// No-bake fallback: grid too large to per-cell trace at load, so every
+		// cell takes a flat mid-Z. Units sit at that flat height on sloped
+		// terrain until the fog volume is baked. Loud on purpose: baking is the
+		// fix (correct per-cell Z AND no load hitch).
+		UE_LOG(LogSeinFogOfWar, Warning,
+			TEXT("InitGridFromVolumes: %d cells exceeds InitTraceCellCap (%d); using FLAT fallback Z. BAKE the fog volume(s) for correct ground height and faster load."),
+			NumCells, InitTraceCellCap);
+	}
 
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(SeinFowInitTrace), /*bTraceComplex*/ true);
 

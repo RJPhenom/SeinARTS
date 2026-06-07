@@ -185,6 +185,12 @@ public:
 	 * Be aware of potential overflow if the fixed-point value exceeds the representable range of int64.
 	 */
 	FORCEINLINE int64 ToInt64() const { return Value >> 32; }
+
+	/**
+	 * Ceil to int32 (rounds toward +infinity). Deterministic, integer-only —
+	 * safe in simulation logic, unlike a ToFloat()-based ceil.
+	 */
+	FORCEINLINE int32 CeilToInt() const { return static_cast<int32>((Value + 0xFFFFFFFFLL) >> 32); }
 	
 	/**
 	 * To float.

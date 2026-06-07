@@ -134,7 +134,7 @@ struct SEINARTSCOVER_API FSeinCoverComponent : public FSeinComponent
 	 *  (Lives here, above the inset, so authors tune slot size + spacing together.) */
 	UPROPERTY(EditAnywhere, Category = "SeinARTS|Cover|Generate",
 		meta = (ClampMin = "0.0"))
-	float SlotRadius = 50.f;
+	FFixedPoint SlotRadius = FFixedPoint::FromInt(50);
 
 	/** Distance from the wall body edge (Edge mode) or area edge (Area mode)
 	 *  to the slot's CENTER, in world units.

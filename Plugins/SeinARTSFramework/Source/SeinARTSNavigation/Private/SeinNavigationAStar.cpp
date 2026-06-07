@@ -763,8 +763,8 @@ bool USeinNavigationAStar::WorldToGrid(const FFixedVector& WorldPos, int32& OutX
 	if (Width <= 0 || Height <= 0 || CellSize <= FFixedPoint::Zero) return false;
 	const FFixedPoint LocalX = WorldPos.X - Origin.X;
 	const FFixedPoint LocalY = WorldPos.Y - Origin.Y;
-	const int32 X = static_cast<int32>((LocalX / CellSize).ToFloat());
-	const int32 Y = static_cast<int32>((LocalY / CellSize).ToFloat());
+	const int32 X = (LocalX / CellSize).ToInt();   // deterministic floor (>>32); off-grid negatives rejected by IsValidCoord
+	const int32 Y = (LocalY / CellSize).ToInt();
 	if (!IsValidCoord(X, Y)) return false;
 	OutX = X;
 	OutY = Y;
@@ -1030,8 +1030,8 @@ bool USeinNavigationAStar::GetCellHeightAt(const FFixedVector& WorldPos, FFixedP
 	const FFixedPoint ContX = LocalX / CellSize;
 	const FFixedPoint ContY = LocalY / CellSize;
 
-	const int32 X0 = static_cast<int32>(ContX.ToFloat());
-	const int32 Y0 = static_cast<int32>(ContY.ToFloat());
+	const int32 X0 = ContX.ToInt();   // deterministic floor (>>32) — no non-deterministic ToFloat
+	const int32 Y0 = ContY.ToInt();
 
 	if (!IsValidCoord(X0, Y0)) return false;
 
@@ -1929,9 +1929,9 @@ bool USeinNavigationAStar::FindCellPath(const FSeinPathRequest& Request, FSeinPa
 		int32 FootprintCells = 0;
 		if (Request.AgentFootprintRadius > FFixedPoint::Zero)
 		{
-			// Ratio = R/CS + 0.5. ceil via `+ 0.999f` trick on the float form.
+			// Ratio = R/CS + 0.5, then deterministic fixed-point ceil.
 			const FFixedPoint Ratio = Request.AgentFootprintRadius / CellSize + FFixedPoint::Half;
-			FootprintCells = static_cast<int32>(Ratio.ToFloat() + 0.999f);
+			FootprintCells = Ratio.CeilToInt();   // deterministic ceil (was a non-deterministic ToFloat()+0.999f)
 		}
 		RequiredClearance = FootprintCells + Request.AgentWallPaddingCells;
 		if (RequiredClearance > static_cast<int32>(WallDistanceCap))
@@ -2261,7 +2261,7 @@ void USeinNavigationAStar::PushWaypointsAwayFromWalls(
 	if (AgentFootprintRadius > FFixedPoint::Zero)
 	{
 		const FFixedPoint Ratio = AgentFootprintRadius / CellSize + FFixedPoint::Half;
-		FootprintCells = static_cast<int32>(Ratio.ToFloat() + 0.999f);
+		FootprintCells = Ratio.CeilToInt();   // deterministic ceil (was a non-deterministic ToFloat()+0.999f)
 	}
 
 	int32 Required = FootprintCells + WallPaddingCells;

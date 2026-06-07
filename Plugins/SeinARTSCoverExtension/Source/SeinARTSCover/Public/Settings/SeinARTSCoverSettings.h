@@ -13,6 +13,7 @@
 #include "CoreMinimal.h"
 #include "Engine/DeveloperSettings.h"
 #include "UObject/SoftObjectPath.h"
+#include "Types/FixedPoint.h"
 #include "SeinARTSCoverSettings.generated.h"
 
 /**
@@ -93,7 +94,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Cover System",
 		meta = (DisplayName = "Cover Snap Radius",
 				ClampMin = "0.0", UIMin = "100.0", UIMax = "2000.0"))
-	float CoverSnapRadius;
+	FFixedPoint CoverSnapRadius;
 
 	// UDeveloperSettings Interface
 	virtual FName GetCategoryName() const override;

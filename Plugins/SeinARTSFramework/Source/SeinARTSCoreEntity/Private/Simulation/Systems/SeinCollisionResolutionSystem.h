@@ -190,11 +190,25 @@ private:
 			B.Center, B.AxisX, B.AxisY, B.HalfX, B.HalfY);
 	}
 
-	/** Deepest contact across every shape pair of two colliders. The deepest
-	 *  (max-penetration) contact drives the separation — resolving the worst
-	 *  overlap first; relaxation passes clean up any shallower residuals. */
+	/** Build every Extents shape of one collider into world-space planar
+	 *  primitives. Done ONCE per "self" per pass and reused across the whole
+	 *  neighbour loop, so a self's shapes are not rebuilt per pair. */
+	static void BuildShapes2D(const FSeinExtentsComponent& Ext, const FFixedTransform& Xf, TArray<FCollisionShape2D>& Out)
+	{
+		Out.Reset(Ext.Shapes.Num());
+		for (const FSeinExtentsShape& Shape : Ext.Shapes)
+		{
+			Out.Add(BuildShape2D(Xf, Shape));
+		}
+	}
+
+	/** Deepest contact between a collider's PRE-BUILT self shapes and another
+	 *  collider's Extents. The deepest (max-penetration) contact drives the
+	 *  separation: resolve the worst overlap first; relaxation passes clean up
+	 *  shallower residuals. Iteration order (self-outer, other-inner) and the
+	 *  strict > tie-break are identical to the pre-optimization version. */
 	static bool ComputeDeepestContact(
-		const FSeinExtentsComponent& SelfExt, const FFixedTransform& SelfXf,
+		const TArray<FCollisionShape2D>& SelfShapes,
 		const FSeinExtentsComponent& OtherExt, const FFixedTransform& OtherXf,
 		FFixedVector& OutNormal, FFixedPoint& OutDepth)
 	{
@@ -202,9 +216,8 @@ private:
 		FFixedPoint BestDepth = FFixedPoint::Zero;
 		FFixedVector BestNormal = FFixedVector::ZeroVector;
 
-		for (const FSeinExtentsShape& ShapeA : SelfExt.Shapes)
+		for (const FCollisionShape2D& A : SelfShapes)
 		{
-			const FCollisionShape2D A = BuildShape2D(SelfXf, ShapeA);
 			for (const FSeinExtentsShape& ShapeB : OtherExt.Shapes)
 			{
 				const FCollisionShape2D B = BuildShape2D(OtherXf, ShapeB);
@@ -262,9 +275,18 @@ private:
 		const FFixedPoint CellSize = Hash.GetCellSize();
 		TArray<FSeinEntityHandle> Neighbors;
 
+		// Hoist the Extents storage once per pass: GetComponent<T>() does a
+		// hashmap lookup by UScriptStruct* per call; resolving the storage once
+		// makes every per-self / per-neighbour fetch an O(1) indexed get.
+		ISeinComponentStorage* ExtentsStorage = World.GetComponentStorageRaw(FSeinExtentsComponent::StaticStruct());
+		// Reused scratch for the self collider's pre-built shapes (see below).
+		TArray<FCollisionShape2D> SelfShapes;
+
 		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle SelfHandle, FSeinEntity& SelfEntity)
 		{
-			const FSeinExtentsComponent* SelfExt = World.GetComponent<FSeinExtentsComponent>(SelfHandle);
+			const FSeinExtentsComponent* SelfExt = ExtentsStorage
+				? static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(SelfHandle))
+				: nullptr;
 			if (!IsCollider(SelfExt)) return;
 			// Non-movable colliders (Static + Stationary) never initiate a push —
 			// they're only resolved as the queried neighbour of a movable, so skip
@@ -286,7 +308,9 @@ private:
 
 			for (const FSeinEntityHandle& OtherHandle : Neighbors)
 			{
-				const FSeinExtentsComponent* OtherExt = World.GetComponent<FSeinExtentsComponent>(OtherHandle);
+				const FSeinExtentsComponent* OtherExt = ExtentsStorage
+					? static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(OtherHandle))
+					: nullptr;
 				if (!IsCollider(OtherExt)) continue;
 
 				const bool bOtherImmovable = (OtherExt->Mobility != ESeinCollisionMobility::Movable);
@@ -311,7 +335,11 @@ private:
 
 				FFixedVector Normal;
 				FFixedPoint  Depth;
-				if (!ComputeDeepestContact(*SelfExt, SelfEntity.Transform, *OtherExt, OtherEntity->Transform, Normal, Depth)) continue;
+				// Rebuild self's shapes from its CURRENT transform: self is pushed
+				// (below) as it resolves earlier neighbours this pass, so later pairs
+				// must see the moved position (matches the pre-opt per-pair rebuild).
+				BuildShapes2D(*SelfExt, SelfEntity.Transform, SelfShapes);
+				if (!ComputeDeepestContact(SelfShapes, *OtherExt, OtherEntity->Transform, Normal, Depth)) continue;
 				if (Depth <= FFixedPoint::Zero) continue;
 
 				// Mass-weighted split. Immovable other (Static/Stationary) = infinite mass → the movable
@@ -390,9 +418,15 @@ private:
 
 		TMap<uint64, TPair<FSeinEntityHandle, FSeinEntityHandle>> Current;
 
+		// Hoist the Extents storage once (see ResolvePass) + reusable self-shape scratch.
+		ISeinComponentStorage* ExtentsStorage = World.GetComponentStorageRaw(FSeinExtentsComponent::StaticStruct());
+		TArray<FCollisionShape2D> SelfShapes;
+
 		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle SelfHandle, FSeinEntity& SelfEntity)
 		{
-			const FSeinExtentsComponent* SelfExt = World.GetComponent<FSeinExtentsComponent>(SelfHandle);
+			const FSeinExtentsComponent* SelfExt = ExtentsStorage
+				? static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(SelfHandle))
+				: nullptr;
 			if (!IsCollider(SelfExt)) return;
 			if (SelfExt->Mobility != ESeinCollisionMobility::Movable) return;
 
@@ -405,9 +439,14 @@ private:
 			Neighbors.Reset();
 			Hash.QueryRadius(SelfPos, QueryRadius, Neighbors, SelfHandle);
 
+			// Build self's collision shapes ONCE, reused across all neighbours.
+			BuildShapes2D(*SelfExt, SelfEntity.Transform, SelfShapes);
+
 			for (const FSeinEntityHandle& OtherHandle : Neighbors)
 			{
-				const FSeinExtentsComponent* OtherExt = World.GetComponent<FSeinExtentsComponent>(OtherHandle);
+				const FSeinExtentsComponent* OtherExt = ExtentsStorage
+					? static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(OtherHandle))
+					: nullptr;
 				if (!IsCollider(OtherExt)) continue;
 
 				const bool bOtherImmovable = (OtherExt->Mobility != ESeinCollisionMobility::Movable);
@@ -424,7 +463,7 @@ private:
 
 				FFixedVector Normal;
 				FFixedPoint  Depth;
-				if (!ComputeDeepestContact(*SelfExt, SelfEntity.Transform, *OtherExt, OtherEntity->Transform, Normal, Depth)) continue;
+				if (!ComputeDeepestContact(SelfShapes, *OtherExt, OtherEntity->Transform, Normal, Depth)) continue;
 
 				const bool bSelfLower = (SelfHandle.Index < OtherHandle.Index);
 				const FSeinEntityHandle A = bSelfLower ? SelfHandle : OtherHandle;

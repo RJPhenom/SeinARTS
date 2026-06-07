@@ -726,26 +726,32 @@ FFixedPoint USeinMovement::ResolveCollisionRadius(
 	// automatically drives the correct collision radius here. No second
 	// "footprint" prop to keep in sync. NavComp.FallbackFootprintRadius is
 	// the fallback for units that don't have Extents.
-	FFixedPoint Radius = FFixedPoint::Zero;
+	// Fetch Extents from storage, then run the shared cascade (the pointer
+	// overload below). Hot loops that have hoisted their Extents storage call
+	// that overload directly, skipping this per-call GetComponent lookup.
+	const FSeinExtentsComponent* Extents = World
+		? World->GetComponent<FSeinExtentsComponent>(SelfHandle)
+		: nullptr;
+	return ResolveCollisionRadius(Extents, NavData);
+}
 
-	if (World)
+FFixedPoint USeinMovement::ResolveCollisionRadius(
+	const FSeinExtentsComponent* Extents,
+	const FSeinNavigationComponent* NavData)
+{
+	FFixedPoint Radius = FFixedPoint::Zero;
+	if (Extents && Extents->Shapes.Num() > 0)
 	{
-		const FSeinExtentsComponent* Extents = World->GetComponent<FSeinExtentsComponent>(SelfHandle);
-		if (Extents && Extents->Shapes.Num() > 0)
+		for (const FSeinExtentsShape& Shape : Extents->Shapes)
 		{
-			for (const FSeinExtentsShape& Shape : Extents->Shapes)
-			{
-				const FFixedPoint ShapeRadius = SeinExtentsHelpers::BoundingRadius(Shape);
-				if (ShapeRadius > Radius) Radius = ShapeRadius;
-			}
+			const FFixedPoint ShapeRadius = SeinExtentsHelpers::BoundingRadius(Shape);
+			if (ShapeRadius > Radius) Radius = ShapeRadius;
 		}
 	}
-
 	if (Radius <= FFixedPoint::Zero && NavData)
 	{
 		Radius = NavData->FallbackFootprintRadius;
 	}
-
 	return Radius;
 }
 

@@ -47,6 +47,10 @@ __pycache__/
 # ── Claude Code local state (settings.local, worktrees, transcripts, etc.) ──
 .claude/
 
+# ── Local planning / design-doc scratch (nav/movement work — NOT code) ──
+# Local working notes that re-ground future sessions; never committed to git.
+planning/
+
 # NOTE (tracked on purpose): *.uproject, *.uplugin, Config/, Source/, Content/
 # (minus baked data above), Build.ps1, .vsconfig, and the per-plugin CLAUDE.md
 # files are all version-controlled.

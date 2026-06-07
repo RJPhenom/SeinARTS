@@ -11,7 +11,7 @@ USeinARTSCoverSettings::USeinARTSCoverSettings()
 	// framework C++ class). Preview enabled on; flip false to ship the cover
 	// module compiled in but the hover decals off. CoverSnapRadius 500 ≈ 5m.
 	: bEnableFormationPreview(true)
-	, CoverSnapRadius(500.0f)
+	, CoverSnapRadius(FFixedPoint::FromInt(500))
 {
 }
 
@@ -23,9 +23,9 @@ void USeinARTSCoverSettings::PostInitProperties()
 	// this field (added to an existing project, or stomped by an older INI)
 	// would otherwise disable cover-snap entirely. A radius ≤ 0 makes no sense;
 	// re-seed to the canonical default.
-	if (CoverSnapRadius <= 0.f)
+	if (CoverSnapRadius <= FFixedPoint::Zero)
 	{
-		CoverSnapRadius = 500.0f;
+		CoverSnapRadius = FFixedPoint::FromInt(500);
 	}
 }
 

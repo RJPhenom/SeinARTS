@@ -141,7 +141,7 @@ public:
 	 *  maps when no bake is loaded). Bake itself has no cap — it's an
 	 *  explicit designer action with progress UI. */
 	UPROPERTY(EditAnywhere, Category = "Bake", meta = (ClampMin = "0"))
-	int32 InitTraceCellCap = 20000;
+	int32 InitTraceCellCap = 4096;
 
 	// ----------------------------------------------------------------------
 	// USeinFogOfWar overrides

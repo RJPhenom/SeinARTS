@@ -38,6 +38,7 @@ class UScriptStruct;
 struct FSeinEntity;
 struct FSeinMovementComponent;
 struct FSeinNavigationComponent;
+struct FSeinExtentsComponent;
 
 /**
  * Per-tick context bundle handed to a movement. One struct so we can add new
@@ -304,6 +305,15 @@ public:
 	static FFixedPoint ResolveCollisionRadius(
 		USeinWorldSubsystem* World,
 		FSeinEntityHandle SelfHandle,
+		const FSeinNavigationComponent* NavData);
+
+	/** Footprint-radius cascade from already-resolved component pointers (no
+	 *  world lookup): Extents (max per-shape bounding radius) -> NavComp
+	 *  FallbackFootprintRadius -> 0. The World/handle overload above fetches
+	 *  Extents then delegates here; hot loops that have hoisted their component
+	 *  storage (e.g. avoidance) call this directly to skip the per-call lookup. */
+	static FFixedPoint ResolveCollisionRadius(
+		const FSeinExtentsComponent* Extents,
 		const FSeinNavigationComponent* NavData);
 
 protected:

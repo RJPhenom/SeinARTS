@@ -10,6 +10,12 @@ It owns the cross-cutting rules that apply to **all three plugins**. Each plugin
 > extension plugins. When you start work, read this file first, then the plugin-specific
 > `CLAUDE.md` for whatever you're touching.
 
+> **Active initiative — Nav/Movement BAR-ification.** If the work touches navigation, movement, or
+> collision, read `planning/README.md` first (it owns the standing rules, doc set, and per-checkpoint
+> cadence for the nav/movement re-architecture). Durable ground truth: `planning/References.md`,
+> `PLAN.md`, `Checkpoints.md`, `Decisions.md`. **Citations in those docs are starting coordinates,
+> not boundaries — read outward and re-ground against live code before asserting.**
+
 ---
 
 ## HARD RULE: never use worktrees

@@ -158,16 +158,15 @@ void USeinCoverAwareDefaultBrokerResolver::PostProcessPositions(
 	TArray<FFixedVector>& InOutPositions,
 	FFixedVector TargetLocation) const
 {
-	// Tuning sourced from plugin settings — single config surface for both
-	// cover-aware resolvers. Live edits take effect on the next move
-	// command (no editor restart). FromFloat is safe at call time because
-	// this resolver path is render-side only (the sim never sees this
-	// radius — it only gates which slot candidates the resolver considers,
-	// and the snap output is already deterministic via sim-side slot /
-	// member positions).
+	// Tuning sourced from plugin settings: one config surface for both
+	// cover-aware resolvers. Live edits take effect on the next move command
+	// (no editor restart). CoverSnapRadius is FFixedPoint, used DIRECTLY:
+	// PostProcessPositions runs in sim command-processing and this radius gates
+	// which slot candidates / members snap, so it MUST be deterministic (a
+	// float->fixed conversion here would be a cross-client desync risk).
 	const USeinARTSCoverSettings* Settings = GetDefault<USeinARTSCoverSettings>();
 	const FFixedPoint CoverSnapRadius =
-		FFixedPoint::FromFloat(Settings ? Settings->CoverSnapRadius : 500.f);
+		(Settings ? Settings->CoverSnapRadius : FFixedPoint::FromInt(500));
 
 	UE_LOG(LogSeinCoverResolver, Verbose,
 		TEXT("[DefaultCoverAware::PostProcessPositions] called; Members=%d, Positions=%d, Target=(%.1f, %.1f, %.1f), Radius=%.1f"),

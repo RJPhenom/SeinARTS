@@ -386,7 +386,7 @@ TArray<FSeinCoverSlotCandidate> USeinCoverDefault::FindNearbySlots(FFixedVector 
 	TArray<FResolvedSlot> Slots;
 	for (const FGatheredProvider& P : Providers)
 	{
-		const FFixedPoint SlotR = FFixedPoint::FromFloat(P.Cover->SlotRadius);
+		const FFixedPoint SlotR = P.Cover->SlotRadius;
 		for (int32 SlotIdx = 0; SlotIdx < P.Cover->Slots.Num(); ++SlotIdx)
 		{
 			const FFixedVector WorldPos = P.Location + P.Rotation.RotateVector(P.Cover->Slots[SlotIdx]);

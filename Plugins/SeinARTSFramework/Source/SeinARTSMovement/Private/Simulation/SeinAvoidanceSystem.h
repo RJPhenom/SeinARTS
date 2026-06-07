@@ -47,6 +47,7 @@
 #include "Collision/SeinCollisionSpatialHash.h"
 #include "Components/SeinMovementComponent.h"
 #include "Components/SeinNavigationComponent.h"
+#include "Components/SeinExtentsComponent.h"
 #include "Movement/SeinMovement.h"
 #include "Types/Entity.h"
 #include "Types/FixedPoint.h"
@@ -77,9 +78,16 @@ public:
 
 		TArray<FSeinEntityHandle> Neighbors;
 
+		// Hoist component-storage lookups out of the per-entity / per-neighbour
+		// loop: GetComponent<T>() is a hashmap lookup by UScriptStruct* per call;
+		// resolving each storage once turns every access into an O(1) indexed get.
+		ISeinComponentStorage* MoveStorage    = World.GetComponentStorageRaw(FSeinMovementComponent::StaticStruct());
+		ISeinComponentStorage* NavStorage     = World.GetComponentStorageRaw(FSeinNavigationComponent::StaticStruct());
+		ISeinComponentStorage* ExtentsStorage = World.GetComponentStorageRaw(FSeinExtentsComponent::StaticStruct());
+
 		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle SelfHandle, FSeinEntity& SelfEntity)
 		{
-			FSeinMovementComponent* Move = World.GetComponent<FSeinMovementComponent>(SelfHandle);
+			FSeinMovementComponent* Move = MoveStorage ? static_cast<FSeinMovementComponent*>(MoveStorage->GetComponentRaw(SelfHandle)) : nullptr;
 			if (!Move) return;
 			// Opted out → leave AvoidanceSteer untouched (stays its default zero), so the
 			// unit's motion is bit-identical to a world with no avoidance.
@@ -97,8 +105,11 @@ public:
 			const FFixedVector Right(Heading.Y, -Heading.X, FFixedPoint::Zero); // planar right of heading
 
 			// Body radius from the movement/nav FOOTPRINT cascade — NOT collision extents.
-			const FSeinNavigationComponent* SelfNav = World.GetComponent<FSeinNavigationComponent>(SelfHandle);
-			const FFixedPoint SelfRadius = USeinMovement::ResolveCollisionRadius(&World, SelfHandle, SelfNav);
+			// Footprint pointers come from the hoisted storage; passed straight to the
+			// no-lookup ResolveCollisionRadius overload (skips a per-self GetComponent).
+			const FSeinNavigationComponent* SelfNav = NavStorage ? static_cast<const FSeinNavigationComponent*>(NavStorage->GetComponentRaw(SelfHandle)) : nullptr;
+			const FSeinExtentsComponent* SelfExt = ExtentsStorage ? static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(SelfHandle)) : nullptr;
+			const FFixedPoint SelfRadius = USeinMovement::ResolveCollisionRadius(SelfExt, SelfNav);
 			if (SelfRadius <= FFixedPoint::Zero) { Move->AvoidanceSteer = FFixedVector::ZeroVector; return; }
 
 			const FFixedVector SelfPos = SelfEntity.Transform.GetLocation();
@@ -133,7 +144,7 @@ public:
 				// — and nav blocking already routes units clear of those, so it is skipped entirely,
 				// never avoided. (The spatial hash this queries holds ALL colliders, walls included,
 				// which is why the filter must live here.) Fetched once and reused for head-on below.
-				const FSeinMovementComponent* OtherMove = World.GetComponent<FSeinMovementComponent>(OtherHandle);
+				const FSeinMovementComponent* OtherMove = MoveStorage ? static_cast<const FSeinMovementComponent*>(MoveStorage->GetComponentRaw(OtherHandle)) : nullptr;
 				if (!OtherMove) continue;
 
 				// WEIGHT-PRIORITY GATE. This unit only yields to a neighbour whose AvoidanceWeight
@@ -174,9 +185,10 @@ public:
 				// Past-goal gate: ignore neighbours farther than the goal.
 				if (GoalDistSq > FFixedPoint::Zero && DistSq >= GoalDistSq) continue;
 
-				// Other body radius from the SAME footprint cascade.
-				const FSeinNavigationComponent* OtherNav = World.GetComponent<FSeinNavigationComponent>(OtherHandle);
-				const FFixedPoint OtherRadius = USeinMovement::ResolveCollisionRadius(&World, OtherHandle, OtherNav);
+				// Other body radius from the SAME footprint cascade (hoisted-storage pointers).
+				const FSeinNavigationComponent* OtherNav = NavStorage ? static_cast<const FSeinNavigationComponent*>(NavStorage->GetComponentRaw(OtherHandle)) : nullptr;
+				const FSeinExtentsComponent* OtherExt = ExtentsStorage ? static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(OtherHandle)) : nullptr;
+				const FFixedPoint OtherRadius = USeinMovement::ResolveCollisionRadius(OtherExt, OtherNav);
 				if (OtherRadius <= FFixedPoint::Zero) continue;
 
 				const FFixedPoint Dist = SeinMath::Sqrt(DistSq);
