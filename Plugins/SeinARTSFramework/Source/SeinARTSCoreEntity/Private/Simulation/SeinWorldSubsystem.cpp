@@ -1401,8 +1401,27 @@ FSeinEntityHandle USeinWorldSubsystem::SpawnEntity(
 		return FSeinEntityHandle::Invalid();
 	}
 
+	// Degenerate-scale guard. A zero scale component is never a legitimate
+	// spawn input, but it fails SILENTLY: the entity is fully functional in
+	// the sim (movement/collision/extents never read scale) while the bridge
+	// drives the actor's render transform from it — an invisible "ghost"
+	// unit. Corrupted authored FFixedTransform data (the fix-1 serializer
+	// window) shipped exactly this via squad slot offsets. Normalize to
+	// Identity and say so loudly. Deterministic: pure function of the input.
+	FFixedTransform SafeTransform = SpawnTransform;
+	if (SafeTransform.Scale.X == FFixedPoint::Zero
+		|| SafeTransform.Scale.Y == FFixedPoint::Zero
+		|| SafeTransform.Scale.Z == FFixedPoint::Zero)
+	{
+		UE_LOG(LogSeinSim, Warning,
+			TEXT("SpawnEntity(%s): spawn transform has a zero scale component (%s) — normalized to Identity. "
+				 "Check the authored transform data feeding this spawn."),
+			*ActorClass->GetName(), *SafeTransform.Scale.ToString());
+		SafeTransform.Scale = FFixedVector::Identity;
+	}
+
 	FSeinEntityHandle Handle = EntityPool.Acquire(
-		SpawnTransform,
+		SafeTransform,
 		OwnerPlayerID
 	);
 
@@ -1504,7 +1523,7 @@ FSeinEntityHandle USeinWorldSubsystem::SpawnEntity(
 	// land on its now-live ACs. Order matters — we enqueue spawn before the
 	// optional construction-state event so the construction AC exists by the
 	// time the construction event reaches it.
-	EnqueueVisualEvent(FSeinVisualEvent::MakeSpawnEvent(Handle, SpawnTransform.GetLocation()));
+	EnqueueVisualEvent(FSeinVisualEvent::MakeSpawnEvent(Handle, SafeTransform.GetLocation()));
 
 	// Construction-state notification — drives the placement-visual swap on the
 	// bridged actor's USeinConstructionComponent. Only fired when the entity

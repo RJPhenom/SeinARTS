@@ -189,7 +189,14 @@ public:
 					if (!Slot.Entity || Slot.Entity->HasAnyClassFlags(CLASS_Abstract)) { ++SkippedNullEntity; continue; }
 					if (SquadActorClass && Slot.Entity.Get() == SquadActorClass) { ++SkippedRecursion; continue; }
 
-					const FFixedTransform MemberXform = SquadXform * Slot.OffsetTransform;
+					// Slot offsets are POSITIONAL anchors — compose location +
+					// rotation only, never scale. A slot's authored Scale must not
+					// propagate into the member's sim transform: the bridge drives
+					// the actor's render scale from it, so a degenerate authored
+					// scale (e.g. the zeroed FFixedPoint values from the fix-1
+					// serializer window) yields invisible-but-functional members.
+					FFixedTransform MemberXform = SquadXform * Slot.OffsetTransform;
+					MemberXform.Scale = FFixedVector::Identity;
 					const FSeinEntityHandle Member = World.SpawnEntity(Slot.Entity, MemberXform, OwnerPlayer);
 					if (!Member.IsValid()) { ++SkippedSpawnFail; continue; }
 					++SpawnedCount;
@@ -395,7 +402,9 @@ public:
 						{
 							const FSeinPlayerID OwnerPlayer = World.GetEntityOwner(Handle);
 							const FFixedTransform SquadXform = Entity.Transform;
-							const FFixedTransform MemberXform = SquadXform * Slot.OffsetTransform;
+							// Positional anchor only — see the lazy-init spawn above.
+							FFixedTransform MemberXform = SquadXform * Slot.OffsetTransform;
+							MemberXform.Scale = FFixedVector::Identity;
 
 							const FSeinEntityHandle NewMember = World.SpawnEntity(Slot.Entity, MemberXform, OwnerPlayer);
 							if (NewMember.IsValid())
