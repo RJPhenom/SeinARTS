@@ -20,6 +20,7 @@
 
 class USeinFogOfWar;
 class USeinFogOfWarAsset;
+class USeinLevelData;
 
 UCLASS()
 class SEINARTSFOGOFWAR_API USeinFogOfWarSubsystem : public UWorldSubsystem
@@ -62,9 +63,23 @@ private:
 	 *  identical tick-N entity positions — lockstep-safe. */
 	FDelegateHandle SimTickHandle;
 
+	/** The shared level-data substrate (CP1.1), resolved in Initialize. Fog
+	 *  registers as its "FogOfWar" layer provider and loads its runtime grid
+	 *  from the baked channel when present. Weak — owned by USeinLevelDataSubsystem. */
+	TWeakObjectPtr<USeinLevelData> LevelData;
+
+	/** Handle for our USeinLevelData::OnLevelDataMutated subscription; removed at
+	 *  Deinitialize. */
+	FDelegateHandle LevelDataMutatedHandle;
+
 	/** Called in OnWorldBeginPlay — scans fog volumes for a baked asset and
 	 *  hands it to the fog impl. Idempotent. */
 	void LoadBakedAssetIntoFogOfWar(UWorld& World);
+
+	/** Re-adopt the shared substrate's fog channel when it rebakes / reloads
+	 *  (CP1.1). Bound to USeinLevelData::OnLevelDataMutated. No-op if the fog
+	 *  doesn't read the substrate or the substrate has no fog data. */
+	void OnLevelDataChanged();
 
 	/** If no baked asset loaded, let the fog impl auto-size its grid from
 	 *  the level's ASeinFogOfWarVolumes so stamping + debug viz work before

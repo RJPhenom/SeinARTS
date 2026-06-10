@@ -17,7 +17,11 @@
 #include "Stamping/SeinStampUtils.h"
 #include "SeinFogOfWarTypes.h"
 #include "SeinARTSFogOfWarModule.h"
+#include "SeinARTSFogOfWarLog.h"
 #include "Settings/PluginSettings.h"
+
+#include "SeinLevelData.h"
+#include "Volumes/SeinLevelVolume.h"
 
 #include "Actor/SeinActor.h"
 #include "Actor/SeinEntityComponent.h"
@@ -41,7 +45,8 @@
 #include "Misc/PackageName.h"
 #endif
 
-DEFINE_LOG_CATEGORY_STATIC(LogSeinFogOfWar, Log, All);
+// LogSeinFogOfWar is module-declared (SeinARTSFogOfWarLog.h) so it is reliably
+// filterable in the Output Log — do not re-introduce a _STATIC define here.
 
 // ============================================================================
 // Asset class
@@ -366,6 +371,265 @@ bool USeinFogOfWarDefault::DoSyncBake(UWorld* World, USeinFogOfWarDefaultAsset*&
 	}
 #endif
 
+	return true;
+}
+
+// ============================================================================
+// Unified level-data layer provider (CP1.1; Decisions D12/D13/D17)
+// ============================================================================
+
+FName USeinFogOfWarDefault::GetLayerId() const
+{
+	return TEXT("FogOfWar");
+}
+
+void USeinFogOfWarDefault::BakeLayer(const USeinLevelData& Substrate, UWorld* World, TArray<uint8>& OutData)
+{
+	OutData.Reset();
+	LastBakedCellSizeMultiple = 1;
+	if (!World) return;
+
+	const FIntPoint FineDims = Substrate.GetDimensions();
+	const float FinestCellF = Substrate.GetFinestCellSize().ToFloat();
+	if (FineDims.X <= 0 || FineDims.Y <= 0 || FinestCellF <= 0.0f) return;
+
+	const FFixedVector OriginFP = Substrate.GetOrigin();
+	const float OriginXF = OriginFP.X.ToFloat();
+	const float OriginYF = OriginFP.Y.ToFloat();
+	const float OriginZF = OriginFP.Z.ToFloat();
+
+	// Fog config comes from the level volumes (first volume wins — the legacy
+	// ASeinFogOfWarVolume convention); their union also gives the sweep ceiling
+	// + the quantization range, exactly like the legacy fog bake.
+	TArray<ASeinLevelVolume*> Volumes;
+	FBox UnionBounds(ForceInit);
+	for (TActorIterator<ASeinLevelVolume> It(World); It; ++It)
+	{
+		if (ASeinLevelVolume* Vol = *It)
+		{
+			Volumes.Add(Vol);
+			UnionBounds += Vol->GetVolumeWorldBounds();
+		}
+	}
+	if (Volumes.Num() == 0 || !UnionBounds.IsValid) return; // can't happen mid-bake; defensive
+
+	// Snap the configured fog cell size to an integer multiple of the finest grid
+	// so the channel records a clean resolution (D13/D15).
+	const float DesiredCellF = Volumes[0]->GetResolvedVisionCellSize().ToFloat();
+	const int32 M = FMath::Max(1, FMath::RoundToInt(DesiredCellF / FinestCellF));
+	LastBakedCellSizeMultiple = M;
+	const float FoWCellF = FinestCellF * M;
+	if (!FMath::IsNearlyEqual(FoWCellF, DesiredCellF, 0.5f))
+	{
+		UE_LOG(LogSeinFogOfWar, Log,
+			TEXT("FoW layer bake: vision cell size %.0f snapped to %.0f (%dx the %.0f shared grid)."),
+			DesiredCellF, FoWCellF, M, FinestCellF);
+	}
+	const bool bBakeBlockers = Volumes[0]->bBakeStaticBlockers;
+
+	const int32 FoWW = FMath::DivideAndRoundUp(FineDims.X, M);
+	const int32 FoWH = FMath::DivideAndRoundUp(FineDims.Y, M);
+	const int32 NumCells = FoWW * FoWH;
+
+	// Fog-specific skip list — fog KEEPS its own bBakesIntoFogOfWar semantics
+	// (a glass wall may bake into nav but not sight, and a sight-blocking hedge
+	// may not bake into nav). Mirrors the legacy fog bake's skip block.
+	FCollisionQueryParams QP(SCENE_QUERY_STAT(SeinFogOfWarBakeLayer), /*bTraceComplex*/ true);
+	for (ASeinLevelVolume* Vol : Volumes)
+	{
+		if (Vol) QP.AddIgnoredActor(Vol);
+	}
+	int32 NumIgnoredActors = 0;
+	for (TActorIterator<ASeinActor> It(World); It; ++It)
+	{
+		ASeinActor* SeinActor = *It;
+		if (!SeinActor) continue;
+
+		bool bSkip = false;
+		if (const USeinEntityComponent* Bridge = SeinActor->FindComponentByClass<USeinEntityComponent>())
+		{
+			if (const FSeinExtentsComponent* Extents = Bridge->FindAuthoredData<FSeinExtentsComponent>())
+			{
+				if (!Extents->bBakesIntoFogOfWar) bSkip = true;
+			}
+			if (!bSkip)
+			{
+				for (const FInstancedStruct& Entry : Bridge->ComponentData)
+				{
+					if (Entry.GetScriptStruct() == FSeinMovementComponent::StaticStruct())
+					{
+						bSkip = true;
+						break;
+					}
+				}
+			}
+		}
+		if (bSkip)
+		{
+			QP.AddIgnoredActor(SeinActor);
+			++NumIgnoredActors;
+		}
+	}
+
+	const float TopZ = UnionBounds.Max.Z + BakeTraceHeadroom;
+	const float BottomZ = UnionBounds.Min.Z - 100.0f;
+
+	// Legacy quantization: 255 steps over the volume Z range + headroom.
+	const float RangeZ = FMath::Max(1.0f, UnionBounds.Max.Z - UnionBounds.Min.Z + BakeTraceHeadroom);
+	const float QuantumF = FMath::Max(1.0f, RangeZ / 255.0f);
+
+	// Cell-footprint box sweep — same thin-wall rationale as the legacy bake: a
+	// fence that doesn't cross the cell center must still register for LOS.
+	const FCollisionShape CellBox = FCollisionShape::MakeBox(
+		FVector(FoWCellF * 0.5f, FoWCellF * 0.5f, 1.0f));
+
+	TArray<uint8> GroundQ;  GroundQ.SetNumUninitialized(NumCells);
+	TArray<uint8> BlockerQ; BlockerQ.SetNumUninitialized(NumCells);
+	TArray<uint8> MaskQ;    MaskQ.SetNumUninitialized(NumCells);
+
+	int32 NumBlockers = 0;
+	for (int32 FY = 0; FY < FoWH; ++FY)
+	{
+		for (int32 FX = 0; FX < FoWW; ++FX)
+		{
+			const int32 Idx = FY * FoWW + FX;
+			const float CX = OriginXF + (FX + 0.5f) * FoWCellF;
+			const float CY = OriginYF + (FY + 0.5f) * FoWCellF;
+
+			// Shared ground at the fog cell's center: the finest cell containing it
+			// (D17 — the ground ray is traced ONCE by the substrate, fog adopts it).
+			const int32 FineX = FMath::Clamp(FX * M + M / 2, 0, FineDims.X - 1);
+			const int32 FineY = FMath::Clamp(FY * M + M / 2, 0, FineDims.Y - 1);
+			FSeinLevelCellSurface Surf;
+			const bool bSurf = Substrate.GetCellSurface(FineY * FineDims.X + FineX, Surf) && Surf.bHasSurface;
+			const float SharedZ = bSurf ? Surf.Height.ToFloat() : BottomZ;
+
+			// Fog's own occluder sweep (the layer-specific ray that stays per-provider).
+			FHitResult TopHit;
+			const bool bHit = World->SweepSingleByChannel(TopHit,
+				FVector(CX, CY, TopZ), FVector(CX, CY, BottomZ),
+				FQuat::Identity, BakeTraceChannel, CellBox, QP);
+
+			float GroundZ;
+			float BlockerRelZ = 0.0f;
+			if (!bHit && !bSurf)
+			{
+				// Nothing here at all — matches the legacy no-hit path (quantizes to 0).
+				GroundZ = OriginZF;
+			}
+			else
+			{
+				const float TopHitZ = bHit ? TopHit.ImpactPoint.Z : SharedZ;
+				// Ground = the shared height, EXCEPT where fog's own sweep sees LOWER —
+				// geometry the fog skip-list ignores (bBakesIntoFogOfWar=false, e.g.
+				// glass) is nav-ground but must not become sight-occluding ground.
+				// Where an occluder covers the cell center the shared height IS the
+				// occluder top, so it occludes as high ground (terrain occludes all
+				// layers) — the masked blocker channel is for occluders ABOVE the
+				// shared ground (thin walls, hedges, fog-only geometry).
+				GroundZ = bSurf ? FMath::Min(SharedZ, TopHitZ) : TopHitZ;
+				if (bBakeBlockers && bHit)
+				{
+					const float Gap = TopHitZ - GroundZ;
+					if (Gap >= StaticBlockerMinHeight)
+					{
+						BlockerRelZ = Gap;
+						++NumBlockers;
+					}
+				}
+			}
+
+			GroundQ[Idx]  = (uint8)FMath::Clamp(FMath::RoundToInt((GroundZ - OriginZF) / QuantumF), 0, 255);
+			BlockerQ[Idx] = (uint8)FMath::Clamp(FMath::RoundToInt(BlockerRelZ / QuantumF), 0, 255);
+			MaskQ[Idx]    = (BlockerRelZ > 0.0f) ? SEIN_FOW_MASK_VISIBLE : 0;
+		}
+	}
+
+	// Channel blob — self-describing, mirrored byte-for-byte by LoadFromSubstrate:
+	// [int32 W][int32 H][int64 CellSize][int64 MinHeight][int64 Quantum]
+	// [Ground×N][Blocker×N][Mask×N]. Origin/coordinate space come from the
+	// substrate at load.
+	const FFixedPoint CellSizeFP = Substrate.GetFinestCellSize() * FFixedPoint::FromInt(M);
+	const FFixedPoint MinHeightFP = OriginFP.Z;
+	const FFixedPoint QuantumFP = FFixedPoint::FromFloat(QuantumF);
+
+	const int32 HeaderBytes = 2 * sizeof(int32) + 3 * sizeof(int64);
+	OutData.SetNumUninitialized(HeaderBytes + 3 * NumCells);
+	uint8* Out = OutData.GetData();
+	auto WriteI32 = [&Out](int32 V) { FMemory::Memcpy(Out, &V, sizeof(int32)); Out += sizeof(int32); };
+	auto WriteI64 = [&Out](int64 V) { FMemory::Memcpy(Out, &V, sizeof(int64)); Out += sizeof(int64); };
+	WriteI32(FoWW);
+	WriteI32(FoWH);
+	WriteI64(CellSizeFP.Value);
+	WriteI64(MinHeightFP.Value);
+	WriteI64(QuantumFP.Value);
+	FMemory::Memcpy(Out, GroundQ.GetData(), NumCells);  Out += NumCells;
+	FMemory::Memcpy(Out, BlockerQ.GetData(), NumCells); Out += NumCells;
+	FMemory::Memcpy(Out, MaskQ.GetData(), NumCells);
+
+	UE_LOG(LogSeinFogOfWar, Log,
+		TEXT("FoW layer bake: %dx%d cells (cell=%.0f, %dx shared res) — blockers=%d (ignored %d actors)"),
+		FoWW, FoWH, FoWCellF, M, NumBlockers, NumIgnoredActors);
+}
+
+bool USeinFogOfWarDefault::LoadFromSubstrate(const USeinLevelData& Substrate)
+{
+	if (!Substrate.HasRuntimeData()) return false;
+
+	TArray<uint8> Blob;
+	if (!Substrate.GetLayerChannel(TEXT("FogOfWar"), Blob)) return false;
+
+	const int32 HeaderBytes = 2 * sizeof(int32) + 3 * sizeof(int64);
+	if (Blob.Num() < HeaderBytes) return false;
+
+	const uint8* In = Blob.GetData();
+	auto ReadI32 = [&In]() { int32 V; FMemory::Memcpy(&V, In, sizeof(int32)); In += sizeof(int32); return V; };
+	auto ReadI64 = [&In]() { int64 V; FMemory::Memcpy(&V, In, sizeof(int64)); In += sizeof(int64); return V; };
+	const int32 W = ReadI32();
+	const int32 H = ReadI32();
+	const FFixedPoint CellSizeIn = FFixedPoint(ReadI64());
+	const FFixedPoint MinH = FFixedPoint(ReadI64());
+	const FFixedPoint Quantum = FFixedPoint(ReadI64());
+
+	const int32 NumCells = W * H;
+	if (NumCells <= 0 || Blob.Num() != HeaderBytes + 3 * NumCells)
+	{
+		UE_LOG(LogSeinFogOfWar, Warning,
+			TEXT("LoadFromSubstrate: FogOfWar channel malformed (%d bytes for %dx%d) — ignoring (re-bake needed)."),
+			Blob.Num(), W, H);
+		return false;
+	}
+
+	Width = W;
+	Height = H;
+	CellSize = CellSizeIn;
+	Origin = Substrate.GetOrigin();
+
+	const uint8* GroundIn  = In;
+	const uint8* BlockerIn = In + NumCells;
+	const uint8* MaskIn    = In + 2 * NumCells;
+
+	GroundHeight.SetNumUninitialized(NumCells);
+	BlockerHeight.SetNumUninitialized(NumCells);
+	BlockerLayerMask.SetNumUninitialized(NumCells);
+	DynamicBlockerHeight.SetNumZeroed(NumCells);
+	DynamicBlockerLayerMask.SetNumZeroed(NumCells);
+	VisionGroups.Empty(); // per-player state recreates lazily on next stamp
+	SourceStates.Empty();
+	LastDynamicBlockerHash = 0;
+
+	// Dequantize — same absolute-world-Z convention as ApplyAssetData.
+	for (int32 Idx = 0; Idx < NumCells; ++Idx)
+	{
+		const FFixedPoint GroundZ = MinH + Quantum * FFixedPoint::FromInt(GroundIn[Idx]);
+		GroundHeight[Idx] = GroundZ;
+		BlockerHeight[Idx] = (BlockerIn[Idx] > 0)
+			? (GroundZ + Quantum * FFixedPoint::FromInt(BlockerIn[Idx]))
+			: FFixedPoint::Zero;
+		BlockerLayerMask[Idx] = MaskIn[Idx];
+	}
+
+	OnFogOfWarMutated.Broadcast();
 	return true;
 }
 

@@ -6,17 +6,22 @@
 #include "SeinFogOfWarSubsystem.h"
 #include "SeinFogOfWar.h"
 #include "SeinFogOfWarAsset.h"
+#include "SeinARTSFogOfWarLog.h"
 #include "Default/SeinFogOfWarDefault.h"
 #include "Volumes/SeinFogOfWarVolume.h"
 #include "Settings/PluginSettings.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "SeinLevelData.h"
+#include "SeinLevelDataSubsystem.h"
+#include "SeinLevelLayerProvider.h"
 
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
 
-DEFINE_LOG_CATEGORY_STATIC(LogSeinFogOfWarSubsystem, Log, All);
+// LogSeinFogOfWarSubsystem is module-declared (SeinARTSFogOfWarLog.h) so it is
+// reliably filterable in the Output Log — do not re-introduce a _STATIC define here.
 
 void USeinFogOfWarSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
@@ -45,10 +50,49 @@ void USeinFogOfWarSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		UE_LOG(LogSeinFogOfWarSubsystem, Error, TEXT("Failed to instantiate fog class %s"),
 			FogClass ? *FogClass->GetName() : TEXT("<null>"));
 	}
+
+	// CP1.1 unified level-data pipeline. Force the substrate subsystem up first
+	// (InitializeDependency → it exists in editor + PIE for the bake-button path),
+	// then — if this fog participates (returns a provider face) — register it as
+	// the "FogOfWar" layer provider and subscribe to rebake/reload so the runtime
+	// grid tracks the shared bake. Non-participating fogs (the base) skip all of this.
+	Collection.InitializeDependency(USeinLevelDataSubsystem::StaticClass());
+	if (FogOfWar)
+	{
+		if (ISeinLevelLayerProvider* Provider = FogOfWar->GetLevelDataProvider())
+		{
+			if (USeinLevelData* Substrate = USeinLevelDataSubsystem::GetLevelDataForWorld(GetWorld()))
+			{
+				LevelData = Substrate;
+				Substrate->RegisterLayerProvider(Provider);
+				LevelDataMutatedHandle = Substrate->OnLevelDataMutated.AddUObject(
+					this, &USeinFogOfWarSubsystem::OnLevelDataChanged);
+			}
+		}
+	}
 }
 
 void USeinFogOfWarSubsystem::Deinitialize()
 {
+	// Unhook from the shared substrate (CP1.1) before FogOfWar is torn down — we
+	// reference FogOfWar->GetLevelDataProvider() to unregister.
+	if (USeinLevelData* Substrate = LevelData.Get())
+	{
+		if (LevelDataMutatedHandle.IsValid())
+		{
+			Substrate->OnLevelDataMutated.Remove(LevelDataMutatedHandle);
+			LevelDataMutatedHandle.Reset();
+		}
+		if (FogOfWar)
+		{
+			if (ISeinLevelLayerProvider* Provider = FogOfWar->GetLevelDataProvider())
+			{
+				Substrate->UnregisterLayerProvider(Provider);
+			}
+		}
+	}
+	LevelData = nullptr;
+
 	if (SimTickHandle.IsValid())
 	{
 		if (UWorld* World = GetWorld())
@@ -81,15 +125,50 @@ void USeinFogOfWarSubsystem::LoadBakedAssetIntoFogOfWar(UWorld& World)
 {
 	if (!FogOfWar) return;
 
+	// Unified pipeline first (CP1.1): if the shared substrate carries a baked grid
+	// + a "FogOfWar" channel, adopt it and we're done. If the substrate isn't
+	// loaded yet (subsystem begin-play order isn't guaranteed), our
+	// OnLevelDataMutated subscription re-adopts it the moment it loads.
+	if (USeinLevelData* Substrate = LevelData.Get())
+	{
+		if (Substrate->HasRuntimeData() && FogOfWar->LoadFromSubstrate(*Substrate))
+		{
+			UE_LOG(LogSeinFogOfWarSubsystem, Log,
+				TEXT("FoW: loaded grid from the unified level-data substrate (CP1.1 substrate path)."));
+			return;
+		}
+	}
+
+	// Legacy path: load fog's own baked asset from a FogOfWarVolume.
 	for (TActorIterator<ASeinFogOfWarVolume> It(&World); It; ++It)
 	{
 		if (USeinFogOfWarAsset* Asset = It->BakedAsset.LoadSynchronous())
 		{
 			FogOfWar->LoadFromAsset(Asset);
+			UE_LOG(LogSeinFogOfWarSubsystem, Log,
+				TEXT("FoW: loaded grid from legacy FogOfWarVolume asset '%s' (substrate carried no fog data)."),
+				*Asset->GetName());
 			return;
 		}
 	}
-	// No baked asset — fog stays empty; queries return no-visibility.
+	UE_LOG(LogSeinFogOfWarSubsystem, Log,
+		TEXT("FoW: no baked data — substrate empty AND no FogOfWarVolume asset. Grid auto-init may follow."));
+}
+
+void USeinFogOfWarSubsystem::OnLevelDataChanged()
+{
+	// Shared substrate rebaked / swapped — re-adopt its fog channel if present. If
+	// not (empty bake / no fog channel), LoadFromSubstrate returns false and leaves
+	// fog as-is, so a prior legacy load (or the next one) still stands.
+	if (!FogOfWar) return;
+	if (USeinLevelData* Substrate = LevelData.Get())
+	{
+		if (FogOfWar->LoadFromSubstrate(*Substrate))
+		{
+			UE_LOG(LogSeinFogOfWarSubsystem, Log,
+				TEXT("FoW: re-adopted the unified level-data substrate (OnLevelDataMutated)."));
+		}
+	}
 }
 
 void USeinFogOfWarSubsystem::InitGridIfUnbaked(UWorld& World)

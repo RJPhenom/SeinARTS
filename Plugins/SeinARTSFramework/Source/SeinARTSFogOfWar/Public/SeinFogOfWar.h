@@ -19,11 +19,15 @@
  *          - The reader BPFL, volume actor, and cross-module LOS delegate
  *            call into this class's virtual surface only.
  *          - Concrete subclasses own their own data storage + bake strategy.
- *          - Baked data is stored in a USeinFogOfWarAsset subclass (impl-
- *            specific); ASeinFogOfWarVolume holds a polymorphic reference.
- *          - Fog-of-war is wholly independent of navigation. The two systems
- *            share no data, no grid, no volume. A project may ship its own
- *            nav, its own fog, or both.
+ *          - Fog-of-war never talks to navigation. Both are LAYERS of the
+ *            unified level-data substrate (CP1.1, Decisions D12): each
+ *            registers an ISeinLevelLayerProvider with USeinLevelData,
+ *            contributes its channel at the ONE shared bake, and loads its
+ *            runtime grid from the baked channels + shared height. The
+ *            sharing is mediated entirely by the substrate — nav and FoW
+ *            still share no direct data or code, and a project may ship its
+ *            own nav, its own fog, or both (the opt-in hooks below default
+ *            to "doesn't participate").
  */
 
 #pragma once
@@ -42,6 +46,8 @@ class USeinFogOfWarAsset;
 class USeinWorldSubsystem;
 class ASeinFogOfWarVolume;
 class IDetailLayoutBuilder;
+class ISeinLevelLayerProvider;
+class USeinLevelData;
 
 /** Fired when the fog-of-war's baked or runtime state mutates (bake
  *  finished, asset swap, dynamic blocker change). Debug viz + cached UI
@@ -100,6 +106,25 @@ public:
 	 *  loaded or procedurally initialized). Queries return no-visibility when
 	 *  false. */
 	virtual bool HasRuntimeData() const { return LoadedAsset != nullptr; }
+
+	// ----------------------------------------------------------------------
+	// Unified level-data participation (CP1.1, Decisions D12) — OPT-IN. A fog
+	// impl that runs as a layer provider on the shared substrate (USeinLevelData)
+	// returns its provider face here and loads its runtime grid from the baked
+	// channels + shared height. These hooks default to "no" so the base stays
+	// agnostic of the substrate (a custom FogOfWarClass that doesn't participate
+	// keeps its own bake/load story).
+	// ----------------------------------------------------------------------
+
+	/** This fog's layer-provider face, or null if it contributes no channel to the
+	 *  unified level-data bake. The fog subsystem registers a non-null result so
+	 *  the shared bake runs this fog's BakeLayer. Default: null (doesn't participate). */
+	virtual ISeinLevelLayerProvider* GetLevelDataProvider() { return nullptr; }
+
+	/** Load the runtime grid from the unified substrate's baked "FogOfWar" channel
+	 *  + shared coordinate space. Return false if this fog doesn't read the
+	 *  substrate (or the substrate carries no fog channel). Default: false. */
+	virtual bool LoadFromSubstrate(const USeinLevelData& /*Substrate*/) { return false; }
 
 	// ----------------------------------------------------------------------
 	// Vision source management — sim-side, called by the actor bridge /

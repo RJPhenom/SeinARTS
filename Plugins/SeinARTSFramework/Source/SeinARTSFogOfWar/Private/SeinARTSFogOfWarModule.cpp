@@ -31,6 +31,7 @@
  */
 
 #include "SeinARTSFogOfWarModule.h"
+#include "SeinARTSFogOfWarLog.h"
 
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
@@ -53,6 +54,13 @@
 #endif // UE_ENABLE_DEBUG_DRAWING
 
 IMPLEMENT_MODULE(FSeinARTSFogOfWarModule, SeinARTSFogOfWar)
+
+// Module-shared log categories (declared in SeinARTSFogOfWarLog.h). Defined here —
+// once per module — so they register at module load and appear in the Output Log
+// filter (see the log header's rationale).
+DEFINE_LOG_CATEGORY(LogSeinFogOfWar);
+DEFINE_LOG_CATEGORY(LogSeinFogOfWarSubsystem);
+DEFINE_LOG_CATEGORY(LogSeinFogOfWarDebug);
 
 // NOTE: the editor-side vision-stamp draw helpers + the entity-bridge
 // draw-callback registration that used to live here have moved to the

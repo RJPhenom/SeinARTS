@@ -41,4 +41,11 @@ public:
 	 *  nav's connectivity midpoints — see the trace-reconciliation note in the
 	 *  microplan). Serializes the result into `OutData` — opaque to the substrate. */
 	virtual void BakeLayer(const USeinLevelData& Substrate, UWorld* World, TArray<uint8>& OutData) = 0;
+
+	/** This layer's cell size as a multiple of the substrate's finest cell size
+	 *  (D13 — coarser layers subsample; e.g. FoW at 400uu over a 100uu grid = 4).
+	 *  Read by the bake orchestration AFTER BakeLayer returns (a provider that
+	 *  derives its resolution from per-bake config records it during BakeLayer)
+	 *  and stored on the channel block as metadata. Default: 1 (finest). */
+	virtual int32 GetCellSizeMultiple() const { return 1; }
 };

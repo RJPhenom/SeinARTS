@@ -48,8 +48,10 @@
 #include "ShowFlags.h"
 #include "Components/BrushComponent.h"
 #include "CollisionQueryParams.h"
+#include "SeinARTSFogOfWarLog.h"
 
-DEFINE_LOG_CATEGORY_STATIC(LogSeinFogOfWarDebug, Log, All);
+// LogSeinFogOfWarDebug is module-declared (SeinARTSFogOfWarLog.h) so it is reliably
+// filterable in the Output Log — do not re-introduce a _STATIC define here.
 
 namespace
 {

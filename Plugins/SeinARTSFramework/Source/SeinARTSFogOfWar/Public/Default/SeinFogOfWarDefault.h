@@ -36,6 +36,7 @@
 
 #include "CoreMinimal.h"
 #include "SeinFogOfWar.h"
+#include "SeinLevelLayerProvider.h"
 #include "Core/SeinPlayerID.h"
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
@@ -44,6 +45,7 @@
 
 class UWorld;
 class USeinFogOfWarDefaultAsset;
+class USeinLevelData;
 struct FSeinVisionComponent;
 struct FSeinStampShape;
 
@@ -106,7 +108,7 @@ struct FSeinFogSourceState
 };
 
 UCLASS(BlueprintType, meta = (DisplayName = "Sein Fog Of War (Default)"))
-class SEINARTSFOGOFWAR_API USeinFogOfWarDefault : public USeinFogOfWar
+class SEINARTSFOGOFWAR_API USeinFogOfWarDefault : public USeinFogOfWar, public ISeinLevelLayerProvider
 {
 	GENERATED_BODY()
 
@@ -155,6 +157,23 @@ public:
 
 	virtual void LoadFromAsset(USeinFogOfWarAsset* Asset) override;
 	virtual bool HasRuntimeData() const override { return Width > 0 && Height > 0; }
+
+	// ----------------------------------------------------------------------
+	// Unified level-data participation (CP1.1): this fog is the "FogOfWar"
+	// layer provider on the shared substrate. BakeLayer adopts the substrate's
+	// shared ground height (D17) and runs the fog-specific occluder box-sweep
+	// at the fog's own (coarser) resolution; LoadFromSubstrate reconstructs the
+	// runtime grid from the baked channel + shared coordinate space.
+	// ----------------------------------------------------------------------
+
+	// ISeinLevelLayerProvider
+	virtual FName GetLayerId() const override;
+	virtual void BakeLayer(const USeinLevelData& Substrate, UWorld* World, TArray<uint8>& OutData) override;
+	virtual int32 GetCellSizeMultiple() const override { return LastBakedCellSizeMultiple; }
+
+	// USeinFogOfWar participation hooks
+	virtual ISeinLevelLayerProvider* GetLevelDataProvider() override { return this; }
+	virtual bool LoadFromSubstrate(const USeinLevelData& Substrate) override;
 
 	virtual void InitGridFromVolumes(UWorld* World) override;
 	virtual void TickStamps(UWorld* World) override;
@@ -245,6 +264,11 @@ private:
 	// ----------------------------------------------------------------------
 	bool bBaking = false;
 	bool bCancelRequested = false;
+
+	/** The fog cell size used by the last BakeLayer, as a multiple of the
+	 *  substrate's finest cell size (snapped to an integer; D13/D15). Read by
+	 *  the bake orchestration via GetCellSizeMultiple after BakeLayer. */
+	int32 LastBakedCellSizeMultiple = 1;
 
 	// ----------------------------------------------------------------------
 	// Helpers

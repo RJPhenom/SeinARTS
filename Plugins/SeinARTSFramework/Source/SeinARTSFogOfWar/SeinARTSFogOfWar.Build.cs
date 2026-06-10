@@ -4,6 +4,13 @@ public class SeinARTSFogOfWar : ModuleRules
 {
     public SeinARTSFogOfWar(ReadOnlyTargetRules Target) : base(Target)
     {
+        // PUBLIC because SeinFogOfWarDefault.h (a public header) inherits
+        // ISeinLevelLayerProvider — the include path must propagate to any
+        // module that includes fog headers (same rationale as nav's dep).
+        PublicDependencyModuleNames.AddRange(new string[] {
+            "SeinARTSLevelData"
+        });
+
         PrivateDependencyModuleNames.AddRange(new string[] {
             "Core", "CoreUObject", "Engine",
             "SeinARTSCore", "SeinARTSCoreEntity",

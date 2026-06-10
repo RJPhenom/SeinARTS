@@ -385,8 +385,11 @@ bool USeinLevelDataDefault::DoSyncBake(UWorld* World, USeinLevelDataDefaultAsset
 		if (!Provider) continue;
 		FSeinLevelChannelBlock Block;
 		Block.LayerId = Provider->GetLayerId();
-		Block.CellSizeMultiple = 1;
 		Provider->BakeLayer(*this, World, Block.Data);
+		// Resolution metadata is read AFTER BakeLayer — providers that derive their
+		// cell size from per-bake config (FoW from the volume's vision cell size)
+		// record the snapped multiple during the bake.
+		Block.CellSizeMultiple = FMath::Max(1, Provider->GetCellSizeMultiple());
 		OutAsset->Channels.Add(MoveTemp(Block));
 	}
 

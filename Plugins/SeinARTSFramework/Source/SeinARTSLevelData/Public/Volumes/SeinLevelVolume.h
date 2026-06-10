@@ -58,6 +58,30 @@ public:
 	FFixedPoint MaxStepHeight = FFixedPoint::FromInt(50);
 
 	// ----------------------------------------------------------------------
+	// Fog Of War layer config (mirrors the legacy ASeinFogOfWarVolume; read by
+	// the fog layer provider at bake — first volume wins, like cell size).
+	// ----------------------------------------------------------------------
+
+	/** Override the project-wide fog cell size. When false, plugin settings'
+	 *  `VisionCellSize`. Snapped to an integer multiple of the shared grid's
+	 *  cell size at bake (the channel-resolution contract). */
+	UPROPERTY(EditAnywhere, Category = "SeinARTS|Fog Of War")
+	bool bOverrideVisionCellSize = false;
+
+	UPROPERTY(EditAnywhere, Category = "SeinARTS|Fog Of War",
+		meta = (EditCondition = "bOverrideVisionCellSize"))
+	FFixedPoint VisionCellSize = FFixedPoint::FromInt(400);
+
+	/** If true, the fog layer's bake detects static sight blockers (walls,
+	 *  buildings, hedgerows) and stamps them into the fog channel. If false,
+	 *  only grid layout + ground height bake — all sight occlusion then comes
+	 *  from runtime sources (`USeinExtentsComponent` with bBlocksFogOfWar,
+	 *  designer-authored ability effects, etc.). */
+	UPROPERTY(EditAnywhere, Category = "SeinARTS|Fog Of War",
+		meta = (DisplayName = "Bake Static Blockers"))
+	bool bBakeStaticBlockers = true;
+
+	// ----------------------------------------------------------------------
 	// Output
 	// ----------------------------------------------------------------------
 
@@ -96,6 +120,9 @@ public:
 
 	/** Per-volume max-step-height with plugin-settings fallback. */
 	FFixedPoint GetResolvedMaxStepHeight() const;
+
+	/** Per-volume fog cell size with plugin-settings fallback (`VisionCellSize`). */
+	FFixedPoint GetResolvedVisionCellSize() const;
 
 	/** Editor button: bake the unified level data covering every Sein Level Volume
 	 *  in this level (runs the shared trace pass + all registered layer providers).

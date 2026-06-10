@@ -85,6 +85,16 @@ FFixedPoint ASeinLevelVolume::GetResolvedMaxStepHeight() const
 	return FFixedPoint::FromInt(50);
 }
 
+FFixedPoint ASeinLevelVolume::GetResolvedVisionCellSize() const
+{
+	if (bOverrideVisionCellSize) return VisionCellSize;
+	if (const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>())
+	{
+		return Settings->VisionCellSize;
+	}
+	return FFixedPoint::FromInt(400);
+}
+
 void ASeinLevelVolume::BakeLevelData()
 {
 	if (UWorld* World = GetWorld())
