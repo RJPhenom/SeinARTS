@@ -531,7 +531,7 @@ void USeinFogOfWarDebugComponent::EnsureFogLoaded()
 
 	if (ASeinFogOfWarVolume* Vol = Cast<ASeinFogOfWarVolume>(GetOwner()))
 	{
-		if (USeinFogOfWarAsset* Asset = Vol->BakedAsset)
+		if (USeinFogOfWarAsset* Asset = Vol->BakedAsset.LoadSynchronous())
 		{
 			Fog->LoadFromAsset(Asset);
 		}

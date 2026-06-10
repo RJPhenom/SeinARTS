@@ -54,9 +54,12 @@ public:
 
 	/** Baked nav data for this level. Assigned by the bake pipeline; shared
 	 *  across all NavVolumes on the level (last-baked wins). Polymorphic —
-	 *  concrete type depends on the active USeinNavigation subclass. */
+	 *  concrete type depends on the active USeinNavigation subclass.
+	 *  SOFT reference — loaded on demand (at begin-play by the nav subsystem, or
+	 *  when the editor viz is shown), so opening the map does NOT force-load the
+	 *  baked grid package into memory as part of the level's hard-reference graph. */
 	UPROPERTY(EditAnywhere, Category = "SeinARTS|Output")
-	TObjectPtr<USeinNavigationAsset> BakedAsset;
+	TSoftObjectPtr<USeinNavigationAsset> BakedAsset;
 
 	/** Scene-proxy-backed cell viz. Driven by `ShowFlags.Navigation` /
 	 *  `Sein.Nav.Show`; null in shipping. */

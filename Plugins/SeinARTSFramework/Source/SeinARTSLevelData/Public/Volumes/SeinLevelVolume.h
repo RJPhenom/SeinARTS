@@ -63,9 +63,11 @@ public:
 
 	/** Baked level data for this level. Assigned by the bake pipeline; shared across
 	 *  all level volumes on the level (last-baked wins). Polymorphic — concrete type
-	 *  depends on the active USeinLevelData subclass. */
+	 *  depends on the active USeinLevelData subclass. SOFT reference — loaded on demand
+	 *  (at begin-play by the level-data subsystem), so opening the map does NOT
+	 *  force-load the baked substrate package into the level's hard-reference graph. */
 	UPROPERTY(EditAnywhere, Category = "SeinARTS|Output")
-	TObjectPtr<USeinLevelDataAsset> BakedAsset;
+	TSoftObjectPtr<USeinLevelDataAsset> BakedAsset;
 
 	// ----------------------------------------------------------------------
 	// Editor-baked AABB snapshot — cross-platform-determinism (mirrors ASeinNavVolume).

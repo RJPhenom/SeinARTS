@@ -419,7 +419,7 @@ void USeinNavDebugComponent::EnsureNavLoaded()
 
 	if (ASeinNavVolume* Vol = Cast<ASeinNavVolume>(GetOwner()))
 	{
-		if (USeinNavigationAsset* Asset = Vol->BakedAsset)
+		if (USeinNavigationAsset* Asset = Vol->BakedAsset.LoadSynchronous())
 		{
 			Nav->LoadFromAsset(Asset);
 		}

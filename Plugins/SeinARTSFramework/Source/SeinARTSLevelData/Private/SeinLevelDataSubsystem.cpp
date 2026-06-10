@@ -73,7 +73,7 @@ void USeinLevelDataSubsystem::LoadBakedAsset(UWorld& World)
 
 	for (TActorIterator<ASeinLevelVolume> It(&World); It; ++It)
 	{
-		if (USeinLevelDataAsset* Asset = It->BakedAsset)
+		if (USeinLevelDataAsset* Asset = It->BakedAsset.LoadSynchronous())
 		{
 			LevelData->LoadFromAsset(Asset);
 			return;

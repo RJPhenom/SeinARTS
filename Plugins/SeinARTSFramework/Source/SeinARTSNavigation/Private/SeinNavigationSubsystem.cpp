@@ -144,7 +144,7 @@ void USeinNavigationSubsystem::LoadBakedAssetIntoNav(UWorld& World)
 	// Legacy / A-B baseline path: load nav's own baked asset from a NavVolume.
 	for (TActorIterator<ASeinNavVolume> It(&World); It; ++It)
 	{
-		if (USeinNavigationAsset* Asset = It->BakedAsset)
+		if (USeinNavigationAsset* Asset = It->BakedAsset.LoadSynchronous())
 		{
 			Navigation->LoadFromAsset(Asset);
 			UE_LOG(LogSeinNavSubsystem, Log,

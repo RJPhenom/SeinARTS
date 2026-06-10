@@ -42,9 +42,11 @@ public:
 	/** Baked fog data for this level. Assigned by the bake pipeline; shared
 	 *  across all ASeinFogOfWarVolumes on the level (last-baked wins).
 	 *  Polymorphic — concrete type depends on the active USeinFogOfWar
-	 *  subclass. */
+	 *  subclass. SOFT reference — loaded on demand (at begin-play, or when the
+	 *  editor viz is shown), so opening the map does NOT force-load the baked
+	 *  fog package into memory as part of the level's hard-reference graph. */
 	UPROPERTY(EditAnywhere, Category = "SeinARTS|Output")
-	TObjectPtr<USeinFogOfWarAsset> BakedAsset;
+	TSoftObjectPtr<USeinFogOfWarAsset> BakedAsset;
 
 	/** If true, the bake's per-cell pass detects static sight blockers
 	 *  (walls, buildings, hedgerows) and stamps them into the asset. If

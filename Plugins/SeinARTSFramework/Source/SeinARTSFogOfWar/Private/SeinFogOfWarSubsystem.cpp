@@ -83,7 +83,7 @@ void USeinFogOfWarSubsystem::LoadBakedAssetIntoFogOfWar(UWorld& World)
 
 	for (TActorIterator<ASeinFogOfWarVolume> It(&World); It; ++It)
 	{
-		if (USeinFogOfWarAsset* Asset = It->BakedAsset)
+		if (USeinFogOfWarAsset* Asset = It->BakedAsset.LoadSynchronous())
 		{
 			FogOfWar->LoadFromAsset(Asset);
 			return;
