@@ -1,13 +1,13 @@
 # SeinARTS — Project Root Guide
 
-This is the **project-level** guide, loaded by every session rooted at `E:/Unreal Engine/SeinARTS`.
-It owns the cross-cutting rules that apply to **all three plugins**. Each plugin has its own
+This is the **project-level** guide, loaded by every session rooted at `D:/Projects/Unreal Engine/SeinARTS`.
+It owns the cross-cutting rules that apply to **all four plugins**. Each plugin has its own
 `CLAUDE.md` with the deep, plugin-specific detail — read the relevant one when you scope into it
 (pointers below).
 
 > Sessions used to be scoped to the `SeinARTSFramework` plugin directory only. They now run from
-> this project root so a single session has native visibility across the framework **and** both
-> extension plugins. When you start work, read this file first, then the plugin-specific
+> this project root so a single session has native visibility across the framework **and** all
+> three extension plugins. When you start work, read this file first, then the plugin-specific
 > `CLAUDE.md` for whatever you're touching.
 
 > **Active initiative — Nav/Movement BAR-ification.** If the work touches navigation, movement, or
@@ -26,14 +26,15 @@ nothing and adds synchronization overhead.
 - **Never** spawn `Agent` calls with `isolation: "worktree"`. Use the default (no isolation).
 - **Never** create or work inside a `.claude/worktrees/<...>/` path. If a turn starts and the
   working directory contains `.claude/worktrees/`, **stop, tell the user, and switch back to the
-  main checkout at `E:/Unreal Engine/SeinARTS/` before doing anything else.**
+  main checkout at `D:/Projects/Unreal Engine/SeinARTS/` before doing anything else.**
 - Parallelism is still encouraged — just spawn parallel agents against the **main checkout**.
   Feature work is naturally module-scoped, so conflicts between parallel agents are rare.
 
 > Note: as of 2026-06-02 the project root **is** a git repository — a single project-wide monorepo
 > (`main`, initial commit `ecf6068`) tracking the host project and all four plugins, with **Git LFS**
-> for binary assets (`*.uasset`/`*.umap` + common media). Baked Nav/FoW data (`**/Content/Levels/Data/`)
-> is gitignored as a regenerable build artifact — **re-bake levels after a fresh clone**. History
+> for binary assets (`*.uasset`/`*.umap` + common media). Baked level data (`**/Content/LevelData/` + legacy patterns)
+> is gitignored as a regenerable build artifact — **re-bake after a fresh clone** via the one
+> "Bake Level Data" button on `ASeinLevelVolume` (unified pipeline, CP1.1). History
 > starts fresh from the plugin split; the framework's pre-split history is archived at
 > `https://github.com/RJPhenom/SeinARTSFramework`. No remote is configured on the monorepo yet, and
 > `gh` is not installed. The no-worktree HARD RULE above still applies.
@@ -47,16 +48,16 @@ nothing and adds synchronization overhead.
 `SeinARTSEditor`. Use the repo build script:
 
 ```powershell
-& "E:/Unreal Engine/SeinARTS/Build.ps1"                       # SeinARTSEditor Win64 Development (incremental ≈ 20s)
-& "E:/Unreal Engine/SeinARTS/Build.ps1" -ExtraArgs '-Clean'   # clean rebuild
-& "E:/Unreal Engine/SeinARTS/Build.ps1" -Target SeinARTS -Config Shipping
+& "D:/Projects/Unreal Engine/SeinARTS/Build.ps1"                       # SeinARTSEditor Win64 Development (incremental ≈ 20s)
+& "D:/Projects/Unreal Engine/SeinARTS/Build.ps1" -ExtraArgs '-Clean'   # clean rebuild
+& "D:/Projects/Unreal Engine/SeinARTS/Build.ps1" -Target SeinARTS -Config Shipping
 ```
 
 `Build.ps1` resolves the engine (known path → registry fallback via `EngineAssociation`), warns if
 the editor is open, and returns UBT's exit code. Equivalent raw one-liner if the script is ever gone:
 
 ```powershell
-& "C:/Program Files/Epic Games/UE_5.7/Engine/Build/BatchFiles/Build.bat" SeinARTSEditor Win64 Development -Project="E:/Unreal Engine/SeinARTS/SeinARTS.uproject" -WaitMutex
+& "C:/Program Files/Epic Games/UE_5.7/Engine/Build/BatchFiles/Build.bat" SeinARTSEditor Win64 Development -Project="D:/Projects/Unreal Engine/SeinARTS/SeinARTS.uproject" -WaitMutex
 ```
 
 - **Run builds in the background** (`run_in_background`) — even incremental is tens of seconds; a
@@ -72,7 +73,7 @@ the editor is open, and returns UBT's exit code. Equivalent raw one-liner if the
 ## What this is
 
 A deterministic **lockstep RTS framework** for Unreal Engine 5, delivered as one core plugin plus
-two opt-in extension plugins. The simulation layer runs entirely on fixed-point math
+three opt-in extension plugins. The simulation layer runs entirely on fixed-point math
 (`FFixedPoint`, 32.32) for cross-platform bit-determinism. Unreal is the renderer — the sim never
 touches `float`, `AActor*`, or any non-deterministic UE system. Data flows one way: **sim → render**.
 
@@ -85,12 +86,12 @@ genre-neutral; specifics are designer-authored in Blueprint.
 ## Repository layout
 
 ```
-E:/Unreal Engine/SeinARTS/
+D:/Projects/Unreal Engine/SeinARTS/
 ├── SeinARTS.uproject        Host UE project (used to compile/PIE the plugins during dev)
 ├── Source/SeinARTS/         Thin host game module — nothing of substance lives here
 ├── Config/ Content/         Host project config + content
 └── Plugins/
-    ├── SeinARTSFramework/             The core. 11 modules. → Plugins/SeinARTSFramework/CLAUDE.md
+    ├── SeinARTSFramework/             The core. 12 modules. → Plugins/SeinARTSFramework/CLAUDE.md
     ├── SeinARTSSquadExtension/        Opt-in squads.  1 module. → .../SeinARTSSquadExtension/CLAUDE.md
     ├── SeinARTSCoverExtension/        Opt-in cover.   3 modules. → .../SeinARTSCoverExtension/CLAUDE.md
     └── SeinARTSMovementPlusExtension/ Opt-in movement modes. 1 module ("SeinARTS Movement+"). → .../SeinARTSMovementPlusExtension/CLAUDE.md
