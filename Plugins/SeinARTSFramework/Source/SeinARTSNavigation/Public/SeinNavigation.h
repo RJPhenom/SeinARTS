@@ -3,24 +3,23 @@
  * @file    SeinNavigation.h
  * @brief   Abstract base class for pluggable navigation implementations.
  *
- *          USeinNavigation owns the end-to-end nav problem for one world:
- *          bake pipeline, baked-asset storage, runtime pathfinding, reachability,
- *          and (optionally) debug visualization. It is the ONLY thing the
- *          framework's MoveTo action, editor bake button, and ability validation
- *          delegate talk to.
+ *          USeinNavigation owns the runtime nav problem for one world:
+ *          pathfinding, reachability, projection/placement queries, and
+ *          (optionally) debug visualization. It is the ONLY thing the
+ *          framework's MoveTo action and ability validation delegate talk to.
+ *
+ *          Baked data comes from the unified level-data pipeline
+ *          (SeinARTSLevelData): a nav that participates registers as an
+ *          ISeinLevelLayerProvider on the shared substrate (USeinLevelData)
+ *          and loads its runtime grid from the baked channels via
+ *          LoadFromSubstrate. The "Bake Level Data" button lives on
+ *          ASeinLevelVolume; this class has no bake surface of its own.
  *
  *          Configured via plugin settings (`USeinARTSCoreSettings::NavigationClass`).
  *          The framework ships `USeinNavigationAStar` as a minimal 2D-grid +
  *          A* reference implementation; game teams can subclass or replace it
  *          entirely with navmesh-, waypoint-, or hierarchical-graph-based impls
  *          without touching any other framework code.
- *
- *          Decoupling contract:
- *          - The MoveTo action, BPFL, volume actor, and ability validation
- *            delegate call into this class's virtual surface only.
- *          - Concrete subclasses own their own data storage + bake strategy.
- *          - Baked data is stored in a USeinNavigationAsset subclass (impl-
- *            specific); ASeinNavVolume holds a polymorphic reference.
  */
 
 #pragma once
@@ -38,9 +37,6 @@
 #include "SeinNavigation.generated.h"
 
 class UWorld;
-class ASeinNavVolume;
-class USeinNavigationAsset;
-class IDetailLayoutBuilder;
 class USeinLevelData;
 class ISeinLevelLayerProvider;
 
@@ -71,7 +67,7 @@ struct FSeinDynamicBlocker
 	uint8 BlockedNavLayerMask = 0xFF;
 };
 
-/** Fired when the nav's baked data mutates (bake finished, asset re-loaded,
+/** Fired when the nav's baked data mutates (bake finished, substrate re-adopted,
  *  dynamic obstacle change). Cached plans must re-query on this signal. */
 DECLARE_MULTICAST_DELEGATE(FSeinOnNavigationMutated);
 
@@ -93,50 +89,20 @@ public:
 	virtual void OnNavigationDeinitialized() {}
 
 	// ----------------------------------------------------------------------
-	// Bake (editor / dev-loop)
+	// Runtime data
 	// ----------------------------------------------------------------------
 
-	/** The UDataAsset class this nav produces when baking. Subclasses return
-	 *  their concrete USeinNavigationAsset subclass. Default: the abstract base
-	 *  (use only if the subclass uses no serialized data — most don't). */
-	virtual TSubclassOf<USeinNavigationAsset> GetAssetClass() const;
-
-	/** Begin an async bake covering every ASeinNavVolume in World. Return true
-	 *  if the bake kicked off (false if already running or no volumes found).
-	 *  Subclasses own the async strategy — tick-driven, worker thread, whatever
-	 *  fits their data. Progress reporting is the subclass's responsibility. */
-	virtual bool BeginBake(UWorld* World) { return false; }
-
-	/** True while an async bake is in progress. */
-	virtual bool IsBaking() const { return false; }
-
-	/** Request bake cancellation. Safe to call when not baking (no-op). */
-	virtual void RequestCancelBake() {}
+	/** True if the nav has usable runtime data (loaded from the unified
+	 *  substrate or procedurally initialized). Queries return no-path when
+	 *  false. Default: false — subclasses report their own grid state. */
+	virtual bool HasRuntimeData() const { return false; }
 
 	// ----------------------------------------------------------------------
-	// Runtime load — called on level begin-play
-	// ----------------------------------------------------------------------
-
-	/** Swap the loaded nav data. Passing nullptr clears runtime state.
-	 *  Subclasses should call Super then broadcast OnNavigationMutated once
-	 *  their own runtime arrays are updated — this base impl stores the
-	 *  pointer but does NOT broadcast, so subclass mutations and the signal
-	 *  stay in lockstep. */
-	virtual void LoadFromAsset(USeinNavigationAsset* Asset) { LoadedAsset = Asset; }
-
-	/** The currently-loaded baked asset, or nullptr if never loaded. */
-	USeinNavigationAsset* GetLoadedAsset() const { return LoadedAsset; }
-
-	/** True if the nav has usable runtime data (either from a baked asset or
-	 *  procedurally initialized). Queries return no-path when false. */
-	virtual bool HasRuntimeData() const { return LoadedAsset != nullptr; }
-
-	// ----------------------------------------------------------------------
-	// Unified level-data pipeline (CP1.1) — OPT-IN. Default navs do NOT
-	// participate (they bake + load their own asset). A nav that registers as a
+	// Unified level-data pipeline (CP1.1) — OPT-IN. A nav that registers as a
 	// layer provider on the shared substrate (USeinLevelData) returns its provider
 	// face here and loads its runtime grid from the baked channels. These hooks
-	// default to "no" so the base stays agnostic of the substrate.
+	// default to "no" so the base stays agnostic of the substrate — a nav that
+	// opts out simply has no baked data until something else initializes it.
 	// ----------------------------------------------------------------------
 
 	/** This nav's layer-provider face, or null if it contributes no channel to the
@@ -145,8 +111,9 @@ public:
 	virtual ISeinLevelLayerProvider* GetLevelDataProvider() { return nullptr; }
 
 	/** Load the runtime grid from the unified substrate's baked channels + shared
-	 *  height. Return false if this nav doesn't read the substrate (the subsystem
-	 *  then falls back to this nav's own baked asset — the A/B baseline). Default: false. */
+	 *  height. Return false if this nav doesn't read the substrate — it then has
+	 *  no baked data (FindPath returns no-path) until something else loads it.
+	 *  Default: false. */
 	virtual bool LoadFromSubstrate(const USeinLevelData& /*Substrate*/) { return false; }
 
 	// ----------------------------------------------------------------------
@@ -355,31 +322,10 @@ public:
 		float& OutHalfExtent) const {}
 
 	// ----------------------------------------------------------------------
-	// Editor extensibility
-	// ----------------------------------------------------------------------
-
-#if WITH_EDITOR
-	/** Optional hook for subclasses to extend ASeinNavVolume's details panel.
-	 *  Called by the framework's `FSeinNavVolumeDetails` after it has added its
-	 *  own "Bake Navigation" row. Subclasses may add custom rows (per-bake
-	 *  options, per-volume diagnostics, multi-stage bake UI, etc.). Default:
-	 *  no-op. The framework's bake button is unconditional — the abstract
-	 *  `BeginBake` virtual dispatches to whatever subclass is active, so
-	 *  designers see the same button regardless of which nav impl is selected. */
-	virtual void CustomizeVolumeDetails(IDetailLayoutBuilder& /*DetailBuilder*/, ASeinNavVolume* /*Volume*/) {}
-#endif
-
-	// ----------------------------------------------------------------------
 	// Events
 	// ----------------------------------------------------------------------
 
-	/** Broadcast after bake completion, asset swap, or dynamic obstacle mutation. */
+	/** Broadcast after bake completion, substrate (re-)adoption, or dynamic
+	 *  obstacle mutation. */
 	FSeinOnNavigationMutated OnNavigationMutated;
-
-protected:
-
-	/** The currently-loaded baked asset. Ownership stays with the volume / asset
-	 *  registry — this is a non-owning pointer. */
-	UPROPERTY(Transient)
-	TObjectPtr<USeinNavigationAsset> LoadedAsset;
 };

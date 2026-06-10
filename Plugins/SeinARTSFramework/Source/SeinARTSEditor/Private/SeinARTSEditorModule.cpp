@@ -266,10 +266,10 @@ void FSeinARTSEditorModule::StartupModule()
 		// standard bitmask combo. Re-add a customization keyed on the new
 		// struct name if a custom combo is desired again.
 
-		// Volume details panels (ASeinNavVolume, ASeinFogOfWarVolume) are
-		// registered by their owning system modules' StartupModule under
-		// `#if WITH_EDITOR` — keeps the editor module decoupled from those
-		// systems. Replace the nav class via plugin settings; the framework's
+		// The unified bake entry point is a CallInEditor button on
+		// ASeinLevelVolume ("Bake Level Data"), so no volume details panels
+		// are registered here — keeps the editor module decoupled from the
+		// nav/FoW systems. Replace the nav/fog class via plugin settings; the
 		// bake button stays on the volume regardless.
 
 		PropertyModule.NotifyCustomizationModuleChanged();

@@ -46,9 +46,10 @@ public class SeinARTSEditor : ModuleRules
             // includes, no build coupling. Disabling cover / FoW / nav
             // takes that module's draw layer with it cleanly.
             //
-            // Volume details panels (ASeinNavVolume, ASeinFogOfWarVolume)
-            // are registered by their owning system modules' StartupModule
-            // under `#if WITH_EDITOR` — same pattern.
+            // The unified bake entry point is a CallInEditor button on
+            // ASeinLevelVolume ("Bake Level Data") — no details-panel
+            // customization needed; layer modules contribute via the
+            // substrate's provider registry, same decoupling.
         });
     }
 }

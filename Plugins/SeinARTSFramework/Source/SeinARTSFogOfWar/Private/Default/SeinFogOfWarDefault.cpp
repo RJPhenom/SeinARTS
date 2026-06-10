@@ -1,16 +1,14 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinFogOfWarDefault.cpp
- * @brief   MVP stamp engine + sync bake. Flat-circle stamp (shadowcast is
- *          step 2); bake runs a two-trace-per-cell pass to detect static
- *          blockers above terrain and serializes quantized uint8 heights
- *          into a USeinFogOfWarDefaultAsset. Runtime dequantizes to
- *          FFixedPoint on load.
+ * @brief   MVP stamp engine + unified-bake layer provider. Flat-circle stamp
+ *          (shadowcast is step 2); BakeLayer runs the fog-specific occluder
+ *          sweep on the shared level-data bake and serializes quantized uint8
+ *          heights into the substrate's "FogOfWar" channel. Runtime
+ *          dequantizes to FFixedPoint in LoadFromSubstrate.
  */
 
 #include "Default/SeinFogOfWarDefault.h"
-#include "Default/SeinFogOfWarDefaultAsset.h"
-#include "Volumes/SeinFogOfWarVolume.h"
 #include "Components/SeinVisionComponent.h"
 #include "Components/SeinExtentsComponent.h"
 #include "Stamping/SeinStampShape.h"
@@ -18,7 +16,6 @@
 #include "SeinFogOfWarTypes.h"
 #include "SeinARTSFogOfWarModule.h"
 #include "SeinARTSFogOfWarLog.h"
-#include "Settings/PluginSettings.h"
 
 #include "SeinLevelData.h"
 #include "Volumes/SeinLevelVolume.h"
@@ -36,343 +33,9 @@
 #include "EngineUtils.h"
 #include "CollisionQueryParams.h"
 #include "Math/Box.h"
-#include "Misc/ScopedSlowTask.h"
-
-#if WITH_EDITOR
-#include "AssetRegistry/AssetRegistryModule.h"
-#include "UObject/Package.h"
-#include "UObject/SavePackage.h"
-#include "Misc/PackageName.h"
-#endif
 
 // LogSeinFogOfWar is module-declared (SeinARTSFogOfWarLog.h) so it is reliably
 // filterable in the Output Log — do not re-introduce a _STATIC define here.
-
-// ============================================================================
-// Asset class
-// ============================================================================
-
-TSubclassOf<USeinFogOfWarAsset> USeinFogOfWarDefault::GetAssetClass() const
-{
-	return USeinFogOfWarDefaultAsset::StaticClass();
-}
-
-// ============================================================================
-// Bake
-// ============================================================================
-
-bool USeinFogOfWarDefault::BeginBake(UWorld* World)
-{
-	if (!World)
-	{
-		UE_LOG(LogSeinFogOfWar, Warning, TEXT("BeginBake: null world"));
-		return false;
-	}
-	if (bBaking)
-	{
-		UE_LOG(LogSeinFogOfWar, Warning, TEXT("BeginBake: already baking"));
-		return false;
-	}
-
-	bBaking = true;
-	bCancelRequested = false;
-	ON_SCOPE_EXIT { bBaking = false; bCancelRequested = false; };
-
-	USeinFogOfWarDefaultAsset* NewAsset = nullptr;
-	const bool bOk = DoSyncBake(World, NewAsset);
-	if (!bOk || !NewAsset)
-	{
-		UE_LOG(LogSeinFogOfWar, Warning, TEXT("BeginBake: failed"));
-		return false;
-	}
-
-	// Point every fog volume at the new asset + load into this impl.
-	for (TActorIterator<ASeinFogOfWarVolume> It(World); It; ++It)
-	{
-		It->BakedAsset = NewAsset;
-		It->MarkPackageDirty();
-	}
-	LoadFromAsset(NewAsset);
-
-	UE_LOG(LogSeinFogOfWar, Log,
-		TEXT("Bake complete: %dx%d cells, CellSize=%s"),
-		NewAsset->Width, NewAsset->Height, *NewAsset->CellSize.ToString());
-	return true;
-}
-
-bool USeinFogOfWarDefault::DoSyncBake(UWorld* World, USeinFogOfWarDefaultAsset*& OutAsset)
-{
-	OutAsset = nullptr;
-
-	// Gather volumes + union their bounds.
-	TArray<ASeinFogOfWarVolume*> Volumes;
-	FBox UnionBounds(ForceInit);
-	for (TActorIterator<ASeinFogOfWarVolume> It(World); It; ++It)
-	{
-		ASeinFogOfWarVolume* Vol = *It;
-		if (!Vol) continue;
-		Volumes.Add(Vol);
-		UnionBounds += Vol->GetVolumeWorldBounds();
-	}
-	if (Volumes.Num() == 0 || !UnionBounds.IsValid)
-	{
-		UE_LOG(LogSeinFogOfWar, Warning, TEXT("DoSyncBake: no FogOfWarVolumes in world"));
-		return false;
-	}
-
-	// Resolve bake parameters from the first volume (MVP uses single global
-	// cell size; later volumes use their own for their region once bake
-	// supports per-region grids). Getter returns FFixedPoint directly — the
-	// only float touched here is the bake-time trace-math float, computed
-	// once via ToFloat().
-	const FFixedPoint BakedCellSize = Volumes[0]->GetResolvedCellSize();
-	const float CellSizeF = BakedCellSize.ToFloat();
-	const bool bBakeStaticBlockers = Volumes[0]->bBakeStaticBlockers;
-
-	const int32 GridW = FMath::Max(1, FMath::CeilToInt((UnionBounds.Max.X - UnionBounds.Min.X) / CellSizeF));
-	const int32 GridH = FMath::Max(1, FMath::CeilToInt((UnionBounds.Max.Y - UnionBounds.Min.Y) / CellSizeF));
-	const FVector OriginWorld(UnionBounds.Min.X, UnionBounds.Min.Y, UnionBounds.Min.Z);
-	const float TopZ = UnionBounds.Max.Z + BakeTraceHeadroom;
-	const float BottomZ = UnionBounds.Min.Z - 100.0f;
-
-	// Height quantization spans the volume's Z range over 255 steps (uint8).
-	// A +1 nudge on MinHeight prevents the highest-Z cell from rounding to
-	// 256 (out of uint8 range) at the top edge.
-	const float RangeZ = FMath::Max(1.0f, UnionBounds.Max.Z - UnionBounds.Min.Z + BakeTraceHeadroom);
-	const float QuantumF = FMath::Max(1.0f, RangeZ / 255.0f);
-
-#if WITH_EDITOR
-	FScopedSlowTask Task(GridW * GridH, NSLOCTEXT("SeinFogOfWarDefault", "Baking", "Baking SeinARTS Fog Of War..."));
-	Task.MakeDialog(/*bShowCancelButton*/ true);
-#endif
-
-	// Create asset (editor) or transient package (runtime bake).
-#if WITH_EDITOR
-	const FString AssetName = FString::Printf(TEXT("FogOfWarData_%s"), *World->GetMapName());
-	OutAsset = CreateOrLoadAsset(World, AssetName);
-#else
-	OutAsset = NewObject<USeinFogOfWarDefaultAsset>(GetTransientPackage());
-#endif
-	if (!OutAsset) return false;
-
-	OutAsset->Width = GridW;
-	OutAsset->Height = GridH;
-	OutAsset->CellSize = BakedCellSize;
-	OutAsset->Origin = FFixedVector(FFixedPoint::FromFloat(OriginWorld.X),
-	                                FFixedPoint::FromFloat(OriginWorld.Y),
-	                                FFixedPoint::FromFloat(OriginWorld.Z));
-	OutAsset->MinHeight = FFixedPoint::FromFloat(OriginWorld.Z);
-	OutAsset->HeightQuantum = FFixedPoint::FromFloat(QuantumF);
-
-	// Bake's internal working cell array (struct-of-cells). Decomposed into the
-	// asset's flat parallel uint8 arrays at the end so the on-disk asset stores
-	// bulk byte blobs, not a tagged per-element struct array.
-	TArray<FSeinFogOfWarCell> Cells;
-	Cells.SetNum(GridW * GridH);
-
-	FCollisionQueryParams QP(SCENE_QUERY_STAT(SeinFogOfWarBake), /*bTraceComplex*/ true);
-	for (ASeinFogOfWarVolume* Vol : Volumes)
-	{
-		if (Vol) QP.AddIgnoredActor(Vol);
-	}
-
-	// Per-entity-class skip list. Mirrors the nav-bake pattern. Two reasons to
-	// exclude an ASeinActor's geometry from the static fog bake:
-	//   1) Designer flagged the entity class as `bBakesIntoFogOfWar = false` —
-	//      glass walls, transparent props, anything that should NOT occlude
-	//      sight even though it may participate in nav.
-	//   2) Mobile heuristic — the entity class CDO carries a USeinMovementComponent.
-	//      Vehicles, infantry, and any other unit running movement should
-	//      not carve their pose-at-bake-time into the static fog grid.
-	// `QP.AddIgnoredActor` ignores every primitive on the actor (skeletal
-	// meshes, collision capsules, brush components — the lot), so the bake
-	// trace passes through cleanly regardless of how the BP is composed.
-	int32 NumIgnoredActors = 0;
-	for (TActorIterator<ASeinActor> It(World); It; ++It)
-	{
-		ASeinActor* SeinActor = *It;
-		if (!SeinActor) continue;
-
-		bool bSkip = false;
-
-		// Hard-override: FSeinExtentsComponent::bBakesIntoFogOfWar in the
-		// entity bridge's ComponentData. ArchetypeDefinition fallback is gone (excised in Phase-5).
-		if (const USeinEntityComponent* Bridge = SeinActor->FindComponentByClass<USeinEntityComponent>())
-		{
-			if (const FSeinExtentsComponent* Extents = Bridge->FindAuthoredData<FSeinExtentsComponent>())
-			{
-				if (!Extents->bBakesIntoFogOfWar)
-				{
-					bSkip = true;
-				}
-			}
-		}
-
-		// Mobile heuristic — see SeinNavigationAStar for the rationale.
-		// Any FSeinMovementComponent authored in the entity bridge's
-		// ComponentData array means the actor is movement-driven and its
-		// at-bake pose is irrelevant.
-		if (!bSkip)
-		{
-			if (const USeinEntityComponent* Bridge = SeinActor->FindComponentByClass<USeinEntityComponent>())
-			{
-				for (const FInstancedStruct& Entry : Bridge->ComponentData)
-				{
-					if (Entry.GetScriptStruct() == FSeinMovementComponent::StaticStruct())
-					{
-						bSkip = true;
-						break;
-					}
-				}
-			}
-		}
-
-		if (bSkip)
-		{
-			QP.AddIgnoredActor(SeinActor);
-			++NumIgnoredActors;
-		}
-	}
-	UE_LOG(LogSeinFogOfWar, Log,
-		TEXT("Bake: ignoring %d SeinActor(s) (mobile + bBakesIntoFogOfWar=false)"),
-		NumIgnoredActors);
-
-	// Cell-footprint box shape for the top trace. Half-extents (cellHalf,
-	// cellHalf, 1cm). Using a box sweep here — not a line trace — so thin
-	// walls / hedgerows / fences that don't intersect the cell center still
-	// register as the cell's top surface. A line trace would miss them
-	// entirely, leaving thin blockers invisible to LOS.
-	const FCollisionShape CellBox = FCollisionShape::MakeBox(
-		FVector(CellSizeF * 0.5f, CellSizeF * 0.5f, 1.0f));
-
-	int32 BakeGroundHits = 0;
-	int32 BakeBlockerHits = 0;
-	int32 BakeMisses = 0;
-	int32 Processed = 0;
-
-	for (int32 Y = 0; Y < GridH; ++Y)
-	{
-		for (int32 X = 0; X < GridW; ++X)
-		{
-			if (bCancelRequested)
-			{
-				UE_LOG(LogSeinFogOfWar, Warning, TEXT("Bake cancelled by user"));
-				OutAsset = nullptr;
-				return false;
-			}
-
-			const float CX = OriginWorld.X + (X + 0.5f) * CellSizeF;
-			const float CY = OriginWorld.Y + (Y + 0.5f) * CellSizeF;
-			const FVector Start(CX, CY, TopZ);
-			const FVector End  (CX, CY, BottomZ);
-
-			FSeinFogOfWarCell& Cell = Cells[Y * GridW + X];
-
-			// Trace 1: box sweep for the topmost opaque surface anywhere in
-			// this cell's footprint (catches thin blockers).
-			FHitResult TopHit;
-			if (!World->SweepSingleByChannel(TopHit, Start, End, FQuat::Identity, BakeTraceChannel, CellBox, QP))
-			{
-				// No geometry at all — no ground, no blocker. GroundHeight
-				// defaults to the volume's bottom (quantized 0).
-				Cell.GroundHeight = 0;
-				Cell.BlockerHeight = 0;
-				Cell.BlockerLayerMask = 0;
-				++BakeMisses;
-			}
-			else
-			{
-				const float TopHitZ = TopHit.ImpactPoint.Z;
-				float GroundZ = TopHitZ;
-				float BlockerRelZ = 0.0f;
-
-				if (bBakeStaticBlockers)
-				{
-					// Trace 2: from the top hit downward, ignoring the top
-					// actor, for the ground beneath. If we miss, the top hit
-					// IS the ground (simple terrain). If we hit, the gap is
-					// a static blocker above the ground.
-					FCollisionQueryParams QP2 = QP;
-					if (AActor* TopActor = TopHit.GetActor())
-					{
-						QP2.AddIgnoredActor(TopActor);
-					}
-
-					FHitResult GroundHit;
-					const FVector Trace2Start(CX, CY, TopHitZ - 0.1f);
-					if (World->LineTraceSingleByChannel(GroundHit, Trace2Start, End, BakeTraceChannel, QP2))
-					{
-						const float GroundHitZ = GroundHit.ImpactPoint.Z;
-						const float Gap = TopHitZ - GroundHitZ;
-						if (Gap >= StaticBlockerMinHeight)
-						{
-							GroundZ = GroundHitZ;
-							BlockerRelZ = Gap;
-							++BakeBlockerHits;
-						}
-						// else: top hit is walkable (terrain noise gap is negligible)
-					}
-				}
-				// else: static blocker pass disabled — the top hit is whatever
-				// stands at the top of this cell and we treat it as ground;
-				// no blocker contribution. All sight occlusion from this point
-				// on comes from runtime USeinExtentsComponent (bBlocksFogOfWar) overlays.
-
-				// Quantize. Ground stored relative to MinHeight; Blocker
-				// stored as height above Ground (both uint8).
-				const float GroundStepsF = (GroundZ - OriginWorld.Z) / QuantumF;
-				const float BlockerStepsF = BlockerRelZ / QuantumF;
-				Cell.GroundHeight = (uint8)FMath::Clamp(FMath::RoundToInt(GroundStepsF), 0, 255);
-				Cell.BlockerHeight = (uint8)FMath::Clamp(FMath::RoundToInt(BlockerStepsF), 0, 255);
-				Cell.BlockerLayerMask = (BlockerRelZ >= StaticBlockerMinHeight) ? SEIN_FOW_MASK_VISIBLE : 0;
-				++BakeGroundHits;
-			}
-
-			++Processed;
-#if WITH_EDITOR
-			if ((Processed & 255) == 0)
-			{
-				Task.EnterProgressFrame(256.0f);
-				if (Task.ShouldCancel())
-				{
-					bCancelRequested = true;
-				}
-			}
-#endif
-		}
-	}
-
-	UE_LOG(LogSeinFogOfWar, Log,
-		TEXT("Bake stats: %dx%d=%d cells — ground=%d blockers=%d no_hit=%d"),
-		GridW, GridH, GridW * GridH, BakeGroundHits, BakeBlockerHits, BakeMisses);
-
-	// Decompose the working cell array into the asset's flat parallel uint8 arrays
-	// (struct-of-arrays). uint8 inners bulk-serialize (one memcpy each); a
-	// TArray<FStruct> writes a property tag per cell (~7x bloat). Quantization
-	// params (MinHeight/HeightQuantum) are already stored on the asset above.
-	{
-		const int32 NumCellsOut = GridW * GridH;
-		OutAsset->GroundHeight.SetNumUninitialized(NumCellsOut);
-		OutAsset->BlockerHeight.SetNumUninitialized(NumCellsOut);
-		OutAsset->BlockerLayerMask.SetNumUninitialized(NumCellsOut);
-		for (int32 i = 0; i < NumCellsOut; ++i)
-		{
-			OutAsset->GroundHeight[i]     = Cells[i].GroundHeight;
-			OutAsset->BlockerHeight[i]    = Cells[i].BlockerHeight;
-			OutAsset->BlockerLayerMask[i] = Cells[i].BlockerLayerMask;
-		}
-	}
-
-#if WITH_EDITOR
-	if (!SaveAssetToDisk(OutAsset))
-	{
-		UE_LOG(LogSeinFogOfWar, Warning, TEXT("Bake: failed to save asset to disk"));
-		// Asset still usable in-memory this session.
-	}
-#endif
-
-	return true;
-}
 
 // ============================================================================
 // Unified level-data layer provider (CP1.1; Decisions D12/D13/D17)
@@ -399,7 +62,7 @@ void USeinFogOfWarDefault::BakeLayer(const USeinLevelData& Substrate, UWorld* Wo
 	const float OriginZF = OriginFP.Z.ToFloat();
 
 	// Fog config comes from the level volumes (first volume wins — the legacy
-	// ASeinFogOfWarVolume convention); their union also gives the sweep ceiling
+	// fog-volume convention); their union also gives the sweep ceiling
 	// + the quantization range, exactly like the legacy fog bake.
 	TArray<ASeinLevelVolume*> Volumes;
 	FBox UnionBounds(ForceInit);
@@ -618,7 +281,9 @@ bool USeinFogOfWarDefault::LoadFromSubstrate(const USeinLevelData& Substrate)
 	SourceStates.Empty();
 	LastDynamicBlockerHash = 0;
 
-	// Dequantize — same absolute-world-Z convention as ApplyAssetData.
+	// Dequantize. Runtime stores ABSOLUTE world Z for both (Ground = MinHeight
+	// + Q·steps; Blocker = Ground + Q·steps) so shadowcast's lampshade test is
+	// a straight world-Z compare.
 	for (int32 Idx = 0; Idx < NumCells; ++Idx)
 	{
 		const FFixedPoint GroundZ = MinH + Quantum * FFixedPoint::FromInt(GroundIn[Idx]);
@@ -633,146 +298,6 @@ bool USeinFogOfWarDefault::LoadFromSubstrate(const USeinLevelData& Substrate)
 	return true;
 }
 
-#if WITH_EDITOR
-USeinFogOfWarDefaultAsset* USeinFogOfWarDefault::CreateOrLoadAsset(UWorld* World, const FString& AssetName) const
-{
-	// Resolve save folder from plugin settings. Default `/Game/FogOfWarData`
-	// only when the path is empty or clearly not a content-mount path. UE
-	// content mounts include `/Game/` (project), `/Engine/` (engine), and
-	// any plugin name (e.g. `/SeinARTSFramework/...` for assets under this
-	// plugin's `Content/`). Accept anything starting with `/` — the content
-	// browser picker enforces valid mount points; the loosened check just
-	// avoids double-validating something UE already validated.
-	//
-	// Strip any trailing slash so the join below produces a clean
-	// `<folder>/<asset>` path regardless of how the picker formatted things.
-	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
-	FString SaveFolder = (Settings ? Settings->FogOfWarDataSaveFolder.Path : FString());
-	if (SaveFolder.IsEmpty() || !SaveFolder.StartsWith(TEXT("/")))
-	{
-		SaveFolder = TEXT("/Game/FogOfWarData");
-	}
-	while (SaveFolder.EndsWith(TEXT("/"))) SaveFolder.LeftChopInline(1);
-
-	const FString PackagePath = FString::Printf(TEXT("%s/%s"), *SaveFolder, *AssetName);
-	UPackage* Package = CreatePackage(*PackagePath);
-	if (!Package) return nullptr;
-
-	USeinFogOfWarDefaultAsset* Existing = FindObject<USeinFogOfWarDefaultAsset>(Package, *AssetName);
-	if (Existing) return Existing;
-
-	USeinFogOfWarDefaultAsset* Asset = NewObject<USeinFogOfWarDefaultAsset>(
-		Package, USeinFogOfWarDefaultAsset::StaticClass(), FName(*AssetName),
-		RF_Public | RF_Standalone);
-	FAssetRegistryModule::AssetCreated(Asset);
-	return Asset;
-}
-
-bool USeinFogOfWarDefault::SaveAssetToDisk(USeinFogOfWarDefaultAsset* Asset) const
-{
-	if (!Asset) return false;
-	UPackage* Pkg = Asset->GetOutermost();
-	if (!Pkg) return false;
-
-	Pkg->MarkPackageDirty();
-
-	const FString Filename = FPackageName::LongPackageNameToFilename(
-		Pkg->GetName(), FPackageName::GetAssetPackageExtension());
-
-	FSavePackageArgs Args;
-	Args.TopLevelFlags = RF_Public | RF_Standalone;
-	Args.SaveFlags = SAVE_None;
-	Args.Error = GError;
-	return UPackage::SavePackage(Pkg, Asset, *Filename, Args);
-}
-#endif
-
-// ============================================================================
-// Load
-// ============================================================================
-
-void USeinFogOfWarDefault::LoadFromAsset(USeinFogOfWarAsset* Asset)
-{
-	Super::LoadFromAsset(Asset);
-	if (const USeinFogOfWarDefaultAsset* Concrete = Cast<USeinFogOfWarDefaultAsset>(Asset))
-	{
-		ApplyAssetData(Concrete);
-	}
-	else
-	{
-		Width = 0;
-		Height = 0;
-		GroundHeight.Reset();
-		BlockerHeight.Reset();
-		BlockerLayerMask.Reset();
-		DynamicBlockerHeight.Reset();
-		DynamicBlockerLayerMask.Reset();
-		VisionGroups.Empty();
-		SourceStates.Empty();
-		LastDynamicBlockerHash = 0;
-	}
-	OnFogOfWarMutated.Broadcast();
-}
-
-void USeinFogOfWarDefault::ApplyAssetData(const USeinFogOfWarDefaultAsset* Asset)
-{
-	if (!Asset)
-	{
-		Width = 0;
-		Height = 0;
-		return;
-	}
-
-	Width = Asset->Width;
-	Height = Asset->Height;
-	CellSize = Asset->CellSize;
-	Origin = Asset->Origin;
-
-	const int32 NumCells = Width * Height;
-
-	// Validate the flat arrays against the grid. An OLD-format asset (pre-SoA, when
-	// this stored a single TArray<FSeinFogOfWarCell> Cells) loads with these empty →
-	// mismatch → clear + warn so the user re-bakes, instead of reading garbage.
-	if (NumCells <= 0 || Asset->GroundHeight.Num() != NumCells
-		|| Asset->BlockerHeight.Num() != NumCells || Asset->BlockerLayerMask.Num() != NumCells)
-	{
-		UE_LOG(LogSeinFogOfWar, Warning,
-			TEXT("ApplyAssetData: cell arrays (%d/%d/%d) don't match %dx%d=%d — clearing (re-bake needed)."),
-			Asset->GroundHeight.Num(), Asset->BlockerHeight.Num(), Asset->BlockerLayerMask.Num(), Width, Height, NumCells);
-		Width = 0;
-		Height = 0;
-		GroundHeight.Reset();
-		BlockerHeight.Reset();
-		BlockerLayerMask.Reset();
-		return;
-	}
-
-	GroundHeight.SetNumUninitialized(NumCells);
-	BlockerHeight.SetNumUninitialized(NumCells);
-	BlockerLayerMask.SetNumUninitialized(NumCells);
-	DynamicBlockerHeight.SetNumZeroed(NumCells);
-	DynamicBlockerLayerMask.SetNumZeroed(NumCells);
-	VisionGroups.Empty(); // per-player state recreates lazily on next stamp
-	SourceStates.Empty();
-	LastDynamicBlockerHash = 0;
-
-	// Dequantize uint8 heights → FFixedPoint. Runtime stores ABSOLUTE world Z
-	// for both (Ground = MinHeight + Q·steps; Blocker = Ground + Q·steps) so
-	// shadowcast's lampshade test is a straight world-Z compare.
-	const FFixedPoint MinH = Asset->MinHeight;
-	const FFixedPoint Q = Asset->HeightQuantum;
-	for (int32 Idx = 0; Idx < NumCells; ++Idx)
-	{
-		const uint8 GroundQ  = Asset->GroundHeight[Idx];
-		const uint8 BlockerQ = Asset->BlockerHeight[Idx];
-		const FFixedPoint GroundZ = MinH + Q * FFixedPoint::FromInt(GroundQ);
-		const FFixedPoint BlockerRelZ = Q * FFixedPoint::FromInt(BlockerQ);
-		GroundHeight[Idx] = GroundZ;
-		BlockerHeight[Idx] = (BlockerQ > 0) ? (GroundZ + BlockerRelZ) : FFixedPoint::Zero;
-		BlockerLayerMask[Idx] = Asset->BlockerLayerMask[Idx];
-	}
-}
-
 // ============================================================================
 // Init (no bake fallback)
 // ============================================================================
@@ -781,16 +306,18 @@ void USeinFogOfWarDefault::InitGridFromVolumes(UWorld* World)
 {
 	if (!World) return;
 
-	// Union all fog volume bounds (using editor-baked PlacedBounds — never
-	// FromFloat at runtime), pick min cell size.
+	// Union all level volume bounds (using editor-baked PlacedBounds — never
+	// FromFloat at runtime). Fog cell size resolves from the first volume
+	// (GetResolvedVisionCellSize — same first-volume-wins convention BakeLayer
+	// uses).
 	FFixedVector UnionMin(FFixedPoint::FromInt(INT32_MAX), FFixedPoint::FromInt(INT32_MAX), FFixedPoint::FromInt(INT32_MAX));
 	FFixedVector UnionMax(FFixedPoint::FromInt(INT32_MIN), FFixedPoint::FromInt(INT32_MIN), FFixedPoint::FromInt(INT32_MIN));
-	FFixedPoint MinCellSize = FFixedPoint::Zero;
+	FFixedPoint ResolvedCellSize = FFixedPoint::Zero;
 	int32 VolumeCount = 0;
 	bool bAnyUnbaked = false;
-	for (TActorIterator<ASeinFogOfWarVolume> It(World); It; ++It)
+	for (TActorIterator<ASeinLevelVolume> It(World); It; ++It)
 	{
-		ASeinFogOfWarVolume* Vol = *It;
+		ASeinLevelVolume* Vol = *It;
 		if (!Vol) continue;
 
 		// Snapshot guard: legacy actors fall back to runtime FromFloat
@@ -818,10 +345,9 @@ void USeinFogOfWarDefault::InitGridFromVolumes(UWorld* World)
 		if (VMax.Y > UnionMax.Y) UnionMax.Y = VMax.Y;
 		if (VMax.Z > UnionMax.Z) UnionMax.Z = VMax.Z;
 
-		const FFixedPoint VolCellSize = Vol->GetResolvedCellSize();
-		if (VolumeCount == 0 || VolCellSize < MinCellSize)
+		if (VolumeCount == 0)
 		{
-			MinCellSize = VolCellSize;
+			ResolvedCellSize = Vol->GetResolvedVisionCellSize();
 		}
 		++VolumeCount;
 	}
@@ -834,14 +360,14 @@ void USeinFogOfWarDefault::InitGridFromVolumes(UWorld* World)
 	if (bAnyUnbaked)
 	{
 		UE_LOG(LogSeinFogOfWar, Warning,
-			TEXT("InitGridFromVolumes: one or more fog volumes have stale "
+			TEXT("InitGridFromVolumes: one or more level volumes have stale "
 				 "PlacedBounds (bBoundsBaked == false). Re-save the level to "
 				 "bake snapshots. NOT cross-arch deterministic until then."));
 	}
 
-	CellSize = MinCellSize;
+	CellSize = ResolvedCellSize;
 	Origin = UnionMin;
-	const float CellSizeF = MinCellSize.ToFloat();
+	const float CellSizeF = ResolvedCellSize.ToFloat();
 	const float SizeXF = (UnionMax.X - UnionMin.X).ToFloat();
 	const float SizeYF = (UnionMax.Y - UnionMin.Y).ToFloat();
 	Width = FMath::Max(1, FMath::CeilToInt(SizeXF / CellSizeF));
@@ -871,10 +397,10 @@ void USeinFogOfWarDefault::InitGridFromVolumes(UWorld* World)
 	{
 		// No-bake fallback: grid too large to per-cell trace at load, so every
 		// cell takes a flat mid-Z. Units sit at that flat height on sloped
-		// terrain until the fog volume is baked. Loud on purpose: baking is the
+		// terrain until the level data is baked. Loud on purpose: baking is the
 		// fix (correct per-cell Z AND no load hitch).
 		UE_LOG(LogSeinFogOfWar, Warning,
-			TEXT("InitGridFromVolumes: %d cells exceeds InitTraceCellCap (%d); using FLAT fallback Z. BAKE the fog volume(s) for correct ground height and faster load."),
+			TEXT("InitGridFromVolumes: %d cells exceeds InitTraceCellCap (%d); using FLAT fallback Z. BAKE the level data for correct ground height and faster load."),
 			NumCells, InitTraceCellCap);
 	}
 

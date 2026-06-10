@@ -218,7 +218,7 @@ public:
 	 * Larger cells = coarser paths, faster bakes.
 	 *
 	 * Per-volume override available: set `bOverrideCellSize` on a
-	 * `ASeinNavVolume` to use a different cell size in that volume only.
+	 * `ASeinLevelVolume` to use a different cell size in that volume only.
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Navigation")
 	FFixedPoint CellSize;
@@ -235,33 +235,29 @@ public:
 	 *
 	 * Typical: about half the CellSize.
 	 *
-	 * Per-volume override available on `ASeinNavVolume`.
+	 * Per-volume override available on `ASeinLevelVolume`.
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Navigation")
 	FFixedPoint MaxStepHeight;
 
 	/**
-	 * **Where baked nav data assets are saved.** When you click "Bake
-	 * Navigation" on a `ASeinNavVolume`, the resulting `.uasset` (containing
-	 * cell grid, heights, connectivity, etc.) is written here as
-	 * `NavData_<LevelName>.uasset` and auto-assigned to every nav volume on
-	 * the level.
+	 * **Where baked level data assets are saved.** When you click "Bake Level
+	 * Data" on a `ASeinLevelVolume`, the resulting `.uasset` (the shared
+	 * height field + every layer's channel — nav, fog of war, …) is written
+	 * here as `LevelData_<LevelName>.uasset` and auto-assigned to every level
+	 * volume on the level.
 	 *
-	 * ELI5: "where do my baked levels go?" Default `/Game/NavData/`. Use the
+	 * ELI5: "where do my baked levels go?" Default `/Game/LevelData/`. Use the
 	 * content-browser picker to choose any folder under any content mount —
-	 * `/Game/` for project content, `/<PluginName>/` for plugin content
-	 * (e.g. `/SeinARTSFramework/Levels/Data/` to keep bakes alongside the
-	 * example levels). The framework auto-creates the folder if it doesn't
-	 * exist.
+	 * `/Game/` for project content, `/<PluginName>/` for plugin content. The
+	 * framework auto-creates the folder if it doesn't exist.
 	 *
-	 * Tuning: change this to relocate bakes (alongside level files, grouped
-	 * by region, inside a plugin's content, etc.). Existing bakes don't
-	 * auto-move when you change this; re-bake to generate fresh data at the
-	 * new path.
+	 * Baked level data is a regenerable build artifact (and gitignored by
+	 * default) — re-bake after changing this; existing bakes don't auto-move.
 	 */
-	UPROPERTY(Config, EditAnywhere, Category = "Navigation",
-		meta = (DisplayName = "Nav Data Save Folder", ContentDir))
-	FDirectoryPath NavDataSaveFolder;
+	UPROPERTY(Config, EditAnywhere, Category = "Level Data",
+		meta = (DisplayName = "Level Data Save Folder", ContentDir))
+	FDirectoryPath LevelDataSaveFolder;
 
 	/**
 	 * Designer-configurable N-layers for the agent/blocker nav layer mask.
@@ -661,33 +657,14 @@ public:
 
 	/**
 	 * Default fog-of-war grid cell edge in world units (per-volume override
-	 * supported on `ASeinFogOfWarVolume`). Independent of nav cell size — the
+	 * supported on `ASeinLevelVolume`). Independent of nav cell size — the
 	 * fog grid is typically coarser than nav because vision doesn't need
-	 * sub-meter granularity. Smaller values = crisper fog edges + higher
+	 * sub-meter granularity; at bake it snaps to an integer multiple of the
+	 * shared level-data grid. Smaller values = crisper fog edges + higher
 	 * memory; larger = cheaper stamps + chunkier edges.
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Fog Of War")
 	FFixedPoint VisionCellSize;
-
-	/**
-	 * **Where baked fog-of-war data assets are saved.** When you click
-	 * "Bake Fog Of War" on a `ASeinFogOfWarVolume`, the resulting `.uasset`
-	 * (cell grid, ground heights, static blocker stamps) is written here
-	 * as `FogOfWarData_<LevelName>.uasset` and auto-assigned to every
-	 * fog volume on the level.
-	 *
-	 * ELI5: same idea as the nav data folder, but for fog/vision bakes.
-	 * Default `/Game/FogOfWarData/`. Use the content-browser picker to
-	 * choose any folder under any content mount — `/Game/` for project
-	 * content, `/<PluginName>/` for plugin content. The framework
-	 * auto-creates the folder if it doesn't exist.
-	 *
-	 * Existing bakes don't auto-move when you change this — re-bake to
-	 * generate fresh data at the new path.
-	 */
-	UPROPERTY(Config, EditAnywhere, Category = "Fog Of War",
-		meta = (DisplayName = "Fog Of War Data Save Folder", ContentDir))
-	FDirectoryPath FogOfWarDataSaveFolder;
 
 	/**
 	 * Designer-configurable N-layers for the EVNNNNNN cell bitfield. Slot 0 →

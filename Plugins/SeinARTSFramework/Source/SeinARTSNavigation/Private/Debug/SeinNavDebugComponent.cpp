@@ -21,9 +21,9 @@
 
 #include "Debug/SeinNavDebugComponent.h"
 #include "SeinNavigation.h"
-#include "SeinNavigationAsset.h"
 #include "SeinNavigationSubsystem.h"
-#include "Volumes/SeinNavVolume.h"
+#include "Volumes/SeinLevelVolume.h"
+#include "SeinLevelDataDefaultAsset.h"
 #include "Settings/PluginSettings.h"
 
 #include "Engine/World.h"
@@ -286,70 +286,72 @@ FPrimitiveSceneProxy* USeinNavDebugComponent::CreateSceneProxy()
 	UWorld* World = GetWorld();
 	if (!World) return nullptr;
 
-	USeinNavigationSubsystem* Sub = World->GetSubsystem<USeinNavigationSubsystem>();
-	if (!Sub) return nullptr;
-
-	USeinNavigation* Nav = Sub->GetNavigation();
-	if (!Nav || !Nav->HasRuntimeData())
-	{
-		UE_LOG(LogSeinNavDebug, Verbose, TEXT("CreateSceneProxy: nav %s"),
-			!Nav ? TEXT("null") : TEXT("has no runtime data"));
-		return nullptr;
-	}
-
-	TArray<FVector> Centers;
-	TArray<FColor> Colors;
-	float HalfExtent = 0.0f;
-	Nav->CollectDebugCellQuads(Centers, Colors, HalfExtent);
-
 	TArray<FVector> Walkable;
 	TArray<FVector> Blocked;
-	Walkable.Reserve(Centers.Num());
-	for (int32 i = 0; i < Centers.Num(); ++i)
-	{
-		const FColor& C = Colors[i];
-		if (C.R > C.G) Blocked.Add(Centers[i]);
-		else Walkable.Add(Centers[i]);
-	}
-
-	// Dynamic blocker cells (overlay above static cells). Routed through the
-	// same scene proxy — folds the previously-per-frame DrawDebugSolidBox
-	// path into the batched mesh rebuild that fires on OnNavigationMutated.
-	// Per-cell colors come from the nav (resolved against plugin-settings
-	// layer colors so a Default-only blocker reads red, an N0 blocker reads
-	// N0's color, etc.) — bucketed below for efficient batched rendering.
-	TArray<FVector> BlockerCenters;
-	TArray<FColor> BlockerColors;
-	float BlockerHalfExtent = 0.0f;
-	Nav->CollectDebugBlockerCells(BlockerCenters, BlockerColors, BlockerHalfExtent);
-
 	TArray<FSeinNavBlockerBucket> BlockerBuckets;
-	if (BlockerCenters.Num() == BlockerColors.Num())
+	float HalfExtent = 0.0f;
+	float BlockerHalfExtent = 0.0f;
+
+	USeinNavigationSubsystem* Sub = World->GetSubsystem<USeinNavigationSubsystem>();
+	USeinNavigation* Nav = Sub ? Sub->GetNavigation() : nullptr;
+	if (Nav && Nav->HasRuntimeData())
 	{
-		for (int32 i = 0; i < BlockerCenters.Num(); ++i)
+		TArray<FVector> Centers;
+		TArray<FColor> Colors;
+		Nav->CollectDebugCellQuads(Centers, Colors, HalfExtent);
+
+		Walkable.Reserve(Centers.Num());
+		for (int32 i = 0; i < Centers.Num(); ++i)
 		{
-			const FColor& Col = BlockerColors[i];
-			FSeinNavBlockerBucket* Match = BlockerBuckets.FindByPredicate(
-				[&Col](const FSeinNavBlockerBucket& B) { return B.Color.ToFColor(true) == Col; });
-			if (!Match)
+			const FColor& C = Colors[i];
+			if (C.R > C.G) Blocked.Add(Centers[i]);
+			else Walkable.Add(Centers[i]);
+		}
+
+		// Dynamic blocker cells (overlay above static cells). Routed through the
+		// same scene proxy — folds the previously-per-frame DrawDebugSolidBox
+		// path into the batched mesh rebuild that fires on OnNavigationMutated.
+		// Per-cell colors come from the nav (resolved against plugin-settings
+		// layer colors so a Default-only blocker reads red, an N0 blocker reads
+		// N0's color, etc.) — bucketed below for efficient batched rendering.
+		TArray<FVector> BlockerCenters;
+		TArray<FColor> BlockerColors;
+		Nav->CollectDebugBlockerCells(BlockerCenters, BlockerColors, BlockerHalfExtent);
+
+		if (BlockerCenters.Num() == BlockerColors.Num())
+		{
+			for (int32 i = 0; i < BlockerCenters.Num(); ++i)
 			{
-				FSeinNavBlockerBucket NewBucket;
-				NewBucket.Color = FLinearColor(Col);
-				Match = &BlockerBuckets.Add_GetRef(MoveTemp(NewBucket));
+				const FColor& Col = BlockerColors[i];
+				FSeinNavBlockerBucket* Match = BlockerBuckets.FindByPredicate(
+					[&Col](const FSeinNavBlockerBucket& B) { return B.Color.ToFColor(true) == Col; });
+				if (!Match)
+				{
+					FSeinNavBlockerBucket NewBucket;
+					NewBucket.Color = FLinearColor(Col);
+					Match = &BlockerBuckets.Add_GetRef(MoveTemp(NewBucket));
+				}
+				Match->Centers.Add(BlockerCenters[i]);
 			}
-			Match->Centers.Add(BlockerCenters[i]);
 		}
 	}
-
-	if (Centers.Num() == 0 && BlockerCenters.Num() == 0)
+	else
 	{
-		UE_LOG(LogSeinNavDebug, Verbose, TEXT("CreateSceneProxy: nav returned 0 static + 0 blocker cells"));
+		// Editor-idle preview — no live nav grid (pre-PIE the subsystems don't
+		// auto-load baked level data), so read the owner volume's baked asset
+		// directly. No blocker cells: dynamic blockers only exist in a live sim.
+		CollectAssetPreviewQuads(Walkable, Blocked, HalfExtent);
+	}
+
+	if (Walkable.Num() == 0 && Blocked.Num() == 0 && BlockerBuckets.Num() == 0)
+	{
+		UE_LOG(LogSeinNavDebug, Verbose, TEXT("CreateSceneProxy: 0 static + 0 blocker cells (no live nav grid + no baked asset preview)"));
 		return nullptr;
 	}
 
 	UE_LOG(LogSeinNavDebug, Verbose,
-		TEXT("CreateSceneProxy: %d walkable + %d blocked + %d blocker cells in %d color buckets, staticHE=%.1f blockerHE=%.1f"),
-		Walkable.Num(), Blocked.Num(), BlockerCenters.Num(), BlockerBuckets.Num(), HalfExtent, BlockerHalfExtent);
+		TEXT("CreateSceneProxy: %d walkable + %d blocked cells + %d blocker color buckets, staticHE=%.1f blockerHE=%.1f"),
+		Walkable.Num(), Blocked.Num(), BlockerBuckets.Num(), HalfExtent, BlockerHalfExtent);
 
 	return new FSeinNavDebugProxy(this,
 		MoveTemp(Walkable), MoveTemp(Blocked), MoveTemp(BlockerBuckets),
@@ -371,8 +373,6 @@ void USeinNavDebugComponent::OnRegister()
 	Super::OnRegister();
 
 #if UE_ENABLE_DEBUG_DRAWING
-	EnsureNavLoaded();
-
 	UWorld* World = GetWorld();
 	if (!World) return;
 	if (USeinNavigationSubsystem* Sub = World->GetSubsystem<USeinNavigationSubsystem>())
@@ -407,21 +407,50 @@ void USeinNavDebugComponent::HandleNavMutated()
 #endif
 }
 
-void USeinNavDebugComponent::EnsureNavLoaded()
+void USeinNavDebugComponent::CollectAssetPreviewQuads(
+	TArray<FVector>& OutWalkable, TArray<FVector>& OutBlocked, float& OutHalfExtent) const
 {
 #if UE_ENABLE_DEBUG_DRAWING
-	UWorld* World = GetWorld();
-	if (!World) return;
-	USeinNavigationSubsystem* Sub = World->GetSubsystem<USeinNavigationSubsystem>();
-	if (!Sub) return;
-	USeinNavigation* Nav = Sub->GetNavigation();
-	if (!Nav || Nav->HasRuntimeData()) return;
+	const ASeinLevelVolume* Vol = Cast<ASeinLevelVolume>(GetOwner());
+	if (!Vol) return;
 
-	if (ASeinNavVolume* Vol = Cast<ASeinNavVolume>(GetOwner()))
+	const USeinLevelDataDefaultAsset* Asset = Cast<USeinLevelDataDefaultAsset>(Vol->BakedAsset.LoadSynchronous());
+	if (!Asset) return;
+
+	const int32 N = Asset->Width * Asset->Height;
+	if (N <= 0) return;
+
+	// Baked "Nav" channel layout: [CellCost: uint8 × N][CellConnections: uint8 × N].
+	// Only the cost half is read here (walkable/blocked split).
+	const FSeinLevelChannelBlock* NavBlock = Asset->Channels.FindByPredicate(
+		[](const FSeinLevelChannelBlock& B) { return B.LayerId == TEXT("Nav"); });
+	if (!NavBlock || NavBlock->Data.Num() != 2 * N) return;
+	const uint8* CellCost = NavBlock->Data.GetData();
+
+	const float CS = Asset->CellSize.ToFloat();
+	OutHalfExtent = CS * 0.5f * 0.9f; // same z-fight inset as the live nav viz
+	const float OriginX = Asset->Origin.X.ToFloat();
+	const float OriginY = Asset->Origin.Y.ToFloat();
+
+	// Shared height dequantization: world_z = HeightMin + q * HeightQuantum.
+	const bool bHasHeight = Asset->SharedHeightQ.Num() == N;
+	const float HeightMin = Asset->HeightMin.ToFloat();
+	const float HeightQuantum = Asset->HeightQuantum.ToFloat();
+	const float FallbackZ = Asset->Origin.Z.ToFloat();
+
+	OutWalkable.Reserve(N);
+	for (int32 Y = 0; Y < Asset->Height; ++Y)
 	{
-		if (USeinNavigationAsset* Asset = Vol->BakedAsset.LoadSynchronous())
+		for (int32 X = 0; X < Asset->Width; ++X)
 		{
-			Nav->LoadFromAsset(Asset);
+			const int32 I = Y * Asset->Width + X;
+			const uint8 C = CellCost[I];
+			const bool bWalkable = C > 0 && C < 255; // 0 / 255 = blocked
+			const float CellZ = bHasHeight ? HeightMin + Asset->SharedHeightQ[I] * HeightQuantum : FallbackZ;
+			(bWalkable ? OutWalkable : OutBlocked).Emplace(
+				OriginX + (X + 0.5f) * CS,
+				OriginY + (Y + 0.5f) * CS,
+				CellZ + 2.0f);
 		}
 	}
 #endif

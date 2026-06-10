@@ -4,7 +4,6 @@
  */
 
 #include "SeinFogOfWar.h"
-#include "SeinFogOfWarAsset.h"
 #include "SeinFogOfWarTypes.h"
 #include "Components/SeinVisionComponent.h"
 #include "Components/SeinFogVisibilityComponent.h"
@@ -16,11 +15,6 @@
 #include "Types/Entity.h"
 
 #include "Engine/World.h"
-
-TSubclassOf<USeinFogOfWarAsset> USeinFogOfWar::GetAssetClass() const
-{
-	return USeinFogOfWarAsset::StaticClass();
-}
 
 uint8 USeinFogOfWar::GetEntityVisibleBits(FSeinPlayerID Observer,
 	USeinWorldSubsystem& Sim, FSeinEntityHandle Target) const

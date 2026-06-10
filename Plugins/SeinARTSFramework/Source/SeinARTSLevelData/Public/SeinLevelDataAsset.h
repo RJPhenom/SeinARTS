@@ -6,9 +6,9 @@
  *          Concrete substrates produce their own subclass (e.g. USeinLevelDataDefaultAsset)
  *          holding the channel-extensible per-cell data — shared height + in-bounds mask +
  *          per-layer channel blocks tagged by layer + resolution (planning/Decisions.md D15).
- *          Mirrors USeinNavigationAsset / USeinFogOfWarAsset: a minimal polymorphic anchor.
- *          ASeinLevelVolume holds a `TObjectPtr<USeinLevelDataAsset>`; the substrate loads
- *          from it. Keeping the base minimal lets the format stay impl-specific + extensible.
+ *          A minimal polymorphic anchor. ASeinLevelVolume holds a soft reference to one;
+ *          the substrate loads from it. Keeping the base minimal lets the format stay
+ *          impl-specific + extensible.
  */
 
 #pragma once

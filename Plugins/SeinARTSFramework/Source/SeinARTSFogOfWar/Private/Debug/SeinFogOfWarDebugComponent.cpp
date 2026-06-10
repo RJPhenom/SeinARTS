@@ -24,11 +24,13 @@
 
 #include "Debug/SeinFogOfWarDebugComponent.h"
 #include "SeinFogOfWar.h"
-#include "SeinFogOfWarAsset.h"
 #include "SeinFogOfWarSubsystem.h"
 #include "SeinFogOfWarTypes.h"
 #include "SeinARTSFogOfWarModule.h"
-#include "Volumes/SeinFogOfWarVolume.h"
+#include "SeinLevelData.h"
+#include "SeinLevelDataAsset.h"
+#include "SeinLevelDataSubsystem.h"
+#include "Volumes/SeinLevelVolume.h"
 #include "Core/SeinPlayerID.h"
 #include "Settings/PluginSettings.h"
 
@@ -88,7 +90,7 @@ namespace
 
 	static void RasterizeVolumeCells(
 		UWorld* World,
-		const ASeinFogOfWarVolume* Volume,
+		const ASeinLevelVolume* Volume,
 		TArray<FVector>& OutCenters,
 		float& OutHalfExtent)
 	{
@@ -98,8 +100,8 @@ namespace
 		if (!Bounds.IsValid || Bounds.GetSize().IsNearlyZero()) return;
 
 		// Render-side path: pulled to float here, no determinism concern —
-		// debug viz only.
-		const float CellSize = Volume->GetResolvedCellSize().ToFloat();
+		// debug viz only. Fog renders at its own (coarser) resolution.
+		const float CellSize = Volume->GetResolvedVisionCellSize().ToFloat();
 		if (CellSize <= 0.0f) return;
 
 		const int32 Width  = FMath::Max(1, FMath::CeilToInt(Bounds.GetSize().X / CellSize));
@@ -386,7 +388,7 @@ FPrimitiveSceneProxy* USeinFogOfWarDebugComponent::CreateSceneProxy()
 	UWorld* World = GetWorld();
 	if (!World) return nullptr;
 
-	ASeinFogOfWarVolume* Volume = Cast<ASeinFogOfWarVolume>(GetOwner());
+	ASeinLevelVolume* Volume = Cast<ASeinLevelVolume>(GetOwner());
 	if (!Volume) return nullptr;
 
 	TArray<FVector> AllCenters;
@@ -425,7 +427,7 @@ FPrimitiveSceneProxy* USeinFogOfWarDebugComponent::CreateSceneProxy()
 		// bounds + resolved cell size — actually change, instead of on every
 		// proxy rebuild (re-register / undo / fog-mutation). See CachedFallback*.
 		const FBox CurBounds = Volume->GetVolumeWorldBounds();
-		const float CurCellSize = Volume->GetResolvedCellSize().ToFloat();
+		const float CurCellSize = Volume->GetResolvedVisionCellSize().ToFloat();
 		if (bHasFallbackCache
 			&& CurCellSize == CachedFallbackCellSize
 			&& CurBounds.Min.Equals(CachedFallbackBounds.Min)
@@ -531,12 +533,23 @@ void USeinFogOfWarDebugComponent::EnsureFogLoaded()
 	USeinFogOfWar* Fog = Sub->GetFogOfWar();
 	if (!Fog || Fog->HasRuntimeData()) return;
 
-	if (ASeinFogOfWarVolume* Vol = Cast<ASeinFogOfWarVolume>(GetOwner()))
+	// Editor-idle path: the level-data subsystem only loads at begin-play, which
+	// editor worlds never reach — pull the owner volume's baked asset into the
+	// SUBSTRATE here, then adopt its FogOfWar channel. The substrate's mutation
+	// broadcast also lets the other layers (nav) adopt from this same load.
+	USeinLevelData* Substrate = USeinLevelDataSubsystem::GetLevelDataForWorld(World);
+	if (!Substrate) return;
+	if (!Substrate->HasRuntimeData())
 	{
-		if (USeinFogOfWarAsset* Asset = Vol->BakedAsset.LoadSynchronous())
-		{
-			Fog->LoadFromAsset(Asset);
-		}
+		ASeinLevelVolume* Vol = Cast<ASeinLevelVolume>(GetOwner());
+		if (!Vol) return;
+		USeinLevelDataAsset* Asset = Vol->BakedAsset.LoadSynchronous();
+		if (!Asset) return;
+		Substrate->LoadFromAsset(Asset); // broadcasts OnLevelDataMutated → subsystems adopt
+	}
+	if (!Fog->HasRuntimeData())
+	{
+		Fog->LoadFromSubstrate(*Substrate); // direct adopt in case no subscription fired
 	}
 #endif
 }

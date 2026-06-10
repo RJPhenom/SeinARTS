@@ -3,17 +3,20 @@
  * @file    SeinFogOfWarDebugComponent.h
  * @brief   Scene-proxy-backed debug viz for the active USeinFogOfWar.
  *
- *          Attached to ASeinFogOfWarVolume in the actor's constructor.
- *          Proxy emits one batched mesh of red cell quads gated by the
- *          custom `ShowFlags.FogOfWar` (registered by the module; toggled
- *          by `Sein.FogOfWar.Show`). Non-PIE path rasterizes the
- *          owner volume's bounds into cells at the volume's resolved cell
- *          size so designers get immediate viz without needing a bake.
+ *          Hosted on ASeinLevelVolume — the FoW module registers this class
+ *          via `ASeinLevelVolume::RegisterDebugComponentClass` at module
+ *          startup and the volume attaches a transient instance. Proxy emits
+ *          one batched mesh of cell quads gated by the custom
+ *          `ShowFlags.FogOfWar` (registered by the module; toggled by
+ *          `Sein.FogOfWar.Show`). Non-PIE path parses the owning volume's
+ *          baked "FogOfWar" level-data channel (real grid + blockers); when
+ *          no bake exists it rasterizes the volume's bounds into cells at the
+ *          volume's resolved vision cell size so designers get immediate viz.
  *
- *          Subscribes to `USeinFogOfWar::OnFogOfWarMutated` — bake / asset
- *          swap / dynamic blocker change triggers `MarkRenderStateDirty`,
- *          forcing UE to rebuild the proxy with fresh cell data. Mirrors
- *          `USeinNavDebugComponent`'s behavior.
+ *          Subscribes to `USeinFogOfWar::OnFogOfWarMutated` — bake /
+ *          substrate adoption / dynamic blocker change triggers
+ *          `MarkRenderStateDirty`, forcing UE to rebuild the proxy with
+ *          fresh cell data. Mirrors `USeinNavDebugComponent`'s behavior.
  */
 
 #pragma once

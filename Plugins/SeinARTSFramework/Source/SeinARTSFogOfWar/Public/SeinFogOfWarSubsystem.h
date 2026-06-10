@@ -5,7 +5,9 @@
  *
  *          Reads `USeinARTSCoreSettings::FogOfWarClass` on Initialize, new's
  *          up that class, and re-exposes it to the rest of the engine (reader
- *          BPFL, cross-module LOS delegate bind, editor bake button).
+ *          BPFL, cross-module LOS delegate bind). Registers the fog as the
+ *          "FogOfWar" layer provider on the unified level-data substrate and
+ *          adopts the baked channel at begin-play.
  *
  *          The subsystem does NOT know what a "grid" or "shadowcast" is — it
  *          only knows a USeinFogOfWar exists. All vision semantics live on
@@ -19,7 +21,6 @@
 #include "SeinFogOfWarSubsystem.generated.h"
 
 class USeinFogOfWar;
-class USeinFogOfWarAsset;
 class USeinLevelData;
 
 UCLASS()
@@ -40,16 +41,6 @@ public:
 	 *  UObject-with-world. Returns null if the world has no fog subsystem. */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Fog Of War", meta = (WorldContext = "WorldContextObject"))
 	static USeinFogOfWar* GetFogOfWarForWorld(const UObject* WorldContextObject);
-
-	/** Kick off a bake for every ASeinFogOfWarVolume in `World`. Returns
-	 *  true if the bake started. Routes to `FoW->BeginBake(World)`. */
-	static bool BeginBake(UWorld* World);
-
-	/** Returns true if the active fog in `World` is currently baking. */
-	static bool IsBaking(UWorld* World);
-
-	/** Request bake cancellation for `World`'s active fog. */
-	static void RequestCancelBake(UWorld* World);
 
 private:
 
@@ -72,8 +63,8 @@ private:
 	 *  Deinitialize. */
 	FDelegateHandle LevelDataMutatedHandle;
 
-	/** Called in OnWorldBeginPlay — scans fog volumes for a baked asset and
-	 *  hands it to the fog impl. Idempotent. */
+	/** Called in OnWorldBeginPlay — adopts the unified level-data substrate's
+	 *  baked "FogOfWar" channel into the fog impl (when present). Idempotent. */
 	void LoadBakedAssetIntoFogOfWar(UWorld& World);
 
 	/** Re-adopt the shared substrate's fog channel when it rebakes / reloads
@@ -81,9 +72,9 @@ private:
 	 *  doesn't read the substrate or the substrate has no fog data. */
 	void OnLevelDataChanged();
 
-	/** If no baked asset loaded, let the fog impl auto-size its grid from
-	 *  the level's ASeinFogOfWarVolumes so stamping + debug viz work before
-	 *  the bake pipeline lands. */
+	/** If no baked data loaded, let the fog impl auto-size its grid from
+	 *  the level's ASeinLevelVolumes so stamping + debug viz work before
+	 *  the level has been baked. */
 	void InitGridIfUnbaked(UWorld& World);
 
 	/** Binds `OnSimTickCompleted` so stamps recompute on the sim-tick clock

@@ -2,9 +2,13 @@
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinNavigationAStar.h
  * @brief   Reference implementation of USeinNavigation — single-layer 2D grid
- *          baked from downward line-traces, with synchronous A* pathfinding and
- *          line-of-sight path smoothing. Minimal on purpose; serves as the
- *          default nav plus an example for custom subclasses.
+ *          with synchronous A* pathfinding and line-of-sight path smoothing.
+ *          Participates in the unified level-data bake (SeinARTSLevelData) as
+ *          the "Nav" layer provider: BakeLayer reproduces per-cell cost +
+ *          connectivity from the shared substrate surface data, and the runtime
+ *          grid loads from the baked channel via LoadFromSubstrate. Minimal on
+ *          purpose; serves as the default nav plus an example for custom
+ *          subclasses.
  */
 
 #pragma once
@@ -17,7 +21,6 @@
 #include "SeinNavigationAStar.generated.h"
 
 class UWorld;
-class USeinNavigationAStarAsset;
 class USeinLevelData;
 
 UCLASS(BlueprintType, meta = (DisplayName = "Sein Nav (A*)"))
@@ -37,9 +40,9 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Bake", meta = (ClampMin = "0.0", ClampMax = "89.0"))
 	float MaxWalkableSlopeDegrees = 45.0f;
 
-	/** Vertical extent (world units) above the tallest NavVolume that the bake
-	 *  traces start from. Bump this if your walkable surfaces sit near the top
-	 *  of the volume and you want a margin. */
+	/** Vertical extent (world units) above the tallest Sein Level Volume that
+	 *  the bake traces start from. Bump this if your walkable surfaces sit near
+	 *  the top of the volume and you want a margin. */
 	UPROPERTY(EditAnywhere, Category = "Bake", meta = (ClampMin = "0.0"))
 	float BakeTraceHeadroom = 200.0f;
 
@@ -64,12 +67,6 @@ public:
 	// USeinNavigation overrides
 	// ----------------------------------------------------------------------
 
-	virtual TSubclassOf<USeinNavigationAsset> GetAssetClass() const override;
-	virtual bool BeginBake(UWorld* World) override;
-	virtual bool IsBaking() const override { return bBaking; }
-	virtual void RequestCancelBake() override { bCancelRequested = true; }
-
-	virtual void LoadFromAsset(USeinNavigationAsset* Asset) override;
 	virtual bool HasRuntimeData() const override { return CellCost.Num() > 0; }
 
 	virtual bool FindPath(const FSeinPathRequest& Request, FSeinPath& OutPath) const override;
@@ -86,15 +83,15 @@ public:
 	// ISeinLevelLayerProvider (CP1.1 nav port) — nav contributes a "Nav" channel
 	// (per-cell Cost + Connections) to the unified level-data bake, reproduced
 	// from the shared substrate surface data + nav's own connectivity midpoint
-	// traces. Its runtime reads this channel + the shared height instead of its
-	// own asset; pathing logic stays unchanged.
+	// traces. Its runtime reads this channel + the shared height; pathing logic
+	// stays unchanged.
 	// ----------------------------------------------------------------------
 	virtual FName GetLayerId() const override;
 	virtual void BakeLayer(const USeinLevelData& Substrate, UWorld* World, TArray<uint8>& OutData) override;
 
 	// Unified-pipeline participation (CP1.1): this nav IS a layer provider, and at
-	// runtime loads its grid from the baked "Nav" channel + shared height instead of
-	// its own asset whenever the substrate carries data (dual-path; see subsystem).
+	// runtime loads its grid from the baked "Nav" channel + shared height whenever
+	// the substrate carries data (the only baked-data path; see subsystem).
 	virtual ISeinLevelLayerProvider* GetLevelDataProvider() override { return this; }
 	virtual bool LoadFromSubstrate(const USeinLevelData& Substrate) override;
 
@@ -152,7 +149,7 @@ protected:
 		int32 WallPaddingCells) const;
 
 	// ----------------------------------------------------------------------
-	// Runtime grid (populated by LoadFromAsset / bake)
+	// Runtime grid (populated by LoadFromSubstrate)
 	// ----------------------------------------------------------------------
 	int32 Width = 0;
 	int32 Height = 0;
@@ -173,7 +170,7 @@ protected:
 	TArray<uint8> CellConnections;
 
 	/** Per-cell Chebyshev distance to the nearest blocked cell, computed at
-	 *  LoadFromAsset time via multi-source BFS. Values clamp to
+	 *  grid-load time via multi-source BFS. Values clamp to
 	 *  [0, WallDistanceCap] — 0 = blocked cell itself, 1 = adjacent to wall,
 	 *  WallDistanceCap = "no nearby walls within scan radius."
 	 *
@@ -189,8 +186,8 @@ protected:
 	 *  side of the bicycle U-turn arc has more breathing room).
 	 *
 	 *  Runtime-only — derived from CellCost at load time, not serialized to
-	 *  the asset. Recomputed whenever the grid changes (load / bake / asset
-	 *  swap). */
+	 *  the baked data. Recomputed whenever the grid changes (substrate load /
+	 *  rebake). */
 	TArray<uint8> WallDistance;
 
 	/** Runtime list of dynamic blockers, refreshed each PreTick by the
@@ -306,12 +303,6 @@ protected:
 	 *  capacity that previous calls grew to — saves the realloc-from-128
 	 *  pattern when consecutive searches both expand to thousands of nodes. */
 	mutable TArray<FAStarNode> Open;
-
-	// ----------------------------------------------------------------------
-	// Bake state
-	// ----------------------------------------------------------------------
-	bool bBaking = false;
-	bool bCancelRequested = false;
 
 	// ----------------------------------------------------------------------
 	// Grid helpers
@@ -448,17 +439,6 @@ protected:
 	static constexpr uint8 WallDistanceCap = 64;
 
 	/** Recompute WallDistance via multi-source BFS from all blocked cells.
-	 *  Run once at LoadFromAsset; not a hot path. */
+	 *  Run once at LoadFromSubstrate; not a hot path. */
 	void RebuildWallDistanceField();
-
-	// ----------------------------------------------------------------------
-	// Bake pipeline (synchronous, editor-blocking slow-task progress)
-	// ----------------------------------------------------------------------
-	bool DoSyncBake(UWorld* World, USeinNavigationAStarAsset*& OutAsset);
-	void ApplyAssetData(const USeinNavigationAStarAsset* Asset);
-
-#if WITH_EDITOR
-	USeinNavigationAStarAsset* CreateOrLoadAsset(UWorld* World, const FString& AssetName) const;
-	bool SaveAssetToDisk(USeinNavigationAStarAsset* Asset) const;
-#endif
 };

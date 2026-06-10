@@ -19,15 +19,15 @@
  *          helper code are gated on `UE_ENABLE_DEBUG_DRAWING`. In
  *          `UE_BUILD_SHIPPING` StartupModule / ShutdownModule are no-ops.
  *
- *          Editor-side integrations (ASeinFogOfWarVolume details panel +
- *          entity-bridge vision-stamp draw layer) live in the companion
- *          SeinARTSFogOfWarEditor module — separate so they load at
- *          PostEngineInit phase after SeinARTSEditor is ready, mirroring the
- *          SeinARTSCoverEditor pattern. Was previously a `#if WITH_EDITOR`
- *          block here, but the Runtime/Default load phase meant
- *          SeinARTSEditor wasn't loaded yet, and the deferred
+ *          Editor-side integrations (the entity-bridge vision-stamp draw
+ *          layer) live in the companion SeinARTSFogOfWarEditor module —
+ *          separate so they load at PostEngineInit phase after SeinARTSEditor
+ *          is ready, mirroring the SeinARTSCoverEditor pattern. Was previously
+ *          a `#if WITH_EDITOR` block here, but the Runtime/Default load phase
+ *          meant SeinARTSEditor wasn't loaded yet, and the deferred
  *          OnFEngineLoopInitComplete path proved unreliable. New module
- *          eliminates the load-order race entirely.
+ *          eliminates the load-order race entirely. (Baking moved to the
+ *          unified "Bake Level Data" button on ASeinLevelVolume.)
  */
 
 #include "SeinARTSFogOfWarModule.h"
@@ -44,6 +44,7 @@
 #include "Engine/GameViewportClient.h"
 #include "UObject/UObjectIterator.h"
 #include "Debug/SeinFogOfWarDebugComponent.h"
+#include "Volumes/SeinLevelVolume.h"
 #include "Settings/PluginSettings.h"
 #include "Data/SeinVisionLayerDefinition.h"
 
@@ -251,10 +252,16 @@ namespace
 
 void FSeinARTSFogOfWarModule::StartupModule()
 {
-	// Editor-side registrations (volume details + vision-stamp draw callback)
-	// live in the SeinARTSFogOfWarEditor module — see file header.
+	// Editor-side registrations (vision-stamp draw callback) live in the
+	// SeinARTSFogOfWarEditor module — see file header.
 
 #if UE_ENABLE_DEBUG_DRAWING
+	// Host the fog cell-viz component on every ASeinLevelVolume (the unified
+	// level-data volume can't link this module's types — dependencies point the
+	// other way — so layer modules push their debug component classes into its
+	// registry; see ASeinLevelVolume::PostRegisterAllComponents).
+	ASeinLevelVolume::RegisterDebugComponentClass(USeinFogOfWarDebugComponent::StaticClass());
+
 	if (!GShowFogOfWarCmd)
 	{
 		GShowFogOfWarCmd = IConsoleManager::Get().RegisterConsoleCommand(
@@ -284,10 +291,12 @@ void FSeinARTSFogOfWarModule::StartupModule()
 
 void FSeinARTSFogOfWarModule::ShutdownModule()
 {
-	// Editor-side teardown (volume details + vision-stamp draw callback)
-	// lives in SeinARTSFogOfWarEditor — see file header.
+	// Editor-side teardown (vision-stamp draw callback) lives in
+	// SeinARTSFogOfWarEditor — see file header.
 
 #if UE_ENABLE_DEBUG_DRAWING
+	ASeinLevelVolume::UnregisterDebugComponentClass(USeinFogOfWarDebugComponent::StaticClass());
+
 	if (GShowFogOfWarCmd)
 	{
 		IConsoleManager::Get().UnregisterConsoleObject(GShowFogOfWarCmd);

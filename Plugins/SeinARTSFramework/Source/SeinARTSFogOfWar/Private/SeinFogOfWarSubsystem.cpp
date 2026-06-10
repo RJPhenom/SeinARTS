@@ -5,10 +5,8 @@
 
 #include "SeinFogOfWarSubsystem.h"
 #include "SeinFogOfWar.h"
-#include "SeinFogOfWarAsset.h"
 #include "SeinARTSFogOfWarLog.h"
 #include "Default/SeinFogOfWarDefault.h"
-#include "Volumes/SeinFogOfWarVolume.h"
 #include "Settings/PluginSettings.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "SeinLevelData.h"
@@ -16,7 +14,6 @@
 #include "SeinLevelLayerProvider.h"
 
 #include "Engine/World.h"
-#include "EngineUtils.h"
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
 
@@ -125,7 +122,7 @@ void USeinFogOfWarSubsystem::LoadBakedAssetIntoFogOfWar(UWorld& World)
 {
 	if (!FogOfWar) return;
 
-	// Unified pipeline first (CP1.1): if the shared substrate carries a baked grid
+	// Unified pipeline (CP1.1): if the shared substrate carries a baked grid
 	// + a "FogOfWar" channel, adopt it and we're done. If the substrate isn't
 	// loaded yet (subsystem begin-play order isn't guaranteed), our
 	// OnLevelDataMutated subscription re-adopts it the moment it loads.
@@ -139,27 +136,15 @@ void USeinFogOfWarSubsystem::LoadBakedAssetIntoFogOfWar(UWorld& World)
 		}
 	}
 
-	// Legacy path: load fog's own baked asset from a FogOfWarVolume.
-	for (TActorIterator<ASeinFogOfWarVolume> It(&World); It; ++It)
-	{
-		if (USeinFogOfWarAsset* Asset = It->BakedAsset.LoadSynchronous())
-		{
-			FogOfWar->LoadFromAsset(Asset);
-			UE_LOG(LogSeinFogOfWarSubsystem, Log,
-				TEXT("FoW: loaded grid from legacy FogOfWarVolume asset '%s' (substrate carried no fog data)."),
-				*Asset->GetName());
-			return;
-		}
-	}
 	UE_LOG(LogSeinFogOfWarSubsystem, Log,
-		TEXT("FoW: no baked data — substrate empty AND no FogOfWarVolume asset. Grid auto-init may follow."));
+		TEXT("FoW: no baked level data — grid auto-init may follow."));
 }
 
 void USeinFogOfWarSubsystem::OnLevelDataChanged()
 {
 	// Shared substrate rebaked / swapped — re-adopt its fog channel if present. If
 	// not (empty bake / no fog channel), LoadFromSubstrate returns false and leaves
-	// fog as-is, so a prior legacy load (or the next one) still stands.
+	// fog as-is, so any previously-adopted (or auto-initialized) grid still stands.
 	if (!FogOfWar) return;
 	if (USeinLevelData* Substrate = LevelData.Get())
 	{
@@ -234,27 +219,4 @@ USeinFogOfWar* USeinFogOfWarSubsystem::GetFogOfWarForWorld(const UObject* WorldC
 		}
 	}
 	return nullptr;
-}
-
-bool USeinFogOfWarSubsystem::BeginBake(UWorld* World)
-{
-	if (!World) return false;
-	USeinFogOfWarSubsystem* Sub = World->GetSubsystem<USeinFogOfWarSubsystem>();
-	if (!Sub || !Sub->FogOfWar) return false;
-	return Sub->FogOfWar->BeginBake(World);
-}
-
-bool USeinFogOfWarSubsystem::IsBaking(UWorld* World)
-{
-	if (!World) return false;
-	USeinFogOfWarSubsystem* Sub = World->GetSubsystem<USeinFogOfWarSubsystem>();
-	if (!Sub || !Sub->FogOfWar) return false;
-	return Sub->FogOfWar->IsBaking();
-}
-
-void USeinFogOfWarSubsystem::RequestCancelBake(UWorld* World)
-{
-	if (!World) return;
-	USeinFogOfWarSubsystem* Sub = World->GetSubsystem<USeinFogOfWarSubsystem>();
-	if (Sub && Sub->FogOfWar) Sub->FogOfWar->RequestCancelBake();
 }

@@ -4,10 +4,13 @@
  * @brief   Abstract base class for pluggable fog-of-war implementations.
  *
  *          USeinFogOfWar owns the end-to-end vision problem for one world:
- *          bake pipeline, baked-asset storage, runtime source/blocker
- *          registration, per-player VisionGroup grid state, stamp-delta
- *          recomputation, and visibility queries. It is the ONLY thing the
- *          framework's reader BPFL and cross-module LOS delegate talk to.
+ *          runtime source/blocker registration, per-player VisionGroup grid
+ *          state, stamp-delta recomputation, and visibility queries. It is
+ *          the ONLY thing the framework's reader BPFL and cross-module LOS
+ *          delegate talk to. Baked data lives on the unified level-data
+ *          substrate (USeinLevelData): a participating fog registers an
+ *          ISeinLevelLayerProvider for the shared bake and loads its runtime
+ *          grid back via LoadFromSubstrate.
  *
  *          Configured via plugin settings (`USeinARTSCoreSettings::FogOfWarClass`).
  *          The framework ships `USeinFogOfWarDefault` as a minimal 2D-grid +
@@ -16,9 +19,9 @@
  *          framework code.
  *
  *          Decoupling contract (mirrors USeinNavigation):
- *          - The reader BPFL, volume actor, and cross-module LOS delegate
- *            call into this class's virtual surface only.
- *          - Concrete subclasses own their own data storage + bake strategy.
+ *          - The reader BPFL and cross-module LOS delegate call into this
+ *            class's virtual surface only.
+ *          - Concrete subclasses own their own runtime data storage.
  *          - Fog-of-war never talks to navigation. Both are LAYERS of the
  *            unified level-data substrate (CP1.1, Decisions D12): each
  *            registers an ISeinLevelLayerProvider with USeinLevelData,
@@ -42,16 +45,13 @@
 #include "SeinFogOfWar.generated.h"
 
 class UWorld;
-class USeinFogOfWarAsset;
 class USeinWorldSubsystem;
-class ASeinFogOfWarVolume;
-class IDetailLayoutBuilder;
 class ISeinLevelLayerProvider;
 class USeinLevelData;
 
 /** Fired when the fog-of-war's baked or runtime state mutates (bake
- *  finished, asset swap, dynamic blocker change). Debug viz + cached UI
- *  reads re-query on this signal. */
+ *  finished, substrate adoption, dynamic blocker change). Debug viz + cached
+ *  UI reads re-query on this signal. */
 DECLARE_MULTICAST_DELEGATE(FSeinOnFogOfWarMutated);
 
 UCLASS(Abstract, BlueprintType, meta = (DisplayName = "Sein Fog Of War"))
@@ -72,40 +72,14 @@ public:
 	virtual void OnFogOfWarDeinitialized() {}
 
 	// ----------------------------------------------------------------------
-	// Bake (editor / dev-loop)
+	// Runtime data state
 	// ----------------------------------------------------------------------
 
-	/** The UDataAsset class this impl produces when baking. Subclasses return
-	 *  their concrete USeinFogOfWarAsset subclass. Default: the abstract base. */
-	virtual TSubclassOf<USeinFogOfWarAsset> GetAssetClass() const;
-
-	/** Begin an async bake covering every ASeinFogOfWarVolume in World. Return
-	 *  true if the bake kicked off (false if already running or no volumes
-	 *  found). Subclasses own the async strategy. */
-	virtual bool BeginBake(UWorld* World) { return false; }
-
-	/** True while an async bake is in progress. */
-	virtual bool IsBaking() const { return false; }
-
-	/** Request bake cancellation. Safe to call when not baking (no-op). */
-	virtual void RequestCancelBake() {}
-
-	// ----------------------------------------------------------------------
-	// Runtime load — called on level begin-play
-	// ----------------------------------------------------------------------
-
-	/** Swap the loaded baked asset. Passing nullptr clears runtime state.
-	 *  Subclasses should call Super then broadcast OnFogOfWarMutated once
-	 *  their own runtime arrays are populated. */
-	virtual void LoadFromAsset(USeinFogOfWarAsset* Asset) { LoadedAsset = Asset; }
-
-	/** The currently-loaded baked asset, or nullptr if never loaded. */
-	USeinFogOfWarAsset* GetLoadedAsset() const { return LoadedAsset; }
-
-	/** True if the impl has usable runtime data (grid dims populated, bake
-	 *  loaded or procedurally initialized). Queries return no-visibility when
-	 *  false. */
-	virtual bool HasRuntimeData() const { return LoadedAsset != nullptr; }
+	/** True if the impl has usable runtime data (grid dims populated, baked
+	 *  substrate channel loaded or grid procedurally initialized). Queries
+	 *  return no-visibility when false. Default: false — subclasses report
+	 *  their own grid state. */
+	virtual bool HasRuntimeData() const { return false; }
 
 	// ----------------------------------------------------------------------
 	// Unified level-data participation (CP1.1, Decisions D12) — OPT-IN. A fog
@@ -156,10 +130,10 @@ public:
 
 	// ----------------------------------------------------------------------
 	// Runtime grid initialization — called by the subsystem on OnWorldBeginPlay
-	// when no baked asset is available. Impls that require a bake may leave
-	// this as a no-op; the MVP default impl auto-sizes a grid from the level's
-	// ASeinFogOfWarVolumes so designers get stamping + debug viz before the
-	// bake pipeline lands.
+	// when no baked level data is available. Impls that require a bake may
+	// leave this as a no-op; the default impl auto-sizes a grid from the
+	// level's ASeinLevelVolumes so designers get stamping + debug viz before
+	// the level has been baked.
 	// ----------------------------------------------------------------------
 
 	virtual void InitGridFromVolumes(UWorld* World) {}
@@ -261,31 +235,10 @@ public:
 		float& OutHalfExtent) const {}
 
 	// ----------------------------------------------------------------------
-	// Editor extensibility
-	// ----------------------------------------------------------------------
-
-#if WITH_EDITOR
-	/** Optional hook for subclasses to extend ASeinFogOfWarVolume's details
-	 *  panel. Called by the framework's `FSeinFogOfWarVolumeDetails` after it
-	 *  has added its own "Bake Fog Of War" row. Subclasses may add custom rows
-	 *  (per-bake options, layer-mask presets, etc.). Default: no-op. The
-	 *  framework's bake button is unconditional — the abstract `BeginBake`
-	 *  virtual dispatches to whatever subclass is active, so designers see the
-	 *  same button regardless of which fog impl is selected. */
-	virtual void CustomizeVolumeDetails(IDetailLayoutBuilder& /*DetailBuilder*/, ASeinFogOfWarVolume* /*Volume*/) {}
-#endif
-
-	// ----------------------------------------------------------------------
 	// Events
 	// ----------------------------------------------------------------------
 
-	/** Broadcast after bake completion, asset swap, dynamic blocker mutation. */
+	/** Broadcast after bake completion, substrate adoption, dynamic blocker
+	 *  mutation. */
 	FSeinOnFogOfWarMutated OnFogOfWarMutated;
-
-protected:
-
-	/** The currently-loaded baked asset. Ownership stays with the volume /
-	 *  asset registry — this is a non-owning pointer. */
-	UPROPERTY(Transient)
-	TObjectPtr<USeinFogOfWarAsset> LoadedAsset;
 };

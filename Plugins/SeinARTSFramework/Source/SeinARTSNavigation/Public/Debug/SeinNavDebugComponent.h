@@ -3,7 +3,9 @@
  * @file    SeinNavDebugComponent.h
  * @brief   Scene-proxy-backed debug viz for the active USeinNavigation.
  *
- *          Attached to ASeinNavVolume in the actor's constructor. At proxy
+ *          Hosted on ASeinLevelVolume: the module registers this class with the
+ *          volume's debug-component registry at startup, and the volume attaches
+ *          one transient instance in PostRegisterAllComponents. At proxy
  *          creation time it calls `USeinNavigation::CollectDebugCellQuads` to
  *          snapshot cell geometry, then emits a single batched mesh per view
  *          via `FDynamicMeshBuilder`. The proxy's `GetViewRelevance` consults
@@ -45,10 +47,11 @@ private:
 	/** Called whenever the active nav broadcasts OnNavigationMutated. */
 	void HandleNavMutated();
 
-	/** In editor (pre-PIE) the world subsystem doesn't auto-load NavVolume
-	 *  assets. This hook grabs the owning volume's baked asset and pushes it
-	 *  into the active nav so the scene proxy has something to draw. */
-	void EnsureNavLoaded();
+	/** Editor-idle preview. In editor (pre-PIE) the subsystems don't auto-load
+	 *  baked level data, so when no live nav has runtime data this reads the
+	 *  owning ASeinLevelVolume's BakedAsset directly and emits cell quads from
+	 *  its baked "Nav" channel (0 / 255 cost = blocked, else walkable). */
+	void CollectAssetPreviewQuads(TArray<FVector>& OutWalkable, TArray<FVector>& OutBlocked, float& OutHalfExtent) const;
 
 	/** Weak pointer so the scene proxy can unsubscribe safely when the nav
 	 *  is swapped out or the component is destroyed. */

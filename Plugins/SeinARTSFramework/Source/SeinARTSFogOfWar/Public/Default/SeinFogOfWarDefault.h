@@ -1,11 +1,11 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinFogOfWarDefault.h
- * @brief   Reference implementation of USeinFogOfWar. Grid loads from a
- *          USeinFogOfWarDefaultAsset (bake output) when available; auto-sizes
- *          from ASeinFogOfWarVolumes when not. MVP stamp is flat-circle;
- *          shadowcast + lampshade + per-player + custom layers land in
- *          subsequent passes.
+ * @brief   Reference implementation of USeinFogOfWar. Grid loads from the
+ *          unified level-data substrate's baked "FogOfWar" channel when
+ *          available; auto-sizes from ASeinLevelVolumes when not. MVP stamp is
+ *          flat-circle; shadowcast + lampshade + per-player + custom layers
+ *          land in subsequent passes.
  *
  *          Determinism contract:
  *          - Stamp output (CellBitfield): fully FFixedPoint. StampFlatCircle
@@ -19,8 +19,9 @@
  *          - Grid layout (Width/Height/Origin/CellSize): derived from AVolume
  *            bounds via FromFloat. Deterministic on IEEE-754 targets with
  *            stock UE floating-point modes (the platforms UE5 ships for).
- *          - Bake is editor-only. Produces quantized per-cell Ground +
- *            Blocker heights stored in USeinFogOfWarDefaultAsset; runtime
+ *          - Bake runs as a layer provider on the unified level-data bake
+ *            (editor-only). Produces quantized per-cell Ground + Blocker
+ *            heights in the substrate's "FogOfWar" channel; runtime
  *            dequantizes into FFixedPoint arrays on load.
  *          - Debug viz (CollectDebugCellQuads): float conversions at the
  *            FFixedPoint → FVector boundary, render-only, not sim state.
@@ -44,7 +45,6 @@
 #include "SeinFogOfWarDefault.generated.h"
 
 class UWorld;
-class USeinFogOfWarDefaultAsset;
 class USeinLevelData;
 struct FSeinVisionComponent;
 struct FSeinStampShape;
@@ -149,13 +149,6 @@ public:
 	// USeinFogOfWar overrides
 	// ----------------------------------------------------------------------
 
-	virtual TSubclassOf<USeinFogOfWarAsset> GetAssetClass() const override;
-
-	virtual bool BeginBake(UWorld* World) override;
-	virtual bool IsBaking() const override { return bBaking; }
-	virtual void RequestCancelBake() override { bCancelRequested = true; }
-
-	virtual void LoadFromAsset(USeinFogOfWarAsset* Asset) override;
 	virtual bool HasRuntimeData() const override { return Width > 0 && Height > 0; }
 
 	// ----------------------------------------------------------------------
@@ -262,8 +255,6 @@ private:
 	// ----------------------------------------------------------------------
 	// Bake state
 	// ----------------------------------------------------------------------
-	bool bBaking = false;
-	bool bCancelRequested = false;
 
 	/** The fog cell size used by the last BakeLayer, as a multiple of the
 	 *  substrate's finest cell size (snapped to an integer; D13/D15). Read by
@@ -411,18 +402,4 @@ private:
 		const FFixedVector& EntityWorldPos,
 		const FFixedQuaternion& EntityRotation,
 		FFixedPoint HeightAboveGround, uint8 LayerMask);
-
-	/** Hoist baked asset fields into runtime arrays. Called from LoadFromAsset
-	 *  when the asset is a USeinFogOfWarDefaultAsset. */
-	void ApplyAssetData(const USeinFogOfWarDefaultAsset* Asset);
-
-	/** Synchronous bake. Walks volumes, double-traces each cell for ground +
-	 *  blocker heights, quantizes into the asset, saves to disk (editor).
-	 *  Returns false on cancel / no volumes / save failure. */
-	bool DoSyncBake(UWorld* World, USeinFogOfWarDefaultAsset*& OutAsset);
-
-#if WITH_EDITOR
-	USeinFogOfWarDefaultAsset* CreateOrLoadAsset(UWorld* World, const FString& AssetName) const;
-	bool SaveAssetToDisk(USeinFogOfWarDefaultAsset* Asset) const;
-#endif
 };

@@ -5,9 +5,7 @@
 
 #include "SeinNavigationSubsystem.h"
 #include "SeinNavigation.h"
-#include "SeinNavigationAsset.h"
 #include "SeinNavigationAStar.h"
-#include "Volumes/SeinNavVolume.h"
 #include "Settings/PluginSettings.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Simulation/Systems/SeinNavBlockerStampSystem.h"
@@ -16,7 +14,6 @@
 #include "SeinLevelLayerProvider.h"
 
 #include "Engine/World.h"
-#include "EngineUtils.h"
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
 
@@ -127,10 +124,10 @@ void USeinNavigationSubsystem::LoadBakedAssetIntoNav(UWorld& World)
 {
 	if (!Navigation) return;
 
-	// Unified pipeline first (CP1.1): if the shared substrate carries a baked grid
-	// + a "Nav" channel, adopt it and we're done (substrate-driven path). If the
-	// substrate isn't loaded yet (subsystem begin-play order isn't guaranteed), our
-	// OnLevelDataMutated subscription re-adopts it the moment it loads.
+	// Unified pipeline (CP1.1): if the shared substrate carries a baked grid + a
+	// "Nav" channel, adopt it. If the substrate isn't loaded yet (subsystem
+	// begin-play order isn't guaranteed), our OnLevelDataMutated subscription
+	// re-adopts it the moment it loads.
 	if (USeinLevelData* Substrate = LevelData.Get())
 	{
 		if (Substrate->HasRuntimeData() && Navigation->LoadFromSubstrate(*Substrate))
@@ -140,21 +137,8 @@ void USeinNavigationSubsystem::LoadBakedAssetIntoNav(UWorld& World)
 			return;
 		}
 	}
-
-	// Legacy / A-B baseline path: load nav's own baked asset from a NavVolume.
-	for (TActorIterator<ASeinNavVolume> It(&World); It; ++It)
-	{
-		if (USeinNavigationAsset* Asset = It->BakedAsset.LoadSynchronous())
-		{
-			Navigation->LoadFromAsset(Asset);
-			UE_LOG(LogSeinNavSubsystem, Log,
-				TEXT("Nav: loaded grid from legacy NavVolume asset '%s' (substrate carried no nav data)."),
-				*Asset->GetName());
-			return;
-		}
-	}
 	UE_LOG(LogSeinNavSubsystem, Log,
-		TEXT("Nav: no baked data — substrate empty AND no NavVolume asset. FindPath returns no-path."));
+		TEXT("Nav: no baked level data — run \"Bake Level Data\" on a Sein Level Volume. FindPath returns no-path."));
 }
 
 void USeinNavigationSubsystem::OnLevelDataChanged()
@@ -376,27 +360,4 @@ USeinNavigation* USeinNavigationSubsystem::GetNavigationForWorld(const UObject* 
 		}
 	}
 	return nullptr;
-}
-
-bool USeinNavigationSubsystem::BeginBake(UWorld* World)
-{
-	if (!World) return false;
-	USeinNavigationSubsystem* Sub = World->GetSubsystem<USeinNavigationSubsystem>();
-	if (!Sub || !Sub->Navigation) return false;
-	return Sub->Navigation->BeginBake(World);
-}
-
-bool USeinNavigationSubsystem::IsBaking(UWorld* World)
-{
-	if (!World) return false;
-	USeinNavigationSubsystem* Sub = World->GetSubsystem<USeinNavigationSubsystem>();
-	if (!Sub || !Sub->Navigation) return false;
-	return Sub->Navigation->IsBaking();
-}
-
-void USeinNavigationSubsystem::RequestCancelBake(UWorld* World)
-{
-	if (!World) return;
-	USeinNavigationSubsystem* Sub = World->GetSubsystem<USeinNavigationSubsystem>();
-	if (Sub && Sub->Navigation) Sub->Navigation->RequestCancelBake();
 }

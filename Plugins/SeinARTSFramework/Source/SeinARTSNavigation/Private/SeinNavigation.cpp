@@ -4,12 +4,6 @@
  */
 
 #include "SeinNavigation.h"
-#include "SeinNavigationAsset.h"
-
-TSubclassOf<USeinNavigationAsset> USeinNavigation::GetAssetClass() const
-{
-	return USeinNavigationAsset::StaticClass();
-}
 
 bool USeinNavigation::IsReachable(const FFixedVector& From, const FFixedVector& To, const FGameplayTagContainer& AgentTags) const
 {

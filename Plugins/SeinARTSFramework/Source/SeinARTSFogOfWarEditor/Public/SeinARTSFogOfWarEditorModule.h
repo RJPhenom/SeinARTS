@@ -2,8 +2,8 @@
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinARTSFogOfWarEditorModule.h
  * @brief   Editor companion to SeinARTSFogOfWar. Registers the vision-stamp
- *          draw layer on the entity bridge visualizer + the ASeinFogOfWarVolume
- *          details panel (bake button).
+ *          draw layer on the entity bridge visualizer. (Fog baking runs through
+ *          the unified "Bake Level Data" button on ASeinLevelVolume.)
  *
  *          Separate from the SeinARTSFogOfWar Runtime module because the FoW
  *          system needs to load at Default phase for sim availability — but

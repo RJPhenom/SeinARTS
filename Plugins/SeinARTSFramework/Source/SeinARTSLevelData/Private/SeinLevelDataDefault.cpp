@@ -431,9 +431,15 @@ bool USeinLevelDataDefault::DoSyncBake(UWorld* World, USeinLevelDataDefaultAsset
 #if WITH_EDITOR
 USeinLevelDataDefaultAsset* USeinLevelDataDefault::CreateOrLoadAsset(UWorld* World, const FString& AssetName) const
 {
-	// MVP save folder. A LevelDataSaveFolder plugin setting can replace this later
-	// (same pattern as NavDataSaveFolder).
-	const FString SaveFolder = TEXT("/Game/LevelData");
+	// Save folder from plugin settings (regenerable, gitignored by default).
+	FString SaveFolder = TEXT("/Game/LevelData");
+	if (const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>())
+	{
+		if (!Settings->LevelDataSaveFolder.Path.IsEmpty())
+		{
+			SaveFolder = Settings->LevelDataSaveFolder.Path;
+		}
+	}
 	const FString PackagePath = FString::Printf(TEXT("%s/%s"), *SaveFolder, *AssetName);
 
 	UPackage* Package = CreatePackage(*PackagePath);

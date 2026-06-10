@@ -18,15 +18,15 @@ public class SeinARTSNavigation : ModuleRules
             "RenderCore", "RHI"
         });
 
-        // Editor-only deps for the bake pipeline (slow-task progress + asset save).
-        // Stripped from shipping builds.
+        // Editor-only deps — viewport showflag plumbing + PIE-start hook for the
+        // Sein.Nav.Show debug toggle (module cpp). Stripped from shipping builds.
         if (Target.bBuildEditor)
         {
             PrivateDependencyModuleNames.AddRange(new string[] {
                 "Slate", "SlateCore",
                 "UnrealEd", "AssetRegistry",
                 "LevelEditor",
-                "PropertyEditor" // Volume details panel + bake button
+                "PropertyEditor"
             });
         }
     }

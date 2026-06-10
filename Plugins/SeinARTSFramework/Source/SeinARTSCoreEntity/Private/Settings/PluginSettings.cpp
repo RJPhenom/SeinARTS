@@ -31,10 +31,10 @@ USeinARTSCoreSettings::USeinARTSCoreSettings()
 	, NavigationClass(FSoftClassPath(TEXT("/Script/SeinARTSNavigation.SeinNavigationAStar")))
 	, CellSize(FFixedPoint::FromInt(100))
 	, MaxStepHeight(FFixedPoint::FromInt(50))
-	// Bake output folders. /Game/NavData and /Game/FogOfWarData by convention.
-	// Designers can change these in plugin settings to relocate baked
-	// `.uasset` files (e.g. group per-region, place beside level files).
-	, NavDataSaveFolder({TEXT("/Game/NavData")})
+	// Unified bake output folder. /Game/LevelData by convention — regenerable,
+	// gitignored. Designers can change this in plugin settings to relocate the
+	// baked `.uasset` (e.g. group per-region, place beside level files).
+	, LevelDataSaveFolder({TEXT("/Game/LevelData")})
 	// Path-pipeline tunables. Budget=32 covers typical RTS group sizes (≤32
 	// units) without any per-tick stagger — a 20-unit move resolves all
 	// paths same tick. Iter-cap + heuristic-weight bound per-call A* cost,
@@ -76,7 +76,6 @@ USeinARTSCoreSettings::USeinARTSCoreSettings()
 	, DebugFixedSessionSeed(0)
 	, FogOfWarClass(FSoftClassPath(TEXT("/Script/SeinARTSFogOfWar.SeinFogOfWarDefault")))
 	, VisionCellSize(FFixedPoint::FromInt(100))
-	, FogOfWarDataSaveFolder({TEXT("/Game/FogOfWarData")})
 	, VisionTickInterval(3)
 	, FogRenderTickRate(10.0f)
 	// Debug visualization defaults — see PluginSettings.h. 10000 / 50000 / true:

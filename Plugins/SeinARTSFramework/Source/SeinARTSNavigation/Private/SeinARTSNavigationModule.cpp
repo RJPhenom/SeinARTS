@@ -36,14 +36,9 @@ DEFINE_LOG_CATEGORY(LogSeinNavigationAStar);
 DEFINE_LOG_CATEGORY(LogSeinNavDebug);
 DEFINE_LOG_CATEGORY(LogSeinNavBlockerStamp);
 
-#if WITH_EDITOR
-#include "Editor/SeinNavVolumeDetails.h"
-#include "Volumes/SeinNavVolume.h"
-#include "PropertyEditorModule.h"
-#endif
-
 #if UE_ENABLE_DEBUG_DRAWING
 #include "Debug/SeinNavDebugComponent.h"
+#include "Volumes/SeinLevelVolume.h"
 
 #include "HAL/IConsoleManager.h"
 #include "Engine/Engine.h"
@@ -267,20 +262,14 @@ namespace
 
 void FSeinARTSNavigationModule::StartupModule()
 {
-#if WITH_EDITOR
-	// Register the volume details panel here so the editor's "Bake Navigation"
-	// button is owned by SeinARTSNavigation — keeps the system self-contained
-	// (the framework's editor module no longer needs a dep on this module).
-	{
-		FPropertyEditorModule& PropertyModule = FModuleManager::LoadModuleChecked<FPropertyEditorModule>("PropertyEditor");
-		PropertyModule.RegisterCustomClassLayout(
-			ASeinNavVolume::StaticClass()->GetFName(),
-			FOnGetDetailCustomizationInstance::CreateStatic(&FSeinNavVolumeDetails::MakeInstance));
-		PropertyModule.NotifyCustomizationModuleChanged();
-	}
-#endif
-
 #if UE_ENABLE_DEBUG_DRAWING
+	// Host the nav cell viz on the unified level volume. ASeinLevelVolume can't
+	// link this module (dependencies point the other way), so it exposes a
+	// debug-component registry: register our component class here and the
+	// volume attaches one transient instance in PostRegisterAllComponents.
+	// Same guard as the component's scene-proxy availability.
+	ASeinLevelVolume::RegisterDebugComponentClass(USeinNavDebugComponent::StaticClass());
+
 	if (!GShowNavCmd)
 	{
 		GShowNavCmd = IConsoleManager::Get().RegisterConsoleCommand(
@@ -325,15 +314,9 @@ void FSeinARTSNavigationModule::StartupModule()
 
 void FSeinARTSNavigationModule::ShutdownModule()
 {
-#if WITH_EDITOR
-	if (FModuleManager::Get().IsModuleLoaded("PropertyEditor"))
-	{
-		FPropertyEditorModule& PropertyModule = FModuleManager::GetModuleChecked<FPropertyEditorModule>("PropertyEditor");
-		PropertyModule.UnregisterCustomClassLayout(ASeinNavVolume::StaticClass()->GetFName());
-	}
-#endif
-
 #if UE_ENABLE_DEBUG_DRAWING
+	ASeinLevelVolume::UnregisterDebugComponentClass(USeinNavDebugComponent::StaticClass());
+
 	if (GShowNavCmd)
 	{
 		IConsoleManager::Get().UnregisterConsoleObject(GShowNavCmd);

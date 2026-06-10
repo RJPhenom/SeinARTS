@@ -5,7 +5,9 @@
  *
  *          Reads `USeinARTSCoreSettings::NavigationClass` on Initialize, new's
  *          up that class, and re-exposes it to the rest of the engine (move-to
- *          action, editor bake button, ability validation delegate).
+ *          action, ability validation delegate). Registers the nav as the "Nav"
+ *          layer provider on the unified level-data substrate and adopts the
+ *          baked grid from it ("Bake Level Data" lives on ASeinLevelVolume).
  *
  *          The subsystem does NOT know what a "grid" or "navmesh" is — it only
  *          knows a USeinNavigation exists. All nav semantics live on the active
@@ -20,7 +22,6 @@
 #include "SeinNavigationSubsystem.generated.h"
 
 class USeinNavigation;
-class USeinNavigationAsset;
 class USeinLevelData;
 class ISeinSystem;
 struct FSeinPathRequest;
@@ -62,16 +63,6 @@ public:
 	 *  bypass the budget. */
 	ESeinPathResult RequestPath(const FSeinPathRequest& Request, FSeinPath& OutPath);
 
-	/** Kick off a bake for every ASeinNavVolume in `World`. Returns true if
-	 *  the bake started. Routes to `Nav->BeginBake(World)`. */
-	static bool BeginBake(UWorld* World);
-
-	/** Returns true if the active nav in `World` is currently baking. */
-	static bool IsBaking(UWorld* World);
-
-	/** Request bake cancellation for `World`'s active nav. */
-	static void RequestCancelBake(UWorld* World);
-
 private:
 
 	/** The active nav for this world. Instantiated from
@@ -88,8 +79,8 @@ private:
 	 *  Deinitialize. */
 	FDelegateHandle LevelDataMutatedHandle;
 
-	/** Called in OnWorldBeginPlay — scans NavVolumes for a baked asset and
-	 *  hands it to the nav. Idempotent. */
+	/** Called in OnWorldBeginPlay — adopts the unified level-data substrate's
+	 *  baked grid into the nav (when it carries a "Nav" channel). Idempotent. */
 	void LoadBakedAssetIntoNav(UWorld& World);
 
 	/** Re-adopt the shared substrate's grid when it rebakes / reloads (CP1.1).

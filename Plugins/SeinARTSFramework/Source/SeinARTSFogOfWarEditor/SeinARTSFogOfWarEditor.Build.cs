@@ -21,11 +21,10 @@ public class SeinARTSFogOfWarEditor : ModuleRules
 			"SlateCore",
 			"InputCore",
 			"UnrealEd",
-			"PropertyEditor",
 			"GameplayTags",
 			"SeinARTSCore",
 			"SeinARTSCoreEntity",           // FInstancedStruct walk in the bridge draw delegate
-			"SeinARTSFogOfWar",              // FSeinVisionComponent + FSeinStampShape, ASeinFogOfWarVolume, USeinFogOfWarSubsystem
+			"SeinARTSFogOfWar",              // FSeinVisionComponent + FSeinStampShape
 			"SeinARTSEditor",                // RegisterComponentDataDraw for vision-stamp viz on the entity bridge
 		});
 	}

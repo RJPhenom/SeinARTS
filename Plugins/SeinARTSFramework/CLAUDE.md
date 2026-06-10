@@ -15,7 +15,7 @@ contains **no cover code at all**.
 
 ---
 
-## Module structure (11 modules)
+## Module structure (12 modules)
 
 ```
 ── Sim layer (deterministic; fixed-point; no float/AActor*) ──
@@ -25,16 +25,26 @@ SeinARTSCoreEntity   The sim heart: entity pool, reflection-backed component sto
                      actions, effects/modifiers/attributes, command buffer + brokers, production,
                      containment, tech, resources, match-flow/voting, squad DATA, visual events,
                      ~26 BPFLs. Also hosts the render-bridge types (ASeinActor, USeinEntityComponent).
-SeinARTSNavigation   Pluggable nav: abstract USeinNavigation base + polymorphic asset; ships
-                     USeinNavigationAStar (single-layer 2D grid, synchronous A*, LoS smoothing) as
-                     the default/reference. Owns bake, pathfinding, reachability, SeinMoveToAction.
+SeinARTSLevelData    The unified level-bake pipeline (CP1.1, Decisions D10–D17): swappable
+                     USeinLevelData substrate (canonical grid + ONE shared trace pass) + the
+                     ISeinLevelLayerProvider registry, ASeinLevelVolume (brush-shape play-area
+                     mask, multi-volume union, per-layer config, the ONE "Bake Level Data"
+                     button, debug-viz component registry), channel-extensible baked asset,
+                     USeinLevelLoS. Nav + FoW are layer providers on it.
+SeinARTSNavigation   Pluggable nav: abstract USeinNavigation base; ships USeinNavigationAStar
+                     (single-layer 2D grid, synchronous A*, LoS smoothing) as the default/
+                     reference. Bakes as the "Nav" layer provider on SeinARTSLevelData and loads
+                     its runtime grid from the substrate. Owns pathfinding, reachability,
+                     SeinMoveToAction.
 SeinARTSMovement     Movement base + shared steering toolkit: abstract USeinMovement, the
                      USeinBasicMovement / USeinBasicUnitMovement defaults, USeinMoveToAction + the
                      "Move To" proxy, the movement BPFL, and the steering/debug show-flags. The
                      concrete modes (Infantry/Wheeled/Tracked/Hover/Flight) + per-class data moved
                      to the SeinARTSMovementPlus extension (see root CLAUDE.md).
 SeinARTSFogOfWar     Pluggable vision/FoW: abstract USeinFogOfWar base + default impl; stamping,
-                     baked fog grid, visibility queries, show-flag debug viz.
+                     visibility queries, show-flag debug viz. Bakes as the "FogOfWar" layer
+                     provider on SeinARTSLevelData (own occluder box-sweep at its own coarser
+                     resolution; adopts the shared ground height, D17).
 
 ── Transport ──
 SeinARTSNet          Lockstep networking: per-PC RPC relay, server-authoritative turn aggregation,
@@ -49,7 +59,7 @@ SeinARTSEditor       Content Browser factories, fixed-point pin factory, thumbna
                      Details customizations, and the entity-bridge visualizer with its
                      per-component DRAW-CALLBACK REGISTRY (extensions register against this).
 SeinARTSGraphNodes   UncookedOnly: K2Node_SeinGetComponent / SeinSetComponent (typed BP component access).
-SeinARTSFogOfWarEditor  Editor companion to FoW: volume bake button + vision-stamp draw callback.
+SeinARTSFogOfWarEditor  Editor companion to FoW: vision-stamp draw callback on the bridge visualizer.
 ```
 
 (Editor companions are split into their own `PostEngineInit` modules to avoid a load-order race
@@ -177,22 +187,36 @@ fixed-point suite: `FFixedPoint` (32.32, platform-split 128-bit mul/div), `FFixe
 make/break for fixed-point lives in `MathBPFL` (in CoreEntity). The `SEIN_SIM_SCOPE` asserts are
 **not** here — they're in `SeinARTSCoreEntity/Core/SeinSimContext.h`.
 
-## Pluggable subsystems
-Two subsystems follow the same pattern: an abstract base + a polymorphic baked-data asset + a
-shipped default impl, with the concrete class chosen via `USeinARTSCoreSettings`:
+## Pluggable subsystems & the unified level-data bake (CP1.1)
+Three subsystems follow the same pattern — an abstract base + a shipped default impl, concrete
+class chosen via `USeinARTSCoreSettings` — and the bake pipeline is UNIFIED behind the third:
 
-- **Navigation** (`USeinARTSCoreSettings::NavigationClass`): abstract `USeinNavigation` + polymorphic
-  `USeinNavigationAsset`. Default `USeinNavigationAStar` (single-layer 2D grid, C-space
-  footprint-aware A*, LoS smoothing, escape-nudge for stuck units). `ASeinNavVolume` and
-  `USeinMoveToAction` are impl-agnostic. **Bake is synchronous** (`FScopedSlowTask`), despite the
-  base-class "async" wording. No UE NavMesh.
+- **Level data** (`USeinARTSCoreSettings::LevelDataClass`): abstract `USeinLevelData` substrate +
+  default `USeinLevelDataDefault`. Owns the canonical grid (finest resolution = nav's cell size),
+  the ONE shared down-trace pass (height + normal·Up + in-brush flags), the
+  `ISeinLevelLayerProvider` registry, and the channel-extensible `USeinLevelDataDefaultAsset`.
+  `ASeinLevelVolume` = the single bounds/config/bake-button actor (brush-shape play-area mask,
+  multi-volume union, per-layer config sections, debug-viz component registry). **Bake is
+  synchronous**; saves to `LevelDataSaveFolder` (default `/Game/LevelData` — gitignored,
+  regenerable). The legacy `ASeinNavVolume` / `ASeinFogOfWarVolume` + per-system baked assets
+  were retired with this (Decisions D16).
+- **Navigation** (`USeinARTSCoreSettings::NavigationClass`): abstract `USeinNavigation`. Default
+  `USeinNavigationAStar` (single-layer 2D grid, C-space footprint-aware A*, LoS smoothing,
+  escape-nudge for stuck units) — bakes its "Nav" channel as a layer provider (slope gate on the
+  shared normal, own connectivity midpoint traces, island-prune→threshold, elevated-obstacle-tops
+  prune) and loads its runtime grid from the substrate. `USeinMoveToAction` is impl-agnostic. No
+  UE NavMesh.
 - **Fog of War** (`USeinARTSCoreSettings::FogOfWarClass`): abstract `USeinFogOfWar` + default
   `USeinFogOfWarDefault` (single-layer grid, Bresenham LOS, per-player refcounted VisionGroups,
-  delta-refcount source caching). Queries are **observer-gated** (`IsEntityVisibleToObserver`) and
-  are the gate the Cover extension reuses. Editor bake is synchronous.
+  delta-refcount source caching) — bakes its "FogOfWar" channel as a layer provider at its OWN
+  coarser resolution (snapped to an integer multiple of the shared grid; own occluder box-sweep
+  for thin walls; adopts the shared ground height, D17). Queries are **observer-gated**
+  (`IsEntityVisibleToObserver`) and are the gate the Cover extension reuses.
 
 > Cross-module resolvers/queries **no-op until their owning module registers** (e.g. nav projection
-> returns identity until Nav is present). This is the pluggability seam, not a bug.
+> returns identity until Nav is present). This is the pluggability seam, not a bug. Custom
+> nav/fog classes that DON'T participate in the unified bake (the base-class hooks default to
+> "no") simply carry no baked data until they load their own — modularity D12 preserved.
 
 ## Movement
 The framework ships the movement **base + shared steering toolkit** and the two built-in defaults:
@@ -297,13 +321,17 @@ registers `"SeinVisionComponent"`; the Cover editor module registers `"SeinCover
   restore, ~26 BPFLs. WIP seams (by design): PRNG seeding not yet wired into the live session-start
   path; lockstep gate / AI-emit interceptor are delegate hooks bound by the Net module; some
   cross-module resolvers no-op until Nav/FoW register.
+- **SeinARTSLevelData** — built 2026-06 (CP1.1): substrate + provider registry + unified volume +
+  channel asset + LoS interface; both shipped layers ported onto it; legacy scaffolding removed.
+  Pending the CP1.1 fresh-level closing verification (see planning/Checkpoints.md).
 - **SeinARTSNavigation** — complete & hardened (lazy A* alloc, dynamic blockers, escape-nudge).
-  Synchronous bake. (An empty `Public/Data/` dir exists; the vehicle curve planner is unbuilt.)
+  Bakes/loads via the unified level-data pipeline. (An empty `Public/Data/` dir exists; the
+  vehicle curve planner is unbuilt.)
 - **SeinARTSMovement** — base + shared steering toolkit + Basic/BasicUnit + MoveTo action/proxy/BPFL;
   complete. The concrete modes (Infantry/Wheeled/Tracked/Hover/Flight) were extracted to the
   **SeinARTSMovementPlus** extension on 2026-06-02 — see that plugin's CLAUDE.md for their state.
-- **SeinARTSFogOfWar** (+Editor) — substantially complete: stamping, baked grid, observer-gated
-  queries, dynamic blockers, sync bake, vision-stamp authoring viz.
+- **SeinARTSFogOfWar** (+Editor) — substantially complete: stamping, observer-gated queries,
+  dynamic blockers, vision-stamp authoring viz. Bakes/loads via the unified level-data pipeline.
 - **SeinARTSNet** — substantially implemented, ahead of its own docstrings. Deferred: full reconnect
   snapshot + tail catch-up; adaptive input-delay (observability only); snapshot restore skips
   ability/resolver-pool reconstruction. `SeinReplayBPFL` is a header-only skeleton.

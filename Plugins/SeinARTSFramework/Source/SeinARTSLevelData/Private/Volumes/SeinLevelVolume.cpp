@@ -16,8 +16,8 @@ ASeinLevelVolume::ASeinLevelVolume(const FObjectInitializer& ObjectInitializer)
 {
 	PrimaryActorTick.bCanEverTick = false;
 
-	// Match ANavMeshBoundsVolume / ASeinNavVolume: NoCollision keeps the brush
-	// wireframe rendering in editor while guaranteeing no physics/query.
+	// Match ANavMeshBoundsVolume: NoCollision keeps the brush wireframe
+	// rendering in editor while guaranteeing no physics/query.
 	if (UBrushComponent* BrushComp = GetBrushComponent())
 	{
 		BrushComp->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
@@ -101,4 +101,62 @@ void ASeinLevelVolume::BakeLevelData()
 	{
 		USeinLevelDataSubsystem::BeginBake(World);
 	}
+}
+
+// ----------------------------------------------------------------------------
+// Debug-viz component registry
+// ----------------------------------------------------------------------------
+
+namespace
+{
+	/** Module-registered debug component classes (nav cell viz, fog cell viz).
+	 *  Raw UClass* is safe: entries live for their owning module's lifetime and
+	 *  are removed in ShutdownModule. */
+	TArray<UClass*> GSeinLevelVolumeDebugComponentClasses;
+}
+
+void ASeinLevelVolume::RegisterDebugComponentClass(UClass* ComponentClass)
+{
+	if (ComponentClass)
+	{
+		GSeinLevelVolumeDebugComponentClasses.AddUnique(ComponentClass);
+	}
+}
+
+void ASeinLevelVolume::UnregisterDebugComponentClass(UClass* ComponentClass)
+{
+	GSeinLevelVolumeDebugComponentClasses.Remove(ComponentClass);
+}
+
+void ASeinLevelVolume::PostRegisterAllComponents()
+{
+	Super::PostRegisterAllComponents();
+
+#if !UE_BUILD_SHIPPING
+	// Attach one transient instance of each registered debug component class.
+	// Re-entrant (map reload, RerunConstructionScripts): skip classes already
+	// present on the actor. Editor-idle + PIE both pass through here.
+	if (IsTemplate())
+	{
+		return; // never mutate the CDO / archetypes
+	}
+	for (UClass* ComponentClass : GSeinLevelVolumeDebugComponentClasses)
+	{
+		if (!ComponentClass || FindComponentByClass(ComponentClass))
+		{
+			continue;
+		}
+		UActorComponent* Comp = NewObject<UActorComponent>(this, ComponentClass, NAME_None, RF_Transient);
+		if (!Comp)
+		{
+			continue;
+		}
+		if (USceneComponent* AsScene = Cast<USceneComponent>(Comp))
+		{
+			AsScene->SetupAttachment(GetBrushComponent());
+		}
+		AddInstanceComponent(Comp);
+		Comp->RegisterComponent();
+	}
+#endif
 }

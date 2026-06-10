@@ -3,17 +3,16 @@
  * @file    SeinLevelVolume.h
  * @brief   Unified level-data bounds volume (CP1.1, planning/Decisions.md D10).
  *
- *          Replaces ASeinNavVolume + ASeinFogOfWarVolume: drop ONE into a level,
- *          shape its brush (the play area), click "Bake Level Data". Multiple volumes
- *          union (play area = union of brush shapes; cells outside every brush are
- *          out-of-bounds). Holds the polymorphic baked asset + per-layer config
- *          sections. The active USeinLevelData subclass (plugin settings) owns bake
- *          semantics; this actor just defines bounds + config.
- *
- *          Mirrors ASeinNavVolume (NoCollision static brush, PostEditMove bounds
- *          snapshot for cross-platform determinism). The Fog Of War config section
- *          is added at the FoW-port step; for now it carries the shared/Navigation
- *          config the nav layer reads.
+ *          Replaces the legacy ASeinNavVolume + ASeinFogOfWarVolume (removed):
+ *          drop ONE into a level, shape its brush (the play area), click "Bake
+ *          Level Data". Multiple volumes union (play area = union of brush shapes;
+ *          cells outside every brush are out-of-bounds). Holds the polymorphic
+ *          baked asset + per-layer config sections (Navigation, Fog Of War). The
+ *          active USeinLevelData subclass (plugin settings) owns bake semantics;
+ *          this actor just defines bounds + config. NoCollision static brush;
+ *          PostEditMove bounds snapshot for cross-platform determinism. Layer
+ *          modules attach their debug-viz components via the
+ *          RegisterDebugComponentClass registry below.
  */
 
 #pragma once
@@ -35,8 +34,8 @@ public:
 	ASeinLevelVolume(const FObjectInitializer& ObjectInitializer);
 
 	// ----------------------------------------------------------------------
-	// Navigation layer config (mirrors ASeinNavVolume; also the shared grid
-	// resolution until per-layer resolution overrides land).
+	// Navigation layer config (also the shared grid resolution — the substrate
+	// bakes at the finest layer resolution, which is nav's).
 	// ----------------------------------------------------------------------
 
 	/** Override the project-wide cell size. When false, plugin settings' `CellSize`. */
@@ -58,8 +57,8 @@ public:
 	FFixedPoint MaxStepHeight = FFixedPoint::FromInt(50);
 
 	// ----------------------------------------------------------------------
-	// Fog Of War layer config (mirrors the legacy ASeinFogOfWarVolume; read by
-	// the fog layer provider at bake — first volume wins, like cell size).
+	// Fog Of War layer config (read by the fog layer provider at bake —
+	// first volume wins, like cell size).
 	// ----------------------------------------------------------------------
 
 	/** Override the project-wide fog cell size. When false, plugin settings'
@@ -94,9 +93,9 @@ public:
 	TSoftObjectPtr<USeinLevelDataAsset> BakedAsset;
 
 	// ----------------------------------------------------------------------
-	// Editor-baked AABB snapshot — cross-platform-determinism (mirrors ASeinNavVolume).
-	// PostEditMove writes (editor-process FromFloat → serialized to .umap); runtime
-	// grid init reads. `bBoundsBaked` distinguishes fresh actors from legacy data.
+	// Editor-baked AABB snapshot — cross-platform determinism. PostEditMove
+	// writes (editor-process FromFloat → serialized to .umap); runtime grid
+	// init reads. `bBoundsBaked` distinguishes fresh actors from legacy data.
 	// ----------------------------------------------------------------------
 	UPROPERTY(VisibleAnywhere, AdvancedDisplay, Category = "SeinARTS|Determinism")
 	FFixedVector PlacedBoundsMin = FFixedVector::ZeroVector;
@@ -129,4 +128,21 @@ public:
 	 *  Routes through USeinLevelDataSubsystem::BeginBake. */
 	UFUNCTION(CallInEditor, Category = "SeinARTS|Build", meta = (DisplayName = "Bake Level Data"))
 	void BakeLevelData();
+
+	// ----------------------------------------------------------------------
+	// Debug-viz component registry. The nav / FoW debug scene-proxy components
+	// (cell viz) are hosted on this volume, but the LevelData module cannot
+	// link against the layer modules (dependencies point the other way) — so
+	// each layer module REGISTERS its component class at module startup (the
+	// framework's draw-callback-registry idiom) and the volume attaches one
+	// transient instance of each registered class in PostRegisterAllComponents.
+	// Non-shipping only (mirrors the legacy volumes' debug hosting).
+	// ----------------------------------------------------------------------
+
+	/** Register/unregister a debug component class to auto-attach to every
+	 *  ASeinLevelVolume. Call from the owning module's Startup/ShutdownModule. */
+	static void RegisterDebugComponentClass(UClass* ComponentClass);
+	static void UnregisterDebugComponentClass(UClass* ComponentClass);
+
+	virtual void PostRegisterAllComponents() override;
 };
