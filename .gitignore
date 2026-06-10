@@ -19,6 +19,7 @@ Saved/
 **/Content/Levels/Data/
 **/Content/NavData/
 **/Content/FogOfWarData/
+**/Content/LevelData/
 
 # ── IDE / build tooling ──
 .vs/
