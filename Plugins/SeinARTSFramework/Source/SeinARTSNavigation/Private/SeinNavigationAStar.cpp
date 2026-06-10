@@ -141,7 +141,12 @@ bool USeinNavigationAStar::DoSyncBake(UWorld* World, USeinNavigationAStarAsset*&
 	OutAsset->Origin = FFixedVector(FFixedPoint::FromFloat(OriginWorld.X),
 	                                FFixedPoint::FromFloat(OriginWorld.Y),
 	                                FFixedPoint::FromFloat(OriginWorld.Z));
-	OutAsset->Cells.SetNum(GridW * GridH);
+
+	// Bake's internal working cell array (struct-of-cells). Decomposed into the
+	// asset's flat parallel arrays at the end of the bake so the on-disk asset
+	// stores bulk byte/int64 blobs, not a tagged per-element struct array.
+	TArray<FSeinAStarCell> Cells;
+	Cells.SetNum(GridW * GridH);
 
 	const float MaxSlopeCos = FMath::Cos(FMath::DegreesToRadians(MaxWalkableSlopeDegrees));
 
@@ -238,7 +243,7 @@ bool USeinNavigationAStar::DoSyncBake(UWorld* World, USeinNavigationAStarAsset*&
 			const FVector Start(CenterX, CenterY, TopZ);
 			const FVector End(CenterX, CenterY, BottomZ);
 
-			FSeinAStarCell& Cell = OutAsset->Cells[Y * GridW + X];
+			FSeinAStarCell& Cell = Cells[Y * GridW + X];
 
 			// Trace down from above; record whatever walkable-topped surface we
 			// hit. A cube top and the floor next to it both register as walkable
@@ -334,7 +339,7 @@ bool USeinNavigationAStar::DoSyncBake(UWorld* World, USeinNavigationAStarAsset*&
 		{
 			for (int32 X = 0; X < GridW; ++X)
 			{
-				FSeinAStarCell& A = OutAsset->Cells[Y * GridW + X];
+				FSeinAStarCell& A = Cells[Y * GridW + X];
 				if (A.Cost == 0) { A.Connections = 0; continue; }
 
 				const FFixedPoint AStep = CellMaxStep[Y * GridW + X];
@@ -345,7 +350,7 @@ bool USeinNavigationAStar::DoSyncBake(UWorld* World, USeinNavigationAStarAsset*&
 					const int32 NX = X + DX8[n];
 					const int32 NY = Y + DY8[n];
 					if (NX < 0 || NX >= GridW || NY < 0 || NY >= GridH) continue;
-					const FSeinAStarCell& B = OutAsset->Cells[NY * GridW + NX];
+					const FSeinAStarCell& B = Cells[NY * GridW + NX];
 					if (B.Cost == 0) continue;
 
 					++BakeEdges;
@@ -426,7 +431,7 @@ bool USeinNavigationAStar::DoSyncBake(UWorld* World, USeinNavigationAStarAsset*&
 
 		for (int32 Seed = 0; Seed < N; ++Seed)
 		{
-			if (OutAsset->Cells[Seed].Cost == 0) continue;
+			if (Cells[Seed].Cost == 0) continue;
 			if (Labels[Seed] != -1) continue;
 
 			const int32 L = NextLabel++;
@@ -442,7 +447,7 @@ bool USeinNavigationAStar::DoSyncBake(UWorld* World, USeinNavigationAStarAsset*&
 
 				const int32 CX = Cur % GridW;
 				const int32 CY = Cur / GridW;
-				const uint8 Conn = OutAsset->Cells[Cur].Connections;
+				const uint8 Conn = Cells[Cur].Connections;
 
 				for (int32 n = 0; n < 8; ++n)
 				{
@@ -476,8 +481,8 @@ bool USeinNavigationAStar::DoSyncBake(UWorld* World, USeinNavigationAStarAsset*&
 		{
 			if (Labels[i] != -1 && Labels[i] != LargestLabel)
 			{
-				OutAsset->Cells[i].Cost = 0;
-				OutAsset->Cells[i].Connections = 0;
+				Cells[i].Cost = 0;
+				Cells[i].Connections = 0;
 				++Pruned;
 			}
 		}
@@ -509,6 +514,23 @@ bool USeinNavigationAStar::DoSyncBake(UWorld* World, USeinNavigationAStarAsset*&
 	UE_LOG(LogSeinNavigationAStar, Log,
 		TEXT("Bake stats: %dx%d=%d cells — walkable=%d blocked=%d (no_trace_hit=%d)"),
 		GridW, GridH, GridW * GridH, BakeWalkable, BakeBlocked, BakeMissed);
+
+	// Decompose the working cell array into the asset's flat parallel arrays
+	// (struct-of-arrays). These serialize as bulk uint8/int64 blobs — a
+	// TArray<FStruct> can't bulk-serialize (one property tag per cell), which
+	// bloated this asset ~15x. Runtime reads them back in ApplyAssetData.
+	{
+		const int32 NumCellsOut = GridW * GridH;
+		OutAsset->CellCost.SetNumUninitialized(NumCellsOut);
+		OutAsset->CellConnections.SetNumUninitialized(NumCellsOut);
+		OutAsset->CellHeightRaw.SetNumUninitialized(NumCellsOut);
+		for (int32 i = 0; i < NumCellsOut; ++i)
+		{
+			OutAsset->CellCost[i]        = Cells[i].Cost;
+			OutAsset->CellConnections[i] = Cells[i].Connections;
+			OutAsset->CellHeightRaw[i]   = Cells[i].Height.Value;
+		}
+	}
 
 #if WITH_EDITOR
 	if (!SaveAssetToDisk(OutAsset))
@@ -877,19 +899,34 @@ void USeinNavigationAStar::ApplyAssetData(const USeinNavigationAStarAsset* Asset
 	Origin = Asset->Origin;
 
 	const int32 N = Width * Height;
-	CellCost.SetNumUninitialized(N);
-	CellHeight.SetNumUninitialized(N);
-	CellConnections.SetNumUninitialized(N);
-	for (int32 i = 0; i < N; ++i)
+
+	// Validate the flat arrays against the grid. An OLD-format asset (pre-SoA, when
+	// this stored a single TArray<FSeinAStarCell> Cells) loads with these new arrays
+	// empty → mismatch → clear + warn so the user re-bakes, instead of reading garbage.
+	if (N <= 0 || Asset->CellCost.Num() != N || Asset->CellConnections.Num() != N || Asset->CellHeightRaw.Num() != N)
 	{
-		CellCost[i] = Asset->Cells[i].Cost;
-		CellHeight[i] = Asset->Cells[i].Height;
-		CellConnections[i] = Asset->Cells[i].Connections;
+		UE_LOG(LogSeinNavigationAStar, Warning,
+			TEXT("ApplyAssetData: cell arrays (%d/%d/%d) don't match %dx%d=%d — clearing (re-bake needed)."),
+			Asset->CellCost.Num(), Asset->CellConnections.Num(), Asset->CellHeightRaw.Num(), Width, Height, N);
+		Width = Height = 0;
+		CellCost.Reset();
+		CellConnections.Reset();
+		CellHeight.Reset();
+		RebuildWallDistanceField();
+		return;
 	}
 
-	// Derived runtime field — not serialized with the asset since it's purely
-	// a function of CellCost. Recomputing at load time keeps the asset format
-	// stable and lets a future passability change propagate without a rebake.
+	// Cost + Connections are bulk uint8 blobs → direct array copy. Height
+	// reconstructs the FFixedPoint (32.32) from its raw int64.
+	CellCost        = Asset->CellCost;
+	CellConnections = Asset->CellConnections;
+	CellHeight.SetNumUninitialized(N);
+	for (int32 i = 0; i < N; ++i)
+	{
+		CellHeight[i] = FFixedPoint(Asset->CellHeightRaw[i]);
+	}
+
+	// Derived runtime field — purely a function of CellCost; recomputed at load.
 	RebuildWallDistanceField();
 }
 

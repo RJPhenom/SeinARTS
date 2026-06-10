@@ -73,17 +73,28 @@ public:
 	UPROPERTY()
 	FFixedVector Origin;
 
-	/** Shared per-cell ground height (finest res, row-major) — traced once for every
-	 *  layer (the dedup win; D13). */
-	UPROPERTY()
-	TArray<FFixedPoint> SharedHeight;
+	// Shared per-cell surface data (finest res, row-major) — traced once for every
+	// layer (the dedup win; D13). Quantized to byte blobs so they bulk-serialize
+	// (one memcpy) instead of as tagged per-element FFixedPoint struct arrays, which
+	// inflated this asset ~5x (≈78 of 85 bytes/cell were these two fields). The
+	// runtime substrate dequantizes them back to FFixedPoint in ApplyAssetData; at
+	// BAKE time the providers read the EXACT pre-quantization values.
 
-	/** Per-cell surface normal · Up (the trace-normal up-dot), finest res. The nav
-	 *  layer's slope gate reads this (`Dot(Normal, Up) >= cos(maxSlope)`); a free
-	 *  byproduct of the same height trace, so storing it costs one scalar/cell and
-	 *  keeps nav's bake bit-identical. */
+	/** Ground height, quantized to uint16: world_z = HeightMin + SharedHeightQ * HeightQuantum. */
 	UPROPERTY()
-	TArray<FFixedPoint> SharedNormalZ;
+	TArray<uint16> SharedHeightQ;
+
+	/** Surface normal · Up, quantized to uint8 over [-1, 1]: normalZ = SharedNormalZQ * (2/255) - 1.
+	 *  The nav slope gate reads the EXACT value at bake time; this byte form is for storage. */
+	UPROPERTY()
+	TArray<uint8> SharedNormalZQ;
+
+	/** Quantization params for SharedHeightQ: world_z = HeightMin + q * HeightQuantum. */
+	UPROPERTY()
+	FFixedPoint HeightMin;
+
+	UPROPERTY()
+	FFixedPoint HeightQuantum;
 
 	/** Per-cell flags (finest res, row-major): bit 0 = in-play-area (the cell center is
 	 *  inside a level-volume brush; D10), bit 1 = surface-hit (the down-trace found

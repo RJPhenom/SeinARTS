@@ -114,10 +114,39 @@ void USeinLevelDataDefault::ApplyAssetData(const USeinLevelDataDefaultAsset* Ass
 	Height = Asset->Height;
 	CellSizeFP = Asset->CellSize;
 	OriginFP = Asset->Origin;
-	SharedHeight = Asset->SharedHeight;
-	SharedNormalZ = Asset->SharedNormalZ;
-	CellFlags = Asset->CellFlags;
 	RuntimeChannels = Asset->Channels;
+
+	const int32 NumCells = Width * Height;
+
+	// Validate the flat arrays. An OLD-format asset (pre-quantization, when this stored
+	// TArray<FFixedPoint> SharedHeight/SharedNormalZ) loads with these empty → mismatch
+	// → clear + warn so the user re-bakes, instead of reading garbage.
+	if (NumCells <= 0 || Asset->SharedHeightQ.Num() != NumCells
+		|| Asset->SharedNormalZQ.Num() != NumCells || Asset->CellFlags.Num() != NumCells)
+	{
+		UE_LOG(LogSeinLevelData, Warning,
+			TEXT("ApplyAssetData: cell arrays (%d/%d/%d) don't match %dx%d=%d — clearing (re-bake needed)."),
+			Asset->SharedHeightQ.Num(), Asset->SharedNormalZQ.Num(), Asset->CellFlags.Num(), Width, Height, NumCells);
+		Width = Height = 0;
+		SharedHeight.Reset();
+		SharedNormalZ.Reset();
+		CellFlags.Reset();
+		return;
+	}
+
+	CellFlags = Asset->CellFlags; // already raw uint8
+
+	// Dequantize uint16 height + uint8 normal·Up → FFixedPoint (deterministic fixed math).
+	const FFixedPoint HMin = Asset->HeightMin;
+	const FFixedPoint HQuantum = Asset->HeightQuantum;
+	const FFixedPoint NormalStep = FFixedPoint::FromInt(2) / FFixedPoint::FromInt(255); // [-1,1] over 255 steps
+	SharedHeight.SetNumUninitialized(NumCells);
+	SharedNormalZ.SetNumUninitialized(NumCells);
+	for (int32 i = 0; i < NumCells; ++i)
+	{
+		SharedHeight[i]  = HMin + HQuantum * FFixedPoint::FromInt(Asset->SharedHeightQ[i]);
+		SharedNormalZ[i] = NormalStep * FFixedPoint::FromInt(Asset->SharedNormalZQ[i]) - FFixedPoint::One;
+	}
 }
 
 void USeinLevelDataDefault::LoadFromAsset(USeinLevelDataAsset* Asset)
@@ -220,10 +249,19 @@ bool USeinLevelDataDefault::DoSyncBake(UWorld* World, USeinLevelDataDefaultAsset
 	                                FFixedPoint::FromFloat(OriginWorld.Y),
 	                                FFixedPoint::FromFloat(OriginWorld.Z));
 	const int32 NumCells = GridW * GridH;
-	OutAsset->SharedHeight.SetNumUninitialized(NumCells);
-	OutAsset->SharedNormalZ.SetNumUninitialized(NumCells);
-	OutAsset->CellFlags.SetNumUninitialized(NumCells);
 	OutAsset->Channels.Reset();
+
+	// Populate the RUNTIME substrate directly with EXACT fixed-point surface data so the
+	// layer providers below read un-quantized values (nav's slope gate stays exact). The
+	// on-disk asset is quantized only at the END of the bake; runtime is then re-synced
+	// from the (quantized) asset so this bake session matches a reloaded session.
+	Width = GridW;
+	Height = GridH;
+	CellSizeFP = BakedCellSize;
+	OriginFP = OutAsset->Origin;
+	SharedHeight.SetNumUninitialized(NumCells);
+	SharedNormalZ.SetNumUninitialized(NumCells);
+	CellFlags.SetNumUninitialized(NumCells);
 
 	// Trace query + skip list — nav-faithful so the shared height feeds nav identically
 	// (trace-reconciliation note in MicroPlan_CP1.1.md): ignore the volumes; ignore any
@@ -317,9 +355,9 @@ bool USeinLevelDataDefault::DoSyncBake(UWorld* World, USeinLevelDataDefaultAsset
 				}
 			}
 
-			OutAsset->SharedHeight[Idx] = HeightFP;
-			OutAsset->SharedNormalZ[Idx] = NormalZFP;
-			OutAsset->CellFlags[Idx] = Flags;
+			SharedHeight[Idx] = HeightFP;
+			SharedNormalZ[Idx] = NormalZFP;
+			CellFlags[Idx] = Flags;
 
 			++Processed;
 #if WITH_EDITOR
@@ -336,8 +374,8 @@ bool USeinLevelDataDefault::DoSyncBake(UWorld* World, USeinLevelDataDefaultAsset
 		TEXT("Level bake: %dx%d=%d cells — in-bounds=%d surface=%d (ignored %d actors), CellSize=%s"),
 		GridW, GridH, NumCells, NumInBounds, NumSurface, NumIgnoredActors, *BakedCellSize.ToString());
 
-	// Apply runtime data so providers can read the shared substrate during their bake.
-	ApplyAssetData(OutAsset);
+	// Runtime substrate already populated (exact) above — providers read it directly
+	// via GetCellSurface, so they see un-quantized height/normal.
 
 	// Run each registered layer provider — independent per provider (MT-ready). Each
 	// computes its channel block from the shared substrate (+ its own layer-specific
@@ -351,6 +389,31 @@ bool USeinLevelDataDefault::DoSyncBake(UWorld* World, USeinLevelDataDefaultAsset
 		Provider->BakeLayer(*this, World, Block.Data);
 		OutAsset->Channels.Add(MoveTemp(Block));
 	}
+
+	// Quantize the EXACT runtime surface data into the asset's compact on-disk form:
+	// uint16 height + uint8 normal·Up byte blobs (bulk-serialized) instead of tagged
+	// FFixedPoint struct arrays (~5x smaller). Quant is at the float→fixed bake
+	// boundary; the dequant in ApplyAssetData is deterministic fixed-point.
+	{
+		const float HeightQuantumF = FMath::Max(1.0f, TopZ - BottomZ) / 65535.0f;
+		OutAsset->HeightMin = FFixedPoint::FromFloat(BottomZ);
+		OutAsset->HeightQuantum = FFixedPoint::FromFloat(HeightQuantumF);
+		OutAsset->SharedHeightQ.SetNumUninitialized(NumCells);
+		OutAsset->SharedNormalZQ.SetNumUninitialized(NumCells);
+		OutAsset->CellFlags = CellFlags; // already raw uint8
+		for (int32 i = 0; i < NumCells; ++i)
+		{
+			const float HZ = SharedHeight[i].ToFloat();
+			OutAsset->SharedHeightQ[i] = (uint16)FMath::Clamp(FMath::RoundToInt((HZ - BottomZ) / HeightQuantumF), 0, 65535);
+
+			const float NZ = SharedNormalZ[i].ToFloat(); // [-1, 1]
+			OutAsset->SharedNormalZQ[i] = (uint8)FMath::Clamp(FMath::RoundToInt((NZ + 1.0f) * 0.5f * 255.0f), 0, 255);
+		}
+	}
+
+	// Re-sync the runtime substrate from the (now quantized) asset so this baking
+	// session reads the same dequantized values a reloaded session will.
+	ApplyAssetData(OutAsset);
 
 #if WITH_EDITOR
 	if (!SaveAssetToDisk(OutAsset))

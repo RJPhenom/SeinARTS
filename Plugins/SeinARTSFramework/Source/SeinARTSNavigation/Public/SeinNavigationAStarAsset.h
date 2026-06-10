@@ -61,9 +61,26 @@ public:
 	UPROPERTY(VisibleAnywhere, Category = "SeinARTS|Navigation|A* Grid")
 	FFixedVector Origin = FFixedVector::ZeroVector;
 
-	/** Flat row-major cell array (size = Width * Height). */
+	// Per-cell baked data as parallel flat arrays (struct-of-arrays), size =
+	// Width * Height, row-major. Stored this way (instead of a TArray<FSeinAStarCell>)
+	// because a TArray<FStruct> can NEVER bulk-serialize — UE writes a full property
+	// tag per cell, which inflated this asset ~15x (≈150 bytes/cell on disk for ~10
+	// bytes of payload). uint8 / int64 inner types DO bulk-serialize (one memcpy).
+	// FSeinAStarCell remains the bake's internal working type only; the runtime grid
+	// is reconstructed from these in ApplyAssetData.
+
+	/** Per-cell cost: 0 = blocked, 1..254 = passable (cost multiplier), 255 = impassable. */
 	UPROPERTY()
-	TArray<FSeinAStarCell> Cells;
+	TArray<uint8> CellCost;
+
+	/** Per-cell 8-direction connectivity bitmask (see FSeinAStarCell::Connections). */
+	UPROPERTY()
+	TArray<uint8> CellConnections;
+
+	/** Per-cell center height as the raw FFixedPoint (32.32) value. Reconstructed via
+	 *  FFixedPoint(int64) on load. int64 bulk-serializes; FFixedPoint (a struct) would not. */
+	UPROPERTY()
+	TArray<int64> CellHeightRaw;
 
 	FORCEINLINE int32 CellIndex(int32 X, int32 Y) const { return Y * Width + X; }
 	FORCEINLINE bool IsValidCoord(int32 X, int32 Y) const { return X >= 0 && X < Width && Y >= 0 && Y < Height; }

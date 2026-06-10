@@ -158,7 +158,12 @@ bool USeinFogOfWarDefault::DoSyncBake(UWorld* World, USeinFogOfWarDefaultAsset*&
 	                                FFixedPoint::FromFloat(OriginWorld.Z));
 	OutAsset->MinHeight = FFixedPoint::FromFloat(OriginWorld.Z);
 	OutAsset->HeightQuantum = FFixedPoint::FromFloat(QuantumF);
-	OutAsset->Cells.SetNum(GridW * GridH);
+
+	// Bake's internal working cell array (struct-of-cells). Decomposed into the
+	// asset's flat parallel uint8 arrays at the end so the on-disk asset stores
+	// bulk byte blobs, not a tagged per-element struct array.
+	TArray<FSeinFogOfWarCell> Cells;
+	Cells.SetNum(GridW * GridH);
 
 	FCollisionQueryParams QP(SCENE_QUERY_STAT(SeinFogOfWarBake), /*bTraceComplex*/ true);
 	for (ASeinFogOfWarVolume* Vol : Volumes)
@@ -256,7 +261,7 @@ bool USeinFogOfWarDefault::DoSyncBake(UWorld* World, USeinFogOfWarDefaultAsset*&
 			const FVector Start(CX, CY, TopZ);
 			const FVector End  (CX, CY, BottomZ);
 
-			FSeinFogOfWarCell& Cell = OutAsset->Cells[Y * GridW + X];
+			FSeinFogOfWarCell& Cell = Cells[Y * GridW + X];
 
 			// Trace 1: box sweep for the topmost opaque surface anywhere in
 			// this cell's footprint (catches thin blockers).
@@ -335,6 +340,23 @@ bool USeinFogOfWarDefault::DoSyncBake(UWorld* World, USeinFogOfWarDefaultAsset*&
 	UE_LOG(LogSeinFogOfWar, Log,
 		TEXT("Bake stats: %dx%d=%d cells — ground=%d blockers=%d no_hit=%d"),
 		GridW, GridH, GridW * GridH, BakeGroundHits, BakeBlockerHits, BakeMisses);
+
+	// Decompose the working cell array into the asset's flat parallel uint8 arrays
+	// (struct-of-arrays). uint8 inners bulk-serialize (one memcpy each); a
+	// TArray<FStruct> writes a property tag per cell (~7x bloat). Quantization
+	// params (MinHeight/HeightQuantum) are already stored on the asset above.
+	{
+		const int32 NumCellsOut = GridW * GridH;
+		OutAsset->GroundHeight.SetNumUninitialized(NumCellsOut);
+		OutAsset->BlockerHeight.SetNumUninitialized(NumCellsOut);
+		OutAsset->BlockerLayerMask.SetNumUninitialized(NumCellsOut);
+		for (int32 i = 0; i < NumCellsOut; ++i)
+		{
+			OutAsset->GroundHeight[i]     = Cells[i].GroundHeight;
+			OutAsset->BlockerHeight[i]    = Cells[i].BlockerHeight;
+			OutAsset->BlockerLayerMask[i] = Cells[i].BlockerLayerMask;
+		}
+	}
 
 #if WITH_EDITOR
 	if (!SaveAssetToDisk(OutAsset))
@@ -443,6 +465,24 @@ void USeinFogOfWarDefault::ApplyAssetData(const USeinFogOfWarDefaultAsset* Asset
 	Origin = Asset->Origin;
 
 	const int32 NumCells = Width * Height;
+
+	// Validate the flat arrays against the grid. An OLD-format asset (pre-SoA, when
+	// this stored a single TArray<FSeinFogOfWarCell> Cells) loads with these empty →
+	// mismatch → clear + warn so the user re-bakes, instead of reading garbage.
+	if (NumCells <= 0 || Asset->GroundHeight.Num() != NumCells
+		|| Asset->BlockerHeight.Num() != NumCells || Asset->BlockerLayerMask.Num() != NumCells)
+	{
+		UE_LOG(LogSeinFogOfWar, Warning,
+			TEXT("ApplyAssetData: cell arrays (%d/%d/%d) don't match %dx%d=%d — clearing (re-bake needed)."),
+			Asset->GroundHeight.Num(), Asset->BlockerHeight.Num(), Asset->BlockerLayerMask.Num(), Width, Height, NumCells);
+		Width = 0;
+		Height = 0;
+		GroundHeight.Reset();
+		BlockerHeight.Reset();
+		BlockerLayerMask.Reset();
+		return;
+	}
+
 	GroundHeight.SetNumUninitialized(NumCells);
 	BlockerHeight.SetNumUninitialized(NumCells);
 	BlockerLayerMask.SetNumUninitialized(NumCells);
@@ -459,12 +499,13 @@ void USeinFogOfWarDefault::ApplyAssetData(const USeinFogOfWarDefaultAsset* Asset
 	const FFixedPoint Q = Asset->HeightQuantum;
 	for (int32 Idx = 0; Idx < NumCells; ++Idx)
 	{
-		const FSeinFogOfWarCell& Cell = Asset->Cells[Idx];
-		const FFixedPoint GroundZ = MinH + Q * FFixedPoint::FromInt(Cell.GroundHeight);
-		const FFixedPoint BlockerRelZ = Q * FFixedPoint::FromInt(Cell.BlockerHeight);
+		const uint8 GroundQ  = Asset->GroundHeight[Idx];
+		const uint8 BlockerQ = Asset->BlockerHeight[Idx];
+		const FFixedPoint GroundZ = MinH + Q * FFixedPoint::FromInt(GroundQ);
+		const FFixedPoint BlockerRelZ = Q * FFixedPoint::FromInt(BlockerQ);
 		GroundHeight[Idx] = GroundZ;
-		BlockerHeight[Idx] = (Cell.BlockerHeight > 0) ? (GroundZ + BlockerRelZ) : FFixedPoint::Zero;
-		BlockerLayerMask[Idx] = Cell.BlockerLayerMask;
+		BlockerHeight[Idx] = (BlockerQ > 0) ? (GroundZ + BlockerRelZ) : FFixedPoint::Zero;
+		BlockerLayerMask[Idx] = Asset->BlockerLayerMask[Idx];
 	}
 }
 

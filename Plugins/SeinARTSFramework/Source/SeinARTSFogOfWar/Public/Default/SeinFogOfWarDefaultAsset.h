@@ -72,9 +72,25 @@ public:
 	UPROPERTY(VisibleAnywhere, Category = "SeinARTS|Fog Of War|Grid")
 	FFixedPoint HeightQuantum = FFixedPoint::FromInt(10);
 
-	/** Flat row-major cell array (size = Width * Height). */
+	// Per-cell baked data as parallel flat uint8 arrays (struct-of-arrays), size =
+	// Width * Height, row-major. Stored this way (not a TArray<FSeinFogOfWarCell>)
+	// because a TArray<FStruct> can't bulk-serialize — UE writes a property tag per
+	// cell, which inflated this asset ~7x (≈21.5 bytes/cell for 3 bytes of payload).
+	// uint8 arrays bulk-serialize (one memcpy each). FSeinFogOfWarCell stays the
+	// bake's internal working type; the runtime grid is reconstructed (and
+	// dequantized to absolute world Z) by ApplyAssetData.
+
+	/** Terrain height, quantized: world_z = MinHeight + GroundHeight * HeightQuantum. */
 	UPROPERTY()
-	TArray<FSeinFogOfWarCell> Cells;
+	TArray<uint8> GroundHeight;
+
+	/** Static-blocker height above GroundHeight (same quantum). 0 = no static blocker. */
+	UPROPERTY()
+	TArray<uint8> BlockerHeight;
+
+	/** Per-cell static-blocker occlusion layer mask (bit 1 = V, bits 2..7 = N0..N5). */
+	UPROPERTY()
+	TArray<uint8> BlockerLayerMask;
 
 	FORCEINLINE int32 CellIndex(int32 X, int32 Y) const { return Y * Width + X; }
 	FORCEINLINE bool IsValidCoord(int32 X, int32 Y) const { return X >= 0 && X < Width && Y >= 0 && Y < Height; }
