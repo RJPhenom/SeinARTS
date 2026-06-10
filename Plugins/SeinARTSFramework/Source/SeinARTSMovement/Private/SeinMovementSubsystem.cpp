@@ -1,20 +1,23 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinMovementSubsystem.cpp
- * @brief   Registers the movement module's sim systems. See header.
+ * @brief   Registers the movement module's sim systems + hosts the persistent
+ *          per-unit movement-instance registry (CP2.1, D-R2). See header.
  */
 
 #include "SeinMovementSubsystem.h"
 #include "Simulation/SeinAvoidanceSystem.h"
-#include "Simulation/SeinInitialSnapSystem.h"
+#include "Simulation/SeinMovementDriverSystem.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "Movement/SeinMovement.h"
+#include "Movement/SeinBasicMovement.h"
+#include "Components/SeinMovementComponent.h"
 
 void USeinMovementSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 {
 	Super::OnWorldBeginPlay(InWorld);
 
-	// Mirrors USeinSquadSubsystem's create + RegisterSystem lifecycle. (The passive
-	// re-seek stripped 2026-06-03 is deliberately NOT re-added.)
+	// Mirrors USeinSquadSubsystem's create + RegisterSystem lifecycle.
 	USeinWorldSubsystem* Sim = InWorld.GetSubsystem<USeinWorldSubsystem>();
 	if (!Sim) return;
 
@@ -22,10 +25,12 @@ void USeinMovementSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 	AvoidanceSystem = new FSeinAvoidanceSystem();
 	Sim->RegisterSystem(AvoidanceSystem);
 
-	// One-time spawn floor-snap — places idle / never-moved units on the ground
-	// (Z + slope pitch/roll) before their first move order.
-	InitialSnapSystem = new FSeinInitialSnapSystem();
-	Sim->RegisterSystem(InitialSnapSystem);
+	// The always-on per-unit movement driver (CP2.1, D-R2). Its first-contact
+	// snap replaced FSeinInitialSnapSystem; its idle settle/coast is the
+	// ground-up redesign the 2026-06-03 FSeinPositionKeepSystem strip was
+	// deferred for (BAR semantics — settle in place, no return-to-home).
+	DriverSystem = new FSeinMovementDriverSystem(this);
+	Sim->RegisterSystem(DriverSystem);
 }
 
 void USeinMovementSubsystem::Deinitialize()
@@ -36,11 +41,11 @@ void USeinMovementSubsystem::Deinitialize()
 		Sim = World->GetSubsystem<USeinWorldSubsystem>();
 	}
 
-	if (InitialSnapSystem)
+	if (DriverSystem)
 	{
-		if (Sim) Sim->UnregisterSystem(InitialSnapSystem);
-		delete InitialSnapSystem;
-		InitialSnapSystem = nullptr;
+		if (Sim) Sim->UnregisterSystem(DriverSystem);
+		delete DriverSystem;
+		DriverSystem = nullptr;
 	}
 	if (AvoidanceSystem)
 	{
@@ -48,5 +53,57 @@ void USeinMovementSubsystem::Deinitialize()
 		delete AvoidanceSystem;
 		AvoidanceSystem = nullptr;
 	}
+
+	MovementInstanceMap.Empty();
+	MovementInstancePool.Empty();
+
 	Super::Deinitialize();
+}
+
+UClass* USeinMovementSubsystem::ResolveMovementClass(const FSeinMovementComponent& Move)
+{
+	UClass* MoveClass = Move.MovementClass.IsValid()
+		? Move.MovementClass.TryLoadClass<USeinMovement>()
+		: nullptr;
+	if (!MoveClass || MoveClass->HasAnyClassFlags(CLASS_Abstract))
+	{
+		MoveClass = USeinBasicMovement::StaticClass();
+	}
+	return MoveClass;
+}
+
+USeinMovement* USeinMovementSubsystem::GetOrCreateMovementInstance(
+	FSeinEntityHandle Handle, const FSeinMovementComponent& Move)
+{
+	UClass* DesiredClass = ResolveMovementClass(Move);
+
+	if (USeinMovement** Existing = MovementInstanceMap.Find(Handle))
+	{
+		if (*Existing && (*Existing)->GetClass() == DesiredClass)
+		{
+			return *Existing;
+		}
+		// Authored MovementClass changed at runtime (effect / designer swap) —
+		// retire the old instance; the new mode starts with fresh kinematic
+		// state (a different mode's steer/ramp state is meaningless to carry).
+		MovementInstancePool.RemoveSingleSwap(*Existing);
+		MovementInstanceMap.Remove(Handle);
+	}
+
+	USeinMovement* NewInstance = NewObject<USeinMovement>(this, DesiredClass);
+	if (!NewInstance) return nullptr;
+
+	MovementInstanceMap.Add(Handle, NewInstance);
+	MovementInstancePool.Add(NewInstance);
+	return NewInstance;
+}
+
+void USeinMovementSubsystem::SweepStaleMovementInstances(USeinWorldSubsystem& World)
+{
+	for (auto It = MovementInstanceMap.CreateIterator(); It; ++It)
+	{
+		if (World.GetEntityPool().IsValid(It->Key)) continue;
+		MovementInstancePool.RemoveSingleSwap(It->Value);
+		It.RemoveCurrent();
+	}
 }

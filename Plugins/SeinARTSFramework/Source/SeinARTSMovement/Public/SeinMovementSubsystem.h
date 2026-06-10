@@ -1,22 +1,37 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinMovementSubsystem.h
- * @brief   World subsystem hook for registering the movement module's sim systems
- *          with the USeinWorldSubsystem tick loop on world begin-play, mirroring
- *          USeinSquadSubsystem's lifecycle. Registers FSeinAvoidanceSystem (local
- *          unit-unit avoidance steering, PreTick) and FSeinInitialSnapSystem (one-time
- *          spawn floor-snap, PreTick). The passive re-seek (FSeinPositionKeepSystem)
- *          was stripped 2026-06-03 pending a redesign and is NOT re-added here.
+ * @brief   World subsystem hook for the movement module's sim systems AND the
+ *          persistent per-unit movement-instance registry (CP2.1, D-R2).
+ *
+ *          Registers with the USeinWorldSubsystem tick loop on world begin-play
+ *          (mirroring USeinSquadSubsystem's lifecycle):
+ *            - FSeinAvoidanceSystem — local unit-unit avoidance steering (PreTick).
+ *            - FSeinMovementDriverSystem — the always-on per-unit driver
+ *              (AbilityExecution, after the order ticks). Its first-contact
+ *              ground snap subsumed the retired FSeinInitialSnapSystem.
+ *
+ *          The registry owns ONE persistent USeinMovement instance per unit,
+ *          resolved from FSeinMovementComponent::MovementClass and created
+ *          lazily — move orders BORROW the instance (OnMoveBegin is the
+ *          per-order reset point), the driver ticks it idle between orders.
+ *          (The old per-order instance lifecycle, and the separately removed
+ *          FSeinPositionKeepSystem, are both superseded by this — the driver
+ *          IS the ground-up redesign the strip was deferred for.)
  */
 
 #pragma once
 
 #include "CoreMinimal.h"
 #include "Subsystems/WorldSubsystem.h"
+#include "Core/SeinEntityHandle.h"
 #include "SeinMovementSubsystem.generated.h"
 
 class FSeinAvoidanceSystem;
-class FSeinInitialSnapSystem;
+class FSeinMovementDriverSystem;
+class USeinMovement;
+class USeinWorldSubsystem;
+struct FSeinMovementComponent;
 
 UCLASS()
 class SEINARTSMOVEMENT_API USeinMovementSubsystem : public UWorldSubsystem
@@ -27,13 +42,43 @@ public:
 	virtual void OnWorldBeginPlay(UWorld& InWorld) override;
 	virtual void Deinitialize() override;
 
+	/** The entity's PERSISTENT movement instance (CP2.1, D-R2). Resolves
+	 *  `FSeinMovementComponent::MovementClass` (null / unresolved / abstract →
+	 *  USeinBasicMovement), creates the instance lazily on first request, and
+	 *  re-creates it if the authored class changes at runtime (effect-driven
+	 *  movement-class swaps start fresh — by design, a different mode's
+	 *  kinematic state is meaningless to carry). Returns null only on
+	 *  NewObject failure. Callers never own the result — the registry roots it
+	 *  for the entity's lifetime. */
+	USeinMovement* GetOrCreateMovementInstance(FSeinEntityHandle Handle, const FSeinMovementComponent& Move);
+
+	/** The shared movement-class resolution cascade: soft path → TryLoadClass →
+	 *  (null / abstract) → USeinBasicMovement. Single source of truth for the
+	 *  registry and any CDO-level queries. */
+	static UClass* ResolveMovementClass(const FSeinMovementComponent& Move);
+
+	/** Remove registry entries whose entity is no longer alive in the pool.
+	 *  Called once per tick by the driver. Touches no sim state — handle
+	 *  generations already prevent stale-entry collisions — so its timing and
+	 *  iteration order are inert to lockstep. */
+	void SweepStaleMovementInstances(USeinWorldSubsystem& World);
+
 private:
 	/** Local unit-unit avoidance steering system (PreTick). Owned here; registered
 	 *  with the sim loop on world begin-play, unregistered + deleted on teardown. */
 	FSeinAvoidanceSystem* AvoidanceSystem = nullptr;
 
-	/** One-time spawn floor-snap system (PreTick) — snaps idle / never-moved units to
-	 *  the ground (Z + slope pitch/roll) once, so a placed unit rests on the floor
-	 *  before its first move order. Same ownership / lifecycle as AvoidanceSystem. */
-	FSeinInitialSnapSystem* InitialSnapSystem = nullptr;
+	/** The always-on per-unit movement driver (AbilityExecution, priority 10).
+	 *  Same ownership / lifecycle as AvoidanceSystem. */
+	FSeinMovementDriverSystem* DriverSystem = nullptr;
+
+	/** Handle → persistent instance index. Plain map (the codebase idiom for
+	 *  handle-keyed maps); ownership / GC-rooting lives in MovementInstancePool. */
+	TMap<FSeinEntityHandle, USeinMovement*> MovementInstanceMap;
+
+	/** GC root for the persistent movement instances (UPROPERTY-array rooting
+	 *  idiom — see e.g. the ability pools). Entries are added/removed in
+	 *  lockstep with MovementInstanceMap. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<USeinMovement>> MovementInstancePool;
 };

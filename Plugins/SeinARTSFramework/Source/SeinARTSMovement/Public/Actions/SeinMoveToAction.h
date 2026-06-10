@@ -164,9 +164,12 @@ private:
 	FFixedPoint BestDistToFinalSq = FFixedPoint::FromInt(1000000);
 	FFixedPoint TimeStalledNearGoal = FFixedPoint::Zero;
 
-	/** Instantiated on first tick from FSeinMovementComponent::MovementClass
-	 *  (or USeinBasicMovement if the soft class is null/unresolved). Owns the
-	 *  actual advance-along-path logic. */
+	/** BORROWED reference to the entity's PERSISTENT movement instance,
+	 *  acquired on first tick from USeinMovementSubsystem's registry (CP2.1,
+	 *  D-R2 — one instance per UNIT, not per order; the registry owns lifetime
+	 *  and GC-rooting, this UPROPERTY just keeps it reachable while the action
+	 *  runs). Owns the actual advance-along-path logic; OnMoveBegin is the
+	 *  per-order reset point for its persistent kinematic state. */
 	UPROPERTY()
 	TObjectPtr<USeinMovement> Movement;
 

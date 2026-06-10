@@ -228,14 +228,22 @@ exposes AnimBP-shaped movement state. Selection is per unit via `FSeinMovementCo
 **`FSoftClassPath` `MovementClass`** (resolved at runtime via `TryLoadClass`) plus a polymorphic
 `MovementClassData`.
 
-**Passive re-seek (position keeping) — REMOVED 2026-06-03.** The earlier `FSeinPositionKeepSystem`
-(idle keeper units re-pathing back to a `DesiredPosition` "home" after being shoved) was stripped
-wholesale — the system, its `USeinMovementSubsystem` registration, the `USeinMoveToAction`
-home-claim/supersede, and the `FSeinMovementComponent` `bMaintainPosition` / `DesiredPosition` /
-`bHasDesiredPosition` fields are all gone. Deliberate clean slate pending a ground-up redesign
-**after local avoidance lands** — do not reintroduce piecemeal. The movement module currently
-registers **no** sim systems; `USeinMovementSubsystem::OnWorldBeginPlay` is the empty hook where the
-redesign (and avoidance) will re-register.
+**Persistent per-unit movement (CP2.1, Decisions D-R2 — landed 2026-06-10, pending PIE
+verification).** Movement instances are persistent per UNIT, not per order:
+`USeinMovementSubsystem` owns a handle-keyed registry (lazy creation from
+`FSeinMovementComponent::MovementClass`; orders BORROW the instance, `OnMoveBegin` is the
+per-order reset point) and registers two sim systems on world begin-play:
+`FSeinAvoidanceSystem` (PreTick 6, one-sided precomputed steers) and the always-on
+**`FSeinMovementDriverSystem`** (AbilityExecution 10 — after the latent/order ticks;
+`bHasTarget` discriminates ordered-this-tick from idle). The driver calls
+`USeinMovement::TickIdle` on every idle unit each tick: first-contact ground snap (this
+subsumed the retired `FSeinInitialSnapSystem`), coast-down of residual order momentum
+through the decel ramp, and per-tick shove-settle (Z + slope re-snap where the unit
+stands — BAR semantics, **no return-to-home**; the earlier `FSeinPositionKeepSystem`
+stripped 2026-06-03 is superseded by this, not reinstated). Contained entities are
+skipped (their container poses them). Ordered steering still runs inside
+`USeinMoveToAction`'s tick this checkpoint; the full move-step migration into the driver
+is CP2.3's decision/integration split (where the momentum push needs it).
 
 The **concrete modes** — Infantry, Wheeled, Tracked, Hover, Flight — and their per-class data structs
 live in the opt-in **SeinARTSMovementPlus** extension, not here. They derive from the base classes

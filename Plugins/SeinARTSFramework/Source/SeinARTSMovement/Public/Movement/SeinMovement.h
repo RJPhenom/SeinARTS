@@ -14,10 +14,15 @@
  *          - USeinWheeledVehicleMovement   — turn-while-moving, no in-place rotation
  *          - USeinTrackedVehicleMovement   — can rotate in place, slow accel
  *
- *          Movement instances are owned by the action (one per active move).
- *          Long-lived state (current waypoint index) lives on the action and
- *          is passed in by reference; transient per-instance state (facing
- *          interpolation, accel ramp) can live on the movement itself.
+ *          Movement instances are PERSISTENT PER UNIT (CP2.1, Decisions D-R2):
+ *          owned by USeinMovementSubsystem's registry, created lazily, and
+ *          surviving across orders — actions BORROW the instance for the
+ *          order's duration (OnMoveBegin is the per-order reset point).
+ *          Per-order state (current waypoint index) lives on the action and is
+ *          passed in by reference; per-instance kinematic state (steer, ramps)
+ *          persists across orders by construction. The always-on driver
+ *          (FSeinMovementDriverSystem) calls TickIdle between orders, so no
+ *          unit is ever tick-orphaned.
  */
 
 #pragma once
@@ -127,6 +132,30 @@ public:
 	/** Called when the action ends (completed/cancelled/failed). Default:
 	 *  no-op. Override to clean up subclass transient state. */
 	virtual void OnMoveEnd(FSeinEntity& Entity) {}
+
+	/** Always-on idle tick — called by FSeinMovementDriverSystem every sim tick
+	 *  for entities with NO active move order this tick (CP2.1, Decisions D-R2:
+	 *  persistent per-unit movement). Owns the un-ordered half of a unit's life:
+	 *    1. First contact: one-time immediate ground + slope snap (subsumed the
+	 *       retired FSeinInitialSnapSystem; latched via bInitialGroundSnapDone,
+	 *       waits until the nav bake is loaded).
+	 *    2. Coast-down: residual Velocity (left set by cancelled/preempted
+	 *       orders BY DESIGN) decays to rest through the same decel ramp orders
+	 *       use, with the footprint-aware nav floor applied — a unit whose
+	 *       order is cancelled mid-stride now visibly coasts to a stop instead
+	 *       of freezing.
+	 *    3. Settle: per-tick Z/altitude re-snap + smoothed slope pitch/roll at
+	 *       the current position, so a unit shoved by collision settles where
+	 *       it lands (BAR semantics — no return-to-home). Yaw is NEVER touched
+	 *       while idle.
+	 *  Ctx.Path is a shared EMPTY path during idle ticks and the waypoint index
+	 *  is a dummy — overrides must not read them. PURE SELF-MUTATION: never
+	 *  query the spatial hash or read neighbour entities here (pool-order
+	 *  iteration would make that order-dependent → desync); precomputed inputs
+	 *  only — same contract as ApplyAvoidanceSteer. Overrideable for per-class
+	 *  idle behavior; the base impl is correct for ground classes and (via the
+	 *  GetAltitude / QueryReferenceZ virtuals) hover + flight classes. */
+	virtual void TickIdle(const FSeinMovementContext& Ctx);
 
 	/** True if this movement subclass does NOT need a `Nav->FindPath` call —
 	 *  it consumes a straight-line `[Start, End]` polyline directly. Flying

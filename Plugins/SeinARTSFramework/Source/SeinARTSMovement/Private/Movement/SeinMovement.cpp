@@ -540,6 +540,81 @@ void USeinMovement::SnapToGroundImmediate(
 	Entity.Transform.Rotation = YawPitchRoll(Yaw, Pitch, Roll);
 }
 
+void USeinMovement::TickIdle(const FSeinMovementContext& Ctx)
+{
+	if (!Ctx.MovementData) return;
+
+	FSeinEntity& Entity = Ctx.Entity;
+	FSeinMovementComponent& MovementData = *Ctx.MovementData;
+	USeinNavigation* Nav = Ctx.Nav;
+	const FFixedPoint DeltaTime = Ctx.DeltaTime;
+
+	// First contact: one-time immediate ground + slope snap (subsumes the
+	// retired FSeinInitialSnapSystem). Gated on a loaded bake so level-placed
+	// units that spawn before nav loads harmlessly retry next tick; the latch
+	// lives on the (hashed, serialized) component so snapshot/replay agree.
+	if (!MovementData.bInitialGroundSnapDone)
+	{
+		if (!Nav || !Nav->HasRuntimeData()) return;
+		SnapToGroundImmediate(Entity, MovementData, Nav);
+		MovementData.bInitialGroundSnapDone = true;
+		return;
+	}
+
+	const FFixedVector InitialPos = Entity.Transform.GetLocation();
+	FFixedVector Pos = InitialPos;
+
+	// Coast-down: residual momentum (an order cancelled / preempted mid-stride
+	// deliberately leaves Velocity set) decays to rest through the SAME decel
+	// ramp orders use, instead of the unit freezing mid-stride. The footprint-
+	// aware nav floor still applies — a coasting unit can't drift through a
+	// wall. The footprint cache is rebuilt per coast tick: coasting is brief
+	// and the cache may never have been primed for a never-ordered unit.
+	FFixedPoint Speed = MovementData.Velocity.Size();
+	if (Speed > FFixedPoint::Epsilon)
+	{
+		CacheFootprintFromContext(Ctx);
+		Speed = StepSpeedToward(Speed, FFixedPoint::Zero,
+			MovementData.Acceleration, MovementData.Deceleration, DeltaTime);
+		if (Speed <= FFixedPoint::Epsilon)
+		{
+			MovementData.Velocity = FFixedVector::ZeroVector;
+		}
+		else
+		{
+			const FFixedVector Dir = FFixedVector::GetSafeNormal(MovementData.Velocity);
+			Pos.X = Pos.X + Dir.X * Speed * DeltaTime;
+			Pos.Y = Pos.Y + Dir.Y * Speed * DeltaTime;
+			MovementData.Velocity = FFixedVector(Dir.X * Speed, Dir.Y * Speed, FFixedPoint::Zero);
+		}
+		Pos = ResolveNavCollision(InitialPos, Pos, Nav);
+	}
+
+	// Per-tick settle: re-snap Z/altitude (rate-limited) and smooth pitch/roll
+	// toward the slope under the CURRENT position — yaw is never touched while
+	// idle. This is what makes a collision-shoved unit settle where it lands
+	// (BAR semantics: no return-to-home) instead of floating / clipping at its
+	// pre-shove pose. Stationary converged units: the samples still run (no
+	// transform-dirty signal exists to skip on) but the write-guard below keeps
+	// the rotation untouched — flagged in Roadmap_Multithreading.md territory
+	// if idle-unit sampling ever shows up in profiles.
+	ApplyGroundSnapAndAltitude(Pos, Ctx.MovementData, Nav, DeltaTime);
+	Entity.Transform.SetLocation(Pos);
+
+	const FFixedPoint Yaw = YawFromRotation(Entity.Transform.Rotation);
+	const FFixedPoint TargetPitch = ComputeSlopePitch(Pos, Yaw, Nav);
+	const FFixedPoint TargetRoll  = ComputeSlopeRoll(Pos, Yaw, Nav);
+	const FFixedPoint OrientRate  = FFixedPoint::Pi / FFixedPoint::FromInt(3); // 60°/s — matches move ticks
+	const FFixedPoint NewPitch = SmoothAngleToward(MovementData.SmoothedPitch, TargetPitch, OrientRate, DeltaTime);
+	const FFixedPoint NewRoll  = SmoothAngleToward(MovementData.SmoothedRoll,  TargetRoll,  OrientRate, DeltaTime);
+	if (NewPitch != MovementData.SmoothedPitch || NewRoll != MovementData.SmoothedRoll)
+	{
+		MovementData.SmoothedPitch = NewPitch;
+		MovementData.SmoothedRoll  = NewRoll;
+		Entity.Transform.Rotation  = YawPitchRoll(Yaw, NewPitch, NewRoll);
+	}
+}
+
 bool USeinMovement::IsFootprintPassable(const FFixedVector& Pos, USeinNavigation* Nav) const
 {
 	if (!Nav) return true;

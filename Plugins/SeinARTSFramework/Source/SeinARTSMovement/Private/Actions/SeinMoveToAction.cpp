@@ -9,7 +9,7 @@
 #include "SeinNavigationAStar.h"  // Cast for escape-nudge fallback
 #include "SeinNavigationSubsystem.h"
 #include "Movement/SeinMovement.h"
-#include "Movement/SeinBasicMovement.h"
+#include "SeinMovementSubsystem.h"   // persistent movement-instance registry (CP2.1)
 
 #include "Abilities/SeinAbility.h"
 #include "Simulation/SeinWorldSubsystem.h"
@@ -158,22 +158,24 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		? World.GetWorld()->GetSubsystem<USeinNavigationSubsystem>()
 		: nullptr;
 
-	// First-tick setup: instantiate the movement, then either FindPath or
+	// First-tick setup: acquire the movement, then either FindPath or
 	// synthesize a straight-line path depending on the movement's
 	// `BypassPathfinding()` answer. Movement comes first so we can ask it.
 	if (!bPathResolved)
 	{
-		// Resolve the movement class. Soft class path on FSeinMovementComponent
-		// decouples CoreEntity from SeinARTSMovement (where the movement
-		// classes live); TryLoadClass pulls in the resolved UClass* at first use.
-		UClass* MovementClass = MoveComp->MovementClass.IsValid()
-			? MoveComp->MovementClass.TryLoadClass<USeinMovement>()
+		// Acquire the entity's PERSISTENT movement instance (CP2.1, D-R2) from
+		// the movement subsystem's registry — one instance per UNIT, not per
+		// order, so subclass kinematic state (steer, ramps) survives across
+		// orders by construction and the driver can tick the same instance
+		// idle between orders. OnMoveBegin below remains the per-order reset
+		// point (every shipped subclass resets its per-order state there).
+		// The registry owns lifetime/GC-rooting; this action only borrows.
+		USeinMovementSubsystem* MoveSub = World.GetWorld()
+			? World.GetWorld()->GetSubsystem<USeinMovementSubsystem>()
 			: nullptr;
-		if (!MovementClass || MovementClass->HasAnyClassFlags(CLASS_Abstract))
-		{
-			MovementClass = USeinBasicMovement::StaticClass();
-		}
-		Movement = NewObject<USeinMovement>(this, MovementClass);
+		Movement = MoveSub
+			? MoveSub->GetOrCreateMovementInstance(OwnerEntity, *MoveComp)
+			: nullptr;
 		if (!Movement)
 		{
 			Fail(static_cast<uint8>(ESeinMoveFailureReason::NoMovementComponent));
@@ -229,8 +231,9 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		}
 
 		// Throttled means "no budget this tick; wait, retry next tick" —
-		// return false WITHOUT setting bPathResolved or keeping Movement so
-		// the action keeps ticking until budget frees up.
+		// return false WITHOUT setting bPathResolved. Dropping Movement just
+		// clears this action's BORROWED ref (the persistent instance stays in
+		// the registry; next tick re-acquires it).
 		if (Result == ESeinPathResult::Throttled)
 		{
 			Movement = nullptr;

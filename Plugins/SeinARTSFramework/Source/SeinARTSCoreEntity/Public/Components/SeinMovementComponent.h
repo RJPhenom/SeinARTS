@@ -241,11 +241,13 @@ struct SEINARTSCOREENTITY_API FSeinMovementComponent : public FSeinComponent
 	FFixedVector AvoidanceSteer = FFixedVector::ZeroVector;
 
 	/** One-time spawn floor-snap latch. False on a freshly spawned/placed entity;
-	 *  set true after FSeinInitialSnapSystem (Movement module, PreTick) performs the
-	 *  initial ground + slope snap, so a placed unit rests on the floor with correct
-	 *  pitch/roll BEFORE its first move order instead of snapping only on first
-	 *  movement. The movement Tick re-snaps every tick and ignores this flag — it
-	 *  exists purely to make the spawn-time snap run exactly once per entity. */
+	 *  set true after the movement driver's first idle tick performs the initial
+	 *  ground + slope snap (USeinMovement::TickIdle's first-contact branch — the
+	 *  always-on FSeinMovementDriverSystem subsumed the retired
+	 *  FSeinInitialSnapSystem in CP2.1), so a placed unit rests on the floor with
+	 *  correct pitch/roll BEFORE its first move order. Move ticks and idle ticks
+	 *  both re-snap every tick and ignore this flag — it exists purely to make
+	 *  the INSTANT (unsmoothed) spawn-time snap run exactly once per entity. */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Movement")
 	bool bInitialGroundSnapDone = false;
 };
