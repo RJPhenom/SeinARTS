@@ -11,13 +11,16 @@
 #include "Settings/PluginSettings.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Simulation/Systems/SeinNavBlockerStampSystem.h"
+#include "SeinLevelData.h"
+#include "SeinLevelDataSubsystem.h"
+#include "SeinLevelLayerProvider.h"
 
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
 
-DEFINE_LOG_CATEGORY_STATIC(LogSeinNavSubsystem, Log, All);
+#include "SeinARTSNavigationLog.h"
 
 void USeinNavigationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
@@ -46,10 +49,49 @@ void USeinNavigationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		UE_LOG(LogSeinNavSubsystem, Error, TEXT("Failed to instantiate nav class %s"),
 			NavClass ? *NavClass->GetName() : TEXT("<null>"));
 	}
+
+	// CP1.1 unified level-data pipeline. Force the substrate subsystem up first
+	// (InitializeDependency → it exists in editor + PIE for the bake button path),
+	// then — if this nav participates (returns a provider face) — register it as the
+	// "Nav" layer provider and subscribe to rebake/reload so the runtime grid tracks
+	// the shared bake. Non-participating navs (the default base) skip all of this.
+	Collection.InitializeDependency(USeinLevelDataSubsystem::StaticClass());
+	if (Navigation)
+	{
+		if (ISeinLevelLayerProvider* Provider = Navigation->GetLevelDataProvider())
+		{
+			if (USeinLevelData* Substrate = USeinLevelDataSubsystem::GetLevelDataForWorld(GetWorld()))
+			{
+				LevelData = Substrate;
+				Substrate->RegisterLayerProvider(Provider);
+				LevelDataMutatedHandle = Substrate->OnLevelDataMutated.AddUObject(
+					this, &USeinNavigationSubsystem::OnLevelDataChanged);
+			}
+		}
+	}
 }
 
 void USeinNavigationSubsystem::Deinitialize()
 {
+	// Unhook from the shared substrate (CP1.1) before Navigation is torn down — we
+	// reference Navigation->GetLevelDataProvider() to unregister.
+	if (USeinLevelData* Substrate = LevelData.Get())
+	{
+		if (LevelDataMutatedHandle.IsValid())
+		{
+			Substrate->OnLevelDataMutated.Remove(LevelDataMutatedHandle);
+			LevelDataMutatedHandle.Reset();
+		}
+		if (Navigation)
+		{
+			if (ISeinLevelLayerProvider* Provider = Navigation->GetLevelDataProvider())
+			{
+				Substrate->UnregisterLayerProvider(Provider);
+			}
+		}
+	}
+	LevelData = nullptr;
+
 	// Tear down the stamping system before nulling Navigation — the system
 	// holds a weak nav ref but would still leak its own memory if dropped
 	// without unregister-from-world.
@@ -85,15 +127,50 @@ void USeinNavigationSubsystem::LoadBakedAssetIntoNav(UWorld& World)
 {
 	if (!Navigation) return;
 
+	// Unified pipeline first (CP1.1): if the shared substrate carries a baked grid
+	// + a "Nav" channel, adopt it and we're done (substrate-driven path). If the
+	// substrate isn't loaded yet (subsystem begin-play order isn't guaranteed), our
+	// OnLevelDataMutated subscription re-adopts it the moment it loads.
+	if (USeinLevelData* Substrate = LevelData.Get())
+	{
+		if (Substrate->HasRuntimeData() && Navigation->LoadFromSubstrate(*Substrate))
+		{
+			UE_LOG(LogSeinNavSubsystem, Log,
+				TEXT("Nav: loaded grid from the unified level-data substrate (CP1.1 substrate path)."));
+			return;
+		}
+	}
+
+	// Legacy / A-B baseline path: load nav's own baked asset from a NavVolume.
 	for (TActorIterator<ASeinNavVolume> It(&World); It; ++It)
 	{
 		if (USeinNavigationAsset* Asset = It->BakedAsset)
 		{
 			Navigation->LoadFromAsset(Asset);
+			UE_LOG(LogSeinNavSubsystem, Log,
+				TEXT("Nav: loaded grid from legacy NavVolume asset '%s' (substrate carried no nav data)."),
+				*Asset->GetName());
 			return;
 		}
 	}
-	// No baked asset — nav stays empty; FindPath returns no-path.
+	UE_LOG(LogSeinNavSubsystem, Log,
+		TEXT("Nav: no baked data — substrate empty AND no NavVolume asset. FindPath returns no-path."));
+}
+
+void USeinNavigationSubsystem::OnLevelDataChanged()
+{
+	// Shared substrate rebaked / swapped — re-adopt its grid if it now carries nav
+	// data. If not (empty bake / no nav channel), LoadFromSubstrate returns false and
+	// leaves nav as-is, so a prior legacy load (or the next one) still stands.
+	if (!Navigation) return;
+	if (USeinLevelData* Substrate = LevelData.Get())
+	{
+		if (Navigation->LoadFromSubstrate(*Substrate))
+		{
+			UE_LOG(LogSeinNavSubsystem, Log,
+				TEXT("Nav: re-adopted the unified level-data substrate (OnLevelDataMutated)."));
+		}
+	}
 }
 
 void USeinNavigationSubsystem::BindSimDelegates(UWorld& World)

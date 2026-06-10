@@ -21,6 +21,7 @@
 
 class USeinNavigation;
 class USeinNavigationAsset;
+class USeinLevelData;
 class ISeinSystem;
 struct FSeinPathRequest;
 struct FSeinPath;
@@ -78,9 +79,23 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<USeinNavigation> Navigation;
 
+	/** The shared level-data substrate (CP1.1), resolved in Initialize. Nav
+	 *  registers as its "Nav" layer provider and loads its runtime grid from the
+	 *  baked channels when present. Weak — owned by USeinLevelDataSubsystem. */
+	TWeakObjectPtr<USeinLevelData> LevelData;
+
+	/** Handle for our USeinLevelData::OnLevelDataMutated subscription; removed at
+	 *  Deinitialize. */
+	FDelegateHandle LevelDataMutatedHandle;
+
 	/** Called in OnWorldBeginPlay — scans NavVolumes for a baked asset and
 	 *  hands it to the nav. Idempotent. */
 	void LoadBakedAssetIntoNav(UWorld& World);
+
+	/** Re-adopt the shared substrate's grid when it rebakes / reloads (CP1.1).
+	 *  Bound to USeinLevelData::OnLevelDataMutated. No-op if nav doesn't read the
+	 *  substrate or the substrate has no nav data. */
+	void OnLevelDataChanged();
 
 	/** Binds cross-module delegates on USeinWorldSubsystem so sim code can
 	 *  query nav reachability without importing nav headers. */

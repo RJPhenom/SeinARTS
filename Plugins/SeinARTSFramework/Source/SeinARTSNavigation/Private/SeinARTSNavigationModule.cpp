@@ -26,6 +26,15 @@
  */
 
 #include "SeinARTSNavigationModule.h"
+#include "SeinARTSNavigationLog.h"
+
+// Module-shared log categories (declared in SeinARTSNavigationLog.h) — defined
+// once here so they register at module load and always show in the Output Log
+// category filter.
+DEFINE_LOG_CATEGORY(LogSeinNavSubsystem);
+DEFINE_LOG_CATEGORY(LogSeinNavigationAStar);
+DEFINE_LOG_CATEGORY(LogSeinNavDebug);
+DEFINE_LOG_CATEGORY(LogSeinNavBlockerStamp);
 
 #if WITH_EDITOR
 #include "Editor/SeinNavVolumeDetails.h"

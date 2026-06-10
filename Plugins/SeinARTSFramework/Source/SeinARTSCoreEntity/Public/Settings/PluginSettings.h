@@ -195,6 +195,18 @@ public:
 	FSoftClassPath NavigationClass;
 
 	/**
+	 * The level-data substrate class (CP1.1 unified bake — nav + Fog-of-War layers
+	 * read from one baked grid). Empty / invalid → framework default
+	 * `USeinLevelDataDefault`. Swappable wholesale, same soft-path pattern as
+	 * `NavigationClass` / `FogOfWarClass` so SeinARTSCoreEntity stays decoupled from
+	 * SeinARTSLevelData (planning/Decisions.md D12).
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Level Data",
+		meta = (DisplayName = "Level Data Class",
+				MetaClass = "/Script/SeinARTSLevelData.SeinLevelData"))
+	FSoftClassPath LevelDataClass;
+
+	/**
 	 * **Size of one nav grid square, in world units.** The pathfinder works
 	 * on a 2D grid; this sets how big each grid cell is.
 	 *

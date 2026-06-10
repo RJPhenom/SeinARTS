@@ -11,15 +11,17 @@
 
 #include "CoreMinimal.h"
 #include "SeinNavigation.h"
+#include "SeinLevelLayerProvider.h"
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
 #include "SeinNavigationAStar.generated.h"
 
 class UWorld;
 class USeinNavigationAStarAsset;
+class USeinLevelData;
 
 UCLASS(BlueprintType, meta = (DisplayName = "Sein Nav (A*)"))
-class SEINARTSNAVIGATION_API USeinNavigationAStar : public USeinNavigation
+class SEINARTSNAVIGATION_API USeinNavigationAStar : public USeinNavigation, public ISeinLevelLayerProvider
 {
 	GENERATED_BODY()
 
@@ -40,6 +42,18 @@ public:
 	 *  of the volume and you want a margin. */
 	UPROPERTY(EditAnywhere, Category = "Bake", meta = (ClampMin = "0.0"))
 	float BakeTraceHeadroom = 200.0f;
+
+	/** Block "obstacle-top" cells at bake — walkable surfaces that perch above the
+	 *  lower ground they're disconnected from (wall / cube tops). They are unreachable
+	 *  AND invalid standing positions, so IsPassable / placement queries must reject
+	 *  them. Legacy nav left them walkable-but-isolated (pathing-correct, but placement-
+	 *  wrong, and they show as floating walkable cells when a tall play volume encloses
+	 *  them). Detection is local-maximum: a connected walkable component every one of
+	 *  whose disconnected walkable 8-neighbours is more than a step LOWER. A same-level
+	 *  disjoint play region (D11) keeps a same-level/higher disconnected neighbour and is
+	 *  never flagged. Off = legacy behaviour (tops stay walkable-isolated). */
+	UPROPERTY(EditAnywhere, Category = "Bake")
+	bool bBlockElevatedObstacleTops = true;
 
 	/** Emit cell quads (green = walkable, red = blocked) for the nav debug
 	 *  scene proxy. Gated by `ShowFlags.Navigation` / `Sein.Nav.Show`. */
@@ -67,6 +81,22 @@ public:
 	virtual bool ProjectPointToNavOnElevation(const FFixedVector& WorldPos, FFixedVector& OutProjected) const override;
 	virtual bool GetCellHeightAt(const FFixedVector& WorldPos, FFixedPoint& OutZ, bool bWalkableOnly = true) const override;
 	virtual void SetDynamicBlockers(const TArray<FSeinDynamicBlocker>& InBlockers) override;
+
+	// ----------------------------------------------------------------------
+	// ISeinLevelLayerProvider (CP1.1 nav port) — nav contributes a "Nav" channel
+	// (per-cell Cost + Connections) to the unified level-data bake, reproduced
+	// from the shared substrate surface data + nav's own connectivity midpoint
+	// traces. Its runtime reads this channel + the shared height instead of its
+	// own asset; pathing logic stays unchanged.
+	// ----------------------------------------------------------------------
+	virtual FName GetLayerId() const override;
+	virtual void BakeLayer(const USeinLevelData& Substrate, UWorld* World, TArray<uint8>& OutData) override;
+
+	// Unified-pipeline participation (CP1.1): this nav IS a layer provider, and at
+	// runtime loads its grid from the baked "Nav" channel + shared height instead of
+	// its own asset whenever the substrate carries data (dual-path; see subsystem).
+	virtual ISeinLevelLayerProvider* GetLevelDataProvider() override { return this; }
+	virtual bool LoadFromSubstrate(const USeinLevelData& Substrate) override;
 
 	// Debug collectors — declarations stay in all build configs (ABI); bodies
 	// are compiled out in shipping via UE_ENABLE_DEBUG_DRAWING in the .cpp.

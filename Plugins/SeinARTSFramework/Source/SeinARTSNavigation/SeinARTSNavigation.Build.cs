@@ -4,6 +4,13 @@ public class SeinARTSNavigation : ModuleRules
 {
     public SeinARTSNavigation(ReadOnlyTargetRules Target) : base(Target)
     {
+        // Public: nav's public header (SeinNavigationAStar.h) inherits
+        // ISeinLevelLayerProvider, so the include path must propagate to nav's
+        // consumers (SeinARTSMovement, etc.).
+        PublicDependencyModuleNames.AddRange(new string[] {
+            "SeinARTSLevelData"
+        });
+
         PrivateDependencyModuleNames.AddRange(new string[] {
             "Core", "CoreUObject", "Engine",
             "SeinARTSCore", "SeinARTSCoreEntity",

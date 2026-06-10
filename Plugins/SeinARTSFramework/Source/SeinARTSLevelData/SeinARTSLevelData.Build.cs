@@ -1,0 +1,27 @@
+using UnrealBuildTool;
+
+public class SeinARTSLevelData : ModuleRules
+{
+    public SeinARTSLevelData(ReadOnlyTargetRules Target) : base(Target)
+    {
+        PrivateDependencyModuleNames.AddRange(new string[] {
+            "Core", "CoreUObject", "Engine",
+            "SeinARTSCore", "SeinARTSCoreEntity",
+            "GameplayTags",
+            "RenderCore", "RHI"
+        });
+
+        // Editor-only deps for the bake pipeline (slow-task progress + asset save)
+        // and the level-volume details panel + "Bake Level Data" button.
+        // Stripped from shipping builds.
+        if (Target.bBuildEditor)
+        {
+            PrivateDependencyModuleNames.AddRange(new string[] {
+                "Slate", "SlateCore",
+                "UnrealEd", "AssetRegistry",
+                "LevelEditor",
+                "PropertyEditor"
+            });
+        }
+    }
+}

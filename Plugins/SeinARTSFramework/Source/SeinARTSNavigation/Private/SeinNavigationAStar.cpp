@@ -14,6 +14,8 @@
 #include "Components/SeinExtentsComponent.h"
 #include "Stamping/SeinStampUtils.h"
 #include "SeinARTSNavigationModule.h"
+#include "SeinLevelData.h"
+#include "Volumes/SeinLevelVolume.h"
 #include "Math/MathLib.h"  // SeinMath::Atan2/Cos/Sin for AugmentInitialHeading
 
 #include "Engine/World.h"
@@ -32,7 +34,7 @@
 #include "FileHelpers.h"
 #endif
 
-DEFINE_LOG_CATEGORY_STATIC(LogSeinNavigationAStar, Log, All);
+#include "SeinARTSNavigationLog.h"
 
 // ============================================================================
 // Asset class
@@ -582,6 +584,267 @@ bool USeinNavigationAStar::SaveAssetToDisk(USeinNavigationAStarAsset* Asset) con
 #endif
 
 // ============================================================================
+// ISeinLevelLayerProvider (CP1.1 nav port)
+// ============================================================================
+
+FName USeinNavigationAStar::GetLayerId() const
+{
+	return TEXT("Nav");
+}
+
+void USeinNavigationAStar::BakeLayer(const USeinLevelData& Substrate, UWorld* World, TArray<uint8>& OutData)
+{
+	OutData.Reset();
+	if (!World) return;
+
+	const FIntPoint Dims = Substrate.GetDimensions();
+	const int32 GridW = Dims.X;
+	const int32 GridH = Dims.Y;
+	if (GridW <= 0 || GridH <= 0) return;
+	const int32 NumCells = GridW * GridH;
+
+	const FFixedPoint CellSizeFP = Substrate.GetFinestCellSize();
+	const FFixedVector OriginFP = Substrate.GetOrigin();
+	const float CellSizeF = CellSizeFP.ToFloat();
+	const FVector OriginWorld(OriginFP.X.ToFloat(), OriginFP.Y.ToFloat(), OriginFP.Z.ToFloat());
+
+	// ----------------------------------------------------------------------
+	// Stage 1 — Cost + Height from the SHARED substrate (slope gate on the
+	// surface normal). Reproduces nav's per-cell trace result without re-tracing:
+	// the substrate's height/normal came from the same nav-faithful line trace.
+	// `bInBounds` is new (brush mask, D10) — for a box volume it is true
+	// everywhere, so Cost matches nav's legacy AABB bake exactly.
+	// ----------------------------------------------------------------------
+	const FFixedPoint MaxSlopeCosFP = FFixedPoint::FromFloat(FMath::Cos(FMath::DegreesToRadians(MaxWalkableSlopeDegrees)));
+	TArray<uint8> Cost;        Cost.SetNumUninitialized(NumCells);
+	TArray<uint8> Connections; Connections.Init(0, NumCells);
+	TArray<FFixedPoint> CellH; CellH.SetNumUninitialized(NumCells);
+	for (int32 i = 0; i < NumCells; ++i)
+	{
+		FSeinLevelCellSurface Surf;
+		const bool bOk = Substrate.GetCellSurface(i, Surf);
+		Cost[i]  = (bOk && Surf.bInBounds && Surf.bHasSurface && Surf.NormalZ >= MaxSlopeCosFP) ? 1 : 0;
+		CellH[i] = bOk ? Surf.Height : FFixedPoint::Zero;
+	}
+
+	// ----------------------------------------------------------------------
+	// Stage 2 — connectivity (nav's midpoint-trace pass, reproduced). Needs the
+	// level volumes (per-cell max-step + union Z extent) and the same nav skip
+	// list for the midpoint traces.
+	// ----------------------------------------------------------------------
+	TArray<ASeinLevelVolume*> Volumes;
+	FBox UnionBounds(ForceInit);
+	for (TActorIterator<ASeinLevelVolume> It(World); It; ++It)
+	{
+		if (ASeinLevelVolume* V = *It) { Volumes.Add(V); UnionBounds += V->GetVolumeWorldBounds(); }
+	}
+	const float TopZ    = (UnionBounds.IsValid ? UnionBounds.Max.Z : OriginWorld.Z) + BakeTraceHeadroom;
+	const float BottomZ = (UnionBounds.IsValid ? UnionBounds.Min.Z : OriginWorld.Z) - 10.0f;
+
+	FCollisionQueryParams QP(SCENE_QUERY_STAT(SeinNavLayerBake), true /*bTraceComplex*/);
+	for (ASeinLevelVolume* V : Volumes) { if (V) QP.AddIgnoredActor(V); }
+	for (TActorIterator<ASeinActor> It(World); It; ++It)
+	{
+		ASeinActor* A = *It;
+		if (!A) continue;
+		bool bSkip = false;
+		if (const USeinEntityComponent* Bridge = A->FindComponentByClass<USeinEntityComponent>())
+		{
+			if (const FSeinExtentsComponent* Ext = Bridge->FindAuthoredData<FSeinExtentsComponent>())
+			{
+				if (!Ext->bBakesIntoNav) bSkip = true;
+			}
+			if (!bSkip)
+			{
+				for (const FInstancedStruct& E : Bridge->ComponentData)
+				{
+					if (E.GetScriptStruct() == FSeinMovementComponent::StaticStruct()) { bSkip = true; break; }
+				}
+			}
+		}
+		if (bSkip) QP.AddIgnoredActor(A);
+	}
+
+	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
+	const FFixedPoint FallbackStepFP = Settings ? Settings->MaxStepHeight : FFixedPoint::FromInt(50);
+	TArray<FFixedPoint> CellMaxStep; CellMaxStep.SetNum(NumCells);
+	for (int32 Y = 0; Y < GridH; ++Y)
+	{
+		for (int32 X = 0; X < GridW; ++X)
+		{
+			const float CX = OriginWorld.X + (X + 0.5f) * CellSizeF;
+			const float CY = OriginWorld.Y + (Y + 0.5f) * CellSizeF;
+			FFixedPoint Step = FallbackStepFP;
+			for (ASeinLevelVolume* V : Volumes)
+			{
+				if (!V) continue;
+				const FBox VB = V->GetVolumeWorldBounds();
+				if (CX >= VB.Min.X && CX <= VB.Max.X && CY >= VB.Min.Y && CY <= VB.Max.Y)
+				{ Step = V->GetResolvedMaxStepHeight(); break; }
+			}
+			CellMaxStep[Y * GridW + X] = Step;
+		}
+	}
+
+	const float BakeTan = FMath::Tan(FMath::DegreesToRadians(MaxWalkableSlopeDegrees));
+	const FFixedPoint BakeMaxSlopeTanSq = FFixedPoint::FromFloat(BakeTan * BakeTan);
+	const FFixedPoint HalfCellSq = (CellSizeFP * CellSizeFP) / FFixedPoint::FromInt(4);
+	const FFixedPoint HalfDiagSq = HalfCellSq * FFixedPoint::FromInt(2);
+	static const int32 DX8[8] = { 1, -1,  0,  0,  1,  1, -1, -1 };
+	static const int32 DY8[8] = { 0,  0,  1, -1,  1, -1,  1, -1 };
+
+	for (int32 Y = 0; Y < GridH; ++Y)
+	{
+		for (int32 X = 0; X < GridW; ++X)
+		{
+			const int32 AIdx = Y * GridW + X;
+			if (Cost[AIdx] == 0) { Connections[AIdx] = 0; continue; }
+			const FFixedPoint AStep = CellMaxStep[AIdx];
+
+			uint8 Mask = 0;
+			for (int32 n = 0; n < 8; ++n)
+			{
+				const int32 NX = X + DX8[n];
+				const int32 NY = Y + DY8[n];
+				if (NX < 0 || NX >= GridW || NY < 0 || NY >= GridH) continue;
+				const int32 BIdx = NY * GridW + NX;
+				if (Cost[BIdx] == 0) continue;
+
+				const float MidX = OriginWorld.X + (X + 0.5f + 0.5f * DX8[n]) * CellSizeF;
+				const float MidY = OriginWorld.Y + (Y + 0.5f + 0.5f * DY8[n]) * CellSizeF;
+				FHitResult MidHit;
+				if (!World->LineTraceSingleByChannel(MidHit, FVector(MidX, MidY, TopZ), FVector(MidX, MidY, BottomZ), ECC_Visibility, QP))
+				{
+					continue; // no surface at midpoint → no edge
+				}
+
+				const FFixedPoint MidZ = FFixedPoint::FromFloat(MidHit.ImpactPoint.Z);
+				const FFixedPoint AZ = CellH[AIdx];
+				const FFixedPoint BZ = CellH[BIdx];
+				const FFixedPoint AMid = (MidZ > AZ) ? (MidZ - AZ) : (AZ - MidZ);
+				const FFixedPoint MidB = (BZ > MidZ) ? (BZ - MidZ) : (MidZ - BZ);
+
+				const FFixedPoint BStep = CellMaxStep[BIdx];
+				const FFixedPoint EdgeStep = (AStep < BStep) ? AStep : BStep;
+				if (AMid > EdgeStep || MidB > EdgeStep) continue;
+
+				const FFixedPoint HalfSq = (n < 4) ? HalfCellSq : HalfDiagSq;
+				if ((AMid * AMid) > HalfSq * BakeMaxSlopeTanSq ||
+				    (MidB * MidB) > HalfSq * BakeMaxSlopeTanSq) continue;
+
+				Mask |= (1 << n);
+			}
+			Connections[AIdx] = Mask;
+		}
+	}
+
+	// ----------------------------------------------------------------------
+	// Stage 3 — connected-component prune → SIZE THRESHOLD (Decisions D11; was
+	// "keep only the largest"). Removes junk islands (cube tops, floating
+	// geometry) while keeping intentional disjoint play regions. For a typical
+	// single-region level this matches the legacy largest-wins result.
+	// ----------------------------------------------------------------------
+	{
+		TArray<int32> Labels; Labels.Init(-1, NumCells);
+		TArray<int32> SizeByLabel;
+		int32 NextLabel = 0;
+		TArray<int32> Stack; Stack.Reserve(256);
+		for (int32 Seed = 0; Seed < NumCells; ++Seed)
+		{
+			if (Cost[Seed] == 0 || Labels[Seed] != -1) continue;
+			const int32 L = NextLabel++;
+			int32 Count = 0;
+			Stack.Reset(); Stack.Add(Seed); Labels[Seed] = L;
+			while (Stack.Num() > 0)
+			{
+				const int32 Cur = Stack.Pop(EAllowShrinking::No);
+				++Count;
+				const int32 CX = Cur % GridW;
+				const int32 CY = Cur / GridW;
+				const uint8 Conn = Connections[Cur];
+				for (int32 n = 0; n < 8; ++n)
+				{
+					if ((Conn & (1 << n)) == 0) continue;
+					const int32 NX = CX + DX8[n];
+					const int32 NY = CY + DY8[n];
+					if (NX < 0 || NX >= GridW || NY < 0 || NY >= GridH) continue;
+					const int32 NIdx = NY * GridW + NX;
+					if (Labels[NIdx] != -1) continue;
+					Labels[NIdx] = L;
+					Stack.Add(NIdx);
+				}
+			}
+			SizeByLabel.Add(Count);
+		}
+
+		const int32 NumLabels = NextLabel;
+
+		// Elevated obstacle-top detection (CP1.1 — a deliberate improvement over
+		// legacy). A walkable component that PERCHES above lower walkable ground it's
+		// disconnected from — every disconnected walkable 8-neighbour is more than a
+		// step LOWER — is a wall / cube top: unreachable AND not a valid standing
+		// position. Legacy kept these walkable-isolated (pathing was still correct,
+		// but IsPassable / placement wrongly accepted them, and a tall play volume
+		// makes them appear as floating walkable cells). We block them. A same-level
+		// disjoint region (D11) keeps a same-level/higher disconnected neighbour, so
+		// PerchesAbove && !HasNonLower is false for it → never flagged. Toggle via
+		// bBlockElevatedObstacleTops (default on; off = legacy behaviour).
+		int32 ElevatedBlocked = 0;
+		if (bBlockElevatedObstacleTops && NumLabels > 0)
+		{
+			TArray<uint8> PerchesAbove; PerchesAbove.Init(0, NumLabels); // has a >step-lower disconnected nbr
+			TArray<uint8> HasNonLower;  HasNonLower.Init(0, NumLabels);  // has a disconnected nbr NOT >step-lower
+			for (int32 Idx = 0; Idx < NumCells; ++Idx)
+			{
+				const int32 L = Labels[Idx];
+				if (L < 0) continue;
+				const int32 CX = Idx % GridW;
+				const int32 CY = Idx / GridW;
+				const FFixedPoint HereH = CellH[Idx];
+				for (int32 n = 0; n < 8; ++n)
+				{
+					const int32 NX = CX + DX8[n];
+					const int32 NY = CY + DY8[n];
+					if (NX < 0 || NX >= GridW || NY < 0 || NY >= GridH) continue;
+					const int32 NIdx = NY * GridW + NX;
+					const int32 NL = Labels[NIdx];
+					if (NL < 0 || NL == L) continue; // only DIFFERENT walkable components
+					const FFixedPoint EdgeStep = (CellMaxStep[Idx] < CellMaxStep[NIdx]) ? CellMaxStep[Idx] : CellMaxStep[NIdx];
+					if (HereH - CellH[NIdx] > EdgeStep) PerchesAbove[L] = 1; // neighbour is >step LOWER
+					else                                HasNonLower[L]  = 1; // neighbour same-level or higher
+				}
+			}
+			for (int32 i = 0; i < NumCells; ++i)
+			{
+				const int32 L = Labels[i];
+				if (L >= 0 && Cost[i] != 0 && PerchesAbove[L] && !HasNonLower[L])
+				{ Cost[i] = 0; Connections[i] = 0; ++ElevatedBlocked; }
+			}
+		}
+
+		const int32 MinComponentCells = 16; // TODO(CP1.1): expose as a settings knob (resolved Q5)
+		int32 Pruned = 0;
+		for (int32 i = 0; i < NumCells; ++i)
+		{
+			if (Labels[i] != -1 && Cost[i] != 0 && SizeByLabel[Labels[i]] < MinComponentCells)
+			{ Cost[i] = 0; Connections[i] = 0; ++Pruned; }
+		}
+		UE_LOG(LogSeinNavigationAStar, Log,
+			TEXT("Nav layer bake: %dx%d, %d components, pruned %d (size<%d) + %d (elevated tops)"),
+			GridW, GridH, SizeByLabel.Num(), Pruned, MinComponentCells, ElevatedBlocked);
+	}
+
+	// ----------------------------------------------------------------------
+	// Serialize: Cost[] then Connections[] (W*H each). Height comes from the
+	// shared substrate at runtime, so it isn't in the channel. The runtime
+	// consumer knows Width/Height from the substrate.
+	// ----------------------------------------------------------------------
+	OutData.SetNumUninitialized(2 * NumCells);
+	FMemory::Memcpy(OutData.GetData(), Cost.GetData(), NumCells);
+	FMemory::Memcpy(OutData.GetData() + NumCells, Connections.GetData(), NumCells);
+}
+
+// ============================================================================
 // LoadFromAsset
 // ============================================================================
 
@@ -628,6 +891,52 @@ void USeinNavigationAStar::ApplyAssetData(const USeinNavigationAStarAsset* Asset
 	// a function of CellCost. Recomputing at load time keeps the asset format
 	// stable and lets a future passability change propagate without a rebake.
 	RebuildWallDistanceField();
+}
+
+bool USeinNavigationAStar::LoadFromSubstrate(const USeinLevelData& Substrate)
+{
+	// Dual-path (CP1.1): only adopt the substrate when it actually carries a baked
+	// grid AND a "Nav" channel of the expected size. Otherwise return false and
+	// leave any existing grid intact — the subsystem then falls back to nav's own
+	// baked asset (the A/B baseline path).
+	if (!Substrate.HasRuntimeData()) return false;
+
+	const FIntPoint Dims = Substrate.GetDimensions();
+	const int32 N = Dims.X * Dims.Y;
+	if (N <= 0) return false;
+
+	TArray<uint8> NavChannel;
+	if (!Substrate.GetLayerChannel(TEXT("Nav"), NavChannel) || NavChannel.Num() != 2 * N)
+	{
+		return false;
+	}
+
+	Width = Dims.X;
+	Height = Dims.Y;
+	CellSize = Substrate.GetFinestCellSize();
+	Origin = Substrate.GetOrigin();
+
+	// Nav channel layout mirrors BakeLayer exactly: [Cost(N)][Connections(N)].
+	CellCost.SetNumUninitialized(N);
+	CellConnections.SetNumUninitialized(N);
+	FMemory::Memcpy(CellCost.GetData(), NavChannel.GetData(), N);
+	FMemory::Memcpy(CellConnections.GetData(), NavChannel.GetData() + N, N);
+
+	// Cell snap-height reads from the shared substrate surface — the dedup win:
+	// one trace pass feeds nav instead of nav re-tracing every cell.
+	CellHeight.SetNumUninitialized(N);
+	for (int32 i = 0; i < N; ++i)
+	{
+		FSeinLevelCellSurface Surf;
+		CellHeight[i] = Substrate.GetCellSurface(i, Surf) ? Surf.Height : FFixedPoint::Zero;
+	}
+
+	// Derived field — pure function of CellCost, same as ApplyAssetData.
+	RebuildWallDistanceField();
+
+	// Broadcast after runtime state is in sync (mirrors LoadFromAsset).
+	OnNavigationMutated.Broadcast();
+	return true;
 }
 
 void USeinNavigationAStar::RebuildWallDistanceField()

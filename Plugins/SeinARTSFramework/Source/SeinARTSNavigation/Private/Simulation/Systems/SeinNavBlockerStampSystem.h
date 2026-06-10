@@ -21,13 +21,12 @@
 #include "SeinNavigation.h"
 #include "Logging/LogMacros.h"
 
-// Diagnostic log for the nav-blocker stamping pipeline. Off by default —
-// flip on with `log LogSeinNavBlockerStamp Verbose` to confirm how many
-// blockers each tick produces and which entities contributed. Use to
-// diagnose "viz isn't showing" — if the count is 0, no entity is supplying
-// blocker data; if it's >0, the issue is downstream (CollectDebugBlockerCells
-// or DrawDynamicBlockersDebug).
-DEFINE_LOG_CATEGORY_STATIC(LogSeinNavBlockerStamp, Log, All);
+// LogSeinNavBlockerStamp (declared in SeinARTSNavigationLog.h): diagnostic log for
+// the nav-blocker stamping pipeline. Off by default — `log LogSeinNavBlockerStamp
+// Verbose` reports how many blockers each tick produces + which entities
+// contributed. If the count is 0 no entity is supplying blocker data; if it's >0
+// the issue is downstream (CollectDebugBlockerCells / DrawDynamicBlockersDebug).
+#include "SeinARTSNavigationLog.h"
 
 /**
  * System: Nav Blocker Stamp

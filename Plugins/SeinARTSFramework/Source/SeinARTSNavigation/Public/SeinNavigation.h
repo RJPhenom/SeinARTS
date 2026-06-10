@@ -41,6 +41,8 @@ class UWorld;
 class ASeinNavVolume;
 class USeinNavigationAsset;
 class IDetailLayoutBuilder;
+class USeinLevelData;
+class ISeinLevelLayerProvider;
 
 /**
  * One runtime path blocker = one FSeinStampShape posed at an entity. Multiple
@@ -128,6 +130,24 @@ public:
 	/** True if the nav has usable runtime data (either from a baked asset or
 	 *  procedurally initialized). Queries return no-path when false. */
 	virtual bool HasRuntimeData() const { return LoadedAsset != nullptr; }
+
+	// ----------------------------------------------------------------------
+	// Unified level-data pipeline (CP1.1) — OPT-IN. Default navs do NOT
+	// participate (they bake + load their own asset). A nav that registers as a
+	// layer provider on the shared substrate (USeinLevelData) returns its provider
+	// face here and loads its runtime grid from the baked channels. These hooks
+	// default to "no" so the base stays agnostic of the substrate.
+	// ----------------------------------------------------------------------
+
+	/** This nav's layer-provider face, or null if it contributes no channel to the
+	 *  unified level-data bake. The nav subsystem registers a non-null result so the
+	 *  shared bake runs this nav's BakeLayer. Default: null (doesn't participate). */
+	virtual ISeinLevelLayerProvider* GetLevelDataProvider() { return nullptr; }
+
+	/** Load the runtime grid from the unified substrate's baked channels + shared
+	 *  height. Return false if this nav doesn't read the substrate (the subsystem
+	 *  then falls back to this nav's own baked asset — the A/B baseline). Default: false. */
+	virtual bool LoadFromSubstrate(const USeinLevelData& /*Substrate*/) { return false; }
 
 	// ----------------------------------------------------------------------
 	// Queries — core pathing surface

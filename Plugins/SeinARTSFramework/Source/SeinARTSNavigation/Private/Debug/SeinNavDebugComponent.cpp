@@ -37,8 +37,7 @@
 #include "SceneManagement.h"
 #include "DynamicMeshBuilder.h"
 #include "MeshElementCollector.h"
-
-DEFINE_LOG_CATEGORY_STATIC(LogSeinNavDebug, Log, All);
+#include "SeinARTSNavigationLog.h"
 
 // ============================================================================
 // Scene proxy (debug-only — class doesn't exist in shipping)
