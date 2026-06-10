@@ -36,6 +36,20 @@ struct SEINARTSCORE_API FFixedPoint
 	constexpr FFixedPoint() : Value(0) {}
 	explicit constexpr FFixedPoint(int64 InValue) : Value(InValue) {}
 
+	/** Native binary serializer (enabled via the TStructOpsTypeTraits below). Writes
+	 *  the raw 32.32 int64, so a TArray<FFixedPoint> — or any FFixedPoint UPROPERTY —
+	 *  serializes as a compact bulk blob instead of a TAGGED reflected struct (which
+	 *  cost ~3-4x per value and made struct-of-FixedPoint arrays bloat ~15x on disk).
+	 *  Determinism-neutral: the int64 value is already platform-stable.
+	 *  WARNING: this CHANGES the on-disk format. Assets saved with the OLD tagged
+	 *  layout load their FFixedPoint values as GARBAGE (UE has no auto-migration for a
+	 *  tagged→native struct switch) — those assets must be re-saved / re-authored. */
+	bool Serialize(FArchive& Ar)
+	{
+		Ar << Value;
+		return true;
+	}
+
 private:
 
 	// Helper: Deterministic 128-bit division for MSVC (pure integer implementation)
@@ -286,3 +300,15 @@ FORCEINLINE uint32 GetTypeHash(const FFixedPoint& FP)
 {
 	return GetTypeHash(FP.Value);
 }
+
+/** Enable FFixedPoint's native binary serializer (Serialize above) so every
+ *  FFixedPoint instance / array serializes as a raw int64 blob rather than as a
+ *  tagged reflected struct. This is what keeps fixed-point data compact on disk. */
+template<>
+struct TStructOpsTypeTraits<FFixedPoint> : public TStructOpsTypeTraitsBase2<FFixedPoint>
+{
+	enum
+	{
+		WithSerializer = true,
+	};
+};
