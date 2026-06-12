@@ -8,6 +8,7 @@
 #include "SeinMovementSubsystem.h"
 #include "Simulation/SeinAvoidanceSystem.h"
 #include "Simulation/SeinMovementDriverSystem.h"
+#include "Simulation/SeinNavContainmentSystem.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Movement/SeinMovement.h"
 #include "Movement/SeinBasicMovement.h"
@@ -31,6 +32,13 @@ void USeinMovementSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 	// deferred for (BAR semantics — settle in place, no return-to-home).
 	DriverSystem = new FSeinMovementDriverSystem(this);
 	Sim->RegisterSystem(DriverSystem);
+
+	// Nav containment (PostTick 11) — keeps the nav-pure collision floor from
+	// stranding units in baked walls / off the grid edge by pulling any
+	// off-walkable movable collider back onto nav. Movement owns this (it may
+	// know nav); the collision floor stays nav-agnostic.
+	NavContainmentSystem = new FSeinNavContainmentSystem();
+	Sim->RegisterSystem(NavContainmentSystem);
 }
 
 void USeinMovementSubsystem::Deinitialize()
@@ -41,6 +49,12 @@ void USeinMovementSubsystem::Deinitialize()
 		Sim = World->GetSubsystem<USeinWorldSubsystem>();
 	}
 
+	if (NavContainmentSystem)
+	{
+		if (Sim) Sim->UnregisterSystem(NavContainmentSystem);
+		delete NavContainmentSystem;
+		NavContainmentSystem = nullptr;
+	}
 	if (DriverSystem)
 	{
 		if (Sim) Sim->UnregisterSystem(DriverSystem);

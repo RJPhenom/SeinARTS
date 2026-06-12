@@ -812,12 +812,17 @@ bool USeinNavigationAStar::ProjectPointToNav(const FFixedVector& WorldPos, FFixe
 	int32 X, Y;
 	if (!WorldToGrid(WorldPos, X, Y))
 	{
-		// Out-of-bounds: previous impl scanned around uninitialized X/Y here
-		// (UB). Refuse instead — the caller can decide whether to clamp the
-		// input themselves before retrying. Projecting an off-map click onto
-		// a far edge cell is a separate "snap to nav bounds" semantic that
-		// belongs in the caller, not in this helper.
-		return false;
+		// Out of bounds — clamp to the nearest edge cell and project from there
+		// rather than refuse. A unit shoved off the grid edge by the nav-pure
+		// collision floor is recovered onto the boundary by the nav-containment
+		// pass (PostTick), which relies on this; a genuinely far-off point still
+		// resolves to the nearest edge cell, and the ring scan below walks inward
+		// to the closest passable spot.
+		if (Width <= 0 || Height <= 0 || CellSize <= FFixedPoint::Zero) return false;
+		const FFixedPoint LocalX = WorldPos.X - Origin.X;
+		const FFixedPoint LocalY = WorldPos.Y - Origin.Y;
+		X = FMath::Clamp((LocalX / CellSize).ToInt(), 0, Width - 1);
+		Y = FMath::Clamp((LocalY / CellSize).ToInt(), 0, Height - 1);
 	}
 	if (IsCellPassable(X, Y))
 	{

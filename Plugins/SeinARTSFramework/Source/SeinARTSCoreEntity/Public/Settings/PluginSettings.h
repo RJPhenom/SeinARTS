@@ -418,6 +418,17 @@ public:
 				EditConditionHides))
 	int32 NavProjectionMaxRingRadius;
 
+	/** **Formation spread (opt-in).** When OFF (default), a group move order sends
+	 *  every selected unit to the SAME projected destination — the AoE/SC2/CoH
+	 *  model — and the hard collision floor packs them into a no-overlap cluster on
+	 *  arrival. When ON, the broker fans members out across a grid formation around
+	 *  the target. All the formation plumbing (grid layout, anti-cross slot match,
+	 *  destination preview) stays wired either way; this only switches the DEFAULT
+	 *  dispatch. Real per-unit-class / per-order formation modes layer on top later. */
+	UPROPERTY(Config, EditAnywhere, Category = "Movement",
+		meta = (DisplayName = "Formation Spread Enabled"))
+	bool bFormationSpreadEnabled = false;
+
 	// Vehicle path curve fitting is unconditionally Reeds-Shepp now —
 	// `USeinNavigationAStar::FitVehicleCurve` always emits typed
 	// Arc/Straight/Reverse segments via the Reeds-Shepp solver. The

@@ -29,6 +29,7 @@
 
 class FSeinAvoidanceSystem;
 class FSeinMovementDriverSystem;
+class FSeinNavContainmentSystem;
 class USeinMovement;
 class USeinWorldSubsystem;
 struct FSeinMovementComponent;
@@ -71,6 +72,11 @@ private:
 	/** The always-on per-unit movement driver (AbilityExecution, priority 10).
 	 *  Same ownership / lifecycle as AvoidanceSystem. */
 	FSeinMovementDriverSystem* DriverSystem = nullptr;
+
+	/** Nav-containment pass (PostTick 11, after collision): pulls movable
+	 *  colliders the nav-pure collision floor shoved off-walkable back onto nav.
+	 *  Same ownership / lifecycle as the others. */
+	FSeinNavContainmentSystem* NavContainmentSystem = nullptr;
 
 	/** Handle → persistent instance index. Plain map (the codebase idiom for
 	 *  handle-keyed maps); ownership / GC-rooting lives in MovementInstancePool. */

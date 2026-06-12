@@ -23,6 +23,7 @@
 #include "Brokers/SeinDefaultCommandBrokerResolver.h"
 #include "Components/SeinAbilityComponent.h"
 #include "Components/SeinCommandBrokerData.h"
+#include "Settings/PluginSettings.h" // bFormationSpreadEnabled (formation-spread opt-in gate)
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Tags/SeinARTSGameplayTags.h"
 #include "Math/MathLib.h"
@@ -430,6 +431,20 @@ TArray<FFixedVector> USeinDefaultCommandBrokerResolver::ResolvePositions_Impleme
 	TArray<FFixedVector> Out;
 	const int32 N = Members.Num();
 	if (N == 0) return Out;
+
+	// Single-destination default (formation spread is opt-in): every member shares
+	// the ONE projected goal (the already-nav-projected anchor) — the AoE/SC2/CoH
+	// model. The hard collision floor packs them into a no-overlap cluster on
+	// arrival; no destination spread needed. The grid below is the opt-in formation
+	// flavor. Both the destination preview and the commit dispatch call through this
+	// function, so the gate can never split preview from commit.
+	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
+	if (!Settings || !Settings->bFormationSpreadEnabled)
+	{
+		Out.Init(Anchor, N);
+		return Out;
+	}
+
 	Out.Reserve(N);
 
 	// Uniform square-ish grid: compute side length = ceil(sqrt(N)), then iterate

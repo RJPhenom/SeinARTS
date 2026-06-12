@@ -101,8 +101,11 @@ CollisionResolution (PostTick), Cooldown, EffectTick, Lifespan, Production, Stat
 modules register their own systems into the loop (e.g. `SeinNavBlockerStampSystem` from Nav;
 `FSeinSquadSystem` from the Squad extension).
 
-**Collision (extent-vs-extent)** is a deterministic layer **independent of navigation** — it never
-consults `bBlocksNav` / the nav grid, and nav never consults it. Authored on `FSeinExtentsComponent`'s
+**Collision (extent-vs-extent)** is a deterministic layer. Its overlap/separation is authored
+independently of navigation — the overlap test never consults `bBlocksNav` / the nav grid, and nav
+never consults collision. The one nav touch-point: the resolution floor's **hard-barrier gate** refuses
+to push a unit onto a non-walkable cell (baked wall / grid edge) via the pluggable `PassableResolver`
+delegate (cover slots exempt), so a unit is never shoved through a wall or off the grid. Authored on `FSeinExtentsComponent`'s
 collision section (`bCollisionEnabled` / `Mobility` / `ObjectType` / response matrix) against a
 settings-driven channel registry (`USeinARTSCoreSettings::CollisionChannels`). Broadphase =
 `FSeinCollisionSpatialHash` (two-tier: cached static + per-tick dynamic, footprint cell-stamped,

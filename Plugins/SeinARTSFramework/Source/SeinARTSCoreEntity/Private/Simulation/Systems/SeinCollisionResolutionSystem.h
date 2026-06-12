@@ -6,15 +6,18 @@
  *          inside each other — and a unit can never be shoved THROUGH a solid
  *          collider (a wall especially).
  *
- *          Replaces the old FSeinPenetrationResolutionSystem, which reduced every
- *          body to a bounding circle and — critically — relied on the NAV
- *          passability grid to stop push-through. This system is pure
- *          extent-vs-extent: it consults ONLY the collision model
- *          (FSeinExtentsComponent's collision section + the channel registry)
- *          and the deterministic MTV narrowphase. It never touches bBlocksNav,
- *          the nav grid, PassableResolver, or HeightResolver. Walls block
- *          because they are immovable (Static, infinite-mass) colliders, not
- *          because of anything navigation knows.
+ *          Separation is pure extent-vs-extent: the OVERLAP test consults ONLY
+ *          the collision model (FSeinExtentsComponent's collision section + the
+ *          channel registry) and the deterministic MTV narrowphase. The one nav
+ *          touch-point is the HARD-BARRIER gate: a separation move that would land
+ *          a unit on a non-walkable cell (a baked nav wall, or off the grid edge)
+ *          is REFUSED — the unit holds at the barrier instead of being shoved
+ *          across it. That walkability test goes through the world subsystem's
+ *          pluggable PassableResolver delegate (cover slots exempt via
+ *          AuthoritativeDestinationResolver), so the floor stays nav-impl-agnostic:
+ *          it asks "walkable?" through a seam, it doesn't know any nav. Net result:
+ *          sein-extents colliders block by the MTV separation; baked nav walls and
+ *          the grid edge block by this gate; both are never-crossable.
  */
 
 #pragma once
@@ -282,6 +285,51 @@ private:
 		// Reused scratch for the self collider's pre-built shapes (see below).
 		TArray<FCollisionShape2D> SelfShapes;
 
+		// Hard-barrier gate: the push must never move a unit's FOOTPRINT onto a
+		// non-walkable cell — a baked nav wall, or off the grid edge, is a
+		// never-crossable barrier (the body holds clear of the face instead of
+		// being shoved across it). Footprint-aware to MATCH the movement step's
+		// ResolveNavCollision, which keeps the whole body off walls; a center-only
+		// gate would let the push shove a body half-into a wall while its center
+		// cell stayed passable (the "units in the wall" symptom). Queried through
+		// the world subsystem's pluggable passability delegate so the collision
+		// floor stays nav-impl-agnostic — a one-way "walkable?" query, no hard nav
+		// dependency. Cover slots (authoritative destinations) are exempt: a unit
+		// may be delivered onto a bake-blocked slot. Unbound (nav-less / tests) →
+		// ungated, identical to the prior behavior.
+		const bool bBarrierGate = World.PassableResolver.IsBound();
+		const bool bAuthExempt  = World.AuthoritativeDestinationResolver.IsBound();
+		// 8 unit-ring directions (45° spacing), sampled at the collider radius — the
+		// body footprint, not just the center.
+		const FFixedPoint RingDiag = FFixedPoint::FromInt(7071) / FFixedPoint::FromInt(10000); // ≈ cos 45°
+		const FFixedVector BarrierRing[8] = {
+			FFixedVector( FFixedPoint::One,   FFixedPoint::Zero, FFixedPoint::Zero),
+			FFixedVector( RingDiag,           RingDiag,          FFixedPoint::Zero),
+			FFixedVector( FFixedPoint::Zero,  FFixedPoint::One,  FFixedPoint::Zero),
+			FFixedVector(-RingDiag,           RingDiag,          FFixedPoint::Zero),
+			FFixedVector(-FFixedPoint::One,   FFixedPoint::Zero, FFixedPoint::Zero),
+			FFixedVector(-RingDiag,          -RingDiag,          FFixedPoint::Zero),
+			FFixedVector( FFixedPoint::Zero, -FFixedPoint::One,  FFixedPoint::Zero),
+			FFixedVector( RingDiag,          -RingDiag,          FFixedPoint::Zero),
+		};
+		auto CanOccupy = [&World, bBarrierGate, bAuthExempt, &BarrierRing](const FFixedVector& P, FFixedPoint Radius) -> bool
+		{
+			if (!bBarrierGate) return true;
+			// Cover slot (authoritative): the whole body may sit on a bake-blocked cell.
+			if (bAuthExempt && World.AuthoritativeDestinationResolver.Execute(P)) return true;
+			// Center first, then the footprint ring — the body must clear walls too.
+			if (!World.PassableResolver.Execute(P)) return false;
+			if (Radius > FFixedPoint::Zero)
+			{
+				for (int32 i = 0; i < 8; ++i)
+				{
+					const FFixedVector S(P.X + BarrierRing[i].X * Radius, P.Y + BarrierRing[i].Y * Radius, P.Z);
+					if (!World.PassableResolver.Execute(S)) return false;
+				}
+			}
+			return true;
+		};
+
 		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle SelfHandle, FSeinEntity& SelfEntity)
 		{
 			const FSeinExtentsComponent* SelfExt = ExtentsStorage
@@ -376,19 +424,30 @@ private:
 					}
 				}
 
-				// Self moves along -Normal (away from other); preserve Z.
+				// Self moves along -Normal (away from other); preserve Z. HOLDS at
+				// the barrier if the move would put its FOOTPRINT across a
+				// non-walkable cell — the body never crosses a wall / the grid edge
+				// (cover exempt), matching the movement step's footprint clamp.
 				const FFixedVector SelfPosNow = SelfEntity.Transform.GetLocation();
 				FFixedVector SelfNew = SelfPosNow - Normal * (Depth * SelfShare);
 				SelfNew.Z = SelfPosNow.Z;
-				SelfEntity.Transform.SetLocation(SelfNew);
+				if (CanOccupy(SelfNew, SelfRadius))
+				{
+					SelfEntity.Transform.SetLocation(SelfNew);
+				}
 
-				// Other moves along +Normal, unless it's an immovable static.
+				// Other moves along +Normal, unless it's an immovable static —
+				// same footprint-barrier hold rule, using its own collider radius.
 				if (!bOtherImmovable)
 				{
 					const FFixedVector OtherPosNow = OtherEntity->Transform.GetLocation();
 					FFixedVector OtherNew = OtherPosNow + Normal * (Depth * OtherShare);
 					OtherNew.Z = OtherPosNow.Z;
-					OtherEntity->Transform.SetLocation(OtherNew);
+					const FFixedPoint OtherRadius = SeinExtentsHelpers::GetColliderBoundingRadius(*OtherExt);
+					if (CanOccupy(OtherNew, OtherRadius))
+					{
+						OtherEntity->Transform.SetLocation(OtherNew);
+					}
 				}
 			}
 		});
