@@ -48,6 +48,7 @@
 #include "Components/SeinMovementComponent.h"
 #include "Components/SeinNavigationComponent.h"
 #include "Components/SeinExtentsComponent.h"
+#include "Components/SeinBrokerMembershipData.h"
 #include "Movement/SeinMovement.h"
 #include "Types/Entity.h"
 #include "Types/FixedPoint.h"
@@ -84,6 +85,13 @@ public:
 		ISeinComponentStorage* MoveStorage    = World.GetComponentStorageRaw(FSeinMovementComponent::StaticStruct());
 		ISeinComponentStorage* NavStorage     = World.GetComponentStorageRaw(FSeinNavigationComponent::StaticStruct());
 		ISeinComponentStorage* ExtentsStorage = World.GetComponentStorageRaw(FSeinExtentsComponent::StaticStruct());
+		// Group identity for cohesion: a unit's CurrentBrokerHandle (stamped when it
+		// joins a command broker — a selection-order group or a squad). Members of
+		// the SAME broker do NOT avoid each other, so a group converges and packs
+		// instead of steering around itself; the hard collision floor still keeps
+		// them from overlapping. Reusing the broker as the group means no separate
+		// group-ID concept — it's the canonical "who was ordered together."
+		ISeinComponentStorage* BrokerStorage  = World.GetComponentStorageRaw(FSeinBrokerMembershipData::StaticStruct());
 
 		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle SelfHandle, FSeinEntity& SelfEntity)
 		{
@@ -111,6 +119,12 @@ public:
 			const FSeinExtentsComponent* SelfExt = ExtentsStorage ? static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(SelfHandle)) : nullptr;
 			const FFixedPoint SelfRadius = USeinMovement::ResolveCollisionRadius(SelfExt, SelfNav);
 			if (SelfRadius <= FFixedPoint::Zero) { Move->AvoidanceSteer = FFixedVector::ZeroVector; return; }
+
+			// Self's group (broker) handle — used to skip same-group neighbours below.
+			// Invalid when the unit isn't in any broker (a lone, never-grouped unit).
+			const FSeinBrokerMembershipData* SelfBroker = BrokerStorage
+				? static_cast<const FSeinBrokerMembershipData*>(BrokerStorage->GetComponentRaw(SelfHandle)) : nullptr;
+			const FSeinEntityHandle SelfBrokerHandle = SelfBroker ? SelfBroker->CurrentBrokerHandle : FSeinEntityHandle();
 
 			const FFixedVector SelfPos = SelfEntity.Transform.GetLocation();
 
@@ -146,6 +160,20 @@ public:
 				// which is why the filter must live here.) Fetched once and reused for head-on below.
 				const FSeinMovementComponent* OtherMove = MoveStorage ? static_cast<const FSeinMovementComponent*>(MoveStorage->GetComponentRaw(OtherHandle)) : nullptr;
 				if (!OtherMove) continue;
+
+				// GROUP COHESION: skip a neighbour in the SAME broker (group). A group
+				// ordered together converges and packs without steering around itself;
+				// the collision floor keeps them non-overlapping. Cross-group and
+				// ungrouped neighbours still avoid normally. This is what kills the
+				// in-group fan-out the closing-velocity gate alone can't (units
+				// converging on one point ARE closing on each other, so they'd
+				// otherwise dodge their own squad).
+				if (SelfBrokerHandle.IsValid())
+				{
+					const FSeinBrokerMembershipData* OtherBroker = BrokerStorage
+						? static_cast<const FSeinBrokerMembershipData*>(BrokerStorage->GetComponentRaw(OtherHandle)) : nullptr;
+					if (OtherBroker && OtherBroker->CurrentBrokerHandle == SelfBrokerHandle) continue;
+				}
 
 				// WEIGHT-PRIORITY GATE. This unit only yields to a neighbour whose AvoidanceWeight
 				// qualifies: equal-or-higher when bAvoidSameWeights, strictly higher otherwise. So a

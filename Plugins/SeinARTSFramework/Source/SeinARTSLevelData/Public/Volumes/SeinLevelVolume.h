@@ -81,15 +81,31 @@ public:
 	bool bBakeStaticBlockers = true;
 
 	// ----------------------------------------------------------------------
-	// Output
+	// Bake — the bake action + the asset it produces. Presented as a "Bake"
+	// sub-group under the shared "SeinARTS" details category (alongside
+	// Navigation / Fog Of War), with the button just above BakedAsset. That
+	// nesting is built by FSeinLevelVolumeDetails (registered by this module in
+	// the editor): a CallInEditor button can't ride the "A|B" sub-category
+	// nesting — its category is forced through EditCategory, which pulls it out
+	// into a detached top-level "SeinARTS|Bake" header — so BakeLevelData is a
+	// plain method here and the customization draws the button. BakedAsset is
+	// authored at plain "SeinARTS" (guaranteeing a real parent category for the
+	// customization to edit); the customization hides that default row and
+	// re-adds it inside the "Bake" group, beneath the button.
 	// ----------------------------------------------------------------------
+
+	/** Bake the unified level data covering every Sein Level Volume in this level
+	 *  (runs the shared trace pass + all registered layer providers). Routes through
+	 *  USeinLevelDataSubsystem::BeginBake. Surfaced as the "Bake Level Data" button
+	 *  in the details panel's "Bake" group (see FSeinLevelVolumeDetails). */
+	void BakeLevelData();
 
 	/** Baked level data for this level. Assigned by the bake pipeline; shared across
 	 *  all level volumes on the level (last-baked wins). Polymorphic — concrete type
 	 *  depends on the active USeinLevelData subclass. SOFT reference — loaded on demand
 	 *  (at begin-play by the level-data subsystem), so opening the map does NOT
 	 *  force-load the baked substrate package into the level's hard-reference graph. */
-	UPROPERTY(EditAnywhere, Category = "SeinARTS|Output")
+	UPROPERTY(EditAnywhere, Category = "SeinARTS")
 	TSoftObjectPtr<USeinLevelDataAsset> BakedAsset;
 
 	// ----------------------------------------------------------------------
@@ -122,12 +138,6 @@ public:
 
 	/** Per-volume fog cell size with plugin-settings fallback (`VisionCellSize`). */
 	FFixedPoint GetResolvedVisionCellSize() const;
-
-	/** Editor button: bake the unified level data covering every Sein Level Volume
-	 *  in this level (runs the shared trace pass + all registered layer providers).
-	 *  Routes through USeinLevelDataSubsystem::BeginBake. */
-	UFUNCTION(CallInEditor, Category = "SeinARTS|Build", meta = (DisplayName = "Bake Level Data"))
-	void BakeLevelData();
 
 	// ----------------------------------------------------------------------
 	// Debug-viz component registry. The nav / FoW debug scene-proxy components

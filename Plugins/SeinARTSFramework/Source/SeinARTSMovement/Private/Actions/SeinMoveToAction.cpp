@@ -310,16 +310,21 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		AcceptanceRadiusSq = Acceptance * Acceptance;
 
 		// Near-goal stall-settle vicinity (see StallVicinityRadiusSq in the
-		// header). Sized to absorb footprint-pinning: a body of radius R held off
-		// a wall-embedded goal can never get its center closer than ~R, so the
-		// band must reach past the acceptance ring by a couple of footprints to
-		// recognise "this is as close as the body fits." Uses the SAME footprint
-		// cascade as runtime collision + path planning (Extents → NavComp → 0).
-		// Floored at 2×Acceptance so zero-footprint (intangible) units still get a
-		// meaningful band — harmless there since a point body never pins.
+		// header). Sized for TWO arrival cases: (1) a single body pinned a
+		// footprint short of a goal it can't physically occupy (wall-embedded
+		// goal — a body of radius R can't get its center closer than ~R); and
+		// (2) the OUTER ring of a crowd packing onto ONE shared destination (the
+		// single-destination default) — those units pin a pack-radius out, held
+		// by the bodies ahead, and must still recognise "this is as close as I
+		// fit" instead of shoving forever. The ×8 footprint reach covers a packed
+		// disc of up to ~64 units (pack radius ≈ footprint·√N); first-pass tuning
+		// value — make it crowd-size-aware (broker-supplied N) if huge groups
+		// outgrow it. Uses the SAME footprint cascade as runtime collision + path
+		// planning (Extents → NavComp → 0). Floored at 2×Acceptance so
+		// zero-footprint (intangible) units still get a meaningful band.
 		const FFixedPoint StallFootprint =
 			USeinMovement::ResolveCollisionRadius(&World, OwnerEntity, NavComp);
-		FFixedPoint StallVicinityRadius = Acceptance + StallFootprint * FFixedPoint::Two;
+		FFixedPoint StallVicinityRadius = Acceptance + StallFootprint * FFixedPoint::FromInt(8);
 		const FFixedPoint MinStallVicinity = Acceptance * FFixedPoint::Two;
 		if (StallVicinityRadius < MinStallVicinity) StallVicinityRadius = MinStallVicinity;
 		StallVicinityRadiusSq = StallVicinityRadius * StallVicinityRadius;
