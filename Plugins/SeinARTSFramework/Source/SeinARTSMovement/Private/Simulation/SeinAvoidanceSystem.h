@@ -161,19 +161,19 @@ public:
 				const FSeinMovementComponent* OtherMove = MoveStorage ? static_cast<const FSeinMovementComponent*>(MoveStorage->GetComponentRaw(OtherHandle)) : nullptr;
 				if (!OtherMove) continue;
 
-				// GROUP COHESION: skip a neighbour in the SAME broker (group). A group
-				// ordered together converges and packs without steering around itself;
-				// the collision floor keeps them non-overlapping. Cross-group and
-				// ungrouped neighbours still avoid normally. This is what kills the
+				// Neighbour's group (broker handle) — drives BOTH cohesion (skip a
+				// same-group neighbour) AND group-vs-group passing (Phase D, below).
+				const FSeinBrokerMembershipData* OtherBroker = BrokerStorage
+					? static_cast<const FSeinBrokerMembershipData*>(BrokerStorage->GetComponentRaw(OtherHandle)) : nullptr;
+				const FSeinEntityHandle OtherBrokerHandle = OtherBroker ? OtherBroker->CurrentBrokerHandle : FSeinEntityHandle();
+
+				// GROUP COHESION: a neighbour in the SAME broker (group) is NOT avoided —
+				// the group converges and packs without steering around itself; the
+				// collision floor keeps them non-overlapping. This is what kills the
 				// in-group fan-out the closing-velocity gate alone can't (units
-				// converging on one point ARE closing on each other, so they'd
-				// otherwise dodge their own squad).
-				if (SelfBrokerHandle.IsValid())
-				{
-					const FSeinBrokerMembershipData* OtherBroker = BrokerStorage
-						? static_cast<const FSeinBrokerMembershipData*>(BrokerStorage->GetComponentRaw(OtherHandle)) : nullptr;
-					if (OtherBroker && OtherBroker->CurrentBrokerHandle == SelfBrokerHandle) continue;
-				}
+				// converging on one point ARE closing on each other, so they'd otherwise
+				// dodge their own squad). Cross-group + ungrouped neighbours fall through.
+				if (SelfBrokerHandle.IsValid() && OtherBrokerHandle == SelfBrokerHandle) continue;
 
 				// WEIGHT-PRIORITY GATE. This unit only yields to a neighbour whose AvoidanceWeight
 				// qualifies: equal-or-higher when bAvoidSameWeights, strictly higher otherwise. So a
@@ -248,6 +248,22 @@ public:
 				if (SideDot > LateralBand)        { TurnSign = -FFixedPoint::One; } // neighbour on right → steer left
 				else if (SideDot < -LateralBand)  { TurnSign =  FFixedPoint::One; } // neighbour on left  → steer right
 				else { TurnSign = (SelfHandle.Index < OtherHandle.Index) ? FFixedPoint::One : -FFixedPoint::One; }
+
+				// PHASE D — group-vs-group passing. When BOTH units belong to (different)
+				// groups, OVERRIDE the per-unit do-si-do with a uniform "shift to my own
+				// right" (+1 = +Right = heading-right). Every member of a group then steps
+				// the SAME way, so two opposing blobs slide past each other like sidewalk
+				// traffic instead of each unit independently picking a side and splaying
+				// the group. Both groups shift to their respective rights, which (for a
+				// head-on pass) are opposite world directions — so they clear each other.
+				// Lone (ungrouped) neighbours keep the do-si-do above.
+				// (Corridor-awareness — reduce the shift when the chosen side is
+				// nav-blocked — is a deferred refinement; the hard-barrier push keeps
+				// units from crossing the wall in the meantime.)
+				if (SelfBrokerHandle.IsValid() && OtherBrokerHandle.IsValid())
+				{
+					TurnSign = FFixedPoint::One;
+				}
 
 				// Steer weight is PURE STEERING — NO mass term. HeadOn (encounter angle) × Falloff
 				// (proximity, whose range ∝ combined footprint, so it is size-proportional) × TurnSign.
