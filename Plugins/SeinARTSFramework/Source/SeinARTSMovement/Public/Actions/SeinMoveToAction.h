@@ -159,10 +159,30 @@ private:
 	 *  resets the stall clock; only genuine fresh closing does. It re-arms (resets
 	 *  to the live distance) whenever the agent is OUTSIDE the vicinity, so a
 	 *  detour / repath / escape that moves it away measures a clean fresh approach.
-	 *  `TimeStalledNearGoal` accumulates while near + not improving. */
+	 *  The "fresh closing" test runs in ACTUAL distance against `StallProgressBand`
+	 *  (~half a footprint, set at setup): the agent must close more than that band
+	 *  past its best to re-arm. (A squared additive epsilon was distance-dependent
+	 *  and vanished to sub-mm at band ranges, so jitter/creep re-armed forever and
+	 *  units shoved the goal endlessly.) `TimeStalledNearGoal` accumulates while
+	 *  near + not improving. */
 	FFixedPoint StallVicinityRadiusSq = FFixedPoint::Zero;
 	FFixedPoint BestDistToFinalSq = FFixedPoint::FromInt(1000000);
+	FFixedPoint StallProgressBand = FFixedPoint::Zero;
 	FFixedPoint TimeStalledNearGoal = FFixedPoint::Zero;
+
+	/** PILE-UP ARRIVAL. A unit near its destination that has stopped making
+	 *  progress (its stall clock has reached a short delay) AND is pressed against
+	 *  a neighbour which has come to REST between it and the goal has effectively
+	 *  arrived - it is only shoving the back of a settled crowd. The progress gate
+	 *  is what keeps a still-flowing unit from collapsing: a unit advancing toward
+	 *  the destination keeps closing, so its stall clock stays ~0 and it never
+	 *  qualifies - it flows in and fills the pack. Propagates the settle outward
+	 *  from the first unit to stop, so a whole pack rests in a quick ripple, and it
+	 *  is robust to loose / imperfect packing (it asks "are the units AHEAD
+	 *  stopped?"). Shares the crowd-sized `StallVicinityRadiusSq` band with the
+	 *  stall settle. `StallFootprintRadius` is the unit's collision radius, cached
+	 *  at setup to size the neighbour query. */
+	FFixedPoint StallFootprintRadius = FFixedPoint::Zero;
 
 	/** BORROWED reference to the entity's PERSISTENT movement instance,
 	 *  acquired on first tick from USeinMovementSubsystem's registry (CP2.1,

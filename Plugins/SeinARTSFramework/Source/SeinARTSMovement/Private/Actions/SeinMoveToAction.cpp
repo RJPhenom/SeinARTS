@@ -15,6 +15,9 @@
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Components/SeinMovementComponent.h"
 #include "Components/SeinNavigationComponent.h"
+#include "Components/SeinBrokerMembershipData.h"
+#include "Components/SeinCommandBrokerData.h"
+#include "Collision/SeinCollisionSpatialHash.h"
 #include "Math/MathLib.h"
 #include "Types/Entity.h"
 #include "Types/FixedPoint.h"
@@ -324,7 +327,44 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		// zero-footprint (intangible) units still get a meaningful band.
 		const FFixedPoint StallFootprint =
 			USeinMovement::ResolveCollisionRadius(&World, OwnerEntity, NavComp);
-		FFixedPoint StallVicinityRadius = Acceptance + StallFootprint * FFixedPoint::FromInt(8);
+		// StallVicinityRadiusSq is sized crowd-aware below, once the group's member
+		// count is known (the outer ring of a big arrival cluster must fall inside
+		// the band, else those units never reach the settle logic at all).
+
+		// Minimum MEANINGFUL closing (in ACTUAL distance) to keep the near-goal
+		// stall clock from resetting — see BestDistToFinalSq in the header. Half a
+		// footprint: larger than collision push-back jitter and slow pack-compaction
+		// creep (so a pinned outer unit settles), far smaller than what a genuinely
+		// approaching unit covers in the 0.75s settle window. Floored so zero-
+		// footprint units still get a real band, not the old sub-mm one.
+		StallProgressBand = StallFootprint / FFixedPoint::Two;
+		const FFixedPoint MinProgressBand = FFixedPoint::FromInt(5);
+		if (StallProgressBand < MinProgressBand) StallProgressBand = MinProgressBand;
+		StallFootprintRadius = StallFootprint;
+
+		// Crowd-aware settle vicinity. Both the stall settle and the pile-up settle
+		// (in TickAction) must reach the OUTER ring of the arrival cluster, whose
+		// radius grows with the group: a loose pack of N bodies spans ~footprint x
+		// 2*sqrt(N). Size the band from the broker member count so the whole pack
+		// qualifies. Safe to be large because BOTH settles also require the unit to
+		// have stopped making progress (the stall clock) - radius alone never
+		// settles a freely-flowing unit, so the moving body of a column is immune.
+		int32 GroupCount = 1;
+		if (const FSeinBrokerMembershipData* Membership =
+				World.GetComponent<FSeinBrokerMembershipData>(OwnerEntity))
+		{
+			if (Membership->CurrentBrokerHandle.IsValid())
+			{
+				if (const FSeinCommandBrokerData* Broker =
+						World.GetComponent<FSeinCommandBrokerData>(Membership->CurrentBrokerHandle))
+				{
+					if (Broker->Members.Num() > GroupCount) GroupCount = Broker->Members.Num();
+				}
+			}
+		}
+		const FFixedPoint GroupReach = FFixedPoint::FromInt(6)
+			+ FFixedPoint::Two * SeinMath::Sqrt(FFixedPoint::FromInt(GroupCount));
+		FFixedPoint StallVicinityRadius = Acceptance + StallFootprint * GroupReach;
 		const FFixedPoint MinStallVicinity = Acceptance * FFixedPoint::Two;
 		if (StallVicinityRadius < MinStallVicinity) StallVicinityRadius = MinStallVicinity;
 		StallVicinityRadiusSq = StallVicinityRadius * StallVicinityRadius;
@@ -792,6 +832,72 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		MoveComp->bArrivalImminent = false;
 	}
 
+	// PILE-UP ARRIVAL (crowd-aware). A unit near its destination that has STOPPED
+	// MAKING PROGRESS (its stall clock has reached the short delay below) and is
+	// pressed against a neighbour which has come to REST between it and the goal
+	// has effectively arrived - it is only shoving the back of a settled crowd, so
+	// stop. The progress gate is the crucial part: a still-FLOWING unit keeps
+	// closing, so its stall clock stays ~0 and it NEVER enters here - it flows in
+	// and fills the pack instead of collapsing the moment the front ranks arrive.
+	// Only a genuinely stuck unit settles, and it does so fast (the short delay)
+	// rather than waiting the full stall duration. Propagates outward from whoever
+	// stops first (the goal occupant arrives within AcceptanceRadius), so a whole
+	// pack rests in a quick ripple. (TimeStalledNearGoal is maintained by the
+	// stall block below; here it carries last tick's value - a one-tick lag that
+	// is immaterial.)
+	// CORNER GUARD: only settle on the FINAL path segment. A tight corner can be
+	// straight-line-near the goal while still path-far (the route bends around
+	// it), so a unit jammed in corner congestion must NOT count as "arrived" -
+	// that orphans it mid-route. While intermediate waypoints remain, keep going;
+	// the settle can only fire once the unit is on the last leg to the goal.
+	if (!bReachedEnd && !bInEscapeMode && Path.Waypoints.Num() > 0
+		&& StallVicinityRadiusSq > FFixedPoint::Zero
+		&& CurrentWaypointIndex >= Path.Waypoints.Num() - 1
+		&& TimeStalledNearGoal >= FFixedPoint::FromInt(3) / FFixedPoint::FromInt(10))
+	{
+		const FFixedVector AgentPos = Entity->Transform.GetLocation();
+		const FFixedVector FinalWp = Path.Waypoints.Last();
+		FFixedVector ToFinal = FinalWp - AgentPos;
+		ToFinal.Z = FFixedPoint::Zero;
+		const FFixedPoint MyGoalDistSq = ToFinal.SizeSquared();
+		if (MyGoalDistSq <= StallVicinityRadiusSq)
+		{
+			const FFixedPoint MyGoalDist = SeinMath::Sqrt(MyGoalDistSq);
+			// Neighbour search reach ~2.5 footprints: enough to see the body
+			// directly ahead even at loose pack spacing.
+			const FFixedPoint ContactReach =
+				StallFootprintRadius * FFixedPoint::FromInt(5) / FFixedPoint::Two;
+			TArray<FSeinEntityHandle> Near;
+			World.GetCollisionSpatialHash().QueryRadius(AgentPos, ContactReach, Near, OwnerEntity);
+			for (const FSeinEntityHandle& Other : Near)
+			{
+				// Only a neighbour at REST counts (no active move order - arrived
+				// or idle). A still-moving blocker means the crowd has not settled
+				// yet, so keep pushing.
+				const FSeinMovementComponent* OtherMove =
+					World.GetComponent<FSeinMovementComponent>(Other);
+				if (!OtherMove || OtherMove->bHasTarget) continue;
+				const FSeinEntity* OtherEntity = World.GetEntity(Other);
+				if (!OtherEntity) continue;
+				FFixedVector OtherToFinal = FinalWp - OtherEntity->Transform.GetLocation();
+				OtherToFinal.Z = FFixedPoint::Zero;
+				// The rested neighbour must sit BETWEEN me and the goal (closer by a
+				// margin) - then I am genuinely piling up behind it, not resting
+				// beside an unrelated stopped unit.
+				if (OtherToFinal.Size() + StallProgressBand < MyGoalDist)
+				{
+					MoveComp->Velocity = FFixedVector::ZeroVector;
+					bReachedEnd = true;
+					UE_LOG(LogSeinMove, Verbose,
+						TEXT("MoveAction pile-up settle: jammed behind a rested "
+						     "neighbour %.1fcm from goal - arriving (entity %s)"),
+						MyGoalDist.ToFloat(), *OwnerEntity.ToString());
+					break;
+				}
+			}
+		}
+	}
+
 	// ----------------------------------------------------------------------
 	// Near-goal stall settle. See StallVicinityRadiusSq in the header. A unit
 	// pinned a footprint short of a final waypoint it can't physically occupy
@@ -803,7 +909,8 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 	// the goal) and once the movement already reported arrival this tick.
 	// ----------------------------------------------------------------------
 	if (!bReachedEnd && !bInEscapeMode && Path.Waypoints.Num() > 0
-		&& StallVicinityRadiusSq > FFixedPoint::Zero)
+		&& StallVicinityRadiusSq > FFixedPoint::Zero
+		&& CurrentWaypointIndex >= Path.Waypoints.Num() - 1) // CORNER GUARD: final leg only (see pile-up above)
 	{
 		const FFixedVector AgentPos = Entity->Transform.GetLocation();
 		FFixedVector ToFinal = Path.Waypoints.Last() - AgentPos;
@@ -822,10 +929,15 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		{
 			// Within the band. BestDistToFinalSq only DECREASES here, so jitter or
 			// orbit around the closest reachable point never resets the clock —
-			// only genuine fresh closing does. ProgressEpsilon keeps fixed-point
-			// noise from registering as progress.
-			const FFixedPoint ProgressEpsilonSq = FFixedPoint::FromInt(4); // ~(2cm)²
-			if (DistFinalSq + ProgressEpsilonSq < BestDistToFinalSq)
+			// only genuine fresh closing does. The progress test is in ACTUAL
+			// distance against StallProgressBand (set at setup), NOT a squared
+			// additive epsilon — that collapsed to a sub-mm threshold at band
+			// ranges, so collision jitter / slow pack-creep re-armed the clock every
+			// tick and the unit shoved the goal forever. Now a pinned unit settles;
+			// a genuinely approaching one gains >> a footprint per window and stays.
+			const FFixedPoint DistFinal     = SeinMath::Sqrt(DistFinalSq);
+			const FFixedPoint BestDistFinal = SeinMath::Sqrt(BestDistToFinalSq);
+			if (DistFinal + StallProgressBand < BestDistFinal)
 			{
 				BestDistToFinalSq = DistFinalSq;
 				TimeStalledNearGoal = FFixedPoint::Zero;
