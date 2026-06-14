@@ -118,8 +118,8 @@ struct SEINARTSCOREENTITY_API FSeinNavigationComponent : public FSeinComponent
 	 *  vehicles especially, because turn radius prevents tight arrivals.
 	 *  Tune lower for infantry / units expected to land exactly on a spot.
 	 *
-	 *  Move abilities can override this per-call; the override only kicks
-	 *  in if it's > 0. Default 50 = half a 100cm cell. */
+	 *  Default 50 = half a 100cm cell. (There is no per-call override today —
+	 *  this per-unit value is authoritative; see API_Cleanup_Pass.md.) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Navigation",
 		meta = (ClampMin = "0.0"))
 	FFixedPoint AcceptanceRadius = FFixedPoint::FromInt(50);

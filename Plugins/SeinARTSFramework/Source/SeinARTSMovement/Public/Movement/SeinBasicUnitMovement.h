@@ -1,16 +1,18 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinBasicUnitMovement.h
- * @brief   Generic RTS-style movement -- seek + arrive along path with
- *          rotation toward velocity direction.
+ * @brief   The RTS-default ground mover: seek + arrive along the path with
+ *          kinematic arrival braking and rotation toward velocity direction.
  *
- *          Sits between USeinBasicMovement (raw transform-along-path, no
- *          steering sugar) and the vehicle classes (momentum, kinematic
- *          arrival, curvature preview). This class is the AoE2 / StarCraft
- *          feel: units face the direction they're walking at TurnRate.
- *          Instant speed (no accel/decel).
+ *          The StarCraft / AoE2 feel — units face the direction they're walking
+ *          at TurnRate. Builds on USeinBasicMovement (raw transform-along-path)
+ *          by adding face-velocity turning and a kinematic speed ramp. The
+ *          concrete vehicle modes (Wheeled / Tracked / Hover / Flight) live in
+ *          the SeinARTSMovementPlus extension, not here.
  *
  *          Key differences from Basic:
+ *            - Kinematic arrival: brakes to a stop at the acceptance ring
+ *              (v² = 2·a·d) instead of moving at a flat top speed.
  *            - Rotates the entity to face actual movement delta each tick,
  *              clamped by `MoveData.TurnRate`.
  *            - Persists `MoveData.Velocity` from the actual moved delta

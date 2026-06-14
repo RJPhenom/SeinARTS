@@ -743,22 +743,12 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 					return true;
 				}
 
-				// Find a nudge target. Requires the AStar nav impl — pluggable
-				// nav providers that don't ship a FindEscapeNudgeTarget go
-				// straight to Stranded.
-				USeinNavigationAStar* NavAStar = Cast<USeinNavigationAStar>(Nav);
-				if (!NavAStar)
-				{
-					UE_LOG(LogSeinMove, Warning,
-						TEXT("MoveAction escape: Nav is not USeinNavigationAStar — Stranded (entity %s)"),
-						*OwnerEntity.ToString());
-					Fail(static_cast<uint8>(ESeinMoveFailureReason::Stranded));
-					return true;
-				}
-
+				// Find a nudge target via the nav's escape hook. A nav impl that
+				// doesn't provide one (base default returns false) falls through
+				// to the sealed-pocket Stranded path below — same terminal outcome.
 				FFixedVector EscapeTarget;
 				int32 TargetWD = -1;
-				if (!NavAStar->FindEscapeNudgeTarget(AgentPosForEscape, EscapeTarget, TargetWD))
+				if (!Nav->FindEscapeNudgeTarget(AgentPosForEscape, EscapeTarget, TargetWD))
 				{
 					// No passable neighbor at chassis cell — sealed pocket.
 					// No amount of nudging will help; fail immediately.

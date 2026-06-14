@@ -8,11 +8,14 @@
  *          pick the movement per unit via FSeinMovementComponent::MovementClass;
  *          null defaults to USeinBasicMovement.
  *
- *          Shipped subclasses:
- *          - USeinBasicMovement            — direct seek + arrive (default)
- *          - USeinInfantryMovement         — basic + face-velocity + smoothed kinematics
- *          - USeinWheeledVehicleMovement   — turn-while-moving, no in-place rotation
- *          - USeinTrackedVehicleMovement   — can rotate in place, slow accel
+ *          Shipped by this module:
+ *          - USeinBasicMovement      — raw seek + arrive (the null/invalid fallback)
+ *          - USeinBasicUnitMovement  — RTS default: seek+arrive + kinematic arrival
+ *                                      ramp + face-velocity turning
+ *          The concrete modes (Infantry / Wheeled / Tracked / Hover / Flight) live
+ *          in the SeinARTSMovementPlus extension and resolve through the soft
+ *          FSeinMovementComponent::MovementClass path — the framework has no
+ *          compile-time dependency on them.
  *
  *          Movement instances are PERSISTENT PER UNIT (CP2.1, Decisions D-R2):
  *          owned by USeinMovementSubsystem's registry, created lazily, and
@@ -170,11 +173,13 @@ public:
 	virtual bool BypassPathfinding() const { return false; }
 
 	/** Returns the per-class sub-data UScriptStruct this movement consumes
-	 *  out of `FSeinMovementComponent::MovementClassData`. Used by the custom
-	 *  details panel to auto-swap the MovementClassData field's struct type
-	 *  when designers change the MovementClass selection, AND by runtime
-	 *  helpers that need to unwrap the per-class authoring (Altitude
-	 *  resolution, per-class kinematic params, etc.).
+	 *  out of `FSeinMovementComponent::MovementClassData`. Used by runtime
+	 *  helpers that unwrap the per-class authoring (Altitude resolution,
+	 *  per-class kinematic params, etc.).
+	 *
+	 *  NOTE: a details-panel auto-swap (re-init MovementClassData to this struct
+	 *  when MovementClass changes) is INTENDED but NOT yet wired — designers
+	 *  currently hand-pick the matching sub-data. See API_Cleanup_Pass.md (#3).
 	 *
 	 *  Default returns nullptr — the subclass has no per-class authoring
 	 *  (e.g., bare USeinBasicMovement). Subclasses with sub-data override
@@ -324,13 +329,13 @@ public:
 	 *  units (long tanks): the planner refuses corridors narrower than the
 	 *  bounding circle even when the body could fit if perfectly oriented.
 	 *
-	 *  // TODO(PlannerAStar): Orientation-aware pathfinding can fit a long
-	 *  // tank through a corridor narrower than its bounding circle by
-	 *  // tracking facing per A* node (per-orientation state). That belongs
-	 *  // in the turn-planning nav variant (SeinNavigationPlannerAStar)
-	 *  // alongside Reeds-Shepp curve fitting, NOT here. The base AStar
-	 *  // uses the conservative bounding circle and that's the correct
-	 *  // trade-off for generic / infantry-centric games. */
+	 *  // TODO(PlannerAStar) — ASPIRATIONAL / UNBUILT: neither a turn-planning nav
+	 *  // variant (SeinNavigationPlannerAStar) nor Reeds-Shepp curve fitting exists
+	 *  // today. Orientation-aware pathfinding could fit a long tank through a
+	 *  // corridor narrower than its bounding circle by tracking facing per A* node
+	 *  // (per-orientation state); that would belong in such a future variant, NOT
+	 *  // here. The base AStar uses the conservative bounding circle and that's the
+	 *  // correct trade-off for generic / infantry-centric games. */
 	static FFixedPoint ResolveCollisionRadius(
 		USeinWorldSubsystem* World,
 		FSeinEntityHandle SelfHandle,

@@ -1502,28 +1502,16 @@ void USeinNavigationAStar::BuildSmoothedPath(const TArray<FIntPoint>& CellPath, 
 // ============================================================================
 // Path query API
 //
-// Three public methods, each with a clear, single responsibility:
+//   FindCellPath — 2D grid A* + LoS string-pull smoothing + wall-push. Produces
+//                  a straight-segment polyline. The real planner; used directly
+//                  by all shipped movement modes and as a building block by any
+//                  vehicle-aware nav subclass.
 //
-//   FindCellPath     — 2D A* + smoothing + wall push. NO kinematic curve fit.
-//                      Used directly by infantry / basic / basic-unit movement
-//                      modes that drive a cell-aware polyline without curve
-//                      enforcement, AND by vehicle movement modes as the first
-//                      half of a compose-the-pipeline planning flow.
-//
-//   FitVehicleCurve  — Converts a cell polyline into drivable arc/straight
-//                      segments respecting MinTurnRadius and StartHeading.
-//                      Called explicitly by vehicle movement modes after
-//                      FindCellPath. Phase 2 wraps the legacy Dubins logic;
-//                      Phase 3 swaps in Reeds-Shepp behind a settings flag.
-//
-//   FindPath         — Backward-compat wrapper: FindCellPath followed by
-//                      FitVehicleCurve (gated internally on MinTurnRadius>0).
-//                      Routes the budgeted USeinNavigationSubsystem::RequestPath
-//                      and any direct callers that haven't migrated to the
-//                      split API. Same behavior as pre-Phase 2.
-//
-// Behavior of FindPath is byte-identical to the pre-Phase-2 monolith — the
-// refactor only exposes the two halves so movement modes can compose them.
+//   FindPath     — Public entry point. Currently calls FindCellPath then
+//                  PushWaypointsAwayFromWalls. (A kinematic curve fitter —
+//                  arc / Reeds-Shepp segments off MinTurnRadius — is NOT built;
+//                  every emitted segment is Straight. If you arrived here from a
+//                  FitVehicleCurve/Dubins comment elsewhere, it never shipped.)
 // ============================================================================
 
 bool USeinNavigationAStar::FindCellPath(const FSeinPathRequest& Request, FSeinPath& OutPath) const

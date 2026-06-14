@@ -6,7 +6,10 @@
 #include "Render/SeinFogOfWarRender.h"
 
 #include "Components/PostProcessComponent.h"
+#include "Engine/BlendableInterface.h"
 #include "Engine/Texture2D.h"
+#include "EngineUtils.h"
+#include "HAL/IConsoleManager.h"
 #include "Materials/MaterialInterface.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "RHI.h"
@@ -23,6 +26,31 @@ const FName ASeinFogOfWarRender::P_FogTexture(TEXT("FogTexture"));
 const FName ASeinFogOfWarRender::P_WorldMin(TEXT("FogWorldMin"));
 const FName ASeinFogOfWarRender::P_WorldSize(TEXT("FogWorldSize"));
 
+#if !UE_BUILD_SHIPPING
+// Dev-only convenience for driving the vision-layer switch from the console.
+// The shipping switch path is SetActiveVisionLayer / CycleVisionLayer (BP/input).
+static void SeinVisionLayerConsoleCommand(const TArray<FString>& Args, UWorld* World)
+{
+	if (!World) return;
+	const bool bCycle = (Args.Num() == 0);
+	const int32 Layer = bCycle ? -1 : FCString::Atoi(*Args[0]);
+	int32 Count = 0;
+	for (TActorIterator<ASeinFogOfWarRender> It(World); It; ++It)
+	{
+		if (bCycle) { It->CycleVisionLayer(); }
+		else        { It->SetActiveVisionLayer(Layer); }
+		++Count;
+	}
+	UE_LOG(LogSeinFogOfWar, Display, TEXT("[Sein.Vision.Layer] %s on %d fog render actor(s)."),
+		bCycle ? TEXT("cycled") : *FString::Printf(TEXT("set layer %d"), Layer), Count);
+}
+
+static FAutoConsoleCommandWithWorldAndArgs GSeinVisionLayerCmd(
+	TEXT("Sein.Vision.Layer"),
+	TEXT("Fog render: set the local active vision layer (-1=Normal, 0..5=custom slot). No arg = cycle Normal + enabled layers."),
+	FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&SeinVisionLayerConsoleCommand));
+#endif
+
 ASeinFogOfWarRender::ASeinFogOfWarRender()
 {
 	// Poll only for observer changes (e.g. local PC late-sets its SeinPlayerID,
@@ -36,16 +64,10 @@ ASeinFogOfWarRender::ASeinFogOfWarRender()
 	PostProcess->bUnbound = true;     // tint the whole view; actor position is irrelevant
 	PostProcess->BlendWeight = 1.0f;
 
-	// Pre-seed the 6 custom-layer slots (index N → EVNNNNNN bit 2+N) so the
-	// mapping is stable + visible in the details panel. Disabled by default —
-	// the three core tiers work with none enabled.
-	CustomLayers.SetNum(6);
-	static const FLinearColor Seed[6] = {
-		FLinearColor(0.20f, 0.40f, 1.00f), FLinearColor(0.55f, 0.30f, 1.00f),
-		FLinearColor(0.70f, 0.20f, 0.90f), FLinearColor(0.85f, 0.45f, 1.00f),
-		FLinearColor(1.00f, 0.25f, 0.85f), FLinearColor(1.00f, 0.55f, 0.80f)
-	};
-	for (int32 i = 0; i < 6; ++i) { CustomLayers[i].Color = Seed[i]; }
+	// Six fixed vision-layer slots (index N → EVNNNNNN bit 2+N) so the mapping is
+	// stable + visible in the details panel. All disabled by default — Normal view
+	// + the three core tiers work with none enabled.
+	VisionLayerPostProcessMaterials.SetNum(6);
 }
 
 void ASeinFogOfWarRender::BeginPlay()
@@ -55,7 +77,6 @@ void ASeinFogOfWarRender::BeginPlay()
 	if (UMaterialInterface* Mat = FogPostProcessMaterial.LoadSynchronous())
 	{
 		FogMID = UMaterialInstanceDynamic::Create(Mat, this);
-		PostProcess->AddOrUpdateBlendable(FogMID, 1.0f);
 	}
 	else
 	{
@@ -63,6 +84,8 @@ void ASeinFogOfWarRender::BeginPlay()
 			TEXT("[FogRender] %s has no FogPostProcessMaterial assigned — fog overlay is inert."),
 			*GetName());
 	}
+
+	RefreshBlendables();   // [ (style if any), fog ]
 
 	if (USeinFogOfWar* Fog = ResolveFog())
 	{
@@ -99,6 +122,42 @@ void ASeinFogOfWarRender::Tick(float DeltaSeconds)
 	}
 }
 
+void ASeinFogOfWarRender::SetActiveVisionLayer(int32 LayerIndex)
+{
+	if (LayerIndex < -1) LayerIndex = -1;
+
+	// Switching to a custom slot is only allowed if that slot is live.
+	if (LayerIndex >= 0 &&
+		(!VisionLayerPostProcessMaterials.IsValidIndex(LayerIndex) ||
+		 !VisionLayerPostProcessMaterials[LayerIndex].bEnabled))
+	{
+		UE_LOG(LogSeinFogOfWar, Verbose,
+			TEXT("[FogRender] Ignoring switch to vision layer %d (out of range or disabled)."), LayerIndex);
+		return;
+	}
+
+	if (LayerIndex == ActiveVisionLayer) return;
+
+	ActiveVisionLayer = LayerIndex;
+	UpdateStyleBlendable();   // swap the full-screen style for the new layer
+	RebuildTexture();         // re-bake the fog reveal from the new layer's bit
+}
+
+void ASeinFogOfWarRender::CycleVisionLayer()
+{
+	// Ordered cycle: Normal (-1), then each ENABLED custom slot in index order.
+	TArray<int32, TInlineAllocator<7>> Order;
+	Order.Add(-1);
+	for (int32 i = 0; i < VisionLayerPostProcessMaterials.Num(); ++i)
+	{
+		if (VisionLayerPostProcessMaterials[i].bEnabled) { Order.Add(i); }
+	}
+
+	int32 Cur = Order.IndexOfByKey(ActiveVisionLayer);
+	if (Cur == INDEX_NONE) { Cur = 0; }   // active slot got disabled → restart at Normal
+	SetActiveVisionLayer(Order[(Cur + 1) % Order.Num()]);
+}
+
 void ASeinFogOfWarRender::RefreshFogRender()
 {
 	ResolveObserver();
@@ -120,6 +179,49 @@ bool ASeinFogOfWarRender::ResolveObserver()
 	CachedObserver = Obs;
 	bObserverResolved = true;
 	return true;
+}
+
+uint8 ASeinFogOfWarRender::ComputeVisibleMask() const
+{
+	if (ActiveVisionLayer < 0 || ActiveVisionLayer >= 6)
+	{
+		return SEIN_FOW_BIT_NORMAL;   // Normal view → the V bit
+	}
+
+	uint8 Mask = static_cast<uint8>(1u << (2 + ActiveVisionLayer));   // the layer's N-bit
+	if (VisionLayerPostProcessMaterials.IsValidIndex(ActiveVisionLayer) &&
+		VisionLayerPostProcessMaterials[ActiveVisionLayer].bCombineWithNormalVision)
+	{
+		Mask |= SEIN_FOW_BIT_NORMAL;   // additive: this layer OR normal vision
+	}
+	return Mask;
+}
+
+void ASeinFogOfWarRender::UpdateStyleBlendable()
+{
+	ActiveStyleMaterial = nullptr;
+	if (VisionLayerPostProcessMaterials.IsValidIndex(ActiveVisionLayer))
+	{
+		const FSeinVisionLayerView& View = VisionLayerPostProcessMaterials[ActiveVisionLayer];
+		if (View.bEnabled)
+		{
+			ActiveStyleMaterial = View.PostProcessMaterial.LoadSynchronous();
+		}
+	}
+	RefreshBlendables();
+}
+
+void ASeinFogOfWarRender::RefreshBlendables()
+{
+	if (!PostProcess) return;
+
+	// Order = application order: style composites UNDER, fog ON TOP. Fog must win
+	// so unexplored stays hidden — otherwise a thermal recolor would re-light
+	// blacked-out terrain and leak the map.
+	TArray<FWeightedBlendable>& Blendables = PostProcess->Settings.WeightedBlendables.Array;
+	Blendables.Reset();
+	if (ActiveStyleMaterial) { Blendables.Add(FWeightedBlendable(1.0f, ActiveStyleMaterial.Get())); }
+	if (FogMID)              { Blendables.Add(FWeightedBlendable(1.0f, FogMID.Get())); }
 }
 
 void ASeinFogOfWarRender::EnsureTexture(int32 W, int32 H)
@@ -162,9 +264,10 @@ void ASeinFogOfWarRender::RebuildTexture()
 	EnsureTexture(W, H);
 	if (!FogTexture || PixelBuffer.Num() != W * H * 4) return;
 
+	const uint8 VisibleMask = ComputeVisibleMask();
 	for (int32 i = 0; i < Cells.Num(); ++i)
 	{
-		const FColor C = TintForCell(Cells[i]).ToFColor(/*bSRGB*/ false);
+		const FColor C = TintForCell(Cells[i], VisibleMask).ToFColor(/*bSRGB*/ false);
 		const int32 o = i * 4;
 		PixelBuffer[o + 0] = C.B;
 		PixelBuffer[o + 1] = C.G;
@@ -207,33 +310,18 @@ void ASeinFogOfWarRender::UploadPixels()
 		});
 }
 
-FLinearColor ASeinFogOfWarRender::TintForCell(uint8 Bits) const
+FLinearColor ASeinFogOfWarRender::TintForCell(uint8 Bits, uint8 VisibleMask) const
 {
 	const bool bExplored = (Bits & SEIN_FOW_BIT_EXPLORED) != 0;
-	const bool bVisible  = (Bits & SEIN_FOW_BIT_NORMAL) != 0;
+	const bool bVisible  = (Bits & VisibleMask) != 0;
 
-	// Base tier (the three requested tiers):
-	FLinearColor Rgb = UnexploredColor;
 	float A;
-	if (bVisible)        { A = 0.0f; }                 // currently visible → clear
+	if (bVisible)        { A = 0.0f; }                 // visible on the active layer → clear
 	else if (bExplored)  { A = ExploredOpacity; }      // explored memory → dimmed
 	else                 { A = UnexploredOpacity; }    // never seen → opaque
 
-	// Custom layers (slot N → EVNNNNNN bit 2+N): blend the layer tint over the
-	// base, and make sure it shows even over visible terrain.
-	const int32 Count = FMath::Min(CustomLayers.Num(), 6);
-	for (int32 i = 0; i < Count; ++i)
-	{
-		const uint8 Bit = static_cast<uint8>(1u << (2 + i));
-		if ((Bits & Bit) != 0 && CustomLayers[i].bEnabled)
-		{
-			const float Op = FMath::Clamp(CustomLayers[i].Opacity, 0.0f, 1.0f);
-			Rgb = FMath::Lerp(Rgb, CustomLayers[i].Color, Op);
-			A = FMath::Max(A, Op);
-		}
-	}
-
-	return FLinearColor(Rgb.R, Rgb.G, Rgb.B, FMath::Clamp(A, 0.0f, 1.0f));
+	return FLinearColor(UnexploredColor.R, UnexploredColor.G, UnexploredColor.B,
+		FMath::Clamp(A, 0.0f, 1.0f));
 }
 
 void ASeinFogOfWarRender::HandleFogMutated()
@@ -247,10 +335,12 @@ void ASeinFogOfWarRender::PostEditChangeProperty(FPropertyChangedEvent& Event)
 	Super::PostEditChangeProperty(Event);
 
 	// Live-tune during PIE: drop the texture so a Smooth-Edges (filter) change
-	// takes effect, then re-bake tints from the current grid. Outside a running
-	// world ResolveFog() returns null and this is a no-op.
+	// takes effect, re-apply the active layer's style, then re-bake tints from the
+	// current grid. Outside a running world ResolveFog() returns null and the
+	// rebuild is a no-op.
 	FogTexture = nullptr;
 	TexWidth = TexHeight = 0;
+	UpdateStyleBlendable();
 	RebuildTexture();
 }
 #endif

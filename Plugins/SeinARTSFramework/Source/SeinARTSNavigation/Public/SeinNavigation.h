@@ -210,6 +210,19 @@ public:
 	 *  unaffected. */
 	virtual void SetDynamicBlockers(const TArray<FSeinDynamicBlocker>& /*Blockers*/) {}
 
+	/** Find a short "escape nudge" target for an agent that A* can't path out of
+	 *  (stuck against walls / sitting in a sub-clearance cell). Returns a nearby
+	 *  cell with more wall-clearance so the steering pipeline can drive the chassis
+	 *  back into open space, after which normal pathing resumes. Consumed by
+	 *  SeinMoveToAction's escape fallback.
+	 *
+	 *  Default: no nudge available — returns false and sets OutTargetWD = -1. A nav
+	 *  without this support simply degrades to the action's sealed-pocket outcome
+	 *  (the same terminal result as before this was a virtual). USeinNavigationAStar
+	 *  overrides it with a WallDistance-gradient walk. */
+	virtual bool FindEscapeNudgeTarget(const FFixedVector& /*AgentPos*/,
+		FFixedVector& /*OutTarget*/, int32& OutTargetWD) const { OutTargetWD = -1; return false; }
+
 	/** Snap an arbitrary world-space point to the nearest walkable location.
 	 *  Returns false if no walkable point is within the nav's reachable region.
 	 *  Default: passes the point through unchanged + returns HasRuntimeData(). */

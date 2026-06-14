@@ -6,9 +6,9 @@
  *          Participates in the unified level-data bake (SeinARTSLevelData) as
  *          the "Nav" layer provider: BakeLayer reproduces per-cell cost +
  *          connectivity from the shared substrate surface data, and the runtime
- *          grid loads from the baked channel via LoadFromSubstrate. Minimal on
- *          purpose; serves as the default nav plus an example for custom
- *          subclasses.
+ *          grid loads from the baked channel via LoadFromSubstrate. Serves as
+ *          the default nav and the reference for custom subclasses; the
+ *          footprint-clearance (C-space) layer is the non-trivial part.
  */
 
 #pragma once
@@ -129,10 +129,10 @@ public:
 	 *  `Path.Waypoints = [OutTarget]` and lets the normal carrot/steering
 	 *  pipeline drive the chassis toward it. Once the chassis reaches a
 	 *  cell in C-space (WD ≥ Required), normal pathing resumes. */
-	bool FindEscapeNudgeTarget(
+	virtual bool FindEscapeNudgeTarget(
 		const FFixedVector& AgentPos,
 		FFixedVector& OutTarget,
-		int32& OutTargetWD) const;
+		int32& OutTargetWD) const override;
 
 protected:
 

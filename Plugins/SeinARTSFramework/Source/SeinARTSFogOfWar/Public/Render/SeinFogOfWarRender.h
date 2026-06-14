@@ -2,7 +2,8 @@
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinFogOfWarRender.h
  * @brief   Drop-in fog-of-war RENDER actor — a placeable post-process source
- *          that tints the world from the LOCAL observer's vision grid.
+ *          that tints the world from the LOCAL observer's vision grid, and
+ *          hosts switchable per-layer "visor" views (thermal, IR, …).
  *
  *          Drop one into a level and assign a fog post-process material; it
  *          tints the whole view with no further wiring (its UPostProcessComponent
@@ -10,24 +11,33 @@
  *          vision — it READS the active USeinFogOfWar each time vision changes
  *          (OnFogOfWarMutated), bakes the local observer's per-cell EVNNNNNN
  *          bitfield into a tiny tint texture (BGRA: rgb = fog color, a = darken
- *          amount), and feeds that + the grid's world bounds to a post-process
+ *          amount), and feeds that + the grid's world bounds to the base fog
  *          material that does `lerp(scene, tint.rgb, tint.a)`.
  *
- *          Tier mapping (per cell), all tunable below:
+ *          Base tier mapping (per cell), all tunable below — computed against the
+ *          ACTIVE vision layer's bit (see vision layers):
  *            - byte == 0 (never explored)  → UnexploredColor @ UnexploredOpacity (opaque black)
- *            - Explored bit, no Normal bit → UnexploredColor @ ExploredOpacity   (dimmed memory)
- *            - Normal (V) bit              → clear (alpha 0)
- *            - custom N0..N5 bits          → per-layer tint blended over the base
+ *            - Explored bit, not visible    → UnexploredColor @ ExploredOpacity   (dimmed memory)
+ *            - visible on the active layer  → clear (alpha 0)
  *
- *          Sim/render separation: this is render-layer only. It performs a pure
- *          READ of already-computed (deterministic) vision; it never mutates sim
- *          state and touches no fixed-point math beyond float conversions for
- *          display. Observer = the local PC's SeinPlayerID
+ *          Vision layers (the switchable "visor" views): the local player can
+ *          switch their view between Normal (the V bit) and any enabled custom
+ *          layer (N0..N5) via SetActiveVisionLayer / CycleVisionLayer or the
+ *          `Sein.Vision.Layer` console command. Switching does two render-only
+ *          things, both client-side and lockstep-safe (the sim already stamps
+ *          every layer bit each tick — this just reads a different one):
+ *            1. the fog's revealed area follows the active layer's bit (the
+ *               texture is rebuilt from that bit; non-additive by default, or
+ *               OR'd with Normal per-slot), and
+ *            2. that layer's full-screen Post Process Material is composited
+ *               UNDER the base fog (so unexplored stays hidden — no map leak).
+ *          The active vision layer is per-player view state; it never touches the
+ *          sim, so two players can run different layers deterministically.
+ *
+ *          Sim/render separation: render-layer only. Pure READ of already-computed
+ *          (deterministic) vision; never mutates sim state; no fixed-point beyond
+ *          float conversions for display. Observer = the local PC's SeinPlayerID
  *          (UE::SeinARTSFogOfWar::ResolveLocalObserverPlayerID).
- *
- *          The post-process material is a designer-authored content asset (see
- *          the FogPostProcessMaterial recipe in the plugin docs). This actor
- *          owns the data → texture path; the material owns the look composite.
  */
 
 #pragma once
@@ -44,28 +54,35 @@ class UMaterialInterface;
 class UMaterialInstanceDynamic;
 
 /**
- * One designer-configurable custom layer's render treatment. Slot index N maps
- * to EVNNNNNN bit (2 + N) — i.e. CustomLayers[0] = N0, ..., CustomLayers[5] = N5,
- * matching `USeinARTSCoreSettings::VisionLayers`. When a cell has this layer's
- * bit set and the slot is enabled, the cell tint is blended toward Color by
- * Opacity (over whatever the base E/V tier produced), and the darken alpha is
- * raised to at least Opacity so the layer shows even over currently-visible
- * terrain (e.g. a faint radar tint).
+ * One switchable custom vision layer's render treatment. Slot index N maps to
+ * EVNNNNNN bit (2 + N) — i.e. VisionLayerPostProcessMaterials[0] = N0, … [5] = N5,
+ * matching `USeinARTSCoreSettings::VisionLayers`.
  */
 USTRUCT(BlueprintType)
-struct FSeinFogLayerRenderConfig
+struct FSeinVisionLayerView
 {
 	GENERATED_BODY()
 
+	/** Switchable. Disabled slots are skipped by CycleVisionLayer and rejected by
+	 *  SetActiveVisionLayer — lets you reserve a slot's index without making it a
+	 *  live view. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Fog Of War")
 	bool bEnabled = false;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Fog Of War")
-	FLinearColor Color = FLinearColor::White;
-
+	/** Full-screen visor style applied while this layer is the active view (a
+	 *  thermal heat palette, IR green, night-vision, …). Composites UNDER the base
+	 *  fog, so the fog still hides unexplored area. Leave empty for a layer that
+	 *  changes only the revealed fog area without restyling the scene. SOFT ref. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Fog Of War",
-		meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float Opacity = 0.5f;
+		meta = (DisplayName = "Post Process Material"))
+	TSoftObjectPtr<UMaterialInterface> PostProcessMaterial;
+
+	/** Additive reveal. False (default) = a true visor: viewing this layer fogs
+	 *  everything except what THIS layer sees. True = the revealed area is this
+	 *  layer OR normal vision (you keep your normal sight and gain this layer's). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Fog Of War",
+		meta = (DisplayName = "Combine With Normal Vision"))
+	bool bCombineWithNormalVision = false;
 };
 
 UCLASS(Blueprintable, meta = (DisplayName = "Sein Fog Of War Render"))
@@ -77,7 +94,7 @@ public:
 	ASeinFogOfWarRender();
 
 	// ----------------------------------------------------------------------
-	// Tunables
+	// Tunables — base fog
 	// ----------------------------------------------------------------------
 
 	/** Post-process material that composites the fog tint over the scene. Reads
@@ -113,12 +130,49 @@ public:
 		meta = (DisplayName = "Smooth Edges"))
 	bool bSmoothEdges = true;
 
-	/** Per-custom-layer render treatment. Fixed 6 slots: index N → EVNNNNNN bit
-	 *  (2 + N) → the layer named in `USeinARTSCoreSettings::VisionLayers[N]`. All
-	 *  disabled by default; the three core tiers work with none enabled. */
+	// ----------------------------------------------------------------------
+	// Tunables — switchable vision layers
+	// ----------------------------------------------------------------------
+
+	/** Per custom vision layer the player can switch their view to (slot N → layer
+	 *  N0..N5, matching Project Settings > SeinARTS > Vision Layers). When the local
+	 *  player switches to this layer (SetActiveVisionLayer / CycleVisionLayer, or the
+	 *  `Sein.Vision.Layer` console command), this slot's Post Process Material is
+	 *  applied FULL-SCREEN on top of the scene but UNDER the base fog — giving that
+	 *  layer its own "visor" look (e.g. a thermal heat palette). The base Fog Post
+	 *  Process Material keeps handling the unexplored/explored darkening, so this
+	 *  material only defines the STYLE, not the fog tint. Leave the material empty
+	 *  for a layer that changes the revealed area without restyling; disable a slot
+	 *  to make it un-switchable. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Fog Of War",
-		meta = (EditFixedSize, DisplayName = "Custom Layers (N0..N5)"))
-	TArray<FSeinFogLayerRenderConfig> CustomLayers;
+		meta = (EditFixedSize, DisplayName = "Vision Layer Post Process Materials"))
+	TArray<FSeinVisionLayerView> VisionLayerPostProcessMaterials;
+
+	// ----------------------------------------------------------------------
+	// Runtime API
+	// ----------------------------------------------------------------------
+
+	/** The vision layer the local view is currently using: -1 = Normal (the V
+	 *  bit), 0..5 = the custom layer in slot N. Client-only view state. */
+	UPROPERTY(VisibleInstanceOnly, Transient, Category = "SeinARTS|Fog Of War",
+		meta = (DisplayName = "Active Vision Layer"))
+	int32 ActiveVisionLayer = -1;
+
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|Fog Of War")
+	int32 GetActiveVisionLayer() const { return ActiveVisionLayer; }
+
+	/** Switch the local view to a vision layer: -1 = Normal, 0..5 = custom slot.
+	 *  Rebuilds the fog reveal from that layer's bit and swaps in its style
+	 *  material. Switching to a disabled / out-of-range custom slot is ignored.
+	 *  Pure render/view change — never touches the sim. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Fog Of War",
+		meta = (DisplayName = "Set Active Vision Layer"))
+	void SetActiveVisionLayer(int32 LayerIndex);
+
+	/** Cycle the local view through Normal → each ENABLED custom layer → Normal. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Fog Of War",
+		meta = (DisplayName = "Cycle Vision Layer"))
+	void CycleVisionLayer();
 
 	/** Force a full rebuild of the tint texture (e.g. after switching the
 	 *  displayed observer in an observer/replay camera). Normally unnecessary —
@@ -136,12 +190,17 @@ protected:
 #endif
 
 private:
-	/** Unbound post-process source that carries the fog material blendable. */
+	/** Unbound post-process source that carries the style + fog blendables. */
 	UPROPERTY(VisibleAnywhere, Category = "SeinARTS|Fog Of War")
 	TObjectPtr<UPostProcessComponent> PostProcess;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInstanceDynamic> FogMID;
+
+	/** The active vision layer's style material, held as a blendable. Null in
+	 *  Normal view or when the active slot has no material. */
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInterface> ActiveStyleMaterial;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UTexture2D> FogTexture;
@@ -164,6 +223,11 @@ private:
 	/** Re-resolve the local observer; returns true if it changed. */
 	bool ResolveObserver();
 
+	/** Which EVNNNNNN bits count as "visible" for the active layer: the V bit in
+	 *  Normal view, else the active layer's N-bit (optionally OR'd with V when the
+	 *  slot opts into Combine With Normal Vision). */
+	uint8 ComputeVisibleMask() const;
+
 	/** (Re)create the transient tint texture at WxH if needed; rebinds it to the
 	 *  material's FogTexture param. */
 	void EnsureTexture(int32 W, int32 H);
@@ -175,8 +239,14 @@ private:
 	/** Stream PixelBuffer to the GPU texture (render-thread safe). */
 	void UploadPixels();
 
-	/** Map one EVNNNNNN byte → tint color + darken alpha using the tunables. */
-	FLinearColor TintForCell(uint8 Bits) const;
+	/** Map one EVNNNNNN byte → tint color + darken alpha for the given visible mask. */
+	FLinearColor TintForCell(uint8 Bits, uint8 VisibleMask) const;
+
+	/** Load/clear the active layer's style material to match ActiveVisionLayer. */
+	void UpdateStyleBlendable();
+
+	/** Rebuild the post-process blendable list in order: style UNDER, fog ON TOP. */
+	void RefreshBlendables();
 
 	void HandleFogMutated();
 
