@@ -11,6 +11,7 @@
 #include "Default/SeinFogOfWarDefault.h"
 #include "Components/SeinVisionComponent.h"
 #include "Components/SeinExtentsComponent.h"
+#include "Components/SeinFogVisibilityComponent.h"
 #include "Stamping/SeinStampShape.h"
 #include "Stamping/SeinStampUtils.h"
 #include "SeinFogOfWarTypes.h"
@@ -548,6 +549,13 @@ void USeinFogOfWarDefault::TickStamps(UWorld* World)
 		}
 		for (FSeinEntityHandle H : Stale) RemoveSourceStamp(H);
 	}
+
+	// Maintain the per-observer VisibleOnceSeen latch off the now-current grid.
+	// Runs every tick regardless of bAnyChanged: a thing that spawns inside an
+	// existing observer's vision must latch even when no SOURCE changed this
+	// tick. Cheap once no VisibleOnceSeen entity remains unseen. A latch flip
+	// is not a grid-viz change, so it deliberately does NOT feed the broadcast.
+	UpdateSeenLatches(*Sim);
 
 	// Only broadcast if SOMETHING about the viz state actually changed.
 	// Skipping idle-tick broadcasts is the difference between paying a full
@@ -1251,6 +1259,60 @@ uint8 USeinFogOfWarDefault::GetEntityVisibleBits(FSeinPlayerID Observer,
 	}
 
 	return Bits;
+}
+
+bool USeinFogOfWarDefault::HasObserverSeenEntity(FSeinPlayerID Observer,
+	FSeinEntityHandle Target) const
+{
+	const FSeinFogVisionGroup* Group = VisionGroups.Find(Observer);
+	return Group && Group->SeenEntities.Contains(Target);
+}
+
+void USeinFogOfWarDefault::UpdateSeenLatches(USeinWorldSubsystem& Sim)
+{
+	// Nothing to latch into until at least one observer has a vision group.
+	if (VisionGroups.Num() == 0) return;
+
+	// Only entities authored VisibleOnceSeen participate. Walk that component's
+	// storage directly so the common case (a world of VisionLayersOnly units /
+	// VisibleOnceExplored buildings) pays a single count check and bails.
+	const ISeinComponentStorage* Storage =
+		Sim.GetComponentStorageRaw(FSeinFogVisibilityComponent::StaticStruct());
+	if (!Storage || Storage->GetComponentCount() == 0) return;
+
+	Sim.GetEntityPool().ForEachEntity(
+		[this, &Sim, Storage](FSeinEntityHandle Handle, FSeinEntity& /*Entity*/)
+		{
+			const void* Raw = Storage->GetComponentRaw(Handle);
+			if (!Raw) return;
+			const FSeinFogVisibilityComponent* FogVis =
+				static_cast<const FSeinFogVisibilityComponent*>(Raw);
+			if (FogVis->FogVisibilityPolicy != ESeinFogVisibilityPolicy::VisibleOnceSeen) return;
+
+			// "Live spotting" mask = the entity's emission bits restricted to
+			// actual visibility layers (Explored excluded — the whole point of
+			// VisibleOnceSeen is that terrain-scouting must NOT count). A zero
+			// mask can never be spotted live, so it can never latch.
+			const uint8 LiveMask = static_cast<uint8>(FogVis->FogVisibilityLayerMask & SEIN_FOW_MASK_VISIBLE);
+			if (LiveMask == 0) return;
+
+			// Latch into every group whose live bits currently cover the
+			// entity's footprint. Already-latched groups skip the (volumetric)
+			// bit query. The per-group result is independent of TMap iteration
+			// order, so determinism holds; we only mutate an existing group's
+			// set here (no structural change to VisionGroups), so iterating it
+			// is safe.
+			for (TPair<FSeinPlayerID, FSeinFogVisionGroup>& Pair : VisionGroups)
+			{
+				FSeinFogVisionGroup& Group = Pair.Value;
+				if (Group.SeenEntities.Contains(Handle)) continue;
+				const uint8 Bits = GetEntityVisibleBits(Pair.Key, Sim, Handle);
+				if ((Bits & LiveMask) != 0)
+				{
+					Group.SeenEntities.Add(Handle);
+				}
+			}
+		});
 }
 
 void USeinFogOfWarDefault::CollectDebugCellQuads(FSeinPlayerID Observer,

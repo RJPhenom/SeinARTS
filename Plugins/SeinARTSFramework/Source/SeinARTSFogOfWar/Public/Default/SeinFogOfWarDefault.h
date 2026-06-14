@@ -68,6 +68,17 @@ struct FSeinFogVisionGroup
 {
 	TArray<uint8> CellBitfield;
 	TArray<uint16> RefCounts[8];
+
+	/** Entities this observer has had live vision of at least once this match
+	 *  — the per-entity sticky latch backing the VisibleOnceSeen policy.
+	 *  Parallel to the per-cell sticky Explored bit (CellBitfield bit 0), but
+	 *  keyed by entity instead of cell, so a thing that appears in explored-
+	 *  but-unseen fog isn't revealed until it is actually seen. Added to by
+	 *  UpdateSeenLatches each tick; read by HasObserverSeenEntity. Entity
+	 *  handles are generational, so a recycled pool slot can't false-positive;
+	 *  stale entries for destroyed entities are harmless (bounded, never
+	 *  matched again). Reset with the rest of the group on grid reload. */
+	TSet<FSeinEntityHandle> SeenEntities;
 };
 
 /**
@@ -175,6 +186,9 @@ public:
 	virtual uint8 GetEntityVisibleBits(FSeinPlayerID Observer,
 		USeinWorldSubsystem& Sim, FSeinEntityHandle Target) const override;
 
+	virtual bool HasObserverSeenEntity(FSeinPlayerID Observer,
+		FSeinEntityHandle Target) const override;
+
 	virtual void CollectDebugCellQuads(FSeinPlayerID Observer,
 		int32 VisibleBitIndex,
 		TArray<FVector>& OutCenters,
@@ -280,6 +294,16 @@ private:
 	 *  to Width*Height when first observed; reuses across ticks (V bits
 	 *  clear, Explored stays sticky). */
 	FSeinFogVisionGroup& GetOrCreateGroup(FSeinPlayerID PlayerID);
+
+	/** Update the per-observer VisibleOnceSeen latch: for every entity authored
+	 *  with that policy, add it to each vision group whose live (non-Explored)
+	 *  bits currently cover the entity's footprint. Sticky — once added, an
+	 *  entity is never removed, so it ghost-reveals for the rest of the match.
+	 *  Called at the tail of TickStamps off the freshly-stamped grid (so a
+	 *  thing that spawns inside existing vision latches the same tick it
+	 *  appears). Deterministic: reads only the per-player grid + sim state,
+	 *  identical on every client. */
+	void UpdateSeenLatches(USeinWorldSubsystem& Sim);
 
 	/** Per-tick entry — change-detect against the source's last stamp
 	 *  state. Identical inputs ⇒ no work, returns false. Changed inputs ⇒

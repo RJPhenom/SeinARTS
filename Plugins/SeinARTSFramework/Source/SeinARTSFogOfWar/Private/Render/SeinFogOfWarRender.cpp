@@ -1,9 +1,9 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
- * @file    SeinFogOfWarRenderActor.cpp
+ * @file    SeinFogOfWarRender.cpp
  */
 
-#include "Render/SeinFogOfWarRenderActor.h"
+#include "Render/SeinFogOfWarRender.h"
 
 #include "Components/PostProcessComponent.h"
 #include "Engine/Texture2D.h"
@@ -19,11 +19,11 @@
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
 
-const FName ASeinFogOfWarRenderActor::P_FogTexture(TEXT("FogTexture"));
-const FName ASeinFogOfWarRenderActor::P_WorldMin(TEXT("FogWorldMin"));
-const FName ASeinFogOfWarRenderActor::P_WorldSize(TEXT("FogWorldSize"));
+const FName ASeinFogOfWarRender::P_FogTexture(TEXT("FogTexture"));
+const FName ASeinFogOfWarRender::P_WorldMin(TEXT("FogWorldMin"));
+const FName ASeinFogOfWarRender::P_WorldSize(TEXT("FogWorldSize"));
 
-ASeinFogOfWarRenderActor::ASeinFogOfWarRenderActor()
+ASeinFogOfWarRender::ASeinFogOfWarRender()
 {
 	// Poll only for observer changes (e.g. local PC late-sets its SeinPlayerID,
 	// or an observer cam switches players). Vision CONTENT changes arrive via
@@ -48,7 +48,7 @@ ASeinFogOfWarRenderActor::ASeinFogOfWarRenderActor()
 	for (int32 i = 0; i < 6; ++i) { CustomLayers[i].Color = Seed[i]; }
 }
 
-void ASeinFogOfWarRenderActor::BeginPlay()
+void ASeinFogOfWarRender::BeginPlay()
 {
 	Super::BeginPlay();
 
@@ -67,14 +67,14 @@ void ASeinFogOfWarRenderActor::BeginPlay()
 	if (USeinFogOfWar* Fog = ResolveFog())
 	{
 		SubscribedFog = Fog;
-		FogMutatedHandle = Fog->OnFogOfWarMutated.AddUObject(this, &ASeinFogOfWarRenderActor::HandleFogMutated);
+		FogMutatedHandle = Fog->OnFogOfWarMutated.AddUObject(this, &ASeinFogOfWarRender::HandleFogMutated);
 	}
 
 	ResolveObserver();
 	RebuildTexture();
 }
 
-void ASeinFogOfWarRenderActor::EndPlay(const EEndPlayReason::Type Reason)
+void ASeinFogOfWarRender::EndPlay(const EEndPlayReason::Type Reason)
 {
 	if (USeinFogOfWar* Fog = SubscribedFog.Get())
 	{
@@ -85,7 +85,7 @@ void ASeinFogOfWarRenderActor::EndPlay(const EEndPlayReason::Type Reason)
 	Super::EndPlay(Reason);
 }
 
-void ASeinFogOfWarRenderActor::Tick(float DeltaSeconds)
+void ASeinFogOfWarRender::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
@@ -99,18 +99,18 @@ void ASeinFogOfWarRenderActor::Tick(float DeltaSeconds)
 	}
 }
 
-void ASeinFogOfWarRenderActor::RefreshFogRender()
+void ASeinFogOfWarRender::RefreshFogRender()
 {
 	ResolveObserver();
 	RebuildTexture();
 }
 
-USeinFogOfWar* ASeinFogOfWarRenderActor::ResolveFog() const
+USeinFogOfWar* ASeinFogOfWarRender::ResolveFog() const
 {
 	return USeinFogOfWarSubsystem::GetFogOfWarForWorld(this);
 }
 
-bool ASeinFogOfWarRenderActor::ResolveObserver()
+bool ASeinFogOfWarRender::ResolveObserver()
 {
 	const FSeinPlayerID Obs = UE::SeinARTSFogOfWar::ResolveLocalObserverPlayerID(GetWorld());
 	if (bObserverResolved && Obs == CachedObserver)
@@ -122,7 +122,7 @@ bool ASeinFogOfWarRenderActor::ResolveObserver()
 	return true;
 }
 
-void ASeinFogOfWarRenderActor::EnsureTexture(int32 W, int32 H)
+void ASeinFogOfWarRender::EnsureTexture(int32 W, int32 H)
 {
 	if (W <= 0 || H <= 0) return;
 	if (FogTexture && TexWidth == W && TexHeight == H) return;
@@ -147,7 +147,7 @@ void ASeinFogOfWarRenderActor::EnsureTexture(int32 W, int32 H)
 	}
 }
 
-void ASeinFogOfWarRenderActor::RebuildTexture()
+void ASeinFogOfWarRender::RebuildTexture()
 {
 	USeinFogOfWar* Fog = ResolveFog();
 	if (!Fog) return;
@@ -183,7 +183,7 @@ void ASeinFogOfWarRenderActor::RebuildTexture()
 	}
 }
 
-void ASeinFogOfWarRenderActor::UploadPixels()
+void ASeinFogOfWarRender::UploadPixels()
 {
 	if (!FogTexture || TexWidth <= 0 || TexHeight <= 0) return;
 	if (PixelBuffer.Num() != TexWidth * TexHeight * 4) return;
@@ -207,7 +207,7 @@ void ASeinFogOfWarRenderActor::UploadPixels()
 		});
 }
 
-FLinearColor ASeinFogOfWarRenderActor::TintForCell(uint8 Bits) const
+FLinearColor ASeinFogOfWarRender::TintForCell(uint8 Bits) const
 {
 	const bool bExplored = (Bits & SEIN_FOW_BIT_EXPLORED) != 0;
 	const bool bVisible  = (Bits & SEIN_FOW_BIT_NORMAL) != 0;
@@ -236,13 +236,13 @@ FLinearColor ASeinFogOfWarRenderActor::TintForCell(uint8 Bits) const
 	return FLinearColor(Rgb.R, Rgb.G, Rgb.B, FMath::Clamp(A, 0.0f, 1.0f));
 }
 
-void ASeinFogOfWarRenderActor::HandleFogMutated()
+void ASeinFogOfWarRender::HandleFogMutated()
 {
 	RebuildTexture();
 }
 
 #if WITH_EDITOR
-void ASeinFogOfWarRenderActor::PostEditChangeProperty(FPropertyChangedEvent& Event)
+void ASeinFogOfWarRender::PostEditChangeProperty(FPropertyChangedEvent& Event)
 {
 	Super::PostEditChangeProperty(Event);
 

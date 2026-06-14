@@ -55,15 +55,31 @@ bool USeinFogOfWar::IsEntityVisibleToObserver(FSeinPlayerID Observer,
 
 	if (Policy == ESeinFogVisibilityPolicy::AlwaysVisible) return true;
 
-	// VisibleOnceExplored widens the mask to include the sticky Explored
-	// bit — once that bit is set anywhere in the footprint, the entity is
-	// permanently visible (ghost reveal).
+	// VisibleOnceExplored widens the mask to include the sticky per-cell
+	// Explored bit — once that bit is set anywhere in the footprint, the
+	// entity is permanently visible (terrain-scouted ghost reveal). Note this
+	// fires even for entities that arrived AFTER the cell was explored;
+	// VisibleOnceSeen (below) is the per-entity alternative that doesn't.
 	if (Policy == ESeinFogVisibilityPolicy::VisibleOnceExplored)
 	{
 		EmissionMask |= SEIN_FOW_BIT_EXPLORED;
 	}
 	if (EmissionMask == 0) return false;     // entity configured as never-visible
 
+	// Currently spotted? A matching live emission bit anywhere in the
+	// footprint means visible right now — for every policy that got this far.
 	const uint8 ObserverBits = GetEntityVisibleBits(Observer, Sim, Target);
-	return (ObserverBits & EmissionMask) != 0;
+	if ((ObserverBits & EmissionMask) != 0) return true;
+
+	// VisibleOnceSeen: not spotted this instant, but stays revealed as a ghost
+	// if this observer has ever had live vision of the entity ITSELF. The
+	// latch is maintained deterministically each fog tick (HasObserverSeenEntity);
+	// unlike VisibleOnceExplored it never reveals on terrain-scouting alone, so
+	// a thing that appears in explored-but-unseen fog stays hidden until seen.
+	if (Policy == ESeinFogVisibilityPolicy::VisibleOnceSeen)
+	{
+		return HasObserverSeenEntity(Observer, Target);
+	}
+
+	return false;
 }

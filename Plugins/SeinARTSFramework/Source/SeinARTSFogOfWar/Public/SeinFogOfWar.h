@@ -200,10 +200,17 @@ public:
 	 *       own units / buildings / deployments regardless of fog.
 	 *    3. `FSeinFogVisibilityComponent::FogVisibilityPolicy`:
 	 *       - `AlwaysVisible` → true.
-	 *       - `VisibleOnceExplored` → visible iff any cell in the entity's
-	 *         footprint has the sticky Explored bit set for `Observer`.
-	 *       - `VisionLayersOnly` (default) → visible iff a vision source on
-	 *         a matching emission layer is currently stamping the cell.
+	 *       - currently spotted (a matching emission-layer bit is live in the
+	 *         footprint) → true for every remaining policy.
+	 *       - `VisibleOnceSeen` → otherwise visible iff `Observer` has EVER
+	 *         had live vision of this entity (per-entity sticky latch — see
+	 *         `HasObserverSeenEntity`). A thing that appears in explored-but-
+	 *         unseen fog stays hidden until it is actually seen.
+	 *       - `VisibleOnceExplored` → otherwise visible iff any cell in the
+	 *         footprint has the sticky per-cell Explored bit set for
+	 *         `Observer` (reveals on terrain scouting, even if the entity
+	 *         itself was never seen).
+	 *       - `VisionLayersOnly` (default) → otherwise hidden.
 	 *
 	 *  Implementation lives in the cpp so subclasses can override if they
 	 *  want different per-player policy. Base impl reads
@@ -227,6 +234,15 @@ public:
 	 *  (props, projectiles, etc. that don't need volumetric checks). */
 	virtual uint8 GetEntityVisibleBits(FSeinPlayerID Observer,
 		USeinWorldSubsystem& Sim, FSeinEntityHandle Target) const;
+
+	/** Whether `Observer` has EVER had live vision of `Target` at least once
+	 *  this match — the per-entity sticky latch backing the `VisibleOnceSeen`
+	 *  policy. Maintained per fog tick by impls that support it (the default
+	 *  impl latches in `TickStamps` off the freshly-stamped per-player grid).
+	 *  Base default returns false, so an impl that doesn't track this degrades
+	 *  `VisibleOnceSeen` to `VisionLayersOnly` — safe (never reveals more than
+	 *  current live vision; no information leak). */
+	virtual bool HasObserverSeenEntity(FSeinPlayerID Observer, FSeinEntityHandle Target) const { return false; }
 
 	// ----------------------------------------------------------------------
 	// Debug

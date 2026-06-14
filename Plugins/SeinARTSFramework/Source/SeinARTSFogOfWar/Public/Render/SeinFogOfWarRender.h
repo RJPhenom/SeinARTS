@@ -1,6 +1,6 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
- * @file    SeinFogOfWarRenderActor.h
+ * @file    SeinFogOfWarRender.h
  * @brief   Drop-in fog-of-war RENDER actor — a placeable post-process source
  *          that tints the world from the LOCAL observer's vision grid.
  *
@@ -35,7 +35,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "Core/SeinPlayerID.h"
-#include "SeinFogOfWarRenderActor.generated.h"
+#include "SeinFogOfWarRender.generated.h"
 
 class USeinFogOfWar;
 class UPostProcessComponent;
@@ -69,12 +69,12 @@ struct FSeinFogLayerRenderConfig
 };
 
 UCLASS(Blueprintable, meta = (DisplayName = "Sein Fog Of War Render"))
-class SEINARTSFOGOFWAR_API ASeinFogOfWarRenderActor : public AActor
+class SEINARTSFOGOFWAR_API ASeinFogOfWarRender : public AActor
 {
 	GENERATED_BODY()
 
 public:
-	ASeinFogOfWarRenderActor();
+	ASeinFogOfWarRender();
 
 	// ----------------------------------------------------------------------
 	// Tunables

@@ -132,8 +132,13 @@ public:
 	/** Persistence policy AFTER reveal:
 	 *    VisionLayersOnly (default) — visible only while currently spotted.
 	 *      Standard for enemy units.
-	 *    VisibleOnceExplored        — visible once scouted; ghost-revealed
-	 *      forever after. Standard for enemy buildings.
+	 *    VisibleOnceSeen            — visible once a source has actually
+	 *      spotted THIS ENTITY; ghost-revealed forever after. Something built
+	 *      in already-explored-but-unseen fog stays hidden until seen.
+	 *      Standard for enemy buildings.
+	 *    VisibleOnceExplored        — visible once the entity's CELL is
+	 *      explored, even if the entity was never seen; coarser terrain-scout
+	 *      reveal.
 	 *    AlwaysVisible              — bypasses fog entirely. Cover providers,
 	 *      persistent destructibles, self-occluding effects whose stamp
 	 *      blocks vision past them but whose actor must stay rendered. */

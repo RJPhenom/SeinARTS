@@ -385,7 +385,7 @@ protected:
 	 *
 	 *  Topology is constrained by `RequiredClearance`: a neighbor cell N is
 	 *  reachable from current cell U iff
-	 *    `WallDistance[N] >= min(RequiredClearance, WallDistance[U] + 1)`
+	 *    `WallDistance[N] >= min(RequiredClearance, WallDistance[U])`
 	 *
 	 *  Why this rule:
 	 *   - **Normal case** (`WallDistance[U] >= RequiredClearance`): neighbor
@@ -393,10 +393,17 @@ protected:
 	 *     "configuration space" — cells where the full footprint clears walls.
 	 *   - **Start-cell escape** (`WallDistance[U] < RequiredClearance`): a
 	 *     unit that spawned next to a wall, or was pushed against one by
-	 *     another system, has a starting cell with too-low clearance. The
-	 *     `min(Required, U+1)` form requires strict improvement (+1 clearance
-	 *     per step) while escaping, until we reach a cell with full clearance.
-	 *     Without this, the search would fail from any low-clearance start.
+	 *     another system (a crowd shove at a corner), has a starting cell with
+	 *     too-low clearance. The `min(Required, U)` form requires only
+	 *     NON-DECREASING clearance (`>= current WD`) while escaping: the unit
+	 *     may traverse level low-clearance cells and climb when it can, locks
+	 *     into configuration space the instant it reaches a full-clearance
+	 *     cell, and never steps to a tighter cell. (An earlier `U+1`
+	 *     "strict +1 climb per step" form stranded units on a flat low-
+	 *     clearance plateau — no orthogonal neighbor strictly higher, the one
+	 *     higher diagonal squeeze-blocked by its low-clearance flanks. See the
+	 *     corner-orphan diagnosis 2026-06-14.) Normal (in-C-space) starts are
+	 *     UNAFFECTED: `min(Required, U) == Required` whenever `U >= Required`.
 	 *
 	 *  Diagonal squeezes: a diagonal step from U requires both cardinal
 	 *  neighbors that flank it to also satisfy the clearance rule, mirroring

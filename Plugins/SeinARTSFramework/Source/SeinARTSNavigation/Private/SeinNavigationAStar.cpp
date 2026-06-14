@@ -1108,9 +1108,14 @@ TArray<FIntPoint> USeinNavigationAStar::AStarSearch(FIntPoint Start, FIntPoint E
 		// Configuration-space rule: while inside C-space (Current's
 		// WallDistance >= RequiredClearance), neighbors must also be in
 		// C-space. While escaping a too-tight starting position, neighbors
-		// must STRICTLY IMPROVE clearance by at least 1, until we reach
-		// C-space. Once in C-space, we never go back to a low-WD cell
-		// (the rule below requires >= RequiredClearance from then on).
+		// must be NON-DECREASING (>= current WD) — the unit may traverse level
+		// low-clearance cells and climb when it can, until it reaches C-space.
+		// Once in C-space, we never go back to a low-WD cell (the rule below
+		// requires >= RequiredClearance from then on). (Was CurWD+1 "strict
+		// climb"; that stranded units shoved onto a flat WD=1 corner plateau
+		// with no strictly-higher orthogonal neighbor — corner-orphan fix
+		// 2026-06-14. C-space behavior is bit-identical: min(RC, CurWD)==RC
+		// whenever CurWD>=RC, so only sub-clearance STARTS see the change.)
 		// Effective WD reads `min(static WallDistance, dynamic-blocker
 		// Chebyshev distance)` via GetEffectiveWD, so dyn blockers
 		// constrain A* topology the same way static walls do (with the
@@ -1120,7 +1125,7 @@ TArray<FIntPoint> USeinNavigationAStar::AStarSearch(FIntPoint Start, FIntPoint E
 			? GetEffectiveWD(CX, CY, RequiredClearance)
 			: 0;
 		const int32 RequiredFromHere = (RequiredClearance > 0)
-			? FMath::Min(RequiredClearance, CurWD + 1)
+			? FMath::Min(RequiredClearance, CurWD)
 			: 0;
 
 		for (int32 n = 0; n < 8; ++n)
@@ -1276,8 +1281,9 @@ TArray<FIntPoint> USeinNavigationAStar::AStarSearch(FIntPoint Start, FIntPoint E
 			? CellConnections[StartIdx] : 0;
 		const int32 EffWD0 = (RequiredClearance > 0)
 			? GetEffectiveWD(Start.X, Start.Y, RequiredClearance) : 0;
+		// Mirrors the search's RequiredFromHere (non-decreasing escape rule).
 		const int32 RequiredFromStart = (RequiredClearance > 0)
-			? FMath::Min(RequiredClearance, EffWD0 + 1) : 0;
+			? FMath::Min(RequiredClearance, EffWD0) : 0;
 
 		FString NeighborReport;
 		static const int32 NDX[8] = { 1, -1,  0,  0,  1,  1, -1, -1 };

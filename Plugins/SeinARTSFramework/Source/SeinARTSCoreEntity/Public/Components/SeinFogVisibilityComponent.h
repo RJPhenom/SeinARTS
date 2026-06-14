@@ -35,9 +35,13 @@ struct SEINARTSCOREENTITY_API FSeinFogVisibilityComponent : public FSeinComponen
 	/** Persistence policy for what happens AFTER this entity is revealed:
 	 *    VisionLayersOnly (default) — visible only while currently spotted.
 	 *      Standard for enemy units.
-	 *    VisibleOnceExplored        — visible after the player has scouted
-	 *      the entity's location at least once; stays as a "ghost" after.
-	 *      Standard for enemy buildings.
+	 *    VisibleOnceSeen            — visible after a source has actually
+	 *      spotted THIS ENTITY once; stays as a "ghost" after. Something
+	 *      appearing in already-explored-but-unseen fog stays hidden until
+	 *      genuinely seen. Standard for enemy buildings (SC2/AoE memory).
+	 *    VisibleOnceExplored        — visible once the entity's CELL has been
+	 *      explored, even if the entity itself was never seen; coarser
+	 *      "intel from terrain" reveal.
 	 *    AlwaysVisible              — bypasses the fog hide check entirely.
 	 *      Cover providers, persistent destructibles, self-occluding effects
 	 *      (their stamp blocks vision but the actor still renders). */

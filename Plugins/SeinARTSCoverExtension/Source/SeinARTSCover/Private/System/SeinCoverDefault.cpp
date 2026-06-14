@@ -35,7 +35,7 @@ namespace SeinCoverDefaultLocal
 	}
 
 	/** Whether `ProviderHandle` is visible to `Observer` per the FoW
-	 *  visibility policy (AlwaysVisible / VisibleOnceExplored /
+	 *  visibility policy (AlwaysVisible / VisibleOnceSeen / VisibleOnceExplored /
 	 *  VisionLayersOnly + owner-sees-own). Returns true unconditionally
 	 *  when Observer is invalid (caller didn't ask for filtering) or when
 	 *  FoW is unavailable (no module / no subsystem). */
