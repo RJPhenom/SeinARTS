@@ -76,11 +76,27 @@ public:
 
 	/** Square edge of the fog overlay texture in texels. Higher = sharper fog edges. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|UI|Minimap", meta = (ClampMin = "16", ClampMax = "512"))
-	int32 FogTextureResolution = 128;
+	int32 FogTextureResolution = 256;
 
 	/** Rebuild the fog overlay every N refreshes (sim ticks). 1 = every tick. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|UI|Minimap", meta = (ClampMin = "1"))
 	int32 FogUpdateInterval = 4;
+
+	/** Box-blur radius (texels) applied to the fog overlay each rebuild to soften the hard
+	 *  per-cell edges. 0 = off. Works together with the texture's bilinear filtering. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|UI|Minimap", meta = (ClampMin = "0", ClampMax = "8"))
+	int32 FogBlurRadius = 0;
+
+	/** Fog overlay color for explored-but-not-currently-visible cells (alpha darkens terrain). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|UI|Minimap")
+	FColor FogExploredColor = FColor(0, 0, 0, 120);
+
+	/** Fog overlay color for never-explored cells (alpha near-opaque hides terrain). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|UI|Minimap")
+	FColor FogUnexploredColor = FColor(2, 2, 4, 255);
+
+	// All five fog tunables above are SEEDED from USeinARTSUISettings on Initialize; the
+	// defaults here are just fallbacks. Widgets may override any of them at runtime.
 
 private:
 	void ResolveBounds();

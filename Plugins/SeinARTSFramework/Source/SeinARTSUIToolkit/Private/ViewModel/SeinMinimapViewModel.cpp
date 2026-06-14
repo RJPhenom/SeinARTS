@@ -22,6 +22,8 @@
 #include "SeinFogOfWarSubsystem.h"
 #include "SeinFogOfWarTypes.h"
 
+#include "Settings/PluginSettings.h"
+
 #include "Engine/World.h"
 #include "Engine/Texture2D.h"
 #include "TextureResource.h"
@@ -30,6 +32,17 @@ void USeinMinimapViewModel::Initialize(USeinWorldSubsystem* InWorldSubsystem, UW
 {
 	WorldSubsystem = InWorldSubsystem;
 	WorldPtr = InWorld;
+
+	// Seed per-instance tunables from the project-wide UI settings. Widgets may still
+	// override any of these at runtime via the BlueprintReadWrite properties.
+	if (const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>())
+	{
+		FogTextureResolution = Settings->MinimapFogTextureResolution;
+		FogUpdateInterval    = Settings->MinimapFogUpdateInterval;
+		FogBlurRadius        = Settings->MinimapFogBlurRadius;
+		FogExploredColor     = Settings->MinimapFogExploredColor;
+		FogUnexploredColor   = Settings->MinimapFogUnexploredColor;
+	}
 
 	ResolveBounds();
 	if (bHasBounds)
@@ -214,9 +227,49 @@ void USeinMinimapViewModel::UpdateFogTexture()
 			const uint8 Bits = Fog->GetCellBitfield(Observer, FFixedVector::FromVector(WorldPos));
 
 			FColor& Out = Px[Y * Res + X];
-			if (Bits & SEIN_FOW_BIT_NORMAL)        { Out = FColor(0, 0, 0, 0); }     // visible: show terrain
-			else if (Bits & SEIN_FOW_BIT_EXPLORED) { Out = FColor(0, 0, 0, 120); }   // explored: dim
-			else                                   { Out = FColor(2, 2, 4, 255); }   // unexplored: hide
+			if (Bits & SEIN_FOW_BIT_NORMAL)        { Out = FColor(0, 0, 0, 0); }   // visible: show terrain (always transparent)
+			else if (Bits & SEIN_FOW_BIT_EXPLORED) { Out = FogExploredColor; }     // explored: dim
+			else                                   { Out = FogUnexploredColor; }   // unexplored: hide
+		}
+	}
+
+	// Soften the hard per-cell fog edges with a separable box blur (the texture's bilinear
+	// filtering then smooths the rest). Cheap at this resolution; clamps at the edges.
+	if (FogBlurRadius > 0)
+	{
+		const int32 R = FogBlurRadius;
+		TArray<FColor> Tmp;
+		Tmp.SetNumUninitialized(Res * Res);
+
+		// Horizontal pass: Px -> Tmp
+		for (int32 Y = 0; Y < Res; ++Y)
+		{
+			for (int32 X = 0; X < Res; ++X)
+			{
+				int32 SumR = 0, SumG = 0, SumB = 0, SumA = 0, N = 0;
+				for (int32 K = -R; K <= R; ++K)
+				{
+					const int32 SX = FMath::Clamp(X + K, 0, Res - 1);
+					const FColor& C = Px[Y * Res + SX];
+					SumR += C.R; SumG += C.G; SumB += C.B; SumA += C.A; ++N;
+				}
+				Tmp[Y * Res + X] = FColor(SumR / N, SumG / N, SumB / N, SumA / N);
+			}
+		}
+		// Vertical pass: Tmp -> Px
+		for (int32 Y = 0; Y < Res; ++Y)
+		{
+			for (int32 X = 0; X < Res; ++X)
+			{
+				int32 SumR = 0, SumG = 0, SumB = 0, SumA = 0, N = 0;
+				for (int32 K = -R; K <= R; ++K)
+				{
+					const int32 SY = FMath::Clamp(Y + K, 0, Res - 1);
+					const FColor& C = Tmp[SY * Res + X];
+					SumR += C.R; SumG += C.G; SumB += C.B; SumA += C.A; ++N;
+				}
+				Px[Y * Res + X] = FColor(SumR / N, SumG / N, SumB / N, SumA / N);
+			}
 		}
 	}
 

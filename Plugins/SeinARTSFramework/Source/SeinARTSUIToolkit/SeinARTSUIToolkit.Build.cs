@@ -21,6 +21,7 @@ public class SeinARTSUIToolkit : ModuleRules
 				"SeinARTSCoreEntity",
 				"SeinARTSFramework",
 				"GameplayTags",
+				"DeveloperSettings",  // minimap VM reads USeinARTSCoreSettings (a UDeveloperSettings)
 			}
 		);
 

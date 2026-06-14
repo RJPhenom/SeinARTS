@@ -1016,6 +1016,35 @@ public:
 	bool bShowWidgetInBasicCategory;
 #endif
 
+	// User Interface
+	// ====================================================================================================
+	// The UI Toolkit ships with the base framework (not a strippable extension), so its
+	// defaults live here under the shared "SeinARTS" page rather than a separate settings
+	// page. USeinMinimapViewModel seeds its per-instance properties from these on init;
+	// widgets may override any at runtime via the view-model's BlueprintReadWrite properties.
+
+	/** Square edge of the minimap fog-overlay texture, in texels. Higher = finer fog edges
+	 *  at higher rebuild cost. */
+	UPROPERTY(Config, EditAnywhere, Category = "UI|Minimap", meta = (DisplayName = "Fog Texture Resolution", ClampMin = "16", ClampMax = "512"))
+	int32 MinimapFogTextureResolution = 256;
+
+	/** Cadence (in sim-tick refreshes) between minimap fog-overlay rebuilds. 1 = every tick. */
+	UPROPERTY(Config, EditAnywhere, Category = "UI|Minimap", meta = (DisplayName = "Fog Update Interval", ClampMin = "1"))
+	int32 MinimapFogUpdateInterval = 4;
+
+	/** Box-blur radius (texels) applied to the minimap fog overlay to soften the hard
+	 *  per-cell edges. 0 = off. */
+	UPROPERTY(Config, EditAnywhere, Category = "UI|Minimap", meta = (DisplayName = "Fog Blur Radius", ClampMin = "0", ClampMax = "8"))
+	int32 MinimapFogBlurRadius = 0;
+
+	/** Minimap overlay color for explored-but-not-currently-visible cells (alpha darkens terrain). */
+	UPROPERTY(Config, EditAnywhere, Category = "UI|Minimap", meta = (DisplayName = "Fog Explored Color"))
+	FColor MinimapFogExploredColor = FColor(0, 0, 0, 120);
+
+	/** Minimap overlay color for never-explored cells (alpha near-opaque hides terrain). */
+	UPROPERTY(Config, EditAnywhere, Category = "UI|Minimap", meta = (DisplayName = "Fog Unexplored Color"))
+	FColor MinimapFogUnexploredColor = FColor(2, 2, 4, 255);
+
 	// UDeveloperSettings Interface
 	// ====================================================================================================
 

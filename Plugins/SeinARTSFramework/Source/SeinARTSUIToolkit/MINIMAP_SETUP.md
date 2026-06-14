@@ -107,13 +107,21 @@ receives clicks; `MapRoot` stays HitTestInvisible so clicks fall through to the 
 6. Right-click with units selected → move there; shift-right-click queues.
 7. Rotate the camera (Q/E or Alt+MMB) → the whole map rotates so your view points up; the viewport box stays upright.
 
-### Tuning (no C++)
+### Tuning
 
+**Project-wide fog defaults** live in **Project Settings ▸ Plugins ▸ SeinARTS ▸ UI ▸ Minimap**:
+`Fog Texture Resolution` (default 256), `Fog Update Interval` (4), `Fog Blur Radius` (0 = off), and the
+`Fog Explored`/`Fog Unexplored` overlay colors. The minimap view-model seeds itself from these on
+init — set them once and every minimap picks them up. For a one-off per-widget override, set the
+matching property on the VM in Construct (e.g. `VM ▸ Set Fog Blur Radius`); the settings are just
+the default.
+
+Other knobs (no C++):
 - **"Up" is wrong / spins the wrong way** → `Rotation Offset Deg` (try 90, 180, -90).
 - **Background mirrored vs the world** (N/S or E/W swapped) → that's a UV-axis convention, not rotation.
   Ping me and I'll add a `bFlipMinimapY` toggle to the bake / `World To Minimap`.
 - **Blip size/color** → your `WBP_Blip` + the `Relation`/`SizeClass` mapping.
-- **Fog chunky / laggy** → on the view-model: `Fog Texture Resolution` (default 128), `Fog Update Interval` (default every 4 sim ticks).
+- **Fog still chunky** → raise `Fog Blur Radius` and/or `Fog Texture Resolution` in the settings page above.
 - **Viewport box at very low camera tilt** → if the camera looks near the horizon, some screen
   corners stop hitting the ground and the box legitimately disappears (it would be infinite). The
   camera pawn clamps pitch to ≤ -5°, so this is an edge case; tell me if you want a clamp instead.
