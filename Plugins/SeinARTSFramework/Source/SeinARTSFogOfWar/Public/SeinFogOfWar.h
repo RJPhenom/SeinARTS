@@ -157,6 +157,21 @@ public:
 	 *  has no runtime data. */
 	virtual uint8 GetCellBitfield(FSeinPlayerID Observer, const FFixedVector& WorldPos) const { return 0; }
 
+	/** Bulk read of one observer's whole visibility grid — for render/UI
+	 *  consumers that need the entire field at once (e.g. a fog-of-war overlay
+	 *  that uploads the grid to a texture) instead of N per-cell point queries.
+	 *  Fills `OutCells` with the row-major EVNNNNNN bitfields (length
+	 *  `OutWidth*OutHeight`, index `Y*OutWidth + X` — same layout `GetCellBitfield`
+	 *  reads) and reports the grid's world-space `OutOrigin` (min corner) +
+	 *  `OutCellSize` so the caller can map world XY <-> cell. When the observer
+	 *  has no VisionGroup yet (has seen nothing), `OutCells` is zero-filled at the
+	 *  grid dims — everything reads unexplored — and the call still returns true.
+	 *  Returns false only when the impl has no runtime grid at all (queries
+	 *  would return no-visibility). Default: false (no grid). */
+	virtual bool GetObserverGrid(FSeinPlayerID Observer, TArray<uint8>& OutCells,
+		FFixedVector& OutOrigin, FFixedPoint& OutCellSize,
+		int32& OutWidth, int32& OutHeight) const { return false; }
+
 	/** Convenience: true if any of `LayerMask`'s bits are set in the cell's
 	 *  bitfield. Caller passes SEIN_FOW_BIT_NORMAL, SEIN_FOW_MASK_VISIBLE,
 	 *  or a custom mask. */

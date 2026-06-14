@@ -13,7 +13,17 @@
 #include "Components/SeinIdentityComponent.h"
 #include "Components/SeinProductionComponent.h"
 #include "Core/SeinPlayerState.h"
+#include "SeinLevelData.h"
+#include "SeinLevelDataSubsystem.h"
+#include "Volumes/SeinLevelVolume.h"
+#include "Player/SeinCameraPawn.h"
+#include "Components/Image.h"
 #include "Engine/World.h"
+#include "Engine/Texture2D.h"
+#include "Engine/Canvas.h"
+#include "Engine/TextureRenderTarget2D.h"
+#include "Kismet/KismetRenderingLibrary.h"
+#include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
 
 // ==================== Internal Helpers ====================
@@ -248,6 +258,137 @@ TArray<FVector2D> USeinUIBPFL::SeinGetCameraFrustumCorners(APlayerController* Pl
 	}
 
 	return Corners;
+}
+
+UTexture2D* USeinUIBPFL::SeinGetMinimapTextureForLevel(const UObject* WorldContextObject)
+{
+	UWorld* World = WorldContextObject
+		? GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::ReturnNull)
+		: nullptr;
+	if (!World)
+	{
+		return nullptr;
+	}
+
+	// 1. Per-level designer override on a level volume wins (first one set).
+	for (TActorIterator<ASeinLevelVolume> It(World); It; ++It)
+	{
+		ASeinLevelVolume* Vol = *It;
+		if (Vol && !Vol->MinimapOverrideTexture.IsNull())
+		{
+			if (UTexture2D* Override = Vol->MinimapOverrideTexture.LoadSynchronous())
+			{
+				return Override;
+			}
+		}
+	}
+
+	// 2. Baked top-down texture from the level-data substrate.
+	if (USeinLevelData* LevelData = USeinLevelDataSubsystem::GetLevelDataForWorld(World))
+	{
+		return LevelData->GetMinimapTexture();
+	}
+
+	return nullptr;
+}
+
+float USeinUIBPFL::SeinGetMinimapRotationDegrees(APlayerController* PlayerController, bool bRotateWithCamera, float RotationOffsetDeg)
+{
+	if (!bRotateWithCamera || !PlayerController)
+	{
+		return RotationOffsetDeg;
+	}
+	if (ASeinCameraPawn* Cam = Cast<ASeinCameraPawn>(PlayerController->GetPawn()))
+	{
+		// Counter-rotate the map so the camera's forward points "up".
+		return -Cam->GetCameraYaw() + RotationOffsetDeg;
+	}
+	return RotationOffsetDeg;
+}
+
+bool USeinUIBPFL::SeinMinimapLocalToWorld(FVector2D LocalPos, FVector2D WidgetSize, FVector2D WorldBoundsMin,
+	FVector2D WorldBoundsMax, float GroundZ, float MapRotationDeg, bool bCircleClip, FVector& OutWorld)
+{
+	OutWorld = FVector::ZeroVector;
+
+	const float S = FMath::Min(WidgetSize.X, WidgetSize.Y);
+	if (S <= 0.0f)
+	{
+		return false;
+	}
+
+	const FVector2D Center = WidgetSize * 0.5f;
+	const FVector2D Pr = LocalPos - Center;
+	if (bCircleClip && Pr.Size() > S * 0.5f)
+	{
+		return false;
+	}
+
+	// Inverse of the display rotation → recover the north-up offset.
+	const float R = FMath::DegreesToRadians(-MapRotationDeg);
+	const float C = FMath::Cos(R);
+	const float Sn = FMath::Sin(R);
+	const FVector2D P(Pr.X * C - Pr.Y * Sn, Pr.X * Sn + Pr.Y * C);
+
+	const FVector2D UV(P.X / S + 0.5f, P.Y / S + 0.5f);
+	if (UV.X < 0.0f || UV.X > 1.0f || UV.Y < 0.0f || UV.Y > 1.0f)
+	{
+		return false;
+	}
+
+	OutWorld = SeinMinimapToWorld(UV, WorldBoundsMin, WorldBoundsMax, GroundZ);
+	return true;
+}
+
+void USeinUIBPFL::SeinDrawCameraViewportToRenderTarget(const UObject* WorldContextObject, APlayerController* PlayerController,
+	UTextureRenderTarget2D* RenderTarget, FVector2D WorldBoundsMin, FVector2D WorldBoundsMax, float GroundZ,
+	FLinearColor LineColor, float LineThickness)
+{
+	if (!RenderTarget || !PlayerController)
+	{
+		return;
+	}
+
+	// The Kismet rendering helpers take a non-const world context.
+	UObject* WCO = const_cast<UObject*>(WorldContextObject);
+
+	UKismetRenderingLibrary::ClearRenderTarget2D(WCO, RenderTarget, FLinearColor::Transparent);
+
+	// True camera-ground footprint (north-up UV) — deprojected screen corners, so it
+	// widens/shrinks faithfully with tilt. <4 corners means the camera is at the horizon.
+	const TArray<FVector2D> CornerUVs = SeinGetCameraFrustumCorners(PlayerController, WorldBoundsMin, WorldBoundsMax, GroundZ);
+	if (CornerUVs.Num() != 4)
+	{
+		return;
+	}
+
+	const FVector2D RTSize(static_cast<float>(RenderTarget->SizeX), static_cast<float>(RenderTarget->SizeY));
+
+	UCanvas* Canvas = nullptr;
+	FVector2D CanvasSize = FVector2D::ZeroVector;
+	FDrawToRenderTargetContext Context;
+	UKismetRenderingLibrary::BeginDrawCanvasToRenderTarget(WCO, RenderTarget, Canvas, CanvasSize, Context);
+	if (Canvas)
+	{
+		for (int32 i = 0; i < 4; ++i)
+		{
+			const FVector2D A = CornerUVs[i] * RTSize;
+			const FVector2D B = CornerUVs[(i + 1) % 4] * RTSize;
+			Canvas->K2_DrawLine(A, B, LineThickness, LineColor);
+		}
+	}
+	UKismetRenderingLibrary::EndDrawCanvasToRenderTarget(WCO, Context);
+}
+
+void USeinUIBPFL::SeinSetImageBrushResource(UImage* Image, UObject* ResourceObject)
+{
+	if (!Image)
+	{
+		return;
+	}
+	FSlateBrush Brush = Image->GetBrush();
+	Brush.SetResourceObject(ResourceObject);
+	Image->SetBrush(Brush);
 }
 
 // ==================== Action Slot Builders ====================

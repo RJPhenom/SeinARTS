@@ -181,6 +181,13 @@ public:
 		TArray<FColor>& OutColors,
 		float& OutHalfExtent) const override;
 
+	/** Hands back a copy of `Observer`'s row-major CellBitfield + grid geometry.
+	 *  Zero-filled (but true) when the observer has no group yet; false only when
+	 *  the grid is uninitialized. See USeinFogOfWar::GetObserverGrid. */
+	virtual bool GetObserverGrid(FSeinPlayerID Observer, TArray<uint8>& OutCells,
+		FFixedVector& OutOrigin, FFixedPoint& OutCellSize,
+		int32& OutWidth, int32& OutHeight) const override;
+
 private:
 
 	// ----------------------------------------------------------------------

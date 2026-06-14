@@ -18,6 +18,7 @@ class USeinActorBridgeSubsystem;
 class USeinSelectionModel;
 class USeinPlayerViewModel;
 class USeinEntityViewModel;
+class USeinMinimapViewModel;
 class ASeinPlayerController;
 
 /**
@@ -64,6 +65,10 @@ public:
 	/** Get or create an entity ViewModel for a specific entity. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|UI")
 	USeinEntityViewModel* GetEntityViewModel(FSeinEntityHandle Handle) const;
+
+	/** Get the minimap view-model (blips, fog overlay, background). */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|UI")
+	USeinMinimapViewModel* GetMinimapViewModel() const;
 
 	/** Get the actor bridge subsystem. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|UI")

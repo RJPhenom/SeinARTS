@@ -9,6 +9,7 @@
 #include "ViewModel/SeinPlayerViewModel.h"
 #include "ViewModel/SeinSelectionModel.h"
 #include "ViewModel/SeinLobbyViewModel.h"
+#include "ViewModel/SeinMinimapViewModel.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Player/SeinPlayerController.h"
 #include "Engine/World.h"
@@ -32,6 +33,9 @@ void USeinUISubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	// Create the selection model
 	SelectionModel = NewObject<USeinSelectionModel>(this);
 	SelectionModel->Initialize(this);
+
+	// The minimap view model is created lazily on first GetMinimapViewModel() — projects
+	// that never show a minimap never pay for it.
 
 	UE_LOG(LogSeinUI, Log, TEXT("SeinUISubsystem initialized"));
 }
@@ -58,6 +62,7 @@ void USeinUISubsystem::Deinitialize()
 	PlayerViewModels.Empty();
 	SelectionModel = nullptr;
 	LobbyViewModel = nullptr;
+	MinimapViewModel = nullptr;
 
 	Super::Deinitialize();
 
@@ -144,6 +149,16 @@ USeinLobbyViewModel* USeinUISubsystem::GetOrCreateLobbyViewModel()
 	return LobbyViewModel;
 }
 
+USeinMinimapViewModel* USeinUISubsystem::GetMinimapViewModel()
+{
+	if (!MinimapViewModel)
+	{
+		MinimapViewModel = NewObject<USeinMinimapViewModel>(this);
+		MinimapViewModel->Initialize(WorldSubsystem.Get(), GetWorld());
+	}
+	return MinimapViewModel;
+}
+
 // ==================== Sim Tick Refresh ====================
 
 void USeinUISubsystem::HandleSimTick(int32 Tick)
@@ -172,6 +187,12 @@ void USeinUISubsystem::HandleSimTick(int32 Tick)
 		{
 			Pair.Value->Refresh();
 		}
+	}
+
+	// Refresh the minimap view model
+	if (MinimapViewModel)
+	{
+		MinimapViewModel->Refresh();
 	}
 
 	// Periodically clean up stale entity ViewModels (every 30 ticks ~ 1 second)

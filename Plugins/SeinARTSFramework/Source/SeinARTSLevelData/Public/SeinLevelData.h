@@ -39,6 +39,7 @@
 class UWorld;
 class USeinLevelDataAsset;
 class ISeinLevelLayerProvider;
+class UTexture2D;
 
 /** Per-cell shared surface data a layer provider reads to reproduce its channel —
  *  the output of the one shared trace pass (D13). Queried by finest-res cell index. */
@@ -108,6 +109,12 @@ public:
 	 *  layer's provider at bake time. The layer's runtime consumer deserializes it
 	 *  (nav: Cost + Connections). Returns false if no such channel / no bake. */
 	virtual bool GetLayerChannel(FName LayerId, TArray<uint8>& OutData) const { return false; }
+
+	/** The baked top-down minimap background texture for this level (synthesized from
+	 *  the shared height field at bake time). Null if the substrate has no bake / no
+	 *  minimap output. The UI layer prefers a per-level designer override
+	 *  (ASeinLevelVolume::MinimapOverrideTexture) over this. Default: null. */
+	virtual UTexture2D* GetMinimapTexture() const { return nullptr; }
 
 	// ----------------------------------------------------------------------
 	// Layer-provider registry (D12) — idiomatic to the framework's existing

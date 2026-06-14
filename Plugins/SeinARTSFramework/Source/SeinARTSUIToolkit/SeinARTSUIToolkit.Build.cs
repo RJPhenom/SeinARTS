@@ -30,6 +30,8 @@ public class SeinARTSUIToolkit : ModuleRules
 				"InputCore",
 				"RenderCore",
 				"SeinARTSNet",
+				"SeinARTSLevelData",  // minimap: play-area bounds + baked background texture
+				"SeinARTSFogOfWar",   // minimap: fog overlay + enemy-blip visibility culling
 			}
 		);
 	}

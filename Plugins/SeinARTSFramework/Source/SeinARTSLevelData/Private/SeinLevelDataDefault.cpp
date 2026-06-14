@@ -15,9 +15,11 @@
 
 #include "StructUtils/InstancedStruct.h"
 #include "Engine/World.h"
+#include "Engine/Texture2D.h"
 #include "EngineUtils.h"
 #include "CollisionQueryParams.h"
 #include "Misc/ScopedSlowTask.h"
+#include "TextureResource.h"
 
 #if WITH_EDITOR
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -115,6 +117,7 @@ void USeinLevelDataDefault::ApplyAssetData(const USeinLevelDataDefaultAsset* Ass
 	CellSizeFP = Asset->CellSize;
 	OriginFP = Asset->Origin;
 	RuntimeChannels = Asset->Channels;
+	MinimapTextureRuntime = Asset->MinimapTexture; // render artifact — independent of the cell arrays below
 
 	const int32 NumCells = Width * Height;
 
@@ -414,6 +417,12 @@ bool USeinLevelDataDefault::DoSyncBake(UWorld* World, USeinLevelDataDefaultAsset
 		}
 	}
 
+	// Synthesize the top-down minimap background texture from the exact (pre-dequant)
+	// runtime surface arrays and stash it on the asset so it serializes with the
+	// package. Done before the re-sync below so ApplyAssetData caches the freshly
+	// built texture into MinimapTextureRuntime.
+	BuildOrUpdateMinimapTexture(OutAsset);
+
 	// Re-sync the runtime substrate from the (now quantized) asset so this baking
 	// session reads the same dequantized values a reloaded session will.
 	ApplyAssetData(OutAsset);
@@ -426,6 +435,113 @@ bool USeinLevelDataDefault::DoSyncBake(UWorld* World, USeinLevelDataDefaultAsset
 #endif
 
 	return true;
+}
+
+// ============================================================================
+// Minimap background texture synthesis
+// ============================================================================
+
+void USeinLevelDataDefault::BuildOrUpdateMinimapTexture(USeinLevelDataDefaultAsset* Asset) const
+{
+	if (!Asset) return;
+	const int32 NumCells = Width * Height;
+	if (Width <= 0 || Height <= 0 || SharedHeight.Num() != NumCells || CellFlags.Num() != NumCells)
+	{
+		return;
+	}
+
+	// One texel per finest cell, capped so the asset stays light on large maps.
+	constexpr int32 MaxDim = 512;
+	const int32 TexW = FMath::Clamp(Width, 1, MaxDim);
+	const int32 TexH = FMath::Clamp(Height, 1, MaxDim);
+
+	// Height range over in-bounds surface cells → contrast for the shading ramp.
+	float MinH = TNumericLimits<float>::Max();
+	float MaxH = TNumericLimits<float>::Lowest();
+	for (int32 i = 0; i < NumCells; ++i)
+	{
+		if ((CellFlags[i] & SeinLevelCellFlags::InBounds) && (CellFlags[i] & SeinLevelCellFlags::HasSurface))
+		{
+			const float H = SharedHeight[i].ToFloat();
+			MinH = FMath::Min(MinH, H);
+			MaxH = FMath::Max(MaxH, H);
+		}
+	}
+	if (!(MaxH > MinH)) { MinH = 0.0f; MaxH = 1.0f; } // no surface cells → flat ramp, avoid div0
+
+	// Shade each texel (nearest-sample the grid). Row 0 = grid Y 0 = world min Y, so the
+	// texture's V axis matches USeinUIBPFL::SeinWorldToMinimap (V grows with world +Y).
+	const FLinearColor LowColor(0.16f, 0.24f, 0.15f);       // low ground (dark green)
+	const FLinearColor HighColor(0.62f, 0.58f, 0.44f);      // high ground (tan)
+	const FLinearColor NoSurfaceColor(0.09f, 0.12f, 0.20f); // pits / no geometry (dark blue)
+	const FColor BorderColor(16, 18, 22, 255);              // out of play area
+
+	TArray<FColor> Pixels;
+	Pixels.SetNumUninitialized(TexW * TexH);
+	for (int32 ty = 0; ty < TexH; ++ty)
+	{
+		const int32 gy = (TexH == Height) ? ty : FMath::Clamp(ty * Height / TexH, 0, Height - 1);
+		for (int32 tx = 0; tx < TexW; ++tx)
+		{
+			const int32 gx = (TexW == Width) ? tx : FMath::Clamp(tx * Width / TexW, 0, Width - 1);
+			const int32 Cell = gy * Width + gx;
+			const uint8 Flags = CellFlags[Cell];
+			FColor& Out = Pixels[ty * TexW + tx];
+
+			if ((Flags & SeinLevelCellFlags::InBounds) == 0)
+			{
+				Out = BorderColor;
+				continue;
+			}
+			if ((Flags & SeinLevelCellFlags::HasSurface) == 0)
+			{
+				Out = NoSurfaceColor.ToFColor(true);
+				continue;
+			}
+			const float T = FMath::Clamp((SharedHeight[Cell].ToFloat() - MinH) / (MaxH - MinH), 0.0f, 1.0f);
+			FLinearColor Base = FMath::Lerp(LowColor, HighColor, T);
+			// Slope relief: steeper (lower normal·Up) reads darker.
+			const float NZ = FMath::Clamp(SharedNormalZ.IsValidIndex(Cell) ? SharedNormalZ[Cell].ToFloat() : 1.0f, 0.0f, 1.0f);
+			Base *= FMath::Lerp(0.55f, 1.0f, NZ);
+			Base.A = 1.0f;
+			Out = Base.ToFColor(true);
+		}
+	}
+
+	UTexture2D* Tex = Asset->MinimapTexture;
+
+#if WITH_EDITOR
+	if (!Tex)
+	{
+		Tex = NewObject<UTexture2D>(Asset, TEXT("MinimapTexture"), RF_Public);
+		Asset->MinimapTexture = Tex;
+	}
+	// Source data is what serializes into the package; UpdateResource builds platform data.
+	Tex->Source.Init(TexW, TexH, 1, 1, TSF_BGRA8, reinterpret_cast<const uint8*>(Pixels.GetData()));
+	Tex->SRGB = true;
+	Tex->CompressionSettings = TC_EditorIcon; // uncompressed RGBA — crisp for UI, no block artifacts
+	Tex->MipGenSettings = TMGS_NoMipmaps;
+	Tex->LODGroup = TEXTUREGROUP_UI;
+	Tex->Filter = TF_Bilinear;
+	Tex->UpdateResource();
+	Tex->PostEditChange();
+#else
+	// Cooked/runtime bake (rare) — build a transient texture for in-memory use.
+	Tex = UTexture2D::CreateTransient(TexW, TexH, PF_B8G8R8A8);
+	if (Tex)
+	{
+		Tex->SRGB = true;
+		Tex->Filter = TF_Bilinear;
+		if (FTexturePlatformData* PD = Tex->GetPlatformData())
+		{
+			void* Data = PD->Mips[0].BulkData.Lock(LOCK_READ_WRITE);
+			FMemory::Memcpy(Data, Pixels.GetData(), TexW * TexH * sizeof(FColor));
+			PD->Mips[0].BulkData.Unlock();
+		}
+		Tex->UpdateResource();
+	}
+	Asset->MinimapTexture = Tex;
+#endif
 }
 
 #if WITH_EDITOR

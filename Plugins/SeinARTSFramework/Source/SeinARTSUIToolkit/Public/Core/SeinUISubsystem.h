@@ -17,6 +17,7 @@ class USeinEntityViewModel;
 class USeinPlayerViewModel;
 class USeinSelectionModel;
 class USeinLobbyViewModel;
+class USeinMinimapViewModel;
 class USeinWorldSubsystem;
 
 /**
@@ -78,6 +79,15 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|UI|Lobby")
 	USeinLobbyViewModel* GetOrCreateLobbyViewModel();
 
+	/**
+	 * Get the minimap view-model (singleton per world), lazily creating it on first
+	 * access. Projects that never show a minimap never create it (and so pay nothing);
+	 * once created it refreshes each sim tick. Drives a minimap Blueprint's blips, fog
+	 * overlay, and background.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|UI|Minimap")
+	USeinMinimapViewModel* GetMinimapViewModel();
+
 private:
 	/** Called after each sim tick — refreshes all active ViewModels. */
 	void HandleSimTick(int32 Tick);
@@ -104,6 +114,10 @@ private:
 	/** Lobby view model (lazy singleton). */
 	UPROPERTY()
 	TObjectPtr<USeinLobbyViewModel> LobbyViewModel;
+
+	/** Minimap view model (singleton). */
+	UPROPERTY()
+	TObjectPtr<USeinMinimapViewModel> MinimapViewModel;
 
 	/** Delegate handle for sim tick. */
 	FDelegateHandle SimTickDelegateHandle;

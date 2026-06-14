@@ -20,6 +20,9 @@
 #include "SeinUIBPFL.generated.h"
 
 class UTexture2D;
+class UTextureRenderTarget2D;
+class APlayerController;
+class UImage;
 
 UCLASS(meta = (DisplayName = "SeinARTS UI Library"))
 class SEINARTSUITOOLKIT_API USeinUIBPFL : public UBlueprintFunctionLibrary
@@ -106,6 +109,65 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|UI|Minimap", meta = (DisplayName = "Get Camera Frustum Corners"))
 	static TArray<FVector2D> SeinGetCameraFrustumCorners(APlayerController* PlayerController, FVector2D WorldBoundsMin, FVector2D WorldBoundsMax, float GroundZ = 0.0f);
+
+	/**
+	 * Resolve the minimap background texture for the current level. A per-level designer
+	 * override authored on an ASeinLevelVolume (MinimapOverrideTexture) wins; otherwise
+	 * the top-down texture baked into the level-data substrate. Null if neither exists
+	 * (no override + no bake). The minimap view-model uses this; designers can also call
+	 * it directly to set an Image brush.
+	 */
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|UI|Minimap", meta = (WorldContext = "WorldContextObject", DisplayName = "Get Minimap Texture For Level"))
+	static UTexture2D* SeinGetMinimapTextureForLevel(const UObject* WorldContextObject);
+
+	/**
+	 * The minimap's display rotation in degrees. When bRotateWithCamera is true this is
+	 * -cameraYaw + RotationOffsetDeg (so the camera's forward points "up", Company-of-Heroes
+	 * style); otherwise just RotationOffsetDeg. Apply this as the render-transform angle on
+	 * the panel that holds the minimap visuals, AND pass it to Minimap Local To World so
+	 * clicks un-rotate consistently. One source of truth for the rotation.
+	 */
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|UI|Minimap", meta = (DisplayName = "Get Minimap Rotation Degrees"))
+	static float SeinGetMinimapRotationDegrees(APlayerController* PlayerController, bool bRotateWithCamera, float RotationOffsetDeg = 0.0f);
+
+	/**
+	 * Convert a minimap click (widget-local pixel position on the UN-rotated minimap area)
+	 * to a world point. Inverts MapRotationDeg, maps to north-up UV, clips to the shape,
+	 * and projects onto the ground plane at GroundZ.
+	 * @param LocalPos       - Click position in the minimap widget's local space.
+	 * @param WidgetSize     - The minimap widget's local size (Geometry.GetLocalSize()).
+	 * @param MapRotationDeg - The same value Get Minimap Rotation Degrees returned.
+	 * @param bCircleClip    - True for a circular minimap (rejects clicks outside the inscribed circle).
+	 * @param OutWorld       - The resolved world point.
+	 * @return True if the click was inside the map (OutWorld valid); false otherwise.
+	 */
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|UI|Minimap", meta = (DisplayName = "Minimap Local To World"))
+	static bool SeinMinimapLocalToWorld(FVector2D LocalPos, FVector2D WidgetSize, FVector2D WorldBoundsMin,
+		FVector2D WorldBoundsMax, float GroundZ, float MapRotationDeg, bool bCircleClip, FVector& OutWorld);
+
+	/**
+	 * Draw the camera's true ground-plane view footprint (a trapezoid — it widens/shrinks
+	 * faithfully with camera tilt, since it's the deprojection of the four screen corners
+	 * onto the ground) into a render target, in NORTH-UP minimap space. Show the render
+	 * target on an Image inside the SAME rotated panel as the rest of the minimap visuals,
+	 * so it ends up upright and aligned with the blips. Call this each frame from the
+	 * minimap widget's tick — only a widget that actually shows a minimap pays for it.
+	 * Clears the target each call. No-op if fewer than 4 corners hit the ground (camera at
+	 * the horizon).
+	 */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|UI|Minimap", meta = (WorldContext = "WorldContextObject", DisplayName = "Draw Camera Viewport To Render Target"))
+	static void SeinDrawCameraViewportToRenderTarget(const UObject* WorldContextObject, APlayerController* PlayerController,
+		UTextureRenderTarget2D* RenderTarget, FVector2D WorldBoundsMin, FVector2D WorldBoundsMax, float GroundZ,
+		FLinearColor LineColor, float LineThickness = 2.0f);
+
+	/**
+	 * Set an Image widget's brush resource to any texture-like UObject. Works for a
+	 * UTexture2D (background / fog) AND a UTextureRenderTarget2D (the viewport-box RT) —
+	 * the stock "Set Brush from Texture" node only accepts Texture2D and rejects render
+	 * targets. Preserves the Image's other brush settings (tint, draw-as, size).
+	 */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|UI|Minimap", meta = (DisplayName = "Set Image Brush Resource"))
+	static void SeinSetImageBrushResource(UImage* Image, UObject* ResourceObject);
 
 	// ==================== Action Slot Builders ====================
 

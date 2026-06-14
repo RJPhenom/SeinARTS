@@ -24,6 +24,7 @@
 #include "SeinLevelVolume.generated.h"
 
 class USeinLevelDataAsset;
+class UTexture2D;
 
 UCLASS(meta = (DisplayName = "Sein Level Volume"))
 class SEINARTSLEVELDATA_API ASeinLevelVolume : public AVolume
@@ -79,6 +80,18 @@ public:
 	UPROPERTY(EditAnywhere, Category = "SeinARTS|Fog Of War",
 		meta = (DisplayName = "Bake Static Blockers"))
 	bool bBakeStaticBlockers = true;
+
+	// ----------------------------------------------------------------------
+	// Minimap layer config.
+	// ----------------------------------------------------------------------
+
+	/** Optional per-level minimap background override. When set, the UI minimap uses
+	 *  this texture instead of the auto-generated baked top-down texture — the path to
+	 *  hand-authored / stylized minimap art (the bake produces a serviceable default).
+	 *  Resolved at the UI layer; the first volume in the level with an override set
+	 *  wins. SOFT reference — loaded on demand by the minimap view-model. */
+	UPROPERTY(EditAnywhere, Category = "SeinARTS|Minimap", meta = (DisplayName = "Minimap Override Texture"))
+	TSoftObjectPtr<UTexture2D> MinimapOverrideTexture;
 
 	// ----------------------------------------------------------------------
 	// Bake — the bake action + the asset it produces. Presented as a "Bake"

@@ -1177,6 +1177,33 @@ uint8 USeinFogOfWarDefault::GetCellBitfield(FSeinPlayerID Observer, const FFixed
 	return Group->CellBitfield.IsValidIndex(Idx) ? Group->CellBitfield[Idx] : 0;
 }
 
+bool USeinFogOfWarDefault::GetObserverGrid(FSeinPlayerID Observer, TArray<uint8>& OutCells,
+	FFixedVector& OutOrigin, FFixedPoint& OutCellSize, int32& OutWidth, int32& OutHeight) const
+{
+	if (Width <= 0 || Height <= 0) return false;
+
+	OutWidth    = Width;
+	OutHeight   = Height;
+	OutOrigin   = Origin;
+	OutCellSize = CellSize;
+
+	const int32 Num = Width * Height;
+	if (const FSeinFogVisionGroup* Group = VisionGroups.Find(Observer);
+		Group && Group->CellBitfield.Num() == Num)
+	{
+		OutCells = Group->CellBitfield;          // copy the observer's field
+	}
+	else
+	{
+		// Observer has seen nothing yet (no group) — present an all-unexplored
+		// field at the correct dims so the renderer paints full fog rather than
+		// erroring out.
+		OutCells.Reset(Num);
+		OutCells.AddZeroed(Num);
+	}
+	return true;
+}
+
 uint8 USeinFogOfWarDefault::GetEntityVisibleBits(FSeinPlayerID Observer,
 	USeinWorldSubsystem& Sim, FSeinEntityHandle Target) const
 {

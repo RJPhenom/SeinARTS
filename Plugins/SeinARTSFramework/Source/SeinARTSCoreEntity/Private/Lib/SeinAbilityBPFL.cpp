@@ -353,7 +353,7 @@ int32 USeinAbilityBPFL::SeinGrantAbility(const UObject* WorldContextObject,
 
 	SeinAbilityGrantLocal::DirtyBrokerCapability(*Subsystem, EntityHandle);
 
-	UE_LOG(LogSeinBPFL, Log,
+	UE_LOG(LogSeinBPFL, Verbose,
 		TEXT("GrantAbility: entity %s granted %s [tag=%s passive=%d id=%d refcount=1]"),
 		*EntityHandle.ToString(), *AbilityClass->GetName(),
 		*Instance->AbilityTag.ToString(), Instance->bIsPassive ? 1 : 0, AbilityID);
@@ -448,7 +448,7 @@ int32 USeinAbilityBPFL::SeinRevokeAbilityByTag(const UObject* WorldContextObject
 		SeinAbilityGrantLocal::DirtyBrokerCapability(*Subsystem, EntityHandle);
 	}
 
-	UE_LOG(LogSeinBPFL, Log,
+	UE_LOG(LogSeinBPFL, Verbose,
 		TEXT("RevokeAbilityByTag: entity %s — tag %s — %d instance(s) destroyed, %d decremented"),
 		*EntityHandle.ToString(), *AbilityTag.ToString(),
 		NumDestroyed, MatchingIDs.Num() - NumDestroyed);
@@ -484,7 +484,7 @@ int32 USeinAbilityBPFL::SeinRevokeAbilityByClass(const UObject* WorldContextObje
 		SeinAbilityGrantLocal::DirtyBrokerCapability(*Subsystem, EntityHandle);
 	}
 
-	UE_LOG(LogSeinBPFL, Log,
+	UE_LOG(LogSeinBPFL, Verbose,
 		TEXT("RevokeAbilityByClass: entity %s — class %s — %s"),
 		*EntityHandle.ToString(), *AbilityClass->GetName(),
 		NumDestroyed > 0 ? TEXT("instance destroyed") : TEXT("refcount decremented (other holders remain)"));

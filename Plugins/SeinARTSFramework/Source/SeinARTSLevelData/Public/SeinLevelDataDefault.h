@@ -39,6 +39,7 @@ public:
 	virtual bool GetSharedHeightAt(const FFixedVector& WorldPos, FFixedPoint& OutZ) const override;
 	virtual bool GetCellSurface(int32 CellIndex, FSeinLevelCellSurface& OutSurface) const override;
 	virtual bool GetLayerChannel(FName LayerId, TArray<uint8>& OutData) const override;
+	virtual UTexture2D* GetMinimapTexture() const override { return MinimapTextureRuntime; }
 	virtual void RegisterLayerProvider(ISeinLevelLayerProvider* Provider) override;
 	virtual void UnregisterLayerProvider(ISeinLevelLayerProvider* Provider) override;
 	virtual bool BeginBake(UWorld* World) override;
@@ -60,6 +61,12 @@ protected:
 	bool DoSyncBake(UWorld* World, USeinLevelDataDefaultAsset*& OutAsset);
 	void ApplyAssetData(const USeinLevelDataDefaultAsset* Asset);
 
+	/** Synthesize (or refresh) the asset's top-down minimap background texture from the
+	 *  current runtime surface arrays (Width/Height/SharedHeight/SharedNormalZ/CellFlags).
+	 *  Height shading + slope relief + an out-of-bounds border. Editor bakes a persistent
+	 *  Source texture (subobject of the asset); runtime bakes a transient texture. */
+	void BuildOrUpdateMinimapTexture(USeinLevelDataDefaultAsset* Asset) const;
+
 #if WITH_EDITOR
 	USeinLevelDataDefaultAsset* CreateOrLoadAsset(UWorld* World, const FString& AssetName) const;
 	bool SaveAssetToDisk(USeinLevelDataDefaultAsset* Asset) const;
@@ -73,6 +80,11 @@ protected:
 	TArray<FFixedPoint> SharedHeight;
 	TArray<FFixedPoint> SharedNormalZ;
 	TArray<uint8> CellFlags;
+
+	/** Baked minimap background texture, cached from the loaded asset (GC-rooted via
+	 *  this UPROPERTY). Returned by GetMinimapTexture. */
+	UPROPERTY(Transient)
+	TObjectPtr<UTexture2D> MinimapTextureRuntime;
 
 	/** Per-layer baked channel blocks (nav, FoW, …), copied from the asset at load
 	 *  so consumers can read their channel via GetLayerChannel. */

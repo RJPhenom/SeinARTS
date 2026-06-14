@@ -21,6 +21,8 @@
 #include "Types/Vector.h"
 #include "SeinLevelDataDefaultAsset.generated.h"
 
+class UTexture2D;
+
 /** Per-cell flag bits for USeinLevelDataDefaultAsset::CellFlags. */
 namespace SeinLevelCellFlags
 {
@@ -105,4 +107,13 @@ public:
 	/** Per-layer channel blocks (nav, FoW, later terrain-cost). Extensible (D15). */
 	UPROPERTY()
 	TArray<FSeinLevelChannelBlock> Channels;
+
+	/** Baked top-down minimap background texture. Synthesized at bake time from the
+	 *  shared height / surface-normal / in-bounds fields — a serviceable auto-generated
+	 *  default the UI minimap shows when no per-level override texture is authored on an
+	 *  ASeinLevelVolume. Stored as a subobject of this asset, so it serializes with the
+	 *  package and regenerates on every re-bake (like the rest of the baked data). May
+	 *  be null (legacy assets, or a bake that produced no in-bounds cells). */
+	UPROPERTY()
+	TObjectPtr<UTexture2D> MinimapTexture;
 };

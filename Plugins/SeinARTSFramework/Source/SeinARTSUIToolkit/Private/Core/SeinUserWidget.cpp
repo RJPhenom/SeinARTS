@@ -9,6 +9,7 @@
 #include "ViewModel/SeinSelectionModel.h"
 #include "ViewModel/SeinPlayerViewModel.h"
 #include "ViewModel/SeinEntityViewModel.h"
+#include "ViewModel/SeinMinimapViewModel.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Simulation/SeinActorBridgeSubsystem.h"
 #include "Player/SeinPlayerController.h"
@@ -42,6 +43,11 @@ USeinPlayerViewModel* USeinUserWidget::GetLocalPlayerViewModel() const
 USeinEntityViewModel* USeinUserWidget::GetEntityViewModel(FSeinEntityHandle Handle) const
 {
 	return UISubsystem.IsValid() ? UISubsystem->GetEntityViewModel(Handle) : nullptr;
+}
+
+USeinMinimapViewModel* USeinUserWidget::GetMinimapViewModel() const
+{
+	return UISubsystem.IsValid() ? UISubsystem->GetMinimapViewModel() : nullptr;
 }
 
 USeinActorBridgeSubsystem* USeinUserWidget::GetActorBridge() const
