@@ -109,11 +109,6 @@ void USeinMinimapViewModel::RebuildBlips()
 	UWorld* W = WorldPtr.Get();
 	if (!Sub || !W || !bHasBounds)
 	{
-		if ((RefreshCounter % 30) == 0)
-		{
-			UE_LOG(LogTemp, Warning, TEXT("[Minimap] RebuildBlips early-out: Sub=%d W=%d bHasBounds=%d"),
-				Sub != nullptr, W != nullptr, bHasBounds);
-		}
 		return;
 	}
 
@@ -137,12 +132,8 @@ void USeinMinimapViewModel::RebuildBlips()
 	USeinFogOfWar* Fog = USeinFogOfWarSubsystem::GetFogOfWarForWorld(W);
 	const bool bFogActive = Fog && Fog->HasRuntimeData();
 
-	int32 NumAlive = 0, NumFogCulled = 0;
-
 	Sub->GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, const FSeinEntity& Entity)
 	{
-		++NumAlive;
-
 		// NOTE: deliberately NOT gating on Entity.IsSelectable() — the sim's FLAG_SELECTABLE
 		// isn't maintained by the spawn path (in-game selection uses actor traces, not this
 		// flag), so it reads false for every unit. Draw every live entity; if non-unit
@@ -158,7 +149,6 @@ void USeinMinimapViewModel::RebuildBlips()
 		{
 			if (!Fog->IsEntityVisibleToObserver(LocalId, *Sub, Handle))
 			{
-				++NumFogCulled;
 				return;
 			}
 		}
@@ -173,14 +163,6 @@ void USeinMinimapViewModel::RebuildBlips()
 		Blip.bSelected = SelectedSet.Contains(Handle);
 		Blips.Add(Blip);
 	});
-
-	// Throttled diagnostic — filter the Output Log by "Minimap". Tells us whether the pool
-	// has entities at all, how many were non-selectable, and how many were fog-culled.
-	if ((RefreshCounter % 30) == 0)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("[Minimap] alive=%d fogCulled=%d blips=%d fogActive=%d"),
-			NumAlive, NumFogCulled, Blips.Num(), bFogActive ? 1 : 0);
-	}
 }
 
 void USeinMinimapViewModel::UpdateFogTexture()
