@@ -21,6 +21,10 @@
 #include "SeinLevelData.h"
 #include "Volumes/SeinLevelVolume.h"
 
+#include "SeinNavigation.h"
+#include "SeinNavigationSubsystem.h"
+#include "Settings/PluginSettings.h"   // terrain-type → vision multiplier
+
 #include "Actor/SeinActor.h"
 #include "Actor/SeinEntityComponent.h"
 #include "Components/SeinMovementComponent.h"
@@ -519,8 +523,14 @@ void USeinFogOfWarDefault::TickStamps(UWorld* World)
 	AliveSources.Reserve(SourceStates.Num());
 	bool bAnySourceChanged = false;
 
+	// Terrain-scaled vision: sample the baked terrain type under each source and scale its
+	// stamp radii by that type's VisionMultiplier (a unit in a forest sees less far).
+	// Resolved once here; null nav / no terrain types → multiplier 1 → unscaled fast path.
+	USeinNavigation* TerrainNav = USeinNavigationSubsystem::GetNavigationForWorld(World);
+	const USeinARTSCoreSettings* TerrainSettings = GetDefault<USeinARTSCoreSettings>();
+
 	Sim->GetEntityPool().ForEachEntity(
-		[this, Sim, Storage, &AliveSources, &bAnySourceChanged](FSeinEntityHandle Handle, FSeinEntity& Entity)
+		[this, Sim, Storage, &AliveSources, &bAnySourceChanged, TerrainNav, TerrainSettings](FSeinEntityHandle Handle, FSeinEntity& Entity)
 		{
 			const void* Raw = Storage->GetComponentRaw(Handle);
 			if (!Raw) return;
@@ -529,11 +539,37 @@ void USeinFogOfWarDefault::TickStamps(UWorld* World)
 
 			AliveSources.Add(Handle);
 			const FSeinPlayerID OwnerPlayer = Sim->GetEntityOwner(Handle);
-			if (UpdateSourceStamp(Handle, *VData,
-				Entity.Transform.GetLocation(), Entity.Transform.Rotation, OwnerPlayer))
+			const FFixedVector SourcePos = Entity.Transform.GetLocation();
+
+			// Terrain vision scale at the source's cell (1 = unchanged → unscaled fast path).
+			FFixedPoint VisMult = FFixedPoint::One;
+			if (TerrainNav && TerrainSettings)
 			{
-				bAnySourceChanged = true;
+				const int32 TType = TerrainNav->GetTerrainTypeAt(SourcePos);
+				if (TType != 0) VisMult = TerrainSettings->GetTerrainVisionMultiplier(TType);
 			}
+
+			bool bChanged;
+			if (VisMult == FFixedPoint::One)
+			{
+				bChanged = UpdateSourceStamp(Handle, *VData, SourcePos, Entity.Transform.Rotation, OwnerPlayer);
+			}
+			else
+			{
+				// Scale a transient copy's stamp shapes. UpdateSourceStamp hashes the (scaled)
+				// stamps for its cache; source MOVEMENT — which is the only way the terrain
+				// under it changes (the bake is static) — already invalidates that cache via
+				// WorldPos, so a stationary source on constant terrain stays on the fast path.
+				FSeinVisionComponent ScaledVData = *VData;
+				for (FSeinVisionStamp& S : ScaledVData.VisionStamps)
+				{
+					S.Shape.Radius      = S.Shape.Radius * VisMult;
+					S.Shape.HalfExtentX = S.Shape.HalfExtentX * VisMult;
+					S.Shape.HalfExtentY = S.Shape.HalfExtentY * VisMult;
+				}
+				bChanged = UpdateSourceStamp(Handle, ScaledVData, SourcePos, Entity.Transform.Rotation, OwnerPlayer);
+			}
+			if (bChanged) bAnySourceChanged = true;
 		});
 
 	// Source went away (entity destroyed, vision component stripped, etc.) —

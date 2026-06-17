@@ -35,6 +35,7 @@
 
 #include "CoreMinimal.h"
 #include "Core/SeinTickPhase.h"
+#include "Core/SeinSystemPriority.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Components/SeinExtentsComponent.h"
 #include "SeinNavigation.h"
@@ -93,6 +94,6 @@ public:
 	}
 
 	virtual ESeinTickPhase GetPhase() const override { return ESeinTickPhase::PostTick; }
-	virtual int32 GetPriority() const override { return 11; }   // right after CollisionResolution (10)
+	virtual int32 GetPriority() const override { return SeinSystemPriority::NavContainment; }
 	virtual FName GetSystemName() const override { return TEXT("NavContainment"); }
 };

@@ -7,9 +7,13 @@
 #include "Components/SeinCoverComponent.h"
 #include "Lib/SeinCoverGeometry.h"
 #include "Tags/SeinCoverGameplayTags.h"
+#include "Settings/SeinARTSCoverSettings.h"
 
 #include "SeinFogOfWar.h"
 #include "SeinFogOfWarSubsystem.h"
+#include "SeinNavigation.h"
+#include "SeinNavigationSubsystem.h"
+#include "Settings/PluginSettings.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Types/Entity.h"
 #include "Math/MathLib.h"
@@ -152,7 +156,10 @@ TArray<FSeinCoverContext> USeinCoverDefault::QueryCoverAt(FFixedVector WorldPoin
 	TArray<FSeinCoverContext> Result;
 
 	USeinWorldSubsystem* WorldSub = World.Get();
-	if (!WorldSub || RegisteredProviders.Num() == 0) return Result;
+	if (!WorldSub) return Result;
+	// NOTE: no longer early-out on an empty provider list — terrain-derived cover (below)
+	// can apply even on maps with zero placed cover-provider entities. The provider loop
+	// is a no-op when the list is empty.
 
 	// One unified containment test per provider: is the query point inside
 	// the provider's `Area` volume? Slots no longer contribute cover contexts
@@ -241,6 +248,38 @@ TArray<FSeinCoverContext> USeinCoverDefault::QueryCoverAt(FFixedVector WorldPoin
 			// modifier unconditionally.
 			Ctx.bIsDirectional = Data->bIsDirectional;
 			Result.Add(Ctx);
+		}
+	}
+
+	// Terrain-derived cover (the TerrainCoverQuality binding — the SOLE terrain↔cover seam;
+	// the base framework stays cover-agnostic). Sample the baked per-cell terrain type under
+	// the query point; if it maps to a cover quality, add an OMNIDIRECTIONAL context with no
+	// provider entity. Deliberately NOT fog-gated — terrain isn't hidden information, unlike
+	// placed cover providers. The best-quality priority still lets stronger entity cover win.
+	if (const USeinARTSCoverSettings* CoverSettings = GetDefault<USeinARTSCoverSettings>())
+	{
+		if (CoverSettings->TerrainCoverQuality.Num() > 0)
+		{
+			if (USeinNavigation* Nav = USeinNavigationSubsystem::GetNavigationForWorld(WorldSub))
+			{
+				const int32 TerrainType = Nav->GetTerrainTypeAt(WorldPoint);
+				if (TerrainType != 0)
+				{
+					const USeinARTSCoreSettings* CoreSettings = GetDefault<USeinARTSCoreSettings>();
+					const FGameplayTag TerrainTag = CoreSettings ? CoreSettings->GetTerrainTag(TerrainType) : FGameplayTag();
+					if (const FGameplayTag* Quality = CoverSettings->TerrainCoverQuality.Find(TerrainTag))
+					{
+						if (Quality->IsValid())
+						{
+							FSeinCoverContext Ctx;
+							Ctx.QualityTag     = *Quality;
+							Ctx.ProviderHandle = FSeinEntityHandle();   // terrain — no provider entity
+							Ctx.bIsDirectional = false;                 // omnidirectional
+							Result.Add(Ctx);
+						}
+					}
+				}
+			}
 		}
 	}
 

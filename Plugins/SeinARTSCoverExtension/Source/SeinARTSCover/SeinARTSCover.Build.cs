@@ -28,6 +28,11 @@ public class SeinARTSCover : ModuleRules
 			// the relevant player can see. Helper lives on USeinFogOfWar:
 			// IsEntityVisibleToObserver(Observer, Sim, Handle).
 			"SeinARTSFogOfWar",
+			// Terrain-derived cover: QueryCoverAt samples the baked per-cell terrain
+			// type at the query point via USeinNavigation::GetTerrainTypeAt and maps
+			// it to a cover quality (TerrainCoverQuality). Nav is the runtime owner
+			// of the terrain-type grid.
+			"SeinARTSNavigation",
 		});
 	}
 }

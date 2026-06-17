@@ -34,4 +34,9 @@ class SEINARTSMOVEMENTPLUS_API USeinInfantryMovement : public USeinBasicMovement
 public:
 	virtual void OnMoveBegin(const FSeinMovementContext& Ctx) override;
 	virtual bool Tick(const FSeinMovementContext& Ctx) override;
+
+	/** Returns FSeinInfantryMovementData so the editor auto-attaches it to
+	 *  MovementClassData when Infantry is selected. (The struct is an empty
+	 *  placeholder today — see SeinInfantryMovementData.h.) */
+	virtual UScriptStruct* GetMovementDataStruct() const override;
 };

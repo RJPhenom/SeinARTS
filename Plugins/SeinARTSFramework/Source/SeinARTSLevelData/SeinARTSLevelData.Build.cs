@@ -8,6 +8,7 @@ public class SeinARTSLevelData : ModuleRules
             "Core", "CoreUObject", "Engine",
             "SeinARTSCore", "SeinARTSCoreEntity",
             "GameplayTags",
+            "PhysicsCore",   // bake resolves a trace hit's physical material → terrain type
             "RenderCore", "RHI"
         });
 

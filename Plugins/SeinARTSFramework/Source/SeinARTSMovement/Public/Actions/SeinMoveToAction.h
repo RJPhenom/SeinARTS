@@ -196,6 +196,7 @@ private:
 	void NotifyCompleted();
 	void NotifyWaypointReached(int32 Index, int32 Total);
 	void NotifyPartialPath();
+	void NotifyPathRecomputed();
 
 	/** Reset transient sim state on the owner's FSeinMovementComponent when
 	 *  the action terminates abnormally (cancel / fail). Currently clears

@@ -5,6 +5,7 @@
 
 #include "Volumes/SeinLevelVolume.h"
 #include "SeinLevelDataSubsystem.h"
+#include "SeinLayerConfig.h"
 #include "Settings/PluginSettings.h"
 
 #include "Components/BrushComponent.h"
@@ -113,6 +114,10 @@ namespace
 	 *  Raw UClass* is safe: entries live for their owning module's lifetime and
 	 *  are removed in ShutdownModule. */
 	TArray<UClass*> GSeinLevelVolumeDebugComponentClasses;
+
+	/** Module-registered USeinLayerConfig subclasses (one editable instance per
+	 *  volume). Same lifetime/safety as the debug-component registry above. */
+	TArray<UClass*> GSeinLevelVolumeLayerConfigClasses;
 }
 
 void ASeinLevelVolume::RegisterDebugComponentClass(UClass* ComponentClass)
@@ -127,6 +132,66 @@ void ASeinLevelVolume::UnregisterDebugComponentClass(UClass* ComponentClass)
 {
 	GSeinLevelVolumeDebugComponentClasses.Remove(ComponentClass);
 }
+
+void ASeinLevelVolume::RegisterLayerConfigClass(UClass* ConfigClass)
+{
+	if (ConfigClass)
+	{
+		GSeinLevelVolumeLayerConfigClasses.AddUnique(ConfigClass);
+	}
+}
+
+void ASeinLevelVolume::UnregisterLayerConfigClass(UClass* ConfigClass)
+{
+	GSeinLevelVolumeLayerConfigClasses.Remove(ConfigClass);
+}
+
+USeinLayerConfig* ASeinLevelVolume::GetLayerConfig(TSubclassOf<USeinLayerConfig> ConfigClass) const
+{
+	if (!ConfigClass)
+	{
+		return nullptr;
+	}
+	for (const TObjectPtr<USeinLayerConfig>& Config : LayerConfigs)
+	{
+		if (Config && Config->IsA(ConfigClass))
+		{
+			return Config;
+		}
+	}
+	return nullptr;
+}
+
+#if WITH_EDITOR
+void ASeinLevelVolume::ReconcileLayerConfigs()
+{
+	// Additive: drop only nulls (a config whose class unloaded), then add one
+	// instance of each registered subclass not already present. Never removes a
+	// live, edited config for a transiently-unregistered class.
+	bool bChanged = LayerConfigs.RemoveAll([](const TObjectPtr<USeinLayerConfig>& C) { return C == nullptr; }) > 0;
+	for (UClass* ConfigClass : GSeinLevelVolumeLayerConfigClasses)
+	{
+		if (!ConfigClass)
+		{
+			continue;
+		}
+		const bool bHas = LayerConfigs.ContainsByPredicate(
+			[ConfigClass](const TObjectPtr<USeinLayerConfig>& C) { return C && C->GetClass() == ConfigClass; });
+		if (!bHas)
+		{
+			if (USeinLayerConfig* NewCfg = NewObject<USeinLayerConfig>(this, ConfigClass))
+			{
+				LayerConfigs.Add(NewCfg);
+				bChanged = true;
+			}
+		}
+	}
+	if (bChanged)
+	{
+		MarkPackageDirty();
+	}
+}
+#endif
 
 void ASeinLevelVolume::PostRegisterAllComponents()
 {
@@ -157,6 +222,15 @@ void ASeinLevelVolume::PostRegisterAllComponents()
 		}
 		AddInstanceComponent(Comp);
 		Comp->RegisterComponent();
+	}
+#endif
+
+#if WITH_EDITOR
+	// Per-volume custom-layer config: ensure an editable instance of each registered
+	// USeinLayerConfig subclass is present (additive). Editor-only authoring concern.
+	if (!IsTemplate())
+	{
+		ReconcileLayerConfigs();
 	}
 #endif
 }

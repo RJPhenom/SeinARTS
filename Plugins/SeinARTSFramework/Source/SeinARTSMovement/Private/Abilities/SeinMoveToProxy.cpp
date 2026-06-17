@@ -88,6 +88,12 @@ void USeinMoveToProxy::NotifyPartialPath()
 	OnPartialPath.Broadcast();
 }
 
+void USeinMoveToProxy::NotifyPathRecomputed()
+{
+	// Non-terminal — the move continues on the freshly recomputed route.
+	OnPathRecomputed.Broadcast();
+}
+
 void USeinMoveToProxy::BroadcastFailure(ESeinMoveFailureReason Reason)
 {
 	OnFailed.Broadcast(Reason);

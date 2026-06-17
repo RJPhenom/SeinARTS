@@ -229,8 +229,11 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS|Ability|Targeting")
 	FGameplayTagQuery ValidTargetTags;
 
-	/** Require line-of-sight from owner to target. Integrates with §12 Vision — until
-	 *  that lands the LOS check always passes. */
+	/** Require line-of-sight from owner to target. Gated on Fog-of-War visibility:
+	 *  when a fog impl is active, activation fails (NoLineOfSight) unless the
+	 *  target is visible to the owner's player. Permissive when no fog is bound
+	 *  (tests / fog-less games). Wired via USeinWorldSubsystem::LineOfSightResolver,
+	 *  bound by USeinFogOfWarSubsystem. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS|Ability|Targeting")
 	bool bRequiresLineOfSight = false;
 

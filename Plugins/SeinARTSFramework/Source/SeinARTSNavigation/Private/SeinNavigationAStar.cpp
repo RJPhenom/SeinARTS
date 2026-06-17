@@ -57,6 +57,9 @@ void USeinNavigationAStar::BakeLayer(const USeinLevelData& Substrate, UWorld* Wo
 	// everywhere, so Cost matches nav's legacy AABB bake exactly.
 	// ----------------------------------------------------------------------
 	const FFixedPoint MaxSlopeCosFP = FFixedPoint::FromFloat(FMath::Cos(FMath::DegreesToRadians(MaxWalkableSlopeDegrees)));
+	// Settings drive both the terrain-type → cost lookup (Stage 1 below) and the
+	// step-height fallback (Stage 2). Fetched once here.
+	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
 	TArray<uint8> Cost;        Cost.SetNumUninitialized(NumCells);
 	TArray<uint8> Connections; Connections.Init(0, NumCells);
 	TArray<FFixedPoint> CellH; CellH.SetNumUninitialized(NumCells);
@@ -64,7 +67,11 @@ void USeinNavigationAStar::BakeLayer(const USeinLevelData& Substrate, UWorld* Wo
 	{
 		FSeinLevelCellSurface Surf;
 		const bool bOk = Substrate.GetCellSurface(i, Surf);
-		Cost[i]  = (bOk && Surf.bInBounds && Surf.bHasSurface && Surf.NormalZ >= MaxSlopeCosFP) ? 1 : 0;
+		const bool bPassable = bOk && Surf.bInBounds && Surf.bHasSurface && Surf.NormalZ >= MaxSlopeCosFP;
+		// Passable cells carry their terrain type's movement-cost multiplier (Default → 1,
+		// so an un-authored level bakes byte-identically to before); A* multiplies it into
+		// step cost. Blocked cells stay 0.
+		Cost[i]  = bPassable ? (uint8)(Settings ? Settings->GetTerrainNavCost(Surf.TerrainTypeIndex) : 1) : 0;
 		CellH[i] = bOk ? Surf.Height : FFixedPoint::Zero;
 	}
 
@@ -106,7 +113,6 @@ void USeinNavigationAStar::BakeLayer(const USeinLevelData& Substrate, UWorld* Wo
 		if (bSkip) QP.AddIgnoredActor(A);
 	}
 
-	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
 	const FFixedPoint FallbackStepFP = Settings ? Settings->MaxStepHeight : FFixedPoint::FromInt(50);
 	TArray<FFixedPoint> CellMaxStep; CellMaxStep.SetNum(NumCells);
 	for (int32 Y = 0; Y < GridH; ++Y)
@@ -321,14 +327,21 @@ bool USeinNavigationAStar::LoadFromSubstrate(const USeinLevelData& Substrate)
 	// Cell snap-height reads from the shared substrate surface — the dedup win:
 	// one trace pass feeds nav instead of nav re-tracing every cell.
 	CellHeight.SetNumUninitialized(N);
+	CellTerrainType.SetNumUninitialized(N);
 	for (int32 i = 0; i < N; ++i)
 	{
 		FSeinLevelCellSurface Surf;
-		CellHeight[i] = Substrate.GetCellSurface(i, Surf) ? Surf.Height : FFixedPoint::Zero;
+		const bool bOk = Substrate.GetCellSurface(i, Surf);
+		CellHeight[i]      = bOk ? Surf.Height : FFixedPoint::Zero;
+		CellTerrainType[i] = bOk ? Surf.TerrainTypeIndex : 0;   // per-agent BlockedTerrainTags gate reads this
 	}
 
 	// Derived field — pure function of CellCost; recomputed on every grid load.
 	RebuildWallDistanceField();
+
+	// Derived field — pure function of CellCost/CellConnections; backs O(1)
+	// IsReachable. Recomputed on every grid load alongside WallDistance.
+	RebuildConnectivityComponents();
 
 	// Broadcast after runtime state is in sync — subscribers (debug scene proxy,
 	// cached plan invalidation, etc.) see a consistent snapshot.
@@ -460,6 +473,65 @@ void USeinNavigationAStar::RebuildWallDistanceField()
 	}
 }
 
+void USeinNavigationAStar::RebuildConnectivityComponents()
+{
+	const int32 N = Width * Height;
+	CellComponent.Init(-1, N);   // -1 = blocked / unlabeled
+	if (N == 0) return;
+
+	static const int32 NeighborDX[8] = { 1, -1,  0,  0,  1,  1, -1, -1 };
+	static const int32 NeighborDY[8] = { 0,  0,  1, -1,  1, -1,  1, -1 };
+
+	// Iterative flood-fill (explicit stack — recursion would overflow on large
+	// grids). Each passable, unlabeled cell seeds a new component; the fill
+	// expands along the SAME static edge relation A* traverses at zero required
+	// clearance: a SET connection bit to a PASSABLE neighbor. This matches the
+	// bake-time island-prune flood-fill (BakeLayer stage 3) one-for-one, with
+	// one added runtime guard:
+	//
+	//   Neighbor passability is re-checked here (IsCellPassable), not inferred
+	//   from the connection bit alone. The bake's island/elevated-top prune sets
+	//   a pruned cell's Cost=0 but does NOT clear its NEIGHBORS' inbound bits, so
+	//   a kept cell can carry a stale connection bit pointing at a now-blocked
+	//   cell. A* guards the identical way (IsCellPassableForPath in AStarSearch);
+	//   without this guard the fill would bleed a component into pruned cells.
+	//
+	// Deterministic and float-free; not a hot path (one pass per grid load).
+	TArray<int32> Stack;
+	Stack.Reserve(256);
+	int32 NextLabel = 0;
+	for (int32 Seed = 0; Seed < N; ++Seed)
+	{
+		if (CellComponent[Seed] != -1) continue;
+		const int32 SeedX = Seed % Width;
+		const int32 SeedY = Seed / Width;
+		if (!IsCellPassable(SeedX, SeedY)) continue;   // leave blocked cells at -1
+
+		const int32 L = NextLabel++;
+		Stack.Reset();
+		Stack.Add(Seed);
+		CellComponent[Seed] = L;
+		while (Stack.Num() > 0)
+		{
+			const int32 Cur = Stack.Pop(EAllowShrinking::No);
+			const int32 CX = Cur % Width;
+			const int32 CY = Cur / Width;
+			const uint8 Conn = CellConnections[Cur];
+			for (int32 n = 0; n < 8; ++n)
+			{
+				if ((Conn & (1 << n)) == 0) continue;        // no traversable edge
+				const int32 NX = CX + NeighborDX[n];
+				const int32 NY = CY + NeighborDY[n];
+				if (!IsCellPassable(NX, NY)) continue;        // bounds + static passability (stale-bit guard)
+				const int32 NIdx = CellIndex(NX, NY);
+				if (CellComponent[NIdx] != -1) continue;      // already labeled
+				CellComponent[NIdx] = L;
+				Stack.Add(NIdx);
+			}
+		}
+	}
+}
+
 // ============================================================================
 // Query helpers
 // ============================================================================
@@ -491,6 +563,101 @@ bool USeinNavigationAStar::IsPassable(const FFixedVector& WorldPos) const
 	int32 X, Y;
 	if (!WorldToGrid(WorldPos, X, Y)) return false;
 	return IsCellPassable(X, Y);
+}
+
+int32 USeinNavigationAStar::GetTerrainTypeAt(const FFixedVector& WorldPos) const
+{
+	int32 X, Y;
+	if (!WorldToGrid(WorldPos, X, Y)) return 0;            // off-grid → Default
+	const int32 Idx = CellIndex(X, Y);
+	return CellTerrainType.IsValidIndex(Idx) ? static_cast<int32>(CellTerrainType[Idx]) : 0;
+}
+
+bool USeinNavigationAStar::IsReachable(const FFixedVector& From, const FFixedVector& To, const FGameplayTagContainer& /*AgentTags*/) const
+{
+	// O(1) reachability via the static connectivity-component field (built at
+	// LoadFromSubstrate). Replaces the base's full-A* fallback on the
+	// command-validation hot path — bRequiresPathableTarget runs this per order
+	// to reject targets a unit genuinely can't reach (across a chasm, on an
+	// isolated island) instead of falling back to a partial path.
+	//
+	// AgentTags is intentionally unused: the reference grid is single-layer and
+	// applies no per-tag STATIC gating (the only per-agent gate is the dynamic-
+	// blocker layer mask, which is transient and excluded here by design — a
+	// vehicle parked in a doorway doesn't make the far side FUNDAMENTALLY
+	// unreachable). A subclass with terrain layers would override with per-layer
+	// component fields.
+	//
+	// Verdict semantics differ from the base fallback ON PURPOSE: the base
+	// returned true whenever FindPath could produce ANY polyline (including a
+	// partial to the nearest-reachable cell when the goal sits in a different
+	// region), so it effectively never rejected an in-bounds target. This
+	// component check returns the CORRECT verdict — true iff the goal is in the
+	// same reachable region as the start — which is the documented intent of the
+	// override ("cheaper reachability component / flood-fill"). See CellComponent
+	// for the precision boundary (diagonal-squeeze corners / oversized agents may
+	// over-report; both degrade to a graceful partial in FindPath).
+	if (CellComponent.Num() != Width * Height || Width <= 0 || Height <= 0) return false;
+
+	// Project both endpoints onto walkable cells (ring-scan to nearest passable
+	// — mirrors FindCellPath's start projection, and tolerates a blocked/off-grid
+	// click by snapping to the nearest reachable ground).
+	FFixedVector FromProj, ToProj;
+	if (!ProjectPointToNav(From, FromProj)) return false;
+	if (!ProjectPointToNav(To,   ToProj))   return false;
+
+	int32 FX, FY, TX, TY;
+	if (!WorldToGrid(FromProj, FX, FY)) return false;   // projected center always maps back in-bounds
+	if (!WorldToGrid(ToProj,   TX, TY)) return false;
+
+	const int32 FromComp = CellComponent[CellIndex(FX, FY)];
+	const int32 ToComp   = CellComponent[CellIndex(TX, TY)];
+	return FromComp >= 0 && FromComp == ToComp;
+}
+
+bool USeinNavigationAStar::GetRandomReachablePoint(const FFixedVector& QueryOrigin, FFixedPoint Radius, FFixedRandom& Rng, FFixedVector& OutPoint) const
+{
+	if (CellComponent.Num() != Width * Height || Width <= 0 || Height <= 0) return false;
+	if (Radius <= FFixedPoint::Zero) return false;
+
+	// Project the origin to a walkable cell; its component id defines the
+	// "reachable" set the sample must land in (same notion as IsReachable).
+	FFixedVector OriginProj;
+	if (!ProjectPointToNav(QueryOrigin, OriginProj)) return false;
+	int32 OX, OY;
+	if (!WorldToGrid(OriginProj, OX, OY)) return false;
+	const int32 OriginComp = CellComponent[CellIndex(OX, OY)];
+	if (OriginComp < 0) return false;
+
+	const FFixedPoint RadiusSq = Radius * Radius;
+	const FFixedVector2D Centre(OriginProj.X, OriginProj.Y);
+
+	// Disc rejection-sampling: draw a uniform point in the radius (FFixedRandom's
+	// own area-uniform sampler — deterministic, advances the caller's stream),
+	// snap to its cell, and accept the first that is passable AND in the origin's
+	// component AND whose CELL CENTER is genuinely within Radius. Sampling over
+	// the disc then filtering by component yields a uniform draw over the
+	// reachable cells in range. Bounded attempts: a region too sparse to hit
+	// returns false (best-effort — see RandomReachableMaxAttempts).
+	for (int32 Attempt = 0; Attempt < RandomReachableMaxAttempts; ++Attempt)
+	{
+		const FFixedVector2D P = Rng.PointInCircle(Centre, Radius);
+		int32 CX, CY;
+		if (!WorldToGrid(FFixedVector(P.X, P.Y, OriginProj.Z), CX, CY)) continue;
+		if (!IsCellPassable(CX, CY)) continue;
+		if (CellComponent[CellIndex(CX, CY)] != OriginComp) continue;
+
+		// The sampled point was inside the disc, but its cell CENTER can sit a
+		// fraction outside — enforce the true radius on the value we return.
+		const FFixedVector Candidate = GridToWorld(CX, CY);
+		const FFixedPoint DX = Candidate.X - OriginProj.X;
+		const FFixedPoint DY = Candidate.Y - OriginProj.Y;
+		if (DX * DX + DY * DY > RadiusSq) continue;
+
+		OutPoint = Candidate;
+		return true;
+	}
+	return false;
 }
 
 bool USeinNavigationAStar::IsWorldPositionClear(const FFixedVector& WorldPos, uint8 AgentNavLayerMask) const
@@ -1458,6 +1625,85 @@ bool USeinNavigationAStar::HasLineOfSight(int32 X0, int32 Y0, int32 X1, int32 Y1
 	}
 }
 
+bool USeinNavigationAStar::NavRaycast(const FFixedVector& From, const FFixedVector& To, FFixedVector& OutHitPoint) const
+{
+	OutHitPoint = To;
+	if (!HasRuntimeData()) return false; // no bake → treat as clear
+
+	int32 X0, Y0, X1, Y1;
+	if (!WorldToGrid(From, X0, Y0) || !WorldToGrid(To, X1, Y1))
+	{
+		return false; // an endpoint is off-grid — can't trace; report clear-to-To
+	}
+
+	// Bresenham supercover with the SAME static passability + connectivity gates A* uses
+	// (no dynamic-blocker overlay — this is a standalone query, not inside a FindPath). On
+	// the first blocked cell / non-traversable step, report that cell's center and return true.
+	int32 DX = FMath::Abs(X1 - X0);
+	int32 DY = FMath::Abs(Y1 - Y0);
+	int32 SX = (X0 < X1) ? 1 : -1;
+	int32 SY = (Y0 < Y1) ? 1 : -1;
+	int32 Err = DX - DY;
+
+	int32 X = X0, Y = Y0;
+	while (true)
+	{
+		if (!IsCellPassable(X, Y))
+		{
+			OutHitPoint = GridToWorld(X, Y);
+			return true;
+		}
+		if (X == X1 && Y == Y1)
+		{
+			return false; // reached the end with no block
+		}
+
+		int32 NextX = X, NextY = Y;
+		const int32 E2 = 2 * Err;
+		if (E2 > -DY) { Err -= DY; NextX += SX; }
+		if (E2 <  DX) { Err += DX; NextY += SY; }
+
+		// Connectivity gate on the step (mirrors HasLineOfSight): a non-connected edge,
+		// or a diagonal squeeze, means the line crosses a slope/step/wall boundary.
+		const int32 StepDX = NextX - X;
+		const int32 StepDY = NextY - Y;
+		int32 DirIdx = -1;
+		if      (StepDX ==  1 && StepDY ==  0) DirIdx = 0;
+		else if (StepDX == -1 && StepDY ==  0) DirIdx = 1;
+		else if (StepDX ==  0 && StepDY ==  1) DirIdx = 2;
+		else if (StepDX ==  0 && StepDY == -1) DirIdx = 3;
+		else if (StepDX ==  1 && StepDY ==  1) DirIdx = 4;
+		else if (StepDX ==  1 && StepDY == -1) DirIdx = 5;
+		else if (StepDX == -1 && StepDY ==  1) DirIdx = 6;
+		else if (StepDX == -1 && StepDY == -1) DirIdx = 7;
+
+		if (DirIdx >= 0)
+		{
+			const uint8 Conn = CellConnections[CellIndex(X, Y)];
+			if ((Conn & (1 << DirIdx)) == 0)
+			{
+				OutHitPoint = GridToWorld(NextX, NextY);
+				return true;
+			}
+			if (DirIdx >= 4)
+			{
+				static const uint8 CardinalA[4] = { 0, 0, 1, 1 };
+				static const uint8 CardinalB[4] = { 2, 3, 2, 3 };
+				const uint8 AIdx = CardinalA[DirIdx - 4];
+				const uint8 BIdx = CardinalB[DirIdx - 4];
+				if ((Conn & (1 << AIdx)) == 0 || (Conn & (1 << BIdx)) == 0)
+				{
+					OutHitPoint = GridToWorld(NextX, NextY);
+					return true;
+				}
+			}
+		}
+
+		X = NextX;
+		Y = NextY;
+	}
+}
+
 void USeinNavigationAStar::BuildSmoothedPath(const TArray<FIntPoint>& CellPath, FSeinPath& OutPath, int32 RequiredClearance) const
 {
 	OutPath.Clear();
@@ -1541,6 +1787,30 @@ bool USeinNavigationAStar::FindCellPath(const FSeinPathRequest& Request, FSeinPa
 	// smoothing — sees the same overlay.
 	BuildDynamicBlockedOverlay(Request.Requester, Request.AgentNavLayerMask);
 
+	// Per-agent terrain filter: bar cells whose terrain type's tag is listed in
+	// Request.BlockedTerrainTags (e.g. an amphibious-only unit that blocks "Water").
+	// Resolved ONCE here into a 256-entry lookup that IsCellPassableForPath reads on the
+	// hot path — so A* topology AND the LoS smoother both honor it. Skipped entirely when
+	// the agent blocks no terrain or the grid carries no per-cell type, so the common case
+	// pays nothing. (HasTag is hierarchical: blocking a parent tag bars its child types.)
+	bRequestHasBlockedTypes = false;
+	if (!Request.BlockedTerrainTags.IsEmpty() && CellTerrainType.Num() == Width * Height)
+	{
+		if (RequestBlockedType.Num() != 256) RequestBlockedType.SetNumZeroed(256);
+		else FMemory::Memzero(RequestBlockedType.GetData(), RequestBlockedType.Num());
+		if (const USeinARTSCoreSettings* TerrainSettings = GetDefault<USeinARTSCoreSettings>())
+		{
+			for (int32 t = 0; t < TerrainSettings->TerrainTypes.Num(); ++t)
+			{
+				if (Request.BlockedTerrainTags.HasTag(TerrainSettings->TerrainTypes[t].TerrainTag))
+				{
+					RequestBlockedType[t + 1] = 1; // stored index = array pos + 1 (reserved-0 Default)
+					bRequestHasBlockedTypes = true;
+				}
+			}
+		}
+	}
+
 	// Invalidate the per-request dynamic-WD cache (same gen-tag pattern as
 	// the A* search state). Bump gen; on wraparound through 0, do one full
 	// reset of the gen array. Allocate / resize the cache buffers if the
@@ -1602,7 +1872,10 @@ bool USeinNavigationAStar::FindCellPath(const FSeinPathRequest& Request, FSeinPa
 	// FindPath is gated by the per-tick path budget at the subsystem level.
 	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
 	const int32 HeuristicWeight = Settings ? Settings->AStarHeuristicWeightPercent : 125;
-	const int32 MaxIters = Settings ? Settings->AStarMaxIterations : 10000;
+	const int32 DefaultMaxIters = Settings ? Settings->AStarMaxIterations : 10000;
+	// Per-request override (0 = project default). Lets a caller bound an expensive /
+	// long-range pathfind; A* returns a best-effort partial if the cap is hit.
+	const int32 MaxIters = (Request.AgentMaxSearchNodes > 0) ? Request.AgentMaxSearchNodes : DefaultMaxIters;
 
 	// Compute the per-request clearance threshold for configuration-space A*.
 	// Same formula as PushWaypointsAwayFromWalls (single source of truth):
@@ -2147,6 +2420,9 @@ void USeinNavigationAStar::CollectDebugCellQuads(TArray<FVector>& OutCenters, TA
 	OutCenters.Reserve(N);
 	OutColors.Reserve(N);
 
+	// Per-terrain-type debug tint (each type's authored DebugColor).
+	const USeinARTSCoreSettings* TerrainSettings = GetDefault<USeinARTSCoreSettings>();
+
 	for (int32 Y = 0; Y < Height; ++Y)
 	{
 		for (int32 X = 0; X < Width; ++X)
@@ -2154,7 +2430,19 @@ void USeinNavigationAStar::CollectDebugCellQuads(TArray<FVector>& OutCenters, TA
 			const int32 I = CellIndex(X, Y);
 			const uint8 C = CellCost[I];
 			const bool bWalkable = C > 0 && C < 255;
-			OutColors.Add(bWalkable ? FColor(0, 200, 0, 160) : FColor(200, 0, 0, 200));
+			FColor CellColor = bWalkable ? FColor(0, 200, 0, 160) : FColor(200, 0, 0, 200);
+			// Tint walkable cells by their terrain type's DebugColor (non-Default only), so
+			// authored terrain (road / mud / forest) is visible in the nav debug overlay.
+			if (bWalkable && TerrainSettings && CellTerrainType.IsValidIndex(I))
+			{
+				const int32 Type = CellTerrainType[I];
+				if (Type > 0 && Type <= TerrainSettings->TerrainTypes.Num())
+				{
+					CellColor = TerrainSettings->TerrainTypes[Type - 1].DebugColor.ToFColor(true);
+					CellColor.A = 160;
+				}
+			}
+			OutColors.Add(CellColor);
 			OutCenters.Emplace(
 				Origin.X.ToFloat() + (X + 0.5f) * CS,
 				Origin.Y.ToFloat() + (Y + 0.5f) * CS,

@@ -309,7 +309,7 @@ bool USeinTrackedVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 	}
 	else
 	{
-		MoveCap = MovementData.TopSpeed;
+		MoveCap = EffectiveTopSpeed(Ctx);   // forward cruise terrain-scaled (reverse keeps ReverseTopSpeed)
 	}
 	FFixedPoint TargetSpeedMag = MoveCap * ThrottleScale;
 	if (MaxArrivalSpeed < TargetSpeedMag) TargetSpeedMag = MaxArrivalSpeed;

@@ -8,6 +8,7 @@
 
 #include "CoreMinimal.h"
 #include "Core/SeinTickPhase.h"
+#include "Core/SeinSystemPriority.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Components/SeinAbilityComponent.h"
 #include "Abilities/SeinAbility.h"
@@ -55,6 +56,6 @@ public:
 	}
 
 	virtual ESeinTickPhase GetPhase() const override { return ESeinTickPhase::AbilityExecution; }
-	virtual int32 GetPriority() const override { return 0; }
+	virtual int32 GetPriority() const override { return SeinSystemPriority::AbilityTick; }
 	virtual FName GetSystemName() const override { return TEXT("AbilityTick"); }
 };

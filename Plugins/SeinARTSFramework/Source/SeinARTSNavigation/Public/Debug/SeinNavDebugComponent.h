@@ -49,9 +49,10 @@ private:
 
 	/** Editor-idle preview. In editor (pre-PIE) the subsystems don't auto-load
 	 *  baked level data, so when no live nav has runtime data this reads the
-	 *  owning ASeinLevelVolume's BakedAsset directly and emits cell quads from
-	 *  its baked "Nav" channel (0 / 255 cost = blocked, else walkable). */
-	void CollectAssetPreviewQuads(TArray<FVector>& OutWalkable, TArray<FVector>& OutBlocked, float& OutHalfExtent) const;
+	 *  owning ASeinLevelVolume's BakedAsset directly and emits per-cell quads +
+	 *  colors from its baked "Nav" channel (0 / 255 cost = blocked red, else green
+	 *  or the cell's terrain-type DebugColor). Parallel arrays, bucketed by color. */
+	void CollectAssetPreviewQuads(TArray<FVector>& OutCenters, TArray<FColor>& OutColors, float& OutHalfExtent) const;
 
 	/** Weak pointer so the scene proxy can unsubscribe safely when the nav
 	 *  is swapped out or the component is destroyed. */

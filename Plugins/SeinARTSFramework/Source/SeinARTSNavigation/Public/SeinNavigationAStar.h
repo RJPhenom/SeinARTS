@@ -71,12 +71,16 @@ public:
 
 	virtual bool FindPath(const FSeinPathRequest& Request, FSeinPath& OutPath) const override;
 	virtual bool FindCellPath(const FSeinPathRequest& Request, FSeinPath& OutPath) const override;
+	virtual bool IsReachable(const FFixedVector& From, const FFixedVector& To, const FGameplayTagContainer& AgentTags) const override;
+	virtual bool GetRandomReachablePoint(const FFixedVector& QueryOrigin, FFixedPoint Radius, FFixedRandom& Rng, FFixedVector& OutPoint) const override;
 	virtual bool IsPassable(const FFixedVector& WorldPos) const override;
 	virtual bool IsWorldPositionClear(const FFixedVector& WorldPos, uint8 AgentNavLayerMask) const override;
 	virtual FFixedPoint GetCellSize() const override { return CellSize; }
 	virtual bool ProjectPointToNav(const FFixedVector& WorldPos, FFixedVector& OutProjected) const override;
 	virtual bool ProjectPointToNavOnElevation(const FFixedVector& WorldPos, FFixedVector& OutProjected) const override;
 	virtual bool GetCellHeightAt(const FFixedVector& WorldPos, FFixedPoint& OutZ, bool bWalkableOnly = true) const override;
+	virtual bool NavRaycast(const FFixedVector& From, const FFixedVector& To, FFixedVector& OutHitPoint) const override;
+	virtual int32 GetTerrainTypeAt(const FFixedVector& WorldPos) const override;
 	virtual void SetDynamicBlockers(const TArray<FSeinDynamicBlocker>& InBlockers) override;
 
 	// ----------------------------------------------------------------------
@@ -156,11 +160,22 @@ protected:
 	FFixedPoint CellSize = FFixedPoint::FromInt(100);
 	FFixedVector Origin = FFixedVector::ZeroVector;
 
-	/** Per-cell cost. 0 = blocked, 1..254 = passable with cost multiplier, 255 = impassable. */
+	/** Per-cell passability. 0 = blocked, 255 = impassable, anything else =
+	 *  passable. NOTE: passability is binary today — A* uses octile step
+	 *  distance and does NOT read 1..254 as a cost multiplier, and the bake
+	 *  writes only blocked/passable. Weighted-terrain cost is the unbuilt nav
+	 *  cost-region design item. */
 	TArray<uint8> CellCost;
 
 	/** Per-cell center-height (world-space Z) — snapped-to placement for units. */
 	TArray<FFixedPoint> CellHeight;
+
+	/** Per-cell terrain-type index (0 = Default), loaded from the shared substrate at
+	 *  LoadFromSubstrate. Read only by the per-request BlockedTerrainTags gate in
+	 *  IsCellPassableForPath so an agent can be barred from terrain types its tags list
+	 *  (e.g. amphibious-only "Water"). The terrain COST itself is baked into CellCost at
+	 *  bake time — not read from here at runtime. */
+	TArray<uint8> CellTerrainType;
 
 	/** Per-cell 8-direction connectivity bitmask (baked). Bit N is set iff a
 	 *  unit can traverse from this cell to its neighbor at direction index N.
@@ -189,6 +204,26 @@ protected:
 	 *  the baked data. Recomputed whenever the grid changes (substrate load /
 	 *  rebake). */
 	TArray<uint8> WallDistance;
+
+	/** Per-cell static connectivity-component label, computed at grid-load time
+	 *  via flood-fill over CellConnections (`RebuildConnectivityComponents`).
+	 *  -1 = blocked / unlabeled; 0..K = component id. Two passable cells share a
+	 *  label iff they're mutually reachable through the STATIC bake (set
+	 *  connection bit + passable neighbor — the same relation A* traverses at
+	 *  zero clearance, and the same one the bake-time island prune uses).
+	 *
+	 *  Backs the O(1) `IsReachable` override: project both endpoints to cells,
+	 *  compare labels. Replaces the base's full-A* reachability fallback on the
+	 *  command-validation hot path. Does not model the diagonal-squeeze
+	 *  anti-tunnel or per-footprint clearance (it can over-report at thin
+	 *  diagonal pinch corners / for oversized agents — both degrade to a
+	 *  graceful partial path, never a hard failure) and ignores dynamic
+	 *  blockers by design (a transient obstacle doesn't make ground
+	 *  fundamentally unreachable).
+	 *
+	 *  Runtime-only — derived from CellCost/CellConnections at load time, not
+	 *  serialized. Recomputed on every grid load alongside WallDistance. */
+	TArray<int32> CellComponent;
 
 	/** Runtime list of dynamic blockers, refreshed each PreTick by the
 	 *  nav-blocker stamping system. FindPath rebuilds the per-call
@@ -220,6 +255,15 @@ protected:
 	 *  the debug scene-proxy rebuild to actual mutations instead of every
 	 *  per-tick push. */
 	uint32 LastBlockerHash = 0;
+
+	/** Per-FindCellPath terrain-tag gate (built in FindCellPath from
+	 *  Request.BlockedTerrainTags). RequestBlockedType is a 256-entry lookup
+	 *  (1 = that terrain-type index is barred for this agent); bRequestHasBlockedTypes
+	 *  guards the hot-path check so an agent that blocks no terrain pays nothing. Mutable:
+	 *  rebuilt inside the const FindCellPath — single-threaded sim, same contract as
+	 *  DynamicBlocked. */
+	mutable TArray<uint8> RequestBlockedType;
+	mutable bool bRequestHasBlockedTypes = false;
 
 	// ----------------------------------------------------------------------
 	// A* search state — lazy-validated via CellGen / CurrentSearchGen
@@ -324,8 +368,13 @@ protected:
 	FORCEINLINE bool IsCellPassableForPath(int32 X, int32 Y) const
 	{
 		if (!IsCellPassable(X, Y)) return false;
+		const int32 Idx = CellIndex(X, Y);
+		// Per-agent terrain-tag gate (BlockedTerrainTags). Guarded so a no-blocked-terrain
+		// agent skips it; when active, CellTerrainType is grid-sized and RequestBlockedType
+		// is 256 entries, so both indexings are in range.
+		if (bRequestHasBlockedTypes && RequestBlockedType[CellTerrainType[Idx]]) return false;
 		if (DynamicBlocked.Num() == 0) return true;
-		return DynamicBlocked[CellIndex(X, Y)] == 0;
+		return DynamicBlocked[Idx] == 0;
 	}
 
 	/** Stamp DynamicBlockers (skipping `Exclude` + filtering to those whose
@@ -445,7 +494,20 @@ protected:
 	 *  64 cells instead of 16, which is a one-shot bake step, not hot. */
 	static constexpr uint8 WallDistanceCap = 64;
 
+	/** Disc rejection-sampling budget for GetRandomReachablePoint. Each attempt
+	 *  draws one uniform point in the radius and tests passability + same
+	 *  component. 32 is ample when a meaningful fraction of the disc is reachable
+	 *  (≈96% hit at 10% reachable area); a region too sparse to hit in 32 draws
+	 *  returns false (best-effort contract — widen the radius if the caller needs
+	 *  a guaranteed result on sparse maps). */
+	static constexpr int32 RandomReachableMaxAttempts = 32;
+
 	/** Recompute WallDistance via multi-source BFS from all blocked cells.
 	 *  Run once at LoadFromSubstrate; not a hot path. */
 	void RebuildWallDistanceField();
+
+	/** Recompute the CellComponent labels via flood-fill over CellConnections
+	 *  (set bit + passable neighbor). Run once at LoadFromSubstrate alongside
+	 *  RebuildWallDistanceField; not a hot path. Backs the O(1) IsReachable. */
+	void RebuildConnectivityComponents();
 };

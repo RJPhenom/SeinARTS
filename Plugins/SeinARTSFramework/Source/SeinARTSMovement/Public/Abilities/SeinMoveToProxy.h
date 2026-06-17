@@ -52,6 +52,13 @@ public:
 	 *  arrivals — most simple movement bindings can ignore it. */
 	UPROPERTY(BlueprintAssignable) FSeinMoveToSimpleDelegate   OnPartialPath;
 
+	/** Fired whenever the action RECOMPUTES its path mid-move — an interval repath or an
+	 *  off-path-drift repath committing a fresh route to the same destination. Non-terminal;
+	 *  the move continues and OnCompleted/OnFailed still fire normally. Bind to react to a
+	 *  changed route (re-evaluate, refresh path UI/SFX). Fires on repaths only, not the
+	 *  initial path. */
+	UPROPERTY(BlueprintAssignable) FSeinMoveToSimpleDelegate   OnPathRecomputed;
+
 	/** Move the ability's owning entity to Destination using its movement
 	 *  profile. Acceptance radius is read from the unit's
 	 *  `FSeinNavigationComponent::AcceptanceRadius`. */
@@ -70,6 +77,7 @@ public:
 	void NotifyWaypointReached(int32 Index, int32 Total);
 	void NotifyCancelled();
 	void NotifyPartialPath();
+	void NotifyPathRecomputed();
 
 private:
 	UPROPERTY() TObjectPtr<USeinAbility> CachedAbility;

@@ -50,8 +50,12 @@ struct SEINARTSCOREENTITY_API FSeinVisionLayerDefinition
 	UPROPERTY(Config, EditAnywhere, Category = "SeinARTS|Vision|Layer")
 	bool bEnabled = false;
 
-	/** Name used to reference this layer from `FSeinVisionComponent.PerceptionLayers`
-	 *  / `EmissionLayers`. Case-sensitive exact match. "Normal" is reserved
+	/** Name used to reference this layer by name in BP queries (e.g.
+	 *  `SeinIsCellVisible(..., LayerName)`) and the debug viewer. Runtime
+	 *  matching is by BIT, not name: a stamp emits into this layer via its
+	 *  `FSeinVisionStamp.LayerMask` bit; a target is seen on it when its
+	 *  `FSeinFogVisibilityComponent.FogVisibilityLayerMask` shares that bit.
+	 *  Case-sensitive exact match. "Normal" is reserved
 	 *  (it's the V-bit / default layer, handled by the framework) — a designer
 	 *  naming a slot "Normal" here will be rejected with a log warning at
 	 *  subsystem init. Use project-specific names: "Stealth", "Thermal",

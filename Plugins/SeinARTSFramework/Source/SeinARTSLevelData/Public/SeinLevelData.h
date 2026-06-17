@@ -49,6 +49,8 @@ struct FSeinLevelCellSurface
 	FFixedPoint NormalZ = FFixedPoint::Zero;  // surface normal · Up (for slope gates)
 	bool bHasSurface = false;                 // the down-trace found geometry
 	bool bInBounds = false;                   // cell center inside a volume brush (D10)
+	uint8 TerrainTypeIndex = 0;               // shared per-cell terrain classification (0 = Default);
+	                                          // nav reads it for cost, the Cover extension for quality
 };
 
 /** Fired after the substrate's baked data mutates (bake finished, asset swapped).

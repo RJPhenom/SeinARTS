@@ -205,18 +205,43 @@ float USeinEntityViewModel::GetBaseAttribute(UScriptStruct* ComponentType, FName
 		return 0.0f;
 	}
 
-	// Find the FFixedPoint field via reflection
+	// Resolve the field via reflection. Supports FFixedPoint, plus plain numeric /
+	// bool / byte / enum fields so a custom component's scalar fields surface in UI
+	// without going through GetComponentData. (Non-scalar fields — FName, strings,
+	// vectors — return 0; read those via GetComponentData instead.)
 	FProperty* Prop = ComponentType->FindPropertyByName(FieldName);
 	if (!Prop)
 	{
 		return 0.0f;
 	}
 
-	const FStructProperty* StructProp = CastField<FStructProperty>(Prop);
-	if (StructProp && StructProp->Struct == FFixedPoint::StaticStruct())
+	if (const FStructProperty* StructProp = CastField<FStructProperty>(Prop))
 	{
-		const FFixedPoint* Value = StructProp->ContainerPtrToValuePtr<FFixedPoint>(CompData);
-		return Value ? Value->ToFloat() : 0.0f;
+		if (StructProp->Struct == FFixedPoint::StaticStruct())
+		{
+			const FFixedPoint* Value = StructProp->ContainerPtrToValuePtr<FFixedPoint>(CompData);
+			return Value ? Value->ToFloat() : 0.0f;
+		}
+		return 0.0f;
+	}
+
+	if (const FBoolProperty* BoolProp = CastField<FBoolProperty>(Prop))
+	{
+		return BoolProp->GetPropertyValue_InContainer(CompData) ? 1.0f : 0.0f;
+	}
+
+	if (const FEnumProperty* EnumProp = CastField<FEnumProperty>(Prop))
+	{
+		const void* ValuePtr = EnumProp->ContainerPtrToValuePtr<void>(CompData);
+		return static_cast<float>(EnumProp->GetUnderlyingProperty()->GetSignedIntPropertyValue(ValuePtr));
+	}
+
+	if (const FNumericProperty* NumProp = CastField<FNumericProperty>(Prop))
+	{
+		const void* ValuePtr = NumProp->ContainerPtrToValuePtr<void>(CompData);
+		return NumProp->IsFloatingPoint()
+			? static_cast<float>(NumProp->GetFloatingPointPropertyValue(ValuePtr))
+			: static_cast<float>(NumProp->GetSignedIntPropertyValue(ValuePtr));
 	}
 
 	return 0.0f;

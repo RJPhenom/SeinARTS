@@ -55,7 +55,10 @@ struct SEINARTSNAVIGATION_API FSeinPathRequest
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Navigation|Path")
 	FSeinEntityHandle Requester;
 
-	/** Terrain tags this agent treats as impassable. Empty = no filter. */
+	/** Terrain tags this agent treats as impassable. RESERVED / not yet honored
+	 *  by the shipped USeinNavigationAStar — there is no per-tag static cost or
+	 *  filter today (see the unbuilt nav cost-region work); a custom
+	 *  USeinNavigation may consume it. Empty = no filter. */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Navigation|Path")
 	FGameplayTagContainer BlockedTerrainTags;
 
@@ -112,6 +115,13 @@ struct SEINARTSNAVIGATION_API FSeinPathRequest
 	 *  destination is an INPUT, not an opinion nav may relocate (root CLAUDE.md #6). */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Navigation|Path")
 	bool bAuthoritativeDestination = false;
+
+	/** Per-request cap on A* node expansions. 0 = use the project default
+	 *  (USeinARTSCoreSettings::AStarMaxIterations). Set a smaller value to bound an
+	 *  expensive / long-range pathfind — A* returns a best-effort partial path
+	 *  (bIsPartial) if the cap is hit rather than searching the whole grid. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Navigation|Path", meta = (ClampMin = "0"))
+	int32 AgentMaxSearchNodes = 0;
 };
 
 /** Kind of motion a path segment represents. Growing the enum is additive;

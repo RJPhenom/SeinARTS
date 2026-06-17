@@ -166,11 +166,19 @@ public:
 	 * entries in place. Adding/removing entries is forbidden — the index
 	 * alignment with Members is part of the contract.
 	 */
-	virtual void PostProcessPositions(
+	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Broker", meta = (DisplayName = "Post Process Positions"))
+	void PostProcessPositions(
 		USeinWorldSubsystem* World,
 		const TArray<FSeinEntityHandle>& Members,
 		TArray<FFixedVector>& InOutPositions,
-		FFixedVector TargetLocation) const {}
+		FFixedVector TargetLocation);
+	/** Default: no-op. Runs in sim command-processing — overrides (C++ or
+	 *  Blueprint) MUST be deterministic (fixed-point only; no float / RNG). */
+	virtual void PostProcessPositions_Implementation(
+		USeinWorldSubsystem* World,
+		const TArray<FSeinEntityHandle>& Members,
+		TArray<FFixedVector>& InOutPositions,
+		FFixedVector TargetLocation) {}
 
 	/**
 	 * Shared helper for ability-level dispatch policy. Filters a candidate

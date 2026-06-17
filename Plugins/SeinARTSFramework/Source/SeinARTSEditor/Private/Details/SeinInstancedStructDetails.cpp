@@ -29,6 +29,7 @@
 #include "SInstancedStructPicker.h"   // FInstancedStructFilter
 #include "InstancedStructDetails.h"   // FInstancedStructDataDetails
 #include "Factories/SeinSimComponentFactory.h"
+#include "UObject/SoftObjectPath.h"
 
 #define LOCTEXT_NAMESPACE "SeinInstancedStructDetails"
 
@@ -65,6 +66,10 @@ public:
 	 *  Set via `meta = (SeinEntityComponentsOnly)` on the FInstancedStruct
 	 *  (or TArray<FInstancedStruct>) property. */
 	bool bRestrictToEntityComponents = false;
+	/** Exact-struct mode: allow ONLY ExactStruct (+ the None option). Used by the
+	 *  sibling-class data-struct mode (e.g. MovementClassData keyed to MovementClass). */
+	TWeakObjectPtr<const UScriptStruct> ExactStruct = nullptr;
+	bool bRestrictToExact = false;
 
 	virtual bool IsStructAllowed(
 		const FStructViewerInitializationOptions& /*InInitOptions*/,
@@ -74,6 +79,13 @@ public:
 		if (!InStruct)
 		{
 			return false;
+		}
+
+		// Sibling-class data-struct mode (e.g. MovementClassData keyed to MovementClass):
+		// accept only the exact struct the sibling class's CDO asks for.
+		if (bRestrictToExact)
+		{
+			return InStruct == ExactStruct.Get();
 		}
 
 		// Entity-bridge ComponentData path: strictest filter. Requires
@@ -134,7 +146,7 @@ public:
 		// project's saved asset registry). Reject in restricted modes; allow
 		// in the open-ended path so generic FInstancedStruct pickers still
 		// behave like UE's default.
-		if (bRestrictToEntityComponents || bRestrictToSeinDeterministic)
+		if (bRestrictToEntityComponents || bRestrictToSeinDeterministic || bRestrictToExact)
 		{
 			return false;
 		}
@@ -165,6 +177,41 @@ void FSeinInstancedStructDetails::CustomizeHeader(
 	RefreshCachedScriptStruct();
 	PropertyHandle->SetOnPropertyValueChanged(
 		FSimpleDelegate::CreateSP(this, &FSeinInstancedStructDetails::RefreshCachedScriptStruct));
+
+	// Sibling-class data-struct mode (e.g. FSeinMovementComponent::MovementClassData
+	// keyed to MovementClass): bind the sibling soft-class property so this struct
+	// auto-swaps when the class changes, and reconcile to the current class now.
+	static const FName NAME_DataStructFromClass("SeinDataStructFromClass");
+	if (PropertyHandle->HasMetaData(NAME_DataStructFromClass))
+	{
+		// Meta format: "<SiblingSoftClassProp>[,<UFunctionName>]". The optional
+		// 2nd token names the accessor on the sibling class CDO; when absent the
+		// default (GetMovementDataStruct) is kept so the movement use-site works.
+		const FString MetaValue = PropertyHandle->GetMetaData(NAME_DataStructFromClass);
+		FString SiblingName, FnName;
+		if (MetaValue.Split(TEXT(","), &SiblingName, &FnName))
+		{
+			SiblingName.TrimStartAndEndInline();
+			FnName.TrimStartAndEndInline();
+			if (!FnName.IsEmpty()) { SiblingDataStructFn = FName(*FnName); }
+		}
+		else
+		{
+			SiblingName = MetaValue;
+		}
+		if (const TSharedPtr<IPropertyHandle> Parent = PropertyHandle->GetParentHandle())
+		{
+			SiblingClassHandle = Parent->GetChildHandle(FName(*SiblingName));
+			if (SiblingClassHandle.IsValid())
+			{
+				SiblingClassHandle->SetOnPropertyValueChanged(
+					FSimpleDelegate::CreateSP(this, &FSeinInstancedStructDetails::ReconcileWithSiblingClass));
+			}
+		}
+		bInitializing = true;
+		ReconcileWithSiblingClass();
+		bInitializing = false;
+	}
 
 	UE_LOG(LogSeinEditorPicker, Verbose,
 		TEXT("CustomizeHeader invoked. Property=%s  BaseStructMeta=%s"),
@@ -303,6 +350,8 @@ TSharedRef<SWidget> FSeinInstancedStructDetails::GenerateStructPicker()
 		StructProperty.IsValid() && StructProperty->HasMetaData(NAME_SeinDeterministicOnly);
 	const bool bRestrictToEntityComponents =
 		StructProperty.IsValid() && StructProperty->HasMetaData(NAME_SeinEntityComponentsOnly);
+	const bool bRestrictToExact =
+		StructProperty.IsValid() && StructProperty->HasMetaData(TEXT("SeinDataStructFromClass"));
 
 	const UScriptStruct* BaseStruct = GetBaseStructFromMeta();
 
@@ -318,6 +367,11 @@ TSharedRef<SWidget> FSeinInstancedStructDetails::GenerateStructPicker()
 	Filter->bAllowBaseStruct = !bExcludeBaseStruct;
 	Filter->bRestrictToSeinDeterministic = bRestrictToSeinDeterministic;
 	Filter->bRestrictToEntityComponents = bRestrictToEntityComponents;
+	Filter->bRestrictToExact = bRestrictToExact;
+	if (bRestrictToExact)
+	{
+		Filter->ExactStruct = GetDataStructFromSiblingClass();
+	}
 
 	FStructViewerInitializationOptions Options;
 	Options.bShowNoneOption = true;
@@ -371,6 +425,82 @@ void FSeinInstancedStructDetails::OnStructPicked(const UScriptStruct* InStruct)
 	if (ComboButton.IsValid())
 	{
 		ComboButton->SetIsOpen(false);
+	}
+}
+
+// =============================================================================
+// Sibling-class data-struct mode (restrict + auto-swap)
+// =============================================================================
+
+const UScriptStruct* FSeinInstancedStructDetails::GetDataStructFromSiblingClass() const
+{
+	if (!SiblingClassHandle.IsValid())
+	{
+		return nullptr;
+	}
+	const UScriptStruct* Result = nullptr;
+	const FName AccessorFn = SiblingDataStructFn; // copy by value — the lambda captures no 'this'
+	SiblingClassHandle->EnumerateConstRawData(
+		[&Result, AccessorFn](const void* RawData, const int32, const int32)
+		{
+			const FSoftClassPath* Path = static_cast<const FSoftClassPath*>(RawData);
+			if (!Path)
+			{
+				return false;
+			}
+			UClass* Cls = Path->TryLoadClass<UObject>();
+			if (!Cls)
+			{
+				return false;
+			}
+			// Call the named accessor UFUNCTION (default GetMovementDataStruct)
+			// via reflection so this editor module stays decoupled from the owning
+			// runtime module (e.g. SeinARTSMovement, whose header pulls in the
+			// Navigation include chain). A virtual UFUNCTION dispatches through
+			// ProcessEvent on the resolved CDO to the concrete subclass override.
+			if (UFunction* Fn = Cls->FindFunctionByName(AccessorFn))
+			{
+				struct FParms { UScriptStruct* ReturnValue = nullptr; } Parms;
+				Cls->GetDefaultObject()->ProcessEvent(Fn, &Parms);
+				Result = Parms.ReturnValue;
+			}
+			return false; // first entry only
+		});
+	return Result;
+}
+
+void FSeinInstancedStructDetails::ReconcileWithSiblingClass()
+{
+	if (!StructProperty.IsValid() || !StructProperty->IsValidHandle())
+	{
+		return;
+	}
+	const UScriptStruct* Want = GetDataStructFromSiblingClass();
+	const UScriptStruct* Have = GetCurrentScriptStruct();
+	if (Want == Have)
+	{
+		return; // already correct (or both None) — preserve any authored values
+	}
+
+	FScopedTransaction Transaction(LOCTEXT("AutoSwapData", "Auto-swap class data struct"));
+	StructProperty->NotifyPreChange();
+	StructProperty->EnumerateRawData(
+		[Want](void* RawData, const int32, const int32)
+		{
+			if (FInstancedStruct* Inst = static_cast<FInstancedStruct*>(RawData))
+			{
+				if (Want) { Inst->InitializeAs(Want); }
+				else      { Inst->Reset(); }
+			}
+			return true;
+		});
+	StructProperty->NotifyPostChange(EPropertyChangeType::ValueSet);
+	StructProperty->NotifyFinishedChangingProperties();
+
+	RefreshCachedScriptStruct();
+	if (!bInitializing && PropUtils.IsValid())
+	{
+		PropUtils->ForceRefresh();
 	}
 }
 

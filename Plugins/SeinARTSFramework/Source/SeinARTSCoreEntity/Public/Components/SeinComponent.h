@@ -9,8 +9,8 @@
  *          BP authoring + DataTable mode).
  *
  *          Purpose: let editor struct pickers filter to "sim components only"
- *          instead of showing every USTRUCT in the engine. The Components
- *          array on the entity bridge's `FSeinAbilityComponent::ComponentData` uses this via BaseStruct metadata.
+ *          instead of showing every USTRUCT in the engine. The `ComponentData`
+ *          array on the entity bridge (`USeinEntityComponent`) uses this via BaseStruct metadata.
  */
 
 #pragma once

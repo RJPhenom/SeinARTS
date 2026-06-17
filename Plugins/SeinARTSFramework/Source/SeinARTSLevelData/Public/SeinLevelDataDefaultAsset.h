@@ -104,6 +104,14 @@ public:
 	UPROPERTY()
 	TArray<uint8> CellFlags;
 
+	/** Per-cell terrain-type index (finest res, row-major) — the shared neutral
+	 *  classification stamped at bake (phys-material map, then terrain-volume override).
+	 *  0 = Default. Nav reads it for movement cost; the Cover extension reads it (by the
+	 *  type's tag) for cover quality. Empty on assets baked before terrain types existed
+	 *  → treated as all-Default at load (additive, no re-bake forced just to load). */
+	UPROPERTY()
+	TArray<uint8> CellTerrainType;
+
 	/** Per-layer channel blocks (nav, FoW, later terrain-cost). Extensible (D15). */
 	UPROPERTY()
 	TArray<FSeinLevelChannelBlock> Channels;

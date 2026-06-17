@@ -1,37 +1,13 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinSquadSubsystem.cpp
- * @brief   Registers FSeinSquadSystem with the sim loop on world begin play.
+ * @brief   Hosts FSeinSquadSystem via the managed USeinSystemHostSubsystem base.
  */
 
 #include "SeinSquadSubsystem.h"
 #include "SeinSquadSystem.h"
-#include "Simulation/SeinWorldSubsystem.h"
 
-void USeinSquadSubsystem::OnWorldBeginPlay(UWorld& InWorld)
+void USeinSquadSubsystem::CreateSystems(USeinWorldSubsystem& /*Sim*/, TArray<TUniquePtr<ISeinSystem>>& OutSystems)
 {
-	Super::OnWorldBeginPlay(InWorld);
-
-	USeinWorldSubsystem* Sim = InWorld.GetSubsystem<USeinWorldSubsystem>();
-	if (!Sim) return;
-
-	SquadSystem = new FSeinSquadSystem();
-	Sim->RegisterSystem(SquadSystem);
-}
-
-void USeinSquadSubsystem::Deinitialize()
-{
-	if (SquadSystem)
-	{
-		if (UWorld* World = GetWorld())
-		{
-			if (USeinWorldSubsystem* Sim = World->GetSubsystem<USeinWorldSubsystem>())
-			{
-				Sim->UnregisterSystem(SquadSystem);
-			}
-		}
-		delete SquadSystem;
-		SquadSystem = nullptr;
-	}
-	Super::Deinitialize();
+	OutSystems.Add(MakeUnique<FSeinSquadSystem>());
 }

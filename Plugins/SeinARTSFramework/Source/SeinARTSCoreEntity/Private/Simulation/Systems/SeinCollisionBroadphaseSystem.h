@@ -18,6 +18,7 @@
 
 #include "CoreMinimal.h"
 #include "Core/SeinTickPhase.h"
+#include "Core/SeinSystemPriority.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Collision/SeinCollisionSpatialHash.h"
 #include "Components/SeinExtentsComponent.h"
@@ -137,6 +138,6 @@ public:
 	}
 
 	virtual ESeinTickPhase GetPhase() const override { return ESeinTickPhase::PreTick; }
-	virtual int32 GetPriority() const override { return 5; }
+	virtual int32 GetPriority() const override { return SeinSystemPriority::CollisionBroadphase; }
 	virtual FName GetSystemName() const override { return TEXT("CollisionBroadphase"); }
 };

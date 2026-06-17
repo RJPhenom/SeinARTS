@@ -6,13 +6,13 @@
 #include "Actions/SeinMoveToAction.h"
 #include "Abilities/SeinMoveToProxy.h"
 #include "SeinNavigation.h"
-#include "SeinNavigationAStar.h"  // Cast for escape-nudge fallback
 #include "SeinNavigationSubsystem.h"
 #include "Movement/SeinMovement.h"
 #include "SeinMovementSubsystem.h"   // persistent movement-instance registry (CP2.1)
 
 #include "Abilities/SeinAbility.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "Settings/PluginSettings.h"     // terrain-type → speed multiplier lookup
 #include "Components/SeinMovementComponent.h"
 #include "Components/SeinNavigationComponent.h"
 #include "Components/SeinBrokerMembershipData.h"
@@ -512,7 +512,7 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 					Entity->Transform.GetLocation().X.ToFloat(),
 					Entity->Transform.GetLocation().Y.ToFloat(),
 					Path.bIsPartial ? TEXT(" [PARTIAL]") : TEXT(""));
-				if (Path.bIsPartial) NotifyPartialPath();
+				NotifyPathRecomputed(); if (Path.bIsPartial) NotifyPartialPath();
 			}
 			else
 			{
@@ -616,7 +616,7 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 				AgentPos.X.ToFloat(),
 				AgentPos.Y.ToFloat(),
 				Path.bIsPartial ? TEXT(" [PARTIAL]") : TEXT(""));
-			if (Path.bIsPartial) NotifyPartialPath();
+			NotifyPathRecomputed(); if (Path.bIsPartial) NotifyPartialPath();
 		}
 		else
 		{
@@ -775,6 +775,22 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 
 	// Delegate the per-tick advance. Movement mutates Entity.Transform and
 	// CurrentWaypointIndex; returns true when the final waypoint is reached.
+	// Terrain SPEED multiplier at the unit's current cell — sampled once per tick and
+	// applied uniformly via USeinMovement::EffectiveTopSpeed. Independent of routing cost.
+	// Default 1 (no nav / Default terrain), so it's behaviour-preserving until authored.
+	FFixedPoint TerrainSpeedMult = FFixedPoint::One;
+	if (Nav)
+	{
+		const int32 TerrainType = Nav->GetTerrainTypeAt(Entity->Transform.GetLocation());
+		if (TerrainType != 0)
+		{
+			if (const USeinARTSCoreSettings* CoreSettings = GetDefault<USeinARTSCoreSettings>())
+			{
+				TerrainSpeedMult = CoreSettings->GetTerrainSpeedMultiplier(TerrainType);
+			}
+		}
+	}
+
 	const int32 PrevWaypoint = CurrentWaypointIndex;
 	FSeinMovementContext TickCtx{
 		*Entity,
@@ -789,6 +805,7 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		OwnerEntity
 	};
 	TickCtx.bAuthoritativeDestination = bAuthoritativeDestination;
+	TickCtx.TerrainSpeedMultiplier = TerrainSpeedMult;
 	// Non-const: the near-goal stall-settle below can promote this to true to
 	// force arrival when the unit is pinned short of an unreachable goal.
 	bool bReachedEnd = Movement->Tick(TickCtx);
@@ -1029,5 +1046,13 @@ void USeinMoveToAction::NotifyPartialPath()
 	if (USeinMoveToProxy* Proxy = Observer.Get())
 	{
 		Proxy->NotifyPartialPath();
+	}
+}
+
+void USeinMoveToAction::NotifyPathRecomputed()
+{
+	if (USeinMoveToProxy* Proxy = Observer.Get())
+	{
+		Proxy->NotifyPathRecomputed();
 	}
 }

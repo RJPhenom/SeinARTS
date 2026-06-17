@@ -24,6 +24,7 @@
 
 #include "CoreMinimal.h"
 #include "Core/SeinTickPhase.h"
+#include "Core/SeinSystemPriority.h"
 #include "Math/MathLib.h"
 #include "Math/CollisionQueries.h"
 #include "Simulation/SeinWorldSubsystem.h"
@@ -84,7 +85,7 @@ public:
 	}
 
 	virtual ESeinTickPhase GetPhase() const override { return ESeinTickPhase::PostTick; }
-	virtual int32 GetPriority() const override { return 10; }
+	virtual int32 GetPriority() const override { return SeinSystemPriority::CollisionResolution; }
 	virtual FName GetSystemName() const override { return TEXT("CollisionResolution"); }
 
 private:

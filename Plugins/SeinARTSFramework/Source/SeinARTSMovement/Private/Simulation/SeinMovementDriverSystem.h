@@ -46,6 +46,7 @@
 
 #include "CoreMinimal.h"
 #include "Core/SeinTickPhase.h"
+#include "Core/SeinSystemPriority.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "SeinMovementSubsystem.h"
 #include "Movement/SeinMovement.h"
@@ -130,7 +131,7 @@ public:
 	}
 
 	virtual ESeinTickPhase GetPhase() const override { return ESeinTickPhase::AbilityExecution; }
-	virtual int32 GetPriority() const override { return 10; }   // after ability/latent ticks, before Production (50)
+	virtual int32 GetPriority() const override { return SeinSystemPriority::MovementDriver; }
 	virtual FName GetSystemName() const override { return TEXT("MovementDriver"); }
 
 private:

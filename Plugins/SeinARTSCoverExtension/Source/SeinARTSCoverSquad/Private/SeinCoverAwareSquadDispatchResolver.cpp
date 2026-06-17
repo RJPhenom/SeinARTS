@@ -89,11 +89,11 @@ namespace SeinCoverSquadSnapLocal
 	}
 }
 
-void USeinCoverAwareSquadDispatchResolver::PostProcessPositions(
+void USeinCoverAwareSquadDispatchResolver::PostProcessPositions_Implementation(
 	USeinWorldSubsystem* WorldSub,
 	const TArray<FSeinEntityHandle>& Members,
 	TArray<FFixedVector>& InOutPositions,
-	FFixedVector TargetLocation) const
+	FFixedVector TargetLocation)
 {
 	// Tuning sourced from plugin settings — single config surface shared
 	// with the default broker resolver. The wrong-side penalty radius

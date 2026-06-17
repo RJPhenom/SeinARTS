@@ -42,8 +42,10 @@
 
 #include "CoreMinimal.h"
 #include "Core/SeinTickPhase.h"
+#include "Core/SeinSystemPriority.h"
 #include "Math/MathLib.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "Settings/PluginSettings.h"
 #include "Collision/SeinCollisionSpatialHash.h"
 #include "Components/SeinMovementComponent.h"
 #include "Components/SeinNavigationComponent.h"
@@ -67,15 +69,18 @@ public:
 	{
 		const FSeinCollisionSpatialHash& Hash = World.GetCollisionSpatialHash();
 
-		// --- Tunables (fixed-point constants → bit-identical cross-platform).
-		//     First-guess values; the real tuning gate is a PIE feel test. ---
-		const FFixedPoint LookaheadSeconds    = FFixedPoint::One / FFixedPoint::FromInt(2);   // 0.5s perception reach
-		const FFixedPoint MovingSpeedFloor    = FFixedPoint::FromInt(10);                     // "is moving" threshold (uu/s)
-		const FFixedPoint FalloffRadii        = FFixedPoint::FromInt(5);                      // influence out to 5× combined footprint
-		const FFixedPoint SmoothKeep          = FFixedPoint::FromInt(7) / FFixedPoint::FromInt(10);  // 0.7 temporal keep
-		const FFixedPoint HeadOnBase          = FFixedPoint::One / FFixedPoint::FromInt(10);  // 0.1 floor on the head-on weight
-		const FFixedPoint ArrivalReleaseRadii = FFixedPoint::FromInt(3);                      // fade steer within 3× footprint of goal
-		const FFixedPoint MaxSteerMagnitude   = FFixedPoint::FromInt(2);                      // clamp on the accumulated lateral nudge
+		// --- Tunables: model-shape constants shared by ALL movers, authored in plugin
+		//     settings (Movement|Avoidance). Per-unit dials (strength/weight) live on
+		//     FSeinMovementComponent. Defaults equal the former inline values, so motion
+		//     is unchanged until tuned. Read once per tick (CDO fetch is cheap). ---
+		const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
+		const FFixedPoint LookaheadSeconds    = Settings->AvoidanceLookaheadSeconds;
+		const FFixedPoint MovingSpeedFloor    = Settings->AvoidanceMovingSpeedFloor;
+		const FFixedPoint FalloffRadii        = Settings->AvoidanceFalloffRadii;
+		const FFixedPoint SmoothKeep          = Settings->AvoidanceSmoothKeep;
+		const FFixedPoint HeadOnBase          = Settings->AvoidanceHeadOnBase;
+		const FFixedPoint ArrivalReleaseRadii = Settings->AvoidanceArrivalReleaseRadii;
+		const FFixedPoint MaxSteerMagnitude   = Settings->AvoidanceMaxSteerMagnitude;
 
 		TArray<FSeinEntityHandle> Neighbors;
 
@@ -305,6 +310,6 @@ public:
 	}
 
 	virtual ESeinTickPhase GetPhase() const override { return ESeinTickPhase::PreTick; }
-	virtual int32 GetPriority() const override { return 6; }
+	virtual int32 GetPriority() const override { return SeinSystemPriority::Avoidance; }
 	virtual FName GetSystemName() const override { return TEXT("Avoidance"); }
 };

@@ -186,6 +186,27 @@ struct SEINARTSCOREENTITY_API FSeinNavigationComponent : public FSeinComponent
 		meta = (ClampMin = "0.0"))
 	FFixedPoint OffPathThreshold = FFixedPoint::FromInt(75);
 
+	/** **Per-unit cap on pathfinder work (A* node expansions) for ONE path
+	 *  request.** Bounds how hard the planner searches before giving up and
+	 *  returning its best-effort partial path (to the closest reachable cell).
+	 *
+	 *  ELI5:
+	 *    - `0` → default. Use the project-wide cap
+	 *      (`USeinARTSCoreSettings::AStarMaxIterations`). Leave it here unless a
+	 *      specific unit needs different behaviour.
+	 *    - `N > 0` → this unit's searches stop after N expansions. SMALLER caps
+	 *      a unit's worst-case pathfind cost on huge / maze-like maps (cheap
+	 *      skirmishers that should give up fast rather than stall the tick);
+	 *      LARGER lets an important unit search harder for a long-range route.
+	 *
+	 *  A hit cap is not a failure — the unit still moves along the partial path
+	 *  toward the goal and (if repathing) tries again from closer up. Only raise
+	 *  it past the project default for units that genuinely need long-range
+	 *  routing on large maps. Default 0 (use project default). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Navigation",
+		meta = (ClampMin = "0", DisplayName = "Max Search Nodes"))
+	int32 MaxSearchNodes = 0;
+
 	/** **Show the destination preview decal when this unit is selected.**
 	 *  The framework draws a CoH-style "where will I stop" indicator on
 	 *  cursor hover during move orders. Set false to suppress for unit
@@ -205,6 +226,7 @@ FORCEINLINE uint32 GetTypeHash(const FSeinNavigationComponent& C)
 	H = HashCombine(H, GetTypeHash(C.RepathInterval));
 	H = HashCombine(H, GetTypeHash(C.RepathFailureLimit));
 	H = HashCombine(H, GetTypeHash(C.OffPathThreshold));
+	H = HashCombine(H, GetTypeHash(C.MaxSearchNodes));
 	H = HashCombine(H, GetTypeHash(C.bShowNavigationPreview));
 	return H;
 }

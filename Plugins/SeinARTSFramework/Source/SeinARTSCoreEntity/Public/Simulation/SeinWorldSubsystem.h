@@ -552,10 +552,10 @@ public:
 
 	/**
 	 * Spawn a new entity from a Blueprint class.
-	 * Walks the Blueprint CDO's USeinActorComponent subobjects, calls Resolve()
-	 * on each, and copies the returned sim payloads into deterministic storage.
-	 * Also initializes abilities and reads identity/cost metadata off the
-	 * legacy USeinArchetypeDefinition component (excised in Phase-5).
+	 * Walks the Blueprint CDO's entity bridge (USeinEntityComponent) ComponentData
+	 * array and copies each FInstancedStruct payload into deterministic storage,
+	 * then initializes abilities and seeds tags (identity/cost come from the
+	 * injected FSeinIdentityComponent / FSeinProducibleComponent payloads).
 	 * @param ActorClass - Blueprint class (must be ASeinActor or subclass)
 	 * @param SpawnTransform - Initial transform in simulation space
 	 * @param OwnerPlayerID - Owning player
@@ -566,8 +566,9 @@ public:
 
 	/**
 	 * Spawn a sim entity for an already-existing (level-placed) ASeinActor.
-	 * Walks the LIVE actor's USeinActorComponents (not the CDO) so per-
-	 * instance edits in the level are captured into sim component storage.
+	 * Walks the LIVE actor's entity-bridge ComponentData (USeinEntityComponent,
+	 * not the CDO) so per-instance edits in the level are captured into sim
+	 * component storage.
 	 * Uses the actor's world transform as the sim transform.
 	 *
 	 * Skips the EntitySpawned visual event — the actor is already in the
@@ -576,8 +577,7 @@ public:
 	 * existing actor to the new entity.
 	 *
 	 * Used by USeinActorBridgeSubsystem::OnWorldBeginPlay to auto-register
-	 * placed actors. Returns invalid handle if PlacedActor is null or has
-	 * no legacy ArchetypeDefinition (excised in Phase-5).
+	 * placed actors. Returns invalid handle if PlacedActor is null.
 	 */
 	FSeinEntityHandle SpawnEntityFromPlacedActor(ASeinActor* PlacedActor, FSeinPlayerID OwnerPlayerID);
 
@@ -607,7 +607,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Entity")
 	FSeinPlayerID GetEntityOwner(FSeinEntityHandle Handle) const;
 
-	/** Set entity owner (for capture mechanics). */
+	/** Set entity owner (for capture mechanics). Mutates sim state, so call it
+	 *  only from within the sim tick — e.g. a passive ability/effect on a
+	 *  capture point. Enforced via SEIN_CHECK_SIM in non-shipping builds. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Entity")
 	void SetEntityOwner(FSeinEntityHandle Handle, FSeinPlayerID NewOwner);
 
@@ -630,10 +632,11 @@ public:
 
 	// ========== Component Management (slot-indexed) ==========
 	//
-	// Component types are resolved at spawn time by walking the Blueprint
-	// CDO's USeinActorComponents; each one's payload struct is injected into
-	// a reflection-backed FSeinGenericComponentStorage keyed by UScriptStruct.
-	// Templated accessors are thin typed wrappers over the raw-bytes path.
+	// Component types are resolved at spawn time by walking the Blueprint CDO's
+	// entity bridge (USeinEntityComponent) ComponentData; each FInstancedStruct
+	// payload is injected into a reflection-backed FSeinGenericComponentStorage
+	// keyed by UScriptStruct. Templated accessors are thin typed wrappers over
+	// the raw-bytes path.
 
 	template<typename T>
 	void AddComponent(FSeinEntityHandle Handle, const T& Component);

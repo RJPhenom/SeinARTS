@@ -43,6 +43,31 @@ public:
 		FFixedVector To,
 		FGameplayTagContainer AgentTags);
 
+	/** Random walkable point within Radius of Origin that is reachable from Origin
+	 *  (same nav region). Deterministic — identical Seed yields the identical
+	 *  point, so it's lockstep-safe (derive Seed from sim state, e.g. entity +
+	 *  tick). Returns false (and leaves OutPoint at Origin) when none is found
+	 *  within the impl's attempt budget: very sparse region, tiny radius, or no
+	 *  baked nav data. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Navigation",
+		meta = (WorldContext = "WorldContextObject", DisplayName = "Get Random Reachable Point"))
+	static bool SeinGetRandomReachablePoint(
+		const UObject* WorldContextObject,
+		FFixedVector Origin,
+		FFixedPoint Radius,
+		int64 Seed,
+		FFixedVector& OutPoint);
+
+	/** Straight-line nav raycast (static bake). Returns true if BLOCKED before reaching
+	 *  `To`, with `OutHitPoint` = the first blocked point (else `To`). Cheap — no pathfind. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Navigation",
+		meta = (WorldContext = "WorldContextObject", DisplayName = "Nav Raycast"))
+	static bool SeinNavRaycast(
+		const UObject* WorldContextObject,
+		FFixedVector From,
+		FFixedVector To,
+		FFixedVector& OutHitPoint);
+
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Navigation", meta = (DisplayName = "Is Path Valid"))
 	static bool SeinIsPathValid(const FSeinPath& Path) { return Path.bIsValid; }
 

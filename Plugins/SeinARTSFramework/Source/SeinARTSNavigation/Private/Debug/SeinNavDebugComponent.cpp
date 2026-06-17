@@ -43,9 +43,12 @@
 // Scene proxy (debug-only — class doesn't exist in shipping)
 // ============================================================================
 
-/** One color group of blocker cells for the proxy. CollectDebugBlockerCells
- *  emits per-cell colors; CreateSceneProxy buckets them into these groups so
- *  GetDynamicMeshElements can render one batched mesh per color. */
+/** One color group of cells for the proxy. The collectors emit per-cell colors;
+ *  CreateSceneProxy buckets them into these groups so GetDynamicMeshElements can
+ *  render one batched mesh per color. Used for BOTH the static nav cells (walkable
+ *  green / blocked red / terrain-type DebugColor) and the dynamic-blocker overlay —
+ *  any color the collector emits renders faithfully, instead of being snapped to a
+ *  fixed green/red. */
 struct FSeinNavBlockerBucket
 {
 	FLinearColor Color;
@@ -56,14 +59,12 @@ class FSeinNavDebugProxy final : public FPrimitiveSceneProxy
 {
 public:
 	FSeinNavDebugProxy(UPrimitiveComponent* InComponent,
-	                   TArray<FVector>&& InWalkable,
-	                   TArray<FVector>&& InBlocked,
+	                   TArray<FSeinNavBlockerBucket>&& InStaticBuckets,
 	                   TArray<FSeinNavBlockerBucket>&& InBlockerBuckets,
 	                   float InHalfExtent,
 	                   float InBlockerHalfExtent)
 		: FPrimitiveSceneProxy(InComponent)
-		, WalkableCenters(MoveTemp(InWalkable))
-		, BlockedCenters(MoveTemp(InBlocked))
+		, StaticBuckets(MoveTemp(InStaticBuckets))
 		, BlockerBuckets(MoveTemp(InBlockerBuckets))
 		, HalfExtent(InHalfExtent)
 		, BlockerHalfExtent(InBlockerHalfExtent)
@@ -80,13 +81,10 @@ public:
 	virtual uint32 GetMemoryFootprint() const override
 	{
 		uint32 Bytes = sizeof(*this)
-		     + WalkableCenters.GetAllocatedSize()
-		     + BlockedCenters.GetAllocatedSize()
+		     + StaticBuckets.GetAllocatedSize()
 		     + BlockerBuckets.GetAllocatedSize();
-		for (const FSeinNavBlockerBucket& B : BlockerBuckets)
-		{
-			Bytes += B.Centers.GetAllocatedSize();
-		}
+		for (const FSeinNavBlockerBucket& B : StaticBuckets)  { Bytes += B.Centers.GetAllocatedSize(); }
+		for (const FSeinNavBlockerBucket& B : BlockerBuckets) { Bytes += B.Centers.GetAllocatedSize(); }
 		return Bytes;
 	}
 
@@ -128,27 +126,22 @@ public:
 			// (`bDebugDrawFrustumCullEnabled`, `DebugDrawMaxDistance`,
 			// `DebugDrawMaxEntities`) are read inside EmitQuads.
 
-			const FColoredMaterialRenderProxy* GreenMat = &Collector.AllocateOneFrameResource<FColoredMaterialRenderProxy>(
-				BaseProxy, FLinearColor(0.0f, 0.7f, 0.0f, 0.35f));
-			const FColoredMaterialRenderProxy* RedMat = &Collector.AllocateOneFrameResource<FColoredMaterialRenderProxy>(
-				BaseProxy, FLinearColor(0.85f, 0.0f, 0.0f, 0.6f));
-			if (WalkableCenters.Num() > 0)
+			// Static nav cells — one batched mesh per color bucket (walkable green,
+			// blocked red, terrain-type DebugColor). Renders each cell's TRUE color
+			// from the collector instead of snapping every cell to a fixed green/red.
+			for (const FSeinNavBlockerBucket& Bucket : StaticBuckets)
 			{
+				if (Bucket.Centers.Num() == 0) continue;
+				const FColoredMaterialRenderProxy* BucketMat = &Collector.AllocateOneFrameResource<FColoredMaterialRenderProxy>(
+					BaseProxy, Bucket.Color);
 				FDynamicMeshBuilder Builder(View->GetFeatureLevel());
-				EmitQuads(Builder, WalkableCenters, HalfExtent, View);
-				Builder.GetMesh(FMatrix::Identity, GreenMat, SDPG_World,
+				EmitQuads(Builder, Bucket.Centers, HalfExtent, View);
+				Builder.GetMesh(FMatrix::Identity, BucketMat, SDPG_World,
 					true /*bDisableBackfaceCulling*/, false /*bReceivesDecals*/,
 					ViewIdx, Collector);
 			}
-			if (BlockedCenters.Num() > 0)
-			{
-				FDynamicMeshBuilder Builder(View->GetFeatureLevel());
-				EmitQuads(Builder, BlockedCenters, HalfExtent, View);
-				Builder.GetMesh(FMatrix::Identity, RedMat, SDPG_World,
-					true, false, ViewIdx, Collector);
-			}
-			// One mesh per blocker color bucket. Typical scene has 1-3 buckets
-			// (single layer most blockers) so the per-view cost stays small.
+			// One mesh per dynamic-blocker color bucket (own half-extent). Typical scene
+			// has 1-3 buckets (single layer most blockers) so the per-view cost stays small.
 			for (const FSeinNavBlockerBucket& Bucket : BlockerBuckets)
 			{
 				if (Bucket.Centers.Num() == 0) continue;
@@ -254,8 +247,7 @@ private:
 		}
 	}
 
-	TArray<FVector> WalkableCenters;
-	TArray<FVector> BlockedCenters;
+	TArray<FSeinNavBlockerBucket> StaticBuckets;
 	TArray<FSeinNavBlockerBucket> BlockerBuckets;
 	float HalfExtent;
 	float BlockerHalfExtent;
@@ -286,11 +278,34 @@ FPrimitiveSceneProxy* USeinNavDebugComponent::CreateSceneProxy()
 	UWorld* World = GetWorld();
 	if (!World) return nullptr;
 
-	TArray<FVector> Walkable;
-	TArray<FVector> Blocked;
+	TArray<FSeinNavBlockerBucket> StaticBuckets;
 	TArray<FSeinNavBlockerBucket> BlockerBuckets;
 	float HalfExtent = 0.0f;
 	float BlockerHalfExtent = 0.0f;
+
+	// Bucket (centers, colors) by EXACT color into per-color groups — shared by the live
+	// and asset-preview paths. Each distinct color becomes one batched mesh, so a cell's
+	// authored color (walkable green, blocked red, OR a terrain type's DebugColor) renders
+	// faithfully. Replaces the old binary "R>G ⇒ blocked/red, else walkable/green" snap,
+	// which painted every terrain-tinted (R>G) cell as blocked-red.
+	auto BucketByColor = [](const TArray<FVector>& Centers, const TArray<FColor>& Colors,
+		TArray<FSeinNavBlockerBucket>& OutBuckets)
+	{
+		const int32 Num = FMath::Min(Centers.Num(), Colors.Num());
+		for (int32 i = 0; i < Num; ++i)
+		{
+			const FColor& Col = Colors[i];
+			FSeinNavBlockerBucket* Match = OutBuckets.FindByPredicate(
+				[&Col](const FSeinNavBlockerBucket& B) { return B.Color.ToFColor(true) == Col; });
+			if (!Match)
+			{
+				FSeinNavBlockerBucket NewBucket;
+				NewBucket.Color = FLinearColor(Col);
+				Match = &OutBuckets.Add_GetRef(MoveTemp(NewBucket));
+			}
+			Match->Centers.Add(Centers[i]);
+		}
+	};
 
 	USeinNavigationSubsystem* Sub = World->GetSubsystem<USeinNavigationSubsystem>();
 	USeinNavigation* Nav = Sub ? Sub->GetNavigation() : nullptr;
@@ -299,14 +314,7 @@ FPrimitiveSceneProxy* USeinNavDebugComponent::CreateSceneProxy()
 		TArray<FVector> Centers;
 		TArray<FColor> Colors;
 		Nav->CollectDebugCellQuads(Centers, Colors, HalfExtent);
-
-		Walkable.Reserve(Centers.Num());
-		for (int32 i = 0; i < Centers.Num(); ++i)
-		{
-			const FColor& C = Colors[i];
-			if (C.R > C.G) Blocked.Add(Centers[i]);
-			else Walkable.Add(Centers[i]);
-		}
+		BucketByColor(Centers, Colors, StaticBuckets);
 
 		// Dynamic blocker cells (overlay above static cells). Routed through the
 		// same scene proxy — folds the previously-per-frame DrawDebugSolidBox
@@ -340,21 +348,24 @@ FPrimitiveSceneProxy* USeinNavDebugComponent::CreateSceneProxy()
 		// Editor-idle preview — no live nav grid (pre-PIE the subsystems don't
 		// auto-load baked level data), so read the owner volume's baked asset
 		// directly. No blocker cells: dynamic blockers only exist in a live sim.
-		CollectAssetPreviewQuads(Walkable, Blocked, HalfExtent);
+		TArray<FVector> Centers;
+		TArray<FColor> Colors;
+		CollectAssetPreviewQuads(Centers, Colors, HalfExtent);
+		BucketByColor(Centers, Colors, StaticBuckets);
 	}
 
-	if (Walkable.Num() == 0 && Blocked.Num() == 0 && BlockerBuckets.Num() == 0)
+	if (StaticBuckets.Num() == 0 && BlockerBuckets.Num() == 0)
 	{
 		UE_LOG(LogSeinNavDebug, Verbose, TEXT("CreateSceneProxy: 0 static + 0 blocker cells (no live nav grid + no baked asset preview)"));
 		return nullptr;
 	}
 
 	UE_LOG(LogSeinNavDebug, Verbose,
-		TEXT("CreateSceneProxy: %d walkable + %d blocked cells + %d blocker color buckets, staticHE=%.1f blockerHE=%.1f"),
-		Walkable.Num(), Blocked.Num(), BlockerBuckets.Num(), HalfExtent, BlockerHalfExtent);
+		TEXT("CreateSceneProxy: %d static color buckets + %d blocker color buckets, staticHE=%.1f blockerHE=%.1f"),
+		StaticBuckets.Num(), BlockerBuckets.Num(), HalfExtent, BlockerHalfExtent);
 
 	return new FSeinNavDebugProxy(this,
-		MoveTemp(Walkable), MoveTemp(Blocked), MoveTemp(BlockerBuckets),
+		MoveTemp(StaticBuckets), MoveTemp(BlockerBuckets),
 		HalfExtent, BlockerHalfExtent);
 #else
 	return nullptr;
@@ -408,7 +419,7 @@ void USeinNavDebugComponent::HandleNavMutated()
 }
 
 void USeinNavDebugComponent::CollectAssetPreviewQuads(
-	TArray<FVector>& OutWalkable, TArray<FVector>& OutBlocked, float& OutHalfExtent) const
+	TArray<FVector>& OutCenters, TArray<FColor>& OutColors, float& OutHalfExtent) const
 {
 #if UE_ENABLE_DEBUG_DRAWING
 	const ASeinLevelVolume* Vol = Cast<ASeinLevelVolume>(GetOwner());
@@ -427,6 +438,12 @@ void USeinNavDebugComponent::CollectAssetPreviewQuads(
 	if (!NavBlock || NavBlock->Data.Num() != 2 * N) return;
 	const uint8* CellCost = NavBlock->Data.GetData();
 
+	// Per-cell terrain type (baked into the asset with the terrain feature) tints walkable
+	// cells by the type's DebugColor — matches the live nav viz. Empty on assets baked
+	// before terrain types existed → all-Default → plain green.
+	const bool bHasTerrain = Asset->CellTerrainType.Num() == N;
+	const USeinARTSCoreSettings* TerrainSettings = GetDefault<USeinARTSCoreSettings>();
+
 	const float CS = Asset->CellSize.ToFloat();
 	OutHalfExtent = CS * 0.5f * 0.9f; // same z-fight inset as the live nav viz
 	const float OriginX = Asset->Origin.X.ToFloat();
@@ -438,7 +455,8 @@ void USeinNavDebugComponent::CollectAssetPreviewQuads(
 	const float HeightQuantum = Asset->HeightQuantum.ToFloat();
 	const float FallbackZ = Asset->Origin.Z.ToFloat();
 
-	OutWalkable.Reserve(N);
+	OutCenters.Reserve(N);
+	OutColors.Reserve(N);
 	for (int32 Y = 0; Y < Asset->Height; ++Y)
 	{
 		for (int32 X = 0; X < Asset->Width; ++X)
@@ -446,11 +464,19 @@ void USeinNavDebugComponent::CollectAssetPreviewQuads(
 			const int32 I = Y * Asset->Width + X;
 			const uint8 C = CellCost[I];
 			const bool bWalkable = C > 0 && C < 255; // 0 / 255 = blocked
+			FColor Color = bWalkable ? FColor(0, 200, 0, 160) : FColor(200, 0, 0, 200);
+			if (bWalkable && bHasTerrain && TerrainSettings)
+			{
+				const int32 Type = Asset->CellTerrainType[I];
+				if (Type > 0 && Type <= TerrainSettings->TerrainTypes.Num())
+				{
+					Color = TerrainSettings->TerrainTypes[Type - 1].DebugColor.ToFColor(true);
+					Color.A = 160;
+				}
+			}
 			const float CellZ = bHasHeight ? HeightMin + Asset->SharedHeightQ[I] * HeightQuantum : FallbackZ;
-			(bWalkable ? OutWalkable : OutBlocked).Emplace(
-				OriginX + (X + 0.5f) * CS,
-				OriginY + (Y + 0.5f) * CS,
-				CellZ + 2.0f);
+			OutCenters.Emplace(OriginX + (X + 0.5f) * CS, OriginY + (Y + 0.5f) * CS, CellZ + 2.0f);
+			OutColors.Add(Color);
 		}
 	}
 #endif

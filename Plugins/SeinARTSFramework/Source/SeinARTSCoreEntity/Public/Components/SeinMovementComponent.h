@@ -110,7 +110,8 @@ struct SEINARTSCOREENTITY_API FSeinMovementComponent : public FSeinComponent
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
 		meta = (BaseStruct = "/Script/SeinARTSCoreEntity.SeinComponent",
 				ExcludeBaseStruct,
-				SeinDeterministicOnly))
+				SeinDeterministicOnly,
+				SeinDataStructFromClass = "MovementClass,GetMovementDataStruct"))
 	FInstancedStruct MovementClassData;
 
 	// =========================================================================

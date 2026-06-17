@@ -6,8 +6,10 @@
 #include "SeinLevelDataDefault.h"
 #include "SeinLevelDataDefaultAsset.h"
 #include "Volumes/SeinLevelVolume.h"
+#include "Volumes/SeinTerrainVolume.h"
 #include "SeinLevelLayerProvider.h"
 #include "Settings/PluginSettings.h"
+#include "PhysicalMaterials/PhysicalMaterial.h"
 #include "Actor/SeinActor.h"
 #include "Actor/SeinEntityComponent.h"
 #include "Components/SeinMovementComponent.h"
@@ -76,6 +78,7 @@ bool USeinLevelDataDefault::GetCellSurface(int32 CellIndex, FSeinLevelCellSurfac
 	const uint8 Flags = CellFlags.IsValidIndex(CellIndex) ? CellFlags[CellIndex] : 0;
 	OutSurface.bHasSurface = (Flags & SeinLevelCellFlags::HasSurface) != 0;
 	OutSurface.bInBounds   = (Flags & SeinLevelCellFlags::InBounds) != 0;
+	OutSurface.TerrainTypeIndex = CellTerrainType.IsValidIndex(CellIndex) ? CellTerrainType[CellIndex] : 0;
 	return true;
 }
 
@@ -134,10 +137,23 @@ void USeinLevelDataDefault::ApplyAssetData(const USeinLevelDataDefaultAsset* Ass
 		SharedHeight.Reset();
 		SharedNormalZ.Reset();
 		CellFlags.Reset();
+		CellTerrainType.Reset();
 		return;
 	}
 
 	CellFlags = Asset->CellFlags; // already raw uint8
+
+	// Terrain type — additive/lenient: copy when present + correctly sized; otherwise
+	// default every cell to 0 (Default type) so assets baked BEFORE terrain types load
+	// unchanged (no re-bake forced merely to open an old level).
+	if (Asset->CellTerrainType.Num() == NumCells)
+	{
+		CellTerrainType = Asset->CellTerrainType;
+	}
+	else
+	{
+		CellTerrainType.Init(0, NumCells);
+	}
 
 	// Dequantize uint16 height + uint8 normal·Up → FFixedPoint (deterministic fixed math).
 	const FFixedPoint HMin = Asset->HeightMin;
@@ -164,6 +180,7 @@ void USeinLevelDataDefault::LoadFromAsset(USeinLevelDataAsset* Asset)
 		SharedHeight.Reset();
 		SharedNormalZ.Reset();
 		CellFlags.Reset();
+		CellTerrainType.Reset();
 		RuntimeChannels.Reset();
 	}
 	OnLevelDataMutated.Broadcast();
@@ -265,12 +282,14 @@ bool USeinLevelDataDefault::DoSyncBake(UWorld* World, USeinLevelDataDefaultAsset
 	SharedHeight.SetNumUninitialized(NumCells);
 	SharedNormalZ.SetNumUninitialized(NumCells);
 	CellFlags.SetNumUninitialized(NumCells);
+	CellTerrainType.SetNumZeroed(NumCells); // 0 = Default; per-cell loop overwrites where classified
 
 	// Trace query + skip list — nav-faithful so the shared height feeds nav identically
 	// (trace-reconciliation note in MicroPlan_CP1.1.md): ignore the volumes; ignore any
 	// ASeinActor whose bridge has FSeinExtentsComponent::bBakesIntoNav=false OR an
 	// FSeinMovementComponent (mobile units don't carve the static bake).
 	FCollisionQueryParams QP(SCENE_QUERY_STAT(SeinLevelDataBake), true /*bTraceComplex*/);
+	QP.bReturnPhysicalMaterial = true; // terrain-type classification reads the hit's phys material
 	for (ASeinLevelVolume* Vol : Volumes) { if (Vol) QP.AddIgnoredActor(Vol); }
 
 	int32 NumIgnoredActors = 0;
@@ -309,6 +328,49 @@ bool USeinLevelDataDefault::DoSyncBake(UWorld* World, USeinLevelDataDefaultAsset
 	// Per-cell trace. MT-ready (Roadmap_Multithreading.md step 1-2): each cell writes its
 	// own slot by index; no shared mutable accumulator in the body (counters are
 	// incidental + single-threaded for now).
+	// Bake trace channel — designer-configurable (USeinARTSCoreSettings, default
+	// ECC_Visibility) so projects whose ground geometry isn't on Visibility can
+	// point the shared down-trace at their own "ground" channel.
+	const ECollisionChannel TraceChannel = GetDefault<USeinARTSCoreSettings>()->BakeTraceChannel;
+
+	// --- Terrain-type resolution setup (Phase 1) -------------------------------------
+	// Two authoring sources feed the shared per-cell terrain type, in this precedence:
+	//   1. Physical-material mapping — a reverse lookup from a trace hit's phys-material
+	//      asset PATH to the type that lists it (paint a landscape layer / assign a mesh
+	//      material; no custom tool). Compared by path — no asset load needed.
+	//   2. Terrain volumes — an explicit brush OVERRIDE that beats the material-derived
+	//      type (highest Priority wins on overlap).
+	// Both reference types authored in USeinARTSCoreSettings::TerrainTypes; stored index
+	// 0 = reserved Default (array position i → stored index i+1).
+	const USeinARTSCoreSettings* TerrainSettings = GetDefault<USeinARTSCoreSettings>();
+
+	TMap<FSoftObjectPath, int32> PhysMatToType;
+	if (TerrainSettings)
+	{
+		for (int32 t = 0; t < TerrainSettings->TerrainTypes.Num(); ++t)
+		{
+			const int32 StoredIndex = t + 1; // reserved-0 Default
+			for (const FSoftObjectPath& MatPath : TerrainSettings->TerrainTypes[t].PhysicalMaterials)
+			{
+				if (MatPath.IsValid()) PhysMatToType.Add(MatPath, StoredIndex);
+			}
+		}
+	}
+
+	// Terrain volumes: precompute (bounds, stored index, priority) once; per cell we pick
+	// the highest-Priority volume whose brush contains the cell. Tag → stored index via
+	// settings; an unset/unknown tag contributes nothing.
+	struct FTerrainVolumeBake { FBox Bounds; int32 StoredIndex; int32 Priority; ASeinTerrainVolume* Volume; };
+	TArray<FTerrainVolumeBake> TerrainVolumes;
+	for (TActorIterator<ASeinTerrainVolume> It(World); It; ++It)
+	{
+		ASeinTerrainVolume* TV = *It;
+		if (!TV) continue;
+		const int32 StoredIndex = TerrainSettings ? TerrainSettings->GetTerrainTypeIndex(TV->TerrainType) : 0;
+		if (StoredIndex <= 0) continue; // unknown/unset tag → no effect
+		TerrainVolumes.Add({ TV->GetVolumeWorldBounds(), StoredIndex, TV->Priority, TV });
+	}
+
 	int32 NumInBounds = 0, NumSurface = 0, Processed = 0;
 	for (int32 Y = 0; Y < GridH; ++Y)
 	{
@@ -340,6 +402,7 @@ bool USeinLevelDataDefault::DoSyncBake(UWorld* World, USeinLevelDataDefaultAsset
 			uint8 Flags = 0;
 			FFixedPoint HeightFP = FFixedPoint::FromFloat(BottomZ);
 			FFixedPoint NormalZFP = FFixedPoint::Zero;
+			uint8 TypeIndex = 0; // terrain type (0 = Default)
 
 			if (bInBounds)
 			{
@@ -349,18 +412,55 @@ bool USeinLevelDataDefault::DoSyncBake(UWorld* World, USeinLevelDataDefaultAsset
 				FHitResult TopHit;
 				const FVector Start(CenterX, CenterY, TopZ);
 				const FVector End(CenterX, CenterY, BottomZ);
-				if (World->LineTraceSingleByChannel(TopHit, Start, End, ECC_Visibility, QP))
+				if (World->LineTraceSingleByChannel(TopHit, Start, End, TraceChannel, QP))
 				{
 					Flags |= SeinLevelCellFlags::HasSurface;
 					HeightFP = FFixedPoint::FromFloat(TopHit.ImpactPoint.Z);
 					NormalZFP = FFixedPoint::FromFloat(FVector::DotProduct(TopHit.Normal, FVector::UpVector));
 					++NumSurface;
+
+					// Source 1 — physical-material mapping: the hit surface's phys material
+					// (painted landscape layer / mesh material) → the terrain type listing it.
+					if (PhysMatToType.Num() > 0)
+					{
+						if (const UPhysicalMaterial* PM = TopHit.PhysMaterial.Get())
+						{
+							if (const int32* Found = PhysMatToType.Find(FSoftObjectPath(PM)))
+							{
+								TypeIndex = (uint8)*Found;
+							}
+						}
+					}
+				}
+
+				// Source 2 — terrain-volume override (explicit; beats the material-derived
+				// type). Highest Priority wins. A terrain region is a 2D XY concept for nav,
+				// so each volume is tested at ITS OWN mid-height (Bounds center Z) rather than
+				// the cell's surface Z — robust regardless of where the ground sits relative to
+				// the brush (a flat slab dropped on the ground, a brush floating above it, etc.
+				// all classify the cells under their XY footprint). EncompassesPoint still
+				// respects non-box brush shapes at that height.
+				if (TerrainVolumes.Num() > 0)
+				{
+					int32 BestPriority = MIN_int32;
+					for (const FTerrainVolumeBake& TV : TerrainVolumes)
+					{
+						if (TV.Priority <= BestPriority) continue;     // can't beat best (ties keep earlier)
+						const FVector Probe(CenterX, CenterY, TV.Bounds.GetCenter().Z);
+						if (!TV.Bounds.IsInsideXY(Probe)) continue;    // cheap XY AABB reject
+						if (TV.Volume && TV.Volume->EncompassesPoint(Probe))
+						{
+							TypeIndex = (uint8)TV.StoredIndex;
+							BestPriority = TV.Priority;
+						}
+					}
 				}
 			}
 
 			SharedHeight[Idx] = HeightFP;
 			SharedNormalZ[Idx] = NormalZFP;
 			CellFlags[Idx] = Flags;
+			CellTerrainType[Idx] = TypeIndex;
 
 			++Processed;
 #if WITH_EDITOR
@@ -376,6 +476,20 @@ bool USeinLevelDataDefault::DoSyncBake(UWorld* World, USeinLevelDataDefaultAsset
 	UE_LOG(LogSeinLevelData, Log,
 		TEXT("Level bake: %dx%d=%d cells — in-bounds=%d surface=%d (ignored %d actors), CellSize=%s"),
 		GridW, GridH, NumCells, NumInBounds, NumSurface, NumIgnoredActors, *BakedCellSize.ToString());
+
+	// Terrain-type bake diagnostic. If "volumes gathered" is 0, no ASeinTerrainVolume was
+	// found or none resolved its TerrainType tag to a registered type (check the tag matches
+	// a USeinARTSCoreSettings::TerrainTypes entry). If volumes > 0 but "classified" is 0, the
+	// brush isn't being detected over any cell (shape/placement) — re-check the volume covers
+	// the play area in XY. Classified > 0 ⇒ the cost IS baked (nav routes around it; it does
+	// NOT slow traversal — A* cost is a routing weight, not a speed multiplier).
+	{
+		int32 Classified = 0;
+		for (int32 i = 0; i < NumCells; ++i) { if (CellTerrainType[i] != 0) ++Classified; }
+		UE_LOG(LogSeinLevelData, Log,
+			TEXT("Terrain types: %d volume(s) gathered, %d phys-mat mapping(s) -> %d/%d cells classified non-Default."),
+			TerrainVolumes.Num(), PhysMatToType.Num(), Classified, NumCells);
+	}
 
 	// Runtime substrate already populated (exact) above — providers read it directly
 	// via GetCellSurface, so they see un-quantized height/normal.
@@ -406,7 +520,8 @@ bool USeinLevelDataDefault::DoSyncBake(UWorld* World, USeinLevelDataDefaultAsset
 		OutAsset->HeightQuantum = FFixedPoint::FromFloat(HeightQuantumF);
 		OutAsset->SharedHeightQ.SetNumUninitialized(NumCells);
 		OutAsset->SharedNormalZQ.SetNumUninitialized(NumCells);
-		OutAsset->CellFlags = CellFlags; // already raw uint8
+		OutAsset->CellFlags = CellFlags;             // already raw uint8
+		OutAsset->CellTerrainType = CellTerrainType; // already raw uint8 (per-cell type index)
 		for (int32 i = 0; i < NumCells; ++i)
 		{
 			const float HZ = SharedHeight[i].ToFloat();

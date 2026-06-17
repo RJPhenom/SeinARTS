@@ -12,6 +12,7 @@
 
 #include "CoreMinimal.h"
 #include "Core/SeinTickPhase.h"
+#include "Core/SeinSystemPriority.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Components/SeinExtentsComponent.h"
 #include "Components/SeinNavigationComponent.h"
@@ -232,7 +233,7 @@ public:
 	}
 
 	virtual ESeinTickPhase GetPhase() const override { return ESeinTickPhase::PreTick; }
-	virtual int32 GetPriority() const override { return 7; }
+	virtual int32 GetPriority() const override { return SeinSystemPriority::NavBlockerStamp; }
 	virtual FName GetSystemName() const override { return TEXT("NavBlockerStamp"); }
 
 private:

@@ -1,28 +1,25 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinSquadSubsystem.h
- * @brief   World subsystem that registers FSeinSquadSystem with the sim loop
- *          and maintains FormationWidth on squad brokers. Follows the same
- *          dynamic registration pattern as USeinNavigationSubsystem.
+ * @brief   World subsystem that hosts FSeinSquadSystem on the sim loop. Uses the
+ *          managed USeinSystemHostSubsystem base — registration + lifetime are
+ *          handled by the base; this just declares which system(s) to host.
  */
 
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Subsystems/WorldSubsystem.h"
+#include "Simulation/SeinSystemHostSubsystem.h"
 #include "SeinSquadSubsystem.generated.h"
 
 class ISeinSystem;
+class USeinWorldSubsystem;
 
 UCLASS()
-class SEINARTSSQUAD_API USeinSquadSubsystem : public UWorldSubsystem
+class SEINARTSSQUAD_API USeinSquadSubsystem : public USeinSystemHostSubsystem
 {
 	GENERATED_BODY()
 
-public:
-	virtual void OnWorldBeginPlay(UWorld& InWorld) override;
-	virtual void Deinitialize() override;
-
-private:
-	ISeinSystem* SquadSystem = nullptr;
+protected:
+	virtual void CreateSystems(USeinWorldSubsystem& Sim, TArray<TUniquePtr<ISeinSystem>>& OutSystems) override;
 };

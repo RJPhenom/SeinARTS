@@ -79,6 +79,13 @@ struct FSeinMovementContext
 	 *  The mover may step onto / occupy it even if its cell is bake-blocked.
 	 *  Set by USeinMoveToAction from the AuthoritativeDestinationResolver. */
 	bool bAuthoritativeDestination = false;
+
+	/** Terrain SPEED multiplier at the unit's position this tick (1 = normal; <1 mud,
+	 *  >1 road). Sampled once per tick by USeinMoveToAction from the unit's terrain type
+	 *  (Nav->GetTerrainTypeAt → USeinARTSCoreSettings::GetTerrainSpeedMultiplier) and
+	 *  applied via USeinMovement::EffectiveTopSpeed so every mode scales uniformly.
+	 *  Independent of nav routing cost. Default 1 (no terrain effect / no data). */
+	FFixedPoint TerrainSpeedMultiplier = FFixedPoint::One;
 };
 
 /**
@@ -177,13 +184,15 @@ public:
 	 *  helpers that unwrap the per-class authoring (Altitude resolution,
 	 *  per-class kinematic params, etc.).
 	 *
-	 *  NOTE: a details-panel auto-swap (re-init MovementClassData to this struct
-	 *  when MovementClass changes) is INTENDED but NOT yet wired — designers
-	 *  currently hand-pick the matching sub-data. See API_Cleanup_Pass.md (#3).
+	 *  Also drives the editor auto-swap: FSeinInstancedStructDetails reads this
+	 *  (via reflection — hence the UFUNCTION) to restrict the MovementClassData
+	 *  picker to this struct and auto-fill it when MovementClass changes. Opt in
+	 *  on the data field with meta = (SeinDataStructFromClass = "MovementClass").
 	 *
 	 *  Default returns nullptr — the subclass has no per-class authoring
 	 *  (e.g., bare USeinBasicMovement). Subclasses with sub-data override
 	 *  to return e.g. `FSeinWheeledMovementData::StaticStruct()`. */
+	UFUNCTION()
 	virtual UScriptStruct* GetMovementDataStruct() const { return nullptr; }
 
 	/** Cruise / hover altitude the unit wants to maintain above ground.
@@ -523,6 +532,15 @@ protected:
 	static FFixedPoint StepSpeedToward(
 		FFixedPoint Current, FFixedPoint Target,
 		FFixedPoint Accel, FFixedPoint Decel, FFixedPoint Dt);
+
+	/** A unit's effective top speed THIS TICK = authored `TopSpeed` × the context's
+	 *  terrain speed multiplier (mud slows, road speeds). The single seam every movement
+	 *  mode reads instead of `MovementData->TopSpeed` directly, so terrain speed applies
+	 *  uniformly without each Tick re-deriving it. Returns 0 if MovementData is null.
+	 *  Use it for the CRUISE/target speed only — leave stable "max-step reference" uses
+	 *  (intermediate-waypoint arrival radius) at raw TopSpeed so a slowed tick never
+	 *  fails to consume a waypoint it has effectively reached. */
+	static FFixedPoint EffectiveTopSpeed(const FSeinMovementContext& Ctx);
 
 	/** Hard nav-collision resolve for a translation step. Wall avoidance is a
 	 *  steering FORCE — it can be overcome by path-attraction + momentum, so

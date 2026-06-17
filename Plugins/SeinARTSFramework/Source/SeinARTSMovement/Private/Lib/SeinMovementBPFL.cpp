@@ -6,6 +6,8 @@
 #include "Lib/SeinMovementBPFL.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Components/SeinMovementComponent.h"
+#include "Abilities/SeinLatentActionManager.h"
+#include "Actions/SeinMoveToAction.h"
 #include "Types/Entity.h"
 #include "Types/FixedPoint.h"
 #include "Types/Quat.h"
@@ -15,6 +17,18 @@
 #include "UObject/UnrealType.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinMovementBPFL, Log, All);
+
+void USeinMovementBPFL::SeinStopMovement(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle)
+{
+	// Movement ONLY — cancels just the entity's USeinMoveToAction, never any other latent
+	// action. The move's OnCancel runs (clears arrival state, fires OnCancelled on its
+	// proxy); the unit then coasts to rest via the idle driver.
+	USeinWorldSubsystem* World = GetWorldSubsystem(WorldContextObject);
+	if (World && World->LatentActionManager)
+	{
+		World->LatentActionManager->CancelActionsForEntityOfClass(EntityHandle, USeinMoveToAction::StaticClass());
+	}
+}
 
 namespace
 {

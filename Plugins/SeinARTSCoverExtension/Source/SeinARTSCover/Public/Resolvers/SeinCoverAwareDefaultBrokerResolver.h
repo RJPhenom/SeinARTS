@@ -37,9 +37,9 @@ public:
 	// Designers wanting per-resolver overrides can subclass and override
 	// PostProcessPositions to read different values.
 
-	virtual void PostProcessPositions(
+	virtual void PostProcessPositions_Implementation(
 		USeinWorldSubsystem* World,
 		const TArray<FSeinEntityHandle>& Members,
 		TArray<FFixedVector>& InOutPositions,
-		FFixedVector TargetLocation) const override;
+		FFixedVector TargetLocation) override;
 };

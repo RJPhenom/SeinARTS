@@ -15,6 +15,10 @@ public class SeinARTSFogOfWar : ModuleRules
             "Core", "CoreUObject", "Engine",
             "SeinARTSCore", "SeinARTSCoreEntity",
             "GameplayTags",
+            // Terrain-scaled vision: TickStamps samples the baked per-cell terrain type
+            // under each vision source (USeinNavigation::GetTerrainTypeAt) and scales the
+            // stamp radius by the type's VisionMultiplier. Nav owns the runtime terrain grid.
+            "SeinARTSNavigation",
             "RenderCore", "RHI"
         });
 

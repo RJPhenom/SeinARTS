@@ -8,6 +8,7 @@
 #include "SeinARTSEditorModule.h"
 #include "Settings/PluginSettings.h"
 #include "Components/SeinComponent.h"
+#include "Components/SeinComponentEligibility.h"
 #include "Kismet2/StructureEditorUtils.h"
 #include "StructUtils/UserDefinedStruct.h"
 
@@ -52,53 +53,16 @@ bool USeinSimComponentFactory::IsSeinDeterministicStruct(const UStruct* Struct)
 
 bool USeinSimComponentFactory::IsSeinEntityComponentStruct(const UStruct* Struct)
 {
-	if (!Struct) return false;
-
-	// Diagnostic logging — Verbose level so it doesn't spam the log every
-	// frame, but enable via `log LogSeinEditorPicker Verbose` to trace which
-	// structs are evaluated and what verdict they get. Useful when a struct
-	// you expect to see in the entity-bridge picker doesn't appear.
-	auto LogResult = [Struct](bool bAccept, const TCHAR* Reason)
-	{
-		UE_LOG(LogTemp, Verbose,
-			TEXT("[SeinPickerFilter] %s -> %s (%s)"),
-			*Struct->GetName(),
-			bAccept ? TEXT("ACCEPT") : TEXT("reject"),
-			Reason);
-		return bAccept;
-	};
-
-	// SeinSubData veto wins regardless of source. A per-class sub-data struct
-	// (e.g. FSeinWheeledMovementData) inherits FSeinComponent for storage
-	// uniformity but should not appear in the entity bridge's top-level
-	// picker — it surfaces only inside its owning component's
-	// FInstancedStruct.MovementClassData picker.
-	if (Struct->HasMetaData(SeinSubDataMetaKey)) return LogResult(false, TEXT("SeinSubData veto"));
-
-	const bool bHasDeterministic = Struct->HasMetaData(SeinDeterministicMetaKey);
-	if (!bHasDeterministic) return LogResult(false, TEXT("no SeinDeterministic meta"));
-
-	// UDS path: explicit SeinEntityComponent tag required (set on creation by
-	// this factory). UE's UDS compiler nullifies supersuper, so IsChildOf
-	// against FSeinComponent doesn't work as an inheritance check here.
-	if (Struct->IsA<UUserDefinedStruct>())
-	{
-		const bool bHasEntityCompMeta = Struct->HasMetaData(SeinEntityComponentMetaKey);
-		return LogResult(bHasEntityCompMeta,
-			bHasEntityCompMeta ? TEXT("UDS with SeinEntityComponent meta")
-			                   : TEXT("UDS missing SeinEntityComponent meta"));
-	}
-
-	// Native USTRUCT path: must inherit FSeinComponent.
-	if (const UScriptStruct* SS = Cast<UScriptStruct>(Struct))
-	{
-		const bool bChildOfSein = SS->IsChildOf(FSeinComponent::StaticStruct());
-		return LogResult(bChildOfSein,
-			bChildOfSein ? TEXT("native USTRUCT IsChildOf FSeinComponent")
-			             : TEXT("native USTRUCT NOT IsChildOf FSeinComponent"));
-	}
-
-	return LogResult(false, TEXT("not a UScriptStruct"));
+	// Single source of truth lives in CoreEntity so the K2 Get/Set Component node
+	// menu (which can't depend on this Editor module) applies the SAME rule — see
+	// SeinComponentEligibility::IsEntityComponentStruct. Verbose trace retained for
+	// diagnosing why an expected struct doesn't appear in the picker
+	// (`log LogSeinEditorPicker Verbose`).
+	const bool bAccept = SeinComponentEligibility::IsEntityComponentStruct(Struct);
+	UE_LOG(LogTemp, Verbose, TEXT("[SeinPickerFilter] %s -> %s"),
+		Struct ? *Struct->GetName() : TEXT("<null>"),
+		bAccept ? TEXT("ACCEPT") : TEXT("reject"));
+	return bAccept;
 }
 
 FText USeinSimComponentFactory::GetDisplayName() const

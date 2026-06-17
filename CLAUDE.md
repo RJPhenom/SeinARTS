@@ -10,11 +10,11 @@ It owns the cross-cutting rules that apply to **all four plugins**. Each plugin 
 > three extension plugins. When you start work, read this file first, then the plugin-specific
 > `CLAUDE.md` for whatever you're touching.
 
-> **Active initiative — Nav/Movement BAR-ification.** If the work touches navigation, movement, or
-> collision, read `planning/README.md` first (it owns the standing rules, doc set, and per-checkpoint
-> cadence for the nav/movement re-architecture). Durable ground truth: `planning/References.md`,
-> `PLAN.md`, `Checkpoints.md`, `Decisions.md`. **Citations in those docs are starting coordinates,
-> not boundaries — read outward and re-ground against live code before asserting.**
+> **Active initiative — base-plugin extensibility & hardening.** If the work touches the extension
+> surface (nav, fog, movement, the bake / level-volume, entities/components, or docs), read
+> `Base_Plugin_Extensibility_Plan.md` (project root) first — it's the self-contained source plan
+> (it supersedes the retired `planning/` BAR-program docs). Citations there are starting coordinates,
+> not boundaries — read outward and re-ground against live code before asserting.
 
 ---
 
@@ -189,8 +189,9 @@ extension can use the Squad extension but treats it as optional at the plugin le
   abilities, effects, AI controllers, command brokers, and sim systems.
 - **`SeinDeterministic` meta.** Every framework sim USTRUCT carries
   `USTRUCT(meta = (SeinDeterministic))`; this is the marker the editor uses to accept a struct as a
-  valid `ComponentData` entry. (UDS-editor variable-type picker filtering is a known UE limitation
-  — currently designer discipline.)
+  valid `ComponentData` entry. (The `ComponentData` entry picker is filtered to valid Sein component
+  structs via `FSeinInstancedStructFilter`; inside a UDS the field-type picker itself isn't filtered,
+  but `FSeinDeterministicStructValidator` strips non-deterministic fields on save.)
 - **`FInstancedStruct` ships in `CoreUObject`** (`CoreUObject/Public/StructUtils/InstancedStruct.h`).
   Do **not** add `StructUtils` as a module dependency — the standalone plugin is deprecated in UE 5.5+.
 - **BP-visible naming.** Category = `SeinARTS|<Subsystem>[|<Subgroup>]` (singular nouns; `Tags` is

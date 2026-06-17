@@ -3,15 +3,17 @@
  * @file    SeinNetSubsystem.h
  * @brief   Game-instance subsystem orchestrating the lockstep network layer.
  *
- * Responsibilities (Phase 0):
+ * Responsibilities:
  *   - On the server, spawn an ASeinNetRelay per APlayerController as it joins
  *     (FGameModeEvents::GameModePostLoginEvent), destroy on logout. Owner =
  *     the PC, so the client legitimately owns its relay for ServerRPC.
  *   - Track all server-side relays + the one client-side local relay.
  *   - Provide SubmitLocalCommand() as the single client entry point.
- *   - Phase 0 server aggregation is a passthrough: incoming submission is
- *     immediately fanned back out to every relay's ClientRPC. Phase 2
- *     replaces this with real per-turn buffering.
+ *   - Server-authoritative per-turn aggregation: buffer each slot's submission
+ *     and dispatch the assembled turn only once every active slot has submitted
+ *     for that TurnId (completeness gate), with deterministic command ordering
+ *     before fan-out, seed distribution, replay capture, periodic state-hash
+ *     desync gossip, and drop-in/out with AI takeover.
  *
  * Networking is gated on:
  *     USeinARTSCoreSettings::bNetworkingEnabled  AND
@@ -210,14 +212,14 @@ public:
 	void RegisterRelay(ASeinNetRelay* Relay);
 	void UnregisterRelay(ASeinNetRelay* Relay);
 
-	/** Server-side: a relay just received a client submission. Phase 1: stamp
-	 *  the source player slot, buffer into per-turn map, fan out the assembled
-	 *  turn once every connected slot has submitted for `TurnId`. */
+	/** Server-side: a relay just received a client submission. Stamps the
+	 *  authoritative source slot, buffers into the per-turn map, and dispatches
+	 *  the assembled turn once every active slot has submitted for `TurnId`. */
 	void ServerHandleSubmission(ASeinNetRelay* SourceRelay, int32 TurnId, const TArray<FSeinCommand>& Commands);
 
-	/** Client-side: server delivered an assembled turn. Phase 1: log + fire
-	 *  the test delegate. Phase 2 will drain into USeinWorldSubsystem at the
-	 *  matching sim-tick boundary. */
+	/** Client-side: server delivered an assembled turn. Stores it keyed by
+	 *  `TurnId` in ReceivedTurns; the sim's gate (ResolveTurnReady → ConsumeTurn)
+	 *  drains it at the matching sim-tick boundary (= TurnId * TicksPerTurn). */
 	void ClientHandleTurn(int32 TurnId, const TArray<FSeinCommand>& Commands);
 
 	/** Server-side: a peer reported its state hash for a check turn. Buffer

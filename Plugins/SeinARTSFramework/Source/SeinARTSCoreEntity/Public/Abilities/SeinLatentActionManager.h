@@ -29,6 +29,11 @@ public:
 	/** Cancel all latent actions belonging to the given entity */
 	void CancelActionsForEntity(FSeinEntityHandle Handle);
 
+	/** Cancel the given entity's active latent actions that are of (or derive from)
+	 *  ActionClass — e.g. pass USeinMoveToAction to cancel ONLY its movement, leaving
+	 *  any other latent actions (channels, waits) running. Null ActionClass = no-op. */
+	void CancelActionsForEntityOfClass(FSeinEntityHandle Handle, TSubclassOf<USeinLatentAction> ActionClass);
+
 	/** Cancel all latent actions belonging to the given ability */
 	void CancelActionsForAbility(USeinAbility* Ability);
 

@@ -13,6 +13,7 @@
 #include "CoreMinimal.h"
 #include "Engine/DeveloperSettings.h"
 #include "UObject/SoftObjectPath.h"
+#include "GameplayTagContainer.h"
 #include "Types/FixedPoint.h"
 #include "SeinARTSCoverSettings.generated.h"
 
@@ -95,6 +96,24 @@ public:
 		meta = (DisplayName = "Cover Snap Radius",
 				ClampMin = "0.0", UIMin = "100.0", UIMax = "2000.0"))
 	FFixedPoint CoverSnapRadius;
+
+	/**
+	 * Terrain-type → cover-quality binding. Maps a base-framework terrain tag (authored
+	 * in Project Settings > SeinARTS > Terrain) to a cover quality tag, so terrain itself
+	 * confers cover — e.g. `SeinARTS.Terrain.Road` → `SeinARTS.Cover.Negative` makes
+	 * exposed roads take more damage. Read at query time by `USeinCoverDefault::QueryCoverAt`
+	 * (it samples the baked per-cell terrain type under the query point); the resulting
+	 * cover is OMNIDIRECTIONAL and NOT fog-gated (terrain isn't hidden information).
+	 *
+	 * This is the ONLY place terrain↔cover is bound — the base framework knows nothing
+	 * about cover. Empty (default) = terrain confers no cover (pure opt-in). A unit behind
+	 * stronger entity cover (sandbag = Heavy) still gets that under the canonical
+	 * best-quality priority; the terrain cover only wins when it's the strongest present.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Cover System",
+		meta = (DisplayName = "Terrain Cover Quality",
+				ForceInlineRow))
+	TMap<FGameplayTag, FGameplayTag> TerrainCoverQuality;
 
 	// UDeveloperSettings Interface
 	virtual FName GetCategoryName() const override;

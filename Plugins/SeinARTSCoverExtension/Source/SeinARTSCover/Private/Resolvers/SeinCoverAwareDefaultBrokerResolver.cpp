@@ -152,11 +152,11 @@ namespace SeinCoverSnapLocal
 	}
 }
 
-void USeinCoverAwareDefaultBrokerResolver::PostProcessPositions(
+void USeinCoverAwareDefaultBrokerResolver::PostProcessPositions_Implementation(
 	USeinWorldSubsystem* WorldSub,
 	const TArray<FSeinEntityHandle>& Members,
 	TArray<FFixedVector>& InOutPositions,
-	FFixedVector TargetLocation) const
+	FFixedVector TargetLocation)
 {
 	// Tuning sourced from plugin settings: one config surface for both
 	// cover-aware resolvers. Live edits take effect on the next move command

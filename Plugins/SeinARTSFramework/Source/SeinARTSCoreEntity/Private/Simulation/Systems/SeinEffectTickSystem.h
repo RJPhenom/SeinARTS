@@ -10,6 +10,7 @@
 
 #include "CoreMinimal.h"
 #include "Core/SeinTickPhase.h"
+#include "Core/SeinSystemPriority.h"
 #include "Core/SeinPlayerState.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Components/SeinActiveEffectsComponent.h"
@@ -61,7 +62,7 @@ public:
 	}
 
 	virtual ESeinTickPhase GetPhase() const override { return ESeinTickPhase::PreTick; }
-	virtual int32 GetPriority() const override { return 0; }
+	virtual int32 GetPriority() const override { return SeinSystemPriority::EffectTick; }
 	virtual FName GetSystemName() const override { return TEXT("EffectTick"); }
 
 private:

@@ -4,6 +4,7 @@
  */
 
 #include "Movement/SeinInfantryMovement.h"
+#include "Data/SeinInfantryMovementData.h"
 #include "SeinNavigation.h"
 #include "SeinPathTypes.h"
 #include "Math/MathLib.h"
@@ -14,6 +15,11 @@
 #include "Components/SeinMovementComponent.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinMovement, Log, All);
+
+UScriptStruct* USeinInfantryMovement::GetMovementDataStruct() const
+{
+	return FSeinInfantryMovementData::StaticStruct();
+}
 
 void USeinInfantryMovement::OnMoveBegin(const FSeinMovementContext& Ctx)
 {
@@ -127,7 +133,7 @@ bool USeinInfantryMovement::Tick(const FSeinMovementContext& Ctx)
 	// Accel/Decel (recommended for snappy infantry) the brake zone is small
 	// and the curve remains continuous.
 	FFixedPoint TargetSpeed = (DistToTargetSq > FFixedPoint::Epsilon)
-		? (MovementData.TopSpeed * Alignment) : FFixedPoint::Zero;
+		? (EffectiveTopSpeed(Ctx) * Alignment) : FFixedPoint::Zero;   // terrain-scaled cruise × facing alignment
 	{
 		FFixedVector ToFinal = FinalWp - PrePos;
 		ToFinal.Z = FFixedPoint::Zero;

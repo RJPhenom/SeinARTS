@@ -50,6 +50,19 @@ void USeinLatentActionManager::CancelActionsForEntity(FSeinEntityHandle Handle)
 	}
 }
 
+void USeinLatentActionManager::CancelActionsForEntityOfClass(FSeinEntityHandle Handle, TSubclassOf<USeinLatentAction> ActionClass)
+{
+	if (!ActionClass) return;
+	for (USeinLatentAction* Action : ActiveActions)
+	{
+		if (Action && !Action->bCompleted && !Action->bCancelled
+			&& Action->OwnerEntity == Handle && Action->IsA(ActionClass))
+		{
+			Action->Cancel();
+		}
+	}
+}
+
 void USeinLatentActionManager::CancelActionsForAbility(USeinAbility* Ability)
 {
 	for (USeinLatentAction* Action : ActiveActions)

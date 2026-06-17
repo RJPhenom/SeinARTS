@@ -1,5 +1,8 @@
 # Movement / Nav API Cleanup — Autonomous Pass
 
+> **SUPERSEDED (2026-06-14) by `Base_Plugin_Extensibility_Plan.md`.** This pass = **Phase 0** of that
+> plan: completed and build-green. Retained as the record of the first cleanup pass.
+
 **Date:** 2026-06-14
 **Author:** Claude (autonomous session, unattended)
 **Scope constraint:** **NO BEHAVIOUR CHANGE** for shipped classes. This pass is *truth + de-leak +

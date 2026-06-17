@@ -335,7 +335,7 @@ registers `"SeinVisionComponent"`; the Cover editor module registers `"SeinCover
 - **SeinARTSLevelData** — built 2026-06 (CP1.1): substrate + provider registry + unified volume +
   channel asset + LoS interface; both shipped layers ported onto it; legacy scaffolding removed.
   CP1.1 closed 2026-06-10 — fresh-level E2E + network-determinism state-hash agreement
-  user-verified (see planning/Checkpoints.md).
+  user-verified.
 - **SeinARTSNavigation** — complete & hardened (lazy A* alloc, dynamic blockers, escape-nudge).
   Bakes/loads via the unified level-data pipeline. (An empty `Public/Data/` dir exists; the
   vehicle curve planner is unbuilt.)

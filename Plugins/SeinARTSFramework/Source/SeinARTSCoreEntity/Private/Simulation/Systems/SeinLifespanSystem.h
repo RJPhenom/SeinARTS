@@ -10,6 +10,7 @@
 
 #include "CoreMinimal.h"
 #include "Core/SeinTickPhase.h"
+#include "Core/SeinSystemPriority.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Components/SeinLifespanData.h"
 
@@ -33,6 +34,6 @@ public:
 	// Runs AFTER ProcessDeferredDestroys (which is the PostTick pre-step, not a
 	// registered system) but before the state hash system — marks entities for
 	// the next tick's destroy pass.
-	virtual int32 GetPriority() const override { return -10; }
+	virtual int32 GetPriority() const override { return SeinSystemPriority::Lifespan; }
 	virtual FName GetSystemName() const override { return TEXT("Lifespan"); }
 };

@@ -30,9 +30,9 @@ public:
 	// See SeinCoverAwareDefaultBrokerResolver.h for the full rationale on why
 	// these are settings-driven rather than per-resolver UPROPERTYs.
 
-	virtual void PostProcessPositions(
+	virtual void PostProcessPositions_Implementation(
 		USeinWorldSubsystem* World,
 		const TArray<FSeinEntityHandle>& Members,
 		TArray<FFixedVector>& InOutPositions,
-		FFixedVector TargetLocation) const override;
+		FFixedVector TargetLocation) override;
 };

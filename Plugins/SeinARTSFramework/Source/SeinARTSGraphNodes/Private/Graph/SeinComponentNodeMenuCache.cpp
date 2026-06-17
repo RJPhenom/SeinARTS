@@ -9,13 +9,13 @@
 #include "UObject/UObjectIterator.h"
 #include "StructUtils/UserDefinedStruct.h"
 #include "Components/SeinComponent.h"
+#include "Components/SeinComponentEligibility.h"
 
 namespace
 {
-	// Same name USeinSimComponentFactory stamps onto Sein UDS components. The K2
-	// nodes can't depend on the (Editor-type) SeinARTSEditor module that owns the
-	// factory, so the constant is duplicated here — keep in sync if it changes.
-	const FName GSeinDeterministicMetaKey(TEXT("SeinDeterministic"));
+	// "Valid entity component" eligibility is defined once in CoreEntity
+	// (SeinComponentEligibility::IsEntityComponentStruct) and shared with the
+	// editor bridge-picker filter — the menu and picker can't drift.
 
 	// Per-rebuild memo. Weak ptrs so a UDS GC'd between rebuilds resolves to null
 	// and is skipped rather than dangling; self-cleaning at module unload.
@@ -27,17 +27,15 @@ namespace
 	{
 		GCachedCandidates.Reset();
 
-		// Identical predicate to the previous per-node scans: native FSeinComponent
-		// children, plus UDS carrying the SeinDeterministic meta (UDS IsChildOf is
-		// unreliable — the UDS compiler clears SuperStruct). TObjectIterator sees
-		// only LOADED structs, exactly as before.
+		// Eligibility is the shared CoreEntity rule (matches the bridge picker):
+		// native FSeinComponent children + UDS carrying the SeinEntityComponent
+		// meta, minus SeinSubData. TObjectIterator sees only LOADED structs.
 		const UScriptStruct* Base = FSeinComponent::StaticStruct();
 		for (TObjectIterator<UScriptStruct> It; It; ++It)
 		{
 			UScriptStruct* S = *It;
 			if (!S || S == Base) continue;
-			if (S->IsChildOf(Base)) { GCachedCandidates.Add(S); continue; }
-			if (S->IsA<UUserDefinedStruct>() && S->HasMetaData(GSeinDeterministicMetaKey))
+			if (SeinComponentEligibility::IsEntityComponentStruct(S))
 			{
 				GCachedCandidates.Add(S);
 			}

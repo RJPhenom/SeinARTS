@@ -81,6 +81,11 @@ protected:
 	TArray<FFixedPoint> SharedNormalZ;
 	TArray<uint8> CellFlags;
 
+	/** Per-cell terrain-type index (0 = Default), loaded from the baked asset. Surfaced
+	 *  through GetCellSurface so layer providers (nav cost) and the Cover extension read
+	 *  the shared classification. Empty/all-zero when the asset predates terrain types. */
+	TArray<uint8> CellTerrainType;
+
 	/** Baked minimap background texture, cached from the loaded asset (GC-rooted via
 	 *  this UPROPERTY). Returned by GetMinimapTexture. */
 	UPROPERTY(Transient)

@@ -1871,6 +1871,10 @@ FSeinPlayerID USeinWorldSubsystem::GetEntityOwner(FSeinEntityHandle Handle) cons
 
 void USeinWorldSubsystem::SetEntityOwner(FSeinEntityHandle Handle, FSeinPlayerID NewOwner)
 {
+	// Mutates sim state — must run inside the sim tick (e.g. a capture-point
+	// passive ability/effect). Asserted in non-shipping builds; compiles out in
+	// shipping. See Core/SeinSimContext.h.
+	SEIN_CHECK_SIM();
 	EntityPool.SetOwner(Handle, NewOwner);
 }
 
@@ -3355,6 +3359,26 @@ ISeinComponentStorage* USeinWorldSubsystem::GetOrCreateStorageForType(UScriptStr
 	ComponentStorages.Add(StructType, Storage);
 
 	UE_LOG(LogSeinSim, Verbose, TEXT("Created component storage for %s"), *StructType->GetName());
+
+#if !UE_BUILD_SHIPPING
+	// Determinism guard (dev only, once per type): warn if this component carries
+	// state the desync hash silently drops (TMap/TSet, structs without
+	// WithGetTypeHash, arrays of such). Such drift would NOT be caught by the
+	// state-hash gossip. See FSeinGenericComponentStorage::ComputeHash.
+	{
+		TArray<FString> Unhashed;
+		FSeinGenericComponentStorage::CollectUnhashedStateFields(StructType, Unhashed);
+		if (Unhashed.Num() > 0)
+		{
+			UE_LOG(LogSeinSim, Warning,
+				TEXT("Component '%s' has field(s) excluded from the determinism state hash: %s. ")
+				TEXT("Per-instance state in these fields will NOT be caught by desync detection — prefer ")
+				TEXT("hashable types (scalars, FName, FGameplayTag, FFixed*) or extend ComputeHash."),
+				*StructType->GetName(), *FString::Join(Unhashed, TEXT(", ")));
+		}
+	}
+#endif
+
 	return Storage;
 }
 

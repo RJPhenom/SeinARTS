@@ -63,7 +63,10 @@ bool USeinBasicUnitMovement::Tick(const FSeinMovementContext& Ctx)
 	const FFixedPoint Acceptance = SeinMath::Sqrt(AcceptanceRadiusSq);
 	const FFixedPoint BrakeDist = (DistToFinal > Acceptance) ? (DistToFinal - Acceptance) : FFixedPoint::Zero;
 	const FFixedPoint ArrivalCap = KinematicArrivalSpeedCap(BrakeDist, MovementData.Deceleration);
-	FFixedPoint TargetSpeed = MovementData.TopSpeed;
+	// Cruise target = terrain-scaled top speed (mud slows, road speeds); the accel/decel
+	// ramp + Velocity below then reflect the reduced speed honestly. The OneStep arrival
+	// reference further down stays at raw TopSpeed (stable max-step, never miss a waypoint).
+	FFixedPoint TargetSpeed = EffectiveTopSpeed(Ctx);
 	if (ArrivalCap < TargetSpeed) TargetSpeed = ArrivalCap;
 
 	// Smoothstep the scalar speed toward the target — Acceleration when growing,

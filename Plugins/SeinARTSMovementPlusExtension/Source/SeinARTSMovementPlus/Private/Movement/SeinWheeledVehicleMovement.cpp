@@ -360,7 +360,7 @@ bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 	// -------------------------------------------------------------------
 	FFixedPoint TargetSpeedMag = bDriveReverse
 		? ((MovementData.ReverseTopSpeed > FFixedPoint::Zero) ? MovementData.ReverseTopSpeed : MovementData.TopSpeed * FFixedPoint::Half)
-		: MovementData.TopSpeed;
+		: EffectiveTopSpeed(Ctx);   // forward cruise terrain-scaled (reverse keeps ReverseTopSpeed)
 	// Compose both turn brakes — TurnSpeedFloor (smoothed-steer-based) and
 	// SharpTurnScale (commanded-yaw-based). They fire for related-but-distinct
 	// reasons; multiplying them lets the more aggressive brake dominate while

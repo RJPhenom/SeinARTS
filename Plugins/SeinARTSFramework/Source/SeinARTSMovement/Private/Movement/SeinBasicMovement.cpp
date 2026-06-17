@@ -29,7 +29,10 @@ bool USeinBasicMovement::Tick(const FSeinMovementContext& Ctx)
 
 	const FFixedVector InitialPos = Entity.Transform.GetLocation();
 	FFixedVector Pos = InitialPos;
-	FFixedPoint RemainingStep = MovementData.TopSpeed * DeltaTime;
+	// Travel budget = terrain-scaled top speed (mud slows, road speeds). The
+	// intermediate-waypoint arrival reference below stays at raw TopSpeed (a stable
+	// max-step reference) so a slowed tick never fails to consume a reached waypoint.
+	FFixedPoint RemainingStep = EffectiveTopSpeed(Ctx) * DeltaTime;
 	// Local avoidance applies to this tick's FIRST movement step only.
 	bool bAvoidanceApplied = false;
 

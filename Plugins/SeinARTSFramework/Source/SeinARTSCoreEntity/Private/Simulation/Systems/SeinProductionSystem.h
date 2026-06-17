@@ -11,6 +11,7 @@
 
 #include "CoreMinimal.h"
 #include "Core/SeinTickPhase.h"
+#include "Core/SeinSystemPriority.h"
 #include "Core/SeinPlayerState.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Components/SeinProductionComponent.h"
@@ -210,6 +211,6 @@ public:
 	}
 
 	virtual ESeinTickPhase GetPhase() const override { return ESeinTickPhase::AbilityExecution; }
-	virtual int32 GetPriority() const override { return 50; }
+	virtual int32 GetPriority() const override { return SeinSystemPriority::Production; }
 	virtual FName GetSystemName() const override { return TEXT("Production"); }
 };

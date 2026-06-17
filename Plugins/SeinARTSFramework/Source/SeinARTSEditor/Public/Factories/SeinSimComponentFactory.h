@@ -6,9 +6,10 @@
  *          the framework's pin-type / struct-viewer filters know to apply
  *          the deterministic-types whitelist when designers edit it.
  *
- *          The synthesized non-Blueprintable wrapper AC for actor BP
- *          composition is created by the AC synthesis pipeline (separate
- *          subsystem) when this UDS is saved.
+ *          The resulting UDS is accepted directly as an entry in an entity
+ *          bridge's `ComponentData` array (the picker filters on the
+ *          `SeinDeterministic` + `SeinEntityComponent` metadata); spawn injects
+ *          the struct payload directly — there is no wrapper actor-component.
  */
 
 #pragma once

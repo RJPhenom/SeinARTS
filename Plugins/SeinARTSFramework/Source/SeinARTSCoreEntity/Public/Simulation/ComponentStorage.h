@@ -68,8 +68,9 @@ public:
 /**
  * Component storage for reflection-based access, used by the runtime.
  *
- * Component types are discovered at entity spawn by walking the Blueprint
- * CDO's USeinActorComponents and injecting the struct each Resolve() returns.
+ * Component types are discovered at entity spawn by walking the Blueprint CDO's
+ * entity bridge (USeinEntityComponent) ComponentData and injecting each
+ * FInstancedStruct payload struct directly.
  * Payloads are stored as raw bytes, with construction/copy/destroy dispatched
  * through UScriptStruct so TArrays, UPROPERTY references, etc. are handled
  * correctly.
@@ -273,19 +274,123 @@ public:
 					continue;
 				}
 
+				// Maps: order-INDEPENDENT content hash. TMap iteration order is
+				// not guaranteed identical across processes for the same logical
+				// contents, so combine per-entry hashes COMMUTATIVELY (sum) before
+				// mixing in. Only when BOTH key and value are hashable; otherwise
+				// hash count only (CollectUnhashedStateFields flags it).
+				if (const FMapProperty* MapProp = CastField<FMapProperty>(Prop))
+				{
+					FScriptMapHelper Helper(MapProp, ValuePtr);
+					Hash = HashCombine(Hash, GetTypeHash(Helper.Num()));
+					const FProperty* KeyP = MapProp->KeyProp;
+					const FProperty* ValP = MapProp->ValueProp;
+					if (KeyP && ValP
+						&& !IsNonDeterministicOrSkip(KeyP) && !IsNonDeterministicOrSkip(ValP)
+						&& (KeyP->PropertyFlags & CPF_HasGetValueTypeHash)
+						&& (ValP->PropertyFlags & CPF_HasGetValueTypeHash))
+					{
+						uint32 Acc = 0;
+						const int32 MaxIndex = Helper.GetMaxIndex();
+						for (int32 i = 0; i < MaxIndex; ++i)
+						{
+							if (!Helper.IsValidIndex(i)) continue;
+							const uint32 KeyH = KeyP->GetValueTypeHash(Helper.GetKeyPtr(i));
+							const uint32 ValH = ValP->GetValueTypeHash(Helper.GetValuePtr(i));
+							Acc += HashCombine(KeyH, ValH);   // per-entry order fixed (key,value); cross-entry commutative
+						}
+						Hash = HashCombine(Hash, Acc);
+					}
+					continue;
+				}
+
+				// Sets: same order-independent commutative-sum approach as maps.
+				if (const FSetProperty* SetProp = CastField<FSetProperty>(Prop))
+				{
+					FScriptSetHelper Helper(SetProp, ValuePtr);
+					Hash = HashCombine(Hash, GetTypeHash(Helper.Num()));
+					const FProperty* ElemP = SetProp->ElementProp;
+					if (ElemP && !IsNonDeterministicOrSkip(ElemP)
+						&& (ElemP->PropertyFlags & CPF_HasGetValueTypeHash))
+					{
+						uint32 Acc = 0;
+						const int32 MaxIndex = Helper.GetMaxIndex();
+						for (int32 i = 0; i < MaxIndex; ++i)
+						{
+							if (!Helper.IsValidIndex(i)) continue;
+							Acc += ElemP->GetValueTypeHash(Helper.GetElementPtr(i));
+						}
+						Hash = HashCombine(Hash, Acc);
+					}
+					continue;
+				}
+
 				if (Prop->PropertyFlags & CPF_HasGetValueTypeHash)
 				{
 					Hash = HashCombine(Hash, Prop->GetValueTypeHash(ValuePtr));
 				}
-				// else: the property type has no GetTypeHash (some nested
-				// struct without WithGetTypeHash, or TMap/TSet). We hash
-				// only the property name — value is dropped. Stable across
-				// processes (consistent zero) but may miss state drift in
-				// those fields. Add per-type branches above if a real case
-				// surfaces.
+				// else: no GetTypeHash and not a handled container — e.g. a nested
+				// struct without WithGetTypeHash, or a map/set/array whose key/value/
+				// element is itself non-hashable (count-only above). Value is dropped;
+				// only the property name is mixed. CollectUnhashedStateFields flags
+				// these. Add per-type branches above if a real case surfaces.
 			}
 		}
 		return Hash;
+	}
+
+	/** Collect the names of UPROPERTY fields whose VALUE is NOT mixed into
+	 *  ComputeHash() — structs without WithGetTypeHash, plus TMap/TSet/arrays
+	 *  whose key/value/element is itself non-hashable. Such fields can hold
+	 *  per-instance state that silently won't contribute to desync detection.
+	 *  Mirrors ComputeHash's skip/hashable logic so the two can't drift. Dev aid. */
+	static void CollectUnhashedStateFields(const UScriptStruct* InStruct, TArray<FString>& OutFieldNames)
+	{
+		if (!InStruct) return;
+		auto IsNonDeterministicOrSkip = [](const FProperty* P) -> bool
+		{
+			if (!P) return true;
+			if (P->HasAnyPropertyFlags(CPF_Transient | CPF_EditorOnly | CPF_Deprecated)) return true;
+			if (P->IsA<FObjectPropertyBase>() || P->IsA<FInterfaceProperty>()) return true;
+			return false;
+		};
+		for (TFieldIterator<FProperty> It(InStruct); It; ++It)
+		{
+			const FProperty* Prop = *It;
+			if (IsNonDeterministicOrSkip(Prop)) continue;
+			if (const FArrayProperty* ArrProp = CastField<FArrayProperty>(Prop))
+			{
+				const FProperty* Inner = ArrProp->Inner;
+				if (Inner && !IsNonDeterministicOrSkip(Inner) && !(Inner->PropertyFlags & CPF_HasGetValueTypeHash))
+				{
+					OutFieldNames.Add(Prop->GetName() + TEXT(" (array elements)"));
+				}
+				continue;
+			}
+			if (const FMapProperty* MapProp = CastField<FMapProperty>(Prop))
+			{
+				const FProperty* KeyP = MapProp->KeyProp;
+				const FProperty* ValP = MapProp->ValueProp;
+				const bool bHashable = KeyP && ValP
+					&& !IsNonDeterministicOrSkip(KeyP) && !IsNonDeterministicOrSkip(ValP)
+					&& (KeyP->PropertyFlags & CPF_HasGetValueTypeHash)
+					&& (ValP->PropertyFlags & CPF_HasGetValueTypeHash);
+				if (!bHashable) OutFieldNames.Add(Prop->GetName() + TEXT(" (map key/value)"));
+				continue;
+			}
+			if (const FSetProperty* SetProp = CastField<FSetProperty>(Prop))
+			{
+				const FProperty* ElemP = SetProp->ElementProp;
+				const bool bHashable = ElemP && !IsNonDeterministicOrSkip(ElemP)
+					&& (ElemP->PropertyFlags & CPF_HasGetValueTypeHash);
+				if (!bHashable) OutFieldNames.Add(Prop->GetName() + TEXT(" (set elements)"));
+				continue;
+			}
+			if (!(Prop->PropertyFlags & CPF_HasGetValueTypeHash))
+			{
+				OutFieldNames.Add(Prop->GetName());
+			}
+		}
 	}
 
 	virtual int32 GetComponentCount() const override

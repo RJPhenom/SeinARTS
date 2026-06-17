@@ -32,8 +32,8 @@ enum class ESeinAbilityTargetValidationResult : uint8
  * Declarative target validation. Run before USeinAbility::CanActivate so the
  * BP-level escape hatch only sees targets that already pass range / tag / LOS.
  *
- * LOS integration is stubbed out pending §12 Vision. Until Vision lands,
- * `bRequiresLineOfSight` trivially passes.
+ * `bRequiresLineOfSight` consults USeinWorldSubsystem::LineOfSightResolver
+ * (bound by USeinFogOfWarSubsystem); permissive when unbound (tests / fog-less).
  */
 struct SEINARTSCOREENTITY_API FSeinAbilityValidation
 {

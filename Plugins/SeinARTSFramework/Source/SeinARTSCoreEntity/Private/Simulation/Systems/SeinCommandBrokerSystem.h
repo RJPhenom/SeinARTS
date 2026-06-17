@@ -18,6 +18,7 @@
 
 #include "CoreMinimal.h"
 #include "Core/SeinTickPhase.h"
+#include "Core/SeinSystemPriority.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Components/SeinCommandBrokerData.h"
 #include "Components/SeinBrokerMembershipData.h"
@@ -402,6 +403,6 @@ public:
 	}
 
 	virtual ESeinTickPhase GetPhase() const override { return ESeinTickPhase::PostTick; }
-	virtual int32 GetPriority() const override { return 40; }
+	virtual int32 GetPriority() const override { return SeinSystemPriority::CommandBroker; }
 	virtual FName GetSystemName() const override { return TEXT("CommandBroker"); }
 };

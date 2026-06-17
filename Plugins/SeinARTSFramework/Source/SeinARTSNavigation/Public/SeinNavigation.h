@@ -30,6 +30,7 @@
 #include "Types/Vector.h"
 #include "Types/Quat.h"
 #include "Types/Entity.h"
+#include "Types/Random.h"
 #include "Stamping/SeinStampShape.h"
 #include "Components/SeinExtentsComponent.h"
 #include "GameplayTagContainer.h"
@@ -152,6 +153,38 @@ public:
 	 *  the FindPath cost is prohibitive on the query hot path (ability
 	 *  validation runs this per activation). */
 	virtual bool IsReachable(const FFixedVector& From, const FFixedVector& To, const FGameplayTagContainer& AgentTags) const;
+
+	/** Find a random walkable world point within `Radius` of `Origin` that is
+	 *  REACHABLE from `Origin` (same static nav region — uses the same component
+	 *  notion as IsReachable). Deterministic: draws from the supplied FFixedRandom
+	 *  stream and ADVANCES it, so the caller owns the seed (lockstep-safe as long
+	 *  as the seed is deterministic — e.g. derived from entity handle + tick).
+	 *  Best-effort: returns false if no reachable point turns up within the impl's
+	 *  attempt budget (very sparse region / tiny radius) or the nav has no runtime
+	 *  data. `OutPoint` is left untouched on false. Default: false (a nav that
+	 *  doesn't support it degrades to "no point"). USeinNavigationAStar overrides
+	 *  with disc rejection-sampling against the connectivity-component field. */
+	virtual bool GetRandomReachablePoint(const FFixedVector& Origin, FFixedPoint Radius,
+		FFixedRandom& Rng, FFixedVector& OutPoint) const { return false; }
+
+	/** Trace a straight line on the STATIC nav grid from `From` to `To`. Returns true if
+	 *  the line is BLOCKED before reaching `To`, with `OutHitPoint` set to the first
+	 *  blocked point; returns false (clear) with `OutHitPoint = To` if the whole line is
+	 *  traversable. A cheap grid walk — NOT a pathfind (no detour). Default: clear
+	 *  (no data). USeinNavigationAStar overrides with a Bresenham + connectivity walk. */
+	virtual bool NavRaycast(const FFixedVector& From, const FFixedVector& To, FFixedVector& OutHitPoint) const
+	{
+		OutHitPoint = To;
+		return false;
+	}
+
+	/** The baked terrain-type index at a world position (0 = Default / off-grid / no
+	 *  data). The neutral shared per-cell classification the level bake stamped —
+	 *  movement reads it to scale traversal speed (via
+	 *  `USeinARTSCoreSettings::GetTerrainSpeedMultiplier`); A* read the same type for
+	 *  routing cost at BAKE time. Default: 0 (a nav with no terrain data is all-Default).
+	 *  USeinNavigationAStar overrides with the runtime grid lookup. */
+	virtual int32 GetTerrainTypeAt(const FFixedVector& WorldPos) const { return 0; }
 
 	/** True if a world-space point is inside the nav's walkable region.
 	 *  Default: false. Subclasses override. */

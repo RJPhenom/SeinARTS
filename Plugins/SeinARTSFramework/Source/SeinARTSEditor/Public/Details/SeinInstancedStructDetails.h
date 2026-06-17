@@ -49,6 +49,20 @@ private:
 	FText GetTooltipText() const;
 	const struct FSlateBrush* GetDisplayValueIcon() const;
 
+	/** Sibling-class data-struct mode — opt in via
+	 *  `meta = (SeinDataStructFromClass="<SiblingSoftClassProp>[,<FnName>]")`. The
+	 *  picker is restricted to, and the value auto-swapped to, the UScriptStruct
+	 *  the sibling soft-class property's CDO returns from the named UFUNCTION
+	 *  (default "GetMovementDataStruct"). */
+	const UScriptStruct* GetDataStructFromSiblingClass() const;
+	void ReconcileWithSiblingClass();
+	TSharedPtr<IPropertyHandle> SiblingClassHandle;
+	/** UFUNCTION name (on the sibling class CDO) returning the matching
+	 *  UScriptStruct*. Parsed from the optional 2nd token of the meta above;
+	 *  defaults to "GetMovementDataStruct". */
+	FName SiblingDataStructFn = FName(TEXT("GetMovementDataStruct"));
+	bool bInitializing = false;
+
 	/** Cached result of GetCurrentScriptStruct(). The header's value widgets bind
 	 *  paint-time Slate attribute getters (text / icon / tooltip); resolving the
 	 *  current struct via EnumerateConstRawData on every paint is wasteful when it

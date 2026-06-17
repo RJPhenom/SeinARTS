@@ -19,6 +19,7 @@
 #include "Data/SeinResourceTypes.h"
 #include "Data/SeinVisionLayerDefinition.h"
 #include "Data/SeinNavLayerDefinition.h"
+#include "Data/SeinTerrainTypeDefinition.h"
 #include "Data/SeinCollisionChannelDefinition.h"
 #include "Data/SeinLobbyMapEntry.h"
 #include "Data/SeinTagPrefixMapping.h"
@@ -260,6 +261,17 @@ public:
 	FDirectoryPath LevelDataSaveFolder;
 
 	/**
+	 * Collision channel the unified bake's shared per-cell down-trace uses to find the
+	 * ground surface (the pass that produces the height field + surface normal). Default
+	 * ECC_Visibility. Point it at a project-specific "ground" channel if your level
+	 * geometry isn't on Visibility. Re-bake after changing. (Consumed by the default
+	 * substrate USeinLevelDataDefault; a custom substrate may read or ignore it.)
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Level Data",
+		meta = (DisplayName = "Bake Trace Channel"))
+	TEnumAsByte<ECollisionChannel> BakeTraceChannel = ECC_Visibility;
+
+	/**
 	 * Designer-configurable N-layers for the agent/blocker nav layer mask.
 	 * Slot 0 → bit 1, slot 6 → bit 7. Exactly 7 slots, framework-enforced.
 	 *
@@ -280,6 +292,84 @@ public:
 	UPROPERTY(Config, EditAnywhere, EditFixedSize, Category = "Navigation",
 		meta = (TitleProperty = "LayerName"))
 	TArray<FSeinNavLayerDefinition> NavLayers;
+
+	/**
+	 * **Terrain types** — the neutral per-cell classification the unified level bake
+	 * stamps once and each system interprets: navigation maps a type to a movement
+	 * COST (here, `NavCost`); the Cover extension maps the same type's `TerrainTag` to
+	 * a cover quality (Road → Negative) — so one authored road region drives both
+	 * faster movement and negative cover without double-authoring, and the base never
+	 * learns about cover.
+	 *
+	 * Authored two ways (both bake into the same per-cell type): list a type's
+	 * `PhysicalMaterials` and the shared down-trace classifies cells whose surface uses
+	 * that phys material (paint a landscape layer / assign a mesh material — native, no
+	 * tool); or drop an `ASeinTerrainVolume` (its `TerrainType` tag + Priority OVERRIDES
+	 * the material-derived type in its footprint).
+	 *
+	 * The baked per-cell channel stores a uint8 INDEX. Index 0 = reserved implicit
+	 * "Default" (cost 1, no tag), NOT in this array — array position i → stored index
+	 * i+1 (mirrors nav layers reserving bit 0). Reordering/deleting only needs a
+	 * RE-BAKE (indices live in regenerable baked data, never in saves). Append or rename.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Terrain",
+		meta = (TitleProperty = "TerrainTag"))
+	TArray<FSeinTerrainTypeDefinition> TerrainTypes;
+
+	/** Movement-cost multiplier for a baked per-cell terrain-type INDEX (0 = Default).
+	 *  Centralizes the reserved-0 / array-offset mapping: index 0 (or out of range) →
+	 *  1; index N → TerrainTypes[N-1].NavCost clamped to [1, 254]. */
+	int32 GetTerrainNavCost(int32 StoredTypeIndex) const
+	{
+		if (StoredTypeIndex <= 0 || StoredTypeIndex > TerrainTypes.Num()) return 1;
+		return FMath::Clamp(TerrainTypes[StoredTypeIndex - 1].NavCost, 1, 254);
+	}
+
+	/** Baked stored INDEX for a terrain `Tag` (0 = Default / not found). The inverse of
+	 *  the reserved-0 mapping above — used by the bake (terrain volume tag → index) and
+	 *  by nav's per-agent BlockedTerrainTags filter (tag → index to gate). */
+	int32 GetTerrainTypeIndex(const FGameplayTag& Tag) const
+	{
+		if (!Tag.IsValid()) return 0;
+		for (int32 i = 0; i < TerrainTypes.Num(); ++i)
+		{
+			if (TerrainTypes[i].TerrainTag == Tag) return i + 1;
+		}
+		return 0;
+	}
+
+	/** Traversal SPEED multiplier for a baked per-cell terrain-type INDEX (0 = Default).
+	 *  The movement step scales a unit's effective top speed by this. Index 0 / out of
+	 *  range → 1 (no change). Floored at 0.05 so a misauthored 0/negative can never freeze
+	 *  a unit. Independent of GetTerrainNavCost (routing) — the two dials are separate. */
+	FFixedPoint GetTerrainSpeedMultiplier(int32 StoredTypeIndex) const
+	{
+		if (StoredTypeIndex <= 0 || StoredTypeIndex > TerrainTypes.Num()) return FFixedPoint::One;
+		const FFixedPoint M = TerrainTypes[StoredTypeIndex - 1].SpeedMultiplier;
+		const FFixedPoint Floor = FFixedPoint::One / FFixedPoint::FromInt(20); // 0.05
+		return (M < Floor) ? Floor : M;
+	}
+
+	/** VISION (sight-radius) multiplier for a baked per-cell terrain-type INDEX
+	 *  (0 = Default). Fog of war scales a unit's vision radius by this while it stands on
+	 *  the terrain. Index 0 / out of range → 1; floored at 0.05. Independent of the other
+	 *  dials. */
+	FFixedPoint GetTerrainVisionMultiplier(int32 StoredTypeIndex) const
+	{
+		if (StoredTypeIndex <= 0 || StoredTypeIndex > TerrainTypes.Num()) return FFixedPoint::One;
+		const FFixedPoint M = TerrainTypes[StoredTypeIndex - 1].VisionMultiplier;
+		const FFixedPoint Floor = FFixedPoint::One / FFixedPoint::FromInt(20); // 0.05
+		return (M < Floor) ? Floor : M;
+	}
+
+	/** Identity tag for a baked per-cell terrain-type INDEX (0 = Default → invalid tag).
+	 *  The inverse of GetTerrainTypeIndex — used by extensions that interpret terrain by
+	 *  tag (e.g. the Cover extension maps a terrain tag → a cover quality). */
+	FGameplayTag GetTerrainTag(int32 StoredTypeIndex) const
+	{
+		if (StoredTypeIndex <= 0 || StoredTypeIndex > TerrainTypes.Num()) return FGameplayTag();
+		return TerrainTypes[StoredTypeIndex - 1].TerrainTag;
+	}
 
 	/**
 	 * **How many path searches the planner will run per simulation tick.**
@@ -429,15 +519,50 @@ public:
 		meta = (DisplayName = "Formation Spread Enabled"))
 	bool bFormationSpreadEnabled = false;
 
-	// Vehicle path curve fitting is unconditionally Reeds-Shepp now —
-	// `USeinNavigationAStar::FitVehicleCurve` always emits typed
-	// Arc/Straight/Reverse segments via the Reeds-Shepp solver. The
-	// experimental flag that gated this during Phase 3 of the wheeled
-	// redesign has been removed.
-	//
-	// Per-vehicle forward-preference bias lives on `FSeinMovementData::
-	// ReversePenaltyMultiplier` so different doctrines (scout car high,
-	// retreat-friendly TD low) can be tuned per-entity-class.
+	// ── Local avoidance (FSeinAvoidanceSystem) ──
+	// Model-shape constants shared by ALL movers (the avoidance model's "feel").
+	// Per-UNIT dials — AvoidanceStrength / AvoidanceWeight / bAvoidSameWeights —
+	// live on FSeinMovementComponent. Defaults equal the former inline literals,
+	// so motion is unchanged until tuned. All fixed-point → bit-identical.
+
+	/** Perception look-ahead: a moving unit perceives neighbours out to
+	 *  2×footprint + Speed×this. Default 0.5s. */
+	UPROPERTY(Config, EditAnywhere, Category = "Movement|Avoidance",
+		meta = (DisplayName = "Lookahead Seconds", ClampMin = "0.0"))
+	FFixedPoint AvoidanceLookaheadSeconds = FFixedPoint::One / FFixedPoint::FromInt(2);
+
+	/** Speed (uu/s) at or below which a unit counts as not-moving and skips avoidance. Default 10. */
+	UPROPERTY(Config, EditAnywhere, Category = "Movement|Avoidance",
+		meta = (DisplayName = "Moving Speed Floor", ClampMin = "0.0"))
+	FFixedPoint AvoidanceMovingSpeedFloor = FFixedPoint::FromInt(10);
+
+	/** Influence range as a multiple of combined footprint (steer fades to 0 by this ×). Default 5. */
+	UPROPERTY(Config, EditAnywhere, Category = "Movement|Avoidance",
+		meta = (DisplayName = "Falloff Radii", ClampMin = "0.0"))
+	FFixedPoint AvoidanceFalloffRadii = FFixedPoint::FromInt(5);
+
+	/** Temporal smoothing: fraction of the previous steer kept each tick (0..1). Default 0.7. */
+	UPROPERTY(Config, EditAnywhere, Category = "Movement|Avoidance",
+		meta = (DisplayName = "Smooth Keep", ClampMin = "0.0", ClampMax = "1.0"))
+	FFixedPoint AvoidanceSmoothKeep = FFixedPoint::FromInt(7) / FFixedPoint::FromInt(10);
+
+	/** Floor on the head-on encounter weight (a with-flow / perpendicular neighbour
+	 *  still carries at least this). Default 0.1. */
+	UPROPERTY(Config, EditAnywhere, Category = "Movement|Avoidance",
+		meta = (DisplayName = "Head-On Base", ClampMin = "0.0"))
+	FFixedPoint AvoidanceHeadOnBase = FFixedPoint::One / FFixedPoint::FromInt(10);
+
+	/** Arrival fade: steering releases within this × footprint of the goal so the
+	 *  collision floor + path-attraction own the endgame. Default 3. */
+	UPROPERTY(Config, EditAnywhere, Category = "Movement|Avoidance",
+		meta = (DisplayName = "Arrival Release Radii", ClampMin = "0.0"))
+	FFixedPoint AvoidanceArrivalReleaseRadii = FFixedPoint::FromInt(3);
+
+	/** Clamp on the accumulated lateral nudge (unit-direction space) before
+	 *  strength-scale + smoothing. Default 2. */
+	UPROPERTY(Config, EditAnywhere, Category = "Movement|Avoidance",
+		meta = (DisplayName = "Max Steer Magnitude", ClampMin = "0.0"))
+	FFixedPoint AvoidanceMaxSteerMagnitude = FFixedPoint::FromInt(2);
 
 	/** EditCondition helper for the A*-family-specific properties above.
 	 *  True when `NavigationClass` is the shipped A* nav (or — once
@@ -569,8 +694,8 @@ public:
 	 * Periodic determinism gossip enable. When true, every Nth turn
 	 * (`DeterminismCheckIntervalTurns`) every client hashes its world state
 	 * and sends the digest to the host; the host fans the digest back so
-	 * peers can compare. Mismatch → freeze sim, dump state, log. Phase 3
-	 * landing — Phase 0 just wires the settings.
+	 * peers can compare. Mismatch → desync alarm broadcast to every peer with
+	 * the full per-slot hash table (see USeinNetSubsystem state-hash gossip).
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Network")
 	bool bDeterminismChecksEnabled;
@@ -687,14 +812,16 @@ public:
 	 * Thermal, Radar, DetectorPerception, Acoustic, Infrared, etc. All 6 ship
 	 * disabled — opt in by naming + enabling the slots your game uses.
 	 *
-	 * Layer semantics (DESIGN §12):
-	 *  - Vision source perceives layer L iff its PerceptionLayers contains
-	 *    L's name. "Normal" is always accepted and maps to V.
-	 *  - Entity is emitted on layer L iff its EmissionLayers contains L's name.
-	 *  - Entity E is visible to observer O iff ∃ source S owned by O such that
-	 *    S's PerceptionLayers ∩ E's EmissionLayers ≠ ∅ AND E's cell has the
-	 *    corresponding bit set in O's VisionGroup bitfield (V for Normal,
-	 *    N(k-1) for designer slot k).
+	 * Layer semantics (per-bit, EVNNNNNN bitfield):
+	 *  - A vision stamp emits into the layers set in its `FSeinVisionStamp.LayerMask`
+	 *    (V = generic visibility; N0..N5 = these designer slots).
+	 *  - An entity is seen on the layers set in its
+	 *    `FSeinFogVisibilityComponent.FogVisibilityLayerMask`.
+	 *  - Entity E is visible to observer O iff some stamp owned by O covers E's
+	 *    cell with a bit also set in E's FogVisibilityLayerMask (the masks
+	 *    intersect on a bit O's VisionGroup has lit for that cell).
+	 *  (There is no name-based PerceptionLayers/EmissionLayers model — names are
+	 *   only for BP queries + the debug viewer; matching is by bit.)
 	 *
 	 * Renaming a slot is safe. Reordering / inserting mid-array shifts every
 	 * higher-slot bit → breaks replays + saves. Only append or rename.

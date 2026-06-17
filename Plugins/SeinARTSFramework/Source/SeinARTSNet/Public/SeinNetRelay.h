@@ -25,8 +25,11 @@
  * singleton needed and ownership stays clean (each client owns only its own
  * relay).
  *
- * Phase 0: the body of these RPCs just logs to LogSeinNet. Phase 2 wires
- * them to the turn-buffer in USeinWorldSubsystem.
+ * The RPC bodies are not stubs: a client submission routes into
+ * USeinNetSubsystem::ServerHandleSubmission (per-turn buffering + completeness
+ * gate), and the assembled turn fans back to each relay into
+ * USeinNetSubsystem::ClientHandleTurn (buffered for the sim's turn-boundary
+ * drain).
  */
 
 #pragma once

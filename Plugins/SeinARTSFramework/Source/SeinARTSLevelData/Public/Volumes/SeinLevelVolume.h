@@ -25,6 +25,7 @@
 
 class USeinLevelDataAsset;
 class UTexture2D;
+class USeinLayerConfig;
 
 UCLASS(meta = (DisplayName = "Sein Level Volume"))
 class SEINARTSLEVELDATA_API ASeinLevelVolume : public AVolume
@@ -167,5 +168,38 @@ public:
 	static void RegisterDebugComponentClass(UClass* ComponentClass);
 	static void UnregisterDebugComponentClass(UClass* ComponentClass);
 
+	// ----------------------------------------------------------------------
+	// Custom bake-layer config registry. A third-party bake-layer system (an
+	// ISeinLevelLayerProvider — like Nav / FoW, but custom: a threat/influence
+	// map, a sound-propagation map, …) surfaces its PER-VOLUME config here WITHOUT
+	// forking this actor: register a USeinLayerConfig subclass at module startup
+	// and an editable instance auto-appears on every volume (reconciled in editor);
+	// the provider reads it at bake via GetLayerConfig. GLOBAL config still belongs
+	// in plugin settings — this registry is only for per-volume settings.
+	// ----------------------------------------------------------------------
+
+	/** Per-volume config instances — one per registered USeinLayerConfig subclass.
+	 *  Edited inline in the details panel; serialized with the level. */
+	UPROPERTY(EditAnywhere, Instanced, Category = "SeinARTS|Layer Config")
+	TArray<TObjectPtr<USeinLayerConfig>> LayerConfigs;
+
+	/** Register/unregister a USeinLayerConfig subclass so an editable instance
+	 *  auto-appears on every ASeinLevelVolume. Call from the owning module's
+	 *  Startup/ShutdownModule (same idiom as RegisterDebugComponentClass). */
+	static void RegisterLayerConfigClass(UClass* ConfigClass);
+	static void UnregisterLayerConfigClass(UClass* ConfigClass);
+
+	/** This volume's config instance of ConfigClass (or null). A layer provider
+	 *  calls this at bake to read its per-volume settings. */
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|Layer Config")
+	USeinLayerConfig* GetLayerConfig(TSubclassOf<USeinLayerConfig> ConfigClass) const;
+
 	virtual void PostRegisterAllComponents() override;
+
+#if WITH_EDITOR
+private:
+	/** Editor reconcile: ensure one instance of each registered USeinLayerConfig
+	 *  subclass exists in LayerConfigs (additive; preserves edited instances). */
+	void ReconcileLayerConfigs();
+#endif
 };

@@ -442,6 +442,15 @@ FFixedPoint USeinMovement::StepSpeedToward(
 	return Target;
 }
 
+FFixedPoint USeinMovement::EffectiveTopSpeed(const FSeinMovementContext& Ctx)
+{
+	if (!Ctx.MovementData) return FFixedPoint::Zero;
+	// Authored cruise speed scaled by the terrain at the unit's position this tick.
+	// Ctx.TerrainSpeedMultiplier defaults to 1 (and the settings getter floors it at
+	// 0.05), so this is behaviour-preserving wherever no terrain speed is authored.
+	return Ctx.MovementData->TopSpeed * Ctx.TerrainSpeedMultiplier;
+}
+
 FFixedPoint USeinMovement::KinematicArrivalSpeedCap(
 	FFixedPoint DistToFinal, FFixedPoint Deceleration)
 {
@@ -950,6 +959,7 @@ ESeinPathResult USeinMovement::PlanPath(const FSeinPlanPathContext& Ctx, FSeinPa
 	{
 		Req.AgentNavLayerMask     = Ctx.NavData->NavLayerMask;
 		Req.AgentWallPaddingCells = Ctx.NavData->WallPadding;
+		Req.AgentMaxSearchNodes   = Ctx.NavData->MaxSearchNodes;   // 0 = project default
 	}
 	// Footprint via the shared cascade (Extents → NavComp → 0) — matches
 	// what CacheFootprintFromContext uses for runtime collision, so the

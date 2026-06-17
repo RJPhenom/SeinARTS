@@ -8,6 +8,7 @@
 
 #include "CoreMinimal.h"
 #include "Core/SeinTickPhase.h"
+#include "Core/SeinSystemPriority.h"
 #include "Simulation/SeinWorldSubsystem.h"
 
 /**
@@ -33,7 +34,7 @@ public:
 	}
 
 	virtual ESeinTickPhase GetPhase() const override { return ESeinTickPhase::PostTick; }
-	virtual int32 GetPriority() const override { return 100; }
+	virtual int32 GetPriority() const override { return SeinSystemPriority::StateHash; }
 	virtual FName GetSystemName() const override { return TEXT("StateHash"); }
 
 	/** Last computed hash, accessible for networking comparison. */

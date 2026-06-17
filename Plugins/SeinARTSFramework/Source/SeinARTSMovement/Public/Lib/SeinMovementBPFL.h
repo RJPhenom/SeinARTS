@@ -149,6 +149,18 @@ public:
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Movement", meta = (WorldContext = "WorldContextObject", DisplayName = "Has Movement Input"))
 	static bool SeinHasMovementInput(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle);
 
+	// ===== Movement control =====
+
+	/** Safely terminate the entity's movement — and ONLY its movement. Cancels its active
+	 *  USeinMoveToAction (its OnCancelled fires on the move proxy; the unit then coasts to
+	 *  rest via the idle driver). Any OTHER latent action on the entity (a channel, a wait,
+	 *  a custom primitive) is left running. The RTS "Stop"/"Halt" command; no-op if not moving.
+	 *  To cancel more, use Cancel All Actions / Cancel Actions Of Class (SeinARTS Latent Action Library).
+	 *  Sim-side: call from an ability / sim context, like Move To. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Movement",
+		meta = (WorldContext = "WorldContextObject", DisplayName = "Stop Movement"))
+	static void SeinStopMovement(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle);
+
 private:
 	static USeinWorldSubsystem* GetWorldSubsystem(const UObject* WorldContextObject);
 };
