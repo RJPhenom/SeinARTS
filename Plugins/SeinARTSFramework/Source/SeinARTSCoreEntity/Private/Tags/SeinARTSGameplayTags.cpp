@@ -93,4 +93,5 @@ namespace SeinARTSTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Formation_Column, "SeinARTS.Formation.Column", "Single-file column (1 wide, N deep) trailing behind the lead");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Formation_Wedge,  "SeinARTS.Formation.Wedge",  "Wedge / arrowhead: tip forward, arms fanning back-left and back-right");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Formation_Ring,   "SeinARTS.Formation.Ring",   "Defensive ring: members spaced evenly around a circle about the anchor");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Formation_Blob,   "SeinARTS.Formation.Blob",   "Every member converges on the single order point (the classic single-destination move); the default gesture nominates this for a plain click when single-click formations are off");
 }

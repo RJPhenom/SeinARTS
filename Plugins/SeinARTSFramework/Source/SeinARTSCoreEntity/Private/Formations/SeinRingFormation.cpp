@@ -40,10 +40,18 @@ FSeinFormationLayout USeinRingFormation::BuildFormation_Implementation(
 	const FFixedQuaternion Facing = Layout.Facing;
 	const FFixedPoint S = (InterUnitSpacing > FFixedPoint::Zero) ? InterUnitSpacing : FFixedPoint::FromInt(150);
 
-	// Radius from arc spacing: circumference = N * S, so R = N*S / 2π. Clamp to a minimum
-	// so a small ring isn't cramped.
+	// Radius = max(default, half the drag length). Default = the no-overlap minimum
+	// (circumference ~ N*S, so R = N*S / 2π, floored at S). The ring never shrinks below that,
+	// but GROWS with the drag so its diameter = max(default diameter, drag length).
 	FFixedPoint R = (S * FFixedPoint::FromInt(N)) / FFixedPoint::TwoPi;
 	if (R < S) { R = S; }
+	if (Target.GuidePoints.Num() >= 2)
+	{
+		FFixedVector DragVec = Target.GuidePoints.Last() - Target.GuidePoints[0];
+		DragVec.Z = FFixedPoint::Zero;
+		const FFixedPoint DragRadius = DragVec.Size() / FFixedPoint::Two;
+		if (DragRadius > R) { R = DragRadius; }
+	}
 
 	// Even angular spacing around the circle; deterministic fixed-point sin/cos.
 	Layout.Positions.Reserve(N);

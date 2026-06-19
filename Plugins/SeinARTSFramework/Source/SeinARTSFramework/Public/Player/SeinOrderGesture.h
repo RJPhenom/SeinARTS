@@ -9,10 +9,11 @@
  *          command release). Its float output is converted to fixed-point and
  *          baked into the lockstep command, so every client replays an identical
  *          order — determinism is preserved without the gesture being sim code.
- *          Default: a click yields no guide (→ the resolver's default formation,
- *          a blob); a drag yields a line (start→end) nominating
- *          SeinARTS.Formation.Box. Subclass for spline / path-march / box / etc.
- *          and select via ASeinPlayerController::OrderGestureClass.
+ *          Default: a drag yields a line (start->end) whose formation comes from the
+ *          project Default Formation (or DragFormationTag if a gesture sets it); a plain
+ *          click yields no guide and, per the Enable Single-Click Formations setting,
+ *          either the Default Formation at the cursor or a single-point blob. Subclass
+ *          for spline / path-march / etc. and select via OrderGestureClass.
  */
 
 #pragma once
@@ -73,8 +74,10 @@ class SEINARTSFRAMEWORK_API USeinOrderGesture : public UObject
 public:
 	USeinOrderGesture();
 
-	/** Formation nominated for a DRAG order. Mapped to a USeinFormation by the
-	 *  command broker resolver's FormationsByTag. Default = SeinARTS.Formation.Box. */
+	/** Formation nominated for a DRAG order, mapped to a USeinFormation by the command
+	 *  broker resolver's FormationsByTag. Default = NONE: a drag uses the project-wide
+	 *  Default Formation (Project Settings -> SeinARTS -> Formation). Set to FORCE a
+	 *  specific formation for this gesture. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Order Gesture",
 		meta = (DisplayName = "Drag Formation Tag"))
 	FGameplayTag DragFormationTag;

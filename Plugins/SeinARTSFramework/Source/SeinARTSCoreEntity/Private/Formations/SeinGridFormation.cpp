@@ -14,7 +14,14 @@ FSeinFormationLayout USeinGridFormation::BuildFormation_Implementation(
 {
 	FSeinFormationLayout Layout;
 	const int32 N = Members.Num();
+	// A right-click-drag rotates the grid to face the drag perpendicular (fixed handedness),
+	// same as the box/column/wedge/ring; a plain click keeps the move-target facing.
 	Layout.Facing = ComputeFormationFacing(Target.CurrentCentroid, Target.CurrentFacing, Target.Anchor);
+	const FFixedVector DragFace = DragFacingDir(Target.GuidePoints);
+	if (!DragFace.IsNearlyZero())
+	{
+		Layout.Facing = FacingFromDirection(DragFace);
+	}
 	if (N == 0) return Layout;
 
 	const FFixedVector Anchor = Target.Anchor;

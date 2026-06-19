@@ -33,8 +33,35 @@ FSeinFormationLayout USeinBoxFormation::BuildFormation_Implementation(
 	}
 	if (!bHasLine || LineVec.IsNearlyZero())
 	{
-		Layout.Facing = ComputeFormationFacing(Target.CurrentCentroid, Target.CurrentFacing, Target.Anchor);
-		Layout.Positions.Init(Target.Anchor, N);
+		// Plain click (no drag width): still a BOX, not a blob — a default square-ish block
+		// (Cols ~ ceil(sqrt(N))) centered on the anchor, facing the move direction, so
+		// single-click box formations spread. A single unit just stands at the anchor.
+		const FFixedQuaternion ClickFacing = ComputeFormationFacing(Target.CurrentCentroid, Target.CurrentFacing, Target.Anchor);
+		Layout.Facing = ClickFacing;
+		Layout.Positions.Reserve(N);
+		if (N == 1)
+		{
+			Layout.Positions.Add(ProjectToNavigable(World, Target.Anchor, Target.Anchor));
+			return Layout;
+		}
+		const FFixedPoint CS = (InterUnitSpacing > FFixedPoint::Zero) ? InterUnitSpacing : FFixedPoint::FromInt(150);
+		int32 Cols = 1; while (Cols * Cols < N) { ++Cols; } // ceil(sqrt(N)) — square-ish
+		const FFixedVector Fwd = ClickFacing.RotateVector(FFixedVector(FFixedPoint::One, FFixedPoint::Zero, FFixedPoint::Zero));
+		FFixedVector RankAxis(FFixedPoint::Zero - Fwd.Y, Fwd.X, FFixedPoint::Zero); // front-rank width axis (perp to facing)
+		RankAxis = RankAxis.IsNearlyZero() ? FFixedVector(FFixedPoint::Zero, FFixedPoint::One, FFixedPoint::Zero) : FFixedVector::GetSafeNormal(RankAxis);
+		const FFixedPoint HalfW = (FFixedPoint::FromInt(Cols - 1) * CS) / FFixedPoint::Two;
+		// Cursor sits at the FRONT-rank center (matching the drag box, whose front rank is on
+		// the line); ranks fill BEHIND it along -Fwd, so the box trails back from the cursor.
+		for (int32 i = 0; i < N; ++i)
+		{
+			const FFixedPoint AlongW  = FFixedPoint::FromInt(i % Cols) * CS - HalfW;  // centered width (rank axis)
+			const FFixedPoint BackOff = FFixedPoint::FromInt(i / Cols) * CS;          // 0 = front rank at the cursor; grows behind
+			const FFixedVector Pos(
+				Target.Anchor.X + RankAxis.X * AlongW - Fwd.X * BackOff,
+				Target.Anchor.Y + RankAxis.Y * AlongW - Fwd.Y * BackOff,
+				Target.Anchor.Z + RankAxis.Z * AlongW - Fwd.Z * BackOff);
+			Layout.Positions.Add(ProjectToNavigable(World, Pos, Target.Anchor));
+		}
 		return Layout;
 	}
 

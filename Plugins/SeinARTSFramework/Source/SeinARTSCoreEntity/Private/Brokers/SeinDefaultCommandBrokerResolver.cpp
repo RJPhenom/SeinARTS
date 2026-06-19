@@ -28,6 +28,8 @@
 #include "Formations/SeinBoxFormation.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Tags/SeinARTSGameplayTags.h"
+#include "Formations/SeinBlobFormation.h"
+#include "Settings/PluginSettings.h"
 #include "Math/MathLib.h"
 #include "Types/Entity.h" // FSeinEntity — current member positions for the slot match
 
@@ -171,12 +173,13 @@ namespace SeinDefaultBrokerLocal
 
 USeinDefaultCommandBrokerResolver::USeinDefaultCommandBrokerResolver()
 {
-	// Ship working right-click-drag formations out of the box. The default order
-	// gesture nominates SeinARTS.Formation.Box (a Total-War-style rank box sized by the
-	// drag); Line (a true single rank) is also mapped for gestures/designers that want
-	// it. Designers re-point or extend FormationsByTag on the resolver CDO.
+	// Ship the stock formations mapped to their tags so order gestures / designers can
+	// nominate any of them via FormationsByTag. The default order gesture nominates NONE
+	// for a drag (so it falls back to the project Default Formation, default Box) and
+	// Formation.Blob for a single-point click. Designers re-point/extend this map on the CDO.
 	FormationsByTag.Add(SeinARTSTags::Formation_Box,  USeinBoxFormation::StaticClass());
 	FormationsByTag.Add(SeinARTSTags::Formation_Line, USeinLineFormation::StaticClass());
+	FormationsByTag.Add(SeinARTSTags::Formation_Blob, USeinBlobFormation::StaticClass());
 }
 
 void USeinDefaultCommandBrokerResolver::ReassignSlots(
@@ -449,6 +452,22 @@ USeinFormation* USeinDefaultCommandBrokerResolver::ResolveFormation(FGameplayTag
 	}
 	if (ClassPtr.IsNull())
 	{
+		// Ultimate fallback: the project-wide Default Formation (Project Settings ->
+		// SeinARTS -> Formation). Lets designers set the default order formation without
+		// subclassing the resolver. Reached only when neither a gesture tag nor this
+		// resolver's own DefaultFormationClass resolved (e.g. the loose-unit default
+		// resolver). The squad resolver sets DefaultFormationClass = SlotFormation, so it
+		// never falls through here -- squads keep their authored slots.
+		if (const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>())
+		{
+			if (UClass* DefaultClass = Settings->DefaultFormation)
+			{
+				if (!DefaultClass->HasAnyClassFlags(CLASS_Abstract))
+				{
+					return GetMutableDefault<USeinFormation>(DefaultClass);
+				}
+			}
+		}
 		return nullptr; // neither resolves → caller uses the blob ResolvePositions fallback
 	}
 

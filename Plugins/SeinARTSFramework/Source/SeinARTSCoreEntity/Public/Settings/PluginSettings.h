@@ -24,12 +24,14 @@
 #include "Data/SeinLobbyMapEntry.h"
 #include "Data/SeinTagPrefixMapping.h"
 #include "StructUtils/InstancedStruct.h"
+#include "Formations/SeinFormation.h"
 #include "PluginSettings.generated.h"
 
 class USeinCommandBrokerResolver;
 class USeinFaction;
 class USeinFactionService;
 class USeinAIController;
+class USeinFormation;
 
 /**
  * What happens when a player disconnects mid-match and the slot's grace
@@ -158,25 +160,9 @@ public:
 		meta = (DisplayName = "Default Broker Resolver Class"))
 	TSoftClassPtr<USeinCommandBrokerResolver> DefaultBrokerResolverClass;
 
-	// ── Destination preview ──
-	// Base-owned destination/formation preview (the per-member decals shown for the
-	// current selection). Cover/Squad extensions augment it (Cover supplies per-cell
-	// quality tags via USeinWorldSubsystem::PreviewQualityProvider). Moved here from
-	// the Cover extension so preview is a base-provided feature.
-
-	/** Actor class the preview subsystem spawns to render the per-member preview
-	 *  decals. Empty → ASeinFormationPreviewActor (framework default). Subclass in
-	 *  Blueprint to author the look (decal material, quality tints). */
-	UPROPERTY(Config, EditAnywhere, Category = "Formation Preview",
-		meta = (DisplayName = "Formation Preview Actor Class",
-				MetaClass = "/Script/SeinARTSFramework.SeinFormationPreviewActor"))
-	FSoftClassPath FormationPreviewActorClass;
-
-	/** Master enable for the destination preview. False = the subsystem exists but
-	 *  renders nothing (e.g. cover-query support without the hover decals). */
-	UPROPERTY(Config, EditAnywhere, Category = "Formation Preview",
-		meta = (DisplayName = "Enable Formation Preview"))
-	bool bEnableFormationPreview = true;
+	// Formation settings (single-click, preview, Default Formation) now live in the
+	// Navigation|Formation subcategory below (declared after NavProjectionMaxRingRadius so
+	// the panel nests them at the bottom of the Navigation section).
 
 	// DefaultSquadDispatchResolverClass removed — squad dispatch resolver
 	// selection is owned by the SeinARTSSquad extension module. Per-squad
@@ -527,6 +513,42 @@ public:
 				EditCondition = "IsUsingShippedAStar",
 				EditConditionHides))
 	int32 NavProjectionMaxRingRadius;
+
+	// Formation (a Navigation SUBCATEGORY -> renders nested at the bottom of the Navigation
+	// section in Project Settings). The order-formation system: the shape a selection forms
+	// for a move. The drag gesture and a plain click both resolve through the command broker
+	// resolver to a USeinFormation.
+
+	/** When true, a plain (non-drag) right-click lays the selection out in the Default
+	 *  Formation at the cursor (and the destination preview shows it) instead of every unit
+	 *  converging on the one point. False (default) = classic single-destination click. */
+	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Formation",
+		meta = (DisplayName = "Enable Single-Click Formations"))
+	bool bEnableSingleClickFormations = false;
+
+	/** Master enable for the destination preview. False = the subsystem exists but renders
+	 *  nothing (e.g. cover-query support without the hover decals). */
+	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Formation",
+		meta = (DisplayName = "Enable Formation Preview"))
+	bool bEnableFormationPreview = true;
+
+	/** Actor class the preview subsystem spawns to render the per-member preview decals.
+	 *  Empty -> ASeinFormationPreviewActor (framework default). Subclass in Blueprint to
+	 *  author the look (decal material, quality tints). */
+	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Formation",
+		meta = (DisplayName = "Formation Preview Actor Class",
+				MetaClass = "/Script/SeinARTSFramework.SeinFormationPreviewActor"))
+	FSoftClassPath FormationPreviewActorClass;
+
+	/** Project-wide DEFAULT formation: the USeinFormation a move uses when the order doesn't
+	 *  nominate a specific one. Drives BOTH the right-click-DRAG default AND (when Enable
+	 *  Single-Click Formations is on) the plain-click formation. Default: Box. Squads ignore
+	 *  this (they lay out their authored slots). Box/Line need the drag's width, so they
+	 *  collapse to a point on a plain click -- pick Grid/Ring/Column/Wedge for a single-click
+	 *  spread. */
+	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Formation",
+		meta = (DisplayName = "Default Formation"))
+	TSubclassOf<USeinFormation> DefaultFormation;
 
 	// ── Local avoidance (FSeinAvoidanceSystem) ──
 	// Model-shape constants shared by ALL movers (the avoidance model's "feel").

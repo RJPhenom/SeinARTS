@@ -482,8 +482,9 @@ void ASeinPlayerController::OnCommandReleased(const FInputActionValue& Value)
 	USeinOrderGesture* Gesture = ResolveOrderGesture();
 	const FSeinOrderGestureResult Order = Gesture->BuildOrder(GestureInput);
 
-	// Anchor = drag start for a drag (the formation builds from there), else the click point.
-	const FVector Anchor = bIsCommandDragging ? CommandDragStart : FinalLocation;
+	// Anchor = the drag MIDPOINT for a drag (formations center on it; the guide still spans
+	// start->end), else the click point. Centered anchoring is the general rule for drags.
+	const FVector Anchor = bIsCommandDragging ? (CommandDragStart + FinalLocation) * 0.5f : FinalLocation;
 	IssueSmartCommandEx(Anchor, TargetActor, bShiftHeld, Order.GuidePoints, Order.FormationTag);
 
 	bIsCommandDragging = false;
@@ -1129,7 +1130,7 @@ void ASeinPlayerController::BuildPreviewOrder(FVector CursorWorld, FVector& OutA
 	}
 
 	const FSeinOrderGestureResult Order = ResolveOrderGesture()->BuildOrder(GestureInput);
-	OutAnchor       = bIsCommandDragging ? CommandDragStart : CursorWorld;
+	OutAnchor       = bIsCommandDragging ? (CommandDragStart + CursorWorld) * 0.5f : CursorWorld;
 	OutGuidePoints  = Order.GuidePoints;
 	OutFormationTag = Order.FormationTag;
 }

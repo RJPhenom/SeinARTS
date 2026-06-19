@@ -6,23 +6,31 @@
 
 #include "Player/SeinOrderGesture.h"
 #include "Tags/SeinARTSGameplayTags.h"
+#include "Settings/PluginSettings.h"
 
 USeinOrderGesture::USeinOrderGesture()
 {
-	// Default drag formation = the framework's Box formation (a Total-War rank box
-	// sized by the drag). Designers re-point this (and the resolver's FormationsByTag)
-	// to bind a drag to any formation (e.g. Formation.Line for a true single rank).
-	DragFormationTag = SeinARTSTags::Formation_Box;
+	// DragFormationTag is empty by default -> a drag uses the project-wide Default Formation
+	// (Project Settings -> SeinARTS -> Formation), via the broker resolver's fallback. Set
+	// this per-gesture to FORCE a specific formation tag (mapped through FormationsByTag)
+	// regardless of the project default.
 }
 
 FSeinOrderGestureResult USeinOrderGesture::BuildOrder_Implementation(const FSeinOrderGestureInput& Input)
 {
 	FSeinOrderGestureResult Result;
 
-	// Simple click: no guide, no nominated formation → the resolver falls back to its
-	// default formation (a blob — the historic single-destination move).
+	// Plain click (no drag). Single-click formations ON -> leave the formation UNnominated
+	// so the resolver lays out the project Default Formation at the cursor (the destination
+	// preview runs this same gesture, so it shows it too). OFF -> nominate Formation.Blob to
+	// force the classic single-point move.
 	if (!Input.bIsDrag)
 	{
+		const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
+		if (!Settings || !Settings->bEnableSingleClickFormations)
+		{
+			Result.FormationTag = SeinARTSTags::Formation_Blob;
+		}
 		return Result;
 	}
 
@@ -36,6 +44,6 @@ FSeinOrderGestureResult USeinOrderGesture::BuildOrder_Implementation(const FSein
 	{
 		Result.GuidePoints = { Input.StartWorld, Input.EndWorld };
 	}
-	Result.FormationTag = DragFormationTag;
+	Result.FormationTag = DragFormationTag; // empty -> project Default Formation (resolver fallback)
 	return Result;
 }

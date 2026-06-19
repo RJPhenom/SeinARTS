@@ -10,6 +10,7 @@
  */
 
 #include "Settings/PluginSettings.h"
+#include "Formations/SeinBoxFormation.h"
 // NOTE: `DefaultBrokerResolverClass` is a soft-class-path (no hard dependency)
 // and defaults to EMPTY → the runtime falls back to the framework's plain
 // `USeinDefaultCommandBrokerResolver` in `SeinWorldSubsystem`. Projects wanting
@@ -135,6 +136,10 @@ USeinARTSCoreSettings::USeinARTSCoreSettings()
 	// Collision channels default EMPTY — the editable array holds only ADDITIONAL
 	// designer channels. The reserved "Default" channel lives OUTSIDE the array
 	// (see GetAllCollisionChannels), so it's always present and can't be removed.
+
+	// Project default order formation = the framework Box (Total-War rank box). Set in the
+	// ctor body (not the init list) so the header needs only a forward-declared USeinFormation.
+	DefaultFormation = USeinBoxFormation::StaticClass();
 }
 
 namespace

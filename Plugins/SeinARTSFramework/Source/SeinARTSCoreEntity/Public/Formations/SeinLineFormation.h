@@ -14,6 +14,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Types/FixedPoint.h"
 #include "Formations/SeinFormation.h"
 #include "SeinLineFormation.generated.h"
 
@@ -29,6 +30,12 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Formation",
 		meta = (DisplayName = "Face Perpendicular"))
 	bool bFacePerpendicular = true;
+
+	/** World-space minimum spacing between adjacent units (UE cm). The line is at least
+	 *  (N-1) * this long so units never overlap; a longer drag expands it past that. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Formation",
+		meta = (DisplayName = "Inter Unit Spacing"))
+	FFixedPoint InterUnitSpacing = FFixedPoint::FromInt(150);
 
 	virtual FSeinFormationLayout BuildFormation_Implementation(
 		USeinWorldSubsystem* World,
