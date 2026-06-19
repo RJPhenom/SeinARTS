@@ -1,8 +1,9 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinSquadDispatchResolver.cpp
- * @brief   Squad-aware broker resolver: leader-first predetermined dispatch
- *          + slot-offset formation positions.
+ * @brief   Squad-aware broker resolver: leader-first predetermined dispatch.
+ *          Slot-offset layout now lives in USeinSlotFormation (this resolver's
+ *          DefaultFormationClass), not a ResolvePositions override.
  */
 
 #include "SeinSquadDispatchResolver.h"
@@ -13,8 +14,18 @@
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Types/Entity.h"
 #include "Math/MathLib.h"
+#include "SeinSlotFormation.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinSquadDispatch, Log, All);
+
+USeinSquadDispatchResolver::USeinSquadDispatchResolver()
+{
+	// Squads lay out at authored per-slot offsets -> use the slot formation by
+	// default. The base ctor already seeded FormationsByTag (e.g. Line), but squads
+	// drop the gesture tag in ResolveDispatch, so this default always resolves --
+	// squads stay slot-driven, behaving like today.
+	DefaultFormationClass = USeinSlotFormation::StaticClass();
+}
 
 FSeinBrokerDispatchPlan USeinSquadDispatchResolver::ResolveDispatch_Implementation(
 	USeinWorldSubsystem* World,
@@ -133,9 +144,18 @@ FSeinBrokerDispatchPlan USeinSquadDispatchResolver::ResolveDispatch_Implementati
 	const bool bReassignLateral = SquadData ? SquadData->bReassignSlotsLateral : false;
 	const bool bReassignDepth   = SquadData ? SquadData->bReassignSlotsDepth   : false;
 
+	// Squads are SLOT-driven: drop the gesture's formation TAG so ResolveFormation
+	// falls to DefaultFormationClass = USeinSlotFormation (authored slots, not Box/Line).
+	// But FORWARD the guide so the slot formation can ORIENT the squad to a
+	// right-click-drag (face across the drag) instead of only facing the move target.
+	FSeinOrderTarget Target;
+	Target.Anchor          = Order.TargetLocation;
+	Target.GuidePoints     = Order.GuidePoints;
+	Target.TargetEntity    = Order.TargetEntity;
+	Target.CurrentCentroid = CurrentCentroid;
+	Target.CurrentFacing   = CurrentFacing;
 	const FSeinFormationLayout Layout = ResolveFormationLayout(
-		World, Effective, CurrentCentroid, CurrentFacing,
-		Order.TargetLocation, bReassignLateral, bReassignDepth);
+		World, Effective, Target, bReassignLateral, bReassignDepth);
 	const FFixedQuaternion FormationFacing = Layout.Facing;
 	const TArray<FFixedVector>& Positions = Layout.Positions;
 
@@ -195,148 +215,3 @@ FSeinBrokerDispatchPlan USeinSquadDispatchResolver::ResolveDispatch_Implementati
 	return Plan;
 }
 
-TArray<FFixedVector> USeinSquadDispatchResolver::ResolvePositions_Implementation(
-	USeinWorldSubsystem* World,
-	const TArray<FSeinEntityHandle>& Members,
-	FFixedVector Anchor,
-	FFixedQuaternion Facing)
-{
-	TArray<FFixedVector> Out;
-	Out.Reserve(Members.Num());
-
-	if (!World)
-	{
-		// Fallback to parent's grid layout if no world (defensive â€” shouldn't happen).
-		return Super::ResolvePositions_Implementation(World, Members, Anchor, Facing);
-	}
-
-	// Per member: look up its slot's OffsetTransform via SquadEntity â†’ FSeinSquadComponent.
-	// Members without a resolvable slot fall back to the parent's grid position
-	// for that index (so a squad mid-tear-down still produces coherent output).
-	//
-	// Two diagnostic counters tracked alongside `bAnyFallback`:
-	// `bAnyAuthoredOffset` flips true the moment we read a non-zero LocalOffset
-	// from any slot, indicating the designer DID author offsets. If after the
-	// loop `bAnyAuthoredOffset` is false AND every member resolved its slot
-	// successfully, we know the data path is correct but every authored
-	// offset happens to be zero â€” clearly an unauthored squad. In that case
-	// we override Out wholesale with the parent grid layout so unauthored
-	// squads get a sensible default formation instead of converging on the
-	// anchor. Authored squads (any non-zero offset) always pass through.
-	bool bAnyFallback = false;
-	bool bAnyAuthoredOffset = false;
-	int32 SlotLookupFailures = 0;
-	TArray<int32> FallbackIndices;
-
-	for (int32 i = 0; i < Members.Num(); ++i)
-	{
-		const FSeinEntityHandle Member = Members[i];
-		const FSeinSquadMemberComponent* MemberData = World->GetComponent<FSeinSquadMemberComponent>(Member);
-		if (!MemberData || !MemberData->SquadEntity.IsValid())
-		{
-			Out.Add(Anchor);            // placeholder â€” replaced below if grid fallback fires
-			FallbackIndices.Add(i);
-			bAnyFallback = true;
-			++SlotLookupFailures;
-			UE_LOG(LogSeinSquadDispatch, Verbose,
-				TEXT("ResolvePositions: member %s has no SquadMemberData / invalid SquadEntity â€” using grid fallback"),
-				*Member.ToString());
-			continue;
-		}
-
-		const FSeinSquadComponent* Squad = World->GetComponent<FSeinSquadComponent>(MemberData->SquadEntity);
-		if (!Squad)
-		{
-			Out.Add(Anchor);
-			FallbackIndices.Add(i);
-			bAnyFallback = true;
-			++SlotLookupFailures;
-			UE_LOG(LogSeinSquadDispatch, Verbose,
-				TEXT("ResolvePositions: member %s points at squad %s but squad has no FSeinSquadComponent â€” using grid fallback"),
-				*Member.ToString(), *MemberData->SquadEntity.ToString());
-			continue;
-		}
-
-		// Prefer SlotIndex (canonical identity, always unique per array
-		// position) over tag-based lookup. SlotTag may be shared across
-		// multiple slots (e.g. five rifleman slots all tagged
-		// `Squad.Slot.Rifleman`), in which case `IndexOfSlotByTag` returns
-		// the FIRST match â€” collapsing every member to slot 0's offset.
-		// Falls back to tag lookup for legacy data (SlotIndex INDEX_NONE).
-		int32 SlotIdx = MemberData->SlotIndex;
-		if (SlotIdx == INDEX_NONE || !Squad->Slots.IsValidIndex(SlotIdx))
-		{
-			SlotIdx = Squad->IndexOfSlotByTag(MemberData->SlotTag);
-		}
-		if (SlotIdx == INDEX_NONE)
-		{
-			Out.Add(Anchor);
-			FallbackIndices.Add(i);
-			bAnyFallback = true;
-			++SlotLookupFailures;
-			UE_LOG(LogSeinSquadDispatch, Verbose,
-				TEXT("ResolvePositions: member %s no valid slot (SlotIndex=%d, SlotTag='%s') in squad %s â€” using grid fallback"),
-				*Member.ToString(),
-				MemberData->SlotIndex,
-				*MemberData->SlotTag.ToString(),
-				*MemberData->SquadEntity.ToString());
-			continue;
-		}
-
-		const FFixedVector LocalOffset = Squad->Slots[SlotIdx].OffsetTransform.GetLocation();
-		if (!LocalOffset.IsNearlyZero())
-		{
-			bAnyAuthoredOffset = true;
-		}
-		const FFixedVector WorldOffset = Facing.RotateVector(LocalOffset);
-		FFixedVector SlotPos = Anchor + WorldOffset;
-
-		// Project slot to passable nav cell â€” same rationale as the default
-		// resolver. Without this, squad formations spreading off raised
-		// platforms or past nav volume edges land on impassable terrain.
-		if (World->NavProjectResolver.IsBound())
-		{
-			FFixedVector Projected;
-			if (World->NavProjectResolver.Execute(SlotPos, Projected))
-			{
-				SlotPos = Projected;
-			}
-			else
-			{
-				SlotPos = Anchor;
-			}
-		}
-
-		Out.Add(SlotPos);
-	}
-
-	// Fallback case 1: per-member slot resolution failed for some members
-	// (squad mid-teardown, member missing component, tag mismatch). Splice
-	// in the parent's grid positions for those specific indices.
-	if (bAnyFallback)
-	{
-		const TArray<FFixedVector> Grid = Super::ResolvePositions_Implementation(World, Members, Anchor, Facing);
-		for (int32 Idx : FallbackIndices)
-		{
-			if (Grid.IsValidIndex(Idx)) { Out[Idx] = Grid[Idx]; }
-		}
-	}
-
-	// Fallback case 2: every member resolved its slot successfully BUT every
-	// authored offset is identity (zero). This is the "designer made a squad
-	// but didn't author per-slot transforms" case â€” without this fallback,
-	// every member would converge on the anchor (because every offset is
-	// zero). Replace the whole output with the parent grid so unauthored
-	// squads spread sensibly. Authored squads (any non-zero offset) skip
-	// this branch and use their authored data.
-	if (!bAnyAuthoredOffset && SlotLookupFailures == 0 && Members.Num() > 1)
-	{
-		UE_LOG(LogSeinSquadDispatch, Verbose,
-			TEXT("ResolvePositions: all %d slot offsets are identity â€” falling back to grid layout. "
-			     "Author per-slot OffsetTransform on FSeinSquadComponent::Slots to get formation-specific layout."),
-			Members.Num());
-		Out = Super::ResolvePositions_Implementation(World, Members, Anchor, Facing);
-	}
-
-	return Out;
-}

@@ -42,9 +42,20 @@ struct SEINARTSCOREENTITY_API FSeinBrokerQueuedOrder
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker")
 	FFixedVector TargetLocation;
 
-	/** Optional second endpoint for drag orders (formation line end). */
+	/** Optional second endpoint for drag orders (formation line end). Legacy single
+	 *  endpoint — superseded by GuidePoints; retained until the gesture migration. */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker")
 	FFixedVector FormationEnd;
+
+	/** Ordered guide geometry for this order — the gesture's path. Empty/1 point =
+	 *  simple click; 2 = a line; N = a path. Consumed by the formation. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker")
+	TArray<FFixedVector> GuidePoints;
+
+	/** Gesture-nominated formation identity. Invalid → the resolver's default
+	 *  formation (DefaultFormationClass). */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker")
+	FGameplayTag FormationTag;
 
 	/** Subset of the broker's members this order dispatches against. Empty = all
 	 *  members. Used by (a) player shift-click on a subset of a shared broker —
@@ -129,6 +140,16 @@ struct SEINARTSCOREENTITY_API FSeinBrokerOrderInput
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker")
 	FFixedVector FormationEnd;
 
+	/** Ordered guide geometry (mirrors FSeinBrokerQueuedOrder::GuidePoints) — the
+	 *  gesture's path, nav-projected. Empty/1 = click; 2 = line; N = path. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker")
+	TArray<FFixedVector> GuidePoints;
+
+	/** Gesture-nominated formation identity (mirrors the queued order). Invalid →
+	 *  the resolver's default formation. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker")
+	FGameplayTag FormationTag;
+
 	/** The effective member set this order dispatches against — TargetMembers
 	 *  from the queued order if non-empty, else the broker's full Members list.
 	 *  Resolvers should iterate EffectiveMembers (not the broker's Members)
@@ -171,9 +192,19 @@ struct SEINARTSCOREENTITY_API FSeinBrokerOrderPayload
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Command")
 	FGameplayTagContainer CommandContext;
 
-	/** Drag-order formation endpoint in world space. Zero = not a drag order. */
+	/** Drag-order formation endpoint in world space. Zero = not a drag order.
+	 *  Legacy single endpoint — superseded by GuidePoints. */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Command")
 	FFixedVector FormationEnd;
+
+	/** Ordered guide geometry — the gesture's path (empty/1 = click, 2 = line, N =
+	 *  path). ProcessCommands nav-projects each point into the queued order. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Command")
+	TArray<FFixedVector> GuidePoints;
+
+	/** Gesture-nominated formation identity (invalid = resolver default). */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Command")
+	FGameplayTag FormationTag;
 
 	/** Targeter-captured points when this command originated from the targeter
 	 *  subsystem (player triggered an ability via action slot, then placed targets).
@@ -259,4 +290,54 @@ struct SEINARTSCOREENTITY_API FSeinFormationLayout
 	 *  straight 180° reverse): the formation pivots to face where it's going. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker|Formation")
 	FFixedQuaternion Facing;
+};
+
+/**
+ * The resolved target of a movement/formation order — the input a `USeinFormation`
+ * consumes to lay out members. Bundles the gesture-produced GUIDE geometry (the
+ * serialized part, carried on the order) with the formation's current centroid /
+ * facing (filled by the resolver at solve time, NOT serialized).
+ *
+ * The guide is an ordered point list — the universal payload across order shapes:
+ *   - empty or 1 point  → a simple click (point order)
+ *   - 2 points          → a line (drag start → end)
+ *   - N points          → a path / spline (drawn order)
+ * A formation consumes only the parts it needs: a Blob ignores the guide, a Line
+ * uses the endpoints, a path-march walks every point.
+ */
+USTRUCT(BlueprintType, meta = (SeinDeterministic))
+struct SEINARTSCOREENTITY_API FSeinOrderTarget
+{
+	GENERATED_BODY()
+
+	/** Primary destination — the nav-projected click/anchor point. For a simple
+	 *  click this is the whole order; for a guide it is the guide's representative
+	 *  point (GuidePoints[0] by convention). */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Formation")
+	FFixedVector Anchor;
+
+	/** Ordered guide geometry (the drag path). Empty/single = simple click; two =
+	 *  line; many = path. The serialized, gesture-produced part of the order. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Formation")
+	TArray<FFixedVector> GuidePoints;
+
+	/** Optional entity target (attack / repair). Formations usually ignore it (the
+	 *  member's ability handles get-in-range); carried for completeness. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Formation")
+	FSeinEntityHandle TargetEntity;
+
+	/** Gesture-nominated formation identity. Invalid → the resolver's default
+	 *  formation. The resolver maps this tag to a USeinFormation class. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Formation")
+	FGameplayTag FormationTag;
+
+	/** Formation's CURRENT centroid (source). Filled by the resolver at solve time
+	 *  from broker data — NOT serialized on the order. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Formation")
+	FFixedVector CurrentCentroid;
+
+	/** Formation's CURRENT facing (source). Filled by the resolver at solve time —
+	 *  NOT serialized on the order. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Formation")
+	FFixedQuaternion CurrentFacing;
 };

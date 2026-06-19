@@ -30,6 +30,9 @@ class SEINARTSMOVEMENT_API USeinBasicUnitMovement : public USeinMovement
 {
 	GENERATED_BODY()
 
-public:
-	virtual bool Tick(const FSeinMovementContext& Ctx) override;
+	// The RTS default loop now lives in USeinMovement::BP_Tick_Implementation (the
+	// BP-authoring default — see Movement_Mode_Authoring_Plan.md). This named mode
+	// adds no behavior of its own; selecting it is equivalent to the framework default.
+	// Kept as a distinct, friendly-named picker entry and the natural parent for BP
+	// modes that want the RTS feel as their starting point.
 };

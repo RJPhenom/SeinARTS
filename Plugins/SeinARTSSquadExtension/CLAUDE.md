@@ -67,18 +67,21 @@ This extension declares **no new USTRUCTs** — it operates entirely on the core
 
 ## Dispatch (and the Cover extension point)
 
-`USeinSquadDispatchResolver` overrides three `_Implementation` hooks of the broker resolver:
+`USeinSquadDispatchResolver` (subclass of the default resolver) overrides **`ResolveDispatch`** and
+adds a **constructor** that selects its formation:
 
 - **`ResolveDispatch`** — for predetermined-ability orders, dispatches via the broker capability map
   filtered by the ability's own dispatch policy (`ApplyAbilityDispatchPolicy`) — CoH "leader throws
-  the smoke." Smart right-click orders route each member to its slot's world position.
-- **`ResolvePositions`** — reads each member's slot `OffsetTransform` (by `SlotIndex`, falling back
-  to tag, then grid) rotated by anchor facing, nav-projected; falls back to a parent grid when
-  offsets are all-identity or unresolved.
-- **`ResolveFormationLayout`** — computes facing (`ComputeFormationFacing`), applies the
-  backward-walk slot mirror, then calls **`PostProcessPositions`** — an empty-base-impl **extension
-  point**. The Cover extension's `USeinCoverAwareSquadDispatchResolver` overrides exactly this to
-  snap final member positions to cover.
+  the smoke." Smart right-click orders route each member to its slot's world position, and DROP the
+  order's gesture guide/formation tag so squads stay slot-driven (ignore drag-formations).
+- **Slot layout** — the constructor sets `DefaultFormationClass = USeinSlotFormation`, which reads
+  each member's slot `OffsetTransform` (by `SlotIndex`, tag fallback) rotated by anchor facing and
+  nav-projected; unauthored squads / unresolved members fall back to a blob at the anchor. This
+  replaced the old `ResolvePositions` override (squads now go through the same formation pipeline as
+  loose units).
+- **Cover extension point** — the inherited `ResolveFormationLayout` calls `PostProcessPositions`
+  (empty base impl) after layout; the Cover extension's `USeinCoverAwareSquadDispatchResolver`
+  overrides exactly that to snap final member positions to cover.
 
 **Resolver selection order:** per-squad `FSeinSquadComponent::DispatchResolverClass` → settings
 `DefaultSquadDispatchResolverClass` (soft path; null if Cover absent) → framework default. A squad

@@ -126,7 +126,9 @@ public:
 	static FSeinFormationLayout SeinComputeFormationPreview(
 		const UObject* WorldContextObject,
 		const TArray<FSeinEntityHandle>& Members,
-		FFixedVector TargetLocation);
+		FFixedVector TargetLocation,
+		const TArray<FFixedVector>& GuidePoints,
+		FGameplayTag FormationTag);
 
 	/** Multi-broker lateral-spacing anchors (internal C++ helper, NOT BP-exposed).
 	 *  Given a set of persistent-broker (squad) entities and a click target, returns
@@ -139,7 +141,8 @@ public:
 	static TArray<FFixedVector> ComputeMultiBrokerAnchors(
 		USeinWorldSubsystem& World,
 		const TArray<FSeinEntityHandle>& Brokers,
-		FFixedVector ClickTarget);
+		FFixedVector ClickTarget,
+		const TArray<FFixedVector>& GuidePoints);
 
 private:
 	static USeinWorldSubsystem* GetWorldSubsystem(const UObject* WorldContextObject);

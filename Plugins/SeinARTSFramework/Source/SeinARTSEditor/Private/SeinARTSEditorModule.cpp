@@ -41,6 +41,7 @@
 #include "Details/SeinInstancedStructDetails.h"
 #include "Details/SeinAutoTagDetails.h"
 #include "Details/SeinARTSCoreSettingsDetails.h"
+#include "Details/SeinMovementModeDetails.h"
 // Volume details panels live in their owning system modules (SeinARTSNavigation
 // + SeinARTSFogOfWar), not here — preserves the "each subsystem self-contained"
 // pattern. Each module registers its own customization at StartupModule under
@@ -259,6 +260,14 @@ void FSeinARTSEditorModule::StartupModule()
 			USeinARTSCoreSettings::StaticClass()->GetFName(),
 			FOnGetDetailCustomizationInstance::CreateStatic(&FSeinARTSCoreSettingsDetails::MakeInstance));
 
+		// Movement-mode BPs (USeinMovement subclasses): a Class-Defaults "Sync Tuning
+		// Struct" button that mirrors the BP's tuning vars into its paired UDS. Keyed by
+		// class NAME so the editor module needs no SeinARTSMovement link dependency; the
+		// customization no-ops for C++ modes (no ClassGeneratedBy).
+		PropertyModule.RegisterCustomClassLayout(
+			FName(TEXT("SeinMovement")),
+			FOnGetDetailCustomizationInstance::CreateStatic(&FSeinMovementModeDetails::MakeInstance));
+
 		// Legacy `FSeinVisionComponent` / `FSeinExtentsComponent` / `FSeinMovementData`
 		// details customizations (nav-layer-mask combo, etc.) were excised in
 		// the Phase-5 refactor. The new `FSeinVisionComponent` /
@@ -314,6 +323,7 @@ void FSeinARTSEditorModule::ShutdownModule()
 		PropertyModule.UnregisterCustomClassLayout(USeinAbility::StaticClass()->GetFName());
 		PropertyModule.UnregisterCustomClassLayout(USeinEffect::StaticClass()->GetFName());
 		PropertyModule.UnregisterCustomClassLayout(USeinARTSCoreSettings::StaticClass()->GetFName());
+		PropertyModule.UnregisterCustomClassLayout(FName(TEXT("SeinMovement")));
 		// Volume class-layouts unregistered by their owning system modules.
 	}
 

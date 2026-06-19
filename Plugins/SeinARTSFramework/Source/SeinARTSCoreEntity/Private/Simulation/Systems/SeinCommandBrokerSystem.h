@@ -195,6 +195,8 @@ namespace SeinCommandBrokerDispatch
 		Input.TargetEntity = Order.TargetEntity;
 		Input.TargetLocation = Order.TargetLocation;
 		Input.FormationEnd = Order.FormationEnd;
+		Input.GuidePoints = Order.GuidePoints;
+		Input.FormationTag = Order.FormationTag;
 		Input.EffectiveMembers = Effective;
 		Input.TargeterPoints = Order.TargeterPoints;
 		Input.PredeterminedAbilityTag = Order.PredeterminedAbilityTag;

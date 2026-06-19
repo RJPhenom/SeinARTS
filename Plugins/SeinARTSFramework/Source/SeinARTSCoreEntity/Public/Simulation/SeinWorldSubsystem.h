@@ -265,6 +265,17 @@ DECLARE_DELEGATE_RetVal_OneParam(bool, FSeinAuthoritativeDestinationResolver,
 	const FFixedVector& /*WorldPos*/);
 
 /**
+ * Delegate the destination-preview subsystem uses to fetch an optional per-cell
+ * QUALITY tag for each previewed formation position (the preview actor maps tags →
+ * decal tints). Bound by an extension — e.g. USeinCoverSubsystem (SeinARTSCover)
+ * returns cover quality per cell, FoW-observer-gated. Unbound → no tags (neutral
+ * preview). Returns an array parallel to the input positions (or empty). Render-
+ * side only (preview), so it is NOT determinism-bound.
+ */
+DECLARE_DELEGATE_RetVal_OneParam(TArray<FGameplayTag>, FSeinPreviewQualityProvider,
+	const TArray<FFixedVector>& /*Positions*/);
+
+/**
  * Delegate sim uses to query ground height at a world position. Registered by
  * USeinNavigationSubsystem (SeinARTSNavigation) at OnWorldBeginPlay.
  *
@@ -518,6 +529,11 @@ public:
 	 *  USeinCoverSubsystem. Unbound → no authoritative destinations (default: nav
 	 *  decides reachability; partial paths stop at the nearest reachable cell). */
 	FSeinAuthoritativeDestinationResolver AuthoritativeDestinationResolver;
+
+	/** Cross-module hook: per-cell QUALITY tags for the destination preview (the
+	 *  preview actor tints decals by tag). Bound by USeinCoverSubsystem (cover
+	 *  quality, FoW-gated). Unbound → neutral preview. Render-side; not sim state. */
+	FSeinPreviewQualityProvider PreviewQualityProvider;
 
 	/** Cross-module ground-height resolver — used by penetration resolution
 	 *  to gate pushes against step-height violations (wall-top cells

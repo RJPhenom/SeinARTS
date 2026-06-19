@@ -8,6 +8,7 @@
 #include "Factories/SeinSimComponentFactory.h"
 #include "UserDefinedStructure/UserDefinedStructEditorData.h"
 #include "EdGraphSchema_K2.h"
+#include "Util/SeinDeterminismRules.h"
 #include "StructUtils/UserDefinedStruct.h"
 #include "UObject/Class.h"
 #include "UObject/UnrealType.h"
@@ -19,33 +20,8 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinUDSValidator, Log, All);
 
-static bool IsPinTypeDeterministic(const FEdGraphPinType& PinType)
-{
-	const FName Cat = PinType.PinCategory;
-
-	// Whitelist of pin categories safe for deterministic sim data.
-	if (Cat == UEdGraphSchema_K2::PC_Boolean
-	 || Cat == UEdGraphSchema_K2::PC_Byte
-	 || Cat == UEdGraphSchema_K2::PC_Int
-	 || Cat == UEdGraphSchema_K2::PC_Int64
-	 || Cat == UEdGraphSchema_K2::PC_Name
-	 || Cat == UEdGraphSchema_K2::PC_Enum)
-	{
-		return true;
-	}
-
-	// Struct fields: only allow structs marked SeinDeterministic (both native
-	// USTRUCTs with the meta and UDSes tagged by the factory).
-	if (Cat == UEdGraphSchema_K2::PC_Struct)
-	{
-		const UStruct* SubStruct = Cast<UStruct>(PinType.PinSubCategoryObject.Get());
-		return USeinSimComponentFactory::IsSeinDeterministicStruct(SubStruct);
-	}
-
-	// Everything else (float/double/real, object/class/interface refs, soft
-	// refs, delegates, string/text, wildcard, fieldpath) is rejected.
-	return false;
-}
+// The determinism whitelist now lives in Util/SeinDeterminismRules.h (shared with the
+// movement-tuning export, so both apply the SAME rule). Use SeinDeterminism::IsPinTypeDeterministic.
 
 void FSeinDeterministicStructValidator::PreChange(const UUserDefinedStruct* /*Changed*/, FStructureEditorUtils::EStructureEditorChangeInfo /*ChangeInfo*/)
 {
@@ -75,7 +51,7 @@ void FSeinDeterministicStructValidator::PostChange(const UUserDefinedStruct* Cha
 	TArray<FString> BadSummaries;
 	for (const FStructVariableDescription& Var : Vars)
 	{
-		if (!IsPinTypeDeterministic(Var.ToPinType()))
+		if (!SeinDeterminism::IsPinTypeDeterministic(Var.ToPinType()))
 		{
 			ToRemove.Add(Var.VarGuid);
 			BadSummaries.Add(FString::Printf(TEXT("%s : %s"),

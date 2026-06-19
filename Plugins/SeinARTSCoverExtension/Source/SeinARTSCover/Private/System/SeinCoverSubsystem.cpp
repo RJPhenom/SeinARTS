@@ -10,6 +10,7 @@
 #include "Components/SeinCoverComponent.h"
 #include "Settings/SeinARTSCoverSettings.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "SeinARTSFogOfWarModule.h"   // ResolveLocalObserverPlayerID for the preview quality hook
 
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -113,6 +114,25 @@ void USeinCoverSubsystem::HookSimWorldEvents()
 			const FFixedPoint Eps = FFixedPoint::FromInt(10); // 10cm — exact-ish match
 			return CoverSystem->FindNearbySlots(WorldPos, Eps, FSeinPlayerID()).Num() > 0;
 		});
+
+		// Destination-preview quality provider: supply per-cell cover quality for the
+		// BASE preview's decal tints, FoW-observer-gated (preview can't leak cover the
+		// local player hasn't scouted). The preview subsystem + actor live in the base
+		// framework now; Cover augments them through this hook. Unbound when Cover is
+		// absent -> neutral preview.
+		WorldSub->PreviewQualityProvider.BindWeakLambda(this,
+			[this](const TArray<FFixedVector>& Positions) -> TArray<FGameplayTag>
+			{
+				TArray<FGameplayTag> Out;
+				if (!CoverSystem) return Out;
+				Out.Reserve(Positions.Num());
+				const FSeinPlayerID Observer = UE::SeinARTSFogOfWar::ResolveLocalObserverPlayerID(GetWorld());
+				for (const FFixedVector& Pos : Positions)
+				{
+					Out.Add(CoverSystem->QueryBestCoverQualityAt(Pos, Observer));
+				}
+				return Out;
+			});
 
 	UE_LOG(LogSeinCoverSubsystem, Log,
 		TEXT("HookSimWorldEvents: subscribed to OnEntitySpawned + OnEntityDestroyed"));

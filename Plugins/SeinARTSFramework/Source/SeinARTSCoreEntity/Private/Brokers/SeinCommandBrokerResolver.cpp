@@ -238,17 +238,15 @@ TArray<FFixedVector> USeinCommandBrokerResolver::ResolvePositions_Implementation
 FSeinFormationLayout USeinCommandBrokerResolver::ResolveFormationLayout_Implementation(
 	USeinWorldSubsystem* World,
 	const TArray<FSeinEntityHandle>& Members,
-	FFixedVector /*CurrentCentroid*/,
-	FFixedQuaternion CurrentFacing,
-	FFixedVector TargetLocation,
+	const FSeinOrderTarget& Target,
 	bool /*bReassignLateral*/,
 	bool /*bReassignDepth*/)
 {
 	// Abstract base default: keep current facing, place every member at the
-	// target. Trivial — useful for very simple subclasses; default + squad
+	// target anchor. Trivial — useful for very simple subclasses; default + squad
 	// resolvers override with real layout logic.
 	FSeinFormationLayout Layout;
-	Layout.Facing = CurrentFacing;
-	Layout.Positions = ResolvePositions(World, Members, TargetLocation, CurrentFacing);
+	Layout.Facing = Target.CurrentFacing;
+	Layout.Positions = ResolvePositions(World, Members, Target.Anchor, Target.CurrentFacing);
 	return Layout;
 }

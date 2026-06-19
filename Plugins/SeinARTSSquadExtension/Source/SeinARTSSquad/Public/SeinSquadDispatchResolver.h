@@ -20,12 +20,13 @@
  *     the squad-level ability instead of "first capable in member order." This
  *     matches CoH "the squad leader throws the smoke." Right-click smart-command
  *     orders fall through to the default per-member context-resolution path.
+ *     Squad smart-orders also DROP the gesture guide/formation tag so squads stay
+ *     slot-driven (ignore drag-formations).
  *
- *   - `ResolvePositions` to read each member's slot offset off the squad's
- *     FSeinSquadComponent and use it (rotated by anchor facing) as the formation
- *     position. Members without a resolvable slot fall back to the default
- *     resolver's grid layout (defensive — shouldn't happen for properly-wired
- *     squads).
+ *   - selects USeinSlotFormation as its DefaultFormationClass (in the constructor),
+ *     so members lay out at their squad's authored per-slot OffsetTransforms through
+ *     the formation pipeline (this replaced a ResolvePositions override). Unresolved
+ *     members / unauthored squads fall back to a blob at the anchor.
  *
  * Designers can subclass further or replace entirely via
  * `FSeinSquadComponent::DispatchResolverClass`.
@@ -46,9 +47,9 @@ public:
 		FSeinEntityHandle BrokerHandle,
 		const FSeinBrokerOrderInput& Order) override;
 
-	virtual TArray<FFixedVector> ResolvePositions_Implementation(
-		USeinWorldSubsystem* World,
-		const TArray<FSeinEntityHandle>& Members,
-		FFixedVector Anchor,
-		FFixedQuaternion Facing) override;
+	/** Default the formation to USeinSlotFormation so members lay out at their
+	 *  squad's authored per-slot offsets (this replaced the old ResolvePositions
+	 *  override). Squads ignore the gesture formation tag (the ResolveDispatch
+	 *  guard drops it), so this default always wins — squads stay slot-driven. */
+	USeinSquadDispatchResolver();
 };

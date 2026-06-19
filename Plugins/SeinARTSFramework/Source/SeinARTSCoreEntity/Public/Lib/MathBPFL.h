@@ -27,7 +27,9 @@
 /**
  * Blueprint Function Library for deterministic fixed-point math operations
  */
-UCLASS(meta = (DisplayName = "SeinARTS Fixed-point Math Library"))
+// `SeinDeterministic` (class meta) marks every function here as safe for a movement-mode
+// graph — the movement determinism validator whitelists calls to SeinDeterministic classes.
+UCLASS(meta = (DisplayName = "SeinARTS Fixed-point Math Library", SeinDeterministic))
 class SEINARTSCOREENTITY_API UMathBPFL : public UBlueprintFunctionLibrary
 {
 	GENERATED_BODY()

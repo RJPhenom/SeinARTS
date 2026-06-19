@@ -50,33 +50,10 @@ public:
 				MetaClass = "/Script/SeinARTSCover.SeinCoverSystem"))
 	FSoftClassPath CoverSystemClass;
 
-	/**
-	 * Actor class spawned by `USeinFormationPreviewSubsystem` to render the
-	 * CoH-style destination preview decals — N ground decals showing where each
-	 * selected member will land if the player right-clicks at the current cursor
-	 * position.
-	 *
-	 * Defaults to the framework's `ASeinFormationPreviewActor` C++ class with no
-	 * decal material set — designers subclass in Blueprint to assign their
-	 * project's decal material + extent, then point this setting at the BP.
-	 * Empty path falls back to `ASeinFormationPreviewActor::StaticClass()` but
-	 * no decals render until the project provides a material.
-	 */
-	UPROPERTY(Config, EditAnywhere, Category = "Formation Preview",
-		meta = (DisplayName = "Formation Preview Actor Class",
-				MetaClass = "/Script/SeinARTSCover.SeinFormationPreviewActor"))
-	FSoftClassPath FormationPreviewActorClass;
-
-	/**
-	 * Master enable for the destination preview decals. When false, the cover
-	 * module is loaded but does not render any preview — useful for projects
-	 * that want cover query support without the CoH-style hover decals, or for
-	 * shipping the module with the feature off until a designer dials in the
-	 * visual treatment.
-	 */
-	UPROPERTY(Config, EditAnywhere, Category = "Formation Preview",
-		meta = (DisplayName = "Enable Formation Preview"))
-	bool bEnableFormationPreview;
+	// NOTE: FormationPreviewActorClass + bEnableFormationPreview moved to
+	// USeinARTSCoreSettings ("Formation Preview" category) — the destination preview
+	// is now a base-framework feature. Cover augments it via the cover-quality hook
+	// (USeinWorldSubsystem::PreviewQualityProvider, bound in USeinCoverSubsystem).
 
 	/**
 	 * Radius (world units) around the move target within which cover slots are

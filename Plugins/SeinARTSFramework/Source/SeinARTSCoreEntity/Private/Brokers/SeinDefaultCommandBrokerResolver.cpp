@@ -23,7 +23,9 @@
 #include "Brokers/SeinDefaultCommandBrokerResolver.h"
 #include "Components/SeinAbilityComponent.h"
 #include "Components/SeinCommandBrokerData.h"
-#include "Settings/PluginSettings.h" // bFormationSpreadEnabled (formation-spread opt-in gate)
+#include "Formations/SeinFormation.h"
+#include "Formations/SeinLineFormation.h"
+#include "Formations/SeinBoxFormation.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Tags/SeinARTSGameplayTags.h"
 #include "Math/MathLib.h"
@@ -31,20 +33,6 @@
 
 namespace SeinDefaultBrokerLocal
 {
-	/** Build a yaw-only quat that rotates world-X (FForwardVector) onto the
-	 *  given direction in the XY plane. Z component of `DirXY` is ignored.
-	 *  Returns Identity for a near-zero direction (degenerate). Shared between
-	 *  the default resolver's facing computation and the squad resolver's
-	 *  formation-facing path (squad resolver uses the same primitive via
-	 *  USeinDefaultCommandBrokerResolver::ComputeFormationFacing). */
-	static FFixedQuaternion YawFacingFromXY(const FFixedVector& DirXY)
-	{
-		FFixedVector Flat(DirXY.X, DirXY.Y, FFixedPoint::Zero);
-		if (Flat.IsNearlyZero()) return FFixedQuaternion::Identity;
-		const FFixedPoint Yaw = SeinMath::Atan2(Flat.Y, Flat.X);
-		return FFixedQuaternion::FromAxisAndAngle(FFixedVector::UpVector, Yaw);
-	}
-
 	/** 1-D rank match along a single unit axis: project each member's CURRENT position and each slot
 	 *  onto Axis, sort both (with a handle/slot-index tie-break → deterministic total order), pair by
 	 *  rank. Translation-invariant — rank ignores the common offset, so no centroid subtraction is
@@ -181,22 +169,14 @@ namespace SeinDefaultBrokerLocal
 	}
 }
 
-FFixedQuaternion USeinDefaultCommandBrokerResolver::ComputeFormationFacing(
-	FFixedVector CurrentCentroid,
-	FFixedQuaternion CurrentFacing,
-	FFixedVector TargetLocation)
+USeinDefaultCommandBrokerResolver::USeinDefaultCommandBrokerResolver()
 {
-	FFixedVector ToTarget = TargetLocation - CurrentCentroid;
-	ToTarget.Z = FFixedPoint::Zero;       // 2D — RTS top-down, ignore vertical
-
-	// Move-to-where-we-are: keep current facing rather than degenerate-quat'ing.
-	if (ToTarget.IsNearlyZero()) return CurrentFacing;
-
-	// Facing ALWAYS rotates to face the move direction — the formation pivots to align with where it's
-	// going, every move, including a straight 180° backpedal. Slot crossing on a hard turn is handled
-	// separately by ReassignSlots (the per-axis re-match), not by withholding the facing rotation.
-	const FFixedVector ToTargetN = FFixedVector::GetSafeNormal(ToTarget);
-	return SeinDefaultBrokerLocal::YawFacingFromXY(ToTargetN);
+	// Ship working right-click-drag formations out of the box. The default order
+	// gesture nominates SeinARTS.Formation.Box (a Total-War-style rank box sized by the
+	// drag); Line (a true single rank) is also mapped for gestures/designers that want
+	// it. Designers re-point or extend FormationsByTag on the resolver CDO.
+	FormationsByTag.Add(SeinARTSTags::Formation_Box,  USeinBoxFormation::StaticClass());
+	FormationsByTag.Add(SeinARTSTags::Formation_Line, USeinLineFormation::StaticClass());
 }
 
 void USeinDefaultCommandBrokerResolver::ReassignSlots(
@@ -239,29 +219,36 @@ void USeinDefaultCommandBrokerResolver::ReassignSlots(
 FSeinFormationLayout USeinDefaultCommandBrokerResolver::ResolveFormationLayout_Implementation(
 	USeinWorldSubsystem* World,
 	const TArray<FSeinEntityHandle>& Members,
-	FFixedVector CurrentCentroid,
-	FFixedQuaternion CurrentFacing,
-	FFixedVector TargetLocation,
+	const FSeinOrderTarget& Target,
 	bool bReassignLateral,
 	bool bReassignDepth)
 {
-	const FFixedQuaternion Facing = ComputeFormationFacing(CurrentCentroid, CurrentFacing, TargetLocation);
-
 	FSeinFormationLayout Layout;
-	Layout.Facing = Facing;
-	Layout.Positions = ResolvePositions(World, Members, TargetLocation, Facing);
+	if (USeinFormation* Formation = ResolveFormation(Target.FormationTag))
+	{
+		// Pluggable formation owns positions + facing. The exact call the preview makes.
+		Layout = Formation->BuildFormation(World, Members, Target);
+	}
+	else
+	{
+		// Fallback: framework-default geometry via this resolver's own ResolvePositions
+		// (a blob unless a subclass overrides it — e.g. the squad resolver's authored
+		// slots). Facing via the shared static now living on USeinFormation.
+		Layout.Facing    = USeinFormation::ComputeFormationFacing(Target.CurrentCentroid, Target.CurrentFacing, Target.Anchor);
+		Layout.Positions = ResolvePositions(World, Members, Target.Anchor, Layout.Facing);
+	}
 
 	// ANTI-CROSS SLOT MATCH. Re-match members to the grid slots so a rotating/translating formation
 	// doesn't make everyone cross to their old INDEX slot (the cross-cutting-paths bug). Per-axis via
 	// the two flags — the default resolver passes its formation-level opt-OUT flags (default both on →
 	// 2-D); the squad resolver passes the squad's per-squad opt-IN flags. Both paths run THROUGH this
 	// shared call, so preview and commit stay byte-identical. Deterministic.
-	ReassignSlots(World, Members, Layout.Positions, Facing, bReassignLateral, bReassignDepth);
+	ReassignSlots(World, Members, Layout.Positions, Layout.Facing, bReassignLateral, bReassignDepth);
 
 	// Hook subclasses (e.g. cover-aware resolvers) to mutate positions before
 	// the layout returns. Empty default impl on the base class — no-op for
 	// non-overriding subclasses.
-	PostProcessPositions(World, Members, Layout.Positions, TargetLocation);
+	PostProcessPositions(World, Members, Layout.Positions, Target.Anchor);
 	return Layout;
 }
 
@@ -363,9 +350,15 @@ FSeinBrokerDispatchPlan USeinDefaultCommandBrokerResolver::ResolveDispatch_Imple
 	// target and lay out per-member positions around the target. Single
 	// entry point shared with the destination preview decals so commit and
 	// preview never drift.
+	FSeinOrderTarget Target;
+	Target.Anchor          = Order.TargetLocation;
+	Target.GuidePoints     = Order.GuidePoints;
+	Target.TargetEntity    = Order.TargetEntity;
+	Target.FormationTag    = Order.FormationTag;
+	Target.CurrentCentroid = Broker->Centroid;
+	Target.CurrentFacing   = Broker->AnchorFacing;
 	const FSeinFormationLayout Layout = ResolveFormationLayout(
-		World, Effective, Broker->Centroid, Broker->AnchorFacing,
-		Order.TargetLocation, bReassignSlotsLateral, bReassignSlotsDepth);
+		World, Effective, Target, bReassignSlotsLateral, bReassignSlotsDepth);
 	Broker->AnchorFacing = Layout.Facing;
 	const TArray<FFixedVector>& Positions = Layout.Positions;
 
@@ -428,73 +421,42 @@ TArray<FFixedVector> USeinDefaultCommandBrokerResolver::ResolvePositions_Impleme
 	FFixedVector Anchor,
 	FFixedQuaternion Facing)
 {
+	// Framework-default geometry: a BLOB — every member shares the one (already
+	// nav-projected) anchor. The AoE/SC2/CoH model; the hard collision floor packs
+	// them into a no-overlap cluster on arrival. This is the fallback used when no
+	// USeinFormation is configured (DefaultFormationClass null). Real spread / shape
+	// is opt-in via a USeinFormation (Grid, Line, custom) selected through
+	// ResolveFormation. Subclasses (e.g. the squad resolver) override this for
+	// authored layouts.
 	TArray<FFixedVector> Out;
-	const int32 N = Members.Num();
-	if (N == 0) return Out;
-
-	// Single-destination default (formation spread is opt-in): every member shares
-	// the ONE projected goal (the already-nav-projected anchor) — the AoE/SC2/CoH
-	// model. The hard collision floor packs them into a no-overlap cluster on
-	// arrival; no destination spread needed. The grid below is the opt-in formation
-	// flavor. Both the destination preview and the commit dispatch call through this
-	// function, so the gate can never split preview from commit.
-	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
-	if (!Settings || !Settings->bFormationSpreadEnabled)
-	{
-		Out.Init(Anchor, N);
-		return Out;
-	}
-
-	Out.Reserve(N);
-
-	// Uniform square-ish grid: compute side length = ceil(sqrt(N)), then iterate
-	// row/column centered on anchor with InterUnitSpacing. Units = UE world cm.
-	const FFixedPoint Spacing = InterUnitSpacing;
-	int32 Side = 1;
-	while (Side * Side < N) ++Side;
-
-	const FFixedPoint HalfExtent = (FFixedPoint::FromInt(Side - 1) * Spacing) / FFixedPoint::Two;
-
-	for (int32 i = 0; i < N; ++i)
-	{
-		const int32 Col = i % Side;
-		const int32 Row = i / Side;
-
-		// Offset in formation-local space (X forward, Y right).
-		const FFixedVector LocalOffset(
-			FFixedPoint::FromInt(Row) * Spacing - HalfExtent,
-			FFixedPoint::FromInt(Col) * Spacing - HalfExtent,
-			FFixedPoint::Zero
-		);
-
-		// Rotate by Facing, translate by Anchor.
-		const FFixedVector WorldOffset = Facing.RotateVector(LocalOffset);
-		FFixedVector SlotPos = Anchor + WorldOffset;
-
-		// Project slot to passable nav cell. Without this, formation grids
-		// spreading off raised platforms / past nav volume edges place
-		// members on impassable terrain — they pathfind to the off-platform
-		// cell via ramps and then steering tries to keep them at the
-		// impassable destination, producing oscillation at ramp corners.
-		// Projection snaps to the nearest walkable cell. Resolver unbound
-		// (tests / nav-less games) → identity, behavior matches pre-projection.
-		// Projection failure → fall back to Anchor (passable by definition,
-		// it's the click cell).
-		if (World && World->NavProjectResolver.IsBound())
-		{
-			FFixedVector Projected;
-			if (World->NavProjectResolver.Execute(SlotPos, Projected))
-			{
-				SlotPos = Projected;
-			}
-			else
-			{
-				SlotPos = Anchor;
-			}
-		}
-
-		Out.Add(SlotPos);
-	}
-
+	Out.Init(Anchor, Members.Num());
 	return Out;
+}
+
+USeinFormation* USeinDefaultCommandBrokerResolver::ResolveFormation(FGameplayTag FormationTag) const
+{
+	TSoftClassPtr<USeinFormation> ClassPtr;
+	if (FormationTag.IsValid())
+	{
+		if (const TSoftClassPtr<USeinFormation>* Found = FormationsByTag.Find(FormationTag))
+		{
+			ClassPtr = *Found;
+		}
+	}
+	if (ClassPtr.IsNull())
+	{
+		ClassPtr = DefaultFormationClass;
+	}
+	if (ClassPtr.IsNull())
+	{
+		return nullptr; // neither resolves → caller uses the blob ResolvePositions fallback
+	}
+
+	UClass* FormationClass = ClassPtr.LoadSynchronous();
+	if (!FormationClass || FormationClass->HasAnyClassFlags(CLASS_Abstract))
+	{
+		return nullptr;
+	}
+	// Stateless formations — invoke on the (mutable) CDO; no per-order state written.
+	return GetMutableDefault<USeinFormation>(FormationClass);
 }

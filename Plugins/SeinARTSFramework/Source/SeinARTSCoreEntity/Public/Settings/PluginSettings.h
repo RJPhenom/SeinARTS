@@ -158,6 +158,26 @@ public:
 		meta = (DisplayName = "Default Broker Resolver Class"))
 	TSoftClassPtr<USeinCommandBrokerResolver> DefaultBrokerResolverClass;
 
+	// ── Destination preview ──
+	// Base-owned destination/formation preview (the per-member decals shown for the
+	// current selection). Cover/Squad extensions augment it (Cover supplies per-cell
+	// quality tags via USeinWorldSubsystem::PreviewQualityProvider). Moved here from
+	// the Cover extension so preview is a base-provided feature.
+
+	/** Actor class the preview subsystem spawns to render the per-member preview
+	 *  decals. Empty → ASeinFormationPreviewActor (framework default). Subclass in
+	 *  Blueprint to author the look (decal material, quality tints). */
+	UPROPERTY(Config, EditAnywhere, Category = "Formation Preview",
+		meta = (DisplayName = "Formation Preview Actor Class",
+				MetaClass = "/Script/SeinARTSFramework.SeinFormationPreviewActor"))
+	FSoftClassPath FormationPreviewActorClass;
+
+	/** Master enable for the destination preview. False = the subsystem exists but
+	 *  renders nothing (e.g. cover-query support without the hover decals). */
+	UPROPERTY(Config, EditAnywhere, Category = "Formation Preview",
+		meta = (DisplayName = "Enable Formation Preview"))
+	bool bEnableFormationPreview = true;
+
 	// DefaultSquadDispatchResolverClass removed — squad dispatch resolver
 	// selection is owned by the SeinARTSSquad extension module. Per-squad
 	// override via FSeinSquadComponent::DispatchResolverClass.
@@ -507,17 +527,6 @@ public:
 				EditCondition = "IsUsingShippedAStar",
 				EditConditionHides))
 	int32 NavProjectionMaxRingRadius;
-
-	/** **Formation spread (opt-in).** When OFF (default), a group move order sends
-	 *  every selected unit to the SAME projected destination — the AoE/SC2/CoH
-	 *  model — and the hard collision floor packs them into a no-overlap cluster on
-	 *  arrival. When ON, the broker fans members out across a grid formation around
-	 *  the target. All the formation plumbing (grid layout, anti-cross slot match,
-	 *  destination preview) stays wired either way; this only switches the DEFAULT
-	 *  dispatch. Real per-unit-class / per-order formation modes layer on top later. */
-	UPROPERTY(Config, EditAnywhere, Category = "Movement",
-		meta = (DisplayName = "Formation Spread Enabled"))
-	bool bFormationSpreadEnabled = false;
 
 	// ── Local avoidance (FSeinAvoidanceSystem) ──
 	// Model-shape constants shared by ALL movers (the avoidance model's "feel").

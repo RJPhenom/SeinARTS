@@ -16,11 +16,239 @@
 #include "Components/SeinNavigationComponent.h"
 #include "Components/SeinExtentsComponent.h"
 #include "Components/SeinExtentsHelpers.h"  // SeinExtentsHelpers::BoundingRadius
+#include "Movement/SeinMoverHandle.h"
+#include "StructUtils/InstancedStruct.h"
+#include "UObject/UnrealType.h"
 
 #if UE_ENABLE_DEBUG_DRAWING
 #include "Debug/SeinDebugDrawCull.h"
 #include "DrawDebugHelpers.h"
 #endif
+
+// ======================================================================================
+// BP-authoring seam (Movement_Mode_Authoring_Plan.md). Tick(Ctx) is the sealed sim entry;
+// it points a reusable handle at the live context and dispatches to the BP-overridable
+// BP_Tick. The default BP_Tick is the RTS integration loop (hoisted verbatim from the
+// former USeinBasicUnitMovement::Tick), with its two decisions delegated to the
+// ComputeDesiredSpeed / ComputeSteer hooks whose defaults reproduce the original inline
+// logic — so a BasicUnit-class unit stays BIT-IDENTICAL.
+// ======================================================================================
+
+bool USeinMovement::Tick(const FSeinMovementContext& Ctx)
+{
+	if (!CachedHandle)
+	{
+		CachedHandle = NewObject<USeinMoverHandle>(this);
+	}
+	CachedHandle->SetContext(&Ctx);
+	const bool bArrived = BP_Tick(CachedHandle);
+	CachedHandle->SetContext(nullptr);  // never let the borrowed context escape the dispatch
+	return bArrived;
+}
+
+void USeinMovement::OnMoveBegin(const FSeinMovementContext& Ctx)
+{
+	// Per-unit tuning hydrate: copy MovementClassData into matching instance vars so a
+	// BP mode's graph reads its own (per-unit-correct) variables. No-op without tuning.
+	if (Ctx.MovementData) { HydrateTuningFromData(Ctx.MovementData->MovementClassData); }
+
+	if (!CachedHandle) { CachedHandle = NewObject<USeinMoverHandle>(this); }
+	CachedHandle->SetContext(&Ctx);
+	BP_OnMoveBegin(CachedHandle);
+	CachedHandle->SetContext(nullptr);
+}
+
+void USeinMovement::OnMoveEnd(FSeinEntity& Entity)
+{
+	if (!CachedHandle) { CachedHandle = NewObject<USeinMoverHandle>(this); }
+	CachedHandle->SetEntityOnly(&Entity);
+	BP_OnMoveEnd(CachedHandle);
+	CachedHandle->SetEntityOnly(nullptr);
+}
+
+void USeinMovement::TickIdle(const FSeinMovementContext& Ctx)
+{
+	if (!CachedHandle) { CachedHandle = NewObject<USeinMoverHandle>(this); }
+	CachedHandle->SetContext(&Ctx);
+	BP_TickIdle(CachedHandle);
+	CachedHandle->SetContext(nullptr);
+}
+
+void USeinMovement::HydrateTuningFromData(const FInstancedStruct& Tuning)
+{
+	const UScriptStruct* SS = Tuning.GetScriptStruct();
+	if (!SS) return;
+	const uint8* Src = Tuning.GetMemory();
+	if (!Src) return;
+
+	// UDS fields carry GUID-mangled FNames; GetAuthoredNameForField (a UStruct virtual that
+	// UUserDefinedStruct overrides) yields the friendly name, so it lines up with the BP
+	// mode's clean variable names. Native structs return the plain field name.
+	UClass* Cls = GetClass();
+	for (TFieldIterator<FProperty> It(SS); It; ++It)
+	{
+		const FProperty* SrcProp = *It;
+		const FName MatchName(*SS->GetAuthoredNameForField(SrcProp));
+		FProperty* DstProp = FindFProperty<FProperty>(Cls, MatchName);
+		if (!DstProp || !DstProp->SameType(SrcProp)) continue;
+		DstProp->CopyCompleteValue(
+			DstProp->ContainerPtrToValuePtr<void>(this),
+			SrcProp->ContainerPtrToValuePtr<void>(Src));
+	}
+}
+
+FFixedPoint USeinMovement::ComputeDesiredSpeed_Implementation(USeinMoverHandle* Mover)
+{
+	const FSeinMovementContext* C = Mover ? Mover->GetContext() : nullptr;
+	return C ? EffectiveTopSpeed(*C) : FFixedPoint::Zero;
+}
+
+FFixedPoint USeinMovement::ComputeSteer_Implementation(USeinMoverHandle* Mover, const FFixedVector& DesiredMoveDir, FFixedPoint CurrentYaw)
+{
+	if (!Mover) return CurrentYaw;
+	// Face-velocity: rotate toward the moved direction, clamped by TurnRate·dt.
+	const FFixedPoint DesiredYaw   = SeinMath::Atan2(DesiredMoveDir.Y, DesiredMoveDir.X);
+	const FFixedPoint YawDelta     = ShortestAngleDelta(CurrentYaw, DesiredYaw);
+	const FFixedPoint MaxTurn      = Mover->GetTurnRate() * Mover->GetDeltaTime();
+	const FFixedPoint AppliedTurn  = ClampFP(YawDelta, -MaxTurn, MaxTurn);
+	return CurrentYaw + AppliedTurn;
+}
+
+bool USeinMovement::BP_Tick_Implementation(USeinMoverHandle* Mover)
+{
+	if (!Mover) return true;
+	const FSeinMovementContext* CtxPtr = Mover->GetContext();
+	if (!CtxPtr) return true;
+	const FSeinMovementContext& Ctx = *CtxPtr;
+
+	if (!Ctx.MovementData) return true;
+
+	FSeinEntity& Entity = Ctx.Entity;
+	FSeinMovementComponent& MovementData = *Ctx.MovementData;
+	const FSeinPath& Path = Ctx.Path;
+	int32& CurrentWaypointIndex = Ctx.CurrentWaypointIndex;
+	const FFixedPoint AcceptanceRadiusSq = Ctx.AcceptanceRadiusSq;
+	const FFixedPoint DeltaTime = Ctx.DeltaTime;
+	USeinNavigation* Nav = Ctx.Nav;
+
+	const int32 N = Path.Waypoints.Num();
+	if (N == 0) return true;
+
+	const FFixedVector InitialPos = Entity.Transform.GetLocation();
+
+	// Recover the current scalar speed from the persisted velocity vector (forward-
+	// only: magnitude IS the scalar speed). Velocity carries momentum across ticks
+	// AND across new orders.
+	const FFixedPoint EntrySpeed = MovementData.Velocity.Size();
+	FFixedPoint CurrentSpeed = EntrySpeed;
+
+	// Kinematic arrival cap: fastest we can still brake to rest at the ACCEPTANCE
+	// RING given Deceleration (v² = 2·a·d). Below TopSpeed only inside the brake zone.
+	FFixedVector ToFinal = Path.Waypoints[N - 1] - InitialPos;
+	ToFinal.Z = FFixedPoint::Zero;
+	const FFixedPoint DistToFinal = ToFinal.Size();
+	const FFixedPoint Acceptance = SeinMath::Sqrt(AcceptanceRadiusSq);
+	const FFixedPoint BrakeDist = (DistToFinal > Acceptance) ? (DistToFinal - Acceptance) : FFixedPoint::Zero;
+	const FFixedPoint ArrivalCap = KinematicArrivalSpeedCap(BrakeDist, MovementData.Deceleration);
+
+	// HOOK: cruise target (default = EffectiveTopSpeed). Then clamp to the arrival cap.
+	FFixedPoint TargetSpeed = ComputeDesiredSpeed(Mover);
+	if (ArrivalCap < TargetSpeed) TargetSpeed = ArrivalCap;
+
+	// Smoothstep the scalar speed toward the target — accel growing, decel shrinking.
+	CurrentSpeed = StepSpeedToward(CurrentSpeed, TargetSpeed,
+		MovementData.Acceleration, MovementData.Deceleration, DeltaTime);
+
+	FFixedVector Pos = InitialPos;
+	FFixedPoint RemainingStep = CurrentSpeed * DeltaTime;
+	bool bAvoidanceApplied = false;
+
+	// Stable max-step reference for intermediate-waypoint arrival (raw TopSpeed, so a
+	// slowed tick never fails to consume a waypoint it has effectively reached).
+	const FFixedPoint OneStep = MovementData.TopSpeed * DeltaTime;
+
+	while (RemainingStep > FFixedPoint::Zero && CurrentWaypointIndex < N)
+	{
+		const FFixedVector Target = Path.Waypoints[CurrentWaypointIndex];
+		FFixedVector Delta = Target - Pos;
+		Delta.Z = FFixedPoint::Zero;
+		const FFixedPoint DistSq = Delta.SizeSquared();
+
+		const bool bIsFinalWaypoint = (CurrentWaypointIndex == N - 1);
+		const FFixedPoint ArriveRadiusSq = bIsFinalWaypoint ? AcceptanceRadiusSq : OneStep * OneStep;
+
+		if (DistSq <= ArriveRadiusSq)
+		{
+			if (bIsFinalWaypoint)
+			{
+				// Arrived within the acceptance ring — STOP IN PLACE (no snap-to-exact).
+				++CurrentWaypointIndex;
+				break;
+			}
+			// Intermediate waypoint: snap-and-advance (small, on-path) then keep stepping.
+			Pos.X = Target.X;
+			Pos.Y = Target.Y;
+			++CurrentWaypointIndex;
+			continue;
+		}
+
+		const FFixedPoint Dist = Delta.Size();
+		const FFixedPoint StepLen = (Dist < RemainingStep) ? Dist : RemainingStep;
+
+		FFixedVector Dir = FFixedVector::GetSafeNormal(Delta);
+		// Local avoidance — bend only this tick's first step (the primary steering dir).
+		if (!bAvoidanceApplied) { Dir = ApplyAvoidanceSteer(Ctx, Dir); bAvoidanceApplied = true; }
+
+		Pos.X = Pos.X + Dir.X * StepLen;
+		Pos.Y = Pos.Y + Dir.Y * StepLen;
+
+		RemainingStep = RemainingStep - StepLen;
+	}
+
+	Pos = ResolveNavCollision(InitialPos, Pos, Nav);
+
+	ApplyGroundSnapAndAltitude(Pos, Ctx.MovementData, Nav, DeltaTime);
+
+	Entity.Transform.SetLocation(Pos);
+
+	const bool bArrived = (CurrentWaypointIndex >= N);
+
+	// Smooth turn from the actual moved delta (velocity-based → a blocked tick holds facing).
+	FFixedVector MoveDelta = Pos - InitialPos;
+	MoveDelta.Z = FFixedPoint::Zero;
+	FFixedVector MoveDir = FFixedVector::ZeroVector;
+	if (MoveDelta.SizeSquared() > FFixedPoint::Epsilon)
+	{
+		MoveDir = FFixedVector::GetSafeNormal(MoveDelta);
+		const FFixedPoint CurrentYaw = YawFromRotation(Entity.Transform.Rotation);
+		// HOOK: facing yaw after this tick's turn (default = face-velocity clamp).
+		const FFixedPoint FinalYaw = ComputeSteer(Mover, MoveDir, CurrentYaw);
+		// Rate-limited pitch/roll smoothing (60°/sec) over the slope under the new facing.
+		const FFixedPoint TargetPitch = ComputeSlopePitch(Pos, FinalYaw, Nav);
+		const FFixedPoint TargetRoll  = ComputeSlopeRoll(Pos, FinalYaw, Nav);
+		const FFixedPoint OrientRate  = FFixedPoint::Pi / FFixedPoint::FromInt(3);
+		MovementData.SmoothedPitch = SmoothAngleToward(MovementData.SmoothedPitch, TargetPitch, OrientRate, DeltaTime);
+		MovementData.SmoothedRoll  = SmoothAngleToward(MovementData.SmoothedRoll,  TargetRoll,  OrientRate, DeltaTime);
+		Entity.Transform.Rotation = YawPitchRoll(FinalYaw, MovementData.SmoothedPitch, MovementData.SmoothedRoll);
+	}
+
+	// Persist world-frame velocity at the ramped scalar speed (momentum across orders).
+	if (bArrived)
+	{
+		MovementData.Velocity = FFixedVector::ZeroVector;
+	}
+	else if (MoveDir.SizeSquared() > FFixedPoint::Epsilon)
+	{
+		MovementData.Velocity = FFixedVector(MoveDir.X * CurrentSpeed, MoveDir.Y * CurrentSpeed, FFixedPoint::Zero);
+	}
+	else
+	{
+		const FFixedVector Forward = Entity.Transform.Rotation.RotateVector(FFixedVector::ForwardVector);
+		MovementData.Velocity = FFixedVector(Forward.X * CurrentSpeed, Forward.Y * CurrentSpeed, FFixedPoint::Zero);
+	}
+
+	return bArrived;
+}
 
 FFixedPoint USeinMovement::ShortestAngleDelta(FFixedPoint From, FFixedPoint To)
 {
@@ -549,8 +777,13 @@ void USeinMovement::SnapToGroundImmediate(
 	Entity.Transform.Rotation = YawPitchRoll(Yaw, Pitch, Roll);
 }
 
-void USeinMovement::TickIdle(const FSeinMovementContext& Ctx)
+void USeinMovement::BP_TickIdle_Implementation(USeinMoverHandle* Mover)
 {
+	if (!Mover) return;
+	const FSeinMovementContext* CtxPtr = Mover->GetContext();
+	if (!CtxPtr) return;
+	const FSeinMovementContext& Ctx = *CtxPtr;
+
 	if (!Ctx.MovementData) return;
 
 	FSeinEntity& Entity = Ctx.Entity;

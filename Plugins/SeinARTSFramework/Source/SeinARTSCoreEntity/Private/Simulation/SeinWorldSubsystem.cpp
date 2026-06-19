@@ -709,6 +709,8 @@ void USeinWorldSubsystem::ProcessCommands()
 			Order.TargetEntity = Cmd.TargetEntity;
 			Order.TargetLocation = Cmd.TargetLocation;
 			Order.FormationEnd = Payload->FormationEnd;
+			Order.GuidePoints = Payload->GuidePoints;
+			Order.FormationTag = Payload->FormationTag;
 			Order.TargeterPoints = Payload->TargeterPoints;
 			Order.PredeterminedAbilityTag = Payload->PredeterminedAbilityTag;
 
@@ -745,6 +747,16 @@ void USeinWorldSubsystem::ProcessCommands()
 					if (NavProjectResolver.Execute(Order.FormationEnd, ProjectedEnd))
 					{
 						Order.FormationEnd = ProjectedEnd;
+					}
+				}
+				// Gesture guide path: project each point so the formation lays out on
+				// reachable cells (same contract as TargetLocation / FormationEnd).
+				for (FFixedVector& GuidePoint : Order.GuidePoints)
+				{
+					FFixedVector ProjectedGuide;
+					if (NavProjectResolver.Execute(GuidePoint, ProjectedGuide))
+					{
+						GuidePoint = ProjectedGuide;
 					}
 				}
 			}
@@ -796,7 +808,7 @@ void USeinWorldSubsystem::ProcessCommands()
 				// commit for multi-squad moves. Single broker = click point.
 				const TArray<FFixedVector> BrokerAnchors =
 					USeinCommandBrokerBPFL::ComputeMultiBrokerAnchors(
-						*this, PersistentBrokerEntities, Order.TargetLocation);
+						*this, PersistentBrokerEntities, Order.TargetLocation, Order.GuidePoints);
 
 				for (int32 i = 0; i < PersistentBrokerEntities.Num(); ++i)
 				{

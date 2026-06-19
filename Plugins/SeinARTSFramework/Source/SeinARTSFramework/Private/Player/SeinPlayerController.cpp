@@ -7,6 +7,7 @@
 #include "Player/SeinPlayerController.h"
 #include "Player/SeinCameraPawn.h"
 #include "Player/SeinTargeterSubsystem.h"
+#include "Player/SeinOrderGesture.h"
 #include "Input/SeinInputConfig.h"
 #include "Actor/SeinActor.h"
 #include "Actor/SeinEntityComponent.h"
@@ -411,12 +412,15 @@ void ASeinPlayerController::OnCommandStarted(const FInputActionValue& Value)
 		CommandDragStart = Hit.ImpactPoint;
 		CommandDragCurrent = CommandDragStart;
 		CommandTargetActor = GetSeinActorFromHit(Hit);
+		CommandDragPath.Reset();
+		CommandDragPath.Add(CommandDragStart);
 	}
 	else
 	{
 		CommandDragStart = FVector::ZeroVector;
 		CommandDragCurrent = FVector::ZeroVector;
 		CommandTargetActor = nullptr;
+		CommandDragPath.Reset();
 	}
 }
 
@@ -456,16 +460,31 @@ void ASeinPlayerController::OnCommandReleased(const FInputActionValue& Value)
 		return;
 	}
 
+	// Interpret the gesture (render-side, issuing client only) into the order's guide
+	// + nominated formation. The result is baked into the lockstep command, so every
+	// client replays the same order. A click yields an empty guide → the resolver's
+	// default formation (a blob).
+	FSeinOrderGestureInput GestureInput;
+	GestureInput.bIsDrag    = bIsCommandDragging;
+	GestureInput.StartWorld = CommandDragStart;
+	GestureInput.EndWorld   = FinalLocation;
+	GestureInput.bShiftHeld = bShiftHeld;
 	if (bIsCommandDragging)
 	{
-		// Formation drag order: start → end defines formation line
-		IssueSmartCommandEx(CommandDragStart, TargetActor, bShiftHeld, FinalLocation);
+		// Terminate the sampled path at the true release point.
+		if (CommandDragPath.Num() == 0 || !CommandDragPath.Last().Equals(FinalLocation))
+		{
+			CommandDragPath.Add(FinalLocation);
+		}
+		GestureInput.PathWorld = CommandDragPath;
 	}
-	else
-	{
-		// Simple click command
-		IssueSmartCommandEx(FinalLocation, TargetActor, bShiftHeld, FVector::ZeroVector);
-	}
+
+	USeinOrderGesture* Gesture = ResolveOrderGesture();
+	const FSeinOrderGestureResult Order = Gesture->BuildOrder(GestureInput);
+
+	// Anchor = drag start for a drag (the formation builds from there), else the click point.
+	const FVector Anchor = bIsCommandDragging ? CommandDragStart : FinalLocation;
+	IssueSmartCommandEx(Anchor, TargetActor, bShiftHeld, Order.GuidePoints, Order.FormationTag);
 
 	bIsCommandDragging = false;
 }
@@ -1082,14 +1101,48 @@ FGameplayTagContainer ASeinPlayerController::BuildCommandContext_Implementation(
 	return Context;
 }
 
+USeinOrderGesture* ASeinPlayerController::ResolveOrderGesture() const
+{
+	UClass* Cls = OrderGestureClass.IsNull() ? nullptr : OrderGestureClass.LoadSynchronous();
+	if (!Cls || Cls->HasAnyClassFlags(CLASS_Abstract)) { Cls = USeinOrderGesture::StaticClass(); }
+	return GetMutableDefault<USeinOrderGesture>(Cls);
+}
+
+void ASeinPlayerController::BuildPreviewOrder(FVector CursorWorld, FVector& OutAnchor,
+	TArray<FVector>& OutGuidePoints, FGameplayTag& OutFormationTag) const
+{
+	// Mirror OnCommandReleased's gesture build so the preview matches the commit.
+	FSeinOrderGestureInput GestureInput;
+	GestureInput.bIsDrag    = bIsCommandDragging;
+	GestureInput.StartWorld = bIsCommandDragging ? CommandDragStart : CursorWorld;
+	GestureInput.EndWorld   = CursorWorld;
+	GestureInput.bShiftHeld = bShiftHeld;
+	if (bIsCommandDragging)
+	{
+		// Copy the live path + terminate at the current cursor (commit terminates at
+		// the release point); we must not mutate the PC's CommandDragPath here.
+		GestureInput.PathWorld = CommandDragPath;
+		if (GestureInput.PathWorld.Num() == 0 || !GestureInput.PathWorld.Last().Equals(CursorWorld))
+		{
+			GestureInput.PathWorld.Add(CursorWorld);
+		}
+	}
+
+	const FSeinOrderGestureResult Order = ResolveOrderGesture()->BuildOrder(GestureInput);
+	OutAnchor       = bIsCommandDragging ? CommandDragStart : CursorWorld;
+	OutGuidePoints  = Order.GuidePoints;
+	OutFormationTag = Order.FormationTag;
+}
+
 void ASeinPlayerController::IssueSmartCommand(const FVector& WorldLocation, ASeinActor* TargetActor)
 {
-	// Thin delegate to the Ex form — no queue, no formation endpoint.
-	IssueSmartCommandEx(WorldLocation, TargetActor, /*bQueue=*/false, FVector::ZeroVector);
+	// Thin delegate to the Ex form — no queue, no formation guide.
+	IssueSmartCommandEx(WorldLocation, TargetActor, /*bQueue=*/false, TArray<FVector>(), FGameplayTag());
 }
 
 void ASeinPlayerController::IssueSmartCommandEx(
-	const FVector& WorldLocation, ASeinActor* TargetActor, bool bQueue, const FVector& FormationEnd)
+	const FVector& WorldLocation, ASeinActor* TargetActor, bool bQueue,
+	const TArray<FVector>& GuidePoints, FGameplayTag FormationTag)
 {
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem();
 	if (!Subsystem)
@@ -1127,9 +1180,12 @@ void ASeinPlayerController::IssueSmartCommandEx(
 			: FSeinEntityHandle::Invalid();
 
 	const FFixedVector FixedLocation = FFixedVector::FromVector(WorldLocation);
-	const FFixedVector FixedFormationEnd = FormationEnd.IsNearlyZero()
-		? FFixedVector()
-		: FFixedVector::FromVector(FormationEnd);
+	TArray<FFixedVector> FixedGuidePoints;
+	FixedGuidePoints.Reserve(GuidePoints.Num());
+	for (const FVector& GuidePoint : GuidePoints)
+	{
+		FixedGuidePoints.Add(FFixedVector::FromVector(GuidePoint));
+	}
 
 	// ONE unified path (DESIGN §5 line 325 "Wraps even size-1 selections"). The PC
 	// emits a single BrokerOrder carrying the raw click context; the broker
@@ -1155,7 +1211,8 @@ void ASeinPlayerController::IssueSmartCommandEx(
 
 	FSeinBrokerOrderPayload Payload;
 	Payload.CommandContext = Context;
-	Payload.FormationEnd = FixedFormationEnd;
+	Payload.GuidePoints = FixedGuidePoints;
+	Payload.FormationTag = FormationTag;
 
 	FSeinCommand BrokerCmd;
 	BrokerCmd.PlayerID = SeinPlayerID;
@@ -1308,6 +1365,14 @@ void ASeinPlayerController::UpdateCommandDrag()
 		if (TraceUnderCursor(Hit))
 		{
 			CommandDragCurrent = Hit.ImpactPoint;
+			// Accumulate the drag path, sampled by cursor distance travelled so the
+			// guide is evenly spaced regardless of drag speed (a slow drag doesn't spam
+			// points). The gesture decides whether to use the whole path or endpoints.
+			if (CommandDragPath.Num() == 0 ||
+				FVector::Dist(CommandDragPath.Last(), CommandDragCurrent) >= CommandDragSampleDistance)
+			{
+				CommandDragPath.Add(CommandDragCurrent);
+			}
 		}
 	}
 }

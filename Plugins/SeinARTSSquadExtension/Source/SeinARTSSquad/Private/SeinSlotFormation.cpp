@@ -1,0 +1,103 @@
+/**
+ * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
+ * @file    SeinSlotFormation.cpp
+ * @brief   Per-slot authored-offset layout (ported from the squad dispatch
+ *          resolver's ResolvePositions override).
+ */
+
+#include "SeinSlotFormation.h"
+#include "Components/SeinSquadComponent.h"
+#include "Components/SeinSquadMemberComponent.h"
+#include "Simulation/SeinWorldSubsystem.h"
+
+FSeinFormationLayout USeinSlotFormation::BuildFormation_Implementation(
+	USeinWorldSubsystem* World,
+	const TArray<FSeinEntityHandle>& Members,
+	const FSeinOrderTarget& Target)
+{
+	FSeinFormationLayout Layout;
+	const int32 N = Members.Num();
+
+	// Facing: a right-click-drag ORIENTS the squad. It faces the drag perpendicular by
+	// fixed handedness (USeinFormation::DragFacingDir); the drag DIRECTION is the sole
+	// authority, so the squad's own position/centroid does NOT influence it and every
+	// squad in a multi-squad drag faces alike. No drag: keep the move-target facing.
+	Layout.Facing = ComputeFormationFacing(Target.CurrentCentroid, Target.CurrentFacing, Target.Anchor);
+	const FFixedVector DragFace = DragFacingDir(Target.GuidePoints);
+	if (!DragFace.IsNearlyZero())
+	{
+		// Face FORWARD over the drag line (the NEGATED perpendicular) so the squad's authored
+		// body extends BEHIND the line: front rank on the line, depth back toward where the
+		// units came from. With the raw perpendicular the squad faced INTO its own body and the
+		// rear rank landed in front of the line. Depth side now matches the loose box.
+		Layout.Facing = FacingFromDirection(FFixedVector::ZeroVector - DragFace);
+	}
+
+	if (N == 0 || !World)
+	{
+		Layout.Positions.Init(Target.Anchor, N);
+		return Layout;
+	}
+
+	const FFixedVector Anchor = Target.Anchor;
+	const FFixedQuaternion Facing = Layout.Facing;
+	Layout.Positions.Reserve(N);
+
+	// Per member: resolve its slot via SquadEntity -> FSeinSquadComponent, take the
+	// authored OffsetTransform (preferring the canonical SlotIndex; SlotTag fallback
+	// for legacy data — a SHARED tag would collapse members onto slot 0), rotate by
+	// facing, translate by the anchor, nav-project. Members whose slot can't be
+	// resolved get the anchor (a blob placeholder).
+	bool bAnyAuthoredOffset = false;
+	int32 SlotLookupFailures = 0;
+	for (int32 i = 0; i < N; ++i)
+	{
+		const FSeinEntityHandle Member = Members[i];
+		const FSeinSquadMemberComponent* MemberData = World->GetComponent<FSeinSquadMemberComponent>(Member);
+		if (!MemberData || !MemberData->SquadEntity.IsValid())
+		{
+			Layout.Positions.Add(Anchor);
+			++SlotLookupFailures;
+			continue;
+		}
+
+		const FSeinSquadComponent* Squad = World->GetComponent<FSeinSquadComponent>(MemberData->SquadEntity);
+		if (!Squad)
+		{
+			Layout.Positions.Add(Anchor);
+			++SlotLookupFailures;
+			continue;
+		}
+
+		int32 SlotIdx = MemberData->SlotIndex;
+		if (SlotIdx == INDEX_NONE || !Squad->Slots.IsValidIndex(SlotIdx))
+		{
+			SlotIdx = Squad->IndexOfSlotByTag(MemberData->SlotTag);
+		}
+		if (SlotIdx == INDEX_NONE)
+		{
+			Layout.Positions.Add(Anchor);
+			++SlotLookupFailures;
+			continue;
+		}
+
+		const FFixedVector LocalOffset = Squad->Slots[SlotIdx].OffsetTransform.GetLocation();
+		if (!LocalOffset.IsNearlyZero())
+		{
+			bAnyAuthoredOffset = true;
+		}
+		const FFixedVector WorldOffset = Facing.RotateVector(LocalOffset);
+		Layout.Positions.Add(ProjectToNavigable(World, Anchor + WorldOffset, Anchor));
+	}
+
+	// Unauthored squad: every member resolved a slot but every offset is identity.
+	// Blob at the anchor (matches pre-refactor: the squad fell back to the base
+	// resolver's blob). Author per-slot OffsetTransforms on FSeinSquadComponent::Slots
+	// for a real layout.
+	if (!bAnyAuthoredOffset && SlotLookupFailures == 0 && N > 1)
+	{
+		Layout.Positions.Init(Anchor, N);
+	}
+
+	return Layout;
+}

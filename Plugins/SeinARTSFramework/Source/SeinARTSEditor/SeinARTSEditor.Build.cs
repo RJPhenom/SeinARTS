@@ -22,6 +22,7 @@ public class SeinARTSEditor : ModuleRules
             "KismetCompiler",
             "GraphEditor",
             "BlueprintGraph",
+            "DataValidation",      // movement-mode determinism validator (UEditorValidatorBase)
             "EditorStyle",
             "Projects",
             "PropertyEditor",

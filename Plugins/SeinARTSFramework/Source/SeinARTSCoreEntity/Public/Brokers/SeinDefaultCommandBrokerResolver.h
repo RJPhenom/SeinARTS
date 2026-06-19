@@ -20,16 +20,33 @@
 #include "Brokers/SeinCommandBrokerResolver.h"
 #include "SeinDefaultCommandBrokerResolver.generated.h"
 
+class USeinFormation;
+
 UCLASS(ClassGroup = (SeinARTS), meta = (DisplayName = "Default Command Broker Resolver"))
 class SEINARTSCOREENTITY_API USeinDefaultCommandBrokerResolver : public USeinCommandBrokerResolver
 {
 	GENERATED_BODY()
 
 public:
-	/** World-space spacing between units in the uniform grid formation. Scale in
-	 *  UE world units (cm). 150 ≈ one infantryman's personal-space radius. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Broker|Formation")
-	FFixedPoint InterUnitSpacing = FFixedPoint::FromInt(150);
+	USeinDefaultCommandBrokerResolver();
+
+	/** Default formation for this resolver's moves when the order nominates no
+	 *  FormationTag (or the tag isn't in FormationsByTag). Null → the resolver's
+	 *  ResolvePositions fallback (a blob — every member shares the destination),
+	 *  which is the framework default. Point at USeinGridFormation, a custom
+	 *  formation, etc. to change the no-gesture layout. (Replaced the removed
+	 *  bFormationSpreadEnabled bool: "spread" is now "pick a spreading formation".) */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Broker|Formation",
+		meta = (DisplayName = "Default Formation Class"))
+	TSoftClassPtr<USeinFormation> DefaultFormationClass;
+
+	/** Optional map of gesture-nominated formation tag → formation class. The order
+	 *  gesture (e.g. a right-click-drag) stamps an FSeinOrderTarget::FormationTag;
+	 *  the resolver looks it up here, falling back to DefaultFormationClass. Lets a
+	 *  project bind "drag = line", "alt-drag = column", etc. without code. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Broker|Formation",
+		meta = (DisplayName = "Formations By Tag"))
+	TMap<FGameplayTag, TSoftClassPtr<USeinFormation>> FormationsByTag;
 
 	/** Formation-level slot RE-MATCH on the LATERAL (left/right) axis. OPT-OUT, default true.
 	 *  When a non-squad selection moves, members are re-matched to the grid slots by left/right rank
@@ -71,32 +88,18 @@ public:
 	virtual FSeinFormationLayout ResolveFormationLayout_Implementation(
 		USeinWorldSubsystem* World,
 		const TArray<FSeinEntityHandle>& Members,
-		FFixedVector CurrentCentroid,
-		FFixedQuaternion CurrentFacing,
-		FFixedVector TargetLocation,
+		const FSeinOrderTarget& Target,
 		bool bReassignLateral,
 		bool bReassignDepth) override;
 
-	/**
-	 * Compute the formation's anchor-facing for a move/attack order.
-	 *
-	 * Facing ALWAYS rotates the formation so its forward axis points from
-	 * `CurrentCentroid` → `TargetLocation` — every move, including a straight 180°
-	 * reverse; the formation pivots to face where it's going. (Move to where the
-	 * formation already stands → keeps `CurrentFacing` rather than degenerating
-	 * to identity.)
-	 *
-	 * Pure compute — no world state read or written. Static so preview consumers
-	 * (no resolver instance) can call it directly without instantiating.
-	 */
-	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "SeinARTS|Broker|Formation",
-		meta = (DisplayName = "Compute Formation Facing"))
-	static FFixedQuaternion ComputeFormationFacing(
-		FFixedVector CurrentCentroid,
-		FFixedQuaternion CurrentFacing,
-		FFixedVector TargetLocation);
-
 protected:
+	/** Resolve the USeinFormation that lays out this order. Looks up `FormationTag`
+	 *  in FormationsByTag, falls back to DefaultFormationClass, and returns the class
+	 *  CDO (formations are stateless / pure compute — invoked on the CDO, never
+	 *  instanced). Null when neither resolves → the caller uses the ResolvePositions
+	 *  blob fallback. Loads the soft class synchronously (loader-cached). */
+	USeinFormation* ResolveFormation(FGameplayTag FormationTag) const;
+
 	/** Re-match members to formation slots so a rotating/translating formation doesn't make units
 	 *  cross paths. Per-axis, driven by the two designer flags:
 	 *    - bLateral only → 1-D rank match on the formation RIGHT axis (preserve left/right order;

@@ -85,4 +85,12 @@ namespace SeinARTSTags
 
 	// --- Environment ---
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Environment_Default, "SeinARTS.Environment.Default", "Default terrain environment tag (designers extend the namespace with biome/surface tags).");
+
+	// --- Formation ---
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Formation,      "SeinARTS.Formation",      "Root for formation-identity tags (order gestures nominate one; the broker resolver maps to a USeinFormation)");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Formation_Box,  "SeinARTS.Formation.Box",  "Default right-click-drag formation: a Total-War rank box (front width = the drag, depth fills to fit N)");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Formation_Line,   "SeinARTS.Formation.Line",   "A true single-rank line spread along the drag (option; Box is the drag default)");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Formation_Column, "SeinARTS.Formation.Column", "Single-file column (1 wide, N deep) trailing behind the lead");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Formation_Wedge,  "SeinARTS.Formation.Wedge",  "Wedge / arrowhead: tip forward, arms fanning back-left and back-right");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Formation_Ring,   "SeinARTS.Formation.Ring",   "Defensive ring: members spaced evenly around a circle about the anchor");
 }

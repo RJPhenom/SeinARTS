@@ -7,11 +7,8 @@
 #include "Settings/SeinARTSCoverSettings.h"
 
 USeinARTSCoverSettings::USeinARTSCoverSettings()
-	// FormationPreviewActorClass empty by default (subsystem falls back to the
-	// framework C++ class). Preview enabled on; flip false to ship the cover
-	// module compiled in but the hover decals off. CoverSnapRadius 500 ≈ 5m.
-	: bEnableFormationPreview(true)
-	, CoverSnapRadius(FFixedPoint::FromInt(500))
+	// CoverSnapRadius 500 ≈ 5m. (Formation-preview settings moved to USeinARTSCoreSettings.)
+	: CoverSnapRadius(FFixedPoint::FromInt(500))
 {
 }
 

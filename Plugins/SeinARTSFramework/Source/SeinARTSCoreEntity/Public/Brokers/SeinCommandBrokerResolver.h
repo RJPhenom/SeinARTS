@@ -133,17 +133,13 @@ public:
 	FSeinFormationLayout ResolveFormationLayout(
 		USeinWorldSubsystem* World,
 		const TArray<FSeinEntityHandle>& Members,
-		FFixedVector CurrentCentroid,
-		FFixedQuaternion CurrentFacing,
-		FFixedVector TargetLocation,
+		const FSeinOrderTarget& Target,
 		bool bReassignLateral,
 		bool bReassignDepth);
 	virtual FSeinFormationLayout ResolveFormationLayout_Implementation(
 		USeinWorldSubsystem* World,
 		const TArray<FSeinEntityHandle>& Members,
-		FFixedVector CurrentCentroid,
-		FFixedQuaternion CurrentFacing,
-		FFixedVector TargetLocation,
+		const FSeinOrderTarget& Target,
 		bool bReassignLateral,
 		bool bReassignDepth);
 

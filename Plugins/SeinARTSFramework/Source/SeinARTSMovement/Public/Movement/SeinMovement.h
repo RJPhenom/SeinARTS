@@ -43,6 +43,7 @@ class USeinNavigation;
 class USeinNavigationSubsystem;
 class USeinWorldSubsystem;
 class UScriptStruct;
+class USeinMoverHandle;
 struct FSeinEntity;
 struct FSeinMovementComponent;
 struct FSeinNavigationComponent;
@@ -121,6 +122,11 @@ class SEINARTSMOVEMENT_API USeinMovement : public UObject
 {
 	GENERATED_BODY()
 
+	// The BP-facing handle wraps this instance's per-tick context and re-exposes the
+	// protected steering toolkit as Tier-2 power-route nodes (bound to the context), so
+	// the toolkit stays out of the public C++ API. See USeinMoverHandle.
+	friend class USeinMoverHandle;
+
 public:
 
 	/** Called once when a MoveTo action resolves a path (before the first
@@ -129,19 +135,69 @@ public:
 	 *  decisions (e.g. auto-reverse latch) that depend on neighbor queries
 	 *  or world services. MoveData is non-const so subclasses can read
 	 *  carry-over runtime state (e.g. Velocity) — preserve it instead
-	 *  of zeroing if you want momentum to flow across order changes. */
-	virtual void OnMoveBegin(const FSeinMovementContext& Ctx) {}
+	 *  of zeroing if you want momentum to flow across order changes.
+	 *
+	 *  SEALED dispatcher → BP_OnMoveBegin. C++ modes overriding OnMoveBegin(Ctx)
+	 *  directly (Movement+ vehicles) bypass the BP hook, exactly as before. */
+	virtual void OnMoveBegin(const FSeinMovementContext& Ctx);
+
+	/** BP-overridable per-order init, called once before the first BP_Tick. Default
+	 *  no-op. Override to reset per-order state (e.g. latch an auto-reverse decision). */
+	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Movement", meta = (DisplayName = "On Move Begin"))
+	void BP_OnMoveBegin(USeinMoverHandle* Mover);
+	virtual void BP_OnMoveBegin_Implementation(USeinMoverHandle* Mover) {}
 
 	/** Called each sim tick while the move is active. Mutates Entity.Transform
 	 *  and writes runtime state back through MoveData (e.g. Velocity).
 	 *  Advances CurrentWaypointIndex as waypoints are consumed.
-	 *  @return true when the entity has reached the final waypoint. */
-	virtual bool Tick(const FSeinMovementContext& Ctx)
-		PURE_VIRTUAL(USeinMovement::Tick, return true;);
+	 *  @return true when the entity has reached the final waypoint.
+	 *
+	 *  SEALED sim-facing entry. It no longer carries behavior — it points the
+	 *  reusable USeinMoverHandle at `Ctx` and dispatches to the BP-overridable
+	 *  BP_Tick. C++ modes that override Tick(Ctx) directly (BasicMovement, the
+	 *  Movement+ vehicles) bypass BP_Tick entirely, exactly as before. */
+	virtual bool Tick(const FSeinMovementContext& Ctx);
+
+	/** BP-overridable per-tick movement. Default = the RTS integration loop
+	 *  (seek + kinematic arrival + face-velocity), which calls ComputeDesiredSpeed
+	 *  / ComputeSteer at its two decision points. Override the whole event (Tier 2
+	 *  "power" authoring) to drive the unit yourself via the handle; override just
+	 *  the hooks (Tier 1) to reshape feel while keeping the loop.
+	 *  @return true when arrived at the final waypoint. */
+	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Movement", meta = (DisplayName = "Tick"))
+	bool BP_Tick(USeinMoverHandle* Mover);
+	virtual bool BP_Tick_Implementation(USeinMoverHandle* Mover);
+
+	/** Hook — cruise target speed this tick, BEFORE the default loop applies the
+	 *  kinematic arrival cap + accel/decel ramp. Default returns the terrain-scaled
+	 *  top speed. Override to brake for sharp turns, shape arrival, etc. */
+	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Movement", meta = (DisplayName = "Compute Desired Speed"))
+	FFixedPoint ComputeDesiredSpeed(USeinMoverHandle* Mover);
+	virtual FFixedPoint ComputeDesiredSpeed_Implementation(USeinMoverHandle* Mover);
+
+	/** Hook — the unit's facing yaw (radians) after this tick's turn, given the
+	 *  direction it actually moved and its current yaw. Default is face-velocity:
+	 *  turn toward DesiredMoveDir clamped by TurnRate·dt. Override for steered
+	 *  kinematics (bicycle, tank pivot). The default loop applies slope pitch/roll
+	 *  on top of the returned yaw. */
+	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Movement", meta = (DisplayName = "Compute Steer"))
+	FFixedPoint ComputeSteer(USeinMoverHandle* Mover, const FFixedVector& DesiredMoveDir, FFixedPoint CurrentYaw);
+	virtual FFixedPoint ComputeSteer_Implementation(USeinMoverHandle* Mover, const FFixedVector& DesiredMoveDir, FFixedPoint CurrentYaw);
 
 	/** Called when the action ends (completed/cancelled/failed). Default:
-	 *  no-op. Override to clean up subclass transient state. */
-	virtual void OnMoveEnd(FSeinEntity& Entity) {}
+	 *  no-op. Override to clean up subclass transient state.
+	 *
+	 *  SEALED dispatcher → BP_OnMoveEnd, binding the handle in entity-only mode
+	 *  (no live path/movement context at end). C++ overrides of OnMoveEnd(Entity)
+	 *  bypass it. */
+	virtual void OnMoveEnd(FSeinEntity& Entity);
+
+	/** BP-overridable end-of-order cleanup. Default no-op. The handle is in entity-
+	 *  only mode here — IsValidMover() is false; transform reads work, but velocity /
+	 *  path / kinematics reads return defaults. */
+	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Movement", meta = (DisplayName = "On Move End"))
+	void BP_OnMoveEnd(USeinMoverHandle* Mover);
+	virtual void BP_OnMoveEnd_Implementation(USeinMoverHandle* Mover) {}
 
 	/** Always-on idle tick — called by FSeinMovementDriverSystem every sim tick
 	 *  for entities with NO active move order this tick (CP2.1, Decisions D-R2:
@@ -167,6 +223,14 @@ public:
 	 *  GetAltitude / QueryReferenceZ virtuals) hover + flight classes. */
 	virtual void TickIdle(const FSeinMovementContext& Ctx);
 
+	/** BP-overridable idle tick (no active order). Default = ground snap + coast-down
+	 *  + slope settle (the base ground/hover/flight behavior). Override for custom idle
+	 *  (e.g. a hover bob). Same self-mutation-only contract as the docstring above —
+	 *  never read neighbour entities here. */
+	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Movement", meta = (DisplayName = "Tick Idle"))
+	void BP_TickIdle(USeinMoverHandle* Mover);
+	virtual void BP_TickIdle_Implementation(USeinMoverHandle* Mover);
+
 	/** True if this movement subclass does NOT need a `Nav->FindPath` call —
 	 *  it consumes a straight-line `[Start, End]` polyline directly. Flying
 	 *  movements override to true: they fly over static obstacles (using
@@ -189,11 +253,20 @@ public:
 	 *  picker to this struct and auto-fill it when MovementClass changes. Opt in
 	 *  on the data field with meta = (SeinDataStructFromClass = "MovementClass").
 	 *
-	 *  Default returns nullptr — the subclass has no per-class authoring
-	 *  (e.g., bare USeinBasicMovement). Subclasses with sub-data override
-	 *  to return e.g. `FSeinWheeledMovementData::StaticStruct()`. */
+	 *  Default returns `TuningStruct` (null unless set) — so a BP-authored mode
+	 *  declares its sub-data by pointing TuningStruct at a UDS (the Phase-B export
+	 *  stamps it; a designer may also set it by hand). C++ subclasses with sub-data
+	 *  override this to return e.g. `FSeinWheeledMovementData::StaticStruct()`. */
 	UFUNCTION()
-	virtual UScriptStruct* GetMovementDataStruct() const { return nullptr; }
+	virtual UScriptStruct* GetMovementDataStruct() const { return TuningStruct; }
+
+	/** The per-class tuning UDS for a BP-authored mode — the struct that fills
+	 *  `FSeinMovementComponent::MovementClassData`. GENERATED + linked by the Class-Defaults
+	 *  "Generate Tuning Data Structure" button; shown READ-ONLY here (it's derived from the
+	 *  mode's variables — don't hand-pick it). Ignored by C++ modes that override
+	 *  GetMovementDataStruct(). */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "SeinARTS|Movement", meta = (DisplayName = "Tuning Struct"))
+	TObjectPtr<UScriptStruct> TuningStruct;
 
 	/** Cruise / hover altitude the unit wants to maintain above ground.
 	 *  Default 0 (ground-bound). Subclasses with their own altitude field
@@ -658,5 +731,18 @@ protected:
 		const FFixedQuaternion& Rotation,
 		const FFixedVector& FinalGoal,
 		const FSeinMovementComponent& MovementData);
+
+	/** Copy each field of the per-unit tuning UDS (FSeinMovementComponent::
+	 *  MovementClassData) into the same-named instance UPROPERTY by reflection, so a
+	 *  BP mode's graph reads its own variables and they reflect per-unit authoring.
+	 *  Deterministic field copy; the instance vars are a cache of the hashed component
+	 *  data. No-op when the tuning struct is empty. Called from the OnMoveBegin dispatch. */
+	void HydrateTuningFromData(const struct FInstancedStruct& Tuning);
+
+	/** Reusable BP-facing context wrapper, lazily created and repointed each
+	 *  dispatch. Transient scratch — never hashed; its context pointer is valid
+	 *  only during a single BP_Tick / hook dispatch. */
+	UPROPERTY(Transient)
+	TObjectPtr<USeinMoverHandle> CachedHandle;
 
 };

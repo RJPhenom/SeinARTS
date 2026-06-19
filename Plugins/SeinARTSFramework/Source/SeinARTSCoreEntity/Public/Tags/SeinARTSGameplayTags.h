@@ -146,4 +146,16 @@ namespace SeinARTSTags
 	// Framework ships `Environment.Default` only; games extend the vocabulary
 	// (Environment.Grass, Environment.Snow, etc.) and interpret via effects (DESIGN §13).
 	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Environment_Default);
+
+	// --- Formation ---
+	// Formation-identity vocabulary. The framework ships Formation.Box (the default
+	// right-click-drag formation) plus Line/Column/Wedge/Ring options; an order gesture
+	// nominates one and the command broker resolver maps it to a USeinFormation via
+	// FormationsByTag. Games add their own formation tags under the Formation root.
+	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Formation);
+	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Formation_Box);
+	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Formation_Line);
+	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Formation_Column);
+	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Formation_Wedge);
+	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Formation_Ring);
 }

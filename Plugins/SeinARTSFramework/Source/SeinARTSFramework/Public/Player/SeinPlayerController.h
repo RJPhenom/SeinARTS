@@ -19,6 +19,7 @@ class ASeinCameraPawn;
 class USeinInputConfig;
 class USeinWorldSubsystem;
 class USeinTargeterSubsystem;
+class USeinOrderGesture;
 struct FInputActionValue;
 struct FSeinTargeterPoint;
 
@@ -233,14 +234,24 @@ public:
 	void IssueSmartCommand(const FVector& WorldLocation, ASeinActor* TargetActor);
 
 	/**
-	 * Issue a smart command with formation drag support.
-	 * @param WorldLocation - Command target location
-	 * @param TargetActor - Actor under cursor (nullptr = ground)
-	 * @param bQueue - Whether to queue rather than replace current ability
-	 * @param FormationEnd - Formation endpoint for drag orders (zero = no formation)
+	 * Issue a smart command with an optional formation guide.
+	 * @param WorldLocation - Command target / anchor location
+	 * @param TargetActor   - Actor under cursor (nullptr = ground)
+	 * @param bQueue        - Whether to queue rather than replace the current ability
+	 * @param GuidePoints   - Gesture guide geometry in WORLD space (empty = simple
+	 *                        click). Converted to fixed-point + nav-projected sim-side.
+	 * @param FormationTag  - Gesture-nominated formation (invalid = resolver default).
 	 */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Command")
-	void IssueSmartCommandEx(const FVector& WorldLocation, ASeinActor* TargetActor, bool bQueue, const FVector& FormationEnd);
+	void IssueSmartCommandEx(const FVector& WorldLocation, ASeinActor* TargetActor, bool bQueue,
+		const TArray<FVector>& GuidePoints, FGameplayTag FormationTag);
+
+	/** Compute the order the CURRENT drag/cursor state would produce — the SAME
+	 *  gesture computation OnCommandReleased commits — exposed for the destination
+	 *  preview so preview === commit. OutAnchor = drag start while dragging, else
+	 *  CursorWorld; OutGuidePoints / OutFormationTag come from the active gesture. */
+	void BuildPreviewOrder(FVector CursorWorld, FVector& OutAnchor,
+		TArray<FVector>& OutGuidePoints, FGameplayTag& OutFormationTag) const;
 
 	/**
 	 * Issue a targeter-originated ability command. Called by USeinTargeterSubsystem
@@ -292,6 +303,22 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Command")
 	FVector CommandDragCurrent = FVector::ZeroVector;
 
+	/** Distance-sampled world-space path captured during a command drag (start …
+	 *  current). Fed to the order gesture to build the guide. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Command")
+	TArray<FVector> CommandDragPath;
+
+	/** Minimum cursor travel (world cm) between captured drag-path points — even
+	 *  spacing regardless of drag speed, no point spam on a slow drag. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Command")
+	float CommandDragSampleDistance = 100.f;
+
+	/** Pluggable interpreter for right-click / drag orders → guide + formation.
+	 *  Null → the base USeinOrderGesture (click → blob, drag → line). Point at a
+	 *  subclass to author custom drag semantics (spline, box, path-march, …). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Command")
+	TSoftClassPtr<USeinOrderGesture> OrderGestureClass;
+
 protected:
 	// ========== Input Handlers ==========
 
@@ -300,6 +327,10 @@ protected:
 	void OnCommandStarted(const FInputActionValue& Value);
 	void OnCommandReleased(const FInputActionValue& Value);
 	void OnCameraPan(const FInputActionValue& Value);
+
+	/** Resolve the active order-gesture instance (OrderGestureClass CDO, or the base
+	 *  USeinOrderGesture CDO when unset). Never null. */
+	USeinOrderGesture* ResolveOrderGesture() const;
 	void OnCameraRotate(const FInputActionValue& Value);
 	void OnCameraZoom(const FInputActionValue& Value);
 	void OnCameraZoomKeyboard(const FInputActionValue& Value);
