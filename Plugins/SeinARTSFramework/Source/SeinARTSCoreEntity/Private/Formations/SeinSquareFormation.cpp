@@ -59,23 +59,8 @@ FSeinFormationLayout USeinSquareFormation::BuildFormation_Implementation(
 	if (RadialGap <= FFixedPoint::Zero) { RadialGap = FFixedPoint::FromInt(50); }
 	const FFixedPoint MinHalfSide = RadialGap;                   // floor
 
-	// Outer half-side. A DRAG sets it directly (honor the drag fully — expand uncapped). A plain CLICK
-	// sizes ONE tight square whose perimeter (8h) holds everyone: 8h = Σ diameter = 2·SumEffR → h =
-	// SumEffR/4. Straight sides mean euclidean == along-side distance (no asin correction, unlike ring).
-	FFixedPoint OuterHalfSide;
-	if (bDrag)
-	{
-		FFixedVector DragVec = Target.GuidePoints.Last() - Target.GuidePoints[0]; DragVec.Z = FFixedPoint::Zero;
-		OuterHalfSide = DragVec.Size() / FFixedPoint::Two;
-	}
-	else
-	{
-		OuterHalfSide = SumEffR / FFixedPoint::FromInt(4);
-	}
-
-	// N-aware shrink floor: grow the minimum half-side until the nested squares (perimeter 8h each, down
-	// to MinHalfSide) hold ALL members, so a hard shrink lands on the tightest MULTI-square packing rather
-	// than one overflowing square (a blob). Honor-the-drag still applies above this floor.
+	// FitsAll(OuterH): do the nested squares (perimeter 8h each) from OuterH down to MinHalfSide hold all
+	// N? Mirrors the fill below. Used to size the compact CLICK and to floor a hard shrink.
 	auto FitsAll = [&](FFixedPoint OuterH) -> bool
 	{
 		FFixedPoint h = OuterH; int32 u = 0;
@@ -93,9 +78,26 @@ FSeinFormationLayout USeinSquareFormation::BuildFormation_Implementation(
 		}
 		return u >= N;
 	};
-	FFixedPoint MinOuter = MinHalfSide;
-	for (int32 Guard = 0; Guard < 256 && !FitsAll(MinOuter); ++Guard) { MinOuter = MinOuter + RadialGap; }
-	if (OuterHalfSide < MinOuter) { OuterHalfSide = MinOuter; }
+
+	// MinCompact = the SMALLEST half-side whose nested squares hold everyone — the most COMPACT packing
+	// (nested squares; ≥2 layers for any selection past one tight square). A plain CLICK uses this — a
+	// click is the tightest multi-square shape, NOT one big loose square. It is also the hard-shrink floor.
+	FFixedPoint MinCompact = MinHalfSide;
+	for (int32 Guard = 0; Guard < 256 && !FitsAll(MinCompact); ++Guard) { MinCompact = MinCompact + RadialGap; }
+
+	// A DRAG sets the half-side directly — honor the drag fully (expand uncapped), but never shrink below
+	// MinCompact. A plain CLICK uses MinCompact (most compact).
+	FFixedPoint OuterHalfSide;
+	if (bDrag)
+	{
+		FFixedVector DragVec = Target.GuidePoints.Last() - Target.GuidePoints[0]; DragVec.Z = FFixedPoint::Zero;
+		OuterHalfSide = DragVec.Size() / FFixedPoint::Two;
+		if (OuterHalfSide < MinCompact) { OuterHalfSide = MinCompact; }
+	}
+	else
+	{
+		OuterHalfSide = MinCompact;
+	}
 
 	// Fill nested COMPLETE squares OUTSIDE-IN as ONE CONTINUOUS evenly-spaced outline per square: the 4
 	// corners are real members (the FIRST member of each side sits exactly on its corner), and each side

@@ -77,31 +77,9 @@ FSeinFormationLayout USeinRingFormation::BuildFormation_Implementation(
 		return FFixedPoint::Two * SeinMath::Asin(Arg);
 	};
 
-	// Outer radius. A DRAG sets it directly — honor the drag fully: expand is uncapped (a sparse single
-	// ring when N can't fill the drawn circle is accepted). A plain CLICK sizes ONE tight ring that
-	// holds everyone: start from the arc estimate (r = Sum(2*effR)/2pi) then nudge OUT until the exact
-	// chord widths fit in 2*pi. Shrink is FLOORED at MinRingRadius so the innermost never collapses.
-	FFixedPoint OuterRadius;
-	if (bDrag)
-	{
-		FFixedVector DragVec = Target.GuidePoints.Last() - Target.GuidePoints[0]; DragVec.Z = FFixedPoint::Zero;
-		OuterRadius = DragVec.Size() / FFixedPoint::Two;
-	}
-	else
-	{
-		OuterRadius = (SumEffR > FFixedPoint::Zero) ? (SumEffR / FFixedPoint::Pi) : MinRingRadius;
-		for (int32 Guard = 0; Guard < 8; ++Guard)
-		{
-			FFixedPoint SumW = FFixedPoint::Zero;
-			for (int32 i = 0; i < N; ++i) { SumW = SumW + AngularWidth(EffR[i], OuterRadius); }
-			if (SumW <= TwoPi) { break; }
-			OuterRadius = OuterRadius + OuterRadius / FFixedPoint::FromInt(8); // *1.125 toward fitting one ring
-		}
-	}
-	// N-aware shrink floor: grow the minimum outer radius until concentric TIGHT rings (down to
-	// MinRingRadius) hold ALL members, so a hard shrink lands on the tightest MULTI-ring packing rather
-	// than one overflowing ring (a blob). Honor-the-drag still applies ABOVE this floor — a big drag
-	// stays sparse. The simulation mirrors the fill below: same member order, same per-ring capacity.
+	// FitsAll(OuterR): do concentric TIGHT rings from OuterR down to MinRingRadius hold all N? Mirrors the
+	// fill below (same member order, same per-ring chord capacity). Used to size the compact CLICK and to
+	// floor a hard shrink.
 	auto FitsAll = [&](FFixedPoint OuterR) -> bool
 	{
 		FFixedPoint s = OuterR; int32 u = 0;
@@ -118,9 +96,27 @@ FSeinFormationLayout USeinRingFormation::BuildFormation_Implementation(
 		}
 		return u >= N;
 	};
-	FFixedPoint MinOuter = MinRingRadius;
-	for (int32 Guard = 0; Guard < 256 && !FitsAll(MinOuter); ++Guard) { MinOuter = MinOuter + RadialGap; }
-	if (OuterRadius < MinOuter) { OuterRadius = MinOuter; }
+
+	// MinCompact = the SMALLEST outer radius whose concentric tight rings hold everyone — the most COMPACT
+	// packing (nested rings; ≥2 layers for any selection past one tight ring). A plain CLICK uses this — a
+	// click is the tightest multi-ring shape, NOT one big loose ring. It is also the hard-shrink floor.
+	FFixedPoint MinCompact = MinRingRadius;
+	for (int32 Guard = 0; Guard < 256 && !FitsAll(MinCompact); ++Guard) { MinCompact = MinCompact + RadialGap; }
+
+	// A DRAG sets the outer radius directly — honor the drag fully (expand uncapped: a sparse single ring
+	// when N can't fill the drawn circle is accepted), but never shrink below MinCompact. A plain CLICK
+	// uses MinCompact (most compact).
+	FFixedPoint OuterRadius;
+	if (bDrag)
+	{
+		FFixedVector DragVec = Target.GuidePoints.Last() - Target.GuidePoints[0]; DragVec.Z = FFixedPoint::Zero;
+		OuterRadius = DragVec.Size() / FFixedPoint::Two;
+		if (OuterRadius < MinCompact) { OuterRadius = MinCompact; }
+	}
+	else
+	{
+		OuterRadius = MinCompact;
+	}
 
 	// Fill concentric rings OUTSIDE-IN: the outer ring packs tight and full FIRST (the visible perimeter
 	// is never loose), each inner ring steps in by RadialGap, the centre stays EMPTY. Only the innermost

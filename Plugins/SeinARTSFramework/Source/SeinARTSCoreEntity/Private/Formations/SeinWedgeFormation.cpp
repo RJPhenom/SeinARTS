@@ -4,7 +4,8 @@
  * @brief   Footprint-aware hollow chevron; large selections fan into nested chevrons (layer count
  *          AUTOMATIC from packing), apexes stepping back so they nest — keeps the wedge compact
  *          instead of one ballooning V. Units pack along the arms by their REAL footprints (biggest
- *          at the tip, variant spacing). A drag sizes the arms; a plain click is one tight chevron.
+ *          at the tip, variant spacing). A drag sizes the arms (no layer compacts below 5 positions — a
+ *          hard drag can't collapse it into a column); a plain click is a compact multi-layer arrowhead.
  */
 
 #include "Formations/SeinWedgeFormation.h"
@@ -67,30 +68,46 @@ FSeinFormationLayout USeinWedgeFormation::BuildFormation_Implementation(
 	const FFixedPoint MinS = FFixedPoint::One / FFixedPoint::FromInt(100); // guard the apex step's /S
 	if (S < MinS) { S = MinS; }
 
-	// Outer arm length A. A DRAG sets it (half the drag — honor the drag fully); a plain CLICK sizes ONE
-	// tight chevron whose two arms (outline 2A) hold everyone: 2A = Σ diameter = 2·SumEffR → A = SumEffR.
 	FFixedVector DragVec = FFixedVector::ZeroVector;
 	if (bDrag) { DragVec = Target.GuidePoints.Last() - Target.GuidePoints[0]; DragVec.Z = FFixedPoint::Zero; }
-	FFixedPoint A = bDrag ? (DragVec.Size() / FFixedPoint::Two) : SumEffR;
-	if (A < MaxEffR) { A = MaxEffR; } // floor: at least seat the tip unit
 
-	// Layer count is AUTOMATIC from packing (no threshold step-graph): how many chevrons of outline 2A it
-	// takes to seat N at their real footprints. A click is one tight chevron; a shorter drag → more
-	// nested chevrons, a longer drag → fewer (expand consumes inner chevrons). Capacity-by-Σdiameter is
-	// exact here because an arm is straight (chord == along-arm distance).
-	const FFixedPoint ArmOutline = A * FFixedPoint::Two; // both arms of one chevron
-	int32 Layers = 1;
+	// Layer count. A wedge layer must seat at least 5 members — fewer degenerates the arrowhead into a
+	// column (an arm pair with one unit each), which is what an over-short drag used to produce. So the
+	// layer count is capped at floor(N/5); a layer holds < 5 ONLY when it is the sole layer (N < 5).
+	const int32 MaxLayers = (N >= 5) ? (N / 5) : 1;
+
+	int32 Layers;
+	if (bDrag)
 	{
-		FFixedPoint Used = FFixedPoint::Zero; int32 Cap = 0;
+		// The drag span (the front chevron's outline) sets how many seat on the front; a shorter drag →
+		// more nested chevrons. Footprint-tight count along the drawn span.
+		const FFixedPoint DragLen = DragVec.Size();
+		int32 FrontCap = 0; FFixedPoint Acc = FFixedPoint::Zero;
 		for (int32 i = 0; i < N; ++i)
 		{
 			const FFixedPoint D = EffR[i] * FFixedPoint::Two + InterUnitSpacing;
-			if (Cap > 0 && (Used + D) > ArmOutline) { break; }
-			Used = Used + D; ++Cap;
+			if (FrontCap > 0 && (Acc + D) > DragLen) { break; }
+			Acc = Acc + D; ++FrontCap;
 		}
-		if (Cap < 1) { Cap = 1; }
-		Layers = FMath::Clamp((N + Cap - 1) / Cap, 1, N);
+		if (FrontCap < 1) { FrontCap = 1; }
+		Layers = (N + FrontCap - 1) / FrontCap; // ceil(N / FrontCap)
 	}
+	else
+	{
+		// A plain CLICK is the most COMPACT arrowhead that still reads as a wedge (≈ as deep as it is
+		// wide): front chevron ≈ √(2N) wide → Layers ≈ N / √(2N). At least 2 layers where N allows.
+		int32 FrontCap = 1; while (FrontCap * FrontCap < 2 * N) { ++FrontCap; } // ceil(√(2N))
+		Layers = (N + FrontCap - 1) / FrontCap;
+		if (MaxLayers >= 2 && Layers < 2) { Layers = 2; }
+	}
+	Layers = FMath::Clamp(Layers, 1, MaxLayers);
+
+	// Arm length A: long enough that `Layers` chevrons seat all N at footprint-tight spacing (each
+	// chevron's outline 2A holds Σdiameter/Layers ⇒ A = SumEffR/Layers), but honor a LONGER drag.
+	FFixedPoint A = SumEffR / FFixedPoint::FromInt(Layers);
+	if (bDrag) { const FFixedPoint DragArm = DragVec.Size() / FFixedPoint::Two; if (DragArm > A) { A = DragArm; } }
+	if (A < MaxEffR) { A = MaxEffR; } // floor: at least seat the tip unit
+	const FFixedPoint ArmOutline = A * FFixedPoint::Two; // both arms of one chevron
 
 	// Each chevron's apex steps BACK along the axis so the chevrons NEST with a perpendicular gap of one
 	// diameter between adjacent arms (apex step = diameter / sin theta). Layer 0's apex is the tip at the
