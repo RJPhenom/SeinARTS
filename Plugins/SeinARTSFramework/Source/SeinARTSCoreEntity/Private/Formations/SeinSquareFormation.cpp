@@ -113,6 +113,9 @@ FSeinFormationLayout USeinSquareFormation::BuildFormation_Implementation(
 	Layout.Positions.SetNum(N);
 	int32 Idx = 0;
 	FFixedPoint H = OuterHalfSide;
+	FFixedPoint PrevH = OuterHalfSide; // half-side of the square just placed (for the per-layer gap)
+	FFixedPoint PrevMax = FFixedPoint::Zero;
+	bool bFirstSquare = true;
 	while (Idx < N)
 	{
 		const bool bFloorRing = (H - RadialGap) < MinHalfSide;
@@ -122,12 +125,25 @@ FSeinFormationLayout USeinSquareFormation::BuildFormation_Implementation(
 		// takes all that remain).
 		const int32 Start = Idx;
 		FFixedPoint Used = FFixedPoint::Zero;
+		FFixedPoint RingMax = FFixedPoint::Zero;
 		while (Idx < N)
 		{
 			const FFixedPoint D = EffR[Idx] * FFixedPoint::Two;
 			if (Idx > Start && !bFloorRing && (Used + D) > Perim) { break; }
 			Used = Used + D;
+			if (EffR[Idx] > RingMax) { RingMax = EffR[Idx]; }
 			++Idx;
+		}
+
+		// PER-LAYER radial gap: pull this square out to clear only ITSELF plus the square directly outside
+		// it (PrevMax + RingMax), not the global biggest footprint, so one big unit doesn't push every
+		// inner square outward. The per-pair gap is always <= the global RadialGap, so the corrected
+		// half-side is >= the gather H and the gathered members still fit. The outer square keeps
+		// OuterHalfSide.
+		if (!bFirstSquare)
+		{
+			const FFixedPoint Tightened = PrevH - (PrevMax + RingMax);
+			if (Tightened > H) { H = Tightened; }
 		}
 		// Split this square's members into 4 CONTIGUOUS sides by FOOTPRINT (not count): fill each side
 		// toward an equal footprint share so a big unit (or a squad-sized vs infantry-sized mix) never
@@ -196,6 +212,10 @@ FSeinFormationLayout USeinSquareFormation::BuildFormation_Implementation(
 			}
 			Cursor += c;
 		}
+
+		PrevH = H;
+		PrevMax = RingMax;
+		bFirstSquare = false;
 
 		if (bFloorRing) { break; }
 		H = H - RadialGap;

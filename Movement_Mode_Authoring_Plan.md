@@ -249,3 +249,9 @@ bit-identical. This is the sacred no-regression gate (§guardrails).
     factory-tooltip updated.
   **Editor RESTART required** — the TuningStruct specifier flip is a reflection change (Live Coding won't
   catch it). Delete any `<Name>_Tuning` test UDS made earlier and regenerate as `<Name>TuningData`.
+- 2026-06-22 — **Bug fix (RJ): renaming a mode BP didn't rename its tuning struct.** Cause: `SyncFields`
+  only updates fields (never the asset name), and `ResolveExistingTuningUDS` returns the already-linked
+  struct via the CDO link → it kept its stale name (and the legacy `_Tuning` name). Fix: `RenameTuningUDS`
+  (`IAssetTools::RenameAssets`) renames + relocates the existing struct to `<BPName>TuningData` in the BP's
+  current folder on every Generate — tracks renames AND folder-moves AND migrates legacy `_Tuning` naming.
+  Best-effort (leaves a redirector at the old path → "Fix Up Redirectors" to clean). Build-green.

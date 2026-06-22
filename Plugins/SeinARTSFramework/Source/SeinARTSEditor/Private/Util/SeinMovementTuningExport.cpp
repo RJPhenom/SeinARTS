@@ -13,6 +13,8 @@
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "StructUtils/UserDefinedStruct.h"
 #include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetToolsModule.h"
+#include "IAssetTools.h"
 #include "UObject/UnrealType.h"
 #include "UObject/Package.h"
 #include "Misc/PackageName.h"
@@ -94,6 +96,21 @@ namespace
 		FAssetRegistryModule::AssetCreated(UDS);
 		Package->MarkPackageDirty();
 		return UDS;
+	}
+
+	/** Rename/relocate the UDS asset (package + object, with redirector fix-up) so it tracks
+	 *  the BP's current name + folder. Best-effort: on failure the struct keeps its name and
+	 *  the link stays valid. Also migrates the legacy "<Name>_Tuning" asset to "<Name>TuningData". */
+	void RenameTuningUDS(UUserDefinedStruct* UDS, const FString& NewPackagePath, const FString& NewName)
+	{
+		if (!UDS) return;
+		const FString CurPath = FPackageName::GetLongPackagePath(UDS->GetOutermost()->GetName());
+		if (UDS->GetName() == NewName && CurPath == NewPackagePath) return;  // already correct
+
+		FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
+		TArray<FAssetRenameData> Renames;
+		Renames.Add(FAssetRenameData(UDS, NewPackagePath, NewName));
+		AssetToolsModule.Get().RenameAssets(Renames);
 	}
 
 	/** Add/remove/retype the UDS's fields to match `Desired`, keyed by friendly name.
@@ -209,7 +226,17 @@ UUserDefinedStruct* SyncTuningStructForBlueprint(UBlueprint* Blueprint)
 	}
 
 	UUserDefinedStruct* UDS = ResolveExistingTuningUDS(Blueprint);
-	if (!UDS) { UDS = CreateTuningUDS(Blueprint); }
+	if (UDS)
+	{
+		// Track BP renames / folder-moves (and migrate the legacy "<Name>_Tuning" asset name) by
+		// renaming the existing struct to match the BP — SyncFields only touches fields, not the name.
+		const FString BPPath = FPackageName::GetLongPackagePath(Blueprint->GetOutermost()->GetName());
+		RenameTuningUDS(UDS, BPPath, Blueprint->GetName() + TEXT("TuningData"));
+	}
+	else
+	{
+		UDS = CreateTuningUDS(Blueprint);
+	}
 	if (!UDS)
 	{
 		UE_LOG(LogSeinMovementTuning, Warning, TEXT("SyncTuningStruct: failed to get/create tuning UDS for %s."),

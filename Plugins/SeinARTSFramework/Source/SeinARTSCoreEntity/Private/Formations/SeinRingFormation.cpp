@@ -130,27 +130,46 @@ FSeinFormationLayout USeinRingFormation::BuildFormation_Implementation(
 	Layout.Positions.SetNum(N);
 	int32 Idx = 0;
 	FFixedPoint S = OuterRadius;
+	FFixedPoint PrevRadius = OuterRadius; // radius of the ring just placed (for the per-layer gap)
+	FFixedPoint PrevMax = FFixedPoint::Zero;
+	bool bFirstRing = true;
 	while (Idx < N)
 	{
 		// A floor ring has no room for another ring inside it: it absorbs ALL remaining members (the
 		// accepted shrink minimum; SeparatePositions later spreads any resulting overlap).
 		const bool bFloorRing = (S - RadialGap) < MinRingRadius;
 
-		// Greedily gather this ring's members (the first always fits; otherwise stop before Sum(w) > 2pi).
+		// Greedily gather this ring's members at the provisional radius S (the first always fits; else
+		// stop before Sum(w) > 2pi). Track the ring's biggest footprint for the per-layer gap below.
 		const int32 Start = Idx;
 		FFixedPoint SumW = FFixedPoint::Zero;
+		FFixedPoint RingMax = FFixedPoint::Zero;
 		while (Idx < N)
 		{
 			const FFixedPoint W = AngularWidth(EffR[Idx], S);
 			if (Idx > Start && !bFloorRing && (SumW + W) > TwoPi) { break; }
 			SumW = SumW + W;
+			if (EffR[Idx] > RingMax) { RingMax = EffR[Idx]; }
 			Idx++;
 		}
 		const int32 Count = Idx - Start;
 
-		// Even slack so a full ring is exactly tight and a partial (innermost) ring spreads around the
-		// whole circle rather than bunching on an arc.
-		FFixedPoint Slack = TwoPi - SumW; if (Slack < FFixedPoint::Zero) { Slack = FFixedPoint::Zero; }
+		// PER-LAYER radial gap: clear only THIS ring plus the ring directly above it (PrevMax + RingMax),
+		// not the global biggest footprint — so one big unit no longer pushes EVERY inner ring outward.
+		// The per-pair gap is always <= the global RadialGap, so the corrected radius is >= the gather
+		// radius S; the members gathered at S still fit the (larger-or-equal) corrected circle. The outer
+		// ring keeps OuterRadius.
+		if (!bFirstRing)
+		{
+			const FFixedPoint Tightened = PrevRadius - (PrevMax + RingMax);
+			if (Tightened > S) { S = Tightened; }
+		}
+
+		// Re-tighten the angular slack to the (corrected) radius so a full ring stays exactly tight and a
+		// partial (innermost) ring spreads around the whole circle rather than bunching on an arc.
+		FFixedPoint SumWAtS = FFixedPoint::Zero;
+		for (int32 p = Start; p < Idx; ++p) { SumWAtS = SumWAtS + AngularWidth(EffR[p], S); }
+		FFixedPoint Slack = TwoPi - SumWAtS; if (Slack < FFixedPoint::Zero) { Slack = FFixedPoint::Zero; }
 		const FFixedPoint SlackShare = (Count > 0) ? (Slack / FFixedPoint::FromInt(Count)) : FFixedPoint::Zero;
 
 		FFixedPoint Acc = FFixedPoint::Zero;
@@ -163,6 +182,10 @@ FSeinFormationLayout USeinRingFormation::BuildFormation_Implementation(
 			Layout.Positions[p] = ProjectToNavigable(World, Center + WorldOffset, Center);
 			Acc = Acc + W + SlackShare;
 		}
+
+		PrevRadius = S;
+		PrevMax = RingMax;
+		bFirstRing = false;
 
 		if (bFloorRing) { break; } // the floor ring already consumed everything left
 		S = S - RadialGap;

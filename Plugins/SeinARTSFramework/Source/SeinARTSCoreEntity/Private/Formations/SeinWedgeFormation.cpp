@@ -49,13 +49,12 @@ FSeinFormationLayout USeinWedgeFormation::BuildFormation_Implementation(
 	// Effective footprint radius per member (= its real radius). VARIANT spacing — units are placed by
 	// their OWN footprints along the arms, never by a single uniform "largest" gap; InterUnitSpacing is
 	// added once per gap.
-	FFixedPoint MaxEffR = FFixedPoint::Zero, SumEffR = FFixedPoint::Zero;
+	FFixedPoint MaxEffR = FFixedPoint::Zero;
 	TArray<FFixedPoint> EffR; EffR.SetNum(N);
 	for (int32 i = 0; i < N; ++i)
 	{
 		EffR[i] = Layout.Radii[i];
 		if (EffR[i] < FFixedPoint::Zero) { EffR[i] = FFixedPoint::Zero; }
-		SumEffR = SumEffR + EffR[i];
 		if (EffR[i] > MaxEffR) { MaxEffR = EffR[i]; }
 	}
 	if (MaxEffR <= FFixedPoint::Zero) { MaxEffR = FFixedPoint::FromInt(25); }
@@ -102,32 +101,24 @@ FSeinFormationLayout USeinWedgeFormation::BuildFormation_Implementation(
 	}
 	Layers = FMath::Clamp(Layers, 1, MaxLayers);
 
-	// Arm length A: long enough that `Layers` chevrons seat all N at footprint-tight spacing (each
-	// chevron's outline 2A holds Σdiameter/Layers ⇒ A = SumEffR/Layers), but honor a LONGER drag.
-	FFixedPoint A = SumEffR / FFixedPoint::FromInt(Layers);
-	if (bDrag) { const FFixedPoint DragArm = DragVec.Size() / FFixedPoint::Two; if (DragArm > A) { A = DragArm; } }
-	if (A < MaxEffR) { A = MaxEffR; } // floor: at least seat the tip unit
-	const FFixedPoint ArmOutline = A * FFixedPoint::Two; // both arms of one chevron
-
 	// Each chevron's apex steps BACK along the axis so the chevrons NEST with a perpendicular gap of one
 	// diameter between adjacent arms (apex step = diameter / sin theta). Layer 0's apex is the tip at the
-	// Center; deeper layers sit behind it → an arrowhead with depth.
+	// Center; deeper layers sit behind it -> an arrowhead with depth.
 	const FFixedPoint ApexStep = (MaxEffR * FFixedPoint::Two) / S;
 
-	// Distribute members across the chevrons biggest-FIRST so the largest seat at the front chevron and
-	// its apex (the tip), filling each chevron's 2A outline before stepping back to the next.
+	// Distribute members across the chevrons biggest-FIRST (largest at the front chevron + its tip) by
+	// COUNT -- ceil(N / Layers) per chevron -- NOT by footprint. A footprint budget let a few big squads
+	// eat a whole chevron's arm, leaving only 1-2 per layer (the bug); a COUNT split keeps ~N/Layers
+	// (>= 5, via the MaxLayers cap) per chevron regardless of a squad/loose footprint MIX, and the big
+	// units cluster at the front chevrons. The per-member footprint march in the placement below still
+	// spaces every unit without overlap.
 	const TArray<int32> MemBySize = SortIndicesByRadiusDesc(EffR); // biggest first
+	const int32 PerChev = (N + Layers - 1) / Layers;               // ceil(N / Layers)
 	TArray<TArray<int32>> ChevMembers; ChevMembers.SetNum(Layers);
+	for (int32 j = 0; j < N; ++j)
 	{
-		int32 k = 0; FFixedPoint Used = FFixedPoint::Zero;
-		for (int32 j = 0; j < N; ++j)
-		{
-			const int32 mi = MemBySize[j];
-			const FFixedPoint D = EffR[mi] * FFixedPoint::Two + InterUnitSpacing;
-			if (k < Layers - 1 && Used > FFixedPoint::Zero && (Used + D) > ArmOutline) { ++k; Used = FFixedPoint::Zero; }
-			ChevMembers[k].Add(mi);
-			Used = Used + D;
-		}
+		const int32 k = FMath::Min(j / PerChev, Layers - 1);
+		ChevMembers[k].Add(MemBySize[j]);
 	}
 
 	// Place each chevron: the biggest member sits at the apex; the rest alternate onto the left / right
