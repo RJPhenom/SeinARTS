@@ -123,12 +123,15 @@ public:
 		meta = (ClampMin = "0.0", ClampMax = "1.0", DisplayName = "Explored Opacity"))
 	float ExploredOpacity = 0.5f;
 
-	/** Bilinear-filter the tint texture for soft fog edges (vs hard per-cell
-	 *  blocks). On by default — the fog grid is coarse, so soft edges read far
-	 *  better. */
+	/** Edge smoothing, in fog cells of blur radius. **0 = NO smoothing** — hard,
+	 *  blocky per-cell edges (nearest-filtered, no blur). Above 0 switches on
+	 *  bilinear filtering plus a box blur of this radius, spreading the fog edge
+	 *  softer and rounding off the per-cell stair-stepping. Cheap (the fog texture
+	 *  is tiny). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Fog Of War",
-		meta = (DisplayName = "Smooth Edges"))
-	bool bSmoothEdges = true;
+		meta = (ClampMin = "0.0", ClampMax = "5.0", UIMax = "5.0",
+			DisplayName = "Smoothing Strength"))
+	float SmoothingStrength = 1.0f;
 
 	// ----------------------------------------------------------------------
 	// Tunables — switchable vision layers
@@ -238,6 +241,10 @@ private:
 
 	/** Stream PixelBuffer to the GPU texture (render-thread safe). */
 	void UploadPixels();
+
+	/** Separable box-blur PixelBuffer in place by `Radius` cells (fractional ok),
+	 *  to soften/spread the fog edge beyond the bilinear filter. */
+	void BlurPixelBuffer(float Radius);
 
 	/** Map one EVNNNNNN byte → tint color + darken alpha for the given visible mask. */
 	FLinearColor TintForCell(uint8 Bits, uint8 VisibleMask) const;

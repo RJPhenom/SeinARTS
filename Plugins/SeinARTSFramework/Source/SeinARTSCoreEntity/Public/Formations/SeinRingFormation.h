@@ -2,9 +2,10 @@
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinRingFormation.h
  * @brief   Ring — members spaced evenly around a circle about the anchor (defensive
- *          ring / "hold this point"). Radius scales with N so neighbours sit about one
- *          spacing apart, clamped to a minimum. Drag-aware facing (cosmetic for a
- *          symmetric ring); a single member just stands at the center.
+ *          ring / "hold this point"). A drag sets the outer radius; rings fill outside-in and
+ *          inner rings form automatically from footprint packing (ring count automatic, not a
+ *          preset), centre left empty. Footprint-spaced; a single member stands at the center.
+ *          Drag-aware facing (cosmetic for a symmetric ring).
  */
 
 #pragma once
@@ -20,11 +21,12 @@ class SEINARTSCOREENTITY_API USeinRingFormation : public USeinFormation
 	GENERATED_BODY()
 
 public:
-	/** Target arc spacing between neighbours around the ring (UE world units, cm). The
-	 *  radius is derived so the circumference fits N units at this spacing. */
+	/** EXTRA gap added to the footprint DIAMETER when spacing neighbours (UE world units, cm). 0 (the
+	 *  default) = footprints touch — the densest non-overlapping spacing; raise to open the ring up.
+	 *  Also added to the radial gap between concentric layers. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Formation",
 		meta = (DisplayName = "Inter Unit Spacing"))
-	FFixedPoint InterUnitSpacing = FFixedPoint::FromInt(150);
+	FFixedPoint InterUnitSpacing = FFixedPoint::Zero;
 
 	virtual FSeinFormationLayout BuildFormation_Implementation(
 		USeinWorldSubsystem* World,

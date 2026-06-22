@@ -1,7 +1,9 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinRingFormation.cpp
- * @brief   Evenly spaced ring about the anchor; deterministic fixed-point trig.
+ * @brief   Tight concentric-ring perimeter about the anchor — members pack as densely as their
+ *          footprints allow around the ring(s), centre left EMPTY. A drag sets the outer radius;
+ *          extra members spill into tighter inner rings. Deterministic fixed-point trig.
  */
 
 #include "Formations/SeinRingFormation.h"
@@ -20,6 +22,9 @@ FSeinFormationLayout USeinRingFormation::BuildFormation_Implementation(
 		return Layout;
 	}
 
+	// Footprint radii drive spacing + preview dot sizing.
+	GatherFootprintRadii(World, Members, Layout.Radii);
+
 	// Facing + center (drag faces forward over the line; click faces the move target).
 	const FFixedVector DragPerp = DragFacingDir(Target.GuidePoints);
 	const bool bDrag = !DragPerp.IsNearlyZero();
@@ -30,7 +35,7 @@ FSeinFormationLayout USeinRingFormation::BuildFormation_Implementation(
 		? FacingFromDirection(FFixedVector::ZeroVector - DragPerp)
 		: ComputeFormationFacing(Target.CurrentCentroid, Target.CurrentFacing, Target.Anchor);
 
-	// One member just stands at the center (a 1-unit ring is degenerate).
+	// A 1-unit ring is degenerate — the member just stands at the center.
 	if (N == 1)
 	{
 		Layout.Positions.Add(ProjectToNavigable(World, Center, Center));
@@ -38,29 +43,128 @@ FSeinFormationLayout USeinRingFormation::BuildFormation_Implementation(
 	}
 
 	const FFixedQuaternion Facing = Layout.Facing;
-	const FFixedPoint S = (InterUnitSpacing > FFixedPoint::Zero) ? InterUnitSpacing : FFixedPoint::FromInt(150);
 
-	// Radius = max(default, half the drag length). Default = the no-overlap minimum
-	// (circumference ~ N*S, so R = N*S / 2π, floored at S). The ring never shrinks below that,
-	// but GROWS with the drag so its diameter = max(default diameter, drag length).
-	FFixedPoint R = (S * FFixedPoint::FromInt(N)) / FFixedPoint::TwoPi;
-	if (R < S) { R = S; }
-	if (Target.GuidePoints.Num() >= 2)
-	{
-		FFixedVector DragVec = Target.GuidePoints.Last() - Target.GuidePoints[0];
-		DragVec.Z = FFixedPoint::Zero;
-		const FFixedPoint DragRadius = DragVec.Size() / FFixedPoint::Two;
-		if (DragRadius > R) { R = DragRadius; }
-	}
-
-	// Even angular spacing around the circle; deterministic fixed-point sin/cos.
-	Layout.Positions.Reserve(N);
+	// Effective footprint radius per member = real radius + half the optional InterUnitSpacing margin
+	// (neighbours then touch at exactly r_i + r_j + spacing). The biggest effective DIAMETER sets the
+	// radial gap between concentric rings AND the minimum ring radius — so the innermost ring keeps a
+	// hollow centre and the chord/asin geometry stays well-conditioned (r/s <= 0.5 there).
+	const FFixedPoint HalfSpace = InterUnitSpacing / FFixedPoint::Two;
+	FFixedPoint MaxEffR = FFixedPoint::Zero, SumEffR = FFixedPoint::Zero;
+	TArray<FFixedPoint> EffR; EffR.SetNum(N);
 	for (int32 i = 0; i < N; ++i)
 	{
-		const FFixedPoint Angle = (FFixedPoint::TwoPi * FFixedPoint::FromInt(i)) / FFixedPoint::FromInt(N);
-		const FFixedVector LocalOffset(R * SeinMath::Cos(Angle), R * SeinMath::Sin(Angle), FFixedPoint::Zero);
-		const FFixedVector WorldOffset = Facing.RotateVector(LocalOffset);
-		Layout.Positions.Add(ProjectToNavigable(World, Center + WorldOffset, Center));
+		EffR[i] = Layout.Radii[i] + HalfSpace;
+		if (EffR[i] < FFixedPoint::Zero) { EffR[i] = FFixedPoint::Zero; }
+		SumEffR = SumEffR + EffR[i];
+		if (EffR[i] > MaxEffR) { MaxEffR = EffR[i]; }
+	}
+	FFixedPoint RadialGap = MaxEffR * FFixedPoint::Two;            // adjacent rings clear by a full diameter
+	if (RadialGap <= FFixedPoint::Zero) { RadialGap = FFixedPoint::FromInt(50); }
+	const FFixedPoint MinRingRadius = RadialGap;                   // floor: hollow centre + r/s <= 0.5
+
+	const FFixedPoint TwoPi  = FFixedPoint::TwoPi;
+	const FFixedPoint ArgCap = FFixedPoint::FromInt(99) / FFixedPoint::FromInt(100); // asin domain guard
+
+	// Per-unit angular WIDTH on a ring of radius s: w = 2*asin(r / s). Two neighbours touch when their
+	// centre-to-centre CHORD equals r_i + r_j, and Sum(w) <= 2*pi is the (slightly conservative,
+	// asin-convex) no-overlap capacity — packs tight by chord, NEVER by arc (the old overlap bug).
+	auto AngularWidth = [&](FFixedPoint EffRadius, FFixedPoint S) -> FFixedPoint
+	{
+		if (S <= FFixedPoint::Zero) { return TwoPi; }
+		FFixedPoint Arg = EffRadius / S;
+		if (Arg > ArgCap) { Arg = ArgCap; }
+		if (Arg < FFixedPoint::Zero) { Arg = FFixedPoint::Zero; }
+		return FFixedPoint::Two * SeinMath::Asin(Arg);
+	};
+
+	// Outer radius. A DRAG sets it directly — honor the drag fully: expand is uncapped (a sparse single
+	// ring when N can't fill the drawn circle is accepted). A plain CLICK sizes ONE tight ring that
+	// holds everyone: start from the arc estimate (r = Sum(2*effR)/2pi) then nudge OUT until the exact
+	// chord widths fit in 2*pi. Shrink is FLOORED at MinRingRadius so the innermost never collapses.
+	FFixedPoint OuterRadius;
+	if (bDrag)
+	{
+		FFixedVector DragVec = Target.GuidePoints.Last() - Target.GuidePoints[0]; DragVec.Z = FFixedPoint::Zero;
+		OuterRadius = DragVec.Size() / FFixedPoint::Two;
+	}
+	else
+	{
+		OuterRadius = (SumEffR > FFixedPoint::Zero) ? (SumEffR / FFixedPoint::Pi) : MinRingRadius;
+		for (int32 Guard = 0; Guard < 8; ++Guard)
+		{
+			FFixedPoint SumW = FFixedPoint::Zero;
+			for (int32 i = 0; i < N; ++i) { SumW = SumW + AngularWidth(EffR[i], OuterRadius); }
+			if (SumW <= TwoPi) { break; }
+			OuterRadius = OuterRadius + OuterRadius / FFixedPoint::FromInt(8); // *1.125 toward fitting one ring
+		}
+	}
+	// N-aware shrink floor: grow the minimum outer radius until concentric TIGHT rings (down to
+	// MinRingRadius) hold ALL members, so a hard shrink lands on the tightest MULTI-ring packing rather
+	// than one overflowing ring (a blob). Honor-the-drag still applies ABOVE this floor — a big drag
+	// stays sparse. The simulation mirrors the fill below: same member order, same per-ring capacity.
+	auto FitsAll = [&](FFixedPoint OuterR) -> bool
+	{
+		FFixedPoint s = OuterR; int32 u = 0;
+		while (u < N && s >= MinRingRadius)
+		{
+			const int32 St = u; FFixedPoint SumW = FFixedPoint::Zero;
+			while (u < N)
+			{
+				const FFixedPoint W = AngularWidth(EffR[u], s);
+				if (u > St && (SumW + W) > TwoPi) { break; }
+				SumW = SumW + W; ++u;
+			}
+			s = s - RadialGap;
+		}
+		return u >= N;
+	};
+	FFixedPoint MinOuter = MinRingRadius;
+	for (int32 Guard = 0; Guard < 256 && !FitsAll(MinOuter); ++Guard) { MinOuter = MinOuter + RadialGap; }
+	if (OuterRadius < MinOuter) { OuterRadius = MinOuter; }
+
+	// Fill concentric rings OUTSIDE-IN: the outer ring packs tight and full FIRST (the visible perimeter
+	// is never loose), each inner ring steps in by RadialGap, the centre stays EMPTY. Only the innermost
+	// ring is ever partial — it spreads its slack evenly around its circle. Expanding the drag grows the
+	// outer ring's capacity, CONSUMING inner rings; shrinking adds rings down to the floor.
+	Layout.Positions.SetNum(N);
+	int32 Idx = 0;
+	FFixedPoint S = OuterRadius;
+	while (Idx < N)
+	{
+		// A floor ring has no room for another ring inside it: it absorbs ALL remaining members (the
+		// accepted shrink minimum; SeparatePositions later spreads any resulting overlap).
+		const bool bFloorRing = (S - RadialGap) < MinRingRadius;
+
+		// Greedily gather this ring's members (the first always fits; otherwise stop before Sum(w) > 2pi).
+		const int32 Start = Idx;
+		FFixedPoint SumW = FFixedPoint::Zero;
+		while (Idx < N)
+		{
+			const FFixedPoint W = AngularWidth(EffR[Idx], S);
+			if (Idx > Start && !bFloorRing && (SumW + W) > TwoPi) { break; }
+			SumW = SumW + W;
+			Idx++;
+		}
+		const int32 Count = Idx - Start;
+
+		// Even slack so a full ring is exactly tight and a partial (innermost) ring spreads around the
+		// whole circle rather than bunching on an arc.
+		FFixedPoint Slack = TwoPi - SumW; if (Slack < FFixedPoint::Zero) { Slack = FFixedPoint::Zero; }
+		const FFixedPoint SlackShare = (Count > 0) ? (Slack / FFixedPoint::FromInt(Count)) : FFixedPoint::Zero;
+
+		FFixedPoint Acc = FFixedPoint::Zero;
+		for (int32 p = Start; p < Idx; ++p)
+		{
+			const FFixedPoint W = AngularWidth(EffR[p], S);
+			const FFixedPoint Angle = Acc + W / FFixedPoint::Two + SlackShare / FFixedPoint::Two;
+			const FFixedVector LocalOffset(S * SeinMath::Cos(Angle), S * SeinMath::Sin(Angle), FFixedPoint::Zero);
+			const FFixedVector WorldOffset = Facing.RotateVector(LocalOffset);
+			Layout.Positions[p] = ProjectToNavigable(World, Center + WorldOffset, Center);
+			Acc = Acc + W + SlackShare;
+		}
+
+		if (bFloorRing) { break; } // the floor ring already consumed everything left
+		S = S - RadialGap;
 	}
 	return Layout;
 }

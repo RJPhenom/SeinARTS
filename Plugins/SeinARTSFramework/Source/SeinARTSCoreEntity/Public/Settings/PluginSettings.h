@@ -532,9 +532,13 @@ public:
 		meta = (DisplayName = "Enable Formation Preview"))
 	bool bEnableFormationPreview = true;
 
-	/** Actor class the preview subsystem spawns to render the per-member preview decals.
-	 *  Empty -> ASeinFormationPreviewActor (framework default). Subclass in Blueprint to
-	 *  author the look (decal material, quality tints). */
+	/** Actor class the preview subsystem spawns to render the per-member destination preview.
+	 *  Empty -> ASeinFormationPreviewActor (framework default = flat MESH quads; ghost-free
+	 *  under TAA). Shipped alternatives: ASeinDecalFormationPreviewActor (deferred decals —
+	 *  terrain-conforming but TAA-smears while dragging) and ASeinISMFormationPreviewActor
+	 *  (one instanced-mesh draw call; scales to huge formations). Subclass any of them in
+	 *  Blueprint to author the look (preview material/mesh, quality tints), or author a fully
+	 *  custom backend by overriding the element hooks. */
 	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Formation",
 		meta = (DisplayName = "Formation Preview Actor Class",
 				MetaClass = "/Script/SeinARTSFramework.SeinFormationPreviewActor"))
@@ -543,8 +547,8 @@ public:
 	/** Project-wide DEFAULT formation: the USeinFormation a move uses when the order doesn't
 	 *  nominate a specific one. Drives BOTH the right-click-DRAG default AND (when Enable
 	 *  Single-Click Formations is on) the plain-click formation. Default: Box. Squads ignore
-	 *  this (they lay out their authored slots). Box/Line need the drag's width, so they
-	 *  collapse to a point on a plain click -- pick Grid/Ring/Column/Wedge for a single-click
+	 *  this (they lay out their authored slots). Box needs the drag's width, so it forms a
+	 *  square-ish block on a plain click -- pick Grid/Ring/Wedge/Square for a single-click
 	 *  spread. */
 	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Formation",
 		meta = (DisplayName = "Default Formation"))

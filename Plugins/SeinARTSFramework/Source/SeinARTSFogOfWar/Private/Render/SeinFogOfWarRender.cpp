@@ -238,7 +238,7 @@ void ASeinFogOfWarRender::EnsureTexture(int32 W, int32 H)
 	if (!FogTexture) return;
 
 	FogTexture->SRGB = false;            // tint bytes are linear; no gamma decode
-	FogTexture->Filter = bSmoothEdges ? TF_Bilinear : TF_Nearest;
+	FogTexture->Filter = (SmoothingStrength > 0.0f) ? TF_Bilinear : TF_Nearest;
 	FogTexture->MipGenSettings = TMGS_NoMipmaps;
 	FogTexture->NeverStream = true;
 	FogTexture->UpdateResource();
@@ -273,6 +273,11 @@ void ASeinFogOfWarRender::RebuildTexture()
 		PixelBuffer[o + 1] = C.G;
 		PixelBuffer[o + 2] = C.R;
 		PixelBuffer[o + 3] = C.A;
+	}
+
+	if (SmoothingStrength > 0.0f)
+	{
+		BlurPixelBuffer(SmoothingStrength);
 	}
 	UploadPixels();
 
@@ -310,6 +315,66 @@ void ASeinFogOfWarRender::UploadPixels()
 		});
 }
 
+void ASeinFogOfWarRender::BlurPixelBuffer(float Radius)
+{
+	if (Radius <= 0.0f || TexWidth <= 0 || TexHeight <= 0) return;
+	if (PixelBuffer.Num() != TexWidth * TexHeight * 4) return;
+
+	const int32 W = TexWidth;
+	const int32 H = TexHeight;
+	const int32 R = FMath::FloorToInt(Radius);
+	const float Frac = Radius - static_cast<float>(R);          // weight of the outer (R+1) tap
+	const float Norm = 1.0f / ((2 * R + 1) + 2.0f * Frac);
+
+	TArray<uint8> Tmp;
+	Tmp.SetNumUninitialized(W * H * 4);
+
+	// Horizontal pass: PixelBuffer -> Tmp (clamp at edges).
+	for (int32 y = 0; y < H; ++y)
+	{
+		const int32 Row = y * W;
+		for (int32 x = 0; x < W; ++x)
+		{
+			float Acc[4] = { 0.f, 0.f, 0.f, 0.f };
+			for (int32 k = -R; k <= R; ++k)
+			{
+				const int32 SI = (Row + FMath::Clamp(x + k, 0, W - 1)) * 4;
+				for (int32 c = 0; c < 4; ++c) { Acc[c] += PixelBuffer[SI + c]; }
+			}
+			if (Frac > 0.0f)
+			{
+				const int32 LI = (Row + FMath::Clamp(x - (R + 1), 0, W - 1)) * 4;
+				const int32 RI = (Row + FMath::Clamp(x + (R + 1), 0, W - 1)) * 4;
+				for (int32 c = 0; c < 4; ++c) { Acc[c] += Frac * (PixelBuffer[LI + c] + PixelBuffer[RI + c]); }
+			}
+			const int32 DI = (Row + x) * 4;
+			for (int32 c = 0; c < 4; ++c) { Tmp[DI + c] = (uint8)FMath::Clamp(FMath::RoundToInt(Acc[c] * Norm), 0, 255); }
+		}
+	}
+
+	// Vertical pass: Tmp -> PixelBuffer.
+	for (int32 y = 0; y < H; ++y)
+	{
+		for (int32 x = 0; x < W; ++x)
+		{
+			float Acc[4] = { 0.f, 0.f, 0.f, 0.f };
+			for (int32 k = -R; k <= R; ++k)
+			{
+				const int32 SI = (FMath::Clamp(y + k, 0, H - 1) * W + x) * 4;
+				for (int32 c = 0; c < 4; ++c) { Acc[c] += Tmp[SI + c]; }
+			}
+			if (Frac > 0.0f)
+			{
+				const int32 TI = (FMath::Clamp(y - (R + 1), 0, H - 1) * W + x) * 4;
+				const int32 BI = (FMath::Clamp(y + (R + 1), 0, H - 1) * W + x) * 4;
+				for (int32 c = 0; c < 4; ++c) { Acc[c] += Frac * (Tmp[TI + c] + Tmp[BI + c]); }
+			}
+			const int32 DI = (y * W + x) * 4;
+			for (int32 c = 0; c < 4; ++c) { PixelBuffer[DI + c] = (uint8)FMath::Clamp(FMath::RoundToInt(Acc[c] * Norm), 0, 255); }
+		}
+	}
+}
+
 FLinearColor ASeinFogOfWarRender::TintForCell(uint8 Bits, uint8 VisibleMask) const
 {
 	const bool bExplored = (Bits & SEIN_FOW_BIT_EXPLORED) != 0;
@@ -334,7 +399,7 @@ void ASeinFogOfWarRender::PostEditChangeProperty(FPropertyChangedEvent& Event)
 {
 	Super::PostEditChangeProperty(Event);
 
-	// Live-tune during PIE: drop the texture so a Smooth-Edges (filter) change
+	// Live-tune during PIE: drop the texture so a Smoothing-Strength (filter) change
 	// takes effect, re-apply the active layer's style, then re-bake tints from the
 	// current grid. Outside a running world ResolveFog() returns null and the
 	// rebuild is a no-op.

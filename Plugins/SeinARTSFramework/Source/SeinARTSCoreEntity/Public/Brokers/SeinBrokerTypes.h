@@ -285,6 +285,14 @@ struct SEINARTSCOREENTITY_API FSeinFormationLayout
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker|Formation")
 	TArray<FFixedVector> Positions;
 
+	/** Per-member footprint radius (world units), index-aligned with Positions —
+	 *  the radius the formation spaced each slot by. Emitted so the destination
+	 *  preview can size each dot to the unit's footprint (preview === commit). May
+	 *  be empty when a formation doesn't size by footprint; consumers then fall back
+	 *  to a uniform dot size. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker|Formation")
+	TArray<FFixedPoint> Radii;
+
 	/** Formation's facing at the anchor — the direction the front rank faces.
 	 *  Always rotated to point from the centroid toward the move target (even a
 	 *  straight 180° reverse): the formation pivots to face where it's going. */

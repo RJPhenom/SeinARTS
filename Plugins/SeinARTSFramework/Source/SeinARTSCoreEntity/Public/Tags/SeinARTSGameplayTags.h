@@ -149,14 +149,20 @@ namespace SeinARTSTags
 
 	// --- Formation ---
 	// Formation-identity vocabulary. The framework ships Formation.Box (the default
-	// right-click-drag formation) plus Line/Column/Wedge/Ring options; an order gesture
+	// right-click-drag formation) plus Wedge/Ring/Square options; an order gesture
 	// nominates one and the command broker resolver maps it to a USeinFormation via
 	// FormationsByTag. Games add their own formation tags under the Formation root.
 	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Formation);
 	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Formation_Box);
-	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Formation_Line);
-	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Formation_Column);
 	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Formation_Wedge);
 	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Formation_Ring);
+	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Formation_Square);
 	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Formation_Blob);
+
+	// --- UI ---
+	// Render/UI-facing entity tags consumed by the UI Toolkit.
+	// Minimap.Hidden: an entity carrying this tag is NOT drawn as a minimap blip
+	// (smoke / vfx emitters, environmental props, capture markers, etc.). Authored via the
+	// entity bridge's BaseTags. Default (no tag) = shown — so it never hides a unit by accident.
+	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(UI_Minimap_Hidden);
 }

@@ -213,6 +213,12 @@ void USeinFormationPreviewSubsystem::RefreshPreview()
 
 	const TArray<FVector> WorldPositions = ConvertPositions(Layout.Positions);
 
+	// Per-member footprint radii (fixed → world cm) so each preview dot sizes to its
+	// unit's footprint. Empty when the formation didn't emit radii → uniform dots.
+	TArray<float> RadiiUU;
+	RadiiUU.Reserve(Layout.Radii.Num());
+	for (const FFixedPoint& R : Layout.Radii) { RadiiUU.Add(R.ToFloat()); }
+
 	// Optional per-cell quality tags from an extension (e.g. Cover supplies cover
 	// quality via USeinWorldSubsystem::PreviewQualityProvider). Unbound → neutral.
 	// Throttled: re-query only on selection change, cursor move past a threshold,
@@ -236,7 +242,7 @@ void USeinFormationPreviewSubsystem::RefreshPreview()
 		bQualityDirty = false;
 	}
 
-	PreviewActor->SetPositions(WorldPositions, CachedQualities);
+	PreviewActor->SetPositions(WorldPositions, CachedQualities, RadiiUU);
 	PreviewActor->SetActorHiddenInGame(false);
 	bIsVisible = true;
 }

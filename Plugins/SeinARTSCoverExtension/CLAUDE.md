@@ -47,10 +47,14 @@ nothing in the framework depends on it.
 - **`USeinCoverSubsystem`** (WorldSubsystem) — owns the active system (class from settings),
   auto-registers/unregisters providers via `USeinWorldSubsystem::OnEntitySpawned/Destroyed`.
 - **`USeinCoverBPFL`** — `SeinQueryCoverAt`, `SeinQueryBestCoverQualityAt`, `SeinGetCoverDirection`.
-- **`ASeinFormationPreviewActor`** (Blueprintable) — per-member decal pool with per-decal MIDs;
-  `CoverQualityTints` (green/yellow/red defaults); `SetPositions` / `HideAll`.
-- **`USeinARTSCoverSettings`** (DeveloperSettings) — `CoverSystemClass`,
-  `FormationPreviewActorClass`, `bEnableFormationPreview`, `CoverSnapRadius` (default 500).
+- **Destination preview** — now a BASE framework feature: `ASeinFormationPreviewActor` + its
+  swappable render backends (default = ghost-free mesh quads; Decal / ISM subclasses) live in
+  SeinARTSFramework. Cover only feeds it per-cell quality tags via
+  `USeinWorldSubsystem::PreviewQualityProvider`; the `CoverQualityTints` (green/yellow/red) are
+  authored on the preview BP.
+- **`USeinARTSCoverSettings`** (DeveloperSettings) — `CoverSystemClass`, `CoverSnapRadius`
+  (default 500). (`FormationPreviewActorClass` / `bEnableFormationPreview` moved to
+  `USeinARTSCoreSettings`.)
 - Native gameplay tags: `SeinARTS.Cover.{Heavy, Light, Negative, UsesCover}`.
 
 ## Resolvers

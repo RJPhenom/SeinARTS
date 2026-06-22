@@ -250,6 +250,23 @@ void USeinNavigationSubsystem::BindSimDelegates(UWorld& World)
 			return Nav->ProjectPointToNavOnElevation(InWorld, OutPassable);
 		});
 
+	// Occupancy-aware projection — same as above but rejects cells already claimed by peer footprints,
+	// so a formation that overflows the play area packs onto the inside edge without piling. Used by
+	// USeinFormation::ProjectPositionsToNavigable. Same permit-on-no-data fallback.
+	Sim->NavProjectFreeResolver.BindWeakLambda(this,
+		[NavWeak](const FFixedVector& InWorld, FFixedPoint SelfRadius,
+			const TArray<FFixedVector>& AvoidCentres, const TArray<FFixedPoint>& AvoidRadii,
+			FFixedVector& OutProjected) -> bool
+		{
+			USeinNavigation* Nav = NavWeak.Get();
+			if (!Nav || !Nav->HasRuntimeData())
+			{
+				OutProjected = InWorld;
+				return true;
+			}
+			return Nav->ProjectPointToNavFree(InWorld, SelfRadius, AvoidCentres, AvoidRadii, OutProjected);
+		});
+
 	// Hand the dynamic-blocker stamping over to the sim's tick loop. PreTick
 	// priority 7 → after spatial-hash rebuild, before AbilityExecution where
 	// MoveToAction's TickAction calls FindPath. Re-register-safe: unregister

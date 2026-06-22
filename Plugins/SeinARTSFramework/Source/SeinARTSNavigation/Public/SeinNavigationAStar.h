@@ -78,6 +78,12 @@ public:
 	virtual FFixedPoint GetCellSize() const override { return CellSize; }
 	virtual bool ProjectPointToNav(const FFixedVector& WorldPos, FFixedVector& OutProjected) const override;
 	virtual bool ProjectPointToNavOnElevation(const FFixedVector& WorldPos, FFixedVector& OutProjected) const override;
+	virtual bool ProjectPointToNavFree(
+		const FFixedVector& WorldPos,
+		FFixedPoint SelfRadius,
+		const TArray<FFixedVector>& AvoidCentres,
+		const TArray<FFixedPoint>& AvoidRadii,
+		FFixedVector& OutProjected) const override;
 	virtual bool GetCellHeightAt(const FFixedVector& WorldPos, FFixedPoint& OutZ, bool bWalkableOnly = true) const override;
 	virtual bool NavRaycast(const FFixedVector& From, const FFixedVector& To, FFixedVector& OutHitPoint) const override;
 	virtual int32 GetTerrainTypeAt(const FFixedVector& WorldPos) const override;

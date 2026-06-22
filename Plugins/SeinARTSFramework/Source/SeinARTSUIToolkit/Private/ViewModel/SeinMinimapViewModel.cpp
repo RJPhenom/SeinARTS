@@ -8,12 +8,15 @@
 #include "Lib/SeinUIBPFL.h"
 
 #include "Simulation/SeinWorldSubsystem.h"
+#include "Simulation/SeinActorBridgeSubsystem.h"
 #include "Core/SeinEntityPool.h"
 #include "Core/SeinPlayerID.h"
 #include "Types/Entity.h"
 #include "Types/Vector.h"
 #include "Player/SeinPlayerController.h"
 #include "Actor/SeinActor.h"
+#include "Components/SeinIdentityComponent.h"
+#include "Tags/SeinARTSGameplayTags.h"
 
 #include "SeinLevelData.h"
 #include "SeinLevelDataSubsystem.h"
@@ -145,13 +148,27 @@ void USeinMinimapViewModel::RebuildBlips()
 	USeinFogOfWar* Fog = USeinFogOfWarSubsystem::GetFogOfWarForWorld(W);
 	const bool bFogActive = Fog && Fog->HasRuntimeData();
 
+	// Resolve the actor bridge once — used to skip presence-less (abstract) entities below.
+	USeinActorBridgeSubsystem* Bridge = W->GetSubsystem<USeinActorBridgeSubsystem>();
+
 	Sub->GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, const FSeinEntity& Entity)
 	{
-		// NOTE: deliberately NOT gating on Entity.IsSelectable() — the sim's FLAG_SELECTABLE
-		// isn't maintained by the spawn path (in-game selection uses actor traces, not this
-		// flag), so it reads false for every unit. Draw every live entity; if non-unit
-		// entities (e.g. squad-container actors) show up as stray blips, exclude them by
-		// component later.
+		// Skip presence-less / abstract entities — command brokers (spawned per move order),
+		// scenario owners, and other sim-internal bookkeeping have no render actor and aren't
+		// things on the map. (If the bridge is somehow unavailable, don't filter — over-drawing
+		// beats an empty minimap.)
+		if (Bridge && !Bridge->GetActorForEntity(Handle))
+		{
+			return;
+		}
+
+		// Designer opt-out for presence-HAVING non-units (smoke / vfx emitters, props): the
+		// SeinARTS.UI.Minimap.Hidden tag, authored via the bridge's BaseTags. No tag = shown.
+		// (FLAG_SELECTABLE isn't maintained by the spawn path, so it can't gate "is a unit".)
+		if (Sub->HasTag(Handle, SeinARTSTags::UI_Minimap_Hidden.GetTag()))
+		{
+			return;
+		}
 
 		const ESeinRelation Relation = USeinUIBPFL::SeinGetEntityRelation(W, Handle, LocalId);
 
@@ -174,6 +191,13 @@ void USeinMinimapViewModel::RebuildBlips()
 		Blip.Relation = Relation;
 		Blip.SizeClass = ESeinMinimapBlipSize::Medium; // type-based sizing is a future polish pass
 		Blip.bSelected = SelectedSet.Contains(Handle);
+
+		// Per-type minimap sprite from identity (null → widget draws its default dot).
+		if (const FSeinIdentityComponent* Identity = Sub->GetComponent<FSeinIdentityComponent>(Handle))
+		{
+			Blip.Icon = Identity->MinimapIcon;
+		}
+
 		Blips.Add(Blip);
 	});
 }

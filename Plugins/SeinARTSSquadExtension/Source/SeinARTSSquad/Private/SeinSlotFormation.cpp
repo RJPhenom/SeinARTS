@@ -33,6 +33,10 @@ FSeinFormationLayout USeinSlotFormation::BuildFormation_Implementation(
 		Layout.Facing = FacingFromDirection(FFixedVector::ZeroVector - DragFace);
 	}
 
+	// Emit footprint radii for preview dot sizing. Slot POSITIONS stay the designer's
+	// authored offsets — the spacing is authored, not footprint-derived.
+	GatherFootprintRadii(World, Members, Layout.Radii);
+
 	if (N == 0 || !World)
 	{
 		Layout.Positions.Init(Target.Anchor, N);

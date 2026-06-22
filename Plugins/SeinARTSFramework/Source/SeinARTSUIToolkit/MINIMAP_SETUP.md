@@ -121,6 +121,11 @@ Other knobs (no C++):
 - **Background mirrored vs the world** (N/S or E/W swapped) → that's a UV-axis convention, not rotation.
   Ping me and I'll add a `bFlipMinimapY` toggle to the bake / `World To Minimap`.
 - **Blip size/color** → your `WBP_Blip` + the `Relation`/`SizeClass` mapping.
+- **A non-unit entity is blipping** (smoke / vfx emitter, environmental prop) → add the
+  `SeinARTS.UI.Minimap.Hidden` tag to that entity's bridge **Base Tags**. The minimap skips
+  anything carrying it; no tag = shown, so it never hides a real unit by accident.
+  (Presence-less *abstract* entities — command brokers spawned per order, scenario owners, etc. —
+  are skipped automatically since they have no render actor; the tag is only for real actors.)
 - **Fog still chunky** → raise `Fog Blur Radius` and/or `Fog Texture Resolution` in the settings page above.
 - **Viewport box at very low camera tilt** → if the camera looks near the horizon, some screen
   corners stop hitting the ground and the box legitimately disappears (it would be infinite). The
@@ -128,8 +133,10 @@ Other knobs (no C++):
 
 ## Known follow-ups (polish, not blocking)
 
-- Per-type blip size/shape (buildings vs infantry vs heroes) — all blips are `Medium` today;
-  needs an identity-tag → size/shape mapping (could move into the VM).
+- Per-type blip **icons** are supported: set `Minimap Icon` on the unit's `FSeinIdentityComponent`
+  and the blip carries it as `Icon` (the VM populates it). `WBP_Blip` draws it (tint by relation),
+  falling back to the dot when unset. Per-type *size* is still a `Medium` stub — derive size from
+  the icon art, or ask for a `MinimapIconScale` field on identity.
 - Drag-select on the minimap (left-drag currently scrubs the camera).
 - A shipped circular-mask material so circle mode is one click.
 - Ping markers / objective icons — layer more images in `MapRoot`.

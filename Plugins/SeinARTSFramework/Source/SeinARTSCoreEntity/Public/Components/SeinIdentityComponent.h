@@ -47,6 +47,13 @@ struct SEINARTSCOREENTITY_API FSeinIdentityComponent : public FSeinComponent
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Identity")
 	TObjectPtr<UTexture2D> Portrait;
 
+	/** Optional per-type minimap blip sprite. When set, the minimap draws this for the
+	 *  entity (typically tinted by team relation) instead of the default dot — e.g. a tank
+	 *  silhouette vs an infantry dot. Null → default dot. Render-side metadata only (not
+	 *  hashed, like Icon / Portrait). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Identity")
+	TObjectPtr<UTexture2D> MinimapIcon;
+
 	/** Gameplay tag uniquely identifying this entity's type
 	 *  (e.g., `Unit.Infantry`, `Building.Barracks`). Drives Class-scope
 	 *  modifier matching, tag-based selection, and entity-type queries. */

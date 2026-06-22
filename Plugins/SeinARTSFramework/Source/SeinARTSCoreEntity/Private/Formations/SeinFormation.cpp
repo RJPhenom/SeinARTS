@@ -7,6 +7,7 @@
 
 #include "Formations/SeinFormation.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "Components/SeinExtentsComponent.h"
 #include "Math/MathLib.h"
 #include "Types/FixedPoint.h"
 
@@ -52,13 +53,346 @@ FFixedVector USeinFormation::ProjectToNavigable(
 	FFixedVector Position,
 	FFixedVector Fallback)
 {
-	if (World && World->NavProjectResolver.IsBound())
+	// Ground-follow FIRST: on passable terrain, keep the slot's X/Y EXACTLY and snap only
+	// its Z to the (bilinear-interpolated) terrain height. A formation on a hill keeps its
+	// top-down shape — each slot just rides the ground. Without this, every slot carries the
+	// flat anchor Z, and the elevation-aware nav projection below shoves any slot whose
+	// terrain sits >NavProjectionElevationTolerance off that flat Z sideways to a same-
+	// elevation cell — scattering the formation across slopes.
+	//
+	// HeightResolver is walkable-only, so a slot on an IMPASSABLE cell (an in-map obstacle, or off the
+	// play area entirely) returns false here and falls through to the nav-projection below.
+	if (World && World->HeightResolver.IsBound())
+	{
+		FFixedPoint GroundZ;
+		if (World->HeightResolver.Execute(Position, GroundZ))
+		{
+			return FFixedVector(Position.X, Position.Y, GroundZ);
+		}
+	}
+
+	if (!World) return Fallback;
+
+	// Off the play area (or on an obstacle): snap the slot to the NEAREST WALKABLE cell on the nav grid.
+	// Per-slot and occupancy-blind — several slots can snap to the same edge cell here. The resolver's
+	// batch ProjectPositionsToNavigable (occupancy-aware) + SeparatePositions passes spread them onto
+	// distinct free cells afterward so they don't pile up.
+	if (World->NavProjectResolver.IsBound())
 	{
 		FFixedVector Projected;
-		if (World->NavProjectResolver.Execute(Position, Projected)) return Projected;
-		return Fallback;
+		if (World->NavProjectResolver.Execute(Position, Projected)) { return Projected; }
 	}
-	return Position;
+	return Position; // no nav bound / unprojectable → leave as-is
+}
+
+FFixedPoint USeinFormation::GetFootprintRadius(USeinWorldSubsystem* World, FSeinEntityHandle Handle)
+{
+	// Fallback for entities with no authored extents — roughly an infantry body, so
+	// footprint-aware spacing degrades to the old uniform feel rather than zero.
+	const FFixedPoint DefaultRadius = FFixedPoint::FromInt(40);
+	if (!World) return DefaultRadius;
+
+	const FSeinExtentsComponent* Extents = World->GetComponent<FSeinExtentsComponent>(Handle);
+	if (!Extents || Extents->Shapes.Num() == 0) return DefaultRadius;
+
+	FFixedPoint Best = FFixedPoint::Zero;
+	for (const FSeinExtentsShape& Shape : Extents->Shapes)
+	{
+		// Per-shape circumscribed radius (orientation-independent so a formation that
+		// rotates to face the drag never overlaps): Capsule → Radius, Box → √(hx²+hy²).
+		FFixedPoint R = (Shape.Shape == ESeinExtentsShape::Capsule)
+			? Shape.Radius
+			: SeinMath::Sqrt(Shape.HalfExtentX * Shape.HalfExtentX + Shape.HalfExtentY * Shape.HalfExtentY);
+		// Push an offset shape (turret forward of hull center, building wing) out by
+		// its planar offset so the entity's overall reach is covered.
+		const FFixedVector Off(Shape.LocalOffset.X, Shape.LocalOffset.Y, FFixedPoint::Zero);
+		R = R + Off.Size();
+		if (R > Best) Best = R;
+	}
+	return (Best > FFixedPoint::Zero) ? Best : DefaultRadius;
+}
+
+void USeinFormation::GatherFootprintRadii(
+	USeinWorldSubsystem* World,
+	const TArray<FSeinEntityHandle>& Members,
+	TArray<FFixedPoint>& OutRadii)
+{
+	OutRadii.Reset();
+	OutRadii.Reserve(Members.Num());
+	for (const FSeinEntityHandle& M : Members)
+	{
+		OutRadii.Add(GetFootprintRadius(World, M));
+	}
+}
+
+void USeinFormation::Spread1D(
+	const TArray<FFixedPoint>& Radii,
+	FFixedPoint MinGap,
+	FFixedPoint TargetLength,
+	TArray<FFixedPoint>& OutOffsets)
+{
+	const int32 N = Radii.Num();
+	OutOffsets.Reset();
+	OutOffsets.SetNum(N);
+	if (N == 0) return;
+	if (N == 1) { OutOffsets[0] = FFixedPoint::Zero; return; }
+
+	// Tight no-overlap gaps between adjacent centers.
+	TArray<FFixedPoint> Gaps;
+	Gaps.SetNum(N - 1);
+	FFixedPoint Span = FFixedPoint::Zero;
+	for (int32 i = 1; i < N; ++i)
+	{
+		FFixedPoint Gap = Radii[i - 1] + Radii[i];
+		if (Gap < MinGap) { Gap = MinGap; }
+		Gaps[i - 1] = Gap;
+		Span = Span + Gap;
+	}
+
+	// A longer requested span (e.g. a long drag) shares its slack evenly across gaps,
+	// so the line fills the drag without ever overlapping. Shorter → keep tight span.
+	if (TargetLength > Span)
+	{
+		const FFixedPoint Slack = (TargetLength - Span) / FFixedPoint::FromInt(N - 1);
+		for (int32 i = 0; i < Gaps.Num(); ++i) { Gaps[i] = Gaps[i] + Slack; }
+		Span = TargetLength;
+	}
+
+	OutOffsets[0] = FFixedPoint::Zero;
+	for (int32 i = 1; i < N; ++i) { OutOffsets[i] = OutOffsets[i - 1] + Gaps[i - 1]; }
+
+	// Center the run on 0.
+	const FFixedPoint Half = Span / FFixedPoint::Two;
+	for (int32 i = 0; i < N; ++i) { OutOffsets[i] = OutOffsets[i] - Half; }
+}
+
+TArray<int32> USeinFormation::SortIndicesByRadiusDesc(const TArray<FFixedPoint>& Radii)
+{
+	TArray<int32> Order;
+	Order.Reserve(Radii.Num());
+	for (int32 i = 0; i < Radii.Num(); ++i) { Order.Add(i); }
+	Order.Sort([&Radii](int32 A, int32 B)
+	{
+		if (Radii[A] != Radii[B]) { return Radii[A] > Radii[B]; } // largest first
+		return A < B;                                              // deterministic tie-break
+	});
+	return Order;
+}
+
+void USeinFormation::PackFootprints(
+	const TArray<FFixedPoint>& Radii,
+	FFixedPoint DesiredFrontWidth,
+	FFixedPoint MinCell,
+	FSeinFootprintPacking& Out)
+{
+	Out = FSeinFootprintPacking();
+	const int32 N = Radii.Num();
+	if (N == 0) return;
+
+	// STEP 1 — cell = smallest footprint diameter (floored at MinCell so a formation can ask for
+	// extra breathing room); each unit → a span×span box, span = ceil(footprint / cell).
+	FFixedPoint Cell = FFixedPoint::Zero;
+	for (int32 i = 0; i < N; ++i)
+	{
+		const FFixedPoint D = Radii[i] * FFixedPoint::Two;
+		if (i == 0 || D < Cell) { Cell = D; }
+	}
+	if (Cell < MinCell) { Cell = MinCell; }
+	if (Cell <= FFixedPoint::Zero) { Cell = FFixedPoint::FromInt(50); }
+	Out.Cell = Cell;
+
+	Out.Span.SetNum(N);
+	int32 TotalCells = 0, MaxSpan = 1;
+	for (int32 i = 0; i < N; ++i)
+	{
+		const FFixedPoint Diameter = Radii[i] * FFixedPoint::Two;
+		int32 s = 1;
+		while (Cell * FFixedPoint::FromInt(s) < Diameter) { ++s; }
+		Out.Span[i] = s;
+		TotalCells += s * s;
+		if (s > MaxSpan) { MaxSpan = s; }
+	}
+
+	// STEP 2 — column count. A drag passes its front WIDTH (world units) → as many cells as span it;
+	// a click passes <= 0 → a square-ish grid (Y = ceil(sqrt(total cells))). Never narrower than the
+	// biggest box; nudged so (Y - MaxSpan) is EVEN so an even-span big box centres. Rows (X) over-
+	// allocate (centring uses the occupied bounds). Column count derived by accumulation to avoid a
+	// fixed→int conversion.
+	int32 Y;
+	if (DesiredFrontWidth > FFixedPoint::Zero)
+	{
+		Y = 1;
+		FFixedPoint Accum = Cell;
+		while (Accum < DesiredFrontWidth && Y < TotalCells) { Accum = Accum + Cell; ++Y; }
+	}
+	else
+	{
+		Y = 1;
+		while (Y * Y < TotalCells) { ++Y; }
+	}
+	if (Y < MaxSpan) { Y = MaxSpan; }
+	if (MaxSpan > 1 && (((Y - MaxSpan) & 1) != 0)) { ++Y; }
+	const int32 X = (TotalCells + Y - 1) / Y + MaxSpan;
+	Out.Columns = Y;
+	Out.Rows = X;
+
+	TArray<bool> Occ; Occ.Init(false, X * Y);
+	Out.BlockRow.Init(0, N);
+	Out.BlockCol.Init(0, N);
+
+	auto BlockFree = [&](int32 r, int32 c, int32 s) -> bool
+	{
+		for (int32 rr = r; rr < r + s; ++rr)
+			for (int32 cc = c; cc < c + s; ++cc) { if (Occ[rr * Y + cc]) { return false; } }
+		return true;
+	};
+	auto MarkBlock = [&](int32 r, int32 c, int32 s)
+	{
+		for (int32 rr = r; rr < r + s; ++rr)
+			for (int32 cc = c; cc < c + s; ++cc) { Occ[rr * Y + cc] = true; }
+	};
+
+	// STEP 3 — largest first.
+	const TArray<int32> Order = SortIndicesByRadiusDesc(Radii);
+
+	// STEP 4 — big boxes front-and-centre: most-forward (top) row that fits, most-central column there.
+	for (const int32 Idx : Order)
+	{
+		const int32 s = Out.Span[Idx];
+		if (s <= 1) { continue; }
+		int32 PlaceR = 0, PlaceC = 0;
+		for (int32 r = 0; r + s <= X; ++r)
+		{
+			int32 RowBestC = -1, RowBestDist = MAX_int32;
+			for (int32 c = 0; c + s <= Y; ++c)
+			{
+				if (!BlockFree(r, c, s)) { continue; }
+				const int32 dist = FMath::Abs(2 * c + s - Y); // 2×(box-centre col − grid-centre col)
+				if (dist < RowBestDist) { RowBestDist = dist; RowBestC = c; }
+			}
+			if (RowBestC >= 0) { PlaceR = r; PlaceC = RowBestC; break; }
+		}
+		MarkBlock(PlaceR, PlaceC, s);
+		Out.BlockRow[Idx] = PlaceR;
+		Out.BlockCol[Idx] = PlaceC;
+	}
+
+	// STEP 5 — 1×1 boxes fill every remaining cell, row-major.
+	for (const int32 Idx : Order)
+	{
+		if (Out.Span[Idx] != 1) { continue; }
+		int32 PlaceR = 0, PlaceC = 0;
+		bool bPlaced = false;
+		for (int32 r = 0; r < X && !bPlaced; ++r)
+			for (int32 c = 0; c < Y && !bPlaced; ++c)
+				if (!Occ[r * Y + c]) { PlaceR = r; PlaceC = c; bPlaced = true; }
+		Occ[PlaceR * Y + PlaceC] = true;
+		Out.BlockRow[Idx] = PlaceR;
+		Out.BlockCol[Idx] = PlaceC;
+	}
+}
+
+void USeinFormation::SeparatePositions(
+	const TArray<FFixedPoint>& Radii,
+	TArray<FFixedVector>& Positions,
+	int32 MaxIterations)
+{
+	const int32 N = Positions.Num();
+	if (N < 2) return;
+	const FFixedPoint Eps = FFixedPoint::One / FFixedPoint::FromInt(100);
+	for (int32 Iter = 0; Iter < MaxIterations; ++Iter)
+	{
+		bool bMoved = false;
+		for (int32 i = 0; i < N; ++i)
+		{
+			for (int32 j = i + 1; j < N; ++j)
+			{
+				FFixedVector D = Positions[j] - Positions[i]; D.Z = FFixedPoint::Zero;
+				const FFixedPoint DistSq = D.X * D.X + D.Y * D.Y;
+				const FFixedPoint Ri = Radii.IsValidIndex(i) ? Radii[i] : FFixedPoint::Zero;
+				const FFixedPoint Rj = Radii.IsValidIndex(j) ? Radii[j] : FFixedPoint::Zero;
+				const FFixedPoint MinDist = Ri + Rj;
+				if (DistSq >= MinDist * MinDist) { continue; } // touching or clear — leave it
+				FFixedPoint Dist = SeinMath::Sqrt(DistSq);
+				FFixedVector Dir;
+				if (Dist > Eps)
+				{
+					Dir = FFixedVector(D.X / Dist, D.Y / Dist, FFixedPoint::Zero);
+				}
+				else
+				{
+					// Coincident → deterministic arbitrary direction derived from the index pair.
+					const FFixedPoint Ang = FFixedPoint::TwoPi * FFixedPoint::FromInt((i * 7 + j) % 16) / FFixedPoint::FromInt(16);
+					Dir = FFixedVector(SeinMath::Cos(Ang), SeinMath::Sin(Ang), FFixedPoint::Zero);
+					Dist = FFixedPoint::Zero;
+				}
+				const FFixedPoint Push = (MinDist - Dist) / FFixedPoint::Two; // each moves half the overlap
+				Positions[i].X = Positions[i].X - Dir.X * Push;
+				Positions[i].Y = Positions[i].Y - Dir.Y * Push;
+				Positions[j].X = Positions[j].X + Dir.X * Push;
+				Positions[j].Y = Positions[j].Y + Dir.Y * Push;
+				bMoved = true;
+			}
+		}
+		if (!bMoved) break;
+	}
+}
+
+void USeinFormation::ProjectPositionsToNavigable(
+	USeinWorldSubsystem* World,
+	const TArray<FFixedPoint>& Radii,
+	TArray<FFixedVector>& Positions)
+{
+	const int32 N = Positions.Num();
+	if (!World || N == 0) return;
+	// No nav projection bound (tests / nav-less games) → nothing to clamp to; leave positions as-is.
+	if (!World->NavProjectFreeResolver.IsBound()) return;
+
+	// A slot is "off nav" when its cell isn't passable (off the play area, or on an obstacle). With no
+	// passability resolver we can't tell, so we treat everything as on-nav and do nothing — same
+	// permit-on-no-data stance as the rest of the nav seam.
+	const bool bCanTestPassable = World->PassableResolver.IsBound();
+
+	auto RadiusAt = [&Radii](int32 i) -> FFixedPoint
+	{
+		return Radii.IsValidIndex(i) ? Radii[i] : FFixedPoint::Zero;
+	};
+
+	// On-nav slots keep their exact spot and seed the occupied set (off-nav slots must avoid them too).
+	// Collect the off-nav slots to relocate in deterministic index order.
+	TArray<FFixedVector> Occupied;
+	TArray<FFixedPoint>  OccupiedRadii;
+	TArray<int32>        OffNav;
+	Occupied.Reserve(N);
+	OccupiedRadii.Reserve(N);
+	for (int32 i = 0; i < N; ++i)
+	{
+		const bool bOnNav = !bCanTestPassable || World->PassableResolver.Execute(Positions[i]);
+		if (bOnNav)
+		{
+			Occupied.Add(Positions[i]);
+			OccupiedRadii.Add(RadiusAt(i));
+		}
+		else
+		{
+			OffNav.Add(i);
+		}
+	}
+	if (OffNav.Num() == 0) return; // whole formation already on-nav — common case, zero work
+
+	// Relocate each off-nav slot to its nearest free cell, accumulating occupancy as we go so the
+	// overflowing slots neither collide with the in-bounds slots nor with each other.
+	for (const int32 i : OffNav)
+	{
+		const FFixedPoint Ri = RadiusAt(i);
+		FFixedVector Projected;
+		if (World->NavProjectFreeResolver.Execute(Positions[i], Ri, Occupied, OccupiedRadii, Projected))
+		{
+			Positions[i] = Projected;
+		}
+		Occupied.Add(Positions[i]);
+		OccupiedRadii.Add(Ri);
+	}
 }
 
 FSeinFormationLayout USeinFormation::BuildFormation_Implementation(
@@ -72,5 +406,6 @@ FSeinFormationLayout USeinFormation::BuildFormation_Implementation(
 	FSeinFormationLayout Layout;
 	Layout.Facing = ComputeFormationFacing(Target.CurrentCentroid, Target.CurrentFacing, Target.Anchor);
 	Layout.Positions.Init(Target.Anchor, Members.Num());
+	GatherFootprintRadii(World, Members, Layout.Radii); // sized dots even for the blob
 	return Layout;
 }

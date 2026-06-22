@@ -13,6 +13,8 @@
 #include "Data/SeinUITypes.h"     // ESeinRelation
 #include "SeinMinimapTypes.generated.h"
 
+class UTexture2D;
+
 /** Overall minimap display shape (clip mask). Circle is recommended when the map
  *  rotates with the camera (a rotating square leaves empty corner wedges). */
 UENUM(BlueprintType)
@@ -61,6 +63,11 @@ struct FSeinMinimapBlip
 	/** The entity this blip represents (for future click-to-select on the minimap). */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|UI|Minimap")
 	FSeinEntityHandle Entity;
+
+	/** Per-type minimap sprite, copied from the entity's FSeinIdentityComponent::MinimapIcon.
+	 *  Null → the widget should draw its default dot. Typically tinted by Relation. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|UI|Minimap")
+	TObjectPtr<UTexture2D> Icon = nullptr;
 };
 
 /**

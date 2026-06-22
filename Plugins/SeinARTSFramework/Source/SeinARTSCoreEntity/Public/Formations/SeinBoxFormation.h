@@ -8,8 +8,7 @@
  *
  *          This is the default right-click-drag formation (nominated by
  *          SeinARTS.Formation.Box). Degrades gracefully: a short drag / few units →
- *          a column or a single sparse rank spanning the drag. Distinct from
- *          USeinLineFormation, which is a true single rank (no depth).
+ *          a single sparse rank spanning the drag.
  */
 
 #pragma once

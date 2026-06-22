@@ -1097,6 +1097,92 @@ bool USeinNavigationAStar::ProjectPointToNavOnElevation(const FFixedVector& Worl
 	return ProjectPointToNav(WorldPos, OutProjected);
 }
 
+bool USeinNavigationAStar::ProjectPointToNavFree(
+	const FFixedVector& WorldPos,
+	FFixedPoint SelfRadius,
+	const TArray<FFixedVector>& AvoidCentres,
+	const TArray<FFixedPoint>& AvoidRadii,
+	FFixedVector& OutProjected) const
+{
+	if (!HasRuntimeData()) return false;
+
+	int32 X, Y;
+	if (!WorldToGrid(WorldPos, X, Y))
+	{
+		// Off-grid input (the slot overflowed the play area): clamp to the nearest edge cell and scan
+		// inward from there, exactly like ProjectPointToNav — the ring walk below finds the closest
+		// free cell just inside the boundary.
+		if (Width <= 0 || Height <= 0 || CellSize <= FFixedPoint::Zero) return false;
+		const FFixedPoint LocalX = WorldPos.X - Origin.X;
+		const FFixedPoint LocalY = WorldPos.Y - Origin.Y;
+		X = FMath::Clamp((LocalX / CellSize).ToInt(), 0, Width - 1);
+		Y = FMath::Clamp((LocalY / CellSize).ToInt(), 0, Height - 1);
+	}
+
+	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
+	const FFixedPoint ZTolerance = Settings
+		? Settings->NavProjectionElevationTolerance
+		: FFixedPoint::FromInt(100);
+	const int32 MaxProjectionRingRadius = Settings ? Settings->NavProjectionMaxRingRadius : 30;
+	const FFixedPoint ZHint = WorldPos.Z;
+
+	// Cell centre clears every avoid footprint (planar): dist(centre, AvoidCentres[j]) >= SelfRadius +
+	// AvoidRadii[j]. This is the occupancy gate that makes the result a FREE cell, not just a walkable
+	// one — two off-nav slots projecting toward the same edge land on distinct cells.
+	auto ClearsAvoid = [&](const FFixedVector& Centre) -> bool
+	{
+		for (int32 j = 0; j < AvoidCentres.Num(); ++j)
+		{
+			const FFixedPoint Rj = AvoidRadii.IsValidIndex(j) ? AvoidRadii[j] : FFixedPoint::Zero;
+			const FFixedPoint MinD = SelfRadius + Rj;
+			const FFixedPoint DX = Centre.X - AvoidCentres[j].X;
+			const FFixedPoint DY = Centre.Y - AvoidCentres[j].Y;
+			if (DX * DX + DY * DY < MinD * MinD) return false;
+		}
+		return true;
+	};
+	// bRequireElevation pass 1 prefers a same-elevation free cell (no cliff stragglers); pass 2 drops
+	// the elevation constraint so a free cell on the wrong elevation still beats overflowing the map.
+	auto IsAcceptable = [&](int32 CX, int32 CY, bool bRequireElevation) -> bool
+	{
+		if (!IsCellPassable(CX, CY)) return false;
+		if (bRequireElevation)
+		{
+			const FFixedPoint CellZ = CellHeight[CellIndex(CX, CY)];
+			const FFixedPoint ZDiff = (CellZ > ZHint) ? (CellZ - ZHint) : (ZHint - CellZ);
+			if (ZDiff > ZTolerance) return false;
+		}
+		return ClearsAvoid(GridToWorld(CX, CY));
+	};
+
+	for (int32 Pass = 0; Pass < 2; ++Pass)
+	{
+		const bool bRequireElevation = (Pass == 0);
+
+		// Quick check: input cell itself free + acceptable?
+		if (IsAcceptable(X, Y, bRequireElevation)) { OutProjected = GridToWorld(X, Y); return true; }
+
+		// Bounded radial ring scan (same O(8R)-per-ring structure as ProjectPointToNav).
+		for (int32 R = 1; R <= MaxProjectionRingRadius; ++R)
+		{
+			for (int32 i = -R; i <= R; ++i)
+			{
+				if (IsAcceptable(X + i, Y + R, bRequireElevation)) { OutProjected = GridToWorld(X + i, Y + R); return true; }
+				if (IsAcceptable(X + i, Y - R, bRequireElevation)) { OutProjected = GridToWorld(X + i, Y - R); return true; }
+			}
+			for (int32 i = -R + 1; i <= R - 1; ++i)
+			{
+				if (IsAcceptable(X - R, Y + i, bRequireElevation)) { OutProjected = GridToWorld(X - R, Y + i); return true; }
+				if (IsAcceptable(X + R, Y + i, bRequireElevation)) { OutProjected = GridToWorld(X + R, Y + i); return true; }
+			}
+		}
+	}
+
+	// No free cell within scan radius (dense crowd / tiny pocket) — never drop the slot: fall back to
+	// the occupancy-blind nearest walkable cell. The resolver's de-overlap pass remains the last word.
+	return ProjectPointToNavOnElevation(WorldPos, OutProjected);
+}
+
 // ============================================================================
 // A* pathfinding
 // ============================================================================

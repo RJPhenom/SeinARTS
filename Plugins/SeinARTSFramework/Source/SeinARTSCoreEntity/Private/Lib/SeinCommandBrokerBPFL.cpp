@@ -436,6 +436,7 @@ FSeinFormationLayout USeinCommandBrokerBPFL::SeinComputeFormationPreview(
 
 	FSeinFormationLayout Out;
 	Out.Positions.SetNum(Members.Num());
+	Out.Radii.SetNum(Members.Num()); // carry per-member footprint radii for preview dot sizing
 
 	// Per-squad laterally-offset anchors — the SAME helper the commit uses, so the
 	// squads spread side-by-side in the preview exactly as when ordered.
@@ -486,11 +487,13 @@ FSeinFormationLayout USeinCommandBrokerBPFL::SeinComputeFormationPreview(
 		const FSeinFormationLayout SquadLayout = Resolver->ResolveFormationLayout(
 			World, SquadMembers, SquadTarget, bReassignLateral, bReassignDepth);
 
-		// Scatter the squad's positions back to the ORIGINAL member indices.
+		// Scatter the squad's positions (+ footprint radii) back to the ORIGINAL member indices.
 		for (int32 k = 0; k < Indices.Num(); ++k)
 		{
 			Out.Positions[Indices[k]] = SquadLayout.Positions.IsValidIndex(k)
 				? SquadLayout.Positions[k] : SquadAnchor;
+			Out.Radii[Indices[k]] = SquadLayout.Radii.IsValidIndex(k)
+				? SquadLayout.Radii[k] : FFixedPoint::Zero;
 		}
 		// Representative facing for any consumer that draws a facing arrow (the
 		// preview renders per-cell decals from Positions; Facing is advisory).
@@ -542,6 +545,8 @@ FSeinFormationLayout USeinCommandBrokerBPFL::SeinComputeFormationPreview(
 			{
 				Out.Positions[LooseIndices[k]] = LooseLayout.Positions.IsValidIndex(k)
 					? LooseLayout.Positions[k] : TargetLocation;
+				Out.Radii[LooseIndices[k]] = LooseLayout.Radii.IsValidIndex(k)
+					? LooseLayout.Radii[k] : FFixedPoint::Zero;
 			}
 			if (SquadOrder.Num() == 0) { Out.Facing = LooseLayout.Facing; }
 		}

@@ -1,8 +1,13 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinBoxFormation.cpp
- * @brief   Rank box sized by the drag: front width = the guide line, depth fills
- *          behind it (toward the centroid) to fit N.
+ * @brief   Footprint-aware rank box. Shares the Grid's packer
+ *          (USeinFormation::PackFootprints) but sets the front WIDTH from the drag
+ *          length instead of a square aspect — biggest units front-and-centre, the
+ *          rest filling the flanks and ranks behind. A plain click → a square-ish
+ *          block on the cursor (same as the grid). The drag line is the FRONT edge;
+ *          the body packs BEHIND it. InterUnitSpacing is the MINIMUM cell size, so a
+ *          designer can open the ranks up beyond the tight footprint packing.
  */
 
 #include "Formations/SeinBoxFormation.h"
@@ -20,110 +25,61 @@ FSeinFormationLayout USeinBoxFormation::BuildFormation_Implementation(
 		return Layout;
 	}
 
-	// Need a two-point guide (the front line). Without one (e.g. a plain click), or a
-	// degenerate zero-length line, behave like a blob at the anchor.
-	const bool bHasLine = Target.GuidePoints.Num() >= 2;
-	FFixedVector Start = Target.Anchor, End = Target.Anchor, LineVec = FFixedVector::ZeroVector;
-	if (bHasLine)
+	GatherFootprintRadii(World, Members, Layout.Radii);
+
+	// Drag vs click. A drag draws the FRONT line: its length sets the box's front width and its
+	// perpendicular (fixed handedness, DragFacingDir) the facing; the body packs BEHIND the line,
+	// centred on the line's midpoint so the front rank spans the drawn width. A plain click → a
+	// square-ish block centred on the cursor, facing the move direction (identical to the grid).
+	const FFixedVector DragFace = DragFacingDir(Target.GuidePoints);
+	const bool bDrag = !DragFace.IsNearlyZero();
+
+	FFixedVector Center;
+	FFixedPoint  FrontWidth = FFixedPoint::Zero; // <= 0 → square-ish
+	if (bDrag)
 	{
-		Start = Target.GuidePoints[0];
-		End   = Target.GuidePoints.Last();
-		LineVec = End - Start;
-		LineVec.Z = FFixedPoint::Zero;
+		const FFixedVector Start = Target.GuidePoints[0];
+		const FFixedVector End   = Target.GuidePoints.Last();
+		Center = (Start + End) / FFixedPoint::Two;
+		FFixedVector LineVec = End - Start; LineVec.Z = FFixedPoint::Zero;
+		FrontWidth = LineVec.Size();
+		Layout.Facing = FacingFromDirection(DragFace);
 	}
-	if (!bHasLine || LineVec.IsNearlyZero())
+	else
 	{
-		// Plain click (no drag width): still a BOX, not a blob — a default square-ish block
-		// (Cols ~ ceil(sqrt(N))) centered on the anchor, facing the move direction, so
-		// single-click box formations spread. A single unit just stands at the anchor.
-		const FFixedQuaternion ClickFacing = ComputeFormationFacing(Target.CurrentCentroid, Target.CurrentFacing, Target.Anchor);
-		Layout.Facing = ClickFacing;
-		Layout.Positions.Reserve(N);
-		if (N == 1)
-		{
-			Layout.Positions.Add(ProjectToNavigable(World, Target.Anchor, Target.Anchor));
-			return Layout;
-		}
-		const FFixedPoint CS = (InterUnitSpacing > FFixedPoint::Zero) ? InterUnitSpacing : FFixedPoint::FromInt(150);
-		int32 Cols = 1; while (Cols * Cols < N) { ++Cols; } // ceil(sqrt(N)) — square-ish
-		const FFixedVector Fwd = ClickFacing.RotateVector(FFixedVector(FFixedPoint::One, FFixedPoint::Zero, FFixedPoint::Zero));
-		FFixedVector RankAxis(FFixedPoint::Zero - Fwd.Y, Fwd.X, FFixedPoint::Zero); // front-rank width axis (perp to facing)
-		RankAxis = RankAxis.IsNearlyZero() ? FFixedVector(FFixedPoint::Zero, FFixedPoint::One, FFixedPoint::Zero) : FFixedVector::GetSafeNormal(RankAxis);
-		const FFixedPoint HalfW = (FFixedPoint::FromInt(Cols - 1) * CS) / FFixedPoint::Two;
-		// Cursor sits at the FRONT-rank center (matching the drag box, whose front rank is on
-		// the line); ranks fill BEHIND it along -Fwd, so the box trails back from the cursor.
-		for (int32 i = 0; i < N; ++i)
-		{
-			const FFixedPoint AlongW  = FFixedPoint::FromInt(i % Cols) * CS - HalfW;  // centered width (rank axis)
-			const FFixedPoint BackOff = FFixedPoint::FromInt(i / Cols) * CS;          // 0 = front rank at the cursor; grows behind
-			const FFixedVector Pos(
-				Target.Anchor.X + RankAxis.X * AlongW - Fwd.X * BackOff,
-				Target.Anchor.Y + RankAxis.Y * AlongW - Fwd.Y * BackOff,
-				Target.Anchor.Z + RankAxis.Z * AlongW - Fwd.Z * BackOff);
-			Layout.Positions.Add(ProjectToNavigable(World, Pos, Target.Anchor));
-		}
-		return Layout;
+		Center = Target.Anchor;
+		Layout.Facing = ComputeFormationFacing(Target.CurrentCentroid, Target.CurrentFacing, Target.Anchor);
 	}
+	const FFixedQuaternion Facing = Layout.Facing;
 
-	const FFixedPoint  Width = LineVec.Size();
-	const FFixedVector Mid((Start.X + End.X) / FFixedPoint::Two,
-	                       (Start.Y + End.Y) / FFixedPoint::Two,
-	                       (Start.Z + End.Z) / FFixedPoint::Two);
+	// Same footprint packer as the grid — only the front width differs (drag width vs square-ish).
+	// InterUnitSpacing is the MINIMUM cell, opening the ranks beyond the tight footprint pack.
+	FSeinFootprintPacking Pack;
+	PackFootprints(Layout.Radii, FrontWidth, InterUnitSpacing, Pack);
+	const FFixedPoint Cell = Pack.Cell;
 
-	// Facing: the drag DIRECTION is the authority: face the front's perpendicular by fixed
-	// handedness (USeinFormation::DragFacingDir), NOT toward/away any centroid. Ranks fill
-	// BEHIND the front line (the drag line is the formation's FRONT edge); with this
-	// handedness the back side is +FaceDir, so the box sits behind the line and faces out
-	// over it. Drag the line the other way to flip the facing/side.
-	const FFixedVector FaceDir = DragFacingDir(Target.GuidePoints);
-	const FFixedVector BackDir = FaceDir;
-	Layout.Facing = FacingFromDirection(FaceDir);
-
-	// Front-rank column count = how many units fit across the drag width at spacing,
-	// capped at N (few units → one sparse rank spanning the drag). Counted by
-	// accumulation to avoid a fixed→int conversion.
-	const FFixedPoint S = (InterUnitSpacing > FFixedPoint::Zero) ? InterUnitSpacing : FFixedPoint::FromInt(150);
-	int32 Columns = 1;
-	{
-		FFixedPoint Accum = S;
-		while (Accum <= Width && Columns < N)
-		{
-			Accum = Accum + S;
-			++Columns;
-		}
-	}
-	if (Columns < 1) { Columns = 1; }
-	if (Columns > N) { Columns = N; }
-
-	const FFixedVector Delta = End - Start;
-	const FFixedPoint ColDenom = (Columns > 1) ? FFixedPoint::FromInt(Columns - 1) : FFixedPoint::One;
-
-	Layout.Positions.Reserve(N);
+	// Centre on the occupied bounding box; row 0 → FRONT. Drag → front rank on the line, body behind;
+	// click → centred block, front toward the move dir. (Identical anchoring to the grid.)
+	int32 MinR = MAX_int32, MaxR = -1, MinC = MAX_int32, MaxC = -1;
 	for (int32 i = 0; i < N; ++i)
 	{
-		const int32 Col = i % Columns;
-		const int32 Row = i / Columns;
+		const int32 s = Pack.Span[i];
+		MinR = FMath::Min(MinR, Pack.BlockRow[i]); MaxR = FMath::Max(MaxR, Pack.BlockRow[i] + s - 1);
+		MinC = FMath::Min(MinC, Pack.BlockCol[i]); MaxC = FMath::Max(MaxC, Pack.BlockCol[i] + s - 1);
+	}
+	const int32 MidRow2 = MinR + MaxR + 1;
+	const int32 MidCol2 = MinC + MaxC + 1;
 
-		// Spread the file across the front line (Start→End); a single column sits at
-		// the line midpoint.
-		FFixedVector FrontPt;
-		if (Columns <= 1)
-		{
-			FrontPt = Mid;
-		}
-		else
-		{
-			const FFixedPoint T = FFixedPoint::FromInt(Col) / ColDenom;
-			FrontPt = FFixedVector(Start.X + Delta.X * T, Start.Y + Delta.Y * T, Start.Z + Delta.Z * T);
-		}
-
-		// Stack ranks behind the front, toward the centroid.
-		const FFixedPoint RowOff = FFixedPoint::FromInt(Row) * S;
-		const FFixedVector Pos(FrontPt.X + BackDir.X * RowOff,
-		                       FrontPt.Y + BackDir.Y * RowOff,
-		                       FrontPt.Z + BackDir.Z * RowOff);
-
-		Layout.Positions.Add(ProjectToNavigable(World, Pos, Target.Anchor));
+	Layout.Positions.SetNum(N);
+	for (int32 i = 0; i < N; ++i)
+	{
+		const int32 s = Pack.Span[i];
+		const FFixedPoint LocalX = bDrag
+			? FFixedPoint::FromInt(2 * Pack.BlockRow[i] + s) * Cell / FFixedPoint::Two
+			: FFixedPoint::FromInt(MidRow2 - (2 * Pack.BlockRow[i] + s)) * Cell / FFixedPoint::Two;
+		const FFixedPoint LocalY = FFixedPoint::FromInt((2 * Pack.BlockCol[i] + s) - MidCol2) * Cell / FFixedPoint::Two;
+		const FFixedVector WorldOffset = Facing.RotateVector(FFixedVector(LocalX, LocalY, FFixedPoint::Zero));
+		Layout.Positions[i] = ProjectToNavigable(World, Center + WorldOffset, Center);
 	}
 
 	return Layout;

@@ -287,6 +287,26 @@ public:
 		return ProjectPointToNav(WorldPos, OutProjected);
 	}
 
+	/** Like ProjectPointToNavOnElevation, but additionally rejects any candidate cell whose centre is
+	 *  within `SelfRadius + AvoidRadii[j]` of `AvoidCentres[j]` — i.e. the nearest walkable cell that is
+	 *  also FREE of the given footprints. The formation layer feeds the already-placed slots as the
+	 *  avoid set so an off-nav slot snaps onto the inside edge of the play area without piling onto a
+	 *  peer (occupancy-aware nearest-free-cell). `AvoidCentres` / `AvoidRadii` are index-aligned; a
+	 *  missing radius counts as zero. Falls back to a free-but-any-elevation cell, then to a plain
+	 *  occupancy-blind projection, so a slot is never dropped.
+	 *
+	 *  Default: ignores avoidance and defers to ProjectPointToNavOnElevation. Subclasses whose grid
+	 *  stores per-cell heights override to do the real occupancy-aware scan. */
+	virtual bool ProjectPointToNavFree(
+		const FFixedVector& WorldPos,
+		FFixedPoint SelfRadius,
+		const TArray<FFixedVector>& AvoidCentres,
+		const TArray<FFixedPoint>& AvoidRadii,
+		FFixedVector& OutProjected) const
+	{
+		return ProjectPointToNavOnElevation(WorldPos, OutProjected);
+	}
+
 	/** Sample the baked top-of-surface Z at a world-space XY.
 	 *
 	 *   `bWalkableOnly = true` (default): refuses on blocked cells (cube

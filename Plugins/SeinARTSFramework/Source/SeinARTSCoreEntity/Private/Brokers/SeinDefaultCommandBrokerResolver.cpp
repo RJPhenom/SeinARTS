@@ -24,8 +24,10 @@
 #include "Components/SeinAbilityComponent.h"
 #include "Components/SeinCommandBrokerData.h"
 #include "Formations/SeinFormation.h"
-#include "Formations/SeinLineFormation.h"
 #include "Formations/SeinBoxFormation.h"
+#include "Formations/SeinWedgeFormation.h"
+#include "Formations/SeinRingFormation.h"
+#include "Formations/SeinSquareFormation.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Tags/SeinARTSGameplayTags.h"
 #include "Formations/SeinBlobFormation.h"
@@ -177,9 +179,11 @@ USeinDefaultCommandBrokerResolver::USeinDefaultCommandBrokerResolver()
 	// nominate any of them via FormationsByTag. The default order gesture nominates NONE
 	// for a drag (so it falls back to the project Default Formation, default Box) and
 	// Formation.Blob for a single-point click. Designers re-point/extend this map on the CDO.
-	FormationsByTag.Add(SeinARTSTags::Formation_Box,  USeinBoxFormation::StaticClass());
-	FormationsByTag.Add(SeinARTSTags::Formation_Line, USeinLineFormation::StaticClass());
-	FormationsByTag.Add(SeinARTSTags::Formation_Blob, USeinBlobFormation::StaticClass());
+	FormationsByTag.Add(SeinARTSTags::Formation_Box,    USeinBoxFormation::StaticClass());
+	FormationsByTag.Add(SeinARTSTags::Formation_Wedge,  USeinWedgeFormation::StaticClass());
+	FormationsByTag.Add(SeinARTSTags::Formation_Ring,   USeinRingFormation::StaticClass());
+	FormationsByTag.Add(SeinARTSTags::Formation_Square, USeinSquareFormation::StaticClass());
+	FormationsByTag.Add(SeinARTSTags::Formation_Blob,   USeinBlobFormation::StaticClass());
 }
 
 void USeinDefaultCommandBrokerResolver::ReassignSlots(
@@ -203,19 +207,46 @@ void USeinDefaultCommandBrokerResolver::ReassignSlots(
 		MemberPos[i] = Entity ? Entity->Transform.GetLocation() : Positions[i];
 	}
 
-	if (bLateral && bDepth)
+	// FOOTPRINT-CLASS PARTITION. A footprint-aware formation reserves each slot for a SPECIFIC
+	// footprint — a 3×3 box slot is sized for a tank, a 1×1 for a rifleman — and the per-member Radii
+	// it emits are index-aligned to MEMBERS, not slots. The anti-cross re-match below permutes only
+	// Positions, so a footprint-BLIND global match (the old code) would hand the tank's reserved slot
+	// to whichever unit happens to stand nearest it and drop the tank into a rifleman's slot — the big
+	// ring then renders at a small slot, the small ring in the big space. So we re-match INSIDE each
+	// footprint class only: a class's members compete for exactly the slots the formation gave that
+	// class. Anti-cross is preserved among same-size units; a cross-size swap can never happen. The
+	// uniform-infantry case is one class == a single partition == the old whole-array behaviour.
+	TArray<FFixedPoint> Radii;
+	USeinFormation::GatherFootprintRadii(World, Members, Radii);
+	TArray<FFixedPoint> Classes;
+	for (int32 i = 0; i < N; ++i) { Classes.AddUnique(Radii[i]); }
+
+	// One axis → 1-D rank match along it. Lateral = the formation RIGHT axis (left/right order);
+	// Depth = the formation FORWARD axis (front/back order). Loop-invariant, hoisted out.
+	const FFixedVector Axis = bLateral
+		? FormationFacing.RotateVector(FFixedVector::RightVector)
+		: FormationFacing.RotateVector(FFixedVector::ForwardVector);
+
+	for (const FFixedPoint& ClassRadius : Classes)
 	{
-		// Both axes → full 2-D nearest-slot assignment.
-		SeinDefaultBrokerLocal::Reassign2D(Members, MemberPos, Positions);
-	}
-	else
-	{
-		// One axis → 1-D rank match along it. Lateral = the formation RIGHT axis (left/right order);
-		// Depth = the formation FORWARD axis (front/back order).
-		const FFixedVector Axis = bLateral
-			? FormationFacing.RotateVector(FFixedVector::RightVector)
-			: FormationFacing.RotateVector(FFixedVector::ForwardVector);
-		SeinDefaultBrokerLocal::Reassign1D(Members, MemberPos, Positions, Axis);
+		TArray<int32> Idx;
+		for (int32 i = 0; i < N; ++i) { if (Radii[i] == ClassRadius) { Idx.Add(i); } }
+		if (Idx.Num() <= 1) { continue; } // a lone unit in its class — its reserved slot is fixed.
+
+		TArray<FSeinEntityHandle> SubMembers;   SubMembers.Reserve(Idx.Num());
+		TArray<FFixedVector>      SubMemberPos; SubMemberPos.Reserve(Idx.Num());
+		TArray<FFixedVector>      SubPositions; SubPositions.Reserve(Idx.Num());
+		for (const int32 i : Idx)
+		{
+			SubMembers.Add(Members[i]);
+			SubMemberPos.Add(MemberPos[i]);
+			SubPositions.Add(Positions[i]);
+		}
+
+		if (bLateral && bDepth) { SeinDefaultBrokerLocal::Reassign2D(SubMembers, SubMemberPos, SubPositions); }
+		else                    { SeinDefaultBrokerLocal::Reassign1D(SubMembers, SubMemberPos, SubPositions, Axis); }
+
+		for (int32 k = 0; k < Idx.Num(); ++k) { Positions[Idx[k]] = SubPositions[k]; }
 	}
 }
 
@@ -247,6 +278,19 @@ FSeinFormationLayout USeinDefaultCommandBrokerResolver::ResolveFormationLayout_I
 	// 2-D); the squad resolver passes the squad's per-squad opt-IN flags. Both paths run THROUGH this
 	// shared call, so preview and commit stay byte-identical. Deterministic.
 	ReassignSlots(World, Members, Layout.Positions, Layout.Facing, bReassignLateral, bReassignDepth);
+
+	// De-overlap / de-dup safety net: no two members may sit on top of each other (footprint-aware,
+	// using each unit's real radius). Spreads slots that under-spaced on a tight curve/corner, and any
+	// that nav-projected to the same nearest free cell when snapped off the play-area edge. Shared
+	// path → preview === commit.
+	USeinFormation::SeparatePositions(Layout.Radii, Layout.Positions, 16);
+
+	// Off-nav safety net: the de-overlap above is nav-blind, so it can shove an edge slot off the play
+	// area (and a blob spreads off its anchor entirely). Clamp any position left off the nav area onto
+	// the nearest FREE cell, occupancy-aware so they pack the inside edge without piling. Runs BEFORE
+	// the cover hook so authoritative cover slots (which intentionally overrule the bake) are the last
+	// word. Shared path → preview === commit.
+	USeinFormation::ProjectPositionsToNavigable(World, Layout.Radii, Layout.Positions);
 
 	// Hook subclasses (e.g. cover-aware resolvers) to mutate positions before
 	// the layout returns. Empty default impl on the base class — no-op for

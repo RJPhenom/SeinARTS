@@ -250,6 +250,27 @@ DECLARE_DELEGATE_RetVal_TwoParams(bool, FSeinNavProjectResolver,
 	const FFixedVector& /*InWorld*/, FFixedVector& /*OutPassable*/);
 
 /**
+ * Delegate sim uses to snap a world position to the nearest passable cell that is ALSO free of a set
+ * of footprints — the occupancy-aware sibling of FSeinNavProjectResolver. Registered by
+ * USeinNavigationSubsystem at OnWorldBeginPlay.
+ *
+ *   InWorld:      position to snap (a formation slot that overflowed the play area)
+ *   SelfRadius:   the snapping slot's footprint radius
+ *   AvoidCentres: world positions already claimed by peer slots (index-aligned with AvoidRadii)
+ *   AvoidRadii:   peer footprint radii; a candidate cell must clear `SelfRadius + AvoidRadii[j]` of each
+ *   OutProjected: nearest walkable + unoccupied position (output)
+ *
+ * Returns true if a cell was found (falls back to occupancy-blind nearest-walkable rather than fail).
+ * Sim defaults to "permit + identity" (`OutProjected = InWorld`, returns true) if no resolver is
+ * registered. Used by USeinFormation::ProjectPositionsToNavigable to pack off-nav slots onto the
+ * inside edge of the play area without piling them onto each other.
+ */
+DECLARE_DELEGATE_RetVal_FiveParams(bool, FSeinNavProjectFreeResolver,
+	const FFixedVector& /*InWorld*/, FFixedPoint /*SelfRadius*/,
+	const TArray<FFixedVector>& /*AvoidCentres*/, const TArray<FFixedPoint>& /*AvoidRadii*/,
+	FFixedVector& /*OutProjected*/);
+
+/**
  * Delegate the sim uses to ask whether a world position is an AUTHORITATIVE
  * destination — one that OVERRULES the coarse nav bake (a cover slot). Registered
  * by USeinCoverSubsystem (SeinARTSCover) at world begin-play; unbound when the
@@ -523,6 +544,13 @@ public:
 	 *  terrain. Registered by USeinNavigationSubsystem at OnWorldBeginPlay.
 	 *  If unbound, projection is a no-op (slot stays where it was). */
 	FSeinNavProjectResolver NavProjectResolver;
+
+	/** Cross-module resolver for "snap to nearest passable cell that is also FREE of these footprints" —
+	 *  the occupancy-aware sibling of NavProjectResolver. Registered by USeinNavigationSubsystem at
+	 *  OnWorldBeginPlay. If unbound, projection is a no-op (slot stays where it was). Used by
+	 *  USeinFormation::ProjectPositionsToNavigable to clamp off-nav formation slots onto free play-area
+	 *  space without piling. */
+	FSeinNavProjectFreeResolver NavProjectFreeResolver;
 
 	/** Cross-module resolver: "is this world position an AUTHORITATIVE destination
 	 *  (a cover slot) that overrules the coarse nav bake?" Bound by

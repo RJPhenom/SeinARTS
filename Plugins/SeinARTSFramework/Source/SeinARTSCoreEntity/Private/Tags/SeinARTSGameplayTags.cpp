@@ -89,9 +89,11 @@ namespace SeinARTSTags
 	// --- Formation ---
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Formation,      "SeinARTS.Formation",      "Root for formation-identity tags (order gestures nominate one; the broker resolver maps to a USeinFormation)");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Formation_Box,  "SeinARTS.Formation.Box",  "Default right-click-drag formation: a Total-War rank box (front width = the drag, depth fills to fit N)");
-	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Formation_Line,   "SeinARTS.Formation.Line",   "A true single-rank line spread along the drag (option; Box is the drag default)");
-	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Formation_Column, "SeinARTS.Formation.Column", "Single-file column (1 wide, N deep) trailing behind the lead");
-	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Formation_Wedge,  "SeinARTS.Formation.Wedge",  "Wedge / arrowhead: tip forward, arms fanning back-left and back-right");
-	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Formation_Ring,   "SeinARTS.Formation.Ring",   "Defensive ring: members spaced evenly around a circle about the anchor");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Formation_Wedge,  "SeinARTS.Formation.Wedge",  "Wedge / arrowhead: hollow nested chevrons, biggest at the tip; large selections fan into concentric chevron layers");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Formation_Ring,   "SeinARTS.Formation.Ring",   "Defensive ring: members evenly around a circle about the anchor; large selections fan into concentric rings");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Formation_Square, "SeinARTS.Formation.Square", "Total-War hollow square outline about the anchor; large selections fan into concentric nested squares");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Formation_Blob,   "SeinARTS.Formation.Blob",   "Every member converges on the single order point (the classic single-destination move); the default gesture nominates this for a plain click when single-click formations are off");
+
+	// --- UI ---
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(UI_Minimap_Hidden, "SeinARTS.UI.Minimap.Hidden", "Entity opts out of appearing as a minimap blip (smoke / vfx emitters, environmental props, etc.). Authored via the entity bridge's BaseTags; default (no tag) = shown.");
 }
