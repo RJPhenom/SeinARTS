@@ -45,6 +45,7 @@
 #include "Components/SeinCommandBrokerData.h"
 #include "Components/SeinBrokerMembershipData.h"
 #include "Brokers/SeinCommandBrokerResolver.h"
+#include "Formations/SeinFormation.h"
 #include "SeinSquadDispatchResolver.h"
 #include "SeinARTSSquadSettings.h"
 #include "Events/SeinVisualEvent.h"
@@ -352,8 +353,9 @@ public:
 				}
 			}
 
-			// 4b. Update FormationWidth — lateral extent of slot offsets.
-				// ProcessCommands reads this for multi-broker lateral spacing.
+			// 4b. Update FormationWidth (lateral extent of slot offsets) + FormationRadius (bounding
+				// circle inclusive of member footprints). ProcessCommands / the parent formation read
+				// these to place the whole squad as ONE footprint-sized element among other units.
 				if (Broker)
 				{
 					FFixedPoint MinY = FFixedPoint::Zero;
@@ -370,6 +372,28 @@ public:
 						}
 					}
 					Broker->FormationWidth = MaxY - MinY;
+
+					// FormationRadius: the farthest member EDGE from the squad's placement origin — for
+					// each live member, its slot-offset distance (XY) PLUS its own footprint radius, taken
+					// as the max. Inclusive of the full footprint of all squad members, so the parent
+					// formation never overlaps a squad with its neighbours. Measured from the origin (the
+					// frame USeinSlotFormation places offsets in) so the bound matches actual placement.
+					FFixedPoint MaxRadius = FFixedPoint::Zero;
+					for (const FSeinEntityHandle& Member : Squad->GetLiveMembers())
+					{
+						FFixedVector Offset = FFixedVector::ZeroVector;
+						if (const FSeinSquadMemberComponent* MemberData = World.GetComponent<FSeinSquadMemberComponent>(Member))
+						{
+							if (Squad->Slots.IsValidIndex(MemberData->SlotIndex))
+							{
+								Offset = Squad->Slots[MemberData->SlotIndex].OffsetTransform.GetLocation();
+							}
+						}
+						const FFixedVector OffsetXY(Offset.X, Offset.Y, FFixedPoint::Zero);
+						const FFixedPoint Reach = OffsetXY.Size() + USeinFormation::GetFootprintRadius(&World, Member);
+						if (Reach > MaxRadius) { MaxRadius = Reach; }
+					}
+					Broker->FormationRadius = MaxRadius;
 				}
 
 				// 5. Per-slot cooldown decrement (toward zero).

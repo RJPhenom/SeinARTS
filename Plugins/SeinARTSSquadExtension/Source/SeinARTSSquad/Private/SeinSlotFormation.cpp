@@ -22,16 +22,13 @@ FSeinFormationLayout USeinSlotFormation::BuildFormation_Implementation(
 	// fixed handedness (USeinFormation::DragFacingDir); the drag DIRECTION is the sole
 	// authority, so the squad's own position/centroid does NOT influence it and every
 	// squad in a multi-squad drag faces alike. No drag: keep the move-target facing.
-	Layout.Facing = ComputeFormationFacing(Target.CurrentCentroid, Target.CurrentFacing, Target.Anchor);
-	const FFixedVector DragFace = DragFacingDir(Target.GuidePoints);
-	if (!DragFace.IsNearlyZero())
-	{
-		// Face FORWARD over the drag line (the NEGATED perpendicular) so the squad's authored
-		// body extends BEHIND the line: front rank on the line, depth back toward where the
-		// units came from. With the raw perpendicular the squad faced INTO its own body and the
-		// rear rank landed in front of the line. Depth side now matches the loose box.
-		Layout.Facing = FacingFromDirection(FFixedVector::ZeroVector - DragFace);
-	}
+	// Facing is handed DOWN by the parent formation (the squad is ONE element in it): the parent
+	// already resolved this squad's facing for its slot — radial in a ring, drag-perpendicular in a
+	// box, move-direction on a plain click — and delivered it via Target.CurrentFacing. Use it directly
+	// and rotate the squad's whole authored body to match. (Pre-B this formation self-computed the drag
+	// perpendicular; that decision now lives one level up so squads orient to the FORMATION, not just
+	// the raw drag.)
+	Layout.Facing = Target.CurrentFacing;
 
 	// Emit footprint radii for preview dot sizing. Slot POSITIONS stay the designer's
 	// authored offsets — the spacing is authored, not footprint-derived.

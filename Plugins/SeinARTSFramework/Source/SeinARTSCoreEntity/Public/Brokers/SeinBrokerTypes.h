@@ -90,6 +90,17 @@ struct SEINARTSCOREENTITY_API FSeinBrokerQueuedOrder
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker")
 	FGameplayTag PredeterminedAbilityTag;
 
+	/** A2 unified-formation pre-placement. When non-empty, the broker dispatches each listed member
+	 *  straight to its paired position instead of solving its own formation — these are the loose
+	 *  subset of a UNIFIED parent formation already solved over the whole selection (squads + loose)
+	 *  in ProcessCommands, so a mixed selection forms ONE shape. Parallel arrays keyed by handle
+	 *  (PreplacedMembers[i] → PreplacedPositions[i]); empty = solve a formation normally. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker")
+	TArray<FSeinEntityHandle> PreplacedMembers;
+
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker")
+	TArray<FFixedVector> PreplacedPositions;
+
 	// ─── Per-order execution state (Option C parallelism) ───
 	//
 	// Previously bIsExecuting + LastDispatchTick lived as single fields on
@@ -172,6 +183,15 @@ struct SEINARTSCOREENTITY_API FSeinBrokerOrderInput
 	 *  per-member ResolveMemberAbility / DefaultCommands path. */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker")
 	FGameplayTag PredeterminedAbilityTag;
+
+	/** A2 pre-placed goals (mirrors FSeinBrokerQueuedOrder): PreplacedMembers[i] → PreplacedPositions[i].
+	 *  When non-empty, the default resolver dispatches each member to its pre-placed goal instead of
+	 *  solving a formation (the unified parent formation already placed it). */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker")
+	TArray<FSeinEntityHandle> PreplacedMembers;
+
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker")
+	TArray<FFixedVector> PreplacedPositions;
 };
 
 /**
@@ -298,6 +318,12 @@ struct SEINARTSCOREENTITY_API FSeinFormationLayout
 	 *  straight 180° reverse): the formation pivots to face where it's going. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker|Formation")
 	FFixedQuaternion Facing;
+
+	/** Per-member facing, index-aligned with Positions — position-DEPENDENT (a ring faces each member
+	 *  radially out, etc.). Filled by the resolver after layout from the formation's FacingMode. Empty →
+	 *  consumers fall back to the single `Facing`. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker|Formation")
+	TArray<FFixedQuaternion> Facings;
 };
 
 /**

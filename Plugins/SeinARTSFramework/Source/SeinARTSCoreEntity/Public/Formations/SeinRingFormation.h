@@ -21,6 +21,9 @@ class SEINARTSCOREENTITY_API USeinRingFormation : public USeinFormation
 	GENERATED_BODY()
 
 public:
+	/** Defaults FacingMode to RadialOutward — members face away from the ring centre. */
+	USeinRingFormation();
+
 	/** EXTRA gap added to the footprint DIAMETER when spacing neighbours (UE world units, cm). 0 (the
 	 *  default) = footprints touch — the densest non-overlapping spacing; raise to open the ring up.
 	 *  Also added to the radial gap between concentric layers. */

@@ -791,33 +791,36 @@ void USeinWorldSubsystem::ProcessCommands()
 			//  - bQueueCommand == true (shift-click): append, executing the new
 			//    order after the current one finishes.
 			//
-			// Multi-broker lateral spacing — when more than one persistent broker
-			// is selected, each gets its own laterally-offset anchor so they march
-			// side-by-side instead of stacking on the click point. Spacing is
-			// computed from per-broker FormationWidth along the move direction's
-			// right axis:
-			//   gap_between_edges ≈ (avg broker width) / 2
-			//   anchor[i] = click + RightAxis * ((cursor + width[i]/2) - half_total)
-			// Single persistent broker → no offset, anchor = click point as before.
+			// A2: ONE unified formation over the WHOLE selection (squads sized by FormationRadius +
+			// loose units sized by their footprint, co-equal elements) so a mixed selection forms a
+			// SINGLE shape instead of a squad-formation and a loose-formation overlapping. Each squad
+			// takes its element position as its anchor; each loose unit's element position becomes a
+			// pre-placed goal for the ephemeral broker below. SAME helper the preview calls so
+			// preview == commit.
+			TArray<FFixedQuaternion> ElementFacings;
+			const TArray<FFixedVector> ElementPositions =
+				USeinCommandBrokerBPFL::ComputeMultiBrokerAnchors(
+					*this, Filtered, Order.TargetLocation, Order.GuidePoints, Order.FormationTag, ElementFacings);
+			TMap<FSeinEntityHandle, int32> ElementIndex;
+			ElementIndex.Reserve(Filtered.Num());
+			for (int32 i = 0; i < Filtered.Num(); ++i) { ElementIndex.Add(Filtered[i], i); }
+
 			if (PersistentBrokerEntities.Num() > 0)
 			{
-				// Per-broker laterally-offset anchors so multiple squads march
-				// side-by-side instead of stacking on the click point. Extracted to a
-				// shared helper (USeinCommandBrokerBPFL::ComputeMultiBrokerAnchors) so
-				// the destination preview computes byte-identical anchors so preview ==
-				// commit for multi-squad moves. Single broker = click point.
-				const TArray<FFixedVector> BrokerAnchors =
-					USeinCommandBrokerBPFL::ComputeMultiBrokerAnchors(
-						*this, PersistentBrokerEntities, Order.TargetLocation, Order.GuidePoints);
-
-				for (int32 i = 0; i < PersistentBrokerEntities.Num(); ++i)
+				for (const FSeinEntityHandle& BrokerHandle : PersistentBrokerEntities)
 				{
-					const FSeinEntityHandle BrokerHandle = PersistentBrokerEntities[i];
 					FSeinCommandBrokerData* PersistentBroker = GetComponent<FSeinCommandBrokerData>(BrokerHandle);
 					if (!PersistentBroker) { continue; }
 
-					const FFixedVector BrokerAnchor = BrokerAnchors.IsValidIndex(i)
-						? BrokerAnchors[i] : Order.TargetLocation;
+					const int32* EidxPtr = ElementIndex.Find(BrokerHandle);
+					const int32 Eidx = EidxPtr ? *EidxPtr : INDEX_NONE;
+					const FFixedVector BrokerAnchor = ElementPositions.IsValidIndex(Eidx)
+						? ElementPositions[Eidx] : Order.TargetLocation;
+
+					// Element facing (radial in a ring, drag-perp in a box) hands the squad its
+					// orientation; same value the preview computed so preview == commit. (Limitation:
+					// AnchorFacing is one field, so formation orders shift-queued in one tick share it.)
+					if (ElementFacings.IsValidIndex(Eidx)) { PersistentBroker->AnchorFacing = ElementFacings[Eidx]; }
 
 					if (!Cmd.bQueueCommand)
 					{
@@ -827,16 +830,10 @@ void USeinWorldSubsystem::ProcessCommands()
 							if (!MemberAC) continue;
 							if (USeinAbility* Active = MemberAC->GetActiveAbility(*this))
 							{
-								if (Active->bIsActive)
-								{
-									Active->CancelAbility();
-								}
+								if (Active->bIsActive) { Active->CancelAbility(); }
 								MemberAC->ActiveAbilityID = INDEX_NONE;
 							}
 						}
-						// Reset clears every queued order (per-order bIsExecuting
-						// flags travel with the orders themselves under the
-						// Option C parallelism model).
 						PersistentBroker->OrderQueue.Reset();
 						PersistentBroker->CurrentOrderContext = FGameplayTagContainer();
 					}
@@ -846,12 +843,26 @@ void USeinWorldSubsystem::ProcessCommands()
 					PersistentBroker->OrderQueue.Add(MyOrder);
 				}
 			}
-
 			// Ephemeral-units path — original ephemeral-broker logic, applied only
 			// to entities without persistent brokers. If the selection was all
 			// persistent brokers, this is empty and the block no-ops.
 			if (EphemeralEntities.Num() > 0)
 			{
+				// A2: feed the loose units' element positions (from the unified formation above) as
+				// pre-placed goals so the default resolver dispatches each to its slot in the SINGLE
+				// shape rather than solving a second, overlapping formation. Set on Order here (after
+				// the squad loop) so the squad copies stayed pre-placed-free.
+				Order.PreplacedMembers.Reset();
+				Order.PreplacedPositions.Reset();
+				Order.PreplacedMembers.Reserve(EphemeralEntities.Num());
+				Order.PreplacedPositions.Reserve(EphemeralEntities.Num());
+				for (const FSeinEntityHandle& E : EphemeralEntities)
+				{
+					const int32* EidxPtr = ElementIndex.Find(E);
+					const int32 Eidx = EidxPtr ? *EidxPtr : INDEX_NONE;
+					Order.PreplacedMembers.Add(E);
+					Order.PreplacedPositions.Add(ElementPositions.IsValidIndex(Eidx) ? ElementPositions[Eidx] : Order.TargetLocation);
+				}
 				FSeinEntityHandle ExistingBroker;
 				if (Cmd.bQueueCommand)
 				{

@@ -11,6 +11,7 @@
 #include "Brokers/SeinBrokerTypes.h"
 #include "Brokers/SeinCommandBrokerResolver.h"
 #include "Brokers/SeinDefaultCommandBrokerResolver.h"
+#include "Formations/SeinFormation.h"
 #include "Input/SeinCommand.h"
 #include "Settings/PluginSettings.h"
 #include "Tags/SeinARTSGameplayTags.h"
@@ -149,49 +150,29 @@ TArray<FFixedVector> USeinCommandBrokerBPFL::ComputeMultiBrokerAnchors(
 	USeinWorldSubsystem& World,
 	const TArray<FSeinEntityHandle>& Brokers,
 	FFixedVector ClickTarget,
-	const TArray<FFixedVector>& GuidePoints)
+	const TArray<FFixedVector>& GuidePoints,
+	FGameplayTag FormationTag,
+	TArray<FFixedQuaternion>& OutFacings)
 {
-	// The SHARED multi-broker lateral-spacing helper, called by BOTH the commit
-	// (USeinWorldSubsystem::ProcessCommands) and the preview, so the two can never
-	// diverge. 0 brokers: empty. 1 broker (single squad): centered on the drag (handled
-	// just below). >1 brokers: laterally spread / boxed (further below).
+	// Lay the brokers (squads) out as ELEMENTS of the gesture formation: each squad is ONE element,
+	// sized by its FormationRadius (its whole footprint) through the SAME footprint-aware
+	// ResolveFormationLayout loose units use, so a multi-squad order takes the chosen shape
+	// (Ring/Wedge/Grid/Box/...) instead of a hardcoded box/row. Each squad then lays out its own
+	// members around the returned anchor (USeinSlotFormation). Shared by the commit
+	// (USeinWorldSubsystem::ProcessCommands) and the preview, so the two can never drift.
 	const int32 N = Brokers.Num();
 	TArray<FFixedVector> Anchors;
 	Anchors.Init(ClickTarget, N);
-	if (N <= 1)
-	{
-		// A single squad CENTERS on the drag (the guide midpoint) like loose units do via the
-		// box spanning the guide. ClickTarget is the drag START, so without this a lone squad
-		// anchored at the start of the line. No drag guide (plain click) -> the click point.
-		if (N == 1 && GuidePoints.Num() >= 2)
-		{
-			const FFixedVector A = GuidePoints[0];
-			const FFixedVector B = GuidePoints.Last();
-			Anchors[0] = FFixedVector((A.X + B.X) / FFixedPoint::Two,
-			                          (A.Y + B.Y) / FFixedPoint::Two,
-			                          (A.Z + B.Z) / FFixedPoint::Two);
-		}
-		return Anchors;
-	}
+	OutFacings.Reset();
+	OutFacings.Init(FFixedQuaternion::Identity, N);
+	if (N == 0) { return Anchors; }
 
-	// 1. Per-broker lateral width from FormationWidth, clamped to a visible minimum.
-	const FFixedPoint MinBrokerWidth = FFixedPoint::FromInt(300);
-	TArray<FFixedPoint> BrokerWidths;
-	BrokerWidths.Reserve(N);
-	FFixedPoint TotalBrokerWidth = FFixedPoint::Zero;
-	for (const FSeinEntityHandle& BrokerHandle : Brokers)
-	{
-		FFixedPoint Width = FFixedPoint::Zero;
-		if (const FSeinCommandBrokerData* BrokerData = World.GetComponent<FSeinCommandBrokerData>(BrokerHandle))
-		{
-			Width = BrokerData->FormationWidth;
-		}
-		if (Width < MinBrokerWidth) { Width = MinBrokerWidth; }
-		BrokerWidths.Add(Width);
-		TotalBrokerWidth += Width;
-	}
+	// The parent layout runs through the project's default resolver CDO (it owns the formation map +
+	// the shaping passes). No resolver (nav-less tests) -> leave every anchor at ClickTarget.
+	USeinCommandBrokerResolver* Resolver = SeinFormationPreviewLocal::ResolveDefaultResolverCDO();
+	if (!Resolver) { return Anchors; }
 
-	// 2. Selection centroid + move direction (XY only — RTS plane).
+	// Selection centroid (XY, RTS plane) -> the formation rotates its facing from centroid to target.
 	FFixedVector SelCentroid = FFixedVector::ZeroVector;
 	int32 CentroidCount = 0;
 	for (const FSeinEntityHandle& BrokerHandle : Brokers)
@@ -204,163 +185,30 @@ TArray<FFixedVector> USeinCommandBrokerBPFL::ComputeMultiBrokerAnchors(
 	}
 	SelCentroid = (CentroidCount > 0) ? (SelCentroid / FFixedPoint::FromInt(CentroidCount)) : ClickTarget;
 
-	// DRAG → BOX OF SQUADS. With a guide line (right-click-drag), lay the squad anchors
-	// out as a box: the front rank spans the drag, extra squads stack into ranks behind
-	// (toward the selection centroid). The unit-box layout one level up — each cell is a
-	// whole squad (uniform avg-width spacing). No guide / degenerate line → the single
-	// side-by-side row below (plain-click behaviour, unchanged).
-	if (GuidePoints.Num() >= 2)
+	// Anti-cross re-match flags read off the default resolver CDO (the same source the within-formation
+	// slot re-match uses), so a moving squad group does not cross to worse-ranked anchors.
+	bool bLateral = true;
+	bool bDepth = true;
+	if (const USeinDefaultCommandBrokerResolver* DefCDO = Cast<USeinDefaultCommandBrokerResolver>(Resolver))
 	{
-		FFixedVector LineVec = GuidePoints.Last() - GuidePoints[0];
-		LineVec.Z = FFixedPoint::Zero;
-		if (!LineVec.IsNearlyZero())
-		{
-			const FFixedVector LStart = GuidePoints[0];
-			const FFixedVector LEnd   = GuidePoints.Last();
-			const FFixedPoint  LLen   = LineVec.Size();
-			const FFixedVector LayoutDir = FFixedVector::GetSafeNormal(LineVec);
-			const FFixedVector LineMid((LStart.X + LEnd.X) / FFixedPoint::Two,
-			                           (LStart.Y + LEnd.Y) / FFixedPoint::Two,
-			                           FFixedPoint::Zero);
-
-			// Depth axis: BEHIND the front rank (the drag line is the front edge). With this
-			// handedness the back side is +FaceDir, matching the box and each squad's slot
-			// facing, so the squad-box sits behind the line and faces out over it.
-			const FFixedVector FaceDir(FFixedPoint::Zero - LayoutDir.Y, LayoutDir.X, FFixedPoint::Zero);
-			const FFixedVector DepthDir = FaceDir;
-
-			// Cell spacing = average squad width; columns = how many fit across the drag.
-			const FFixedPoint AvgW = TotalBrokerWidth / FFixedPoint::FromInt(N);
-			const FFixedPoint CellW = (AvgW > FFixedPoint::Zero) ? AvgW : MinBrokerWidth;
-			int32 Cols = 1;
-			{
-				FFixedPoint Accum = CellW;
-				while (Accum <= LLen && Cols < N) { Accum = Accum + CellW; ++Cols; }
-			}
-			if (Cols < 1) { Cols = 1; }
-			if (Cols > N) { Cols = N; }
-
-			// Anti-cross: order squads by current position along the drag (left→right),
-			// gated on the formation-level lateral flag (same as the row path below).
-			bool bLat = true;
-			if (const USeinDefaultCommandBrokerResolver* DefCDO =
-				Cast<USeinDefaultCommandBrokerResolver>(SeinFormationPreviewLocal::ResolveDefaultResolverCDO()))
-			{
-				bLat = DefCDO->bReassignSlotsLateral;
-			}
-			TArray<FFixedPoint> AlongCoord; AlongCoord.SetNum(N);
-			TArray<int32> Order2; Order2.Reserve(N);
-			for (int32 i = 0; i < N; ++i)
-			{
-				const FSeinEntity* BrokerEnt = World.GetEntity(Brokers[i]);
-				const FFixedVector Pos = BrokerEnt ? BrokerEnt->Transform.GetLocation() : ClickTarget;
-				AlongCoord[i] = FFixedVector::DotProduct(Pos, LayoutDir);
-				Order2.Add(i);
-			}
-			if (bLat)
-			{
-				Order2.Sort([&AlongCoord, &Brokers](int32 A, int32 B)
-				{
-					if (AlongCoord[A] != AlongCoord[B]) return AlongCoord[A] < AlongCoord[B];
-					return Brokers[A].Index < Brokers[B].Index;
-				});
-			}
-
-			const FFixedPoint ColDenom = (Cols > 1) ? FFixedPoint::FromInt(Cols - 1) : FFixedPoint::One;
-			const FFixedVector LineDelta = LEnd - LStart;
-			for (int32 k = 0; k < N; ++k)
-			{
-				const int32 i = Order2[k];
-				const int32 col = k % Cols;
-				const int32 row = k / Cols;
-				FFixedVector FrontPt;
-				if (Cols <= 1)
-				{
-					FrontPt = LineMid;
-				}
-				else
-				{
-					const FFixedPoint T = FFixedPoint::FromInt(col) / ColDenom;
-					FrontPt = FFixedVector(LStart.X + LineDelta.X * T,
-					                       LStart.Y + LineDelta.Y * T,
-					                       LStart.Z + LineDelta.Z * T);
-				}
-				const FFixedPoint RowOff = FFixedPoint::FromInt(row) * CellW;
-				Anchors[i] = FFixedVector(FrontPt.X + DepthDir.X * RowOff,
-				                          FrontPt.Y + DepthDir.Y * RowOff,
-				                          FrontPt.Z + DepthDir.Z * RowOff);
-			}
-			return Anchors;
-		}
+		bLateral = DefCDO->bReassignSlotsLateral;
+		bDepth = DefCDO->bReassignSlotsDepth;
 	}
 
-	FFixedVector MoveDir = ClickTarget - SelCentroid;
-	MoveDir.Z = FFixedPoint::Zero;
-	FFixedVector RightAxis;
-	if (MoveDir.IsNearlyZero())
-	{
-		RightAxis = FFixedVector::RightVector;
-	}
-	else
-	{
-		const FFixedVector ForwardN = FFixedVector::GetSafeNormal(MoveDir);
-		// UE convention: Right = Forward rotated +90 around +Z -> (-Y, X, 0)
-		RightAxis = FFixedVector(-ForwardN.Y, ForwardN.X, FFixedPoint::Zero);
-	}
+	// Each broker is ONE element; ResolveFormationLayout sizes it via the broker-aware
+	// GetFootprintRadius (FormationRadius). ClickTarget is the drag midpoint, so a lone squad centres.
+	FSeinOrderTarget Target;
+	Target.Anchor = ClickTarget;
+	Target.GuidePoints = GuidePoints;
+	Target.FormationTag = FormationTag;
+	Target.CurrentCentroid = SelCentroid;
+	Target.CurrentFacing = FFixedQuaternion::Identity;
 
-	// 3. Gap budget: span = sum(widths) + (N-1)*gap; gap-per-edge = avg width / 2.
-	const FFixedPoint AvgWidth = TotalBrokerWidth / FFixedPoint::FromInt(N);
-	const FFixedPoint GapPerEdge = AvgWidth / FFixedPoint::Two;
-	const FFixedPoint TotalSpan = TotalBrokerWidth + GapPerEdge * FFixedPoint::FromInt(N - 1);
-	const FFixedPoint HalfSpan = TotalSpan / FFixedPoint::Two;
-
-	// 3.5 ANTI-CROSS: order the brokers by their CURRENT position along RightAxis (left→right), so the
-	// leftmost squad fills the leftmost anchor and squads don't cross to a worse-ranked slot — the
-	// formation-level equivalent of the within-squad slot re-match. Without this, brokers fill anchors
-	// by array index, so a selection whose array order doesn't match its live left/right layout crosses
-	// (the X when moving a group of squads). Deterministic: perpendicular coordinate, then entity-handle
-	// index tie-break (TOTAL order → no unstable-sort desync). Commit and preview both call this, so they
-	// stay byte-identical.
-	// Gated on the formation-level OPT-OUT lateral flag (default true) read off the default resolver
-	// CDO — the squad-group is a 1-D row, so only the lateral toggle is meaningful here.
-	bool bLateralReassign = true;
-	if (const USeinDefaultCommandBrokerResolver* DefCDO =
-		Cast<USeinDefaultCommandBrokerResolver>(SeinFormationPreviewLocal::ResolveDefaultResolverCDO()))
-	{
-		bLateralReassign = DefCDO->bReassignSlotsLateral;
-	}
-
-	TArray<FFixedPoint> BrokerPerp; BrokerPerp.SetNum(N);
-	TArray<int32> RankOrder; RankOrder.Reserve(N);
+	const FSeinFormationLayout Layout = Resolver->ResolveFormationLayout(&World, Brokers, Target, bLateral, bDepth);
 	for (int32 i = 0; i < N; ++i)
 	{
-		const FSeinEntity* BrokerEnt = World.GetEntity(Brokers[i]);
-		const FFixedVector Pos = BrokerEnt ? BrokerEnt->Transform.GetLocation() : ClickTarget;
-		BrokerPerp[i] = FFixedVector::DotProduct(Pos, RightAxis);
-		RankOrder.Add(i);
-	}
-	if (bLateralReassign)
-	{
-		// Leftmost-by-current-position fills the leftmost anchor. Skip → RankOrder stays identity
-		// (raw array/index order, the pre-anti-cross behavior).
-		RankOrder.Sort([&BrokerPerp, &Brokers](int32 A, int32 B)
-		{
-			if (BrokerPerp[A] != BrokerPerp[B]) return BrokerPerp[A] < BrokerPerp[B];
-			return Brokers[A].Index < Brokers[B].Index;
-		});
-	}
-
-	// 4. Walk anchors along RightAxis around ClickTarget, in left→right RANK order — each broker keeps
-	// its own width, and the anchor is stored back at the broker's ORIGINAL index so the returned array
-	// stays index-aligned with the input Brokers.
-	FFixedPoint Cursor = -HalfSpan;
-	for (int32 k = 0; k < N; ++k)
-	{
-		const int32 i = RankOrder[k]; // the k-th broker from the left
-		const FFixedPoint Width = BrokerWidths[i];
-		const FFixedPoint AnchorOffset = Cursor + Width / FFixedPoint::Two;
-		Anchors[i] = ClickTarget + RightAxis * AnchorOffset;
-		Cursor = Cursor + Width + GapPerEdge;
+		Anchors[i]    = Layout.Positions.IsValidIndex(i) ? Layout.Positions[i] : ClickTarget;
+		OutFacings[i] = Layout.Facings.IsValidIndex(i)   ? Layout.Facings[i]   : Layout.Facing;
 	}
 	return Anchors;
 }
@@ -438,10 +286,19 @@ FSeinFormationLayout USeinCommandBrokerBPFL::SeinComputeFormationPreview(
 	Out.Positions.SetNum(Members.Num());
 	Out.Radii.SetNum(Members.Num()); // carry per-member footprint radii for preview dot sizing
 
-	// Per-squad laterally-offset anchors — the SAME helper the commit uses, so the
-	// squads spread side-by-side in the preview exactly as when ordered.
-	const TArray<FFixedVector> SquadAnchors =
-		ComputeMultiBrokerAnchors(*World, SquadOrder, TargetLocation, ProjectedGuide);
+	// Per-squad anchors via the SAME helper the commit uses, so squads take the gesture formation
+	// (Ring/Wedge/Box/...) in the preview exactly as when ordered. Each squad then lays its own
+	// members at its anchor below (USeinSlotFormation) — preview === commit.
+	// A2: ONE unified formation over ALL elements - squad handles + loose unit handles, co-equal, each
+	// sized by its footprint (squad = FormationRadius). Squads are the FIRST elements, loose follow;
+	// element index e >= FirstLooseElement maps to LooseIndices[e - FirstLooseElement]. SAME helper the
+	// commit calls so preview == commit.
+	TArray<FSeinEntityHandle> Elements = SquadOrder;
+	const int32 FirstLooseElement = Elements.Num();
+	for (const int32 Idx : LooseIndices) { Elements.Add(Members[Idx]); }
+	TArray<FFixedQuaternion> ElementFacings;
+	const TArray<FFixedVector> ElementPositions =
+		ComputeMultiBrokerAnchors(*World, Elements, TargetLocation, ProjectedGuide, FormationTag, ElementFacings);
 
 	for (int32 s = 0; s < SquadOrder.Num(); ++s)
 	{
@@ -477,13 +334,15 @@ FSeinFormationLayout USeinCommandBrokerBPFL::SeinComputeFormationPreview(
 		if (!Resolver) { continue; }
 
 		const FFixedVector SquadAnchor =
-			SquadAnchors.IsValidIndex(s) ? SquadAnchors[s] : TargetLocation;
+			ElementPositions.IsValidIndex(s) ? ElementPositions[s] : TargetLocation;
 
 		FSeinOrderTarget SquadTarget;
 		SquadTarget.Anchor          = SquadAnchor;
-		SquadTarget.GuidePoints     = ProjectedGuide;   // orient the squad to the drag (no tag → stays SlotFormation), matching commit
+		SquadTarget.GuidePoints     = ProjectedGuide;   // forwarded for completeness; SlotFormation uses CurrentFacing
 		SquadTarget.CurrentCentroid = Centroid;
-		SquadTarget.CurrentFacing   = Facing;
+		// Facing handed down by the PARENT formation (this squad's element facing): radial in a ring,
+		// drag-perp in a box, move-dir on a click. SlotFormation uses it directly. preview === commit.
+		SquadTarget.CurrentFacing   = ElementFacings.IsValidIndex(s) ? ElementFacings[s] : Facing;
 		const FSeinFormationLayout SquadLayout = Resolver->ResolveFormationLayout(
 			World, SquadMembers, SquadTarget, bReassignLateral, bReassignDepth);
 
@@ -500,57 +359,19 @@ FSeinFormationLayout USeinCommandBrokerBPFL::SeinComputeFormationPreview(
 		if (s == 0) { Out.Facing = SquadLayout.Facing; }
 	}
 
-	// Loose (non-squad) members → default resolver, one grid at the click target —
-	// mirrors the commit's ephemeral-broker path (loose units dispatch to
-	// Order.TargetLocation, NOT a laterally-offset anchor).
-	if (LooseIndices.Num() > 0)
+	// Loose (non-squad) members: each is its OWN element in the unified formation above - scatter its
+	// element position straight to its dot (its slot in the SINGLE shape), sized by its footprint.
+	// Mirrors the commit's pre-placed loose dispatch so preview == commit.
+	for (int32 j = 0; j < LooseIndices.Num(); ++j)
 	{
-		if (USeinCommandBrokerResolver* Resolver = SeinFormationPreviewLocal::ResolveDefaultResolverCDO())
-		{
-			TArray<FSeinEntityHandle> LooseMembers;
-			LooseMembers.Reserve(LooseIndices.Num());
-			FFixedVector Sum = FFixedVector::ZeroVector;
-			int32 Count = 0;
-			for (const int32 Idx : LooseIndices)
-			{
-				LooseMembers.Add(Members[Idx]);
-				if (const FSeinEntity* Entity = World->GetEntity(Members[Idx]))
-				{
-					Sum = Sum + Entity->Transform.GetLocation();
-					++Count;
-				}
-			}
-			const FFixedVector LooseCentroid = (Count > 0)
-				? (Sum / FFixedPoint::FromInt(Count)) : TargetLocation;
-
-			// Non-squad selection → the default resolver's formation-level opt-OUT flags (default both
-			// on → 2-D). Mirrors the commit, where the ephemeral broker's default resolver reads the
-			// same instance flags.
-			bool bLooseLateral = true, bLooseDepth = true;
-			if (const USeinDefaultCommandBrokerResolver* DefCDO = Cast<USeinDefaultCommandBrokerResolver>(Resolver))
-			{
-				bLooseLateral = DefCDO->bReassignSlotsLateral;
-				bLooseDepth   = DefCDO->bReassignSlotsDepth;
-			}
-			FSeinOrderTarget LooseTarget;
-			LooseTarget.Anchor          = TargetLocation;
-			LooseTarget.GuidePoints     = ProjectedGuide;
-			LooseTarget.FormationTag    = FormationTag;
-			LooseTarget.CurrentCentroid = LooseCentroid;
-			LooseTarget.CurrentFacing   = FFixedQuaternion::Identity;
-			const FSeinFormationLayout LooseLayout = Resolver->ResolveFormationLayout(
-				World, LooseMembers, LooseTarget, bLooseLateral, bLooseDepth);
-
-			for (int32 k = 0; k < LooseIndices.Num(); ++k)
-			{
-				Out.Positions[LooseIndices[k]] = LooseLayout.Positions.IsValidIndex(k)
-					? LooseLayout.Positions[k] : TargetLocation;
-				Out.Radii[LooseIndices[k]] = LooseLayout.Radii.IsValidIndex(k)
-					? LooseLayout.Radii[k] : FFixedPoint::Zero;
-			}
-			if (SquadOrder.Num() == 0) { Out.Facing = LooseLayout.Facing; }
-		}
+		const int32 MemberIdx = LooseIndices[j];
+		const int32 ElemIdx = FirstLooseElement + j;
+		Out.Positions[MemberIdx] = ElementPositions.IsValidIndex(ElemIdx) ? ElementPositions[ElemIdx] : TargetLocation;
+		Out.Radii[MemberIdx] = USeinFormation::GetFootprintRadius(World, Members[MemberIdx]);
 	}
-
+	if (SquadOrder.Num() == 0 && ElementFacings.IsValidIndex(FirstLooseElement))
+	{
+		Out.Facing = ElementFacings[FirstLooseElement];
+	}
 	return Out;
 }

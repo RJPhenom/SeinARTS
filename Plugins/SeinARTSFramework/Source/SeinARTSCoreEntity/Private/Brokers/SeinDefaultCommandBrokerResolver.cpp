@@ -258,9 +258,11 @@ FSeinFormationLayout USeinDefaultCommandBrokerResolver::ResolveFormationLayout_I
 	bool bReassignDepth)
 {
 	FSeinFormationLayout Layout;
+	ESeinFormationFacing FacingMode = ESeinFormationFacing::Uniform;
 	if (USeinFormation* Formation = ResolveFormation(Target.FormationTag))
 	{
 		// Pluggable formation owns positions + facing. The exact call the preview makes.
+		FacingMode = Formation->FacingMode;
 		Layout = Formation->BuildFormation(World, Members, Target);
 	}
 	else
@@ -296,6 +298,12 @@ FSeinFormationLayout USeinDefaultCommandBrokerResolver::ResolveFormationLayout_I
 	// the layout returns. Empty default impl on the base class — no-op for
 	// non-overriding subclasses.
 	PostProcessPositions(World, Members, Layout.Positions, Target.Anchor);
+
+	// Per-member facing from the formation's FacingMode, computed from the FINAL positions (a ring
+	// faces each member radially out). Carried to consumers — a squad rotates its whole authored body
+	// to its element's facing. Uniform formations just replicate Layout.Facing. Shared path → preview
+	// === commit.
+	USeinFormation::ComputeMemberFacings(FacingMode, Layout.Positions, Target.Anchor, Layout.Facing, Layout.Facings);
 	return Layout;
 }
 
@@ -393,21 +401,37 @@ FSeinBrokerDispatchPlan USeinDefaultCommandBrokerResolver::ResolveDispatch_Imple
 		return Plan;
 	}
 
-	// Formation layout: rotate the formation forward axis along centroid →
-	// target and lay out per-member positions around the target. Single
-	// entry point shared with the destination preview decals so commit and
-	// preview never drift.
-	FSeinOrderTarget Target;
-	Target.Anchor          = Order.TargetLocation;
-	Target.GuidePoints     = Order.GuidePoints;
-	Target.TargetEntity    = Order.TargetEntity;
-	Target.FormationTag    = Order.FormationTag;
-	Target.CurrentCentroid = Broker->Centroid;
-	Target.CurrentFacing   = Broker->AnchorFacing;
-	const FSeinFormationLayout Layout = ResolveFormationLayout(
-		World, Effective, Target, bReassignSlotsLateral, bReassignSlotsDepth);
-	Broker->AnchorFacing = Layout.Facing;
-	const TArray<FFixedVector>& Positions = Layout.Positions;
+	// Per-member goal positions. A2: when the order carries PRE-PLACED positions (the loose subset of a
+	// UNIFIED parent formation already solved in ProcessCommands so squads + loose share ONE shape), use
+	// them directly — solving a formation here too is exactly what made a mixed selection render two
+	// overlapping formations. Otherwise solve the formation as usual (the shared entry the preview also
+	// calls, so commit and preview never drift).
+	TArray<FFixedVector> Positions;
+	if (Order.PreplacedPositions.Num() > 0)
+	{
+		Positions.Reserve(Effective.Num());
+		for (const FSeinEntityHandle& Member : Effective)
+		{
+			const int32 Pidx = Order.PreplacedMembers.IndexOfByKey(Member);
+			Positions.Add(Order.PreplacedPositions.IsValidIndex(Pidx) ? Order.PreplacedPositions[Pidx] : Order.TargetLocation);
+		}
+	}
+	else
+	{
+		// Formation layout: rotate the formation forward axis along centroid → target and lay out
+		// per-member positions around the target.
+		FSeinOrderTarget Target;
+		Target.Anchor          = Order.TargetLocation;
+		Target.GuidePoints     = Order.GuidePoints;
+		Target.TargetEntity    = Order.TargetEntity;
+		Target.FormationTag    = Order.FormationTag;
+		Target.CurrentCentroid = Broker->Centroid;
+		Target.CurrentFacing   = Broker->AnchorFacing;
+		const FSeinFormationLayout Layout = ResolveFormationLayout(
+			World, Effective, Target, bReassignSlotsLateral, bReassignSlotsDepth);
+		Broker->AnchorFacing = Layout.Facing;
+		Positions = Layout.Positions;
+	}
 
 	// Entity-targeted orders (attack a unit, repair a building, etc.): every
 	// member dispatches against the same entity. Their own ability handles

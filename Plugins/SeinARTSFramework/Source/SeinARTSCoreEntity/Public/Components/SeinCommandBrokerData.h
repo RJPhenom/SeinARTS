@@ -129,6 +129,15 @@ struct SEINARTSCOREENTITY_API FSeinCommandBrokerData : public FSeinComponent
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker")
 	FFixedPoint FormationWidth = FFixedPoint::Zero;
 
+	/** Bounding-circle radius of the broker's formation (world units): the distance from the broker's
+	 *  placement origin out to the farthest member EDGE, i.e. inclusive of every member's footprint.
+	 *  Maintained by the owning system (the squad system computes it from slot offsets + member
+	 *  footprints, like FormationWidth). Read by USeinFormation::GetFootprintRadius so a parent
+	 *  formation can place the whole broker as ONE footprint-sized element. Zero = not maintained
+	 *  (falls back to the broker actor's own extents). */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker")
+	FFixedPoint FormationRadius = FFixedPoint::Zero;
+
 	// Per-order execution state (`bIsExecuting` + `LastDispatchTick`) was
 	// promoted onto FSeinBrokerQueuedOrder so non-overlapping subset-targeted
 	// orders can dispatch concurrently. The broker tick computes a
@@ -142,5 +151,6 @@ FORCEINLINE uint32 GetTypeHash(const FSeinCommandBrokerData& Data)
 	Hash = HashCombine(Hash, GetTypeHash(Data.OrderQueue.Num()));
 	Hash = HashCombine(Hash, GetTypeHash(Data.Centroid));
 	Hash = HashCombine(Hash, GetTypeHash(Data.FormationWidth));
+	Hash = HashCombine(Hash, GetTypeHash(Data.FormationRadius));
 	return Hash;
 }

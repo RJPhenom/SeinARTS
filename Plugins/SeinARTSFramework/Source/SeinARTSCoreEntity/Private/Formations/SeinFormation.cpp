@@ -8,6 +8,7 @@
 #include "Formations/SeinFormation.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Components/SeinExtentsComponent.h"
+#include "Components/SeinCommandBrokerData.h"
 #include "Math/MathLib.h"
 #include "Types/FixedPoint.h"
 
@@ -17,6 +18,30 @@ FFixedQuaternion USeinFormation::FacingFromDirection(FFixedVector DirectionXY)
 	if (Flat.IsNearlyZero()) return FFixedQuaternion::Identity;
 	const FFixedPoint Yaw = SeinMath::Atan2(Flat.Y, Flat.X);
 	return FFixedQuaternion::FromAxisAndAngle(FFixedVector::UpVector, Yaw);
+}
+
+void USeinFormation::ComputeMemberFacings(
+	ESeinFormationFacing Mode,
+	const TArray<FFixedVector>& Positions,
+	FFixedVector Center,
+	FFixedQuaternion UniformFacing,
+	TArray<FFixedQuaternion>& OutFacings)
+{
+	const int32 N = Positions.Num();
+	OutFacings.SetNum(N);
+	for (int32 i = 0; i < N; ++i)
+	{
+		if (Mode == ESeinFormationFacing::Uniform)
+		{
+			OutFacings[i] = UniformFacing;
+			continue;
+		}
+		// Radial: face away from (Outward) or toward (Inward) the formation centre, on the XY plane.
+		const FFixedVector Dir = (Mode == ESeinFormationFacing::RadialOutward)
+			? FFixedVector(Positions[i].X - Center.X, Positions[i].Y - Center.Y, FFixedPoint::Zero)
+			: FFixedVector(Center.X - Positions[i].X, Center.Y - Positions[i].Y, FFixedPoint::Zero);
+		OutFacings[i] = Dir.IsNearlyZero() ? UniformFacing : FacingFromDirection(Dir);
+	}
 }
 
 FFixedVector USeinFormation::DragFacingDir(const TArray<FFixedVector>& GuidePoints)
@@ -91,6 +116,14 @@ FFixedPoint USeinFormation::GetFootprintRadius(USeinWorldSubsystem* World, FSein
 	// footprint-aware spacing degrades to the old uniform feel rather than zero.
 	const FFixedPoint DefaultRadius = FFixedPoint::FromInt(40);
 	if (!World) return DefaultRadius;
+
+	// Composite-broker element (a squad): its footprint is the whole formation's bounding circle,
+	// maintained by the owning system (e.g. the squad system). When present, a parent formation places
+	// the entire squad as ONE element of this size; its members lay out internally around the anchor.
+	if (const FSeinCommandBrokerData* Broker = World->GetComponent<FSeinCommandBrokerData>(Handle))
+	{
+		if (Broker->FormationRadius > FFixedPoint::Zero) { return Broker->FormationRadius; }
+	}
 
 	const FSeinExtentsComponent* Extents = World->GetComponent<FSeinExtentsComponent>(Handle);
 	if (!Extents || Extents->Shapes.Num() == 0) return DefaultRadius;

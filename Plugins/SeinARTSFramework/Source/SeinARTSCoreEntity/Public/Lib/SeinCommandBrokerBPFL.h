@@ -130,19 +130,23 @@ public:
 		const TArray<FFixedVector>& GuidePoints,
 		FGameplayTag FormationTag);
 
-	/** Multi-broker lateral-spacing anchors (internal C++ helper, NOT BP-exposed).
-	 *  Given a set of persistent-broker (squad) entities and a click target, returns
-	 *  each broker's laterally-offset anchor so multiple squads march side-by-side
-	 *  instead of stacking on the click — offset derived from each broker's
-	 *  FormationWidth along the move direction's right axis. N <= 1 → anchor ==
-	 *  ClickTarget; index-aligned with `Brokers`. Shared by the commit
-	 *  (USeinWorldSubsystem::ProcessCommands) and SeinComputeFormationPreview so the
-	 *  two can never drift. */
+	/** Per-broker formation anchors (internal C++ helper, NOT BP-exposed). Lays the persistent-broker
+	 *  (squad) entities out as ELEMENTS of the gesture `FormationTag` formation — each squad is one
+	 *  element, sized by its FSeinCommandBrokerData::FormationRadius (its whole footprint) via the same
+	 *  footprint-aware `ResolveFormationLayout` loose units use. So a multi-squad order takes the chosen
+	 *  shape (Ring/Wedge/Grid/Box/…) instead of the old hardcoded box/row; each squad then lays its own
+	 *  members around the returned anchor (USeinSlotFormation). An invalid `FormationTag` falls to the
+	 *  resolver's default formation. N == 0 → empty; N == 1 → the single element centres on ClickTarget.
+	 *  Index-aligned with `Brokers`. Shared by the commit (USeinWorldSubsystem::ProcessCommands) and
+	 *  SeinComputeFormationPreview so the two can never drift. `OutFacings` returns each broker's
+	 *  position-dependent facing (radial in a ring, drag-perp in a box, …), index-aligned with `Brokers`. */
 	static TArray<FFixedVector> ComputeMultiBrokerAnchors(
 		USeinWorldSubsystem& World,
 		const TArray<FSeinEntityHandle>& Brokers,
 		FFixedVector ClickTarget,
-		const TArray<FFixedVector>& GuidePoints);
+		const TArray<FFixedVector>& GuidePoints,
+		FGameplayTag FormationTag,
+		TArray<FFixedQuaternion>& OutFacings);
 
 private:
 	static USeinWorldSubsystem* GetWorldSubsystem(const UObject* WorldContextObject);

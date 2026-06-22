@@ -200,6 +200,8 @@ namespace SeinCommandBrokerDispatch
 		Input.EffectiveMembers = Effective;
 		Input.TargeterPoints = Order.TargeterPoints;
 		Input.PredeterminedAbilityTag = Order.PredeterminedAbilityTag;
+		Input.PreplacedMembers = Order.PreplacedMembers;
+		Input.PreplacedPositions = Order.PreplacedPositions;
 
 		const FSeinBrokerDispatchPlan Plan = Resolver->ResolveDispatch(&World, BrokerHandle, Input);
 

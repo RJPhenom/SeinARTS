@@ -9,6 +9,11 @@
 #include "Formations/SeinRingFormation.h"
 #include "Math/MathLib.h"
 
+USeinRingFormation::USeinRingFormation()
+{
+	FacingMode = ESeinFormationFacing::RadialOutward;
+}
+
 FSeinFormationLayout USeinRingFormation::BuildFormation_Implementation(
 	USeinWorldSubsystem* World,
 	const TArray<FSeinEntityHandle>& Members,

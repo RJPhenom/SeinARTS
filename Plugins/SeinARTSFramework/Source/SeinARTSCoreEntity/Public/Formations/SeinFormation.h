@@ -50,6 +50,21 @@ struct FSeinFootprintPacking
 	int32         Rows    = 1;
 };
 
+/**
+ * How a formation orients each member relative to its slot. Uniform = everyone faces the formation
+ * facing (box / grid / line / blob); RadialOutward / RadialInward = face away from / toward the
+ * formation centre (ring, square). The parent formation hands the resulting facing to each element —
+ * a squad rotates its whole authored body to it. Resolved AFTER layout from the FINAL positions, so
+ * it survives the de-overlap / nav-projection passes.
+ */
+UENUM(BlueprintType)
+enum class ESeinFormationFacing : uint8
+{
+	Uniform        UMETA(DisplayName = "Uniform"),
+	RadialOutward  UMETA(DisplayName = "Radial Outward"),
+	RadialInward   UMETA(DisplayName = "Radial Inward"),
+};
+
 UCLASS(Abstract, Blueprintable, EditInlineNew, ClassGroup = (SeinARTS),
 	meta = (DisplayName = "Formation"))
 class SEINARTSCOREENTITY_API USeinFormation : public UObject
@@ -57,6 +72,12 @@ class SEINARTSCOREENTITY_API USeinFormation : public UObject
 	GENERATED_BODY()
 
 public:
+	/** Per-member facing policy (see ESeinFormationFacing). Default Uniform; Ring / Square default to
+	 *  RadialOutward via their constructors. Designer-overridable per formation. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Formation",
+		meta = (DisplayName = "Facing Mode"))
+	ESeinFormationFacing FacingMode = ESeinFormationFacing::Uniform;
+
 	/**
 	 * Lay out the given members for an order. Returns per-member world positions
 	 * (index-aligned with `Members`) plus the formation's facing at the target.
@@ -212,4 +233,17 @@ public:
 		USeinWorldSubsystem* World,
 		const TArray<FFixedPoint>& Radii,
 		TArray<FFixedVector>& Positions);
+
+	/**
+	 * Fill per-member facings (index-aligned with Positions) per `Mode`: Uniform → all = `UniformFacing`;
+	 * RadialOutward / RadialInward → each faces away from / toward `Center` (the formation anchor),
+	 * falling back to `UniformFacing` for a member sitting on the centre. Computed by the resolver from
+	 * the FINAL positions (after the layout passes), so radial directions are exact. Deterministic.
+	 */
+	static void ComputeMemberFacings(
+		ESeinFormationFacing Mode,
+		const TArray<FFixedVector>& Positions,
+		FFixedVector Center,
+		FFixedQuaternion UniformFacing,
+		TArray<FFixedQuaternion>& OutFacings);
 };

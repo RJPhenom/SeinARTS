@@ -8,6 +8,11 @@
 
 #include "Formations/SeinSquareFormation.h"
 
+USeinSquareFormation::USeinSquareFormation()
+{
+	FacingMode = ESeinFormationFacing::RadialOutward;
+}
+
 FSeinFormationLayout USeinSquareFormation::BuildFormation_Implementation(
 	USeinWorldSubsystem* World,
 	const TArray<FSeinEntityHandle>& Members,
@@ -124,11 +129,32 @@ FSeinFormationLayout USeinSquareFormation::BuildFormation_Implementation(
 			Used = Used + D;
 			++Idx;
 		}
-		const int32 K = Idx - Start; // members on this square
-
-		// Split K across the 4 sides as evenly as possible; each side's FIRST member is its corner.
-		const int32 Base = K / 4;
-		const int32 Rem  = K % 4;
+		// Split this square's members into 4 CONTIGUOUS sides by FOOTPRINT (not count): fill each side
+		// toward an equal footprint share so a big unit (or a squad-sized vs infantry-sized mix) never
+		// overruns one side and marches its members PAST the corner onto the next edge (the "bleeding
+		// edge" the old K/4 count split produced). The guard leaves >= 1 member for each remaining side
+		// so all four corners stay seated for K >= 4.
+		int32 SideC[4] = { 0, 0, 0, 0 };
+		{
+			FFixedPoint SquareSpan = FFixedPoint::Zero;
+			for (int32 m = Start; m < Idx; ++m) { SquareSpan = SquareSpan + EffR[m] * FFixedPoint::Two; }
+			const FFixedPoint SideTarget = SquareSpan / FFixedPoint::FromInt(4);
+			int32 sSide = 0;
+			FFixedPoint SideUsed = FFixedPoint::Zero;
+			for (int32 m = Start; m < Idx; ++m)
+			{
+				++SideC[sSide];
+				SideUsed = SideUsed + EffR[m] * FFixedPoint::Two;
+				const int32 MembersAfter = (Idx - 1) - m;
+				const int32 SidesAfter   = 3 - sSide;
+				if (sSide < 3 && MembersAfter > 0 &&
+					((SideUsed >= SideTarget && MembersAfter > SidesAfter) || (MembersAfter <= SidesAfter)))
+				{
+					++sSide;
+					SideUsed = FFixedPoint::Zero;
+				}
+			}
+		}
 
 		const FFixedPoint CornerX[4] = { H,                    H,                    FFixedPoint::Zero - H, FFixedPoint::Zero - H };
 		const FFixedPoint CornerY[4] = { H,                    FFixedPoint::Zero - H, FFixedPoint::Zero - H, H                    };
@@ -139,7 +165,7 @@ FSeinFormationLayout USeinSquareFormation::BuildFormation_Implementation(
 		int32 Cursor = Start;
 		for (int32 s = 0; s < 4; ++s)
 		{
-			const int32 c = Base + (s < Rem ? 1 : 0);
+			const int32 c = SideC[s];
 			if (c <= 0) { continue; }
 
 			// Even slack so this side's `c` members (corner-inclusive) fill [0, SideLen]: `c` gaps total
