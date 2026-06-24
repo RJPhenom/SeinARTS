@@ -28,6 +28,99 @@ class SEINARTSNAVIGATION_API USeinNavigationAStar : public USeinNavigation, publ
 {
 	GENERATED_BODY()
 
+private:
+
+	/** Open-list node, kept as a class-private nested type so the search heap
+	 *  can live inside FAStarScratch. Was previously in an anonymous namespace
+	 *  inside the .cpp; moved here strictly to preserve the heap's allocated
+	 *  memory across FindPath calls (long paths grow Open to 1000s of entries
+	 *  and the local-array version reallocated from scratch on the next
+	 *  search). */
+	struct FAStarNode
+	{
+		int32 CellIdx = 0;
+		int32 FCost = 0;
+		int32 GCost = 0;
+		int32 Tiebreak = 0; // insertion order; keeps heap order deterministic
+
+		bool operator<(const FAStarNode& Other) const
+		{
+			if (FCost != Other.FCost) return FCost < Other.FCost;
+			if (GCost != Other.GCost) return GCost > Other.GCost; // prefer higher G (closer to goal)
+			return Tiebreak < Other.Tiebreak;
+		}
+	};
+
+	/** All mutable per-search scratch, bundled so the A* path search is
+	 *  REENTRANT: each concurrent search carries its own FAStarScratch, so the
+	 *  search methods take it by reference instead of touching shared instance
+	 *  members. The serial path uses a single persistent `MainScratch` instance
+	 *  (below), preserving the lazy-gen / persistent-buffer behavior the old
+	 *  mutable members had — the arrays size once and survive across calls.
+	 *  Holds ONLY mutable scratch; read-only grid data (CellCost, WallDistance,
+	 *  CellConnections, DynamicBlockers, …) stays on the class, shared and
+	 *  immutable during a search. */
+	struct FAStarScratch
+	{
+		/** Per-cell flag (1 = dynamically blocked for this FindPath, 0 = clear).
+		 *  Rebuilt at the top of each FindPath; the buffer is reused across calls
+		 *  to avoid per-call allocations (per-scratch, so concurrent searches
+		 *  don't clash). */
+		TArray<uint8> DynamicBlocked;
+
+		/** AABB of cells written into `DynamicBlocked` by the previous
+		 *  `BuildDynamicBlockedOverlay` call (inclusive bounds, in grid
+		 *  coordinates). Next overlay rebuild clears only this rect instead of
+		 *  the full grid — huge savings on large maps with localized blocker
+		 *  clusters (e.g. a 1km² map with a few vehicles in one corner used to
+		 *  pay 1MB of Memzero per FindPath × 4 paths/tick).
+		 *
+		 *  `Min.X > Max.X` is the "empty / invalid" sentinel: previous overlay
+		 *  wrote nothing, no clear needed. */
+		FIntRect LastOverlayDirtyRect = FIntRect(INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN);
+
+		/** Per-request dynamic-WD lazy cache (Chebyshev distance from each visited
+		 *  cell to its nearest dyn-blocked cell, capped at the per-request
+		 *  RequiredClearance), gen-tagged just like the A* search state. Bumped at
+		 *  the top of each FindCellPath so consecutive requests don't share stale
+		 *  dynamic distances. Per-scratch for reentrancy. */
+		TArray<uint8> DynamicWDCache;
+		TArray<uint16> DynamicWDCacheGen;
+		uint16 CurrentDynamicWDGen = 0;
+
+		/** Per-FindCellPath terrain-tag gate (built in FindCellPath from
+		 *  Request.BlockedTerrainTags). RequestBlockedType is a 256-entry lookup
+		 *  (1 = that terrain-type index is barred for this agent);
+		 *  bRequestHasBlockedTypes guards the hot-path check so an agent that
+		 *  blocks no terrain pays nothing. Per-scratch for reentrancy. */
+		TArray<uint8> RequestBlockedType;
+		bool bRequestHasBlockedTypes = false;
+
+		// A* search state — lazy-validated via SearchCellGen / CurrentSearchGen.
+		// The three core search arrays (GCosts, Parents, Closed) are sized once
+		// when the grid changes and never re-initialized at the start of a
+		// search; a parallel SearchCellGen array stores the search-generation
+		// that last touched each cell, so stale entries read as "fresh"
+		// (INT32_MAX / -1 / false) without a memzero. Per-scratch for reentrancy.
+		TArray<int32> SearchGCosts;
+		TArray<int32> SearchParents;
+		TArray<uint8> SearchClosed;
+		TArray<uint16> SearchCellGen;
+		uint16 CurrentSearchGen = 0;
+
+		/** Heap-ordered open list, scratch-scoped so allocation persists across
+		 *  searches. `Open.Reset()` at the top of each AStarSearch keeps the
+		 *  capacity that previous calls grew to — saves the realloc-from-128
+		 *  pattern when consecutive searches both expand to thousands of nodes. */
+		TArray<FAStarNode> Open;
+	};
+
+	/** Persistent scratch for the serial (single-threaded) path. The virtual
+	 *  FindPath / FindCellPath overrides forward this; its arrays persist across
+	 *  calls exactly as the old `mutable` members did, so serial behavior is
+	 *  byte-identical. Mutable because the search methods are `const`. */
+	mutable FAStarScratch MainScratch;
+
 public:
 
 	// ----------------------------------------------------------------------
@@ -71,6 +164,28 @@ public:
 
 	virtual bool FindPath(const FSeinPathRequest& Request, FSeinPath& OutPath) const override;
 	virtual bool FindCellPath(const FSeinPathRequest& Request, FSeinPath& OutPath) const override;
+
+	/** Run a batch of path requests, parallelized across worker threads when
+	 *  Sein.Sim.Parallel is on — each worker gets its own FAStarScratch, so the
+	 *  searches run race-free and each result is identical to the serial path.
+	 *  Falls back to a serial MainScratch loop when parallelism is off / N==1. */
+	virtual void RunPathBatch(const TArray<FSeinPathRequest>& Requests, TArray<FSeinPath>& OutResults) const override;
+
+private:
+	/** Reentrant body of FindCellPath. The virtual override is a thin wrapper
+	 *  that forwards `MainScratch`; this helper takes the per-search scratch
+	 *  by reference so the same code can run concurrently on multiple threads,
+	 *  each with its own FAStarScratch. Serial behavior is byte-identical to
+	 *  the pre-refactor member-scratch version (MainScratch's arrays persist
+	 *  across calls exactly as the old mutable members did). */
+	bool FindCellPathInternal(const FSeinPathRequest& Request, FSeinPath& OutPath, FAStarScratch& Scratch) const;
+
+	/** Reentrant body of FindPath (cell A* + wall-push + post-validation) operating
+	 *  on the supplied scratch. The virtual FindPath passes MainScratch; RunPathBatch's
+	 *  parallel path passes a per-worker scratch so concurrent searches don't collide. */
+	bool FindPathInternal(const FSeinPathRequest& Request, FSeinPath& OutPath, FAStarScratch& Scratch) const;
+
+public:
 	virtual bool IsReachable(const FFixedVector& From, const FFixedVector& To, const FGameplayTagContainer& AgentTags) const override;
 	virtual bool GetRandomReachablePoint(const FFixedVector& QueryOrigin, FFixedPoint Radius, FFixedRandom& Rng, FFixedVector& OutPoint) const override;
 	virtual bool IsPassable(const FFixedVector& WorldPos) const override;
@@ -158,7 +273,8 @@ protected:
 	void PushWaypointsAwayFromWalls(
 		FSeinPath& Path,
 		FFixedPoint AgentFootprintRadius,
-		int32 WallPaddingCells) const;
+		int32 WallPaddingCells,
+		FAStarScratch& Scratch) const;
 
 	// ----------------------------------------------------------------------
 	// Runtime grid (populated by LoadFromSubstrate)
@@ -236,26 +352,9 @@ protected:
 	/** Runtime list of dynamic blockers, refreshed each PreTick by the
 	 *  nav-blocker stamping system. FindPath rebuilds the per-call
 	 *  DynamicBlocked overlay from this list (excluding the requester so
-	 *  a unit can path out of its own footprint). */
+	 *  a unit can path out of its own footprint). Shared, immutable during a
+	 *  search — NOT part of FAStarScratch. */
 	TArray<FSeinDynamicBlocker> DynamicBlockers;
-
-	/** Per-cell flag (1 = dynamically blocked for this FindPath, 0 = clear).
-	 *  Mutable so it can be rebuilt inside the const FindPath. Single-threaded
-	 *  sim guarantees no concurrent FindPath; the buffer is reused across
-	 *  calls to avoid per-call allocations. */
-	mutable TArray<uint8> DynamicBlocked;
-
-	/** AABB of cells written into `DynamicBlocked` by the previous
-	 *  `BuildDynamicBlockedOverlay` call (inclusive bounds, in grid
-	 *  coordinates). Next overlay rebuild clears only this rect instead of
-	 *  the full grid — huge savings on large maps with localized blocker
-	 *  clusters (e.g. a 1km² map with a few vehicles in one corner used to
-	 *  pay 1MB of Memzero per FindPath × 4 paths/tick).
-	 *
-	 *  `Min.X > Max.X` is the "empty / invalid" sentinel: previous overlay
-	 *  wrote nothing, no clear needed. Mutable for the same reason as
-	 *  DynamicBlocked. */
-	mutable FIntRect LastOverlayDirtyRect = FIntRect(INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN);
 
 	/** Fingerprint of the last DynamicBlockers list pushed via SetDynamicBlockers.
 	 *  XOR-fold of per-blocker pose + mask + shape hash. SetDynamicBlockers
@@ -263,98 +362,6 @@ protected:
 	 *  the debug scene-proxy rebuild to actual mutations instead of every
 	 *  per-tick push. */
 	uint32 LastBlockerHash = 0;
-
-	/** Per-FindCellPath terrain-tag gate (built in FindCellPath from
-	 *  Request.BlockedTerrainTags). RequestBlockedType is a 256-entry lookup
-	 *  (1 = that terrain-type index is barred for this agent); bRequestHasBlockedTypes
-	 *  guards the hot-path check so an agent that blocks no terrain pays nothing. Mutable:
-	 *  rebuilt inside the const FindCellPath — single-threaded sim, same contract as
-	 *  DynamicBlocked. */
-	mutable TArray<uint8> RequestBlockedType;
-	mutable bool bRequestHasBlockedTypes = false;
-
-	// ----------------------------------------------------------------------
-	// A* search state — lazy-validated via CellGen / CurrentSearchGen
-	// ----------------------------------------------------------------------
-	//
-	// The three core search arrays (GCosts, Parents, Closed) used to be
-	// allocated + initialized inside every AStarSearch call — on a 1km² grid
-	// that's ~9 MB of memzero per call, plus the alloc itself. With the
-	// per-tick path budget driving 4+ FindPath calls per tick at 30Hz, the
-	// init cost was dominating the actual A* work on large grids.
-	//
-	// Lazy validation pattern: the arrays are sized once when the grid
-	// changes, never re-initialized at the start of a search. A parallel
-	// `CellGen` array stores the search-generation that last touched each
-	// cell. When `CellGen[i] != CurrentSearchGen` the cell's GCosts /
-	// Parents / Closed entries are treated as "fresh" (INT32_MAX / -1 /
-	// false) — uninitialized values never read without the gen check.
-	// `++CurrentSearchGen` per search; on uint16 wraparound (every ~65k
-	// searches) we do one full CellGen reset to keep the invariant.
-	//
-	// Per-call cost now scales with **expanded nodes** (hundreds-to-low-
-	// thousands) instead of grid size. All mutable so they can be modified
-	// inside the const FindPath / AStarSearch. Single-threaded sim
-	// guarantees no concurrent search, so no synchronization needed.
-
-	mutable TArray<int32> SearchGCosts;
-	mutable TArray<int32> SearchParents;
-	mutable TArray<uint8> SearchClosed;
-	mutable TArray<uint16> SearchCellGen;
-	mutable uint16 CurrentSearchGen = 0;
-
-	// ----------------------------------------------------------------------
-	// Dynamic-WD lazy cache — per-request, gen-tagged just like the A*
-	// search state. Caches the Chebyshev distance from each visited cell
-	// to its nearest dyn-blocked cell, capped at a per-request RequiredClearance.
-	//
-	// Why lazy: the dyn-blocker influence region inflated by RequiredClearance
-	// can cover thousands of cells per request, but A* / Push / Smoother
-	// only actually read clearance at a fraction of them. Precomputing the
-	// full inflated field would touch every cell in the halo whether or not
-	// the path goes near it; lazy compute only pays for cells we read.
-	//
-	// Fast paths:
-	//  - Cell outside `LastOverlayDirtyRect` inflated by RequiredClearance →
-	//    no blocker can be within range, return WallDistance immediately.
-	//    Single rect check, ~95% of A*-visited cells hit this in sparse-
-	//    blocker maps (units clustered in a few squads).
-	//  - Cache hit on prior visit in this request → O(1) lookup, no scan.
-	//
-	// Slow path: Chebyshev ring scan outward from the cell, exits early
-	// at the first dyn-blocked cell encountered. Worst-case O(R²) cells
-	// scanned; typical case much less since most query cells are near a
-	// blocker (otherwise the rect check skipped them).
-	mutable TArray<uint8> DynamicWDCache;
-	mutable TArray<uint16> DynamicWDCacheGen;
-	mutable uint16 CurrentDynamicWDGen = 0;
-
-	/** Open-list node, kept as a class-private nested type so `Open` can live
-	 *  on the impl as a `mutable` member. Was previously in an anonymous
-	 *  namespace inside the .cpp; moved here strictly to preserve the heap's
-	 *  allocated memory across FindPath calls (long paths grow Open to 1000s
-	 *  of entries and the local-array version reallocated from scratch on
-	 *  the next search). */
-	struct FAStarNode
-	{
-		int32 CellIdx = 0;
-		int32 FCost = 0;
-		int32 GCost = 0;
-		int32 Tiebreak = 0; // insertion order; keeps heap order deterministic
-
-		bool operator<(const FAStarNode& Other) const
-		{
-			if (FCost != Other.FCost) return FCost < Other.FCost;
-			if (GCost != Other.GCost) return GCost > Other.GCost; // prefer higher G (closer to goal)
-			return Tiebreak < Other.Tiebreak;
-		}
-	};
-
-	/** Heap-ordered open list, member-scoped so allocation persists across
-	 *  searches. `Open.Reset()` at the top of each AStarSearch keeps the
-	 *  capacity that previous calls grew to — saves the realloc-from-128
-	 *  pattern when consecutive searches both expand to thousands of nodes. */
-	mutable TArray<FAStarNode> Open;
 
 	// ----------------------------------------------------------------------
 	// Grid helpers
@@ -372,17 +379,19 @@ protected:
 	 *  current request's dynamic-blocked overlay. DynamicBlocked is rebuilt
 	 *  at the top of FindPath (with the requester excluded + agent mask
 	 *  applied), so callers inside that scope (A*, HasLineOfSight) can use
-	 *  this directly. */
-	FORCEINLINE bool IsCellPassableForPath(int32 X, int32 Y) const
+	 *  this directly. Reads the per-search scratch (DynamicBlocked +
+	 *  RequestBlockedType + the blocked-types flag) so it is reentrant across
+	 *  concurrent searches that each carry their own FAStarScratch. */
+	FORCEINLINE bool IsCellPassableForPath(int32 X, int32 Y, const FAStarScratch& Scratch) const
 	{
 		if (!IsCellPassable(X, Y)) return false;
 		const int32 Idx = CellIndex(X, Y);
 		// Per-agent terrain-tag gate (BlockedTerrainTags). Guarded so a no-blocked-terrain
 		// agent skips it; when active, CellTerrainType is grid-sized and RequestBlockedType
 		// is 256 entries, so both indexings are in range.
-		if (bRequestHasBlockedTypes && RequestBlockedType[CellTerrainType[Idx]]) return false;
-		if (DynamicBlocked.Num() == 0) return true;
-		return DynamicBlocked[Idx] == 0;
+		if (Scratch.bRequestHasBlockedTypes && Scratch.RequestBlockedType[CellTerrainType[Idx]]) return false;
+		if (Scratch.DynamicBlocked.Num() == 0) return true;
+		return Scratch.DynamicBlocked[Idx] == 0;
 	}
 
 	/** Stamp DynamicBlockers (skipping `Exclude` + filtering to those whose
@@ -390,7 +399,7 @@ protected:
 	 *  Called at the top of FindPath so the overlay matches BOTH the
 	 *  requester (self-exclusion) AND the agent's layer (water blocker
 	 *  doesn't stamp for amphibious agents). */
-	void BuildDynamicBlockedOverlay(FSeinEntityHandle Exclude, uint8 AgentNavLayerMask) const;
+	void BuildDynamicBlockedOverlay(FSeinEntityHandle Exclude, uint8 AgentNavLayerMask, FAStarScratch& Scratch) const;
 
 	/** Effective wall-distance at (X, Y): `min(static WallDistance, dynamic-
 	 *  blocker Chebyshev distance)`, capped at `MaxR` for the dynamic side.
@@ -410,12 +419,12 @@ protected:
 	 *  PushWaypointsAwayFromWalls. All three observe the same effective
 	 *  clearance — so dynamic blockers act on path topology, smoothing,
 	 *  AND waypoint push, exactly like static walls do. */
-	int32 GetEffectiveWD(int32 X, int32 Y, int32 MaxR) const;
+	int32 GetEffectiveWD(int32 X, int32 Y, int32 MaxR, FAStarScratch& Scratch) const;
 
 private:
 	/** Slow-path ring scan for `GetEffectiveWD` — exits early on first
 	 *  encountered dyn-blocked cell. Caller guarantees (X, Y) is valid. */
-	int32 ComputeDynamicWDRingScan(int32 X, int32 Y, int32 MaxR) const;
+	int32 ComputeDynamicWDRingScan(int32 X, int32 Y, int32 MaxR, FAStarScratch& Scratch) const;
 
 protected:
 
@@ -430,13 +439,13 @@ protected:
 	 *  smoothing to find a line OUT. Used for path smoothing; the clearance
 	 *  gate keeps smoothed segments from collapsing across wall corners that
 	 *  A* carefully routed around. */
-	bool HasLineOfSight(int32 X0, int32 Y0, int32 X1, int32 Y1, int32 RequiredClearance = 0) const;
+	bool HasLineOfSight(int32 X0, int32 Y0, int32 X1, int32 Y1, FAStarScratch& Scratch, int32 RequiredClearance = 0) const;
 
 	/** String-pull smoothed polyline from an A* cell chain. Forwards
 	 *  `RequiredClearance` into `HasLineOfSight` so the smoother refuses to
 	 *  collapse waypoints across low-clearance cells. Default 0 = no
 	 *  clearance enforcement (backward-compatible). */
-	void BuildSmoothedPath(const TArray<FIntPoint>& CellPath, FSeinPath& OutPath, int32 RequiredClearance = 0) const;
+	void BuildSmoothedPath(const TArray<FIntPoint>& CellPath, FSeinPath& OutPath, FAStarScratch& Scratch, int32 RequiredClearance = 0) const;
 
 	/** Core A* search — configuration-space (footprint-aware) variant.
 	 *
@@ -485,7 +494,7 @@ protected:
 	 *  MaxIterations: hard cap on node expansions.
 	 */
 	TArray<FIntPoint> AStarSearch(FIntPoint Start, FIntPoint End, bool& bOutPartial,
-		int32 HeuristicWeightPercent, int32 MaxIterations, int32 RequiredClearance) const;
+		int32 HeuristicWeightPercent, int32 MaxIterations, int32 RequiredClearance, FAStarScratch& Scratch) const;
 
 	/** Constant used to mark cells as "no nearby wall" in WallDistance. Sets
 	 *  the maximum BFS expansion radius: any cell further than this many

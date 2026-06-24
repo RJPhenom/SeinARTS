@@ -45,6 +45,7 @@
 #include "Core/SeinSystemPriority.h"
 #include "Math/MathLib.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "Core/SeinParallel.h"
 #include "Settings/PluginSettings.h"
 #include "Collision/SeinCollisionSpatialHash.h"
 #include "Components/SeinMovementComponent.h"
@@ -82,8 +83,6 @@ public:
 		const FFixedPoint ArrivalReleaseRadii = Settings->AvoidanceArrivalReleaseRadii;
 		const FFixedPoint MaxSteerMagnitude   = Settings->AvoidanceMaxSteerMagnitude;
 
-		TArray<FSeinEntityHandle> Neighbors;
-
 		// Hoist component-storage lookups out of the per-entity / per-neighbour
 		// loop: GetComponent<T>() is a hashmap lookup by UScriptStruct* per call;
 		// resolving each storage once turns every access into an O(1) indexed get.
@@ -98,8 +97,28 @@ public:
 		// group-ID concept — it's the canonical "who was ordered together."
 		ISeinComponentStorage* BrokerStorage  = World.GetComponentStorageRaw(FSeinBrokerMembershipData::StaticStruct());
 
-		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle SelfHandle, FSeinEntity& SelfEntity)
+		// Gather live handles into an indexable array (serial, cheap), then fan the
+		// per-unit avoidance computation across worker threads. Each body reads the
+		// immutable start-of-tick snapshot (broadphase + neighbour transforms /
+		// velocities, all frozen at PreTick) and writes ONLY its own AvoidanceSteer —
+		// the determinism contract this file's header already guarantees IS the
+		// SeinParallelFor body contract (immutable reads + disjoint per-self writes).
+		// `Sein.Sim.Parallel 0` forces this serial; the result is bit-identical.
+		TArray<FSeinEntityHandle> LiveHandles;
+		LiveHandles.Reserve(World.GetEntityPool().GetActiveCount());
+		World.GetEntityPool().ForEachEntity([&LiveHandles](FSeinEntityHandle Handle, FSeinEntity&) { LiveHandles.Add(Handle); });
+
+		SeinParallelFor(LiveHandles.Num(), [&](int32 Index)
 		{
+			const FSeinEntityHandle SelfHandle = LiveHandles[Index];
+			FSeinEntity* SelfEntityPtr = World.GetEntityPool().Get(SelfHandle);
+			if (!SelfEntityPtr) return;
+			FSeinEntity& SelfEntity = *SelfEntityPtr;
+
+			// Per-body neighbour scratch — MUST be a local (one buffer per body
+			// invocation) so concurrent QueryRadius calls never share it.
+			TArray<FSeinEntityHandle> Neighbors;
+
 			FSeinMovementComponent* Move = MoveStorage ? static_cast<FSeinMovementComponent*>(MoveStorage->GetComponentRaw(SelfHandle)) : nullptr;
 			if (!Move) return;
 			// Opted out → leave AvoidanceSteer untouched (stays its default zero), so the

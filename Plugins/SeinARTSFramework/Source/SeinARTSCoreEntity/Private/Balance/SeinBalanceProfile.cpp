@@ -7,6 +7,7 @@
 
 #if WITH_EDITOR
 #include "Actor/SeinActor.h"
+#include "Abilities/SeinAbility.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "UObject/UObjectGlobals.h"
@@ -33,13 +34,28 @@ void USeinBalanceProfile::ResolveTargetClasses(TArray<UClass*>& OutClasses) cons
 
 	IAssetRegistry& AR = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
 
+	// Kind-aware base class + roots. Entities read IncludedRoots/ExcludedClasses against ASeinActor;
+	// Abilities read AbilityRoots/ExcludedAbilities against USeinAbility. The walk below is identical.
+	const bool bAbilities = (TargetKind == ESeinBalanceTargetKind::Abilities);
+	UClass* const BaseClass = bAbilities ? USeinAbility::StaticClass() : ASeinActor::StaticClass();
+
+	TArray<UClass*> RootClasses, ExcludedRootClasses;
+	if (bAbilities)
+	{
+		for (const TSoftClassPtr<USeinAbility>& R : AbilityRoots)     { if (UClass* C = R.LoadSynchronous()) RootClasses.Add(C); }
+		for (const TSoftClassPtr<USeinAbility>& E : ExcludedAbilities) { if (UClass* C = E.LoadSynchronous()) ExcludedRootClasses.Add(C); }
+	}
+	else
+	{
+		for (const TSoftClassPtr<ASeinActor>& R : IncludedRoots)   { if (UClass* C = R.LoadSynchronous()) RootClasses.Add(C); }
+		for (const TSoftClassPtr<ASeinActor>& E : ExcludedClasses) { if (UClass* C = E.LoadSynchronous()) ExcludedRootClasses.Add(C); }
+	}
+
 	// Excluded = each excluded class + its whole subtree. Built first so the
 	// included traversal can prune excluded branches (and we post-filter too).
 	TSet<FTopLevelAssetPath> Excluded;
-	for (const TSoftClassPtr<ASeinActor>& Ex : ExcludedClasses)
+	for (UClass* ExClass : ExcludedRootClasses)
 	{
-		UClass* ExClass = Ex.LoadSynchronous();
-		if (!ExClass) continue;
 		const FTopLevelAssetPath ExPath = ExClass->GetClassPathName();
 		Excluded.Add(ExPath);
 		AR.GetDerivedClassNames({ ExPath }, TSet<FTopLevelAssetPath>(), Excluded);
@@ -47,10 +63,8 @@ void USeinBalanceProfile::ResolveTargetClasses(TArray<UClass*>& OutClasses) cons
 
 	// Included = each root + its subtree, with excluded branches pruned.
 	TSet<FTopLevelAssetPath> Included;
-	for (const TSoftClassPtr<ASeinActor>& Root : IncludedRoots)
+	for (UClass* RootClass : RootClasses)
 	{
-		UClass* RootClass = Root.LoadSynchronous();
-		if (!RootClass) continue;
 		const FTopLevelAssetPath RootPath = RootClass->GetClassPathName();
 		if (!Excluded.Contains(RootPath))
 		{
@@ -74,7 +88,7 @@ void USeinBalanceProfile::ResolveTargetClasses(TArray<UClass*>& OutClasses) cons
 		}
 
 		UClass* Cls = ResolveClassFromPath(Name);
-		if (!Cls || !Cls->IsChildOf(ASeinActor::StaticClass())) continue;
+		if (!Cls || !Cls->IsChildOf(BaseClass)) continue;
 		if (!bIncludeAbstract && Cls->HasAnyClassFlags(CLASS_Abstract)) continue;
 		if (Cls->HasAnyClassFlags(CLASS_NewerVersionExists | CLASS_Deprecated)) continue;
 

@@ -18,7 +18,7 @@
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
 #include "Types/Vector2D.h"
-#include "Types/FixedCurve.h"
+#include "Math/FixedCurve.h"
 #include "Types/Rotator.h"
 #include "Types/Quat.h"
 #include "Types/Transform.h"

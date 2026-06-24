@@ -501,6 +501,21 @@ units stay bit-identical. F4 → a BP custom planner emits a non-A* path.
     Edited as a plain key array (no curve-editor canvas yet — the ~80% interim; a Slate widget can layer on later).
   **Editor RESTART required** (new USTRUCT + UFUNCTIONs).
 
+- 2026-06-23 — **Point-2 fix (Tier-2 state determinism) + native curve tuning DONE, build-green.**
+  • **Point 2 — member-variable determinism check.** The shared `USeinBlueprintDeterminismValidator` now also walks the
+    BP's `NewVariables` and warns on any **non-deterministic-typed member variable** — the call-walk only caught
+    non-deterministic CALLS, not STATE. A mode instance persists per-unit in the sim, so a loose float/vector/object
+    member is the desync footgun; tuning vars (deterministic-typed, hydrated) pass. Shared by movement + formation;
+    respects the opt-in escalate-to-error.
+  • **Native curve tuning.** `FFixedCurve` rewritten to wrap a native `FRuntimeFloatCurve` (full curve-editor UX —
+    points / tangents / interp modes); `Sample` evaluates it DETERMINISTICALLY in fixed-point from the authored keys
+    (Constant / Linear / Cubic matched via FRichCurve's Hermite basis). Lockstep-safe: curve data is authored content
+    (identical on all clients), `FromFloat` is assert-free, and the eval is fixed-point — the same "editor-authored →
+    deterministic at runtime" pattern as cover-slot scatter. Relocated SeinARTSCore → SeinARTSCoreEntity (FRuntimeFloatCurve
+    needs Engine). Verified the state-hash guard DROPS-with-a-dev-warning (never asserts) on the curve's float keys, and
+    authored content can't diverge — safe. `Sample Fixed Curve` BPFL unchanged.
+  **Editor RESTART required.**
+
 ### Rescan backlog (prioritized, 2026-06-22) — gaps surfaced by the audit, NOT yet done
 - **[DONE 2026-06-22] Mover-handle completeness + slope-smoothing node.** Added the three reads + `Apply Slope Tilt`
   (shared helper extracted from the loop). See the execution-log entry above.

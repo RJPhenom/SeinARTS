@@ -20,6 +20,16 @@
  *          A* reference implementation; game teams can subclass or replace it
  *          entirely with navmesh-, waypoint-, or hierarchical-graph-based impls
  *          without touching any other framework code.
+ *
+ *          LAYERING (read this before adding "path planning"):
+ *            - Navigation = TOPOLOGY ("where can a unit go?"). Produces an FSeinPath.
+ *              This class + subclasses; ONE concrete impl ships (USeinNavigationAStar) —
+ *              there is no separate "planner nav" class.
+ *            - FSeinPath  = the hand-off contract (a waypoint backbone + typed segments).
+ *            - Movement   = KINEMATICS ("how does THIS unit drive it?"). Curve-fitting /
+ *              Reeds-Shepp / reversing live in `USeinMovement::PlanPath` (per-unit), NOT
+ *              in a nav class. A nav subclass is the right home ONLY for orientation-aware
+ *              (facing-per-node) pathing — see SeinMovement.h ResolveCollisionRadius.
  */
 
 #pragma once
@@ -129,6 +139,23 @@ public:
 	 *  subclass may layer in project-specific post-processing (extra wall
 	 *  padding, maneuver shaping) before returning. */
 	virtual bool FindPath(const FSeinPathRequest& Request, FSeinPath& OutPath) const { OutPath.Clear(); return false; }
+
+	/**
+	 * Run a batch of path requests. The async-pathfinding drain calls this so a nav
+	 * impl can parallelize the batch internally (per-thread scratch). Default: SERIAL
+	 * — loops FindPath, so any nav works unchanged (a non-reentrant impl simply
+	 * doesn't parallelize). USeinNavigationAStar overrides it to run the searches
+	 * across worker threads. OutResults is sized to Requests and filled index-aligned;
+	 * each result must be a pure function of its request + the immutable grid.
+	 */
+	virtual void RunPathBatch(const TArray<FSeinPathRequest>& Requests, TArray<FSeinPath>& OutResults) const
+	{
+		OutResults.SetNum(Requests.Num());
+		for (int32 i = 0; i < Requests.Num(); ++i)
+		{
+			FindPath(Requests[i], OutResults[i]);
+		}
+	}
 
 	/** Cell-level path query — pure 2D pathfinding on the clearance grid.
 	 *  Output is a cell-aware polyline: smoothed (LoS-collapsed) and

@@ -37,6 +37,7 @@
 #include "Core/SeinTickPhase.h"
 #include "Core/SeinSystemPriority.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "Core/SeinParallel.h"
 #include "Components/SeinExtentsComponent.h"
 #include "SeinNavigation.h"
 #include "SeinNavigationSubsystem.h"
@@ -60,8 +61,25 @@ public:
 
 		const bool bHasAuthoritative = World.AuthoritativeDestinationResolver.IsBound();
 
-		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, FSeinEntity& Entity)
+		// Gather live handles, then project off-nav movable colliders back on. Pure
+		// per-unit: reads the immutable nav bake (IsPassable / ProjectPointToNav are
+		// scratch-free const reads) + own transform, writes only own transform — a
+		// clean SeinParallelFor body. EXCEPTION: when a cover AuthoritativeDestination-
+		// Resolver is bound, that cross-module delegate's thread-safety isn't
+		// guaranteed, so cover projects run this serial via bForceSerial (then the
+		// Execute call only ever runs on the main thread). `Sein.Sim.Parallel 0`
+		// forces serial too; the result is bit-identical either way.
+		TArray<FSeinEntityHandle> LiveHandles;
+		LiveHandles.Reserve(World.GetEntityPool().GetActiveCount());
+		World.GetEntityPool().ForEachEntity([&LiveHandles](FSeinEntityHandle Handle, FSeinEntity&) { LiveHandles.Add(Handle); });
+
+		SeinParallelFor(LiveHandles.Num(), [&](int32 Index)
 		{
+			const FSeinEntityHandle Handle = LiveHandles[Index];
+			FSeinEntity* EntityPtr = World.GetEntityPool().Get(Handle);
+			if (!EntityPtr) return;
+			FSeinEntity& Entity = *EntityPtr;
+
 			const FSeinExtentsComponent* Ext =
 				static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(Handle));
 			// Only MOVABLE colliders can be displaced off-nav by the floor.
@@ -90,7 +108,7 @@ public:
 				Projected.Z = Pos.Z;
 				Entity.Transform.SetLocation(Projected);
 			}
-		});
+		}, /*bForceSerial=*/bHasAuthoritative);
 	}
 
 	virtual ESeinTickPhase GetPhase() const override { return ESeinTickPhase::PostTick; }

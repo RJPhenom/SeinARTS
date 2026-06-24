@@ -61,6 +61,33 @@ struct SEINARTSMOVEMENTPLUS_API FSeinWheeledMovementData : public FSeinComponent
 	FFixedPoint SteerResponse = FFixedPoint::FromInt(3);
 
 	// ---------------------------------------------------------------------
+	// Low-speed turn assist (the Company of Heroes "helping hand")
+	// ---------------------------------------------------------------------
+
+	/** The CoH-style "helping hand": how fast (radians/sec) a near-stationary wheeled
+	 *  vehicle may rotate toward its goal, ABOVE what the honest bicycle model allows.
+	 *  A real car can't turn while stopped — this relaxes that so a stopped/slow chassis
+	 *  can pivot toward its destination, giving tight u-turns from rest, snappy
+	 *  responsiveness, and an escape hatch when boxed in. Fades to zero by Turn Assist
+	 *  Fade Speed, so at cruising speed the turn is physically honest. Looks slightly
+	 *  unphysical if you stare at a stopped vehicle pivoting, but reads fine in motion —
+	 *  the CoH trade. Set 0 for a strict bicycle model. Default π (~a 1-second u-turn
+	 *  from rest); the designer dials it for feel. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement|LowSpeed",
+		meta = (ClampMin = "0.0"))
+	FFixedPoint LowSpeedTurnRate = FFixedPoint::Pi;
+
+	/** Speed (world units/sec) at which the helping-hand turn assist has fully faded to
+	 *  zero — above this the chassis turns by the honest bicycle model only. The assist
+	 *  is full at rest and ramps down linearly to here, so it shapes the from-rest
+	 *  reorient without touching cruising turns. Larger = the assist helps through more
+	 *  of a turn (tighter, less honest); smaller = assist only at a crawl. Default 300.
+	 *  Ignored when Low Speed Turn Rate is 0. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement|LowSpeed",
+		meta = (ClampMin = "0.0"))
+	FFixedPoint TurnAssistFadeSpeed = FFixedPoint::FromInt(300);
+
+	// ---------------------------------------------------------------------
 	// Look-ahead / carrot
 	// ---------------------------------------------------------------------
 
@@ -140,6 +167,8 @@ FORCEINLINE uint32 GetTypeHash(const FSeinWheeledMovementData& C)
 	uint32 H = GetTypeHash(C.Wheelbase);
 	H = HashCombine(H, GetTypeHash(C.MaxSteerAngle));
 	H = HashCombine(H, GetTypeHash(C.SteerResponse));
+	H = HashCombine(H, GetTypeHash(C.LowSpeedTurnRate));
+	H = HashCombine(H, GetTypeHash(C.TurnAssistFadeSpeed));
 	H = HashCombine(H, GetTypeHash(C.LookAheadDistance));
 	H = HashCombine(H, GetTypeHash(C.LookAheadTimeHorizon));
 	H = HashCombine(H, GetTypeHash(C.ArrivalSlowdownDistance));

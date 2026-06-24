@@ -48,6 +48,7 @@
 #include "Core/SeinTickPhase.h"
 #include "Core/SeinSystemPriority.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "Core/SeinParallel.h"
 #include "SeinMovementSubsystem.h"
 #include "Movement/SeinMovement.h"
 #include "Components/SeinMovementComponent.h"
@@ -93,6 +94,27 @@ public:
 		// reads Path / the waypoint index (contract in its docstring).
 		static const FSeinPath IdlePath;
 
+		// Gather idle units serially (movement-instance creation + its registry
+		// insert MUST be serial), pre-fetching the stable component pointers — no
+		// AddComponent runs this phase, so they don't dangle. Partition by whether
+		// the movement CLASS is native: a native (C++) mode's TickIdle is compiled
+		// code and fans cleanly across worker threads; a Blueprint-authored mode's
+		// TickIdle may be a BP graph, and UE's Blueprint VM is NOT thread-safe, so
+		// those stay on the serial spine. TickIdle is otherwise pure self-mutation
+		// (its docstring: no neighbour reads, no spatial queries; nav reads are the
+		// scratch-free immutable bake), so the native batch is a clean SeinParallelFor.
+		// `Sein.Sim.Parallel 0` forces it all serial; the result is bit-identical.
+		struct FIdleUnit
+		{
+			FSeinEntity* Entity;
+			FSeinEntityHandle Handle;
+			FSeinMovementComponent* Move;
+			FSeinNavigationComponent* NavComp;
+			USeinMovement* Movement;
+		};
+		TArray<FIdleUnit> NativeIdle;   // C++ movement class — parallel-safe
+		TArray<FIdleUnit> ScriptIdle;   // Blueprint movement class — serial only
+
 		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, FSeinEntity& Entity)
 		{
 			FSeinMovementComponent* Move = World.GetComponent<FSeinMovementComponent>(Handle);
@@ -113,21 +135,33 @@ public:
 			USeinMovement* Movement = Sub->GetOrCreateMovementInstance(Handle, *Move);
 			if (!Movement) return;
 
+			const FIdleUnit Unit{ &Entity, Handle, Move, World.GetComponent<FSeinNavigationComponent>(Handle), Movement };
+			(Movement->GetClass()->IsNative() ? NativeIdle : ScriptIdle).Add(Unit);
+		});
+
+		// Tick one idle unit: builds the per-unit context (own WaypointIndex local
+		// so concurrent bodies never share it) and runs TickIdle on its instance.
+		const auto TickOneIdle = [&](const FIdleUnit& Unit)
+		{
 			int32 IdleWaypointIndex = 0;
 			FSeinMovementContext Ctx{
-				Entity,
-				Move,
-				World.GetComponent<FSeinNavigationComponent>(Handle),
+				*Unit.Entity,
+				Unit.Move,
+				Unit.NavComp,
 				IdlePath,
 				IdleWaypointIndex,
 				FFixedPoint::Zero,   // acceptance — meaningless while idle
 				DeltaTime,
 				Nav,
 				&World,
-				Handle
+				Unit.Handle
 			};
-			Movement->TickIdle(Ctx);
-		});
+			Unit.Movement->TickIdle(Ctx);
+		};
+
+		// Native modes → parallel. Blueprint modes → serial (BP VM not thread-safe).
+		SeinParallelFor(NativeIdle.Num(), [&](int32 Index) { TickOneIdle(NativeIdle[Index]); });
+		for (const FIdleUnit& Unit : ScriptIdle) { TickOneIdle(Unit); }
 	}
 
 	virtual ESeinTickPhase GetPhase() const override { return ESeinTickPhase::AbilityExecution; }

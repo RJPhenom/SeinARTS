@@ -19,6 +19,7 @@
 #include "CoreMinimal.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "SeinPathTypes.h"
+#include "Core/SeinEntityHandle.h"
 #include "SeinNavigationSubsystem.generated.h"
 
 class USeinNavigation;
@@ -114,4 +115,23 @@ private:
 	 *  mismatch triggers a fresh-tick reset. See note above on why this
 	 *  replaces the old `OnSimTickCompleted` subscription. */
 	int32 LastResetTick = -1;
+
+	// ── Async pathfinding (Sein.Sim.AsyncPathfinding) ─────────────────────────
+	// Opt-in: requests queue here keyed by Requester (re-requests dedup) and run as
+	// a deterministic parallel batch one tick later via Navigation->RunPathBatch.
+	// See RequestPath / DrainAsyncPathQueue.
+
+	/** Pending requests, keyed by Requester (latest request per unit wins). */
+	TMap<FSeinEntityHandle, FSeinPathRequest> AsyncQueue;
+
+	/** Ready results from the last drain, consumed on the requester's next RequestPath. */
+	TMap<FSeinEntityHandle, FSeinPath> AsyncResults;
+
+	/** Sim tick the async queue was last drained (drain runs once per tick). */
+	int32 LastDrainTick = -1;
+
+	/** Drain the async queue: serve up to PathRequestsPerTickBudget requests in
+	 *  canonical handle order via Navigation->RunPathBatch, caching the results.
+	 *  Runs once per tick at the first async RequestPath of that tick. */
+	void DrainAsyncPathQueue(int32 CurrentTick);
 };

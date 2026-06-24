@@ -10,11 +10,10 @@ It owns the cross-cutting rules that apply to **all four plugins**. Each plugin 
 > three extension plugins. When you start work, read this file first, then the plugin-specific
 > `CLAUDE.md` for whatever you're touching.
 
-> **Active initiative — base-plugin extensibility & hardening.** If the work touches the extension
-> surface (nav, fog, movement, the bake / level-volume, entities/components, or docs), read
-> `Base_Plugin_Extensibility_Plan.md` (project root) first — it's the self-contained source plan
-> (it supersedes the retired `planning/` BAR-program docs). Citations there are starting coordinates,
-> not boundaries — read outward and re-ground against live code before asserting.
+> **Active initiative — movement & navigation depth.** CoH-quality vehicle movement (Reeds-Shepp
+> curve planning), nav links / jump, clean-API hardening, and the `FSeinPath` typed-segment seam are
+> under active development, so the nav↔movement seam is evolving. `Movement_Mode_Authoring_Plan.md`
+> (project root) tracks the BP movement-mode authoring thread. Re-ground against live code before asserting.
 
 ---
 
@@ -36,8 +35,10 @@ nothing and adds synchronization overhead.
 > is gitignored as a regenerable build artifact — **re-bake after a fresh clone** via the one
 > "Bake Level Data" button on `ASeinLevelVolume` (unified pipeline, CP1.1). History
 > starts fresh from the plugin split; the framework's pre-split history is archived at
-> `https://github.com/RJPhenom/SeinARTSFramework`. No remote is configured on the monorepo yet, and
-> `gh` is not installed. The no-worktree HARD RULE above still applies.
+> `https://github.com/RJPhenom/SeinARTSFramework`. The monorepo's `origin` remote is
+> `https://github.com/RJPhenom/SeinARTS.git`, and `gh` (v2.94.0) is installed — but may be
+> unauthenticated; run `gh auth login` if PR/remote tooling reports expired auth. The no-worktree
+> HARD RULE above still applies.
 
 ---
 

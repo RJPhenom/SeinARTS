@@ -89,7 +89,18 @@ void FSeinBalanceProfileDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBu
 			.OnClicked(this, &FSeinBalanceProfileDetails::OnPushClicked)
 			.Content()
 			[
-				SNew(STextBlock).Text(LOCTEXT("PushBtn", "Push Table → Entities"))
+				SNew(STextBlock).Text(LOCTEXT("PushBtn", "Push Table → Source"))
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f)
+		[
+			SNew(SButton)
+			.HAlign(HAlign_Center)
+			.ToolTipText(LOCTEXT("SyncTip", "Compare the table to the source without writing — reports cells that differ."))
+			.OnClicked(this, &FSeinBalanceProfileDetails::OnCheckSyncClicked)
+			.Content()
+			[
+				SNew(STextBlock).Text(LOCTEXT("SyncBtn", "Check Sync"))
 			]
 		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f)
@@ -174,10 +185,85 @@ FReply FSeinBalanceProfileDetails::OnGatherClicked()
 
 FReply FSeinBalanceProfileDetails::OnPushClicked()
 {
-	// Phase C — write-back into the source Blueprints. Honest stub for now.
-	FNotificationInfo Info(LOCTEXT("PushTodo", "Push Table → Entities lands in Phase C (write-back)."));
-	Info.ExpireDuration = 4.0f;
-	FSlateNotificationManager::Get().AddNotification(Info);
+	USeinBalanceProfile* Profile = WeakProfile.Get();
+	if (!Profile)
+	{
+		return FReply::Handled();
+	}
+
+	int32 SkippedCells = 0;
+	const int32 NumWritten = SeinBalanceTable::PushToEntities(Profile, SkippedCells);
+
+	FNotificationInfo Info(FText::GetEmpty());
+	Info.ExpireDuration = 6.0f;
+	Info.bUseSuccessFailIcons = true;
+	if (NumWritten < 0)
+	{
+		Info.Text = LOCTEXT("PushAbort", "Push cancelled, or no generated table to push (Gather first).");
+		if (TSharedPtr<SNotificationItem> Item = FSlateNotificationManager::Get().AddNotification(Info))
+		{
+			Item->SetCompletionState(SNotificationItem::CS_Fail);
+		}
+	}
+	else
+	{
+		const FText Base = FText::Format(
+			LOCTEXT("PushOk", "Pushed {0} changed value(s) into the unit Blueprints. Save them (Ctrl+S) to persist."),
+			FText::AsNumber(NumWritten));
+		Info.Text = (SkippedCells > 0)
+			? FText::Format(LOCTEXT("PushOkSkip", "{0}\n({1} cell(s) skipped — that component isn't on the unit.)"),
+				Base, FText::AsNumber(SkippedCells))
+			: Base;
+		if (TSharedPtr<SNotificationItem> Item = FSlateNotificationManager::Get().AddNotification(Info))
+		{
+			Item->SetCompletionState(SNotificationItem::CS_Success);
+		}
+	}
+	return FReply::Handled();
+}
+
+FReply FSeinBalanceProfileDetails::OnCheckSyncClicked()
+{
+	USeinBalanceProfile* Profile = WeakProfile.Get();
+	if (!Profile)
+	{
+		return FReply::Handled();
+	}
+
+	int32 CellsChecked = 0;
+	const int32 Diffs = SeinBalanceTable::CheckSync(Profile, CellsChecked);
+
+	FNotificationInfo Info(FText::GetEmpty());
+	Info.ExpireDuration = 5.0f;
+	Info.bUseSuccessFailIcons = true;
+	if (Diffs < 0)
+	{
+		Info.Text = LOCTEXT("SyncNoTable", "No generated table to check — Gather first.");
+		if (TSharedPtr<SNotificationItem> Item = FSlateNotificationManager::Get().AddNotification(Info))
+		{
+			Item->SetCompletionState(SNotificationItem::CS_Fail);
+		}
+	}
+	else if (Diffs == 0)
+	{
+		Info.Text = FText::Format(
+			LOCTEXT("SyncOk", "In sync — all {0} tuning cell(s) match the source Blueprints."),
+			FText::AsNumber(CellsChecked));
+		if (TSharedPtr<SNotificationItem> Item = FSlateNotificationManager::Get().AddNotification(Info))
+		{
+			Item->SetCompletionState(SNotificationItem::CS_Success);
+		}
+	}
+	else
+	{
+		Info.Text = FText::Format(
+			LOCTEXT("SyncDrift", "{0} of {1} cell(s) differ from the source. Gather to pull source in, or Push to write your edits out."),
+			FText::AsNumber(Diffs), FText::AsNumber(CellsChecked));
+		if (TSharedPtr<SNotificationItem> Item = FSlateNotificationManager::Get().AddNotification(Info))
+		{
+			Item->SetCompletionState(SNotificationItem::CS_None);
+		}
+	}
 	return FReply::Handled();
 }
 

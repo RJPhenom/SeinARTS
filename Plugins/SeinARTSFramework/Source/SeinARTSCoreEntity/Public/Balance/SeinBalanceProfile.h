@@ -11,8 +11,7 @@
  *           This asset is editor tooling only — it is never read by the
  *           running sim. The unit Blueprints remain the source of truth; the
  *           generated table is a bulk EDITING VIEW that gathers their authored
- *           ComponentData and (later) pushes edits back. See the project-root
- *           `Balance_Table_Plan.md` for the full design + phase ladder.
+ *           ComponentData and pushes edits back.
  *
  *           Phase A (this file): targeting + target resolution only. Column
  *           synthesis (Gather) and write-back (Push) are wired as no-op
@@ -27,7 +26,18 @@
 #include "SeinBalanceProfile.generated.h"
 
 class ASeinActor;
+class USeinAbility;
 class UDataTable;
+
+/** What a balance profile targets — units (ASeinActor subclasses, tuning their components) or
+ *  abilities (USeinAbility subclasses, tuning cost / cooldown / range). Both activation cost and
+ *  production/build cost are ability `ResourceCost`s, so the ability table tunes them together. */
+UENUM()
+enum class ESeinBalanceTargetKind : uint8
+{
+	Entities    UMETA(DisplayName = "Entities (units / buildings)"),
+	Abilities   UMETA(DisplayName = "Abilities (cost / cooldown / range)"),
+};
 
 /**
  * Scope + output config for one balance table. A designer points it at a class
@@ -45,19 +55,34 @@ public:
 	// Targeting
 	// =========================================================================
 
-	/** Root classes to include. Every concrete ASeinActor subclass under each
-	 *  root (loaded or not) is matched — opt in a parent, its children appear.
-	 *  Native or Blueprint roots both work. */
-	UPROPERTY(EditAnywhere, Category = "Targeting", meta = (DisplayName = "Included Roots"))
+	/** What this profile tunes — entity components, or ability cost/cooldown/range. The relevant root
+	 *  fields below show/hide to match. */
+	UPROPERTY(EditAnywhere, Category = "Targeting", meta = (DisplayName = "Target Kind"))
+	ESeinBalanceTargetKind TargetKind = ESeinBalanceTargetKind::Entities;
+
+	/** (Entities) Root classes to include. Every concrete ASeinActor subclass under each root
+	 *  (loaded or not) is matched — opt in a parent, its children appear. Native or BP roots both work. */
+	UPROPERTY(EditAnywhere, Category = "Targeting", meta = (DisplayName = "Included Roots",
+		EditCondition = "TargetKind == ESeinBalanceTargetKind::Entities", EditConditionHides))
 	TArray<TSoftClassPtr<ASeinActor>> IncludedRoots;
 
-	/** Classes to exclude. Each entry removes that class AND its whole subtree
-	 *  from the matched set, even if a broader Included Root would have caught it. */
-	UPROPERTY(EditAnywhere, Category = "Targeting", meta = (DisplayName = "Excluded Classes"))
+	/** (Entities) Classes to exclude — removes that class AND its whole subtree from the matched set. */
+	UPROPERTY(EditAnywhere, Category = "Targeting", meta = (DisplayName = "Excluded Classes",
+		EditCondition = "TargetKind == ESeinBalanceTargetKind::Entities", EditConditionHides))
 	TArray<TSoftClassPtr<ASeinActor>> ExcludedClasses;
 
-	/** Include classes flagged Abstract. Off by default — abstract bases carry
-	 *  no shippable tuning of their own. */
+	/** (Abilities) Root ability classes — every concrete USeinAbility subclass under each root is
+	 *  matched (one row per ability). */
+	UPROPERTY(EditAnywhere, Category = "Targeting", meta = (DisplayName = "Ability Roots",
+		EditCondition = "TargetKind == ESeinBalanceTargetKind::Abilities", EditConditionHides))
+	TArray<TSoftClassPtr<USeinAbility>> AbilityRoots;
+
+	/** (Abilities) Ability classes to exclude (class + subtree). */
+	UPROPERTY(EditAnywhere, Category = "Targeting", meta = (DisplayName = "Excluded Abilities",
+		EditCondition = "TargetKind == ESeinBalanceTargetKind::Abilities", EditConditionHides))
+	TArray<TSoftClassPtr<USeinAbility>> ExcludedAbilities;
+
+	/** Include classes flagged Abstract. Off by default — abstract bases carry no shippable tuning. */
 	UPROPERTY(EditAnywhere, Category = "Targeting", meta = (DisplayName = "Include Abstract"))
 	bool bIncludeAbstract = false;
 
@@ -76,7 +101,8 @@ public:
 	 *  synthesis (Phase B) — see SeinComponentEligibility::IsEntityComponentStruct. */
 	UPROPERTY(EditAnywhere, Category = "Tracking",
 		meta = (DisplayName = "Tracked Components",
-			MetaStruct = "/Script/SeinARTSCoreEntity.SeinComponent"))
+			MetaStruct = "/Script/SeinARTSCoreEntity.SeinComponent",
+			EditCondition = "TargetKind == ESeinBalanceTargetKind::Entities", EditConditionHides))
 	TArray<TObjectPtr<UScriptStruct>> TrackedComponents;
 
 	// =========================================================================
@@ -94,12 +120,10 @@ public:
 	TSoftObjectPtr<UDataTable> GeneratedTable;
 
 #if WITH_EDITOR
-	/** Resolve the concrete ASeinActor subclasses this profile targets: the
-	 *  union of each Included Root's subtree, minus every Excluded class and its
-	 *  subtree, minus abstract classes (unless bIncludeAbstract). Matched
-	 *  Blueprint classes are loaded so their flags can be read; result is sorted
-	 *  by class name. Editor-only — drives the Details-panel preview and (later)
-	 *  the Gather/Push passes. */
+	/** Resolve the concrete subclasses this profile targets — ASeinActor subclasses for
+	 *  TargetKind::Entities, USeinAbility subclasses for TargetKind::Abilities: the union of each
+	 *  root's subtree, minus every excluded class + subtree, minus abstract (unless bIncludeAbstract).
+	 *  Matched Blueprint classes are loaded so their flags can be read; sorted by name. Editor-only. */
 	void ResolveTargetClasses(TArray<UClass*>& OutClasses) const;
 #endif
 };

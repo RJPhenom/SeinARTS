@@ -11,6 +11,7 @@
 #include "EdGraph/EdGraph.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Misc/DataValidation.h"
+#include "Util/SeinDeterminismRules.h"  // SeinDeterminism::IsPinTypeDeterministic (member-var check)
 #include "UObject/Class.h"
 #include "UObject/UnrealType.h"
 
@@ -171,6 +172,27 @@ EDataValidationResult USeinBlueprintDeterminismValidator::ValidateLoadedAsset_Im
 				"{0} calls non-deterministic '{1}::{2}' — this can desync lockstep. Use the SeinARTS "
 				"fixed-point math / {3} nodes, or confirm the call is deterministic."),
 			KindLabel, FText::FromString(OwnerName), FText::FromString(FuncName), HintText);
+
+		if (bAsError) { AssetFails(InAsset, Msg); }
+		else          { AssetWarning(InAsset, Msg); }
+	}
+
+	// Member variables: the call walk catches non-deterministic CALLS, not non-deterministic STATE.
+	// A movement mode persists per-unit (and a formation must stay stateless), so a non-deterministic-
+	// typed member variable is loose authoritative state that can desync lockstep. Tuning vars are
+	// deterministic-typed (they pass) + hydrated; floats / vector-floats / object refs kept as scratch
+	// are what's flagged. Render-only values belong outside the sim (e.g. Set Render Value), not here.
+	for (const FBPVariableDescription& Var : BP->NewVariables)
+	{
+		if (SeinDeterminism::IsPinTypeDeterministic(Var.VarType)) continue;
+
+		bAnyFlagged = true;
+		const FText Msg = FText::Format(
+			LOCTEXT("NonDeterministicVar",
+				"{0} variable '{1}' is a non-deterministic type — a {0} runs in the deterministic sim and "
+				"persists per-unit, so non-deterministic member state can desync lockstep. Use fixed-point "
+				"types (FFixedPoint / FFixedVector), or keep render-only values out of the simulation."),
+			KindLabel, FText::FromName(Var.VarName));
 
 		if (bAsError) { AssetFails(InAsset, Msg); }
 		else          { AssetWarning(InAsset, Msg); }

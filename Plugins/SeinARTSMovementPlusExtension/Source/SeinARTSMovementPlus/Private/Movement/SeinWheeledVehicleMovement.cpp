@@ -214,6 +214,10 @@ bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 	// Hoisted out of the `if` block so the sharp-turn brake (step 8.5)
 	// can read it. Zero when ToTarget is null — no brake fires.
 	FFixedPoint AbsYawErr = FFixedPoint::Zero;
+	// Signed rotation needed to face the drive-appropriate heading (toward the carrot,
+	// or away from it when reversing). Hoisted for the low-speed turn assist (the CoH
+	// helping-hand) in step 7.
+	FFixedPoint YawErrSigned = FFixedPoint::Zero;
 	const FFixedPoint CurrentYaw = YawFromRotation(Entity.Transform.Rotation);
 	if (ToTarget.SizeSquared() > FFixedPoint::Epsilon)
 	{
@@ -221,6 +225,7 @@ bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 			? SeinMath::Atan2(-ToTarget.Y, -ToTarget.X)
 			: SeinMath::Atan2(ToTarget.Y, ToTarget.X);
 		const FFixedPoint YawErr = ShortestAngleDelta(CurrentYaw, DesiredYaw);
+		YawErrSigned = YawErr;
 		AbsYawErr = (YawErr < FFixedPoint::Zero) ? -YawErr : YawErr;
 		FFixedPoint PathPullSteer = ClampFP(YawErr, -Wheeled.MaxSteerAngle, Wheeled.MaxSteerAngle);
 		if (bDriveReverse) PathPullSteer = -PathPullSteer;
@@ -238,9 +243,12 @@ bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 	}
 
 	// -------------------------------------------------------------------
-	// 7. Bicycle yaw rate: w = (v / L) * tan(d). Speed-dependent -- a
-	//    stationary vehicle cannot pivot. Outer cap by MovementData.TurnRate
-	//    is a safety lid against extreme combos.
+	// 7. Yaw rate: the honest bicycle (w = v/L · tan δ — speed-dependent, so a
+	//    stationary chassis can't pivot) PLUS the CoH "helping hand": a
+	//    low-speed turn assist that lets a stopped/slow vehicle rotate toward
+	//    its goal anyway (tight u-turns from rest, responsiveness, escape
+	//    hatch when boxed in). The assist fades to zero by TurnAssistFadeSpeed,
+	//    so cruising turns remain the unchanged honest bicycle.
 	// -------------------------------------------------------------------
 	FFixedPoint YawStep = FFixedPoint::Zero;
 	if (Wheeled.Wheelbase > FFixedPoint::One)
@@ -250,6 +258,35 @@ bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 		const FFixedPoint MaxRate = MovementData.TurnRate;
 		const FFixedPoint ClampedRate = ClampFP(YawRate, -MaxRate, MaxRate);
 		YawStep = ClampedRate * DeltaTime;
+	}
+	// CoH helping-hand. Active only below TurnAssistFadeSpeed — above it the
+	// `Fade > 0` guard skips the whole block, leaving high-speed steering exactly
+	// as the honest bicycle. Within the band it provides a FLOOR on how far the
+	// chassis may rotate toward its desired heading this tick, then guards against
+	// overshooting that heading (no oscillation).
+	if (Wheeled.LowSpeedTurnRate > FFixedPoint::Zero
+		&& Wheeled.TurnAssistFadeSpeed > FFixedPoint::Epsilon)
+	{
+		FFixedPoint Fade = FFixedPoint::One - (AbsCurrentSpeed / Wheeled.TurnAssistFadeSpeed);
+		if (Fade < FFixedPoint::Zero) Fade = FFixedPoint::Zero;
+		if (Fade > FFixedPoint::One)  Fade = FFixedPoint::One;
+		if (Fade > FFixedPoint::Zero)
+		{
+			const FFixedPoint AssistMaxStep = Wheeled.LowSpeedTurnRate * Fade * DeltaTime;
+			const FFixedPoint AssistStep = ClampFP(YawErrSigned, -AssistMaxStep, AssistMaxStep);
+			// Take whichever step rotates further toward the desired heading (both
+			// share YawErrSigned's sign), then clamp so we never overshoot it.
+			if (YawErrSigned >= FFixedPoint::Zero)
+			{
+				if (AssistStep > YawStep)   YawStep = AssistStep;
+				if (YawStep > YawErrSigned) YawStep = YawErrSigned;
+			}
+			else
+			{
+				if (AssistStep < YawStep)   YawStep = AssistStep;
+				if (YawStep < YawErrSigned) YawStep = YawErrSigned;
+			}
+		}
 	}
 	const FFixedPoint NewYaw = CurrentYaw + YawStep;
 	// Pitch is applied after ground snap (step 12) — use a placeholder here,
@@ -325,6 +362,36 @@ bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 	}
 
 	// -------------------------------------------------------------------
+	// 8.6. Low-speed reorient hold (helping-hand companion). When nearly
+	//      stopped AND badly misaligned, ease throttle down so the helping-hand
+	//      (step 7) can rotate the chassis toward its goal BEFORE it drives off
+	//      — a "pivot then go" that keeps from-rest u-turns tight instead of
+	//      looping wide. Engages ONLY when both nearly stopped and > 90° off,
+	//      so normal low-speed driving and any at-speed turn are untouched.
+	//      Gated on the helping-hand being active — without an assist to rotate
+	//      the held chassis it would strand the unit.
+	// -------------------------------------------------------------------
+	FFixedPoint ReorientScale = FFixedPoint::One;
+	if (Wheeled.LowSpeedTurnRate > FFixedPoint::Zero
+		&& Wheeled.TurnAssistFadeSpeed > FFixedPoint::Epsilon)
+	{
+		const FFixedPoint HoldSpeed = Wheeled.TurnAssistFadeSpeed * FFixedPoint::Half;
+		const FFixedPoint HalfPi    = FFixedPoint::Pi * FFixedPoint::Half;
+		if (AbsCurrentSpeed < HoldSpeed && AbsYawErr > HalfPi && HoldSpeed > FFixedPoint::Epsilon)
+		{
+			// Misalign factor: 0 at 90° -> 1 at 180°.
+			FFixedPoint MisalignT = (AbsYawErr - HalfPi) / HalfPi;
+			if (MisalignT > FFixedPoint::One) MisalignT = FFixedPoint::One;
+			// Stopped factor: 1 at rest -> 0 at HoldSpeed (releases as speed builds).
+			FFixedPoint StoppedT = FFixedPoint::One - (AbsCurrentSpeed / HoldSpeed);
+			if (StoppedT < FFixedPoint::Zero) StoppedT = FFixedPoint::Zero;
+			if (StoppedT > FFixedPoint::One)  StoppedT = FFixedPoint::One;
+			ReorientScale = FFixedPoint::One - MisalignT * StoppedT;
+			if (ReorientScale < FFixedPoint::Zero) ReorientScale = FFixedPoint::Zero;
+		}
+	}
+
+	// -------------------------------------------------------------------
 	// 9. Kinematic arrival cap (v^2 = 2*a*d) + optional linear floor
 	//    inside ArrivalSlowdownDistance.
 	//
@@ -361,11 +428,12 @@ bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 	FFixedPoint TargetSpeedMag = bDriveReverse
 		? ((MovementData.ReverseTopSpeed > FFixedPoint::Zero) ? MovementData.ReverseTopSpeed : MovementData.TopSpeed * FFixedPoint::Half)
 		: EffectiveTopSpeed(Ctx);   // forward cruise terrain-scaled (reverse keeps ReverseTopSpeed)
-	// Compose both turn brakes — TurnSpeedFloor (smoothed-steer-based) and
-	// SharpTurnScale (commanded-yaw-based). They fire for related-but-distinct
-	// reasons; multiplying them lets the more aggressive brake dominate while
-	// keeping each one's behavior unchanged when the other doesn't fire.
-	TargetSpeedMag = TargetSpeedMag * TurnScale * SharpTurnScale;
+	// Compose the throttle brakes — TurnSpeedFloor (smoothed-steer-based),
+	// SharpTurnScale (commanded-yaw-based), and ReorientScale (the from-rest
+	// "pivot then go" hold). They fire for related-but-distinct reasons;
+	// multiplying lets the most aggressive dominate while keeping each one's
+	// behavior unchanged when the others don't fire.
+	TargetSpeedMag = TargetSpeedMag * TurnScale * SharpTurnScale * ReorientScale;
 	if (MaxArrivalSpeed < TargetSpeedMag) TargetSpeedMag = MaxArrivalSpeed;
 	const FFixedPoint TargetSpeed = bDriveReverse ? -TargetSpeedMag : TargetSpeedMag;
 

@@ -7,6 +7,7 @@
 #include "SeinNavigation.h"
 #include "SeinNavigationAStar.h"
 #include "Settings/PluginSettings.h"
+#include "Core/SeinParallel.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Simulation/Systems/SeinNavBlockerStampSystem.h"
 #include "SeinLevelData.h"
@@ -70,6 +71,9 @@ void USeinNavigationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 void USeinNavigationSubsystem::Deinitialize()
 {
+	AsyncQueue.Reset();
+	AsyncResults.Reset();
+
 	// Unhook from the shared substrate (CP1.1) before Navigation is torn down — we
 	// reference Navigation->GetLevelDataProvider() to unregister.
 	if (USeinLevelData* Substrate = LevelData.Get())
@@ -310,6 +314,39 @@ ESeinPathResult USeinNavigationSubsystem::RequestPath(const FSeinPathRequest& Re
 			CurrentSimTick = Sim->GetCurrentTick();
 		}
 	}
+	// ── Async pathfinding (opt-in) ────────────────────────────────────────────
+	// When Sein.Sim.AsyncPathfinding is on, requests don't run inline — they queue
+	// and run as a deterministic PARALLEL BATCH one tick later (header + SeinParallel.h).
+	// Needs a valid Requester to key results; one-shot queries (BPFL, reachability)
+	// call Navigation->FindPath directly and never reach this branch.
+	if (SeinSimAsyncPathfindingEnabled() && SeinSimParallelEnabled() && Request.Requester.IsValid())
+	{
+		// Drain LAST tick's queue ONCE per tick, at the first async request of the
+		// tick (deterministic: latent actions tick in a fixed order across clients).
+		if (CurrentSimTick != LastDrainTick)
+		{
+			DrainAsyncPathQueue(CurrentSimTick);
+			LastDrainTick = CurrentSimTick;
+		}
+
+		// Result ready (from this or a prior drain)? deliver + consume.
+		if (FSeinPath* Ready = AsyncResults.Find(Request.Requester))
+		{
+			const bool bValid = Ready->bIsValid;
+			OutPath = MoveTemp(*Ready);
+			AsyncResults.Remove(Request.Requester);
+			if (!bValid) { OutPath.Clear(); return ESeinPathResult::NotFound; }
+			return ESeinPathResult::Found;
+		}
+
+		// Not ready → queue (dedup by Requester) and wait. The move action treats
+		// Throttled as "retry next tick", which re-enqueues — so the queue self-
+		// populates with exactly the still-waiting units each tick.
+		AsyncQueue.Add(Request.Requester, Request);
+		OutPath.Clear();
+		return ESeinPathResult::Throttled;
+	}
+
 	if (CurrentSimTick != LastResetTick)
 	{
 #if !UE_BUILD_SHIPPING
@@ -364,6 +401,58 @@ ESeinPathResult USeinNavigationSubsystem::RequestPath(const FSeinPathRequest& Re
 	}
 	OutPath.Clear();
 	return ESeinPathResult::NotFound;
+}
+
+void USeinNavigationSubsystem::DrainAsyncPathQueue(int32 CurrentTick)
+{
+	// Drop any un-consumed results from the previous drain: each is normally consumed
+	// the same tick it's produced (the requesting action retries that tick), so a
+	// leftover belongs to a unit that canceled/died — safe to discard. Keeps it bounded.
+	AsyncResults.Reset();
+
+	if (!Navigation || AsyncQueue.Num() == 0)
+	{
+		AsyncQueue.Reset();
+		return;
+	}
+
+	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
+	const int32 Budget = FMath::Max(0, Settings ? Settings->PathRequestsPerTickBudget : 32);
+
+	// Canonical order: serve queued requesters sorted by handle so EVERY client serves
+	// the same subset under budget (TMap iteration order is nondeterministic).
+	TArray<FSeinEntityHandle> Keys;
+	AsyncQueue.GetKeys(Keys);
+	Keys.Sort([](const FSeinEntityHandle& A, const FSeinEntityHandle& B)
+	{
+		if (A.Index != B.Index) return A.Index < B.Index;
+		return A.Generation < B.Generation;
+	});
+
+	const int32 Count = FMath::Min(Keys.Num(), Budget);
+
+	TArray<FSeinPathRequest> Batch;
+	Batch.Reserve(Count);
+	for (int32 i = 0; i < Count; ++i)
+	{
+		Batch.Add(AsyncQueue.FindChecked(Keys[i]));
+	}
+
+	// RunPathBatch joins before it returns (parallel inside the AStar override; serial
+	// otherwise), so the whole burst completes within THIS tick — no cross-tick spread,
+	// and the result is bit-identical to the serial path. Determinism by construction.
+	TArray<FSeinPath> Results;
+	Navigation->RunPathBatch(Batch, Results);
+
+	for (int32 i = 0; i < Count && i < Results.Num(); ++i)
+	{
+		AsyncResults.Add(Keys[i], MoveTemp(Results[i]));
+	}
+
+	// Clear the whole queue: served units consume their result (and stop requesting);
+	// the unserved tail re-enqueues next tick via the action's Throttled retry — so no
+	// stale/dead entries accumulate and the per-tick serve order stays canonical.
+	AsyncQueue.Reset();
 }
 
 USeinNavigation* USeinNavigationSubsystem::GetNavigationForWorld(const UObject* WorldContextObject)

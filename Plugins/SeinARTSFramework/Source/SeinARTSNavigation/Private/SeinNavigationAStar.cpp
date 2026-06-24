@@ -4,6 +4,7 @@
  */
 
 #include "SeinNavigationAStar.h"
+#include "Core/SeinParallel.h"
 #include "Settings/PluginSettings.h"
 #include "Data/SeinNavLayerDefinition.h"
 #include "Actor/SeinActor.h"
@@ -763,17 +764,17 @@ void USeinNavigationAStar::SetDynamicBlockers(const TArray<FSeinDynamicBlocker>&
 	}
 }
 
-void USeinNavigationAStar::BuildDynamicBlockedOverlay(FSeinEntityHandle Exclude, uint8 AgentNavLayerMask) const
+void USeinNavigationAStar::BuildDynamicBlockedOverlay(FSeinEntityHandle Exclude, uint8 AgentNavLayerMask, FAStarScratch& Scratch) const
 {
 	const int32 N = Width * Height;
-	if (DynamicBlocked.Num() != N)
+	if (Scratch.DynamicBlocked.Num() != N)
 	{
 		// First call (or grid resized): allocate + zero the entire buffer.
 		// Subsequent calls hit the bounded-clear path below.
-		DynamicBlocked.SetNumZeroed(N);
-		LastOverlayDirtyRect = FIntRect(INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN);
+		Scratch.DynamicBlocked.SetNumZeroed(N);
+		Scratch.LastOverlayDirtyRect = FIntRect(INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN);
 	}
-	else if (LastOverlayDirtyRect.Min.X <= LastOverlayDirtyRect.Max.X)
+	else if (Scratch.LastOverlayDirtyRect.Min.X <= Scratch.LastOverlayDirtyRect.Max.X)
 	{
 		// Bounded clear — wipe only the cells the previous overlay wrote
 		// into. On large maps with a handful of blockers in one corner this
@@ -781,22 +782,22 @@ void USeinNavigationAStar::BuildDynamicBlockedOverlay(FSeinEntityHandle Exclude,
 		// cells) with a few-row clear. Row-by-row Memzero so each clear is
 		// still a contiguous memory operation (faster than per-cell writes
 		// even for narrow rects).
-		const int32 ClampedMinY = FMath::Max(0, LastOverlayDirtyRect.Min.Y);
-		const int32 ClampedMaxY = FMath::Min(Height - 1, LastOverlayDirtyRect.Max.Y);
-		const int32 ClampedMinX = FMath::Max(0, LastOverlayDirtyRect.Min.X);
-		const int32 ClampedMaxX = FMath::Min(Width - 1, LastOverlayDirtyRect.Max.X);
+		const int32 ClampedMinY = FMath::Max(0, Scratch.LastOverlayDirtyRect.Min.Y);
+		const int32 ClampedMaxY = FMath::Min(Height - 1, Scratch.LastOverlayDirtyRect.Max.Y);
+		const int32 ClampedMinX = FMath::Max(0, Scratch.LastOverlayDirtyRect.Min.X);
+		const int32 ClampedMaxX = FMath::Min(Width - 1, Scratch.LastOverlayDirtyRect.Max.X);
 		const int32 RowSpan = ClampedMaxX - ClampedMinX + 1;
 		if (RowSpan > 0)
 		{
 			for (int32 Y = ClampedMinY; Y <= ClampedMaxY; ++Y)
 			{
-				FMemory::Memzero(&DynamicBlocked[CellIndex(ClampedMinX, Y)], RowSpan);
+				FMemory::Memzero(&Scratch.DynamicBlocked[CellIndex(ClampedMinX, Y)], RowSpan);
 			}
 		}
 	}
 
 	// Reset dirty rect to empty before this call's stamps populate it.
-	LastOverlayDirtyRect = FIntRect(INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN);
+	Scratch.LastOverlayDirtyRect = FIntRect(INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN);
 
 	if (DynamicBlockers.Num() == 0 || N == 0) return;
 
@@ -818,13 +819,13 @@ void USeinNavigationAStar::BuildDynamicBlockedOverlay(FSeinEntityHandle Exclude,
 		SeinStampUtils::ForEachCoveredCell(
 			B.Shape, B.EntityCenter, B.EntityRotation,
 			CellSize, Origin, Width, Height,
-			[this](int32 X, int32 Y)
+			[this, &Scratch](int32 X, int32 Y)
 			{
-				DynamicBlocked[CellIndex(X, Y)] = 1;
-				if (X < LastOverlayDirtyRect.Min.X) LastOverlayDirtyRect.Min.X = X;
-				if (Y < LastOverlayDirtyRect.Min.Y) LastOverlayDirtyRect.Min.Y = Y;
-				if (X > LastOverlayDirtyRect.Max.X) LastOverlayDirtyRect.Max.X = X;
-				if (Y > LastOverlayDirtyRect.Max.Y) LastOverlayDirtyRect.Max.Y = Y;
+				Scratch.DynamicBlocked[CellIndex(X, Y)] = 1;
+				if (X < Scratch.LastOverlayDirtyRect.Min.X) Scratch.LastOverlayDirtyRect.Min.X = X;
+				if (Y < Scratch.LastOverlayDirtyRect.Min.Y) Scratch.LastOverlayDirtyRect.Min.Y = Y;
+				if (X > Scratch.LastOverlayDirtyRect.Max.X) Scratch.LastOverlayDirtyRect.Max.X = X;
+				if (Y > Scratch.LastOverlayDirtyRect.Max.Y) Scratch.LastOverlayDirtyRect.Max.Y = Y;
 			});
 	}
 }
@@ -833,7 +834,7 @@ void USeinNavigationAStar::BuildDynamicBlockedOverlay(FSeinEntityHandle Exclude,
 // Dynamic-WD lazy query
 // ============================================================================
 
-int32 USeinNavigationAStar::GetEffectiveWD(int32 X, int32 Y, int32 MaxR) const
+int32 USeinNavigationAStar::GetEffectiveWD(int32 X, int32 Y, int32 MaxR, FAStarScratch& Scratch) const
 {
 	// Defensive — invalid coord returns 0 (interpreted as "wall-adjacent",
 	// so any clearance check fails). Caller normally already validated, but
@@ -846,49 +847,49 @@ int32 USeinNavigationAStar::GetEffectiveWD(int32 X, int32 Y, int32 MaxR) const
 
 	// Fast paths — if any of these trip, dynamic contribution is "no nearby
 	// blocker" and the static WallDistance answer is correct as-is.
-	if (DynamicBlocked.Num() != WallDistance.Num()) return StaticWD;
-	if (MaxR <= 0)                                  return StaticWD;
+	if (Scratch.DynamicBlocked.Num() != WallDistance.Num()) return StaticWD;
+	if (MaxR <= 0)                                          return StaticWD;
 
 	// Rect-based early-out: if (X, Y) is outside the dirty rect inflated by
 	// MaxR, no dyn-blocked cell can be within MaxR Chebyshev distance.
 	// `Min.X > Max.X` is the sentinel for "empty overlay" (set in
 	// BuildDynamicBlockedOverlay reset path).
-	if (LastOverlayDirtyRect.Min.X > LastOverlayDirtyRect.Max.X) return StaticWD;
-	if (X < LastOverlayDirtyRect.Min.X - MaxR) return StaticWD;
-	if (X > LastOverlayDirtyRect.Max.X + MaxR) return StaticWD;
-	if (Y < LastOverlayDirtyRect.Min.Y - MaxR) return StaticWD;
-	if (Y > LastOverlayDirtyRect.Max.Y + MaxR) return StaticWD;
+	if (Scratch.LastOverlayDirtyRect.Min.X > Scratch.LastOverlayDirtyRect.Max.X) return StaticWD;
+	if (X < Scratch.LastOverlayDirtyRect.Min.X - MaxR) return StaticWD;
+	if (X > Scratch.LastOverlayDirtyRect.Max.X + MaxR) return StaticWD;
+	if (Y < Scratch.LastOverlayDirtyRect.Min.Y - MaxR) return StaticWD;
+	if (Y > Scratch.LastOverlayDirtyRect.Max.Y + MaxR) return StaticWD;
 
 	// Per-request cache lookup (lazy validation via gen tag, same pattern as
 	// the A* SearchCellGen state).
-	if (DynamicWDCacheGen.IsValidIndex(Idx)
-		&& DynamicWDCacheGen[Idx] == CurrentDynamicWDGen)
+	if (Scratch.DynamicWDCacheGen.IsValidIndex(Idx)
+		&& Scratch.DynamicWDCacheGen[Idx] == Scratch.CurrentDynamicWDGen)
 	{
-		const int32 CachedDyn = static_cast<int32>(DynamicWDCache[Idx]);
+		const int32 CachedDyn = static_cast<int32>(Scratch.DynamicWDCache[Idx]);
 		return FMath::Min(StaticWD, CachedDyn);
 	}
 
 	// Slow path — ring scan from (X, Y) outward.
-	const int32 DynWD = ComputeDynamicWDRingScan(X, Y, MaxR);
+	const int32 DynWD = ComputeDynamicWDRingScan(X, Y, MaxR, Scratch);
 
 	// Cache the dynamic component. Capped to 255 (uint8 storage). Subsequent
 	// reads (A* diagonal anti-squeeze, Push gradient walk) get O(1).
-	if (DynamicWDCache.IsValidIndex(Idx))
+	if (Scratch.DynamicWDCache.IsValidIndex(Idx))
 	{
-		DynamicWDCache[Idx] = static_cast<uint8>(FMath::Min(DynWD, 255));
-		DynamicWDCacheGen[Idx] = CurrentDynamicWDGen;
+		Scratch.DynamicWDCache[Idx] = static_cast<uint8>(FMath::Min(DynWD, 255));
+		Scratch.DynamicWDCacheGen[Idx] = Scratch.CurrentDynamicWDGen;
 	}
 
 	return FMath::Min(StaticWD, DynWD);
 }
 
-int32 USeinNavigationAStar::ComputeDynamicWDRingScan(int32 X, int32 Y, int32 MaxR) const
+int32 USeinNavigationAStar::ComputeDynamicWDRingScan(int32 X, int32 Y, int32 MaxR, FAStarScratch& Scratch) const
 {
 	// Cell itself blocked → distance 0. (Shouldn't happen if caller filtered
 	// via IsCellPassableForPath, but defensive — A* C-space gate reads the
 	// CURRENT cell's WD too, not just neighbors.)
 	const int32 Idx = CellIndex(X, Y);
-	if (DynamicBlocked[Idx] != 0) return 0;
+	if (Scratch.DynamicBlocked[Idx] != 0) return 0;
 
 	// Walk outward in Chebyshev rings (R=1, 2, 3, ...). At each ring, scan
 	// only the FRAME (top row, bottom row, left col, right col minus corners).
@@ -910,7 +911,7 @@ int32 USeinNavigationAStar::ComputeDynamicWDRingScan(int32 X, int32 Y, int32 Max
 			const int32 DXMax = FMath::Min( R, Width - 1 - X);
 			for (int32 DX = DXMin; DX <= DXMax; ++DX)
 			{
-				if (DynamicBlocked[CellIndex(X + DX, YTop)] != 0) return R;
+				if (Scratch.DynamicBlocked[CellIndex(X + DX, YTop)] != 0) return R;
 			}
 		}
 		if (YBot >= 0 && YBot < Height)
@@ -919,7 +920,7 @@ int32 USeinNavigationAStar::ComputeDynamicWDRingScan(int32 X, int32 Y, int32 Max
 			const int32 DXMax = FMath::Min( R, Width - 1 - X);
 			for (int32 DX = DXMin; DX <= DXMax; ++DX)
 			{
-				if (DynamicBlocked[CellIndex(X + DX, YBot)] != 0) return R;
+				if (Scratch.DynamicBlocked[CellIndex(X + DX, YBot)] != 0) return R;
 			}
 		}
 
@@ -929,8 +930,8 @@ int32 USeinNavigationAStar::ComputeDynamicWDRingScan(int32 X, int32 Y, int32 Max
 		for (int32 DY = DYMin; DY <= DYMax; ++DY)
 		{
 			const int32 NY = Y + DY;
-			if (XLeft >= 0          && DynamicBlocked[CellIndex(XLeft,  NY)] != 0) return R;
-			if (XRight < Width      && DynamicBlocked[CellIndex(XRight, NY)] != 0) return R;
+			if (XLeft >= 0          && Scratch.DynamicBlocked[CellIndex(XLeft,  NY)] != 0) return R;
+			if (XRight < Width      && Scratch.DynamicBlocked[CellIndex(XRight, NY)] != 0) return R;
 		}
 	}
 
@@ -1253,7 +1254,7 @@ namespace
 }
 
 TArray<FIntPoint> USeinNavigationAStar::AStarSearch(FIntPoint Start, FIntPoint End, bool& bOutPartial,
-	int32 HeuristicWeightPercent, int32 MaxIterations, int32 RequiredClearance) const
+	int32 HeuristicWeightPercent, int32 MaxIterations, int32 RequiredClearance, FAStarScratch& Scratch) const
 {
 	bOutPartial = false;
 	TArray<FIntPoint> Result;
@@ -1262,7 +1263,7 @@ TArray<FIntPoint> USeinNavigationAStar::AStarSearch(FIntPoint Start, FIntPoint E
 	// no longer early-out on a blocked End: the search continues regardless
 	// and the best-H cell tracking below produces a partial path to the
 	// closest reachable cell.
-	if (!IsCellPassableForPath(Start.X, Start.Y)) return Result;
+	if (!IsCellPassableForPath(Start.X, Start.Y, Scratch)) return Result;
 
 	const int32 N = Width * Height;
 
@@ -1280,10 +1281,10 @@ TArray<FIntPoint> USeinNavigationAStar::AStarSearch(FIntPoint Start, FIntPoint E
 	// Per-call cost now scales with **expanded nodes** (hundreds-to-low-
 	// thousands) instead of grid size — the previous Init() trio cost
 	// ~9 MB of memzero per FindPath on a 1km² grid (4+4+1 MB).
-	if (SearchGCosts.Num() != N) SearchGCosts.SetNumUninitialized(N);
-	if (SearchParents.Num() != N) SearchParents.SetNumUninitialized(N);
-	if (SearchClosed.Num() != N) SearchClosed.SetNumUninitialized(N);
-	if (SearchCellGen.Num() != N) SearchCellGen.Init(0, N);
+	if (Scratch.SearchGCosts.Num() != N) Scratch.SearchGCosts.SetNumUninitialized(N);
+	if (Scratch.SearchParents.Num() != N) Scratch.SearchParents.SetNumUninitialized(N);
+	if (Scratch.SearchClosed.Num() != N) Scratch.SearchClosed.SetNumUninitialized(N);
+	if (Scratch.SearchCellGen.Num() != N) Scratch.SearchCellGen.Init(0, N);
 
 	// Bump search generation. uint16 wraparound: when ++ rolls 0xFFFF → 0,
 	// every existing gen-marked cell would suddenly look "untouched in this
@@ -1291,17 +1292,17 @@ TArray<FIntPoint> USeinNavigationAStar::AStarSearch(FIntPoint Start, FIntPoint E
 	// full reset on wrap and starting back at 1 (0 reserved for "never
 	// touched"). Wrap-reset is amortized over ~65k searches so its per-call
 	// cost is negligible.
-	if (++CurrentSearchGen == 0)
+	if (++Scratch.CurrentSearchGen == 0)
 	{
-		FMemory::Memzero(SearchCellGen.GetData(), N * sizeof(uint16));
-		CurrentSearchGen = 1;
+		FMemory::Memzero(Scratch.SearchCellGen.GetData(), N * sizeof(uint16));
+		Scratch.CurrentSearchGen = 1;
 	}
-	const uint16 SearchGen = CurrentSearchGen;
+	const uint16 SearchGen = Scratch.CurrentSearchGen;
 
-	// Reset the member-scoped open list — preserves capacity from prior
+	// Reset the scratch-scoped open list — preserves capacity from prior
 	// searches so consecutive long paths don't repeatedly grow the heap
-	// from the default reserve. Member declaration in the header.
-	Open.Reset();
+	// from the default reserve. Declaration in FAStarScratch (header).
+	Scratch.Open.Reset();
 	int32 Tiebreak = 0;
 
 	const int32 StartIdx = CellIndex(Start.X, Start.Y);
@@ -1331,11 +1332,11 @@ TArray<FIntPoint> USeinNavigationAStar::AStarSearch(FIntPoint Start, FIntPoint E
 	// Touch start cell — initialize all gen-validated fields explicitly so
 	// the first read in the loop sees the right values regardless of what
 	// the uninitialized SetNumUninitialized memory held.
-	SearchGCosts[StartIdx] = 0;
-	SearchParents[StartIdx] = -1;
-	SearchClosed[StartIdx] = 0;
-	SearchCellGen[StartIdx] = SearchGen;
-	Open.HeapPush(FAStarNode{StartIdx, (StartH * Weight) / 100, 0, Tiebreak++});
+	Scratch.SearchGCosts[StartIdx] = 0;
+	Scratch.SearchParents[StartIdx] = -1;
+	Scratch.SearchClosed[StartIdx] = 0;
+	Scratch.SearchCellGen[StartIdx] = SearchGen;
+	Scratch.Open.HeapPush(FAStarNode{StartIdx, (StartH * Weight) / 100, 0, Tiebreak++});
 
 	static const int32 NeighborDX[8] = { 1, -1,  0,  0,  1,  1, -1, -1 };
 	static const int32 NeighborDY[8] = { 0,  0,  1, -1,  1, -1,  1, -1 };
@@ -1352,7 +1353,7 @@ TArray<FIntPoint> USeinNavigationAStar::AStarSearch(FIntPoint Start, FIntPoint E
 		while (CurIdx != -1)
 		{
 			Reverse.Add(FIntPoint(CurIdx % Width, CurIdx / Width));
-			CurIdx = SearchParents[CurIdx];
+			CurIdx = Scratch.SearchParents[CurIdx];
 		}
 		TArray<FIntPoint> Forward;
 		Forward.Reserve(Reverse.Num());
@@ -1360,17 +1361,17 @@ TArray<FIntPoint> USeinNavigationAStar::AStarSearch(FIntPoint Start, FIntPoint E
 		return Forward;
 	};
 
-	while (Open.Num() > 0)
+	while (Scratch.Open.Num() > 0)
 	{
 		FAStarNode Cur;
-		Open.HeapPop(Cur, EAllowShrinking::No);
+		Scratch.Open.HeapPop(Cur, EAllowShrinking::No);
 
 		// Closed check: only meaningful when the cell was touched in THIS
 		// search. SearchCellGen mismatch ⇒ stale data from a previous
 		// search; treat as "not closed."
-		if (SearchCellGen[Cur.CellIdx] == SearchGen && SearchClosed[Cur.CellIdx]) continue;
-		SearchClosed[Cur.CellIdx] = 1;
-		SearchCellGen[Cur.CellIdx] = SearchGen;
+		if (Scratch.SearchCellGen[Cur.CellIdx] == SearchGen && Scratch.SearchClosed[Cur.CellIdx]) continue;
+		Scratch.SearchClosed[Cur.CellIdx] = 1;
+		Scratch.SearchCellGen[Cur.CellIdx] = SearchGen;
 
 		if (Cur.CellIdx == EndIdx)
 		{
@@ -1423,7 +1424,7 @@ TArray<FIntPoint> USeinNavigationAStar::AStarSearch(FIntPoint Start, FIntPoint E
 		// rect-based fast path keeping the cost low when blockers are
 		// sparse around the search).
 		const int32 CurWD = (RequiredClearance > 0)
-			? GetEffectiveWD(CX, CY, RequiredClearance)
+			? GetEffectiveWD(CX, CY, RequiredClearance, Scratch)
 			: 0;
 		const int32 RequiredFromHere = (RequiredClearance > 0)
 			? FMath::Min(RequiredClearance, CurWD)
@@ -1437,7 +1438,7 @@ TArray<FIntPoint> USeinNavigationAStar::AStarSearch(FIntPoint Start, FIntPoint E
 
 			const int32 NX = CX + NeighborDX[n];
 			const int32 NY = CY + NeighborDY[n];
-			if (!IsCellPassableForPath(NX, NY)) continue; // static + dynamic blocker check
+			if (!IsCellPassableForPath(NX, NY, Scratch)) continue; // static + dynamic blocker check
 
 			const int32 NIdx = CellIndex(NX, NY);
 
@@ -1463,7 +1464,7 @@ TArray<FIntPoint> USeinNavigationAStar::AStarSearch(FIntPoint Start, FIntPoint E
 			const bool bNeighborIsGoal = (NX == End.X && NY == End.Y);
 			if (RequiredClearance > 0 && !bNeighborIsGoal)
 			{
-				const int32 NeighborWD = GetEffectiveWD(NX, NY, RequiredClearance);
+				const int32 NeighborWD = GetEffectiveWD(NX, NY, RequiredClearance, Scratch);
 				if (NeighborWD < RequiredFromHere) continue;
 			}
 
@@ -1496,8 +1497,8 @@ TArray<FIntPoint> USeinNavigationAStar::AStarSearch(FIntPoint Start, FIntPoint E
 					const int32 CardBY = CY + NeighborDY[BIdx];
 					if (IsValidCoord(CardAX, CardAY) && IsValidCoord(CardBX, CardBY))
 					{
-						const int32 CardAWD = GetEffectiveWD(CardAX, CardAY, RequiredClearance);
-						const int32 CardBWD = GetEffectiveWD(CardBX, CardBY, RequiredClearance);
+						const int32 CardAWD = GetEffectiveWD(CardAX, CardAY, RequiredClearance, Scratch);
+						const int32 CardBWD = GetEffectiveWD(CardBX, CardBY, RequiredClearance, Scratch);
 						if (CardAWD < RequiredFromHere || CardBWD < RequiredFromHere) continue;
 					}
 				}
@@ -1506,7 +1507,7 @@ TArray<FIntPoint> USeinNavigationAStar::AStarSearch(FIntPoint Start, FIntPoint E
 			// Closed check on neighbor: same gen-validated semantic as the
 			// popped-node check above. Stale SearchClosed values from prior
 			// searches are filtered by the gen mismatch.
-			if (SearchCellGen[NIdx] == SearchGen && SearchClosed[NIdx]) continue;
+			if (Scratch.SearchCellGen[NIdx] == SearchGen && Scratch.SearchClosed[NIdx]) continue;
 
 			// Base step cost = neighbor-direction weight × per-cell terrain
 			// cost. Topology already accounts for clearance via the C-space
@@ -1520,23 +1521,23 @@ TArray<FIntPoint> USeinNavigationAStar::AStarSearch(FIntPoint Start, FIntPoint E
 
 			// GCost read: gen-validated. Stale entries treated as INT32_MAX
 			// so any new G is an improvement on first visit this search.
-			const int32 PrevG = (SearchCellGen[NIdx] == SearchGen) ? SearchGCosts[NIdx] : INT32_MAX;
+			const int32 PrevG = (Scratch.SearchCellGen[NIdx] == SearchGen) ? Scratch.SearchGCosts[NIdx] : INT32_MAX;
 			if (NewG >= PrevG) continue;
 
-			SearchGCosts[NIdx] = NewG;
-			SearchParents[NIdx] = Cur.CellIdx;
+			Scratch.SearchGCosts[NIdx] = NewG;
+			Scratch.SearchParents[NIdx] = Cur.CellIdx;
 			// Explicitly mark not-yet-closed when first touching — uninit
 			// SearchClosed bytes might contain anything; the gen check above
 			// reads them safely as "untouched," but as soon as we set the gen
 			// here the byte itself must reflect "open."
-			SearchClosed[NIdx] = 0;
-			SearchCellGen[NIdx] = SearchGen;
+			Scratch.SearchClosed[NIdx] = 0;
+			Scratch.SearchCellGen[NIdx] = SearchGen;
 			// Apply heuristic weight to f-cost. Weighted A* — paths bounded
 			// by Weight% of optimal; search prunes aggressively on obstacle-
 			// rich maps. Determinism preserved via shared Weight constant.
 			const int32 H = OctileHeuristic(NX, NY, End.X, End.Y);
 			const int32 WeightedHCost = (H * Weight) / 100;
-			Open.HeapPush(FAStarNode{NIdx, NewG + WeightedHCost, NewG, Tiebreak++});
+			Scratch.Open.HeapPush(FAStarNode{NIdx, NewG + WeightedHCost, NewG, Tiebreak++});
 		}
 	}
 
@@ -1581,7 +1582,7 @@ TArray<FIntPoint> USeinNavigationAStar::AStarSearch(FIntPoint Start, FIntPoint E
 		const uint8 StartConn = (CellConnections.IsValidIndex(StartIdx))
 			? CellConnections[StartIdx] : 0;
 		const int32 EffWD0 = (RequiredClearance > 0)
-			? GetEffectiveWD(Start.X, Start.Y, RequiredClearance) : 0;
+			? GetEffectiveWD(Start.X, Start.Y, RequiredClearance, Scratch) : 0;
 		// Mirrors the search's RequiredFromHere (non-decreasing escape rule).
 		const int32 RequiredFromStart = (RequiredClearance > 0)
 			? FMath::Min(RequiredClearance, EffWD0) : 0;
@@ -1605,10 +1606,10 @@ TArray<FIntPoint> USeinNavigationAStar::AStarSearch(FIntPoint Start, FIntPoint E
 				continue;
 			}
 			const bool bConnOk = (StartConn & (1 << n)) != 0;
-			const bool bPassable = IsCellPassableForPath(NX, NY);
+			const bool bPassable = IsCellPassableForPath(NX, NY, Scratch);
 			const int32 NIdx = CellIndex(NX, NY);
 			const int32 NWD = (RequiredClearance > 0)
-				? GetEffectiveWD(NX, NY, RequiredClearance)
+				? GetEffectiveWD(NX, NY, RequiredClearance, Scratch)
 				: (WallDistance.IsValidIndex(NIdx) ? static_cast<int32>(WallDistance[NIdx]) : -1);
 			const bool bClearanceOk = (RequiredClearance == 0) || (NWD >= RequiredFromStart);
 
@@ -1636,8 +1637,8 @@ TArray<FIntPoint> USeinNavigationAStar::AStarSearch(FIntPoint Start, FIntPoint E
 					const int32 CardBY = Start.Y + NDY[BIdx];
 					if (IsValidCoord(CardAX, CardAY) && IsValidCoord(CardBX, CardBY))
 					{
-						const int32 CardAWD = GetEffectiveWD(CardAX, CardAY, RequiredClearance);
-						const int32 CardBWD = GetEffectiveWD(CardBX, CardBY, RequiredClearance);
+						const int32 CardAWD = GetEffectiveWD(CardAX, CardAY, RequiredClearance, Scratch);
+						const int32 CardBWD = GetEffectiveWD(CardBX, CardBY, RequiredClearance, Scratch);
 						if (CardAWD < RequiredFromStart || CardBWD < RequiredFromStart)
 						{
 							bDiagSqueezeOk = false;
@@ -1676,7 +1677,7 @@ TArray<FIntPoint> USeinNavigationAStar::AStarSearch(FIntPoint Start, FIntPoint E
 // Path smoothing (line-of-sight string-pull)
 // ============================================================================
 
-bool USeinNavigationAStar::HasLineOfSight(int32 X0, int32 Y0, int32 X1, int32 Y1, int32 RequiredClearance) const
+bool USeinNavigationAStar::HasLineOfSight(int32 X0, int32 Y0, int32 X1, int32 Y1, FAStarScratch& Scratch, int32 RequiredClearance) const
 {
 	// Bresenham supercover with connectivity gate — the smoother must honor the
 	// same rules A* uses, otherwise a path that A* carefully routed around an
@@ -1693,7 +1694,7 @@ bool USeinNavigationAStar::HasLineOfSight(int32 X0, int32 Y0, int32 X1, int32 Y1
 
 	while (true)
 	{
-		if (!IsCellPassableForPath(X, Y)) return false;
+		if (!IsCellPassableForPath(X, Y, Scratch)) return false;
 
 		// Clearance gate. Reject lines that pass through any cell whose
 		// WallDistance is below the requested clearance. The anchor cell
@@ -1706,7 +1707,7 @@ bool USeinNavigationAStar::HasLineOfSight(int32 X0, int32 Y0, int32 X1, int32 Y1
 		// Smoother won't collapse segments past dynamic blockers either.
 		if (!bIsAnchor && RequiredClearance > 0)
 		{
-			const int32 WD = GetEffectiveWD(X, Y, RequiredClearance);
+			const int32 WD = GetEffectiveWD(X, Y, RequiredClearance, Scratch);
 			if (WD < RequiredClearance) return false;
 		}
 		bIsAnchor = false;
@@ -1838,7 +1839,7 @@ bool USeinNavigationAStar::NavRaycast(const FFixedVector& From, const FFixedVect
 	}
 }
 
-void USeinNavigationAStar::BuildSmoothedPath(const TArray<FIntPoint>& CellPath, FSeinPath& OutPath, int32 RequiredClearance) const
+void USeinNavigationAStar::BuildSmoothedPath(const TArray<FIntPoint>& CellPath, FSeinPath& OutPath, FAStarScratch& Scratch, int32 RequiredClearance) const
 {
 	OutPath.Clear();
 	if (CellPath.Num() == 0) return;
@@ -1861,7 +1862,7 @@ void USeinNavigationAStar::BuildSmoothedPath(const TArray<FIntPoint>& CellPath, 
 	{
 		int32 J = I + 1;
 		while (J + 1 < CellPath.Num() &&
-			HasLineOfSight(CellPath[I].X, CellPath[I].Y, CellPath[J + 1].X, CellPath[J + 1].Y, RequiredClearance))
+			HasLineOfSight(CellPath[I].X, CellPath[I].Y, CellPath[J + 1].X, CellPath[J + 1].Y, Scratch, RequiredClearance))
 		{
 			++J;
 		}
@@ -1896,6 +1897,15 @@ void USeinNavigationAStar::BuildSmoothedPath(const TArray<FIntPoint>& CellPath, 
 
 bool USeinNavigationAStar::FindCellPath(const FSeinPathRequest& Request, FSeinPath& OutPath) const
 {
+	// Thin wrapper over the reentrant body — the serial path uses the single
+	// persistent MainScratch, whose buffers survive across calls exactly as the
+	// old mutable members did (byte-identical serial behavior). The Scratch-
+	// taking helper is what a future parallel batch calls with per-worker scratch.
+	return FindCellPathInternal(Request, OutPath, MainScratch);
+}
+
+bool USeinNavigationAStar::FindCellPathInternal(const FSeinPathRequest& Request, FSeinPath& OutPath, FAStarScratch& Scratch) const
+{
 	OutPath.Clear();
 	if (!HasRuntimeData()) return false;
 
@@ -1919,7 +1929,7 @@ bool USeinNavigationAStar::FindCellPath(const FSeinPathRequest& Request, FSeinPa
 	// (water blocks Default, ignore amphibious) don't apply universally.
 	// Done first so every passability check below — source projection, A*,
 	// smoothing — sees the same overlay.
-	BuildDynamicBlockedOverlay(Request.Requester, Request.AgentNavLayerMask);
+	BuildDynamicBlockedOverlay(Request.Requester, Request.AgentNavLayerMask, Scratch);
 
 	// Per-agent terrain filter: bar cells whose terrain type's tag is listed in
 	// Request.BlockedTerrainTags (e.g. an amphibious-only unit that blocks "Water").
@@ -1927,19 +1937,19 @@ bool USeinNavigationAStar::FindCellPath(const FSeinPathRequest& Request, FSeinPa
 	// hot path — so A* topology AND the LoS smoother both honor it. Skipped entirely when
 	// the agent blocks no terrain or the grid carries no per-cell type, so the common case
 	// pays nothing. (HasTag is hierarchical: blocking a parent tag bars its child types.)
-	bRequestHasBlockedTypes = false;
+	Scratch.bRequestHasBlockedTypes = false;
 	if (!Request.BlockedTerrainTags.IsEmpty() && CellTerrainType.Num() == Width * Height)
 	{
-		if (RequestBlockedType.Num() != 256) RequestBlockedType.SetNumZeroed(256);
-		else FMemory::Memzero(RequestBlockedType.GetData(), RequestBlockedType.Num());
+		if (Scratch.RequestBlockedType.Num() != 256) Scratch.RequestBlockedType.SetNumZeroed(256);
+		else FMemory::Memzero(Scratch.RequestBlockedType.GetData(), Scratch.RequestBlockedType.Num());
 		if (const USeinARTSCoreSettings* TerrainSettings = GetDefault<USeinARTSCoreSettings>())
 		{
 			for (int32 t = 0; t < TerrainSettings->TerrainTypes.Num(); ++t)
 			{
 				if (Request.BlockedTerrainTags.HasTag(TerrainSettings->TerrainTypes[t].TerrainTag))
 				{
-					RequestBlockedType[t + 1] = 1; // stored index = array pos + 1 (reserved-0 Default)
-					bRequestHasBlockedTypes = true;
+					Scratch.RequestBlockedType[t + 1] = 1; // stored index = array pos + 1 (reserved-0 Default)
+					Scratch.bRequestHasBlockedTypes = true;
 				}
 			}
 		}
@@ -1951,16 +1961,16 @@ bool USeinNavigationAStar::FindCellPath(const FSeinPathRequest& Request, FSeinPa
 	// grid dimensions changed since the last call.
 	{
 		const int32 NCells = Width * Height;
-		if (DynamicWDCache.Num()    != NCells) DynamicWDCache.SetNumUninitialized(NCells);
-		if (DynamicWDCacheGen.Num() != NCells) DynamicWDCacheGen.Init(0, NCells);
+		if (Scratch.DynamicWDCache.Num()    != NCells) Scratch.DynamicWDCache.SetNumUninitialized(NCells);
+		if (Scratch.DynamicWDCacheGen.Num() != NCells) Scratch.DynamicWDCacheGen.Init(0, NCells);
 
-		if (++CurrentDynamicWDGen == 0)
+		if (++Scratch.CurrentDynamicWDGen == 0)
 		{
 			// uint16 wraparound — clear the gen array and restart at 1.
 			// (gen 0 is the "never touched" sentinel; we never want a live
 			// gen to collide with it.)
-			FMemory::Memzero(DynamicWDCacheGen.GetData(), NCells * sizeof(uint16));
-			CurrentDynamicWDGen = 1;
+			FMemory::Memzero(Scratch.DynamicWDCacheGen.GetData(), NCells * sizeof(uint16));
+			Scratch.CurrentDynamicWDGen = 1;
 		}
 	}
 
@@ -2068,7 +2078,7 @@ bool USeinNavigationAStar::FindCellPath(const FSeinPathRequest& Request, FSeinPa
 	// somewhere sensible along the way to the click.
 	bool bPartial = false;
 	TArray<FIntPoint> CellPath = AStarSearch(FIntPoint(SX, SY), FIntPoint(EX, EY), bPartial,
-		HeuristicWeight, MaxIters, RequiredClearance);
+		HeuristicWeight, MaxIters, RequiredClearance, Scratch);
 
 	if (CellPath.Num() == 0)
 	{
@@ -2087,7 +2097,7 @@ bool USeinNavigationAStar::FindCellPath(const FSeinPathRequest& Request, FSeinPa
 		return false;
 	}
 
-	BuildSmoothedPath(CellPath, OutPath, RequiredClearance);
+	BuildSmoothedPath(CellPath, OutPath, Scratch, RequiredClearance);
 	// Apply partial flag AFTER smoothing — BuildSmoothedPath's OutPath.Clear()
 	// resets it, so setting it earlier gets clobbered.
 	OutPath.bIsPartial = bPartial;
@@ -2200,6 +2210,13 @@ bool USeinNavigationAStar::FindCellPath(const FSeinPathRequest& Request, FSeinPa
 
 bool USeinNavigationAStar::FindPath(const FSeinPathRequest& Request, FSeinPath& OutPath) const
 {
+	// Serial entry: the whole pipeline runs through the persistent MainScratch
+	// (its buffers survive across calls exactly as the pre-refactor mutable members).
+	return FindPathInternal(Request, OutPath, MainScratch);
+}
+
+bool USeinNavigationAStar::FindPathInternal(const FSeinPathRequest& Request, FSeinPath& OutPath, FAStarScratch& Scratch) const
+{
 	// 2D configuration-space cell A* + LoS smoothing. A* runs in the unit's
 	// configuration space (cells where `WallDistance >= Required` for this
 	// footprint), so emitted waypoints and the segments between them are
@@ -2212,11 +2229,16 @@ bool USeinNavigationAStar::FindPath(const FSeinPathRequest& Request, FSeinPath& 
 	// happens to be near its boundary (the literal click position, before
 	// any cell-center snap, can still be close to a wall edge). Cheap.
 	OutPath.Clear();
-	if (!FindCellPath(Request, OutPath)) return false;
+	// Route the whole pipeline through the serial MainScratch: FindCellPathInternal
+	// populates the dynamic overlay / blocked-types / dyn-WD cache in it, and the
+	// wall-push + post-validation diagnostics below read that SAME live scratch
+	// state (the overlay must still reflect this request's blockers). Byte-identical
+	// to the pre-refactor flow where all three stages shared the mutable members.
+	if (!FindCellPathInternal(Request, OutPath, Scratch)) return false;
 
 	if (Request.AgentFootprintRadius > FFixedPoint::Zero || Request.AgentWallPaddingCells > 0)
 	{
-		PushWaypointsAwayFromWalls(OutPath, Request.AgentFootprintRadius, Request.AgentWallPaddingCells);
+		PushWaypointsAwayFromWalls(OutPath, Request.AgentFootprintRadius, Request.AgentWallPaddingCells, Scratch);
 
 		// The wall-push must NOT relocate an authoritative destination (cover slot)
 		// off its slot — the slot belongs AT the wall. Restore the exact End that
@@ -2251,7 +2273,7 @@ bool USeinNavigationAStar::FindPath(const FSeinPathRequest& Request, FSeinPath& 
 			if (!WorldToGrid(OutPath.Waypoints[i + 1], BX, BY)) continue;
 			if (AX == BX && AY == BY) continue; // zero-length segment, skip
 
-			if (HasLineOfSight(AX, AY, BX, BY, 0)) continue; // segment OK
+			if (HasLineOfSight(AX, AY, BX, BY, Scratch, 0)) continue; // segment OK
 
 			// Failed — replay the trace to find the rejection point.
 			FString Trace;
@@ -2271,7 +2293,7 @@ bool USeinNavigationAStar::FindPath(const FSeinPathRequest& Request, FSeinPath& 
 					Trace += FString::Printf(TEXT("[%d] cell(%d,%d) OUT_OF_BOUNDS — REJECTED\n"), Step, CurX, CurY);
 					break;
 				}
-				if (!IsCellPassableForPath(CurX, CurY))
+				if (!IsCellPassableForPath(CurX, CurY, Scratch))
 				{
 					const int32 CIdx = CellIndex(CurX, CurY);
 					const uint8 CC = CellCost.IsValidIndex(CIdx) ? CellCost[CIdx] : 0;
@@ -2352,10 +2374,48 @@ bool USeinNavigationAStar::FindPath(const FSeinPathRequest& Request, FSeinPath& 
 	return OutPath.bIsValid;
 }
 
+void USeinNavigationAStar::RunPathBatch(const TArray<FSeinPathRequest>& Requests, TArray<FSeinPath>& OutResults) const
+{
+	const int32 N = Requests.Num();
+	OutResults.SetNum(N);
+	if (N == 0) return;
+
+	// Serial when parallelism is off or the batch is a single search (dispatch
+	// overhead beats the win). Serial runs through the persistent MainScratch, so
+	// the result is byte-identical to the inline FindPath path.
+	if (N < 2 || !SeinSimParallelEnabled())
+	{
+		for (int32 i = 0; i < N; ++i)
+		{
+			FindPathInternal(Requests[i], OutResults[i], MainScratch);
+		}
+		return;
+	}
+
+	// Parallel: ParallelForWithTaskContext gives each worker its OWN FAStarScratch
+	// (never shared concurrently), so the searches run race-free. Each FindPathInternal
+	// is a pure function of (request, immutable grid) — the scratch is only workspace,
+	// reset per search by the generation pattern — so every OutResults[i] is identical
+	// to the serial path regardless of thread count or scheduling. This is BAR's
+	// per-thread searchThreadData model; determinism is by construction.
+#if !UE_BUILD_SHIPPING
+	SeinSetInParallelSection(true);
+#endif
+	TArray<FAStarScratch> Contexts;
+	ParallelForWithTaskContext(Contexts, N, [this, &Requests, &OutResults](FAStarScratch& Scratch, int32 Index)
+	{
+		FindPathInternal(Requests[Index], OutResults[Index], Scratch);
+	});
+#if !UE_BUILD_SHIPPING
+	SeinSetInParallelSection(false);
+#endif
+}
+
 void USeinNavigationAStar::PushWaypointsAwayFromWalls(
 	FSeinPath& Path,
 	FFixedPoint AgentFootprintRadius,
-	int32 WallPaddingCells) const
+	int32 WallPaddingCells,
+	FAStarScratch& Scratch) const
 {
 	if (Path.Waypoints.Num() == 0) return;
 	if (WallDistance.Num() != Width * Height) return; // asset not loaded
@@ -2420,7 +2480,7 @@ void USeinNavigationAStar::PushWaypointsAwayFromWalls(
 		// Effective WD = min(static, dyn-blocker Chebyshev distance). Same
 		// source-of-truth as A* / smoother clearance gates — Push acts on
 		// dynamic blockers the same way it acts on static walls.
-		int32 CurDist = GetEffectiveWD(CurX, CurY, Required);
+		int32 CurDist = GetEffectiveWD(CurX, CurY, Required, Scratch);
 
 		// Already clear — no push needed for this waypoint.
 		if (CurDist >= Required) continue;
@@ -2448,8 +2508,8 @@ void USeinNavigationAStar::PushWaypointsAwayFromWalls(
 				const int32 NX = CurX + NeighborDX[n];
 				const int32 NY = CurY + NeighborDY[n];
 				if (!IsValidCoord(NX, NY)) continue;
-				if (!IsCellPassableForPath(NX, NY)) continue;
-				const int32 ND = GetEffectiveWD(NX, NY, Required);
+				if (!IsCellPassableForPath(NX, NY, Scratch)) continue;
+				const int32 ND = GetEffectiveWD(NX, NY, Required, Scratch);
 				if (ND > BestNDist)
 				{
 					BestN = n;
@@ -2480,7 +2540,7 @@ void USeinNavigationAStar::PushWaypointsAwayFromWalls(
 		// If either adjacent segment fails the check, REVERT the push (keep
 		// original position). Path stays slightly tighter to the wall for
 		// this waypoint, but doesn't cross.
-		if ((CurX != X || CurY != Y) && IsCellPassableForPath(CurX, CurY))
+		if ((CurX != X || CurY != Y) && IsCellPassableForPath(CurX, CurY, Scratch))
 		{
 			bool bPrevSegOk = true;
 			bool bNextSegOk = true;
@@ -2490,7 +2550,7 @@ void USeinNavigationAStar::PushWaypointsAwayFromWalls(
 				int32 PrevX, PrevY;
 				if (WorldToGrid(Path.Waypoints[W - 1], PrevX, PrevY))
 				{
-					bPrevSegOk = HasLineOfSight(PrevX, PrevY, CurX, CurY, 0);
+					bPrevSegOk = HasLineOfSight(PrevX, PrevY, CurX, CurY, Scratch, 0);
 				}
 			}
 
@@ -2499,7 +2559,7 @@ void USeinNavigationAStar::PushWaypointsAwayFromWalls(
 				int32 NextX, NextY;
 				if (WorldToGrid(Path.Waypoints[W + 1], NextX, NextY))
 				{
-					bNextSegOk = HasLineOfSight(CurX, CurY, NextX, NextY, 0);
+					bNextSegOk = HasLineOfSight(CurX, CurY, NextX, NextY, Scratch, 0);
 				}
 			}
 

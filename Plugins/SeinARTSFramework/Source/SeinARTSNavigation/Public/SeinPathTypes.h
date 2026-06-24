@@ -123,8 +123,12 @@ struct SEINARTSNAVIGATION_API FSeinPathRequest
 	int32 AgentMaxSearchNodes = 0;
 };
 
-/** Kind of motion a path segment represents. Growing the enum is additive;
- *  consumers default-handle unknown values as straights. */
+/** Kind of motion a path segment represents. Only `Straight` is built today — the
+ *  enum is intentionally a one-value extensibility seam. New kinds are added by whatever
+ *  PRODUCES the path: the nav (`FindPath`) for topology kinds (e.g. link / jump hops over
+ *  off-mesh edges), a movement planner (`USeinMovement::PlanPath`) for kinematic kinds
+ *  (e.g. arc curve-fitting). Consumers default-handle unknown values as straights, so
+ *  growing it stays additive. */
 UENUM(BlueprintType)
 enum class ESeinPathSegmentType : uint8
 {
@@ -151,7 +155,13 @@ struct SEINARTSNAVIGATION_API FSeinPathSegment
 	FFixedVector To;
 };
 
-/** Path query result. Waypoints are world-space, ordered Start → End. */
+/** Path query result — a route carried as TWO complementary views:
+ *    - `Waypoints` : the world-space polyline the built-in follower drives (Start → End).
+ *    - `Segments`  : the same route as TYPED segments (Straight today) — an extensibility
+ *                    seam for arc / link / jump kinds emitted by whatever produces the path
+ *                    (the nav for topology kinds, a movement planner for kinematic kinds).
+ *  The follower drives the waypoint backbone; segment-aware driving is opt-in for a custom
+ *  movement mode (read them via the Mover Handle's Get Segment / Get Path Segments nodes). */
 USTRUCT(BlueprintType)
 struct SEINARTSNAVIGATION_API FSeinPath
 {

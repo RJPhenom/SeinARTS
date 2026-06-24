@@ -28,6 +28,7 @@ private:
 	FReply OnPreviewClicked();
 	FReply OnGatherClicked();
 	FReply OnPushClicked();
+	FReply OnCheckSyncClicked();
 	FText GetPreviewText() const;
 
 	/** The profile being customized. */

@@ -17,6 +17,7 @@
 #include "Data/SeinWorldSnapshot.h"
 #include "Settings/PluginSettings.h"
 #include "Core/SeinSimContext.h"
+#include "Core/SeinParallel.h"
 #include "Abilities/SeinAbility.h"
 #include "Abilities/SeinAbilityValidation.h"
 #include "Abilities/SeinLatentActionManager.h"
@@ -1398,6 +1399,7 @@ void USeinWorldSubsystem::ProcessCommands()
 
 void USeinWorldSubsystem::EnqueueCommand(const FSeinCommand& Command)
 {
+	SEIN_CHECK_NOT_PARALLEL();
 	PendingCommands.AddCommand(Command);
 }
 
@@ -1732,6 +1734,7 @@ FSeinEntityHandle USeinWorldSubsystem::SpawnAbstractEntity(
 
 void USeinWorldSubsystem::DestroyEntity(FSeinEntityHandle Handle)
 {
+	SEIN_CHECK_NOT_PARALLEL();
 	if (!Handle.IsValid() || !EntityPool.IsValid(Handle))
 	{
 		return;
@@ -3373,6 +3376,7 @@ const ISeinComponentStorage* USeinWorldSubsystem::GetComponentStorageRaw(UScript
 
 ISeinComponentStorage* USeinWorldSubsystem::GetOrCreateStorageForType(UScriptStruct* StructType)
 {
+	SEIN_CHECK_NOT_PARALLEL();
 	if (ISeinComponentStorage** Found = ComponentStorages.Find(StructType))
 	{
 		return *Found;
@@ -3455,6 +3459,7 @@ void USeinWorldSubsystem::SortSystemsIfNeeded()
 
 void USeinWorldSubsystem::EnqueueVisualEvent(const FSeinVisualEvent& Event)
 {
+	SEIN_CHECK_NOT_PARALLEL();
 	VisualEventQueue.Enqueue(Event);
 }
 

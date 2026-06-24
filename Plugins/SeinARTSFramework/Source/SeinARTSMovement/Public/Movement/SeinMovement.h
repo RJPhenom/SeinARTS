@@ -345,11 +345,10 @@ public:
 	 *    - If `BypassPathfinding()` is true, synthesizes a straight-line
 	 *      two-waypoint path `[currentPos, destination]`. Used by flying
 	 *      movements that don't path through static obstacles.
-	 *    - Otherwise, builds an `FSeinPathRequest` populated with kinematic
-	 *      hints from `MovementData` + `NavData` (footprint radius, velocity-
-	 *      scaled turn radius, wall padding, start heading) and routes it
-	 *      through `Ctx.NavSub->RequestPath` — the budgeted call that
-	 *      returns `Throttled` when the per-tick path-request budget is spent.
+	 *    - Otherwise, builds an `FSeinPathRequest` from `MovementData` + `NavData`
+	 *      (footprint radius, wall-padding cells, nav-layer mask) and routes it
+	 *      through `Ctx.NavSub->RequestPath` — the budgeted call that returns
+	 *      `Throttled` when the per-tick path-request budget is spent.
 	 *
 	 *  Subclasses override to compose movement-specific planning pipelines.
 	 *  Wheeled, for example, can call the nav's cell A* to get a coarse
@@ -389,29 +388,28 @@ public:
 		FFixedPoint DistToFinal, FFixedPoint Deceleration);
 
 	/** Minimum turn radius (world units) the unit's steering can physically
-	 *  execute. Drives two downstream features:
-	 *    1. Path corner rounding (nav layer) — corners get arcs of radius
-	 *       `min(half-incoming-segment, half-outgoing-segment, MinTurnRadius)`
-	 *       so vehicles trace smooth curves they can actually drive.
-	 *    2. Curvature-aware throttle preview — vehicles slow when the path
-	 *       ahead curves tighter than their min radius.
+	 *  execute — 0 means it can pivot in place (no radius constraint). This is a
+	 *  per-unit QUERY: it REPORTS the radius; nothing in the base acts on it yet.
 	 *
-	 *  Default 0 — no rounding constraint. Infantry, BasicMovement, and
-	 *  tracked vehicles (which can pivot in place) leave it at 0. Wheeled
-	 *  overrides via the bicycle kinematic identity `Wheelbase / tan(MaxSteerAngle)`,
-	 *  reading both values from `MovementData::MovementClassData` unwrapped as
-	 *  `FSeinWheeledMovementData`. Tracked may also opt into a preferred radius
-	 *  via its own per-class data.
+	 *  Intended consumer: a Movement+ vehicle planner (see PlanPath) would read it
+	 *  to round path corners into drivable arcs and to slow before turns tighter
+	 *  than the radius. That curve-fitting / curvature-throttle is NOT built today —
+	 *  this hook exists so the planner can read the radius when it lands.
 	 *
-	 *  Takes `MovementData` so subclass overrides can read their per-class
-	 *  sub-data (Wheelbase / MaxSteerAngle / preferred-radius) directly. */
+	 *  Default 0. Infantry, BasicMovement, and tracked vehicles (which pivot in
+	 *  place) leave it at 0. Wheeled overrides via the bicycle identity
+	 *  `Wheelbase / tan(MaxSteerAngle)`, reading both from
+	 *  `MovementData::MovementClassData` as `FSeinWheeledMovementData`; Tracked may
+	 *  opt into a preferred radius via its own per-class data. Takes `MovementData`
+	 *  so overrides can read their per-class sub-data directly. */
 	virtual FFixedPoint GetMinTurnRadius(const FSeinMovementComponent* /*MovementData*/) const { return BP_GetMinTurnRadius(); }
 
 	/** The tightest turn the unit can make, in world units. Return 0 for no limit (it can pivot).
 	 *
-	 *  Used to round path corners into curves the unit can actually drive, and to slow it before turns
-	 *  sharper than this. A wheeled vehicle computes it from its wheelbase and steering angle; pivoting
-	 *  units leave it at 0. Read it from your tuning variables so it can be set per unit. */
+	 *  Reports the unit's turn radius so a vehicle planner can shape its driving (round corners into
+	 *  drivable arcs, slow before tight turns). That planner is a Movement+ feature not yet built, so
+	 *  today the value is read but nothing acts on it. A wheeled vehicle computes it from its wheelbase
+	 *  and steering angle; pivoting units leave it 0. Read it from your tuning variables (per unit). */
 	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Movement", meta = (DisplayName = "Get Min Turn Radius"))
 	FFixedPoint BP_GetMinTurnRadius() const;
 	virtual FFixedPoint BP_GetMinTurnRadius_Implementation() const { return FFixedPoint::Zero; }
@@ -482,13 +480,14 @@ public:
 	 *  units (long tanks): the planner refuses corridors narrower than the
 	 *  bounding circle even when the body could fit if perfectly oriented.
 	 *
-	 *  // TODO(PlannerAStar) — ASPIRATIONAL / UNBUILT: neither a turn-planning nav
-	 *  // variant (SeinNavigationPlannerAStar) nor Reeds-Shepp curve fitting exists
-	 *  // today. Orientation-aware pathfinding could fit a long tank through a
-	 *  // corridor narrower than its bounding circle by tracking facing per A* node
-	 *  // (per-orientation state); that would belong in such a future variant, NOT
-	 *  // here. The base AStar uses the conservative bounding circle and that's the
-	 *  // correct trade-off for generic / infantry-centric games. */
+	 *  FUTURE / UNBUILT: this conservative bounding circle is the right trade-off for
+	 *  generic / infantry-centric games. Two SEPARATE future pieces would relax it for
+	 *  long vehicles — and they live in DIFFERENT layers, so don't conflate them:
+	 *    - Drivable arcs + reversing (Reeds-Shepp / curve fitting) -> a Movement+ vehicle
+	 *      planner via PlanPath (per-unit kinematics), NOT a nav class.
+	 *    - Threading a long tank through a corridor narrower than its bounding circle
+	 *      (orientation-aware A* that tracks facing per node) -> a future USeinNavigation
+	 *      subclass, NOT here on the base. */
 	static FFixedPoint ResolveCollisionRadius(
 		USeinWorldSubsystem* World,
 		FSeinEntityHandle SelfHandle,
