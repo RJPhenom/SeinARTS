@@ -39,9 +39,9 @@ enum class ESeinRepathMode : uint8
 	Interval        UMETA(DisplayName = "Interval"),
 
 	/** Repath only when the unit has demonstrably drifted off the planned
-	 *  polyline (cheaper, more reactive). Implementation is deferred —
-	 *  selecting this currently behaves as no-repath until the off-path
-	 *  detector is wired up. */
+	 *  polyline — cheaper and more reactive than Interval. The off-path
+	 *  detector measures the unit against its path each tick and repaths
+	 *  (budget-gated) once it strays past the threshold. */
 	OffPathOnly     UMETA(DisplayName = "Off-Path Only")
 };
 
@@ -50,168 +50,114 @@ struct SEINARTSCOREENTITY_API FSeinNavigationComponent : public FSeinComponent
 {
 	GENERATED_BODY()
 
-	/** **FALLBACK body radius (world units) — used ONLY when the entity has
-	 *  no `FSeinExtentsComponent`.** Almost every unit in an RTS has an
-	 *  Extents component (it drives FoW occlusion, hit detection, nav
-	 *  blocking), and when it does, THAT'S the source of truth for body
-	 *  size — this field is silently ignored.
+	/** Body radius (world units) the framework falls back to when this entity has no
+	 *  Extents Component. Almost every RTS unit has an Extents Component — it drives FoW
+	 *  occlusion, hit detection, and nav blocking — and when present THAT is the body-size
+	 *  source of truth and this field is ignored.
 	 *
-	 *  ELI5: think of this as "what radius the framework should use if I
-	 *  didn't bother authoring an Extents component." Useful for prototype
-	 *  units or simple actors where you want a quick collision footprint
-	 *  without the full Extents setup.
-	 *
-	 *  Resolution cascade (matches collision and pathfinding both):
-	 *    1. Extents Shapes (max BoundingRadius across all shapes) — preferred
-	 *    2. THIS field — fallback when Extents is absent
-	 *    3. 0 — intangible (no collision, no path clearance, no avoidance)
-	 *
-	 *  When this field IS used (no Extents on the BP), it drives:
-	 *    - Path clearance — planner keeps body clear of walls
-	 *    - Penetration — units never overlap their footprints
-	 *    - Avoidance — perception radius for nearby units
-	 *
-	 *  Rough guides for Extents-less units:
-	 *    - Infantry / small bipeds: 50
-	 *    - Wheeled vehicles (cars, trucks): 100
-	 *    - Tracked vehicles (tanks): 150
-	 *
-	 *  Default 50. */
+	 *  Use it for prototype units or simple actors where you want a quick collision
+	 *  footprint without authoring full Extents. When it IS used (no Extents on the
+	 *  Blueprint) it drives path clearance (planner keeps the body clear of walls),
+	 *  penetration (units never overlap footprints), and avoidance (perception radius for
+	 *  nearby units). Resolution order, matching collision and pathfinding: (1) Extents
+	 *  shapes — max bounding radius — preferred; (2) this field — fallback when Extents is
+	 *  absent; (3) 0 — intangible (no collision, clearance, or avoidance). Rough guides:
+	 *  infantry / small bipeds 50, wheeled vehicles 100, tracked vehicles 150. Default 50. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Navigation",
 		meta = (ClampMin = "0.0", DisplayName = "Fallback Footprint Radius"))
 	FFixedPoint FallbackFootprintRadius = FFixedPoint::FromInt(50);
 
-	/** **Extra breathing room beyond the geometric minimum, in nav cells.**
-	 *  The planner ALREADY keeps enough space for the body to clear walls
-	 *  (using the formula `Required = ceil(FootprintRadius/CellSize + 0.5)`,
-	 *  where the `+0.5` accounts for the half-cell distance from cell-center
-	 *  to wall edge). This field adds N MORE cells on top of that minimum.
+	/** Extra wall clearance for this unit, in nav cells, on top of the geometric minimum.
+	 *  The planner already keeps just enough room for the body to clear walls; this adds N
+	 *  more cells of margin. 0 = just barely fit (the default).
 	 *
-	 *  ELI5:
-	 *    - `WallPadding = 0` → default. "Just barely fit" — unit body has
-	 *      the minimum possible clearance to walls (the geometric +0.5-cell
-	 *      half-cell offset is already baked into the formula). Tight
-	 *      corridors OK, light scrapes possible during turns at high speed.
-	 *      Opt-in to anything higher if your map / vehicles need slack.
-	 *    - `WallPadding = 1` → one full cell of extra space beyond the
-	 *      body. Comfortable margin for steering bumps and avoidance.
-	 *    - `WallPadding = 2+` → wider corridors required. Tanks/vehicles
-	 *      often want this for turn-radius slack without rubbing walls.
-	 *
-	 *  Be aware: bumping this can make narrow corridors UNREACHABLE if their
-	 *  width is below `geometric minimum + padding`. That's correct behavior
-	 *  — the unit genuinely doesn't fit comfortably — but designers tuning
-	 *  padding should watch for paths suddenly routing the long way around.
-	 *
-	 *  Capped at 64 (the planner's clearance-BFS expansion radius). Useful
-	 *  range typically 0–8. Default 0 (opt-in). */
+	 *  The geometric minimum is Required = ceil(FootprintRadius / CellSize + 0.5), where
+	 *  the +0.5 is the half-cell from cell-center to wall edge. 0 = tight corridors OK,
+	 *  light scrapes possible on fast turns; 1 = a comfortable cell of slack for steering
+	 *  bumps and avoidance; 2+ = wider corridors required, typical for tanks/vehicles that
+	 *  want turn-radius slack without rubbing walls. Note: raising this can make a narrow
+	 *  corridor UNREACHABLE if its width is below minimum + padding — correct (the unit
+	 *  genuinely doesn't fit), but watch for paths suddenly routing the long way around.
+	 *  Capped at 64 (the planner's clearance-BFS radius); useful range 0–8. Default 0. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Navigation",
 		meta = (ClampMin = "0", ClampMax = "64", UIMin = "0", UIMax = "16",
 				DisplayName = "Wall Padding (cells)"))
 	int32 WallPadding = 0;
 
-	/** **How close (world units) the unit needs to be to its destination
-	 *  to count as "arrived."** Below this distance the unit stops and
-	 *  reports the move complete.
+	/** How close (world units) the unit must get to its destination to count as arrived —
+	 *  within this distance it stops and reports the move complete.
 	 *
-	 *  Tune higher for units that can't precisely stop on a dime — wheeled
-	 *  vehicles especially, because turn radius prevents tight arrivals.
-	 *  Tune lower for infantry / units expected to land exactly on a spot.
-	 *
-	 *  Default 50 = half a 100cm cell. (There is no per-call override today —
-	 *  this per-unit value is authoritative; see API_Cleanup_Pass.md.) */
+	 *  Tune higher for units that can't stop on a dime (wheeled vehicles especially, where
+	 *  turn radius prevents tight arrivals); lower for infantry expected to land exactly on
+	 *  a spot. Default 50 = half a 100cm cell. Per-unit and authoritative — there is no
+	 *  per-call override. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Navigation",
 		meta = (ClampMin = "0.0"))
 	FFixedPoint AcceptanceRadius = FFixedPoint::FromInt(50);
 
-	/** **Which terrain "classes" this unit is affected by.** A bitmask:
-	 *  each bit corresponds to a nav layer defined in plugin settings
-	 *  (water, lava, no-build, etc.). The unit is blocked from a cell only
-	 *  when AT LEAST ONE of its layer bits is also set in that cell's
-	 *  blocker.
+	/** Which terrain classes this unit is affected by — a bitmask where each bit is a nav
+	 *  layer defined in plugin settings (water, lava, no-build, etc.). The unit is blocked
+	 *  from a cell only when at least one of its bits is also set in that cell's blocker.
+	 *  Default 0x01 (bit 0 = "Default" = normal ground units).
 	 *
-	 *  ELI5 example — "amphibious skips water":
-	 *    - The water blocker is authored with the Default bit set.
-	 *    - Normal infantry have NavLayerMask = Default → blocked by water.
-	 *    - Amphibious unit drops Default and sets Amphibious → no overlap
-	 *      with water blocker → walks through water freely.
-	 *
-	 *  Multi-class units (e.g. amphibious tank that blocks ground units AND
-	 *  walks on water) set BOTH bits.
-	 *
-	 *  Default 0x01 = bit 0 = "Default" — normal ground units. */
+	 *  Example, "amphibious skips water": author the water blocker with the Default bit;
+	 *  normal infantry keep NavLayerMask = Default so water blocks them; the amphibious
+	 *  unit drops Default and sets Amphibious, so it shares no bit with the water blocker
+	 *  and walks through. A multi-class unit (e.g. an amphibious tank that blocks ground
+	 *  units AND crosses water) sets both bits. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Navigation",
 		meta = (Bitmask, BitmaskEnum = "/Script/SeinARTSCoreEntity.ESeinNavLayerBit"))
 	uint8 NavLayerMask = 0x01;
 
-	/** **When a moving unit re-runs the pathfinder to react to world
-	 *  changes.** Long moves can drift off-path (turn dynamics, blocker
-	 *  changes, new buildings appearing). Repathing keeps the unit honest.
-	 *  See `ESeinRepathMode` for option descriptions. */
+	/** When a moving unit re-runs the pathfinder to react to world changes — turn drift,
+	 *  blocker changes, new buildings appearing. Repathing keeps the unit honest. See
+	 *  Repath Mode for the option descriptions. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Navigation")
 	ESeinRepathMode RepathMode = ESeinRepathMode::Interval;
 
-	/** **Seconds between automatic repaths (Interval mode only).** Smaller
-	 *  = more reactive to world changes (new walls, destroyed gates) but
-	 *  costs more pathfinder work per second. Larger = cheaper but stale
-	 *  paths persist longer.
-	 *
-	 *  Default 0.25s. Ignored when RepathMode isn't Interval. */
+	/** Seconds between automatic repaths (Interval mode only). Smaller = more reactive to
+	 *  world changes (new walls, destroyed gates) but more pathfinder work per second;
+	 *  larger = cheaper but stale paths persist longer. Default 0.25s. Ignored unless
+	 *  Repath Mode is Interval. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Navigation",
 		meta = (ClampMin = "0.05"))
 	FFixedPoint RepathInterval = FFixedPoint::FromInt(1) / FFixedPoint::FromInt(4);
 
-	/** **How many failed repaths in a row before giving up on the move.**
-	 *  If the pathfinder keeps returning no-path (because of new blockers
-	 *  or a sealed destination), after this many tries the move action
-	 *  fails entirely rather than thrashing forever.
-	 *
-	 *  Each successful repath resets the counter. Default 3 ≈ 0.75s at
-	 *  the default 0.25s interval. */
+	/** How many repaths may fail in a row before the move gives up entirely instead of
+	 *  thrashing forever — e.g. when new blockers or a sealed destination keep returning
+	 *  no-path. Each successful repath resets the count. Default 3 ≈ 0.75s at the default
+	 *  0.25s interval. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Navigation",
 		meta = (ClampMin = "1"))
 	int32 RepathFailureLimit = 3;
 
-	/** **How far (world units) the unit can drift from its planned path
-	 *  before OffPathOnly mode triggers a fresh pathfind.** Only used when
-	 *  RepathMode == OffPathOnly.
+	/** How far (world units) the unit may drift from its planned path before Off-Path Only
+	 *  mode triggers a fresh pathfind. Used only when Repath Mode is Off-Path Only.
 	 *
-	 *  Smaller = repaths on every minor avoidance bump (twitchy).
-	 *  Larger = newly placed obstacles don't trigger recompute until the
-	 *  unit is well off course.
-	 *
-	 *  Default 75cm — a bit bigger than the default footprint so passive
-	 *  avoidance bumps don't thrash the planner. */
+	 *  Smaller = repaths on every minor avoidance bump (twitchy); larger = newly placed
+	 *  obstacles don't trigger a recompute until the unit is well off course. Default 75cm
+	 *  — a bit bigger than the default footprint so passive avoidance bumps don't thrash
+	 *  the planner. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Navigation",
 		meta = (ClampMin = "0.0"))
 	FFixedPoint OffPathThreshold = FFixedPoint::FromInt(75);
 
-	/** **Per-unit cap on pathfinder work (A* node expansions) for ONE path
-	 *  request.** Bounds how hard the planner searches before giving up and
-	 *  returning its best-effort partial path (to the closest reachable cell).
+	/** Per-unit cap on pathfinder work (A* node expansions) for one path request, bounding
+	 *  how hard the planner searches before returning its best-effort partial path to the
+	 *  closest reachable cell. 0 = use the project default from plugin settings.
 	 *
-	 *  ELI5:
-	 *    - `0` → default. Use the project-wide cap
-	 *      (`USeinARTSCoreSettings::AStarMaxIterations`). Leave it here unless a
-	 *      specific unit needs different behaviour.
-	 *    - `N > 0` → this unit's searches stop after N expansions. SMALLER caps
-	 *      a unit's worst-case pathfind cost on huge / maze-like maps (cheap
-	 *      skirmishers that should give up fast rather than stall the tick);
-	 *      LARGER lets an important unit search harder for a long-range route.
-	 *
-	 *  A hit cap is not a failure — the unit still moves along the partial path
-	 *  toward the goal and (if repathing) tries again from closer up. Only raise
-	 *  it past the project default for units that genuinely need long-range
-	 *  routing on large maps. Default 0 (use project default). */
+	 *  Smaller caps a unit's worst-case pathfind cost on huge / maze-like maps (cheap
+	 *  skirmishers that should give up fast rather than stall the tick); larger lets an
+	 *  important unit search harder for a long-range route. Hitting the cap is not a
+	 *  failure — the unit still moves along the partial path toward the goal and (if
+	 *  repathing) tries again from closer up. Default 0. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Navigation",
 		meta = (ClampMin = "0", DisplayName = "Max Search Nodes"))
 	int32 MaxSearchNodes = 0;
 
-	/** **Show the destination preview decal when this unit is selected.**
-	 *  The framework draws a CoH-style "where will I stop" indicator on
-	 *  cursor hover during move orders. Set false to suppress for unit
-	 *  types where the preview doesn't add value (e.g. always-mobile
-	 *  scouts, off-screen support units). Default true. */
+	/** Show the destination preview when this unit is selected — the CoH-style "where will
+	 *  I stop" indicator drawn on cursor hover during move orders. Turn off for unit types
+	 *  where it adds no value (always-mobile scouts, off-screen support). Default true. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Navigation")
 	bool bShowNavigationPreview = true;
 };

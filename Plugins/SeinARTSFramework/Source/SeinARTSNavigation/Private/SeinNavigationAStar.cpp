@@ -269,7 +269,11 @@ void USeinNavigationAStar::BakeLayer(const USeinLevelData& Substrate, UWorld* Wo
 			}
 		}
 
-		const int32 MinComponentCells = 16; // TODO(CP1.1): expose as a settings knob (resolved Q5)
+		// Smallest connected walkable region (in cells) the bake keeps; anything smaller is
+		// pruned as junk (cube tops, slivers of floating geometry). Designer-tunable via
+		// USeinARTSCoreSettings::NavMinWalkableIslandCells (default 16); a custom nav subclass
+		// can override the prune entirely in its own BakeLayer.
+		const int32 MinComponentCells = Settings ? FMath::Max(1, Settings->NavMinWalkableIslandCells) : 16;
 		int32 Pruned = 0;
 		for (int32 i = 0; i < NumCells; ++i)
 		{
@@ -686,6 +690,50 @@ bool USeinNavigationAStar::IsWorldPositionClear(const FFixedVector& WorldPos, ui
 		if (bBlocked) return false;
 	}
 	return true;
+}
+
+bool USeinNavigationAStar::IsPlacementValid(const FFixedVector& CenterWorld, FFixedPoint YawDegrees,
+	const FSeinExtentsShape& Shape, uint8 /*AgentLayerMask*/) const
+{
+	if (!HasRuntimeData()) return false;
+
+	// Rasterize the FULL footprint and reject if ANY covered cell is blocked. The base
+	// scaffold sampled only the centre cell, so a multi-cell building could pass validation
+	// with a corner hanging over a wall. We reuse SeinStampUtils::ForEachCoveredCell — the
+	// SAME deterministic fixed-point cell-cover test the path planner and dynamic-blocker
+	// overlay use — so a footprint this accepts is one pathing also considers walkable.
+	// Static bake only (IsCellPassable); dynamic-occupancy gating, if ever wanted, would
+	// swap in IsWorldPositionClear per cell.
+	const FSeinStampShape Stamp = Shape.AsStampShape();
+
+	// Entity rotation from the placement yaw, built with fixed-point LUT trig (never FMath —
+	// float sin/cos over rotation is determinism-fragile across platforms, and this runs in
+	// ability validation on every client). ForEachCoveredCell composes it with the shape's
+	// own YawOffset.
+	const FFixedPoint YawRad = SeinStampUtils::DegToRad(YawDegrees);
+	const FFixedQuaternion Rot = FFixedQuaternion::FromAxisAndAngle(
+		FFixedVector(FFixedPoint::Zero, FFixedPoint::Zero, FFixedPoint::One), YawRad);
+
+	bool bAnyCell = false;
+	bool bBlocked = false;
+	SeinStampUtils::ForEachCoveredCell(
+		Stamp, CenterWorld, Rot, CellSize, Origin, Width, Height,
+		[this, &bAnyCell, &bBlocked](int32 X, int32 Y)
+		{
+			bAnyCell = true;
+			if (!bBlocked && !IsCellPassable(X, Y)) bBlocked = true;
+		});
+
+	if (bBlocked) return false;
+	if (bAnyCell)  return true;
+
+	// Degenerate footprint (zero extent, or centre off-grid so no cell was visited) — fall
+	// back to a single centre sample so a point-like placement still gets a verdict.
+	const FFixedVector SampleWorld(
+		CenterWorld.X + Shape.LocalOffset.X,
+		CenterWorld.Y + Shape.LocalOffset.Y,
+		CenterWorld.Z);
+	return IsPassable(SampleWorld);
 }
 
 void USeinNavigationAStar::SetDynamicBlockers(const TArray<FSeinDynamicBlocker>& InBlockers)
@@ -2138,14 +2186,13 @@ bool USeinNavigationAStar::FindCellPath(const FSeinPathRequest& Request, FSeinPa
 		}
 	}
 
-	// Derive the typed segment list from the cell polyline. One Straight
-	// segment per consecutive waypoint pair. Vehicle paths via the FindPath
-	// wrapper re-derive after FitVehicleCurve mutates the polyline; the
-	// derivation here keeps FindCellPath's contract — every successful
-	// return carries a segment-derived path — so direct callers (infantry /
-	// basic / basic-unit PlanPath; Phase 3+ vehicle PlanPath as the first
-	// stage of its compose-the-pipeline flow) can read Segments without
-	// an extra DeriveSegmentsFromWaypoints call.
+	// Derive the typed segment list from the cell polyline — one Straight
+	// segment per consecutive waypoint pair. Done here so FindCellPath's
+	// contract holds: every successful return carries a segment-derived path,
+	// so direct callers (infantry / basic / basic-unit PlanPath) can read
+	// Segments without an extra DeriveSegmentsFromWaypoints call. A FindPath
+	// wrapper that further mutates the polyline (e.g. wall-push) re-derives
+	// afterward.
 	OutPath.DeriveSegmentsFromWaypoints();
 
 	return OutPath.bIsValid;

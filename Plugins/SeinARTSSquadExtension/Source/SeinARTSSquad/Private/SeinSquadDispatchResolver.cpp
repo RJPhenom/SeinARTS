@@ -144,16 +144,16 @@ FSeinBrokerDispatchPlan USeinSquadDispatchResolver::ResolveDispatch_Implementati
 	const bool bReassignLateral = SquadData ? SquadData->bReassignSlotsLateral : false;
 	const bool bReassignDepth   = SquadData ? SquadData->bReassignSlotsDepth   : false;
 
-	// Squads are SLOT-driven: drop the gesture's formation TAG so ResolveFormation
-	// falls to DefaultFormationClass = USeinSlotFormation (authored slots, not Box/Line).
-	// But FORWARD the guide so the slot formation can ORIENT the squad to a
-	// right-click-drag (face across the drag) instead of only facing the move target.
-	FSeinOrderTarget Target;
-	Target.Anchor          = Order.TargetLocation;
-	Target.GuidePoints     = Order.GuidePoints;
-	Target.TargetEntity    = Order.TargetEntity;
-	Target.CurrentCentroid = CurrentCentroid;
-	Target.CurrentFacing   = CurrentFacing;
+	// A squad is ONE element of the parent formation: the parent (ComputeMultiBrokerAnchors) already spent
+	// the gesture SPACING the squad anchors and handed this squad its anchor (Order.TargetLocation) +
+	// element facing (CurrentFacing). Lay the members out in the squad's OWN compact shape via the shared
+	// inner-layout constructor, which by construction carries NO gesture guide/tag — a guide here would
+	// re-expand each squad to fill the whole drag, overlapping them into one. EMPTY FormationClass = the
+	// slot formation (this resolver's DefaultFormationClass). SAME constructor the preview uses → preview
+	// === commit. (TargetEntity isn't needed for layout; the per-member dispatch reads Order.TargetEntity.)
+	const FSeinOrderTarget Target = USeinFormation::MakeInnerLayoutTarget(
+		Order.TargetLocation, CurrentCentroid, CurrentFacing,
+		SquadData ? SquadData->FormationClass : TSoftClassPtr<USeinFormation>());
 	const FSeinFormationLayout Layout = ResolveFormationLayout(
 		World, Effective, Target, bReassignLateral, bReassignDepth);
 	const FFixedQuaternion FormationFacing = Layout.Facing;

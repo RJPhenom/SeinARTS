@@ -107,6 +107,11 @@ USeinMovement* USeinMovementSubsystem::GetOrCreateMovementInstance(
 	USeinMovement* NewInstance = NewObject<USeinMovement>(this, DesiredClass);
 	if (!NewInstance) return nullptr;
 
+	// Hydrate per-unit tuning onto the fresh instance immediately, so any virtual that reads tuning
+	// (GetAltitude / GetMinTurnRadius at plan-time, TickIdle, the steering hooks) sees correct values
+	// from the very first use — not just after the first OnMoveBegin. No-op when there's no tuning.
+	NewInstance->HydrateTuningFromData(Move.MovementClassData);
+
 	MovementInstanceMap.Add(Handle, NewInstance);
 	MovementInstancePool.Add(NewInstance);
 	return NewInstance;

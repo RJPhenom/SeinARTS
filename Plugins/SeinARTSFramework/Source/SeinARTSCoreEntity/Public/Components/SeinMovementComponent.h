@@ -251,6 +251,14 @@ struct SEINARTSCOREENTITY_API FSeinMovementComponent : public FSeinComponent
 	 *  the INSTANT (unsmoothed) spawn-time snap run exactly once per entity. */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Movement")
 	bool bInitialGroundSnapDone = false;
+
+	/** Per-unit custom render/anim values a movement mode writes each tick for the render layer to read
+	 *  (e.g. a hover's bank angle in slot 0, a tank's tread-speed delta in slot 1). Render-only: written
+	 *  via Set Render Value (Sein Mover Handle), read via Get Movement Render Value (Sein Movement
+	 *  Library). NOT part of the deterministic state hash — it's cosmetic output the mode computes
+	 *  deterministically, so it never affects the sim. */
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "SeinARTS|Movement|State")
+	TArray<FFixedPoint> RenderState;
 };
 
 FORCEINLINE uint32 GetTypeHash(const FSeinMovementComponent& C)

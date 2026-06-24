@@ -261,6 +261,41 @@ public:
 					}
 				}
 
+				// Initial formation pass: when the squad authored a non-default formation, lay the
+				// freshly-spawned members out with it (the SAME resolver entry point dispatch + preview
+				// use) instead of leaving them at their authored slot offsets. EMPTY FormationClass = the
+				// slot formation, for which the slot-offset spawn above is already correct -> skip.
+				if (!Squad->FormationClass.IsNull())
+				{
+					if (USeinCommandBrokerResolver* SquadResolver = World.GetCommandBrokerResolver(Broker->ResolverID))
+					{
+						const TArray<FSeinEntityHandle> LiveMembers = Squad->GetLiveMembers();
+						if (LiveMembers.Num() > 0)
+						{
+							FSeinOrderTarget InitTarget;
+							InitTarget.Anchor          = SquadXform.GetLocation();
+							InitTarget.CurrentCentroid = SquadXform.GetLocation();
+							InitTarget.CurrentFacing   = SquadXform.GetQuaternionRotation();
+							InitTarget.FormationClass  = Squad->FormationClass;
+							const FSeinFormationLayout InitLayout = SquadResolver->ResolveFormationLayout(
+								&World, LiveMembers, InitTarget,
+								Squad->bReassignSlotsLateral, Squad->bReassignSlotsDepth);
+							for (int32 MemberIdx = 0; MemberIdx < LiveMembers.Num(); ++MemberIdx)
+							{
+								if (!InitLayout.Positions.IsValidIndex(MemberIdx)) continue;
+								if (FSeinEntity* MemberEnt = World.GetEntity(LiveMembers[MemberIdx]))
+								{
+									MemberEnt->Transform.SetLocation(InitLayout.Positions[MemberIdx]);
+									if (InitLayout.Facings.IsValidIndex(MemberIdx))
+									{
+										MemberEnt->Transform.SetRotation(InitLayout.Facings[MemberIdx]);
+									}
+								}
+							}
+						}
+					}
+				}
+
 				UE_LOG(LogSeinSquadSystem, Log,
 					TEXT("[SquadInit] %s: complete. Spawned=%d, SkippedNullEntity=%d, SkippedRecursion=%d, SkippedSpawnFail=%d, Leader=%s, BrokerMembers=%d"),
 					*Handle.ToString(), SpawnedCount, SkippedNullEntity, SkippedRecursion, SkippedSpawnFail,
@@ -379,19 +414,52 @@ public:
 					// formation never overlaps a squad with its neighbours. Measured from the origin (the
 					// frame USeinSlotFormation places offsets in) so the bound matches actual placement.
 					FFixedPoint MaxRadius = FFixedPoint::Zero;
-					for (const FSeinEntityHandle& Member : Squad->GetLiveMembers())
+					if (Squad->FormationClass.IsNull())
 					{
-						FFixedVector Offset = FFixedVector::ZeroVector;
-						if (const FSeinSquadMemberComponent* MemberData = World.GetComponent<FSeinSquadMemberComponent>(Member))
+						// Slot formation (default): footprint = farthest authored slot offset + member footprint.
+						for (const FSeinEntityHandle& Member : Squad->GetLiveMembers())
 						{
-							if (Squad->Slots.IsValidIndex(MemberData->SlotIndex))
+							FFixedVector Offset = FFixedVector::ZeroVector;
+							if (const FSeinSquadMemberComponent* MemberData = World.GetComponent<FSeinSquadMemberComponent>(Member))
 							{
-								Offset = Squad->Slots[MemberData->SlotIndex].OffsetTransform.GetLocation();
+								if (Squad->Slots.IsValidIndex(MemberData->SlotIndex))
+								{
+									Offset = Squad->Slots[MemberData->SlotIndex].OffsetTransform.GetLocation();
+								}
+							}
+							const FFixedVector OffsetXY(Offset.X, Offset.Y, FFixedPoint::Zero);
+							const FFixedPoint Reach = OffsetXY.Size() + USeinFormation::GetFootprintRadius(&World, Member);
+							if (Reach > MaxRadius) { MaxRadius = Reach; }
+						}
+					}
+					else
+					{
+						// Non-slot formation: the authored slots DON'T describe the layout. Dry-run the chosen
+						// formation over the live members at a neutral origin / identity facing and take
+						// max(|pos| + member footprint), so the parent formation sizes the squad by where its
+						// members ACTUALLY go (else white space when slots are wider than the shape, overlap when
+						// narrower). Rotation-invariant (a radius), so identity facing is fine. Deterministic.
+						const TArray<FSeinEntityHandle> LiveMembers = Squad->GetLiveMembers();
+						USeinFormation* FpFormation = nullptr;
+						if (UClass* FpClass = Squad->FormationClass.LoadSynchronous())
+						{
+							if (!FpClass->HasAnyClassFlags(CLASS_Abstract)) { FpFormation = GetMutableDefault<USeinFormation>(FpClass); }
+						}
+						if (FpFormation && LiveMembers.Num() > 0)
+						{
+							FSeinOrderTarget FpTarget;
+							FpTarget.Anchor          = FFixedVector::ZeroVector;
+							FpTarget.CurrentCentroid = FFixedVector::ZeroVector;
+							FpTarget.CurrentFacing   = FFixedQuaternion::Identity;
+							const FSeinFormationLayout FpLayout = FpFormation->BuildFormation(&World, LiveMembers, FpTarget);
+							for (int32 m = 0; m < LiveMembers.Num(); ++m)
+							{
+								const FFixedVector P = FpLayout.Positions.IsValidIndex(m) ? FpLayout.Positions[m] : FFixedVector::ZeroVector;
+								const FFixedVector PXY(P.X, P.Y, FFixedPoint::Zero);
+								const FFixedPoint Reach = PXY.Size() + USeinFormation::GetFootprintRadius(&World, LiveMembers[m]);
+								if (Reach > MaxRadius) { MaxRadius = Reach; }
 							}
 						}
-						const FFixedVector OffsetXY(Offset.X, Offset.Y, FFixedPoint::Zero);
-						const FFixedPoint Reach = OffsetXY.Size() + USeinFormation::GetFootprintRadius(&World, Member);
-						if (Reach > MaxRadius) { MaxRadius = Reach; }
 					}
 					Broker->FormationRadius = MaxRadius;
 				}

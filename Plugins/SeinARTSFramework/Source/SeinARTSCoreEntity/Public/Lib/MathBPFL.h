@@ -18,6 +18,7 @@
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
 #include "Types/Vector2D.h"
+#include "Types/FixedCurve.h"
 #include "Types/Rotator.h"
 #include "Types/Quat.h"
 #include "Types/Transform.h"
@@ -62,6 +63,15 @@ public:
 	/** Returns 2*Pi (6.28318530718) */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Math|FixedPoint|Constants", meta = (DisplayName = "Fixed-point Two Pi"))
 	static FFixedPoint TwoPi() { return FFixedPoint::TwoPi; }
+
+	// FFixedCurve - Sampling
+	// ====================================================================================================
+
+	/** Samples a Fixed Curve at an input — piecewise-linear between its keys, clamped past the ends.
+	 *  Deterministic. Use it to read a tuning curve (grip vs. speed, throttle falloff, turn-rate vs.
+	 *  speed, …) inside a movement mode. */
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|Math|Curve", meta = (DisplayName = "Sample Fixed Curve"))
+	static FFixedPoint SeinSampleFixedCurve(const FFixedCurve& Curve, FFixedPoint Input) { return Curve.Sample(Input); }
 	
 	/** Returns Pi/2 (1.57079632679) */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Math|FixedPoint|Constants", meta = (DisplayName = "Fixed-point Half Pi"))

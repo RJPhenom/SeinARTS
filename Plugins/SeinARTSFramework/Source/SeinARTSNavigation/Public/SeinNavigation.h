@@ -125,9 +125,9 @@ public:
 	 *  path. Single entry point for path consumers (BPFL queries,
 	 *  reachability checks, the budgeted
 	 *  `USeinNavigationSubsystem::RequestPath` path). What the subclass
-	 *  produces is its own concern — barebones nav returns a polyline,
-	 *  vehicle-aware nav layers in wall padding / curve fitting / maneuver
-	 *  prepend before returning. */
+	 *  produces is its own concern — barebones nav returns a polyline; a
+	 *  subclass may layer in project-specific post-processing (extra wall
+	 *  padding, maneuver shaping) before returning. */
 	virtual bool FindPath(const FSeinPathRequest& Request, FSeinPath& OutPath) const { OutPath.Clear(); return false; }
 
 	/** Cell-level path query — pure 2D pathfinding on the clearance grid.
@@ -135,9 +135,9 @@ public:
 	 *  segment-derived as straight segments. Used directly by movement
 	 *  modes that don't need curve-aware paths (`USeinBasicMovement`,
 	 *  `USeinBasicUnitMovement`, `USeinInfantryMovement`), and as a
-	 *  building block by vehicle-aware nav subclasses (which call this
-	 *  internally from their `FindPath` override before layering on
-	 *  curve fitting and other post-processing).
+	 *  building block by nav subclasses that call this internally from
+	 *  their `FindPath` override before layering on project-specific
+	 *  post-processing.
 	 *
 	 *  Default: clears OutPath and returns false. The default nav impl
 	 *  (`USeinNavigationAStar`) overrides this with the real 2D
@@ -256,7 +256,8 @@ public:
 	virtual bool FindEscapeNudgeTarget(const FFixedVector& /*AgentPos*/,
 		FFixedVector& /*OutTarget*/, int32& OutTargetWD) const { OutTargetWD = -1; return false; }
 
-	/** Snap an arbitrary world-space point to the nearest walkable location.
+	/** Snap a point to the nearest walkable cell — the PLAIN projection (for the elevation- and
+	 *  occupancy-aware variants, see ProjectPointToNavOnElevation and ProjectPointToNavFree).
 	 *  Returns false if no walkable point is within the nav's reachable region.
 	 *  Default: passes the point through unchanged + returns HasRuntimeData(). */
 	virtual bool ProjectPointToNav(const FFixedVector& WorldPos, FFixedVector& OutProjected) const
@@ -265,9 +266,9 @@ public:
 		return HasRuntimeData();
 	}
 
-	/** Z-biased projection: snap to nearest walkable cell, preferring cells
-	 *  whose stored height is close to `WorldPos.Z`. When the input lands at
-	 *  a platform edge, regular `ProjectPointToNav` would snap to the
+	/** Snap to the nearest walkable cell AT the input's elevation — the elevation-aware step up
+	 *  from ProjectPointToNav, preferring cells whose stored height is close to `WorldPos.Z`. When
+	 *  the input lands at a platform edge, regular `ProjectPointToNav` would snap to the
 	 *  nearest XY passable cell — which on most baked grids is the lower
 	 *  floor cell because cells are indexed by XY only. This Z-biased
 	 *  version expands the search to find a cell at the input's elevation,
@@ -287,9 +288,10 @@ public:
 		return ProjectPointToNav(WorldPos, OutProjected);
 	}
 
-	/** Like ProjectPointToNavOnElevation, but additionally rejects any candidate cell whose centre is
-	 *  within `SelfRadius + AvoidRadii[j]` of `AvoidCentres[j]` — i.e. the nearest walkable cell that is
-	 *  also FREE of the given footprints. The formation layer feeds the already-placed slots as the
+	/** Snap to the nearest walkable cell at the input's elevation that is ALSO FREE of the given
+	 *  footprints — the occupancy-aware step up from ProjectPointToNavOnElevation. Rejects any
+	 *  candidate cell whose centre is within `SelfRadius + AvoidRadii[j]` of `AvoidCentres[j]`,
+	 *  i.e. the nearest walkable free cell. The formation layer feeds the already-placed slots as the
 	 *  avoid set so an off-nav slot snaps onto the inside edge of the play area without piling onto a
 	 *  peer (occupancy-aware nearest-free-cell). `AvoidCentres` / `AvoidRadii` are index-aligned; a
 	 *  missing radius counts as zero. Falls back to a free-but-any-elevation cell, then to a plain

@@ -75,6 +75,8 @@ public:
 	virtual bool GetRandomReachablePoint(const FFixedVector& QueryOrigin, FFixedPoint Radius, FFixedRandom& Rng, FFixedVector& OutPoint) const override;
 	virtual bool IsPassable(const FFixedVector& WorldPos) const override;
 	virtual bool IsWorldPositionClear(const FFixedVector& WorldPos, uint8 AgentNavLayerMask) const override;
+	virtual bool IsPlacementValid(const FFixedVector& CenterWorld, FFixedPoint YawDegrees,
+		const FSeinExtentsShape& Shape, uint8 AgentLayerMask) const override;
 	virtual FFixedPoint GetCellSize() const override { return CellSize; }
 	virtual bool ProjectPointToNav(const FFixedVector& WorldPos, FFixedVector& OutProjected) const override;
 	virtual bool ProjectPointToNavOnElevation(const FFixedVector& WorldPos, FFixedVector& OutProjected) const override;
@@ -166,11 +168,11 @@ protected:
 	FFixedPoint CellSize = FFixedPoint::FromInt(100);
 	FFixedVector Origin = FFixedVector::ZeroVector;
 
-	/** Per-cell passability. 0 = blocked, 255 = impassable, anything else =
-	 *  passable. NOTE: passability is binary today — A* uses octile step
-	 *  distance and does NOT read 1..254 as a cost multiplier, and the bake
-	 *  writes only blocked/passable. Weighted-terrain cost is the unbuilt nav
-	 *  cost-region design item. */
+	/** Per-cell A* routing weight + passability. 0 = blocked, 255 = impassable;
+	 *  1..254 = passable, and the value IS the terrain cost multiplier the A*
+	 *  step cost reads (higher = costlier to cross, so routing prefers cheaper
+	 *  ground). Baked from terrain NavCost. (Dynamic/runtime cost regions are a
+	 *  separate, unbuilt item.) */
 	TArray<uint8> CellCost;
 
 	/** Per-cell center-height (world-space Z) — snapped-to placement for units. */

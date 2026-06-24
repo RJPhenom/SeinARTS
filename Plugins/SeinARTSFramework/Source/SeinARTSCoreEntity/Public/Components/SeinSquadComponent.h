@@ -22,6 +22,7 @@
 #include "SeinSquadComponent.generated.h"
 
 class USeinCommandBrokerResolver;
+class USeinFormation;
 
 /**
  * Whether the squad enters a container as a single entity (one occupant
@@ -190,6 +191,16 @@ USTRUCT(BlueprintType, meta = (SeinDeterministic))
 struct SEINARTSCOREENTITY_API FSeinSquadComponent : public FSeinComponent
 {
 	GENERATED_BODY()
+
+	/** The formation this squad lays its members out with, around the squad's anchor. EMPTY = the slot
+	 *  formation (each member at its authored per-slot OffsetTransform — the default). Point at
+	 *  USeinGridFormation / USeinWedgeFormation / USeinRingFormation / a custom USeinFormation to lay the
+	 *  members out by footprint instead (the per-slot OffsetTransform is then ignored). The slot list is
+	 *  STILL the squad's roster (entity classes, reinforce cost, identity tags) for EVERY formation —
+	 *  only the per-slot OffsetTransform is specific to the slot formation. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Squad",
+		meta = (DisplayName = "Formation Class"))
+	TSoftClassPtr<USeinFormation> FormationClass;
 
 	/** Canonical slot list. Each slot is heterogeneous (own entity class, cost,
 	 *  formation offset). Mutating this array at runtime requires routing

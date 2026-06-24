@@ -4,8 +4,9 @@
  * @brief   Module startup + movement debug toggles.
  *
  *          `Sein.Show.Steering [0|1|on|off]` toggles a custom show flag
- *          (`ShowFlags.SeinSteering`) that gates per-subclass movement
- *          debug viz (carrot points, path tangent lines, etc.). Movement
+ *          (`ShowFlags.SeinSteering`) that gates movement debug viz. Today it
+ *          draws each unit's footprint ring, velocity vector, and avoidance
+ *          steer (carrot / look-ahead / turn-radius viz is planned). Movement
  *          code consumes the flag via
  *          `UE::SeinARTSMovement::IsSteeringShowFlagOnForWorld`.
  *
@@ -427,32 +428,6 @@ namespace
 			const int32 CurIdx = C.Action->GetCurrentWaypointIndex();
 			const FFixedVector AgentPosFixed = C.AgentPosFixed;
 
-			// Diagnostic: dump the path the visualizer is ACTUALLY reading.
-			// Proves whether what the user sees in PIE matches what the planner
-			// returned, or whether something downstream is mutating the path.
-			// Throttled to one log line per Action per second so the spam stays
-			// bounded.
-			{
-				static TMap<TWeakObjectPtr<USeinMoveToAction>, double> LastLogTimeByAction;
-				const double NowSec = FPlatformTime::Seconds();
-				const TWeakObjectPtr<USeinMoveToAction> WeakAction(C.Action);
-				double& LastTime = LastLogTimeByAction.FindOrAdd(WeakAction);
-				if (NowSec - LastTime >= 1.0)
-				{
-					LastTime = NowSec;
-					FString WPList;
-					for (int32 i = 0; i < Path.Waypoints.Num(); ++i)
-					{
-						WPList += FString::Printf(TEXT("[%d](%.0f,%.0f) "),
-							i,
-							Path.Waypoints[i].X.ToFloat(),
-							Path.Waypoints[i].Y.ToFloat());
-					}
-					UE_LOG(LogTemp, Log,
-						TEXT("PATH VIZ DRAW: Action=%p CurIdx=%d N=%d  Waypoints: %s"),
-						C.Action, CurIdx, Path.Waypoints.Num(), *WPList);
-				}
-			}
 
 			// Path cell highlights: yellow cells along the remaining path, blue cell
 			// at the final destination (flag marker).
@@ -954,7 +929,7 @@ void FSeinARTSMovementModule::StartupModule()
 	{
 		GShowSteeringCmd = IConsoleManager::Get().RegisterConsoleCommand(
 			TEXT("Sein.Show.Steering"),
-			TEXT("Toggle ShowFlags.SeinSteering across all viewports (custom show flag). When on, movement subclasses draw per-unit debug viz (carrot points, path tangent lines, etc.). Usage: Sein.Show.Steering [0|1|on|off]."),
+			TEXT("Toggle ShowFlags.SeinSteering across all viewports (custom show flag). When on, movement draws per-unit debug viz: footprint ring, velocity, and avoidance steer. Usage: Sein.Show.Steering [0|1|on|off]."),
 			FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&OnShowSteeringCommand),
 			ECVF_Default);
 	}

@@ -1,31 +1,28 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinMovementDeterminismValidator.h
- * @brief   Data-validation pass for movement-mode Blueprints (USeinMovement subclasses).
- *          Walks the BP's graphs and WARNS on any function call whose target isn't
- *          whitelisted as deterministic — neither the function nor its owning class carries
- *          the `SeinDeterministic` meta. This is the guard for the Tier-2 power route, where
- *          a non-deterministic node in a sim-tick graph would desync lockstep.
- *
- *          Auto-gathered at editor start (UEditorValidatorBase); runs on save and on
- *          "Validate Assets". Warnings (not hard errors) for V1 — escalatable to errors
- *          (AssetFails) once the whitelist coverage is confirmed in practice.
+ * @brief   Determinism validator for movement-mode Blueprints (USeinMovement subclasses). Thin scope +
+ *          messaging over the shared USeinBlueprintDeterminismValidator, which owns the graph walk
+ *          (direct + macro recursion), the deterministic-call whitelist, and the RNG denylist. Opts into
+ *          blocking errors via Project Settings → SeinARTS → Movement (bMovementDeterminismIsError).
  */
 
 #pragma once
 
 #include "CoreMinimal.h"
-#include "EditorValidatorBase.h"
+#include "Validators/SeinBlueprintDeterminismValidator.h"
 #include "SeinMovementDeterminismValidator.generated.h"
 
+class UBlueprint;
+
 UCLASS()
-class USeinMovementDeterminismValidator : public UEditorValidatorBase
+class USeinMovementDeterminismValidator : public USeinBlueprintDeterminismValidator
 {
 	GENERATED_BODY()
 
-public:
-	USeinMovementDeterminismValidator();
-
-	virtual bool CanValidateAsset_Implementation(const FAssetData& InAssetData, UObject* InObject, FDataValidationContext& InContext) const override;
-	virtual EDataValidationResult ValidateLoadedAsset_Implementation(const FAssetData& InAssetData, UObject* InAsset, FDataValidationContext& Context) override;
+protected:
+	virtual bool IsTargetBlueprint(UBlueprint* Blueprint) const override;
+	virtual FText GetAssetKindLabel() const override;
+	virtual FText GetToolkitHintText() const override;
+	virtual bool ShouldEscalateToError() const override;
 };

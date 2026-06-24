@@ -12,7 +12,9 @@
 #include "Actor/SeinActor.h"
 #include "Abilities/SeinAbility.h"
 #include "Effects/SeinEffectBlueprint.h"
+#include "Formations/SeinFormationBlueprint.h"
 #include "Widgets/SeinWidgetBlueprint.h"
+#include "Util/SeinMovementTuningExport.h"  // IsMovementModeBlueprint (path-resolves USeinMovement; no Movement link dep)
 #include "Engine/Blueprint.h"
 #include "Engine/Texture2D.h"
 #include "TextureResource.h"
@@ -96,6 +98,8 @@ const FTexture* USeinBlueprintThumbnailRenderer::GetIconResource(ESeinAssetType 
 	case ESeinAssetType::Ability:   TextureName = FName(TEXT("SeinAbilityIcon92"));   break;
 	case ESeinAssetType::Effect:    TextureName = FName(TEXT("SeinEffectIcon92"));    break;
 	case ESeinAssetType::Widget:    TextureName = FName(TEXT("SeinWidgetIcon92"));    break;
+	case ESeinAssetType::Formation: TextureName = FName(TEXT("SeinFormationIcon92")); break;
+	case ESeinAssetType::Movement:  TextureName = FName(TEXT("SeinMovementIcon92"));  break;
 	default: return nullptr;
 	}
 
@@ -129,6 +133,11 @@ USeinBlueprintThumbnailRenderer::ESeinAssetType USeinBlueprintThumbnailRenderer:
 		return ESeinAssetType::Effect;
 	}
 
+	if (Blueprint->IsA<USeinFormationBlueprint>())
+	{
+		return ESeinAssetType::Formation;
+	}
+
 	if (Blueprint->ParentClass->IsChildOf(ASeinActor::StaticClass()))
 	{
 		return ESeinAssetType::Unit;
@@ -137,6 +146,13 @@ USeinBlueprintThumbnailRenderer::ESeinAssetType USeinBlueprintThumbnailRenderer:
 	if (Blueprint->ParentClass->IsChildOf(USeinAbility::StaticClass()))
 	{
 		return ESeinAssetType::Ability;
+	}
+
+	// Movement modes are plain UBlueprints parented to USeinMovement — detected via the
+	// canonical predicate (resolves USeinMovement by path, so no Movement link dependency).
+	if (SeinMovementTuning::IsMovementModeBlueprint(Blueprint))
+	{
+		return ESeinAssetType::Movement;
 	}
 
 	return ESeinAssetType::None;
@@ -150,6 +166,8 @@ FLinearColor USeinBlueprintThumbnailRenderer::GetBarColor(ESeinAssetType Type)
 	case ESeinAssetType::Ability:   return FLinearColor::FromSRGBColor(FColor::FromHex(TEXT("FF0000"))); // #FF0000
 	case ESeinAssetType::Effect:    return FLinearColor::FromSRGBColor(FColor::FromHex(TEXT("FFFF00"))); // #FFFF00
 	case ESeinAssetType::Widget:    return FLinearColor::FromSRGBColor(FColor::FromHex(TEXT("0095FF"))); // #0095FF
+	case ESeinAssetType::Formation: return FLinearColor::FromSRGBColor(FColor::FromHex(TEXT("3CB371"))); // #3CB371
+	case ESeinAssetType::Movement:  return FLinearColor::FromSRGBColor(FColor::FromHex(TEXT("FF8C00"))); // #FF8C00
 	default:                        return FLinearColor::Transparent;
 	}
 }

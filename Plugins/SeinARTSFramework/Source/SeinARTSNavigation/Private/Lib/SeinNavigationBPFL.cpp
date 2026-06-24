@@ -6,6 +6,7 @@
 #include "Lib/SeinNavigationBPFL.h"
 #include "SeinNavigation.h"
 #include "SeinNavigationSubsystem.h"
+#include "Settings/PluginSettings.h"
 #include "Types/Random.h"
 
 FSeinPath USeinNavigationBPFL::SeinFindPath(const UObject* WorldContextObject, FFixedVector Start, FFixedVector End, FSeinEntityHandle Requester, FGameplayTagContainer BlockedTerrainTags)
@@ -45,4 +46,38 @@ bool USeinNavigationBPFL::SeinNavRaycast(const UObject* WorldContextObject, FFix
 	USeinNavigation* Nav = USeinNavigationSubsystem::GetNavigationForWorld(WorldContextObject);
 	if (!Nav) return false;
 	return Nav->NavRaycast(From, To, OutHitPoint);
+}
+
+bool USeinNavigationBPFL::SeinGetCellHeightAt(const UObject* WorldContextObject, FFixedVector WorldPos, bool bWalkableOnly, FFixedPoint& OutHeight)
+{
+	OutHeight = WorldPos.Z;
+	USeinNavigation* Nav = USeinNavigationSubsystem::GetNavigationForWorld(WorldContextObject);
+	if (!Nav) return false;
+	return Nav->GetCellHeightAt(WorldPos, OutHeight, bWalkableOnly);
+}
+
+int32 USeinNavigationBPFL::SeinGetTerrainTypeAt(const UObject* WorldContextObject, FFixedVector WorldPos)
+{
+	USeinNavigation* Nav = USeinNavigationSubsystem::GetNavigationForWorld(WorldContextObject);
+	return Nav ? Nav->GetTerrainTypeAt(WorldPos) : 0;
+}
+
+FGameplayTag USeinNavigationBPFL::SeinGetTerrainTagAt(const UObject* WorldContextObject, FFixedVector WorldPos)
+{
+	USeinNavigation* Nav = USeinNavigationSubsystem::GetNavigationForWorld(WorldContextObject);
+	if (!Nav) return FGameplayTag();
+	return GetDefault<USeinARTSCoreSettings>()->GetTerrainTag(Nav->GetTerrainTypeAt(WorldPos));
+}
+
+bool USeinNavigationBPFL::SeinIsPositionClear(const UObject* WorldContextObject, FFixedVector WorldPos)
+{
+	USeinNavigation* Nav = USeinNavigationSubsystem::GetNavigationForWorld(WorldContextObject);
+	if (!Nav) return false;
+	return Nav->IsWorldPositionClear(WorldPos, /*AgentNavLayerMask*/ 0);
+}
+
+FFixedPoint USeinNavigationBPFL::SeinGetCellSize(const UObject* WorldContextObject)
+{
+	USeinNavigation* Nav = USeinNavigationSubsystem::GetNavigationForWorld(WorldContextObject);
+	return Nav ? Nav->GetCellSize() : FFixedPoint::Zero;
 }

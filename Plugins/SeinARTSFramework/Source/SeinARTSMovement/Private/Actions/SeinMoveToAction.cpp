@@ -267,7 +267,7 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		// we've confirmed the diagnosis from the logs.
 		if (Movement->GetMinTurnRadius(MoveComp) > FFixedPoint::Zero && Path.Segments.Num() == 0)
 		{
-			UE_LOG(LogSeinMove, Warning,
+			UE_LOG(LogSeinMove, Verbose,
 				TEXT("MoveToAction initial PlanPath: vehicle path has 0 drivable "
 				     "segments but is being committed (entity %s, dest=(%.1f,%.1f), "
 				     "waypoints=%d, bIsValid=%d, bIsPartial=%d) — expect the "

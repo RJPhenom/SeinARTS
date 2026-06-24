@@ -12,6 +12,8 @@
 #include "Actor/SeinActorBlueprint.h"
 #include "Abilities/SeinAbilityBlueprint.h"
 #include "Effects/SeinEffectBlueprint.h"
+#include "Formations/SeinFormationBlueprint.h"
+#include "Balance/SeinBalanceProfile.h"
 
 #define LOCTEXT_NAMESPACE "SeinARTSEditor"
 
@@ -64,6 +66,40 @@ UClass* FAssetTypeActions_SeinEffectBlueprint::GetSupportedClass() const
 uint32 FAssetTypeActions_SeinEffectBlueprint::GetCategories()
 {
 	return EAssetTypeCategories::Basic | FSeinARTSEditorModule::GetAssetCategoryBit();
+}
+
+// ==================== Formation (SeinFormationBlueprint) ====================
+
+FText FAssetTypeActions_SeinFormationBlueprint::GetName() const
+{
+	return LOCTEXT("SeinFormationBlueprintName", "Formation Pattern");
+}
+
+UClass* FAssetTypeActions_SeinFormationBlueprint::GetSupportedClass() const
+{
+	return USeinFormationBlueprint::StaticClass();
+}
+
+uint32 FAssetTypeActions_SeinFormationBlueprint::GetCategories()
+{
+	return EAssetTypeCategories::Basic | FSeinARTSEditorModule::GetAssetCategoryBit();
+}
+
+// ==================== Balance Profile (USeinBalanceProfile) ====================
+
+FText FAssetTypeActions_SeinBalanceProfile::GetName() const
+{
+	return LOCTEXT("SeinBalanceProfileName", "Balance Data");
+}
+
+UClass* FAssetTypeActions_SeinBalanceProfile::GetSupportedClass() const
+{
+	return USeinBalanceProfile::StaticClass();
+}
+
+uint32 FAssetTypeActions_SeinBalanceProfile::GetCategories()
+{
+	return FSeinARTSEditorModule::GetAssetCategoryBit();
 }
 
 #undef LOCTEXT_NAMESPACE

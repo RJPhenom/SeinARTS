@@ -55,10 +55,13 @@ struct SEINARTSNAVIGATION_API FSeinPathRequest
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Navigation|Path")
 	FSeinEntityHandle Requester;
 
-	/** Terrain tags this agent treats as impassable. RESERVED / not yet honored
-	 *  by the shipped USeinNavigationAStar — there is no per-tag static cost or
-	 *  filter today (see the unbuilt nav cost-region work); a custom
-	 *  USeinNavigation may consume it. Empty = no filter. */
+	/** Terrain classes this agent treats as impassable. The shipped USeinNavigationAStar
+	 *  honors this as a HARD filter: cells whose baked terrain type maps to any listed tag
+	 *  are excluded from both the A* topology and the line-of-sight smoother for this
+	 *  request (e.g. an amphibious-only unit that lists "Water"). Matching is hierarchical —
+	 *  listing a parent tag bars its child types. Pass/block only; there is no per-tag soft
+	 *  routing COST (that is the separate, unbuilt cost-region work). A custom
+	 *  USeinNavigation may interpret it differently. Empty = no filter. */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Navigation|Path")
 	FGameplayTagContainer BlockedTerrainTags;
 
@@ -71,38 +74,34 @@ struct SEINARTSNAVIGATION_API FSeinPathRequest
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Navigation|Path")
 	uint8 AgentNavLayerMask = 0xFF;
 
-	/** Agent collision footprint radius in world units. The pathfinder uses
-	 *  this as a "preferred clearance" hint — paths are biased toward routes
-	 *  that keep this many cells of breathing room from blocked cells. Big
-	 *  vehicles get wider routes through open corridors; infantry (radius
-	 *  near 0) ignores the bias and takes the shortest path. The exact
-	 *  cost-shaping depends on the nav impl; the default A* impl converts
-	 *  this to integer cell-clearance and adds a per-cell penalty
-	 *  proportional to how many cells short of the preferred clearance each
-	 *  candidate cell is. Default 0 disables the bias (legacy behavior —
-	 *  paths hug walls). MoveToAction populates from
-	 *  FSeinMovementData::FootprintRadius at request time. */
+	/** Agent body radius in world units. The default A* converts this to a whole-cell
+	 *  clearance requirement and runs the search in the unit's CONFIGURATION SPACE: only
+	 *  cells where the body physically fits (WallDistance >= ceil(radius / CellSize + 0.5)
+	 *  + AgentWallPaddingCells) are expanded, so big vehicles route through wider corridors
+	 *  while infantry (radius near 0) take the shortest line. It is a hard topology gate,
+	 *  not a soft cost — a unit is never routed through a gap its body can't clear (with a
+	 *  carve-out that lets a unit escape a too-tight START cell, and stop AT an adjacent
+	 *  destination). Exact treatment is impl-defined. Default 0 = no clearance requirement
+	 *  (paths may hug walls). MoveToAction populates this from the unit's resolved footprint
+	 *  (Extents max bounding radius, else the Navigation Component's Fallback Footprint
+	 *  Radius) at request time. */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Navigation|Path")
 	FFixedPoint AgentFootprintRadius;
 
-	/** Extra cells of wall clearance (on top of the agent's footprint) the
-	 *  planner should keep the path away from any wall. Best-effort — each
-	 *  smoothed-polyline waypoint is shifted along the gradient of the nav's
-	 *  WallDistance field until it sits at least `ceil(AgentFootprintRadius
-	 *  / CellSize) + AgentWallPaddingCells` from the nearest wall, or the
-	 *  gradient saturates (in narrow corridors waypoints land on the local
-	 *  WallDistance maximum, i.e. the corridor centerline). Never fails the
-	 *  path.
+	/** Extra cells of wall clearance (on top of the agent's footprint) the planner keeps
+	 *  the path away from walls. Feeds the configuration-space clearance gate alongside
+	 *  the footprint (Required = ceil(AgentFootprintRadius / CellSize + 0.5) +
+	 *  AgentWallPaddingCells), so raising it both tightens which cells A* will route
+	 *  through AND pushes smoothed waypoints further from walls along the nav's
+	 *  WallDistance gradient. Best-effort on the push (in narrow corridors waypoints
+	 *  settle on the corridor centerline); never fails the path.
 	 *
-	 *  Capped at the planner's BFS expansion radius (default 64 cells);
-	 *  values above the cap saturate at the cap (the WallDistance field
-	 *  itself reads as the cap for cells further than that from any wall).
-	 *
-	 *  MoveToAction populates from `FSeinMovementData::WallPaddingCells`
-	 *  (default 1 on the data struct). Applies to the destination waypoint
-	 *  too: an order adjacent to a wall stops the unit N cells out in open
-	 *  space. Abilities that want pinpoint stops (Garrison / Attack /
-	 *  interact) zero this field on their move data so the push is a no-op. */
+	 *  Capped at the planner's BFS expansion radius (default 64 cells); values above the
+	 *  cap saturate at it. Applies to the destination waypoint too: an order adjacent to
+	 *  a wall stops the unit N cells out in open space. MoveToAction populates this from
+	 *  the Navigation Component's Wall Padding (default 0). Abilities that want pinpoint
+	 *  stops (Garrison / Attack / interact) zero it on their move data so the push is a
+	 *  no-op. */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Navigation|Path")
 	int32 AgentWallPaddingCells = 0;
 
@@ -167,6 +166,10 @@ struct SEINARTSNAVIGATION_API FSeinPath
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Navigation|Path")
 	TArray<FSeinPathSegment> Segments;
 
+	/** Total planar (XY) world-space length of the path — the sum of segment
+	 *  lengths, set by `DeriveSegmentsFromWaypoints` when the path is committed.
+	 *  Use it to compare routes by travel distance (not the waypoint count).
+	 *  Does NOT include terrain cost weighting. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Navigation|Path")
 	FFixedPoint TotalCost;
 
@@ -200,6 +203,7 @@ struct SEINARTSNAVIGATION_API FSeinPath
 	void DeriveSegmentsFromWaypoints()
 	{
 		Segments.Reset();
+		TotalCost = FFixedPoint::Zero;
 		const int32 N = Waypoints.Num();
 		if (N < 2) return;
 		Segments.Reserve(N - 1);
@@ -209,6 +213,11 @@ struct SEINARTSNAVIGATION_API FSeinPath
 			Seg.Type = ESeinPathSegmentType::Straight;
 			Seg.From = Waypoints[i];
 			Seg.To   = Waypoints[i + 1];
+			// Accumulate planar (XY) length — the travel-distance convention the
+			// mover uses (Z is terrain-follow, not travel).
+			FFixedVector Delta = Waypoints[i + 1] - Waypoints[i];
+			Delta.Z = FFixedPoint::Zero;
+			TotalCost += Delta.Size();
 			Segments.Add(MoveTemp(Seg));
 		}
 	}

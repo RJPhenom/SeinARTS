@@ -17,6 +17,8 @@
 #include "Abilities/SeinTargeterTypes.h"
 #include "SeinBrokerTypes.generated.h"
 
+class USeinFormation;
+
 /**
  * One queued order on a broker. Shift-chained dispatches append to
  * FSeinCommandBrokerData::OrderQueue; each is consumed in FIFO order as the
@@ -302,7 +304,7 @@ struct SEINARTSCOREENTITY_API FSeinFormationLayout
 	GENERATED_BODY()
 
 	/** Per-member world positions, index-aligned with the input Members array. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker|Formation")
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker|Formation")
 	TArray<FFixedVector> Positions;
 
 	/** Per-member footprint radius (world units), index-aligned with Positions —
@@ -310,19 +312,19 @@ struct SEINARTSCOREENTITY_API FSeinFormationLayout
 	 *  preview can size each dot to the unit's footprint (preview === commit). May
 	 *  be empty when a formation doesn't size by footprint; consumers then fall back
 	 *  to a uniform dot size. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker|Formation")
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker|Formation")
 	TArray<FFixedPoint> Radii;
 
 	/** Formation's facing at the anchor — the direction the front rank faces.
 	 *  Always rotated to point from the centroid toward the move target (even a
 	 *  straight 180° reverse): the formation pivots to face where it's going. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker|Formation")
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker|Formation")
 	FFixedQuaternion Facing;
 
 	/** Per-member facing, index-aligned with Positions — position-DEPENDENT (a ring faces each member
 	 *  radially out, etc.). Filled by the resolver after layout from the formation's FacingMode. Empty →
 	 *  consumers fall back to the single `Facing`. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker|Formation")
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker|Formation")
 	TArray<FFixedQuaternion> Facings;
 };
 
@@ -364,6 +366,12 @@ struct SEINARTSCOREENTITY_API FSeinOrderTarget
 	 *  formation. The resolver maps this tag to a USeinFormation class. */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Formation")
 	FGameplayTag FormationTag;
+
+	/** Optional explicit formation CLASS override. When set, the resolver uses THIS formation directly
+	 *  (bypassing FormationTag / FormationsByTag) — e.g. a squad lays its members out with its authored
+	 *  FSeinSquadComponent::FormationClass. Empty → resolve via FormationTag as usual. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Formation")
+	TSoftClassPtr<USeinFormation> FormationClass;
 
 	/** Formation's CURRENT centroid (source). Filled by the resolver at solve time
 	 *  from broker data — NOT serialized on the order. */

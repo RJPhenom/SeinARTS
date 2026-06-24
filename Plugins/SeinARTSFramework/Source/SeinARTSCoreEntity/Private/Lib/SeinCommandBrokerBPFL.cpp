@@ -336,13 +336,15 @@ FSeinFormationLayout USeinCommandBrokerBPFL::SeinComputeFormationPreview(
 		const FFixedVector SquadAnchor =
 			ElementPositions.IsValidIndex(s) ? ElementPositions[s] : TargetLocation;
 
-		FSeinOrderTarget SquadTarget;
-		SquadTarget.Anchor          = SquadAnchor;
-		SquadTarget.GuidePoints     = ProjectedGuide;   // forwarded for completeness; SlotFormation uses CurrentFacing
-		SquadTarget.CurrentCentroid = Centroid;
-		// Facing handed down by the PARENT formation (this squad's element facing): radial in a ring,
-		// drag-perp in a box, move-dir on a click. SlotFormation uses it directly. preview === commit.
-		SquadTarget.CurrentFacing   = ElementFacings.IsValidIndex(s) ? ElementFacings[s] : Facing;
+		// Inner-layout target via the shared constructor: the squad's members around the anchor the parent
+		// formation gave it, in the squad's OWN compact shape. By construction it carries NO gesture
+		// guide/tag, so the drag can't re-expand each squad (which overlapped them into one). The PARENT
+		// element facing (radial in a ring, drag-perp in a box, move-dir on a click) is handed down here.
+		// SAME constructor the commit (USeinSquadDispatchResolver::ResolveDispatch) uses → preview === commit.
+		const FFixedQuaternion SquadFacing = ElementFacings.IsValidIndex(s) ? ElementFacings[s] : Facing;
+		const FSeinOrderTarget SquadTarget = USeinFormation::MakeInnerLayoutTarget(
+			SquadAnchor, Centroid, SquadFacing,
+			SquadData ? SquadData->FormationClass : TSoftClassPtr<USeinFormation>());
 		const FSeinFormationLayout SquadLayout = Resolver->ResolveFormationLayout(
 			World, SquadMembers, SquadTarget, bReassignLateral, bReassignDepth);
 

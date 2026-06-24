@@ -1,22 +1,23 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinBasicUnitMovement.h
- * @brief   The RTS-default ground mover: seek + arrive along the path with
- *          kinematic arrival braking and rotation toward velocity direction.
+ * @brief   The RTS-default ground mover (StarCraft / AoE2 feel): seek + arrive
+ *          along the path with kinematic arrival braking, facing the direction
+ *          of travel at TurnRate.
  *
- *          The StarCraft / AoE2 feel — units face the direction they're walking
- *          at TurnRate. Builds on USeinBasicMovement (raw transform-along-path)
- *          by adding face-velocity turning and a kinematic speed ramp. The
- *          concrete vehicle modes (Wheeled / Tracked / Hover / Flight) live in
- *          the SeinARTSMovementPlus extension, not here.
+ *          As of the BP-authoring refactor this is a friendly-named MARKER class —
+ *          the RTS loop it used to implement now lives in the base
+ *          USeinMovement::BP_Tick_Implementation (the BP-authoring default), so
+ *          selecting it is equivalent to the framework default. Kept as a clear
+ *          picker entry and the natural parent for BP modes that want the RTS feel
+ *          as a starting point. The concrete vehicle modes (Wheeled / Tracked /
+ *          Hover / Flight) live in the SeinARTSMovementPlus extension.
  *
- *          Key differences from Basic:
+ *          The RTS feel, for reference (now provided by the base loop):
  *            - Kinematic arrival: brakes to a stop at the acceptance ring
- *              (v² = 2·a·d) instead of moving at a flat top speed.
- *            - Rotates the entity to face actual movement delta each tick,
- *              clamped by `MoveData.TurnRate`.
- *            - Persists `MoveData.Velocity` from the actual moved delta
- *              (non-strafing convention).
+ *              (v² = 2·a·d) instead of a flat top speed.
+ *            - Faces the actual movement delta each tick, clamped by TurnRate.
+ *            - Persists Velocity from the moved delta (non-strafing).
  */
 
 #pragma once

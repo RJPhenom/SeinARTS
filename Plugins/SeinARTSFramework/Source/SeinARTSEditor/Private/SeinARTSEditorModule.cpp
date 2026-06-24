@@ -30,6 +30,7 @@
 #include "Actor/SeinActorBlueprint.h"
 #include "Abilities/SeinAbilityBlueprint.h"
 #include "Effects/SeinEffectBlueprint.h"
+#include "Formations/SeinFormationBlueprint.h"
 #include "Widgets/SeinWidgetBlueprint.h"
 #include "WidgetBlueprint.h"
 #include "KismetCompiler.h"
@@ -42,6 +43,9 @@
 #include "Details/SeinAutoTagDetails.h"
 #include "Details/SeinARTSCoreSettingsDetails.h"
 #include "Details/SeinMovementModeDetails.h"
+#include "Details/SeinBalanceProfileDetails.h"
+#include "Balance/SeinBalanceProfile.h"
+#include "Details/SeinSquadSlotDetails.h"
 // Volume details panels live in their owning system modules (SeinARTSNavigation
 // + SeinARTSFogOfWar), not here — preserves the "each subsystem self-contained"
 // pattern. Each module registers its own customization at StartupModule under
@@ -191,6 +195,10 @@ void FSeinARTSEditorModule::StartupModule()
 		USeinEffectBlueprint::StaticClass(),
 		USeinBlueprintThumbnailRenderer::StaticClass()
 	);
+	ThumbnailMgr.RegisterCustomRenderer(
+		USeinFormationBlueprint::StaticClass(),
+		USeinBlueprintThumbnailRenderer::StaticClass()
+	);
 	// Sein UDSes (Right-click → Component) get the SeinComponentIcon92 tile.
 	// The renderer falls through to the engine default for non-Sein UDSes.
 	ThumbnailMgr.RegisterCustomRenderer(
@@ -245,6 +253,11 @@ void FSeinARTSEditorModule::StartupModule()
 			TEXT("SeinCollisionObjectType"),
 			FOnGetPropertyTypeCustomizationInstance::CreateStatic(&FSeinCollisionObjectTypeDetails::MakeInstance));
 
+		// Squad slot — hide the per-slot OffsetTransform when the squad's chosen formation isn't slot-based.
+		PropertyModule.RegisterCustomPropertyTypeLayout(
+			TEXT("SeinSquadSlot"),
+			FOnGetPropertyTypeCustomizationInstance::CreateStatic(&FSeinSquadSlotDetails::MakeInstance));
+
 		// Auto-tag-generation customizers — per-BP "Reset to Auto" buttons +
 		// settings-page Regenerate buttons. See SeinAutoTagDetails.h.
 		PropertyModule.RegisterCustomClassLayout(
@@ -267,6 +280,13 @@ void FSeinARTSEditorModule::StartupModule()
 		PropertyModule.RegisterCustomClassLayout(
 			FName(TEXT("SeinMovement")),
 			FOnGetDetailCustomizationInstance::CreateStatic(&FSeinMovementModeDetails::MakeInstance));
+
+		// Balance Profile — Preview / Gather / Push action buttons. Keyed by the
+		// concrete class; the editor module depends on SeinARTSCoreEntity, so no
+		// name-string indirection is needed (unlike SeinMovement above).
+		PropertyModule.RegisterCustomClassLayout(
+			USeinBalanceProfile::StaticClass()->GetFName(),
+			FOnGetDetailCustomizationInstance::CreateStatic(&FSeinBalanceProfileDetails::MakeInstance));
 
 		// Legacy `FSeinVisionComponent` / `FSeinExtentsComponent` / `FSeinMovementData`
 		// details customizations (nav-layer-mask combo, etc.) were excised in
@@ -320,10 +340,12 @@ void FSeinARTSEditorModule::ShutdownModule()
 		PropertyModule.UnregisterCustomPropertyTypeLayout(TEXT("InstancedStruct"));
 		PropertyModule.UnregisterCustomPropertyTypeLayout(TEXT("SeinVisionStamp"));
 		PropertyModule.UnregisterCustomPropertyTypeLayout(TEXT("SeinIdentityComponent"));
+		PropertyModule.UnregisterCustomPropertyTypeLayout(TEXT("SeinSquadSlot"));
 		PropertyModule.UnregisterCustomClassLayout(USeinAbility::StaticClass()->GetFName());
 		PropertyModule.UnregisterCustomClassLayout(USeinEffect::StaticClass()->GetFName());
 		PropertyModule.UnregisterCustomClassLayout(USeinARTSCoreSettings::StaticClass()->GetFName());
 		PropertyModule.UnregisterCustomClassLayout(FName(TEXT("SeinMovement")));
+		PropertyModule.UnregisterCustomClassLayout(USeinBalanceProfile::StaticClass()->GetFName());
 		// Volume class-layouts unregistered by their owning system modules.
 	}
 
@@ -395,6 +417,8 @@ void FSeinARTSEditorModule::RegisterAssetTypeActions()
 	RegisterAction(MakeShared<FAssetTypeActions_SeinActorBlueprint>());
 	RegisterAction(MakeShared<FAssetTypeActions_SeinAbilityBlueprint>());
 	RegisterAction(MakeShared<FAssetTypeActions_SeinEffectBlueprint>());
+	RegisterAction(MakeShared<FAssetTypeActions_SeinFormationBlueprint>());
+	RegisterAction(MakeShared<FAssetTypeActions_SeinBalanceProfile>());
 }
 
 void FSeinARTSEditorModule::UnregisterAssetTypeActions()

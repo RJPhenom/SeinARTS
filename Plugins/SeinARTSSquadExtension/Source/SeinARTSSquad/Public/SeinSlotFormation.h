@@ -29,4 +29,8 @@ public:
 		USeinWorldSubsystem* World,
 		const TArray<FSeinEntityHandle>& Members,
 		const FSeinOrderTarget& Target) override;
+
+	/** The slot formation IS the authored-slot-offset layout — so a squad using it shows its per-slot
+	 *  OffsetTransform authoring (the editor's Details customization keys off this). */
+	virtual bool UsesAuthoredSlotOffsets_Implementation() const override { return true; }
 };

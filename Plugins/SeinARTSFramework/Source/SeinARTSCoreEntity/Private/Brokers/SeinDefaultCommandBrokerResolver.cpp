@@ -259,7 +259,18 @@ FSeinFormationLayout USeinDefaultCommandBrokerResolver::ResolveFormationLayout_I
 {
 	FSeinFormationLayout Layout;
 	ESeinFormationFacing FacingMode = ESeinFormationFacing::Uniform;
-	if (USeinFormation* Formation = ResolveFormation(Target.FormationTag))
+	// An explicit class override (e.g. a squad's authored FormationClass) wins over the tag map; else
+	// resolve the gesture FormationTag via FormationsByTag / DefaultFormationClass as usual.
+	USeinFormation* Formation = nullptr;
+	if (!Target.FormationClass.IsNull())
+	{
+		if (UClass* OverrideClass = Target.FormationClass.LoadSynchronous())
+		{
+			if (!OverrideClass->HasAnyClassFlags(CLASS_Abstract)) { Formation = GetMutableDefault<USeinFormation>(OverrideClass); }
+		}
+	}
+	if (!Formation) { Formation = ResolveFormation(Target.FormationTag); }
+	if (Formation)
 	{
 		// Pluggable formation owns positions + facing. The exact call the preview makes.
 		FacingMode = Formation->FacingMode;

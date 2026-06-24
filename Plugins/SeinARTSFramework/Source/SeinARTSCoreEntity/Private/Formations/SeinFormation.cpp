@@ -428,6 +428,22 @@ void USeinFormation::ProjectPositionsToNavigable(
 	}
 }
 
+FSeinOrderTarget USeinFormation::MakeInnerLayoutTarget(
+	const FFixedVector& Anchor,
+	const FFixedVector& Centroid,
+	const FFixedQuaternion& Facing,
+	const TSoftClassPtr<USeinFormation>& FormationClass)
+{
+	FSeinOrderTarget Target;
+	Target.Anchor          = Anchor;
+	Target.CurrentCentroid = Centroid;
+	Target.CurrentFacing   = Facing;
+	Target.FormationClass  = FormationClass;
+	// No GuidePoints and no FormationTag, BY CONSTRUCTION — the parent formation owns the gesture; the
+	// inner layout keeps its own compact shape. Do NOT add them here or at call sites.
+	return Target;
+}
+
 FSeinFormationLayout USeinFormation::BuildFormation_Implementation(
 	USeinWorldSubsystem* World,
 	const TArray<FSeinEntityHandle>& Members,

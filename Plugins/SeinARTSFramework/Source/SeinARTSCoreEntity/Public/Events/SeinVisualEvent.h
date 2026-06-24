@@ -73,6 +73,11 @@ enum class ESeinVisualEventType : uint8
 	CollisionOverlapBegin,
 	/** Two colliders stopped overlapping (separated, or one was destroyed). */
 	CollisionOverlapEnd,
+
+	/** A render cue emitted by a movement mode (skid, dust, engine rev, …). The specific cue is
+	 *  designer-chosen via `Tag` — the framework does not enumerate cues. `PrimaryEntity` = the unit,
+	 *  `Location` = where it happens, `Value` = a free payload (turn sharpness, slip amount, …). */
+	MovementCue,
 };
 
 /**
@@ -247,6 +252,10 @@ struct SEINARTSCOREENTITY_API FSeinVisualEvent
 
 	/** Create a CollisionOverlapEnd event — counterpart to begin. */
 	static FSeinVisualEvent MakeCollisionOverlapEndEvent(FSeinEntityHandle A, FSeinEntityHandle B);
+
+	/** Create a MovementCue event — a designer-tagged render cue from a movement mode. `CueTag` is the
+	 *  specific cue, `Value` a free payload, `Location` where it happens. */
+	static FSeinVisualEvent MakeMovementCueEvent(FSeinEntityHandle Entity, FGameplayTag CueTag, FFixedPoint Value, FFixedVector Location);
 };
 
 /**

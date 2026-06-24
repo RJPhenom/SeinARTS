@@ -12,6 +12,7 @@
 
 #include "CoreMinimal.h"
 #include "AssetTypeActions/AssetTypeActions_Blueprint.h"
+#include "AssetTypeActions_Base.h"
 
 /**
  * Asset type actions for Unit (SeinActor) Blueprints.
@@ -48,6 +49,33 @@ class FAssetTypeActions_SeinEffectBlueprint : public FAssetTypeActions_Blueprint
 public:
 	virtual FText GetName() const override;
 	virtual FColor GetTypeColor() const override { return FColor::FromHex(TEXT("FFFF00")); }
+	virtual UClass* GetSupportedClass() const override;
+	virtual uint32 GetCategories() override;
+};
+
+/**
+ * Asset type actions for Formation (USeinFormation) Blueprints.
+ * Color: #3CB371 (Green)
+ */
+class FAssetTypeActions_SeinFormationBlueprint : public FAssetTypeActions_Blueprint
+{
+public:
+	virtual FText GetName() const override;
+	virtual FColor GetTypeColor() const override { return FColor::FromHex(TEXT("3CB371")); }
+	virtual UClass* GetSupportedClass() const override;
+	virtual uint32 GetCategories() override;
+};
+
+/**
+ * Asset type actions for the Balance Profile data asset (USeinBalanceProfile).
+ * Not a Blueprint type — derives from FAssetTypeActions_Base.
+ * Color: #B266FF (Purple)
+ */
+class FAssetTypeActions_SeinBalanceProfile : public FAssetTypeActions_Base
+{
+public:
+	virtual FText GetName() const override;
+	virtual FColor GetTypeColor() const override { return FColor::FromHex(TEXT("B266FF")); }
 	virtual UClass* GetSupportedClass() const override;
 	virtual uint32 GetCategories() override;
 };

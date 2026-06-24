@@ -40,13 +40,27 @@ class USeinWorldSubsystem;
  * (Rows over-allocates so the big-box pass always fits — callers centre on the OCCUPIED bounds, not
  * these). Pure compute, no UObject — a plain value struct shared by the Grid and Box formations.
  */
-struct FSeinFootprintPacking
+USTRUCT(BlueprintType, meta = (SeinDeterministic))
+struct SEINARTSCOREENTITY_API FSeinFootprintPacking
 {
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Formation")
 	FFixedPoint   Cell = FFixedPoint::Zero;
+
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Formation")
 	TArray<int32> Span;
+
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Formation")
 	TArray<int32> BlockRow;
+
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Formation")
 	TArray<int32> BlockCol;
+
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Formation")
 	int32         Columns = 1;
+
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Formation")
 	int32         Rows    = 1;
 };
 
@@ -90,7 +104,7 @@ public:
 	 * formation's current centroid / facing (filled by the resolver). Default impl
 	 * is a blob: every member to `Target.Anchor`, facing rotated centroid → anchor.
 	 */
-	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Formation", meta = (DisplayName = "Build Formation"))
+	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Formation", meta = (DisplayName = "Build Formation", SeinDeterministic))
 	FSeinFormationLayout BuildFormation(
 		USeinWorldSubsystem* World,
 		const TArray<FSeinEntityHandle>& Members,
@@ -99,6 +113,31 @@ public:
 		USeinWorldSubsystem* World,
 		const TArray<FSeinEntityHandle>& Members,
 		const FSeinOrderTarget& Target);
+
+	/**
+	 * Whether this formation places members at their squad's AUTHORED per-slot OffsetTransforms
+	 * (FSeinSquadComponent::Slots) rather than computing positions from footprints — only the slot
+	 * formation does. Editor hint: a squad shows its per-slot OffsetTransform authoring ONLY when its
+	 * chosen Formation Class returns true here (a footprint-laid formation ignores the offsets, so
+	 * authoring them would mislead). Pure config query — no sim state. */
+	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Formation", meta = (DisplayName = "Uses Authored Slot Offsets"))
+	bool UsesAuthoredSlotOffsets() const;
+	virtual bool UsesAuthoredSlotOffsets_Implementation() const { return false; }
+
+	/**
+	 * Build the order target for laying out a COMPOSITE element's own contents (a squad's members) around
+	 * the anchor the PARENT formation gave it. Carries the anchor, centroid and parent-given facing + the
+	 * element's own FormationClass — but DELIBERATELY no gesture guide and no formation tag: the parent
+	 * formation already consumed the gesture to SPACE the element anchors, so the inner layout must keep
+	 * its own compact shape (a guide here re-expands every element to fill the whole drag, overlapping
+	 * them into one). The SINGLE constructor for inner-layout targets — used by the squad dispatch commit
+	 * AND the preview — so the two can never drift and the gesture can never leak back into the inner
+	 * layout. Top-level formations stay blind: they only ever see element count + footprint sizes. */
+	static FSeinOrderTarget MakeInnerLayoutTarget(
+		const FFixedVector& Anchor,
+		const FFixedVector& Centroid,
+		const FFixedQuaternion& Facing,
+		const TSoftClassPtr<USeinFormation>& FormationClass);
 
 	/**
 	 * Yaw-only facing that rotates the formation forward axis from `CurrentCentroid`
@@ -111,7 +150,7 @@ public:
 	 * of facing logic.)
 	 */
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "SeinARTS|Formation",
-		meta = (DisplayName = "Compute Formation Facing"))
+		meta = (DisplayName = "Compute Formation Facing", SeinDeterministic))
 	static FFixedQuaternion ComputeFormationFacing(
 		FFixedVector CurrentCentroid,
 		FFixedQuaternion CurrentFacing,
@@ -122,7 +161,7 @@ public:
 	 *  behind ComputeFormationFacing; formations call it directly for facings that
 	 *  aren't "toward the target" — e.g. a line facing perpendicular to itself. */
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "SeinARTS|Formation",
-		meta = (DisplayName = "Facing From Direction"))
+		meta = (DisplayName = "Facing From Direction", SeinDeterministic))
 	static FFixedQuaternion FacingFromDirection(FFixedVector DirectionXY);
 
 	/** Facing DIRECTION (XY) for a right-click-drag: the guide line's perpendicular on a
@@ -132,7 +171,7 @@ public:
 	 *  the zero vector when the guide isn't a usable 2+ point line (caller keeps its non-drag
 	 *  facing). Feed the result to FacingFromDirection; drag the other way to flip the side. */
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "SeinARTS|Formation",
-		meta = (DisplayName = "Drag Facing Direction"))
+		meta = (DisplayName = "Drag Facing Direction", SeinDeterministic))
 	static FFixedVector DragFacingDir(const TArray<FFixedVector>& GuidePoints);
 
 	/**
@@ -146,7 +185,7 @@ public:
 	 * at all. Deterministic — the nav grid is baked.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Formation",
-		meta = (DisplayName = "Project To Navigable"))
+		meta = (DisplayName = "Project To Navigable", SeinDeterministic))
 	static FFixedVector ProjectToNavigable(
 		USeinWorldSubsystem* World,
 		FFixedVector Position,
@@ -162,11 +201,13 @@ public:
 	 * the old uniform feel rather than collapsing to zero. Deterministic.
 	 */
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "SeinARTS|Formation",
-		meta = (DisplayName = "Get Footprint Radius"))
+		meta = (DisplayName = "Get Footprint Radius", SeinDeterministic))
 	static FFixedPoint GetFootprintRadius(USeinWorldSubsystem* World, FSeinEntityHandle Handle);
 
 	/** Fill OutRadii (index-aligned with Members) with each member's footprint
 	 *  radius via GetFootprintRadius. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Formation",
+		meta = (DisplayName = "Gather Footprint Radii", SeinDeterministic))
 	static void GatherFootprintRadii(
 		USeinWorldSubsystem* World,
 		const TArray<FSeinEntityHandle>& Members,
@@ -178,6 +219,8 @@ public:
 	 *  evenly across gaps (a long drag spreads the line without overlap), otherwise
 	 *  the tight no-overlap span is used. Centered on 0; index-aligned with Radii.
 	 *  Pass TargetLength = 0 for the pure no-overlap span. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Formation",
+		meta = (DisplayName = "Spread 1D", SeinDeterministic))
 	static void Spread1D(
 		const TArray<FFixedPoint>& Radii,
 		FFixedPoint MinGap,
@@ -187,6 +230,8 @@ public:
 	/** Member indices sorted by footprint radius DESCENDING (largest first), tie-broken by
 	 *  index for determinism. Formations place big units first for clean size-graded shapes
 	 *  (wedge tip, box front-centre, grid embed). */
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "SeinARTS|Formation",
+		meta = (DisplayName = "Sort Indices By Radius Desc", SeinDeterministic))
 	static TArray<int32> SortIndicesByRadiusDesc(const TArray<FFixedPoint>& Radii);
 
 	/**
@@ -200,6 +245,8 @@ public:
 	 * centres. Deterministic (fixed-point only). The shared packer behind the Grid (square) and Box
 	 * (drag-width) formations; each applies its own world anchoring to the returned blocks.
 	 */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Formation",
+		meta = (DisplayName = "Pack Footprints", SeinDeterministic))
 	static void PackFootprints(
 		const TArray<FFixedPoint>& Radii,
 		FFixedPoint DesiredFrontWidth,
@@ -214,9 +261,11 @@ public:
 	 * index-derived direction. A bounded, deterministic relaxation (fixed pair order, fixed-point) so
 	 * no formation ever returns two members on top of each other. Index-aligned with Radii.
 	 */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Formation",
+		meta = (DisplayName = "Separate Positions", SeinDeterministic))
 	static void SeparatePositions(
 		const TArray<FFixedPoint>& Radii,
-		TArray<FFixedVector>& Positions,
+		UPARAM(ref) TArray<FFixedVector>& Positions,
 		int32 MaxIterations);
 
 	/**
@@ -229,10 +278,12 @@ public:
 	 * edge instead of floating in the void. Index-aligned with Radii; a missing radius counts as zero.
 	 * No-op when no nav is bound (tests / nav-less games). Deterministic — the nav grid is baked.
 	 */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Formation",
+		meta = (DisplayName = "Project Positions To Navigable", SeinDeterministic))
 	static void ProjectPositionsToNavigable(
 		USeinWorldSubsystem* World,
 		const TArray<FFixedPoint>& Radii,
-		TArray<FFixedVector>& Positions);
+		UPARAM(ref) TArray<FFixedVector>& Positions);
 
 	/**
 	 * Fill per-member facings (index-aligned with Positions) per `Mode`: Uniform → all = `UniformFacing`;
@@ -240,6 +291,8 @@ public:
 	 * falling back to `UniformFacing` for a member sitting on the centre. Computed by the resolver from
 	 * the FINAL positions (after the layout passes), so radial directions are exact. Deterministic.
 	 */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Formation",
+		meta = (DisplayName = "Compute Member Facings", SeinDeterministic))
 	static void ComputeMemberFacings(
 		ESeinFormationFacing Mode,
 		const TArray<FFixedVector>& Positions,

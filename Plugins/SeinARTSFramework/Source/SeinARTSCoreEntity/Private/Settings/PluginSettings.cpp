@@ -53,6 +53,10 @@ USeinARTSCoreSettings::USeinARTSCoreSettings()
 	// blocked regions.
 	, NavProjectionElevationTolerance(FFixedPoint::FromInt(100))
 	, NavProjectionMaxRingRadius(30)
+	// Nav bake island-prune threshold. 16 cells matches the long-standing hardcoded
+	// default — small enough to keep legitimate platforms, large enough to drop cube
+	// tops / floating slivers. Gated to the shipped A* in the editor (IsUsingShippedAStar).
+	, NavMinWalkableIslandCells(16)
 	// Network defaults — see PluginSettings.h for rationale on each. Soft path
 	// for the relay class follows the established nav/fog decoupling: this
 	// module deliberately does NOT depend on SeinARTSNet. Initializer order

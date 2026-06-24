@@ -45,6 +45,17 @@ FSeinVisualEvent FSeinVisualEvent::MakeCollisionOverlapEndEvent(FSeinEntityHandl
 	return Event;
 }
 
+FSeinVisualEvent FSeinVisualEvent::MakeMovementCueEvent(FSeinEntityHandle Entity, FGameplayTag CueTag, FFixedPoint Value, FFixedVector InLocation)
+{
+	FSeinVisualEvent Event;
+	Event.Type = ESeinVisualEventType::MovementCue;
+	Event.PrimaryEntity = Entity;
+	Event.Tag = CueTag;
+	Event.Value = Value;
+	Event.Location = InLocation;
+	return Event;
+}
+
 FSeinVisualEvent FSeinVisualEvent::MakeDamageAppliedEvent(FSeinEntityHandle Target, FSeinEntityHandle Source, FFixedPoint Amount, FGameplayTag DamageType)
 {
 	FSeinVisualEvent Event;

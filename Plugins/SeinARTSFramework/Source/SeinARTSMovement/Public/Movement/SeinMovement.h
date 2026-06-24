@@ -44,6 +44,7 @@ class USeinNavigationSubsystem;
 class USeinWorldSubsystem;
 class UScriptStruct;
 class USeinMoverHandle;
+class USeinPlannerHandle;
 struct FSeinEntity;
 struct FSeinMovementComponent;
 struct FSeinNavigationComponent;
@@ -126,6 +127,9 @@ class SEINARTSMOVEMENT_API USeinMovement : public UObject
 	// protected steering toolkit as Tier-2 power-route nodes (bound to the context), so
 	// the toolkit stays out of the public C++ API. See USeinMoverHandle.
 	friend class USeinMoverHandle;
+	// Hydrates per-unit tuning onto a freshly-created instance (so shape virtuals read correct
+	// values at plan-time / idle, not just after OnMoveBegin) — calls protected HydrateTuningFromData.
+	friend class USeinMovementSubsystem;
 
 public:
 
@@ -141,8 +145,11 @@ public:
 	 *  directly (Movement+ vehicles) bypass the BP hook, exactly as before. */
 	virtual void OnMoveBegin(const FSeinMovementContext& Ctx);
 
-	/** BP-overridable per-order init, called once before the first BP_Tick. Default
-	 *  no-op. Override to reset per-order state (e.g. latch an auto-reverse decision). */
+	/** Runs once when the unit starts a new move order, before the first Tick. Use it to reset
+	 *  anything that should start fresh each order.
+	 *
+	 *  Optional; the default does nothing. A common use is setting up per-order state your Tick or
+	 *  Compute Steer reads. You can read the unit through the handle here. */
 	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Movement", meta = (DisplayName = "On Move Begin"))
 	void BP_OnMoveBegin(USeinMoverHandle* Mover);
 	virtual void BP_OnMoveBegin_Implementation(USeinMoverHandle* Mover) {}
@@ -158,31 +165,59 @@ public:
 	 *  Movement+ vehicles) bypass BP_Tick entirely, exactly as before. */
 	virtual bool Tick(const FSeinMovementContext& Ctx);
 
-	/** BP-overridable per-tick movement. Default = the RTS integration loop
-	 *  (seek + kinematic arrival + face-velocity), which calls ComputeDesiredSpeed
-	 *  / ComputeSteer at its two decision points. Override the whole event (Tier 2
-	 *  "power" authoring) to drive the unit yourself via the handle; override just
-	 *  the hooks (Tier 1) to reshape feel while keeping the loop.
-	 *  @return true when arrived at the final waypoint. */
+	/** Moves the unit one frame along its path. Return true once it has reached the destination.
+	 *
+	 *  This is the full movement step. The default runs the built-in loop (speed up, brake into the
+	 *  goal, face the way it is travelling), which calls Compute Speed and Compute Steer for its two
+	 *  decisions. Override those hooks to tweak feel; override this whole event only when you want to
+	 *  drive the unit yourself with the Mover Handle toolkit. */
 	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Movement", meta = (DisplayName = "Tick"))
 	bool BP_Tick(USeinMoverHandle* Mover);
 	virtual bool BP_Tick_Implementation(USeinMoverHandle* Mover);
 
-	/** Hook — cruise target speed this tick, BEFORE the default loop applies the
-	 *  kinematic arrival cap + accel/decel ramp. Default returns the terrain-scaled
-	 *  top speed. Override to brake for sharp turns, shape arrival, etc. */
-	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Movement", meta = (DisplayName = "Compute Desired Speed"))
-	FFixedPoint ComputeDesiredSpeed(USeinMoverHandle* Mover);
-	virtual FFixedPoint ComputeDesiredSpeed_Implementation(USeinMoverHandle* Mover);
+	/** Decides how fast the unit wants to go this frame. Return its target cruise speed.
+	 *
+	 *  Called by the default loop. Whatever you return is then capped so the unit can still brake to a
+	 *  clean stop at its goal (from its Deceleration) — so this sets cruise speed, not the brake curve.
+	 *  The default returns the unit's terrain-adjusted top speed. Override to slow for sharp turns, low
+	 *  health, and so on. For full control over braking, use a custom Tick instead. */
+	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Movement", meta = (DisplayName = "Compute Speed"))
+	FFixedPoint ComputeSpeed(USeinMoverHandle* Mover);
+	virtual FFixedPoint ComputeSpeed_Implementation(USeinMoverHandle* Mover);
 
-	/** Hook — the unit's facing yaw (radians) after this tick's turn, given the
-	 *  direction it actually moved and its current yaw. Default is face-velocity:
-	 *  turn toward DesiredMoveDir clamped by TurnRate·dt. Override for steered
-	 *  kinematics (bicycle, tank pivot). The default loop applies slope pitch/roll
-	 *  on top of the returned yaw. */
+	/** Decides the fastest the unit may go right now and still brake to a clean stop at its goal —
+	 *  return that speed cap for the given remaining stop distance.
+	 *
+	 *  Called by the default loop near the goal; it floors the cruise speed (from Compute Speed) with
+	 *  whatever you return, so the unit stops cleanly. The default solves the kinematic brake equation
+	 *  from the unit's Deceleration. Override to reshape JUST the brake — a hard stop, a two-stage brake,
+	 *  a slow creep onto the exact spot — without taking over the whole Tick. Distance To Stop is the
+	 *  remaining distance to the acceptance ring. */
+	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Movement", meta = (DisplayName = "Compute Arrival Speed Cap"))
+	FFixedPoint ComputeArrivalSpeedCap(USeinMoverHandle* Mover, FFixedPoint DistanceToStop);
+	virtual FFixedPoint ComputeArrivalSpeedCap_Implementation(USeinMoverHandle* Mover, FFixedPoint DistanceToStop);
+
+	/** Decides which way the unit faces this frame. Return the final facing as a yaw angle in radians,
+	 *  after turning.
+	 *
+	 *  Called by the default loop on frames the unit moved, given the direction it actually travelled
+	 *  and its current yaw. This returns the absolute facing to end at, not a turn amount. The default
+	 *  turns toward the travel direction no faster than the unit's Turn Rate. Override for a different
+	 *  steering model, like a car that turns only while moving or a tank that pivots in place. The loop
+	 *  still tilts the unit to the ground slope on top of the yaw you return. */
 	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Movement", meta = (DisplayName = "Compute Steer"))
 	FFixedPoint ComputeSteer(USeinMoverHandle* Mover, const FFixedVector& DesiredMoveDir, FFixedPoint CurrentYaw);
 	virtual FFixedPoint ComputeSteer_Implementation(USeinMoverHandle* Mover, const FFixedVector& DesiredMoveDir, FFixedPoint CurrentYaw);
+
+	/** Decides whether the unit backs up to reach this order's goal. Return true to reverse.
+	 *
+	 *  Checked once when the order starts, so it cannot flip-flop mid-move. The default returns true
+	 *  only when the unit is allowed to reverse and the goal is close and behind it. When true, the
+	 *  default loop limits speed to Reverse Top Speed and faces the unit away from the goal so it backs
+	 *  in. Units that cannot reverse never do. */
+	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Movement", meta = (DisplayName = "Should Reverse"))
+	bool ShouldReverse(USeinMoverHandle* Mover);
+	virtual bool ShouldReverse_Implementation(USeinMoverHandle* Mover);
 
 	/** Called when the action ends (completed/cancelled/failed). Default:
 	 *  no-op. Override to clean up subclass transient state.
@@ -192,9 +227,10 @@ public:
 	 *  bypass it. */
 	virtual void OnMoveEnd(FSeinEntity& Entity);
 
-	/** BP-overridable end-of-order cleanup. Default no-op. The handle is in entity-
-	 *  only mode here — IsValidMover() is false; transform reads work, but velocity /
-	 *  path / kinematics reads return defaults. */
+	/** Runs when the unit's move order ends, completes, or is cancelled. Use it to clean up.
+	 *
+	 *  Optional; the default does nothing. Only transform reads are available here, since there is no
+	 *  live path or velocity at the end of an order. */
 	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Movement", meta = (DisplayName = "On Move End"))
 	void BP_OnMoveEnd(USeinMoverHandle* Mover);
 	virtual void BP_OnMoveEnd_Implementation(USeinMoverHandle* Mover) {}
@@ -223,25 +259,35 @@ public:
 	 *  GetAltitude / QueryReferenceZ virtuals) hover + flight classes. */
 	virtual void TickIdle(const FSeinMovementContext& Ctx);
 
-	/** BP-overridable idle tick (no active order). Default = ground snap + coast-down
-	 *  + slope settle (the base ground/hover/flight behavior). Override for custom idle
-	 *  (e.g. a hover bob). Same self-mutation-only contract as the docstring above —
-	 *  never read neighbour entities here. */
+	/** Runs every frame while the unit stands still (no move order). Use it for idle motion.
+	 *
+	 *  Optional; the default keeps the unit on the ground, coasts any leftover speed to a stop, and
+	 *  settles it on slopes where it stands. Override for custom idle such as a hover bob. There is no
+	 *  path while idle, and you must not read other units here. */
 	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Movement", meta = (DisplayName = "Tick Idle"))
 	void BP_TickIdle(USeinMoverHandle* Mover);
 	virtual void BP_TickIdle_Implementation(USeinMoverHandle* Mover);
 
-	/** True if this movement subclass does NOT need a `Nav->FindPath` call —
-	 *  it consumes a straight-line `[Start, End]` polyline directly. Flying
-	 *  movements override to true: they fly over static obstacles (using
-	 *  the no-gate variant of `GetCellHeightAt` for Z, which auto-clears
-	 *  anything in the cell) and don't benefit from A*. Ground movements
-	 *  stay false. The action reads this on first tick to decide whether
-	 *  to call PlanPath at all on repath ticks (flying paths don't drift in
-	 *  any meaningful sense — see the action's repath gate). The default
-	 *  `PlanPath` impl also reads it to decide between synthesize-straight-
-	 *  line and Nav->RequestPath. */
-	virtual bool BypassPathfinding() const { return false; }
+	/** Whether this mode flies straight over obstacles instead of routing around them.
+	 *
+	 *  When on, the unit's path is a straight line to the destination (no pathfinding search) and it
+	 *  flies over walls and buildings — turn it on for flyers and hovercraft. When off (the default)
+	 *  the unit routes around obstacles like a ground unit. This is a per-mode trait, so it is a
+	 *  checkbox here rather than a per-unit tuning variable. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS", meta = (DisplayName = "Bypass Pathfinding"))
+	bool bBypassPathfinding = false;
+
+	/** Whether the unit sticks to walkable ground, or rides the top of whatever is below it.
+	 *
+	 *  When on (the default) the unit's height is taken only from walkable ground, so it holds its
+	 *  height when sliding past a wall instead of climbing it. Turn it off for flyers so they ride
+	 *  over buildings and other blocked cells. A per-mode trait, so it is a checkbox. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS", meta = (DisplayName = "Snaps To Ground"))
+	bool bSnapsToGround = true;
+
+	/** Whether this mode flies straight over obstacles (returns the Bypass Pathfinding flag). The move
+	 *  action and the default planner read it; C++ modes may override for conditional behaviour. */
+	virtual bool BypassPathfinding() const { return bBypassPathfinding; }
 
 	/** Returns the per-class sub-data UScriptStruct this movement consumes
 	 *  out of `FSeinMovementComponent::MovementClassData`. Used by runtime
@@ -260,19 +306,25 @@ public:
 	UFUNCTION()
 	virtual UScriptStruct* GetMovementDataStruct() const { return TuningStruct; }
 
-	/** The per-class tuning UDS for a BP-authored mode — the struct that fills
-	 *  `FSeinMovementComponent::MovementClassData`. GENERATED + linked by the Class-Defaults
-	 *  "Generate Tuning Data Structure" button; shown READ-ONLY here (it's derived from the
-	 *  mode's variables — don't hand-pick it). Ignored by C++ modes that override
-	 *  GetMovementDataStruct(). */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "SeinARTS|Movement", meta = (DisplayName = "Tuning Struct"))
+	/** The tuning data this mode uses, shown read-only — it is generated for you.
+	 *
+	 *  When you add tuning variables and click Generate Tuning Data Structure, this points at the
+	 *  struct holding them, which then auto-fills each unit's Movement Class Data so values can be set
+	 *  per unit. You do not edit this directly; it is derived from your variables. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "SeinARTS", meta = (DisplayName = "Tuning Struct"))
 	TObjectPtr<UScriptStruct> TuningStruct;
 
-	/** Cruise / hover altitude the unit wants to maintain above ground.
-	 *  Default 0 (ground-bound). Subclasses with their own altitude field
-	 *  (hover / flight) override to fetch from their MovementClassData
-	 *  sub-struct. */
-	virtual FFixedPoint GetAltitude(const FSeinMovementComponent* MovementData) const { return FFixedPoint::Zero; }
+	/** Returns the unit's cruise altitude above ground (reads the Get Altitude hook by default).
+	 *  C++ modes may override this directly. */
+	virtual FFixedPoint GetAltitude(const FSeinMovementComponent* MovementData) const { return BP_GetAltitude(); }
+
+	/** How high above the ground the unit flies. Return 0 to sit on the ground.
+	 *
+	 *  Used by hover and flight modes to hold a cruising height; the unit's ground snap adds this on
+	 *  top of the terrain height. Read it from one of your tuning variables so it can be set per unit. */
+	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Movement", meta = (DisplayName = "Get Altitude"))
+	FFixedPoint BP_GetAltitude() const;
+	virtual FFixedPoint BP_GetAltitude_Implementation() const { return FFixedPoint::Zero; }
 
 	/** One-time immediate ground + slope snap for a spawned/placed entity that has
 	 *  not yet moved. Snaps the entity's Z to the nav reference height (+ this
@@ -316,6 +368,16 @@ public:
 	 *  state — that's what OnMoveBegin / Tick are for. */
 	virtual ESeinPathResult PlanPath(const FSeinPlanPathContext& Ctx, FSeinPath& OutPath) const;
 
+	/** Builds the route a unit will follow to its destination, and reports the result.
+	 *
+	 *  Called when an order starts and on each repath. The default flies straight for flyers and runs
+	 *  the pathfinder for ground units. Override to build a custom route with the Planner handle: ask
+	 *  for a normal path with Request Nav Path and then smooth or curve-fit its waypoints, or build one
+	 *  from scratch with Add Waypoint and Finalize Path. Return the planning result. */
+	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Movement", meta = (DisplayName = "Plan Path"))
+	ESeinPathResult BP_PlanPath(USeinPlannerHandle* Planner) const;
+	virtual ESeinPathResult BP_PlanPath_Implementation(USeinPlannerHandle* Planner) const;
+
 	/** Maximum speed at which the unit can still brake to zero EXACTLY at
 	 *  `DistToFinal` ahead, given `Deceleration`. Solves v² = 2·a·d for v.
 	 *  Returns a very large value when Deceleration <= 0 (no kinematic cap
@@ -343,7 +405,16 @@ public:
 	 *
 	 *  Takes `MovementData` so subclass overrides can read their per-class
 	 *  sub-data (Wheelbase / MaxSteerAngle / preferred-radius) directly. */
-	virtual FFixedPoint GetMinTurnRadius(const FSeinMovementComponent* /*MovementData*/) const { return FFixedPoint::Zero; }
+	virtual FFixedPoint GetMinTurnRadius(const FSeinMovementComponent* /*MovementData*/) const { return BP_GetMinTurnRadius(); }
+
+	/** The tightest turn the unit can make, in world units. Return 0 for no limit (it can pivot).
+	 *
+	 *  Used to round path corners into curves the unit can actually drive, and to slow it before turns
+	 *  sharper than this. A wheeled vehicle computes it from its wheelbase and steering angle; pivoting
+	 *  units leave it at 0. Read it from your tuning variables so it can be set per unit. */
+	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Movement", meta = (DisplayName = "Get Min Turn Radius"))
+	FFixedPoint BP_GetMinTurnRadius() const;
+	virtual FFixedPoint BP_GetMinTurnRadius_Implementation() const { return FFixedPoint::Zero; }
 
 #if UE_ENABLE_DEBUG_DRAWING
 	/** Always-on steering-vector viz for a single entity. Draws:
@@ -514,6 +585,20 @@ protected:
 		const FFixedVector& Pos,
 		FFixedPoint Yaw,
 		USeinNavigation* Nav) const;
+
+	/** Assemble the unit's final rotation for a tick: tilt the given facing `Yaw`
+	 *  to the ground slope at `Pos`, rate-limit the pitch/roll change toward it
+	 *  (60°/sec), and persist the smoothed angles on `MovementData` so terrain
+	 *  orientation stays continuous across ticks and orders. Returns the final
+	 *  rotation. This is the slope step the default loop runs; shared with the
+	 *  Apply Slope Tilt handle node so a custom BP_Tick can match it instead of
+	 *  popping when it sets rotation from yaw alone. */
+	FFixedQuaternion ApplySlopeTilt(
+		const FFixedVector& Pos,
+		FFixedPoint Yaw,
+		FSeinMovementComponent* MovementData,
+		USeinNavigation* Nav,
+		FFixedPoint DeltaTime) const;
 
 	/** Yaw in radians extracted from the forward vector of a rotation. Matches
 	 *  atan2(forward.Y, forward.X) so it round-trips with YawOnly. */
@@ -744,5 +829,17 @@ protected:
 	 *  only during a single BP_Tick / hook dispatch. */
 	UPROPERTY(Transient)
 	TObjectPtr<USeinMoverHandle> CachedHandle;
+
+	/** Reverse decision for the current order, latched at OnMoveBegin and read by the default loop.
+	 *  Transient per-order instance state — re-derived deterministically each order from hashed
+	 *  inputs (position / facing / goal / component fields), never hashed itself (same class as a
+	 *  vehicle's steer state). false for every forward-only unit → byte-identical. */
+	bool bReversingThisOrder = false;
+
+	/** Reusable plan-time handle. PlanPath is const, so it's set via a localized const_cast (caching a
+	 *  scratch handle is not movement-instance state). Its context/path pointers are valid only during
+	 *  one PlanPath dispatch. */
+	UPROPERTY(Transient)
+	TObjectPtr<USeinPlannerHandle> CachedPlannerHandle;
 
 };

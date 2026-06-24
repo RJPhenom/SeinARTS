@@ -149,6 +149,11 @@ public:
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Movement", meta = (WorldContext = "WorldContextObject", DisplayName = "Has Movement Input"))
 	static bool SeinHasMovementInput(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle);
 
+	/** Reads a custom render/anim value a movement mode wrote at a slot (see Set Render Value on the Sein
+	 *  Mover Handle). Returns 0 if the unit has no value at that slot. Drives visuals only. */
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|Movement", meta = (WorldContext = "WorldContextObject", DisplayName = "Get Movement Render Value"))
+	static float SeinGetMovementRenderValue(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, int32 Slot);
+
 	// ===== Movement control =====
 
 	/** Safely terminate the entity's movement — and ONLY its movement. Cancels its active

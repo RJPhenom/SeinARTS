@@ -17,6 +17,7 @@
 #include "Components/SeinExtentsComponent.h"
 #include "Components/SeinExtentsHelpers.h"  // SeinExtentsHelpers::BoundingRadius
 #include "Movement/SeinMoverHandle.h"
+#include "Movement/SeinPlannerHandle.h"
 #include "StructUtils/InstancedStruct.h"
 #include "UObject/UnrealType.h"
 
@@ -54,6 +55,9 @@ void USeinMovement::OnMoveBegin(const FSeinMovementContext& Ctx)
 
 	if (!CachedHandle) { CachedHandle = NewObject<USeinMoverHandle>(this); }
 	CachedHandle->SetContext(&Ctx);
+	// Latch the reverse decision once per order — the 3-gate ShouldAutoReverse can oscillate if
+	// polled per-tick near the threshold. The default loop reads bReversingThisOrder.
+	bReversingThisOrder = ShouldReverse(CachedHandle);
 	BP_OnMoveBegin(CachedHandle);
 	CachedHandle->SetContext(nullptr);
 }
@@ -97,10 +101,17 @@ void USeinMovement::HydrateTuningFromData(const FInstancedStruct& Tuning)
 	}
 }
 
-FFixedPoint USeinMovement::ComputeDesiredSpeed_Implementation(USeinMoverHandle* Mover)
+FFixedPoint USeinMovement::ComputeSpeed_Implementation(USeinMoverHandle* Mover)
 {
 	const FSeinMovementContext* C = Mover ? Mover->GetContext() : nullptr;
 	return C ? EffectiveTopSpeed(*C) : FFixedPoint::Zero;
+}
+
+FFixedPoint USeinMovement::ComputeArrivalSpeedCap_Implementation(USeinMoverHandle* Mover, FFixedPoint DistanceToStop)
+{
+	const FSeinMovementContext* C = Mover ? Mover->GetContext() : nullptr;
+	const FFixedPoint Decel = (C && C->MovementData) ? C->MovementData->Deceleration : FFixedPoint::Zero;
+	return KinematicArrivalSpeedCap(DistanceToStop, Decel);
 }
 
 FFixedPoint USeinMovement::ComputeSteer_Implementation(USeinMoverHandle* Mover, const FFixedVector& DesiredMoveDir, FFixedPoint CurrentYaw)
@@ -112,6 +123,17 @@ FFixedPoint USeinMovement::ComputeSteer_Implementation(USeinMoverHandle* Mover, 
 	const FFixedPoint MaxTurn      = Mover->GetTurnRate() * Mover->GetDeltaTime();
 	const FFixedPoint AppliedTurn  = ClampFP(YawDelta, -MaxTurn, MaxTurn);
 	return CurrentYaw + AppliedTurn;
+}
+
+bool USeinMovement::ShouldReverse_Implementation(USeinMoverHandle* Mover)
+{
+	const FSeinMovementContext* C = Mover ? Mover->GetContext() : nullptr;
+	if (!C || !C->MovementData || C->Path.Waypoints.Num() == 0) return false;
+	return ShouldAutoReverse(
+		C->Entity.Transform.GetLocation(),
+		C->Entity.Transform.Rotation,
+		C->Path.Waypoints.Last(),
+		*C->MovementData);
 }
 
 bool USeinMovement::BP_Tick_Implementation(USeinMoverHandle* Mover)
@@ -149,10 +171,19 @@ bool USeinMovement::BP_Tick_Implementation(USeinMoverHandle* Mover)
 	const FFixedPoint DistToFinal = ToFinal.Size();
 	const FFixedPoint Acceptance = SeinMath::Sqrt(AcceptanceRadiusSq);
 	const FFixedPoint BrakeDist = (DistToFinal > Acceptance) ? (DistToFinal - Acceptance) : FFixedPoint::Zero;
-	const FFixedPoint ArrivalCap = KinematicArrivalSpeedCap(BrakeDist, MovementData.Deceleration);
+	const FFixedPoint ArrivalCap = ComputeArrivalSpeedCap(Mover, BrakeDist);
 
-	// HOOK: cruise target (default = EffectiveTopSpeed). Then clamp to the arrival cap.
-	FFixedPoint TargetSpeed = ComputeDesiredSpeed(Mover);
+	// HOOK: cruise target (default = EffectiveTopSpeed).
+	FFixedPoint TargetSpeed = ComputeSpeed(Mover);
+	// Reverse (latched at OnMoveBegin): cap the cruise at ReverseTopSpeed (0 → TopSpeed/2 fallback).
+	if (bReversingThisOrder)
+	{
+		const FFixedPoint RevCap = (MovementData.ReverseTopSpeed > FFixedPoint::Zero)
+			? MovementData.ReverseTopSpeed
+			: (MovementData.TopSpeed * FFixedPoint::Half);
+		if (RevCap < TargetSpeed) TargetSpeed = RevCap;
+	}
+	// Then clamp to the arrival cap.
 	if (ArrivalCap < TargetSpeed) TargetSpeed = ArrivalCap;
 
 	// Smoothstep the scalar speed toward the target — accel growing, decel shrinking.
@@ -221,15 +252,16 @@ bool USeinMovement::BP_Tick_Implementation(USeinMoverHandle* Mover)
 	{
 		MoveDir = FFixedVector::GetSafeNormal(MoveDelta);
 		const FFixedPoint CurrentYaw = YawFromRotation(Entity.Transform.Rotation);
-		// HOOK: facing yaw after this tick's turn (default = face-velocity clamp).
-		const FFixedPoint FinalYaw = ComputeSteer(Mover, MoveDir, CurrentYaw);
-		// Rate-limited pitch/roll smoothing (60°/sec) over the slope under the new facing.
-		const FFixedPoint TargetPitch = ComputeSlopePitch(Pos, FinalYaw, Nav);
-		const FFixedPoint TargetRoll  = ComputeSlopeRoll(Pos, FinalYaw, Nav);
-		const FFixedPoint OrientRate  = FFixedPoint::Pi / FFixedPoint::FromInt(3);
-		MovementData.SmoothedPitch = SmoothAngleToward(MovementData.SmoothedPitch, TargetPitch, OrientRate, DeltaTime);
-		MovementData.SmoothedRoll  = SmoothAngleToward(MovementData.SmoothedRoll,  TargetRoll,  OrientRate, DeltaTime);
-		Entity.Transform.Rotation = YawPitchRoll(FinalYaw, MovementData.SmoothedPitch, MovementData.SmoothedRoll);
+		// When reversing, face AWAY from travel — the unit backs toward the goal. HOOK: facing yaw
+		// after this tick's turn (default = face-velocity clamp toward the steer direction).
+		const FFixedVector SteerDir = bReversingThisOrder
+			? FFixedVector(-MoveDir.X, -MoveDir.Y, FFixedPoint::Zero)
+			: MoveDir;
+		const FFixedPoint FinalYaw = ComputeSteer(Mover, SteerDir, CurrentYaw);
+		// Tilt to the ground slope under the new facing — rate-limited (60°/sec) and persisted on
+		// MovementData so orientation stays continuous across ticks/orders. Shared with the Apply
+		// Slope Tilt handle node so a custom BP_Tick can reproduce it exactly.
+		Entity.Transform.Rotation = ApplySlopeTilt(Pos, FinalYaw, &MovementData, Nav, DeltaTime);
 	}
 
 	// Persist world-frame velocity at the ramped scalar speed (momentum across orders).
@@ -697,7 +729,7 @@ bool USeinMovement::QueryReferenceZ(USeinNavigation* Nav, const FFixedVector& Wo
 	// Default: walkable-only gate ON. Refuses on blocked cells (wall tops,
 	// cube interiors) so a ground unit sliding across a blocked sliver
 	// holds its previous Z instead of popping onto the wall.
-	return Nav ? Nav->GetCellHeightAt(WorldPos, OutZ, /*bWalkableOnly=*/ true) : false;
+	return Nav ? Nav->GetCellHeightAt(WorldPos, OutZ, /*bWalkableOnly=*/ bSnapsToGround) : false;
 }
 
 void USeinMovement::ApplyGroundSnapAndAltitude(
@@ -954,6 +986,23 @@ FFixedVector USeinMovement::ApplyAvoidanceSteer(const FSeinMovementContext& Ctx,
 		FFixedVector(DesiredDir.X + Steer.X, DesiredDir.Y + Steer.Y, DesiredDir.Z));
 }
 
+FFixedQuaternion USeinMovement::ApplySlopeTilt(
+	const FFixedVector& Pos,
+	FFixedPoint Yaw,
+	FSeinMovementComponent* MovementData,
+	USeinNavigation* Nav,
+	FFixedPoint DeltaTime) const
+{
+	if (!MovementData) return YawPitchRoll(Yaw, FFixedPoint::Zero, FFixedPoint::Zero);
+
+	const FFixedPoint TargetPitch = ComputeSlopePitch(Pos, Yaw, Nav);
+	const FFixedPoint TargetRoll  = ComputeSlopeRoll(Pos, Yaw, Nav);
+	const FFixedPoint OrientRate  = FFixedPoint::Pi / FFixedPoint::FromInt(3);
+	MovementData->SmoothedPitch = SmoothAngleToward(MovementData->SmoothedPitch, TargetPitch, OrientRate, DeltaTime);
+	MovementData->SmoothedRoll  = SmoothAngleToward(MovementData->SmoothedRoll,  TargetRoll,  OrientRate, DeltaTime);
+	return YawPitchRoll(Yaw, MovementData->SmoothedPitch, MovementData->SmoothedRoll);
+}
+
 #if UE_ENABLE_DEBUG_DRAWING
 void USeinMovement::DrawSteeringDebugViz(
 	UWorld* World,
@@ -1157,59 +1206,29 @@ bool USeinMovement::ShouldAutoReverse(
 
 ESeinPathResult USeinMovement::PlanPath(const FSeinPlanPathContext& Ctx, FSeinPath& OutPath) const
 {
-	// Bypass branch — flying / hover movements consume a straight-line
-	// [start, end] polyline directly. They fly over static obstacles and
-	// don't benefit from A*, so we don't bother routing through the
-	// pathfinder (and don't consume any path-request budget).
+	// Sealed sim-facing entry — bind the reusable planner handle to the context + output and
+	// dispatch to the BP-overridable BP_PlanPath. (const: the cached scratch handle is not
+	// movement-instance state, so the localized const_cast is safe — same idiom as the per-tick path.)
+	USeinMovement* Self = const_cast<USeinMovement*>(this);
+	if (!Self->CachedPlannerHandle)
+	{
+		Self->CachedPlannerHandle = NewObject<USeinPlannerHandle>(Self);
+	}
+	Self->CachedPlannerHandle->SetContext(&Ctx, &OutPath);
+	const ESeinPathResult Result = BP_PlanPath(Self->CachedPlannerHandle);
+	Self->CachedPlannerHandle->SetContext(nullptr, nullptr);
+	return Result;
+}
+
+ESeinPathResult USeinMovement::BP_PlanPath_Implementation(USeinPlannerHandle* Planner) const
+{
+	if (!Planner) return ESeinPathResult::NoNavigation;
+	// Built-in default (the former inline PlanPath, now composed from the planner handle's nodes —
+	// the single source of each branch): flyers consume a straight [start,end] line; ground units
+	// route a budgeted A* request.
 	if (BypassPathfinding())
 	{
-		OutPath.Clear();
-		OutPath.Waypoints.Add(Ctx.Entity.Transform.GetLocation());
-		OutPath.Waypoints.Add(Ctx.Destination);
-		OutPath.bIsValid = true;
-		OutPath.bIsPartial = false;
-		// Derive the typed segment list. Two-waypoint straight-line path
-		// → one Straight segment. Segment-aware consumers see a complete
-		// path; legacy consumers continue reading Waypoints.
-		OutPath.DeriveSegmentsFromWaypoints();
-		return ESeinPathResult::Found;
+		return Planner->BuildStraightLinePath();
 	}
-
-	// Ground branch — populate the nav request from NavData kinematics and
-	// route through the budgeted subsystem call. Returning NoNavigation
-	// rather than asserting lets the action turn it into a clean Fail()
-	// (matches prior behavior where the action checked Nav/NavSub itself).
-	if (!Ctx.NavSub)
-	{
-		return ESeinPathResult::NoNavigation;
-	}
-
-	FSeinPathRequest Req;
-	Req.Start                = Ctx.Entity.Transform.GetLocation();
-	Req.End                  = Ctx.Destination;
-	Req.Requester            = Ctx.SelfHandle;
-	if (Ctx.NavData)
-	{
-		Req.AgentNavLayerMask     = Ctx.NavData->NavLayerMask;
-		Req.AgentWallPaddingCells = Ctx.NavData->WallPadding;
-		Req.AgentMaxSearchNodes   = Ctx.NavData->MaxSearchNodes;   // 0 = project default
-	}
-	// Footprint via the shared cascade (Extents → NavComp → 0) — matches
-	// what CacheFootprintFromContext uses for runtime collision, so the
-	// path planner clears whatever the body actually occupies. Without
-	// this, large vehicles with Extents components were getting stuck on
-	// corners because A* planned for the (smaller) NavComp fallback
-	// radius while the runtime body was the (larger) Extents radius.
-	Req.AgentFootprintRadius = ResolveCollisionRadius(Ctx.World, Ctx.SelfHandle, Ctx.NavData);
-
-	// Authoritative destination — ask the cover (or any) extension whether End is a
-	// position that OVERRULES the coarse nav bake (a cover slot). When true, the
-	// planner honors End as the exact final waypoint even on a partial path and
-	// skips the wall-push on it (root CLAUDE.md #6). Unbound (cover absent / no-nav
-	// games) → false, i.e. the default nearest-reachable behavior.
-	Req.bAuthoritativeDestination = Ctx.World
-		&& Ctx.World->AuthoritativeDestinationResolver.IsBound()
-		&& Ctx.World->AuthoritativeDestinationResolver.Execute(Ctx.Destination);
-
-	return Ctx.NavSub->RequestPath(Req, OutPath);
+	return Planner->RequestNavPath();
 }

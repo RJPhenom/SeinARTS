@@ -73,8 +73,16 @@ adds a **constructor** that selects its formation:
 - **`ResolveDispatch`** — for predetermined-ability orders, dispatches via the broker capability map
   filtered by the ability's own dispatch policy (`ApplyAbilityDispatchPolicy`) — CoH "leader throws
   the smoke." Smart right-click orders route each member to its slot's world position, and DROP the
-  order's gesture guide/formation tag so squads stay slot-driven (ignore drag-formations).
-- **Slot layout** — the constructor sets `DefaultFormationClass = USeinSlotFormation`, which reads
+  order's gesture guide/formation tag so each squad keeps its own COMPACT shape at the anchor the parent formation gave it. Squads now
+  participate in the multi-unit formation as ELEMENTS (sized by `FSeinCommandBrokerData::FormationRadius`
+  = the squad's own footprint); the parent gesture spaces the squad ANCHORS, never each squad's
+  internals. The gesture-free squad-internal target is built via `USeinFormation::MakeInnerLayoutTarget`,
+  used by this resolver AND the preview (`SeinComputeFormationPreview`) so the two can't drift and the
+  drag can never re-expand a squad's own formation.
+- **Slot layout** — the constructor sets `DefaultFormationClass = USeinSlotFormation` as the DEFAULT, overridable
+  per-squad via `FSeinSquadComponent::FormationClass` (Grid/Wedge/Ring/custom; the framework editor
+  hides the per-slot `OffsetTransform` authoring for non-slot picks via `FSeinSquadSlotDetails` +
+  `USeinFormation::UsesAuthoredSlotOffsets`). The slot formation reads
   each member's slot `OffsetTransform` (by `SlotIndex`, tag fallback) rotated by anchor facing and
   nav-projected; unauthored squads / unresolved members fall back to a blob at the anchor. This
   replaced the old `ResolvePositions` override (squads now go through the same formation pipeline as

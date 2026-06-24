@@ -51,9 +51,9 @@ uint32 USeinMovementModeFactory::GetMenuCategories() const
 FText USeinMovementModeFactory::GetToolTip() const
 {
 	return LOCTEXT("SeinMovementModeFactoryToolTip",
-		"A movement mode Blueprint (child of Sein Movement). Override Compute Steer / Compute Desired "
-		"Speed for custom feel, or the whole Tick for full control; add tuning variables and use the "
-		"Class-Defaults 'Generate Tuning Data Structure' button to generate its tuning data.");
+		"A movement mode Blueprint (child of Sein Movement). Override Compute Steer / Compute Speed for "
+		"custom feel, or the whole Tick for full control; add tuning variables and use the Class-Defaults "
+		"'Generate Tuning Data Structure' button to generate its tuning data.");
 }
 
 #undef LOCTEXT_NAMESPACE

@@ -139,7 +139,7 @@ public:
 	// Effects
 	// ====================================================================================================
 
-	// Command Brokers (DESIGN §5)
+	// Command Brokers
 	// ====================================================================================================
 
 	/**
@@ -178,23 +178,18 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Effects", meta = (ClampMin = "1", UIMin = "32", UIMax = "1024"))
 	int32 EffectCountWarningThreshold;
 
-	// Navigation Settings (DESIGN §13)
+	// Navigation Settings
 	// ====================================================================================================
 
 	/**
-	 * **Which navigation implementation drives pathfinding.** The framework's
-	 * MoveTo action, editor bake button, and ability validation all route
-	 * through this class — the rest of the plugin doesn't care what's
-	 * underneath.
+	 * Which navigation system drives pathfinding for the whole game. Movement orders, the level
+	 * bake, and order validation all route through the class you pick here; nothing else in the
+	 * framework cares what's underneath.
 	 *
-	 * Ships with `USeinNavigationAStar` as the default: footprint-aware
-	 * (configuration-space) 2D grid A* + line-of-sight smoothing. Paths
-	 * route only through cells where the unit's body physically fits — no
-	 * post-process push needed. Suitable as a generic RTS default.
-	 *
-	 * Game teams can subclass for project-specific behavior (curve-fitting
-	 * for vehicles, flow fields for mass movement, etc.) without touching
-	 * any framework code.
+	 * The default is the shipped A* nav: a footprint-aware 2D-grid A* with line-of-sight
+	 * smoothing that routes units only through cells their body physically fits in, a solid
+	 * generic RTS default. Game teams can select their own C++ subclass here (custom routing,
+	 * flow fields for mass movement, etc.) without touching any other framework code.
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Navigation",
 		meta = (DisplayName = "Navigation Class",
@@ -206,7 +201,7 @@ public:
 	 * read from one baked grid). Empty / invalid → framework default
 	 * `USeinLevelDataDefault`. Swappable wholesale, same soft-path pattern as
 	 * `NavigationClass` / `FogOfWarClass` so SeinARTSCoreEntity stays decoupled from
-	 * SeinARTSLevelData (planning/Decisions.md D12).
+	 * SeinARTSLevelData.
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Level Data",
 		meta = (DisplayName = "Level Data Class",
@@ -214,53 +209,39 @@ public:
 	FSoftClassPath LevelDataClass;
 
 	/**
-	 * **Size of one nav grid square, in world units.** The pathfinder works
-	 * on a 2D grid; this sets how big each grid cell is.
+	 * How big each navigation grid square is, in world units. The pathfinder works on a 2D
+	 * grid; pick this to roughly match your smallest unit's body size.
 	 *
-	 * ELI5: pick this to match your smallest unit's body size.
-	 *  - Infantry-centric RTS (CoH/AoE feel): ~100 (1m cells)
-	 *  - Massive-unit RTS (Supreme Commander feel): ~800 (8m cells)
-	 *
-	 * Trade-off: smaller cells = finer detail, more memory, slower bakes.
-	 * Larger cells = coarser paths, faster bakes.
-	 *
-	 * Per-volume override available: set `bOverrideCellSize` on a
-	 * `ASeinLevelVolume` to use a different cell size in that volume only.
+	 * Rough guides: an infantry-centric RTS (CoH / AoE feel) wants about 100 (1m cells); a
+	 * massive-unit RTS (Supreme Commander feel) wants about 800 (8m cells). Smaller cells give
+	 * finer paths but cost more memory and slower bakes; larger cells are coarser but cheaper.
+	 * A Sein Level Volume can override this for its own area only (Override Cell Size on the volume).
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Navigation")
 	FFixedPoint CellSize;
 
 	/**
-	 * **Tallest vertical step a unit can climb in one stride, in world
-	 * units.** Used at bake time to decide whether two adjacent cells are
-	 * connected: if their height difference exceeds this, the connection
-	 * is dropped (treated as a wall edge).
+	 * The tallest vertical step a unit can climb in one stride, in world units — think "stair
+	 * height." At bake time, two adjacent cells whose heights differ by more than this are
+	 * treated as disconnected (a wall edge), so units won't path up the step.
 	 *
-	 * ELI5: think "stair height." A 30cm value lets units climb curbs but
-	 * not walls; an 80cm value lets them climb up small ledges; 200cm+
-	 * effectively disables the step check.
-	 *
-	 * Typical: about half the CellSize.
-	 *
-	 * Per-volume override available on `ASeinLevelVolume`.
+	 * A 30cm value lets units mount curbs but not walls; ~80cm lets them climb small ledges;
+	 * 200cm+ effectively disables the step check. Typical is about half the Cell Size. A Sein
+	 * Level Volume can override it for its own area.
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Navigation")
 	FFixedPoint MaxStepHeight;
 
 	/**
-	 * **Where baked level data assets are saved.** When you click "Bake Level
-	 * Data" on a `ASeinLevelVolume`, the resulting `.uasset` (the shared
-	 * height field + every layer's channel — nav, fog of war, …) is written
-	 * here as `LevelData_<LevelName>.uasset` and auto-assigned to every level
-	 * volume on the level.
+	 * Where baked level-data assets are saved. When you click "Bake Level Data" on a Sein Level
+	 * Volume, the resulting asset (the shared height field plus every layer's channel — nav, fog
+	 * of war, and so on) is written here as LevelData_<LevelName> and auto-assigned to every
+	 * level volume on the level.
 	 *
-	 * ELI5: "where do my baked levels go?" Default `/Game/LevelData/`. Use the
-	 * content-browser picker to choose any folder under any content mount —
-	 * `/Game/` for project content, `/<PluginName>/` for plugin content. The
-	 * framework auto-creates the folder if it doesn't exist.
-	 *
-	 * Baked level data is a regenerable build artifact (and gitignored by
-	 * default) — re-bake after changing this; existing bakes don't auto-move.
+	 * Default /Game/LevelData/. Use the content-browser picker to choose any folder under any
+	 * content mount (/Game/ for project content, /<PluginName>/ for plugin content); the folder
+	 * is auto-created if missing. Baked level data is a regenerable, gitignored build artifact —
+	 * re-bake after changing this, as existing bakes don't move themselves.
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Level Data",
 		meta = (DisplayName = "Level Data Save Folder", ContentDir))
@@ -300,7 +281,7 @@ public:
 	TArray<FSeinNavLayerDefinition> NavLayers;
 
 	/**
-	 * **Terrain types** — the neutral per-cell classification the unified level bake
+	 * Terrain types — the neutral per-cell classification the unified level bake
 	 * stamps once and each system interprets: navigation maps a type to a movement
 	 * COST (here, `NavCost`); the Cover extension maps the same type's `TerrainTag` to
 	 * a cover quality (Road → Negative) — so one authored road region drives both
@@ -378,27 +359,16 @@ public:
 	}
 
 	/**
-	 * **How many path searches the planner will run per simulation tick.**
-	 * If more units ask for paths in the same tick than the budget allows,
-	 * the extras wait one tick and try again.
+	 * How many path searches the planner runs per simulation tick — the planner's "speed limit."
+	 * If more units ask for paths in one tick than the budget allows, the extras wait a tick and
+	 * try again, so a big selection staggers its searches instead of spiking the CPU.
 	 *
-	 * ELI5: think of this as the planner's "speed limit." A budget of 32
-	 * means up to 32 units can start a move in the same tick instantly;
-	 * a 50-unit selection would stagger across 2 ticks (~67ms).
-	 *
-	 * Tuning:
-	 *  - **Default 32** — covers typical RTS group sizes without visible
-	 *    stagger.
-	 *  - Lower (4-8) — hard cap on per-tick CPU cost. Useful on low-spec
-	 *    targets or huge maps where individual searches are expensive.
-	 *  - Higher (128+) — effectively disables throttling. Use if your game
-	 *    has frequent large simultaneous moves and you've measured the
-	 *    real cost is acceptable.
-	 *
-	 * Note: BPFL one-off queries (`SeinFindPath`) and reachability checks
-	 * bypass this budget — only auto-pathing units are throttled.
-	 *
-	 * Lockstep-safe (the order of consumption matches across clients).
+	 * Default 32 covers typical RTS group sizes with no visible stagger (a 50-unit selection
+	 * spreads over about 2 ticks). Lower it (4-8) to hard-cap per-tick path cost on low-spec
+	 * targets or huge maps; raise it (128+) to effectively disable throttling if you have
+	 * frequent large simultaneous moves and have measured the cost is fine. One-off Blueprint
+	 * queries (Find Path) and reachability checks bypass the budget — only auto-pathing units are
+	 * throttled. Lockstep-safe: consumption order matches across clients.
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Navigation",
 		meta = (ClampMin = "1", ClampMax = "1024", UIMin = "1", UIMax = "256",
@@ -406,22 +376,15 @@ public:
 	int32 PathRequestsPerTickBudget;
 
 	/**
-	 * **A* search speed-vs-optimality dial, as a percent.** The pathfinder
-	 * uses `f(n) = g(n) + (h(n) * Weight) / 100`. At 100 it's pure A*
-	 * (always optimal, slow on big maps); above 100 it's "weighted A*"
-	 * (faster, paths can be up to Weight% longer than optimal).
+	 * Speed-vs-optimality dial for the A* search, as a percent: 100 means "find the shortest
+	 * path no matter what," higher means "find a good path faster, I'll accept up to that-much
+	 * longer." The search scores cells as f = g + (h * Weight) / 100, so raising Weight biases it
+	 * harder toward the goal and expands fewer cells.
 	 *
-	 * ELI5: 100 = "find the shortest path no matter what."
-	 *       150 = "find a path quickly, I'm OK with up to 50% longer."
-	 *
-	 * Tuning:
-	 *  - **Default 125** — paths at most 25% longer than optimal. Visually
-	 *    indistinguishable on most maps. 5-10× faster search on
-	 *    obstacle-rich terrain than pure A*.
-	 *  - 100 — pure A*. Slowest but always optimal.
-	 *  - 200+ — very fast but paths visibly suboptimal (zig-zags).
-	 *
-	 * Only used when the shipped A*-family nav is selected (gated below).
+	 * Default 125 keeps paths at most 25% longer than optimal — visually indistinguishable on
+	 * most maps, and 5-10x faster than pure A* on obstacle-rich terrain. 100 is pure, always-
+	 * optimal A* (slowest); 200+ is very fast but produces visibly sub-optimal zig-zags. Only
+	 * used when the shipped A*-family nav is selected.
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Navigation",
 		meta = (ClampMin = "100", ClampMax = "300", UIMin = "100", UIMax = "200",
@@ -431,23 +394,15 @@ public:
 	int32 AStarHeuristicWeightPercent;
 
 	/**
-	 * **Hard cap on how much work one path search can do.** A* explores
-	 * cells one at a time; this caps the total number of cells it'll look
-	 * at before giving up. On cap-exceeded, A* returns the best partial
-	 * path it found (closest-to-goal cell it reached) — same behavior as
-	 * an unreachable destination.
+	 * Hard cap on how much work one path search may do — the planner's "patience limit." A*
+	 * explores cells one at a time; once it has expanded this many it gives up and returns the
+	 * best partial path it found (the closest-to-goal cell it reached), the same as it does for a
+	 * genuinely unreachable destination.
 	 *
-	 * ELI5: think "patience limit." Higher = the planner will work harder
-	 * on tough paths; lower = fails fast on impossible paths.
-	 *
-	 * Tuning:
-	 *  - **Default 10000** — covers any legitimate path on a 1km² map with
-	 *    100cm cells.
-	 *  - Raise (50000+) for very large maps or fine-grained grids.
-	 *  - Lower for tighter performance bounds on huge maps with many
-	 *    unreachable clicks.
-	 *
-	 * Only used when the shipped A*-family nav is selected.
+	 * Default 10000 covers any legitimate path on a 1 square-km map at 100cm cells. Raise it
+	 * (50000+) for very large maps or fine grids where long routes need more search; lower it for
+	 * a tighter performance bound on huge maps with many unreachable clicks. Only used when the
+	 * shipped A*-family nav is selected.
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Navigation",
 		meta = (ClampMin = "256", ClampMax = "1000000", UIMin = "1000", UIMax = "100000",
@@ -457,26 +412,17 @@ public:
 	int32 AStarMaxIterations;
 
 	/**
-	 * **How strict the planner is about elevation matching when snapping
-	 * a destination onto walkable ground.** When the user clicks somewhere
-	 * (or formations place slots), the planner snaps the click to the
-	 * nearest passable cell. This tolerance is the maximum Z difference
-	 * between input height and candidate cell height — beyond it, the
-	 * scan keeps looking.
+	 * How close in height a candidate cell must be to count as "the same level" when the planner
+	 * snaps a destination onto walkable ground. Clicks (and formation slots) snap to the nearest
+	 * passable cell; this is the maximum height difference allowed before the search keeps
+	 * looking for a better-matched cell.
 	 *
-	 * ELI5: prevents the "stragglers running off cliffs" bug. If you click
-	 * on a raised platform, slots that fan over the edge would otherwise
-	 * snap to the floor below; the elevation gate forces them to find a
-	 * platform cell instead.
-	 *
-	 * Tuning:
-	 *  - **Default 100** — matches the default 100cm cell size.
-	 *  - Tighter (50) — for maps with closely-spaced mezzanine levels you
-	 *    want to keep distinct.
-	 *  - Looser (200+) — for maps with tall step-ups you want considered
-	 *    the same level.
-	 *
-	 * Only used when the shipped A*-family nav is selected.
+	 * It prevents the "stragglers run off the cliff" bug: click on a raised platform and slots
+	 * that fan over the edge would otherwise snap to the floor below — the elevation gate keeps
+	 * them on the platform. Default 100 matches the default 100cm cell. Tighten it (50) for maps
+	 * with closely-stacked mezzanine levels you want kept distinct; loosen it (200+) for tall
+	 * step-ups that should still read as one level. Only used when the shipped A*-family nav is
+	 * selected.
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Navigation",
 		meta = (ClampMin = "1.0", ClampMax = "10000.0", UIMin = "10.0", UIMax = "1000.0",
@@ -486,26 +432,17 @@ public:
 	FFixedPoint NavProjectionElevationTolerance;
 
 	/**
-	 * **How far the planner searches for a fallback cell when the clicked
-	 * spot isn't directly walkable.** Click on a wall, in the ocean, or on
-	 * an impassable mountain — the planner scans outward ring-by-ring
-	 * looking for the nearest walkable cell. This caps how far it'll go
-	 * before giving up.
+	 * How far (in cells) the planner searches for a fallback spot when the clicked point isn't
+	 * directly walkable — the "walk near here instead" radius. Click a wall, the ocean, or an
+	 * impassable mountain and the planner scans outward ring by ring for the nearest walkable
+	 * cell, giving up past this distance.
 	 *
-	 * ELI5: think "search radius for 'walk near here instead'." A click on
-	 * water with radius=30 → unit walks to the nearest shore within 30
-	 * cells; with radius=5 → fails if no shore within 5 cells.
-	 *
-	 * Tuning:
-	 *  - **Default 30** — ≈30m at the default 100cm grid.
-	 *  - Raise for sparse walkable regions where clicks legitimately need
-	 *    to scan far for a valid cell.
-	 *  - Lower if you want clicks past the walkable area to fail-fast
-	 *    instead of "walking to the nearest land."
-	 *
-	 * Cost scales with R², so very large values are expensive.
-	 *
-	 * Only used when the shipped A*-family nav is selected.
+	 * At radius 30 a click on water sends the unit to the nearest shore within 30 cells; at 5 it
+	 * fails if no shore is that close. Default 30 is about 30m on a 100cm grid. Raise it for
+	 * sparse walkable regions where clicks legitimately need to scan far; lower it if you'd rather
+	 * clicks past the playable area fail fast than "walk to the nearest land." Cost scales with
+	 * the radius squared, so keep large values in check. Only used when the shipped A*-family nav
+	 * is selected.
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Navigation",
 		meta = (ClampMin = "1", ClampMax = "200", UIMin = "5", UIMax = "60",
@@ -513,6 +450,23 @@ public:
 				EditCondition = "IsUsingShippedAStar",
 				EditConditionHides))
 	int32 NavProjectionMaxRingRadius;
+
+	/**
+	 * Smallest connected walkable region the nav bake keeps, in cells. After baking, the A*
+	 * nav floods the grid into connected walkable regions and discards any region smaller than
+	 * this — junk islands like wall tops, cube tops, and slivers of floating geometry units
+	 * can't reach anyway.
+	 *
+	 * Raise it to prune larger stray patches (e.g. a 5x5 rooftop you don't want pathable);
+	 * lower it toward 1 to keep small legitimate platforms. Re-bake after changing. Only used
+	 * when the shipped A*-family nav is selected.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Navigation",
+		meta = (ClampMin = "1", ClampMax = "1024", UIMin = "1", UIMax = "256",
+				DisplayName = "Nav Min Walkable Island (cells)",
+				EditCondition = "IsUsingShippedAStar",
+				EditConditionHides))
+	int32 NavMinWalkableIslandCells;
 
 	// Formation (a Navigation SUBCATEGORY -> renders nested at the bottom of the Navigation
 	// section in Project Settings). The order-formation system: the shape a selection forms
@@ -553,6 +507,14 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Formation",
 		meta = (DisplayName = "Default Formation"))
 	TSubclassOf<USeinFormation> DefaultFormation;
+
+	/** When ON, the movement-mode determinism validator reports non-deterministic Blueprint calls as
+	 *  ERRORS (blocking Data Validation / cook) instead of warnings. Off by default — enable it to
+	 *  enforce lockstep-safety across a team once your movement-mode graphs are clean. Affects only
+	 *  movement-mode Blueprint validation. */
+	UPROPERTY(Config, EditAnywhere, Category = "Movement",
+		meta = (DisplayName = "Treat Movement Non-Determinism As Error"))
+	bool bMovementDeterminismIsError = false;
 
 	// ── Local avoidance (FSeinAvoidanceSystem) ──
 	// Model-shape constants shared by ALL movers (the avoidance model's "feel").
@@ -626,7 +588,7 @@ public:
 	 * a channel a collider can BE (its Object Type) and can RESPOND to (its
 	 * response matrix), with a per-channel DefaultResponse. Analogous to Unreal's
 	 * object channels (WorldStatic, Pawn, Vehicle, …) but fully data-driven and
-	 * **independent of navigation** — a nav blocker need not be a collider, and a
+	 * independent of navigation — a nav blocker need not be a collider, and a
 	 * collider need not block nav.
 	 *
 	 * Colliders (FSeinExtentsComponent's collision section) reference channels by
@@ -662,7 +624,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Collision", meta = (ClampMin = "1"))
 	int32 CollisionMassRatioCutoff = 8;
 
-	// Network / Lockstep Settings (DESIGN §TBD — Phase 0 spike)
+	// Network / Lockstep Settings
 	// ====================================================================================================
 
 	/**

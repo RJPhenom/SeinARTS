@@ -75,6 +75,45 @@ void FSeinARTSEditorStyle::Initialize()
 		new FSlateImageBrush(StyleSet->RootToContentDir(TEXT("SeinEffectIcon92"), TEXT(".png")), FVector2D(92.0f, 92.0f))
 	);
 
+	// ==================== Formation (SeinFormation) ====================
+
+	StyleSet->Set(
+		"ClassIcon.SeinFormation",
+		new FSlateImageBrush(StyleSet->RootToContentDir(TEXT("SeinFormationIcon16"), TEXT(".png")), FVector2D(16.0f, 16.0f))
+	);
+
+	StyleSet->Set(
+		"ClassThumbnail.SeinFormation",
+		new FSlateImageBrush(StyleSet->RootToContentDir(TEXT("SeinFormationIcon92"), TEXT(".png")), FVector2D(92.0f, 92.0f))
+	);
+
+	// ==================== Movement Mode (SeinMovement) ====================
+	// Movement modes are plain UBlueprints parented to USeinMovement; the corner
+	// badge resolves via the parent-class chain, so registering under the parent
+	// class name catches every authored mode BP.
+
+	StyleSet->Set(
+		"ClassIcon.SeinMovement",
+		new FSlateImageBrush(StyleSet->RootToContentDir(TEXT("SeinMovementIcon16"), TEXT(".png")), FVector2D(16.0f, 16.0f))
+	);
+
+	StyleSet->Set(
+		"ClassThumbnail.SeinMovement",
+		new FSlateImageBrush(StyleSet->RootToContentDir(TEXT("SeinMovementIcon92"), TEXT(".png")), FVector2D(92.0f, 92.0f))
+	);
+
+	// ==================== Balance Data Asset (SeinBalanceProfile) ====================
+
+	StyleSet->Set(
+		"ClassIcon.SeinBalanceProfile",
+		new FSlateImageBrush(StyleSet->RootToContentDir(TEXT("SeinDataIcon16"), TEXT(".png")), FVector2D(16.0f, 16.0f))
+	);
+
+	StyleSet->Set(
+		"ClassThumbnail.SeinBalanceProfile",
+		new FSlateImageBrush(StyleSet->RootToContentDir(TEXT("SeinDataIcon92"), TEXT(".png")), FVector2D(92.0f, 92.0f))
+	);
+
 	// ==================== Generic Sein Asset ====================
 	// Fallback icon for any SeinARTS asset lacking a type-specific thumbnail.
 
@@ -192,6 +231,8 @@ void FSeinARTSEditorStyle::Initialize()
 	LoadAndCacheIcon(FName(TEXT("SeinAbilityIcon92")),    TEXT("SeinAbilityIcon92.png"));
 	LoadAndCacheIcon(FName(TEXT("SeinComponentIcon92")),  TEXT("SeinComponentIcon92.png"));
 	LoadAndCacheIcon(FName(TEXT("SeinEffectIcon92")),     TEXT("SeinEffectIcon92.png"));
+	LoadAndCacheIcon(FName(TEXT("SeinFormationIcon92")),  TEXT("SeinFormationIcon92.png"));
+	LoadAndCacheIcon(FName(TEXT("SeinMovementIcon92")),   TEXT("SeinMovementIcon92.png"));
 	LoadAndCacheIcon(FName(TEXT("SeinWidgetIcon92")),     TEXT("SeinWidgetIcon92.png"));
 	LoadAndCacheIcon(FName(TEXT("SeinAssetIcon92")),      TEXT("SeinAssetIcon92.png"));
 }

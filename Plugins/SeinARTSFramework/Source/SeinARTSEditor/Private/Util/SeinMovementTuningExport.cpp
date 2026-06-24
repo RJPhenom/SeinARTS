@@ -26,12 +26,30 @@ namespace SeinMovementTuning
 
 namespace
 {
+	/** UDS-field metadata key storing the source BP variable's GUID. Lets a renamed tuning var map to
+	 *  its existing UDS field (preserving per-unit authored values — UDS instances serialize by field
+	 *  GUID) instead of being dropped and re-added under the new name. */
+	const FName SeinSourceVarGuidKey(TEXT("SeinSourceVarGuid"));
+
+	/** Display/validation metadata copied from the BP tuning variable to its UDS field, so the per-unit
+	 *  MovementClassData editor shows the same tooltip, clamps, slider range, units, and grouping. */
+	const TArray<FName>& TuningMetaKeys()
+	{
+		static const TArray<FName> Keys = {
+			TEXT("tooltip"), TEXT("ClampMin"), TEXT("ClampMax"),
+			TEXT("UIMin"), TEXT("UIMax"), TEXT("Units"), TEXT("Category")
+		};
+		return Keys;
+	}
+
 	/** One BP tuning variable, reduced to what the UDS field needs. */
 	struct FDesiredField
 	{
-		FString          Name;          // == BP var name; becomes the UDS field's friendly name
-		FEdGraphPinType  PinType;
-		FString          DefaultValue;
+		FString               Name;          // == BP var name; becomes the UDS field's friendly name
+		FEdGraphPinType       PinType;
+		FString               DefaultValue;
+		FGuid                 SourceGuid;     // source BP variable's stable GUID — the rename-tracking key
+		TMap<FName, FString>  Meta;           // whitelisted display/validation metadata from the BP var
 	};
 
 	/** USeinMovement, resolved by path so this module needs no Movement link dependency. */
@@ -113,36 +131,79 @@ namespace
 		AssetToolsModule.Get().RenameAssets(Renames);
 	}
 
-	/** Add/remove/retype the UDS's fields to match `Desired`, keyed by friendly name.
-	 *  Order: reconcile desired first (so the UDS is never transiently empty), then drop
-	 *  strays (including the dummy field CreateUserDefinedStruct seeds). */
+	/** Stamp the source-var GUID, re-sync the default value from the BP var, and propagate the
+	 *  whitelisted display/validation metadata onto an existing UDS field (clearing any the BP var no
+	 *  longer carries). The BP var is the authoritative source for a tool-managed UDS, so the default
+	 *  is re-applied every pass — only when it actually changed, to avoid needless struct rebuilds. */
+	void ApplyFieldMetaAndDefault(UUserDefinedStruct* UDS, const FGuid& FieldGuid, const FDesiredField& D)
+	{
+		FStructureEditorUtils::SetMetaData(UDS, FieldGuid, SeinSourceVarGuidKey, D.SourceGuid.ToString());
+
+		if (const FStructVariableDescription* VD = FStructureEditorUtils::GetVarDescByGuid(UDS, FieldGuid))
+		{
+			if (VD->DefaultValue != D.DefaultValue)
+			{
+				FStructureEditorUtils::ChangeVariableDefaultValue(UDS, FieldGuid, D.DefaultValue);
+			}
+		}
+
+		for (const FName& Key : TuningMetaKeys())
+		{
+			if (const FString* Value = D.Meta.Find(Key))
+			{
+				FStructureEditorUtils::SetMetaData(UDS, FieldGuid, Key, *Value);
+			}
+			else if (const FString* Existing = FStructureEditorUtils::GetMetaData(UDS, FieldGuid, Key))
+			{
+				if (!Existing->IsEmpty()) { FStructureEditorUtils::SetMetaData(UDS, FieldGuid, Key, FString()); }
+			}
+		}
+	}
+
+	/** Reconcile the UDS's fields to `Desired`, matching by the SOURCE BP-VAR GUID stamped in each
+	 *  field's metadata (not by name). So renaming a tuning variable RENAMES its UDS field — which
+	 *  preserves every per-unit authored value, because UDS instances serialize by the field's own
+	 *  GUID, which a rename keeps — instead of dropping the field and re-adding it under the new name.
+	 *  Legacy fields predating the GUID stamp are adopted by friendly name on the first sync.
+	 *  Order: reconcile desired first (so the UDS is never transiently empty), then drop strays. */
 	void SyncFields(UUserDefinedStruct* UDS, const TArray<FDesiredField>& Desired)
 	{
 		if (!UDS) return;
 
-		// Pass 1 — ensure each desired field exists with the right type.
-		for (const FDesiredField& D : Desired)
+		// Find an existing field for a desired var: by stamped source GUID (rename-stable), else by
+		// friendly name (legacy field, adopted below). Returns the UDS field's own GUID.
+		auto FindField = [UDS](const FDesiredField& D, FGuid& OutFieldGuid) -> bool
 		{
-			FGuid ExistingGuid;
 			for (const FStructVariableDescription& V : FStructureEditorUtils::GetVarDesc(UDS))
 			{
-				if (V.FriendlyName == D.Name) { ExistingGuid = V.VarGuid; break; }
+				const FString* Stored = FStructureEditorUtils::GetMetaData(UDS, V.VarGuid, SeinSourceVarGuidKey);
+				if (Stored && *Stored == D.SourceGuid.ToString()) { OutFieldGuid = V.VarGuid; return true; }
 			}
-
-			if (ExistingGuid.IsValid())
+			for (const FStructVariableDescription& V : FStructureEditorUtils::GetVarDesc(UDS))
 			{
-				if (const FStructVariableDescription* VD = FStructureEditorUtils::GetVarDescByGuid(UDS, ExistingGuid))
+				if (V.FriendlyName == D.Name) { OutFieldGuid = V.VarGuid; return true; }
+			}
+			return false;
+		};
+
+		// Pass 1 — ensure each desired field exists; reconcile its name + type, and (re)stamp its
+		// source-var GUID so it tracks renames from here on.
+		for (const FDesiredField& D : Desired)
+		{
+			FGuid FieldGuid;
+			if (FindField(D, FieldGuid))
+			{
+				if (const FStructVariableDescription* VD = FStructureEditorUtils::GetVarDescByGuid(UDS, FieldGuid))
 				{
-					if (VD->ToPinType() != D.PinType)
-					{
-						FStructureEditorUtils::ChangeVariableType(UDS, ExistingGuid, D.PinType);
-					}
+					if (VD->FriendlyName != D.Name)   { FStructureEditorUtils::RenameVariable(UDS, FieldGuid, D.Name); }
+					if (VD->ToPinType()  != D.PinType) { FStructureEditorUtils::ChangeVariableType(UDS, FieldGuid, D.PinType); }
 				}
+				ApplyFieldMetaAndDefault(UDS, FieldGuid, D);
 				continue;
 			}
 
-			// New field: AddVariable auto-names it, so snapshot GUIDs to find the new one,
-			// then rename to the BP var name and apply the default (best-effort).
+			// New field: AddVariable auto-names it, so snapshot GUIDs to find the new one, then rename
+			// to the BP var name, stamp its source GUID, and apply the default (best-effort).
 			TSet<FGuid> Before;
 			for (const FStructVariableDescription& V : FStructureEditorUtils::GetVarDesc(UDS)) { Before.Add(V.VarGuid); }
 			if (!FStructureEditorUtils::AddVariable(UDS, D.PinType)) { continue; }
@@ -155,21 +216,23 @@ namespace
 			if (NewGuid.IsValid())
 			{
 				FStructureEditorUtils::RenameVariable(UDS, NewGuid, D.Name);
-				if (!D.DefaultValue.IsEmpty())
-				{
-					FStructureEditorUtils::ChangeVariableDefaultValue(UDS, NewGuid, D.DefaultValue);
-				}
+				ApplyFieldMetaAndDefault(UDS, NewGuid, D);
 			}
 		}
 
-		// Pass 2 — drop any field not in Desired (snapshot GUIDs first; Remove mutates the list).
+		// Pass 2 — drop fields whose source var is gone. Keep a field iff its stamped source GUID is
+		// still desired (or, for an un-adopted legacy field with no stamp, its name is). Snapshot
+		// GUIDs first; Remove mutates the list.
+		TSet<FString> DesiredGuids;
 		TSet<FString> DesiredNames;
-		for (const FDesiredField& D : Desired) { DesiredNames.Add(D.Name); }
+		for (const FDesiredField& D : Desired) { DesiredGuids.Add(D.SourceGuid.ToString()); DesiredNames.Add(D.Name); }
 
 		TArray<FGuid> ToRemove;
 		for (const FStructVariableDescription& V : FStructureEditorUtils::GetVarDesc(UDS))
 		{
-			if (!DesiredNames.Contains(V.FriendlyName)) { ToRemove.Add(V.VarGuid); }
+			const FString* Stored = FStructureEditorUtils::GetMetaData(UDS, V.VarGuid, SeinSourceVarGuidKey);
+			const bool bKeep = Stored ? DesiredGuids.Contains(*Stored) : DesiredNames.Contains(V.FriendlyName);
+			if (!bKeep) { ToRemove.Add(V.VarGuid); }
 		}
 		for (const FGuid& G : ToRemove) { FStructureEditorUtils::RemoveVariable(UDS, G); }
 	}
@@ -213,7 +276,17 @@ UUserDefinedStruct* SyncTuningStructForBlueprint(UBlueprint* Blueprint)
 		const bool bInstanceEditable = (Var.PropertyFlags & CPF_Edit) && !(Var.PropertyFlags & CPF_DisableEditOnInstance);
 		if (!bInstanceEditable) continue;
 		if (!SeinDeterminism::IsPinTypeDeterministic(Var.VarType)) continue;
-		Desired.Add({ Var.VarName.ToString(), Var.VarType, Var.DefaultValue });
+
+		FDesiredField Field;
+		Field.Name         = Var.VarName.ToString();
+		Field.PinType      = Var.VarType;
+		Field.DefaultValue = Var.DefaultValue;
+		Field.SourceGuid   = Var.VarGuid;
+		for (const FName& Key : TuningMetaKeys())
+		{
+			if (Var.HasMetaData(Key)) { Field.Meta.Add(Key, Var.GetMetaData(Key)); }
+		}
+		Desired.Add(MoveTemp(Field));
 	}
 
 	// No tuning vars → unlink and make no asset.

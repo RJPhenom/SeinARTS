@@ -31,4 +31,9 @@ public:
 	virtual FText GetDisplayName() const override;
 	virtual uint32 GetMenuCategories() const override;
 	virtual FText GetToolTip() const override;
+
+	// Create-menu icon + thumbnail (resolved from the SeinARTS editor style set — see
+	// SeinARTSEditorStyle.cpp). Without these the entry falls back to the generic Blueprint icon.
+	virtual FName GetNewAssetThumbnailOverride() const override { return TEXT("ClassThumbnail.SeinMovement"); }
+	virtual FName GetNewAssetIconOverride() const override { return TEXT("ClassIcon.SeinMovement"); }
 };
