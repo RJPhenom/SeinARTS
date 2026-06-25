@@ -47,7 +47,15 @@ public:
 		{
 			Hash.ClearStatic();
 		}
-		Hash.ClearDynamic();
+
+		// Gather the dynamic colliders (Movable + Stationary) into a flat list, then
+		// hand it to Hash.BuildDynamic in ONE call. The per-collider filtering +
+		// GetColliderBoundingRadius below stays serial and cheap; BuildDynamic does the
+		// expensive per-collider footprint cell-stamp in parallel and canonicalizes the
+		// result, replacing the old per-collider Hash.InsertDynamic loop (and its
+		// per-cell TMap hashing) with a sort-grid rebuild.
+		TArray<FSeinCollisionSpatialHash::FDynamicColliderInput> DynamicColliders;
+		DynamicColliders.Reserve(World.GetEntityPool().GetActiveCount());
 
 		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, FSeinEntity& Entity)
 		{
@@ -127,9 +135,14 @@ public:
 				// Movable AND Stationary live in the per-tick dynamic tier — both
 				// can change position (Stationary is unpushable, but script/ability-
 				// moved), so neither can be cached in the static tier like Static.
-				Hash.InsertDynamic(Handle, Pos, Radius);
+				// Collected here; stamped in one parallel BuildDynamic pass below.
+				DynamicColliders.Add(FSeinCollisionSpatialHash::FDynamicColliderInput{ Handle, Pos, Radius });
 			}
 		});
+
+		// One batched rebuild of the dynamic sort grid (parallel per-collider stamp +
+		// canonicalizing sort). Replaces the per-collider InsertDynamic + ClearDynamic.
+		Hash.BuildDynamic(DynamicColliders);
 
 		if (bRebuildStatic)
 		{
