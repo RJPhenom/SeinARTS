@@ -109,7 +109,7 @@ public:
 				const FSeinPlayerID OwnerPlayer = World.GetEntityOwner(Handle);
 				const FFixedTransform SquadXform = Entity.Transform;
 
-				UE_LOG(LogSeinSquadSystem, Log,
+				UE_LOG(LogSeinSquadSystem, Verbose,
 					TEXT("[SquadInit] %s: starting cascade. SlotCount=%d, SquadLoc=%s, Owner=%s"),
 					*Handle.ToString(), Squad->Slots.Num(),
 					*SquadXform.GetLocation().ToString(), *OwnerPlayer.ToString());
@@ -145,7 +145,7 @@ public:
 				{
 					ResolverClass = USeinSquadDispatchResolver::StaticClass();
 				}
-				UE_LOG(LogSeinSquadSystem, Log,
+				UE_LOG(LogSeinSquadSystem, Verbose,
 					TEXT("[SquadInit] %s: resolver=%s (per-squad=%s)"),
 					*Handle.ToString(), *GetNameSafe(ResolverClass),
 					*GetNameSafe(Squad->DispatchResolverClass.Get()));
@@ -296,7 +296,7 @@ public:
 					}
 				}
 
-				UE_LOG(LogSeinSquadSystem, Log,
+				UE_LOG(LogSeinSquadSystem, Verbose,
 					TEXT("[SquadInit] %s: complete. Spawned=%d, SkippedNullEntity=%d, SkippedRecursion=%d, SkippedSpawnFail=%d, Leader=%s, BrokerMembers=%d"),
 					*Handle.ToString(), SpawnedCount, SkippedNullEntity, SkippedRecursion, SkippedSpawnFail,
 					*Squad->Leader.ToString(), Broker ? Broker->Members.Num() : -1);

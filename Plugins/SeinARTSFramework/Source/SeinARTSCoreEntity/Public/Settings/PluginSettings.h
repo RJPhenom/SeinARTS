@@ -624,6 +624,26 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Collision", meta = (ClampMin = "1"))
 	int32 CollisionMassRatioCutoff = 8;
 
+	/**
+	 * Which collision resolver runs the per-tick collider separation + overlap
+	 * events for the whole game. The PostTick collision-resolution system delegates
+	 * to the class you pick here; nothing else in the framework cares what's
+	 * underneath.
+	 *
+	 * The default is the shipped Gauss-Seidel resolver: a fixed-pass relaxation that
+	 * pushes overlapping Block colliders apart along their minimum-translation axis,
+	 * with mass-weighting, an infinite-mass wall/static gate, and a footprint-aware
+	 * hard-barrier hold so units are never shoved through walls or off the grid. Game
+	 * teams can select their own C++ subclass here (impulse-based, position-based
+	 * dynamics, etc.) without touching any other framework code. Empty / invalid /
+	 * abstract → the shipped default. Same soft-path pattern as `NavigationClass` /
+	 * `FogOfWarClass`.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Collision",
+		meta = (DisplayName = "Collision Resolver Class",
+				MetaClass = "/Script/SeinARTSCoreEntity.SeinCollisionResolver"))
+	FSoftClassPath CollisionResolverClass;
+
 	// Network / Lockstep Settings
 	// ====================================================================================================
 

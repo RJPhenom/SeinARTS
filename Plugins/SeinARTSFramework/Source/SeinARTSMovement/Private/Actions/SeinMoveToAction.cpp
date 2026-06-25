@@ -959,7 +959,7 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 					FFixedPoint::FromInt(3) / FFixedPoint::FromInt(4);
 				if (TimeStalledNearGoal >= StallSettleDuration)
 				{
-					UE_LOG(LogSeinMove, Log,
+					UE_LOG(LogSeinMove, Verbose,
 						TEXT("MoveAction near-goal settle: pinned %.1fcm from final for "
 						     "%.2fs — arriving (entity %s)"),
 						SeinMath::Sqrt(DistFinalSq).ToFloat(),

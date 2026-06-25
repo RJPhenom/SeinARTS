@@ -42,11 +42,14 @@
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
 #include "Types/Quat.h"
+// FSeinFogStampWork embeds TArray<FSeinVisionStamp> by value (the per-source
+// stamp set the parallel footprint compute rasterizes), so the full definition
+// must be visible here — a forward declaration no longer suffices.
+#include "Components/SeinVisionComponent.h"
 #include "SeinFogOfWarDefault.generated.h"
 
 class UWorld;
 class USeinLevelData;
-struct FSeinVisionComponent;
 struct FSeinStampShape;
 
 /**
@@ -112,9 +115,10 @@ struct FSeinFogSourceState
 	 *
 	 *  Invariant: ascending-sorted. Multiset (duplicates kept) so per-stamp
 	 *  apex / overlap with covered-cell scans pair off cleanly with the
-	 *  next-tick generated set in ApplyFootprintDiff. UpdateSourceStamp
-	 *  Sort()s the new generated set before commit; DecrementFootprintsForState's
-	 *  Reset() leaves the array empty (sorted by definition). */
+	 *  next-tick generated set in ApplyFootprintDiff. TickStamps' parallel
+	 *  compute Sort()s the new generated set before the serial apply commits
+	 *  it here; DecrementFootprintsForState's Reset() leaves the array empty
+	 *  (sorted by definition). */
 	TArray<int32> Footprints[8];
 };
 
@@ -266,11 +270,11 @@ private:
 	TMap<FSeinPlayerID, FSeinFogVisionGroup> VisionGroups;
 
 	/** Per-source last-stamped memo. Drives the delta-refcount path:
-	 *  TickStamps walks live entities, calls UpdateSourceStamp which
-	 *  short-circuits on identical inputs, otherwise removes the old
-	 *  footprint + re-stamps. Sources that vanish (entity destroyed,
-	 *  vision component removed) get their footprint torn down on the
-	 *  next tick. */
+	 *  TickStamps' serial change-detection short-circuits a source on
+	 *  identical inputs, otherwise queues it for the parallel footprint
+	 *  compute + serial diff-apply (which removes the old footprint + commits
+	 *  the new). Sources that vanish (entity destroyed, vision component
+	 *  removed) get their footprint torn down on the next tick. */
 	TMap<FSeinEntityHandle, FSeinFogSourceState> SourceStates;
 
 	// ----------------------------------------------------------------------
@@ -305,26 +309,38 @@ private:
 	 *  identical on every client. */
 	void UpdateSeenLatches(USeinWorldSubsystem& Sim);
 
-	/** Per-tick entry — change-detect against the source's last stamp
-	 *  state. Identical inputs ⇒ no work, returns false. Changed inputs ⇒
-	 *  remove the old footprint, compute the new one, apply refcount deltas,
-	 *  returns true. The stable-source path is the entire point of opt 2:
-	 *  most units don't cross cells per tick, so most calls return early
-	 *  after a few compares.
+	/** One changed vision source queued by TickStamps' serial gather for the
+	 *  parallel footprint compute + serial apply (the "parallel-compute,
+	 *  serial-apply" pattern — mirrors FSeinAvoidanceSystem / the Jacobi
+	 *  collision resolver). Holds everything the parallel body needs (pose +
+	 *  the possibly terrain-scaled stamp set + owner), the change-detection
+	 *  result the serial commit will write back (StampsHash), and the per-bit
+	 *  cell-list SCRATCH the parallel body fills (the disjoint per-source write
+	 *  slot). Only sources whose pose/stamp-hash changed since last tick get a
+	 *  work item; unchanged sources skip exactly as the old stable-fast-path did.
 	 *
-	 *  TickStamps consumes the return value to gate OnFogOfWarMutated —
-	 *  without that gate, an idle world (no movement, no smoke change) would
-	 *  still broadcast every tick, forcing the debug component to rebuild
-	 *  its scene proxy at vision-tick frequency even with the showflag off. */
-	bool UpdateSourceStamp(FSeinEntityHandle Handle, const FSeinVisionComponent& VData,
-		const FFixedVector& WorldPos, const FFixedQuaternion& Rotation,
-		FSeinPlayerID Owner);
+	 *  GenScratch[bit] (1..7): the new footprint cells this tick, generated +
+	 *  sorted by the parallel body, consumed by the serial ApplyFootprintDiff
+	 *  and then moved into FSeinFogSourceState::Footprints[bit]. Body-disjoint:
+	 *  body i writes only WorkItems[i].GenScratch, never another item's. */
+	struct FSeinFogStampWork
+	{
+		FSeinEntityHandle      Handle;
+		FSeinPlayerID          Owner;
+		FFixedVector           WorldPos;
+		FFixedQuaternion       Rotation;
+		FFixedPoint            EyeHeight;
+		uint32                 StampsHash = 0;
+		TArray<FSeinVisionStamp> Stamps;   // the (possibly terrain-scaled) stamp set to rasterize
+		TArray<int32>          GenScratch[8];
+	};
 
 	/** Tear down a source's footprints — decrement refcounts on every
 	 *  stamped cell, clear bits where refcount hits 0, erase the state
-	 *  entry. Called when an entity vanishes (destroyed, vision data
-	 *  stripped) and during re-stamps from UpdateSourceStamp. Explored
-	 *  bit is sticky and never decremented. */
+	 *  entry. Called from TickStamps when an entity vanishes (destroyed,
+	 *  vision data stripped); a still-live source that merely moved is
+	 *  diffed in place by the serial apply, not torn down. Explored bit is
+	 *  sticky and never decremented. */
 	void RemoveSourceStamp(FSeinEntityHandle Handle);
 
 	/** Generate the cell-index footprint for one stamp × one layer-bit, with
@@ -352,13 +368,19 @@ private:
 	 *  and trivial to verify). Cells appended to OutCells are unsorted and
 	 *  may include duplicates across multiple stamps (apex always emitted
 	 *  first per stamp; LOS-walked cells appended after). Sort happens in
-	 *  the caller before diffing. */
+	 *  the caller before diffing.
+	 *
+	 *  CONST + PURE: reads only the immutable per-tick grid state (GroundHeight
+	 *  / Blocker / DynamicBlocker arrays, all finalized before the source loop)
+	 *  plus its own arguments, and appends into the caller-owned OutCells. This
+	 *  is what lets TickStamps call it from inside a SeinParallelFor body — each
+	 *  body writes only its own scratch slot, never any FoW member. */
 	void GenerateLayerFootprintCells(
 		const FSeinStampShape& Shape,
 		const FFixedVector& EntityWorldPos,
 		const FFixedQuaternion& EntityRotation,
 		FFixedPoint EyeHeight, uint8 StampBit,
-		TArray<int32>& OutCells);
+		TArray<int32>& OutCells) const;
 
 	/** Diff `OldSorted` against `NewSorted` (both ascending, multiset
 	 *  semantics — duplicates pair off in iteration order) and apply the
@@ -419,8 +441,10 @@ private:
 	/** Walk every per-bit footprint stored on `State`, decrement the
 	 *  matching refcount in `Group`, clear bits where refcount hits 0,
 	 *  and reset the footprint arrays. Explored bit is sticky and never
-	 *  touched. Used by RemoveSourceStamp + UpdateSourceStamp's
-	 *  "old-then-new" path. */
+	 *  touched. Used by RemoveSourceStamp + TickStamps' serial apply when a
+	 *  source changes owner (footprints can't diff across per-player groups,
+	 *  so the old group is fully decremented and the new one diffed from an
+	 *  empty baseline). */
 	void DecrementFootprintsForState(FSeinFogSourceState& State, FSeinFogVisionGroup& Group);
 
 	/** Stamp one shape's footprint of effective height + layer mask into

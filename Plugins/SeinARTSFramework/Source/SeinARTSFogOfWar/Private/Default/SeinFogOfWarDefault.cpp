@@ -32,6 +32,7 @@
 #include "Simulation/ComponentStorage.h"
 #include "Core/SeinEntityPool.h"
 #include "Core/SeinEntityHandle.h"
+#include "Core/SeinParallel.h"
 #include "Types/Entity.h"
 
 #include "Engine/World.h"
@@ -454,6 +455,24 @@ FSeinFogVisionGroup& USeinFogOfWarDefault::GetOrCreateGroup(FSeinPlayerID Player
 	return Group;
 }
 
+namespace
+{
+	/** Hash a vision source's stamp set. Folds shape geometry + layer mask
+	 *  per stamp; XOR-combine across stamps so iteration order is irrelevant
+	 *  (matches the existing dynamic-blocker fingerprint pattern). Used by
+	 *  TickStamps' serial change-detection stable-fast-path compare. */
+	uint32 HashVisionStamps(const TArray<FSeinVisionStamp>& Stamps)
+	{
+		uint32 H = 0;
+		for (const FSeinVisionStamp& S : Stamps)
+		{
+			H ^= GetTypeHash(S.Shape);
+			H ^= static_cast<uint32>(S.LayerMask);
+		}
+		return H;
+	}
+}
+
 void USeinFogOfWarDefault::TickStamps(UWorld* World)
 {
 	if (Width <= 0 || Height <= 0 || !World) return;
@@ -498,11 +517,12 @@ void USeinFogOfWarDefault::TickStamps(UWorld* World)
 	const bool bDynamicBlockersChanged = RebuildDynamicBlockers(World);
 
 	// If dynamic blockers changed, every source's LOS may have shifted —
-	// flip bValid=false on every source so UpdateSourceStamp's stable-
-	// fast-path returns early and the diff path runs. We DON'T eagerly
-	// tear down old footprints here (as we used to) because the per-bit
-	// diff in UpdateSourceStamp computes the minimal old→new delta when
-	// it runs — for sources whose LOS results don't actually change
+	// flip bValid=false on every source so the change-detection stable-
+	// fast-path below recomputes (each invalidated source gets a work item)
+	// and the diff path runs. We DON'T eagerly tear down old footprints here
+	// (as we used to) because the per-bit diff in the serial apply computes
+	// the minimal old→new delta when it runs — for sources whose LOS results
+	// don't actually change
 	// despite the blocker mutation, the diff is empty and the per-tick
 	// cost collapses to "generate footprint + sort + zero-diff." That's
 	// the win: a smoke grenade halfway across the map no longer triggers
@@ -515,13 +535,29 @@ void USeinFogOfWarDefault::TickStamps(UWorld* World)
 		}
 	}
 
-	// Walk live entities. Each call is O(few-compares) on the stable path
-	// — only sources whose inputs differ from last tick pay the full
-	// remove-and-restamp cost. Accumulate the change flag from each call so
-	// we can suppress the OnFogOfWarMutated broadcast on idle ticks.
-	TSet<FSeinEntityHandle> AliveSources;
-	AliveSources.Reserve(SourceStates.Num());
-	bool bAnySourceChanged = false;
+	// ----------------------------------------------------------------------
+	// Per-source footprint stamping — parallel-compute, serial-apply
+	// (the established pattern; mirrors FSeinAvoidanceSystem / the Jacobi
+	// collision resolver). The per-source Bresenham LOS footprint generation
+	// is the dominant per-tick FoW cost and is the classic one-worker-per-
+	// vision-source candidate: each source's footprint is a PURE READ of the
+	// immutable per-tick grid (GroundHeight / Blocker / DynamicBlocker arrays,
+	// all finalized by RebuildDynamicBlockers ABOVE this loop) plus the
+	// source's own pose, and the outputs (per-bit cell lists) are per-source
+	// and disjoint. So we split the old per-source UpdateSourceStamp into:
+	//   (1) SERIAL gather + change-detection — reads the SourceStates cache to
+	//       decide which sources changed; collects only those into a work-list.
+	//   (2) PARALLEL compute — each changed source rasterizes its per-bit
+	//       footprint cells into its OWN work-item scratch (no SourceStates /
+	//       VisionGroups touch).
+	//   (3) SERIAL apply — in work-list (handle) order, commit each source's
+	//       SourceStates cache entry and ApplyFootprintDiff its new vs old
+	//       cells into the shared refcounted VisionGroups.
+	// `Sein.Sim.Parallel 0` forces the compute serial; the result is bit-
+	// identical (immutable reads, disjoint per-source scratch, fixed-point /
+	// integer Bresenham, handle-ordered serial apply), so it stays lockstep-
+	// safe for the ability LOS gate.
+	// ----------------------------------------------------------------------
 
 	// Terrain-scaled vision: sample the baked terrain type under each source and scale its
 	// stamp radii by that type's VisionMultiplier (a unit in a forest sees less far).
@@ -529,8 +565,22 @@ void USeinFogOfWarDefault::TickStamps(UWorld* World)
 	USeinNavigation* TerrainNav = USeinNavigationSubsystem::GetNavigationForWorld(World);
 	const USeinARTSCoreSettings* TerrainSettings = GetDefault<USeinARTSCoreSettings>();
 
+	// (1) SERIAL gather + change-detection. ForEachEntity walks slots in
+	//     ascending index order, so the work-list (and thus the serial apply
+	//     below) is naturally handle-sorted — a fixed, deterministic order.
+	//     The change decision READS the SourceStates cache (FindOrAdd ensures
+	//     the entry exists so the apply phase can re-fetch it by handle); a
+	//     source whose pose + stamp-hash match last tick skips with no work
+	//     item, exactly as the old stable-fast-path did. We do NOT hold the
+	//     FindOrAdd reference past this body — the map may rehash as more
+	//     entries are added — the apply phase re-fetches by handle.
+	TSet<FSeinEntityHandle> AliveSources;
+	AliveSources.Reserve(SourceStates.Num());
+	TArray<FSeinFogStampWork> WorkItems;
+	WorkItems.Reserve(SourceStates.Num());
+
 	Sim->GetEntityPool().ForEachEntity(
-		[this, Sim, Storage, &AliveSources, &bAnySourceChanged, TerrainNav, TerrainSettings](FSeinEntityHandle Handle, FSeinEntity& Entity)
+		[this, Sim, Storage, &AliveSources, &WorkItems, TerrainNav, TerrainSettings](FSeinEntityHandle Handle, FSeinEntity& Entity)
 		{
 			const void* Raw = Storage->GetComponentRaw(Handle);
 			if (!Raw) return;
@@ -540,6 +590,7 @@ void USeinFogOfWarDefault::TickStamps(UWorld* World)
 			AliveSources.Add(Handle);
 			const FSeinPlayerID OwnerPlayer = Sim->GetEntityOwner(Handle);
 			const FFixedVector SourcePos = Entity.Transform.GetLocation();
+			const FFixedQuaternion SourceRot = Entity.Transform.Rotation;
 
 			// Terrain vision scale at the source's cell (1 = unchanged → unscaled fast path).
 			FFixedPoint VisMult = FFixedPoint::One;
@@ -549,28 +600,160 @@ void USeinFogOfWarDefault::TickStamps(UWorld* World)
 				if (TType != 0) VisMult = TerrainSettings->GetTerrainVisionMultiplier(TType);
 			}
 
-			bool bChanged;
-			if (VisMult == FFixedPoint::One)
+			// Build the stamp set this tick rasterizes — the authored set, or a
+			// terrain-scaled copy. The hash + the footprint compute both run
+			// against THIS set, so the cache stays consistent. Source MOVEMENT —
+			// the only way the terrain under a source changes (the bake is
+			// static) — already invalidates the cache via WorldPos, so a
+			// stationary source on constant terrain stays on the fast path.
+			const TArray<FSeinVisionStamp>* StampsToUse = &VData->VisionStamps;
+			TArray<FSeinVisionStamp> ScaledStamps;
+			if (VisMult != FFixedPoint::One)
 			{
-				bChanged = UpdateSourceStamp(Handle, *VData, SourcePos, Entity.Transform.Rotation, OwnerPlayer);
-			}
-			else
-			{
-				// Scale a transient copy's stamp shapes. UpdateSourceStamp hashes the (scaled)
-				// stamps for its cache; source MOVEMENT — which is the only way the terrain
-				// under it changes (the bake is static) — already invalidates that cache via
-				// WorldPos, so a stationary source on constant terrain stays on the fast path.
-				FSeinVisionComponent ScaledVData = *VData;
-				for (FSeinVisionStamp& S : ScaledVData.VisionStamps)
+				ScaledStamps = VData->VisionStamps;
+				for (FSeinVisionStamp& S : ScaledStamps)
 				{
 					S.Shape.Radius      = S.Shape.Radius * VisMult;
 					S.Shape.HalfExtentX = S.Shape.HalfExtentX * VisMult;
 					S.Shape.HalfExtentY = S.Shape.HalfExtentY * VisMult;
 				}
-				bChanged = UpdateSourceStamp(Handle, ScaledVData, SourcePos, Entity.Transform.Rotation, OwnerPlayer);
+				StampsToUse = &ScaledStamps;
 			}
-			if (bChanged) bAnySourceChanged = true;
+
+			const uint32 NewStampsHash = HashVisionStamps(*StampsToUse);
+
+			// Stable-source fast path (the old UpdateSourceStamp early-out).
+			// Identical pose + owner + eye + stamp set ⇒ no work, no work item.
+			// Pose includes Rotation since shaped stamps depend on it (rect
+			// axes, cone direction). bValid is flipped false above for ALL
+			// sources when dynamic blockers changed, so this correctly falls
+			// through to a recompute then.
+			const FSeinFogSourceState& State = SourceStates.FindOrAdd(Handle);
+			if (State.bValid
+				&& State.Owner == OwnerPlayer
+				&& State.WorldPos == SourcePos
+				&& State.Rotation == SourceRot
+				&& State.EyeHeight == VData->EyeHeight
+				&& State.StampsHash == NewStampsHash)
+			{
+				return;
+			}
+
+			// Changed → queue a work item carrying everything the parallel
+			// footprint compute needs. The stamp set is copied into the item so
+			// the parallel body never touches transient/component state.
+			FSeinFogStampWork& Work = WorkItems.AddDefaulted_GetRef();
+			Work.Handle     = Handle;
+			Work.Owner      = OwnerPlayer;
+			Work.WorldPos   = SourcePos;
+			Work.Rotation   = SourceRot;
+			Work.EyeHeight  = VData->EyeHeight;
+			Work.StampsHash = NewStampsHash;
+			Work.Stamps     = *StampsToUse;
 		});
+
+	// (2) PARALLEL compute. Each body rasterizes its source's per-bit footprint
+	//     cells into WorkItems[i].GenScratch — a disjoint per-source slot. Pure
+	//     reads of the immutable grid (GroundHeight / Blocker / DynamicBlocker,
+	//     finalized before this loop) + the item's own inputs; NO SourceStates
+	//     FindOrAdd, NO VisionGroups mutation. Per-bit: union this tick's stamp
+	//     contributions across all of the source's stamps emitting on that bit,
+	//     then sort (the diff in the apply phase wants ascending multisets).
+	//     This path calls NO cross-module delegate (every LOS read is a FoW-
+	//     internal immutable-grid read), so no bForceSerial is needed — only the
+	//     Sein.Sim.Parallel / min-batch gating inside SeinParallelFor.
+	const int32 NumWork = WorkItems.Num();
+	SeinParallelFor(NumWork, [this, &WorkItems](int32 i)
+	{
+		FSeinFogStampWork& Work = WorkItems[i];
+		for (uint8 Bit = 1; Bit <= 7; ++Bit)
+		{
+			const uint8 BitMask = static_cast<uint8>(1u << Bit);
+			TArray<int32>& NewCells = Work.GenScratch[Bit];
+			NewCells.Reset();
+			for (const FSeinVisionStamp& VStamp : Work.Stamps)
+			{
+				if (!VStamp.Shape.bEnabled) continue;
+				if (VStamp.LayerMask == 0) continue;
+				if ((VStamp.LayerMask & BitMask) == 0) continue;
+				GenerateLayerFootprintCells(VStamp.Shape, Work.WorldPos, Work.Rotation,
+					Work.EyeHeight, Bit, NewCells);
+			}
+			NewCells.Sort();
+		}
+	});
+
+	// (3) SERIAL apply — handle-ordered (the work-list order). Commit each
+	//     source's SourceStates cache entry AND ApplyFootprintDiff its new vs
+	//     old cell lists into the shared refcounted VisionGroups. The refcount
+	//     add/remove is commutative so the final VisionGroups is order-
+	//     independent, but we apply in the fixed work-list order anyway. This is
+	//     the back half of the old UpdateSourceStamp, verbatim — owner-transfer
+	//     migration, per-bit diff + footprint commit, cache-key commit.
+	bool bAnySourceChanged = (NumWork > 0);
+	for (int32 i = 0; i < NumWork; ++i)
+	{
+		FSeinFogStampWork& Work = WorkItems[i];
+		FSeinFogSourceState& State = SourceStates.FindChecked(Work.Handle);
+
+		// Owner transfer: footprints live in per-player groups, so we can't
+		// diff across groups. Decrement everything from the old group (which
+		// resets State.Footprints[Bit] in place), then the per-bit diff below
+		// runs against the now-empty old set into the new group. Not gated on
+		// bValid — forced-invalidation paths (dynamic blockers changed) leave
+		// Footprints populated even with bValid=false, and a same-tick owner
+		// change would still need them migrated. Happy path (Owner unchanged)
+		// skips the find+iter entirely.
+		if (State.Owner != Work.Owner)
+		{
+			if (FSeinFogVisionGroup* OldGroup = VisionGroups.Find(State.Owner))
+			{
+				DecrementFootprintsForState(State, *OldGroup);
+			}
+			else
+			{
+				// Old owner has no group (typical for fresh entities — default-
+				// constructed Owner). Footprints[] should already be empty;
+				// reset defensively so the diff has a clean baseline.
+				for (int32 BitIdx = 1; BitIdx <= 7; ++BitIdx)
+				{
+					State.Footprints[BitIdx].Reset();
+				}
+			}
+		}
+
+		FSeinFogVisionGroup& NewGroup = GetOrCreateGroup(Work.Owner);
+
+		// Per-bit diff. The parallel body already unioned + sorted the new cell
+		// list per bit; here we apply the minimal refcount/bitfield delta vs
+		// last tick's stored footprint and commit the (sorted) new set for next
+		// tick's diff. Bit 0 (Explored) is sticky and handled inside Increment.
+		for (uint8 Bit = 1; Bit <= 7; ++Bit)
+		{
+			ApplyFootprintDiff(NewGroup, Bit, State.Footprints[Bit], Work.GenScratch[Bit]);
+			State.Footprints[Bit] = MoveTemp(Work.GenScratch[Bit]);
+		}
+
+		// Commit cache key for next tick's compare.
+		State.bValid    = true;
+		State.Owner     = Work.Owner;
+		State.WorldPos  = Work.WorldPos;
+		State.Rotation  = Work.Rotation;
+		State.EyeHeight = Work.EyeHeight;
+		State.StampsHash = Work.StampsHash;
+
+		// DIAGNOSTIC (2026-05-02 smoke-not-blocking regression): one line per
+		// source per re-stamp. EyeZ here is the same value passed to LOS — if
+		// it's much higher than the smoke's `TopZ` (logged in
+		// StampDynamicBlockerShape) the lampshade test rejects. Free when
+		// LogSeinFogOfWar is below Verbose.
+		const FFixedPoint EyeZForLog = Work.WorldPos.Z + Work.EyeHeight;
+		UE_LOG(LogSeinFogOfWar, Verbose,
+			TEXT("UpdateSourceStamp: Handle=%d WorldPos.Z=%lld EyeHeight=%lld EyeZ=%lld "
+				 "Stamps=%d Owner=%u"),
+			Work.Handle.Index, Work.WorldPos.Z.Value, Work.EyeHeight.Value, EyeZForLog.Value,
+			Work.Stamps.Num(), Work.Owner.Value);
+	}
 
 	// Source went away (entity destroyed, vision component stripped, etc.) —
 	// tear down its footprint so its bits don't linger. Counts as a viz
@@ -612,133 +795,6 @@ void USeinFogOfWarDefault::TickStamps(UWorld* World)
 	}
 }
 
-namespace
-{
-	/** Hash a vision source's stamp set. Folds shape geometry + layer mask
-	 *  per stamp; XOR-combine across stamps so iteration order is irrelevant
-	 *  (matches the existing dynamic-blocker fingerprint pattern). Used by
-	 *  UpdateSourceStamp's stable-fast-path compare. */
-	uint32 HashVisionStamps(const TArray<FSeinVisionStamp>& Stamps)
-	{
-		uint32 H = 0;
-		for (const FSeinVisionStamp& S : Stamps)
-		{
-			H ^= GetTypeHash(S.Shape);
-			H ^= static_cast<uint32>(S.LayerMask);
-		}
-		return H;
-	}
-}
-
-bool USeinFogOfWarDefault::UpdateSourceStamp(FSeinEntityHandle Handle,
-	const FSeinVisionComponent& VData, const FFixedVector& WorldPos,
-	const FFixedQuaternion& Rotation, FSeinPlayerID Owner)
-{
-	FSeinFogSourceState& State = SourceStates.FindOrAdd(Handle);
-
-	const uint32 NewStampsHash = HashVisionStamps(VData.VisionStamps);
-
-	// Stable-source fast path. Identical pose + stamp set ⇒ no work. Pose
-	// includes Rotation since shaped stamps depend on it (rect axes, cone
-	// direction). Stamps hash folds shape geometry + per-stamp layer mask
-	// + bEnabled flags, so toggling a garrison-cone on or off invalidates
-	// the cache as expected. Returns false: nothing changed, caller
-	// doesn't need to broadcast OnFogOfWarMutated for this source.
-	if (State.bValid
-		&& State.Owner == Owner
-		&& State.WorldPos == WorldPos
-		&& State.Rotation == Rotation
-		&& State.EyeHeight == VData.EyeHeight
-		&& State.StampsHash == NewStampsHash)
-	{
-		return false;
-	}
-
-	// Owner transfer: footprints live in per-player groups, so we can't
-	// diff across groups. Decrement everything from the old group (which
-	// resets State.Footprints[Bit] arrays in place), then the per-bit diff
-	// below runs against the now-empty old set into the new group. Not
-	// gated on bValid — forced-invalidation paths (e.g. dynamic blockers
-	// changed) leave Footprints populated even with bValid=false, and a
-	// same-tick owner change would still need them migrated. The happy
-	// path (Owner unchanged) skips the find+iter entirely.
-	if (State.Owner != Owner)
-	{
-		if (FSeinFogVisionGroup* OldGroup = VisionGroups.Find(State.Owner))
-		{
-			DecrementFootprintsForState(State, *OldGroup);
-		}
-		else
-		{
-			// Old owner has no group (typical for fresh entities — default-
-			// constructed Owner). Footprints[] should already be empty;
-			// reset defensively so the diff has a clean baseline.
-			for (int32 BitIdx = 1; BitIdx <= 7; ++BitIdx)
-			{
-				State.Footprints[BitIdx].Reset();
-			}
-		}
-	}
-
-	FSeinFogVisionGroup& NewGroup = GetOrCreateGroup(Owner);
-
-	// Per-bit diff. For each layer-bit (1..7), union the current tick's
-	// stamp contributions across all stamps of this source emitting on
-	// that bit, sort, then apply the minimal refcount/bitfield delta vs
-	// last tick's stored footprint via ApplyFootprintDiff. The pre-diff
-	// path was "decrement all old + increment all new" per cell; the diff
-	// path skips the matched-cells case entirely, which is the dominant
-	// case for typical movement (unit shifts one cell, footprint mostly
-	// overlaps).
-	//
-	// Bit 0 (Explored) is sticky and never participates in the per-bit
-	// mask machinery — Increment in ApplyFootprintDiff sets it on every
-	// newly-visible cell, and we never clear it.
-	//
-	// Per-bit scratch buckets reused across iterations via TArray::Reset()
-	// (preserves capacity). A unit emitting on only bit 1 (typical) does
-	// 1 allocation across all 7 bit passes.
-	TArray<int32> NewCells;
-	for (uint8 Bit = 1; Bit <= 7; ++Bit)
-	{
-		const uint8 BitMask = static_cast<uint8>(1u << Bit);
-		NewCells.Reset();
-		for (const FSeinVisionStamp& VStamp : VData.VisionStamps)
-		{
-			if (!VStamp.Shape.bEnabled) continue;
-			if (VStamp.LayerMask == 0) continue;
-			if ((VStamp.LayerMask & BitMask) == 0) continue;
-			GenerateLayerFootprintCells(VStamp.Shape, WorldPos, Rotation,
-				VData.EyeHeight, Bit, NewCells);
-		}
-		NewCells.Sort();
-		ApplyFootprintDiff(NewGroup, Bit, State.Footprints[Bit], NewCells);
-		State.Footprints[Bit] = NewCells;  // commit (sorted) for next tick's diff
-	}
-
-	// Commit cache key for next tick's compare.
-	State.bValid = true;
-	State.Owner = Owner;
-	State.WorldPos = WorldPos;
-	State.Rotation = Rotation;
-	State.EyeHeight = VData.EyeHeight;
-	State.StampsHash = NewStampsHash;
-
-	// DIAGNOSTIC (2026-05-02 smoke-not-blocking regression): one line per
-	// source per re-stamp. EyeZ here is the same value passed to LOS — if
-	// it's much higher than the smoke's `TopZ` (logged in StampDynamicBlockerShape)
-	// the lampshade test rejects. Free when LogSeinFogOfWar is
-	// below Verbose.
-	const FFixedPoint EyeZForLog = WorldPos.Z + VData.EyeHeight;
-	UE_LOG(LogSeinFogOfWar, Verbose,
-		TEXT("UpdateSourceStamp: Handle=%d WorldPos.Z=%lld EyeHeight=%lld EyeZ=%lld "
-			 "Stamps=%d Owner=%u"),
-		Handle.Index, WorldPos.Z.Value, VData.EyeHeight.Value, EyeZForLog.Value,
-		VData.VisionStamps.Num(), Owner.Value);
-
-	return true;
-}
-
 void USeinFogOfWarDefault::RemoveSourceStamp(FSeinEntityHandle Handle)
 {
 	FSeinFogSourceState* State = SourceStates.Find(Handle);
@@ -758,7 +814,7 @@ void USeinFogOfWarDefault::GenerateLayerFootprintCells(
 	const FFixedVector& EntityWorldPos,
 	const FFixedQuaternion& EntityRotation,
 	FFixedPoint EyeHeight, uint8 StampBit,
-	TArray<int32>& OutCells)
+	TArray<int32>& OutCells) const
 {
 	if (StampBit < 1 || StampBit > 7) return;
 	if (CellSize <= FFixedPoint::Zero) return;

@@ -55,6 +55,8 @@
 #include "Simulation/Systems/SeinProductionSystem.h"
 #include "Simulation/Systems/SeinCollisionResolutionSystem.h"
 #include "Simulation/Systems/SeinCollisionBroadphaseSystem.h"
+#include "Collision/SeinCollisionResolver.h"
+#include "Collision/SeinCollisionResolverDefault.h"
 #include "Simulation/Systems/SeinStateHashSystem.h"
 #include "Simulation/Systems/SeinLifespanSystem.h"
 
@@ -104,6 +106,34 @@ void USeinWorldSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	for (ISeinSystem* Sys : BuiltInSystems)
 	{
 		RegisterSystem(Sys);
+	}
+
+	// Instantiate the pluggable collision resolver. The PostTick
+	// FSeinCollisionResolutionSystem delegates its per-tick work to this object.
+	// Resolve the configured class, falling back to the shipped Gauss-Seidel
+	// default if the setting is empty or points to a stale / abstract class —
+	// EXACTLY mirroring USeinNavigationSubsystem::Initialize's NavigationClass path.
+	{
+		UClass* ResolverClass = nullptr;
+		if (Settings && Settings->CollisionResolverClass.IsValid())
+		{
+			ResolverClass = Settings->CollisionResolverClass.TryLoadClass<USeinCollisionResolver>();
+		}
+		if (!ResolverClass || ResolverClass->HasAnyClassFlags(CLASS_Abstract))
+		{
+			ResolverClass = USeinCollisionResolverDefault::StaticClass();
+		}
+
+		CollisionResolver = NewObject<USeinCollisionResolver>(this, ResolverClass, TEXT("SeinCollisionResolver"));
+		if (CollisionResolver)
+		{
+			CollisionResolver->OnInitialized(GetWorld());
+		}
+		else
+		{
+			UE_LOG(LogSeinSim, Error, TEXT("Failed to instantiate collision resolver class %s"),
+				ResolverClass ? *ResolverClass->GetName() : TEXT("<null>"));
+		}
 	}
 
 	// Auto-register the Neutral player (ID 0). Entities that logically have "no
@@ -1868,7 +1898,7 @@ void USeinWorldSubsystem::ProcessDeferredDestroys()
 		EntityActorClassMap.Remove(Handle);
 		EntityPool.Release(Handle);
 
-		UE_LOG(LogSeinSim, Log, TEXT("Destroyed entity %s"), *Handle.ToString());
+		UE_LOG(LogSeinSim, Verbose, TEXT("Destroyed entity %s"), *Handle.ToString());
 	}
 
 	PendingDestroy.Empty();
@@ -3559,6 +3589,17 @@ int32 USeinWorldSubsystem::ComputeStateHash() const
 	// Pointer hash is stable within a process but not guaranteed across
 	// processes, so sort by struct name before hashing. Keeps cross-process
 	// comparison reliable for desync detection.
+	//
+	// The per-storage ComputeHash() walk is the expensive part (every live slot
+	// × every reflected field). Each storage's hash is INDEPENDENT and a pure
+	// read, so fan those out across worker threads — then fold the results back
+	// SERIALLY in the sorted order. HashCombine is not associative, so the fold
+	// order is load-bearing and must stay identical to the serial path; only the
+	// independent per-storage hashing runs concurrently. SeinParallelFor is
+	// gated by Sein.Sim.Parallel and is bit-identical to the serial loop (it
+	// runs serially when the cvar is off or the batch is below the min). The
+	// SeinParallelFor body obeys the contract: reads immutable storage, writes
+	// only its own disjoint Results slot, no structural mutation.
 	{
 		TArray<UScriptStruct*> Structs;
 		Structs.Reserve(ComponentStorages.Num());
@@ -3567,10 +3608,19 @@ int32 USeinWorldSubsystem::ComputeStateHash() const
 		{
 			return A.GetFName().Compare(B.GetFName()) < 0;
 		});
-		for (UScriptStruct* Struct : Structs)
+
+		const int32 NumStorages = Structs.Num();
+		TArray<uint32> Results;
+		Results.SetNumUninitialized(NumStorages);
+		SeinParallelFor(NumStorages, [this, &Structs, &Results](int32 Index)
 		{
-			Hash = HashCombine(Hash, GetTypeHash(Struct->GetFName()));
-			Hash = HashCombine(Hash, ComponentStorages[Struct]->ComputeHash());
+			Results[Index] = ComponentStorages[Structs[Index]]->ComputeHash();
+		});
+
+		for (int32 Index = 0; Index < NumStorages; ++Index)
+		{
+			Hash = HashCombine(Hash, GetTypeHash(Structs[Index]->GetFName()));
+			Hash = HashCombine(Hash, Results[Index]);
 		}
 	}
 

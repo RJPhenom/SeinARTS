@@ -13,6 +13,7 @@
 #include "Core/SeinSystemPriority.h"
 #include "Core/SeinPlayerState.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "Simulation/ComponentStorage.h"
 #include "Components/SeinActiveEffectsComponent.h"
 #include "Effects/SeinActiveEffect.h"
 #include "Effects/SeinEffect.h"
@@ -41,14 +42,29 @@ public:
 		// in this tick's duration/interval math.
 		World.ProcessPendingEffectApplies();
 
-		// 2. Tick per-entity Instance-scope effects.
-		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, FSeinEntity& /*Entity*/)
+		// 2. Tick per-entity Instance-scope effects. Only entities carrying
+		// FSeinActiveEffectsComponent participate — iterate that storage's live
+		// slots directly instead of the full pool + per-entity GetComponent
+		// miss. ForEachLiveComponent yields slots in the same ascending order
+		// ForEachEntity did, so per-entity tick order is unchanged. Removals
+		// route through World.RemoveInstanceEffect, which mutates the payload's
+		// inner ActiveEffects array (RemoveAtSwap) — NOT this storage's slot
+		// set — so walking the live bit-array stays safe across the pass. The
+		// pending-apply drain in step 1 already finished any AddComponent before
+		// iteration begins.
+		if (ISeinComponentStorage* Storage =
+			World.GetComponentStorageRaw(FSeinActiveEffectsComponent::StaticStruct()))
 		{
-			FSeinActiveEffectsComponent* EffectsComp = World.GetComponent<FSeinActiveEffectsComponent>(Handle);
-			if (!EffectsComp || EffectsComp->ActiveEffects.Num() == 0) return;
+			FSeinEntityPool& Pool = World.GetEntityPool();
+			Storage->ForEachLiveComponent([&](int32 SlotIndex, void* RawComponent)
+			{
+				FSeinActiveEffectsComponent* EffectsComp = static_cast<FSeinActiveEffectsComponent*>(RawComponent);
+				if (!EffectsComp || EffectsComp->ActiveEffects.Num() == 0) return;
 
-			TickEffectsArray(Handle, EffectsComp->ActiveEffects, DeltaTime, World);
-		});
+				const FSeinEntityHandle Handle(SlotIndex, Pool.GetSlotGeneration(SlotIndex));
+				TickEffectsArray(Handle, EffectsComp->ActiveEffects, DeltaTime, World);
+			});
+		}
 
 		// 3. Tick per-player Class + Player scope effects. Class/Player-scope
 		// ticks don't have a natural single "target entity" — we use the stored Target

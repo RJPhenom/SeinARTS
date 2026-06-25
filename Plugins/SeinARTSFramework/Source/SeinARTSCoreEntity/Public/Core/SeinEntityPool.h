@@ -64,6 +64,19 @@ public:
 	FORCEINLINE int32 GetActiveCount() const { return ActiveCount; }
 	FORCEINLINE int32 GetCapacity() const { return Capacity; }
 
+	/**
+	 * Current generation counter for a slot index, or 0 (invalid) if the slot
+	 * is out of range. Used to reconstruct a full FSeinEntityHandle from a bare
+	 * slot index obtained via ISeinComponentStorage::ForEachLiveComponent —
+	 * `FSeinEntityHandle(Slot, GetSlotGeneration(Slot))` is exactly the handle
+	 * ForEachEntity would yield for an alive slot. Component storage owns slot
+	 * indices only; generations are the pool's authority.
+	 */
+	FORCEINLINE int32 GetSlotGeneration(int32 SlotIndex) const
+	{
+		return Generations.IsValidIndex(SlotIndex) ? Generations[SlotIndex] : 0;
+	}
+
 	/** Reset pool to a clean state (keeps no allocations). */
 	void Reset();
 

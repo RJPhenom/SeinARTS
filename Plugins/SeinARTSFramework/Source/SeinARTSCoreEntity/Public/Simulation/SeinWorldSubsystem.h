@@ -32,6 +32,7 @@ class ASeinActor;
 class USeinFaction;
 class USeinAbility;
 class USeinCommandBrokerResolver;
+class USeinCollisionResolver;
 class USeinAIController;
 class USeinEffect;
 class USeinLatentActionManager;
@@ -668,6 +669,13 @@ public:
 	FSeinCollisionSpatialHash& GetCollisionSpatialHash() { return CollisionSpatialHash; }
 	const FSeinCollisionSpatialHash& GetCollisionSpatialHash() const { return CollisionSpatialHash; }
 
+	/** The active collision resolver. Owns one tick's full collider separation +
+	 *  overlap-event emission; the PostTick FSeinCollisionResolutionSystem delegates
+	 *  to it. Instantiated from `USeinARTSCoreSettings::CollisionResolverClass` in
+	 *  Initialize (defaults to USeinCollisionResolverDefault). Never null after
+	 *  Initialize. Mirrors the pluggable Navigation / Fog-of-War seam. */
+	USeinCollisionResolver* GetCollisionResolver() const { return CollisionResolver; }
+
 	/** Get the Blueprint actor class stored for an entity (for actor bridge spawning). */
 	TSubclassOf<ASeinActor> GetEntityActorClass(FSeinEntityHandle Handle) const;
 
@@ -1126,6 +1134,14 @@ private:
 	// lifetime is identical and the collision systems need a stable, world-scoped
 	// query surface. Initialized in Initialize(). Collision-only (not navigation).
 	FSeinCollisionSpatialHash CollisionSpatialHash;
+
+	// Active collision resolver — owns the per-tick separation + overlap-event
+	// logic the PostTick FSeinCollisionResolutionSystem delegates to. Instantiated
+	// in Initialize() from USeinARTSCoreSettings::CollisionResolverClass (falls back
+	// to USeinCollisionResolverDefault on empty/abstract/stale). UPROPERTY so the
+	// resolver is GC-rooted by the subsystem. Pluggable seam — mirrors NavigationClass.
+	UPROPERTY(Transient)
+	TObjectPtr<USeinCollisionResolver> CollisionResolver;
 
 	// Component storage registry (slot-indexed, keyed by UScriptStruct*)
 	TMap<UScriptStruct*, ISeinComponentStorage*> ComponentStorages;

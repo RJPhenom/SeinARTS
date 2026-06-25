@@ -350,7 +350,11 @@ public:
 			// parallelism case).
 			if (Broker->OrderQueue.Num() > 0 && Broker->Members.Num() > 0)
 			{
-				TSet<FSeinEntityHandle> LockedMembers;
+				// Reused across brokers/ticks to avoid a per-broker set
+				// allocation; Reset() clears it while keeping capacity. The
+				// broker tick is serial (ForEachEntity is a plain loop), so a
+				// shared member set is safe — it's fully cleared before each use.
+				LockedMembers.Reset();
 				for (const FSeinBrokerQueuedOrder& Order : Broker->OrderQueue)
 				{
 					if (!Order.bIsExecuting) continue;
@@ -409,4 +413,10 @@ public:
 	virtual ESeinTickPhase GetPhase() const override { return ESeinTickPhase::PostTick; }
 	virtual int32 GetPriority() const override { return SeinSystemPriority::CommandBroker; }
 	virtual FName GetSystemName() const override { return TEXT("CommandBroker"); }
+
+private:
+	/** Scratch set for the per-broker dispatch loop's member-lock tracking,
+	 *  reused (Reset() each broker) to avoid a per-broker-per-tick allocation.
+	 *  Sim-thread-only scratch — the broker tick runs serially. */
+	TSet<FSeinEntityHandle> LockedMembers;
 };

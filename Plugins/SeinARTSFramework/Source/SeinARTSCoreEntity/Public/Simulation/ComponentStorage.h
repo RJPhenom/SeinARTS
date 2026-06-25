@@ -32,6 +32,27 @@ public:
 	virtual int32 GetComponentCount() const = 0;
 	virtual void Clear() = 0;
 
+	/**
+	 * Sparse live-slot iteration: invoke Visitor for every alive slot exactly
+	 * once, in SLOT-INDEX ASCENDING order, handing it the slot index and a
+	 * mutable pointer to that slot's raw payload. This matches
+	 * FSeinEntityPool::ForEachEntity's ascending-slot order, so a system that
+	 * iterates a single storage instead of the full pool visits its entities
+	 * in the identical deterministic order.
+	 *
+	 * Storage owns slot indices only — NOT generations (those live on the
+	 * pool's per-slot generation counters). Callers that need a full
+	 * FSeinEntityHandle reconstruct it as FSeinEntityHandle(SlotIndex,
+	 * Pool.GetSlotGeneration(SlotIndex)) — the same way the pool builds handles
+	 * in ForEachEntity.
+	 *
+	 * Contract: the Visitor must NOT add or remove components of THIS storage
+	 * during iteration (it walks the live bit-array in place). Deferring
+	 * destroys / instance-effect removals is fine — those mutate the pool's
+	 * pending list or a payload's inner array, not this storage's slot set.
+	 */
+	virtual void ForEachLiveComponent(TFunctionRef<void(int32 /*SlotIndex*/, void* /*RawComponent*/)> Visitor) = 0;
+
 	/** Alias for RemoveComponent — clearer intent when cleaning up a destroyed entity. */
 	virtual void RemoveAllForEntity(FSeinEntityHandle Handle) = 0;
 
@@ -408,6 +429,18 @@ public:
 		}
 		HasComponentBits.Init(false, HasComponentBits.Num());
 		ComponentCount = 0;
+	}
+
+	virtual void ForEachLiveComponent(TFunctionRef<void(int32 /*SlotIndex*/, void* /*RawComponent*/)> Visitor) override
+	{
+		// TConstSetBitIterator yields set-bit indices in ascending order, which
+		// matches FSeinEntityPool::ForEachEntity's slot order — see the
+		// interface docstring for why that determinism guarantee matters.
+		for (TConstSetBitIterator<> It(HasComponentBits); It; ++It)
+		{
+			const int32 SlotIndex = It.GetIndex();
+			Visitor(SlotIndex, GetSlotPtr(SlotIndex));
+		}
 	}
 
 	virtual void CollectReferences(FReferenceCollector& Collector, UObject* Owner) override

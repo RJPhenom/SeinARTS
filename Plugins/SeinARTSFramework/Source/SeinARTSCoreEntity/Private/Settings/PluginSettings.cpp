@@ -57,6 +57,14 @@ USeinARTSCoreSettings::USeinARTSCoreSettings()
 	// default — small enough to keep legitimate platforms, large enough to drop cube
 	// tops / floating slivers. Gated to the shipped A* in the editor (IsUsingShippedAStar).
 	, NavMinWalkableIslandCells(16)
+	// Collision resolver defaults to the shipped Gauss-Seidel resolver. Like
+	// NavigationClass / FogOfWarClass it's a soft-class-path string rather than a
+	// StaticClass() call — but here the target lives in THIS module
+	// (SeinARTSCoreEntity), so the path could also resolve in-module; the soft
+	// path keeps the declaration uniform with the other pluggable-class settings
+	// and lets a designer clear it back to the default. (Declared in the Collision
+	// section, between Navigation and Network — initializer order matches.)
+	, CollisionResolverClass(FSoftClassPath(TEXT("/Script/SeinARTSCoreEntity.SeinCollisionResolverDefault")))
 	// Network defaults — see PluginSettings.h for rationale on each. Soft path
 	// for the relay class follows the established nav/fog decoupling: this
 	// module deliberately does NOT depend on SeinARTSNet. Initializer order
