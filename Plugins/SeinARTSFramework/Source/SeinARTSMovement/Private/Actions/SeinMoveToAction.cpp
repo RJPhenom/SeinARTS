@@ -345,10 +345,13 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		// Crowd-aware settle vicinity. Both the stall settle and the pile-up settle
 		// (in TickAction) must reach the OUTER ring of the arrival cluster, whose
 		// radius grows with the group: a loose pack of N bodies spans ~footprint x
-		// 2*sqrt(N). Size the band from the broker member count so the whole pack
-		// qualifies. Safe to be large because BOTH settles also require the unit to
-		// have stopped making progress (the stall clock) - radius alone never
-		// settles a freely-flowing unit, so the moving body of a column is immune.
+		// sqrt(N). Size the band from the broker member count so the whole pack
+		// qualifies, but keep it TIGHT for a lone unit (see GroupReach below): a single
+		// unit has no cluster to span, and an oversized band made big lone units count
+		// as "near goal" while still far out and accelerating, tripping the stall-settle
+		// (the large-footprint move abort). The stall clock itself only accrues when a
+		// unit is genuinely not closing (the high-water re-arm in the settle block), so
+		// the band defines WHERE a settle may apply, not whether a moving unit settles.
 		int32 GroupCount = 1;
 		if (const FSeinBrokerMembershipData* Membership =
 				World.GetComponent<FSeinBrokerMembershipData>(OwnerEntity))
@@ -362,8 +365,13 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 				}
 			}
 		}
-		const FFixedPoint GroupReach = FFixedPoint::FromInt(6)
-			+ FFixedPoint::Two * SeinMath::Sqrt(FFixedPoint::FromInt(GroupCount));
+		// ~2x the crowd's pack radius (pack radius is ~sqrt(N) footprints), so a packed
+		// arrival's outer ring stays covered with margin while a LONE unit (N=1) gets a
+		// tight 2-footprint band. The old fixed +6 base put single big units "near goal"
+		// ~8 footprints out (~17 m for a vehicle) -- far enough to trip the near-goal
+		// stall-settle while still accelerating toward a reachable goal.
+		const FFixedPoint GroupReach =
+			FFixedPoint::Two * SeinMath::Sqrt(FFixedPoint::FromInt(GroupCount));
 		FFixedPoint StallVicinityRadius = Acceptance + StallFootprint * GroupReach;
 		const FFixedPoint MinStallVicinity = Acceptance * FFixedPoint::Two;
 		if (StallVicinityRadius < MinStallVicinity) StallVicinityRadius = MinStallVicinity;
@@ -934,6 +942,19 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		}
 		else
 		{
+			// [FIX] Re-arm the high-water mark UP to the current distance when we are
+			// currently FARTHER than it. A unit that STARTS inside the vicinity band
+			// (big footprint / big group, so band > goalDist) never runs the outside-
+			// band re-arm above, so BestDistToFinalSq would otherwise stay at its ~1000u
+			// init sentinel -- making the progress gate below unsatisfiable for any goal
+			// past that, so a moving, closing unit wrongly accrues the stall clock and
+			// settles far short. Clamping up makes "best" the true closest-reached from
+			// the first in-band tick (and re-bases it if the unit is pushed back out).
+			if (DistFinalSq > BestDistToFinalSq)
+			{
+				BestDistToFinalSq = DistFinalSq;
+			}
+
 			// Within the band. BestDistToFinalSq only DECREASES here, so jitter or
 			// orbit around the closest reachable point never resets the clock —
 			// only genuine fresh closing does. The progress test is in ACTUAL

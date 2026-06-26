@@ -13,6 +13,7 @@
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Data/SeinCameraSnapshotData.h"
 #include "Engine/World.h"
+#include "CollisionQueryParams.h"
 
 ASeinCameraPawn::ASeinCameraPawn()
 {
@@ -44,6 +45,9 @@ void ASeinCameraPawn::BeginPlay()
 	CurrentPitch = CameraPitch;
 	SpringArm->TargetArmLength = DefaultZoomDistance;
 	SpringArm->SetRelativeRotation(FRotator(CurrentPitch, 0.0f, 0.0f));
+
+	// Start grounded so the camera doesn't begin floating at the spawn Z over uneven terrain.
+	UpdateGroundFollow(0.0f, /*bSnapImmediate*/ true);
 }
 
 void ASeinCameraPawn::Tick(float DeltaSeconds)
@@ -88,6 +92,10 @@ void ASeinCameraPawn::Tick(float DeltaSeconds)
 
 	// Clamp to bounds
 	ClampToBounds();
+
+	// Ground-follow: ease the pivot Z onto the terrain at its (final, clamped) XY. Handles both
+	// smooth terrain tracking while panning and the eased altitude transition after a recenter snap.
+	UpdateGroundFollow(DeltaSeconds);
 }
 
 // ==================== Input Handlers ====================
@@ -297,6 +305,77 @@ void ASeinCameraPawn::ClampToBounds()
 	Pos.X = FMath::Clamp(Pos.X, WorldBounds.Min.X, WorldBounds.Max.X);
 	Pos.Y = FMath::Clamp(Pos.Y, WorldBounds.Min.Y, WorldBounds.Max.Y);
 	CameraPivot->SetWorldLocation(Pos);
+}
+
+// ==================== Ground Follow ====================
+
+bool ASeinCameraPawn::TraceGroundHeight(const FVector2D& WorldXY, float& OutGroundZ) const
+{
+	UWorld* World = GetWorld();
+	if (!World || !CameraPivot)
+	{
+		return false;
+	}
+
+	const float CenterZ = CameraPivot->GetComponentLocation().Z;
+	const FVector Start(WorldXY.X, WorldXY.Y, CenterZ + GroundTraceExtent);
+	const FVector End  (WorldXY.X, WorldXY.Y, CenterZ - GroundTraceExtent);
+
+	FCollisionQueryParams QP(SCENE_QUERY_STAT(SeinCameraGround), /*bTraceComplex*/ false);
+	QP.AddIgnoredActor(this);
+
+	// Object-type query against static world only → ignores dynamic units/pawns, so the camera
+	// follows terrain + static geometry rather than bobbing over unit tops.
+	const FCollisionObjectQueryParams ObjQP(GroundTraceObjectType);
+
+	FHitResult Hit;
+	if (World->LineTraceSingleByObjectType(Hit, Start, End, ObjQP, QP))
+	{
+		OutGroundZ = Hit.ImpactPoint.Z;
+		return true;
+	}
+	return false;
+}
+
+void ASeinCameraPawn::UpdateGroundFollow(float DeltaSeconds, bool bSnapImmediate)
+{
+	if (!bGroundFollow || !CameraPivot)
+	{
+		return;
+	}
+
+	const FVector Loc = CameraPivot->GetComponentLocation();
+	float GroundZ = 0.0f;
+	if (!TraceGroundHeight(FVector2D(Loc.X, Loc.Y), GroundZ))
+	{
+		return; // no ground (hole / off-map) → hold current Z
+	}
+
+	const float NewZ = bSnapImmediate
+		? GroundZ
+		: FMath::FInterpTo(Loc.Z, GroundZ, DeltaSeconds, GroundFollowInterpSpeed);
+	CameraPivot->SetWorldLocation(FVector(Loc.X, Loc.Y, NewZ));
+}
+
+void ASeinCameraPawn::FocusOnWorldPoint(FVector WorldPoint)
+{
+	if (!CameraPivot)
+	{
+		return;
+	}
+
+	// A manual recenter cancels any active follow.
+	if (FollowTarget.IsValid())
+	{
+		StopFollowing();
+	}
+
+	// Move the ground focus in XY immediately; leave Z to ground-follow so it eases to the
+	// terrain height at the new spot (smooth altitude transition) rather than popping.
+	FVector Loc = CameraPivot->GetComponentLocation();
+	Loc.X = WorldPoint.X;
+	Loc.Y = WorldPoint.Y;
+	CameraPivot->SetWorldLocation(Loc);
 }
 
 // ==================== Accessors ====================

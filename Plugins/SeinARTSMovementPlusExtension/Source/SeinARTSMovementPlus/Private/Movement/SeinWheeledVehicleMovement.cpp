@@ -259,17 +259,29 @@ bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 		const FFixedPoint ClampedRate = ClampFP(YawRate, -MaxRate, MaxRate);
 		YawStep = ClampedRate * DeltaTime;
 	}
-	// CoH helping-hand. Active only below TurnAssistFadeSpeed — above it the
-	// `Fade > 0` guard skips the whole block, leaving high-speed steering exactly
-	// as the honest bicycle. Within the band it provides a FLOOR on how far the
-	// chassis may rotate toward its desired heading this tick, then guards against
-	// overshooting that heading (no oscillation).
+	// CoH helping-hand. Active only below TurnAssistFadeSpeed AND for sharp turns (the
+	// angle gate below) — outside either, the `Fade > 0` guard skips the whole block,
+	// leaving cruising AND moderate-angle turns to the honest bicycle so they ARC.
+	// Within the band it provides a FLOOR on how far the chassis may rotate toward its
+	// desired heading this tick, then guards against overshooting it (no oscillation).
 	if (Wheeled.LowSpeedTurnRate > FFixedPoint::Zero
 		&& Wheeled.TurnAssistFadeSpeed > FFixedPoint::Epsilon)
 	{
 		FFixedPoint Fade = FFixedPoint::One - (AbsCurrentSpeed / Wheeled.TurnAssistFadeSpeed);
 		if (Fade < FFixedPoint::Zero) Fade = FFixedPoint::Zero;
 		if (Fade > FFixedPoint::One)  Fade = FFixedPoint::One;
+		// Angle gate: assist only SHARP turns. Ramp 0 at 90 deg of heading error -> 1
+		// at 180 deg, so a moderate turn (<= 90 deg) gets NO assist and the chassis
+		// ARCS from rest like a car instead of pivoting to face the goal then driving
+		// straight. Only u-turn-ish headings pivot tight (the assist's real job) — this
+		// is what stopped the first/from-stop order from looking like a face-and-go.
+		{
+			const FFixedPoint HalfPiGate = FFixedPoint::Pi * FFixedPoint::Half;
+			FFixedPoint AngleScale = (AbsYawErr - HalfPiGate) / HalfPiGate;
+			if (AngleScale < FFixedPoint::Zero) AngleScale = FFixedPoint::Zero;
+			if (AngleScale > FFixedPoint::One)  AngleScale = FFixedPoint::One;
+			Fade = Fade * AngleScale;
+		}
 		if (Fade > FFixedPoint::Zero)
 		{
 			const FFixedPoint AssistMaxStep = Wheeled.LowSpeedTurnRate * Fade * DeltaTime;

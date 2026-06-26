@@ -89,7 +89,7 @@ For a **circle** minimap, apply a circular mask material to the images (or wrap 
 - `Minimap Local To World(Local, Size, VM.Bounds…, VM.GroundZ, Rot, bCircle) → World, bInside`.
 - If `bInside`:
   - **Right** mouse → `PlayerController ▸ Issue Smart Command Ex(World, null, IsShiftDown, (0,0,0))`.
-  - **Left** mouse → `Cast PlayerController ▸ Get Pawn to SeinCameraPawn` → `Set Camera State(World, GetCameraYaw, GetCameraPitch, GetCurrentZoomDistance)`.
+  - **Left** mouse → `Cast PlayerController ▸ Get Pawn to SeinCameraPawn` → `Focus On World Point(World)`. (Recenters the pivot's XY; the camera's ground-follow eases Z to the terrain there — only `World.XY` is used. Don't use `Set Camera State` for this — that's snapshot restore and it slams the pivot Z to a flat value, jumping the altitude.)
 - Return **Handled** (and capture the mouse on left-press if you want drag-to-scrub).
 
 ## Step 6 — HUD
