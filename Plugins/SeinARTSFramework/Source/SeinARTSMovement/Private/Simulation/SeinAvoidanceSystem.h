@@ -149,6 +149,10 @@ public:
 			const FSeinBrokerMembershipData* SelfBroker = BrokerStorage
 				? static_cast<const FSeinBrokerMembershipData*>(BrokerStorage->GetComponentRaw(SelfHandle)) : nullptr;
 			const FSeinEntityHandle SelfBrokerHandle = SelfBroker ? SelfBroker->CurrentBrokerHandle : FSeinEntityHandle();
+			// Self's per-order cohesion group (0 = none) — the cross-track group id stamped
+			// at order time so co-selected units in DIFFERENT brokers (separate squads, or
+			// squad-vs-loose) still cohere. See FSeinBrokerMembershipData::CohesionGroupId.
+			const int64 SelfCohesionId = SelfBroker ? SelfBroker->CohesionGroupId : 0;
 
 			const FFixedVector SelfPos = SelfEntity.Transform.GetLocation();
 
@@ -191,13 +195,32 @@ public:
 					? static_cast<const FSeinBrokerMembershipData*>(BrokerStorage->GetComponentRaw(OtherHandle)) : nullptr;
 				const FSeinEntityHandle OtherBrokerHandle = OtherBroker ? OtherBroker->CurrentBrokerHandle : FSeinEntityHandle();
 
-				// GROUP COHESION: a neighbour in the SAME broker (group) is NOT avoided —
+				// GROUP COHESION: a neighbour ordered together with us is NOT avoided —
 				// the group converges and packs without steering around itself; the
 				// collision floor keeps them non-overlapping. This is what kills the
 				// in-group fan-out the closing-velocity gate alone can't (units
 				// converging on one point ARE closing on each other, so they'd otherwise
-				// dodge their own squad). Cross-group + ungrouped neighbours fall through.
-				if (SelfBrokerHandle.IsValid() && OtherBrokerHandle == SelfBrokerHandle) continue;
+				// dodge their own squad). "Ordered together" is EITHER the same immediate
+				// broker OR the same per-order cohesion group — the latter so co-selected
+				// units that dispatch into DIFFERENT brokers (separate squads, or
+				// squad-vs-loose) also cohere, since broker membership alone is single-
+				// level. Cross-group + ungrouped neighbours fall through.
+				const bool bSameBroker = SelfBrokerHandle.IsValid() && OtherBrokerHandle == SelfBrokerHandle;
+				const int64 OtherCohesionId = OtherBroker ? OtherBroker->CohesionGroupId : 0;
+				const bool bSameCohesion = SelfCohesionId != 0 && SelfCohesionId == OtherCohesionId;
+				if (bSameBroker || bSameCohesion) continue;
+
+				// BULLDOZE IDLE NEIGHBOURS (the local-avoidance rule BAR uses; see the
+				// orbit research). A STATIONARY neighbour gets NO steering dodge — you can't
+				// orbit something that isn't moving, and steering around a static cluster is
+				// exactly what curves a transiting unit into the "black hole" orbit. Idle
+				// units are left to the collision floor (pushed aside, like a DENSE BLOB —
+				// the case that already works), so the unit pushes straight through instead
+				// of circling. Only MOVING neighbours get a dodge (do-si-do / Phase D), which
+				// is correct for transient group-vs-group passing (the arc that works).
+				// Squared compare avoids a per-neighbour sqrt; same MovingSpeedFloor the
+				// self-speed gate above uses.
+				if (OtherMove->Velocity.SizeSquared() <= MovingSpeedFloor * MovingSpeedFloor) continue;
 
 				// WEIGHT-PRIORITY GATE. This unit only yields to a neighbour whose AvoidanceWeight
 				// qualifies: equal-or-higher when bAvoidSameWeights, strictly higher otherwise. So a

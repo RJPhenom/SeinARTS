@@ -508,6 +508,28 @@ public:
 		meta = (DisplayName = "Default Formation"))
 	TSubclassOf<USeinFormation> DefaultFormation;
 
+	// UI
+	// ====================================================================================================
+
+	/**
+	 * How marquee (drag-box) selection measures a unit's on-screen footprint. The HUD projects each
+	 * unit's body to screen space and tests that 2D silhouette against the drag rectangle.
+	 *
+	 * TRUE (default) — test the unit's ACTUAL authored extents silhouette: exact box corners, and
+	 * capsules with their true hemispherical end-caps (HalfHeight clamped to >= Radius), built from
+	 * rotation + offset only (sim extents carry no scale). This matches the red extents visualizer
+	 * 1:1, so the box selects exactly what you see.
+	 *
+	 * FALSE — legacy fast path: approximate each body by the convex hull of just its extent's top and
+	 * bottom rings (a flat-capped cylinder, no caps), via the full actor transform. Cheaper, but under
+	 * an angled RTS camera the projected near-edge of the base ring balloons below the unit, so the
+	 * hull over-covers tall/large capsules and the box can grab units it never visually touches (most
+	 * visible on big units). Toggle the `Sein.Marquee.Debug.Show` overlay to compare the two live.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "UI",
+		meta = (DisplayName = "Use Sein Extents For Marquee"))
+	bool bUseSeinExtentsForMarquee = true;
+
 	/** When ON, the movement-mode determinism validator reports non-deterministic Blueprint calls as
 	 *  ERRORS (blocking Data Validation / cook) instead of warnings. Off by default — enable it to
 	 *  enforce lockstep-safety across a team once your movement-mode graphs are clean. Affects only

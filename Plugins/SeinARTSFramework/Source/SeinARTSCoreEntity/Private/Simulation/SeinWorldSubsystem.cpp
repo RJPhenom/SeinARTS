@@ -479,6 +479,12 @@ void USeinWorldSubsystem::ProcessCommands()
 	const TArray<FSeinCommand> CommandsThisTick = PendingCommands.GetCommands();
 	PendingCommands.Clear();
 
+	// Within-tick order sequence for minting per-order cohesion group ids (see the
+	// group-order dispatch below). Local → reset each tick by construction; combined
+	// with the serialized CurrentTick it yields a deterministic, collision-free id
+	// that is identical on every client and stable across a snapshot restore.
+	int32 CohesionOrderSeq = 0;
+
 	for (const FSeinCommand& Cmd : CommandsThisTick)
 	{
 		// Diagnostic trace — per-command handling. Verbose so it stays out of
@@ -914,6 +920,48 @@ void USeinWorldSubsystem::ProcessCommands()
 				else
 				{
 					CreateBrokerForMembers(EphemeralEntities, Cmd.PlayerID, Order);
+				}
+			}
+
+			// Cohesion group stamp. Give every UNIT participating in this order the
+			// SAME id — loose units directly, plus each persistent (squad) broker's
+			// members — so co-ordered units ACROSS separate squads, and squad-vs-loose,
+			// are one group to local-avoidance cohesion (they pack instead of steering
+			// around each other; the hard floor still prevents overlap). Broker
+			// membership alone is single-level — squad members carry their squad's
+			// handle, loose units the ephemeral broker's — so without this a mixed /
+			// multi-squad selection wouldn't cohere below the top level. A solo order
+			// stamps 0, clearing any stale group so a unit pulled out of a group stops
+			// cohering with its former peers. Deterministic id: (CurrentTick, within-
+			// tick order index). See FSeinBrokerMembershipData::CohesionGroupId.
+			{
+				const int64 CohesionId = (Filtered.Num() > 1)
+					? ((static_cast<int64>(CurrentTick) << 20) | static_cast<int64>(CohesionOrderSeq++ & 0xFFFFF))
+					: 0;
+				auto StampCohesion = [this, CohesionId](const FSeinEntityHandle& U)
+				{
+					if (FSeinBrokerMembershipData* MB = GetComponent<FSeinBrokerMembershipData>(U))
+					{
+						MB->CohesionGroupId = CohesionId;
+					}
+					else
+					{
+						FSeinBrokerMembershipData NB;
+						NB.CohesionGroupId = CohesionId;
+						AddComponent(U, NB);
+					}
+				};
+				for (const FSeinEntityHandle& E : EphemeralEntities) { StampCohesion(E); }
+				for (const FSeinEntityHandle& BH : PersistentBrokerEntities)
+				{
+					// Snapshot Members before stamping: the defensive AddComponent branch
+					// can reallocate component storage, so we must not iterate a live
+					// storage-backed list across it.
+					if (const FSeinCommandBrokerData* PB = GetComponent<FSeinCommandBrokerData>(BH))
+					{
+						const TArray<FSeinEntityHandle> Members = PB->Members;
+						for (const FSeinEntityHandle& Mem : Members) { StampCohesion(Mem); }
+					}
 				}
 			}
 			continue;

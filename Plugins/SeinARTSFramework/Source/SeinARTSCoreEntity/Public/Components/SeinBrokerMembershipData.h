@@ -27,9 +27,27 @@ struct SEINARTSCOREENTITY_API FSeinBrokerMembershipData : public FSeinComponent
 	 *  "not in any broker." */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker")
 	FSeinEntityHandle CurrentBrokerHandle;
+
+	/** Per-ORDER cohesion group id. Identifies the whole selection an entity was
+	 *  ordered with, ACROSS the separate dispatch tracks a selection splits into —
+	 *  loose units land in one ephemeral broker, each squad's members keep their own
+	 *  squad broker, so `CurrentBrokerHandle` alone is single-level and won't tell a
+	 *  squad member it was co-selected with another squad (or with loose units). The
+	 *  command processor stamps the SAME id on every participating unit of a multi-
+	 *  element order so the local-avoidance cohesion skip treats them as one group
+	 *  (they pack instead of steering around each other); the hard floor still
+	 *  prevents overlap. 0 = not in any cohesion group (solo order / never grouped).
+	 *
+	 *  Deterministic by construction: minted from (CurrentTick, within-tick order
+	 *  index) during CommandProcessing, identical on every client and after a snapshot
+	 *  restore (the id rides this serialized component; nothing re-mints on restore). */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker")
+	int64 CohesionGroupId = 0;
 };
 
 FORCEINLINE uint32 GetTypeHash(const FSeinBrokerMembershipData& Data)
 {
-	return GetTypeHash(Data.CurrentBrokerHandle);
+	uint32 Hash = GetTypeHash(Data.CurrentBrokerHandle);
+	Hash = HashCombine(Hash, GetTypeHash(Data.CohesionGroupId));
+	return Hash;
 }

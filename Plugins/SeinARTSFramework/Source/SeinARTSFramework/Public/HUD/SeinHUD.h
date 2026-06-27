@@ -95,6 +95,16 @@ protected:
 	 */
 	void CollectActorsInMarquee(const FVector2D& P0, const FVector2D& P1, TArray<ASeinActor*>& OutActors);
 
+	/**
+	 * Debug overlay (toggle: Sein.Marquee.Debug.Show). Draws, for every
+	 * selectable unit, the exact screen-space convex polygon CollectActorsInMarquee
+	 * SAT-tests against the marquee (red outline) plus the raw projected extent
+	 * samples (amber dots). Shares the hull builder with the selection path, so the
+	 * drawn shape is exactly the tested shape. Always-on while enabled (no drag
+	 * needed) for direct comparison against the marquee box.
+	 */
+	void DrawMarqueeDebugHulls();
+
 	ASeinPlayerController* GetSeinPlayerController() const;
 
 private:

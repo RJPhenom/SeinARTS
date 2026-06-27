@@ -10,6 +10,7 @@
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Actor/SeinActor.h"
 #include "Components/SeinExtentsComponent.h"
+#include "Settings/PluginSettings.h"
 #include "Types/Entity.h"
 #include "Engine/Canvas.h"
 #include "Engine/Font.h"
@@ -19,16 +20,52 @@
 #include "EngineUtils.h"
 #include "HAL/IConsoleManager.h"
 
-// Opt-in marquee-selection funnel diagnostics. Off by default; enable in the
-// console with `Sein.Marquee.DebugLog 1` to print, per drag, where (if anywhere)
+// Opt-in marquee-selection funnel diagnostics. Off by default; toggle in the
+// console with `Sein.Marquee.DebugLog` to print, per drag, where (if anywhere)
 // candidate units are lost — iterate → valid → projected → hull/SAT hit — plus
 // the marquee rect and a few units' projected screen boxes for coordinate-space
-// sanity. `Sein.Marquee.DebugLog 0` to silence.
-static TAutoConsoleVariable<int32> CVarSeinMarqueeDebugLog(
+// sanity. Run it again to silence.
+// Both marquee debug switches are console COMMANDS, not cvars, so a bare command
+// flips them (just hit Enter). An optional arg still forces a state: 1/on/true →
+// on, 0/off/false → off, toggle → flip. State lives in these file-static bools.
+static bool GSeinMarqueeDebugLog  = false;
+static bool GSeinMarqueeDebugShow = false;
+
+// No arg → flip. Else: 0/off/false → off; toggle → flip; anything else → on.
+static void SeinApplyToggleArg(const TArray<FString>& Args, bool& bFlag)
+{
+	if (Args.Num() == 0) { bFlag = !bFlag; return; }
+	const FString A = Args[0].TrimStartAndEnd();
+	if (A.Equals(TEXT("toggle"), ESearchCase::IgnoreCase)) { bFlag = !bFlag; }
+	else if (A.Equals(TEXT("0")) || A.Equals(TEXT("off"), ESearchCase::IgnoreCase) || A.Equals(TEXT("false"), ESearchCase::IgnoreCase)) { bFlag = false; }
+	else { bFlag = true; }
+}
+
+static FAutoConsoleCommandWithWorldArgsAndOutputDevice CCmdSeinMarqueeDebugLog(
 	TEXT("Sein.Marquee.DebugLog"),
-	0,
-	TEXT("When 1, logs marquee box-selection funnel diagnostics on each drag (default 0)."),
-	ECVF_Default);
+	TEXT("Toggle marquee selection funnel logging. Bare command flips; optional 0/1/on/off/toggle forces a state."),
+	FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateLambda(
+		[](const TArray<FString>& Args, UWorld*, FOutputDevice& Ar)
+		{
+			SeinApplyToggleArg(Args, GSeinMarqueeDebugLog);
+			Ar.Logf(TEXT("Sein.Marquee.DebugLog = %d"), GSeinMarqueeDebugLog ? 1 : 0);
+		}));
+
+// Opt-in marquee hull overlay. `Sein.Marquee.Debug.Show` draws, every frame,
+// the EXACT screen-space convex polygon the marquee SAT-tests for each unit
+// (red outline) plus the raw projected extent samples (amber dots). The overlay
+// and the selection share one hull builder (SeinComputeActorScreenHull), so the
+// red shape you see IS the shape the box is tested against — compare it directly
+// to the cyan marquee. Run it again to hide (off by default).
+static FAutoConsoleCommandWithWorldArgsAndOutputDevice CCmdSeinMarqueeDebugShow(
+	TEXT("Sein.Marquee.Debug.Show"),
+	TEXT("Toggle the marquee hull overlay (red = SAT-tested polygon, amber = projected samples). Bare command flips; optional 0/1/on/off/toggle forces a state."),
+	FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateLambda(
+		[](const TArray<FString>& Args, UWorld*, FOutputDevice& Ar)
+		{
+			SeinApplyToggleArg(Args, GSeinMarqueeDebugShow);
+			Ar.Logf(TEXT("Sein.Marquee.Debug.Show = %d"), GSeinMarqueeDebugShow ? 1 : 0);
+		}));
 
 void ASeinHUD::BeginPlay()
 {
@@ -75,6 +112,12 @@ void ASeinHUD::DrawHUD()
 		// Marquee just ended — resolve selection
 		ResolveMarqueeSelection();
 		bMarqueeWasActive = false;
+	}
+
+	// Debug: draw the exact screen-space hulls the marquee tests (Sein.Marquee.Debug.Show).
+	if (GSeinMarqueeDebugShow)
+	{
+		DrawMarqueeDebugHulls();
 	}
 
 	// Debug command log overlay
@@ -127,50 +170,155 @@ void ASeinHUD::DrawMarqueeBox()
 // and SAT-test that polygon against the marquee. Tight, and it tracks the body.
 // ====================================================================================================
 
-// Append an entity's silhouette source points (world space) for the marquee
-// test. Prefers the authored sim extents (box → 8 corners, capsule → top+bottom
-// rings); falls back to the actor's visual component-bounds box when the entity
-// has no extents component.
-static void SeinAppendMarqueeHullSources(AActor* Actor, USeinWorldSubsystem* Sim,
-	FSeinEntityHandle Handle, TArray<FVector>& OutWorld)
+// Read the marquee geometry mode (Project Settings > Plugins > SeinARTS > UI).
+// TRUE → project the exact authored extents silhouette (matches the
+// red extents viz); FALSE → the legacy top/bottom-ring approximation. Defaults
+// to TRUE if settings are unavailable.
+static bool SeinUseExtentsForMarquee()
+{
+	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
+	return Settings ? Settings->bUseSeinExtentsForMarquee : true;
+}
+
+// Faithful capsule surface sampling — matches the editor extents visualizer's
+// DrawWireCapsule shape exactly: true hemispherical end-caps, HalfHeight clamped
+// to >= Radius. Center/axes are world-space; the convex hull of these points is
+// the capsule's real projected silhouette (no flat-cap over-cover).
+static void SeinAppendCapsulePoints(const FVector& Center,
+	const FVector& AxisX, const FVector& AxisY, const FVector& AxisZ,
+	float Radius, float HalfHeight, TArray<FVector>& OutWorld)
+{
+	constexpr int32 NumSides = 16;                       // matches DrawWireCapsule
+	const float CylHalf = FMath::Max(0.0f, HalfHeight - Radius);
+	// Cap latitudes equator(0) -> pole(90); the mid bands keep the convex hull
+	// from cutting each dome down to a cone.
+	static constexpr float CapLatDeg[] = { 0.0f, 30.0f, 60.0f, 90.0f };
+
+	for (int32 S = 0; S < NumSides; ++S)
+	{
+		const float Ang = (static_cast<float>(S) / static_cast<float>(NumSides)) * 2.0f * PI;
+		const FVector Radial = AxisX * FMath::Cos(Ang) + AxisY * FMath::Sin(Ang);
+		for (const float LatDeg : CapLatDeg)
+		{
+			const float Lat = FMath::DegreesToRadians(LatDeg);
+			const float RingR = Radius * FMath::Cos(Lat);
+			const float RingH = CylHalf + Radius * FMath::Sin(Lat);
+			OutWorld.Add(Center + AxisZ * RingH + Radial * RingR);   // top cap + body
+			OutWorld.Add(Center - AxisZ * RingH + Radial * RingR);   // bottom cap + body
+		}
+	}
+}
+
+// ACCURATE path: mirror the editor extents visualizer's geometry exactly —
+// rotation + offset only (sim extents are scale-free, so actor scale is dropped,
+// same as the viz), ShapeBase + per-shape YawOffset, capsule HalfHeight =
+// max(Height/2, Radius) with hemispherical caps, box = 8 oriented corners. So the
+// projected hull equals the red extents viz the player sees.
+static void SeinAppendExtentsHullSourcesAccurate(AActor* Actor,
+	const FSeinExtentsComponent* Extents, TArray<FVector>& OutWorld)
+{
+	const FQuat ActorQuat = Actor->GetActorQuat();
+	const FVector ActorPos = Actor->GetActorLocation();
+
+	for (const FSeinExtentsShape& Shape : Extents->Shapes)
+	{
+		const FVector LocalOffset(
+			Shape.LocalOffset.X.ToFloat(),
+			Shape.LocalOffset.Y.ToFloat(),
+			Shape.LocalOffset.Z.ToFloat());
+		const FVector ShapeBase = ActorPos + ActorQuat.RotateVector(LocalOffset);
+
+		const FQuat YawQ(FVector::UpVector, FMath::DegreesToRadians(Shape.YawOffsetDegrees.ToFloat()));
+		const FQuat ShapeQuat = ActorQuat * YawQ;
+		const FVector AxisX = ShapeQuat.GetForwardVector();
+		const FVector AxisY = ShapeQuat.GetRightVector();
+		const FVector AxisZ = ShapeQuat.GetUpVector();
+
+		const float Height = FMath::Max(0.0f, Shape.Height.ToFloat());
+		const FVector Center = ShapeBase + AxisZ * (Height * 0.5f);
+
+		if (Shape.Shape == ESeinExtentsShape::Box)
+		{
+			const float HX = FMath::Max(0.0f, Shape.HalfExtentX.ToFloat());
+			const float HY = FMath::Max(0.0f, Shape.HalfExtentY.ToFloat());
+			const float HZ = Height * 0.5f;
+			for (int32 Sx = -1; Sx <= 1; Sx += 2)
+			for (int32 Sy = -1; Sy <= 1; Sy += 2)
+			for (int32 Sz = -1; Sz <= 1; Sz += 2)
+			{
+				OutWorld.Add(Center + AxisX * (Sx * HX) + AxisY * (Sy * HY) + AxisZ * (Sz * HZ));
+			}
+		}
+		else // Capsule
+		{
+			const float Radius = FMath::Max(0.0f, Shape.Radius.ToFloat());
+			const float HalfHeight = FMath::Max(Height * 0.5f, Radius);
+			SeinAppendCapsulePoints(Center, AxisX, AxisY, AxisZ, Radius, HalfHeight, OutWorld);
+		}
+	}
+}
+
+// LEGACY path (bUseSeinExtentsForMarquee = false): the original approximation —
+// box = 8 corners; capsule = top + bottom rings only (a flat-capped cylinder),
+// via the FULL actor transform (incl. scale). Over-covers tall/large capsules
+// under an angled camera; kept for parity / opt-out.
+static void SeinAppendExtentsHullSourcesLegacy(AActor* Actor,
+	const FSeinExtentsComponent* Extents, TArray<FVector>& OutWorld)
 {
 	const FTransform Xf = Actor->GetActorTransform();
 
+	for (const FSeinExtentsShape& Shape : Extents->Shapes)
+	{
+		const float OX = Shape.LocalOffset.X.ToFloat();
+		const float OY = Shape.LocalOffset.Y.ToFloat();
+		const float OZ = Shape.LocalOffset.Z.ToFloat();
+		const float HZ = Shape.Height.ToFloat();
+
+		if (Shape.Shape == ESeinExtentsShape::Box)
+		{
+			const float HX = Shape.HalfExtentX.ToFloat();
+			const float HY = Shape.HalfExtentY.ToFloat();
+			const FQuat YawQ(FVector::UpVector, FMath::DegreesToRadians(Shape.YawOffsetDegrees.ToFloat()));
+			for (int32 Sx = -1; Sx <= 1; Sx += 2)
+			for (int32 Sy = -1; Sy <= 1; Sy += 2)
+			{
+				const FVector PlanarXY = FVector(OX, OY, 0.0f) + YawQ.RotateVector(FVector(Sx * HX, Sy * HY, 0.0f));
+				OutWorld.Add(Xf.TransformPosition(FVector(PlanarXY.X, PlanarXY.Y, OZ)));        // bottom
+				OutWorld.Add(Xf.TransformPosition(FVector(PlanarXY.X, PlanarXY.Y, OZ + HZ)));   // top
+			}
+		}
+		else // Capsule — top + bottom rings (8 each).
+		{
+			const float R = Shape.Radius.ToFloat();
+			for (int32 K = 0; K < 8; ++K)
+			{
+				const float Ang = (static_cast<float>(K) / 8.0f) * 2.0f * PI;
+				const float RX = FMath::Cos(Ang) * R;
+				const float RY = FMath::Sin(Ang) * R;
+				OutWorld.Add(Xf.TransformPosition(FVector(OX + RX, OY + RY, OZ)));        // bottom
+				OutWorld.Add(Xf.TransformPosition(FVector(OX + RX, OY + RY, OZ + HZ)));   // top
+			}
+		}
+	}
+}
+
+// Append an entity's silhouette source points (world space) for the marquee
+// test. With a valid extents component, dispatches to the accurate or legacy
+// builder per the Selection setting; with none, falls back to the actor's visual
+// component-bounds box.
+static void SeinAppendMarqueeHullSources(AActor* Actor, USeinWorldSubsystem* Sim,
+	FSeinEntityHandle Handle, TArray<FVector>& OutWorld)
+{
 	const FSeinExtentsComponent* Extents = Sim ? Sim->GetComponent<FSeinExtentsComponent>(Handle) : nullptr;
 	if (Extents && Extents->Shapes.Num() > 0)
 	{
-		for (const FSeinExtentsShape& Shape : Extents->Shapes)
+		if (SeinUseExtentsForMarquee())
 		{
-			const float OX = Shape.LocalOffset.X.ToFloat();
-			const float OY = Shape.LocalOffset.Y.ToFloat();
-			const float OZ = Shape.LocalOffset.Z.ToFloat();
-			const float HZ = Shape.Height.ToFloat();
-
-			if (Shape.Shape == ESeinExtentsShape::Box)
-			{
-				const float HX = Shape.HalfExtentX.ToFloat();
-				const float HY = Shape.HalfExtentY.ToFloat();
-				const FQuat YawQ(FVector::UpVector, FMath::DegreesToRadians(Shape.YawOffsetDegrees.ToFloat()));
-				for (int32 Sx = -1; Sx <= 1; Sx += 2)
-				for (int32 Sy = -1; Sy <= 1; Sy += 2)
-				{
-					const FVector PlanarXY = FVector(OX, OY, 0.0f) + YawQ.RotateVector(FVector(Sx * HX, Sy * HY, 0.0f));
-					OutWorld.Add(Xf.TransformPosition(FVector(PlanarXY.X, PlanarXY.Y, OZ)));        // bottom
-					OutWorld.Add(Xf.TransformPosition(FVector(PlanarXY.X, PlanarXY.Y, OZ + HZ)));   // top
-				}
-			}
-			else // Capsule — sample top + bottom rings (8 each).
-			{
-				const float R = Shape.Radius.ToFloat();
-				for (int32 K = 0; K < 8; ++K)
-				{
-					const float Ang = (static_cast<float>(K) / 8.0f) * 2.0f * PI;
-					const float RX = FMath::Cos(Ang) * R;
-					const float RY = FMath::Sin(Ang) * R;
-					OutWorld.Add(Xf.TransformPosition(FVector(OX + RX, OY + RY, OZ)));        // bottom
-					OutWorld.Add(Xf.TransformPosition(FVector(OX + RX, OY + RY, OZ + HZ)));   // top
-				}
-			}
+			SeinAppendExtentsHullSourcesAccurate(Actor, Extents, OutWorld);
+		}
+		else
+		{
+			SeinAppendExtentsHullSourcesLegacy(Actor, Extents, OutWorld);
 		}
 		return;
 	}
@@ -290,6 +438,45 @@ static bool SeinConvexHullIntersectsBox2D(const TArray<FVector2D>& Hull, const F
 	return true; // no separating axis found → overlap
 }
 
+// Build the screen-space convex polygon the marquee tests for one actor. This is
+// the single source of truth shared by CollectActorsInMarquee (the SAT test) and
+// the Sein.Marquee.Debug.Show overlay (the red outline) — so what's drawn is
+// byte-for-byte what's tested. ScratchWorld is caller-owned scratch (reused
+// across actors to avoid per-actor allocation). Returns false if the actor
+// produced no points in front of the camera. OutScreenPts = the raw projected
+// extent samples (pre-hull); OutHull = the CCW silhouette polygon.
+static bool SeinComputeActorScreenHull(AHUD* Hud, AActor* Actor, USeinWorldSubsystem* Sim,
+	FSeinEntityHandle Handle, TArray<FVector>& ScratchWorld,
+	TArray<FVector2D>& OutScreenPts, TArray<FVector2D>& OutHull)
+{
+	ScratchWorld.Reset();
+	SeinAppendMarqueeHullSources(Actor, Sim, Handle, ScratchWorld);
+	if (ScratchWorld.Num() == 0)
+	{
+		return false;
+	}
+
+	// Project through the HUD canvas so coordinates share the marquee rect's
+	// space. Skip points behind the camera (Z <= 0), mirroring the engine
+	// routine's front-side guard.
+	OutScreenPts.Reset();
+	for (const FVector& WorldPt : ScratchWorld)
+	{
+		const FVector Projected = Hud->Project(WorldPt, true);
+		if (Projected.Z > 0.0f)
+		{
+			OutScreenPts.Add(FVector2D(Projected.X, Projected.Y));
+		}
+	}
+	if (OutScreenPts.Num() == 0)
+	{
+		return false;
+	}
+
+	SeinConvexHull2D(OutScreenPts, OutHull);
+	return true;
+}
+
 void ASeinHUD::CollectActorsInMarquee(const FVector2D& P0, const FVector2D& P1, TArray<ASeinActor*>& OutActors)
 {
 	OutActors.Reset();
@@ -310,7 +497,7 @@ void ASeinHUD::CollectActorsInMarquee(const FVector2D& P0, const FVector2D& P1, 
 
 	// Opt-in funnel diagnostics (Sein.Marquee.DebugLog 1). Counters are cheap; the
 	// per-actor logging + projected-box math below only run when debug is on.
-	const bool bDebugLog = CVarSeinMarqueeDebugLog.GetValueOnGameThread() != 0;
+	const bool bDebugLog = GSeinMarqueeDebugLog;
 	int32 NumIterated = 0, NumValid = 0, NumNonSelectable = 0, NumProjected = 0, NumHit = 0, NumSampled = 0;
 
 	TArray<FVector>   WorldPts;
@@ -338,32 +525,14 @@ void ASeinHUD::CollectActorsInMarquee(const FVector2D& P0, const FVector2D& P1, 
 			if (Entity && !Entity->IsSelectable()) { ++NumNonSelectable; }
 		}
 
-		WorldPts.Reset();
-		SeinAppendMarqueeHullSources(Actor, Sim, Handle, WorldPts);
-		if (WorldPts.Num() == 0)
-		{
-			continue;
-		}
-
-		// Project through the HUD canvas so coordinates share the marquee rect's
-		// space. Skip points behind the camera (Z <= 0), mirroring the engine
-		// routine's front-side guard.
-		ScreenPts.Reset();
-		for (const FVector& WorldPt : WorldPts)
-		{
-			const FVector Projected = Project(WorldPt, true);
-			if (Projected.Z > 0.0f)
-			{
-				ScreenPts.Add(FVector2D(Projected.X, Projected.Y));
-			}
-		}
-		if (ScreenPts.Num() == 0)
+		// Shared with the Sein.Marquee.Debug.Show overlay: the drawn polygon is
+		// exactly the one SAT-tested here. WorldPts is reused as scratch.
+		if (!SeinComputeActorScreenHull(this, Actor, Sim, Handle, WorldPts, ScreenPts, Hull))
 		{
 			continue;
 		}
 		++NumProjected;
 
-		SeinConvexHull2D(ScreenPts, Hull);
 		const bool bHit = SeinConvexHullIntersectsBox2D(Hull, Rect);
 
 		// Log the first few candidates so we can compare projected screen coords
@@ -395,6 +564,61 @@ void ASeinHUD::CollectActorsInMarquee(const FVector2D& P0, const FVector2D& P1, 
 	}
 }
 
+// Draw, for every selectable unit, the exact screen-space polygon the marquee
+// tests against (red outline) plus the raw projected extent samples (amber
+// dots). Always-on while Sein.Marquee.Debug.Show is 1 — no drag required — so
+// you can line a unit's tested silhouette up against the cyan marquee box and
+// see precisely what it does (and doesn't) cover.
+void ASeinHUD::DrawMarqueeDebugHulls()
+{
+	UWorld* World = GetWorld();
+	if (!World || !Canvas)
+	{
+		return;
+	}
+
+	USeinWorldSubsystem* Sim = World->GetSubsystem<USeinWorldSubsystem>();
+
+	TArray<FVector>   WorldPts;
+	TArray<FVector2D> ScreenPts;
+	TArray<FVector2D> Hull;
+
+	const FLinearColor HullColor(1.0f, 0.0f, 0.0f, 0.9f);    // red — the SAT-tested polygon
+	const FLinearColor PointColor(1.0f, 0.8f, 0.0f, 0.9f);   // amber — raw projected samples
+	const float HullThickness = 1.5f;
+	const float PointSize = 3.0f;
+
+	for (TActorIterator<ASeinActor> It(World); It; ++It)
+	{
+		ASeinActor* Actor = *It;
+		if (!Actor || !Actor->HasValidEntity())
+		{
+			continue;
+		}
+
+		const FSeinEntityHandle Handle = Actor->GetEntityHandle();
+		if (!SeinComputeActorScreenHull(this, Actor, Sim, Handle, WorldPts, ScreenPts, Hull))
+		{
+			continue;
+		}
+
+		// Hull outline — close the loop (i -> i+1, last -> first).
+		const int32 N = Hull.Num();
+		for (int32 i = 0; N >= 2 && i < N; ++i)
+		{
+			const FVector2D& A = Hull[i];
+			const FVector2D& B = Hull[(i + 1) % N];
+			DrawLine(A.X, A.Y, B.X, B.Y, HullColor, HullThickness);
+		}
+
+		// Raw projected samples, so degenerate/edge-on silhouettes are visible too.
+		for (const FVector2D& P : ScreenPts)
+		{
+			DrawRect(PointColor, P.X - PointSize * 0.5f, P.Y - PointSize * 0.5f, PointSize, PointSize);
+		}
+	}
+}
+
 void ASeinHUD::ResolveMarqueeSelection()
 {
 	ASeinPlayerController* PC = GetSeinPlayerController();
@@ -409,7 +633,7 @@ void ASeinHUD::ResolveMarqueeSelection()
 	// Opt-in: marquee corners (mouse space) + how many the collector returned.
 	// Compare 'collected' against the final "Selected" count: if collected > 0 but
 	// nothing selects, the ownership filter in ReceiveMarqueeSelection is the gate.
-	if (CVarSeinMarqueeDebugLog.GetValueOnGameThread() != 0)
+	if (GSeinMarqueeDebugLog)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("[Marquee] corners start=(%.0f,%.0f) cur=(%.0f,%.0f) -> collected=%d"),
 			PC->MarqueeStart.X, PC->MarqueeStart.Y, PC->MarqueeCurrent.X, PC->MarqueeCurrent.Y, ActorsInBox.Num());
