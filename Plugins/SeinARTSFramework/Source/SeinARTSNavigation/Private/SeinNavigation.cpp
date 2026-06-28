@@ -15,6 +15,17 @@ bool USeinNavigation::IsReachable(const FFixedVector& From, const FFixedVector& 
 	return FindPath(Request, Path) && Path.bIsValid;
 }
 
+FFixedVector USeinNavigation::QueryDirection(const FSeinDirectionQuery& Query) const
+{
+	// Base default: obstacle-BLIND straight line toward the goal. A safe fallback so any
+	// nav answers SOMETHING; obstacle-aware (route-shaped) or field-based (field-shaped)
+	// navs override. Zero when already at the goal (degenerate) → "stop".
+	FFixedVector Delta = Query.Goal - Query.From;
+	Delta.Z = FFixedPoint::Zero;
+	if (Delta.SizeSquared() <= FFixedPoint::Epsilon) return FFixedVector::ZeroVector;
+	return FFixedVector::GetSafeNormal(Delta);
+}
+
 bool USeinNavigation::IsPlacementValid(const FFixedVector& CenterWorld, FFixedPoint /*YawDegrees*/,
 	const FSeinExtentsShape& Shape, uint8 /*AgentLayerMask*/) const
 {

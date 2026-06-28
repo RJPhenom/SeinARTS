@@ -33,6 +33,40 @@
 #include "UObject/SoftObjectPath.h"
 #include "SeinMovementComponent.generated.h"
 
+/** The per-tick OUTPUT of the local-avoidance layer (USeinAvoidance), produced at
+ *  PreTick and consumed by the movement Tick. Two channels:
+ *    - SteerDir   : a planar (XY) lateral nudge that BENDS the unit's desired heading,
+ *                   consumed via USeinMovement::ApplyAvoidanceSteer. Strength-scaled +
+ *                   temporally smoothed by the shipped model.
+ *    - SpeedScale : a [0,1] multiplier on cruise speed so a model can make a unit YIELD
+ *                   by slowing (not only turning). 1 = no change. The base RTS loop
+ *                   applies it (USeinMovement::GetAvoidanceSpeedScale); the shipped
+ *                   boids model leaves it at 1, so it is a byte-identical no-op until a
+ *                   custom model writes < 1.
+ *  Runtime sim state, hashed as a desync canary. A struct (not two loose fields) so the
+ *  avoidance OUTPUT CONTRACT can grow additively without churning consumers. */
+USTRUCT(BlueprintType, meta = (SeinDeterministic))
+struct SEINARTSCOREENTITY_API FSeinAvoidanceOutput
+{
+	GENERATED_BODY()
+
+	/** Planar lateral steer nudge (unit-direction space). Zero = no steering. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Movement|Avoidance")
+	FFixedVector SteerDir = FFixedVector::ZeroVector;
+
+	/** Cruise-speed multiplier, [0,1]. 1 = full speed (no yield). */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Movement|Avoidance",
+		meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	FFixedPoint SpeedScale = FFixedPoint::One;
+};
+
+FORCEINLINE uint32 GetTypeHash(const FSeinAvoidanceOutput& O)
+{
+	uint32 Hash = GetTypeHash(O.SteerDir);
+	Hash = HashCombine(Hash, GetTypeHash(O.SpeedScale));
+	return Hash;
+}
+
 USTRUCT(BlueprintType, meta = (SeinDeterministic))
 struct SEINARTSCOREENTITY_API FSeinMovementComponent : public FSeinComponent
 {
@@ -233,13 +267,13 @@ struct SEINARTSCOREENTITY_API FSeinMovementComponent : public FSeinComponent
 		meta = (DisplayName = "Avoid Same Weights"))
 	bool bAvoidSameWeights = true;
 
-	/** Per-tick lateral avoidance nudge (planar XY, strength-scaled, temporally
-	 *  smoothed) written by FSeinAvoidanceSystem at PreTick and consumed by the
-	 *  movement Tick via USeinMovement::ApplyAvoidanceSteer. Runtime sim state;
-	 *  hashed as a desync canary. Stays exactly zero for AvoidanceStrength = 0
-	 *  units, which is what makes them a true no-op. */
+	/** This unit's current avoidance OUTPUT (lateral steer + speed-yield scale), written
+	 *  by the active avoidance impl (USeinAvoidance) at PreTick and consumed by the
+	 *  movement Tick (USeinMovement::ApplyAvoidanceSteer + GetAvoidanceSpeedScale).
+	 *  Runtime sim state; hashed as a desync canary. Stays at its zero-steer / unity-scale
+	 *  default for AvoidanceStrength = 0 units, which is what makes them a true no-op. */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Movement")
-	FFixedVector AvoidanceSteer = FFixedVector::ZeroVector;
+	FSeinAvoidanceOutput AvoidanceOutput;
 
 	/** One-time spawn floor-snap latch. False on a freshly spawned/placed entity;
 	 *  set true after the movement driver's first idle tick performs the initial
@@ -281,7 +315,7 @@ FORCEINLINE uint32 GetTypeHash(const FSeinMovementComponent& C)
 	Hash = HashCombine(Hash, GetTypeHash(C.AvoidanceStrength));
 	Hash = HashCombine(Hash, GetTypeHash(C.AvoidanceWeight));
 	Hash = HashCombine(Hash, GetTypeHash(C.bAvoidSameWeights));
-	Hash = HashCombine(Hash, GetTypeHash(C.AvoidanceSteer));
+	Hash = HashCombine(Hash, GetTypeHash(C.AvoidanceOutput));
 	Hash = HashCombine(Hash, GetTypeHash(C.bInitialGroundSnapDone));
 	// MovementClassData is hashed by the framework attribute resolver's
 	// reflection walk; skipped here (FInstancedStruct doesn't expose a

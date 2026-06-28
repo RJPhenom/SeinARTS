@@ -30,6 +30,7 @@
 class FSeinAvoidanceSystem;
 class FSeinMovementDriverSystem;
 class FSeinNavContainmentSystem;
+class USeinAvoidance;
 class USeinMovement;
 class USeinWorldSubsystem;
 struct FSeinMovementComponent;
@@ -58,6 +59,11 @@ public:
 	 *  registry and any CDO-level queries. */
 	static UClass* ResolveMovementClass(const FSeinMovementComponent& Move);
 
+	/** The avoidance-class resolution cascade: `USeinARTSCoreSettings::AvoidanceClass`
+	 *  soft path → TryLoadClass → (empty / invalid / abstract) → USeinAvoidanceDefault.
+	 *  Mirrors the NavigationClass / CollisionResolverClass picker pattern. */
+	static UClass* ResolveAvoidanceClass();
+
 	/** Remove registry entries whose entity is no longer alive in the pool.
 	 *  Called once per tick by the driver. Touches no sim state — handle
 	 *  generations already prevent stale-entry collisions — so its timing and
@@ -65,9 +71,16 @@ public:
 	void SweepStaleMovementInstances(USeinWorldSubsystem& World);
 
 private:
-	/** Local unit-unit avoidance steering system (PreTick). Owned here; registered
-	 *  with the sim loop on world begin-play, unregistered + deleted on teardown. */
+	/** Local unit-unit avoidance steering system (PreTick). A thin delegator owned
+	 *  here; registered with the sim loop on world begin-play, unregistered + deleted
+	 *  on teardown. Delegates to AvoidanceInstance. */
 	FSeinAvoidanceSystem* AvoidanceSystem = nullptr;
+
+	/** The active pluggable avoidance impl (USeinARTSCoreSettings::AvoidanceClass →
+	 *  default USeinAvoidanceDefault). GC-rooted by this UPROPERTY; AvoidanceSystem
+	 *  holds a raw pointer to it. Created once in OnWorldBeginPlay. */
+	UPROPERTY(Transient)
+	TObjectPtr<USeinAvoidance> AvoidanceInstance;
 
 	/** The always-on per-unit movement driver (AbilityExecution, priority 10).
 	 *  Same ownership / lifecycle as AvoidanceSystem. */

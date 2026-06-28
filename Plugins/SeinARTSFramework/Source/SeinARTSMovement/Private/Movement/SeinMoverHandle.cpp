@@ -264,6 +264,12 @@ FFixedVector USeinMoverHandle::ApplyAvoidanceSteer(FFixedVector DesiredDir) cons
 	return (Owner && Ctx) ? Owner->ApplyAvoidanceSteer(*Ctx, DesiredDir) : DesiredDir;
 }
 
+FFixedPoint USeinMoverHandle::GetAvoidanceSpeedScale() const
+{
+	USeinMovement* Owner = GetOwningMovement();
+	return (Owner && Ctx) ? Owner->GetAvoidanceSpeedScale(*Ctx) : FFixedPoint::One;
+}
+
 FFixedVector USeinMoverHandle::ClampToNavigation(FFixedVector OldPos, FFixedVector NewPos) const
 {
 	USeinMovement* Owner = GetOwningMovement();
@@ -331,6 +337,18 @@ FGameplayTag USeinMoverHandle::GetTerrainTagAt(const FFixedVector& WorldPos) con
 bool USeinMoverHandle::IsPositionClear(const FFixedVector& WorldPos) const
 {
 	return (Ctx && Ctx->Nav) ? Ctx->Nav->IsWorldPositionClear(WorldPos, /*AgentNavLayerMask*/ 0) : false;
+}
+
+FFixedVector USeinMoverHandle::QueryNavDirection(FFixedVector Goal, int64 GroupId) const
+{
+	if (!Ctx || !Ctx->Nav) return FFixedVector::ZeroVector;
+	FSeinDirectionQuery Query;
+	Query.From                = Ctx->Entity.Transform.GetLocation();
+	Query.Goal                = Goal;
+	Query.Requester           = Ctx->SelfHandle;
+	Query.AgentFootprintRadius = GetFootprintRadius();
+	Query.GroupId             = GroupId;
+	return Ctx->Nav->QueryDirection(Query);
 }
 
 // ---- Debug draw (editor/development only; never mutates sim) -------------------

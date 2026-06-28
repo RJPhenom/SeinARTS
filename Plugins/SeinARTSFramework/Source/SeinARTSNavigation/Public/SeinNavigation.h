@@ -175,6 +175,20 @@ public:
 		return false;
 	}
 
+	/** Direction-query seam — the "pull" complement to FindPath's "push" route. Returns a
+	 *  planar UNIT direction the agent at `Query.From` should head to progress toward
+	 *  `Query.Goal`, or ZERO if it should stop (arrived / no direction / no data). This is
+	 *  the seam a FIELD-shaped nav (flow field / continuum crowds) answers NATIVELY — it
+	 *  samples its precomputed per-cell field at `From` instead of producing a per-agent
+	 *  route — and the seam a field-follower movement mode consumes each tick. A
+	 *  ROUTE-shaped nav answers it by routing and returning the first step's heading
+	 *  (USeinNavigationAStar does this). `Query.GroupId` lets a field nav share ONE field
+	 *  across an ordered group (key by GroupId + Goal); per-agent navs ignore it.
+	 *
+	 *  Base default: straight-line toward `Goal` (obstacle-BLIND) — a safe fallback so any
+	 *  nav answers SOMETHING; override for obstacle-aware or field-based direction. */
+	virtual FFixedVector QueryDirection(const FSeinDirectionQuery& Query) const;
+
 	/** Fast reachability check. Default: falls back to FindPath. Subclasses
 	 *  should override with a cheaper reachability component / flood-fill if
 	 *  the FindPath cost is prohibitive on the query hot path (ability

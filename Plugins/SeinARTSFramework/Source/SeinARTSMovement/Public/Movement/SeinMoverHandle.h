@@ -277,6 +277,14 @@ public:
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Movement|Toolkit", meta = (DisplayName = "Apply Avoidance Steer"))
 	FFixedVector ApplyAvoidanceSteer(FFixedVector DesiredDir) const;
 
+	/** The avoidance SPEED-YIELD for this unit this tick — a 0..1 multiplier on cruise speed.
+	 *
+	 *  The local-avoidance layer can ask a unit to give way by SLOWING, not just turning. Multiply
+	 *  your cruise speed by this (1 = full speed, no yield). Pair with Apply Avoidance Steer (heading)
+	 *  for the full avoidance response in a custom Tick. The shipped boids model always returns 1. */
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|Movement|Toolkit", meta = (DisplayName = "Get Avoidance Speed Scale"))
+	FFixedPoint GetAvoidanceSpeedScale() const;
+
 	/** Stops a move from crossing into walls; returns a safe position.
 	 *
 	 *  Give it where the unit was and where it wants to go. If the target lands on a blocked cell it
@@ -353,6 +361,17 @@ public:
 	 *  navigation plus current dynamic blockers). */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Movement|Toolkit", meta = (DisplayName = "Is Position Clear"))
 	bool IsPositionClear(const FFixedVector& WorldPos) const;
+
+	/** Asks the navigation "from where I am now, which way to the goal?" — returns a planar direction.
+	 *
+	 *  The pull-style nav query a FIELD-FOLLOWER movement mode samples each tick: it returns the unit
+	 *  direction to head (zero = stop / arrived / no route), from this unit's current position toward Goal.
+	 *  A field-based nav (flow field) answers cheaply from its precomputed field; the shipped grid nav
+	 *  answers by routing (so for the grid nav, a normal waypoint-following mode is cheaper than polling
+	 *  this). Group Id lets a shared-field nav reuse one field across an ordered group (0 = lone). */
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|Movement|Toolkit",
+		meta = (DisplayName = "Query Nav Direction", AdvancedDisplay = "GroupId"))
+	FFixedVector QueryNavDirection(FFixedVector Goal, int64 GroupId = 0) const;
 
 	// =====================================================================================
 	// Debug draw. Editor/development only — these do nothing in a shipping build and never

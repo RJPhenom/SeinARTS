@@ -208,7 +208,14 @@ class chosen via `USeinARTSCoreSettings` — and the bake pipeline is UNIFIED be
   escape-nudge for stuck units) — bakes its "Nav" channel as a layer provider (slope gate on the
   shared normal, own connectivity midpoint traces, island-prune→threshold, elevated-obstacle-tops
   prune) and loads its runtime grid from the substrate. `USeinMoveToAction` is impl-agnostic. No
-  UE NavMesh.
+  UE NavMesh. **Seams for non-polyline planners:** a `QueryDirection(FSeinDirectionQuery) → unit dir`
+  virtual (the "pull" complement to the "push" `FindPath`, so a FIELD-shaped nav — flow field /
+  continuum crowds — answers "which way from here" natively; A* answers it via the first path step);
+  `ESeinPathSegmentType` carries `Field` + `AbstractEdge` kinds (a field / HPA* nav emits these,
+  consumers default-handle them as straights); and `FSeinPathRequest` / `FSeinDirectionQuery` carry a
+  `GroupId` so a shared-field / hierarchical nav can key ONE field/route per ordered group (contract
+  only — the shipped A* nav ignores it; building the cache is the impl's job). BP exposure: `Query Nav
+  Direction` on the nav BPFL + Mover Handle (for field-follower movement modes).
 - **Fog of War** (`USeinARTSCoreSettings::FogOfWarClass`): abstract `USeinFogOfWar` + default
   `USeinFogOfWarDefault` (single-layer grid, Bresenham LOS, per-player refcounted VisionGroups,
   delta-refcount source caching) — bakes its "FogOfWar" channel as a layer provider at its OWN
@@ -236,7 +243,7 @@ verification).** Movement instances are persistent per UNIT, not per order:
 `USeinMovementSubsystem` owns a handle-keyed registry (lazy creation from
 `FSeinMovementComponent::MovementClass`; orders BORROW the instance, `OnMoveBegin` is the
 per-order reset point) and registers two sim systems on world begin-play:
-`FSeinAvoidanceSystem` (PreTick 6, one-sided precomputed steers) and the always-on
+`FSeinAvoidanceSystem` (PreTick 6) and the always-on
 **`FSeinMovementDriverSystem`** (AbilityExecution 10 — after the latent/order ticks;
 `bHasTarget` discriminates ordered-this-tick from idle). The driver calls
 `USeinMovement::TickIdle` on every idle unit each tick: first-contact ground snap (this
@@ -247,6 +254,19 @@ stripped 2026-06-03 is superseded by this, not reinstated). Contained entities a
 skipped (their container poses them). Ordered steering still runs inside
 `USeinMoveToAction`'s tick this checkpoint; the full move-step migration into the driver
 is CP2.3's decision/integration split (where the momentum push needs it).
+
+**Avoidance is pluggable** (same abstract-base + settings-picker pattern as Navigation /
+Collision / FoW): abstract `USeinAvoidance` + `USeinARTSCoreSettings::AvoidanceClass`
+(default `USeinAvoidanceDefault` = the SpringRTS/BAR lateral-steer boids model). The
+PreTick `FSeinAvoidanceSystem` is a thin delegator → `ComputeAvoidance`; the instance is
+owned + GC-rooted by `USeinMovementSubsystem`. The per-tick OUTPUT contract is
+`FSeinAvoidanceOutput { SteerDir, SpeedScale }` on `FSeinMovementComponent` — a lateral
+steer (consumed by `USeinMovement::ApplyAvoidanceSteer`) PLUS a [0,1] cruise-speed yield
+(consumed by `GetAvoidanceSpeedScale`, default 1 = no-op; lets a model give way by
+braking, not only turning). NOT velocity-replacement (no ORCA): avoidance runs as a
+speed-agnostic PreTick precompute, so the output is a nudge+scale, not a full velocity.
+Swap the model (a different boids/flocking model, a flow-field separation pass) with zero
+core edits.
 
 The **concrete modes** — Infantry, Wheeled, Tracked, Hover, Flight — and their per-class data structs
 live in the opt-in **SeinARTSMovementPlus** extension, not here. They derive from the base classes

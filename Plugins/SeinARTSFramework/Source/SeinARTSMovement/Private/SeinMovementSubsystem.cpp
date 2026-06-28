@@ -12,6 +12,9 @@
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Movement/SeinMovement.h"
 #include "Movement/SeinBasicMovement.h"
+#include "Movement/SeinAvoidance.h"
+#include "Movement/SeinAvoidanceDefault.h"
+#include "Settings/PluginSettings.h"
 #include "Components/SeinMovementComponent.h"
 
 void USeinMovementSubsystem::OnWorldBeginPlay(UWorld& InWorld)
@@ -22,8 +25,14 @@ void USeinMovementSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 	USeinWorldSubsystem* Sim = InWorld.GetSubsystem<USeinWorldSubsystem>();
 	if (!Sim) return;
 
-	// Local avoidance — the soft steering layer above the penetration floor.
-	AvoidanceSystem = new FSeinAvoidanceSystem();
+	// Local avoidance — the soft steering layer above the penetration floor. The
+	// MODEL is pluggable (USeinARTSCoreSettings::AvoidanceClass → USeinAvoidanceDefault);
+	// instantiate + GC-root it here, then register a thin delegator system that calls
+	// it each PreTick. Same abstract-base + soft-class-picker pattern as Navigation /
+	// CollisionResolver / FogOfWar.
+	AvoidanceInstance = NewObject<USeinAvoidance>(this, ResolveAvoidanceClass());
+	if (AvoidanceInstance) AvoidanceInstance->OnInitialized(&InWorld);
+	AvoidanceSystem = new FSeinAvoidanceSystem(AvoidanceInstance);
 	Sim->RegisterSystem(AvoidanceSystem);
 
 	// The always-on per-unit movement driver (CP2.1, D-R2). Its first-contact
@@ -67,6 +76,9 @@ void USeinMovementSubsystem::Deinitialize()
 		delete AvoidanceSystem;
 		AvoidanceSystem = nullptr;
 	}
+	// AvoidanceInstance is a UPROPERTY → GC owns it; drop the ref AFTER the delegator
+	// system (which holds a raw pointer to it) is gone, so the pointer never dangles.
+	AvoidanceInstance = nullptr;
 
 	MovementInstanceMap.Empty();
 	MovementInstancePool.Empty();
@@ -84,6 +96,19 @@ UClass* USeinMovementSubsystem::ResolveMovementClass(const FSeinMovementComponen
 		MoveClass = USeinBasicMovement::StaticClass();
 	}
 	return MoveClass;
+}
+
+UClass* USeinMovementSubsystem::ResolveAvoidanceClass()
+{
+	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
+	UClass* AvoidClass = (Settings && Settings->AvoidanceClass.IsValid())
+		? Settings->AvoidanceClass.TryLoadClass<USeinAvoidance>()
+		: nullptr;
+	if (!AvoidClass || AvoidClass->HasAnyClassFlags(CLASS_Abstract))
+	{
+		AvoidClass = USeinAvoidanceDefault::StaticClass();
+	}
+	return AvoidClass;
 }
 
 USeinMovement* USeinMovementSubsystem::GetOrCreateMovementInstance(

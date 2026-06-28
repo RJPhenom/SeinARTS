@@ -186,6 +186,12 @@ bool USeinMovement::BP_Tick_Implementation(USeinMoverHandle* Mover)
 	// Then clamp to the arrival cap.
 	if (ArrivalCap < TargetSpeed) TargetSpeed = ArrivalCap;
 
+	// Avoidance speed-yield: a model may ask this unit to slow (not only turn) to give
+	// way — SpeedScale in [0,1], default 1 = byte-identical no-op (the shipped boids model
+	// never writes it). Applied to the cruise target so the slow ramps in through
+	// StepSpeedToward like any other speed change. Pairs with ApplyAvoidanceSteer (heading).
+	TargetSpeed = TargetSpeed * GetAvoidanceSpeedScale(Ctx);
+
 	// Smoothstep the scalar speed toward the target — accel growing, decel shrinking.
 	CurrentSpeed = StepSpeedToward(CurrentSpeed, TargetSpeed,
 		MovementData.Acceleration, MovementData.Deceleration, DeltaTime);
@@ -974,7 +980,7 @@ FFixedVector USeinMovement::ApplyAvoidanceSteer(const FSeinMovementContext& Ctx,
 	// order-dependent → desync. The steer was computed ONE-SIDED at PreTick by
 	// FSeinAvoidanceSystem; here we only consume our own already-written field.
 	if (!Ctx.MovementData) return DesiredDir;
-	const FFixedVector& Steer = Ctx.MovementData->AvoidanceSteer;
+	const FFixedVector& Steer = Ctx.MovementData->AvoidanceOutput.SteerDir;
 
 	// Bit-exact no-op when not avoiding: return the input direction UNCHANGED (no
 	// renormalize), so AvoidanceStrength = 0 / no-neighbour units move identically
@@ -984,6 +990,17 @@ FFixedVector USeinMovement::ApplyAvoidanceSteer(const FSeinMovementContext& Ctx,
 	// Bend the (unit) desired direction by the lateral steer, then renormalize.
 	return FFixedVector::GetSafeNormal(
 		FFixedVector(DesiredDir.X + Steer.X, DesiredDir.Y + Steer.Y, DesiredDir.Z));
+}
+
+FFixedPoint USeinMovement::GetAvoidanceSpeedScale(const FSeinMovementContext& Ctx) const
+{
+	// PURE READ of the PreTick-written speed-yield channel (same one-sided, order-
+	// independent discipline as ApplyAvoidanceSteer — never read neighbour state here).
+	// 1 = no change. The shipped boids model never modulates speed, so this is a
+	// byte-identical no-op until a custom avoidance model writes SpeedScale < 1 to make
+	// a unit YIELD by braking (rather than only turning). The base RTS loop multiplies
+	// its cruise target by this; a custom Tick reads it via the Mover Handle.
+	return Ctx.MovementData ? Ctx.MovementData->AvoidanceOutput.SpeedScale : FFixedPoint::One;
 }
 
 FFixedQuaternion USeinMovement::ApplySlopeTilt(

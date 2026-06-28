@@ -24,6 +24,20 @@ FSeinPath USeinNavigationBPFL::SeinFindPath(const UObject* WorldContextObject, F
 	return Result;
 }
 
+FFixedVector USeinNavigationBPFL::SeinQueryNavDirection(const UObject* WorldContextObject, FFixedVector From, FFixedVector Goal, FSeinEntityHandle Requester, FGameplayTagContainer BlockedTerrainTags, int64 GroupId)
+{
+	USeinNavigation* Nav = USeinNavigationSubsystem::GetNavigationForWorld(WorldContextObject);
+	if (!Nav) return FFixedVector::ZeroVector;
+
+	FSeinDirectionQuery Query;
+	Query.From = From;
+	Query.Goal = Goal;
+	Query.Requester = Requester;
+	Query.BlockedTerrainTags = BlockedTerrainTags;
+	Query.GroupId = GroupId;
+	return Nav->QueryDirection(Query);
+}
+
 bool USeinNavigationBPFL::SeinIsLocationReachable(const UObject* WorldContextObject, FFixedVector From, FFixedVector To, FGameplayTagContainer AgentTags)
 {
 	USeinNavigation* Nav = USeinNavigationSubsystem::GetNavigationForWorld(WorldContextObject);

@@ -165,6 +165,13 @@ public:
 	virtual bool FindPath(const FSeinPathRequest& Request, FSeinPath& OutPath) const override;
 	virtual bool FindCellPath(const FSeinPathRequest& Request, FSeinPath& OutPath) const override;
 
+	/** Obstacle-aware "which way from here": routes From→Goal (cell path) and returns the
+	 *  heading to the first waypoint past the start. This is the PULL-equivalent of FindPath
+	 *  for the shipped route-shaped nav — note it runs a search per call, so route-shaped
+	 *  movement should consume the PATH api, not poll this every tick; the seam exists so a
+	 *  FIELD-shaped nav can answer cheaply. Falls back to the base straight-line on no path. */
+	virtual FFixedVector QueryDirection(const FSeinDirectionQuery& Query) const override;
+
 	/** Run a batch of path requests, parallelized across worker threads when
 	 *  Sein.Sim.Parallel is on — each worker gets its own FAStarScratch, so the
 	 *  searches run race-free and each result is identical to the serial path.

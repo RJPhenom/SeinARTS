@@ -538,11 +538,28 @@ public:
 		meta = (DisplayName = "Treat Movement Non-Determinism As Error"))
 	bool bMovementDeterminismIsError = false;
 
-	// ── Local avoidance (FSeinAvoidanceSystem) ──
-	// Model-shape constants shared by ALL movers (the avoidance model's "feel").
-	// Per-UNIT dials — AvoidanceStrength / AvoidanceWeight / bAvoidSameWeights —
-	// live on FSeinMovementComponent. Defaults equal the former inline literals,
-	// so motion is unchanged until tuned. All fixed-point → bit-identical.
+	// ── Local avoidance ──
+	// The MODEL is pluggable (AvoidanceClass below); the tuning constants that follow
+	// are the shipped USeinAvoidanceDefault model's "feel". Per-UNIT dials —
+	// AvoidanceStrength / AvoidanceWeight / bAvoidSameWeights — live on
+	// FSeinMovementComponent. Defaults equal the former inline literals, so motion is
+	// unchanged until tuned. All fixed-point → bit-identical.
+
+	/**
+	 * Which local-avoidance model runs the per-tick soft steering for the whole game.
+	 * The PreTick avoidance system delegates to the class you pick here; nothing else
+	 * in the framework cares what's underneath. The shipped default is the SpringRTS/
+	 * BAR-distilled lateral-steer boids model (USeinAvoidanceDefault). Game teams can
+	 * select their own C++ subclass (a different boids/flocking model, a flow-field
+	 * follower's separation pass, etc.) without touching any other framework code.
+	 * Empty / invalid / abstract → the shipped default. Same soft-path pattern as
+	 * `NavigationClass` / `CollisionResolverClass` / `FogOfWarClass`. (NOT ORCA —
+	 * velocity-obstacle avoidance is out of scope for RTS unit counts.)
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Movement|Avoidance",
+		meta = (DisplayName = "Avoidance Class",
+				MetaClass = "/Script/SeinARTSMovement.SeinAvoidance"))
+	FSoftClassPath AvoidanceClass;
 
 	/** Perception look-ahead: a moving unit perceives neighbours out to
 	 *  2×footprint + Speed×this. Default 0.5s. */

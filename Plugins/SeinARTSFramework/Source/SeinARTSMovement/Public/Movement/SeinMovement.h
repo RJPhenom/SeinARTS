@@ -734,11 +734,11 @@ protected:
 	bool IsFootprintPassable(const FFixedVector& Pos, USeinNavigation* Nav) const;
 
 	/** Bend a NORMALIZED desired direction by this unit's precomputed local-
-	 *  avoidance steer (`FSeinMovementComponent::AvoidanceSteer`, written one-sided
-	 *  at PreTick by `FSeinAvoidanceSystem`). This is the single integration point
-	 *  every movement mode calls, so the general avoidance system applies across
-	 *  all of them. Soft layer — the hard penetration floor remains the no-overlap
-	 *  guarantee.
+	 *  avoidance steer (`FSeinMovementComponent::AvoidanceOutput.SteerDir`, written
+	 *  one-sided at PreTick by the active `USeinAvoidance`). This is the single
+	 *  integration point every movement mode calls, so the general avoidance system
+	 *  applies across all of them. Soft layer — the hard penetration floor remains the
+	 *  no-overlap guarantee.
 	 *
 	 *  PURE READ: never query the spatial hash or read neighbour state here.
 	 *  Movement runs through the insertion-ordered latent-action manager, so a
@@ -747,6 +747,15 @@ protected:
 	 *  opted-out unit moves identically to a world with no avoidance. Input is
 	 *  assumed unit-length; the steer is sized in that same unit space. */
 	FFixedVector ApplyAvoidanceSteer(const FSeinMovementContext& Ctx, const FFixedVector& DesiredDir) const;
+
+	/** This unit's precomputed avoidance SPEED-YIELD this tick
+	 *  (`FSeinMovementComponent::AvoidanceOutput.SpeedScale`, written one-sided at
+	 *  PreTick by the active `USeinAvoidance`): a [0,1] multiplier on cruise speed so a
+	 *  model can make a unit give way by SLOWING, not only turning. 1 = no change. The
+	 *  base RTS loop multiplies its cruise target by this; a custom BP_Tick reads it via
+	 *  the Mover Handle. PURE READ — same one-sided / order-independent discipline as
+	 *  ApplyAvoidanceSteer. Byte-identical no-op while the model leaves it at 1. */
+	FFixedPoint GetAvoidanceSpeedScale(const FSeinMovementContext& Ctx) const;
 
 	// CacheFootprintFromContext is declared in the public section below —
 	// called by USeinMoveToAction's first-tick setup.

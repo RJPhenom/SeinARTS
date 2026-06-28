@@ -39,6 +39,23 @@ public:
 		FSeinEntityHandle Requester,
 		FGameplayTagContainer BlockedTerrainTags);
 
+	/** Asks the navigation "from here, which way to the goal?" — returns a single planar direction.
+	 *
+	 *  The pull-style complement to Find Path: instead of a whole route it returns the unit direction to
+	 *  head this tick (zero = stop / arrived / no route). Field-based navigation (flow fields) answers this
+	 *  cheaply every tick; the shipped grid nav answers by routing and returning the first step (so for the
+	 *  grid nav, prefer Find Path for ordinary movement). Group Id lets a shared-field nav reuse one field
+	 *  for an ordered group (0 = lone unit). */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Navigation",
+		meta = (WorldContext = "WorldContextObject", DisplayName = "Query Nav Direction", AdvancedDisplay = "GroupId"))
+	static FFixedVector SeinQueryNavDirection(
+		const UObject* WorldContextObject,
+		FFixedVector From,
+		FFixedVector Goal,
+		FSeinEntityHandle Requester,
+		FGameplayTagContainer BlockedTerrainTags,
+		int64 GroupId = 0);
+
 	/** Can a unit get from one point to another at all? Returns true if a route exists.
 	 *
 	 *  A fast connectivity check, cheaper than Find Path — it answers reachability without building the

@@ -545,7 +545,7 @@ namespace
 				USeinMovement::DrawSteeringDebugViz(
 					World, EntityPosFixed, FootprintRadius,
 					bActiveMove ? MovementData->Velocity : FFixedVector::ZeroVector,
-					bActiveMove ? MovementData->AvoidanceSteer : FFixedVector::ZeroVector);
+					bActiveMove ? MovementData->AvoidanceOutput.SteerDir : FFixedVector::ZeroVector);
 			});
 		}
 		else

@@ -121,20 +121,89 @@ struct SEINARTSNAVIGATION_API FSeinPathRequest
 	 *  (bIsPartial) if the cap is hit rather than searching the whole grid. */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Navigation|Path", meta = (ClampMin = "0"))
 	int32 AgentMaxSearchNodes = 0;
+
+	/** Group / region key for navs that SHARE planning work across many agents — a
+	 *  flow-field or hierarchical nav keys ONE field / abstract route per (GroupId, End)
+	 *  and reuses it for every member, rather than planning each request independently.
+	 *  0 = none (treat as a lone agent). The shipped per-agent A* nav IGNORES this. This
+	 *  is a CONTRACT seam only: the framework defines + carries the key (movement stamps
+	 *  it from the order's cohesion group); BUILDING the shared-field/route cache keyed by
+	 *  it is the nav impl's job. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Navigation|Path")
+	int64 GroupId = 0;
 };
 
-/** Kind of motion a path segment represents. Only `Straight` is built today — the
- *  enum is intentionally a one-value extensibility seam. New kinds are added by whatever
- *  PRODUCES the path: the nav (`FindPath`) for topology kinds (e.g. link / jump hops over
- *  off-mesh edges), a movement planner (`USeinMovement::PlanPath`) for kinematic kinds
- *  (e.g. arc curve-fitting). Consumers default-handle unknown values as straights, so
- *  growing it stays additive. */
+/** Direction-query input — the "pull" complement to FSeinPathRequest's "push" route.
+ *  Asks the nav "from HERE, which way do I head toward Goal?" once, for one agent, this
+ *  tick (see USeinNavigation::QueryDirection). A FIELD-shaped nav answers by sampling its
+ *  precomputed field at From (cheap, shared across a group); a ROUTE-shaped nav answers by
+ *  routing and returning the first step's heading. Lean by design — a per-tick query, not
+ *  a full plan — so a field-follower movement mode can poll it every tick. */
+USTRUCT(BlueprintType)
+struct SEINARTSNAVIGATION_API FSeinDirectionQuery
+{
+	GENERATED_BODY()
+
+	/** The querying agent's current world position. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Navigation|Direction")
+	FFixedVector From;
+
+	/** The destination the agent is heading toward. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Navigation|Direction")
+	FFixedVector Goal;
+
+	/** The querying agent (self-exclusion / per-agent field lookup). */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Navigation|Direction")
+	FSeinEntityHandle Requester;
+
+	/** Terrain classes this agent treats as impassable — same semantics as
+	 *  FSeinPathRequest::BlockedTerrainTags. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Navigation|Direction")
+	FGameplayTagContainer BlockedTerrainTags;
+
+	/** Agent nav-layer mask (dynamic-blocker filtering). Default 0xFF. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Navigation|Direction")
+	uint8 AgentNavLayerMask = 0xFF;
+
+	/** Agent body radius (clearance), world units. Default 0. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Navigation|Direction")
+	FFixedPoint AgentFootprintRadius;
+
+	/** Group / region key for shared-field navs (see FSeinPathRequest::GroupId). 0 = lone.
+	 *  A field nav keys ONE field per (GroupId, Goal) and samples it for every member;
+	 *  per-agent navs ignore it. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Navigation|Direction")
+	int64 GroupId = 0;
+};
+
+/** Kind of motion a path segment represents. `Straight` is the only kind the shipped
+ *  nav / movement PRODUCE today; the rest are CONTRACT seams for non-polyline planners to
+ *  emit. New kinds are added by whatever PRODUCES the path: the nav (`FindPath`) for
+ *  topology / field kinds, a movement planner (`USeinMovement::PlanPath`) for kinematic
+ *  kinds (e.g. arc curve-fitting). Consumers default-handle unknown values as straights,
+ *  so growing it stays additive. */
 UENUM(BlueprintType)
 enum class ESeinPathSegmentType : uint8
 {
 	/** Straight-line segment from `From` to `To`. One segment per
 	 *  `Waypoints[i] → Waypoints[i+1]` pair. */
 	Straight UMETA(DisplayName = "Straight"),
+
+	/** Hierarchical ABSTRACT edge (HPA*-style): a hop between two abstract-graph nodes
+	 *  (cluster portals) that has NOT been refined to ground waypoints. `From`/`To` are the
+	 *  portal anchors. A follower refines it ON DEMAND (route `From`→`To` for the next
+	 *  segment as it streams toward it) instead of eagerly expanding the whole route — the
+	 *  scaling win for many-agent / long-range planning. Produced by a hierarchical
+	 *  `USeinNavigation`; not emitted by the shipped A* nav. */
+	AbstractEdge UMETA(DisplayName = "Abstract Edge"),
+
+	/** FIELD-follow segment (flow-field / continuum-crowd style): the route is NOT a
+	 *  polyline but a shared DIRECTION FIELD owned by the nav. `From` = the anchor/region,
+	 *  `To` = the goal. A follower IGNORES the waypoint backbone for this segment and
+	 *  instead samples the nav each tick via `USeinNavigation::QueryDirection` (which reads
+	 *  the field), so one field serves a whole group (keyed by `FSeinPathRequest::GroupId`).
+	 *  Produced by a field-shaped `USeinNavigation`; not emitted by the shipped A* nav. */
+	Field UMETA(DisplayName = "Field"),
 };
 
 /** Single typed segment in a planned path. One segment per consecutive

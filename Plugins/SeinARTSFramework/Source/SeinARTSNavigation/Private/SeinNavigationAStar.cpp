@@ -1904,6 +1904,36 @@ bool USeinNavigationAStar::FindCellPath(const FSeinPathRequest& Request, FSeinPa
 	return FindCellPathInternal(Request, OutPath, MainScratch);
 }
 
+FFixedVector USeinNavigationAStar::QueryDirection(const FSeinDirectionQuery& Query) const
+{
+	// Obstacle-aware "which way": route From→Goal and return the heading to the first
+	// waypoint past the start. The pull-equivalent of FindPath for this route-shaped nav.
+	// (A field-shaped nav would override to sample a precomputed field instead — far
+	// cheaper to poll per tick.) Falls back to the base straight-line on no data / no path.
+	if (!HasRuntimeData()) return Super::QueryDirection(Query);
+
+	FSeinPathRequest Req;
+	Req.Start                = Query.From;
+	Req.End                  = Query.Goal;
+	Req.Requester            = Query.Requester;
+	Req.BlockedTerrainTags   = Query.BlockedTerrainTags;
+	Req.AgentNavLayerMask    = Query.AgentNavLayerMask;
+	Req.AgentFootprintRadius = Query.AgentFootprintRadius;
+	Req.GroupId              = Query.GroupId;
+
+	FSeinPath Path;
+	if (FindCellPath(Req, Path) && Path.Waypoints.Num() >= 2)
+	{
+		FFixedVector Delta = Path.Waypoints[1] - Query.From;
+		Delta.Z = FFixedPoint::Zero;
+		if (Delta.SizeSquared() > FFixedPoint::Epsilon)
+		{
+			return FFixedVector::GetSafeNormal(Delta);
+		}
+	}
+	return Super::QueryDirection(Query);
+}
+
 bool USeinNavigationAStar::FindCellPathInternal(const FSeinPathRequest& Request, FSeinPath& OutPath, FAStarScratch& Scratch) const
 {
 	OutPath.Clear();
