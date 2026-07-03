@@ -869,6 +869,45 @@ FFixedVector USeinMovement::ResolveNavCollision(
 	USeinNavigation* Nav,
 	const FFixedVector* AuthoritativeDest) const
 {
+	// SWEPT nav floor. A fast unit whose one-tick planar move exceeds its own footprint
+	// radius could step OVER a thin blocker sitting BETWEEN its start and end footprints —
+	// the continuous-space twin of the LoS supercover tunnel. Subdivide such a move into
+	// footprint-radius-sized hops and resolve each, so the body is checked continuously.
+	// SELF-GATING, NO SETTING: the hop length IS the footprint radius, so a unit only
+	// subdivides when |step| > radius (TopSpeed·dt > radius → ~1500 cm/s for a 50 cm
+	// footprint at 30 Hz) — genuinely fast movers only. Everyone else pays one Size() +
+	// compare and takes the single-step path. Deterministic (fixed-point Size / division).
+	const FFixedPoint SubStep = CachedCollisionRadius;
+	if (Nav && SubStep > FFixedPoint::Zero)
+	{
+		const FFixedVector Delta(NewPos.X - OldPos.X, NewPos.Y - OldPos.Y, FFixedPoint::Zero);
+		const FFixedPoint Dist = Delta.Size();
+		if (Dist > SubStep)
+		{
+			const int32 Hops = (Dist / SubStep).ToInt() + 1;   // ceil-ish; >= 2 in this branch
+			FFixedVector Cur = OldPos;
+			for (int32 h = 1; h <= Hops; ++h)
+			{
+				const FFixedPoint T = FFixedPoint::FromInt(h) / FFixedPoint::FromInt(Hops);
+				const FFixedVector Target(OldPos.X + Delta.X * T, OldPos.Y + Delta.Y * T, NewPos.Z);
+				const FFixedVector Resolved = ResolveNavCollisionStep(Cur, Target, Nav, AuthoritativeDest);
+				// Blocked / slid mid-sweep → stop at the last clear point (don't keep walking
+				// the original line past a blocker the hop just refused).
+				if (Resolved.X != Target.X || Resolved.Y != Target.Y) return Resolved;
+				Cur = Resolved;
+			}
+			return Cur; // whole sweep clear → planar-equal to NewPos
+		}
+	}
+	return ResolveNavCollisionStep(OldPos, NewPos, Nav, AuthoritativeDest);
+}
+
+FFixedVector USeinMovement::ResolveNavCollisionStep(
+	const FFixedVector& OldPos,
+	const FFixedVector& NewPos,
+	USeinNavigation* Nav,
+	const FFixedVector* AuthoritativeDest) const
+{
 	if (!Nav) return NewPos;
 
 	// Escape valve — if the unit's CENTER is already inside a blocked cell (spawned

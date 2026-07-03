@@ -387,10 +387,20 @@ void USeinFormation::ProjectPositionsToNavigable(
 	// No nav projection bound (tests / nav-less games) → nothing to clamp to; leave positions as-is.
 	if (!World->NavProjectFreeResolver.IsBound()) return;
 
-	// A slot is "off nav" when its cell isn't passable (off the play area, or on an obstacle). With no
-	// passability resolver we can't tell, so we treat everything as on-nav and do nothing — same
-	// permit-on-no-data stance as the rest of the nav seam.
-	const bool bCanTestPassable = World->PassableResolver.IsBound();
+	// A slot is "off nav" when its cell isn't passable — off the play area, on a BAKED obstacle, OR under
+	// a runtime DYNAMIC blocker (bBlocksNav — a non-baked cover wall / deployable). We classify with the
+	// DYNAMIC-aware resolver so on/off-nav reflects DE-FACTO availability (bake MINUS runtime blockers),
+	// not just the static bake. Otherwise a plain slot landing on a dynamic wall reads "on-nav", the
+	// preview marker renders ON the wall, and the unit is delivered short of it (the movement floor stops
+	// it clear) — a WYSIWYG break. Preview and commit both run THIS shared function, so swapping it keeps
+	// them identical (root CLAUDE.md #6). Cover slots are unaffected: the cover PostProcessPositions hook
+	// runs AFTER this and overrides, sourcing slots from FindNearbySlots (itself dynamic-filtered) near
+	// the target — so this can't relocate a cover slot out from under the hook. (The relocation target
+	// below, NavProjectFreeResolver, is still static-only; a relocated slot lands on the nearest
+	// bake-walkable + peer-free cell, which is almost always dynamic-clear too since blockers are sparse.
+	// A relocation landing on ANOTHER dynamic blocker is a rare residual, tracked separately.)
+	// With no resolver we can't tell → treat everything as on-nav (permit-on-no-data).
+	const bool bCanTestPassable = World->DynamicPassableResolver.IsBound();
 
 	auto RadiusAt = [&Radii](int32 i) -> FFixedPoint
 	{
@@ -406,7 +416,7 @@ void USeinFormation::ProjectPositionsToNavigable(
 	OccupiedRadii.Reserve(N);
 	for (int32 i = 0; i < N; ++i)
 	{
-		const bool bOnNav = !bCanTestPassable || World->PassableResolver.Execute(Positions[i]);
+		const bool bOnNav = !bCanTestPassable || World->DynamicPassableResolver.Execute(Positions[i]);
 		if (bOnNav)
 		{
 			Occupied.Add(Positions[i]);

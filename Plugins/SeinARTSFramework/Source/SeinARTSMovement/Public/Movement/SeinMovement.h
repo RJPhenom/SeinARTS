@@ -736,6 +736,17 @@ protected:
 		USeinNavigation* Nav,
 		const FFixedVector* AuthoritativeDest = nullptr) const;
 
+	/** Single short-step nav-collision resolve (escape valve, authoritative-dest exempt,
+	 *  footprint + step-height gate, axis slides, hold-in-place). `ResolveNavCollision`
+	 *  self-gates on step size and subdivides a long move into footprint-radius-sized hops,
+	 *  calling THIS per hop — so a fast unit can't tunnel a thin blocker sitting between its
+	 *  start and end footprints. Not for direct use; go through `ResolveNavCollision`. */
+	FFixedVector ResolveNavCollisionStep(
+		const FFixedVector& OldPos,
+		const FFixedVector& NewPos,
+		USeinNavigation* Nav,
+		const FFixedVector* AuthoritativeDest = nullptr) const;
+
 	/** Footprint-aware passability check at a candidate position. True iff
 	 *  the candidate's center AND every cached ring sample land on passable
 	 *  cells (per `CachedCollisionRadius` / `CachedFootprintSamples`).
