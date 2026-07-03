@@ -38,11 +38,13 @@
  *    - SteerDir   : a planar (XY) lateral nudge that BENDS the unit's desired heading,
  *                   consumed via USeinMovement::ApplyAvoidanceSteer. Strength-scaled +
  *                   temporally smoothed by the shipped model.
- *    - SpeedScale : a [0,1] multiplier on cruise speed so a model can make a unit YIELD
- *                   by slowing (not only turning). 1 = no change. The base RTS loop
- *                   applies it (USeinMovement::GetAvoidanceSpeedScale); the shipped
- *                   boids model leaves it at 1, so it is a byte-identical no-op until a
- *                   custom model writes < 1.
+ *    - SpeedScale : a non-negative multiplier on cruise speed. < 1 = YIELD by slowing
+ *                   (not only turning); > 1 = CATCH-UP boost (e.g. formation cohesion
+ *                   closing a gap); 1 = bit-exact no change. The base RTS loop applies
+ *                   it (USeinMovement::GetAvoidanceSpeedScale). The CONTRACT deliberately
+ *                   does not bound the boost or pick a cohesion model — how much (if any)
+ *                   > 1 a model writes, and how a movement mode physically honors it, are
+ *                   CLASS opinions, not seam rules.
  *  Runtime sim state, hashed as a desync canary. A struct (not two loose fields) so the
  *  avoidance OUTPUT CONTRACT can grow additively without churning consumers. */
 USTRUCT(BlueprintType, meta = (SeinDeterministic))
@@ -54,9 +56,12 @@ struct SEINARTSCOREENTITY_API FSeinAvoidanceOutput
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Movement|Avoidance")
 	FFixedVector SteerDir = FFixedVector::ZeroVector;
 
-	/** Cruise-speed multiplier, [0,1]. 1 = full speed (no yield). */
+	/** Cruise-speed multiplier, >= 0. 1 = full speed (bit-exact no-op); < 1 = yield
+	 *  by braking; > 1 = catch-up boost. Unbounded above BY CONTRACT — magnitude
+	 *  policy belongs to the producing avoidance class and the consuming movement
+	 *  mode, never to this seam. */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Movement|Avoidance",
-		meta = (ClampMin = "0.0", ClampMax = "1.0"))
+		meta = (ClampMin = "0.0"))
 	FFixedPoint SpeedScale = FFixedPoint::One;
 };
 
@@ -167,7 +172,13 @@ struct SEINARTSCOREENTITY_API FSeinMovementComponent : public FSeinComponent
 	// Runtime state (BlueprintReadWrite, not authored)
 	// =========================================================================
 
-	/** Active move target world position (sim space). */
+	/** Active move target world position (sim space) — the current order's resolved
+	 *  per-member goal (formation slot / click point), written by USeinMoveToAction
+	 *  each move tick alongside bHasTarget. A TRANSIENT per-order copy: the durable
+	 *  slot layout is formation/broker-owned; which member fills which slot can be
+	 *  re-decided on a re-form. Gate reads on bHasTarget (the value is stale after
+	 *  arrival by design — "last ordered goal"). PreTick systems (avoidance
+	 *  arrival-release, cohesion laggard detection) read it via component storage. */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Movement")
 	FFixedVector TargetLocation = FFixedVector::ZeroVector;
 

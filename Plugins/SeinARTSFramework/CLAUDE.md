@@ -273,8 +273,9 @@ The **concrete modes** — Infantry, Wheeled, Tracked, Hover, Flight — and the
 live in the opt-in **SeinARTSMovementPlus** extension, not here. They derive from the base classes
 above (Infantry from `USeinBasicMovement`; the rest from `USeinMovement`) and are resolved through
 the soft `MovementClass` path, so the framework has **no compile-time dependency** on them. See
-`Plugins/SeinARTSMovementPlusExtension/CLAUDE.md`. (Wheeled feel = bicycle pure-pursuit + nav
-corner-rounding via `GetMinTurnRadius`; NOT a Reeds-Shepp curve fit — see root doc.)
+`Plugins/SeinARTSMovementPlusExtension/CLAUDE.md`. (Wheeled feel = runtime bicycle pure-pursuit
+steering; NOT a Reeds-Shepp curve fit — see root doc. `GetMinTurnRadius` is a producer with NO
+consumer yet — the future curve planner / corner-rounding pass plugs in via `PlanPath`.)
 
 ## Networking (`SeinARTSNet`)
 GameInstance-subsystem-scoped (survives map travel). Real lockstep: `ASeinNetRelay` (per-PC RPC

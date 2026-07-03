@@ -148,6 +148,11 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 	// released" the moment the action ends — even while Velocity coasts toward
 	// zero.
 	MoveComp->bHasTarget = true;
+	// Publish the current order's resolved goal to the component so PreTick systems
+	// (avoidance arrival-release, cohesion laggard detection) can see it — they run
+	// without this action's context. Idempotent, same rationale as bHasTarget; NOT
+	// cleared at end (a "last ordered goal" — readers gate on bHasTarget).
+	MoveComp->TargetLocation = Destination;
 
 	USeinNavigation* Nav = USeinNavigationSubsystem::GetNavigationForWorld(&World);
 	USeinNavigationSubsystem* NavSub = World.GetWorld()

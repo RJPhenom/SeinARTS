@@ -699,6 +699,33 @@ public:
 		meta = (DisplayName = "Max Steer Magnitude", ClampMin = "0.0"))
 	FFixedPoint AvoidanceMaxSteerMagnitude = FFixedPoint::FromInt(2);
 
+	/** How much a unit brakes when it is steering hard — yield-by-slowing, layered on top of
+	 *  yield-by-turning. At full steer saturation the unit's cruise speed is multiplied by
+	 *  (1 − this); between zero and full steer the brake scales linearly. 0 disables braking
+	 *  entirely (bit-exact full speed). Default 0.25 — a unit swerving at its steering cap
+	 *  drops to 75% cruise, so congestion reads as units slowing into the weave instead of
+	 *  sliding through it at full tilt. */
+	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Avoidance",
+		meta = (DisplayName = "Brake Strength", ClampMin = "0.0", ClampMax = "1.0"))
+	FFixedPoint AvoidanceBrakeStrength = FFixedPoint::One / FFixedPoint::FromInt(4);
+
+	/** Formation cohesion, hold-back side: how much a member AHEAD of its group throttles so the
+	 *  formation stays together in motion. At full deviation from the group's mean progress the
+	 *  leader's cruise speed is multiplied by (1 − this). 0 disables hold-back. Default 0.25 —
+	 *  front-runners ease to 75% until the group catches up. Group = the unit's command broker
+	 *  (its formation); lone units are unaffected. */
+	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Avoidance",
+		meta = (DisplayName = "Cohesion Hold-Back", ClampMin = "0.0", ClampMax = "1.0"))
+	FFixedPoint AvoidanceCohesionHoldBack = FFixedPoint::One / FFixedPoint::FromInt(4);
+
+	/** Formation cohesion, catch-up side: the cruise multiplier a member BEHIND its group ramps
+	 *  toward so laggards close the gap. 1 disables catch-up (laggards recover only via leaders
+	 *  holding back). Default 1.1 — stragglers hustle at up to 110% cruise. How a movement mode
+	 *  physically honors a boost above its top speed is that mode's own policy. */
+	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Avoidance",
+		meta = (DisplayName = "Cohesion Catch-Up Boost", ClampMin = "1.0"))
+	FFixedPoint AvoidanceCohesionCatchUpBoost = FFixedPoint::FromInt(11) / FFixedPoint::FromInt(10);
+
 	// Navigation — Formation (a Navigation SUBCATEGORY, nested below Avoidance)
 	// ----------------------------------------------------------------------------------------------------
 	// The order-formation system: the shape a selection forms for a move. The drag gesture and a plain

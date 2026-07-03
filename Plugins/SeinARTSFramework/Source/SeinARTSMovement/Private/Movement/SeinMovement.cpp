@@ -999,7 +999,8 @@ FFixedVector USeinMovement::ApplyAvoidanceSteer(const FSeinMovementContext& Ctx,
 	// scale the steer down toward the path heading until it clears (a tangent-along-the-wall
 	// approximation), and only fall back to the pure path heading if even a gentle steer is
 	// blocked. Nav reads are the static bake (immutable this tick) → deterministic; a few probes,
-	// first step only. (Dense corner piles are separately handled by the avoidance regime hand-off.)
+	// first step only. (Dense corner piles are the avoidance MODEL's concern — the shipped class
+	// is currently a no-op skeleton; its rebuild owns that behavior, not this guard.)
 	if (Ctx.Nav)
 	{
 		const FFixedVector Pos = Ctx.Entity.Transform.GetLocation();
@@ -1060,7 +1061,8 @@ void USeinMovement::DrawSteeringDebugViz(
 	const FFixedVector& EntityPos,
 	float FootprintRadius,
 	const FFixedVector& Velocity,
-	const FFixedVector& AvoidanceSteer)
+	const FFixedVector& AvoidanceSteer,
+	const FFixedPoint& SpeedScale)
 {
 	if (!World || FootprintRadius <= 0.0f) return;
 
@@ -1075,8 +1077,26 @@ void USeinMovement::DrawSteeringDebugViz(
 		EntityPos.Z.ToFloat());
 	const FVector Center(EntityPosFloat.X, EntityPosFloat.Y, EntityPosFloat.Z + ZLift);
 
-	const FColor OrangeColor(255, 220, 0, 255); // footprint ring + velocity vector
+	const FColor OrangeColor(255, 220, 0, 255); // footprint ring + neutral velocity vector
 	const FColor AvoidColor(255, 0, 0, 255);    // avoidance vector
+
+	// Velocity-arrow tint by SpeedScale: neutral orange at 1; toward RED as the unit yields
+	// speed (< 1: avoidance brake / cohesion hold-back); toward GREEN as it boosts (> 1:
+	// cohesion catch-up). Full tint at ±0.5 from neutral. Render-only float math.
+	FColor VelocityColor = OrangeColor;
+	{
+		const float Scale = SpeedScale.ToFloat();
+		if (Scale < 1.0f)
+		{
+			const float T = FMath::Clamp((1.0f - Scale) / 0.5f, 0.0f, 1.0f);
+			VelocityColor = FColor(255, static_cast<uint8>(220.0f * (1.0f - T)), 0, 255);
+		}
+		else if (Scale > 1.0f)
+		{
+			const float T = FMath::Clamp((Scale - 1.0f) / 0.5f, 0.0f, 1.0f);
+			VelocityColor = FColor(static_cast<uint8>(255.0f * (1.0f - T)), 220, 0, 255);
+		}
+	}
 
 	// Footprint ring. DrawDebugCircle defaults to the XZ plane — the explicit Y/Z axis pair
 	// lays it flat in XY on the ground.
@@ -1100,7 +1120,7 @@ void USeinMovement::DrawSteeringDebugViz(
 		const FVector Origin = UE::SeinARTSMovement::DebugDraw::ComputeFootprintOriginAlong(
 			EntityPosFloat, VelocityFloat, FootprintRadius, ZLift);
 		DrawDebugDirectionalArrow(World, Origin, Origin + VelocityFloat,
-			/*ArrowSize*/ 20.0f, OrangeColor,
+			/*ArrowSize*/ 20.0f, VelocityColor,
 			/*PersistentLines*/ false, DrawLifetime, /*DepthPriority*/ 0, /*Thickness*/ 5.0f);
 
 		// AVOIDANCE arrow — RED, the world-space steer expressed as the sideways velocity it adds

@@ -1,13 +1,25 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinAvoidanceDefault.h
- * @brief   The framework's shipped local-avoidance plug — CURRENTLY A CLEAN-SLATE SKELETON.
+ * @brief   The framework's shipped local-avoidance plug: a lateral-steer + brake-to-yield model.
  *
- *          ComputeAvoidance is a deliberate no-op: it writes no steer, so selecting this class is
- *          behaviourally IDENTICAL to AvoidanceClass=None. It exists as the registered scaffold to
- *          rebuild a local-avoidance model into from the ground up (the former lateral-steer boids
- *          model was removed 2026-07-02 — recoverable from git history). See the .cpp for the
- *          rebuild contract (snapshot reads, per-unit AvoidanceOutput writes, determinism rules).
+ *          One PreTick pass over all movers. Per moving unit it accumulates a sideways nudge away
+ *          from qualifying neighbours (SteerDir) and eases cruise speed off as that nudge saturates
+ *          (SpeedScale < 1, yield-by-braking) — both written to the unit's own AvoidanceOutput and
+ *          consumed by the movement harness/policies. The gate chain that decides "qualifying":
+ *          units only (never walls — nav owns statics), never formation-mates (two-layer group skip:
+ *          same broker OR same per-order cohesion group), never stationary neighbours (the anti-
+ *          orbit bulldoze rule — idlers are the collision floor's job), weight-priority (lighter
+ *          yields to heavier), ahead-of-heading + genuinely-closing courses only, and nothing past
+ *          the unit's own goal. Near the goal the whole output fades (arrival release) so path
+ *          attraction and the collision floor own the endgame. Deterministic throughout: fixed-
+ *          point, snapshot reads, handle-index tiebreaks, parallel-safe (SeinParallelFor contract).
+ *
+ *          Tuning: model-shape constants in Project Settings → SeinARTS (Navigation|Avoidance,
+ *          part of the settings determinism fingerprint); per-unit dials (AvoidanceStrength /
+ *          AvoidanceWeight / bAvoidSameWeights) on FSeinMovementComponent. Swap the whole model by
+ *          subclassing USeinAvoidance and picking your class in settings — this class is the
+ *          shipped OPINION, not the seam.
  */
 
 #pragma once
@@ -19,11 +31,11 @@
 class USeinWorldSubsystem;
 
 /**
- * The out-of-the-box local-avoidance plug. Currently a CLEAN-SLATE SKELETON: it does nothing, so
- * moving units behave exactly as they would with avoidance turned off (AvoidanceClass=None). This
- * is the scaffold for building the shipped avoidance model from the ground up — build the model in
- * ComputeAvoidance here, or subclass Sein Avoidance (the abstract base) to ship an alternative and
- * select it in settings.
+ * The out-of-the-box local-avoidance model: moving units bend around crossing/oncoming traffic
+ * (lateral steer), brake as the weave gets dense (speed yield), pack with their own formation
+ * group instead of dodging it, bulldoze straight through idle stragglers (the collision floor
+ * shoves those aside), and release entirely on final approach so arrivals settle instead of
+ * orbiting. Ship different behavior by subclassing Sein Avoidance and selecting it in settings.
  */
 UCLASS(meta = (DisplayName = "Sein Avoidance Default"))
 class SEINARTSMOVEMENT_API USeinAvoidanceDefault : public USeinAvoidance
@@ -32,8 +44,8 @@ class SEINARTSMOVEMENT_API USeinAvoidanceDefault : public USeinAvoidance
 
 public:
 
-	/** One PreTick local-avoidance pass. CLEAN-SLATE SKELETON — currently a no-op (writes no steer;
-	 *  behaviourally identical to AvoidanceClass=None). Rebuild the model here; see the .cpp and
-	 *  USeinAvoidance::ComputeAvoidance for the contract. */
+	/** One PreTick local-avoidance pass over all movers — writes each unit's own
+	 *  AvoidanceOutput (SteerDir + SpeedScale). See the file docstring for the model
+	 *  and USeinAvoidance::ComputeAvoidance for the seam contract. */
 	virtual void ComputeAvoidance(USeinWorldSubsystem& World) override;
 };

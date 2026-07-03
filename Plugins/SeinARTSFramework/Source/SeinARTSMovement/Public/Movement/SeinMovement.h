@@ -438,11 +438,14 @@ public:
 	 *  opt out of viz by design).
 	 *
 	 *  Draws the footprint ring + two WORLD-SPACE arrows straight from the entity (NOT rotated
-	 *  by the chassis transform — both inputs are already world vectors): ORANGE = the VELOCITY
-	 *  vector (entity → velocity, at true magnitude); RED = the local-avoidance steer expressed
+	 *  by the chassis transform — both inputs are already world vectors): the VELOCITY vector
+	 *  (entity → velocity, at true magnitude) and RED = the local-avoidance steer expressed
 	 *  as the sideways velocity it adds (AvoidanceSteer × speed), comparable to the velocity
-	 *  arrow. Both skip when ~zero. Callers pass zero while a unit has no active move order, so a
-	 *  unit at rest shows the ring only (its stored Velocity / AvoidanceSteer may be stale).
+	 *  arrow. Both skip when ~zero. The velocity arrow is TINTED by SpeedScale — orange at 1
+	 *  (neutral), toward red below 1 (avoidance braking / cohesion hold-back), toward green
+	 *  above 1 (cohesion catch-up boost) — so the speed-yield channel is visible per unit.
+	 *  Callers pass zero vectors / One while a unit has no active move order, so a unit at
+	 *  rest shows the ring only (its stored Velocity / AvoidanceOutput may be stale).
 	 *
 	 *  Pure draw — no sim mutation, safe to call off the sim tick. */
 	static void DrawSteeringDebugViz(
@@ -450,7 +453,8 @@ public:
 		const FFixedVector& EntityPos,
 		float FootprintRadius,
 		const FFixedVector& Velocity,
-		const FFixedVector& AvoidanceSteer = FFixedVector::ZeroVector);
+		const FFixedVector& AvoidanceSteer = FFixedVector::ZeroVector,
+		const FFixedPoint& SpeedScale = FFixedPoint::One);
 #endif // UE_ENABLE_DEBUG_DRAWING
 
 	/** Populate the footprint cache used by `ResolveNavCollision`. Called by
@@ -659,8 +663,13 @@ protected:
 	 *  regardless of overshoot magnitude.
 	 *
 	 *  Algorithm: while CurrentWaypointIndex < N - 1, test
-	 *    1. Crossover: dot(AgentPos - W[i], W[i+1] - W[i]) > 0 → past W[i].
+	 *    1. Crossover (INCOMING direction): dot(AgentPos - W[i], W[i] - W[i-1]) > 0
+	 *       → genuinely overshot PAST W[i] along the leg that was travelled toward
+	 *       it. (Never the OUTGOING W[i]→W[i+1] direction — that fires for any
+	 *       agent merely on the far side of W[i]'s plane, however far off to the
+	 *       side, and skips whole detours; see the .cpp why-comment.)
 	 *    2. Distance fallback: |AgentPos - W[i]| < CloseRadius → close enough.
+	 *       (Sole trigger for W[0], which has no incoming leg.)
 	 *  Either advances; otherwise stops.
 	 *
 	 *  Last-waypoint case: arrival logic owns it; this helper never

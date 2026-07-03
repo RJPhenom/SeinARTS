@@ -485,13 +485,15 @@ namespace
 				}
 
 				// Steering arrows only while under an active move order — at rest the stored Velocity
-				// / AvoidanceSteer can be stale, so pass zero → the unit shows the ring only. During a
-				// move both are live: orange = world velocity (entity → velocity), red = avoidance.
+				// / AvoidanceOutput can be stale, so pass zero/One → the unit shows the ring only.
+				// During a move all three are live: velocity arrow (SpeedScale-tinted — orange
+				// neutral, red = braking/hold-back, green = catch-up boost), red = avoidance steer.
 				const bool bActiveMove = MovementData->bHasTarget;
 				USeinMovement::DrawSteeringDebugViz(
 					World, EntityPosFixed, FootprintRadius,
 					bActiveMove ? MovementData->Velocity : FFixedVector::ZeroVector,
-					bActiveMove ? MovementData->AvoidanceOutput.SteerDir : FFixedVector::ZeroVector);
+					bActiveMove ? MovementData->AvoidanceOutput.SteerDir : FFixedVector::ZeroVector,
+					bActiveMove ? MovementData->AvoidanceOutput.SpeedScale : FFixedPoint::One);
 			});
 		}
 		else

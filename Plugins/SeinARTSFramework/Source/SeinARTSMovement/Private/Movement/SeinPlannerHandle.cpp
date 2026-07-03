@@ -10,6 +10,7 @@
 #include "SeinNavigationSubsystem.h"
 #include "Components/SeinMovementComponent.h"
 #include "Components/SeinNavigationComponent.h"
+#include "Components/SeinBrokerMembershipData.h"
 #include "Types/Entity.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Settings/PluginSettings.h"
@@ -96,6 +97,17 @@ ESeinPathResult USeinPlannerHandle::RequestNavPath()
 	// Footprint via the shared cascade (Extents -> NavComp -> 0), so the planner clears what the
 	// body actually occupies — the same radius runtime collision uses.
 	Req.AgentFootprintRadius = USeinMovement::ResolveCollisionRadius(Ctx->World, Ctx->SelfHandle, Ctx->NavData);
+	// Group key for share-planning navs (flow field / hierarchical): the order's cohesion
+	// group id, stamped on every member of a multi-element order. The shipped A* ignores
+	// it; a shared-field nav keys one field/route per (GroupId, End). 0 = lone agent.
+	if (Ctx->World)
+	{
+		if (const FSeinBrokerMembershipData* Membership =
+				Ctx->World->GetComponent<FSeinBrokerMembershipData>(Ctx->SelfHandle))
+		{
+			Req.GroupId = Membership->CohesionGroupId;
+		}
+	}
 	// Authoritative destination (a cover slot overruling the coarse bake): honored as the exact
 	// final waypoint even on a partial path. Unbound -> false (default nearest-reachable).
 	Req.bAuthoritativeDestination = Ctx->World

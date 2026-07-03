@@ -45,7 +45,9 @@ public:
 	virtual bool Tick(const FSeinMovementContext& Ctx) override;
 
 	/** Bicycle minimum turn radius — `Wheelbase / tan(MaxSteerAngle)`.
-	 *  Consumed by the nav layer for corner rounding. Returns 0 when
+	 *  A PRODUCER awaiting its consumer: nothing in the base acts on it yet
+	 *  (a future vehicle curve planner / corner-rounding pass plugs in via
+	 *  PlanPath — see the base GetMinTurnRadius docstring). Returns 0 when
 	 *  MaxSteerAngle is degenerate (avoids div-by-zero). Reads kinematic
 	 *  values from the unwrapped FSeinWheeledMovementData sub-data. */
 	virtual FFixedPoint GetMinTurnRadius(const FSeinMovementComponent* MovementData) const override;
