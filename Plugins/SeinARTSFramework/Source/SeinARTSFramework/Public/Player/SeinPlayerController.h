@@ -164,7 +164,7 @@ protected:
 	/** Resolve squad-membership: any input actor whose entity carries
 	 *  FSeinSquadMemberComponent is replaced with its squad's actor. Members are
 	 *  never selectable directly — selecting a member always selects the
-	 *  whole squad (CoH semantics). Returns deduplicated list with nulls
+	 *  whole squad (select-the-squad semantics). Returns deduplicated list with nulls
 	 *  stripped. Static so both PC selection methods + external callers can
 	 *  use it. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Selection")

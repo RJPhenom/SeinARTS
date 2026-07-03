@@ -2,7 +2,7 @@
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinSquadComponent.h
  * @brief   Squad component for the persistent squad entity that owns
- *          a heterogeneous slot list (CoH-style). Slots are canonical;
+ *          a heterogeneous slot list. Slots are canonical;
  *          the live member list is derived from non-invalid occupants.
  */
 
@@ -34,7 +34,7 @@ UENUM(BlueprintType)
 enum class ESeinSquadContainmentMode : uint8
 {
 	/** Squad enters as one entity. Squad actor occupies the container; members
-	 *  are hidden / parked relative to it. CoH garrison style. */
+	 *  are hidden / parked relative to it. Garrison behavior. */
 	AsOne,
 
 	/** Each squad member enters the container individually. Container sees N
@@ -106,7 +106,7 @@ struct SEINARTSCOREENTITY_API FSeinSquadSlot
 	FFixedPoint ReinforceBuildTime = FFixedPoint::Zero;
 
 	/** Cooldown (sim-seconds) gating subsequent reinforces of THIS slot after a
-	 *  member arrives. Default 0 = no cooldown (CoH2 default behavior). */
+	 *  member arrives. Default 0 = no cooldown (the common default). */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Squad")
 	FFixedPoint ReinforceCooldown = FFixedPoint::Zero;
 

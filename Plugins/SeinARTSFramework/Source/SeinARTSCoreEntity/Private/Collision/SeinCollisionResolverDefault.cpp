@@ -96,11 +96,7 @@ void USeinCollisionResolverDefault::ResolvePass(USeinWorldSubsystem& World, cons
 			if (!bOtherImmovable && OtherHandle.Index <= SelfHandle.Index) continue;
 
 			// Effective response = weaker of the two sides (Block needs both).
-			const ESeinCollisionResponse DefSelfToOther = ChannelDefaults.FindRef(OtherExt->ObjectType.Channel);
-			const ESeinCollisionResponse DefOtherToSelf = ChannelDefaults.FindRef(SelfExt->ObjectType.Channel);
-			const ESeinCollisionResponse RespSelfToOther = SelfExt->CollisionResponses.GetResponseForChannel(OtherExt->ObjectType.Channel, DefSelfToOther);
-			const ESeinCollisionResponse RespOtherToSelf = OtherExt->CollisionResponses.GetResponseForChannel(SelfExt->ObjectType.Channel, DefOtherToSelf);
-			const ESeinCollisionResponse Effective = ResolvePairResponse(RespSelfToOther, RespOtherToSelf);
+			const ESeinCollisionResponse Effective = ResolvePairFor(*SelfExt, *OtherExt, ChannelDefaults);
 
 			// Only Block pushes. Ignore → nothing; Overlap → no push (overlap
 			// begin/end events are emitted by the overlap system, not here).

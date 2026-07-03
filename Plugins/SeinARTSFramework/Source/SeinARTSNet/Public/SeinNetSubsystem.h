@@ -229,6 +229,10 @@ public:
 	 *  full per-slot hash table. */
 	void ServerHandleStateHashReport(ASeinNetRelay* SourceRelay, int32 Turn, int32 Hash);
 
+	/** Server-side handler for a joining client's config fingerprint. Compares against the host's own
+	 *  fingerprint; on mismatch kicks the client (Client_NotifyKicked). No-op when the check is off. */
+	void ServerHandleConfigFingerprint(ASeinNetRelay* SourceRelay, int32 Fingerprint);
+
 	/** Client-side: server told us a desync was detected at `Turn` and is
 	 *  forwarding everyone's hashes so we can show the alarm with full
 	 *  context. Logs at Error + posts a persistent red on-screen debug
@@ -545,6 +549,7 @@ private:
 
 	/** Read-helpers from settings. */
 	bool IsDeterminismGossipEnabled() const;
+	bool IsConfigParityCheckEnabled() const;
 	int32 GetDeterminismCheckIntervalTurns() const;
 
 	// ============== Adaptive input delay observability (Phase 4 polish) ==============

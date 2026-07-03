@@ -164,22 +164,35 @@ FFixedPoint USeinCollisionResolver::ResolveColliderMass(const FSeinExtentsCompon
 bool USeinCollisionResolver::CanOccupy(USeinWorldSubsystem& World, const FFixedVector& P, FFixedPoint Radius)
 {
 	// Hard-barrier gate: the push must never move a unit's FOOTPRINT onto a
-	// non-walkable cell — a baked nav wall, or off the grid edge, is a
-	// never-crossable barrier (the body holds clear of the face instead of
-	// being shoved across it). Footprint-aware to MATCH the movement step's
-	// ResolveNavCollision, which keeps the whole body off walls; a center-only
-	// gate would let the push shove a body half-into a wall while its center
-	// cell stayed passable (the "units in the wall" symptom). Queried through
-	// the world subsystem's pluggable passability delegate so the collision
-	// floor stays nav-impl-agnostic — a one-way "walkable?" query, no hard nav
-	// dependency. Cover slots (authoritative destinations) are exempt: a unit
-	// may be delivered onto a bake-blocked slot. Unbound (nav-less / tests) →
-	// ungated, identical to the prior behavior.
-	if (!World.PassableResolver.IsBound()) return true;
-	// Cover slot (authoritative): the whole body may sit on a bake-blocked cell.
-	if (World.AuthoritativeDestinationResolver.IsBound() && World.AuthoritativeDestinationResolver.Execute(P)) return true;
-	// Center first, then the footprint ring — the body must clear walls too.
-	if (!World.PassableResolver.Execute(P)) return false;
+	// non-walkable cell — a baked nav wall, a runtime DYNAMIC nav blocker
+	// (bBlocksNav — e.g. a non-baked cover wall / deployable / blocking vehicle),
+	// or off the grid edge, is a never-crossable barrier (the body holds clear of
+	// the face instead of being shoved across it). Footprint-aware to MATCH the
+	// movement step's ResolveNavCollision, which keeps the whole body off walls; a
+	// center-only gate would let the push shove a body half-into a wall while its
+	// center cell stayed passable (the "units in the wall" symptom). Queried through
+	// the world subsystem's pluggable DYNAMIC passability delegate (static bake AND
+	// runtime blockers) so the collision floor stays nav-impl-agnostic — a one-way
+	// "walkable?" query, no hard nav dependency. Using the dynamic-aware resolver
+	// (NOT the static-only PassableResolver) is what extends the barrier to the
+	// non-baked cover walls: static IsPassable can't see them, so a static-only gate
+	// shoved units straight into them and they got nav-stuck. Cover slots
+	// (authoritative destinations) are exempt: a unit may be delivered onto a
+	// bake-blocked slot. Unbound (nav-less / tests) → ungated, identical to prior.
+	if (!World.DynamicPassableResolver.IsBound()) return true;
+	// Center walkability FIRST. The cover-slot exemption only matters when the cell is bake-BLOCKED,
+	// so consult the (potentially expensive — a cover-slot spatial query) AuthoritativeDestination-
+	// Resolver ONLY on the blocked path, never on the common push onto walkable ground. (It used to
+	// run on EVERY push candidate, thrashing the cover query near walls where pushes are most frequent.)
+	if (!World.DynamicPassableResolver.Execute(P))
+	{
+		// Center blocked (static bake OR a dynamic nav blocker) — allow only if it's an
+		// authoritative cover slot that overrules the bake. A cover slot sits ~one footprint
+		// outside its wall, so its own cell is normally clear of the wall's stamp; the exemption
+		// stays for the low-res-bake-false-negative case, unchanged.
+		return World.AuthoritativeDestinationResolver.IsBound() && World.AuthoritativeDestinationResolver.Execute(P);
+	}
+	// Center walkable — the body footprint must clear walls too.
 	if (Radius > FFixedPoint::Zero)
 	{
 		// 8 unit-ring directions (45° spacing), sampled at the collider radius —
@@ -198,7 +211,7 @@ bool USeinCollisionResolver::CanOccupy(USeinWorldSubsystem& World, const FFixedV
 		for (int32 i = 0; i < 8; ++i)
 		{
 			const FFixedVector S(P.X + BarrierRing[i].X * Radius, P.Y + BarrierRing[i].Y * Radius, P.Z);
-			if (!World.PassableResolver.Execute(S)) return false;
+			if (!World.DynamicPassableResolver.Execute(S)) return false;
 		}
 	}
 	return true;
@@ -246,11 +259,7 @@ void USeinCollisionResolver::DetectOverlapsAndEmit(USeinWorldSubsystem& World, c
 			const bool bOtherImmovable = (OtherExt->Mobility != ESeinCollisionMobility::Movable);
 			if (!bOtherImmovable && OtherHandle.Index <= SelfHandle.Index) continue;
 
-			const ESeinCollisionResponse DefSelfToOther = ChannelDefaults.FindRef(OtherExt->ObjectType.Channel);
-			const ESeinCollisionResponse DefOtherToSelf = ChannelDefaults.FindRef(SelfExt->ObjectType.Channel);
-			const ESeinCollisionResponse RespSelfToOther = SelfExt->CollisionResponses.GetResponseForChannel(OtherExt->ObjectType.Channel, DefSelfToOther);
-			const ESeinCollisionResponse RespOtherToSelf = OtherExt->CollisionResponses.GetResponseForChannel(SelfExt->ObjectType.Channel, DefOtherToSelf);
-			if (ResolvePairResponse(RespSelfToOther, RespOtherToSelf) != ESeinCollisionResponse::Overlap) continue;
+			if (ResolvePairFor(*SelfExt, *OtherExt, ChannelDefaults) != ESeinCollisionResponse::Overlap) continue;
 
 			FSeinEntity* OtherEntity = World.GetEntityPool().Get(OtherHandle);
 			if (!OtherEntity) continue;

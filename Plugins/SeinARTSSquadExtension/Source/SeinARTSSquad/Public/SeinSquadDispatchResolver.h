@@ -18,7 +18,8 @@
  *
  *   - `ResolveDispatch` for predetermined-ability orders so the leader dispatches
  *     the squad-level ability instead of "first capable in member order." This
- *     matches CoH "the squad leader throws the smoke." Right-click smart-command
+ *     matches leader-performs semantics — the squad leader performs the ability.
+ *     Right-click smart-command
  *     orders fall through to the default per-member context-resolution path.
  *     Squad smart-orders also DROP the gesture guide/formation tag so squads stay
  *     slot-driven (ignore drag-formations).

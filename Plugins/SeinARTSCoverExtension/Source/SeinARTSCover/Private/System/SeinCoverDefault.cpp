@@ -292,7 +292,7 @@ FGameplayTag USeinCoverDefault::QueryBestCoverQualityAt(FFixedVector WorldPoint,
 	// Canonical priority: Heavy > Light > Negative > <any other tag>.
 	// We pick the strongest PROTECTION tag first (Heavy → Light) so a unit
 	// standing in heavy cover layered on top of a negative-cover patch (e.g.
-	// sandbags on a road) still gets the heavy chevron — matches CoH-style
+	// sandbags on a road) still gets the heavy chevron — matches the common
 	// "best protection" UX. Falls back to negative only when no positive
 	// cover is present, so the negative is the lone signal at that point.
 	const TArray<FSeinCoverContext> Contexts = QueryCoverAt(WorldPoint, Observer);

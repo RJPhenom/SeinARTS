@@ -16,17 +16,15 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinHover, Log, All);
 
-USeinHoverMovement::USeinHoverMovement()
-	: CruiseAltitude(FFixedPoint::FromInt(200))
-	, AltitudeClearanceThreshold(FFixedPoint::FromInt(100))
-	, AltitudeChangeRate(FFixedPoint::FromInt(200))
-	, LookAheadDistance(FFixedPoint::FromInt(200))
-{
-}
-
 UScriptStruct* USeinHoverMovement::GetMovementDataStruct() const
 {
 	return FSeinHoverMovementData::StaticStruct();
+}
+
+FFixedPoint USeinHoverMovement::GetDeceleration(const FSeinMovementComponent* MovementData) const
+{
+	const FSeinHoverMovementData* Data = MovementData ? MovementData->MovementClassData.GetPtr<FSeinHoverMovementData>() : nullptr;
+	return Data ? Data->Deceleration : FSeinHoverMovementData().Deceleration;
 }
 
 FFixedPoint USeinHoverMovement::GetAltitude(const FSeinMovementComponent* MovementData) const
@@ -60,6 +58,10 @@ bool USeinHoverMovement::Tick(const FSeinMovementContext& Ctx)
 
 	FSeinEntity& Entity = Ctx.Entity;
 	FSeinMovementComponent& MovementData = *Ctx.MovementData;
+	// Per-class tuning (accel/decel live here now, off the bare component). Defaults when unauthored.
+	const FSeinHoverMovementData DefaultsHover;
+	const FSeinHoverMovementData* HoverPtr = MovementData.MovementClassData.GetPtr<FSeinHoverMovementData>();
+	const FSeinHoverMovementData& HoverTuning = HoverPtr ? *HoverPtr : DefaultsHover;
 	const FSeinPath& Path = Ctx.Path;
 	int32& CurrentWaypointIndex = Ctx.CurrentWaypointIndex;
 	const FFixedPoint AcceptanceRadiusSq = Ctx.AcceptanceRadiusSq;
@@ -100,8 +102,8 @@ bool USeinHoverMovement::Tick(const FSeinMovementContext& Ctx)
 	}
 
 	// Steering target on the (straight-line) polyline.
-	const FFixedPoint LookAhead = (LookAheadDistance > FFixedPoint::Zero)
-		? LookAheadDistance : FFixedPoint::FromInt(100);
+	const FFixedPoint LookAhead = (HoverTuning.LookAheadDistance > FFixedPoint::Zero)
+		? HoverTuning.LookAheadDistance : FFixedPoint::FromInt(100);
 	const FFixedVector LookAheadPoint = ResolveLookAheadPoint(AgentPos, Path, CurrentWaypointIndex, LookAhead);
 
 	FFixedVector ToTarget = LookAheadPoint - AgentPos;
@@ -135,11 +137,11 @@ bool USeinHoverMovement::Tick(const FSeinMovementContext& Ctx)
 	FFixedVector ToFinal = FinalWp - AgentPos;
 	ToFinal.Z = FFixedPoint::Zero;
 	const FFixedPoint DistFinal = ToFinal.Size();
-	const FFixedPoint MaxArrivalSpeed = KinematicArrivalSpeedCap(DistFinal, MovementData.Deceleration);
+	const FFixedPoint MaxArrivalSpeed = KinematicArrivalSpeedCap(DistFinal, HoverTuning.Deceleration);
 	FFixedPoint TargetSpeed = MovementData.TopSpeed;
 	if (MaxArrivalSpeed < TargetSpeed) TargetSpeed = MaxArrivalSpeed;
 	CurrentSpeed = StepSpeedToward(CurrentSpeed, TargetSpeed,
-		MovementData.Acceleration, MovementData.Deceleration, DeltaTime);
+		HoverTuning.Acceleration, HoverTuning.Deceleration, DeltaTime);
 
 	// Translate along post-rotation forward.
 	const FFixedPoint CosY = SeinMath::Cos(NewYaw);
@@ -157,12 +159,12 @@ bool USeinHoverMovement::Tick(const FSeinMovementContext& Ctx)
 	// per-class sub-data so it persists across move orders — a helicopter
 	// holds altitude between commands. Falls back to a no-op lerp when no
 	// HoverData is authored (GetAltitude returns 0 in that case).
-	const FFixedPoint TargetAltitude = (CruiseAltitude > AltitudeClearanceThreshold)
-		? CruiseAltitude : AltitudeClearanceThreshold;
+	const FFixedPoint TargetAltitude = (HoverTuning.CruiseAltitude > HoverTuning.AltitudeClearanceThreshold)
+		? HoverTuning.CruiseAltitude : HoverTuning.AltitudeClearanceThreshold;
 	FFixedPoint CurrentAltitude = FFixedPoint::Zero;
 	if (FSeinHoverMovementData* HoverData = MovementData.MovementClassData.GetMutablePtr<FSeinHoverMovementData>())
 	{
-		const FFixedPoint AltStep = AltitudeChangeRate * DeltaTime;
+		const FFixedPoint AltStep = HoverTuning.AltitudeChangeRate * DeltaTime;
 		const FFixedPoint AltDelta = TargetAltitude - HoverData->Altitude;
 		if (AltDelta > AltStep)        HoverData->Altitude = HoverData->Altitude + AltStep;
 		else if (AltDelta < -AltStep)  HoverData->Altitude = HoverData->Altitude - AltStep;

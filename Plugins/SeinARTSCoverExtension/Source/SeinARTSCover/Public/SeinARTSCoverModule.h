@@ -7,7 +7,7 @@
  *          this module strips:
  *            - Cover-providing entity types and area / edge cover queries
  *            - Destination preview decals (the live-cursor formation
- *              visualization that colors slots by cover quality in CoH style)
+ *              visualization that colors slots by cover quality)
  *            - Cover-aware formation snapping in the broker resolver
  *
  *          Phase 1 (current) ships only the destination preview infrastructure

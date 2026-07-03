@@ -32,6 +32,27 @@
 
 class USeinFaction;
 
+/**
+ * Finds the playable factions in your project and hands them to the lobby so players can pick a
+ * side, and validates the faction a player claims in a lobby slot. This is the faction source
+ * selected out of the box; swap in your own to add player-designed, modded, or downloaded factions.
+ *
+ * On startup it scans the AssetRegistry for every Sein Faction data asset and caches them as soft
+ * references (name and icon load only when the UI displays them). It re-scans when the AssetRegistry
+ * finishes loading (cooked builds can finish after this subsystem starts) and whenever you call
+ * Refresh From Asset Registry. Alongside the discovered assets you can register or unregister
+ * runtime factions (player-designed, modded, or network-imported); asset factions can only be
+ * removed by deleting the asset. Any change fires On Factions Changed so faction-picker widgets
+ * rebuild. It lives at GameInstance scope, so the cached list survives travel between the lobby and
+ * gameplay maps and stays warm.
+ *
+ * Lookups: Get Available Factions returns everything known (assets plus runtime-registered);
+ * Get Available Factions Filtered narrows that to a preset's allowlist (an empty allowlist means
+ * no restriction, so the full list is returned); Is Faction Valid is a linear scan the lobby uses
+ * to reject slot claims with unknown faction IDs; Resolve Faction maps a faction ID back to its
+ * underlying Sein Faction (or a null soft pointer if there is no match) so the UI can show its
+ * name and icon.
+ */
 UCLASS(BlueprintType, Blueprintable)
 class SEINARTSCOREENTITY_API USeinFactionService : public UGameInstanceSubsystem
 {

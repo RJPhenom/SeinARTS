@@ -25,6 +25,64 @@ struct SEINARTSMOVEMENTPLUS_API FSeinFlyingMovementData : public FSeinComponent
 {
 	GENERATED_BODY()
 
+	/** Acceleration rate (world units per second²) — current speed ramps UP toward the target
+	 *  (feeds StepSpeedToward). Moved off the bare FSeinMovementComponent 2026-07-02. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
+		meta = (ClampMin = "0.0"))
+	FFixedPoint Acceleration = FFixedPoint::FromInt(750);
+
+	/** Deceleration rate (world units per second²) — current speed ramps DOWN, and the kinematic
+	 *  arrival-brake rate into the final waypoint. Typically >= Acceleration. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
+		meta = (ClampMin = "0.0"))
+	FFixedPoint Deceleration = FFixedPoint::FromInt(750);
+
+	/** Preferred altitude offset above the cell surface (world units). Fighters ~600, bombers ~800.
+	 *  Effective altitude is max(CruiseAltitude, AltitudeClearanceThreshold). (Moved off the class into
+	 *  this UDS 2026-07-02 so all Flight tuning is authored in one place.) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
+		meta = (ClampMin = "0.0"))
+	FFixedPoint CruiseAltitude = FFixedPoint::FromInt(600);
+
+	/** Minimum altitude offset above the cell surface (world units) — the unit won't descend below
+	 *  this even if CruiseAltitude is set lower. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
+		meta = (ClampMin = "0.0"))
+	FFixedPoint AltitudeClearanceThreshold = FFixedPoint::FromInt(200);
+
+	/** Vertical climb/descent rate (world units per second) — smoothly closes the gap between the
+	 *  current altitude and the target. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
+		meta = (ClampMin = "0.0"))
+	FFixedPoint AltitudeChangeRate = FFixedPoint::FromInt(100);
+
+	/** Distance between front/rear axles (world units) — loosely models the aircraft's turning circle;
+	 *  smaller = tighter turn radius for a given speed. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
+		meta = (ClampMin = "1.0"))
+	FFixedPoint Wheelbase = FFixedPoint::FromInt(300);
+
+	/** Maximum bank angle in radians (±). Larger = tighter possible turns. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
+		meta = (ClampMin = "0.0"))
+	FFixedPoint MaxSteerAngle = FFixedPoint::Pi / FFixedPoint::FromInt(3);
+
+	/** How fast the bank angle interpolates toward its desired value (1/seconds). Higher = snappier. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
+		meta = (ClampMin = "0.1"))
+	FFixedPoint SteerResponse = FFixedPoint::FromInt(2);
+
+	/** Look-ahead distance along the (straight-line) path for the steering carrot. Fighters ~400-800. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
+		meta = (ClampMin = "0.0"))
+	FFixedPoint LookAheadDistance = FFixedPoint::FromInt(500);
+
+	/** Minimum forward speed as a fraction of TopSpeed (0..1) — a plane won't decelerate below
+	 *  TopSpeed × this even on arrival (fixed-wing can't stall). Default 0.6. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
+		meta = (ClampMin = "0.1", ClampMax = "1.0"))
+	FFixedPoint MinSpeedRatio = FFixedPoint::FromInt(6) / FFixedPoint::FromInt(10);
+
 	/** Cruise altitude (world units) above the ground-snapped Z. Flight
 	 *  movement subclasses lerp toward this value so flying units climb to
 	 *  altitude after take-off instead of popping to it. Persists across
@@ -36,5 +94,16 @@ struct SEINARTSMOVEMENTPLUS_API FSeinFlyingMovementData : public FSeinComponent
 
 FORCEINLINE uint32 GetTypeHash(const FSeinFlyingMovementData& C)
 {
-	return GetTypeHash(C.Altitude);
+	uint32 H = GetTypeHash(C.Acceleration);
+	H = HashCombine(H, GetTypeHash(C.Deceleration));
+	H = HashCombine(H, GetTypeHash(C.CruiseAltitude));
+	H = HashCombine(H, GetTypeHash(C.AltitudeClearanceThreshold));
+	H = HashCombine(H, GetTypeHash(C.AltitudeChangeRate));
+	H = HashCombine(H, GetTypeHash(C.Wheelbase));
+	H = HashCombine(H, GetTypeHash(C.MaxSteerAngle));
+	H = HashCombine(H, GetTypeHash(C.SteerResponse));
+	H = HashCombine(H, GetTypeHash(C.LookAheadDistance));
+	H = HashCombine(H, GetTypeHash(C.MinSpeedRatio));
+	H = HashCombine(H, GetTypeHash(C.Altitude));
+	return H;
 }

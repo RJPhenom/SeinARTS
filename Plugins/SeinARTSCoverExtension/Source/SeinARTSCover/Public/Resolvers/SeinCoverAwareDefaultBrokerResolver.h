@@ -1,7 +1,7 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinCoverAwareDefaultBrokerResolver.h
- * @brief   Default broker resolver with CoH-style cover-snap.
+ * @brief   Default broker resolver with automatic cover-snap.
  *
  *          Overrides `PostProcessPositions` to substitute cover-slot positions
  *          for members carrying the `SeinARTS.Cover.UsesCover` tag, when those

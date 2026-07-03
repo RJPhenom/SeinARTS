@@ -34,10 +34,13 @@ namespace
 	FAutoConsoleVariableRef CVarSeinSimAsyncPathfinding(
 		TEXT("Sein.Sim.AsyncPathfinding"),
 		GSeinSimAsyncPathfinding,
-		TEXT("Opt-in: run path requests as a deterministic PARALLEL BATCH one tick after they're made,\n")
-		TEXT("instead of inline-synchronous. Requires Sein.Sim.Parallel=1. Adds ~1 tick (33ms @30Hz) of\n")
-		TEXT("path-acquisition latency (imperceptible; BAR does exactly this). Default 0 (OFF) — the inline\n")
-		TEXT("path is byte-unchanged. A/B vs 0 with Sein.Sim.StateHash.Log to verify bit-identical results."),
+		TEXT("Run path requests as a deterministic PARALLEL BATCH one tick after they're made,\n")
+		TEXT("instead of inline-synchronous. Requires Sein.Sim.Parallel=1. DEFAULT 0 (OFF) — the async\n")
+		TEXT("batch currently keys cached paths by entity handle with no start/dest match and no clear on\n")
+		TEXT("order re-issue, so a re-ordered unit can follow a stale prior-order path and a group can split.\n")
+		TEXT("Inline same-tick paths are correct; re-enable only after the async keying/clear rework.\n")
+		TEXT("SIM-AFFECTING: changes WHEN a unit gets its path, so it must match across all clients (the\n")
+		TEXT("SeinARTS project setting drives this as a build default)."),
 		ECVF_Default);
 }
 

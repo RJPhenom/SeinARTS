@@ -70,6 +70,25 @@ struct SEINARTSNET_API FSeinSlotHashEntry
 	FSeinSlotHashEntry(FSeinPlayerID InSlot, int32 InHash) : Slot(InSlot), Hash(InHash) {}
 };
 
+/**
+ * Carries the lockstep networking wire between one player and the host. Every connected player
+ * gets their own relay, and it is server-spawned automatically — designers do not place or pick it.
+ *
+ * The server spawns one relay per APlayerController and hands ownership to that controller, so a
+ * client legitimately owns the actor whose RPCs it drives (spoofing-resistant: a client owns only
+ * its own relay). The relay is the RPC endpoint for the whole lockstep session: clients submit
+ * their turn commands up to the server (Server_SubmitCommands), the server unicasts each assembled
+ * turn back down (Client_ReceiveTurn), and it also carries session start, the pre-match lobby verbs
+ * (slot claim / ready / team / slot state / map select / kick / leave), and the Phase 4 determinism
+ * gossip (each client reports its per-turn state hash; on divergence the server fans the full
+ * per-slot hash list back so every machine can show which slot desynced).
+ *
+ * Fan-out is done by the host iterating every per-controller relay rather than by a Multicast — the
+ * bandwidth is the same as a true broadcast, but no Always-Relevant singleton is needed and each
+ * client owns only its own relay. Command RPCs are Reliable because lockstep cannot tolerate a
+ * dropped or reordered turn. The server treats the sending relay's AssignedPlayerID as the
+ * authoritative sender and rewrites the command's PlayerID before fan-out.
+ */
 UCLASS(ClassGroup = (SeinARTS), meta = (DisplayName = "Sein Net Relay"))
 class SEINARTSNET_API ASeinNetRelay : public AActor
 {
@@ -169,6 +188,14 @@ public:
 	 *  off in shipping unless designer explicitly enables. */
 	UFUNCTION(Server, Reliable)
 	void Server_ReportStateHash(int32 Turn, int32 Hash);
+
+	/** Client -> server. Opt-in config-parity check (Check Settings Parity On Join). The joining client
+	 *  sends a fingerprint of its sim-affecting settings; the server compares it to its own and, on
+	 *  mismatch, kicks the client (Client_NotifyKicked) before the match starts rather than letting it
+	 *  silently desync. int32 for the same UHT reason as Server_ReportStateHash — only the bit pattern
+	 *  matters. */
+	UFUNCTION(Server, Reliable)
+	void Server_ReportConfigFingerprint(int32 Fingerprint);
 
 	/** Server -> owning client. Determinism gossip alarm. Fired by the server
 	 *  when peer state hashes diverge for `Turn`. Each client logs at Error

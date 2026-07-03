@@ -24,6 +24,24 @@
 #include "Types/Vector.h"
 #include "SeinLevelDataDefault.generated.h"
 
+/**
+ * Bakes the level into the shared grid every other system reads from: ground height, surface
+ * slope, and which cells are inside the play area. It is the level-data substrate selected out
+ * of the box, and its bake is what the one "Bake Level Data" button on Sein Level Volume runs.
+ *
+ * Casts ONE downward line trace per grid cell over the union of all Sein Level Volume bounds,
+ * producing a shared height field, a surface-normal-dot-Up value per cell (1.0 = flat ground,
+ * falling toward 0 as the slope steepens), and in-bounds / valid-surface flags. It then runs
+ * every registered layer provider so each can compute its own channel block from that same
+ * shared trace: the Navigation and Fog of War layers both build on it, and the nav layer
+ * reproduces its walkability bake from this data (its slope gate reads the stored normal-dot-Up;
+ * it re-traces cell midpoints itself only for the connectivity bitmask). The grid runs at the
+ * finest resolution in play (nav's cell size); results are saved into the baked Sein Level Data
+ * (Default) asset and a top-down minimap background texture is synthesized from the surface
+ * arrays (height shading plus slope relief plus an out-of-bounds border). Read queries are
+ * reentrant; baking and asset loading are single-threaded, and the per-cell bake writes results
+ * by index into pre-sized arrays so the loop can be parallelized later.
+ */
 UCLASS(meta = (DisplayName = "Sein Level Data (Default Grid)"))
 class SEINARTSLEVELDATA_API USeinLevelDataDefault : public USeinLevelData
 {

@@ -21,7 +21,7 @@
  *
  * Area volume color is independent of quality (light-green wire box / sphere)
  * so the area volume reads as "where cover applies" and the slot rings carry
- * the quality signal — matches CoH's UX of color = protection level.
+ * the quality signal — follows the common UX of color = protection level.
  */
 
 #include "Visualizers/SeinCoverEntityDraw.h"
@@ -51,8 +51,8 @@ namespace SeinCoverEntityDrawLocal
 		return CellSizeFloat > 1.0f ? CellSizeFloat : 100.0f;
 	}
 
-	/** Slot color derived from the cover provider's QualityTag. Matches CoH-
-	 *  style cover UX so designers can read protection level at a glance:
+	/** Slot color derived from the cover provider's QualityTag. Follows the
+	 *  common cover UX so designers can read protection level at a glance:
 	 *  green=heavy, yellow=light, red=negative, white=unset/other. */
 	static FColor GetSlotColorForQuality(const FGameplayTag& QualityTag)
 	{

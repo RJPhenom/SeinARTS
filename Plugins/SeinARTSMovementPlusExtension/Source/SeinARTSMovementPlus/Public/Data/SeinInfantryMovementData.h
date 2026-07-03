@@ -26,18 +26,23 @@ struct SEINARTSMOVEMENTPLUS_API FSeinInfantryMovementData : public FSeinComponen
 {
 	GENERATED_BODY()
 
-	// Intentionally empty. USeinInfantryMovement drives entirely off the base
-	// FSeinMovementComponent knobs (TopSpeed / Acceleration / Deceleration /
-	// TurnRate); the old per-class TopRotationSpeed / LateralAcceleration /
-	// LateralDeceleration fields were never read by any movement code and were
-	// cut. Kept as a placeholder so infantry still gets a sub-data slot in the
-	// MovementClassData picker — add genuinely infantry-specific tuning here
-	// if/when the steering work defines a real need.
+	/** Acceleration rate (world units per second²) — how quickly current speed ramps UP toward the
+	 *  target. Feeds the smoothstep speed model (StepSpeedToward); high values give snappy infantry.
+	 *  Moved off the now-bare FSeinMovementComponent (2026-07-02) — accel/decel are per-mode tuning. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
+		meta = (ClampMin = "0.0"))
+	FFixedPoint Acceleration = FFixedPoint::FromInt(750);
+
+	/** Deceleration rate (world units per second²) — how quickly current speed ramps DOWN, and the
+	 *  kinematic arrival-brake rate into the final waypoint. Typically >= Acceleration. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
+		meta = (ClampMin = "0.0"))
+	FFixedPoint Deceleration = FFixedPoint::FromInt(750);
 };
 
-FORCEINLINE uint32 GetTypeHash(const FSeinInfantryMovementData& /*C*/)
+FORCEINLINE uint32 GetTypeHash(const FSeinInfantryMovementData& C)
 {
-	// No per-instance state — all instances are equivalent. Stable non-zero
-	// constant so the struct stays usable as a hashed value / map key.
-	return 0x5E10A11Cu;
+	uint32 H = GetTypeHash(C.Acceleration);
+	H = HashCombine(H, GetTypeHash(C.Deceleration));
+	return H;
 }

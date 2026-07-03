@@ -20,26 +20,41 @@ void USeinLevelDataSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 	// Resolve the configured level-data class; fall back to the shipped default
 	// if the setting is empty or points to a stale / abstract class.
+	// WYSIWYG. None/empty => the level substrate is intentionally OFF (LevelData stays null; the Bake
+	// Level Data button does nothing and nav / baked fog occluders / minimap get no data). A
+	// set-but-unloadable/abstract class is a mistake, not an off-switch: it falls back to the shipped
+	// default with a logged error. Every consumer (and BeginBake) already null-guards LevelData.
 	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
 	UClass* LevelDataClass = nullptr;
-	if (Settings && Settings->LevelDataClass.IsValid())
+	if (Settings && !Settings->LevelDataClass.IsNull())
 	{
 		LevelDataClass = Settings->LevelDataClass.TryLoadClass<USeinLevelData>();
-	}
-	if (!LevelDataClass || LevelDataClass->HasAnyClassFlags(CLASS_Abstract))
-	{
-		LevelDataClass = USeinLevelDataDefault::StaticClass();
+		if (!LevelDataClass || LevelDataClass->HasAnyClassFlags(CLASS_Abstract))
+		{
+			UE_LOG(LogSeinLevelDataSubsystem, Error,
+				TEXT("LevelDataClass '%s' could not be loaded or is abstract — falling back to the shipped default."),
+				*Settings->LevelDataClass.ToString());
+			LevelDataClass = USeinLevelDataDefault::StaticClass();
+		}
 	}
 
-	LevelData = NewObject<USeinLevelData>(this, LevelDataClass, TEXT("SeinLevelData"));
-	if (LevelData)
+	if (LevelDataClass)
 	{
-		LevelData->OnInitialized(GetWorld());
+		LevelData = NewObject<USeinLevelData>(this, LevelDataClass, TEXT("SeinLevelData"));
+		if (LevelData)
+		{
+			LevelData->OnInitialized(GetWorld());
+		}
+		else
+		{
+			UE_LOG(LogSeinLevelDataSubsystem, Error, TEXT("Failed to instantiate level-data class %s"),
+				*LevelDataClass->GetName());
+		}
 	}
 	else
 	{
-		UE_LOG(LogSeinLevelDataSubsystem, Error, TEXT("Failed to instantiate level-data class %s"),
-			LevelDataClass ? *LevelDataClass->GetName() : TEXT("<null>"));
+		USeinARTSCoreSettings::ReportDisabledSystem(TEXT("Level Data"),
+			TEXT("The level bake is disabled; navigation, baked fog occluders, and the minimap have no data."), /*bHighSeverity*/ true);
 	}
 }
 
@@ -99,7 +114,15 @@ bool USeinLevelDataSubsystem::BeginBake(UWorld* World)
 {
 	if (!World) return false;
 	USeinLevelDataSubsystem* Sub = World->GetSubsystem<USeinLevelDataSubsystem>();
-	if (!Sub || !Sub->LevelData) return false;
+	if (!Sub) return false;
+	if (!Sub->LevelData)
+	{
+		// Level substrate is OFF (LevelDataClass = None). Tell the designer why the bake did nothing
+		// instead of silently returning — this is the trap the WYSIWYG warning exists to close.
+		USeinARTSCoreSettings::ReportDisabledSystem(TEXT("Level Data"),
+			TEXT("Bake Level Data did nothing because the Level Data class is None."), /*bHighSeverity*/ true);
+		return false;
+	}
 	return Sub->LevelData->BeginBake(World);
 }
 

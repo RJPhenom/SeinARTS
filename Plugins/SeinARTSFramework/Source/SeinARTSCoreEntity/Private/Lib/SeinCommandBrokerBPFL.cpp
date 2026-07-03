@@ -130,14 +130,15 @@ namespace SeinFormationPreviewLocal
 	 *  when spawning a fresh broker. */
 	static USeinCommandBrokerResolver* ResolveDefaultResolverCDO()
 	{
-		TSubclassOf<USeinCommandBrokerResolver> ResolverClass;
-		if (const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>())
+		const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
+		// WYSIWYG. None/empty => broker dispatch is OFF → return null; callers already treat a null
+		// resolver as "no formation spread / no dispatch", so preview and commit stay consistent. A
+		// set-but-unloadable/abstract class falls back to the shipped default (a mistake is not off).
+		if (!Settings || Settings->DefaultBrokerResolverClass.IsNull())
 		{
-			if (!Settings->DefaultBrokerResolverClass.IsNull())
-			{
-				ResolverClass = Settings->DefaultBrokerResolverClass.LoadSynchronous();
-			}
+			return nullptr;
 		}
+		TSubclassOf<USeinCommandBrokerResolver> ResolverClass = Settings->DefaultBrokerResolverClass.LoadSynchronous();
 		if (!ResolverClass || ResolverClass->HasAnyClassFlags(CLASS_Abstract))
 		{
 			ResolverClass = USeinDefaultCommandBrokerResolver::StaticClass();

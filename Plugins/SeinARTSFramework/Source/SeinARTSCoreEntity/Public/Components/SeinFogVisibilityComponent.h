@@ -38,7 +38,7 @@ struct SEINARTSCOREENTITY_API FSeinFogVisibilityComponent : public FSeinComponen
 	 *    VisibleOnceSeen            — visible after a source has actually
 	 *      spotted THIS ENTITY once; stays as a "ghost" after. Something
 	 *      appearing in already-explored-but-unseen fog stays hidden until
-	 *      genuinely seen. Standard for enemy buildings (SC2/AoE memory).
+	 *      genuinely seen. Standard for enemy buildings (explored-terrain memory).
 	 *    VisibleOnceExplored        — visible once the entity's CELL has been
 	 *      explored, even if the entity itself was never seen; coarser
 	 *      "intel from terrain" reveal.

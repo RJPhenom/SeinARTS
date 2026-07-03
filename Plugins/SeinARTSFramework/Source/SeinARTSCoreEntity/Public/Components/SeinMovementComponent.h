@@ -82,24 +82,6 @@ struct SEINARTSCOREENTITY_API FSeinMovementComponent : public FSeinComponent
 		meta = (ClampMin = "0.0"))
 	FFixedPoint TopSpeed = FFixedPoint::FromInt(500);
 
-	/** Acceleration rate (world units per second²) — how quickly current speed
-	 *  ramps UP toward target. Drives the smoothstep speed model in BOTH the
-	 *  vehicle movements AND infantry: USeinInfantryMovement::Tick feeds this
-	 *  into StepSpeedToward (and Deceleration into the arrival brake), so high
-	 *  accel/decel give snappy infantry. (Older "infantry ignores it" note was
-	 *  stale.) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
-		meta = (ClampMin = "0.0"))
-	FFixedPoint Acceleration = FFixedPoint::FromInt(750);
-
-	/** Deceleration rate (world units per second²) — how quickly current speed
-	 *  ramps DOWN toward target. Also the kinematic arrival-brake rate (units
-	 *  slow into the final waypoint). Typically >= Acceleration so units brake
-	 *  at least as hard as they accelerate. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
-		meta = (ClampMin = "0.0"))
-	FFixedPoint Deceleration = FFixedPoint::FromInt(750);
-
 	/** Turn rate in radians per second (general — applies regardless of
 	 *  movement class). Per-class sub-data may override behaviour around
 	 *  this; e.g. tracked vehicles' pivot-vs-arc decision branches off
@@ -298,8 +280,6 @@ struct SEINARTSCOREENTITY_API FSeinMovementComponent : public FSeinComponent
 FORCEINLINE uint32 GetTypeHash(const FSeinMovementComponent& C)
 {
 	uint32 Hash = GetTypeHash(C.TopSpeed);
-	Hash = HashCombine(Hash, GetTypeHash(C.Acceleration));
-	Hash = HashCombine(Hash, GetTypeHash(C.Deceleration));
 	Hash = HashCombine(Hash, GetTypeHash(C.TurnRate));
 	Hash = HashCombine(Hash, GetTypeHash(C.MovementClass));
 	Hash = HashCombine(Hash, GetTypeHash(C.bCanReverse));

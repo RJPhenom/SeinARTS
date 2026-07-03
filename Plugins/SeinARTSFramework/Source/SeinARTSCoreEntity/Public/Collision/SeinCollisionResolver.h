@@ -15,7 +15,13 @@
  *          hard-barrier gate (the world subsystem's pluggable PassableResolver /
  *          AuthoritativeDestinationResolver delegates), which a resolver queries
  *          through the world subsystem so the collision floor stays
- *          nav-impl-agnostic.
+ *          nav-impl-agnostic. FRAMING: this is NOT collision asking navigation for
+ *          pathing permission — it is collision treating the nav-blocked region as
+ *          STATIC, infinite-mass geometry (walls a body can't be shoved through),
+ *          which is squarely collision's own job. The nav grid is just the cheap
+ *          authoritative source of "where the static barriers are" in a grid RTS
+ *          (there are no per-cell wall colliders). So collision stays nav-BLIND in
+ *          principle: it never softens or changes an overlap decision to serve pathing.
  *
  *          Configured via plugin settings
  *          (`USeinARTSCoreSettings::CollisionResolverClass`). The framework ships
@@ -148,6 +154,25 @@ protected:
 
 	/** Snapshot the enabled channels' default responses by name. */
 	static void BuildChannelDefaults(TMap<FName, ESeinCollisionResponse>& Out);
+
+	/** Effective response for a self↔other collider pair: look up each side's
+	 *  per-channel response against the OTHER's object-type channel (falling back
+	 *  to that channel's default from `ChannelDefaults`), then resolve to the
+	 *  weaker of the two via ResolvePairResponse (Block needs both). The single
+	 *  shared form of the four-lookup expression every resolver's per-pair loop
+	 *  runs — same channel lookup order and tie-break, so the resolved value is
+	 *  byte-identical across the Gauss-Seidel, parallel Jacobi, and overlap-diff
+	 *  call sites. */
+	static FORCEINLINE ESeinCollisionResponse ResolvePairFor(
+		const FSeinExtentsComponent& SelfExt, const FSeinExtentsComponent& OtherExt,
+		const TMap<FName, ESeinCollisionResponse>& ChannelDefaults)
+	{
+		const ESeinCollisionResponse DefSelfToOther = ChannelDefaults.FindRef(OtherExt.ObjectType.Channel);
+		const ESeinCollisionResponse DefOtherToSelf = ChannelDefaults.FindRef(SelfExt.ObjectType.Channel);
+		const ESeinCollisionResponse RespSelfToOther = SelfExt.CollisionResponses.GetResponseForChannel(OtherExt.ObjectType.Channel, DefSelfToOther);
+		const ESeinCollisionResponse RespOtherToSelf = OtherExt.CollisionResponses.GetResponseForChannel(SelfExt.ObjectType.Channel, DefOtherToSelf);
+		return ResolvePairResponse(RespSelfToOther, RespOtherToSelf);
+	}
 
 	/** True iff the entity is a live collider eligible for resolution (enabled,
 	 *  has a body, has an object type). */

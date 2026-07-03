@@ -38,7 +38,8 @@ public:
 	virtual void Deinitialize() override;
 	virtual void OnWorldBeginPlay(UWorld& InWorld) override;
 
-	/** The active navigation instance. Never null after Initialize. */
+	/** The active navigation instance. Null when NavigationClass is None (navigation off, WYSIWYG);
+	 *  otherwise valid after Initialize. All callers null-guard. */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Navigation")
 	USeinNavigation* GetNavigation() const { return Navigation; }
 

@@ -2,7 +2,7 @@
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinAbility_SquadReinforce.h
  * @brief   Starter-content squad ability: reinforce one missing member.
- *          Lives on the squad entity. CoH-style behavior — fills the first
+ *          Lives on the squad entity. Reinforcement behavior — fills the first
  *          empty slot in declaration order, charges the slot's ReinforceCost
  *          from the owning player at enqueue, then the squad system progresses
  *          the reinforce entry over the slot's ReinforceBuildTime and spawns

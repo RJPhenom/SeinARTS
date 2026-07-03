@@ -24,28 +24,43 @@ void USeinNavigationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
 
-	// Resolve the configured nav class. Fall back to the shipped A* default
-	// if the setting is empty or points to a stale class.
+	// Resolve the configured nav class (WYSIWYG). None/empty => navigation is intentionally OFF
+	// (Navigation stays null — every Move order fails and the nav wall-barrier is disabled). A
+	// set-but-unloadable/abstract class is a mistake, not an off-switch: it falls back to the shipped
+	// A* default with a logged error. A valid class is used as-is. Every consumer is null-guarded.
 	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
 	UClass* NavClass = nullptr;
-	if (Settings && Settings->NavigationClass.IsValid())
+	if (Settings && !Settings->NavigationClass.IsNull())
 	{
 		NavClass = Settings->NavigationClass.TryLoadClass<USeinNavigation>();
-	}
-	if (!NavClass || NavClass->HasAnyClassFlags(CLASS_Abstract))
-	{
-		NavClass = USeinNavigationAStar::StaticClass();
+		if (!NavClass || NavClass->HasAnyClassFlags(CLASS_Abstract))
+		{
+			UE_LOG(LogSeinNavSubsystem, Error,
+				TEXT("NavigationClass '%s' could not be loaded or is abstract — falling back to the shipped A* default."),
+				*Settings->NavigationClass.ToString());
+			NavClass = USeinNavigationAStar::StaticClass();
+		}
 	}
 
-	Navigation = NewObject<USeinNavigation>(this, NavClass, TEXT("SeinNavigation"));
-	if (Navigation)
+	if (NavClass)
 	{
-		Navigation->OnNavigationInitialized(GetWorld());
+		Navigation = NewObject<USeinNavigation>(this, NavClass, TEXT("SeinNavigation"));
+		if (Navigation)
+		{
+			Navigation->OnNavigationInitialized(GetWorld());
+		}
+		else
+		{
+			UE_LOG(LogSeinNavSubsystem, Error, TEXT("Failed to instantiate nav class %s"),
+				*NavClass->GetName());
+		}
 	}
 	else
 	{
-		UE_LOG(LogSeinNavSubsystem, Error, TEXT("Failed to instantiate nav class %s"),
-			NavClass ? *NavClass->GetName() : TEXT("<null>"));
+		// NavigationClass is None → navigation off (WYSIWYG). Leave Navigation null; the provider
+		// registration below and all downstream consumers already guard on it.
+		USeinARTSCoreSettings::ReportDisabledSystem(TEXT("Navigation"),
+			TEXT("Move orders will fail and the nav wall-barrier is disabled (collision may push units through walls)."), /*bHighSeverity*/ true);
 	}
 
 	// CP1.1 unified level-data pipeline. Force the substrate subsystem up first

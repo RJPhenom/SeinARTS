@@ -17,6 +17,13 @@
  *          The collision/nav separation stays intact — collision never learns
  *          about nav; movement owns "units stay on nav."
  *
+ *          NOT REDUNDANT with the collision floor's hard-barrier gate (the
+ *          PassableResolver check in the resolver). That gate PREVENTS a collision
+ *          push from crossing a static barrier; this pass is the broader net that
+ *          CORRECTS a movable collider found off-nav from ANY cause — spawned/placed
+ *          off the bake, a bake change under a standing unit, or any residual the
+ *          per-push gate didn't cover. Prevent + correct, by design; keep both.
+ *
  *          COVER EXEMPTION: a unit delivered to an AUTHORITATIVE destination (a
  *          cover slot that overrules the coarse bake) may legitimately stand on a
  *          bake-blocked cell, so positions the AuthoritativeDestinationResolver
@@ -62,9 +69,11 @@ public:
 		const bool bHasAuthoritative = World.AuthoritativeDestinationResolver.IsBound();
 
 		// Gather live handles, then project off-nav movable colliders back on. Pure
-		// per-unit: reads the immutable nav bake (IsPassable / ProjectPointToNav are
-		// scratch-free const reads) + own transform, writes only own transform — a
-		// clean SeinParallelFor body. EXCEPTION: when a cover AuthoritativeDestination-
+		// per-unit: reads the immutable nav bake + this tick's FROZEN dynamic-blocker
+		// list (IsWorldPositionClear / ProjectPointToNav are scratch-free const reads;
+		// the blocker list is stamped at PreTick 7 and never mutated during this
+		// PostTick pass, so parallel reads are race-free) + own transform, writes only
+		// own transform — a clean SeinParallelFor body. EXCEPTION: when a cover AuthoritativeDestination-
 		// Resolver is bound, that cross-module delegate's thread-safety isn't
 		// guaranteed, so cover projects run this serial via bForceSerial (then the
 		// Execute call only ever runs on the main thread). `Sein.Sim.Parallel 0`
@@ -88,9 +97,18 @@ public:
 
 			const FFixedVector Pos = Entity.Transform.GetLocation();
 
-			// Already on walkable ground → nothing to do. The overwhelming common
-			// case: one grid lookup, no write.
-			if (Nav->IsPassable(Pos)) return;
+			// Already on clear ground → nothing to do (the overwhelming common case).
+			// DYNAMIC-aware: IsWorldPositionClear rejects the static bake AND the runtime
+			// dynamic-blocker list (bBlocksNav), so this corrective net now extracts a unit
+			// LEFT STANDING on a non-baked cover wall / deployable dropped over it — the
+			// idle-side twin of the collision-floor and movement-floor fixes. Static
+			// IsPassable saw only the bake and left such a unit stuck inside the wall.
+			// Ground layer 0x01 matches the DynamicPassableResolver binding. (The
+			// ProjectPointToNav pull-back below is still static, so it lands on a
+			// bake-walkable cell that a dynamic blocker could also cover — that self-
+			// corrects on the next tick's re-detection; a dynamic-aware projection is a
+			// later refinement.)
+			if (Nav->IsWorldPositionClear(Pos, /*AgentNavLayerMask=*/0x01)) return;
 
 			// Cover-slot exemption: a unit on an authoritative destination may
 			// stand on a bake-blocked cell — leave it where it is.

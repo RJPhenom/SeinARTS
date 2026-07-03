@@ -33,6 +33,22 @@ struct SEINARTSMOVEMENTPLUS_API FSeinWheeledMovementData : public FSeinComponent
 	GENERATED_BODY()
 
 	// ---------------------------------------------------------------------
+	// Speed ramp (moved off the bare FSeinMovementComponent 2026-07-02)
+	// ---------------------------------------------------------------------
+
+	/** Acceleration rate (world units per second²) — how quickly current speed ramps UP toward the
+	 *  target (feeds StepSpeedToward). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement|Speed",
+		meta = (ClampMin = "0.0"))
+	FFixedPoint Acceleration = FFixedPoint::FromInt(750);
+
+	/** Deceleration rate (world units per second²) — how quickly current speed ramps DOWN, and the
+	 *  kinematic arrival-brake rate into the final waypoint. Typically >= Acceleration. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement|Speed",
+		meta = (ClampMin = "0.0"))
+	FFixedPoint Deceleration = FFixedPoint::FromInt(750);
+
+	// ---------------------------------------------------------------------
 	// Bicycle kinematics
 	// ---------------------------------------------------------------------
 
@@ -61,17 +77,17 @@ struct SEINARTSMOVEMENTPLUS_API FSeinWheeledMovementData : public FSeinComponent
 	FFixedPoint SteerResponse = FFixedPoint::FromInt(3);
 
 	// ---------------------------------------------------------------------
-	// Low-speed turn assist (the Company of Heroes "helping hand")
+	// Low-speed turn assist (the "helping hand")
 	// ---------------------------------------------------------------------
 
-	/** The CoH-style "helping hand": how fast (radians/sec) a near-stationary wheeled
+	/** The low-speed turn-assist "helping hand": how fast (radians/sec) a near-stationary wheeled
 	 *  vehicle may rotate toward its goal, ABOVE what the honest bicycle model allows.
 	 *  A real car can't turn while stopped — this relaxes that so a stopped/slow chassis
 	 *  can pivot toward its destination, giving tight u-turns from rest, snappy
 	 *  responsiveness, and an escape hatch when boxed in. Fades to zero by Turn Assist
 	 *  Fade Speed, so at cruising speed the turn is physically honest. Looks slightly
 	 *  unphysical if you stare at a stopped vehicle pivoting, but reads fine in motion —
-	 *  the CoH trade. Set 0 for a strict bicycle model. Default π (~a 1-second u-turn
+	 *  that is the trade. Set 0 for a strict bicycle model. Default π (~a 1-second u-turn
 	 *  from rest); the designer dials it for feel. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement|LowSpeed",
 		meta = (ClampMin = "0.0"))
@@ -164,7 +180,9 @@ struct SEINARTSMOVEMENTPLUS_API FSeinWheeledMovementData : public FSeinComponent
 
 FORCEINLINE uint32 GetTypeHash(const FSeinWheeledMovementData& C)
 {
-	uint32 H = GetTypeHash(C.Wheelbase);
+	uint32 H = GetTypeHash(C.Acceleration);
+	H = HashCombine(H, GetTypeHash(C.Deceleration));
+	H = HashCombine(H, GetTypeHash(C.Wheelbase));
 	H = HashCombine(H, GetTypeHash(C.MaxSteerAngle));
 	H = HashCombine(H, GetTypeHash(C.SteerResponse));
 	H = HashCombine(H, GetTypeHash(C.LowSpeedTurnRate));

@@ -30,7 +30,7 @@ Everything is authored **north-up** and rotated in exactly one place: a single p
 transform. Put the background, fog, blip canvas, and viewport-RT image all inside one **`MapRoot`**
 panel, and each tick set `MapRoot`'s render-transform angle to `Get Minimap Rotation Degrees`.
 Because the rotation is "align camera-forward with up", the viewport trapezoid ends up upright and
-the blips/terrain rotate beneath it — Company-of-Heroes behavior, no per-element math.
+the blips/terrain rotate beneath it — map-rotates-under-a-fixed-arrow behavior, no per-element math.
 
 Handle **clicks on the unrotated root** (not inside `MapRoot`), so `Minimap Local To World` only has
 to invert that one rotation value.
@@ -43,7 +43,7 @@ Select your `ASeinLevelVolume` → **SeinARTS ▸ Bake ▸ Bake Level Data**. Th
 ## Step 2 (optional) — hand-authored background
 
 On the `ASeinLevelVolume`, set **SeinARTS ▸ Minimap ▸ Minimap Override Texture** to any `Texture2D` —
-it wins over the baked one (the path to painted CoH-style art).
+it wins over the baked one (the path to painted hand-authored art).
 
 ## Step 3 — create `WBP_Minimap` (parent = SeinUserWidget)
 

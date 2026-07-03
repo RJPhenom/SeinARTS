@@ -79,6 +79,29 @@ enum class ESeinFormationFacing : uint8
 	RadialInward   UMETA(DisplayName = "Radial Inward"),
 };
 
+/**
+ * Decides how a group of ordered units arranges itself on the ground when you give them a move
+ * order — the shape they spread into (a blob, a grid, a box, a wedge, a ring, a square) and which
+ * way they end up facing. This is the abstract base; pick a concrete shape, or subclass it in
+ * Blueprint to author your own.
+ *
+ * Given an order target plus the set of members, a formation computes each member's world position
+ * (index-aligned with the members) and the formation's facing. It is the pluggable "how do N units
+ * arrange" seam, kept separate from dispatch (which ability runs, which member gets it — that stays
+ * on the command broker resolver). Formations are stateless pure compute: the framework runs them on
+ * their class default object (they carry only config properties, never per-order state), so there is
+ * no instancing or pooling. They are strictly deterministic — fixed-point math only, no float and no
+ * RNG — because the on-screen destination preview calls the exact same formation code the committed
+ * order does, and the two must agree bit-for-bit while lockstep networking must never desync.
+ *
+ * The base ships a small footprint-aware toolkit shared by every shape: real-radius spacing that
+ * never overlaps (a big unit clears more room than a small one), 1-D line spreading, a size-graded
+ * cell-grid packer that places the biggest units front-and-centre, a de-overlap relaxation pass, and
+ * nav projection that folds any slot spilling off the play area back onto the nearest walkable cell.
+ * Framework subclasses are Formation (Blob) — everyone to the shared anchor, the default — plus the
+ * Grid, Box, Wedge, Ring and Square formations. Designers subclass for custom shapes and select one
+ * on the command broker resolver's formation class / tag map.
+ */
 UCLASS(Abstract, Blueprintable, EditInlineNew, ClassGroup = (SeinARTS),
 	meta = (DisplayName = "Formation"))
 class SEINARTSCOREENTITY_API USeinFormation : public UObject

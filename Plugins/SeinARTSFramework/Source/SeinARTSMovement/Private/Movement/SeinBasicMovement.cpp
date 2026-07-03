@@ -4,87 +4,14 @@
  */
 
 #include "Movement/SeinBasicMovement.h"
-#include "SeinNavigation.h"
-#include "SeinPathTypes.h"
-#include "Components/SeinMovementComponent.h"
-#include "Types/Entity.h"
-#include "Types/FixedPoint.h"
 
-bool USeinBasicMovement::Tick(const FSeinMovementContext& Ctx)
+FSeinMotion USeinBasicMovement::ComputeMotion_Implementation(USeinMoverHandle* Mover)
 {
-	if (!Ctx.MovementData)
-	{
-		// No movement component on the entity — nothing to drive. Report
-		// arrived so the move-to action ends cleanly rather than spinning.
-		return true;
-	}
-
-	FSeinEntity& Entity = Ctx.Entity;
-	FSeinMovementComponent& MovementData = *Ctx.MovementData;
-	const FSeinPath& Path = Ctx.Path;
-	int32& CurrentWaypointIndex = Ctx.CurrentWaypointIndex;
-	const FFixedPoint AcceptanceRadiusSq = Ctx.AcceptanceRadiusSq;
-	const FFixedPoint DeltaTime = Ctx.DeltaTime;
-	USeinNavigation* Nav = Ctx.Nav;
-
-	const FFixedVector InitialPos = Entity.Transform.GetLocation();
-	FFixedVector Pos = InitialPos;
-	// Travel budget = terrain-scaled top speed (mud slows, road speeds). The
-	// intermediate-waypoint arrival reference below stays at raw TopSpeed (a stable
-	// max-step reference) so a slowed tick never fails to consume a reached waypoint.
-	FFixedPoint RemainingStep = EffectiveTopSpeed(Ctx) * DeltaTime;
-	// Local avoidance applies to this tick's FIRST movement step only.
-	bool bAvoidanceApplied = false;
-
-	while (RemainingStep > FFixedPoint::Zero && CurrentWaypointIndex < Path.Waypoints.Num())
-	{
-		const FFixedVector Target = Path.Waypoints[CurrentWaypointIndex];
-		FFixedVector Delta = Target - Pos;
-		Delta.Z = FFixedPoint::Zero;
-		const FFixedPoint DistSq = Delta.SizeSquared();
-
-		const bool bIsFinalWaypoint = (CurrentWaypointIndex == Path.Waypoints.Num() - 1);
-		const FFixedPoint OneStep = MovementData.TopSpeed * DeltaTime;
-		const FFixedPoint ArriveRadiusSq = bIsFinalWaypoint ? AcceptanceRadiusSq : OneStep * OneStep;
-
-		if (DistSq <= ArriveRadiusSq)
-		{
-			Pos.X = Target.X;
-			Pos.Y = Target.Y;
-			++CurrentWaypointIndex;
-			continue;
-		}
-
-		const FFixedPoint Dist = Delta.Size();
-		const FFixedPoint StepLen = (Dist < RemainingStep) ? Dist : RemainingStep;
-
-		FFixedVector Dir = FFixedVector::GetSafeNormal(Delta);
-		// Local avoidance — bend only this tick's first step (the primary steering
-		// direction); later sub-steps consuming close waypoints use true geometry.
-		// Soft layer; the penetration floor still guarantees no overlap.
-		if (!bAvoidanceApplied) { Dir = ApplyAvoidanceSteer(Ctx, Dir); bAvoidanceApplied = true; }
-
-		Pos.X = Pos.X + Dir.X * StepLen;
-		Pos.Y = Pos.Y + Dir.Y * StepLen;
-
-		RemainingStep = RemainingStep - StepLen;
-	}
-
-	Pos = ResolveNavCollision(InitialPos, Pos, Nav);
-
-	ApplyGroundSnapAndAltitude(Pos, Ctx.MovementData, Nav, DeltaTime);
-
-	Entity.Transform.SetLocation(Pos);
-
-	if (DeltaTime > FFixedPoint::Zero)
-	{
-		FFixedVector Disp = Pos - InitialPos;
-		MovementData.Velocity = FFixedVector(Disp.X / DeltaTime, Disp.Y / DeltaTime, FFixedPoint::Zero);
-	}
-	else
-	{
-		MovementData.Velocity = FFixedVector::ZeroVector;
-	}
-
-	return CurrentWaypointIndex >= Path.Waypoints.Num();
+	// Basic = translate only. Identical to the base default ground policy (head to the current
+	// waypoint at terrain-scaled top speed, bent by local avoidance) but with NO rotation — the unit
+	// slides toward its goal without turning to face it. The base Tick harness owns arrival, the hard
+	// nav-collision floor, ground snap, and velocity persistence.
+	FSeinMotion Motion = Super::ComputeMotion_Implementation(Mover);
+	Motion.bUpdateFacing = false;
+	return Motion;
 }

@@ -1,7 +1,7 @@
 # SeinARTSCoverExtension — Plugin Guide
 
 Opt-in **cover system** for the SeinARTS lockstep RTS: deterministic cover providers (slots + area
-volumes) on sim entities, a pluggable cover-query system, CoH-style cover-snap dispatch resolvers,
+volumes) on sim entities, a pluggable cover-query system, automatic cover-snap dispatch resolvers,
 and a per-player destination-preview decal layer tinted by cover quality. Cleanly strippable —
 nothing in the framework depends on it.
 

@@ -29,6 +29,7 @@ FFixedPoint ComputeSpeed(USeinMoverHandle* Mover);
 Rules:
 - **Plain text only — no Markdown.** UE tooltips do not parse it: `**bold**` and `` `backticks` ``
   render literally as noise. No `**`, no backtick code spans, no bullet syntax.
+- **No external game or IP names** (see Comments & docs) — describe the behavior, not the game.
 - **Lead with what it does for the user**, not the implementation. "How fast the unit wants to go,"
   not "returns the terrain-scaled `TopSpeed` before the arrival cap."
 - **Trivial getters get one clear sentence** — the ELI5 *is* the complete description, so no second
@@ -118,8 +119,17 @@ own settings page.
 - **Trust code over comments** — the architecture has stabilized but some docstrings lag the
   implementation. When you find a docstring that contradicts the code, fix the docstring as part of
   your change (don't leave a known-stale comment behind).
-- **Don't reference retired docs** (`DESIGN.md`, `PLAN.md`, `API_Cleanup_Pass.md`, BAR-program
-  planning docs) — they're gone; cite live code or the current plan docs instead.
+- **No external game, engine, or IP names.** Never name other games, engines, or franchises
+  (Company of Heroes, StarCraft, Age of Empires, Supreme Commander, Total War, SpringRTS, Beyond All
+  Reason, and the like) in tooltips, code comments, or docs — this framework is genre-neutral.
+  Describe the *behavior* or *technique* instead: "a height-aware true-line-of-sight fog model," not
+  "CoH TrueSight"; "a rank-and-file block," not "a Total-War square"; "settle-in-place, no
+  return-to-home," not "BAR semantics." Algorithm and math names (A*, boids, Gauss-Seidel, Jacobi,
+  Reeds-Shepp, Dubins, Bresenham, Xorshift) are fine — those are technical terms, not trademarks.
+  (Note: `AoE` in this codebase almost always means *Area of Effect*, which is fine — only the
+  game "Age of Empires" is off-limits.)
+- **Don't reference retired docs** (`DESIGN.md`, `PLAN.md`, `API_Cleanup_Pass.md`, and the retired
+  porting-program planning docs) — they're gone; cite live code or the current plan docs instead.
 - **No dead outputs / always-on log spam.** A BP-exposed field that's never populated, or a
   per-tick `UE_LOG`, erodes trust — either make it real or remove it; gate diagnostics behind a
   verbosity level or a show-flag.

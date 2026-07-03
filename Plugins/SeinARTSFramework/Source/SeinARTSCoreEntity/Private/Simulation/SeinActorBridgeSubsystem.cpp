@@ -171,6 +171,16 @@ void USeinActorBridgeSubsystem::Tick(float DeltaTime)
 	// directly. The bridge no longer fans poses out — keeps it lean.
 }
 
+bool USeinActorBridgeSubsystem::IsTickable() const
+{
+	// Only tick when there is render-side work: pending visual events to drain, or actors under
+	// management. When the sim is dormant (no entities, no events) this returns false, so the bridge
+	// costs zero per frame. Transform sync runs on the OnSimTickCompleted delegate, not this Tick, so
+	// skipping the engine Tick never affects it.
+	return SimSubsystem.IsValid()
+		&& (SimSubsystem->HasPendingVisualEvents() || EntityActorMap.Num() > 0);
+}
+
 // ==================== Sim Tick Callback ====================
 
 void USeinActorBridgeSubsystem::HandleSimTick(int32 Tick)

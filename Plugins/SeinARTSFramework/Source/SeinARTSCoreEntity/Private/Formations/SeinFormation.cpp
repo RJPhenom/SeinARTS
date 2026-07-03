@@ -344,7 +344,13 @@ void USeinFormation::SeparatePositions(
 				const FFixedPoint DistSq = D.X * D.X + D.Y * D.Y;
 				const FFixedPoint Ri = Radii.IsValidIndex(i) ? Radii[i] : FFixedPoint::Zero;
 				const FFixedPoint Rj = Radii.IsValidIndex(j) ? Radii[j] : FFixedPoint::Zero;
-				const FFixedPoint MinDist = Ri + Rj;
+				// Rest with breathing room: space slots a small margin BEYOND footprint contact
+				// (Ri+Rj) so units settled onto them sit just OUTSIDE the collision floor's
+				// separation threshold — the floor then never fires at rest and a formation holds
+				// its shape instead of being shoved apart. In the shared resolver path, so the
+				// preview shows the same spacing the commit lands on (root CLAUDE.md #6).
+				const FFixedPoint RestMargin = FFixedPoint::FromInt(25);
+				const FFixedPoint MinDist = Ri + Rj + RestMargin;
 				if (DistSq >= MinDist * MinDist) { continue; } // touching or clear — leave it
 				FFixedPoint Dist = SeinMath::Sqrt(DistSq);
 				FFixedVector Dir;
@@ -450,7 +456,7 @@ FSeinFormationLayout USeinFormation::BuildFormation_Implementation(
 	const FSeinOrderTarget& Target)
 {
 	// Default: BLOB. Every member shares the one (already nav-projected) anchor —
-	// the AoE/SC2/CoH model; the hard collision floor packs them on arrival. Facing
+	// the mass-select single-destination model; the hard collision floor packs them on arrival. Facing
 	// rotates to face the move direction. USeinBlobFormation inherits this as-is.
 	FSeinFormationLayout Layout;
 	Layout.Facing = ComputeFormationFacing(Target.CurrentCentroid, Target.CurrentFacing, Target.Anchor);

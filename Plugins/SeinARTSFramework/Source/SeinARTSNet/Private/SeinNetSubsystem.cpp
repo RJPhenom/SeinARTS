@@ -189,6 +189,12 @@ bool USeinNetSubsystem::IsDeterminismGossipEnabled() const
 	return Settings && Settings->bDeterminismChecksEnabled;
 }
 
+bool USeinNetSubsystem::IsConfigParityCheckEnabled() const
+{
+	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
+	return Settings && Settings->bConfigParityCheckEnabled;
+}
+
 int32 USeinNetSubsystem::GetDeterminismCheckIntervalTurns() const
 {
 	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
@@ -311,8 +317,23 @@ void USeinNetSubsystem::ServerSpawnRelayForController(APlayerController* PC, FSe
 		}
 	}
 
+	// WYSIWYG. None/empty => the net relay is OFF: spawn nothing, so this controller gets no relay and
+	// lockstep traffic can't flow. A set-but-unloadable class is a mistake, not an off-switch: fall
+	// back to the shipped default with a logged error.
+	if (Settings->RelayActorClass.IsNull())
+	{
+		USeinARTSCoreSettings::ReportDisabledSystem(TEXT("Net Relay"),
+			TEXT("No relay is spawned, so lockstep networking can't send or receive commands."), /*bHighSeverity*/ true);
+		return;
+	}
 	UClass* RelayClass = Settings->RelayActorClass.TryLoadClass<ASeinNetRelay>();
-	if (!RelayClass) RelayClass = ASeinNetRelay::StaticClass();
+	if (!RelayClass)
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("RelayActorClass '%s' could not be loaded — falling back to the shipped default."),
+			*Settings->RelayActorClass.ToString());
+		RelayClass = ASeinNetRelay::StaticClass();
+	}
 
 	FActorSpawnParameters Params;
 	Params.Owner = PC;
@@ -568,6 +589,18 @@ void USeinNetSubsystem::NotifyLocalSlotAssigned(ASeinNetRelay* Relay, FSeinPlaye
 
 	UE_LOG(LogSeinNet, Log, TEXT("NotifyLocalSlotAssigned: gate hooks bound (sim deferred until Client_StartSession)  TicksPerTurn=%d  InputDelay=%d turns."),
 		GetTicksPerTurn(), GetInputDelayTurns());
+
+	// Opt-in config-parity check: the moment this client latches its slot (before the sim starts),
+	// send a fingerprint of its sim-affecting settings to the host, which rejects a mismatched client
+	// rather than letting it silently desync. Only in a real networked session with a valid slot +
+	// relay; the host's own relay round-trips harmlessly (its fingerprint trivially matches).
+	if (IsConfigParityCheckEnabled() && IsNetworkingActive() && LocalPlayerID.IsValid() && Relay)
+	{
+		if (const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>())
+		{
+			Relay->Server_ReportConfigFingerprint(Settings->ComputeConfigFingerprint());
+		}
+	}
 }
 
 void USeinNetSubsystem::StartLocalSession()
@@ -1140,19 +1173,22 @@ void USeinNetSubsystem::TryAutoRegisterAIForSlot(FSeinPlayerID Slot)
 	// Resolve the configured class. Empty path or failed load → fall back to
 	// the framework-shipped null controller. Both branches log; designers
 	// see in the log what class actually got picked.
-	UClass* AIClass = nullptr;
-	if (!Settings->DefaultAIControllerClass.IsNull())
+	// WYSIWYG. None/empty => drop-takeover AI is OFF: register no controller, so the dropped slot's
+	// units simply idle (the server's empty heartbeats keep the lockstep gate from stalling). A
+	// set-but-unloadable class is a mistake, not an off-switch: fall back to the shipped null
+	// controller with a logged warning.
+	if (Settings->DefaultAIControllerClass.IsNull())
 	{
-		AIClass = Settings->DefaultAIControllerClass.TryLoadClass<USeinAIController>();
-		if (!AIClass)
-		{
-			UE_LOG(LogSeinNet, Warning,
-				TEXT("[Drop] slot=%u DefaultAIControllerClass='%s' failed to load — falling back to USeinNullAIController."),
-				Slot.Value, *Settings->DefaultAIControllerClass.ToString());
-		}
+		USeinARTSCoreSettings::ReportDisabledSystem(TEXT("Default AI Controller"),
+			TEXT("A dropped player's slot gets no AI takeover; its units stay idle."), /*bHighSeverity*/ false);
+		return;
 	}
+	UClass* AIClass = Settings->DefaultAIControllerClass.TryLoadClass<USeinAIController>();
 	if (!AIClass)
 	{
+		UE_LOG(LogSeinNet, Warning,
+			TEXT("[Drop] slot=%u DefaultAIControllerClass='%s' failed to load — falling back to USeinNullAIController."),
+			Slot.Value, *Settings->DefaultAIControllerClass.ToString());
 		AIClass = USeinNullAIController::StaticClass();
 	}
 
@@ -1519,6 +1555,43 @@ void USeinNetSubsystem::MaybeSubmitStateHashCheck(int32 JustFinishedTurn)
 		TEXT("[DETERMINISM] reporting hash=0x%08x for turn=%d  slot=%u"),
 		static_cast<uint32>(LocalHash), JustFinishedTurn, LocalPlayerID.Value);
 	Relay->Server_ReportStateHash(JustFinishedTurn, LocalHash);
+}
+
+void USeinNetSubsystem::ServerHandleConfigFingerprint(ASeinNetRelay* SourceRelay, int32 Fingerprint)
+{
+	if (!IsServer() || !SourceRelay || !IsConfigParityCheckEnabled()) return;
+
+	const FSeinPlayerID* SlotPtr = RelayToSlot.Find(SourceRelay);
+	if (!SlotPtr || !SlotPtr->IsValid())
+	{
+		UE_LOG(LogSeinNet, Warning,
+			TEXT("[CONFIG] ServerHandleConfigFingerprint: unmapped relay %s — dropping fingerprint."),
+			*GetNameSafe(SourceRelay));
+		return;
+	}
+	const FSeinPlayerID Slot = *SlotPtr;
+
+	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
+	const int32 ServerFingerprint = Settings ? Settings->ComputeConfigFingerprint() : 0;
+
+	if (Fingerprint == ServerFingerprint)
+	{
+		UE_LOG(LogSeinNet, Log,
+			TEXT("[CONFIG] slot=%u config parity OK (fingerprint 0x%08x)."),
+			Slot.Value, static_cast<uint32>(ServerFingerprint));
+		return;
+	}
+
+	// Mismatch — the joining client's sim-affecting settings differ from the host's; it would desync
+	// every tick. Reject it before the match starts, via the same disconnect + travel-to-menu path the
+	// lobby kick uses. The disconnect drives the normal leave/logout cleanup (UnregisterRelay clears
+	// RelayToSlot), so the slot frees for a correctly-configured re-join.
+	UE_LOG(LogSeinNet, Error,
+		TEXT("[CONFIG] slot=%u config MISMATCH (client 0x%08x vs host 0x%08x) — kicking."),
+		Slot.Value, static_cast<uint32>(Fingerprint), static_cast<uint32>(ServerFingerprint));
+	SourceRelay->Client_NotifyKicked(FString::Printf(
+		TEXT("Config mismatch: your SeinARTS sim settings differ from the host's (fingerprint 0x%08x vs 0x%08x). Ensure both use the same DefaultGame.ini."),
+		static_cast<uint32>(Fingerprint), static_cast<uint32>(ServerFingerprint)));
 }
 
 void USeinNetSubsystem::ServerHandleStateHashReport(ASeinNetRelay* SourceRelay, int32 Turn, int32 Hash)

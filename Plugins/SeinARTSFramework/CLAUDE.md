@@ -249,7 +249,7 @@ per-order reset point) and registers two sim systems on world begin-play:
 `USeinMovement::TickIdle` on every idle unit each tick: first-contact ground snap (this
 subsumed the retired `FSeinInitialSnapSystem`), coast-down of residual order momentum
 through the decel ramp, and per-tick shove-settle (Z + slope re-snap where the unit
-stands — BAR semantics, **no return-to-home**; the earlier `FSeinPositionKeepSystem`
+stands — settle-in-place semantics, **no return-to-home**; the earlier `FSeinPositionKeepSystem`
 stripped 2026-06-03 is superseded by this, not reinstated). Contained entities are
 skipped (their container poses them). Ordered steering still runs inside
 `USeinMoveToAction`'s tick this checkpoint; the full move-step migration into the driver
@@ -257,7 +257,7 @@ is CP2.3's decision/integration split (where the momentum push needs it).
 
 **Avoidance is pluggable** (same abstract-base + settings-picker pattern as Navigation /
 Collision / FoW): abstract `USeinAvoidance` + `USeinARTSCoreSettings::AvoidanceClass`
-(default `USeinAvoidanceDefault` = the SpringRTS/BAR lateral-steer boids model). The
+(default `USeinAvoidanceDefault` = a lateral-steer boids model). The
 PreTick `FSeinAvoidanceSystem` is a thin delegator → `ComputeAvoidance`; the instance is
 owned + GC-rooted by `USeinMovementSubsystem`. The per-tick OUTPUT contract is
 `FSeinAvoidanceOutput { SteerDir, SpeedScale }` on `FSeinMovementComponent` — a lateral

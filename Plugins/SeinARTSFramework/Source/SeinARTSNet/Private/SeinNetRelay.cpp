@@ -257,6 +257,18 @@ void ASeinNetRelay::Server_ReportStateHash_Implementation(int32 Turn, int32 Hash
 	}
 }
 
+void ASeinNetRelay::Server_ReportConfigFingerprint_Implementation(int32 Fingerprint)
+{
+	UE_LOG(LogSeinNet, Verbose,
+		TEXT("[Server] Recv config fingerprint 0x%08x  FromSlot=%u"),
+		static_cast<uint32>(Fingerprint), AssignedPlayerID.Value);
+
+	if (USeinNetSubsystem* Net = GetNetSubsystem())
+	{
+		Net->ServerHandleConfigFingerprint(this, Fingerprint);
+	}
+}
+
 void ASeinNetRelay::Client_NotifyDesync_Implementation(int32 Turn, const TArray<FSeinSlotHashEntry>& PeerHashes)
 {
 	UE_LOG(LogSeinNet, Error,

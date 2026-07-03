@@ -9,6 +9,7 @@
 #include "Movement/SeinMoverHandle.h"
 #include "Movement/SeinMovement.h"
 #include "Components/SeinMovementComponent.h"
+#include "Components/SeinNavigationComponent.h"
 #include "Types/Entity.h"
 #include "Math/MathLib.h"
 #include "SeinPathTypes.h"
@@ -86,16 +87,6 @@ FFixedPoint USeinMoverHandle::GetSpeed() const
 FFixedPoint USeinMoverHandle::GetTopSpeed() const
 {
 	return (Ctx && Ctx->MovementData) ? Ctx->MovementData->TopSpeed : FFixedPoint::Zero;
-}
-
-FFixedPoint USeinMoverHandle::GetAcceleration() const
-{
-	return (Ctx && Ctx->MovementData) ? Ctx->MovementData->Acceleration : FFixedPoint::Zero;
-}
-
-FFixedPoint USeinMoverHandle::GetDeceleration() const
-{
-	return (Ctx && Ctx->MovementData) ? Ctx->MovementData->Deceleration : FFixedPoint::Zero;
 }
 
 FFixedPoint USeinMoverHandle::GetTurnRate() const
@@ -336,7 +327,13 @@ FGameplayTag USeinMoverHandle::GetTerrainTagAt(const FFixedVector& WorldPos) con
 
 bool USeinMoverHandle::IsPositionClear(const FFixedVector& WorldPos) const
 {
-	return (Ctx && Ctx->Nav) ? Ctx->Nav->IsWorldPositionClear(WorldPos, /*AgentNavLayerMask*/ 0) : false;
+	// Mask MUST be non-zero: (BlockedNavLayerMask & 0) == 0 skips EVERY dynamic blocker,
+	// silently degrading this to a static-only query that reports a dynamic-wall cell as
+	// clear — the exact trap SeinNavigationBPFL documents. Use the agent's own nav layer
+	// (0x01 ground fallback), matching the movement floor's CachedNavLayerMask.
+	if (!Ctx || !Ctx->Nav) return false;
+	const uint8 Mask = Ctx->NavData ? Ctx->NavData->NavLayerMask : uint8(0x01);
+	return Ctx->Nav->IsWorldPositionClear(WorldPos, Mask);
 }
 
 FFixedVector USeinMoverHandle::QueryNavDirection(FFixedVector Goal, int64 GroupId) const

@@ -155,7 +155,7 @@ struct SEINARTSCOREENTITY_API FSeinNavigationComponent : public FSeinComponent
 		meta = (ClampMin = "0", DisplayName = "Max Search Nodes"))
 	int32 MaxSearchNodes = 0;
 
-	/** Show the destination preview when this unit is selected — the CoH-style "where will
+	/** Show the destination preview when this unit is selected — the "where will
 	 *  I stop" indicator drawn on cursor hover during move orders. Turn off for unit types
 	 *  where it adds no value (always-mobile scouts, off-screen support). Default true. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Navigation")

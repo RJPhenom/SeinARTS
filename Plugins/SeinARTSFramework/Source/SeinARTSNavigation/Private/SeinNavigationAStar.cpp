@@ -22,6 +22,7 @@
 #include "CollisionQueryParams.h"
 #include "DrawDebugHelpers.h"
 #include "Math/Box.h"
+#include "Algo/Reverse.h"
 
 #include "SeinARTSNavigationLog.h"
 
@@ -680,6 +681,29 @@ bool USeinNavigationAStar::IsWorldPositionClear(const FFixedVector& WorldPos, ui
 	for (const FSeinDynamicBlocker& B : DynamicBlockers)
 	{
 		if ((B.BlockedNavLayerMask & AgentNavLayerMask) == 0) continue;
+
+		// Cheap bounding-circle reject before the O(covered-cells) rasterization.
+		// Conservative reach = shape's max linear extent + |local offset| (both
+		// axes — upper-bounds the rotated magnitude) + one cell of half-cell-pad
+		// slack. If WorldPos is provably outside that, the blocker can't cover the
+		// query cell, so skip it. This query runs per movement-floor footprint
+		// sample (9× per step attempt, ×3 attempts), so open-space queries must
+		// stay O(blockers), not O(blockers × cells); the full rasterization is
+		// paid only for a blocker the unit is actually next to.
+		FFixedPoint Reach;
+		switch (B.Shape.Shape)
+		{
+		case ESeinStampShape::Rect:    Reach = B.Shape.HalfExtentX + B.Shape.HalfExtentY; break;
+		case ESeinStampShape::Conical: Reach = B.Shape.ConeLength; break;
+		default:                       Reach = B.Shape.Radius; break; // Radial
+		}
+		const FFixedPoint AbsOffX = (B.Shape.LocalOffset.X < FFixedPoint::Zero) ? -B.Shape.LocalOffset.X : B.Shape.LocalOffset.X;
+		const FFixedPoint AbsOffY = (B.Shape.LocalOffset.Y < FFixedPoint::Zero) ? -B.Shape.LocalOffset.Y : B.Shape.LocalOffset.Y;
+		const FFixedPoint BoundR = Reach + AbsOffX + AbsOffY + CellSize;
+		const FFixedPoint DX = WorldPos.X - B.EntityCenter.X;
+		const FFixedPoint DY = WorldPos.Y - B.EntityCenter.Y;
+		if (DX * DX + DY * DY > BoundR * BoundR) continue;
+
 		bool bBlocked = false;
 		SeinStampUtils::ForEachCoveredCell(
 			B.Shape, B.EntityCenter, B.EntityRotation,
@@ -1021,6 +1045,33 @@ bool USeinNavigationAStar::GetCellHeightAt(const FFixedVector& WorldPos, FFixedP
 	return true;
 }
 
+template <typename FAcceptPred>
+bool USeinNavigationAStar::RingScanForCell(int32 StartX, int32 StartY, int32 MaxR, FAcceptPred&& Accept, FFixedVector& OutProjected) const
+{
+	// Quick check: start cell itself accepted?
+	if (Accept(StartX, StartY)) { OutProjected = GridToWorld(StartX, StartY); return true; }
+
+	// Bounded radial ring scan. Each ring at radius R has 8R cells (the (2R+1)²
+	// square minus the (2R-1)² inner square). Iterating only the ring perimeter —
+	// top/bottom rows (including corners) then left/right columns (excluding the
+	// already-covered corners) — is O(8R) per ring. Visitation order is identical
+	// to the former inline copies so results match exactly.
+	for (int32 R = 1; R <= MaxR; ++R)
+	{
+		for (int32 i = -R; i <= R; ++i)
+		{
+			if (Accept(StartX + i, StartY + R)) { OutProjected = GridToWorld(StartX + i, StartY + R); return true; }
+			if (Accept(StartX + i, StartY - R)) { OutProjected = GridToWorld(StartX + i, StartY - R); return true; }
+		}
+		for (int32 i = -R + 1; i <= R - 1; ++i)
+		{
+			if (Accept(StartX - R, StartY + i)) { OutProjected = GridToWorld(StartX - R, StartY + i); return true; }
+			if (Accept(StartX + R, StartY + i)) { OutProjected = GridToWorld(StartX + R, StartY + i); return true; }
+		}
+	}
+	return false;
+}
+
 bool USeinNavigationAStar::ProjectPointToNav(const FFixedVector& WorldPos, FFixedVector& OutProjected) const
 {
 	if (!HasRuntimeData()) return false;
@@ -1040,44 +1091,18 @@ bool USeinNavigationAStar::ProjectPointToNav(const FFixedVector& WorldPos, FFixe
 		X = FMath::Clamp((LocalX / CellSize).ToInt(), 0, Width - 1);
 		Y = FMath::Clamp((LocalY / CellSize).ToInt(), 0, Height - 1);
 	}
-	if (IsCellPassable(X, Y))
-	{
-		OutProjected = GridToWorld(X, Y);
-		return true;
-	}
 
-	// Bounded radial ring scan for the nearest passable cell. Capped at
-	// `NavProjectionMaxRingRadius` cells from plugin settings (default 30
-	// = ≈30m at the default 100cm grid) so a click in a totally blocked
-	// region (open ocean, large impassable mountain) fails fast instead
-	// of sweeping the entire grid. Past that distance the user almost
+	// Ring scan for the nearest passable cell. Capped at `NavProjectionMaxRingRadius`
+	// cells from plugin settings (default 30 ≈ 30m at the default 100cm grid) so a
+	// click in a totally blocked region (open ocean, large impassable mountain) fails
+	// fast instead of sweeping the entire grid. Past that distance the user almost
 	// certainly meant a different click — failure is the right answer.
-	//
-	// Each ring at radius R has 8R cells (the (2R+1)² square minus the
-	// (2R-1)² inner square). Iterating only the ring perimeter — top/bottom
-	// rows + left/right columns excluding corners — is O(8R) per ring vs.
-	// the previous O((2R+1)²) which spent most iterations skipping interior
-	// cells.
 	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
 	const int32 MaxProjectionRingRadius = Settings ? Settings->NavProjectionMaxRingRadius : 30;
 
-	for (int32 R = 1; R <= MaxProjectionRingRadius; ++R)
-	{
-		// Top + bottom rows (dy = ±R, dx ∈ [-R, +R]).
-		for (int32 i = -R; i <= R; ++i)
-		{
-			if (IsCellPassable(X + i, Y + R)) { OutProjected = GridToWorld(X + i, Y + R); return true; }
-			if (IsCellPassable(X + i, Y - R)) { OutProjected = GridToWorld(X + i, Y - R); return true; }
-		}
-		// Left + right columns (dx = ±R, dy ∈ (-R, +R) — corners already
-		// covered above).
-		for (int32 i = -R + 1; i <= R - 1; ++i)
-		{
-			if (IsCellPassable(X - R, Y + i)) { OutProjected = GridToWorld(X - R, Y + i); return true; }
-			if (IsCellPassable(X + R, Y + i)) { OutProjected = GridToWorld(X + R, Y + i); return true; }
-		}
-	}
-	return false;
+	return RingScanForCell(X, Y, MaxProjectionRingRadius,
+		[this](int32 CX, int32 CY) { return IsCellPassable(CX, CY); },
+		OutProjected);
 }
 
 bool USeinNavigationAStar::ProjectPointToNavOnElevation(const FFixedVector& WorldPos, FFixedVector& OutProjected) const
@@ -1112,35 +1137,14 @@ bool USeinNavigationAStar::ProjectPointToNavOnElevation(const FFixedVector& Worl
 		return ZDiff <= ZTolerance;
 	};
 
-	// Quick check: input cell already on matching elevation?
-	if (IsAcceptable(X, Y))
-	{
-		OutProjected = GridToWorld(X, Y);
-		return true;
-	}
-
-	// Ring scan for cell on matching elevation. Same scan structure as
-	// ProjectPointToNav, but accepts only cells within ZTolerance of the
-	// input's Z. If no Z-matching cell is found within the scan radius,
-	// fall back to plain XY projection (any walkable cell, regardless of
-	// elevation) so we never return failure when a walkable cell exists
-	// — better to put the unit on the wrong elevation than to drop the
-	// command entirely.
+	// Ring scan for a cell on matching elevation (same scan structure as
+	// ProjectPointToNav, accepting only cells within ZTolerance of the input's Z).
+	// If no Z-matching cell is found within the scan radius, fall back to plain XY
+	// projection (any walkable cell, regardless of elevation) so we never return
+	// failure when a walkable cell exists — better to put the unit on the wrong
+	// elevation than to drop the command entirely.
 	const int32 MaxProjectionRingRadius = Settings ? Settings->NavProjectionMaxRingRadius : 30;
-
-	for (int32 R = 1; R <= MaxProjectionRingRadius; ++R)
-	{
-		for (int32 i = -R; i <= R; ++i)
-		{
-			if (IsAcceptable(X + i, Y + R)) { OutProjected = GridToWorld(X + i, Y + R); return true; }
-			if (IsAcceptable(X + i, Y - R)) { OutProjected = GridToWorld(X + i, Y - R); return true; }
-		}
-		for (int32 i = -R + 1; i <= R - 1; ++i)
-		{
-			if (IsAcceptable(X - R, Y + i)) { OutProjected = GridToWorld(X - R, Y + i); return true; }
-			if (IsAcceptable(X + R, Y + i)) { OutProjected = GridToWorld(X + R, Y + i); return true; }
-		}
-	}
+	if (RingScanForCell(X, Y, MaxProjectionRingRadius, IsAcceptable, OutProjected)) return true;
 
 	// No Z-matching cell within scan radius — fall back to plain XY projection.
 	return ProjectPointToNav(WorldPos, OutProjected);
@@ -1208,22 +1212,14 @@ bool USeinNavigationAStar::ProjectPointToNavFree(
 	{
 		const bool bRequireElevation = (Pass == 0);
 
-		// Quick check: input cell itself free + acceptable?
-		if (IsAcceptable(X, Y, bRequireElevation)) { OutProjected = GridToWorld(X, Y); return true; }
-
 		// Bounded radial ring scan (same O(8R)-per-ring structure as ProjectPointToNav).
-		for (int32 R = 1; R <= MaxProjectionRingRadius; ++R)
+		// Pass 1 (elevation-required) then pass 2 (elevation-relaxed) — the scan checks
+		// the input cell first, then walks outward.
+		if (RingScanForCell(X, Y, MaxProjectionRingRadius,
+			[&](int32 CX, int32 CY) { return IsAcceptable(CX, CY, bRequireElevation); },
+			OutProjected))
 		{
-			for (int32 i = -R; i <= R; ++i)
-			{
-				if (IsAcceptable(X + i, Y + R, bRequireElevation)) { OutProjected = GridToWorld(X + i, Y + R); return true; }
-				if (IsAcceptable(X + i, Y - R, bRequireElevation)) { OutProjected = GridToWorld(X + i, Y - R); return true; }
-			}
-			for (int32 i = -R + 1; i <= R - 1; ++i)
-			{
-				if (IsAcceptable(X - R, Y + i, bRequireElevation)) { OutProjected = GridToWorld(X - R, Y + i); return true; }
-				if (IsAcceptable(X + R, Y + i, bRequireElevation)) { OutProjected = GridToWorld(X + R, Y + i); return true; }
-			}
+			return true;
 		}
 	}
 
@@ -1251,19 +1247,138 @@ namespace
 	// FAStarNode moved to a class-private nested type on USeinNavigationAStar
 	// so the Open heap can live as a `mutable` member and preserve its allocation
 	// across FindPath calls. Definition is in SeinNavigationAStar.h.
+
+	// ------------------------------------------------------------------------
+	// Shared 8-neighbor direction tables + the single Bresenham grid-walk
+	// primitive. These were previously duplicated ~5× (NeighborDX/DY/Cost,
+	// CardinalA/B, the (StepDX,StepDY)→DirIdx mapping, and the supercover
+	// Bresenham loop in HasLineOfSight / NavRaycast / the FindPath replay
+	// diagnostic / the debug Rasterize). One copy each; identical values.
+	// ------------------------------------------------------------------------
+
+	/** 8-neighbor offsets, indexed by direction:
+	 *    0:E(+1,0) 1:W(-1,0) 2:N(0,+1) 3:S(0,-1)
+	 *    4:NE(+1,+1) 5:SE(+1,-1) 6:NW(-1,+1) 7:SW(-1,-1) */
+	static const int32 SeinNeighborDX[8]   = { 1, -1,  0,  0,  1,  1, -1, -1 };
+	static const int32 SeinNeighborDY[8]   = { 0,  0,  1, -1,  1, -1,  1, -1 };
+	static const int32 SeinNeighborCost[8] = { 10, 10, 10, 10, 14, 14, 14, 14 };
+
+	/** For a diagonal direction index (4..7), the two cardinal direction indices
+	 *  that flank it (used by the diagonal anti-squeeze checks). Index with
+	 *  (DirIdx - 4). */
+	static const uint8 SeinDiagCardinalA[4] = { 0, 0, 1, 1 };
+	static const uint8 SeinDiagCardinalB[4] = { 2, 3, 2, 3 };
+
+	/** Map a single grid step (dx, dy) ∈ {-1,0,+1}² to its 8-neighbor direction
+	 *  index, or -1 for a no-move (0,0). Matches the bake-time bitmask ordering. */
+	FORCEINLINE int32 SeinStepToDirIdx(int32 StepDX, int32 StepDY)
+	{
+		if      (StepDX ==  1 && StepDY ==  0) return 0;
+		else if (StepDX == -1 && StepDY ==  0) return 1;
+		else if (StepDX ==  0 && StepDY ==  1) return 2;
+		else if (StepDX ==  0 && StepDY == -1) return 3;
+		else if (StepDX ==  1 && StepDY ==  1) return 4;
+		else if (StepDX ==  1 && StepDY == -1) return 5;
+		else if (StepDX == -1 && StepDY ==  1) return 6;
+		else if (StepDX == -1 && StepDY == -1) return 7;
+		return -1;
+	}
+
+	/** Outcome of a WalkGridLine traversal. */
+	enum class ESeinGridWalk : uint8
+	{
+		ReachedEnd,     // walk arrived at (X1,Y1) with no callback abort
+		AbortedAtCell,  // VisitFn returned false at the current cell
+		AbortedAtStep,  // StepFn returned false on the step about to be taken
+	};
+
+	/** Single Bresenham grid walk from (X0,Y0) to (X1,Y1), promoted to a TRUE
+	 *  SUPERCOVER at diagonal steps (visits the two corner cells the line clips,
+	 *  so an LoS check can't tunnel diagonally through a thin wall — see the
+	 *  in-loop note).
+	 *
+	 *  Per cell, calls VisitFn(X, Y) — returning false aborts the walk
+	 *  (ReachedEnd is NOT reported; AbortedAtCell is). On reaching the end cell
+	 *  the walk stops with ReachedEnd BEFORE computing a further step. Otherwise
+	 *  it computes the next cell and its direction index and calls
+	 *  StepFn(X, Y, NextX, NextY, DirIdx) — returning false aborts with
+	 *  AbortedAtStep (NextX/NextY are passed so the caller can record the
+	 *  rejected step's target).
+	 *
+	 *  Templated + FORCEINLINE so the callbacks inline into the loop with no
+	 *  indirect call — the hot smoothing/raycast paths keep their original
+	 *  codegen. The core Bresenham arithmetic (DX/DY/SX/SY/Err, the `E2 > -DY` /
+	 *  `E2 < DX` order) is unchanged; the only addition is the two corner VisitFn
+	 *  calls on a diagonal step (the supercover gate). Deterministic on every
+	 *  client, so it's safe on the sim FindPath path. */
+	template <typename FVisitFn, typename FStepFn>
+	FORCEINLINE ESeinGridWalk WalkGridLine(int32 X0, int32 Y0, int32 X1, int32 Y1,
+		FVisitFn&& VisitFn, FStepFn&& StepFn)
+	{
+		const int32 DX = FMath::Abs(X1 - X0);
+		const int32 DY = FMath::Abs(Y1 - Y0);
+		const int32 SX = (X0 < X1) ? 1 : -1;
+		const int32 SY = (Y0 < Y1) ? 1 : -1;
+		int32 Err = DX - DY;
+
+		int32 X = X0, Y = Y0;
+		for (;;)
+		{
+			if (!VisitFn(X, Y)) return ESeinGridWalk::AbortedAtCell;
+			if (X == X1 && Y == Y1) return ESeinGridWalk::ReachedEnd;
+
+			int32 NextX = X, NextY = Y;
+			const int32 E2 = 2 * Err;
+			const bool bStepX = (E2 > -DY);
+			const bool bStepY = (E2 <  DX);
+			if (bStepX) { Err -= DY; NextX += SX; }
+			if (bStepY) { Err += DX; NextY += SY; }
+
+			// TRUE-SUPERCOVER corner gate. On a diagonal step (both axes advance) the
+			// geometric line clips the two corner cells (X+SX, Y) and (X, Y+SY). A plain
+			// Bresenham jumps corner-to-corner and visits NEITHER — so an LoS walk can
+			// TUNNEL straight through a thin wall (or a dynamic nav blocker) wedged at the
+			// diagonal junction: the smoother then collapses an A* detour into a straight
+			// line through the wall, and the StepFn's static-connectivity anti-squeeze
+			// can't catch it because a dynamic blocker isn't in CellConnections. Visit
+			// BOTH corners so a blocked / low-clearance corner aborts the line, matching
+			// A*'s own diagonal anti-squeeze (both flanking cardinals must clear). Runs
+			// only on genuine diagonal steps; cardinal steps keep the plain fast path.
+			// Deterministic order (X-corner then Y-corner) — same on every client.
+			if (bStepX && bStepY)
+			{
+				if (!VisitFn(NextX, Y)) return ESeinGridWalk::AbortedAtCell;
+				if (!VisitFn(X, NextY)) return ESeinGridWalk::AbortedAtCell;
+			}
+
+			const int32 DirIdx = SeinStepToDirIdx(NextX - X, NextY - Y);
+			if (!StepFn(X, Y, NextX, NextY, DirIdx)) return ESeinGridWalk::AbortedAtStep;
+
+			X = NextX;
+			Y = NextY;
+		}
+	}
 }
 
-TArray<FIntPoint> USeinNavigationAStar::AStarSearch(FIntPoint Start, FIntPoint End, bool& bOutPartial,
+void USeinNavigationAStar::AStarSearch(FIntPoint Start, FIntPoint End, bool& bOutPartial,
 	int32 HeuristicWeightPercent, int32 MaxIterations, int32 RequiredClearance, FAStarScratch& Scratch) const
 {
 	bOutPartial = false;
-	TArray<FIntPoint> Result;
-	if (!IsValidCoord(Start.X, Start.Y) || !IsValidCoord(End.X, End.Y)) return Result;
-	// Start must be passable — caller pre-projects via ProjectPointToNav. We
-	// no longer early-out on a blocked End: the search continues regardless
-	// and the best-H cell tracking below produces a partial path to the
-	// closest reachable cell.
-	if (!IsCellPassableForPath(Start.X, Start.Y, Scratch)) return Result;
+	// The reconstructed chain is written into Scratch.CellPath (pooled). Reset it
+	// up front so every early-out leaves the caller an empty path.
+	Scratch.CellPath.Reset();
+	if (!IsValidCoord(Start.X, Start.Y) || !IsValidCoord(End.X, End.Y)) return;
+	// Start gate — STATIC passability only (baked wall / off-grid / terrain cost).
+	// We deliberately TOLERATE a start cell blocked ONLY in the dynamic overlay: a
+	// unit spawned on — or shoved onto — a runtime nav blocker (e.g. a cover wall
+	// dropped over a spawn point) is physically standing there and must be able to
+	// path OUT. Seeding it lets the C-space escape below (strict-improving effective
+	// WD) walk it to the nearest clear cell; a hard IsCellPassableForPath bail here
+	// would strand it forever (empty path → move fails on every repath). A genuinely
+	// STATIC-blocked start (inside a baked wall) still bails. We also no longer
+	// early-out on a blocked End — the search continues and best-H tracking yields a
+	// partial to the closest reachable cell.
+	if (!IsCellPassable(Start.X, Start.Y)) return;
 
 	const int32 N = Width * Height;
 
@@ -1338,27 +1453,27 @@ TArray<FIntPoint> USeinNavigationAStar::AStarSearch(FIntPoint Start, FIntPoint E
 	Scratch.SearchCellGen[StartIdx] = SearchGen;
 	Scratch.Open.HeapPush(FAStarNode{StartIdx, (StartH * Weight) / 100, 0, Tiebreak++});
 
-	static const int32 NeighborDX[8] = { 1, -1,  0,  0,  1,  1, -1, -1 };
-	static const int32 NeighborDY[8] = { 0,  0,  1, -1,  1, -1,  1, -1 };
-	static const int32 NeighborCost[8] = { 10, 10, 10, 10, 14, 14, 14, 14 };
+	// Shared 8-neighbor offset/cost tables (file-local SeinNeighbor* above).
+	const int32 (&NeighborDX)[8]   = SeinNeighborDX;
+	const int32 (&NeighborDY)[8]   = SeinNeighborDY;
+	const int32 (&NeighborCost)[8] = SeinNeighborCost;
 
-	// Reconstruct walks Parents from a destination cell back to Start. Every
-	// cell on the chain was touched in this search (we only recurse from
-	// cells whose Parents we explicitly wrote), so SearchParents reads are
-	// safe without gen checks here.
-	auto Reconstruct = [&](int32 EndIdxLocal) -> TArray<FIntPoint>
+	// Reconstruct walks Parents from a destination cell back to Start, filling
+	// the pooled Scratch.CellPath in place (Reset, not realloc). Every cell on
+	// the chain was touched in this search (we only recurse from cells whose
+	// Parents we explicitly wrote), so SearchParents reads are safe without gen
+	// checks here. The chain is collected reversed (End→Start) then reversed
+	// in place to Start→End — one buffer, no per-call by-value temporaries.
+	auto Reconstruct = [&](int32 EndIdxLocal)
 	{
-		TArray<FIntPoint> Reverse;
+		Scratch.CellPath.Reset();
 		int32 CurIdx = EndIdxLocal;
 		while (CurIdx != -1)
 		{
-			Reverse.Add(FIntPoint(CurIdx % Width, CurIdx / Width));
+			Scratch.CellPath.Add(FIntPoint(CurIdx % Width, CurIdx / Width));
 			CurIdx = Scratch.SearchParents[CurIdx];
 		}
-		TArray<FIntPoint> Forward;
-		Forward.Reserve(Reverse.Num());
-		for (int32 i = Reverse.Num() - 1; i >= 0; --i) Forward.Add(Reverse[i]);
-		return Forward;
+		Algo::Reverse(Scratch.CellPath);
 	};
 
 	while (Scratch.Open.Num() > 0)
@@ -1376,7 +1491,8 @@ TArray<FIntPoint> USeinNavigationAStar::AStarSearch(FIntPoint Start, FIntPoint E
 		if (Cur.CellIdx == EndIdx)
 		{
 			// Exact goal reached.
-			return Reconstruct(EndIdx);
+			Reconstruct(EndIdx);
+			return;
 		}
 
 		// Iteration cap — bound worst-case search on unreachable goals or
@@ -1481,10 +1597,8 @@ TArray<FIntPoint> USeinNavigationAStar::AStarSearch(FIntPoint Start, FIntPoint E
 				//   5: (+1,-1) → (+1,0)=0, (0,-1)=3
 				//   6: (-1,+1) → (-1,0)=1, (0,+1)=2
 				//   7: (-1,-1) → (-1,0)=1, (0,-1)=3
-				static const uint8 CardinalA[4] = { 0, 0, 1, 1 };
-				static const uint8 CardinalB[4] = { 2, 3, 2, 3 };
-				const uint8 AIdx = CardinalA[n - 4];
-				const uint8 BIdx = CardinalB[n - 4];
+				const uint8 AIdx = SeinDiagCardinalA[n - 4];
+				const uint8 BIdx = SeinDiagCardinalB[n - 4];
 				if ((CurConn & (1 << AIdx)) == 0 || (CurConn & (1 << BIdx)) == 0) continue;
 
 				// Diagonal clearance anti-squeeze: both cardinal cells the
@@ -1549,22 +1663,42 @@ TArray<FIntPoint> USeinNavigationAStar::AStarSearch(FIntPoint Start, FIntPoint E
 	// for the caller — partial path with bOutPartial=true.
 	bOutPartial = true;
 
+#if !UE_BUILD_SHIPPING
+	// Both diagnostics (the Verbose "why did A* give up" line and the Warning
+	// "stuck at start" neighbor dump) live in ReportAStarPartial so this host
+	// function reads at its real logic size. The reporter gates each block by
+	// its own log-channel activity BEFORE doing any grid work (WD ring scans),
+	// so a release build with the channel off pays nothing here.
+	ReportAStarPartial(Start, End, StartIdx, EndIdx, BestCellIdx, Iterations, IterCap, RequiredClearance, Scratch);
+#endif
+
+	Reconstruct(BestCellIdx);
+}
+
+#if !UE_BUILD_SHIPPING
+void USeinNavigationAStar::ReportAStarPartial(FIntPoint Start, FIntPoint End, int32 StartIdx, int32 EndIdx,
+	int32 BestCellIdx, int32 Iterations, int32 IterCap, int32 RequiredClearance, FAStarScratch& Scratch) const
+{
 	// Diagnostic: WHY did A* give up? Iter cap means "ran out of work budget,
 	// might still be reachable" — likely fix is bumping AStarMaxIterations.
 	// Exhaustion means "literally no C-space path exists to End" — destination
 	// is disconnected from start in the agent's C-space (different connected
 	// component, or End cell itself is WD < RequiredClearance). Different bugs,
-	// different fixes.
-	const bool bIterCapHit = (Iterations >= IterCap);
-	const int32 EndWD = WallDistance.IsValidIndex(EndIdx)
-		? static_cast<int32>(WallDistance[EndIdx]) : -1;
-	UE_LOG(LogSeinNavigationAStar, Verbose,
-		TEXT("  AStarSearch partial: reason=%s  Iterations=%d/%d  EndCell=(%d,%d) WD=%d  RequiredClearance=%d  BestH cell idx=%d"),
-		bIterCapHit ? TEXT("ITER_CAP") : TEXT("OPEN_LIST_EXHAUSTED"),
-		Iterations, IterCap,
-		End.X, End.Y, EndWD,
-		RequiredClearance,
-		BestCellIdx);
+	// different fixes. Gated on Verbose activity so the EndWD lookup + format
+	// is skipped when the channel is off.
+	if (UE_LOG_ACTIVE(LogSeinNavigationAStar, Verbose))
+	{
+		const bool bIterCapHit = (Iterations >= IterCap);
+		const int32 EndWD = WallDistance.IsValidIndex(EndIdx)
+			? static_cast<int32>(WallDistance[EndIdx]) : -1;
+		UE_LOG(LogSeinNavigationAStar, Verbose,
+			TEXT("  AStarSearch partial: reason=%s  Iterations=%d/%d  EndCell=(%d,%d) WD=%d  RequiredClearance=%d  BestH cell idx=%d"),
+			bIterCapHit ? TEXT("ITER_CAP") : TEXT("OPEN_LIST_EXHAUSTED"),
+			Iterations, IterCap,
+			End.X, End.Y, EndWD,
+			RequiredClearance,
+			BestCellIdx);
+	}
 
 	// "Stuck at start" diagnostic — fires at Warning level when A* couldn't
 	// expand AT ALL from the start cell (BestCellIdx == StartIdx). This is
@@ -1574,8 +1708,9 @@ TArray<FIntPoint> USeinNavigationAStar::AStarSearch(FIntPoint Start, FIntPoint E
 	// so the root cause is visible without enabling Verbose: was it the
 	// connection bit (slope/step gate), the passability check (wall or
 	// dynamic blocker), or the clearance gate (Required > NeighborWD with
-	// no strict-improvement escape available)?
-	if (BestCellIdx == StartIdx && Iterations > 0)
+	// no strict-improvement escape available)? Gated on Warning activity AND
+	// the stuck-at-start condition before any neighbor WD ring scans run.
+	if (BestCellIdx == StartIdx && Iterations > 0 && UE_LOG_ACTIVE(LogSeinNavigationAStar, Warning))
 	{
 		const int32 StartWD = WallDistance.IsValidIndex(StartIdx)
 			? static_cast<int32>(WallDistance[StartIdx]) : -1;
@@ -1588,16 +1723,14 @@ TArray<FIntPoint> USeinNavigationAStar::AStarSearch(FIntPoint Start, FIntPoint E
 			? FMath::Min(RequiredClearance, EffWD0) : 0;
 
 		FString NeighborReport;
-		static const int32 NDX[8] = { 1, -1,  0,  0,  1,  1, -1, -1 };
-		static const int32 NDY[8] = { 0,  0,  1, -1,  1, -1,  1, -1 };
 		static const TCHAR* NDName[8] = {
 			TEXT("E"), TEXT("W"), TEXT("N"), TEXT("S"),
 			TEXT("NE"), TEXT("SE"), TEXT("NW"), TEXT("SW")
 		};
 		for (int32 n = 0; n < 8; ++n)
 		{
-			const int32 NX = Start.X + NDX[n];
-			const int32 NY = Start.Y + NDY[n];
+			const int32 NX = Start.X + SeinNeighborDX[n];
+			const int32 NY = Start.Y + SeinNeighborDY[n];
 			NeighborReport += FString::Printf(TEXT("  %s(%d,%d): "), NDName[n], NX, NY);
 
 			if (!IsValidCoord(NX, NY))
@@ -1621,20 +1754,18 @@ TArray<FIntPoint> USeinNavigationAStar::AStarSearch(FIntPoint Start, FIntPoint E
 			bool bDiagSqueezeOk = true;
 			if (n >= 4)
 			{
-				static const uint8 CardinalA[4] = { 0, 0, 1, 1 };
-				static const uint8 CardinalB[4] = { 2, 3, 2, 3 };
-				const uint8 AIdx = CardinalA[n - 4];
-				const uint8 BIdx = CardinalB[n - 4];
+				const uint8 AIdx = SeinDiagCardinalA[n - 4];
+				const uint8 BIdx = SeinDiagCardinalB[n - 4];
 				if ((StartConn & (1 << AIdx)) == 0 || (StartConn & (1 << BIdx)) == 0)
 				{
 					bDiagSqueezeOk = false;
 				}
 				else if (RequiredClearance > 0)
 				{
-					const int32 CardAX = Start.X + NDX[AIdx];
-					const int32 CardAY = Start.Y + NDY[AIdx];
-					const int32 CardBX = Start.X + NDX[BIdx];
-					const int32 CardBY = Start.Y + NDY[BIdx];
+					const int32 CardAX = Start.X + SeinNeighborDX[AIdx];
+					const int32 CardAY = Start.Y + SeinNeighborDY[AIdx];
+					const int32 CardBX = Start.X + SeinNeighborDX[BIdx];
+					const int32 CardBY = Start.Y + SeinNeighborDY[BIdx];
 					if (IsValidCoord(CardAX, CardAY) && IsValidCoord(CardBX, CardBY))
 					{
 						const int32 CardAWD = GetEffectiveWD(CardAX, CardAY, RequiredClearance, Scratch);
@@ -1669,9 +1800,8 @@ TArray<FIntPoint> USeinNavigationAStar::AStarSearch(FIntPoint Start, FIntPoint E
 			Start.X, Start.Y, StartWD, EffWD0, RequiredClearance,
 			RequiredFromStart, StartConn, *NeighborReport);
 	}
-
-	return Reconstruct(BestCellIdx);
 }
+#endif // !UE_BUILD_SHIPPING
 
 // ============================================================================
 // Path smoothing (line-of-sight string-pull)
@@ -1682,59 +1812,38 @@ bool USeinNavigationAStar::HasLineOfSight(int32 X0, int32 Y0, int32 X1, int32 Y1
 	// Bresenham supercover with connectivity gate — the smoother must honor the
 	// same rules A* uses, otherwise a path that A* carefully routed around an
 	// obstacle gets collapsed into a straight line that walks through
-	// walkable-but-disconnected cells (e.g., across a cube footprint).
-	int32 DX = FMath::Abs(X1 - X0);
-	int32 DY = FMath::Abs(Y1 - Y0);
-	int32 SX = (X0 < X1) ? 1 : -1;
-	int32 SY = (Y0 < Y1) ? 1 : -1;
-	int32 Err = DX - DY;
-
-	int32 X = X0, Y = Y0;
+	// walkable-but-disconnected cells (e.g., across a cube footprint). Walks the
+	// line via the shared WalkGridLine primitive; the per-cell + per-step
+	// predicates below carry the exact gates the hand-rolled loop did.
 	bool bIsAnchor = true;
 
-	while (true)
-	{
-		if (!IsCellPassableForPath(X, Y, Scratch)) return false;
-
-		// Clearance gate. Reject lines that pass through any cell whose
-		// WallDistance is below the requested clearance. The anchor cell
-		// (X0, Y0) is exempt because the unit may legitimately START in a
-		// low-clearance cell — we still need smoothing to find a line OUT.
-		// Without this gate, BuildSmoothedPath collapses A* corner detours
-		// into straight segments that hug wall edges; PushWaypointsAwayFromWalls
-		// then only fixes endpoint waypoints, leaving segments grazing walls.
-		// Effective WD (static + dyn blocker) — same gate semantics as A*.
-		// Smoother won't collapse segments past dynamic blockers either.
-		if (!bIsAnchor && RequiredClearance > 0)
+	const ESeinGridWalk Walk = WalkGridLine(X0, Y0, X1, Y1,
+		[&](int32 X, int32 Y) -> bool
 		{
-			const int32 WD = GetEffectiveWD(X, Y, RequiredClearance, Scratch);
-			if (WD < RequiredClearance) return false;
-		}
-		bIsAnchor = false;
+			if (!IsCellPassableForPath(X, Y, Scratch)) return false;
 
-		if (X == X1 && Y == Y1) return true;
-
-		int32 NextX = X, NextY = Y;
-		const int32 E2 = 2 * Err;
-		if (E2 > -DY) { Err -= DY; NextX += SX; }
-		if (E2 < DX)  { Err += DX; NextY += SY; }
-
-		// Connectivity gate on the step about to be taken. Map the (dx, dy)
-		// direction to the 8-neighbor bitmask index used at bake time.
-		const int32 StepDX = NextX - X;
-		const int32 StepDY = NextY - Y;
-		int32 DirIdx = -1;
-		if (StepDX ==  1 && StepDY ==  0) DirIdx = 0;
-		else if (StepDX == -1 && StepDY ==  0) DirIdx = 1;
-		else if (StepDX ==  0 && StepDY ==  1) DirIdx = 2;
-		else if (StepDX ==  0 && StepDY == -1) DirIdx = 3;
-		else if (StepDX ==  1 && StepDY ==  1) DirIdx = 4;
-		else if (StepDX ==  1 && StepDY == -1) DirIdx = 5;
-		else if (StepDX == -1 && StepDY ==  1) DirIdx = 6;
-		else if (StepDX == -1 && StepDY == -1) DirIdx = 7;
-
-		if (DirIdx >= 0)
+			// Clearance gate. Reject lines that pass through any cell whose
+			// WallDistance is below the requested clearance. The anchor cell
+			// (X0, Y0) is exempt because the unit may legitimately START in a
+			// low-clearance cell — we still need smoothing to find a line OUT.
+			// Without this gate, BuildSmoothedPath collapses A* corner detours
+			// into straight segments that hug wall edges; PushWaypointsAwayFromWalls
+			// then only fixes endpoint waypoints, leaving segments grazing walls.
+			// Effective WD (static + dyn blocker) — same gate semantics as A*.
+			// Smoother won't collapse segments past dynamic blockers either.
+			if (!bIsAnchor && RequiredClearance > 0)
+			{
+				const int32 WD = GetEffectiveWD(X, Y, RequiredClearance, Scratch);
+				if (WD < RequiredClearance) return false;
+			}
+			bIsAnchor = false;
+			return true;
+		},
+		[&](int32 X, int32 Y, int32 /*NextX*/, int32 /*NextY*/, int32 DirIdx) -> bool
 		{
+			// Connectivity gate on the step about to be taken (DirIdx already
+			// mapped from the (dx,dy) step by WalkGridLine).
+			if (DirIdx < 0) return true;
 			const uint8 Conn = CellConnections[CellIndex(X, Y)];
 			if ((Conn & (1 << DirIdx)) == 0) return false;
 			// Diagonal anti-squeeze — mirrors A*'s rule. The diagonal
@@ -1747,17 +1856,14 @@ bool USeinNavigationAStar::HasLineOfSight(int32 X0, int32 Y0, int32 X1, int32 Y1
 			// red-blocked cells at platform edges.
 			if (DirIdx >= 4)
 			{
-				static const uint8 CardinalA[4] = { 0, 0, 1, 1 };
-				static const uint8 CardinalB[4] = { 2, 3, 2, 3 };
-				const uint8 AIdx = CardinalA[DirIdx - 4];
-				const uint8 BIdx = CardinalB[DirIdx - 4];
+				const uint8 AIdx = SeinDiagCardinalA[DirIdx - 4];
+				const uint8 BIdx = SeinDiagCardinalB[DirIdx - 4];
 				if ((Conn & (1 << AIdx)) == 0 || (Conn & (1 << BIdx)) == 0) return false;
 			}
-		}
+			return true;
+		});
 
-		X = NextX;
-		Y = NextY;
-	}
+	return Walk == ESeinGridWalk::ReachedEnd;
 }
 
 bool USeinNavigationAStar::NavRaycast(const FFixedVector& From, const FFixedVector& To, FFixedVector& OutHitPoint) const
@@ -1774,69 +1880,45 @@ bool USeinNavigationAStar::NavRaycast(const FFixedVector& From, const FFixedVect
 	// Bresenham supercover with the SAME static passability + connectivity gates A* uses
 	// (no dynamic-blocker overlay — this is a standalone query, not inside a FindPath). On
 	// the first blocked cell / non-traversable step, report that cell's center and return true.
-	int32 DX = FMath::Abs(X1 - X0);
-	int32 DY = FMath::Abs(Y1 - Y0);
-	int32 SX = (X0 < X1) ? 1 : -1;
-	int32 SY = (Y0 < Y1) ? 1 : -1;
-	int32 Err = DX - DY;
-
-	int32 X = X0, Y = Y0;
-	while (true)
-	{
-		if (!IsCellPassable(X, Y))
+	// Walks via the shared WalkGridLine primitive; the predicates carry the gates and stash
+	// the hit point on abort. ReachedEnd ⇒ clear line (false).
+	const ESeinGridWalk Walk = WalkGridLine(X0, Y0, X1, Y1,
+		[&](int32 X, int32 Y) -> bool
 		{
-			OutHitPoint = GridToWorld(X, Y);
+			if (!IsCellPassable(X, Y))
+			{
+				OutHitPoint = GridToWorld(X, Y);
+				return false; // blocked cell — stop, hit recorded
+			}
 			return true;
-		}
-		if (X == X1 && Y == Y1)
+		},
+		[&](int32 X, int32 Y, int32 NextX, int32 NextY, int32 DirIdx) -> bool
 		{
-			return false; // reached the end with no block
-		}
-
-		int32 NextX = X, NextY = Y;
-		const int32 E2 = 2 * Err;
-		if (E2 > -DY) { Err -= DY; NextX += SX; }
-		if (E2 <  DX) { Err += DX; NextY += SY; }
-
-		// Connectivity gate on the step (mirrors HasLineOfSight): a non-connected edge,
-		// or a diagonal squeeze, means the line crosses a slope/step/wall boundary.
-		const int32 StepDX = NextX - X;
-		const int32 StepDY = NextY - Y;
-		int32 DirIdx = -1;
-		if      (StepDX ==  1 && StepDY ==  0) DirIdx = 0;
-		else if (StepDX == -1 && StepDY ==  0) DirIdx = 1;
-		else if (StepDX ==  0 && StepDY ==  1) DirIdx = 2;
-		else if (StepDX ==  0 && StepDY == -1) DirIdx = 3;
-		else if (StepDX ==  1 && StepDY ==  1) DirIdx = 4;
-		else if (StepDX ==  1 && StepDY == -1) DirIdx = 5;
-		else if (StepDX == -1 && StepDY ==  1) DirIdx = 6;
-		else if (StepDX == -1 && StepDY == -1) DirIdx = 7;
-
-		if (DirIdx >= 0)
-		{
+			// Connectivity gate on the step (mirrors HasLineOfSight): a non-connected edge,
+			// or a diagonal squeeze, means the line crosses a slope/step/wall boundary.
+			if (DirIdx < 0) return true;
 			const uint8 Conn = CellConnections[CellIndex(X, Y)];
 			if ((Conn & (1 << DirIdx)) == 0)
 			{
 				OutHitPoint = GridToWorld(NextX, NextY);
-				return true;
+				return false;
 			}
 			if (DirIdx >= 4)
 			{
-				static const uint8 CardinalA[4] = { 0, 0, 1, 1 };
-				static const uint8 CardinalB[4] = { 2, 3, 2, 3 };
-				const uint8 AIdx = CardinalA[DirIdx - 4];
-				const uint8 BIdx = CardinalB[DirIdx - 4];
+				const uint8 AIdx = SeinDiagCardinalA[DirIdx - 4];
+				const uint8 BIdx = SeinDiagCardinalB[DirIdx - 4];
 				if ((Conn & (1 << AIdx)) == 0 || (Conn & (1 << BIdx)) == 0)
 				{
 					OutHitPoint = GridToWorld(NextX, NextY);
-					return true;
+					return false;
 				}
 			}
-		}
+			return true;
+		});
 
-		X = NextX;
-		Y = NextY;
-	}
+	// AbortedAtCell / AbortedAtStep ⇒ hit (OutHitPoint set in the predicate);
+	// ReachedEnd ⇒ reached the end with no block.
+	return Walk != ESeinGridWalk::ReachedEnd;
 }
 
 void USeinNavigationAStar::BuildSmoothedPath(const TArray<FIntPoint>& CellPath, FSeinPath& OutPath, FAStarScratch& Scratch, int32 RequiredClearance) const
@@ -1888,12 +1970,47 @@ void USeinNavigationAStar::BuildSmoothedPath(const TArray<FIntPoint>& CellPath, 
 //                  by all shipped movement modes and as a building block by any
 //                  vehicle-aware nav subclass.
 //
-//   FindPath     — Public entry point. Currently calls FindCellPath then
-//                  PushWaypointsAwayFromWalls. (A kinematic curve fitter —
-//                  arc / Reeds-Shepp segments off MinTurnRadius — is NOT built;
-//                  every emitted segment is Straight. If you arrived here from a
-//                  FitVehicleCurve/Dubins comment elsewhere, it never shipped.)
+//   FindPath     — Public entry point. Calls FindCellPath then
+//                  PushWaypointsAwayFromWalls. Every emitted segment is Straight.
 // ============================================================================
+
+int32 USeinNavigationAStar::ComputeRequiredClearance(FFixedPoint FootprintRadius, int32 WallPaddingCells) const
+{
+	// Single source of truth for the configuration-space clearance threshold,
+	// shared by the A* C-space gate (FindCellPathInternal) and the wall-push pass
+	// (PushWaypointsAwayFromWalls):
+	//
+	//   Required = ceil(FootprintRadius / CellSize + 0.5) + WallPaddingCells
+	//
+	// The `+ 0.5` accounts for the half-cell distance between a unit's CENTER
+	// (positioned at cell-center) and the nearest wall EDGE (cell border).
+	// Without it the formula picks one cell less than the body actually needs —
+	// e.g. for FootprintRadius=30 and CellSize=50, `ceil(0.6)=1` says "unit
+	// center in cells with WD≥1," but at WD=1 the wall edge is only 25 cm from
+	// the unit center while the body extends 30 cm (clips by 5 cm). With +0.5,
+	// `ceil(1.1)=2` → cells with WD≥2 → wall edge 75 cm away → 30 cm body fits.
+	// Geometrically: (Required − 0.5) × CellSize ≥ FootprintRadius.
+	//
+	// Capped at the WallDistance BFS saturation cap — beyond it the field can't
+	// distinguish, so the cap becomes the effective ceiling.
+	if (CellSize <= FFixedPoint::Zero) return 0;
+
+	int32 FootprintCells = 0;
+	if (FootprintRadius > FFixedPoint::Zero)
+	{
+		// Ratio = R/CS + 0.5, then deterministic fixed-point ceil (was a
+		// non-deterministic ToFloat()+0.999f).
+		const FFixedPoint Ratio = FootprintRadius / CellSize + FFixedPoint::Half;
+		FootprintCells = Ratio.CeilToInt();
+	}
+
+	int32 Required = FootprintCells + WallPaddingCells;
+	if (Required > static_cast<int32>(WallDistanceCap))
+	{
+		Required = WallDistanceCap;
+	}
+	return Required;
+}
 
 bool USeinNavigationAStar::FindCellPath(const FSeinPathRequest& Request, FSeinPath& OutPath) const
 {
@@ -2051,46 +2168,14 @@ bool USeinNavigationAStar::FindCellPathInternal(const FSeinPathRequest& Request,
 	// long-range pathfind; A* returns a best-effort partial if the cap is hit.
 	const int32 MaxIters = (Request.AgentMaxSearchNodes > 0) ? Request.AgentMaxSearchNodes : DefaultMaxIters;
 
-	// Compute the per-request clearance threshold for configuration-space A*.
-	// Same formula as PushWaypointsAwayFromWalls (single source of truth):
-	//
-	//   Required = ceil(FootprintRadius / CellSize + 0.5) + WallPaddingCells
-	//
-	// The `+ 0.5` accounts for the half-cell distance between a unit's CENTER
-	// (positioned at cell-center) and the nearest wall EDGE (cell border).
-	// Without it, the formula picked one cell less than the body actually
-	// needs — e.g. for FootprintRadius=30 and CellSize=50, `ceil(0.6)=1` says
-	// "unit center in cells with WD≥1," but at WD=1 the wall edge is only
-	// 25 cm from the unit center while the body extends 30 cm. Body clips
-	// wall by 5 cm. With the +0.5, `ceil(1.1)=2` → cells with WD≥2 → wall
-	// edge 75 cm away → 30 cm body fits with 45 cm of slack.
-	//
-	// Geometrically: (Required − 0.5) × CellSize ≥ FootprintRadius.
-	//
-	// Capped at the WallDistance BFS saturation cap — beyond it the field
-	// can't distinguish, so the cap becomes the effective ceiling.
-	//
-	// This value drives BOTH A* expansion (only cells with enough WallDistance
-	// are reachable, with a strict-improvement escape from too-tight starts)
-	// AND HasLineOfSight clearance (smoothed segments stay clear). The result
-	// is that A* topology itself is footprint-correct — the unit's body fits
-	// at every cell on the path, not just at the waypoints.
-	int32 RequiredClearance = 0;
-	if (CellSize > FFixedPoint::Zero)
-	{
-		int32 FootprintCells = 0;
-		if (Request.AgentFootprintRadius > FFixedPoint::Zero)
-		{
-			// Ratio = R/CS + 0.5, then deterministic fixed-point ceil.
-			const FFixedPoint Ratio = Request.AgentFootprintRadius / CellSize + FFixedPoint::Half;
-			FootprintCells = Ratio.CeilToInt();   // deterministic ceil (was a non-deterministic ToFloat()+0.999f)
-		}
-		RequiredClearance = FootprintCells + Request.AgentWallPaddingCells;
-		if (RequiredClearance > static_cast<int32>(WallDistanceCap))
-		{
-			RequiredClearance = WallDistanceCap;
-		}
-	}
+	// Per-request clearance threshold for configuration-space A* — see
+	// ComputeRequiredClearance for the formula + geometric derivation (single
+	// source of truth, shared with PushWaypointsAwayFromWalls). This value drives
+	// BOTH A* expansion (only cells with enough WallDistance are reachable, with a
+	// strict-improvement escape from too-tight starts) AND HasLineOfSight clearance
+	// (smoothed segments stay clear), so A* topology itself is footprint-correct —
+	// the unit's body fits at every cell on the path, not just at the waypoints.
+	const int32 RequiredClearance = ComputeRequiredClearance(Request.AgentFootprintRadius, Request.AgentWallPaddingCells);
 
 	// A* explores the full reachable region from Start (within configuration
 	// space) and tracks the lowest-H cell visited. Goal reachable through
@@ -2107,8 +2192,12 @@ bool USeinNavigationAStar::FindCellPathInternal(const FSeinPathRequest& Request,
 	// So FindPath itself stays permissive: MoveToAction's contract is to get
 	// somewhere sensible along the way to the click.
 	bool bPartial = false;
-	TArray<FIntPoint> CellPath = AStarSearch(FIntPoint(SX, SY), FIntPoint(EX, EY), bPartial,
+	AStarSearch(FIntPoint(SX, SY), FIntPoint(EX, EY), bPartial,
 		HeuristicWeight, MaxIters, RequiredClearance, Scratch);
+	// AStarSearch fills the pooled Scratch.CellPath in place (no by-value return).
+	// Alias it for the smoothing + diagnostics below; the buffer's lifetime is the
+	// scratch's, so the const-ref stays valid for the rest of this call.
+	const TArray<FIntPoint>& CellPath = Scratch.CellPath;
 
 	if (CellPath.Num() == 0)
 	{
@@ -2132,68 +2221,13 @@ bool USeinNavigationAStar::FindCellPathInternal(const FSeinPathRequest& Request,
 	// resets it, so setting it earlier gets clobbered.
 	OutPath.bIsPartial = bPartial;
 
-	// Diagnostic: dump WD values along the cell-path AND smoothed waypoints.
-	// If any cell on either has WD < RequiredClearance (excluding the start
-	// cell which is exempt during escape), the gating broke somewhere. The
-	// MIN value across the path tells us the worst-case clearance — should
-	// be >= RequiredClearance for a properly-gated path.
-	{
-		int32 MinCellPathWD = INT32_MAX;
-		for (int32 i = 1; i < CellPath.Num(); ++i) // skip start cell (escape-exempt)
-		{
-			const int32 Idx = CellIndex(CellPath[i].X, CellPath[i].Y);
-			if (WallDistance.IsValidIndex(Idx))
-			{
-				const int32 WD = static_cast<int32>(WallDistance[Idx]);
-				if (WD < MinCellPathWD) MinCellPathWD = WD;
-			}
-		}
-		int32 MinWaypointWD = INT32_MAX;
-		for (int32 i = 0; i < OutPath.Waypoints.Num(); ++i)
-		{
-			int32 WX, WY;
-			if (WorldToGrid(OutPath.Waypoints[i], WX, WY))
-			{
-				const int32 Idx = CellIndex(WX, WY);
-				if (WallDistance.IsValidIndex(Idx))
-				{
-					const int32 WD = static_cast<int32>(WallDistance[Idx]);
-					if (WD < MinWaypointWD) MinWaypointWD = WD;
-				}
-			}
-		}
-		UE_LOG(LogSeinNavigationAStar, Verbose,
-			TEXT("FindCellPath: RequiredClearance=%d  CellPath: %d cells, min WD (excl. start) = %d   "
-			     "Smoothed waypoints: %d, min WD = %d   bPartial=%d"),
-			RequiredClearance, CellPath.Num(),
-			(MinCellPathWD == INT32_MAX ? -1 : MinCellPathWD),
-			OutPath.Waypoints.Num(),
-			(MinWaypointWD == INT32_MAX ? -1 : MinWaypointWD),
-			bPartial ? 1 : 0);
-
-		// Waypoint coord dump — lets the user compare planner output to the
-		// visualized path to confirm what they're seeing. Partial path end
-		// = best-H reachable cell (not the destination).
-		for (int32 i = 0; i < OutPath.Waypoints.Num(); ++i)
-		{
-			int32 WX = -1, WY = -1;
-			int32 WD = -1;
-			if (WorldToGrid(OutPath.Waypoints[i], WX, WY))
-			{
-				const int32 Idx = CellIndex(WX, WY);
-				if (WallDistance.IsValidIndex(Idx))
-				{
-					WD = static_cast<int32>(WallDistance[Idx]);
-				}
-			}
-			UE_LOG(LogSeinNavigationAStar, Verbose,
-				TEXT("    WP[%d] = (%.1f, %.1f) cell=(%d,%d) WD=%d"),
-				i,
-				OutPath.Waypoints[i].X.ToFloat(),
-				OutPath.Waypoints[i].Y.ToFloat(),
-				WX, WY, WD);
-		}
-	}
+#if !UE_BUILD_SHIPPING
+	// Per-waypoint Verbose clearance dump, extracted + gated (ReportCellPathClearance)
+	// so this host function reads at its real logic size and a release build with the
+	// channel off does no grid work. Pure observation. Runs on the smoothed OutPath
+	// BEFORE the final-waypoint snap below, matching the original placement.
+	ReportCellPathClearance(CellPath, OutPath, RequiredClearance, bPartial);
+#endif
 
 	// Replace last waypoint with the requested end position (within the cell)
 	// so unit actually arrives at the ordered point, not the cell center.
@@ -2281,47 +2315,53 @@ bool USeinNavigationAStar::FindPathInternal(const FSeinPathRequest& Request, FSe
 	}
 
 #if !UE_BUILD_SHIPPING
-	// Path-validation diagnostic. After all path-pipeline stages (A* topology,
-	// smoother LoS-pull, push, segment derivation), walk every waypoint-to-
-	// waypoint segment via HasLineOfSight(clearance=0) — passability + connection
-	// bits only. A failure here means SOMETHING in the pipeline emitted a
-	// segment the planner's own rules consider unreachable: chassis would try
-	// to drive through a wall along that line.
+	// Path-validation diagnostic moved into ReportUnreachableSegments so this host
+	// function reads at its real logic size. The reporter gates on Warning activity
+	// BEFORE doing any segment grid work (per-segment HasLineOfSight + Bresenham
+	// replay), so a release build with the channel off pays nothing.
+	ReportUnreachableSegments(Request, OutPath, Scratch);
+#endif
+
+	return OutPath.bIsValid;
+}
+
+#if !UE_BUILD_SHIPPING
+void USeinNavigationAStar::ReportUnreachableSegments(const FSeinPathRequest& Request, const FSeinPath& OutPath, FAStarScratch& Scratch) const
+{
+	// After all path-pipeline stages (A* topology, smoother LoS-pull, push, segment
+	// derivation), walk every waypoint-to-waypoint segment via HasLineOfSight
+	// (clearance=0) — passability + connection bits only. A failure here means
+	// SOMETHING in the pipeline emitted a segment the planner's own rules consider
+	// unreachable: chassis would try to drive through a wall along that line.
 	//
-	// On failure, manually replay the Bresenham trace (duplicating HasLineOfSight's
-	// loop) to log WHICH cell + step bit + diagonal anti-squeeze rejected the
-	// line. Pure observation — never modifies OutPath. Stripped in shipping.
+	// On failure, replay the Bresenham trace (via the shared WalkGridLine primitive)
+	// to log WHICH cell + step bit + diagonal anti-squeeze rejected the line. Pure
+	// observation — never modifies OutPath. Stripped in shipping; gated on Warning.
 	//
-	// This is the diagnostic of last resort for "occasional bad-path flash"
-	// bugs where the visible flash is too brief to step-through with a
-	// debugger but the log can capture the smoking gun.
+	// This is the diagnostic of last resort for "occasional bad-path flash" bugs
+	// where the visible flash is too brief to step-through with a debugger but the
+	// log can capture the smoking gun.
+	if (!UE_LOG_ACTIVE(LogSeinNavigationAStar, Warning)) return;
+
+	for (int32 i = 0; i + 1 < OutPath.Waypoints.Num(); ++i)
 	{
-		for (int32 i = 0; i + 1 < OutPath.Waypoints.Num(); ++i)
-		{
-			int32 AX, AY, BX, BY;
-			if (!WorldToGrid(OutPath.Waypoints[i], AX, AY)) continue;
-			if (!WorldToGrid(OutPath.Waypoints[i + 1], BX, BY)) continue;
-			if (AX == BX && AY == BY) continue; // zero-length segment, skip
+		int32 AX, AY, BX, BY;
+		if (!WorldToGrid(OutPath.Waypoints[i], AX, AY)) continue;
+		if (!WorldToGrid(OutPath.Waypoints[i + 1], BX, BY)) continue;
+		if (AX == BX && AY == BY) continue; // zero-length segment, skip
 
-			if (HasLineOfSight(AX, AY, BX, BY, Scratch, 0)) continue; // segment OK
+		if (HasLineOfSight(AX, AY, BX, BY, Scratch, 0)) continue; // segment OK
 
-			// Failed — replay the trace to find the rejection point.
-			FString Trace;
-			const int32 DX = FMath::Abs(BX - AX);
-			const int32 DY = FMath::Abs(BY - AY);
-			const int32 SX = (AX < BX) ? 1 : -1;
-			const int32 SY = (AY < BY) ? 1 : -1;
-			int32 Err = DX - DY;
-			int32 CurX = AX, CurY = AY;
-			int32 Step = 0;
-			const int32 MaxStep = (DX + DY + 4); // safety cap
-
-			while (Step < MaxStep)
+		// Failed — replay the trace via WalkGridLine to find the rejection point.
+		FString Trace;
+		int32 Step = 0;
+		const ESeinGridWalk Walk = WalkGridLine(AX, AY, BX, BY,
+			[&](int32 CurX, int32 CurY) -> bool
 			{
 				if (!IsValidCoord(CurX, CurY))
 				{
 					Trace += FString::Printf(TEXT("[%d] cell(%d,%d) OUT_OF_BOUNDS — REJECTED\n"), Step, CurX, CurY);
-					break;
+					return false;
 				}
 				if (!IsCellPassableForPath(CurX, CurY, Scratch))
 				{
@@ -2329,32 +2369,12 @@ bool USeinNavigationAStar::FindPathInternal(const FSeinPathRequest& Request, FSe
 					const uint8 CC = CellCost.IsValidIndex(CIdx) ? CellCost[CIdx] : 0;
 					Trace += FString::Printf(TEXT("[%d] cell(%d,%d) CellCost=%d IsCellPassableForPath=false — REJECTED\n"),
 						Step, CurX, CurY, CC);
-					break;
+					return false;
 				}
-				if (CurX == BX && CurY == BY)
-				{
-					Trace += FString::Printf(TEXT("[%d] cell(%d,%d) REACHED ENDPOINT — should have returned true; investigate\n"),
-						Step, CurX, CurY);
-					break;
-				}
-
-				int32 NextX = CurX, NextY = CurY;
-				const int32 E2 = 2 * Err;
-				if (E2 > -DY) { Err -= DY; NextX += SX; }
-				if (E2 < DX)  { Err += DX; NextY += SY; }
-
-				const int32 StepDX = NextX - CurX;
-				const int32 StepDY = NextY - CurY;
-				int32 DirIdx = -1;
-				if      (StepDX ==  1 && StepDY ==  0) DirIdx = 0;
-				else if (StepDX == -1 && StepDY ==  0) DirIdx = 1;
-				else if (StepDX ==  0 && StepDY ==  1) DirIdx = 2;
-				else if (StepDX ==  0 && StepDY == -1) DirIdx = 3;
-				else if (StepDX ==  1 && StepDY ==  1) DirIdx = 4;
-				else if (StepDX ==  1 && StepDY == -1) DirIdx = 5;
-				else if (StepDX == -1 && StepDY ==  1) DirIdx = 6;
-				else if (StepDX == -1 && StepDY == -1) DirIdx = 7;
-
+				return true;
+			},
+			[&](int32 CurX, int32 CurY, int32 NextX, int32 NextY, int32 DirIdx) -> bool
+			{
 				if (DirIdx >= 0)
 				{
 					const int32 CIdx = CellIndex(CurX, CurY);
@@ -2364,10 +2384,8 @@ bool USeinNavigationAStar::FindPathInternal(const FSeinPathRequest& Request, FSe
 					int32 ABit = -1, BBit = -1;
 					if (DirIdx >= 4)
 					{
-						static const uint8 CardinalA[4] = { 0, 0, 1, 1 };
-						static const uint8 CardinalB[4] = { 2, 3, 2, 3 };
-						ABit = CardinalA[DirIdx - 4];
-						BBit = CardinalB[DirIdx - 4];
+						ABit = SeinDiagCardinalA[DirIdx - 4];
+						BBit = SeinDiagCardinalB[DirIdx - 4];
 						bDiagOk = (CC & (1 << ABit)) != 0 && (CC & (1 << BBit)) != 0;
 					}
 					Trace += FString::Printf(
@@ -2377,32 +2395,99 @@ bool USeinNavigationAStar::FindPathInternal(const FSeinPathRequest& Request, FSe
 					if (!bBitSet || !bDiagOk)
 					{
 						Trace += TEXT("    REJECTED HERE (step bit unset or diagonal squeeze)\n");
-						break;
+						return false;
 					}
 				}
-
-				CurX = NextX;
-				CurY = NextY;
 				++Step;
-			}
+				return true;
+			});
 
-			UE_LOG(LogSeinNavigationAStar, Warning,
-				TEXT("FindPath: emitted path has UNREACHABLE segment from "
-				     "WP[%d]=(%.1f,%.1f) cell=(%d,%d) to WP[%d]=(%.1f,%.1f) cell=(%d,%d) "
-				     "— chassis may try to drive through a wall along this line. "
-				     "Path total waypoints=%d, Request.End=(%.1f,%.1f), bIsPartial=%d. "
-				     "Bresenham trace:\n%s"),
-				i, OutPath.Waypoints[i].X.ToFloat(), OutPath.Waypoints[i].Y.ToFloat(), AX, AY,
-				i + 1, OutPath.Waypoints[i + 1].X.ToFloat(), OutPath.Waypoints[i + 1].Y.ToFloat(), BX, BY,
-				OutPath.Waypoints.Num(),
-				Request.End.X.ToFloat(), Request.End.Y.ToFloat(),
-				OutPath.bIsPartial ? 1 : 0, *Trace);
+		if (Walk == ESeinGridWalk::ReachedEnd)
+		{
+			Trace += FString::Printf(TEXT("[%d] cell(%d,%d) REACHED ENDPOINT — should have returned true; investigate\n"),
+				Step, BX, BY);
+		}
+
+		UE_LOG(LogSeinNavigationAStar, Warning,
+			TEXT("FindPath: emitted path has UNREACHABLE segment from "
+			     "WP[%d]=(%.1f,%.1f) cell=(%d,%d) to WP[%d]=(%.1f,%.1f) cell=(%d,%d) "
+			     "— chassis may try to drive through a wall along this line. "
+			     "Path total waypoints=%d, Request.End=(%.1f,%.1f), bIsPartial=%d. "
+			     "Bresenham trace:\n%s"),
+			i, OutPath.Waypoints[i].X.ToFloat(), OutPath.Waypoints[i].Y.ToFloat(), AX, AY,
+			i + 1, OutPath.Waypoints[i + 1].X.ToFloat(), OutPath.Waypoints[i + 1].Y.ToFloat(), BX, BY,
+			OutPath.Waypoints.Num(),
+			Request.End.X.ToFloat(), Request.End.Y.ToFloat(),
+			OutPath.bIsPartial ? 1 : 0, *Trace);
+	}
+}
+
+void USeinNavigationAStar::ReportCellPathClearance(const TArray<FIntPoint>& CellPath, const FSeinPath& OutPath,
+	int32 RequiredClearance, bool bPartial) const
+{
+	// Dump WD values along the cell-path AND smoothed waypoints. If any cell on
+	// either has WD < RequiredClearance (excluding the start cell, exempt during
+	// escape), the gating broke somewhere. The MIN value tells us the worst-case
+	// clearance — should be >= RequiredClearance for a properly-gated path. Gated
+	// on Verbose so the grid reads + formatting are skipped when the channel is off.
+	if (!UE_LOG_ACTIVE(LogSeinNavigationAStar, Verbose)) return;
+
+	int32 MinCellPathWD = INT32_MAX;
+	for (int32 i = 1; i < CellPath.Num(); ++i) // skip start cell (escape-exempt)
+	{
+		const int32 Idx = CellIndex(CellPath[i].X, CellPath[i].Y);
+		if (WallDistance.IsValidIndex(Idx))
+		{
+			const int32 WD = static_cast<int32>(WallDistance[Idx]);
+			if (WD < MinCellPathWD) MinCellPathWD = WD;
 		}
 	}
-#endif
+	int32 MinWaypointWD = INT32_MAX;
+	for (int32 i = 0; i < OutPath.Waypoints.Num(); ++i)
+	{
+		int32 WX, WY;
+		if (WorldToGrid(OutPath.Waypoints[i], WX, WY))
+		{
+			const int32 Idx = CellIndex(WX, WY);
+			if (WallDistance.IsValidIndex(Idx))
+			{
+				const int32 WD = static_cast<int32>(WallDistance[Idx]);
+				if (WD < MinWaypointWD) MinWaypointWD = WD;
+			}
+		}
+	}
+	UE_LOG(LogSeinNavigationAStar, Verbose,
+		TEXT("FindCellPath: RequiredClearance=%d  CellPath: %d cells, min WD (excl. start) = %d   "
+		     "Smoothed waypoints: %d, min WD = %d   bPartial=%d"),
+		RequiredClearance, CellPath.Num(),
+		(MinCellPathWD == INT32_MAX ? -1 : MinCellPathWD),
+		OutPath.Waypoints.Num(),
+		(MinWaypointWD == INT32_MAX ? -1 : MinWaypointWD),
+		bPartial ? 1 : 0);
 
-	return OutPath.bIsValid;
+	// Waypoint coord dump — lets the user compare planner output to the visualized
+	// path. Partial path end = best-H reachable cell (not the destination).
+	for (int32 i = 0; i < OutPath.Waypoints.Num(); ++i)
+	{
+		int32 WX = -1, WY = -1;
+		int32 WD = -1;
+		if (WorldToGrid(OutPath.Waypoints[i], WX, WY))
+		{
+			const int32 Idx = CellIndex(WX, WY);
+			if (WallDistance.IsValidIndex(Idx))
+			{
+				WD = static_cast<int32>(WallDistance[Idx]);
+			}
+		}
+		UE_LOG(LogSeinNavigationAStar, Verbose,
+			TEXT("    WP[%d] = (%.1f, %.1f) cell=(%d,%d) WD=%d"),
+			i,
+			OutPath.Waypoints[i].X.ToFloat(),
+			OutPath.Waypoints[i].Y.ToFloat(),
+			WX, WY, WD);
+	}
 }
+#endif // !UE_BUILD_SHIPPING
 
 void USeinNavigationAStar::RunPathBatch(const TArray<FSeinPathRequest>& Requests, TArray<FSeinPath>& OutResults) const
 {
@@ -2426,8 +2511,8 @@ void USeinNavigationAStar::RunPathBatch(const TArray<FSeinPathRequest>& Requests
 	// (never shared concurrently), so the searches run race-free. Each FindPathInternal
 	// is a pure function of (request, immutable grid) — the scratch is only workspace,
 	// reset per search by the generation pattern — so every OutResults[i] is identical
-	// to the serial path regardless of thread count or scheduling. This is BAR's
-	// per-thread searchThreadData model; determinism is by construction.
+	// to the serial path regardless of thread count or scheduling. This is the
+	// standard per-thread search-workspace model; determinism is by construction.
 #if !UE_BUILD_SHIPPING
 	SeinSetInParallelSection(true);
 #endif
@@ -2451,32 +2536,15 @@ void USeinNavigationAStar::PushWaypointsAwayFromWalls(
 	if (WallDistance.Num() != Width * Height) return; // asset not loaded
 	if (CellSize <= FFixedPoint::Zero) return;
 
-	// Footprint contribution in whole cells. Formula matches FindCellPath's
-	// configuration-space threshold (single source of truth):
-	//   Required = ceil(R / CS + 0.5) + WallPadding
-	// The `+0.5` accounts for the half-cell distance from a cell-center
-	// waypoint to the wall edge. Without it the body clips walls by up to
-	// CellSize/2 even when the WallDistance check "passes." See the comment
-	// in FindCellPath for the full geometric derivation.
-	int32 FootprintCells = 0;
-	if (AgentFootprintRadius > FFixedPoint::Zero)
-	{
-		const FFixedPoint Ratio = AgentFootprintRadius / CellSize + FFixedPoint::Half;
-		FootprintCells = Ratio.CeilToInt();   // deterministic ceil (was a non-deterministic ToFloat()+0.999f)
-	}
-
-	int32 Required = FootprintCells + WallPaddingCells;
+	// Required clearance in whole cells — single source of truth shared with
+	// FindCellPathInternal's A* C-space gate (ComputeRequiredClearance):
+	//   Required = ceil(R / CS + 0.5) + WallPadding, capped at WallDistanceCap.
+	// The `+0.5` accounts for the half-cell distance from a cell-center waypoint
+	// to the wall edge; the cap matches the WallDistance BFS saturation so the
+	// gradient walk's "cap == cap" stall lands on the same answer. See the
+	// comment in FindCellPath for the full geometric derivation.
+	const int32 Required = ComputeRequiredClearance(AgentFootprintRadius, WallPaddingCells);
 	if (Required <= 0) return; // infantry-class agent with no padding — nothing to push
-
-	// Saturate at the BFS cap. Beyond it the WallDistance field reads as the
-	// cap everywhere far from walls, so the gradient walk would terminate
-	// inside open space with a "cap == cap" stall — exactly the same answer
-	// as if we'd capped here. Capping explicitly also keeps the step budget
-	// bounded.
-	if (Required > static_cast<int32>(WallDistanceCap))
-	{
-		Required = WallDistanceCap;
-	}
 
 	// Per-waypoint step budget. The gradient walk takes at most ~Required
 	// strictly-improving steps before WallDistance reaches Required, plus a
@@ -2485,8 +2553,9 @@ void USeinNavigationAStar::PushWaypointsAwayFromWalls(
 	// improves" check terminates earlier in practice.
 	const int32 MaxStepsPerWaypoint = Required * 2;
 
-	static const int32 NeighborDX[8] = { 1, -1,  0,  0,  1,  1, -1, -1 };
-	static const int32 NeighborDY[8] = { 0,  0,  1, -1,  1, -1,  1, -1 };
+	// Shared 8-neighbor offset tables (file-local SeinNeighbor* above).
+	const int32 (&NeighborDX)[8] = SeinNeighborDX;
+	const int32 (&NeighborDY)[8] = SeinNeighborDY;
 
 	// The destination waypoint is pushed alongside the interior ones. Orders
 	// issued adjacent to walls produce stop positions in open space rather
@@ -2607,9 +2676,8 @@ void USeinNavigationAStar::PushWaypointsAwayFromWalls(
 	if (PushedCount > 0)
 	{
 		UE_LOG(LogSeinNavigationAStar, Verbose,
-			TEXT("PushWaypointsAwayFromWalls: Footprint=%.1f (=%d cells) + Padding=%d → Required=%d cells, pushed %d/%d waypoints"),
+			TEXT("PushWaypointsAwayFromWalls: Footprint=%.1f + Padding=%d → Required=%d cells, pushed %d/%d waypoints"),
 			AgentFootprintRadius.ToFloat(),
-			FootprintCells,
 			WallPaddingCells,
 			Required,
 			PushedCount,
@@ -2946,50 +3014,33 @@ void USeinNavigationAStar::CollectDebugPathCells(
 		OutRemainingCells.Add(CellCenterFVec(X, Y));
 	};
 
+	// Plain Bresenham fill (no connectivity gate — purely visual): visit every
+	// cell the line crosses via the shared WalkGridLine primitive.
 	auto Rasterize = [&](int32 X0, int32 Y0, int32 X1, int32 Y1)
 	{
-		const int32 DX = FMath::Abs(X1 - X0);
-		const int32 DY = FMath::Abs(Y1 - Y0);
-		const int32 SX = (X0 < X1) ? 1 : -1;
-		const int32 SY = (Y0 < Y1) ? 1 : -1;
-		int32 Err = DX - DY;
-		int32 X = X0, Y = Y0;
-		for (;;)
-		{
-			VisitCell(X, Y);
-			if (X == X1 && Y == Y1) return;
-			const int32 E2 = 2 * Err;
-			if (E2 > -DY) { Err -= DY; X += SX; }
-			if (E2 < DX)  { Err += DX; Y += SY; }
-		}
+		WalkGridLine(X0, Y0, X1, Y1,
+			[&](int32 X, int32 Y) { VisitCell(X, Y); return true; },
+			[](int32, int32, int32, int32, int32) { return true; });
 	};
 
-	// Start from the agent's current cell (or the current waypoint if the
-	// agent has drifted out of bounds), then walk through every remaining
-	// waypoint. Bresenham fills in all grid cells the line segments cross.
-	int32 AgentX, AgentY;
-	const bool bAgentInGrid = WorldToGrid(AgentPos, AgentX, AgentY);
-
+	// Rasterize the FULL planned A* route — every segment WP[0]→…→WP[last] — so this
+	// shows EXACTLY the path A* produced on the grid, INDEPENDENT of the follower's
+	// live index. The OLD behavior anchored the draw to the follower's
+	// CurrentWaypointIndex (and the agent), so a follower that skipped waypoints drew a
+	// straight line to a FAR waypoint — masking a STEERING bug as a bad nav path. That's
+	// exactly how the waypoint-advance bug hid: the corrupted index made both this and
+	// the line overlay collapse to "unit → destination" through a wall while A*'s real
+	// detour sat undrawn in the earlier waypoints. The unit's LIVE heading is drawn
+	// separately (agent→current-target line in the module viz), so a follower divergence
+	// now reads as that line cutting ACROSS this honest route.
+	(void)AgentPos;              // route is agent/index-independent now — see above
+	(void)CurrentWaypointIndex;
 	int32 PrevX = INT32_MIN, PrevY = INT32_MIN;
-	if (bAgentInGrid)
-	{
-		PrevX = AgentX;
-		PrevY = AgentY;
-	}
-	else if (WorldToGrid(Waypoints[CurrentWaypointIndex], PrevX, PrevY))
-	{
-		// fell back to current waypoint
-	}
-	else
-	{
-		return;
-	}
-
-	for (int32 i = CurrentWaypointIndex; i < Waypoints.Num(); ++i)
+	for (int32 i = 0; i < Waypoints.Num(); ++i)
 	{
 		int32 NX, NY;
-		if (!WorldToGrid(Waypoints[i], NX, NY)) break;
-		Rasterize(PrevX, PrevY, NX, NY);
+		if (!WorldToGrid(Waypoints[i], NX, NY)) continue;
+		if (PrevX != INT32_MIN) Rasterize(PrevX, PrevY, NX, NY);
 		PrevX = NX;
 		PrevY = NY;
 	}

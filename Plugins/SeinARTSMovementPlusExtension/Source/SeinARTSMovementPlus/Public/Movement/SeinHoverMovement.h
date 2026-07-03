@@ -35,36 +35,8 @@ class SEINARTSMOVEMENTPLUS_API USeinHoverMovement : public USeinMovement
 
 public:
 
-	USeinHoverMovement();
-
-	/** Preferred altitude offset above the cell surface (world units).
-	 *  Helicopter cruise heights are typically 100-300; gunships ~200,
-	 *  transport choppers ~150. Effective altitude is `max(CruiseAltitude,
-	 *  AltitudeClearanceThreshold)` — the floor protects against
-	 *  designer-mistuned cruise dropping the unit too close to obstacles.
-	 *
-	 *  NOTE: legacy class-level UPROPERTY, kept here for now. The current
-	 *  altitude lerp state (which persists across orders) lives on
-	 *  `FSeinHoverMovementData::Altitude` in the polymorphic per-class
-	 *  sub-data; this knob is its target. */
-	UPROPERTY(EditAnywhere, Category = "Hover", meta = (ClampMin = "0.0"))
-	FFixedPoint CruiseAltitude;
-
-	/** Hard minimum altitude offset above the cell surface (world units).
-	 *  Effective altitude floor — the unit will not descend below this even
-	 *  if `CruiseAltitude` is set lower. Default 100. */
-	UPROPERTY(EditAnywhere, Category = "Hover", meta = (ClampMin = "0.0"))
-	FFixedPoint AltitudeClearanceThreshold;
-
-	/** Vertical climb / descent rate (world units per second). Smoothly
-	 *  closes the gap between current Altitude and target altitude. */
-	UPROPERTY(EditAnywhere, Category = "Hover", meta = (ClampMin = "0.0"))
-	FFixedPoint AltitudeChangeRate;
-
-	/** Look-ahead distance along the (straight-line) path for the steering
-	 *  carrot. Short = nimble; long = ponderous. */
-	UPROPERTY(EditAnywhere, Category = "Hover", meta = (ClampMin = "0.0"))
-	FFixedPoint LookAheadDistance;
+	// All Hover tuning lives in FSeinHoverMovementData (the MovementClassData sub-data) — no
+	// class-level tuning UPROPERTYs, matching the Wheeled/Tracked exemplar. Normalized 2026-07-02.
 
 	virtual bool BypassPathfinding() const override { return true; }
 	virtual bool QueryReferenceZ(class USeinNavigation* Nav, const FFixedVector& WorldPos, FFixedPoint& OutZ) const override;
@@ -81,4 +53,8 @@ public:
 	 *  `FSeinHoverMovementData::Altitude` (the lerped runtime altitude
 	 *  written by Tick) out of the polymorphic sub-data. */
 	virtual FFixedPoint GetAltitude(const FSeinMovementComponent* MovementData) const override;
+
+	/** Braking rate for the impl-agnostic idle coast + arrival-imminent estimate — reads
+	 *  Deceleration out of the unwrapped FSeinHoverMovementData sub-data. */
+	virtual FFixedPoint GetDeceleration(const FSeinMovementComponent* MovementData) const override;
 };

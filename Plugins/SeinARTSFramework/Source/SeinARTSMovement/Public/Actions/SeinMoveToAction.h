@@ -117,72 +117,16 @@ private:
 	 *  path. Reset on every successful repath. */
 	int32 ConsecutiveRepathFailures = 0;
 
-	/** Escape-nudge fallback state. When the chassis ends up in a position
-	 *  A* can't expand from (`Path.bIsPartial && Waypoints.Num() == 1`, or
-	 *  repeated repath failures), we override `Path` with a single waypoint
-	 *  pointing at the highest-WD passable neighbor cell and let the normal
-	 *  carrot/steering pipeline drive the chassis toward it. Once the
-	 *  chassis reaches a cell with WD ≥ Required (back in C-space), or the
-	 *  escape timer expires without meaningful progress, we exit. Exit
-	 *  modes: success → force immediate repath; failure → `Stranded`.
-	 *
-	 *  `bInEscapeMode` true while the override is active. `EscapeTimer`
-	 *  counts seconds since escape entry. `EscapeStartPos` is the chassis
-	 *  position when we entered escape — compared against current pos to
-	 *  detect "isn't moving even with the nudge target set." */
-	bool bInEscapeMode = false;
-	FFixedPoint EscapeTimer = FFixedPoint::Zero;
-	FFixedVector EscapeStartPos = FFixedVector::ZeroVector;
-
-	/** Near-goal stall settle (failsafe). A unit can get pinned a footprint-width
-	 *  short of a final waypoint it can never physically occupy — a nav-reachable
-	 *  cell whose body footprint is blocked by an adjacent wall (the nav/collision
-	 *  seam). The movement's own arrival can't fire there: it's never within
-	 *  AcceptanceRadius, and the overshoot graceful-stop needs `heading AWAY` while
-	 *  a pinned unit heads straight INTO the obstacle. So it seeks that point
-	 *  forever — and for face-velocity movements (infantry weld facing to seek
-	 *  direction) "seek forever" renders as "spin in place forever."
-	 *
-	 *  This is the missing exit: once the agent is within `StallVicinityRadiusSq`
-	 *  of the final waypoint AND makes no further radial progress for
-	 *  `StallSettleDuration` (see TickAction), the move arrives — this spot is as
-	 *  close as the body can get. Class-agnostic (lives on the action, not a
-	 *  movement subclass, so it protects every mode) and complements the
-	 *  escape-nudge fallback above: escape handles stuck-at-START (can't plan from
-	 *  the start cell); this handles stuck-at-GOAL (plans + approaches fine, but
-	 *  can't physically finish).
-	 *
-	 *  `StallVicinityRadiusSq` is resolved once at first-tick setup from acceptance
-	 *  + footprint. `BestDistToFinalSq` is the closest planar distance² to the
-	 *  final waypoint reached within the current near-goal approach — a monotonic
-	 *  high-water mark, so jitter/orbit around the closest reachable point never
-	 *  resets the stall clock; only genuine fresh closing does. It re-arms (resets
-	 *  to the live distance) whenever the agent is OUTSIDE the vicinity, so a
-	 *  detour / repath / escape that moves it away measures a clean fresh approach.
-	 *  The "fresh closing" test runs in ACTUAL distance against `StallProgressBand`
-	 *  (~half a footprint, set at setup): the agent must close more than that band
-	 *  past its best to re-arm. (A squared additive epsilon was distance-dependent
-	 *  and vanished to sub-mm at band ranges, so jitter/creep re-armed forever and
-	 *  units shoved the goal endlessly.) `TimeStalledNearGoal` accumulates while
-	 *  near + not improving. */
-	FFixedPoint StallVicinityRadiusSq = FFixedPoint::Zero;
+	/** Near-goal stall failsafe. A unit pinned within a tight band of a final waypoint it cannot
+	 *  physically occupy (a nav-reachable cell whose body footprint is wall/crowd-blocked) never
+	 *  satisfies the harness arrival — it is never within AcceptanceRadius, and it heads INTO the
+	 *  obstacle so the overshoot guard (which needs "heading away") won't fire — so without this it
+	 *  would push forever. `BestDistToFinalSq` is the closest planar distance² reached this approach
+	 *  (a monotonic high-water, so jitter/orbit never resets the clock); `TimeStalledNearGoal` accrues
+	 *  while near + not closing. Once it stalls a short while inside the tight band, the move arrives —
+	 *  this is as near as the body fits. See TickAction. */
 	FFixedPoint BestDistToFinalSq = FFixedPoint::FromInt(1000000);
-	FFixedPoint StallProgressBand = FFixedPoint::Zero;
 	FFixedPoint TimeStalledNearGoal = FFixedPoint::Zero;
-
-	/** PILE-UP ARRIVAL. A unit near its destination that has stopped making
-	 *  progress (its stall clock has reached a short delay) AND is pressed against
-	 *  a neighbour which has come to REST between it and the goal has effectively
-	 *  arrived - it is only shoving the back of a settled crowd. The progress gate
-	 *  is what keeps a still-flowing unit from collapsing: a unit advancing toward
-	 *  the destination keeps closing, so its stall clock stays ~0 and it never
-	 *  qualifies - it flows in and fills the pack. Propagates the settle outward
-	 *  from the first unit to stop, so a whole pack rests in a quick ripple, and it
-	 *  is robust to loose / imperfect packing (it asks "are the units AHEAD
-	 *  stopped?"). Shares the crowd-sized `StallVicinityRadiusSq` band with the
-	 *  stall settle. `StallFootprintRadius` is the unit's collision radius, cached
-	 *  at setup to size the neighbour query. */
-	FFixedPoint StallFootprintRadius = FFixedPoint::Zero;
 
 	/** BORROWED reference to the entity's PERSISTENT movement instance,
 	 *  acquired on first tick from USeinMovementSubsystem's registry (CP2.1,

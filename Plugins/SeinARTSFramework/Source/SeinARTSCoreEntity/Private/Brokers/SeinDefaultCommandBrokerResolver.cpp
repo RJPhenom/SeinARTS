@@ -504,7 +504,7 @@ TArray<FFixedVector> USeinDefaultCommandBrokerResolver::ResolvePositions_Impleme
 	FFixedQuaternion Facing)
 {
 	// Framework-default geometry: a BLOB — every member shares the one (already
-	// nav-projected) anchor. The AoE/SC2/CoH model; the hard collision floor packs
+	// nav-projected) anchor. The mass-select single-destination model; the hard collision floor packs
 	// them into a no-overlap cluster on arrival. This is the fallback used when no
 	// USeinFormation is configured (DefaultFormationClass null). Real spread / shape
 	// is opt-in via a USeinFormation (Grid, Line, custom) selected through
@@ -545,6 +545,14 @@ USeinFormation* USeinDefaultCommandBrokerResolver::ResolveFormation(FGameplayTag
 				{
 					return GetMutableDefault<USeinFormation>(DefaultClass);
 				}
+			}
+			else
+			{
+				// DefaultFormation is None → no formation shape (WYSIWYG). Loose orders use the blob
+				// fallback below; that is a valid mode, so this is a gentle one-time nudge, not an
+				// error. The render-side preview path reaches here first; the log dedupes to once.
+				USeinARTSCoreSettings::ReportDisabledSystem(TEXT("Default Formation"),
+					TEXT("Loose move orders use the blob (no formation shape); set a Default Formation to enable shapes."), /*bHighSeverity*/ false);
 			}
 		}
 		return nullptr; // neither resolves → caller uses the blob ResolvePositions fallback

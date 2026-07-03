@@ -44,7 +44,7 @@ enum class ESeinFogVisibilityPolicy : uint8
 	 *  that appears in already-explored-but-currently-unseen fog (e.g. a
 	 *  building constructed in scouted territory you've since lost sight of)
 	 *  stays hidden until you genuinely see it. The canonical "you remember
-	 *  what you've seen" reveal (SC2 / AoE buildings). Contrast
+	 *  what you've seen" remembered-terrain reveal. Contrast
 	 *  VisibleOnceExplored, which reveals on terrain scouting alone. */
 	VisibleOnceSeen        UMETA(DisplayName = "Visible Once Seen"),
 

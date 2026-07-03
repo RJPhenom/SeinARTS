@@ -42,6 +42,18 @@ struct SEINARTSMOVEMENTPLUS_API FSeinTrackedMovementData : public FSeinComponent
 {
 	GENERATED_BODY()
 
+	/** Acceleration rate (world units per second²) — current speed ramps UP toward the target
+	 *  (feeds StepSpeedToward). Moved off the bare FSeinMovementComponent 2026-07-02. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
+		meta = (ClampMin = "0.0"))
+	FFixedPoint Acceleration = FFixedPoint::FromInt(750);
+
+	/** Deceleration rate (world units per second²) — current speed ramps DOWN, and the kinematic
+	 *  arrival-brake rate into the final waypoint. Typically >= Acceleration. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
+		meta = (ClampMin = "0.0"))
+	FFixedPoint Deceleration = FFixedPoint::FromInt(750);
+
 	/** Speed (cm/s) separating ARC mode (above) from PIVOT mode (at or below).
 	 *  Above PivotSpeed the chassis behaves like a wheeled vehicle — drives
 	 *  at full speed, yaw rotates at TurnRate, no stop-and-pivot. At or below
@@ -131,7 +143,9 @@ struct SEINARTSMOVEMENTPLUS_API FSeinTrackedMovementData : public FSeinComponent
 
 FORCEINLINE uint32 GetTypeHash(const FSeinTrackedMovementData& C)
 {
-	uint32 H = GetTypeHash(C.PivotSpeed);
+	uint32 H = GetTypeHash(C.Acceleration);
+	H = HashCombine(H, GetTypeHash(C.Deceleration));
+	H = HashCombine(H, GetTypeHash(C.PivotSpeed));
 	H = HashCombine(H, GetTypeHash(C.PivotAlignDot));
 	H = HashCombine(H, GetTypeHash(C.SharpTurnBrakeAngle));
 	H = HashCombine(H, GetTypeHash(C.SharpTurnBrakeStrength));

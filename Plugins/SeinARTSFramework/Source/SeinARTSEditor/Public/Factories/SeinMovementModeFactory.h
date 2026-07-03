@@ -2,11 +2,11 @@
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinMovementModeFactory.h
  * @brief   Content-Browser factory for a "SeinARTS Movement Mode" — a Blueprint
- *          pre-parented to USeinMovement, so the designer gets the RTS-default loop
- *          (USeinMovement::BP_Tick_Implementation) to build on and can override the
- *          Compute Steer / Compute Desired Speed hooks (Tier 1) or the whole Tick
- *          (Tier 2). Pair it with tuning variables + the Class-Defaults "Sync Tuning
- *          Struct" button to generate the matching UDS.
+ *          pre-parented to USeinMovement, so the designer gets the base ComputeMotion
+ *          policy to build on — override Compute Motion (Tier 1) to return a custom
+ *          desired velocity + facing, or override the whole Tick (Tier 2) to drive the
+ *          unit yourself with the Mover Handle toolkit. Pair it with tuning variables +
+ *          the Class-Defaults "Sync Tuning Struct" button to generate the matching UDS.
  *
  *          Auto-discovered (a bCreateNew UFactory needs no explicit registration). The
  *          parent class is resolved by path so the editor module keeps no link

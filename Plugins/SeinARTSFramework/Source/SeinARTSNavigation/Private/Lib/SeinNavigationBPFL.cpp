@@ -87,7 +87,12 @@ bool USeinNavigationBPFL::SeinIsPositionClear(const UObject* WorldContextObject,
 {
 	USeinNavigation* Nav = USeinNavigationSubsystem::GetNavigationForWorld(WorldContextObject);
 	if (!Nav) return false;
-	return Nav->IsWorldPositionClear(WorldPos, /*AgentNavLayerMask*/ 0);
+	// Match-all layer mask (0xFF) so EVERY dynamic blocker is considered, consistent
+	// with FSeinPathRequest's default mask. Mask 0 would AND to zero against every
+	// blocker's BlockedNavLayerMask and skip them all, wrongly reporting blocked
+	// cells as clear. This no-arg BP node has no agent context, so match-all is the
+	// correct conservative default.
+	return Nav->IsWorldPositionClear(WorldPos, /*AgentNavLayerMask*/ 0xFF);
 }
 
 FFixedPoint USeinNavigationBPFL::SeinGetCellSize(const UObject* WorldContextObject)

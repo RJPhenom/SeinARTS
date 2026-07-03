@@ -53,11 +53,21 @@
 class USeinWorldSubsystem;
 
 /**
- * Default collision resolver (Gauss-Seidel).
+ * Resolves collision for sim-side entities synchronously (on the game thread). Keeps solid
+ * bodies from ending a tick overlapping, and is the resolver selected out of the box.
  *
- * Runs after movement (PostTick) and before StateHash, so its separations are
- * part of the deterministic state snapshot. Uses the collision broadphase
- * (rebuilt PreTick) to find candidate neighbours in O(K).
+ * Uses GAUSS-SEIDEL relaxation: a fixed number of passes, each walking the movable colliders
+ * one at a time and pushing every overlapping Blocking pair apart along their shortest-
+ * separation (minimum-translation) axis. "Gauss-Seidel" means each body reads the latest
+ * mid-pass positions as the pass proceeds — a body already nudged this pass is seen in its
+ * moved spot by the bodies it meets later, so a dense pile settles in few passes; the trade-off
+ * is that those sequential reads keep the pass single-threaded. Candidate neighbours come from
+ * the collision broadphase (rebuilt each PreTick), so the cost stays roughly linear in the
+ * collider count. Pushes are mass-weighted (a heavier body barely yields to a lighter one;
+ * walls and statics are infinite-mass), and a hard-barrier gate refuses any push that would
+ * cross a baked wall or leave the grid edge. Runs after movement and before the state hash each
+ * tick, so its separations are part of the deterministic snapshot. For the multithreaded
+ * variant see Sein Collision Resolver (Parallel).
  */
 UCLASS(meta = (DisplayName = "Sein Collision Resolver (Default)"))
 class SEINARTSCOREENTITY_API USeinCollisionResolverDefault : public USeinCollisionResolver

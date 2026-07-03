@@ -16,24 +16,15 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinFlight, Log, All);
 
-USeinFlightMovement::USeinFlightMovement()
-	: CruiseAltitude(FFixedPoint::FromInt(600))
-	, AltitudeClearanceThreshold(FFixedPoint::FromInt(200))
-	, AltitudeChangeRate(FFixedPoint::FromInt(100))
-	, Wheelbase(FFixedPoint::FromInt(300))
-	// 60 deg (pi/3) max bank — wider than wheeled because aircraft can lean
-	// hard in turns.
-	, MaxSteerAngle(FFixedPoint::Pi / FFixedPoint::FromInt(3))
-	, SteerResponse(FFixedPoint::FromInt(2))
-	, LookAheadDistance(FFixedPoint::FromInt(500))
-	// 0.6 = 60% of MoveSpeed minimum. Loiter speed.
-	, MinSpeedRatio(FFixedPoint::FromInt(6) / FFixedPoint::FromInt(10))
-{
-}
-
 UScriptStruct* USeinFlightMovement::GetMovementDataStruct() const
 {
 	return FSeinFlyingMovementData::StaticStruct();
+}
+
+FFixedPoint USeinFlightMovement::GetDeceleration(const FSeinMovementComponent* MovementData) const
+{
+	const FSeinFlyingMovementData* Data = MovementData ? MovementData->MovementClassData.GetPtr<FSeinFlyingMovementData>() : nullptr;
+	return Data ? Data->Deceleration : FSeinFlyingMovementData().Deceleration;
 }
 
 FFixedPoint USeinFlightMovement::GetAltitude(const FSeinMovementComponent* MovementData) const
@@ -63,7 +54,10 @@ void USeinFlightMovement::OnMoveBegin(const FSeinMovementContext& Ctx)
 	// bump velocity magnitude to the loiter minimum immediately. A plane at
 	// 0 speed in mid-air would visually fall and the first-tick math would
 	// underflow.
-	const FFixedPoint MinSpeed = Ctx.MovementData->TopSpeed * MinSpeedRatio;
+	const FSeinFlyingMovementData DefaultsFlying;
+	const FSeinFlyingMovementData* FlyingPtr = Ctx.MovementData->MovementClassData.GetPtr<FSeinFlyingMovementData>();
+	const FSeinFlyingMovementData& FlyingData = FlyingPtr ? *FlyingPtr : DefaultsFlying;
+	const FFixedPoint MinSpeed = Ctx.MovementData->TopSpeed * FlyingData.MinSpeedRatio;
 	const FFixedPoint VelMag = Ctx.MovementData->Velocity.Size();
 	if (VelMag < MinSpeed)
 	{
@@ -78,6 +72,10 @@ bool USeinFlightMovement::Tick(const FSeinMovementContext& Ctx)
 
 	FSeinEntity& Entity = Ctx.Entity;
 	FSeinMovementComponent& MovementData = *Ctx.MovementData;
+	// Per-class tuning (accel/decel live here now, off the bare component). Defaults when unauthored.
+	const FSeinFlyingMovementData DefaultsFlying;
+	const FSeinFlyingMovementData* FlyingPtr = MovementData.MovementClassData.GetPtr<FSeinFlyingMovementData>();
+	const FSeinFlyingMovementData& FlyingData = FlyingPtr ? *FlyingPtr : DefaultsFlying;
 	const FSeinPath& Path = Ctx.Path;
 	int32& CurrentWaypointIndex = Ctx.CurrentWaypointIndex;
 	const FFixedPoint AcceptanceRadiusSq = Ctx.AcceptanceRadiusSq;
@@ -115,7 +113,7 @@ bool USeinFlightMovement::Tick(const FSeinMovementContext& Ctx)
 		{
 			// Don't zero velocity — leave at min loiter so the plane drifts
 			// past, ready for the next order with momentum.
-			const FFixedPoint MinSpeed = MovementData.TopSpeed * MinSpeedRatio;
+			const FFixedPoint MinSpeed = MovementData.TopSpeed * FlyingData.MinSpeedRatio;
 			const FFixedPoint CurMag = MovementData.Velocity.Size();
 			if (CurMag < MinSpeed)
 			{
@@ -126,8 +124,8 @@ bool USeinFlightMovement::Tick(const FSeinMovementContext& Ctx)
 	}
 
 	// Steering target on the polyline.
-	const FFixedPoint LookAhead = (LookAheadDistance > FFixedPoint::Zero)
-		? LookAheadDistance : FFixedPoint::FromInt(200);
+	const FFixedPoint LookAhead = (FlyingData.LookAheadDistance > FFixedPoint::Zero)
+		? FlyingData.LookAheadDistance : FFixedPoint::FromInt(200);
 	const FFixedVector LookAheadPoint = ResolveLookAheadPoint(AgentPos, Path, CurrentWaypointIndex, LookAhead);
 
 	FFixedVector ToTarget = LookAheadPoint - AgentPos;
@@ -141,12 +139,12 @@ bool USeinFlightMovement::Tick(const FSeinMovementContext& Ctx)
 	{
 		const FFixedPoint DesiredYaw = SeinMath::Atan2(ToTarget.Y, ToTarget.X);
 		const FFixedPoint YawErr = ShortestAngleDelta(CurrentYaw, DesiredYaw);
-		DesiredSteer = ClampFP(YawErr, -MaxSteerAngle, MaxSteerAngle);
+		DesiredSteer = ClampFP(YawErr, -FlyingData.MaxSteerAngle, FlyingData.MaxSteerAngle);
 	}
 
 	// Smooth bank toward desired.
 	{
-		FFixedPoint Alpha = SteerResponse * DeltaTime;
+		FFixedPoint Alpha = FlyingData.SteerResponse * DeltaTime;
 		if (Alpha < FFixedPoint::Zero) Alpha = FFixedPoint::Zero;
 		if (Alpha > FFixedPoint::One)  Alpha = FFixedPoint::One;
 		CurrentSteer = CurrentSteer + (DesiredSteer - CurrentSteer) * Alpha;
@@ -155,10 +153,10 @@ bool USeinFlightMovement::Tick(const FSeinMovementContext& Ctx)
 	// Bicycle yaw rate: omega = (v / L) * tan(delta). Capped by TurnRate
 	// as a safety lid on extreme combos.
 	FFixedPoint YawStep = FFixedPoint::Zero;
-	if (Wheelbase > FFixedPoint::One)
+	if (FlyingData.Wheelbase > FFixedPoint::One)
 	{
 		const FFixedPoint TanSteer = SeinMath::Tan(CurrentSteer);
-		const FFixedPoint YawRate = (CurrentSpeed / Wheelbase) * TanSteer;
+		const FFixedPoint YawRate = (CurrentSpeed / FlyingData.Wheelbase) * TanSteer;
 		const FFixedPoint MaxRate = MovementData.TurnRate;
 		const FFixedPoint ClampedRate = ClampFP(YawRate, -MaxRate, MaxRate);
 		YawStep = ClampedRate * DeltaTime;
@@ -168,10 +166,10 @@ bool USeinFlightMovement::Tick(const FSeinMovementContext& Ctx)
 
 	// Speed: target = MoveSpeed; floor = MoveSpeed * MinSpeedRatio.
 	// No kinematic arrival cap — planes don't slow on approach.
-	const FFixedPoint MinSpeed = MovementData.TopSpeed * MinSpeedRatio;
+	const FFixedPoint MinSpeed = MovementData.TopSpeed * FlyingData.MinSpeedRatio;
 	FFixedPoint TargetSpeed = MovementData.TopSpeed;
 	CurrentSpeed = StepSpeedToward(CurrentSpeed, TargetSpeed,
-		MovementData.Acceleration, MovementData.Deceleration, DeltaTime);
+		FlyingData.Acceleration, FlyingData.Deceleration, DeltaTime);
 	if (CurrentSpeed < MinSpeed) CurrentSpeed = MinSpeed;
 
 	// Translate along post-rotation forward.
@@ -185,12 +183,12 @@ bool USeinFlightMovement::Tick(const FSeinMovementContext& Ctx)
 	// Altitude: lerp toward max(cruise, clearance). Same shape as Hover —
 	// current altitude lives on FSeinFlyingMovementData so it persists
 	// across move orders.
-	const FFixedPoint TargetAltitude = (CruiseAltitude > AltitudeClearanceThreshold)
-		? CruiseAltitude : AltitudeClearanceThreshold;
+	const FFixedPoint TargetAltitude = (FlyingData.CruiseAltitude > FlyingData.AltitudeClearanceThreshold)
+		? FlyingData.CruiseAltitude : FlyingData.AltitudeClearanceThreshold;
 	FFixedPoint CurrentAltitude = FFixedPoint::Zero;
 	if (FSeinFlyingMovementData* FlightData = MovementData.MovementClassData.GetMutablePtr<FSeinFlyingMovementData>())
 	{
-		const FFixedPoint AltStep = AltitudeChangeRate * DeltaTime;
+		const FFixedPoint AltStep = FlyingData.AltitudeChangeRate * DeltaTime;
 		const FFixedPoint AltDelta = TargetAltitude - FlightData->Altitude;
 		if (AltDelta > AltStep)        FlightData->Altitude = FlightData->Altitude + AltStep;
 		else if (AltDelta < -AltStep)  FlightData->Altitude = FlightData->Altitude - AltStep;

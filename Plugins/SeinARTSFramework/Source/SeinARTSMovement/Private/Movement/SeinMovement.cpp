@@ -27,24 +27,135 @@
 #endif
 
 // ======================================================================================
-// BP-authoring seam (Movement_Mode_Authoring_Plan.md). Tick(Ctx) is the sealed sim entry;
-// it points a reusable handle at the live context and dispatches to the BP-overridable
-// BP_Tick. The default BP_Tick is the RTS integration loop (hoisted verbatim from the
-// former USeinBasicUnitMovement::Tick), with its two decisions delegated to the
-// ComputeDesiredSpeed / ComputeSteer hooks whose defaults reproduce the original inline
-// logic — so a BasicUnit-class unit stays BIT-IDENTICAL.
+// Steering seam (two-tier). The base Tick(Ctx) is the shared MECHANISM HARNESS: waypoint advance →
+// arrival (acceptance ring OR IsOvershootArrival) → the mode's ComputeMotion policy (desired
+// velocity + facing) → translate + nav-collision floor + ground snap + TurnRate-clamped turn +
+// slope tilt + velocity persist. Tier-1 modes (Basic / BasicUnit / Infantry, and BP-authored modes)
+// override ComputeMotion only. Tier-2 modes (the Movement+ vehicles) override Tick(Ctx) directly for
+// full control and never reach the harness or ComputeMotion.
 // ======================================================================================
 
 bool USeinMovement::Tick(const FSeinMovementContext& Ctx)
 {
-	if (!CachedHandle)
+	if (!Ctx.MovementData) return true;
+
+	FSeinEntity& Entity = Ctx.Entity;
+	FSeinMovementComponent& MovementData = *Ctx.MovementData;
+	const FSeinPath& Path = Ctx.Path;
+	int32& CurrentWaypointIndex = Ctx.CurrentWaypointIndex;
+	const FFixedPoint DeltaTime = Ctx.DeltaTime;
+	USeinNavigation* Nav = Ctx.Nav;
+
+	const int32 N = Path.Waypoints.Num();
+	if (N == 0) return true;
+
+	const FFixedVector PrePos  = Entity.Transform.GetLocation();
+	const FFixedVector FinalWp = Path.Waypoints[N - 1];
+
+	// MECHANISM: advance past any waypoint the unit has crossed/reached (dot-product crossover +
+	// distance fallback), so the policy always steers at a waypoint that is ahead of it.
 	{
-		CachedHandle = NewObject<USeinMoverHandle>(this);
+		const FFixedPoint OneStep = MovementData.TopSpeed * DeltaTime;
+		const FFixedPoint CloseRadius = (OneStep * FFixedPoint::Two > FFixedPoint::FromInt(50))
+			? OneStep * FFixedPoint::Two : FFixedPoint::FromInt(50);
+		AdvanceWaypointAlongPath(CurrentWaypointIndex, Path, PrePos, CloseRadius);
 	}
+
+	// MECHANISM: arrival. Within the acceptance ring, OR an overshoot (close + slow + heading away)
+	// — the graceful-stop guard that stops a unit orbiting a slot it can't quite land on.
+	{
+		FFixedVector ToFinal = FinalWp - PrePos;
+		ToFinal.Z = FFixedPoint::Zero;
+		const bool bWithinAcceptance = ToFinal.SizeSquared() <= Ctx.AcceptanceRadiusSq;
+		const FFixedPoint EntrySpeed        = MovementData.Velocity.Size();
+		const FFixedPoint VicinityRadiusSq  = Ctx.AcceptanceRadiusSq * FFixedPoint::FromInt(4);
+		const FFixedPoint OvershootSpeedCap = MovementData.TopSpeed / FFixedPoint::FromInt(3);
+		if (bWithinAcceptance || IsOvershootArrival(PrePos, FinalWp, Entity.Transform.Rotation,
+				EntrySpeed, VicinityRadiusSq, OvershootSpeedCap))
+		{
+			MovementData.Velocity = FFixedVector::ZeroVector;
+			return true;
+		}
+	}
+
+	// POLICY: the mode decides desired velocity + facing this tick.
+	if (!CachedHandle) { CachedHandle = NewObject<USeinMoverHandle>(this); }
 	CachedHandle->SetContext(&Ctx);
-	const bool bArrived = BP_Tick(CachedHandle);
+	const FSeinMotion Motion = ComputeMotion(CachedHandle);
 	CachedHandle->SetContext(nullptr);  // never let the borrowed context escape the dispatch
-	return bArrived;
+
+	// MECHANISM: translate by the desired velocity, clamped so we don't overshoot the current
+	// waypoint within one tick; then the hard nav-collision floor (respecting an authoritative
+	// cover-slot destination) and ground snap.
+	FFixedVector NewPos = PrePos;
+	{
+		FFixedVector Step(Motion.Velocity.X * DeltaTime, Motion.Velocity.Y * DeltaTime, FFixedPoint::Zero);
+		FFixedVector ToWp = Path.Waypoints[CurrentWaypointIndex] - PrePos;
+		ToWp.Z = FFixedPoint::Zero;
+		const FFixedPoint DistWp  = ToWp.Size();
+		const FFixedPoint StepLen = Step.Size();
+		if (StepLen > DistWp && StepLen > FFixedPoint::Epsilon)
+		{
+			const FFixedPoint Scale = DistWp / StepLen;
+			Step.X = Step.X * Scale;
+			Step.Y = Step.Y * Scale;
+		}
+		NewPos.X = PrePos.X + Step.X;
+		NewPos.Y = PrePos.Y + Step.Y;
+		NewPos = ResolveNavCollision(PrePos, NewPos, Nav,
+			Ctx.bAuthoritativeDestination ? &FinalWp : nullptr);
+	}
+	ApplyGroundSnapAndAltitude(NewPos, Ctx.MovementData, Nav, DeltaTime);
+	Entity.Transform.SetLocation(NewPos);
+
+	// MECHANISM: facing. Turn current yaw toward the policy's TargetYaw at TurnRate, then tilt to the
+	// ground slope (ground modes) — or a flat yaw-only rotation when the mode doesn't snap to ground.
+	// A mode that holds facing (Basic) sets bUpdateFacing = false and this is skipped.
+	if (Motion.bUpdateFacing)
+	{
+		const FFixedPoint CurrentYaw = YawFromRotation(Entity.Transform.Rotation);
+		const FFixedPoint YawDelta   = ShortestAngleDelta(CurrentYaw, Motion.TargetYaw);
+		const FFixedPoint MaxTurn    = MovementData.TurnRate * DeltaTime;
+		const FFixedPoint FinalYaw   = CurrentYaw + ClampFP(YawDelta, -MaxTurn, MaxTurn);
+		Entity.Transform.Rotation = bSnapsToGround
+			? ApplySlopeTilt(NewPos, FinalYaw, &MovementData, Nav, DeltaTime)
+			: YawOnly(FinalYaw);
+	}
+
+	// MECHANISM: persist velocity from the ACTUAL post-collision moved delta (honest momentum — a
+	// wall-pinned unit reports ~zero, so avoidance neighbours + anim graphs see the truth).
+	FFixedVector MoveDelta = NewPos - PrePos;
+	MoveDelta.Z = FFixedPoint::Zero;
+	MovementData.Velocity = (DeltaTime > FFixedPoint::Zero)
+		? FFixedVector(MoveDelta.X / DeltaTime, MoveDelta.Y / DeltaTime, FFixedPoint::Zero)
+		: FFixedVector::ZeroVector;
+
+	return false;
+}
+
+FSeinMotion USeinMovement::ComputeMotion_Implementation(USeinMoverHandle* Mover)
+{
+	// Default policy = ultra-basic ground mover: head to the current waypoint at terrain-scaled top
+	// speed (bent by local avoidance, scaled by the avoidance speed-yield) and face the travel
+	// direction. USeinBasicUnitMovement is exactly this; USeinBasicMovement drops the facing.
+	FSeinMotion Motion;
+	const FSeinMovementContext* C = Mover ? Mover->GetContext() : nullptr;
+	if (!C || !C->MovementData) return Motion;
+	const FSeinMovementContext& Ctx = *C;
+
+	const int32 N = Ctx.Path.Waypoints.Num();
+	if (N == 0 || Ctx.CurrentWaypointIndex >= N) return Motion;
+
+	FFixedVector ToWp = Ctx.Path.Waypoints[Ctx.CurrentWaypointIndex] - Ctx.Entity.Transform.GetLocation();
+	ToWp.Z = FFixedPoint::Zero;
+	if (ToWp.SizeSquared() <= FFixedPoint::Epsilon) return Motion;
+
+	const FFixedVector Dir   = ApplyAvoidanceSteer(Ctx, FFixedVector::GetSafeNormal(ToWp));
+	const FFixedPoint  Speed = EffectiveTopSpeed(Ctx) * GetAvoidanceSpeedScale(Ctx);
+	Motion.Velocity     = FFixedVector(Dir.X * Speed, Dir.Y * Speed, FFixedPoint::Zero);
+	Motion.TargetYaw    = SeinMath::Atan2(Dir.Y, Dir.X);
+	Motion.bUpdateFacing = true;
+	return Motion;
 }
 
 void USeinMovement::OnMoveBegin(const FSeinMovementContext& Ctx)
@@ -55,9 +166,6 @@ void USeinMovement::OnMoveBegin(const FSeinMovementContext& Ctx)
 
 	if (!CachedHandle) { CachedHandle = NewObject<USeinMoverHandle>(this); }
 	CachedHandle->SetContext(&Ctx);
-	// Latch the reverse decision once per order — the 3-gate ShouldAutoReverse can oscillate if
-	// polled per-tick near the threshold. The default loop reads bReversingThisOrder.
-	bReversingThisOrder = ShouldReverse(CachedHandle);
 	BP_OnMoveBegin(CachedHandle);
 	CachedHandle->SetContext(nullptr);
 }
@@ -101,192 +209,12 @@ void USeinMovement::HydrateTuningFromData(const FInstancedStruct& Tuning)
 	}
 }
 
-FFixedPoint USeinMovement::ComputeSpeed_Implementation(USeinMoverHandle* Mover)
-{
-	const FSeinMovementContext* C = Mover ? Mover->GetContext() : nullptr;
-	return C ? EffectiveTopSpeed(*C) : FFixedPoint::Zero;
-}
-
-FFixedPoint USeinMovement::ComputeArrivalSpeedCap_Implementation(USeinMoverHandle* Mover, FFixedPoint DistanceToStop)
-{
-	const FSeinMovementContext* C = Mover ? Mover->GetContext() : nullptr;
-	const FFixedPoint Decel = (C && C->MovementData) ? C->MovementData->Deceleration : FFixedPoint::Zero;
-	return KinematicArrivalSpeedCap(DistanceToStop, Decel);
-}
-
-FFixedPoint USeinMovement::ComputeSteer_Implementation(USeinMoverHandle* Mover, const FFixedVector& DesiredMoveDir, FFixedPoint CurrentYaw)
-{
-	if (!Mover) return CurrentYaw;
-	// Face-velocity: rotate toward the moved direction, clamped by TurnRate·dt.
-	const FFixedPoint DesiredYaw   = SeinMath::Atan2(DesiredMoveDir.Y, DesiredMoveDir.X);
-	const FFixedPoint YawDelta     = ShortestAngleDelta(CurrentYaw, DesiredYaw);
-	const FFixedPoint MaxTurn      = Mover->GetTurnRate() * Mover->GetDeltaTime();
-	const FFixedPoint AppliedTurn  = ClampFP(YawDelta, -MaxTurn, MaxTurn);
-	return CurrentYaw + AppliedTurn;
-}
-
-bool USeinMovement::ShouldReverse_Implementation(USeinMoverHandle* Mover)
-{
-	const FSeinMovementContext* C = Mover ? Mover->GetContext() : nullptr;
-	if (!C || !C->MovementData || C->Path.Waypoints.Num() == 0) return false;
-	return ShouldAutoReverse(
-		C->Entity.Transform.GetLocation(),
-		C->Entity.Transform.Rotation,
-		C->Path.Waypoints.Last(),
-		*C->MovementData);
-}
-
-bool USeinMovement::BP_Tick_Implementation(USeinMoverHandle* Mover)
-{
-	if (!Mover) return true;
-	const FSeinMovementContext* CtxPtr = Mover->GetContext();
-	if (!CtxPtr) return true;
-	const FSeinMovementContext& Ctx = *CtxPtr;
-
-	if (!Ctx.MovementData) return true;
-
-	FSeinEntity& Entity = Ctx.Entity;
-	FSeinMovementComponent& MovementData = *Ctx.MovementData;
-	const FSeinPath& Path = Ctx.Path;
-	int32& CurrentWaypointIndex = Ctx.CurrentWaypointIndex;
-	const FFixedPoint AcceptanceRadiusSq = Ctx.AcceptanceRadiusSq;
-	const FFixedPoint DeltaTime = Ctx.DeltaTime;
-	USeinNavigation* Nav = Ctx.Nav;
-
-	const int32 N = Path.Waypoints.Num();
-	if (N == 0) return true;
-
-	const FFixedVector InitialPos = Entity.Transform.GetLocation();
-
-	// Recover the current scalar speed from the persisted velocity vector (forward-
-	// only: magnitude IS the scalar speed). Velocity carries momentum across ticks
-	// AND across new orders.
-	const FFixedPoint EntrySpeed = MovementData.Velocity.Size();
-	FFixedPoint CurrentSpeed = EntrySpeed;
-
-	// Kinematic arrival cap: fastest we can still brake to rest at the ACCEPTANCE
-	// RING given Deceleration (v² = 2·a·d). Below TopSpeed only inside the brake zone.
-	FFixedVector ToFinal = Path.Waypoints[N - 1] - InitialPos;
-	ToFinal.Z = FFixedPoint::Zero;
-	const FFixedPoint DistToFinal = ToFinal.Size();
-	const FFixedPoint Acceptance = SeinMath::Sqrt(AcceptanceRadiusSq);
-	const FFixedPoint BrakeDist = (DistToFinal > Acceptance) ? (DistToFinal - Acceptance) : FFixedPoint::Zero;
-	const FFixedPoint ArrivalCap = ComputeArrivalSpeedCap(Mover, BrakeDist);
-
-	// HOOK: cruise target (default = EffectiveTopSpeed).
-	FFixedPoint TargetSpeed = ComputeSpeed(Mover);
-	// Reverse (latched at OnMoveBegin): cap the cruise at ReverseTopSpeed (0 → TopSpeed/2 fallback).
-	if (bReversingThisOrder)
-	{
-		const FFixedPoint RevCap = (MovementData.ReverseTopSpeed > FFixedPoint::Zero)
-			? MovementData.ReverseTopSpeed
-			: (MovementData.TopSpeed * FFixedPoint::Half);
-		if (RevCap < TargetSpeed) TargetSpeed = RevCap;
-	}
-	// Then clamp to the arrival cap.
-	if (ArrivalCap < TargetSpeed) TargetSpeed = ArrivalCap;
-
-	// Avoidance speed-yield: a model may ask this unit to slow (not only turn) to give
-	// way — SpeedScale in [0,1], default 1 = byte-identical no-op (the shipped boids model
-	// never writes it). Applied to the cruise target so the slow ramps in through
-	// StepSpeedToward like any other speed change. Pairs with ApplyAvoidanceSteer (heading).
-	TargetSpeed = TargetSpeed * GetAvoidanceSpeedScale(Ctx);
-
-	// Smoothstep the scalar speed toward the target — accel growing, decel shrinking.
-	CurrentSpeed = StepSpeedToward(CurrentSpeed, TargetSpeed,
-		MovementData.Acceleration, MovementData.Deceleration, DeltaTime);
-
-	FFixedVector Pos = InitialPos;
-	FFixedPoint RemainingStep = CurrentSpeed * DeltaTime;
-	bool bAvoidanceApplied = false;
-
-	// Stable max-step reference for intermediate-waypoint arrival (raw TopSpeed, so a
-	// slowed tick never fails to consume a waypoint it has effectively reached).
-	const FFixedPoint OneStep = MovementData.TopSpeed * DeltaTime;
-
-	while (RemainingStep > FFixedPoint::Zero && CurrentWaypointIndex < N)
-	{
-		const FFixedVector Target = Path.Waypoints[CurrentWaypointIndex];
-		FFixedVector Delta = Target - Pos;
-		Delta.Z = FFixedPoint::Zero;
-		const FFixedPoint DistSq = Delta.SizeSquared();
-
-		const bool bIsFinalWaypoint = (CurrentWaypointIndex == N - 1);
-		const FFixedPoint ArriveRadiusSq = bIsFinalWaypoint ? AcceptanceRadiusSq : OneStep * OneStep;
-
-		if (DistSq <= ArriveRadiusSq)
-		{
-			if (bIsFinalWaypoint)
-			{
-				// Arrived within the acceptance ring — STOP IN PLACE (no snap-to-exact).
-				++CurrentWaypointIndex;
-				break;
-			}
-			// Intermediate waypoint: snap-and-advance (small, on-path) then keep stepping.
-			Pos.X = Target.X;
-			Pos.Y = Target.Y;
-			++CurrentWaypointIndex;
-			continue;
-		}
-
-		const FFixedPoint Dist = Delta.Size();
-		const FFixedPoint StepLen = (Dist < RemainingStep) ? Dist : RemainingStep;
-
-		FFixedVector Dir = FFixedVector::GetSafeNormal(Delta);
-		// Local avoidance — bend only this tick's first step (the primary steering dir).
-		if (!bAvoidanceApplied) { Dir = ApplyAvoidanceSteer(Ctx, Dir); bAvoidanceApplied = true; }
-
-		Pos.X = Pos.X + Dir.X * StepLen;
-		Pos.Y = Pos.Y + Dir.Y * StepLen;
-
-		RemainingStep = RemainingStep - StepLen;
-	}
-
-	Pos = ResolveNavCollision(InitialPos, Pos, Nav);
-
-	ApplyGroundSnapAndAltitude(Pos, Ctx.MovementData, Nav, DeltaTime);
-
-	Entity.Transform.SetLocation(Pos);
-
-	const bool bArrived = (CurrentWaypointIndex >= N);
-
-	// Smooth turn from the actual moved delta (velocity-based → a blocked tick holds facing).
-	FFixedVector MoveDelta = Pos - InitialPos;
-	MoveDelta.Z = FFixedPoint::Zero;
-	FFixedVector MoveDir = FFixedVector::ZeroVector;
-	if (MoveDelta.SizeSquared() > FFixedPoint::Epsilon)
-	{
-		MoveDir = FFixedVector::GetSafeNormal(MoveDelta);
-		const FFixedPoint CurrentYaw = YawFromRotation(Entity.Transform.Rotation);
-		// When reversing, face AWAY from travel — the unit backs toward the goal. HOOK: facing yaw
-		// after this tick's turn (default = face-velocity clamp toward the steer direction).
-		const FFixedVector SteerDir = bReversingThisOrder
-			? FFixedVector(-MoveDir.X, -MoveDir.Y, FFixedPoint::Zero)
-			: MoveDir;
-		const FFixedPoint FinalYaw = ComputeSteer(Mover, SteerDir, CurrentYaw);
-		// Tilt to the ground slope under the new facing — rate-limited (60°/sec) and persisted on
-		// MovementData so orientation stays continuous across ticks/orders. Shared with the Apply
-		// Slope Tilt handle node so a custom BP_Tick can reproduce it exactly.
-		Entity.Transform.Rotation = ApplySlopeTilt(Pos, FinalYaw, &MovementData, Nav, DeltaTime);
-	}
-
-	// Persist world-frame velocity at the ramped scalar speed (momentum across orders).
-	if (bArrived)
-	{
-		MovementData.Velocity = FFixedVector::ZeroVector;
-	}
-	else if (MoveDir.SizeSquared() > FFixedPoint::Epsilon)
-	{
-		MovementData.Velocity = FFixedVector(MoveDir.X * CurrentSpeed, MoveDir.Y * CurrentSpeed, FFixedPoint::Zero);
-	}
-	else
-	{
-		const FFixedVector Forward = Entity.Transform.Rotation.RotateVector(FFixedVector::ForwardVector);
-		MovementData.Velocity = FFixedVector(Forward.X * CurrentSpeed, Forward.Y * CurrentSpeed, FFixedPoint::Zero);
-	}
-
-	return bArrived;
-}
+// The former value-hooks (ComputeSpeed / ComputeArrivalSpeedCap / ComputeSteer / ShouldReverse),
+// the StepAlongPath inner integrator, and the BP_Tick_Implementation monolith were removed with the
+// two-tier de-monolith. Their behavior now lives in: the base Tick harness + ComputeMotion policy
+// (above), the shared static toolbox (KinematicArrivalSpeedCap / StepSpeedToward / ResolveNavCollision
+// / IsOvershootArrival / slope helpers) that Tier-2 modes call directly, and — for accel/decel/reverse
+// feel — the concrete Movement+ modes' own Tick overrides.
 
 FFixedPoint USeinMovement::ShortestAngleDelta(FFixedPoint From, FFixedPoint To)
 {
@@ -491,30 +419,39 @@ void USeinMovement::AdvanceWaypointAlongPath(
 	while (CurrentWaypointIndex < N - 1)
 	{
 		const FFixedVector& Wp = Path.Waypoints[CurrentWaypointIndex];
-
-		// Cross-over test: dot(AgentPos - Wp, NextWp - Wp) > 0 means the
-		// agent's offset from the current waypoint projects positively
-		// onto the segment direction toward the next waypoint — i.e., the
-		// agent has already CROSSED the current waypoint. Robust against
-		// overshoot at speed where the distance test below misses
-		// (waypoint behind chassis but outside CloseRadius).
-		const FFixedVector& NextWp = Path.Waypoints[CurrentWaypointIndex + 1];
-		const FFixedPoint SegDx = NextWp.X - Wp.X;
-		const FFixedPoint SegDy = NextWp.Y - Wp.Y;
 		const FFixedPoint OffDx = AgentPos.X - Wp.X;
 		const FFixedPoint OffDy = AgentPos.Y - Wp.Y;
-		const FFixedPoint Dot   = OffDx * SegDx + OffDy * SegDy;
 
-		bool bAdvance = (Dot > FFixedPoint::Zero);
+		bool bAdvance = false;
 
-		// Distance fallback: agent close to the waypoint but not past it
-		// (e.g., waypoint sits in a tight spline-sample cluster near a
-		// corner). Catches the "approach + barely arrive" case while the
-		// crossover test catches the "overshoot at speed" case.
-		if (!bAdvance)
+		// Overshoot test — has the agent passed Wp ALONG THE INCOMING travel
+		// direction (PrevWp → Wp)? This MUST use the incoming direction, NOT the
+		// outgoing (Wp → NextWp). The outgoing form fires whenever the agent is
+		// merely on the NextWp side of the plane through Wp, regardless of lateral
+		// offset — so a unit sitting off to the side of a long leg (e.g. NORTH of a
+		// detour's south-going first leg) reads as "already past" waypoints it never
+		// approached, skips the ENTIRE detour, and steers straight at the far /
+		// destination waypoint THROUGH the wall the detour routed around (the unit
+		// then pins on the movement floor at the wall face and never recovers,
+		// because at the face it's still "past" by the outgoing test). The incoming
+		// direction only registers a genuine overshoot beyond a waypoint the agent
+		// actually traveled toward. The first waypoint has no incoming segment, so
+		// it advances on distance alone (per-tick steps are << CloseRadius, so the
+		// distance test reliably catches its arrival).
+		if (CurrentWaypointIndex > 0)
 		{
-			const FFixedPoint DistSq = OffDx * OffDx + OffDy * OffDy;
-			if (DistSq <= CloseRadiusSq) bAdvance = true;
+			const FFixedVector& PrevWp = Path.Waypoints[CurrentWaypointIndex - 1];
+			const FFixedPoint InDx = Wp.X - PrevWp.X;
+			const FFixedPoint InDy = Wp.Y - PrevWp.Y;
+			if (OffDx * InDx + OffDy * InDy > FFixedPoint::Zero) bAdvance = true;
+		}
+
+		// Distance test — genuinely within CloseRadius of Wp. Primary trigger for
+		// normal arrival (the mode steers straight at Wp, so the agent always passes
+		// within CloseRadius of it) and the sole trigger for the first waypoint.
+		if (!bAdvance && (OffDx * OffDx + OffDy * OffDy) <= CloseRadiusSq)
+		{
+			bAdvance = true;
 		}
 
 		if (bAdvance) ++CurrentWaypointIndex;
@@ -526,8 +463,7 @@ FFixedVector USeinMovement::ResolveLookAheadPoint(
 	const FFixedVector& AgentPos,
 	const FSeinPath& Path,
 	int32 CurrentWaypointIndex,
-	FFixedPoint LookAhead,
-	FFixedPoint /*MaxCornerAngleRadians (deprecated, no-op)*/)
+	FFixedPoint LookAhead)
 {
 	const int32 N = Path.Waypoints.Num();
 	if (N == 0) return AgentPos;
@@ -536,13 +472,13 @@ FFixedVector USeinMovement::ResolveLookAheadPoint(
 
 	// Pure linear look-ahead walker with controller-side cluster skip.
 	//
-	// History: previously this function carried a `MaxCornerAngleRadians`-
-	// driven cos-falloff weight on each segment past the current one — meant
-	// to smoothly reduce the carrot's reach across corners and prevent
-	// pure-pursuit corner-cutting. In practice it tangled badly with off-path
+	// History: this function once carried a `MaxCornerAngleRadians`-driven
+	// cos-falloff weight on each segment past the current one — meant to
+	// smoothly reduce the carrot's reach across corners and prevent pure-
+	// pursuit corner-cutting. In practice it tangled badly with off-path
 	// drift (the synthetic AgentPos→Waypoints[CurIdx] segment contaminated
-	// cumulative turn angle), produced multiple regressions, and ultimately
-	// got stripped. The parameter is kept for signature ABI but ignored.
+	// cumulative turn angle), produced multiple regressions, and was stripped
+	// (the parameter went with it).
 	//
 	// What this function does NOW:
 	//   1. Pre-thins the working polyline: drops waypoints that are CLOSE to
@@ -853,27 +789,37 @@ void USeinMovement::BP_TickIdle_Implementation(USeinMoverHandle* Mover)
 	FFixedPoint Speed = MovementData.Velocity.Size();
 	if (Speed > FFixedPoint::Epsilon)
 	{
-		CacheFootprintFromContext(Ctx);
-		Speed = StepSpeedToward(Speed, FFixedPoint::Zero,
-			MovementData.Acceleration, MovementData.Deceleration, DeltaTime);
-		if (Speed <= FFixedPoint::Epsilon)
+		// The mode's braking rate: 0 for the ultra-basic modes (they stop crisply the moment the
+		// order releases), or the per-class UDS Deceleration for Infantry / the vehicles (a cancelled
+		// unit coasts to a halt through the same ramp its orders use).
+		const FFixedPoint Decel = GetDeceleration(&MovementData);
+		if (Decel <= FFixedPoint::Zero)
 		{
 			MovementData.Velocity = FFixedVector::ZeroVector;
 		}
 		else
 		{
-			const FFixedVector Dir = FFixedVector::GetSafeNormal(MovementData.Velocity);
-			Pos.X = Pos.X + Dir.X * Speed * DeltaTime;
-			Pos.Y = Pos.Y + Dir.Y * Speed * DeltaTime;
-			MovementData.Velocity = FFixedVector(Dir.X * Speed, Dir.Y * Speed, FFixedPoint::Zero);
+			CacheFootprintFromContext(Ctx);
+			Speed = StepSpeedToward(Speed, FFixedPoint::Zero, Decel, Decel, DeltaTime);
+			if (Speed <= FFixedPoint::Epsilon)
+			{
+				MovementData.Velocity = FFixedVector::ZeroVector;
+			}
+			else
+			{
+				const FFixedVector Dir = FFixedVector::GetSafeNormal(MovementData.Velocity);
+				Pos.X = Pos.X + Dir.X * Speed * DeltaTime;
+				Pos.Y = Pos.Y + Dir.Y * Speed * DeltaTime;
+				MovementData.Velocity = FFixedVector(Dir.X * Speed, Dir.Y * Speed, FFixedPoint::Zero);
+			}
+			Pos = ResolveNavCollision(InitialPos, Pos, Nav);
 		}
-		Pos = ResolveNavCollision(InitialPos, Pos, Nav);
 	}
 
 	// Per-tick settle: re-snap Z/altitude (rate-limited) and smooth pitch/roll
 	// toward the slope under the CURRENT position — yaw is never touched while
 	// idle. This is what makes a collision-shoved unit settle where it lands
-	// (BAR semantics: no return-to-home) instead of floating / clipping at its
+	// (settle-in-place semantics: no return-to-home) instead of floating / clipping at its
 	// pre-shove pose. Stationary converged units: the samples still run (no
 	// transform-dirty signal exists to skip on) but the write-guard below keeps
 	// the rotation untouched — flagged in Roadmap_Multithreading.md territory
@@ -898,14 +844,21 @@ void USeinMovement::BP_TickIdle_Implementation(USeinMoverHandle* Mover)
 bool USeinMovement::IsFootprintPassable(const FFixedVector& Pos, USeinNavigation* Nav) const
 {
 	if (!Nav) return true;
-	if (!Nav->IsPassable(Pos)) return false;
+	// Dynamic-AWARE floor: IsWorldPositionClear rejects the static bake AND runtime
+	// dynamic nav blockers (bBlocksNav — non-baked cover walls / deployables). A
+	// static-only check (the former IsPassable) let a body slide THROUGH a dynamic
+	// wall even though A* routed around it, because the steering/arrival step isn't
+	// perfectly on-path and nothing downstream stopped it. Mask = the agent's own
+	// layer, so a blocker only stops layers it's authored to hit; by default units
+	// don't stamp nav, so this blocks against structures, not other units.
+	if (!Nav->IsWorldPositionClear(Pos, CachedNavLayerMask)) return false;
 	for (int32 i = 0; i < CachedNumFootprintSamples; ++i)
 	{
 		const FFixedVector SamplePos(
 			Pos.X + CachedFootprintSamples[i].X,
 			Pos.Y + CachedFootprintSamples[i].Y,
 			Pos.Z);
-		if (!Nav->IsPassable(SamplePos)) return false;
+		if (!Nav->IsWorldPositionClear(SamplePos, CachedNavLayerMask)) return false;
 	}
 	return true;
 }
@@ -917,6 +870,15 @@ FFixedVector USeinMovement::ResolveNavCollision(
 	const FFixedVector* AuthoritativeDest) const
 {
 	if (!Nav) return NewPos;
+
+	// Escape valve — if the unit's CENTER is already inside a blocked cell (spawned
+	// on / shoved onto a nav blocker before the floor could stop it), do NOT pin it
+	// there: return the candidate so it can move toward its path (which routes OUT)
+	// until its center clears, at which point the floor re-engages footprint-clamping.
+	// Center-only (not the footprint) so it never false-triggers on a unit merely
+	// grazing a wall edge — that case still wants the normal clamp below. Pairs with
+	// A*'s dynamic-blocked-start tolerance so a spawn-on-a-blocker unit can extract.
+	if (!Nav->IsWorldPositionClear(OldPos, CachedNavLayerMask)) return NewPos;
 
 	// Authoritative-destination overrule: when the candidate sits within reach of
 	// an authoritative destination (a cover slot), let the unit move there even
@@ -988,8 +950,41 @@ FFixedVector USeinMovement::ApplyAvoidanceSteer(const FSeinMovementContext& Ctx,
 	if (Steer.SizeSquared() <= FFixedPoint::Epsilon) return DesiredDir;
 
 	// Bend the (unit) desired direction by the lateral steer, then renormalize.
-	return FFixedVector::GetSafeNormal(
+	const FFixedVector Bent = FFixedVector::GetSafeNormal(
 		FFixedVector(DesiredDir.X + Steer.X, DesiredDir.Y + Steer.Y, DesiredDir.Z));
+
+	// WALL-TANGENT GUARD. Avoidance is wall-blind, so the bent heading can aim into static
+	// geometry — the nav floor then pins the unit and it grinds. Do NOT just drop avoidance near
+	// walls (that funnels every unit onto one path line → corner pile, the prior regression);
+	// instead keep as much lateral steer as the wall allows: if the bent step is nav-blocked,
+	// scale the steer down toward the path heading until it clears (a tangent-along-the-wall
+	// approximation), and only fall back to the pure path heading if even a gentle steer is
+	// blocked. Nav reads are the static bake (immutable this tick) → deterministic; a few probes,
+	// first step only. (Dense corner piles are separately handled by the avoidance regime hand-off.)
+	if (Ctx.Nav)
+	{
+		const FFixedVector Pos = Ctx.Entity.Transform.GetLocation();
+		const FFixedPoint Probe = CachedCollisionRadius + FFixedPoint::FromInt(50);
+		const FFixedVector BentCand(Pos.X + Bent.X * Probe, Pos.Y + Bent.Y * Probe, Pos.Z);
+		if (!IsFootprintPassable(BentCand, Ctx.Nav))
+		{
+			const FFixedPoint S1 = FFixedPoint::FromInt(2) / FFixedPoint::FromInt(3); // 0.66
+			const FFixedVector Cand1 = FFixedVector::GetSafeNormal(
+				FFixedVector(DesiredDir.X + Steer.X * S1, DesiredDir.Y + Steer.Y * S1, DesiredDir.Z));
+			if (IsFootprintPassable(FFixedVector(Pos.X + Cand1.X * Probe, Pos.Y + Cand1.Y * Probe, Pos.Z), Ctx.Nav))
+				return Cand1;
+
+			const FFixedPoint S2 = FFixedPoint::One / FFixedPoint::FromInt(3); // 0.33
+			const FFixedVector Cand2 = FFixedVector::GetSafeNormal(
+				FFixedVector(DesiredDir.X + Steer.X * S2, DesiredDir.Y + Steer.Y * S2, DesiredDir.Z));
+			if (IsFootprintPassable(FFixedVector(Pos.X + Cand2.X * Probe, Pos.Y + Cand2.Y * Probe, Pos.Z), Ctx.Nav))
+				return Cand2;
+
+			return DesiredDir; // even a gentle steer hits the wall — follow the path, let the floor resolve
+		}
+	}
+
+	return Bent;
 }
 
 FFixedPoint USeinMovement::GetAvoidanceSpeedScale(const FSeinMovementContext& Ctx) const
@@ -1146,6 +1141,9 @@ void USeinMovement::CacheFootprintFromContext(const FSeinMovementContext& Ctx)
 	const FFixedPoint Radius = ResolveCollisionRadius(Ctx.World, Ctx.SelfHandle, Ctx.NavData);
 
 	CachedCollisionRadius = Radius;
+	// Agent nav layer (default ground 0x01) — the nav floor passes this to
+	// IsWorldPositionClear so a dynamic blocker only stops layers it's authored to.
+	CachedNavLayerMask = Ctx.NavData ? Ctx.NavData->NavLayerMask : uint8(0x01);
 
 	if (Radius > FFixedPoint::Zero)
 	{

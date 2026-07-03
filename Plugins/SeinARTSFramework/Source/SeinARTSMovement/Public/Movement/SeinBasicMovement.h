@@ -1,12 +1,12 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinBasicMovement.h
- * @brief   Baseline movement algo -- seek current waypoint at MoveSpeed,
- *          arrive within acceptance radius, increment to next waypoint.
+ * @brief   Ultra-basic mover: translate toward the path at top speed, no rotation.
  *
- *          No rotation, no momentum. Direct translate along the path polyline.
- *          Shipped as the framework default so "works out of the box" stays
- *          preserved for any unit that doesn't pick a specific algo.
+ *          A ComputeMotion policy over the shared base Tick harness — it returns "head to the
+ *          current waypoint at terrain-scaled top speed" and holds facing (bUpdateFacing = false).
+ *          No rotation, no momentum, no accel/brake. The null/invalid fallback, so "works out of
+ *          the box" is preserved for any unit that doesn't pick a specific movement class.
  */
 
 #pragma once
@@ -21,5 +21,5 @@ class SEINARTSMOVEMENT_API USeinBasicMovement : public USeinMovement
 	GENERATED_BODY()
 
 public:
-	virtual bool Tick(const FSeinMovementContext& Ctx) override;
+	virtual FSeinMotion ComputeMotion_Implementation(USeinMoverHandle* Mover) override;
 };

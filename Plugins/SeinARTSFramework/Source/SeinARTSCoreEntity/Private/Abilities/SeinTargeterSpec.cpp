@@ -46,7 +46,7 @@ USeinPointFacingTargeterSpec::USeinPointFacingTargeterSpec()
 	// (you can't place a bunker in occupied cells), free rotation.
 	// Set RotationStepDegrees > 0 in subclasses / instances if your project
 	// wants cardinal/octagonal snapping (90 / 45 are common). Free-by-default
-	// matches CoH-style placement UX.
+	// matches standard click-to-place UX.
 	TargetCount = 1;
 	bRejectClickWhenBlocked = true;
 	RotationStepDegrees = 0;

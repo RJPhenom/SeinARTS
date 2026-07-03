@@ -148,7 +148,13 @@ FGameplayTag USeinPlannerHandle::GetTerrainTagAt(const FFixedVector& WorldPos) c
 
 bool USeinPlannerHandle::IsPositionClear(const FFixedVector& WorldPos) const
 {
-	return (Ctx && Ctx->Nav) ? Ctx->Nav->IsWorldPositionClear(WorldPos, /*AgentNavLayerMask*/ 0) : false;
+	// Mask MUST be non-zero: (BlockedNavLayerMask & 0) == 0 skips EVERY dynamic blocker,
+	// silently degrading this to a static-only query that reports a dynamic-wall cell as
+	// clear — the exact trap SeinNavigationBPFL documents. Use the agent's own nav layer
+	// (0x01 ground fallback); this Ctx already reads NavData->NavLayerMask for path requests.
+	if (!Ctx || !Ctx->Nav) return false;
+	const uint8 Mask = Ctx->NavData ? Ctx->NavData->NavLayerMask : uint8(0x01);
+	return Ctx->Nav->IsWorldPositionClear(WorldPos, Mask);
 }
 
 FFixedPoint USeinPlannerHandle::GetCellSize() const

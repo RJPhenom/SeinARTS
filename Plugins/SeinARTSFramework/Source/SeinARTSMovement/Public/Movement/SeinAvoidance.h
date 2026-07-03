@@ -19,8 +19,8 @@
  *          itself. Data flows: avoidance writes the field → movement reads it.
  *
  *          Configured via plugin settings (`USeinARTSCoreSettings::AvoidanceClass`).
- *          The framework ships `USeinAvoidanceDefault` (a SpringRTS/BAR-distilled
- *          lateral-steer boids model). Game teams can subclass or replace it entirely
+ *          The framework ships `USeinAvoidanceDefault` (a lateral-steer boids
+ *          model). Game teams can subclass or replace it entirely
  *          (a different boids model, a flow-field follower's separation pass, etc.)
  *          without touching any other framework code. Mirrors the pluggable Navigation
  *          / Collision-resolver / Fog-of-War pattern (abstract base + shipped default,

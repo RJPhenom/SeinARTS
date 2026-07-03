@@ -672,8 +672,9 @@ public:
 	/** The active collision resolver. Owns one tick's full collider separation +
 	 *  overlap-event emission; the PostTick FSeinCollisionResolutionSystem delegates
 	 *  to it. Instantiated from `USeinARTSCoreSettings::CollisionResolverClass` in
-	 *  Initialize (defaults to USeinCollisionResolverDefault). Never null after
-	 *  Initialize. Mirrors the pluggable Navigation / Fog-of-War seam. */
+	 *  Initialize (defaults to USeinCollisionResolverDefault). Null when that setting is
+	 *  None (collision off, WYSIWYG); otherwise valid after Initialize — the delegator
+	 *  system null-guards. Mirrors the pluggable Navigation / Fog-of-War seam. */
 	USeinCollisionResolver* GetCollisionResolver() const { return CollisionResolver; }
 
 	/** Get the Blueprint actor class stored for an entity (for actor bridge spawning). */
@@ -1105,6 +1106,10 @@ public:
 	/** Flush all visual events (called by render layer). */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Visual")
 	TArray<FSeinVisualEvent> FlushVisualEvents();
+
+	/** Non-draining peek: true if any visual events are queued. Lets the render bridge skip its
+	 *  per-frame tick entirely when there is nothing to dispatch. */
+	bool HasPendingVisualEvents() const { return VisualEventQueue.Num() > 0; }
 
 	// ========== Latent Actions ==========
 

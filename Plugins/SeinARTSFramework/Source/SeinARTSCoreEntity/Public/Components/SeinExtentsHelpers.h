@@ -117,7 +117,7 @@ namespace SeinExtentsHelpers
 	 * Compute a "stand here" point just outside a target entity's footprint,
 	 * on the surface CLOSEST to `ApproachFrom`. Used by AutoMoveThen so a
 	 * unit walking up to a building stops at the building's edge instead of
-	 * its center — matching CoH/AoE-style "build/repair/attack on the
+	 * its center — matching standard "build/repair/attack on the
 	 * footprint perimeter" semantics.
 	 *
 	 * Geometry (top-down, planar — Z preserved from EntityTransform):

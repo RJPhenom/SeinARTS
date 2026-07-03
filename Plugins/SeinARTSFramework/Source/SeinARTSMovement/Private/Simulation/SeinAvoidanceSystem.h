@@ -13,7 +13,7 @@
  *          at pri 5, so neighbour reads are a consistent start-of-tick snapshot; before
  *          movement runs in AbilityExecution, which consumes the output this same tick).
  *
- *          The avoidance MODEL (the SpringRTS/BAR boids math) lives in
+ *          The avoidance MODEL (the lateral-steer boids math) lives in
  *          USeinAvoidanceDefault — see SeinAvoidanceDefault.{h,cpp} and the contract
  *          docstring on USeinAvoidance.
  */

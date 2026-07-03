@@ -178,7 +178,7 @@ public:
 
 	/** Whether the cooldown applies to the activating member only or to the whole
 	 *  squad (when the activating entity is a squad member). Default Squad — matches
-	 *  CoH "one squad-wide throw cooldown." Flip to Member for stackable per-soldier
+	 *  a single squad-wide throw cooldown. Flip to Member for stackable per-soldier
 	 *  abilities. No effect on lone (non-squad-member) entities. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS|Ability|Cost")
 	ESeinCooldownScope CooldownScope = ESeinCooldownScope::Squad;

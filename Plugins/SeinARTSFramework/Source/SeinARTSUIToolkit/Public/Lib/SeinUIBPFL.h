@@ -122,8 +122,8 @@ public:
 
 	/**
 	 * The minimap's display rotation in degrees. When bRotateWithCamera is true this is
-	 * -cameraYaw + RotationOffsetDeg (so the camera's forward points "up", Company-of-Heroes
-	 * style); otherwise just RotationOffsetDeg. Apply this as the render-transform angle on
+	 * -cameraYaw + RotationOffsetDeg (so the camera's forward points "up", the map rotating
+	 * under a fixed arrow); otherwise just RotationOffsetDeg. Apply this as the render-transform angle on
 	 * the panel that holds the minimap visuals, AND pass it to Minimap Local To World so
 	 * clicks un-rotate consistently. One source of truth for the rotation.
 	 */

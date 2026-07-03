@@ -16,6 +16,7 @@
 #include "Movement/SeinAvoidanceDefault.h"
 #include "Settings/PluginSettings.h"
 #include "Components/SeinMovementComponent.h"
+#include "SeinARTSCoreEntityLog.h"
 
 void USeinMovementSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 {
@@ -30,15 +31,25 @@ void USeinMovementSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 	// instantiate + GC-root it here, then register a thin delegator system that calls
 	// it each PreTick. Same abstract-base + soft-class-picker pattern as Navigation /
 	// CollisionResolver / FogOfWar.
-	AvoidanceInstance = NewObject<USeinAvoidance>(this, ResolveAvoidanceClass());
-	if (AvoidanceInstance) AvoidanceInstance->OnInitialized(&InWorld);
-	AvoidanceSystem = new FSeinAvoidanceSystem(AvoidanceInstance);
-	Sim->RegisterSystem(AvoidanceSystem);
+	if (UClass* AvoidClass = ResolveAvoidanceClass())
+	{
+		AvoidanceInstance = NewObject<USeinAvoidance>(this, AvoidClass);
+		if (AvoidanceInstance) AvoidanceInstance->OnInitialized(&InWorld);
+		AvoidanceSystem = new FSeinAvoidanceSystem(AvoidanceInstance);
+		Sim->RegisterSystem(AvoidanceSystem);
+	}
+	else
+	{
+		// AvoidanceClass is None → avoidance off (WYSIWYG). Skip the instance + delegator system;
+		// units keep their default (zero) AvoidanceOutput, so movement + collision are unchanged.
+		USeinARTSCoreSettings::ReportDisabledSystem(TEXT("Avoidance"),
+			TEXT("Units still move and collide but won't flow around each other; crowds grind at chokepoints."), /*bHighSeverity*/ false);
+	}
 
 	// The always-on per-unit movement driver (CP2.1, D-R2). Its first-contact
 	// snap replaced FSeinInitialSnapSystem; its idle settle/coast is the
 	// ground-up redesign the 2026-06-03 FSeinPositionKeepSystem strip was
-	// deferred for (BAR semantics — settle in place, no return-to-home).
+	// deferred for (settle-in-place semantics — no return-to-home).
 	DriverSystem = new FSeinMovementDriverSystem(this);
 	Sim->RegisterSystem(DriverSystem);
 
@@ -100,12 +111,20 @@ UClass* USeinMovementSubsystem::ResolveMovementClass(const FSeinMovementComponen
 
 UClass* USeinMovementSubsystem::ResolveAvoidanceClass()
 {
+	// WYSIWYG. None/empty => avoidance is intentionally OFF: return null so OnWorldBeginPlay skips
+	// creating + registering the avoidance system. A set-but-unloadable/abstract class is a mistake,
+	// not an off-switch: fall back to the shipped default with a logged error.
 	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
-	UClass* AvoidClass = (Settings && Settings->AvoidanceClass.IsValid())
-		? Settings->AvoidanceClass.TryLoadClass<USeinAvoidance>()
-		: nullptr;
+	if (!Settings || Settings->AvoidanceClass.IsNull())
+	{
+		return nullptr;
+	}
+	UClass* AvoidClass = Settings->AvoidanceClass.TryLoadClass<USeinAvoidance>();
 	if (!AvoidClass || AvoidClass->HasAnyClassFlags(CLASS_Abstract))
 	{
+		UE_LOG(LogSeinSim, Error,
+			TEXT("AvoidanceClass '%s' could not be loaded or is abstract — falling back to the shipped default."),
+			*Settings->AvoidanceClass.ToString());
 		AvoidClass = USeinAvoidanceDefault::StaticClass();
 	}
 	return AvoidClass;

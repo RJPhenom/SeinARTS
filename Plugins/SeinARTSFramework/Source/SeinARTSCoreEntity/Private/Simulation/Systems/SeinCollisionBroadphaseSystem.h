@@ -40,6 +40,20 @@ class FSeinCollisionBroadphaseSystem final : public ISeinSystem
 public:
 	virtual void Tick(FFixedPoint /*DeltaTime*/, USeinWorldSubsystem& World) override
 	{
+		// Skip the (otherwise wasted) rebuild when nothing meaningful consumes the hash: the collision
+		// resolver is OFF (null) AND the avoidance model is OFF (AvoidanceClass = None). The only other
+		// reader, USeinMoveToAction's stall query, tolerates an empty hash (it just keeps pushing). The
+		// avoidance INSTANCE lives in the Movement module, out of reach here, so its off-state is read
+		// from AvoidanceClass — a per-client-identical setting, so the skip stays lockstep-deterministic.
+		if (World.GetCollisionResolver() == nullptr)
+		{
+			const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
+			if (Settings && Settings->AvoidanceClass.IsNull())
+			{
+				return;
+			}
+		}
+
 		FSeinCollisionSpatialHash& Hash = World.GetCollisionSpatialHash();
 
 		const bool bRebuildStatic = Hash.IsStaticDirty();

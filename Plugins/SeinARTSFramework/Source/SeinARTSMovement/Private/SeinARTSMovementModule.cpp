@@ -61,11 +61,17 @@
 IMPLEMENT_MODULE(FSeinARTSMovementModule, SeinARTSMovement)
 
 #if UE_ENABLE_DEBUG_DRAWING
-// Custom show flag for steering viz (footprint ring, velocity arrow,
-// avoidance arrow, perception circle, look-ahead cone). UE doesn't ship a
-// matching built-in, so we register one via TCustomShowFlag (same pattern
-// as SeinARTSFogOfWar). Module-public so per-controller draw sites can
-// share the gate.
+// Custom show flags. UE doesn't ship matching built-ins, so we register them
+// via TCustomShowFlag (same pattern as SeinARTSFogOfWar).
+//   - SeinSteering: footprint ring, velocity arrow, avoidance arrow,
+//     perception circle, look-ahead cone. Module-public so per-controller
+//     draw sites can share the gate (via IsSteeringShowFlagOnForWorld).
+//   - SeinExtents: each entity's FSeinExtentsComponent shapes in PIE and the
+//     level editor — every shape draws as a red wire box / capsule, matching
+//     the BP-viewport extents visualizer so the same shape reads identically
+//     in both contexts. Sim-side concept (Extents lives in SeinARTSCoreEntity)
+//     but hosted here for ticker-infrastructure reuse — SeinARTSCoreEntity has
+//     no debug-draw pipeline of its own.
 namespace UE::SeinARTSMovement
 {
 	static TCustomShowFlag<> ShowSteering(
@@ -74,246 +80,180 @@ namespace UE::SeinARTSMovement
 		SFG_Normal,
 		NSLOCTEXT("SeinARTSMovement", "ShowSteering", "Steering"));
 
-	// Extents show flag — draws each entity's FSeinExtentsComponent shapes
-	// in PIE and the level editor — every shape draws as a red wire box /
-	// capsule, matching the BP-viewport extents visualizer so the same shape
-	// reads identically in both contexts. Sim-side concept (Extents lives in
-	// SeinARTSCoreEntity) but hosted here for ticker-infrastructure reuse —
-	// SeinARTSCoreEntity has no debug-draw pipeline of its own.
 	static TCustomShowFlag<> ShowExtents(
 		TEXT("SeinExtents"),
 		/*DefaultEnabled*/ false,
 		SFG_Normal,
 		NSLOCTEXT("SeinARTSMovement", "ShowExtents", "Extents"));
+}
 
-	bool IsSteeringShowFlagOnForWorld(UWorld* World)
+namespace
+{
+	/** Generic show-flag plumbing shared by the Steering and Extents flags.
+	 *  Wraps one TCustomShowFlag with the viewport-iterating toggle/query/
+	 *  console-command boilerplate that was previously copy-pasted per flag.
+	 *  The `LogName` is the human-facing console command name (e.g.
+	 *  "Sein.Show.Steering") used only for the toggle's UE_LOG line. */
+	struct FSeinShowFlagToggle
 	{
-		if (!World) return false;
+		TCustomShowFlag<>& Flag;
+		const TCHAR* LogName;
+		const TCHAR* FlagName;
+
+		/** True iff some viewport rendering `World` currently has the flag on.
+		 *  Matches by world so toggling off on the user's visible viewport
+		 *  hides the viz for that viewport's units even if some other viewport
+		 *  (editor / other PIE) still has the flag on. */
+		bool IsOnForWorld(UWorld* World) const
+		{
+			if (!World) return false;
 
 #if WITH_EDITOR
-		if (GEditor)
-		{
-			for (const FLevelEditorViewportClient* Vp : GEditor->GetLevelViewportClients())
+			if (GEditor)
 			{
-				if (Vp && Vp->GetWorld() == World
-				    && ShowSteering.IsEnabled(Vp->EngineShowFlags))
+				for (const FLevelEditorViewportClient* Vp : GEditor->GetLevelViewportClients())
 				{
-					return true;
+					if (Vp && Vp->GetWorld() == World && Flag.IsEnabled(Vp->EngineShowFlags))
+					{
+						return true;
+					}
 				}
 			}
-		}
 #endif
-		// Enumerate every FWorldContext's GameViewport — in multi-client PIE
-		// there are multiple GameViewports and only one is GEngine->GameViewport.
-		// Match by world so toggling the flag off on the user's visible
-		// viewport actually hides the viz for that viewport's units, even
-		// if some other viewport (editor / other PIE) still has the flag on.
-		if (GEngine)
-		{
-			for (const FWorldContext& Ctx : GEngine->GetWorldContexts())
+			// Enumerate every FWorldContext's GameViewport — in multi-client
+			// PIE there are multiple GameViewports and only one is
+			// GEngine->GameViewport.
+			if (GEngine)
 			{
-				if (Ctx.GameViewport
-				    && Ctx.GameViewport->GetWorld() == World
-				    && ShowSteering.IsEnabled(Ctx.GameViewport->EngineShowFlags))
+				for (const FWorldContext& Ctx : GEngine->GetWorldContexts())
 				{
-					return true;
+					if (Ctx.GameViewport && Ctx.GameViewport->GetWorld() == World
+					    && Flag.IsEnabled(Ctx.GameViewport->EngineShowFlags))
+					{
+						return true;
+					}
+				}
+			}
+			return false;
+		}
+
+		/** Set the flag across all editor + game viewport clients. Iterates
+		 *  every FWorldContext's GameViewport so multi-client PIE applies the
+		 *  toggle to every PIE window, not just the primary one pointed at by
+		 *  GEngine->GameViewport. */
+		void SetEnabledAllViewports(bool bEnable) const
+		{
+#if WITH_EDITOR
+			if (GEditor)
+			{
+				for (FLevelEditorViewportClient* Vp : GEditor->GetLevelViewportClients())
+				{
+					if (Vp)
+					{
+						Flag.SetEnabled(Vp->EngineShowFlags, bEnable);
+						Vp->Invalidate();
+					}
+				}
+			}
+#endif
+			if (GEngine)
+			{
+				for (const FWorldContext& Ctx : GEngine->GetWorldContexts())
+				{
+					if (Ctx.GameViewport)
+					{
+						Flag.SetEnabled(Ctx.GameViewport->EngineShowFlags, bEnable);
+					}
 				}
 			}
 		}
-		return false;
+
+		/** "Any viewport has the flag" check used by the console-command toggle.
+		 *  Per-tick draw gates use the per-world IsOnForWorld instead — only the
+		 *  toggle command needs a global "current state" query. */
+		bool IsOnAnyViewport() const
+		{
+#if WITH_EDITOR
+			if (GEditor)
+			{
+				for (const FLevelEditorViewportClient* Vp : GEditor->GetLevelViewportClients())
+				{
+					if (Vp && Flag.IsEnabled(Vp->EngineShowFlags)) return true;
+				}
+			}
+#endif
+			if (GEngine)
+			{
+				for (const FWorldContext& Ctx : GEngine->GetWorldContexts())
+				{
+					if (Ctx.GameViewport && Flag.IsEnabled(Ctx.GameViewport->EngineShowFlags))
+					{
+						return true;
+					}
+				}
+			}
+			return false;
+		}
+
+		/** Console-command handler. Parses on/off the same way as
+		 *  ShowNavigation; no-args = toggle. */
+		void HandleCommand(const TArray<FString>& Args) const
+		{
+			bool bEnable = !IsOnAnyViewport();
+			if (Args.Num() > 0)
+			{
+				const FString& A = Args[0];
+				if (A == TEXT("0") || A.Equals(TEXT("off"),  ESearchCase::IgnoreCase) || A.Equals(TEXT("false"), ESearchCase::IgnoreCase))
+				{
+					bEnable = false;
+				}
+				else if (A == TEXT("1") || A.Equals(TEXT("on"), ESearchCase::IgnoreCase) || A.Equals(TEXT("true"), ESearchCase::IgnoreCase))
+				{
+					bEnable = true;
+				}
+			}
+			SetEnabledAllViewports(bEnable);
+			UE_LOG(LogTemp, Log, TEXT("%s = %s (ShowFlags.%s)"),
+				LogName, bEnable ? TEXT("ON") : TEXT("OFF"), FlagName);
+		}
+	};
+
+	// The two toggles — one instance of the shared helper per flag.
+	static FSeinShowFlagToggle GSteeringToggle{
+		UE::SeinARTSMovement::ShowSteering, TEXT("Sein.Show.Steering"), TEXT("SeinSteering") };
+	static FSeinShowFlagToggle GExtentsToggle{
+		UE::SeinARTSMovement::ShowExtents, TEXT("Sein.Show.Extents"), TEXT("SeinExtents") };
+
+	IConsoleCommand* GShowSteeringCmd = nullptr;
+	IConsoleCommand* GShowExtentsCmd = nullptr;
+	FTSTicker::FDelegateHandle GTickHandle;
+
+	static void OnShowSteeringCommand(const TArray<FString>& Args, UWorld* /*WorldContext*/)
+	{
+		GSteeringToggle.HandleCommand(Args);
+	}
+
+	static void OnShowExtentsCommand(const TArray<FString>& Args, UWorld* /*WorldContext*/)
+	{
+		GExtentsToggle.HandleCommand(Args);
+	}
+}
+
+namespace UE::SeinARTSMovement
+{
+	bool IsSteeringShowFlagOnForWorld(UWorld* World)
+	{
+		return GSteeringToggle.IsOnForWorld(World);
 	}
 
 	bool IsExtentsShowFlagOnForWorld(UWorld* World)
 	{
-		if (!World) return false;
-
-#if WITH_EDITOR
-		if (GEditor)
-		{
-			for (const FLevelEditorViewportClient* Vp : GEditor->GetLevelViewportClients())
-			{
-				if (Vp && Vp->GetWorld() == World
-				    && ShowExtents.IsEnabled(Vp->EngineShowFlags))
-				{
-					return true;
-				}
-			}
-		}
-#endif
-		if (GEngine)
-		{
-			for (const FWorldContext& Ctx : GEngine->GetWorldContexts())
-			{
-				if (Ctx.GameViewport
-				    && Ctx.GameViewport->GetWorld() == World
-				    && ShowExtents.IsEnabled(Ctx.GameViewport->EngineShowFlags))
-				{
-					return true;
-				}
-			}
-		}
-		return false;
+		return GExtentsToggle.IsOnForWorld(World);
 	}
 }
 
 namespace
 {
-	IConsoleCommand* GShowSteeringCmd = nullptr;
-	IConsoleCommand* GShowExtentsCmd = nullptr;
-	FTSTicker::FDelegateHandle GTickHandle;
-
-	/** Set ShowFlags.SeinSteering across all editor + game viewport clients.
-	 *  Iterates every FWorldContext's GameViewport so multi-client PIE applies
-	 *  the toggle to every PIE window, not just the primary one pointed at by
-	 *  GEngine->GameViewport. */
-	static void SetSteeringShowFlag(bool bEnable)
-	{
-#if WITH_EDITOR
-		if (GEditor)
-		{
-			for (FLevelEditorViewportClient* Vp : GEditor->GetLevelViewportClients())
-			{
-				if (Vp)
-				{
-					UE::SeinARTSMovement::ShowSteering.SetEnabled(Vp->EngineShowFlags, bEnable);
-					Vp->Invalidate();
-				}
-			}
-		}
-#endif
-		if (GEngine)
-		{
-			for (const FWorldContext& Ctx : GEngine->GetWorldContexts())
-			{
-				if (Ctx.GameViewport)
-				{
-					UE::SeinARTSMovement::ShowSteering.SetEnabled(Ctx.GameViewport->EngineShowFlags, bEnable);
-				}
-			}
-		}
-	}
-
-	/** "Any viewport has the flag" check used by the console-command toggle.
-	 *  Public consumers (per-tick draw gate) use the per-world variant
-	 *  `IsSteeringShowFlagOnForWorld` instead — only the toggle command needs
-	 *  a global "current state" query. */
-	static bool IsSteeringShowFlagOn_AnyViewport()
-	{
-#if WITH_EDITOR
-		if (GEditor)
-		{
-			for (const FLevelEditorViewportClient* Vp : GEditor->GetLevelViewportClients())
-			{
-				if (Vp && UE::SeinARTSMovement::ShowSteering.IsEnabled(Vp->EngineShowFlags)) return true;
-			}
-		}
-#endif
-		if (GEngine)
-		{
-			for (const FWorldContext& Ctx : GEngine->GetWorldContexts())
-			{
-				if (Ctx.GameViewport && UE::SeinARTSMovement::ShowSteering.IsEnabled(Ctx.GameViewport->EngineShowFlags))
-				{
-					return true;
-				}
-			}
-		}
-		return false;
-	}
-
-	static void OnShowSteeringCommand(const TArray<FString>& Args, UWorld* /*WorldContext*/)
-	{
-		// Parse on/off the same way as ShowNavigation. No-args = toggle.
-		bool bEnable = !IsSteeringShowFlagOn_AnyViewport();
-		if (Args.Num() > 0)
-		{
-			const FString& A = Args[0];
-			if (A == TEXT("0") || A.Equals(TEXT("off"),  ESearchCase::IgnoreCase) || A.Equals(TEXT("false"), ESearchCase::IgnoreCase))
-			{
-				bEnable = false;
-			}
-			else if (A == TEXT("1") || A.Equals(TEXT("on"), ESearchCase::IgnoreCase) || A.Equals(TEXT("true"), ESearchCase::IgnoreCase))
-			{
-				bEnable = true;
-			}
-		}
-		SetSteeringShowFlag(bEnable);
-		UE_LOG(LogTemp, Log, TEXT("Sein.Show.Steering = %s (ShowFlags.SeinSteering)"),
-			bEnable ? TEXT("ON") : TEXT("OFF"));
-	}
-
-	// --- Extents show flag: same toggle / query / command pattern as Steering ---
-	static void SetExtentsShowFlag(bool bEnable)
-	{
-#if WITH_EDITOR
-		if (GEditor)
-		{
-			for (FLevelEditorViewportClient* Vp : GEditor->GetLevelViewportClients())
-			{
-				if (Vp)
-				{
-					UE::SeinARTSMovement::ShowExtents.SetEnabled(Vp->EngineShowFlags, bEnable);
-					Vp->Invalidate();
-				}
-			}
-		}
-#endif
-		if (GEngine)
-		{
-			for (const FWorldContext& Ctx : GEngine->GetWorldContexts())
-			{
-				if (Ctx.GameViewport)
-				{
-					UE::SeinARTSMovement::ShowExtents.SetEnabled(Ctx.GameViewport->EngineShowFlags, bEnable);
-				}
-			}
-		}
-	}
-
-	static bool IsExtentsShowFlagOn_AnyViewport()
-	{
-#if WITH_EDITOR
-		if (GEditor)
-		{
-			for (const FLevelEditorViewportClient* Vp : GEditor->GetLevelViewportClients())
-			{
-				if (Vp && UE::SeinARTSMovement::ShowExtents.IsEnabled(Vp->EngineShowFlags)) return true;
-			}
-		}
-#endif
-		if (GEngine)
-		{
-			for (const FWorldContext& Ctx : GEngine->GetWorldContexts())
-			{
-				if (Ctx.GameViewport && UE::SeinARTSMovement::ShowExtents.IsEnabled(Ctx.GameViewport->EngineShowFlags))
-				{
-					return true;
-				}
-			}
-		}
-		return false;
-	}
-
-	static void OnShowExtentsCommand(const TArray<FString>& Args, UWorld* /*WorldContext*/)
-	{
-		bool bEnable = !IsExtentsShowFlagOn_AnyViewport();
-		if (Args.Num() > 0)
-		{
-			const FString& A = Args[0];
-			if (A == TEXT("0") || A.Equals(TEXT("off"),  ESearchCase::IgnoreCase) || A.Equals(TEXT("false"), ESearchCase::IgnoreCase))
-			{
-				bEnable = false;
-			}
-			else if (A == TEXT("1") || A.Equals(TEXT("on"), ESearchCase::IgnoreCase) || A.Equals(TEXT("true"), ESearchCase::IgnoreCase))
-			{
-				bEnable = true;
-			}
-		}
-		SetExtentsShowFlag(bEnable);
-		UE_LOG(LogTemp, Log, TEXT("Sein.Show.Extents = %s (ShowFlags.SeinExtents)"),
-			bEnable ? TEXT("ON") : TEXT("OFF"));
-	}
-
 	/** Draw active-move debug for `World`:
 	 *   - Yellow solid boxes at each cell the remaining path crosses
 	 *   - Blue solid box at the final-destination cell (flag marker)
@@ -463,15 +403,22 @@ namespace
 			const FVector EntityPos = ToFVector(AgentPosFixed);
 			const FVector CurTarget = ToFVector(Path.Waypoints[CurIdx]);
 
+			// Agent → CURRENT-TARGET waypoint: the unit's live HEADING, distinct from the
+			// planned route below. On-track it lies along the route; when the follower
+			// diverges (e.g. a waypoint-advance bug aiming at a far waypoint) this line
+			// cuts ACROSS the route — the tell that it's a STEERING issue, not a nav one.
 			DrawDebugLine(World, EntityPos, CurTarget, LineEntityToTarget, false, 0.0f, 0, 3.0f);
-			for (int32 i = CurIdx; i < Path.Waypoints.Num() - 1; ++i)
+
+			// FULL planned A* route (every segment from WP[0]), index-independent — always
+			// shows exactly what A* produced, so a follower divergence is visible against it.
+			for (int32 i = 0; i < Path.Waypoints.Num() - 1; ++i)
 			{
 				DrawDebugLine(World, ToFVector(Path.Waypoints[i]), ToFVector(Path.Waypoints[i + 1]),
 					LineChain, false, 0.0f, 0, 2.0f);
 			}
 			DrawDebugSphere(World, ToFVector(Path.Waypoints.Last()), 20.0f, 12,
 				LineChain, false, 0.0f, 0, 2.0f);
-			for (int32 i = CurIdx; i < Path.Waypoints.Num(); ++i)
+			for (int32 i = 0; i < Path.Waypoints.Num(); ++i)
 			{
 				DrawDebugPoint(World, ToFVector(Path.Waypoints[i]), 6.0f, FColor::White, false, 0.0f);
 			}

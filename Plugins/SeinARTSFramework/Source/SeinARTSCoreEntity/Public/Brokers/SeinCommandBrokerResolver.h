@@ -25,15 +25,29 @@
 class USeinWorldSubsystem;
 
 /**
- * Abstract designer-pluggable dispatch resolver for CommandBrokers.
+ * Decides, when an order lands on a broker (a squad or a multi-unit selection), which members run
+ * which abilities against which targets and where each member stands. This is the abstract base you
+ * subclass for custom formation and dispatch behavior; the framework ships the concrete default that
+ * projects override via Default Broker Resolver Class in the SeinARTS Core settings.
  *
- * `ResolveDispatch` runs when a new order hits a broker. Given the broker
- * handle + order input, it returns a dispatch plan enumerating per-member
- * (ability, target) tuples the broker system will issue internally.
+ * A broker fans one player order out to many members. Resolve Dispatch is the entry point: given the
+ * broker handle and the order input, it walks the order's effective member set (a subset-aware slice
+ * that honors the queued order's targeted-members field, not the broker's full roster) and returns a
+ * dispatch plan of per-member (ability, target, position) tuples the broker system issues internally;
+ * members left out of the plan are silently skipped. Resolve Member Ability is the per-member "which
+ * ability does this member want for this click context" hook (default: consult the member's own
+ * command table, highest-priority match, then fallback tag; return an invalid tag to skip the member).
  *
- * `ResolvePositions` is a helper for tight-formation layout. Default impl
- * returns the anchor for every member; subclasses override for class-clustered
- * spacing, ranks, wedges, etc.
+ * Formation layout is a pure, side-effect-free solver so the destination preview can render the exact
+ * positions the player will get on commit. Resolve Formation Layout rotates the group's facing so its
+ * forward axis points from the current centroid toward the target, lays members out on a symmetric
+ * grid, then re-matches members to grid slots to stop paths crossing: the lateral / depth reassign
+ * flags pick left-right rank matching, front-back rank matching, full 2-D nearest-slot matching, or
+ * raw index order. Resolve Positions is the lower-level per-member placement (default returns the
+ * anchor for every member; subclasses add ranks, class clusters, wedges, authored slots), and
+ * Post Process Positions is a generic no-op extension pass to nudge those positions afterward (the
+ * cover extension uses it to snap cover-using members onto nearby cover slots) — it must stay
+ * deterministic (fixed-point only, no float or RNG) since it runs in sim command processing.
  */
 UCLASS(Abstract, Blueprintable, EditInlineNew, ClassGroup = (SeinARTS),
 	meta = (DisplayName = "Command Broker Resolver"))

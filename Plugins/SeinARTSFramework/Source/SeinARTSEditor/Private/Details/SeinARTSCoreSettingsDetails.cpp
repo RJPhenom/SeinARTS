@@ -8,6 +8,7 @@
 #include "Util/SeinAutoTagGenerator.h"
 
 #include "DetailCategoryBuilder.h"
+#include "IDetailGroup.h"
 #include "DetailLayoutBuilder.h"
 #include "DetailWidgetRow.h"
 #include "PropertyHandle.h"
@@ -44,13 +45,59 @@ TSharedRef<IDetailCustomization> FSeinARTSCoreSettingsDetails::MakeInstance()
 
 void FSeinARTSCoreSettingsDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilder)
 {
-	IDetailCategoryBuilder& TagCategory = DetailBuilder.EditCategory(
-		TEXT("Tag Semantics"),
-		FText::GetEmpty(),
-		ECategoryPriority::Default);
+	// Pin the top-level category order in Project Settings. The engine would otherwise order
+	// categories by first-declaration; we set an explicit order here so the panel always reads
+	// top-to-bottom the intended way (Simulation first, Editor Preferences last). Keep this list
+	// in sync with the category declaration order in PluginSettings.h.
+	{
+		const TCHAR* const CategoryOrder[] = {
+			TEXT("Simulation"),
+			TEXT("Level Data"),
+			TEXT("Terrain"),
+			TEXT("Economy"),
+			TEXT("Collision"),
+			TEXT("Navigation"),
+			TEXT("Fog Of War"),
+			TEXT("Network"),
+			TEXT("UI"),
+			TEXT("Debug Visualization"),
+			TEXT("Editor Preferences"),
+		};
+		int32 SortOrder = 0;
+		for (const TCHAR* CategoryName : CategoryOrder)
+		{
+			DetailBuilder.EditCategory(CategoryName).SetSortOrder(SortOrder++);
+		}
+	}
+
+	// Tag Semantics — render the tag-generation settings and the two regenerate buttons together in a
+	// single "Tag Semantics" group under Editor Preferences. The tag properties are declared in the
+	// "Editor Preferences" category (no pipe subcategory) and re-homed here, so the buttons can live in
+	// the SAME group instead of floating at the category level.
+	IDetailCategoryBuilder& EditorPrefsCategory = DetailBuilder.EditCategory(
+		TEXT("Editor Preferences"), FText::GetEmpty(), ECategoryPriority::Default);
+	IDetailGroup& TagGroup = EditorPrefsCategory.AddGroup(
+		TEXT("Tag Semantics"), LOCTEXT("TagSemanticsGroup", "Tag Semantics"),
+		/*bForAdvanced*/ false, /*bStartExpanded*/ true);
+
+	// Re-home the four tag-semantics properties into the group (hide their default placement first),
+	// then the two regenerate buttons follow at the bottom of the group.
+	{
+		const TSharedRef<IPropertyHandle> TagProps[] = {
+			DetailBuilder.GetProperty(GET_MEMBER_NAME_CHECKED(USeinARTSCoreSettings, bEnableAutoTagGeneration)),
+			DetailBuilder.GetProperty(GET_MEMBER_NAME_CHECKED(USeinARTSCoreSettings, TagPrefix)),
+			DetailBuilder.GetProperty(GET_MEMBER_NAME_CHECKED(USeinARTSCoreSettings, PrefixCategoryMappings)),
+			DetailBuilder.GetProperty(GET_MEMBER_NAME_CHECKED(USeinARTSCoreSettings, bAllowTagLayering)),
+		};
+		for (const TSharedRef<IPropertyHandle>& TagProp : TagProps)
+		{
+			DetailBuilder.HideProperty(TagProp);
+			TagGroup.AddPropertyRow(TagProp);
+		}
+	}
 
 	// --- Regenerate Auto-Generated Tags (non-destructive) ---
-	TagCategory.AddCustomRow(LOCTEXT("RegenAutoRowFilter", "Regenerate Auto-Generated Tags"))
+	TagGroup.AddWidgetRow().FilterString(LOCTEXT("RegenAutoRowFilter", "Regenerate Auto-Generated Tags"))
 	.NameContent()
 	[
 		SNew(STextBlock)
@@ -79,7 +126,7 @@ void FSeinARTSCoreSettingsDetails::CustomizeDetails(IDetailLayoutBuilder& Detail
 	];
 
 	// --- Force Regenerate All Tags (destructive, confirmation required) ---
-	TagCategory.AddCustomRow(LOCTEXT("ForceRegenRowFilter", "Force Regenerate All Tags"))
+	TagGroup.AddWidgetRow().FilterString(LOCTEXT("ForceRegenRowFilter", "Force Regenerate All Tags"))
 	.NameContent()
 	[
 		SNew(STextBlock)

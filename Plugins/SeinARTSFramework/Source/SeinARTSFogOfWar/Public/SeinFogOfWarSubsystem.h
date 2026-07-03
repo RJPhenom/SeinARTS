@@ -33,7 +33,8 @@ public:
 	virtual void Deinitialize() override;
 	virtual void OnWorldBeginPlay(UWorld& InWorld) override;
 
-	/** The active fog-of-war instance. Never null after Initialize. */
+	/** The active fog-of-war instance. Null when FogOfWarClass is None (fog off, WYSIWYG); otherwise
+	 *  valid after Initialize. All callers null-guard. */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Fog Of War")
 	USeinFogOfWar* GetFogOfWar() const { return FogOfWar; }
 

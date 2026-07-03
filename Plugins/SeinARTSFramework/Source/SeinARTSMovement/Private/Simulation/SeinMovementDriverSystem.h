@@ -18,7 +18,7 @@
  *              contact ground snap (this subsumed the retired
  *              FSeinInitialSnapSystem), coast-down of residual order momentum
  *              through the decel ramp, and per-tick shove-settle (Z/slope
- *              re-snap at the current position — BAR semantics, no
+ *              re-snap at the current position — settle-in-place semantics, no
  *              return-to-home).
  *
  *          Contained entities (garrison / transport / attachment) are posed by

@@ -118,6 +118,35 @@ struct FSeinPlanPathContext
 	USeinWorldSubsystem* World;
 };
 
+/**
+ * The per-tick OUTPUT of a movement mode's steering POLICY (USeinMovement::ComputeMotion). The
+ * mode answers only "where do I want to go and face this tick?"; the base Tick harness applies the
+ * shared mechanism (translate, nav-collision floor, ground snap, TurnRate-clamped turn, slope tilt,
+ * velocity persistence). One struct so the policy contract can grow additively without churn.
+ */
+USTRUCT(BlueprintType, meta = (DisplayName = "Sein Motion"))
+struct FSeinMotion
+{
+	GENERATED_BODY()
+
+	/** Intended planar (XY) world velocity this tick — direction × speed. The harness moves the unit
+	 *  by Velocity·dt (clamped so it can't overshoot the current waypoint), applies the hard
+	 *  nav-collision floor + ground snap, and persists the unit's Velocity from the ACTUAL
+	 *  post-collision delta. Zero = hold position (still rotates if bUpdateFacing). */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Movement")
+	FFixedVector Velocity = FFixedVector::ZeroVector;
+
+	/** Target facing yaw (radians) to turn toward this tick, clamped by the harness to TurnRate·dt
+	 *  (then slope-tilted for ground modes). Applied only when bUpdateFacing is true. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Movement")
+	FFixedPoint TargetYaw = FFixedPoint::Zero;
+
+	/** When false the unit holds its current facing (no rotation this tick) — e.g. the strafe-free
+	 *  Basic mode. When true the harness turns current yaw toward TargetYaw at TurnRate. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Movement")
+	bool bUpdateFacing = false;
+};
+
 UCLASS(Abstract, Blueprintable, meta = (DisplayName = "Sein Movement"))
 class SEINARTSMOVEMENT_API USeinMovement : public UObject
 {
@@ -154,70 +183,32 @@ public:
 	void BP_OnMoveBegin(USeinMoverHandle* Mover);
 	virtual void BP_OnMoveBegin_Implementation(USeinMoverHandle* Mover) {}
 
-	/** Called each sim tick while the move is active. Mutates Entity.Transform
-	 *  and writes runtime state back through MoveData (e.g. Velocity).
-	 *  Advances CurrentWaypointIndex as waypoints are consumed.
+	/** Called each sim tick while the move is active. The base implementation is the shared MECHANISM
+	 *  HARNESS: it advances CurrentWaypointIndex, tests arrival (acceptance ring OR the
+	 *  IsOvershootArrival graceful-stop guard that prevents a unit orbiting a slot it can't quite
+	 *  hit), calls the mode's ComputeMotion policy for this tick's desired velocity + facing, then
+	 *  applies the universal mechanism — translate + hard nav-collision floor + ground snap +
+	 *  TurnRate-clamped turn + slope tilt + velocity persistence.
 	 *  @return true when the entity has reached the final waypoint.
 	 *
-	 *  SEALED sim-facing entry. It no longer carries behavior — it points the
-	 *  reusable USeinMoverHandle at `Ctx` and dispatches to the BP-overridable
-	 *  BP_Tick. C++ modes that override Tick(Ctx) directly (BasicMovement, the
-	 *  Movement+ vehicles) bypass BP_Tick entirely, exactly as before. */
+	 *  A mode customizes FEEL by overriding ComputeMotion (Tier 1 — Basic / BasicUnit / Infantry, and
+	 *  BP-authored modes). A mode that needs full control of the tick (the Movement+ vehicles)
+	 *  overrides Tick(Ctx) directly and bypasses the harness + ComputeMotion entirely. */
 	virtual bool Tick(const FSeinMovementContext& Ctx);
 
-	/** Moves the unit one frame along its path. Return true once it has reached the destination.
+	/** The single steering-POLICY hook: return this unit's desired motion for the current tick — the
+	 *  intended planar velocity, and the yaw to turn toward (or bUpdateFacing = false to hold facing).
+	 *  The base Tick harness owns everything else (waypoint advance, arrival, the nav-collision floor,
+	 *  ground snap, the TurnRate-clamped turn, slope tilt, velocity persistence), so a mode answers
+	 *  only "where do I want to go and face this tick?".
 	 *
-	 *  This is the full movement step. The default runs the built-in loop (speed up, brake into the
-	 *  goal, face the way it is travelling), which calls Compute Speed and Compute Steer for its two
-	 *  decisions. Override those hooks to tweak feel; override this whole event only when you want to
-	 *  drive the unit yourself with the Mover Handle toolkit. */
-	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Movement", meta = (DisplayName = "Tick"))
-	bool BP_Tick(USeinMoverHandle* Mover);
-	virtual bool BP_Tick_Implementation(USeinMoverHandle* Mover);
-
-	/** Decides how fast the unit wants to go this frame. Return its target cruise speed.
-	 *
-	 *  Called by the default loop. Whatever you return is then capped so the unit can still brake to a
-	 *  clean stop at its goal (from its Deceleration) — so this sets cruise speed, not the brake curve.
-	 *  The default returns the unit's terrain-adjusted top speed. Override to slow for sharp turns, low
-	 *  health, and so on. For full control over braking, use a custom Tick instead. */
-	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Movement", meta = (DisplayName = "Compute Speed"))
-	FFixedPoint ComputeSpeed(USeinMoverHandle* Mover);
-	virtual FFixedPoint ComputeSpeed_Implementation(USeinMoverHandle* Mover);
-
-	/** Decides the fastest the unit may go right now and still brake to a clean stop at its goal —
-	 *  return that speed cap for the given remaining stop distance.
-	 *
-	 *  Called by the default loop near the goal; it floors the cruise speed (from Compute Speed) with
-	 *  whatever you return, so the unit stops cleanly. The default solves the kinematic brake equation
-	 *  from the unit's Deceleration. Override to reshape JUST the brake — a hard stop, a two-stage brake,
-	 *  a slow creep onto the exact spot — without taking over the whole Tick. Distance To Stop is the
-	 *  remaining distance to the acceptance ring. */
-	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Movement", meta = (DisplayName = "Compute Arrival Speed Cap"))
-	FFixedPoint ComputeArrivalSpeedCap(USeinMoverHandle* Mover, FFixedPoint DistanceToStop);
-	virtual FFixedPoint ComputeArrivalSpeedCap_Implementation(USeinMoverHandle* Mover, FFixedPoint DistanceToStop);
-
-	/** Decides which way the unit faces this frame. Return the final facing as a yaw angle in radians,
-	 *  after turning.
-	 *
-	 *  Called by the default loop on frames the unit moved, given the direction it actually travelled
-	 *  and its current yaw. This returns the absolute facing to end at, not a turn amount. The default
-	 *  turns toward the travel direction no faster than the unit's Turn Rate. Override for a different
-	 *  steering model, like a car that turns only while moving or a tank that pivots in place. The loop
-	 *  still tilts the unit to the ground slope on top of the yaw you return. */
-	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Movement", meta = (DisplayName = "Compute Steer"))
-	FFixedPoint ComputeSteer(USeinMoverHandle* Mover, const FFixedVector& DesiredMoveDir, FFixedPoint CurrentYaw);
-	virtual FFixedPoint ComputeSteer_Implementation(USeinMoverHandle* Mover, const FFixedVector& DesiredMoveDir, FFixedPoint CurrentYaw);
-
-	/** Decides whether the unit backs up to reach this order's goal. Return true to reverse.
-	 *
-	 *  Checked once when the order starts, so it cannot flip-flop mid-move. The default returns true
-	 *  only when the unit is allowed to reverse and the goal is close and behind it. When true, the
-	 *  default loop limits speed to Reverse Top Speed and faces the unit away from the goal so it backs
-	 *  in. Units that cannot reverse never do. */
-	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Movement", meta = (DisplayName = "Should Reverse"))
-	bool ShouldReverse(USeinMoverHandle* Mover);
-	virtual bool ShouldReverse_Implementation(USeinMoverHandle* Mover);
+	 *  The default is the ultra-basic ground policy: head to the current waypoint at terrain-scaled
+	 *  top speed (bent by local avoidance, scaled by the avoidance speed-yield) and face the direction
+	 *  of travel. Override for a custom feel; override the whole Tick only when you must drive the unit
+	 *  yourself with the Mover Handle toolkit. */
+	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Movement", meta = (DisplayName = "Compute Motion"))
+	FSeinMotion ComputeMotion(USeinMoverHandle* Mover);
+	virtual FSeinMotion ComputeMotion_Implementation(USeinMoverHandle* Mover);
 
 	/** Called when the action ends (completed/cancelled/failed). Default:
 	 *  no-op. Override to clean up subclass transient state.
@@ -248,7 +239,7 @@ public:
 	 *       of freezing.
 	 *    3. Settle: per-tick Z/altitude re-snap + smoothed slope pitch/roll at
 	 *       the current position, so a unit shoved by collision settles where
-	 *       it lands (BAR semantics — no return-to-home). Yaw is NEVER touched
+	 *       it lands (settle-in-place semantics — no return-to-home). Yaw is NEVER touched
 	 *       while idle.
 	 *  Ctx.Path is a shared EMPTY path during idle ticks and the waypoint index
 	 *  is a dummy — overrides must not read them. PURE SELF-MUTATION: never
@@ -314,6 +305,13 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "SeinARTS", meta = (DisplayName = "Tuning Struct"))
 	TObjectPtr<UScriptStruct> TuningStruct;
 
+	/** This mode's Deceleration rate (world units per second²) — how hard it brakes. Base returns 0:
+	 *  the ultra-basic Basic/BasicUnit have no ramp (they stop crisply). Modes with a speed ramp
+	 *  (Infantry + the Movement+ vehicles) override this to return their per-class UDS Deceleration.
+	 *  Read by the impl-agnostic consumers that need a mode's braking rate WITHOUT knowing its UDS
+	 *  type: the base idle coast-down (TickIdle) and USeinMoveToAction's arrival-imminent estimate. */
+	virtual FFixedPoint GetDeceleration(const FSeinMovementComponent* MovementData) const { return FFixedPoint::Zero; }
+
 	/** Returns the unit's cruise altitude above ground (reads the Get Altitude hook by default).
 	 *  C++ modes may override this directly. */
 	virtual FFixedPoint GetAltitude(const FSeinMovementComponent* MovementData) const { return BP_GetAltitude(); }
@@ -354,7 +352,7 @@ public:
 	 *  Wheeled, for example, can call the nav's cell A* to get a coarse
 	 *  polyline, then post-process through a kinematic curve fitter that
 	 *  emits arc + straight + reverse segments suited to its turn dynamics
-	 *  (CoH-style armored car driving). Helicopters / jets compose their
+	 *  (high-fidelity armored car driving). Helicopters / jets compose their
 	 *  own 3D planners.
 	 *
 	 *  Return values:
@@ -390,6 +388,13 @@ public:
 	/** Minimum turn radius (world units) the unit's steering can physically
 	 *  execute — 0 means it can pivot in place (no radius constraint). This is a
 	 *  per-unit QUERY: it REPORTS the radius; nothing in the base acts on it yet.
+	 *
+	 *  SANCTIONED base seam (NOT extension-anticipation): the movement base is
+	 *  deliberately purpose-built for vehicle movement — PlanPath / PlannerHandle /
+	 *  GetMinTurnRadius are the kinematic-planning API that lives here on purpose, the
+	 *  same way the opt-in reverse fields do. It is intentionally a no-op consumer in
+	 *  the base; the producer (the curve planner) is a Movement+ concern. Do not flag
+	 *  this as a "base must not anticipate extensions" violation.
 	 *
 	 *  Intended consumer: a Movement+ vehicle planner (see PlanPath) would read it
 	 *  to round path corners into drivable arcs and to slow before turns tighter
@@ -481,7 +486,7 @@ public:
 	 *  bounding circle even when the body could fit if perfectly oriented.
 	 *
 	 *  FUTURE / UNBUILT: this conservative bounding circle is the right trade-off for
-	 *  generic / infantry-centric games. Two SEPARATE future pieces would relax it for
+	 *  generic / infantry-centric unit sets. Two SEPARATE future pieces would relax it for
 	 *  long vehicles — and they live in DIFFERENT layers, so don't conflate them:
 	 *    - Drivable arcs + reversing (Reeds-Shepp / curve fitting) -> a Movement+ vehicle
 	 *      planner via PlanPath (per-unit kinematics), NOT a nav class.
@@ -531,6 +536,12 @@ protected:
 	 *  allows slopes up to ~78° at typical per-tick step distances while
 	 *  rejecting multi-meter wall step-ups. Set 0 to disable. */
 	FFixedPoint CachedMaxStepHeight = FFixedPoint::FromInt(75);
+
+	/** Agent's nav layer mask (`FSeinNavigationComponent::NavLayerMask`, default
+	 *  0x01 = ground), cached alongside the footprint. Passed to the nav floor's
+	 *  `IsWorldPositionClear` so a dynamic blocker only stops agents its authored
+	 *  `BlockedNavLayerMask` intersects. */
+	uint8 CachedNavLayerMask = 0x01;
 
 	/** Shortest signed angular delta from `From` to `To`, wrapped to [-π, π]. */
 	static FFixedPoint ShortestAngleDelta(FFixedPoint From, FFixedPoint To);
@@ -622,19 +633,16 @@ protected:
 	 *  terrain). Thinning is per-call and never touches Path.Waypoints —
 	 *  drift / repath logic still sees all original waypoints.
 	 *
-	 *  `MaxCornerAngleRadians` — DEPRECATED. Previously controlled a cos(angle)
-	 *  weighting on segment budget consumption to soften corner anticipation;
-	 *  removed because it interacted badly with off-path drift and never
-	 *  cleanly solved the wheeled corner-cutting problem. Parameter retained
-	 *  for ABI compatibility but ignored. Use the new cluster-skip thinning
-	 *  for cluster handling; for sharp-corner anticipation, lean on lower
-	 *  `LookAheadDistance` instead. */
+	 *  Corner handling: rely on the cluster-skip thinning above; for sharp-
+	 *  corner anticipation, lean on a lower `LookAheadDistance` instead. (A
+	 *  former `MaxCornerAngleRadians` cos-falloff knob was removed — it
+	 *  interacted badly with off-path drift and never cleanly solved the
+	 *  wheeled corner-cutting problem.) */
 	static FFixedVector ResolveLookAheadPoint(
 		const FFixedVector& AgentPos,
 		const FSeinPath& Path,
 		int32 CurrentWaypointIndex,
-		FFixedPoint LookAhead,
-		FFixedPoint MaxCornerAngleRadians = FFixedPoint::Zero);
+		FFixedPoint LookAhead);
 
 	/** Cross-over waypoint advance — advances `CurrentWaypointIndex` past
 	 *  any waypoint the agent has CROSSED along the segment toward the
@@ -713,10 +721,15 @@ protected:
 	 *  and no `NavData.FallbackFootprintRadius`), the ring is empty and behavior
 	 *  collapses to legacy point-only check.
 	 *
-	 *  Static-only by design — `Nav->IsPassable` reads the bake, not the
-	 *  dynamic blocker overlay (that lives on a per-FindPath path); blocking
-	 *  vehicles against each other is penetration resolution's job. So this
-	 *  is "don't walk through walls", not "don't walk through tanks." */
+	 *  Dynamic-AWARE — queries `Nav->IsWorldPositionClear` (static bake AND the
+	 *  runtime dynamic-blocker list), so a unit can't slide its body through a
+	 *  non-baked cover wall / deployable that A* correctly routed around. The
+	 *  path is a steering force that can miss; this floor is the last defense,
+	 *  and a static-only floor let bodies slip through dynamic walls (the
+	 *  "moves through the wall" symptom). Uses the agent's own nav layer mask,
+	 *  and by default units DON'T stamp nav — so this blocks against STRUCTURES,
+	 *  not other units; unit-vs-unit push stays collision/penetration's job
+	 *  ("don't walk through walls", not "don't walk through tanks"). */
 	FFixedVector ResolveNavCollision(
 		const FFixedVector& OldPos,
 		const FFixedVector& NewPos,
@@ -837,12 +850,6 @@ protected:
 	 *  only during a single BP_Tick / hook dispatch. */
 	UPROPERTY(Transient)
 	TObjectPtr<USeinMoverHandle> CachedHandle;
-
-	/** Reverse decision for the current order, latched at OnMoveBegin and read by the default loop.
-	 *  Transient per-order instance state — re-derived deterministically each order from hashed
-	 *  inputs (position / facing / goal / component fields), never hashed itself (same class as a
-	 *  vehicle's steer state). false for every forward-only unit → byte-identical. */
-	bool bReversingThisOrder = false;
 
 	/** Reusable plan-time handle. PlanPath is const, so it's set via a localized const_cast (caching a
 	 *  scratch handle is not movement-instance state). Its context/path pointers are valid only during

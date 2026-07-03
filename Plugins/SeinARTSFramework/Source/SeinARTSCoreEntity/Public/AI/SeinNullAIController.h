@@ -30,6 +30,26 @@
 #include "AI/SeinAIController.h"
 #include "SeinNullAIController.generated.h"
 
+/**
+ * The stand-in AI controller that takes over a player's units when they drop out of a match,
+ * before you have authored your own strategic AI. It does nothing on its own — the units just
+ * sit idle — but it wires up the whole takeover pipeline so you can see it fire. This is the
+ * one selected out of the box for the Default AI Controller Class setting.
+ *
+ * When a slot is dropped and the drop policy is BasicAI, the framework needs SOMETHING concrete
+ * to instantiate as the takeover controller. This is that minimal-but-complete reference impl
+ * that ships in the box — the same role Sein Navigation (A*) plays for navigation. Its tick is
+ * a genuine no-op and it emits no commands, so the abandoned units stand still, but the full
+ * lifecycle runs: the slot transitions to AITakeover, the controller registers with the World
+ * Subsystem, ticks during the Command Processing phase, and unregisters cleanly if the player
+ * reconnects. Replace it with your project's real strategic AI by pointing the Default AI
+ * Controller Class setting at your own subclass.
+ *
+ * It exists as a real class rather than an empty class path on purpose: an empty default leaves
+ * silent "did the takeover wire even fire?" ambiguity, whereas this concrete fallback makes the
+ * registration log line and the sim tick happen unconditionally, so you can watch the takeover
+ * occur even before your own AI is authored.
+ */
 UCLASS(BlueprintType, meta = (DisplayName = "Null AI Controller"))
 class SEINARTSCOREENTITY_API USeinNullAIController : public USeinAIController
 {

@@ -1,28 +1,13 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinAvoidanceDefault.h
- * @brief   The framework's shipped local-avoidance implementation — the
- *          SpringRTS/BAR-distilled lateral-steer boids model.
+ * @brief   The framework's shipped local-avoidance plug — CURRENTLY A CLEAN-SLATE SKELETON.
  *
- *          Per moving unit, reads neighbours from the collision spatial hash (a
- *          start-of-tick snapshot, since this runs BEFORE movement) and accumulates
- *          a purely-LATERAL steering nudge that bends the unit around other MOVABLE
- *          units before they collide. UNIT-TO-UNIT ONLY — static geometry (walls,
- *          buildings) contributes nothing; nav blocking already keeps units clear of
- *          those, so avoidance is a pure cohesion tool, never a pathing tool. The
- *          nudge is written to FSeinMovementComponent::AvoidanceOutput.SteerDir; the
- *          shipped model leaves AvoidanceOutput.SpeedScale at 1 (it bends heading, it
- *          does not yet brake-to-yield). The movement Tick consumes the steer via
- *          USeinMovement::ApplyAvoidanceSteer. The hard floor still guarantees
- *          no overlap — this just makes crowds FLOW instead of grind.
- *
- *          Model: turn-sign nudge, head-on weighting, distance falloff, closing-
- *          velocity gate, group cohesion (broker / cohesion-id), bulldoze-idle, a
- *          deterministic handle tie-break for the dead-ahead symmetry case, and
- *          Phase-D group-vs-group passing. All fixed-point, lockstep-safe.
- *
- *          The default for `USeinARTSCoreSettings::AvoidanceClass`. Subclass
- *          USeinAvoidance directly to ship a different model.
+ *          ComputeAvoidance is a deliberate no-op: it writes no steer, so selecting this class is
+ *          behaviourally IDENTICAL to AvoidanceClass=None. It exists as the registered scaffold to
+ *          rebuild a local-avoidance model into from the ground up (the former lateral-steer boids
+ *          model was removed 2026-07-02 — recoverable from git history). See the .cpp for the
+ *          rebuild contract (snapshot reads, per-unit AvoidanceOutput writes, determinism rules).
  */
 
 #pragma once
@@ -33,6 +18,13 @@
 
 class USeinWorldSubsystem;
 
+/**
+ * The out-of-the-box local-avoidance plug. Currently a CLEAN-SLATE SKELETON: it does nothing, so
+ * moving units behave exactly as they would with avoidance turned off (AvoidanceClass=None). This
+ * is the scaffold for building the shipped avoidance model from the ground up — build the model in
+ * ComputeAvoidance here, or subclass Sein Avoidance (the abstract base) to ship an alternative and
+ * select it in settings.
+ */
 UCLASS(meta = (DisplayName = "Sein Avoidance Default"))
 class SEINARTSMOVEMENT_API USeinAvoidanceDefault : public USeinAvoidance
 {
@@ -40,10 +32,8 @@ class SEINARTSMOVEMENT_API USeinAvoidanceDefault : public USeinAvoidance
 
 public:
 
-	/** One PreTick local-avoidance pass — see USeinAvoidance::ComputeAvoidance and
-	 *  the file-header model notes. Reads the immutable start-of-tick snapshot, fans
-	 *  the per-unit computation across worker threads (SeinParallelFor), writes each
-	 *  unit's own AvoidanceOutput.SteerDir. Bit-identical serial under
-	 *  `Sein.Sim.Parallel 0`. */
+	/** One PreTick local-avoidance pass. CLEAN-SLATE SKELETON — currently a no-op (writes no steer;
+	 *  behaviourally identical to AvoidanceClass=None). Rebuild the model here; see the .cpp and
+	 *  USeinAvoidance::ComputeAvoidance for the contract. */
 	virtual void ComputeAvoidance(USeinWorldSubsystem& World) override;
 };

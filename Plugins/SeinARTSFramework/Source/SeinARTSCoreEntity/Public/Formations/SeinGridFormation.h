@@ -16,6 +16,20 @@
 #include "Formations/SeinFormation.h"
 #include "SeinGridFormation.generated.h"
 
+/**
+ * Arranges a selection into a tidy rectangular block when you order them to move. Units fill a
+ * square-ish grid of evenly spaced slots, centered on where you clicked and rotated so the block
+ * faces the direction of travel.
+ *
+ * This is a GRID formation shape: it lays out one slot per member on a uniform lattice sized to be
+ * as close to square as the member count allows (roughly equal rows and columns), spaces slots by
+ * Inter Unit Spacing (in UE world units / centimeters), and rotates the whole grid to face the move
+ * direction. Every slot is projected onto walkable navigation so nobody is placed inside a wall or
+ * off the grid. This reproduces the layout the retired automatic formation-spread once produced, but
+ * as an opt-in shape a project selects on the command broker's resolver. After this shape emits its
+ * slots, the resolver still runs its anti-cross slot re-match pass so units claim the nearest slot
+ * and their paths do not needlessly cross.
+ */
 UCLASS(ClassGroup = (SeinARTS), meta = (DisplayName = "Grid Formation"))
 class SEINARTSCOREENTITY_API USeinGridFormation : public USeinFormation
 {

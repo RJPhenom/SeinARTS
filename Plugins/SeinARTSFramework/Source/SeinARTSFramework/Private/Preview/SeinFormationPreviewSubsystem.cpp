@@ -268,9 +268,21 @@ void USeinFormationPreviewSubsystem::EnsurePreviewActorSpawned()
 	TSubclassOf<ASeinFormationPreviewActor> ActorClass;
 	if (const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>())
 	{
-		if (Settings->FormationPreviewActorClass.IsValid())
+		// WYSIWYG. None/empty => the preview actor is OFF: spawn nothing, so no on-ground destination
+		// markers render (PreviewActor stays null; callers already treat that as "not spawned"). A
+		// set-but-unloadable/abstract class is a mistake, not an off-switch: fall back to the default.
+		if (Settings->FormationPreviewActorClass.IsNull())
 		{
-			ActorClass = Settings->FormationPreviewActorClass.TryLoadClass<ASeinFormationPreviewActor>();
+			USeinARTSCoreSettings::ReportDisabledSystem(TEXT("Formation Preview"),
+				TEXT("No on-ground destination markers are drawn for move orders."), /*bHighSeverity*/ false);
+			return;
+		}
+		ActorClass = Settings->FormationPreviewActorClass.TryLoadClass<ASeinFormationPreviewActor>();
+		if (!ActorClass || ActorClass->HasAnyClassFlags(CLASS_Abstract))
+		{
+			UE_LOG(LogSeinFormationPreviewSubsystem, Error,
+				TEXT("FormationPreviewActorClass '%s' could not be loaded or is abstract — falling back to the default."),
+				*Settings->FormationPreviewActorClass.ToString());
 		}
 	}
 	if (!ActorClass || ActorClass->HasAnyClassFlags(CLASS_Abstract))

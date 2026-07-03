@@ -24,6 +24,22 @@
 class UDecalComponent;
 class UMaterialInstanceDynamic;
 
+/**
+ * Draws the destination/formation preview markers as decals projected onto the ground, so they
+ * drape over hills and slopes instead of floating on a flat plane. Pick this when your maps have
+ * uneven terrain; pick the mesh backend (Formation Preview Actor) when the ground is mostly flat.
+ *
+ * Uses DEFERRED DECAL projection: each marker is a UDecalComponent whose projection box is cast
+ * straight down onto the scene, painting the preview material onto whatever ground geometry it
+ * touches. This is what lets the marker conform to terrain. The trade-off is a deferred decal
+ * cannot write motion velocity for its own movement, so while you drag the markers across the
+ * ground they smear/ghost under TAA; pair this backend with TSR (which rejects stale history by
+ * colour) if that bothers you. ProjectionDepthUU sets how far each decal box extends vertically in
+ * world units (centered on the placement position) — keep it small (~64) so decals hit the ground
+ * only and don't bleed onto overhead structures. Selected via the Formation Preview Actor Class
+ * setting; the assigned preview material must be a Deferred Decal domain material (null falls back
+ * to the engine's default deferred-decal material).
+ */
 UCLASS(Blueprintable, NotPlaceable, meta = (DisplayName = "Formation Preview Actor (Decal)"))
 class SEINARTSFRAMEWORK_API ASeinDecalFormationPreviewActor : public ASeinFormationPreviewActor
 {

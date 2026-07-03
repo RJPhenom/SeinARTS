@@ -53,12 +53,23 @@
 class USeinWorldSubsystem;
 
 /**
- * Parallel collision resolver (Jacobi).
+ * Resolves collision for sim-side entities across worker threads. Same job as the default
+ * resolver — stop solid bodies overlapping — structured so the heavy per-body compute fans out
+ * in parallel for large unit counts.
  *
- * Runs after movement (PostTick) and before StateHash, like the default, and
- * shares its entire collision floor; only the relaxation schedule (snapshot-read
- * + deferred-apply Jacobi, per-mover-parallel) differs. Default-off: chosen via
- * settings.
+ * Uses JACOBI relaxation. Where Gauss-Seidel reads each body's latest mid-pass position (quick
+ * to settle, but sequential), Jacobi freezes a start-of-pass snapshot, has every body compute
+ * only its OWN separation from that frozen state into a private slot, then applies all the
+ * moves together once the pass ends. No body ever reads another's mid-pass move, so each body's
+ * work is a pure function of immutable state writing a disjoint slot — the contract that lets
+ * the pass run as a deterministic parallel-for. The trade-off is convergence: because
+ * neighbours don't see each other's pushes within a pass, Jacobi needs more passes to settle a
+ * dense cluster (default 8, versus 4 for Gauss-Seidel). Everything else — the mass-weighting,
+ * the infinite-mass walls and statics, the hard-barrier gate that refuses a push through a
+ * baked wall or off the grid, the overlap events — is the exact same collision floor as the
+ * default; only the relaxation schedule differs, and the result is bit-identical to the serial
+ * path (provable on the Sein.Sim.Parallel 0-vs-1 state-hash gate). Runs after movement and
+ * before the state hash each tick.
  */
 UCLASS(meta = (DisplayName = "Sein Collision Resolver (Parallel)"))
 class SEINARTSCOREENTITY_API USeinCollisionResolverParallel : public USeinCollisionResolver

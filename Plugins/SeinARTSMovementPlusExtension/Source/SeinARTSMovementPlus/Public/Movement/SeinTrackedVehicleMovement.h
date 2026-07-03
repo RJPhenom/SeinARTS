@@ -65,6 +65,10 @@ public:
 	 *  USeinTrackedVehicleMovement is selected. */
 	virtual UScriptStruct* GetMovementDataStruct() const override;
 
+	/** Braking rate for the impl-agnostic idle coast + arrival-imminent estimate — reads
+	 *  Deceleration out of the unwrapped FSeinTrackedMovementData sub-data. */
+	virtual FFixedPoint GetDeceleration(const FSeinMovementComponent* MovementData) const override;
+
 protected:
 
 	/** Latched-at-OnMoveBegin reverse decision. Tracked needs no

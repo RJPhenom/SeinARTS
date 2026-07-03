@@ -22,6 +22,31 @@
 
 class USeinFormation;
 
+/**
+ * Decides, for each unit in a selection, what a single order actually makes that unit do, and
+ * where each one stands when it gets there. This is the resolver picked out of the box, and it is
+ * the base the Squad and Cover extensions build on.
+ *
+ * Dispatch is capability-driven, per member. If a member can service the order's context (its own
+ * commands table maps the click context to an ability), that ability is dispatched against the
+ * order target. Otherwise the member falls back to a "tag along" move toward its own slot in the
+ * formation — so non-combatants swept up in an attack order, or units with an unmapped click type,
+ * still travel with the group instead of standing idle. The tag-along ability is configurable and
+ * can be turned off (leaving those members idle for the order).
+ *
+ * Positions come from a formation. The order gesture (a right-click-drag, an alt-drag, etc.) can
+ * stamp a formation tag that this resolver looks up in Formations By Tag; if nothing matches it
+ * uses the Default Formation Class, and if that is also unset it falls back to a blob where every
+ * member shares the single destination. Point the default at a spreading formation (grid, wedge,
+ * ring, etc.) to change the no-gesture layout.
+ *
+ * Two opt-out slot RE-MATCH passes keep a moving formation from making units cross paths: the
+ * lateral pass re-ranks members left-to-right, and with the depth pass added the grid gets a full
+ * 2-D nearest-slot assignment so a deep block also converges without units swapping front-to-back.
+ * Both default on; clearing them falls back to raw index order. The re-match is deterministic —
+ * every sort carries a handle tie-break for a total, bit-identical order across clients — so it is
+ * safe for lockstep.
+ */
 UCLASS(ClassGroup = (SeinARTS), meta = (DisplayName = "Default Command Broker Resolver"))
 class SEINARTSCOREENTITY_API USeinDefaultCommandBrokerResolver : public USeinCommandBrokerResolver
 {

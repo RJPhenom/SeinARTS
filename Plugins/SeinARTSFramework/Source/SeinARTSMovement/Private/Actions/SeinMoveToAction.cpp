@@ -23,6 +23,7 @@
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
 #include "Engine/World.h"
+#include "HAL/IConsoleManager.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinMove, Log, All);
 
@@ -113,10 +114,6 @@ void USeinMoveToAction::Initialize(const FFixedVector& InDestination)
 	bAuthoritativeDestination = false;
 	TimeSinceLastRepath = FFixedPoint::Zero;
 	ConsecutiveRepathFailures = 0;
-	bInEscapeMode = false;
-	EscapeTimer = FFixedPoint::Zero;
-	EscapeStartPos = FFixedVector::ZeroVector;
-	StallVicinityRadiusSq = FFixedPoint::Zero;
 	BestDistToFinalSq = FFixedPoint::FromInt(1000000);
 	TimeStalledNearGoal = FFixedPoint::Zero;
 	Path.Clear();
@@ -312,71 +309,6 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 			: FFixedPoint::FromInt(50);
 		AcceptanceRadiusSq = Acceptance * Acceptance;
 
-		// Near-goal stall-settle vicinity (see StallVicinityRadiusSq in the
-		// header). Sized for TWO arrival cases: (1) a single body pinned a
-		// footprint short of a goal it can't physically occupy (wall-embedded
-		// goal — a body of radius R can't get its center closer than ~R); and
-		// (2) the OUTER ring of a crowd packing onto ONE shared destination (the
-		// single-destination default) — those units pin a pack-radius out, held
-		// by the bodies ahead, and must still recognise "this is as close as I
-		// fit" instead of shoving forever. The ×8 footprint reach covers a packed
-		// disc of up to ~64 units (pack radius ≈ footprint·√N); first-pass tuning
-		// value — make it crowd-size-aware (broker-supplied N) if huge groups
-		// outgrow it. Uses the SAME footprint cascade as runtime collision + path
-		// planning (Extents → NavComp → 0). Floored at 2×Acceptance so
-		// zero-footprint (intangible) units still get a meaningful band.
-		const FFixedPoint StallFootprint =
-			USeinMovement::ResolveCollisionRadius(&World, OwnerEntity, NavComp);
-		// StallVicinityRadiusSq is sized crowd-aware below, once the group's member
-		// count is known (the outer ring of a big arrival cluster must fall inside
-		// the band, else those units never reach the settle logic at all).
-
-		// Minimum MEANINGFUL closing (in ACTUAL distance) to keep the near-goal
-		// stall clock from resetting — see BestDistToFinalSq in the header. Half a
-		// footprint: larger than collision push-back jitter and slow pack-compaction
-		// creep (so a pinned outer unit settles), far smaller than what a genuinely
-		// approaching unit covers in the 0.75s settle window. Floored so zero-
-		// footprint units still get a real band, not the old sub-mm one.
-		StallProgressBand = StallFootprint / FFixedPoint::Two;
-		const FFixedPoint MinProgressBand = FFixedPoint::FromInt(5);
-		if (StallProgressBand < MinProgressBand) StallProgressBand = MinProgressBand;
-		StallFootprintRadius = StallFootprint;
-
-		// Crowd-aware settle vicinity. Both the stall settle and the pile-up settle
-		// (in TickAction) must reach the OUTER ring of the arrival cluster, whose
-		// radius grows with the group: a loose pack of N bodies spans ~footprint x
-		// sqrt(N). Size the band from the broker member count so the whole pack
-		// qualifies, but keep it TIGHT for a lone unit (see GroupReach below): a single
-		// unit has no cluster to span, and an oversized band made big lone units count
-		// as "near goal" while still far out and accelerating, tripping the stall-settle
-		// (the large-footprint move abort). The stall clock itself only accrues when a
-		// unit is genuinely not closing (the high-water re-arm in the settle block), so
-		// the band defines WHERE a settle may apply, not whether a moving unit settles.
-		int32 GroupCount = 1;
-		if (const FSeinBrokerMembershipData* Membership =
-				World.GetComponent<FSeinBrokerMembershipData>(OwnerEntity))
-		{
-			if (Membership->CurrentBrokerHandle.IsValid())
-			{
-				if (const FSeinCommandBrokerData* Broker =
-						World.GetComponent<FSeinCommandBrokerData>(Membership->CurrentBrokerHandle))
-				{
-					if (Broker->Members.Num() > GroupCount) GroupCount = Broker->Members.Num();
-				}
-			}
-		}
-		// ~2x the crowd's pack radius (pack radius is ~sqrt(N) footprints), so a packed
-		// arrival's outer ring stays covered with margin while a LONE unit (N=1) gets a
-		// tight 2-footprint band. The old fixed +6 base put single big units "near goal"
-		// ~8 footprints out (~17 m for a vehicle) -- far enough to trip the near-goal
-		// stall-settle while still accelerating toward a reachable goal.
-		const FFixedPoint GroupReach =
-			FFixedPoint::Two * SeinMath::Sqrt(FFixedPoint::FromInt(GroupCount));
-		FFixedPoint StallVicinityRadius = Acceptance + StallFootprint * GroupReach;
-		const FFixedPoint MinStallVicinity = Acceptance * FFixedPoint::Two;
-		if (StallVicinityRadius < MinStallVicinity) StallVicinityRadius = MinStallVicinity;
-		StallVicinityRadiusSq = StallVicinityRadius * StallVicinityRadius;
-
 		// Authoritative destination: is this move's target a position that overrules
 		// the coarse nav bake (a cover slot)? Queried ONCE here (not per-tick) and
 		// carried on the movement tick context so ResolveNavCollision lets the unit
@@ -427,13 +359,7 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 	// below owns Path while we're trying to nudge out of a stuck cell. It
 	// runs its own repath attempts at a different cadence (gated on
 	// distance moved since escape entry) and exits escape on success.
-	if (bInEscapeMode)
-	{
-		// Skip — escape-nudge logic below replaces Path each tick until
-		// either the chassis escapes (fresh repath returns a valid full
-		// path) or the escape timer expires (Stranded).
-	}
-	else if (Movement->BypassPathfinding())
+	if (Movement->BypassPathfinding())
 	{
 		TimeSinceLastRepath = FFixedPoint::Zero;
 		// fall through to the movement tick below — no repath block to run.
@@ -659,128 +585,6 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 	}
 	} // end else (non-bypass repath block)
 
-	// ----------------------------------------------------------------------
-	// Escape-nudge fallback. When A* can't expand from the chassis's start
-	// cell, FindPath returns a partial path with a single waypoint at (or
-	// very near) the chassis itself — the chassis no-ops and the action
-	// would otherwise instantly NotifyCompleted (the "0 drivable segments"
-	// warning case). Same trap fires when ConsecutiveRepathFailures climbs
-	// (path system gives up trying because every recent repath returned
-	// degenerate or failed). Either way: rather than let the move silently
-	// end, drive the chassis up the WallDistance gradient (toward the
-	// highest-WD passable neighbor) until either A* can plan again or we
-	// conclude the chassis is genuinely Stranded.
-	//
-	// Detection runs unconditionally (after both bypass-pathfinding and
-	// normal repath branches). While in escape mode the override below
-	// replaces Path each tick; the normal repath block above is gated to
-	// skip while escape is active.
-	// ----------------------------------------------------------------------
-	{
-		const FFixedVector AgentPosForEscape = Entity->Transform.GetLocation();
-		const bool bDegeneratePath = Path.bIsValid
-			&& Path.bIsPartial
-			&& Path.Waypoints.Num() <= 1;
-
-		if (!bInEscapeMode && (bDegeneratePath || ConsecutiveRepathFailures >= 2))
-		{
-			bInEscapeMode = true;
-			EscapeTimer = FFixedPoint::Zero;
-			EscapeStartPos = AgentPosForEscape;
-			UE_LOG(LogSeinMove, Log,
-				TEXT("MoveAction entering escape mode: agent=(%.1f,%.1f) degeneratePath=%d failures=%d dest=(%.1f,%.1f) (entity %s)"),
-				AgentPosForEscape.X.ToFloat(), AgentPosForEscape.Y.ToFloat(),
-				bDegeneratePath ? 1 : 0, ConsecutiveRepathFailures,
-				Destination.X.ToFloat(), Destination.Y.ToFloat(),
-				*OwnerEntity.ToString());
-		}
-
-		if (bInEscapeMode)
-		{
-			EscapeTimer = EscapeTimer + DeltaTime;
-			// 2 seconds max — chassis at MoveSpeed should clear several cells
-			// in that time. If it hasn't, we're genuinely stuck.
-			const FFixedPoint MaxEscapeDuration = FFixedPoint::FromInt(2);
-
-			bool bExitedEscape = false;
-
-			// Re-attempt full PlanPath once the chassis has moved meaningfully
-			// since entering escape (typical signal that the nudge worked and
-			// we're back in plannable territory). Half-cell distance²
-			// threshold so we don't fire on every tiny jitter.
-			const FFixedPoint MinMoveToRetrySq = FFixedPoint::FromInt(50 * 50);
-			if (NavSub && Movement
-				&& (AgentPosForEscape - EscapeStartPos).SizeSquared() >= MinMoveToRetrySq)
-			{
-				FSeinPlanPathContext EscapeReplanCtx{
-					*Entity, MoveComp, NavComp, Destination, Nav, NavSub, OwnerEntity, &World
-				};
-				FSeinPath NewPath;
-				const ESeinPathResult Result = Movement->PlanPath(EscapeReplanCtx, NewPath);
-				if (Result == ESeinPathResult::Found
-					&& NewPath.bIsValid
-					&& !NewPath.bIsPartial
-					&& NewPath.Waypoints.Num() > 0)
-				{
-					// Escaped — use the fresh full path, resume normal driving.
-					Path = NewPath;
-					CurrentWaypointIndex = 0;
-					PathOriginAgentPos = AgentPosForEscape;
-					bInEscapeMode = false;
-					EscapeTimer = FFixedPoint::Zero;
-					ConsecutiveRepathFailures = 0;
-					bExitedEscape = true;
-					UE_LOG(LogSeinMove, Log,
-						TEXT("MoveAction escape successful: repath returned %d waypoints (entity %s)"),
-						Path.Waypoints.Num(), *OwnerEntity.ToString());
-				}
-			}
-
-			if (!bExitedEscape)
-			{
-				// Timeout — chassis tried to escape, but didn't make enough
-				// progress. Fail with Stranded so AI scripts can distinguish
-				// "couldn't plan at all" (PathNotFound) from "tried to nudge
-				// out of a stuck cell and failed."
-				if (EscapeTimer >= MaxEscapeDuration)
-				{
-					UE_LOG(LogSeinMove, Warning,
-						TEXT("MoveAction escape: timed out after %.2fs without exit (entity %s)"),
-						EscapeTimer.ToFloat(), *OwnerEntity.ToString());
-					Fail(static_cast<uint8>(ESeinMoveFailureReason::Stranded));
-					return true;
-				}
-
-				// Find a nudge target via the nav's escape hook. A nav impl that
-				// doesn't provide one (base default returns false) falls through
-				// to the sealed-pocket Stranded path below — same terminal outcome.
-				FFixedVector EscapeTarget;
-				int32 TargetWD = -1;
-				if (!Nav->FindEscapeNudgeTarget(AgentPosForEscape, EscapeTarget, TargetWD))
-				{
-					// No passable neighbor at chassis cell — sealed pocket.
-					// No amount of nudging will help; fail immediately.
-					UE_LOG(LogSeinMove, Warning,
-						TEXT("MoveAction escape: no passable neighbor at chassis cell — Stranded (entity %s)"),
-						*OwnerEntity.ToString());
-					Fail(static_cast<uint8>(ESeinMoveFailureReason::Stranded));
-					return true;
-				}
-
-				// Override Path with the escape target. The normal carrot
-				// resolver + steering pipeline drives toward it next tick;
-				// no changes needed in any movement subclass.
-				Path.Clear();
-				Path.Waypoints.Add(EscapeTarget);
-				Path.bIsValid = true;
-				Path.bIsPartial = false;
-				Path.DeriveSegmentsFromWaypoints();
-				CurrentWaypointIndex = 0;
-				PathOriginAgentPos = AgentPosForEscape;
-			}
-		}
-	}
-
 	// Delegate the per-tick advance. Movement mutates Entity.Transform and
 	// CurrentWaypointIndex; returns true when the final waypoint is reached.
 	// Terrain SPEED multiplier at the unit's current cell — sampled once per tick and
@@ -838,8 +642,11 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		FFixedVector ToFinal = FinalWp - AgentPos;
 		ToFinal.Z = FFixedPoint::Zero;
 		const FFixedPoint DistFinal = ToFinal.Size();
+		// The braking rate is per-mode now (Movement+ UDS), so query it through the movement instead
+		// of the bare component. Ultra-basic modes return 0 → KinematicArrivalSpeedCap gives a huge
+		// cap → bArrivalImminent stays false (they don't brake), which is correct.
 		const FFixedPoint MaxArrivalSpeed = USeinMovement::KinematicArrivalSpeedCap(
-			DistFinal, MoveComp->Deceleration);
+			DistFinal, Movement->GetDeceleration(MoveComp));
 		MoveComp->bArrivalImminent = MaxArrivalSpeed < MoveComp->TopSpeed;
 	}
 	else
@@ -847,125 +654,38 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		MoveComp->bArrivalImminent = false;
 	}
 
-	// PILE-UP ARRIVAL (crowd-aware). A unit near its destination that has STOPPED
-	// MAKING PROGRESS (its stall clock has reached the short delay below) and is
-	// pressed against a neighbour which has come to REST between it and the goal
-	// has effectively arrived - it is only shoving the back of a settled crowd, so
-	// stop. The progress gate is the crucial part: a still-FLOWING unit keeps
-	// closing, so its stall clock stays ~0 and it NEVER enters here - it flows in
-	// and fills the pack instead of collapsing the moment the front ranks arrive.
-	// Only a genuinely stuck unit settles, and it does so fast (the short delay)
-	// rather than waiting the full stall duration. Propagates outward from whoever
-	// stops first (the goal occupant arrives within AcceptanceRadius), so a whole
-	// pack rests in a quick ripple. (TimeStalledNearGoal is maintained by the
-	// stall block below; here it carries last tick's value - a one-tick lag that
-	// is immaterial.)
-	// CORNER GUARD: only settle on the FINAL path segment. A tight corner can be
-	// straight-line-near the goal while still path-far (the route bends around
-	// it), so a unit jammed in corner congestion must NOT count as "arrived" -
-	// that orphans it mid-route. While intermediate waypoints remain, keep going;
-	// the settle can only fire once the unit is on the last leg to the goal.
-	if (!bReachedEnd && !bInEscapeMode && Path.Waypoints.Num() > 0
-		&& StallVicinityRadiusSq > FFixedPoint::Zero
-		&& CurrentWaypointIndex >= Path.Waypoints.Num() - 1
-		&& TimeStalledNearGoal >= FFixedPoint::FromInt(3) / FFixedPoint::FromInt(10))
-	{
-		const FFixedVector AgentPos = Entity->Transform.GetLocation();
-		const FFixedVector FinalWp = Path.Waypoints.Last();
-		FFixedVector ToFinal = FinalWp - AgentPos;
-		ToFinal.Z = FFixedPoint::Zero;
-		const FFixedPoint MyGoalDistSq = ToFinal.SizeSquared();
-		if (MyGoalDistSq <= StallVicinityRadiusSq)
-		{
-			const FFixedPoint MyGoalDist = SeinMath::Sqrt(MyGoalDistSq);
-			// Neighbour search reach ~2.5 footprints: enough to see the body
-			// directly ahead even at loose pack spacing.
-			const FFixedPoint ContactReach =
-				StallFootprintRadius * FFixedPoint::FromInt(5) / FFixedPoint::Two;
-			TArray<FSeinEntityHandle> Near;
-			World.GetCollisionSpatialHash().QueryRadius(AgentPos, ContactReach, Near, OwnerEntity);
-			for (const FSeinEntityHandle& Other : Near)
-			{
-				// Only a neighbour at REST counts (no active move order - arrived
-				// or idle). A still-moving blocker means the crowd has not settled
-				// yet, so keep pushing.
-				const FSeinMovementComponent* OtherMove =
-					World.GetComponent<FSeinMovementComponent>(Other);
-				if (!OtherMove || OtherMove->bHasTarget) continue;
-				const FSeinEntity* OtherEntity = World.GetEntity(Other);
-				if (!OtherEntity) continue;
-				FFixedVector OtherToFinal = FinalWp - OtherEntity->Transform.GetLocation();
-				OtherToFinal.Z = FFixedPoint::Zero;
-				// The rested neighbour must sit BETWEEN me and the goal (closer by a
-				// margin) - then I am genuinely piling up behind it, not resting
-				// beside an unrelated stopped unit.
-				if (OtherToFinal.Size() + StallProgressBand < MyGoalDist)
-				{
-					MoveComp->Velocity = FFixedVector::ZeroVector;
-					bReachedEnd = true;
-					UE_LOG(LogSeinMove, Verbose,
-						TEXT("MoveAction pile-up settle: jammed behind a rested "
-						     "neighbour %.1fcm from goal - arriving (entity %s)"),
-						MyGoalDist.ToFloat(), *OwnerEntity.ToString());
-					break;
-				}
-			}
-		}
-	}
-
-	// ----------------------------------------------------------------------
-	// Near-goal stall settle. See StallVicinityRadiusSq in the header. A unit
-	// pinned a footprint short of a final waypoint it can't physically occupy
-	// (nav-reachable cell, collision-blocked body) satisfies neither the
-	// movement's within-acceptance nor its overshoot arrival, so it would seek
-	// — and, for face-velocity movements, SPIN — that point forever. Convert
-	// "near the goal and unable to get any closer for a while" into arrival.
-	// Skipped while escaping (that path owns Path and aims at a nudge cell, not
-	// the goal) and once the movement already reported arrival this tick.
-	// ----------------------------------------------------------------------
-	if (!bReachedEnd && !bInEscapeMode && Path.Waypoints.Num() > 0
-		&& StallVicinityRadiusSq > FFixedPoint::Zero
-		&& CurrentWaypointIndex >= Path.Waypoints.Num() - 1) // CORNER GUARD: final leg only (see pile-up above)
+	// Near-goal failsafe. A unit pinned within a tight band of a final waypoint it can't physically
+	// occupy (a nav-reachable cell whose body footprint is wall/crowd-blocked) never satisfies the
+	// harness arrival — it is never within AcceptanceRadius, and it heads INTO the obstacle so the
+	// overshoot guard (which needs "heading away") won't fire either. Left alone it would push
+	// forever. So: once it stops closing for a short while THIS close, this is as near as its body
+	// fits — arrive. Final leg only, and the band is TIGHT (3× acceptance), so only a unit
+	// essentially AT its goal settles — never one still approaching (that was the old crowd-aware
+	// band's "forgotten units" bug).
+	if (!bReachedEnd && Path.Waypoints.Num() > 0
+		&& CurrentWaypointIndex >= Path.Waypoints.Num() - 1)
 	{
 		const FFixedVector AgentPos = Entity->Transform.GetLocation();
 		FFixedVector ToFinal = Path.Waypoints.Last() - AgentPos;
 		ToFinal.Z = FFixedPoint::Zero;
 		const FFixedPoint DistFinalSq = ToFinal.SizeSquared();
+		const FFixedPoint VicinitySq = AcceptanceRadiusSq * FFixedPoint::FromInt(9); // (3× acceptance)²
 
-		if (DistFinalSq > StallVicinityRadiusSq)
+		if (DistFinalSq > VicinitySq)
 		{
-			// Outside the near-goal band — re-arm the high-water mark to here so a
-			// fresh approach (after a detour / repath / escape that moved us away)
-			// measures progress from this point, not a stale earlier best.
+			// Outside the tight band — re-arm the progress high-water + clock for a fresh approach.
 			BestDistToFinalSq = DistFinalSq;
 			TimeStalledNearGoal = FFixedPoint::Zero;
 		}
 		else
 		{
-			// [FIX] Re-arm the high-water mark UP to the current distance when we are
-			// currently FARTHER than it. A unit that STARTS inside the vicinity band
-			// (big footprint / big group, so band > goalDist) never runs the outside-
-			// band re-arm above, so BestDistToFinalSq would otherwise stay at its ~1000u
-			// init sentinel -- making the progress gate below unsatisfiable for any goal
-			// past that, so a moving, closing unit wrongly accrues the stall clock and
-			// settles far short. Clamping up makes "best" the true closest-reached from
-			// the first in-band tick (and re-bases it if the unit is pushed back out).
-			if (DistFinalSq > BestDistToFinalSq)
-			{
-				BestDistToFinalSq = DistFinalSq;
-			}
-
-			// Within the band. BestDistToFinalSq only DECREASES here, so jitter or
-			// orbit around the closest reachable point never resets the clock —
-			// only genuine fresh closing does. The progress test is in ACTUAL
-			// distance against StallProgressBand (set at setup), NOT a squared
-			// additive epsilon — that collapsed to a sub-mm threshold at band
-			// ranges, so collision jitter / slow pack-creep re-armed the clock every
-			// tick and the unit shoved the goal forever. Now a pinned unit settles;
-			// a genuinely approaching one gains >> a footprint per window and stays.
-			const FFixedPoint DistFinal     = SeinMath::Sqrt(DistFinalSq);
-			const FFixedPoint BestDistFinal = SeinMath::Sqrt(BestDistToFinalSq);
-			if (DistFinal + StallProgressBand < BestDistFinal)
+			// Clamp the high-water up on the first in-band tick (it inits to a large sentinel).
+			if (DistFinalSq > BestDistToFinalSq) BestDistToFinalSq = DistFinalSq;
+			// Meaningful-closing test in ACTUAL distance (a squared additive epsilon vanishes at
+			// range). 10 cm: larger than collision jitter, far smaller than a genuine approach.
+			const FFixedPoint DistFinal = SeinMath::Sqrt(DistFinalSq);
+			const FFixedPoint BestDist  = SeinMath::Sqrt(BestDistToFinalSq);
+			if (DistFinal + FFixedPoint::FromInt(10) < BestDist)
 			{
 				BestDistToFinalSq = DistFinalSq;
 				TimeStalledNearGoal = FFixedPoint::Zero;
@@ -973,19 +693,9 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 			else
 			{
 				TimeStalledNearGoal = TimeStalledNearGoal + DeltaTime;
-				// 0.75s — long enough that legitimate near-goal maneuvering (rounding
-				// a neighbour, a brief brake) keeps closing and resets the clock;
-				// short enough that a true pin stops spinning promptly.
-				const FFixedPoint StallSettleDuration =
-					FFixedPoint::FromInt(3) / FFixedPoint::FromInt(4);
-				if (TimeStalledNearGoal >= StallSettleDuration)
+				// 0.75 s pinned this close → this is as far in as the body gets; settle.
+				if (TimeStalledNearGoal >= FFixedPoint::FromInt(3) / FFixedPoint::FromInt(4))
 				{
-					UE_LOG(LogSeinMove, Verbose,
-						TEXT("MoveAction near-goal settle: pinned %.1fcm from final for "
-						     "%.2fs — arriving (entity %s)"),
-						SeinMath::Sqrt(DistFinalSq).ToFloat(),
-						TimeStalledNearGoal.ToFloat(),
-						*OwnerEntity.ToString());
 					MoveComp->Velocity = FFixedVector::ZeroVector;
 					bReachedEnd = true;
 				}

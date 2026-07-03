@@ -27,7 +27,7 @@
  *            FFixedPoint → FVector boundary, render-only, not sim state.
  *
  *          Upgrades in later passes:
- *          - Shadowcast + lampshade eye-height blocker test (CoH TrueSight)
+ *          - Shadowcast + lampshade eye-height blocker test (elevation-aware true-line-of-sight)
  *          - Per-player VisionGroup grids + ownership filter
  *          - 6 custom layer bits (Stealth, Thermal, etc.)
  *          - Stamp-delta refcount (only recompute on cell-cross / prop change)
@@ -122,6 +122,34 @@ struct FSeinFogSourceState
 	TArray<int32> Footprints[8];
 };
 
+/**
+ * Computes what each player can see: hides the map under fog, reveals cells around units that have
+ * vision, and remembers explored ground once you've been there. This is the fog-of-war system
+ * selected out of the box.
+ *
+ * Each observer (one per player ID) gets its own grid of per-cell visibility bits: bit 0 is a
+ * sticky Explored flag that stays lit for the rest of the match once revealed, and bits 1-7 are
+ * live vision layers (bit 1 = Normal sight, bits 2-7 = custom layers such as Thermal or Stealth)
+ * that clear the moment nothing is looking. Live bits are reference-counted per cell, so a cell
+ * stays visible while any source covers it and only goes dark when the last one leaves.
+ *
+ * Vision is stamped each sim tick from every entity carrying a vision component: for each source
+ * an eye position is taken at the unit's sim Z plus its EyeHeight, and line-of-sight to every cell
+ * in range is tested with an integer Bresenham walk whose ray Z is interpolated from the eye down
+ * to the target cell. That elevation-aware trace is the true-sight behavior — a unit on a roof
+ * looking down still has a wall between them block the far ground. Terrain always occludes; static
+ * baked blockers and runtime dynamic blockers (smoke, destructibles) occlude only when their layer
+ * mask covers the stamp's bit, so smoke can hide Normal sight while letting Thermal through. A
+ * delta-refcount cache short-circuits any source whose pose and stamp set are unchanged since last
+ * tick, so most stationary units cost nothing; changed sources fan out across worker threads
+ * (parallel compute, serial apply). All observers stamp against the same tick-N snapshot, keeping
+ * the result lockstep-identical on every client.
+ *
+ * This is also the "FogOfWar" layer provider on the unified level-data bake: it runs its own
+ * occluder box-sweep at its own coarser cell size (an integer multiple of the shared grid) and
+ * adopts the substrate's shared ground height, loading its runtime grid back from that baked
+ * channel. When no bake is present the grid auto-sizes from the Sein Level Volumes in the level.
+ */
 UCLASS(BlueprintType, meta = (DisplayName = "Sein Fog Of War (Default)"))
 class SEINARTSFOGOFWAR_API USeinFogOfWarDefault : public USeinFogOfWar, public ISeinLevelLayerProvider
 {

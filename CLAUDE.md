@@ -10,10 +10,12 @@ It owns the cross-cutting rules that apply to **all four plugins**. Each plugin 
 > three extension plugins. When you start work, read this file first, then the plugin-specific
 > `CLAUDE.md` for whatever you're touching.
 
-> **Active initiative — movement & navigation depth.** CoH-quality vehicle movement (Reeds-Shepp
-> curve planning), nav links / jump, clean-API hardening, and the `FSeinPath` typed-segment seam are
-> under active development, so the nav↔movement seam is evolving. `Movement_Mode_Authoring_Plan.md`
-> (project root) tracks the BP movement-mode authoring thread. Re-ground against live code before asserting.
+> **Active initiative — movement & navigation depth.** The movement/avoidance/nav seams are clean and
+> pluggable (`USeinAvoidance` / `USeinCollisionResolver` / `USeinNavigation` abstract-base + settings
+> picker; the `FSeinPath` typed-segment seam); current work is deflating localized bloat in a few
+> function bodies (A* diagnostics, the `TickAction` re-seek tangle, the avoidance kernel) without
+> redesigning the seams, plus future high-fidelity vehicle movement (steering-first; Reeds-Shepp baked
+> offline, never runtime). The nav↔movement seam is still evolving — re-ground against live code before asserting.
 
 ---
 

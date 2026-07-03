@@ -176,11 +176,7 @@ void USeinCollisionResolverParallel::JacobiPass(USeinWorldSubsystem& World, cons
 
 			// Effective response = weaker of the two sides (Block needs both) —
 			// the same gating as the default's ResolvePass.
-			const ESeinCollisionResponse DefSelfToOther = ChannelDefaults.FindRef(OtherExt->ObjectType.Channel);
-			const ESeinCollisionResponse DefOtherToSelf = ChannelDefaults.FindRef(Self.Ext->ObjectType.Channel);
-			const ESeinCollisionResponse RespSelfToOther = Self.Ext->CollisionResponses.GetResponseForChannel(OtherExt->ObjectType.Channel, DefSelfToOther);
-			const ESeinCollisionResponse RespOtherToSelf = OtherExt->CollisionResponses.GetResponseForChannel(Self.Ext->ObjectType.Channel, DefOtherToSelf);
-			if (ResolvePairResponse(RespSelfToOther, RespOtherToSelf) != ESeinCollisionResponse::Block) continue;
+			if (ResolvePairFor(*Self.Ext, *OtherExt, ChannelDefaults) != ESeinCollisionResponse::Block) continue;
 
 			const FSeinEntity* OtherEntityPtr = World.GetEntityPool().Get(OtherHandle);
 			if (!OtherEntityPtr) continue;

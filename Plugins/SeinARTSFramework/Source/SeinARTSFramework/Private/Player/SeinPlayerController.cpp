@@ -275,7 +275,7 @@ void ASeinPlayerController::SetupInputComponent()
 
 void ASeinPlayerController::OnSelectPressed(const FInputActionValue& Value)
 {
-	// LMB confirms an active targeter session (CoH-style: left-click places
+	// LMB confirms an active targeter session (left-click places
 	// the target). We intercept on press, route to the subsystem, and set a
 	// "consumed" flag so the matching release doesn't run the default
 	// selection-clear / marquee logic on the same click.
@@ -1476,8 +1476,8 @@ void ASeinPlayerController::LogCameraUpdate()
 	// Route through the lockstep wire — observer commands (CameraUpdate /
 	// SelectionChanged) are sim-skip per `IsObserverCommand()` so they don't
 	// affect state hash, but propagating them through the per-turn stream
-	// powers two features for free: live spectator/POV-switch (CoH-style
-	// 2-minute-delay observer mode reads the same wire) and complete
+	// powers two features for free: live spectator/POV-switch (a
+	// delayed observer mode reads the same wire) and complete
 	// replays (server's ReplayWriter naturally captures all observer
 	// streams alongside sim-mutating commands). Bandwidth cost is small —
 	// CameraUpdate is throttled to CameraLogInterval ticks + skip-if-static,

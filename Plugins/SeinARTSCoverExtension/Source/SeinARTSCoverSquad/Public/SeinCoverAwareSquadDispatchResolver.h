@@ -1,7 +1,7 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinCoverAwareSquadDispatchResolver.h
- * @brief   Squad dispatch resolver with CoH-style cover-snap.
+ * @brief   Squad dispatch resolver with automatic cover-snap.
  *
  *          Same cover-snap behavior as USeinCoverAwareDefaultBrokerResolver
  *          but inherits from USeinSquadDispatchResolver so squads with

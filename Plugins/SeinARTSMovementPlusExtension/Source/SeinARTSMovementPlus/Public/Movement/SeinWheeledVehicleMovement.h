@@ -55,6 +55,10 @@ public:
 	 *  when USeinWheeledVehicleMovement is selected. */
 	virtual UScriptStruct* GetMovementDataStruct() const override;
 
+	/** Braking rate for the impl-agnostic idle coast + arrival-imminent estimate — reads
+	 *  Deceleration out of the unwrapped FSeinWheeledMovementData sub-data. */
+	virtual FFixedPoint GetDeceleration(const FSeinMovementComponent* MovementData) const override;
+
 protected:
 
 	/** Per-instance current steer angle (radians, +/- MaxSteerAngle). Smoothed

@@ -48,8 +48,8 @@ enum class ESeinCooldownScope : uint8
 	Member,
 
 	/** All squad members' instances of the ability tag go on cooldown when ANY
-	 *  member activates. Default — matches CoH-style "the squad threw the grenade,
-	 *  the whole squad waits before throwing again." For non-squad entities this
+	 *  member activates. Default — matches the "the squad threw the grenade,
+	 *  the whole squad waits before throwing again" semantic. For non-squad entities this
 	 *  collapses to Member behavior automatically. */
 	Squad
 };

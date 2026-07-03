@@ -19,7 +19,7 @@ ESeinAbilityTargetValidationResult FSeinAbilityValidation::ValidateTarget(
 	USeinWorldSubsystem& World)
 {
 	// Range check — owner → nearest point on target's footprint surface
-	// (NOT center). Matches CoH/AoE-style "distance to the building, not
+	// (NOT center). Matches the classic RTS "distance to the building, not
 	// distance to the building's pivot" semantics. Build / repair / attack
 	// abilities with a target that has FSeinExtentsComponent get face-aware
 	// range; abilities targeting un-extents-ed entities (or world locations)

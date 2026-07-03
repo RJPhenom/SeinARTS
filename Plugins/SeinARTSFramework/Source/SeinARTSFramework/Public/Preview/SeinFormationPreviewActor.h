@@ -43,6 +43,29 @@ class UStaticMeshComponent;
 class UMaterialInterface;
 class UMaterialInstanceDynamic;
 
+/**
+ * Draws the destination preview for a move order — the ghost markers showing where your selected
+ * units will stand if you order them here. One lives per local player, and this is the renderer
+ * picked out of the box.
+ *
+ * This is the base of the render-backend seam: it owns everything drawing-style-agnostic (the
+ * SetPositions / HideAll API, the per-element change guards that skip redraws when nothing moved,
+ * and the quality-tag-to-tint color resolution) and delegates the actual drawing to a small set of
+ * overridable element hooks (EnsureElementCount, UpdateElement, SetElementVisible, NumElements,
+ * CommitElements). Its own hooks render a pool of flat mesh quads, which is the recommended default:
+ * a moving mesh writes velocity (or uses a masked material that does), so it does NOT ghost under
+ * Temporal Anti-Aliasing the way a moving deferred decal does while you drag the cursor.
+ *
+ * Other looks are subclasses that override those hooks: the decal backend renders a pool of deferred
+ * decals that conform to terrain (but ghost under TAA — pair with TSR); the ISM backend uses one
+ * Instanced Static Mesh with per-instance custom-data tint, a single draw call that scales to huge
+ * formations. A project can author a fully custom backend in C++ or Blueprint (the element hooks are
+ * BlueprintNativeEvents) — e.g. a Niagara-driven look. The Formation Preview Actor Class setting
+ * picks which class is used. This is pure presentation and never mutates sim state. The
+ * quality-tint map is a generic gameplay-tag-to-color table; the framework ships it empty (a neutral
+ * preview) and a project — or the Cover extension's preview Blueprint — populates it. The tint
+ * property names retain the historic "Cover" spelling so existing authored preview values survive.
+ */
 UCLASS(Blueprintable, NotPlaceable, meta = (DisplayName = "Formation Preview Actor (Mesh)"))
 class SEINARTSFRAMEWORK_API ASeinFormationPreviewActor : public AActor
 {

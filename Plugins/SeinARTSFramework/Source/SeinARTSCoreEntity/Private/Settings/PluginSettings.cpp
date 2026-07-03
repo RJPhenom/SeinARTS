@@ -11,65 +11,86 @@
 
 #include "Settings/PluginSettings.h"
 #include "Formations/SeinBoxFormation.h"
-// NOTE: `DefaultBrokerResolverClass` is a soft-class-path (no hard dependency)
-// and defaults to EMPTY → the runtime falls back to the framework's plain
-// `USeinDefaultCommandBrokerResolver` in `SeinWorldSubsystem`. Projects wanting
-// cover-aware loose-unit dispatch opt in by pointing this setting at the Cover
-// Extension's resolver (this repo's DefaultGame.ini does exactly that). The
-// base settings no longer name any cover class — full extension decoupling.
+#include "HAL/IConsoleManager.h"
+#include "Engine/Engine.h"
+#include "Engine/World.h"
+#include "SeinARTSCoreEntityLog.h"
+#include "Misc/Crc.h"
+#include "UObject/UnrealType.h"
+// NOTE: `DefaultBrokerResolverClass` is a soft-class-path (no hard dependency). It now defaults
+// EXPLICITLY to the framework's plain `USeinDefaultCommandBrokerResolver` (WYSIWYG: an EMPTY/None
+// value means loose-unit group dispatch is OFF, so the default must be a real class or a fresh
+// project would ship with group orders disabled). Projects wanting cover-aware loose-unit dispatch
+// point this at the Cover Extension's resolver (this repo's DefaultGame.ini does exactly that). The
+// base settings still name no cover class — full extension decoupling.
 
+// NOTE: the constructor's member-initializer order below MUST match the field
+// DECLARATION order in PluginSettings.h (which follows the Project Settings
+// category order: Simulation → Level Data → Terrain → Economy → Collision →
+// Navigation → Fog Of War → Network → UI → Debug Visualization → Editor
+// Preferences) to avoid -Wreorder. Members with in-class initializers (the
+// avoidance dials, the minimap defaults, etc.) are not listed here.
 USeinARTSCoreSettings::USeinARTSCoreSettings()
+	// Simulation.
 	: SimulationTickRate(30)
 	, MaxTicksPerFrame(5)
-	// ResourceCatalog defaults-constructs via TArray's ctor.
-	// DefaultBrokerResolverClass default-constructs to null (empty soft path) —
-	// no cover-flavored default. See the note above.
 	, EffectCountWarningThreshold(256)
-	// NavigationClass defaults to the shipped A* reference. Hard-coded as a
-	// soft-class path string (not a StaticClass() call) because this module
+	// Level Data. Substrate class defaults EXPLICITLY to the shipped grid; the save folder is
+	// /Game/LevelData by convention (regenerable, gitignored). Both are soft paths so this module
+	// does not depend on SeinARTSLevelData. Empty LevelDataClass now means the substrate is OFF
+	// (WYSIWYG), so the ctor must name the default or a fresh project would boot with no level bake.
+	, LevelDataClass(FSoftClassPath(TEXT("/Script/SeinARTSLevelData.SeinLevelDataDefault")))
+	, LevelDataSaveFolder({TEXT("/Game/LevelData")})
+	// Collision resolver defaults to the shipped Gauss-Seidel resolver. Like
+	// NavigationClass / FogOfWarClass it's a soft-class-path string rather than a
+	// StaticClass() call — the target lives in THIS module (SeinARTSCoreEntity),
+	// so the path could resolve in-module, but the soft path keeps the declaration
+	// uniform with the other pluggable-class settings and lets a designer clear it
+	// back to the default. (Declared in the Collision section, before Navigation.)
+	, CollisionResolverClass(FSoftClassPath(TEXT("/Script/SeinARTSCoreEntity.SeinCollisionResolverDefault")))
+	// Navigation. NavigationClass defaults to the shipped A* reference. Hard-coded
+	// as a soft-class path string (not a StaticClass() call) because this module
 	// (SeinARTSCoreEntity) intentionally does NOT depend on SeinARTSNavigation —
 	// the decoupling is the whole point of the pluggable nav architecture.
 	, NavigationClass(FSoftClassPath(TEXT("/Script/SeinARTSNavigation.SeinNavigationAStar")))
 	, CellSize(FFixedPoint::FromInt(100))
 	, MaxStepHeight(FFixedPoint::FromInt(50))
-	// Unified bake output folder. /Game/LevelData by convention — regenerable,
-	// gitignored. Designers can change this in plugin settings to relocate the
-	// baked `.uasset` (e.g. group per-region, place beside level files).
-	, LevelDataSaveFolder({TEXT("/Game/LevelData")})
 	// Path-pipeline tunables. Budget=32 covers typical RTS group sizes (≤32
-	// units) without any per-tick stagger — a 20-unit move resolves all
-	// paths same tick. Iter-cap + heuristic-weight bound per-call A* cost,
-	// so 32 simultaneous calls is ~32ms typical / 200ms pathological.
-	// Heuristic weight 125% gives paths up to 25% longer than optimal for a
-	// 5–10× search speedup on obstacle-rich maps; visually unnoticeable.
+	// units) without any per-tick stagger — a 20-unit move resolves all paths
+	// same tick. Heuristic weight 125% gives paths up to 25% longer than optimal
+	// for a 5–10× search speedup on obstacle-rich maps; visually unnoticeable.
 	// Max iterations 10000 bounds A* work for unreachable / very-long paths.
 	, PathRequestsPerTickBudget(32)
 	, AStarHeuristicWeightPercent(125)
 	, AStarMaxIterations(10000)
 	// Nav projection tunables — see PluginSettings.h for rationale on each.
 	// 100cm tolerance covers typical curb / step deltas without crossing
-	// platform-height boundaries; 30-cell ring radius is ~30m on a 100cm
-	// grid, plenty for off-edge slot snapping without sweeping huge
-	// blocked regions.
+	// platform-height boundaries; 30-cell ring radius is ~30m on a 100cm grid,
+	// plenty for off-edge slot snapping without sweeping huge blocked regions.
 	, NavProjectionElevationTolerance(FFixedPoint::FromInt(100))
 	, NavProjectionMaxRingRadius(30)
 	// Nav bake island-prune threshold. 16 cells matches the long-standing hardcoded
 	// default — small enough to keep legitimate platforms, large enough to drop cube
 	// tops / floating slivers. Gated to the shipped A* in the editor (IsUsingShippedAStar).
 	, NavMinWalkableIslandCells(16)
-	// Collision resolver defaults to the shipped Gauss-Seidel resolver. Like
-	// NavigationClass / FogOfWarClass it's a soft-class-path string rather than a
-	// StaticClass() call — but here the target lives in THIS module
-	// (SeinARTSCoreEntity), so the path could also resolve in-module; the soft
-	// path keeps the declaration uniform with the other pluggable-class settings
-	// and lets a designer clear it back to the default. (Declared in the Collision
-	// section, between Navigation and Network — initializer order matches.)
-	, CollisionResolverClass(FSoftClassPath(TEXT("/Script/SeinARTSCoreEntity.SeinCollisionResolverDefault")))
+	// Default broker resolver + avoidance model default EXPLICITLY to their shipped classes. Empty
+	// means the system is OFF (WYSIWYG), so a fresh project would otherwise boot with loose-unit
+	// dispatch / avoidance disabled. Both soft paths (no hard dep on the owning module). This repo's
+	// DefaultGame.ini overrides the broker to the Cover-aware resolver.
+	, DefaultBrokerResolverClass(FSoftObjectPath(TEXT("/Script/SeinARTSCoreEntity.SeinDefaultCommandBrokerResolver")))
+	, AvoidanceClass(FSoftClassPath(TEXT("/Script/SeinARTSMovement.SeinAvoidanceDefault")))
+	// Formation preview actor defaults to the shipped mesh-quad preview. Soft path (no hard dep on
+	// SeinARTSFramework). Empty now means the preview is OFF (WYSIWYG), so the ctor must name the
+	// default or a fresh project would render no destination preview.
+	, FormationPreviewActorClass(FSoftClassPath(TEXT("/Script/SeinARTSFramework.SeinFormationPreviewActor")))
+	// Fog of War. Soft-class-path default follows the same nav/relay decoupling.
+	, FogOfWarClass(FSoftClassPath(TEXT("/Script/SeinARTSFogOfWar.SeinFogOfWarDefault")))
+	, VisionCellSize(FFixedPoint::FromInt(100))
+	, VisionTickInterval(3)
+	, FogRenderTickRate(10.0f)
 	// Network defaults — see PluginSettings.h for rationale on each. Soft path
-	// for the relay class follows the established nav/fog decoupling: this
-	// module deliberately does NOT depend on SeinARTSNet. Initializer order
-	// here MUST match the field-declaration order in the header (Network is
-	// declared between Navigation and Vision).
+	// for the relay class follows the established nav/fog decoupling: this module
+	// deliberately does NOT depend on SeinARTSNet.
 	, bNetworkingEnabled(true)
 	, TurnRate(10)
 	, InputDelayTurns(3)
@@ -78,34 +99,30 @@ USeinARTSCoreSettings::USeinARTSCoreSettings()
 	, bDeterminismChecksEnabled(true)
 	, DeterminismCheckIntervalTurns(10)
 	// Drop-in/drop-out: BasicAI policy + 30s grace period default. Ships
-	// `USeinNullAIController` as the framework no-op fallback so the
-	// auto-spawn path is exercised end-to-end even before designers wire
-	// their own AI subclass — same "minimal reference impl" pattern as the
-	// shipped A* nav and default fog. Soft-class-path string because this
-	// module deliberately can't reach into project code.
+	// `USeinNullAIController` as the framework no-op fallback so the auto-spawn
+	// path is exercised end-to-end even before designers wire their own AI
+	// subclass — same "minimal reference impl" pattern as the shipped A* nav and
+	// default fog. Soft-class-path string because this module deliberately can't
+	// reach into project code.
 	, SlotDropPolicy(ESeinSlotDropPolicy::BasicAI)
 	, DefaultAIControllerClass(FSoftClassPath(TEXT("/Script/SeinARTSCoreEntity.SeinNullAIController")))
 	, DroppedToAITakeoverSeconds(30.0)
 	, DebugFixedSessionSeed(0)
-	, FogOfWarClass(FSoftClassPath(TEXT("/Script/SeinARTSFogOfWar.SeinFogOfWarDefault")))
-	, VisionCellSize(FFixedPoint::FromInt(100))
-	, VisionTickInterval(3)
-	, FogRenderTickRate(10.0f)
-	// Debug visualization defaults — see PluginSettings.h. 10000 / 50000 / true:
+	// Lobby defaults — soft paths empty by default (designer ships their own
+	// preset / maps). FactionServiceClass falls back to the framework default
+	// `USeinFactionService` (AssetRegistry scan) when empty. Reconnect grace 60s
+	// is the sweet spot for network blips without leaving slots reserved long
+	// enough to block re-joining players in casual lobbies.
+	, FactionServiceClass(FSoftClassPath(TEXT("/Script/SeinARTSCoreEntity.SeinFactionService")))
+	, LobbyReconnectGraceSeconds(60.0f)
+	// Debug visualization defaults. 10000 / 50000 / true:
 	//   - 100m view distance covers a typical zoom-out shot of active combat
-	//   - 50000-cell-per-bucket cap renders a generous in-view grid even on
-	//     fine cell sizes (50cm) at typical zoom levels; teams can lower for
-	//     stricter caps or raise for unbounded viz.
+	//   - 50000-cell-per-bucket cap renders a generous in-view grid even on fine
+	//     cell sizes (50cm) at typical zoom levels; teams can lower for stricter
+	//     caps or raise for unbounded viz.
 	, DebugDrawMaxDistance(10000.0f)
 	, DebugDrawMaxEntities(50000)
 	, bDebugDrawFrustumCullEnabled(true)
-	// Lobby defaults — soft paths empty by default (designer ships their own
-	// preset / maps). FactionServiceClass falls back to the framework default
-	// `USeinFactionService` (AssetRegistry scan) when empty. Reconnect grace
-	// 60s is the sweet spot for network blips without leaving slots reserved
-	// long enough to block re-joining players in casual lobbies.
-	, FactionServiceClass(FSoftClassPath(TEXT("/Script/SeinARTSCoreEntity.SeinFactionService")))
-	, LobbyReconnectGraceSeconds(60.0f)
 	// Tag Semantics defaults — auto-tag generation on, "SeinARTS" namespace,
 	// layering on. PrefixCategoryMappings is body-initialized below since
 	// TArray<USTRUCT> + ctor-initialization is verbose.
@@ -149,7 +166,7 @@ USeinARTSCoreSettings::USeinARTSCoreSettings()
 	// designer channels. The reserved "Default" channel lives OUTSIDE the array
 	// (see GetAllCollisionChannels), so it's always present and can't be removed.
 
-	// Project default order formation = the framework Box (Total-War rank box). Set in the
+	// Project default order formation = the framework Box (a rank-and-file block). Set in the
 	// ctor body (not the init list) so the header needs only a forward-declared USeinFormation.
 	DefaultFormation = USeinBoxFormation::StaticClass();
 }
@@ -225,10 +242,112 @@ void USeinARTSCoreSettings::PostInitProperties()
 		}
 	}
 
-	// DefaultBrokerResolverClass is intentionally left at whatever the config
-	// loaded (empty by default → plain framework resolver). No cover-flavored
-	// reseed here — cover-aware dispatch is an opt-in the project wires via the
-	// setting, keeping the base framework free of any cover class reference.
+	// DefaultBrokerResolverClass is left at whatever the config loaded (the ctor
+	// default is now the plain framework resolver; empty/None means loose-unit
+	// group dispatch is OFF). No cover-flavored reseed here — cover-aware dispatch
+	// is an opt-in the project wires via the setting, keeping the base framework
+	// free of any cover class reference.
+
+	// Push the simulation-performance toggles (now resolved from config) to their
+	// backing cvars so the sim systems see the project's chosen defaults from boot.
+	ApplySimPerformanceCvars();
+}
+
+void USeinARTSCoreSettings::ApplySimPerformanceCvars() const
+{
+	IConsoleManager& CM = IConsoleManager::Get();
+
+	// ECVF_SetByProjectSetting: a later manual console command (ECVF_SetByConsole, higher
+	// priority) still overrides these — so live A/B testing via the console keeps working.
+	if (IConsoleVariable* CV = CM.FindConsoleVariable(TEXT("Sein.Sim.Parallel")))
+	{
+		CV->Set(bParallelSimulation ? 1 : 0, ECVF_SetByProjectSetting);
+	}
+	if (IConsoleVariable* CV = CM.FindConsoleVariable(TEXT("Sein.Sim.ParallelMinBatch")))
+	{
+		CV->Set(ParallelMinBatch, ECVF_SetByProjectSetting);
+	}
+	if (IConsoleVariable* CV = CM.FindConsoleVariable(TEXT("Sein.Sim.AsyncPathfinding")))
+	{
+		CV->Set(bAsyncPathfinding ? 1 : 0, ECVF_SetByProjectSetting);
+	}
+}
+
+void USeinARTSCoreSettings::ReportDisabledSystem(const TCHAR* SystemName, const TCHAR* Detail, bool bHighSeverity)
+{
+#if !UE_BUILD_SHIPPING
+	// Development-only, render-side notice — it must NEVER touch hashed sim state (and is compiled out
+	// of shipping). Shown in game, PIE, and editor worlds alike (the editor Bake Level Data path
+	// needs it), with the log deduped per system per session so transient/preview worlds can't spam.
+	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
+	if (Settings && Settings->bSuppressDisabledSystemWarnings)
+	{
+		return;
+	}
+	const FString Message = FString::Printf(TEXT("SeinARTS: %s is OFF (its class is None). %s"), SystemName, Detail);
+
+	// Dedupe the LOG line per system per session — some callers (broker / formation) resolve
+	// per-order, so an undeduped UE_LOG would spam. This set is a pure render-side debug side
+	// channel and never feeds back into hashed sim state. The on-screen message needs no set: its
+	// stable per-system key refreshes the same line in place instead of stacking.
+	const FName SysKey(SystemName);
+	static TSet<FName> LoggedOnce;
+	if (!LoggedOnce.Contains(SysKey))
+	{
+		LoggedOnce.Add(SysKey);
+		UE_LOG(LogSeinSim, Warning, TEXT("%s  Suppress via Project Settings > SeinARTS > Debug Visualization."), *Message);
+	}
+	if (GEngine)
+	{
+		// Red for high-severity off-states (nav / level data / broker / net relay break a core flow),
+		// orange (ff9900) for benign "no-X" modes.
+		const FColor Colour = bHighSeverity ? FColor(255, 0, 0) : FColor(255, 153, 0);
+		GEngine->AddOnScreenDebugMessage(static_cast<uint64>(GetTypeHash(SysKey)), 3600.0f, Colour, Message);
+	}
+#else
+	(void)SystemName; (void)Detail; (void)bHighSeverity;
+#endif
+}
+
+int32 USeinARTSCoreSettings::ComputeConfigFingerprint() const
+{
+	// SIM-AFFECTING settings that MUST be byte-identical across every client in a lockstep session.
+	// EXCLUDES render / transport / lobby / editor / debug fields (they may legitimately differ per
+	// machine — e.g. FormationPreviewActorClass, RelayActorClass, the minimap/debug-viz knobs). The
+	// list order is fixed and each value is exported by reflection (ExportText → a value-based string:
+	// the path for a soft-class, the element list for an array), so the hash is deterministic across
+	// machines/builds. Keep this list in sync when adding a sim-affecting setting.
+	static const TCHAR* const Fields[] = {
+		TEXT("SimulationTickRate"), TEXT("TurnRate"), TEXT("InputDelayTurns"), TEXT("bAsyncPathfinding"),
+		TEXT("NavigationClass"), TEXT("CollisionResolverClass"), TEXT("AvoidanceClass"), TEXT("FogOfWarClass"),
+		TEXT("LevelDataClass"), TEXT("DefaultBrokerResolverClass"), TEXT("DefaultFormation"),
+		TEXT("CellSize"), TEXT("MaxStepHeight"), TEXT("CollisionMassRatioCutoff"), TEXT("PathRequestsPerTickBudget"),
+		TEXT("AStarHeuristicWeightPercent"), TEXT("AStarMaxIterations"), TEXT("NavProjectionElevationTolerance"),
+		TEXT("NavProjectionMaxRingRadius"), TEXT("NavMinWalkableIslandCells"),
+		TEXT("AvoidanceLookaheadSeconds"), TEXT("AvoidanceMovingSpeedFloor"), TEXT("AvoidanceFalloffRadii"),
+		TEXT("AvoidanceSmoothKeep"), TEXT("AvoidanceHeadOnBase"), TEXT("AvoidanceArrivalReleaseRadii"),
+		TEXT("AvoidanceMaxSteerMagnitude"),
+		TEXT("VisionCellSize"), TEXT("VisionTickInterval"),
+		TEXT("NavLayers"), TEXT("TerrainTypes"), TEXT("CollisionChannels"), TEXT("VisionLayers"),
+		TEXT("ResourceCatalog"), TEXT("RegisteredFactions"),
+	};
+
+	FString Fp;
+	Fp.Reserve(2048);
+	const UClass* Cls = GetClass();
+	for (const TCHAR* FieldName : Fields)
+	{
+		Fp += FieldName;
+		Fp += TEXT("=");
+		if (const FProperty* Prop = FindFProperty<FProperty>(Cls, FieldName))
+		{
+			FString Value;
+			Prop->ExportText_InContainer(0, Value, this, nullptr, nullptr, PPF_None);
+			Fp += Value;
+		}
+		Fp += TEXT(";");
+	}
+	return static_cast<int32>(FCrc::StrCrc32(*Fp));
 }
 
 TArray<FSeinCollisionChannelDefinition> USeinARTSCoreSettings::GetAllCollisionChannels() const
@@ -260,6 +379,14 @@ FName USeinARTSCoreSettings::GetCategoryName() const
 }
 
 #if WITH_EDITOR
+void USeinARTSCoreSettings::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
+{
+	Super::PostEditChangeProperty(PropertyChangedEvent);
+	// Cheap + safe to re-apply on any property change — keeps the perf cvars in sync the
+	// moment a designer toggles Parallel Simulation / Async Pathfinding in Project Settings.
+	ApplySimPerformanceCvars();
+}
+
 FText USeinARTSCoreSettings::GetSectionText() const
 {
 	return NSLOCTEXT("SeinARTSCore", "SeinARTSCoreSettingsSection", "SeinARTS");

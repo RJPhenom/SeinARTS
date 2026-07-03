@@ -114,25 +114,40 @@ void USeinWorldSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	// default if the setting is empty or points to a stale / abstract class —
 	// EXACTLY mirroring USeinNavigationSubsystem::Initialize's NavigationClass path.
 	{
+		// WYSIWYG. None/empty => collision resolution is intentionally OFF (CollisionResolver stays
+		// null; solid bodies overlap freely and overlap events stop firing). A set-but-unloadable/
+		// abstract class is a mistake, not an off-switch: it falls back to the shipped Gauss-Seidel
+		// default with a logged error. The one consumer (FSeinCollisionResolutionSystem) null-guards.
 		UClass* ResolverClass = nullptr;
-		if (Settings && Settings->CollisionResolverClass.IsValid())
+		if (Settings && !Settings->CollisionResolverClass.IsNull())
 		{
 			ResolverClass = Settings->CollisionResolverClass.TryLoadClass<USeinCollisionResolver>();
-		}
-		if (!ResolverClass || ResolverClass->HasAnyClassFlags(CLASS_Abstract))
-		{
-			ResolverClass = USeinCollisionResolverDefault::StaticClass();
+			if (!ResolverClass || ResolverClass->HasAnyClassFlags(CLASS_Abstract))
+			{
+				UE_LOG(LogSeinSim, Error,
+					TEXT("CollisionResolverClass '%s' could not be loaded or is abstract — falling back to the shipped default."),
+					*Settings->CollisionResolverClass.ToString());
+				ResolverClass = USeinCollisionResolverDefault::StaticClass();
+			}
 		}
 
-		CollisionResolver = NewObject<USeinCollisionResolver>(this, ResolverClass, TEXT("SeinCollisionResolver"));
-		if (CollisionResolver)
+		if (ResolverClass)
 		{
-			CollisionResolver->OnInitialized(GetWorld());
+			CollisionResolver = NewObject<USeinCollisionResolver>(this, ResolverClass, TEXT("SeinCollisionResolver"));
+			if (CollisionResolver)
+			{
+				CollisionResolver->OnInitialized(GetWorld());
+			}
+			else
+			{
+				UE_LOG(LogSeinSim, Error, TEXT("Failed to instantiate collision resolver class %s"),
+					*ResolverClass->GetName());
+			}
 		}
 		else
 		{
-			UE_LOG(LogSeinSim, Error, TEXT("Failed to instantiate collision resolver class %s"),
-				ResolverClass ? *ResolverClass->GetName() : TEXT("<null>"));
+			USeinARTSCoreSettings::ReportDisabledSystem(TEXT("Collision"),
+				TEXT("Solid bodies overlap freely and overlap events stop firing."), /*bHighSeverity*/ false);
 		}
 	}
 
@@ -1111,7 +1126,7 @@ void USeinWorldSubsystem::ProcessCommands()
 					USeinResourceBPFL::SeinDeduct(this, Cmd.PlayerID, AutoMoveAtEnqueue);
 
 					// Resolve the Move destination. If the command targets an entity,
-					// stand at the EDGE of its footprint (CoH / AoE-style — units
+					// stand at the EDGE of its footprint (perimeter-standoff — units
 					// build / repair / attack on the footprint perimeter, not the
 					// center). Falls back to the entity center when the target has
 					// no extents data, and to the raw TargetLocation when there's
@@ -3989,6 +4004,34 @@ FSeinEntityHandle USeinWorldSubsystem::CreateBrokerForMembers(
 		InitialCentroid = InitialCentroid / FFixedPoint::FromInt(CentroidCount);
 	}
 
+	// Resolver class resolution (WYSIWYG). None/empty => loose-unit + smart-command dispatch is OFF:
+	// create no broker at all, so the order simply doesn't dispatch. A set-but-unloadable/abstract
+	// class is a mistake, not an off-switch: fall back to the shipped default. Resolved BEFORE the
+	// spawn (step 3) so an off broker never leaks an orphan abstract entity.
+	TSubclassOf<USeinCommandBrokerResolver> ResolverClass;
+	if (const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>())
+	{
+		if (!Settings->DefaultBrokerResolverClass.IsNull())
+		{
+			ResolverClass = Settings->DefaultBrokerResolverClass.LoadSynchronous();
+			if (!ResolverClass || ResolverClass->HasAnyClassFlags(CLASS_Abstract))
+			{
+				UE_LOG(LogSeinSim, Error,
+					TEXT("DefaultBrokerResolverClass '%s' could not be loaded or is abstract — falling back to the shipped default."),
+					*Settings->DefaultBrokerResolverClass.ToString());
+				ResolverClass = USeinDefaultCommandBrokerResolver::StaticClass();
+			}
+		}
+	}
+	if (!ResolverClass)
+	{
+		// Broker resolver is None → dispatch off. The prior broker was already evicted above, so the
+		// new order still cancels the member's previous one; we simply create nothing new.
+		USeinARTSCoreSettings::ReportDisabledSystem(TEXT("Broker Resolver"),
+			TEXT("Loose-unit group orders and single-unit smart commands (move-then-attack) won't dispatch. Plain single moves and squads are unaffected."), /*bHighSeverity*/ true);
+		return FSeinEntityHandle::Invalid();
+	}
+
 	// 3. Spawn the abstract broker entity.
 	FSeinEntityHandle BrokerHandle = SpawnAbstractEntity(FFixedTransform(InitialCentroid), OwnerPlayerID);
 	if (!BrokerHandle.IsValid()) return FSeinEntityHandle::Invalid();
@@ -4001,19 +4044,6 @@ FSeinEntityHandle USeinWorldSubsystem::CreateBrokerForMembers(
 	BrokerData.OrderQueue.Add(FirstOrder);
 	BrokerData.bCapabilityMapDirty = true;
 
-	// Resolver class resolution: plugin-setting soft class → framework default.
-	TSubclassOf<USeinCommandBrokerResolver> ResolverClass;
-	if (const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>())
-	{
-		if (!Settings->DefaultBrokerResolverClass.IsNull())
-		{
-			ResolverClass = Settings->DefaultBrokerResolverClass.LoadSynchronous();
-		}
-	}
-	if (!ResolverClass || ResolverClass->HasAnyClassFlags(CLASS_Abstract))
-	{
-		ResolverClass = USeinDefaultCommandBrokerResolver::StaticClass();
-	}
 	// Phase 4 architecture: resolver is registered in the world's resolver
 	// pool; component stores the int32 ID, not a TObjectPtr.
 	USeinCommandBrokerResolver* ResolverInstance = NewObject<USeinCommandBrokerResolver>(this, ResolverClass);

@@ -202,7 +202,7 @@ public:
 	/** Quantization step for the captured rotation, in degrees.
 	 *
 	 *    0   → FREE ROTATION (no snap). Hologram + captured yaw match cursor
-	 *          direction continuously. Typical for CoH-style RTS placement.
+	 *          direction continuously. Typical for standard click-to-place RTS placement.
 	 *    45  → octagonal snap (8 steps).
 	 *    90  → cardinal snap (4 steps). Typical for grid-aligned RTS.
 	 *    any → 360 / RotationStepDegrees discrete steps.

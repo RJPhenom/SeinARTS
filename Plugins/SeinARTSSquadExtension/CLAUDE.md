@@ -1,6 +1,6 @@
 # SeinARTSSquadExtension — Plugin Guide
 
-Opt-in extension adding **persistent, heterogeneous-slot squads** (CoH-style) on top of
+Opt-in extension adding **persistent, heterogeneous-slot squads** on top of
 `SeinARTSFramework`: per-tick squad lifecycle, formation dispatch, and reinforcement. Strippable —
 when this plugin is absent, the framework carries no squad *behavior* (only the data structs).
 
@@ -71,8 +71,8 @@ This extension declares **no new USTRUCTs** — it operates entirely on the core
 adds a **constructor** that selects its formation:
 
 - **`ResolveDispatch`** — for predetermined-ability orders, dispatches via the broker capability map
-  filtered by the ability's own dispatch policy (`ApplyAbilityDispatchPolicy`) — CoH "leader throws
-  the smoke." Smart right-click orders route each member to its slot's world position, and DROP the
+  filtered by the ability's own dispatch policy (`ApplyAbilityDispatchPolicy`) — leader-performs
+  semantics (the squad leader performs the ability). Smart right-click orders route each member to its slot's world position, and DROP the
   order's gesture guide/formation tag so each squad keeps its own COMPACT shape at the anchor the parent formation gave it. Squads now
   participate in the multi-unit formation as ELEMENTS (sized by `FSeinCommandBrokerData::FormationRadius`
   = the squad's own footprint); the parent gesture spaces the squad ANCHORS, never each squad's

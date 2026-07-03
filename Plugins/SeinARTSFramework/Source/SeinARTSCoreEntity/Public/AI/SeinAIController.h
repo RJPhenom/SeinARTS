@@ -48,10 +48,24 @@ struct SEINARTSCOREENTITY_API FSeinAITickContext
 };
 
 /**
- * Abstract AI controller. Instantiate subclasses on the sim host (local in
- * single-player) and register them with `USeinWorldSubsystem::RegisterAIController`;
- * the subsystem ticks them during CommandProcessing phase. Commands emitted
- * via `EmitCommand` flow through the lockstep txn log.
+ * Base class for a computer-player brain. Subclass it in Blueprint to build an
+ * enemy or ally AI that watches the game and issues orders on a player's behalf,
+ * the same way a human's controller would. This is an abstract base, so you pick
+ * one of your own subclasses rather than this class directly.
+ *
+ * The framework only supplies the plumbing: a per-tick entry point, the Emit
+ * Command call that drops an order into the lockstep command buffer, and sim-state
+ * query libraries to read the world. The actual reasoning is yours to author in
+ * Blueprint or C++ — behaviour tree, finite-state machine, utility scoring, GOAP,
+ * or anything else. That reasoning does NOT have to be deterministic: only the
+ * host machine runs the AI, and only the orders it emits cross the lockstep
+ * boundary, so bit-determinism is required of the emitted commands, not the
+ * thinking behind them.
+ *
+ * Instances live on the sim host (local in single-player). Register one with the
+ * world subsystem's Register AI Controller call; the subsystem then ticks it each
+ * frame during the command-processing phase, so any order it emits is processed on
+ * the same tick.
  */
 UCLASS(Abstract, Blueprintable, EditInlineNew, ClassGroup = (SeinARTS),
 	meta = (DisplayName = "AI Controller"))

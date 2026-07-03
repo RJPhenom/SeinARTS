@@ -26,6 +26,27 @@
 class UInstancedStaticMeshComponent;
 class UMaterialInstanceDynamic;
 
+/**
+ * Draws the destination/formation preview — the little markers that show where your units will
+ * stand when you give a move order — as one big batch of identical meshes. Because every marker
+ * is an instance of a single mesh component it renders in ONE draw call, so it stays cheap even
+ * when the formation is huge. Like the other preview backends it does not smear or ghost under
+ * temporal anti-aliasing (TAA).
+ *
+ * Uses INSTANCED-STATIC-MESH rendering: the whole formation is drawn as instances of one
+ * UInstancedStaticMeshComponent rather than a separate component per marker, which is what lets
+ * it scale to very large formations. The marker's ring shape comes from the material; each
+ * member's radius is applied as per-instance scale.
+ *
+ * Tinting note: an instanced-static-mesh component cannot carry a per-instance material, so the
+ * quality tint is written to per-instance custom-data floats 0-3 (as R, G, B, A) instead of a
+ * material tint parameter. For the tint to appear, the preview material must read those floats —
+ * add a PerInstanceCustomData node (or GetPerInstanceCustomData 0..3) and feed it into the
+ * colour. Without that wiring the preview still renders, just in the material's own colour (a
+ * neutral default that looks fine when no quality provider is bound).
+ *
+ * Select this backend via the Formation Preview Actor Class setting.
+ */
 UCLASS(Blueprintable, NotPlaceable, meta = (DisplayName = "Formation Preview Actor (Instanced Mesh)"))
 class SEINARTSFRAMEWORK_API ASeinISMFormationPreviewActor : public ASeinFormationPreviewActor
 {

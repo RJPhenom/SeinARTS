@@ -32,6 +32,12 @@ UScriptStruct* USeinWheeledVehicleMovement::GetMovementDataStruct() const
 	return FSeinWheeledMovementData::StaticStruct();
 }
 
+FFixedPoint USeinWheeledVehicleMovement::GetDeceleration(const FSeinMovementComponent* MovementData) const
+{
+	const FSeinWheeledMovementData* Data = MovementData ? MovementData->MovementClassData.GetPtr<FSeinWheeledMovementData>() : nullptr;
+	return Data ? Data->Deceleration : FSeinWheeledMovementData().Deceleration;
+}
+
 FFixedPoint USeinWheeledVehicleMovement::GetMinTurnRadius(const FSeinMovementComponent* MovementData) const
 {
 	// Bicycle identity: R_min = wheelbase / tan(max steer). Guards against
@@ -161,12 +167,10 @@ bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 		? -CurrentSpeed : CurrentSpeed;
 	const FFixedPoint LookAhead = ComputeAdaptiveLookAhead(
 		LookAheadFloor, Wheeled.LookAheadTimeHorizon, AbsCurrentSpeed);
-	// `MaxCornerAngleRadians` was a deprecated carrot-weighting input — pass zero.
-	// `ResolveLookAheadPoint` now does cluster-skip thinning internally;
-	// no per-call carrot-corner-weighting input is needed.
+	// `ResolveLookAheadPoint` does cluster-skip thinning internally; no
+	// per-call carrot-corner-weighting input is needed.
 	const FFixedVector LookAheadPoint = ResolveLookAheadPoint(
-		AgentPos, Path, CurrentWaypointIndex, LookAhead,
-		FFixedPoint::Zero);
+		AgentPos, Path, CurrentWaypointIndex, LookAhead);
 
 	FFixedVector ToTarget = LookAheadPoint - AgentPos;
 	ToTarget.Z = FFixedPoint::Zero;
@@ -215,7 +219,7 @@ bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 	// can read it. Zero when ToTarget is null — no brake fires.
 	FFixedPoint AbsYawErr = FFixedPoint::Zero;
 	// Signed rotation needed to face the drive-appropriate heading (toward the carrot,
-	// or away from it when reversing). Hoisted for the low-speed turn assist (the CoH
+	// or away from it when reversing). Hoisted for the low-speed turn assist (the
 	// helping-hand) in step 7.
 	FFixedPoint YawErrSigned = FFixedPoint::Zero;
 	const FFixedPoint CurrentYaw = YawFromRotation(Entity.Transform.Rotation);
@@ -244,7 +248,7 @@ bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 
 	// -------------------------------------------------------------------
 	// 7. Yaw rate: the honest bicycle (w = v/L · tan δ — speed-dependent, so a
-	//    stationary chassis can't pivot) PLUS the CoH "helping hand": a
+	//    stationary chassis can't pivot) PLUS the "helping hand": a
 	//    low-speed turn assist that lets a stopped/slow vehicle rotate toward
 	//    its goal anyway (tight u-turns from rest, responsiveness, escape
 	//    hatch when boxed in). The assist fades to zero by TurnAssistFadeSpeed,
@@ -259,7 +263,7 @@ bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 		const FFixedPoint ClampedRate = ClampFP(YawRate, -MaxRate, MaxRate);
 		YawStep = ClampedRate * DeltaTime;
 	}
-	// CoH helping-hand. Active only below TurnAssistFadeSpeed AND for sharp turns (the
+	// Helping-hand. Active only below TurnAssistFadeSpeed AND for sharp turns (the
 	// angle gate below) — outside either, the `Fade > 0` guard skips the whole block,
 	// leaving cruising AND moderate-angle turns to the honest bicycle so they ARC.
 	// Within the band it provides a FLOOR on how far the chassis may rotate toward its
@@ -424,7 +428,7 @@ bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 		const FFixedPoint BrakeDist = (DistFinal > Acceptance)
 			? (DistFinal - Acceptance)
 			: FFixedPoint::Zero;
-		MaxArrivalSpeed = KinematicArrivalSpeedCap(BrakeDist, MovementData.Deceleration);
+		MaxArrivalSpeed = KinematicArrivalSpeedCap(BrakeDist, Wheeled.Deceleration);
 		if (Wheeled.ArrivalSlowdownDistance > FFixedPoint::Zero && DistFinal < Wheeled.ArrivalSlowdownDistance)
 		{
 			const FFixedPoint LinearCap = MovementData.TopSpeed * (DistFinal / Wheeled.ArrivalSlowdownDistance);
@@ -461,7 +465,7 @@ bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 		MaxArrivalSpeed.ToFloat());
 
 	CurrentSpeed = StepSpeedToward(CurrentSpeed, TargetSpeed,
-		MovementData.Acceleration, MovementData.Deceleration, DeltaTime);
+		Wheeled.Acceleration, Wheeled.Deceleration, DeltaTime);
 
 	// -------------------------------------------------------------------
 	// 11. Translate along the post-rotation forward.

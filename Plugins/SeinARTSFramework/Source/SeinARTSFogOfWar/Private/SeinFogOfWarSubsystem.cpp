@@ -26,26 +26,41 @@ void USeinFogOfWarSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 	// Resolve the configured fog class. Fall back to the shipped default if
 	// the setting is empty or points to a stale / abstract class.
+	// WYSIWYG. None/empty => fog is intentionally OFF (FogOfWar stays null; nothing is hidden and
+	// every unit is always visible). A set-but-unloadable/abstract class is a mistake, not an
+	// off-switch: it falls back to the shipped default with a logged error. Every consumer, and the
+	// layer-provider registration below, already null-guard FogOfWar.
 	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
 	UClass* FogClass = nullptr;
-	if (Settings && Settings->FogOfWarClass.IsValid())
+	if (Settings && !Settings->FogOfWarClass.IsNull())
 	{
 		FogClass = Settings->FogOfWarClass.TryLoadClass<USeinFogOfWar>();
-	}
-	if (!FogClass || FogClass->HasAnyClassFlags(CLASS_Abstract))
-	{
-		FogClass = USeinFogOfWarDefault::StaticClass();
+		if (!FogClass || FogClass->HasAnyClassFlags(CLASS_Abstract))
+		{
+			UE_LOG(LogSeinFogOfWarSubsystem, Error,
+				TEXT("FogOfWarClass '%s' could not be loaded or is abstract — falling back to the shipped default."),
+				*Settings->FogOfWarClass.ToString());
+			FogClass = USeinFogOfWarDefault::StaticClass();
+		}
 	}
 
-	FogOfWar = NewObject<USeinFogOfWar>(this, FogClass, TEXT("SeinFogOfWar"));
-	if (FogOfWar)
+	if (FogClass)
 	{
-		FogOfWar->OnFogOfWarInitialized(GetWorld());
+		FogOfWar = NewObject<USeinFogOfWar>(this, FogClass, TEXT("SeinFogOfWar"));
+		if (FogOfWar)
+		{
+			FogOfWar->OnFogOfWarInitialized(GetWorld());
+		}
+		else
+		{
+			UE_LOG(LogSeinFogOfWarSubsystem, Error, TEXT("Failed to instantiate fog class %s"),
+				*FogClass->GetName());
+		}
 	}
 	else
 	{
-		UE_LOG(LogSeinFogOfWarSubsystem, Error, TEXT("Failed to instantiate fog class %s"),
-			FogClass ? *FogClass->GetName() : TEXT("<null>"));
+		USeinARTSCoreSettings::ReportDisabledSystem(TEXT("Fog Of War"),
+			TEXT("Nothing is hidden; every unit is always visible."), /*bHighSeverity*/ false);
 	}
 
 	// CP1.1 unified level-data pipeline. Force the substrate subsystem up first

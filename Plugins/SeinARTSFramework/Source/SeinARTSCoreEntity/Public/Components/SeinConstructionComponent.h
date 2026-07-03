@@ -1,8 +1,8 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinConstructionComponent.h
- * @brief   Construction-over-time component for placed buildings (Pattern B,
- *          CoH-style). The placement ability spawns a building with this
+ * @brief   Construction-over-time component for placed buildings (Pattern B).
+ *          The placement ability spawns a building with this
  *          component attached; a builder unit's BA_Construct ability ticks
  *          Progress each sim tick. When Progress >= TimeToCompletion, the building
  *          transitions to operational via the optional CompletionEffect.

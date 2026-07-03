@@ -23,6 +23,26 @@
 class UWorld;
 class USeinLevelData;
 
+/**
+ * Works out how units walk from A to B: it lays a 2D grid over the level, finds a route around
+ * walls and steep ground, then straightens that route into clean waypoints. This is the navigation
+ * used out of the box, and the reference other nav classes copy.
+ *
+ * Uses A* SEARCH over a single-layer square grid. A* explores cells cheapest-route-first, guided by
+ * a straight-line distance estimate to the goal, so it finds a short path without checking every
+ * cell. Routing weight is per-cell (higher = costlier ground, so the search prefers cheaper terrain);
+ * cells are blocked by baked walls, over-steep slopes, or dynamic blockers stamped in each tick. The
+ * search is footprint-aware (configuration-space): it keeps the whole unit clear of walls by the
+ * agent's radius plus a padding margin, measured against a per-cell distance-to-nearest-wall field,
+ * so different unit sizes get different routes from the same bake. After the search, a line-of-sight
+ * string-pull smooths the cell chain into a short waypoint list, then a wall-push pass nudges those
+ * waypoints toward corridor centers. Genuinely unreachable goals return a partial path to the closest
+ * reachable cell rather than failing. Searches run synchronously on the game thread; when batched and
+ * Sein.Sim.Parallel is on, each worker gets its own scratch so results stay identical to the serial
+ * path. Participates in the unified level-data bake as the "Nav" layer provider: it reproduces
+ * per-cell cost and connectivity from the shared level substrate and loads its runtime grid from that
+ * baked channel.
+ */
 UCLASS(BlueprintType, meta = (DisplayName = "Sein Nav (A*)"))
 class SEINARTSNAVIGATION_API USeinNavigationAStar : public USeinNavigation, public ISeinLevelLayerProvider
 {
@@ -113,6 +133,14 @@ private:
 		 *  capacity that previous calls grew to — saves the realloc-from-128
 		 *  pattern when consecutive searches both expand to thousands of nodes. */
 		TArray<FAStarNode> Open;
+
+		/** Reusable cell-path buffer. AStarSearch fills this (via Reset, not
+		 *  realloc) with the reconstructed chain Start→End (or Start→best-H for a
+		 *  partial), and FindCellPathInternal reads it. Scratch-scoped so the
+		 *  allocation survives across searches instead of a fresh per-call
+		 *  TArray-by-value return; per-worker on the parallel batch path, so
+		 *  concurrent searches never share it. */
+		TArray<FIntPoint> CellPath;
 	};
 
 	/** Persistent scratch for the serial (single-threaded) path. The virtual
@@ -433,6 +461,37 @@ private:
 	 *  encountered dyn-blocked cell. Caller guarantees (X, Y) is valid. */
 	int32 ComputeDynamicWDRingScan(int32 X, int32 Y, int32 MaxR, FAStarScratch& Scratch) const;
 
+	/** Shared O(8R)-per-ring outward scan around (StartX, StartY) used by the three
+	 *  ProjectPointToNav* publics. Checks the start cell first, then each ring at
+	 *  radius 1..MaxR (top + bottom rows including corners, then left + right
+	 *  columns excluding corners — identical visitation order to the old inline
+	 *  copies). `Accept(CX, CY)` is the per-cell acceptance predicate; on the first
+	 *  accepted cell, writes its world center to OutProjected and returns true.
+	 *  Returns false if no cell is accepted within MaxR. Defined in the .cpp; all
+	 *  instantiations are local to that TU. */
+	template <typename FAcceptPred>
+	bool RingScanForCell(int32 StartX, int32 StartY, int32 MaxR, FAcceptPred&& Accept, FFixedVector& OutProjected) const;
+
+	/** Required configuration-space clearance, in whole cells, for an agent of the
+	 *  given footprint radius + wall-padding:
+	 *    Required = ceil(FootprintRadius / CellSize + 0.5) + WallPaddingCells
+	 *  (clamped to WallDistanceCap). Single source of truth for both the A* C-space
+	 *  gate (FindCellPathInternal) and the wall-push pass (PushWaypointsAwayFromWalls).
+	 *  Deterministic fixed-point ceil. Returns 0 when CellSize is non-positive. */
+	int32 ComputeRequiredClearance(FFixedPoint FootprintRadius, int32 WallPaddingCells) const;
+
+#if !UE_BUILD_SHIPPING
+	/** Non-shipping diagnostic reporters extracted from their host search/path
+	 *  functions so those read at their real logic size. Each gates on its log
+	 *  channel's activity BEFORE doing any grid work; pure observation, never
+	 *  mutates path results. Declarations compiled out in shipping. */
+	void ReportAStarPartial(FIntPoint Start, FIntPoint End, int32 StartIdx, int32 EndIdx,
+		int32 BestCellIdx, int32 Iterations, int32 IterCap, int32 RequiredClearance, FAStarScratch& Scratch) const;
+	void ReportUnreachableSegments(const FSeinPathRequest& Request, const FSeinPath& OutPath, FAStarScratch& Scratch) const;
+	void ReportCellPathClearance(const TArray<FIntPoint>& CellPath, const FSeinPath& OutPath,
+		int32 RequiredClearance, bool bPartial) const;
+#endif
+
 protected:
 
 	bool WorldToGrid(const FFixedVector& WorldPos, int32& OutX, int32& OutY) const;
@@ -499,8 +558,12 @@ protected:
 	 *  HeuristicWeightPercent: f(n) = g(n) + (h(n) * Weight) / 100. Values
 	 *    >100 produce weighted A* (suboptimal but faster). 100 = admissible.
 	 *  MaxIterations: hard cap on node expansions.
+	 *
+	 *  The reconstructed cell chain is written into `Scratch.CellPath` (filled via
+	 *  Reset, not realloc — pooled across calls); empty there means no path /
+	 *  invalid start. The caller reads `Scratch.CellPath` after the call.
 	 */
-	TArray<FIntPoint> AStarSearch(FIntPoint Start, FIntPoint End, bool& bOutPartial,
+	void AStarSearch(FIntPoint Start, FIntPoint End, bool& bOutPartial,
 		int32 HeuristicWeightPercent, int32 MaxIterations, int32 RequiredClearance, FAStarScratch& Scratch) const;
 
 	/** Constant used to mark cells as "no nearby wall" in WallDistance. Sets

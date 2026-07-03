@@ -21,11 +21,17 @@ bool USeinFactionService::ShouldCreateSubsystem(UObject* Outer) const
 	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
 	if (!Settings) return GetClass() == StaticClass();
 
-	UClass* ConfiguredClass = nullptr;
-	if (!Settings->FactionServiceClass.IsNull())
+	// WYSIWYG. None/empty => the faction service is OFF: create no candidate at all (the lobby then
+	// finds a null service and offers no factions; all callers null-guard). A set-but-unloadable class
+	// is a mistake, not an off-switch: fall back to the base default.
+	if (Settings->FactionServiceClass.IsNull())
 	{
-		ConfiguredClass = Settings->FactionServiceClass.TryLoadClass<USeinFactionService>();
+		USeinARTSCoreSettings::ReportDisabledSystem(TEXT("Faction Service"),
+			TEXT("No factions are discovered for the lobby faction picker."), /*bHighSeverity*/ false);
+		return false;
 	}
+
+	UClass* ConfiguredClass = Settings->FactionServiceClass.TryLoadClass<USeinFactionService>();
 	if (!ConfiguredClass)
 	{
 		ConfiguredClass = USeinFactionService::StaticClass();

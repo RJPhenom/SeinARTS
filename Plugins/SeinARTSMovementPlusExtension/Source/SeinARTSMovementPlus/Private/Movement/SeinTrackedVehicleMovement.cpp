@@ -30,6 +30,12 @@ UScriptStruct* USeinTrackedVehicleMovement::GetMovementDataStruct() const
 	return FSeinTrackedMovementData::StaticStruct();
 }
 
+FFixedPoint USeinTrackedVehicleMovement::GetDeceleration(const FSeinMovementComponent* MovementData) const
+{
+	const FSeinTrackedMovementData* Data = MovementData ? MovementData->MovementClassData.GetPtr<FSeinTrackedMovementData>() : nullptr;
+	return Data ? Data->Deceleration : FSeinTrackedMovementData().Deceleration;
+}
+
 FFixedPoint USeinTrackedVehicleMovement::GetMinTurnRadius(const FSeinMovementComponent* MovementData) const
 {
 	// Read MinTurnRadius from the tracked-specific sub-data slot on the
@@ -292,7 +298,7 @@ bool USeinTrackedVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 		FFixedVector ToFinal = FinalWp - AgentPos;
 		ToFinal.Z = FFixedPoint::Zero;
 		const FFixedPoint DistFinal = ToFinal.Size();
-		MaxArrivalSpeed = KinematicArrivalSpeedCap(DistFinal, MovementData.Deceleration);
+		MaxArrivalSpeed = KinematicArrivalSpeedCap(DistFinal, Tracked.Deceleration);
 	}
 
 	// -------------------------------------------------------------------
@@ -316,7 +322,7 @@ bool USeinTrackedVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 	const FFixedPoint TargetSpeed = bIsReversing ? -TargetSpeedMag : TargetSpeedMag;
 
 	CurrentSpeed = StepSpeedToward(CurrentSpeed, TargetSpeed,
-		MovementData.Acceleration, MovementData.Deceleration, DeltaTime);
+		Tracked.Acceleration, Tracked.Deceleration, DeltaTime);
 
 	// -------------------------------------------------------------------
 	// 9. Translate along post-turn forward, nav-collision resolve, ground

@@ -90,13 +90,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Movement", meta = (DisplayName = "Get Top Speed"))
 	FFixedPoint GetTopSpeed() const;
 
-	/** How fast the unit speeds up (units per second squared). */
-	UFUNCTION(BlueprintPure, Category = "SeinARTS|Movement", meta = (DisplayName = "Get Acceleration"))
-	FFixedPoint GetAcceleration() const;
-
-	/** How fast the unit slows down (also drives arrival braking). */
-	UFUNCTION(BlueprintPure, Category = "SeinARTS|Movement", meta = (DisplayName = "Get Deceleration"))
-	FFixedPoint GetDeceleration() const;
+	// Get Acceleration / Get Deceleration were removed 2026-07-02: accel/decel moved off the bare
+	// FSeinMovementComponent into each Movement+ mode's per-class UDS. A custom BP mode reads them
+	// from its own tuning data (MovementClassData) — they are not top-line component knobs.
 
 	/** How fast the unit can turn (radians per second). */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Movement", meta = (DisplayName = "Get Turn Rate"))
