@@ -83,10 +83,10 @@ struct SEINARTSMOVEMENTPLUS_API FSeinFlyingMovementData : public FSeinComponent
 		meta = (ClampMin = "0.1", ClampMax = "1.0"))
 	FFixedPoint MinSpeedRatio = FFixedPoint::FromInt(6) / FFixedPoint::FromInt(10);
 
-	/** Cruise altitude (world units) above the ground-snapped Z. Flight
-	 *  movement subclasses lerp toward this value so flying units climb to
-	 *  altitude after take-off instead of popping to it. Persists across
-	 *  move orders — a flying unit retains altitude between commands. */
+	/** CURRENT runtime flight altitude (world units) above the ground-snapped Z —
+	 *  the value the Flight Tick drives toward CruiseAltitude after take-off so
+	 *  flying units climb instead of popping to it (editable as the initial value).
+	 *  Persists across move orders — a flying unit retains altitude between commands. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
 		meta = (ClampMin = "0.0"))
 	FFixedPoint Altitude = FFixedPoint::Zero;

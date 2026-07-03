@@ -44,7 +44,8 @@ Net: the dependency points **up** (extension → framework). Remove this plugin 
 - **Name skew:** the class is `Flight`, its data struct is `Flying` (`FSeinFlyingMovementData`).
   Preserved as-is from before the split — don't "fix" one without a redirect.
 - `USeinInfantryMovement` inherits `USeinBasicMovement` (which stays in the framework) — a deliberate
-  cross-plugin inheritance; Infantry fully overrides `Tick` and uses Basic only for hierarchy.
+  cross-plugin inheritance; Infantry overrides `ComputeMotion` (a Tier-1 policy over the base
+  `USeinMovement::Tick` harness) and uses Basic only for hierarchy.
 - All data structs are `SeinSubData`-tagged `FSeinComponent`s — they surface only inside the
   `MovementClassData` polymorphic picker, never the top-level ComponentData picker.
 - The classes reach back into the framework's `SeinARTSMovement` for the shared steering helpers

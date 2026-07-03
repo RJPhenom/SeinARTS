@@ -1245,8 +1245,9 @@ namespace
 		return 14 * Mn + 10 * (Mx - Mn);
 	}
 	// FAStarNode moved to a class-private nested type on USeinNavigationAStar
-	// so the Open heap can live as a `mutable` member and preserve its allocation
-	// across FindPath calls. Definition is in SeinNavigationAStar.h.
+	// so the Open heap can live inside FAStarScratch (per-worker on the parallel
+	// path; the serial path reuses the persistent MainScratch) and preserve its
+	// allocation across FindPath calls. Definition is in SeinNavigationAStar.h.
 
 	// ------------------------------------------------------------------------
 	// Shared 8-neighbor direction tables + the single Bresenham grid-walk
@@ -2977,7 +2978,10 @@ void USeinNavigationAStar::CollectDebugPathCells(
 	OutRemainingCells.Reset();
 	OutCurrentTargetCell.Reset();
 	OutHalfExtent = 0.0f;
-	if (!HasRuntimeData() || !Waypoints.IsValidIndex(CurrentWaypointIndex)) return;
+	// Guard on emptiness only — the full-route draw below is index-independent, so it
+	// must NOT be gated on the follower's live CurrentWaypointIndex (a corrupted index
+	// would suppress the honest route, the exact masking the full-route change removed).
+	if (!HasRuntimeData() || Waypoints.Num() == 0) return;
 
 	const float CS = CellSize.ToFloat();
 	OutHalfExtent = CS * 0.5f * 0.9f;

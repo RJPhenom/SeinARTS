@@ -44,6 +44,7 @@ public class SeinARTSFramework : ModuleRules
 				"EnhancedInput",
 				"UMG",
 				"SeinARTSNet",
+				"SeinARTSLevelData",
 			}
 			);
 		

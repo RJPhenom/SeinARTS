@@ -1188,7 +1188,7 @@ void USeinMovement::CacheFootprintFromContext(const FSeinMovementContext& Ctx)
 	{
 		// 8 ring samples at 45° spacing. Computed once per move action via
 		// SeinMath::Cos / SeinMath::Sin (~1µs total). Per-tick cost in
-		// ResolveNavCollision becomes 9 IsPassable calls (center + ring) =
+		// ResolveNavCollision becomes 9 IsWorldPositionClear calls (center + ring) =
 		// ~450ns per step attempt; with 3 step attempts worst case (full,
 		// X-only, Y-only) ≈ 1.35µs per Tick per vehicle. Negligible.
 		CachedNumFootprintSamples = 8;

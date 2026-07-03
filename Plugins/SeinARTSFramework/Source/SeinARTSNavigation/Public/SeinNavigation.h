@@ -398,13 +398,17 @@ public:
 
 	/** Collect per-cell geometry for an active move-to path. Called each frame
 	 *  from the debug ticker while `ShowFlags.Navigation` is on. Subclasses
-	 *  rasterize the line from `AgentPos` through `Waypoints[CurrentIdx..End]`
-	 *  into grid cells; the ticker draws them as tinted overlays.
+	 *  rasterize the FULL A* route (every waypoint segment WP[0]→…→last) into grid
+	 *  cells; the ticker draws them as tinted overlays. Drawing the full route —
+	 *  independent of the follower's live index — keeps the viz honest: a follower
+	 *  that diverges shows against the true route instead of replacing it.
 	 *
-	 *  - OutRemainingCells: cells along the path ahead of the agent (excludes
-	 *    the current-target cell to avoid double-draw).
-	 *  - OutCurrentTargetCell: the single cell containing `Waypoints[CurrentIdx]`
-	 *    (drawn with a distinct lead-marker color). Empty if unreachable.
+	 *  - OutRemainingCells: cells along the route (excludes the destination cell to
+	 *    avoid double-draw with OutCurrentTargetCell).
+	 *  - OutCurrentTargetCell: the destination cell (final waypoint), drawn with a
+	 *    distinct marker color. Empty if unreachable.
+	 *  - `AgentPos` / `CurrentWaypointIndex` are retained for the virtual's interface
+	 *    contract but unused by the shipped full-route impl.
 	 *
 	 *  Same stripping convention as CollectDebugCellQuads. */
 	virtual void CollectDebugPathCells(

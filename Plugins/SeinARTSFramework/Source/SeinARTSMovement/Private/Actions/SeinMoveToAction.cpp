@@ -15,15 +15,11 @@
 #include "Settings/PluginSettings.h"     // terrain-type → speed multiplier lookup
 #include "Components/SeinMovementComponent.h"
 #include "Components/SeinNavigationComponent.h"
-#include "Components/SeinBrokerMembershipData.h"
-#include "Components/SeinCommandBrokerData.h"
-#include "Collision/SeinCollisionSpatialHash.h"
 #include "Math/MathLib.h"
 #include "Types/Entity.h"
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
 #include "Engine/World.h"
-#include "HAL/IConsoleManager.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinMove, Log, All);
 
@@ -371,14 +367,6 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 	// disables repathing (mode treated as no-op, falls through to the
 	// movement tick). The legacy struct co-mingled these with kinematics; the
 	// split puts pathfinding concerns where they belong.
-	const ESeinRepathMode RepathMode = NavComp ? NavComp->RepathMode : ESeinRepathMode::Interval;
-	const FFixedPoint RepathInterval = (NavComp && NavComp->RepathInterval > FFixedPoint::Zero)
-		? NavComp->RepathInterval : FFixedPoint::FromInt(1) / FFixedPoint::FromInt(4);
-	const int32 RepathFailureLimit = (NavComp && NavComp->RepathFailureLimit > 0)
-		? NavComp->RepathFailureLimit : 3;
-	const FFixedPoint OffPathThreshold = (NavComp && NavComp->OffPathThreshold > FFixedPoint::Zero)
-		? NavComp->OffPathThreshold : FFixedPoint::FromInt(75);
-
 	if (!NavComp)
 	{
 		// No nav component — skip the repath block entirely. The initial
@@ -386,12 +374,22 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		// Same fall-through path as the bypass-pathfinding branch.
 	}
 	else
+	{
+	// NavComp is non-null in this branch, so the repath knobs need no null-guard —
+	// only the zero-field default remains (a designer leaving a field at 0 gets the
+	// built-in default: ¼s interval / 3 failures / 75cm off-path threshold).
+	const ESeinRepathMode RepathMode = NavComp->RepathMode;
+	const FFixedPoint RepathInterval = NavComp->RepathInterval > FFixedPoint::Zero
+		? NavComp->RepathInterval : FFixedPoint::FromInt(1) / FFixedPoint::FromInt(4);
+	const int32 RepathFailureLimit = NavComp->RepathFailureLimit > 0
+		? NavComp->RepathFailureLimit : 3;
+	const FFixedPoint OffPathThreshold = NavComp->OffPathThreshold > FFixedPoint::Zero
+		? NavComp->OffPathThreshold : FFixedPoint::FromInt(75);
 	switch (RepathMode)
 	{
 	case ESeinRepathMode::Interval:
 	{
-		const FFixedPoint Interval = RepathInterval;
-		if (TimeSinceLastRepath >= Interval && Nav && NavSub)
+		if (TimeSinceLastRepath >= RepathInterval && Nav && NavSub)
 		{
 			FSeinPlanPathContext PlanCtx{
 				*Entity,
@@ -458,11 +456,10 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 				// stale path is no longer trustworthy: fail with
 				// PathNotFound rather than march toward a dead end.
 				++ConsecutiveRepathFailures;
-				const int32 Limit = RepathFailureLimit;
 				UE_LOG(LogSeinMove, Verbose,
 					TEXT("Repath (Interval) failed: attempt %d/%d (entity %s)"),
-					ConsecutiveRepathFailures, Limit, *OwnerEntity.ToString());
-				if (ConsecutiveRepathFailures >= Limit)
+					ConsecutiveRepathFailures, RepathFailureLimit, *OwnerEntity.ToString());
+				if (ConsecutiveRepathFailures >= RepathFailureLimit)
 				{
 					UE_LOG(LogSeinMove, Warning,
 						TEXT("Repath (Interval): %d consecutive failures — failing move (entity %s, dest=(%.1f,%.1f))"),
@@ -500,11 +497,9 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		const FFixedVector AgentPos = Entity->Transform.GetLocation();
 		const FFixedPoint DriftSq = OffPathMinDistSqToPolyline(AgentPos, PathOriginAgentPos, Path.Waypoints);
 
-		// Threshold fallback: 75cm if the field was zeroed out (e.g.,
-		// legacy data pre-dating this field, or designer set it to 0
-		// expecting "use default"). Matches the constructor default.
-		const FFixedPoint Threshold = OffPathThreshold;
-		const FFixedPoint ThresholdSq = Threshold * Threshold;
+		// OffPathThreshold already resolved to its 75cm zero-field default upstream
+		// (where RepathMode is read); here it's the live drift tolerance.
+		const FFixedPoint ThresholdSq = OffPathThreshold * OffPathThreshold;
 
 		if (DriftSq <= ThresholdSq) break;
 		if (!NavSub) break;
@@ -545,7 +540,7 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 			UE_LOG(LogSeinMove, Verbose,
 				TEXT("Repath (OffPathOnly): drift=%.1fcm > threshold=%.1fcm, %d new waypoints from (%.1f,%.1f)%s"),
 				SeinMath::Sqrt(DriftSq).ToFloat(),
-				Threshold.ToFloat(),
+				OffPathThreshold.ToFloat(),
 				NewPath.Waypoints.Num(),
 				AgentPos.X.ToFloat(),
 				AgentPos.Y.ToFloat(),
@@ -583,6 +578,7 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		break;
 	}
 	}
+	} // end else (NavComp present — repath knobs scoped here)
 	} // end else (non-bypass repath block)
 
 	// Delegate the per-tick advance. Movement mutates Entity.Transform and

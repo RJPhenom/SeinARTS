@@ -62,10 +62,11 @@ struct SEINARTSMOVEMENTPLUS_API FSeinHoverMovementData : public FSeinComponent
 		meta = (ClampMin = "0.0"))
 	FFixedPoint LookAheadDistance = FFixedPoint::FromInt(200);
 
-	/** Hover altitude (world units) above the ground-snapped Z. Hover
-	 *  movement subclasses lerp toward this value over time so units don't
-	 *  pop to altitude. Persists across move orders — a hovering unit
-	 *  retains altitude between commands. */
+	/** CURRENT runtime hover altitude (world units) above the ground-snapped Z —
+	 *  the value the Hover Tick drives toward its cruise target (CruiseAltitude /
+	 *  AltitudeClearanceThreshold) over time so units don't pop to altitude
+	 *  (editable as the initial value). Persists across move orders — a hovering
+	 *  unit retains altitude between commands. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
 		meta = (ClampMin = "0.0"))
 	FFixedPoint Altitude = FFixedPoint::Zero;

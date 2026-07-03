@@ -458,14 +458,14 @@ public:
 	 *
 	 *  Cascade for the effective collision radius:
 	 *    Tier 1: `FSeinExtentsComponent` on the entity if present. For Capsule
-	 *      shapes uses `Radius`; for Box uses `max(HalfExtentX, HalfExtentY)`
-	 *      as a conservative bounding circle. Compound entities take the
-	 *      max bounding radius across all shapes.
+	 *      shapes uses `Radius`; for Box uses the diagonal
+	 *      `sqrt(HalfExtentX² + HalfExtentY²)` (smallest enclosing circle).
+	 *      Compound entities take the max bounding radius across all shapes.
 	 *    Tier 2: `NavData.FallbackFootprintRadius` (used only when no Extents).
 	 *    Tier 3: 0 — point-only, no ring samples.
 	 *
 	 *  Precomputes 8 ring sample offsets at the resolved radius. Per-tick
-	 *  collision checks then sample 1 center + 8 ring points = 9 IsPassable
+	 *  collision checks then sample 1 center + 8 ring points = 9 IsWorldPositionClear
 	 *  calls per step, ~450ns total. Entity-stable for the duration of the
 	 *  move action; never re-derived per tick. */
 	void CacheFootprintFromContext(const FSeinMovementContext& Ctx);
@@ -479,8 +479,8 @@ public:
 	 *  while the runtime body had a different one, producing the classic
 	 *  "planned path that the body physically can't follow" stuckness.
 	 *
-	 *  Box shape conversion: takes `max(HalfExtentX, HalfExtentY)` as a
-	 *  conservative bounding-circle radius. This is correct for radially-
+	 *  Box shape conversion: takes the diagonal `sqrt(HalfExtentX² + HalfExtentY²)`
+	 *  as the smallest enclosing bounding-circle radius. This is correct for radially-
 	 *  symmetric movement (infantry, hover) but conservative for elongated
 	 *  units (long tanks): the planner refuses corridors narrower than the
 	 *  bounding circle even when the body could fit if perfectly oriented.
@@ -525,7 +525,7 @@ protected:
 	int32 CachedNumFootprintSamples = 0;
 
 	/** Local-space XY offsets for footprint sampling. Computed from
-	 *  CachedCollisionRadius once per move action; passed to IsPassable
+	 *  CachedCollisionRadius once per move action; sampled via IsWorldPositionClear
 	 *  at each ResolveNavCollision call. Fixed-size to avoid per-tick
 	 *  allocations. */
 	FFixedVector CachedFootprintSamples[8];
@@ -781,7 +781,7 @@ protected:
 	 *  ApplyAvoidanceSteer. Byte-identical no-op while the model leaves it at 1. */
 	FFixedPoint GetAvoidanceSpeedScale(const FSeinMovementContext& Ctx) const;
 
-	// CacheFootprintFromContext is declared in the public section below —
+	// CacheFootprintFromContext is declared in the public section above —
 	// called by USeinMoveToAction's first-tick setup.
 
 	/** Resolve `NewPos.Z` against the nav's reference Z sample plus the

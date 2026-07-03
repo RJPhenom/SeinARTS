@@ -26,7 +26,7 @@
 // the nav-blocker stamping pipeline. Off by default — `log LogSeinNavBlockerStamp
 // Verbose` reports how many blockers each tick produces + which entities
 // contributed. If the count is 0 no entity is supplying blocker data; if it's >0
-// the issue is downstream (CollectDebugBlockerCells / DrawDynamicBlockersDebug).
+// the issue is downstream (CollectDebugBlockerCells).
 #include "SeinARTSNavigationLog.h"
 
 /**

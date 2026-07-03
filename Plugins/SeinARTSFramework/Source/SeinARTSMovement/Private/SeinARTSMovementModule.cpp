@@ -368,9 +368,8 @@ namespace
 			const int32 CurIdx = C.Action->GetCurrentWaypointIndex();
 			const FFixedVector AgentPosFixed = C.AgentPosFixed;
 
-
-			// Path cell highlights: yellow cells along the remaining path, blue cell
-			// at the final destination (flag marker).
+			// Path cell highlights: yellow cells along the FULL A* route (index-independent),
+			// blue cell at the final destination (flag marker).
 			TArray<FVector> RemainingCells;
 			TArray<FVector> TargetCell;
 			float HalfExtent = 0.0f;

@@ -17,6 +17,9 @@
 #include "Brokers/SeinBrokerTypes.h"
 #include "Simulation/SeinActorBridgeSubsystem.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "SeinLevelData.h"
+#include "SeinLevelDataSubsystem.h"
+#include "Types/Vector.h"
 #include "Input/SeinCommand.h"
 #include "Lib/SeinResourceBPFL.h"
 #include "Tags/SeinARTSGameplayTags.h"
@@ -97,10 +100,8 @@ void ASeinPlayerController::Tick(float DeltaSeconds)
 	PurgeStaleSelection();
 	LogCameraUpdate();
 
-	// Single under-cursor trace per tick, fanned out to consumers below.
-	// One trace covers the targeter's preview update AND the cursor delegate
-	// (subscribed by the cover module's destination preview subsystem) — no
-	// reason to TraceUnderCursor twice on the same frame.
+	// Under-cursor physics trace — drives the targeter preview (which may legitimately
+	// target unit meshes, so it wants the physics hit, not the ground point).
 	FHitResult CursorHit;
 	const bool bValidCursorHit = TraceUnderCursor(CursorHit);
 
@@ -113,14 +114,17 @@ void ASeinPlayerController::Tick(float DeltaSeconds)
 		}
 	}
 
-	// Cursor delegate — fires every tick regardless of state. Pass the trace
-	// result and a validity flag so subscribers can skip processing on missed
-	// traces (cursor off the world) without rerunning the trace themselves.
-	// No subscribers = no cost; the multicast invocation is empty in that case.
+	// Cursor delegate — feeds the formation destination preview (subscribed by the
+	// preview subsystem). Uses the analytic GROUND point (baked height field) rather
+	// than the physics hit, so hovering a unit/prop mesh no longer drags the previewed
+	// destination onto the mesh surface (root CLAUDE invariant #6: the preview anchor is
+	// the raw nav-ground under the cursor). Subscribers skip on an invalid (off-world)
+	// result. No subscribers = no cost — the ground resolve is skipped entirely.
 	if (OnCursorUpdated.IsBound())
 	{
-		const FVector CursorWorld = bValidCursorHit ? CursorHit.ImpactPoint : FVector::ZeroVector;
-		OnCursorUpdated.Broadcast(CursorWorld, bValidCursorHit);
+		FVector CursorGround;
+		const bool bValidGround = GetGroundPointUnderCursor(CursorGround);
+		OnCursorUpdated.Broadcast(bValidGround ? CursorGround : FVector::ZeroVector, bValidGround);
 	}
 }
 
@@ -405,21 +409,23 @@ void ASeinPlayerController::OnCommandStarted(const FInputActionValue& Value)
 		CommandDragScreenStart = FVector2D(MouseX, MouseY);
 	}
 
-	// Record world hit position and target actor at press time
+	// Record the target actor (physics trace — must hit unit meshes) and the drag
+	// anchor (GROUND point — must NOT snap to a hovered mesh) at press time.
 	FHitResult Hit;
-	if (TraceUnderCursor(Hit))
+	CommandTargetActor = TraceUnderCursor(Hit) ? GetSeinActorFromHit(Hit) : nullptr;
+
+	FVector Ground;
+	if (GetGroundPointUnderCursor(Ground))
 	{
-		CommandDragStart = Hit.ImpactPoint;
-		CommandDragCurrent = CommandDragStart;
-		CommandTargetActor = GetSeinActorFromHit(Hit);
+		CommandDragStart = Ground;
+		CommandDragCurrent = Ground;
 		CommandDragPath.Reset();
-		CommandDragPath.Add(CommandDragStart);
+		CommandDragPath.Add(Ground);
 	}
 	else
 	{
 		CommandDragStart = FVector::ZeroVector;
 		CommandDragCurrent = FVector::ZeroVector;
-		CommandTargetActor = nullptr;
 		CommandDragPath.Reset();
 	}
 }
@@ -437,16 +443,23 @@ void ASeinPlayerController::OnCommandReleased(const FInputActionValue& Value)
 
 	bRMBHeld = false;
 
-	// Get final world position under cursor
-	FHitResult Hit;
+	// Final destination = GROUND point under the cursor (not a hovered mesh surface) so
+	// the committed order matches the formation preview and lands the units correctly.
 	FVector FinalLocation = CommandDragStart;
 	ASeinActor* TargetActor = CommandTargetActor.Get();
 
-	if (TraceUnderCursor(Hit))
+	FVector Ground;
+	if (GetGroundPointUnderCursor(Ground))
 	{
-		FinalLocation = Hit.ImpactPoint;
-		// If not dragging, use whatever is under cursor at release time
-		if (!bIsCommandDragging)
+		FinalLocation = Ground;
+	}
+
+	// If not dragging, refresh the target actor from whatever unit is under the cursor
+	// at release time — this needs the physics trace (the ground point ignores meshes).
+	if (!bIsCommandDragging)
+	{
+		FHitResult Hit;
+		if (TraceUnderCursor(Hit))
 		{
 			TargetActor = GetSeinActorFromHit(Hit);
 		}
@@ -1278,6 +1291,83 @@ bool ASeinPlayerController::TraceUnderCursor(FHitResult& OutHit) const
 	return GetWorld()->LineTraceSingleByChannel(OutHit, WorldOrigin, TraceEnd, SelectionTraceChannel, Params);
 }
 
+namespace
+{
+	// Cursor→ground height-field resolve tuning. Render-side only (float + camera) —
+	// never sim state; the committed destination is re-projected deterministically at
+	// the command boundary.
+	constexpr int32 SeinGroundResolveMaxIterations = 4;
+	constexpr float SeinGroundResolveToleranceUU  = 1.0f;   // cm
+
+	/** Intersect a world ray with the horizontal plane Z = PlaneZ. Returns false when
+	 *  the ray is parallel to the plane or the crossing is behind the ray origin. */
+	static bool SeinIntersectRayGroundPlane(const FVector& Origin, const FVector& Dir,
+		float PlaneZ, FVector& OutPoint)
+	{
+		if (FMath::IsNearlyZero(Dir.Z)) return false;
+		const float T = (PlaneZ - Origin.Z) / Dir.Z;
+		if (T < 0.f) return false;
+		OutPoint = Origin + Dir * T;
+		return true;
+	}
+}
+
+bool ASeinPlayerController::GetGroundPointUnderCursor(FVector& OutWorld) const
+{
+	// Deproject the cursor to a world ray.
+	float MouseX, MouseY;
+	if (!GetMousePosition(MouseX, MouseY)) return false;
+
+	FVector Origin, Dir;
+	if (!DeprojectScreenPositionToWorld(MouseX, MouseY, Origin, Dir)) return false;
+
+	// Seed the ground altitude from the physics selection trace. Only its Z is used
+	// (a hovered unit/prop still stands near ground level); its XY is discarded. This
+	// call also doubles as the graceful fallback when there is no baked level data.
+	FHitResult SeedHit;
+	if (!TraceUnderCursor(SeedHit)) return false;   // cursor off the world entirely
+
+	// Analytic resolve against the baked level-data height field — the same static
+	// ground the nav grid is derived from. Because it intersects a height field rather
+	// than physics geometry, it is immune to unit/prop meshes: a ray grazing a unit or a
+	// tree still lands on the ground XY under the cursor. Iterate intersect-ray-with-plane
+	// → sample-height until the Z estimate settles (1–2 steps for an RTS camera).
+	if (const USeinLevelData* LevelData = USeinLevelDataSubsystem::GetLevelDataForWorld(this))
+	{
+		float EstZ = SeedHit.ImpactPoint.Z;
+		FVector Resolved = SeedHit.ImpactPoint;
+		bool bResolved = false;
+
+		for (int32 Iter = 0; Iter < SeinGroundResolveMaxIterations; ++Iter)
+		{
+			FVector Candidate;
+			if (!SeinIntersectRayGroundPlane(Origin, Dir, EstZ, Candidate)) break;
+
+			FFixedPoint SampledZ;
+			if (!LevelData->GetSharedHeightAt(FFixedVector::FromVector(Candidate), SampledZ)) break; // off-grid XY
+
+			const float GroundZ = SampledZ.ToFloat();
+			Candidate.Z = GroundZ;
+			Resolved = Candidate;
+			bResolved = true;
+
+			if (FMath::Abs(GroundZ - EstZ) <= SeinGroundResolveToleranceUU) break;   // settled
+			EstZ = GroundZ;
+		}
+
+		if (bResolved)
+		{
+			OutWorld = Resolved;
+			return true;
+		}
+	}
+
+	// No baked ground under the cursor (no level data, or cursor off the baked grid):
+	// fall back to the physics hit point — pre-fix behavior, reached only without a bake.
+	OutWorld = SeedHit.ImpactPoint;
+	return true;
+}
+
 ASeinActor* ASeinPlayerController::GetSeinActorFromHit(const FHitResult& Hit) const
 {
 	if (!Hit.GetActor())
@@ -1362,10 +1452,12 @@ void ASeinPlayerController::UpdateCommandDrag()
 	// Update current drag position in world space
 	if (bIsCommandDragging)
 	{
-		FHitResult Hit;
-		if (TraceUnderCursor(Hit))
+		// GROUND point (not the physics hit) so the drag guide tracks the nav ground and
+		// never jumps onto a hovered unit/prop mesh mid-drag.
+		FVector Ground;
+		if (GetGroundPointUnderCursor(Ground))
 		{
-			CommandDragCurrent = Hit.ImpactPoint;
+			CommandDragCurrent = Ground;
 			// Accumulate the drag path, sampled by cursor distance travelled so the
 			// guide is evenly spaced regardless of drag speed (a slow drag doesn't spam
 			// points). The gesture decides whether to use the whole path or endpoints.

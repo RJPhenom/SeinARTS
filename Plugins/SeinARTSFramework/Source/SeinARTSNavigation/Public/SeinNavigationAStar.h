@@ -497,7 +497,7 @@ protected:
 	bool WorldToGrid(const FFixedVector& WorldPos, int32& OutX, int32& OutY) const;
 	FFixedVector GridToWorld(int32 X, int32 Y) const;
 
-	/** Bresenham grid line-of-sight — true if every cell from (X0,Y0) to (X1,Y1)
+	/** Supercover grid line-of-sight — true if every cell from (X0,Y0) to (X1,Y1)
 	 *  is passable AND, when `RequiredClearance > 0`, every cell on the line
 	 *  EXCEPT the anchor (X0,Y0) has `WallDistance >= RequiredClearance`. The
 	 *  anchor is exempt because the unit may legitimately start near a wall

@@ -86,11 +86,11 @@ struct SEINARTSMOVEMENTPLUS_API FSeinTrackedMovementData : public FSeinComponent
 
 	/** Sharp-turn brake threshold (radians) for ARC mode. When the chassis
 	 *  is in arc mode AND the commanded yaw delta exceeds this angle,
-	 *  throttle scales down toward `SharpTurnBrakeFactor` — mimics wheeled's
+	 *  throttle scales down by `SharpTurnBrakeStrength` — mimics wheeled's
 	 *  behavior for high-speed corners. Has no effect in pivot mode.
 	 *
 	 *  Default π/3 (60°). Lower for earlier braking on milder turns. Set to
-	 *  π (180°) or `SharpTurnBrakeFactor = 1.0` to disable. */
+	 *  π (180°), or `SharpTurnBrakeStrength = 0`, to disable. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
 		meta = (ClampMin = "0.0"))
 	FFixedPoint SharpTurnBrakeAngle = FFixedPoint::Pi / FFixedPoint::FromInt(3);

@@ -406,6 +406,22 @@ public:
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Targeter")
 	USeinTargeterSubsystem* GetTargeterSubsystem() const;
 
+	/**
+	 * Resolve the world-space GROUND point under the mouse cursor by intersecting the
+	 * cursor ray with the baked level-data height field — the same static-ground surface
+	 * the navigation grid is derived from. Unlike a physics trace (TraceUnderCursor), this
+	 * is immune to unit and prop meshes: hovering a unit or a tree still returns the ground
+	 * XY under the cursor, not the mesh surface. Use this (NOT the selection trace) for
+	 * MOVE / order destinations so the point feeds the formation resolver as a clean
+	 * nav-ground input (root CLAUDE invariant #6: the destination is the raw ground under
+	 * the cursor, resolved to a nav cell ONCE downstream). Falls back to the physics
+	 * selection trace only when there is no baked level data under the cursor. Returns
+	 * false solely when the cursor is off the world entirely.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Command",
+		meta = (DisplayName = "Get Ground Point Under Cursor"))
+	bool GetGroundPointUnderCursor(FVector& OutWorld) const;
+
 	/** Read a resource value for this player. Surface for UMG bindings —
 	 *  designers drag from a Player Controller pin and find this directly
 	 *  in the binding picker rather than navigating UI subsystem internals.

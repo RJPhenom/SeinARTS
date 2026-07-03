@@ -10,7 +10,7 @@
  *              The chassis behaves like a wheeled vehicle. Full throttle,
  *              yaw rotates toward the steering target at `TurnRate × Dt`,
  *              and an optional sharp-turn brake (`SharpTurnBrakeAngle` /
- *              `SharpTurnBrakeFactor`) softens throttle for hard turns at
+ *              `SharpTurnBrakeStrength`) softens throttle for hard turns at
  *              high speed. Open-terrain U-turns arc through without
  *              stopping — matches the wheeled vehicle feel.
  *
