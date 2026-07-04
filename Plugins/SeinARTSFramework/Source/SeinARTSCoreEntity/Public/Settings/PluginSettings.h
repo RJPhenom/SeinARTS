@@ -770,12 +770,34 @@ public:
 
 	/** How far a settled unit must be pushed off its formation before the formation re-forms.
 	 *
-	 *  World units, measured to the NEAREST settled slot. Must comfortably exceed the arrival
-	 *  acceptance radius plus ordinary collision-settle jitter, or formations re-form forever.
-	 *  Default 150. Only read while Idle Re-Seek is on. */
+	 *  World units, measured to the unit's ASSIGNED slot after members are re-matched to slots.
+	 *  Must comfortably exceed the arrival acceptance radius plus ordinary collision-settle
+	 *  jitter, or formations re-form forever. Default 150. Only read while Idle Re-Seek is on. */
 	UPROPERTY(Config, EditAnywhere, Category = "Navigation",
 		meta = (DisplayName = "Re-Seek Displacement Threshold", ClampMin = "0.0"))
 	FFixedPoint ReseekDisplacementThreshold = FFixedPoint::FromInt(150);
+
+	/** How often an idle formation checks whether it has been shoved apart, in seconds.
+	 *
+	 *  The cold watch cadence: while nothing is displaced and no re-form is running, each
+	 *  formation scans at this interval. Larger = cheaper and slower to notice displacement;
+	 *  smaller = snappier. Converted to whole sim ticks (minimum one tick). Default 0.5.
+	 *  Only read while Idle Re-Seek is on. */
+	UPROPERTY(Config, EditAnywhere, Category = "Navigation",
+		meta = (DisplayName = "Re-Seek Watch Interval", ClampMin = "0.0"))
+	FFixedPoint ReseekWatchInterval = FFixedPoint::One / FFixedPoint::FromInt(2);
+
+	/** How often soldiers are released during an active re-form, in seconds. 0 = every sim tick.
+	 *
+	 *  The hot cadence: while a re-form episode is running, displaced soldiers whose personal
+	 *  stagger delay has matured and whose path home is clear of traffic release at this
+	 *  sampling rate. Coarser values quantize releases into visible waves (soldiers whose
+	 *  gates opened in the same window fire together); 0 samples every tick so each soldier
+	 *  releases the moment its own gates open - the most organic setting. Default 0.
+	 *  Only read while Idle Re-Seek is on. */
+	UPROPERTY(Config, EditAnywhere, Category = "Navigation",
+		meta = (DisplayName = "Re-Seek Release Interval", ClampMin = "0.0"))
+	FFixedPoint ReseekReleaseInterval = FFixedPoint::Zero;
 
 	// Navigation — Formation (a Navigation SUBCATEGORY, nested below Avoidance)
 	// ----------------------------------------------------------------------------------------------------

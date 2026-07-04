@@ -330,6 +330,7 @@ int32 USeinARTSCoreSettings::ComputeConfigFingerprint() const
 		TEXT("AvoidanceCohesionHoldBack"), TEXT("AvoidanceCohesionCatchUpBoost"),
 		TEXT("AvoidanceCohesionRangeRadii"), TEXT("bSettleToFormationFacing"),
 		TEXT("bIdleReseek"), TEXT("ReseekDisplacementThreshold"),
+		TEXT("ReseekWatchInterval"), TEXT("ReseekReleaseInterval"),
 		TEXT("VisionCellSize"), TEXT("VisionTickInterval"),
 		TEXT("NavLayers"), TEXT("TerrainTypes"), TEXT("CollisionChannels"), TEXT("VisionLayers"),
 		TEXT("ResourceCatalog"), TEXT("RegisteredFactions"),

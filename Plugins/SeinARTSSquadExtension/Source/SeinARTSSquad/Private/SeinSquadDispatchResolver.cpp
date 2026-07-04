@@ -144,29 +144,73 @@ FSeinBrokerDispatchPlan USeinSquadDispatchResolver::ResolveDispatch_Implementati
 	const bool bReassignLateral = SquadData ? SquadData->bReassignSlotsLateral : false;
 	const bool bReassignDepth   = SquadData ? SquadData->bReassignSlotsDepth   : false;
 
-	// A squad is ONE element of the parent formation: the parent (ComputeMultiBrokerAnchors) already spent
-	// the gesture SPACING the squad anchors and handed this squad its anchor (Order.TargetLocation) +
-	// element facing (CurrentFacing). Lay the members out in the squad's OWN compact shape via the shared
-	// inner-layout constructor, which by construction carries NO gesture guide/tag — a guide here would
-	// re-expand each squad to fill the whole drag, overlapping them into one. EMPTY FormationClass = the
-	// slot formation (this resolver's DefaultFormationClass). SAME constructor the preview uses → preview
-	// === commit. (TargetEntity isn't needed for layout; the per-member dispatch reads Order.TargetEntity.)
-	const FSeinOrderTarget Target = USeinFormation::MakeInnerLayoutTarget(
-		Order.TargetLocation, CurrentCentroid, CurrentFacing,
-		SquadData ? SquadData->FormationClass : TSoftClassPtr<USeinFormation>());
-	const FSeinFormationLayout Layout = ResolveFormationLayout(
-		World, Effective, Target, bReassignLateral, bReassignDepth);
-	const FFixedQuaternion FormationFacing = Layout.Facing;
-	const TArray<FFixedVector>& Positions = Layout.Positions;
-
-	// Persist the formation facing on the broker so the next move's
-	// "current facing" lookup reflects this dispatch.
-	if (BrokerData)
-	{
-		BrokerData->AnchorFacing = FormationFacing;
-	}
-
 	const bool bEntityTargeted = Order.TargetEntity.IsValid();
+
+	// PRE-PLACED FIDELITY PATH (idle re-form + any internal machinery that dispatches
+	// members to exact points): when the order carries member→position pairs, route each
+	// listed member STRAIGHT to its paired world position and skip the inner layout solve
+	// entirely. Re-solving here would be actively destructive for a SCATTERED squad: the
+	// facing recomputes from centroid→anchor (a scattered centroid sits off to the side, so
+	// every dispatch rotates the slot offsets to a fresh wrong orientation) and the
+	// AnchorFacing write below would overwrite the squad's standing facing with that junk —
+	// corrupting the very layout a re-form is trying to return to. A pre-placed dispatch
+	// returns to the layout AS GIVEN: no re-solve, no facing recompute, no state writes.
+	TArray<FFixedVector> Positions;
+	FFixedQuaternion FormationFacing = CurrentFacing;
+	if (Order.PreplacedPositions.Num() > 0)
+	{
+		Positions.Reserve(Effective.Num());
+		for (const FSeinEntityHandle& Member : Effective)
+		{
+			const int32 Pidx = Order.PreplacedMembers.IndexOfByKey(Member);
+			Positions.Add(Order.PreplacedPositions.IsValidIndex(Pidx)
+				? Order.PreplacedPositions[Pidx] : Order.TargetLocation);
+		}
+	}
+	else
+	{
+		// A squad is ONE element of the parent formation: the parent (ComputeMultiBrokerAnchors)
+		// already spent the gesture SPACING the squad anchors and handed this squad its anchor
+		// (Order.TargetLocation) + element facing (CurrentFacing). Lay the members out in the
+		// squad's OWN compact shape via the shared inner-layout constructor, which by
+		// construction carries NO gesture guide/tag — a guide here would re-expand each squad to
+		// fill the whole drag, overlapping them into one. EMPTY FormationClass = the slot
+		// formation (this resolver's DefaultFormationClass). SAME constructor the preview uses →
+		// preview === commit. (TargetEntity isn't needed for layout; the per-member dispatch
+		// reads Order.TargetEntity.)
+		const FSeinOrderTarget Target = USeinFormation::MakeInnerLayoutTarget(
+			Order.TargetLocation, CurrentCentroid, CurrentFacing,
+			SquadData ? SquadData->FormationClass : TSoftClassPtr<USeinFormation>());
+		const FSeinFormationLayout Layout = ResolveFormationLayout(
+			World, Effective, Target, bReassignLateral, bReassignDepth);
+		FormationFacing = Layout.Facing;
+		Positions = Layout.Positions;
+
+		// Persist the formation facing on the broker so the next move's
+		// "current facing" lookup reflects this dispatch.
+		if (BrokerData)
+		{
+			BrokerData->AnchorFacing = FormationFacing;
+		}
+
+		// PERSIST THE RESOLVED LAYOUT ON THE BROKER (idle re-seek + settle-facing consumers) —
+		// mirrors the default resolver's capture, with one squad-specific difference:
+		// MEMBER-ALIGNED. Squads have AUTHORED slot roles (the re-match toggles default OFF, so
+		// slot i belongs to member i of this dispatch), and a re-form must send each member back
+		// to ITS OWN slot rather than re-shuffling the roster. Full-squad GROUND orders only:
+		// entity-targeted dispatches carry no slots, and subset/pre-placed orders must not
+		// clobber the squad's standing layout with a partial or re-routed one.
+		if (BrokerData && !bEntityTargeted && Positions.Num() > 0
+			&& Effective.Num() == BrokerData->Members.Num())
+		{
+			BrokerData->SettledSlotPositions = Positions;
+			TArray<FFixedQuaternion> SlotFacings = Layout.Facings;
+			while (SlotFacings.Num() < Positions.Num()) { SlotFacings.Add(FormationFacing); }
+			SlotFacings.SetNum(Positions.Num());
+			BrokerData->SettledSlotFacings = SlotFacings;
+			BrokerData->bSettledSlotsMemberAligned = true;
+		}
+	}
 
 	Plan.MemberDispatches.Reserve(Effective.Num());
 

@@ -165,11 +165,33 @@ struct SEINARTSCOREENTITY_API FSeinCommandBrokerData : public FSeinComponent
 	/** The earliest sim tick this formation may next consider an idle re-seek.
 	 *
 	 *  Advanced by the broker tick on every re-seek scan (the re-check cadence) and pushed
-	 *  further out after issuing a re-form (the cooldown), so re-seek neither scans every
+	 *  further out after an episode ends (the quiet period), so re-seek neither scans every
 	 *  tick nor machine-guns follow-up orders onto crowded ground. Runtime state; unused
 	 *  while the Idle Re-Seek setting is off. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker")
 	int32 NextReseekAllowedTick = 0;
+
+	/** Whether each settled slot belongs to a SPECIFIC member (slot i = Members i), or the
+	 *  slots are free for any member to fill.
+	 *
+	 *  Set by whichever resolver captured the layout: the default (loose-formation) resolver
+	 *  leaves this false — a re-form re-matches members to slots so the return crosses as
+	 *  little as possible. The squad resolver sets it true — squads have AUTHORED slot roles
+	 *  (pinned by default), so a re-form sends each member back to ITS OWN slot instead of
+	 *  re-shuffling the roster. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker")
+	bool bSettledSlotsMemberAligned = false;
+
+	/** The sim tick this formation's current re-seek episode began, or 0 when no episode
+	 *  is active.
+	 *
+	 *  An episode starts when displaced members are first noticed (with the ground clear
+	 *  of traffic) and ends when nobody is displaced and no re-form orders remain in
+	 *  flight. Each member's staggered release delay is measured from this anchor, so
+	 *  soldiers peel back toward their slots at individually jittered moments instead of
+	 *  all at once. Runtime state; unused while the Idle Re-Seek setting is off. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker")
+	int32 ReseekEpisodeStartTick = 0;
 
 	// Per-order execution state (`bIsExecuting` + `LastDispatchTick`) was
 	// promoted onto FSeinBrokerQueuedOrder so non-overlapping subset-targeted
@@ -186,6 +208,8 @@ FORCEINLINE uint32 GetTypeHash(const FSeinCommandBrokerData& Data)
 	Hash = HashCombine(Hash, GetTypeHash(Data.FormationWidth));
 	Hash = HashCombine(Hash, GetTypeHash(Data.FormationRadius));
 	Hash = HashCombine(Hash, GetTypeHash(Data.NextReseekAllowedTick));
+	Hash = HashCombine(Hash, GetTypeHash(Data.ReseekEpisodeStartTick));
+	Hash = HashCombine(Hash, GetTypeHash(Data.bSettledSlotsMemberAligned));
 	Hash = HashCombine(Hash, GetTypeHash(Data.SettledSlotPositions.Num()));
 	for (const FFixedVector& Slot : Data.SettledSlotPositions)
 	{

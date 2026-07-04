@@ -25,7 +25,11 @@
 #include "Components/SeinAbilityComponent.h"
 #include "Brokers/SeinCommandBrokerResolver.h"
 #include "Brokers/SeinDefaultCommandBrokerResolver.h"  // ReassignSlots (idle re-seek pairing)
+#include "Collision/SeinCollisionSpatialHash.h"        // idle re-seek traffic gather
 #include "Components/SeinMovementComponent.h"          // idle re-seek settle checks
+#include "Components/SeinExtentsComponent.h"           // idle re-seek corridor radii
+#include "Components/SeinExtentsHelpers.h"             // GetColliderBoundingRadius
+#include "Components/SeinNavigationComponent.h"        // fallback footprint radius
 #include "Settings/PluginSettings.h"                   // bIdleReseek + threshold
 #include "Tags/SeinARTSGameplayTags.h"                 // ground-move context for internal re-form orders
 #include "Abilities/SeinAbility.h"
@@ -399,84 +403,314 @@ public:
 				}
 			}
 
-			// 4.5 IDLE RE-SEEK (opt-in, default off): a fully-idle formation whose members were
-			// shoved off its settled slots re-fills its OWN slots with one internal ground order.
-			// The FORMATION owns the slots; which member takes which slot is re-decided here via
-			// the anti-cross matcher (a scattered line re-forms in whatever arrangement crosses
-			// least — never "everyone back to their exact old spot"). Gates, cheapest first:
-			// the setting; queue EMPTY (fully idle — a re-form in flight suppresses the next);
-			// a settled layout with EXACTLY one slot per member (deaths staled it → skip until
-			// the next player ground order refreshes it); the scan cadence / post-issue cooldown
-			// (deterministic tick math); every member move-capable, ability-idle, and velocity-
-			// settled (a crowd still resolving defers — natural damping against re-seek
-			// cascades); and someone displaced beyond the threshold from their NEAREST slot.
-			// Squad brokers never capture settled slots, so they skip naturally.
+			// 4.5 IDLE RE-SEEK (opt-in, default off): a formation whose members were shoved off
+			// its settled slots re-fills its OWN slots — each soldier INDIVIDUALLY gated, so the
+			// re-form reads organic instead of choreographed. The FORMATION owns the slots;
+			// which member takes which slot is re-decided via the anti-cross matcher. Per scan
+			// (every ~0.5s, and only while no FOREIGN order is queued — the player always wins):
+			//   • Pair every unreleased member to an unclaimed slot (bijective, anti-cross,
+			//     deterministic). DISPLACED = far from YOUR PAIRED slot — never "near someone's
+			//     slot": a blob camped around a ring must keep resolving until every slot is
+			//     actually filled by its assigned member.
+			//   • Each displaced member releases ON ITS OWN when ALL of: it is individually
+			//     settled (ability-idle, no move target, ~zero velocity); its personal jitter
+			//     delay from the episode anchor has matured (hash of its handle modulo ~1.5s —
+			//     lockstep-identical); and its CORRIDOR IS CLEAR — no moving foreign unit near
+			//     the straight member→slot segment (destination end included), so a soldier on
+			//     the crowd's trailing edge starts back while the column still transits
+			//     elsewhere, and nobody marches into oncoming traffic. Own members in motion
+			//     never block a corridor (same-formation traffic is cohesion-skipped and
+			//     brush-bys are the collision floor's job).
+			//   • Each released soldier gets its OWN one-member internal order (claimed slots /
+			//     members are excluded from later pairings); the episode ends (anchor reset +
+			//     a 1s quiet period) when nobody is pair-displaced and nothing is in flight.
+			// IT3 handoff note: the per-member release gate is where a future transit-dodge
+			// behavior plugs in — "dodge active" simply suppresses that member's release.
+			// Deaths stale the layout (member/slot counts diverge) → re-seek suspends until the
+			// next full ground order recaptures. Squad brokers never capture slots → skip.
 			const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
 			if (Settings->bIdleReseek
-				&& Broker->OrderQueue.Num() == 0
 				&& Broker->Members.Num() > 0
 				&& Broker->SettledSlotPositions.Num() == Broker->Members.Num()
 				&& CurrentTick >= Broker->NextReseekAllowedTick)
 			{
-				// Scan cadence: ~half a second between checks keeps the idle cost negligible.
+				// Scan cadences, both designer-tuned (seconds → whole ticks, deterministic):
+				// WATCH (cold) = how often an undisturbed formation checks for displacement;
+				// RELEASE (hot) = how often releases are sampled during an active episode —
+				// floor of one tick, so the default 0 means "every tick" (each soldier fires
+				// the moment its own gates open; coarser values quantize releases into waves).
 				const int32 TickRate = (Settings->SimulationTickRate > 1) ? Settings->SimulationTickRate : 1;
-				const int32 HalfSecond = (TickRate / 2 > 1) ? TickRate / 2 : 1;
-				Broker->NextReseekAllowedTick = CurrentTick + HalfSecond;
+				int32 WatchTicks = (Settings->ReseekWatchInterval * FFixedPoint::FromInt(TickRate)).ToInt();
+				if (WatchTicks < 1) { WatchTicks = 1; }
+				int32 ReleaseTicks = (Settings->ReseekReleaseInterval * FFixedPoint::FromInt(TickRate)).ToInt();
+				if (ReleaseTicks < 1) { ReleaseTicks = 1; }
+				Broker->NextReseekAllowedTick = CurrentTick + WatchTicks;
 
-				bool bEligible = true;
-				bool bDisplaced = false;
-				const FFixedPoint Threshold = Settings->ReseekDisplacementThreshold;
-				const FFixedPoint ThresholdSq = Threshold * Threshold;
-				for (const FSeinEntityHandle& M : Broker->Members)
+				// Foreign-order gate: any queued order that is NOT one of our re-form subsets
+				// (internal + pre-placed) suspends re-seek — the player always wins.
+				bool bForeignOrder = false;
+				for (const FSeinBrokerQueuedOrder& Queued : Broker->OrderQueue)
 				{
-					const FSeinAbilityComponent* AC = World.GetComponent<FSeinAbilityComponent>(M);
-					const USeinAbility* Active = AC ? AC->GetActiveAbility(World) : nullptr;
-					const FSeinMovementComponent* Move = World.GetComponent<FSeinMovementComponent>(M);
-					const FSeinEntity* E = World.GetEntity(M);
-					if (!Move || !E
-						|| (Active && Active->bIsActive)
-						|| Move->bHasTarget
-						|| Move->Velocity.SizeSquared() > FFixedPoint::Epsilon)
+					if (!(Queued.bIsInternalPrefix && Queued.PreplacedPositions.Num() > 0))
 					{
-						bEligible = false;
+						bForeignOrder = true;
 						break;
 					}
-					if (bDisplaced) continue; // one displaced member is enough; keep validating eligibility
-					const FFixedVector Pos = E->Transform.GetLocation();
-					FFixedPoint BestSq = ThresholdSq + FFixedPoint::One; // sentinel: "no slot within threshold"
-					for (const FFixedVector& Slot : Broker->SettledSlotPositions)
-					{
-						const FFixedPoint DX = Pos.X - Slot.X;
-						const FFixedPoint DY = Pos.Y - Slot.Y;
-						const FFixedPoint DSq = DX * DX + DY * DY;
-						if (DSq < BestSq) { BestSq = DSq; }
-					}
-					if (BestSq > ThresholdSq) { bDisplaced = true; }
 				}
 
-				if (bEligible && bDisplaced)
+				if (!bForeignOrder)
 				{
-					// Pair members ↔ slots (anti-cross, deterministic), then dispatch each member
-					// straight to its slot via the pre-placed path — NO re-solve: the settled
-					// layout IS the shape (cover-snapped + occupancy-resolved at original
-					// dispatch), so the formation re-forms exactly where it stood.
-					TArray<FFixedVector> Slots = Broker->SettledSlotPositions;
-					USeinDefaultCommandBrokerResolver::ReassignSlots(
-						&World, Broker->Members, Slots, Broker->AnchorFacing,
-						/*bLateral*/ true, /*bDepth*/ true);
+					// In-flight claims: members already released + the slots their re-form
+					// orders target. Later pairings cover only the remainder.
+					TSet<FSeinEntityHandle> ReleasedMembers;
+					TArray<FFixedVector> ClaimedSlots;
+					for (const FSeinBrokerQueuedOrder& Queued : Broker->OrderQueue)
+					{
+						for (const FSeinEntityHandle& RM : Queued.PreplacedMembers) { ReleasedMembers.Add(RM); }
+						ClaimedSlots.Append(Queued.PreplacedPositions);
+					}
 
-					FSeinBrokerQueuedOrder Order;
-					Order.Context.AddTag(SeinARTSTags::Command_Context_RightClick);
-					Order.Context.AddTag(SeinARTSTags::Command_Context_Target_Ground);
-					Order.TargetLocation = Broker->Anchor;
-					Order.bIsInternalPrefix = true;
-					Order.PreplacedMembers = Broker->Members;
-					Order.PreplacedPositions = Slots;
-					Broker->OrderQueue.Add(Order);
+					// Pair the unreleased members to their return slots. Two modes, chosen by the
+					// CAPTURING resolver via bSettledSlotsMemberAligned:
+					//   ALIGNED (squads)  — slot i belongs to Members i; every member returns to
+					//                       ITS OWN authored slot, roster never re-shuffles.
+					//   FREE (loose)      — bijective anti-cross re-match over the remainder so
+					//                       the return crosses as little as possible.
+					// A member already standing on its paired slot reads "on station" below.
+					TArray<FSeinEntityHandle> Unreleased;
+					TArray<FFixedVector> Paired;
+					bool bPairingValid = true;
+					if (Broker->bSettledSlotsMemberAligned)
+					{
+						for (int32 j = 0; j < Broker->Members.Num(); ++j)
+						{
+							if (ReleasedMembers.Contains(Broker->Members[j])) continue;
+							Unreleased.Add(Broker->Members[j]);
+							Paired.Add(Broker->SettledSlotPositions[j]);
+						}
+					}
+					else
+					{
+						for (const FSeinEntityHandle& M : Broker->Members)
+						{
+							if (!ReleasedMembers.Contains(M)) { Unreleased.Add(M); }
+						}
+						// Unclaimed slots (exact fixed-point identity — claimed slot values are
+						// copies straight out of SettledSlotPositions).
+						TArray<FFixedVector> Unclaimed;
+						for (const FFixedVector& Slot : Broker->SettledSlotPositions)
+						{
+							bool bClaimed = false;
+							for (const FFixedVector& C : ClaimedSlots)
+							{
+								if (C.X == Slot.X && C.Y == Slot.Y) { bClaimed = true; break; }
+							}
+							if (!bClaimed) { Unclaimed.Add(Slot); }
+						}
+						// Defensive: transient count skew (a member died with its re-form in
+						// flight) → skip this scan; dead-strip + completion pop reconverge.
+						bPairingValid = (Unreleased.Num() == Unclaimed.Num());
+						if (bPairingValid)
+						{
+							Paired = Unclaimed;
+							USeinDefaultCommandBrokerResolver::ReassignSlots(
+								&World, Unreleased, Paired, Broker->AnchorFacing,
+								/*bLateral*/ true, /*bDepth*/ true);
+						}
+					}
 
-					// Post-issue cooldown: a re-form that lands imperfectly on still-crowded
-					// ground may legitimately fire again, but never as a machine-gun.
-					Broker->NextReseekAllowedTick = CurrentTick + TickRate * 2;
+					if (bPairingValid && Unreleased.Num() > 0)
+					{
+
+						// MOVING foreign traffic, gathered ONCE per scan over the combined
+						// slots+members bounds (+margin): position + body radius per mover, for
+						// the per-member corridor tests below. Parked foreigners are ignored
+						// (standing occupancy is not transit); own members never block.
+						TArray<FFixedVector> TrafficPos;
+						TArray<FFixedPoint> TrafficRadius;
+						{
+							FFixedVector Min = Broker->SettledSlotPositions[0];
+							FFixedVector Max = Min;
+							const auto Grow = [&Min, &Max](const FFixedVector& P)
+							{
+								if (P.X < Min.X) Min.X = P.X;
+								if (P.Y < Min.Y) Min.Y = P.Y;
+								if (P.X > Max.X) Max.X = P.X;
+								if (P.Y > Max.Y) Max.Y = P.Y;
+							};
+							for (const FFixedVector& Slot : Broker->SettledSlotPositions) { Grow(Slot); }
+							for (const FSeinEntityHandle& M : Unreleased)
+							{
+								if (const FSeinEntity* E = World.GetEntity(M)) { Grow(E->Transform.GetLocation()); }
+							}
+							const FFixedVector Centre(
+								(Min.X + Max.X) / FFixedPoint::Two, (Min.Y + Max.Y) / FFixedPoint::Two,
+								Broker->SettledSlotPositions[0].Z);
+							FFixedVector HalfSpan(Max.X - Centre.X, Max.Y - Centre.Y, FFixedPoint::Zero);
+							const FFixedPoint GatherRadius = HalfSpan.Size() + FFixedPoint::FromInt(400);
+
+							ReseekScratchNeighbors.Reset();
+							World.GetCollisionSpatialHash().QueryRadius(
+								Centre, GatherRadius, ReseekScratchNeighbors, FSeinEntityHandle());
+							for (const FSeinEntityHandle& N : ReseekScratchNeighbors)
+							{
+								if (Broker->Members.Contains(N)) continue;
+								const FSeinMovementComponent* NMove = World.GetComponent<FSeinMovementComponent>(N);
+								if (!NMove) continue; // static geometry — not traffic
+								if (!NMove->bHasTarget && NMove->Velocity.SizeSquared() <= FFixedPoint::Epsilon) continue;
+								const FSeinEntity* NE = World.GetEntity(N);
+								if (!NE) continue;
+								FFixedPoint R = FFixedPoint::Zero;
+								if (const FSeinExtentsComponent* NExt = World.GetComponent<FSeinExtentsComponent>(N))
+								{
+									R = SeinExtentsHelpers::GetColliderBoundingRadius(*NExt);
+								}
+								if (R <= FFixedPoint::Zero)
+								{
+									if (const FSeinNavigationComponent* NNav = World.GetComponent<FSeinNavigationComponent>(N))
+									{
+										R = NNav->FallbackFootprintRadius;
+									}
+								}
+								if (R <= FFixedPoint::Zero) { R = FFixedPoint::FromInt(50); }
+								TrafficPos.Add(NE->Transform.GetLocation());
+								TrafficRadius.Add(R);
+							}
+						}
+
+						// Planar point→segment distance² (the corridor test workhorse). A
+						// degenerate segment (member already at its slot) collapses to a point
+						// distance. All fixed-point; deterministic.
+						const auto SegDistSq = [](const FFixedVector& P, const FFixedVector& A, const FFixedVector& B) -> FFixedPoint
+						{
+							const FFixedPoint ABX = B.X - A.X;
+							const FFixedPoint ABY = B.Y - A.Y;
+							const FFixedPoint LenSq = ABX * ABX + ABY * ABY;
+							FFixedPoint T = FFixedPoint::Zero;
+							if (LenSq > FFixedPoint::Epsilon)
+							{
+								T = ((P.X - A.X) * ABX + (P.Y - A.Y) * ABY) / LenSq;
+								if (T < FFixedPoint::Zero) T = FFixedPoint::Zero;
+								if (T > FFixedPoint::One)  T = FFixedPoint::One;
+							}
+							const FFixedPoint CX = A.X + ABX * T;
+							const FFixedPoint CY = A.Y + ABY * T;
+							const FFixedPoint DX = P.X - CX;
+							const FFixedPoint DY = P.Y - CY;
+							return DX * DX + DY * DY;
+						};
+
+						const FFixedPoint Threshold = Settings->ReseekDisplacementThreshold;
+						const FFixedPoint ThresholdSq = Threshold * Threshold;
+						const int32 WindowTicks = ((TickRate * 3) / 2 > 1) ? (TickRate * 3) / 2 : 1;
+						bool bAnyDisplaced = false;
+						int32 ReleasedThisScan = 0;
+
+						for (int32 i = 0; i < Unreleased.Num(); ++i)
+						{
+							const FSeinEntityHandle& M = Unreleased[i];
+							const FSeinMovementComponent* Move = World.GetComponent<FSeinMovementComponent>(M);
+							const FSeinEntity* E = World.GetEntity(M);
+							if (!Move || !E) continue;
+
+							// PAIRED displacement — distance to YOUR assigned slot, never "near
+							// someone's slot": a blob camped around a ring keeps resolving until
+							// every slot is filled by its assigned member.
+							const FFixedVector Pos = E->Transform.GetLocation();
+							const FFixedPoint DX = Pos.X - Paired[i].X;
+							const FFixedPoint DY = Pos.Y - Paired[i].Y;
+							if (DX * DX + DY * DY <= ThresholdSq) continue; // on station
+							bAnyDisplaced = true;
+
+							// Individually settled? (Ability-idle, no move target, ~zero velocity.)
+							const FSeinAbilityComponent* AC = World.GetComponent<FSeinAbilityComponent>(M);
+							const USeinAbility* Active = AC ? AC->GetActiveAbility(World) : nullptr;
+							if ((Active && Active->bIsActive)
+								|| Move->bHasTarget
+								|| Move->Velocity.SizeSquared() > FFixedPoint::Epsilon)
+							{
+								continue; // displaced but not settled — keeps the episode alive
+							}
+
+							// Episode anchors on the first displaced sighting (deterministic order).
+							if (Broker->ReseekEpisodeStartTick == 0)
+							{
+								Broker->ReseekEpisodeStartTick = CurrentTick;
+							}
+							// Personal jitter matured? (Hash of handle — lockstep-identical.)
+							const int32 Jitter = static_cast<int32>(
+								GetTypeHash(M) % static_cast<uint32>(WindowTicks));
+							if (CurrentTick < Broker->ReseekEpisodeStartTick + Jitter) continue;
+
+							// CORRIDOR CLEAR? Any moving foreign unit inside the member→slot
+							// corridor (halfwidth = both bodies + margin; destination end
+							// included) blocks THIS member only — a soldier on the crowd's
+							// trailing edge starts back while the column still transits elsewhere.
+							// (IT3 handoff: a future transit-dodge state also suppresses here.)
+							FFixedPoint SelfR = FFixedPoint::Zero;
+							if (const FSeinExtentsComponent* SExt = World.GetComponent<FSeinExtentsComponent>(M))
+							{
+								SelfR = SeinExtentsHelpers::GetColliderBoundingRadius(*SExt);
+							}
+							if (SelfR <= FFixedPoint::Zero)
+							{
+								if (const FSeinNavigationComponent* SNav = World.GetComponent<FSeinNavigationComponent>(M))
+								{
+									SelfR = SNav->FallbackFootprintRadius;
+								}
+							}
+							if (SelfR <= FFixedPoint::Zero) { SelfR = FFixedPoint::FromInt(50); }
+
+							bool bCorridorClear = true;
+							for (int32 t = 0; t < TrafficPos.Num(); ++t)
+							{
+								const FFixedPoint Halfwidth = SelfR + TrafficRadius[t] + FFixedPoint::FromInt(100);
+								if (SegDistSq(TrafficPos[t], Pos, Paired[i]) < Halfwidth * Halfwidth)
+								{
+									bCorridorClear = false;
+									break;
+								}
+							}
+							if (!bCorridorClear) continue;
+
+							// RELEASE — this soldier alone, straight to its paired slot. One-
+							// member TargetMembers is CRITICAL (empty would fan the order across
+							// ALL members and send everyone to the anchor).
+							FSeinBrokerQueuedOrder Order;
+							Order.TargetMembers.Add(M);
+							Order.PreplacedMembers.Add(M);
+							Order.PreplacedPositions.Add(Paired[i]);
+							Order.Context.AddTag(SeinARTSTags::Command_Context_RightClick);
+							Order.Context.AddTag(SeinARTSTags::Command_Context_Target_Ground);
+							Order.TargetLocation = Broker->Anchor;
+							Order.bIsInternalPrefix = true;
+							Broker->OrderQueue.Add(Order);
+							++ReleasedThisScan;
+						}
+
+						const bool bInFlight = ReleasedMembers.Num() > 0 || ReleasedThisScan > 0;
+						if (!bAnyDisplaced && !bInFlight)
+						{
+							// Episode over. Reset the anchor; grant a quiet period so a finished
+							// re-form doesn't immediately rescan.
+							if (Broker->ReseekEpisodeStartTick != 0)
+							{
+								Broker->ReseekEpisodeStartTick = 0;
+								Broker->NextReseekAllowedTick = CurrentTick + TickRate;
+							}
+						}
+						else
+						{
+							// EPISODE HOT → rescan at the RELEASE cadence. The watch cadence
+							// quantized releases into visible mini-waves (everyone whose jitter
+							// matured / corridor cleared within the same scan window fired
+							// together on the scan tick); the release interval samples finer —
+							// default every tick, so each soldier releases the exact tick its
+							// own gates open. Cost is transient and bounded (only brokers with
+							// a live episode, only while it lasts).
+							Broker->NextReseekAllowedTick = CurrentTick + ReleaseTicks;
+						}
+					}
 				}
 			}
 
@@ -504,4 +738,9 @@ private:
 	 *  reused (Reset() each broker) to avoid a per-broker-per-tick allocation.
 	 *  Sim-thread-only scratch — the broker tick runs serially. */
 	TSet<FSeinEntityHandle> LockedMembers;
+
+	/** Scratch neighbor buffer for the idle re-seek traffic-clearance query,
+	 *  reused (Reset() each scan) for the same no-per-tick-allocation reason.
+	 *  Sim-thread-only scratch — the broker tick runs serially. */
+	TArray<FSeinEntityHandle> ReseekScratchNeighbors;
 };

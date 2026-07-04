@@ -458,16 +458,21 @@ FSeinBrokerDispatchPlan USeinDefaultCommandBrokerResolver::ResolveDispatch_Imple
 
 	// PERSIST THE RESOLVED LAYOUT ON THE BROKER — the formation owns its slots; members
 	// are transient assignees (which member fills which slot is re-decided at use via
-	// ReassignSlots). Ground orders only: entity-targeted dispatches carry no slots, and
-	// clobbering the last ground layout with them would erase the formation's standing
-	// spots. Facings pad with AnchorFacing for paths that carry none (pre-placed parent
+	// ReassignSlots). FULL-BROKER ground orders only: entity-targeted dispatches carry no
+	// slots, and SUBSET orders (a shift-click on part of the selection, an AutoMoveThen
+	// prefix, an idle re-form wave) must never clobber the formation's standing layout
+	// with a partial one — the layout is defined by the last order the WHOLE formation
+	// took. Facings pad with AnchorFacing for paths that carry none (pre-placed parent
 	// slots). Consumers: formation re-form / re-seek + per-slot settle policies.
-	if (!bEntityTargeted && Positions.Num() > 0)
+	if (!bEntityTargeted && Positions.Num() > 0 && Effective.Num() == Broker->Members.Num())
 	{
 		Broker->SettledSlotPositions = Positions;
 		while (SlotFacings.Num() < Positions.Num()) { SlotFacings.Add(Broker->AnchorFacing); }
 		SlotFacings.SetNum(Positions.Num());
 		Broker->SettledSlotFacings = SlotFacings;
+		// Loose formations re-match members to slots on a re-form (least-crossing return);
+		// the squad resolver's capture sets this TRUE (authored slot roles stay pinned).
+		Broker->bSettledSlotsMemberAligned = false;
 	}
 
 	Plan.MemberDispatches.Reserve(Effective.Num());
