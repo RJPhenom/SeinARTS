@@ -7,8 +7,12 @@
 
 #include "Formations/SeinFormation.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "Collision/SeinCollisionSpatialHash.h"
 #include "Components/SeinExtentsComponent.h"
+#include "Components/SeinExtentsHelpers.h"
 #include "Components/SeinCommandBrokerData.h"
+#include "Components/SeinMovementComponent.h"
+#include "Components/SeinNavigationComponent.h"
 #include "Math/MathLib.h"
 #include "Types/FixedPoint.h"
 
@@ -380,12 +384,70 @@ void USeinFormation::SeparatePositions(
 void USeinFormation::ProjectPositionsToNavigable(
 	USeinWorldSubsystem* World,
 	const TArray<FFixedPoint>& Radii,
-	TArray<FFixedVector>& Positions)
+	TArray<FFixedVector>& Positions,
+	const TArray<FSeinEntityHandle>& ExcludeFromOccupancy)
 {
 	const int32 N = Positions.Num();
 	if (!World || N == 0) return;
 	// No nav projection bound (tests / nav-less games) → nothing to clamp to; leave positions as-is.
 	if (!World->NavProjectFreeResolver.IsBound()) return;
+
+	// PARKED-UNIT OCCUPANCY. Gather idle bodies near the formation footprint so no slot is placed
+	// ON one — the "order into a settled crowd" case, where occupancy-blind slots made arrivers
+	// grind against parked bodies until the stall failsafe fired each one. Rules: only PARKED units
+	// count (idle, movement-capable, not in ExcludeFromOccupancy — this order's own members vacate
+	// their spots; moving traffic is transient and ignored, which also keeps preview↔commit parity:
+	// parked bodies are stable between the preview frame and the click's processing tick). Radius
+	// from the same collider cascade the broadphase stamps (Extents bounding radius → nav fallback
+	// footprint). Query = the collision hash's start-of-tick snapshot, handle-sorted → deterministic.
+	TArray<FFixedVector> ParkedCentres;
+	TArray<FFixedPoint>  ParkedRadii;
+	{
+		// Formation bounds → one hash query covering every slot plus a body-sized margin.
+		FFixedVector Min = Positions[0];
+		FFixedVector Max = Positions[0];
+		for (int32 i = 1; i < N; ++i)
+		{
+			if (Positions[i].X < Min.X) Min.X = Positions[i].X;
+			if (Positions[i].Y < Min.Y) Min.Y = Positions[i].Y;
+			if (Positions[i].X > Max.X) Max.X = Positions[i].X;
+			if (Positions[i].Y > Max.Y) Max.Y = Positions[i].Y;
+		}
+		const FFixedVector Centre(
+			(Min.X + Max.X) / FFixedPoint::Two, (Min.Y + Max.Y) / FFixedPoint::Two, Positions[0].Z);
+		FFixedVector HalfSpan(Max.X - Centre.X, Max.Y - Centre.Y, FFixedPoint::Zero);
+		const FFixedPoint QueryRadius = HalfSpan.Size() + FFixedPoint::FromInt(300); // body-sized margin
+
+		TSet<FSeinEntityHandle> Excluded;
+		Excluded.Reserve(ExcludeFromOccupancy.Num());
+		for (const FSeinEntityHandle& H : ExcludeFromOccupancy) { Excluded.Add(H); }
+
+		TArray<FSeinEntityHandle> Nearby;
+		World->GetCollisionSpatialHash().QueryRadius(Centre, QueryRadius, Nearby, FSeinEntityHandle());
+		for (const FSeinEntityHandle& H : Nearby)
+		{
+			if (Excluded.Contains(H)) continue;
+			const FSeinMovementComponent* Move = World->GetComponent<FSeinMovementComponent>(H);
+			if (!Move || Move->bHasTarget) continue; // not a unit, or in motion → not occupancy
+			const FSeinEntity* Entity = World->GetEntityPool().Get(H);
+			if (!Entity) continue;
+			FFixedPoint BodyRadius = FFixedPoint::Zero;
+			if (const FSeinExtentsComponent* Ext = World->GetComponent<FSeinExtentsComponent>(H))
+			{
+				BodyRadius = SeinExtentsHelpers::GetColliderBoundingRadius(*Ext);
+			}
+			if (BodyRadius <= FFixedPoint::Zero)
+			{
+				if (const FSeinNavigationComponent* Nav = World->GetComponent<FSeinNavigationComponent>(H))
+				{
+					BodyRadius = Nav->FallbackFootprintRadius;
+				}
+			}
+			if (BodyRadius <= FFixedPoint::Zero) continue; // intangible → doesn't occupy ground
+			ParkedCentres.Add(Entity->Transform.GetLocation());
+			ParkedRadii.Add(BodyRadius);
+		}
+	}
 
 	// A slot is "off nav" when its cell isn't passable — off the play area, on a BAKED obstacle, OR under
 	// a runtime DYNAMIC blocker (bBlocksNav — a non-baked cover wall / deployable). We classify with the
@@ -407,31 +469,46 @@ void USeinFormation::ProjectPositionsToNavigable(
 		return Radii.IsValidIndex(i) ? Radii[i] : FFixedPoint::Zero;
 	};
 
-	// On-nav slots keep their exact spot and seed the occupied set (off-nav slots must avoid them too).
-	// Collect the off-nav slots to relocate in deterministic index order.
-	TArray<FFixedVector> Occupied;
-	TArray<FFixedPoint>  OccupiedRadii;
-	TArray<int32>        OffNav;
-	Occupied.Reserve(N);
-	OccupiedRadii.Reserve(N);
+	// Slot-vs-parked overlap test (planar, footprint-vs-footprint) — a slot ON a body relocates.
+	const auto OverlapsParked = [&ParkedCentres, &ParkedRadii](const FFixedVector& P, FFixedPoint R) -> bool
+	{
+		for (int32 k = 0; k < ParkedCentres.Num(); ++k)
+		{
+			const FFixedPoint DX = P.X - ParkedCentres[k].X;
+			const FFixedPoint DY = P.Y - ParkedCentres[k].Y;
+			const FFixedPoint MinDist = R + ParkedRadii[k];
+			if (DX * DX + DY * DY < MinDist * MinDist) return true;
+		}
+		return false;
+	};
+
+	// CLEAN slots keep their exact spot and join the occupied set (relocated slots must avoid them
+	// too). A slot relocates when it is off-nav (baked wall / play-area edge / dynamic blocker) OR
+	// on a parked body. Occupied is seeded with the parked bodies FIRST so every relocation avoids
+	// them. Deterministic index order throughout.
+	TArray<FFixedVector> Occupied = ParkedCentres;
+	TArray<FFixedPoint>  OccupiedRadii = ParkedRadii;
+	TArray<int32>        Relocate;
+	Occupied.Reserve(ParkedCentres.Num() + N);
+	OccupiedRadii.Reserve(ParkedRadii.Num() + N);
 	for (int32 i = 0; i < N; ++i)
 	{
 		const bool bOnNav = !bCanTestPassable || World->DynamicPassableResolver.Execute(Positions[i]);
-		if (bOnNav)
+		if (bOnNav && !OverlapsParked(Positions[i], RadiusAt(i)))
 		{
 			Occupied.Add(Positions[i]);
 			OccupiedRadii.Add(RadiusAt(i));
 		}
 		else
 		{
-			OffNav.Add(i);
+			Relocate.Add(i);
 		}
 	}
-	if (OffNav.Num() == 0) return; // whole formation already on-nav — common case, zero work
+	if (Relocate.Num() == 0) return; // whole formation already clean — common case, zero work
 
-	// Relocate each off-nav slot to its nearest free cell, accumulating occupancy as we go so the
-	// overflowing slots neither collide with the in-bounds slots nor with each other.
-	for (const int32 i : OffNav)
+	// Relocate each flagged slot to its nearest free cell, accumulating occupancy as we go so the
+	// overflowing slots neither collide with parked bodies, the clean slots, nor each other.
+	for (const int32 i : Relocate)
 	{
 		const FFixedPoint Ri = RadiusAt(i);
 		FFixedVector Projected;

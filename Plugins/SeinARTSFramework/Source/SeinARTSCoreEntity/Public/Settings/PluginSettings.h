@@ -699,32 +699,83 @@ public:
 		meta = (DisplayName = "Max Steer Magnitude", ClampMin = "0.0"))
 	FFixedPoint AvoidanceMaxSteerMagnitude = FFixedPoint::FromInt(2);
 
-	/** How much a unit brakes when it is steering hard — yield-by-slowing, layered on top of
-	 *  yield-by-turning. At full steer saturation the unit's cruise speed is multiplied by
-	 *  (1 − this); between zero and full steer the brake scales linearly. 0 disables braking
-	 *  entirely (bit-exact full speed). Default 0.25 — a unit swerving at its steering cap
-	 *  drops to 75% cruise, so congestion reads as units slowing into the weave instead of
-	 *  sliding through it at full tilt. */
+	/** How hard a unit brakes when it is swerving hard through traffic. 0 = never brake.
+	 *
+	 *  Yield-by-slowing, layered on top of yield-by-turning: steering saturation is the congestion
+	 *  signal, and at full saturation the unit's cruise speed is multiplied by (1 - this), scaling
+	 *  linearly in between. Applies only while a unit is actively avoiding; a clear unit always runs
+	 *  full cruise. Default 0.25 - a unit swerving at its steering cap drops to 75 percent cruise,
+	 *  so congestion reads as units slowing into the weave instead of sliding through at full tilt. */
 	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Avoidance",
 		meta = (DisplayName = "Brake Strength", ClampMin = "0.0", ClampMax = "1.0"))
 	FFixedPoint AvoidanceBrakeStrength = FFixedPoint::One / FFixedPoint::FromInt(4);
 
-	/** Formation cohesion, hold-back side: how much a member AHEAD of its group throttles so the
-	 *  formation stays together in motion. At full deviation from the group's mean progress the
-	 *  leader's cruise speed is multiplied by (1 − this). 0 disables hold-back. Default 0.25 —
-	 *  front-runners ease to 75% until the group catches up. Group = the unit's command broker
-	 *  (its formation); lone units are unaffected. */
+	/** How much a unit that has pulled ahead of its formation slows down so the group stays
+	 *  together. 0 = leaders never wait.
+	 *
+	 *  At full deviation ahead of the group's mean progress, the front-runner's cruise speed is
+	 *  multiplied by (1 - this). The group is the unit's command broker (its formation); lone units
+	 *  are unaffected. Pairs with Cohesion Catch-Up Boost (the behind-the-group side) and Cohesion
+	 *  Range (how much lag counts as full deviation). Default 0.5 - front-runners ease to half
+	 *  speed until the group catches up. */
 	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Avoidance",
 		meta = (DisplayName = "Cohesion Hold-Back", ClampMin = "0.0", ClampMax = "1.0"))
-	FFixedPoint AvoidanceCohesionHoldBack = FFixedPoint::One / FFixedPoint::FromInt(4);
+	FFixedPoint AvoidanceCohesionHoldBack = FFixedPoint::One / FFixedPoint::FromInt(2);
 
-	/** Formation cohesion, catch-up side: the cruise multiplier a member BEHIND its group ramps
-	 *  toward so laggards close the gap. 1 disables catch-up (laggards recover only via leaders
-	 *  holding back). Default 1.1 — stragglers hustle at up to 110% cruise. How a movement mode
-	 *  physically honors a boost above its top speed is that mode's own policy. */
+	/** How much a unit that has fallen behind its formation speeds up to close the gap.
+	 *  1 = laggards never hurry.
+	 *
+	 *  The cruise multiplier a lagging member ramps toward at full deviation behind the group's
+	 *  mean progress. Values above 1 push a unit past its authored top speed - how a movement mode
+	 *  physically honors that is the mode's own policy. Pairs with Cohesion Hold-Back and Cohesion
+	 *  Range. Default 2 - stragglers sprint at up to double cruise to rejoin their formation. */
 	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Avoidance",
 		meta = (DisplayName = "Cohesion Catch-Up Boost", ClampMin = "1.0"))
-	FFixedPoint AvoidanceCohesionCatchUpBoost = FFixedPoint::FromInt(11) / FFixedPoint::FromInt(10);
+	FFixedPoint AvoidanceCohesionCatchUpBoost = FFixedPoint::FromInt(2);
+
+	/** How strung out a formation must get, measured in bodies, before catch-up and hold-back
+	 *  reach full strength.
+	 *
+	 *  Multiples of a unit's footprint radius, so the response is the same on a short hop and a
+	 *  long march. A member starts reacting once it deviates from the group's mean progress by
+	 *  about 15 percent of this range and responds fully at the whole range. Default 8 - a unit
+	 *  with a 50 cm footprint starts reacting around 60 cm of lag and responds fully at 400 cm. */
+	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Avoidance",
+		meta = (DisplayName = "Cohesion Range (Footprints)", ClampMin = "1.0"))
+	FFixedPoint AvoidanceCohesionRangeRadii = FFixedPoint::FromInt(8);
+
+	/** Whether units turn to face their formation's direction after arriving on a slot.
+	 *
+	 *  When on, a unit delivered to a formation slot rotates at its own Turn Rate to the slot's
+	 *  facing while it settles, so an arrived formation ends up facing formation-forward instead
+	 *  of frozen at each unit's last travel heading. Applies only to slot-delivered ground moves
+	 *  (lone moves, entity-targeted orders, and squad-authored dispatches keep the travel heading);
+	 *  movement classes that never rotate are exempt. Off = every unit keeps its travel heading. */
+	UPROPERTY(Config, EditAnywhere, Category = "Navigation",
+		meta = (DisplayName = "Settle To Formation Facing"))
+	bool bSettleToFormationFacing = true;
+
+	/** Whether idle formations automatically re-form after being shoved apart. Off by default.
+	 *
+	 *  When on, a formation whose order queue is empty and whose members are all idle and settled
+	 *  checks about twice a second whether anyone has been displaced more than the Re-Seek
+	 *  Displacement Threshold from the formation's settled slots (collision shoves, passing
+	 *  traffic, and the like). If so, the formation issues ONE internal ground order to re-fill
+	 *  its own slots - members are re-matched to slots so the re-form crosses as little as
+	 *  possible, not returned to their exact old spots. Applies to formations dispatched by the
+	 *  default broker resolver; squad-authored dispatches are unaffected. */
+	UPROPERTY(Config, EditAnywhere, Category = "Navigation",
+		meta = (DisplayName = "Idle Re-Seek"))
+	bool bIdleReseek = false;
+
+	/** How far a settled unit must be pushed off its formation before the formation re-forms.
+	 *
+	 *  World units, measured to the NEAREST settled slot. Must comfortably exceed the arrival
+	 *  acceptance radius plus ordinary collision-settle jitter, or formations re-form forever.
+	 *  Default 150. Only read while Idle Re-Seek is on. */
+	UPROPERTY(Config, EditAnywhere, Category = "Navigation",
+		meta = (DisplayName = "Re-Seek Displacement Threshold", ClampMin = "0.0"))
+	FFixedPoint ReseekDisplacementThreshold = FFixedPoint::FromInt(150);
 
 	// Navigation — Formation (a Navigation SUBCATEGORY, nested below Avoidance)
 	// ----------------------------------------------------------------------------------------------------

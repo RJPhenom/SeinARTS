@@ -547,6 +547,26 @@ protected:
 	 *  `BlockedNavLayerMask` intersects. */
 	uint8 CachedNavLayerMask = 0x01;
 
+	// ----------------------------------------------------------------------
+	// Settle-facing cache (per movement instance). The idle settle resolves
+	// "which formation slot is mine" ONCE per order — by exact-matching the
+	// unit's last ordered goal (FSeinMovementComponent::TargetLocation, which
+	// for ground moves IS the broker's persisted slot position, byte-identical
+	// fixed-point) against the broker's SettledSlotPositions — and caches the
+	// matched slot facing here, keyed by that goal. Derived deterministically
+	// from hashed sim state, so an instance cache (not itself hashed) is safe.
+	// ----------------------------------------------------------------------
+	FFixedVector CachedSettleFacingKey = FFixedVector::ZeroVector;
+	FFixedQuaternion CachedSettleFacing = FFixedQuaternion::Identity;
+	bool bCachedSettleFacingResolved = false;
+	bool bCachedSettleFacingFound = false;
+
+	/** Whether this movement class turns idle units toward their formation slot's facing
+	 *  while settling (gated globally by the Settle To Formation Facing project setting).
+	 *  Default true. Override to false for classes that never rotate — Basic (translate-
+	 *  only) opts out so its no-rotation contract holds while idle too. */
+	virtual bool SettlesToSlotFacing() const { return true; }
+
 	/** Shortest signed angular delta from `From` to `To`, wrapped to [-π, π]. */
 	static FFixedPoint ShortestAngleDelta(FFixedPoint From, FFixedPoint To);
 

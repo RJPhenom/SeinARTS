@@ -16,6 +16,9 @@
 #include "Components/SeinNavigationComponent.h"
 #include "Components/SeinExtentsComponent.h"
 #include "Components/SeinExtentsHelpers.h"  // SeinExtentsHelpers::BoundingRadius
+#include "Components/SeinBrokerMembershipData.h"  // settle-facing: my broker
+#include "Components/SeinCommandBrokerData.h"     // settle-facing: broker's persisted slots
+#include "Settings/PluginSettings.h"              // bSettleToFormationFacing
 #include "Movement/SeinMoverHandle.h"
 #include "Movement/SeinPlannerHandle.h"
 #include "StructUtils/InstancedStruct.h"
@@ -817,23 +820,88 @@ void USeinMovement::BP_TickIdle_Implementation(USeinMoverHandle* Mover)
 	}
 
 	// Per-tick settle: re-snap Z/altitude (rate-limited) and smooth pitch/roll
-	// toward the slope under the CURRENT position — yaw is never touched while
-	// idle. This is what makes a collision-shoved unit settle where it lands
-	// (settle-in-place semantics: no return-to-home) instead of floating / clipping at its
-	// pre-shove pose. Stationary converged units: the samples still run (no
-	// transform-dirty signal exists to skip on) but the write-guard below keeps
-	// the rotation untouched — flagged in Roadmap_Multithreading.md territory
-	// if idle-unit sampling ever shows up in profiles.
+	// toward the slope under the CURRENT position. This is what makes a
+	// collision-shoved unit settle where it lands (settle-in-place semantics: no
+	// return-to-home) instead of floating / clipping at its pre-shove pose.
+	// Stationary converged units: the samples still run (no transform-dirty
+	// signal exists to skip on) but the write-guard below keeps the rotation
+	// untouched — flagged in Roadmap_Multithreading.md territory if idle-unit
+	// sampling ever shows up in profiles.
 	ApplyGroundSnapAndAltitude(Pos, Ctx.MovementData, Nav, DeltaTime);
 	Entity.Transform.SetLocation(Pos);
 
-	const FFixedPoint Yaw = YawFromRotation(Entity.Transform.Rotation);
+	FFixedPoint Yaw = YawFromRotation(Entity.Transform.Rotation);
+	bool bYawStepped = false;
+
+	// SETTLE FACING — a unit delivered to a formation slot turns (at its own TurnRate)
+	// to the slot's facing while it settles, so an arrived formation faces formation-
+	// forward instead of freezing at each unit's last travel heading. "Which slot is
+	// mine": exact-match the unit's last ordered goal (TargetLocation — for ground moves
+	// this IS the broker's persisted slot position, byte-identical fixed-point) against
+	// the broker's SettledSlotPositions; resolved once per order via the instance cache.
+	// No match (lone move, entity-targeted order, squad-authored dispatch) → keep the
+	// travel heading. Broker reads here are order-independent const reads of data that
+	// is stable during this phase (written at CommandProcessing / PostTick), so the
+	// parallel idle batch stays race-free and deterministic.
+	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
+	if (Settings && Settings->bSettleToFormationFacing && SettlesToSlotFacing()
+		&& MovementData.TurnRate > FFixedPoint::Zero && Ctx.World)
+	{
+		const FFixedVector& Key = MovementData.TargetLocation;
+		if (!bCachedSettleFacingResolved
+			|| Key.X != CachedSettleFacingKey.X || Key.Y != CachedSettleFacingKey.Y
+			|| Key.Z != CachedSettleFacingKey.Z)
+		{
+			bCachedSettleFacingResolved = true;
+			bCachedSettleFacingFound = false;
+			CachedSettleFacingKey = Key;
+			if (const FSeinBrokerMembershipData* Membership =
+					Ctx.World->GetComponent<FSeinBrokerMembershipData>(Ctx.SelfHandle))
+			{
+				if (Membership->CurrentBrokerHandle.IsValid())
+				{
+					if (const FSeinCommandBrokerData* Broker =
+							Ctx.World->GetComponent<FSeinCommandBrokerData>(Membership->CurrentBrokerHandle))
+					{
+						for (int32 i = 0; i < Broker->SettledSlotPositions.Num(); ++i)
+						{
+							const FFixedVector& Slot = Broker->SettledSlotPositions[i];
+							if (Slot.X == Key.X && Slot.Y == Key.Y)
+							{
+								if (Broker->SettledSlotFacings.IsValidIndex(i))
+								{
+									CachedSettleFacing = Broker->SettledSlotFacings[i];
+									bCachedSettleFacingFound = true;
+								}
+								break;
+							}
+						}
+					}
+				}
+			}
+		}
+		if (bCachedSettleFacingFound)
+		{
+			const FFixedPoint TargetYaw = YawFromRotation(CachedSettleFacing);
+			const FFixedPoint Delta = ShortestAngleDelta(Yaw, TargetYaw);
+			const FFixedPoint AbsDelta = (Delta < FFixedPoint::Zero) ? -Delta : Delta;
+			// Convergence band (~0.25°): below it, stop stepping so fixed-point
+			// atan2/quaternion round-trip noise can't jitter a parked unit forever.
+			if (AbsDelta > FFixedPoint::Pi / FFixedPoint::FromInt(720))
+			{
+				const FFixedPoint MaxTurn = MovementData.TurnRate * DeltaTime;
+				Yaw = Yaw + ClampFP(Delta, -MaxTurn, MaxTurn);
+				bYawStepped = true;
+			}
+		}
+	}
+
 	const FFixedPoint TargetPitch = ComputeSlopePitch(Pos, Yaw, Nav);
 	const FFixedPoint TargetRoll  = ComputeSlopeRoll(Pos, Yaw, Nav);
 	const FFixedPoint OrientRate  = FFixedPoint::Pi / FFixedPoint::FromInt(3); // 60°/s — matches move ticks
 	const FFixedPoint NewPitch = SmoothAngleToward(MovementData.SmoothedPitch, TargetPitch, OrientRate, DeltaTime);
 	const FFixedPoint NewRoll  = SmoothAngleToward(MovementData.SmoothedRoll,  TargetRoll,  OrientRate, DeltaTime);
-	if (NewPitch != MovementData.SmoothedPitch || NewRoll != MovementData.SmoothedRoll)
+	if (bYawStepped || NewPitch != MovementData.SmoothedPitch || NewRoll != MovementData.SmoothedRoll)
 	{
 		MovementData.SmoothedPitch = NewPitch;
 		MovementData.SmoothedRoll  = NewRoll;

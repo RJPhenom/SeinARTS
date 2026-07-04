@@ -55,6 +55,7 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 	const FFixedPoint BrakeStrength       = Settings->AvoidanceBrakeStrength;
 	const FFixedPoint CohesionHoldBack    = Settings->AvoidanceCohesionHoldBack;
 	const FFixedPoint CohesionBoost       = Settings->AvoidanceCohesionCatchUpBoost;
+	const FFixedPoint CohesionRangeRadii  = Settings->AvoidanceCohesionRangeRadii;
 	// Cohesion off entirely when both sides are neutral — the aggregate pre-pass is skipped
 	// and every unit's CohesionScale is exactly One (bit-exact no-op).
 	const bool bCohesionEnabled = CohesionHoldBack > FFixedPoint::Zero || CohesionBoost > FFixedPoint::One;
@@ -364,8 +365,12 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 				{
 					const FFixedPoint Mean = Agg->SumDist / FFixedPoint::FromInt(Agg->Count);
 					const FFixedPoint SelfDist = SeinMath::Sqrt(GoalDistSq);
-					FFixedPoint Norm = SelfRadius * FFixedPoint::FromInt(4);
-					if (Mean > Norm) Norm = Mean;
+					// SPATIAL normalization — deviation measured in body-lengths (footprint ×
+					// CohesionRangeRadii), NOT as a fraction of remaining trip. Normalizing by
+					// the mean made cohesion invisible on long moves: a 200cm lag was 0.07 of a
+					// 3000cm march (under the deadband) but 0.4 of a 500cm hop — the same
+					// physical strung-out-ness must read the same at any order length.
+					const FFixedPoint Norm = SelfRadius * CohesionRangeRadii;
 					FFixedPoint DevT = (SelfDist - Mean) / Norm;                 // + = behind, − = ahead
 					if (DevT >  FFixedPoint::One) DevT =  FFixedPoint::One;
 					if (DevT < -FFixedPoint::One) DevT = -FFixedPoint::One;

@@ -22,4 +22,8 @@ class SEINARTSMOVEMENT_API USeinBasicMovement : public USeinMovement
 
 public:
 	virtual FSeinMotion ComputeMotion_Implementation(USeinMoverHandle* Mover) override;
+
+	/** Basic never rotates — its translate-only contract holds while idle too, so the
+	 *  settle-facing turn is opted out. */
+	virtual bool SettlesToSlotFacing() const override { return false; }
 };

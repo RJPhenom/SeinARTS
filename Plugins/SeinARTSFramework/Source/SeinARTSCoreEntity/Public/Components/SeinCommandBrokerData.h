@@ -138,6 +138,39 @@ struct SEINARTSCOREENTITY_API FSeinCommandBrokerData : public FSeinComponent
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker")
 	FFixedPoint FormationRadius = FFixedPoint::Zero;
 
+	/** Where this formation's spots are on the ground - the slot positions of the last
+	 *  ground move this broker dispatched.
+	 *
+	 *  The FORMATION owns its slots; which member stands in which slot is re-decided at
+	 *  use (a scattered line re-forms with members in whatever arrangement crosses least,
+	 *  via Reassign Slots) - so this is a plain slot list, deliberately NOT a member-to-slot
+	 *  map. Written by the default broker resolver at every ground-move dispatch with the
+	 *  FINAL delivered goals (after nav projection and cover snap). Entity-targeted orders
+	 *  (attack, repair) leave it untouched - slots do not apply to a moving target. Empty
+	 *  until the first ground order. Consumers: formation re-form / re-seek and per-slot
+	 *  settle policies. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker")
+	TArray<FFixedVector> SettledSlotPositions;
+
+	/** Which way each of this formation's spots faces, index-aligned with Settled Slot
+	 *  Positions.
+	 *
+	 *  From the formation's facing mode (uniform, radial in/out) computed on the final
+	 *  positions; paths that carry no per-slot facing (pre-placed parent-formation slots)
+	 *  fill with the broker's Anchor Facing. Same lifetime and ownership rules as Settled
+	 *  Slot Positions. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker")
+	TArray<FFixedQuaternion> SettledSlotFacings;
+
+	/** The earliest sim tick this formation may next consider an idle re-seek.
+	 *
+	 *  Advanced by the broker tick on every re-seek scan (the re-check cadence) and pushed
+	 *  further out after issuing a re-form (the cooldown), so re-seek neither scans every
+	 *  tick nor machine-guns follow-up orders onto crowded ground. Runtime state; unused
+	 *  while the Idle Re-Seek setting is off. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker")
+	int32 NextReseekAllowedTick = 0;
+
 	// Per-order execution state (`bIsExecuting` + `LastDispatchTick`) was
 	// promoted onto FSeinBrokerQueuedOrder so non-overlapping subset-targeted
 	// orders can dispatch concurrently. The broker tick computes a
@@ -152,5 +185,15 @@ FORCEINLINE uint32 GetTypeHash(const FSeinCommandBrokerData& Data)
 	Hash = HashCombine(Hash, GetTypeHash(Data.Centroid));
 	Hash = HashCombine(Hash, GetTypeHash(Data.FormationWidth));
 	Hash = HashCombine(Hash, GetTypeHash(Data.FormationRadius));
+	Hash = HashCombine(Hash, GetTypeHash(Data.NextReseekAllowedTick));
+	Hash = HashCombine(Hash, GetTypeHash(Data.SettledSlotPositions.Num()));
+	for (const FFixedVector& Slot : Data.SettledSlotPositions)
+	{
+		Hash = HashCombine(Hash, GetTypeHash(Slot));
+	}
+	for (const FFixedQuaternion& Facing : Data.SettledSlotFacings)
+	{
+		Hash = HashCombine(Hash, GetTypeHash(Facing));
+	}
 	return Hash;
 }

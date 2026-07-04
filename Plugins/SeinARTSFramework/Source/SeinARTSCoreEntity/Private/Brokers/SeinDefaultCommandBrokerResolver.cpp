@@ -298,12 +298,13 @@ FSeinFormationLayout USeinDefaultCommandBrokerResolver::ResolveFormationLayout_I
 	// path → preview === commit.
 	USeinFormation::SeparatePositions(Layout.Radii, Layout.Positions, 16);
 
-	// Off-nav safety net: the de-overlap above is nav-blind, so it can shove an edge slot off the play
-	// area (and a blob spreads off its anchor entirely). Clamp any position left off the nav area onto
-	// the nearest FREE cell, occupancy-aware so they pack the inside edge without piling. Runs BEFORE
-	// the cover hook so authoritative cover slots (which intentionally overrule the bake) are the last
-	// word. Shared path → preview === commit.
-	USeinFormation::ProjectPositionsToNavigable(World, Layout.Radii, Layout.Positions);
+	// Placement safety net: the de-overlap above is nav- and occupancy-blind, so it can shove an edge
+	// slot off the play area, and raw layouts can drop slots onto PARKED units (an order into a settled
+	// crowd). Clamp any position left off the nav area OR on an idle body onto the nearest FREE cell,
+	// occupancy-aware so they pack open ground without piling. Members of THIS order are excluded from
+	// the occupancy read — they vacate their spots. Runs BEFORE the cover hook so authoritative cover
+	// slots (which intentionally overrule the bake) are the last word. Shared path → preview === commit.
+	USeinFormation::ProjectPositionsToNavigable(World, Layout.Radii, Layout.Positions, Members);
 
 	// Hook subclasses (e.g. cover-aware resolvers) to mutate positions before
 	// the layout returns. Empty default impl on the base class — no-op for
@@ -418,6 +419,7 @@ FSeinBrokerDispatchPlan USeinDefaultCommandBrokerResolver::ResolveDispatch_Imple
 	// overlapping formations. Otherwise solve the formation as usual (the shared entry the preview also
 	// calls, so commit and preview never drift).
 	TArray<FFixedVector> Positions;
+	TArray<FFixedQuaternion> SlotFacings; // filled by the layout branch; padded at capture below
 	if (Order.PreplacedPositions.Num() > 0)
 	{
 		Positions.Reserve(Effective.Num());
@@ -442,6 +444,7 @@ FSeinBrokerDispatchPlan USeinDefaultCommandBrokerResolver::ResolveDispatch_Imple
 			World, Effective, Target, bReassignSlotsLateral, bReassignSlotsDepth);
 		Broker->AnchorFacing = Layout.Facing;
 		Positions = Layout.Positions;
+		SlotFacings = Layout.Facings;
 	}
 
 	// Entity-targeted orders (attack a unit, repair a building, etc.): every
@@ -452,6 +455,20 @@ FSeinBrokerDispatchPlan USeinDefaultCommandBrokerResolver::ResolveDispatch_Imple
 	// targets the same cell and you get the visible "30 units converging on
 	// one cell" clumping bug. Mirrors the squad resolver's slot-routing.
 	const bool bEntityTargeted = Order.TargetEntity.IsValid();
+
+	// PERSIST THE RESOLVED LAYOUT ON THE BROKER — the formation owns its slots; members
+	// are transient assignees (which member fills which slot is re-decided at use via
+	// ReassignSlots). Ground orders only: entity-targeted dispatches carry no slots, and
+	// clobbering the last ground layout with them would erase the formation's standing
+	// spots. Facings pad with AnchorFacing for paths that carry none (pre-placed parent
+	// slots). Consumers: formation re-form / re-seek + per-slot settle policies.
+	if (!bEntityTargeted && Positions.Num() > 0)
+	{
+		Broker->SettledSlotPositions = Positions;
+		while (SlotFacings.Num() < Positions.Num()) { SlotFacings.Add(Broker->AnchorFacing); }
+		SlotFacings.SetNum(Positions.Num());
+		Broker->SettledSlotFacings = SlotFacings;
+	}
 
 	Plan.MemberDispatches.Reserve(Effective.Num());
 

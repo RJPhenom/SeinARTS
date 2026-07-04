@@ -24,6 +24,10 @@
 #include "Components/SeinBrokerMembershipData.h"
 #include "Components/SeinAbilityComponent.h"
 #include "Brokers/SeinCommandBrokerResolver.h"
+#include "Brokers/SeinDefaultCommandBrokerResolver.h"  // ReassignSlots (idle re-seek pairing)
+#include "Components/SeinMovementComponent.h"          // idle re-seek settle checks
+#include "Settings/PluginSettings.h"                   // bIdleReseek + threshold
+#include "Tags/SeinARTSGameplayTags.h"                 // ground-move context for internal re-form orders
 #include "Abilities/SeinAbility.h"
 #include "Input/SeinCommand.h"
 
@@ -392,6 +396,87 @@ public:
 						// pass so subsequent eligible orders see the conflict.
 						for (const FSeinEntityHandle& M : Effective) { LockedMembers.Add(M); }
 					}
+				}
+			}
+
+			// 4.5 IDLE RE-SEEK (opt-in, default off): a fully-idle formation whose members were
+			// shoved off its settled slots re-fills its OWN slots with one internal ground order.
+			// The FORMATION owns the slots; which member takes which slot is re-decided here via
+			// the anti-cross matcher (a scattered line re-forms in whatever arrangement crosses
+			// least — never "everyone back to their exact old spot"). Gates, cheapest first:
+			// the setting; queue EMPTY (fully idle — a re-form in flight suppresses the next);
+			// a settled layout with EXACTLY one slot per member (deaths staled it → skip until
+			// the next player ground order refreshes it); the scan cadence / post-issue cooldown
+			// (deterministic tick math); every member move-capable, ability-idle, and velocity-
+			// settled (a crowd still resolving defers — natural damping against re-seek
+			// cascades); and someone displaced beyond the threshold from their NEAREST slot.
+			// Squad brokers never capture settled slots, so they skip naturally.
+			const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
+			if (Settings->bIdleReseek
+				&& Broker->OrderQueue.Num() == 0
+				&& Broker->Members.Num() > 0
+				&& Broker->SettledSlotPositions.Num() == Broker->Members.Num()
+				&& CurrentTick >= Broker->NextReseekAllowedTick)
+			{
+				// Scan cadence: ~half a second between checks keeps the idle cost negligible.
+				const int32 TickRate = (Settings->SimulationTickRate > 1) ? Settings->SimulationTickRate : 1;
+				const int32 HalfSecond = (TickRate / 2 > 1) ? TickRate / 2 : 1;
+				Broker->NextReseekAllowedTick = CurrentTick + HalfSecond;
+
+				bool bEligible = true;
+				bool bDisplaced = false;
+				const FFixedPoint Threshold = Settings->ReseekDisplacementThreshold;
+				const FFixedPoint ThresholdSq = Threshold * Threshold;
+				for (const FSeinEntityHandle& M : Broker->Members)
+				{
+					const FSeinAbilityComponent* AC = World.GetComponent<FSeinAbilityComponent>(M);
+					const USeinAbility* Active = AC ? AC->GetActiveAbility(World) : nullptr;
+					const FSeinMovementComponent* Move = World.GetComponent<FSeinMovementComponent>(M);
+					const FSeinEntity* E = World.GetEntity(M);
+					if (!Move || !E
+						|| (Active && Active->bIsActive)
+						|| Move->bHasTarget
+						|| Move->Velocity.SizeSquared() > FFixedPoint::Epsilon)
+					{
+						bEligible = false;
+						break;
+					}
+					if (bDisplaced) continue; // one displaced member is enough; keep validating eligibility
+					const FFixedVector Pos = E->Transform.GetLocation();
+					FFixedPoint BestSq = ThresholdSq + FFixedPoint::One; // sentinel: "no slot within threshold"
+					for (const FFixedVector& Slot : Broker->SettledSlotPositions)
+					{
+						const FFixedPoint DX = Pos.X - Slot.X;
+						const FFixedPoint DY = Pos.Y - Slot.Y;
+						const FFixedPoint DSq = DX * DX + DY * DY;
+						if (DSq < BestSq) { BestSq = DSq; }
+					}
+					if (BestSq > ThresholdSq) { bDisplaced = true; }
+				}
+
+				if (bEligible && bDisplaced)
+				{
+					// Pair members ↔ slots (anti-cross, deterministic), then dispatch each member
+					// straight to its slot via the pre-placed path — NO re-solve: the settled
+					// layout IS the shape (cover-snapped + occupancy-resolved at original
+					// dispatch), so the formation re-forms exactly where it stood.
+					TArray<FFixedVector> Slots = Broker->SettledSlotPositions;
+					USeinDefaultCommandBrokerResolver::ReassignSlots(
+						&World, Broker->Members, Slots, Broker->AnchorFacing,
+						/*bLateral*/ true, /*bDepth*/ true);
+
+					FSeinBrokerQueuedOrder Order;
+					Order.Context.AddTag(SeinARTSTags::Command_Context_RightClick);
+					Order.Context.AddTag(SeinARTSTags::Command_Context_Target_Ground);
+					Order.TargetLocation = Broker->Anchor;
+					Order.bIsInternalPrefix = true;
+					Order.PreplacedMembers = Broker->Members;
+					Order.PreplacedPositions = Slots;
+					Broker->OrderQueue.Add(Order);
+
+					// Post-issue cooldown: a re-form that lands imperfectly on still-crowded
+					// ground may legitimately fire again, but never as a machine-gun.
+					Broker->NextReseekAllowedTick = CurrentTick + TickRate * 2;
 				}
 			}
 

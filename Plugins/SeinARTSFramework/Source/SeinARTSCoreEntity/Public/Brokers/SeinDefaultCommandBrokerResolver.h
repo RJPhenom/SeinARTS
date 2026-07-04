@@ -117,14 +117,6 @@ public:
 		bool bReassignLateral,
 		bool bReassignDepth) override;
 
-protected:
-	/** Resolve the USeinFormation that lays out this order. Looks up `FormationTag`
-	 *  in FormationsByTag, falls back to DefaultFormationClass, and returns the class
-	 *  CDO (formations are stateless / pure compute — invoked on the CDO, never
-	 *  instanced). Null when neither resolves → the caller uses the ResolvePositions
-	 *  blob fallback. Loads the soft class synchronously (loader-cached). */
-	USeinFormation* ResolveFormation(FGameplayTag FormationTag) const;
-
 	/** Re-match members to formation slots so a rotating/translating formation doesn't make units
 	 *  cross paths. Per-axis, driven by the two designer flags:
 	 *    - bLateral only → 1-D rank match on the formation RIGHT axis (preserve left/right order;
@@ -147,4 +139,14 @@ protected:
 		FFixedQuaternion FormationFacing,
 		bool bLateral,
 		bool bDepth);
+	// ReassignSlots is PUBLIC (a pure deterministic static utility): consumed by the
+	// dispatch layout pass above AND the broker tick's idle re-seek pairing.
+
+protected:
+	/** Resolve the USeinFormation that lays out this order. Looks up `FormationTag`
+	 *  in FormationsByTag, falls back to DefaultFormationClass, and returns the class
+	 *  CDO (formations are stateless / pure compute — invoked on the CDO, never
+	 *  instanced). Null when neither resolves → the caller uses the ResolvePositions
+	 *  blob fallback. Loads the soft class synchronously (loader-cached). */
+	USeinFormation* ResolveFormation(FGameplayTag FormationTag) const;
 };

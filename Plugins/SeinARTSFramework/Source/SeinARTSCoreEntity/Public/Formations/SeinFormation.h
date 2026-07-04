@@ -292,21 +292,30 @@ public:
 		int32 MaxIterations);
 
 	/**
-	 * Final off-nav safety pass: any position that landed OFF the nav area is projected to the nearest
-	 * FREE cell — walkable AND not within footprint distance of any other slot — with every peer slot
-	 * treated as occupied so two overflowing slots never resolve onto the same spot. Positions already
-	 * on the nav area are left EXACTLY where they are (this never reshapes an in-bounds formation). The
-	 * shared net the resolver runs AFTER SeparatePositions so a formation spilling past the play-area
-	 * edge (a blob spread off a corner, a slot the de-overlap push shoved out) packs onto the inside
-	 * edge instead of floating in the void. Index-aligned with Radii; a missing radius counts as zero.
-	 * No-op when no nav is bound (tests / nav-less games). Deterministic — the nav grid is baked.
+	 * Final placement safety pass: any position that landed off the nav area, or on top of a PARKED
+	 * unit's body, is projected to the nearest free cell instead.
+	 *
+	 * Free = walkable, clear of runtime nav blockers, not within footprint distance of any other slot,
+	 * and not on a parked unit (an idle body that is not part of this order — Exclude From Occupancy
+	 * lists this order's own members, since they vacate their spots). Every peer slot and parked body
+	 * is treated as occupied during relocation so two overflowing slots never resolve onto the same
+	 * spot. Positions already on free ground are left EXACTLY where they are (this never reshapes a
+	 * clean formation). The shared net the resolver runs AFTER Separate Positions, so a formation
+	 * spilling past the play-area edge or ordered onto a settled crowd packs onto the nearest open
+	 * ground instead of grinding into bodies. Index-aligned with Radii; a missing radius counts as
+	 * zero. Only PARKED units count as occupancy — moving traffic is transient and ignored (this also
+	 * keeps the destination preview and the committed order in agreement: parked bodies are stable
+	 * between the preview frame and the click). No-op when no nav is bound (tests / nav-less games).
+	 * Deterministic — baked grid + start-of-tick collision snapshot.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Formation",
-		meta = (DisplayName = "Project Positions To Navigable", SeinDeterministic))
+		meta = (DisplayName = "Project Positions To Navigable", SeinDeterministic,
+		        AutoCreateRefTerm = "ExcludeFromOccupancy"))
 	static void ProjectPositionsToNavigable(
 		USeinWorldSubsystem* World,
 		const TArray<FFixedPoint>& Radii,
-		UPARAM(ref) TArray<FFixedVector>& Positions);
+		UPARAM(ref) TArray<FFixedVector>& Positions,
+		const TArray<FSeinEntityHandle>& ExcludeFromOccupancy);
 
 	/**
 	 * Fill per-member facings (index-aligned with Positions) per `Mode`: Uniform → all = `UniformFacing`;
