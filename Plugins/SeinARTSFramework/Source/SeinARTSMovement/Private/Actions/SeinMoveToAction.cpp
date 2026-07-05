@@ -20,6 +20,7 @@
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
 #include "Engine/World.h"
+#include "Simulation/SeinMovementTraceLog.h"  // [ARRIVE]/[THROTTLE] movement-trace events
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinMove, Log, All);
 
@@ -237,9 +238,24 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		// the registry; next tick re-acquires it).
 		if (Result == ESeinPathResult::Throttled)
 		{
+#if !UE_BUILD_SHIPPING
+			// Movement-trace event: how long this unit has stood as a commanded statue
+			// waiting on the path budget (log at 5, then every 30 ticks — a streak past
+			// ~5 means the budget is being starved by earlier-inserted requesters).
+			++InitialThrottleStreak;
+			if (InitialThrottleStreak == 5 || (InitialThrottleStreak % 30) == 0)
+			{
+				UE_LOG(LogSeinMoveTrace, Verbose, TEXT("[THROTTLE] t=%d h=%d:%d streak=%d"),
+					World.GetCurrentTick(), OwnerEntity.Index, OwnerEntity.Generation,
+					InitialThrottleStreak);
+			}
+#endif
 			Movement = nullptr;
 			return false;
 		}
+#if !UE_BUILD_SHIPPING
+		InitialThrottleStreak = 0;
+#endif
 		if (Result == ESeinPathResult::NoNavigation)
 		{
 			Fail(static_cast<uint8>(ESeinMoveFailureReason::NoNavigation));
@@ -695,9 +711,19 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 			{
 				TimeStalledNearGoal = TimeStalledNearGoal + DeltaTime;
 				// 0.75 s pinned this close → this is as far in as the body gets; settle.
+				// Routed through the mode's arrival policy (not a raw Velocity=0) so a
+				// crowd-stall arrival leaves the unit in the same per-class state as a
+				// clean ring arrival — both arrival owners share one stop semantics.
 				if (TimeStalledNearGoal >= FFixedPoint::FromInt(3) / FFixedPoint::FromInt(4))
 				{
-					MoveComp->Velocity = FFixedVector::ZeroVector;
+#if !UE_BUILD_SHIPPING
+					// Movement-trace event: the third arrival owner (crowd-stall settle).
+					UE_LOG(LogSeinMoveTrace, Verbose,
+						TEXT("[ARRIVE] t=%d h=%d:%d cause=stall dist=%.0f accept=%.0f"),
+						World.GetCurrentTick(), OwnerEntity.Index, OwnerEntity.Generation,
+						DistFinal.ToFloat(), SeinMath::Sqrt(AcceptanceRadiusSq).ToFloat());
+#endif
+					Movement->DispatchArrivalMotion(TickCtx);
 					bReachedEnd = true;
 				}
 			}

@@ -273,11 +273,13 @@ public:
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Movement|Toolkit", meta = (DisplayName = "Apply Avoidance Steer"))
 	FFixedVector ApplyAvoidanceSteer(FFixedVector DesiredDir) const;
 
-	/** The avoidance SPEED-YIELD for this unit this tick — a 0..1 multiplier on cruise speed.
+	/** The avoidance SPEED-YIELD for this unit this tick — a non-negative multiplier on cruise speed.
 	 *
-	 *  The local-avoidance layer can ask a unit to give way by SLOWING, not just turning. Multiply
-	 *  your cruise speed by this (1 = full speed, no yield). Pair with Apply Avoidance Steer (heading)
-	 *  for the full avoidance response in a custom Tick. The shipped boids model always returns 1. */
+	 *  The local-avoidance layer can ask a unit to give way by SLOWING, not just turning — or to
+	 *  hurry with a value above 1 (formation catch-up). Multiply your cruise speed by this (1 = full
+	 *  speed, no yield). Pair with Apply Avoidance Steer (heading) for the full avoidance response
+	 *  in a custom Tick. The shipped model writes brake-on-congestion times formation hold-back or
+	 *  catch-up. */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Movement|Toolkit", meta = (DisplayName = "Get Avoidance Speed Scale"))
 	FFixedPoint GetAvoidanceSpeedScale() const;
 

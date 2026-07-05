@@ -8,6 +8,7 @@
 #include "SeinMovementSubsystem.h"
 #include "Simulation/SeinAvoidanceSystem.h"
 #include "Simulation/SeinMovementDriverSystem.h"
+#include "Simulation/SeinMovementTraceSystem.h"
 #include "Simulation/SeinNavContainmentSystem.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Movement/SeinMovement.h"
@@ -17,6 +18,10 @@
 #include "Settings/PluginSettings.h"
 #include "Components/SeinMovementComponent.h"
 #include "SeinARTSCoreEntityLog.h"
+
+// The movement-trace channel ([EP]/[UNIT]/[ORPHAN]/[ARRIVE]/[THROTTLE] lines).
+// Declared in Simulation/SeinMovementTraceLog.h; one switch: `log LogSeinMoveTrace Verbose`.
+DEFINE_LOG_CATEGORY(LogSeinMoveTrace);
 
 void USeinMovementSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 {
@@ -59,6 +64,12 @@ void USeinMovementSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 	// know nav); the collision floor stays nav-agnostic.
 	NavContainmentSystem = new FSeinNavContainmentSystem();
 	Sim->RegisterSystem(NavContainmentSystem);
+
+	// Observation-only crowd-jam trace (PostTick 90). Registered unconditionally on
+	// every client — it no-ops unless `log LogSeinMoveTrace Verbose` and never writes
+	// sim state, so lockstep is indifferent to it.
+	TraceSystem = new FSeinMovementTraceSystem();
+	Sim->RegisterSystem(TraceSystem);
 }
 
 void USeinMovementSubsystem::Deinitialize()
@@ -69,6 +80,12 @@ void USeinMovementSubsystem::Deinitialize()
 		Sim = World->GetSubsystem<USeinWorldSubsystem>();
 	}
 
+	if (TraceSystem)
+	{
+		if (Sim) Sim->UnregisterSystem(TraceSystem);
+		delete TraceSystem;
+		TraceSystem = nullptr;
+	}
 	if (NavContainmentSystem)
 	{
 		if (Sim) Sim->UnregisterSystem(NavContainmentSystem);

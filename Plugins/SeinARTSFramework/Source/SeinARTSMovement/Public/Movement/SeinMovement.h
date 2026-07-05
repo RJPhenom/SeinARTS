@@ -210,6 +210,28 @@ public:
 	FSeinMotion ComputeMotion(USeinMoverHandle* Mover);
 	virtual FSeinMotion ComputeMotion_Implementation(USeinMoverHandle* Mover);
 
+	/** Decides what state the unit is left in at the moment its move completes. Default: a hard
+	 *  stop - zero velocity, facing untouched.
+	 *
+	 *  The arrival-POLICY hook, one tick only: return residual velocity to roll or loiter through
+	 *  the arrival instead of snapping to rest, and set Update Facing for one final TurnRate-clamped
+	 *  facing step. Together with the other two hooks it covers the whole arrival without any mode
+	 *  copying harness internals: shape the APPROACH (braking curves) in Compute Motion; author
+	 *  post-arrival SETTLING (the settle-facing turn, idle motion) in Tick Idle; decide the arrival
+	 *  INSTANT here. The arrival TRIGGER itself (acceptance ring, overshoot guard, the move action's
+	 *  crowd-stall failsafe) is harness mechanism and cannot be vetoed - completion always proceeds,
+	 *  so no policy can hold an order open. */
+	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Movement", meta = (DisplayName = "Compute Arrival Motion"))
+	FSeinMotion ComputeArrivalMotion(USeinMoverHandle* Mover);
+	virtual FSeinMotion ComputeArrivalMotion_Implementation(USeinMoverHandle* Mover);
+
+	/** MECHANISM: dispatch ComputeArrivalMotion with a bound handle and APPLY the result (the
+	 *  velocity write + the optional final facing step). Called by the base Tick harness on
+	 *  ring/overshoot arrival AND by USeinMoveToAction's crowd-stall failsafe, so both arrival
+	 *  owners apply the same per-class stop semantics. A Tier-2 Tick override should call this at
+	 *  its own arrival point for the same reason (instead of hand-writing `Velocity = 0`). */
+	void DispatchArrivalMotion(const FSeinMovementContext& Ctx);
+
 	/** Called when the action ends (completed/cancelled/failed). Default:
 	 *  no-op. Override to clean up subclass transient state.
 	 *
@@ -701,6 +723,17 @@ protected:
 		const FSeinPath& Path,
 		const FFixedVector& AgentPos,
 		FFixedPoint CloseRadius);
+
+	/** Harness-standard advance: the same crossover + distance rules, with the standard close
+	 *  radius (max(2 × TopSpeed × Dt, 50cm)) read straight from the context.
+	 *
+	 *  OWNERSHIP CONTRACT: waypoint advance is HARNESS mechanism. Tier-1 modes never touch it
+	 *  (the base Tick runs it before every ComputeMotion). A Tier-2 Tick override MUST call one
+	 *  of these two helpers rather than hand-rolling an advance loop — the incoming-direction
+	 *  crossover test is load-bearing: a hand-rolled distance-only loop reintroduces the
+	 *  overshoot-at-speed / backward-carrot bugs, and an outgoing-direction crossover skips
+	 *  whole detours (the historic through-wall bug). */
+	static void AdvanceWaypointAlongPath(const FSeinMovementContext& Ctx);
 
 
 	/** Speed-adaptive look-ahead distance:

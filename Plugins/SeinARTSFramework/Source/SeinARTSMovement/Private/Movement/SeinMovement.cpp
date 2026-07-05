@@ -21,6 +21,7 @@
 #include "Settings/PluginSettings.h"              // bSettleToFormationFacing
 #include "Movement/SeinMoverHandle.h"
 #include "Movement/SeinPlannerHandle.h"
+#include "Simulation/SeinMovementTraceLog.h"       // [ARRIVE] movement-trace events
 #include "StructUtils/InstancedStruct.h"
 #include "UObject/UnrealType.h"
 
@@ -55,17 +56,16 @@ bool USeinMovement::Tick(const FSeinMovementContext& Ctx)
 	const FFixedVector PrePos  = Entity.Transform.GetLocation();
 	const FFixedVector FinalWp = Path.Waypoints[N - 1];
 
-	// MECHANISM: advance past any waypoint the unit has crossed/reached (dot-product crossover +
-	// distance fallback), so the policy always steers at a waypoint that is ahead of it.
-	{
-		const FFixedPoint OneStep = MovementData.TopSpeed * DeltaTime;
-		const FFixedPoint CloseRadius = (OneStep * FFixedPoint::Two > FFixedPoint::FromInt(50))
-			? OneStep * FFixedPoint::Two : FFixedPoint::FromInt(50);
-		AdvanceWaypointAlongPath(CurrentWaypointIndex, Path, PrePos, CloseRadius);
-	}
+	// MECHANISM: advance past any waypoint the unit has crossed/reached (incoming-direction
+	// crossover + distance fallback), so the policy always steers at a waypoint ahead of it.
+	// Harness-owned — see the AdvanceWaypointAlongPath ownership contract in the header.
+	AdvanceWaypointAlongPath(Ctx);
 
-	// MECHANISM: arrival. Within the acceptance ring, OR an overshoot (close + slow + heading away)
-	// — the graceful-stop guard that stops a unit orbiting a slot it can't quite land on.
+	// MECHANISM: arrival TRIGGER. Within the acceptance ring, OR an overshoot (close + slow +
+	// heading away) — the graceful-stop guard that stops a unit orbiting a slot it can't quite
+	// land on. The trigger cannot be vetoed; WHAT the unit is left doing is the mode's arrival
+	// POLICY (ComputeArrivalMotion — default hard stop), applied via DispatchArrivalMotion so
+	// the action's crowd-stall failsafe leaves the unit in the same per-class state.
 	{
 		FFixedVector ToFinal = FinalWp - PrePos;
 		ToFinal.Z = FFixedPoint::Zero;
@@ -76,7 +76,21 @@ bool USeinMovement::Tick(const FSeinMovementContext& Ctx)
 		if (bWithinAcceptance || IsOvershootArrival(PrePos, FinalWp, Entity.Transform.Rotation,
 				EntrySpeed, VicinityRadiusSq, OvershootSpeedCap))
 		{
-			MovementData.Velocity = FFixedVector::ZeroVector;
+#if !UE_BUILD_SHIPPING
+			// Movement-trace event: WHICH trigger arrived the unit. An "overshoot" burst
+			// right after a mass order — with dist well outside acceptance and entry≈0 —
+			// is the spurious-order-start-arrival signature (stale zero Velocity passes
+			// the winding-down gate on tick one).
+			UE_LOG(LogSeinMoveTrace, Verbose,
+				TEXT("[ARRIVE] t=%d h=%d:%d cause=%s dist=%.0f accept=%.0f entry=%.0f"),
+				Ctx.World ? Ctx.World->GetCurrentTick() : -1,
+				Ctx.SelfHandle.Index, Ctx.SelfHandle.Generation,
+				bWithinAcceptance ? TEXT("ring") : TEXT("overshoot"),
+				ToFinal.Size().ToFloat(),
+				SeinMath::Sqrt(Ctx.AcceptanceRadiusSq).ToFloat(),
+				EntrySpeed.ToFloat());
+#endif
+			DispatchArrivalMotion(Ctx);
 			return true;
 		}
 	}
@@ -108,6 +122,30 @@ bool USeinMovement::Tick(const FSeinMovementContext& Ctx)
 		NewPos = ResolveNavCollision(PrePos, NewPos, Nav,
 			Ctx.bAuthoritativeDestination ? &FinalWp : nullptr);
 	}
+#if !UE_BUILD_SHIPPING
+	// Movement-trace event: the policy commanded real motion but the applied step came out
+	// ~zero — the straggler signature (a face-pinned unit far from the final leg has NO
+	// failsafe: the stall-settle is final-leg-only and repaths keep succeeding). distWp
+	// discriminates the two sub-causes: large distWp = the nav floor refused the whole step
+	// (direct + both slides — wall face-pin); distWp≈0 = degenerate carrot (waypoint step-
+	// clamp scaled the step away). ~1 line/s per held unit while Verbose.
+	if (UE_LOG_ACTIVE(LogSeinMoveTrace, Verbose)
+		&& Ctx.World && (Ctx.World->GetCurrentTick() % 30) == 0)
+	{
+		FFixedVector HeldDelta = NewPos - PrePos;
+		HeldDelta.Z = FFixedPoint::Zero;
+		const FFixedPoint CmdSpeed = Motion.Velocity.Size();
+		if (CmdSpeed > FFixedPoint::FromInt(10) && HeldDelta.SizeSquared() <= FFixedPoint::Epsilon)
+		{
+			FFixedVector ToWpDiag = Path.Waypoints[CurrentWaypointIndex] - PrePos;
+			ToWpDiag.Z = FFixedPoint::Zero;
+			UE_LOG(LogSeinMoveTrace, Verbose,
+				TEXT("[HOLD] t=%d h=%d:%d cmd=%.0f wp=%d/%d distWp=%.0f"),
+				Ctx.World->GetCurrentTick(), Ctx.SelfHandle.Index, Ctx.SelfHandle.Generation,
+				CmdSpeed.ToFloat(), CurrentWaypointIndex, N, ToWpDiag.Size().ToFloat());
+		}
+	}
+#endif
 	ApplyGroundSnapAndAltitude(NewPos, Ctx.MovementData, Nav, DeltaTime);
 	Entity.Transform.SetLocation(NewPos);
 
@@ -159,6 +197,49 @@ FSeinMotion USeinMovement::ComputeMotion_Implementation(USeinMoverHandle* Mover)
 	Motion.TargetYaw    = SeinMath::Atan2(Dir.Y, Dir.X);
 	Motion.bUpdateFacing = true;
 	return Motion;
+}
+
+FSeinMotion USeinMovement::ComputeArrivalMotion_Implementation(USeinMoverHandle* /*Mover*/)
+{
+	// Default arrival policy: HARD STOP. The default-constructed motion is zero velocity with
+	// facing untouched — bit-exact with the harness's historic `Velocity = 0` arrival. Modes
+	// that roll or loiter through arrival override this to return residual velocity.
+	return FSeinMotion();
+}
+
+void USeinMovement::DispatchArrivalMotion(const FSeinMovementContext& Ctx)
+{
+	if (!Ctx.MovementData) return;
+
+	if (!CachedHandle) { CachedHandle = NewObject<USeinMoverHandle>(this); }
+	CachedHandle->SetContext(&Ctx);
+	const FSeinMotion Arrival = ComputeArrivalMotion(CachedHandle);
+	CachedHandle->SetContext(nullptr);
+
+	Ctx.MovementData->Velocity = FFixedVector(Arrival.Velocity.X, Arrival.Velocity.Y, FFixedPoint::Zero);
+
+	// Optional final facing step — same TurnRate clamp + slope handling as the harness's normal
+	// facing mechanism, applied once. Post-arrival facing work (settle-facing) continues in
+	// TickIdle; this is only the arrival tick's contribution.
+	if (Arrival.bUpdateFacing && Ctx.MovementData->TurnRate > FFixedPoint::Zero)
+	{
+		const FFixedPoint CurrentYaw = YawFromRotation(Ctx.Entity.Transform.Rotation);
+		const FFixedPoint YawDelta   = ShortestAngleDelta(CurrentYaw, Arrival.TargetYaw);
+		const FFixedPoint MaxTurn    = Ctx.MovementData->TurnRate * Ctx.DeltaTime;
+		const FFixedPoint FinalYaw   = CurrentYaw + ClampFP(YawDelta, -MaxTurn, MaxTurn);
+		Ctx.Entity.Transform.Rotation = bSnapsToGround
+			? ApplySlopeTilt(Ctx.Entity.Transform.GetLocation(), FinalYaw, Ctx.MovementData, Ctx.Nav, Ctx.DeltaTime)
+			: YawOnly(FinalYaw);
+	}
+}
+
+void USeinMovement::AdvanceWaypointAlongPath(const FSeinMovementContext& Ctx)
+{
+	if (!Ctx.MovementData) return;
+	const FFixedPoint OneStep = Ctx.MovementData->TopSpeed * Ctx.DeltaTime;
+	const FFixedPoint CloseRadius = (OneStep * FFixedPoint::Two > FFixedPoint::FromInt(50))
+		? OneStep * FFixedPoint::Two : FFixedPoint::FromInt(50);
+	AdvanceWaypointAlongPath(Ctx.CurrentWaypointIndex, Ctx.Path, Ctx.Entity.Transform.GetLocation(), CloseRadius);
 }
 
 void USeinMovement::OnMoveBegin(const FSeinMovementContext& Ctx)
@@ -1099,10 +1180,10 @@ FFixedPoint USeinMovement::GetAvoidanceSpeedScale(const FSeinMovementContext& Ct
 {
 	// PURE READ of the PreTick-written speed-yield channel (same one-sided, order-
 	// independent discipline as ApplyAvoidanceSteer — never read neighbour state here).
-	// 1 = no change. The shipped boids model never modulates speed, so this is a
-	// byte-identical no-op until a custom avoidance model writes SpeedScale < 1 to make
-	// a unit YIELD by braking (rather than only turning). The base RTS loop multiplies
-	// its cruise target by this; a custom Tick reads it via the Mover Handle.
+	// 1 = no change; the multiplier is non-negative and MAY exceed 1 (catch-up). The
+	// shipped model produces it as brake-on-steer-saturation × formation cohesion
+	// (hold-back / catch-up). The base RTS loop multiplies its cruise target by this;
+	// a custom Tick reads it via the Mover Handle.
 	return Ctx.MovementData ? Ctx.MovementData->AvoidanceOutput.SpeedScale : FFixedPoint::One;
 }
 

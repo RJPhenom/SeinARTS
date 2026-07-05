@@ -11,9 +11,15 @@
  *          same broker OR same per-order cohesion group), never stationary neighbours (the anti-
  *          orbit bulldoze rule — idlers are the collision floor's job), weight-priority (lighter
  *          yields to heavier), ahead-of-heading + genuinely-closing courses only, and nothing past
- *          the unit's own goal. Near the goal the whole output fades (arrival release) so path
- *          attraction and the collision floor own the endgame. Deterministic throughout: fixed-
- *          point, snapshot reads, handle-index tiebreaks, parallel-safe (SeinParallelFor contract).
+ *          the unit's own goal. Inside a few footprints of the goal the output releases outright
+ *          (binary arrival release, not a fade) so path attraction and the collision floor own the
+ *          endgame. Formation cohesion (the SpeedScale hold-back / catch-up pacing against the
+ *          group's mean remaining distance) is keyed to honest motion, never to commanded
+ *          velocity: the group mean averages members with real per-tick DISPLACEMENT, and the
+ *          catch-up boost waits for real PROGRESS toward the goal — so neither a body-blocked
+ *          nor a sideways-churned member is ever throttled harder into a jam.
+ *          Deterministic throughout: fixed-point, snapshot reads, handle-index tiebreaks,
+ *          parallel-safe (SeinParallelFor contract).
  *
  *          Tuning: model-shape constants in Project Settings → SeinARTS (Navigation|Avoidance,
  *          part of the settings determinism fingerprint); per-unit dials (AvoidanceStrength /

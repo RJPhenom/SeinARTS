@@ -268,6 +268,20 @@ struct SEINARTSCOREENTITY_API FSeinMovementComponent : public FSeinComponent
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Movement")
 	FSeinAvoidanceOutput AvoidanceOutput;
 
+	/** World location at the previous avoidance PreTick sample — the active avoidance
+	 *  model's serial pre-pass maintains this for every movement-carrying entity (idle
+	 *  or ordered) so PreTick systems can measure the unit's ACTUAL per-tick world
+	 *  displacement, collision included.
+	 *
+	 *  Velocity cannot serve that read: it is the unit's own commanded step (post
+	 *  nav-floor, PRE body-collision — the collision resolver never writes it back),
+	 *  so a body-blocked unit pressing into a crowd reads ~full commanded speed while
+	 *  its body goes nowhere. ZeroVector = no sample yet (fresh spawn, or no avoidance
+	 *  model active — consumers must fall back to the commanded-velocity test).
+	 *  Runtime sim state, hashed. */
+	UPROPERTY()
+	FFixedVector PrevTickLocation = FFixedVector::ZeroVector;
+
 	/** One-time spawn floor-snap latch. False on a freshly spawned/placed entity;
 	 *  set true after the movement driver's first idle tick performs the initial
 	 *  ground + slope snap (USeinMovement::TickIdle's first-contact branch — the
@@ -307,6 +321,7 @@ FORCEINLINE uint32 GetTypeHash(const FSeinMovementComponent& C)
 	Hash = HashCombine(Hash, GetTypeHash(C.AvoidanceWeight));
 	Hash = HashCombine(Hash, GetTypeHash(C.bAvoidSameWeights));
 	Hash = HashCombine(Hash, GetTypeHash(C.AvoidanceOutput));
+	Hash = HashCombine(Hash, GetTypeHash(C.PrevTickLocation));
 	Hash = HashCombine(Hash, GetTypeHash(C.bInitialGroundSnapDone));
 	// MovementClassData is hashed by the framework attribute resolver's
 	// reflection walk; skipped here (FInstancedStruct doesn't expose a

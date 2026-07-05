@@ -128,6 +128,12 @@ private:
 	FFixedPoint BestDistToFinalSq = FFixedPoint::FromInt(1000000);
 	FFixedPoint TimeStalledNearGoal = FFixedPoint::Zero;
 
+	/** Movement-trace bookkeeping only (LogSeinMoveTrace): consecutive ticks the
+	 *  INITIAL path request came back Throttled — the window a freshly-ordered
+	 *  unit stands as a commanded statue (bHasTarget set, no path, no movement
+	 *  tick, no idle tick). Never read by sim logic. */
+	int32 InitialThrottleStreak = 0;
+
 	/** BORROWED reference to the entity's PERSISTENT movement instance,
 	 *  acquired on first tick from USeinMovementSubsystem's registry (CP2.1,
 	 *  D-R2 — one instance per UNIT, not per order; the registry owns lifetime

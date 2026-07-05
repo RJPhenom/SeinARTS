@@ -38,5 +38,6 @@ namespace SeinSystemPriority
 	inline constexpr int32 NavContainment      = 11;
 	inline constexpr int32 Squad               = 30;
 	inline constexpr int32 CommandBroker       = 40;
+	inline constexpr int32 MovementTrace       = 90;   // observation-only; sees the tick's final transforms
 	inline constexpr int32 StateHash           = 100;  // last — hashes the finished frame
 }

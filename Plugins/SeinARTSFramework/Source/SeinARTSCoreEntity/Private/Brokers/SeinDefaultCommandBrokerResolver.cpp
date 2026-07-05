@@ -285,17 +285,11 @@ FSeinFormationLayout USeinDefaultCommandBrokerResolver::ResolveFormationLayout_I
 		Layout.Positions = ResolvePositions(World, Members, Target.Anchor, Layout.Facing);
 	}
 
-	// ANTI-CROSS SLOT MATCH. Re-match members to the grid slots so a rotating/translating formation
-	// doesn't make everyone cross to their old INDEX slot (the cross-cutting-paths bug). Per-axis via
-	// the two flags — the default resolver passes its formation-level opt-OUT flags (default both on →
-	// 2-D); the squad resolver passes the squad's per-squad opt-IN flags. Both paths run THROUGH this
-	// shared call, so preview and commit stay byte-identical. Deterministic.
-	ReassignSlots(World, Members, Layout.Positions, Layout.Facing, bReassignLateral, bReassignDepth);
-
 	// De-overlap / de-dup safety net: no two members may sit on top of each other (footprint-aware,
 	// using each unit's real radius). Spreads slots that under-spaced on a tight curve/corner, and any
-	// that nav-projected to the same nearest free cell when snapped off the play-area edge. Shared
-	// path → preview === commit.
+	// that nav-projected to the same nearest free cell when snapped off the play-area edge. For
+	// degenerate layouts this pass CREATES the real geometry — Blob emits every position ON the
+	// anchor and relies on this scatter. Shared path → preview === commit.
 	USeinFormation::SeparatePositions(Layout.Radii, Layout.Positions, 16);
 
 	// Placement safety net: the de-overlap above is nav- and occupancy-blind, so it can shove an edge
@@ -305,6 +299,22 @@ FSeinFormationLayout USeinDefaultCommandBrokerResolver::ResolveFormationLayout_I
 	// the occupancy read — they vacate their spots. Runs BEFORE the cover hook so authoritative cover
 	// slots (which intentionally overrule the bake) are the last word. Shared path → preview === commit.
 	USeinFormation::ProjectPositionsToNavigable(World, Layout.Radii, Layout.Positions, Members);
+
+	// ANTI-CROSS SLOT MATCH. Re-match members to slots so a rotating/translating formation doesn't
+	// make everyone cross to their old INDEX slot (the cross-cutting-paths bug). Runs on the FINAL
+	// slot geometry — AFTER the scatter and nav/occupancy projection — because it must see real
+	// slots to minimize crossings: matching before the scatter degenerated on Blob click orders
+	// (every slot still ON the anchor → every pairing cost identical → index-order match), handing
+	// members far-side spots in the destination disc so the crowd's internal goal vectors crossed
+	// maximally (measured as the departure jam's presser standoff). Pure PERMUTATION, partitioned
+	// by footprint class inside ReassignSlots: no slot moves (the projected/separated geometry —
+	// and the preview's slot set — is untouched) and same-radius-only swaps preserve every pairwise
+	// spacing guarantee SeparatePositions just established. Per-axis via the two flags — the default
+	// resolver passes its formation-level opt-OUT flags (default both on → 2-D); the squad resolver
+	// passes the squad's per-squad opt-IN flags. Both paths run THROUGH this shared call, so preview
+	// and commit stay byte-identical. Deterministic. Stays BEFORE the cover hook: cover snap binds a
+	// specific member's slot to a cover position, so the member↔slot pairing must be final first.
+	ReassignSlots(World, Members, Layout.Positions, Layout.Facing, bReassignLateral, bReassignDepth);
 
 	// Hook subclasses (e.g. cover-aware resolvers) to mutate positions before
 	// the layout returns. Empty default impl on the base class — no-op for

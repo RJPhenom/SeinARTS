@@ -29,6 +29,7 @@
 
 class FSeinAvoidanceSystem;
 class FSeinMovementDriverSystem;
+class FSeinMovementTraceSystem;
 class FSeinNavContainmentSystem;
 class USeinAvoidance;
 class USeinMovement;
@@ -90,6 +91,12 @@ private:
 	 *  colliders the nav-pure collision floor shoved off-walkable back onto nav.
 	 *  Same ownership / lifecycle as the others. */
 	FSeinNavContainmentSystem* NavContainmentSystem = nullptr;
+
+	/** Observation-only movement trace (PostTick 90, after everything that moves
+	 *  bodies): the crowd-jam "written picture" logger behind `log LogSeinMoveTrace
+	 *  Verbose`. Silent by default; never touches sim state. Same ownership /
+	 *  lifecycle as the others. */
+	FSeinMovementTraceSystem* TraceSystem = nullptr;
 
 	/** Handle → persistent instance index. Plain map (the codebase idiom for
 	 *  handle-keyed maps); ownership / GC-rooting lives in MovementInstancePool. */
