@@ -159,6 +159,7 @@ public:
 				NewBroker.Centroid = SquadXform.GetLocation();
 				NewBroker.Anchor = SquadXform.GetLocation();
 				NewBroker.bCapabilityMapDirty = true;
+				NewBroker.bAvoidAsCohesiveBody = Squad->bAvoidAsBlob;   // obstacle-side blob opt-in
 				{
 					USeinCommandBrokerResolver* ResolverInstance =
 						NewObject<USeinCommandBrokerResolver>(&World, ResolverClass);
@@ -463,6 +464,10 @@ public:
 					}
 					Broker->FormationRadius = MaxRadius;
 				}
+
+				// Keep the broker's obstacle-side blob flag live with the squad authoring (a
+				// runtime toggle takes effect next tick — the avoidance kernel reads it PreTick).
+				Broker->bAvoidAsCohesiveBody = Squad->bAvoidAsBlob;
 
 				// 5. Per-slot cooldown decrement (toward zero).
 			for (FSeinSquadSlot& Slot : Squad->Slots)

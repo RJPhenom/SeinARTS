@@ -699,6 +699,21 @@ public:
 		meta = (DisplayName = "Max Steer Magnitude", ClampMin = "0.0"))
 	FFixedPoint AvoidanceMaxSteerMagnitude = FFixedPoint::FromInt(2);
 
+	/** The tightest avoidance may bend a unit's heading away from the straight line to its current
+	 *  goal, given as the cosine of the maximum bend angle.
+	 *
+	 *  After steering, the bent heading is clamped so it never points more than this far off the goal
+	 *  bearing. That keeps a unit always making some forward progress toward its goal, which is what
+	 *  stops it circling a churning crowd forever (an orbit needs the unit to spend part of each loop
+	 *  heading away from its goal - this cap forbids that). Given as a cosine so it needs no trig:
+	 *  1 = no bend allowed (pure goal-seek), 0 = up to 90 degrees, -1 = OFF (any bend, including
+	 *  backward). Default about 80 degrees - wide enough for a clean slide-past, tight enough to break
+	 *  melee orbits. Set to -1 to disable (bit-identical to no cap). Only the side choice is preserved;
+	 *  this never flips which way a unit dodges. */
+	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Avoidance",
+		meta = (DisplayName = "Bend Cap (Cos)", ClampMin = "-1.0", ClampMax = "1.0"))
+	FFixedPoint AvoidanceBendCapCos = FFixedPoint::FromInt(17) / FFixedPoint::FromInt(100);
+
 	/** How hard a unit brakes when it is swerving hard through traffic. 0 = never brake.
 	 *
 	 *  Yield-by-slowing, layered on top of yield-by-turning: steering saturation is the congestion
@@ -743,6 +758,26 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Avoidance",
 		meta = (DisplayName = "Cohesion Range (Footprints)", ClampMin = "1.0"))
 	FFixedPoint AvoidanceCohesionRangeRadii = FFixedPoint::FromInt(8);
+
+	/** How strongly two units on a genuine crossing course slide past each other.
+	 *
+	 *  When two movers are heading opposite ways and their goals are on opposite sides, they pick
+	 *  opposite sides and curve past instead of running into each other or circling. This scales
+	 *  that sideways slide. 0 turns the crossing slide-past off entirely (units fall back to the
+	 *  basic side-step, which is what causes the head-on lock and orbiting). Default 1. */
+	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Avoidance",
+		meta = (DisplayName = "Do-Si-Do Strength", ClampMin = "0.0"))
+	FFixedPoint AvoidanceDoSiDoStrength = FFixedPoint::One;
+
+	/** How far apart two units' goals must be before the engine treats them as genuinely crossing.
+	 *
+	 *  Measured as a multiple of how far apart the two units currently are. Higher means the slide-
+	 *  past only kicks in for units that really are trading places, so a crowd converging on one
+	 *  spot still packs tightly instead of shoving sideways. Lower makes units more eager to treat a
+	 *  near-miss as a crossing. Combined with the opposite-directions test. Default 1. */
+	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Avoidance",
+		meta = (DisplayName = "Crossing Goal Divergence", ClampMin = "0.0"))
+	FFixedPoint AvoidanceCrossingGoalDivergence = FFixedPoint::One;
 
 	/** Whether units turn to face their formation's direction after arriving on a slot.
 	 *

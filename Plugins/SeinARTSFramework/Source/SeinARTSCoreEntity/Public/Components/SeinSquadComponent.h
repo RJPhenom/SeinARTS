@@ -281,6 +281,18 @@ struct SEINARTSCOREENTITY_API FSeinSquadComponent : public FSeinComponent
 		meta = (DisplayName = "Reassign Slots Depth"))
 	bool bReassignSlotsDepth = false;
 
+	/** OBSTACLE-SIDE avoidance opinion (OPT-IN, default false): should OTHER units route around this
+	 *  squad as one cohesive body instead of threading through the gaps between its members?
+	 *
+	 *  On = a foreign unit crossing this squad sees ONE disc obstacle (the squad's centroid + extent)
+	 *  and slides around it, instead of aiming at the moving gap between members and orbiting. Two
+	 *  squads that both enable it sidestep each other as whole bodies. Off (default) = per-member
+	 *  avoidance (a unit may pass through the formation's interior). Propagated to the squad's
+	 *  command broker each tick by the squad system. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Squad",
+		meta = (DisplayName = "Avoid As Blob"))
+	bool bAvoidAsBlob = false;
+
 	/** Per-squad override for the dispatch resolver class used by this squad's
 	 *  CommandBroker. Defaults to the framework's `USeinSquadDispatchResolver`
 	 *  (leader-first dispatch + per-slot transform formations). Designers
@@ -343,6 +355,7 @@ FORCEINLINE uint32 GetTypeHash(const FSeinSquadComponent& Component)
 	Hash = HashCombine(Hash, GetTypeHash(Component.CoherencyRadius));
 	Hash = HashCombine(Hash, GetTypeHash(Component.bReassignSlotsLateral));
 	Hash = HashCombine(Hash, GetTypeHash(Component.bReassignSlotsDepth));
+	Hash = HashCombine(Hash, GetTypeHash(Component.bAvoidAsBlob));
 	Hash = HashCombine(Hash, GetTypeHash(Component.Slots.Num()));
 	for (const FSeinSquadSlot& Slot : Component.Slots)
 	{

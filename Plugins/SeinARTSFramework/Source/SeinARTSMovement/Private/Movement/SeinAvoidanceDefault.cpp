@@ -32,6 +32,7 @@
 #include "Components/SeinNavigationComponent.h"
 #include "Components/SeinExtentsComponent.h"
 #include "Components/SeinBrokerMembershipData.h"
+#include "Components/SeinCommandBrokerData.h"   // blob-obstacle: neighbour broker Centroid/FormationRadius/flag
 #include "Movement/SeinMovement.h"
 #include "Types/Entity.h"
 #include "Types/FixedPoint.h"
@@ -41,6 +42,46 @@
 // early-out in ComputeAvoidance): enable in PIE with `log LogSeinAvoidance Verbose`, reproduce,
 // and the log shows each commanded-but-pinned unit's neighbourhood with per-gate skip counts.
 DEFINE_LOG_CATEGORY_STATIC(LogSeinAvoidance, Log, All);
+
+namespace
+{
+	/**
+	 * Deterministic, antisymmetric "do-si-do": the WORLD-SPACE unit direction THIS unit should
+	 * slide toward so it passes an oncoming/crossing partner cleanly instead of mirror-dancing.
+	 *
+	 * The trap the naive per-unit side-pick falls into: two opposed units each pick "the side the
+	 * other is on relative to MY heading", and because their headings are opposed those picks
+	 * RE-ALIGN to the same world direction — they march together, never passing. The fix is a
+	 * SHARED world-frame axis: order the pair canonically (handle Index,Gen), take the perpendicular
+	 * of the connecting line PosLo→PosHi (identical for both units, independent of either heading),
+	 * and hand each role the OPPOSITE end of it. Lo → +perp, Hi → −perp ⇒ provably opposite world
+	 * sides, computed from frozen snapshots with zero shared state (one-sided-write safe). The
+	 * caller scales this by the usual HeadOn×Falloff magnitude and adds it to the world-space Accum.
+	 */
+	static FFixedVector ComputeDoSiDoSteer(
+		const FSeinEntityHandle& Self, const FSeinEntityHandle& Other,
+		const FFixedVector& SelfPos, const FFixedVector& OtherPos)
+	{
+		const bool bSelfIsLo = Self < Other;                       // canonical total order (Index, then Gen)
+		const FFixedVector& PosLo = bSelfIsLo ? SelfPos : OtherPos;
+		const FFixedVector& PosHi = bSelfIsLo ? OtherPos : SelfPos;
+		const FFixedVector D(PosHi.X - PosLo.X, PosHi.Y - PosLo.Y, FFixedPoint::Zero); // shared connecting line
+		FFixedVector Perp(-D.Y, D.X, FFixedPoint::Zero);           // world perpendicular — SAME for both units
+		const FFixedPoint Len = Perp.Size();
+		if (Len <= FFixedPoint::Epsilon)
+		{
+			// Coincident centres — no connecting line. Fall back to a fixed world axis split by
+			// handle order (still shared + antisymmetric): Lo→+Y, Hi→−Y.
+			return bSelfIsLo
+				? FFixedVector(FFixedPoint::Zero,  FFixedPoint::One, FFixedPoint::Zero)
+				: FFixedVector(FFixedPoint::Zero, -FFixedPoint::One, FFixedPoint::Zero);
+		}
+		Perp.X = Perp.X / Len;
+		Perp.Y = Perp.Y / Len;
+		// Lo pushes to the +perp end, Hi to the −perp end → opposite sides for head-on AND crossing.
+		return bSelfIsLo ? Perp : FFixedVector(-Perp.X, -Perp.Y, FFixedPoint::Zero);
+	}
+}
 
 void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 {
@@ -61,6 +102,14 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 	const FFixedPoint CohesionHoldBack    = Settings->AvoidanceCohesionHoldBack;
 	const FFixedPoint CohesionBoost       = Settings->AvoidanceCohesionCatchUpBoost;
 	const FFixedPoint CohesionRangeRadii  = Settings->AvoidanceCohesionRangeRadii;
+	// Do-si-do (crossing slide-past) dials. Strength 0 = the crossing steer is off entirely
+	// (pure group-skip + geometric sidewalk, the pre-do-si-do behaviour). CrossGoalDivergence is
+	// the goal-separation-vs-body-separation ratio that marks a GENUINE crossing (paired with
+	// opposed travel intent); larger = crossings recognised more rarely = more packing preserved.
+	const FFixedPoint DoSiDoStrength      = Settings->AvoidanceDoSiDoStrength;
+	const FFixedPoint DoSiDoCrossDiverge  = Settings->AvoidanceCrossingGoalDivergence;
+	const FFixedPoint KconvSq             = DoSiDoCrossDiverge * DoSiDoCrossDiverge;
+	const bool bDoSiDoEnabled             = DoSiDoStrength > FFixedPoint::Zero;
 	// Cohesion off entirely when both sides are neutral — the aggregate pre-pass is skipped
 	// and every unit's CohesionScale is exactly One (bit-exact no-op).
 	const bool bCohesionEnabled = CohesionHoldBack > FFixedPoint::Zero || CohesionBoost > FFixedPoint::One;
@@ -82,6 +131,10 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 	// multi-element order. Same-group neighbours are never avoided (the group converges
 	// and packs; the collision floor keeps bodies apart).
 	ISeinComponentStorage* BrokerStorage  = World.GetComponentStorageRaw(FSeinBrokerMembershipData::StaticStruct());
+	// Broker-LEVEL data (Centroid / FormationRadius / bAvoidAsCohesiveBody) for the blob-obstacle
+	// scope: read per neighbour via its CurrentBrokerHandle. Prior-tick snapshot (broker maintenance
+	// is PostTick), read-only in the parallel body → contract-safe.
+	ISeinComponentStorage* BrokerDataStorage = World.GetComponentStorageRaw(FSeinCommandBrokerData::StaticStruct());
 
 	// Gather live handles (serial, cheap), then fan the per-unit computation across
 	// worker threads under the body contract in the file docstring. The SAME serial
@@ -320,6 +373,16 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 		const FSeinEntityHandle SelfBrokerHandle = SelfBroker ? SelfBroker->CurrentBrokerHandle : FSeinEntityHandle();
 		const int64 SelfCohesionId = SelfBroker ? SelfBroker->CohesionGroupId : 0;
 
+		// Self's own broker BLOB state — for blob-vs-blob: when BOTH self and the foreign obstacle
+		// squad advertise "avoid me as a body", the two squads sidestep coherently keyed on their
+		// broker centroids. When self is loose or non-blob, self routes around a foreign blob as an
+		// individual (the simpler geometric pick in the blob branch below).
+		const FSeinCommandBrokerData* SelfBrokerData = (SelfBrokerHandle.IsValid() && BrokerDataStorage)
+			? static_cast<const FSeinCommandBrokerData*>(BrokerDataStorage->GetComponentRaw(SelfBrokerHandle)) : nullptr;
+		const bool bSelfIsBlob = SelfBrokerData && SelfBrokerData->bAvoidAsCohesiveBody
+			&& SelfBrokerData->FormationRadius > FFixedPoint::Zero;
+		const FFixedVector SelfBrokerCentroid = SelfBrokerData ? SelfBrokerData->Centroid : FFixedVector::ZeroVector;
+
 		const FFixedVector SelfPos = SelfEntity.Transform.GetLocation();
 
 		// Planar distance to goal — drives the past-goal gate AND the arrival fade.
@@ -343,6 +406,10 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 		Neighbors.Reset();
 		Hash.QueryRadius(SelfPos, Perception, Neighbors, SelfHandle);
 
+		// Body-local dedup for the blob scope: a blob-flagged foreign squad contributes ONE steer
+		// (from its Centroid/FormationRadius), not one per member in range. Fresh per invocation.
+		TSet<FSeinEntityHandle> VisitedBlobBrokers;
+
 		FFixedVector Accum = FFixedVector::ZeroVector;
 		for (const FSeinEntityHandle& OtherHandle : Neighbors)
 		{
@@ -361,6 +428,45 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 				? static_cast<const FSeinBrokerMembershipData*>(BrokerStorage->GetComponentRaw(OtherHandle)) : nullptr;
 			const FSeinEntityHandle OtherBrokerHandle = OtherBroker ? OtherBroker->CurrentBrokerHandle : FSeinEntityHandle();
 
+			// A blob already resolved this invocation: skip its remaining members entirely (one
+			// steer per blob, from its Centroid — see the blob branch below). Placed before the
+			// group-skip so it can't be reached for self's own broker (self is never in the set).
+			if (OtherBrokerHandle.IsValid() && VisitedBlobBrokers.Contains(OtherBrokerHandle)) continue;
+
+			// Neighbour goal snapshot (immutable PreTick) → the genuine-crossing predicate.
+			const bool bOtherHasTarget = OtherMove->bHasTarget;
+			// Blob-obstacle state of the neighbour's broker (never self's own broker).
+			const FSeinCommandBrokerData* OtherBrokerData = (OtherBrokerHandle.IsValid() && BrokerDataStorage
+				&& OtherBrokerHandle != SelfBrokerHandle)
+				? static_cast<const FSeinCommandBrokerData*>(BrokerDataStorage->GetComponentRaw(OtherBrokerHandle)) : nullptr;
+			const bool bOtherIsBlob = OtherBrokerData && OtherBrokerData->bAvoidAsCohesiveBody
+				&& OtherBrokerData->FormationRadius > FFixedPoint::Zero;
+
+			// GENUINE-CROSSING PREDICATE — distinguishes CONVERGING (goals collapsing to one region,
+			// keep group-skip/packing) from CROSSING (opposed travel intent + goals far apart, so a
+			// do-si-do is warranted). Reused by the intra-group carve-out (scope 1) AND the
+			// cross-group passing (scope 2). Self's bHasTarget is guaranteed by the !bHasTarget
+			// early-out at the top of this parallel body, so Move->TargetLocation is a live goal here.
+			bool bGenuineCrossing = false;
+			if (bDoSiDoEnabled && bOtherHasTarget)
+			{
+				FFixedVector OtherToGoal = OtherMove->TargetLocation - OtherEntity->Transform.GetLocation();
+				OtherToGoal.Z = FFixedPoint::Zero;
+				FFixedVector ToOtherEarly = OtherEntity->Transform.GetLocation() - SelfPos;
+				ToOtherEarly.Z = FFixedPoint::Zero;
+				const FFixedPoint BodySepSq = ToOtherEarly.SizeSquared();
+				const FFixedVector RelVelEarly(Vel.X - OtherMove->Velocity.X, Vel.Y - OtherMove->Velocity.Y, FFixedPoint::Zero);
+				const FFixedPoint ClosingEarly = ToOtherEarly.X * RelVelEarly.X + ToOtherEarly.Y * RelVelEarly.Y; // >0 closing
+				const FFixedPoint IntentDot    = ToGoal.X * OtherToGoal.X + ToGoal.Y * OtherToGoal.Y;             // <0 opposed
+				FFixedVector GoalSep = OtherMove->TargetLocation - Move->TargetLocation;
+				GoalSep.Z = FFixedPoint::Zero;
+				const FFixedPoint GoalSepSq = GoalSep.SizeSquared();
+				bGenuineCrossing =
+					   (ClosingEarly > FFixedPoint::Zero)          // closing
+					&& (IntentDot   < FFixedPoint::Zero)           // opposed travel intent (sign-stable primary)
+					&& (GoalSepSq   > KconvSq * BodySepSq);        // goals not collapsing to one region
+			}
+
 			// GROUP COHESION SKIP: a neighbour ordered together with us is never avoided —
 			// the group converges and packs instead of steering around itself; the collision
 			// floor keeps bodies apart. "Ordered together" = same immediate broker OR same
@@ -370,7 +476,86 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 			const bool bSameBroker = SelfBrokerHandle.IsValid() && OtherBrokerHandle == SelfBrokerHandle;
 			const int64 OtherCohesionId = OtherBroker ? OtherBroker->CohesionGroupId : 0;
 			const bool bSameCohesion = SelfCohesionId != 0 && SelfCohesionId == OtherCohesionId;
-			if (bSameBroker || bSameCohesion) continue;
+			if (bSameBroker || bSameCohesion)
+			{
+				// CONVERGING mate → keep packing (group-skip unchanged). Only a GENUINE CROSSING
+				// (two mates whose slots are on opposite sides — the re-seek-lockup case) unlocks a
+				// do-si-do-ONLY slide-past; general mate-vs-mate separation stays OFF so tight
+				// formations don't fan out. Anti-cross slot assignment (ReassignSlots) is the first
+				// line that makes crossings rare; this is the safety net for the residual.
+				if (!bGenuineCrossing) continue;
+				// An idle mate is not a crossing partner (nothing to pass).
+				if (OtherMove->Velocity.SizeSquared() <= MovingSpeedFloor * MovingSpeedFloor) continue;
+				FFixedVector CToOther = OtherEntity->Transform.GetLocation() - SelfPos;
+				CToOther.Z = FFixedPoint::Zero;
+				const FFixedPoint CDistSq = CToOther.SizeSquared();
+				if (CDistSq <= FFixedPoint::Epsilon) continue;
+				const FSeinNavigationComponent* CNav = NavStorage ? static_cast<const FSeinNavigationComponent*>(NavStorage->GetComponentRaw(OtherHandle)) : nullptr;
+				const FSeinExtentsComponent* CExt = ExtentsStorage ? static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(OtherHandle)) : nullptr;
+				const FFixedPoint CRadius = USeinMovement::ResolveCollisionRadius(CExt, CNav);
+				if (CRadius <= FFixedPoint::Zero) continue;
+				const FFixedPoint CDist = SeinMath::Sqrt(CDistSq);
+				const FFixedPoint CRange = (SelfRadius + CRadius) * FalloffRadii;
+				if (CDist >= CRange) continue;
+				const FFixedPoint CFall = FFixedPoint::One - (CDist / CRange);
+				const FFixedVector CSteer = ComputeDoSiDoSteer(
+					SelfHandle, OtherHandle, SelfPos, OtherEntity->Transform.GetLocation());
+				const FFixedPoint CMag = (FFixedPoint::One + HeadOnBase) * CFall * DoSiDoStrength;
+				Accum.X += CSteer.X * CMag;
+				Accum.Y += CSteer.Y * CMag;
+				continue; // handled this mate as a crossing — no general separation
+			}
+
+			// BLOB OBSTACLE (scope 3, opt-in per squad). When the neighbour's broker advertises
+			// "avoid me as one cohesive body", resolve ONCE against its Centroid + FormationRadius
+			// instead of chasing the moving inter-member gap (which is what makes a transiting unit
+			// orbit a squad). Deduped so a 50-member squad emits a single steer. Runs before the
+			// bulldoze gate so a PARKED blob squad is still routed around (it advertised as a wall).
+			if (bOtherIsBlob)
+			{
+				VisitedBlobBrokers.Add(OtherBrokerHandle);
+				const FFixedVector BlobCentroid = OtherBrokerData->Centroid;
+				const FFixedPoint BlobExtent    = OtherBrokerData->FormationRadius;
+				FFixedVector ToBlob(BlobCentroid.X - SelfPos.X, BlobCentroid.Y - SelfPos.Y, FFixedPoint::Zero);
+				const FFixedPoint BlobDistSq = ToBlob.SizeSquared();
+				if (BlobDistSq <= FFixedPoint::Epsilon) continue;
+				if (ToBlob.X * Heading.X + ToBlob.Y * Heading.Y <= FFixedPoint::Zero) continue;   // blob behind → ignore
+				if (GoalDistSq > FFixedPoint::Zero && BlobDistSq >= GoalDistSq) continue;          // blob past our goal
+				const FFixedPoint BlobDist  = SeinMath::Sqrt(BlobDistSq);
+				const FFixedPoint BlobRange = (SelfRadius + BlobExtent) * FalloffRadii;
+				if (BlobDist >= BlobRange) continue;
+				const FFixedPoint BlobFall = FFixedPoint::One - (BlobDist / BlobRange);
+				const FFixedPoint BlobMag  = (FFixedPoint::One + HeadOnBase) * BlobFall;
+				if (bSelfIsBlob)
+				{
+					// BLOB-vs-BLOB: two flagged squads sidestep coherently — the shared axis is keyed
+					// on the ordered BROKER pair via their centroids, so every member of squad X
+					// steers the same world way and squad Y the opposite. (Blob avoidance is its own
+					// opt-in; not gated on DoSiDoStrength — the helper is just the direction primitive.)
+					const FFixedVector BSteer = ComputeDoSiDoSteer(
+						SelfBrokerHandle, OtherBrokerHandle, SelfBrokerCentroid, BlobCentroid);
+					Accum.X += BSteer.X * BlobMag;
+					Accum.Y += BSteer.Y * BlobMag;
+				}
+				else
+				{
+					// UNIT-vs-BLOB: one-sided obstacle avoidance (the blob does not steer for me), so a
+					// plain geometric side pick suffices — steer to the side of the blob my heading
+					// favours, handle-tiebreak in the dead-ahead band (deterministic).
+					const FFixedPoint SideDotB = ToBlob.X * Right.X + ToBlob.Y * Right.Y;
+					const FFixedPoint BandB     = SelfRadius / FFixedPoint::FromInt(4);
+					// Dead-ahead tiebreak: the operands are intentionally cross-namespace (a unit
+					// handle vs a broker handle) — this is only a stable deterministic coin-flip for
+					// the (unit, blob) pair, not a spatial relation; a one-sided obstacle has no
+					// second observer to stay antisymmetric with.
+					const FFixedPoint BlobTurn  = (SideDotB > BandB)  ? -FFixedPoint::One
+						: (SideDotB < -BandB) ?  FFixedPoint::One
+						: ((SelfHandle < OtherBrokerHandle) ? FFixedPoint::One : -FFixedPoint::One);
+					Accum.X += Right.X * (BlobMag * BlobTurn);
+					Accum.Y += Right.Y * (BlobMag * BlobTurn);
+				}
+				continue; // neighbour handled at the blob level
+			}
 
 			// BULLDOZE IDLE NEIGHBOURS (the anti-orbit rule). A STATIONARY neighbour gets NO
 			// steering dodge — you can't orbit something that isn't moving, and steering
@@ -439,35 +624,45 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 				HeadOn = (FFixedPoint::One - CosA) + HeadOnBase;
 			}
 
-			// Dodge AWAY from the neighbour's side. Inside a "dead-ahead" band the side is
-			// undefined → break it DETERMINISTICALLY by handle index, so two head-on units
-			// pick OPPOSITE sides instead of marching into each other (do-si-do).
-			const FFixedPoint SideDot = ToOther.X * Right.X + ToOther.Y * Right.Y;
-			const FFixedPoint LateralBand = SelfRadius / FFixedPoint::FromInt(4);
-			FFixedPoint TurnSign;
-			if (SideDot > LateralBand)        { TurnSign = -FFixedPoint::One; } // neighbour on right → steer left
-			else if (SideDot < -LateralBand)  { TurnSign =  FFixedPoint::One; } // neighbour on left  → steer right
-			else { TurnSign = (SelfHandle.Index < OtherHandle.Index) ? FFixedPoint::One : -FFixedPoint::One; }
-
-			// GROUP-VS-GROUP SIDEWALK PASS: when BOTH units belong to (different) groups,
-			// OVERRIDE the per-unit do-si-do with a uniform "shift to my own right" — every
-			// member of a group steps the SAME way, so two opposing blobs slide past each
-			// other like sidewalk traffic instead of each unit splaying independently.
-			// (Corridor-awareness — damping the shift when that side is nav-blocked — is a
-			// deferred refinement; the wall-tangent guard + hard barrier hold the line.)
-			if (SelfBrokerHandle.IsValid() && OtherBrokerHandle.IsValid())
+			// STEER DIRECTION. A GENUINE CROSSING (opposed intent + goals apart) resolves via the
+			// antisymmetric world-frame do-si-do so the pair slides past on OPPOSITE sides — the
+			// primitive that breaks the mirror-dance orbit for opposed pairs and squad-vs-squad
+			// traffic. Everything else keeps the geometric side-pick (+ the group-vs-group sidewalk
+			// shift for co-directional group lane traffic). The two branches are disjoint predicates.
+			// Steer weight is PURE STEERING — NO mass term (mass physics belong to the collision
+			// floor). AvoidanceStrength (below) is the magnitude knob; AvoidanceWeight is the priority.
+			if (bGenuineCrossing)
 			{
-				TurnSign = FFixedPoint::One;
+				const FFixedVector Steer = ComputeDoSiDoSteer(
+					SelfHandle, OtherHandle, SelfPos, OtherEntity->Transform.GetLocation());
+				const FFixedPoint W = HeadOn * Falloff * DoSiDoStrength;
+				Accum.X += Steer.X * W;
+				Accum.Y += Steer.Y * W;
 			}
+			else
+			{
+				// Dodge AWAY from the neighbour's side. Inside a "dead-ahead" band the side is
+				// undefined → break it deterministically by handle index.
+				const FFixedPoint SideDot = ToOther.X * Right.X + ToOther.Y * Right.Y;
+				const FFixedPoint LateralBand = SelfRadius / FFixedPoint::FromInt(4);
+				FFixedPoint TurnSign;
+				if (SideDot > LateralBand)        { TurnSign = -FFixedPoint::One; } // neighbour on right → steer left
+				else if (SideDot < -LateralBand)  { TurnSign =  FFixedPoint::One; } // neighbour on left  → steer right
+				else { TurnSign = (SelfHandle.Index < OtherHandle.Index) ? FFixedPoint::One : -FFixedPoint::One; }
 
-			// Steer weight is PURE STEERING — NO mass term. HeadOn (encounter angle) ×
-			// Falloff (proximity, range ∝ combined footprint → size-proportional) ×
-			// TurnSign. Do NOT reintroduce a mass factor here — mass physics belong to the
-			// collision floor, not this steering layer. AvoidanceStrength (below) is the
-			// magnitude knob; AvoidanceWeight (gated above) is the priority.
-			const FFixedPoint W = HeadOn * Falloff * TurnSign;
-			Accum.X += Right.X * W;
-			Accum.Y += Right.Y * W;
+				// GROUP-VS-GROUP SIDEWALK PASS (non-crossing only): two groups in co-directional /
+				// glancing traffic all shift to their own right so they slide past like sidewalk
+				// lanes. Opposed crossings are handled by the do-si-do branch above, so this no
+				// longer curves head-on pairs the same way (the old orbit cause).
+				if (SelfBrokerHandle.IsValid() && OtherBrokerHandle.IsValid())
+				{
+					TurnSign = FFixedPoint::One;
+				}
+
+				const FFixedPoint W = HeadOn * Falloff * TurnSign;
+				Accum.X += Right.X * W;
+				Accum.Y += Right.Y * W;
+			}
 		}
 
 		// Clamp the accumulated lateral nudge (bounds a crowd repulsor sum + fixed-point

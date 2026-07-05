@@ -182,6 +182,16 @@ struct SEINARTSCOREENTITY_API FSeinCommandBrokerData : public FSeinComponent
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker")
 	bool bSettledSlotsMemberAligned = false;
 
+	/** OBSTACLE-SIDE avoidance opinion: how OTHER units treat this broker's members. When true, a
+	 *  transiting unit routes around this formation's whole extent (Centroid + FormationRadius) as
+	 *  ONE cohesive body instead of steering through the gaps between its members (which makes the
+	 *  transiting unit chase the moving gap and orbit). Set each tick by the owning system — the
+	 *  squad system copies it from FSeinSquadComponent::bAvoidAsBlob; left false for loose /
+	 *  ephemeral brokers (they carry no maintained FormationRadius, so the kernel treats them
+	 *  per-member regardless). Default false. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker")
+	bool bAvoidAsCohesiveBody = false;
+
 	/** The sim tick this formation's current re-seek episode began, or 0 when no episode
 	 *  is active.
 	 *
@@ -210,6 +220,7 @@ FORCEINLINE uint32 GetTypeHash(const FSeinCommandBrokerData& Data)
 	Hash = HashCombine(Hash, GetTypeHash(Data.NextReseekAllowedTick));
 	Hash = HashCombine(Hash, GetTypeHash(Data.ReseekEpisodeStartTick));
 	Hash = HashCombine(Hash, GetTypeHash(Data.bSettledSlotsMemberAligned));
+	Hash = HashCombine(Hash, GetTypeHash(Data.bAvoidAsCohesiveBody));
 	Hash = HashCombine(Hash, GetTypeHash(Data.SettledSlotPositions.Num()));
 	for (const FFixedVector& Slot : Data.SettledSlotPositions)
 	{

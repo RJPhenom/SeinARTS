@@ -257,8 +257,11 @@ is CP2.3's decision/integration split (where the momentum push needs it).
 
 **Avoidance is pluggable** (same abstract-base + settings-picker pattern as Navigation /
 Collision / FoW): abstract `USeinAvoidance` + `USeinARTSCoreSettings::AvoidanceClass`
-(default `USeinAvoidanceDefault` = a **no-op skeleton**, behaviorally identical to `None`; the
-lateral-steer boids model was gutted 2026-07-02 pending a from-scratch rebuild). The
+(default `USeinAvoidanceDefault` = a **full lateral-steer + brake-to-yield model** rebuilt through
+2026-07: deterministic do-si-do crossing resolution [shared world-axis, antisymmetric by handle
+order], formation-scoped cohesion [SpeedScale hold-back/catch-up keyed on ACTUAL displacement],
+per-squad blob-obstacle opt-in [`bAvoidAsBlob`], and a goal-relative bend cap [`AvoidanceBendCapCos`]
+that guarantees forward progress so dense melees can't orbit; `None` still = OFF). The
 PreTick `FSeinAvoidanceSystem` is a thin delegator → `ComputeAvoidance`; the instance is
 owned + GC-rooted by `USeinMovementSubsystem`. The per-tick OUTPUT contract is
 `FSeinAvoidanceOutput { SteerDir, SpeedScale }` on `FSeinMovementComponent` — a lateral

@@ -1141,6 +1141,39 @@ FFixedVector USeinMovement::ApplyAvoidanceSteer(const FSeinMovementContext& Ctx,
 	const FFixedVector Bent = FFixedVector::GetSafeNormal(
 		FFixedVector(DesiredDir.X + Steer.X, DesiredDir.Y + Steer.Y, DesiredDir.Z));
 
+	// GOAL-RELATIVE BEND CAP (planar / XY). Clamp a unit-length bent heading so its angular
+	// deviation from the (unit-length) DesiredDir — the mode's straight-line heading to its CURRENT
+	// WAYPOINT — never exceeds acos(BendCapCos). This is what breaks dense-melee ORBITS: a summed
+	// per-neighbour repulsor can otherwise rotate the bent heading past 90° (mostly lateral / partly
+	// backward), so a unit circles a churning crowd. Forcing Bent·DesiredDir >= BendCapCos > 0 keeps
+	// a strictly-positive component along the line to the waypoint EVERY tick, so waypoint distance
+	// strictly decreases and no limit cycle can form. It only ever REDUCES the perpendicular
+	// (off-goal) component while KEEPING its direction — the do-si-do / geometric SIDE choice is
+	// never touched, so it cannot reintroduce lock-step or the packing regression. No trig: the cap
+	// sine is sqrt(1 − cos²). BendCapCos = −1 (OFF) or a Bent already inside the cap is a bit-exact
+	// passthrough.
+	const FFixedPoint BendCapCos = GetDefault<USeinARTSCoreSettings>()->AvoidanceBendCapCos;
+	const auto CapToGoal = [&](const FFixedVector& In) -> FFixedVector
+	{
+		if (BendCapCos <= -FFixedPoint::One) return In;                     // OFF sentinel → passthrough
+		const FFixedPoint Along = In.X * DesiredDir.X + In.Y * DesiredDir.Y; // cos(theta), both unit-length
+		if (Along >= BendCapCos) return In;                                 // already within the cap
+		// Perpendicular component of In about DesiredDir — its DIRECTION is the side the steer chose.
+		FFixedVector Perp(In.X - DesiredDir.X * Along, In.Y - DesiredDir.Y * Along, FFixedPoint::Zero);
+		const FFixedPoint PerpLen = Perp.Size();
+		if (PerpLen <= FFixedPoint::Epsilon) return DesiredDir;             // In ≈ ±Desired → no side info → goal
+		FFixedPoint SinSq = FFixedPoint::One - BendCapCos * BendCapCos;
+		if (SinSq < FFixedPoint::Zero) SinSq = FFixedPoint::Zero;           // guard Sqrt's X>=0 assert (fp rounding)
+		const FFixedPoint CapSin = SeinMath::Sqrt(SinSq);
+		const FFixedPoint InvPerp = FFixedPoint::One / PerpLen;
+		const FFixedVector PerpHat(Perp.X * InvPerp, Perp.Y * InvPerp, FFixedPoint::Zero);
+		// Rebuild at exactly the cap angle: cos·Desired + sin·PerpHat (same side, reduced deviation).
+		return FFixedVector(
+			DesiredDir.X * BendCapCos + PerpHat.X * CapSin,
+			DesiredDir.Y * BendCapCos + PerpHat.Y * CapSin,
+			DesiredDir.Z);
+	};
+
 	// WALL-TANGENT GUARD. Avoidance is wall-blind, so the bent heading can aim into static
 	// geometry — the nav floor then pins the unit and it grinds. Do NOT just drop avoidance near
 	// walls (that funnels every unit onto one path line → corner pile, the prior regression);
@@ -1148,8 +1181,10 @@ FFixedVector USeinMovement::ApplyAvoidanceSteer(const FSeinMovementContext& Ctx,
 	// scale the steer down toward the path heading until it clears (a tangent-along-the-wall
 	// approximation), and only fall back to the pure path heading if even a gentle steer is
 	// blocked. Nav reads are the static bake (immutable this tick) → deterministic; a few probes,
-	// first step only. (Dense corner piles are the avoidance MODEL's concern — the shipped class
-	// is currently a no-op skeleton; its rebuild owns that behavior, not this guard.)
+	// first step only. This guard owns wall-tangency; the bend cap above owns melee-orbit
+	// prevention. All exits funnel through the single CapToGoal below (a wall-scaled steer only
+	// REDUCES deviation, so the cap never fights the guard; the DesiredDir fallback caps to itself).
+	FFixedVector Result = Bent;
 	if (Ctx.Nav)
 	{
 		const FFixedVector Pos = Ctx.Entity.Transform.GetLocation();
@@ -1161,19 +1196,21 @@ FFixedVector USeinMovement::ApplyAvoidanceSteer(const FSeinMovementContext& Ctx,
 			const FFixedVector Cand1 = FFixedVector::GetSafeNormal(
 				FFixedVector(DesiredDir.X + Steer.X * S1, DesiredDir.Y + Steer.Y * S1, DesiredDir.Z));
 			if (IsFootprintPassable(FFixedVector(Pos.X + Cand1.X * Probe, Pos.Y + Cand1.Y * Probe, Pos.Z), Ctx.Nav))
-				return Cand1;
-
-			const FFixedPoint S2 = FFixedPoint::One / FFixedPoint::FromInt(3); // 0.33
-			const FFixedVector Cand2 = FFixedVector::GetSafeNormal(
-				FFixedVector(DesiredDir.X + Steer.X * S2, DesiredDir.Y + Steer.Y * S2, DesiredDir.Z));
-			if (IsFootprintPassable(FFixedVector(Pos.X + Cand2.X * Probe, Pos.Y + Cand2.Y * Probe, Pos.Z), Ctx.Nav))
-				return Cand2;
-
-			return DesiredDir; // even a gentle steer hits the wall — follow the path, let the floor resolve
+				Result = Cand1;
+			else
+			{
+				const FFixedPoint S2 = FFixedPoint::One / FFixedPoint::FromInt(3); // 0.33
+				const FFixedVector Cand2 = FFixedVector::GetSafeNormal(
+					FFixedVector(DesiredDir.X + Steer.X * S2, DesiredDir.Y + Steer.Y * S2, DesiredDir.Z));
+				if (IsFootprintPassable(FFixedVector(Pos.X + Cand2.X * Probe, Pos.Y + Cand2.Y * Probe, Pos.Z), Ctx.Nav))
+					Result = Cand2;
+				else
+					Result = DesiredDir; // even a gentle steer hits the wall — follow the path, let the floor resolve
+			}
 		}
 	}
 
-	return Bent;
+	return CapToGoal(Result);
 }
 
 FFixedPoint USeinMovement::GetAvoidanceSpeedScale(const FSeinMovementContext& Ctx) const
