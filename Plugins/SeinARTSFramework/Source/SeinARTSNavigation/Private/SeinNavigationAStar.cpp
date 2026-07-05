@@ -2744,15 +2744,14 @@ void USeinNavigationAStar::CollectDebugCellQuads(TArray<FVector>& OutCenters, TA
 #endif
 }
 
-bool USeinNavigationAStar::FindEscapeNudgeTarget(
-	const FFixedVector& AgentPos,
-	FFixedVector& OutTarget,
-	int32& OutTargetWD) const
+bool USeinNavigationAStar::QueryEscapeTarget(
+	const FSeinEscapeQuery& Query,
+	FFixedVector& OutTarget) const
 {
 	if (!HasRuntimeData()) return false;
 
 	int32 AgentX, AgentY;
-	if (!WorldToGrid(AgentPos, AgentX, AgentY)) return false;
+	if (!WorldToGrid(Query.From, AgentX, AgentY)) return false;
 	if (!IsValidCoord(AgentX, AgentY)) return false;
 
 	// Walk the WallDistance gradient outward up to `MaxEscapeSteps` cells,
@@ -2763,7 +2762,7 @@ bool USeinNavigationAStar::FindEscapeNudgeTarget(
 	// move completed before any nudging happened. Walking N cells gives the
 	// chassis a target far enough to actually drive toward.
 	//
-	// `bVisited` array prevents the walk from oscillating between two
+	// The visited array prevents the walk from oscillating between two
 	// equal-WD cells (e.g., agent ↔ neighbor when both happen to share the
 	// local maximum). Bounded by MaxEscapeSteps so the walk always
 	// terminates even on degenerate maps.
@@ -2773,12 +2772,12 @@ bool USeinNavigationAStar::FindEscapeNudgeTarget(
 
 	TArray<int32, TInlineAllocator<MaxEscapeSteps + 1>> Visited;
 	Visited.Reserve(MaxEscapeSteps + 1);
+	// The stepped chain (excludes the start cell) — kept for the contract
+	// validation walk-back below.
+	TArray<TPair<int32, int32>, TInlineAllocator<MaxEscapeSteps>> Chain;
 
 	int32 CurX = AgentX;
 	int32 CurY = AgentY;
-	int32 LastValidX = -1;
-	int32 LastValidY = -1;
-	int32 LastValidWD = -1;
 	Visited.Add(CellIndex(CurX, CurY));
 
 	for (int32 step = 0; step < MaxEscapeSteps; ++step)
@@ -2818,24 +2817,99 @@ bool USeinNavigationAStar::FindEscapeNudgeTarget(
 		if (BestN < 0)
 		{
 			// Dead end — no passable+connected unvisited neighbor at this
-			// step. If we've made any progress, return the last valid cell;
-			// otherwise return false (sealed pocket at the very start).
+			// step. Whatever chain we walked so far goes to validation;
+			// an empty chain is the sealed-pocket false below.
 			break;
 		}
 
 		CurX += NeighborDX[BestN];
 		CurY += NeighborDY[BestN];
-		LastValidX = CurX;
-		LastValidY = CurY;
-		LastValidWD = BestWD;
 		Visited.Add(CellIndex(CurX, CurY));
+		Chain.Emplace(CurX, CurY);
 	}
 
-	if (LastValidX < 0) return false;
+	// CONTRACT VALIDATION (see the base docstring): the gradient walk above is
+	// STATIC-only by design (a transient dynamic obstacle shouldn't reroute the
+	// walk), but the RETURNED target must be one the movement floor — which IS
+	// dynamic-aware and footprint-aware, and which drives the escape leg as a
+	// STRAIGHT line from Query.From — will actually let the agent walk to and
+	// stand on, or a curable hold converts to a Stranded fail. Per candidate
+	// (walking BACK from the furthest chain cell):
+	//   1. the candidate center is clear (static + dynamic, agent layer mask)
+	//      and not on a terrain class the agent blocks;
+	//   2. the agent FOOTPRINT fits there — 8 ring samples at the carried
+	//      radius, mirroring the floor's own footprint gate;
+	//   3. the STRAIGHT segment From→candidate is clear at half-cell samples —
+	//      the greedy chain can bend around a wall tip the straight leg would
+	//      then cross.
+	const USeinARTSCoreSettings* TerrainSettings = !Query.BlockedTerrainTags.IsEmpty()
+		? GetDefault<USeinARTSCoreSettings>() : nullptr;
 
-	OutTarget = GridToWorld(LastValidX, LastValidY);
-	OutTargetWD = LastValidWD;
-	return true;
+	auto IsFootprintClearAt = [&](const FFixedVector& Center) -> bool
+	{
+		if (!IsWorldPositionClear(Center, Query.AgentNavLayerMask)) return false;
+		const FFixedPoint R = Query.AgentFootprintRadius;
+		if (R <= FFixedPoint::Zero) return true;
+		// 4 axis + 4 diagonal ring samples (diagonal offset = R·sin45°),
+		// the same coverage shape as the movement floor's cached ring.
+		const FFixedPoint D = R * FFixedPoint::FromInt(7071) / FFixedPoint::FromInt(10000);
+		const FFixedVector Ring[8] = {
+			FFixedVector(Center.X + R, Center.Y,     Center.Z),
+			FFixedVector(Center.X - R, Center.Y,     Center.Z),
+			FFixedVector(Center.X,     Center.Y + R, Center.Z),
+			FFixedVector(Center.X,     Center.Y - R, Center.Z),
+			FFixedVector(Center.X + D, Center.Y + D, Center.Z),
+			FFixedVector(Center.X + D, Center.Y - D, Center.Z),
+			FFixedVector(Center.X - D, Center.Y + D, Center.Z),
+			FFixedVector(Center.X - D, Center.Y - D, Center.Z) };
+		for (const FFixedVector& S : Ring)
+		{
+			if (!IsWorldPositionClear(S, Query.AgentNavLayerMask)) return false;
+		}
+		return true;
+	};
+
+	auto IsSegmentClear = [&](const FFixedVector& From, const FFixedVector& To) -> bool
+	{
+		FFixedVector Delta = To - From;
+		Delta.Z = FFixedPoint::Zero;
+		const FFixedPoint Len = Delta.Size();
+		const FFixedPoint StepLen = CellSize / FFixedPoint::FromInt(2);
+		if (Len <= StepLen || StepLen <= FFixedPoint::Zero) return true;
+		// Sample every half cell along the segment (endpoints validated by the
+		// caller). ≤ ~24 samples for the 6-cell walk — trivial for a rare query.
+		const int32 Steps = 1 + (Len / StepLen).ToInt();   // deterministic floor (>>32)
+		for (int32 s = 1; s < Steps; ++s)
+		{
+			const FFixedPoint T = FFixedPoint::FromInt(s) / FFixedPoint::FromInt(Steps);
+			const FFixedVector Sample(
+				From.X + Delta.X * T, From.Y + Delta.Y * T, From.Z);
+			if (!IsWorldPositionClear(Sample, Query.AgentNavLayerMask)) return false;
+		}
+		return true;
+	};
+
+	for (int32 i = Chain.Num() - 1; i >= 0; --i)
+	{
+		const int32 CX = Chain[i].Key;
+		const int32 CY = Chain[i].Value;
+		const FFixedVector Candidate = GridToWorld(CX, CY);
+		if (TerrainSettings)
+		{
+			const int32 CIdx = CellIndex(CX, CY);
+			const int32 T = CellTerrainType.IsValidIndex(CIdx) ? CellTerrainType[CIdx] : 0;
+			if (TerrainSettings->TerrainTypes.IsValidIndex(T)
+				&& Query.BlockedTerrainTags.HasTag(TerrainSettings->TerrainTypes[T].TerrainTag))
+			{
+				continue;
+			}
+		}
+		if (!IsFootprintClearAt(Candidate)) continue;
+		if (!IsSegmentClear(Query.From, Candidate)) continue;
+		OutTarget = Candidate;
+		return true;
+	}
+	return false;
 }
 
 void USeinNavigationAStar::CollectDebugBlockerCells(

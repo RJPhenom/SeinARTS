@@ -272,29 +272,26 @@ public:
 		TArray<FColor>& OutColors,
 		float& OutHalfExtent) const override;
 
-	/** Find a "nudge target" world position for an agent stuck at `AgentPos`.
-	 *  Scans the 8 cells around the agent's current cell, picks the one with
-	 *  the highest static `WallDistance` value that is also passable AND
-	 *  reachable from the agent's cell via the bake's connection bits.
-	 *  Returns the cell CENTER as a world position in `OutTarget`, with
-	 *  `OutTargetWD` set to the chosen neighbor's WD; returns false (and
-	 *  leaves outputs untouched) if no passable neighbor exists in any
-	 *  direction (chassis is in a sealed pocket).
+	/** Escape-target query (base contract: USeinNavigation::QueryEscapeTarget).
+	 *  Walks UP the static `WallDistance` gradient from the agent's cell — up to
+	 *  6 cells, greedy highest-WD unvisited neighbor per step, each hop gated by
+	 *  the bake's connection bits (no slope/step violations) and static
+	 *  passability — then returns the FURTHEST cell of that walk which also
+	 *  passes the CONTRACT validation (walking BACK along the chain until one
+	 *  does): candidate + agent footprint ring clear of dynamic blockers (per
+	 *  Query.AgentNavLayerMask / AgentFootprintRadius), no blocked terrain
+	 *  (Query.BlockedTerrainTags), AND the straight From→candidate segment clear
+	 *  at half-cell samples — the consumer walks a straight leg the greedy
+	 *  chain may have bent around. Multi-cell on purpose: a single-step target lands inside
+	 *  typical AcceptanceRadius and "arrives" instantly, escaping nothing.
+	 *  Returns the cell CENTER as a world position; false (outputs untouched)
+	 *  when the agent's cell is a sealed pocket or no walked cell validates.
 	 *
-	 *  Static WD only — dynamic-blocker influence is intentionally ignored
-	 *  for this query so a single transient obstacle doesn't trap an agent
-	 *  in escape mode forever. Connection bits ARE checked so the chosen
-	 *  neighbor is physically reachable (no slope/step gate violations).
-	 *
-	 *  Consumed by SeinMoveToAction's escape-nudge fallback when A* can't
-	 *  find a path from the agent's current cell. The action overrides
-	 *  `Path.Waypoints = [OutTarget]` and lets the normal carrot/steering
-	 *  pipeline drive the chassis toward it. Once the chassis reaches a
-	 *  cell in C-space (WD ≥ Required), normal pathing resumes. */
-	virtual bool FindEscapeNudgeTarget(
-		const FFixedVector& AgentPos,
-		FFixedVector& OutTarget,
-		int32& OutTargetWD) const override;
+	 *  Consumed by SeinMoveToAction's hold-escape ladder, which steers the unit
+	 *  to the target as a short internal leg and then resumes normal pathing. */
+	virtual bool QueryEscapeTarget(
+		const FSeinEscapeQuery& Query,
+		FFixedVector& OutTarget) const override;
 
 protected:
 

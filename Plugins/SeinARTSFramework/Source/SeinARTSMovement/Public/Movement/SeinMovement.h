@@ -533,6 +533,22 @@ public:
 		const FSeinExtentsComponent* Extents,
 		const FSeinNavigationComponent* NavData);
 
+	/** Footprint-aware passability check at a candidate position. True iff
+	 *  the candidate's center AND every cached ring sample land on passable
+	 *  cells (per `CachedCollisionRadius` / `CachedFootprintSamples`).
+	 *  Subclasses use this for direction-clear probes — e.g., the unstick
+	 *  state machine probes the reverse direction before committing to
+	 *  Reversing, so a vehicle in a corner doesn't reverse INTO another
+	 *  wall. When `CachedNumFootprintSamples == 0` (no Extents + no
+	 *  FallbackFootprintRadius), degrades to legacy point-only check.
+	 *
+	 *  Public for the same reason `CacheFootprintFromContext` is: the move
+	 *  action calls it — its hold-escape ladder probes the commanded direction
+	 *  to tell a MECHANICAL block (footprint refused → escalate) from a policy
+	 *  zero (a pivot-in-place — never escalate). Valid whenever the footprint
+	 *  cache is (i.e. during a move). */
+	bool IsFootprintPassable(const FFixedVector& Pos, USeinNavigation* Nav) const;
+
 protected:
 
 	// ----------------------------------------------------------------------
@@ -808,16 +824,6 @@ protected:
 		const FFixedVector& NewPos,
 		USeinNavigation* Nav,
 		const FFixedVector* AuthoritativeDest = nullptr) const;
-
-	/** Footprint-aware passability check at a candidate position. True iff
-	 *  the candidate's center AND every cached ring sample land on passable
-	 *  cells (per `CachedCollisionRadius` / `CachedFootprintSamples`).
-	 *  Subclasses use this for direction-clear probes — e.g., the unstick
-	 *  state machine probes the reverse direction before committing to
-	 *  Reversing, so a vehicle in a corner doesn't reverse INTO another
-	 *  wall. When `CachedNumFootprintSamples == 0` (no Extents + no
-	 *  FallbackFootprintRadius), degrades to legacy point-only check. */
-	bool IsFootprintPassable(const FFixedVector& Pos, USeinNavigation* Nav) const;
 
 	/** Bend a NORMALIZED desired direction by this unit's precomputed local-
 	 *  avoidance steer (`FSeinMovementComponent::AvoidanceOutput.SteerDir`, written

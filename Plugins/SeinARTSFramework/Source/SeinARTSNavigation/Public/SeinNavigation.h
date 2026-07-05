@@ -284,18 +284,24 @@ public:
 	 *  unaffected. */
 	virtual void SetDynamicBlockers(const TArray<FSeinDynamicBlocker>& /*Blockers*/) {}
 
-	/** Find a short "escape nudge" target for an agent that A* can't path out of
-	 *  (stuck against walls / sitting in a sub-clearance cell). Returns a nearby
-	 *  cell with more wall-clearance so the steering pipeline can drive the chassis
-	 *  back into open space, after which normal pathing resumes. Consumed by
-	 *  SeinMoveToAction's escape fallback.
+	/** Find a nearby "escape" target for an agent that is mechanically stuck — its
+	 *  applied movement step has been ~zero against a blocked footprint while its
+	 *  order keeps commanding motion. Consumed by SeinMoveToAction's hold-escape
+	 *  ladder: the action steers the unit to the returned target as a short internal
+	 *  leg, then resumes normal pathing from the freed position.
 	 *
-	 *  Default: no nudge available — returns false and sets OutTargetWD = -1. A nav
-	 *  without this support simply degrades to the action's sealed-pocket outcome
-	 *  (the same terminal result as before this was a virtual). USeinNavigationAStar
-	 *  overrides it with a WallDistance-gradient walk. */
-	virtual bool FindEscapeNudgeTarget(const FFixedVector& /*AgentPos*/,
-		FFixedVector& /*OutTarget*/, int32& OutTargetWD) const { OutTargetWD = -1; return false; }
+	 *  CONTRACT: a returned target must be CURRENTLY reachable by the STRAIGHT
+	 *  leg the consumer drives — the target and the segment From→target clear of
+	 *  static bake AND dynamic blockers (per Query.AgentNavLayerMask), the
+	 *  agent's FOOTPRINT (Query.AgentFootprintRadius) fitting at the target, and
+	 *  no terrain class the agent blocks (Query.BlockedTerrainTags) — or the
+	 *  movement floor will refuse the escape leg and convert a curable hold into
+	 *  a Stranded fail. No answer: return false with OutTarget untouched (same
+	 *  convention as GetRandomReachablePoint); the action's exhaustion path stays
+	 *  bounded either way. USeinNavigationAStar overrides with a WallDistance-
+	 *  gradient walk. */
+	virtual bool QueryEscapeTarget(const FSeinEscapeQuery& /*Query*/,
+		FFixedVector& /*OutTarget*/) const { return false; }
 
 	/** Snap a point to the nearest walkable cell — the PLAIN projection (for the elevation- and
 	 *  occupancy-aware variants, see ProjectPointToNavOnElevation and ProjectPointToNavFree).

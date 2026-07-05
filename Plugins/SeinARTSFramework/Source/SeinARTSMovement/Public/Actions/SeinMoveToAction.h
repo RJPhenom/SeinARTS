@@ -34,13 +34,14 @@ enum class ESeinMoveFailureReason : uint8
 	NoMovementComponent UMETA(DisplayName = "No Movement Component"),
 	NoNavigation        UMETA(DisplayName = "No Navigation"),
 	Cancelled           UMETA(DisplayName = "Cancelled"),
-	/** Chassis was stranded — entered the escape-nudge fallback (driving up
-	 *  the WallDistance gradient toward open space) but couldn't make
-	 *  meaningful progress before the escape timer expired, or no passable
-	 *  neighbor existed to nudge toward. Distinct from `PathNotFound` so
-	 *  AI scripts can react differently (e.g., abandon order vs retry
-	 *  destination): Stranded means "we tried the escape route and it
-	 *  didn't help," PathNotFound means "we never found a plannable path." */
+	/** The unit is mechanically stuck: its applied step stayed ~zero against a
+	 *  footprint-blocked direction, the hold-escape ladder forced a repath and
+	 *  attempted nav escape legs, and three attempts exhausted (no escape
+	 *  target / escape leg itself held / arrival outside the escape ring) — or
+	 *  the per-order escape budget ran out on a recurring pin. Distinct from
+	 *  `PathNotFound` so AI scripts can react differently (abandon order vs
+	 *  retry destination): Stranded means "we tried to physically break free
+	 *  and couldn't," PathNotFound means "we never found a plannable path." */
 	Stranded            UMETA(DisplayName = "Stranded")
 };
 
@@ -133,6 +134,62 @@ private:
 	 *  unit stands as a commanded statue (bHasTarget set, no path, no movement
 	 *  tick, no idle tick). Never read by sim logic. */
 	int32 InitialThrottleStreak = 0;
+
+	/** HOLD-ESCAPE LADDER — the far-from-goal counterpart of the near-goal stall
+	 *  failsafe above. A unit whose APPLIED step (post nav-floor persisted
+	 *  Velocity) stays ~zero while its order commands motion mid-route has no
+	 *  other exit in the codebase: the stall failsafe is final-leg-only and
+	 *  repaths keep succeeding, so a wall face-pin holds forever (the straggler).
+	 *  The ladder: accrue HoldTime; at each 0.3s boundary probe the commanded
+	 *  direction's footprint passability (a PASSABLE probe = pivot/yield — never
+	 *  escalate); first blocked boundary forces a repath (stage 1); the next
+	 *  queries the nav for an escape target and walks there as a short internal
+	 *  leg (stage 2); three exhausted attempts fail the move with Stranded.
+	 *  All transient action-local state (TimeStalledNearGoal precedent) —
+	 *  deterministic inputs, nothing hashed, dies with the per-order action.
+	 *  DETECTION SCOPE: Tier-1 harness modes only, by construction — Tier-2
+	 *  vehicle Ticks persist COMMANDED velocity (Forward × CurrentSpeed), so a
+	 *  wall-pinned vehicle never reads held here (Wheeled/Tracked carry their
+	 *  own reverse-unstick machinery). */
+	FFixedPoint HoldTime = FFixedPoint::Zero;
+	/** Next HoldTime boundary at which the ladder probes/escalates (0.3s steps). */
+	FFixedPoint NextEscalationAt = FFixedPoint::Zero;
+	/** Stage 1 (forced repath) already fired for the current hold episode. */
+	bool bStage1Fired = false;
+	/** One-shot: fold a forced repath into the next repath-block evaluation,
+	 *  bypassing the Interval timer / OffPathOnly drift+min-interval gates.
+	 *  Cleared after ANY attempt including Throttled (never sticky — stage 2
+	 *  backstops a budget-swallowed stage 1). */
+	bool bForceRepathNow = false;
+	/** Escape leg in flight: `Path` temporarily holds [AgentPos → EscapeTarget]. */
+	bool bEscapeMode = false;
+	FFixedVector EscapeTarget = FFixedVector::ZeroVector;
+	/** Escape-leg acceptance² (entry-gated so the leg can never instant-arrive). */
+	FFixedPoint EscapeAcceptSq = FFixedPoint::Zero;
+	/** Per-attempt hold clock while the escape leg itself is walked. */
+	FFixedPoint EscapeHoldTime = FFixedPoint::Zero;
+	/** CONSECUTIVE failed escape attempts within the current stuck episode
+	 *  (no-answer / leg held / arrival outside the ring). Episode-scoped: reset
+	 *  by escape success AND by genuine resumed motion. At 3 the move fails
+	 *  with ESeinMoveFailureReason::Stranded. */
+	int32 EscapeAttempts = 0;
+	/** TOTAL escape legs installed over this order's lifetime — never reset.
+	 *  The terminating backstop for the walk→pin→escape→resume oscillation: a
+	 *  reproducible pin whose escapes SUCCEED (so EscapeAttempts never
+	 *  accumulates) but whose resume re-plans into the same pin would cycle
+	 *  forever; at 5 entries the next escalation fails Stranded instead. */
+	int32 TotalEscapeEntries = 0;
+	/** Resolved once at first-tick setup (Extents → FallbackFootprintRadius
+	 *  cascade): the body radius the ladder probes with and the escape query
+	 *  carries. */
+	FFixedPoint FootprintRadius = FFixedPoint::Zero;
+	/** Near-goal settle band² shared by the stall failsafe AND the ladder's
+	 *  exclusion: max(3 × acceptance, footprint + 100cm). Body-aware on
+	 *  purpose — a unit ordered flush against a wall stops ~footprint short of
+	 *  its final waypoint no matter how small the authored acceptance is; that
+	 *  stop belongs to the failsafe (settle: as near as the body fits), never
+	 *  to the ladder (escaping it would oscillate forever). */
+	FFixedPoint StallBandSq = FFixedPoint::Zero;
 
 	/** BORROWED reference to the entity's PERSISTENT movement instance,
 	 *  acquired on first tick from USeinMovementSubsystem's registry (CP2.1,

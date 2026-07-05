@@ -176,6 +176,39 @@ struct SEINARTSNAVIGATION_API FSeinDirectionQuery
 	int64 GroupId = 0;
 };
 
+/** Escape-target query input — asks the nav "I am mechanically stuck HERE; where is nearby
+ *  open space I can physically walk to?" (see USeinNavigation::QueryEscapeTarget). Fired by
+ *  the move action's hold-escape ladder when a unit's applied step has been ~zero against a
+ *  blocked footprint for a sustained window. Lean by design — a rare per-escalation query,
+ *  not a per-tick poll. */
+USTRUCT(BlueprintType)
+struct SEINARTSNAVIGATION_API FSeinEscapeQuery
+{
+	GENERATED_BODY()
+
+	/** The stuck agent's current world position. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Navigation|Escape")
+	FFixedVector From;
+
+	/** The querying agent (self-exclusion for impls that consult dynamic state).
+	 *  Reserved — the shipped A* impl ignores it. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Navigation|Escape")
+	FSeinEntityHandle Requester;
+
+	/** Terrain classes this agent treats as impassable — same semantics as
+	 *  FSeinPathRequest::BlockedTerrainTags. A returned target never sits on one. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Navigation|Escape")
+	FGameplayTagContainer BlockedTerrainTags;
+
+	/** Agent nav-layer mask (dynamic-blocker filtering for target validation). Default 0xFF. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Navigation|Escape")
+	uint8 AgentNavLayerMask = 0xFF;
+
+	/** Agent body radius (clearance), world units. Default 0. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Navigation|Escape")
+	FFixedPoint AgentFootprintRadius;
+};
+
 /** Kind of motion a path segment represents. `Straight` is the only kind the shipped
  *  nav / movement PRODUCE today; the rest are CONTRACT seams for non-polyline planners to
  *  emit. New kinds are added by whatever PRODUCES the path: the nav (`FindPath`) for
