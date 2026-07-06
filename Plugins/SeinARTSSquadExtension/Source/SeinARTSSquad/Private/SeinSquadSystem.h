@@ -299,6 +299,34 @@ public:
 					}
 				}
 
+				// SEED THE RE-SEEK HOME (member-aligned). The idle re-seek gate needs the broker to
+				// carry SettledSlotPositions matching its Members; those were previously written ONLY by
+				// an order's dispatch, so a NEVER-ORDERED squad had an empty layout and never re-formed
+				// when shoved. Capture the freshly-laid-out members' ACTUAL poses ONCE here (slot i is
+				// Members[i]'s home). Captured once, NOT re-stamped per tick: the centroid block below
+				// re-syncs Broker->Anchor to the LIVE centroid while the queue is empty, so a recomputed
+				// home would chase a shoved squad and never re-form — a fixed capture is the stable
+				// muster pose. A later full ground order overwrites it (dispatch recaptures at the new
+				// destination), so this only fills the pre-order gap.
+				if (Broker && Broker->SettledSlotPositions.Num() != Broker->Members.Num())
+				{
+					Broker->SettledSlotPositions.Reset();
+					Broker->SettledSlotFacings.Reset();
+					for (const FSeinEntityHandle& M : Broker->Members)
+					{
+						if (const FSeinEntity* ME = World.GetEntity(M))
+						{
+							Broker->SettledSlotPositions.Add(ME->Transform.GetLocation());
+							Broker->SettledSlotFacings.Add(ME->Transform.GetQuaternionRotation());
+						}
+					}
+					// Member-aligned only if every member resolved (counts match); otherwise leave the
+					// gate failing (safe: no re-seek until a real order recaptures) rather than seed a
+					// misaligned home.
+					Broker->bSettledSlotsMemberAligned =
+						(Broker->SettledSlotPositions.Num() == Broker->Members.Num());
+				}
+
 				UE_LOG(LogSeinSquadSystem, Verbose,
 					TEXT("[SquadInit] %s: complete. Spawned=%d, SkippedNullEntity=%d, SkippedRecursion=%d, SkippedSpawnFail=%d, Leader=%s, BrokerMembers=%d"),
 					*Handle.ToString(), SpawnedCount, SkippedNullEntity, SkippedRecursion, SkippedSpawnFail,

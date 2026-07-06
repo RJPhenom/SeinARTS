@@ -30,6 +30,7 @@
 #include "Components/SeinExtentsComponent.h"           // idle re-seek corridor radii
 #include "Components/SeinExtentsHelpers.h"             // GetColliderBoundingRadius
 #include "Components/SeinNavigationComponent.h"        // fallback footprint radius
+#include "Components/SeinContainmentMemberData.h"      // loose-home-return: skip contained units
 #include "Settings/PluginSettings.h"                   // bIdleReseek + threshold
 #include "Tags/SeinARTSGameplayTags.h"                 // ground-move context for internal re-form orders
 #include "Abilities/SeinAbility.h"
@@ -255,11 +256,52 @@ public:
 	virtual void Tick(FFixedPoint /*DeltaTime*/, USeinWorldSubsystem& World) override
 	{
 		TArray<FSeinEntityHandle> CullList;
+		TArray<FSeinEntityHandle> LooseReturnList;   // un-brokered units to self-return home (deferred past the pool walk)
+		const USeinARTSCoreSettings* BrokerSettings = GetDefault<USeinARTSCoreSettings>();
 
-		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, FSeinEntity& /*Entity*/)
+		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, FSeinEntity& Entity)
 		{
 			FSeinCommandBrokerData* Broker = World.GetComponent<FSeinCommandBrokerData>(Handle);
-			if (!Broker) return;
+			if (!Broker)
+			{
+				// LOOSE-HOME-RETURN (re-seek for the un-brokered). A unit that was never ordered has no
+				// broker and no SettledSlotPositions, so the broker re-seek below can't reach it. If it is
+				// idle, settled, un-contained, and shoved off its seeded HOME, queue a self-return home:
+				// acted on AFTER this pool walk (CreateBrokerForMembers spawns an entity — unsafe to do
+				// mid-iteration). The return mints the unit's persistent broker via the normal order path
+				// (dispatch captures HomePos as its settled slot), so every LATER shove is owned by the
+				// broker re-seek below. Same bIdleReseek master switch + displacement threshold as re-seek.
+				if (BrokerSettings && BrokerSettings->bIdleReseek)
+				{
+					const FSeinMovementComponent* Move = World.GetComponent<FSeinMovementComponent>(Handle);
+					if (Move && Move->bHomeSeeded && !Move->bHasTarget
+						&& Move->Velocity.SizeSquared() <= FFixedPoint::Epsilon)
+					{
+						// Member of a live broker already? Its broker's re-seek owns it — skip.
+						const FSeinBrokerMembershipData* Memb = World.GetComponent<FSeinBrokerMembershipData>(Handle);
+						const bool bBrokered = Memb && Memb->CurrentBrokerHandle.IsValid()
+							&& World.GetEntityPool().IsValid(Memb->CurrentBrokerHandle);
+						// Contained (garrison / transport / attachment)? Its container poses it — skip.
+						const FSeinContainmentMemberData* Cont = World.GetComponent<FSeinContainmentMemberData>(Handle);
+						const bool bContained = Cont && Cont->CurrentContainer.IsValid();
+						// Busy in an ability? Leave it be.
+						const FSeinAbilityComponent* AC = World.GetComponent<FSeinAbilityComponent>(Handle);
+						const USeinAbility* Active = AC ? AC->GetActiveAbility(World) : nullptr;
+						const bool bBusy = Active && Active->bIsActive;
+						if (!bBrokered && !bContained && !bBusy)
+						{
+							FFixedVector Delta = Entity.Transform.GetLocation() - Move->HomePos;
+							Delta.Z = FFixedPoint::Zero;
+							const FFixedPoint Thresh = BrokerSettings->ReseekDisplacementThreshold;
+							if (Delta.SizeSquared() > Thresh * Thresh)
+							{
+								LooseReturnList.Add(Handle);
+							}
+						}
+					}
+				}
+				return;
+			}
 
 			// 1. Strip dead members (belt-and-suspenders — ProcessDeferredDestroys
 			// already evicts on death, but members whose handle was released through
@@ -733,6 +775,33 @@ public:
 		for (const FSeinEntityHandle& H : CullList)
 		{
 			World.DestroyEntity(H);
+		}
+
+		// Self-issue the loose-home returns collected above (deferred — each mints a broker entity,
+		// unsafe during the pool walk). Each is a single-member ground move back to the unit's seeded
+		// home; CreateBrokerForMembers builds its persistent broker and the dispatch captures HomePos
+		// as the settled slot, so every subsequent shove routes through the broker re-seek. The list
+		// is in pool order and broker allocation is deterministic, so the whole pass is deterministic.
+		for (const FSeinEntityHandle& H : LooseReturnList)
+		{
+			const FSeinMovementComponent* Move = World.GetComponent<FSeinMovementComponent>(H);
+			if (!Move || !Move->bHomeSeeded) continue;
+			// Re-validate un-brokered (a broker could have been minted for it earlier in this loop).
+			const FSeinBrokerMembershipData* Memb = World.GetComponent<FSeinBrokerMembershipData>(H);
+			if (Memb && Memb->CurrentBrokerHandle.IsValid()
+				&& World.GetEntityPool().IsValid(Memb->CurrentBrokerHandle)) continue;
+
+			FSeinBrokerQueuedOrder Order;
+			Order.TargetMembers.Add(H);
+			Order.PreplacedMembers.Add(H);
+			Order.PreplacedPositions.Add(Move->HomePos);
+			Order.Context.AddTag(SeinARTSTags::Command_Context_RightClick);
+			Order.Context.AddTag(SeinARTSTags::Command_Context_Target_Ground);
+			Order.TargetLocation = Move->HomePos;
+
+			TArray<FSeinEntityHandle> Members;
+			Members.Add(H);
+			World.CreateBrokerForMembers(Members, World.GetEntityOwner(H), Order);
 		}
 	}
 

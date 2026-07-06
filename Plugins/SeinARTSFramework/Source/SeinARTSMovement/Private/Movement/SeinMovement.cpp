@@ -858,6 +858,16 @@ void USeinMovement::BP_TickIdle_Implementation(USeinMoverHandle* Mover)
 		if (!Nav || !Nav->HasRuntimeData()) return;
 		SnapToGroundImmediate(Entity, MovementData, Nav);
 		MovementData.bInitialGroundSnapDone = true;
+		// Seed the idle re-seek HOME (muster pose) from this settled spawn pose. An UN-BROKERED unit
+		// (never ordered → no broker → no SettledSlotPositions) returns HERE when shoved, via the
+		// broker system's loose-home-return. Seeded once; a later order gives the unit a broker whose
+		// SettledSlotPositions supersedes this per-unit home.
+		if (!MovementData.bHomeSeeded)
+		{
+			MovementData.HomePos    = Entity.Transform.GetLocation();
+			MovementData.HomeFacing = Entity.Transform.GetQuaternionRotation();
+			MovementData.bHomeSeeded = true;
+		}
 		return;
 	}
 

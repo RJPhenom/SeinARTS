@@ -30,6 +30,7 @@
 #include "StructUtils/InstancedStruct.h"
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
+#include "Types/Quat.h"
 #include "UObject/SoftObjectPath.h"
 #include "SeinMovementComponent.generated.h"
 
@@ -293,6 +294,24 @@ struct SEINARTSCOREENTITY_API FSeinMovementComponent : public FSeinComponent
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Movement")
 	bool bInitialGroundSnapDone = false;
 
+	/** Idle re-seek HOME (muster pose) for an UN-BROKERED unit: the pose it came to rest at under its
+	 *  own control, seeded ONCE at the first-contact ground-snap (see USeinMovement::TickIdle) and
+	 *  consumed by the broker system's loose-home-return when the unit is shoved off it. A shove does
+	 *  NOT update it — returning HERE is the whole point. Once the unit is ordered it gains a persistent
+	 *  broker whose SettledSlotPositions is the authoritative home, and this per-unit home is no longer
+	 *  consulted. Runtime sim state, hashed. */
+	UPROPERTY()
+	FFixedVector HomePos = FFixedVector::ZeroVector;
+
+	/** Facing captured alongside HomePos (the muster-pose orientation). Hashed. */
+	UPROPERTY()
+	FFixedQuaternion HomeFacing = FFixedQuaternion::Identity;
+
+	/** False until HomePos/HomeFacing are seeded (the first idle ground-snap tick after nav loads).
+	 *  Gates the loose-home-return: an un-seeded unit has no home to return to. Hashed. */
+	UPROPERTY()
+	bool bHomeSeeded = false;
+
 	/** Per-unit custom render/anim values a movement mode writes each tick for the render layer to read
 	 *  (e.g. a hover's bank angle in slot 0, a tank's tread-speed delta in slot 1). Render-only: written
 	 *  via Set Render Value (Sein Mover Handle), read via Get Movement Render Value (Sein Movement
@@ -323,6 +342,9 @@ FORCEINLINE uint32 GetTypeHash(const FSeinMovementComponent& C)
 	Hash = HashCombine(Hash, GetTypeHash(C.AvoidanceOutput));
 	Hash = HashCombine(Hash, GetTypeHash(C.PrevTickLocation));
 	Hash = HashCombine(Hash, GetTypeHash(C.bInitialGroundSnapDone));
+	Hash = HashCombine(Hash, GetTypeHash(C.HomePos));
+	Hash = HashCombine(Hash, GetTypeHash(C.HomeFacing));
+	Hash = HashCombine(Hash, GetTypeHash(C.bHomeSeeded));
 	// MovementClassData is hashed by the framework attribute resolver's
 	// reflection walk; skipped here (FInstancedStruct doesn't expose a
 	// stable GetTypeHash for arbitrary inner structs).
