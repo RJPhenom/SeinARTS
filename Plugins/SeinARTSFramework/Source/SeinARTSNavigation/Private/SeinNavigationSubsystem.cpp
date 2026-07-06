@@ -331,10 +331,14 @@ ESeinPathResult USeinNavigationSubsystem::RequestPath(const FSeinPathRequest& Re
 	}
 	// ── Async pathfinding (opt-in) ────────────────────────────────────────────
 	// When Sein.Sim.AsyncPathfinding is on, requests don't run inline — they queue
-	// and run as a deterministic PARALLEL BATCH one tick later (header + SeinParallel.h).
-	// Needs a valid Requester to key results; one-shot queries (BPFL, reachability)
-	// call Navigation->FindPath directly and never reach this branch.
-	if (SeinSimAsyncPathfindingEnabled() && SeinSimParallelEnabled() && Request.Requester.IsValid())
+	// and run as a deterministic BATCH one tick later (header + SeinParallel.h). Deliberately NOT
+	// gated on Sein.Sim.Parallel: the determinism is the fixed 1-tick defer + in-tick join, not the
+	// threading. RunPathBatch runs the batch parallel when Parallel is on and byte-identically serial
+	// when off, so the deferred (sim-affecting, fingerprinted) timing is identical on every peer no
+	// matter the per-machine Parallel toggle; gating on it would let a Parallel-off peer run paths
+	// inline same-tick and desync. Needs a valid Requester to key results; one-shot queries (BPFL,
+	// reachability) call Navigation->FindPath directly and never reach this branch.
+	if (SeinSimAsyncPathfindingEnabled() && Request.Requester.IsValid())
 	{
 		// Drain LAST tick's queue ONCE per tick, at the first async request of the
 		// tick (deterministic: latent actions tick in a fixed order across clients).
@@ -344,14 +348,23 @@ ESeinPathResult USeinNavigationSubsystem::RequestPath(const FSeinPathRequest& Re
 			LastDrainTick = CurrentSimTick;
 		}
 
-		// Result ready (from this or a prior drain)? deliver + consume.
-		if (FSeinPath* Ready = AsyncResults.Find(Request.Requester))
+		// Result ready (from this or a prior drain)? Deliver + consume — but ONLY if it was computed
+		// for THIS request. The maps key on Requester alone, so a unit re-ordered to a new destination
+		// since it queued could otherwise be handed its PRIOR order's path (wrong goal), or a stale
+		// NotFound could fail a valid new order. The identity check (End + agent params, NOT Start)
+		// rejects a mismatched cached result and falls through to (re)queue the live request.
+		if (FSeinAsyncPathResult* Ready = AsyncResults.Find(Request.Requester))
 		{
-			const bool bValid = Ready->bIsValid;
-			OutPath = MoveTemp(*Ready);
+			if (PathRequestIdentityMatches(Ready->Request, Request))
+			{
+				const bool bValid = Ready->Path.bIsValid;
+				OutPath = MoveTemp(Ready->Path);
+				AsyncResults.Remove(Request.Requester);
+				if (!bValid) { OutPath.Clear(); return ESeinPathResult::NotFound; }
+				return ESeinPathResult::Found;
+			}
+			// Stale (requester re-ordered since queueing): drop it, fall through to queue the live request.
 			AsyncResults.Remove(Request.Requester);
-			if (!bValid) { OutPath.Clear(); return ESeinPathResult::NotFound; }
-			return ESeinPathResult::Found;
 		}
 
 		// Not ready → queue (dedup by Requester) and wait. The move action treats
@@ -418,6 +431,21 @@ ESeinPathResult USeinNavigationSubsystem::RequestPath(const FSeinPathRequest& Re
 	return ESeinPathResult::NotFound;
 }
 
+bool USeinNavigationSubsystem::PathRequestIdentityMatches(const FSeinPathRequest& A, const FSeinPathRequest& B)
+{
+	// Deliberately EXCLUDES Start (re-sampled to the unit's live position every repath tick, so a
+	// Start-inclusive check would never match a moving unit's cached result) and Requester (the map
+	// key, always equal here). Everything else that changes the computed route is compared.
+	return A.End.X == B.End.X && A.End.Y == B.End.Y && A.End.Z == B.End.Z
+		&& A.AgentNavLayerMask         == B.AgentNavLayerMask
+		&& A.AgentFootprintRadius      == B.AgentFootprintRadius
+		&& A.AgentWallPaddingCells     == B.AgentWallPaddingCells
+		&& A.AgentMaxSearchNodes       == B.AgentMaxSearchNodes
+		&& A.bAuthoritativeDestination == B.bAuthoritativeDestination
+		&& A.GroupId                   == B.GroupId
+		&& A.BlockedTerrainTags        == B.BlockedTerrainTags;
+}
+
 void USeinNavigationSubsystem::DrainAsyncPathQueue(int32 CurrentTick)
 {
 	// Drop any un-consumed results from the previous drain: each is normally consumed
@@ -461,7 +489,12 @@ void USeinNavigationSubsystem::DrainAsyncPathQueue(int32 CurrentTick)
 
 	for (int32 i = 0; i < Count && i < Results.Num(); ++i)
 	{
-		AsyncResults.Add(Keys[i], MoveTemp(Results[i]));
+		// Pair the result with the request that produced it (Batch[i], Keys[i], Results[i] share
+		// index i) so delivery can reject it if the requester was re-ordered to a new destination.
+		FSeinAsyncPathResult Entry;
+		Entry.Request = Batch[i];
+		Entry.Path    = MoveTemp(Results[i]);
+		AsyncResults.Add(Keys[i], MoveTemp(Entry));
 	}
 
 	// Clear the whole queue: served units consume their result (and stop requesting);

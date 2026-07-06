@@ -3,8 +3,8 @@
  * @file    SeinMovementDeterminismValidator.h
  * @brief   Determinism validator for movement-mode Blueprints (USeinMovement subclasses). Thin scope +
  *          messaging over the shared USeinBlueprintDeterminismValidator, which owns the graph walk
- *          (direct + macro recursion), the deterministic-call whitelist, and the RNG denylist. Opts into
- *          blocking errors via Project Settings → SeinARTS → Movement (bMovementDeterminismIsError).
+ *          (direct + macro recursion), the deterministic-call whitelist, and the RNG denylist. ALWAYS
+ *          escalates findings to blocking errors: a non-deterministic mover breaks lockstep.
  */
 
 #pragma once

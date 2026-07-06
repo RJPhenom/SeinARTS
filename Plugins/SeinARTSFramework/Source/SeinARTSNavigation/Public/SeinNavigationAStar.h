@@ -99,6 +99,19 @@ private:
 		 *  wrote nothing, no clear needed. */
 		FIntRect LastOverlayDirtyRect = FIntRect(INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN);
 
+		/** Overlay-REUSE signature (perf; bit-identical). BuildDynamicBlockedOverlay is SKIPPED when the
+		 *  current request would rebuild the SAME overlay this scratch already holds: same agent mask,
+		 *  same blocker set (LastBlockerHash), and the held overlay carried no relevant self-exclusion
+		 *  (bOverlayReuseValid). This lets a fresh per-worker scratch build the overlay ONCE per async
+		 *  batch and reuse it for the rest of that batch's same-mask, non-self-blocker requests, instead
+		 *  of re-stamping every blocker per request (the cover-wall batch cost). The reused overlay
+		 *  equals the per-request one (exclusion only removes the requester's OWN cells, which a
+		 *  non-blocker requester has none of). Only the overlay BYTES are reused; the MaxR-capped
+		 *  dynamic-WD cache is still re-derived per request (it is not overlay-pure). */
+		bool   bOverlayReuseValid      = false;
+		uint8  OverlayReuseMask        = 0;
+		uint32 OverlayReuseBlockerHash = 0;
+
 		/** Per-request dynamic-WD lazy cache (Chebyshev distance from each visited
 		 *  cell to its nearest dyn-blocked cell, capped at the per-request
 		 *  RequiredClearance), gen-tagged just like the A* search state. Bumped at

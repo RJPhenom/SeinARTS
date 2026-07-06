@@ -5,7 +5,6 @@
 
 #include "Validators/SeinMovementDeterminismValidator.h"
 #include "Util/SeinMovementTuningExport.h"  // IsMovementModeBlueprint
-#include "Settings/PluginSettings.h"        // USeinARTSCoreSettings
 
 #define LOCTEXT_NAMESPACE "SeinMovementDeterminismValidator"
 
@@ -26,9 +25,9 @@ FText USeinMovementDeterminismValidator::GetToolkitHintText() const
 
 bool USeinMovementDeterminismValidator::ShouldEscalateToError() const
 {
-	// Opt-in (Project Settings -> SeinARTS -> Movement): report findings as blocking errors instead of
-	// warnings, so a team can enforce lockstep-safety once its movement-mode graphs are clean.
-	return GetDefault<USeinARTSCoreSettings>()->bMovementDeterminismIsError;
+	// Movement-mode non-determinism is ALWAYS a blocking error, never a warning: a non-deterministic
+	// mover breaks lockstep, so it must block Data Validation and cook rather than be dismissible.
+	return true;
 }
 
 #undef LOCTEXT_NAMESPACE

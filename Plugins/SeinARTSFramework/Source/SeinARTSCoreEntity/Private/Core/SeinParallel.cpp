@@ -30,17 +30,18 @@ namespace
 		TEXT("(thread-dispatch overhead exceeds the win below a few dozen entities). Default 64."),
 		ECVF_Default);
 
-	int32 GSeinSimAsyncPathfinding = 0;
+	int32 GSeinSimAsyncPathfinding = 1;
 	FAutoConsoleVariableRef CVarSeinSimAsyncPathfinding(
 		TEXT("Sein.Sim.AsyncPathfinding"),
 		GSeinSimAsyncPathfinding,
-		TEXT("Run path requests as a deterministic PARALLEL BATCH one tick after they're made,\n")
-		TEXT("instead of inline-synchronous. Requires Sein.Sim.Parallel=1. DEFAULT 0 (OFF) — the async\n")
-		TEXT("batch currently keys cached paths by entity handle with no start/dest match and no clear on\n")
-		TEXT("order re-issue, so a re-ordered unit can follow a stale prior-order path and a group can split.\n")
-		TEXT("Inline same-tick paths are correct; re-enable only after the async keying/clear rework.\n")
-		TEXT("SIM-AFFECTING: changes WHEN a unit gets its path, so it must match across all clients (the\n")
-		TEXT("SeinARTS project setting drives this as a build default)."),
+		TEXT("Run path requests as a deterministic BATCH one tick after they're made, instead of\n")
+		TEXT("inline-synchronous. NOT gated on Sein.Sim.Parallel: the batch runs parallel when Parallel\n")
+		TEXT("is on and byte-identically serial when off, so the deferred timing is the same on every\n")
+		TEXT("peer regardless of that per-machine toggle. Cached results are keyed by request CONTENT\n")
+		TEXT("(destination + agent params, excluding the per-tick-resampled Start), so a re-ordered unit\n")
+		TEXT("never follows a stale path. DEFAULT ON. SIM-AFFECTING: changes WHICH tick a unit gets its\n")
+		TEXT("path, so it must match across all clients (the SeinARTS project setting drives it as a\n")
+		TEXT("fingerprinted build default)."),
 		ECVF_Default);
 }
 

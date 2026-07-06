@@ -303,11 +303,7 @@ struct SEINARTSCOREENTITY_API FSeinMovementComponent : public FSeinComponent
 	UPROPERTY()
 	FFixedVector HomePos = FFixedVector::ZeroVector;
 
-	/** Facing captured alongside HomePos (the muster-pose orientation). Hashed. */
-	UPROPERTY()
-	FFixedQuaternion HomeFacing = FFixedQuaternion::Identity;
-
-	/** False until HomePos/HomeFacing are seeded (the first idle ground-snap tick after nav loads).
+	/** False until HomePos is seeded (the first idle ground-snap tick after nav loads).
 	 *  Gates the loose-home-return: an un-seeded unit has no home to return to. Hashed. */
 	UPROPERTY()
 	bool bHomeSeeded = false;
@@ -343,7 +339,6 @@ FORCEINLINE uint32 GetTypeHash(const FSeinMovementComponent& C)
 	Hash = HashCombine(Hash, GetTypeHash(C.PrevTickLocation));
 	Hash = HashCombine(Hash, GetTypeHash(C.bInitialGroundSnapDone));
 	Hash = HashCombine(Hash, GetTypeHash(C.HomePos));
-	Hash = HashCombine(Hash, GetTypeHash(C.HomeFacing));
 	Hash = HashCombine(Hash, GetTypeHash(C.bHomeSeeded));
 	// MovementClassData is hashed by the framework attribute resolver's
 	// reflection walk; skipped here (FInstancedStruct doesn't expose a

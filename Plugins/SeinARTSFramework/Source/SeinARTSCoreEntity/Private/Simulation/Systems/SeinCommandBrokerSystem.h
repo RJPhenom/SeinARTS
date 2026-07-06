@@ -599,6 +599,8 @@ public:
 								if (Broker->Members.Contains(N)) continue;
 								const FSeinMovementComponent* NMove = World.GetComponent<FSeinMovementComponent>(N);
 								if (!NMove) continue; // static geometry — not traffic
+								// Skip PARKED foreigners (no order + at rest). A dodging idler carries honest
+								// non-zero velocity (the idle-dodge decouple), so it correctly reads as traffic here.
 								if (!NMove->bHasTarget && NMove->Velocity.SizeSquared() <= FFixedPoint::Epsilon) continue;
 								const FSeinEntity* NE = World.GetEntity(N);
 								if (!NE) continue;

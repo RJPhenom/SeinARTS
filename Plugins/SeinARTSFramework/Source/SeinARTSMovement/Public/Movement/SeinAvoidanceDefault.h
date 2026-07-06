@@ -8,8 +8,10 @@
  *          (SpeedScale < 1, yield-by-braking) — both written to the unit's own AvoidanceOutput and
  *          consumed by the movement harness/policies. The gate chain that decides "qualifying":
  *          units only (never walls — nav owns statics), never formation-mates (two-layer group skip:
- *          same broker OR same per-order cohesion group), never stationary neighbours (the anti-
- *          orbit bulldoze rule — idlers are the collision floor's job), weight-priority (lighter
+ *          same broker OR same per-order cohesion group); IDLE neighbours (defined as carrying no
+ *          move order) fall to the collision floor by default, or when Idle Resolve is on the mover
+ *          THREADS around them toward a goal-aligned gap (and an idle unit may itself step aside,
+ *          writing an honest velocity so the anim layer and re-seek react); weight-priority (lighter
  *          yields to heavier), ahead-of-heading + genuinely-closing courses only, and nothing past
  *          the unit's own goal. Inside a few footprints of the goal the output releases outright
  *          (binary arrival release, not a fade) so path attraction and the collision floor own the
@@ -39,8 +41,9 @@ class USeinWorldSubsystem;
 /**
  * The out-of-the-box local-avoidance model: moving units bend around crossing/oncoming traffic
  * (lateral steer), brake as the weave gets dense (speed yield), pack with their own formation
- * group instead of dodging it, bulldoze straight through idle stragglers (the collision floor
- * shoves those aside), and release entirely on final approach so arrivals settle instead of
+ * group instead of dodging it, thread around idle stragglers via a goal-aligned gap-seek when Idle
+ * Resolve is on (else the collision floor shoves them aside), and release entirely on final approach
+ * so arrivals settle instead of
  * orbiting. Ship different behavior by subclassing Sein Avoidance and selecting it in settings.
  */
 UCLASS(meta = (DisplayName = "Sein Avoidance Default"))

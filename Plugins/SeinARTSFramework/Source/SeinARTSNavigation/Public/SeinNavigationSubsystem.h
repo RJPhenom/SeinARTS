@@ -125,8 +125,17 @@ private:
 	/** Pending requests, keyed by Requester (latest request per unit wins). */
 	TMap<FSeinEntityHandle, FSeinPathRequest> AsyncQueue;
 
+	/** A drained result paired with the request that produced it. The request identity is
+	 *  re-checked on delivery so a unit re-ordered to a NEW destination since it queued never
+	 *  consumes the stale path — handle-only keying would otherwise hand back the OLD goal. */
+	struct FSeinAsyncPathResult
+	{
+		FSeinPathRequest Request;
+		FSeinPath Path;
+	};
+
 	/** Ready results from the last drain, consumed on the requester's next RequestPath. */
-	TMap<FSeinEntityHandle, FSeinPath> AsyncResults;
+	TMap<FSeinEntityHandle, FSeinAsyncPathResult> AsyncResults;
 
 	/** Sim tick the async queue was last drained (drain runs once per tick). */
 	int32 LastDrainTick = -1;
@@ -135,4 +144,10 @@ private:
 	 *  canonical handle order via Navigation->RunPathBatch, caching the results.
 	 *  Runs once per tick at the first async RequestPath of that tick. */
 	void DrainAsyncPathQueue(int32 CurrentTick);
+
+	/** True if two path requests would resolve to the SAME route: every path-affecting field
+	 *  matches EXCEPT Start (re-sampled to the unit's live position on every repath, so a
+	 *  Start-inclusive check would never match a moving unit) and Requester (the map key). Rejects
+	 *  a cached async result whose destination/params no longer match the live request. */
+	static bool PathRequestIdentityMatches(const FSeinPathRequest& A, const FSeinPathRequest& B);
 };

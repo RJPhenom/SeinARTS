@@ -15,7 +15,7 @@
 #include "SeinARTSNavigationModule.h"
 #include "SeinLevelData.h"
 #include "Volumes/SeinLevelVolume.h"
-#include "Math/MathLib.h"  // SeinMath::Atan2/Cos/Sin for AugmentInitialHeading
+#include "Math/MathLib.h"  // SeinMath fixed-point sqrt / trig used by the search + clearance math
 
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -778,6 +778,14 @@ void USeinNavigationAStar::SetDynamicBlockers(const TArray<FSeinDynamicBlocker>&
 		NewHash ^= GetTypeHash(B.EntityCenter.X.Value);
 		NewHash ^= GetTypeHash(B.EntityCenter.Y.Value);
 		NewHash ^= GetTypeHash(B.EntityCenter.Z.Value);
+		// Rotation drives WHICH cells a Rect / Cone (or offset-Radial) blocker stamps, so a
+		// rotation-only change (a vehicle turning in place, a rotating wall) IS an overlay change.
+		// This hash is the overlay-reuse invalidation key, so omitting rotation would reuse a stale
+		// overlay when a blocker rotates. Fold all four quaternion components.
+		NewHash ^= GetTypeHash(B.EntityRotation.X.Value);
+		NewHash ^= GetTypeHash(B.EntityRotation.Y.Value);
+		NewHash ^= GetTypeHash(B.EntityRotation.Z.Value);
+		NewHash ^= GetTypeHash(B.EntityRotation.W.Value);
 		NewHash ^= GetTypeHash(B.Shape);
 		NewHash ^= static_cast<uint32>(B.BlockedNavLayerMask);
 	}
@@ -2071,13 +2079,39 @@ bool USeinNavigationAStar::FindCellPathInternal(const FSeinPathRequest& Request,
 		Request.Start.X.ToFloat(), Request.Start.Y.ToFloat(),
 		Request.End.X.ToFloat(),   Request.End.Y.ToFloat());
 
-	// Rebuild the dynamic-blocker overlay for this request. Excludes the
-	// requesting entity's own blocker so a unit can path out of its own
-	// footprint, AND filters by agent layer mask so terrain-class blockers
-	// (water blocks Default, ignore amphibious) don't apply universally.
-	// Done first so every passability check below — source projection, A*,
-	// smoothing — sees the same overlay.
-	BuildDynamicBlockedOverlay(Request.Requester, Request.AgentNavLayerMask, Scratch);
+	// OVERLAY REUSE (perf; bit-identical). A fresh per-worker scratch rebuilds the dynamic-blocker
+	// overlay for its first request each async batch, then RE-STAMPS every blocker per subsequent
+	// request even though the overlay is identical — the cover-wall batch cost. Skip the rebuild when
+	// this scratch already holds the SAME overlay: same agent mask, same blocker set (LastBlockerHash),
+	// and the held overlay carried no relevant self-exclusion. A path requester that OWNS a blocker
+	// (rare — units don't block nav) can't share the no-exclusion overlay and forces a rebuild.
+	// Bit-identical because exclusion only removes the requester's own cells, which a non-blocker
+	// requester has none of, so the shared overlay equals the per-request overlay.
+	bool bRequesterOwnsBlocker = false;
+	for (const FSeinDynamicBlocker& B : DynamicBlockers)
+	{
+		if (B.Owner == Request.Requester) { bRequesterOwnsBlocker = true; break; }
+	}
+	const bool bReuseOverlay = !bRequesterOwnsBlocker
+		&& Scratch.bOverlayReuseValid
+		&& Scratch.OverlayReuseMask        == Request.AgentNavLayerMask
+		&& Scratch.OverlayReuseBlockerHash == LastBlockerHash
+		&& Scratch.DynamicBlocked.Num()    == Width * Height;
+
+	if (!bReuseOverlay)
+	{
+		// Rebuild the dynamic-blocker overlay for this request. Excludes the requesting entity's own
+		// blocker so a unit can path out of its own footprint, AND filters by agent layer mask so
+		// terrain-class blockers (water blocks Default, ignore amphibious) don't apply universally.
+		// Done first so every passability check below (source projection, A*, smoothing) sees the same
+		// overlay.
+		BuildDynamicBlockedOverlay(Request.Requester, Request.AgentNavLayerMask, Scratch);
+		// Reusable ONLY when this build carried no relevant exclusion (requester owns no blocker); a
+		// self-blocker build is request-specific and forces the next request to rebuild.
+		Scratch.bOverlayReuseValid      = !bRequesterOwnsBlocker;
+		Scratch.OverlayReuseMask        = Request.AgentNavLayerMask;
+		Scratch.OverlayReuseBlockerHash = LastBlockerHash;
+	}
 
 	// Per-agent terrain filter: bar cells whose terrain type's tag is listed in
 	// Request.BlockedTerrainTags (e.g. an amphibious-only unit that blocks "Water").
@@ -2103,10 +2137,13 @@ bool USeinNavigationAStar::FindCellPathInternal(const FSeinPathRequest& Request,
 		}
 	}
 
-	// Invalidate the per-request dynamic-WD cache (same gen-tag pattern as
-	// the A* search state). Bump gen; on wraparound through 0, do one full
-	// reset of the gen array. Allocate / resize the cache buffers if the
-	// grid dimensions changed since the last call.
+	// Invalidate the per-request dynamic-WD cache by bumping the gen — ALWAYS, even when the overlay
+	// BYTES were reused above. The cache is NOT overlay-pure: GetEffectiveWD caps its ring scan at the
+	// per-request footprint clearance (RequiredClearance / MaxR), so a small-footprint request's cached
+	// "nothing within MaxR" is WRONG for a larger-footprint request sharing the same overlay. Only the
+	// overlay stamp is reusable; these MaxR-capped distances must be re-derived per request. On
+	// wraparound through 0, do one full reset. Allocate / resize the cache buffers if the grid dims
+	// changed since the last call.
 	{
 		const int32 NCells = Width * Height;
 		if (Scratch.DynamicWDCache.Num()    != NCells) Scratch.DynamicWDCache.SetNumUninitialized(NCells);

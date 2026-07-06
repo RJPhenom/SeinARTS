@@ -864,8 +864,7 @@ void USeinMovement::BP_TickIdle_Implementation(USeinMoverHandle* Mover)
 		// SettledSlotPositions supersedes this per-unit home.
 		if (!MovementData.bHomeSeeded)
 		{
-			MovementData.HomePos    = Entity.Transform.GetLocation();
-			MovementData.HomeFacing = Entity.Transform.GetQuaternionRotation();
+			MovementData.HomePos     = Entity.Transform.GetLocation();
 			MovementData.bHomeSeeded = true;
 		}
 		return;

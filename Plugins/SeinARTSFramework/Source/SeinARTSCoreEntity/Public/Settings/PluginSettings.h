@@ -167,25 +167,27 @@ public:
 	 * are made, instead of solving each inline the moment it is asked for. This is how large-scale
 	 * RTS engines pathfind at scale — it lifts the single most expensive sim system off the critical
 	 * tick. The path a unit gets is unchanged; the only cost is about one tick (~33 ms at 30 Hz) of
-	 * delay before a move order produces its path, which is imperceptible in play. Requires Parallel
-	 * Simulation on.
+	 * delay before a move order produces its path, which is imperceptible in play. The batch runs in
+	 * parallel when Parallel Simulation is on and byte-identically serial when off, so the deferred
+	 * timing is the same regardless of that per-machine toggle.
 	 *
 	 * Sim-affecting and lockstep-critical: because it shifts WHICH tick a unit receives its path on,
 	 * every client in a multiplayer match must use the same value — treat it as a build-wide default
 	 * like the tick rate, never a per-machine knob. Drives the Sein.Sim.AsyncPathfinding console
 	 * variable.
 	 *
-	 * DEFAULT OFF (2026-07-02): the async batch subsystem has correctness bugs — it keys cached paths
-	 * by entity handle only (no start/destination match) and never clears a unit's pending request /
-	 * cached result on order re-issue, so a re-ordered unit can consume a PRIOR order's path (stale
-	 * destination) and a group given ONE order can SPLIT (some units on the new dest, some on the old)
-	 * or silently not respond (a stale NotFound fails the move). Inline same-tick pathing is correct
-	 * and is the reset default until the async path is reworked (request-content keying +
-	 * clear-on-cancel/re-issue/death). Re-enable only after that fix.
+	 * ON by default (2026-07-06): the async batch now keys each cached result by its request IDENTITY
+	 * (destination + agent params, deliberately NOT the per-tick-resampled Start) and rejects any
+	 * cached path whose destination no longer matches the live request. So a re-ordered unit never
+	 * consumes a prior order's path, a group given one order can't split, and a stale NotFound can't
+	 * fail a valid move; a stale pending request self-clears via key-overwrite, and dead/consumed
+	 * results via the per-drain reset. The timing is fixed-1-tick-deferred, drained and consumed
+	 * within one tick before the StateHash, so it is bit-deterministic across peers: validate via the
+	 * Sein.Sim.Parallel 0-vs-1 state-hash gate with async on, then peer/replay agreement.
 	 */
-	UPROPERTY(Config, EditAnywhere, Category = "Simulation|Performance",
-		meta = (DisplayName = "Async Pathfinding", EditCondition = "bParallelSimulation"))
-	bool bAsyncPathfinding = false;
+	UPROPERTY(Config, EditAnywhere, Category = "Navigation",
+		meta = (DisplayName = "Async Pathfinding"))
+	bool bAsyncPathfinding = true;
 
 	// Level Data
 	// ====================================================================================================
@@ -582,16 +584,6 @@ public:
 				EditCondition = "IsUsingShippedAStar",
 				EditConditionHides))
 	int32 NavMinWalkableIslandCells;
-
-	/**
-	 * Whether the movement-mode determinism validator treats a non-deterministic Blueprint call as an
-	 * error instead of a warning. On, it blocks Data Validation and cook; off (the default), it only
-	 * warns. Turn it on to enforce lockstep-safety across a team once your movement-mode graphs are
-	 * clean. Affects movement-mode Blueprint validation only.
-	 */
-	UPROPERTY(Config, EditAnywhere, Category = "Navigation",
-		meta = (DisplayName = "Treat Movement Non-Determinism As Error"))
-	bool bMovementDeterminismIsError = false;
 
 	/**
 	 * Which resolver every spawned command broker uses to decide how a group order fans out to its
