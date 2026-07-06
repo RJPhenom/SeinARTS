@@ -145,7 +145,17 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 	// Broker-scoped = the INNER formation layer (a squad, or a loose-order group).
 	// Cross-broker cohesion for a multi-squad order (the outer CohesionGroupId layer —
 	// squads keeping pace with squads) is a deliberate follow-up, not implemented here.
-	struct FCohesionAggregate { int32 Count = 0; FFixedPoint SumDist; };
+	// Per-broker (INNER) aggregate. Also carries the broker's CohesionGroupId + the outer-pacing
+	// flag, captured once from the first admitted member (all members of one broker share both), so
+	// the OUTER aggregate-of-aggregates below can be built without a broker→members reverse walk.
+	struct FCohesionAggregate
+	{
+		int32 Count = 0;
+		FFixedPoint SumDist;
+		int64 CohesionGroupId = 0;
+		bool bPaceSquads = false;
+		bool bStamped = false;
+	};
 	TMap<FSeinEntityHandle, FCohesionAggregate> GroupAggregates;
 	TArray<FSeinEntityHandle> LiveHandles;
 	LiveHandles.Reserve(World.GetEntityPool().GetActiveCount());
@@ -220,9 +230,40 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 		FFixedVector ToGoal = Move->TargetLocation - Entity.Transform.GetLocation();
 		ToGoal.Z = FFixedPoint::Zero;
 		FCohesionAggregate& Agg = GroupAggregates.FindOrAdd(Broker->CurrentBrokerHandle);
+		if (!Agg.bStamped)
+		{
+			// Capture the broker's order id + outer-pacing flag once (deterministic — every admitted
+			// member of this broker shares both; the flag is a per-broker property).
+			Agg.CohesionGroupId = Broker->CohesionGroupId;
+			const FSeinCommandBrokerData* BD = BrokerDataStorage
+				? static_cast<const FSeinCommandBrokerData*>(BrokerDataStorage->GetComponentRaw(Broker->CurrentBrokerHandle)) : nullptr;
+			Agg.bPaceSquads = BD && BD->bPaceSquadsTogether;
+			Agg.bStamped = true;
+		}
 		Agg.Count += 1;
 		Agg.SumDist = Agg.SumDist + ToGoal.Size();
 	});
+
+	// OUTER cohesion aggregate-of-aggregates (squads pacing squads). Serial, after the per-broker
+	// sums finalize and before the parallel pass. For each DISTINCT flagged broker in a multi-squad
+	// order (keyed on the shared CohesionGroupId), accumulate its mean remaining distance with EQUAL
+	// SQUAD WEIGHT (mean-of-broker-means, not member-weighted). Only flagged brokers enter, so the
+	// setting OFF → empty map → OuterTerm==One everywhere → bit-exact inner-only. Commutative sums →
+	// order-independent → deterministic despite TMap iteration order.
+	struct FOuterCohesionAggregate { int32 DistinctBrokerCount = 0; FFixedPoint SumOfBrokerMeans; };
+	TMap<int64, FOuterCohesionAggregate> OuterAggregates;
+	if (bCohesionEnabled)
+	{
+		for (const TPair<FSeinEntityHandle, FCohesionAggregate>& Pair : GroupAggregates)
+		{
+			const FCohesionAggregate& A = Pair.Value;
+			if (A.Count <= 0 || !A.bPaceSquads || A.CohesionGroupId == 0) continue;
+			const FFixedPoint BrokerMean = A.SumDist / FFixedPoint::FromInt(A.Count);
+			FOuterCohesionAggregate& O = OuterAggregates.FindOrAdd(A.CohesionGroupId);
+			O.DistinctBrokerCount += 1;
+			O.SumOfBrokerMeans = O.SumOfBrokerMeans + BrokerMean;
+		}
+	}
 
 	SeinParallelFor(LiveHandles.Num(), [&](int32 Index)
 	{
@@ -716,7 +757,7 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 		//    so an arriving group doesn't blow the ratio up) with a deadband so a
 		//    steady formation doesn't oscillate around its own average. Solo units,
 		//    single-member groups, and disabled dials all leave the term at exactly One.
-		FFixedPoint CohesionTerm = FFixedPoint::One;
+		FFixedPoint InnerTerm = FFixedPoint::One;
 		if (bCohesionEnabled && SelfBrokerHandle.IsValid())
 		{
 			if (const FCohesionAggregate* Agg = GroupAggregates.Find(SelfBrokerHandle))
@@ -752,16 +793,80 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 						if (bMakingHeadway)
 						{
 							const FFixedPoint T = (DevT - Deadband) / Span;      // (0,1]
-							CohesionTerm = FFixedPoint::One + (CohesionBoost - FFixedPoint::One) * T;
+							InnerTerm = FFixedPoint::One + (CohesionBoost - FFixedPoint::One) * T;
 						}
 					}
 					else if (DevT < -Deadband)
 					{
 						const FFixedPoint T = (-DevT - Deadband) / Span;         // (0,1]
-						CohesionTerm = FFixedPoint::One - CohesionHoldBack * T;
+						InnerTerm = FFixedPoint::One - CohesionHoldBack * T;
 					}
 				}
 			}
+		}
+
+		// 3. OUTER COHESION (squads pacing squads). A member's SQUAD position vs the group-of-squads'
+		//    mean progress (EQUAL squad weight = mean-of-broker-means), same ramp shape as inner.
+		//    Engages ONLY when this member's cohesion group spans >= 2 distinct FLAGGED brokers (a
+		//    multi-squad order); single-squad / loose / setting-off all leave OuterTerm == One (→
+		//    inner-only, bit-exact). Self-broker must itself be flagged (symmetric: an opted-out squad
+		//    is neither paced nor a pacer — inert under the global setting, correct if it ever goes
+		//    per-squad). Outer catch-up is NOT progress-gated: a whole squad lagging is a spacing fact.
+		FFixedPoint OuterTerm = FFixedPoint::One;
+		if (bCohesionEnabled && SelfCohesionId != 0
+			&& SelfBrokerData && SelfBrokerData->bPaceSquadsTogether)
+		{
+			if (const FOuterCohesionAggregate* OAgg = OuterAggregates.Find(SelfCohesionId))
+			{
+				if (OAgg->DistinctBrokerCount >= 2)
+				{
+					if (const FCohesionAggregate* SelfAgg = GroupAggregates.Find(SelfBrokerHandle))
+					{
+						if (SelfAgg->Count >= 1)
+						{
+							const FFixedPoint SelfBrokerMean = SelfAgg->SumDist / FFixedPoint::FromInt(SelfAgg->Count);
+							const FFixedPoint GroupMean = OAgg->SumOfBrokerMeans / FFixedPoint::FromInt(OAgg->DistinctBrokerCount);
+							const FFixedPoint Norm = SelfRadius * CohesionRangeRadii;
+							FFixedPoint DevO = (SelfBrokerMean - GroupMean) / Norm;   // + = my squad behind, − = ahead
+							if (DevO >  FFixedPoint::One) DevO =  FFixedPoint::One;
+							if (DevO < -FFixedPoint::One) DevO = -FFixedPoint::One;
+							const FFixedPoint Deadband = FFixedPoint::FromInt(3) / FFixedPoint::FromInt(20); // 0.15
+							const FFixedPoint Span = FFixedPoint::One - Deadband;
+							if (DevO > Deadband)
+							{
+								const FFixedPoint T = (DevO - Deadband) / Span;
+								OuterTerm = FFixedPoint::One + (CohesionBoost - FFixedPoint::One) * T;
+							}
+							else if (DevO < -Deadband)
+							{
+								const FFixedPoint T = (-DevO - Deadband) / Span;
+								OuterTerm = FFixedPoint::One - CohesionHoldBack * T;
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// QUADRANT COMPOSE (RJ's model), two exact invariants: an inner-LEADER (ahead of its own
+		// squad, InnerTerm < 1) NEVER speeds up (clamped ≤ 1); an inner-STRAGGLER (behind, InnerTerm
+		// > 1) ALWAYS keeps its full inner catch-up and outer can only ADD, never cancel it (≥
+		// InnerTerm — so case 3, squad-ahead, is ignored). NEUTRAL-inner takes the pure outer term.
+		// Together: a squad's leaders can never outrun its own stragglers to chase macro pacing.
+		FFixedPoint CohesionTerm;
+		if (InnerTerm > FFixedPoint::One)
+		{
+			const FFixedPoint OuterAdd = (OuterTerm > FFixedPoint::One) ? OuterTerm : FFixedPoint::One;
+			CohesionTerm = InnerTerm * OuterAdd;                                   // straggler: outer adds only
+		}
+		else if (InnerTerm < FFixedPoint::One)
+		{
+			const FFixedPoint Prod = InnerTerm * OuterTerm;
+			CohesionTerm = (Prod < FFixedPoint::One) ? Prod : FFixedPoint::One;    // leader: never > 1
+		}
+		else
+		{
+			CohesionTerm = OuterTerm;                                              // neutral: pure outer
 		}
 
 		// Compose multiplicatively, smooth like the steer (damps enter/leave snaps), snap

@@ -759,6 +759,7 @@ public:
 		meta = (DisplayName = "Cohesion Range (Footprints)", ClampMin = "1.0"))
 	FFixedPoint AvoidanceCohesionRangeRadii = FFixedPoint::FromInt(8);
 
+
 	/** How strongly two units on a genuine crossing course slide past each other.
 	 *
 	 *  When two movers are heading opposite ways and their goals are on opposite sides, they pick
@@ -1398,6 +1399,13 @@ public:
 	 * the net layer's opt-in config-parity check at join (see Check Settings Parity On Join). Value-based
 	 * and stable across machines/builds (reflection ExportText + FCrc), so two peers with identical
 	 * settings produce the same value.
+	 *
+	 * The value ALSO folds in any EXTENSION settings registered via FSeinConfigFingerprintRegistry
+	 * (e.g. the Squad extension's Pace Squads Together / dispatch-resolver class), sorted by stable id
+	 * so it stays load-order independent — this is how an extension's sim-affecting settings join the
+	 * parity check without the base depending on the extension. NOTE: the value is NOT wire-stable
+	 * across framework versions (the field set evolves); a lockstep session already requires matched
+	 * builds, so there is nothing to migrate.
 	 */
 	int32 ComputeConfigFingerprint() const;
 

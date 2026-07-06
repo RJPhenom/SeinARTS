@@ -192,6 +192,16 @@ struct SEINARTSCOREENTITY_API FSeinCommandBrokerData : public FSeinComponent
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker")
 	bool bAvoidAsCohesiveBody = false;
 
+	/** COHESION-SIDE opinion (mirrors bAvoidAsCohesiveBody's stamp pattern): whether this broker's
+	 *  squad participates in OUTER cohesion — pacing the OTHER squads of the same multi-squad order
+	 *  (keyed on CohesionGroupId) so the whole ordered body stays together in transit. Set each tick
+	 *  by the owning squad system from the project-wide USeinARTSSquadSettings::bPaceSquadsTogether;
+	 *  left false for loose / ephemeral brokers and when the setting is off (=> inner-only cohesion,
+	 *  bit-exact). Read by the avoidance kernel via the broker handle — the framework kernel never
+	 *  sees the squad extension. Default false. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker")
+	bool bPaceSquadsTogether = false;
+
 	/** The sim tick this formation's current re-seek episode began, or 0 when no episode
 	 *  is active.
 	 *
@@ -221,6 +231,7 @@ FORCEINLINE uint32 GetTypeHash(const FSeinCommandBrokerData& Data)
 	Hash = HashCombine(Hash, GetTypeHash(Data.ReseekEpisodeStartTick));
 	Hash = HashCombine(Hash, GetTypeHash(Data.bSettledSlotsMemberAligned));
 	Hash = HashCombine(Hash, GetTypeHash(Data.bAvoidAsCohesiveBody));
+	Hash = HashCombine(Hash, GetTypeHash(Data.bPaceSquadsTogether));
 	Hash = HashCombine(Hash, GetTypeHash(Data.SettledSlotPositions.Num()));
 	for (const FFixedVector& Slot : Data.SettledSlotPositions)
 	{

@@ -10,6 +10,7 @@
  */
 
 #include "Settings/PluginSettings.h"
+#include "Settings/SeinConfigFingerprintRegistry.h"
 #include "Formations/SeinBoxFormation.h"
 #include "HAL/IConsoleManager.h"
 #include "Engine/Engine.h"
@@ -354,6 +355,10 @@ int32 USeinARTSCoreSettings::ComputeConfigFingerprint() const
 		}
 		Fp += TEXT(";");
 	}
+	// Fold in extension-registered sim-affecting settings (squad, etc.) AFTER the core
+	// section. AppendContributors sorts by stable id internally, so the value is
+	// independent of module load / registration order (see the registry docstring).
+	FSeinConfigFingerprintRegistry::AppendContributors(Fp);
 	return static_cast<int32>(FCrc::StrCrc32(*Fp));
 }
 

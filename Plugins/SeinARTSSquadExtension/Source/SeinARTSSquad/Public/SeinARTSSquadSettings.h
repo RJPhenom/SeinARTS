@@ -51,6 +51,23 @@ public:
 		meta = (DisplayName = "Default Squad Dispatch Resolver Class"))
 	TSoftClassPtr<USeinCommandBrokerResolver> DefaultSquadDispatchResolverClass;
 
+	/** Whether the separate squads of ONE multi-squad order pace each other in transit.
+	 *
+	 *  Cohesion normally keeps a single squad's members together (a straggler's squadmates hold up
+	 *  for it). This extends that ONE level up: when on, the squads of a single multi-squad move also
+	 *  pace each other, so a fast squad eases off and the laggard squads catch up, keeping the whole
+	 *  ordered body together instead of the fast squad racing ahead and the formation stringing out.
+	 *  A squad never lets its own leaders outrun its own stragglers to do this. Off = each squad keeps
+	 *  its own pace and personality (they may separate in transit). Default on. Only affects orders
+	 *  that span more than one squad; loose units and lone squads are unaffected.
+	 *
+	 *  Consumed by the framework avoidance model (the squad system stamps it onto each squad's command
+	 *  broker; the base never reads this extension setting directly). Sim-affecting, so it is registered
+	 *  into the lockstep config-parity fingerprint via the squad module's fingerprint contributor. */
+	UPROPERTY(Config, EditAnywhere, Category = "Dispatch",
+		meta = (DisplayName = "Pace Squads Together"))
+	bool bPaceSquadsTogether = true;
+
 	// UDeveloperSettings Interface
 	virtual FName GetCategoryName() const override;
 
