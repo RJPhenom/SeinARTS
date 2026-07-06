@@ -332,6 +332,7 @@ int32 USeinARTSCoreSettings::ComputeConfigFingerprint() const
 		TEXT("AvoidanceCohesionHoldBack"), TEXT("AvoidanceCohesionCatchUpBoost"),
 		TEXT("AvoidanceCohesionRangeRadii"),
 		TEXT("AvoidanceDoSiDoStrength"), TEXT("AvoidanceCrossingGoalDivergence"),
+		TEXT("AvoidanceIdleResolveStrength"),
 		TEXT("bSettleToFormationFacing"),
 		TEXT("bIdleReseek"), TEXT("ReseekDisplacementThreshold"),
 		TEXT("ReseekWatchInterval"), TEXT("ReseekReleaseInterval"),

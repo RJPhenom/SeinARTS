@@ -110,6 +110,12 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 	const FFixedPoint DoSiDoCrossDiverge  = Settings->AvoidanceCrossingGoalDivergence;
 	const FFixedPoint KconvSq             = DoSiDoCrossDiverge * DoSiDoCrossDiverge;
 	const bool bDoSiDoEnabled             = DoSiDoStrength > FFixedPoint::Zero;
+	// RESOLVE-THROUGH (mover-resolves-around-idlers). Strength 0 = the bulldoze-idle rule stands
+	// bit-exact (a mover plows through parked units, collision shoves them). > 0 = a moving unit
+	// steers around an idle neighbour whose AvoidanceWeight qualifies (heavier-or-equal), scaled by
+	// this. Orbit-safe under the goal-relative bend cap (which guarantees forward progress).
+	const FFixedPoint IdleResolveStrength = Settings->AvoidanceIdleResolveStrength;
+	const bool bResolveThroughIdlers      = IdleResolveStrength > FFixedPoint::Zero;
 	// Cohesion off entirely when both sides are neutral — the aggregate pre-pass is skipped
 	// and every unit's CohesionScale is exactly One (bit-exact no-op).
 	const bool bCohesionEnabled = CohesionHoldBack > FFixedPoint::Zero || CohesionBoost > FFixedPoint::One;
@@ -598,13 +604,17 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 				continue; // neighbour handled at the blob level
 			}
 
-			// BULLDOZE IDLE NEIGHBOURS (the anti-orbit rule). A STATIONARY neighbour gets NO
-			// steering dodge — you can't orbit something that isn't moving, and steering
-			// around a static cluster is exactly what curves a transiting unit into the
-			// "black hole" orbit. Idle units are left to the collision floor (pushed aside),
-			// so the unit pushes straight through instead of circling. Only MOVING
-			// neighbours get a dodge. Squared compare avoids a per-neighbour sqrt.
-			if (OtherMove->Velocity.SizeSquared() <= MovingSpeedFloor * MovingSpeedFloor) continue;
+			// BULLDOZE IDLE NEIGHBOURS — WEIGHT-GATED by RESOLVE-THROUGH. Historically a mover got
+			// NO dodge around a STATIONARY neighbour: you can't orbit something that isn't moving,
+			// and steering around a static cluster curves a transiting unit into a "black hole"
+			// orbit — so idlers were left to the collision floor. That anti-orbit rationale is now
+			// covered more robustly by the goal-relative bend cap (provable forward progress), so
+			// when Idle Resolve is on a QUALIFYING idle neighbour falls through to the weight gate
+			// and the geometric side-pick — the mover weaves around it. At strength 0 the
+			// short-circuit is byte-identical to the old unconditional continue. Squared compare
+			// avoids a per-neighbour sqrt.
+			const bool bOtherIdle = OtherMove->Velocity.SizeSquared() <= MovingSpeedFloor * MovingSpeedFloor;
+			if (bOtherIdle && !bResolveThroughIdlers) continue;
 
 			// WEIGHT-PRIORITY GATE. This unit only yields to a neighbour whose
 			// AvoidanceWeight qualifies: equal-or-higher when bAvoidSameWeights, strictly
@@ -700,7 +710,11 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 					TurnSign = FFixedPoint::One;
 				}
 
-				const FFixedPoint W = HeadOn * Falloff * TurnSign;
+				// An IDLE neighbour only reaches here when Idle Resolve is on (else it was skipped
+				// above); scale its contribution by the resolve strength so mover-resolve firmness
+				// is dialable independently. A MOVING neighbour (bOtherIdle false) is unchanged.
+				FFixedPoint W = HeadOn * Falloff * TurnSign;
+				if (bOtherIdle) W = W * IdleResolveStrength;
 				Accum.X += Right.X * W;
 				Accum.Y += Right.Y * W;
 			}

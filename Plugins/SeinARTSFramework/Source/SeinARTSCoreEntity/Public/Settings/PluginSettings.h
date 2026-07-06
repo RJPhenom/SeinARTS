@@ -714,6 +714,17 @@ public:
 		meta = (DisplayName = "Bend Cap (Cos)", ClampMin = "-1.0", ClampMax = "1.0"))
 	FFixedPoint AvoidanceBendCapCos = FFixedPoint::FromInt(17) / FFixedPoint::FromInt(100);
 
+	/** How firmly a MOVING unit steers around a stationary unit that's in its way.
+	 *
+	 *  0 (default) = the mover plows straight through parked units and lets the collision layer shove
+	 *  them aside. Above 0, a mover instead weaves around an idle unit whose Avoidance Weight qualifies
+	 *  (heavier-or-equal) - so moving infantry route around an idle tank, while a moving tank still
+	 *  plows through idle infantry (the lighter idler is ignored). Higher = firmer weave. The mover
+	 *  can't circle the parked unit - the Bend Cap guarantees it keeps making forward progress. */
+	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Avoidance",
+		meta = (DisplayName = "Idle Resolve Strength", ClampMin = "0.0"))
+	FFixedPoint AvoidanceIdleResolveStrength = FFixedPoint::Zero;
+
 	/** How hard a unit brakes when it is swerving hard through traffic. 0 = never brake.
 	 *
 	 *  Yield-by-slowing, layered on top of yield-by-turning: steering saturation is the congestion
