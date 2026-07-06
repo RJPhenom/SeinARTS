@@ -122,6 +122,10 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 	// off → the true-idle branch takes the exact ClearOutput (bit-exact today).
 	const FFixedPoint IdleDodgeStrength   = Settings->AvoidanceIdleDodgeStrength;
 	const bool bIdleDodgeEnabled          = Settings->bIdleReseek && IdleDodgeStrength > FFixedPoint::Zero;
+	// Bend cap, also read here (not only in ApplyAvoidanceSteer): the idle GAP-SEEK below bounds its
+	// candidate headings to the same goal-relative wedge, so it never proposes a thread the downstream
+	// cap would just clamp away. -1 (OFF sentinel) = no wedge limit (full candidate span).
+	const FFixedPoint BendCapCos          = Settings->AvoidanceBendCapCos;
 	// Cohesion off entirely when both sides are neutral — the aggregate pre-pass is skipped
 	// and every unit's CohesionScale is exactly One (bit-exact no-op).
 	const bool bCohesionEnabled = CohesionHoldBack > FFixedPoint::Zero || CohesionBoost > FFixedPoint::One;
@@ -131,6 +135,26 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 		? GetDefault<USeinARTSCoreSettings>()->SimulationTickRate : 30;
 	const FFixedPoint FloorPerTick   = MovingSpeedFloor / FFixedPoint::FromInt(TickRate);
 	const FFixedPoint FloorPerTickSq = FloorPerTick * FloorPerTick;
+
+	// IDLE GAP-SEEK candidate rotations (resolve-through, mover side). When Idle Resolve is on, a
+	// mover facing a field of loose idle units does NOT sum a repulsor away from them (two idlers
+	// flanking a passable lane cancel to a detour) — it samples headings rotated off its travel
+	// direction by these FIXED offsets and threads the nearest one no idler's footprint-cone covers.
+	// The (cos, sin) of each offset are the ONLY trig here and are built ONCE, serially, outside the
+	// parallel body; the per-unit scan is pure dot-products (no atan2/asin, no angular-interval bins),
+	// so it is bit-stable. Offsets 0,10,...,80 deg; the per-unit scan stops at the bend-cap wedge.
+	constexpr int32 GapCandidateCount = 9;
+	FFixedPoint GapCos[GapCandidateCount];
+	FFixedPoint GapSin[GapCandidateCount];
+	if (bResolveThroughIdlers)
+	{
+		for (int32 k = 0; k < GapCandidateCount; ++k)
+		{
+			const FFixedPoint Ang = FFixedPoint::DegToRad * FFixedPoint::FromInt(k * 10);
+			GapCos[k] = SeinMath::Cos(Ang);
+			GapSin[k] = SeinMath::Sin(Ang);
+		}
+	}
 
 	// Hoist component-storage lookups out of the per-entity / per-neighbour loop:
 	// GetComponent<T>() is a hashmap lookup by UScriptStruct* per call; resolving each
@@ -552,6 +576,19 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 		// (from its Centroid/FormationRadius), not one per member in range. Fresh per invocation.
 		TSet<FSeinEntityHandle> VisitedBlobBrokers;
 
+		// IDLE-BLOCKER buffer for the post-loop gap-seek (resolve-through, mover side). Idle
+		// neighbours are NOT accumulated into Accum below — they are collected here as blocked
+		// bearings and resolved as ONE steer (thread the gap, or detour if none admits). Fixed
+		// stack storage (no per-unit alloc in the hot body); a crowd denser than this cap is a wall
+		// → detour regardless, so the overflow is harmless. Each entry: the unit dir to the idler,
+		// the cos of its footprint-inflated subtended half-angle (the cone it blocks), and the
+		// pre-gap-seek geometric detour term (used only in the no-gap fallback).
+		constexpr int32 MaxIdleBlockers = 24;
+		FFixedVector IdleDir[MaxIdleBlockers];
+		FFixedPoint  IdleCosAlpha[MaxIdleBlockers];
+		FFixedPoint  IdleDetour[MaxIdleBlockers];
+		int32 NumIdleBlockers = 0;
+
 		FFixedVector Accum = FFixedVector::ZeroVector;
 		for (const FSeinEntityHandle& OtherHandle : Neighbors)
 		{
@@ -705,10 +742,16 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 			// orbit — so idlers were left to the collision floor. That anti-orbit rationale is now
 			// covered more robustly by the goal-relative bend cap (provable forward progress), so
 			// when Idle Resolve is on a QUALIFYING idle neighbour falls through to the weight gate
-			// and the geometric side-pick — the mover weaves around it. At strength 0 the
-			// short-circuit is byte-identical to the old unconditional continue. Squared compare
-			// avoids a per-neighbour sqrt.
-			const bool bOtherIdle = OtherMove->Velocity.SizeSquared() <= MovingSpeedFloor * MovingSpeedFloor;
+			// and the post-loop gap-seek — the mover threads/weaves around it. At strength 0 the
+			// short-circuit is byte-identical to the old unconditional continue.
+			//
+			// IDLE = "carries no move order" (bHasTarget false), NOT "not currently moving". This is
+			// the decouple linchpin: an idler stepping aside (idle-dodge) now writes a real velocity
+			// so the anim BP and re-seek see its motion, so a velocity test would flip a dodging idler
+			// to "mover" and break both this gate and the gap-seek. Keying on the order is also more
+			// honest — a body-blocked COMMANDED unit (a pinned presser) is a mover, and now takes the
+			// moving-neighbour path (do-si-do / geometric) rather than being bulldozed.
+			const bool bOtherIdle = !OtherMove->bHasTarget;
 			if (bOtherIdle && !bResolveThroughIdlers) continue;
 
 			// WEIGHT-PRIORITY GATE. This unit only yields to a neighbour whose
@@ -773,8 +816,8 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 			// STEER DIRECTION. A GENUINE CROSSING (opposed intent + goals apart) resolves via the
 			// antisymmetric world-frame do-si-do so the pair slides past on OPPOSITE sides — the
 			// primitive that breaks the mirror-dance orbit for opposed pairs and squad-vs-squad
-			// traffic. Everything else keeps the geometric side-pick (+ the group-vs-group sidewalk
-			// shift for co-directional group lane traffic). The two branches are disjoint predicates.
+			// traffic. Everything else takes the geometric side-pick: idle neighbours are diverted
+			// out to the post-loop gap-seek, and moving groups keep their real sides to cleave apart.
 			// Steer weight is PURE STEERING — NO mass term (mass physics belong to the collision
 			// floor). AvoidanceStrength (below) is the magnitude knob; AvoidanceWeight is the priority.
 			if (bGenuineCrossing)
@@ -787,8 +830,9 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 			}
 			else
 			{
-				// Dodge AWAY from the neighbour's side. Inside a "dead-ahead" band the side is
-				// undefined → break it deterministically by handle index.
+				// GEOMETRIC SIDE PICK — the side of the heading the neighbour sits on. Shared by the
+				// moving-neighbour steer AND the idle-blocker detour term. Inside a "dead-ahead" band
+				// the side is undefined → break it deterministically by handle index.
 				const FFixedPoint SideDot = ToOther.X * Right.X + ToOther.Y * Right.Y;
 				const FFixedPoint LateralBand = SelfRadius / FFixedPoint::FromInt(4);
 				FFixedPoint TurnSign;
@@ -796,22 +840,99 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 				else if (SideDot < -LateralBand)  { TurnSign =  FFixedPoint::One; } // neighbour on left  → steer right
 				else { TurnSign = (SelfHandle.Index < OtherHandle.Index) ? FFixedPoint::One : -FFixedPoint::One; }
 
-				// GROUP-VS-GROUP SIDEWALK PASS (non-crossing only): two groups in co-directional /
-				// glancing traffic all shift to their own right so they slide past like sidewalk
-				// lanes. Opposed crossings are handled by the do-si-do branch above, so this no
-				// longer curves head-on pairs the same way (the old orbit cause).
-				if (SelfBrokerHandle.IsValid() && OtherBrokerHandle.IsValid())
+				// IDLE neighbour (no move order): do NOT sum a repulsor — record it as a blocked
+				// bearing for the post-loop GAP-SEEK (thread the goal-aligned gap; detour only if no
+				// gap admits). Only reachable with Idle Resolve on (idlers were else skipped above).
+				if (bOtherIdle)
 				{
-					TurnSign = FFixedPoint::One;
+					if (NumIdleBlockers < MaxIdleBlockers)
+					{
+						const FFixedPoint InvDist = FFixedPoint::One / Dist;
+						IdleDir[NumIdleBlockers] = FFixedVector(ToOther.X * InvDist, ToOther.Y * InvDist, FFixedPoint::Zero);
+						// Footprint-inflated subtended half-angle: sin(a) = (SelfR+OtherR)/Dist, clamped
+						// to 1 (an overlapping idler blocks the whole forward hemisphere on its bearing).
+						// The cone it blocks is cos(a) = sqrt(1 - sin^2 a); a candidate heading is blocked
+						// when its dot with this bearing exceeds cos(a).
+						FFixedPoint SinA = (SelfRadius + OtherRadius) * InvDist;
+						if (SinA > FFixedPoint::One) SinA = FFixedPoint::One;
+						FFixedPoint CosASq = FFixedPoint::One - SinA * SinA;
+						if (CosASq < FFixedPoint::Zero) CosASq = FFixedPoint::Zero;
+						IdleCosAlpha[NumIdleBlockers] = SeinMath::Sqrt(CosASq);
+						IdleDetour[NumIdleBlockers]   = HeadOn * Falloff * TurnSign;
+						++NumIdleBlockers;
+					}
+					continue; // resolved post-loop by the gap-seek
 				}
 
-				// An IDLE neighbour only reaches here when Idle Resolve is on (else it was skipped
-				// above); scale its contribution by the resolve strength so mover-resolve firmness
-				// is dialable independently. A MOVING neighbour (bOtherIdle false) is unchanged.
-				FFixedPoint W = HeadOn * Falloff * TurnSign;
-				if (bOtherIdle) W = W * IdleResolveStrength;
+				// MOVING NEIGHBOUR — GROUP CLEAVE (was: sidewalk shift). Two co-directional groups
+				// keep their real geometric sides and split around each other along the contact line,
+				// instead of all shifting one way (which read as the whole crowd rotating past). Opposed
+				// crossings are owned by the do-si-do branch above, and genuine head-on mirror tension
+				// is likewise the do-si-do's job, so no forced side is needed here anymore.
+				const FFixedPoint W = HeadOn * Falloff * TurnSign;
 				Accum.X += Right.X * W;
 				Accum.Y += Right.Y * W;
+			}
+		}
+
+		// IDLE GAP-SEEK RESOLUTION (resolve-through, mover side). The idle blockers collected above
+		// become ONE steer: sample headings rotated off the travel direction by the fixed candidate
+		// offsets (bounded by the bend-cap wedge), and take the one NEAREST the travel direction that
+		// no idler's footprint-cone covers, leaning toward the goal on ties — a gap thread. If EVERY
+		// in-wedge heading is blocked (a solid idle wall), fall back to the summed geometric detour
+		// (route around), orbit-safe under the downstream bend cap. Empty list → no idle contribution.
+		if (NumIdleBlockers > 0)
+		{
+			const FFixedPoint InvGoal = FFixedPoint::One / SeinMath::Sqrt(GoalDistSq);
+			const FFixedVector GoalDir(ToGoal.X * InvGoal, ToGoal.Y * InvGoal, FFixedPoint::Zero);
+			const FFixedVector LeftPerp(-Heading.Y, Heading.X, FFixedPoint::Zero); // +offset side; Right = -LeftPerp
+			const bool bWedge = BendCapCos > -FFixedPoint::One;
+
+			bool bGapFound = false;
+			FFixedVector GapDir = Heading;
+			FFixedPoint BestGoalDot = FFixedPoint::MinValue;
+			for (int32 k = 0; k < GapCandidateCount && !bGapFound; ++k)
+			{
+				if (bWedge && GapCos[k] < BendCapCos) break; // past the cap wedge — no wider thread is reachable
+				const int32 SideCount = (k == 0) ? 1 : 2;    // 0 deg has a single candidate (dead ahead)
+				for (int32 si = 0; si < SideCount; ++si)
+				{
+					const FFixedPoint Sign = (si == 0) ? FFixedPoint::One : -FFixedPoint::One;
+					const FFixedVector Cand(
+						Heading.X * GapCos[k] + LeftPerp.X * (GapSin[k] * Sign),
+						Heading.Y * GapCos[k] + LeftPerp.Y * (GapSin[k] * Sign),
+						FFixedPoint::Zero);
+					bool bBlocked = false;
+					for (int32 b = 0; b < NumIdleBlockers; ++b)
+					{
+						if (Cand.X * IdleDir[b].X + Cand.Y * IdleDir[b].Y > IdleCosAlpha[b]) { bBlocked = true; break; }
+					}
+					if (bBlocked) continue;
+					// Clear: keep the more goal-aligned of this offset's two sides (deterministic — the
+					// +side, evaluated first, wins an exact tie). The outer !bGapFound then stops at the
+					// nearest-to-travel offset that cleared, so the thread deviates as little as it can.
+					const FFixedPoint GoalDot = Cand.X * GoalDir.X + Cand.Y * GoalDir.Y;
+					if (!bGapFound || GoalDot > BestGoalDot) { BestGoalDot = GoalDot; GapDir = Cand; bGapFound = true; }
+				}
+			}
+
+			if (bGapFound)
+			{
+				// Nudge toward the gap: the lateral (Right) component of the chosen heading, scaled by
+				// resolve strength. A straight-through gap (GapDir == Heading) yields zero nudge — the
+				// mover threads dead ahead instead of being shoved off a clear lane.
+				const FFixedPoint LatComp = GapDir.X * Right.X + GapDir.Y * Right.Y;
+				Accum.X += Right.X * (LatComp * IdleResolveStrength);
+				Accum.Y += Right.Y * (LatComp * IdleResolveStrength);
+			}
+			else
+			{
+				// No admitting gap → the pre-gap-seek behaviour: summed geometric repulsion away from
+				// the idle wall (each blocker's HeadOn*Falloff*side), scaled by resolve strength.
+				FFixedPoint DetourSum = FFixedPoint::Zero;
+				for (int32 b = 0; b < NumIdleBlockers; ++b) { DetourSum += IdleDetour[b]; }
+				Accum.X += Right.X * (DetourSum * IdleResolveStrength);
+				Accum.Y += Right.Y * (DetourSum * IdleResolveStrength);
 			}
 		}
 

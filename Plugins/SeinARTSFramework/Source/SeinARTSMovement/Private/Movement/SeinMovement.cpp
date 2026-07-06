@@ -864,14 +864,30 @@ void USeinMovement::BP_TickIdle_Implementation(USeinMoverHandle* Mover)
 	const FFixedVector InitialPos = Entity.Transform.GetLocation();
 	FFixedVector Pos = InitialPos;
 
+	// IDLE-DODGE intent, resolved UP FRONT so coast-down can yield to it. "Actively dodging" = a
+	// qualifying mover's approach left this idler a non-zero dodge steer, the step speed is on, AND
+	// the unit is at rest or already moving only at the slow dodge pace. That last clause lets real
+	// ORDER residual momentum (a cancelled mid-stride order — fast) coast to rest FIRST: the velocity
+	// the dodge writes below is ~IdleStepSpeed, safely under this cap, so an active dodge re-qualifies
+	// every tick while fast residual sits above the cap and keeps coasting until it decays into range.
+	const USeinARTSCoreSettings* IdleSet = GetDefault<USeinARTSCoreSettings>();
+	const FFixedVector& DodgeSteer  = MovementData.AvoidanceOutput.SteerDir;
+	const FFixedPoint IdleStepSpeed = IdleSet ? IdleSet->AvoidanceIdleDodgeStepSpeed : FFixedPoint::Zero;
+	const FFixedPoint DodgeVelCap   = IdleStepSpeed + IdleStepSpeed / FFixedPoint::Two; // 1.5x headroom
+	const bool bDodgeActive = DodgeSteer.SizeSquared() > FFixedPoint::Epsilon
+		&& IdleStepSpeed > FFixedPoint::Zero
+		&& MovementData.Velocity.SizeSquared() <= DodgeVelCap * DodgeVelCap;
+
 	// Coast-down: residual momentum (an order cancelled / preempted mid-stride
 	// deliberately leaves Velocity set) decays to rest through the SAME decel
 	// ramp orders use, instead of the unit freezing mid-stride. The footprint-
 	// aware nav floor still applies — a coasting unit can't drift through a
 	// wall. The footprint cache is rebuilt per coast tick: coasting is brief
 	// and the cache may never have been primed for a never-ordered unit.
+	// Skipped while a dodge owns motion this tick (the dodge writes velocity below);
+	// once the dodge steer clears, the leftover dodge velocity coasts to rest here.
 	FFixedPoint Speed = MovementData.Velocity.Size();
-	if (Speed > FFixedPoint::Epsilon)
+	if (!bDodgeActive && Speed > FFixedPoint::Epsilon)
 	{
 		// The mode's braking rate: 0 for the ultra-basic modes (they stop crisply the moment the
 		// order releases), or the per-class UDS Deceleration for Infantry / the vehicles (a cancelled
@@ -903,24 +919,27 @@ void USeinMovement::BP_TickIdle_Implementation(USeinMoverHandle* Mover)
 	// IDLE-DODGE SHUFFLE (resolve-through, idler side). Consume this unit's OWN precomputed avoidance
 	// steer — written one-sided at PreTick only when a qualifying mover is approaching — as a slow
 	// lateral step aside. PURE-SELF: no neighbour read, so TickIdle stays deterministic and
-	// neighbour-blind. Velocity is NEVER written (that's the load-bearing invariant: the dodging unit
-	// keeps reading "settled", so its return-to-slot is governed by the re-seek RELEASE SUPPRESSION —
-	// which keys on this non-zero SteerDir — not by a velocity flag). Routed through the nav floor so
-	// a dodging idler can't clip a wall. Runs only for a unit at rest (a coasting unit finishes first).
+	// neighbour-blind. Routed through the nav floor so a dodging idler can't clip a wall.
+	//
+	// DECOUPLE: unlike the earlier design, this now WRITES an honest displacement-derived velocity.
+	// That makes the step VISIBLE to velocity-gated consumers — the anim BP plays the step-aside, and
+	// re-seek's OWN settled-predicate (velocity ~zero) holds this member back from re-forming while it
+	// dodges — so idle-dodge and re-seek stay two SEPARATE behaviours with no bespoke suppression hook.
+	if (bDodgeActive)
 	{
-		const USeinARTSCoreSettings* IdleSet = GetDefault<USeinARTSCoreSettings>();
-		const FFixedVector& DodgeSteer = MovementData.AvoidanceOutput.SteerDir;
-		const FFixedPoint IdleStepSpeed = IdleSet ? IdleSet->AvoidanceIdleDodgeStepSpeed : FFixedPoint::Zero;
-		if (DodgeSteer.SizeSquared() > FFixedPoint::Epsilon
-			&& IdleStepSpeed > FFixedPoint::Zero
-			&& MovementData.Velocity.SizeSquared() <= FFixedPoint::Epsilon)
+		CacheFootprintFromContext(Ctx);
+		const FFixedVector DodgeDir = FFixedVector::GetSafeNormal(DodgeSteer);
+		const FFixedVector PreDodge = Pos;
+		Pos.X = Pos.X + DodgeDir.X * IdleStepSpeed * DeltaTime;
+		Pos.Y = Pos.Y + DodgeDir.Y * IdleStepSpeed * DeltaTime;
+		Pos = ResolveNavCollision(PreDodge, Pos, Nav);
+		// Honest velocity = actual (nav-clamped) planar displacement / dt — the unit's own commanded
+		// step, the same definition the ordered path uses.
+		if (DeltaTime > FFixedPoint::Zero)
 		{
-			CacheFootprintFromContext(Ctx);
-			const FFixedVector DodgeDir = FFixedVector::GetSafeNormal(DodgeSteer);
-			const FFixedVector PreDodge = Pos;
-			Pos.X = Pos.X + DodgeDir.X * IdleStepSpeed * DeltaTime;
-			Pos.Y = Pos.Y + DodgeDir.Y * IdleStepSpeed * DeltaTime;
-			Pos = ResolveNavCollision(PreDodge, Pos, Nav);
+			const FFixedPoint InvDt = FFixedPoint::One / DeltaTime;
+			MovementData.Velocity = FFixedVector(
+				(Pos.X - PreDodge.X) * InvDt, (Pos.Y - PreDodge.Y) * InvDt, FFixedPoint::Zero);
 		}
 	}
 

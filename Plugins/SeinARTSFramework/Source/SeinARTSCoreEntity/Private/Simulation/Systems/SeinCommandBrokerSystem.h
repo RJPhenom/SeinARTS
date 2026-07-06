@@ -621,18 +621,12 @@ public:
 							const FFixedPoint DY = Pos.Y - Paired[i].Y;
 							if (DX * DX + DY * DY <= ThresholdSq) continue; // on station
 
-							// DODGE-ACTIVE SUPPRESSION (the IT3 transit-dodge plug-point). A member
-							// actively stepping aside for a passing mover — its own avoidance SteerDir
-							// is non-zero (idlers only ever get a non-zero SteerDir from the idle-dodge)
-							// — is treated exactly like an on-station member: no re-form order, and it
-							// does NOT count as displaced. When the mover passes and the dodge clears
-							// (SteerDir hard-zeros), this SAME gate next tick sees it displaced+settled
-							// and issues the return — so the shipped re-seek owns the walk-back,
-							// un-duplicated (no parallel return in TickIdle). One benign wrinkle: a
-							// suppressed member not counting toward bAnyDisplaced can let the episode
-							// end-reset mid-dodge (re-bases the personal jitter); the return still fires.
-							if (Move->AvoidanceOutput.SteerDir.SizeSquared() > FFixedPoint::Epsilon) continue;
-
+							// Idle-dodge no longer suppresses re-seek here. The dodge writes a real velocity, so
+							// the settled-predicate just below (velocity ~zero) already holds a dodging member back
+							// from re-forming and releases it once the dodge ends and its velocity coasts to zero -
+							// dodge and re-seek decoupled through that one honest signal. A dodging member DOES count
+							// as displaced (keeps the episode alive), so its return fires within the same episode the
+							// moment it clears.
 							bAnyDisplaced = true;
 
 							// Individually settled? (Ability-idle, no move target, ~zero velocity.)
