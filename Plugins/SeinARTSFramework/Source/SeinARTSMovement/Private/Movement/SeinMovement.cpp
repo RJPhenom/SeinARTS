@@ -900,6 +900,30 @@ void USeinMovement::BP_TickIdle_Implementation(USeinMoverHandle* Mover)
 		}
 	}
 
+	// IDLE-DODGE SHUFFLE (resolve-through, idler side). Consume this unit's OWN precomputed avoidance
+	// steer — written one-sided at PreTick only when a qualifying mover is approaching — as a slow
+	// lateral step aside. PURE-SELF: no neighbour read, so TickIdle stays deterministic and
+	// neighbour-blind. Velocity is NEVER written (that's the load-bearing invariant: the dodging unit
+	// keeps reading "settled", so its return-to-slot is governed by the re-seek RELEASE SUPPRESSION —
+	// which keys on this non-zero SteerDir — not by a velocity flag). Routed through the nav floor so
+	// a dodging idler can't clip a wall. Runs only for a unit at rest (a coasting unit finishes first).
+	{
+		const USeinARTSCoreSettings* IdleSet = GetDefault<USeinARTSCoreSettings>();
+		const FFixedVector& DodgeSteer = MovementData.AvoidanceOutput.SteerDir;
+		const FFixedPoint IdleStepSpeed = IdleSet ? IdleSet->AvoidanceIdleDodgeStepSpeed : FFixedPoint::Zero;
+		if (DodgeSteer.SizeSquared() > FFixedPoint::Epsilon
+			&& IdleStepSpeed > FFixedPoint::Zero
+			&& MovementData.Velocity.SizeSquared() <= FFixedPoint::Epsilon)
+		{
+			CacheFootprintFromContext(Ctx);
+			const FFixedVector DodgeDir = FFixedVector::GetSafeNormal(DodgeSteer);
+			const FFixedVector PreDodge = Pos;
+			Pos.X = Pos.X + DodgeDir.X * IdleStepSpeed * DeltaTime;
+			Pos.Y = Pos.Y + DodgeDir.Y * IdleStepSpeed * DeltaTime;
+			Pos = ResolveNavCollision(PreDodge, Pos, Nav);
+		}
+	}
+
 	// Per-tick settle: re-snap Z/altitude (rate-limited) and smooth pitch/roll
 	// toward the slope under the CURRENT position. This is what makes a
 	// collision-shoved unit settle where it lands (settle-in-place semantics: no

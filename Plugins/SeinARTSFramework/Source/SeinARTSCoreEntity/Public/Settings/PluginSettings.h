@@ -725,6 +725,25 @@ public:
 		meta = (DisplayName = "Idle Resolve Strength", ClampMin = "0.0"))
 	FFixedPoint AvoidanceIdleResolveStrength = FFixedPoint::Zero;
 
+	/** How strongly an IDLE unit steps aside for an approaching mover that's about to run it over.
+	 *
+	 *  0 (default) = idle units never move on their own (a mover plows through them, the collision
+	 *  layer shoves them). Above 0, an idle unit shuffles sideways to make a lane for an approaching
+	 *  mover whose Avoidance Weight qualifies (heavier-or-equal) - so idle infantry step aside for a
+	 *  passing tank, while an idle tank holds its ground for passing infantry. Only active while Idle
+	 *  Re-Seek is on: the re-form owns walking the unit back to its slot once the mover has passed. */
+	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Avoidance",
+		meta = (DisplayName = "Idle Dodge Strength", ClampMin = "0.0"))
+	FFixedPoint AvoidanceIdleDodgeStrength = FFixedPoint::Zero;
+
+	/** How fast (world units per second) a dodging idle unit shuffles aside.
+	 *
+	 *  Keep it slow so a step-aside reads as a shuffle, not a sprint, and the collision layer resolves
+	 *  any minor idler-into-idler overlap gracefully. Inert while Idle Dodge Strength is 0. Default 40. */
+	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Avoidance",
+		meta = (DisplayName = "Idle Dodge Step Speed", ClampMin = "0.0"))
+	FFixedPoint AvoidanceIdleDodgeStepSpeed = FFixedPoint::FromInt(40);
+
 	/** How hard a unit brakes when it is swerving hard through traffic. 0 = never brake.
 	 *
 	 *  Yield-by-slowing, layered on top of yield-by-turning: steering saturation is the congestion

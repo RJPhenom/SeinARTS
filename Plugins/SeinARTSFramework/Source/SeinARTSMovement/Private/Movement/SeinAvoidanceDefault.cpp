@@ -116,6 +116,12 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 	// this. Orbit-safe under the goal-relative bend cap (which guarantees forward progress).
 	const FFixedPoint IdleResolveStrength = Settings->AvoidanceIdleResolveStrength;
 	const bool bResolveThroughIdlers      = IdleResolveStrength > FFixedPoint::Zero;
+	// IDLER-DODGES-MOVER: an idle unit steps aside for an approaching qualifying mover. Gated ALSO
+	// on bIdleReseek — the shipped re-seek owns the walk back to slot (the dodge only suppresses its
+	// release while active), so a dodge is meaningless without a return path. Strength 0 OR re-seek
+	// off → the true-idle branch takes the exact ClearOutput (bit-exact today).
+	const FFixedPoint IdleDodgeStrength   = Settings->AvoidanceIdleDodgeStrength;
+	const bool bIdleDodgeEnabled          = Settings->bIdleReseek && IdleDodgeStrength > FFixedPoint::Zero;
 	// Cohesion off entirely when both sides are neutral — the aggregate pre-pass is skipped
 	// and every unit's CohesionScale is exactly One (bit-exact no-op).
 	const bool bCohesionEnabled = CohesionHoldBack > FFixedPoint::Zero || CohesionBoost > FFixedPoint::One;
@@ -297,8 +303,97 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 			Move->AvoidanceOutput.SpeedScale = FFixedPoint::One;
 		};
 
-		// No active move order → release and bail. Avoidance only steers movers.
-		if (!Move->bHasTarget) { ClearOutput(); return; }
+		// No active move order → IDLE. Default: release and bail (avoidance only steers movers). But
+		// when idle-dodge is on, an idle unit steps ASIDE for an approaching qualifying mover — a
+		// one-sided lateral nudge computed here (the sanctioned whole-world PreTick pass), applied
+		// pure-self in TickIdle, with the shipped re-seek owning the return (the dodge suppresses
+		// re-seek's release while its SteerDir is non-zero; see the broker system).
+		if (!Move->bHasTarget)
+		{
+			if (!bIdleDodgeEnabled) { ClearOutput(); return; }
+
+			const FSeinNavigationComponent* IdleSelfNav = NavStorage ? static_cast<const FSeinNavigationComponent*>(NavStorage->GetComponentRaw(SelfHandle)) : nullptr;
+			const FSeinExtentsComponent* IdleSelfExt = ExtentsStorage ? static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(SelfHandle)) : nullptr;
+			const FFixedPoint IdleSelfRadius = USeinMovement::ResolveCollisionRadius(IdleSelfExt, IdleSelfNav);
+			if (IdleSelfRadius <= FFixedPoint::Zero) { ClearOutput(); return; }
+			const FFixedVector IdleSelfPos = SelfEntity.Transform.GetLocation();
+
+			// Idlers don't cruise → no lookahead term; personal-space perception only.
+			const FFixedPoint IdlePerception = IdleSelfRadius * FFixedPoint::FromInt(2);
+			Neighbors.Reset();
+			Hash.QueryRadius(IdleSelfPos, IdlePerception, Neighbors, SelfHandle);
+
+			FFixedVector DodgeAccum = FFixedVector::ZeroVector;
+			for (const FSeinEntityHandle& OtherHandle : Neighbors)
+			{
+				const FSeinEntity* OtherEntity = World.GetEntityPool().Get(OtherHandle);
+				if (!OtherEntity) continue;
+				const FSeinMovementComponent* OtherMove = MoveStorage ? static_cast<const FSeinMovementComponent*>(MoveStorage->GetComponentRaw(OtherHandle)) : nullptr;
+				if (!OtherMove) continue;
+				// Only a REAL ORDERED MOVER triggers a dodge. bHasTarget=true is the CASCADE CUTOFF —
+				// a dodging idler has bHasTarget=false, so it can never trigger another idler's dodge.
+				if (!OtherMove->bHasTarget) continue;
+				const FFixedVector OtherVel = OtherMove->Velocity;
+				if (OtherVel.SizeSquared() <= MovingSpeedFloor * MovingSpeedFloor) continue;
+				// WEIGHT LEVER, idler as SELF: yield only to a heavier-or-equal mover (a heavy idler
+				// holds its ground for a light mover). Same comparison the mover-vs-mover gate uses.
+				const bool bDodgeQualifies = Move->bAvoidSameWeights
+					? (OtherMove->AvoidanceWeight >= Move->AvoidanceWeight)
+					: (OtherMove->AvoidanceWeight >  Move->AvoidanceWeight);
+				if (!bDodgeQualifies) continue;
+				FFixedVector ToSelf = IdleSelfPos - OtherEntity->Transform.GetLocation();
+				ToSelf.Z = FFixedPoint::Zero;
+				// APPROACHING gate (hysteresis): the mover must be heading toward this idler; a mover
+				// already past + receding fails, so a passing tail can't re-fire the dodge.
+				if (ToSelf.X * OtherVel.X + ToSelf.Y * OtherVel.Y <= FFixedPoint::Zero) continue;
+				const FSeinNavigationComponent* ONav = NavStorage ? static_cast<const FSeinNavigationComponent*>(NavStorage->GetComponentRaw(OtherHandle)) : nullptr;
+				const FSeinExtentsComponent* OExt = ExtentsStorage ? static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(OtherHandle)) : nullptr;
+				const FFixedPoint OtherRadius = USeinMovement::ResolveCollisionRadius(OExt, ONav);
+				if (OtherRadius <= FFixedPoint::Zero) continue;
+				const FFixedPoint DodgeRange = (IdleSelfRadius + OtherRadius) * FalloffRadii;
+				if (DodgeRange <= FFixedPoint::Epsilon) continue;
+				const FFixedPoint Dist = SeinMath::Sqrt(ToSelf.SizeSquared());
+				if (Dist >= DodgeRange) continue;
+				const FFixedPoint Falloff = FFixedPoint::One - (Dist / DodgeRange);
+				// Step aside PERPENDICULAR to the mover's travel, on the side the idler already sits
+				// (make a lane, don't cross the mover's path). Dead-ahead → deterministic handle tie.
+				const FFixedPoint OtherSpeed = OtherVel.Size();
+				const FFixedVector OtherVelN(OtherVel.X / OtherSpeed, OtherVel.Y / OtherSpeed, FFixedPoint::Zero);
+				const FFixedVector MoverRight(OtherVelN.Y, -OtherVelN.X, FFixedPoint::Zero);
+				const FFixedPoint SideDot = ToSelf.X * MoverRight.X + ToSelf.Y * MoverRight.Y;
+				const FFixedPoint Band = IdleSelfRadius / FFixedPoint::FromInt(4);
+				const FFixedPoint TurnSign = (SideDot > Band) ? FFixedPoint::One
+					: (SideDot < -Band) ? -FFixedPoint::One
+					: ((SelfHandle.Index < OtherHandle.Index) ? FFixedPoint::One : -FFixedPoint::One);
+				DodgeAccum.X += MoverRight.X * (Falloff * TurnSign);
+				DodgeAccum.Y += MoverRight.Y * (Falloff * TurnSign);
+			}
+
+			// No qualifying approaching mover → HARD release (bit-exact today). The hard zero is what
+			// lifts the re-seek suppression next tick, so the shipped re-seek can walk the (now
+			// off-slot) idler home — instead of a smoothed decay that would keep shuffling it aside.
+			if (DodgeAccum.SizeSquared() <= FFixedPoint::Epsilon) { ClearOutput(); return; }
+
+			// Same clamp → scale → smooth-ramp → snap tail as the mover path (scaled by the global
+			// idle-dodge strength). Smoothing only ramps the dodge IN; the empty-Accum hard release
+			// above ends it crisply.
+			FFixedPoint DodgeLen = DodgeAccum.Size();
+			if (DodgeLen > MaxSteerMagnitude && DodgeLen > FFixedPoint::Epsilon)
+			{
+				const FFixedPoint Scale = MaxSteerMagnitude / DodgeLen;
+				DodgeAccum.X = DodgeAccum.X * Scale;
+				DodgeAccum.Y = DodgeAccum.Y * Scale;
+			}
+			const FFixedVector DodgeScaled(DodgeAccum.X * IdleDodgeStrength, DodgeAccum.Y * IdleDodgeStrength, FFixedPoint::Zero);
+			FFixedVector DodgeSmoothed(
+				DodgeScaled.X * (FFixedPoint::One - SmoothKeep) + Move->AvoidanceOutput.SteerDir.X * SmoothKeep,
+				DodgeScaled.Y * (FFixedPoint::One - SmoothKeep) + Move->AvoidanceOutput.SteerDir.Y * SmoothKeep,
+				FFixedPoint::Zero);
+			if (DodgeSmoothed.SizeSquared() <= FFixedPoint::Epsilon) DodgeSmoothed = FFixedVector::ZeroVector;
+			Move->AvoidanceOutput.SteerDir = DodgeSmoothed;
+			Move->AvoidanceOutput.SpeedScale = FFixedPoint::One;   // idlers don't brake/cohesion
+			return;
+		}
 
 		// Heading from end-of-last-tick velocity (the same snapshot value for every unit
 		// at PreTick). Stopped/too-slow → release and bail.
