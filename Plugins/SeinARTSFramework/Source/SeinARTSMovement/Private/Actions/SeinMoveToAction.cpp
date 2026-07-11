@@ -335,7 +335,7 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		// instead of pinning at "almost arrived" forever.
 		const FFixedPoint Acceptance = NavComp
 			? NavComp->AcceptanceRadius
-			: FFixedPoint::FromInt(50);
+			: FSeinNavigationComponent::DefaultArrivalAcceptance();
 		AcceptanceRadiusSq = Acceptance * Acceptance;
 
 		// Body radius (once per order) + the shared near-goal settle band: the

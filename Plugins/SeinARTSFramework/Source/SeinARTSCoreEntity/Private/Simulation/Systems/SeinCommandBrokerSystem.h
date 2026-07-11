@@ -486,6 +486,14 @@ public:
 				if (WatchTicks < 1) { WatchTicks = 1; }
 				int32 ReleaseTicks = (Settings->ReseekReleaseInterval * FFixedPoint::FromInt(TickRate)).ToInt();
 				if (ReleaseTicks < 1) { ReleaseTicks = 1; }
+				// Episode-duration cap (B1): a self-feeding re-form limit cycle never reaches the
+				// "nobody displaced" end condition below, so bound one episode in wall-seconds.
+				// 0 = disabled. Reuses the already-hashed ReseekEpisodeStartTick; adds no sim state.
+				int32 MaxEpisodeTicks = (Settings->ReseekMaxEpisodeSeconds * FFixedPoint::FromInt(TickRate)).ToInt();
+				if (MaxEpisodeTicks < 0) { MaxEpisodeTicks = 0; }
+				// Only an exact 0 disables the cap; a positive-but-sub-tick value rounds up to one
+				// tick rather than silently truncating to "off".
+				if (MaxEpisodeTicks == 0 && Settings->ReseekMaxEpisodeSeconds > FFixedPoint::Zero) { MaxEpisodeTicks = 1; }
 				Broker->NextReseekAllowedTick = CurrentTick + WatchTicks;
 
 				// Foreign-order gate: any queued order that is NOT one of our re-form subsets
@@ -500,7 +508,19 @@ public:
 					}
 				}
 
-				if (!bForeignOrder)
+				// B1: if a hot episode has outlived the cap without converging, declare the crowd
+				// good-enough - stop correcting, end the episode, and grant an extended quiet period.
+				// Mode-agnostic: bounds any limit cycle regardless of a mode's return dynamics. Sits
+				// before the pairing/release work so a capped scan does no further re-forming.
+				const bool bEpisodeCapped = (Broker->ReseekEpisodeStartTick != 0
+					&& MaxEpisodeTicks > 0
+					&& CurrentTick - Broker->ReseekEpisodeStartTick > MaxEpisodeTicks);
+				if (bEpisodeCapped)
+				{
+					Broker->ReseekEpisodeStartTick = 0;
+					Broker->NextReseekAllowedTick = CurrentTick + (TickRate * 2);
+				}
+				else if (!bForeignOrder)
 				{
 					// In-flight claims: members already released + the slots their re-form
 					// orders target. Later pairings cover only the remainder.
@@ -645,7 +665,6 @@ public:
 						};
 
 						const FFixedPoint Threshold = Settings->ReseekDisplacementThreshold;
-						const FFixedPoint ThresholdSq = Threshold * Threshold;
 						const int32 WindowTicks = ((TickRate * 3) / 2 > 1) ? (TickRate * 3) / 2 : 1;
 						bool bAnyDisplaced = false;
 						int32 ReleasedThisScan = 0;
@@ -661,9 +680,28 @@ public:
 							// someone's slot": a blob camped around a ring keeps resolving until
 							// every slot is filled by its assigned member.
 							const FFixedVector Pos = E->Transform.GetLocation();
+							// Structural hysteresis floor (A): the on-station band can never sit at or
+							// below the unit's arrival acceptance, or a just-arrived, collision-jostled
+							// member reads as "displaced" and the formation re-forms forever. Floor at
+							// twice acceptance (arrival tolerance plus an equal jostle band); a configured
+							// threshold above the floor wins. Per-member: AcceptanceRadius is hashed sim state.
+							FFixedPoint MemberAcceptance = FFixedPoint::Zero;
+							if (const FSeinNavigationComponent* MNav = World.GetComponent<FSeinNavigationComponent>(M))
+							{
+								MemberAcceptance = MNav->AcceptanceRadius;
+							}
+							// Match the movement layer's arrival fallback: a nav-less unit (or one with a
+							// zero acceptance) completes moves within 50 (SeinMoveToAction / the trace
+							// system use the same constant). Compute the floor against that real arrival
+							// tolerance, not 0 - otherwise those members would slip the floor entirely.
+							if (MemberAcceptance <= FFixedPoint::Zero) { MemberAcceptance = FSeinNavigationComponent::DefaultArrivalAcceptance(); }
+							FFixedPoint EffThreshold = Threshold;
+							const FFixedPoint Floor = MemberAcceptance + MemberAcceptance;
+							if (EffThreshold < Floor) { EffThreshold = Floor; }
+							const FFixedPoint EffThresholdSq = EffThreshold * EffThreshold;
 							const FFixedPoint DX = Pos.X - Paired[i].X;
 							const FFixedPoint DY = Pos.Y - Paired[i].Y;
-							if (DX * DX + DY * DY <= ThresholdSq) continue; // on station
+							if (DX * DX + DY * DY <= EffThresholdSq) continue; // on station
 
 							// Idle-dodge no longer suppresses re-seek here. The dodge writes a real velocity, so
 							// the settled-predicate just below (velocity ~zero) already holds a dodging member back

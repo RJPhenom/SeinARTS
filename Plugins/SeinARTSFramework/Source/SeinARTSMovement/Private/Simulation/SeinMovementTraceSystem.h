@@ -136,7 +136,7 @@ public:
 			const FSeinNavigationComponent* NavComp = NavStorage
 				? static_cast<const FSeinNavigationComponent*>(NavStorage->GetComponentRaw(Handle)) : nullptr;
 			const FFixedPoint Accept = (NavComp && NavComp->AcceptanceRadius > FFixedPoint::Zero)
-				? NavComp->AcceptanceRadius : FFixedPoint::FromInt(50);
+				? NavComp->AcceptanceRadius : FSeinNavigationComponent::DefaultArrivalAcceptance();
 
 			// Classify. PINNED = the movement side commanded ~nothing (the avoidance
 			// kernel's own pinned classifier); PRESSER = commanded plenty, body went

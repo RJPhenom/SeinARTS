@@ -830,7 +830,10 @@ public:
 	 *
 	 *  World units, measured to the unit's ASSIGNED slot after members are re-matched to slots.
 	 *  Must comfortably exceed the arrival acceptance radius plus ordinary collision-settle
-	 *  jitter, or formations re-form forever. Default 150. Only read while Idle Re-Seek is on. */
+	 *  jitter, or formations re-form forever. A structural floor enforces this at runtime: the
+	 *  effective trigger is never less than twice a unit's arrival acceptance, so a too-low value
+	 *  here is quietly raised rather than causing an endless shuffle. Default 150. Only read while
+	 *  Idle Re-Seek is on. */
 	UPROPERTY(Config, EditAnywhere, Category = "Navigation",
 		meta = (DisplayName = "Re-Seek Displacement Threshold", ClampMin = "0.0"))
 	FFixedPoint ReseekDisplacementThreshold = FFixedPoint::FromInt(150);
@@ -856,6 +859,19 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Navigation",
 		meta = (DisplayName = "Re-Seek Release Interval", ClampMin = "0.0"))
 	FFixedPoint ReseekReleaseInterval = FFixedPoint::Zero;
+
+	/** Safety cap on how long one re-form episode may run before it gives up, in seconds.
+	 *
+	 *  A dense crowd can enter a slow shuffle where each unit's return home nudges a neighbour off
+	 *  its slot, which returns and nudges the next - a loop that never fully settles on its own.
+	 *  When an episode has run this long without finishing, the formation is declared good-enough:
+	 *  it stops re-forming and rests where it is, then waits a moment before checking again. This
+	 *  is a backstop, not the primary defence (the displacement floor above is), so it should
+	 *  rarely fire. 0 disables the cap (not recommended). Default 4. Only read while Idle Re-Seek
+	 *  is on. */
+	UPROPERTY(Config, EditAnywhere, Category = "Navigation",
+		meta = (DisplayName = "Re-Seek Max Episode Seconds", ClampMin = "0.0"))
+	FFixedPoint ReseekMaxEpisodeSeconds = FFixedPoint::FromInt(4);
 
 	// Navigation — Formation (a Navigation SUBCATEGORY, nested below Avoidance)
 	// ----------------------------------------------------------------------------------------------------

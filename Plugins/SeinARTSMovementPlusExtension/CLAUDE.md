@@ -64,7 +64,16 @@ sub-data). If you ever rename or re-home one of these types again, add the match
 ## Current state
 
 Extracted from the framework's `SeinARTSMovement` module on **2026-06-02**; behavior unchanged by the
-move. Wheeled/Tracked are the most-iterated. Hover/Flight carry a half-finished migration of tuning
-onto their sub-data structs (some class-level UPROPERTY knobs still present). The aspirational
-vehicle curve-fitting planner (Reeds-Shepp/Dubins) referenced in stale comments is **unbuilt** — see
-root `CLAUDE.md`.
+move. All five modes are BUILT and behavior-correct — this is refactor/extend territory, not a
+skeleton. The steering seam is a landed TWO-TIER contract: **Infantry** is the Tier-1 exemplar
+(overrides `ComputeMotion` only — accel/decel + alignment-scaled turn + kinematic arrival brake, all
+riding the base `USeinMovement::Tick` harness), and the four vehicles (Wheeled/Tracked/Hover/Flight)
+override `Tick` wholesale (Tier-2). Per-class tuning now rides entirely on the sub-data structs
+(`FSeinInfantryMovementData` etc.); the earlier half-finished migration is done — each mode class
+holds only runtime state (e.g. `CurrentSteer`, `bIsReversing`). Wheeled/Tracked are the most-iterated.
+
+Known gaps for the mode-depth work (2026-07-06): aircraft bank is computed then discarded (Flight
+writes yaw-only); Hover turns-to-face rather than strafing; Flight loiter/idle is punted to the AI
+controller; air avoidance is planar (no vertical channel) and Flight doesn't consume it;
+`GetMinTurnRadius` is a producer with no consumer. The aspirational vehicle curve-fitting planner
+(Reeds-Shepp/Dubins) referenced in stale comments is **unbuilt** — see root `CLAUDE.md`.

@@ -73,6 +73,36 @@ the editor is open, and returns UBT's exit code. Equivalent raw one-liner if the
 
 ---
 
+## Working style: making changes that stick
+
+This is a **lockstep-deterministic** sim, so a subtle mistake is a *silent desync discovered late* — the
+failure mode that ends in rollback (this project's owner has lived many). The discipline that avoids it,
+learned from the sessions that *worked*:
+
+- **Match verification to blast radius.** A change touching the sim spine, determinism, or multiple
+  modules earns the full loop: investigate against **live code** → design and present the real fork(s)
+  for RJ to decide → implement → **adversarially red-team the change** (independent agents whose job is
+  to *refute* it) → build green (read the log, not just the exit code) → hand RJ the A/B. Trivial
+  mechanical edits skip the ceremony. Turn **ultracode ON** for the former (it defaults you to workflow
+  orchestration + adversarial verification); leave it off for the latter — the verification is
+  token-expensive and only earns its cost when a missed bug means a rollback.
+- **Determinism is invisible to code-reading — verify, don't trust confidence.** "This is bit-identical
+  / deterministic" is a **hypothesis** until an independent adversarial pass has tried and failed to
+  refute it AND the `Sein.Sim.Parallel 0`-vs-`1` StateHash agrees (plus peer/replay for anything that
+  shifts *which tick* something happens). An assistant's certainty about determinism is **not evidence**
+  here — confidently-wrong determinism claims have been caught by the red-team, never by re-reading. The
+  A/B StateHash is the definition of "done" for a sim change, not a nice-to-have; RJ's PIE is the final
+  oracle and everything before it is reasoning.
+- **RJ owns the forks; the assistant owns the mechanism.** Feel, product, sequencing, and ship-posture
+  are RJ's calls — investigate, present options **with a recommendation**, then gate implementation on
+  his pick. Don't guess at taste, and don't reorder his "this then that."
+- **Ground every load-bearing claim in the live code before acting** — including re-verifying a
+  subagent's or workflow's own synthesis (they err too, and the workflows themselves sometimes fail or
+  return stubs; read their output critically). See "Source of truth" below on stale docstrings.
+- **Defer explicitly, don't gold-plate.** Record deferred items where a future dev will find them.
+
+---
+
 ## What this is
 
 A deterministic **lockstep RTS framework** for Unreal Engine 5, delivered as one core plugin plus

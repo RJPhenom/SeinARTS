@@ -84,6 +84,12 @@ struct SEINARTSCOREENTITY_API FSeinNavigationComponent : public FSeinComponent
 				DisplayName = "Wall Padding (cells)"))
 	int32 WallPadding = 0;
 
+	/** The arrival acceptance a unit falls back to when it has no navigation component, or an
+	 *  explicitly zero AcceptanceRadius. Single source of truth shared by the move-completion
+	 *  check (SeinMoveToAction), the movement-trace settle classifier, and the idle re-seek
+	 *  displacement floor - so the fallback and this field's own default can never drift apart. */
+	static FORCEINLINE FFixedPoint DefaultArrivalAcceptance() { return FFixedPoint::FromInt(50); }
+
 	/** How close (world units) the unit must get to its destination to count as arrived —
 	 *  within this distance it stops and reports the move complete.
 	 *
@@ -93,7 +99,7 @@ struct SEINARTSCOREENTITY_API FSeinNavigationComponent : public FSeinComponent
 	 *  per-call override. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Navigation",
 		meta = (ClampMin = "0.0"))
-	FFixedPoint AcceptanceRadius = FFixedPoint::FromInt(50);
+	FFixedPoint AcceptanceRadius = DefaultArrivalAcceptance();
 
 	/** Which terrain classes this unit is affected by — a bitmask where each bit is a nav
 	 *  layer defined in plugin settings (water, lava, no-build, etc.). The unit is blocked
