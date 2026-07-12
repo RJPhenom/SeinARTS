@@ -2196,12 +2196,10 @@ bool USeinNavigationAStar::FindCellPathInternal(const FSeinPathRequest& Request,
 		WorldToGrid(Snapped, SX, SY);
 	}
 
-	// Read tunables from plugin settings — heuristic weight + iteration cap.
-	// Settings access is a singleton lookup (cheap); no caching needed since
-	// FindPath is gated by the per-tick path budget at the subsystem level.
-	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
-	const int32 HeuristicWeight = Settings ? Settings->AStarHeuristicWeightPercent : 125;
-	const int32 DefaultMaxIters = Settings ? Settings->AStarMaxIterations : 10000;
+	// A* search tunables (heuristic weight + iteration cap) live on this nav class's CDO — edit them
+	// via a Blueprint subclass slotted in Project Settings > NavigationClass. Read as members.
+	const int32 HeuristicWeight = AStarHeuristicWeightPercent;
+	const int32 DefaultMaxIters = AStarMaxIterations;
 	// Per-request override (0 = project default). Lets a caller bound an expensive /
 	// long-range pathfind; A* returns a best-effort partial if the cap is hit.
 	const int32 MaxIters = (Request.AgentMaxSearchNodes > 0) ? Request.AgentMaxSearchNodes : DefaultMaxIters;

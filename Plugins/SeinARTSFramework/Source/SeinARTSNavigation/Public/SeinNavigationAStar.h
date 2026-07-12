@@ -43,7 +43,7 @@ class USeinLevelData;
  * per-cell cost and connectivity from the shared level substrate and loads its runtime grid from that
  * baked channel.
  */
-UCLASS(BlueprintType, meta = (DisplayName = "Sein Nav (A*)"))
+UCLASS(Blueprintable, BlueprintType, meta = (DisplayName = "Sein Nav (A*)"))
 class SEINARTSNAVIGATION_API USeinNavigationAStar : public USeinNavigation, public ISeinLevelLayerProvider
 {
 	GENERATED_BODY()
@@ -196,6 +196,26 @@ public:
 	 *  scene proxy. Gated by `ShowFlags.Navigation` / `Sein.Nav.Show`. */
 	UPROPERTY(EditAnywhere, Category = "Debug")
 	bool bDrawCellsInDebug = true;
+
+	/** Speed-versus-optimality dial for the A* search, as a percent: 100 means "find the shortest
+	 *  path no matter what," higher means "find a good path faster, accepting up to that-much longer."
+	 *  The search scores cells as f = g + (h * Weight) / 100, so raising Weight biases it harder toward
+	 *  the goal and expands fewer cells. Default 125 keeps paths at most 25% longer than optimal
+	 *  (visually indistinguishable) for a 5-10x speedup on obstacle-rich terrain; 100 is pure,
+	 *  always-optimal A* (slowest); 200 and up is very fast but produces visible zig-zags. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS",
+		meta = (DisplayName = "A* Heuristic Weight (%)", ClampMin = "100", ClampMax = "300", UIMin = "100", UIMax = "200"))
+	int32 AStarHeuristicWeightPercent = 125;
+
+	/** Hard cap on how much work one path search may do — the planner's patience limit. A* explores
+	 *  cells one at a time; once it has expanded this many it gives up and returns the best partial
+	 *  path it found (the closest-to-goal cell reached), the same as for a genuinely unreachable goal.
+	 *  Default 10000 covers any legitimate path on a 1 square-km map at 100 cm cells. Raise it (50000
+	 *  and up) for very large maps or fine grids; lower it for a tighter bound on huge maps with many
+	 *  unreachable clicks. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS",
+		meta = (DisplayName = "A* Max Iterations", ClampMin = "256", ClampMax = "1000000", UIMin = "1000", UIMax = "100000"))
+	int32 AStarMaxIterations = 10000;
 
 	// ----------------------------------------------------------------------
 	// USeinNavigation overrides

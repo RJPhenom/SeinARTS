@@ -56,14 +56,10 @@ USeinARTSCoreSettings::USeinARTSCoreSettings()
 	, NavigationClass(FSoftClassPath(TEXT("/Script/SeinARTSNavigation.SeinNavigationAStar")))
 	, CellSize(FFixedPoint::FromInt(100))
 	, MaxStepHeight(FFixedPoint::FromInt(50))
-	// Path-pipeline tunables. Budget=32 covers typical RTS group sizes (≤32
+	// Path-pipeline tunable. Budget=32 covers typical RTS group sizes (≤32
 	// units) without any per-tick stagger — a 20-unit move resolves all paths
-	// same tick. Heuristic weight 125% gives paths up to 25% longer than optimal
-	// for a 5–10× search speedup on obstacle-rich maps; visually unnoticeable.
-	// Max iterations 10000 bounds A* work for unreachable / very-long paths.
+	// same tick. (A* heuristic weight + iteration cap moved to USeinNavigationAStar's CDO.)
 	, PathRequestsPerTickBudget(32)
-	, AStarHeuristicWeightPercent(125)
-	, AStarMaxIterations(10000)
 	// Nav projection tunables — see PluginSettings.h for rationale on each.
 	// 100cm tolerance covers typical curb / step deltas without crossing
 	// platform-height boundaries; 30-cell ring radius is ~30m on a 100cm grid,
@@ -317,23 +313,19 @@ int32 USeinARTSCoreSettings::ComputeConfigFingerprint() const
 	// machine — e.g. FormationPreviewActorClass, RelayActorClass, the minimap/debug-viz knobs). The
 	// list order is fixed and each value is exported by reflection (ExportText → a value-based string:
 	// the path for a soft-class, the element list for an array), so the hash is deterministic across
-	// machines/builds. Keep this list in sync when adding a sim-affecting setting.
+	// machines/builds. Keep this list in sync when adding a sim-affecting setting. NOTE: tuning that
+	// lives on a pluggable class's CDO (the A* search knobs on USeinNavigationAStar, the avoidance
+	// model knobs on USeinAvoidanceDefault) is intentionally NOT listed here — its determinism is
+	// carried by the class-PATH token (NavigationClass / AvoidanceClass) plus identical compiled/asset
+	// content, exactly as Formation's tuning is. Only tuning that still lives on THIS settings object
+	// belongs in this list.
 	static const TCHAR* const Fields[] = {
 		TEXT("SimulationTickRate"), TEXT("TurnRate"), TEXT("InputDelayTurns"), TEXT("bAsyncPathfinding"),
 		TEXT("NavigationClass"), TEXT("CollisionResolverClass"), TEXT("AvoidanceClass"), TEXT("FogOfWarClass"),
 		TEXT("LevelDataClass"), TEXT("DefaultBrokerResolverClass"), TEXT("DefaultFormation"),
 		TEXT("CellSize"), TEXT("MaxStepHeight"), TEXT("CollisionMassRatioCutoff"), TEXT("PathRequestsPerTickBudget"),
-		TEXT("AStarHeuristicWeightPercent"), TEXT("AStarMaxIterations"), TEXT("NavProjectionElevationTolerance"),
-		TEXT("NavProjectionMaxRingRadius"), TEXT("NavMinWalkableIslandCells"),
-		TEXT("AvoidanceLookaheadSeconds"), TEXT("AvoidanceMovingSpeedFloor"), TEXT("AvoidanceFalloffRadii"),
-		TEXT("AvoidanceSmoothKeep"), TEXT("AvoidanceHeadOnBase"), TEXT("AvoidanceArrivalReleaseRadii"),
-		TEXT("AvoidanceMaxSteerMagnitude"), TEXT("AvoidanceBrakeStrength"),
-		TEXT("AvoidanceBendCapCos"),
-		TEXT("AvoidanceCohesionHoldBack"), TEXT("AvoidanceCohesionCatchUpBoost"),
-		TEXT("AvoidanceCohesionRangeRadii"),
-		TEXT("AvoidanceDoSiDoStrength"), TEXT("AvoidanceCrossingGoalDivergence"),
-		TEXT("AvoidanceIdleResolveStrength"),
-		TEXT("AvoidanceIdleDodgeStrength"), TEXT("AvoidanceIdleDodgeStepSpeed"),
+		TEXT("NavProjectionElevationTolerance"), TEXT("NavProjectionMaxRingRadius"), TEXT("NavMinWalkableIslandCells"),
+		TEXT("AvoidanceMovingSpeedFloor"), TEXT("AvoidanceBendCapCos"), TEXT("AvoidanceIdleDodgeStepSpeed"),
 		TEXT("bSettleToFormationFacing"),
 		TEXT("bIdleReseek"), TEXT("ReseekDisplacementThreshold"),
 		TEXT("ReseekWatchInterval"), TEXT("ReseekReleaseInterval"), TEXT("ReseekMaxEpisodeSeconds"),

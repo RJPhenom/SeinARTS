@@ -496,42 +496,6 @@ public:
 	int32 PathRequestsPerTickBudget;
 
 	/**
-	 * Speed-versus-optimality dial for the A* search, as a percent: 100 means "find the shortest path
-	 * no matter what," higher means "find a good path faster, I'll accept up to that-much longer." The
-	 * search scores cells as f = g + (h * Weight) / 100, so raising Weight biases it harder toward the
-	 * goal and expands fewer cells.
-	 *
-	 * Default 125 keeps paths at most 25% longer than optimal — visually indistinguishable on most
-	 * maps, and 5-10x faster than pure A* on obstacle-rich terrain. 100 is pure, always-optimal A*
-	 * (slowest); 200 and up is very fast but produces visibly sub-optimal zig-zags. Only used when the
-	 * shipped A*-family nav is selected.
-	 */
-	UPROPERTY(Config, EditAnywhere, Category = "Navigation",
-		meta = (ClampMin = "100", ClampMax = "300", UIMin = "100", UIMax = "200",
-				DisplayName = "A* Heuristic Weight (%)",
-				EditCondition = "IsUsingShippedAStar",
-				EditConditionHides))
-	int32 AStarHeuristicWeightPercent;
-
-	/**
-	 * Hard cap on how much work one path search may do — the planner's patience limit. A* explores
-	 * cells one at a time; once it has expanded this many it gives up and returns the best partial path
-	 * it found (the closest-to-goal cell it reached), the same as it does for a genuinely unreachable
-	 * destination.
-	 *
-	 * Default 10000 covers any legitimate path on a 1 square-km map at 100 cm cells. Raise it (50000
-	 * and up) for very large maps or fine grids where long routes need more search; lower it for a
-	 * tighter performance bound on huge maps with many unreachable clicks. Only used when the shipped
-	 * A*-family nav is selected.
-	 */
-	UPROPERTY(Config, EditAnywhere, Category = "Navigation",
-		meta = (ClampMin = "256", ClampMax = "1000000", UIMin = "1000", UIMax = "100000",
-				DisplayName = "A* Max Iterations",
-				EditCondition = "IsUsingShippedAStar",
-				EditConditionHides))
-	int32 AStarMaxIterations;
-
-	/**
 	 * How close in height a candidate cell must be to count as "the same level" when the planner snaps
 	 * a destination onto walkable ground. Clicks (and formation slots) snap to the nearest passable
 	 * cell; this is the maximum height difference allowed before the search keeps looking for a
@@ -622,12 +586,14 @@ public:
 		// Future: || Path == TEXT("/Script/SeinARTSNavigation.SeinNavigationPlannerAStar");
 	}
 
-	// Navigation — Avoidance (a Navigation SUBCATEGORY)
-	// ----------------------------------------------------------------------------------------------------
-	// The MODEL is pluggable (AvoidanceClass below); the tuning constants that follow are the shipped
-	// USeinAvoidanceDefault model's "feel". Per-UNIT dials — AvoidanceStrength / AvoidanceWeight /
-	// bAvoidSameWeights — live on FSeinMovementComponent. Defaults equal the former inline literals,
-	// so motion is unchanged until tuned. All fixed-point → bit-identical.
+	// Navigation — Avoidance (a Navigation SUBCATEGORY). The AvoidanceClass PICKER heads this subcategory
+	// (declared first), followed by the model-AGNOSTIC harness knobs the MOVEMENT HARNESS reads regardless
+	// of which avoidance class is slotted (Moving Speed Floor, Bend Cap, Idle Dodge Step Speed). Each knob
+	// carries EditCondition="IsAvoidanceClassSet" WITHOUT EditConditionHides, so it greys out (stays visible,
+	// disabled) when the picker is None rather than vanishing — no editor customization needed. The model's
+	// SHAPE tuning lives on the shipped USeinAvoidanceDefault class's CDO (subclass it as a Blueprint, tune
+	// the class-defaults, slot it in the picker). Per-UNIT dials — AvoidanceStrength / AvoidanceWeight /
+	// bAvoidSameWeights — live on FSeinMovementComponent.
 
 	/**
 	 * Which local-avoidance model runs the soft per-tick steering that keeps moving units from crowding
@@ -645,51 +611,17 @@ public:
 				MetaClass = "/Script/SeinARTSMovement.SeinAvoidance"))
 	FSoftClassPath AvoidanceClass;
 
-	/** How far ahead in time a moving unit looks for neighbours to steer around. It perceives others
-	 *  out to twice its footprint plus its speed times this many seconds, so faster units watch farther
-	 *  ahead. Default 0.5 seconds. */
-	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Avoidance",
-		meta = (DisplayName = "Lookahead Seconds", ClampMin = "0.0"))
-	FFixedPoint AvoidanceLookaheadSeconds = FFixedPoint::One / FFixedPoint::FromInt(2);
+	/** EditCondition helper: true when an avoidance model is selected (AvoidanceClass is not None).
+	 *  The model-agnostic harness knobs below grey out (stay visible, disabled) when avoidance is OFF. */
+	UFUNCTION()
+	bool IsAvoidanceClassSet() const { return !AvoidanceClass.IsNull(); }
 
 	/** The speed, in world units per second, at or below which a unit counts as stopped and skips
 	 *  avoidance steering entirely. Default 10. */
 	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Avoidance",
-		meta = (DisplayName = "Moving Speed Floor", ClampMin = "0.0"))
+		meta = (DisplayName = "Moving Speed Floor", ClampMin = "0.0",
+				EditCondition = "IsAvoidanceClassSet"))
 	FFixedPoint AvoidanceMovingSpeedFloor = FFixedPoint::FromInt(10);
-
-	/** How far a neighbour's influence reaches, measured in multiples of the two units' combined
-	 *  footprint. Steering fades to zero by this multiple. Default 5. */
-	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Avoidance",
-		meta = (DisplayName = "Falloff Radii", ClampMin = "0.0"))
-	FFixedPoint AvoidanceFalloffRadii = FFixedPoint::FromInt(5);
-
-	/** How much of last tick's steering direction is carried into this tick, from 0 to 1, to keep
-	 *  motion smooth instead of jittery. Higher is smoother but slower to react. Default 0.7. */
-	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Avoidance",
-		meta = (DisplayName = "Smooth Keep", ClampMin = "0.0", ClampMax = "1.0"))
-	FFixedPoint AvoidanceSmoothKeep = FFixedPoint::FromInt(7) / FFixedPoint::FromInt(10);
-
-	/** The minimum weight given to a neighbour that is not coming head-on. A unit moving with the flow
-	 *  or crossing perpendicular still counts at least this much, so it is never ignored entirely.
-	 *  Default 0.1. */
-	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Avoidance",
-		meta = (DisplayName = "Head-On Base", ClampMin = "0.0"))
-	FFixedPoint AvoidanceHeadOnBase = FFixedPoint::One / FFixedPoint::FromInt(10);
-
-	/** How close to its goal a unit stops avoidance-steering, measured in footprints. Inside this
-	 *  radius the collision resolver and path attraction take over the final approach, so units settle
-	 *  onto their destination instead of shuffling. Default 3. */
-	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Avoidance",
-		meta = (DisplayName = "Arrival Release Radii", ClampMin = "0.0"))
-	FFixedPoint AvoidanceArrivalReleaseRadii = FFixedPoint::FromInt(3);
-
-	/** The cap on how strong the accumulated sideways nudge can get before per-unit strength scaling
-	 *  and smoothing are applied. Keeps a crowded unit from being shoved sideways too hard in one tick.
-	 *  Default 2. */
-	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Avoidance",
-		meta = (DisplayName = "Max Steer Magnitude", ClampMin = "0.0"))
-	FFixedPoint AvoidanceMaxSteerMagnitude = FFixedPoint::FromInt(2);
 
 	/** The tightest avoidance may bend a unit's heading away from the straight line to its current
 	 *  goal, given as the cosine of the maximum bend angle.
@@ -703,104 +635,18 @@ public:
 	 *  melee orbits. Set to -1 to disable (bit-identical to no cap). Only the side choice is preserved;
 	 *  this never flips which way a unit dodges. */
 	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Avoidance",
-		meta = (DisplayName = "Bend Cap (Cos)", ClampMin = "-1.0", ClampMax = "1.0"))
+		meta = (DisplayName = "Bend Cap (Cos)", ClampMin = "-1.0", ClampMax = "1.0",
+				EditCondition = "IsAvoidanceClassSet"))
 	FFixedPoint AvoidanceBendCapCos = FFixedPoint::FromInt(17) / FFixedPoint::FromInt(100);
-
-	/** How firmly a MOVING unit steers around a stationary unit that's in its way.
-	 *
-	 *  0 (default) = the mover plows straight through parked units and lets the collision layer shove
-	 *  them aside. Above 0, a mover instead weaves around an idle unit whose Avoidance Weight qualifies
-	 *  (heavier-or-equal) - so moving infantry route around an idle tank, while a moving tank still
-	 *  plows through idle infantry (the lighter idler is ignored). Higher = firmer weave. The mover
-	 *  can't circle the parked unit - the Bend Cap guarantees it keeps making forward progress. */
-	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Avoidance",
-		meta = (DisplayName = "Idle Resolve Strength", ClampMin = "0.0"))
-	FFixedPoint AvoidanceIdleResolveStrength = FFixedPoint::Zero;
-
-	/** How strongly an IDLE unit steps aside for an approaching mover that's about to run it over.
-	 *
-	 *  0 (default) = idle units never move on their own (a mover plows through them, the collision
-	 *  layer shoves them). Above 0, an idle unit shuffles sideways to make a lane for an approaching
-	 *  mover whose Avoidance Weight qualifies (heavier-or-equal) - so idle infantry step aside for a
-	 *  passing tank, while an idle tank holds its ground for passing infantry. Only active while Idle
-	 *  Re-Seek is on: the re-form owns walking the unit back to its slot once the mover has passed. */
-	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Avoidance",
-		meta = (DisplayName = "Idle Dodge Strength", ClampMin = "0.0"))
-	FFixedPoint AvoidanceIdleDodgeStrength = FFixedPoint::Zero;
 
 	/** How fast (world units per second) a dodging idle unit shuffles aside.
 	 *
 	 *  Keep it slow so a step-aside reads as a shuffle, not a sprint, and the collision layer resolves
 	 *  any minor idler-into-idler overlap gracefully. Inert while Idle Dodge Strength is 0. Default 40. */
 	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Avoidance",
-		meta = (DisplayName = "Idle Dodge Step Speed", ClampMin = "0.0"))
+		meta = (DisplayName = "Idle Dodge Step Speed", ClampMin = "0.0",
+				EditCondition = "IsAvoidanceClassSet"))
 	FFixedPoint AvoidanceIdleDodgeStepSpeed = FFixedPoint::FromInt(40);
-
-	/** How hard a unit brakes when it is swerving hard through traffic. 0 = never brake.
-	 *
-	 *  Yield-by-slowing, layered on top of yield-by-turning: steering saturation is the congestion
-	 *  signal, and at full saturation the unit's cruise speed is multiplied by (1 - this), scaling
-	 *  linearly in between. Applies only while a unit is actively avoiding; a clear unit always runs
-	 *  full cruise. Default 0.25 - a unit swerving at its steering cap drops to 75 percent cruise,
-	 *  so congestion reads as units slowing into the weave instead of sliding through at full tilt. */
-	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Avoidance",
-		meta = (DisplayName = "Brake Strength", ClampMin = "0.0", ClampMax = "1.0"))
-	FFixedPoint AvoidanceBrakeStrength = FFixedPoint::One / FFixedPoint::FromInt(4);
-
-	/** How much a unit that has pulled ahead of its formation slows down so the group stays
-	 *  together. 0 = leaders never wait.
-	 *
-	 *  At full deviation ahead of the group's mean progress, the front-runner's cruise speed is
-	 *  multiplied by (1 - this). The group is the unit's command broker (its formation); lone units
-	 *  are unaffected. Pairs with Cohesion Catch-Up Boost (the behind-the-group side) and Cohesion
-	 *  Range (how much lag counts as full deviation). Default 0.5 - front-runners ease to half
-	 *  speed until the group catches up. */
-	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Avoidance",
-		meta = (DisplayName = "Cohesion Hold-Back", ClampMin = "0.0", ClampMax = "1.0"))
-	FFixedPoint AvoidanceCohesionHoldBack = FFixedPoint::One / FFixedPoint::FromInt(2);
-
-	/** How much a unit that has fallen behind its formation speeds up to close the gap.
-	 *  1 = laggards never hurry.
-	 *
-	 *  The cruise multiplier a lagging member ramps toward at full deviation behind the group's
-	 *  mean progress. Values above 1 push a unit past its authored top speed - how a movement mode
-	 *  physically honors that is the mode's own policy. Pairs with Cohesion Hold-Back and Cohesion
-	 *  Range. Default 2 - stragglers sprint at up to double cruise to rejoin their formation. */
-	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Avoidance",
-		meta = (DisplayName = "Cohesion Catch-Up Boost", ClampMin = "1.0"))
-	FFixedPoint AvoidanceCohesionCatchUpBoost = FFixedPoint::FromInt(2);
-
-	/** How strung out a formation must get, measured in bodies, before catch-up and hold-back
-	 *  reach full strength.
-	 *
-	 *  Multiples of a unit's footprint radius, so the response is the same on a short hop and a
-	 *  long march. A member starts reacting once it deviates from the group's mean progress by
-	 *  about 15 percent of this range and responds fully at the whole range. Default 8 - a unit
-	 *  with a 50 cm footprint starts reacting around 60 cm of lag and responds fully at 400 cm. */
-	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Avoidance",
-		meta = (DisplayName = "Cohesion Range (Footprints)", ClampMin = "1.0"))
-	FFixedPoint AvoidanceCohesionRangeRadii = FFixedPoint::FromInt(8);
-
-
-	/** How strongly two units on a genuine crossing course slide past each other.
-	 *
-	 *  When two movers are heading opposite ways and their goals are on opposite sides, they pick
-	 *  opposite sides and curve past instead of running into each other or circling. This scales
-	 *  that sideways slide. 0 turns the crossing slide-past off entirely (units fall back to the
-	 *  basic side-step, which is what causes the head-on lock and orbiting). Default 1. */
-	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Avoidance",
-		meta = (DisplayName = "Do-Si-Do Strength", ClampMin = "0.0"))
-	FFixedPoint AvoidanceDoSiDoStrength = FFixedPoint::One;
-
-	/** How far apart two units' goals must be before the engine treats them as genuinely crossing.
-	 *
-	 *  Measured as a multiple of how far apart the two units currently are. Higher means the slide-
-	 *  past only kicks in for units that really are trading places, so a crowd converging on one
-	 *  spot still packs tightly instead of shoving sideways. Lower makes units more eager to treat a
-	 *  near-miss as a crossing. Combined with the opposite-directions test. Default 1. */
-	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Avoidance",
-		meta = (DisplayName = "Crossing Goal Divergence", ClampMin = "0.0"))
-	FFixedPoint AvoidanceCrossingGoalDivergence = FFixedPoint::One;
 
 	/** Whether units turn to face their formation's direction after arriving on a slot.
 	 *
@@ -822,7 +668,7 @@ public:
 	 *  its own slots - members are re-matched to slots so the re-form crosses as little as
 	 *  possible, not returned to their exact old spots. Applies to formations dispatched by the
 	 *  default broker resolver; squad-authored dispatches are unaffected. */
-	UPROPERTY(Config, EditAnywhere, Category = "Navigation",
+	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Re-Seek",
 		meta = (DisplayName = "Idle Re-Seek"))
 	bool bIdleReseek = false;
 
@@ -834,8 +680,9 @@ public:
 	 *  effective trigger is never less than twice a unit's arrival acceptance, so a too-low value
 	 *  here is quietly raised rather than causing an endless shuffle. Default 150. Only read while
 	 *  Idle Re-Seek is on. */
-	UPROPERTY(Config, EditAnywhere, Category = "Navigation",
-		meta = (DisplayName = "Re-Seek Displacement Threshold", ClampMin = "0.0"))
+	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Re-Seek",
+		meta = (DisplayName = "Re-Seek Displacement Threshold", ClampMin = "0.0",
+				EditCondition = "bIdleReseek"))
 	FFixedPoint ReseekDisplacementThreshold = FFixedPoint::FromInt(150);
 
 	/** How often an idle formation checks whether it has been shoved apart, in seconds.
@@ -844,8 +691,9 @@ public:
 	 *  formation scans at this interval. Larger = cheaper and slower to notice displacement;
 	 *  smaller = snappier. Converted to whole sim ticks (minimum one tick). Default 0.5.
 	 *  Only read while Idle Re-Seek is on. */
-	UPROPERTY(Config, EditAnywhere, Category = "Navigation",
-		meta = (DisplayName = "Re-Seek Watch Interval", ClampMin = "0.0"))
+	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Re-Seek",
+		meta = (DisplayName = "Re-Seek Watch Interval", ClampMin = "0.0",
+				EditCondition = "bIdleReseek"))
 	FFixedPoint ReseekWatchInterval = FFixedPoint::One / FFixedPoint::FromInt(2);
 
 	/** How often soldiers are released during an active re-form, in seconds. 0 = every sim tick.
@@ -856,8 +704,9 @@ public:
 	 *  gates opened in the same window fire together); 0 samples every tick so each soldier
 	 *  releases the moment its own gates open - the most organic setting. Default 0.
 	 *  Only read while Idle Re-Seek is on. */
-	UPROPERTY(Config, EditAnywhere, Category = "Navigation",
-		meta = (DisplayName = "Re-Seek Release Interval", ClampMin = "0.0"))
+	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Re-Seek",
+		meta = (DisplayName = "Re-Seek Release Interval", ClampMin = "0.0",
+				EditCondition = "bIdleReseek"))
 	FFixedPoint ReseekReleaseInterval = FFixedPoint::Zero;
 
 	/** Safety cap on how long one re-form episode may run before it gives up, in seconds.
@@ -869,11 +718,12 @@ public:
 	 *  is a backstop, not the primary defence (the displacement floor above is), so it should
 	 *  rarely fire. 0 disables the cap (not recommended). Default 4. Only read while Idle Re-Seek
 	 *  is on. */
-	UPROPERTY(Config, EditAnywhere, Category = "Navigation",
-		meta = (DisplayName = "Re-Seek Max Episode Seconds", ClampMin = "0.0"))
+	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Re-Seek",
+		meta = (DisplayName = "Re-Seek Max Episode Seconds", ClampMin = "0.0",
+				EditCondition = "bIdleReseek"))
 	FFixedPoint ReseekMaxEpisodeSeconds = FFixedPoint::FromInt(4);
 
-	// Navigation — Formation (a Navigation SUBCATEGORY, nested below Avoidance)
+	// Navigation — Formation (a Navigation SUBCATEGORY, nested below Re-Seek)
 	// ----------------------------------------------------------------------------------------------------
 	// The order-formation system: the shape a selection forms for a move. The drag gesture and a plain
 	// click both resolve through the command broker resolver to a USeinFormation.

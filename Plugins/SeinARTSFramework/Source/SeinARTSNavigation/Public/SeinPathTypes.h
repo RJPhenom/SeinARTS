@@ -116,7 +116,7 @@ struct SEINARTSNAVIGATION_API FSeinPathRequest
 	bool bAuthoritativeDestination = false;
 
 	/** Per-request cap on A* node expansions. 0 = use the project default
-	 *  (USeinARTSCoreSettings::AStarMaxIterations). Set a smaller value to bound an
+	 *  (USeinNavigationAStar::AStarMaxIterations, on the nav class CDO). Set a smaller value to bound an
 	 *  expensive / long-range pathfind — A* returns a best-effort partial path
 	 *  (bIsPartial) if the cap is hit rather than searching the whole grid. */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Navigation|Path", meta = (ClampMin = "0"))

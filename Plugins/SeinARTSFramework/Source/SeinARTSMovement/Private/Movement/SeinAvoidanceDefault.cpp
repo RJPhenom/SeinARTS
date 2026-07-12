@@ -87,40 +87,42 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 {
 	const FSeinCollisionSpatialHash& Hash = World.GetCollisionSpatialHash();
 
-	// --- Tunables: model-shape constants shared by ALL movers, authored in plugin settings
-	//     (Navigation|Avoidance) and part of the settings determinism fingerprint. Per-unit
-	//     dials (strength/weight/same-weights) live on FSeinMovementComponent. ---
+	// --- Tunables: the model-shape constants are authored on THIS class's CDO (edit via a Blueprint
+	//     subclass slotted in Project Settings > AvoidanceClass; captured for determinism by that
+	//     class-path + identical content, so they leave the settings fingerprint). The model-AGNOSTIC
+	//     harness knobs (Moving Speed Floor / Bend Cap) + the Idle Re-Seek switch still come from
+	//     plugin settings. Per-unit dials (strength/weight/same-weights) live on FSeinMovementComponent. ---
 	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
-	const FFixedPoint LookaheadSeconds    = Settings->AvoidanceLookaheadSeconds;
+	const FFixedPoint LookaheadSeconds    = AvoidanceLookaheadSeconds;
 	const FFixedPoint MovingSpeedFloor    = Settings->AvoidanceMovingSpeedFloor;
-	const FFixedPoint FalloffRadii        = Settings->AvoidanceFalloffRadii;
-	const FFixedPoint SmoothKeep          = Settings->AvoidanceSmoothKeep;
-	const FFixedPoint HeadOnBase          = Settings->AvoidanceHeadOnBase;
-	const FFixedPoint ArrivalReleaseRadii = Settings->AvoidanceArrivalReleaseRadii;
-	const FFixedPoint MaxSteerMagnitude   = Settings->AvoidanceMaxSteerMagnitude;
-	const FFixedPoint BrakeStrength       = Settings->AvoidanceBrakeStrength;
-	const FFixedPoint CohesionHoldBack    = Settings->AvoidanceCohesionHoldBack;
-	const FFixedPoint CohesionBoost       = Settings->AvoidanceCohesionCatchUpBoost;
-	const FFixedPoint CohesionRangeRadii  = Settings->AvoidanceCohesionRangeRadii;
+	const FFixedPoint FalloffRadii        = AvoidanceFalloffRadii;
+	const FFixedPoint SmoothKeep          = AvoidanceSmoothKeep;
+	const FFixedPoint HeadOnBase          = AvoidanceHeadOnBase;
+	const FFixedPoint ArrivalReleaseRadii = AvoidanceArrivalReleaseRadii;
+	const FFixedPoint MaxSteerMagnitude   = AvoidanceMaxSteerMagnitude;
+	const FFixedPoint BrakeStrength       = AvoidanceBrakeStrength;
+	const FFixedPoint CohesionHoldBack    = AvoidanceCohesionHoldBack;
+	const FFixedPoint CohesionBoost       = AvoidanceCohesionCatchUpBoost;
+	const FFixedPoint CohesionRangeRadii  = AvoidanceCohesionRangeRadii;
 	// Do-si-do (crossing slide-past) dials. Strength 0 = the crossing steer is off entirely
 	// (pure group-skip + geometric sidewalk, the pre-do-si-do behaviour). CrossGoalDivergence is
 	// the goal-separation-vs-body-separation ratio that marks a GENUINE crossing (paired with
 	// opposed travel intent); larger = crossings recognised more rarely = more packing preserved.
-	const FFixedPoint DoSiDoStrength      = Settings->AvoidanceDoSiDoStrength;
-	const FFixedPoint DoSiDoCrossDiverge  = Settings->AvoidanceCrossingGoalDivergence;
+	const FFixedPoint DoSiDoStrength      = AvoidanceDoSiDoStrength;
+	const FFixedPoint DoSiDoCrossDiverge  = AvoidanceCrossingGoalDivergence;
 	const FFixedPoint KconvSq             = DoSiDoCrossDiverge * DoSiDoCrossDiverge;
 	const bool bDoSiDoEnabled             = DoSiDoStrength > FFixedPoint::Zero;
 	// RESOLVE-THROUGH (mover-resolves-around-idlers). Strength 0 = the bulldoze-idle rule stands
 	// bit-exact (a mover plows through parked units, collision shoves them). > 0 = a moving unit
 	// steers around an idle neighbour whose AvoidanceWeight qualifies (heavier-or-equal), scaled by
 	// this. Orbit-safe under the goal-relative bend cap (which guarantees forward progress).
-	const FFixedPoint IdleResolveStrength = Settings->AvoidanceIdleResolveStrength;
+	const FFixedPoint IdleResolveStrength = AvoidanceIdleResolveStrength;
 	const bool bResolveThroughIdlers      = IdleResolveStrength > FFixedPoint::Zero;
 	// IDLER-DODGES-MOVER: an idle unit steps aside for an approaching qualifying mover. Gated ALSO
 	// on bIdleReseek — the shipped re-seek owns the walk back to slot (the dodge only suppresses its
 	// release while active), so a dodge is meaningless without a return path. Strength 0 OR re-seek
 	// off → the true-idle branch takes the exact ClearOutput (bit-exact today).
-	const FFixedPoint IdleDodgeStrength   = Settings->AvoidanceIdleDodgeStrength;
+	const FFixedPoint IdleDodgeStrength   = AvoidanceIdleDodgeStrength;
 	const bool bIdleDodgeEnabled          = Settings->bIdleReseek && IdleDodgeStrength > FFixedPoint::Zero;
 	// Bend cap, also read here (not only in ApplyAvoidanceSteer): the idle GAP-SEEK below bounds its
 	// candidate headings to the same goal-relative wedge, so it never proposes a thread the downstream
