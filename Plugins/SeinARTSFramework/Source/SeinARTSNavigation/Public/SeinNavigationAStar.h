@@ -23,6 +23,13 @@
 class UWorld;
 class USeinLevelData;
 
+#if WITH_DEV_AUTOMATION_TESTS
+namespace UE::SeinARTSTests
+{
+	struct FNavigationAStarTestAccess;
+}
+#endif
+
 /**
  * Works out how units walk from A to B: it lays a 2D grid over the level, finds a route around
  * walls and steep ground, then straightens that route into clean waypoints. This is the navigation
@@ -49,6 +56,10 @@ class SEINARTSNAVIGATION_API USeinNavigationAStar : public USeinNavigation, publ
 	GENERATED_BODY()
 
 private:
+
+#if WITH_DEV_AUTOMATION_TESTS
+	friend struct UE::SeinARTSTests::FNavigationAStarTestAccess;
+#endif
 
 	/** Open-list node, kept as a class-private nested type so the search heap
 	 *  can live inside FAStarScratch. Was previously in an anonymous namespace
@@ -101,8 +112,10 @@ private:
 
 		/** Overlay-REUSE signature (perf; bit-identical). BuildDynamicBlockedOverlay is SKIPPED when the
 		 *  current request would rebuild the SAME overlay this scratch already holds: same agent mask,
-		 *  same blocker set (LastBlockerHash), and the held overlay carried no relevant self-exclusion
-		 *  (bOverlayReuseValid). This lets a fresh per-worker scratch build the overlay ONCE per async
+		 *  no blocker/grid mutation since it was built, and no relevant self-exclusion
+		 *  (`bOverlayReuseValid`). Exact blocker changes and substrate reloads explicitly invalidate the
+		 *  persistent MainScratch; worker scratches are local to one immutable batch. This lets a fresh
+		 *  per-worker scratch build the overlay ONCE per async
 		 *  batch and reuse it for the rest of that batch's same-mask, non-self-blocker requests, instead
 		 *  of re-stamping every blocker per request (the cover-wall batch cost). The reused overlay
 		 *  equals the per-request one (exclusion only removes the requester's OWN cells, which a
@@ -110,7 +123,6 @@ private:
 		 *  dynamic-WD cache is still re-derived per request (it is not overlay-pure). */
 		bool   bOverlayReuseValid      = false;
 		uint8  OverlayReuseMask        = 0;
-		uint32 OverlayReuseBlockerHash = 0;
 
 		/** Per-request dynamic-WD lazy cache (Chebyshev distance from each visited
 		 *  cell to its nearest dyn-blocked cell, capped at the per-request
@@ -418,13 +430,6 @@ protected:
 	 *  a unit can path out of its own footprint). Shared, immutable during a
 	 *  search — NOT part of FAStarScratch. */
 	TArray<FSeinDynamicBlocker> DynamicBlockers;
-
-	/** Fingerprint of the last DynamicBlockers list pushed via SetDynamicBlockers.
-	 *  XOR-fold of per-blocker pose + mask + shape hash. SetDynamicBlockers
-	 *  only broadcasts OnNavigationMutated when the new hash differs — gates
-	 *  the debug scene-proxy rebuild to actual mutations instead of every
-	 *  per-tick push. */
-	uint32 LastBlockerHash = 0;
 
 	// ----------------------------------------------------------------------
 	// Grid helpers

@@ -166,8 +166,25 @@ public:
 		FSeinEntityHandle EntityHandle,
 		TSubclassOf<class USeinAbility> AbilityClass);
 
+	/** Framework-internal source-aware grant used by active effects. The source
+	 *  ID is committed before passive activation and is the only reference a
+	 *  matching effect teardown may later consume. */
+	static int32 SeinGrantAbilityFromEffect(const UObject* WorldContextObject,
+		FSeinEntityHandle EntityHandle,
+		TSubclassOf<class USeinAbility> AbilityClass,
+		int64 EffectInstanceID);
+
+	/** Consume one grant owned by `EffectInstanceID`. A missing source record is
+	 *  a no-op even if the same class has since been granted by someone else. */
+	static int32 SeinRevokeAbilityFromEffect(const UObject* WorldContextObject,
+		FSeinEntityHandle EntityHandle,
+		TSubclassOf<class USeinAbility> AbilityClass,
+		int64 EffectInstanceID);
+
 	/** Revoke one grant of every ability instance on the entity whose
-	 *  AbilityTag matches. Decrements the grant refcount per matching
+	 *  AbilityTag matches. Consumes an anonymous/native grant first; if none
+	 *  exists, consumes the oldest effect-owned source and prunes that effect's
+	 *  live ledger claim. Decrements the grant refcount per matching
 	 *  instance; only fully destroys the instance (cancel active → unregister
 	 *  pool → remove from arrays) when the refcount hits zero. Dirties the
 	 *  broker capability map when any instance is actually destroyed.
@@ -182,7 +199,7 @@ public:
 		FGameplayTag AbilityTag);
 
 	/** Revoke one grant of the entity's instance of the given ability class.
-	 *  Same refcount-decrement semantics as `SeinRevokeAbilityByTag` — only
+	 *  Same anonymous-first/source-pruning semantics as `SeinRevokeAbilityByTag` — only
 	 *  destroys at zero count. Use when the caller has a concrete class
 	 *  reference (typical for effect-driven revokes that remember which
 	 *  classes they granted).

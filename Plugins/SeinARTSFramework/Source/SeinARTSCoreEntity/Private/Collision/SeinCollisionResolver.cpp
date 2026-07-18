@@ -223,7 +223,7 @@ void USeinCollisionResolver::DetectOverlapsAndEmit(USeinWorldSubsystem& World, c
 	const FFixedPoint CellSize = Hash.GetCellSize();
 	TArray<FSeinEntityHandle> Neighbors;
 
-	TMap<uint64, TPair<FSeinEntityHandle, FSeinEntityHandle>> Current;
+	TSet<FOverlapPairKey> Current;
 
 	// Hoist the Extents storage once (see ResolvePass) + reusable self-shape scratch.
 	ISeinComponentStorage* ExtentsStorage = World.GetComponentStorageRaw(FSeinExtentsComponent::StaticStruct());
@@ -268,38 +268,32 @@ void USeinCollisionResolver::DetectOverlapsAndEmit(USeinWorldSubsystem& World, c
 			FFixedPoint  Depth;
 			if (!ComputeDeepestContact(SelfShapes, *OtherExt, OtherEntity->Transform, Normal, Depth)) continue;
 
-			const bool bSelfLower = (SelfHandle.Index < OtherHandle.Index);
-			const FSeinEntityHandle A = bSelfLower ? SelfHandle : OtherHandle;
-			const FSeinEntityHandle B = bSelfLower ? OtherHandle : SelfHandle;
-			Current.Add(MakePairKey(SelfHandle.Index, OtherHandle.Index),
-				TPair<FSeinEntityHandle, FSeinEntityHandle>(A, B));
+			Current.Add(MakePairKey(SelfHandle, OtherHandle));
 		}
 	});
 
-	// Diff against last tick. Collect begin/end keys, sort for deterministic
-	// event order, then emit.
-	TArray<uint64> BeginKeys;
-	TArray<uint64> EndKeys;
-	for (const TPair<uint64, TPair<FSeinEntityHandle, FSeinEntityHandle>>& KV : Current)
+	// Diff against last tick. Collect pair identities, sort for deterministic
+	// event order, then emit all begins before all ends as before.
+	TArray<FOverlapPairKey> BeginKeys;
+	TArray<FOverlapPairKey> EndKeys;
+	for (const FOverlapPairKey& Pair : Current)
 	{
-		if (!ActiveOverlaps.Contains(KV.Key)) BeginKeys.Add(KV.Key);
+		if (!ActiveOverlaps.Contains(Pair)) BeginKeys.Add(Pair);
 	}
-	for (const TPair<uint64, TPair<FSeinEntityHandle, FSeinEntityHandle>>& KV : ActiveOverlaps)
+	for (const FOverlapPairKey& Pair : ActiveOverlaps)
 	{
-		if (!Current.Contains(KV.Key)) EndKeys.Add(KV.Key);
+		if (!Current.Contains(Pair)) EndKeys.Add(Pair);
 	}
 	BeginKeys.Sort();
 	EndKeys.Sort();
 
-	for (const uint64 Key : BeginKeys)
+	for (const FOverlapPairKey& Pair : BeginKeys)
 	{
-		const TPair<FSeinEntityHandle, FSeinEntityHandle>& Pair = Current[Key];
-		World.EnqueueVisualEvent(FSeinVisualEvent::MakeCollisionOverlapBeginEvent(Pair.Key, Pair.Value));
+		World.EnqueueVisualEvent(FSeinVisualEvent::MakeCollisionOverlapBeginEvent(Pair.A, Pair.B));
 	}
-	for (const uint64 Key : EndKeys)
+	for (const FOverlapPairKey& Pair : EndKeys)
 	{
-		const TPair<FSeinEntityHandle, FSeinEntityHandle>& Pair = ActiveOverlaps[Key];
-		World.EnqueueVisualEvent(FSeinVisualEvent::MakeCollisionOverlapEndEvent(Pair.Key, Pair.Value));
+		World.EnqueueVisualEvent(FSeinVisualEvent::MakeCollisionOverlapEndEvent(Pair.A, Pair.B));
 	}
 
 	ActiveOverlaps = MoveTemp(Current);

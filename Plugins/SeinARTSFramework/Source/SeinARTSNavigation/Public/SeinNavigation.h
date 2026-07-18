@@ -76,6 +76,20 @@ struct FSeinDynamicBlocker
 	 *  intersection with the requesting agent's NavLayerMask. Default 0xFF
 	 *  (blocks everyone) if the owning entity didn't author a mask. */
 	uint8 BlockedNavLayerMask = 0xFF;
+
+	FORCEINLINE bool operator==(const FSeinDynamicBlocker& Other) const
+	{
+		return Shape == Other.Shape
+			&& EntityCenter == Other.EntityCenter
+			&& EntityRotation == Other.EntityRotation
+			&& Owner == Other.Owner
+			&& BlockedNavLayerMask == Other.BlockedNavLayerMask;
+	}
+
+	FORCEINLINE bool operator!=(const FSeinDynamicBlocker& Other) const
+	{
+		return !(*this == Other);
+	}
 };
 
 /** Fired when the nav's baked data mutates (bake finished, substrate re-adopted,

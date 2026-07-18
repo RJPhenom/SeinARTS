@@ -349,6 +349,14 @@ bool USeinNavigationAStar::LoadFromSubstrate(const USeinLevelData& Substrate)
 	// IsReachable. Recomputed on every grid load alongside WallDistance.
 	RebuildConnectivityComponents();
 
+	// Grid adoption can change width/height while retaining the same total cell
+	// count. Drop both overlay bytes and their 2D dirty rectangle so neither is
+	// reinterpreted through the new row stride. Reset retains array capacity.
+	MainScratch.DynamicBlocked.Reset();
+	MainScratch.LastOverlayDirtyRect =
+		FIntRect(INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN);
+	MainScratch.bOverlayReuseValid = false;
+
 	// Broadcast after runtime state is in sync — subscribers (debug scene proxy,
 	// cached plan invalidation, etc.) see a consistent snapshot.
 	OnNavigationMutated.Broadcast();
@@ -763,37 +771,15 @@ bool USeinNavigationAStar::IsPlacementValid(const FFixedVector& CenterWorld, FFi
 
 void USeinNavigationAStar::SetDynamicBlockers(const TArray<FSeinDynamicBlocker>& InBlockers)
 {
-	DynamicBlockers = InBlockers;
+	// The PreTick producer emits a deterministic handle/shape-ordered list.
+	// Exact equality avoids collision-prone fingerprints and catches generation,
+	// sub-cell pose, rotation, and same-count geometry changes. Order-only
+	// differences conservatively invalidate, which is safe for custom callers.
+	if (DynamicBlockers == InBlockers) return;
 
-	// Hash the new list so we only broadcast OnNavigationMutated when the
-	// blocker set actually changed. The stamping system pushes every PreTick
-	// regardless of motion; an unconditional broadcast here would invalidate
-	// the debug scene proxy ~60×/sec for static scenes — wasted mesh builds.
-	// XOR-fold is order-independent (matches the spatial-hash insertion-order
-	// pattern) so the same set in any iteration order produces the same hash.
-	uint32 NewHash = 0;
-	for (const FSeinDynamicBlocker& B : InBlockers)
-	{
-		NewHash ^= GetTypeHash(B.Owner.Index);
-		NewHash ^= GetTypeHash(B.EntityCenter.X.Value);
-		NewHash ^= GetTypeHash(B.EntityCenter.Y.Value);
-		NewHash ^= GetTypeHash(B.EntityCenter.Z.Value);
-		// Rotation drives WHICH cells a Rect / Cone (or offset-Radial) blocker stamps, so a
-		// rotation-only change (a vehicle turning in place, a rotating wall) IS an overlay change.
-		// This hash is the overlay-reuse invalidation key, so omitting rotation would reuse a stale
-		// overlay when a blocker rotates. Fold all four quaternion components.
-		NewHash ^= GetTypeHash(B.EntityRotation.X.Value);
-		NewHash ^= GetTypeHash(B.EntityRotation.Y.Value);
-		NewHash ^= GetTypeHash(B.EntityRotation.Z.Value);
-		NewHash ^= GetTypeHash(B.EntityRotation.W.Value);
-		NewHash ^= GetTypeHash(B.Shape);
-		NewHash ^= static_cast<uint32>(B.BlockedNavLayerMask);
-	}
-	if (NewHash != LastBlockerHash)
-	{
-		LastBlockerHash = NewHash;
-		OnNavigationMutated.Broadcast();
-	}
+	DynamicBlockers = InBlockers;
+	MainScratch.bOverlayReuseValid = false;
+	OnNavigationMutated.Broadcast();
 }
 
 void USeinNavigationAStar::BuildDynamicBlockedOverlay(FSeinEntityHandle Exclude, uint8 AgentNavLayerMask, FAStarScratch& Scratch) const
@@ -2092,8 +2078,8 @@ bool USeinNavigationAStar::FindCellPathInternal(const FSeinPathRequest& Request,
 	// OVERLAY REUSE (perf; bit-identical). A fresh per-worker scratch rebuilds the dynamic-blocker
 	// overlay for its first request each async batch, then RE-STAMPS every blocker per subsequent
 	// request even though the overlay is identical — the cover-wall batch cost. Skip the rebuild when
-	// this scratch already holds the SAME overlay: same agent mask, same blocker set (LastBlockerHash),
-	// and the held overlay carried no relevant self-exclusion. A path requester that OWNS a blocker
+	// this scratch already holds the SAME overlay: same agent mask, no intervening exact blocker/grid
+	// mutation, and the held overlay carried no relevant self-exclusion. A path requester that OWNS a blocker
 	// (rare — units don't block nav) can't share the no-exclusion overlay and forces a rebuild.
 	// Bit-identical because exclusion only removes the requester's own cells, which a non-blocker
 	// requester has none of, so the shared overlay equals the per-request overlay.
@@ -2105,7 +2091,6 @@ bool USeinNavigationAStar::FindCellPathInternal(const FSeinPathRequest& Request,
 	const bool bReuseOverlay = !bRequesterOwnsBlocker
 		&& Scratch.bOverlayReuseValid
 		&& Scratch.OverlayReuseMask        == Request.AgentNavLayerMask
-		&& Scratch.OverlayReuseBlockerHash == LastBlockerHash
 		&& Scratch.DynamicBlocked.Num()    == Width * Height;
 
 	if (!bReuseOverlay)
@@ -2120,7 +2105,6 @@ bool USeinNavigationAStar::FindCellPathInternal(const FSeinPathRequest& Request,
 		// self-blocker build is request-specific and forces the next request to rebuild.
 		Scratch.bOverlayReuseValid      = !bRequesterOwnsBlocker;
 		Scratch.OverlayReuseMask        = Request.AgentNavLayerMask;
-		Scratch.OverlayReuseBlockerHash = LastBlockerHash;
 	}
 
 	// Per-agent terrain filter: bar cells whose terrain type's tag is listed in
@@ -2751,7 +2735,7 @@ void USeinNavigationAStar::CollectDebugCellQuads(TArray<FVector>& OutCenters, TA
 	// One emitted quad per actual nav cell — viz reads the configured
 	// `Settings->CellSize` (or per-volume override) authoritatively.
 	// At very large grids (1km²+) this can be expensive on proxy rebuild,
-	// but the broadcast is hash-gated in `SetDynamicBlockers` so rebuilds
+	// but the broadcast is exact-change-gated in `SetDynamicBlockers` so rebuilds
 	// only fire on actual mutations.
 	const int32 N = Width * Height;
 	OutCenters.Reserve(N);

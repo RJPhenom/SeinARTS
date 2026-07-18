@@ -39,6 +39,34 @@ class USeinReplayReader;
 class USeinAIController;
 class USeinWorldSubsystem;
 struct FSeinSlotHashEntry;
+struct FSeinNetSubsystemTestAccess;
+
+/** A frozen local submission. Once a turn boundary assigns commands to a
+ *  turn, retries must preserve that exact batch rather than merging later
+ *  input into it. */
+struct FSeinPendingTurnSubmission
+{
+	int32 TurnId = INDEX_NONE;
+	TArray<FSeinCommand> Commands;
+};
+
+/** A state hash captured at its exact checkpoint. A failed local send must
+ *  retry this value; recomputing after the sim advances would report a
+ *  different state under the old turn number. */
+struct FSeinPendingStateHashReport
+{
+	int32 Turn = INDEX_NONE;
+	int32 Hash = 0;
+};
+
+/** Non-authoritative, wall-clock-only diagnostics for one incomplete server
+ *  turn. Kept per turn so interleaved network arrivals retain attribution. */
+struct FSeinIncompleteTurnDiagnostic
+{
+	double FirstObservedAt = 0.0;
+	double LastLoggedAt = 0.0;
+	bool bEscalated = false;
+};
 
 /**
  * Slot lifecycle states for drop-in/drop-out (Phase 4).
@@ -128,15 +156,15 @@ public:
 	 *  ghost relays forever. */
 	int32 GetActiveSlotCount() const
 	{
-		int32 Count = 0;
+		TSet<FSeinPlayerID> Slots;
 		for (const TPair<TWeakObjectPtr<ASeinNetRelay>, FSeinPlayerID>& Pair : RelayToSlot)
 		{
-			if (Pair.Key.IsValid())
+			if (Pair.Key.IsValid() && Pair.Value.IsValid())
 			{
-				++Count;
+				Slots.Add(Pair.Value);
 			}
 		}
-		return Count;
+		return Slots.Num();
 	}
 
 	/** Server-only: spawn the lockstep relay for a given PlayerController
@@ -153,18 +181,16 @@ public:
 	 *  instead of double-spawning. */
 	void ServerSpawnRelayForController(APlayerController* PC, FSeinPlayerID Slot);
 
-	/** Called by ASeinNetRelay::OnRep_AssignedPlayerID on the owning client
-	 *  when the slot + seed arrive. Binds the lockstep gate hooks but does
-	 *  NOT start the sim — sim start is gated on Client_StartSession (server)
-	 *  / StartLockstepSession (manual / lobby trigger). */
+	/** Called by ASeinNetRelay replication on the owning client when its slot
+	 *  and seed arrive. Latches local identity, ensures the current world's
+	 *  lockstep hooks are bound, and retries deferred work. */
 	void NotifyLocalSlotAssigned(ASeinNetRelay* Relay, FSeinPlayerID Slot, int64 Seed);
 
-	/** Server-only: kick off the lockstep session. Fires Client_StartSession
-	 *  on every connected relay (so all peers' sims start simultaneously, at
-	 *  tick 0, with the gate engaged from the first frame) and starts the
-	 *  server's own sim. Called from `Sein.Net.StartMatch` (Phase 2b) or
-	 *  from a future lobby flow (Phase 3). Idempotent — already-running
-	 *  sims are left alone. */
+	/** Server-only: request lockstep session start. When config parity is
+	 *  enabled on the host, the request remains latched until every connected
+	 *  relay slot has reported the host's fingerprint; only then does the
+	 *  server fire Client_StartSession and start its own tick-zero sim.
+	 *  Idempotent — already-running sims are left alone. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Network")
 	void StartLockstepSession();
 
@@ -229,8 +255,9 @@ public:
 	 *  full per-slot hash table. */
 	void ServerHandleStateHashReport(ASeinNetRelay* SourceRelay, int32 Turn, int32 Hash);
 
-	/** Server-side handler for a joining client's config fingerprint. Compares against the host's own
-	 *  fingerprint; on mismatch kicks the client (Client_NotifyKicked). No-op when the check is off. */
+	/** Server-side handler for a joining client's config fingerprint. Records
+	 *  an accepted report for the start barrier, or kicks a mismatched client.
+	 *  No-op when host-side enforcement is disabled. */
 	void ServerHandleConfigFingerprint(ASeinNetRelay* SourceRelay, int32 Fingerprint);
 
 	/** Client-side: server told us a desync was detected at `Turn` and is
@@ -303,31 +330,72 @@ public:
 	const TArray<TWeakObjectPtr<ASeinNetRelay>>& GetRelays() const { return Relays; }
 
 private:
+	friend struct FSeinNetSubsystemTestAccess;
+	enum class EFirstAcceptResult : uint8
+	{
+		Accepted,
+		IdenticalDuplicate,
+		ConflictingDuplicate,
+	};
+
 	void OnPostLogin(AGameModeBase* GameMode, APlayerController* NewPlayer);
 	void OnLogout(AGameModeBase* GameMode, AController* Exiting);
 
-	/** FWorldDelegates::OnWorldCleanup handler. Resets per-match lockstep
-	 *  state (`ServerTurnBuffer`, `ReceivedTurns`, `PendingOutgoingCommands`,
-	 *  `CompletedTurns`, `LastSubmittedTurn`) when a world is torn down so
-	 *  the next world's sim starts from a clean lockstep pipeline. Filtered
-	 *  to only the world this GameInstance owns — cleanup of other worlds
-	 *  (sub-PIE, etc.) is ignored. Relay/peer-identity state is preserved. */
+	/** FWorldDelegates::OnWorldCleanup handler. Resets state belonging to the
+	 *  retiring tick-zero/turn-number epoch while preserving match identity
+	 *  whose seamless-travel semantics are still a deliberate design gate. */
 	void OnWorldCleanup(UWorld* World, bool bSessionEnded, bool bCleanupResources);
 
-	/** True only on the server side. Cached at first relay-spawn / first
-	 *  hook call; cheaper than re-querying NetMode every entry. */
+	/** Clear every command/hash value whose identity is scoped to one fresh
+	 *  simulation world. Does not decide whether seed, relay/slot identity,
+	 *  replay, desync alarm, or drop lifecycle survive travel. */
+	void ResetLockstepEpochState(UWorld* RetiringWorld);
+
+	/** Release Net-owned AI takeover objects tied to RetiringWorld and discard
+	 *  commands they authored for its obsolete turn epoch. */
+	void ReleaseWorldOwnedAI(UWorld* RetiringWorld);
+
+	/** True on listen and dedicated authority worlds. */
 	bool IsServer() const;
+	bool IsDedicatedAuthority() const;
 
 	/** Server-side: lazy-init SessionSeed on first call. Once set, never
 	 *  changes for the life of this game-instance subsystem. */
 	void EnsureSessionSeed();
 
+	/** Bind the gate, turn-boundary, and authority-AI hooks to the current
+	 *  simulation world independently of local-player relay assignment. */
+	USeinWorldSubsystem* BindLockstepHooksForCurrentWorld();
+	bool AreNetworkStartPrerequisitesReady(bool bHooksReady) const;
+	void TryDispatchLockstepSessionStart();
+	bool IsConfigParityStartBarrierSatisfied(TArray<FSeinPlayerID>* OutMissingSlots = nullptr) const;
+	static bool AreConfigFingerprintsComplete(
+		const TArray<FSeinPlayerID>& ExpectedSlots,
+		const TMap<FSeinPlayerID, int32>& AcceptedFingerprints,
+		int32 RequiredFingerprint);
+
 	/** Server-side: check if every connected slot has submitted for `TurnId`;
 	 *  if so, assemble + fan out via every relay's Client_ReceiveTurn. */
-	void ServerCheckTurnComplete(int32 TurnId);
+	void ServerCheckTurnComplete(
+		int32 TurnId, FSeinPlayerID CompletingSubmitter = FSeinPlayerID());
+	void GetExpectedCommandSlots(TArray<FSeinPlayerID>& OutSlots) const;
+	static bool AreExpectedCommandSlotsComplete(
+		const TArray<FSeinPlayerID>& ExpectedSlots,
+		const TMap<FSeinPlayerID, TArray<FSeinCommand>>& Submissions);
+	bool IsCommandSubmissionLifecycleAllowed(FSeinPlayerID Slot) const;
+	EFirstAcceptResult BufferCommandSubmissionFirstWins(
+		int32 TurnId, FSeinPlayerID Slot, TArray<FSeinCommand>&& Commands);
+	EFirstAcceptResult BufferHashReportFirstWins(int32 Turn, FSeinPlayerID Slot, int32 Hash);
+	void StampAuthoritativeCommandBatch(
+		TArray<FSeinCommand>& Commands, FSeinPlayerID Slot, int32 TurnId) const;
+	bool DrainPendingAICommandsForTurn(
+		FSeinPlayerID Slot, int32 TurnId, TArray<FSeinCommand>& OutCommands);
+	bool BuildDroppedSlotSubmission(
+		FSeinPlayerID Slot, int32 TurnId, bool bAllowAICommands,
+		TArray<FSeinCommand>& OutCommands);
 
-	/** Lockstep gate hook (Phase 2b). Bound on USeinWorldSubsystem when the
-	 *  local slot is assigned. Returns true iff the assembled turn for `Turn`
+	/** Lockstep gate hook (Phase 2b). Bound on the current WorldSubsystem before
+	 *  simulation start. Returns true iff the assembled turn for `Turn`
 	 *  is in ReceivedTurns, OR `Turn` is in the InputDelay-turns grace period
 	 *  at session start (no submissions could exist for those). */
 	bool ResolveTurnReady(int32 Turn);
@@ -343,9 +411,41 @@ private:
 	 *  complete on every connected peer. */
 	void OnSimTickCompleted(int32 CompletedTick);
 
+	/** Start is a request in networked play: wait for the seed and current
+	 *  world's hooks, plus a local relay/slot on player-hosting processes.
+	 *  Dedicated authority requires no synthetic local player. */
+	void TryStartLocalSession();
+
+	/** Put the canonical turn directly into a dedicated authority's gate
+	 *  buffer; it has no owning relay through which to receive a client RPC. */
+	void BufferAssembledTurnForDedicatedAuthority(int32 TurnId, const TArray<FSeinCommand>& Commands);
+	void BufferReceivedTurn(int32 TurnId, const TArray<FSeinCommand>& Commands);
+
+	/** Freeze every not-yet-queued turn through FinalTurn. Catch-up turns are
+	 *  heartbeats; when bAttachCurrentCommands is true the final turn receives
+	 *  the current command accumulator. */
+	void QueueTurnSubmissionsThrough(int32 FinalTurn, bool bAttachCurrentCommands);
+
+	/** Submit frozen turns in order. Stops at the first local-send failure and
+	 *  leaves that entry intact for relay-assignment/replacement retry. */
+	void FlushPendingTurnSubmissions();
+
+	/** Submit exact captured state-hash checkpoints in order, retaining the
+	 *  first locally-unsent entry. */
+	void FlushPendingStateHashReports();
+
+	/** Enqueue one exact hash checkpoint unless it was already queued/reported. */
+	void EnqueueStateHashReport(int32 Turn, int32 Hash);
+
 	/** Read-helper: ticks-per-turn from settings, with sane fallback. */
 	int32 GetTicksPerTurn() const;
 	int32 GetInputDelayTurns() const;
+	int32 GetCurrentTurn() const;
+	bool IsCommandTurnWithinProtocolWindow(int32 TurnId, const TCHAR* Context) const;
+	bool IsHashTurnWithinProtocolWindow(int32 Turn, const TCHAR* Context) const;
+	void PruneProtocolState(int32 ReferenceTurn);
+	void GetExpectedHashReporterSlots(TArray<FSeinPlayerID>& OutSlots) const;
+	bool AreExpectedHashReportsComplete(const TMap<FSeinPlayerID, int32>& Reports) const;
 
 	UPROPERTY()
 	TArray<TWeakObjectPtr<ASeinNetRelay>> Relays;
@@ -359,14 +459,25 @@ private:
 	 *  authoritative "who sent this submission". */
 	TMap<TWeakObjectPtr<ASeinNetRelay>, FSeinPlayerID> RelayToSlot;
 
+	/** Host-side reports accepted by the pre-start config barrier. Values are
+	 *  retained so a host setting changed after an early report cannot start
+	 *  against a stale acceptance. New relay occupants must report afresh. */
+	TMap<FSeinPlayerID, int32> AcceptedConfigFingerprints;
+
+	/** StartLockstepSession is a request: parity RPCs may still be in flight.
+	 *  The last accepted report retries and consumes this latch. */
+	bool bServerStartRequested = false;
+
 	/** Server-side: per-turn aggregation buffer. Inner map: PlayerID -> their
 	 *  submitted commands for that turn. Once Inner.Num() == GetActiveSlotCount(),
 	 *  the turn is fanned out and the entry purged. */
 	TMap<int32, TMap<FSeinPlayerID, TArray<FSeinCommand>>> ServerTurnBuffer;
 
 	/** Server-side: completed/dispatched turn IDs (so a stragglar's late
-	 *  submission for an already-dispatched turn doesn't re-fan or stall). */
+	 *  submission for an already-dispatched turn doesn't re-fan or stall).
+	 *  Kept as a bounded recent window; older IDs are rejected by the floor. */
 	TSet<int32> CompletedTurns;
+	int32 CompletedTurnRejectionFloor = -1;
 
 	/** Local-client cache: this client's slot (replicated via relay). Zero
 	 *  until OnRep_AssignedPlayerID fires. */
@@ -388,16 +499,15 @@ private:
 	 *  the GI's lifetime — cleared in Deinitialize. */
 	FDelegateHandle WorldCleanupHandle;
 
-	/** Subscription to USeinWorldSubsystem::OnSimTickCompleted, set in
-	 *  NotifyLocalSlotAssigned (after the world subsystem exists), cleared
-	 *  in Deinitialize. Drives the per-turn heartbeat flush. */
+	/** Subscription to USeinWorldSubsystem::OnSimTickCompleted, installed by
+	 *  BindLockstepHooksForCurrentWorld and cleared with the turn epoch. */
 	FDelegateHandle TickCompletedHandle;
 
 	/** Tracks WHICH WorldSubsystem the TickCompletedHandle is bound to.
 	 *  Crucial for seamless travel: the GI-scoped NetSubsystem survives the
 	 *  world swap, but the OLD WorldSubsystem (whose multicast TickCompletedHandle
 	 *  was registered against) is destroyed. The handle ID becomes stale.
-	 *  NotifyLocalSlotAssigned compares CachedWorldSub against the current
+	 *  BindLockstepHooksForCurrentWorld compares it against the current
 	 *  WorldSub — if they differ, it forces a rebind to the new WorldSub.
 	 *  Without this, post-travel sims tick freely but never get
 	 *  OnSimTickCompleted fired → no turn-boundary submissions → lockstep
@@ -413,10 +523,21 @@ private:
 	 *  outgoing TurnId stamp) along with an implicit heartbeat. */
 	TArray<FSeinCommand> PendingOutgoingCommands;
 
+	/** Frozen per-turn batches awaiting successful local handoff to the
+	 *  reliable relay RPC. Normally empty immediately after each boundary. */
+	TArray<FSeinPendingTurnSubmission> PendingTurnSubmissions;
+
+	/** Highest turn assigned to PendingTurnSubmissions (sent or unsent). */
+	int32 LastQueuedTurn = -1;
+
 	/** Client-side: highest TurnId we've already submitted for. Tracked so a
 	 *  single-turn worth of OnSimTickCompleted ticks doesn't double-submit
 	 *  the same heartbeat. -1 means "never submitted yet". */
 	int32 LastSubmittedTurn = -1;
+
+	/** Client_StartSession may race replicated slot/seed readiness. Latch the
+	 *  request rather than allowing even one ungated/unseeded sim tick. */
+	bool bStartSessionRequested = false;
 
 	/** Server-only: captures every dispatched turn for offline replay
 	 *  reconstruction. Created lazily in StartLockstepSession, flushed in
@@ -442,7 +563,7 @@ private:
 
 	/** Server-side: AI-emitted commands buffered until the next turn boundary,
 	 *  keyed by the AI's owned slot. Populated by the AIEmitInterceptor
-	 *  delegate (bound on USeinWorldSubsystem in NotifyLocalSlotAssigned) and
+	 *  delegate (bound on USeinWorldSubsystem with the lockstep hooks) and
 	 *  drained by InjectDroppedSlotHeartbeats when assembling the outgoing
 	 *  turn — replaces the empty heartbeat for slots whose AI emitted this
 	 *  tick. Without this, AI commands would call EnqueueCommand directly on
@@ -486,11 +607,10 @@ private:
 	 *  call when no controller is tracked. */
 	void TeardownAIForSlot(FSeinPlayerID Slot);
 
-	/** Server-side: per-Dropped-slot heartbeat injection — called from
-	 *  OnSimTickCompleted. For each slot in Dropped state, submit an empty
-	 *  command list directly into the server's turn buffer so the gate can
-	 *  complete without waiting for an unreachable peer. */
-	void InjectDroppedSlotHeartbeats(int32 Turn);
+	/** Complete dropped/AI slots for a turn. Only the canonical outgoing-turn
+	 *  maintenance call may drain pending AI commands; recovery calls for
+	 *  already-open turns must inject heartbeat-only submissions. */
+	void InjectDroppedSlotHeartbeats(int32 Turn, bool bAllowAICommands);
 
 	/** Server-side: poll dropped slots once per simulated turn boundary; if
 	 *  any have been dropped longer than the timeout, transition them to
@@ -507,14 +627,10 @@ private:
 	double LastStallLogTime = 0.0;
 	bool bStallLogEscalated = false;
 
-	/** Same persistence-tracking pattern for the server-side BUFFER
-	 *  INCOMPLETE diagnostic. Most "incompletes" are transient (one peer's
-	 *  packet arrives ms later than the others) — only persistent ones
-	 *  are worth a Log-level line. */
-	int32 LastIncompleteWarnedTurn = -1;
-	double FirstIncompleteAtTime = 0.0;
-	double LastIncompleteWarnTime = 0.0;
-	bool bIncompleteLogEscalated = false;
+
+	/** Per-turn, non-authoritative BUFFER INCOMPLETE diagnostics. Erased on
+	 *  completion, protocol pruning, and epoch reset so it stays bounded. */
+	TMap<int32, FSeinIncompleteTurnDiagnostic> IncompleteTurnDiagnostics;
 
 	// ============== Determinism gossip (Phase 4) ==============
 
@@ -527,6 +643,7 @@ private:
 	/** Server-side: turns that have already been compared, so a stragglar's
 	 *  late report doesn't re-trigger the alarm. Pruned periodically. */
 	TSet<int32> CompletedHashChecks;
+	int32 CompletedHashRejectionFloor = -1;
 
 	/** Local-side: set when ClientHandleDesyncNotification fires. Stays true
 	 *  until manually cleared. Surfaces via IsLocalDesyncDetected() for
@@ -536,6 +653,19 @@ private:
 	/** Client-side: highest turn we've already submitted a state-hash report
 	 *  for, so OnSimTickCompleted's check doesn't double-submit. */
 	int32 LastHashReportedTurn = -1;
+
+	/** Exact checkpoint values captured locally but not yet handed to the
+	 *  reliable relay RPC. */
+	TArray<FSeinPendingStateHashReport> PendingStateHashReports;
+	int32 LastHashQueuedTurn = -1;
+
+#if WITH_DEV_AUTOMATION_TESTS
+	/** White-box transport seams used only by the disabled non-shipping test
+	 *  plugin to force local handoff failures deterministically. */
+	TFunction<bool(int32, const TArray<FSeinCommand>&)> TestTurnSubmitOverride;
+	TFunction<bool(int32, int32)> TestHashSubmitOverride;
+	TOptional<bool> TestDedicatedAuthorityOverride;
+#endif
 
 	/** Compute + submit the local sim's state hash if `Turn` is a check turn
 	 *  per `DeterminismCheckIntervalTurns`. Called from OnSimTickCompleted at
@@ -573,6 +703,8 @@ private:
 	/** Server-side helper: bump straggler count for the slot whose submission
 	 *  pushed a turn into completion AFTER it had been logged as INCOMPLETE.
 	 *  Called from ServerCheckTurnComplete on the completion path. */
+	void FinalizeCompletedTurnDiagnostics(
+		int32 TurnId, FSeinPlayerID CompletingSubmitter);
 	void RecordStragglerIfApplicable(int32 TurnId, FSeinPlayerID LastSubmittingSlot);
 
 public:

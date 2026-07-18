@@ -38,7 +38,6 @@
 #include "Brokers/SeinDefaultCommandBrokerResolver.h"
 #include "Attributes/SeinModifier.h"
 #include "Attributes/SeinAttributeResolver.h"
-#include "Core/SeinSimContext.h"
 #include "Effects/SeinEffect.h"
 #include "Lib/SeinAbilityBPFL.h"   // for runtime Grant/Revoke during effect fan-out
 #include "Lib/SeinResourceBPFL.h"
@@ -46,6 +45,7 @@
 #include "Tags/SeinARTSGameplayTags.h"
 #include "Containers/Ticker.h"
 #include "StructUtils/InstancedStruct.h"
+#include "UObject/StructOnScope.h"
 
 // Built-in systems
 #include "Simulation/Systems/SeinEffectTickSystem.h"
@@ -70,6 +70,7 @@ void USeinWorldSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 	EntityPool.Initialize(1024);
 	CurrentTick = 0;
+	NextEffectInstanceID = 1;
 	TimeAccumulator = 0.0f;
 	bIsRunning = false;
 
@@ -183,8 +184,10 @@ void USeinWorldSubsystem::Deinitialize()
 	Systems.Empty();
 	PendingCommands.Clear();
 	PendingDestroy.Empty();
+	PendingEffectApplies.Empty();
 	EntityTagIndex.Empty();
 	NamedEntityRegistry.Empty();
+	OwnerTransitionRevisions.Empty();
 
 	Super::Deinitialize();
 
@@ -723,9 +726,9 @@ void USeinWorldSubsystem::ProcessCommands()
 				{
 					const FSeinTargeterPoint& First = Payload->TargeterPoints[0];
 
-					// Yaw degrees from RotationStep × RotationStepDegrees on the spec.
-					const FFixedPoint YawDeg = FFixedPoint::FromInt(
-						static_cast<int32>(First.RotationStep) * PFSpec->RotationStepDegrees);
+					// YawDegrees is the authoritative captured pose for both snapped and
+					// free rotation. RotationStep is only gesture/UI metadata.
+					const FFixedPoint YawDeg = First.YawDegrees;
 
 					// AgentLayerMask: blocking-perspective bit. We don't have an
 					// agent here (placing a building, not pathing through one).
@@ -1299,6 +1302,14 @@ void USeinWorldSubsystem::ProcessCommands()
 				RejectCommand(SeinARTSTags::Command_Reject_CanActivateFailed);
 				continue;
 			}
+			if (!Ability->CanCommitGrantedTags())
+			{
+				UE_LOG(LogSeinSim, Error,
+					TEXT("ActivateAbility[%s]: owned-tag refcount is saturated"),
+					*Cmd.AbilityTag.ToString());
+				RejectCommand(SeinARTSTags::Command_Reject_CanActivateFailed);
+				continue;
+			}
 
 			// 5. Catalog-aware cost split — universal across production and
 			// non-production abilities. The catalog tags each resource as
@@ -1381,13 +1392,26 @@ void USeinWorldSubsystem::ProcessCommands()
 			// SeinCommandBrokerDispatch::ActivateMemberAbility.
 			Ability->RecordDeductedCost(AtEnqueueCost);
 			Ability->RecordPendingCompletionCost(PendingCompletionCost);
+			bool bActivated = false;
 			if (Cmd.TargeterPoints.Num() > 0)
 			{
-				Ability->ActivateAbilityWithTargeterPoints(Cmd.TargetEntity, Cmd.TargetLocation, Cmd.TargeterPoints);
+				bActivated = Ability->ActivateAbilityWithTargeterPoints(
+					Cmd.TargetEntity, Cmd.TargetLocation, Cmd.TargeterPoints);
 			}
 			else
 			{
-				Ability->ActivateAbility(Cmd.TargetEntity, Cmd.TargetLocation);
+				bActivated = Ability->ActivateAbility(Cmd.TargetEntity, Cmd.TargetLocation);
+			}
+			if (!bActivated)
+			{
+				// The command preflight should make this unreachable in the
+				// single-threaded sim, but preserve economic balance if a future
+				// activation seam introduces another transactional failure.
+				USeinResourceBPFL::SeinRefund(this, Cmd.PlayerID, AtEnqueueCost);
+				Ability->RecordDeductedCost(FSeinResourceCost());
+				Ability->RecordPendingCompletionCost(FSeinResourceCost());
+				RejectCommand(SeinARTSTags::Command_Reject_CanActivateFailed);
+				continue;
 			}
 			if (!Ability->bIsPassive)
 			{
@@ -1844,7 +1868,12 @@ void USeinWorldSubsystem::DestroyEntity(FSeinEntityHandle Handle)
 
 void USeinWorldSubsystem::ProcessDeferredDestroys()
 {
-	for (const FSeinEntityHandle& Handle : PendingDestroy)
+	// Detach this tick's work. Callbacks and broker self-cull may queue more
+	// destroys; those remain in PendingDestroy for the next PostTick instead of
+	// invalidating iteration or being dropped by a trailing Empty().
+	TArray<FSeinEntityHandle> Draining;
+	Swap(Draining, PendingDestroy);
+	for (const FSeinEntityHandle& Handle : Draining)
 	{
 		if (!EntityPool.IsValid(Handle)) continue;
 
@@ -1930,6 +1959,29 @@ void USeinWorldSubsystem::ProcessDeferredDestroys()
 		UnindexEntityTags(Handle);
 		UnregisterHandleFromNames(Handle);
 
+		// Player/Class effects can outlive every unit they ever granted to. Drop
+		// this recipient from all live ledgers before its ability component is
+		// discarded; no revoke is needed because every ability row is torn down
+		// immediately below. Stable removal keeps surviving grant order canonical.
+		for (FSeinPlayerID PlayerID : GetRegisteredPlayerIDs())
+		{
+			FSeinPlayerState* State = GetPlayerStateMutable(PlayerID);
+			if (!State) continue;
+			auto Prune = [Handle](TArray<FSeinActiveEffect>& Effects)
+			{
+				for (FSeinActiveEffect& Effect : Effects)
+				{
+					Effect.CommittedAbilityGrants.RemoveAll(
+						[Handle](const FSeinEffectAbilityGrant& Grant)
+						{
+							return Grant.Recipient == Handle;
+						});
+				}
+			};
+			Prune(State->ClassEffects);
+			Prune(State->PlayerEffects);
+		}
+
 		// Phase 4 architecture: release this entity's ability + resolver pool
 		// slots BEFORE component storage clears. The pool slots own the
 		// UObject lifetime via UPROPERTY; freeing the slot lets the GC reap
@@ -1959,12 +2011,12 @@ void USeinWorldSubsystem::ProcessDeferredDestroys()
 
 		EnqueueVisualEvent(FSeinVisualEvent::MakeDestroyEvent(Handle));
 		EntityActorClassMap.Remove(Handle);
+		OwnerTransitionRevisions.Remove(Handle);
 		EntityPool.Release(Handle);
 
 		UE_LOG(LogSeinSim, Verbose, TEXT("Destroyed entity %s"), *Handle.ToString());
 	}
 
-	PendingDestroy.Empty();
 }
 
 FSeinEntity* USeinWorldSubsystem::GetEntity(FSeinEntityHandle Handle)
@@ -1994,7 +2046,67 @@ void USeinWorldSubsystem::SetEntityOwner(FSeinEntityHandle Handle, FSeinPlayerID
 	// passive ability/effect). Asserted in non-shipping builds; compiles out in
 	// shipping. See Core/SeinSimContext.h.
 	SEIN_CHECK_SIM();
+	FSeinEntity* Entity = EntityPool.Get(Handle);
+	if (!Entity || !Entity->IsAlive()) return;
+	const FSeinPlayerID OldOwner = GetEntityOwner(Handle);
+	if (OldOwner == NewOwner) return;
+
+	struct FDetachedGrant
+	{
+		int64 EffectInstanceID = 0;
+		TSubclassOf<USeinAbility> AbilityClass;
+	};
+	TArray<FDetachedGrant> DetachedGrants;
+	if (FSeinPlayerState* OldState = GetPlayerStateMutable(OldOwner))
+	{
+		TArray<FSeinActiveEffect*> Effects;
+		Effects.Reserve(OldState->ClassEffects.Num() + OldState->PlayerEffects.Num());
+		for (FSeinActiveEffect& Effect : OldState->ClassEffects) Effects.Add(&Effect);
+		for (FSeinActiveEffect& Effect : OldState->PlayerEffects) Effects.Add(&Effect);
+		Effects.Sort([](const FSeinActiveEffect& A, const FSeinActiveEffect& B)
+		{
+			return A.EffectInstanceID < B.EffectInstanceID;
+		});
+
+		// Detach every old-owner claim before the first callback-capable revoke.
+		for (FSeinActiveEffect* Effect : Effects)
+		{
+			for (const FSeinEffectAbilityGrant& Grant : Effect->CommittedAbilityGrants)
+			{
+				if (Grant.Recipient == Handle && Grant.AbilityClass)
+				{
+					DetachedGrants.Add({ Effect->EffectInstanceID, Grant.AbilityClass });
+				}
+			}
+			Effect->CommittedAbilityGrants.RemoveAll(
+				[Handle](const FSeinEffectAbilityGrant& Grant)
+				{
+					return Grant.Recipient == Handle;
+				});
+		}
+	}
+
+	// Publish the new owner before revoke callbacks. A recursive transfer then
+	// sees the current transition, and the outer call will skip stale replay.
 	EntityPool.SetOwner(Handle, NewOwner);
+	uint64& Revision = OwnerTransitionRevisions.FindOrAdd(Handle);
+	const uint64 ThisTransitionRevision = ++Revision;
+	bool bSuperseded = false;
+	for (const FDetachedGrant& Grant : DetachedGrants)
+	{
+		USeinAbilityBPFL::SeinRevokeAbilityFromEffect(
+			this, Handle, Grant.AbilityClass, Grant.EffectInstanceID);
+		const uint64* CurrentRevision = OwnerTransitionRevisions.Find(Handle);
+		bSuperseded |= !CurrentRevision
+			|| *CurrentRevision != ThisTransitionRevision;
+	}
+
+	Entity = EntityPool.Get(Handle);
+	if (!bSuperseded && Entity && Entity->IsAlive()
+		&& GetEntityOwner(Handle) == NewOwner)
+	{
+		ReplayEffectAbilityGrants(Handle);
+	}
 }
 
 TSubclassOf<ASeinActor> USeinWorldSubsystem::GetEntityActorClass(FSeinEntityHandle Handle) const
@@ -2099,6 +2211,14 @@ bool USeinWorldSubsystem::GetPlayerStateCopy(FSeinPlayerID PlayerID, FSeinPlayer
 	return false;
 }
 
+TArray<FSeinPlayerID> USeinWorldSubsystem::GetRegisteredPlayerIDs() const
+{
+	TArray<FSeinPlayerID> PlayerIDs;
+	PlayerStates.GetKeys(PlayerIDs);
+	PlayerIDs.Sort();
+	return PlayerIDs;
+}
+
 void USeinWorldSubsystem::RegisterFaction(USeinFaction* Faction)
 {
 	if (!Faction) return;
@@ -2188,7 +2308,7 @@ USeinCommandBrokerResolver* USeinWorldSubsystem::GetCommandBrokerResolver(int32 
 
 void USeinWorldSubsystem::CaptureSnapshot(FSeinWorldSnapshot& OutSnapshot)
 {
-	OutSnapshot.SnapshotVersion = 1;
+	OutSnapshot.SnapshotVersion = FSeinWorldSnapshot::CurrentVersion;
 	OutSnapshot.FrameworkVersion = TEXT("0.1.0");
 	OutSnapshot.GameVersion = TEXT("unset");
 	OutSnapshot.MapIdentifier = GetWorld() ? FName(*GetWorld()->GetMapName()) : NAME_None;
@@ -2198,6 +2318,7 @@ void USeinWorldSubsystem::CaptureSnapshot(FSeinWorldSnapshot& OutSnapshot)
 	OutSnapshot.SessionSeed = 0;
 	OutSnapshot.PRNGState0 = static_cast<int64>(SimRandom.State0);
 	OutSnapshot.PRNGState1 = static_cast<int64>(SimRandom.State1);
+	OutSnapshot.NextEffectInstanceID = NextEffectInstanceID;
 
 	OutSnapshot.MatchSettings = CurrentMatchSettings;
 	OutSnapshot.MatchState = static_cast<uint8>(MatchState);
@@ -2248,7 +2369,7 @@ void USeinWorldSubsystem::CaptureSnapshot(FSeinWorldSnapshot& OutSnapshot)
 	// ---- Ability pool ----
 	// Capture per-slot UObject state via reflection. Cooldowns + bIsActive
 	// + every UPROPERTY-tagged field on USeinAbility subclasses round-trips
-	// through UObject::Serialize wrapped in the proxy archive. Free slots
+	// through SerializeTaggedProperties wrapped in the proxy archive. Free slots
 	// are written too so the free-list reconstructs exactly on restore.
 	OutSnapshot.AbilityPoolRecords.Reset(AbilityPool.Num());
 	for (int32 ID = 0; ID < AbilityPool.Num(); ++ID)
@@ -2306,17 +2427,422 @@ void USeinWorldSubsystem::CaptureSnapshot(FSeinWorldSnapshot& OutSnapshot)
 	OnCaptureSnapshotPostSim.Broadcast(OutSnapshot);
 }
 
+namespace
+{
+	bool ValidateSnapshotComponentBlob(const FSeinSnapshotComponentStorageBlob& Blob,
+		UScriptStruct& StructType, const TSet<int32>& AliveEntitySlots)
+	{
+		if (Blob.EntryCount < 0 || Blob.EntryCount > AliveEntitySlots.Num()) return false;
+		FMemoryReader MemoryReader(Blob.Bytes, /*bIsPersistent=*/true);
+		FObjectAndNameAsStringProxyArchive Reader(
+			MemoryReader, /*bInLoadIfFindFails=*/true);
+		int32 InnerCount = 0;
+		Reader << InnerCount;
+		if (Reader.IsError() || InnerCount != Blob.EntryCount || InnerCount < 0)
+		{
+			return false;
+		}
+		TSet<int32> SeenSlots;
+		for (int32 EntryIndex = 0; EntryIndex < InnerCount; ++EntryIndex)
+		{
+			int32 Slot = 0;
+			Reader << Slot;
+			if (Reader.IsError() || Slot <= 0 || !AliveEntitySlots.Contains(Slot)
+				|| SeenSlots.Contains(Slot))
+			{
+				return false;
+			}
+			SeenSlots.Add(Slot);
+			FStructOnScope Component(&StructType);
+			StructType.SerializeBin(Reader, Component.GetStructMemory());
+			if (Reader.IsError()) return false;
+		}
+		return MemoryReader.Tell() == Blob.Bytes.Num();
+	}
+
+	template<typename ComponentType, typename VisitorType>
+	bool DecodeSnapshotComponentBlob(const FSeinWorldSnapshot& Snapshot,
+		const TSet<int32>& AliveEntitySlots, VisitorType&& Visitor)
+	{
+		const FSeinSnapshotComponentStorageBlob* Blob = Snapshot.ComponentStorageBlobs.Find(
+			ComponentType::StaticStruct()->GetPathName());
+		if (!Blob) return true;
+		if (Blob->EntryCount < 0 || Blob->EntryCount > AliveEntitySlots.Num()) return false;
+
+		FMemoryReader MemoryReader(Blob->Bytes, /*bIsPersistent=*/true);
+		FObjectAndNameAsStringProxyArchive Reader(
+			MemoryReader, /*bInLoadIfFindFails=*/true);
+		int32 InnerCount = 0;
+		Reader << InnerCount;
+		if (Reader.IsError() || InnerCount != Blob->EntryCount || InnerCount < 0)
+		{
+			return false;
+		}
+
+		TSet<int32> SeenSlots;
+		for (int32 EntryIndex = 0; EntryIndex < InnerCount; ++EntryIndex)
+		{
+			int32 Slot = 0;
+			Reader << Slot;
+			if (Reader.IsError() || Slot <= 0 || !AliveEntitySlots.Contains(Slot)
+				|| SeenSlots.Contains(Slot))
+			{
+				return false;
+			}
+			SeenSlots.Add(Slot);
+			ComponentType Component;
+			ComponentType::StaticStruct()->SerializeBin(Reader, &Component);
+			if (Reader.IsError() || !Visitor(Slot, Component)) return false;
+		}
+		return !Reader.IsError() && MemoryReader.Tell() == Blob->Bytes.Num();
+	}
+
+	bool TryValidateSnapshotSimState(const FSeinWorldSnapshot& Snapshot,
+		USeinWorldSubsystem& ScratchOuter, int64& OutMaxEffectID)
+	{
+		struct FValidatedAbilityPoolState
+		{
+			UClass* Class = nullptr;
+			FSeinEntityHandle OwnerEntity;
+			bool bIsPassive = false;
+		};
+
+		OutMaxEffectID = 0;
+		TSet<int32> AllEntitySlots;
+		TSet<int32> AliveEntitySlots;
+		TSet<FSeinEntityHandle> AliveEntityHandles;
+		TMap<int32, FSeinEntityHandle> AliveHandleBySlot;
+		for (const FSeinSnapshotEntityRecord& Entity : Snapshot.Entities)
+		{
+			if (Entity.SlotIndex <= 0 || Entity.Generation <= 0
+				|| AllEntitySlots.Contains(Entity.SlotIndex))
+			{
+				return false;
+			}
+			AllEntitySlots.Add(Entity.SlotIndex);
+			if (Entity.bAlive)
+			{
+				AliveEntitySlots.Add(Entity.SlotIndex);
+				const FSeinEntityHandle Handle(Entity.SlotIndex, Entity.Generation);
+				AliveEntityHandles.Add(Handle);
+				AliveHandleBySlot.Add(Entity.SlotIndex, Handle);
+			}
+		}
+		for (const auto& Pair : Snapshot.ComponentStorageBlobs)
+		{
+			UScriptStruct* StructType = FindObject<UScriptStruct>(nullptr, *Pair.Key);
+			if (!StructType
+				|| !ValidateSnapshotComponentBlob(Pair.Value, *StructType, AliveEntitySlots))
+			{
+				return false;
+			}
+		}
+
+		auto ValidatePoolTopology = [&ScratchOuter](const TArray<FSeinSnapshotPoolInstanceRecord>& Records,
+			const UClass* RequiredBaseClass,
+			TArray<FValidatedAbilityPoolState>* OutAbilityStates)
+		{
+			if (OutAbilityStates) OutAbilityStates->SetNum(Records.Num());
+			for (int32 Index = 0; Index < Records.Num(); ++Index)
+			{
+				const FSeinSnapshotPoolInstanceRecord& Record = Records[Index];
+				if (Record.PoolID != Index) return false;
+				if (!Record.bAlive)
+				{
+					// Capture emits pristine records for free slots. Reject hidden state
+					// that restore would otherwise silently discard.
+					if (!Record.ClassPath.IsEmpty() || !Record.StateBytes.IsEmpty()) return false;
+					continue;
+				}
+
+				UClass* Class = Record.ClassPath.IsEmpty()
+					? nullptr
+					: LoadObject<UClass>(nullptr, *Record.ClassPath);
+				if (!Class || !Class->IsChildOf(RequiredBaseClass)
+					|| Class->HasAnyClassFlags(
+						CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists))
+				{
+					return false;
+				}
+
+				// Deserialize before replacing any authoritative state. Use the same
+				// compatible outer type as production pool instances.
+				// Custom implementations may legally declare Within=SeinWorldSubsystem;
+				// RF_Transient keeps this validation-only object out of persistence and
+				// it is never registered into live authoritative storage.
+				UObject* Scratch = NewObject<UObject>(
+					&ScratchOuter, Class, NAME_None, RF_Transient);
+				if (!Scratch) return false;
+				TArray<uint8> MutableBytes = Record.StateBytes;
+				FMemoryReader MemoryReader(MutableBytes, /*bIsPersistent=*/true);
+				FObjectAndNameAsStringProxyArchive Reader(
+					MemoryReader, /*bInLoadIfFindFails=*/true);
+				Class->SerializeTaggedProperties(
+					Reader, reinterpret_cast<uint8*>(Scratch), Class, nullptr);
+				if (Reader.IsError() || MemoryReader.Tell() != Record.StateBytes.Num())
+				{
+					return false;
+				}
+
+				if (OutAbilityStates)
+				{
+					const USeinAbility* Ability = Cast<USeinAbility>(Scratch);
+					if (!Ability) return false;
+					FValidatedAbilityPoolState& State = (*OutAbilityStates)[Index];
+					State.Class = Class;
+					State.OwnerEntity = Ability->OwnerEntity;
+					State.bIsPassive = Ability->bIsPassive;
+				}
+			}
+			return true;
+		};
+		TArray<FValidatedAbilityPoolState> AbilityPoolStates;
+		if (!ValidatePoolTopology(Snapshot.AbilityPoolRecords,
+				USeinAbility::StaticClass(), &AbilityPoolStates)
+			|| !ValidatePoolTopology(Snapshot.ResolverPoolRecords,
+				USeinCommandBrokerResolver::StaticClass(), nullptr))
+		{
+			return false;
+		}
+
+		for (const auto& Pair : Snapshot.PlayerStates)
+		{
+			const FSeinPlayerState& State = Pair.Value;
+			if (State.PlayerID != Pair.Key) return false;
+			for (const auto& RefCount : State.PlayerTagRefCounts)
+			{
+				if (!RefCount.Key.IsValid() || RefCount.Value <= 0
+					|| !State.PlayerTags.HasTagExact(RefCount.Key))
+				{
+					return false;
+				}
+			}
+			TArray<FGameplayTag> PresentTags;
+			State.PlayerTags.GetGameplayTagArray(PresentTags);
+			for (const FGameplayTag& Tag : PresentTags)
+			{
+				if (!State.PlayerTagRefCounts.Contains(Tag)) return false;
+			}
+		}
+
+		TSet<int64> SeenIDs;
+		TMap<FString, int32> LedgerGrantMultiset;
+		TMap<FString, int32> OwnershipGrantMultiset;
+		auto GrantKey = [](int64 EffectID, FSeinEntityHandle Recipient,
+			const UClass* AbilityClass)
+		{
+			return FString::Printf(TEXT("%lld|%d|%d|%s"), EffectID,
+				Recipient.Index, Recipient.Generation,
+				AbilityClass ? *AbilityClass->GetPathName() : TEXT("<null>"));
+		};
+		auto IncrementMultiset = [](TMap<FString, int32>& Multiset, FString Key)
+		{
+			int32& Count = Multiset.FindOrAdd(MoveTemp(Key));
+			if (Count == MAX_int32) return false;
+			++Count;
+			return true;
+		};
+		auto Accumulate = [&](const TArray<FSeinActiveEffect>& Effects,
+			ESeinModifierScope ExpectedScope,
+			const FSeinEntityHandle* ExpectedInstanceTarget = nullptr)
+		{
+			TMap<const UClass*, int32> ClassCounts;
+			for (const FSeinActiveEffect& Effect : Effects)
+			{
+				if (Effect.EffectInstanceID <= 0 || SeenIDs.Contains(Effect.EffectInstanceID))
+				{
+					return false;
+				}
+				const USeinEffect* Def = Effect.EffectClass
+					? GetDefault<USeinEffect>(Effect.EffectClass)
+					: nullptr;
+				if (!Def) return false;
+				if (Def->Scope != ExpectedScope
+					|| (ExpectedInstanceTarget
+						&& Effect.Target != *ExpectedInstanceTarget))
+				{
+					return false;
+				}
+				const int32 EffectiveMaxStacks = FMath::Max(1, Def->MaxStacks);
+				if (Effect.CurrentStacks < 1 || Effect.CurrentStacks > EffectiveMaxStacks
+					|| (Def->StackingRule != ESeinEffectStackingRule::Stack
+						&& Effect.CurrentStacks != 1))
+				{
+					return false;
+				}
+				int32& ClassCount = ClassCounts.FindOrAdd(Effect.EffectClass.Get());
+				++ClassCount;
+				if ((Def->StackingRule == ESeinEffectStackingRule::Independent
+						&& ClassCount > EffectiveMaxStacks)
+					|| (Def->StackingRule != ESeinEffectStackingRule::Independent
+						&& ClassCount > 1))
+				{
+					return false;
+				}
+				for (const FSeinEffectAbilityGrant& Grant : Effect.CommittedAbilityGrants)
+				{
+					if (!Grant.AbilityClass || !AliveEntityHandles.Contains(Grant.Recipient))
+					{
+						return false;
+					}
+					if (!IncrementMultiset(LedgerGrantMultiset, GrantKey(
+						Effect.EffectInstanceID, Grant.Recipient,
+						Grant.AbilityClass.Get())))
+					{
+						return false;
+					}
+				}
+				SeenIDs.Add(Effect.EffectInstanceID);
+				if (Effect.EffectInstanceID > OutMaxEffectID)
+				{
+					OutMaxEffectID = Effect.EffectInstanceID;
+				}
+			}
+			return true;
+		};
+
+		for (const auto& Pair : Snapshot.PlayerStates)
+		{
+			if (!Accumulate(Pair.Value.ClassEffects, ESeinModifierScope::Class)
+				|| !Accumulate(Pair.Value.PlayerEffects, ESeinModifierScope::Player))
+			{
+				return false;
+			}
+		}
+
+		if (!DecodeSnapshotComponentBlob<FSeinActiveEffectsComponent>(
+			Snapshot, AliveEntitySlots,
+			[&](int32 Slot, const FSeinActiveEffectsComponent& Component)
+		{
+			const FSeinEntityHandle* Target = AliveHandleBySlot.Find(Slot);
+			return Target && Accumulate(Component.ActiveEffects,
+				ESeinModifierScope::Instance, Target);
+		})) return false;
+
+		TSet<int32> ReferencedAbilityPoolIDs;
+		if (!DecodeSnapshotComponentBlob<FSeinAbilityComponent>(
+			Snapshot, AliveEntitySlots,
+			[&](int32 Slot, const FSeinAbilityComponent& Component)
+		{
+			const FSeinEntityHandle* Recipient = AliveHandleBySlot.Find(Slot);
+			if (!Recipient) return false;
+			const int32 NumInstances = Component.AbilityInstanceIDs.Num();
+			if (Component.AbilityGrantCounts.Num() != NumInstances
+				|| Component.AbilityGrantOwnership.Num() != NumInstances)
+			{
+				return false;
+			}
+			if (Component.ActiveAbilityID != INDEX_NONE
+				&& !Component.AbilityInstanceIDs.Contains(Component.ActiveAbilityID))
+			{
+				return false;
+			}
+			TSet<int32> ActivePassiveIDs;
+			for (int32 PassiveID : Component.ActivePassiveIDs)
+			{
+				if (!Component.AbilityInstanceIDs.Contains(PassiveID)
+					|| ActivePassiveIDs.Contains(PassiveID))
+				{
+					return false;
+				}
+				ActivePassiveIDs.Add(PassiveID);
+			}
+			for (int32 Index = 0; Index < NumInstances; ++Index)
+			{
+				const int32 PoolID = Component.AbilityInstanceIDs[Index];
+				if (!Snapshot.AbilityPoolRecords.IsValidIndex(PoolID)
+					|| !Snapshot.AbilityPoolRecords[PoolID].bAlive
+					|| ReferencedAbilityPoolIDs.Contains(PoolID))
+				{
+					return false;
+				}
+				ReferencedAbilityPoolIDs.Add(PoolID);
+				const FValidatedAbilityPoolState& AbilityState =
+					AbilityPoolStates[PoolID];
+				const UClass* AbilityClass = AbilityState.Class;
+				if (!AbilityClass || AbilityState.OwnerEntity != *Recipient)
+				{
+					return false;
+				}
+				const bool bIsPrimary = Component.ActiveAbilityID == PoolID;
+				const bool bIsListedPassive = ActivePassiveIDs.Contains(PoolID);
+				// Public direct activation/end paths do not yet centralize the
+				// bIsActive <-> component-index relationship. Enforce only the
+				// structural role each populated index claims: primary IDs must be
+				// non-passive and passive-list IDs must be passive.
+				if ((bIsPrimary && AbilityState.bIsPassive)
+					|| (bIsListedPassive && !AbilityState.bIsPassive))
+				{
+					return false;
+				}
+				const FSeinAbilityGrantOwnership& Ownership =
+					Component.AbilityGrantOwnership[Index];
+				if (Ownership.AnonymousGrantCount < 0) return false;
+				for (int64 EffectID : Ownership.EffectInstanceIDs)
+				{
+					if (EffectID <= 0 || !SeenIDs.Contains(EffectID)) return false;
+					if (!IncrementMultiset(OwnershipGrantMultiset,
+						GrantKey(EffectID, *Recipient, AbilityClass)))
+					{
+						return false;
+					}
+				}
+				const int64 Total = static_cast<int64>(Ownership.AnonymousGrantCount)
+					+ static_cast<int64>(Ownership.EffectInstanceIDs.Num());
+				if (Total < 1 || Total > MAX_int32
+					|| Component.AbilityGrantCounts[Index] != Total)
+				{
+					return false;
+				}
+			}
+			return true;
+		})) return false;
+		for (int32 PoolID = 0; PoolID < Snapshot.AbilityPoolRecords.Num(); ++PoolID)
+		{
+			if (Snapshot.AbilityPoolRecords[PoolID].bAlive
+				&& !ReferencedAbilityPoolIDs.Contains(PoolID))
+			{
+				return false;
+			}
+		}
+		return LedgerGrantMultiset.OrderIndependentCompareEqual(
+			OwnershipGrantMultiset);
+	}
+}
+
 bool USeinWorldSubsystem::RestoreSnapshot(const FSeinWorldSnapshot& InSnapshot)
 {
-	if (InSnapshot.SnapshotVersion != 1)
+	if (InSnapshot.SnapshotVersion != FSeinWorldSnapshot::CurrentVersion)
 	{
-		UE_LOG(LogSeinSim, Error, TEXT("RestoreSnapshot: unsupported version %d (expected 1)."), InSnapshot.SnapshotVersion);
+		UE_LOG(LogSeinSim, Error, TEXT("RestoreSnapshot: unsupported version %d (expected %d)."),
+			InSnapshot.SnapshotVersion, FSeinWorldSnapshot::CurrentVersion);
+		return false;
+	}
+	if (InSnapshot.NextEffectInstanceID <= 0)
+	{
+		UE_LOG(LogSeinSim, Error, TEXT("RestoreSnapshot: invalid next effect ID %lld."),
+			InSnapshot.NextEffectInstanceID);
+		return false;
+	}
+	int64 MaxActiveEffectID = 0;
+	if (!TryValidateSnapshotSimState(InSnapshot, *this, MaxActiveEffectID))
+	{
+		UE_LOG(LogSeinSim, Error,
+			TEXT("RestoreSnapshot: active effect state is malformed; allocator validation failed."));
+		return false;
+	}
+	if (InSnapshot.NextEffectInstanceID <= MaxActiveEffectID)
+	{
+		UE_LOG(LogSeinSim, Error,
+			TEXT("RestoreSnapshot: next effect ID %lld must exceed max active effect ID %lld."),
+			InSnapshot.NextEffectInstanceID, MaxActiveEffectID);
 		return false;
 	}
 
 	if (bIsRunning) StopSimulation();
 
 	CurrentTick = InSnapshot.CurrentTick;
+	NextEffectInstanceID = InSnapshot.NextEffectInstanceID;
 	SimRandom.State0 = static_cast<uint64>(InSnapshot.PRNGState0);
 	SimRandom.State1 = static_cast<uint64>(InSnapshot.PRNGState1);
 
@@ -2326,6 +2852,23 @@ bool USeinWorldSubsystem::RestoreSnapshot(const FSeinWorldSnapshot& InSnapshot)
 	StartingStateDeadlineTick = InSnapshot.StartingStateDeadlineTick;
 
 	PlayerStates = InSnapshot.PlayerStates;
+	OwnerTransitionRevisions.Reset();
+
+	// Timeline-local collision and visual-event state is not authoritative
+	// snapshot data. Drop the abandoned timeline's pending render events and
+	// deferred effect applies, then force both broadphase tiers/overlap diffs to
+	// re-derive from restored state. Capturing in-flight applies for exact
+	// continuation remains part of STATE-01; they must never leak in from the
+	// timeline being replaced.
+	VisualEventQueue.Events.Reset();
+	PendingEffectApplies.Reset();
+	CollisionSpatialHash.ClearStatic();
+	CollisionSpatialHash.ClearDynamic();
+	CollisionSpatialHash.MarkStaticDirty();
+	if (CollisionResolver)
+	{
+		CollisionResolver->OnSnapshotRestored();
+	}
 
 	// Wipe the actor-class map so reconcile spawns the right classes from
 	// the snapshot's ActorClassPath records (rebuilt below).
@@ -2415,7 +2958,7 @@ bool USeinWorldSubsystem::RestoreSnapshot(const FSeinWorldSnapshot& InSnapshot)
 
 	// Wipe the existing pools. UPROPERTY arrays let GC reap the old instances
 	// once we drop them. Then rebuild slot-by-slot: NewObject by class, walk
-	// UObject::Serialize through the proxy archive to replay every UPROPERTY
+	// SerializeTaggedProperties through the proxy archive to replay every UPROPERTY
 	// (including CooldownRemaining + bIsActive on USeinAbility), place at the
 	// original PoolID. Free slots stay null + go on the free list.
 	auto RestorePool = [this](auto& Pool, auto& FreeList, const TArray<FSeinSnapshotPoolInstanceRecord>& Records, const TCHAR* PoolName)
@@ -2626,6 +3169,10 @@ bool FSeinEntityTagState::GrantTagInternal(const FGameplayTag& Tag)
 {
 	if (!Tag.IsValid()) return false;
 	int32& RefCount = TagRefCounts.FindOrAdd(Tag, 0);
+	if (RefCount == MAX_int32)
+	{
+		return false;
+	}
 	++RefCount;
 	if (RefCount == 1)
 	{
@@ -2685,18 +3232,33 @@ const FGameplayTagContainer& USeinWorldSubsystem::GetEntityBaseTags(FSeinEntityH
 	return TagState ? TagState->BaseTags : Empty;
 }
 
-void USeinWorldSubsystem::GrantTag(FSeinEntityHandle Handle, FGameplayTag Tag)
+bool USeinWorldSubsystem::CanGrantTag(FSeinEntityHandle Handle, FGameplayTag Tag) const
 {
-	if (!Tag.IsValid()) return;
+	if (!Tag.IsValid()) return false;
+	const FSeinEntityTagState* TagState = EntityTagStates.Find(Handle);
+	return !TagState || TagState->TagRefCounts.FindRef(Tag) < MAX_int32;
+}
+
+bool USeinWorldSubsystem::GrantTag(FSeinEntityHandle Handle, FGameplayTag Tag)
+{
+	if (!Tag.IsValid()) return false;
 	// FindOrAdd — auto-create the entity's tag state if it doesn't exist yet
 	// (e.g., transient grants from abilities/effects on entities that didn't
 	// author any BaseTags). Refcount handles the rest.
 	FSeinEntityTagState& TagState = EntityTagStates.FindOrAdd(Handle);
+	if (TagState.TagRefCounts.FindRef(Tag) == MAX_int32)
+	{
+		UE_LOG(LogSeinSim, Error,
+			TEXT("GrantTag: refcount saturated for %s on entity %s"),
+			*Tag.ToString(), *Handle.ToString());
+		return false;
+	}
 
 	if (TagState.GrantTagInternal(Tag))
 	{
 		EntityTagIndex.FindOrAdd(Tag).Add(Handle);
 	}
+	return true;
 }
 
 void USeinWorldSubsystem::UngrantTag(FSeinEntityHandle Handle, FGameplayTag Tag)
@@ -2727,7 +3289,15 @@ void USeinWorldSubsystem::GrantPlayerTag(FSeinPlayerID PlayerID, FGameplayTag Ta
 	if (!State) return;
 
 	int32& Count = State->PlayerTagRefCounts.FindOrAdd(Tag);
-	const int32 Old = Count++;
+	if (Count == MAX_int32)
+	{
+		UE_LOG(LogSeinSim, Error,
+			TEXT("GrantPlayerTag: refcount saturated for %s on player %s"),
+			*Tag.ToString(), *PlayerID.ToString());
+		return;
+	}
+	const int32 Old = Count;
+	++Count;
 	if (Old == 0)
 	{
 		State->PlayerTags.AddTag(Tag);
@@ -2757,8 +3327,8 @@ bool USeinWorldSubsystem::AddBaseTag(FSeinEntityHandle Handle, FGameplayTag Tag)
 	FSeinEntityTagState& TagState = EntityTagStates.FindOrAdd(Handle);
 	if (TagState.BaseTags.HasTagExact(Tag)) return false;
 
+	if (!GrantTag(Handle, Tag)) return false;
 	TagState.BaseTags.AddTag(Tag);
-	GrantTag(Handle, Tag);
 	return true;
 }
 
@@ -2794,6 +3364,16 @@ void USeinWorldSubsystem::ReplaceBaseTags(FSeinEntityHandle Handle, const FGamep
 		if (!TagState.BaseTags.HasTagExact(Incoming))
 		{
 			ToGrant.AddTag(Incoming);
+		}
+	}
+	for (const FGameplayTag& Tag : ToGrant)
+	{
+		if (!CanGrantTag(Handle, Tag))
+		{
+			UE_LOG(LogSeinSim, Error,
+				TEXT("ReplaceBaseTags: refcount saturated for %s on entity %s; replacement rejected"),
+				*Tag.ToString(), *Handle.ToString());
+			return;
 		}
 	}
 
@@ -2966,17 +3546,43 @@ FFixedPoint USeinWorldSubsystem::ResolvePlayerAttribute(FSeinPlayerID PlayerID, 
 
 // ==================== Effects ====================
 
-uint32 USeinWorldSubsystem::ApplyEffect(FSeinEntityHandle Target, TSubclassOf<USeinEffect> EffectClass, FSeinEntityHandle Source)
+namespace
 {
-	if (!EffectClass || !EntityPool.IsValid(Target))
+	int32 CountEffectStacksWithTag(const TArray<FSeinActiveEffect>& Effects, FGameplayTag Tag)
+	{
+		if (!Tag.IsValid())
+		{
+			return 0;
+		}
+
+		int64 Total = 0;
+		for (const FSeinActiveEffect& Effect : Effects)
+		{
+			const USeinEffect* Def = Effect.EffectClass ? GetDefault<USeinEffect>(Effect.EffectClass) : nullptr;
+			if (Def && Def->EffectTag.MatchesTag(Tag))
+			{
+				Total += FMath::Max(0, Effect.CurrentStacks);
+				if (Total >= MAX_int32) return MAX_int32;
+			}
+		}
+		return static_cast<int32>(Total);
+	}
+}
+
+int64 USeinWorldSubsystem::ApplyEffect(FSeinEntityHandle Target, TSubclassOf<USeinEffect> EffectClass, FSeinEntityHandle Source)
+{
+	SEIN_CHECK_NOT_PARALLEL();
+
+	const FSeinEntity* TargetEntity = EntityPool.Get(Target);
+	if (!EffectClass || !TargetEntity || !TargetEntity->IsAlive())
 	{
 		return 0;
 	}
 
 	// If we're inside a sim tick, defer to the PreTick drain. Outside a sim tick
-	// (render-side authored apply, test harness), commit synchronously. In shipping
-	// SEIN_IS_SIM_CONTEXT() is always true (sim-only macro stripped) — correct
-	// default since shipping applies run during the sim tick.
+	// (render-side authored apply, test harness), commit synchronously. Context
+	// tracking is functional scheduling state and therefore remains enabled in
+	// Shipping; only its diagnostic assertions are compiled out there.
 	if (SEIN_IS_SIM_CONTEXT())
 	{
 		PendingEffectApplies.Add({ Target, EffectClass, Source });
@@ -3003,9 +3609,234 @@ void USeinWorldSubsystem::ProcessPendingEffectApplies()
 	}
 }
 
-uint32 USeinWorldSubsystem::ApplyEffectInternal(FSeinEntityHandle Target, TSubclassOf<USeinEffect> EffectClass, FSeinEntityHandle Source)
+FSeinActiveEffect* USeinWorldSubsystem::FindActiveEffectByID(int64 EffectInstanceID)
 {
-	if (!EffectClass || !EntityPool.IsValid(Target))
+	if (EffectInstanceID <= 0)
+	{
+		return nullptr;
+	}
+
+	FSeinActiveEffect* Found = nullptr;
+	EntityPool.ForEachEntity([&](FSeinEntityHandle Handle, const FSeinEntity& /*Entity*/)
+	{
+		if (Found) return;
+		if (FSeinActiveEffectsComponent* Effects = GetComponent<FSeinActiveEffectsComponent>(Handle))
+		{
+			Found = Effects->ActiveEffects.FindByPredicate([EffectInstanceID](const FSeinActiveEffect& Effect)
+			{
+				return Effect.EffectInstanceID == EffectInstanceID;
+			});
+		}
+	});
+	if (Found)
+	{
+		return Found;
+	}
+
+	for (FSeinPlayerID PlayerID : GetRegisteredPlayerIDs())
+	{
+		FSeinPlayerState* State = GetPlayerStateMutable(PlayerID);
+		if (!State) continue;
+		Found = State->ClassEffects.FindByPredicate([EffectInstanceID](const FSeinActiveEffect& Effect)
+		{
+			return Effect.EffectInstanceID == EffectInstanceID;
+		});
+		if (!Found)
+		{
+			Found = State->PlayerEffects.FindByPredicate([EffectInstanceID](const FSeinActiveEffect& Effect)
+			{
+				return Effect.EffectInstanceID == EffectInstanceID;
+			});
+		}
+		if (Found)
+		{
+			return Found;
+		}
+	}
+	return nullptr;
+}
+
+void USeinWorldSubsystem::PruneEffectAbilityGrantClaim(int64 EffectInstanceID,
+	FSeinEntityHandle Recipient, TSubclassOf<USeinAbility> AbilityClass)
+{
+	FSeinActiveEffect* Effect = FindActiveEffectByID(EffectInstanceID);
+	if (!Effect || !AbilityClass) return;
+	const int32 Index = Effect->CommittedAbilityGrants.IndexOfByPredicate(
+		[&](const FSeinEffectAbilityGrant& Grant)
+		{
+			return Grant.Recipient == Recipient && Grant.AbilityClass == AbilityClass;
+		});
+	if (Index != INDEX_NONE)
+	{
+		Effect->CommittedAbilityGrants.RemoveAt(Index, 1, EAllowShrinking::No);
+	}
+}
+
+void USeinWorldSubsystem::PruneAllEffectAbilityGrantClaims(
+	FSeinEntityHandle Recipient, TSubclassOf<USeinAbility> AbilityClass)
+{
+	if (!AbilityClass) return;
+	auto Prune = [&](TArray<FSeinActiveEffect>& Effects)
+	{
+		for (FSeinActiveEffect& Effect : Effects)
+		{
+			Effect.CommittedAbilityGrants.RemoveAll(
+				[&](const FSeinEffectAbilityGrant& Grant)
+				{
+					return Grant.Recipient == Recipient
+						&& Grant.AbilityClass == AbilityClass;
+				});
+		}
+	};
+	EntityPool.ForEachEntity([&](FSeinEntityHandle Handle, const FSeinEntity& /*Entity*/)
+	{
+		if (FSeinActiveEffectsComponent* Effects = GetComponent<FSeinActiveEffectsComponent>(Handle))
+		{
+			Prune(Effects->ActiveEffects);
+		}
+	});
+	for (FSeinPlayerID PlayerID : GetRegisteredPlayerIDs())
+	{
+		if (FSeinPlayerState* State = GetPlayerStateMutable(PlayerID))
+		{
+			Prune(State->ClassEffects);
+			Prune(State->PlayerEffects);
+		}
+	}
+}
+
+FSeinActiveEffect* USeinWorldSubsystem::ResolveEffect(const FEffectLocator& Locator)
+{
+	TArray<FSeinActiveEffect>* Storage = nullptr;
+	if (Locator.Scope == ESeinModifierScope::Instance)
+	{
+		if (FSeinActiveEffectsComponent* Effects =
+			GetComponent<FSeinActiveEffectsComponent>(Locator.InstanceTarget))
+		{
+			Storage = &Effects->ActiveEffects;
+		}
+	}
+	else if (FSeinPlayerState* State = GetPlayerStateMutable(Locator.PlayerID))
+	{
+		Storage = Locator.Scope == ESeinModifierScope::Class
+			? &State->ClassEffects
+			: &State->PlayerEffects;
+	}
+	return Storage ? Storage->FindByPredicate([&](const FSeinActiveEffect& Effect)
+	{
+		return Effect.EffectInstanceID == Locator.EffectInstanceID;
+	}) : nullptr;
+}
+
+bool USeinWorldSubsystem::IsEffectGrantRecipientEligible(
+	const FEffectLocator& Locator, FSeinEntityHandle Recipient)
+{
+	const FSeinEntity* Entity = EntityPool.Get(Recipient);
+	FSeinActiveEffect* Active = ResolveEffect(Locator);
+	if (!Active || !Entity || !Entity->IsAlive()
+		|| !GetComponent<FSeinAbilityComponent>(Recipient))
+	{
+		return false;
+	}
+	if (Locator.Scope == ESeinModifierScope::Instance)
+	{
+		return Recipient == Locator.InstanceTarget && Active->Target == Locator.InstanceTarget;
+	}
+
+	const USeinEffect* CDO = Active->EffectClass
+		? GetDefault<USeinEffect>(Active->EffectClass)
+		: nullptr;
+	return CDO && GetEntityOwner(Recipient) == Locator.PlayerID
+		&& CDO->AbilityTargetClassTag.IsValid()
+		&& HasTag(Recipient, CDO->AbilityTargetClassTag);
+}
+
+bool USeinWorldSubsystem::GrantAbilityTrackedByEffect(const FEffectLocator& Locator,
+	FSeinEntityHandle Recipient, TSubclassOf<USeinAbility> AbilityClass)
+{
+	FSeinActiveEffect* Effect = ResolveEffect(Locator);
+	if (!Effect || !AbilityClass)
+	{
+		return Effect != nullptr;
+	}
+	if (!IsEffectGrantRecipientEligible(Locator, Recipient))
+	{
+		return true; // Effect survives; this sampled recipient no longer qualifies.
+	}
+
+	// Reserve ownership before the grant: a new passive can execute arbitrary
+	// Blueprint and remove this effect before SeinGrantAbility returns. Teardown
+	// then sees the reservation and balances the just-committed ability ref.
+	FSeinEffectAbilityGrant Grant;
+	Grant.Recipient = Recipient;
+	Grant.AbilityClass = AbilityClass;
+	Effect->CommittedAbilityGrants.Add(Grant);
+
+	if (USeinAbilityBPFL::SeinGrantAbilityFromEffect(this, Recipient,
+		AbilityClass, Locator.EffectInstanceID) == INDEX_NONE)
+	{
+		// Reconcile by multiplicity, not by blindly removing the last matching
+		// ledger entry. A passive may transfer B→C→B and re-grant the same
+		// effect/class before this older activation returns; in that case the live
+		// matching entry belongs to the replacement source row, not this detached
+		// reservation.
+		if (FSeinActiveEffect* StillActive = ResolveEffect(Locator))
+		{
+			int32 LedgerClaims = 0;
+			for (const FSeinEffectAbilityGrant& ExistingGrant
+				: StillActive->CommittedAbilityGrants)
+			{
+				if (ExistingGrant.Recipient == Recipient
+					&& ExistingGrant.AbilityClass == AbilityClass)
+				{
+					++LedgerClaims;
+				}
+			}
+
+			int32 SourceClaims = 0;
+			if (const FSeinAbilityComponent* AbilityComp =
+				GetComponent<FSeinAbilityComponent>(Recipient))
+			{
+				for (int32 Index = 0; Index < AbilityComp->AbilityInstanceIDs.Num(); ++Index)
+				{
+					const USeinAbility* Ability =
+						GetAbilityInstance(AbilityComp->AbilityInstanceIDs[Index]);
+					if (!Ability || Ability->GetClass() != AbilityClass.Get()
+						|| !AbilityComp->AbilityGrantOwnership.IsValidIndex(Index))
+					{
+						continue;
+					}
+					for (int64 SourceID
+						: AbilityComp->AbilityGrantOwnership[Index].EffectInstanceIDs)
+					{
+						SourceClaims += SourceID == Locator.EffectInstanceID ? 1 : 0;
+					}
+				}
+			}
+
+			for (int32 Index = StillActive->CommittedAbilityGrants.Num() - 1;
+				LedgerClaims > SourceClaims && Index >= 0; --Index)
+			{
+				const FSeinEffectAbilityGrant& Reserved =
+					StillActive->CommittedAbilityGrants[Index];
+				if (Reserved.Recipient == Recipient && Reserved.AbilityClass == AbilityClass)
+				{
+					StillActive->CommittedAbilityGrants.RemoveAt(
+						Index, 1, EAllowShrinking::No);
+					break;
+				}
+			}
+		}
+	}
+	return ResolveEffect(Locator) != nullptr;
+}
+
+int64 USeinWorldSubsystem::ApplyEffectInternal(FSeinEntityHandle Target, TSubclassOf<USeinEffect> EffectClass, FSeinEntityHandle Source)
+{
+	SEIN_CHECK_NOT_PARALLEL();
+
+	const FSeinEntity* TargetEntity = EntityPool.Get(Target);
+	if (!EffectClass || !TargetEntity || !TargetEntity->IsAlive())
 	{
 		return 0;
 	}
@@ -3020,38 +3851,40 @@ uint32 USeinWorldSubsystem::ApplyEffectInternal(FSeinEntityHandle Target, TSubcl
 	{
 		RemoveInstanceEffectsWithTag(Target, Tag);
 	}
+	TargetEntity = EntityPool.Get(Target);
+	if (!TargetEntity || !TargetEntity->IsAlive())
+	{
+		return 0;
+	}
 
 	// --- Prepare scope-specific storage pointers ---
 	TArray<FSeinActiveEffect>* Storage = nullptr;
-	uint32* IdCounter = nullptr;
 	FSeinPlayerState* OwnerState = nullptr;
-	FSeinActiveEffectsComponent* InstanceComp = nullptr;
+	const FSeinPlayerID OwnerID = GetEntityOwner(Target);
 
 	switch (CDO->Scope)
 	{
 		case ESeinModifierScope::Instance:
 		{
-			InstanceComp = GetComponent<FSeinActiveEffectsComponent>(Target);
+			FSeinActiveEffectsComponent* InstanceComp = GetComponent<FSeinActiveEffectsComponent>(Target);
 			if (!InstanceComp) { return 0; }
 			Storage = &InstanceComp->ActiveEffects;
-			IdCounter = &InstanceComp->NextEffectInstanceID;
 			break;
 		}
 		case ESeinModifierScope::Class:
 		case ESeinModifierScope::Player:
 		{
-			const FSeinPlayerID OwnerID = GetEntityOwner(Target);
 			OwnerState = GetPlayerStateMutable(OwnerID);
 			if (!OwnerState) { return 0; }
 			Storage = CDO->Scope == ESeinModifierScope::Class
 				? &OwnerState->ClassEffects
 				: &OwnerState->PlayerEffects;
-			IdCounter = &OwnerState->NextEffectInstanceID;
 			break;
 		}
 	}
 
-	if (!Storage || !IdCounter) { return 0; }
+	if (!Storage) { return 0; }
+	const int32 EffectiveMaxStacks = FMath::Max(1, CDO->MaxStacks);
 
 	// --- Stacking ---
 	FSeinActiveEffect* Existing = nullptr;
@@ -3063,14 +3896,27 @@ uint32 USeinWorldSubsystem::ApplyEffectInternal(FSeinEntityHandle Target, TSubcl
 		}
 	}
 
-	uint32 AssignedID = 0;
+	int64 AssignedID = 0;
 	bool bIsNewInstance = false;
+	FEffectLocator EffectLocator;
+	EffectLocator.Scope = CDO->Scope;
+	EffectLocator.InstanceTarget = Target;
+	EffectLocator.PlayerID = OwnerID;
+	auto IsAssignedEffectActive = [&]() -> bool
+	{
+		EffectLocator.EffectInstanceID = AssignedID;
+		return ResolveEffect(EffectLocator) != nullptr;
+	};
 
 	if (Existing && CDO->StackingRule == ESeinEffectStackingRule::Stack)
 	{
 		// Stack re-apply: bump CurrentStacks and refresh duration; no new instance,
 		// no OnApply hook, no additional GrantedTags refcount.
-		Existing->CurrentStacks = FMath::Min(Existing->CurrentStacks + 1, CDO->MaxStacks);
+		const int32 ClampedStacks = FMath::Clamp(
+			Existing->CurrentStacks, 1, EffectiveMaxStacks);
+		Existing->CurrentStacks = ClampedStacks < EffectiveMaxStacks
+			? ClampedStacks + 1
+			: EffectiveMaxStacks;
 		if (CDO->DurationMode == ESeinEffectDurationMode::Timed)
 		{
 			Existing->RemainingDuration = CDO->Duration;
@@ -3089,6 +3935,57 @@ uint32 USeinWorldSubsystem::ApplyEffectInternal(FSeinEntityHandle Target, TSubcl
 	}
 	else
 	{
+		// Tags are part of the effect's balanced ownership. Reject the whole
+		// application before allocating an ID when any authored tag increment
+		// would saturate; committing the effect without the increment would let
+		// teardown consume another source's saturated reference later.
+		TMap<FGameplayTag, int32> RequiredTagIncrements;
+		if (CDO->Scope == ESeinModifierScope::Instance)
+		{
+			for (const FGameplayTag& Tag : CDO->GrantedTags)
+			{
+				++RequiredTagIncrements.FindOrAdd(Tag);
+			}
+			const FSeinEntityTagState* TagState = EntityTagStates.Find(Target);
+			for (const auto& Increment : RequiredTagIncrements)
+			{
+				const int32 ExistingRefCount = TagState
+					? TagState->TagRefCounts.FindRef(Increment.Key)
+					: 0;
+				if (static_cast<int64>(ExistingRefCount) + Increment.Value > MAX_int32)
+				{
+					UE_LOG(LogSeinSim, Error,
+						TEXT("ApplyEffect: entity tag refcount would overflow for %s on %s"),
+						*Increment.Key.ToString(), *Target.ToString());
+					return 0;
+				}
+			}
+		}
+		else
+		{
+			if (CDO->EffectTag.IsValid())
+			{
+				++RequiredTagIncrements.FindOrAdd(CDO->EffectTag);
+			}
+			for (const FGameplayTag& Tag : CDO->GrantedTags)
+			{
+				++RequiredTagIncrements.FindOrAdd(Tag);
+			}
+			for (const auto& Increment : RequiredTagIncrements)
+			{
+				const int32 ExistingRefCount = OwnerState
+					? OwnerState->PlayerTagRefCounts.FindRef(Increment.Key)
+					: 0;
+				if (static_cast<int64>(ExistingRefCount) + Increment.Value > MAX_int32)
+				{
+					UE_LOG(LogSeinSim, Error,
+						TEXT("ApplyEffect: player tag refcount would overflow for %s on %s"),
+						*Increment.Key.ToString(), *OwnerID.ToString());
+					return 0;
+				}
+			}
+		}
+
 		// Independent, or no existing instance: reject if storage already at MaxStacks for this class.
 		if (CDO->StackingRule == ESeinEffectStackingRule::Independent)
 		{
@@ -3097,7 +3994,7 @@ uint32 USeinWorldSubsystem::ApplyEffectInternal(FSeinEntityHandle Target, TSubcl
 			{
 				if (E.EffectClass == EffectClass) ++Count;
 			}
-			if (Count >= CDO->MaxStacks)
+			if (Count >= EffectiveMaxStacks)
 			{
 				return 0;
 			}
@@ -3117,6 +4014,11 @@ uint32 USeinWorldSubsystem::ApplyEffectInternal(FSeinEntityHandle Target, TSubcl
 			}
 		}
 #endif
+		if (NextEffectInstanceID <= 0 || NextEffectInstanceID == MAX_int64)
+		{
+			UE_LOG(LogSeinSim, Error, TEXT("Effect ID space exhausted; refusing effect apply."));
+			return 0;
+		}
 
 		FSeinActiveEffect NewEffect;
 		NewEffect.EffectClass = EffectClass;
@@ -3130,10 +4032,17 @@ uint32 USeinWorldSubsystem::ApplyEffectInternal(FSeinEntityHandle Target, TSubcl
 		NewEffect.RemainingDuration = (CDO->DurationMode == ESeinEffectDurationMode::Timed)
 			? CDO->Duration
 			: FFixedPoint::Zero;
-		NewEffect.EffectInstanceID = (*IdCounter)++;
+		NewEffect.EffectInstanceID = NextEffectInstanceID++;
 		Storage->Add(NewEffect);
 		AssignedID = NewEffect.EffectInstanceID;
+		EffectLocator.EffectInstanceID = AssignedID;
 		bIsNewInstance = true;
+
+		// Record the committed transition before any grant/passive/OnApply callback
+		// can synchronously remove it. A transient self-removal therefore produces
+		// the truthful causal sequence EffectApplied -> EffectRemoved, never a late
+		// EffectApplied for an instance that is already gone.
+		EnqueueVisualEvent(FSeinVisualEvent::MakeEffectEvent(Target, CDO->EffectTag, /*bApplied=*/true));
 
 		// --- Grant tags (refcount) ---
 		// Per DESIGN §10 tech unification:
@@ -3167,15 +4076,17 @@ uint32 USeinWorldSubsystem::ApplyEffectInternal(FSeinEntityHandle Target, TSubcl
 		// (designer guard against unintended "grant to everyone" footgun).
 		// Spawn-time replay handles entities that come online AFTER apply
 		// (see InitializeEntityAbilities's effect-replay block).
-		if (CDO->GrantedAbilities.Num() > 0)
+		const TArray<TSubclassOf<USeinAbility>> AbilityClasses = CDO->GrantedAbilities;
+		if (AbilityClasses.Num() > 0)
 		{
 			if (CDO->Scope == ESeinModifierScope::Instance)
 			{
-				for (const TSubclassOf<USeinAbility>& AbilityClass : CDO->GrantedAbilities)
+				for (const TSubclassOf<USeinAbility>& AbilityClass : AbilityClasses)
 				{
-					if (AbilityClass)
+					if (AbilityClass
+						&& !GrantAbilityTrackedByEffect(EffectLocator, Target, AbilityClass))
 					{
-						USeinAbilityBPFL::SeinGrantAbility(this, Target, AbilityClass);
+						return AssignedID;
 					}
 				}
 			}
@@ -3183,161 +4094,189 @@ uint32 USeinWorldSubsystem::ApplyEffectInternal(FSeinEntityHandle Target, TSubcl
 			{
 				const FSeinPlayerID Owner = GetEntityOwner(Target);
 				const FGameplayTag ClassFilter = CDO->AbilityTargetClassTag;
-				// Walk every live entity; gate on owner match + class-tag match
-				// before granting. EntityPool iteration is the only enumeration
-				// surface today (no per-player index); cost is O(N entities ×
-				// N granted abilities) per effect apply, fine for tech-tier
-				// frequency (apply runs at most a handful of times per match).
+				TArray<FSeinEntityHandle> Recipients;
 				EntityPool.ForEachEntity([&](FSeinEntityHandle Other, const FSeinEntity& /*OtherEntity*/)
 				{
-					if (GetEntityOwner(Other) != Owner) return;
-					if (!HasTag(Other, ClassFilter)) return;
-					for (const TSubclassOf<USeinAbility>& AbilityClass : CDO->GrantedAbilities)
+					if (GetEntityOwner(Other) == Owner && HasTag(Other, ClassFilter))
 					{
-						if (AbilityClass)
-						{
-							USeinAbilityBPFL::SeinGrantAbility(this, Other, AbilityClass);
-						}
+						Recipients.Add(Other);
 					}
 				});
+				// Passive activation can execute Blueprint and grow the entity pool;
+				// dispatch only after the canonical recipient snapshot is complete.
+				for (FSeinEntityHandle Other : Recipients)
+				{
+					for (const TSubclassOf<USeinAbility>& AbilityClass : AbilityClasses)
+					{
+						if (AbilityClass
+							&& !GrantAbilityTrackedByEffect(EffectLocator, Other, AbilityClass))
+						{
+							return AssignedID;
+						}
+					}
+				}
 			}
 		}
 	}
 
-	// OnApply fires only on new instances — Stack / Refresh re-applies are
-	// "same effect, refreshed" and do not re-trigger the apply hook.
+	// OnApply is eligible only for a still-live new instance. Stack/Refresh
+	// re-applies do not retrigger it, and passive-grant self-removal skips it.
 	if (bIsNewInstance)
 	{
+		const FSeinEntity* CurrentTarget = EntityPool.Get(Target);
+		const bool bTargetStillEligible = CurrentTarget && CurrentTarget->IsAlive()
+			&& (CDO->Scope == ESeinModifierScope::Instance
+				|| GetEntityOwner(Target) == OwnerID);
+		if (!bTargetStillEligible || !IsAssignedEffectActive())
+		{
+			return AssignedID;
+		}
 		USeinEffect* MutableCDO = Cast<USeinEffect>(EffectClass->GetDefaultObject());
 		if (MutableCDO)
 		{
 			MutableCDO->OnApply(Target, Source);
 		}
-		EnqueueVisualEvent(FSeinVisualEvent::MakeEffectEvent(Target, CDO->EffectTag, /*bApplied=*/true));
+		if (!IsAssignedEffectActive())
+		{
+			return AssignedID;
+		}
 	}
 
 	// Instant effect (DurationMode == Instant): remove immediately. OnApply
-	// already fired; OnExpire is gated inside RemoveInstanceEffect to not
+	// already fired; OnExpire is gated inside RemoveEffect to not
 	// fire for Instant-mode effects (no real expiration occurred).
 	if (bIsNewInstance && CDO->DurationMode == ESeinEffectDurationMode::Instant)
 	{
-		RemoveInstanceEffect(Target, AssignedID, /*bByExpiration=*/true);
+		// Use the locator already captured at commit. Global lookup intentionally
+		// enumerates only alive entities, while OnApply is allowed to mark an
+		// instance target dead before deferred component teardown. The known
+		// storage remains valid long enough to dispatch balanced OnRemoved/events.
+		if (CDO->Scope == ESeinModifierScope::Instance)
+		{
+			RemoveEffect(Target, AssignedID, /*bByExpiration=*/true);
+		}
+		else
+		{
+			RemovePlayerEffect(OwnerID, AssignedID, /*bByExpiration=*/true);
+		}
 	}
 
 	return AssignedID;
 }
 
-bool USeinWorldSubsystem::RemoveInstanceEffect(FSeinEntityHandle Target, uint32 EffectInstanceID, bool bByExpiration)
+bool USeinWorldSubsystem::RemoveEffectFromStorage(TArray<FSeinActiveEffect>& Storage,
+	int64 EffectInstanceID, FSeinPlayerID PlayerForTags, bool bByExpiration)
 {
-	// Locate across all three scope storages (Instance on entity; Class / Player on owner).
-	// An instance ID is only unique within its containing storage, so we check each.
-	auto TryRemoveFromArray = [&](TArray<FSeinActiveEffect>& Storage, FSeinPlayerID PlayerForTags) -> bool
+	const int32 EffectIndex = Storage.IndexOfByPredicate([EffectInstanceID](const FSeinActiveEffect& Effect)
 	{
-		for (int32 i = 0; i < Storage.Num(); ++i)
-		{
-			if (Storage[i].EffectInstanceID == EffectInstanceID)
-			{
-				const FSeinActiveEffect Effect = Storage[i];
-				Storage.RemoveAtSwap(i, EAllowShrinking::No);
-
-				const USeinEffect* Def = Effect.EffectClass ? GetDefault<USeinEffect>(Effect.EffectClass) : nullptr;
-				// Symmetrical ungrant — see ApplyEffectInternal grant branch.
-				if (Def)
-				{
-					if (Def->Scope == ESeinModifierScope::Instance)
-					{
-						for (const FGameplayTag& Tag : Def->GrantedTags)
-						{
-							UngrantTag(Target, Tag);
-						}
-					}
-					else
-					{
-						if (Def->EffectTag.IsValid())
-						{
-							UngrantPlayerTag(PlayerForTags, Def->EffectTag);
-						}
-						for (const FGameplayTag& Tag : Def->GrantedTags)
-						{
-							UngrantPlayerTag(PlayerForTags, Tag);
-						}
-					}
-
-					// Revoke ability grants — mirror of ApplyEffectInternal's
-					// grant fan-out. By-class revoke (not by-tag) because we
-					// know exactly which classes this effect granted; by-tag
-					// would accidentally revoke abilities granted by OTHER
-					// sources that happen to share an AbilityTag.
-					if (Def->GrantedAbilities.Num() > 0)
-					{
-						if (Def->Scope == ESeinModifierScope::Instance)
-						{
-							for (const TSubclassOf<USeinAbility>& AbilityClass : Def->GrantedAbilities)
-							{
-								if (AbilityClass)
-								{
-									USeinAbilityBPFL::SeinRevokeAbilityByClass(this, Target, AbilityClass);
-								}
-							}
-						}
-						else if (Def->AbilityTargetClassTag.IsValid())
-						{
-							const FGameplayTag ClassFilter = Def->AbilityTargetClassTag;
-							EntityPool.ForEachEntity([&](FSeinEntityHandle Other, const FSeinEntity& /*OtherEntity*/)
-							{
-								if (GetEntityOwner(Other) != PlayerForTags) return;
-								if (!HasTag(Other, ClassFilter)) return;
-								for (const TSubclassOf<USeinAbility>& AbilityClass : Def->GrantedAbilities)
-								{
-									if (AbilityClass)
-									{
-										USeinAbilityBPFL::SeinRevokeAbilityByClass(this, Other, AbilityClass);
-									}
-								}
-							});
-						}
-					}
-				}
-
-				if (Def)
-				{
-					USeinEffect* MutableCDO = Cast<USeinEffect>(Effect.EffectClass->GetDefaultObject());
-					if (MutableCDO)
-					{
-						// OnExpire fires only for Timed effects that actually reached
-						// the end of their duration. Instant and Persistent modes
-						// never fire OnExpire (no real expiration occurred).
-						const bool bHadRealDuration = (Def->DurationMode == ESeinEffectDurationMode::Timed);
-						if (bByExpiration && bHadRealDuration)
-						{
-							MutableCDO->OnExpire(Target);
-						}
-						MutableCDO->OnRemoved(Target, bByExpiration);
-					}
-					EnqueueVisualEvent(FSeinVisualEvent::MakeEffectEvent(Target, Def->EffectTag, /*bApplied=*/false));
-				}
-				return true;
-			}
-		}
+		return Effect.EffectInstanceID == EffectInstanceID;
+	});
+	if (EffectIndex == INDEX_NONE)
+	{
 		return false;
-	};
+	}
+
+	// Detach before any ability or Blueprint callback. Re-entrant removal then
+	// sees a coherent storage, and stable removal preserves callback/modifier order.
+	const FSeinActiveEffect Effect = Storage[EffectIndex];
+	Storage.RemoveAt(EffectIndex, 1, EAllowShrinking::No);
+
+	const USeinEffect* Def = Effect.EffectClass ? GetDefault<USeinEffect>(Effect.EffectClass) : nullptr;
+	if (Def && Def->Scope == ESeinModifierScope::Instance)
+	{
+		for (const FGameplayTag& Tag : Def->GrantedTags)
+		{
+			UngrantTag(Effect.Target, Tag);
+		}
+	}
+	else if (Def)
+	{
+		if (Def->EffectTag.IsValid())
+		{
+			UngrantPlayerTag(PlayerForTags, Def->EffectTag);
+		}
+		for (const FGameplayTag& Tag : Def->GrantedTags)
+		{
+			UngrantPlayerTag(PlayerForTags, Tag);
+		}
+	}
+
+	// Revoke only references this exact effect instance committed. The ledger is
+	// detached with the effect before callbacks, so partial passive self-removal
+	// cannot revoke an authored class that this application never reached.
+	for (const FSeinEffectAbilityGrant& Grant : Effect.CommittedAbilityGrants)
+	{
+		if (Grant.AbilityClass)
+		{
+			USeinAbilityBPFL::SeinRevokeAbilityFromEffect(this, Grant.Recipient,
+				Grant.AbilityClass, Effect.EffectInstanceID);
+		}
+	}
+
+	USeinEffect* MutableCDO = Def
+		? Cast<USeinEffect>(Effect.EffectClass->GetDefaultObject())
+		: nullptr;
+	if (MutableCDO)
+	{
+		if (bByExpiration && Def->DurationMode == ESeinEffectDurationMode::Timed)
+		{
+			MutableCDO->OnExpire(Effect.Target);
+		}
+		MutableCDO->OnRemoved(Effect.Target, bByExpiration);
+	}
+	EnqueueVisualEvent(FSeinVisualEvent::MakeEffectEvent(
+		Effect.Target, Def ? Def->EffectTag : FGameplayTag(), /*bApplied=*/false));
+	return true;
+}
+
+bool USeinWorldSubsystem::RemoveEffect(FSeinEntityHandle Target, int64 EffectInstanceID, bool bByExpiration)
+{
+	if (EffectInstanceID <= 0 || !EntityPool.IsValid(Target))
+	{
+		return false;
+	}
 
 	const FSeinPlayerID OwnerID = GetEntityOwner(Target);
 	if (FSeinActiveEffectsComponent* InstanceComp = GetComponent<FSeinActiveEffectsComponent>(Target))
 	{
-		if (TryRemoveFromArray(InstanceComp->ActiveEffects, OwnerID))
+		if (RemoveEffectFromStorage(InstanceComp->ActiveEffects, EffectInstanceID, OwnerID, bByExpiration))
 		{
 			return true;
 		}
 	}
+	return RemovePlayerEffect(OwnerID, EffectInstanceID, bByExpiration);
+}
 
-	if (FSeinPlayerState* OwnerState = GetPlayerStateMutable(OwnerID))
+bool USeinWorldSubsystem::RemoveEffectByID(int64 EffectInstanceID, bool bByExpiration)
+{
+	if (EffectInstanceID <= 0)
 	{
-		if (TryRemoveFromArray(OwnerState->ClassEffects, OwnerID))
+		return false;
+	}
+
+	// Locate first, dispatch teardown second: removal callbacks may grow or
+	// destroy the entity pool and must never run inside pool enumeration.
+	FSeinEntityHandle InstanceTarget;
+	EntityPool.ForEachEntity([&](FSeinEntityHandle Handle, const FSeinEntity& /*Entity*/)
+	{
+		if (InstanceTarget.IsValid()) return;
+		const FSeinActiveEffectsComponent* Effects = GetComponent<FSeinActiveEffectsComponent>(Handle);
+		if (Effects && Effects->ActiveEffects.ContainsByPredicate([EffectInstanceID](const FSeinActiveEffect& Effect)
 		{
-			return true;
+			return Effect.EffectInstanceID == EffectInstanceID;
+		}))
+		{
+			InstanceTarget = Handle;
 		}
-		if (TryRemoveFromArray(OwnerState->PlayerEffects, OwnerID))
+	});
+	if (InstanceTarget.IsValid())
+	{
+		return RemoveEffect(InstanceTarget, EffectInstanceID, bByExpiration);
+	}
+
+	for (FSeinPlayerID PlayerID : GetRegisteredPlayerIDs())
+	{
+		if (RemovePlayerEffect(PlayerID, EffectInstanceID, bByExpiration))
 		{
 			return true;
 		}
@@ -3345,57 +4284,98 @@ bool USeinWorldSubsystem::RemoveInstanceEffect(FSeinEntityHandle Target, uint32 
 	return false;
 }
 
+bool USeinWorldSubsystem::RemovePlayerEffect(FSeinPlayerID PlayerID, int64 EffectInstanceID, bool bByExpiration)
+{
+	if (EffectInstanceID <= 0)
+	{
+		return false;
+	}
+	FSeinPlayerState* PlayerState = GetPlayerStateMutable(PlayerID);
+	if (!PlayerState)
+	{
+		return false;
+	}
+	if (RemoveEffectFromStorage(PlayerState->ClassEffects, EffectInstanceID, PlayerID, bByExpiration))
+	{
+		return true;
+	}
+	return RemoveEffectFromStorage(PlayerState->PlayerEffects, EffectInstanceID, PlayerID, bByExpiration);
+}
+
+bool USeinWorldSubsystem::HasInstanceEffectWithTag(FSeinEntityHandle Target, FGameplayTag Tag) const
+{
+	const FSeinActiveEffectsComponent* Effects = GetComponent<FSeinActiveEffectsComponent>(Target);
+	return Effects && Effects->HasEffectWithTag(Tag);
+}
+
+int32 USeinWorldSubsystem::GetInstanceEffectStacks(FSeinEntityHandle Target, FGameplayTag Tag) const
+{
+	const FSeinActiveEffectsComponent* Effects = GetComponent<FSeinActiveEffectsComponent>(Target);
+	return Effects ? Effects->GetStackCountForTag(Tag) : 0;
+}
+
+int32 USeinWorldSubsystem::GetEffectStacksForPlayer(
+	FSeinPlayerID PlayerID, ESeinModifierScope Scope, FGameplayTag Tag) const
+{
+	const FSeinPlayerState* State = GetPlayerState(PlayerID);
+	if (!State)
+	{
+		return 0;
+	}
+
+	if (Scope == ESeinModifierScope::Class)
+	{
+		return CountEffectStacksWithTag(State->ClassEffects, Tag);
+	}
+	if (Scope == ESeinModifierScope::Player)
+	{
+		return CountEffectStacksWithTag(State->PlayerEffects, Tag);
+	}
+	return 0;
+}
+
+bool USeinWorldSubsystem::HasEffectWithTagForPlayer(
+	FSeinPlayerID PlayerID, ESeinModifierScope Scope, FGameplayTag Tag) const
+{
+	return GetEffectStacksForPlayer(PlayerID, Scope, Tag) > 0;
+}
+
 void USeinWorldSubsystem::RemoveInstanceEffectsWithTag(FSeinEntityHandle Target, FGameplayTag Tag)
 {
 	if (!Tag.IsValid()) return;
 
-	auto RemoveMatching = [&](TArray<FSeinActiveEffect>& Storage, FSeinPlayerID PlayerForTags)
+	auto CollectMatching = [&](const TArray<FSeinActiveEffect>& Storage, TArray<int64>& OutEffectIDs)
 	{
-		for (int32 i = Storage.Num() - 1; i >= 0; --i)
+		for (const FSeinActiveEffect& Effect : Storage)
 		{
-			const USeinEffect* Def = Storage[i].EffectClass ? GetDefault<USeinEffect>(Storage[i].EffectClass) : nullptr;
-			if (!Def || !Def->EffectTag.MatchesTag(Tag)) continue;
-
-			const FSeinActiveEffect Effect = Storage[i];
-			Storage.RemoveAtSwap(i, EAllowShrinking::No);
-
-			if (Def->Scope == ESeinModifierScope::Instance)
+			const USeinEffect* Def = Effect.EffectClass ? GetDefault<USeinEffect>(Effect.EffectClass) : nullptr;
+			if (Def && Def->EffectTag.MatchesTag(Tag))
 			{
-				for (const FGameplayTag& GT : Def->GrantedTags)
-				{
-					UngrantTag(Target, GT);
-				}
+				OutEffectIDs.Add(Effect.EffectInstanceID);
 			}
-			else
-			{
-				if (Def->EffectTag.IsValid())
-				{
-					UngrantPlayerTag(PlayerForTags, Def->EffectTag);
-				}
-				for (const FGameplayTag& GT : Def->GrantedTags)
-				{
-					UngrantPlayerTag(PlayerForTags, GT);
-				}
-			}
-
-			USeinEffect* MutableCDO = Cast<USeinEffect>(Effect.EffectClass->GetDefaultObject());
-			if (MutableCDO)
-			{
-				MutableCDO->OnRemoved(Target, /*bByExpiration=*/false);
-			}
-			EnqueueVisualEvent(FSeinVisualEvent::MakeEffectEvent(Target, Def->EffectTag, /*bApplied=*/false));
 		}
 	};
 
 	const FSeinPlayerID OwnerID = GetEntityOwner(Target);
-	if (FSeinActiveEffectsComponent* InstanceComp = GetComponent<FSeinActiveEffectsComponent>(Target))
+	TArray<int64> InstanceEffectIDs;
+	TArray<int64> PlayerEffectIDs;
+	if (const FSeinActiveEffectsComponent* InstanceComp = GetComponent<FSeinActiveEffectsComponent>(Target))
 	{
-		RemoveMatching(InstanceComp->ActiveEffects, OwnerID);
+		CollectMatching(InstanceComp->ActiveEffects, InstanceEffectIDs);
 	}
-	if (FSeinPlayerState* OwnerState = GetPlayerStateMutable(OwnerID))
+	if (const FSeinPlayerState* OwnerState = GetPlayerState(OwnerID))
 	{
-		RemoveMatching(OwnerState->ClassEffects, OwnerID);
-		RemoveMatching(OwnerState->PlayerEffects, OwnerID);
+		CollectMatching(OwnerState->ClassEffects, PlayerEffectIDs);
+		CollectMatching(OwnerState->PlayerEffects, PlayerEffectIDs);
+	}
+
+	for (int64 EffectID : InstanceEffectIDs)
+	{
+		RemoveEffect(Target, EffectID, /*bByExpiration=*/false);
+	}
+	for (int64 EffectID : PlayerEffectIDs)
+	{
+		RemovePlayerEffect(OwnerID, EffectID, /*bByExpiration=*/false);
 	}
 }
 
@@ -3409,9 +4389,14 @@ void USeinWorldSubsystem::RemoveEffectsFromDeadSource(FSeinEntityHandle DeadHand
 		return Def && Def->bRemoveOnSourceDeath;
 	};
 
-	// Collect first, remove after — RemoveInstanceEffect mutates the same storages
-	// we're iterating, so buffering the hits keeps iteration stable.
-	TArray<TPair<FSeinEntityHandle, uint32>> ToRemove;
+	struct FPendingEffectRemoval
+	{
+		FSeinEntityHandle Target;
+		FSeinPlayerID PlayerID;
+		int64 EffectID = 0;
+		bool bPlayerScoped = false;
+	};
+	TArray<FPendingEffectRemoval> ToRemove;
 
 	// Instance scope: every entity's FSeinActiveEffectsComponent.
 	EntityPool.ForEachEntity([&](FSeinEntityHandle Handle, FSeinEntity& /*Entity*/)
@@ -3422,34 +4407,44 @@ void USeinWorldSubsystem::RemoveEffectsFromDeadSource(FSeinEntityHandle DeadHand
 		{
 			if (E.Source == DeadHandle && WantsSourceDeathRemoval(E.EffectClass))
 			{
-				ToRemove.Add({ Handle, E.EffectInstanceID });
+				ToRemove.Add({ Handle, FSeinPlayerID::Neutral(), E.EffectInstanceID, false });
 			}
 		}
 	});
 
-	// Class / Player scope: every player state.
-	ForEachPlayerStateMutable([&](FSeinPlayerID /*PID*/, FSeinPlayerState& State)
+	// Class / Player scope: canonical player order, with player identity retained
+	// so removal still works if the effect's original target is stale.
+	for (FSeinPlayerID PlayerID : GetRegisteredPlayerIDs())
 	{
-		for (const FSeinActiveEffect& E : State.ClassEffects)
+		const FSeinPlayerState* State = GetPlayerState(PlayerID);
+		if (!State) continue;
+		for (const FSeinActiveEffect& E : State->ClassEffects)
 		{
 			if (E.Source == DeadHandle && WantsSourceDeathRemoval(E.EffectClass))
 			{
-				ToRemove.Add({ E.Target, E.EffectInstanceID });
+				ToRemove.Add({ E.Target, PlayerID, E.EffectInstanceID, true });
 			}
 		}
-		for (const FSeinActiveEffect& E : State.PlayerEffects)
+		for (const FSeinActiveEffect& E : State->PlayerEffects)
 		{
 			if (E.Source == DeadHandle && WantsSourceDeathRemoval(E.EffectClass))
 			{
-				ToRemove.Add({ E.Target, E.EffectInstanceID });
+				ToRemove.Add({ E.Target, PlayerID, E.EffectInstanceID, true });
 			}
 		}
-	});
+	}
 
 	// bByExpiration=false — this is cancellation by source death, not natural expiry.
-	for (const TPair<FSeinEntityHandle, uint32>& R : ToRemove)
+	for (const FPendingEffectRemoval& Removal : ToRemove)
 	{
-		RemoveInstanceEffect(R.Key, R.Value, /*bByExpiration=*/false);
+		if (Removal.bPlayerScoped)
+		{
+			RemovePlayerEffect(Removal.PlayerID, Removal.EffectID, /*bByExpiration=*/false);
+		}
+		else
+		{
+			RemoveEffect(Removal.Target, Removal.EffectID, /*bByExpiration=*/false);
+		}
 	}
 }
 
@@ -3600,8 +4595,6 @@ namespace
 		Hash = HashCombine(Hash, GetTypeHash(State.bReady));
 		Hash = HashCombine(Hash, GetTypeHash(State.bIsSpectator));
 		Hash = HashCombine(Hash, GetTypeHash(State.bIsAI));
-		Hash = HashCombine(Hash, GetTypeHash(State.NextEffectInstanceID));
-
 		HashTagMap(Hash, State.Resources,          [](const FFixedPoint& V) { return GetTypeHash(V); });
 		HashTagMap(Hash, State.ResourceCaps,       [](const FFixedPoint& V) { return GetTypeHash(V); });
 		HashTagMap(Hash, State.PlayerTagRefCounts, [](int32 V)              { return GetTypeHash(V); });
@@ -3641,6 +4634,7 @@ namespace
 int32 USeinWorldSubsystem::ComputeStateHash() const
 {
 	uint32 Hash = GetTypeHash(CurrentTick);
+	Hash = HashCombine(Hash, GetTypeHash(NextEffectInstanceID));
 
 	// Entities — pool iterates in slot-index order, already deterministic.
 	EntityPool.ForEachEntity([&Hash](FSeinEntityHandle Handle, const FSeinEntity& Entity)
@@ -3836,27 +4830,73 @@ void USeinWorldSubsystem::ReplayEffectAbilityGrants(FSeinEntityHandle Handle)
 	const FSeinPlayerID Owner = GetEntityOwner(Handle);
 	const FSeinPlayerState* OwnerState = GetPlayerState(Owner);
 	if (!OwnerState) return;
+	const uint64 InitialOwnerRevision = OwnerTransitionRevisions.FindRef(Handle);
 
-	auto ReplayFromEffectStorage = [&](const TArray<FSeinActiveEffect>& Storage)
+	// Snapshot stable storage locators before any passive callback. IDs are sorted
+	// by commit order, then each locator is re-resolved immediately before use;
+	// removing the current or a later effect cannot invalidate iteration.
+	TArray<FEffectLocator> EffectLocators;
+	EffectLocators.Reserve(OwnerState->ClassEffects.Num() + OwnerState->PlayerEffects.Num());
+	for (const FSeinActiveEffect& Active : OwnerState->ClassEffects)
 	{
-		for (const FSeinActiveEffect& Active : Storage)
+		FEffectLocator& Locator = EffectLocators.AddDefaulted_GetRef();
+		Locator.Scope = ESeinModifierScope::Class;
+		Locator.PlayerID = Owner;
+		Locator.EffectInstanceID = Active.EffectInstanceID;
+	}
+	for (const FSeinActiveEffect& Active : OwnerState->PlayerEffects)
+	{
+		FEffectLocator& Locator = EffectLocators.AddDefaulted_GetRef();
+		Locator.Scope = ESeinModifierScope::Player;
+		Locator.PlayerID = Owner;
+		Locator.EffectInstanceID = Active.EffectInstanceID;
+	}
+	EffectLocators.Sort([](const FEffectLocator& A, const FEffectLocator& B)
+	{
+		return A.EffectInstanceID < B.EffectInstanceID;
+	});
+
+	for (const FEffectLocator& Locator : EffectLocators)
+	{
+		const FSeinEntity* RecipientEntity = EntityPool.Get(Handle);
+		if (!RecipientEntity || !RecipientEntity->IsAlive()
+			|| GetEntityOwner(Handle) != Owner
+			|| OwnerTransitionRevisions.FindRef(Handle) != InitialOwnerRevision
+			|| !GetComponent<FSeinAbilityComponent>(Handle))
 		{
-			const USeinEffect* CDO = Active.EffectClass ? GetDefault<USeinEffect>(Active.EffectClass) : nullptr;
-			if (!CDO) continue;
-			if (CDO->GrantedAbilities.Num() == 0) continue;
-			if (!CDO->AbilityTargetClassTag.IsValid()) continue;
-			if (!HasTag(Handle, CDO->AbilityTargetClassTag)) continue;
-			for (const TSubclassOf<USeinAbility>& AbilityClass : CDO->GrantedAbilities)
+			break;
+		}
+
+		FSeinActiveEffect* Active = ResolveEffect(Locator);
+		if (!Active) continue;
+		const USeinEffect* CDO = Active->EffectClass
+			? GetDefault<USeinEffect>(Active->EffectClass)
+			: nullptr;
+		if (!CDO || (CDO->Scope != ESeinModifierScope::Class
+				&& CDO->Scope != ESeinModifierScope::Player)
+			|| !CDO->AbilityTargetClassTag.IsValid()
+			|| !HasTag(Handle, CDO->AbilityTargetClassTag))
+		{
+			continue;
+		}
+
+		const TArray<TSubclassOf<USeinAbility>> AbilityClasses = CDO->GrantedAbilities;
+		for (const TSubclassOf<USeinAbility>& AbilityClass : AbilityClasses)
+		{
+			if (AbilityClass
+				&& !GrantAbilityTrackedByEffect(Locator, Handle, AbilityClass))
 			{
-				if (AbilityClass)
-				{
-					USeinAbilityBPFL::SeinGrantAbility(this, Handle, AbilityClass);
-				}
+				break;
+			}
+			RecipientEntity = EntityPool.Get(Handle);
+			if (!RecipientEntity || !RecipientEntity->IsAlive()
+				|| GetEntityOwner(Handle) != Owner
+				|| OwnerTransitionRevisions.FindRef(Handle) != InitialOwnerRevision)
+			{
+				return;
 			}
 		}
-	};
-	ReplayFromEffectStorage(OwnerState->ClassEffects);
-	ReplayFromEffectStorage(OwnerState->PlayerEffects);
+	}
 }
 
 // ==================== Tag seeding / unindexing ====================

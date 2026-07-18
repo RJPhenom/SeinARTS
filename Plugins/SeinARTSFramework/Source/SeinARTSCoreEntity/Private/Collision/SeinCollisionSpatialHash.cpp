@@ -32,7 +32,7 @@ int32 FSeinCollisionSpatialHash::ToCell(FFixedPoint WorldCoord, FFixedPoint Orig
 	// toward zero; add a floor correction for the negative-with-remainder case
 	// so cell -1 stays distinct from cell 0 on the negative side of origin.
 	if (CellSize <= FFixedPoint::Zero) return 0;
-	const int64 RawDiff = static_cast<int64>(WorldCoord) - static_cast<int64>(OriginCoord);
+	const int64 RawDiff = (WorldCoord - OriginCoord).Value;
 	const int64 RawCellSize = static_cast<int64>(CellSize);
 	int64 Cell = RawDiff / RawCellSize;
 	if ((RawDiff % RawCellSize != 0) && ((RawDiff < 0) != (RawCellSize < 0)))

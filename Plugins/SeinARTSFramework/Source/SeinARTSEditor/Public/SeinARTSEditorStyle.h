@@ -15,7 +15,7 @@
  * Manages the Slate style set for SeinARTS editor tooling.
  * Registers class icons, thumbnails, and branding assets.
  */
-class FSeinARTSEditorStyle
+class SEINARTSEDITOR_API FSeinARTSEditorStyle
 {
 public:
 	static void Initialize();

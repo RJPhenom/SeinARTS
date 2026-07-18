@@ -238,25 +238,45 @@ namespace SeinAbilityGrantLocal
 		return INDEX_NONE;
 	}
 
+	static FSeinAbilityGrantOwnership& EnsureOwnershipRow(
+		FSeinAbilityComponent& AC, int32 ParallelIndex)
+	{
+		while (AC.AbilityGrantOwnership.Num() <= ParallelIndex)
+		{
+			FSeinAbilityGrantOwnership Ownership;
+			const int32 LegacyIndex = AC.AbilityGrantOwnership.Num();
+			Ownership.AnonymousGrantCount = AC.AbilityGrantCounts.IsValidIndex(LegacyIndex)
+				? FMath::Max(1, AC.AbilityGrantCounts[LegacyIndex])
+				: 1;
+			AC.AbilityGrantOwnership.Add(MoveTemp(Ownership));
+		}
+		return AC.AbilityGrantOwnership[ParallelIndex];
+	}
+
+	static int64 GetOwnershipTotal(const FSeinAbilityGrantOwnership& Ownership)
+	{
+		return static_cast<int64>(Ownership.AnonymousGrantCount)
+			+ static_cast<int64>(Ownership.EffectInstanceIDs.Num());
+	}
+
 	/** Tear down an ability instance entry: cancel-if-active, drop from
 	 *  parallel arrays, clear active/passive slots, unregister from pool,
 	 *  remove class from GrantedAbilities. Caller is responsible for the
-	 *  broker-dirty call. `ParallelIndex` is the index into both
-	 *  AbilityInstanceIDs and AbilityGrantCounts. */
+	 *  broker-dirty call. Component ownership rows are detached before
+	 *  CancelAbility so reentrant grant/revoke cannot invalidate the index. The
+	 *  old pool slot stays occupied until Cancel returns, preventing ID reuse. */
 	static void DestroyInstanceAt(USeinWorldSubsystem& World,
 		FSeinAbilityComponent& AC, int32 ParallelIndex)
 	{
 		if (!AC.AbilityInstanceIDs.IsValidIndex(ParallelIndex)) return;
 
 		const int32 ID = AC.AbilityInstanceIDs[ParallelIndex];
+		USeinAbility* Instance = World.GetAbilityInstance(ID);
 		UClass* ClassToForget = nullptr;
-		if (USeinAbility* Ab = World.GetAbilityInstance(ID))
+		const bool bCancel = Instance && Instance->bIsActive;
+		if (Instance)
 		{
-			if (Ab->bIsActive)
-			{
-				Ab->CancelAbility();
-			}
-			ClassToForget = Ab->GetClass();
+			ClassToForget = Instance->GetClass();
 		}
 		if (AC.ActiveAbilityID == ID)
 		{
@@ -269,96 +289,161 @@ namespace SeinAbilityGrantLocal
 		{
 			AC.AbilityGrantCounts.RemoveAt(ParallelIndex);
 		}
-		World.UnregisterAbilityInstance(ID);
+		if (AC.AbilityGrantOwnership.IsValidIndex(ParallelIndex))
+		{
+			AC.AbilityGrantOwnership.RemoveAt(ParallelIndex);
+		}
 
 		if (ClassToForget)
 		{
 			AC.GrantedAbilities.Remove(ClassToForget);
 		}
+		if (bCancel)
+		{
+			Instance->CancelAbility();
+		}
+		World.UnregisterAbilityInstance(ID);
+	}
+}
+
+namespace SeinAbilityGrantLocal
+{
+	static int32 GrantAbilityInternal(const UObject* WorldContextObject,
+		FSeinEntityHandle EntityHandle, TSubclassOf<USeinAbility> AbilityClass,
+		int64 EffectInstanceID)
+	{
+		UWorld* ContextWorld = WorldContextObject
+			? GEngine->GetWorldFromContextObject(
+				WorldContextObject, EGetWorldErrorMode::ReturnNull)
+			: nullptr;
+		USeinWorldSubsystem* Subsystem = ContextWorld
+			? ContextWorld->GetSubsystem<USeinWorldSubsystem>()
+			: nullptr;
+		if (!Subsystem)
+		{
+			UE_LOG(LogSeinBPFL, Warning, TEXT("GrantAbility: no SeinWorldSubsystem"));
+			return INDEX_NONE;
+		}
+		const FSeinEntity* Entity = Subsystem->GetEntityPool().Get(EntityHandle);
+		if (!AbilityClass || AbilityClass->HasAnyClassFlags(CLASS_Abstract)
+			|| !Entity || !Entity->IsAlive() || EffectInstanceID < 0)
+		{
+			UE_LOG(LogSeinBPFL, Warning,
+				TEXT("GrantAbility: invalid entity, class, or source for entity %s"),
+				*EntityHandle.ToString());
+			return INDEX_NONE;
+		}
+		FSeinAbilityComponent* AbilityComp =
+			Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
+		if (!AbilityComp)
+		{
+			UE_LOG(LogSeinBPFL, Warning,
+				TEXT("GrantAbility: entity %s has no FSeinAbilityComponent"),
+				*EntityHandle.ToString());
+			return INDEX_NONE;
+		}
+
+		const UClass* TargetClass = AbilityClass.Get();
+		const int32 ExistingIdx = FindInstanceIndex(*Subsystem, *AbilityComp,
+			[TargetClass](const USeinAbility* Ab) { return Ab->GetClass() == TargetClass; });
+		if (ExistingIdx != INDEX_NONE)
+		{
+			FSeinAbilityGrantOwnership& Ownership =
+				EnsureOwnershipRow(*AbilityComp, ExistingIdx);
+			const int64 PreviousTotal = GetOwnershipTotal(Ownership);
+			if (PreviousTotal >= MAX_int32)
+			{
+				UE_LOG(LogSeinBPFL, Error,
+					TEXT("GrantAbility: refcount saturated for %s on entity %s"),
+					*AbilityClass->GetName(), *EntityHandle.ToString());
+				return INDEX_NONE;
+			}
+			if (EffectInstanceID > 0)
+			{
+				Ownership.EffectInstanceIDs.Add(EffectInstanceID);
+			}
+			else
+			{
+				++Ownership.AnonymousGrantCount;
+			}
+			while (AbilityComp->AbilityGrantCounts.Num() <= ExistingIdx)
+			{
+				AbilityComp->AbilityGrantCounts.Add(1);
+			}
+			AbilityComp->AbilityGrantCounts[ExistingIdx] =
+				static_cast<int32>(PreviousTotal + 1);
+			return AbilityComp->AbilityInstanceIDs[ExistingIdx];
+		}
+
+		USeinAbility* Instance = NewObject<USeinAbility>(Subsystem, AbilityClass);
+		Instance->InitializeAbility(EntityHandle, Subsystem);
+		const int32 AbilityID = Subsystem->RegisterAbilityInstance(Instance);
+
+		FSeinAbilityGrantOwnership Ownership;
+		if (EffectInstanceID > 0)
+		{
+			Ownership.EffectInstanceIDs.Add(EffectInstanceID);
+		}
+		else
+		{
+			Ownership.AnonymousGrantCount = 1;
+		}
+		AbilityComp->GrantedAbilities.AddUnique(AbilityClass);
+		AbilityComp->AbilityInstanceIDs.Add(AbilityID);
+		AbilityComp->AbilityGrantCounts.Add(1);
+		AbilityComp->AbilityGrantOwnership.Add(MoveTemp(Ownership));
+
+		if (Instance->bIsPassive)
+		{
+			if (!Instance->ActivateAbility(EntityHandle, FFixedVector::ZeroVector))
+			{
+				AbilityComp = Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
+				const int32 FailedIndex = AbilityComp
+					? AbilityComp->AbilityInstanceIDs.IndexOfByKey(AbilityID)
+					: INDEX_NONE;
+				if (AbilityComp && FailedIndex != INDEX_NONE)
+				{
+					DestroyInstanceAt(*Subsystem, *AbilityComp, FailedIndex);
+				}
+				return INDEX_NONE;
+			}
+			AbilityComp = Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
+			const int32 CurrentIndex = AbilityComp
+				? AbilityComp->AbilityInstanceIDs.IndexOfByKey(AbilityID)
+				: INDEX_NONE;
+			const bool bSourceStillOwned = CurrentIndex != INDEX_NONE
+				&& AbilityComp->AbilityGrantOwnership.IsValidIndex(CurrentIndex)
+				&& (EffectInstanceID > 0
+					? AbilityComp->AbilityGrantOwnership[CurrentIndex]
+						.EffectInstanceIDs.Contains(EffectInstanceID)
+					: AbilityComp->AbilityGrantOwnership[CurrentIndex]
+						.AnonymousGrantCount > 0);
+			if (!bSourceStillOwned || Subsystem->GetAbilityInstance(AbilityID) != Instance)
+			{
+				return INDEX_NONE;
+			}
+			AbilityComp->ActivePassiveIDs.Add(AbilityID);
+		}
+
+		DirtyBrokerCapability(*Subsystem, EntityHandle);
+		return AbilityID;
 	}
 }
 
 int32 USeinAbilityBPFL::SeinGrantAbility(const UObject* WorldContextObject,
-	FSeinEntityHandle EntityHandle,
-	TSubclassOf<USeinAbility> AbilityClass)
+	FSeinEntityHandle EntityHandle, TSubclassOf<USeinAbility> AbilityClass)
 {
-	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
-	if (!Subsystem)
-	{
-		UE_LOG(LogSeinBPFL, Warning, TEXT("GrantAbility: no SeinWorldSubsystem"));
-		return INDEX_NONE;
-	}
-	if (!AbilityClass || AbilityClass->HasAnyClassFlags(CLASS_Abstract))
-	{
-		UE_LOG(LogSeinBPFL, Warning, TEXT("GrantAbility: null or abstract AbilityClass for entity %s"),
-			*EntityHandle.ToString());
-		return INDEX_NONE;
-	}
-	FSeinAbilityComponent* AbilityComp = Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
-	if (!AbilityComp)
-	{
-		UE_LOG(LogSeinBPFL, Warning,
-			TEXT("GrantAbility: entity %s has no FSeinAbilityComponent — author one on its entity bridge's ComponentData before granting"),
-			*EntityHandle.ToString());
-		return INDEX_NONE;
-	}
+	return SeinAbilityGrantLocal::GrantAbilityInternal(
+		WorldContextObject, EntityHandle, AbilityClass, /*EffectInstanceID=*/0);
+}
 
-	// Refcounted idempotency. If the entity already holds an instance of
-	// this class, bump its refcount and return the existing pool ID. A
-	// matching `SeinRevokeAbility*` call elsewhere only fully destroys the
-	// instance when the count drops back to zero — so two grant-sources
-	// (native authoring + an effect, two effects, etc.) coexist safely.
-	const UClass* TargetClass = AbilityClass.Get();
-	const int32 ExistingIdx = SeinAbilityGrantLocal::FindInstanceIndex(*Subsystem, *AbilityComp,
-		[TargetClass](const USeinAbility* Ab) { return Ab->GetClass() == TargetClass; });
-	if (ExistingIdx != INDEX_NONE)
-	{
-		// Bump the parallel-array refcount entry. Auto-pad the count array if
-		// it's somehow lagging behind (defensive — legacy snapshots loaded
-		// before this field existed will have empty AbilityGrantCounts).
-		while (AbilityComp->AbilityGrantCounts.Num() <= ExistingIdx)
-		{
-			AbilityComp->AbilityGrantCounts.Add(1);
-		}
-		AbilityComp->AbilityGrantCounts[ExistingIdx] += 1;
-
-		const int32 ExistingID = AbilityComp->AbilityInstanceIDs[ExistingIdx];
-		UE_LOG(LogSeinBPFL, Verbose,
-			TEXT("GrantAbility: entity %s already holds %s (id=%d) — refcount now %d"),
-			*EntityHandle.ToString(), *AbilityClass->GetName(),
-			ExistingID, AbilityComp->AbilityGrantCounts[ExistingIdx]);
-		return ExistingID;
-	}
-
-	// New grant — instantiate via the same pipeline as the spawn-time native
-	// path (which itself now routes through this BPFL for refcount
-	// consistency).
-	USeinAbility* Instance = NewObject<USeinAbility>(Subsystem, AbilityClass);
-	Instance->InitializeAbility(EntityHandle, Subsystem);
-	const int32 AbilityID = Subsystem->RegisterAbilityInstance(Instance);
-
-	// Track in component. Adding the class to GrantedAbilities means a
-	// save/reload that re-runs InitializeEntityAbilities picks up the
-	// runtime-granted class too. Parallel `AbilityGrantCounts` entry seeds
-	// at 1 — the count balances against the eventual matching revoke.
-	AbilityComp->GrantedAbilities.AddUnique(AbilityClass);
-	AbilityComp->AbilityInstanceIDs.Add(AbilityID);
-	AbilityComp->AbilityGrantCounts.Add(1);
-
-	if (Instance->bIsPassive)
-	{
-		Instance->ActivateAbility(EntityHandle, FFixedVector::ZeroVector);
-		AbilityComp->ActivePassiveIDs.Add(AbilityID);
-	}
-
-	SeinAbilityGrantLocal::DirtyBrokerCapability(*Subsystem, EntityHandle);
-
-	UE_LOG(LogSeinBPFL, Verbose,
-		TEXT("GrantAbility: entity %s granted %s [tag=%s passive=%d id=%d refcount=1]"),
-		*EntityHandle.ToString(), *AbilityClass->GetName(),
-		*Instance->AbilityTag.ToString(), Instance->bIsPassive ? 1 : 0, AbilityID);
-
-	return AbilityID;
+int32 USeinAbilityBPFL::SeinGrantAbilityFromEffect(const UObject* WorldContextObject,
+	FSeinEntityHandle EntityHandle, TSubclassOf<USeinAbility> AbilityClass,
+	int64 EffectInstanceID)
+{
+	if (EffectInstanceID <= 0) return INDEX_NONE;
+	return SeinAbilityGrantLocal::GrantAbilityInternal(
+		WorldContextObject, EntityHandle, AbilityClass, EffectInstanceID);
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -378,27 +463,54 @@ int32 USeinAbilityBPFL::SeinGrantAbility(const UObject* WorldContextObject,
 
 namespace SeinAbilityGrantLocal
 {
-	/** Decrement the refcount at `ParallelIndex`. If it hits zero, tear down
-	 *  the instance via DestroyInstanceAt. Returns 1 if the instance was
-	 *  destroyed, 0 otherwise. Pads the count array if it lags (legacy
-	 *  snapshots) so the first revoke on a pre-refcount instance still
-	 *  reaches zero in one call. */
-	static int32 DecrementAndMaybeDestroy(USeinWorldSubsystem& World,
-		FSeinAbilityComponent& AC, int32 ParallelIndex)
+	/** Consume one source-owned reference. Effect-specific calls only consume a
+	 *  matching effect ID. Aggregate calls prefer anonymous ownership, otherwise
+	 *  consume the oldest effect source and prune its live ledger before any
+	 *  callback-capable destruction. Returns 1 only when the instance dies. */
+	static int32 ConsumeGrantAndMaybeDestroy(USeinWorldSubsystem& World,
+		FSeinEntityHandle Entity, FSeinAbilityComponent& AC, int32 ParallelIndex,
+		int64 RequiredEffectInstanceID = 0)
 	{
 		if (!AC.AbilityInstanceIDs.IsValidIndex(ParallelIndex)) return 0;
+		USeinAbility* Ability = World.GetAbilityInstance(AC.AbilityInstanceIDs[ParallelIndex]);
+		if (!Ability) return 0;
+		const TSubclassOf<USeinAbility> AbilityClass = Ability->GetClass();
+		FSeinAbilityGrantOwnership& Ownership = EnsureOwnershipRow(AC, ParallelIndex);
 
+		int64 PrunedEffectID = 0;
+		if (RequiredEffectInstanceID > 0)
+		{
+			const int32 SourceIndex = Ownership.EffectInstanceIDs.IndexOfByKey(
+				RequiredEffectInstanceID);
+			if (SourceIndex == INDEX_NONE) return 0;
+			Ownership.EffectInstanceIDs.RemoveAt(SourceIndex, 1, EAllowShrinking::No);
+		}
+		else if (Ownership.AnonymousGrantCount > 0)
+		{
+			--Ownership.AnonymousGrantCount;
+		}
+		else if (!Ownership.EffectInstanceIDs.IsEmpty())
+		{
+			PrunedEffectID = Ownership.EffectInstanceIDs[0];
+			Ownership.EffectInstanceIDs.RemoveAt(0, 1, EAllowShrinking::No);
+		}
+		else
+		{
+			return 0;
+		}
+
+		if (PrunedEffectID > 0)
+		{
+			World.PruneEffectAbilityGrantClaim(
+				PrunedEffectID, Entity, AbilityClass);
+		}
+		const int64 Remaining = GetOwnershipTotal(Ownership);
 		while (AC.AbilityGrantCounts.Num() <= ParallelIndex)
 		{
 			AC.AbilityGrantCounts.Add(1);
 		}
-		int32& Count = AC.AbilityGrantCounts[ParallelIndex];
-		if (Count > 1)
-		{
-			Count -= 1;
-			return 0;
-		}
-		// Count is 1 (or 0 — defensively destroy in either case).
+		AC.AbilityGrantCounts[ParallelIndex] = static_cast<int32>(Remaining);
+		if (Remaining > 0) return 0;
 		DestroyInstanceAt(World, AC, ParallelIndex);
 		return 1;
 	}
@@ -438,9 +550,12 @@ int32 USeinAbilityBPFL::SeinRevokeAbilityByTag(const UObject* WorldContextObject
 	int32 NumDestroyed = 0;
 	for (int32 ID : MatchingIDs)
 	{
+		AbilityComp = Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
+		if (!AbilityComp) break;
 		const int32 Idx = AbilityComp->AbilityInstanceIDs.IndexOfByKey(ID);
 		if (Idx == INDEX_NONE) continue;  // already removed by a prior pass
-		NumDestroyed += SeinAbilityGrantLocal::DecrementAndMaybeDestroy(*Subsystem, *AbilityComp, Idx);
+		NumDestroyed += SeinAbilityGrantLocal::ConsumeGrantAndMaybeDestroy(
+			*Subsystem, EntityHandle, *AbilityComp, Idx);
 	}
 
 	if (NumDestroyed > 0)
@@ -477,7 +592,8 @@ int32 USeinAbilityBPFL::SeinRevokeAbilityByClass(const UObject* WorldContextObje
 		return 0;
 	}
 
-	const int32 NumDestroyed = SeinAbilityGrantLocal::DecrementAndMaybeDestroy(*Subsystem, *AbilityComp, Idx);
+	const int32 NumDestroyed = SeinAbilityGrantLocal::ConsumeGrantAndMaybeDestroy(
+		*Subsystem, EntityHandle, *AbilityComp, Idx);
 
 	if (NumDestroyed > 0)
 	{
@@ -489,6 +605,32 @@ int32 USeinAbilityBPFL::SeinRevokeAbilityByClass(const UObject* WorldContextObje
 		*EntityHandle.ToString(), *AbilityClass->GetName(),
 		NumDestroyed > 0 ? TEXT("instance destroyed") : TEXT("refcount decremented (other holders remain)"));
 
+	return NumDestroyed;
+}
+
+int32 USeinAbilityBPFL::SeinRevokeAbilityFromEffect(const UObject* WorldContextObject,
+	FSeinEntityHandle EntityHandle, TSubclassOf<USeinAbility> AbilityClass,
+	int64 EffectInstanceID)
+{
+	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
+	if (!Subsystem || !AbilityClass || EffectInstanceID <= 0) return 0;
+	FSeinAbilityComponent* AbilityComp =
+		Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
+	if (!AbilityComp) return 0;
+	const UClass* TargetClass = AbilityClass.Get();
+	const int32 Idx = SeinAbilityGrantLocal::FindInstanceIndex(
+		*Subsystem, *AbilityComp,
+		[TargetClass](const USeinAbility* Ability)
+		{
+			return Ability->GetClass() == TargetClass;
+		});
+	if (Idx == INDEX_NONE) return 0;
+	const int32 NumDestroyed = SeinAbilityGrantLocal::ConsumeGrantAndMaybeDestroy(
+		*Subsystem, EntityHandle, *AbilityComp, Idx, EffectInstanceID);
+	if (NumDestroyed > 0)
+	{
+		SeinAbilityGrantLocal::DirtyBrokerCapability(*Subsystem, EntityHandle);
+	}
 	return NumDestroyed;
 }
 
@@ -516,8 +658,15 @@ int32 USeinAbilityBPFL::SeinForceRevokeAbilityByTag(const UObject* WorldContextO
 	int32 NumDestroyed = 0;
 	for (int32 ID : MatchingIDs)
 	{
+		AbilityComp = Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
+		if (!AbilityComp) break;
 		const int32 Idx = AbilityComp->AbilityInstanceIDs.IndexOfByKey(ID);
 		if (Idx == INDEX_NONE) continue;
+		if (const USeinAbility* Ability = Subsystem->GetAbilityInstance(ID))
+		{
+			Subsystem->PruneAllEffectAbilityGrantClaims(
+				EntityHandle, Ability->GetClass());
+		}
 		SeinAbilityGrantLocal::DestroyInstanceAt(*Subsystem, *AbilityComp, Idx);
 		++NumDestroyed;
 	}
@@ -548,6 +697,7 @@ int32 USeinAbilityBPFL::SeinForceRevokeAbilityByClass(const UObject* WorldContex
 		[TargetClass](const USeinAbility* Ab) { return Ab->GetClass() == TargetClass; });
 	if (Idx == INDEX_NONE) return 0;
 
+	Subsystem->PruneAllEffectAbilityGrantClaims(EntityHandle, AbilityClass);
 	SeinAbilityGrantLocal::DestroyInstanceAt(*Subsystem, *AbilityComp, Idx);
 	SeinAbilityGrantLocal::DirtyBrokerCapability(*Subsystem, EntityHandle);
 

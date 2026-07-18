@@ -75,7 +75,10 @@ namespace SeinMath
 	// Absolute value
 	FORCEINLINE FFixedPoint Abs(FFixedPoint X)
 	{
-		return FFixedPoint(X < 0 ? -X : X);
+		// +2^63 has no signed 32.32 representation. Saturating that one
+		// magnitude preserves Abs's non-negative contract.
+		if (X == FFixedPoint::MinValue) return FFixedPoint::MaxValue;
+		return X < FFixedPoint::Zero ? -X : X;
 	}
 
 	// Minimum
@@ -121,54 +124,37 @@ namespace SeinMath
 	// Floor - rounds down to nearest integer
 	FORCEINLINE FFixedPoint Floor(FFixedPoint X)
 	{
-		// Mask off fractional bits (lower 32 bits), adjust for negative numbers
-		int64 Val = static_cast<int64>(X);
-		if (X < 0 && (Val & 0xFFFFFFFFLL) != 0)
-		{
-			// Negative number with fractional part - round down (more negative)
-			return FFixedPoint((Val & 0xFFFFFFFF00000000LL) - 0x100000000LL);
-		}
-		return FFixedPoint(Val & 0xFFFFFFFF00000000LL);
+		// Two's-complement 32.32 is already floor-based: clearing the low
+		// fraction bits maps -1.25 to -2 exactly. The old extra subtraction
+		// incorrectly returned -3.
+		const uint64 IntegerBits = static_cast<uint64>(X.Value) & 0xFFFFFFFF00000000ULL;
+		return FFixedPoint(BitCast<int64>(IntegerBits));
 	}
 
 	// Ceil - rounds up to nearest integer
 	FORCEINLINE FFixedPoint Ceil(FFixedPoint X)
 	{
-		int64 Val = static_cast<int64>(X);
-		// If there's a fractional part and number is positive, round up
-		if ((Val & 0xFFFFFFFFLL) != 0 && Val > 0)
+		const uint64 Bits = static_cast<uint64>(X.Value);
+		uint64 IntegerBits = Bits & 0xFFFFFFFF00000000ULL;
+		if ((Bits & 0xFFFFFFFFULL) != 0)
 		{
-			return FFixedPoint((Val & 0xFFFFFFFF00000000LL) + 0x100000000LL);
+			IntegerBits += 0x100000000ULL;
 		}
-		return FFixedPoint(Val & 0xFFFFFFFF00000000LL);
+		return FFixedPoint(BitCast<int64>(IntegerBits));
 	}
 
 	// Round - rounds to nearest integer (0.5 rounds up)
 	FORCEINLINE FFixedPoint Round(FFixedPoint X)
 	{
-		int64 Val = static_cast<int64>(X);
-		int64 Frac = Val & 0xFFFFFFFFLL;
-		int64 Integer = Val & 0xFFFFFFFF00000000LL;
-		
-		// Check if fractional part is >= 0.5 (0x80000000 in 32.32 fixed-point)
-		if (Val >= 0)
+		const uint64 Bits = static_cast<uint64>(X.Value);
+		uint64 IntegerBits = Bits & 0xFFFFFFFF00000000ULL;
+		// Matches Unreal's documented "fraction .5 rounds up" convention,
+		// including -1.5 -> -1.
+		if ((Bits & 0xFFFFFFFFULL) >= 0x80000000ULL)
 		{
-			// Positive: add 1 if frac >= 0.5
-			if (Frac >= 0x80000000LL)
-			{
-				return FFixedPoint(Integer + 0x100000000LL);
-			}
+			IntegerBits += 0x100000000ULL;
 		}
-		else
-		{
-			// Negative: subtract 1 if frac >= 0.5 (in absolute terms)
-			if (Frac >= 0x80000000LL)
-			{
-				return FFixedPoint(Integer - 0x100000000LL);
-			}
-		}
-		
-		return FFixedPoint(Integer);
+		return FFixedPoint(BitCast<int64>(IntegerBits));
 	}
 
 	// Modulo - deterministic remainder operation
@@ -178,6 +164,9 @@ namespace SeinMath
 		
 		int64 XVal = static_cast<int64>(X);
 		int64 YVal = static_cast<int64>(Y);
+		// The sole signed-remainder overflow case; its mathematical remainder
+		// is zero, so handle it before invoking `%`.
+		if (XVal == INT64_MIN && YVal == -1) return FFixedPoint::Zero;
 		
 		// C++ % operator for fixed-point values
 		int64 Result = XVal % YVal;
@@ -233,9 +222,19 @@ namespace SeinMath
 	{
 		if (Exponent == 0) return FFixedPoint::One;
 		
-		// Handle negative exponents
-		bool IsNegative = Exponent < 0;
-		int32 Exp = IsNegative ? -Exponent : Exponent;
+		// Start negative powers from the reciprocal. Computing Base^|Exponent|
+		// first can overflow before the final reciprocal even when the requested
+		// result is representable (for example 2^-32 is one raw 32.32 quantum).
+		const bool IsNegative = Exponent < 0;
+		uint32 Exp = IsNegative
+			? (0u - static_cast<uint32>(Exponent))
+			: static_cast<uint32>(Exponent);
+		if (IsNegative)
+		{
+			check(Base != FFixedPoint::Zero && "Zero cannot be raised to a negative power");
+			if (Base == FFixedPoint::Zero) return FFixedPoint::MaxValue;
+			Base = FFixedPoint::One / Base;
+		}
 		
 		FFixedPoint Result = FFixedPoint::One;
 		FFixedPoint CurrentBase = Base;
@@ -251,7 +250,7 @@ namespace SeinMath
 			Exp >>= 1;
 		}
 		
-		return IsNegative ? (FFixedPoint::One / Result) : Result;
+		return Result;
 	}
 
 	// Natural exponential function (e^x) using Padé approximation for determinism
@@ -306,8 +305,8 @@ namespace SeinMath
 			// For positive n, shift left
 			if (N < 32) // Prevent overflow
 			{
-				int64 ScaledResult = static_cast<int64>(ExpR) << N;
-				return FFixedPoint(ScaledResult);
+				const uint64 ScaledBits = static_cast<uint64>(ExpR.Value) << N;
+				return FFixedPoint(BitCast<int64>(ScaledBits));
 			}
 			else
 			{
@@ -319,8 +318,13 @@ namespace SeinMath
 			// For negative n, shift right
 			if (N > -64) // Prevent underflow to zero
 			{
-				int64 ScaledResult = static_cast<int64>(ExpR) >> (-N);
-				return FFixedPoint(ScaledResult);
+				const int32 Shift = -N;
+				uint64 ScaledBits = static_cast<uint64>(ExpR.Value) >> Shift;
+				if (ExpR.Value < 0)
+				{
+					ScaledBits |= (~0ULL << (64 - Shift));
+				}
+				return FFixedPoint(BitCast<int64>(ScaledBits));
 			}
 			else
 			{
@@ -344,7 +348,7 @@ namespace SeinMath
 		
 		// Count leading zeros to find the exponent
 		int32 Exponent = 0;
-		int64 AbsVal = Val < 0 ? -Val : Val;
+		const int64 AbsVal = Val; // X > 0 above
 		
 		// Find position of highest set bit (this is our n in 2^n)
 		int32 HighBit = 63;
@@ -481,7 +485,13 @@ namespace SeinMath
 		// 1. Sign — atan is odd.
 		bool bNegate = false;
 		FFixedPoint A = X;
-		if (A < FFixedPoint::Zero) { A = -A; bNegate = true; }
+		if (A < FFixedPoint::Zero)
+		{
+			// The exact magnitude of MinValue is unrepresentable; MaxValue is
+			// one raw quantum lower and yields the correct limiting atan result.
+			A = (A == FFixedPoint::MinValue) ? FFixedPoint::MaxValue : -A;
+			bNegate = true;
+		}
 
 		// 2. Reciprocal — collapse |x| > 1 to (0, 1].
 		bool bComplement = false;
@@ -549,8 +559,7 @@ namespace SeinMath
 	// Asin using Newton-Raphson method
 	FORCEINLINE FFixedPoint Asin(FFixedPoint X)
 	{
-		const int64 AbsX = X < 0 ? -X : X;
-		if (AbsX > FFixedPoint::One) return FFixedPoint(0); // Clamp
+		if (X < -FFixedPoint::One || X > FFixedPoint::One) return FFixedPoint(0); // Clamp
 		
 		// Use identity: asin(x) = atan2(x, sqrt(1 - x²))
 		FFixedPoint OneMinusX2 = FFixedPoint::One - (X * X);

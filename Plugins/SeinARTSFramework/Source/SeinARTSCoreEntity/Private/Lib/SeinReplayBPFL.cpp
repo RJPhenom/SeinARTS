@@ -33,11 +33,8 @@ FSeinReplayHeader USeinReplayBPFL::SeinBuildReplayHeader(const UObject* WorldCon
 	Header.StartTick = 0;
 	Header.EndTick = Sub->GetCurrentTick();
 	Header.RecordedAt = FDateTime::UtcNow();
-	// Player registrations: walk the registered-player map via the BP accessor.
-	// (Sub->GetPlayerCount / ForEachPlayerStateMutable — but that last one is
-	// non-const; we use the iteration helper's read-only cousin by calling
-	// ForEachPlayerStateMutable on a non-const cast, which is safe because we
-	// don't mutate. Prefer a const iterator if available when this matters.)
+	// Player registration records are stamped by match-flow plumbing; callers
+	// that need a canonical enumeration use Sub->GetRegisteredPlayerIDs().
 	return Header;
 }
 

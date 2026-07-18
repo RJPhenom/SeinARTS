@@ -12,8 +12,8 @@
  *          Separation is pure extent-vs-extent: a resolver consults the collision
  *          model (FSeinExtentsComponent + the channel registry) and the
  *          deterministic MTV narrowphase only. The one nav touch-point is the
- *          hard-barrier gate (the world subsystem's pluggable PassableResolver /
- *          AuthoritativeDestinationResolver delegates), which a resolver queries
+	 *          hard-barrier gate (the world subsystem's pluggable dynamic-passability /
+	 *          authoritative-destination delegates), which a resolver queries
  *          through the world subsystem so the collision floor stays
  *          nav-impl-agnostic. FRAMING: this is NOT collision asking navigation for
  *          pathing permission — it is collision treating the nav-blocked region as
@@ -81,6 +81,12 @@ public:
 	 *  Default: no-op. Mirrors USeinNavigation::OnNavigationInitialized. */
 	virtual void OnInitialized(UWorld* /*World*/) {}
 
+	/** Called after the world subsystem restores authoritative snapshot state.
+	 *  Custom resolvers should discard any timeline-local scratch and call the
+	 *  base implementation so overlap events are re-derived from the restored
+	 *  world instead of diffed against the abandoned timeline. */
+	virtual void OnSnapshotRestored() { ActiveOverlaps.Reset(); }
+
 	// ----------------------------------------------------------------------
 	// Resolution — the per-tick surface
 	// ----------------------------------------------------------------------
@@ -102,12 +108,41 @@ protected:
 	// resolver so a second strategy reuses them with NO logic change.
 	// ======================================================================
 
-	/** Overlap-responding pairs that were overlapping LAST tick, keyed by the
-	 *  canonical pair key (minIndex<<32 | maxIndex), value = (A,B) handles with
-	 *  A.Index < B.Index. Diffed against this tick's set to emit begin/end
-	 *  events. Lives on the resolver, not the hashed sim state — a snapshot
-	 *  restore simply re-derives it within a tick (a transient render signal). */
-	TMap<uint64, TPair<FSeinEntityHandle, FSeinEntityHandle>> ActiveOverlaps;
+	/** Canonical full-handle identity for one overlap pair. Generations are part
+	 *  of identity so destroying/reusing a slot ends the old overlap and begins
+	 *  a distinct one even when both slot indices are unchanged. */
+	struct FOverlapPairKey
+	{
+		FSeinEntityHandle A;
+		FSeinEntityHandle B;
+
+		FOverlapPairKey() = default;
+		FOverlapPairKey(FSeinEntityHandle InA, FSeinEntityHandle InB)
+			: A(InA), B(InB)
+		{
+			if (B < A) Swap(A, B);
+		}
+
+		bool operator==(const FOverlapPairKey& Other) const
+		{
+			return A == Other.A && B == Other.B;
+		}
+
+		bool operator<(const FOverlapPairKey& Other) const
+		{
+			return A < Other.A || (A == Other.A && B < Other.B);
+		}
+
+		friend uint32 GetTypeHash(const FOverlapPairKey& Pair)
+		{
+			return HashCombine(GetTypeHash(Pair.A), GetTypeHash(Pair.B));
+		}
+	};
+
+	/** Overlap-responding pairs that were overlapping last tick. Lives on the
+	 *  resolver, not hashed sim state; OnSnapshotRestored clears it so the next
+	 *  tick re-derives this transient render signal from restored state. */
+	TSet<FOverlapPairKey> ActiveOverlaps;
 
 	/** A single Extents shape resolved into a planar (XY) collision primitive,
 	 *  in world space, plus its vertical [ZMin, ZMax] span for the early-out. */
@@ -187,21 +222,19 @@ protected:
 	 *  occupy world position `P` — i.e. the move would NOT put its FOOTPRINT onto
 	 *  a non-walkable cell (a baked nav wall, or off the grid edge). Samples the
 	 *  center plus an 8-direction unit ring at the collider radius (the body, not
-	 *  just the center) through the world subsystem's pluggable PassableResolver,
+	 *  just the center) through the world subsystem's DynamicPassableResolver,
 	 *  so the collision floor stays nav-impl-agnostic — a one-way "walkable?"
-	 *  query, no hard nav dependency. Cover slots (AuthoritativeDestinationResolver)
-	 *  are exempt: a unit may be delivered onto a bake-blocked slot. Unbound
+	 *  query, no hard nav dependency. An AuthoritativeDestinationResolver may
+	 *  exempt an exact authored destination from the center-cell rejection. Unbound
 	 *  (nav-less / tests) → always true (ungated), identical to the prior behavior.
 	 *  Shared by every resolver so the "never through a wall" rule is one
 	 *  implementation. */
 	static bool CanOccupy(USeinWorldSubsystem& World, const FFixedVector& P, FFixedPoint Radius);
 
-	/** Build a canonical pair key (lower entity index in the high 32 bits). */
-	static FORCEINLINE uint64 MakePairKey(int32 IndexA, int32 IndexB)
+	/** Build a canonical pair key ordered by full generational handle. */
+	static FORCEINLINE FOverlapPairKey MakePairKey(FSeinEntityHandle A, FSeinEntityHandle B)
 	{
-		const int32 Lo = (IndexA < IndexB) ? IndexA : IndexB;
-		const int32 Hi = (IndexA < IndexB) ? IndexB : IndexA;
-		return (static_cast<uint64>(static_cast<uint32>(Lo)) << 32) | static_cast<uint32>(Hi);
+		return FOverlapPairKey(A, B);
 	}
 
 	/**
@@ -209,8 +242,8 @@ protected:
 	 * overlap, then diff against last tick's set to emit CollisionOverlapBegin /
 	 * CollisionOverlapEnd visual events. Block pairs are already separated by the
 	 * resolution passes, so they don't appear here; Ignore pairs are skipped.
-	 * Event emission order is made deterministic by sorting the pair keys (TMap
-	 * iteration order is not stable, but the sorted uint64 keys are).
+	 * Event emission order is made deterministic by sorting the full-handle pair
+	 * keys rather than depending on TSet iteration order.
 	 */
 	void DetectOverlapsAndEmit(USeinWorldSubsystem& World, const TMap<FName, ESeinCollisionResponse>& ChannelDefaults);
 };

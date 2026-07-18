@@ -44,6 +44,74 @@ separately.
 - Baseline Shipping build: test modules were excluded, but existing production FoW render code
   failed on editor-only `UTexture2D::MipGenSettings`; tracked below as `BUILD-01`.
 
+### Phase 1 content migration evidence
+
+An all-content `LoadPackage -all -projectonly` scan proved that exactly seven packages retained the
+pre-native `FFixedPoint` tagged layout. A temporary read-only compatibility path recovered one raw
+32.32 value from each package; packages were then resaved individually and the compatibility code
+was removed. A native full-content reload produced zero tagged-property mismatches and reproduced
+the exact raw-value manifest:
+
+| Package | Raw `int64` |
+|---|---:|
+| `SA_Build` | 1,288,490,188,800 |
+| `SA_Place_Barracks` | 214,748,364,800 |
+| `SA_Place_VehicleDepot` | 214,748,364,800 |
+| `SA_Produce_CombatCar` | 64,424,509,440 |
+| `SA_Produce_Research_VehicleDepot` | 107,374,182,400 |
+| `SA_ThrowSmoke` | 2,147,483,648,000 |
+| `SE_UnlockVehicleDepot` | -4,294,967,296 |
+
+The same scan exposed four unrelated obsolete root assets with broken redirected imports
+(`BP_Unit`, `SU_Basic`, `SU_Wheeled`, and `LVL_Lobby`); those are isolated as `CONTENT-02` rather
+than being mixed into the serializer migration.
+
+### Phase 1 verification
+
+- The full `All`-profile `SeinARTS` Automation run passed 74/74 tests. Focused evidence includes
+  Effects 30/30, Snapshot 4/4, all determinism tests 3/3, placement/cover integration 2/2, and
+  editor-style lifecycle 1/1. The framework-only unit profile passed 68/68 before the final
+  all-category run.
+- The effect suite exercises globally unique IDs, exact source-aware ability ownership, callback
+  removal/destruction, stack/tag saturation, transactional rollback, and deterministic iteration.
+  An adversarial claim that nested away/back transfer lost one of multiple detached ability classes
+  was disproved by an exact two-class lifecycle test: the ownership multiset balances after removal.
+- Snapshot v4 rejects dirty free slots, abstract/deprecated/newer classes, malformed or trailing
+  tagged bytes, cross-wired ability owners, and contradictory primary/passive roles before mutating
+  live state. A custom implementation using `Within=SeinWorldSubsystem` also round-trips, preserving
+  the framework's pluggable class seam.
+- A same-process serial/parallel collision workload passed. Two fresh editor processes each ran the
+  same 100-collider workload for 120 production ticks: all 120 raw fixed-point pose digests matched,
+  while all 120 existing `StateHash` values differed. This isolates `STATE-02` canonicalization from
+  the now-tested parallel collision result; fresh-process StateHash agreement is **not** claimed.
+- Clean MSVC Development and Shipping builds succeeded. The Shipping receipt contains neither test
+  plugin nor test build product; the ordinary Editor receipt also contains no enabled test plugin.
+- Clang compiled and linked `SeinARTSCore` and `SeinARTSCoreEntity` after fixed-point division was
+  moved off compiler-emitted 128-bit runtime helpers. A full Clang Editor executable cannot be linked
+  against Epic's launcher-engine MSVC binaries because of unrelated Windows ABI imports, so Clang
+  execution is not claimed.
+- `CompileAllBlueprints` reported zero Blueprint compile errors. It retains seven known warnings:
+  two Python-name collisions (`ExtentsShape`, `StampShape`), two references to the missing BrandKit
+  `SeinAssetIcon92.png`, and three invalid gameplay tags (`SeinARTS.Ability.Garrison`,
+  `SeinARTS.Unit.Vehicle`, `SeinARTS.Tech.VehicleDepot`). The native all-content load has zero
+  serializer mismatches and only the four separately tracked `CONTENT-02` load failures.
+
+### Phase 1 production-size checkpoint
+
+Tests are excluded, matching the baseline method. Correctness and explicit network/snapshot
+contracts increased production source by 2,534 lines overall; this is evidence, not a target. The
+largest increase is concentrated in validation and lifecycle state, while several effect, nav, and
+FoW paths became smaller. Later readability work should compare against this checkpoint without
+removing validated behavior merely to reduce LOC.
+
+| Area | Files | Lines | Delta | Blank | Comment-like |
+|---|---:|---:|---:|---:|---:|
+| Host `Source` | 5 | 65 | 0 | 16 | 10 |
+| Framework | 508 | 99,222 | +2,515 | 12,150 | 29,255 |
+| Squad extension | 18 | 2,026 | +8 | 229 | 526 |
+| Cover extension | 33 | 4,094 | +11 | 432 | 1,377 |
+| Movement+ extension | 18 | 2,361 | 0 | 283 | 828 |
+
 ## Status vocabulary
 
 - **Queued** — audit finding awaiting phase-local revalidation.
@@ -78,26 +146,31 @@ separately.
 | ID | Finding | Phase | Status |
 |---|---|---:|---|
 | COR-01 | Multiplayer command ownership, sender-role, match-control, payload, and turn-window validation are incomplete. | 2 | Gate |
-| COR-02 | Effect IDs collide across scope/storage; removal identity is ambiguous. | 1 | Confirmed |
-| STATE-01 | Snapshot capture/restore is not exact continuation state across all future-affecting systems. | 3 | Confirmed |
-| COR-03 | Latent-action iteration can be invalidated by synchronous Blueprint callbacks. | 1 | Confirmed |
+| COR-02 | Effect IDs collide across scope/storage; removal identity is ambiguous. | 1 | Verified |
+| STATE-01 | Snapshot capture/restore is not exact continuation state across all future-affecting systems, including centralized ability active-index lifecycle. | 3 | Confirmed |
+| COR-03 | Latent-action iteration can be invalidated by synchronous Blueprint callbacks. | 1 | Verified |
 | STATE-02 | StateHash coverage/canonicalization is incomplete and includes process-local `FName` identity. | 3 | Confirmed |
 | NAV-01 | Initial destinations can be silently moved after preview by partial A*, wall push, authority recognition, or endpoint restoration. | 5 | Confirmed |
 | NAV-02 | Budgeted asynchronous repath results can be overwritten/lost when keyed only by requester. | 5 | Confirmed |
-| CACHE-01 | Structured-XOR/fingerprint keys can collide; FoW source/blocker rotation/invalidation is incomplete. | 1/6 | Confirmed |
-| NET-01 | Failed local submission, map restart, retained hash/turn sets, and pruning lifecycle are incomplete. | 1/4 | Confirmed |
-| COR-04 | Free-rotation placement validates an incorrect/default yaw. | 1 | Confirmed |
-| COR-05 | Collision overlap pair identity omits entity generation. | 1 | Confirmed |
+| CACHE-01 | Structured-XOR/fingerprint keys can collide; FoW source/blocker rotation/invalidation is incomplete. Exact nav/FoW cache identities and equal-cell reset are fixed; broader invalidation remains. | 1/6 | In progress |
+| NET-01 | Failed local submission, map restart, retained hash/turn sets, and pruning lifecycle are incomplete. Phase-1 readiness, retry, bounds, slot/turn, and reset contracts are fixed; ownership/travel policy remains. | 1/4 | In progress |
+| COR-04 | Free-rotation placement validates an incorrect/default yaw. | 1 | Verified |
+| COR-05 | Collision overlap pair identity omits entity generation. | 1 | Verified |
 | NAV-03 | Same-cell vehicle paths can contain no drivable segment and fail incorrectly. | 5 | Queued |
 | MOVE-01 | Fixed-wing idle/coast behavior can violate continuous-flight expectations. | 7 | Gate |
-| COR-06 | Generic component initialization can run twice. | 1 | Confirmed |
-| EDIT-01 | Editor-owned rooted resources are not reliably released. | 1 | Confirmed |
-| COR-07 | Player-effect callbacks may depend on unordered storage iteration. | 1 | Confirmed |
+| COR-06 | Generic component initialization can run twice. | 1 | Verified |
+| EDIT-01 | Editor-owned rooted resources are not reliably released. | 1 | Verified |
+| COR-07 | Player-effect callbacks may depend on unordered storage iteration. | 1 | Verified |
 | FOW-01 | No-bake/runtime fallback crosses nondeterministic float/editor behavior into authoritative visibility. | 6 | Queued |
-| MATH-01 | Extreme fixed-point construction/arithmetic contains signed-overflow/undefined-behavior edges. | 1 | Confirmed |
-| CFG-01 | Cover's sim-affecting settings are not yet a stable config-fingerprint contributor. | 1 | Confirmed |
-| BUILD-01 | Shipping compile references editor-only `UTexture2D::MipGenSettings` in FoW rendering. | 1 | Confirmed |
-| CONTENT-01 | Existing Blueprint assets emit tagged-property deserialization errors during headless startup. | 1/7 | Confirmed |
+| FOW-02 | FoW stores one blocker height beside an OR'd layer mask, so overlapping layers incorrectly inherit the tallest blocker. | 6 | Confirmed |
+| FOW-03 | Dynamic FoW blocker height ignores the authored extents `LocalOffset.Z`. | 6 | Confirmed |
+| FOW-04 | Terrain vision scaling adjusts radial/rect shapes but omits cone length. | 6 | Confirmed |
+| MATH-01 | Extreme fixed-point construction/arithmetic contains signed-overflow/undefined-behavior edges. | 1 | Verified |
+| CFG-01 | Cover's sim-affecting settings are not yet a stable config-fingerprint contributor. | 1 | Verified |
+| BUILD-01 | Shipping compile references editor-only `UTexture2D::MipGenSettings` in FoW rendering. | 1 | Verified |
+| BUILD-02 | Uncooked headless `-game` loads `SW_UnitBanner`, whose generated class depends on editor-only `USeinWidgetBlueprint`; the asset class needs an UncookedOnly/runtime-safe ownership seam. | 7 | Confirmed |
+| CONTENT-01 | Existing Blueprint assets emit tagged-property deserialization errors during headless startup. | 1/7 | Verified |
+| CONTENT-02 | Four obsolete root-level assets have broken redirected imports during an all-content load. | 7 | Confirmed |
 
 ## Performance and memory
 
@@ -111,6 +184,9 @@ separately.
 | PERF-06 | Cover provider/slot work has quadratic paths and duplicated allocation bodies. | 5/8 | Confirmed |
 | PERF-07 | Squad, avoidance, and collision scan broad entity sets and allocate avoidable per-tick containers. | 7/8 | Confirmed |
 | PERF-08 | Replay and completed/hash/turn histories can grow without practical bounds. | 4/8 | Confirmed |
+| PERF-09 | High effect stack counts materialize one resolved modifier copy per stack. | 8 | Confirmed |
+| PERF-10 | Merely enabling Cover binds the authority resolver and globally forces collision serial, even in worlds with no authoritative cover destination. | 5/8 | Confirmed |
+| PERF-11 | StateHash parallel dispatch is budgeted by storage count, so the default minimum batch normally leaves the expensive entity walk serial. | 3/8 | Confirmed |
 
 ## API, modularity, and extensibility
 
@@ -127,6 +203,7 @@ separately.
 | API-09 | FoW lifecycle hooks and implementation contracts are advertised more broadly than wired. | 6/7 | Queued |
 | API-10 | Targeter gestures and attribute modifier types are narrower than their Blueprint-facing promise. | 7 | Gate |
 | API-11 | Cover authority is a single-cast Boolean with no requester, source, stable slot, or override policy context. | 5 | Confirmed |
+| API-12 | Direct ability activate/end/cancel paths do not centrally maintain `ActiveAbilityID`/`ActivePassiveIDs`; snapshot restore preserves IDs but deliberately deactivates opaque passive execution. | 3/7 | Confirmed |
 
 ## Approved feature/completeness scope
 

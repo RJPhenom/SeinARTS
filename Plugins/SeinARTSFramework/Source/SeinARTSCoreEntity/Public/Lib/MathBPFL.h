@@ -209,9 +209,9 @@ public:
 		Keywords = "make construct fixed point literal deterministic"))
 	static FFixedPoint MakeFixedPointFromParts(int32 IntegerPortion, int32 FractionPortion)
 	{
-		const int64 Hi  = static_cast<int64>(IntegerPortion) << 32;
-		const int64 Lo  = static_cast<int64>(static_cast<uint32>(FractionPortion));
-		return FFixedPoint(Hi | Lo);
+		const uint64 Bits = (static_cast<uint64>(static_cast<uint32>(IntegerPortion)) << 32)
+			| static_cast<uint32>(FractionPortion);
+		return FFixedPoint(BitCast<int64>(Bits));
 	}
 
 	/** Break a FFixedPoint back into its 32.32 integer and fractional halves. */
@@ -220,8 +220,9 @@ public:
 		DisplayName = "Break FixedPoint"))
 	static void BreakFixedPointToParts(FFixedPoint Value, int32& IntegerPortion, int32& FractionPortion)
 	{
-		IntegerPortion      = static_cast<int32>(Value.Value >> 32);
-		FractionPortion = static_cast<int32>(static_cast<uint32>(Value.Value & 0xFFFFFFFF));
+		const uint64 Bits = BitCast<uint64>(Value.Value);
+		IntegerPortion = BitCast<int32>(static_cast<uint32>(Bits >> 32));
+		FractionPortion = BitCast<int32>(static_cast<uint32>(Bits));
 	}
 	
 	/** Makes a FixedPoint rational number from a given float. Note: conversion may lose precision. */

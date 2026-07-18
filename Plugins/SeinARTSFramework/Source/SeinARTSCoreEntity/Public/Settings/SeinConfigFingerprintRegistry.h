@@ -15,8 +15,9 @@
  *          StableId via FName::LexicalLess — a content-based compare, NOT the
  *          registration-order-dependent FName comparison index), so two clients
  *          whose modules loaded in different orders compute the IDENTICAL
- *          fingerprint for identical config. The per-field reflection (ExportText)
- *          is byte-identical to the core Fields[] loop.
+ *          fingerprint for identical config. Scalars use ExportText; reflected
+ *          containers and structs are recursively length-framed, with every map/set
+ *          sorted because UE's default ExportText follows hash order.
  *
  *          The StableId is a FROZEN cross-client wire identifier: renaming it
  *          changes its sort position and thus every client's fingerprint. Never
@@ -38,8 +39,12 @@ struct SEINARTSCOREENTITY_API FSeinConfigFingerprintContributor
 	FName StableId;
 
 	/** The extension's settings CDO (GetDefault<UMySettings>()); its named fields
-	 *  are reflected + ExportText'd exactly like the core settings' fields. */
+	 *  are reflected into a canonical value representation. */
 	TWeakObjectPtr<const UObject> SettingsCDO;
+
+	/** Stable class path retained independently of the weak CDO so a stale hot-
+	 *  reload entry cannot let another schema claim the same frozen ID. */
+	FString SettingsClassPath;
 
 	/** Sim-affecting property names on that CDO, in the extension's own authored
 	 *  order (compiled into the extension → identical across clients). */
@@ -51,16 +56,18 @@ struct SEINARTSCOREENTITY_API FSeinConfigFingerprintContributor
 class SEINARTSCOREENTITY_API FSeinConfigFingerprintRegistry
 {
 public:
-	/** Register (or idempotently replace, keyed on StableId) an extension's
-	 *  fingerprint contribution. Call from the extension's StartupModule. */
-	static void RegisterContributor(FName StableId, const UObject* SettingsCDO, TArray<FName> FieldNames);
+	/** Register an extension's fingerprint contribution. Rejects invalid schemas
+	 *  and conflicting reuse of a frozen StableId; an identical hot-reload
+	 *  registration refreshes its CDO. Call from StartupModule. */
+	static bool RegisterContributor(FName StableId, const UObject* SettingsCDO, TArray<FName> FieldNames);
 
 	/** Remove a contribution. Call from the extension's ShutdownModule. */
 	static void UnregisterContributor(FName StableId);
 
-	/** Append `<StableId>|<field>=<ExportText>;` chunks for every contributor,
-	 *  folded in StableId LexicalLess order (load-order independent). Skips a
-	 *  contributor whose CDO weak-ptr is stale. Called by ComputeConfigFingerprint. */
+	/** Append `<StableId>|<field>=<canonical value>;` chunks for every contributor,
+	 *  folded in StableId LexicalLess order (load-order independent). A stale CDO is
+	 *  re-resolved from its frozen class path; an invalid registered schema is fatal
+	 *  rather than silently omitted from lockstep parity. */
 	static void AppendContributors(FString& OutFp);
 
 private:

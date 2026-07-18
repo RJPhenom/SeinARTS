@@ -9,7 +9,8 @@
  *
  *          Configuration lives on the CDO; `FSeinActiveEffect` in component
  *          storage carries only the class reference + per-instance runtime
- *          state (stacks, remaining duration, source, instance ID).
+ *          state (stacks, remaining duration, source, instance ID, and the
+ *          exact ability grants committed by that instance).
  */
 
 #pragma once
@@ -32,7 +33,7 @@ class USeinAbility;
  *                does (no real expiration happened). Use for one-shot stat
  *                bumps, "give resources now," instant-damage effects, etc.
  *   Persistent → never expires on its own. Stays until explicitly removed
- *                (e.g. by RemoveInstanceEffect, or by the entity being
+ *                (e.g. by RemoveEffect, or by the entity being
  *                destroyed). Use for tech effects, "while alive" buffs,
  *                permanent stat upgrades.
  *   Timed      → finite duration; ticks down in FSeinEffectTickSystem and
@@ -166,10 +167,9 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS|Effect|Modifiers")
 	TArray<FSeinModifier> Modifiers;
 
-	/** Tags granted to the target entity while this effect is active. Grants are
-	 *  routed through USeinWorldSubsystem::GrantTag (refcount grant per DESIGN §2)
-	 *  so overlapping grants from abilities / other effects survive this effect's
-	 *  removal. Ignored for Player-scope effects (no player-level tag storage yet). */
+	/** Tags granted while this effect is active. Instance scope grants them to
+	 *  the target entity; Class/Player scope grants them to the owning player's
+	 *  tag state. All paths are refcounted so overlapping grants survive removal. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS|Effect|Tags")
 	FGameplayTagContainer GrantedTags;
 
@@ -212,11 +212,11 @@ public:
 	// tag state, and grants those abilities — so a unit spawned AFTER tech
 	// research completes still receives the unlocked ability.
 	//
-	// Revoke on remove: removing the effect issues a matching
-	// SeinRevokeAbilityByClass per granted class. With refcount semantics
-	// this decrements rather than unconditionally destroying — the
-	// ability only disappears if no other source (native authoring,
-	// another effect) still holds it.
+	// Revoke on remove: each successful grant is recorded on the active
+	// effect and removal revokes exactly that ledger. With refcount semantics
+	// the ability only disappears if no other source (native authoring,
+	// another effect) still holds it. This remains balanced when a passive
+	// callback removes the effect partway through the authored array.
 
 	/** Ability classes granted on apply. See class docblock for fan-out
 	 *  rules per scope. Empty = no abilities granted. */
@@ -226,7 +226,10 @@ public:
 	/** Entity-tag filter for Class/Player scope ability fan-out. Required
 	 *  for Class/Player scope — empty value skips ability grants
 	 *  (modifier/tag grants on the effect still apply). For Instance scope
-	 *  this field is ignored. Example: a Vehicle Depot tech effect with
+	 *  this field is ignored. Eligibility is sampled during apply, spawn replay,
+	 *  and owner-transfer replay (and rechecked between callback-capable grants);
+	 *  later standalone tag changes do not automatically grant or revoke. Example:
+	 *  a Vehicle Depot tech effect with
 	 *  AbilityTargetClassTag = `Unit.Role.ConstructionWorker` grants
 	 *  PlaceVehicleDepot to every construction unit the player owns
 	 *  (existing + future). */
@@ -262,6 +265,11 @@ public:
 
 	// ─── BP hooks ───
 
+	/** Runs after the new instance, tags, and GrantedAbilities are committed.
+	 *  Passive ability activation happens first; if it synchronously removes the
+	 *  effect, On Apply is skipped because the instance no longer exists. The
+	 *  EffectApplied visual event is queued at initial commit, so self-removal
+	 *  produces EffectApplied then EffectRemoved, never the reverse. */
 	UFUNCTION(BlueprintImplementableEvent, Category = "SeinARTS|Effect", meta = (DisplayName = "On Apply"))
 	void OnApply(FSeinEntityHandle Target, FSeinEntityHandle Source);
 

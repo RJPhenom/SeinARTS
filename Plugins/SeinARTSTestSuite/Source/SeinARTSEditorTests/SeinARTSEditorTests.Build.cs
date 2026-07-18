@@ -12,6 +12,7 @@ public class SeinARTSEditorTests : ModuleRules
 			"CoreUObject",
 			"Engine",
 			"Slate",
+			"SlateCore",
 			"CQTest",
 			"UnrealEd",
 			"Kismet",

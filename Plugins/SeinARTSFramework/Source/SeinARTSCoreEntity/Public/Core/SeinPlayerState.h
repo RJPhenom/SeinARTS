@@ -100,10 +100,6 @@ struct SEINARTSCOREENTITY_API FSeinPlayerState
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Effects")
 	TArray<FSeinActiveEffect> PlayerEffects;
 
-	/** Monotonically increasing ID counter for effect instances on this player (not
-	 *  globally unique — scoped to `ClassEffects` + `PlayerEffects`). */
-	uint32 NextEffectInstanceID = 1;
-
 	FSeinPlayerState() = default;
 	explicit FSeinPlayerState(FSeinPlayerID InPlayerID, FSeinFactionID InFactionID, uint8 InTeamID = 0);
 

@@ -1,9 +1,8 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinActiveEffectsComponent.cpp
- * @brief   FSeinActiveEffectsComponent implementation — effect add/remove,
- *          CDO-backed tag queries, stack counting, modifier collection
- *          for attribute resolve.
+ * @brief   Read/query helpers for instance-scope active effect data. Lifecycle
+ *          mutation stays on USeinWorldSubsystem so teardown cannot bypass hooks.
  */
 
 #include "Components/SeinActiveEffectsComponent.h"
@@ -14,42 +13,6 @@ namespace SeinActiveEffectsInternal
 	FORCEINLINE const USeinEffect* CDO(const FSeinActiveEffect& Effect)
 	{
 		return Effect.EffectClass ? GetDefault<USeinEffect>(Effect.EffectClass) : nullptr;
-	}
-}
-
-uint32 FSeinActiveEffectsComponent::AddEffect(const FSeinActiveEffect& Effect)
-{
-	FSeinActiveEffect& Added = ActiveEffects.Add_GetRef(Effect);
-	Added.EffectInstanceID = NextEffectInstanceID++;
-	return Added.EffectInstanceID;
-}
-
-void FSeinActiveEffectsComponent::RemoveEffect(uint32 EffectInstanceID)
-{
-	for (int32 i = ActiveEffects.Num() - 1; i >= 0; --i)
-	{
-		if (ActiveEffects[i].EffectInstanceID == EffectInstanceID)
-		{
-			ActiveEffects.RemoveAtSwap(i, EAllowShrinking::No);
-			return;
-		}
-	}
-}
-
-void FSeinActiveEffectsComponent::RemoveEffectsWithTag(const FGameplayTag& Tag)
-{
-	if (!Tag.IsValid())
-	{
-		return;
-	}
-
-	for (int32 i = ActiveEffects.Num() - 1; i >= 0; --i)
-	{
-		const USeinEffect* Def = SeinActiveEffectsInternal::CDO(ActiveEffects[i]);
-		if (Def && Def->EffectTag.MatchesTag(Tag))
-		{
-			ActiveEffects.RemoveAtSwap(i, EAllowShrinking::No);
-		}
 	}
 }
 
@@ -73,30 +36,32 @@ bool FSeinActiveEffectsComponent::HasEffectWithTag(const FGameplayTag& Tag) cons
 
 int32 FSeinActiveEffectsComponent::GetStackCountForTag(const FGameplayTag& Tag) const
 {
-	int32 Total = 0;
+	int64 Total = 0;
 	for (const FSeinActiveEffect& Effect : ActiveEffects)
 	{
 		const USeinEffect* Def = SeinActiveEffectsInternal::CDO(Effect);
 		if (Def && Def->EffectTag.MatchesTag(Tag))
 		{
-			Total += Effect.CurrentStacks;
+			Total += FMath::Max(0, Effect.CurrentStacks);
+			if (Total >= MAX_int32) return MAX_int32;
 		}
 	}
-	return Total;
+	return static_cast<int32>(Total);
 }
 
 int32 FSeinActiveEffectsComponent::GetStackCountForClass(TSubclassOf<USeinEffect> EffectClass) const
 {
-	int32 Total = 0;
+	int64 Total = 0;
 	if (!EffectClass) return 0;
 	for (const FSeinActiveEffect& Effect : ActiveEffects)
 	{
 		if (Effect.EffectClass == EffectClass)
 		{
-			Total += Effect.CurrentStacks;
+			Total += FMath::Max(0, Effect.CurrentStacks);
+			if (Total >= MAX_int32) return MAX_int32;
 		}
 	}
-	return Total;
+	return static_cast<int32>(Total);
 }
 
 void FSeinActiveEffectsComponent::CollectModifiers(TArray<FSeinModifier>& OutModifiers) const
@@ -116,10 +81,4 @@ void FSeinActiveEffectsComponent::CollectModifiers(TArray<FSeinModifier>& OutMod
 			}
 		}
 	}
-}
-
-void FSeinActiveEffectsComponent::Clear()
-{
-	ActiveEffects.Empty();
-	NextEffectInstanceID = 1;
 }

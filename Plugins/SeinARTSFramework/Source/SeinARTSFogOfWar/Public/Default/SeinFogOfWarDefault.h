@@ -52,6 +52,13 @@ class UWorld;
 class USeinLevelData;
 struct FSeinStampShape;
 
+#if WITH_DEV_AUTOMATION_TESTS
+namespace UE::SeinARTSTests
+{
+	struct FFogOfWarDefaultTestAccess;
+}
+#endif
+
 /**
  * Per-observer visibility state. One per FSeinPlayerID; lazily created on
  * the owner's first stamp.
@@ -88,13 +95,13 @@ struct FSeinFogVisionGroup
  * Per-source memo of the last stamped state for delta-refcount updates.
  * One per live FSeinEntityHandle that carries FSeinVisionComponent.
  *
- * Each tick: a source whose pose AND stamp set hash to the last-tick value
+ * Each tick: a source whose pose AND exact effective stamp set equal the last-tick value
  * skips entirely (the big perf win — most units don't move per tick). On
  * change: we walk the stored Footprints to decrement old refcounts, then
  * re-stamp every shape and accumulate footprints into the new arrays.
  *
  * Cache key is pose (WorldPos + Rotation, since shaped stamps care about
- * orientation) + EyeHeight + a hash of the Stamps array (shape geometry
+ * orientation) + EyeHeight + the Stamps array (shape geometry
  * + per-stamp layer mask + bEnabled). When any of those changes the source
  * does the full rebuild.
  */
@@ -105,7 +112,7 @@ struct FSeinFogSourceState
 	FFixedVector WorldPos;
 	FFixedQuaternion Rotation;
 	FFixedPoint EyeHeight;
-	uint32 StampsHash = 0;
+	TArray<FSeinVisionStamp> Stamps;
 
 	/** Cells this source last stamped per bit (1-7), aggregated across all
 	 *  the source's stamps that emitted on that bit — a building with two
@@ -120,6 +127,34 @@ struct FSeinFogSourceState
 	 *  it here; DecrementFootprintsForState's Reset() leaves the array empty
 	 *  (sorted by definition). */
 	TArray<int32> Footprints[8];
+};
+
+/** Exact input to one dynamic-blocker rasterization. The entity pool and each
+ *  component's Shapes array provide canonical ordering, so array equality is
+ *  a collision-free change detector. Identity is intentionally absent: two
+ *  entities producing byte-for-byte equivalent overlay inputs are visually
+ *  equivalent. */
+struct FSeinFogDynamicBlockerSnapshot
+{
+	FFixedVector WorldPos;
+	FFixedQuaternion Rotation;
+	FSeinStampShape Shape;
+	FFixedPoint Height;
+	uint8 LayerMask = 0;
+
+	FORCEINLINE bool operator==(const FSeinFogDynamicBlockerSnapshot& Other) const
+	{
+		return WorldPos == Other.WorldPos
+			&& Rotation == Other.Rotation
+			&& Shape == Other.Shape
+			&& Height == Other.Height
+			&& LayerMask == Other.LayerMask;
+	}
+
+	FORCEINLINE bool operator!=(const FSeinFogDynamicBlockerSnapshot& Other) const
+	{
+		return !(*this == Other);
+	}
 };
 
 /**
@@ -236,6 +271,10 @@ public:
 
 private:
 
+#if WITH_DEV_AUTOMATION_TESTS
+	friend struct UE::SeinARTSTests::FFogOfWarDefaultTestAccess;
+#endif
+
 	// ----------------------------------------------------------------------
 	// Runtime grid
 	// ----------------------------------------------------------------------
@@ -272,21 +311,21 @@ private:
 	 *  masks). */
 	TArray<uint8> DynamicBlockerLayerMask;
 
-	/** Fingerprint of last tick's dynamic-blocker entity set (XOR-folded
-	 *  per-entity hash of pos + height + radius + mask). Used by
-	 *  RebuildDynamicBlockers to detect smoke-changed-since-last-tick
-	 *  and force a full source-state invalidation when it does. */
-	uint32 LastDynamicBlockerHash = 0;
+	/** Exact ordered rasterization inputs currently represented in the
+	 *  dynamic overlay. An identical next-tick list retains the overlay; a
+	 *  change dirty-clears/rebuilds it and invalidates affected source caches. */
+	TArray<FSeinFogDynamicBlockerSnapshot> DynamicBlockerSnapshots;
 
 	/** Cells written into the dynamic-blocker overlay last tick. Drives the
 	 *  dirty-rect clear at the top of RebuildDynamicBlockers — only those
 	 *  indices get zeroed, instead of memzeroing the full W*H arrays. Most
 	 *  ticks dynamic blockers cover ≪ W*H cells, so this is a massive win
 	 *  on large maps (saves ~50MB/tick of array clear at 1km² @ 400cm cells).
-	 *  Reset (without shrinking allocation) every tick; populated by
+	 *  Reset (without shrinking allocation) whenever the blocker snapshot changes; populated by
 	 *  StampDynamicBlockerShape on first-write per cell per tick. May
 	 *  contain duplicates only across grid-resize transitions (handled by
-	 *  the size-mismatch fallback in RebuildDynamicBlockers). */
+	 *  the size-mismatch fallback in RebuildDynamicBlockers). Grid reloads
+	 *  explicitly reset it before adopting a new index space. */
 	TArray<int32> LastDynamicBlockerCells;
 
 	/** Per-observer visibility state. Keyed by FSeinPlayerID; lazily
@@ -342,9 +381,9 @@ private:
 	 *  serial-apply" pattern — mirrors FSeinAvoidanceSystem / the Jacobi
 	 *  collision resolver). Holds everything the parallel body needs (pose +
 	 *  the possibly terrain-scaled stamp set + owner), the change-detection
-	 *  result the serial commit will write back (StampsHash), and the per-bit
+	 *  exact stamp set the serial commit will write back, and the per-bit
 	 *  cell-list SCRATCH the parallel body fills (the disjoint per-source write
-	 *  slot). Only sources whose pose/stamp-hash changed since last tick get a
+	 *  slot). Only sources whose pose/stamps changed since last tick get a
 	 *  work item; unchanged sources skip exactly as the old stable-fast-path did.
 	 *
 	 *  GenScratch[bit] (1..7): the new footprint cells this tick, generated +
@@ -358,7 +397,6 @@ private:
 		FFixedVector           WorldPos;
 		FFixedQuaternion       Rotation;
 		FFixedPoint            EyeHeight;
-		uint32                 StampsHash = 0;
 		TArray<FSeinVisionStamp> Stamps;   // the (possibly terrain-scaled) stamp set to rasterize
 		TArray<int32>          GenScratch[8];
 	};

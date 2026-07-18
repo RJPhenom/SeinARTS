@@ -20,7 +20,8 @@ class SEINARTSCOREENTITY_API USeinLatentActionManager : public UObject
 	GENERATED_BODY()
 
 public:
-	/** Register a new latent action to be ticked */
+	/** Register a new latent action. Registrations made from a running action or
+	 *  callback first tick on the next simulation tick. */
 	void RegisterAction(USeinLatentAction* Action);
 
 	/** Tick all active actions and clean up completed ones */
@@ -37,7 +38,9 @@ public:
 	/** Cancel all latent actions belonging to the given ability */
 	void CancelActionsForAbility(USeinAbility* Ability);
 
-	/** Cancel every active latent action across the entire sim. Used by the
+	/** Cancel every active latent action across the entire sim. Actions registered
+	 *  synchronously by cancellation callbacks are discarded as part of the hard
+	 *  reset. Used by the
 	 *  snapshot-restore path to drop in-flight latent state before the
 	 *  ability pool is rebuilt — without this, latent actions hold stale
 	 *  refs into the about-to-be-replaced ability instances. */

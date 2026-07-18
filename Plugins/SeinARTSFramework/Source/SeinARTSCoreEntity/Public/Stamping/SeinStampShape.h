@@ -144,6 +144,25 @@ struct SEINARTSCOREENTITY_API FSeinStampShape
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Stamp",
 		meta = (DisplayName = "Round Far Edge"))
 	bool bConeRoundEdge = true;
+
+	FORCEINLINE bool operator==(const FSeinStampShape& Other) const
+	{
+		return Shape == Other.Shape
+			&& bEnabled == Other.bEnabled
+			&& LocalOffset == Other.LocalOffset
+			&& YawOffsetDegrees == Other.YawOffsetDegrees
+			&& Radius == Other.Radius
+			&& HalfExtentX == Other.HalfExtentX
+			&& HalfExtentY == Other.HalfExtentY
+			&& ConeAngleDegrees == Other.ConeAngleDegrees
+			&& ConeLength == Other.ConeLength
+			&& bConeRoundEdge == Other.bConeRoundEdge;
+	}
+
+	FORCEINLINE bool operator!=(const FSeinStampShape& Other) const
+	{
+		return !(*this == Other);
+	}
 };
 
 FORCEINLINE uint32 GetTypeHash(const FSeinStampShape& Stamp)

@@ -11,9 +11,7 @@
 
 #include "Core/SeinSimContext.h"
 
-#if !UE_BUILD_SHIPPING
 static thread_local bool GIsInSeinSimContext = false;
 
 bool SeinIsInSimContext() { return GIsInSeinSimContext; }
 void SeinSetSimContext(bool bInSim) { GIsInSeinSimContext = bInSim; }
-#endif

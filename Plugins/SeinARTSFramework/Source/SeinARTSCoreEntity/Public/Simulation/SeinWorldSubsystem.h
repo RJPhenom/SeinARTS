@@ -36,6 +36,7 @@ class USeinCollisionResolver;
 class USeinAIController;
 class USeinEffect;
 class USeinLatentActionManager;
+struct FSeinActiveEffect;
 struct FSeinModifier;
 
 /**
@@ -734,16 +735,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Player", meta = (DisplayName = "Get Player State"))
 	bool GetPlayerStateCopy(FSeinPlayerID PlayerID, FSeinPlayerState& OutState) const;
 
-	/** Iterate every registered player state (mutable). Used by the effect tick
-	 *  system to walk per-player effect lists. C++ only. */
-	template<typename Func>
-	void ForEachPlayerStateMutable(Func&& Callback)
-	{
-		for (auto& Pair : PlayerStates)
-		{
-			Callback(Pair.Key, Pair.Value);
-		}
-	}
+	/** Registered player IDs in canonical ascending order. The returned array is
+	 *  a snapshot: players registered by a callback are first visible next pass. */
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|Player", meta = (DisplayName = "Get Registered Player IDs"))
+	TArray<FSeinPlayerID> GetRegisteredPlayerIDs() const;
 
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Player")
 	void RegisterFaction(USeinFaction* Faction);
@@ -788,10 +783,12 @@ public:
 	// Snapshot is owned by the subsystem; the file/wire serializer wraps it
 	// in `FObjectAndNameAsStringProxyArchive` (replay writer pattern).
 
-	/** Capture current sim state into the supplied snapshot. Read-only on
-	 *  sim state, but fires `OnCaptureSnapshotPostSim` (non-const broadcast)
-	 *  so upstream modules can stamp their own fields — hence the method
-	 *  is non-const. */
+	/** Capture current sim state into the supplied snapshot. Call only at a
+	 *  quiescent fixed-tick boundary: no callback is executing and the deferred
+	 *  destroy/effect-apply queues must be empty. Those transient queues are not
+	 *  part of this schema. Read-only on sim state, but fires
+	 *  `OnCaptureSnapshotPostSim` (non-const broadcast) so upstream modules can
+	 *  stamp their own fields — hence the method is non-const. */
 	void CaptureSnapshot(struct FSeinWorldSnapshot& OutSnapshot);
 
 	/** Restore sim state from the snapshot. Wipes current entity pool /
@@ -884,7 +881,13 @@ public:
 
 	/** Grant a tag (refcount++). Adds to EntityTagIndex on the 0→1 edge. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Tags")
-	void GrantTag(FSeinEntityHandle Handle, FGameplayTag Tag);
+	/** Acquire one refcounted tag reference. Returns false without mutation when
+	 *  the tag is invalid or its counter is saturated. Callers that later release
+	 *  ownership must retain this result rather than assuming the grant landed. */
+	bool GrantTag(FSeinEntityHandle Handle, FGameplayTag Tag);
+
+	/** Whether one additional reference can be acquired without saturation. */
+	bool CanGrantTag(FSeinEntityHandle Handle, FGameplayTag Tag) const;
 
 	/** Ungrant a tag (refcount--). Removes from EntityTagIndex on the 1→0 edge.
 	 *  Safe to call on tags that were never granted (no-op). */
@@ -959,18 +962,49 @@ public:
 	 *   Class    → target owner's FSeinPlayerState::ClassEffects
 	 *   Player → target owner's FSeinPlayerState::PlayerEffects
 	 *
-	 * Returns the assigned effect instance ID (0 if the apply failed or was
-	 * deferred — deferred applies don't return a usable ID to the caller).
+	 * Returns the assigned effect instance ID, or 0 when failed/deferred. Zero
+	 * for a deferred apply is deliberate: stacking and validation resolve only
+	 * when the queue drains, so it is not an ID reservation or cancellation
+	 * token. Pending-operation identity is a separate API/snapshot contract.
 	 */
-	uint32 ApplyEffect(FSeinEntityHandle Target, TSubclassOf<USeinEffect> EffectClass, FSeinEntityHandle Source);
+	int64 ApplyEffect(FSeinEntityHandle Target, TSubclassOf<USeinEffect> EffectClass, FSeinEntityHandle Source);
 
 	/** Drain the pending-apply queue. Called at PreTick by FSeinEffectTickSystem. */
 	void ProcessPendingEffectApplies();
 
-	/** Remove an Instance-scope effect by instance ID. Returns true if removed. */
-	bool RemoveInstanceEffect(FSeinEntityHandle Target, uint32 EffectInstanceID, bool bByExpiration);
+	/** Remove an effect by its world-global ID, using a live Target to select its
+	 *  Instance storage and owning player's Class/Player storages. */
+	bool RemoveEffect(FSeinEntityHandle Target, int64 EffectInstanceID, bool bByExpiration);
 
-	/** Remove all Instance-scope effects matching a tag. */
+	/** Remove an effect using only its world-global ID. This is the canonical
+	 *  identity-based removal API; the target-anchored overload remains as a
+	 *  convenient, narrower lookup when the target is already known. */
+	bool RemoveEffectByID(int64 EffectInstanceID, bool bByExpiration);
+
+	/** Remove a Class/Player-scope effect from a known player. Unlike the target-
+	 *  anchored overload, this remains valid when the effect's original target
+	 *  entity has already been destroyed. C++ only. */
+	bool RemovePlayerEffect(FSeinPlayerID PlayerID, int64 EffectInstanceID, bool bByExpiration);
+
+	/** Ability ownership maintenance used by explicit aggregate/force revokes.
+	 *  These only edit live ledgers; source-aware ability rows remain the final
+	 *  authority when an effect is already detached inside a callback. */
+	void PruneEffectAbilityGrantClaim(int64 EffectInstanceID,
+		FSeinEntityHandle Recipient, TSubclassOf<USeinAbility> AbilityClass);
+	void PruneAllEffectAbilityGrantClaims(
+		FSeinEntityHandle Recipient, TSubclassOf<USeinAbility> AbilityClass);
+
+	/** Instance-scope query conveniences for a known target entity. */
+	bool HasInstanceEffectWithTag(FSeinEntityHandle Target, FGameplayTag Tag) const;
+	int32 GetInstanceEffectStacks(FSeinEntityHandle Target, FGameplayTag Tag) const;
+
+	/** Query one player-owned effect storage. Scope must be Class or Player;
+	 *  Instance has no entity target and therefore returns false/zero. */
+	bool HasEffectWithTagForPlayer(FSeinPlayerID PlayerID, ESeinModifierScope Scope, FGameplayTag Tag) const;
+	int32 GetEffectStacksForPlayer(FSeinPlayerID PlayerID, ESeinModifierScope Scope, FGameplayTag Tag) const;
+
+	/** Legacy-named target convenience: remove matching effects from the target's
+	 *  Instance storage and its owner's Class and Player storages. */
 	void RemoveInstanceEffectsWithTag(FSeinEntityHandle Target, FGameplayTag Tag);
 
 	/** Strip every active effect whose `Source == DeadHandle` and whose CDO declares
@@ -1131,6 +1165,10 @@ public:
 	int32 ComputeStateHash() const;
 
 private:
+	// Grants the disabled test module narrow white-box access to seed otherwise
+	// unreachable saturation/corruption boundaries. No test code ships here.
+	friend struct FSeinWorldSubsystemTestAccess;
+
 	// Entity pool (replaces TMap<FSeinID, FSeinEntity>)
 	FSeinEntityPool EntityPool;
 
@@ -1174,6 +1212,11 @@ private:
 	// Entity → Blueprint class map (for actor bridge spawning)
 	TMap<FSeinEntityHandle, TSubclassOf<ASeinActor>> EntityActorClassMap;
 
+	// Transient call-stack transaction metadata. Each real ownership change
+	// increments its handle revision so an outer transfer can detect recursive
+	// B→C→B supersession and avoid replaying B twice. Not gameplay state.
+	TMap<FSeinEntityHandle, uint64> OwnerTransitionRevisions;
+
 	// Per-entity tag state. Replaces the old FSeinTagData sim-component
 	// storage — see FSeinEntityTagState doc. Seeded at spawn from the
 	// entity bridge's BaseTags + any explicit additions; mutated at runtime
@@ -1192,6 +1235,10 @@ private:
 
 	// Pending-apply queue for effects applied during tick hooks. Drained at PreTick.
 	TArray<FSeinPendingEffectApply> PendingEffectApplies;
+
+	// World-global, monotonically increasing effect identity. Zero is invalid;
+	// IDs are never reused within this simulation timeline.
+	int64 NextEffectInstanceID = 1;
 
 	// AI controller registry (DESIGN §16). Ticked in CommandProcessing phase.
 	UPROPERTY()
@@ -1217,7 +1264,30 @@ private:
 
 	// Commit an apply synchronously (used by ApplyEffect when not in a tick, and
 	// by ProcessPendingEffectApplies when draining). Returns instance ID or 0.
-	uint32 ApplyEffectInternal(FSeinEntityHandle Target, TSubclassOf<USeinEffect> EffectClass, FSeinEntityHandle Source);
+	int64 ApplyEffectInternal(FSeinEntityHandle Target, TSubclassOf<USeinEffect> EffectClass, FSeinEntityHandle Source);
+
+	// Central teardown path shared by explicit, tag, expiry, and source-death
+	// removal. Removes before dispatching callbacks so synchronous re-entry is safe.
+	bool RemoveEffectFromStorage(TArray<FSeinActiveEffect>& Storage, int64 EffectInstanceID,
+		FSeinPlayerID PlayerForTags, bool bByExpiration);
+
+	struct FEffectLocator
+	{
+		ESeinModifierScope Scope = ESeinModifierScope::Instance;
+		FSeinEntityHandle InstanceTarget;
+		FSeinPlayerID PlayerID;
+		int64 EffectInstanceID = 0;
+	};
+
+	// Callback-capable hot paths carry a stable storage locator and re-resolve
+	// only that target/player array. Global scanning remains for rare public
+	// identity operations and explicit ownership repair.
+	FSeinActiveEffect* FindActiveEffectByID(int64 EffectInstanceID);
+	FSeinActiveEffect* ResolveEffect(const FEffectLocator& Locator);
+	bool IsEffectGrantRecipientEligible(const FEffectLocator& Locator,
+		FSeinEntityHandle Recipient);
+	bool GrantAbilityTrackedByEffect(const FEffectLocator& Locator, FSeinEntityHandle Recipient,
+		TSubclassOf<USeinAbility> AbilityClass);
 
 	// Simulation state
 	bool bIsRunning = false;

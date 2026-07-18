@@ -10,6 +10,41 @@
 
 class USeinWorldSubsystem;
 
+/** Deterministic ownership of one runtime ability instance. Ordinary/native
+ *  grants are anonymous; effect grants carry their world-global effect ID so
+ *  teardown can consume only its own reference after callback-driven reuse. */
+USTRUCT(meta = (SeinDeterministic))
+struct SEINARTSCOREENTITY_API FSeinAbilityGrantOwnership
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	int32 AnonymousGrantCount = 0;
+
+	/** One entry per committed effect grant. Duplicates are legal when an
+	 *  authored effect lists the same ability class more than once. */
+	UPROPERTY()
+	TArray<int64> EffectInstanceIDs;
+};
+
+FORCEINLINE uint32 GetTypeHash(const FSeinAbilityGrantOwnership& Ownership)
+{
+	uint32 Hash = GetTypeHash(Ownership.AnonymousGrantCount);
+	Hash = HashCombine(Hash, GetTypeHash(Ownership.EffectInstanceIDs.Num()));
+	for (int64 EffectID : Ownership.EffectInstanceIDs)
+	{
+		Hash = HashCombine(Hash, GetTypeHash(EffectID));
+	}
+	return Hash;
+}
+
+template<>
+struct TStructOpsTypeTraits<FSeinAbilityGrantOwnership>
+	: public TStructOpsTypeTraitsBase2<FSeinAbilityGrantOwnership>
+{
+	enum { WithGetTypeHash = true };
+};
+
 /**
  * Component tracking an entity's abilities.
  *
@@ -31,15 +66,11 @@ class USeinWorldSubsystem;
  * `Get*` accessors below (which take a `USeinWorldSubsystem&` so the pool
  * lookup happens at the call site rather than caching a pointer here).
  *
- * Grant lifecycle is reference-counted. `AbilityInstanceIDs` and
- * `AbilityGrantCounts` are parallel arrays — `AbilityGrantCounts[i]` is the
- * outstanding refcount for `AbilityInstanceIDs[i]`. Each call to
- * `USeinAbilityBPFL::SeinGrantAbility` for a class already held bumps the
- * count; each `SeinRevokeAbility*` call decrements it; the instance is only
- * unregistered + pool-freed when the count hits zero. This prevents an
- * effect-driven revoke from clobbering a natively-authored grant or another
- * effect's grant of the same class. `SeinForceRevokeAbility*` is the escape
- * hatch that ignores the count.
+ * Grant lifecycle is source-aware and reference-counted. The three parallel
+ * arrays identify each runtime instance, its cached total refcount, and its
+ * anonymous/effect-ID owners. Effect teardown consumes only its own source ID;
+ * callback-driven force-revoke/regrant therefore cannot steal a replacement
+ * holder. `SeinForceRevokeAbility*` remains the explicit all-owner escape hatch.
  */
 USTRUCT(BlueprintType, meta = (SeinDeterministic))
 struct SEINARTSCOREENTITY_API FSeinAbilityComponent : public FSeinComponent
@@ -67,6 +98,12 @@ struct SEINARTSCOREENTITY_API FSeinAbilityComponent : public FSeinComponent
 	 *  See class docstring for full lifecycle. */
 	UPROPERTY()
 	TArray<int32> AbilityGrantCounts;
+
+	/** Source ownership parallel to `AbilityInstanceIDs`. The cached
+	 *  `AbilityGrantCounts[i]` must equal AnonymousGrantCount plus the number of
+	 *  EffectInstanceIDs; snapshot restore rejects any mismatch. */
+	UPROPERTY()
+	TArray<FSeinAbilityGrantOwnership> AbilityGrantOwnership;
 
 	/** Pool ID of the currently-active primary ability (not passive).
 	 *  INDEX_NONE = nothing active. */

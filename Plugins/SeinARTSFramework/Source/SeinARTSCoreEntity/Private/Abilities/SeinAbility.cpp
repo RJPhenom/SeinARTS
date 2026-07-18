@@ -203,6 +203,7 @@ void USeinAbility::InitializeAbility(FSeinEntityHandle Owner, USeinWorldSubsyste
 	bIsActive = false;
 	bCooldownStarted = false;
 	DeductedCost.Amounts.Empty();
+	CommittedGrantedTags.Reset();
 }
 
 UWorld* USeinAbility::GetWorld() const
@@ -214,8 +215,75 @@ UWorld* USeinAbility::GetWorld() const
 	return WorldSubsystem ? WorldSubsystem->GetWorld() : nullptr;
 }
 
-void USeinAbility::ActivateAbility(FSeinEntityHandle Target, FFixedVector Location)
+bool USeinAbility::CanCommitGrantedTags() const
 {
+	if (!WorldSubsystem)
+	{
+		return true;
+	}
+	const bool bWillReleaseCurrentOwnership = bIsActive
+		&& GrantedTags.HasAny(CancelAbilitiesWithTag);
+	if (bIsActive && !bWillReleaseCurrentOwnership)
+	{
+		return false;
+	}
+	for (const FGameplayTag& Tag : GrantedTags)
+	{
+		if (!WorldSubsystem->CanGrantTag(OwnerEntity, Tag)
+			&& !(bWillReleaseCurrentOwnership
+				&& CommittedGrantedTags.HasTagExact(Tag)))
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+bool USeinAbility::AcquireGrantedTags()
+{
+	CommittedGrantedTags.Reset();
+	if (!WorldSubsystem)
+	{
+		return true;
+	}
+	for (const FGameplayTag& Tag : GrantedTags)
+	{
+		if (!WorldSubsystem->GrantTag(OwnerEntity, Tag))
+		{
+			ReleaseCommittedGrantedTags();
+			return false;
+		}
+		CommittedGrantedTags.AddTag(Tag);
+	}
+	return true;
+}
+
+void USeinAbility::ReleaseCommittedGrantedTags()
+{
+	if (WorldSubsystem)
+	{
+		for (const FGameplayTag& Tag : CommittedGrantedTags)
+		{
+			WorldSubsystem->UngrantTag(OwnerEntity, Tag);
+		}
+	}
+	CommittedGrantedTags.Reset();
+}
+
+bool USeinAbility::ActivateAbility(FSeinEntityHandle Target, FFixedVector Location)
+{
+	if (bIsActive)
+	{
+		return false;
+	}
+	if (!AcquireGrantedTags())
+	{
+		UE_LOG(LogSeinAbilityImpl, Error,
+			TEXT("ActivateAbility[%s]: refused because an owned tag is saturated on %s"),
+			*GetName(), *OwnerEntity.ToString());
+		return false;
+	}
+
 	// Right-click / direct-activation path — no targeter points captured.
 	// Empty TargeterPoints array signals "trigger came from the smart-command
 	// flow" to OnActivate; ability reads TargetLocation alone.
@@ -231,23 +299,25 @@ void USeinAbility::ActivateAbility(FSeinEntityHandle Target, FFixedVector Locati
 		StartCooldownInternal();
 	}
 
-	// Grant each OwnedTag. Refcounting means overlapping grants
-	// from BaseTags, other abilities, or effects stay present — DeactivateAbility
-	// just releases our refcount.
-	if (WorldSubsystem)
-	{
-		for (const FGameplayTag& Tag : GrantedTags)
-		{
-			WorldSubsystem->GrantTag(OwnerEntity, Tag);
-		}
-	}
-
 	OnActivate();
+	return true;
 }
 
-void USeinAbility::ActivateAbilityWithTargeterPoints(FSeinEntityHandle Target, FFixedVector Location,
+bool USeinAbility::ActivateAbilityWithTargeterPoints(FSeinEntityHandle Target, FFixedVector Location,
 	const TArray<FSeinTargeterPoint>& Points)
 {
+	if (bIsActive)
+	{
+		return false;
+	}
+	if (!AcquireGrantedTags())
+	{
+		UE_LOG(LogSeinAbilityImpl, Error,
+			TEXT("ActivateAbility[%s]: refused because an owned tag is saturated on %s"),
+			*GetName(), *OwnerEntity.ToString());
+		return false;
+	}
+
 	// Targeter-originated activation. TargetLocation mirrors Points[0].Location
 	// when available so single-point ability OnActivate logic that only reads
 	// TargetLocation continues to work — multi-target abilities iterate
@@ -262,15 +332,8 @@ void USeinAbility::ActivateAbilityWithTargeterPoints(FSeinEntityHandle Target, F
 		StartCooldownInternal();
 	}
 
-	if (WorldSubsystem)
-	{
-		for (const FGameplayTag& Tag : GrantedTags)
-		{
-			WorldSubsystem->GrantTag(OwnerEntity, Tag);
-		}
-	}
-
 	OnActivate();
+	return true;
 }
 
 void USeinAbility::TickAbility(FFixedPoint DeltaTime)
@@ -317,13 +380,7 @@ void USeinAbility::DeactivateAbility(bool bCancelled)
 		WorldSubsystem->LatentActionManager->CancelActionsForAbility(this);
 	}
 
-	if (WorldSubsystem)
-	{
-		for (const FGameplayTag& Tag : GrantedTags)
-		{
-			WorldSubsystem->UngrantTag(OwnerEntity, Tag);
-		}
-	}
+	ReleaseCommittedGrantedTags();
 
 	DeductedCost.Amounts.Empty();
 

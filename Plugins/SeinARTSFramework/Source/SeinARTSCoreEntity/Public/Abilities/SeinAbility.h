@@ -361,6 +361,12 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Ability|Runtime")
 	bool bIsActive = false;
 
+	/** Exact tag references acquired by the current activation. This is kept
+	 *  separate from the authored GrantedTags so a failed saturated grant can
+	 *  never make teardown consume another system's reference. */
+	UPROPERTY()
+	FGameplayTagContainer CommittedGrantedTags;
+
 	/** Snapshot of the cost actually deducted on activation. Empty unless currently
 	 *  active. Used to drive refund-on-cancel without re-resolving cost at deactivate time.
 	 *  For production abilities this is only the AtEnqueue portion — the AtCompletion
@@ -451,13 +457,17 @@ public:
 
 	/** Activate with target entity + location. TargetLocation runtime field is
 	 *  populated; TargeterPoints is left empty (right-click / direct-activation path). */
-	void ActivateAbility(FSeinEntityHandle Target, FFixedVector Location);
+	bool ActivateAbility(FSeinEntityHandle Target, FFixedVector Location);
 
 	/** Activate with targeter-captured points. TargetLocation is set to Points[0].Location
 	 *  for single-target convenience; TargeterPoints is populated with the full array.
 	 *  When Points is empty this degrades to the basic ActivateAbility(Target, Location). */
-	void ActivateAbilityWithTargeterPoints(FSeinEntityHandle Target, FFixedVector Location,
+	bool ActivateAbilityWithTargeterPoints(FSeinEntityHandle Target, FFixedVector Location,
 		const TArray<FSeinTargeterPoint>& Points);
+
+	/** Preflight for command processing. Activation still performs a transactional
+	 *  acquisition so direct/native callers receive the same safety guarantee. */
+	bool CanCommitGrantedTags() const;
 
 	void TickAbility(FFixedPoint DeltaTime);
 	void DeactivateAbility(bool bCancelled);
@@ -519,6 +529,9 @@ public:
 	void ClearRallyPoint();
 
 private:
+	bool AcquireGrantedTags();
+	void ReleaseCommittedGrantedTags();
+
 	/** Set CooldownRemaining + bCooldownStarted on this instance, and (when
 	 *  CooldownScope == Squad and the owner is a squad member) propagate the
 	 *  same cooldown to every squadmate's instance of this ability tag. Called

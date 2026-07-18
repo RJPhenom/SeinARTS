@@ -43,6 +43,18 @@
 // LogSeinFogOfWar is module-declared (SeinARTSFogOfWarLog.h) so it is reliably
 // filterable in the Output Log — do not re-introduce a _STATIC define here.
 
+namespace
+{
+	/** Resize and zero every element, including retained same-size storage.
+	 *  TArray::SetNumZeroed only initializes newly added elements. */
+	template <typename ElementType>
+	void ResetToZeroedSize(TArray<ElementType>& Values, int32 Num)
+	{
+		Values.Reset(Num);
+		Values.AddZeroed(Num);
+	}
+}
+
 // ============================================================================
 // Unified level-data layer provider (CP1.1; Decisions D12/D13/D17)
 // ============================================================================
@@ -281,11 +293,12 @@ bool USeinFogOfWarDefault::LoadFromSubstrate(const USeinLevelData& Substrate)
 	GroundHeight.SetNumUninitialized(NumCells);
 	BlockerHeight.SetNumUninitialized(NumCells);
 	BlockerLayerMask.SetNumUninitialized(NumCells);
-	DynamicBlockerHeight.SetNumZeroed(NumCells);
-	DynamicBlockerLayerMask.SetNumZeroed(NumCells);
+	ResetToZeroedSize(DynamicBlockerHeight, NumCells);
+	ResetToZeroedSize(DynamicBlockerLayerMask, NumCells);
 	VisionGroups.Empty(); // per-player state recreates lazily on next stamp
 	SourceStates.Empty();
-	LastDynamicBlockerHash = 0;
+	DynamicBlockerSnapshots.Reset();
+	LastDynamicBlockerCells.Reset();
 
 	// Dequantize. Runtime stores ABSOLUTE world Z for both (Ground = MinHeight
 	// + Q·steps; Blocker = Ground + Q·steps) so shadowcast's lampshade test is
@@ -381,13 +394,14 @@ void USeinFogOfWarDefault::InitGridFromVolumes(UWorld* World)
 
 	const int32 NumCells = Width * Height;
 	GroundHeight.SetNumUninitialized(NumCells);
-	BlockerHeight.SetNumZeroed(NumCells);
-	BlockerLayerMask.SetNumZeroed(NumCells);
-	DynamicBlockerHeight.SetNumZeroed(NumCells);
-	DynamicBlockerLayerMask.SetNumZeroed(NumCells);
+	ResetToZeroedSize(BlockerHeight, NumCells);
+	ResetToZeroedSize(BlockerLayerMask, NumCells);
+	ResetToZeroedSize(DynamicBlockerHeight, NumCells);
+	ResetToZeroedSize(DynamicBlockerLayerMask, NumCells);
 	VisionGroups.Empty();
 	SourceStates.Empty();
-	LastDynamicBlockerHash = 0;
+	DynamicBlockerSnapshots.Reset();
+	LastDynamicBlockerCells.Reset();
 
 	// Per-cell downward trace capped at InitTraceCellCap — no-bake fallback.
 	// Trace endpoints are runtime-only (the trace itself is non-deterministic
@@ -453,24 +467,6 @@ FSeinFogVisionGroup& USeinFogOfWarDefault::GetOrCreateGroup(FSeinPlayerID Player
 		Group.CellBitfield.SetNumZeroed(NumCells);
 	}
 	return Group;
-}
-
-namespace
-{
-	/** Hash a vision source's stamp set. Folds shape geometry + layer mask
-	 *  per stamp; XOR-combine across stamps so iteration order is irrelevant
-	 *  (matches the existing dynamic-blocker fingerprint pattern). Used by
-	 *  TickStamps' serial change-detection stable-fast-path compare. */
-	uint32 HashVisionStamps(const TArray<FSeinVisionStamp>& Stamps)
-	{
-		uint32 H = 0;
-		for (const FSeinVisionStamp& S : Stamps)
-		{
-			H ^= GetTypeHash(S.Shape);
-			H ^= static_cast<uint32>(S.LayerMask);
-		}
-		return H;
-	}
 }
 
 void USeinFogOfWarDefault::TickStamps(UWorld* World)
@@ -570,7 +566,7 @@ void USeinFogOfWarDefault::TickStamps(UWorld* World)
 	//     below) is naturally handle-sorted — a fixed, deterministic order.
 	//     The change decision READS the SourceStates cache (FindOrAdd ensures
 	//     the entry exists so the apply phase can re-fetch it by handle); a
-	//     source whose pose + stamp-hash match last tick skips with no work
+	//     source whose pose + exact effective stamps match last tick skips with no work
 	//     item, exactly as the old stable-fast-path did. We do NOT hold the
 	//     FindOrAdd reference past this body — the map may rehash as more
 	//     entries are added — the apply phase re-fetches by handle.
@@ -601,7 +597,7 @@ void USeinFogOfWarDefault::TickStamps(UWorld* World)
 			}
 
 			// Build the stamp set this tick rasterizes — the authored set, or a
-			// terrain-scaled copy. The hash + the footprint compute both run
+			// terrain-scaled copy. The cache comparison + footprint compute both run
 			// against THIS set, so the cache stays consistent. Source MOVEMENT —
 			// the only way the terrain under a source changes (the bake is
 			// static) — already invalidates the cache via WorldPos, so a
@@ -620,8 +616,6 @@ void USeinFogOfWarDefault::TickStamps(UWorld* World)
 				StampsToUse = &ScaledStamps;
 			}
 
-			const uint32 NewStampsHash = HashVisionStamps(*StampsToUse);
-
 			// Stable-source fast path (the old UpdateSourceStamp early-out).
 			// Identical pose + owner + eye + stamp set ⇒ no work, no work item.
 			// Pose includes Rotation since shaped stamps depend on it (rect
@@ -634,7 +628,7 @@ void USeinFogOfWarDefault::TickStamps(UWorld* World)
 				&& State.WorldPos == SourcePos
 				&& State.Rotation == SourceRot
 				&& State.EyeHeight == VData->EyeHeight
-				&& State.StampsHash == NewStampsHash)
+				&& State.Stamps == *StampsToUse)
 			{
 				return;
 			}
@@ -648,7 +642,6 @@ void USeinFogOfWarDefault::TickStamps(UWorld* World)
 			Work.WorldPos   = SourcePos;
 			Work.Rotation   = SourceRot;
 			Work.EyeHeight  = VData->EyeHeight;
-			Work.StampsHash = NewStampsHash;
 			Work.Stamps     = *StampsToUse;
 		});
 
@@ -740,7 +733,7 @@ void USeinFogOfWarDefault::TickStamps(UWorld* World)
 		State.WorldPos  = Work.WorldPos;
 		State.Rotation  = Work.Rotation;
 		State.EyeHeight = Work.EyeHeight;
-		State.StampsHash = Work.StampsHash;
+		State.Stamps    = Work.Stamps;
 
 		// DIAGNOSTIC (2026-05-02 smoke-not-blocking regression): one line per
 		// source per re-stamp. EyeZ here is the same value passed to LOS — if
@@ -1070,123 +1063,102 @@ bool USeinFogOfWarDefault::IsCellOpaqueToEye(int32 X, int32 Y, FFixedPoint EyeZ,
 
 bool USeinFogOfWarDefault::RebuildDynamicBlockers(UWorld* World)
 {
-	// Dirty-rect clear: zero only cells that were stamped last tick instead
-	// of memzeroing the entire W*H arrays. At 1km² @ 400cm cells the full
-	// memzero costs ~50MB per FoW tick; in practice dynamic blockers (smoke
-	// grenades, destructibles) cover orders-of-magnitude fewer cells, so
-	// the dirty list is tiny by comparison.
-	//
-	// Grid-resize fallback: if either array's size disagrees with W*H the
-	// dirty list's indices are stale (or arrays haven't been sized yet on
-	// first call). SetNumZeroed handles both — it grows + zero-fills, or
-	// truncates + zero-fills the kept range. Either way the dirty list is
-	// reset since its indices no longer describe the new grid.
 	const int32 NumCells = Width * Height;
 	const bool bSizeMismatch =
 		DynamicBlockerHeight.Num() != NumCells ||
 		DynamicBlockerLayerMask.Num() != NumCells;
+
+	// Gather the complete rasterization input before touching the current
+	// overlay. Entity-pool and Shapes-array iteration provide canonical order,
+	// making exact array equality a collision-free change detector.
+	TArray<FSeinFogDynamicBlockerSnapshot> CurrentSnapshots;
+	CurrentSnapshots.Reserve(DynamicBlockerSnapshots.Num());
+	if (World)
+	{
+		if (USeinWorldSubsystem* Sim = World->GetSubsystem<USeinWorldSubsystem>())
+		{
+			const ISeinComponentStorage* Storage =
+				Sim->GetComponentStorageRaw(FSeinExtentsComponent::StaticStruct());
+			if (Storage)
+			{
+				Sim->GetEntityPool().ForEachEntity(
+					[Storage, &CurrentSnapshots](FSeinEntityHandle Handle, FSeinEntity& Entity)
+					{
+						const void* Raw = Storage->GetComponentRaw(Handle);
+						if (!Raw) return;
+						const FSeinExtentsComponent* Extents =
+							static_cast<const FSeinExtentsComponent*>(Raw);
+						if (!Extents->bBlocksFogOfWar
+							|| Extents->BlockedFogOfWarLayerMask == 0
+							|| Extents->Shapes.IsEmpty())
+						{
+							return;
+						}
+
+						const FFixedVector Pos = Entity.Transform.GetLocation();
+						const FFixedQuaternion Rot = Entity.Transform.Rotation;
+						for (const FSeinExtentsShape& ExtShape : Extents->Shapes)
+						{
+							if (ExtShape.Height <= FFixedPoint::Zero) continue;
+							FSeinFogDynamicBlockerSnapshot& Snapshot =
+								CurrentSnapshots.AddDefaulted_GetRef();
+							Snapshot.WorldPos = Pos;
+							Snapshot.Rotation = Rot;
+							Snapshot.Shape = ExtShape.AsStampShape();
+							Snapshot.Height = ExtShape.Height;
+							Snapshot.LayerMask = Extents->BlockedFogOfWarLayerMask;
+						}
+					});
+			}
+			else
+			{
+				UE_LOG(LogSeinFogOfWar, Verbose,
+					TEXT("RebuildDynamicBlockers: no FSeinExtentsComponent storage registered "
+						 "— no entity with USeinExtentsComponent has been spawned via SpawnEntity"));
+			}
+		}
+	}
+
+	if (!bSizeMismatch && CurrentSnapshots == DynamicBlockerSnapshots)
+	{
+		return false;
+	}
+
+	// Dirty-clear only when inputs changed. A size mismatch means the old
+	// dirty indices belong to another grid and must not be dereferenced.
+	const int32 NumDirtyCells = LastDynamicBlockerCells.Num();
 	if (bSizeMismatch)
 	{
-		DynamicBlockerHeight.SetNumZeroed(NumCells);
-		DynamicBlockerLayerMask.SetNumZeroed(NumCells);
-		LastDynamicBlockerCells.Reset();
+		// Either array may already have NumCells elements; clear both explicitly
+		// because SetNumZeroed would retain same-sized contents.
+		ResetToZeroedSize(DynamicBlockerHeight, NumCells);
+		ResetToZeroedSize(DynamicBlockerLayerMask, NumCells);
 	}
 	else
 	{
-		// FFixedPoint::Zero is the "no blocker" sentinel — value 0 on its
-		// int64 backing. Per-element write is fine; the list typically holds
-		// hundreds-to-thousands of indices, not millions.
 		for (const int32 Idx : LastDynamicBlockerCells)
 		{
-			DynamicBlockerHeight[Idx] = FFixedPoint::Zero;
-			DynamicBlockerLayerMask[Idx] = 0;
-		}
-		// Verbose: confirm dirty-rect path is firing and compare against
-		// full-grid clear cost. Free when log level is off.
-		UE_LOG(LogSeinFogOfWar, Verbose,
-			TEXT("RebuildDynamicBlockers: dirty-rect cleared %d cell(s) "
-				 "(full-grid clear would have been %d)"),
-			LastDynamicBlockerCells.Num(), NumCells);
-		LastDynamicBlockerCells.Reset();
-	}
-
-	// Whether to force every source's stable-fast-path cache to invalidate
-	// this tick. Computed at end via hash compare.
-	auto FinalizeReturn = [&](uint32 NewHash) -> bool
-	{
-		const bool bChanged = (NewHash != LastDynamicBlockerHash);
-		LastDynamicBlockerHash = NewHash;
-		return bChanged;
-	};
-
-	if (!World) return FinalizeReturn(0);
-	USeinWorldSubsystem* Sim = World->GetSubsystem<USeinWorldSubsystem>();
-	if (!Sim) return FinalizeReturn(0);
-	const ISeinComponentStorage* Storage = Sim->GetComponentStorageRaw(FSeinExtentsComponent::StaticStruct());
-	if (!Storage)
-	{
-		// Verbose so users can spot this without VeryVerbose. The most
-		// common cause of "smoke isn't blocking": no entity in the world
-		// has FSeinExtentsComponent in component storage (level-placed actor not
-		// registered, or component not on the BP).
-		UE_LOG(LogSeinFogOfWar, Verbose,
-			TEXT("RebuildDynamicBlockers: no FSeinExtentsComponent storage registered "
-				 "— no entity with USeinExtentsComponent has been spawned via SpawnEntity"));
-		return FinalizeReturn(0);
-	}
-
-	// Walk every alive entity; stamp every shape on every extents that has
-	// bBlocksFogOfWar set. Per-shape Height drives occluder height (max-per-
-	// cell across overlapping shapes). Smoke-grenade pattern: spawn an
-	// entity with FSeinExtentsComponent via an ability, set bBlocksFogOfWar=true
-	// + a Capsule shape with the smoke's radius/height; the subsystem picks
-	// it up automatically.
-	int32 NumStamps = 0;
-	uint32 NewHash = 0;
-	Sim->GetEntityPool().ForEachEntity(
-		[this, Storage, &NumStamps, &NewHash](FSeinEntityHandle Handle, FSeinEntity& Entity)
-		{
-			const void* Raw = Storage->GetComponentRaw(Handle);
-			if (!Raw) return;
-			const FSeinExtentsComponent* Extents = static_cast<const FSeinExtentsComponent*>(Raw);
-			if (!Extents) return;
-			if (!Extents->bBlocksFogOfWar) return;
-			if (Extents->BlockedFogOfWarLayerMask == 0) return;
-			if (Extents->Shapes.Num() == 0) return;
-
-			const FFixedVector Pos = Entity.Transform.GetLocation();
-			const FFixedQuaternion Rot = Entity.Transform.Rotation;
-
-			// Fold entity-level fields into the change-detection fingerprint
-			// once. XOR is order-independent so swapping iteration order
-			// produces the same fingerprint — only adds / removes / edits
-			// flip the hash.
-			NewHash ^= GetTypeHash(Handle.Index);
-			NewHash ^= GetTypeHash(Pos.X.Value);
-			NewHash ^= GetTypeHash(Pos.Y.Value);
-			NewHash ^= GetTypeHash(Pos.Z.Value);
-			NewHash ^= static_cast<uint32>(Extents->BlockedFogOfWarLayerMask);
-
-			for (const FSeinExtentsShape& ExtShape : Extents->Shapes)
+			if (DynamicBlockerHeight.IsValidIndex(Idx))
 			{
-				if (ExtShape.Height <= FFixedPoint::Zero) continue;
-
-				const FSeinStampShape PlanarStamp = ExtShape.AsStampShape();
-				StampDynamicBlockerShape(PlanarStamp, Pos, Rot,
-					ExtShape.Height, Extents->BlockedFogOfWarLayerMask);
-				++NumStamps;
-				NewHash ^= GetTypeHash(ExtShape);
+				DynamicBlockerHeight[Idx] = FFixedPoint::Zero;
+				DynamicBlockerLayerMask[Idx] = 0;
 			}
-		});
-	// Verbose every tick — single line confirms the function is firing
-	// AND tells you how many stamps it picked up. Diff against the number
-	// of enabled stamps across all live FSeinExtentsComponent (bBlocksFogOfWar)
-	// entities (one entity with 4 enabled stamps = 4 here).
-	UE_LOG(LogSeinFogOfWar, Verbose,
-		TEXT("RebuildDynamicBlockers: stamped %d shape(s) across blocker entities"),
-		NumStamps);
+		}
+	}
+	LastDynamicBlockerCells.Reset();
 
-	return FinalizeReturn(NewHash);
+	for (const FSeinFogDynamicBlockerSnapshot& Snapshot : CurrentSnapshots)
+	{
+		StampDynamicBlockerShape(Snapshot.Shape, Snapshot.WorldPos,
+			Snapshot.Rotation, Snapshot.Height, Snapshot.LayerMask);
+	}
+	DynamicBlockerSnapshots = MoveTemp(CurrentSnapshots);
+
+	UE_LOG(LogSeinFogOfWar, Verbose,
+		TEXT("RebuildDynamicBlockers: exact inputs changed; cleared %d old cell(s), stamped %d shape(s)"),
+		NumDirtyCells, DynamicBlockerSnapshots.Num());
+
+	return true;
 }
 
 void USeinFogOfWarDefault::StampDynamicBlockerShape(const FSeinStampShape& Shape,

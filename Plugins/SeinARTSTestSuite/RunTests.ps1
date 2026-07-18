@@ -162,6 +162,19 @@ $EditorProcess.WaitForExit()
 $EditorProcess.Refresh()
 $EditorExitCode = $EditorProcess.ExitCode
 
+# Some PowerShell/Process combinations lose ExitCode after a redirected native process has
+# already closed, even though WaitForExit completed and Unreal emitted its terminal status.
+# Fall back only to Automation's exact final marker; absence or malformed output remains fatal.
+if ($null -eq $EditorExitCode) {
+	$ExitMarker = Select-String -Path $StdoutPath -Pattern '\*\*\*\* TEST COMPLETE\. EXIT CODE: (-?\d+) \*\*\*\*' |
+		Select-Object -Last 1
+	if (-not $ExitMarker -or $ExitMarker.Matches.Count -ne 1) {
+		throw "Automation process exposed no exit code or terminal marker. See '$StdoutPath'."
+	}
+	$EditorExitCode = [int]$ExitMarker.Matches[0].Groups[1].Value
+	Write-Verbose "Recovered editor exit code $EditorExitCode from Unreal's terminal marker."
+}
+
 $IndexPath = Join-Path $ReportPath 'index.json'
 if (-not (Test-Path -LiteralPath $IndexPath)) {
 	throw "Automation produced no index.json (editor exit $EditorExitCode). See '$LogPath', '$StdoutPath', and '$StderrPath'."

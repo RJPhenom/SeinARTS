@@ -58,7 +58,7 @@ struct SEINARTSCOREENTITY_API FSeinSnapshotPoolInstanceRecord
 	UPROPERTY()
 	FString ClassPath;
 
-	/** Raw serialized UPROPERTY state — produced by `UObject::Serialize`
+	/** Raw UPROPERTY state produced by `UClass::SerializeTaggedProperties`
 	 *  through an `FObjectAndNameAsStringProxyArchive`. Restored the same way. */
 	UPROPERTY()
 	TArray<uint8> StateBytes;
@@ -104,10 +104,12 @@ struct SEINARTSCOREENTITY_API FSeinWorldSnapshot
 {
 	GENERATED_BODY()
 
+	static constexpr int32 CurrentVersion = 4;
+
 	// ========== Header ==========
 
 	UPROPERTY()
-	int32 SnapshotVersion = 1;
+	int32 SnapshotVersion = CurrentVersion;
 
 	UPROPERTY()
 	FString FrameworkVersion;
@@ -137,6 +139,11 @@ struct SEINARTSCOREENTITY_API FSeinWorldSnapshot
 	UPROPERTY()
 	int64 PRNGState1 = 0;
 
+	/** Next world-global effect instance ID. Future allocation order is
+	 *  authoritative state even when every previously allocated effect expired. */
+	UPROPERTY()
+	int64 NextEffectInstanceID = 1;
+
 	// ========== Match flow ==========
 
 	UPROPERTY()
@@ -163,7 +170,7 @@ struct SEINARTSCOREENTITY_API FSeinWorldSnapshot
 
 	/** Full per-slot snapshot of `USeinWorldSubsystem::AbilityPool`. Each entry
 	 *  has the class path + UObject-reflected state bytes; restore recreates
-	 *  the instance via NewObject(class) + UObject::Serialize. Free slots are
+	 *  the instance via NewObject(class) + SerializeTaggedProperties. Free slots are
 	 *  written too so the free-list reconstructs exactly. */
 	UPROPERTY()
 	TArray<FSeinSnapshotPoolInstanceRecord> AbilityPoolRecords;

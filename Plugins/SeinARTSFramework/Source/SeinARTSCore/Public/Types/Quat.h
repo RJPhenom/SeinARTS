@@ -287,39 +287,23 @@ struct SEINARTSCORE_API FFixedQuaternion
 	// Get normalized quaternion
 	FORCEINLINE FFixedQuaternion GetNormalized() const
 	{
-		const int64 XSq = static_cast<int64>(X) * X;
-		const int64 YSq = static_cast<int64>(Y) * Y;
-		const int64 ZSq = static_cast<int64>(Z) * Z;
-		const int64 WSq = static_cast<int64>(W) * W;
-		int64 SizeSq = XSq + YSq + ZSq + WSq;
-		
-		if (SizeSq <= FFixedPoint::Epsilon)
+		// Scale first so squaring and summing cannot overflow 32.32 even for
+		// unusually large inputs. The scale cancels out during normalization.
+		const FFixedPoint Scale = SeinMath::Max(
+			SeinMath::Max(SeinMath::Abs(X), SeinMath::Abs(Y)),
+			SeinMath::Max(SeinMath::Abs(Z), SeinMath::Abs(W)));
+		if (Scale <= FFixedPoint::Epsilon)
 		{
 			return Identity;
 		}
-		
-		// Integer square root
-		int64 Bit = 1LL << 62;
-		while (Bit > SizeSq) Bit >>= 2;
-		int64 Root = 0;
-		while (Bit != 0)
+
+		const FFixedQuaternion Scaled(X / Scale, Y / Scale, Z / Scale, W / Scale);
+		const FFixedPoint Length = SeinMath::Sqrt(Scaled.SizeSquared());
+		if (Length > FFixedPoint::Epsilon)
 		{
-			if (SizeSq >= Root + Bit)
-			{
-				SizeSq -= Root + Bit;
-				Root = (Root >> 1) + Bit;
-			}
-			else
-			{
-				Root >>= 1;
-			}
-			Bit >>= 2;
-		}
-		
-		const FFixedPoint Length(static_cast<int64>(Root << 16));
-		if (Length != 0)
-		{
-			return FFixedQuaternion(X / Length, Y / Length, Z / Length, W / Length);
+			return FFixedQuaternion(
+				Scaled.X / Length, Scaled.Y / Length,
+				Scaled.Z / Length, Scaled.W / Length);
 		}
 		return Identity;
 	}
@@ -354,4 +338,3 @@ FORCEINLINE uint32 GetTypeHash(const FFixedQuaternion& Q)
 	Hash = HashCombine(Hash, GetTypeHash(Q.W));
 	return Hash;
 }
-

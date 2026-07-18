@@ -57,6 +57,8 @@
 #include "Actor/SeinEntityComponent.h"
 #include "UnrealEdGlobals.h"
 #include "Editor/UnrealEdEngine.h"
+#include "CoreGlobals.h"
+#include "UObject/UObjectBase.h"
 
 #define LOCTEXT_NAMESPACE "SeinARTSEditor"
 
@@ -339,6 +341,8 @@ void FSeinARTSEditorModule::ShutdownModule()
 		PropertyModule.UnregisterCustomPropertyTypeLayout(TEXT("FixedPoint"));
 		PropertyModule.UnregisterCustomPropertyTypeLayout(TEXT("InstancedStruct"));
 		PropertyModule.UnregisterCustomPropertyTypeLayout(TEXT("SeinVisionStamp"));
+		PropertyModule.UnregisterCustomPropertyTypeLayout(TEXT("SeinCollisionResponseContainer"));
+		PropertyModule.UnregisterCustomPropertyTypeLayout(TEXT("SeinCollisionObjectType"));
 		PropertyModule.UnregisterCustomPropertyTypeLayout(TEXT("SeinIdentityComponent"));
 		PropertyModule.UnregisterCustomPropertyTypeLayout(TEXT("SeinSquadSlot"));
 		PropertyModule.UnregisterCustomClassLayout(USeinAbility::StaticClass()->GetFName());
@@ -347,6 +351,18 @@ void FSeinARTSEditorModule::ShutdownModule()
 		PropertyModule.UnregisterCustomClassLayout(FName(TEXT("SeinMovement")));
 		PropertyModule.UnregisterCustomClassLayout(USeinBalanceProfile::StaticClass()->GetFName());
 		// Volume class-layouts unregistered by their owning system modules.
+	}
+
+	if (UObjectInitialized() && !IsEngineExitRequested())
+	{
+		if (UThumbnailManager* ThumbnailManager = UThumbnailManager::TryGet())
+		{
+			ThumbnailManager->UnregisterCustomRenderer(USeinActorBlueprint::StaticClass());
+			ThumbnailManager->UnregisterCustomRenderer(USeinAbilityBlueprint::StaticClass());
+			ThumbnailManager->UnregisterCustomRenderer(USeinEffectBlueprint::StaticClass());
+			ThumbnailManager->UnregisterCustomRenderer(USeinFormationBlueprint::StaticClass());
+			ThumbnailManager->UnregisterCustomRenderer(UUserDefinedStruct::StaticClass());
+		}
 	}
 
 	if (GUnrealEd != nullptr)

@@ -38,43 +38,45 @@ class FSeinEffectTickSystem final : public ISeinSystem
 public:
 	virtual void Tick(FFixedPoint DeltaTime, USeinWorldSubsystem& World) override
 	{
-		// 1. Drain pending-apply queue first so newly-applied effects participate
-		// in this tick's duration/interval math.
+		// Drain first, then snapshot every outer identity before a Blueprint hook
+		// can grow component storage or rehash the player map.
 		World.ProcessPendingEffectApplies();
 
-		// 2. Tick per-entity Instance-scope effects. Only entities carrying
-		// FSeinActiveEffectsComponent participate — iterate that storage's live
-		// slots directly instead of the full pool + per-entity GetComponent
-		// miss. ForEachLiveComponent yields slots in the same ascending order
-		// ForEachEntity did, so per-entity tick order is unchanged. Removals
-		// route through World.RemoveInstanceEffect, which mutates the payload's
-		// inner ActiveEffects array (RemoveAtSwap) — NOT this storage's slot
-		// set — so walking the live bit-array stays safe across the pass. The
-		// pending-apply drain in step 1 already finished any AddComponent before
-		// iteration begins.
+		TArray<FSeinEntityHandle> EffectEntities;
 		if (ISeinComponentStorage* Storage =
 			World.GetComponentStorageRaw(FSeinActiveEffectsComponent::StaticStruct()))
 		{
 			FSeinEntityPool& Pool = World.GetEntityPool();
 			Storage->ForEachLiveComponent([&](int32 SlotIndex, void* RawComponent)
 			{
-				FSeinActiveEffectsComponent* EffectsComp = static_cast<FSeinActiveEffectsComponent*>(RawComponent);
-				if (!EffectsComp || EffectsComp->ActiveEffects.Num() == 0) return;
-
-				const FSeinEntityHandle Handle(SlotIndex, Pool.GetSlotGeneration(SlotIndex));
-				TickEffectsArray(Handle, EffectsComp->ActiveEffects, DeltaTime, World);
+				const FSeinActiveEffectsComponent* EffectsComp = static_cast<const FSeinActiveEffectsComponent*>(RawComponent);
+				const FSeinEntityHandle Handle(
+					SlotIndex, Pool.GetSlotGeneration(SlotIndex));
+				if (EffectsComp && EffectsComp->ActiveEffects.Num() > 0
+					&& World.IsEntityAlive(Handle))
+				{
+					EffectEntities.Add(Handle);
+				}
 			});
 		}
+		const TArray<FSeinPlayerID> PlayerIDs = World.GetRegisteredPlayerIDs();
 
-		// 3. Tick per-player Class + Player scope effects. Class/Player-scope
-		// ticks don't have a natural single "target entity" — we use the stored Target
-		// on each FSeinActiveEffect. That target may have been destroyed; OnTick/OnExpire
-		// hooks receive a potentially-stale handle which BP authors must validate.
-		World.ForEachPlayerStateMutable([&](FSeinPlayerID /*PlayerID*/, FSeinPlayerState& State)
+		for (FSeinEntityHandle Entity : EffectEntities)
 		{
-			TickPlayerScopedArray(State.ClassEffects, DeltaTime, World);
-			TickPlayerScopedArray(State.PlayerEffects, DeltaTime, World);
-		});
+			if (World.IsEntityAlive(Entity))
+			{
+				TickStorage(World, DeltaTime, Entity,
+					FSeinPlayerID::Neutral(), ESeinModifierScope::Instance);
+			}
+		}
+
+		// Canonical player order is gameplay-significant when hooks mutate shared
+		// state or allocate globally ordered identities.
+		for (FSeinPlayerID PlayerID : PlayerIDs)
+		{
+			TickStorage(World, DeltaTime, FSeinEntityHandle::Invalid(), PlayerID, ESeinModifierScope::Class);
+			TickStorage(World, DeltaTime, FSeinEntityHandle::Invalid(), PlayerID, ESeinModifierScope::Player);
+		}
 	}
 
 	virtual ESeinTickPhase GetPhase() const override { return ESeinTickPhase::PreTick; }
@@ -82,91 +84,117 @@ public:
 	virtual FName GetSystemName() const override { return TEXT("EffectTick"); }
 
 private:
-	/** Tick a per-entity effects array (Instance scope); remove-by-expiration routes
-	 *  through World.RemoveInstanceEffect so tag ungrant + hooks + visual events fire. */
-	static void TickEffectsArray(FSeinEntityHandle Handle, TArray<FSeinActiveEffect>& Effects, FFixedPoint DeltaTime, USeinWorldSubsystem& World)
+	static TArray<FSeinActiveEffect>* ResolveStorage(USeinWorldSubsystem& World,
+		FSeinEntityHandle Entity, FSeinPlayerID PlayerID, ESeinModifierScope Scope)
 	{
-		TArray<uint32> Expired;
-
-		for (FSeinActiveEffect& Effect : Effects)
+		if (Scope == ESeinModifierScope::Instance)
 		{
-			const USeinEffect* Def = Effect.EffectClass ? GetDefault<USeinEffect>(Effect.EffectClass) : nullptr;
-			if (!Def) { continue; }
-
-			// Finite duration — decrement. Zero = instant (shouldn't be in storage).
-			// Negative = infinite (leave alone).
-			if (Def->DurationMode == ESeinEffectDurationMode::Timed)
-			{
-				Effect.RemainingDuration = Effect.RemainingDuration - DeltaTime;
-				if (Effect.RemainingDuration <= FFixedPoint::Zero)
-				{
-					Expired.Add(Effect.EffectInstanceID);
-					continue;
-				}
-			}
-
-			// Periodic tick — fire OnTick on roll-over (supports multiple fires per tick
-			// in case DeltaTime > TickInterval, though that's unusual at 30 Hz).
-			if (Def->TickInterval > FFixedPoint::Zero)
-			{
-				Effect.TimeSinceLastPeriodic = Effect.TimeSinceLastPeriodic + DeltaTime;
-				while (Effect.TimeSinceLastPeriodic >= Def->TickInterval)
-				{
-					Effect.TimeSinceLastPeriodic = Effect.TimeSinceLastPeriodic - Def->TickInterval;
-					USeinEffect* MutableCDO = Cast<USeinEffect>(Effect.EffectClass->GetDefaultObject());
-					if (MutableCDO)
-					{
-						MutableCDO->OnTick(Effect.Target, Def->TickInterval);
-					}
-				}
-			}
+			FSeinActiveEffectsComponent* Component = World.GetComponent<FSeinActiveEffectsComponent>(Entity);
+			return Component ? &Component->ActiveEffects : nullptr;
 		}
-
-		for (uint32 ExpiredID : Expired)
+		FSeinPlayerState* State = World.GetPlayerState(PlayerID);
+		if (!State)
 		{
-			World.RemoveInstanceEffect(Handle, ExpiredID, /*bByExpiration=*/true);
+			return nullptr;
 		}
+		return Scope == ESeinModifierScope::Class ? &State->ClassEffects : &State->PlayerEffects;
 	}
 
-	/** Tick a player-scope array (Class/Player). Hook dispatch uses the stored
-	 *  per-effect Target (the entity that drove the apply). */
-	static void TickPlayerScopedArray(TArray<FSeinActiveEffect>& Effects, FFixedPoint DeltaTime, USeinWorldSubsystem& World)
+	static FSeinActiveEffect* FindEffect(TArray<FSeinActiveEffect>* Effects, int64 EffectID)
 	{
-		TArray<TPair<FSeinEntityHandle, uint32>> Expired;
-
-		for (FSeinActiveEffect& Effect : Effects)
+		return Effects ? Effects->FindByPredicate([EffectID](const FSeinActiveEffect& Effect)
 		{
-			const USeinEffect* Def = Effect.EffectClass ? GetDefault<USeinEffect>(Effect.EffectClass) : nullptr;
-			if (!Def) { continue; }
+			return Effect.EffectInstanceID == EffectID;
+		}) : nullptr;
+	}
+
+	static void TickStorage(USeinWorldSubsystem& World, FFixedPoint DeltaTime,
+		FSeinEntityHandle Entity, FSeinPlayerID PlayerID, ESeinModifierScope Scope)
+	{
+		const bool bInstanceScope = Scope == ESeinModifierScope::Instance;
+		if (bInstanceScope && !World.IsEntityAlive(Entity))
+		{
+			return;
+		}
+		TArray<FSeinActiveEffect>* InitialStorage = ResolveStorage(World, Entity, PlayerID, Scope);
+		if (!InitialStorage || InitialStorage->Num() == 0)
+		{
+			return;
+		}
+
+		TArray<int64, TInlineAllocator<8>> EffectIDs;
+		EffectIDs.Reserve(InitialStorage->Num());
+		for (const FSeinActiveEffect& Effect : *InitialStorage)
+		{
+			EffectIDs.Add(Effect.EffectInstanceID);
+		}
+		TArray<int64, TInlineAllocator<4>> ExpiredIDs;
+
+		for (int64 EffectID : EffectIDs)
+		{
+			if (bInstanceScope && !World.IsEntityAlive(Entity))
+			{
+				return;
+			}
+			FSeinActiveEffect* Effect = FindEffect(ResolveStorage(World, Entity, PlayerID, Scope), EffectID);
+			if (!Effect) continue;
+
+			const USeinEffect* Def = Effect->EffectClass ? GetDefault<USeinEffect>(Effect->EffectClass) : nullptr;
+			if (!Def) continue;
 
 			if (Def->DurationMode == ESeinEffectDurationMode::Timed)
 			{
-				Effect.RemainingDuration = Effect.RemainingDuration - DeltaTime;
-				if (Effect.RemainingDuration <= FFixedPoint::Zero)
+				Effect->RemainingDuration = Effect->RemainingDuration - DeltaTime;
+				if (Effect->RemainingDuration <= FFixedPoint::Zero)
 				{
-					Expired.Add({ Effect.Target, Effect.EffectInstanceID });
+					ExpiredIDs.Add(EffectID);
 					continue;
 				}
 			}
 
 			if (Def->TickInterval > FFixedPoint::Zero)
 			{
-				Effect.TimeSinceLastPeriodic = Effect.TimeSinceLastPeriodic + DeltaTime;
-				while (Effect.TimeSinceLastPeriodic >= Def->TickInterval)
+				Effect->TimeSinceLastPeriodic = Effect->TimeSinceLastPeriodic + DeltaTime;
+				while (true)
 				{
-					Effect.TimeSinceLastPeriodic = Effect.TimeSinceLastPeriodic - Def->TickInterval;
-					USeinEffect* MutableCDO = Cast<USeinEffect>(Effect.EffectClass->GetDefaultObject());
+					if (bInstanceScope && !World.IsEntityAlive(Entity))
+					{
+						return;
+					}
+					Effect = FindEffect(ResolveStorage(World, Entity, PlayerID, Scope), EffectID);
+					if (!Effect) break;
+					Def = Effect->EffectClass ? GetDefault<USeinEffect>(Effect->EffectClass) : nullptr;
+					if (!Def || Def->TickInterval <= FFixedPoint::Zero
+						|| Effect->TimeSinceLastPeriodic < Def->TickInterval)
+					{
+						break;
+					}
+
+					const FFixedPoint Interval = Def->TickInterval;
+					const FSeinEntityHandle CallbackTarget = Effect->Target;
+					const TSubclassOf<USeinEffect> CallbackClass = Effect->EffectClass;
+					Effect->TimeSinceLastPeriodic = Effect->TimeSinceLastPeriodic - Interval;
+					USeinEffect* MutableCDO = CallbackClass
+						? Cast<USeinEffect>(CallbackClass->GetDefaultObject()) : nullptr;
 					if (MutableCDO)
 					{
-						MutableCDO->OnTick(Effect.Target, Def->TickInterval);
+						MutableCDO->OnTick(CallbackTarget, Interval);
 					}
 				}
 			}
 		}
 
-		for (const TPair<FSeinEntityHandle, uint32>& E : Expired)
+		for (int64 ExpiredID : ExpiredIDs)
 		{
-			World.RemoveInstanceEffect(E.Key, E.Value, /*bByExpiration=*/true);
+			if (bInstanceScope)
+			{
+				if (!World.IsEntityAlive(Entity)) return;
+				World.RemoveEffect(Entity, ExpiredID, /*bByExpiration=*/true);
+			}
+			else
+			{
+				World.RemovePlayerEffect(PlayerID, ExpiredID, /*bByExpiration=*/true);
+			}
 		}
 	}
 };

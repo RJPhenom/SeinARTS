@@ -53,6 +53,24 @@ void ASeinNetRelay::OnRep_AssignedPlayerID()
 	}
 }
 
+void ASeinNetRelay::OnRep_SessionSeed()
+{
+	UE_LOG(LogSeinNet, Verbose,
+		TEXT("[Client] OnRep_SessionSeed: slot=%u  seed=%lld  Owner=%s"),
+		AssignedPlayerID.Value, SessionSeed, *GetNameSafe(GetOwner()));
+
+	// Replication does not guarantee the two property notifications arrive in
+	// a particular order. If the slot is already known, re-run the idempotent
+	// readiness/binding path now that the seed is available.
+	if (AssignedPlayerID.IsValid())
+	{
+		if (USeinNetSubsystem* Net = GetNetSubsystem())
+		{
+			Net->NotifyLocalSlotAssigned(this, AssignedPlayerID, SessionSeed);
+		}
+	}
+}
+
 void ASeinNetRelay::BeginPlay()
 {
 	Super::BeginPlay();

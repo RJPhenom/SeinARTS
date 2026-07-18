@@ -172,8 +172,7 @@ public:
 		}
 		else
 		{
-			StructType->ClearScriptStruct(SlotPtr);
-			StructType->InitializeStruct(SlotPtr);
+			ResetSlot(SlotIndex);
 		}
 
 		HasComponentBits[SlotIndex] = true;
@@ -185,9 +184,7 @@ public:
 		if (SlotIndex < SlotCapacity && HasComponentBits[SlotIndex])
 		{
 			HasComponentBits[SlotIndex] = false;
-			uint8* SlotPtr = GetSlotPtr(SlotIndex);
-			StructType->ClearScriptStruct(SlotPtr);
-			StructType->InitializeStruct(SlotPtr);
+			ResetSlot(SlotIndex);
 			ComponentCount--;
 		}
 	}
@@ -423,9 +420,7 @@ public:
 	{
 		for (TConstSetBitIterator<> It(HasComponentBits); It; ++It)
 		{
-			uint8* SlotPtr = GetSlotPtr(It.GetIndex());
-			StructType->ClearScriptStruct(SlotPtr);
-			StructType->InitializeStruct(SlotPtr);
+			ResetSlot(It.GetIndex());
 		}
 		HasComponentBits.Init(false, HasComponentBits.Num());
 		ComponentCount = 0;
@@ -496,6 +491,13 @@ public:
 	UScriptStruct* GetStructType() const { return StructType; }
 
 private:
+	void ResetSlot(int32 SlotIndex)
+	{
+		// ClearScriptStruct destroys and reconstructs the payload. Calling
+		// InitializeStruct again would double-construct resource-owning fields.
+		StructType->ClearScriptStruct(GetSlotPtr(SlotIndex));
+	}
+
 	void EnsureSlotCapacity(int32 SlotIndex)
 	{
 		const int32 RequiredSize = SlotIndex + 1;

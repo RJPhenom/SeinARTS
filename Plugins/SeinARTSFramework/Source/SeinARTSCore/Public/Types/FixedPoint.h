@@ -40,10 +40,8 @@ struct SEINARTSCORE_API FFixedPoint
 	 *  the raw 32.32 int64, so a TArray<FFixedPoint> — or any FFixedPoint UPROPERTY —
 	 *  serializes as a compact bulk blob instead of a TAGGED reflected struct (which
 	 *  cost ~3-4x per value and made struct-of-FixedPoint arrays bloat ~15x on disk).
-	 *  Determinism-neutral: the int64 value is already platform-stable.
-	 *  WARNING: this CHANGES the on-disk format. Assets saved with the OLD tagged
-	 *  layout load their FFixedPoint values as GARBAGE (UE has no auto-migration for a
-	 *  tagged→native struct switch) — those assets must be re-saved / re-authored. */
+	 *  Determinism-neutral: the int64 value is already platform-stable. Content that
+	 *  predated this serializer was migrated to the native layout in July 2026. */
 	bool Serialize(FArchive& Ar)
 	{
 		Ar << Value;
@@ -51,22 +49,28 @@ struct SEINARTSCORE_API FFixedPoint
 	}
 
 private:
+	/** Reinterpret a raw two's-complement bit pattern without relying on the
+	 *  implementation-defined unsigned-to-signed integer conversion. */
+	static FORCEINLINE int64 FromRawBits(uint64 Bits)
+	{
+		return BitCast<int64>(Bits);
+	}
 
-	// Helper: Deterministic 128-bit division for MSVC (pure integer implementation)
+	static FORCEINLINE uint64 ToRawBits(int64 Raw)
+	{
+		return static_cast<uint64>(Raw);
+	}
+
+	// Portable deterministic 128-by-64 division. Using this on every compiler
+	// keeps quotient semantics identical and avoids Clang's compiler-rt
+	// __divti3/__udivti3 dependency, which launcher UE builds do not export.
 	static FORCEINLINE int64 Div128By64(int64 NumeratorHigh, uint64 NumeratorLow, int64 Divisor)
 	{
 		// Handle signs
 		bool ResultNegative = (NumeratorHigh < 0) != (Divisor < 0);
 
-		// Take the absolute value of the FULL 128-bit numerator. The 128-bit value
-		// is (NumeratorHigh << 64) | NumeratorLow interpreted as int128. Negation
-		// is a 128-bit two's complement: bitwise-NOT the unsigned bit pattern of
-		// both halves, then add 1 to the low half with carry into the high half.
-		// (The previous version mistakenly started AbsHigh at -NumeratorHigh and
-		// then re-negated, producing a wrong unsigned magnitude for negative
-		// numerators — every negative-numerator divide returned garbage, which
-		// is what made the X component of normalized direction vectors explode
-		// when the click was W/SW/NW of the unit.)
+		// Take the absolute value of the full 128-bit numerator by applying
+		// two's-complement negation across both halves.
 		uint64 AbsHigh;
 		uint64 AbsLow;
 		if (NumeratorHigh < 0)
@@ -80,7 +84,8 @@ private:
 			AbsLow  = NumeratorLow;
 		}
 
-		uint64 AbsDivisor = Divisor < 0 ? (Divisor == INT64_MIN ? (uint64)INT64_MAX + 1 : -Divisor) : Divisor;
+		const uint64 DivisorBits = ToRawBits(Divisor);
+		const uint64 AbsDivisor = Divisor < 0 ? (0ULL - DivisorBits) : DivisorBits;
 		
 		// Binary long division (128-bit by 64-bit)
 		uint64 Quotient = 0;
@@ -101,9 +106,11 @@ private:
 			}
 		}
 		
-		// Apply sign
-		int64 Result = static_cast<int64>(Quotient);
-		return ResultNegative ? -Result : Result;
+		// Apply the sign in unsigned two's-complement space. This also defines
+		// the otherwise-overflowing -INT64_MIN case and preserves the low 64
+		// quotient bits used by the existing Win64 implementation.
+		const uint64 ResultBits = ResultNegative ? (0ULL - Quotient) : Quotient;
+		return FromRawBits(ResultBits);
 	}
 
 public:
@@ -115,22 +122,37 @@ public:
 	operator int64() const { return Value; }
 
 	// Basic arithmetic operators
-	FORCEINLINE FFixedPoint operator+(const FFixedPoint& Other) const { return FFixedPoint(Value + Other.Value); }
-	FORCEINLINE FFixedPoint operator-(const FFixedPoint& Other) const { return FFixedPoint(Value - Other.Value); }
-	FORCEINLINE FFixedPoint operator-() const { return FFixedPoint(-Value); }
+	/** Arithmetic overflow is defined as raw modulo-2^64 wrap. This matches
+	 *  the framework's established Win64 behavior while avoiding signed UB. */
+	FORCEINLINE FFixedPoint operator+(const FFixedPoint& Other) const
+	{
+		return FFixedPoint(FromRawBits(ToRawBits(Value) + ToRawBits(Other.Value)));
+	}
+	FORCEINLINE FFixedPoint operator-(const FFixedPoint& Other) const
+	{
+		return FFixedPoint(FromRawBits(ToRawBits(Value) - ToRawBits(Other.Value)));
+	}
+	FORCEINLINE FFixedPoint operator-() const
+	{
+		return FFixedPoint(FromRawBits(0ULL - ToRawBits(Value)));
+	}
 	FORCEINLINE FFixedPoint operator*(const FFixedPoint& Other) const 
 	{ 
 		// 64-bit multiplication requires 128-bit intermediate to avoid overflow
 		#if defined(__GNUC__) || defined(__clang__)
-			// GCC/Clang: use __int128
-			__int128 Result = (static_cast<__int128>(Value) * static_cast<__int128>(Other.Value)) >> 32;
-			return FFixedPoint(static_cast<int64>(Result));
+			// The signed product fits in int128. Convert its bit pattern to
+			// unsigned before shifting so a negative right shift is fully defined.
+			const __int128 Product = static_cast<__int128>(Value) * static_cast<__int128>(Other.Value);
+			const unsigned __int128 ProductBits = static_cast<unsigned __int128>(Product);
+			return FFixedPoint(FromRawBits(static_cast<uint64>(ProductBits >> 32)));
 		#elif defined(_MSC_VER)
 			// MSVC: use _mul128 intrinsic
 			int64 High;
-			int64 Low = _mul128(Value, Other.Value, &High);
-			// Combine high and low parts after shift: (High << 32) | (Low >> 32)
-			return FFixedPoint((High << 32) | (static_cast<uint64>(Low) >> 32));
+			const int64 Low = _mul128(Value, Other.Value, &High);
+			// Assemble the low 64 bits of the shifted product in unsigned
+			// space. Shifting a negative signed High was undefined C++.
+			const uint64 ShiftedBits = (ToRawBits(High) << 32) | (ToRawBits(Low) >> 32);
+			return FFixedPoint(FromRawBits(ShiftedBits));
 		#else
 			#error "Platform does not support 128-bit multiplication"
 		#endif
@@ -142,16 +164,15 @@ public:
 		check(Other.Value != 0 && "FFixedPoint division by zero");
 		if (Other.Value == 0) return FFixedPoint::MaxValue; // Fallback for shipping builds
 		
-		// 64-bit division requires 128-bit intermediate for precision
-		#if defined(__GNUC__) || defined(__clang__)
-			// GCC/Clang: use __int128
-			__int128 Numerator = static_cast<__int128>(Value) << 32;
-			return FFixedPoint(static_cast<int64>(Numerator / Other.Value));
-		#elif defined(_MSC_VER)
-			// MSVC: deterministic software 128-bit division
-			// Create 128-bit numerator: Value << 32
-			int64 High = Value >> 32;      // Sign-extended upper bits
-			uint64 Low = static_cast<uint64>(Value) << 32;  // Lower bits shifted
+		// Create the signed Value << 32 numerator by assembling its two halves,
+		// then use the shared software divider. This is bit-identical across the
+		// supported MSVC and Clang toolchains.
+		#if defined(__GNUC__) || defined(__clang__) || defined(_MSC_VER)
+			const uint64 ValueBits = ToRawBits(Value);
+			uint64 HighBits = ValueBits >> 32;
+			if (Value < 0) HighBits |= 0xFFFFFFFF00000000ULL;
+			const int64 High = FromRawBits(HighBits);
+			const uint64 Low = ValueBits << 32;
 			return FFixedPoint(Div128By64(High, Low, Other.Value));
 		#else
 			#error "Platform does not support 128-bit division"
@@ -167,21 +188,41 @@ public:
 	FORCEINLINE bool operator>=(const FFixedPoint& Other) const { return Value >= Other.Value; }
 
 	// Assignment operators
-	FORCEINLINE FFixedPoint& operator+=(const FFixedPoint& Other) { Value += Other.Value; return *this; }
-	FORCEINLINE FFixedPoint& operator-=(const FFixedPoint& Other) { Value -= Other.Value; return *this; }
+	FORCEINLINE FFixedPoint& operator+=(const FFixedPoint& Other) { *this = *this + Other; return *this; }
+	FORCEINLINE FFixedPoint& operator-=(const FFixedPoint& Other) { *this = *this - Other; return *this; }
 	FORCEINLINE FFixedPoint& operator*=(const FFixedPoint& Other) { *this = *this * Other; return *this; }
 	FORCEINLINE FFixedPoint& operator/=(const FFixedPoint& Other) { *this = *this / Other; return *this; }
 
 	// Factory methods
-	FORCEINLINE static FFixedPoint FromInt(int32 IntValue) { return FFixedPoint(static_cast<int64>(IntValue) << 32); }
-	FORCEINLINE static FFixedPoint FromInt64(int64 IntValue) { return FFixedPoint(IntValue << 32); }
+	FORCEINLINE static FFixedPoint FromInt(int32 IntValue)
+	{
+		return FFixedPoint(FromRawBits(static_cast<uint64>(static_cast<int64>(IntValue)) << 32));
+	}
+	/** Values outside the representable 32-bit integer range retain the
+	 *  established low-32-bit wrapping behavior. */
+	FORCEINLINE static FFixedPoint FromInt64(int64 IntValue)
+	{
+		return FFixedPoint(FromRawBits(static_cast<uint64>(IntValue) << 32));
+	}
 	
 	/**
 	 * WARNING: NON-DETERMINISTIC! Only use for editor/visualization purposes.
 	 * Floating-point operations may produce different results across platforms/compilers.
 	 * NEVER use this in simulation logic - use FromInt() instead.
 	 */
-	FORCEINLINE static FFixedPoint FromFloat(float FloatValue) { return FFixedPoint(static_cast<int64>(FloatValue * 4294967296.0)); }
+	FORCEINLINE static FFixedPoint FromFloat(float FloatValue)
+	{
+		if (FMath::IsNaN(FloatValue)) return FFixedPoint::Zero;
+		if (!FMath::IsFinite(FloatValue))
+		{
+			return FloatValue < 0.0f ? FFixedPoint::MinValue : FFixedPoint::MaxValue;
+		}
+
+		const double Scaled = static_cast<double>(FloatValue) * 4294967296.0;
+		if (Scaled >= static_cast<double>(INT64_MAX)) return FFixedPoint::MaxValue;
+		if (Scaled <= static_cast<double>(INT64_MIN)) return FFixedPoint::MinValue;
+		return FFixedPoint(static_cast<int64>(Scaled));
+	}
 
 	// Conversion methods
 	// ===========================================================================================
@@ -191,20 +232,28 @@ public:
 	 * 
 	 * Be aware of potential overflow if the fixed-point value exceeds the representable range of int32.
 	 */
-	FORCEINLINE int32 ToInt() const { return static_cast<int32>(Value >> 32); }
+	FORCEINLINE int32 ToInt() const
+	{
+		const uint32 IntegerBits = static_cast<uint32>(ToRawBits(Value) >> 32);
+		return BitCast<int32>(IntegerBits);
+	}
 
 	/**
 	 * To int64. 
 	 * 
 	 * Be aware of potential overflow if the fixed-point value exceeds the representable range of int64.
 	 */
-	FORCEINLINE int64 ToInt64() const { return Value >> 32; }
+	FORCEINLINE int64 ToInt64() const { return static_cast<int64>(ToInt()); }
 
 	/**
 	 * Ceil to int32 (rounds toward +infinity). Deterministic, integer-only —
 	 * safe in simulation logic, unlike a ToFloat()-based ceil.
 	 */
-	FORCEINLINE int32 CeilToInt() const { return static_cast<int32>((Value + 0xFFFFFFFFLL) >> 32); }
+	FORCEINLINE int32 CeilToInt() const
+	{
+		const uint64 RoundedBits = ToRawBits(Value) + 0xFFFFFFFFULL;
+		return BitCast<int32>(static_cast<uint32>(RoundedBits >> 32));
+	}
 	
 	/**
 	 * To float.
@@ -230,8 +279,13 @@ public:
 	 */
 	FORCEINLINE bool IsNearlyEqual(FFixedPoint Other, FFixedPoint Tolerance = FFixedPoint::Epsilon) const
 	{
-		FFixedPoint Diff = *this - Other;
-		return (Diff < 0 ? -Diff : Diff) <= Tolerance;
+		if (Tolerance.Value < 0) return false;
+		const uint64 ThisBits = ToRawBits(Value);
+		const uint64 OtherBits = ToRawBits(Other.Value);
+		const uint64 Distance = Value >= Other.Value
+			? (ThisBits - OtherBits)
+			: (OtherBits - ThisBits);
+		return Distance <= static_cast<uint64>(Tolerance.Value);
 	}
 
 	// Mathematical Constants (declarations)

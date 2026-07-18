@@ -90,9 +90,9 @@ later movement repaths may re-resolve.
   not a second render pipeline.
 - Preview is read-only. It may create provisional claims but never mutate authoritative sim state.
 
-`CoverSystemClass`, `CoverSnapRadius`, and `TerrainCoverQuality` affect sim outcomes. They must be
-covered by a stable config-fingerprint contributor; until that contributor exists, treat config
-parity as an active correctness gap rather than claiming full lockstep coverage.
+`CoverSystemClass`, `CoverSnapRadius`, and `TerrainCoverQuality` affect sim outcomes. The module
+registers all three under the frozen `CoverExtension` config-fingerprint ID. Map entries are
+canonically sorted by the base registry, so insertion order is not compatibility state.
 
 ## Verification
 

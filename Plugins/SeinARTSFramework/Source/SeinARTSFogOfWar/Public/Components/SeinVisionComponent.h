@@ -52,6 +52,16 @@ struct SEINARTSFOGOFWAR_API FSeinVisionStamp
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Vision",
 		meta = (Bitmask, BitmaskEnum = "/Script/SeinARTSFogOfWar.ESeinFogOfWarLayerBit"))
 	uint8 LayerMask = 0x02; // V bit (Normal)
+
+	FORCEINLINE bool operator==(const FSeinVisionStamp& Other) const
+	{
+		return Shape == Other.Shape && LayerMask == Other.LayerMask;
+	}
+
+	FORCEINLINE bool operator!=(const FSeinVisionStamp& Other) const
+	{
+		return !(*this == Other);
+	}
 };
 
 /**

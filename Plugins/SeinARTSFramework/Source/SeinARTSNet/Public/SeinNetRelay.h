@@ -108,7 +108,7 @@ public:
 	 *  same value across all). Lockstep-critical: every client's PRNG MUST
 	 *  initialize from this exact value before tick 0, or rolls diverge from
 	 *  the first frame. */
-	UPROPERTY(Replicated, BlueprintReadOnly, Category = "SeinARTS|Network")
+	UPROPERTY(ReplicatedUsing = OnRep_SessionSeed, BlueprintReadOnly, Category = "SeinARTS|Network")
 	int64 SessionSeed = 0;
 
 	/** Client -> server. Owning client packs its commands for `TurnId`; server
@@ -189,11 +189,11 @@ public:
 	UFUNCTION(Server, Reliable)
 	void Server_ReportStateHash(int32 Turn, int32 Hash);
 
-	/** Client -> server. Opt-in config-parity check (Check Settings Parity On Join). The joining client
-	 *  sends a fingerprint of its sim-affecting settings; the server compares it to its own and, on
-	 *  mismatch, kicks the client (Client_NotifyKicked) before the match starts rather than letting it
-	 *  silently desync. int32 for the same UHT reason as Server_ReportStateHash — only the bit pattern
-	 *  matters. */
+	/** Client -> server. Every joining client reports its sim-settings
+	 *  fingerprint; the host's Check Settings Parity On Join setting decides
+	 *  whether to enforce it. This prevents a client's local opt-out from
+	 *  bypassing the host's pre-start barrier. int32 carries the CRC bit
+	 *  pattern, matching Server_ReportStateHash's UHT-safe representation. */
 	UFUNCTION(Server, Reliable)
 	void Server_ReportConfigFingerprint(int32 Fingerprint);
 
@@ -217,6 +217,12 @@ public:
 
 	UFUNCTION()
 	void OnRep_AssignedPlayerID();
+
+	/** AssignedPlayerID and SessionSeed are separate replicated properties;
+	 *  either RepNotify may run first. Re-notify the subsystem when the seed
+	 *  arrives so a deferred start cannot remain blocked forever. */
+	UFUNCTION()
+	void OnRep_SessionSeed();
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 

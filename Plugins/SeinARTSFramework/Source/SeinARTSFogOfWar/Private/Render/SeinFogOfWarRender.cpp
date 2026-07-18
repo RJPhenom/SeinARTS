@@ -239,7 +239,6 @@ void ASeinFogOfWarRender::EnsureTexture(int32 W, int32 H)
 
 	FogTexture->SRGB = false;            // tint bytes are linear; no gamma decode
 	FogTexture->Filter = (SmoothingStrength > 0.0f) ? TF_Bilinear : TF_Nearest;
-	FogTexture->MipGenSettings = TMGS_NoMipmaps;
 	FogTexture->NeverStream = true;
 	FogTexture->UpdateResource();
 

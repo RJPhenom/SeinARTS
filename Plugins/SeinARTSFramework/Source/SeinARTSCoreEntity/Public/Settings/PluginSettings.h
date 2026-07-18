@@ -901,8 +901,10 @@ public:
 	bool bDeterminismChecksEnabled;
 
 	/**
-	 * Whether to verify, when a client joins, that its sim-affecting settings match the host's before
-	 * the match starts. On (default), a joining client sends a fingerprint of its determinism-relevant
+	 * On the host, whether to verify that each joining client's sim-affecting settings match before
+	 * the match starts. Every client reports its determinism-relevant fingerprint; when this is on
+	 * (default) for the host, session start waits for and validates every connected client's report.
+	 * A client-local opt-out does not override host policy. The fingerprint covers
 	 * settings (the pluggable class pickers, tick/turn cadence, nav/collision/avoidance tuning, and the
 	 * nav/terrain/collision/vision/resource registries); the host compares it to its own and rejects a
 	 * mismatched client with a reason rather than letting it silently desync every tick. Render-only,

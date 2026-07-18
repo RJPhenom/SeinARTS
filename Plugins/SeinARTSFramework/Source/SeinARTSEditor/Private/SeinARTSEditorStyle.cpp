@@ -13,6 +13,8 @@
 #include "Styling/SlateStyle.h"
 #include "Interfaces/IPluginManager.h"
 #include "ImageUtils.h"
+#include "CoreGlobals.h"
+#include "UObject/UObjectBase.h"
 
 TSharedPtr<FSlateStyleSet> FSeinARTSEditorStyle::StyleSet = nullptr;
 FString FSeinARTSEditorStyle::IconsDir;
@@ -25,13 +27,15 @@ void FSeinARTSEditorStyle::Initialize()
 		return;
 	}
 
-	StyleSet = MakeShared<FSlateStyleSet>(FName(TEXT("SeinARTSEditorStyle")));
-
 	TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("SeinARTSFramework"));
 	if (!Plugin.IsValid())
 	{
 		return;
 	}
+
+	// Do not publish a valid-but-unregistered set if plugin discovery fails.
+	// Initialize remains retryable for unusual startup/hot-reload ordering.
+	StyleSet = MakeShared<FSlateStyleSet>(FName(TEXT("SeinARTSEditorStyle")));
 
 	const FString BrandKitDir = Plugin->GetBaseDir() / TEXT("Resources") / TEXT("BrandKit");
 	IconsDir = BrandKitDir;
@@ -215,15 +219,20 @@ void FSeinARTSEditorStyle::Initialize()
 		// style key matches the UE-internal ShowFlag identifier (the same string the
 		// custom show flag is registered with via TCustomShowFlag), prefixed with
 		// "ShowFlagsMenu." per FShowFlagMenuCommands::GetShowFlagIcon.
-		AppStyle->Set(
-			"ShowFlagsMenu.FogOfWar",
-			new FSlateVectorImageBrush(BrandKitDir / TEXT("SeinFogOfWarViewFlag.svg"), FVector2D(16.0f, 16.0f)));
-		AppStyle->Set(
-			"ShowFlagsMenu.SeinSteering",
-			new FSlateVectorImageBrush(BrandKitDir / TEXT("SeinSteeringViewFlag.svg"), FVector2D(16.0f, 16.0f)));
-		AppStyle->Set(
-			"ShowFlagsMenu.SeinExtents",
-			new FSlateVectorImageBrush(BrandKitDir / TEXT("SeinExtentsViewFlag.svg"), FVector2D(16.0f, 16.0f)));
+		auto RegisterShowFlagIcon = [&](const FName Key, const TCHAR* Filename)
+		{
+			// AppStyle owns raw brush pointers for the process lifetime and offers no
+			// removal API. Reuse an earlier hot-reload registration instead of
+			// overwriting it and leaking one brush per module reload.
+			if (!AppStyle->GetOptionalBrush(Key, nullptr, nullptr))
+			{
+				AppStyle->Set(Key, new FSlateVectorImageBrush(
+					BrandKitDir / Filename, FVector2D(16.0f, 16.0f)));
+			}
+		};
+		RegisterShowFlagIcon(TEXT("ShowFlagsMenu.FogOfWar"), TEXT("SeinFogOfWarViewFlag.svg"));
+		RegisterShowFlagIcon(TEXT("ShowFlagsMenu.SeinSteering"), TEXT("SeinSteeringViewFlag.svg"));
+		RegisterShowFlagIcon(TEXT("ShowFlagsMenu.SeinExtents"), TEXT("SeinExtentsViewFlag.svg"));
 	}
 
 	// Load PNG files as UTexture2D for thumbnail renderers (FCanvas can't use Slate file brushes)
@@ -266,9 +275,19 @@ FString FSeinARTSEditorStyle::GetIconPath(const FString& IconFilename)
 
 void FSeinARTSEditorStyle::Shutdown()
 {
-	// Don't touch the UTexture2D pointers during shutdown — the UObject array
-	// may already be torn down, and any TObjectPtr dereference will assert.
-	// The textures are rooted transients; the process is exiting so leaking is fine.
+	// Hot reload/module unload happens while UObject state is live: release the
+	// transient roots so each reload does not leak another icon generation. During
+	// final process teardown the UObject array may already be unsafe to touch.
+	if (UObjectInitialized() && !IsEngineExitRequested())
+	{
+		for (const TPair<FName, TObjectPtr<UTexture2D>>& Pair : IconTextures)
+		{
+			if (UTexture2D* Texture = Pair.Value.Get(); Texture && Texture->IsRooted())
+			{
+				Texture->RemoveFromRoot();
+			}
+		}
+	}
 	IconTextures.Empty();
 
 	if (StyleSet.IsValid())

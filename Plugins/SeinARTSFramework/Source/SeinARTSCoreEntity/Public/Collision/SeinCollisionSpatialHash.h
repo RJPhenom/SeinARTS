@@ -131,9 +131,9 @@ private:
 	 *  negatives without aliasing. */
 	static FORCEINLINE int64 MakeKey(int32 CellX, int32 CellY)
 	{
-		const uint32 X = static_cast<uint32>(CellX);
-		const uint32 Y = static_cast<uint32>(CellY);
-		return (static_cast<int64>(X) << 32) | static_cast<int64>(Y);
+		const uint64 Bits = (static_cast<uint64>(static_cast<uint32>(CellX)) << 32)
+			| static_cast<uint32>(CellY);
+		return BitCast<int64>(Bits);
 	}
 
 	/** World coord → cell index along one axis. Floor division on raw fp bits

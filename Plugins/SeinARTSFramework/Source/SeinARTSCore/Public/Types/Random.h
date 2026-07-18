@@ -159,7 +159,7 @@ struct SEINARTSCORE_API FFixedRandom
 	 */
 	FORCEINLINE int32 Int()
 	{
-		return static_cast<int32>(Next32());
+		return BitCast<int32>(Next32());
 	}
 
 	/**
@@ -167,15 +167,15 @@ struct SEINARTSCORE_API FFixedRandom
 	 */
 	FORCEINLINE int64 Int64()
 	{
-		return static_cast<int64>(Next64());
+		return BitCast<int64>(Next64());
 	}
 
 	/**
-	 * Generate random FFixedPoint in range [0, 1].
+	 * Generate random FFixedPoint in range [0, 1).
 	 */
 	FORCEINLINE FFixedPoint FixedPoint()
 	{
-		// Map uint32 to [0, 1] in fixed-point
+		// Map uint32 to [0, 1) in fixed-point
 		const uint32 Value = Next32();
 		// Explicitly: (Value * 2^32) >> 32 = Value (in fixed-point format)
 		return FFixedPoint(static_cast<int64>((static_cast<uint64>(Value) * static_cast<uint64>(FFixedPoint::One.Value)) >> 32));
@@ -213,11 +213,14 @@ struct SEINARTSCORE_API FFixedRandom
 	FORCEINLINE int32 IntRange(int32 Min, int32 Max)
 	{
 		if (Min >= Max) return Min;
-		
-		const uint32 Range = static_cast<uint32>(Max - Min + 1);
+
+		// Compute in 64 bits: the inclusive full int32 range contains 2^32
+		// values, which cannot be represented by uint32 and previously became
+		// a modulo-by-zero. The final mathematical result is always in int32.
+		const uint64 Range = static_cast<uint64>(static_cast<int64>(Max) - Min) + 1ULL;
 		const uint32 Value = Next32();
-		
-		return Min + static_cast<int32>(Value % Range);
+		const uint64 Offset = Range == (1ULL << 32) ? Value : Value % Range;
+		return static_cast<int32>(static_cast<int64>(Min) + static_cast<int64>(Offset));
 	}
 
 	/**

@@ -19,12 +19,11 @@
 
 namespace SeinStampUtils
 {
-	/** FFixedPoint → int32 floor. Uses the deterministic SeinMath::Floor + a
-	 *  ToFloat conversion bounded by the grid scale (cell counts are well
-	 *  inside float's exact-integer range, so the round-trip is exact). */
+	/** FFixedPoint → int32 floor. `ToInt` extracts the signed integer
+	 *  high word directly, so no float boundary is involved. */
 	FORCEINLINE int32 FloorToInt(FFixedPoint X)
 	{
-		return FMath::FloorToInt(SeinMath::Floor(X).ToFloat());
+		return X.ToInt();
 	}
 
 	/** π / 180 as an FFixedPoint ratio — converts degrees → radians without

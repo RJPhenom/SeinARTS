@@ -80,7 +80,7 @@ struct SEINARTSCOREENTITY_API FSeinModifier
 
 	/** Effect instance ID that owns this modifier (0 = standalone). */
 	UPROPERTY()
-	uint32 SourceEffectID = 0;
+	int64 SourceEffectID = 0;
 
 	// --- Class Targeting ---
 

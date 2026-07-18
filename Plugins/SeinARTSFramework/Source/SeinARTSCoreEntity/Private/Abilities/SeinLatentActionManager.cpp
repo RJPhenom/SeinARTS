@@ -12,6 +12,18 @@
 #include "Abilities/SeinLatentActionManager.h"
 #include "Abilities/SeinLatentAction.h"
 
+namespace
+{
+	using FActionSnapshot = TArray<TObjectPtr<USeinLatentAction>, TInlineAllocator<16>>;
+
+	FActionSnapshot SnapshotActions(const TArray<TObjectPtr<USeinLatentAction>>& Actions)
+	{
+		FActionSnapshot Snapshot;
+		Snapshot.Append(Actions);
+		return Snapshot;
+	}
+}
+
 void USeinLatentActionManager::RegisterAction(USeinLatentAction* Action)
 {
 	if (Action && !ActiveActions.Contains(Action))
@@ -22,7 +34,10 @@ void USeinLatentActionManager::RegisterAction(USeinLatentAction* Action)
 
 void USeinLatentActionManager::TickAll(FFixedPoint DeltaTime, USeinWorldSubsystem& World)
 {
-	for (USeinLatentAction* Action : ActiveActions)
+	// Tick the entry snapshot. Blueprint delegates may synchronously register,
+	// cancel, or hard-reset actions; new registrations start next sim tick.
+	const FActionSnapshot Snapshot = SnapshotActions(ActiveActions);
+	for (USeinLatentAction* Action : Snapshot)
 	{
 		if (!Action || Action->bCompleted || Action->bCancelled)
 		{
@@ -30,7 +45,10 @@ void USeinLatentActionManager::TickAll(FFixedPoint DeltaTime, USeinWorldSubsyste
 		}
 
 		const bool bFinished = Action->TickAction(DeltaTime, World);
-		if (bFinished)
+		// TickAction may synchronously cancel or complete itself (including via a
+		// recursive manager cancellation). Preserve that terminal outcome instead
+		// of overwriting cancellation with natural completion.
+		if (bFinished && !Action->bCompleted && !Action->bCancelled)
 		{
 			Action->Complete();
 		}
@@ -41,7 +59,8 @@ void USeinLatentActionManager::TickAll(FFixedPoint DeltaTime, USeinWorldSubsyste
 
 void USeinLatentActionManager::CancelActionsForEntity(FSeinEntityHandle Handle)
 {
-	for (USeinLatentAction* Action : ActiveActions)
+	const FActionSnapshot Snapshot = SnapshotActions(ActiveActions);
+	for (USeinLatentAction* Action : Snapshot)
 	{
 		if (Action && !Action->bCompleted && !Action->bCancelled && Action->OwnerEntity == Handle)
 		{
@@ -53,7 +72,8 @@ void USeinLatentActionManager::CancelActionsForEntity(FSeinEntityHandle Handle)
 void USeinLatentActionManager::CancelActionsForEntityOfClass(FSeinEntityHandle Handle, TSubclassOf<USeinLatentAction> ActionClass)
 {
 	if (!ActionClass) return;
-	for (USeinLatentAction* Action : ActiveActions)
+	const FActionSnapshot Snapshot = SnapshotActions(ActiveActions);
+	for (USeinLatentAction* Action : Snapshot)
 	{
 		if (Action && !Action->bCompleted && !Action->bCancelled
 			&& Action->OwnerEntity == Handle && Action->IsA(ActionClass))
@@ -65,7 +85,8 @@ void USeinLatentActionManager::CancelActionsForEntityOfClass(FSeinEntityHandle H
 
 void USeinLatentActionManager::CancelActionsForAbility(USeinAbility* Ability)
 {
-	for (USeinLatentAction* Action : ActiveActions)
+	const FActionSnapshot Snapshot = SnapshotActions(ActiveActions);
+	for (USeinLatentAction* Action : Snapshot)
 	{
 		if (Action && !Action->bCompleted && !Action->bCancelled && Action->OwningAbility == Ability)
 		{
@@ -76,15 +97,18 @@ void USeinLatentActionManager::CancelActionsForAbility(USeinAbility* Ability)
 
 void USeinLatentActionManager::CancelAllActions()
 {
-	for (USeinLatentAction* Action : ActiveActions)
+	const FActionSnapshot Snapshot = SnapshotActions(ActiveActions);
+	// Detach first so callbacks cannot invalidate this pass. A second reset
+	// below intentionally discards actions spawned by hard-reset callbacks.
+	ActiveActions.Reset();
+	for (USeinLatentAction* Action : Snapshot)
 	{
 		if (Action && !Action->bCompleted && !Action->bCancelled)
 		{
 			Action->Cancel();
 		}
 	}
-	// Drop the array — snapshot restore wants a clean slate before the
-	// ability pool is rebuilt.
+	// Snapshot restore requires a clean slate before the ability pool rebuild.
 	ActiveActions.Reset();
 }
 
