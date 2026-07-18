@@ -26,6 +26,14 @@ DEFINE_LOG_CATEGORY_STATIC(LogSeinMove, Log, All);
 
 namespace
 {
+	/** Fixed chord tolerance (world units) for flattening typed Arc path segments into the
+	 *  drivable waypoint backbone (FSeinPath::FlattenToWaypoints). Intentionally a COMPILE-TIME
+	 *  constant, never a per-run tunable: the flatten must produce an identical waypoint count on
+	 *  every peer, so a value that could differ across machines would be a silent desync. ~5 cm
+	 *  sagitta reads smooth at RTS camera distance, and it only affects a plain follower driving an
+	 *  arc path — a curve-aware mode reads the exact segments instead. */
+	const FFixedPoint GArcFlattenChordError = FFixedPoint::FromInt(5);
+
 	/** Planar (XY) distance² from point `Q` to segment `S..E`. Z is ignored —
 	 *  the sim is XY-driven and Z drift on slopes shouldn't trigger spurious
 	 *  off-path repaths. Closest-point-on-segment is the projection of Q onto
@@ -318,6 +326,12 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 			NotifyPartialPath();
 		}
 
+		// Expand any typed (Arc / Jump / Field / AbstractEdge) segments into the drivable waypoint
+		// backbone so the built-in follower can drive them with no follower-loop changes. Self-
+		// guarded + inert for the shipped all-Straight case (leaves Waypoints untouched); a
+		// curve-aware Tier-2 mode ignores the flattened backbone and reads the exact segments.
+		Path.FlattenToWaypoints(GArcFlattenChordError);
+
 		bPathResolved = true;
 		CurrentWaypointIndex = 0;
 		// Capture the agent's position at the moment this path was
@@ -487,6 +501,9 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 				// Movement's Velocity (on FSeinMovementComponent) is preserved
 				// so the unit doesn't lose momentum at the swap.
 				Path = NewPath;
+				// Expand typed segments into the drivable backbone (self-guarded no-op for the
+				// shipped all-Straight case). See the initial-commit flatten for rationale.
+				Path.FlattenToWaypoints(GArcFlattenChordError);
 				CurrentWaypointIndex = 0;
 				// Re-anchor the OffPathOnly drift origin to the agent's
 				// current position. This is the Path.Start fed to FindPath
@@ -590,6 +607,9 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		if (RepathResult == ESeinPathResult::Found && NewPath.Waypoints.Num() > 0)
 		{
 			Path = NewPath;
+			// Expand typed segments into the drivable backbone (self-guarded no-op for the shipped
+			// all-Straight case). See the initial-commit flatten for rationale.
+			Path.FlattenToWaypoints(GArcFlattenChordError);
 			CurrentWaypointIndex = 0;
 			// Re-anchor the OffPathOnly drift origin to AgentPos (same as
 			// Req.Start fed to RequestPath above) so the implicit

@@ -283,6 +283,15 @@ public:
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Movement|Toolkit", meta = (DisplayName = "Get Avoidance Speed Scale"))
 	FFixedPoint GetAvoidanceSpeedScale() const;
 
+	/** The RAW avoidance steer nudge for this unit this tick — the full 3D vector the avoidance
+	 *  layer wrote, before Apply Avoidance Steer bends it into the XY plane.
+	 *
+	 *  Apply Avoidance Steer is the normal (planar) way to consume avoidance; use this instead when
+	 *  a mode needs the VERTICAL (Z) channel — e.g. an air mode reading a climb/descend dodge an
+	 *  air avoidance model wrote. Zero = no steering. */
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|Movement|Toolkit", meta = (DisplayName = "Get Avoidance Steer"))
+	FFixedVector GetAvoidanceSteer() const;
+
 	/** Stops a move from crossing into walls; returns a safe position.
 	 *
 	 *  Give it where the unit was and where it wants to go. If the target lands on a blocked cell it

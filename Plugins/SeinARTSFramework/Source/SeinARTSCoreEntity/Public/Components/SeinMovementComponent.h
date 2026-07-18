@@ -36,9 +36,12 @@
 
 /** The per-tick OUTPUT of the local-avoidance layer (USeinAvoidance), produced at
  *  PreTick and consumed by the movement Tick. Two channels:
- *    - SteerDir   : a planar (XY) lateral nudge that BENDS the unit's desired heading,
- *                   consumed via USeinMovement::ApplyAvoidanceSteer. Strength-scaled +
- *                   temporally smoothed by the shipped model.
+ *    - SteerDir   : a lateral steer nudge that BENDS the unit's desired heading, consumed via
+ *                   USeinMovement::ApplyAvoidanceSteer (which bends in the XY plane). A full
+ *                   FFixedVector, hashed INCLUDING Z, so an AIR avoidance model may also write a
+ *                   vertical (Z) dodge; an air movement mode reads the raw vector via the Mover
+ *                   Handle's Get Avoidance Steer and honors the Z channel itself. Strength-scaled
+ *                   + temporally smoothed by the shipped (planar) model.
  *    - SpeedScale : a non-negative multiplier on cruise speed. < 1 = YIELD by slowing
  *                   (not only turning); > 1 = CATCH-UP boost (e.g. formation cohesion
  *                   closing a gap); 1 = bit-exact no change. The base RTS loop applies
@@ -53,7 +56,10 @@ struct SEINARTSCOREENTITY_API FSeinAvoidanceOutput
 {
 	GENERATED_BODY()
 
-	/** Planar lateral steer nudge (unit-direction space). Zero = no steering. */
+	/** Lateral steer nudge (unit-direction space). A full 3D vector, hashed including Z: the
+	 *  shipped model and the base ApplyAvoidanceSteer consumer use the XY channel; the Z channel is
+	 *  reserved for an air model + air movement mode (vertical dodge), read raw via the Mover
+	 *  Handle's Get Avoidance Steer. Zero = no steering. */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Movement|Avoidance")
 	FFixedVector SteerDir = FFixedVector::ZeroVector;
 

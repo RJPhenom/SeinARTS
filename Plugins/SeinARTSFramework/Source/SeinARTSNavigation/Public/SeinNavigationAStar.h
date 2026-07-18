@@ -294,11 +294,9 @@ public:
 	// are compiled out in shipping via UE_ENABLE_DEBUG_DRAWING in the .cpp.
 	virtual void CollectDebugCellQuads(TArray<FVector>& OutCenters, TArray<FColor>& OutColors, float& OutHalfExtent) const override;
 	virtual void CollectDebugPathCells(
-		const FFixedVector& AgentPos,
-		const TArray<FFixedVector>& Waypoints,
-		int32 CurrentWaypointIndex,
-		TArray<FVector>& OutRemainingCells,
-		TArray<FVector>& OutCurrentTargetCell,
+		const TArray<FFixedVector>& CellPathWorld,
+		TArray<FVector>& OutRouteCells,
+		TArray<FVector>& OutDestCell,
 		float& OutHalfExtent) const override;
 	virtual void CollectDebugBlockerCells(
 		TArray<FVector>& OutCenters,

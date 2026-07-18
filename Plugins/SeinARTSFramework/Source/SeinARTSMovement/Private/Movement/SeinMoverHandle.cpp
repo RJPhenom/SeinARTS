@@ -261,6 +261,13 @@ FFixedPoint USeinMoverHandle::GetAvoidanceSpeedScale() const
 	return (Owner && Ctx) ? Owner->GetAvoidanceSpeedScale(*Ctx) : FFixedPoint::One;
 }
 
+FFixedVector USeinMoverHandle::GetAvoidanceSteer() const
+{
+	// Raw 3D steer (incl. the Z channel an air model may write) straight off the per-tick
+	// avoidance output — no planar projection, unlike ApplyAvoidanceSteer.
+	return (Ctx && Ctx->MovementData) ? Ctx->MovementData->AvoidanceOutput.SteerDir : FFixedVector::ZeroVector;
+}
+
 FFixedVector USeinMoverHandle::ClampToNavigation(FFixedVector OldPos, FFixedVector NewPos) const
 {
 	USeinMovement* Owner = GetOwningMovement();

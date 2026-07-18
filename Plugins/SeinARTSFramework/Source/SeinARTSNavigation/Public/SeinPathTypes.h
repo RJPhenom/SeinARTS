@@ -237,11 +237,33 @@ enum class ESeinPathSegmentType : uint8
 	 *  the field), so one field serves a whole group (keyed by `FSeinPathRequest::GroupId`).
 	 *  Produced by a field-shaped `USeinNavigation`; not emitted by the shipped A* nav. */
 	Field UMETA(DisplayName = "Field"),
+
+	/** Drivable CIRCULAR ARC segment — a Dubins / Reeds-Shepp corner or curve. `From` and
+	 *  `To` are the arc endpoints; `Center` is the arc center, `Radius` its radius, and
+	 *  `SweepAngle` the SIGNED swept angle (sign = handedness, magnitude = extent in radians).
+	 *  `From` + `To` + `Center` + `SweepAngle` fully determine the arc. The built-in follower
+	 *  drives it as a fine polyline via `FlattenToWaypoints`; a curve-aware Tier-2 mode may
+	 *  pure-pursuit the exact arc by reading the segment (Mover Handle `Get Segment`). Emitted
+	 *  by a movement planner (`USeinMovement::PlanPath` via the Planner Handle's `Add Arc
+	 *  Segment`) or a curve-planning nav; not emitted by the shipped A* nav. */
+	Arc UMETA(DisplayName = "Arc"),
+
+	/** Discrete HOP / link segment — a ballistic jump, a jump-jet leap, a cliff nav-link. The
+	 *  unit travels from `From` (launch) to `To` (land) along a mode-defined trajectory rather
+	 *  than the ground polyline; the apex/arc is derived by the driving mode, so no extra
+	 *  geometry is carried here. The built-in follower falls back to a straight `From`→`To`
+	 *  hop; an airborne / jump-capable mode reads the segment and plays its own trajectory.
+	 *  Emitted by a nav that produces links or a movement planner; not emitted by the shipped
+	 *  A* nav. */
+	Jump UMETA(DisplayName = "Jump"),
 };
 
-/** Single typed segment in a planned path. One segment per consecutive
- *  `Waypoints[i] → Waypoints[i+1]` pair, derived by
- *  `DeriveSegmentsFromWaypoints` after the path is committed. */
+/** Single typed segment in a planned path. For a `Straight` route there is one segment per
+ *  consecutive `Waypoints[i] → Waypoints[i+1]` pair (derived by `DeriveSegmentsFromWaypoints`).
+ *  For a typed route (containing `Arc`, etc.) the segments are the AUTHORED truth and the
+ *  `Waypoints` polyline is a driven approximation of them (see `FSeinPath::FlattenToWaypoints`) —
+ *  so segments are NOT 1:1 with waypoint pairs there. The geometry fields below are meaningful
+ *  only for the kinds that name them (`Arc`); they stay zero for the others. */
 USTRUCT(BlueprintType)
 struct SEINARTSNAVIGATION_API FSeinPathSegment
 {
@@ -255,15 +277,39 @@ struct SEINARTSNAVIGATION_API FSeinPathSegment
 
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Navigation|Path")
 	FFixedVector To;
+
+	/** ARC center (world). Meaningful only for `Arc`; zero otherwise. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Navigation|Path")
+	FFixedVector Center;
+
+	/** ARC radius (world units). Meaningful only for `Arc`; zero otherwise. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Navigation|Path")
+	FFixedPoint Radius = FFixedPoint::Zero;
+
+	/** SIGNED swept angle of the arc, radians — sign = handedness (positive = counter-clockwise,
+	 *  negative = clockwise), magnitude = extent. Meaningful only for `Arc`; zero otherwise. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Navigation|Path")
+	FFixedPoint SweepAngle = FFixedPoint::Zero;
+
+	/** Drive DIRECTION for this segment: true = travel it in REVERSE (backward). Lets one path
+	 *  alternate forward and reverse at cusps (Reeds-Shepp), which a single mode-global reverse
+	 *  latch cannot express. Carrying the flag is the base contract; ACTING on it (reverse
+	 *  kinematics, cusp settle) is the driving mode's job. Default false = forward. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Navigation|Path")
+	bool bReverse = false;
 };
 
 /** Path query result — a route carried as TWO complementary views:
  *    - `Waypoints` : the world-space polyline the built-in follower drives (Start → End).
- *    - `Segments`  : the same route as TYPED segments (Straight today) — an extensibility
- *                    seam for arc / link / jump kinds emitted by whatever produces the path
- *                    (the nav for topology kinds, a movement planner for kinematic kinds).
- *  The follower drives the waypoint backbone; segment-aware driving is opt-in for a custom
- *  movement mode (read them via the Mover Handle's Get Segment / Get Path Segments nodes). */
+ *    - `Segments`  : the same route as TYPED segments — Straight / AbstractEdge / Field / Arc /
+ *                    Jump — emitted by whatever produces the path (the nav for topology / field
+ *                    kinds, a movement planner for kinematic kinds like Arc).
+ *  For a plain Straight route the two views agree 1:1 (`DeriveSegmentsFromWaypoints`). For a
+ *  TYPED route the `Segments` are the authored truth and `Waypoints` is a drivable approximation
+ *  of them: call `FlattenToWaypoints` once at commit so the built-in follower can drive an arc /
+ *  link path with no follower-loop changes. A curve-aware movement mode instead reads the exact
+ *  `Segments` (via the Mover Handle's Get Segment / Get Path Segments nodes) and ignores the
+ *  approximated backbone. */
 USTRUCT(BlueprintType)
 struct SEINARTSNAVIGATION_API FSeinPath
 {
@@ -292,6 +338,13 @@ struct SEINARTSNAVIGATION_API FSeinPath
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Navigation|Path")
 	bool bIsPartial = false;
 
+	/** DEBUG-ONLY: the EXACT A* cell chain (cell centers, world-space) this route was built from,
+	 *  captured BEFORE the string-pull smoother collapses it into turn-point `Waypoints`. The nav
+	 *  path debug viz draws these 1:1, so the yellow cells match the logical cell path pathfinding
+	 *  actually chose. Deliberately NOT a UPROPERTY — never reflected / hashed / serialized, so it
+	 *  carries no sim state and cannot affect determinism; populated only in non-shipping builds. */
+	TArray<FFixedVector> DebugCellPath;
+
 	void Clear()
 	{
 		Waypoints.Reset();
@@ -299,6 +352,7 @@ struct SEINARTSNAVIGATION_API FSeinPath
 		TotalCost = FFixedPoint::Zero;
 		bIsValid = false;
 		bIsPartial = false;
+		DebugCellPath.Reset();
 	}
 
 	int32 GetWaypointCount() const { return Waypoints.Num(); }
@@ -332,5 +386,35 @@ struct SEINARTSNAVIGATION_API FSeinPath
 			TotalCost += Delta.Size();
 			Segments.Add(MoveTemp(Seg));
 		}
+	}
+
+	/** Rebuild `Waypoints` from typed `Segments` into a drivable polyline the built-in follower
+	 *  can drive with no follower-loop changes: each `Arc` is expanded into fixed-point samples
+	 *  bounded by `MaxChordError` (the maximum allowed sagitta between the true arc and a sampled
+	 *  chord); every other kind (Straight / AbstractEdge / Field / Jump) collapses to its
+	 *  `From`→`To` endpoints. `Segments` is PRESERVED as the authored typed truth (render + a
+	 *  curve-aware mode read it), so after this call `Waypoints` is a fine polyline no longer 1:1
+	 *  with `Segments`. Endpoints are copied exactly (no fixed-point drift at joins); the terminal
+	 *  waypoint stays the exact destination, preserving the destination-preview invariant.
+	 *
+	 *  SELF-GUARDING and DETERMINISTIC: a no-op when `Segments` holds only Straight kinds (the
+	 *  shipped case) — `Waypoints` is left untouched — so this is safe to call unconditionally on
+	 *  any committed path. When it does expand, it uses fixed-point LUT trig and a FIXED chord
+	 *  tolerance so every peer produces an identical waypoint count and identical positions; pass
+	 *  a compile-time / config constant for `MaxChordError`, never a per-run tunable that could
+	 *  drift across machines. Defined out-of-line in SeinPathTypes.cpp (keeps the trig include out
+	 *  of this widely-included header). */
+	void FlattenToWaypoints(FFixedPoint MaxChordError);
+
+	/** True if any segment is a non-`Straight` kind (Arc / Jump / Field / AbstractEdge) — i.e.
+	 *  the route needs `FlattenToWaypoints` (or a segment-aware mode) rather than plain waypoint
+	 *  following. False for the shipped all-Straight case. */
+	bool HasTypedSegments() const
+	{
+		for (const FSeinPathSegment& Seg : Segments)
+		{
+			if (Seg.Type != ESeinPathSegmentType::Straight) return true;
+		}
+		return false;
 	}
 };

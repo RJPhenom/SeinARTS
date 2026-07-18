@@ -1935,6 +1935,16 @@ void USeinNavigationAStar::BuildSmoothedPath(const TArray<FIntPoint>& CellPath, 
 	OutPath.Clear();
 	if (CellPath.Num() == 0) return;
 
+#if !UE_BUILD_SHIPPING
+	// Capture the RAW A* cell chain (cell centers) BEFORE the string-pull smoother below collapses it
+	// into turn-point waypoints — the nav path debug viz draws these 1:1 (the exact cells A* traversed).
+	OutPath.DebugCellPath.Reset(CellPath.Num());
+	for (const FIntPoint& Cell : CellPath)
+	{
+		OutPath.DebugCellPath.Add(GridToWorld(Cell.X, Cell.Y));
+	}
+#endif
+
 	// String-pull from cellPath[0] onward: advance J as far as LoS(anchor, J+1) holds,
 	// commit cellPath[J] as a turn point, anchor = J, repeat. We deliberately DO NOT
 	// emit cellPath[0] — the unit already occupies that cell, and emitting its center
@@ -3076,86 +3086,31 @@ void USeinNavigationAStar::CollectDebugBlockerCells(
 }
 
 void USeinNavigationAStar::CollectDebugPathCells(
-	const FFixedVector& AgentPos,
-	const TArray<FFixedVector>& Waypoints,
-	int32 CurrentWaypointIndex,
-	TArray<FVector>& OutRemainingCells,
-	TArray<FVector>& OutCurrentTargetCell,
+	const TArray<FFixedVector>& CellPathWorld,
+	TArray<FVector>& OutRouteCells,
+	TArray<FVector>& OutDestCell,
 	float& OutHalfExtent) const
 {
 #if UE_ENABLE_DEBUG_DRAWING
-	OutRemainingCells.Reset();
-	OutCurrentTargetCell.Reset();
+	OutRouteCells.Reset();
+	OutDestCell.Reset();
 	OutHalfExtent = 0.0f;
-	// Guard on emptiness only — the full-route draw below is index-independent, so it
-	// must NOT be gated on the follower's live CurrentWaypointIndex (a corrupted index
-	// would suppress the honest route, the exact masking the full-route change removed).
-	if (!HasRuntimeData() || Waypoints.Num() == 0) return;
+	if (!HasRuntimeData() || CellPathWorld.Num() == 0) return;
 
-	const float CS = CellSize.ToFloat();
-	OutHalfExtent = CS * 0.5f * 0.9f;
+	OutHalfExtent = CellSize.ToFloat() * 0.5f * 0.9f;
 
-	auto CellCenterFVec = [this](int32 X, int32 Y)
+	// 1:1 with pathfinding. `CellPathWorld` is the EXACT A* cell chain (cell centers) captured BEFORE
+	// smoothing — see FSeinPath::DebugCellPath. Each entry is one cell drawn as one box: no
+	// rasterization, no supercover width, so the yellow cells match the logical cell path A* chose,
+	// cell-for-cell. The last cell is the destination, split out so the ticker can mark it distinctly.
+	OutRouteCells.Reserve(FMath::Max(0, CellPathWorld.Num() - 1));
+	const int32 Last = CellPathWorld.Num() - 1;
+	for (int32 i = 0; i <= Last; ++i)
 	{
-		const FFixedVector V = GridToWorld(X, Y);
-		return FVector(V.X.ToFloat(), V.Y.ToFloat(), V.Z.ToFloat());
-	};
-
-	// Final waypoint = the order's end point, drawn as the highlighted
-	// destination cell. Excluded from the path list below so there's no
-	// double-draw.
-	const int32 FinalIdx = Waypoints.Num() - 1;
-	int32 DestX = INT32_MIN, DestY = INT32_MIN;
-	if (Waypoints.IsValidIndex(FinalIdx) && WorldToGrid(Waypoints[FinalIdx], DestX, DestY))
-	{
-		OutCurrentTargetCell.Add(CellCenterFVec(DestX, DestY));
-	}
-
-	const int32 SkipIndex = (DestX != INT32_MIN) ? CellIndex(DestX, DestY) : -1;
-
-	TSet<int32> Visited;
-	Visited.Reserve(64);
-
-	auto VisitCell = [&](int32 X, int32 Y)
-	{
-		if (!IsValidCoord(X, Y)) return;
-		const int32 Idx = CellIndex(X, Y);
-		if (Idx == SkipIndex) return; // drawn separately as destination
-		bool bAlreadyIn = false;
-		Visited.Add(Idx, &bAlreadyIn);
-		if (bAlreadyIn) return;
-		OutRemainingCells.Add(CellCenterFVec(X, Y));
-	};
-
-	// Plain Bresenham fill (no connectivity gate — purely visual): visit every
-	// cell the line crosses via the shared WalkGridLine primitive.
-	auto Rasterize = [&](int32 X0, int32 Y0, int32 X1, int32 Y1)
-	{
-		WalkGridLine(X0, Y0, X1, Y1,
-			[&](int32 X, int32 Y) { VisitCell(X, Y); return true; },
-			[](int32, int32, int32, int32, int32) { return true; });
-	};
-
-	// Rasterize the FULL planned A* route — every segment WP[0]→…→WP[last] — so this
-	// shows EXACTLY the path A* produced on the grid, INDEPENDENT of the follower's
-	// live index. The OLD behavior anchored the draw to the follower's
-	// CurrentWaypointIndex (and the agent), so a follower that skipped waypoints drew a
-	// straight line to a FAR waypoint — masking a STEERING bug as a bad nav path. That's
-	// exactly how the waypoint-advance bug hid: the corrupted index made both this and
-	// the line overlay collapse to "unit → destination" through a wall while A*'s real
-	// detour sat undrawn in the earlier waypoints. The unit's LIVE heading is drawn
-	// separately (agent→current-target line in the module viz), so a follower divergence
-	// now reads as that line cutting ACROSS this honest route.
-	(void)AgentPos;              // route is agent/index-independent now — see above
-	(void)CurrentWaypointIndex;
-	int32 PrevX = INT32_MIN, PrevY = INT32_MIN;
-	for (int32 i = 0; i < Waypoints.Num(); ++i)
-	{
-		int32 NX, NY;
-		if (!WorldToGrid(Waypoints[i], NX, NY)) continue;
-		if (PrevX != INT32_MIN) Rasterize(PrevX, PrevY, NX, NY);
-		PrevX = NX;
-		PrevY = NY;
+		const FFixedVector& V = CellPathWorld[i];
+		const FVector Center(V.X.ToFloat(), V.Y.ToFloat(), V.Z.ToFloat());
+		if (i == Last) OutDestCell.Add(Center);
+		else           OutRouteCells.Add(Center);
 	}
 #endif
 }

@@ -72,6 +72,34 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Movement|Planner", meta = (DisplayName = "Finalize Path"))
 	void FinalizePath(bool bIsPartial);
 
+	// ---- Building a TYPED path (arcs / drivable curves) ----
+	// A vehicle mode rounds the nav polyline into drivable curves here: add alternating straight +
+	// arc segments, then call Finalize Typed Path. The built-in follower drives the flattened
+	// backbone; a curve-aware mode reads the exact segments (Mover Handle Get Segment).
+
+	/** Appends a drivable ARC segment (a Dubins / Reeds-Shepp curve) to the path: it runs From ->
+	 *  To about Center with the given Radius and SIGNED Sweep (sign = handedness, magnitude =
+	 *  extent in radians); Reverse marks a segment driven backward (a Reeds-Shepp cusp). Also
+	 *  pushes the endpoints onto the waypoint backbone so the path stays coherent for a plain
+	 *  follower. Chain segments end-to-end (each From = the previous To). Call Finalize Typed Path
+	 *  (NOT Finalize Path) once all segments are added. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Movement|Planner", meta = (DisplayName = "Add Arc Segment"))
+	void AddArcSegment(const FFixedVector& From, const FFixedVector& To,
+		const FFixedVector& Center, FFixedPoint Radius, FFixedPoint Sweep, bool bReverse);
+
+	/** Appends a STRAIGHT typed segment (From -> To) — the tangent legs between arcs when building
+	 *  a mixed straight + arc route by hand. Reverse marks it driven backward. Also pushes the
+	 *  endpoints onto the waypoint backbone. Call Finalize Typed Path once done. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Movement|Planner", meta = (DisplayName = "Add Straight Segment"))
+	void AddStraightSegment(const FFixedVector& From, const FFixedVector& To, bool bReverse);
+
+	/** Finishes a hand-built TYPED path (arc / straight segments added above). Unlike Finalize
+	 *  Path, this PRESERVES the typed segments you authored instead of rederiving them as plain
+	 *  straights, and sets total cost from the true segment lengths (an arc contributes its arc
+	 *  length). Set Is Partial if the route stops short of the exact destination. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Movement|Planner", meta = (DisplayName = "Finalize Typed Path"))
+	void FinalizeTypedPath(bool bIsPartial);
+
 	/** Replaces the path with a straight line from start to destination, and reports success.
 	 *
 	 *  The flying default — a unit that ignores obstacles just goes straight. For ground units use

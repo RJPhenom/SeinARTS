@@ -68,6 +68,76 @@ void USeinPlannerHandle::FinalizePath(bool bIsPartial)
 	OutPath->DeriveSegmentsFromWaypoints();
 }
 
+// ---- Building a TYPED path (arcs / drivable curves) ---------------------------
+
+namespace
+{
+	// Push a segment's endpoints onto the coarse waypoint backbone: the first segment seeds its
+	// From, every segment adds its To, so a chained sequence yields the corner polyline. This is
+	// provisional — FlattenToWaypoints refines it into the drivable fine polyline at commit — but
+	// it keeps Waypoints non-empty (the follower's Found gate) and coherent before then.
+	void PushSegmentBackbone(FSeinPath* OutPath, const FFixedVector& From, const FFixedVector& To)
+	{
+		if (OutPath->Waypoints.Num() == 0) OutPath->Waypoints.Add(From);
+		OutPath->Waypoints.Add(To);
+	}
+}
+
+void USeinPlannerHandle::AddArcSegment(const FFixedVector& From, const FFixedVector& To,
+	const FFixedVector& Center, FFixedPoint Radius, FFixedPoint Sweep, bool bReverse)
+{
+	if (!OutPath) return;
+	FSeinPathSegment Seg;
+	Seg.Type       = ESeinPathSegmentType::Arc;
+	Seg.From       = From;
+	Seg.To         = To;
+	Seg.Center     = Center;
+	Seg.Radius     = Radius;
+	Seg.SweepAngle = Sweep;
+	Seg.bReverse   = bReverse;
+	OutPath->Segments.Add(MoveTemp(Seg));
+	PushSegmentBackbone(OutPath, From, To);
+}
+
+void USeinPlannerHandle::AddStraightSegment(const FFixedVector& From, const FFixedVector& To, bool bReverse)
+{
+	if (!OutPath) return;
+	FSeinPathSegment Seg;
+	Seg.Type     = ESeinPathSegmentType::Straight;
+	Seg.From     = From;
+	Seg.To       = To;
+	Seg.bReverse = bReverse;
+	OutPath->Segments.Add(MoveTemp(Seg));
+	PushSegmentBackbone(OutPath, From, To);
+}
+
+void USeinPlannerHandle::FinalizeTypedPath(bool bIsPartial)
+{
+	if (!OutPath) return;
+	OutPath->bIsValid   = OutPath->Segments.Num() > 0 || OutPath->Waypoints.Num() > 0;
+	OutPath->bIsPartial = bIsPartial;
+	// Preserve the author-supplied typed Segments — do NOT call DeriveSegmentsFromWaypoints, which
+	// would clobber them back to Straight (the clobber that made the read-only segment seam
+	// unusable). Recompute TotalCost from true segment lengths: an arc contributes its arc length
+	// (Radius * |Sweep|); every other kind its planar chord length.
+	FFixedPoint Cost = FFixedPoint::Zero;
+	for (const FSeinPathSegment& Seg : OutPath->Segments)
+	{
+		if (Seg.Type == ESeinPathSegmentType::Arc)
+		{
+			const FFixedPoint AbsSweep = (Seg.SweepAngle < FFixedPoint::Zero) ? -Seg.SweepAngle : Seg.SweepAngle;
+			Cost += Seg.Radius * AbsSweep;
+		}
+		else
+		{
+			FFixedVector D = Seg.To - Seg.From;
+			D.Z = FFixedPoint::Zero;
+			Cost += D.Size();
+		}
+	}
+	OutPath->TotalCost = Cost;
+}
+
 ESeinPathResult USeinPlannerHandle::BuildStraightLinePath()
 {
 	if (!Ctx || !OutPath) return ESeinPathResult::NoNavigation;

@@ -368,13 +368,12 @@ namespace
 			const int32 CurIdx = C.Action->GetCurrentWaypointIndex();
 			const FFixedVector AgentPosFixed = C.AgentPosFixed;
 
-			// Path cell highlights: yellow cells along the FULL A* route (index-independent),
-			// blue cell at the final destination (flag marker).
+			// Path cell highlights: the EXACT A* cell chain, drawn 1:1 with the cells pathfinding
+			// chose (FSeinPath::DebugCellPath), blue cell at the final destination (flag marker).
 			TArray<FVector> RemainingCells;
 			TArray<FVector> TargetCell;
 			float HalfExtent = 0.0f;
-			Nav->CollectDebugPathCells(AgentPosFixed, Path.Waypoints, CurIdx,
-				RemainingCells, TargetCell, HalfExtent);
+			Nav->CollectDebugPathCells(Path.DebugCellPath, RemainingCells, TargetCell, HalfExtent);
 
 			if (HalfExtent > 0.0f)
 			{

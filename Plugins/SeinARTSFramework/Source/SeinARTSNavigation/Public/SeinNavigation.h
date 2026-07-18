@@ -402,27 +402,19 @@ public:
 		TArray<FColor>& OutColors,
 		float& OutHalfExtent) const {}
 
-	/** Collect per-cell geometry for an active move-to path. Called each frame
-	 *  from the debug ticker while `ShowFlags.Navigation` is on. Subclasses
-	 *  rasterize the FULL A* route (every waypoint segment WP[0]→…→last) into grid
-	 *  cells; the ticker draws them as tinted overlays. Drawing the full route —
-	 *  independent of the follower's live index — keeps the viz honest: a follower
-	 *  that diverges shows against the true route instead of replacing it.
+	/** Collect per-cell geometry for an active move-to path. Called each frame from the debug ticker
+	 *  while `ShowFlags.Navigation` is on. `CellPathWorld` is the EXACT logical cell chain pathfinding
+	 *  produced (cell centers, world-space — `FSeinPath::DebugCellPath`, captured before smoothing), so
+	 *  the ticker draws the yellow cells 1:1 with the path A* chose — one box per cell, no rasterization.
 	 *
-	 *  - OutRemainingCells: cells along the route (excludes the destination cell to
-	 *    avoid double-draw with OutCurrentTargetCell).
-	 *  - OutCurrentTargetCell: the destination cell (final waypoint), drawn with a
-	 *    distinct marker color. Empty if unreachable.
-	 *  - `AgentPos` / `CurrentWaypointIndex` are retained for the virtual's interface
-	 *    contract but unused by the shipped full-route impl.
+	 *  - OutRouteCells: every cell of the chain EXCEPT the last (excluded to avoid double-draw).
+	 *  - OutDestCell: the final (destination) cell, drawn with a distinct marker color. Empty if none.
 	 *
 	 *  Same stripping convention as CollectDebugCellQuads. */
 	virtual void CollectDebugPathCells(
-		const FFixedVector& AgentPos,
-		const TArray<FFixedVector>& Waypoints,
-		int32 CurrentWaypointIndex,
-		TArray<FVector>& OutRemainingCells,
-		TArray<FVector>& OutCurrentTargetCell,
+		const TArray<FFixedVector>& CellPathWorld,
+		TArray<FVector>& OutRouteCells,
+		TArray<FVector>& OutDestCell,
 		float& OutHalfExtent) const {}
 
 	/** Collect cells currently stamped by dynamic nav blockers (tanks,
