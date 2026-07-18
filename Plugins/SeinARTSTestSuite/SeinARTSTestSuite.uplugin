@@ -1,0 +1,40 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1",
+	"FriendlyName": "SeinARTS Test Suite",
+	"Description": "Non-shipping automated tests and deterministic scenario fixtures for SeinARTS.",
+	"Category": "Testing",
+	"CreatedBy": "Phenom Studios",
+	"CanContainContent": true,
+	"EnabledByDefault": false,
+	"Installed": false,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Modules": [
+		{
+			"Name": "SeinARTSTestSupport",
+			"Type": "DeveloperTool",
+			"LoadingPhase": "Default",
+			"TargetConfigurationDenyList": ["Shipping"]
+		},
+		{
+			"Name": "SeinARTSFrameworkTests",
+			"Type": "DeveloperTool",
+			"LoadingPhase": "Default",
+			"TargetConfigurationDenyList": ["Shipping"]
+		},
+		{
+			"Name": "SeinARTSEditorTests",
+			"Type": "Editor",
+			"LoadingPhase": "PostEngineInit",
+			"TargetConfigurationDenyList": ["Shipping"]
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "SeinARTSFramework",
+			"Enabled": true
+		}
+	]
+}

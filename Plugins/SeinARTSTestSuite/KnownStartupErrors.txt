@@ -1,0 +1,7 @@
+LogClass: Error: Failed loading tagged StructProperty /Script/SeinARTSCoreEntity.SeinAbility:MaxRange. Read 8B, expected 41B. Package: /SeinARTSFramework/Blueprints/Abilities/SA_Build
+LogClass: Error: Failed loading tagged StructProperty /Script/SeinARTSCoreEntity.SeinAbility:AreaRadius. Read 8B, expected 41B. Package: /SeinARTSFramework/Blueprints/Abilities/SA_ThrowSmoke
+LogClass: Error: Failed loading tagged MapProperty /Script/SeinARTSCoreEntity.SeinResourceCost:Amounts. Read 57B, expected 90B. Package: /SeinARTSFramework/Blueprints/Abilities/SA_Produce_CombatCar
+LogClass: Error: Failed loading tagged MapProperty /Script/SeinARTSCoreEntity.SeinResourceCost:Amounts. Read 57B, expected 90B. Package: /SeinARTSFramework/Blueprints/Abilities/SA_Place_VehicleDepot
+LogClass: Error: Failed loading tagged StructProperty /Script/SeinARTSCoreEntity.SeinEffect:Duration. Read 8B, expected 41B. Package: /SeinARTSFramework/Blueprints/Effects/SE_UnlockVehicleDepot
+LogClass: Error: Failed loading tagged MapProperty /Script/SeinARTSCoreEntity.SeinResourceCost:Amounts. Read 57B, expected 90B. Package: /SeinARTSFramework/Blueprints/Abilities/SA_Produce_Research_VehicleDepot
+LogClass: Error: Failed loading tagged MapProperty /Script/SeinARTSCoreEntity.SeinResourceCost:Amounts. Read 57B, expected 90B. Package: /SeinARTSFramework/Blueprints/Abilities/SA_Place_Barracks

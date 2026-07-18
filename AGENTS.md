@@ -1,13 +1,13 @@
 # SeinARTS — Project Root Guide
 
 This is the **project-level** guide, loaded by every session rooted at `D:/Projects/Unreal Engine/SeinARTS`.
-It owns the cross-cutting rules that apply to **all four plugins**. Each plugin has its own
+It owns the cross-cutting rules that apply to **all four production plugins** and the two test suites. Each plugin has its own
 `AGENTS.md` with the deep, plugin-specific detail — read the relevant one when you scope into it
 (pointers below).
 
 > Sessions used to be scoped to the `SeinARTSFramework` plugin directory only. They now run from
-> this project root so a single session has native visibility across the framework **and** all
-> three extension plugins. When you start work, read this file first, then the plugin-specific
+> this project root so a single session has native visibility across the four production plugins
+> and both disabled test plugins. When you start work, read this file first, then the plugin-specific
 > `AGENTS.md` for whatever you're touching.
 
 > **Active initiative — movement & navigation depth.** The movement/avoidance/nav seams are clean and
@@ -32,7 +32,8 @@ nothing and adds synchronization overhead.
   Feature work is naturally module-scoped, so conflicts between parallel agents are rare.
 
 > Note: as of 2026-06-02 the project root **is** a git repository — a single project-wide monorepo
-> (`main`, initial commit `ecf6068`) tracking the host project and all four plugins, with **Git LFS**
+> (`main`, initial commit `ecf6068`) tracking the host, four production plugins, and two disabled
+> test plugins, with **Git LFS**
 > for binary assets (`*.uasset`/`*.umap` + common media). Baked level data (`**/Content/LevelData/` + legacy patterns)
 > is gitignored as a regenerable build artifact — **re-bake after a fresh clone** via the one
 > "Bake Level Data" button on `ASeinLevelVolume` (unified pipeline, CP1.1). History
@@ -70,6 +71,12 @@ the editor is open, and returns UBT's exit code. Equivalent raw one-liner if the
   still runs, so you can build-to-check-errors with the editor open, just not relink.
 - Success = exit `0` / `Result: Succeeded`. UBT prints `Compile [x64] <file>.cpp` and
   `Link [x64] UnrealEditor-<Module>.dll` lines — confirm the module you changed actually rebuilt.
+
+### Automated tests
+
+Automated tests live in the disabled, non-shipping `Plugins/SeinARTSTestSuite` plugin; read its
+`AGENTS.md` before adding or running tests. Production modules never depend on that plugin or
+`CQTest`. Enable it explicitly through its `RunTests.ps1`; ordinary and Shipping builds leave it out.
 
 ---
 
@@ -127,7 +134,9 @@ D:/Projects/Unreal Engine/SeinARTS/
     ├── SeinARTSFramework/             The core. 12 modules. → Plugins/SeinARTSFramework/AGENTS.md
     ├── SeinARTSSquadExtension/        Opt-in squads.  1 module. → .../SeinARTSSquadExtension/AGENTS.md
     ├── SeinARTSCoverExtension/        Opt-in cover.   3 modules. → .../SeinARTSCoverExtension/AGENTS.md
-    └── SeinARTSMovementPlusExtension/ Opt-in movement modes. 1 module ("SeinARTS Movement+"). → .../SeinARTSMovementPlusExtension/AGENTS.md
+    ├── SeinARTSMovementPlusExtension/ Opt-in movement modes. 1 module ("SeinARTS Movement+"). → .../SeinARTSMovementPlusExtension/AGENTS.md
+    ├── SeinARTSTestSuite/              Disabled framework/editor tests. 3 modules. → .../SeinARTSTestSuite/AGENTS.md
+    └── SeinARTSExtensionTestSuite/     Disabled all-extension tests. 2 modules. → .../SeinARTSExtensionTestSuite/AGENTS.md
 ```
 
 ## Plugin topology & dependency chain
@@ -140,16 +149,21 @@ SeinARTSFramework ................... base; depends on no other Sein plugin
    │                                        (declared "Optional" in the .uplugin, but see the gotcha below)
    └── SeinARTSMovementPlusExtension ...... REQUIRES SeinARTSFramework
                                             (concrete movement modes; framework keeps Basic / Basic Unit)
+
+SeinARTSTestSuite ................... disabled development-only Framework consumer
+SeinARTSExtensionTestSuite ......... disabled consumer of the base test suite + all extensions;
+                                     no production plugin may depend on either test plugin
 ```
 
 Dependencies point **up** toward the framework, never down. The framework knows nothing about the
 extensions; an extension may be stripped and the framework still builds and runs. The Cover
 extension can use the Squad extension but treats it as optional at the plugin level.
 
-> **Gotcha:** the Cover extension's optional dependency on Squad is enforced **only** in the
-> `.uplugin` (`Optional: true`), not in code — the `SeinARTSCoverSquad` module's `Build.cs`
-> hard-links `SeinARTSSquad` with no `#if` guards. So if Squad is absent, `SeinARTSCoverSquad`
-> simply doesn't load; it does not degrade to a stub. The other two cover modules are unaffected.
+> **Gotcha:** Cover does not currently support a physically stripped Squad plugin. Although the
+> `.uplugin` marks Squad optional, that same descriptor always declares `SeinARTSCoverSquad`, whose
+> `Build.cs` hard-links `SeinARTSSquad` without guards. A target compiling Cover with Squad absent
+> therefore fails rather than merely skipping the bridge. The base Cover source modules do not
+> themselves use Squad, but packaging them independently requires a future module/plugin split.
 
 ## Which AGENTS.md to read
 
@@ -159,6 +173,8 @@ extension can use the Squad extension but treats it as optional at the plugin le
 | Persistent squads, formation dispatch, reinforcement | `Plugins/SeinARTSSquadExtension/AGENTS.md` |
 | Cover providers/geometry, cover-aware dispatch, formation preview | `Plugins/SeinARTSCoverExtension/AGENTS.md` |
 | Infantry/Wheeled/Tracked/Hover/Flight movement modes + per-class tuning | `Plugins/SeinARTSMovementPlusExtension/AGENTS.md` |
+| Automated tests, fixtures, scripted maps, and test runners | `Plugins/SeinARTSTestSuite/AGENTS.md` |
+| Tests intentionally linking every opt-in extension | `Plugins/SeinARTSExtensionTestSuite/AGENTS.md` |
 
 ---
 
@@ -210,6 +226,12 @@ extension can use the Squad extension but treats it as optional at the plugin le
    cell under a slot is a low-resolution false-negative, not a reason to move the slot); the unit is
    delivered to the exact slot and the preview shows the exact slot.
 
+7. **Lockstep configuration is state.** Every plugin that owns sim-affecting project settings must
+   register them with `FSeinConfigFingerprintRegistry` under a frozen stable contributor ID. Reflected
+   property names must match exactly, ordering must be canonical, and contributors unregister on
+   module shutdown. A missing extension or mismatched setting must fail compatibility at join instead
+   of becoming a silent desync.
+
 ---
 
 ## Code conventions (all plugins)
@@ -245,9 +267,11 @@ docstrings lag the implementation. The retired `DESIGN.md` / `PLAN.md` (gone pos
 still cited in some headers (e.g. "DESIGN §11") — those references are dangling.
 
 Known stale-comment traps (verified against code during the 2026-06 doc rebuild):
-- **Reeds-Shepp / Dubins vehicle curve-fitting is unbuilt.** `FitVehicleCurve` exists only in
-  aspirational comments; path segments are `Straight`-only. Wheeled driving feel comes from runtime
-  pure-pursuit steering + nav corner-rounding, not a curve planner.
+- **Reeds-Shepp / Dubins vehicle curve-fitting is unbuilt.** Typed paths support `Straight`,
+  `AbstractEdge`, `Field`, `Arc`, and `Jump`, and Movement exposes Planner/Mover handles plus arc
+  flattening. However, the shipped A*/default planner still emits straight segments and no shipped
+  vehicle mode produces Reeds-Shepp/Dubins curves. Wheeled feel comes from runtime steering and nav
+  corner handling, not a runtime curve search.
 - **Net is not "Phase 0."** Despite file docstrings saying "just logs"/"passthrough," real lockstep
   aggregation, replay, lobby, and desync handling are implemented.
 - **Squads are not abstract.** A squad is a real lightweight (non-abstract) `ASeinActor` so banners

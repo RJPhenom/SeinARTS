@@ -1,0 +1,46 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1",
+	"FriendlyName": "SeinARTS Extension Test Suite",
+	"Description": "Non-shipping automated tests that exercise the opt-in SeinARTS extensions together.",
+	"Category": "Testing",
+	"CreatedBy": "Phenom Studios",
+	"CanContainContent": true,
+	"EnabledByDefault": false,
+	"Installed": false,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Modules": [
+		{
+			"Name": "SeinARTSExtensionTests",
+			"Type": "DeveloperTool",
+			"LoadingPhase": "Default",
+			"TargetConfigurationDenyList": ["Shipping"]
+		},
+		{
+			"Name": "SeinARTSExtensionEditorTests",
+			"Type": "Editor",
+			"LoadingPhase": "PostEngineInit",
+			"TargetConfigurationDenyList": ["Shipping"]
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "SeinARTSTestSuite",
+			"Enabled": true
+		},
+		{
+			"Name": "SeinARTSSquadExtension",
+			"Enabled": true
+		},
+		{
+			"Name": "SeinARTSCoverExtension",
+			"Enabled": true
+		},
+		{
+			"Name": "SeinARTSMovementPlusExtension",
+			"Enabled": true
+		}
+	]
+}
