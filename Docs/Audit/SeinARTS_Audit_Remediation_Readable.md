@@ -16,22 +16,22 @@ Markdown file is the live reader's edition.
 
 The campaign tracks **67 findings and approved work items**.
 
-- **17 are formally closed:** 15 Verified and 2 Fixed.
-- **9 are In progress.**
+- **18 are formally closed:** 16 Verified and 2 Fixed.
+- **8 are In progress.**
 - **3 are Approved for implementation but are not complete.**
 - **23 are Confirmed and awaiting their implementation or verification wave.**
 - **5 are Queued for phase-local revalidation.**
 - **10 are Gates requiring a product or API decision.**
 - Nothing is currently marked Disproved or Deferred.
 
-That is **17 of 67 rows, or 25.37%, formally closed** under the ledger's strict Definition of
+That is **18 of 67 rows, or 26.87%, formally closed** under the ledger's strict Definition of
 Complete. It is deliberately not an estimate of engineering effort completed: foundational work can
 unlock several rows, while a single acceptance row can require substantial multi-process or PIE
 evidence.
 
 By workstream:
 
-- **Correctness, determinism, and lifecycle:** 31 items; 16 formally closed.
+- **Correctness, determinism, and lifecycle:** 31 items; 17 formally closed.
 - **Performance and memory:** 11 items; none formally closed.
 - **API, modularity, and extensibility:** 14 items; 1 formally closed.
 - **Feature and completeness scope:** 11 items; none formally closed.
@@ -301,20 +301,23 @@ This current boundary supersedes the evidence snapshot above without erasing its
   fail-closed BLAKE3-128 canonical roots. The legacy 32-bit hash is explicitly deprecated and
   local-diagnostic-only. Independent fresh-process serial and parallel collision traces matched exact
   canonical root and pose for all 120 ticks.
-- `TEST-01` is **In progress** pending clean commit-bound floor provenance. The runner writes
-  `attempt.json` before launch and finalizes it for build failure, no report, test failure, and
-  success. Baseline matching is case-insensitive, canonical broad suites fail closed without one,
-  and baseline ancestry is checked. Dirty-tree Unit evidence is 321/317 for All/Framework, while the
-  checked-in floor remains 318/316 until this checkpoint reproduces those counts cleanly.
-- Final evidence is Cover restore/custom seam 2/2
-  (`SeinARTS.Unit.Cover.SnapshotRestore-20260729-163836-d7d73fe5`), All Unit 321/321
-  (`SeinARTS.Unit-20260729-163909-043d6040`), All Integration 12/12
-  (`SeinARTS.Integration-20260729-164017-33849e08`), and All Determinism 16/16
-  (`SeinARTS.Determinism-20260729-164035-a9cc55b0`). Independent serial and parallel traces are
-  `SeinARTS.Determinism.Process.SerialCollisionTrace-20260729-163937-8fbecf4b` and
-  `SeinARTS.Determinism.Process.ParallelCollisionTrace-20260729-163954-280a45a6`.
+- `TEST-01` is **Verified**. The runner writes `attempt.json` before launch and finalizes it for
+  build failure, no report, test failure, and success. Baseline matching is case-insensitive,
+  canonical broad suites fail closed without one, and baseline ancestry is checked. Clean commit
+  `9a991f544a59d1b63395fb8a9a783c6d7d1c2e30` reproduced all six broad-suite floors, including Unit
+  321/317 for All/Framework, and now owns their checked-in provenance.
+- Final clean evidence is Cover restore/custom seam 2/2
+  (`SeinARTS.Unit.Cover.SnapshotRestore-20260729-165659-c5d85929`), All/Framework Unit 321/317
+  (`SeinARTS.Unit-20260729-165216-1f242af9`,
+  `SeinARTS.Unit-20260729-165243-eb433c77`), All/Framework Integration 12/11
+  (`SeinARTS.Integration-20260729-165310-74b30bc8`,
+  `SeinARTS.Integration-20260729-165449-e2e8a874`), and All/Framework Determinism 16/15
+  (`SeinARTS.Determinism-20260729-165506-960f69a1`,
+  `SeinARTS.Determinism-20260729-165543-fc72725e`). Independent serial and parallel traces are
+  `SeinARTS.Determinism.Process.SerialCollisionTrace-20260729-165621-a09bcfae` and
+  `SeinARTS.Determinism.Process.ParallelCollisionTrace-20260729-165638-ffd47bc8`.
 - Ordinary Editor builds are green. The Shipping gate caught branch-level teardown/restore include
-  gaps, those gaps were repaired, and the final `SeinARTS Win64 Shipping` rerun succeeded at 16:44.
+  gaps, those gaps were repaired, and the clean `SeinARTS Win64 Shipping` rerun succeeded at 16:57.
 - The current replay boundary is executable file v8 and CoreEntity header metadata v6. Earlier v6/v5
   references remain the correct historical Phase-2 boundary.
 
@@ -491,12 +494,12 @@ This current boundary supersedes the evidence snapshot above without erasing its
   - **Phase:** Immediate
   - **Finding:** Focused regression coverage pins the native eight-byte `FFixedPoint` serializer,
     exact raw-bit round trip, and `WithSerializer` trait.
-- [ ] **TEST-01 - In progress**
+- [x] **TEST-01 - Verified**
   - **Phase:** 5/8
   - **Finding:** Durable `attempt.json` receipts cover launch and every terminal outcome. Canonical
     broad suites fail closed without case-insensitive suite/profile baselines whose commits are
-    verified ancestors. Dirty-tree Unit evidence is 321/317; promotion awaits a clean implementation
-    checkpoint and truthful floor provenance.
+    verified ancestors. Clean commit `9a991f544a59d1b63395fb8a9a783c6d7d1c2e30` reproduced all six
+    floors, including Unit 321/317, and owns their checked-in provenance.
 
 ## Performance and memory checklist
 

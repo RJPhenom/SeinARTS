@@ -4,38 +4,38 @@
     {
       "profile": "All",
       "suite": "SeinARTS.Unit",
-      "minimumCount": 318,
-      "establishedAtCommit": "f3a0f29ccb36084130a0d4aaa9ada4a3d9f712ba"
+      "minimumCount": 321,
+      "establishedAtCommit": "9a991f544a59d1b63395fb8a9a783c6d7d1c2e30"
     },
     {
       "profile": "Framework",
       "suite": "SeinARTS.Unit",
-      "minimumCount": 316,
-      "establishedAtCommit": "f3a0f29ccb36084130a0d4aaa9ada4a3d9f712ba"
+      "minimumCount": 317,
+      "establishedAtCommit": "9a991f544a59d1b63395fb8a9a783c6d7d1c2e30"
     },
     {
       "profile": "All",
       "suite": "SeinARTS.Integration",
       "minimumCount": 12,
-      "establishedAtCommit": "f3a0f29ccb36084130a0d4aaa9ada4a3d9f712ba"
+      "establishedAtCommit": "9a991f544a59d1b63395fb8a9a783c6d7d1c2e30"
     },
     {
       "profile": "Framework",
       "suite": "SeinARTS.Integration",
       "minimumCount": 11,
-      "establishedAtCommit": "f3a0f29ccb36084130a0d4aaa9ada4a3d9f712ba"
+      "establishedAtCommit": "9a991f544a59d1b63395fb8a9a783c6d7d1c2e30"
     },
     {
       "profile": "All",
       "suite": "SeinARTS.Determinism",
       "minimumCount": 16,
-      "establishedAtCommit": "f3a0f29ccb36084130a0d4aaa9ada4a3d9f712ba"
+      "establishedAtCommit": "9a991f544a59d1b63395fb8a9a783c6d7d1c2e30"
     },
     {
       "profile": "Framework",
       "suite": "SeinARTS.Determinism",
       "minimumCount": 15,
-      "establishedAtCommit": "f3a0f29ccb36084130a0d4aaa9ada4a3d9f712ba"
+      "establishedAtCommit": "9a991f544a59d1b63395fb8a9a783c6d7d1c2e30"
     }
   ]
 }

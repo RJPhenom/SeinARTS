@@ -159,11 +159,11 @@ current-status statements with the final branch evidence from the continued reme
 - **STATE-02 — Verified.** Peer comparison and pause success use authoritative canonical
   BLAKE3-128 roots. The legacy 32-bit hash is deprecated and restricted to local diagnostics.
   A fresh-process 120-tick serial/parallel run matched exact roots and poses.
-- **TEST-01 — In progress.** `attempt.json` is written before launch and finalized for build
-  failure, missing-report/test failure, and pass outcomes. Suite/profile baseline lookup is
-  case-insensitive; canonical broad suites fail closed when a baseline is absent; ancestry is
-  checked. Dirty-tree Unit evidence is 321/317, but promotion awaits clean commit-bound receipts
-  and truthful floor provenance.
+- **TEST-01 — Verified.** `attempt.json` is written before launch and finalized for build failure,
+  missing-report/test failure, and pass outcomes. Suite/profile baseline lookup is case-insensitive;
+  canonical broad suites fail closed when a baseline is absent; ancestry is checked. Clean commit
+  `9a991f544a59d1b63395fb8a9a783c6d7d1c2e30` reproduced all six broad-suite floors, including Unit
+  321/317, and now owns their checked-in provenance.
 
 ### 5.2 Performance and API rebaseline
 
@@ -192,23 +192,26 @@ current-status statements with the final branch evidence from the continued reme
 ### 5.3 Final evidence
 
 - Cover restore/custom-provider seam: 2/2,
-  `SeinARTS.Unit.Cover.SnapshotRestore-20260729-163836-d7d73fe5`.
-- All Unit: 321/321, `SeinARTS.Unit-20260729-163909-043d6040`.
-- Integration: 12/12, `SeinARTS.Integration-20260729-164017-33849e08`.
-- Determinism: 16/16, `SeinARTS.Determinism-20260729-164035-a9cc55b0`.
+  `SeinARTS.Unit.Cover.SnapshotRestore-20260729-165659-c5d85929`.
+- All/Framework Unit: 321/317, `SeinARTS.Unit-20260729-165216-1f242af9` and
+  `SeinARTS.Unit-20260729-165243-eb433c77`.
+- All/Framework Integration: 12/11, `SeinARTS.Integration-20260729-165310-74b30bc8` and
+  `SeinARTS.Integration-20260729-165449-e2e8a874`.
+- All/Framework Determinism: 16/15, `SeinARTS.Determinism-20260729-165506-960f69a1` and
+  `SeinARTS.Determinism-20260729-165543-fc72725e`.
 - Fresh-process serial/parallel A/B: 120/120 ticks with exact canonical-root and pose
   agreement,
-  `SeinARTS.Determinism.Process.SerialCollisionTrace-20260729-163937-8fbecf4b` and
-  `SeinARTS.Determinism.Process.ParallelCollisionTrace-20260729-163954-280a45a6`.
+  `SeinARTS.Determinism.Process.SerialCollisionTrace-20260729-165621-a09bcfae` and
+  `SeinARTS.Determinism.Process.ParallelCollisionTrace-20260729-165638-ffd47bc8`.
 - Ordinary Editor builds are green. Shipping initially exposed teardown/restore include gaps;
-  the gate caught them, they were fixed, and the final Shipping rerun was green at 16:44.
+  the gate caught them, they were fixed, and the clean Shipping rerun was green at 16:57.
 
 The live replay boundary is executable file version **v8** with header metadata **v6**.
 Earlier v6/v5 references above or in companion documents are historical checkpoint evidence.
 
-The reconciled 67-row ledger now has **17 closed** (**15 Verified**, **2 Fixed**),
-**9 In progress**, **3 Approved**, **23 Confirmed**, **5 Queued**, and **10 Gate**.
-The correctness workstream owns 16 of the closed rows; performance and feature work remain the
+The reconciled 67-row ledger now has **18 closed** (**16 Verified**, **2 Fixed**),
+**8 In progress**, **3 Approved**, **23 Confirmed**, **5 Queued**, and **10 Gate**.
+The correctness workstream owns 17 of the closed rows; performance and feature work remain the
 largest open delivery surfaces.
 
 ### 5.4 Remaining action order

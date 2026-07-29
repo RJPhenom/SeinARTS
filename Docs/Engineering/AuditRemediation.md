@@ -259,30 +259,33 @@ record:
   `ComputeStateHash` surface is explicitly deprecated and local-diagnostic-only. Independent
   fresh-process serial and parallel collision traces matched exact canonical root and pose on all
   120 ticks.
-- `TEST-01` is In progress pending clean commit-bound floor provenance. `RunTests.ps1` creates
-  `attempt.json` before launch and finalizes it for build failure, no-report, test failure, and pass
-  outcomes; suite/profile baseline matching is case-insensitive; canonical broad suites fail closed
-  without a checked-in baseline; and baseline ancestry is validated. Dirty-tree evidence discovered
-  Unit 321/317 for All/Framework, but the checked-in floor remains 318/316 until those counts are
-  reproduced from this implementation checkpoint.
-- Final focused and broad evidence is Cover restore/custom seam 2/2
-  (`SeinARTS.Unit.Cover.SnapshotRestore-20260729-163836-d7d73fe5`), All Unit 321/321
-  (`SeinARTS.Unit-20260729-163909-043d6040`), All Integration 12/12
-  (`SeinARTS.Integration-20260729-164017-33849e08`), and All Determinism 16/16
-  (`SeinARTS.Determinism-20260729-164035-a9cc55b0`). The independent serial and parallel
-  fresh-process traces are `SeinARTS.Determinism.Process.SerialCollisionTrace-20260729-163937-8fbecf4b`
-  and `SeinARTS.Determinism.Process.ParallelCollisionTrace-20260729-163954-280a45a6`.
+- `TEST-01` is Verified. `RunTests.ps1` creates `attempt.json` before launch and finalizes it for
+  build failure, no-report, test failure, and pass outcomes; suite/profile baseline matching is
+  case-insensitive; canonical broad suites fail closed without a checked-in baseline; and baseline
+  ancestry is validated. Clean commit `9a991f544a59d1b63395fb8a9a783c6d7d1c2e30` reproduced all six
+  broad-suite floors, including Unit 321/317 for All/Framework, and now owns their checked-in
+  provenance.
+- Final clean focused and broad evidence is Cover restore/custom seam 2/2
+  (`SeinARTS.Unit.Cover.SnapshotRestore-20260729-165659-c5d85929`), All/Framework Unit 321/317
+  (`SeinARTS.Unit-20260729-165216-1f242af9`,
+  `SeinARTS.Unit-20260729-165243-eb433c77`), All/Framework Integration 12/11
+  (`SeinARTS.Integration-20260729-165310-74b30bc8`,
+  `SeinARTS.Integration-20260729-165449-e2e8a874`), and All/Framework Determinism 16/15
+  (`SeinARTS.Determinism-20260729-165506-960f69a1`,
+  `SeinARTS.Determinism-20260729-165543-fc72725e`). The independent serial and parallel
+  fresh-process traces are `SeinARTS.Determinism.Process.SerialCollisionTrace-20260729-165621-a09bcfae`
+  and `SeinARTS.Determinism.Process.ParallelCollisionTrace-20260729-165638-ffd47bc8`.
 - Ordinary Editor builds are green. The Shipping gate exposed branch-level teardown/restore include
-  gaps, those gaps were repaired, and the final `SeinARTS Win64 Shipping` rerun succeeded at 16:44.
+  gaps, those gaps were repaired, and the clean `SeinARTS Win64 Shipping` rerun succeeded at 16:57.
 - The current compatibility boundary is executable replay file v8 and CoreEntity header-metadata v6.
   Earlier v6/v5 references above remain the accurate historical Phase-2 boundary.
 
 ### Current campaign rollup
 
 - **67 total rows.**
-- **17 formally closed:** 15 Verified and 2 Fixed.
-- **9 In progress, 3 Approved, 23 Confirmed, 5 Queued, and 10 Gate.**
-- Correctness/determinism/lifecycle: 31 rows, 16 closed.
+- **18 formally closed:** 16 Verified and 2 Fixed.
+- **8 In progress, 3 Approved, 23 Confirmed, 5 Queued, and 10 Gate.**
+- Correctness/determinism/lifecycle: 31 rows, 17 closed.
 - Performance/memory: 11 rows, none closed.
 - API/modularity/extensibility: 14 rows, 1 closed.
 - Feature/completeness: 11 rows, none closed.
@@ -371,7 +374,7 @@ record:
 | CONTENT-02 | Four obsolete root-level assets have broken redirected imports during an all-content load. | 7 | Confirmed |
 | CONTENT-03 | Seven corrected `FFixedPoint` asset blobs are committed on this branch, including the match hotfix, but `origin/main` remains stale; a mixed stale/resaved fleet can silently desync until the shared baseline receives those blobs. | Immediate | In progress |
 | SER-01 | Focused regression coverage pins `FFixedPoint`'s native eight-byte serializer, exact raw-bit round trip, and `WithSerializer` trait. | Immediate | Verified |
-| TEST-01 | Durable `attempt.json` receipts cover launch and every terminal outcome, and broad suites fail closed without case-insensitive suite/profile baselines whose commits are verified ancestors. Dirty-tree Unit evidence is 321/317; promotion awaits a clean implementation checkpoint and truthful floor provenance. | 5/8 | In progress |
+| TEST-01 | Durable `attempt.json` receipts cover launch and every terminal outcome, and broad suites fail closed without case-insensitive suite/profile baselines whose commits are verified ancestors. Clean commit `9a991f544a59d1b63395fb8a9a783c6d7d1c2e30` reproduced all six floors, including Unit 321/317, and owns their checked-in provenance. | 5/8 | Verified |
 
 ## Performance and memory
 
