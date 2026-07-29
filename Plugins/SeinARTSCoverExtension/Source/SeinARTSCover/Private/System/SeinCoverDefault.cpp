@@ -132,8 +132,18 @@ void USeinCoverDefault::RegisterProvider(FSeinEntityHandle ProviderHandle)
 		return;
 	}
 
-	RegisteredProviders.Add(ProviderHandle);
-	RegisteredProviderReaches.Add(Reach);
+	// Canonical handle order is part of Default's deterministic query policy.
+	// A live peer can destroy/reuse slots in a different registration history
+	// than a freshly restored peer; append order would then change equal-cost
+	// slot tie-breaks after resync.
+	int32 InsertIndex = 0;
+	while (InsertIndex < RegisteredProviders.Num()
+		&& RegisteredProviders[InsertIndex] < ProviderHandle)
+	{
+		++InsertIndex;
+	}
+	RegisteredProviders.Insert(ProviderHandle, InsertIndex);
+	RegisteredProviderReaches.Insert(Reach, InsertIndex);
 	UE_LOG(LogSeinCoverDefault, Verbose,
 		TEXT("RegisterProvider: %s (reach=%.1f; now %d total)"),
 		*ProviderHandle.ToString(), Reach.ToFloat(), RegisteredProviders.Num());
@@ -547,9 +557,18 @@ TArray<FSeinCoverSlotCandidate> USeinCoverDefault::FindNearbySlots(FFixedVector 
 		TArray<int32> Indices;
 		Indices.Reserve(NumCandidates);
 		for (int32 i = 0; i < NumCandidates; ++i) Indices.Add(i);
-		Indices.Sort([&DistSqByCandidate](int32 A, int32 B)
+		Indices.Sort([&DistSqByCandidate, &Result](int32 A, int32 B)
 		{
-			return DistSqByCandidate[A] < DistSqByCandidate[B];
+			if (DistSqByCandidate[A] != DistSqByCandidate[B])
+			{
+				return DistSqByCandidate[A] < DistSqByCandidate[B];
+			}
+			if (Result[A].ProviderHandle != Result[B].ProviderHandle)
+			{
+				return Result[A].ProviderHandle
+					< Result[B].ProviderHandle;
+			}
+			return Result[A].SlotIndex < Result[B].SlotIndex;
 		});
 
 		TArray<FSeinCoverSlotCandidate> Sorted;

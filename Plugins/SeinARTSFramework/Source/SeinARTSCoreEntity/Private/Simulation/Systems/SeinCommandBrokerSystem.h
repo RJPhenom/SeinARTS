@@ -536,7 +536,7 @@ namespace SeinCommandBrokerDispatch
 
 /**
  * System: CommandBroker
- * Phase: PostTick | Priority: 40 (before StateHashSystem)
+ * Phase: PostTick | Priority: 40
  */
 class FSeinCommandBrokerSystem final : public ISeinSystem
 {

@@ -103,6 +103,9 @@ namespace UE::SeinARTSTests
 		bool bStillPaused = true;
 		bool bProtocolFailure = true;
 		FGuid AppliedDigest;
+		FGuid CallbackDigest;
+		FString CallbackRootError;
+		bool bCallbackRootAvailable = false;
 		Fixture.World->PauseControlAppliedNotifier.BindLambda(
 			[&](const FSeinPauseControlCursor&, bool bInStillPaused,
 				const FGuid& Digest, bool bInProtocolFailure)
@@ -111,6 +114,9 @@ namespace UE::SeinARTSTests
 				bStillPaused = bInStillPaused;
 				AppliedDigest = Digest;
 				bProtocolFailure = bInProtocolFailure;
+				bCallbackRootAvailable =
+					Fixture.World->ComputeCanonicalStateRoot(
+						CallbackDigest, CallbackRootError);
 			});
 		Fixture.World->SubmitLocalCommandDraft(Fixture.MakeResume());
 		Fixture.TickPausedFrame(20.0f);
@@ -118,10 +124,18 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(bApplied));
 		ASSERT_THAT(IsFalse(bStillPaused));
 		ASSERT_THAT(IsFalse(bProtocolFailure));
-		ASSERT_THAT(IsFalse(AppliedDigest.IsValid()));
+		ASSERT_THAT(IsTrue(AppliedDigest.IsValid()));
+		ASSERT_THAT(IsTrue(bCallbackRootAvailable));
+		ASSERT_THAT(IsTrue(CallbackRootError.IsEmpty()));
+		ASSERT_THAT(IsTrue(AppliedDigest == CallbackDigest));
 		ASSERT_THAT(IsFalse(Fixture.World->IsSimulationPaused()));
 		ASSERT_THAT(AreEqual(FrozenTick, Fixture.World->GetCurrentTick()));
 		ASSERT_THAT(AreEqual(0, CompletedTicks));
+		FGuid PostTickDigest;
+		FString PostTickRootError;
+		ASSERT_THAT(IsTrue(Fixture.World->ComputeCanonicalStateRoot(
+			PostTickDigest, PostTickRootError)));
+		ASSERT_THAT(IsTrue(AppliedDigest == PostTickDigest));
 
 		Fixture.TickPausedFrame();
 		ASSERT_THAT(AreEqual(FrozenTick + 1, Fixture.World->GetCurrentTick()));
@@ -287,16 +301,19 @@ namespace UE::SeinARTSTests
 				return true;
 			});
 		bool bProtocolFailure = false;
+		FGuid AppliedDigest;
 		Fixture.World->PauseControlAppliedNotifier.BindLambda(
-			[&bProtocolFailure](const FSeinPauseControlCursor&, bool,
-				const FGuid&, bool bFailure)
+			[&](const FSeinPauseControlCursor&, bool,
+				const FGuid& Digest, bool bFailure)
 			{
 				bProtocolFailure = bFailure;
+				AppliedDigest = Digest;
 			});
 		Assert.ExpectError(TEXT("Pause-control protocol violation"));
 		Fixture.TickPausedFrame();
 		Fixture.World->PauseControlFrameResolver.Unbind();
 		ASSERT_THAT(IsTrue(bProtocolFailure));
+		ASSERT_THAT(IsFalse(AppliedDigest.IsValid()));
 		ASSERT_THAT(IsTrue(Fixture.World->IsSimulationPaused()));
 		ASSERT_THAT(AreEqual(int64(0),
 			Fixture.World->GetExpectedPauseControlCursor().Sequence));
@@ -367,9 +384,21 @@ namespace UE::SeinARTSTests
 				OutFrame = RejectedButCanonical;
 				return true;
 			});
+		FGuid RejectedFrameDigest;
+		bool bRejectedFrameProtocolFailure = true;
+		Fixture.World->PauseControlAppliedNotifier.BindLambda(
+			[&](const FSeinPauseControlCursor&, bool,
+				const FGuid& Digest, bool bFailure)
+			{
+				RejectedFrameDigest = Digest;
+				bRejectedFrameProtocolFailure = bFailure;
+			});
 		Fixture.TickPausedFrame();
 		Fixture.World->PauseControlFrameResolver.Unbind();
+		Fixture.World->PauseControlAppliedNotifier.Unbind();
 		ASSERT_THAT(IsTrue(Fixture.World->IsSimulationPaused()));
+		ASSERT_THAT(IsFalse(bRejectedFrameProtocolFailure));
+		ASSERT_THAT(IsTrue(RejectedFrameDigest.IsValid()));
 
 		FSeinWorldSnapshot Captured;
 		Fixture.World->CaptureSnapshot(Captured);
@@ -386,6 +415,58 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(Fixture.World->IsSimulationPaused()));
 		ASSERT_THAT(AreEqual(CapturedHash, Fixture.World->ComputeStateHash()));
 		ASSERT_THAT(AreEqual(int64(1),
+			Fixture.World->GetExpectedPauseControlCursor().Sequence));
+	}
+
+	TEST(PauseControlReportsCanonicalCaptureRefusalWithoutReplayingFrame,
+		"SeinARTS.Unit.Authority.PauseControl")
+	{
+		FRunningMatchFixture Fixture;
+		ASSERT_THAT(IsNotNull(Fixture.World));
+		Fixture.SetPausedInSim(true);
+		const FSeinPauseControlCursor Cursor =
+			Fixture.World->GetExpectedPauseControlCursor();
+
+		FSeinPauseControlFrame Frame;
+		Frame.Cursor = Cursor;
+		FSeinCommand Unauthorized = Fixture.MakeResume(Cursor.FrozenTick);
+		Unauthorized.PlayerID = FSeinPlayerID(2);
+		Frame.Commands.Add(Unauthorized);
+		Fixture.World->PauseControlFrameResolver.BindLambda(
+			[&Frame](FSeinPauseControlFrame& OutFrame)
+			{
+				OutFrame = Frame;
+				return true;
+			});
+
+		FString ReplayError;
+		ASSERT_THAT(IsTrue(
+			Fixture.World->BeginReplayExclusiveCommandIngressForTests(
+				ReplayError)));
+		int32 NotificationCount = 0;
+		bool bProtocolFailure = true;
+		FGuid AppliedDigest;
+		Fixture.World->PauseControlAppliedNotifier.BindLambda(
+			[&](const FSeinPauseControlCursor&, bool,
+				const FGuid& Digest, bool bFailure)
+			{
+				++NotificationCount;
+				AppliedDigest = Digest;
+				bProtocolFailure = bFailure;
+			});
+
+		Assert.ExpectError(TEXT(
+			"applied, but canonical state-root capture failed"));
+		Fixture.TickPausedFrame();
+		Fixture.World->EndReplayExclusiveCommandIngressForTests();
+		Fixture.World->PauseControlFrameResolver.Unbind();
+		Fixture.World->PauseControlAppliedNotifier.Unbind();
+
+		ASSERT_THAT(AreEqual(1, NotificationCount));
+		ASSERT_THAT(IsFalse(bProtocolFailure));
+		ASSERT_THAT(IsFalse(AppliedDigest.IsValid()));
+		ASSERT_THAT(AreEqual(
+			Cursor.Sequence + 1,
 			Fixture.World->GetExpectedPauseControlCursor().Sequence));
 	}
 

@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Runs the collision StateHash workload in two fresh editor processes and compares every tick.
+  Runs the collision canonical-root workload in two fresh editor processes and compares every tick.
 
 .EXAMPLE
   .\RunDeterminismAB.ps1
@@ -83,19 +83,28 @@ if ($SerialTrace.Count -ne $ExpectedFrames -or $ParallelTrace.Count -ne $Expecte
 }
 
 for ($Index = 0; $Index -lt $ExpectedFrames; ++$Index) {
+	$PayloadPattern = '^tick=(\d+) root=([0-9A-Fa-f]{32}) pose=(0x[0-9A-Fa-f]{16})$'
+	$SerialMatch = [regex]::Match($SerialTrace[$Index], $PayloadPattern)
+	$ParallelMatch = [regex]::Match($ParallelTrace[$Index], $PayloadPattern)
+	if (-not $SerialMatch.Success -or -not $ParallelMatch.Success) {
+		throw "Malformed canonical determinism payload at frame $($Index + 1):`nserial:   $($SerialTrace[$Index])`nparallel: $($ParallelTrace[$Index])`nLogs: '$SerialLog', '$ParallelLog'."
+	}
+	$ExpectedTick = $Index + 1
+	$SerialTick = [int]$SerialMatch.Groups[1].Value
+	$ParallelTick = [int]$ParallelMatch.Groups[1].Value
+	if ($SerialTick -ne $ExpectedTick -or $ParallelTick -ne $ExpectedTick) {
+		throw "Non-canonical determinism trace order at frame $ExpectedTick (serial tick=$SerialTick, parallel tick=$ParallelTick). Logs: '$SerialLog', '$ParallelLog'."
+	}
+
 	if ($SerialTrace[$Index] -cne $ParallelTrace[$Index]) {
-		$PayloadPattern = '^tick=\d+ state=(0x[0-9A-Fa-f]+) pose=(0x[0-9A-Fa-f]+)$'
-		$SerialMatch = [regex]::Match($SerialTrace[$Index], $PayloadPattern)
-		$ParallelMatch = [regex]::Match($ParallelTrace[$Index], $PayloadPattern)
-		if ($SerialMatch.Success -and $ParallelMatch.Success -and
-			$SerialMatch.Groups[2].Value -ceq $ParallelMatch.Groups[2].Value -and
-			$SerialMatch.Groups[1].Value -cne $ParallelMatch.Groups[1].Value) {
-			throw "StateHash canonicality divergence at frame $($Index + 1) despite identical raw fixed-point poses (STATE-02):`nserial:   $($SerialTrace[$Index])`nparallel: $($ParallelTrace[$Index])`nLogs: '$SerialLog', '$ParallelLog'."
+		if ($SerialMatch.Groups[3].Value -ceq $ParallelMatch.Groups[3].Value -and
+			$SerialMatch.Groups[2].Value -cne $ParallelMatch.Groups[2].Value) {
+			throw "Canonical world-root divergence at frame $($Index + 1) despite identical raw fixed-point poses (STATE-02):`nserial:   $($SerialTrace[$Index])`nparallel: $($ParallelTrace[$Index])`nLogs: '$SerialLog', '$ParallelLog'."
 		}
 		throw "First serial/parallel divergence at frame $($Index + 1):`nserial:   $($SerialTrace[$Index])`nparallel: $($ParallelTrace[$Index])`nLogs: '$SerialLog', '$ParallelLog'."
 	}
 }
 
-Write-Host "[RunDeterminismAB.ps1] Serial/parallel StateHash + raw-pose traces match for all $ExpectedFrames ticks." -ForegroundColor Green
+Write-Host "[RunDeterminismAB.ps1] Serial/parallel canonical-root + raw-pose traces match for all $ExpectedFrames ticks." -ForegroundColor Green
 Write-Host "Serial log:   $SerialLog"
 Write-Host "Parallel log: $ParallelLog"

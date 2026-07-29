@@ -6,7 +6,7 @@
 struct SEINARTSTESTSUPPORT_API FSeinCollisionDeterminismFrame
 {
 	int32 Tick = 0;
-	uint32 StateHash = 0;
+	FGuid StateRoot;
 	uint64 PoseDigest = 0;
 	TArray<uint64> PoseWords;
 
@@ -38,7 +38,7 @@ struct SEINARTSTESTSUPPORT_API FSeinCollisionDeterminismTrace
 /**
  * Runs the exact production fixed-tick path in a CQTest transient world.
  * The packed collider workload exercises collision broadphase, parallel Jacobi
- * resolution, and the component-storage StateHash dispatch.
+ * resolution, and the canonical world-state root across stable tick boundaries.
  */
 SEINARTSTESTSUPPORT_API FSeinCollisionDeterminismTrace
 	SeinRunCollisionDeterminismScenario(bool bParallel, int32 TickCount = 120);

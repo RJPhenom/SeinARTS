@@ -21,7 +21,7 @@
  * PreTick-built broadphase + Extents storage) writing a disjoint slot, the
  * per-neighbour loop is sequential in handle order, and all math is fixed-point —
  * so the result is independent of thread count, provable on the Sein.Sim.Parallel
- * 0-vs-1 StateHash gate. The serial apply is the only mutation and it is disjoint
+ * 0-vs-1 canonical-root gate. The serial apply is the only mutation and it is disjoint
  * per self; deferring it out of the compute is what keeps the parallel reads on a
  * consistent snapshot.
  */

@@ -65,8 +65,8 @@ class USeinWorldSubsystem;
  * the collision broadphase (rebuilt each PreTick), so the cost stays roughly linear in the
  * collider count. Pushes are mass-weighted (a heavier body barely yields to a lighter one;
  * walls and statics are infinite-mass), and a hard-barrier gate refuses any push that would
- * cross a baked wall or leave the grid edge. Runs after movement and before the state hash each
- * tick, so its separations are part of the deterministic snapshot. For the multithreaded
+ * cross a baked wall or leave the grid edge. Runs after movement each tick, so its settled
+ * separations are part of the deterministic snapshot. For the multithreaded
  * variant see Sein Collision Resolver (Parallel).
  */
 UCLASS(meta = (DisplayName = "Sein Collision Resolver (Default)"))

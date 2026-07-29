@@ -17,7 +17,7 @@ namespace
 
 namespace UE::SeinARTSTests
 {
-	TEST(CollisionStateHashSerialParallelMatches, "SeinARTS.Determinism")
+	TEST(CollisionCanonicalRootSerialParallelMatches, "SeinARTS.Determinism")
 	{
 		const FSeinCollisionDeterminismTrace Serial =
 			SeinRunCollisionDeterminismScenario(false, TraceTicks);
@@ -40,20 +40,22 @@ namespace UE::SeinARTSTests
 			const FSeinCollisionDeterminismFrame& SerialFrame = Serial.Frames[Index];
 			const FSeinCollisionDeterminismFrame& ParallelFrame = Parallel.Frames[Index];
 			const bool bPosesMatch = SerialFrame.PoseWords == ParallelFrame.PoseWords;
-			const bool bHashesMatch = SerialFrame.StateHash == ParallelFrame.StateHash;
+			const bool bRootsMatch = SerialFrame.StateRoot == ParallelFrame.StateRoot;
 			const bool bDigestsMatch = SerialFrame.PoseDigest == ParallelFrame.PoseDigest;
-			if (!bPosesMatch || !bHashesMatch || !bDigestsMatch)
+			if (!bPosesMatch || !bRootsMatch || !bDigestsMatch)
 			{
 				const TCHAR* MismatchKind = !bPosesMatch
 					? TEXT("collision pose mismatch")
-					: (!bHashesMatch ? TEXT("StateHash-only mismatch") : TEXT("pose-digest mismatch"));
+					: (!bRootsMatch
+						? TEXT("canonical-root-only mismatch")
+						: TEXT("pose-digest mismatch"));
 				AddError(FString::Printf(
-					TEXT("Serial/parallel divergence at tick %d: serial state=0x%08X pose=0x%016llX, ")
-					TEXT("parallel state=0x%08X pose=0x%016llX (%s)."),
+					TEXT("Serial/parallel divergence at tick %d: serial root=%s pose=0x%016llX, ")
+					TEXT("parallel root=%s pose=0x%016llX (%s)."),
 					SerialFrame.Tick,
-					SerialFrame.StateHash,
+					*SerialFrame.StateRoot.ToString(EGuidFormats::Digits),
 					static_cast<unsigned long long>(SerialFrame.PoseDigest),
-					ParallelFrame.StateHash,
+					*ParallelFrame.StateRoot.ToString(EGuidFormats::Digits),
 					static_cast<unsigned long long>(ParallelFrame.PoseDigest),
 					MismatchKind));
 				return;

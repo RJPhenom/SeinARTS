@@ -89,7 +89,7 @@ namespace SeinPayerContinuityTestPrivate
 	void ExpectAbilityHashDiagnostic(TTestRunner& TestRunner)
 	{
 		TestRunner.AddExpectedError(
-			TEXT("Component 'SeinAbilityComponent' has field(s) excluded from the determinism state hash"),
+			TEXT("Component 'SeinAbilityComponent' has field(s) excluded from the legacy local state fingerprint"),
 			EAutomationExpectedErrorFlags::Contains, 1, false);
 	}
 

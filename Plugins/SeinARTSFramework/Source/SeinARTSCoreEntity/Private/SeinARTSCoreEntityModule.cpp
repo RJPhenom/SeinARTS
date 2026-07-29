@@ -32,6 +32,7 @@
 #include "Input/SeinCommandAuthorityPolicy.h"
 #include "Settings/PluginSettings.h"
 #include "Simulation/SeinCanonicalStateRecipe.h"
+#include "Simulation/SeinWorldSubsystem.h"
 #include "Serialization/SeinCanonicalStateCodec.h"
 #include "Subsystems/SeinFactionService.h"
 #include "Tags/SeinARTSGameplayTags.h"
@@ -48,25 +49,24 @@ DEFINE_LOG_CATEGORY(LogSeinBPFL);
 #if !UE_BUILD_SHIPPING
 #include "HAL/IConsoleManager.h"
 #include "Engine/World.h"
-#include "Simulation/SeinWorldSubsystem.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinStateHashCmd, Log, All);
 
-// Per-tick state hash logging toggle. When nonzero, USeinWorldSubsystem
-// logs ComputeStateHash() after every sim tick — run two PIE clients with
-// this on and diff the logs; any divergence localizes the desync tick.
-// Stripped in shipping.
+// Per-tick legacy local-fingerprint logging toggle. This remains useful for
+// locating a mutation inside one process or an otherwise identical preload
+// environment, but is neither complete nor cross-process canonical. The
+// stable-boundary StateRoot command below is the authoritative determinism
+// diagnostic. Stripped in shipping.
 static TAutoConsoleVariable<int32> CVarSeinLogStateHash(
 	TEXT("Sein.Sim.StateHash.Log"),
 	0,
-	TEXT("If nonzero, log the sim state hash each tick. Determinism-verification tool — diff logs across two PIE clients to find the tick where lockstep broke."),
+	TEXT("If nonzero, log the legacy local state fingerprint each tick. Not valid for cross-process determinism evidence; use Sein.Sim.StateRoot at a stable boundary."),
 	ECVF_Default);
 
-// One-shot: dump the current state hash on demand. Useful for pause-and-
-// compare debugging without spamming logs.
+// One-shot compatibility command for the incomplete local fingerprint.
 static FAutoConsoleCommandWithWorldAndArgs CmdSeinDumpStateHash(
 	TEXT("Sein.Sim.StateHash"),
-	TEXT("Log the current USeinWorldSubsystem::ComputeStateHash() value once."),
+	TEXT("Log the legacy local state fingerprint once. Not valid for peer or fresh-process comparison."),
 	FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(
 		[](const TArray<FString>& /*Args*/, UWorld* World)
 		{
@@ -74,9 +74,43 @@ static FAutoConsoleCommandWithWorldAndArgs CmdSeinDumpStateHash(
 			if (USeinWorldSubsystem* Sub = World->GetSubsystem<USeinWorldSubsystem>())
 			{
 				UE_LOG(LogSeinStateHashCmd, Log,
-					TEXT("StateHash[tick %d] = 0x%08x"),
+					TEXT("LegacyLocalStateFingerprint[tick %d] = 0x%08x"),
 					Sub->GetCurrentTick(),
 					static_cast<uint32>(Sub->ComputeStateHash()));
+			}
+		}));
+
+// Authoritative one-shot determinism diagnostic. Canonical capture is allowed
+// only at a coherent stable boundary and explains any refusal.
+static FAutoConsoleCommandWithWorldAndArgs CmdSeinDumpStateRoot(
+	TEXT("Sein.Sim.StateRoot"),
+	TEXT("Log the exact canonical world-state root at the current stable boundary."),
+	FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(
+		[](const TArray<FString>& /*Args*/, UWorld* World)
+		{
+			if (!World)
+			{
+				return;
+			}
+			if (USeinWorldSubsystem* Sub =
+				World->GetSubsystem<USeinWorldSubsystem>())
+			{
+				FGuid Root;
+				FString Error;
+				if (Sub->ComputeCanonicalStateRoot(Root, Error))
+				{
+					UE_LOG(LogSeinStateHashCmd, Log,
+						TEXT("StateRoot[tick %d] = %s"),
+						Sub->GetCurrentTick(),
+						*Root.ToString(EGuidFormats::Digits));
+				}
+				else
+				{
+					UE_LOG(LogSeinStateHashCmd, Warning,
+						TEXT("StateRoot[tick %d] unavailable: %s"),
+						Sub->GetCurrentTick(),
+						*Error);
+				}
 			}
 		}));
 #endif // !UE_BUILD_SHIPPING

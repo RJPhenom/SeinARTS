@@ -8,6 +8,7 @@
 #include "CoreMinimal.h"
 
 class USeinWorldSubsystem;
+struct FSeinSnapshotRestoreOptions;
 struct FSeinWorldSnapshot;
 
 namespace SeinTestSnapshotRestore
@@ -20,5 +21,13 @@ namespace SeinTestSnapshotRestore
 	SEINARTSTESTSUPPORT_API bool RestoreTrusted(
 		USeinWorldSubsystem& World,
 		const FSeinWorldSnapshot& Snapshot,
+		FString* OutClaimError = nullptr);
+
+	/** Explicit-policy variant for multiplayer catch-up, dormant adoption,
+	 *  and local-presentation tests. */
+	SEINARTSTESTSUPPORT_API bool RestoreTrusted(
+		USeinWorldSubsystem& World,
+		const FSeinWorldSnapshot& Snapshot,
+		const FSeinSnapshotRestoreOptions& Options,
 		FString* OutClaimError = nullptr);
 }

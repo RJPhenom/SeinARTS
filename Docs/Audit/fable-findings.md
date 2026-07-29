@@ -130,3 +130,95 @@ any tally that walks index files. A silently aborted suite can read as "no failu
 
 The perf workstream (11 rows, all Confirmed) had not been started as of this review — no
 finding here changes that sequencing.
+
+---
+
+## 5. Codex rebaseline — 2026-07-29 current branch boundary
+
+This section preserves the review above as a dated checkpoint while superseding its
+current-status statements with the final branch evidence from the continued remediation pass.
+
+### 5.1 Correctness, state, content, and test status
+
+- **SER-01 — Verified.** The native eight-byte `FFixedPoint` serialization layout and
+  `WithSerializer` contract are now pinned by automation.
+- **CONTENT-03 — In progress.** All seven affected asset blobs are corrected and committed on
+  the remediation branch/match hotfix. `origin/main` remains stale until that work is merged.
+- **STATE-01 — In progress.** Snapshot v13 now exactly covers Core
+  world/entity/component state, ability and resolver pools, canonical Blueprint value slots,
+  Wait/MoveTo continuations, Movement/Movement+ policy instances, navigation async
+  continuation, and FoW authoritative state. Squad state is component-backed and shipped
+  broadphase, blocker, overlap, and cover indexes are derived. Exact continuation remains
+  incomplete for arbitrary Blueprint VM latent/async frames, post-freeze navigation substrate
+  mutation, unenforced stateful formation/resolver preview paths, and custom
+  navigation/collision/cover implementations without explicit state-coverage claims. Quiescent
+  capture continues to fail closed on deferred effect/destroy and replay-ingress work.
+- The shipped Cover restore path now rebuilds its default and custom derived registry in
+  canonical order with deterministic tie-breaks. That closes the concrete Cover restore seam;
+  it does not close the remaining `STATE-01` custom-provider coverage contract.
+- **STATE-02 — Verified.** Peer comparison and pause success use authoritative canonical
+  BLAKE3-128 roots. The legacy 32-bit hash is deprecated and restricted to local diagnostics.
+  A fresh-process 120-tick serial/parallel run matched exact roots and poses.
+- **TEST-01 — In progress.** `attempt.json` is written before launch and finalized for build
+  failure, missing-report/test failure, and pass outcomes. Suite/profile baseline lookup is
+  case-insensitive; canonical broad suites fail closed when a baseline is absent; ancestry is
+  checked. Dirty-tree Unit evidence is 321/317, but promotion awaits clean commit-bound receipts
+  and truthful floor provenance.
+
+### 5.2 Performance and API rebaseline
+
+- **PERF-01 — In progress.** Authoritative peer/pause comparison has moved to canonical roots,
+  but canonical root construction is still a synchronous full-state walk and is not shared
+  across consumers.
+- **PERF-05 — Confirmed.** The minimap keeps a stable texture allocation, but each refresh
+  still allocates full CPU buffers, performs dense resolution-squared world-to-fixed fog
+  lookups plus optional blur, copies the full mip, and calls `UpdateResource`.
+- **PERF-08 — In progress.** Net histories are pruned to 256 turns and replay memory is capped
+  at 64 MiB, but exhausting that cap still aborts and discards the complete recording; streaming
+  and retention remain open.
+- **PERF-11 — Confirmed.** The deprecated local 32-bit hash still batches storage work while
+  walking storage/entity structure serially. The authoritative canonical root is a separate
+  synchronous cost.
+- **API-08 — Confirmed.** Navigation request/query/A* types support blocked-terrain tags and a
+  nav-layer mask, but shipped movement does not carry per-unit blocked tags end to end; MoveTo
+  escalation remains empty and containment uses the default mask.
+- **API-09 — Confirmed.** FoW initialization, substrate mutation, and canonical-state plumbing
+  are wired. Source/blocker registration APIs have no shipped callers, so the default path still
+  scans component storage.
+- **API-13 — Confirmed.** Current live sizes are approximately 12,389 lines for
+  `SeinWorldSubsystem.cpp` and 7,302 for `SeinNetSubsystem.cpp`; the canonical-root
+  implementation has moved to a separate approximately 1,123-line unit.
+
+### 5.3 Final evidence
+
+- Cover restore/custom-provider seam: 2/2,
+  `SeinARTS.Unit.Cover.SnapshotRestore-20260729-163836-d7d73fe5`.
+- All Unit: 321/321, `SeinARTS.Unit-20260729-163909-043d6040`.
+- Integration: 12/12, `SeinARTS.Integration-20260729-164017-33849e08`.
+- Determinism: 16/16, `SeinARTS.Determinism-20260729-164035-a9cc55b0`.
+- Fresh-process serial/parallel A/B: 120/120 ticks with exact canonical-root and pose
+  agreement,
+  `SeinARTS.Determinism.Process.SerialCollisionTrace-20260729-163937-8fbecf4b` and
+  `SeinARTS.Determinism.Process.ParallelCollisionTrace-20260729-163954-280a45a6`.
+- Ordinary Editor builds are green. Shipping initially exposed teardown/restore include gaps;
+  the gate caught them, they were fixed, and the final Shipping rerun was green at 16:44.
+
+The live replay boundary is executable file version **v8** with header metadata **v6**.
+Earlier v6/v5 references above or in companion documents are historical checkpoint evidence.
+
+The reconciled 67-row ledger now has **17 closed** (**15 Verified**, **2 Fixed**),
+**9 In progress**, **3 Approved**, **23 Confirmed**, **5 Queued**, and **10 Gate**.
+The correctness workstream owns 16 of the closed rows; performance and feature work remain the
+largest open delivery surfaces.
+
+### 5.4 Remaining action order
+
+1. Merge the seven corrected `CONTENT-03` blobs so `origin/main` no longer carries the stale
+   serializer-era assets.
+2. Continue `STATE-01` with explicit coverage claims and fail-closed behavior for arbitrary
+   Blueprint continuations, mutable navigation substrate state, stateful formation/preview
+   implementations, and custom navigation/collision/cover providers.
+3. Build `FEAT-01` authenticated, bounded checkpoint-plus-command-tail catch-up on the proven
+   canonical snapshot/root foundation.
+4. Continue the performance workstream, prioritizing synchronous canonical-state cost,
+   minimap refresh cost, and replay streaming/retention without weakening designer-facing seams.

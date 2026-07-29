@@ -150,9 +150,9 @@ namespace
 FString FSeinCollisionDeterminismFrame::ToLogPayload() const
 {
 	return FString::Printf(
-		TEXT("tick=%03d state=0x%08X pose=0x%016llX"),
+		TEXT("tick=%03d root=%s pose=0x%016llX"),
 		Tick,
-		StateHash,
+		*StateRoot.ToString(EGuidFormats::Digits),
 		static_cast<unsigned long long>(PoseDigest));
 }
 
@@ -180,7 +180,9 @@ FString FSeinCollisionDeterminismTrace::Validate(bool bExpectedParallel, int32 E
 	}
 	if (ComponentStorageCount < 4)
 	{
-		return FString::Printf(TEXT("Expected at least 4 StateHash storage jobs, found %d."), ComponentStorageCount);
+		return FString::Printf(
+			TEXT("Expected at least 4 canonical component storages, found %d."),
+			ComponentStorageCount);
 	}
 	if (SpawnedEntityCount != ExpectedEntityCount || FinalEntityCount != ExpectedEntityCount)
 	{
@@ -210,6 +212,12 @@ FString FSeinCollisionDeterminismTrace::Validate(bool bExpectedParallel, int32 E
 				TEXT("Trace tick sequence broke at frame %d (captured tick %d)."),
 				Index + 1,
 				Frames[Index].Tick);
+		}
+		if (!Frames[Index].StateRoot.IsValid())
+		{
+			return FString::Printf(
+				TEXT("Canonical state root is invalid at frame %d."),
+				Index + 1);
 		}
 	}
 	return FString();
@@ -370,7 +378,11 @@ FSeinCollisionDeterminismTrace SeinRunCollisionDeterminismScenario(bool bParalle
 
 		FSeinCollisionDeterminismFrame Frame;
 		Frame.Tick = World->GetCurrentTick();
-		Frame.StateHash = static_cast<uint32>(World->ComputeStateHash());
+		if (!World->ComputeCanonicalStateRoot(
+				Frame.StateRoot, Trace.FailureReason))
+		{
+			break;
+		}
 		if (!CapturePoseWords(*World, Handles, Frame.PoseWords, Trace.FailureReason))
 		{
 			break;

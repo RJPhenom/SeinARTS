@@ -38,7 +38,7 @@
  *          DEFAULT-OFF. The framework default stays the Gauss-Seidel resolver;
  *          this is selected by pointing `USeinARTSCoreSettings::CollisionResolverClass`
  *          at it. Determinism is provable on the `Sein.Sim.Parallel 0-vs-1`
- *          StateHash gate: the parallel compute is bit-identical to the serial
+ *          canonical-root gate: the parallel compute is bit-identical to the serial
  *          fallback (immutable reads, disjoint writes, fixed-point sums,
  *          handle-sorted neighbour loop, serial apply).
  */
@@ -68,8 +68,8 @@ class USeinWorldSubsystem;
  * the infinite-mass walls and statics, the hard-barrier gate that refuses a push through a
  * baked wall or off the grid, the overlap events — is the exact same collision floor as the
  * default; only the relaxation schedule differs, and the result is bit-identical to the serial
- * path (provable on the Sein.Sim.Parallel 0-vs-1 state-hash gate). Runs after movement and
- * before the state hash each tick.
+ * path (provable on the Sein.Sim.Parallel 0-vs-1 canonical-root gate). Runs after movement
+ * during PostTick, so settled positions are visible at the stable tick boundary.
  */
 UCLASS(meta = (DisplayName = "Sein Collision Resolver (Parallel)"))
 class SEINARTSCOREENTITY_API USeinCollisionResolverParallel : public USeinCollisionResolver

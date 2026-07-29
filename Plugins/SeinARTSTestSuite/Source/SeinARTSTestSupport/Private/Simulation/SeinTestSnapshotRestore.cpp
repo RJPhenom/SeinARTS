@@ -14,6 +14,21 @@ bool SeinTestSnapshotRestore::RestoreTrusted(
 	const FSeinWorldSnapshot& Snapshot,
 	FString* OutClaimError)
 {
+	return RestoreTrusted(
+		World,
+		Snapshot,
+		FSeinSnapshotRestoreOptions(
+			ESeinSnapshotLocalStateRestorePolicy::RestoreCaptured,
+			ESeinSnapshotResumePolicy::ResumeImmediately),
+		OutClaimError);
+}
+
+bool SeinTestSnapshotRestore::RestoreTrusted(
+	USeinWorldSubsystem& World,
+	const FSeinWorldSnapshot& Snapshot,
+	const FSeinSnapshotRestoreOptions& Options,
+	FString* OutClaimError)
+{
 	if (OutClaimError)
 	{
 		OutClaimError->Reset();
@@ -37,7 +52,5 @@ bool SeinTestSnapshotRestore::RestoreTrusted(
 	return World.RestoreSnapshot(
 		MoveTemp(Authority),
 		Snapshot,
-		FSeinSnapshotRestoreOptions(
-			ESeinSnapshotLocalStateRestorePolicy::RestoreCaptured,
-			ESeinSnapshotResumePolicy::ResumeImmediately));
+		Options);
 }

@@ -254,14 +254,12 @@ public:
 		uint32 Hash = 0;
 		if (!StructType) return Hash;
 
-		// Walk reflected UPROPERTY fields per slot. Using reflection (not raw
-		// memory iteration) is critical for cross-process determinism: padding
-		// bytes between fields, transient/non-UPROPERTY internal members, and
-		// uninitialized scratch memory ALL differ across machines even when
-		// the deterministic state is identical. Reflection-driven hashing
-		// covers exactly the fields the designer marked as state, and uses
-		// each property's own GetValueTypeHash which is content-based
-		// (string for FString, raw int64 for FFixedPoint, etc.).
+		// Walk reflected UPROPERTY fields per slot instead of raw memory so this
+		// legacy local fingerprint ignores padding and scratch bytes. This path
+		// is intentionally not the cross-process determinism contract:
+		// GetValueTypeHash is process-local for some reflected types and the
+		// fallback below omits unsupported values. Canonical world-root capture
+		// uses its own exact, fail-closed reflected encoder.
 		// Helper: should this property be skipped entirely (non-deterministic
 		// value across processes, or not state-relevant)?
 		auto IsNonDeterministicOrSkip = [](const FProperty* P) -> bool

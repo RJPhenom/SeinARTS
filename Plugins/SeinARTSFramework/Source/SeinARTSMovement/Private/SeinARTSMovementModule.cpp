@@ -32,6 +32,7 @@
 #include "Serialization/SeinMovementCanonicalStateProvider.h"
 #include "Serialization/SeinMovementStateCoverageInternal.h"
 #include "SeinMovementSubsystem.h"
+#include "Simulation/SeinWorldSubsystem.h"
 #include "UObject/UObjectIterator.h"
 
 #if UE_ENABLE_DEBUG_DRAWING
@@ -58,7 +59,6 @@
 #include "Containers/Ticker.h"
 #include "DrawDebugHelpers.h"
 #include "Core/SeinEntityPool.h"
-#include "Simulation/SeinWorldSubsystem.h"
 #include "Types/Entity.h"
 
 #if WITH_EDITOR

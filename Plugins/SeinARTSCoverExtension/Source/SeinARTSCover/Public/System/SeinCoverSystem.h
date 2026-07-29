@@ -46,29 +46,56 @@ public:
 	// Lifecycle — called by USeinCoverSubsystem
 	// ----------------------------------------------------------------------
 
-	/** Called once when the cover subsystem instantiates this system. Default:
-	 *  stores the world ref. Subclasses override to set up spatial indexes,
-	 *  bind to sim events, etc. Always call Super. */
+	/** Called when the cover subsystem activates this system. Default: stores
+	 *  the world ref. Subclasses override to set up spatial indexes, bind to
+	 *  external events, etc. Always call Super. */
 	virtual void OnCoverSystemInitialized(USeinWorldSubsystem* InWorld);
 
-	/** Called once when the cover subsystem is tearing down. Default: clears
-	 *  the world ref. Subclasses override to release index storage. */
+	/** Called on final teardown. Default: clears the world ref and the base
+	 *  registry mirror. Subclasses override to release index storage and
+	 *  external bindings. Always call Super. */
 	virtual void OnCoverSystemDeinitialized();
 
 	// ----------------------------------------------------------------------
 	// Provider registration
 	// ----------------------------------------------------------------------
 
-	/** Add a cover-providing entity to the system. Called once at entity
-	 *  spawn (via the cover module's entity-spawn hook) after the entity has
-	 *  its `FSeinCoverComponent` payload in storage.
+	/**
+	 * Canonical front door used by USeinCoverSubsystem when a provider enters
+	 * the authoritative world. It de-duplicates handles and keeps registration
+	 * order canonical even when an entity slot is reused.
+	 */
+	void RegisterAuthoritativeProvider(FSeinEntityHandle ProviderHandle);
+
+	/**
+	 * Canonical front door used by USeinCoverSubsystem when a provider leaves
+	 * the authoritative world. Safe to call for an already-absent handle.
+	 */
+	void UnregisterAuthoritativeProvider(FSeinEntityHandle ProviderHandle);
+
+	/** Implementation hook for adding a cover-providing entity after the base
+	 *  front door has normalized registry history.
 	 *
 	 *  Default: no-op. Subclasses MUST override to track the handle. */
 	virtual void RegisterProvider(FSeinEntityHandle ProviderHandle) PURE_VIRTUAL(USeinCoverSystem::RegisterProvider, );
 
-	/** Remove a cover-providing entity. Called from the component's destroy
-	 *  hook OR by the cover subsystem when a registered handle goes stale. */
+	/** Implementation hook for removing a cover-providing entity. It must be
+	 *  idempotent because reconciliation may remove a stale handle. */
 	virtual void UnregisterProvider(FSeinEntityHandle ProviderHandle) PURE_VIRTUAL(USeinCoverSystem::UnregisterProvider, );
+
+	/**
+	 * Replace all derived provider bookkeeping from a canonical, handle-sorted
+	 * view of the authoritative world. Called after snapshot/resync adoption
+	 * and when the subsystem first attaches to an already-populated world.
+	 *
+	 * The base owns this operation: it unregisters every previously mirrored
+	 * provider and replays the existing RegisterProvider/UnregisterProvider
+	 * implementation hooks in canonical order. A custom implementation does
+	 * not need a new restore API and its lifecycle methods remain activation /
+	 * final-teardown only.
+	 */
+	void RebuildProviderRegistry(
+		const TArray<FSeinEntityHandle>& ProviderHandles);
 
 	// ----------------------------------------------------------------------
 	// Queries
@@ -136,4 +163,9 @@ protected:
 	 *  components, transforms, etc. during queries. */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<USeinWorldSubsystem> World;
+
+private:
+	/** Sorted mirror of the handles delivered through the authoritative front
+	 *  door. Derived query/index state is still owned by the subclass. */
+	TArray<FSeinEntityHandle> AuthoritativeProviderHandles;
 };

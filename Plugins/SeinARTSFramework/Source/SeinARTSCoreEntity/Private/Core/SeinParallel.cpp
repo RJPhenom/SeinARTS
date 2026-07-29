@@ -19,7 +19,7 @@ namespace
 		TEXT("Master toggle for deterministic sim parallelism (SeinParallelFor).\n")
 		TEXT("  1 (default) = parallel sim passes (avoidance, idle-driver, nav-containment, pathfinding...) run multithreaded.\n")
 		TEXT("  0           = force every SeinParallelFor serial. The parallel path is designed to be BIT-IDENTICAL to this;\n")
-		TEXT("                diff Sein.Sim.StateHash.Log streams with this 1 vs 0 over the same scenario to verify."),
+		TEXT("                compare canonical world roots plus peer/replay agreement with this 1 vs 0 to verify."),
 		ECVF_Default);
 
 	int32 GSeinSimParallelMinBatch = 64;

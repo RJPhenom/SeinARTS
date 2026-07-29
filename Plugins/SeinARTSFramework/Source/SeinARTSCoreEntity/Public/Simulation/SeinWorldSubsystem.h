@@ -396,8 +396,9 @@ DECLARE_DELEGATE_RetVal_OneParam(bool, FSeinPauseControlFrameResolver,
 
 /**
  * Report an accepted or protocol-invalid frozen frame to the active topology adapter.
- * CanonicalStateDigest is intentionally invalid until the canonical full-world digest
- * lands; multiplayer adapters must fail closed rather than substitute ComputeStateHash.
+ * A protocol-successful frame carries its exact post-frame canonical world root.
+ * Capture refusal leaves the digest invalid without reclassifying the already-consumed
+ * frame as a protocol failure; adapters must fail closed on either condition.
  */
 DECLARE_DELEGATE_FourParams(FSeinPauseControlAppliedNotifier,
 	const FSeinPauseControlCursor& /*Cursor*/,
@@ -1133,6 +1134,18 @@ public:
 		const struct FSeinCameraSnapshotData& /*CameraState*/);
 	FOnRestoreSnapshot OnRestoreSnapshotPostSim;
 
+	/**
+	 * Fired after every successful authoritative snapshot replacement, once
+	 * Core state is coherent and before actor-bridge reconciliation or resumed
+	 * simulation. Extension systems use this read-only seam to rebuild derived,
+	 * non-canonical sim indexes from restored entity/component state so bridge
+	 * callbacks cannot observe an abandoned index. It fires for both local-state
+	 * policies; handlers must not mutate authoritative sim state, depend on
+	 * restored actors, or retain a restore capability.
+	 */
+	DECLARE_MULTICAST_DELEGATE(FOnAuthoritativeStateRestored);
+	FOnAuthoritativeStateRestored OnAuthoritativeStateRestored;
+
 	// ============================================================================
 	// Ability + Resolver pools (Phase 4 architecture cleanup)
 	// ============================================================================
@@ -1669,9 +1682,15 @@ public:
 		FGuid& OutRoot,
 		FString& OutError) const;
 
-	/** Legacy in-process diagnostic only. Do not use for peer compatibility,
-	 *  checkpoints, or replay validation. */
-	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Debug")
+	/** Legacy in-process transactional fingerprint only. This intentionally
+	 *  cannot fail closed and is neither complete nor cross-process canonical.
+	 *  Do not use for peer compatibility, checkpoints, replay validation, or
+	 *  fresh-process determinism evidence. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Debug",
+		meta = (DisplayName = "Compute Legacy Local State Fingerprint",
+			DeprecatedFunction,
+			DeprecationMessage =
+				"Use Compute Canonical State Root for determinism evidence."))
 	int32 ComputeStateHash() const;
 
 private:

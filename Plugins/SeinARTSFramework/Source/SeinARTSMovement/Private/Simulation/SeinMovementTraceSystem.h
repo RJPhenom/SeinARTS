@@ -28,12 +28,11 @@
  *          under the same log category.
  *
  *          DETERMINISM: pure observation. Reads sim state, writes only its own
- *          transient (unhashed) bookkeeping and the log. Registered on every
+ *          transient (non-authoritative) bookkeeping and the log. Registered on every
  *          client unconditionally; a client with the channel silent simply logs
- *          nothing — sim state and the state hash are untouched either way.
+ *          nothing — authoritative sim state is untouched either way.
  *
- * Phase: PostTick | Priority: MovementTrace (90) — after CommandBroker (40),
- *        before StateHash (100).
+ * Phase: PostTick | Priority: MovementTrace (90) — after CommandBroker (40).
  */
 
 #pragma once

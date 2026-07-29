@@ -264,6 +264,7 @@ namespace SeinCoverGenLocal
 	}
 }
 
+#if WITH_EDITORONLY_DATA
 void FSeinCoverComponent::GenerateSlots(const FSeinExtentsShape* OptionalEdgeShape)
 {
 	UE_LOG(LogSeinCoverGen, Log,
@@ -471,3 +472,4 @@ void FSeinCoverComponent::GenerateSlots(const FSeinExtentsShape* OptionalEdgeSha
 			break;
 	}
 }
+#endif

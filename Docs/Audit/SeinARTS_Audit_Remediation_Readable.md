@@ -16,22 +16,22 @@ Markdown file is the live reader's edition.
 
 The campaign tracks **67 findings and approved work items**.
 
-- **15 are formally closed:** 13 Verified and 2 Fixed.
-- **6 are In progress.**
+- **17 are formally closed:** 15 Verified and 2 Fixed.
+- **9 are In progress.**
 - **3 are Approved for implementation but are not complete.**
-- **26 are Confirmed and awaiting their implementation or verification wave.**
-- **7 are Queued for phase-local revalidation.**
+- **23 are Confirmed and awaiting their implementation or verification wave.**
+- **5 are Queued for phase-local revalidation.**
 - **10 are Gates requiring a product or API decision.**
 - Nothing is currently marked Disproved or Deferred.
 
-That is **15 of 67 rows, or 22.39%, formally closed** under the ledger's strict Definition of
+That is **17 of 67 rows, or 25.37%, formally closed** under the ledger's strict Definition of
 Complete. It is deliberately not an estimate of engineering effort completed: foundational work can
 unlock several rows, while a single acceptance row can require substantial multi-process or PIE
 evidence.
 
 By workstream:
 
-- **Correctness, determinism, and lifecycle:** 31 items; 14 formally closed.
+- **Correctness, determinism, and lifecycle:** 31 items; 16 formally closed.
 - **Performance and memory:** 11 items; none formally closed.
 - **API, modularity, and extensibility:** 14 items; 1 formally closed.
 - **Feature and completeness scope:** 11 items; none formally closed.
@@ -258,7 +258,7 @@ had advanced far beyond the Phase-4 narrative:
   their player, issuer kind, payer, tick, payload, and order exactly. This capability is procedural
   authorization between trusted native modules, not cryptographic byte authentication; network,
   campaign, cloud-save, and replay adapters still owe a bounded authenticated outer envelope.
-- Final current evidence passes the Framework-profile snapshot-restore authority suite 7/7
+- Evidence recorded at that checkpoint passes the Framework-profile snapshot-restore authority suite 7/7
   (`SeinARTS.Unit.Authority.SnapshotRestore-20260729-152203`), final-state Unit 318/318 including
   45 expected-warning passes (`SeinARTS.Unit-20260729-152336`), Integration 12/12
   (`SeinARTS.Integration-20260729-152016`), Determinism 16/16
@@ -275,6 +275,48 @@ had advanced far beyond the Phase-4 narrative:
   tallies can nevertheless omit aborted attempts; `TEST-01` tracks durable run evidence.
 
 The full second-pass delta is recorded in [fable-findings.md](fable-findings.md).
+
+### July 29 current branch rebaseline
+
+This current boundary supersedes the evidence snapshot above without erasing its historical record:
+
+- `SER-01` is **Verified**. A focused regression pins `FFixedPoint`'s native eight-byte serializer,
+  exact raw-bit round trip, and `WithSerializer` trait.
+- `CONTENT-03` is **In progress**. The seven corrected fixed-point asset blobs, including the match
+  hotfix, are committed on this branch, but `origin/main` remains stale. The fleet hazard stays open
+  until those exact blobs reach the shared production baseline.
+- `STATE-01` remains **In progress**. Snapshot v13 now exactly covers Core
+  world/entity/component state, ability and resolver pools, canonical Blueprint value slots,
+  Wait/MoveTo continuations, Movement/Movement+ policy instances, navigation async continuation, and
+  FoW authoritative state. Squad state is component-backed and shipped broadphase, blocker, overlap,
+  and cover indexes are derived. Exact continuation remains incomplete for arbitrary Blueprint VM
+  latent/async frames, post-freeze navigation substrate mutation, unenforced stateful
+  formation/resolver preview paths, and custom navigation/collision/cover implementations without
+  explicit state-coverage claims. Quiescent capture continues to fail closed on deferred
+  effect/destroy and replay-ingress work.
+- Cover restore now rebuilds the default or custom implementation's derived provider registry from
+  authoritative entities with canonical handle ordering and generation-safe tie-breaks. That closes
+  the discovered restore-index hole but not `STATE-01`'s broader custom-provider claim boundary.
+- `STATE-02` is **Verified**. Authoritative peer and successful pause-control evidence uses
+  fail-closed BLAKE3-128 canonical roots. The legacy 32-bit hash is explicitly deprecated and
+  local-diagnostic-only. Independent fresh-process serial and parallel collision traces matched exact
+  canonical root and pose for all 120 ticks.
+- `TEST-01` is **In progress** pending clean commit-bound floor provenance. The runner writes
+  `attempt.json` before launch and finalizes it for build failure, no report, test failure, and
+  success. Baseline matching is case-insensitive, canonical broad suites fail closed without one,
+  and baseline ancestry is checked. Dirty-tree Unit evidence is 321/317 for All/Framework, while the
+  checked-in floor remains 318/316 until this checkpoint reproduces those counts cleanly.
+- Final evidence is Cover restore/custom seam 2/2
+  (`SeinARTS.Unit.Cover.SnapshotRestore-20260729-163836-d7d73fe5`), All Unit 321/321
+  (`SeinARTS.Unit-20260729-163909-043d6040`), All Integration 12/12
+  (`SeinARTS.Integration-20260729-164017-33849e08`), and All Determinism 16/16
+  (`SeinARTS.Determinism-20260729-164035-a9cc55b0`). Independent serial and parallel traces are
+  `SeinARTS.Determinism.Process.SerialCollisionTrace-20260729-163937-8fbecf4b` and
+  `SeinARTS.Determinism.Process.ParallelCollisionTrace-20260729-163954-280a45a6`.
+- Ordinary Editor builds are green. The Shipping gate caught branch-level teardown/restore include
+  gaps, those gaps were repaired, and the final `SeinARTS Win64 Shipping` rerun succeeded at 16:44.
+- The current replay boundary is executable file v8 and CoreEntity header metadata v6. Earlier v6/v5
+  references remain the correct historical Phase-2 boundary.
 
 ## Approved architectural and product decisions
 
@@ -329,17 +371,23 @@ The full second-pass delta is recorded in [fable-findings.md](fable-findings.md)
   - **Finding:** Effect IDs collide across scope/storage; removal identity is ambiguous.
 - [ ] **STATE-01 - In progress**
   - **Phase:** 5
-  - **Finding:** Canonical state, provider roles, snapshot v13, Wait/MoveTo codecs, and the focused
-    Blueprint MoveTo continuation suite are green, but the complete continuation fallback and
-    system/provider coverage inventory are not closed.
+  - **Finding:** Snapshot v13 now exactly covers Core world/entity/component state, ability and
+    resolver pools, canonical Blueprint value slots, Wait/MoveTo continuations, Movement/Movement+
+    policy instances, navigation async continuation, and FoW authoritative state. Squad state is
+    component-backed and shipped broadphase, blocker, overlap, and cover indexes are derived. Exact
+    continuation remains incomplete for arbitrary Blueprint VM latent/async frames, post-freeze
+    navigation substrate mutation, unenforced stateful formation/resolver preview paths, and custom
+    navigation/collision/cover implementations without explicit state-coverage claims. Quiescent
+    capture continues to fail closed on deferred effect/destroy and replay-ingress work.
 - [x] **COR-03 - Verified**
   - **Phase:** 1
   - **Finding:** Latent-action iteration can be invalidated by synchronous Blueprint callbacks.
-- [ ] **STATE-02 - In progress**
+- [x] **STATE-02 - Verified**
   - **Phase:** 5
-  - **Finding:** Canonical BLAKE3-128 roots and peer comparison are implemented, but legacy
-    `ComputeStateHash` still includes process-local `FName` identity and final fresh-process coverage
-    proof is incomplete.
+  - **Finding:** Authoritative BLAKE3-128 canonical roots drive peer comparison and successful
+    pause-control evidence. Legacy 32-bit `ComputeStateHash` is deprecated and
+    local-diagnostic-only; independent fresh-process serial and parallel traces matched exact
+    canonical root and pose for all 120 ticks.
 - [x] **STATE-03 - Fixed**
   - **Phase:** 3/4
   - **Finding:** Tick-zero bootstrap lacked a canonical completion barrier and replay-compatible
@@ -434,24 +482,29 @@ The full second-pass delta is recorded in [fable-findings.md](fable-findings.md)
   - **Phase:** 7
   - **Finding:** Four obsolete root-level assets have broken redirected imports during an
     all-content load.
-- [ ] **CONTENT-03 - Confirmed**
+- [ ] **CONTENT-03 - In progress**
   - **Phase:** Immediate
-  - **Finding:** `main` still contains seven pre-resave fixed-point assets that load silently zeroed;
-    a mixed stale/resaved fleet can silently desync.
-- [ ] **SER-01 - Confirmed**
+  - **Finding:** Seven corrected fixed-point asset blobs, including the match hotfix, are committed
+    on this branch, but `origin/main` remains stale; a mixed stale/resaved fleet can silently desync
+    until the shared baseline receives them.
+- [x] **SER-01 - Verified**
   - **Phase:** Immediate
-  - **Finding:** No focused test pins the native eight-byte `FFixedPoint` serializer, exact raw-bit
-    round trip, and `WithSerializer` trait.
-- [ ] **TEST-01 - Confirmed**
+  - **Finding:** Focused regression coverage pins the native eight-byte `FFixedPoint` serializer,
+    exact raw-bit round trip, and `WithSerializer` trait.
+- [ ] **TEST-01 - In progress**
   - **Phase:** 5/8
-  - **Finding:** Retrospective Automation evidence can omit aborted/no-report attempts and has no
-    durable expected-count floor bound to suite, profile, and commit.
+  - **Finding:** Durable `attempt.json` receipts cover launch and every terminal outcome. Canonical
+    broad suites fail closed without case-insensitive suite/profile baselines whose commits are
+    verified ancestors. Dirty-tree Unit evidence is 321/317; promotion awaits a clean implementation
+    checkpoint and truthful floor provenance.
 
 ## Performance and memory checklist
 
-- [ ] **PERF-01 - Confirmed**
+- [ ] **PERF-01 - In progress**
   - **Phase:** 5/8
-  - **Finding:** Redundant full StateHash walks occur at incompatible cadences.
+  - **Finding:** Peer and pause-control evidence now uses canonical BLAKE3-128 roots and the legacy
+    32-bit walk is opt-in local diagnostics only, but full canonical walks remain synchronous at
+    independent checkpoint cadences and are not shared or cached.
 - [ ] **PERF-02 - Confirmed**
   - **Phase:** 5/8
   - **Finding:** Parallel A* creates and destroys seven-array worker scratch contexts for every
@@ -465,8 +518,9 @@ The full second-pass delta is recorded in [fable-findings.md](fable-findings.md)
     affected sources.
 - [ ] **PERF-05 - Confirmed**
   - **Phase:** 6
-  - **Finding:** Minimap performs dense point queries, buffer churn, and full texture recreation and
-    upload.
+  - **Finding:** Minimap reuses its texture at a stable resolution, but every refresh still allocates
+    full pixel buffers, performs dense world-to-fixed fog lookups and optional blur, copies the
+    complete mip, and calls `UpdateResource`.
 - [ ] **PERF-06 - Confirmed**
   - **Phase:** 5/8
   - **Finding:** Cover provider and slot work has quadratic paths and duplicated allocation bodies.
@@ -474,9 +528,11 @@ The full second-pass delta is recorded in [fable-findings.md](fable-findings.md)
   - **Phase:** 7/8
   - **Finding:** Squad, avoidance, and collision scan broad entity sets and allocate avoidable
     per-tick containers.
-- [ ] **PERF-08 - Confirmed**
+- [ ] **PERF-08 - In progress**
   - **Phase:** 5/8
-  - **Finding:** Replay and completed/hash/turn histories can grow without practical bounds.
+  - **Finding:** Network turn/root histories are pruned to a 256-turn window and replay has a 64 MiB
+    cap, but cap exhaustion aborts and discards the complete buffered recording; journal streaming
+    and long-session retention remain open.
 - [ ] **PERF-09 - Confirmed**
   - **Phase:** 8
   - **Finding:** High effect stack counts materialize one resolved modifier copy per stack.
@@ -487,8 +543,9 @@ The full second-pass delta is recorded in [fable-findings.md](fable-findings.md)
     projects that opted into the non-default parallel resolver.
 - [ ] **PERF-11 - Confirmed**
   - **Phase:** 5/8
-  - **Finding:** StateHash parallel dispatch is budgeted by storage count, so the default minimum
-    batch normally leaves the expensive entity walk serial.
+  - **Finding:** Legacy `ComputeStateHash` parallel dispatch is budgeted by storage count and normally
+    leaves the entity walk serial. That path is now deprecated and local-only; production
+    canonical-root encoding and hashing is a separate synchronous cost to profile.
 
 ## API, modularity, and extensibility checklist
 
@@ -516,14 +573,16 @@ The full second-pass delta is recorded in [fable-findings.md](fable-findings.md)
 - [ ] **API-07 - Gate**
   - **Phase:** 5/7
   - **Finding:** Typed path kinds lack an extensible custom payload and validation story.
-- [ ] **API-08 - Queued**
+- [ ] **API-08 - Confirmed**
   - **Phase:** 5
-  - **Finding:** Per-unit terrain restrictions are not wired through the full request and planner
-    path.
-- [ ] **API-09 - Queued**
+  - **Finding:** Nav request/query types and A* honor `BlockedTerrainTags` and `NavLayerMask`, but
+    shipped movement authoring does not carry per-unit blocked-terrain policy end to end: MoveTo
+    escalation leaves the tags empty and containment still uses the default ground mask.
+- [ ] **API-09 - Confirmed**
   - **Phase:** 6/7
-  - **Finding:** FoW lifecycle hooks and implementation contracts are advertised more broadly than
-    wired.
+  - **Finding:** FoW initialization, substrate mutation, and canonical state are wired, but the
+    advertised `RegisterSource`/`UnregisterSource` and `RegisterBlocker`/`UnregisterBlocker` hooks have
+    no callers; the default scans component storage directly.
 - [ ] **API-10 - Gate**
   - **Phase:** 7
   - **Finding:** Targeter gestures and attribute modifier types are narrower than their
@@ -539,9 +598,9 @@ The full second-pass delta is recorded in [fable-findings.md](fable-findings.md)
     deactivates opaque passive execution.
 - [ ] **API-13 - Confirmed**
   - **Phase:** 8
-  - **Finding:** Core and Net state machines are over-concentrated in 9,615-line and 6,401-line
-    implementation files; split internal responsibilities without widening public seams or changing
-    execution order.
+  - **Finding:** Core and Net state machines remain concentrated in roughly 12.4k-line and 7.3k-line
+    implementation files even after canonical-root serialization moved to its own unit; split
+    internal responsibilities without widening public seams or changing execution order.
 - [ ] **API-14 - Confirmed**
   - **Phase:** 5
   - **Finding:** Public mutable entity-pool, component-storage, and player-state accessors bypass the
@@ -597,12 +656,12 @@ The full second-pass delta is recorded in [fable-findings.md](fable-findings.md)
 
 ### Replay foundation boundary
 
-The replay foundation recorded in the ledger is a bounded v6 executable format owned exclusively by
+The current replay foundation is a bounded v8 executable format owned exclusively by
 `SeinARTSNet`. Full recordings start at tick zero, retain every applied assembled turn including
 empty heartbeats, stop on the exact inclusive `EndTick`, bind executable command decoding to the
 world's frozen schema/name catalog, and carry the agreed bootstrap receipt.
 
-The similarly named CoreEntity Blueprint helpers are bounded v5
+The similarly named CoreEntity Blueprint helpers are bounded v6
 **header-metadata-only** documents. The ambiguous legacy nodes remain as deprecated wrappers and
 cannot create or load an executable journal. `FEAT-02` remains open for checkpoints, seeking,
 long-session streaming, and retention policy.

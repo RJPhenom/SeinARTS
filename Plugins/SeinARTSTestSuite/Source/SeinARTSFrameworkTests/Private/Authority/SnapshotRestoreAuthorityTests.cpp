@@ -369,18 +369,25 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(RootBefore == RootAfter));
 	}
 
-	TEST(SnapshotRestorePreserveCurrentSkipsTheLocalRestoreDelegate,
+	TEST(SnapshotRestorePreserveCurrentSkipsLocalButFiresAuthoritativeReconcile,
 		"SeinARTS.Unit.Authority.SnapshotRestore")
 	{
 		FSnapshotRestoreAuthorityFixture Fixture;
 		ASSERT_THAT(IsTrue(Fixture.IsReady()));
 
 		int32 RestoreDelegateCalls = 0;
+		int32 AuthoritativeReconcileCalls = 0;
 		const FDelegateHandle RestoreHandle =
 			Fixture.Destination->OnRestoreSnapshotPostSim.AddLambda(
 				[&RestoreDelegateCalls](const FSeinCameraSnapshotData&)
 				{
 					++RestoreDelegateCalls;
+				});
+		const FDelegateHandle ReconcileHandle =
+			Fixture.Destination->OnAuthoritativeStateRestored.AddLambda(
+				[&AuthoritativeReconcileCalls]()
+				{
+					++AuthoritativeReconcileCalls;
 				});
 
 		FSeinSnapshotRestoreAuthorityHandle Authority;
@@ -393,11 +400,14 @@ namespace UE::SeinARTSTests
 			MoveTemp(Authority), Fixture.Snapshot, Options)));
 		ASSERT_THAT(IsFalse(Authority.IsValid()));
 		ASSERT_THAT(AreEqual(0, RestoreDelegateCalls));
+		ASSERT_THAT(AreEqual(1, AuthoritativeReconcileCalls));
 		ASSERT_THAT(IsTrue(
 			Fixture.Destination->IsSimulationRunning()));
 
 		Fixture.Destination->OnRestoreSnapshotPostSim.Remove(
 			RestoreHandle);
+		Fixture.Destination->OnAuthoritativeStateRestored.Remove(
+			ReconcileHandle);
 	}
 
 	TEST(SnapshotRestoreCanRemainStoppedThenResumeWithExactPendingCommands,

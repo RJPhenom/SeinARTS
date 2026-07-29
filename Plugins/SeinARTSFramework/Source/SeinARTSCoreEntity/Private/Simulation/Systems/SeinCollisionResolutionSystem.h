@@ -16,8 +16,8 @@
  *
  *          Registration is unchanged from when this system held the logic inline:
  *          PostTick phase, SeinSystemPriority::CollisionResolution. It still runs
- *          after movement (PostTick) and before StateHash (priority 100), so the
- *          resolver's separations are part of the deterministic state snapshot.
+ *          after movement, so the resolver's settled separations are visible at
+ *          the stable tick boundary and in deterministic snapshots.
  */
 
 #pragma once

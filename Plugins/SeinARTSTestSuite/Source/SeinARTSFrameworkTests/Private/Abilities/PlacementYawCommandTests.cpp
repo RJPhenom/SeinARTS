@@ -47,7 +47,7 @@ namespace UE::SeinARTSTests
 	TEST(FreeRotationPlacementUsesCapturedYaw, "SeinARTS.Integration.Commands")
 	{
 		TestRunner->AddExpectedError(
-			TEXT("Component 'SeinAbilityComponent' has field(s) excluded from the determinism state hash"),
+			TEXT("Component 'SeinAbilityComponent' has field(s) excluded from the legacy local state fingerprint"),
 			EAutomationExpectedErrorFlags::Contains, 1, false);
 		TestRunner->AddExpectedError(
 			TEXT("footprint blocked"),

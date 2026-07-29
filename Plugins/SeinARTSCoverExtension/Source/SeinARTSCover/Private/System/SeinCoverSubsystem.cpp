@@ -20,6 +20,7 @@ DEFINE_LOG_CATEGORY_STATIC(LogSeinCoverSubsystem, Log, All);
 void USeinCoverSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
+	Collection.InitializeDependency(USeinWorldSubsystem::StaticClass());
 
 	// Resolve the configured class. FSoftClassPath drives the picker — same
 	// pattern as NavigationClass / FogOfWarClass / RelayActorClass — so this
@@ -92,6 +93,10 @@ void USeinCoverSubsystem::ReleaseModuleOwnedStateForModuleUnload()
 	{
 		if (SpawnedHandle.IsValid())   CachedSimWorld->OnEntitySpawned.Remove(SpawnedHandle);
 		if (DestroyedHandle.IsValid()) CachedSimWorld->OnEntityDestroyed.Remove(DestroyedHandle);
+		if (RestoredHandle.IsValid())
+		{
+			CachedSimWorld->OnAuthoritativeStateRestored.Remove(RestoredHandle);
+		}
 		if (CachedSimWorld->AuthoritativeDestinationResolver.IsBoundToObject(this))
 		{
 			CachedSimWorld->AuthoritativeDestinationResolver.Unbind();
@@ -102,6 +107,7 @@ void USeinCoverSubsystem::ReleaseModuleOwnedStateForModuleUnload()
 		}
 		SpawnedHandle.Reset();
 		DestroyedHandle.Reset();
+		RestoredHandle.Reset();
 		CachedSimWorld = nullptr;
 	}
 
@@ -119,15 +125,16 @@ void USeinCoverSubsystem::HookSimWorldEvents()
 	USeinWorldSubsystem* WorldSub = World->GetSubsystem<USeinWorldSubsystem>();
 	if (!WorldSub)
 	{
-		// Sim subsystem may not be up yet at our Initialize. Retry on the
-		// next world begin-play tick.
+		// Defensive fallback for an unusual world that declined the declared
+		// subsystem dependency. Retry on world begin play.
 		UE_LOG(LogSeinCoverSubsystem, Verbose,
 			TEXT("HookSimWorldEvents: sim subsystem not ready; will rebind in OnWorldBeginPlay"));
 		return;
 	}
 	if (CachedSimWorld == WorldSub
 		&& SpawnedHandle.IsValid()
-		&& DestroyedHandle.IsValid())
+		&& DestroyedHandle.IsValid()
+		&& RestoredHandle.IsValid())
 	{
 		return;
 	}
@@ -137,6 +144,8 @@ void USeinCoverSubsystem::HookSimWorldEvents()
 		this, &USeinCoverSubsystem::HandleEntitySpawned);
 	DestroyedHandle = WorldSub->OnEntityDestroyed.AddUObject(
 		this, &USeinCoverSubsystem::HandleEntityDestroyed);
+	RestoredHandle = WorldSub->OnAuthoritativeStateRestored.AddUObject(
+		this, &USeinCoverSubsystem::ReconcileProviderRegistry);
 
 	// Authoritative-destination resolver: tell the sim's path/movement layer that a
 	// cover slot is a valid destination that OVERRULES the coarse nav bake (root
@@ -171,8 +180,13 @@ void USeinCoverSubsystem::HookSimWorldEvents()
 				return Out;
 			});
 
+	// Initialization order is intentionally unconstrained across plugins. If
+	// the sim world already contains authored or restored providers, bring the
+	// replaceable cover implementation to the same derived state immediately.
+	ReconcileProviderRegistry();
+
 	UE_LOG(LogSeinCoverSubsystem, Log,
-		TEXT("HookSimWorldEvents: subscribed to OnEntitySpawned + OnEntityDestroyed"));
+		TEXT("HookSimWorldEvents: subscribed to entity lifecycle + authoritative restore"));
 }
 
 void USeinCoverSubsystem::HandleEntitySpawned(FSeinEntityHandle Handle)
@@ -183,7 +197,7 @@ void USeinCoverSubsystem::HandleEntitySpawned(FSeinEntityHandle Handle)
 	// authored an FSeinCoverComponent entry on the ComponentData array.
 	if (CachedSimWorld->GetComponent<FSeinCoverComponent>(Handle) != nullptr)
 	{
-		CoverSystem->RegisterProvider(Handle);
+		CoverSystem->RegisterAuthoritativeProvider(Handle);
 		UE_LOG(LogSeinCoverSubsystem, Verbose,
 			TEXT("HandleEntitySpawned: registered cover provider %s"), *Handle.ToString());
 	}
@@ -197,8 +211,36 @@ void USeinCoverSubsystem::HandleEntityDestroyed(FSeinEntityHandle Handle)
 	// the hot destroy path.
 	if (CoverSystem)
 	{
-		CoverSystem->UnregisterProvider(Handle);
+		CoverSystem->UnregisterAuthoritativeProvider(Handle);
 	}
+}
+
+void USeinCoverSubsystem::ReconcileProviderRegistry()
+{
+	if (!CoverSystem || !CachedSimWorld)
+	{
+		return;
+	}
+
+	TArray<FSeinEntityHandle> ProviderHandles;
+	ProviderHandles.Reserve(
+		CachedSimWorld->GetEntityPool().GetActiveCount());
+	CachedSimWorld->GetEntityPool().ForEachEntity(
+		[this, &ProviderHandles](
+			FSeinEntityHandle Handle,
+			const FSeinEntity& /*Entity*/)
+		{
+			if (CachedSimWorld->GetComponent<FSeinCoverComponent>(Handle))
+			{
+				ProviderHandles.Add(Handle);
+			}
+		});
+	ProviderHandles.Sort();
+
+	CoverSystem->RebuildProviderRegistry(ProviderHandles);
+	UE_LOG(LogSeinCoverSubsystem, Verbose,
+		TEXT("ReconcileProviderRegistry: rebuilt %d authoritative provider(s)"),
+		ProviderHandles.Num());
 }
 
 USeinCoverSystem* USeinCoverSubsystem::GetCoverSystemForWorld(const UObject* WorldContextObject)

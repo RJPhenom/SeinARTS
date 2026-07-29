@@ -174,8 +174,8 @@ public:
 	// ----------------------------------------------------------------------------------------------------
 	// These three drive the `Sein.Sim.*` console variables; the console still wins at runtime for
 	// live A/B testing. Parallel passes are designed BIT-IDENTICAL to serial, so toggling them is
-	// deterministic (verify via Sein.Sim.StateHash.Log). Exception: Async Pathfinding shifts WHEN a
-	// path arrives by one tick — see its note; it must match across clients in a match.
+	// deterministic (verify with canonical-root A/B plus peer/replay agreement). Exception: Async
+	// Pathfinding shifts WHEN a path arrives by one tick — see its note; it must match across clients.
 
 	/**
 	 * Master switch for spreading the simulation's per-entity work across CPU worker threads. When
@@ -222,8 +222,8 @@ public:
 	 * consumes a prior order's path, a group given one order can't split, and a stale NotFound can't
 	 * fail a valid move; a stale pending request self-clears via key-overwrite, and dead/consumed
 	 * results via the per-drain reset. The timing is fixed-1-tick-deferred, drained and consumed
-	 * within one tick before the StateHash, so it is bit-deterministic across peers: validate via the
-	 * Sein.Sim.Parallel 0-vs-1 state-hash gate with async on, then peer/replay agreement.
+	 * within one tick, so it is bit-deterministic across peers: validate via the
+	 * Sein.Sim.Parallel 0-vs-1 canonical-root gate with async on, then peer/replay agreement.
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Navigation",
 		meta = (DisplayName = "Async Pathfinding"))

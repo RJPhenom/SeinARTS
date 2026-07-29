@@ -35,7 +35,7 @@
  *
  * Phase: PostTick | Priority: 11 — immediately after CollisionResolution (10),
  *        so it corrects the same tick's pushes before squad centroid (30) and
- *        the state hash (100).
+ *        the stable tick boundary.
  */
 
 #pragma once

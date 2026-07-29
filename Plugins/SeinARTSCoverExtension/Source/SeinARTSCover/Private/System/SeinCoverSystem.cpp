@@ -6,6 +6,9 @@
 #include "System/SeinCoverSystem.h"
 #include "Simulation/SeinWorldSubsystem.h"
 
+#include "Algo/BinarySearch.h"
+#include "Algo/Unique.h"
+
 void USeinCoverSystem::OnCoverSystemInitialized(USeinWorldSubsystem* InWorld)
 {
 	World = InWorld;
@@ -13,7 +16,74 @@ void USeinCoverSystem::OnCoverSystemInitialized(USeinWorldSubsystem* InWorld)
 
 void USeinCoverSystem::OnCoverSystemDeinitialized()
 {
+	AuthoritativeProviderHandles.Reset();
 	World = nullptr;
+}
+
+void USeinCoverSystem::RegisterAuthoritativeProvider(
+	FSeinEntityHandle ProviderHandle)
+{
+	const int32 InsertIndex = Algo::LowerBound(
+		AuthoritativeProviderHandles, ProviderHandle);
+	if (AuthoritativeProviderHandles.IsValidIndex(InsertIndex)
+		&& AuthoritativeProviderHandles[InsertIndex] == ProviderHandle)
+	{
+		return;
+	}
+
+	if (InsertIndex == AuthoritativeProviderHandles.Num())
+	{
+		AuthoritativeProviderHandles.Add(ProviderHandle);
+		RegisterProvider(ProviderHandle);
+		return;
+	}
+
+	// Slot reuse can introduce a lower canonical handle after later handles
+	// were already registered. Rebuild through the legacy implementation hooks
+	// so custom indexes never inherit history-dependent iteration order.
+	for (const FSeinEntityHandle ExistingHandle :
+		AuthoritativeProviderHandles)
+	{
+		UnregisterProvider(ExistingHandle);
+	}
+	AuthoritativeProviderHandles.Insert(ProviderHandle, InsertIndex);
+	for (const FSeinEntityHandle CanonicalHandle :
+		AuthoritativeProviderHandles)
+	{
+		RegisterProvider(CanonicalHandle);
+	}
+}
+
+void USeinCoverSystem::UnregisterAuthoritativeProvider(
+	FSeinEntityHandle ProviderHandle)
+{
+	const int32 ExistingIndex = Algo::LowerBound(
+		AuthoritativeProviderHandles, ProviderHandle);
+	if (AuthoritativeProviderHandles.IsValidIndex(ExistingIndex)
+		&& AuthoritativeProviderHandles[ExistingIndex] == ProviderHandle)
+	{
+		AuthoritativeProviderHandles.RemoveAt(ExistingIndex);
+	}
+	UnregisterProvider(ProviderHandle);
+}
+
+void USeinCoverSystem::RebuildProviderRegistry(
+	const TArray<FSeinEntityHandle>& ProviderHandles)
+{
+	for (const FSeinEntityHandle ExistingHandle :
+		AuthoritativeProviderHandles)
+	{
+		UnregisterProvider(ExistingHandle);
+	}
+	AuthoritativeProviderHandles.Reset();
+
+	TArray<FSeinEntityHandle> CanonicalHandles = ProviderHandles;
+	CanonicalHandles.Sort();
+	CanonicalHandles.SetNum(Algo::Unique(CanonicalHandles));
+	for (const FSeinEntityHandle ProviderHandle : CanonicalHandles)
+	{
+		RegisterAuthoritativeProvider(ProviderHandle);
+	}
 }
 
 TArray<FSeinCoverContext> USeinCoverSystem::QueryCoverAt(FFixedVector /*WorldPoint*/,

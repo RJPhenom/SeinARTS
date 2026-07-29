@@ -1181,6 +1181,11 @@ namespace
 
 		const int32 Tick = WorldSub->GetCurrentTick();
 		const int32 LegacyPartialHash = WorldSub->ComputeStateHash();
+		FGuid CanonicalRoot;
+		FString CanonicalRootError;
+		const bool bHasCanonicalRoot =
+			WorldSub->ComputeCanonicalStateRoot(
+				CanonicalRoot, CanonicalRootError);
 		const int32 ActiveEntities = WorldSub->GetEntityPool().GetActiveCount();
 		const int64 Seed = Net ? Net->GetSessionSeed() : 0;
 		const FSeinPlayerID LocalSlot = Net ? Net->GetLocalPlayerID() : FSeinPlayerID::Neutral();
@@ -1188,6 +1193,16 @@ namespace
 		Ar.Logf(TEXT("[SeinNet] DumpState  Tick=%d  LegacyPartialStateHash=0x%08x  ActiveEntities=%d  Seed=%lld  LocalSlot=%u  NetMode=%d"),
 			Tick, static_cast<uint32>(LegacyPartialHash), ActiveEntities,
 			Seed, LocalSlot.Value, static_cast<int32>(World->GetNetMode()));
+		if (bHasCanonicalRoot)
+		{
+			Ar.Logf(TEXT("[SeinNet] CanonicalStateRoot=%s"),
+				*CanonicalRoot.ToString(EGuidFormats::Digits));
+		}
+		else
+		{
+			Ar.Logf(TEXT("[SeinNet] CanonicalStateRoot unavailable: %s"),
+				*CanonicalRootError);
+		}
 
 		// Server-only: dump the slot↔relay binding so cross-run comparisons can
 		// confirm Player 1 = SeinPlayerController_0, etc.

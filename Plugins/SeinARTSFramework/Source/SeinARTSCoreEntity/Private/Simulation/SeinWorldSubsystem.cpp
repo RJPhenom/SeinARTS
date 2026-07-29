@@ -868,6 +868,7 @@ void USeinWorldSubsystem::ReleaseAllModuleOwnedState()
 	PauseControlAppliedNotifier.Unbind();
 	OnCaptureSnapshotPostSim.Clear();
 	OnRestoreSnapshotPostSim.Clear();
+	OnAuthoritativeStateRestored.Clear();
 
 	if (LatentActionManager)
 	{
@@ -2262,15 +2263,14 @@ bool USeinWorldSubsystem::TickSimulation(float DeltaTime)
 		}
 
 #if !UE_BUILD_SHIPPING
-		// Determinism verification: when the Log cvar is on, dump the sim
-		// state hash each tick. Run two PIE clients (or two PIE sessions)
-		// with this enabled and diff the logs — any divergence pinpoints
-		// the tick where lockstep breaks. Gated off in shipping builds so
-		// the hash walk doesn't cost production CPU.
+		// Local mutation diagnostics: when the legacy Log cvar is on, dump the
+		// incomplete in-process fingerprint each tick. This can localize a
+		// divergence only when preload/name-pool conditions are controlled; it
+		// is not peer or fresh-process determinism evidence. Use the canonical
+		// world root at stable boundaries for that. Gated off in shipping.
 		//
 		// Two log levels:
-		//   = 1: hash only — `StateHash[tick N] = 0xXXXX`. Compact, finds
-		//        first divergent tick. Use for long sessions.
+		//   = 1: local fingerprint only. Compact, useful for one-process traces.
 		//   = 2: hash + per-entity dump on tick 1, then hash-only on
 		//        subsequent ticks. Tick 1 is the initial state — diffing
 		//        two log files at tick 1 reveals what's structurally
@@ -2283,13 +2283,15 @@ bool USeinWorldSubsystem::TickSimulation(float DeltaTime)
 			const int32 StateLogLevel = CVarLog ? CVarLog->GetInt() : 0;
 			if (StateLogLevel != 0)
 			{
-				UE_LOG(LogSeinSim, Log, TEXT("StateHash[tick %d] = 0x%08x"),
+				UE_LOG(LogSeinSim, Log,
+					TEXT("LegacyLocalStateFingerprint[tick %d] = 0x%08x"),
 					CurrentTick, static_cast<uint32>(ComputeStateHash()));
 
 				const bool bDumpEntities = (StateLogLevel >= 3) || (StateLogLevel == 2 && CurrentTick == 1);
 				if (bDumpEntities)
 				{
-					UE_LOG(LogSeinSim, Log, TEXT("StateHash[tick %d] entity dump  (active=%d):"),
+					UE_LOG(LogSeinSim, Log,
+						TEXT("LegacyLocalStateFingerprint[tick %d] entity dump  (active=%d):"),
 						CurrentTick, EntityPool.GetActiveCount());
 
 					// Walk every alive entity and print ID, owner, and the
@@ -2412,7 +2414,7 @@ void USeinWorldSubsystem::TickSystems(FFixedPoint DeltaTime)
 			}
 		}
 
-		// Phase 4: PostTick — cleanup, state hash
+		// Phase 4: PostTick — cleanup and settled tick state
 		ProcessDeferredDestroys();
 		for (const FRegisteredSystem& Registered : Systems)
 		{
@@ -2697,11 +2699,22 @@ void USeinWorldSubsystem::PumpPauseControlFrame()
 
 	if (PauseControlAppliedNotifier.IsBound())
 	{
-		// ComputeStateHash is intentionally not substituted here: Phase 1 proved it
-		// is process-local. Multiplayer must wait for the canonical digest provider.
-		const FGuid InvalidCanonicalStateDigest;
+		FGuid CanonicalStateDigest;
+		if (!bProtocolFailure)
+		{
+			FString RootError;
+			if (!ComputeCanonicalStateRoot(
+					CanonicalStateDigest, RootError))
+			{
+				UE_LOG(LogSeinSim, Error,
+					TEXT("Pause-control frame epoch=%lld sequence=%lld applied, but canonical state-root capture failed: %s"),
+					Frame.Cursor.PauseEpoch,
+					Frame.Cursor.Sequence,
+					*RootError);
+			}
+		}
 		PauseControlAppliedNotifier.Execute(
-			Frame.Cursor, bSimPaused, InvalidCanonicalStateDigest,
+			Frame.Cursor, bSimPaused, CanonicalStateDigest,
 			bProtocolFailure);
 	}
 }
@@ -8152,6 +8165,16 @@ bool USeinWorldSubsystem::RestoreSnapshot(
 		CollisionResolver->OnSnapshotRestored();
 	}
 
+	// Rebuild extension-owned, non-canonical sim indexes before actor-bridge
+	// cull/spawn callbacks can query them. The callback is read-only with
+	// respect to authoritative state; custom extensions never receive Core's
+	// private restore capability and must not depend on restored actors.
+	{
+		TGuardValue<bool> ReadOnlyGuard(bReadOnlyCallbackInProgress, true);
+		TGuardValue<bool> ObserverGuard(bObserverCallbackInProgress, true);
+		OnAuthoritativeStateRestored.Broadcast();
+	}
+
 	UE_LOG(LogSeinSim, Log,
 		TEXT("RestoreSnapshot: authority=%s  localState=%s  resume=%s  tick=%d  entities=%d  componentStorages=%d  playerStates=%d  abilityPool=%d  latentActions=%d  resolverPool=%d"),
 		*ConsumedRestoreAuthorityID.ToString(),
@@ -10006,19 +10029,18 @@ ISeinComponentStorage* USeinWorldSubsystem::GetOrCreateStorageForType(UScriptStr
 	UE_LOG(LogSeinSim, Verbose, TEXT("Created component storage for %s"), *StructType->GetName());
 
 #if !UE_BUILD_SHIPPING
-	// Determinism guard (dev only, once per type): warn if this component carries
-	// state the desync hash silently drops (TMap/TSet, structs without
-	// WithGetTypeHash, arrays of such). Such drift would NOT be caught by the
-	// state-hash gossip. See FSeinGenericComponentStorage::ComputeHash.
+	// Legacy-diagnostic guard (dev only, once per type): warn if this component
+	// carries state the incomplete local fingerprint silently drops. Canonical
+	// world-root capture uses a separate exact, fail-closed reflected encoder.
 	{
 		TArray<FString> Unhashed;
 		FSeinGenericComponentStorage::CollectUnhashedStateFields(StructType, Unhashed);
 		if (Unhashed.Num() > 0)
 		{
 			UE_LOG(LogSeinSim, Warning,
-				TEXT("Component '%s' has field(s) excluded from the determinism state hash: %s. ")
-				TEXT("Per-instance state in these fields will NOT be caught by desync detection — prefer ")
-				TEXT("hashable types (scalars, FName, FGameplayTag, FFixed*) or extend ComputeHash."),
+				TEXT("Component '%s' has field(s) excluded from the legacy local state fingerprint: %s. ")
+				TEXT("Use the canonical world root for peer desync detection; extend ComputeHash only ")
+				TEXT("when this compatibility diagnostic needs the field."),
 				*StructType->GetName(), *FString::Join(Unhashed, TEXT(", ")));
 		}
 	}
@@ -10791,10 +10813,10 @@ int32 USeinWorldSubsystem::ComputeStateHash() const
 		Hash = HashCombine(Hash, GetTypeHash(Entity));
 	});
 
-	// Component storages — TMap is keyed by UScriptStruct* (pointer).
-	// Pointer hash is stable within a process but not guaranteed across
-	// processes, so sort by struct name before hashing. Keeps cross-process
-	// comparison reliable for desync detection.
+	// Component storages — TMap is keyed by UScriptStruct* (pointer), so sort
+	// by path for a repeatable local fold. The reflected property/value hashes
+	// below still contain process-local and incomplete identity; this legacy
+	// fingerprint is intentionally not a cross-process contract.
 	//
 	// The per-storage ComputeHash() walk is the expensive part (every live slot
 	// × every reflected field). Each storage's hash is INDEPENDENT and a pure

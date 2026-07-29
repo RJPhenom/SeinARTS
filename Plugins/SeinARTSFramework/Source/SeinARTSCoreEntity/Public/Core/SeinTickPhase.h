@@ -20,7 +20,7 @@ enum class ESeinTickPhase : uint8
 	PreTick,            // Cooldowns, effect expiration, modifier cleanup, resource income
 	CommandProcessing,  // Dequeue player/AI commands, activate/cancel abilities
 	AbilityExecution,   // All active abilities tick via latent action manager, production
-	PostTick            // Deferred destroy, pool recycle, state hash computation
+	PostTick            // Deferred destroy, pool recycle, settled tick state
 };
 
 /**

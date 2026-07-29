@@ -54,10 +54,9 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<USeinCoverSystem> CoverSystem;
 
-	/** Bind to USeinWorldSubsystem's OnEntitySpawned/Destroyed at world ready.
-	 *  The world subsystem may not be available at our Initialize() call
-	 *  (UE doesn't enforce subsystem init order between modules), so we hook
-	 *  via OnWorldBeginPlay as well — same pattern other systems use. */
+	/** Bind to USeinWorldSubsystem's lifecycle and restore delegates. Initialize
+	 *  declares the Core world dependency; OnWorldBeginPlay remains a defensive
+	 *  idempotent retry for unusual world construction. */
 	void HookSimWorldEvents();
 
 	/** Called by the sim world subsystem when an entity finishes spawning.
@@ -70,6 +69,11 @@ private:
 	 *  to the dying component payload. */
 	void HandleEntityDestroyed(FSeinEntityHandle Handle);
 
+	/** Rebuild the active implementation's derived provider registry from the
+	 *  authoritative alive-entity/component view. Used after snapshot adoption
+	 *  and when binding to an already-populated sim world. */
+	void ReconcileProviderRegistry();
+
 	/** Cached sim subsystem ref — set on HookSimWorldEvents. Used to inspect
 	 *  components during spawn registration; destroy unregistration is handle-only. */
 	UPROPERTY(Transient)
@@ -77,4 +81,5 @@ private:
 
 	FDelegateHandle SpawnedHandle;
 	FDelegateHandle DestroyedHandle;
+	FDelegateHandle RestoredHandle;
 };

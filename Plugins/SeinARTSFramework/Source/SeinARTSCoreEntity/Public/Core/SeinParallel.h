@@ -41,10 +41,9 @@
  *            Sein.Sim.Parallel          (default 1) master on/off. 0 forces
  *                                        every SeinParallelFor serial. The
  *                                        parallel path is designed to be BIT-
- *                                        IDENTICAL to this — diff
- *                                        `Sein.Sim.StateHash.Log` streams with
- *                                        it 1 vs 0 over the same scenario to
- *                                        prove no divergence.
+ *                                        IDENTICAL to this — compare canonical
+ *                                        world roots plus peer/replay agreement
+ *                                        with it 1 vs 0 over the same scenario.
  *            Sein.Sim.ParallelMinBatch  (default 64) batches smaller than this
  *                                        run serial (dispatch overhead > win).
  */

@@ -116,6 +116,7 @@ struct SEINARTSCOVER_API FSeinCoverComponent : public FSeinComponent
 	//   - Area: fills `Area`'s interior with concentric inset rings. Reads
 	//     `Area.Shape` + `Area.LocalExtents` directly; no sibling needed.
 
+#if WITH_EDITORONLY_DATA
 	/** Distribution mode — Edge (around `Area`'s perimeter) or Area (interior). */
 	UPROPERTY(EditAnywhere, Category = "SeinARTS|Cover|Generate")
 	ESeinCoverGenerateMode GenerateMode = ESeinCoverGenerateMode::Edge;
@@ -125,6 +126,7 @@ struct SEINARTSCOVER_API FSeinCoverComponent : public FSeinComponent
 	UPROPERTY(EditAnywhere, Category = "SeinARTS|Cover|Generate",
 		meta = (ClampMin = "1", UIMin = "1", UIMax = "64"))
 	int32 GenerateSlotCount = 8;
+#endif
 
 	/** Footprint radius of a unit standing on a slot, in world units. This is the
 	 *  circle used at RUNTIME (in the cover system's slot resolution) to: (a) reject
@@ -136,6 +138,7 @@ struct SEINARTSCOVER_API FSeinCoverComponent : public FSeinComponent
 		meta = (ClampMin = "0.0"))
 	FFixedPoint SlotRadius = FFixedPoint::FromInt(50);
 
+#if WITH_EDITORONLY_DATA
 	/** Distance from the wall body edge (Edge mode) or area edge (Area mode)
 	 *  to the slot's CENTER, in world units.
 	 *
@@ -191,6 +194,7 @@ struct SEINARTSCOVER_API FSeinCoverComponent : public FSeinComponent
 	 *  tick. The caller (cover details panel) resolves the sibling Extents
 	 *  shape from the owning USeinEntityComponent's ComponentData array. */
 	void GenerateSlots(const FSeinExtentsShape* OptionalEdgeShape = nullptr);
+#endif
 };
 
 FORCEINLINE uint32 GetTypeHash(const FSeinCoverComponent& Data)
