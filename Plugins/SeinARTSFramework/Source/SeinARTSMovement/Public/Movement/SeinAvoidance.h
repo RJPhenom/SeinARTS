@@ -61,6 +61,12 @@ public:
 	 *  Default: no-op. Mirrors USeinCollisionResolver::OnInitialized. */
 	virtual void OnInitialized(UWorld* /*World*/) {}
 
+	/** Called after the delegating system stops and before this implementation
+	 *  is detached, while its native module is still callable. Override to
+	 *  release delegate bindings or native resources. Must be idempotent and
+	 *  must not issue gameplay mutations. */
+	virtual void OnDeinitialized() {}
+
 	// ----------------------------------------------------------------------
 	// Compute — the per-tick surface
 	// ----------------------------------------------------------------------

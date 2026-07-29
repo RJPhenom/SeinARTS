@@ -40,10 +40,10 @@ struct SEINARTSCOREENTITY_API FSeinEntityHandle
 		return FSeinEntityHandle(0, 0);
 	}
 
-	/** Check validity (generation 0 is always invalid) */
+	/** A valid handle always names a non-reserved slot and positive generation. */
 	FORCEINLINE bool IsValid() const
 	{
-		return Generation != 0;
+		return Index > 0 && Generation > 0;
 	}
 
 	FORCEINLINE bool operator==(const FSeinEntityHandle& Other) const

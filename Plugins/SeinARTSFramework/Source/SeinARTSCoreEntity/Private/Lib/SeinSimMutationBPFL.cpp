@@ -7,7 +7,6 @@
 #include "Lib/SeinSimMutationBPFL.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Simulation/ComponentStorage.h"
-#include "Core/SeinSimContext.h"
 #include "Core/SeinEntityPool.h"
 #include "Types/Entity.h"
 #include "Math/MathLib.h"
@@ -29,7 +28,6 @@ namespace
 	template<typename T>
 	bool WriteWholeStruct(const UObject* WorldContextObject, FSeinEntityHandle Handle, const T& NewData, const TCHAR* FnName)
 	{
-		SEIN_CHECK_SIM();
 		UWorld* World = WorldContextObject ? GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::ReturnNull) : nullptr;
 		USeinWorldSubsystem* Subsystem = World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
 		if (!Subsystem)
@@ -37,6 +35,7 @@ namespace
 			UE_LOG(LogSeinBPFL, Warning, TEXT("%s: no SeinWorldSubsystem"), FnName);
 			return false;
 		}
+		if (!Subsystem->RequireStateMutationAuthorization(FnName)) return false;
 		T* Dst = Subsystem->GetComponent<T>(Handle);
 		if (!Dst)
 		{
@@ -55,13 +54,13 @@ bool USeinSimMutationBPFL::SeinSetProductionData(const UObject* WCO, FSeinEntity
 
 bool USeinSimMutationBPFL::SeinSetComponent(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, UScriptStruct* StructType, const FInstancedStruct& NewData)
 {
-	SEIN_CHECK_SIM();
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
 	if (!Subsystem || !StructType)
 	{
 		UE_LOG(LogSeinBPFL, Warning, TEXT("SetComponent: no subsystem or null struct type"));
 		return false;
 	}
+	if (!Subsystem->RequireStateMutationAuthorization(TEXT("SetComponent"))) return false;
 	if (NewData.GetScriptStruct() != StructType)
 	{
 		UE_LOG(LogSeinBPFL, Warning, TEXT("SetComponent: NewData type %s doesn't match requested %s"),
@@ -94,9 +93,9 @@ bool USeinSimMutationBPFL::SeinSetComponent(const UObject* WorldContextObject, F
 
 bool USeinSimMutationBPFL::SeinSetRallyPoint(const UObject* WCO, FSeinEntityHandle H, FFixedVector V)
 {
-	SEIN_CHECK_SIM();
 	USeinWorldSubsystem* S = GetWorldSubsystem(WCO);
 	if (!S) return false;
+	if (!S->RequireStateMutationAuthorization(TEXT("SetRallyPoint"))) return false;
 	FSeinProductionComponent* D = S->GetComponent<FSeinProductionComponent>(H);
 	if (!D) { UE_LOG(LogSeinBPFL, Warning, TEXT("SetRallyPoint: entity %s has no FSeinProductionComponent"), *H.ToString()); return false; }
 	D->bRallyToEntity = false;
@@ -109,9 +108,9 @@ bool USeinSimMutationBPFL::SeinSetRallyPoint(const UObject* WCO, FSeinEntityHand
 
 bool USeinSimMutationBPFL::SeinSetCurrentBuildProgress(const UObject* WCO, FSeinEntityHandle H, FFixedPoint V)
 {
-	SEIN_CHECK_SIM();
 	USeinWorldSubsystem* S = GetWorldSubsystem(WCO);
 	if (!S) return false;
+	if (!S->RequireStateMutationAuthorization(TEXT("SetCurrentBuildProgress"))) return false;
 	FSeinProductionComponent* D = S->GetComponent<FSeinProductionComponent>(H);
 	if (!D) { UE_LOG(LogSeinBPFL, Warning, TEXT("SetCurrentBuildProgress: entity %s has no FSeinProductionComponent"), *H.ToString()); return false; }
 	D->CurrentBuildProgress = V;
@@ -189,9 +188,9 @@ namespace
 
 bool USeinSimMutationBPFL::SeinSetChildLocalRotation(const UObject* WCO, FSeinEntityHandle Handle, FGameplayTag Tag, FFixedQuaternion NewRotation)
 {
-	SEIN_CHECK_SIM();
 	USeinWorldSubsystem* S = GetWorldSubsystem(WCO);
 	if (!S) return false;
+	if (!S->RequireStateMutationAuthorization(TEXT("SetChildLocalRotation"))) return false;
 	FSeinChildTransformsComponent* Data = S->GetComponent<FSeinChildTransformsComponent>(Handle);
 	if (!Data) { UE_LOG(LogSeinBPFL, Warning, TEXT("SetChildLocalRotation: entity %s has no FSeinChildTransformsComponent"), *Handle.ToString()); return false; }
 	FSeinChildTransform* Found = FindByTagMutable(Data->Children, Tag);
@@ -202,9 +201,9 @@ bool USeinSimMutationBPFL::SeinSetChildLocalRotation(const UObject* WCO, FSeinEn
 
 bool USeinSimMutationBPFL::SeinSetChildLocalTransform(const UObject* WCO, FSeinEntityHandle Handle, FGameplayTag Tag, FFixedTransform NewTransform)
 {
-	SEIN_CHECK_SIM();
 	USeinWorldSubsystem* S = GetWorldSubsystem(WCO);
 	if (!S) return false;
+	if (!S->RequireStateMutationAuthorization(TEXT("SetChildLocalTransform"))) return false;
 	FSeinChildTransformsComponent* Data = S->GetComponent<FSeinChildTransformsComponent>(Handle);
 	if (!Data) { UE_LOG(LogSeinBPFL, Warning, TEXT("SetChildLocalTransform: entity %s has no FSeinChildTransformsComponent"), *Handle.ToString()); return false; }
 	FSeinChildTransform* Found = FindByTagMutable(Data->Children, Tag);
@@ -216,9 +215,9 @@ bool USeinSimMutationBPFL::SeinSetChildLocalTransform(const UObject* WCO, FSeinE
 bool USeinSimMutationBPFL::SeinTurnChildToward(const UObject* WCO, FSeinEntityHandle Handle, FGameplayTag Tag,
 	FFixedVector WorldTarget, FFixedPoint TurnRateRadPerSec, FFixedPoint DeltaTime)
 {
-	SEIN_CHECK_SIM();
 	USeinWorldSubsystem* S = GetWorldSubsystem(WCO);
 	if (!S) return false;
+	if (!S->RequireStateMutationAuthorization(TEXT("TurnChildToward"))) return false;
 
 	const FSeinEntity* Entity = S->GetEntity(Handle);
 	if (!Entity) return false;

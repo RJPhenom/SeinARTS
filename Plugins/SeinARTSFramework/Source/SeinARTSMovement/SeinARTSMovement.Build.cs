@@ -5,13 +5,14 @@ public class SeinARTSMovement : ModuleRules
     public SeinARTSMovement(ReadOnlyTargetRules Target) : base(Target)
     {
         PublicDependencyModuleNames.AddRange(new string[] {
-            "GameplayTags"   // FGameplayTag is exposed on the public mover/planner handle headers
+            "GameplayTags",   // FGameplayTag is exposed on the public mover/planner handle headers
+            "SeinARTSCoreEntity",
+            "SeinARTSNavigation" // FSeinPath and navigation request/result types are public API
         });
 
         PrivateDependencyModuleNames.AddRange(new string[] {
             "Core", "CoreUObject", "Engine",
-            "SeinARTSCore", "SeinARTSCoreEntity",
-            "SeinARTSNavigation"
+            "SeinARTSCore"
         });
 
         // Editor-only deps: the active-move debug ticker reaches into the

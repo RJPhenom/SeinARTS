@@ -44,7 +44,12 @@ public:
 		});
 	}
 
-	virtual ESeinTickPhase GetPhase() const override { return ESeinTickPhase::PreTick; }
-	virtual int32 GetPriority() const override { return SeinSystemPriority::CooldownTick; }
-	virtual FName GetSystemName() const override { return TEXT("CooldownTick"); }
+	virtual FSeinSystemDescriptor DescribeSystem() const override
+	{
+		return FSeinSystemDescriptor::Stateless(
+			FName(TEXT("seinarts.core.cooldown_tick")),
+			1u,
+			ESeinTickPhase::PreTick,
+			SeinSystemPriority::CooldownTick);
+	}
 };

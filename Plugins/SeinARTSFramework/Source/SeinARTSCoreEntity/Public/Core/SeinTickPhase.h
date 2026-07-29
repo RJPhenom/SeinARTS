@@ -24,6 +24,97 @@ enum class ESeinTickPhase : uint8
 };
 
 /**
+ * Explicit recapture coverage for retained state used by a tick system.
+ *
+ * Stateless means the system and every implementation object it delegates to
+ * retain no future-affecting state outside Core's ordinary snapshot. A system
+ * that delegates through persistent module-owned objects names the canonical
+ * state contributors that restore those objects. Unspecified is deliberately
+ * rejected before tick zero.
+ */
+enum class ESeinSystemStateCoverage : uint8
+{
+	Unspecified,
+	Stateless,
+	CanonicalStateContributors
+};
+
+/**
+ * Immutable participation contract for one deterministic simulation system.
+ *
+ * StableSystemID is a globally namespaced, bounded ASCII identifier. Core
+ * canonicalizes it case-insensitively when the system registers.
+ * ImplementationRevision is positive and must change whenever the system's
+ * deterministic behavior changes without another compatibility identity doing
+ * so. Phase, priority, and the canonical ID form the total execution order.
+ *
+ * RequiredCanonicalStateContributorKeys use the frozen
+ * "stable-domain/stable-contributor" spelling. They cover persistent state
+ * retained by the system or an implementation object it invokes; component,
+ * entity-pool, and other state already owned by Core's snapshot is not repeated.
+ */
+struct SEINARTSCOREENTITY_API FSeinSystemDescriptor
+{
+	FName StableSystemID = NAME_None;
+	uint32 ImplementationRevision = 0;
+	ESeinTickPhase Phase = ESeinTickPhase::PreTick;
+	int32 Priority = 0;
+	ESeinSystemStateCoverage StateCoverage =
+		ESeinSystemStateCoverage::Unspecified;
+	TArray<FName> RequiredCanonicalStateContributorKeys;
+
+	static FSeinSystemDescriptor Stateless(
+		FName StableSystemID,
+		uint32 ImplementationRevision,
+		ESeinTickPhase Phase,
+		int32 Priority)
+	{
+		FSeinSystemDescriptor Result;
+		Result.StableSystemID = StableSystemID;
+		Result.ImplementationRevision = ImplementationRevision;
+		Result.Phase = Phase;
+		Result.Priority = Priority;
+		Result.StateCoverage = ESeinSystemStateCoverage::Stateless;
+		return Result;
+	}
+
+	static FSeinSystemDescriptor WithCanonicalState(
+		FName StableSystemID,
+		uint32 ImplementationRevision,
+		ESeinTickPhase Phase,
+		int32 Priority,
+		TArray<FName> RequiredContributorKeys)
+	{
+		FSeinSystemDescriptor Result;
+		Result.StableSystemID = StableSystemID;
+		Result.ImplementationRevision = ImplementationRevision;
+		Result.Phase = Phase;
+		Result.Priority = Priority;
+		Result.StateCoverage =
+			ESeinSystemStateCoverage::CanonicalStateContributors;
+		Result.RequiredCanonicalStateContributorKeys =
+			MoveTemp(RequiredContributorKeys);
+		return Result;
+	}
+
+	bool operator==(const FSeinSystemDescriptor& Other) const
+	{
+		return StableSystemID == Other.StableSystemID
+			&& ImplementationRevision == Other.ImplementationRevision
+			&& Phase == Other.Phase
+			&& Priority == Other.Priority
+			&& StateCoverage == Other.StateCoverage
+			&& RequiredCanonicalStateContributorKeys
+				== Other.RequiredCanonicalStateContributorKeys;
+	}
+
+	bool operator!=(const FSeinSystemDescriptor& Other) const
+	{
+		return !(*this == Other);
+	}
+};
+
+/**
  * Abstract interface for simulation systems.
  * Systems are registered with the world subsystem and ticked each sim frame.
  */
@@ -35,12 +126,6 @@ public:
 	/** Tick this system for one simulation frame. */
 	virtual void Tick(FFixedPoint DeltaTime, USeinWorldSubsystem& World) = 0;
 
-	/** Which phase this system runs in. */
-	virtual ESeinTickPhase GetPhase() const = 0;
-
-	/** Priority within phase. Lower = earlier. */
-	virtual int32 GetPriority() const = 0;
-
-	/** Debug name for this system. */
-	virtual FName GetSystemName() const = 0;
+	/** Frozen identity, revision, and canonical execution position. */
+	virtual FSeinSystemDescriptor DescribeSystem() const = 0;
 };

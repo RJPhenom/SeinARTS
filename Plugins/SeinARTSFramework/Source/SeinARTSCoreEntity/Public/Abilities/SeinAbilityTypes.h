@@ -157,7 +157,7 @@ struct SEINARTSCOREENTITY_API FSeinAbilityAvailability
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Ability")
 	FFixedPoint CooldownRemaining = FFixedPoint::Zero;
 
-	/** True if the owning player can afford the ability's ResourceCost. */
+	/** True if the owner can afford the ability's policy-resolved activation cost. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Ability")
 	bool bCanAfford = false;
 

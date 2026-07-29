@@ -34,24 +34,25 @@ public:
 
 	/**
 	 * Sparse live-slot iteration: invoke Visitor for every alive slot exactly
-	 * once, in SLOT-INDEX ASCENDING order, handing it the slot index and a
-	 * mutable pointer to that slot's raw payload. This matches
+	 * once, in SLOT-INDEX ASCENDING order, handing it the exact generational
+	 * handle stored with that slot and a mutable pointer to its raw payload.
+	 * This matches
 	 * FSeinEntityPool::ForEachEntity's ascending-slot order, so a system that
 	 * iterates a single storage instead of the full pool visits its entities
 	 * in the identical deterministic order.
 	 *
-	 * Storage owns slot indices only — NOT generations (those live on the
-	 * pool's per-slot generation counters). Callers that need a full
-	 * FSeinEntityHandle reconstruct it as FSeinEntityHandle(SlotIndex,
-	 * Pool.GetSlotGeneration(SlotIndex)) — the same way the pool builds handles
-	 * in ForEachEntity.
+	 * The entity pool remains the authority for whether the yielded handle is
+	 * alive. Consumers must validate that exact handle before mutating entity
+	 * state; they must never replace its generation with the pool's current
+	 * generation for the slot.
 	 *
 	 * Contract: the Visitor must NOT add or remove components of THIS storage
 	 * during iteration (it walks the live bit-array in place). Deferring
 	 * destroys / instance-effect removals is fine — those mutate the pool's
 	 * pending list or a payload's inner array, not this storage's slot set.
 	 */
-	virtual void ForEachLiveComponent(TFunctionRef<void(int32 /*SlotIndex*/, void* /*RawComponent*/)> Visitor) = 0;
+	virtual void ForEachLiveComponent(
+		TFunctionRef<void(FSeinEntityHandle /*Handle*/, void* /*RawComponent*/)> Visitor) = 0;
 
 	/** Alias for RemoveComponent — clearer intent when cleaning up a destroyed entity. */
 	virtual void RemoveAllForEntity(FSeinEntityHandle Handle) = 0;
@@ -76,6 +77,7 @@ public:
 	 *   int32 EntryCount
 	 *   for each:
 	 *     int32 SlotIndex
+	 *     int32 Generation
 	 *     UScriptStruct::SerializeBin(payload, archive)
 	 *
 	 * On restore, the storage is cleared first; entries then re-populated. The
@@ -105,11 +107,13 @@ public:
 		, ComponentCount(0)
 	{
 		check(StructType && StructSize > 0);
-		if (InitialCapacity > 0)
+		if (InitialCapacity > 0 && InitialCapacity < MAX_int32
+			&& (static_cast<int64>(InitialCapacity) + 1) * StructSize <= MAX_int32)
 		{
 			const int32 TotalSlots = InitialCapacity + 1; // +1 for reserved slot 0
 			Data.SetNumZeroed(TotalSlots * StructSize);
 			HasComponentBits.Init(false, TotalSlots);
+			StoredGenerations.Init(0, TotalSlots);
 			SlotCapacity = TotalSlots;
 
 			// Initialize all slots with default-constructed structs
@@ -131,6 +135,11 @@ public:
 
 	virtual void Grow(int32 NewCapacity) override
 	{
+		if (NewCapacity < 0 || NewCapacity == MAX_int32
+			|| (static_cast<int64>(NewCapacity) + 1) * StructSize > MAX_int32)
+		{
+			return;
+		}
 		const int32 NewTotalSlots = NewCapacity + 1;
 		if (NewTotalSlots <= SlotCapacity)
 		{
@@ -145,6 +154,7 @@ public:
 		{
 			HasComponentBits.Add(false, BitsToAdd);
 		}
+		StoredGenerations.SetNumZeroed(NewTotalSlots);
 
 		SlotCapacity = NewTotalSlots;
 
@@ -157,12 +167,27 @@ public:
 
 	virtual void AddComponent(FSeinEntityHandle Handle, const void* ComponentData) override
 	{
-		const int32 SlotIndex = static_cast<int32>(Handle.Index);
-		EnsureSlotCapacity(SlotIndex);
+		if (!Handle.IsValid())
+		{
+			return;
+		}
 
-		if (!HasComponentBits[SlotIndex])
+		const int32 SlotIndex = static_cast<int32>(Handle.Index);
+		if (!EnsureSlotCapacity(SlotIndex))
+		{
+			return;
+		}
+
+		const bool bHadComponent = HasComponentBits[SlotIndex];
+		const bool bRecycledSlot = bHadComponent
+			&& StoredGenerations[SlotIndex] != Handle.Generation;
+		if (!bHadComponent)
 		{
 			ComponentCount++;
+		}
+		else if (bRecycledSlot)
+		{
+			ResetSlot(SlotIndex);
 		}
 
 		uint8* SlotPtr = GetSlotPtr(SlotIndex);
@@ -172,18 +197,23 @@ public:
 		}
 		else
 		{
-			ResetSlot(SlotIndex);
+			if (!bRecycledSlot)
+			{
+				ResetSlot(SlotIndex);
+			}
 		}
 
 		HasComponentBits[SlotIndex] = true;
+		StoredGenerations[SlotIndex] = Handle.Generation;
 	}
 
 	virtual void RemoveComponent(FSeinEntityHandle Handle) override
 	{
 		const int32 SlotIndex = static_cast<int32>(Handle.Index);
-		if (SlotIndex < SlotCapacity && HasComponentBits[SlotIndex])
+		if (IsStoredHandle(Handle))
 		{
 			HasComponentBits[SlotIndex] = false;
+			StoredGenerations[SlotIndex] = 0;
 			ResetSlot(SlotIndex);
 			ComponentCount--;
 		}
@@ -196,14 +226,13 @@ public:
 
 	virtual bool HasComponent(FSeinEntityHandle Handle) const override
 	{
-		const int32 SlotIndex = static_cast<int32>(Handle.Index);
-		return SlotIndex < SlotCapacity && HasComponentBits[SlotIndex];
+		return IsStoredHandle(Handle);
 	}
 
 	virtual void* GetComponentRaw(FSeinEntityHandle Handle) override
 	{
 		const int32 SlotIndex = static_cast<int32>(Handle.Index);
-		if (SlotIndex < SlotCapacity && HasComponentBits[SlotIndex])
+		if (IsStoredHandle(Handle))
 		{
 			return GetSlotPtr(SlotIndex);
 		}
@@ -213,7 +242,7 @@ public:
 	virtual const void* GetComponentRaw(FSeinEntityHandle Handle) const override
 	{
 		const int32 SlotIndex = static_cast<int32>(Handle.Index);
-		if (SlotIndex < SlotCapacity && HasComponentBits[SlotIndex])
+		if (IsStoredHandle(Handle))
 		{
 			return GetSlotPtr(SlotIndex);
 		}
@@ -260,6 +289,7 @@ public:
 		{
 			const int32 SlotIndex = It.GetIndex();
 			Hash = HashCombine(Hash, GetTypeHash(static_cast<uint32>(SlotIndex)));
+			Hash = HashCombine(Hash, GetTypeHash(StoredGenerations[SlotIndex]));
 
 			const uint8* SlotPtr = GetSlotPtr(SlotIndex);
 			for (TFieldIterator<FProperty> PropIt(StructType); PropIt; ++PropIt)
@@ -423,10 +453,12 @@ public:
 			ResetSlot(It.GetIndex());
 		}
 		HasComponentBits.Init(false, HasComponentBits.Num());
+		StoredGenerations.Init(0, StoredGenerations.Num());
 		ComponentCount = 0;
 	}
 
-	virtual void ForEachLiveComponent(TFunctionRef<void(int32 /*SlotIndex*/, void* /*RawComponent*/)> Visitor) override
+	virtual void ForEachLiveComponent(
+		TFunctionRef<void(FSeinEntityHandle /*Handle*/, void* /*RawComponent*/)> Visitor) override
 	{
 		// TConstSetBitIterator yields set-bit indices in ascending order, which
 		// matches FSeinEntityPool::ForEachEntity's slot order — see the
@@ -434,16 +466,24 @@ public:
 		for (TConstSetBitIterator<> It(HasComponentBits); It; ++It)
 		{
 			const int32 SlotIndex = It.GetIndex();
-			Visitor(SlotIndex, GetSlotPtr(SlotIndex));
+			Visitor(
+				FSeinEntityHandle(SlotIndex, StoredGenerations[SlotIndex]),
+				GetSlotPtr(SlotIndex));
 		}
 	}
 
 	virtual void CollectReferences(FReferenceCollector& Collector, UObject* Owner) override
 	{
 		if (!StructType) return;
+		// The registry map is intentionally keyed by raw UScriptStruct* for its
+		// public lookup API. Keep the actual type as a collector-visible
+		// TObjectPtr here so a UUserDefinedStruct cannot be collected while its
+		// storage remains live.
+		Collector.AddReferencedObject(StructType, Owner);
 		for (TConstSetBitIterator<> It(HasComponentBits); It; ++It)
 		{
-			Collector.AddPropertyReferencesWithStructARO(StructType, GetSlotPtr(It.GetIndex()), Owner);
+			Collector.AddPropertyReferencesWithStructARO(
+				StructType.Get(), GetSlotPtr(It.GetIndex()), Owner);
 		}
 	}
 
@@ -454,13 +494,20 @@ public:
 		if (Ar.IsSaving())
 		{
 			// Count alive slots first; write count, then per-entry write
-			// (slot, payload).
+			// (slot, generation, payload).
 			int32 EntryCount = ComponentCount;
 			Ar << EntryCount;
 			for (TConstSetBitIterator<> It(HasComponentBits); It; ++It)
 			{
 				int32 Slot = It.GetIndex();
+				int32 Generation = StoredGenerations[Slot];
+				if (Generation <= 0)
+				{
+					Ar.SetError();
+					return 0;
+				}
 				Ar << Slot;
+				Ar << Generation;
 				StructType->SerializeBin(Ar, GetSlotPtr(Slot));
 			}
 			return EntryCount;
@@ -472,25 +519,50 @@ public:
 			Clear();
 			int32 EntryCount = 0;
 			Ar << EntryCount;
+			if (Ar.IsError() || EntryCount < 0
+				|| EntryCount > FMath::Max(0, SlotCapacity - 1))
+			{
+				Ar.SetError();
+				return 0;
+			}
 			for (int32 i = 0; i < EntryCount; ++i)
 			{
 				int32 Slot = 0;
+				int32 Generation = 0;
 				Ar << Slot;
-				EnsureSlotCapacity(Slot);
-				if (!HasComponentBits[Slot])
+				Ar << Generation;
+				const FSeinEntityHandle Handle(Slot, Generation);
+				if (Ar.IsError() || !Handle.IsValid()
+					|| !HasComponentBits.IsValidIndex(Slot)
+					|| HasComponentBits[Slot])
 				{
-					HasComponentBits[Slot] = true;
-					++ComponentCount;
+					Ar.SetError();
+					return i;
 				}
+				HasComponentBits[Slot] = true;
+				StoredGenerations[Slot] = Generation;
+				++ComponentCount;
 				StructType->SerializeBin(Ar, GetSlotPtr(Slot));
+				if (Ar.IsError())
+				{
+					return i;
+				}
 			}
 			return EntryCount;
 		}
 	}
 
-	UScriptStruct* GetStructType() const { return StructType; }
+	UScriptStruct* GetStructType() const { return StructType.Get(); }
 
 private:
+	bool IsStoredHandle(FSeinEntityHandle Handle) const
+	{
+		return Handle.IsValid()
+			&& HasComponentBits.IsValidIndex(Handle.Index)
+			&& HasComponentBits[Handle.Index]
+			&& StoredGenerations[Handle.Index] == Handle.Generation;
+	}
+
 	void ResetSlot(int32 SlotIndex)
 	{
 		// ClearScriptStruct destroys and reconstructs the payload. Calling
@@ -498,13 +570,19 @@ private:
 		StructType->ClearScriptStruct(GetSlotPtr(SlotIndex));
 	}
 
-	void EnsureSlotCapacity(int32 SlotIndex)
+	bool EnsureSlotCapacity(int32 SlotIndex)
 	{
+		if (SlotIndex <= 0 || SlotIndex == MAX_int32
+			|| (static_cast<int64>(SlotIndex) + 1) * StructSize > MAX_int32)
+		{
+			return false;
+		}
 		const int32 RequiredSize = SlotIndex + 1;
 		if (RequiredSize > SlotCapacity)
 		{
 			Grow(RequiredSize - 1);
 		}
+		return HasComponentBits.IsValidIndex(SlotIndex);
 	}
 
 	uint8* GetSlotPtr(int32 SlotIndex)
@@ -517,10 +595,11 @@ private:
 		return Data.GetData() + (SlotIndex * StructSize);
 	}
 
-	UScriptStruct* StructType;
+	TObjectPtr<UScriptStruct> StructType;
 	int32 StructSize;
 	TArray<uint8> Data;
 	TBitArray<> HasComponentBits;
+	TArray<int32> StoredGenerations;
 	int32 SlotCapacity = 0;
 	int32 ComponentCount;
 };

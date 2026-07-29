@@ -43,6 +43,7 @@ namespace SeinFormationPreviewLocal
 void USeinFormationPreviewSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
+	bModuleUnloadStateReleased = false;
 
 	// Immediate hook (covers subsystem-after-PC creation); the post-load-map
 	// delegate + the Tick lazy-bind catch the PC-not-ready-yet case.
@@ -63,6 +64,13 @@ void USeinFormationPreviewSubsystem::Initialize(FSubsystemCollectionBase& Collec
 
 void USeinFormationPreviewSubsystem::Deinitialize()
 {
+	ReleaseModuleOwnedStateForModuleUnload();
+	Super::Deinitialize();
+}
+
+void USeinFormationPreviewSubsystem::ReleaseModuleOwnedStateForModuleUnload()
+{
+	bModuleUnloadStateReleased = true;
 	UnhookPlayerControllerDelegates();
 	FCoreUObjectDelegates::PostLoadMapWithWorld.RemoveAll(this);
 
@@ -74,8 +82,9 @@ void USeinFormationPreviewSubsystem::Deinitialize()
 
 	bIsVisible = false;
 	BoundPC = nullptr;
-
-	Super::Deinitialize();
+	CachedQualities.Reset();
+	bLastCursorValid = false;
+	bQualityDirty = true;
 }
 
 void USeinFormationPreviewSubsystem::HookPlayerControllerDelegates()
@@ -382,7 +391,7 @@ TStatId USeinFormationPreviewSubsystem::GetStatId() const
 
 bool USeinFormationPreviewSubsystem::IsTickable() const
 {
-	return !IsTemplate();
+	return !IsTemplate() && !bModuleUnloadStateReleased;
 }
 
 UWorld* USeinFormationPreviewSubsystem::GetTickableGameObjectWorld() const

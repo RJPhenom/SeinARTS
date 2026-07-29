@@ -164,7 +164,12 @@ public:
 		}
 	}
 
-	virtual ESeinTickPhase GetPhase() const override { return ESeinTickPhase::PreTick; }
-	virtual int32 GetPriority() const override { return SeinSystemPriority::CollisionBroadphase; }
-	virtual FName GetSystemName() const override { return TEXT("CollisionBroadphase"); }
+	virtual FSeinSystemDescriptor DescribeSystem() const override
+	{
+		return FSeinSystemDescriptor::Stateless(
+			FName(TEXT("seinarts.core.collision_broadphase")),
+			1u,
+			ESeinTickPhase::PreTick,
+			SeinSystemPriority::CollisionBroadphase);
+	}
 };

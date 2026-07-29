@@ -83,8 +83,10 @@ enum class ESeinEffectStackingRule : uint8
 /**
  * Designer-authored effect base. Subclass in Blueprint to define behavior.
  *
- * Effects are deterministic and run sim-side. Hooks are BlueprintImplementable —
- * designers fill them in BP graphs; C++ provides no default behavior.
+ * Effects are deterministic, stateless class-default strategies that run sim-side.
+ * Hooks are BlueprintImplementable — designers fill them in BP graphs; C++ provides
+ * no default behavior. Future-affecting state belongs in FSeinActiveEffect or world
+ * component storage; callbacks must never mutate this definition object.
  *
  * Lifetime: pick a `DurationMode` (Instant / Persistent / Timed). Timed effects
  * read `Duration` for the timer length; Instant/Persistent ignore it.
@@ -93,7 +95,8 @@ enum class ESeinEffectStackingRule : uint8
  * `OnTick` every N sim-seconds while active. Orthogonal to DurationMode — a
  * Persistent aura can periodically pulse, a Timed DoT can tick per second.
  */
-UCLASS(Blueprintable, Abstract, ClassGroup = (SeinARTS), meta = (DisplayName = "SeinARTS Effect"))
+UCLASS(Blueprintable, Abstract, Const, ClassGroup = (SeinARTS),
+	meta = (DisplayName = "SeinARTS Effect"))
 class SEINARTSCOREENTITY_API USeinEffect : public UObject
 {
 	GENERATED_BODY()
@@ -174,7 +177,12 @@ public:
 	FGameplayTagContainer GrantedTags;
 
 	/** On apply, remove any existing active effect on the same target whose CDO's
-	 *  EffectTag matches any tag in this container. Classic "anti-poison removes poison". */
+	 *  EffectTag matches any tag in this container. The exact victims and the
+	 *  replacement's transaction-relevant definition are frozen after predictable
+	 *  validation. OnRemoved may run arbitrary Blueprint; if it invalidates the
+	 *  target or frozen definition, committed removals are not rolled back and the
+	 *  replacement itself is not applied. Classic
+	 *  "anti-poison removes poison". */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS|Effect|Tags")
 	FGameplayTagContainer RemoveEffectsWithTag;
 
@@ -271,16 +279,16 @@ public:
 	 *  EffectApplied visual event is queued at initial commit, so self-removal
 	 *  produces EffectApplied then EffectRemoved, never the reverse. */
 	UFUNCTION(BlueprintImplementableEvent, Category = "SeinARTS|Effect", meta = (DisplayName = "On Apply"))
-	void OnApply(FSeinEntityHandle Target, FSeinEntityHandle Source);
+	void OnApply(FSeinEntityHandle Target, FSeinEntityHandle Source) const;
 
 	UFUNCTION(BlueprintImplementableEvent, Category = "SeinARTS|Effect", meta = (DisplayName = "On Tick"))
-	void OnTick(FSeinEntityHandle Target, FFixedPoint DeltaTime);
+	void OnTick(FSeinEntityHandle Target, FFixedPoint DeltaTime) const;
 
 	UFUNCTION(BlueprintImplementableEvent, Category = "SeinARTS|Effect", meta = (DisplayName = "On Expire"))
-	void OnExpire(FSeinEntityHandle Target);
+	void OnExpire(FSeinEntityHandle Target) const;
 
 	UFUNCTION(BlueprintImplementableEvent, Category = "SeinARTS|Effect", meta = (DisplayName = "On Removed"))
-	void OnRemoved(FSeinEntityHandle Target, bool bByExpiration);
+	void OnRemoved(FSeinEntityHandle Target, bool bByExpiration) const;
 
 #if WITH_EDITOR
 	/** Watches manual edits to EffectTag in the BP details panel and flips

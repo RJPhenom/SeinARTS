@@ -174,19 +174,24 @@ public:
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Movement", meta = (DisplayName = "Get Distance To Final Waypoint"))
 	FFixedPoint GetDistanceToFinalWaypoint() const;
 
-	/** How many typed segments the current path has — the typed stretches between its waypoints.
+	/** How many typed segments the current path has.
 	 *
-	 *  Where the waypoints are the turn points, a segment is the stretch from one waypoint to the
-	 *  next, tagged with how to travel it (today always Straight). Read each with Get Segment to drive
-	 *  a path by segment type — ease into a curve, follow an arc instead of a straight line. May be
-	 *  zero for simple paths that never derived segments; when present it is the waypoint count minus
-	 *  one. */
+	 *  For a plain route every segment is a Straight between two consecutive waypoints, so the count
+	 *  is the waypoint count minus one. For a TYPED route (a vehicle maneuver plan with arcs /
+	 *  reverse legs) the segments are the authored truth and the waypoints are a FINE polyline
+	 *  flattened FROM them — the two counts are unrelated there, so never index segments by waypoint.
+	 *  Read each with Get Segment to drive a path by segment type. May be zero for simple paths that
+	 *  never derived segments. */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Movement", meta = (DisplayName = "Get Segment Count"))
 	int32 GetSegmentCount() const;
 
-	/** The typed segment at a given index — the stretch from waypoint Index to the next, carrying its
-	 *  type (Straight today) and its From / To endpoints. Returns an empty Straight segment if the
-	 *  index is out of range. Pair it with Get Segment Count to walk the path one segment at a time. */
+	/** The typed segment at a given index — its kind (Straight / Arc / …), From / To endpoints, arc
+	 *  geometry, and reverse flag. Returns an empty Straight segment if the index is out of range.
+	 *
+	 *  Index is a RAW segment index, NOT a waypoint index: on a typed route (arcs / reverse legs) the
+	 *  flattened waypoints outnumber the segments, so a segment-aware mode must track its own segment
+	 *  cursor (advance it when the unit passes a segment's To) rather than deriving it from the
+	 *  current waypoint. Pair with Get Segment Count to walk the path one segment at a time. */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Movement", meta = (DisplayName = "Get Segment"))
 	FSeinPathSegment GetSegment(int32 Index) const;
 

@@ -14,5 +14,9 @@ class FSeinARTSUIToolkit : public FDefaultModuleImpl
 {
 public:
 	virtual void StartupModule() override;
+	virtual void PreUnloadCallback() override;
 	virtual void ShutdownModule() override;
+
+private:
+	void ReleaseModuleOwnedState();
 };

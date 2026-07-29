@@ -8,7 +8,6 @@
 #include "Input/SeinCommand.h"
 #include "Tags/SeinARTSGameplayTags.h"
 #include "Engine/World.h"
-#include "StructUtils/InstancedStruct.h"
 
 USeinWorldSubsystem* USeinMatchFlowBPFL::GetWorldSubsystem(const UObject* WorldContextObject)
 {
@@ -29,14 +28,68 @@ ESeinMatchState USeinMatchFlowBPFL::SeinGetMatchState(const UObject* WorldContex
 	return Sub ? Sub->GetMatchState() : ESeinMatchState::Lobby;
 }
 
-void USeinMatchFlowBPFL::SeinStartMatch(const UObject* WorldContextObject, const FSeinMatchSettings& Settings)
+bool USeinMatchFlowBPFL::SeinRegisterBootstrapEvidenceValue(
+	const UObject* WorldContextObject,
+	FName StableContributorID,
+	int32 SchemaVersion,
+	const FInstancedStruct& Value,
+	FString& OutError)
+{
+	OutError.Reset();
+	USeinWorldSubsystem* Sub = GetWorldSubsystem(WorldContextObject);
+	if (!Sub)
+	{
+		OutError = TEXT("Register Bootstrap Evidence requires a Sein world.");
+		return false;
+	}
+	if (SchemaVersion <= 0)
+	{
+		OutError = TEXT("Initial-state schema version must be positive.");
+		return false;
+	}
+	return Sub->RegisterCanonicalBootstrapEvidenceValue(
+		StableContributorID,
+		static_cast<uint32>(SchemaVersion),
+		Value,
+		OutError);
+}
+
+bool USeinMatchFlowBPFL::SeinSetCanonicalStateValue(
+	const UObject* WorldContextObject,
+	const FSeinCanonicalStateKey& Key,
+	const FInstancedStruct& Value,
+	FString& OutError)
+{
+	OutError.Reset();
+	USeinWorldSubsystem* Sub =
+		GetWorldSubsystem(WorldContextObject);
+	if (!Sub)
+	{
+		OutError = TEXT("Set State Value requires a Sein world.");
+		return false;
+	}
+	return Sub->SetCanonicalStateValue(Key, Value, OutError);
+}
+
+bool USeinMatchFlowBPFL::SeinGetCanonicalStateValue(
+	const UObject* WorldContextObject,
+	const FSeinCanonicalStateKey& Key,
+	FInstancedStruct& OutValue)
+{
+	OutValue.Reset();
+	const USeinWorldSubsystem* Sub =
+		GetWorldSubsystem(WorldContextObject);
+	return Sub && Sub->GetCanonicalStateValue(Key, OutValue);
+}
+
+bool USeinMatchFlowBPFL::SeinStartStandaloneSimulation(
+	const UObject* WorldContextObject)
 {
 	USeinWorldSubsystem* Sub = GetWorldSubsystem(WorldContextObject);
-	if (!Sub) return;
-	FSeinCommand Cmd;
-	Cmd.CommandType = SeinARTSTags::Command_Type_StartMatch;
-	Cmd.Payload.InitializeAs<FSeinMatchSettings>(Settings);
-	Sub->EnqueueCommand(Cmd);
+	return Sub && Sub->GetWorld()
+		&& Sub->GetWorld()->GetNetMode() == NM_Standalone
+		&& Sub->StandaloneBootstrapLauncher.IsBound()
+		&& Sub->StandaloneBootstrapLauncher.Execute();
 }
 
 void USeinMatchFlowBPFL::SeinEndMatch(const UObject* WorldContextObject, FSeinPlayerID Winner, FGameplayTag Reason)
@@ -45,9 +98,11 @@ void USeinMatchFlowBPFL::SeinEndMatch(const UObject* WorldContextObject, FSeinPl
 	if (!Sub) return;
 	FSeinCommand Cmd;
 	Cmd.CommandType = SeinARTSTags::Command_Type_EndMatch;
-	Cmd.PlayerID = Winner;
-	Cmd.AbilityTag = Reason;
-	Sub->EnqueueCommand(Cmd);
+	FSeinEndMatchCommandPayload Payload;
+	Payload.Winner = Winner;
+	Payload.Reason = Reason;
+	Cmd.Payload.InitializeAs<FSeinEndMatchCommandPayload>(Payload);
+	Sub->SubmitLocalCommandDraft(Cmd, /*bRequestMatchAdministration=*/true);
 }
 
 void USeinMatchFlowBPFL::SeinRequestPause(const UObject* WorldContextObject, FSeinPlayerID Requester)
@@ -57,7 +112,7 @@ void USeinMatchFlowBPFL::SeinRequestPause(const UObject* WorldContextObject, FSe
 	FSeinCommand Cmd;
 	Cmd.CommandType = SeinARTSTags::Command_Type_PauseMatchRequest;
 	Cmd.PlayerID = Requester;
-	Sub->EnqueueCommand(Cmd);
+	Sub->SubmitLocalCommandDraft(Cmd);
 }
 
 void USeinMatchFlowBPFL::SeinRequestResume(const UObject* WorldContextObject, FSeinPlayerID Requester)
@@ -67,7 +122,7 @@ void USeinMatchFlowBPFL::SeinRequestResume(const UObject* WorldContextObject, FS
 	FSeinCommand Cmd;
 	Cmd.CommandType = SeinARTSTags::Command_Type_ResumeMatchRequest;
 	Cmd.PlayerID = Requester;
-	Sub->EnqueueCommand(Cmd);
+	Sub->SubmitLocalCommandDraft(Cmd);
 }
 
 void USeinMatchFlowBPFL::SeinConcedeMatch(const UObject* WorldContextObject, FSeinPlayerID Conceding)
@@ -77,14 +132,5 @@ void USeinMatchFlowBPFL::SeinConcedeMatch(const UObject* WorldContextObject, FSe
 	FSeinCommand Cmd;
 	Cmd.CommandType = SeinARTSTags::Command_Type_ConcedeMatch;
 	Cmd.PlayerID = Conceding;
-	Sub->EnqueueCommand(Cmd);
-}
-
-void USeinMatchFlowBPFL::SeinRestartMatch(const UObject* WorldContextObject)
-{
-	USeinWorldSubsystem* Sub = GetWorldSubsystem(WorldContextObject);
-	if (!Sub) return;
-	FSeinCommand Cmd;
-	Cmd.CommandType = SeinARTSTags::Command_Type_RestartMatch;
-	Sub->EnqueueCommand(Cmd);
+	Sub->SubmitLocalCommandDraft(Cmd);
 }

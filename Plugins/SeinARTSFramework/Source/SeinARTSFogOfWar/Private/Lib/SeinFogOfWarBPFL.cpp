@@ -138,14 +138,21 @@ namespace
 	 *  FSeinFogVisibilityComponent ptr (where FogVisibilityLayerMask lives).
 	 *  Returns nullptr on any failure (entity invalid, no sim, no fog-vis
 	 *  component authored on the entity). */
-	static FSeinFogVisibilityComponent* FindMutableFogVisibility(const UObject* WorldContextObject,
-		FSeinEntityHandle Entity)
+	static FSeinFogVisibilityComponent* FindMutableFogVisibility(
+		const UObject* WorldContextObject,
+		FSeinEntityHandle Entity,
+		const TCHAR* MutationOperation = nullptr)
 	{
 		if (!WorldContextObject || !Entity.IsValid()) return nullptr;
 		UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::ReturnNull);
 		if (!World) return nullptr;
 		USeinWorldSubsystem* Sim = World->GetSubsystem<USeinWorldSubsystem>();
 		if (!Sim) return nullptr;
+		if (MutationOperation
+			&& !Sim->RequireStateMutationAuthorization(MutationOperation))
+		{
+			return nullptr;
+		}
 		ISeinComponentStorage* Storage = Sim->GetComponentStorageRaw(FSeinFogVisibilityComponent::StaticStruct());
 		if (!Storage) return nullptr;
 		return static_cast<FSeinFogVisibilityComponent*>(Storage->GetComponentRaw(Entity));
@@ -162,7 +169,8 @@ int32 USeinFogOfWarBPFL::SeinGetEntityEmissionMask(const UObject* WorldContextOb
 void USeinFogOfWarBPFL::SeinSetEntityEmissionMask(const UObject* WorldContextObject,
 	FSeinEntityHandle Entity, int32 NewMask)
 {
-	if (FSeinFogVisibilityComponent* FogVis = FindMutableFogVisibility(WorldContextObject, Entity))
+	if (FSeinFogVisibilityComponent* FogVis = FindMutableFogVisibility(
+		WorldContextObject, Entity, TEXT("SetEntityEmissionMask")))
 	{
 		FogVis->FogVisibilityLayerMask = static_cast<uint8>(NewMask & 0xFF);
 	}
@@ -171,7 +179,8 @@ void USeinFogOfWarBPFL::SeinSetEntityEmissionMask(const UObject* WorldContextObj
 void USeinFogOfWarBPFL::SeinAddEntityEmissionLayers(const UObject* WorldContextObject,
 	FSeinEntityHandle Entity, int32 LayersToAdd)
 {
-	if (FSeinFogVisibilityComponent* FogVis = FindMutableFogVisibility(WorldContextObject, Entity))
+	if (FSeinFogVisibilityComponent* FogVis = FindMutableFogVisibility(
+		WorldContextObject, Entity, TEXT("AddEntityEmissionLayers")))
 	{
 		FogVis->FogVisibilityLayerMask |= static_cast<uint8>(LayersToAdd & 0xFF);
 	}
@@ -180,7 +189,8 @@ void USeinFogOfWarBPFL::SeinAddEntityEmissionLayers(const UObject* WorldContextO
 void USeinFogOfWarBPFL::SeinRemoveEntityEmissionLayers(const UObject* WorldContextObject,
 	FSeinEntityHandle Entity, int32 LayersToRemove)
 {
-	if (FSeinFogVisibilityComponent* FogVis = FindMutableFogVisibility(WorldContextObject, Entity))
+	if (FSeinFogVisibilityComponent* FogVis = FindMutableFogVisibility(
+		WorldContextObject, Entity, TEXT("RemoveEntityEmissionLayers")))
 	{
 		FogVis->FogVisibilityLayerMask &= ~static_cast<uint8>(LayersToRemove & 0xFF);
 	}

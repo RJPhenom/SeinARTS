@@ -109,8 +109,9 @@ public:
 
 	// Emit ----------------------------------------------------------------
 
-	/** Drop a command into the lockstep buffer. Typically the AI author
-	 *  fills `PlayerID = OwnedPlayerID` before calling. */
+	/** Submit a command through the active lockstep topology. Valid only from
+	 *  this exact registered controller's Tick callback; Core stamps the owned
+	 *  player identity and rejects lifecycle or out-of-band calls. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|AI")
 	void EmitCommand(const FSeinCommand& Command);
 

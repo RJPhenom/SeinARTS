@@ -19,7 +19,7 @@ USeinWorldSubsystem* USeinComponentBPFL::GetWorldSubsystem(const UObject* WorldC
 bool USeinComponentBPFL::SeinGetComponentData(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, UScriptStruct* StructType, FInstancedStruct& OutData)
 {
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
-	if (!Subsystem || !StructType)
+	if (!Subsystem || !StructType || !Subsystem->IsEntityAlive(EntityHandle))
 	{
 		UE_LOG(LogSeinBPFL, Warning, TEXT("GetComponentData: no subsystem or null struct type"));
 		return false;
@@ -104,6 +104,11 @@ DEFINE_FUNCTION(USeinComponentBPFL::execSeinGetComponentTyped)
 		*static_cast<bool*>(RESULT_PARAM) = false;
 		return;
 	}
+	if (!Subsystem->IsEntityAlive(EntityHandle))
+	{
+		*static_cast<bool*>(RESULT_PARAM) = false;
+		return;
+	}
 
 	UScriptStruct* StructType = OutProperty->Struct;
 	const ISeinComponentStorage* Storage = Subsystem->GetComponentStorageRaw(StructType);
@@ -162,7 +167,9 @@ DEFINE_FUNCTION(USeinComponentBPFL::execSeinSetComponentTyped)
 	}
 
 	USeinWorldSubsystem* Subsystem = USeinComponentBPFL::GetWorldSubsystem(WorldContextObject);
-	if (!Subsystem)
+	if (!Subsystem
+		|| !Subsystem->RequireStateMutationAuthorization(TEXT("SetComponentTyped"))
+		|| !Subsystem->IsEntityAlive(EntityHandle))
 	{
 		*static_cast<bool*>(RESULT_PARAM) = false;
 		return;
@@ -191,7 +198,7 @@ TArray<FInstancedStruct> USeinComponentBPFL::SeinGetComponents(const UObject* Wo
 {
 	TArray<FInstancedStruct> Result;
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
-	if (!Subsystem) return Result;
+	if (!Subsystem || !Subsystem->IsEntityAlive(EntityHandle)) return Result;
 
 	// Sort component types by struct name before walking. TMap<UScriptStruct*>
 	// iteration is pointer-keyed — stable within a process but not guaranteed

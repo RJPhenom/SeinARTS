@@ -7,11 +7,14 @@
 #include "SeinFogOfWar.h"
 #include "SeinARTSFogOfWarLog.h"
 #include "Default/SeinFogOfWarDefault.h"
+#include "Core/SeinSystemPriority.h"
 #include "Settings/PluginSettings.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "SeinLevelData.h"
 #include "SeinLevelDataSubsystem.h"
 #include "SeinLevelLayerProvider.h"
+#include "Serialization/SeinCanonicalInitialStateDigest.h"
+#include "Serialization/SeinFogOfWarStateCodecRegistry.h"
 
 #include "Engine/World.h"
 #include "Types/FixedPoint.h"
@@ -20,9 +23,84 @@
 // LogSeinFogOfWarSubsystem is module-declared (SeinARTSFogOfWarLog.h) so it is
 // reliably filterable in the Output Log — do not re-introduce a _STATIC define here.
 
+namespace
+{
+	void AppendFramed(FString& Out, const FString& Value)
+	{
+		const FTCHARToUTF8 Utf8(*Value);
+		Out += FString::Printf(TEXT("%d:"), Utf8.Length());
+		Out += Value;
+		Out += TEXT("\n");
+	}
+
+	bool BuildDisabledStaticEnvironmentDigest(
+		FGuid& OutDigest,
+		FString& OutError)
+	{
+		FSeinCanonicalDigestWriter Writer(
+			TEXT("SeinARTS.FogOfWar.DisabledStaticEnvironment"), 1);
+		return Writer.WriteString(TEXT("disabled"))
+			&& Writer.Finalize(OutDigest, OutError);
+	}
+
+	class FSeinFogOfWarStampSystem final : public ISeinSystem
+	{
+	public:
+		explicit FSeinFogOfWarStampSystem(USeinFogOfWar* InFogOfWar)
+			: FogOfWar(InFogOfWar)
+		{
+		}
+
+		virtual void Tick(
+			FFixedPoint /*DeltaTime*/,
+			USeinWorldSubsystem& World) override
+		{
+			USeinFogOfWar* Fog = FogOfWar.Get();
+			if (!Fog)
+			{
+				return;
+			}
+
+			const USeinARTSCoreSettings* Settings =
+				GetDefault<USeinARTSCoreSettings>();
+			const int32 Interval =
+				Settings && Settings->VisionTickInterval > 0
+					? Settings->VisionTickInterval
+					: 1;
+			if ((World.GetCurrentTick() % Interval) == 0)
+			{
+				Fog->TickStamps(World.GetWorld());
+			}
+		}
+
+		virtual FSeinSystemDescriptor DescribeSystem() const override
+		{
+			return FSeinSystemDescriptor::WithCanonicalState(
+				FName(TEXT("seinarts.fog_of_war.stamp")),
+				1u,
+				ESeinTickPhase::PostTick,
+				SeinSystemPriority::FogOfWar,
+				{ FName(TEXT(
+					"seinarts.fog-of-war/canonical-state")) });
+		}
+
+	private:
+		TWeakObjectPtr<USeinFogOfWar> FogOfWar;
+	};
+}
+
 void USeinFogOfWarSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
+	Collection.InitializeDependency(USeinWorldSubsystem::StaticClass());
+	StateCodecToken = 0;
+	bSimDelegatesBound = false;
+	bFogConfigured = false;
+	bStateBindingFrozen = false;
+	ConfiguredFogClassPath.Reset();
+	StateCodecFailureReason.Reset();
+	FrozenStateBindingFrame.Reset();
+	FrozenStaticEnvironmentDigest.Invalidate();
 
 	// Resolve the configured fog class. Fall back to the shipped default if
 	// the setting is empty or points to a stale / abstract class.
@@ -46,15 +124,34 @@ void USeinFogOfWarSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 	if (FogClass)
 	{
+		bFogConfigured = true;
+		ConfiguredFogClassPath = FogClass->GetPathName();
 		FogOfWar = NewObject<USeinFogOfWar>(this, FogClass, TEXT("SeinFogOfWar"));
 		if (FogOfWar)
 		{
 			FogOfWar->OnFogOfWarInitialized(GetWorld());
+			FString CodecError;
+			if (!FSeinFogOfWarStateCodecRegistry::FreezeForClass(
+				FogOfWar->GetClass(),
+				StateCodecToken,
+				CodecError))
+			{
+				StateCodecFailureReason = MoveTemp(CodecError);
+				UE_LOG(LogSeinFogOfWarSubsystem, Error,
+					TEXT("FogOfWarClass '%s' cannot participate in deterministic state: %s"),
+					*ConfiguredFogClassPath,
+					*StateCodecFailureReason);
+				FogOfWar->OnFogOfWarDeinitialized();
+				FogOfWar = nullptr;
+			}
 		}
 		else
 		{
-			UE_LOG(LogSeinFogOfWarSubsystem, Error, TEXT("Failed to instantiate fog class %s"),
+			StateCodecFailureReason = FString::Printf(
+				TEXT("Failed to instantiate fog class %s."),
 				*FogClass->GetName());
+			UE_LOG(LogSeinFogOfWarSubsystem, Error, TEXT("%s"),
+				*StateCodecFailureReason);
 		}
 	}
 	else
@@ -82,10 +179,46 @@ void USeinFogOfWarSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 			}
 		}
 	}
+
+	if (UWorld* World = GetWorld())
+	{
+		RegisterStampSystem(*World);
+	}
 }
 
 void USeinFogOfWarSubsystem::Deinitialize()
 {
+	ReleaseModuleOwnedState();
+	StateCodecToken = 0;
+	Super::Deinitialize();
+}
+
+void USeinFogOfWarSubsystem::ReleaseModuleOwnedStateForModuleUnload()
+{
+	check(IsInGameThread());
+	if (bFogConfigured && StateCodecFailureReason.IsEmpty())
+	{
+		StateCodecFailureReason =
+			TEXT("The fog-of-war module unloaded while this world was alive.");
+	}
+	StateCodecToken = 0;
+	ReleaseModuleOwnedState();
+}
+
+void USeinFogOfWarSubsystem::ReleaseModuleOwnedState()
+{
+	if (UWorld* World = GetWorld())
+	{
+		if (USeinWorldSubsystem* Sim =
+			World->GetSubsystem<USeinWorldSubsystem>())
+		{
+			Sim->TerminateAndReleaseForModuleUnload(
+				FName(TEXT("SeinARTSFogOfWar")),
+				TEXT("Fog-of-war executable state is being released."));
+		}
+	}
+	UnbindSimDelegates();
+
 	// Unhook from the shared substrate (CP1.1) before FogOfWar is torn down — we
 	// reference FogOfWar->GetLevelDataProvider() to unregister.
 	if (USeinLevelData* Substrate = LevelData.Get())
@@ -105,23 +238,22 @@ void USeinFogOfWarSubsystem::Deinitialize()
 	}
 	LevelData = nullptr;
 
-	if (SimTickHandle.IsValid())
+	if (StampSystem)
 	{
 		if (UWorld* World = GetWorld())
 		{
 			if (USeinWorldSubsystem* Sim = World->GetSubsystem<USeinWorldSubsystem>())
 			{
-				Sim->OnSimTickCompleted.Remove(SimTickHandle);
+				Sim->UnregisterSystem(StampSystem.Get());
 			}
 		}
-		SimTickHandle.Reset();
+		StampSystem.Reset();
 	}
 	if (FogOfWar)
 	{
 		FogOfWar->OnFogOfWarDeinitialized();
 	}
 	FogOfWar = nullptr;
-	Super::Deinitialize();
 }
 
 void USeinFogOfWarSubsystem::OnWorldBeginPlay(UWorld& InWorld)
@@ -130,7 +262,6 @@ void USeinFogOfWarSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 	LoadBakedAssetIntoFogOfWar(InWorld);
 	InitGridIfUnbaked(InWorld);
 	BindSimDelegates(InWorld);
-	BindStampTick(InWorld);
 }
 
 void USeinFogOfWarSubsystem::LoadBakedAssetIntoFogOfWar(UWorld& World)
@@ -167,6 +298,26 @@ void USeinFogOfWarSubsystem::OnLevelDataChanged()
 		{
 			UE_LOG(LogSeinFogOfWarSubsystem, Log,
 				TEXT("FoW: re-adopted the unified level-data substrate (OnLevelDataMutated)."));
+			if (bStateBindingFrozen)
+			{
+				FGuid CurrentStaticDigest;
+				FString StaticError;
+				if (!FSeinFogOfWarStateCodecRegistry::
+						ComputeStaticEnvironmentDigest(
+							StateCodecToken,
+							*FogOfWar,
+							CurrentStaticDigest,
+							StaticError)
+					|| CurrentStaticDigest
+						!= FrozenStaticEnvironmentDigest)
+				{
+					InvalidateCanonicalStateCodecLease(
+						StateCodecToken,
+						StaticError.IsEmpty()
+							? TEXT("The fog static environment changed after the match StateContract froze.")
+							: StaticError);
+				}
+			}
 		}
 	}
 }
@@ -178,31 +329,17 @@ void USeinFogOfWarSubsystem::InitGridIfUnbaked(UWorld& World)
 	FogOfWar->InitGridFromVolumes(&World);
 }
 
-void USeinFogOfWarSubsystem::BindStampTick(UWorld& World)
+void USeinFogOfWarSubsystem::RegisterStampSystem(UWorld& World)
 {
 	if (!FogOfWar) return;
 	USeinWorldSubsystem* Sim = World.GetSubsystem<USeinWorldSubsystem>();
 	if (!Sim) return;
-	if (SimTickHandle.IsValid())
+	if (StampSystem)
 	{
-		Sim->OnSimTickCompleted.Remove(SimTickHandle);
-		SimTickHandle.Reset();
+		Sim->UnregisterSystem(StampSystem.Get());
 	}
-	SimTickHandle = Sim->OnSimTickCompleted.AddUObject(this, &USeinFogOfWarSubsystem::HandleSimTickCompleted);
-}
-
-void USeinFogOfWarSubsystem::HandleSimTickCompleted(int32 CurrentTick)
-{
-	if (!FogOfWar) return;
-
-	// VisionTickInterval = N → recompute every Nth sim tick (e.g. 3 @ 30Hz
-	// sim = 10Hz stamps). All clients hit the same tick boundary, stamp the
-	// same source snapshot, produce the same bits — no wall-clock drift.
-	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
-	const int32 Interval = (Settings && Settings->VisionTickInterval > 0) ? Settings->VisionTickInterval : 1;
-	if ((CurrentTick % Interval) != 0) return;
-
-	FogOfWar->TickStamps(GetWorld());
+	StampSystem = MakeUnique<FSeinFogOfWarStampSystem>(FogOfWar);
+	Sim->RegisterSystem(StampSystem.Get());
 }
 
 void USeinFogOfWarSubsystem::BindSimDelegates(UWorld& World)
@@ -221,6 +358,177 @@ void USeinFogOfWarSubsystem::BindSimDelegates(UWorld& World)
 			if (!Fog || !Fog->HasRuntimeData()) return true; // no data = permit (tests, fog-less games)
 			return Fog->IsCellVisible(ObserverPlayer, TargetWorld, SEIN_FOW_BIT_NORMAL);
 		});
+	bSimDelegatesBound = true;
+}
+
+void USeinFogOfWarSubsystem::UnbindSimDelegates()
+{
+	if (!bSimDelegatesBound)
+	{
+		return;
+	}
+	if (UWorld* World = GetWorld())
+	{
+		if (USeinWorldSubsystem* Sim =
+			World->GetSubsystem<USeinWorldSubsystem>())
+		{
+			if (Sim->LineOfSightResolver.IsBoundToObject(this))
+			{
+				Sim->LineOfSightResolver.Unbind();
+			}
+		}
+	}
+	bSimDelegatesBound = false;
+}
+
+bool USeinFogOfWarSubsystem::FreezeCanonicalStateBinding(
+	FString& OutFrame,
+	FString& OutError)
+{
+	OutFrame.Reset();
+	OutError.Reset();
+
+	FString CandidateFrame =
+		TEXT("SeinARTS.FogOfWar.WorldBinding\n");
+	AppendFramed(CandidateFrame, TEXT("1"));
+	if (!bFogConfigured)
+	{
+		FGuid DisabledDigest;
+		if (!BuildDisabledStaticEnvironmentDigest(
+			DisabledDigest, OutError))
+		{
+			return false;
+		}
+		AppendFramed(CandidateFrame, TEXT("disabled"));
+		AppendFramed(CandidateFrame, TEXT("<disabled>"));
+		AppendFramed(
+			CandidateFrame, TEXT("seinarts.fog.disabled"));
+		AppendFramed(CandidateFrame, TEXT("0"));
+		AppendFramed(CandidateFrame, TEXT("0"));
+		AppendFramed(CandidateFrame, TEXT("0"));
+		AppendFramed(
+			CandidateFrame,
+			DisabledDigest.ToString(EGuidFormats::Digits));
+
+		if (bStateBindingFrozen
+			&& (FrozenStateBindingFrame != CandidateFrame
+				|| FrozenStaticEnvironmentDigest
+					!= DisabledDigest))
+		{
+			OutError =
+				TEXT("Disabled fog state binding changed after freeze.");
+			return false;
+		}
+		bStateBindingFrozen = true;
+		FrozenStateBindingFrame = CandidateFrame;
+		FrozenStaticEnvironmentDigest = DisabledDigest;
+		OutFrame = MoveTemp(CandidateFrame);
+		return true;
+	}
+
+	if (!StateCodecFailureReason.IsEmpty()
+		|| StateCodecToken == 0
+		|| !FogOfWar)
+	{
+		OutError = StateCodecFailureReason.IsEmpty()
+			? TEXT("Configured fog implementation has no live exact-state codec binding.")
+			: StateCodecFailureReason;
+		return false;
+	}
+
+	FSeinFogOfWarStateCodecRegistry::FResolvedClaim Claim;
+	if (!FSeinFogOfWarStateCodecRegistry::Resolve(
+		StateCodecToken, Claim, OutError)
+		|| !FogOfWar->GetClass()->IsChildOf(
+			Claim.Descriptor.SupportedClass))
+	{
+		if (OutError.IsEmpty())
+		{
+			OutError =
+				TEXT("Frozen fog codec no longer matches the active implementation class.");
+		}
+		return false;
+	}
+
+	FGuid StaticDigest;
+	if (!FSeinFogOfWarStateCodecRegistry::
+		ComputeStaticEnvironmentDigest(
+			StateCodecToken,
+			*FogOfWar,
+			StaticDigest,
+			OutError))
+	{
+		return false;
+	}
+
+	AppendFramed(CandidateFrame, TEXT("enabled"));
+	AppendFramed(
+		CandidateFrame, FogOfWar->GetClass()->GetPathName());
+	AppendFramed(
+		CandidateFrame,
+		Claim.Descriptor.StableImplementationId);
+	AppendFramed(
+		CandidateFrame,
+		LexToString(Claim.Descriptor.StateSchemaVersion));
+	AppendFramed(
+		CandidateFrame,
+		LexToString(Claim.Descriptor.BehaviorRevision));
+	AppendFramed(
+		CandidateFrame,
+		LexToString(Claim.Descriptor.CodecRevision));
+	AppendFramed(
+		CandidateFrame,
+		Claim.Descriptor.PayloadSchemaDigest.ToString(
+			EGuidFormats::Digits));
+	AppendFramed(
+		CandidateFrame,
+		Claim.CodecDescriptorDigest.ToString(
+			EGuidFormats::Digits));
+	AppendFramed(
+		CandidateFrame,
+		LexToString(
+			Claim.Descriptor.Limits.MaxRecursionDepth));
+	AppendFramed(
+		CandidateFrame,
+		LexToString(
+			Claim.Descriptor.Limits.MaxEncodedBytes));
+	AppendFramed(
+		CandidateFrame,
+		LexToString(
+			Claim.Descriptor.Limits.MaxAggregateElements));
+	AppendFramed(
+		CandidateFrame,
+		StaticDigest.ToString(EGuidFormats::Digits));
+
+	if (bStateBindingFrozen
+		&& (FrozenStateBindingFrame != CandidateFrame
+			|| FrozenStaticEnvironmentDigest != StaticDigest))
+	{
+		OutError =
+			TEXT("Fog implementation or static environment changed after the match StateContract froze.");
+		return false;
+	}
+
+	bStateBindingFrozen = true;
+	FrozenStateBindingFrame = CandidateFrame;
+	FrozenStaticEnvironmentDigest = StaticDigest;
+	OutFrame = MoveTemp(CandidateFrame);
+	return true;
+}
+
+void USeinFogOfWarSubsystem::InvalidateCanonicalStateCodecLease(
+	uint64 Token,
+	const FString& Reason)
+{
+	if (Token == 0 || StateCodecToken != Token)
+	{
+		return;
+	}
+	StateCodecFailureReason = Reason.IsEmpty()
+		? TEXT("The frozen fog state codec generation became unavailable.")
+		: Reason;
+	StateCodecToken = 0;
+	ReleaseModuleOwnedState();
 }
 
 USeinFogOfWar* USeinFogOfWarSubsystem::GetFogOfWarForWorld(const UObject* WorldContextObject)

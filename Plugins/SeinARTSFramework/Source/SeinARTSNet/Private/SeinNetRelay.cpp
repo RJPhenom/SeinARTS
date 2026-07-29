@@ -36,6 +36,8 @@ void ASeinNetRelay::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLif
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(ASeinNetRelay, AssignedPlayerID);
+	DOREPLIFETIME(ASeinNetRelay, AssignedParticipantID);
+	DOREPLIFETIME(ASeinNetRelay, ProtocolContext);
 	DOREPLIFETIME(ASeinNetRelay, SessionSeed);
 }
 
@@ -45,12 +47,11 @@ void ASeinNetRelay::OnRep_AssignedPlayerID()
 		TEXT("[Client] OnRep_AssignedPlayerID: slot=%u  seed=%lld  Owner=%s"),
 		AssignedPlayerID.Value, SessionSeed, *GetNameSafe(GetOwner()));
 
-	// Latch into the subsystem so SubmitLocalCommand and gameplay code can read
-	// it. Note: this OnRep fires only on the owning client (relay is owner-only).
 	if (USeinNetSubsystem* Net = GetNetSubsystem())
 	{
-		Net->NotifyLocalSlotAssigned(this, AssignedPlayerID, SessionSeed);
+		Net->NotifyLocalLobbySlotAssigned(this, AssignedPlayerID);
 	}
+	OnRep_ProtocolAssignment();
 }
 
 void ASeinNetRelay::OnRep_SessionSeed()
@@ -62,13 +63,14 @@ void ASeinNetRelay::OnRep_SessionSeed()
 	// Replication does not guarantee the two property notifications arrive in
 	// a particular order. If the slot is already known, re-run the idempotent
 	// readiness/binding path now that the seed is available.
-	if (AssignedPlayerID.IsValid())
-	{
-		if (USeinNetSubsystem* Net = GetNetSubsystem())
-		{
-			Net->NotifyLocalSlotAssigned(this, AssignedPlayerID, SessionSeed);
-		}
-	}
+	OnRep_ProtocolAssignment();
+}
+
+void ASeinNetRelay::OnRep_ProtocolAssignment()
+{
+	// Identity properties remain useful for inspection and relay replacement,
+	// but match activation comes through the atomic bootstrap RPC so a client
+	// can never combine a new context with stale settings from another match.
 }
 
 void ASeinNetRelay::BeginPlay()
@@ -110,36 +112,135 @@ USeinNetSubsystem* ASeinNetRelay::GetNetSubsystem() const
 	return GI->GetSubsystem<USeinNetSubsystem>();
 }
 
-void ASeinNetRelay::Server_SubmitCommands_Implementation(int32 TurnId, const TArray<FSeinCommand>& Commands)
+void ASeinNetRelay::Server_SubmitCommands_Implementation(
+	const FSeinProtocolContext& Context,
+	int32 TurnId,
+	const FSeinOpaqueCommandBatch& OpaqueDrafts)
 {
 	UE_LOG(LogSeinNet, Verbose,
-		TEXT("[Server] Recv submission  TurnId=%d  Count=%d  FromSlot=%u  Owner=%s"),
-		TurnId, Commands.Num(), AssignedPlayerID.Value, *GetNameSafe(GetOwner()));
+		TEXT("[Server] Recv opaque submission  TurnId=%d  Bytes=%d  FromSlot=%u  Owner=%s"),
+		TurnId, OpaqueDrafts.Bytes.Num(), AssignedPlayerID.Value, *GetNameSafe(GetOwner()));
 
 	if (USeinNetSubsystem* Net = GetNetSubsystem())
 	{
-		Net->ServerHandleSubmission(this, TurnId, Commands);
+		Net->ServerHandleSubmission(this, Context, TurnId, OpaqueDrafts);
 	}
 }
 
-void ASeinNetRelay::Client_ReceiveTurn_Implementation(int32 TurnId, const TArray<FSeinCommand>& Commands)
+void ASeinNetRelay::Client_ReceiveTurn_Implementation(
+	const FSeinProtocolContext& Context,
+	int32 TurnId,
+	const FSeinOpaqueCommandBatch& OpaqueCommands)
 {
 	UE_LOG(LogSeinNet, Verbose,
-		TEXT("[Client] Recv turn  TurnId=%d  Count=%d  Owner=%s"),
-		TurnId, Commands.Num(), *GetNameSafe(GetOwner()));
+		TEXT("[Client] Recv opaque turn  TurnId=%d  Bytes=%d  Owner=%s"),
+		TurnId, OpaqueCommands.Bytes.Num(), *GetNameSafe(GetOwner()));
 
 	if (USeinNetSubsystem* Net = GetNetSubsystem())
 	{
-		Net->ClientHandleTurn(TurnId, Commands);
+		Net->ClientHandleTurn(Context, TurnId, OpaqueCommands);
 	}
 }
 
-void ASeinNetRelay::Client_StartSession_Implementation()
+void ASeinNetRelay::Client_RequestMatchBootstrapReceipt_Implementation(
+	const FSeinProtocolContext& Context)
 {
-	UE_LOG(LogSeinNet, Log, TEXT("[Client] Client_StartSession received  Owner=%s"), *GetNameSafe(GetOwner()));
 	if (USeinNetSubsystem* Net = GetNetSubsystem())
 	{
-		Net->StartLocalSession();
+		Net->ClientHandleBootstrapReceiptRequest(Context);
+	}
+}
+
+void ASeinNetRelay::Server_ReportMatchBootstrapReceipt_Implementation(
+	const FSeinProtocolContext& Context,
+	const FSeinMatchBootstrapReceipt& Receipt)
+{
+	if (USeinNetSubsystem* Net = GetNetSubsystem())
+	{
+		Net->ServerHandleBootstrapReceipt(this, Context, Receipt);
+	}
+}
+
+void ASeinNetRelay::Server_ReportMatchBootstrapFailure_Implementation(
+	const FSeinProtocolContext& Context)
+{
+	if (USeinNetSubsystem* Net = GetNetSubsystem())
+	{
+		Net->ServerHandleBootstrapFailure(this, Context);
+	}
+}
+
+void ASeinNetRelay::Client_AuthorizeMatchBootstrap_Implementation(
+	const FSeinProtocolContext& Context,
+	const FSeinMatchBootstrapReceipt& Receipt)
+{
+	if (USeinNetSubsystem* Net = GetNetSubsystem())
+	{
+		Net->ClientHandleBootstrapAuthorization(Context, Receipt);
+	}
+}
+
+void ASeinNetRelay::Server_ReportMatchBootstrapAuthorizedReady_Implementation(
+	const FSeinProtocolContext& Context,
+	const FSeinMatchBootstrapReceipt& Receipt)
+{
+	if (USeinNetSubsystem* Net = GetNetSubsystem())
+	{
+		Net->ServerHandleBootstrapAuthorizedReady(this, Context, Receipt);
+	}
+}
+
+void ASeinNetRelay::Client_LaunchMatchBootstrap_Implementation(
+	const FSeinProtocolContext& Context,
+	const FSeinMatchBootstrapReceipt& Receipt)
+{
+	if (USeinNetSubsystem* Net = GetNetSubsystem())
+	{
+		Net->ClientHandleBootstrapLaunch(Context, Receipt);
+	}
+}
+
+void ASeinNetRelay::Client_FailMatchBootstrap_Implementation(
+	const FSeinProtocolContext& Context,
+	const FString& Reason)
+{
+	if (USeinNetSubsystem* Net = GetNetSubsystem())
+	{
+		Net->ClientHandleBootstrapFailure(Context, Reason);
+	}
+}
+
+void ASeinNetRelay::Client_PrepareMatchBootstrap_Implementation(
+	FSeinPlayerID Slot,
+	FSeinNetworkParticipantID ParticipantID,
+	const FSeinProtocolContext& Context,
+	int64 Seed,
+	bool bSimulates,
+	bool bAllowCurrentWorldActivation,
+	const FSeinMatchSettings& MatchSettings)
+{
+	if (USeinNetSubsystem* Net = GetNetSubsystem())
+	{
+		Net->NotifyLocalProtocolAssigned(
+			this,
+			Slot,
+			ParticipantID,
+			Context,
+			Seed,
+			bSimulates,
+			MatchSettings,
+			bAllowCurrentWorldActivation
+				? ESeinPreparedWorldActivation::AllowCurrentWorld
+				: ESeinPreparedWorldActivation::RequiresWorldTransition);
+	}
+}
+
+void ASeinNetRelay::Client_CancelPreparedMatchTravel_Implementation(
+	const FSeinProtocolContext& Context)
+{
+	if (USeinNetSubsystem* Net = GetNetSubsystem())
+	{
+		Net->ClientHandlePreparedMatchTravelCancelled(Context);
 	}
 }
 
@@ -263,19 +364,45 @@ void ASeinNetRelay::Server_RequestLeave_Implementation()
 	Lobby->ServerHandleLeave(OwnerPC);
 }
 
-void ASeinNetRelay::Server_ReportStateHash_Implementation(int32 Turn, int32 Hash)
+void ASeinNetRelay::Server_ReportWorldStateRoot_Implementation(
+	const FSeinProtocolContext& Context,
+	int32 Turn,
+	FGuid WorldRoot)
 {
 	UE_LOG(LogSeinNet, Verbose,
-		TEXT("[Server] Recv state-hash report  Turn=%d  Hash=0x%08x  FromSlot=%u"),
-		Turn, static_cast<uint32>(Hash), AssignedPlayerID.Value);
+		TEXT("[Coordinator] Recv world-state-root report  Turn=%d  Root=%s  FromSlot=%u"),
+		Turn, *WorldRoot.ToString(EGuidFormats::Digits), AssignedPlayerID.Value);
 
 	if (USeinNetSubsystem* Net = GetNetSubsystem())
 	{
-		Net->ServerHandleStateHashReport(this, Turn, Hash);
+		Net->ServerHandleWorldStateRootReport(
+			this, Context, Turn, WorldRoot);
 	}
 }
 
-void ASeinNetRelay::Server_ReportConfigFingerprint_Implementation(int32 Fingerprint)
+void ASeinNetRelay::Server_ReportDeterminismSessionFailure_Implementation(
+	const FSeinProtocolContext& Context,
+	const FSeinDeterminismSessionFailure& Failure)
+{
+	UE_LOG(LogSeinNet, Error,
+		TEXT("[Coordinator] Recv determinism-session failure  Turn=%d  Kind=%d  FromSlot=%u"),
+		Failure.Turn,
+		static_cast<int32>(Failure.Kind),
+		AssignedPlayerID.Value);
+
+	if (USeinNetSubsystem* Net = GetNetSubsystem())
+	{
+		Net->ServerHandleDeterminismSessionFailure(
+			this, Context, Failure);
+	}
+}
+
+void ASeinNetRelay::Server_ReportConfigFingerprint_Implementation(
+	const FSeinProtocolContext& Context,
+	int32 Fingerprint,
+	FGuid CommandProtocolDigest,
+	FGuid MatchSettingsDigest,
+	FGuid SimulationContentDigest)
 {
 	UE_LOG(LogSeinNet, Verbose,
 		TEXT("[Server] Recv config fingerprint 0x%08x  FromSlot=%u"),
@@ -283,19 +410,45 @@ void ASeinNetRelay::Server_ReportConfigFingerprint_Implementation(int32 Fingerpr
 
 	if (USeinNetSubsystem* Net = GetNetSubsystem())
 	{
-		Net->ServerHandleConfigFingerprint(this, Fingerprint);
+		Net->ServerHandleConfigFingerprint(
+			this,
+			Context,
+			Fingerprint,
+			CommandProtocolDigest,
+			MatchSettingsDigest,
+			SimulationContentDigest);
 	}
 }
 
-void ASeinNetRelay::Client_NotifyDesync_Implementation(int32 Turn, const TArray<FSeinSlotHashEntry>& PeerHashes)
+void ASeinNetRelay::Client_NotifyDesync_Implementation(
+	const FSeinProtocolContext& Context,
+	int32 Turn,
+	const TArray<FSeinParticipantWorldRootEntry>& PeerRoots)
 {
 	UE_LOG(LogSeinNet, Error,
 		TEXT("[Client] Recv DESYNC alarm  Turn=%d  PeerCount=%d"),
-		Turn, PeerHashes.Num());
+		Turn, PeerRoots.Num());
 
 	if (USeinNetSubsystem* Net = GetNetSubsystem())
 	{
-		Net->ClientHandleDesyncNotification(Turn, PeerHashes);
+		Net->ClientHandleDesyncNotification(Context, Turn, PeerRoots);
+	}
+}
+
+void ASeinNetRelay::Client_NotifyDeterminismSessionFailure_Implementation(
+	const FSeinProtocolContext& Context,
+	const FSeinDeterminismSessionFailure& Failure)
+{
+	UE_LOG(LogSeinNet, Error,
+		TEXT("[Client] Recv determinism-session failure  Turn=%d  Kind=%d  Participant=%s"),
+		Failure.Turn,
+		static_cast<int32>(Failure.Kind),
+		*Failure.ParticipantID.ToCanonicalString());
+
+	if (USeinNetSubsystem* Net = GetNetSubsystem())
+	{
+		Net->HandleAuthoritativeDeterminismSessionFailure(
+			Context, Failure);
 	}
 }
 

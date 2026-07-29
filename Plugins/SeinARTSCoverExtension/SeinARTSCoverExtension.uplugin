@@ -16,7 +16,7 @@
 		{
 			"Name": "SeinARTSCoverSquad",
 			"Type": "Runtime",
-			"LoadingPhase": "Default"
+			"LoadingPhase": "PostDefault"
 		}
 	],
 	"FriendlyName": "SeinARTS Cover",

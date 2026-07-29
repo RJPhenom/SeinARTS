@@ -164,9 +164,16 @@ public:
 		for (const FIdleUnit& Unit : ScriptIdle) { TickOneIdle(Unit); }
 	}
 
-	virtual ESeinTickPhase GetPhase() const override { return ESeinTickPhase::AbilityExecution; }
-	virtual int32 GetPriority() const override { return SeinSystemPriority::MovementDriver; }
-	virtual FName GetSystemName() const override { return TEXT("MovementDriver"); }
+	virtual FSeinSystemDescriptor DescribeSystem() const override
+	{
+		return FSeinSystemDescriptor::WithCanonicalState(
+			FName(TEXT("seinarts.movement.driver")),
+			1u,
+			ESeinTickPhase::AbilityExecution,
+			SeinSystemPriority::MovementDriver,
+			{FName(TEXT(
+				"seinarts.movement/persistent-policy-instances"))});
+	}
 
 private:
 	/** The owning movement subsystem — hosts the persistent-instance registry

@@ -47,13 +47,11 @@ public:
 			World.GetComponentStorageRaw(FSeinActiveEffectsComponent::StaticStruct()))
 		{
 			FSeinEntityPool& Pool = World.GetEntityPool();
-			Storage->ForEachLiveComponent([&](int32 SlotIndex, void* RawComponent)
+			Storage->ForEachLiveComponent([&](FSeinEntityHandle Handle, void* RawComponent)
 			{
 				const FSeinActiveEffectsComponent* EffectsComp = static_cast<const FSeinActiveEffectsComponent*>(RawComponent);
-				const FSeinEntityHandle Handle(
-					SlotIndex, Pool.GetSlotGeneration(SlotIndex));
 				if (EffectsComp && EffectsComp->ActiveEffects.Num() > 0
-					&& World.IsEntityAlive(Handle))
+					&& Pool.IsValid(Handle))
 				{
 					EffectEntities.Add(Handle);
 				}
@@ -79,9 +77,14 @@ public:
 		}
 	}
 
-	virtual ESeinTickPhase GetPhase() const override { return ESeinTickPhase::PreTick; }
-	virtual int32 GetPriority() const override { return SeinSystemPriority::EffectTick; }
-	virtual FName GetSystemName() const override { return TEXT("EffectTick"); }
+	virtual FSeinSystemDescriptor DescribeSystem() const override
+	{
+		return FSeinSystemDescriptor::Stateless(
+			FName(TEXT("seinarts.core.effect_tick")),
+			1u,
+			ESeinTickPhase::PreTick,
+			SeinSystemPriority::EffectTick);
+	}
 
 private:
 	static TArray<FSeinActiveEffect>* ResolveStorage(USeinWorldSubsystem& World,
@@ -174,11 +177,11 @@ private:
 					const FSeinEntityHandle CallbackTarget = Effect->Target;
 					const TSubclassOf<USeinEffect> CallbackClass = Effect->EffectClass;
 					Effect->TimeSinceLastPeriodic = Effect->TimeSinceLastPeriodic - Interval;
-					USeinEffect* MutableCDO = CallbackClass
-						? Cast<USeinEffect>(CallbackClass->GetDefaultObject()) : nullptr;
-					if (MutableCDO)
+					const USeinEffect* CallbackDefinition = CallbackClass
+						? GetDefault<USeinEffect>(CallbackClass) : nullptr;
+					if (CallbackDefinition)
 					{
-						MutableCDO->OnTick(CallbackTarget, Interval);
+						CallbackDefinition->OnTick(CallbackTarget, Interval);
 					}
 				}
 			}

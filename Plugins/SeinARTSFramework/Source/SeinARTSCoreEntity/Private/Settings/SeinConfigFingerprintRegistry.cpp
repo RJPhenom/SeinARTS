@@ -7,11 +7,39 @@
 #include "UObject/PropertyOptional.h"
 #include "UObject/UnrealType.h"
 #include "UObject/Object.h"
+#include "UObject/WeakObjectPtr.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinConfigFingerprint, Log, All);
 
 namespace
 {
+	struct FSeinConfigFingerprintClaim
+	{
+		uint64 Token = 0;
+		TWeakObjectPtr<const UObject> SettingsCDO;
+	};
+
+	struct FSeinConfigFingerprintContributor
+	{
+		FName StableId;
+		FString SettingsClassPath;
+		TArray<FName> FieldNames;
+		TArray<FSeinConfigFingerprintClaim> Claims;
+	};
+
+	struct FSeinConfigFingerprintRegistryState
+	{
+		FCriticalSection Mutex;
+		TArray<FSeinConfigFingerprintContributor> Contributors;
+		uint64 NextToken = 1;
+	};
+
+	FSeinConfigFingerprintRegistryState& GetRegistryState()
+	{
+		static FSeinConfigFingerprintRegistryState State;
+		return State;
+	}
+
 	FString FrameFingerprintValue(const FString& Value)
 	{
 		return FString::FromInt(Value.Len()) + TEXT(":") + Value;
@@ -130,20 +158,44 @@ namespace
 	}
 }
 
-TArray<FSeinConfigFingerprintContributor>& FSeinConfigFingerprintRegistry::Get()
+FSeinConfigFingerprintRegistrationHandle::
+	~FSeinConfigFingerprintRegistrationHandle()
 {
-	// Meyers singleton — first-use init, no static-init-order fiasco.
-	static TArray<FSeinConfigFingerprintContributor> Registry;
-	return Registry;
+	Reset();
 }
 
-FCriticalSection& FSeinConfigFingerprintRegistry::Mutex()
+FSeinConfigFingerprintRegistrationHandle::
+	FSeinConfigFingerprintRegistrationHandle(
+		FSeinConfigFingerprintRegistrationHandle&& Other) noexcept
+	: Token(Other.Token)
 {
-	static FCriticalSection M;
-	return M;
+	Other.Token = 0;
 }
 
-bool FSeinConfigFingerprintRegistry::RegisterContributor(
+FSeinConfigFingerprintRegistrationHandle&
+FSeinConfigFingerprintRegistrationHandle::operator=(
+	FSeinConfigFingerprintRegistrationHandle&& Other) noexcept
+{
+	if (this != &Other)
+	{
+		Reset();
+		Token = Other.Token;
+		Other.Token = 0;
+	}
+	return *this;
+}
+
+void FSeinConfigFingerprintRegistrationHandle::Reset()
+{
+	if (Token != 0)
+	{
+		FSeinConfigFingerprintRegistry::UnregisterContributor(Token);
+		Token = 0;
+	}
+}
+
+FSeinConfigFingerprintRegistrationHandle
+FSeinConfigFingerprintRegistry::RegisterContributor(
 	FName StableId, const UObject* SettingsCDO, TArray<FName> FieldNames)
 {
 	if (StableId.IsNone() || !SettingsCDO || !SettingsCDO->HasAnyFlags(RF_ClassDefaultObject)
@@ -152,7 +204,7 @@ bool FSeinConfigFingerprintRegistry::RegisterContributor(
 		UE_LOG(LogSeinConfigFingerprint, Error,
 			TEXT("Rejected config-fingerprint contributor '%s': expected a non-empty ID, CDO, and field list."),
 			*StableId.ToString());
-		return false;
+		return {};
 	}
 
 	TSet<FName> UniqueFields;
@@ -164,15 +216,29 @@ bool FSeinConfigFingerprintRegistry::RegisterContributor(
 			UE_LOG(LogSeinConfigFingerprint, Error,
 				TEXT("Rejected config-fingerprint contributor '%s': field '%s' is missing or duplicated on %s."),
 				*StableId.ToString(), *FieldName.ToString(), *SettingsCDO->GetClass()->GetPathName());
-			return false;
+			return {};
 		}
 		UniqueFields.Add(FieldName);
 	}
 
-	FScopeLock Lock(&Mutex());
-	TArray<FSeinConfigFingerprintContributor>& Registry = Get();
-	if (FSeinConfigFingerprintContributor* Existing =
-		Registry.FindByPredicate([&](const FSeinConfigFingerprintContributor& C){ return C.StableId == StableId; }))
+	FSeinConfigFingerprintRegistryState& State = GetRegistryState();
+	FScopeLock Lock(&State.Mutex);
+	if (State.NextToken == 0 || State.NextToken == MAX_uint64)
+	{
+		UE_LOG(LogSeinConfigFingerprint, Error,
+			TEXT("Rejected config-fingerprint contributor '%s': registration token space is exhausted."),
+			*StableId.ToString());
+		return {};
+	}
+
+	TArray<FSeinConfigFingerprintContributor>& Registry = State.Contributors;
+	FSeinConfigFingerprintContributor* Existing =
+		Registry.FindByPredicate(
+			[&](const FSeinConfigFingerprintContributor& Contributor)
+			{
+				return Contributor.StableId == StableId;
+			});
+	if (Existing)
 	{
 		const FString ClassPath = SettingsCDO->GetClass()->GetPathName();
 		const bool bSameSchema = Existing->FieldNames == FieldNames
@@ -182,28 +248,68 @@ bool FSeinConfigFingerprintRegistry::RegisterContributor(
 			UE_LOG(LogSeinConfigFingerprint, Error,
 				TEXT("Rejected conflicting config-fingerprint contributor ID '%s'."),
 				*StableId.ToString());
-			return false;
+			return {};
 		}
-
-		// Idempotent re-register (e.g. hot reload): refresh the CDO in place.
-		Existing->SettingsCDO = SettingsCDO;
+		if (Existing->Claims.Num() >= MaxReloadClaimsPerContributor)
+		{
+			UE_LOG(LogSeinConfigFingerprint, Error,
+				TEXT("Rejected config-fingerprint contributor '%s': too many overlapping reload generations."),
+				*StableId.ToString());
+			return {};
+		}
 	}
 	else
 	{
 		FSeinConfigFingerprintContributor New;
 		New.StableId = StableId;
-		New.SettingsCDO = SettingsCDO;
 		New.SettingsClassPath = SettingsCDO->GetClass()->GetPathName();
 		New.FieldNames = MoveTemp(FieldNames);
 		Registry.Add(MoveTemp(New));
+		Existing = &Registry.Last();
 	}
-	return true;
+
+	const uint64 Token = State.NextToken++;
+	FSeinConfigFingerprintClaim& Claim = Existing->Claims.AddDefaulted_GetRef();
+	Claim.Token = Token;
+	Claim.SettingsCDO = SettingsCDO;
+	return FSeinConfigFingerprintRegistrationHandle(Token);
 }
 
-void FSeinConfigFingerprintRegistry::UnregisterContributor(FName StableId)
+void FSeinConfigFingerprintRegistry::UnregisterContributor(uint64 Token)
 {
-	FScopeLock Lock(&Mutex());
-	Get().RemoveAll([&](const FSeinConfigFingerprintContributor& C){ return C.StableId == StableId; });
+	if (Token == 0)
+	{
+		return;
+	}
+
+	FSeinConfigFingerprintRegistryState& State = GetRegistryState();
+	FScopeLock Lock(&State.Mutex);
+	const int32 ContributorIndex = State.Contributors.IndexOfByPredicate(
+		[Token](const FSeinConfigFingerprintContributor& Contributor)
+		{
+			return Contributor.Claims.ContainsByPredicate(
+				[Token](const FSeinConfigFingerprintClaim& Claim)
+				{
+					return Claim.Token == Token;
+				});
+		});
+	if (ContributorIndex == INDEX_NONE)
+	{
+		return;
+	}
+
+	FSeinConfigFingerprintContributor& Contributor =
+		State.Contributors[ContributorIndex];
+	const int32 RemovedClaims = Contributor.Claims.RemoveAll(
+		[Token](const FSeinConfigFingerprintClaim& Claim)
+		{
+			return Claim.Token == Token;
+		});
+	check(RemovedClaims == 1);
+	if (Contributor.Claims.IsEmpty())
+	{
+		State.Contributors.RemoveAt(ContributorIndex);
+	}
 }
 
 void FSeinConfigFingerprintRegistry::AppendContributors(FString& OutFp)
@@ -213,8 +319,9 @@ void FSeinConfigFingerprintRegistry::AppendContributors(FString& OutFp)
 	// across clients regardless of module load order — the whole point of the seam.
 	TArray<FSeinConfigFingerprintContributor> Copy;
 	{
-		FScopeLock Lock(&Mutex());
-		Copy = Get();
+		FSeinConfigFingerprintRegistryState& State = GetRegistryState();
+		FScopeLock Lock(&State.Mutex);
+		Copy = State.Contributors;
 	}
 	Copy.Sort([](const FSeinConfigFingerprintContributor& A, const FSeinConfigFingerprintContributor& B)
 	{
@@ -223,7 +330,19 @@ void FSeinConfigFingerprintRegistry::AppendContributors(FString& OutFp)
 
 	for (const FSeinConfigFingerprintContributor& C : Copy)
 	{
-		const UObject* CDO = C.SettingsCDO.Get();
+		const UObject* CDO = nullptr;
+		uint64 NewestLiveToken = 0;
+		for (const FSeinConfigFingerprintClaim& Claim : C.Claims)
+		{
+			if (Claim.Token > NewestLiveToken)
+			{
+				if (const UObject* Candidate = Claim.SettingsCDO.Get())
+				{
+					CDO = Candidate;
+					NewestLiveToken = Claim.Token;
+				}
+			}
+		}
 		if (!CDO)
 		{
 			const UClass* SettingsClass = FindObject<UClass>(nullptr, *C.SettingsClassPath);

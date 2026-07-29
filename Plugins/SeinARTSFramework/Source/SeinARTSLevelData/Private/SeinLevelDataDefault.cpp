@@ -99,6 +99,21 @@ bool USeinLevelDataDefault::GetLayerChannel(FName LayerId, TArray<uint8>& OutDat
 // Provider registry
 // ============================================================================
 
+void USeinLevelDataDefault::OnDeinitialized()
+{
+	bCancelRequested = true;
+	bBaking = false;
+	Providers.Reset();
+	RuntimeChannels.Reset();
+	SharedHeight.Reset();
+	SharedNormalZ.Reset();
+	CellFlags.Reset();
+	CellTerrainType.Reset();
+	MinimapTextureRuntime = nullptr;
+	Width = 0;
+	Height = 0;
+}
+
 void USeinLevelDataDefault::RegisterLayerProvider(ISeinLevelLayerProvider* Provider)
 {
 	if (Provider) Providers.AddUnique(Provider);

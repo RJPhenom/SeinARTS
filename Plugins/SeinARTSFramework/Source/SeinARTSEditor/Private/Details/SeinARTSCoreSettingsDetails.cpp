@@ -6,6 +6,7 @@
 #include "Details/SeinARTSCoreSettingsDetails.h"
 
 #include "Util/SeinAutoTagGenerator.h"
+#include "Util/SeinSimulationContentManifestBuilder.h"
 
 #include "DetailCategoryBuilder.h"
 #include "IDetailGroup.h"
@@ -58,6 +59,7 @@ void FSeinARTSCoreSettingsDetails::CustomizeDetails(IDetailLayoutBuilder& Detail
 			TEXT("Collision"),
 			TEXT("Navigation"),
 			TEXT("Fog Of War"),
+			TEXT("Commands"),
 			TEXT("Network"),
 			TEXT("UI"),
 			TEXT("Debug Visualization"),
@@ -68,6 +70,116 @@ void FSeinARTSCoreSettingsDetails::CustomizeDetails(IDetailLayoutBuilder& Detail
 		{
 			DetailBuilder.EditCategory(CategoryName).SetSortOrder(SortOrder++);
 		}
+	}
+
+	// Simulation Content is authored through ordinary Blueprint/data assets.
+	// Keep the generated compatibility manifest beside its two authoring inputs
+	// and provide one explicit rebuild action; its records remain read-only.
+	{
+		IDetailCategoryBuilder& SimulationCategory =
+			DetailBuilder.EditCategory(
+				TEXT("Simulation"),
+				FText::GetEmpty(),
+				ECategoryPriority::Important);
+		IDetailGroup& ContentGroup =
+			SimulationCategory.AddGroup(
+				TEXT("Simulation Content"),
+				LOCTEXT(
+					"SimulationContentGroup",
+					"Simulation Content"),
+				false,
+				true);
+
+		const TSharedRef<IPropertyHandle> ContentProperties[] = {
+			DetailBuilder.GetProperty(
+				GET_MEMBER_NAME_CHECKED(
+					USeinARTSCoreSettings,
+					SimulationContentManifest)),
+			DetailBuilder.GetProperty(
+				GET_MEMBER_NAME_CHECKED(
+					USeinARTSCoreSettings,
+					AdditionalSimulationContentRoots)),
+		};
+		for (const TSharedRef<IPropertyHandle>& Property :
+			ContentProperties)
+		{
+			DetailBuilder.HideProperty(Property);
+			ContentGroup.AddPropertyRow(Property);
+		}
+
+		ContentGroup.AddWidgetRow()
+		.FilterString(
+			LOCTEXT(
+				"GenerateSimulationContentFilter",
+				"Generate Regenerate Simulation Content Manifest"))
+		.NameContent()
+		[
+			SNew(STextBlock)
+			.Text(
+				LOCTEXT(
+					"GenerateSimulationContentLabel",
+					"Compatibility Evidence"))
+			.Font(IDetailLayoutBuilder::GetDetailFont())
+			.ToolTipText(
+				LOCTEXT(
+					"GenerateSimulationContentTip",
+					"Discovers Blueprint-authored simulation classes, Available Maps, deterministic user structs, explicit roots, and their saved runtime dependencies. Dirty, unsaved, uncompiled, or unhashed inputs are rejected."))
+		]
+		.ValueContent()
+		.MinDesiredWidth(280.f)
+		[
+			SNew(SButton)
+			.HAlign(HAlign_Center)
+			.OnClicked_Lambda([]() -> FReply
+			{
+				FSeinSimulationContentManifestBuildResult
+					Result;
+				FString Error;
+				if (!FSeinSimulationContentManifestBuilder::
+					GenerateConfiguredManifest(
+						Result,
+						Error))
+				{
+					FMessageDialog::Open(
+						EAppMsgType::Ok,
+						FText::FromString(
+							Error.IsEmpty()
+								? FString(TEXT("Simulation Content Manifest generation failed."))
+								: Error),
+						LOCTEXT(
+							"GenerateSimulationContentFailedTitle",
+							"Manifest Generation Failed"));
+					return FReply::Handled();
+				}
+
+				FMessageDialog::Open(
+					EAppMsgType::Ok,
+					FText::Format(
+						LOCTEXT(
+							"GenerateSimulationContentDone",
+							"Saved {0}\n\nContributors: {1}\nPackages: {2}\nRoot: {3}"),
+						FText::FromString(
+							Result.ManifestObjectPath),
+						FText::AsNumber(
+							Result.ContributorCount),
+						FText::AsNumber(
+							Result.RecordCount),
+						FText::FromString(
+							Result.RootDigest.ToString(
+								EGuidFormats::Digits))),
+					LOCTEXT(
+						"GenerateSimulationContentDoneTitle",
+						"Simulation Content Manifest Generated"));
+				return FReply::Handled();
+			})
+			[
+				SNew(STextBlock)
+				.Text(
+					LOCTEXT(
+						"GenerateSimulationContentButton",
+						"Generate / Regenerate Manifest"))
+			]
+		];
 	}
 
 	// Tag Semantics — render the tag-generation settings and the two regenerate buttons together in a

@@ -305,9 +305,14 @@ public:
 #endif // !UE_BUILD_SHIPPING
 	}
 
-	virtual ESeinTickPhase GetPhase() const override { return ESeinTickPhase::PostTick; }
-	virtual int32 GetPriority() const override { return SeinSystemPriority::MovementTrace; }
-	virtual FName GetSystemName() const override { return TEXT("MovementTrace"); }
+	virtual FSeinSystemDescriptor DescribeSystem() const override
+	{
+		return FSeinSystemDescriptor::Stateless(
+			FName(TEXT("seinarts.movement.trace")),
+			1u,
+			ESeinTickPhase::PostTick,
+			SeinSystemPriority::MovementTrace);
+	}
 
 private:
 	struct FTraceState

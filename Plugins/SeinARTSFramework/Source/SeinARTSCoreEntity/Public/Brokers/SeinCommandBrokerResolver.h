@@ -87,7 +87,9 @@ public:
 	 * order's TargetMembers field). For each effective member, call
 	 * `ResolveMemberAbility` to pick the ability, decide target + position,
 	 * and emit a dispatch tuple. Members that don't appear in the returned
-	 * plan are silently skipped for this order.
+	 * plan are silently skipped for this order. Resolver implementations must not
+	 * mutate broker state. Return optional facing/settled-slot changes through the
+	 * plan; the broker system validates and commits them transactionally.
 	 */
 	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Broker", meta = (DisplayName = "Resolve Dispatch"))
 	FSeinBrokerDispatchPlan ResolveDispatch(

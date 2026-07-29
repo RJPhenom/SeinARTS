@@ -16,8 +16,8 @@
  *   - Custom C++ pawn: inherit from ISeinSnapshotCameraProvider, override
  *     CaptureCameraState_Implementation and RestoreCameraState_Implementation.
  *   - Custom BP pawn: add the interface in Class Settings → Interfaces, then
- *     implement the two events in the event graph. Snapshot fields are
- *     accessible as struct members on the FSeinWorldSnapshot wildcard pin.
+ *     implement the two events in the event graph. The compact
+ *     FSeinCameraSnapshotData struct is passed directly to both events.
  *   - Don't want camera in saves: don't implement the interface. The
  *     framework no-ops gracefully.
  *
@@ -54,7 +54,7 @@ class SEINARTSCOREENTITY_API ISeinSnapshotCameraProvider
 public:
 	/**
 	 * Stamp the local camera state into OutData. Called by the Framework's
-	 * MatchBootstrap subsystem during snapshot capture.
+	 * presentation-only camera snapshot subsystem during snapshot capture.
 	 *
 	 * Set OutData.bHasState = true so the matching restore knows there's
 	 * data to apply. Fill the generic fields (PivotLocation / Yaw / Pitch /

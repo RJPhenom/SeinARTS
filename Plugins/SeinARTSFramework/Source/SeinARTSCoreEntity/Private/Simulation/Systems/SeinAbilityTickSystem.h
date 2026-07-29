@@ -55,7 +55,12 @@ public:
 		});
 	}
 
-	virtual ESeinTickPhase GetPhase() const override { return ESeinTickPhase::AbilityExecution; }
-	virtual int32 GetPriority() const override { return SeinSystemPriority::AbilityTick; }
-	virtual FName GetSystemName() const override { return TEXT("AbilityTick"); }
+	virtual FSeinSystemDescriptor DescribeSystem() const override
+	{
+		return FSeinSystemDescriptor::Stateless(
+			FName(TEXT("seinarts.core.ability_tick")),
+			1u,
+			ESeinTickPhase::AbilityExecution,
+			SeinSystemPriority::AbilityTick);
+	}
 };

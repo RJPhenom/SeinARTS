@@ -3,16 +3,16 @@
  * @file    SeinMatchSettings.h
  * @brief   Match-level configuration primitive — minimal framework shape.
  *
- * `FSeinMatchSettings` is the runtime struct snapshotted into
- * `USeinWorldSubsystem` at StartMatch (immutable after). The framework
+ * `FSeinMatchSettings` is the runtime contract installed by the one-shot
+ * match bootstrap transaction (immutable after). The framework
  * intentionally ships only two fields:
  *   - `Slots` — the per-player slot manifest (framework-essential: drives
  *     player registration, spawn pipeline, lobby UI).
  *   - `Extensions` — opt-in `FInstancedStruct` array. Designers + framework
  *     subsystems with match-level rules ship their own USTRUCTs and look
- *     them up by type at runtime (`FindMatchExtension<T>`). Framework C++
- *     does NOT prescribe what's in here; designer scripts compose match
- *     behavior by including the rule structs their game needs.
+ *     them up by type at runtime (`FindMatchExtension<T>`). Framework C++ owns
+ *     only its explicitly documented extension types; designer scripts compose
+ *     the remaining policy from project-specific rule structs.
  *
  * For a starter pack of common RTS knobs (friendly fire, time limit, etc.)
  * see `FSeinBasicMatchSettings` (Data/SeinBasicMatchSettings.h). Designers
@@ -24,23 +24,27 @@
 
 #include "CoreMinimal.h"
 #include "Core/SeinFactionID.h"
+#include "Core/SeinPlayerID.h"
 #include "GameplayTagContainer.h"
 #include "StructUtils/InstancedStruct.h"
 #include "SeinMatchSettings.generated.h"
 
+struct FSeinDeterministicValueDigestError;
+
 /**
- * Slot occupancy state. Drives whether the game mode spawns the slot's
- * PlayerStart entity at world begin and how a connecting controller is
- * bound. Open and Closed slots produce no spawn.
+ * Slot occupancy state. Drives whether the shared bootstrap materializer
+ * creates player state and an optional PlayerStart entity, and how the
+ * authority-side GameMode binds a controller. Open and Closed slots produce
+ * no deterministic player or spawn state.
  */
 UENUM(BlueprintType)
 enum class ESeinSlotState : uint8
 {
-	/** Joinable but currently empty. No spawn until a controller claims it. */
+	/** Joinable during lobby assembly; produces no deterministic match state while Open. */
 	Open,
-	/** Human player expected. Spawn at world begin; controller binds on connect. */
+	/** Human player expected. Bootstrap creates state/spawn; GameMode binds its controller. */
 	Human,
-	/** AI fills this slot. Spawn at world begin; AI controller registers later (DESIGN §16). */
+	/** AI fills this slot. Bootstrap creates state/spawn; AI policy attaches separately. */
 	AI,
 	/** Locked out. No spawn, no controller binding. */
 	Closed,
@@ -49,8 +53,8 @@ enum class ESeinSlotState : uint8
 /**
  * Per-slot match manifest entry. SlotIndex maps 1:1 to
  * `ASeinPlayerStart::PlayerSlot` for spawn-location lookup. Faction/team here
- * are the runtime source of truth — PlayerStart's same-named fields are
- * legacy/anchor metadata only.
+ * are the frozen runtime source of truth. PlayerStart's same-named fields are
+ * authoring defaults used when a standalone/direct-PIE manifest is synthesized.
  */
 USTRUCT(BlueprintType, meta = (SeinDeterministic))
 struct SEINARTSCOREENTITY_API FSeinMatchSlot
@@ -73,10 +77,6 @@ struct SEINARTSCOREENTITY_API FSeinMatchSlot
 		meta = (ClampMin = "0"))
 	uint8 TeamID = 0;
 
-	/** Lobby/scoreboard label ("RJ", "AI - Hard", "Open"). */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Match")
-	FText DisplayName;
-
 	/** Optional AI personality tag (DESIGN §16 — designer-extended namespace). */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Match",
 		meta = (Categories = "SeinARTS.AI"))
@@ -86,18 +86,17 @@ struct SEINARTSCOREENTITY_API FSeinMatchSlot
 /**
  * Match flow state. Transitions are command-driven (lockstep-deterministic).
  *
- * NOTE on `Starting`: framework no longer ships a pre-match countdown
- * (cut along with the opinionated rule fields). `Starting` is preserved
- * as an enum value so designer code that wants a custom countdown UX can
- * still observe the state, but framework auto-transitions Lobby → Starting
- * → Playing instantly. Designer countdown UI delays calling StartMatch.
+ * NOTE on `Starting`: framework no longer ships a pre-match countdown.
+ * Bootstrap seals tick zero in `Starting`; the first simulation tick advances
+ * it to `Playing`. A standalone map can hold authorized tick zero with
+ * `bAutoStartSim=false`, while network/replay adapters own their launch timing.
  */
 UENUM(BlueprintType)
 enum class ESeinMatchState : uint8
 {
 	/** Pre-match, players joining, settings configurable. */
 	Lobby,
-	/** Transitional. Framework moves through this in 0 ticks. */
+	/** Sealed tick-zero state; the first simulation tick enters Playing. */
 	Starting,
 	/** Normal sim execution. */
 	Playing,
@@ -110,14 +109,14 @@ enum class ESeinMatchState : uint8
 };
 
 /**
- * Runtime match configuration snapshot. Snapshotted into
- * `USeinWorldSubsystem::CurrentMatchSettings` at StartMatch; mutation after
+ * Runtime match configuration snapshot. Canonically installed into
+ * `USeinWorldSubsystem::CurrentMatchSettings` during bootstrap; mutation after
  * that point is forbidden (desync-safe).
  *
- * Framework intentionally ships ONLY the slot manifest + extension array.
+ * Framework intentionally ships only the slot manifest + extension array.
  * Match-level rules (friendly fire, resource sharing, time limits, victory
- * conditions, etc.) are designer-driven via `Extensions` — the framework
- * never reads or interprets them. See `FSeinBasicMatchSettings` for a
+ * conditions, etc.) are designer-driven via `Extensions`. Each module reads
+ * only the extension types it owns; see `FSeinBasicMatchSettings` for a
  * designer-convenience starter struct covering common RTS knobs.
  */
 USTRUCT(BlueprintType, meta = (SeinDeterministic))
@@ -125,16 +124,11 @@ struct SEINARTSCOREENTITY_API FSeinMatchSettings
 {
 	GENERATED_BODY()
 
-	/** Per-slot occupancy + faction/team. Built at runtime by the lobby
-	 *  (`ASeinLobbyState::Slots`) and snapshotted into this struct at
-	 *  StartMatch. Game mode walks this at world-begin to spawn HQs for
-	 *  Human/AI slots.
-	 *
-	 *  PIE-direct testing (no lobby): this array stays empty; the GameMode's
-	 *  legacy fallback in `ChoosePlayerStart` routes connecting PCs to
-	 *  `ASeinPlayerStart`s by `PlayerSlot` field — host = slot 1, window 2 =
-	 *  slot 2, etc. SeinPlayerStarts are the source of truth for slot
-	 *  positions in that path. */
+	/** Per-slot occupancy + faction/team. A lobby/matchmaker may supply the
+	 *  manifest directly. In standalone/direct PIE without a published lobby
+	 *  snapshot, the Framework synthesizes it from authored SeinPlayerStarts.
+	 *  The shared bootstrap materializer consumes the canonical result on every
+	 *  simulation peer; GameMode only routes Human controllers to those slots. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Match")
 	TArray<FSeinMatchSlot> Slots;
 
@@ -145,10 +139,33 @@ struct SEINARTSCOREENTITY_API FSeinMatchSettings
 	 *  rule structs their game uses (`FSeinBasicMatchSettings` for common
 	 *  RTS knobs, custom structs for game-specific rules).
 	 *
-	 *  Framework code does NOT prescribe what's in here. Match flow + sim
-	 *  state machine are driven by framework code; per-rule policy is
-	 *  designer-authored. */
+	 *  A module may interpret only the extension types it explicitly owns.
+	 *  Project-specific rule policy remains designer-authored. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Match",
 		meta = (SeinDeterministicOnly))
 	TArray<FInstancedStruct> Extensions;
 };
+
+/** Deterministic payload for an administrator-issued EndMatch command. */
+USTRUCT(BlueprintType, meta = (SeinDeterministic))
+struct SEINARTSCOREENTITY_API FSeinEndMatchCommandPayload
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Match")
+	FSeinPlayerID Winner;
+
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Match")
+	FGameplayTag Reason;
+};
+
+/**
+ * Canonicalize slot/extension order and compute the runtime compatibility
+ * digest. On failure, leaves Settings unchanged and invalidates OutDigest.
+ * Semantic rules such as duplicate slot/type rejection remain the caller's
+ * command-schema responsibility.
+ */
+SEINARTSCOREENTITY_API bool SeinCanonicalizeAndDigestMatchSettings(
+	FSeinMatchSettings& Settings,
+	FGuid& OutDigest,
+	FSeinDeterministicValueDigestError* OutError = nullptr);

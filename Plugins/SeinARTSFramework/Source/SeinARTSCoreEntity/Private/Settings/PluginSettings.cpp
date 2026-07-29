@@ -85,6 +85,10 @@ USeinARTSCoreSettings::USeinARTSCoreSettings()
 	, VisionCellSize(FFixedPoint::FromInt(100))
 	, VisionTickInterval(3)
 	, FogRenderTickRate(10.0f)
+	// Command protocol. None is fail-closed, so the shipped owner+grant policy
+	// is named explicitly rather than recovered as a hidden fallback.
+	, CommandAuthorityPolicyClass(FSoftClassPath(TEXT("/Script/SeinARTSCoreEntity.SeinDefaultCommandAuthorityPolicy")))
+	, MaxCommandsPerSubmission(256)
 	// Network defaults — see PluginSettings.h for rationale on each. Soft path
 	// for the relay class follows the established nav/fog decoupling: this module
 	// deliberately does NOT depend on SeinARTSNet.
@@ -321,6 +325,7 @@ int32 USeinARTSCoreSettings::ComputeConfigFingerprint() const
 	// belongs in this list.
 	static const TCHAR* const Fields[] = {
 		TEXT("SimulationTickRate"), TEXT("TurnRate"), TEXT("InputDelayTurns"), TEXT("bAsyncPathfinding"),
+		TEXT("CommandAuthorityPolicyClass"), TEXT("CommandHandlerClasses"), TEXT("MaxCommandsPerSubmission"),
 		TEXT("NavigationClass"), TEXT("CollisionResolverClass"), TEXT("AvoidanceClass"), TEXT("FogOfWarClass"),
 		TEXT("LevelDataClass"), TEXT("DefaultBrokerResolverClass"), TEXT("DefaultFormation"),
 		TEXT("CellSize"), TEXT("MaxStepHeight"), TEXT("CollisionMassRatioCutoff"), TEXT("PathRequestsPerTickBudget"),
@@ -348,6 +353,26 @@ int32 USeinARTSCoreSettings::ComputeConfigFingerprint() const
 			Fp += Value;
 		}
 		Fp += TEXT(";");
+	}
+	// Recipe composition is a semantic set: execution is canonically ordered by
+	// stable contributor ID, so a harmless Project Settings reorder must not
+	// change lockstep compatibility.
+	TArray<FString> CanonicalRecipePaths;
+	CanonicalRecipePaths.Reserve(CanonicalStateRecipes.Num());
+	for (const TSoftClassPtr<USeinCanonicalStateRecipe>& Recipe :
+		CanonicalStateRecipes)
+	{
+		CanonicalRecipePaths.Add(
+			Recipe.ToSoftObjectPath().ToString());
+	}
+	CanonicalRecipePaths.Sort();
+	Fp += TEXT("CanonicalStateRecipes=");
+	for (const FString& RecipePath : CanonicalRecipePaths)
+	{
+		Fp += FString::Printf(
+			TEXT("%d:%s;"),
+			RecipePath.Len(),
+			*RecipePath);
 	}
 	// Fold in extension-registered sim-affecting settings (squad, etc.) AFTER the core
 	// section. AppendContributors sorts by stable id internally, so the value is

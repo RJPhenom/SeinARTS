@@ -129,7 +129,12 @@ public:
 		}, /*bForceSerial=*/bHasAuthoritative);
 	}
 
-	virtual ESeinTickPhase GetPhase() const override { return ESeinTickPhase::PostTick; }
-	virtual int32 GetPriority() const override { return SeinSystemPriority::NavContainment; }
-	virtual FName GetSystemName() const override { return TEXT("NavContainment"); }
+	virtual FSeinSystemDescriptor DescribeSystem() const override
+	{
+		return FSeinSystemDescriptor::Stateless(
+			FName(TEXT("seinarts.movement.nav_containment")),
+			1u,
+			ESeinTickPhase::PostTick,
+			SeinSystemPriority::NavContainment);
+	}
 };

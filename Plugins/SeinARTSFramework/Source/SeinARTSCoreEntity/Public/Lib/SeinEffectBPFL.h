@@ -30,9 +30,11 @@ public:
 
 	/** Apply a `USeinEffect` class to a target. Scope from the effect CDO determines
 	 *  storage location (Instance on target, Class / Player on target owner's
-	 *  PlayerState). Returns the world-global effect instance ID, or 0 if the apply
-	 *  failed/was deferred to the next PreTick. Deferred zero is not a reservation:
-	 *  stacking and validity resolve only when that queue drains. */
+	 *  PlayerState). Returns the world-global effect instance ID, or 0 if no ID
+	 *  was assigned / the apply was deferred to the next PreTick. Zero does not
+	 *  promise that no mutation occurred: replacement OnRemoved callbacks may
+	 *  invalidate the target after their removals commit. Deferred zero is not a
+	 *  reservation; stacking and validity resolve only when the queue drains. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Effect",
 		meta = (WorldContext = "WorldContextObject", DisplayName = "Apply Effect"))
 	static int64 SeinApplyEffect(const UObject* WorldContextObject, FSeinEntityHandle TargetHandle,

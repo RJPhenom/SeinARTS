@@ -50,6 +50,7 @@ class SEINARTSLEVELDATA_API USeinLevelDataDefault : public USeinLevelData
 public:
 
 	// --- USeinLevelData surface ---
+	virtual void OnDeinitialized() override;
 	virtual FFixedPoint GetFinestCellSize() const override { return CellSizeFP; }
 	virtual FFixedVector GetOrigin() const override { return OriginFP; }
 	virtual FIntPoint GetDimensions() const override { return FIntPoint(Width, Height); }

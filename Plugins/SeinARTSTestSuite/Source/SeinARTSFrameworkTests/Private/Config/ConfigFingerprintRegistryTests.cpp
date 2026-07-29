@@ -61,21 +61,6 @@ namespace UE::SeinARTSTests
 			return Result;
 		}
 
-		struct FScopedContributorRegistration
-		{
-			explicit FScopedContributorRegistration(FName InStableId)
-				: StableId(InStableId)
-			{
-			}
-
-			~FScopedContributorRegistration()
-			{
-				FSeinConfigFingerprintRegistry::UnregisterContributor(StableId);
-			}
-
-			FName StableId;
-		};
-
 		struct FScopedTestSettingsRestore
 		{
 			explicit FScopedTestSettingsRestore(USeinConfigFingerprintTestSettings& InSettings)
@@ -106,13 +91,13 @@ namespace UE::SeinARTSTests
 	TEST(ConfigFingerprintRecursivelyCanonicalizesContainers, "SeinARTS.Unit.ConfigFingerprint")
 	{
 		const FName StableId(TEXT("SeinFrameworkTest.RecursiveCanonicalization"));
-		FScopedContributorRegistration Registration(StableId);
 		USeinConfigFingerprintTestSettings* Settings =
 			GetMutableDefault<USeinConfigFingerprintTestSettings>();
 		ASSERT_THAT(IsNotNull(Settings));
 		FScopedTestSettingsRestore Restore(*Settings);
 
-		ASSERT_THAT(IsTrue(FSeinConfigFingerprintRegistry::RegisterContributor(
+		FSeinConfigFingerprintRegistrationHandle Registration =
+			FSeinConfigFingerprintRegistry::RegisterContributor(
 			StableId,
 			Settings,
 			{
@@ -120,7 +105,8 @@ namespace UE::SeinARTSTests
 				GET_MEMBER_NAME_CHECKED(USeinConfigFingerprintTestSettings, OrderedGroups),
 				GET_MEMBER_NAME_CHECKED(USeinConfigFingerprintTestSettings, OptionalGroup),
 				GET_MEMBER_NAME_CHECKED(USeinConfigFingerprintTestSettings, ScalarValue),
-			})));
+			});
+		ASSERT_THAT(IsTrue(Registration.IsValid()));
 
 		PopulateSettings(*Settings, false);
 		const FString ForwardInsertion = CaptureFingerprintContributors();
@@ -147,7 +133,6 @@ namespace UE::SeinARTSTests
 			GetMutableDefault<USeinConfigFingerprintTestSettings>();
 		ASSERT_THAT(IsNotNull(Settings));
 		const FName StableId(TEXT("SeinFrameworkTest.RegistrationValidation"));
-		FScopedContributorRegistration Registration(StableId);
 		const FName ScalarField =
 			GET_MEMBER_NAME_CHECKED(USeinConfigFingerprintTestSettings, ScalarValue);
 
@@ -155,27 +140,31 @@ namespace UE::SeinARTSTests
 			TEXT("expected a non-empty ID, CDO, and field list"),
 			EAutomationExpectedErrorFlags::Contains, 4, false);
 		ASSERT_THAT(IsFalse(FSeinConfigFingerprintRegistry::RegisterContributor(
-			NAME_None, Settings, { ScalarField })));
+			NAME_None, Settings, { ScalarField }).IsValid()));
 		ASSERT_THAT(IsFalse(FSeinConfigFingerprintRegistry::RegisterContributor(
-			TEXT("SeinFrameworkTest.NullCDO"), nullptr, { ScalarField })));
+			TEXT("SeinFrameworkTest.NullCDO"), nullptr, { ScalarField }).IsValid()));
 		ASSERT_THAT(IsFalse(FSeinConfigFingerprintRegistry::RegisterContributor(
 			TEXT("SeinFrameworkTest.NonCDO"), NewObject<USeinConfigFingerprintTestSettings>(),
-			{ ScalarField })));
+			{ ScalarField }).IsValid()));
 		ASSERT_THAT(IsFalse(FSeinConfigFingerprintRegistry::RegisterContributor(
-			TEXT("SeinFrameworkTest.EmptyFields"), Settings, {})));
+			TEXT("SeinFrameworkTest.EmptyFields"), Settings, {}).IsValid()));
 
 		TestRunner->AddExpectedError(
 			TEXT("is missing or duplicated"),
 			EAutomationExpectedErrorFlags::Contains, 2, false);
 		ASSERT_THAT(IsFalse(FSeinConfigFingerprintRegistry::RegisterContributor(
-			TEXT("SeinFrameworkTest.MissingField"), Settings, { TEXT("NotAProperty") })));
+			TEXT("SeinFrameworkTest.MissingField"), Settings, { TEXT("NotAProperty") }).IsValid()));
 		ASSERT_THAT(IsFalse(FSeinConfigFingerprintRegistry::RegisterContributor(
-			TEXT("SeinFrameworkTest.DuplicateField"), Settings, { ScalarField, ScalarField })));
+			TEXT("SeinFrameworkTest.DuplicateField"), Settings, { ScalarField, ScalarField }).IsValid()));
 
-		ASSERT_THAT(IsTrue(FSeinConfigFingerprintRegistry::RegisterContributor(
-			StableId, Settings, { ScalarField })));
-		ASSERT_THAT(IsTrue(FSeinConfigFingerprintRegistry::RegisterContributor(
-			StableId, Settings, { ScalarField })));
+		FSeinConfigFingerprintRegistrationHandle FirstGeneration =
+			FSeinConfigFingerprintRegistry::RegisterContributor(
+				StableId, Settings, { ScalarField });
+		FSeinConfigFingerprintRegistrationHandle SecondGeneration =
+			FSeinConfigFingerprintRegistry::RegisterContributor(
+				StableId, Settings, { ScalarField });
+		ASSERT_THAT(IsTrue(FirstGeneration.IsValid()));
+		ASSERT_THAT(IsTrue(SecondGeneration.IsValid()));
 
 		TestRunner->AddExpectedError(
 			TEXT("Rejected conflicting config-fingerprint contributor ID"),
@@ -186,13 +175,21 @@ namespace UE::SeinARTSTests
 			{
 				ScalarField,
 				GET_MEMBER_NAME_CHECKED(USeinConfigFingerprintTestSettings, ValuesByGroup),
-			})));
+			}).IsValid()));
 		ASSERT_THAT(IsFalse(FSeinConfigFingerprintRegistry::RegisterContributor(
 			StableId,
 			GetDefault<USeinConfigFingerprintAlternateTestSettings>(),
-			{ GET_MEMBER_NAME_CHECKED(USeinConfigFingerprintAlternateTestSettings, ScalarValue) })));
+			{ GET_MEMBER_NAME_CHECKED(USeinConfigFingerprintAlternateTestSettings, ScalarValue) }).IsValid()));
 
 		ASSERT_THAT(IsTrue(CaptureFingerprintContributors().Contains(
+			StableId.ToString() + TEXT("|ScalarValue="))));
+
+		FirstGeneration.Reset();
+		ASSERT_THAT(IsTrue(CaptureFingerprintContributors().Contains(
+			StableId.ToString() + TEXT("|ScalarValue="))));
+
+		SecondGeneration.Reset();
+		ASSERT_THAT(IsFalse(CaptureFingerprintContributors().Contains(
 			StableId.ToString() + TEXT("|ScalarValue="))));
 	}
 }

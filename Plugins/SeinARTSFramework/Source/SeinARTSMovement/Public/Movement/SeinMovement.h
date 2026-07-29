@@ -45,6 +45,7 @@ class USeinWorldSubsystem;
 class UScriptStruct;
 class USeinMoverHandle;
 class USeinPlannerHandle;
+struct FSeinMovementCanonicalStateProvider;
 struct FSeinEntity;
 struct FSeinMovementComponent;
 struct FSeinNavigationComponent;
@@ -159,6 +160,9 @@ class SEINARTSMOVEMENT_API USeinMovement : public UObject
 	// Hydrates per-unit tuning onto a freshly-created instance (so shape virtuals read correct
 	// values at plan-time / idle, not just after OnMoveBegin) — calls protected HydrateTuningFromData.
 	friend class USeinMovementSubsystem;
+	// Canonical restore stages under the final subsystem outer, hydrates the
+	// candidate component baseline, then applies exact reflected state.
+	friend struct FSeinMovementCanonicalStateProvider;
 
 public:
 

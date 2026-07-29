@@ -27,8 +27,17 @@ void USeinTargeterSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 void USeinTargeterSubsystem::Deinitialize()
 {
-	ResetToIdle();
+	ReleaseModuleOwnedStateForModuleUnload();
 	Super::Deinitialize();
+}
+
+void USeinTargeterSubsystem::ReleaseModuleOwnedStateForModuleUnload()
+{
+	// Teardown must not invoke Blueprint listeners while their owning modules
+	// may also be withdrawing.
+	OnStateChanged.Clear();
+	ResetToIdle();
+	CachedPC.Reset();
 }
 
 void USeinTargeterSubsystem::Activate(USeinTargeterSpec* InSpec, FGameplayTag InAbilityTag,

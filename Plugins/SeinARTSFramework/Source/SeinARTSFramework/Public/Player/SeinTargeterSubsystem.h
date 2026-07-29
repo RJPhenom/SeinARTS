@@ -61,6 +61,9 @@ public:
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 
+	/** Destroy transient targeting state before module withdrawal. */
+	void ReleaseModuleOwnedStateForModuleUnload();
+
 	// ========== Public API ==========
 
 	/** Activate the targeter for a given ability + owner entity.

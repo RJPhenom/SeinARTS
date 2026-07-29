@@ -29,26 +29,44 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "UObject/WeakObjectPtr.h"
-
-/** One extension's registered contribution to the config-parity fingerprint. */
-struct SEINARTSCOREENTITY_API FSeinConfigFingerprintContributor
+/**
+ * Move-only lease for one module generation's fingerprint contribution.
+ *
+ * Exact duplicate generations may overlap during Live Coding or module reload.
+ * Releasing an older lease removes only that generation, never the replacement
+ * generation which claimed the same frozen contributor ID.
+ */
+class SEINARTSCOREENTITY_API FSeinConfigFingerprintRegistrationHandle
 {
-	/** Stable, frozen cross-client identifier (e.g. "SquadExtension"). Drives the
-	 *  deterministic fold order and namespaces the field chunks. */
-	FName StableId;
+public:
+	FSeinConfigFingerprintRegistrationHandle() = default;
+	~FSeinConfigFingerprintRegistrationHandle();
 
-	/** The extension's settings CDO (GetDefault<UMySettings>()); its named fields
-	 *  are reflected into a canonical value representation. */
-	TWeakObjectPtr<const UObject> SettingsCDO;
+	FSeinConfigFingerprintRegistrationHandle(
+		const FSeinConfigFingerprintRegistrationHandle&) = delete;
+	FSeinConfigFingerprintRegistrationHandle& operator=(
+		const FSeinConfigFingerprintRegistrationHandle&) = delete;
 
-	/** Stable class path retained independently of the weak CDO so a stale hot-
-	 *  reload entry cannot let another schema claim the same frozen ID. */
-	FString SettingsClassPath;
+	FSeinConfigFingerprintRegistrationHandle(
+		FSeinConfigFingerprintRegistrationHandle&& Other) noexcept;
+	FSeinConfigFingerprintRegistrationHandle& operator=(
+		FSeinConfigFingerprintRegistrationHandle&& Other) noexcept;
 
-	/** Sim-affecting property names on that CDO, in the extension's own authored
-	 *  order (compiled into the extension → identical across clients). */
-	TArray<FName> FieldNames;
+	bool IsValid() const
+	{
+		return Token != 0;
+	}
+
+	void Reset();
+
+private:
+	explicit FSeinConfigFingerprintRegistrationHandle(uint64 InToken)
+		: Token(InToken)
+	{
+	}
+
+	uint64 Token = 0;
+	friend class FSeinConfigFingerprintRegistry;
 };
 
 /** Process-global registry (plain static singleton — no GC, available independent
@@ -56,13 +74,17 @@ struct SEINARTSCOREENTITY_API FSeinConfigFingerprintContributor
 class SEINARTSCOREENTITY_API FSeinConfigFingerprintRegistry
 {
 public:
-	/** Register an extension's fingerprint contribution. Rejects invalid schemas
-	 *  and conflicting reuse of a frozen StableId; an identical hot-reload
-	 *  registration refreshes its CDO. Call from StartupModule. */
-	static bool RegisterContributor(FName StableId, const UObject* SettingsCDO, TArray<FName> FieldNames);
+	static constexpr int32 MaxReloadClaimsPerContributor = 64;
 
-	/** Remove a contribution. Call from the extension's ShutdownModule. */
-	static void UnregisterContributor(FName StableId);
+	/**
+	 * Register an extension's fingerprint contribution. Rejects invalid schemas
+	 * and conflicting reuse of a frozen StableId. Exact duplicate generations
+	 * receive independent leases so they may overlap safely during reload.
+	 */
+	static FSeinConfigFingerprintRegistrationHandle RegisterContributor(
+		FName StableId,
+		const UObject* SettingsCDO,
+		TArray<FName> FieldNames);
 
 	/** Append `<StableId>|<field>=<canonical value>;` chunks for every contributor,
 	 *  folded in StableId LexicalLess order (load-order independent). A stale CDO is
@@ -71,6 +93,6 @@ public:
 	static void AppendContributors(FString& OutFp);
 
 private:
-	static TArray<FSeinConfigFingerprintContributor>& Get();
-	static FCriticalSection& Mutex();
+	static void UnregisterContributor(uint64 Token);
+	friend class FSeinConfigFingerprintRegistrationHandle;
 };

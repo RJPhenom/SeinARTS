@@ -9,6 +9,7 @@
 #include "Containers/Ticker.h"
 #include "Core/SeinParallel.h"
 #include "HAL/IConsoleManager.h"
+#include "Simulation/SeinTestMatchBootstrap.h"
 #include "Simulation/SeinWorldSubsystem.h"
 
 namespace
@@ -240,7 +241,6 @@ FSeinCollisionDeterminismTrace SeinRunCollisionDeterminismScenario(bool bParalle
 		Trace.FailureReason = TEXT("The transient world did not create USeinWorldSubsystem.");
 		return Trace;
 	}
-
 	Trace.bParallelModeObserved =
 		SeinSimParallelEnabled() == bParallel && SeinSimParallelMinBatch() == 1;
 	Trace.bParallelResolverSelected =
@@ -262,53 +262,81 @@ FSeinCollisionDeterminismTrace SeinRunCollisionDeterminismScenario(bool bParalle
 	TArray<FSeinEntityHandle> Handles;
 	Handles.Reserve(Trace.ExpectedEntityCount);
 	int32 EntityOrdinal = 0;
-	for (int32 Row = 0; Row < MovableRows; ++Row)
+	bool bAuthoringSucceeded = true;
+	const auto AuthorState = [&]()
 	{
-		for (int32 Column = 0; Column < MovableColumns; ++Column)
+		for (int32 Row = 0; Row < MovableRows; ++Row)
 		{
-			const int32 X = Column * 90 + ((Row & 1) != 0 ? 35 : 0);
-			const int32 Y = Row * 80;
-			const FFixedVector Position(
-				FFixedPoint::FromInt(X),
-				FFixedPoint::FromInt(Y),
-				FFixedPoint::Zero);
+			for (int32 Column = 0; Column < MovableColumns; ++Column)
+			{
+				const int32 X = Column * 90 + ((Row & 1) != 0 ? 35 : 0);
+				const int32 Y = Row * 80;
+				const FFixedVector Position(
+					FFixedPoint::FromInt(X),
+					FFixedPoint::FromInt(Y),
+					FFixedPoint::Zero);
+				const FSeinEntityHandle Handle = World->SpawnAbstractEntity(
+					FFixedTransform(Position), FSeinPlayerID::Neutral());
+				if (!Handle.IsValid())
+				{
+					Trace.FailureReason =
+						TEXT("Failed to spawn a movable collision entity.");
+					bAuthoringSucceeded = false;
+					return;
+				}
+				AddScenarioComponents(
+					*World, Handle, EntityOrdinal,
+					ESeinCollisionMobility::Movable, TickCount);
+				Handles.Add(Handle);
+				++EntityOrdinal;
+			}
+		}
+
+		const FIntPoint AnchorPositions[StationaryCount] = {
+			FIntPoint(250, 200),
+			FIntPoint(780, 200),
+			FIntPoint(250, 520),
+			FIntPoint(780, 520),
+		};
+		for (const FIntPoint Position : AnchorPositions)
+		{
 			const FSeinEntityHandle Handle = World->SpawnAbstractEntity(
-				FFixedTransform(Position), FSeinPlayerID::Neutral());
+				FFixedTransform(FFixedVector(
+					FFixedPoint::FromInt(Position.X),
+					FFixedPoint::FromInt(Position.Y),
+					FFixedPoint::Zero)),
+				FSeinPlayerID::Neutral());
 			if (!Handle.IsValid())
 			{
-				Trace.FailureReason = TEXT("Failed to spawn a movable collision entity.");
-				return Trace;
+				Trace.FailureReason =
+					TEXT("Failed to spawn a stationary collision anchor.");
+				bAuthoringSucceeded = false;
+				return;
 			}
 			AddScenarioComponents(
-				*World, Handle, EntityOrdinal, ESeinCollisionMobility::Movable, TickCount);
+				*World, Handle, EntityOrdinal,
+				ESeinCollisionMobility::Stationary, TickCount);
 			Handles.Add(Handle);
 			++EntityOrdinal;
 		}
-	}
-
-	const FIntPoint AnchorPositions[StationaryCount] = {
-		FIntPoint(250, 200),
-		FIntPoint(780, 200),
-		FIntPoint(250, 520),
-		FIntPoint(780, 520),
 	};
-	for (const FIntPoint Position : AnchorPositions)
+	FString BootstrapError;
+	if (!SeinTestMatchBootstrap::Materialize(
+			*World,
+			AuthorState,
+			FSeinMatchSettings(),
+			0,
+			TEXT("SeinARTS.CollisionDeterminism"),
+			&BootstrapError)
+		|| !bAuthoringSucceeded)
 	{
-		const FSeinEntityHandle Handle = World->SpawnAbstractEntity(
-			FFixedTransform(FFixedVector(
-				FFixedPoint::FromInt(Position.X),
-				FFixedPoint::FromInt(Position.Y),
-				FFixedPoint::Zero)),
-			FSeinPlayerID::Neutral());
-		if (!Handle.IsValid())
+		if (Trace.FailureReason.IsEmpty())
 		{
-			Trace.FailureReason = TEXT("Failed to spawn a stationary collision anchor.");
-			return Trace;
+			Trace.FailureReason = BootstrapError.IsEmpty()
+				? TEXT("The collision scenario could not materialize tick zero.")
+				: BootstrapError;
 		}
-		AddScenarioComponents(
-			*World, Handle, EntityOrdinal, ESeinCollisionMobility::Stationary, TickCount);
-		Handles.Add(Handle);
-		++EntityOrdinal;
+		return Trace;
 	}
 
 	Trace.SpawnedEntityCount = World->GetEntityPool().GetActiveCount();
@@ -321,7 +349,11 @@ FSeinCollisionDeterminismTrace SeinRunCollisionDeterminismScenario(bool bParalle
 	}
 
 	Trace.Frames.Reserve(TickCount);
-	World->StartSimulation();
+	if (!SeinTestMatchBootstrap::Start(*World))
+	{
+		Trace.FailureReason = TEXT("The collision scenario bootstrap could not authorize tick zero.");
+		return Trace;
+	}
 	for (int32 FrameIndex = 0; FrameIndex < TickCount; ++FrameIndex)
 	{
 		const int32 TickBefore = World->GetCurrentTick();

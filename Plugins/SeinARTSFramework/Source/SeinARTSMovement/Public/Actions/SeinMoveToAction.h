@@ -10,6 +10,12 @@
  *          are read from FSeinNavigationComponent. Steering is minimal:
  *          seek toward next waypoint with an arrive radius at the final
  *          waypoint.
+ *
+ *          Snapshot continuation is intentionally narrower than native
+ *          construction: only the exact USeinMoveToProxy graph emitted by
+ *          the standard Blueprint async node is checkpointable. A directly
+ *          constructed/observerless action still runs, but capture refuses
+ *          it instead of guessing how custom callbacks should be resumed.
  */
 
 #pragma once
@@ -23,6 +29,14 @@
 
 class USeinMoveToProxy;
 class USeinMovement;
+struct FSeinMoveToActionCodec;
+
+#if WITH_DEV_AUTOMATION_TESTS
+namespace UE::SeinARTSTests
+{
+	struct FMoveToActionContinuationTestAccess;
+}
+#endif
 
 /** Reasons a move can fail. Passed via USeinLatentAction::Fail() reason code. */
 UENUM(BlueprintType)
@@ -42,13 +56,22 @@ enum class ESeinMoveFailureReason : uint8
 	 *  `PathNotFound` so AI scripts can react differently (abandon order vs
 	 *  retry destination): Stranded means "we tried to physically break free
 	 *  and couldn't," PathNotFound means "we never found a plannable path." */
-	Stranded            UMETA(DisplayName = "Stranded")
+	Stranded            UMETA(DisplayName = "Stranded"),
+	/** The async node was invoked outside bootstrap materialization or a
+	 *  deterministic simulation callback, so no latent action was registered. */
+	InvalidExecutionContext UMETA(DisplayName = "Invalid Execution Context")
 };
 
 UCLASS()
 class SEINARTSMOVEMENT_API USeinMoveToAction : public USeinLatentAction
 {
 	GENERATED_BODY()
+
+	friend class USeinMovementSubsystem;
+	friend struct FSeinMoveToActionCodec;
+#if WITH_DEV_AUTOMATION_TESTS
+	friend struct UE::SeinARTSTests::FMoveToActionContinuationTestAccess;
+#endif
 
 public:
 
@@ -59,6 +82,7 @@ public:
 	virtual bool TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& World) override;
 	virtual void OnCancel() override;
 	virtual void OnFail(uint8 ReasonCode) override;
+	virtual void OnTimelineAbandoned() override;
 
 	/** Optional observer — receives Completed/Failed/Waypoint/Cancelled events. */
 	TWeakObjectPtr<USeinMoveToProxy> Observer;
@@ -145,8 +169,9 @@ private:
 	 *  escalate); first blocked boundary forces a repath (stage 1); the next
 	 *  queries the nav for an escape target and walks there as a short internal
 	 *  leg (stage 2); three exhausted attempts fail the move with Stranded.
-	 *  All transient action-local state (TimeStalledNearGoal precedent) —
-	 *  deterministic inputs, nothing hashed, dies with the per-order action.
+	 *  All action-local state (TimeStalledNearGoal precedent) is canonical
+	 *  continuation state while the order is active and dies when that order
+	 *  ends.
 	 *  DETECTION SCOPE: Tier-1 harness modes only, by construction — Tier-2
 	 *  vehicle Ticks persist COMMANDED velocity (Forward × CurrentSpeed), so a
 	 *  wall-pinned vehicle never reads held here (Wheeled/Tracked carry their
@@ -200,14 +225,15 @@ private:
 	UPROPERTY()
 	TObjectPtr<USeinMovement> Movement;
 
+	/** Claimed before dispatching terminal movement cleanup because OnMoveEnd
+	 *  may execute Blueprint and synchronously re-enter ability cancellation. */
+	bool bMovementFinalized = false;
+
 	void NotifyCompleted();
 	void NotifyWaypointReached(int32 Index, int32 Total);
 	void NotifyPartialPath();
 	void NotifyPathRecomputed();
 
-	/** Reset transient sim state on the owner's FSeinMovementComponent when
-	 *  the action terminates abnormally (cancel / fail). Currently clears
-	 *  `bArrivalImminent` so AnimBPs don't show stale "approaching" state
-	 *  after a mid-arrival cancellation. */
-	void ResetTransientMoveState();
+	/** Dispatch OnMoveEnd and clear order-local movement flags exactly once. */
+	void FinalizeMovementOnce();
 };

@@ -2,9 +2,8 @@
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinCommand.h
  * @brief   Deterministic command system. Commands are issued by players/AI
- *          and processed during the CommandProcessing tick phase.
- *          CommandType is a gameplay tag under SeinARTS.Command.Type.* —
- *          designer-extensible, version-stable for replays.
+ *          and processed during the CommandProcessing tick phase. CommandType
+ *          plus SchemaVersion form the exact registered wire-schema key.
  */
 
 #pragma once
@@ -17,6 +16,30 @@
 #include "StructUtils/InstancedStruct.h"
 #include "Abilities/SeinTargeterTypes.h"
 #include "SeinCommand.generated.h"
+
+/** Limits that are part of the cross-module command protocol contract. */
+namespace SeinCommandProtocolLimits
+{
+	constexpr int32 MaxCommandsPerAuthor = 1024;
+}
+
+/**
+ * Authenticated authority carried with a canonical command.
+ *
+ * Callers may construct Unauthenticated commands, but a trusted ingress must
+ * replace that value before simulation. Network transports derive it from the
+ * authenticated participant binding; deterministic systems stamp their own
+ * follow-up commands locally on every peer. Coordinator status is deliberately
+ * absent: gathering a turn never grants gameplay or match-control authority.
+ */
+UENUM(BlueprintType)
+enum class ESeinCommandIssuerKind : uint8
+{
+	Unauthenticated,
+	Player,
+	MatchAdministrator,
+	DeterministicSystem,
+};
 
 /**
  * A single deterministic command from a player or AI to an entity.
@@ -40,6 +63,14 @@ struct SEINARTSCOREENTITY_API FSeinCommand
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Command")
 	FSeinPlayerID PlayerID;
 
+	/** Trusted ingress classification. Never trust a value supplied over the wire. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Command|Authority")
+	ESeinCommandIssuerKind IssuerKind = ESeinCommandIssuerKind::Unauthenticated;
+
+	/** Snapshotted payer for a deterministic-system ActivateAbility follow-up. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Command|Authority")
+	FSeinPlayerID DerivedResourcePayer;
+
 	/** Entity this command targets */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Command")
 	FSeinEntityHandle EntityHandle;
@@ -47,6 +78,10 @@ struct SEINARTSCOREENTITY_API FSeinCommand
 	/** What kind of command this is — a tag under SeinARTS.Command.Type.*  */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Command")
 	FGameplayTag CommandType;
+
+	/** Positive wire schema version. Exact matching only; no nearest-version fallback. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Command")
+	int32 SchemaVersion = 1;
 
 	/** Gameplay tag identifying the ability or entity identity */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Command")
@@ -143,7 +178,10 @@ struct SEINARTSCOREENTITY_API FSeinCommand
 	// production now flows through MakeAbilityCommand on production-marked
 	// abilities; rally authoring goes through SA_SetRallyPoint abilities.
 
-	/** Create an ability command with queue and formation support. */
+	/**
+	 * Legacy source-compatible ability factory. Queue/formation arguments are
+	 * ignored because those semantics belong to BrokerOrder payloads.
+	 */
 	static FSeinCommand MakeAbilityCommandEx(
 		FSeinPlayerID Player,
 		FSeinEntityHandle Entity,
@@ -199,4 +237,7 @@ struct SEINARTSCOREENTITY_API FSeinCommandBuffer
 
 	/** Read-only access to the command array. */
 	const TArray<FSeinCommand>& GetCommands() const;
+
+	/** Move all buffered commands out, leaving an empty reusable buffer. */
+	TArray<FSeinCommand> DrainCommands();
 };

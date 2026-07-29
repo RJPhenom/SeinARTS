@@ -8,8 +8,9 @@
  *           picks USeinWheeledVehicleMovement as the movement class.
  *
  *           Single source of truth for wheeled tuning. The wheeled
- *           controller class (USeinWheeledVehicleMovement) holds NO
- *           UPROPERTYs of its own — every tunable lives here. Per the
+ *           controller class (USeinWheeledVehicleMovement) holds no editable
+ *           tuning properties — every tunable lives here; its private
+ *           reflected fields are canonical runtime state. Per the
  *           "no shared source of truth" rule, fields are NOT shared with
  *           other movement-class data structs even when they have the
  *           same name (e.g. tracked has its own SharpTurnBrakeAngle).
@@ -50,6 +51,21 @@ struct SEINARTSMOVEMENTPLUS_API FSeinWheeledMovementData : public FSeinComponent
 
 	// ---------------------------------------------------------------------
 	// Bicycle kinematics
+	//
+	// COUPLING WARNING — the unit-level `FSeinMovementComponent::TurnRate`
+	// is a THIRD turning governor alongside the two fields below, and its
+	// base default (5 rad/s) is sized for pivot-capable units, not vehicles:
+	//   - Minimum turn radius   R_min    = Wheelbase / tan(MaxSteerAngle)
+	//   - Cruise (planned) arc  R_cruise = max(R_min, TopSpeed / TurnRate)
+	//   - Arc speed law (drive) v        <= TurnRate * R
+	// At TurnRate = 5 with typical TopSpeeds, R_cruise collapses to R_min —
+	// every planned U-turn is a minimum-radius arc and the arc speed law
+	// never brakes, so the "full-speed wide swoop in open ground vs braked
+	// tight arc in confined ground" differentiation NEVER materializes.
+	// Author vehicle TurnRate ~= TopSpeed / desired-cruise-arc-radius
+	// (e.g. TopSpeed 500, wanted swoop radius ~500 -> TurnRate ~1.0).
+	// TurnRate also hard-clamps the bicycle yaw rate in the driver, so
+	// setting it very low makes even min-radius arcs crawl.
 	// ---------------------------------------------------------------------
 
 	/** Distance between front and rear axles (world units). Bicycle-kinematic
@@ -102,6 +118,41 @@ struct SEINARTSMOVEMENTPLUS_API FSeinWheeledMovementData : public FSeinComponent
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement|LowSpeed",
 		meta = (ClampMin = "0.0"))
 	FFixedPoint TurnAssistFadeSpeed = FFixedPoint::FromInt(300);
+
+	// ---------------------------------------------------------------------
+	// Maneuver planning (Reeds-Shepp-style start maneuvers)
+	// ---------------------------------------------------------------------
+
+	/** Plans an explicit start maneuver (U-turn arc, straight reverse, multi-point turn, or
+	 *  reverse-out of a corridor) whenever the chassis is badly misaligned with its route, and
+	 *  drives it as typed arc/reverse path segments with planned speeds — full-speed wide arcs in
+	 *  open ground, braked tight arcs and cusped turns against walls. Turn OFF to fall back to the
+	 *  plain pursuit steering (the pre-maneuver behavior) for comparison or for a deliberately
+	 *  simpler unit. Default on. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement|Maneuver")
+	bool bManeuverPlanning = true;
+
+	/** Lets this wheeled vehicle drive maneuver legs in reverse (multi-point turns, backing out of
+	 *  corridors, short reverse parking). Defaults ON for wheeled vehicles — this is the mode's own
+	 *  gate and is OR-combined with the unit-level Can Reverse flag (which defaults off), so wheeled
+	 *  units reverse out of the box; untick BOTH to forbid reverse. Reverse speed still comes from
+	 *  the unit's Reverse Top Speed. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement|Maneuver")
+	bool bCanReverse = true;
+
+	/** How strongly a forward-only maneuver is preferred over one that needs reversing. A cusped
+	 *  plan (3-point turn, reverse-out) wins only when the forward route is more than this factor
+	 *  longer. 1.0 = pick purely by length; higher = stronger forward preference. Default 1.35. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement|Maneuver",
+		meta = (ClampMin = "1.0"))
+	FFixedPoint ForwardPathBias = FFixedPoint::FromInt(135) / FFixedPoint::FromInt(100);
+
+	/** Farthest the planner will drive in reverse along its own route to find room to turn around
+	 *  (the corridor-escape maneuver). Beyond this it gives up on reversing out and falls back to
+	 *  pivot-assisted pursuit. Default 1200 (12 m). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement|Maneuver",
+		meta = (ClampMin = "0.0"))
+	FFixedPoint ReversePlanMaxDistance = FFixedPoint::FromInt(1200);
 
 	// ---------------------------------------------------------------------
 	// Look-ahead / carrot
@@ -187,6 +238,10 @@ FORCEINLINE uint32 GetTypeHash(const FSeinWheeledMovementData& C)
 	H = HashCombine(H, GetTypeHash(C.SteerResponse));
 	H = HashCombine(H, GetTypeHash(C.LowSpeedTurnRate));
 	H = HashCombine(H, GetTypeHash(C.TurnAssistFadeSpeed));
+	H = HashCombine(H, GetTypeHash(C.bManeuverPlanning));
+	H = HashCombine(H, GetTypeHash(C.bCanReverse));
+	H = HashCombine(H, GetTypeHash(C.ForwardPathBias));
+	H = HashCombine(H, GetTypeHash(C.ReversePlanMaxDistance));
 	H = HashCombine(H, GetTypeHash(C.LookAheadDistance));
 	H = HashCombine(H, GetTypeHash(C.LookAheadTimeHorizon));
 	H = HashCombine(H, GetTypeHash(C.ArrivalSlowdownDistance));

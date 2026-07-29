@@ -12,13 +12,25 @@
 #include "SeinAssetTypeActions.h"
 #include "AssetToolsModule.h"
 #include "IAssetTools.h"
+#include "AssetDefinitionRegistry.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
+#include "Definitions/AssetDefinition_SeinWidgetBlueprint.h"
 #include "ThumbnailRendering/ThumbnailManager.h"
 #include "Thumbnails/SeinBlueprintThumbnailRenderer.h"
 #include "Thumbnails/SeinStructThumbnailRenderer.h"
+#include "Validators/SeinAbilityContinuationAnalysis.h"
+#include "Validators/SeinAbilityContinuationValidator.h"
+#include "Validators/SeinBalanceProfileValidator.h"
+#include "Validators/SeinCanonicalStateRecipeDeterminismValidator.h"
+#include "Validators/SeinCommandDeterminismValidator.h"
 #include "Validators/SeinDeterministicStructValidator.h"
+#include "Validators/SeinFormationDeterminismValidator.h"
+#include "Validators/SeinMovementClassValidator.h"
+#include "Validators/SeinMovementDeterminismValidator.h"
 #include "Util/SeinAutoTagGenerator.h"
+#include "Util/SeinSimulationContentEditorGuards.h"
+#include "Util/SeinSimulationContentManifestBuilder.h"
 #include "Settings/PluginSettings.h"
 #include "Abilities/SeinAbility.h"
 #include "Effects/SeinEffect.h"
@@ -34,10 +46,12 @@
 #include "Widgets/SeinWidgetBlueprint.h"
 #include "WidgetBlueprint.h"
 #include "KismetCompiler.h"
+#include "K2Node_AsyncAction.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "EdGraphUtilities.h"
 #include "Graph/SeinPinFactory.h"
 #include "PropertyEditorModule.h"
+#include "InstancedStructDetails.h"
 #include "Details/SeinFixedPointDetails.h"
 #include "Details/SeinInstancedStructDetails.h"
 #include "Details/SeinAutoTagDetails.h"
@@ -55,14 +69,19 @@
 #include "Details/SeinCollisionObjectTypeDetails.h"
 #include "Visualizers/SeinEntityComponentVisualizer.h"
 #include "Actor/SeinEntityComponent.h"
+#include "Editor.h"
+#include "EditorValidatorSubsystem.h"
 #include "UnrealEdGlobals.h"
 #include "Editor/UnrealEdEngine.h"
 #include "CoreGlobals.h"
 #include "UObject/UObjectBase.h"
+#include "Features/IModularFeatures.h"
+#include "HAL/IConsoleManager.h"
 
 #define LOCTEXT_NAMESPACE "SeinARTSEditor"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinAutoTag, Log, All);
+DEFINE_LOG_CATEGORY_STATIC(LogSeinARTSEditor, Log, All);
 
 namespace SeinAutoTagRenameHandler
 {
@@ -148,6 +167,40 @@ namespace SeinAutoTagRenameHandler
 	}
 }
 
+namespace SeinAbilityContinuationCompilerGate
+{
+	/**
+	 * UE 5.7's RegisterCompilerForBP and compiler-extension registries expose
+	 * no unregister operation. A module-owned factory/extension would leave a
+	 * stale callback after live module unload. The editor pre-compile delegate
+	 * is symmetric, runs after CurrentMessageLog is installed, and therefore
+	 * emits the same real blocking compiler errors without replacing the stock
+	 * Kismet compiler.
+	 */
+	void Validate(UBlueprint* Blueprint)
+	{
+		if (!FSeinAbilityContinuationAnalysis::IsAbilityBlueprint(
+				Blueprint))
+		{
+			return;
+		}
+
+		TArray<FSeinAbilityContinuationFinding> Findings;
+		FSeinAbilityContinuationAnalysis::Analyze(*Blueprint, Findings);
+		for (const FSeinAbilityContinuationFinding& Finding : Findings)
+		{
+			const UEdGraphNode* AsyncNode = Finding.AsyncNode;
+			const UEdGraphNode* SourceNode =
+				Finding.SourceNode ? Finding.SourceNode : AsyncNode;
+			Blueprint->Message_Error(
+				Finding.ToDiagnostic()
+					+ TEXT(" Async node: @@. Unsafe source: @@."),
+				AsyncNode,
+				SourceNode);
+		}
+	}
+}
+
 EAssetTypeCategories::Type FSeinARTSEditorModule::SeinARTSCategoryBit = EAssetTypeCategories::Misc;
 
 // Out-of-line ctor/dtor — keeps the forward-declared TUniquePtr<UDSValidator>
@@ -158,7 +211,61 @@ FSeinARTSEditorModule::~FSeinARTSEditorModule() = default;
 
 void FSeinARTSEditorModule::StartupModule()
 {
+	bModuleOwnedStateReleased = false;
 	FSeinARTSEditorStyle::Initialize();
+
+	// Asset definitions normally self-register when their CDO is constructed,
+	// but a late-loaded editor module can create the CDO before the registry
+	// exists. Make the lease explicit so Startup and PreUnload are symmetric.
+	if (UAssetDefinitionRegistry* AssetDefinitionRegistry =
+			UAssetDefinitionRegistry::Get())
+	{
+		AssetDefinitionRegistry->RegisterAssetDefinition(
+			GetMutableDefault<UAssetDefinition_SeinWidgetBlueprint>());
+	}
+
+	// One shared, read-only preflight backs both gates. The module owns every
+	// lease so editor/module reload cannot leave a stale PIE authorizer or cook
+	// callback behind.
+	SimulationContentCookIntegration =
+		MakeUnique<FSeinSimulationContentCookIntegration>();
+	SimulationContentGenerateCommand =
+		MakeUnique<FAutoConsoleCommand>(
+			TEXT("Sein.SimulationContent.GenerateManifest"),
+			TEXT("Generate and save the exact active simulation-content manifest profile."),
+			FConsoleCommandDelegate::CreateLambda(
+				[]()
+				{
+					FSeinSimulationContentManifestBuildResult Result;
+					FString Error;
+					if (!FSeinSimulationContentManifestBuilder::
+						GenerateConfiguredManifest(Result, Error))
+					{
+						UE_LOG(
+							LogSeinARTSEditor,
+							Error,
+							TEXT("Simulation-content manifest generation failed: %s"),
+							*Error);
+						return;
+					}
+					UE_LOG(
+						LogSeinARTSEditor,
+						Display,
+						TEXT("Generated simulation-content manifest %s (%d contributors, %d records, digest=%s)."),
+						*Result.ManifestObjectPath,
+						Result.ContributorCount,
+						Result.RecordCount,
+						*Result.RootDigest.ToString(
+							EGuidFormats::Digits));
+				}));
+	if (!IsRunningCommandlet())
+	{
+		SimulationContentPIEAuthorizer =
+			MakeUnique<FSeinSimulationContentPIEAuthorizer>();
+		IModularFeatures::Get().RegisterModularFeature(
+			IPIEAuthorizer::GetModularFeatureName(),
+			SimulationContentPIEAuthorizer.Get());
+	}
 
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 
@@ -182,6 +289,13 @@ void FSeinARTSEditorModule::StartupModule()
 		USeinWidgetBlueprint::StaticClass(),
 		&UWidgetBlueprint::GetCompilerForWidgetBP
 	);
+
+	if (GEditor != nullptr)
+	{
+		AbilityContinuationPreCompileHandle =
+			GEditor->OnBlueprintPreCompile().AddStatic(
+				&SeinAbilityContinuationCompilerGate::Validate);
+	}
 
 	// Register custom thumbnail renderers for our Blueprint subclasses.
 	UThumbnailManager& ThumbnailMgr = UThumbnailManager::Get();
@@ -333,8 +447,96 @@ void FSeinARTSEditorModule::StartupModule()
 	}
 }
 
+void FSeinARTSEditorModule::PreUnloadCallback()
+{
+	ReleaseModuleOwnedState();
+}
+
 void FSeinARTSEditorModule::ShutdownModule()
 {
+	ReleaseModuleOwnedState();
+}
+
+void FSeinARTSEditorModule::ReleaseModuleOwnedState()
+{
+	if (bModuleOwnedStateReleased)
+	{
+		return;
+	}
+	bModuleOwnedStateReleased = true;
+
+	if (AbilityContinuationPreCompileHandle.IsValid())
+	{
+		if (GEditor != nullptr)
+		{
+			GEditor->OnBlueprintPreCompile().Remove(
+				AbilityContinuationPreCompileHandle);
+		}
+		AbilityContinuationPreCompileHandle.Reset();
+	}
+
+	SimulationContentGenerateCommand.Reset();
+	if (SimulationContentPIEAuthorizer)
+	{
+		IModularFeatures::Get().UnregisterModularFeature(
+			IPIEAuthorizer::GetModularFeatureName(),
+			SimulationContentPIEAuthorizer.Get());
+		SimulationContentPIEAuthorizer.Reset();
+	}
+	SimulationContentCookIntegration.Reset();
+
+	const bool bCanTouchUObjectRegistries =
+		UObjectInitialized() && !IsEngineExitRequested();
+	if (bCanTouchUObjectRegistries)
+	{
+		// The registry holds the definition CDO strongly. Only remove our exact
+		// generation so a replacement module loaded during a reload cannot be
+		// accidentally unregistered by the outgoing generation.
+		if (FModuleManager::Get().IsModuleLoaded("AssetDefinition"))
+		{
+			if (UAssetDefinitionRegistry* AssetDefinitionRegistry =
+					UAssetDefinitionRegistry::Get())
+			{
+				UAssetDefinition_SeinWidgetBlueprint* AssetDefinition =
+					GetMutableDefault<UAssetDefinition_SeinWidgetBlueprint>();
+				if (AssetDefinitionRegistry->GetAssetDefinitionForClass(
+						USeinWidgetBlueprint::StaticClass()) == AssetDefinition)
+				{
+					AssetDefinitionRegistry->UnregisterAssetDefinition(
+						AssetDefinition);
+				}
+			}
+		}
+
+		// Native validators are normally discovered automatically, but the
+		// subsystem retains their UObject instances until its deferred
+		// ModuleUnloaded pass. Remove every concrete validator synchronously
+		// while this generation's vtables are still resident.
+		if (GEditor != nullptr)
+		{
+			if (UEditorValidatorSubsystem* ValidatorSubsystem =
+					GEditor->GetEditorSubsystem<UEditorValidatorSubsystem>())
+			{
+				ValidatorSubsystem->RemoveValidator(
+					GetMutableDefault<
+						USeinAbilityContinuationValidator>());
+				ValidatorSubsystem->RemoveValidator(
+					GetMutableDefault<USeinBalanceProfileValidator>());
+				ValidatorSubsystem->RemoveValidator(
+					GetMutableDefault<
+						USeinCanonicalStateRecipeDeterminismValidator>());
+				ValidatorSubsystem->RemoveValidator(
+					GetMutableDefault<USeinCommandDeterminismValidator>());
+				ValidatorSubsystem->RemoveValidator(
+					GetMutableDefault<USeinFormationDeterminismValidator>());
+				ValidatorSubsystem->RemoveValidator(
+					GetMutableDefault<USeinMovementClassValidator>());
+				ValidatorSubsystem->RemoveValidator(
+					GetMutableDefault<USeinMovementDeterminismValidator>());
+			}
+		}
+	}
+
 	if (FModuleManager::Get().IsModuleLoaded("PropertyEditor"))
 	{
 		FPropertyEditorModule& PropertyModule = FModuleManager::GetModuleChecked<FPropertyEditorModule>("PropertyEditor");
@@ -351,6 +553,19 @@ void FSeinARTSEditorModule::ShutdownModule()
 		PropertyModule.UnregisterCustomClassLayout(FName(TEXT("SeinMovement")));
 		PropertyModule.UnregisterCustomClassLayout(USeinBalanceProfile::StaticClass()->GetFName());
 		// Volume class-layouts unregistered by their owning system modules.
+
+		// We replaced StructUtilsEditor's global InstancedStruct layout at
+		// startup. On a live module unload, put the stock implementation back
+		// before invalidating details views so no delegate points into this DLL.
+		if (!IsEngineExitRequested()
+			&& FModuleManager::Get().IsModuleLoaded("StructUtilsEditor"))
+		{
+			PropertyModule.RegisterCustomPropertyTypeLayout(
+				TEXT("InstancedStruct"),
+				FOnGetPropertyTypeCustomizationInstance::CreateStatic(
+					&FInstancedStructDetails::MakeInstance));
+		}
+		PropertyModule.NotifyCustomizationModuleChanged();
 	}
 
 	if (UObjectInitialized() && !IsEngineExitRequested())

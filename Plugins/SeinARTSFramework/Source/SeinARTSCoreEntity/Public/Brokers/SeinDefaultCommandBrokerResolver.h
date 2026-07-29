@@ -62,7 +62,7 @@ public:
 	 *  formation, etc. to change the no-gesture layout. (Replaced the removed
 	 *  bFormationSpreadEnabled bool: "spread" is now "pick a spreading formation".) */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Broker|Formation",
-		meta = (DisplayName = "Default Formation Class"))
+		meta = (DisplayName = "Default Formation Class", SeinPoolStateIgnore))
 	TSoftClassPtr<USeinFormation> DefaultFormationClass;
 
 	/** Optional map of gesture-nominated formation tag → formation class. The order
@@ -70,7 +70,7 @@ public:
 	 *  the resolver looks it up here, falling back to DefaultFormationClass. Lets a
 	 *  project bind "drag = line", "alt-drag = column", etc. without code. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Broker|Formation",
-		meta = (DisplayName = "Formations By Tag"))
+		meta = (DisplayName = "Formations By Tag", SeinPoolStateIgnore))
 	TMap<FGameplayTag, TSoftClassPtr<USeinFormation>> FormationsByTag;
 
 	/** Formation-level slot RE-MATCH on the LATERAL (left/right) axis. OPT-OUT, default true.

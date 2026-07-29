@@ -792,12 +792,12 @@ void USeinFogOfWarDefault::RemoveSourceStamp(FSeinEntityHandle Handle)
 {
 	FSeinFogSourceState* State = SourceStates.Find(Handle);
 	if (!State) return;
-	if (State->bValid)
+	// bValid only controls whether the source's cached inputs may take the
+	// stable fast path. Dynamic-blocker changes invalidate those inputs while
+	// leaving the already-applied footprints (and their refcounts) intact.
+	if (FSeinFogVisionGroup* Group = VisionGroups.Find(State->Owner))
 	{
-		if (FSeinFogVisionGroup* Group = VisionGroups.Find(State->Owner))
-		{
-			DecrementFootprintsForState(*State, *Group);
-		}
+		DecrementFootprintsForState(*State, *Group);
 	}
 	SourceStates.Remove(Handle);
 }

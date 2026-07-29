@@ -28,6 +28,7 @@
 #include "Effects/SeinEffect.h"
 #include "Actor/SeinActor.h"
 #include "Core/SeinAssetTagKeys.h"
+#include "Core/SeinSimContext.h"
 #include "UObject/AssetRegistryTagsContext.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinAbilityImpl, Log, All);
@@ -65,6 +66,24 @@ void USeinAbility::GetAssetRegistryTags(FAssetRegistryTagsContext Context) const
 	}
 }
 
+void USeinAbility::ResolveActivationCosts(
+	const UObject* WorldContextObject,
+	FSeinResourceCost& OutActivationCost,
+	FSeinResourceCost& OutProductionCompletionCost) const
+{
+	OutProductionCompletionCost.Amounts.Reset();
+	if (CostTiming == ESeinAbilityCostTiming::ProductionQueue)
+	{
+		USeinResourceBPFL::SeinSplitCostByCatalog(
+			WorldContextObject, ResourceCost,
+			OutActivationCost, OutProductionCompletionCost);
+		return;
+	}
+
+	// Immediate is also the fail-safe for an invalid serialized enum value.
+	OutActivationCost = ResourceCost;
+}
+
 void USeinAbility::EnqueueProduction(TSubclassOf<ASeinActor> ProducibleClass)
 {
 	if (!WorldSubsystem)
@@ -73,10 +92,36 @@ void USeinAbility::EnqueueProduction(TSubclassOf<ASeinActor> ProducibleClass)
 			*GetName());
 		return;
 	}
+	if (!SeinIsInSimContext(WorldSubsystem))
+	{
+		UE_LOG(LogSeinAbilityImpl, Error,
+			TEXT("EnqueueProduction rejected outside this world's simulation context for %s"),
+			*GetName());
+		return;
+	}
+	if (!ResourcePayer.IsValid())
+	{
+		UE_LOG(LogSeinAbilityImpl, Warning,
+			TEXT("EnqueueProduction[%s]: no unconsumed activation funding snapshot"),
+			*GetName());
+		return;
+	}
+	const auto RollBackFailedEnqueue = [this]()
+	{
+		if (!DeductedCost.IsEmpty() && ResourcePayer.IsValid())
+		{
+			USeinResourceBPFL::SeinRefund(
+				WorldSubsystem, ResourcePayer, DeductedCost);
+		}
+		DeductedCost.Amounts.Empty();
+		PendingCompletionCost.Amounts.Empty();
+		ResourcePayer = FSeinPlayerID::Neutral();
+	};
 	if (!ProducibleClass)
 	{
 		UE_LOG(LogSeinAbilityImpl, Warning, TEXT("EnqueueProduction[%s]: null ProducibleClass"),
 			*GetName());
+		RollBackFailedEnqueue();
 		return;
 	}
 
@@ -86,6 +131,7 @@ void USeinAbility::EnqueueProduction(TSubclassOf<ASeinActor> ProducibleClass)
 		UE_LOG(LogSeinAbilityImpl, Warning,
 			TEXT("EnqueueProduction[%s]: owner %s has no FSeinProductionComponent"),
 			*GetName(), *OwnerEntity.ToString());
+		RollBackFailedEnqueue();
 		return;
 	}
 	if (!ProdComp->CanQueueMore())
@@ -93,6 +139,7 @@ void USeinAbility::EnqueueProduction(TSubclassOf<ASeinActor> ProducibleClass)
 		UE_LOG(LogSeinAbilityImpl, Warning,
 			TEXT("EnqueueProduction[%s]: owner %s queue full (max=%d)"),
 			*GetName(), *OwnerEntity.ToString(), ProdComp->MaxQueueSize);
+		RollBackFailedEnqueue();
 		return;
 	}
 
@@ -118,25 +165,43 @@ void USeinAbility::EnqueueProduction(TSubclassOf<ASeinActor> ProducibleClass)
 		UE_LOG(LogSeinAbilityImpl, Warning,
 			TEXT("EnqueueProduction[%s]: producible %s has no FSeinProducibleComponent on its entity bridge; skipping"),
 			*GetName(), *ProducibleClass->GetName());
+		RollBackFailedEnqueue();
+		return;
+	}
+	UClass* ResearchEffectClass = Producible->GrantedTechEffect.Get();
+	if (Producible->bIsResearch
+		&& (!ResearchEffectClass
+			|| ResearchEffectClass->HasAnyClassFlags(CLASS_Abstract)
+			|| !GetDefault<USeinEffect>(ResearchEffectClass)))
+	{
+		UE_LOG(LogSeinAbilityImpl, Warning,
+			TEXT("EnqueueProduction[%s]: research producible %s has no usable GrantedTechEffect"),
+			*GetName(), *ProducibleClass->GetName());
+		RollBackFailedEnqueue();
 		return;
 	}
 
-	// Cost split: AtEnqueue bucket was already deducted by the activation gate
-	// (recorded as `DeductedCost` on this ability instance). AtCompletion bucket
-	// sits in `PendingCompletionCost` waiting to be handed to the queue entry.
-	// We snapshot both onto the queue entry: AtEnqueue for refund-on-cancel
-	// math, AtCompletion for the production system to deduct at spawn time.
+	// The activation snapshot is already policy-resolved. Immediate abilities
+	// transfer the full deducted cost and no completion cost; Production Queue
+	// abilities transfer the catalog split.
 	FSeinProductionQueueEntry Entry;
 	Entry.ActorClass = ProducibleClass;
 	Entry.TotalBuildTime = Producible->BuildTime;
 	Entry.AtEnqueueCost = DeductedCost;
 	Entry.AtCompletionCost = PendingCompletionCost;
+	Entry.ResourcePayer = ResourcePayer;
 	Entry.bIsResearch = Producible->bIsResearch;
 	Entry.ResearchEffectClass = Producible->GrantedTechEffect;
 	Entry.RefundPolicy = Producible->RefundPolicy;
 
 	const bool bWasEmpty = ProdComp->Queue.Num() == 0;
 	ProdComp->Queue.Add(MoveTemp(Entry));
+
+	// Economic ownership has transferred to the queue entry. The ability must
+	// not retain a second refundable copy if its graph is cancelled afterward.
+	DeductedCost.Amounts.Empty();
+	PendingCompletionCost.Amounts.Empty();
+	ResourcePayer = FSeinPlayerID::Neutral();
 
 	UE_LOG(LogSeinAbilityImpl, Verbose,
 		TEXT("EnqueueProduction[%s]: queued %s on %s (build=%.2fs, queue depth=%d)"),
@@ -155,7 +220,11 @@ void USeinAbility::EnqueueProduction(TSubclassOf<ASeinActor> ProducibleClass)
 
 void USeinAbility::SetRallyPoint(const FFixedTransform& Transform)
 {
-	if (!WorldSubsystem) return;
+	if (!WorldSubsystem
+		|| !WorldSubsystem->RequireStateMutationAuthorization(TEXT("AbilitySetRallyPoint")))
+	{
+		return;
+	}
 	FSeinProductionComponent* ProdComp = WorldSubsystem->GetComponent<FSeinProductionComponent>(OwnerEntity);
 	if (!ProdComp)
 	{
@@ -171,7 +240,11 @@ void USeinAbility::SetRallyPoint(const FFixedTransform& Transform)
 
 void USeinAbility::SetRallyEntity(FSeinEntityHandle RallyEntity)
 {
-	if (!WorldSubsystem) return;
+	if (!WorldSubsystem
+		|| !WorldSubsystem->RequireStateMutationAuthorization(TEXT("AbilitySetRallyEntity")))
+	{
+		return;
+	}
 	FSeinProductionComponent* ProdComp = WorldSubsystem->GetComponent<FSeinProductionComponent>(OwnerEntity);
 	if (!ProdComp)
 	{
@@ -187,7 +260,11 @@ void USeinAbility::SetRallyEntity(FSeinEntityHandle RallyEntity)
 
 void USeinAbility::ClearRallyPoint()
 {
-	if (!WorldSubsystem) return;
+	if (!WorldSubsystem
+		|| !WorldSubsystem->RequireStateMutationAuthorization(TEXT("AbilityClearRallyPoint")))
+	{
+		return;
+	}
 	FSeinProductionComponent* ProdComp = WorldSubsystem->GetComponent<FSeinProductionComponent>(OwnerEntity);
 	if (!ProdComp) return;
 	ProdComp->bRallyToEntity = false;
@@ -199,10 +276,14 @@ void USeinAbility::InitializeAbility(FSeinEntityHandle Owner, USeinWorldSubsyste
 {
 	OwnerEntity = Owner;
 	WorldSubsystem = Subsystem;
+	RuntimePoolID = INDEX_NONE;
 	CooldownRemaining = FFixedPoint::Zero;
 	bIsActive = false;
+	AbilityActivationID = 0;
 	bCooldownStarted = false;
 	DeductedCost.Amounts.Empty();
+	PendingCompletionCost.Amounts.Empty();
+	ResourcePayer = FSeinPlayerID::Neutral();
 	CommittedGrantedTags.Reset();
 }
 
@@ -272,6 +353,11 @@ void USeinAbility::ReleaseCommittedGrantedTags()
 
 bool USeinAbility::ActivateAbility(FSeinEntityHandle Target, FFixedVector Location)
 {
+	if (!WorldSubsystem
+		|| !WorldSubsystem->RequireStateMutationAuthorization(TEXT("ActivateAbility")))
+	{
+		return false;
+	}
 	if (bIsActive)
 	{
 		return false;
@@ -283,6 +369,15 @@ bool USeinAbility::ActivateAbility(FSeinEntityHandle Target, FFixedVector Locati
 			*GetName(), *OwnerEntity.ToString());
 		return false;
 	}
+	int64 NewActivationID = 0;
+	if (!WorldSubsystem->TryAllocateAbilityActivationID(NewActivationID))
+	{
+		ReleaseCommittedGrantedTags();
+		UE_LOG(LogSeinAbilityImpl, Error,
+			TEXT("ActivateAbility[%s]: deterministic activation ID space is exhausted."),
+			*GetName());
+		return false;
+	}
 
 	// Right-click / direct-activation path — no targeter points captured.
 	// Empty TargeterPoints array signals "trigger came from the smart-command
@@ -290,6 +385,7 @@ bool USeinAbility::ActivateAbility(FSeinEntityHandle Target, FFixedVector Locati
 	TargeterPoints.Reset();
 	TargetEntity = Target;
 	TargetLocation = Location;
+	AbilityActivationID = NewActivationID;
 	bIsActive = true;
 
 	// Start cooldown if the ability's timing fires on activate. OnEnd-timed abilities
@@ -306,6 +402,12 @@ bool USeinAbility::ActivateAbility(FSeinEntityHandle Target, FFixedVector Locati
 bool USeinAbility::ActivateAbilityWithTargeterPoints(FSeinEntityHandle Target, FFixedVector Location,
 	const TArray<FSeinTargeterPoint>& Points)
 {
+	if (!WorldSubsystem
+		|| !WorldSubsystem->RequireStateMutationAuthorization(
+			TEXT("ActivateAbilityWithTargeterPoints")))
+	{
+		return false;
+	}
 	if (bIsActive)
 	{
 		return false;
@@ -317,6 +419,15 @@ bool USeinAbility::ActivateAbilityWithTargeterPoints(FSeinEntityHandle Target, F
 			*GetName(), *OwnerEntity.ToString());
 		return false;
 	}
+	int64 NewActivationID = 0;
+	if (!WorldSubsystem->TryAllocateAbilityActivationID(NewActivationID))
+	{
+		ReleaseCommittedGrantedTags();
+		UE_LOG(LogSeinAbilityImpl, Error,
+			TEXT("ActivateAbility[%s]: deterministic activation ID space is exhausted."),
+			*GetName());
+		return false;
+	}
 
 	// Targeter-originated activation. TargetLocation mirrors Points[0].Location
 	// when available so single-point ability OnActivate logic that only reads
@@ -325,6 +436,7 @@ bool USeinAbility::ActivateAbilityWithTargeterPoints(FSeinEntityHandle Target, F
 	TargeterPoints = Points;
 	TargetEntity = Target;
 	TargetLocation = Points.Num() > 0 ? Points[0].Location : Location;
+	AbilityActivationID = NewActivationID;
 	bIsActive = true;
 
 	if (CooldownStartTiming == ESeinCooldownStartTiming::OnActivate)
@@ -346,6 +458,11 @@ void USeinAbility::TickAbility(FFixedPoint DeltaTime)
 
 void USeinAbility::DeactivateAbility(bool bCancelled)
 {
+	if (!WorldSubsystem
+		|| !WorldSubsystem->RequireStateMutationAuthorization(TEXT("DeactivateAbility")))
+	{
+		return;
+	}
 	if (!bIsActive)
 	{
 		return;
@@ -358,8 +475,7 @@ void USeinAbility::DeactivateAbility(bool bCancelled)
 	{
 		if (bRefundCostOnCancel && !DeductedCost.IsEmpty())
 		{
-			const FSeinPlayerID Owner = WorldSubsystem->GetEntityOwner(OwnerEntity);
-			USeinResourceBPFL::SeinRefund(WorldSubsystem, Owner, DeductedCost);
+			USeinResourceBPFL::SeinRefund(WorldSubsystem, ResourcePayer, DeductedCost);
 		}
 		if (bRefundCooldownOnCancel && bCooldownStarted)
 		{
@@ -383,6 +499,8 @@ void USeinAbility::DeactivateAbility(bool bCancelled)
 	ReleaseCommittedGrantedTags();
 
 	DeductedCost.Amounts.Empty();
+	PendingCompletionCost.Amounts.Empty();
+	ResourcePayer = FSeinPlayerID::Neutral();
 
 	// Clear captured targeter points so a subsequent right-click activation
 	// doesn't see stale data from the prior targeter cast.

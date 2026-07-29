@@ -13,17 +13,32 @@
 #include "Core/SeinTickPhase.h"
 #include "Core/SeinSystemPriority.h"
 #include "Core/SeinPlayerState.h"
+#include "SeinARTSCoreEntityLog.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Components/SeinProductionComponent.h"
 #include "Components/SeinIdentityComponent.h"
+#include "Components/SeinAbilityComponent.h"
 #include "Actor/SeinEntityComponent.h"
 #include "Brokers/SeinBrokerTypes.h"
 #include "Effects/SeinEffect.h"
 #include "Events/SeinVisualEvent.h"
 #include "Lib/SeinResourceBPFL.h"
+#include "Tags/SeinARTSGameplayTags.h"
 
 namespace SeinProductionLocal
 {
+	struct FReadyCompletion
+	{
+		FSeinProductionQueueEntry Entry;
+		FSeinPlayerID ProducerOwner;
+		FFixedTransform SpawnTransform;
+		bool bRallyToEntity = false;
+		FFixedTransform RallyTransform;
+		FSeinEntityHandle RallyEntity;
+		FFixedPoint OriginalProgress;
+		bool bOriginalStalled = false;
+	};
+
 	/** Read FSeinIdentityComponent::IdentityTag off the producible class's
 	 *  CDO entity bridge ComponentData. Returns an invalid tag when no
 	 *  identity component is authored on the producible. */
@@ -42,8 +57,216 @@ namespace SeinProductionLocal
 		}
 		return FGameplayTag();
 	}
+
+	static bool CostsEqual(const FSeinResourceCost& A, const FSeinResourceCost& B)
+	{
+		if (A.Amounts.Num() != B.Amounts.Num()) return false;
+		for (const auto& Pair : A.Amounts)
+		{
+			const FFixedPoint* Other = B.Amounts.Find(Pair.Key);
+			if (!Other || *Other != Pair.Value) return false;
+		}
+		return true;
+	}
+
+	/** Queue entries have no stable ID yet, so callbacks are insulated by a full
+	 *  value snapshot. Identical entries are intentionally interchangeable. */
+	static bool EntriesEqual(
+		const FSeinProductionQueueEntry& A,
+		const FSeinProductionQueueEntry& B)
+	{
+		return A.ActorClass == B.ActorClass
+			&& A.TotalBuildTime == B.TotalBuildTime
+			&& CostsEqual(A.AtEnqueueCost, B.AtEnqueueCost)
+			&& CostsEqual(A.AtCompletionCost, B.AtCompletionCost)
+			&& A.ResourcePayer == B.ResourcePayer
+			&& A.bIsResearch == B.bIsResearch
+			&& A.ResearchEffectClass == B.ResearchEffectClass
+			&& A.RefundPolicy.bUseCustomRefund == B.RefundPolicy.bUseCustomRefund
+			&& A.RefundPolicy.CustomRefundPercentage
+				== B.RefundPolicy.CustomRefundPercentage;
+	}
+
+	static bool SnapshotReadyCompletion(
+		USeinWorldSubsystem& World,
+		FSeinEntityHandle Producer,
+		FReadyCompletion& Out)
+	{
+		const FSeinEntity* Entity = World.GetEntity(Producer);
+		const FSeinProductionComponent* Production =
+			World.GetComponent<FSeinProductionComponent>(Producer);
+		if (!Entity || !Entity->IsAlive()
+			|| !Production || Production->Queue.IsEmpty()
+			|| Production->CurrentBuildProgress < Production->Queue[0].TotalBuildTime)
+		{
+			return false;
+		}
+
+		Out.Entry = Production->Queue[0];
+		Out.ProducerOwner = World.GetEntityOwner(Producer);
+		Out.SpawnTransform = Entity->Transform * Production->SpawnPointOffset;
+		Out.bRallyToEntity = Production->bRallyToEntity;
+		Out.RallyTransform = Production->RallyTransform;
+		Out.RallyEntity = Production->RallyEntity;
+		Out.OriginalProgress = Production->CurrentBuildProgress;
+		Out.bOriginalStalled = Production->bStalledAtCompletion;
+		return true;
+	}
+
+	/** Detach the exact front entry before any spawn/effect callback can mutate
+	 *  its storage. The atomic deduction is the sequential affordability gate. */
+	static bool DeductAndDetach(
+		USeinWorldSubsystem& World,
+		FSeinEntityHandle Producer,
+		const FReadyCompletion& Completion)
+	{
+		if (!USeinResourceBPFL::SeinDeduct(
+			&World, Completion.Entry.ResourcePayer,
+			Completion.Entry.AtCompletionCost))
+		{
+			return false;
+		}
+
+		FSeinProductionComponent* Production =
+			World.GetComponent<FSeinProductionComponent>(Producer);
+		if (!Production || Production->Queue.IsEmpty()
+			|| !EntriesEqual(Production->Queue[0], Completion.Entry))
+		{
+			USeinResourceBPFL::SeinRefund(
+				&World, Completion.Entry.ResourcePayer,
+				Completion.Entry.AtCompletionCost);
+			return false;
+		}
+
+		Production->Queue.RemoveAt(0);
+		Production->CurrentBuildProgress = FFixedPoint::Zero;
+		Production->bStalledAtCompletion = false;
+		return true;
+	}
+
+	static void RestoreFailedCompletion(
+		USeinWorldSubsystem& World,
+		FSeinEntityHandle Producer,
+		const FReadyCompletion& Completion)
+	{
+		USeinResourceBPFL::SeinRefund(
+			&World, Completion.Entry.ResourcePayer,
+			Completion.Entry.AtCompletionCost);
+		if (FSeinProductionComponent* Production =
+			World.GetComponent<FSeinProductionComponent>(Producer))
+		{
+			Production->Queue.Insert(Completion.Entry, 0);
+			Production->CurrentBuildProgress = Completion.OriginalProgress;
+			Production->bStalledAtCompletion = Completion.bOriginalStalled;
+		}
+	}
+
+	/** Returns true only on the transition into stalled, so diagnostics and the
+	 *  visual event are emitted exactly once for a malformed/unaffordable front. */
+	static bool MarkStalled(
+		USeinWorldSubsystem& World,
+		FSeinEntityHandle Producer,
+		const FSeinProductionQueueEntry& ExpectedFront)
+	{
+		bool bNewlyStalled = false;
+		if (FSeinProductionComponent* Production =
+			World.GetComponent<FSeinProductionComponent>(Producer))
+		{
+			if (!Production->Queue.IsEmpty()
+				&& EntriesEqual(Production->Queue[0], ExpectedFront)
+				&& !Production->bStalledAtCompletion)
+			{
+				Production->bStalledAtCompletion = true;
+				bNewlyStalled = true;
+			}
+		}
+
+		if (bNewlyStalled)
+		{
+			const FGameplayTag IdentityTag =
+				GetIdentityTagFromClass(ExpectedFront.ActorClass);
+			World.EnqueueVisualEvent(
+				FSeinVisualEvent::MakeProductionStalledEvent(Producer, IdentityTag));
+		}
+		return bNewlyStalled;
+	}
+
+	static void DispatchRally(
+		USeinWorldSubsystem& World,
+		FSeinEntityHandle Produced,
+		const FReadyCompletion& Completion)
+	{
+		FFixedVector RallyLocation = Completion.RallyTransform.GetLocation();
+		if (Completion.bRallyToEntity && Completion.RallyEntity.IsValid())
+		{
+			RallyLocation = FFixedVector::ZeroVector;
+			if (const FSeinEntity* RallyEntity =
+				World.GetEntity(Completion.RallyEntity))
+			{
+				RallyLocation = RallyEntity->Transform.GetLocation();
+			}
+		}
+
+		if (RallyLocation == FFixedVector::ZeroVector
+			|| RallyLocation == Completion.SpawnTransform.GetLocation())
+		{
+			return;
+		}
+
+		FGameplayTag MoveAbilityTag;
+		if (const FSeinAbilityComponent* AbilityComponent =
+			World.GetComponent<FSeinAbilityComponent>(Produced))
+		{
+			if (const USeinAbility* MoveAbility =
+				AbilityComponent->FindMoveAbility(World))
+			{
+				MoveAbilityTag = MoveAbility->AbilityTag;
+			}
+		}
+		if (!MoveAbilityTag.IsValid()) return;
+
+		FSeinBrokerQueuedOrder Order;
+		Order.Context.AddTag(MoveAbilityTag);
+		Order.TargetLocation = RallyLocation;
+		Order.bIsInternalPrefix = true;
+		const TArray<FSeinEntityHandle> Member = {Produced};
+		World.CreateBrokerForMembers(
+			Member, Completion.ProducerOwner, Order);
+	}
+
+	static void EmitNextStartedEvent(
+		USeinWorldSubsystem& World, FSeinEntityHandle Producer)
+	{
+		TSubclassOf<ASeinActor> NextClass;
+		const FSeinEntity* ProducerEntity = World.GetEntity(Producer);
+		if (ProducerEntity && ProducerEntity->IsAlive())
+		{
+			if (const FSeinProductionComponent* Production =
+				World.GetComponent<FSeinProductionComponent>(Producer);
+				Production && !Production->Queue.IsEmpty())
+			{
+				NextClass = Production->Queue[0].ActorClass;
+			}
+		}
+		if (NextClass)
+		{
+			const FGameplayTag NextIdentityTag =
+				GetIdentityTagFromClass(NextClass);
+			World.EnqueueVisualEvent(FSeinVisualEvent::MakeProductionEvent(
+				Producer, NextIdentityTag, /*bCompleted=*/false));
+		}
+	}
+
+	static void EmitCompletionEvents(
+		USeinWorldSubsystem& World,
+		FSeinEntityHandle Producer,
+		FGameplayTag ProducedIdentityTag)
+	{
+		World.EnqueueVisualEvent(FSeinVisualEvent::MakeProductionEvent(
+			Producer, ProducedIdentityTag, /*bCompleted=*/true));
+		EmitNextStartedEvent(World, Producer);
+	}
 }
-#include "Tags/SeinARTSGameplayTags.h"
 
 /**
  * System: Production
@@ -51,10 +274,13 @@ namespace SeinProductionLocal
  *
  * Per tick for every entity with FSeinProductionComponent + non-empty Queue:
  *   1. Advance CurrentBuildProgress (unless already stalled — stall halts the timer).
- *   2. When progress >= TotalBuildTime, `AttemptSpawn`:
- *      a. If AtCompletionCost fits (catalog-aware CanAfford), deduct + spawn/apply.
- *      b. Else raise `bStalledAtCompletion`, fire ProductionStalled once, retry next tick.
- *   3. On successful completion: fire ProductionCompleted + (if research) TechResearched,
+ *   2. When progress >= TotalBuildTime, atomically deduct AtCompletionCost and
+ *      detach the front entry before spawning/applying it. Failed unit spawns
+ *      restore the exact entry and refund the completion deduction. A research
+ *      replacement invalidated by an OnRemoved callback is irreversible: its
+ *      detached entry/cost stay consumed and no success event is emitted.
+ *   3. Unaffordable or malformed entries stall and fire ProductionStalled once.
+ *   4. On successful completion: fire ProductionCompleted + (if research) TechResearched,
  *      dequeue, reset progress; fire ProductionStarted for the next entry if any.
  */
 class FSeinProductionSystem final : public ISeinSystem
@@ -62,12 +288,13 @@ class FSeinProductionSystem final : public ISeinSystem
 public:
 	virtual void Tick(FFixedPoint DeltaTime, USeinWorldSubsystem& World) override
 	{
-		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, FSeinEntity& Entity)
+		// Phase 1 is deliberately mutation-light: spawning can grow both the entity
+		// pool and component storages, invalidating every reference held by this walk.
+		TArray<FSeinEntityHandle> ReadyProducers;
+		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, FSeinEntity&)
 		{
 			FSeinProductionComponent* ProdComp = World.GetComponent<FSeinProductionComponent>(Handle);
 			if (!ProdComp || ProdComp->Queue.Num() == 0) return;
-
-			const FSeinPlayerID OwnerID = World.GetEntityOwner(Handle);
 
 			// Advance progress unless we're already parked at 100% waiting on cap.
 			if (!ProdComp->bStalledAtCompletion)
@@ -75,142 +302,127 @@ public:
 				ProdComp->CurrentBuildProgress = ProdComp->CurrentBuildProgress + DeltaTime;
 			}
 
-			const FSeinProductionQueueEntry& Front = ProdComp->Queue[0];
-			if (ProdComp->CurrentBuildProgress < Front.TotalBuildTime)
+			if (ProdComp->CurrentBuildProgress >= ProdComp->Queue[0].TotalBuildTime)
 			{
-				return;
+				ReadyProducers.Add(Handle);
 			}
+		});
 
-			// At or past 100%. Gate on AtCompletion affordability.
-			if (!Front.AtCompletionCost.IsEmpty() &&
-				!USeinResourceBPFL::SeinCanAfford(&World, OwnerID, Front.AtCompletionCost))
+		// Phase 2 processes the stable handle snapshot in ascending slot order.
+		// Every producer/component/queue value is reacquired between operations.
+		for (const FSeinEntityHandle Producer : ReadyProducers)
+		{
+			SeinProductionLocal::FReadyCompletion Completion;
+			if (!SeinProductionLocal::SnapshotReadyCompletion(
+				World, Producer, Completion))
 			{
-				if (!ProdComp->bStalledAtCompletion)
-				{
-					ProdComp->bStalledAtCompletion = true;
-					const FGameplayTag IdentityTag = SeinProductionLocal::GetIdentityTagFromClass(Front.ActorClass);
-					World.EnqueueVisualEvent(FSeinVisualEvent::MakeProductionStalledEvent(Handle, IdentityTag));
-				}
-				return;
-			}
-
-			// AtCompletion deduct — catalog-aware (pop/supply resources add toward cap).
-			if (!Front.AtCompletionCost.IsEmpty())
-			{
-				USeinResourceBPFL::SeinDeduct(&World, OwnerID, Front.AtCompletionCost);
+				continue;
 			}
 
 			FGameplayTag ProducedIdentityTag;
-
-			if (Front.bIsResearch)
+			if (Completion.Entry.bIsResearch)
 			{
-				// Unified tech path: apply the research effect class to the owner's
-				// representative entity. The effect's scope routes modifiers + tags
-				// to the right sim location (Instance / Archetype / Player).
-				if (Front.ResearchEffectClass)
+				UClass* EffectClass = Completion.Entry.ResearchEffectClass.Get();
+				const USeinEffect* EffectDef = EffectClass
+					? GetDefault<USeinEffect>(EffectClass)
+					: nullptr;
+				if (!EffectDef || EffectClass->HasAnyClassFlags(
+					CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists))
 				{
-					World.ApplyEffect(Handle, Front.ResearchEffectClass, Handle);
-					if (const USeinEffect* EffectDef = GetDefault<USeinEffect>(Front.ResearchEffectClass))
+					if (SeinProductionLocal::MarkStalled(
+						World, Producer, Completion.Entry))
 					{
-						ProducedIdentityTag = EffectDef->EffectTag;
-						if (ProducedIdentityTag.IsValid())
-						{
-							World.EnqueueVisualEvent(
-								FSeinVisualEvent::MakeTechResearchedEvent(OwnerID, ProducedIdentityTag));
-						}
+						UE_LOG(LogSeinSim, Error,
+							TEXT("Production stalled on %s: research entry has no usable effect class."),
+							*Producer.ToString());
 					}
+					continue;
+				}
+				ProducedIdentityTag = EffectDef->EffectTag;
+			}
+			else if (!Completion.Entry.ActorClass)
+			{
+				if (SeinProductionLocal::MarkStalled(
+					World, Producer, Completion.Entry))
+				{
+					UE_LOG(LogSeinSim, Error,
+						TEXT("Production stalled on %s: unit entry has no actor class."),
+						*Producer.ToString());
+				}
+				continue;
+			}
+
+			if (!SeinProductionLocal::DeductAndDetach(
+				World, Producer, Completion))
+			{
+				SeinProductionLocal::MarkStalled(
+					World, Producer, Completion.Entry);
+				continue;
+			}
+
+			if (Completion.Entry.bIsResearch)
+			{
+				const USeinWorldSubsystem::FEffectApplyResult ApplyResult =
+					World.ApplyEffectTransactional(
+					Producer, Completion.Entry.ResearchEffectClass, Producer);
+				if (ApplyResult.Status
+					== USeinWorldSubsystem::EEffectApplyStatus::RejectedNoMutation)
+				{
+					SeinProductionLocal::RestoreFailedCompletion(
+						World, Producer, Completion);
+					SeinProductionLocal::MarkStalled(
+						World, Producer, Completion.Entry);
+					continue;
+				}
+				if (ApplyResult.Status == USeinWorldSubsystem::EEffectApplyStatus::
+					InvalidatedAfterReplacementRemoval)
+				{
+					// Replacement teardown already ran arbitrary callbacks. Retrying or
+					// refunding would duplicate irreversible authored side effects, so
+					// consume this detached completion without claiming research success.
+					UE_LOG(LogSeinSim, Error,
+						TEXT("Production research on %s was invalidated by a RemoveEffectsWithTag callback; cost and queue entry remain consumed."),
+						*Producer.ToString());
+					SeinProductionLocal::EmitNextStartedEvent(World, Producer);
+					continue;
+				}
+				if (ProducedIdentityTag.IsValid())
+				{
+					World.EnqueueVisualEvent(
+						FSeinVisualEvent::MakeTechResearchedEvent(
+							Completion.ProducerOwner, ProducedIdentityTag));
 				}
 			}
-			else if (Front.ActorClass)
+			else
 			{
-				// Spawn at the producer's authored SpawnPointOffset, composed
-				// with the producer's world transform so the offset rotates
-				// with the producer (barracks placed at any yaw spawns out of
-				// the same door regardless of facing). The composed transform's
-				// rotation also carries to the produced unit, so designers can
-				// point the SpawnPointOffset forward and units arrive aimed at
-				// the rally walkway before the rally Move dispatches. Default
-				// identity = pivot (mesh-interior); designer is expected to
-				// override.
-				const FFixedTransform SpawnWorldTransform = Entity.Transform * ProdComp->SpawnPointOffset;
-				const FFixedVector SpawnLocation = SpawnWorldTransform.GetLocation();
-
-				const FSeinEntityHandle ProducedHandle =
-					World.SpawnEntity(Front.ActorClass, SpawnWorldTransform, OwnerID);
-
-				ProducedIdentityTag = SeinProductionLocal::GetIdentityTagFromClass(Front.ActorClass);
-
-				// Stat attribution is designer-authored — wrap this entry point
-				// (or hook the ProductionCompleted visual event from BP) if your
-				// project tracks production counters.
-
-				// Rally auto-move (DESIGN §9 Q9 + §5 broker integration): if the
-				// production component carries a non-zero rally target, drop a
-				// single-member broker order on the produced unit to navigate
-				// there. Entity-targeted rallies resolve to the entity's current
-				// transform at dispatch time.
-				if (ProducedHandle.IsValid())
+				const FSeinEntityHandle Produced = World.SpawnEntity(
+					Completion.Entry.ActorClass,
+					Completion.SpawnTransform,
+					Completion.ProducerOwner);
+				if (!Produced.IsValid())
 				{
-					FFixedVector RallyLoc;
-					if (ProdComp->bRallyToEntity && ProdComp->RallyEntity.IsValid())
-					{
-						if (const FSeinEntity* RallyEntityPtr = World.GetEntity(ProdComp->RallyEntity))
-						{
-							RallyLoc = RallyEntityPtr->Transform.GetLocation();
-						}
-					}
-					else
-					{
-						RallyLoc = ProdComp->RallyTransform.GetLocation();
-					}
-
-					if (RallyLoc != FFixedVector::ZeroVector && RallyLoc != SpawnLocation)
-					{
-						// Resolve the produced unit's move-ability tag via the
-						// bIsMoveAbility flag (designer-set on whichever
-						// ability represents "move" — typically SA_Move).
-						// Skip the auto-rally move if the produced unit has
-						// no move ability flagged.
-						const FSeinAbilityComponent* ProducedAbilityComp =
-							World.GetComponent<FSeinAbilityComponent>(ProducedHandle);
-						const USeinAbility* MoveAbility = ProducedAbilityComp
-							? ProducedAbilityComp->FindMoveAbility(World)
-							: nullptr;
-						if (MoveAbility && MoveAbility->AbilityTag.IsValid())
-						{
-							FSeinBrokerQueuedOrder Order;
-							Order.Context.AddTag(MoveAbility->AbilityTag);
-							Order.TargetLocation = RallyLoc;
-							Order.bIsInternalPrefix = true;
-							TArray<FSeinEntityHandle> Member = { ProducedHandle };
-							World.CreateBrokerForMembers(Member, OwnerID, Order);
-						}
-					}
+					SeinProductionLocal::RestoreFailedCompletion(
+						World, Producer, Completion);
+					continue;
 				}
+
+				ProducedIdentityTag = SeinProductionLocal::GetIdentityTagFromClass(
+					Completion.Entry.ActorClass);
+				SeinProductionLocal::DispatchRally(
+					World, Produced, Completion);
 			}
 
-			// Fire ProductionCompleted for UI. For research uses the effect tag; for
-			// units uses the identity tag. Empty tag is allowed if neither resolved.
-			World.EnqueueVisualEvent(
-				FSeinVisualEvent::MakeProductionEvent(Handle, ProducedIdentityTag, /*bCompleted=*/true));
-
-			// Dequeue + reset progress/stall.
-			ProdComp->Queue.RemoveAt(0);
-			ProdComp->CurrentBuildProgress = FFixedPoint::Zero;
-			ProdComp->bStalledAtCompletion = false;
-
-			// Fire ProductionStarted for the next entry, if any.
-			if (ProdComp->Queue.Num() > 0)
-			{
-				const FSeinProductionQueueEntry& Next = ProdComp->Queue[0];
-				const FGameplayTag NextIdentityTag = SeinProductionLocal::GetIdentityTagFromClass(Next.ActorClass);
-				World.EnqueueVisualEvent(
-					FSeinVisualEvent::MakeProductionEvent(Handle, NextIdentityTag, /*bCompleted=*/false));
-			}
-		});
+			SeinProductionLocal::EmitCompletionEvents(
+				World, Producer, ProducedIdentityTag);
+		}
 	}
 
-	virtual ESeinTickPhase GetPhase() const override { return ESeinTickPhase::AbilityExecution; }
-	virtual int32 GetPriority() const override { return SeinSystemPriority::Production; }
-	virtual FName GetSystemName() const override { return TEXT("Production"); }
+	virtual FSeinSystemDescriptor DescribeSystem() const override
+	{
+		return FSeinSystemDescriptor::Stateless(
+			FName(TEXT("seinarts.core.production")),
+			1u,
+			ESeinTickPhase::AbilityExecution,
+			SeinSystemPriority::Production);
+	}
 };

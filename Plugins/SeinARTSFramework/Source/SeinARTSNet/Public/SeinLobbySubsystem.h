@@ -42,6 +42,7 @@
 #include "SeinLobbyState.h"
 #include "GameplayTagContainer.h"
 #include "Containers/Ticker.h"
+#include "TimerManager.h"
 #include "UObject/SoftObjectPtr.h"
 #include "SeinLobbySubsystem.generated.h"
 
@@ -60,6 +61,10 @@ public:
 	// UGameInstanceSubsystem
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
+
+	/** Idempotently detach every callback and release runtime state before the
+	 *  owning module's code can unload. Deinitialize delegates to this path. */
+	void ReleaseModuleOwnedStateForModuleUnload();
 
 	/**
 	 * Optional gameplay map to ServerTravel to when StartLockstepSession is
@@ -179,10 +184,12 @@ public:
 	 *   - if `bTravelToGameplayMap=true` AND `GameplayMap` is set, calls
 	 *     `World::ServerTravel(GameplayMap)` (the new map's GameMode picks
 	 *     up the snapshot in InitGame), OR
-	 *   - else calls `USeinNetSubsystem::StartLockstepSession()` in-place.
+	 *   - standalone invokes CoreEntity's Framework-owned bootstrap launcher
+	 *     in-place; networked lobby-derived starts require travel so the final
+	 *     roster is installed before any peer registers simulation entities.
 	 *
-	 *  Returns true on accept, false if rejected (no Human-claimed slot or
-	 *  travel requested but `GameplayMap` empty). */
+	 *  Returns true on accept, false if rejected (no Human-claimed slot,
+	 *  invalid travel map, or a networked in-place request). */
 	bool ServerStartMatch(bool bTravelToGameplayMap);
 
 	// ========== Read API (server + client) ==========
@@ -194,6 +201,11 @@ public:
 	/** Snapshot accessor. Empty (default-constructed) until
 	 *  PublishMatchSettingsSnapshot fires. */
 	const FSeinMatchSettings& GetPublishedSnapshot() const { return PublishedSnapshot; }
+
+	/** Install the server-authored, final snapshot into this GameInstance.
+	 *  Used by the pre-travel lockstep bootstrap on clients so destination
+	 *  world initialization sees the same slot/extension manifest as authority. */
+	bool InstallPreparedMatchSettingsSnapshot(const FSeinMatchSettings& Snapshot);
 
 	/** Current replicated lobby actor; null on the client until first
 	 *  replication arrives, null on the server until InitializeLobby spawns it. */
@@ -225,6 +237,7 @@ public:
 private:
 	void OnPostLogin(AGameModeBase* GameMode, APlayerController* NewPlayer);
 	void OnLogout(AGameModeBase* GameMode, AController* Exiting);
+	void ExecutePreparedServerTravel(FString MapURL);
 
 	bool IsServer() const;
 
@@ -274,6 +287,9 @@ private:
 	/** Cached published snapshot. Updated on PublishMatchSettingsSnapshot. */
 	FSeinMatchSettings PublishedSnapshot;
 	bool bSnapshotPublished = false;
+	bool bTravelScheduled = false;
+	FTimerHandle PendingTravelTimerHandle;
+	TWeakObjectPtr<UWorld> PendingTravelTimerWorld;
 
 	/** GameMode-pushed slot count used by `EnsureLobbyActor` when lazy-spawning
 	 *  the lobby actor in a world. Set via `SetSlotCountOverride`. Zero means
@@ -283,4 +299,5 @@ private:
 
 	FDelegateHandle PostLoginHandle;
 	FDelegateHandle LogoutHandle;
+	bool bModuleOwnedStateReleased = false;
 };

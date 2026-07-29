@@ -93,7 +93,8 @@ public:
 	 *  picker (see USeinARTSCoreSettings::NavigationClass). The targeter
 	 *  subsystem resolves the path on Activate (sync load, then cached). */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Targeter",
-		meta = (MetaClass = "/Script/SeinARTSFramework.SeinTargeterPreview"))
+		meta = (
+			MetaClass = "/Script/SeinARTSFramework.SeinTargeterPreview"))
 	FSoftClassPath PreviewClass;
 
 	/** When true, RMB clicks on cells the spec considers Blocked are eaten —

@@ -4,13 +4,14 @@
  * @brief   Named tick priorities for ISeinSystems, grouped by ESeinTickPhase.
  *
  *          Within a phase, systems tick in ASCENDING priority (lower = earlier;
- *          ties broken by system name for cross-client determinism). These are the
- *          slots the shipped systems occupy — when authoring a custom ISeinSystem,
+ *          ties broken by canonical stable system ID for cross-client
+ *          determinism). These are the slots the shipped systems occupy —
+ *          when authoring a custom ISeinSystem,
  *          reference one of these (or pick a gap between them) so your registration
  *          order is intentional instead of a copied magic number.
  *
  *          These constants ARE the source of truth: every shipped system's
- *          GetPriority() returns one of them, so changing a slot here changes
+ *          DescribeSystem().Priority uses one of them, so changing a slot here changes
  *          the live tick order. Keep them ordered as they tick within a phase.
  */
 
@@ -38,6 +39,6 @@ namespace SeinSystemPriority
 	inline constexpr int32 NavContainment      = 11;
 	inline constexpr int32 Squad               = 30;
 	inline constexpr int32 CommandBroker       = 40;
+	inline constexpr int32 FogOfWar            = 80;
 	inline constexpr int32 MovementTrace       = 90;   // observation-only; sees the tick's final transforms
-	inline constexpr int32 StateHash           = 100;  // last — hashes the finished frame
 }

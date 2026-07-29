@@ -34,6 +34,10 @@ public:
 	/** Append one assembled-turn record. No-op if not recording. */
 	void RecordTurn(int32 TurnId, const TArray<FSeinCommand>& Commands);
 
+	/** Observe one completed sim tick. Calls must be contiguous from tick 1;
+	 *  FinishRecording stamps the last observed value as inclusive EndTick. */
+	void ObserveCompletedTick(int32 CompletedTick);
+
 	/** Serialize the buffer to disk and close. Returns the resolved file path
 	 *  on success, empty string on failure (or if not recording). Writes to
 	 *  Saved/Replays/<MapName>_<UTCStamp>.seinreplay by default. */
@@ -45,9 +49,22 @@ public:
 	/** How many turn records are in the buffer. */
 	int32 GetBufferedTurnCount() const { return Buffer.Turns.Num(); }
 
+	/** Inclusive terminal tick observed so far (zero before the first tick). */
+	int32 GetObservedEndTick() const { return LastObservedCompletedTick; }
+
+	/** True after a missing, duplicate, or out-of-order completed-tick callback. */
+	bool HasTickObservationFailure() const { return bTickObservationFailed; }
+
 private:
 	UPROPERTY()
 	FSeinReplay Buffer;
 
 	bool bRecording = false;
+	bool bTickObservationFailed = false;
+	bool bJournalObservationFailed = false;
+	uint64 BaselineBodyBytes = 0;
+	uint64 BaselineDecodedAllocationBytes = 0;
+	uint64 BufferedBodyBytes = 0;
+	uint64 BufferedDecodedAllocationBytes = 0;
+	int32 LastObservedCompletedTick = 0;
 };

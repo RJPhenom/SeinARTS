@@ -1,10 +1,14 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinWheeledVehicleMovement.cpp
- * @brief   Bicycle-kinematics pure-pursuit controller.
+ * @brief   Bicycle-kinematics controller with Reeds-Shepp-style start-maneuver
+ *          planning (see SeinWheeledManeuver.h) and a typed-segment driver.
  */
 
 #include "Movement/SeinWheeledVehicleMovement.h"
+#include "Movement/SeinWheeledManeuver.h"
+#include "Movement/SeinPlannerHandle.h"
+#include "Movement/SeinMoverHandle.h"
 #include "SeinARTSMovementModule.h"
 #include "SeinNavigation.h"
 #include "SeinPathTypes.h"
@@ -24,6 +28,100 @@
 #endif
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinWheeled, Log, All);
+
+namespace
+{
+	// Compile-time driver constants (determinism rule: never per-run tunables).
+	// Speed below which the cusp direction latch may flip (world units/sec).
+	const FFixedPoint CuspFlipSpeed = FFixedPoint::FromInt(30);
+	// Carrot distance along a straight maneuver leg (world units).
+	const FFixedPoint ManeuverLookAhead = FFixedPoint::FromInt(250);
+	// Proximity at which a maneuver segment counts as consumed (world units).
+	const FFixedPoint SegmentCloseRadius = FFixedPoint::FromInt(50);
+	// Arc-tracking correction caps (radians) and the radial error → steer gain
+	// distance (a full radial correction at this many units of offset).
+	const FFixedPoint SteerHeadingCorrCap = FFixedPoint::Pi / FFixedPoint::FromInt(8);
+	const FFixedPoint SteerRadialCorrCap  = FFixedPoint::Pi / FFixedPoint::FromInt(12);
+	const FFixedPoint RadialGainDist      = FFixedPoint::FromInt(400);
+	// Arc angular-progress epsilon (radians, ~3 deg).
+	const FFixedPoint ArcSweepEps = FFixedPoint::Pi / FFixedPoint::FromInt(60);
+	// Stuck detection / recovery.
+	const FFixedPoint StuckSpeedMin       = FFixedPoint::FromInt(50);
+	const FFixedPoint StuckTriggerSeconds = FFixedPoint::Half;
+	const FFixedPoint RecoverySeconds     = FFixedPoint::FromInt(3) / FFixedPoint::FromInt(5); // 0.6 s
+	const FFixedPoint RecoverySpeedCap    = FFixedPoint::FromInt(250);
+	// Maneuver leg held near zero speed this long → abandon the head into
+	// carrot pursuit (traffic escape). Longer than any cusp/from-rest ramp.
+	// A per-entity deterministic jitter (handle % 8 × 0.1 s) is ADDED at the
+	// comparison site: two equal-weight vehicles maneuvering head-on both
+	// brake-yield symmetrically, and without the jitter both would abandon on
+	// the SAME deterministic tick and re-plan back into mirror-lock. (Residual
+	// collision when handle indices are ≡ mod 8 — rare, and the pair still
+	// resolves via the differing replans that follow.)
+	const FFixedPoint ManeuverStallAbandonSeconds = FFixedPoint::FromInt(6) / FFixedPoint::FromInt(5); // 1.2 s
+	// Speed below which the cusp PRE-STEER engages: while braking the last
+	// stretch into a cusp, the wheels crank toward the next leg's lock (a real
+	// driver turns the wheel during the stop). Gated low so the approach
+	// stays straight — cranked-wheel yaw drift below this speed is negligible
+	// (~0.03 rad over the brake-out).
+	const FFixedPoint CuspPreSteerSpeed = CuspFlipSpeed * FFixedPoint::FromInt(3);
+	// Orbit backstop: |yaw| swept without waypoint/segment progress.
+	const FFixedPoint OrbitYawLimit = FFixedPoint::Pi * FFixedPoint::FromInt(5) / FFixedPoint::Two; // 2.5*pi
+
+	FFixedPoint AbsFP2(FFixedPoint V) { return V < FFixedPoint::Zero ? -V : V; }
+	FFixedPoint MinFP2(FFixedPoint A, FFixedPoint B) { return A < B ? A : B; }
+	FFixedPoint MaxFP2(FFixedPoint A, FFixedPoint B) { return A > B ? A : B; }
+
+	/** Robust angular progress along an arc segment: how much of |Sweep| the
+	 *  position at `Pos` has consumed, with the wrap ambiguity resolved by
+	 *  splitting the leftover circle between "just past the end" and "still
+	 *  before the start". */
+	FFixedPoint ArcProgress(const FSeinPathSegment& S, const FFixedVector& Pos)
+	{
+		const FFixedPoint AbsSweep = AbsFP2(S.SweepAngle);
+		if (S.Radius <= FFixedPoint::Epsilon || AbsSweep <= FFixedPoint::Epsilon) return AbsSweep;
+		const FFixedPoint SweepSign = (S.SweepAngle >= FFixedPoint::Zero) ? FFixedPoint::One : -FFixedPoint::One;
+		const FFixedPoint Phi     = SeinMath::Atan2(Pos.Y - S.Center.Y, Pos.X - S.Center.X);
+		const FFixedPoint PhiFrom = SeinMath::Atan2(S.From.Y - S.Center.Y, S.From.X - S.Center.X);
+		const FFixedPoint Raw = SeinWheeledManeuver::WrapPositive(SweepSign * (Phi - PhiFrom));
+		if (Raw <= AbsSweep) return Raw;
+		const FFixedPoint TwoPi = FFixedPoint::Pi * FFixedPoint::Two;
+		const FFixedPoint Mid = AbsSweep + (TwoPi - AbsSweep) * FFixedPoint::Half;
+		return (Raw < Mid) ? AbsSweep : FFixedPoint::Zero;
+	}
+
+	/** Geometric completion test for a maneuver segment. Arcs complete on
+	 *  ANGULAR progress only — the end-plane test false-fires at the very
+	 *  START of a >=180-deg sweep, and the 50 cm proximity shortcut exceeds
+	 *  the whole chord of a minimum swing leg on tight chassis (R_min < ~190),
+	 *  which would chain-skip the leg unmoved. ArcProgress already reads
+	 *  ~AbsSweep for any pose near the endpoint, so proximity adds nothing for
+	 *  arcs. Straights complete on the end-plane crossover or proximity. */
+	bool SegmentComplete(const FSeinPathSegment& S, const FFixedVector& Pos)
+	{
+		if (S.Type == ESeinPathSegmentType::Arc && S.Radius > FFixedPoint::Epsilon)
+		{
+			return ArcProgress(S, Pos) >= AbsFP2(S.SweepAngle) - ArcSweepEps;
+		}
+		FFixedVector ToEnd = Pos - S.To;
+		ToEnd.Z = FFixedPoint::Zero;
+		if (ToEnd.SizeSquared() <= SegmentCloseRadius * SegmentCloseRadius) return true;
+		FFixedVector Dir = S.To - S.From;
+		Dir.Z = FFixedPoint::Zero;
+		if (Dir.SizeSquared() <= FFixedPoint::Epsilon) return true;
+		Dir = FFixedVector::GetSafeNormal(Dir);
+		return (ToEnd.X * Dir.X + ToEnd.Y * Dir.Y) >= FFixedPoint::Zero;
+	}
+
+	/** Wrap-safe "is this planar delta definitely far away" precheck: 32.32
+	 *  squares wrap past ~46,340 units, so any comparison of SizeSquared/Size
+	 *  against a small radius must first rule out far vectors component-wise. */
+	bool IsPlanarFar(const FFixedVector& Delta)
+	{
+		const FFixedPoint Cap = FFixedPoint::FromInt(20000);
+		return AbsFP2(Delta.X) >= Cap || AbsFP2(Delta.Y) >= Cap;
+	}
+}
 
 USeinWheeledVehicleMovement::USeinWheeledVehicleMovement() = default;
 
@@ -58,8 +156,45 @@ FFixedPoint USeinWheeledVehicleMovement::GetMinTurnRadius(const FSeinMovementCom
 	return Wheeled.Wheelbase / TanSteer;
 }
 
+void USeinWheeledVehicleMovement::ResetDriverState()
+{
+	SegCursor = 0;
+	TailStartSeg = 0;
+	bDriveReverseLatch = false;
+	CachedPathWaypointNum = -1;
+	CachedPathSegmentNum = -1;
+	CachedPathFirstWp = FFixedVector::ZeroVector;
+	CachedPathLastWp = FFixedVector::ZeroVector;
+	CachedPathTotalCost = FFixedPoint::Zero;
+	CachedPathFirstSegTo = FFixedVector::ZeroVector;
+	LastEntryPos = FFixedVector::ZeroVector;
+	bLastEntryPosValid = false;
+	StuckTime = FFixedPoint::Zero;
+	ManeuverStallTime = FFixedPoint::Zero;
+	RecoveryTime = FFixedPoint::Zero;
+	RecoveryDir = 0;
+	YawAccumSinceProgress = FFixedPoint::Zero;
+	LastProgressWaypointIndex = -1;
+}
+
+void USeinWheeledVehicleMovement::OnMoveEnd(FSeinEntity& Entity)
+{
+	Super::OnMoveEnd(Entity);
+	// New orders must never see stale driver state at plan time: the initial
+	// PlanPath of the NEXT order runs BEFORE OnMoveBegin's reset, and the
+	// engage-hysteresis read (TailStartSeg/SegCursor) would otherwise leak the
+	// finished order's in-maneuver flag into the fresh plan.
+	CurrentSteer = FFixedPoint::Zero;
+	ResetDriverState();
+	bIsReversing = false;
+}
+
 void USeinWheeledVehicleMovement::OnMoveBegin(const FSeinMovementContext& Ctx)
 {
+	// Base dispatcher: fires BP_OnMoveBegin for BP subclasses and re-runs the
+	// per-order tuning hydration (both were silently skipped before).
+	Super::OnMoveBegin(Ctx);
+
 	if (!Ctx.MovementData) return;
 
 	FSeinEntity& Entity = Ctx.Entity;
@@ -69,15 +204,192 @@ void USeinWheeledVehicleMovement::OnMoveBegin(const FSeinMovementContext& Ctx)
 	// Wheels self-center per move action. Velocity intentionally preserved
 	// so a vehicle reordered mid-drive doesn't instant-stop.
 	CurrentSteer = FFixedPoint::Zero;
+	ResetDriverState();
+	bIsReversing = false;
 
-	// Auto-reverse latch -- if the destination is behind the unit and close
-	// enough (per MovementData reverse tunables), commit to driving backward.
-	const int32 N = Path.Waypoints.Num();
-	bIsReversing = (N > 0) && ShouldAutoReverse(
-		Entity.Transform.GetLocation(),
-		Entity.Transform.Rotation,
-		Path.Waypoints[N - 1],
-		MovementData);
+	// LEGACY one-shot auto-reverse latch — only when maneuver planning is off
+	// (the planner expresses reverse as typed segments instead, re-decided on
+	// every repath rather than latched for the whole order).
+	const FSeinWheeledMovementData DefaultsWheeled;
+	const FSeinWheeledMovementData* WheeledPtr = MovementData.MovementClassData.GetPtr<FSeinWheeledMovementData>();
+	const FSeinWheeledMovementData& Wheeled = WheeledPtr ? *WheeledPtr : DefaultsWheeled;
+	if (!Wheeled.bManeuverPlanning)
+	{
+		const int32 N = Path.Waypoints.Num();
+		bIsReversing = (N > 0) && ShouldAutoReverse(
+			Entity.Transform.GetLocation(),
+			Entity.Transform.Rotation,
+			Path.Waypoints[N - 1],
+			MovementData);
+	}
+}
+
+FSeinMotion USeinWheeledVehicleMovement::ComputeArrivalMotion_Implementation(USeinMoverHandle* Mover)
+{
+	// Roll-through arrival: keep the residual velocity (the kinematic arrival
+	// cap has already braked it toward the ring edge) and let the idle
+	// coast-down finish the stop through GetDeceleration — a vehicle eases to
+	// rest instead of snapping. Facing untouched.
+	FSeinMotion Motion;
+	const FSeinMovementContext* C = Mover ? Mover->GetContext() : nullptr;
+	if (C && C->MovementData)
+	{
+		Motion.Velocity = C->MovementData->Velocity;
+	}
+	return Motion;
+}
+
+ESeinPathResult USeinWheeledVehicleMovement::PlanPath(const FSeinPlanPathContext& Ctx, FSeinPath& OutPath) const
+{
+	// Coarse stage: the base sealed dispatcher (budgeted A* / straight-line for
+	// flyers; BP-overridable via the Plan Path event). Throttled / NotFound /
+	// NoNavigation pass through untouched — the action's retry machinery
+	// depends on seeing them verbatim.
+	const ESeinPathResult Result = Super::PlanPath(Ctx, OutPath);
+	if (Result != ESeinPathResult::Found || !Ctx.MovementData) return Result;
+	if (BypassPathfinding()) return Result;
+	if (OutPath.Waypoints.Num() == 0) return Result;
+	// A path that ALREADY carries typed segments was authored by a BP Plan
+	// Path override — it owns its geometry; never clobber it with a re-fit.
+	if (OutPath.HasTypedSegments()) return Result;
+
+	const FSeinWheeledMovementData DefaultsWheeled;
+	const FSeinWheeledMovementData* WheeledPtr = Ctx.MovementData->MovementClassData.GetPtr<FSeinWheeledMovementData>();
+	const FSeinWheeledMovementData& Wheeled = WheeledPtr ? *WheeledPtr : DefaultsWheeled;
+	if (!Wheeled.bManeuverPlanning) return Result;
+
+	const FFixedPoint RMin = GetMinTurnRadius(Ctx.MovementData);
+	if (RMin <= FFixedPoint::Zero) return Result; // pivot-capable — no maneuver constraint
+
+	const FSeinMovementComponent& MovementData = *Ctx.MovementData;
+	const FFixedPoint RevTop = (MovementData.ReverseTopSpeed > FFixedPoint::Zero)
+		? MovementData.ReverseTopSpeed : MovementData.TopSpeed * FFixedPoint::Half;
+
+	SeinWheeledManeuver::FInputs In;
+	In.Pos = Ctx.Entity.Transform.GetLocation();
+	In.Yaw = YawFromRotation(Ctx.Entity.Transform.Rotation);
+	In.MinTurnRadius = RMin;
+	// Cruise radius capped at 100 m: a degenerate TurnRate would otherwise
+	// push tangent-solve geometry past the fixed-point square wrap (~463 m).
+	In.CruiseTurnRadius = (MovementData.TurnRate > FFixedPoint::Epsilon)
+		? MinFP2(MaxFP2(RMin, MovementData.TopSpeed / MovementData.TurnRate), FFixedPoint::FromInt(10000))
+		: RMin;
+	In.FootprintRadius = ResolveCollisionRadius(Ctx.World, Ctx.SelfHandle, Ctx.NavData);
+	In.NavLayerMask = Ctx.NavData ? Ctx.NavData->NavLayerMask : 0x01;
+	In.ReverseSpeedPenalty = (RevTop > FFixedPoint::Epsilon)
+		? MaxFP2(FFixedPoint::One, MovementData.TopSpeed / RevTop) : FFixedPoint::Two;
+	In.ForwardPathBias = MaxFP2(FFixedPoint::One, Wheeled.ForwardPathBias);
+	In.ReverseEngageDistance = MovementData.ReverseEngageDistanceThreshold;
+	In.ReverseEngageDot = MovementData.ReverseEngageDotThreshold;
+	In.ReversePlanMaxDistance = Wheeled.ReversePlanMaxDistance;
+	// Wheeled-mode reverse gate: the sub-data default (ON) OR the unit-level
+	// opt-in — wheeled vehicles reverse out of the box, untick both to forbid.
+	In.bCanReverse = Wheeled.bCanReverse || MovementData.bCanReverse;
+	// Replan continuity: read the current travel direction from hashed state so
+	// interval repaths mid-reverse prefer to keep reversing. A recovery-nudge
+	// reverse is NOT a planned reverse leg — it must not force the ladder onto
+	// reverse-starting candidates.
+	{
+		const FFixedVector Fwd = Ctx.Entity.Transform.Rotation.RotateVector(FFixedVector::ForwardVector);
+		const FFixedPoint VelDot = MovementData.Velocity.X * Fwd.X + MovementData.Velocity.Y * Fwd.Y;
+		const bool bRecoveryReverse = RecoveryTime > FFixedPoint::Zero && RecoveryDir < 0;
+		In.bCurrentlyReversing = !bRecoveryReverse
+			&& (VelDot < FFixedPoint::Zero)
+			&& MovementData.Velocity.SizeSquared() > CuspFlipSpeed * CuspFlipSpeed;
+	}
+	// Engage hysteresis: while a maneuver head is being DRIVEN (instance state
+	// — deterministic, derived from hashed history; reset per order via
+	// OnMoveEnd), replans keep engaging down to a much lower heading error so
+	// an in-progress U-turn/K-turn produces its continuation instead of being
+	// truncated into braked pursuit the moment the error dips under the cold
+	// threshold. Cold engage stays the toolkit default (~100 deg); continue
+	// threshold 45 deg hands off below the sharp-turn-brake band (60 deg) so
+	// the pursuit finish is smooth.
+	if (TailStartSeg > 0 && SegCursor < TailStartSeg)
+	{
+		In.EngageAngle = FFixedPoint::Pi / FFixedPoint::FromInt(4);
+	}
+	In.Nav = Ctx.Nav;
+
+	SeinWheeledManeuver::FPlan Plan;
+	if (!SeinWheeledManeuver::PlanStartManeuver(In, OutPath.Waypoints, Plan)) return Result;
+
+	// Emit through the planner handle (Super unbound it after its dispatch —
+	// rebind with the same localized-const_cast idiom the base uses).
+	const TArray<FFixedVector> Coarse = OutPath.Waypoints;
+	const bool bWasPartial = OutPath.bIsPartial;
+	USeinWheeledVehicleMovement* MutableThis = const_cast<USeinWheeledVehicleMovement*>(this);
+	if (!MutableThis->CachedPlannerHandle)
+	{
+		MutableThis->CachedPlannerHandle = NewObject<USeinPlannerHandle>(MutableThis);
+	}
+	USeinPlannerHandle* Handle = MutableThis->CachedPlannerHandle;
+	Handle->SetContext(&Ctx, &OutPath);
+	Handle->ClearPath();
+	for (const SeinWheeledManeuver::FLeg& Leg : Plan.Legs)
+	{
+		if (Leg.bArc)
+		{
+			Handle->AddArcSegment(Leg.From, Leg.To, Leg.Center, Leg.Radius, Leg.Sweep, Leg.bReverse);
+		}
+		else
+		{
+			Handle->AddStraightSegment(Leg.From, Leg.To, Leg.bReverse);
+		}
+	}
+	if (Plan.JoinWaypointIndex >= 0)
+	{
+		// The last maneuver leg ends exactly AT Coarse[JoinWaypointIndex]; the
+		// tail continues the coarse polyline so the terminal waypoint stays the
+		// exact ordered destination (preview invariant).
+		for (int32 i = Plan.JoinWaypointIndex; i + 1 < Coarse.Num(); ++i)
+		{
+			Handle->AddStraightSegment(Coarse[i], Coarse[i + 1], false);
+		}
+	}
+	Handle->FinalizeTypedPath(bWasPartial);
+	Handle->SetContext(nullptr, nullptr);
+	return ESeinPathResult::Found;
+}
+
+bool USeinWheeledVehicleMovement::RefreshPathCache(const FSeinPath& Path, FFixedPoint CurrentSpeed, FFixedPoint CuspFlipSpd)
+{
+	const int32 WpNum = Path.Waypoints.Num();
+	const int32 SegNum = Path.Segments.Num();
+	const FFixedVector First = WpNum > 0 ? Path.Waypoints[0] : FFixedVector::ZeroVector;
+	const FFixedVector Last = WpNum > 0 ? Path.Waypoints[WpNum - 1] : FFixedVector::ZeroVector;
+	const FFixedVector FirstSegTo = SegNum > 0 ? Path.Segments[0].To : FFixedVector::ZeroVector;
+	const bool bSame =
+		WpNum == CachedPathWaypointNum && SegNum == CachedPathSegmentNum
+		&& First.X == CachedPathFirstWp.X && First.Y == CachedPathFirstWp.Y && First.Z == CachedPathFirstWp.Z
+		&& Last.X == CachedPathLastWp.X && Last.Y == CachedPathLastWp.Y && Last.Z == CachedPathLastWp.Z
+		&& Path.TotalCost == CachedPathTotalCost
+		&& FirstSegTo.X == CachedPathFirstSegTo.X && FirstSegTo.Y == CachedPathFirstSegTo.Y;
+	if (bSame) return false;
+
+	CachedPathWaypointNum = WpNum;
+	CachedPathSegmentNum = SegNum;
+	CachedPathFirstWp = First;
+	CachedPathLastWp = Last;
+	CachedPathTotalCost = Path.TotalCost;
+	CachedPathFirstSegTo = FirstSegTo;
+
+	// Tail = everything after the last non-(forward straight) segment.
+	TailStartSeg = 0;
+	for (int32 i = 0; i < SegNum; ++i)
+	{
+		const FSeinPathSegment& S = Path.Segments[i];
+		if (S.Type != ESeinPathSegmentType::Straight || S.bReverse) TailStartSeg = i + 1;
+	}
+	SegCursor = 0;
+	// Initial drive latch: keep the live travel direction while moving (the
+	// cusp gate brakes before any flip); adopt the first segment's direction
+	// when effectively stopped.
+	const bool bFirstReverse = (TailStartSeg > 0 && SegNum > 0) ? Path.Segments[0].bReverse : false;
+	bDriveReverseLatch = (AbsFP2(CurrentSpeed) > CuspFlipSpd) ? (CurrentSpeed < FFixedPoint::Zero) : bFirstReverse;
+	YawAccumSinceProgress = FFixedPoint::Zero;
+	LastProgressWaypointIndex = -1;
+	return true;
 }
 
 bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
@@ -92,11 +404,8 @@ bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 	const FFixedPoint DeltaTime = Ctx.DeltaTime;
 	USeinNavigation* Nav = Ctx.Nav;
 
-	// Unwrap wheeled-specific sub-data once. Every wheeled tunable —
-	// Wheelbase, MaxSteerAngle, SteerResponse, LookAhead*, ArrivalSlowdown,
-	// TurnSpeedFloor, SharpTurnBrake* — lives here. Defaults from
-	// FSeinWheeledMovementData's in-class initializers stand in when
-	// MovementClassData is unauthored.
+	// Unwrap wheeled-specific sub-data once. Defaults from the struct's
+	// in-class initializers stand in when MovementClassData is unauthored.
 	const FSeinWheeledMovementData DefaultsWheeled;
 	const FSeinWheeledMovementData* WheeledPtr = MovementData.MovementClassData.GetPtr<FSeinWheeledMovementData>();
 	const FSeinWheeledMovementData& Wheeled = WheeledPtr ? *WheeledPtr : DefaultsWheeled;
@@ -115,40 +424,73 @@ bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 	const FFixedPoint EntryDot = MovementData.Velocity.X * EntryForward.X + MovementData.Velocity.Y * EntryForward.Y;
 	const FFixedPoint EntryMag = MovementData.Velocity.Size();
 	FFixedPoint CurrentSpeed = (EntryDot >= FFixedPoint::Zero) ? EntryMag : -EntryMag;
+	const FFixedPoint AbsCurrentSpeed = AbsFP2(CurrentSpeed);
 
 	const FFixedVector AgentPos = Entity.Transform.GetLocation();
 	const FFixedVector FinalWp = Path.Waypoints[N - 1];
-
-	// Drive direction: auto-reverse latch (one-shot at OnMoveBegin for
-	// behind-the-chassis goals). All path segments are forward-only.
-	const bool bDriveReverse = bIsReversing;
-	const bool bYawTargetFlipped = bDriveReverse;
+	const FFixedPoint CurrentYaw = YawFromRotation(EntryRot);
 
 	// -------------------------------------------------------------------
-	// 2. Arrival check (within / overshoot). Return true on hit so the
-	//    action ends.
+	// 2. Path identity + segment-driver cache (rebuilds on initial plan and
+	//    every repath), then geometric segment-cursor advance.
+	// -------------------------------------------------------------------
+	RefreshPathCache(Path, CurrentSpeed, CuspFlipSpeed);
+	const int32 SegNum = Path.Segments.Num();
+	const bool bHasManeuverHead = TailStartSeg > 0 && SegNum > 0;
+	while (SegCursor < TailStartSeg && SegCursor < SegNum
+		&& SegmentComplete(Path.Segments[SegCursor], AgentPos))
+	{
+		++SegCursor;
+		YawAccumSinceProgress = FFixedPoint::Zero;
+	}
+	const bool bManeuverMode = bHasManeuverHead && SegCursor < TailStartSeg && SegCursor < SegNum;
+
+	// Drive direction this tick. Maneuver mode owns it via the cusp latch; the
+	// tail is forward by construction; the legacy path uses the one-shot latch.
+	bool bDriveReverse;
+	if (bManeuverMode)         { bDriveReverse = bDriveReverseLatch; }
+	else if (bHasManeuverHead) { bDriveReverse = false; bDriveReverseLatch = false; }
+	else                       { bDriveReverse = bIsReversing; }
+
+	// -------------------------------------------------------------------
+	// 3. Arrival check (ring / overshoot). Overshoot uses the TRAVEL heading
+	//    (facing flipped when reversing) so a reverse approach doesn't misread
+	//    as "heading away" and complete early. Arrival routes through
+	//    DispatchArrivalMotion so the mode's arrival policy (roll-through)
+	//    applies — the Tier-2 contract.
 	// -------------------------------------------------------------------
 	{
 		FFixedVector ToFinal = FinalWp - AgentPos;
 		ToFinal.Z = FFixedPoint::Zero;
-		const bool bWithinAcceptance = ToFinal.SizeSquared() <= AcceptanceRadiusSq;
-		const FFixedPoint VicinityRadiusSq = AcceptanceRadiusSq * FFixedPoint::FromInt(4);
-		const FFixedPoint OvershootSpeedCap = MovementData.TopSpeed / FFixedPoint::FromInt(3);
-		const bool bOvershoot = IsOvershootArrival(
-			AgentPos, FinalWp, Entity.Transform.Rotation,
-			CurrentSpeed, VicinityRadiusSq, OvershootSpeedCap);
-		if (bWithinAcceptance || bOvershoot)
+		// Far precheck: a goal beyond the fixed-point square wrap (~463 m)
+		// would read as a NEGATIVE SizeSquared and instantly "arrive". Skip
+		// both arrival tests entirely while definitely far.
+		if (!IsPlanarFar(ToFinal))
 		{
-			MovementData.Velocity = FFixedVector::ZeroVector;
-			CurrentSteer = FFixedPoint::Zero;
-			return true;
+			const bool bWithinAcceptance = ToFinal.SizeSquared() <= AcceptanceRadiusSq;
+			const FFixedPoint VicinityRadiusSq = AcceptanceRadiusSq * FFixedPoint::FromInt(4);
+			const FFixedPoint OvershootSpeedCap = MovementData.TopSpeed / FFixedPoint::FromInt(3);
+			const FFixedQuaternion TravelRot = bDriveReverse
+				? YawOnly(CurrentYaw + FFixedPoint::Pi) : EntryRot;
+			// The overshoot guard exists to stop a chassis orbiting a goal it
+			// can't circle into — but a maneuver head IS a planned circle-back;
+			// while one is being driven, only the acceptance ring may complete.
+			const bool bOvershoot = !bManeuverMode && IsOvershootArrival(
+				AgentPos, FinalWp, TravelRot,
+				CurrentSpeed, VicinityRadiusSq, OvershootSpeedCap);
+			if (bWithinAcceptance || bOvershoot)
+			{
+				DispatchArrivalMotion(Ctx);
+				CurrentSteer = FFixedPoint::Zero;
+				return true;
+			}
 		}
 	}
 
 	// -------------------------------------------------------------------
-	// 3. Cross-over waypoint advance -- see USeinMovement::
-	//    AdvanceWaypointAlongPath. Uses dot-product crossover (robust
-	//    to overshoot at speed) plus a distance fallback.
+	// 4. Cross-over waypoint advance -- harness bookkeeping (the action's
+	//    notifications and stall band read the index) even while the steering
+	//    itself is segment-driven.
 	// -------------------------------------------------------------------
 	{
 		const FFixedPoint OneStep = MovementData.TopSpeed * DeltaTime;
@@ -156,89 +498,435 @@ bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 			? OneStep * FFixedPoint::Two : FFixedPoint::FromInt(50);
 		AdvanceWaypointAlongPath(CurrentWaypointIndex, Path, AgentPos, CloseRadius);
 	}
-
-	// -------------------------------------------------------------------
-	// 4. Carrot on the polyline. Speed-adaptive distance so the carrot
-	//    sits further ahead at speed for smoother corner arcs.
-	// -------------------------------------------------------------------
-	const FFixedPoint LookAheadFloor = (Wheeled.LookAheadDistance > FFixedPoint::Zero)
-		? Wheeled.LookAheadDistance : FFixedPoint::FromInt(100);
-	const FFixedPoint AbsCurrentSpeed = (CurrentSpeed < FFixedPoint::Zero)
-		? -CurrentSpeed : CurrentSpeed;
-	const FFixedPoint LookAhead = ComputeAdaptiveLookAhead(
-		LookAheadFloor, Wheeled.LookAheadTimeHorizon, AbsCurrentSpeed);
-	// `ResolveLookAheadPoint` does cluster-skip thinning internally; no
-	// per-call carrot-corner-weighting input is needed.
-	const FFixedVector LookAheadPoint = ResolveLookAheadPoint(
-		AgentPos, Path, CurrentWaypointIndex, LookAhead);
-
-	FFixedVector ToTarget = LookAheadPoint - AgentPos;
-	ToTarget.Z = FFixedPoint::Zero;
-
-	// Local avoidance — bend the carrot direction around nearby units in the FORWARD
-	// frame, BEFORE the auto-reverse yaw-flip below (step 5), so the dodge isn't
-	// inverted when backing up. Normalized in/out: only the carrot ANGLE is consumed
-	// downstream (Atan2), its magnitude is unused. Soft layer; the penetration floor
-	// still guarantees no overlap.
-	if (ToTarget.SizeSquared() > FFixedPoint::Epsilon)
+	if (CurrentWaypointIndex != LastProgressWaypointIndex)
 	{
-		ToTarget = ApplyAvoidanceSteer(Ctx, FFixedVector::GetSafeNormal(ToTarget));
+		LastProgressWaypointIndex = CurrentWaypointIndex;
+		YawAccumSinceProgress = FFixedPoint::Zero;
+	}
+
+	const FFixedPoint Cruise = EffectiveTopSpeed(Ctx);
+	const FFixedPoint RevTop = (MovementData.ReverseTopSpeed > FFixedPoint::Zero)
+		? MovementData.ReverseTopSpeed : MovementData.TopSpeed * FFixedPoint::Half;
+	const FFixedPoint SpeedYield = GetAvoidanceSpeedScale(Ctx);
+	const bool bRecovering = RecoveryTime > FFixedPoint::Zero && RecoveryDir != 0;
+
+	// Final-approach kinematic cap (v^2 = 2*a*d toward the acceptance-ring
+	// EDGE) + optional linear slowdown floor — shared by every steering mode.
+	// DistFinal is the far-sentinel when the goal is beyond the fixed-point
+	// square wrap: no braking (or near-goal logic) applies out there.
+	FFixedPoint MaxArrivalSpeed = FFixedPoint::FromInt(1000000);
+	FFixedPoint DistFinal = FFixedPoint::FromInt(100000);
+	{
+		FFixedVector ToFinal = FinalWp - AgentPos;
+		ToFinal.Z = FFixedPoint::Zero;
+		if (!IsPlanarFar(ToFinal))
+		{
+			DistFinal = ToFinal.Size();
+			const FFixedPoint Acceptance = Ctx.NavData ? Ctx.NavData->AcceptanceRadius : FFixedPoint::Zero;
+			const FFixedPoint BrakeDist = (DistFinal > Acceptance)
+				? (DistFinal - Acceptance)
+				: FFixedPoint::Zero;
+			MaxArrivalSpeed = KinematicArrivalSpeedCap(BrakeDist, Wheeled.Deceleration);
+			if (Wheeled.ArrivalSlowdownDistance > FFixedPoint::Zero && DistFinal < Wheeled.ArrivalSlowdownDistance)
+			{
+				const FFixedPoint LinearCap = MovementData.TopSpeed * (DistFinal / Wheeled.ArrivalSlowdownDistance);
+				if (LinearCap < MaxArrivalSpeed) MaxArrivalSpeed = LinearCap;
+			}
+		}
+	}
+
+	// -------------------------------------------------------------------
+	// 4.5 Stuck detection: sustained commanded-but-not-moving, measured
+	//     ENTRY-to-ENTRY across ticks so the PostTick collision resolver's
+	//     pushes are included — entity/crowd pins are caught, not only the
+	//     nav-floor wall pins an in-tick before/after compare would see.
+	//     Gated on bManeuverPlanning (the OFF setting stays a faithful legacy
+	//     A/B control) and suppressed near the goal, where the action's
+	//     crowd-stall settle owns the endgame.
+	// -------------------------------------------------------------------
+	const FFixedPoint NearGoalSuppress = CachedCollisionRadius + FFixedPoint::FromInt(150);
+	const bool bRecoveryAllowed = Wheeled.bManeuverPlanning && DistFinal > NearGoalSuppress;
+	if (bRecoveryAllowed && !bRecovering && bLastEntryPosValid)
+	{
+		FFixedVector EntryMoved = AgentPos - LastEntryPos;
+		EntryMoved.Z = FFixedPoint::Zero;
+		// Entry speed IS last tick's commanded speed (persisted velocity).
+		const FFixedPoint Expected = AbsCurrentSpeed * DeltaTime;
+		if (AbsCurrentSpeed > StuckSpeedMin && Expected > FFixedPoint::One
+			&& !IsPlanarFar(EntryMoved)
+			&& EntryMoved.Size() < Expected * FFixedPoint::Half * FFixedPoint::Half)
+		{
+			StuckTime += DeltaTime;
+			if (StuckTime >= StuckTriggerSeconds)
+			{
+				const bool bEffectiveCanReverse = Wheeled.bCanReverse || MovementData.bCanReverse;
+				const FFixedPoint ProbeDist = CachedCollisionRadius + FFixedPoint::FromInt(80);
+				const FFixedVector Behind(AgentPos.X - EntryForward.X * ProbeDist, AgentPos.Y - EntryForward.Y * ProbeDist, AgentPos.Z);
+				const FFixedVector Ahead(AgentPos.X + EntryForward.X * ProbeDist, AgentPos.Y + EntryForward.Y * ProbeDist, AgentPos.Z);
+				if (bEffectiveCanReverse && IsFootprintPassable(Behind, Nav)) { RecoveryDir = -1; RecoveryTime = RecoverySeconds; }
+				else if (IsFootprintPassable(Ahead, Nav))                     { RecoveryDir = +1; RecoveryTime = RecoverySeconds; }
+				StuckTime = FFixedPoint::Zero;
+			}
+		}
+		else
+		{
+			StuckTime = FFixedPoint::Zero;
+		}
+	}
+	LastEntryPos = AgentPos;
+	bLastEntryPosValid = true;
+
+	// -------------------------------------------------------------------
+	// 5. Steering + target speed, by mode.
+	// -------------------------------------------------------------------
+	FFixedPoint DesiredSteer = FFixedPoint::Zero;
+	FFixedPoint TargetSpeed = FFixedPoint::Zero;
+	// Legacy-mode assist inputs (stay zero in maneuver/recovery modes, which
+	// disables the helping hand — planned maneuvers are honest bicycle only).
+	FFixedPoint AbsYawErr = FFixedPoint::Zero;
+	FFixedPoint YawErrSigned = FFixedPoint::Zero;
+	bool bAllowAssist = false;
+	// Set by the legacy branch, which smooths the steer itself BEFORE its
+	// throttle scales read it (the original ordering); the shared smoothing
+	// step below then skips.
+	bool bSteerSmoothedInBranch = false;
+#if UE_ENABLE_DEBUG_DRAWING
+	FFixedVector DebugSteerTarget = AgentPos;
+	bool bDebugSteerTargetValid = false;
+#endif
+
+	if (bRecovering)
+	{
+		// Probe-gated straight nudge to break a wall/crowd pin; the normal
+		// repath then replans the maneuver from the freed pose.
+		RecoveryTime -= DeltaTime;
+		if (RecoveryTime <= FFixedPoint::Zero) { RecoveryDir = 0; }
+		const FFixedPoint Mag = MinFP2(RecoverySpeedCap, (RecoveryDir < 0) ? RevTop : Cruise);
+		TargetSpeed = (RecoveryDir < 0) ? -Mag : Mag;
+		bDriveReverse = RecoveryDir < 0;
+	}
+	else if (bManeuverMode)
+	{
+		const FSeinPathSegment& S = Path.Segments[SegCursor];
+
+		// Cusp gate: a direction flip engages only once the chassis has braked
+		// under the cusp epsilon. During the last stretch of the brake the
+		// wheels PRE-STEER toward the next leg's lock (a real driver cranks
+		// the wheel during the stop), so the flipped leg departs at lock
+		// instead of spending ~1/SteerResponse drifting wide from center.
+		if (S.bReverse != bDriveReverseLatch)
+		{
+			if (AbsCurrentSpeed > CuspFlipSpeed)
+			{
+				DesiredSteer = FFixedPoint::Zero;
+				if (AbsCurrentSpeed < CuspPreSteerSpeed
+					&& S.Type == ESeinPathSegmentType::Arc && S.Radius > FFixedPoint::Epsilon)
+				{
+					// The next leg's feed-forward lock (same formula the arc
+					// tracker uses below).
+					const FFixedPoint SweepSign = (S.SweepAngle >= FFixedPoint::Zero) ? FFixedPoint::One : -FFixedPoint::One;
+					const FFixedPoint DirSign = S.bReverse ? -SweepSign : SweepSign;
+					DesiredSteer = ClampFP(DirSign * SeinMath::Atan(Wheeled.Wheelbase / S.Radius),
+						-Wheeled.MaxSteerAngle, Wheeled.MaxSteerAngle);
+				}
+				TargetSpeed = FFixedPoint::Zero; // brake to the cusp
+			}
+			else
+			{
+				// Flip the latch and KEEP the pre-cranked steer — re-centering
+				// here would throw away the wheel angle just set up.
+				bDriveReverseLatch = S.bReverse;
+			}
+			bDriveReverse = bDriveReverseLatch;
+		}
+
+		if (S.bReverse == bDriveReverseLatch)
+		{
+			FFixedPoint SegSpeedMag;
+			FFixedPoint DistToSegEnd;
+			if (S.Type == ESeinPathSegmentType::Arc && S.Radius > FFixedPoint::Epsilon)
+			{
+				// Curvature feed-forward + heading/cross-track correction.
+				const FFixedPoint SweepSign = (S.SweepAngle >= FFixedPoint::Zero) ? FFixedPoint::One : -FFixedPoint::One;
+				FFixedVector FromC = AgentPos - S.Center;
+				FromC.Z = FFixedPoint::Zero;
+				const FFixedPoint Phi = SeinMath::Atan2(FromC.Y, FromC.X);
+				const FFixedPoint TangentYaw = Phi + SweepSign * FFixedPoint::Pi * FFixedPoint::Half;
+				const FFixedPoint DesiredYaw = S.bReverse ? TangentYaw + FFixedPoint::Pi : TangentYaw;
+				const FFixedPoint YawErr = ShortestAngleDelta(CurrentYaw, DesiredYaw);
+				const FFixedPoint RadialErr = FromC.Size() - S.Radius; // >0 = outside the arc
+				const FFixedPoint DirSign = S.bReverse ? -SweepSign : SweepSign;
+				const FFixedPoint FeedForward = DirSign * SeinMath::Atan(Wheeled.Wheelbase / S.Radius);
+				const FFixedPoint HeadTerm = (S.bReverse ? -FFixedPoint::One : FFixedPoint::One)
+					* ClampFP(YawErr, -SteerHeadingCorrCap, SteerHeadingCorrCap);
+				const FFixedPoint RadTerm = DirSign
+					* ClampFP(RadialErr / RadialGainDist, -SteerRadialCorrCap, SteerRadialCorrCap);
+				DesiredSteer = ClampFP(FeedForward + HeadTerm + RadTerm,
+					-Wheeled.MaxSteerAngle, Wheeled.MaxSteerAngle);
+
+				// Arc speed law: v <= TurnRate * R keeps the arc trackable under
+				// the yaw-rate clamp — wide (cruise-radius) arcs run full speed,
+				// tight (min-radius) arcs brake. This is the planned arc-braking.
+				SegSpeedMag = S.bReverse ? RevTop : Cruise;
+				if (MovementData.TurnRate > FFixedPoint::Epsilon)
+				{
+					SegSpeedMag = MinFP2(SegSpeedMag, MovementData.TurnRate * S.Radius);
+				}
+				DistToSegEnd = (AbsFP2(S.SweepAngle) - ArcProgress(S, AgentPos)) * S.Radius;
+#if UE_ENABLE_DEBUG_DRAWING
+				DebugSteerTarget = S.To;
+				bDebugSteerTargetValid = true;
+#endif
+			}
+			else
+			{
+				// Straight leg: pursue a carrot clamped to the segment line
+				// (reverse legs pursue it nose-away — reverse pure pursuit).
+				FFixedVector Dir = S.To - S.From;
+				Dir.Z = FFixedPoint::Zero;
+				const FFixedPoint Len = Dir.Size();
+				FFixedVector Carrot = S.To;
+				if (Len > FFixedPoint::Epsilon)
+				{
+					Dir = FFixedVector::GetSafeNormal(Dir);
+					FFixedVector FromStart = AgentPos - S.From;
+					FromStart.Z = FFixedPoint::Zero;
+					const FFixedPoint T = ClampFP(FromStart.X * Dir.X + FromStart.Y * Dir.Y, FFixedPoint::Zero, Len);
+					const FFixedPoint CarrotT = MinFP2(T + ManeuverLookAhead, Len);
+					Carrot = FFixedVector(S.From.X + Dir.X * CarrotT, S.From.Y + Dir.Y * CarrotT, S.From.Z);
+					DistToSegEnd = Len - T;
+				}
+				else
+				{
+					DistToSegEnd = FFixedPoint::Zero;
+				}
+				FFixedVector ToTarget = Carrot - AgentPos;
+				ToTarget.Z = FFixedPoint::Zero;
+				if (ToTarget.SizeSquared() > FFixedPoint::Epsilon)
+				{
+					const FFixedPoint DesiredYaw = S.bReverse
+						? SeinMath::Atan2(-ToTarget.Y, -ToTarget.X)
+						: SeinMath::Atan2(ToTarget.Y, ToTarget.X);
+					const FFixedPoint YawErr = ShortestAngleDelta(CurrentYaw, DesiredYaw);
+					FFixedPoint Steer = ClampFP(YawErr, -Wheeled.MaxSteerAngle, Wheeled.MaxSteerAngle);
+					if (S.bReverse) Steer = -Steer;
+					DesiredSteer = Steer;
+				}
+				SegSpeedMag = S.bReverse ? RevTop : Cruise;
+#if UE_ENABLE_DEBUG_DRAWING
+				DebugSteerTarget = Carrot;
+				bDebugSteerTargetValid = true;
+#endif
+			}
+
+			// Anticipatory braking into the next segment's entry speed: zero at
+			// a cusp, the arc speed law at an arc — v = sqrt(vNext^2 + 2*a*d).
+			if (SegCursor + 1 < TailStartSeg && SegCursor + 1 < SegNum)
+			{
+				const FSeinPathSegment& Next = Path.Segments[SegCursor + 1];
+				FFixedPoint NextEntry;
+				if (Next.bReverse != S.bReverse)
+				{
+					NextEntry = FFixedPoint::Zero;
+				}
+				else if (Next.Type == ESeinPathSegmentType::Arc && Next.Radius > FFixedPoint::Epsilon
+					&& MovementData.TurnRate > FFixedPoint::Epsilon)
+				{
+					NextEntry = MinFP2(Next.bReverse ? RevTop : Cruise, MovementData.TurnRate * Next.Radius);
+				}
+				else
+				{
+					NextEntry = Next.bReverse ? RevTop : Cruise;
+				}
+				if (NextEntry < SegSpeedMag && Wheeled.Deceleration > FFixedPoint::Zero)
+				{
+					const FFixedPoint CapSq = NextEntry * NextEntry
+						+ FFixedPoint::Two * Wheeled.Deceleration * MaxFP2(DistToSegEnd, FFixedPoint::Zero);
+					SegSpeedMag = MinFP2(SegSpeedMag, SeinMath::Sqrt(CapSq));
+				}
+			}
+
+			if (MaxArrivalSpeed < SegSpeedMag) SegSpeedMag = MaxArrivalSpeed;
+			// Maneuver legs yield to avoidance by BRAKING only — bending a
+			// planned arc/reverse leg would break its geometry; the collision
+			// floor + resolver remain the hard guarantees.
+			SegSpeedMag = SegSpeedMag * SpeedYield;
+			TargetSpeed = S.bReverse ? -SegSpeedMag : SegSpeedMag;
+			bDriveReverse = S.bReverse;
+		}
+
+		// Maneuver traffic-stall escape: a planned leg held near zero speed
+		// (avoidance yield against a parked neighbour, or anything else the
+		// stuck detector's commanded-speed gate can't see) for a sustained
+		// window abandons the head and falls back to carrot pursuit, whose
+		// avoidance steer-bend routes around traffic naturally. Cusp braking
+		// is intentional slowness and is excluded.
+		if (S.bReverse == bDriveReverseLatch && AbsCurrentSpeed < StuckSpeedMin)
+		{
+			ManeuverStallTime += DeltaTime;
+			// Per-entity deterministic jitter breaks abandon-tick symmetry
+			// between mutually-yielding vehicles (see the constant's comment).
+			const FFixedPoint StallJitter =
+				FFixedPoint::FromInt(Ctx.SelfHandle.Index % 8) / FFixedPoint::FromInt(10);
+			if (ManeuverStallTime >= ManeuverStallAbandonSeconds + StallJitter)
+			{
+				SegCursor = TailStartSeg;
+				ManeuverStallTime = FFixedPoint::Zero;
+			}
+		}
+		else
+		{
+			ManeuverStallTime = FFixedPoint::Zero;
+		}
+	}
+	else
+	{
+		// ---------------------------------------------------------------
+		// LEGACY / TAIL: speed-adaptive pure-pursuit carrot on the waypoint
+		// backbone — the pre-maneuver steering, kept intact for the all-
+		// forward tail and for bManeuverPlanning-off units. Additions over
+		// the historic code: the avoidance SpeedScale yield is consumed.
+		// ---------------------------------------------------------------
+		bAllowAssist = true;
+
+		const FFixedPoint LookAheadFloor = (Wheeled.LookAheadDistance > FFixedPoint::Zero)
+			? Wheeled.LookAheadDistance : FFixedPoint::FromInt(100);
+		const FFixedPoint LookAhead = ComputeAdaptiveLookAhead(
+			LookAheadFloor, Wheeled.LookAheadTimeHorizon, AbsCurrentSpeed);
+		const FFixedVector LookAheadPoint = ResolveLookAheadPoint(
+			AgentPos, Path, CurrentWaypointIndex, LookAhead);
+
+		FFixedVector ToTarget = LookAheadPoint - AgentPos;
+		ToTarget.Z = FFixedPoint::Zero;
+
+		// Local avoidance — bend the carrot direction in the FORWARD frame,
+		// BEFORE the auto-reverse yaw-flip, so the dodge isn't inverted when
+		// backing up. Soft layer; the penetration floor still guarantees no
+		// overlap.
+		if (ToTarget.SizeSquared() > FFixedPoint::Epsilon)
+		{
+			ToTarget = ApplyAvoidanceSteer(Ctx, FFixedVector::GetSafeNormal(ToTarget));
+		}
+#if UE_ENABLE_DEBUG_DRAWING
+		DebugSteerTarget = LookAheadPoint;
+		bDebugSteerTargetValid = true;
+#endif
+
+		// Pure path-pull steer -- yaw error toward the carrot. bDriveReverse
+		// flips desired yaw to "back faces goal" and inverts the steer for
+		// bicycle reverse kinematics.
+		if (ToTarget.SizeSquared() > FFixedPoint::Epsilon)
+		{
+			const FFixedPoint DesiredYaw = bDriveReverse
+				? SeinMath::Atan2(-ToTarget.Y, -ToTarget.X)
+				: SeinMath::Atan2(ToTarget.Y, ToTarget.X);
+			const FFixedPoint YawErr = ShortestAngleDelta(CurrentYaw, DesiredYaw);
+			YawErrSigned = YawErr;
+			AbsYawErr = AbsFP2(YawErr);
+			FFixedPoint PathPullSteer = ClampFP(YawErr, -Wheeled.MaxSteerAngle, Wheeled.MaxSteerAngle);
+			if (bDriveReverse) PathPullSteer = -PathPullSteer;
+			DesiredSteer = PathPullSteer;
+		}
+
+		// PARITY: smooth CurrentSteer toward DesiredSteer BEFORE the throttle
+		// scales read it — the original tick order (smooth, then TurnScale on
+		// the same-tick smoothed steer). The shared smoothing step later skips.
+		{
+			FFixedPoint Alpha = Wheeled.SteerResponse * DeltaTime;
+			if (Alpha < FFixedPoint::Zero) Alpha = FFixedPoint::Zero;
+			if (Alpha > FFixedPoint::One)  Alpha = FFixedPoint::One;
+			CurrentSteer = CurrentSteer + (DesiredSteer - CurrentSteer) * Alpha;
+		}
+		bSteerSmoothedInBranch = true;
+
+		// Throttle scaling -- quadratic falloff with |steer| / MaxSteer.
+		FFixedPoint TurnScale = FFixedPoint::One;
+		if (Wheeled.TurnSpeedFloor < FFixedPoint::One && Wheeled.MaxSteerAngle > FFixedPoint::Epsilon)
+		{
+			const FFixedPoint AbsSteer = AbsFP2(CurrentSteer);
+			FFixedPoint T = AbsSteer / Wheeled.MaxSteerAngle;
+			if (T > FFixedPoint::One) T = FFixedPoint::One;
+			const FFixedPoint TSq = T * T;
+			TurnScale = FFixedPoint::One - (FFixedPoint::One - Wheeled.TurnSpeedFloor) * TSq;
+		}
+
+		// Sharp-turn brake — reacts to the COMMANDED turn (raw |YawErr|)
+		// immediately, while TurnSpeedFloor lags on the smoothed steer.
+		FFixedPoint SharpTurnScale = FFixedPoint::One;
+		if (Wheeled.SharpTurnBrakeStrength > FFixedPoint::Zero
+			&& Wheeled.SharpTurnBrakeAngle < FFixedPoint::Pi
+			&& AbsYawErr > Wheeled.SharpTurnBrakeAngle)
+		{
+			const FFixedPoint SharpRange = FFixedPoint::Pi - Wheeled.SharpTurnBrakeAngle;
+			if (SharpRange > FFixedPoint::Epsilon)
+			{
+				FFixedPoint AngleT = (AbsYawErr - Wheeled.SharpTurnBrakeAngle) / SharpRange;
+				if (AngleT > FFixedPoint::One) AngleT = FFixedPoint::One;
+				FFixedPoint SpeedT = FFixedPoint::One;
+				if (MovementData.TopSpeed > FFixedPoint::Epsilon)
+				{
+					SpeedT = AbsCurrentSpeed / MovementData.TopSpeed;
+					if (SpeedT > FFixedPoint::One)  SpeedT = FFixedPoint::One;
+					if (SpeedT < FFixedPoint::Zero) SpeedT = FFixedPoint::Zero;
+				}
+				const FFixedPoint Reduction = Wheeled.SharpTurnBrakeStrength * AngleT * SpeedT;
+				SharpTurnScale = FFixedPoint::One - Reduction;
+				if (SharpTurnScale < FFixedPoint::Zero) SharpTurnScale = FFixedPoint::Zero;
+			}
+		}
+
+		// Low-speed reorient hold (helping-hand companion): pivot-then-go for
+		// from-rest u-turns when nearly stopped AND badly misaligned.
+		FFixedPoint ReorientScale = FFixedPoint::One;
+		if (Wheeled.LowSpeedTurnRate > FFixedPoint::Zero
+			&& Wheeled.TurnAssistFadeSpeed > FFixedPoint::Epsilon)
+		{
+			const FFixedPoint HoldSpeed = Wheeled.TurnAssistFadeSpeed * FFixedPoint::Half;
+			const FFixedPoint HalfPi    = FFixedPoint::Pi * FFixedPoint::Half;
+			if (AbsCurrentSpeed < HoldSpeed && AbsYawErr > HalfPi && HoldSpeed > FFixedPoint::Epsilon)
+			{
+				FFixedPoint MisalignT = (AbsYawErr - HalfPi) / HalfPi;
+				if (MisalignT > FFixedPoint::One) MisalignT = FFixedPoint::One;
+				FFixedPoint StoppedT = FFixedPoint::One - (AbsCurrentSpeed / HoldSpeed);
+				if (StoppedT < FFixedPoint::Zero) StoppedT = FFixedPoint::Zero;
+				if (StoppedT > FFixedPoint::One)  StoppedT = FFixedPoint::One;
+				ReorientScale = FFixedPoint::One - MisalignT * StoppedT;
+				if (ReorientScale < FFixedPoint::Zero) ReorientScale = FFixedPoint::Zero;
+			}
+		}
+
+		FFixedPoint TargetSpeedMag = bDriveReverse ? RevTop : Cruise;
+		TargetSpeedMag = TargetSpeedMag * TurnScale * SharpTurnScale * ReorientScale;
+		// Avoidance speed-yield — give way by braking, not only turning.
+		TargetSpeedMag = TargetSpeedMag * SpeedYield;
+		if (MaxArrivalSpeed < TargetSpeedMag) TargetSpeedMag = MaxArrivalSpeed;
+		TargetSpeed = bDriveReverse ? -TargetSpeedMag : TargetSpeedMag;
 	}
 
 #if UE_ENABLE_DEBUG_DRAWING
-	// Carrot debug viz. Gated on Sein.Nav.Show.SteeringVectors. Green dot =
-	// carrot point, green line = agent -> carrot.
-	if (UWorld* DebugWorld = Ctx.World ? Ctx.World->GetWorld() : nullptr)
+	// Steering-target viz. Gated on Sein.Nav.Show.SteeringVectors. Green dot =
+	// the active steering target (carrot / arc endpoint), green line = agent → target.
+	if (bDebugSteerTargetValid)
 	{
-		if (UE::SeinARTSMovement::IsSteeringShowFlagOnForWorld(DebugWorld))
+		if (UWorld* DebugWorld = Ctx.World ? Ctx.World->GetWorld() : nullptr)
 		{
-			const float DrawLifetime = static_cast<float>(Ctx.DeltaTime.ToFloat()) + 0.01f;
-			const FVector Origin(AgentPos.X.ToFloat(), AgentPos.Y.ToFloat(), AgentPos.Z.ToFloat() + 50.0f);
-			// Use the carrot's interpolated Z (from ResolveLookAheadPoint) rather
-			// than forcing AgentPos.Z — on slopes the carrot sits along the path's
-			// elevation profile, so the debug dot + steering line follow the path's
-			// pitch instead of a flat Z plane at the chassis.
-			const FVector CarrotPos(LookAheadPoint.X.ToFloat(), LookAheadPoint.Y.ToFloat(), LookAheadPoint.Z.ToFloat() + 50.0f);
-			DrawDebugPoint(DebugWorld, CarrotPos, 8.0f, FColor::Green, false, DrawLifetime);
-			DrawDebugLine(DebugWorld, Origin, CarrotPos, FColor::Green, false, DrawLifetime, 0, 2.0f);
+			if (UE::SeinARTSMovement::IsSteeringShowFlagOnForWorld(DebugWorld))
+			{
+				const float DrawLifetime = static_cast<float>(Ctx.DeltaTime.ToFloat()) + 0.01f;
+				const FVector Origin(AgentPos.X.ToFloat(), AgentPos.Y.ToFloat(), AgentPos.Z.ToFloat() + 50.0f);
+				const FVector TargetPos(DebugSteerTarget.X.ToFloat(), DebugSteerTarget.Y.ToFloat(), DebugSteerTarget.Z.ToFloat() + 50.0f);
+				DrawDebugPoint(DebugWorld, TargetPos, 8.0f, FColor::Green, false, DrawLifetime);
+				DrawDebugLine(DebugWorld, Origin, TargetPos, FColor::Green, false, DrawLifetime, 0, 2.0f);
+			}
 		}
 	}
 #endif
 
 	// -------------------------------------------------------------------
-	// 5. Pure path-pull steer -- yaw error toward the carrot.
-	//
-	//    bYawTargetFlipped (auto-reverse) flips the desired yaw to
-	//    back-faces-goal. bDriveReverse inverts the final steer for
-	//    bicycle reverse kinematics (a steered front wheel arcs the
-	//    rear opposite to the forward case when the chassis is moving
-	//    backward).
+	// 6. Smooth CurrentSteer toward DesiredSteer (exponential approach) —
+	//    unless the legacy branch already did (parity ordering).
 	// -------------------------------------------------------------------
-	FFixedPoint DesiredSteer = FFixedPoint::Zero;
-	// Hoisted out of the `if` block so the sharp-turn brake (step 8.5)
-	// can read it. Zero when ToTarget is null — no brake fires.
-	FFixedPoint AbsYawErr = FFixedPoint::Zero;
-	// Signed rotation needed to face the drive-appropriate heading (toward the carrot,
-	// or away from it when reversing). Hoisted for the low-speed turn assist (the
-	// helping-hand) in step 7.
-	FFixedPoint YawErrSigned = FFixedPoint::Zero;
-	const FFixedPoint CurrentYaw = YawFromRotation(Entity.Transform.Rotation);
-	if (ToTarget.SizeSquared() > FFixedPoint::Epsilon)
-	{
-		const FFixedPoint DesiredYaw = bYawTargetFlipped
-			? SeinMath::Atan2(-ToTarget.Y, -ToTarget.X)
-			: SeinMath::Atan2(ToTarget.Y, ToTarget.X);
-		const FFixedPoint YawErr = ShortestAngleDelta(CurrentYaw, DesiredYaw);
-		YawErrSigned = YawErr;
-		AbsYawErr = (YawErr < FFixedPoint::Zero) ? -YawErr : YawErr;
-		FFixedPoint PathPullSteer = ClampFP(YawErr, -Wheeled.MaxSteerAngle, Wheeled.MaxSteerAngle);
-		if (bDriveReverse) PathPullSteer = -PathPullSteer;
-		DesiredSteer = PathPullSteer;
-	}
-
-	// -------------------------------------------------------------------
-	// 6. Smooth CurrentSteer toward DesiredSteer (exponential approach).
-	// -------------------------------------------------------------------
+	if (!bSteerSmoothedInBranch)
 	{
 		FFixedPoint Alpha = Wheeled.SteerResponse * DeltaTime;
 		if (Alpha < FFixedPoint::Zero) Alpha = FFixedPoint::Zero;
@@ -247,12 +935,10 @@ bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 	}
 
 	// -------------------------------------------------------------------
-	// 7. Yaw rate: the honest bicycle (w = v/L · tan δ — speed-dependent, so a
-	//    stationary chassis can't pivot) PLUS the "helping hand": a
-	//    low-speed turn assist that lets a stopped/slow vehicle rotate toward
-	//    its goal anyway (tight u-turns from rest, responsiveness, escape
-	//    hatch when boxed in). The assist fades to zero by TurnAssistFadeSpeed,
-	//    so cruising turns remain the unchanged honest bicycle.
+	// 7. Yaw rate: the honest bicycle (w = v/L · tan δ) PLUS — legacy/tail
+	//    mode only — the low-speed "helping hand" turn assist. Planned
+	//    maneuvers are honest bicycle only: the plan itself provides the
+	//    tight-turn capability (arcs, cusps), so assisting would fight it.
 	// -------------------------------------------------------------------
 	FFixedPoint YawStep = FFixedPoint::Zero;
 	if (Wheeled.Wheelbase > FFixedPoint::One)
@@ -263,22 +949,15 @@ bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 		const FFixedPoint ClampedRate = ClampFP(YawRate, -MaxRate, MaxRate);
 		YawStep = ClampedRate * DeltaTime;
 	}
-	// Helping-hand. Active only below TurnAssistFadeSpeed AND for sharp turns (the
-	// angle gate below) — outside either, the `Fade > 0` guard skips the whole block,
-	// leaving cruising AND moderate-angle turns to the honest bicycle so they ARC.
-	// Within the band it provides a FLOOR on how far the chassis may rotate toward its
-	// desired heading this tick, then guards against overshooting it (no oscillation).
-	if (Wheeled.LowSpeedTurnRate > FFixedPoint::Zero
+	if (bAllowAssist
+		&& Wheeled.LowSpeedTurnRate > FFixedPoint::Zero
 		&& Wheeled.TurnAssistFadeSpeed > FFixedPoint::Epsilon)
 	{
 		FFixedPoint Fade = FFixedPoint::One - (AbsCurrentSpeed / Wheeled.TurnAssistFadeSpeed);
 		if (Fade < FFixedPoint::Zero) Fade = FFixedPoint::Zero;
 		if (Fade > FFixedPoint::One)  Fade = FFixedPoint::One;
-		// Angle gate: assist only SHARP turns. Ramp 0 at 90 deg of heading error -> 1
-		// at 180 deg, so a moderate turn (<= 90 deg) gets NO assist and the chassis
-		// ARCS from rest like a car instead of pivoting to face the goal then driving
-		// straight. Only u-turn-ish headings pivot tight (the assist's real job) — this
-		// is what stopped the first/from-stop order from looking like a face-and-go.
+		// Angle gate: assist only SHARP (u-turn-ish) headings — moderate turns
+		// arc honestly from rest instead of pivoting.
 		{
 			const FFixedPoint HalfPiGate = FFixedPoint::Pi * FFixedPoint::Half;
 			FFixedPoint AngleScale = (AbsYawErr - HalfPiGate) / HalfPiGate;
@@ -290,8 +969,6 @@ bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 		{
 			const FFixedPoint AssistMaxStep = Wheeled.LowSpeedTurnRate * Fade * DeltaTime;
 			const FFixedPoint AssistStep = ClampFP(YawErrSigned, -AssistMaxStep, AssistMaxStep);
-			// Take whichever step rotates further toward the desired heading (both
-			// share YawErrSigned's sign), then clamp so we never overshoot it.
 			if (YawErrSigned >= FFixedPoint::Zero)
 			{
 				if (AssistStep > YawStep)   YawStep = AssistStep;
@@ -305,171 +982,45 @@ bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 		}
 	}
 	const FFixedPoint NewYaw = CurrentYaw + YawStep;
-	// Pitch is applied after ground snap (step 12) — use a placeholder here,
-	// overwritten below once NewPos is resolved.
+	YawAccumSinceProgress += AbsFP2(YawStep);
 
-	// Steering diagnostic -- log every tick at Verbose.
 	UE_LOG(LogSeinWheeled, Verbose,
-		TEXT("Wheeled: pos=(%.1f,%.1f) yaw=%.3f currSteer=%.3f desiredSteer=%.3f speed=%.1f"),
+		TEXT("Wheeled: pos=(%.1f,%.1f) yaw=%.3f currSteer=%.3f desiredSteer=%.3f speed=%.1f mode=%s seg=%d/%d rev=%d"),
 		AgentPos.X.ToFloat(), AgentPos.Y.ToFloat(),
 		CurrentYaw.ToFloat(), CurrentSteer.ToFloat(), DesiredSteer.ToFloat(),
-		CurrentSpeed.ToFloat());
-
-	// -------------------------------------------------------------------
-	// 8. Throttle scaling -- quadratic falloff with |steer| / MaxSteer.
-	//    At full steer, throttle = TurnSpeedFloor; at zero steer, full
-	//    throttle.
-	// -------------------------------------------------------------------
-	FFixedPoint TurnScale = FFixedPoint::One;
-	if (Wheeled.TurnSpeedFloor < FFixedPoint::One && Wheeled.MaxSteerAngle > FFixedPoint::Epsilon)
-	{
-		const FFixedPoint AbsSteer = (CurrentSteer < FFixedPoint::Zero) ? -CurrentSteer : CurrentSteer;
-		FFixedPoint T = AbsSteer / Wheeled.MaxSteerAngle;
-		if (T > FFixedPoint::One) T = FFixedPoint::One;
-		const FFixedPoint TSq = T * T;
-		TurnScale = FFixedPoint::One - (FFixedPoint::One - Wheeled.TurnSpeedFloor) * TSq;
-	}
-
-	// -------------------------------------------------------------------
-	// 8.5. Sharp-turn brake — react to the COMMANDED turn (raw |YawErr|)
-	//      rather than the smoothed CurrentSteer. The TurnSpeedFloor brake
-	//      (step 8) lags by ~SteerResponse time constant; in that window a
-	//      vehicle commanded to turn 180° at full speed keeps accelerating
-	//      until the smoothed steer catches up, undershooting the path arc.
-	//      This brake engages immediately on a sharp commanded turn so the
-	//      chassis decelerates while the steer is settling.
-	//
-	//      Scales linearly with both yaw-error magnitude (above the
-	//      threshold angle) and current-speed / TopSpeed — slow vehicles
-	//      pivot slowly anyway via bicycle kinematics (yaw rate = v/L * tan(steer)),
-	//      no need to brake further. At low speed the velocity factor pulls
-	//      the brake toward 1.0 regardless of how sharp the turn is.
-	// -------------------------------------------------------------------
-	FFixedPoint SharpTurnScale = FFixedPoint::One;
-	if (Wheeled.SharpTurnBrakeStrength > FFixedPoint::Zero
-		&& Wheeled.SharpTurnBrakeAngle < FFixedPoint::Pi
-		&& AbsYawErr > Wheeled.SharpTurnBrakeAngle)
-	{
-		const FFixedPoint SharpRange = FFixedPoint::Pi - Wheeled.SharpTurnBrakeAngle;
-		if (SharpRange > FFixedPoint::Epsilon)
-		{
-			// Angle factor: 0 just above threshold → 1 at π (180° turn).
-			FFixedPoint AngleT = (AbsYawErr - Wheeled.SharpTurnBrakeAngle) / SharpRange;
-			if (AngleT > FFixedPoint::One) AngleT = FFixedPoint::One;
-
-			// Velocity factor: 0 at rest → 1 at TopSpeed. Suppresses the
-			// brake at low speed where it'd just slow normal start-up.
-			FFixedPoint SpeedT = FFixedPoint::One;
-			if (MovementData.TopSpeed > FFixedPoint::Epsilon)
-			{
-				const FFixedPoint AbsCurr = (CurrentSpeed < FFixedPoint::Zero) ? -CurrentSpeed : CurrentSpeed;
-				SpeedT = AbsCurr / MovementData.TopSpeed;
-				if (SpeedT > FFixedPoint::One)  SpeedT = FFixedPoint::One;
-				if (SpeedT < FFixedPoint::Zero) SpeedT = FFixedPoint::Zero;
-			}
-
-			// New semantics: SharpTurnBrakeStrength is 0..1 where 0 = no brake
-			// and 1 = full stop at max sharp turn at TopSpeed. Reduction is
-			// linear in all three factors: Strength × AngleT × SpeedT.
-			const FFixedPoint Reduction = Wheeled.SharpTurnBrakeStrength * AngleT * SpeedT;
-			SharpTurnScale = FFixedPoint::One - Reduction;
-			if (SharpTurnScale < FFixedPoint::Zero) SharpTurnScale = FFixedPoint::Zero;
-		}
-	}
-
-	// -------------------------------------------------------------------
-	// 8.6. Low-speed reorient hold (helping-hand companion). When nearly
-	//      stopped AND badly misaligned, ease throttle down so the helping-hand
-	//      (step 7) can rotate the chassis toward its goal BEFORE it drives off
-	//      — a "pivot then go" that keeps from-rest u-turns tight instead of
-	//      looping wide. Engages ONLY when both nearly stopped and > 90° off,
-	//      so normal low-speed driving and any at-speed turn are untouched.
-	//      Gated on the helping-hand being active — without an assist to rotate
-	//      the held chassis it would strand the unit.
-	// -------------------------------------------------------------------
-	FFixedPoint ReorientScale = FFixedPoint::One;
-	if (Wheeled.LowSpeedTurnRate > FFixedPoint::Zero
-		&& Wheeled.TurnAssistFadeSpeed > FFixedPoint::Epsilon)
-	{
-		const FFixedPoint HoldSpeed = Wheeled.TurnAssistFadeSpeed * FFixedPoint::Half;
-		const FFixedPoint HalfPi    = FFixedPoint::Pi * FFixedPoint::Half;
-		if (AbsCurrentSpeed < HoldSpeed && AbsYawErr > HalfPi && HoldSpeed > FFixedPoint::Epsilon)
-		{
-			// Misalign factor: 0 at 90° -> 1 at 180°.
-			FFixedPoint MisalignT = (AbsYawErr - HalfPi) / HalfPi;
-			if (MisalignT > FFixedPoint::One) MisalignT = FFixedPoint::One;
-			// Stopped factor: 1 at rest -> 0 at HoldSpeed (releases as speed builds).
-			FFixedPoint StoppedT = FFixedPoint::One - (AbsCurrentSpeed / HoldSpeed);
-			if (StoppedT < FFixedPoint::Zero) StoppedT = FFixedPoint::Zero;
-			if (StoppedT > FFixedPoint::One)  StoppedT = FFixedPoint::One;
-			ReorientScale = FFixedPoint::One - MisalignT * StoppedT;
-			if (ReorientScale < FFixedPoint::Zero) ReorientScale = FFixedPoint::Zero;
-		}
-	}
-
-	// -------------------------------------------------------------------
-	// 9. Kinematic arrival cap (v^2 = 2*a*d) + optional linear floor
-	//    inside ArrivalSlowdownDistance.
-	//
-	// The cap aims to bring the chassis to zero speed at the EDGE of the
-	// acceptance ring, not at the goal point itself. Without this offset,
-	// the arrival check (step 2) hard-zeros velocity the moment the
-	// chassis crosses into AcceptanceRadius.
-	// -------------------------------------------------------------------
-	FFixedPoint MaxArrivalSpeed;
-	{
-		FFixedVector ToFinal = FinalWp - AgentPos;
-		ToFinal.Z = FFixedPoint::Zero;
-		const FFixedPoint DistFinal = ToFinal.Size();
-		// AcceptanceRadius moved to FSeinNavigationComponent in the Phase-5
-		// decomposition — read it from NavData, falling back to zero (no
-		// safety brake offset) when NavData is null.
-		const FFixedPoint Acceptance = Ctx.NavData ? Ctx.NavData->AcceptanceRadius : FFixedPoint::Zero;
-		const FFixedPoint BrakeDist = (DistFinal > Acceptance)
-			? (DistFinal - Acceptance)
-			: FFixedPoint::Zero;
-		MaxArrivalSpeed = KinematicArrivalSpeedCap(BrakeDist, Wheeled.Deceleration);
-		if (Wheeled.ArrivalSlowdownDistance > FFixedPoint::Zero && DistFinal < Wheeled.ArrivalSlowdownDistance)
-		{
-			const FFixedPoint LinearCap = MovementData.TopSpeed * (DistFinal / Wheeled.ArrivalSlowdownDistance);
-			if (LinearCap < MaxArrivalSpeed) MaxArrivalSpeed = LinearCap;
-		}
-	}
-
-	// -------------------------------------------------------------------
-	// 10. Target speed magnitude -- forward uses MoveSpeed, reverse uses
-	//     ReverseMaxSpeed (or MoveSpeed/2 fallback). Apply throttle scale
-	//     + arrival cap, then sign-restore for reverse.
-	// -------------------------------------------------------------------
-	FFixedPoint TargetSpeedMag = bDriveReverse
-		? ((MovementData.ReverseTopSpeed > FFixedPoint::Zero) ? MovementData.ReverseTopSpeed : MovementData.TopSpeed * FFixedPoint::Half)
-		: EffectiveTopSpeed(Ctx);   // forward cruise terrain-scaled (reverse keeps ReverseTopSpeed)
-	// Compose the throttle brakes — TurnSpeedFloor (smoothed-steer-based),
-	// SharpTurnScale (commanded-yaw-based), and ReorientScale (the from-rest
-	// "pivot then go" hold). They fire for related-but-distinct reasons;
-	// multiplying lets the most aggressive dominate while keeping each one's
-	// behavior unchanged when the others don't fire.
-	TargetSpeedMag = TargetSpeedMag * TurnScale * SharpTurnScale * ReorientScale;
-	if (MaxArrivalSpeed < TargetSpeedMag) TargetSpeedMag = MaxArrivalSpeed;
-	const FFixedPoint TargetSpeed = bDriveReverse ? -TargetSpeedMag : TargetSpeedMag;
-
-	UE_LOG(LogSeinWheeled, Verbose,
-		TEXT("WheeledBrake: baseSpeed=%.1f targetMag=%.1f currSpeed=%.1f reverse=%d turnScale=%.3f sharpScale=%.3f absYawErr=%.3f arrivalCap=%.1f"),
-		MovementData.TopSpeed.ToFloat(),
-		TargetSpeedMag.ToFloat(),
 		CurrentSpeed.ToFloat(),
-		bDriveReverse ? 1 : 0,
-		TurnScale.ToFloat(),
-		SharpTurnScale.ToFloat(),
-		AbsYawErr.ToFloat(),
-		MaxArrivalSpeed.ToFloat());
+		bRecovering ? TEXT("recover") : (bManeuverMode ? TEXT("maneuver") : TEXT("pursuit")),
+		SegCursor, TailStartSeg, bDriveReverse ? 1 : 0);
 
+	// -------------------------------------------------------------------
+	// 8. Orbit backstop — a chassis that has swept >2.5*pi of yaw without any
+	//    waypoint/segment progress is circling something; break the loop with
+	//    the recovery nudge (the next repath replans the maneuver).
+	//    Gated on bManeuverPlanning so the OFF setting is a faithful legacy
+	//    A/B control (the recovery machinery did not exist pre-maneuver), and
+	//    suppressed near the goal where the action's crowd-stall settle owns
+	//    the endgame (a recovery nudge there completes the order mid-nudge
+	//    with backward residual velocity).
+	// -------------------------------------------------------------------
+	if (bRecoveryAllowed && !bRecovering && YawAccumSinceProgress > OrbitYawLimit)
+	{
+		const bool bEffectiveCanReverse = Wheeled.bCanReverse || MovementData.bCanReverse;
+		const FFixedVector Fwd(SeinMath::Cos(CurrentYaw), SeinMath::Sin(CurrentYaw), FFixedPoint::Zero);
+		const FFixedPoint ProbeDist = CachedCollisionRadius + FFixedPoint::FromInt(80);
+		const FFixedVector Behind(AgentPos.X - Fwd.X * ProbeDist, AgentPos.Y - Fwd.Y * ProbeDist, AgentPos.Z);
+		const FFixedVector Ahead(AgentPos.X + Fwd.X * ProbeDist, AgentPos.Y + Fwd.Y * ProbeDist, AgentPos.Z);
+		if (bEffectiveCanReverse && IsFootprintPassable(Behind, Nav))      { RecoveryDir = -1; RecoveryTime = RecoverySeconds; }
+		else if (IsFootprintPassable(Ahead, Nav))                          { RecoveryDir = +1; RecoveryTime = RecoverySeconds; }
+		YawAccumSinceProgress = FFixedPoint::Zero;
+		StuckTime = FFixedPoint::Zero;
+	}
+
+	// -------------------------------------------------------------------
+	// 9. Speed integration + translate along the post-rotation forward.
+	// -------------------------------------------------------------------
 	CurrentSpeed = StepSpeedToward(CurrentSpeed, TargetSpeed,
 		Wheeled.Acceleration, Wheeled.Deceleration, DeltaTime);
 
-	// -------------------------------------------------------------------
-	// 11. Translate along the post-rotation forward.
-	// -------------------------------------------------------------------
 	const FFixedPoint CosY = SeinMath::Cos(NewYaw);
 	const FFixedPoint SinY = SeinMath::Sin(NewYaw);
 	const FFixedPoint StepLen = CurrentSpeed * DeltaTime;
@@ -478,9 +1029,11 @@ bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 	NewPos.Y = NewPos.Y + SinY * StepLen;
 
 	// -------------------------------------------------------------------
-	// 12. Footprint-aware nav collision floor + ground snap.
+	// 10. Footprint-aware nav collision floor (honoring an authoritative
+	//     cover-slot destination, matching the harness) + ground snap.
 	// -------------------------------------------------------------------
-	NewPos = ResolveNavCollision(AgentPos, NewPos, Nav);
+	NewPos = ResolveNavCollision(AgentPos, NewPos, Nav,
+		Ctx.bAuthoritativeDestination ? &FinalWp : nullptr);
 	ApplyGroundSnapAndAltitude(NewPos, Ctx.MovementData, Nav, DeltaTime);
 
 	{
@@ -495,6 +1048,9 @@ bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 	Entity.Transform.SetLocation(NewPos);
 	// Persist velocity along post-rotation forward; bicycle physics couples
 	// velocity direction to facing for non-strafing wheeled vehicles.
+	// COMMANDED (not post-collision) by design — this keeps vehicles outside
+	// the action's hold-escape ladder (whose straight escape legs a min-turn
+	// chassis can't drive); the mode's own stuck recovery below fills that role.
 	MovementData.Velocity = FFixedVector(CosY * CurrentSpeed, SinY * CurrentSpeed, FFixedPoint::Zero);
 
 	return false;

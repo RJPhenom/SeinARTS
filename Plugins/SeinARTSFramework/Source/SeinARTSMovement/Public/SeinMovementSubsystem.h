@@ -4,8 +4,8 @@
  * @brief   World subsystem hook for the movement module's sim systems AND the
  *          persistent per-unit movement-instance registry (CP2.1, D-R2).
  *
- *          Registers with the USeinWorldSubsystem tick loop on world begin-play
- *          (mirroring USeinSquadSubsystem's lifecycle):
+ *          Registers its systems during subsystem Initialize so execution
+ *          topology can freeze before match launch:
  *            - FSeinAvoidanceSystem — local unit-unit avoidance steering (PreTick).
  *            - FSeinMovementDriverSystem — the always-on per-unit driver
  *              (AbilityExecution, after the order ticks). Its first-contact
@@ -34,6 +34,7 @@ class FSeinNavContainmentSystem;
 class USeinAvoidance;
 class USeinMovement;
 class USeinWorldSubsystem;
+struct FSeinMovementCanonicalStateProvider;
 struct FSeinMovementComponent;
 
 UCLASS()
@@ -42,6 +43,7 @@ class SEINARTSMOVEMENT_API USeinMovementSubsystem : public UWorldSubsystem
 	GENERATED_BODY()
 
 public:
+	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void OnWorldBeginPlay(UWorld& InWorld) override;
 	virtual void Deinitialize() override;
 
@@ -71,15 +73,47 @@ public:
 	 *  iteration order are inert to lockstep. */
 	void SweepStaleMovementInstances(USeinWorldSubsystem& World);
 
+	/** Exact current instance, or null. Never creates or resolves a fallback. */
+	USeinMovement* FindMovementInstance(FSeinEntityHandle Handle) const
+	{
+		return MovementInstanceMap.FindRef(Handle);
+	}
+
+	USeinAvoidance* GetAvoidanceInstance() const
+	{
+		return AvoidanceInstance;
+	}
+
+	int32 GetMovementInstanceCount() const
+	{
+		return MovementInstanceMap.Num();
+	}
+
+	/**
+	 * Tear down every system and UObject reference whose executable behavior
+	 * lives in this module. Called from both PreUnloadCallback and Deinitialize;
+	 * safe to call repeatedly.
+	 */
+	void ReleaseModuleOwnedStateForModuleUnload();
+
+	/**
+	 * Extension PreUnload seam. Terminally releases Core sim state, including
+	 * reflected native payloads, then drops movement/avoidance instances whose
+	 * native class hierarchy touches OwnerModuleId before its vtables disappear.
+	 */
+	void ReleaseNativeClassStateForModuleUnload(FName OwnerModuleId);
+
 private:
+	friend struct FSeinMovementCanonicalStateProvider;
+
 	/** Local unit-unit avoidance steering system (PreTick). A thin delegator owned
-	 *  here; registered with the sim loop on world begin-play, unregistered + deleted
+	 *  here; registered with the sim loop during initialization, unregistered + deleted
 	 *  on teardown. Delegates to AvoidanceInstance. */
 	FSeinAvoidanceSystem* AvoidanceSystem = nullptr;
 
 	/** The active pluggable avoidance impl (USeinARTSCoreSettings::AvoidanceClass →
 	 *  default USeinAvoidanceDefault). GC-rooted by this UPROPERTY; AvoidanceSystem
-	 *  holds a raw pointer to it. Created once in OnWorldBeginPlay. */
+	 *  holds a raw pointer to it. Created once in Initialize. */
 	UPROPERTY(Transient)
 	TObjectPtr<USeinAvoidance> AvoidanceInstance;
 

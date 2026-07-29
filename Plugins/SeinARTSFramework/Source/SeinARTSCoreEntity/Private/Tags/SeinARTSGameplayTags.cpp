@@ -35,12 +35,10 @@ namespace SeinARTSTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Type_BrokerOrder,       "SeinARTS.Command.Type.BrokerOrder",       "Multi-unit dispatch routed through a CommandBroker (DESIGN §5)");
 
 	// Match flow (DESIGN §18).
-	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Type_StartMatch,          "SeinARTS.Command.Type.StartMatch",          "Transition Lobby → Starting");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Type_PauseMatchRequest,   "SeinARTS.Command.Type.PauseMatchRequest",   "Request a sim pause (may be a vote trigger)");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Type_ResumeMatchRequest,  "SeinARTS.Command.Type.ResumeMatchRequest",  "Request resume after pause");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Type_EndMatch,            "SeinARTS.Command.Type.EndMatch",            "Scenario / victory-code ends the match");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Type_ConcedeMatch,        "SeinARTS.Command.Type.ConcedeMatch",        "Player concedes (triggers EndMatch if victory condition met)");
-	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Type_RestartMatch,        "SeinARTS.Command.Type.RestartMatch",        "Reset back to Lobby (requires vote or host authority)");
 
 	// Votes.
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Type_StartVote,           "SeinARTS.Command.Type.StartVote",           "Initiate a vote");
@@ -82,6 +80,10 @@ namespace SeinARTSTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Reject_SimPaused,          "SeinARTS.Command.Reject.SimPaused",          "Sim is paused in Hard mode; command rejected");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Reject_SpectatorForbidden, "SeinARTS.Command.Reject.SpectatorForbidden", "Spectator tried to emit a sim-mutating command");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Reject_MatchStateInvalid,  "SeinARTS.Command.Reject.MatchStateInvalid",  "Match is not in a state that accepts this command (e.g., commands during Starting countdown)");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Reject_Unauthorized,       "SeinARTS.Command.Reject.Unauthorized",       "Authenticated issuer lacks the command's registered authority scope");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Reject_Malformed,          "SeinARTS.Command.Reject.Malformed",          "Command envelope or payload does not match its registered schema");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Reject_UnsupportedSchema,  "SeinARTS.Command.Reject.UnsupportedSchema",  "Command tag or exact schema version is not registered");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Reject_PayloadTooLarge,    "SeinARTS.Command.Reject.PayloadTooLarge",    "Command exceeds its registered deterministic payload budget");
 
 	// --- Environment ---
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Environment_Default, "SeinARTS.Environment.Default", "Default terrain environment tag (designers extend the namespace with biome/surface tags).");

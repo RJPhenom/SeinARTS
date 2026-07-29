@@ -42,6 +42,15 @@ void USeinUISubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 void USeinUISubsystem::Deinitialize()
 {
+	ReleaseModuleOwnedStateForModuleUnload();
+	Super::Deinitialize();
+
+	UE_LOG(LogSeinUI, Log, TEXT("SeinUISubsystem deinitialized"));
+}
+
+void USeinUISubsystem::ReleaseModuleOwnedStateForModuleUnload()
+{
+	check(IsInGameThread());
 	if (WorldSubsystem.IsValid())
 	{
 		WorldSubsystem->OnSimTickCompleted.Remove(SimTickDelegateHandle);
@@ -63,10 +72,7 @@ void USeinUISubsystem::Deinitialize()
 	SelectionModel = nullptr;
 	LobbyViewModel = nullptr;
 	MinimapViewModel = nullptr;
-
-	Super::Deinitialize();
-
-	UE_LOG(LogSeinUI, Log, TEXT("SeinUISubsystem deinitialized"));
+	WorldSubsystem.Reset();
 }
 
 // ==================== ViewModel Access ====================

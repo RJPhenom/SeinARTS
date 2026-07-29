@@ -430,6 +430,11 @@ FSeinBrokerDispatchPlan USeinDefaultCommandBrokerResolver::ResolveDispatch_Imple
 	// calls, so commit and preview never drift).
 	TArray<FFixedVector> Positions;
 	TArray<FFixedQuaternion> SlotFacings; // filled by the layout branch; padded at capture below
+	const FSeinPlayerID BrokerOwner = World->GetEntityOwner(BrokerHandle);
+	const int32 BrokerResolverID = Broker->ResolverID;
+	const TArray<FSeinEntityHandle> BrokerMembers = Broker->Members;
+	const FFixedVector BrokerCentroid = Broker->Centroid;
+	const FFixedQuaternion BrokerAnchorFacing = Broker->AnchorFacing;
 	if (Order.PreplacedPositions.Num() > 0)
 	{
 		Positions.Reserve(Effective.Num());
@@ -448,11 +453,29 @@ FSeinBrokerDispatchPlan USeinDefaultCommandBrokerResolver::ResolveDispatch_Imple
 		Target.GuidePoints     = Order.GuidePoints;
 		Target.TargetEntity    = Order.TargetEntity;
 		Target.FormationTag    = Order.FormationTag;
-		Target.CurrentCentroid = Broker->Centroid;
-		Target.CurrentFacing   = Broker->AnchorFacing;
+		Target.CurrentCentroid = BrokerCentroid;
+		Target.CurrentFacing   = BrokerAnchorFacing;
+
+		// ResolveFormationLayout reaches designer-pluggable formation, position,
+		// and post-process hooks. Any of them may synchronously grow component
+		// storage, so no broker pointer may survive the call.
+		Broker = nullptr;
 		const FSeinFormationLayout Layout = ResolveFormationLayout(
 			World, Effective, Target, bReassignSlotsLateral, bReassignSlotsDepth);
-		Broker->AnchorFacing = Layout.Facing;
+
+		Broker = World->GetComponent<FSeinCommandBrokerData>(BrokerHandle);
+		if (!World->IsEntityAlive(BrokerHandle) || !Broker
+			|| World->GetEntityOwner(BrokerHandle) != BrokerOwner
+			|| Broker->ResolverID != BrokerResolverID
+			|| Broker->Centroid != BrokerCentroid
+			|| Broker->Members != BrokerMembers)
+		{
+			// The broker system's outer precondition rejects the stale plan and
+			// retries the still-pending order on a later tick.
+			return Plan;
+		}
+		Plan.bApplyAnchorFacing = true;
+		Plan.AnchorFacing = Layout.Facing;
 		Positions = Layout.Positions;
 		SlotFacings = Layout.Facings;
 	}
@@ -466,23 +489,28 @@ FSeinBrokerDispatchPlan USeinDefaultCommandBrokerResolver::ResolveDispatch_Imple
 	// one cell" clumping bug. Mirrors the squad resolver's slot-routing.
 	const bool bEntityTargeted = Order.TargetEntity.IsValid();
 
-	// PERSIST THE RESOLVED LAYOUT ON THE BROKER — the formation owns its slots; members
-	// are transient assignees (which member fills which slot is re-decided at use via
-	// ReassignSlots). FULL-BROKER ground orders only: entity-targeted dispatches carry no
-	// slots, and SUBSET orders (a shift-click on part of the selection, an AutoMoveThen
-	// prefix, an idle re-form wave) must never clobber the formation's standing layout
-	// with a partial one — the layout is defined by the last order the WHOLE formation
-	// took. Facings pad with AnchorFacing for paths that carry none (pre-placed parent
-	// slots). Consumers: formation re-form / re-seek + per-slot settle policies.
-	if (!bEntityTargeted && Positions.Num() > 0 && Effective.Num() == Broker->Members.Num())
+	// Return the resolved layout for transactional broker-system commit. The formation
+	// owns its slots; members are transient assignees (which member fills which slot is
+	// re-decided at use via ReassignSlots). FULL-BROKER ground orders only: entity-targeted
+	// dispatches carry no slots, and SUBSET orders (a shift-click on part of the selection,
+	// an AutoMoveThen prefix, an idle re-form wave) must never clobber the formation's
+	// standing layout with a partial one. Facings pad with AnchorFacing for paths that
+	// carry none (pre-placed parent slots). Consumers: formation re-form / re-seek +
+	// per-slot settle policies.
+	if (!bEntityTargeted && Positions.Num() > 0
+		&& Effective.Num() == BrokerMembers.Num())
 	{
-		Broker->SettledSlotPositions = Positions;
-		while (SlotFacings.Num() < Positions.Num()) { SlotFacings.Add(Broker->AnchorFacing); }
+		const FFixedQuaternion SettledFacing = Plan.bApplyAnchorFacing
+			? Plan.AnchorFacing : BrokerAnchorFacing;
+		while (SlotFacings.Num() < Positions.Num())
+		{
+			SlotFacings.Add(SettledFacing);
+		}
 		SlotFacings.SetNum(Positions.Num());
-		Broker->SettledSlotFacings = SlotFacings;
-		// Loose formations re-match members to slots on a re-form (least-crossing return);
-		// the squad resolver's capture sets this TRUE (authored slot roles stay pinned).
-		Broker->bSettledSlotsMemberAligned = false;
+		Plan.bApplySettledSlots = true;
+		Plan.SettledSlotPositions = Positions;
+		Plan.SettledSlotFacings = MoveTemp(SlotFacings);
+		Plan.bSettledSlotsMemberAligned = false;
 	}
 
 	Plan.MemberDispatches.Reserve(Effective.Num());
@@ -491,13 +519,16 @@ FSeinBrokerDispatchPlan USeinDefaultCommandBrokerResolver::ResolveDispatch_Imple
 	{
 		const FSeinEntityHandle Member = Effective[i];
 		const FFixedVector MemberGoal = Positions.IsValidIndex(i) ? Positions[i] : Order.TargetLocation;
-
-		const FSeinAbilityComponent* AC = World->GetComponent<FSeinAbilityComponent>(Member);
-		if (!AC) continue;
+		if (!World->GetComponent<FSeinAbilityComponent>(Member)) continue;
 
 		// Layer 1: per-member tag resolution. Virtual, so subclass overrides
 		// apply here. Default impl reads FSeinAbilityComponent::ResolveCommandContext.
 		const FGameplayTag ResolvedTag = ResolveMemberAbility(World, Member, Order.Context);
+
+		// ResolveMemberAbility is Blueprint-pluggable and may grow or replace
+		// component storage. Acquire the member component only after it returns.
+		const FSeinAbilityComponent* AC = World->GetComponent<FSeinAbilityComponent>(Member);
+		if (!AC) continue;
 
 		// Primary: dispatch the resolved tag if the member owns that ability.
 		if (ResolvedTag.IsValid() && AC->HasAbilityWithTag(*World, ResolvedTag))

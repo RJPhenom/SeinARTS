@@ -18,7 +18,9 @@ void USeinLatentActionBPFL::SeinCancelAllActions(const UObject* WorldContextObje
 {
 	if (USeinWorldSubsystem* World = GetWorldSubsystem(WorldContextObject))
 	{
-		if (World->LatentActionManager)
+		if (World->LatentActionManager
+			&& World->RequireStateMutationAuthorization(
+				TEXT("CancelAllActions")))
 		{
 			World->LatentActionManager->CancelActionsForEntity(EntityHandle);
 		}
@@ -29,7 +31,9 @@ void USeinLatentActionBPFL::SeinCancelActionsOfClass(const UObject* WorldContext
 {
 	if (USeinWorldSubsystem* World = GetWorldSubsystem(WorldContextObject))
 	{
-		if (World->LatentActionManager)
+		if (World->LatentActionManager
+			&& World->RequireStateMutationAuthorization(
+				TEXT("CancelActionsOfClass")))
 		{
 			World->LatentActionManager->CancelActionsForEntityOfClass(EntityHandle, ActionClass);
 		}

@@ -5,14 +5,15 @@
  *
  * Responsibilities:
  *   - On the server, spawn an ASeinNetRelay per APlayerController as it joins
- *     (FGameModeEvents::GameModePostLoginEvent), destroy on logout. Owner =
- *     the PC, so the client legitimately owns its relay for ServerRPC.
+ *     (FGameModeEvents::GameModePostLoginEvent) and retain slot identity across
+ *     disconnect/reconnect. Owner = the PC, so the client legitimately owns
+ *     its relay for ServerRPC.
  *   - Track all server-side relays + the one client-side local relay.
  *   - Provide SubmitLocalCommand() as the single client entry point.
  *   - Server-authoritative per-turn aggregation: buffer each slot's submission
  *     and dispatch the assembled turn only once every active slot has submitted
  *     for that TurnId (completeness gate), with deterministic command ordering
- *     before fan-out, seed distribution, replay capture, periodic state-hash
+ *     before fan-out, seed distribution, replay capture, periodic world-root
  *     desync gossip, and drop-in/out with AI takeover.
  *
  * Networking is gated on:
@@ -25,9 +26,15 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Containers/Ticker.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "Input/SeinCommand.h"
 #include "Core/SeinPlayerID.h"
+#include "Data/SeinMatchSettings.h"
+#include "Simulation/SeinMatchBootstrapBarrier.h"
+#include "SeinNetProtocolTypes.h"
+#include "SeinBootstrapConsensus.h"
+#include "SeinTurnAggregator.h"
 #include "SeinNetSubsystem.generated.h"
 
 class ASeinNetRelay;
@@ -38,8 +45,20 @@ class USeinReplayWriter;
 class USeinReplayReader;
 class USeinAIController;
 class USeinWorldSubsystem;
-struct FSeinSlotHashEntry;
+class UNetDriver;
+struct FSeinParticipantWorldRootEntry;
+struct FSeinCommandSchemaDescriptor;
 struct FSeinNetSubsystemTestAccess;
+namespace ETravelFailure { enum Type : int; }
+namespace ENetworkFailure { enum Type : int; }
+
+/** Optional native outbound adapter for P2P or non-UE transports. Returning
+ *  false retains the exact report until the adapter explicitly retries it. */
+DECLARE_DELEGATE_RetVal_TwoParams(
+	bool,
+	FSeinDeterminismSessionFailureSubmitter,
+	const FSeinProtocolContext&,
+	const FSeinDeterminismSessionFailure&);
 
 /** A frozen local submission. Once a turn boundary assigns commands to a
  *  turn, retries must preserve that exact batch rather than merging later
@@ -47,16 +66,58 @@ struct FSeinNetSubsystemTestAccess;
 struct FSeinPendingTurnSubmission
 {
 	int32 TurnId = INDEX_NONE;
-	TArray<FSeinCommand> Commands;
+	TArray<FSeinCommandSubmissionDraft> Drafts;
 };
 
-/** A state hash captured at its exact checkpoint. A failed local send must
+/** Exact additive cost of one command inside an opaque batch. The fixed
+ *  batch header is charged once when a turn prefix is selected. */
+struct FSeinQueuedCommandCost
+{
+	int32 VariableWireBytes = 0;
+	uint64 VariableCanonicalCostBytes = 0;
+};
+
+/** Bounded local-input backlog. Costs are captured from the same frozen
+ *  codec/schema contract used at handoff, so selecting a prefix is linear. */
+struct FSeinOutgoingDraftBacklog
+{
+	TArray<FSeinCommandSubmissionDraft> Drafts;
+	TArray<FSeinQueuedCommandCost> Costs;
+	int64 VariableWireBytes = 0;
+	uint64 VariableCanonicalCostBytes = 0;
+
+	bool IsEmpty() const { return Drafts.IsEmpty(); }
+	int32 Num() const { return Drafts.Num(); }
+	void Reset()
+	{
+		Drafts.Reset();
+		Costs.Reset();
+		VariableWireBytes = 0;
+		VariableCanonicalCostBytes = 0;
+	}
+};
+
+/** Per-author server-AI backlog. The source is consumed only after the
+ *  selected prefix is accepted by the turn aggregator. */
+struct FSeinAICommandBacklog
+{
+	TArray<FSeinCommand> Commands;
+	TArray<FSeinQueuedCommandCost> Costs;
+	int64 VariableWireBytes = 0;
+	uint64 VariableCanonicalCostBytes = 0;
+
+	bool IsEmpty() const { return Commands.IsEmpty(); }
+	int32 Num() const { return Commands.Num(); }
+};
+
+/** A canonical world-state root captured at its exact checkpoint. A failed
+ *  local send must
  *  retry this value; recomputing after the sim advances would report a
  *  different state under the old turn number. */
-struct FSeinPendingStateHashReport
+struct FSeinPendingWorldStateRootReport
 {
 	int32 Turn = INDEX_NONE;
-	int32 Hash = 0;
+	FGuid WorldRoot;
 };
 
 /** Non-authoritative, wall-clock-only diagnostics for one incomplete server
@@ -93,6 +154,52 @@ enum class ESeinSlotLifecycle : uint8
 	Reconnecting,
 };
 
+enum class ESeinPreparedWorldActivation : uint8
+{
+	RequiresWorldTransition,
+	AllowCurrentWorld,
+};
+
+/** Destination assignment retained by the game-instance without touching the
+ * currently loaded world's active lockstep epoch. */
+struct FSeinPendingLocalProtocolAssignment
+{
+	TWeakObjectPtr<ASeinNetRelay> Relay;
+	FSeinPlayerID Slot;
+	FSeinNetworkParticipantID ParticipantID;
+	FSeinProtocolContext Context;
+	int64 Seed = 0;
+	bool bSimulates = false;
+	FSeinMatchSettings MatchSettings;
+	TWeakObjectPtr<UWorld> SourceWorld;
+	ESeinPreparedWorldActivation Activation =
+		ESeinPreparedWorldActivation::RequiresWorldTransition;
+
+	bool IsSet() const { return Context.IsValid(); }
+	void Reset() { *this = FSeinPendingLocalProtocolAssignment(); }
+};
+
+/** Coordinator-owned prepared epoch. It becomes active only after the loaded
+ * world proves the destination digest. */
+struct FSeinPendingAuthorityProtocolState
+{
+	FSeinProtocolContext Context;
+	FSeinMatchSettings MatchSettings;
+	int64 Seed = 0;
+	TArray<FSeinParticipantBinding> ParticipantBindings;
+	TMap<FSeinPlayerID, FSeinNetworkParticipantID> SlotToParticipant;
+	FSeinNetworkParticipantID CoordinatorParticipantID;
+	TMap<FSeinPlayerID, ESeinSlotLifecycle> SlotLifecycle;
+	int32 FrozenMaxCommandsPerSubmission = 0;
+	ESeinMatchTravelIntent Intent = ESeinMatchTravelIntent::NewMatch;
+	TWeakObjectPtr<UWorld> SourceWorld;
+	ESeinPreparedWorldActivation Activation =
+		ESeinPreparedWorldActivation::RequiresWorldTransition;
+
+	bool IsSet() const { return Context.IsValid(); }
+	void Reset() { *this = FSeinPendingAuthorityProtocolState(); }
+};
+
 UCLASS()
 class SEINARTSNET_API USeinNetSubsystem : public UGameInstanceSubsystem
 {
@@ -103,6 +210,10 @@ public:
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 
+	/** Idempotently detach every callback and release runtime state before the
+	 *  owning module's code can unload. Deinitialize delegates to this path. */
+	void ReleaseModuleOwnedStateForModuleUnload();
+
 	/** Player-input entry point. Stamps an automatically-computed TurnId
 	 *  derived from the current sim tick + InputDelayTurns. Caller doesn't
 	 *  need to think about turns — just hand it the command.
@@ -110,11 +221,15 @@ public:
 	 *  In Standalone (or when networking is disabled in settings) the command
 	 *  bypasses the relay and goes directly into USeinWorldSubsystem's
 	 *  command buffer — single-player is zero-overhead. In a networked
-	 *  session, forwards to the local relay's Server_SubmitCommands; the
-	 *  server's AssignedPlayerID overrides the command's PlayerID before
-	 *  fan-out, so callers don't need to fill it correctly (server will). */
+	 *  session it buffers an untrusted draft for the next turn; authenticated
+	 *  ingress replaces PlayerID, IssuerKind, and Tick before aggregation. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Network")
 	void SubmitLocalCommand(const FSeinCommand& Command);
+	/** Topology-adapter entry used by USeinWorldSubsystem. Draft provenance is
+	 *  ignored; match administration is only a request proved at ingress. */
+	void SubmitLocalCommandDraft(
+		const FSeinCommand& Draft,
+		bool bRequestMatchAdministration);
 
 	/** Batched variant of SubmitLocalCommand. */
 	void SubmitLocalCommands(const TArray<FSeinCommand>& Commands);
@@ -128,9 +243,8 @@ public:
 	 *  enqueue, OR networked submit through a valid LocalRelay). Returns false
 	 *  if dropped — caller MUST NOT advance any "last submitted" tracking on
 	 *  false, otherwise the missed turn never re-submits and the lockstep
-	 *  gate stalls forever (subtle race: OnRep_AssignedPlayerID hasn't fired
-	 *  before Client_StartSession arrives, LocalRelay is still null at the
-	 *  pre-fire moment, the heartbeat is silently dropped). */
+	 *  gate stalls forever (for example, if relay assignment races tick-zero
+	 *  authorization and the first heartbeat cannot be handed off). */
 	bool SubmitLocalCommandAtTurn(int32 TurnId, const FSeinCommand& Command);
 	bool SubmitLocalCommandsAtTurn(int32 TurnId, const TArray<FSeinCommand>& Commands);
 
@@ -139,6 +253,14 @@ public:
 	 *  Zero before that — callers should treat zero as "not yet assigned". */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Network")
 	FSeinPlayerID GetLocalPlayerID() const { return LocalPlayerID; }
+
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|Network")
+	FSeinNetworkParticipantID GetLocalParticipantID() const { return LocalParticipantID; }
+
+	const FSeinProtocolContext& GetActiveProtocolContext() const { return ActiveProtocolContext; }
+	const TArray<FSeinParticipantBinding>& GetParticipantBindings() const { return ParticipantBindings; }
+	const FSeinMatchSettings& GetActiveMatchSettings() const { return ActiveMatchSettings; }
+	bool HasActiveMatchSettings() const { return bHasActiveMatchSettings; }
 
 	/** Session-wide deterministic seed. Server generates once at first
 	 *  PostLogin; replicated to clients via the relay. Sim PRNG MUST be
@@ -154,18 +276,7 @@ public:
 	 *  call (`UnregisterRelay`) never fires, leaving stale entries in
 	 *  `RelayToSlot`. Without filtering, the gate waits for submissions from
 	 *  ghost relays forever. */
-	int32 GetActiveSlotCount() const
-	{
-		TSet<FSeinPlayerID> Slots;
-		for (const TPair<TWeakObjectPtr<ASeinNetRelay>, FSeinPlayerID>& Pair : RelayToSlot)
-		{
-			if (Pair.Key.IsValid() && Pair.Value.IsValid())
-			{
-				Slots.Add(Pair.Value);
-			}
-		}
-		return Slots.Num();
-	}
+	int32 GetActiveSlotCount() const { return TurnAggregator.GetExpectedAuthors().Num(); }
 
 	/** Server-only: spawn the lockstep relay for a given PlayerController
 	 *  with the slot already chosen by the match-flow / lobby authority
@@ -181,22 +292,43 @@ public:
 	 *  instead of double-spawning. */
 	void ServerSpawnRelayForController(APlayerController* PC, FSeinPlayerID Slot);
 
+	/** Update the local gameplay-slot cache for lobby/UI use. Protocol identity
+	 *  is established separately when a prepared match assignment arrives. */
+	void NotifyLocalLobbySlotAssigned(ASeinNetRelay* Relay, FSeinPlayerID Slot);
+
 	/** Called by ASeinNetRelay replication on the owning client when its slot
 	 *  and seed arrive. Latches local identity, ensures the current world's
 	 *  lockstep hooks are bound, and retries deferred work. */
-	void NotifyLocalSlotAssigned(ASeinNetRelay* Relay, FSeinPlayerID Slot, int64 Seed);
+	void NotifyLocalProtocolAssigned(
+		ASeinNetRelay* Relay,
+		FSeinPlayerID Slot,
+		FSeinNetworkParticipantID ParticipantID,
+		const FSeinProtocolContext& Context,
+		int64 Seed,
+		bool bSimulates,
+		const FSeinMatchSettings& MatchSettings,
+		ESeinPreparedWorldActivation Activation =
+			ESeinPreparedWorldActivation::RequiresWorldTransition);
 
-	/** Server-only: request lockstep session start. When config parity is
-	 *  enabled on the host, the request remains latched until every connected
-	 *  relay slot has reported the host's fingerprint; only then does the
-	 *  server fire Client_StartSession and start its own tick-zero sim.
-	 *  Idempotent — already-running sims are left alone. */
+	/**
+	 * Establish durable match identity before in-place start or travel.
+	 * Repeated preparation of the same pending intent is idempotent.
+	 */
+	bool PrepareMatchTravel(
+		ESeinMatchTravelIntent Intent,
+		FName DestinationWorldPackage,
+		ESeinPreparedWorldActivation Activation =
+			ESeinPreparedWorldActivation::RequiresWorldTransition);
+	/** Cancel an unactivated prepared travel without disturbing the source epoch. */
+	void AbortPreparedMatchTravel(const FString& Reason);
+
+	/** Coordinator-only start request. Compatibility is checked first, then
+	 *  every frozen simulating participant must report one identical tick-zero
+	 *  materialization receipt before authorization is fanned out. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Network")
 	void StartLockstepSession();
 
-	/** Local-only: start the sim if it isn't running. Called by
-	 *  Client_StartSession on receiving clients, and by StartLockstepSession
-	 *  on the host. Public so the console command can drive it directly. */
+	/** Standalone-only start/resume request. Network launch is coordinator-only. */
 	void StartLocalSession();
 
 	/** Server-only accessor: the replay writer instance, valid between
@@ -241,37 +373,167 @@ public:
 	/** Server-side: a relay just received a client submission. Stamps the
 	 *  authoritative source slot, buffers into the per-turn map, and dispatches
 	 *  the assembled turn once every active slot has submitted for `TurnId`. */
-	void ServerHandleSubmission(ASeinNetRelay* SourceRelay, int32 TurnId, const TArray<FSeinCommand>& Commands);
+	void ServerHandleSubmission(
+		ASeinNetRelay* SourceRelay,
+		const FSeinProtocolContext& Context,
+		int32 TurnId,
+		const FSeinOpaqueCommandBatch& OpaqueDrafts);
 
 	/** Client-side: server delivered an assembled turn. Stores it keyed by
 	 *  `TurnId` in ReceivedTurns; the sim's gate (ResolveTurnReady → ConsumeTurn)
 	 *  drains it at the matching sim-tick boundary (= TurnId * TicksPerTurn). */
-	void ClientHandleTurn(int32 TurnId, const TArray<FSeinCommand>& Commands);
+	void ClientHandleTurn(
+		const FSeinProtocolContext& Context,
+		int32 TurnId,
+		const FSeinOpaqueCommandBatch& OpaqueCommands);
 
-	/** Server-side: a peer reported its state hash for a check turn. Buffer
-	 *  per-peer hashes; once all active peers have reported, compare —
+	/** Coordinator requested local materialization under an exact context. */
+	void ClientHandleBootstrapReceiptRequest(const FSeinProtocolContext& Context);
+
+	/** Authenticated relay delivered a peer's sealed local receipt. */
+	void ServerHandleBootstrapReceipt(
+		ASeinNetRelay* SourceRelay,
+		const FSeinProtocolContext& Context,
+		const FSeinMatchBootstrapReceipt& Receipt);
+
+	/** Authenticated relay reported terminal local materialization failure. */
+	void ServerHandleBootstrapFailure(
+		ASeinNetRelay* SourceRelay,
+		const FSeinProtocolContext& Context);
+
+	/** Coordinator authorized this peer's exact local receipt. */
+	void ClientHandleBootstrapAuthorization(
+		const FSeinProtocolContext& Context,
+		const FSeinMatchBootstrapReceipt& Receipt);
+
+	void ServerHandleBootstrapAuthorizedReady(
+		ASeinNetRelay* SourceRelay,
+		const FSeinProtocolContext& Context,
+		const FSeinMatchBootstrapReceipt& Receipt);
+
+	void ClientHandleBootstrapLaunch(
+		const FSeinProtocolContext& Context,
+		const FSeinMatchBootstrapReceipt& Receipt);
+
+	/** Coordinator terminated the frozen bootstrap attempt. */
+	void ClientHandleBootstrapFailure(
+		const FSeinProtocolContext& Context,
+		const FString& Reason);
+	void ClientHandlePreparedMatchTravelCancelled(
+		const FSeinProtocolContext& Context);
+
+	/** Coordinator-side: a peer reported its world-state root for a check
+	 *  turn. Buffer per-peer roots; once all active peers have reported, compare —
 	 *  agreement is silent (Verbose log), divergence fans Client_NotifyDesync
 	 *  to every relay so all peers get the red on-screen alarm with the
-	 *  full per-slot hash table. */
-	void ServerHandleStateHashReport(ASeinNetRelay* SourceRelay, int32 Turn, int32 Hash);
+	 *  full participant-root table. */
+	void ServerHandleWorldStateRootReport(
+		ASeinNetRelay* SourceRelay,
+		const FSeinProtocolContext& Context,
+		int32 Turn,
+		FGuid WorldRoot);
 
-	/** Server-side handler for a joining client's config fingerprint. Records
-	 *  an accepted report for the start barrier, or kicks a mismatched client.
-	 *  No-op when host-side enforcement is disabled. */
-	void ServerHandleConfigFingerprint(ASeinNetRelay* SourceRelay, int32 Fingerprint);
+	/** Shipped relay-adapter ingress. The relay supplies authenticated
+	 *  participant provenance; the payload never chooses its identity. */
+	void ServerHandleDeterminismSessionFailure(
+		ASeinNetRelay* SourceRelay,
+		const FSeinProtocolContext& Context,
+		const FSeinDeterminismSessionFailure& Failure);
 
-	/** Client-side: server told us a desync was detected at `Turn` and is
-	 *  forwarding everyone's hashes so we can show the alarm with full
+	/**
+	 * Topology-neutral coordinator ingress for a trusted transport adapter.
+	 * Dedicated, listen-host, P2P, and custom transports converge here after
+	 * authenticating the reporter identity.
+	 */
+	bool HandleAuthenticatedDeterminismSessionFailure(
+		const FSeinProtocolContext& Context,
+		FSeinNetworkParticipantID AuthenticatedParticipantID,
+		const FSeinDeterminismSessionFailure& Failure);
+
+	/** Topology-neutral receiving side for a coordinator-issued terminal
+	 *  determinism-health result. Custom transports call this exact seam. */
+	void HandleAuthoritativeDeterminismSessionFailure(
+		const FSeinProtocolContext& Context,
+		const FSeinDeterminismSessionFailure& Failure);
+
+	/** Server-side compatibility acknowledgement. Command, match-settings, and
+	 *  simulation-content parity are mandatory; config parity is host policy. */
+	void ServerHandleConfigFingerprint(
+		ASeinNetRelay* SourceRelay,
+		const FSeinProtocolContext& Context,
+		int32 Fingerprint,
+		FGuid CommandProtocolDigest,
+		FGuid MatchSettingsDigest,
+		FGuid SimulationContentDigest);
+
+	/** Peer-side: coordinator told us a desync was detected at `Turn` and is
+	 *  forwarding everyone's world roots so we can show the alarm with full
 	 *  context. Logs at Error + posts a persistent red on-screen debug
 	 *  message via GEngine->AddOnScreenDebugMessage. Optionally pauses the
 	 *  local sim if `bPauseOnDesync` is set in plugin settings. */
-	void ClientHandleDesyncNotification(int32 Turn, const TArray<FSeinSlotHashEntry>& PeerHashes);
+	void ClientHandleDesyncNotification(
+		const FSeinProtocolContext& Context,
+		int32 Turn,
+		const TArray<FSeinParticipantWorldRootEntry>& PeerRoots);
 
 	/** True iff the local sim has been flagged as desynced. Once set, stays
 	 *  true until the user calls `Sein.Net.ClearDesync` or restarts PIE.
 	 *  The lockstep gate consults this so designers can choose to halt the
 	 *  sim on detection (default: continue ticking, just show alarm). */
 	bool IsLocalDesyncDetected() const { return bDesyncDetected; }
+
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|Network|Determinism")
+	bool HasDeterminismSessionFailure() const
+	{
+		return DeterminismSessionFailure.IsValid();
+	}
+
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|Network|Determinism")
+	FSeinDeterminismSessionFailure GetDeterminismSessionFailure() const
+	{
+		return DeterminismSessionFailure;
+	}
+
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|Network|Determinism")
+	bool IsDeterminismSessionFailureAuthoritative() const
+	{
+		return bDeterminismSessionFailureAuthoritative;
+	}
+
+	/** Installs the single outbound terminal-report adapter used by a custom
+	 *  transport. The built-in UE relay remains the fallback when unbound. */
+	void SetDeterminismSessionFailureSubmitter(
+		FSeinDeterminismSessionFailureSubmitter Submitter);
+	void ClearDeterminismSessionFailureSubmitter();
+
+	/** Explicit retry edge for a custom adapter that previously returned false.
+	 *  Returns true once no local terminal report remains pending. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Network|Determinism")
+	bool RetryPendingDeterminismSessionFailureReport();
+
+	/** Identity-based coordinator check; deliberately independent of UE net
+	 *  mode so a custom peer-authority adapter can use the same contract. */
+	bool IsLocalProtocolCoordinator() const
+	{
+		return ActiveProtocolContext.IsValid()
+			&& LocalParticipantID.IsValid()
+			&& ActiveProtocolContext.CoordinatorParticipantID
+				== LocalParticipantID;
+	}
+
+	/** Native observer seam for custom topology adapters and systems code. */
+	DECLARE_MULTICAST_DELEGATE_OneParam(
+		FOnDeterminismSessionFailure,
+		const FSeinDeterminismSessionFailure& /*Failure*/);
+	FOnDeterminismSessionFailure OnDeterminismSessionFailure;
+
+	/** Blueprint event for designer-authored failure UI and match flow. */
+	DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
+		FOnDeterminismSessionFailureDynamic,
+		const FSeinDeterminismSessionFailure&,
+		Failure);
+	UPROPERTY(BlueprintAssignable, Category = "SeinARTS|Network|Determinism")
+	FOnDeterminismSessionFailureDynamic OnDeterminismSessionFailureBP;
 
 	/** Phase 0 visibility hooks — bind from console exec or test code. */
 	DECLARE_MULTICAST_DELEGATE_TwoParams(FOnTurnReceived, int32 /*TurnId*/, const TArray<FSeinCommand>& /*Commands*/);
@@ -345,11 +607,23 @@ private:
 	 *  retiring tick-zero/turn-number epoch while preserving match identity
 	 *  whose seamless-travel semantics are still a deliberate design gate. */
 	void OnWorldCleanup(UWorld* World, bool bSessionEnded, bool bCleanupResources);
+	void OnTravelFailure(
+		UWorld* World,
+		ETravelFailure::Type FailureType,
+		const FString& ErrorString);
+	void OnNetworkFailure(
+		UWorld* World,
+		UNetDriver* NetDriver,
+		ENetworkFailure::Type FailureType,
+		const FString& ErrorString);
+	bool OwnsFailureWorld(const UWorld* World) const;
+	void CancelPendingLocalTravelFailure(const FString& Reason);
 
-	/** Clear every command/hash value whose identity is scoped to one fresh
+	/** Clear every command/world-root value whose identity is scoped to one fresh
 	 *  simulation world. Does not decide whether seed, relay/slot identity,
 	 *  replay, desync alarm, or drop lifecycle survive travel. */
 	void ResetLockstepEpochState(UWorld* RetiringWorld);
+	void ResetMatchState(UWorld* RetiringWorld);
 
 	/** Release Net-owned AI takeover objects tied to RetiringWorld and discard
 	 *  commands they authored for its obsolete turn epoch. */
@@ -362,33 +636,135 @@ private:
 	/** Server-side: lazy-init SessionSeed on first call. Once set, never
 	 *  changes for the life of this game-instance subsystem. */
 	void EnsureSessionSeed();
+	bool BuildCanonicalParticipantManifest(
+		const FSeinMatchInstanceID& MatchInstanceID,
+		TArray<FSeinParticipantBinding>& OutBindings,
+		TMap<FSeinPlayerID, FSeinNetworkParticipantID>& OutSlotToParticipant,
+		FSeinNetworkParticipantID& OutCoordinatorParticipantID,
+		TMap<FSeinPlayerID, ESeinSlotLifecycle>& OutSlotLifecycle);
+	bool ConfigureTurnAggregator();
+	bool ConfigureBootstrapConsensus();
+	bool ResolveLocalCommandProtocolDigest(FGuid& OutDigest) const;
+	bool ResolveLocalSimulationContentDigest(FGuid& OutDigest) const;
+	void ApplyProtocolAssignmentToRelays();
+	bool TryPromotePendingAuthorityProtocolState();
+	bool TryPromotePendingLocalProtocolAssignment();
+	void SchedulePendingProtocolPromotion();
+	bool TickPendingProtocolPromotion(float DeltaSeconds);
+	void CancelPendingProtocolPromotion();
+	void TryRearmPreparedDestinationStart();
+	bool IsCurrentProtocolContext(
+		const FSeinProtocolContext& MessageContext,
+		const TCHAR* Operation) const;
+	const FSeinParticipantBinding* FindParticipantBinding(
+		FSeinNetworkParticipantID ParticipantID) const;
+	FSeinNetworkParticipantID FindParticipantForSlot(FSeinPlayerID Slot) const;
+	bool IsParticipantConnected(FSeinNetworkParticipantID ParticipantID) const;
+	bool AreRequiredStartParticipantsBound(
+		TArray<FSeinNetworkParticipantID>* OutMissingParticipants = nullptr) const;
+	bool IsCurrentWorldPreparedDestination(FString* OutError = nullptr) const;
+	static bool IsPreparedWorldActivationEligible(
+		const UWorld* CurrentWorld,
+		const UWorld* SourceWorld,
+		ESeinPreparedWorldActivation Activation,
+		const FGuid& LoadedWorldDigest,
+		const FGuid& DestinationWorldDigest);
 
 	/** Bind the gate, turn-boundary, and authority-AI hooks to the current
 	 *  simulation world independently of local-player relay assignment. */
 	USeinWorldSubsystem* BindLockstepHooksForCurrentWorld();
 	bool AreNetworkStartPrerequisitesReady(bool bHooksReady) const;
 	void TryDispatchLockstepSessionStart();
-	bool IsConfigParityStartBarrierSatisfied(TArray<FSeinPlayerID>* OutMissingSlots = nullptr) const;
+	bool IsLocalSimulatingParticipant() const;
+	bool TryMaterializeLocalBootstrapReceipt(
+		const FSeinProtocolContext& Context,
+		FSeinMatchBootstrapReceipt& OutReceipt,
+		FString& OutError);
+	void SubmitLocalBootstrapReceipt(
+		const FSeinProtocolContext& Context,
+		const FSeinMatchBootstrapReceipt& Receipt);
+	void SubmitLocalBootstrapAuthorizedReady(
+		const FSeinProtocolContext& Context,
+		const FSeinMatchBootstrapReceipt& Receipt);
+	void ScheduleBootstrapMaterializerRetry(
+		const FSeinProtocolContext& Context);
+	bool TickBootstrapMaterializerRetry(float DeltaSeconds);
+	void CancelBootstrapMaterializerRetry();
+	void SubmitBootstrapReceiptForParticipant(
+		FSeinNetworkParticipantID ParticipantID,
+		const FSeinProtocolContext& Context,
+		const FSeinMatchBootstrapReceipt& Receipt);
+	void SubmitBootstrapAuthorizedReadyForParticipant(
+		FSeinNetworkParticipantID ParticipantID,
+		const FSeinProtocolContext& Context,
+		const FSeinMatchBootstrapReceipt& Receipt);
+	void DispatchBootstrapReceiptRequests();
+	void DispatchBootstrapAuthorization();
+	void DispatchBootstrapLaunch();
+	void TryAuthorizeLocalBootstrap();
+	void TryLaunchLocalBootstrap();
+	void StartBootstrapCoordinatorTimeout();
+	bool TickBootstrapCoordinatorTimeout(float DeltaSeconds);
+	void CancelBootstrapCoordinatorTimeout();
+	void FailBootstrapSession(const FString& Reason, bool bNotifyPeers);
+	void FailLocalBootstrapAfterCommit(const FString& Reason);
+	void ReportLocalBootstrapFailure(const FSeinProtocolContext& Context);
+	bool IsConfigParityStartBarrierSatisfied(
+		TArray<FSeinNetworkParticipantID>* OutMissingParticipants = nullptr) const;
 	static bool AreConfigFingerprintsComplete(
-		const TArray<FSeinPlayerID>& ExpectedSlots,
-		const TMap<FSeinPlayerID, int32>& AcceptedFingerprints,
+		const TArray<FSeinNetworkParticipantID>& ExpectedParticipants,
+		const TMap<FSeinNetworkParticipantID, int32>& AcceptedFingerprints,
 		int32 RequiredFingerprint);
 
 	/** Server-side: check if every connected slot has submitted for `TurnId`;
 	 *  if so, assemble + fan out via every relay's Client_ReceiveTurn. */
 	void ServerCheckTurnComplete(
 		int32 TurnId, FSeinPlayerID CompletingSubmitter = FSeinPlayerID());
+	bool FreezeAuthorSubmissionPolicy(const TCHAR* Operation);
+	int32 GetFrozenExpectedAuthorCount() const;
+	bool ValidateAuthorSubmissionBudget(
+		int32 CommandCount,
+		const FSeinOpaqueCommandBatch& EncodedBatch,
+		uint64 CanonicalCostBytes,
+		FString& OutError) const;
+	bool PreflightCanonicalTurnBatch(
+		TConstArrayView<FSeinCommand> Commands,
+		FString& OutError) const;
 	void GetExpectedCommandSlots(TArray<FSeinPlayerID>& OutSlots) const;
-	static bool AreExpectedCommandSlotsComplete(
-		const TArray<FSeinPlayerID>& ExpectedSlots,
-		const TMap<FSeinPlayerID, TArray<FSeinCommand>>& Submissions);
 	bool IsCommandSubmissionLifecycleAllowed(FSeinPlayerID Slot) const;
-	EFirstAcceptResult BufferCommandSubmissionFirstWins(
-		int32 TurnId, FSeinPlayerID Slot, TArray<FSeinCommand>&& Commands);
-	EFirstAcceptResult BufferHashReportFirstWins(int32 Turn, FSeinPlayerID Slot, int32 Hash);
+	bool IsAICommandSubmissionAllowed(
+		FSeinPlayerID Slot,
+		FString* OutError = nullptr) const;
+	EFirstAcceptResult BufferWorldStateRootReportFirstWins(
+		int32 Turn,
+		FSeinNetworkParticipantID ParticipantID,
+		const FGuid& WorldRoot);
 	void StampAuthoritativeCommandBatch(
-		TArray<FSeinCommand>& Commands, FSeinPlayerID Slot, int32 TurnId) const;
-	bool DrainPendingAICommandsForTurn(
+		TArray<FSeinCommand>& Commands,
+		FSeinPlayerID Slot,
+		bool bGrantMatchAdministration,
+		int32 TurnId) const;
+	bool FindFrozenCommandSchema(
+		FGameplayTag CommandType,
+		int32 SchemaVersion,
+		FSeinCommandSchemaDescriptor& OutSchema) const;
+	static bool IsUnsupportedNetworkPauseCommand(
+		const FSeinCommand& Command,
+		const FSeinCommandSchemaDescriptor* Schema);
+	bool MeasureOutgoingDraftCost(
+		const FSeinCommandSubmissionDraft& Draft,
+		FSeinQueuedCommandCost& OutCost,
+		FString& OutError) const;
+	bool MeasureAICommandCost(
+		const FSeinCommand& Command,
+		FSeinQueuedCommandCost& OutCost,
+		FString& OutError) const;
+	bool TryBufferOutgoingDraft(const FSeinCommandSubmissionDraft& Draft);
+	void FreezeLargestOutgoingDraftPrefix(
+		int32 TurnId, TArray<FSeinCommandSubmissionDraft>& OutDrafts);
+	bool TryBufferAICommand(FSeinPlayerID Slot, const FSeinCommand& Command);
+	void ConsumeAICommandPrefix(FSeinPlayerID Slot, int32 Count);
+	bool PeekPendingAICommandsForTurn(
 		FSeinPlayerID Slot, int32 TurnId, TArray<FSeinCommand>& OutCommands);
 	bool BuildDroppedSlotSubmission(
 		FSeinPlayerID Slot, int32 TurnId, bool bAllowAICommands,
@@ -411,9 +787,7 @@ private:
 	 *  complete on every connected peer. */
 	void OnSimTickCompleted(int32 CompletedTick);
 
-	/** Start is a request in networked play: wait for the seed and current
-	 *  world's hooks, plus a local relay/slot on player-hosting processes.
-	 *  Dedicated authority requires no synthetic local player. */
+	/** Execute a standalone start/resume request. Network launch never enters. */
 	void TryStartLocalSession();
 
 	/** Put the canonical turn directly into a dedicated authority's gate
@@ -429,23 +803,49 @@ private:
 	/** Submit frozen turns in order. Stops at the first local-send failure and
 	 *  leaves that entry intact for relay-assignment/replacement retry. */
 	void FlushPendingTurnSubmissions();
+	bool SubmitLocalDraftsAtTurn(
+		int32 TurnId,
+		const TArray<FSeinCommandSubmissionDraft>& Drafts);
 
-	/** Submit exact captured state-hash checkpoints in order, retaining the
+	/** Submit exact captured world-state-root checkpoints in order, retaining the
 	 *  first locally-unsent entry. */
-	void FlushPendingStateHashReports();
+	void FlushPendingWorldStateRootReports();
 
-	/** Enqueue one exact hash checkpoint unless it was already queued/reported. */
-	void EnqueueStateHashReport(int32 Turn, int32 Hash);
+	/** Submit the exact local terminal report, retaining it until a topology
+	 *  adapter accepts the handoff. */
+	void FlushPendingDeterminismSessionFailure();
+
+	/** Enqueue one valid exact root checkpoint unless already queued/reported. */
+	void EnqueueWorldStateRootReport(int32 Turn, const FGuid& WorldRoot);
 
 	/** Read-helper: ticks-per-turn from settings, with sane fallback. */
 	int32 GetTicksPerTurn() const;
 	int32 GetInputDelayTurns() const;
 	int32 GetCurrentTurn() const;
 	bool IsCommandTurnWithinProtocolWindow(int32 TurnId, const TCHAR* Context) const;
-	bool IsHashTurnWithinProtocolWindow(int32 Turn, const TCHAR* Context) const;
+	bool IsDeterminismEvidenceTurnWithinProtocolWindow(
+		int32 Turn, const TCHAR* Context) const;
 	void PruneProtocolState(int32 ReferenceTurn);
-	void GetExpectedHashReporterSlots(TArray<FSeinPlayerID>& OutSlots) const;
-	bool AreExpectedHashReportsComplete(const TMap<FSeinPlayerID, int32>& Reports) const;
+	void GetExpectedWorldRootReporterParticipants(
+		TArray<FSeinNetworkParticipantID>& OutParticipants) const;
+	bool AreExpectedWorldRootReportsComplete(
+		const TMap<FSeinNetworkParticipantID, FGuid>& Reports) const;
+	void ServerHandleWorldStateRootReportForParticipant(
+		FSeinNetworkParticipantID ParticipantID,
+		int32 Turn,
+		const FGuid& WorldRoot);
+	bool IsDueWorldStateRootCheckpoint(int32 Turn) const;
+	void ReportLocalWorldStateRootCaptureFailure(int32 CheckpointTurn);
+	void ReportLocalDeterminismSessionFailure(
+		const FSeinDeterminismSessionFailure& Failure);
+	void HandleExecutionTopologyInvalidated(const FString& Reason);
+	void EnterDeterminismSessionFailure(
+		const FSeinDeterminismSessionFailure& Failure,
+		bool bAuthoritative,
+		bool bNotifyPeers);
+	void ApplyDueAuthenticatedDeterminismSessionFailuresThrough(
+		int32 ThroughTurn);
+	void ExpireIncompleteWorldStateRootCheckpointsThrough(int32 Cutoff);
 
 	UPROPERTY()
 	TArray<TWeakObjectPtr<ASeinNetRelay>> Relays;
@@ -455,38 +855,78 @@ private:
 	 *  matches the local first PC. */
 	TWeakObjectPtr<ASeinNetRelay> LocalRelay;
 
+	FSeinDeterminismSessionFailureSubmitter
+		DeterminismSessionFailureSubmitter;
+
 	/** Server-side: relay -> slot mapping. Source of truth for
 	 *  authoritative "who sent this submission". */
 	TMap<TWeakObjectPtr<ASeinNetRelay>, FSeinPlayerID> RelayToSlot;
+	TMap<TWeakObjectPtr<ASeinNetRelay>, FSeinNetworkParticipantID> RelayToParticipant;
+
+	/** Durable match manifest. Slot identity and process identity are distinct. */
+	TArray<FSeinParticipantBinding> ParticipantBindings;
+	TMap<FSeinPlayerID, FSeinNetworkParticipantID> SlotToParticipant;
+	FSeinNetworkParticipantID CoordinatorParticipantID;
+	FSeinProtocolContext ActiveProtocolContext;
+	FSeinMatchSettings ActiveMatchSettings;
+	bool bHasActiveMatchSettings = false;
+	FSeinPendingAuthorityProtocolState PendingAuthorityProtocolState;
+	FSeinPendingLocalProtocolAssignment PendingLocalProtocolAssignment;
+	FTSTicker::FDelegateHandle PendingProtocolPromotionHandle;
+	/** CDO value captured once for a match. Epoch continuation preserves it;
+	 *  only ResetMatchState clears it. */
+	int32 FrozenMaxCommandsPerSubmission = 0;
+	/** Frozen set of participants that simulate this epoch. It never shrinks
+	 *  during bootstrap; a dedicated coordinator is included only if its
+	 *  manifest binding actually simulates. */
+	TSet<FSeinNetworkParticipantID> RequiredStartParticipants;
+	FSeinBootstrapConsensus BootstrapConsensus;
+	TOptional<FSeinMatchBootstrapReceipt> LocalBootstrapReceipt;
+	TOptional<FSeinProtocolContext> PendingLocalBootstrapReceiptReportContext;
+	TOptional<FSeinProtocolContext>
+		PendingLocalBootstrapAuthorizedReadyReportContext;
+	TOptional<FSeinProtocolContext> DeferredBootstrapReceiptRequestContext;
+	FTSTicker::FDelegateHandle BootstrapMaterializerRetryHandle;
+	int32 BootstrapMaterializerRetryAttempts = 0;
+	TOptional<FSeinProtocolContext> PendingBootstrapAuthorizationContext;
+	TOptional<FSeinMatchBootstrapReceipt> PendingBootstrapAuthorizationReceipt;
+	TOptional<FSeinProtocolContext> PendingBootstrapLaunchContext;
+	TOptional<FSeinMatchBootstrapReceipt> PendingBootstrapLaunchReceipt;
+	/** Exclusive Core capability owned by this topology adapter for one world. */
+	FSeinMatchBootstrapAuthorityHandle MatchBootstrapAuthority;
+	FTSTicker::FDelegateHandle BootstrapCoordinatorTimeoutHandle;
+	double BootstrapCoordinatorDeadlineSeconds = 0.0;
+	FString BootstrapSessionFailureReason;
+	bool bBootstrapFailureReported = false;
+	bool bBootstrapLaunchBarrierActive = false;
+	bool bLocalBootstrapIngressClosed = false;
 
 	/** Host-side reports accepted by the pre-start config barrier. Values are
 	 *  retained so a host setting changed after an early report cannot start
 	 *  against a stale acceptance. New relay occupants must report afresh. */
-	TMap<FSeinPlayerID, int32> AcceptedConfigFingerprints;
+	TMap<FSeinNetworkParticipantID, int32> AcceptedConfigFingerprints;
 
 	/** StartLockstepSession is a request: parity RPCs may still be in flight.
 	 *  The last accepted report retries and consumes this latch. */
 	bool bServerStartRequested = false;
 
-	/** Server-side: per-turn aggregation buffer. Inner map: PlayerID -> their
-	 *  submitted commands for that turn. Once Inner.Num() == GetActiveSlotCount(),
-	 *  the turn is fanned out and the entry purged. */
-	TMap<int32, TMap<FSeinPlayerID, TArray<FSeinCommand>>> ServerTurnBuffer;
-
-	/** Server-side: completed/dispatched turn IDs (so a stragglar's late
-	 *  submission for an already-dispatched turn doesn't re-fan or stall).
-	 *  Kept as a bounded recent window; older IDs are rejected by the floor. */
-	TSet<int32> CompletedTurns;
-	int32 CompletedTurnRejectionFloor = -1;
+	/** Topology-neutral, immutable per-author turn ledger and assembly gate. */
+	FSeinTurnAggregator TurnAggregator;
 
 	/** Local-client cache: this client's slot (replicated via relay). Zero
 	 *  until OnRep_AssignedPlayerID fires. */
 	FSeinPlayerID LocalPlayerID;
+	FSeinNetworkParticipantID LocalParticipantID;
+	bool bLocalParticipantSimulates = false;
 
 	/** Session-wide seed. On the server: generated once in EnsureSessionSeed
 	 *  on first PostLogin. On clients: latched from the relay's replicated
 	 *  property. */
 	int64 SessionSeed = 0;
+
+	/** Prepared before travel; survives source-world cleanup until destination re-arm. */
+	bool bDestinationStartPending = false;
+	ESeinMatchTravelIntent PendingTravelIntent = ESeinMatchTravelIntent::NewMatch;
 
 	FDelegateHandle PostLoginHandle;
 	FDelegateHandle LogoutHandle;
@@ -498,15 +938,19 @@ private:
 	 *  the world cleanup (GameInstance scope), so this hook stays bound for
 	 *  the GI's lifetime — cleared in Deinitialize. */
 	FDelegateHandle WorldCleanupHandle;
+	FDelegateHandle TravelFailureHandle;
+	FDelegateHandle NetworkFailureHandle;
 
 	/** Subscription to USeinWorldSubsystem::OnSimTickCompleted, installed by
 	 *  BindLockstepHooksForCurrentWorld and cleared with the turn epoch. */
 	FDelegateHandle TickCompletedHandle;
+	FDelegateHandle ExecutionTopologyInvalidatedHandle;
+	bool bModuleOwnedStateReleased = false;
 
-	/** Tracks WHICH WorldSubsystem the TickCompletedHandle is bound to.
+	/** Tracks WHICH WorldSubsystem the world-scoped handles are bound to.
 	 *  Crucial for seamless travel: the GI-scoped NetSubsystem survives the
-	 *  world swap, but the OLD WorldSubsystem (whose multicast TickCompletedHandle
-	 *  was registered against) is destroyed. The handle ID becomes stale.
+	 *  world swap, but the OLD WorldSubsystem (whose multicast handles were
+	 *  registered against) is destroyed. The handle IDs become stale.
 	 *  BindLockstepHooksForCurrentWorld compares it against the current
 	 *  WorldSub — if they differ, it forces a rebind to the new WorldSub.
 	 *  Without this, post-travel sims tick freely but never get
@@ -518,10 +962,9 @@ private:
 	 *  drainage at the matching sim-tick turn boundary. Keyed by turn ID. */
 	TMap<int32, TArray<FSeinCommand>> ReceivedTurns;
 
-	/** Client-side: locally captured commands buffered until the next turn
-	 *  boundary, when they're flushed to the server (with the appropriate
-	 *  outgoing TurnId stamp) along with an implicit heartbeat. */
-	TArray<FSeinCommand> PendingOutgoingCommands;
+	/** Client-side input waiting for real turn boundaries. Capped to four
+	 *  author-turn shares by count, wire bytes, and decoded allocation. */
+	FSeinOutgoingDraftBacklog PendingOutgoingDrafts;
 
 	/** Frozen per-turn batches awaiting successful local handoff to the
 	 *  reliable relay RPC. Normally empty immediately after each boundary. */
@@ -535,8 +978,8 @@ private:
 	 *  the same heartbeat. -1 means "never submitted yet". */
 	int32 LastSubmittedTurn = -1;
 
-	/** Client_StartSession may race replicated slot/seed readiness. Latch the
-	 *  request rather than allowing even one ungated/unseeded sim tick. */
+	/** Standalone resume request. First tick-zero launch belongs to the active
+	 *  bootstrap authority, never this compatibility entry point. */
 	bool bStartSessionRequested = false;
 
 	/** Server-only: captures every dispatched turn for offline replay
@@ -569,14 +1012,13 @@ private:
 	 *  tick. Without this, AI commands would call EnqueueCommand directly on
 	 *  the host's sim and immediately desync from every client.
 	 *
-	 *  Cleared per-slot in TeardownAIForSlot (reconnect) and across-the-board
-	 *  in Deinitialize. */
-	TMap<FSeinPlayerID, TArray<FSeinCommand>> PendingAICommands;
+	 *  Each slot is capped to four author-turn shares. Cleared per-slot in
+	 *  TeardownAIForSlot (reconnect) and across-the-board in Deinitialize. */
+	TMap<FSeinPlayerID, FSeinAICommandBacklog> PendingAICommands;
 
-	/** Interceptor body bound to USeinWorldSubsystem::AIEmitInterceptor. Returns
-	 *  true iff the command was routed onto the lockstep wire (server +
-	 *  networking active); false signals the AI controller should fall back
-	 *  to direct local enqueue. */
+	/** Interceptor body installed through USeinWorldSubsystem's opaque AI route.
+	 *  A bound adapter owns the routing decision: true means accepted; false
+	 *  means rejected. Only an unbound adapter permits standalone ingress. */
 	bool HandleAIEmit(FSeinPlayerID OwnedSlot, const FSeinCommand& Command);
 
 	/** Server-side: per-slot AI controller instantiated on the
@@ -632,50 +1074,81 @@ private:
 	 *  completion, protocol pruning, and epoch reset so it stays bounded. */
 	TMap<int32, FSeinIncompleteTurnDiagnostic> IncompleteTurnDiagnostics;
 
-	// ============== Determinism gossip (Phase 4) ==============
+	// ============== Determinism gossip ==============
 
-	/** Server-side: per-check-turn collected state hashes. Inner key is the
-	 *  reporting peer's slot, value is their hash. When inner.Num() ==
+	/** Coordinator-side: per-check-turn collected canonical world roots.
+	 *  Inner key is the reporting participant, value is its root. When inner.Num() ==
 	 *  GetActiveSlotCount() we run comparison + (on mismatch) fan-out.
 	 *  Cleared per-turn after comparison. */
-	TMap<int32 /*Turn*/, TMap<FSeinPlayerID, int32 /*Hash*/>> ServerHashReports;
+	TMap<int32 /*Turn*/, TMap<FSeinNetworkParticipantID, FGuid /*WorldRoot*/>>
+		ServerWorldStateRootReports;
 
-	/** Server-side: turns that have already been compared, so a stragglar's
+	/** Coordinator-side: turns that have already been compared, so a straggler's
 	 *  late report doesn't re-trigger the alarm. Pruned periodically. */
-	TSet<int32> CompletedHashChecks;
-	int32 CompletedHashRejectionFloor = -1;
+	TSet<int32> CompletedWorldStateRootChecks;
+	int32 CompletedWorldStateRootRejectionFloor = -1;
 
 	/** Local-side: set when ClientHandleDesyncNotification fires. Stays true
 	 *  until manually cleared. Surfaces via IsLocalDesyncDetected() for
 	 *  the gate to consult if the project wants halt-on-desync. */
 	bool bDesyncDetected = false;
 
-	/** Client-side: highest turn we've already submitted a state-hash report
+	/** Local-side: highest turn we've already submitted a world-root report
 	 *  for, so OnSimTickCompleted's check doesn't double-submit. */
-	int32 LastHashReportedTurn = -1;
+	int32 LastWorldStateRootReportedTurn = -1;
 
 	/** Exact checkpoint values captured locally but not yet handed to the
 	 *  reliable relay RPC. */
-	TArray<FSeinPendingStateHashReport> PendingStateHashReports;
-	int32 LastHashQueuedTurn = -1;
+	TArray<FSeinPendingWorldStateRootReport> PendingWorldStateRootReports;
+	int32 LastWorldStateRootQueuedTurn = -1;
+
+	/** Local terminal state. A participant-local capture failure is provisional
+	 *  until the coordinator distributes one canonical failure value. */
+	FSeinDeterminismSessionFailure DeterminismSessionFailure;
+	bool bDeterminismSessionFailureAuthoritative = false;
+	TOptional<FSeinDeterminismSessionFailure>
+		PendingDeterminismSessionFailureReport;
+	TMap<int32, TArray<FSeinDeterminismSessionFailure>>
+		PendingAuthenticatedDeterminismSessionFailures;
 
 #if WITH_DEV_AUTOMATION_TESTS
 	/** White-box transport seams used only by the disabled non-shipping test
 	 *  plugin to force local handoff failures deterministically. */
 	TFunction<bool(int32, const TArray<FSeinCommand>&)> TestTurnSubmitOverride;
-	TFunction<bool(int32, int32)> TestHashSubmitOverride;
+	TFunction<bool(int32, const FGuid&)> TestWorldStateRootSubmitOverride;
+	TFunction<bool(const FSeinDeterminismSessionFailure&)>
+		TestDeterminismSessionFailureSubmitOverride;
+	TFunction<bool(FGuid&, FString&)> TestWorldStateRootResolverOverride;
+	TOptional<bool> TestServerOverride;
 	TOptional<bool> TestDedicatedAuthorityOverride;
+	TOptional<TArray<FSeinParticipantBinding>> TestParticipantManifestOverride;
+	TOptional<FGuid> TestCommandProtocolDigestOverride;
+	TOptional<FGuid> TestSimulationContentDigestOverride;
+	TOptional<int32> TestCommandProtocolMaxCommandsOverride;
+	TOptional<bool> TestNetworkingActiveOverride;
+	TOptional<bool> TestDeterminismGossipEnabledOverride;
+	TOptional<int32> TestDeterminismCheckIntervalOverride;
+	TOptional<int32> TestCurrentTurnOverride;
+	TFunction<bool(FGameplayTag, int32, FSeinCommandSchemaDescriptor&)>
+		TestFindCommandSchemaOverride;
 #endif
 
-	/** Compute + submit the local sim's state hash if `Turn` is a check turn
+	/**
+	 * Resolve the canonical 128-bit root without falling back to the legacy
+	 * diagnostic ComputeStateHash. This is the single integration point for
+	 * the Core full-world-root API.
+	 */
+	bool ResolveLocalWorldStateRoot(FGuid& OutRoot, FString& OutError) const;
+
+	/** Compute + submit the local sim's world-state root if `Turn` is a check turn
 	 *  per `DeterminismCheckIntervalTurns`. Called from OnSimTickCompleted at
 	 *  every turn boundary; the cadence check is internal. */
-	void MaybeSubmitStateHashCheck(int32 JustFinishedTurn);
+	void MaybeSubmitWorldStateRootCheck(int32 JustFinishedTurn);
 
-	/** Server-only: run the comparison for `Turn` once all peers have
+	/** Coordinator-only: run the comparison for `Turn` once all peers have
 	 *  reported. On match, log Verbose + clear; on mismatch, fan
 	 *  Client_NotifyDesync to every relay. */
-	void ServerCompareHashesForTurn(int32 Turn);
+	void ServerCompareWorldStateRootsForTurn(int32 Turn);
 
 	/** Read-helpers from settings. */
 	bool IsDeterminismGossipEnabled() const;

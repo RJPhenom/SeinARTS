@@ -1,10 +1,9 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinMatchFlowBPFL.h
- * @brief   BP surface for match settings + match-flow operations (DESIGN §18).
- *          Settings read is BlueprintPure (immutable post-StartMatch);
- *          flow mutations route through the command buffer so the txn log
- *          captures state-machine transitions for replay.
+ * @brief   BP surface for immutable match settings and in-match flow operations.
+ *          Tick-zero startup belongs to the active bootstrap provider; runtime
+ *          flow mutations route through the command buffer for replay.
  */
 
 #pragma once
@@ -14,6 +13,8 @@
 #include "GameplayTagContainer.h"
 #include "Core/SeinPlayerID.h"
 #include "Data/SeinMatchSettings.h"
+#include "Serialization/SeinCanonicalStateRegistry.h"
+#include "StructUtils/InstancedStruct.h"
 #include "SeinMatchFlowBPFL.generated.h"
 
 class USeinWorldSubsystem;
@@ -27,7 +28,7 @@ public:
 
 	// Reads -----------------------------------------------------------------
 
-	/** Read the current match settings snapshot. Immutable after `StartMatch`. */
+	/** Read the immutable match settings snapshot installed at bootstrap. */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Match",
 		meta = (WorldContext = "WorldContextObject", DisplayName = "Get Match Settings"))
 	static FSeinMatchSettings SeinGetMatchSettings(const UObject* WorldContextObject);
@@ -37,13 +38,44 @@ public:
 		meta = (WorldContext = "WorldContextObject", DisplayName = "Get Match State"))
 	static ESeinMatchState SeinGetMatchState(const UObject* WorldContextObject);
 
-	// Mutations (route through command buffer for lockstep determinism) ---
+	/**
+	 * Add receipt-only deterministic evidence while bootstrap is Applying.
+	 * This does not create a persistent/queryable state slot; author those
+	 * through a Canonical State Recipe and Set/Get State Value.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Match|Bootstrap",
+		meta = (WorldContext = "WorldContextObject", DisplayName = "Register Bootstrap Evidence"))
+	static bool SeinRegisterBootstrapEvidenceValue(
+		const UObject* WorldContextObject,
+		FName StableContributorID,
+		int32 SchemaVersion,
+		const FInstancedStruct& Value,
+		FString& OutError);
 
-	/** Enqueue a StartMatch command. Settings payload carried via `FInstancedStruct`;
-	 *  the sim snapshots at handler-dispatch time. */
+	/** Transactionally update one state slot during deterministic simulation. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|State",
+		meta = (WorldContext = "WorldContextObject", DisplayName = "Set State Value"))
+	static bool SeinSetCanonicalStateValue(
+		const UObject* WorldContextObject,
+		const FSeinCanonicalStateKey& Key,
+		const FInstancedStruct& Value,
+		FString& OutError);
+
+	/** Read a copy of one state slot. */
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|State",
+		meta = (WorldContext = "WorldContextObject", DisplayName = "Get State Value"))
+	static bool SeinGetCanonicalStateValue(
+		const UObject* WorldContextObject,
+		const FSeinCanonicalStateKey& Key,
+		FInstancedStruct& OutValue);
+
+	/** Launch tick zero after standalone bootstrap authorization, or resume a
+	 *  stopped standalone match. Network topologies own their launch barrier. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Match",
-		meta = (WorldContext = "WorldContextObject", DisplayName = "Start Match"))
-	static void SeinStartMatch(const UObject* WorldContextObject, const FSeinMatchSettings& Settings);
+		meta = (WorldContext = "WorldContextObject", DisplayName = "Start Standalone Simulation"))
+	static bool SeinStartStandaloneSimulation(const UObject* WorldContextObject);
+
+	// Mutations (route through command buffer for lockstep determinism) ---
 
 	/** Enqueue an EndMatch command. `Winner` = victor; `Reason` = designer-authored
 	 *  victory reason tag (`MyGame.Victory.Annihilation`, etc.). */
@@ -65,11 +97,6 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Match",
 		meta = (WorldContext = "WorldContextObject", DisplayName = "Concede Match"))
 	static void SeinConcedeMatch(const UObject* WorldContextObject, FSeinPlayerID Conceding);
-
-	/** Enqueue a restart command. Resets match state to Lobby. */
-	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Match",
-		meta = (WorldContext = "WorldContextObject", DisplayName = "Restart Match"))
-	static void SeinRestartMatch(const UObject* WorldContextObject);
 
 private:
 	static USeinWorldSubsystem* GetWorldSubsystem(const UObject* WorldContextObject);

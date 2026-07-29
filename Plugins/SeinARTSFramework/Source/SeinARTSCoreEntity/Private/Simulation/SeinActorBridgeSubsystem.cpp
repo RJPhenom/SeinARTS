@@ -91,42 +91,44 @@ void USeinActorBridgeSubsystem::RegisterAllPlacedActors(UWorld& InWorld)
 	int32 NumSkipped = 0;
 	for (ASeinActor* PlacedActor : Sorted)
 	{
-		// Skip actors already linked to an entity. Includes the case where
-		// the bridge's own SpawnActorForEntity created the actor in
-		// response to a runtime SpawnEntity — that path stamps the entity
-		// handle on the actor before it ever begin-plays.
 		if (PlacedActor->HasValidEntity())
 		{
 			++NumSkipped;
-			continue;
 		}
-
-		// Read the per-instance ownership slot set in the level editor.
-		// PlayerSlot 0 = neutral (decoration, props, capture points before
-		// capture). PlayerSlot N>0 stamps the entity for FSeinPlayerID(N).
-		// Note: this fires before any player has connected via
-		// HandleStartingNewPlayer, so the player state for slot N may not
-		// exist yet — RegisterPlayer creates it later. Anything querying
-		// owner state in that window must handle a missing FSeinPlayerState.
-		const FSeinPlayerID PlacedOwner = PlacedActor->PlayerSlot > 0
-			? FSeinPlayerID(static_cast<uint8>(PlacedActor->PlayerSlot))
-			: FSeinPlayerID::Neutral();
-		const FSeinEntityHandle Handle = SimSubsystem->SpawnEntityFromPlacedActor(
-			PlacedActor, PlacedOwner);
-		if (!Handle.IsValid()) continue;
-
-		// InitializeWithEntity before RegisterActor so the actor's bridge
-		// has a valid handle by the time DispatchSpawn fires ReceiveEntitySpawned
-		// on the ACs — BP handlers commonly call GetEntityHandle() on the
-		// owning actor and need it valid.
-		PlacedActor->InitializeWithEntity(Handle);
-		RegisterActor(Handle, PlacedActor);
-		++NumRegistered;
+		else if (RegisterPlacedActor(*PlacedActor).IsValid())
+		{
+			++NumRegistered;
+		}
 	}
 
 	UE_LOG(LogSeinBridge, Log,
 		TEXT("RegisterAllPlacedActors: stable-sorted, registered %d placed ASeinActor(s); %d already had entities."),
 		NumRegistered, NumSkipped);
+}
+
+FSeinEntityHandle USeinActorBridgeSubsystem::RegisterPlacedActor(
+	ASeinActor& PlacedActor)
+{
+	if (!SimSubsystem.IsValid() || PlacedActor.HasValidEntity())
+	{
+		return FSeinEntityHandle::Invalid();
+	}
+
+	const FSeinPlayerID PlacedOwner = PlacedActor.PlayerSlot > 0
+		? FSeinPlayerID(static_cast<uint8>(PlacedActor.PlayerSlot))
+		: FSeinPlayerID::Neutral();
+	const FSeinEntityHandle Handle = SimSubsystem->SpawnEntityFromPlacedActor(
+		&PlacedActor, PlacedOwner);
+	if (!Handle.IsValid())
+	{
+		return FSeinEntityHandle::Invalid();
+	}
+
+	// Actor-side Blueprint callbacks may query their entity immediately after
+	// bridge registration, so stamp the handle first.
+	PlacedActor.InitializeWithEntity(Handle);
+	RegisterActor(Handle, &PlacedActor);
+	return Handle;
 }
 
 void USeinActorBridgeSubsystem::Deinitialize()

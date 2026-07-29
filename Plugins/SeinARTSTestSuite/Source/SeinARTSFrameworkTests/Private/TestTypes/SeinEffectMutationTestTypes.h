@@ -104,6 +104,10 @@ class USeinEffectPeriodicBTestEffect : public USeinEffectMutationTestHook
 
 public:
 	USeinEffectPeriodicBTestEffect();
+
+	/** Derived authored state used to prove replacement snapshots are not base-only. */
+	UPROPERTY(EditDefaultsOnly)
+	FFixedPoint DerivedBehaviorValue = FFixedPoint::Zero;
 };
 
 UCLASS()
@@ -133,12 +137,16 @@ class USeinLatentMutationTestAction : public USeinLatentAction
 public:
 	using FTickCallback = TFunction<bool(USeinLatentMutationTestAction&, USeinWorldSubsystem&)>;
 	using FCancelCallback = TFunction<void(USeinLatentMutationTestAction&)>;
+	using FAbandonCallback = TFunction<void(USeinLatentMutationTestAction&)>;
 	static FTickCallback TickCallback;
 	static FCancelCallback CancelCallback;
+	static FAbandonCallback AbandonCallback;
 
 	int32 TickCount = 0;
 	int32 CancelCount = 0;
+	int32 AbandonCount = 0;
 
 	virtual bool TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& World) override;
 	virtual void OnCancel() override;
+	virtual void OnTimelineAbandoned() override;
 };

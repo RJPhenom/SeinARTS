@@ -57,7 +57,12 @@ bool USeinConstructionBPFL::SeinAddConstructionProgress(const UObject* WorldCont
 	FSeinEntityHandle Entity, FFixedPoint Amount)
 {
 	USeinWorldSubsystem* Sub = GetSubsystem(WorldContextObject);
-	if (!Sub) return false;
+	if (!Sub
+		|| !Sub->RequireStateMutationAuthorization(
+			TEXT("AddConstructionProgress")))
+	{
+		return false;
+	}
 
 	FSeinConstructionComponent* Data = Sub->GetComponent<FSeinConstructionComponent>(Entity);
 	if (!Data)
@@ -93,7 +98,11 @@ bool USeinConstructionBPFL::SeinAddConstructionProgress(const UObject* WorldCont
 void USeinConstructionBPFL::SeinFinishConstruction(const UObject* WorldContextObject, FSeinEntityHandle Entity)
 {
 	USeinWorldSubsystem* Sub = GetSubsystem(WorldContextObject);
-	if (!Sub) return;
+	if (!Sub
+		|| !Sub->RequireStateMutationAuthorization(TEXT("FinishConstruction")))
+	{
+		return;
+	}
 
 	// Snapshot completion-effect class BEFORE we remove the component, so the
 	// effect application happens against valid data. The remove + ungrant +

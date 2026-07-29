@@ -25,13 +25,13 @@ separately.
 
 - Test infrastructure: disabled base `Plugins/SeinARTSTestSuite` plus disabled
   `Plugins/SeinARTSExtensionTestSuite`; three base modules and two extension modules, all denied in
-  Shipping. The extension companion has separate runtime and Editor modules. The split permits
+  Shipping. The extension companion has separate DeveloperTool and Editor modules. The split permits
   a true framework-only build/run profile without mounting extension assets.
 - Production modules depend on neither the test plugin nor `CQTest`.
 - Test-enabled editor build: succeeded on 2026-07-18.
 - Headless Automation smoke: `SeinARTS.Unit` discovered and passed; the runner parsed the exported
   `index.json` rather than trusting process exit alone.
-- Both `All` and extension-stripped `Framework` profiles build and execute; the framework receipt
+- Both `All` and extension-disabled `Framework` profiles build and execute; the framework receipt
   marks Squad, Cover, Movement+, and the extension test suite disabled.
 - The strict runner correctly rejects seven pre-Automation asset-load errors that Unreal's test
   result otherwise reports as green. `-AllowKnownStartupErrors` accepts only the exact sorted
@@ -39,8 +39,8 @@ separately.
 - Test-profile builds immediately restore the ordinary editor receipt before Automation launches;
   a completed test run does not enable test plugins or suppress production extensions on normal
   Editor startup.
-- Ordinary editor build after test scaffolding: succeeded and its target receipt contains no test
-  plugin/module entries.
+- Ordinary editor build after test scaffolding: succeeded and its target receipt contains no Sein
+  test plugin/module entries.
 - Baseline Shipping build: test modules were excluded, but existing production FoW render code
   failed on editor-only `UTexture2D::MipGenSettings`; tracked below as `BUILD-01`.
 
@@ -84,8 +84,9 @@ than being mixed into the serializer migration.
   same 100-collider workload for 120 production ticks: all 120 raw fixed-point pose digests matched,
   while all 120 existing `StateHash` values differed. This isolates `STATE-02` canonicalization from
   the now-tested parallel collision result; fresh-process StateHash agreement is **not** claimed.
-- Clean MSVC Development and Shipping builds succeeded. The Shipping receipt contains neither test
-  plugin nor test build product; the ordinary Editor receipt also contains no enabled test plugin.
+- Clean MSVC Development and Shipping builds succeeded. The Shipping receipt contains neither Sein
+  test plugin nor Sein test build product; the ordinary Editor receipt contains no enabled Sein test
+  plugin.
 - Clang compiled and linked `SeinARTSCore` and `SeinARTSCoreEntity` after fixed-point division was
   moved off compiler-emitted 128-bit runtime helpers. A full Clang Editor executable cannot be linked
   against Epic's launcher-engine MSVC binaries because of unrelated Windows ABI imports, so Clang
@@ -111,6 +112,81 @@ removing validated behavior merely to reduce LOC.
 | Squad extension | 18 | 2,026 | +8 | 229 | 526 |
 | Cover extension | 33 | 4,094 | +11 | 432 | 1,377 |
 | Movement+ extension | 18 | 2,361 | 0 | 283 | 828 |
+
+### Phase 2 working checkpoint
+
+- The full test-enabled `All` profile builds, restores the ordinary editor receipt, and passes
+  172/172 `SeinARTS.Unit` tests. The exported report is
+  `Saved/Automation/SeinARTS.Unit-20260722-122403/index.json` (153 clean passes, 19 expected-warning
+  passes, zero failures or skipped tests).
+- Raw `FName` command payloads now use a frozen, manifest-bound catalog and bounded `uint32` wire
+  indices; hostile bytes cannot intern names. Standalone, network, and replay paths normalize to the
+  same catalog representative. The current coordinated compatibility boundary is command wire v3 /
+  command protocol domain 6 / replay file v6 / header metadata v5.
+- Executable replay and header-metadata serialization use the active world's immutable catalog.
+  Literal-null metadata calls retain an explicit worldless-tooling fallback to current project
+  defaults; a supplied context without a frozen simulation world fails closed.
+- Adversarial review exposed a separate tick-zero bootstrap contract/barrier problem before replay
+  playback was widened. It is tracked as `STATE-03` and remains a design gate rather than being
+  hidden behind the green unit suite.
+
+### Phase 3/4 tick-zero, authority, and lifecycle checkpoint
+
+- Gate G is approved and implemented as a world-lifetime inert facade plus one transient bootstrap
+  transaction: freeze contract -> materialize -> seal/preflight -> compare exact local receipts ->
+  authorize every simulation participant -> release the transaction -> launch the already-reserved
+  dormant tick-zero scheduler. Failure is terminal for that world; reconnect/checkpoint adoption does
+  not reopen bootstrap.
+- `ASeinGameMode` remains Unreal's match authority/controller shell, but no longer owns parallel
+  deterministic defaults. The legacy default-faction and GameMode starting-resource paths were
+  removed. Active Human/AI slots require explicit valid factions; framework starting resources are a
+  canonical match extension. The default materializer requires exactly one `ASeinPlayerStart` per
+  active Human/AI slot, while custom materializers remain pluggable.
+- The canonical receipt binds the frozen contract, authorization context, materialization plan, and
+  initial state. Native contributors use registration handles with teardown; Blueprint/extensions can
+  contribute immediate deterministic `FInstancedStruct` values. Seed installation and guarded
+  framework Applying-phase mutators require the exact lexical materializer capability; legacy mutable
+  storage accessors remain tracked as `API-14`.
+- Bootstrap consensus is transport-neutral. The shipped Unreal relay supports standalone, dedicated,
+  and listen-server topologies without encoding those shapes into the authority policy. Pending travel
+  state is source-world/destination-bound, same-map travel is explicit, failure delegates are removed
+  on deinitialize, and the irreversible launch fanout occurs only after unanimous authorized-ready.
+- Command ingress is closed until `Consumed + running`. Local drafts, authenticated transport,
+  replay, deterministic-system, AI, and observer routes now have distinct capabilities and lifecycle
+  gates. AI emission is exact-controller and lexical; replay primes commands at a private exact-tick
+  boundary; public completion/bootstrap callbacks enter the guarded read-only observer scope.
+- State hardening now includes live-only guarded entity/component reads, exact deferred-destroy
+  inspection, generation-preserving component iteration, generation-exhaustion retirement, staged
+  snapshot-v7 restore, snapshot reentrancy/GC protection, and explicit ownership-transition
+  quiescence. Full continuation snapshots and canonical cross-process state hashing remain Phase 5.
+- Independent adversarial review found no remaining source-level Phase-4 blocker. The All profile
+  passes Unit 210/210, Sim 27/27, Determinism 5/5, Integration 10/10, and Editor 1/1. The
+  extension-disabled Framework profile passes Unit 210/210, Sim 26/26, Determinism 5/5, and
+  Integration 9/9. Representative reports are under `Saved/Automation/` at
+  `SeinARTS.Unit-20260723-000315`, `SeinARTS.Sim-20260723-000947`,
+  `SeinARTS.Determinism-20260723-001010`, `SeinARTS.Integration-20260723-001409`, and
+  `SeinARTS.Unit-20260723-001507` (Framework).
+- Ordinary `SeinARTSEditor Win64 Development` and `SeinARTS Win64 Shipping` builds succeed. Neither
+  receipt enables a Sein test plugin or contains a Sein test build product, and production source has
+  no `CQTest`/test-suite dependency. A real multi-peer travel/launch `SeinARTS.Network.PIE` scenario
+  is not yet present, so `STATE-03` is Fixed rather than promoted to Verified.
+
+### Phase 4 production-size checkpoint
+
+The Phase-4 correctness work did **not** shrink production source. Relative to the Phase-1 checkpoint,
+Framework production grew by 23,631 lines and 40 files. Most of the increase is executable protocol,
+validation, serialization, and lifecycle machinery rather than comments, but the concentration is not
+an acceptable final readability posture: `SeinWorldSubsystem.cpp` is 9,615 lines and
+`SeinNetSubsystem.cpp` is 6,401. `API-13` tracks internal decomposition after the exact-state contracts
+are frozen; reduction must preserve the tested seams and behavior.
+
+| Area | Files | Lines | Delta from baseline | Delta from Phase 1 | Blank | Comment-like |
+|---|---:|---:|---:|---:|---:|---:|
+| Host `Source` | 5 | 65 | 0 | 0 | 16 | 10 |
+| Framework | 548 | 122,853 | +26,146 | +23,631 | 13,737 | 30,219 |
+| Squad extension | 18 | 2,056 | +38 | +30 | 231 | 531 |
+| Cover extension | 33 | 4,093 | +10 | -1 | 432 | 1,376 |
+| Movement+ extension | 18 | 2,361 | 0 | 0 | 283 | 828 |
 
 ## Status vocabulary
 
@@ -140,20 +216,35 @@ removing validated behavior merely to reduce LOC.
 - Plugin-local `AGENTS.md` guides are canonical for Codex. All `CLAUDE.md` files remain present for
   possible future Claude use.
 - Work remains in the main checkout; worktrees are forbidden.
+- Command authority is topology-neutral. Transport-authenticated participants, gameplay player
+  slots, simulation/hash peers, coordinator capability, and match-administration capability are
+  distinct identities/roles. Coordinating a turn never grants gameplay or administration rights.
+- The default command-authority policy is owner control plus explicit deterministic scoped grants.
+  Broker orders preserve their existing mixed-recipient behavior by filtering unauthorized/stale
+  members; single-entity commands reject unauthorized control. Delegated actions spend the entity
+  owner's resources by default, while custom policies may implement shared-resource games.
+- Commands use an exact registered tag + schema-version contract with bounded deterministic payloads.
+  Native built-ins and Blueprint/extension handlers share the same frozen compatibility manifest;
+  missing or conflicting handlers fail before tick zero rather than being silently skipped.
+- The framework will ship the existing Unreal dedicated/listen relay as its first transport adapter,
+  while authority and turn aggregation remain compatible with future elected-P2P and all-peer
+  adapters. Authenticated fail-stop peers are the P2P baseline; Byzantine consensus and anti-DoS are
+  outside the framework guarantee.
 
 ## Correctness, determinism, and lifecycle
 
 | ID | Finding | Phase | Status |
 |---|---|---:|---|
-| COR-01 | Multiplayer command ownership, sender-role, match-control, payload, and turn-window validation are incomplete. | 2 | Gate |
+| COR-01 | Multiplayer command ownership, sender-role, match-control, payload, and turn-window validation are incomplete. | 2/4 | Verified |
 | COR-02 | Effect IDs collide across scope/storage; removal identity is ambiguous. | 1 | Verified |
-| STATE-01 | Snapshot capture/restore is not exact continuation state across all future-affecting systems, including centralized ability active-index lifecycle. | 3 | Confirmed |
+| STATE-01 | Snapshot capture/restore is not exact continuation state across all future-affecting systems, including centralized ability active-index lifecycle. | 5 | Confirmed |
 | COR-03 | Latent-action iteration can be invalidated by synchronous Blueprint callbacks. | 1 | Verified |
-| STATE-02 | StateHash coverage/canonicalization is incomplete and includes process-local `FName` identity. | 3 | Confirmed |
+| STATE-02 | StateHash coverage/canonicalization is incomplete and includes process-local `FName` identity. | 5 | Confirmed |
+| STATE-03 | Tick-zero bootstrap lacked a canonical completion barrier and replay-compatible shared materialization contract; server/client derived GameMode defaults and failure paths differently. | 3/4 | Fixed |
 | NAV-01 | Initial destinations can be silently moved after preview by partial A*, wall push, authority recognition, or endpoint restoration. | 5 | Confirmed |
 | NAV-02 | Budgeted asynchronous repath results can be overwritten/lost when keyed only by requester. | 5 | Confirmed |
 | CACHE-01 | Structured-XOR/fingerprint keys can collide; FoW source/blocker rotation/invalidation is incomplete. Exact nav/FoW cache identities and equal-cell reset are fixed; broader invalidation remains. | 1/6 | In progress |
-| NET-01 | Failed local submission, map restart, retained hash/turn sets, and pruning lifecycle are incomplete. Phase-1 readiness, retry, bounds, slot/turn, and reset contracts are fixed; ownership/travel policy remains. | 1/4 | In progress |
+| NET-01 | Failed local submission, map restart, retained hash/turn sets, and pruning lifecycle were incomplete. Readiness, ownership, exact travel binding, failure cleanup, retry, bounds, slot/turn, and reset contracts are fixed; checkpoint catch-up and long-session retention remain. | 1/4/5/8 | In progress |
 | COR-04 | Free-rotation placement validates an incorrect/default yaw. | 1 | Verified |
 | COR-05 | Collision overlap pair identity omits entity generation. | 1 | Verified |
 | NAV-03 | Same-cell vehicle paths can contain no drivable segment and fail incorrectly. | 5 | Queued |
@@ -176,23 +267,23 @@ removing validated behavior merely to reduce LOC.
 
 | ID | Finding/opportunity | Owning phase | Status |
 |---|---|---:|---|
-| PERF-01 | Redundant full StateHash walks occur at incompatible cadences. | 3/8 | Confirmed |
+| PERF-01 | Redundant full StateHash walks occur at incompatible cadences. | 5/8 | Confirmed |
 | PERF-02 | A* scratch allocation churn is high; retained worker contexts need an explicit memory cap. | 5/8 | Confirmed |
 | PERF-03 | FoW changed-source footprint generation is roughly cubic in radius. | 6 | Confirmed |
 | PERF-04 | Any dynamic FoW blocker change invalidates all sources rather than spatially affected sources. | 6 | Confirmed |
 | PERF-05 | Minimap performs dense point queries, buffer churn, and full texture recreation/upload. | 6 | Confirmed |
 | PERF-06 | Cover provider/slot work has quadratic paths and duplicated allocation bodies. | 5/8 | Confirmed |
 | PERF-07 | Squad, avoidance, and collision scan broad entity sets and allocate avoidable per-tick containers. | 7/8 | Confirmed |
-| PERF-08 | Replay and completed/hash/turn histories can grow without practical bounds. | 4/8 | Confirmed |
+| PERF-08 | Replay and completed/hash/turn histories can grow without practical bounds. | 5/8 | Confirmed |
 | PERF-09 | High effect stack counts materialize one resolved modifier copy per stack. | 8 | Confirmed |
 | PERF-10 | Merely enabling Cover binds the authority resolver and globally forces collision serial, even in worlds with no authoritative cover destination. | 5/8 | Confirmed |
-| PERF-11 | StateHash parallel dispatch is budgeted by storage count, so the default minimum batch normally leaves the expensive entity walk serial. | 3/8 | Confirmed |
+| PERF-11 | StateHash parallel dispatch is budgeted by storage count, so the default minimum batch normally leaves the expensive entity walk serial. | 5/8 | Confirmed |
 
 ## API, modularity, and extensibility
 
 | ID | Finding | Phase | Status |
 |---|---|---:|---|
-| API-01 | Command dispatch/validation is centralized as hardcoded branching rather than stable registered handlers/policies. | 2 | Gate |
+| API-01 | Command dispatch/validation is centralized as hardcoded branching rather than stable registered handlers/policies. | 2/4 | Verified |
 | API-02 | Some public headers rely on dependencies declared private in Build.cs. | 1/7 | Queued |
 | API-03 | Cover's optional Squad dependency is metadata-only; the bridge module hard-links Squad. | 7 | Confirmed |
 | API-04 | Terrain query ownership leaks through Navigation rather than a neutral terrain contract. | 7 | Gate |
@@ -204,13 +295,15 @@ removing validated behavior merely to reduce LOC.
 | API-10 | Targeter gestures and attribute modifier types are narrower than their Blueprint-facing promise. | 7 | Gate |
 | API-11 | Cover authority is a single-cast Boolean with no requester, source, stable slot, or override policy context. | 5 | Confirmed |
 | API-12 | Direct ability activate/end/cancel paths do not centrally maintain `ActiveAbilityID`/`ActivePassiveIDs`; snapshot restore preserves IDs but deliberately deactivates opaque passive execution. | 3/7 | Confirmed |
+| API-13 | Core and Net state machines are over-concentrated in 9,615-line and 6,401-line implementation files; split internal responsibilities without widening public seams or changing execution order. | 8 | Confirmed |
+| API-14 | Public mutable entity-pool, component-storage, and player-state accessors bypass the guarded mutation/bootstrap facade and can violate lifecycle invariants. | 5 | Confirmed |
 
 ## Approved feature/completeness scope
 
 | ID | Work | Phase | Status |
 |---|---|---:|---|
-| FEAT-01 | Checkpoint plus command-tail reconnect and exact catch-up. | 4 | Queued |
-| FEAT-02 | Replay journaling, checkpoints, seeking, validation, and bounded storage. | 4 | Queued |
+| FEAT-01 | Checkpoint plus command-tail reconnect and exact catch-up. | 5 | Queued |
+| FEAT-02 | Replay journaling, checkpoints, seeking, validation, and bounded storage. | 5 | In progress |
 | FEAT-03 | Tactical cover matching, stable slot identities, reservations, lifecycle, and shared preview/commit planning. | 5 | Approved |
 | FEAT-04 | Faster height-aware FoW default plus spatial invalidation and performance/quality A/B. | 6 | Approved |
 | FEAT-05 | Rich targeter/gesture registry and public policy composition. | 7 | Gate |
@@ -219,16 +312,25 @@ removing validated behavior merely to reduce LOC.
 | FEAT-08 | Vehicle typed-path producer/validation and flight/3D behavior, consistent with steering-first and offline-authored curves. | 7 | Gate |
 | FEAT-09 | Adaptive input delay after observability and policy review. | 7/8 | Gate |
 
+Replay's foundation now uses a bounded v6 executable format owned exclusively by
+`SeinARTSNet`: full recordings start at tick 0, retain every applied assembled turn (including empty
+heartbeats), stop on the exact inclusive `EndTick`, bind executable command decoding to the world's
+frozen schema/name catalog, and carry the agreed bootstrap receipt. The similarly named CoreEntity
+Blueprint helpers are bounded v5 **header-metadata-only** documents; the ambiguous legacy nodes
+remain as deprecated wrappers and cannot create or load an executable journal. FEAT-02 remains open
+for checkpoints, seeking, and long-session streaming/retention policy.
+
 ## Design gates
 
 | Gate | Decision |
 |---|---|
-| A | Entity control/delegation, host/match-control authority, and native versus Blueprint custom network commands. |
+| A | **Approved 2026-07-18.** Owner-by-default deterministic authority with scoped grants; coordinator and match-admin capabilities remain separate from gameplay slots; exact versioned native/BP handler registry; topology-neutral core with Unreal relay as the first shipped transport adapter. |
 | B | Exact persistence contract for active Blueprint latent execution and opaque continuation fallback. |
 | C | Contextual authoritative-destination provider registry and allowed bypass flags. |
 | D | Cover scoring, contention, reservation lifecycle, queued orders, and moving providers. |
 | E | Height-aware FoW quality policy and evidence required to replace the default. |
 | F | Public API clusters: targeters, modifiers, terrain, production, team vision, and movement feel. |
+| G | **Approved 2026-07-22.** Canonical match rules and exact peer receipt consensus; world-lifetime inert facade plus one self-culling transient transaction; immediate Blueprint deterministic-value contributions plus native registered contributors; GameMode remains the Unreal authority shell without duplicated deterministic defaults. |
 
 ## Definition of complete
 

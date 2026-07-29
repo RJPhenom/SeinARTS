@@ -144,11 +144,11 @@ struct SEINARTSCOREENTITY_API FSeinCommandBrokerData : public FSeinComponent
 	 *  The FORMATION owns its slots; which member stands in which slot is re-decided at
 	 *  use (a scattered line re-forms with members in whatever arrangement crosses least,
 	 *  via Reassign Slots) - so this is a plain slot list, deliberately NOT a member-to-slot
-	 *  map. Written by the default broker resolver at every ground-move dispatch with the
-	 *  FINAL delivered goals (after nav projection and cover snap). Entity-targeted orders
-	 *  (attack, repair) leave it untouched - slots do not apply to a moving target. Empty
-	 *  until the first ground order. Consumers: formation re-form / re-seek and per-slot
-	 *  settle policies. */
+	 *  map. Returned by the resolver in its dispatch plan and committed atomically by the
+	 *  broker system at every ground-move dispatch with the FINAL delivered goals (after
+	 *  nav projection and cover snap). Entity-targeted orders (attack, repair) leave it
+	 *  untouched - slots do not apply to a moving target. Empty until the first ground
+	 *  order. Consumers: formation re-form / re-seek and per-slot settle policies. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker")
 	TArray<FFixedVector> SettledSlotPositions;
 
@@ -224,6 +224,10 @@ FORCEINLINE uint32 GetTypeHash(const FSeinCommandBrokerData& Data)
 {
 	uint32 Hash = GetTypeHash(Data.Members.Num());
 	Hash = HashCombine(Hash, GetTypeHash(Data.OrderQueue.Num()));
+	for (const FSeinBrokerQueuedOrder& Order : Data.OrderQueue)
+	{
+		Hash = HashCombine(Hash, GetTypeHash(Order.DerivedResourcePayer));
+	}
 	Hash = HashCombine(Hash, GetTypeHash(Data.Centroid));
 	Hash = HashCombine(Hash, GetTypeHash(Data.FormationWidth));
 	Hash = HashCombine(Hash, GetTypeHash(Data.FormationRadius));

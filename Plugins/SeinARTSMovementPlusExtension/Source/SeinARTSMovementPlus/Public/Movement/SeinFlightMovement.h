@@ -58,6 +58,8 @@ public:
 protected:
 
 	/** Per-instance current bank angle (radians, +/- MaxSteerAngle). Reset on
-	 *  OnMoveBegin — bank settles to neutral at the start of each new order. */
+	 *  OnMoveBegin — bank settles to neutral at the start of each new order.
+	 *  Reflected so canonical movement snapshots restore mid-order steering. */
+	UPROPERTY()
 	FFixedPoint CurrentSteer = FFixedPoint::Zero;
 };

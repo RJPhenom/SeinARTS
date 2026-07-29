@@ -62,7 +62,10 @@ struct SEINARTSMOVEMENTPLUS_API FSeinTrackedMovementData : public FSeinComponent
 	 *  for more aggressive "tank does high-speed donuts" feel.
 	 *
 	 *  Default 50 cm/s — roughly the speed at which a real tank would commit
-	 *  to a pivot rather than carve an arc. */
+	 *  to a pivot rather than carve an arc. Maneuver-plan cusps treat the
+	 *  pivot band as at least the driver's cusp-flip speed (30) regardless of
+	 *  a lower authored value, so a flipped reverse leg always pivots to its
+	 *  heading before driving. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
 		meta = (ClampMin = "0.0"))
 	FFixedPoint PivotSpeed = FFixedPoint::FromInt(50);
@@ -83,6 +86,21 @@ struct SEINARTSMOVEMENTPLUS_API FSeinTrackedMovementData : public FSeinComponent
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
 		meta = (ClampMin = "-1.0", ClampMax = "1.0"))
 	FFixedPoint PivotAlignDot = FFixedPoint::Half;
+
+	/** Yaw-rate slew (radians per second²) — how quickly the hull's turn RATE
+	 *  ramps toward the demanded rate, the tracked analog of a heavy hull's
+	 *  rotational inertia (a 25-ton chassis doesn't snap from straight to
+	 *  full rotation in one tick). Applies to arc turns, pivots, and cusp
+	 *  settling alike; the rate also decays through this on the way OUT of a
+	 *  turn, so turn exits ease instead of stopping dead.
+	 *
+	 *  0 (default) = OFF — yaw rate changes instantly, the pre-inertia
+	 *  behavior, bit-exact. Recommended when authored: ~3-5 × TurnRate (the
+	 *  hull reaches full rotation rate in ~0.2-0.3 s — subtle weight without
+	 *  sluggishness); lower values read heavier. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
+		meta = (ClampMin = "0.0"))
+	FFixedPoint TurnAcceleration = FFixedPoint::Zero;
 
 	/** Sharp-turn brake threshold (radians) for ARC mode. When the chassis
 	 *  is in arc mode AND the commanded yaw delta exceeds this angle,
@@ -132,13 +150,64 @@ struct SEINARTSMOVEMENTPLUS_API FSeinTrackedMovementData : public FSeinComponent
 
 	/** Optional authored minimum turn radius for tracked vehicles (world
 	 *  units). Tracked can pivot in place — 0 = "always pivot at sharp
-	 *  corners." Setting non-zero biases nav-layer corner rounding toward
-	 *  arcs of this radius for a more deliberate "rolling tank" feel.
-	 *  Consumed by `GetMinTurnRadius` which the path planner reads when
-	 *  building cell paths. Default 0. */
+	 *  corners." Setting non-zero declares "this chassis does NOT neutral-
+	 *  turn": the maneuver planner then treats it like a wheeled vehicle and
+	 *  plans the FULL word ladder (U-turn arcs, 3-point turns, reverse-out)
+	 *  at this radius instead of relying on pivots. KNOWN EXCEPTION: the idle
+	 *  settle-facing turn still rotates a parked chassis in place (a base
+	 *  behavior shared by all ground modes — disable globally via Settle To
+	 *  Formation Facing, or accept the cosmetic pivot). Default 0. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
 		meta = (ClampMin = "0.0"))
 	FFixedPoint MinTurnRadius = FFixedPoint::Zero;
+
+	// ---------------------------------------------------------------------
+	// Maneuver planning
+	//
+	// COUPLING NOTE — the unit-level `FSeinMovementComponent::TurnRate` is
+	// the tracked turn ENGINE (pivot rate AND arc yaw rate), and it also
+	// sizes the momentum U-turn arc: an at-speed turnaround sweeps radius
+	// R = speed / TurnRate, clamped to [100, 10000] world units, and the
+	// word only engages above max(2 × PivotSpeed, TopSpeed / 4) while
+	// driving FORWARD (the driver then holds arc speed at 7/8 of
+	// TurnRate·R for correction margin). At the base default TurnRate = 5
+	// the radius sits on the 100-unit floor (a near-pivot); author
+	// TurnRate ~= TopSpeed / desired-sweep-radius (~1.0 rad/s for a
+	// visible rolling U-turn at cruise) if you want tanks to CARVE their
+	// at-speed turnarounds.
+	// ---------------------------------------------------------------------
+
+	/** Plans explicit start maneuvers as typed path segments: a straight
+	 *  reverse for close behind-goals, a momentum-preserving U-turn arc when
+	 *  ordered to turn around while already at speed, and — when Min Turn
+	 *  Radius is authored non-zero — the full wheeled-style maneuver ladder
+	 *  (arcs, 3-point turns, reverse-out). Turn OFF for the plain arc/pivot
+	 *  controller (the pre-maneuver behavior) for comparison. Default on. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement|Maneuver")
+	bool bManeuverPlanning = true;
+
+	/** Lets this tracked vehicle drive maneuver legs in reverse (backing to a
+	 *  close behind-goal, reverse legs of an authored-radius 3-point turn).
+	 *  Defaults ON for vehicles — this is the mode's own gate and is
+	 *  OR-combined with the unit-level Can Reverse flag (default off), so
+	 *  tracked units reverse out of the box; untick BOTH to forbid reverse.
+	 *  Reverse speed still comes from the unit's Reverse Top Speed. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement|Maneuver")
+	bool bCanReverse = true;
+
+	/** How strongly a forward maneuver is preferred over one that reverses.
+	 *  A reversing plan wins only when the forward route is more than this
+	 *  factor longer. 1.0 = pick purely by length. Default 1.35. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement|Maneuver",
+		meta = (ClampMin = "1.0"))
+	FFixedPoint ForwardPathBias = FFixedPoint::FromInt(135) / FFixedPoint::FromInt(100);
+
+	/** Farthest the planner will drive in reverse along its own route to find
+	 *  room to turn around — used only by the authored-radius (non-pivoting)
+	 *  ladder; a neutral-steer tank never needs it. Default 1200 (12 m). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement|Maneuver",
+		meta = (ClampMin = "0.0"))
+	FFixedPoint ReversePlanMaxDistance = FFixedPoint::FromInt(1200);
 };
 
 FORCEINLINE uint32 GetTypeHash(const FSeinTrackedMovementData& C)
@@ -147,10 +216,15 @@ FORCEINLINE uint32 GetTypeHash(const FSeinTrackedMovementData& C)
 	H = HashCombine(H, GetTypeHash(C.Deceleration));
 	H = HashCombine(H, GetTypeHash(C.PivotSpeed));
 	H = HashCombine(H, GetTypeHash(C.PivotAlignDot));
+	H = HashCombine(H, GetTypeHash(C.TurnAcceleration));
 	H = HashCombine(H, GetTypeHash(C.SharpTurnBrakeAngle));
 	H = HashCombine(H, GetTypeHash(C.SharpTurnBrakeStrength));
 	H = HashCombine(H, GetTypeHash(C.LookAheadDistance));
 	H = HashCombine(H, GetTypeHash(C.LookAheadTimeHorizon));
 	H = HashCombine(H, GetTypeHash(C.MinTurnRadius));
+	H = HashCombine(H, GetTypeHash(C.bManeuverPlanning));
+	H = HashCombine(H, GetTypeHash(C.bCanReverse));
+	H = HashCombine(H, GetTypeHash(C.ForwardPathBias));
+	H = HashCombine(H, GetTypeHash(C.ReversePlanMaxDistance));
 	return H;
 }

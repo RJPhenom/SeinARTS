@@ -704,7 +704,7 @@ namespace
 		TEXT("SERVER ONLY. Full lobby start: snapshot the lobby + ServerTravel to the configured gameplay map (or start lockstep in-place if no gameplay map is set). Mirrors the BPFL START button. Use this from the dedicated-server console; `Sein.Net.StartMatch` is the in-place-only variant."),
 		FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(&HandleLobbyStartMatch));
 
-	// ============== Determinism gossip / desync (Phase 4) ==============
+	// ============== Determinism gossip / desync ==============
 
 	void HandleSimulateDesync(const TArray<FString>& Args, UWorld* World, FOutputDevice& Ar)
 	{
@@ -713,30 +713,37 @@ namespace
 		USeinNetSubsystem* Net = GI ? GI->GetSubsystem<USeinNetSubsystem>() : nullptr;
 		if (!Net) { Ar.Log(TEXT("[SeinNet] SimulateDesync: USeinNetSubsystem missing.")); return; }
 
-		// Build a fake hash table where every peer disagrees, so the alarm
+		// Build a fake world-root table where every peer disagrees, so the alarm
 		// path exercises end-to-end without actually corrupting the sim.
-		// Every slot gets a distinct hash; the comparison fails immediately.
+		// Every participant gets a distinct 128-bit root.
 		const int32 FakeTurn = Args.Num() > 0 ? FCString::Atoi(*Args[0]) : 999;
 
-		TArray<FSeinSlotHashEntry> Fake;
+		TArray<FSeinParticipantWorldRootEntry> Fake;
 		const auto& Relays = Net->GetRelays();
 		uint32 Counter = 0xDEAD0000u;
 		for (const TWeakObjectPtr<ASeinNetRelay>& Wp : Relays)
 		{
 			if (ASeinNetRelay* R = Wp.Get())
 			{
-				Fake.Emplace(R->AssignedPlayerID, Counter++);
+				Fake.Emplace(
+					R->AssignedParticipantID,
+					FGuid(0xDEAD0000u, 0xBEEF0000u, 0xCAFE0000u, Counter++));
 			}
 		}
 		if (Fake.IsEmpty())
 		{
-			Fake.Emplace(Net->GetLocalPlayerID(), 0xDEADBEEFu);
-			Fake.Emplace(FSeinPlayerID(255), 0xCAFEBABEu);
+			Fake.Emplace(
+				Net->GetLocalParticipantID(),
+				FGuid(0xDEADBEEFu, 1, 2, 3));
+			Fake.Emplace(
+				FSeinNetworkParticipantID(FGuid(1, 2, 3, 4)),
+				FGuid(0xCAFEBABEu, 5, 6, 7));
 		}
 
-		Ar.Logf(TEXT("[SeinNet] SimulateDesync: triggering local alarm path with %d fake peer hashes (Turn=%d)."),
+		Ar.Logf(TEXT("[SeinNet] SimulateDesync: triggering local alarm path with %d fake peer world roots (Turn=%d)."),
 			Fake.Num(), FakeTurn);
-		Net->ClientHandleDesyncNotification(FakeTurn, Fake);
+		Net->ClientHandleDesyncNotification(
+			Net->GetActiveProtocolContext(), FakeTurn, Fake);
 	}
 
 	void HandleClearDesync(const TArray<FString>& Args, UWorld* World, FOutputDevice& Ar)
@@ -759,7 +766,7 @@ namespace
 
 	static FAutoConsoleCommandWithWorldArgsAndOutputDevice GCmdSimulateDesync(
 		TEXT("Sein.Net.SimulateDesync"),
-		TEXT("Sein.Net.SimulateDesync [Turn] — fire the LOCAL desync alarm with fake per-peer hashes for testing the red on-screen UI. Does not actually desync the sim. Default Turn=999."),
+		TEXT("Sein.Net.SimulateDesync [Turn] — fire the LOCAL desync alarm with fake per-peer world roots for testing the red on-screen UI. Does not actually desync the sim. Default Turn=999."),
 		FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(&HandleSimulateDesync));
 
 	static FAutoConsoleCommandWithWorldArgsAndOutputDevice GCmdClearDesync(
@@ -799,7 +806,7 @@ namespace
 
 		const FSeinReplayHeader& H = Reader->GetHeader();
 		Ar.Logf(TEXT("[SeinNet] LoadReplay: loaded %d turn(s)  seed=%lld  map=%s  recorded=%s"),
-			Reader->GetTurnCount(), H.RandomSeed, *H.MapIdentifier.ToString(), *H.RecordedAt.ToString());
+			Reader->GetTurnCount(), H.RandomSeed, *H.MapIdentifier, *H.RecordedAt.ToString());
 
 		if (Reader->Play())
 		{
@@ -837,7 +844,7 @@ namespace
 		TEXT("Halt the currently-playing replay (sim continues from current state)."),
 		FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(&HandleStopReplay));
 
-	// ============== World snapshot (Phase 4 architecture) ==============
+	// ============== World snapshot ==============
 
 	void HandleDumpSnapshot(const TArray<FString>& Args, UWorld* World, FOutputDevice& Ar)
 	{
@@ -846,12 +853,12 @@ namespace
 		if (!WorldSub) { Ar.Log(TEXT("[SeinNet] DumpSnapshot: USeinWorldSubsystem missing.")); return; }
 
 		FSeinWorldSnapshot Snap;
+		FSeinWorldSnapshotReferenceGuard SnapGCGuard(Snap);
 		WorldSub->CaptureSnapshot(Snap);
-
-		// Stamp the session seed if NetSubsystem has one.
-		if (USeinNetSubsystem* Net = World->GetGameInstance()->GetSubsystem<USeinNetSubsystem>())
+		if (Snap.SnapshotVersion != FSeinWorldSnapshot::CurrentVersion)
 		{
-			Snap.SessionSeed = Net->GetSessionSeed();
+			Ar.Log(TEXT("[SeinNet] DumpSnapshot: capture refused; no checkpoint was written."));
+			return;
 		}
 
 		// Serialize via FObjectAndNameAsStringProxyArchive (same primitive the
@@ -861,6 +868,13 @@ namespace
 		FMemoryWriter MemWriter(Buf, /*bIsPersistent*/ true);
 		FObjectAndNameAsStringProxyArchive Writer(MemWriter, /*bInLoadIfFindFails*/ false);
 		FSeinWorldSnapshot::StaticStruct()->SerializeItem(Writer, &Snap, nullptr);
+		if (Writer.IsError() || Writer.IsCriticalError()
+			|| MemWriter.IsError() || MemWriter.IsCriticalError()
+			|| MemWriter.Tell() != Buf.Num())
+		{
+			Ar.Log(TEXT("[SeinNet] DumpSnapshot: serialization error; no checkpoint was written."));
+			return;
+		}
 
 		const FString FileName = Args.Num() > 0
 			? Args[0]
@@ -932,12 +946,15 @@ namespace
 		}
 
 		FSeinWorldSnapshot Snap;
+		FSeinWorldSnapshotReferenceGuard SnapGCGuard(Snap);
 		FMemoryReader MemReader(Buf, /*bIsPersistent*/ true);
 		FObjectAndNameAsStringProxyArchive Reader(MemReader, /*bInLoadIfFindFails*/ true);
 		FSeinWorldSnapshot::StaticStruct()->SerializeItem(Reader, &Snap, nullptr);
-		if (Reader.IsError() || Reader.IsCriticalError())
+		if (Reader.IsError() || Reader.IsCriticalError()
+			|| MemReader.IsError() || MemReader.IsCriticalError()
+			|| MemReader.Tell() != Buf.Num())
 		{
-			Ar.Log(TEXT("[SeinNet] LoadSnapshot: deserialization error."));
+			Ar.Log(TEXT("[SeinNet] LoadSnapshot: deserialization error or trailing file data."));
 			return;
 		}
 
@@ -956,7 +973,7 @@ namespace
 
 	static FAutoConsoleCommandWithWorldArgsAndOutputDevice GCmdLoadSnapshot(
 		TEXT("Sein.Net.LoadSnapshot"),
-		TEXT("Sein.Net.LoadSnapshot <FileNameOrPath> — restore sim state from a .seinsnapshot file. NOTE: ability/resolver pool reconstruction is deferred — abilities reset on restore."),
+		TEXT("Sein.Net.LoadSnapshot <FileNameOrPath> — restore a compatible standalone sim checkpoint. Active continuations require an exact locally frozen codec."),
 		FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(&HandleLoadSnapshot));
 
 	// ============== Drop-in / drop-out (Phase 4) ==============
@@ -1117,7 +1134,7 @@ namespace
 
 	static FAutoConsoleCommandWithWorldArgsAndOutputDevice GCmdStartMatch(
 		TEXT("Sein.Net.StartMatch"),
-		TEXT("SERVER ONLY. Start the lockstep session: fan Client_StartSession to every connected relay so all peers' sims start simultaneously at tick 0 with the gate engaged."),
+		TEXT("SERVER ONLY. Start lockstep bootstrap: gather identical tick-zero receipts from every frozen sim peer, authorize them, then launch tick 0."),
 		FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(&HandleStartMatch));
 
 	void HandleDumpState(const TArray<FString>& Args, UWorld* World, FOutputDevice& Ar)
@@ -1128,13 +1145,14 @@ namespace
 		if (!WorldSub) { Ar.Log(TEXT("[SeinNet] DumpState: no USeinWorldSubsystem.")); return; }
 
 		const int32 Tick = WorldSub->GetCurrentTick();
-		const int32 Hash = WorldSub->ComputeStateHash();
+		const int32 LegacyPartialHash = WorldSub->ComputeStateHash();
 		const int32 ActiveEntities = WorldSub->GetEntityPool().GetActiveCount();
 		const int64 Seed = Net ? Net->GetSessionSeed() : 0;
 		const FSeinPlayerID LocalSlot = Net ? Net->GetLocalPlayerID() : FSeinPlayerID::Neutral();
 
-		Ar.Logf(TEXT("[SeinNet] DumpState  Tick=%d  StateHash=0x%08x  ActiveEntities=%d  Seed=%lld  LocalSlot=%u  NetMode=%d"),
-			Tick, (uint32)Hash, ActiveEntities, Seed, LocalSlot.Value, (int32)World->GetNetMode());
+		Ar.Logf(TEXT("[SeinNet] DumpState  Tick=%d  LegacyPartialStateHash=0x%08x  ActiveEntities=%d  Seed=%lld  LocalSlot=%u  NetMode=%d"),
+			Tick, static_cast<uint32>(LegacyPartialHash), ActiveEntities,
+			Seed, LocalSlot.Value, static_cast<int32>(World->GetNetMode()));
 
 		// Server-only: dump the slot↔relay binding so cross-run comparisons can
 		// confirm Player 1 = SeinPlayerController_0, etc.
@@ -1159,6 +1177,6 @@ namespace
 
 	static FAutoConsoleCommandWithWorldArgsAndOutputDevice GCmdDumpState(
 		TEXT("Sein.Net.DumpState"),
-		TEXT("Dump current sim state: tick, state hash, entity count, session seed, local slot. Run on every window in turn — same Tick should produce same StateHash on every machine if lockstep is healthy."),
+		TEXT("Dump current sim diagnostics: tick, legacy partial 32-bit hash, entity count, session seed, and local slot. The legacy hash is not the canonical world root and cannot prove lockstep agreement."),
 		FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(&HandleDumpState));
 }

@@ -7,6 +7,7 @@
 #include "GameMode/SeinPlayerStart.h"
 #include "EngineUtils.h"
 #include "Engine/World.h"
+#include "Settings/PluginSettings.h"
 
 ASeinPlayerStart::ASeinPlayerStart(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -17,13 +18,17 @@ FSeinMatchSettings ASeinPlayerStart::SynthesizeMatchSettingsFromLevel(UWorld* Wo
 {
 	FSeinMatchSettings Out;
 	if (!World) return Out;
+	if (const USeinARTSCoreSettings* Settings =
+		GetDefault<USeinARTSCoreSettings>())
+	{
+		Out.Extensions = Settings->DefaultMatchExtensions;
+	}
 
 	// Walk every SeinPlayerStart in the level. Build a Human slot per
 	// PlayerStart with PlayerSlot > 0 (PlayerSlot 0 is "any slot" and not
 	// part of the manifest). Faction/team flow through from the PlayerStart
-	// actor. State is Human so PreRegisterMatchSlots pre-spawns each HQ at
-	// world begin — both server and client run the same loop and produce
-	// matching entity IDs (lockstep determinism).
+	// actor. State is Human so the shared bootstrap transaction registers each
+	// player and optional start entity in canonical slot order on every peer.
 	for (TActorIterator<ASeinPlayerStart> It(World); It; ++It)
 	{
 		const ASeinPlayerStart* Start = *It;
@@ -34,7 +39,6 @@ FSeinMatchSettings ASeinPlayerStart::SynthesizeMatchSettingsFromLevel(UWorld* Wo
 		Slot.State       = ESeinSlotState::Human;
 		Slot.FactionID   = Start->FactionID;
 		Slot.TeamID      = Start->TeamID;
-		Slot.DisplayName = FText::FromString(FString::Printf(TEXT("Slot %d"), Start->PlayerSlot));
 		Out.Slots.Add(Slot);
 	}
 
@@ -56,11 +60,11 @@ void ASeinPlayerStart::PostEditMove(bool bFinished)
 	Super::PostEditMove(bFinished);
 
 	// Editor-process snapshot — same pattern as ASeinActor. Conversion
-	// runs once in the editor, the FFixedVector serializes to the .umap,
+	// runs once in the editor, the FFixedTransform serializes to the .umap,
 	// and every client (PC, ARM Mac, Surface ARM, mobile, console) reads
 	// identical int64 bits at level load. Cross-arch lockstep safe.
-	PlacedSimLocation = FFixedVector::FromVector(GetActorLocation());
-	bSimLocationBaked = true;
+	PlacedSimTransform = FFixedTransform::FromTransform(GetActorTransform());
+	bSimTransformBaked = true;
 
 	if (bFinished)
 	{

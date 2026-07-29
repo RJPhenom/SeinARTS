@@ -135,6 +135,7 @@ void USeinMoveToAction::Initialize(const FFixedVector& InDestination)
 	StallBandSq = FFixedPoint::Zero;
 	Path.Clear();
 	Movement = nullptr;
+	bMovementFinalized = false;
 }
 
 bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& World)
@@ -1089,14 +1090,12 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 
 	if (bReachedEnd)
 	{
-		Movement->OnMoveEnd(*Entity);
-		// Centralized end-of-action cleanup so success and cancel/fail paths
-		// agree on transient state (bHasTarget, bArrivalImminent). Reads
-		// MoveComp through the same chain ResetTransientMoveState uses; the
-		// re-lookup is cheap and keeps cleanup logic in one place.
-		ResetTransientMoveState();
-		NotifyCompleted();
+		// Terminalize before either OnMoveEnd or the proxy delegate: both may
+		// synchronously call EndAbility, whose latent-action cancellation must
+		// observe this action as already complete.
 		Complete();
+		FinalizeMovementOnce();
+		NotifyCompleted();
 		return true;
 	}
 	return false;
@@ -1104,7 +1103,7 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 
 void USeinMoveToAction::OnCancel()
 {
-	ResetTransientMoveState();
+	FinalizeMovementOnce();
 	if (USeinMoveToProxy* Proxy = Observer.Get())
 	{
 		Proxy->NotifyCancelled();
@@ -1113,23 +1112,58 @@ void USeinMoveToAction::OnCancel()
 
 void USeinMoveToAction::OnFail(uint8 ReasonCode)
 {
-	ResetTransientMoveState();
+	FinalizeMovementOnce();
 	if (USeinMoveToProxy* Proxy = Observer.Get())
 	{
 		Proxy->NotifyFailed(static_cast<ESeinMoveFailureReason>(ReasonCode));
 	}
 }
 
-void USeinMoveToAction::ResetTransientMoveState()
+void USeinMoveToAction::OnTimelineAbandoned()
 {
-	// Walks OwningAbility → World → SimSubsystem → MovementComponent. Any
-	// link in that chain being null is a routine "we're tearing down" state
-	// — fail silently rather than warn.
+	// An abandoned timeline is neither a cancellation nor a move end. In
+	// particular, do not call FinalizeMovementOnce(): OnMoveEnd may execute
+	// Blueprint and would manufacture gameplay on the discarded timeline.
+	USeinMoveToProxy* Proxy = Observer.Get();
+	Observer.Reset();
+	Movement = nullptr;
+	bMovementFinalized = true;
+	// Assignment from a fresh value releases array capacity too. Path::Clear()
+	// retains slack, which would let an externally-retained abandoned action
+	// pin a large route allocation across repeated editor/module reloads.
+	Path = FSeinPath();
+	OwningAbility = nullptr;
+	OwnerEntity = FSeinEntityHandle::Invalid();
+	if (Proxy)
+	{
+		Proxy->AbandonForSnapshotRestore();
+	}
+}
+
+void USeinMoveToAction::FinalizeMovementOnce()
+{
+	if (bMovementFinalized) return;
+	bMovementFinalized = true;
+
+	// Release the borrowed reference before the Blueprint-capable end hook so
+	// synchronous re-entry cannot dispatch it twice.
+	USeinMovement* EndingMovement = Movement;
+	Movement = nullptr;
+
 	if (!OwningAbility) return;
 	UWorld* World = OwningAbility->GetWorld();
 	if (!World) return;
 	USeinWorldSubsystem* Sim = World->GetSubsystem<USeinWorldSubsystem>();
 	if (!Sim) return;
+
+	if (EndingMovement)
+	{
+		if (FSeinEntity* Entity = Sim->GetEntity(OwnerEntity))
+		{
+			EndingMovement->OnMoveEnd(*Entity);
+		}
+	}
+
 	FSeinMovementComponent* MoveComp = Sim->GetComponent<FSeinMovementComponent>(OwnerEntity);
 	if (!MoveComp) return;
 	MoveComp->bArrivalImminent = false;

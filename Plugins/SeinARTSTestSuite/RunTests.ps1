@@ -99,9 +99,15 @@ if (-not (Test-Path -LiteralPath $ReceiptPath)) {
 	throw "No ordinary editor target receipt exists. Run again without -SkipBuild."
 }
 $Receipt = Get-Content -Raw -LiteralPath $ReceiptPath | ConvertFrom-Json
-$TestReceiptEntry = $Receipt.Plugins | Where-Object { $_.Name -eq 'SeinARTSTestSuite' } | Select-Object -First 1
-if ($TestReceiptEntry -and $TestReceiptEntry.Enabled) {
-	throw "The shared editor receipt still enables the test suite. Run Build.ps1 once to restore normal startup, then retry."
+if ($Receipt.PSObject.Properties.Name -notcontains 'BuildPlugins') {
+	throw "The editor target receipt has no BuildPlugins field; cannot verify normal-startup plugin isolation."
+}
+$UnexpectedTestPlugins = @(
+	'SeinARTSTestSuite',
+	'SeinARTSExtensionTestSuite'
+) | Where-Object { $Receipt.BuildPlugins -contains $_ }
+if ($UnexpectedTestPlugins.Count -gt 0) {
+	throw "The shared editor receipt still includes test plugin(s): $($UnexpectedTestPlugins -join ', '). Run Build.ps1 once to restore normal startup, then retry."
 }
 
 $SafeSuite = $Suite -replace '[^A-Za-z0-9_.-]', '_'

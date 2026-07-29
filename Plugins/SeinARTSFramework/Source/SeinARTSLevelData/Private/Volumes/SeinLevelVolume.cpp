@@ -8,9 +8,13 @@
 #include "SeinLayerConfig.h"
 #include "Settings/PluginSettings.h"
 
+#include "Components/ActorComponent.h"
 #include "Components/BrushComponent.h"
+#include "Components/PrimitiveComponent.h"
 #include "Engine/CollisionProfile.h"
 #include "Engine/World.h"
+#include "RenderingThread.h"
+#include "UObject/UObjectIterator.h"
 
 ASeinLevelVolume::ASeinLevelVolume(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -112,25 +116,194 @@ namespace
 {
 	/** Module-registered debug component classes (nav cell viz, fog cell viz).
 	 *  Raw UClass* is safe: entries live for their owning module's lifetime and
-	 *  are removed in ShutdownModule. */
+	 *  are removed in PreUnloadCallback (and idempotently at shutdown). */
 	TArray<UClass*> GSeinLevelVolumeDebugComponentClasses;
 
 	/** Module-registered USeinLayerConfig subclasses (one editable instance per
 	 *  volume). Same lifetime/safety as the debug-component registry above. */
 	TArray<UClass*> GSeinLevelVolumeLayerConfigClasses;
+
+#if !UE_BUILD_SHIPPING
+	bool IsUsableDebugComponentClass(const UClass* ComponentClass)
+	{
+		return ComponentClass
+			&& ComponentClass->IsChildOf(UActorComponent::StaticClass())
+			&& !ComponentClass->HasAnyClassFlags(
+				CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists);
+	}
+
+	bool IsLiveLevelVolume(const ASeinLevelVolume* Volume)
+	{
+		return IsValid(Volume) && !Volume->IsTemplate();
+	}
+
+	bool HasExactDebugComponent(
+		const ASeinLevelVolume& Volume,
+		const UClass* ComponentClass)
+	{
+		TInlineComponentArray<UActorComponent*> Components(&Volume);
+		return Components.ContainsByPredicate(
+			[ComponentClass](const UActorComponent* Component)
+			{
+				return IsValid(Component)
+					&& Component->GetClass() == ComponentClass;
+			});
+	}
+
+	void AttachDebugComponent(
+		ASeinLevelVolume& Volume,
+		UClass* ComponentClass)
+	{
+		if (HasExactDebugComponent(Volume, ComponentClass))
+		{
+			return;
+		}
+
+		UActorComponent* Component = NewObject<UActorComponent>(
+			&Volume, ComponentClass, NAME_None, RF_Transient);
+		if (!Component)
+		{
+			return;
+		}
+
+		if (USceneComponent* SceneComponent =
+			Cast<USceneComponent>(Component))
+		{
+			SceneComponent->SetupAttachment(Volume.GetBrushComponent());
+		}
+		Volume.AddInstanceComponent(Component);
+		if (Volume.GetWorld())
+		{
+			Component->RegisterComponent();
+		}
+	}
+
+	int32 DestroyDebugComponents(UClass* ComponentClass)
+	{
+		TArray<UActorComponent*> ComponentsToDestroy;
+		for (TObjectIterator<UActorComponent> It; It; ++It)
+		{
+			UActorComponent* Component = *It;
+			if (!IsValid(Component)
+				|| Component->IsTemplate()
+				|| Component->GetClass() != ComponentClass)
+			{
+				continue;
+			}
+
+			ASeinLevelVolume* Volume =
+				Cast<ASeinLevelVolume>(Component->GetOwner());
+			if (IsLiveLevelVolume(Volume))
+			{
+				ComponentsToDestroy.Add(Component);
+			}
+		}
+
+		int32 NumRemoved = ComponentsToDestroy.Num();
+		for (UActorComponent* Component : ComponentsToDestroy)
+		{
+			if (!IsValid(Component))
+			{
+				continue;
+			}
+
+			// DestroyComponent removes instance ownership too, but do it first
+			// and explicitly so even a partially torn-down component cannot
+			// leave a stale module-class reference in InstanceComponents.
+			if (ASeinLevelVolume* Volume =
+				Cast<ASeinLevelVolume>(Component->GetOwner()))
+			{
+				Volume->RemoveInstanceComponent(Component);
+			}
+			if (!Component->IsBeingDestroyed())
+			{
+				Component->DestroyComponent();
+			}
+		}
+
+		// Scrub any exact-class instance entry missed by the object snapshot
+		// (including an invalid or synchronously re-created component).
+		for (TObjectIterator<ASeinLevelVolume> It; It; ++It)
+		{
+			ASeinLevelVolume* Volume = *It;
+			if (!IsLiveLevelVolume(Volume))
+			{
+				continue;
+			}
+
+			const TArray<UActorComponent*> InstanceComponents =
+				Volume->GetInstanceComponents();
+			for (UActorComponent* Component : InstanceComponents)
+			{
+				if (Component && Component->GetClass() == ComponentClass)
+				{
+					Volume->RemoveInstanceComponent(Component);
+					if (IsValid(Component)
+						&& !Component->IsBeingDestroyed())
+					{
+						Component->DestroyComponent();
+					}
+					++NumRemoved;
+				}
+			}
+		}
+
+		return NumRemoved;
+	}
+#endif
 }
 
 void ASeinLevelVolume::RegisterDebugComponentClass(UClass* ComponentClass)
 {
-	if (ComponentClass)
+	check(IsInGameThread());
+	if (!ComponentClass
+		|| !ComponentClass->IsChildOf(UActorComponent::StaticClass())
+		|| ComponentClass->HasAnyClassFlags(
+			CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists))
 	{
-		GSeinLevelVolumeDebugComponentClasses.AddUnique(ComponentClass);
+		return;
 	}
+
+	GSeinLevelVolumeDebugComponentClasses.AddUnique(ComponentClass);
+
+#if !UE_BUILD_SHIPPING
+	if (!IsUsableDebugComponentClass(ComponentClass))
+	{
+		return;
+	}
+	for (TObjectIterator<ASeinLevelVolume> It; It; ++It)
+	{
+		ASeinLevelVolume* Volume = *It;
+		if (IsLiveLevelVolume(Volume))
+		{
+			AttachDebugComponent(*Volume, ComponentClass);
+		}
+	}
+#endif
 }
 
 void ASeinLevelVolume::UnregisterDebugComponentClass(UClass* ComponentClass)
 {
-	GSeinLevelVolumeDebugComponentClasses.Remove(ComponentClass);
+	check(IsInGameThread());
+	const bool bWasRegistered =
+		GSeinLevelVolumeDebugComponentClasses.Remove(ComponentClass) > 0;
+
+#if !UE_BUILD_SHIPPING
+	if (!ComponentClass
+		|| !ComponentClass->IsChildOf(UActorComponent::StaticClass()))
+	{
+		return;
+	}
+
+	const int32 NumRemoved = DestroyDebugComponents(ComponentClass);
+	if ((bWasRegistered || NumRemoved > 0)
+		&& ComponentClass->IsChildOf(UPrimitiveComponent::StaticClass()))
+	{
+		// Primitive scene-proxy destruction is queued to the render thread.
+		// Drain it while the component's owning module and vtable are callable.
+		FlushRenderingCommands();
+	}
+#endif
 }
 
 void ASeinLevelVolume::RegisterLayerConfigClass(UClass* ConfigClass)
@@ -207,21 +380,11 @@ void ASeinLevelVolume::PostRegisterAllComponents()
 	}
 	for (UClass* ComponentClass : GSeinLevelVolumeDebugComponentClasses)
 	{
-		if (!ComponentClass || FindComponentByClass(ComponentClass))
+		if (!IsUsableDebugComponentClass(ComponentClass))
 		{
 			continue;
 		}
-		UActorComponent* Comp = NewObject<UActorComponent>(this, ComponentClass, NAME_None, RF_Transient);
-		if (!Comp)
-		{
-			continue;
-		}
-		if (USceneComponent* AsScene = Cast<USceneComponent>(Comp))
-		{
-			AsScene->SetupAttachment(GetBrushComponent());
-		}
-		AddInstanceComponent(Comp);
-		Comp->RegisterComponent();
+		AttachDebugComponent(*this, ComponentClass);
 	}
 #endif
 

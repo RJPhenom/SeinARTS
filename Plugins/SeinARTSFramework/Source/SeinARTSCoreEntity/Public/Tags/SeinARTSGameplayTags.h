@@ -88,14 +88,12 @@ namespace SeinARTSTags
 	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Command_Type_Ping);
 	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Command_Type_BrokerOrder);
 
-	// Match flow commands (DESIGN §18). State-machine transitions that don't
+	// In-match flow commands. State-machine transitions that don't
 	// target a specific entity — `FSeinCommand::EntityHandle` is unused.
-	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Command_Type_StartMatch);
 	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Command_Type_PauseMatchRequest);
 	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Command_Type_ResumeMatchRequest);
 	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Command_Type_EndMatch);
 	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Command_Type_ConcedeMatch);
-	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Command_Type_RestartMatch);
 
 	// Vote command types (Session 5.4).
 	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Command_Type_StartVote);
@@ -141,6 +139,10 @@ namespace SeinARTSTags
 	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Command_Reject_SimPaused);
 	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Command_Reject_SpectatorForbidden);
 	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Command_Reject_MatchStateInvalid);
+	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Command_Reject_Unauthorized);
+	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Command_Reject_Malformed);
+	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Command_Reject_UnsupportedSchema);
+	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Command_Reject_PayloadTooLarge);
 
 	// --- Environment ---
 	// Framework ships `Environment.Default` only; games extend the vocabulary

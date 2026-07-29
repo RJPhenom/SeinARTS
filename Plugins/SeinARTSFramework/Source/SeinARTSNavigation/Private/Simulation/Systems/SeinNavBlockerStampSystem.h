@@ -149,9 +149,16 @@ public:
 			TEXT("Pushed %d exact nav blocker stamp(s)"), Blockers.Num());
 	}
 
-	virtual ESeinTickPhase GetPhase() const override { return ESeinTickPhase::PreTick; }
-	virtual int32 GetPriority() const override { return SeinSystemPriority::NavBlockerStamp; }
-	virtual FName GetSystemName() const override { return TEXT("NavBlockerStamp"); }
+	virtual FSeinSystemDescriptor DescribeSystem() const override
+	{
+		return FSeinSystemDescriptor::WithCanonicalState(
+			FName(TEXT("seinarts.navigation.dynamic_blocker_stamp")),
+			1u,
+			ESeinTickPhase::PreTick,
+			SeinSystemPriority::NavBlockerStamp,
+			{FName(TEXT(
+				"seinarts.navigation/async-path-continuation"))});
+	}
 
 private:
 	TWeakObjectPtr<USeinNavigation> Nav;

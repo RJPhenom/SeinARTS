@@ -11,6 +11,7 @@
 #include "Settings/PluginSettings.h"
 #include "Subsystems/SeinFactionService.h"
 #include "Data/SeinMatchSettings.h"
+#include "Simulation/SeinWorldSubsystem.h"
 #include "Engine/World.h"
 #include "Engine/GameInstance.h"
 #include "Engine/AssetManager.h"
@@ -21,6 +22,7 @@
 #include "Engine/NetConnection.h"
 #include "Net/UnrealNetwork.h"
 #include "Containers/Ticker.h"
+#include "TimerManager.h"
 
 namespace
 {
@@ -43,6 +45,7 @@ namespace
 void USeinLobbySubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
+	bModuleOwnedStateReleased = false;
 
 	PostLoginHandle = FGameModeEvents::GameModePostLoginEvent.AddUObject(this, &USeinLobbySubsystem::OnPostLogin);
 	LogoutHandle    = FGameModeEvents::GameModeLogoutEvent.AddUObject(this, &USeinLobbySubsystem::OnLogout);
@@ -52,8 +55,26 @@ void USeinLobbySubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 void USeinLobbySubsystem::Deinitialize()
 {
-	FGameModeEvents::GameModePostLoginEvent.Remove(PostLoginHandle);
-	FGameModeEvents::GameModeLogoutEvent.Remove(LogoutHandle);
+	ReleaseModuleOwnedStateForModuleUnload();
+	Super::Deinitialize();
+}
+
+void USeinLobbySubsystem::ReleaseModuleOwnedStateForModuleUnload()
+{
+	check(IsInGameThread());
+	if (bModuleOwnedStateReleased) return;
+	bModuleOwnedStateReleased = true;
+
+	if (PostLoginHandle.IsValid())
+	{
+		FGameModeEvents::GameModePostLoginEvent.Remove(PostLoginHandle);
+		PostLoginHandle.Reset();
+	}
+	if (LogoutHandle.IsValid())
+	{
+		FGameModeEvents::GameModeLogoutEvent.Remove(LogoutHandle);
+		LogoutHandle.Reset();
+	}
 
 	// Cancel any in-flight grace-timer entries (subsystem outlives the
 	// individual lobby world but timers tick on the global core ticker).
@@ -63,13 +84,23 @@ void USeinLobbySubsystem::Deinitialize()
 	}
 	PendingReclaimTimers.Reset();
 
+	if (PendingTravelTimerHandle.IsValid())
+	{
+		if (UWorld* TimerWorld = PendingTravelTimerWorld.Get())
+		{
+			TimerWorld->GetTimerManager().ClearTimer(
+				PendingTravelTimerHandle);
+		}
+		PendingTravelTimerHandle.Invalidate();
+	}
+	PendingTravelTimerWorld.Reset();
+
 	LobbyStateActor.Reset();
 	ControllerToSlot.Reset();
 	PublishedSnapshot = FSeinMatchSettings();
 	bSnapshotPublished = false;
-
-	UE_LOG(LogSeinNet, Log, TEXT("USeinLobbySubsystem deinitialized."));
-	Super::Deinitialize();
+	bTravelScheduled = false;
+	SlotCountOverride = 0;
 }
 
 bool USeinLobbySubsystem::IsServer() const
@@ -139,7 +170,6 @@ FSeinMatchSlot USeinLobbySubsystem::ProjectLobbySlotToMatchSlot(const FSeinLobby
 	Out.State       = In.State;
 	Out.FactionID   = In.FactionID;
 	Out.TeamID      = In.TeamID;
-	Out.DisplayName = In.DisplayName;
 	Out.AIProfile   = In.AIProfile;
 	return Out;
 }
@@ -524,12 +554,12 @@ bool USeinLobbySubsystem::ServerHandleSlotClaim(APlayerController* PC, int32 Slo
 						// self). Without this, Net->LocalPlayerID stays as the OLD
 						// slot for the host — IsLocalReady reads stale data and
 						// the Ready toggle sticks. Mirror what RegisterRelay does
-						// at spawn: call NotifyLocalSlotAssigned directly when the
+						// at spawn: update the lobby slot directly when the
 						// relay's owner is local. Remote clients still get this
 						// via OnRep_AssignedPlayerID — they're unaffected.
 						if (PC->IsLocalController())
 						{
-							Net->NotifyLocalSlotAssigned(R, NewSlotID, R->SessionSeed);
+							Net->NotifyLocalLobbySlotAssigned(R, NewSlotID);
 						}
 					}
 					break;
@@ -1019,6 +1049,37 @@ void USeinLobbySubsystem::PublishMatchSettingsSnapshot()
 		PublishedSnapshot.Slots.Num());
 }
 
+bool USeinLobbySubsystem::InstallPreparedMatchSettingsSnapshot(
+	const FSeinMatchSettings& Snapshot)
+{
+	if (Snapshot.Slots.IsEmpty()) return false;
+	PublishedSnapshot = Snapshot;
+	bSnapshotPublished = true;
+	return true;
+}
+
+void USeinLobbySubsystem::ExecutePreparedServerTravel(FString MapURL)
+{
+	PendingTravelTimerHandle.Invalidate();
+	PendingTravelTimerWorld.Reset();
+	bTravelScheduled = false;
+	if (UWorld* World = GetWorld())
+	{
+		if (!World->ServerTravel(MapURL, /*bAbsolute=*/true))
+		{
+			if (UGameInstance* GI = GetGameInstance())
+			{
+				if (USeinNetSubsystem* Net =
+					GI->GetSubsystem<USeinNetSubsystem>())
+				{
+					Net->AbortPreparedMatchTravel(
+						TEXT("UWorld::ServerTravel rejected the prepared URL."));
+				}
+			}
+		}
+	}
+}
+
 bool USeinLobbySubsystem::ServerStartMatch(bool bTravelToGameplayMap)
 {
 	if (!IsServer())
@@ -1053,63 +1114,127 @@ bool USeinLobbySubsystem::ServerStartMatch(bool bTravelToGameplayMap)
 	// `bReady` from the replicated lobby state and choose whether to call
 	// SeinRequestStartMatch. Framework permits Start whenever there's a
 	// Human-claimed slot.
+	UWorld* World = GetWorld();
+	const bool bNetworked = World && World->GetNetMode() != NM_Standalone;
+	if (bNetworked && !bTravelToGameplayMap)
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("[Lobby] ServerStartMatch: networked lobby-derived starts require travel so every peer registers the final immutable roster from tick zero."));
+		return false;
+	}
+
+	TSoftObjectPtr<UWorld> TravelMap;
+	FString TravelMapURL;
+	if (bTravelToGameplayMap)
+	{
+		TravelMap = ResolveGameplayMap();
+		TravelMapURL = TravelMap.IsNull()
+			? FString()
+			: TravelMap.ToSoftObjectPath().GetLongPackageName();
+		if (!World || TravelMapURL.IsEmpty())
+		{
+			UE_LOG(LogSeinNet, Error,
+				TEXT("[Lobby] ServerStartMatch: travel requested but the gameplay map is invalid (soft path '%s'); refusing start."),
+				*TravelMap.ToString());
+			return false;
+		}
+	}
 
 	// Snapshot the lobby state into the GI override so whichever GameMode
 	// runs next (current world OR the post-travel world) picks it up.
 	PublishMatchSettingsSnapshot();
+	if (!bNetworked)
+	{
+		if (bTravelToGameplayMap)
+		{
+			const FString BootstrapTravelURL = TravelMapURL
+				+ TEXT("?SeinBootstrap=StandaloneLaunch");
+			UE_LOG(LogSeinNet, Log,
+				TEXT("[Lobby] ServerStartMatch: standalone ServerTravel to '%s' (from soft path '%s')"),
+				*BootstrapTravelURL, *TravelMap.ToString());
+			if (!bTravelScheduled)
+			{
+				bTravelScheduled = true;
+				FTimerDelegate TravelDelegate;
+				TravelDelegate.BindUObject(
+					this,
+					&USeinLobbySubsystem::ExecutePreparedServerTravel,
+					BootstrapTravelURL);
+				PendingTravelTimerWorld = World;
+				PendingTravelTimerHandle =
+					World->GetTimerManager().SetTimerForNextTick(
+						TravelDelegate);
+			}
+			return true;
+		}
+
+		USeinWorldSubsystem* WorldSubsystem =
+			World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
+		if (!WorldSubsystem
+			|| !WorldSubsystem->StandaloneBootstrapLauncher.IsBound()
+			|| !WorldSubsystem->StandaloneBootstrapLauncher.Execute())
+		{
+			UE_LOG(LogSeinNet, Error,
+				TEXT("[Lobby] ServerStartMatch: Framework standalone bootstrap rejected the published lobby contract."));
+			return false;
+		}
+		UE_LOG(LogSeinNet, Log,
+			TEXT("[Lobby] ServerStartMatch: standalone bootstrap launched in-place."));
+		return true;
+	}
+
+	UGameInstance* GI = GetGameInstance();
+	USeinNetSubsystem* Net = GI ? GI->GetSubsystem<USeinNetSubsystem>() : nullptr;
+	if (!Net)
+	{
+		UE_LOG(LogSeinNet, Warning,
+			TEXT("[Lobby] ServerStartMatch: USeinNetSubsystem missing — could not prepare match."));
+		return false;
+	}
+	const FName DestinationWorldPackage = bTravelToGameplayMap
+		? FName(*TravelMapURL)
+		: (World && World->GetOutermost()
+			? World->GetOutermost()->GetFName()
+			: NAME_None);
+	if (!Net->PrepareMatchTravel(
+		ESeinMatchTravelIntent::NewMatch,
+		DestinationWorldPackage,
+		bTravelToGameplayMap
+			? ESeinPreparedWorldActivation::RequiresWorldTransition
+			: ESeinPreparedWorldActivation::AllowCurrentWorld))
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("[Lobby] ServerStartMatch: canonical participant/protocol preparation failed; refusing travel/start."));
+		return false;
+	}
 
 	if (bTravelToGameplayMap)
 	{
-		const TSoftObjectPtr<UWorld> Map = ResolveGameplayMap();
-		if (Map.IsNull())
+		// Use the long package name (no asset suffix) for the travel URL.
+		// `TravelMap.ToString()` returns `/Game/Maps/X.X`; ServerTravel expects
+		// the package path `/Game/Maps/X`. The URL intent reserves tick-zero
+		// authority for the network coordinator on every traveling peer.
+		const FString BootstrapTravelURL = TravelMapURL
+			+ TEXT("?SeinBootstrap=ExternalOrchestrator");
+		UE_LOG(LogSeinNet, Log,
+			TEXT("[Lobby] ServerStartMatch: ServerTravel to '%s' (from soft path '%s')"),
+			*BootstrapTravelURL, *TravelMap.ToString());
+		if (!bTravelScheduled)
 		{
-			UE_LOG(LogSeinNet, Warning,
-				TEXT("[Lobby] ServerStartMatch: travel requested but no gameplay map configured (subsystem GameplayMap and PluginSettings::DefaultGameplayMap both empty) — falling through to in-place start."));
+			bTravelScheduled = true;
+			FTimerDelegate TravelDelegate;
+			TravelDelegate.BindUObject(
+				this,
+				&USeinLobbySubsystem::ExecutePreparedServerTravel,
+				BootstrapTravelURL);
+			PendingTravelTimerWorld = World;
+			PendingTravelTimerHandle =
+				World->GetTimerManager().SetTimerForNextTick(
+					TravelDelegate);
 		}
-		else
-		{
-			UWorld* World = GetWorld();
-			if (World)
-			{
-				// Use the long package name (no asset suffix) for the travel URL.
-				// `Map.ToString()` returns the full soft-object-path
-				// `/Game/Maps/X.X` — ServerTravel parses that as a URL and the
-				// trailing `.X` gets misinterpreted as a query/anchor fragment,
-				// which silently no-ops the travel in PIE listen-server. The
-				// long package name `/Game/Maps/X` is the canonical form
-				// `ServerTravel` / `OpenLevel` expect.
-				const FString MapURL = Map.ToSoftObjectPath().GetLongPackageName();
-				if (MapURL.IsEmpty())
-				{
-					UE_LOG(LogSeinNet, Warning,
-						TEXT("[Lobby] ServerStartMatch: resolved gameplay map has no package name (soft path was '%s') — falling through to in-place start."),
-						*Map.ToString());
-				}
-				else
-				{
-					UE_LOG(LogSeinNet, Log,
-						TEXT("[Lobby] ServerStartMatch: ServerTravel to '%s' (from soft path '%s')"),
-						*MapURL, *Map.ToString());
-					World->ServerTravel(MapURL, /*bAbsolute=*/true);
-					return true;
-				}
-			}
-		}
+		return true;
 	}
 
-	// In-place start (no travel, or travel mis-configured): kick the lockstep
-	// session right here in the current world.
-	if (UGameInstance* GI = GetGameInstance())
-	{
-		if (USeinNetSubsystem* Net = GI->GetSubsystem<USeinNetSubsystem>())
-		{
-			UE_LOG(LogSeinNet, Log, TEXT("[Lobby] ServerStartMatch: starting lockstep in-place."));
-			Net->StartLockstepSession();
-			return true;
-		}
-	}
-
-	UE_LOG(LogSeinNet, Warning, TEXT("[Lobby] ServerStartMatch: USeinNetSubsystem missing — could not start."));
 	return false;
 }
 

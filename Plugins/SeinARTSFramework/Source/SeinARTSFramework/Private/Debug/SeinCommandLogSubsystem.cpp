@@ -93,6 +93,12 @@ void USeinCommandLogSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 void USeinCommandLogSubsystem::Deinitialize()
 {
+	ReleaseModuleOwnedStateForModuleUnload();
+	Super::Deinitialize();
+}
+
+void USeinCommandLogSubsystem::ReleaseModuleOwnedStateForModuleUnload()
+{
 	if (SimSubsystem.IsValid())
 	{
 		SimSubsystem->OnCommandsProcessing.Remove(CommandsDelegateHandle);
@@ -101,8 +107,8 @@ void USeinCommandLogSubsystem::Deinitialize()
 	CommandsDelegateHandle.Reset();
 	BrokerDispatchedDelegateHandle.Reset();
 	LogEntries.Empty();
-
-	Super::Deinitialize();
+	SimSubsystem.Reset();
+	bShowOverlay = false;
 }
 
 // ==================== Command Capture ====================

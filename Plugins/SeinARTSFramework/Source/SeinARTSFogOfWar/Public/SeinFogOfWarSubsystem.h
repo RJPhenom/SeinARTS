@@ -17,11 +17,15 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Core/SeinTickPhase.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "SeinFogOfWarSubsystem.generated.h"
 
 class USeinFogOfWar;
 class USeinLevelData;
+class FSeinARTSFogOfWarModule;
+class FSeinFogOfWarStateCodecRegistry;
+struct FSeinFogOfWarCanonicalStateProvider;
 
 UCLASS()
 class SEINARTSFOGOFWAR_API USeinFogOfWarSubsystem : public UWorldSubsystem
@@ -43,17 +47,29 @@ public:
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Fog Of War", meta = (WorldContext = "WorldContextObject"))
 	static USeinFogOfWar* GetFogOfWarForWorld(const UObject* WorldContextObject);
 
+	/**
+	 * Pre-unload fail-stop. Severs delegates/systems, unregisters the level
+	 * provider, and destroys the active implementation while its module code
+	 * is still executable. Idempotent with ordinary world teardown.
+	 */
+	void ReleaseModuleOwnedStateForModuleUnload();
+
 private:
+	friend class FSeinARTSFogOfWarModule;
+	friend class FSeinFogOfWarStateCodecRegistry;
+	friend struct FSeinFogOfWarCanonicalStateProvider;
 
 	/** The active fog-of-war for this world. Instantiated from
 	 *  `USeinARTSCoreSettings::FogOfWarClass` during Initialize. */
 	UPROPERTY(Transient)
 	TObjectPtr<USeinFogOfWar> FogOfWar;
 
-	/** Handle into USeinWorldSubsystem::OnSimTickCompleted. Stamp updates run
-	 *  from the sim tick (not wall clock) so all clients recompute against
-	 *  identical tick-N entity positions — lockstep-safe. */
-	FDelegateHandle SimTickHandle;
+	/**
+	 * Owned deterministic PostTick system. Running stamps inside Core's ordered
+	 * sim pipeline guarantees every canonical-state observer sees the completed
+	 * tick, independent of multicast delegate binding order.
+	 */
+	TUniquePtr<ISeinSystem> StampSystem;
 
 	/** The shared level-data substrate (CP1.1), resolved in Initialize. Fog
 	 *  registers as its "FogOfWar" layer provider and loads its runtime grid
@@ -63,6 +79,16 @@ private:
 	/** Handle for our USeinLevelData::OnLevelDataMutated subscription; removed at
 	 *  Deinitialize. */
 	FDelegateHandle LevelDataMutatedHandle;
+
+	/** Exact concrete state-codec generation selected once for this world. */
+	uint64 StateCodecToken = 0;
+	bool bSimDelegatesBound = false;
+	bool bFogConfigured = false;
+	bool bStateBindingFrozen = false;
+	FString ConfiguredFogClassPath;
+	FString StateCodecFailureReason;
+	FString FrozenStateBindingFrame;
+	FGuid FrozenStaticEnvironmentDigest;
 
 	/** Called in OnWorldBeginPlay — adopts the unified level-data substrate's
 	 *  baked "FogOfWar" channel into the fog impl (when present). Idempotent. */
@@ -78,15 +104,23 @@ private:
 	 *  the level has been baked. */
 	void InitGridIfUnbaked(UWorld& World);
 
-	/** Binds `OnSimTickCompleted` so stamps recompute on the sim-tick clock
-	 *  at the plugin-settings `VisionTickInterval` cadence. */
-	void BindStampTick(UWorld& World);
-
-	/** Called each sim tick — applies `VisionTickInterval` gate, then drives
-	 *  the impl's TickStamps for this tick's source snapshot. */
-	void HandleSimTickCompleted(int32 CurrentTick);
+	/** Registers the ordered PostTick stamp system during subsystem initialization. */
+	void RegisterStampSystem(UWorld& World);
 
 	/** Binds cross-module delegates on USeinWorldSubsystem so sim code can
 	 *  query visibility without importing fog-of-war headers. */
 	void BindSimDelegates(UWorld& World);
+
+	void UnbindSimDelegates();
+	void ReleaseModuleOwnedState();
+
+	/** Provider-only exact implementation/static-environment contract freeze. */
+	bool FreezeCanonicalStateBinding(
+		FString& OutFrame,
+		FString& OutError);
+
+	/** Called by codec withdrawal before the concrete module can unload. */
+	void InvalidateCanonicalStateCodecLease(
+		uint64 Token,
+		const FString& Reason);
 };

@@ -35,7 +35,7 @@ void USeinSelectionBPFL::EnqueueObserverCommand(
 	Cmd.EntityList = Members;
 	Cmd.ActiveFocusIndex = ActiveFocusIndex;
 	Cmd.QueueIndex = GroupIndex; // repurposed — observer commands never hit production-queue paths
-	World->EnqueueCommand(Cmd);
+	World->SubmitLocalCommandDraft(Cmd);
 }
 
 void USeinSelectionBPFL::SeinReplaceSelection(const UObject* WorldContextObject, FSeinPlayerID PlayerID, const TArray<FSeinEntityHandle>& Members, int32 ActiveFocusIndex)
@@ -91,7 +91,11 @@ bool USeinSelectionBPFL::SeinIsSelectable(const UObject* WorldContextObject, FSe
 void USeinSelectionBPFL::SeinSetSelectable(const UObject* WorldContextObject, FSeinEntityHandle Entity, bool bSelectable)
 {
 	USeinWorldSubsystem* Sub = GetWorldSubsystem(WorldContextObject);
-	if (!Sub) return;
+	if (!Sub
+		|| !Sub->RequireStateMutationAuthorization(TEXT("SetSelectable")))
+	{
+		return;
+	}
 	if (FSeinEntity* E = Sub->GetEntity(Entity))
 	{
 		E->SetSelectable(bSelectable);

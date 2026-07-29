@@ -18,8 +18,15 @@
 
 namespace SeinAttributeResolverPrivate
 {
-	/** Cache key: (StructType, FieldName) -> FProperty* */
-	static TMap<TPair<UScriptStruct*, FName>, FProperty*> PropertyCache;
+	/**
+	 * Weak struct roots make cached reflection safe across reinstancing and
+	 * module unload. A stale entry can retain neither the UScriptStruct nor its
+	 * native module, and its FProperty pointer is never reachable through a new
+	 * struct generation's distinct weak-object identity.
+	 */
+	static TMap<
+		TWeakObjectPtr<UScriptStruct>,
+		TMap<FName, FProperty*>> PropertyCache;
 
 	/** Critical section for thread-safe cache access. */
 	static FCriticalSection CacheLock;
@@ -36,14 +43,18 @@ FProperty* FSeinAttributeResolver::FindFieldProperty(UScriptStruct* StructType, 
 		return nullptr;
 	}
 
-	const TPair<UScriptStruct*, FName> Key(StructType, FieldName);
+	const TWeakObjectPtr<UScriptStruct> StructKey(StructType);
 
 	// Check cache first
 	{
 		FScopeLock Lock(&SeinAttributeResolverPrivate::CacheLock);
-		if (FProperty** Found = SeinAttributeResolverPrivate::PropertyCache.Find(Key))
+		if (TMap<FName, FProperty*>* StructProperties =
+			SeinAttributeResolverPrivate::PropertyCache.Find(StructKey))
 		{
-			return *Found;
+			if (FProperty** Found = StructProperties->Find(FieldName))
+			{
+				return *Found;
+			}
 		}
 	}
 
@@ -53,7 +64,9 @@ FProperty* FSeinAttributeResolver::FindFieldProperty(UScriptStruct* StructType, 
 	// Cache the result (including nullptr for negative lookups)
 	{
 		FScopeLock Lock(&SeinAttributeResolverPrivate::CacheLock);
-		SeinAttributeResolverPrivate::PropertyCache.Add(Key, Property);
+		SeinAttributeResolverPrivate::PropertyCache
+			.FindOrAdd(StructKey)
+			.Add(FieldName, Property);
 	}
 
 	return Property;

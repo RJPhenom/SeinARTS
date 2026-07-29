@@ -19,7 +19,10 @@ void USeinScenarioBPFL::SeinSetSimPaused(const UObject* WorldContextObject, bool
 {
 	if (USeinWorldSubsystem* Sub = GetWorldSubsystem(WorldContextObject))
 	{
-		Sub->SetSimPaused(bPaused);
+		if (Sub->RequireStateMutationAuthorization(TEXT("ScenarioSetSimPaused")))
+		{
+			Sub->SetSimPaused(bPaused);
+		}
 	}
 }
 
@@ -37,7 +40,11 @@ void USeinScenarioBPFL::SeinPlayPreRenderedCinematic(
 	int32 VoteThreshold)
 {
 	USeinWorldSubsystem* Sub = GetWorldSubsystem(WorldContextObject);
-	if (!Sub) return;
+	if (!Sub
+		|| !Sub->RequireStateMutationAuthorization(TEXT("PlayPreRenderedCinematic")))
+	{
+		return;
+	}
 	if (bBlocksSim)
 	{
 		Sub->SetSimPaused(true);
@@ -49,7 +56,11 @@ void USeinScenarioBPFL::SeinPlayPreRenderedCinematic(
 void USeinScenarioBPFL::SeinEndCinematic(const UObject* WorldContextObject, FGameplayTag CinematicID, bool bResumeSimIfPaused)
 {
 	USeinWorldSubsystem* Sub = GetWorldSubsystem(WorldContextObject);
-	if (!Sub) return;
+	if (!Sub
+		|| !Sub->RequireStateMutationAuthorization(TEXT("EndCinematic")))
+	{
+		return;
+	}
 	Sub->EnqueueVisualEvent(FSeinVisualEvent::MakeEndCinematicEvent(CinematicID));
 	if (bResumeSimIfPaused && Sub->IsSimulationPaused())
 	{

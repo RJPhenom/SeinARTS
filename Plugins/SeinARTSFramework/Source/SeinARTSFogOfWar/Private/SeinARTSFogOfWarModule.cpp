@@ -16,8 +16,8 @@
  *          grid red. PIE: local player controller's visible + explored cells.
  *
  *          Shipping strip: the custom show flag, console command, and all
- *          helper code are gated on `UE_ENABLE_DEBUG_DRAWING`. In
- *          `UE_BUILD_SHIPPING` StartupModule / ShutdownModule are no-ops.
+ *          helper code are gated on `UE_ENABLE_DEBUG_DRAWING`. Shipping still
+ *          registers the native simulation-content contributor.
  *
  *          Editor-side integrations (the entity-bridge vision-stamp draw
  *          layer) live in the companion SeinARTSFogOfWarEditor module —
@@ -32,10 +32,15 @@
 
 #include "SeinARTSFogOfWarModule.h"
 #include "SeinARTSFogOfWarLog.h"
+#include "SeinFogOfWar.h"
+#include "Simulation/SeinWorldSubsystem.h"
+#include "SeinFogOfWarSubsystem.h"
+#include "Serialization/SeinFogOfWarCanonicalStateProvider.h"
 
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "UObject/UnrealType.h"
+#include "UObject/UObjectIterator.h"
 
 #if UE_ENABLE_DEBUG_DRAWING
 #include "ShowFlags.h"
@@ -62,6 +67,23 @@ IMPLEMENT_MODULE(FSeinARTSFogOfWarModule, SeinARTSFogOfWar)
 DEFINE_LOG_CATEGORY(LogSeinFogOfWar);
 DEFINE_LOG_CATEGORY(LogSeinFogOfWarSubsystem);
 DEFINE_LOG_CATEGORY(LogSeinFogOfWarDebug);
+
+namespace
+{
+	FSeinSimulationContentDiscoveryRoot MakePackageDiscoveryRoot(
+		const UClass* RootClass)
+	{
+		check(RootClass);
+
+		FSeinSimulationContentDiscoveryRoot Root;
+		Root.RootClassPath = RootClass->GetPathName();
+		Root.StableRecordKindId =
+			FSeinSimulationContentManifestCodec::GetCurrentRecordKindId();
+		Root.RecordRevision =
+			FSeinSimulationContentManifestCodec::CurrentRecordRevision;
+		return Root;
+	}
+}
 
 // NOTE: the editor-side vision-stamp draw helpers + the entity-bridge
 // draw-callback registration that used to live here have moved to the
@@ -252,6 +274,54 @@ namespace
 
 void FSeinARTSFogOfWarModule::StartupModule()
 {
+	CanonicalStateRegistrationHandle.Reset();
+	DefaultStateCodecRegistrationHandle.Reset();
+	SimulationContentRegistrationHandle.Reset();
+
+	FString StateRegistrationError;
+	DefaultStateCodecRegistrationHandle =
+		SeinRegisterDefaultFogOfWarStateCodec(
+			StateRegistrationError);
+	if (!DefaultStateCodecRegistrationHandle.IsValid())
+	{
+		UE_LOG(LogSeinFogOfWar, Error,
+			TEXT("Default fog exact-state codec failed to register: %s"),
+			*StateRegistrationError);
+	}
+
+	StateRegistrationError.Reset();
+	CanonicalStateRegistrationHandle =
+		SeinRegisterFogOfWarCanonicalStateProvider(
+			StateRegistrationError);
+	if (!CanonicalStateRegistrationHandle.IsValid())
+	{
+		UE_LOG(LogSeinFogOfWar, Error,
+			TEXT("Universal fog canonical-state contributor failed to register: %s"),
+			*StateRegistrationError);
+	}
+
+	FSeinSimulationContentContributorDescriptor ContentDescriptor;
+	ContentDescriptor.StableContributorId = TEXT("seinarts.fogofwar");
+	ContentDescriptor.ContributorRevision = 1;
+	ContentDescriptor.DiscoveryRoots = {
+		MakePackageDiscoveryRoot(USeinFogOfWar::StaticClass()),
+	};
+
+	FString ContentRegistrationError;
+	SimulationContentRegistrationHandle =
+		FSeinSimulationContentRegistry::RegisterContributor(
+			ContentDescriptor,
+			&ContentRegistrationError);
+	if (!SimulationContentRegistrationHandle.IsValid())
+	{
+		UE_LOG(
+			LogSeinFogOfWar,
+			Error,
+			TEXT("Simulation-content contributor '%s' failed to register: %s"),
+			*ContentDescriptor.StableContributorId,
+			*ContentRegistrationError);
+	}
+
 	// Editor-side registrations (vision-stamp draw callback) live in the
 	// SeinARTSFogOfWarEditor module — see file header.
 
@@ -289,6 +359,42 @@ void FSeinARTSFogOfWarModule::StartupModule()
 #endif
 }
 
+void FSeinARTSFogOfWarModule::PreUnloadCallback()
+{
+	check(IsInGameThread());
+
+#if UE_ENABLE_DEBUG_DRAWING
+	// Destroys live components and drains their scene proxies before this
+	// module's component vtable can disappear.
+	ASeinLevelVolume::UnregisterDebugComponentClass(
+		USeinFogOfWarDebugComponent::StaticClass());
+#endif
+
+	for (TObjectIterator<USeinWorldSubsystem> It; It; ++It)
+	{
+		if (!It->HasAnyFlags(RF_ClassDefaultObject))
+		{
+			It->TerminateAndReleaseForModuleUnload(
+				TEXT("SeinARTSFogOfWar"),
+				TEXT("fog-of-war executable and canonical state are unloading"));
+		}
+	}
+
+	for (TObjectIterator<USeinFogOfWarSubsystem> It; It; ++It)
+	{
+		if (!It->HasAnyFlags(RF_ClassDefaultObject))
+		{
+			It->ReleaseModuleOwnedStateForModuleUnload();
+		}
+	}
+
+	// Worlds retain only exact tokens. Withdraw callbacks and reflected roots
+	// while every staged/live object has already been released.
+	CanonicalStateRegistrationHandle.Reset();
+	DefaultStateCodecRegistrationHandle.Reset();
+	SimulationContentRegistrationHandle.Reset();
+}
+
 void FSeinARTSFogOfWarModule::ShutdownModule()
 {
 	// Editor-side teardown (vision-stamp draw callback) lives in
@@ -313,6 +419,10 @@ void FSeinARTSFogOfWarModule::ShutdownModule()
 		GLayerPerspectiveCmd = nullptr;
 	}
 #endif
+
+	CanonicalStateRegistrationHandle.Reset();
+	DefaultStateCodecRegistrationHandle.Reset();
+	SimulationContentRegistrationHandle.Reset();
 }
 
 namespace UE::SeinARTSFogOfWar

@@ -18,16 +18,25 @@
  *          proxy (Nav module's `USeinNavDebugComponent`) and this overlay.
  *
  *          Shipping strip: ticker, console command, and helper draw functions
- *          are gated on UE_ENABLE_DEBUG_DRAWING. In UE_BUILD_SHIPPING the
- *          module's StartupModule / ShutdownModule are no-ops.
+ *          are gated on UE_ENABLE_DEBUG_DRAWING. Shipping still registers the
+ *          native simulation-content contributor.
  */
 
 #include "SeinARTSMovementModule.h"
+#include "Movement/SeinAvoidance.h"
+#include "Movement/SeinAvoidanceDefault.h"
+#include "Movement/SeinBasicMovement.h"
+#include "Movement/SeinBasicUnitMovement.h"
+#include "Movement/SeinMovement.h"
+#include "Serialization/SeinMoveToActionCodec.h"
+#include "Serialization/SeinMovementCanonicalStateProvider.h"
+#include "Serialization/SeinMovementStateCoverageInternal.h"
+#include "SeinMovementSubsystem.h"
+#include "UObject/UObjectIterator.h"
 
 #if UE_ENABLE_DEBUG_DRAWING
 #include "Actions/SeinMoveToAction.h"
 #include "Debug/SeinDebugDrawCull.h"
-#include "Movement/SeinMovement.h"
 #include "Components/SeinMovementComponent.h"
 #include "Components/SeinNavigationComponent.h"
 #include "Components/SeinExtentsComponent.h"
@@ -59,6 +68,25 @@
 #endif // UE_ENABLE_DEBUG_DRAWING
 
 IMPLEMENT_MODULE(FSeinARTSMovementModule, SeinARTSMovement)
+
+DEFINE_LOG_CATEGORY_STATIC(LogSeinARTSMovementModule, Log, All);
+
+namespace
+{
+	FSeinSimulationContentDiscoveryRoot MakePackageDiscoveryRoot(
+		const UClass* RootClass)
+	{
+		check(RootClass);
+
+		FSeinSimulationContentDiscoveryRoot Root;
+		Root.RootClassPath = RootClass->GetPathName();
+		Root.StableRecordKindId =
+			FSeinSimulationContentManifestCodec::GetCurrentRecordKindId();
+		Root.RecordRevision =
+			FSeinSimulationContentManifestCodec::CurrentRecordRevision;
+		return Root;
+	}
+}
 
 #if UE_ENABLE_DEBUG_DRAWING
 // Custom show flags. UE doesn't ship matching built-ins, so we register them
@@ -869,8 +897,128 @@ namespace
 }
 #endif // UE_ENABLE_DEBUG_DRAWING
 
+namespace
+{
+#if UE_ENABLE_DEBUG_DRAWING
+	void ReleaseMovementDebugBindings()
+	{
+		if (GShowSteeringCmd)
+		{
+			IConsoleManager::Get().UnregisterConsoleObject(
+				GShowSteeringCmd);
+			GShowSteeringCmd = nullptr;
+		}
+		if (GShowExtentsCmd)
+		{
+			IConsoleManager::Get().UnregisterConsoleObject(
+				GShowExtentsCmd);
+			GShowExtentsCmd = nullptr;
+		}
+		if (GTickHandle.IsValid())
+		{
+			FTSTicker::GetCoreTicker().RemoveTicker(GTickHandle);
+			GTickHandle.Reset();
+		}
+	}
+#else
+	void ReleaseMovementDebugBindings() {}
+#endif
+
+	FSeinMovementStateCoverageRegistrationHandle RegisterBuiltInCoverage(
+		const UClass* NativeClass,
+		ESeinMovementStateCoverage Coverage,
+		FString& OutError)
+	{
+		FSeinMovementStateCoverageDescriptor Descriptor;
+		Descriptor.NativeClass = NativeClass;
+		Descriptor.Coverage = Coverage;
+		return FSeinMovementStateCoverageRegistry::Register(
+			TEXT("SeinARTSMovement"), Descriptor, &OutError);
+	}
+}
+
 void FSeinARTSMovementModule::StartupModule()
 {
+	SeinSetMovementCoverageProviderRefreshEnabled(false);
+	CanonicalStateRegistrationHandle.Reset();
+	MoveToActionCodecRegistrationHandle.Reset();
+	BuiltInCoverageHandles.Reset();
+	SimulationContentRegistrationHandle.Reset();
+
+	FSeinSimulationContentContributorDescriptor ContentDescriptor;
+	ContentDescriptor.StableContributorId = TEXT("seinarts.movement");
+	ContentDescriptor.ContributorRevision = 1;
+	ContentDescriptor.DiscoveryRoots = {
+		MakePackageDiscoveryRoot(USeinMovement::StaticClass()),
+		MakePackageDiscoveryRoot(USeinAvoidance::StaticClass()),
+	};
+
+	FString ContentRegistrationError;
+	SimulationContentRegistrationHandle =
+		FSeinSimulationContentRegistry::RegisterContributor(
+			ContentDescriptor,
+			&ContentRegistrationError);
+	if (!SimulationContentRegistrationHandle.IsValid())
+	{
+		UE_LOG(
+			LogSeinARTSMovementModule,
+			Error,
+			TEXT("Simulation-content contributor '%s' failed to register: %s"),
+			*ContentDescriptor.StableContributorId,
+			*ContentRegistrationError);
+	}
+
+	auto AddCoverage = [this](
+		const UClass* Class,
+		ESeinMovementStateCoverage Coverage)
+	{
+		FString Error;
+		FSeinMovementStateCoverageRegistrationHandle Handle =
+			RegisterBuiltInCoverage(Class, Coverage, Error);
+		if (!Handle.IsValid())
+		{
+			UE_LOG(LogSeinARTSMovementModule, Error,
+				TEXT("State coverage registration failed for '%s': %s"),
+				Class ? *Class->GetPathName() : TEXT("<null>"),
+				*Error);
+			return;
+		}
+		BuiltInCoverageHandles.Add(MoveTemp(Handle));
+	};
+	AddCoverage(
+		USeinMovement::StaticClass(),
+		ESeinMovementStateCoverage::ReflectedComplete);
+	AddCoverage(
+		USeinBasicMovement::StaticClass(),
+		ESeinMovementStateCoverage::Stateless);
+	AddCoverage(
+		USeinBasicUnitMovement::StaticClass(),
+		ESeinMovementStateCoverage::Stateless);
+	AddCoverage(
+		USeinAvoidance::StaticClass(),
+		ESeinMovementStateCoverage::Stateless);
+	AddCoverage(
+		USeinAvoidanceDefault::StaticClass(),
+		ESeinMovementStateCoverage::ReflectedComplete);
+
+	FString CanonicalError;
+	if (!RefreshCanonicalStateProvider(CanonicalError))
+	{
+		UE_LOG(LogSeinARTSMovementModule, Error,
+			TEXT("Movement canonical-state provider failed to register: %s"),
+			*CanonicalError);
+	}
+	FString MoveToCodecError;
+	MoveToActionCodecRegistrationHandle =
+		SeinRegisterMoveToActionCodec(MoveToCodecError);
+	if (!MoveToActionCodecRegistrationHandle.IsValid())
+	{
+		UE_LOG(LogSeinARTSMovementModule, Error,
+			TEXT("Move To continuation codec failed to register: %s"),
+			*MoveToCodecError);
+	}
+	SeinSetMovementCoverageProviderRefreshEnabled(true);
+
 #if UE_ENABLE_DEBUG_DRAWING
 	if (!GShowSteeringCmd)
 	{
@@ -894,19 +1042,66 @@ void FSeinARTSMovementModule::StartupModule()
 #endif
 }
 
+bool FSeinARTSMovementModule::RefreshCanonicalStateProvider(
+	FString& OutError)
+{
+	check(IsInGameThread());
+	FSeinMovementStateCoverageSnapshot Coverage;
+	if (!SeinBuildMovementStateCoverageSnapshot(
+			Coverage, OutError,
+			/*bRequireCompleteLoadedClasses*/ false))
+	{
+		return false;
+	}
+
+	// Different coverage manifests intentionally conflict under one key, so
+	// withdraw this generation before publishing the replacement.
+	CanonicalStateRegistrationHandle.Reset();
+	CanonicalStateRegistrationHandle =
+		SeinRegisterMovementCanonicalStateProvider(
+			Coverage, OutError);
+	return CanonicalStateRegistrationHandle.IsValid();
+}
+
+void FSeinARTSMovementModule::PreUnloadCallback()
+{
+	check(IsInGameThread());
+	SeinSetMovementCoverageProviderRefreshEnabled(false);
+	ReleaseMovementDebugBindings();
+
+	for (TObjectIterator<USeinWorldSubsystem> It; It; ++It)
+	{
+		if (!It->HasAnyFlags(RF_ClassDefaultObject))
+		{
+			It->TerminateAndReleaseForModuleUnload(
+				TEXT("SeinARTSMovement"),
+				TEXT("movement systems and persistent policy instances are unloading"));
+		}
+	}
+
+	for (TObjectIterator<USeinMovementSubsystem> It; It; ++It)
+	{
+		if (It->HasAnyFlags(RF_ClassDefaultObject))
+		{
+			continue;
+		}
+		It->ReleaseNativeClassStateForModuleUnload(
+			TEXT("SeinARTSMovement"));
+		It->ReleaseModuleOwnedStateForModuleUnload();
+	}
+
+	MoveToActionCodecRegistrationHandle.Reset();
+	CanonicalStateRegistrationHandle.Reset();
+	BuiltInCoverageHandles.Reset();
+	SimulationContentRegistrationHandle.Reset();
+}
+
 void FSeinARTSMovementModule::ShutdownModule()
 {
-#if UE_ENABLE_DEBUG_DRAWING
-	if (GShowSteeringCmd)
-	{
-		IConsoleManager::Get().UnregisterConsoleObject(GShowSteeringCmd);
-		GShowSteeringCmd = nullptr;
-	}
-	if (GShowExtentsCmd)
-	{
-		IConsoleManager::Get().UnregisterConsoleObject(GShowExtentsCmd);
-		GShowExtentsCmd = nullptr;
-	}
-	FTSTicker::GetCoreTicker().RemoveTicker(GTickHandle);
-#endif
+	SeinSetMovementCoverageProviderRefreshEnabled(false);
+	ReleaseMovementDebugBindings();
+	MoveToActionCodecRegistrationHandle.Reset();
+	CanonicalStateRegistrationHandle.Reset();
+	BuiltInCoverageHandles.Reset();
+	SimulationContentRegistrationHandle.Reset();
 }

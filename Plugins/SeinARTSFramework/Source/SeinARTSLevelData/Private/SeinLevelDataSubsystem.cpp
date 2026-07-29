@@ -60,12 +60,19 @@ void USeinLevelDataSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 void USeinLevelDataSubsystem::Deinitialize()
 {
+	ReleaseModuleOwnedStateForModuleUnload();
+	Super::Deinitialize();
+}
+
+void USeinLevelDataSubsystem::ReleaseModuleOwnedStateForModuleUnload()
+{
+	check(IsInGameThread());
 	if (LevelData)
 	{
+		LevelData->RequestCancelBake();
 		LevelData->OnDeinitialized();
 	}
 	LevelData = nullptr;
-	Super::Deinitialize();
 }
 
 bool USeinLevelDataSubsystem::DoesSupportWorldType(const EWorldType::Type WorldType) const

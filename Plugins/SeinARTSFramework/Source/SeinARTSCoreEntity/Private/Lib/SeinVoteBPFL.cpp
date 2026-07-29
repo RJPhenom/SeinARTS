@@ -31,7 +31,7 @@ void USeinVoteBPFL::SeinStartVote(const UObject* WorldContextObject, FGameplayTa
 	Cmd.AbilityTag = VoteType;
 	Cmd.PlayerID = Initiator;
 	Cmd.Payload.InitializeAs<FSeinStartVoteCommandPayload>(Pay);
-	Sub->EnqueueCommand(Cmd);
+	Sub->SubmitLocalCommandDraft(Cmd);
 }
 
 void USeinVoteBPFL::SeinCastVote(const UObject* WorldContextObject, FGameplayTag VoteType, FSeinPlayerID Voter, int32 VoteValue)
@@ -43,7 +43,7 @@ void USeinVoteBPFL::SeinCastVote(const UObject* WorldContextObject, FGameplayTag
 	Cmd.AbilityTag = VoteType;
 	Cmd.PlayerID = Voter;
 	Cmd.QueueIndex = VoteValue;
-	Sub->EnqueueCommand(Cmd);
+	Sub->SubmitLocalCommandDraft(Cmd);
 }
 
 TArray<FSeinVoteState> USeinVoteBPFL::SeinGetActiveVotes(const UObject* WorldContextObject)

@@ -58,6 +58,18 @@ void ASeinPlayerController::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>
 	DOREPLIFETIME_CONDITION(ASeinPlayerController, SeinPlayerID, COND_OwnerOnly);
 }
 
+void ASeinPlayerController::SeamlessTravelFrom(APlayerController* OldPC)
+{
+	Super::SeamlessTravelFrom(OldPC);
+	if (const ASeinPlayerController* OldSeinPC = Cast<ASeinPlayerController>(OldPC))
+	{
+		// Gameplay slots are match identity, not connection/world identity. Keep
+		// the exact slot when a destination map selects a different PC class CDO
+		// and UE replaces the controller during seamless travel.
+		SeinPlayerID = OldSeinPC->SeinPlayerID;
+	}
+}
+
 void ASeinPlayerController::BeginPlay()
 {
 	Super::BeginPlay();
@@ -642,7 +654,7 @@ void ASeinPlayerController::OnPingPressed(const FInputActionValue& Value)
 	}
 	else
 	{
-		Subsystem->EnqueueCommand(Cmd);
+		Subsystem->SubmitLocalCommandDraft(Cmd);
 	}
 
 	// --- Immediate visual feedback (render-side only) ---
@@ -1248,7 +1260,7 @@ void ASeinPlayerController::IssueSmartCommandEx(
 	}
 	else
 	{
-		Subsystem->EnqueueCommand(BrokerCmd);
+		Subsystem->SubmitLocalCommandDraft(BrokerCmd);
 	}
 
 	// OnCommandIssued broadcasts a representative ability tag for VFX/audio —
@@ -1581,7 +1593,7 @@ void ASeinPlayerController::LogCameraUpdate()
 	}
 	else
 	{
-		Subsystem->EnqueueCommand(Cmd);
+		Subsystem->SubmitLocalCommandDraft(Cmd);
 	}
 
 	LastCameraLogTick = CurrentTick;
@@ -1622,7 +1634,7 @@ void ASeinPlayerController::LogSelectionChanged()
 	}
 	else
 	{
-		Subsystem->EnqueueCommand(Cmd);
+		Subsystem->SubmitLocalCommandDraft(Cmd);
 	}
 }
 
@@ -1754,7 +1766,6 @@ void ASeinPlayerController::IssueTargetedAbility(FGameplayTag AbilityTag,
 	FSeinCommand BrokerCmd;
 	BrokerCmd.PlayerID = SeinPlayerID;
 	BrokerCmd.CommandType = SeinARTSTags::Command_Type_BrokerOrder;
-	BrokerCmd.AbilityTag = AbilityTag;
 	BrokerCmd.TargetEntity = FSeinEntityHandle::Invalid();
 	BrokerCmd.TargetLocation = PrimaryLocation;
 	BrokerCmd.EntityList = MemberHandles;
@@ -1771,7 +1782,7 @@ void ASeinPlayerController::IssueTargetedAbility(FGameplayTag AbilityTag,
 	}
 	else
 	{
-		Subsystem->EnqueueCommand(BrokerCmd);
+		Subsystem->SubmitLocalCommandDraft(BrokerCmd);
 	}
 
 	// Render-side feedback hook — the same delegate right-click uses. UI can

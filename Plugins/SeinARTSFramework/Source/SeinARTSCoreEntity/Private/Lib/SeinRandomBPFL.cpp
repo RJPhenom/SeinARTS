@@ -16,7 +16,11 @@ USeinWorldSubsystem* USeinRandomBPFL::GetWorldSubsystem(const UObject* WorldCont
 bool USeinRandomBPFL::SeinRandomBool(const UObject* WorldContextObject)
 {
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
-	if (!Subsystem) return false;
+	if (!Subsystem
+		|| !Subsystem->RequireStateMutationAuthorization(TEXT("RandomBool")))
+	{
+		return false;
+	}
 	return Subsystem->SimRandom.Bool();
 }
 
@@ -28,13 +32,22 @@ bool USeinRandomBPFL::SeinRandomBoolWithProbability(const UObject* WorldContextO
 	// Early-out at the extremes so deterministic / boundary calls don't advance the PRNG stream.
 	if (Probability <= FFixedPoint::Zero) return false;
 	if (Probability >= FFixedPoint::One) return true;
+	if (!Subsystem->RequireStateMutationAuthorization(
+		TEXT("RandomBoolWithProbability")))
+	{
+		return false;
+	}
 	return Subsystem->SimRandom.Bool(Probability);
 }
 
 FFixedPoint USeinRandomBPFL::SeinRandomFixedPoint(const UObject* WorldContextObject)
 {
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
-	if (!Subsystem) return FFixedPoint::Zero;
+	if (!Subsystem
+		|| !Subsystem->RequireStateMutationAuthorization(TEXT("RandomFixedPoint")))
+	{
+		return FFixedPoint::Zero;
+	}
 	return Subsystem->SimRandom.FixedPoint();
 }
 
@@ -45,6 +58,10 @@ FFixedPoint USeinRandomBPFL::SeinRandomFixedPointRange(const UObject* WorldConte
 
 	// `Range` itself early-outs on Min >= Max (returns Min without advancing). Match that here.
 	if (Min >= Max) return Min;
+	if (!Subsystem->RequireStateMutationAuthorization(TEXT("RandomFixedPointRange")))
+	{
+		return Min;
+	}
 	return Subsystem->SimRandom.Range(Min, Max);
 }
 
@@ -54,5 +71,9 @@ int32 USeinRandomBPFL::SeinRandomIntRange(const UObject* WorldContextObject, int
 	if (!Subsystem) return Min;
 
 	if (Min >= Max) return Min;
+	if (!Subsystem->RequireStateMutationAuthorization(TEXT("RandomIntRange")))
+	{
+		return Min;
+	}
 	return Subsystem->SimRandom.IntRange(Min, Max);
 }

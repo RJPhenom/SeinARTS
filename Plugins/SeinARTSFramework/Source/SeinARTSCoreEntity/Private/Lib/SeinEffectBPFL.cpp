@@ -19,27 +19,41 @@ int64 USeinEffectBPFL::SeinApplyEffect(const UObject* WorldContextObject, FSeinE
 	TSubclassOf<USeinEffect> EffectClass, FSeinEntityHandle SourceHandle)
 {
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
-	if (!Subsystem) return 0;
+	if (!Subsystem
+		|| !Subsystem->RequireStateMutationAuthorization(TEXT("ApplyEffect")))
+	{
+		return 0;
+	}
 	return Subsystem->ApplyEffect(TargetHandle, EffectClass, SourceHandle);
 }
 
 void USeinEffectBPFL::SeinRemoveEffect(const UObject* WorldContextObject, FSeinEntityHandle TargetHandle, int64 EffectInstanceID)
 {
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
-	if (!Subsystem) return;
+	if (!Subsystem
+		|| !Subsystem->RequireStateMutationAuthorization(TEXT("RemoveEffect")))
+	{
+		return;
+	}
 	Subsystem->RemoveEffect(TargetHandle, EffectInstanceID, /*bByExpiration=*/false);
 }
 
 bool USeinEffectBPFL::SeinRemoveEffectByID(const UObject* WorldContextObject, int64 EffectInstanceID)
 {
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
-	return Subsystem && Subsystem->RemoveEffectByID(EffectInstanceID, /*bByExpiration=*/false);
+	return Subsystem
+		&& Subsystem->RequireStateMutationAuthorization(TEXT("RemoveEffectByID"))
+		&& Subsystem->RemoveEffectByID(EffectInstanceID, /*bByExpiration=*/false);
 }
 
 void USeinEffectBPFL::SeinRemoveEffectsWithTag(const UObject* WorldContextObject, FSeinEntityHandle TargetHandle, FGameplayTag Tag)
 {
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
-	if (!Subsystem) return;
+	if (!Subsystem
+		|| !Subsystem->RequireStateMutationAuthorization(TEXT("RemoveEffectsWithTag")))
+	{
+		return;
+	}
 	Subsystem->RemoveInstanceEffectsWithTag(TargetHandle, Tag);
 }
 

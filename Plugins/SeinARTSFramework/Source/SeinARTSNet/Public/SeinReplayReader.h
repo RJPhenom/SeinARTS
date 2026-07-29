@@ -3,10 +3,12 @@
  * @file    SeinReplayReader.h
  * @brief   Local-only playback of a .seinreplay file (the writer's other half).
  *
- * Phase 4a. Reads a `FSeinReplay` blob from disk, validates the header against
- * current sim state (logs warnings on mismatch but doesn't block playback),
- * seeds the sim PRNG from the header, then drives the sim forward by feeding
- * recorded turns into `USeinWorldSubsystem` at the matching tick boundaries.
+ * Reads a bounded v8 file prefix first and rejects incompatible command,
+ * simulation-content, or config identities before decoding. Body decode selects types only
+ * by index from the frozen command/match catalogs; replay data never resolves
+ * an object path or triggers package loads.
+ * Playback installs the canonical settings snapshot, seeds the sim PRNG, then
+ * feeds recorded turns at their matching tick boundaries.
  *
  * Playback runs in Standalone mode — networking gate is bypassed, the reader
  * is the authority. Use cases:
@@ -28,6 +30,7 @@
 #include "CoreMinimal.h"
 #include "UObject/Object.h"
 #include "Data/SeinReplayTurn.h"
+#include "Simulation/SeinMatchBootstrapBarrier.h"
 #include "SeinReplayReader.generated.h"
 
 class USeinWorldSubsystem;
@@ -38,13 +41,15 @@ class SEINARTSNET_API USeinReplayReader : public UObject
 	GENERATED_BODY()
 
 public:
-	/** Read + deserialize a .seinreplay file. Resolves bare filenames against
-	 *  `Saved/Replays/`. Returns true on success, false if the file is missing,
-	 *  unreadable, or a serialization error occurs. */
+	virtual void BeginDestroy() override;
+
+	/** Read + validate a v8 .seinreplay file. Legacy, oversized, corrupt,
+	 *  incompatible, or structurally invalid files fail closed without replacing
+	 *  a previously validated replay. Active playback must be stopped first. */
 	bool LoadFromFile(const FString& Path);
 
-	/** Begin playback. Seeds PRNG from the loaded header, starts the sim if
-	 *  not already running, hooks `OnSimTickCompleted` to drain the turn
+	/** Begin playback. Requires a pristine non-running tick-0 Lobby world,
+	 *  seeds the PRNG, starts the sim, and drains the recorded turn
 	 *  stream into the sim's command buffer at the matching ticks.
 	 *
 	 *  Pre-conditions:
@@ -56,8 +61,8 @@ public:
 	 *  Returns true on accept. */
 	bool Play();
 
-	/** Halt playback. Unhooks `OnSimTickCompleted`. Does NOT stop the sim — the
-	 *  caller may want it to keep ticking against the post-replay state. */
+	/** Abort playback and unhook the private replay turn-boundary notifier. An explicit abort leaves
+	 *  simulation control to the caller; natural completion stops at EndTick. */
 	void Stop();
 
 	/** True if currently driving the sim from the loaded turn buffer. */
@@ -70,10 +75,15 @@ public:
 	const FSeinReplayHeader& GetHeader() const { return Loaded.Header; }
 
 private:
-	/** Hook bound to `USeinWorldSubsystem::OnSimTickCompleted`. Drains every
-	 *  loaded turn whose `TurnId == sim's just-finished turn` into the
-	 *  command buffer for the next tick. */
+	/** Hook bound to Core's private replay tick notifier. Drains only a loaded
+	 *  turn whose `TurnId * TicksPerTurn` is the exact upcoming sim tick. */
 	void HandleSimTick(int32 CompletedTick);
+	bool DrainTurnsForUpcomingTick(
+		USeinWorldSubsystem* WorldSub,
+		int64 UpcomingTick);
+
+	/** Natural completion or protocol failure: halt the sim and detach. */
+	void HaltPlayback(USeinWorldSubsystem* WorldSub, const TCHAR* Reason);
 
 	/** Resolve helper. */
 	USeinWorldSubsystem* GetWorldSubsystem() const;
@@ -83,10 +93,15 @@ private:
 
 	bool bLoaded = false;
 	bool bPlaying = false;
+	bool bOwnsExternalCommandIngress = false;
+	FSeinMatchBootstrapAuthorityHandle BootstrapAuthority;
 
 	/** Cursor into Loaded.Turns. Advanced by HandleSimTick; entries before
 	 *  this index have already been enqueued. */
 	int32 NextTurnIndex = 0;
 
+	/** Exact world whose notifier owns SimTickHandle. The reader is GI-owned,
+	 *  so GetWorld() may already name a destination world during teardown. */
+	TWeakObjectPtr<USeinWorldSubsystem> BoundWorldSubsystem;
 	FDelegateHandle SimTickHandle;
 };

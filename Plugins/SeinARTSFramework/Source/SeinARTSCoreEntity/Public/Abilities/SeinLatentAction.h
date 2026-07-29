@@ -7,6 +7,8 @@
 
 class USeinAbility;
 class USeinWorldSubsystem;
+class USeinLatentActionManager;
+class FSeinLatentActionRestorePlan;
 
 /**
  * Base class for latent (multi-tick) ability nodes.
@@ -39,6 +41,12 @@ public:
 	/** Opaque failure reason code — subclasses define their own enum and cast. */
 	uint8 FailureReason = 0;
 
+	/** Stable world-global identity assigned exactly once by the manager. */
+	int64 GetActionID() const { return ActionID; }
+
+	/** Activation generation captured when this action entered manager order. */
+	int64 GetAbilityActivationID() const { return AbilityActivationID; }
+
 	/**
 	 * Called each sim tick while the action is active.
 	 * @return true when the action is complete and should be removed.
@@ -51,6 +59,12 @@ public:
 	/** Called when the action fails. Override to notify observers. */
 	virtual void OnFail(uint8 /*ReasonCode*/) {}
 
+	/**
+	 * Silent teardown for an abandoned timeline (restore/module unload).
+	 * This is native-only and must not broadcast terminal gameplay delegates.
+	 */
+	virtual void OnTimelineAbandoned() {}
+
 	/** Mark this action as completed */
 	void Complete();
 
@@ -59,4 +73,11 @@ public:
 
 	/** Mark this action as failed. Sets bFailed + bCompleted and calls OnFail(). */
 	void Fail(uint8 ReasonCode);
+
+private:
+	int64 ActionID = 0;
+	int64 AbilityActivationID = 0;
+
+	friend class USeinLatentActionManager;
+	friend class FSeinLatentActionRestorePlan;
 };

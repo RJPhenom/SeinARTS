@@ -2,12 +2,29 @@
 
 #include "Modules/ModuleManager.h"
 #include "Core/SeinPlayerID.h"
+#include "Serialization/SeinCanonicalStateRegistry.h"
+#include "Serialization/SeinFogOfWarStateCodecRegistry.h"
+#include "Serialization/SeinSimulationContentRegistry.h"
 
 class FSeinARTSFogOfWarModule : public FDefaultModuleImpl
 {
 public:
 	virtual void StartupModule() override;
+	virtual void PreUnloadCallback() override;
 	virtual void ShutdownModule() override;
+
+	/** False keeps bootstrap fail-closed after a content-registration error. */
+	bool IsSimulationContentContributorReady() const
+	{
+		return SimulationContentRegistrationHandle.IsValid()
+			&& CanonicalStateRegistrationHandle.IsValid()
+			&& DefaultStateCodecRegistrationHandle.IsValid();
+	}
+
+private:
+	FSeinCanonicalStateRegistrationHandle CanonicalStateRegistrationHandle;
+	FSeinFogOfWarStateCodecRegistrationHandle DefaultStateCodecRegistrationHandle;
+	FSeinSimulationContentRegistrationHandle SimulationContentRegistrationHandle;
 };
 
 namespace UE::SeinARTSFogOfWar

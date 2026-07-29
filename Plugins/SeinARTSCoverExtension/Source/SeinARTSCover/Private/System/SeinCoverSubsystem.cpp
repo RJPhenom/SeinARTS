@@ -64,10 +64,42 @@ void USeinCoverSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 void USeinCoverSubsystem::Deinitialize()
 {
+	ReleaseModuleOwnedStateForModuleUnload();
+	Super::Deinitialize();
+}
+
+void USeinCoverSubsystem::OnWorldBeginPlay(UWorld& InWorld)
+{
+	Super::OnWorldBeginPlay(InWorld);
+	HookSimWorldEvents();
+}
+
+void USeinCoverSubsystem::ReleaseModuleOwnedStateForModuleUnload()
+{
+	check(IsInGameThread());
+	if (UWorld* World = GetWorld())
+	{
+		if (USeinWorldSubsystem* Sim =
+				World->GetSubsystem<USeinWorldSubsystem>())
+		{
+			Sim->TerminateAndReleaseForModuleUnload(
+				FName(TEXT("SeinARTSCover")),
+				TEXT("cover state and deterministic destination resolvers are unloading"));
+		}
+	}
+
 	if (CachedSimWorld)
 	{
 		if (SpawnedHandle.IsValid())   CachedSimWorld->OnEntitySpawned.Remove(SpawnedHandle);
 		if (DestroyedHandle.IsValid()) CachedSimWorld->OnEntityDestroyed.Remove(DestroyedHandle);
+		if (CachedSimWorld->AuthoritativeDestinationResolver.IsBoundToObject(this))
+		{
+			CachedSimWorld->AuthoritativeDestinationResolver.Unbind();
+		}
+		if (CachedSimWorld->PreviewQualityProvider.IsBoundToObject(this))
+		{
+			CachedSimWorld->PreviewQualityProvider.Unbind();
+		}
 		SpawnedHandle.Reset();
 		DestroyedHandle.Reset();
 		CachedSimWorld = nullptr;
@@ -78,7 +110,6 @@ void USeinCoverSubsystem::Deinitialize()
 		CoverSystem->OnCoverSystemDeinitialized();
 		CoverSystem = nullptr;
 	}
-	Super::Deinitialize();
 }
 
 void USeinCoverSubsystem::HookSimWorldEvents()
@@ -92,6 +123,12 @@ void USeinCoverSubsystem::HookSimWorldEvents()
 		// next world begin-play tick.
 		UE_LOG(LogSeinCoverSubsystem, Verbose,
 			TEXT("HookSimWorldEvents: sim subsystem not ready; will rebind in OnWorldBeginPlay"));
+		return;
+	}
+	if (CachedSimWorld == WorldSub
+		&& SpawnedHandle.IsValid()
+		&& DestroyedHandle.IsValid())
+	{
 		return;
 	}
 

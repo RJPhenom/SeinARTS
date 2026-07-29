@@ -9,6 +9,7 @@
 #include "Components/SeinExtentsHelpers.h"
 #include "Containers/Ticker.h"
 #include "Lib/SeinAbilityBPFL.h"
+#include "Simulation/SeinTestMatchBootstrap.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Tags/SeinARTSGameplayTags.h"
 #include "TestTypes/SeinPlacementYawTestTypes.h"
@@ -56,33 +57,45 @@ namespace UE::SeinARTSTests
 		FActorTestSpawner Spawner;
 		USeinWorldSubsystem* World = Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
 		ASSERT_THAT(IsNotNull(World));
-
 		const FSeinPlayerID Player(1);
-		World->RegisterPlayer(Player, FSeinFactionID(1));
-		const FSeinEntityHandle Entity = World->SpawnAbstractEntity(FFixedTransform(), Player);
-		World->AddComponent(Entity, FSeinAbilityComponent());
-		const int32 AbilityID = USeinAbilityBPFL::SeinGrantAbility(
-			World, Entity, USeinPlacementYawTestAbility::StaticClass());
-		ASSERT_THAT(IsTrue(AbilityID != INDEX_NONE));
-		USeinAbility* GrantedAbility = World->GetAbilityInstance(AbilityID);
-		ASSERT_THAT(IsNotNull(GrantedAbility));
-		GrantedAbility->AbilityTag = SeinARTSTags::Command_Context_AbilityTriggered;
-		GrantedAbility->bRequiresFreeFootprint = true;
-		USeinPointFacingTargeterSpec* Targeter =
-			NewObject<USeinPointFacingTargeterSpec>(GrantedAbility);
-		Targeter->BuildingClass = ASeinPlacementYawTestBuilding::StaticClass();
-		Targeter->RotationStepDegrees = 0;
-		GrantedAbility->TargeterSpec = Targeter;
+		FSeinEntityHandle Entity;
+		const auto AuthorState = [&]()
+		{
+			World->RegisterPlayer(Player, FSeinFactionID(1));
+			Entity = World->SpawnAbstractEntity(FFixedTransform(), Player);
+			World->AddComponent(Entity, FSeinAbilityComponent());
+			const int32 AbilityID = USeinAbilityBPFL::SeinGrantAbility(
+				World, Entity, USeinPlacementYawTestAbility::StaticClass());
+			ASSERT_THAT(IsTrue(AbilityID != INDEX_NONE));
+			USeinAbility* GrantedAbility = World->GetAbilityInstance(AbilityID);
+			ASSERT_THAT(IsNotNull(GrantedAbility));
+			GrantedAbility->AbilityTag =
+				SeinARTSTags::Command_Context_AbilityTriggered;
+			GrantedAbility->bRequiresFreeFootprint = true;
+			USeinPointFacingTargeterSpec* Targeter =
+				NewObject<USeinPointFacingTargeterSpec>(GrantedAbility);
+			Targeter->BuildingClass =
+				ASeinPlacementYawTestBuilding::StaticClass();
+			Targeter->RotationStepDegrees = 0;
+			GrantedAbility->TargeterSpec = Targeter;
 
-		const FSeinAbilityComponent* AbilityComponent =
-			World->GetComponent<FSeinAbilityComponent>(Entity);
-		ASSERT_THAT(IsNotNull(AbilityComponent));
-		const USeinAbility* Ability = AbilityComponent->FindAbilityByTag(
-			*World, SeinARTSTags::Command_Context_AbilityTriggered);
-		ASSERT_THAT(AreEqual(GrantedAbility, Ability));
-		ASSERT_THAT(IsNotNull(Cast<USeinPointFacingTargeterSpec>(Ability->TargeterSpec)));
-		ASSERT_THAT(IsNotNull(SeinExtentsHelpers::GetPrimaryExtentsShape(
-			ASeinPlacementYawTestBuilding::StaticClass())));
+			const FSeinAbilityComponent* AbilityComponent =
+				World->GetComponent<FSeinAbilityComponent>(Entity);
+			ASSERT_THAT(IsNotNull(AbilityComponent));
+			const USeinAbility* Ability = AbilityComponent->FindAbilityByTag(
+				*World, SeinARTSTags::Command_Context_AbilityTriggered);
+			ASSERT_THAT(AreEqual(GrantedAbility, Ability));
+			ASSERT_THAT(IsNotNull(
+				Cast<USeinPointFacingTargeterSpec>(Ability->TargeterSpec)));
+			ASSERT_THAT(IsNotNull(SeinExtentsHelpers::GetPrimaryExtentsShape(
+				ASeinPlacementYawTestBuilding::StaticClass())));
+		};
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Materialize(
+			*World,
+			AuthorState,
+			FSeinMatchSettings(),
+			0,
+			TEXT("SeinARTS.PlacementYaw"))));
 
 		const FFixedPoint ExpectedYaw = FFixedPoint::FromInt(137);
 		bool bResolverCalled = false;
@@ -108,9 +121,9 @@ namespace UE::SeinARTSTests
 		Command.CommandType = SeinARTSTags::Command_Type_BrokerOrder;
 		Command.EntityList.Add(Entity);
 		Command.Payload = FInstancedStruct::Make(Payload);
-		World->EnqueueCommand(Command);
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World)));
+		World->SubmitLocalCommandDraft(Command);
 
-		World->StartSimulation();
 		FTSTicker::GetCoreTicker().Tick(World->GetFixedDeltaTimeSeconds());
 		World->StopSimulation();
 

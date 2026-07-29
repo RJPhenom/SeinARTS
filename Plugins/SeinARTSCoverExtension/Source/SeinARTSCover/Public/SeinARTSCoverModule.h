@@ -10,10 +10,25 @@
 
 #include "CoreMinimal.h"
 #include "Modules/ModuleManager.h"
+#include "Serialization/SeinSimulationContentRegistry.h"
+#include "Serialization/SeinPoolObjectCodecRegistry.h"
+#include "Settings/SeinConfigFingerprintRegistry.h"
 
 class FSeinARTSCoverModule : public IModuleInterface
 {
 public:
 	virtual void StartupModule() override;
+	virtual void PreUnloadCallback() override;
 	virtual void ShutdownModule() override;
+
+	/** False keeps bootstrap fail-closed after a content-registration error. */
+	bool IsSimulationContentContributorReady() const
+	{
+		return SimulationContentRegistrationHandle.IsValid();
+	}
+
+private:
+	FSeinConfigFingerprintRegistrationHandle ConfigFingerprintRegistrationHandle;
+	FSeinSimulationContentRegistrationHandle SimulationContentRegistrationHandle;
+	FSeinPoolObjectCodecRegistrationHandle PoolObjectCodecHandle;
 };

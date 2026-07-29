@@ -16,7 +16,8 @@
  *
  * Reads base values from component data using FProperty reflection, applies
  * modifier stacks in a deterministic order (Override > Multiply > Add), and
- * writes results back. Caches property lookups for performance.
+ * writes results back. Property lookups are cached behind weak struct roots,
+ * so reinstancing or module unload cannot leave a live dangling cache claim.
  */
 class SEINARTSCOREENTITY_API FSeinAttributeResolver
 {
@@ -55,7 +56,7 @@ public:
 	/** Check whether a property is an FStructProperty wrapping FFixedPoint. */
 	static bool IsFixedPointField(FProperty* Property);
 
-	/** Clear the internal property cache. Call on hot-reload if needed. */
+	/** Clear the internal property cache immediately during a terminal reset. */
 	static void ClearPropertyCache();
 
 private:

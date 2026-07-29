@@ -39,6 +39,10 @@ public:
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 
+	/** Idempotently sever every external callback and owned view-model root
+	 *  before the UI module unloads. */
+	void ReleaseModuleOwnedStateForModuleUnload();
+
 	// ========== ViewModel Access ==========
 
 	/**

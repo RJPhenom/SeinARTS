@@ -30,6 +30,13 @@ class SEINARTSCOVER_API USeinCoverSubsystem : public UWorldSubsystem
 public:
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
+	virtual void OnWorldBeginPlay(UWorld& InWorld) override;
+
+	/**
+	 * Sever delegates and release the active cover implementation before its
+	 * defining module unloads. Idempotent with ordinary world teardown.
+	 */
+	void ReleaseModuleOwnedStateForModuleUnload();
 
 	/** The active cover system instance. Never null after Initialize completes
 	 *  successfully — falls back to USeinCoverDefault when settings is empty
@@ -58,14 +65,13 @@ private:
 	 *  it with the active cover system. */
 	void HandleEntitySpawned(FSeinEntityHandle Handle);
 
-	/** Symmetric: unregister cover providers as they're destroyed. The cover
-	 *  system reads the entity's FSeinCoverComponent for its `Reach` cache
-	 *  during register, so we MUST run this before component storage wipes
-	 *  (matches the OnEntityDestroyed event's "before wipe" contract). */
+	/** Symmetric: unregister cover providers as they're destroyed. The registry
+	 *  is keyed by handle, so teardown is idempotent and needs no mutable access
+	 *  to the dying component payload. */
 	void HandleEntityDestroyed(FSeinEntityHandle Handle);
 
-	/** Cached sim subsystem ref — set on HookSimWorldEvents. Used to read
-	 *  components during the spawn/destroy callbacks. */
+	/** Cached sim subsystem ref — set on HookSimWorldEvents. Used to inspect
+	 *  components during spawn registration; destroy unregistration is handle-only. */
 	UPROPERTY(Transient)
 	TObjectPtr<USeinWorldSubsystem> CachedSimWorld;
 

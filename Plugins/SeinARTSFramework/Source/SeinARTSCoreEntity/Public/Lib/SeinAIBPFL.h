@@ -38,8 +38,9 @@ public:
 		meta = (WorldContext = "WorldContextObject", DisplayName = "Query Visible Entities For Player"))
 	static TArray<FSeinEntityHandle> SeinQueryVisibleEntitiesForPlayer(const UObject* WorldContextObject, FSeinPlayerID ObserverPlayer, FGameplayTagQuery Query);
 
-	/** Forward a command into the lockstep buffer. Thin wrapper around
-	 *  `USeinWorldSubsystem::EnqueueCommand`; here for BP discoverability. */
+	/** Forward a command through the registered AI controller supplied as the
+	 *  world-context/self object. Its owned-player binding replaces any player
+	 *  identity authored into the command draft. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|AI",
 		meta = (WorldContext = "WorldContextObject", DisplayName = "Emit Command"))
 	static void SeinEmitCommand(const UObject* WorldContextObject, const FSeinCommand& Command);

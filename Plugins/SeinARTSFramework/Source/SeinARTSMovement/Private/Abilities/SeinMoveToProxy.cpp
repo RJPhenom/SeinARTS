@@ -41,6 +41,11 @@ void USeinMoveToProxy::Activate()
 		BroadcastFailure(ESeinMoveFailureReason::NoNavigation);
 		return;
 	}
+	if (!SimWorld->RequireStateMutationAuthorization(TEXT("MoveTo")))
+	{
+		BroadcastFailure(ESeinMoveFailureReason::InvalidExecutionContext);
+		return;
+	}
 
 	if (!USeinNavigationSubsystem::GetNavigationForWorld(World))
 	{
@@ -54,48 +59,81 @@ void USeinMoveToProxy::Activate()
 	Action->Observer = this;
 	Action->Initialize(CachedDestination);
 
-	SimWorld->LatentActionManager->RegisterAction(Action);
+	if (!SimWorld->LatentActionManager->RegisterAction(Action))
+	{
+		Action->Observer.Reset();
+		BroadcastFailure(
+			ESeinMoveFailureReason::InvalidExecutionContext);
+		return;
+	}
 	RunningAction = Action;
 }
 
 void USeinMoveToProxy::NotifyCompleted()
 {
-	OnCompleted.Broadcast();
-	SetReadyToDestroy();
+	OnCompleted.Broadcast(FSeinMoveToResult());
+	ReleaseAfterTerminal();
 }
 
 void USeinMoveToProxy::NotifyFailed(ESeinMoveFailureReason Reason)
 {
-	OnFailed.Broadcast(Reason);
-	SetReadyToDestroy();
+	FSeinMoveToResult Result;
+	Result.FailureReason = Reason;
+	OnFailed.Broadcast(Result);
+	ReleaseAfterTerminal();
 }
 
 void USeinMoveToProxy::NotifyWaypointReached(int32 Index, int32 Total)
 {
-	OnWaypointReached.Broadcast(Index, Total);
+	FSeinMoveToResult Result;
+	Result.WaypointIndex = Index;
+	Result.TotalWaypoints = Total;
+	OnWaypointReached.Broadcast(Result);
 }
 
 void USeinMoveToProxy::NotifyCancelled()
 {
-	OnCancelled.Broadcast();
-	SetReadyToDestroy();
+	FSeinMoveToResult Result;
+	Result.FailureReason = ESeinMoveFailureReason::Cancelled;
+	OnCancelled.Broadcast(Result);
+	ReleaseAfterTerminal();
 }
 
 void USeinMoveToProxy::NotifyPartialPath()
 {
 	// Non-terminal — the move continues toward the partial endpoint, and
 	// OnCompleted fires on arrival as usual. Don't SetReadyToDestroy here.
-	OnPartialPath.Broadcast();
+	OnPartialPath.Broadcast(FSeinMoveToResult());
 }
 
 void USeinMoveToProxy::NotifyPathRecomputed()
 {
 	// Non-terminal — the move continues on the freshly recomputed route.
-	OnPathRecomputed.Broadcast();
+	OnPathRecomputed.Broadcast(FSeinMoveToResult());
+}
+
+void USeinMoveToProxy::AbandonForSnapshotRestore()
+{
+	ReleaseAfterTerminal();
+}
+
+void USeinMoveToProxy::ReleaseAfterTerminal()
+{
+	OnCompleted.Clear();
+	OnFailed.Clear();
+	OnWaypointReached.Clear();
+	OnCancelled.Clear();
+	OnPartialPath.Clear();
+	OnPathRecomputed.Clear();
+	RunningAction = nullptr;
+	CachedAbility = nullptr;
+	SetReadyToDestroy();
 }
 
 void USeinMoveToProxy::BroadcastFailure(ESeinMoveFailureReason Reason)
 {
-	OnFailed.Broadcast(Reason);
-	SetReadyToDestroy();
+	FSeinMoveToResult Result;
+	Result.FailureReason = Reason;
+	OnFailed.Broadcast(Result);
+	ReleaseAfterTerminal();
 }

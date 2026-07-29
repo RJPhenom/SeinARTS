@@ -4,6 +4,7 @@
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
 #include "Core/SeinEntityHandle.h"
+#include "Core/SeinPlayerID.h"
 #include "GameplayTagContainer.h"
 #include "Abilities/SeinAbilityTypes.h"
 #include "Abilities/SeinTargeterTypes.h"
@@ -92,6 +93,20 @@ enum class ESeinAbilityDispatchFallback : uint8
 	Fail,
 };
 
+/** Defines when an ability's authored ResourceCost becomes committed state. */
+UENUM(BlueprintType)
+enum class ESeinAbilityCostTiming : uint8
+{
+	/** Charge the full cost when activation commits. This is the safe default
+	 *  for ordinary gameplay abilities and ignores production catalog timing. */
+	Immediate,
+
+	/** Split the cost by each resource's production timing. AtEnqueue entries
+	 *  are charged on activation; AtCompletion entries transfer through
+	 *  EnqueueProduction and are charged when the queue item completes. */
+	ProductionQueue UMETA(DisplayName = "Production Queue"),
+};
+
 /**
  * Base class for all abilities in the SeinARTS framework.
  * Designers subclass this in Blueprint to define ability behavior.
@@ -159,8 +174,16 @@ public:
 	// ─── Cost + cooldown ───
 
 	/** Resource cost to activate (unified cost struct per DESIGN §6). */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS|Ability|Cost")
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly,
+		Category = "SeinARTS|Ability|Cost",
+		meta = (SeinPoolStateIgnore))
 	FSeinResourceCost ResourceCost;
+
+	/** Payment timing for ResourceCost. Keep Immediate for ordinary abilities.
+	 *  Use Production Queue only when OnActivate transfers its funding snapshot
+	 *  through EnqueueProduction. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS|Ability|Cost")
+	ESeinAbilityCostTiming CostTiming = ESeinAbilityCostTiming::Immediate;
 
 	/** Refund the deducted cost when the ability is cancelled. Default true — matches
 	 *  typical RTS economy where cancelling "didn't happen" from the ledger's view.
@@ -283,7 +306,9 @@ public:
 	 *  drag data, footprint placement, line corridor, etc.
 	 *
 	 *  Phase 1: only USeinPointTargeterSpec is implemented. */
-	UPROPERTY(EditDefaultsOnly, Instanced, BlueprintReadOnly, Category = "SeinARTS|Ability|Targeting")
+	UPROPERTY(EditDefaultsOnly, Instanced, BlueprintReadOnly,
+		Category = "SeinARTS|Ability|Targeting",
+		meta = (SeinPoolStateIgnore))
 	TObjectPtr<USeinTargeterSpec> TargeterSpec;
 
 	// ─── Arbitration (DESIGN §3 + §7) ───
@@ -361,30 +386,37 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Ability|Runtime")
 	bool bIsActive = false;
 
+	/**
+	 * World-global deterministic identity of this instance's current/most recent
+	 * activation. Zero means it has never activated in this timeline.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Ability|Runtime")
+	int64 AbilityActivationID = 0;
+
+	int64 GetActivationID() const { return AbilityActivationID; }
+
 	/** Exact tag references acquired by the current activation. This is kept
 	 *  separate from the authored GrantedTags so a failed saturated grant can
 	 *  never make teardown consume another system's reference. */
 	UPROPERTY()
 	FGameplayTagContainer CommittedGrantedTags;
 
-	/** Snapshot of the cost actually deducted on activation. Empty unless currently
-	 *  active. Used to drive refund-on-cancel without re-resolving cost at deactivate time.
-	 *  For production abilities this is only the AtEnqueue portion — the AtCompletion
-	 *  portion is held in `PendingCompletionCost` and never deducted at activation. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Ability|Runtime")
+	/** Snapshot of the cost actually deducted on activation. Used for cancellation
+	 *  refunds without re-resolving authored policy. For Production Queue abilities,
+	 *  this contains only the catalog's AtEnqueue bucket. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Ability|Runtime",
+		meta = (SeinPoolStateIgnore))
 	FSeinResourceCost DeductedCost;
 
-	/** AtCompletion-bucket snapshot populated by the activation gate when this is
-	 *  a production ability. The activation gate splits ResourceCost via the
-	 *  resource catalog: AtEnqueue resources are deducted immediately (recorded
-	 *  in DeductedCost), AtCompletion resources are held here for the
-	 *  USeinProductionBPFL::SeinEnqueueProduction call to seed the queue entry's
-	 *  AtCompletionCost. The production system deducts it at spawn time.
-	 *
-	 *  Empty unless this is a production ability with at least one AtCompletion-
-	 *  marked resource in the cost map. Designers don't read this directly —
-	 *  EnqueueProduction handles the wiring. */
+	/** Principal whose resources funded this activation. Snapshotted so later
+	 *  cancellation and production completion never re-resolve a changed policy. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Ability|Runtime")
+	FSeinPlayerID ResourcePayer;
+
+	/** Deferred catalog bucket for a Production Queue activation. EnqueueProduction
+	 *  transfers it to the queue entry; Immediate abilities always leave it empty. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Ability|Runtime",
+		meta = (SeinPoolStateIgnore))
 	FSeinResourceCost PendingCompletionCost;
 
 	/** Whether the cooldown has been started for the current activation. Drives
@@ -444,11 +476,13 @@ public:
 	// ─── Control (callable from BP ability scripts) ───
 
 	/** End this ability normally */
-	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Ability")
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Ability",
+		meta = (SeinContinuationSafe))
 	void EndAbility();
 
 	/** Cancel this ability (forced termination) */
-	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Ability")
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Ability",
+		meta = (SeinContinuationSafe))
 	void CancelAbility();
 
 	// ─── Internal ───
@@ -477,12 +511,15 @@ public:
 	/** Stamp the cost snapshot on activation. Called by ProcessCommands after
 	 *  a successful USeinResourceBPFL::SeinDeduct. */
 	void RecordDeductedCost(const FSeinResourceCost& Cost) { DeductedCost = Cost; }
+	void RecordResourcePayer(FSeinPlayerID Payer) { ResourcePayer = Payer; }
 
-	/** Stamp the AtCompletion-bucket snapshot on activation. Called by
-	 *  ProcessCommands after the catalog-aware split. Empty for abilities
-	 *  whose ResourceCost contains no AtCompletion-marked resources (the
-	 *  typical non-production ability case). Production abilities consume
-	 *  this in `EnqueueProduction` to seed the queue entry's AtCompletionCost. */
+	/** Resolve the exact cost charged by activation and any amount transferred to
+	 *  production completion. Shared by command preflight, commit, and UI reads. */
+	void ResolveActivationCosts(const UObject* WorldContextObject,
+		FSeinResourceCost& OutActivationCost,
+		FSeinResourceCost& OutProductionCompletionCost) const;
+
+	/** Stamp the Production Queue completion bucket on activation. */
 	void RecordPendingCompletionCost(const FSeinResourceCost& Cost) { PendingCompletionCost = Cost; }
 
 	// ─── BP-callable convenience methods (production / rally) ───
@@ -495,10 +532,10 @@ public:
 
 	/** Append a queue entry on the ability's owner for `ProducibleClass`. Reads
 	 *  build time, refund policy, and research effect from the class's
-	 *  `FSeinProducibleComponent`. Cost is taken from this ability's `ResourceCost`
-	 *  (the activation gate has already deducted the AtEnqueue portion;
-	 *  AtCompletion sits in `PendingCompletionCost` and is handed to the queue
-	 *  entry). No-op (with warning) if owner has no FSeinProductionComponent, queue
+	 *  `FSeinProducibleComponent`. The activation's deducted cost becomes the
+	 *  queue's refundable AtEnqueue principal; a Production Queue ability also
+	 *  transfers its deferred bucket. No-op (with warning) if owner has no
+	 *  FSeinProductionComponent, queue
 	 *  is full, or the producible has no FSeinProducibleComponent.
 	 *
 	 *  BP usage: OnActivate → Self.EnqueueProduction(SU_Rifleman) → End Ability. */
@@ -528,7 +565,12 @@ public:
 		meta = (DisplayName = "Clear Rally Point"))
 	void ClearRallyPoint();
 
+	/** Derived O(1) pool locator; validated against the world's slot on use. */
+	int32 GetRuntimePoolID() const { return RuntimePoolID; }
+
 private:
+	int32 RuntimePoolID = INDEX_NONE;
+
 	bool AcquireGrantedTags();
 	void ReleaseCommittedGrantedTags();
 
@@ -537,4 +579,6 @@ private:
 	 *  same cooldown to every squadmate's instance of this ability tag. Called
 	 *  by the three cooldown-start sites in ActivateAbility / DeactivateAbility. */
 	void StartCooldownInternal();
+
+	friend class USeinWorldSubsystem;
 };

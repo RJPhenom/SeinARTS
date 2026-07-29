@@ -47,7 +47,7 @@ struct SEINARTSCOREENTITY_API FSeinProducibleComponent : public FSeinComponent
 	FGameplayTagContainer PrerequisiteTags;
 
 	/** Refund policy applied when this entry is cancelled mid-build. Default
-	 *  progress-proportional refund of the AtEnqueue bucket. */
+	 *  progress-proportional refund of its deducted activation principal. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Producible")
 	FSeinProductionRefundPolicy RefundPolicy;
 

@@ -6,7 +6,6 @@
 
 #include "Lib/SeinResourceBPFL.h"
 #include "Core/SeinPlayerState.h"
-#include "Core/SeinSimContext.h"
 #include "Settings/PluginSettings.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Tags/SeinARTSGameplayTags.h"
@@ -171,12 +170,14 @@ void USeinResourceBPFL::SeinSplitCostByCatalog(const UObject* /*WorldContextObje
 
 bool USeinResourceBPFL::SeinDeduct(const UObject* WorldContextObject, FSeinPlayerID PlayerID, const FSeinResourceCost& Cost)
 {
-	SEIN_CHECK_SIM();
-
 	if (Cost.IsEmpty()) { return true; }
 
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
-	if (!Subsystem) { return false; }
+	if (!Subsystem
+		|| !Subsystem->RequireStateMutationAuthorization(TEXT("DeductResource")))
+	{
+		return false;
+	}
 
 	FSeinPlayerState* State = Subsystem->GetPlayerState(PlayerID);
 	if (!State) { return false; }
@@ -203,12 +204,14 @@ bool USeinResourceBPFL::SeinDeduct(const UObject* WorldContextObject, FSeinPlaye
 
 void USeinResourceBPFL::SeinRefund(const UObject* WorldContextObject, FSeinPlayerID PlayerID, const FSeinResourceCost& Cost)
 {
-	SEIN_CHECK_SIM();
-
 	if (Cost.IsEmpty()) { return; }
 
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
-	if (!Subsystem) { return; }
+	if (!Subsystem
+		|| !Subsystem->RequireStateMutationAuthorization(TEXT("RefundResource")))
+	{
+		return;
+	}
 
 	FSeinPlayerState* State = Subsystem->GetPlayerState(PlayerID);
 	if (!State) { return; }
@@ -233,12 +236,14 @@ void USeinResourceBPFL::SeinRefund(const UObject* WorldContextObject, FSeinPlaye
 
 void USeinResourceBPFL::SeinGrantIncome(const UObject* WorldContextObject, FSeinPlayerID PlayerID, const FSeinResourceCost& Amount)
 {
-	SEIN_CHECK_SIM();
-
 	if (Amount.IsEmpty()) { return; }
 
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
-	if (!Subsystem) { return; }
+	if (!Subsystem
+		|| !Subsystem->RequireStateMutationAuthorization(TEXT("GrantIncome")))
+	{
+		return;
+	}
 
 	FSeinPlayerState* State = Subsystem->GetPlayerState(PlayerID);
 	if (!State) { return; }
@@ -251,13 +256,15 @@ void USeinResourceBPFL::SeinGrantIncome(const UObject* WorldContextObject, FSein
 
 bool USeinResourceBPFL::SeinTransfer(const UObject* WorldContextObject, FSeinPlayerID FromPlayer, FSeinPlayerID ToPlayer, const FSeinResourceCost& Amount)
 {
-	SEIN_CHECK_SIM();
-
 	if (Amount.IsEmpty()) { return true; }
 	if (FromPlayer == ToPlayer) { return true; }
 
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
-	if (!Subsystem) { return false; }
+	if (!Subsystem
+		|| !Subsystem->RequireStateMutationAuthorization(TEXT("TransferResource")))
+	{
+		return false;
+	}
 
 	// SeinTransfer is an unconditional primitive — affordability check
 	// remains, but any gameplay gate ("no mid-match transfers", "only

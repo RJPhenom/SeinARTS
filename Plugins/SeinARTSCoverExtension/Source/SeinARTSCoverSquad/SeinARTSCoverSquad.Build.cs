@@ -13,6 +13,7 @@ public class SeinARTSCoverSquad : ModuleRules
 			"Core",
 			"CoreUObject",
 			"Engine",
+			"SeinARTSCoreEntity",
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[]
@@ -20,7 +21,6 @@ public class SeinARTSCoverSquad : ModuleRules
 			"InputCore",
 			"GameplayTags",
 			"SeinARTSCore",
-			"SeinARTSCoreEntity",
 			"SeinARTSCover",
 			"SeinARTSSquad",
 			"SeinARTSFramework",       // FormationPreviewSubsystem uses ASeinPlayerController + USeinTargeterSubsystem

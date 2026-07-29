@@ -81,6 +81,12 @@ public:
 	 *  Default: no-op. Mirrors USeinNavigation::OnNavigationInitialized. */
 	virtual void OnInitialized(UWorld* /*World*/) {}
 
+	/** Called while the owning world and this implementation's native module are
+	 *  still callable, immediately before the resolver is detached. Override to
+	 *  release delegate bindings or native resources. Must be idempotent and
+	 *  must not issue gameplay mutations. */
+	virtual void OnDeinitialized() { ActiveOverlaps.Reset(); }
+
 	/** Called after the world subsystem restores authoritative snapshot state.
 	 *  Custom resolvers should discard any timeline-local scratch and call the
 	 *  base implementation so overlap events are re-derived from the restored

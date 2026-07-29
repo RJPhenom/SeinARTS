@@ -4,9 +4,10 @@
  * @brief   Restricted-access Blueprint Function Library for mutating sim-side
  *          component state. Callable only from `USeinAbility` and `USeinEffect`
  *          Blueprint graphs (enforced at BP-compile time by RestrictedToClasses).
- *          Each function additionally calls `SEIN_CHECK_SIM()` as a runtime
- *          backstop — functions invoked from outside a sim tick assert in
- *          dev builds.
+ *          Every function passes the functional all-build world-mutation gate:
+ *          stopped tick-zero Applying materialization and running fixed-tick
+ *          callbacks are accepted; post-seal/off-tick calls are rejected in
+ *          Shipping as well as development builds.
  *
  *          Prefer field-level setters over whole-struct setters when a field-
  *          level version exists: whole-struct setters clobber every field and

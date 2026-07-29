@@ -27,7 +27,7 @@
 		{
 			"Name": "SeinARTSEditorTests",
 			"Type": "Editor",
-			"LoadingPhase": "PostEngineInit",
+			"LoadingPhase": "Default",
 			"TargetConfigurationDenyList": ["Shipping"]
 		}
 	],

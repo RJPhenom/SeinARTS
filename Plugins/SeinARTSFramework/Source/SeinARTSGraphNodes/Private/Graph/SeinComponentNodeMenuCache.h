@@ -39,4 +39,7 @@ namespace SeinComponentNodeMenu
 	 *  action menu (native FSeinComponent children + SeinDeterministic UDS),
 	 *  sorted by name. Memoized per action-DB rebuild (see file header). */
 	void GetCandidateStructs(TArray<UScriptStruct*>& Out);
+
+	/** Drop this module generation's weak candidate cache before DLL unload. */
+	void ResetCandidateCache();
 }

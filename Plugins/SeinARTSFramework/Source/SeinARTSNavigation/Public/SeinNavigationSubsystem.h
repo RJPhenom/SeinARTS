@@ -25,8 +25,16 @@
 class USeinNavigation;
 class USeinLevelData;
 class ISeinSystem;
+struct FSeinNavigationCanonicalStateProvider;
 struct FSeinPathRequest;
 struct FSeinPath;
+
+#if WITH_DEV_AUTOMATION_TESTS
+namespace UE::SeinARTSTests
+{
+	struct FNavigationCanonicalStateTestAccess;
+}
+#endif
 
 UCLASS()
 class SEINARTSNAVIGATION_API USeinNavigationSubsystem : public UWorldSubsystem
@@ -37,6 +45,13 @@ public:
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 	virtual void OnWorldBeginPlay(UWorld& InWorld) override;
+
+	/**
+	 * Unregister systems and delegates, then release module-owned runtime state
+	 * while SeinARTSNavigation code is still loaded. Called by the module's
+	 * PreUnloadCallback; idempotent with later world teardown.
+	 */
+	void ReleaseModuleOwnedStateForModuleUnload();
 
 	/** The active navigation instance. Null when NavigationClass is None (navigation off, WYSIWYG);
 	 *  otherwise valid after Initialize. All callers null-guard. */
@@ -66,6 +81,10 @@ public:
 	ESeinPathResult RequestPath(const FSeinPathRequest& Request, FSeinPath& OutPath);
 
 private:
+	friend struct FSeinNavigationCanonicalStateProvider;
+#if WITH_DEV_AUTOMATION_TESTS
+	friend struct UE::SeinARTSTests::FNavigationCanonicalStateTestAccess;
+#endif
 
 	/** The active nav for this world. Instantiated from
 	 *  `USeinARTSCoreSettings::NavigationClass` during Initialize. */
@@ -93,13 +112,14 @@ private:
 	/** Binds cross-module delegates on USeinWorldSubsystem so sim code can
 	 *  query nav reachability without importing nav headers. */
 	void BindSimDelegates(UWorld& World);
+	void UnbindSimDelegates();
 
 	/** Sim-tick system that gathers FSeinExtentsComponent entities (those with
 	 *  bBlocksNav set) each PreTick
 	 *  and pushes them into Navigation->SetDynamicBlockers. Owned here so
 	 *  Navigation stays a pure data/query object — the world subsystem just
-	 *  ticks it. Created at OnWorldBeginPlay (when SeinWorldSubsystem is
-	 *  available); torn down at Deinitialize. */
+	 *  ticks it. Created and registered during Initialize, before execution
+	 *  topology freeze; torn down at Deinitialize. */
 	ISeinSystem* NavBlockerStampSystem = nullptr;
 
 	/** Number of `RequestPath` calls served (Found or NotFound) within the

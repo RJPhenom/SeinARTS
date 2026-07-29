@@ -48,7 +48,11 @@ FFixedPoint USeinAttributeBPFL::SeinGetBaseAttribute(const UObject* WorldContext
 void USeinAttributeBPFL::SeinSetBaseAttribute(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, UScriptStruct* ComponentType, FName FieldName, FFixedPoint Value)
 {
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
-	if (!Subsystem || !ComponentType) return;
+	if (!Subsystem || !ComponentType
+		|| !Subsystem->RequireStateMutationAuthorization(TEXT("SetBaseAttribute")))
+	{
+		return;
+	}
 
 	ISeinComponentStorage* Storage = Subsystem->GetComponentStorageRaw(ComponentType);
 	if (!Storage) return;

@@ -6,14 +6,21 @@
 #include "SeinNetSubsystem.h"
 #include "SeinARTSNet.h"
 #include "SeinNetRelay.h"
+#include "SeinLobbySubsystem.h"
 #include "SeinReplayWriter.h"
 #include "SeinReplayReader.h"
+#include "SeinReplayFormat.h"
+#include "SeinNetCommandWireCodec.h"
 #include "Settings/PluginSettings.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "Input/SeinCommandSchemaRegistry.h"
+#include "Serialization/SeinDeterministicValueDigest.h"
+#include "Tags/SeinARTSGameplayTags.h"
 #include "AI/SeinAIController.h"
 #include "AI/SeinNullAIController.h"
 #include "UObject/SoftObjectPath.h"
 #include "Engine/Engine.h"
+#include "Engine/NetDriver.h"
 #include "Engine/World.h"
 #include "Engine/GameInstance.h"
 #include "GameFramework/GameModeBase.h"
@@ -30,26 +37,183 @@ namespace
 	// per-turn maps. This is transport hygiene, not gameplay tuning.
 	constexpr int32 GSeinMaxProtocolTurnLead = 256;
 	constexpr int32 GSeinRetainedHistoryTurns = 256;
+	// A burst may drain over several genuine turn boundaries, but it must not
+	// become an unbounded process-local memory sink while transport is stalled.
+	constexpr int32 GSeinMaxBufferedAuthorTurns = 4;
+	// Destination actors bind the materializer during normal world startup.
+	// Bound this non-simulation scheduler bridge so a missing integration fails
+	// closed instead of retaining the game-instance subsystem forever.
+	constexpr int32 GSeinMaxBootstrapMaterializerRetryTicks = 120;
+	constexpr double GSeinBootstrapCoordinatorTimeoutSeconds = 30.0;
+	const FName GSeinNetworkBootstrapAuthorityID(
+		TEXT("SeinARTS.Net.LockstepBootstrap"));
 
-	bool AreCommandBatchesIdentical(
-		const TArray<FSeinCommand>& A, const TArray<FSeinCommand>& B)
+	struct FSeinAuthorSubmissionBudget
 	{
-		if (A.Num() != B.Num()) return false;
-		const UScriptStruct* CommandStruct = FSeinCommand::StaticStruct();
-		for (int32 Index = 0; Index < A.Num(); ++Index)
+		int32 MaxCommands = 0;
+		int32 MaxEncodedBytes = 0;
+		uint64 MaxCanonicalCostBytes = 0;
+	};
+
+	int32 GetConfiguredMaxCommandsPerSubmission()
+	{
+		const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
+		return FMath::Clamp(
+			Settings ? Settings->MaxCommandsPerSubmission : 1,
+			1,
+			SeinNetProtocolLimits::MaxCommandsPerAuthor);
+	}
+
+	FSeinAuthorSubmissionBudget GetAuthorSubmissionBudget(
+		int32 ExpectedAuthorCount,
+		int32 FrozenMaxCommandsPerSubmission)
+	{
+		const int32 Authors = FMath::Clamp(
+			ExpectedAuthorCount, 1,
+			SeinNetProtocolLimits::MaxCommandAuthors);
+		const int32 VariableWireBytes =
+			static_cast<int32>(FSeinOpaqueCommandBatch::MaxBytes)
+			- FSeinNetCommandWireCodec::FixedBatchHeaderBytes;
+		FSeinAuthorSubmissionBudget Result;
+		Result.MaxCommands = FMath::Min(
+			FMath::Clamp(
+				FrozenMaxCommandsPerSubmission,
+				0,
+				SeinNetProtocolLimits::MaxCommandsPerAuthor),
+			SeinReplayFormat::MaxCommandsPerTurn / Authors);
+		Result.MaxEncodedBytes = FSeinNetCommandWireCodec::FixedBatchHeaderBytes
+			+ VariableWireBytes / Authors;
+		Result.MaxCanonicalCostBytes =
+			FSeinNetCommandWireCodec::MaxCanonicalCostBytes
+			/ static_cast<uint64>(Authors);
+		return Result;
+	}
+
+	bool FitsSingleTurnBudget(
+		const FSeinQueuedCommandCost& Cost,
+		const FSeinAuthorSubmissionBudget& Budget)
+	{
+		return Budget.MaxCommands > 0
+			&& Cost.VariableWireBytes >= 0
+			&& FSeinNetCommandWireCodec::FixedBatchHeaderBytes
+				+ Cost.VariableWireBytes <= Budget.MaxEncodedBytes
+			&& FSeinNetCommandWireCodec::FixedBatchHeaderBytes
+				+ Cost.VariableCanonicalCostBytes
+				<= Budget.MaxCanonicalCostBytes;
+	}
+
+	bool FitsBacklogBudget(
+		int32 ExistingCount,
+		int64 ExistingVariableWireBytes,
+		uint64 ExistingVariableCanonicalCostBytes,
+		const FSeinQueuedCommandCost& Added,
+		const FSeinAuthorSubmissionBudget& PerTurn)
+	{
+		if (PerTurn.MaxEncodedBytes
+			< FSeinNetCommandWireCodec::FixedBatchHeaderBytes
+			|| PerTurn.MaxCanonicalCostBytes
+				< FSeinNetCommandWireCodec::FixedBatchHeaderBytes)
 		{
-			if (!CommandStruct->CompareScriptStruct(&A[Index], &B[Index], 0))
-			{
-				return false;
-			}
+			return false;
 		}
-		return true;
+		const int64 MaxCount =
+			static_cast<int64>(PerTurn.MaxCommands) * GSeinMaxBufferedAuthorTurns;
+		const int64 MaxVariableWireBytes = static_cast<int64>(
+			PerTurn.MaxEncodedBytes - FSeinNetCommandWireCodec::FixedBatchHeaderBytes)
+			* GSeinMaxBufferedAuthorTurns;
+		const uint64 MaxVariableCanonicalCostBytes =
+			(PerTurn.MaxCanonicalCostBytes
+				- FSeinNetCommandWireCodec::FixedBatchHeaderBytes)
+			* GSeinMaxBufferedAuthorTurns;
+		return Added.VariableWireBytes >= 0
+			&& static_cast<int64>(ExistingCount) + 1 <= MaxCount
+			&& ExistingVariableWireBytes <= MaxVariableWireBytes - Added.VariableWireBytes
+			&& Added.VariableCanonicalCostBytes
+				<= MaxVariableCanonicalCostBytes
+			&& ExistingVariableCanonicalCostBytes
+				<= MaxVariableCanonicalCostBytes
+					- Added.VariableCanonicalCostBytes;
+	}
+
+	void RemoveOutgoingPrefix(FSeinOutgoingDraftBacklog& Backlog, int32 Count)
+	{
+		Count = FMath::Clamp(Count, 0, Backlog.Drafts.Num());
+		Backlog.Drafts.RemoveAt(0, Count, EAllowShrinking::No);
+		Backlog.Costs.RemoveAt(0, FMath::Min(Count, Backlog.Costs.Num()), EAllowShrinking::No);
+		Backlog.VariableWireBytes = 0;
+		Backlog.VariableCanonicalCostBytes = 0;
+		for (const FSeinQueuedCommandCost& Cost : Backlog.Costs)
+		{
+			Backlog.VariableWireBytes += Cost.VariableWireBytes;
+			Backlog.VariableCanonicalCostBytes +=
+				Cost.VariableCanonicalCostBytes;
+		}
+	}
+
+	void RemoveAICommandPrefix(FSeinAICommandBacklog& Backlog, int32 Count)
+	{
+		Count = FMath::Clamp(Count, 0, Backlog.Commands.Num());
+		Backlog.Commands.RemoveAt(0, Count, EAllowShrinking::No);
+		Backlog.Costs.RemoveAt(0, FMath::Min(Count, Backlog.Costs.Num()), EAllowShrinking::No);
+		Backlog.VariableWireBytes = 0;
+		Backlog.VariableCanonicalCostBytes = 0;
+		for (const FSeinQueuedCommandCost& Cost : Backlog.Costs)
+		{
+			Backlog.VariableWireBytes += Cost.VariableWireBytes;
+			Backlog.VariableCanonicalCostBytes +=
+				Cost.VariableCanonicalCostBytes;
+		}
+	}
+
+	int32 GetMaxCommandsPerCanonicalTurn()
+	{
+		return SeinReplayFormat::MaxCommandsPerTurn;
+	}
+
+	FSeinNetworkParticipantID MakeParticipantID(
+		const FSeinMatchInstanceID& MatchID,
+		const FString& StableRole)
+	{
+		const FString Identity = FString::Printf(
+			TEXT("/SeinARTS/Network/%s/Participant/%s"),
+			*MatchID.ToCanonicalString(),
+			*StableRole);
+		return FSeinNetworkParticipantID(FGuid::NewDeterministicGuid(
+			Identity,
+			0x5345494E4E455431ull));
+	}
+
+	bool AreMatchSettingsIdentical(
+		const FSeinMatchSettings& A,
+		const FSeinMatchSettings& B)
+	{
+		return FSeinMatchSettings::StaticStruct()->CompareScriptStruct(&A, &B, 0);
+	}
+
+	bool ComputeMatchSettingsDigest(
+		FSeinMatchSettings& Settings,
+		FGuid& OutDigest,
+		const TCHAR* Operation)
+	{
+		FSeinDeterministicValueDigestError Error;
+		if (SeinCanonicalizeAndDigestMatchSettings(Settings, OutDigest, &Error)
+			&& OutDigest.IsValid())
+		{
+			return true;
+		}
+
+		OutDigest.Invalidate();
+		UE_LOG(LogSeinNet, Error,
+			TEXT("%s: canonical match-settings digest failed closed (field=%s error=%s)."),
+			Operation, *Error.FieldPath, *Error.Message);
+		return false;
 	}
 }
 
 void USeinNetSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
+	bModuleOwnedStateReleased = false;
 
 	PostLoginHandle = FGameModeEvents::GameModePostLoginEvent.AddUObject(this, &USeinNetSubsystem::OnPostLogin);
 	LogoutHandle = FGameModeEvents::GameModeLogoutEvent.AddUObject(this, &USeinNetSubsystem::OnLogout);
@@ -66,15 +230,57 @@ void USeinNetSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	// pipeline). Relay tracking (`Relays`, `RelayToSlot`, `LocalRelay`) is
 	// peer-identity, not lockstep state, and is preserved.
 	WorldCleanupHandle = FWorldDelegates::OnWorldCleanup.AddUObject(this, &USeinNetSubsystem::OnWorldCleanup);
+	if (GEngine)
+	{
+		TravelFailureHandle = GEngine->OnTravelFailure().AddUObject(
+			this, &USeinNetSubsystem::OnTravelFailure);
+		NetworkFailureHandle = GEngine->OnNetworkFailure().AddUObject(
+			this, &USeinNetSubsystem::OnNetworkFailure);
+	}
 
 	UE_LOG(LogSeinNet, Log, TEXT("USeinNetSubsystem initialized."));
 }
 
 void USeinNetSubsystem::Deinitialize()
 {
-	FGameModeEvents::GameModePostLoginEvent.Remove(PostLoginHandle);
-	FGameModeEvents::GameModeLogoutEvent.Remove(LogoutHandle);
-	FWorldDelegates::OnWorldCleanup.Remove(WorldCleanupHandle);
+	ReleaseModuleOwnedStateForModuleUnload();
+	Super::Deinitialize();
+}
+
+void USeinNetSubsystem::ReleaseModuleOwnedStateForModuleUnload()
+{
+	check(IsInGameThread());
+	if (bModuleOwnedStateReleased) return;
+	bModuleOwnedStateReleased = true;
+
+	if (PostLoginHandle.IsValid())
+	{
+		FGameModeEvents::GameModePostLoginEvent.Remove(PostLoginHandle);
+		PostLoginHandle.Reset();
+	}
+	if (LogoutHandle.IsValid())
+	{
+		FGameModeEvents::GameModeLogoutEvent.Remove(LogoutHandle);
+		LogoutHandle.Reset();
+	}
+	if (WorldCleanupHandle.IsValid())
+	{
+		FWorldDelegates::OnWorldCleanup.Remove(WorldCleanupHandle);
+		WorldCleanupHandle.Reset();
+	}
+	if (GEngine)
+	{
+		if (TravelFailureHandle.IsValid())
+		{
+			GEngine->OnTravelFailure().Remove(TravelFailureHandle);
+		}
+		if (NetworkFailureHandle.IsValid())
+		{
+			GEngine->OnNetworkFailure().Remove(NetworkFailureHandle);
+		}
+	}
+	TravelFailureHandle.Reset();
+	NetworkFailureHandle.Reset();
 
 	// Flush the replay log to disk on session teardown. PIE Stop = end of
 	// match for our purposes, so we always write a file. If the writer isn't
@@ -89,28 +295,48 @@ void USeinNetSubsystem::Deinitialize()
 	}
 	ReplayWriter = nullptr;
 
-	if (ReplayReader && ReplayReader->IsPlaying())
+	if (ReplayReader)
 	{
 		ReplayReader->Stop();
 	}
 	ReplayReader = nullptr;
 
-	ResetLockstepEpochState(GetWorld());
+	// nullptr deliberately means "detach whichever world is actually bound";
+	// the GI's current world may differ during seamless-travel teardown.
+	ResetMatchState(nullptr);
+	ClearDeterminismSessionFailureSubmitter();
 
 	Relays.Reset();
 	LocalRelay.Reset();
 	RelayToSlot.Reset();
-	AcceptedConfigFingerprints.Reset();
-	SlotLifecycle.Reset();
-	SlotDroppedAtTime.Reset();
-	StragglerCounts.Reset();
-	TurnsCompletedCount = 0;
-	bDesyncDetected = false;
-	LocalPlayerID = FSeinPlayerID::Neutral();
-	SessionSeed = 0;
+	RelayToParticipant.Reset();
+	PendingTravelIntent = ESeinMatchTravelIntent::NewMatch;
 
-	UE_LOG(LogSeinNet, Log, TEXT("USeinNetSubsystem deinitialized."));
-	Super::Deinitialize();
+	OnDeterminismSessionFailure.Clear();
+	OnDeterminismSessionFailureBP.Clear();
+	OnTurnReceived.Clear();
+	OnLocalSlotChanged.Clear();
+	OnLocalSlotChangedBP.Clear();
+	OnLocalCommandIssued.Clear();
+	OnLocalCommandIssuedBP.Clear();
+
+#if WITH_DEV_AUTOMATION_TESTS
+	TestTurnSubmitOverride = nullptr;
+	TestWorldStateRootSubmitOverride = nullptr;
+	TestDeterminismSessionFailureSubmitOverride = nullptr;
+	TestWorldStateRootResolverOverride = nullptr;
+	TestServerOverride.Reset();
+	TestDedicatedAuthorityOverride.Reset();
+	TestParticipantManifestOverride.Reset();
+	TestCommandProtocolDigestOverride.Reset();
+	TestSimulationContentDigestOverride.Reset();
+	TestCommandProtocolMaxCommandsOverride.Reset();
+	TestNetworkingActiveOverride.Reset();
+	TestDeterminismGossipEnabledOverride.Reset();
+	TestDeterminismCheckIntervalOverride.Reset();
+	TestCurrentTurnOverride.Reset();
+	TestFindCommandSchemaOverride = nullptr;
+#endif
 }
 
 void USeinNetSubsystem::OnWorldCleanup(UWorld* World, bool bSessionEnded, bool bCleanupResources)
@@ -121,18 +347,25 @@ void USeinNetSubsystem::OnWorldCleanup(UWorld* World, bool bSessionEnded, bool b
 	// other GIs (sub-PIE windows, asset browser previews, etc) shouldn't
 	// touch our state.
 	if (World->GetGameInstance() != GetGameInstance()) return;
+	if (const USeinWorldSubsystem* BoundWorldSub = CachedWorldSub.Get())
+	{
+		// Seamless travel can initialize and bind the destination before the
+		// source world finishes cleanup. A late source callback must not erase
+		// the destination epoch or detach its hooks.
+		if (BoundWorldSub->GetWorld() != World) return;
+	}
 
 	const bool bHadState =
-		!ServerTurnBuffer.IsEmpty() ||
+		!TurnAggregator.GetPendingTurnIDs().IsEmpty() ||
 		!ReceivedTurns.IsEmpty() ||
-		!PendingOutgoingCommands.IsEmpty() ||
+		!PendingOutgoingDrafts.IsEmpty() ||
 		!PendingTurnSubmissions.IsEmpty() ||
-		!CompletedTurns.IsEmpty() ||
-		!ServerHashReports.IsEmpty() ||
-		!PendingStateHashReports.IsEmpty() ||
+		TurnAggregator.GetTurnRejectionFloor() >= 0 ||
+		!ServerWorldStateRootReports.IsEmpty() ||
+		!PendingWorldStateRootReports.IsEmpty() ||
 		!AITakeoverControllers.IsEmpty() ||
 		LastSubmittedTurn != -1 ||
-		LastHashReportedTurn != -1;
+		LastWorldStateRootReportedTurn != -1;
 
 	ResetLockstepEpochState(World);
 
@@ -142,6 +375,101 @@ void USeinNetSubsystem::OnWorldCleanup(UWorld* World, bool bSessionEnded, bool b
 			TEXT("OnWorldCleanup: reset lockstep state for world %s (sessionEnded=%d)."),
 			*GetNameSafe(World), bSessionEnded ? 1 : 0);
 	}
+}
+
+bool USeinNetSubsystem::OwnsFailureWorld(const UWorld* World) const
+{
+	const UGameInstance* GameInstance = GetGameInstance();
+	// Engine failure delegates are global. An unattributed null world must not
+	// cancel every pending assignment in a multi-PIE process.
+	return GameInstance && World
+		&& World->GetGameInstance() == GameInstance;
+}
+
+void USeinNetSubsystem::CancelPendingLocalTravelFailure(
+	const FString& Reason)
+{
+	if (!PendingLocalProtocolAssignment.IsSet()) return;
+	const FSeinProtocolContext Context =
+		PendingLocalProtocolAssignment.Context;
+	ClientHandlePreparedMatchTravelCancelled(Context);
+	UE_LOG(LogSeinNet, Error,
+		TEXT("Prepared destination failed locally before activation; source epoch preserved: %s"),
+		*Reason.Left(512));
+}
+
+void USeinNetSubsystem::OnTravelFailure(
+	UWorld* World,
+	ETravelFailure::Type FailureType,
+	const FString& ErrorString)
+{
+	if ((!PendingAuthorityProtocolState.IsSet()
+			&& !PendingLocalProtocolAssignment.IsSet())
+		|| !OwnsFailureWorld(World))
+	{
+		return;
+	}
+
+	const FString Reason = FString::Printf(
+		TEXT("Travel failure %s: %s"),
+		ETravelFailure::ToString(FailureType),
+		ErrorString.IsEmpty() ? TEXT("no engine diagnostic") : *ErrorString);
+	if (PendingAuthorityProtocolState.IsSet())
+	{
+		// The callback can arrive after the engine has browsed to a fallback
+		// world, so pending coordinator ownership—not current NetMode—is the
+		// durable authority proof for this rollback.
+		AbortPreparedMatchTravel(Reason);
+		return;
+	}
+	CancelPendingLocalTravelFailure(Reason);
+}
+
+void USeinNetSubsystem::OnNetworkFailure(
+	UWorld* World,
+	UNetDriver* NetDriver,
+	ENetworkFailure::Type FailureType,
+	const FString& ErrorString)
+{
+	if (!PendingLocalProtocolAssignment.IsSet())
+	{
+		return;
+	}
+	UWorld* FailureWorld = World;
+	if (!FailureWorld && NetDriver)
+	{
+		FailureWorld = NetDriver->GetWorld();
+	}
+	bool bOwnedPendingDriver = false;
+	if (NetDriver && GEngine)
+	{
+		if (const FWorldContext* Context =
+			GEngine->GetWorldContextFromPendingNetGameNetDriver(NetDriver))
+		{
+			bOwnedPendingDriver =
+				Context->OwningGameInstance == GetGameInstance();
+		}
+	}
+	const bool bOwnedFailure = OwnsFailureWorld(FailureWorld)
+		|| bOwnedPendingDriver;
+	if (!bOwnedFailure) return;
+
+	const UWorld* SourceWorld =
+		PendingLocalProtocolAssignment.SourceWorld.Get();
+	const UWorld* CurrentWorld = GetWorld();
+	const bool bClientDriver = NetDriver && NetDriver->ServerConnection;
+	if (!bOwnedPendingDriver && !bClientDriver
+		&& (!FailureWorld || FailureWorld->GetNetMode() != NM_Client)
+		&& (!SourceWorld || SourceWorld->GetNetMode() != NM_Client)
+		&& (!CurrentWorld || CurrentWorld->GetNetMode() != NM_Client))
+	{
+		return;
+	}
+
+	CancelPendingLocalTravelFailure(FString::Printf(
+		TEXT("Network failure %s: %s"),
+		ENetworkFailure::ToString(FailureType),
+		ErrorString.IsEmpty() ? TEXT("no engine diagnostic") : *ErrorString));
 }
 
 void USeinNetSubsystem::ReleaseWorldOwnedAI(UWorld* RetiringWorld)
@@ -175,46 +503,123 @@ void USeinNetSubsystem::ReleaseWorldOwnedAI(UWorld* RetiringWorld)
 
 void USeinNetSubsystem::ResetLockstepEpochState(UWorld* RetiringWorld)
 {
-	USeinWorldSubsystem* RetiringWorldSub =
-		RetiringWorld ? RetiringWorld->GetSubsystem<USeinWorldSubsystem>() : nullptr;
-	if (RetiringWorldSub && CachedWorldSub.Get() == RetiringWorldSub)
+	CancelBootstrapMaterializerRetry();
+	CancelBootstrapCoordinatorTimeout();
+
+	// Detach from the world we actually bound, even when this is an in-place
+	// epoch reset with no retiring-world pointer. Clearing only the cached
+	// handle would otherwise leave live delegates behind across match/module
+	// reloads and make the next bind stack another callback.
+	USeinWorldSubsystem* BoundWorldSub = CachedWorldSub.Get();
+	const bool bDetachBoundWorld =
+		BoundWorldSub && (!RetiringWorld || BoundWorldSub->GetWorld() == RetiringWorld);
+	if (bDetachBoundWorld)
 	{
-		RetiringWorldSub->TurnReadyResolver.Unbind();
-		RetiringWorldSub->TurnConsumeNotifier.Unbind();
-		RetiringWorldSub->AIEmitInterceptor.Unbind();
+		BoundWorldSub->TurnReadyResolver.Unbind();
+		BoundWorldSub->TurnConsumeNotifier.Unbind();
+		BoundWorldSub->ClearAIEmitInterceptor();
+		BoundWorldSub->ClearLocalCommandSubmitter();
 		if (TickCompletedHandle.IsValid())
 		{
-			RetiringWorldSub->OnSimTickCompleted.Remove(TickCompletedHandle);
+			BoundWorldSub->OnSimTickCompleted.Remove(TickCompletedHandle);
+		}
+		if (ExecutionTopologyInvalidatedHandle.IsValid())
+		{
+			BoundWorldSub->OnExecutionTopologyInvalidated.Remove(
+				ExecutionTopologyInvalidatedHandle);
 		}
 	}
 
-	TickCompletedHandle.Reset();
-	CachedWorldSub.Reset();
+	if (!BoundWorldSub || bDetachBoundWorld)
+	{
+		TickCompletedHandle.Reset();
+		ExecutionTopologyInvalidatedHandle.Reset();
+		CachedWorldSub.Reset();
+	}
 	ReleaseWorldOwnedAI(RetiringWorld);
 
-	ServerTurnBuffer.Reset();
-	CompletedTurns.Reset();
-	CompletedTurnRejectionFloor = -1;
+	TurnAggregator.Reset();
+	ConfigureTurnAggregator();
 	ReceivedTurns.Reset();
-	PendingOutgoingCommands.Reset();
+	PendingOutgoingDrafts.Reset();
 	PendingTurnSubmissions.Reset();
 	LastQueuedTurn = -1;
 	LastSubmittedTurn = -1;
 	bStartSessionRequested = false;
 	bServerStartRequested = false;
-
-	ServerHashReports.Reset();
-	CompletedHashChecks.Reset();
-	CompletedHashRejectionFloor = -1;
-	PendingStateHashReports.Reset();
-	LastHashQueuedTurn = -1;
-	LastHashReportedTurn = -1;
+	ServerWorldStateRootReports.Reset();
+	CompletedWorldStateRootChecks.Reset();
+	CompletedWorldStateRootRejectionFloor = -1;
+	PendingWorldStateRootReports.Reset();
+	LastWorldStateRootQueuedTurn = -1;
+	LastWorldStateRootReportedTurn = -1;
+	DeterminismSessionFailure = FSeinDeterminismSessionFailure();
+	bDeterminismSessionFailureAuthoritative = false;
+	PendingDeterminismSessionFailureReport.Reset();
+	PendingAuthenticatedDeterminismSessionFailures.Reset();
+	BootstrapConsensus.Reset();
+	LocalBootstrapReceipt.Reset();
+	PendingLocalBootstrapReceiptReportContext.Reset();
+	PendingLocalBootstrapAuthorizedReadyReportContext.Reset();
+	DeferredBootstrapReceiptRequestContext.Reset();
+	PendingBootstrapAuthorizationContext.Reset();
+	PendingBootstrapAuthorizationReceipt.Reset();
+	PendingBootstrapLaunchContext.Reset();
+	PendingBootstrapLaunchReceipt.Reset();
+	MatchBootstrapAuthority = FSeinMatchBootstrapAuthorityHandle();
+	BootstrapSessionFailureReason.Reset();
+	bBootstrapFailureReported = false;
+	bBootstrapLaunchBarrierActive = false;
+	bLocalBootstrapIngressClosed = false;
 
 	LastStalledTurn = -1;
 	FirstStalledAtTime = 0.0;
 	LastStallLogTime = 0.0;
 	bStallLogEscalated = false;
 	IncompleteTurnDiagnostics.Reset();
+}
+
+void USeinNetSubsystem::ResetMatchState(UWorld* RetiringWorld)
+{
+	ResetLockstepEpochState(RetiringWorld);
+	CancelPendingProtocolPromotion();
+	PendingAuthorityProtocolState.Reset();
+	PendingLocalProtocolAssignment.Reset();
+	ParticipantBindings.Reset();
+	SlotToParticipant.Reset();
+	RelayToParticipant.Reset();
+	CoordinatorParticipantID = FSeinNetworkParticipantID::Invalid();
+	ActiveProtocolContext = FSeinProtocolContext();
+	ActiveMatchSettings = FSeinMatchSettings();
+	bHasActiveMatchSettings = false;
+	FrozenMaxCommandsPerSubmission = 0;
+	RequiredStartParticipants.Reset();
+	BootstrapConsensus.Reset();
+	LocalBootstrapReceipt.Reset();
+	PendingLocalBootstrapReceiptReportContext.Reset();
+	PendingLocalBootstrapAuthorizedReadyReportContext.Reset();
+	DeferredBootstrapReceiptRequestContext.Reset();
+	PendingBootstrapAuthorizationContext.Reset();
+	PendingBootstrapAuthorizationReceipt.Reset();
+	PendingBootstrapLaunchContext.Reset();
+	PendingBootstrapLaunchReceipt.Reset();
+	MatchBootstrapAuthority = FSeinMatchBootstrapAuthorityHandle();
+	BootstrapSessionFailureReason.Reset();
+	bBootstrapFailureReported = false;
+	bBootstrapLaunchBarrierActive = false;
+	bLocalBootstrapIngressClosed = false;
+	AcceptedConfigFingerprints.Reset();
+	TurnAggregator.Reset();
+	LocalPlayerID = FSeinPlayerID::Neutral();
+	LocalParticipantID = FSeinNetworkParticipantID::Invalid();
+	bLocalParticipantSimulates = false;
+	SessionSeed = 0;
+	SlotLifecycle.Reset();
+	SlotDroppedAtTime.Reset();
+	StragglerCounts.Reset();
+	TurnsCompletedCount = 0;
+	bDesyncDetected = false;
+	bDestinationStartPending = false;
 }
 
 int32 USeinNetSubsystem::GetTicksPerTurn() const
@@ -232,6 +637,12 @@ int32 USeinNetSubsystem::GetInputDelayTurns() const
 
 int32 USeinNetSubsystem::GetCurrentTurn() const
 {
+#if WITH_DEV_AUTOMATION_TESTS
+	if (TestCurrentTurnOverride.IsSet())
+	{
+		return FMath::Max(0, TestCurrentTurnOverride.GetValue());
+	}
+#endif
 	const UWorld* World = GetWorld();
 	const USeinWorldSubsystem* WorldSub = World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
 	return WorldSub ? FMath::Max(0, WorldSub->GetCurrentTick() / GetTicksPerTurn()) : 0;
@@ -264,11 +675,15 @@ bool USeinNetSubsystem::IsCommandTurnWithinProtocolWindow(int32 TurnId, const TC
 	return true;
 }
 
-bool USeinNetSubsystem::IsHashTurnWithinProtocolWindow(int32 Turn, const TCHAR* Context) const
+bool USeinNetSubsystem::IsDeterminismEvidenceTurnWithinProtocolWindow(
+	int32 Turn,
+	const TCHAR* Context) const
 {
 	if (Turn < 0)
 	{
-		UE_LOG(LogSeinNet, Warning, TEXT("%s: rejecting negative hash turn=%d."), Context, Turn);
+		UE_LOG(LogSeinNet, Warning,
+			TEXT("%s: rejecting negative determinism-evidence turn=%d."),
+			Context, Turn);
 		return false;
 	}
 
@@ -278,63 +693,152 @@ bool USeinNetSubsystem::IsHashTurnWithinProtocolWindow(int32 Turn, const TCHAR* 
 	if (Turn < OldestAccepted || static_cast<int64>(Turn) > MaxAccepted)
 	{
 		UE_LOG(LogSeinNet, Warning,
-			TEXT("%s: rejecting hash turn=%d outside [%d,%lld] (current=%d)."),
+			TEXT("%s: rejecting determinism-evidence turn=%d outside [%d,%lld] (current=%d)."),
 			Context, Turn, OldestAccepted, MaxAccepted, CurrentTurn);
 		return false;
 	}
 	return true;
 }
 
+void USeinNetSubsystem::ExpireIncompleteWorldStateRootCheckpointsThrough(
+	int32 Cutoff)
+{
+	if (!IsDeterminismGossipEnabled()
+		|| !IsLocalProtocolCoordinator()
+		|| bDeterminismSessionFailureAuthoritative
+		|| Cutoff <= CompletedWorldStateRootRejectionFloor)
+	{
+		return;
+	}
+
+	TArray<FSeinNetworkParticipantID> ExpectedParticipants;
+	GetExpectedWorldRootReporterParticipants(ExpectedParticipants);
+	if (ExpectedParticipants.IsEmpty()) return;
+
+	const int32 Interval = GetDeterminismCheckIntervalTurns();
+	if (Interval <= 0) return;
+	const int64 FirstPossible = FMath::Max<int64>(
+		Interval,
+		static_cast<int64>(CompletedWorldStateRootRejectionFloor) + 1);
+	const int64 FirstDue =
+		((FirstPossible + Interval - 1) / Interval) * Interval;
+
+	for (int64 Due64 = FirstDue; Due64 <= Cutoff; Due64 += Interval)
+	{
+		const int32 DueTurn = static_cast<int32>(Due64);
+		if (CompletedWorldStateRootChecks.Contains(DueTurn)) continue;
+
+		const TMap<FSeinNetworkParticipantID, FGuid>* Reports =
+			ServerWorldStateRootReports.Find(DueTurn);
+		if (Reports && AreExpectedWorldRootReportsComplete(*Reports))
+		{
+			ServerCompareWorldStateRootsForTurn(DueTurn);
+			if (CompletedWorldStateRootChecks.Contains(DueTurn))
+			{
+				continue;
+			}
+		}
+
+		FSeinNetworkParticipantID FirstMissing =
+			FSeinNetworkParticipantID::Invalid();
+		for (const FSeinNetworkParticipantID ParticipantID :
+			ExpectedParticipants)
+		{
+			if (!Reports || !Reports->Contains(ParticipantID))
+			{
+				FirstMissing = ParticipantID;
+				break;
+			}
+		}
+		if (!FirstMissing.IsValid()) continue;
+
+		FSeinDeterminismSessionFailure Failure;
+		Failure.Kind =
+			ESeinDeterminismSessionFailureKind::
+				CanonicalRootCheckpointExpired;
+		Failure.Turn = DueTurn;
+		Failure.ParticipantID = FirstMissing;
+		EnterDeterminismSessionFailure(
+			Failure,
+			/*bAuthoritative=*/true,
+			/*bNotifyPeers=*/true);
+		return;
+	}
+}
+
 void USeinNetSubsystem::PruneProtocolState(int32 ReferenceTurn)
 {
+	ApplyDueAuthenticatedDeterminismSessionFailuresThrough(
+		ReferenceTurn);
 	const int32 Cutoff = ReferenceTurn - GSeinRetainedHistoryTurns;
 	if (Cutoff <= -1) return;
 
-	CompletedTurnRejectionFloor = FMath::Max(CompletedTurnRejectionFloor, Cutoff);
-	for (auto It = CompletedTurns.CreateIterator(); It; ++It)
+	for (const int32 PendingTurn : TurnAggregator.GetPendingTurnIDs())
 	{
-		if (*It <= CompletedTurnRejectionFloor) It.RemoveCurrent();
-	}
-	for (auto It = ServerTurnBuffer.CreateIterator(); It; ++It)
-	{
-		if (It.Key() <= CompletedTurnRejectionFloor)
+		if (PendingTurn <= Cutoff)
 		{
 			UE_LOG(LogSeinNet, Warning,
-				TEXT("[Server] pruning incomplete obsolete turn buffer=%d."), It.Key());
-			It.RemoveCurrent();
+				TEXT("[Server] pruning incomplete obsolete turn=%d."), PendingTurn);
 		}
 	}
+	TurnAggregator.PruneThroughTurn(Cutoff);
 	for (auto It = IncompleteTurnDiagnostics.CreateIterator(); It; ++It)
 	{
-		if (It.Key() <= CompletedTurnRejectionFloor) It.RemoveCurrent();
+		if (It.Key() <= TurnAggregator.GetTurnRejectionFloor()) It.RemoveCurrent();
 	}
 	for (auto It = ReceivedTurns.CreateIterator(); It; ++It)
 	{
-		if (It.Key() <= CompletedTurnRejectionFloor) It.RemoveCurrent();
+		if (It.Key() <= TurnAggregator.GetTurnRejectionFloor()) It.RemoveCurrent();
 	}
 
-	CompletedHashRejectionFloor = FMath::Max(CompletedHashRejectionFloor, Cutoff);
-	for (auto It = CompletedHashChecks.CreateIterator(); It; ++It)
+	// A due proof obligation must become an explicit terminal health result
+	// before its evidence is aged out. This also catches the zero-report case,
+	// for which no ServerWorldStateRootReports entry exists to warn about.
+	ExpireIncompleteWorldStateRootCheckpointsThrough(Cutoff);
+	CompletedWorldStateRootRejectionFloor =
+		FMath::Max(CompletedWorldStateRootRejectionFloor, Cutoff);
+	for (auto It = CompletedWorldStateRootChecks.CreateIterator(); It; ++It)
 	{
-		if (*It <= CompletedHashRejectionFloor) It.RemoveCurrent();
+		if (*It <= CompletedWorldStateRootRejectionFloor) It.RemoveCurrent();
 	}
-	for (auto It = ServerHashReports.CreateIterator(); It; ++It)
+	for (auto It = ServerWorldStateRootReports.CreateIterator(); It; ++It)
 	{
-		if (It.Key() <= CompletedHashRejectionFloor)
+		if (It.Key() <= CompletedWorldStateRootRejectionFloor)
 		{
 			UE_LOG(LogSeinNet, Warning,
-				TEXT("[DETERMINISM] pruning incomplete hash check for obsolete turn=%d."), It.Key());
+				TEXT("[DETERMINISM] pruning obsolete world-root evidence for turn=%d after session-health evaluation."),
+				It.Key());
 			It.RemoveCurrent();
 		}
 	}
-	for (int32 Index = PendingStateHashReports.Num() - 1; Index >= 0; --Index)
+	for (int32 Index = PendingWorldStateRootReports.Num() - 1;
+		Index >= 0; --Index)
 	{
-		if (PendingStateHashReports[Index].Turn <= CompletedHashRejectionFloor)
+		if (PendingWorldStateRootReports[Index].Turn
+			<= CompletedWorldStateRootRejectionFloor)
 		{
+			const int32 ExpiredTurn =
+				PendingWorldStateRootReports[Index].Turn;
+			if (IsDueWorldStateRootCheckpoint(ExpiredTurn)
+				&& LocalParticipantID.IsValid()
+				&& !DeterminismSessionFailure.IsValid())
+			{
+				FSeinDeterminismSessionFailure Failure;
+				Failure.Kind =
+					ESeinDeterminismSessionFailureKind::
+						CanonicalRootCheckpointExpired;
+				Failure.Turn = ExpiredTurn;
+				Failure.ParticipantID = LocalParticipantID;
+				EnterDeterminismSessionFailure(
+					Failure,
+					/*bAuthoritative=*/false,
+					/*bNotifyPeers=*/false);
+			}
 			UE_LOG(LogSeinNet, Warning,
-				TEXT("[DETERMINISM] discarding locally pending obsolete hash turn=%d."),
-				PendingStateHashReports[Index].Turn);
-			PendingStateHashReports.RemoveAt(Index, 1, EAllowShrinking::No);
+				TEXT("[DETERMINISM] discarding locally pending obsolete world-root turn=%d after session-health evaluation."),
+				ExpiredTurn);
+			PendingWorldStateRootReports.RemoveAt(
+				Index, 1, EAllowShrinking::No);
 		}
 	}
 }
@@ -342,28 +846,17 @@ void USeinNetSubsystem::PruneProtocolState(int32 ReferenceTurn)
 void USeinNetSubsystem::GetExpectedCommandSlots(TArray<FSeinPlayerID>& OutSlots) const
 {
 	OutSlots.Reset();
-	for (const TPair<TWeakObjectPtr<ASeinNetRelay>, FSeinPlayerID>& Pair : RelayToSlot)
+	for (const FSeinParticipantBinding& Binding : ParticipantBindings)
 	{
-		if (Pair.Key.IsValid() && Pair.Value.IsValid())
+		for (const FSeinPlayerID Slot : Binding.CommandSlots)
 		{
-			OutSlots.AddUnique(Pair.Value);
+			OutSlots.Add(Slot);
 		}
 	}
 	OutSlots.Sort([](const FSeinPlayerID& A, const FSeinPlayerID& B)
 	{
 		return A.Value < B.Value;
 	});
-}
-
-bool USeinNetSubsystem::AreExpectedCommandSlotsComplete(
-	const TArray<FSeinPlayerID>& ExpectedSlots,
-	const TMap<FSeinPlayerID, TArray<FSeinCommand>>& Submissions)
-{
-	for (const FSeinPlayerID Slot : ExpectedSlots)
-	{
-		if (!Submissions.Contains(Slot)) return false;
-	}
-	return true;
 }
 
 bool USeinNetSubsystem::IsCommandSubmissionLifecycleAllowed(FSeinPlayerID Slot) const
@@ -372,66 +865,93 @@ bool USeinNetSubsystem::IsCommandSubmissionLifecycleAllowed(FSeinPlayerID Slot) 
 	return Lifecycle && *Lifecycle == ESeinSlotLifecycle::Connected;
 }
 
-USeinNetSubsystem::EFirstAcceptResult USeinNetSubsystem::BufferCommandSubmissionFirstWins(
-	int32 TurnId, FSeinPlayerID Slot, TArray<FSeinCommand>&& Commands)
+bool USeinNetSubsystem::IsAICommandSubmissionAllowed(
+	FSeinPlayerID Slot,
+	FString* OutError) const
 {
-	TMap<FSeinPlayerID, TArray<FSeinCommand>>& TurnBuffer = ServerTurnBuffer.FindOrAdd(TurnId);
-	if (const TArray<FSeinCommand>* Existing = TurnBuffer.Find(Slot))
+	auto Reject = [OutError](const TCHAR* Error)
 	{
-		return AreCommandBatchesIdentical(*Existing, Commands)
+		if (OutError) *OutError = Error;
+		return false;
+	};
+	if (!Slot.IsValid())
+	{
+		return Reject(TEXT("slot identity is invalid"));
+	}
+	const FSeinNetworkParticipantID ParticipantID = FindParticipantForSlot(Slot);
+	const FSeinParticipantBinding* Binding = FindParticipantBinding(ParticipantID);
+	if (!ParticipantID.IsValid() || !Binding || !Binding->CommandSlots.Contains(Slot))
+	{
+		return Reject(TEXT("slot is absent from the frozen command-author manifest"));
+	}
+	const ESeinSlotLifecycle* Lifecycle = SlotLifecycle.Find(Slot);
+	if (!Lifecycle || *Lifecycle != ESeinSlotLifecycle::AITakeover)
+	{
+		return Reject(TEXT("only an AI-takeover slot may author AI commands"));
+	}
+	return true;
+}
+
+USeinNetSubsystem::EFirstAcceptResult
+USeinNetSubsystem::BufferWorldStateRootReportFirstWins(
+	int32 Turn,
+	FSeinNetworkParticipantID ParticipantID,
+	const FGuid& WorldRoot)
+{
+	TMap<FSeinNetworkParticipantID, FGuid>& TurnBuffer =
+		ServerWorldStateRootReports.FindOrAdd(Turn);
+	if (const FGuid* Existing = TurnBuffer.Find(ParticipantID))
+	{
+		return *Existing == WorldRoot
 			? EFirstAcceptResult::IdenticalDuplicate
 			: EFirstAcceptResult::ConflictingDuplicate;
 	}
 
-	TurnBuffer.Add(Slot, MoveTemp(Commands));
+	TurnBuffer.Add(ParticipantID, WorldRoot);
 	return EFirstAcceptResult::Accepted;
 }
 
-USeinNetSubsystem::EFirstAcceptResult USeinNetSubsystem::BufferHashReportFirstWins(
-	int32 Turn, FSeinPlayerID Slot, int32 Hash)
+void USeinNetSubsystem::GetExpectedWorldRootReporterParticipants(
+	TArray<FSeinNetworkParticipantID>& OutParticipants) const
 {
-	TMap<FSeinPlayerID, int32>& TurnBuffer = ServerHashReports.FindOrAdd(Turn);
-	if (const int32* Existing = TurnBuffer.Find(Slot))
+	OutParticipants.Reset();
+	for (const FSeinParticipantBinding& Binding : ParticipantBindings)
 	{
-		return *Existing == Hash
-			? EFirstAcceptResult::IdenticalDuplicate
-			: EFirstAcceptResult::ConflictingDuplicate;
+		if (Binding.bReportsWorldRoots
+			&& IsParticipantConnected(Binding.ParticipantID))
+		{
+			OutParticipants.Add(Binding.ParticipantID);
+		}
 	}
-
-	TurnBuffer.Add(Slot, Hash);
-	return EFirstAcceptResult::Accepted;
-}
-
-void USeinNetSubsystem::GetExpectedHashReporterSlots(TArray<FSeinPlayerID>& OutSlots) const
-{
-	OutSlots.Reset();
-	for (const TPair<TWeakObjectPtr<ASeinNetRelay>, FSeinPlayerID>& Pair : RelayToSlot)
+	OutParticipants.Sort([](
+		const FSeinNetworkParticipantID& A,
+		const FSeinNetworkParticipantID& B)
 	{
-		if (!Pair.Key.IsValid() || !Pair.Value.IsValid()) continue;
-		const ESeinSlotLifecycle* Lifecycle = SlotLifecycle.Find(Pair.Value);
-		if (!Lifecycle || *Lifecycle != ESeinSlotLifecycle::Connected) continue;
-		OutSlots.AddUnique(Pair.Value);
-	}
-	OutSlots.Sort([](const FSeinPlayerID& A, const FSeinPlayerID& B)
-	{
-		return A.Value < B.Value;
+		return A.ToCanonicalString() < B.ToCanonicalString();
 	});
 }
 
-bool USeinNetSubsystem::AreExpectedHashReportsComplete(const TMap<FSeinPlayerID, int32>& Reports) const
+bool USeinNetSubsystem::AreExpectedWorldRootReportsComplete(
+	const TMap<FSeinNetworkParticipantID, FGuid>& Reports) const
 {
-	TArray<FSeinPlayerID> ExpectedSlots;
-	GetExpectedHashReporterSlots(ExpectedSlots);
-	if (ExpectedSlots.IsEmpty()) return false;
-	for (const FSeinPlayerID Slot : ExpectedSlots)
+	TArray<FSeinNetworkParticipantID> ExpectedParticipants;
+	GetExpectedWorldRootReporterParticipants(ExpectedParticipants);
+	if (ExpectedParticipants.IsEmpty()) return false;
+	for (const FSeinNetworkParticipantID ParticipantID : ExpectedParticipants)
 	{
-		if (!Reports.Contains(Slot)) return false;
+		if (!Reports.Contains(ParticipantID)) return false;
 	}
 	return true;
 }
 
 bool USeinNetSubsystem::IsDeterminismGossipEnabled() const
 {
+#if WITH_DEV_AUTOMATION_TESTS
+	if (TestDeterminismGossipEnabledOverride.IsSet())
+	{
+		return TestDeterminismGossipEnabledOverride.GetValue();
+	}
+#endif
 	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
 	return Settings && Settings->bDeterminismChecksEnabled;
 }
@@ -444,12 +964,27 @@ bool USeinNetSubsystem::IsConfigParityCheckEnabled() const
 
 int32 USeinNetSubsystem::GetDeterminismCheckIntervalTurns() const
 {
+#if WITH_DEV_AUTOMATION_TESTS
+	if (TestDeterminismCheckIntervalOverride.IsSet())
+	{
+		return FMath::Max(1, TestDeterminismCheckIntervalOverride.GetValue());
+	}
+#endif
 	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
 	return (Settings && Settings->DeterminismCheckIntervalTurns > 0) ? Settings->DeterminismCheckIntervalTurns : 10;
 }
 
+bool USeinNetSubsystem::IsDueWorldStateRootCheckpoint(int32 Turn) const
+{
+	const int32 Interval = GetDeterminismCheckIntervalTurns();
+	return Turn > 0 && Interval > 0 && Turn % Interval == 0;
+}
+
 bool USeinNetSubsystem::IsServer() const
 {
+#if WITH_DEV_AUTOMATION_TESTS
+	if (TestServerOverride.IsSet()) return TestServerOverride.GetValue();
+#endif
 	const UWorld* World = GetWorld();
 	if (!World) return false;
 	const ENetMode Mode = World->GetNetMode();
@@ -470,6 +1005,12 @@ bool USeinNetSubsystem::IsDedicatedAuthority() const
 
 bool USeinNetSubsystem::IsNetworkingActive() const
 {
+#if WITH_DEV_AUTOMATION_TESTS
+	if (TestNetworkingActiveOverride.IsSet())
+	{
+		return TestNetworkingActiveOverride.GetValue();
+	}
+#endif
 	const UWorld* World = GetWorld();
 	if (!World) return false;
 	if (World->GetNetMode() == NM_Standalone) return false;
@@ -523,11 +1064,20 @@ void USeinNetSubsystem::ServerSpawnRelayForController(APlayerController* PC, FSe
 
 	UWorld* World = PC->GetWorld();
 	if (!World) return;
+	TryPromotePendingAuthorityProtocolState();
 
 	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
 	if (!Settings || !Settings->bNetworkingEnabled)
 	{
 		UE_LOG(LogSeinNet, Verbose, TEXT("ServerSpawnRelayForController: networking disabled — skipping."));
+		return;
+	}
+	const FSeinNetworkParticipantID ParticipantID = FindParticipantForSlot(Slot);
+	if (ActiveProtocolContext.IsValid() && !ParticipantID.IsValid())
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("ServerSpawnRelayForController: slot=%u is absent from active membership %s — fail-closed."),
+			Slot.Value, *ActiveProtocolContext.ToCanonicalDebugString());
 		return;
 	}
 
@@ -565,25 +1115,55 @@ void USeinNetSubsystem::ServerSpawnRelayForController(APlayerController* PC, FSe
 			{
 				const FSeinPlayerID* PrevSlot = RelayToSlot.Find(R);
 				const uint8 PrevSlotValue = PrevSlot ? PrevSlot->Value : 0;
-				if (PrevSlot && *PrevSlot != Slot)
+				const FSeinNetworkParticipantID PreviousParticipant =
+					RelayToParticipant.FindRef(R);
+				if (PreviousParticipant.IsValid() && PreviousParticipant != ParticipantID)
 				{
-					int32 AcceptedFingerprint = 0;
-					const bool bHadAcceptedFingerprint =
-						AcceptedConfigFingerprints.RemoveAndCopyValue(*PrevSlot, AcceptedFingerprint);
-					AcceptedConfigFingerprints.Remove(Slot);
-					if (bHadAcceptedFingerprint)
-					{
-						// Acceptance belongs to this relay process, not the incidental
-						// lobby slot number. Preserve it across a same-relay rebind.
-						AcceptedConfigFingerprints.Add(Slot, AcceptedFingerprint);
-					}
+					AcceptedConfigFingerprints.Remove(PreviousParticipant);
 				}
 				R->AssignedPlayerID = Slot;
+				R->AssignedParticipantID = ParticipantID;
+				R->ProtocolContext = ActiveProtocolContext;
 				R->SessionSeed = SessionSeed;
 				RelayToSlot.Add(R, Slot);
+				if (ParticipantID.IsValid()) RelayToParticipant.Add(R, ParticipantID);
+				R->ForceNetUpdate();
+				if (PC->IsLocalController())
+				{
+					NotifyLocalLobbySlotAssigned(R, Slot);
+					if (ParticipantID.IsValid() && ActiveProtocolContext.IsValid()
+						&& bHasActiveMatchSettings)
+					{
+						NotifyLocalProtocolAssigned(
+							R,
+							Slot,
+							ParticipantID,
+							ActiveProtocolContext,
+							SessionSeed,
+							FindParticipantBinding(ParticipantID)
+								&& FindParticipantBinding(ParticipantID)->bSimulates,
+							ActiveMatchSettings,
+							ESeinPreparedWorldActivation::AllowCurrentWorld);
+					}
+				}
+				else if (ParticipantID.IsValid() && ActiveProtocolContext.IsValid()
+					&& bHasActiveMatchSettings)
+				{
+					R->Client_PrepareMatchBootstrap(
+						Slot,
+						ParticipantID,
+						ActiveProtocolContext,
+						SessionSeed,
+						FindParticipantBinding(ParticipantID)
+							&& FindParticipantBinding(ParticipantID)->bSimulates,
+						/*bAllowCurrentWorldActivation=*/true,
+						ActiveMatchSettings);
+				}
 				UE_LOG(LogSeinNet, Log,
 					TEXT("ServerSpawnRelayForController: existing relay %s re-stamped slot=%u (was %u) for %s"),
 					*GetNameSafe(R), Slot.Value, PrevSlotValue, *GetNameSafe(PC));
+				TryRearmPreparedDestinationStart();
+				TryDispatchLockstepSessionStart();
 				return;
 			}
 		}
@@ -628,11 +1208,17 @@ void USeinNetSubsystem::ServerSpawnRelayForController(APlayerController* PC, FSe
 
 	EnsureSessionSeed();
 	Relay->AssignedPlayerID = Slot;
+	Relay->AssignedParticipantID = ParticipantID;
+	Relay->ProtocolContext = ActiveProtocolContext;
 	Relay->SessionSeed = SessionSeed;
 	// A genuinely new relay occupant must prove parity itself; never inherit
 	// an earlier process's acceptance merely because the slot was reused.
-	AcceptedConfigFingerprints.Remove(Slot);
+	if (ParticipantID.IsValid())
+	{
+		AcceptedConfigFingerprints.Remove(ParticipantID);
+	}
 	RelayToSlot.Add(Relay, Slot);
+	if (ParticipantID.IsValid()) RelayToParticipant.Add(Relay, ParticipantID);
 
 	// Drop-in/drop-out: mark this slot Connected. If it was previously
 	// Dropped (a reconnect), this also clears the heartbeat-injection.
@@ -649,9 +1235,28 @@ void USeinNetSubsystem::ServerSpawnRelayForController(APlayerController* PC, FSe
 	}
 
 	Relay->FinishSpawning(FTransform::Identity);
+	if (ActiveProtocolContext.IsValid() && ParticipantID.IsValid()
+		&& bHasActiveMatchSettings)
+	{
+		const APlayerController* OwnerPC = Cast<APlayerController>(Relay->GetOwner());
+		if (!OwnerPC || !OwnerPC->IsLocalController())
+		{
+			Relay->Client_PrepareMatchBootstrap(
+				Slot,
+				ParticipantID,
+				ActiveProtocolContext,
+				SessionSeed,
+				FindParticipantBinding(ParticipantID)
+					&& FindParticipantBinding(ParticipantID)->bSimulates,
+				/*bAllowCurrentWorldActivation=*/true,
+				ActiveMatchSettings);
+		}
+	}
 
 	UE_LOG(LogSeinNet, Log, TEXT("ServerSpawnRelayForController: spawned %s for %s  slot=%u  seed=%lld  lifecycle=Connected"),
 		*GetNameSafe(Relay), *GetNameSafe(PC), Slot.Value, SessionSeed);
+	TryRearmPreparedDestinationStart();
+	TryDispatchLockstepSessionStart();
 }
 
 void USeinNetSubsystem::EnsureSessionSeed()
@@ -681,6 +1286,1106 @@ void USeinNetSubsystem::EnsureSessionSeed()
 	UE_LOG(LogSeinNet, Log, TEXT("EnsureSessionSeed: generated SessionSeed=%lld"), SessionSeed);
 }
 
+const FSeinParticipantBinding* USeinNetSubsystem::FindParticipantBinding(
+	FSeinNetworkParticipantID ParticipantID) const
+{
+	return ParticipantBindings.FindByPredicate(
+		[ParticipantID](const FSeinParticipantBinding& Binding)
+		{
+			return Binding.ParticipantID == ParticipantID;
+		});
+}
+
+FSeinNetworkParticipantID USeinNetSubsystem::FindParticipantForSlot(FSeinPlayerID Slot) const
+{
+	return SlotToParticipant.FindRef(Slot);
+}
+
+bool USeinNetSubsystem::IsParticipantConnected(
+	FSeinNetworkParticipantID ParticipantID) const
+{
+	if (!ParticipantID.IsValid()) return false;
+	if (IsDedicatedAuthority() && ParticipantID == CoordinatorParticipantID) return true;
+
+	for (const TPair<TWeakObjectPtr<ASeinNetRelay>, FSeinNetworkParticipantID>& Pair
+		: RelayToParticipant)
+	{
+		if (!Pair.Key.IsValid() || Pair.Value != ParticipantID) continue;
+		const FSeinPlayerID Slot = RelayToSlot.FindRef(Pair.Key);
+		const ESeinSlotLifecycle* Lifecycle = SlotLifecycle.Find(Slot);
+		if (Slot.IsValid() && Lifecycle && *Lifecycle == ESeinSlotLifecycle::Connected)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+bool USeinNetSubsystem::AreRequiredStartParticipantsBound(
+	TArray<FSeinNetworkParticipantID>* OutMissingParticipants) const
+{
+	if (OutMissingParticipants) OutMissingParticipants->Reset();
+	const UWorld* CurrentWorld = GetWorld();
+	bool bAllReady = CurrentWorld != nullptr;
+
+	for (const FSeinNetworkParticipantID ParticipantID : RequiredStartParticipants)
+	{
+		bool bBoundInCurrentWorld =
+			IsDedicatedAuthority() && ParticipantID == CoordinatorParticipantID;
+		if (!bBoundInCurrentWorld)
+		{
+			for (const TPair<TWeakObjectPtr<ASeinNetRelay>,
+				FSeinNetworkParticipantID>& Pair : RelayToParticipant)
+			{
+				ASeinNetRelay* Relay = Pair.Key.Get();
+				if (!Relay || Pair.Value != ParticipantID
+					|| Relay->GetWorld() != CurrentWorld)
+				{
+					continue;
+				}
+				const FSeinPlayerID Slot = RelayToSlot.FindRef(Pair.Key);
+				const ESeinSlotLifecycle* Lifecycle = SlotLifecycle.Find(Slot);
+				if (Slot.IsValid() && Lifecycle
+					&& *Lifecycle == ESeinSlotLifecycle::Connected)
+				{
+					bBoundInCurrentWorld = true;
+					break;
+				}
+			}
+		}
+
+		if (!bBoundInCurrentWorld)
+		{
+			bAllReady = false;
+			if (OutMissingParticipants)
+			{
+				OutMissingParticipants->Add(ParticipantID);
+			}
+		}
+	}
+
+	if (OutMissingParticipants)
+	{
+		OutMissingParticipants->Sort([](
+			const FSeinNetworkParticipantID& A,
+			const FSeinNetworkParticipantID& B)
+		{
+			return A.ToCanonicalString() < B.ToCanonicalString();
+		});
+	}
+	return bAllReady;
+}
+
+bool USeinNetSubsystem::IsCurrentWorldPreparedDestination(
+	FString* OutError) const
+{
+	if (OutError) OutError->Reset();
+	const UWorld* World = GetWorld();
+	const FString PackageName = World && World->GetOutermost()
+		? World->GetOutermost()->GetName()
+		: FString();
+	const FGuid LoadedDigest = SeinComputeDestinationWorldDigest(PackageName);
+	if (ActiveProtocolContext.IsValid()
+		&& LoadedDigest.IsValid()
+		&& LoadedDigest == ActiveProtocolContext.DestinationWorldDigest)
+	{
+		return true;
+	}
+	if (OutError)
+	{
+		*OutError = TEXT("The loaded world does not match the prepared destination identity.");
+	}
+	return false;
+}
+
+bool USeinNetSubsystem::IsPreparedWorldActivationEligible(
+	const UWorld* CurrentWorld,
+	const UWorld* SourceWorld,
+	ESeinPreparedWorldActivation Activation,
+	const FGuid& LoadedWorldDigest,
+	const FGuid& DestinationWorldDigest)
+{
+	return CurrentWorld
+		&& LoadedWorldDigest.IsValid()
+		&& LoadedWorldDigest == DestinationWorldDigest
+		&& (Activation == ESeinPreparedWorldActivation::AllowCurrentWorld
+			|| CurrentWorld != SourceWorld);
+}
+
+bool USeinNetSubsystem::IsCurrentProtocolContext(
+	const FSeinProtocolContext& MessageContext,
+	const TCHAR* Operation) const
+{
+	if (ActiveProtocolContext.IsValid() && MessageContext == ActiveProtocolContext)
+	{
+		return true;
+	}
+	UE_LOG(LogSeinNet, Warning,
+		TEXT("%s: protocol context mismatch; active={%s} message={%s}."),
+		Operation,
+		*ActiveProtocolContext.ToCanonicalDebugString(),
+		*MessageContext.ToCanonicalDebugString());
+	return false;
+}
+
+bool USeinNetSubsystem::ConfigureTurnAggregator()
+{
+	if (!ActiveProtocolContext.IsValid() || ParticipantBindings.IsEmpty()) return false;
+	const ESeinTurnAggregatorConfigResult Result =
+		TurnAggregator.Configure(ActiveProtocolContext, ParticipantBindings);
+	if (Result != ESeinTurnAggregatorConfigResult::Configured)
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("ConfigureTurnAggregator: rejected manifest/context (result=%d context=%s)."),
+			static_cast<int32>(Result),
+			*ActiveProtocolContext.ToCanonicalDebugString());
+		return false;
+	}
+	if (bHasActiveMatchSettings)
+	{
+		const int32 FrozenAuthorCount = GetFrozenExpectedAuthorCount();
+		if (FrozenAuthorCount != TurnAggregator.GetExpectedAuthors().Num())
+		{
+			UE_LOG(LogSeinNet, Error,
+				TEXT("ConfigureTurnAggregator: frozen active-slot count %d does not match manifest author count %d."),
+				FrozenAuthorCount, TurnAggregator.GetExpectedAuthors().Num());
+			TurnAggregator.Reset();
+			return false;
+		}
+		if (!FreezeAuthorSubmissionPolicy(TEXT("ConfigureTurnAggregator")))
+		{
+			TurnAggregator.Reset();
+			return false;
+		}
+	}
+	return true;
+}
+
+bool USeinNetSubsystem::ConfigureBootstrapConsensus()
+{
+	RequiredStartParticipants.Reset();
+	TArray<FSeinNetworkParticipantID> SimulatingParticipants;
+	for (const FSeinParticipantBinding& Binding : ParticipantBindings)
+	{
+		if (!Binding.bSimulates) continue;
+		RequiredStartParticipants.Add(Binding.ParticipantID);
+		SimulatingParticipants.Add(Binding.ParticipantID);
+	}
+
+	const ESeinBootstrapConsensusConfigResult Result =
+		BootstrapConsensus.Configure(ActiveProtocolContext, SimulatingParticipants);
+	if (Result != ESeinBootstrapConsensusConfigResult::Configured)
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("ConfigureBootstrapConsensus: rejected frozen simulation membership (result=%d context=%s)."),
+			static_cast<int32>(Result),
+			*ActiveProtocolContext.ToCanonicalDebugString());
+		return false;
+	}
+	return true;
+}
+
+bool USeinNetSubsystem::FreezeAuthorSubmissionPolicy(const TCHAR* Operation)
+{
+	if (FrozenMaxCommandsPerSubmission > 0) return true;
+	if (!bHasActiveMatchSettings || GetFrozenExpectedAuthorCount() <= 0)
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("%s: cannot freeze author submission policy without canonical active match settings."),
+			Operation);
+		return false;
+	}
+#if WITH_DEV_AUTOMATION_TESTS
+	if (TestCommandProtocolMaxCommandsOverride.IsSet())
+	{
+		FrozenMaxCommandsPerSubmission = FMath::Clamp(
+			TestCommandProtocolMaxCommandsOverride.GetValue(), 1,
+			SeinNetProtocolLimits::MaxCommandsPerAuthor);
+	}
+	else
+#endif
+	{
+		const UWorld* World = GetWorld();
+		const USeinWorldSubsystem* WorldSub =
+			World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
+		FrozenMaxCommandsPerSubmission = WorldSub
+			? WorldSub->GetCommandProtocolMaxCommandsPerSubmission()
+			: 0;
+	}
+	if (FrozenMaxCommandsPerSubmission <= 0)
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("%s: the world has no command submission cap frozen into its protocol identity."),
+			Operation);
+		return false;
+	}
+	UE_LOG(LogSeinNet, Verbose,
+		TEXT("%s: froze MaxCommandsPerSubmission=%d for this match."),
+		Operation, FrozenMaxCommandsPerSubmission);
+	return true;
+}
+
+int32 USeinNetSubsystem::GetFrozenExpectedAuthorCount() const
+{
+	if (!bHasActiveMatchSettings) return 0;
+	int32 Count = 0;
+	for (const FSeinMatchSlot& Slot : ActiveMatchSettings.Slots)
+	{
+		if (Slot.State == ESeinSlotState::Human || Slot.State == ESeinSlotState::AI)
+			++Count;
+	}
+	return Count;
+}
+
+bool USeinNetSubsystem::ValidateAuthorSubmissionBudget(
+	int32 CommandCount,
+	const FSeinOpaqueCommandBatch& EncodedBatch,
+	uint64 CanonicalCostBytes,
+	FString& OutError) const
+{
+	const int32 AuthorCount = GetFrozenExpectedAuthorCount();
+	if (AuthorCount <= 0
+		|| AuthorCount > SeinNetProtocolLimits::MaxCommandAuthors)
+	{
+		OutError = TEXT("frozen command-author count is unavailable or outside the 1..16 match cap");
+		return false;
+	}
+	if (FrozenMaxCommandsPerSubmission <= 0)
+	{
+		OutError = TEXT("per-match author submission policy is not frozen");
+		return false;
+	}
+	if (TurnAggregator.IsConfigured()
+		&& TurnAggregator.GetExpectedAuthors().Num() != AuthorCount)
+	{
+		OutError = TEXT("frozen active-slot count disagrees with the configured command-author manifest");
+		return false;
+	}
+	const FSeinAuthorSubmissionBudget Budget = GetAuthorSubmissionBudget(
+		AuthorCount, FrozenMaxCommandsPerSubmission);
+	if (CommandCount > Budget.MaxCommands
+		|| EncodedBatch.Bytes.Num() > Budget.MaxEncodedBytes
+		|| CanonicalCostBytes > Budget.MaxCanonicalCostBytes)
+	{
+		OutError = FString::Printf(
+			TEXT("author submission exceeds deterministic %d-way share (commands=%d/%d wire=%d/%d canonical-cost=%llu/%llu)"),
+			AuthorCount,
+			CommandCount, Budget.MaxCommands,
+			EncodedBatch.Bytes.Num(), Budget.MaxEncodedBytes,
+			static_cast<unsigned long long>(CanonicalCostBytes),
+			static_cast<unsigned long long>(Budget.MaxCanonicalCostBytes));
+		return false;
+	}
+	return true;
+}
+
+bool USeinNetSubsystem::PreflightCanonicalTurnBatch(
+	TConstArrayView<FSeinCommand> Commands,
+	FString& OutError) const
+{
+	FSeinOpaqueCommandBatch Encoded;
+	const int32 MaxCommands = GetMaxCommandsPerCanonicalTurn();
+	auto FindSchema = [this](
+		FGameplayTag Type, int32 Version, FSeinCommandSchemaDescriptor& Out)
+	{
+		return FindFrozenCommandSchema(Type, Version, Out);
+	};
+	if (!FSeinNetCommandWireCodec::EncodeCommands(
+		Commands,
+		MaxCommands,
+		FindSchema,
+		Encoded,
+		OutError))
+	{
+		return false;
+	}
+
+	TArray<FSeinCommand> Decoded;
+	if (!FSeinNetCommandWireCodec::DecodeCommands(
+		Encoded, MaxCommands, FindSchema, Decoded, OutError))
+	{
+		return false;
+	}
+	if (Decoded.Num() != Commands.Num())
+	{
+		OutError = TEXT("canonical command preflight round-trip changed command count");
+		return false;
+	}
+	const UScriptStruct* CommandStruct = FSeinCommand::StaticStruct();
+	for (int32 Index = 0; Index < Decoded.Num(); ++Index)
+	{
+		if (!CommandStruct->CompareScriptStruct(&Commands[Index], &Decoded[Index], 0))
+		{
+			OutError = FString::Printf(
+				TEXT("canonical command preflight round-trip changed command index %d"),
+				Index);
+			return false;
+		}
+	}
+	return true;
+}
+
+bool USeinNetSubsystem::ResolveLocalCommandProtocolDigest(FGuid& OutDigest) const
+{
+	OutDigest.Invalidate();
+#if WITH_DEV_AUTOMATION_TESTS
+	if (TestCommandProtocolDigestOverride.IsSet())
+	{
+		OutDigest = TestCommandProtocolDigestOverride.GetValue();
+		return OutDigest.IsValid();
+	}
+#endif
+
+	const UWorld* World = GetWorld();
+	const USeinWorldSubsystem* WorldSub =
+		World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
+	if (!WorldSub) return false;
+	OutDigest = WorldSub->GetCommandProtocolDigest();
+	return OutDigest.IsValid();
+}
+
+bool USeinNetSubsystem::ResolveLocalSimulationContentDigest(
+	FGuid& OutDigest) const
+{
+	OutDigest.Invalidate();
+#if WITH_DEV_AUTOMATION_TESTS
+	if (TestSimulationContentDigestOverride.IsSet())
+	{
+		OutDigest = TestSimulationContentDigestOverride.GetValue();
+		return OutDigest.IsValid();
+	}
+#endif
+
+	const UWorld* World = GetWorld();
+	const USeinWorldSubsystem* WorldSub =
+		World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
+	if (!WorldSub || !WorldSub->IsSimulationContentReady())
+	{
+		return false;
+	}
+	OutDigest = WorldSub->GetSimulationContentDigest();
+	return OutDigest.IsValid();
+}
+
+bool USeinNetSubsystem::BuildCanonicalParticipantManifest(
+	const FSeinMatchInstanceID& MatchInstanceID,
+	TArray<FSeinParticipantBinding>& OutBindings,
+	TMap<FSeinPlayerID, FSeinNetworkParticipantID>& OutSlotToParticipant,
+	FSeinNetworkParticipantID& OutCoordinatorParticipantID,
+	TMap<FSeinPlayerID, ESeinSlotLifecycle>& OutSlotLifecycle)
+{
+	OutBindings.Reset();
+	OutSlotToParticipant.Reset();
+	OutCoordinatorParticipantID = FSeinNetworkParticipantID::Invalid();
+	OutSlotLifecycle.Reset();
+
+	if (!MatchInstanceID.IsValid()) return false;
+
+#if WITH_DEV_AUTOMATION_TESTS
+	if (TestParticipantManifestOverride.IsSet())
+	{
+		OutBindings = TestParticipantManifestOverride.GetValue();
+		if (OutBindings.IsEmpty()
+			|| OutBindings.Num() > SeinNetProtocolLimits::MaxParticipants)
+		{
+			return false;
+		}
+		int32 CommandSlotCount = 0;
+		for (const FSeinParticipantBinding& Binding : OutBindings)
+		{
+			if (!Binding.IsValid()) return false;
+			if (!OutCoordinatorParticipantID.IsValid() && Binding.bCanCoordinate)
+			{
+				OutCoordinatorParticipantID = Binding.ParticipantID;
+			}
+			for (const FSeinPlayerID Slot : Binding.CommandSlots)
+			{
+				if (OutSlotToParticipant.Contains(Slot)) return false;
+				OutSlotToParticipant.Add(Slot, Binding.ParticipantID);
+				OutSlotLifecycle.Add(Slot, ESeinSlotLifecycle::Connected);
+				++CommandSlotCount;
+			}
+		}
+		OutBindings.Sort([](
+			const FSeinParticipantBinding& A,
+			const FSeinParticipantBinding& B)
+		{
+			return A.ParticipantID.ToCanonicalString() < B.ParticipantID.ToCanonicalString();
+		});
+		return CommandSlotCount > 0 && OutCoordinatorParticipantID.IsValid();
+	}
+#endif
+
+	TSet<FSeinPlayerID> HumanSlotSet;
+	TSet<FSeinPlayerID> AISlotSet;
+	if (const UGameInstance* GI = GetGameInstance())
+	{
+		if (const USeinLobbySubsystem* Lobby = GI->GetSubsystem<USeinLobbySubsystem>())
+		{
+			if (Lobby->HasPublishedSnapshot())
+			{
+				for (const FSeinMatchSlot& Slot : Lobby->GetPublishedSnapshot().Slots)
+				{
+					if (Slot.SlotIndex <= 0 || Slot.SlotIndex > MAX_uint8) continue;
+					const FSeinPlayerID PlayerSlot(static_cast<uint8>(Slot.SlotIndex));
+					if (Slot.State == ESeinSlotState::Human) HumanSlotSet.Add(PlayerSlot);
+					else if (Slot.State == ESeinSlotState::AI) AISlotSet.Add(PlayerSlot);
+				}
+			}
+		}
+	}
+	for (const TPair<TWeakObjectPtr<ASeinNetRelay>, FSeinPlayerID>& Pair : RelayToSlot)
+	{
+		if (Pair.Key.IsValid() && Pair.Value.IsValid()) HumanSlotSet.Add(Pair.Value);
+	}
+
+	TArray<FSeinPlayerID> HumanSlots = HumanSlotSet.Array();
+	TArray<FSeinPlayerID> AISlots = AISlotSet.Array();
+	HumanSlots.Sort([](const FSeinPlayerID A, const FSeinPlayerID B) { return A.Value < B.Value; });
+	AISlots.Sort([](const FSeinPlayerID A, const FSeinPlayerID B) { return A.Value < B.Value; });
+	if (HumanSlots.IsEmpty() && AISlots.IsEmpty())
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("BuildCanonicalParticipantManifest: no Human or AI command slots; refusing an auto-completing empty match."));
+		return false;
+	}
+
+	if (IsDedicatedAuthority())
+	{
+		OutCoordinatorParticipantID = MakeParticipantID(
+			MatchInstanceID,
+			TEXT("DedicatedAuthority"));
+		FSeinParticipantBinding& Dedicated = OutBindings.Emplace_GetRef();
+		Dedicated.ParticipantID = OutCoordinatorParticipantID;
+		Dedicated.bSimulates = true;
+		Dedicated.bReportsWorldRoots = true;
+		Dedicated.bCanCoordinate = true;
+	}
+
+	for (const FSeinPlayerID Slot : HumanSlots)
+	{
+		const FSeinNetworkParticipantID ParticipantID = MakeParticipantID(
+			MatchInstanceID,
+			FString::Printf(TEXT("HumanSlot.%u"), Slot.Value));
+		FSeinParticipantBinding& Binding = OutBindings.Emplace_GetRef();
+		Binding.ParticipantID = ParticipantID;
+		Binding.CommandSlots.Add(Slot);
+		Binding.bSimulates = true;
+		Binding.bReportsWorldRoots = true;
+		OutSlotToParticipant.Add(Slot, ParticipantID);
+
+		bool bLiveRelay = false;
+		for (const TPair<TWeakObjectPtr<ASeinNetRelay>, FSeinPlayerID>& RelayPair : RelayToSlot)
+		{
+			ASeinNetRelay* Relay = RelayPair.Key.Get();
+			if (!Relay || RelayPair.Value != Slot) continue;
+			bLiveRelay = true;
+			APlayerController* PC = Cast<APlayerController>(Relay->GetOwner());
+			if (const UGameInstance* GI = GetGameInstance())
+			{
+				if (const USeinLobbySubsystem* Lobby =
+					GI->GetSubsystem<USeinLobbySubsystem>())
+				{
+					// Match administration comes from the lobby authority policy.
+					// Transport coordination below is an independent capability.
+					Binding.bCanAdministerMatch |= Lobby->IsHostController(PC);
+				}
+			}
+			if (!IsDedicatedAuthority())
+			{
+				if (PC && PC->IsLocalController())
+				{
+					OutCoordinatorParticipantID = ParticipantID;
+				}
+			}
+		}
+		OutSlotLifecycle.Add(
+			Slot,
+			bLiveRelay ? ESeinSlotLifecycle::Connected : ESeinSlotLifecycle::Dropped);
+	}
+
+	if (!OutCoordinatorParticipantID.IsValid())
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("BuildCanonicalParticipantManifest: no coordinator participant is available."));
+		return false;
+	}
+	FSeinParticipantBinding* Coordinator = OutBindings.FindByPredicate(
+		[OutCoordinatorParticipantID](const FSeinParticipantBinding& Binding)
+		{
+			return Binding.ParticipantID == OutCoordinatorParticipantID;
+		});
+	if (!Coordinator) return false;
+	Coordinator->bCanCoordinate = true;
+	for (const FSeinPlayerID Slot : AISlots)
+	{
+		if (OutSlotToParticipant.Contains(Slot))
+		{
+			UE_LOG(LogSeinNet, Error,
+				TEXT("BuildCanonicalParticipantManifest: slot=%u is both Human and AI."), Slot.Value);
+			return false;
+		}
+		Coordinator->CommandSlots.Add(Slot);
+		OutSlotToParticipant.Add(Slot, OutCoordinatorParticipantID);
+		OutSlotLifecycle.Add(Slot, ESeinSlotLifecycle::AITakeover);
+	}
+
+	OutBindings.Sort([](
+		const FSeinParticipantBinding& A,
+		const FSeinParticipantBinding& B)
+	{
+		return A.ParticipantID.ToCanonicalString() < B.ParticipantID.ToCanonicalString();
+	});
+	if (OutBindings.Num() > SeinNetProtocolLimits::MaxParticipants)
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("BuildCanonicalParticipantManifest: participant count %d exceeds protocol cap %d."),
+			OutBindings.Num(), SeinNetProtocolLimits::MaxParticipants);
+		return false;
+	}
+	return true;
+}
+
+void USeinNetSubsystem::ApplyProtocolAssignmentToRelays()
+{
+	const bool bUsePending = PendingAuthorityProtocolState.IsSet();
+	const FSeinProtocolContext& AssignmentContext = bUsePending
+		? PendingAuthorityProtocolState.Context
+		: ActiveProtocolContext;
+	const FSeinMatchSettings& AssignmentSettings = bUsePending
+		? PendingAuthorityProtocolState.MatchSettings
+		: ActiveMatchSettings;
+	const int64 AssignmentSeed = bUsePending
+		? PendingAuthorityProtocolState.Seed
+		: SessionSeed;
+	const TMap<FSeinPlayerID, FSeinNetworkParticipantID>& AssignmentSlots =
+		bUsePending
+			? PendingAuthorityProtocolState.SlotToParticipant
+			: SlotToParticipant;
+	const TArray<FSeinParticipantBinding>& AssignmentBindings = bUsePending
+		? PendingAuthorityProtocolState.ParticipantBindings
+		: ParticipantBindings;
+	const ESeinPreparedWorldActivation AssignmentActivation = bUsePending
+		? PendingAuthorityProtocolState.Activation
+		: ESeinPreparedWorldActivation::AllowCurrentWorld;
+	for (const TWeakObjectPtr<ASeinNetRelay>& WeakRelay : Relays)
+	{
+		ASeinNetRelay* Relay = WeakRelay.Get();
+		if (!Relay) continue;
+		const FSeinPlayerID Slot = RelayToSlot.FindRef(Relay);
+		const FSeinNetworkParticipantID ParticipantID =
+			AssignmentSlots.FindRef(Slot);
+		if (!Slot.IsValid() || !ParticipantID.IsValid())
+		{
+			UE_LOG(LogSeinNet, Error,
+				TEXT("ApplyProtocolAssignmentToRelays: relay=%s has no canonical slot/participant binding."),
+				*GetNameSafe(Relay));
+			continue;
+		}
+		Relay->AssignedPlayerID = Slot;
+		Relay->AssignedParticipantID = ParticipantID;
+		Relay->ProtocolContext = AssignmentContext;
+		Relay->SessionSeed = AssignmentSeed;
+		Relay->ForceNetUpdate();
+		const FSeinParticipantBinding* AssignmentBinding =
+			AssignmentBindings.FindByPredicate(
+				[ParticipantID](const FSeinParticipantBinding& Binding)
+				{
+					return Binding.ParticipantID == ParticipantID;
+				});
+		const bool bSimulates = AssignmentBinding
+			&& AssignmentBinding->bSimulates;
+
+		const APlayerController* PC = Cast<APlayerController>(Relay->GetOwner());
+		if (PC && PC->IsLocalController())
+		{
+			if (bUsePending)
+			{
+				PendingLocalProtocolAssignment.Relay = Relay;
+				PendingLocalProtocolAssignment.Slot = Slot;
+				PendingLocalProtocolAssignment.ParticipantID = ParticipantID;
+				PendingLocalProtocolAssignment.Context = AssignmentContext;
+				PendingLocalProtocolAssignment.Seed = AssignmentSeed;
+				PendingLocalProtocolAssignment.bSimulates = bSimulates;
+				PendingLocalProtocolAssignment.MatchSettings =
+					AssignmentSettings;
+				PendingLocalProtocolAssignment.SourceWorld =
+					PendingAuthorityProtocolState.SourceWorld;
+				PendingLocalProtocolAssignment.Activation =
+					AssignmentActivation;
+				SchedulePendingProtocolPromotion();
+			}
+			else
+			{
+				NotifyLocalProtocolAssigned(
+					Relay,
+					Slot,
+					ParticipantID,
+					AssignmentContext,
+					AssignmentSeed,
+					bSimulates,
+					AssignmentSettings,
+					AssignmentActivation);
+			}
+		}
+		else
+		{
+			Relay->Client_PrepareMatchBootstrap(
+				Slot,
+				ParticipantID,
+				AssignmentContext,
+				AssignmentSeed,
+				bSimulates,
+				AssignmentActivation
+					== ESeinPreparedWorldActivation::AllowCurrentWorld,
+				AssignmentSettings);
+		}
+	}
+}
+
+bool USeinNetSubsystem::PrepareMatchTravel(
+	ESeinMatchTravelIntent Intent,
+	FName DestinationWorldPackage,
+	ESeinPreparedWorldActivation Activation)
+{
+	if (!IsServer())
+	{
+		UE_LOG(LogSeinNet, Warning, TEXT("PrepareMatchTravel: server-only."));
+		return false;
+	}
+	const FGuid DestinationWorldDigest =
+		SeinComputeDestinationWorldDigest(DestinationWorldPackage.ToString());
+	if (!DestinationWorldDigest.IsValid())
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("PrepareMatchTravel: destination world package '%s' is invalid."),
+			*DestinationWorldPackage.ToString());
+		return false;
+	}
+	if (bDestinationStartPending)
+	{
+		if (PendingTravelIntent == Intent
+			&& PendingAuthorityProtocolState.IsSet()
+			&& PendingAuthorityProtocolState.Activation == Activation
+			&& PendingAuthorityProtocolState.SourceWorld.Get() == GetWorld()
+			&& PendingAuthorityProtocolState.Context.DestinationWorldDigest
+				== DestinationWorldDigest)
+		{
+			return true;
+		}
+		UE_LOG(LogSeinNet, Error,
+			TEXT("PrepareMatchTravel: conflicting intent while destination start is pending."));
+		return false;
+	}
+
+	FGuid LocalCommandProtocolDigest;
+	if (!ResolveLocalCommandProtocolDigest(LocalCommandProtocolDigest))
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("PrepareMatchTravel: local command protocol is unavailable; refusing to create or continue an incompatible match."));
+		return false;
+	}
+	FGuid LocalSimulationContentDigest;
+	if (!ResolveLocalSimulationContentDigest(
+			LocalSimulationContentDigest))
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("PrepareMatchTravel: local simulation-content identity is unavailable; refusing to create or continue an unproven match."));
+		return false;
+	}
+
+	FSeinPendingAuthorityProtocolState Prepared;
+	Prepared.Intent = Intent;
+	Prepared.SourceWorld = GetWorld();
+	Prepared.Activation = Activation;
+	if (Intent == ESeinMatchTravelIntent::NewMatch)
+	{
+		bool bPreparedSettings = false;
+		if (const UGameInstance* GI = GetGameInstance())
+		{
+			if (const USeinLobbySubsystem* Lobby = GI->GetSubsystem<USeinLobbySubsystem>())
+			{
+				if (Lobby->HasPublishedSnapshot()
+					&& !Lobby->GetPublishedSnapshot().Slots.IsEmpty())
+				{
+					Prepared.MatchSettings = Lobby->GetPublishedSnapshot();
+					bPreparedSettings = true;
+				}
+			}
+		}
+		if (!bPreparedSettings && bHasActiveMatchSettings)
+		{
+			Prepared.MatchSettings = ActiveMatchSettings;
+			bPreparedSettings = true;
+		}
+		if (!bPreparedSettings)
+		{
+			UE_LOG(LogSeinNet, Error,
+				TEXT("PrepareMatchTravel(NewMatch): no canonical match settings snapshot is available."));
+			return false;
+		}
+		FGuid MatchSettingsDigest;
+		if (!ComputeMatchSettingsDigest(
+			Prepared.MatchSettings,
+			MatchSettingsDigest,
+			TEXT("PrepareMatchTravel(NewMatch)")))
+		{
+			return false;
+		}
+
+		const FSeinMatchInstanceID MatchInstanceID(FGuid::NewGuid());
+		const int64 PreviousSeed = SessionSeed;
+		SessionSeed = 0;
+		EnsureSessionSeed();
+		Prepared.Seed = SessionSeed;
+		SessionSeed = PreviousSeed;
+		if (!BuildCanonicalParticipantManifest(
+				MatchInstanceID,
+				Prepared.ParticipantBindings,
+				Prepared.SlotToParticipant,
+				Prepared.CoordinatorParticipantID,
+				Prepared.SlotLifecycle))
+		{
+			return false;
+		}
+		Prepared.Context = FSeinProtocolContext(
+			MatchInstanceID,
+			1,
+			Prepared.CoordinatorParticipantID,
+			1,
+			1,
+			SeinComputeMembershipDigest(Prepared.ParticipantBindings),
+			DestinationWorldDigest,
+			MatchSettingsDigest,
+			LocalSimulationContentDigest,
+			LocalCommandProtocolDigest);
+	}
+	else
+	{
+		if (!ActiveProtocolContext.IsValid() || ParticipantBindings.IsEmpty()
+			|| !bHasActiveMatchSettings
+			|| ActiveProtocolContext.LockstepEpoch == MAX_int64)
+		{
+			UE_LOG(LogSeinNet, Error,
+				TEXT("PrepareMatchTravel(ContinueMatch): no valid durable match or epoch exhausted."));
+			return false;
+		}
+		Prepared.MatchSettings = ActiveMatchSettings;
+		FGuid CurrentMatchSettingsDigest;
+		if (!ComputeMatchSettingsDigest(
+				Prepared.MatchSettings,
+				CurrentMatchSettingsDigest,
+				TEXT("PrepareMatchTravel(ContinueMatch)"))
+			|| CurrentMatchSettingsDigest != ActiveProtocolContext.MatchSettingsDigest
+			|| LocalSimulationContentDigest
+				!= ActiveProtocolContext.SimulationContentDigest
+			|| LocalCommandProtocolDigest != ActiveProtocolContext.CommandProtocolDigest
+			|| CoordinatorParticipantID != ActiveProtocolContext.CoordinatorParticipantID)
+		{
+			UE_LOG(LogSeinNet, Error,
+				TEXT("PrepareMatchTravel(ContinueMatch): durable settings, simulation content, command protocol, or coordinator identity changed; refusing epoch transition."));
+			return false;
+		}
+		Prepared.Context = ActiveProtocolContext;
+		++Prepared.Context.LockstepEpoch;
+		Prepared.Context.DestinationWorldDigest = DestinationWorldDigest;
+		Prepared.Seed = SessionSeed;
+		Prepared.ParticipantBindings = ParticipantBindings;
+		Prepared.SlotToParticipant = SlotToParticipant;
+		Prepared.CoordinatorParticipantID = CoordinatorParticipantID;
+		Prepared.SlotLifecycle = SlotLifecycle;
+		Prepared.FrozenMaxCommandsPerSubmission =
+			FrozenMaxCommandsPerSubmission;
+	}
+
+	PendingAuthorityProtocolState = MoveTemp(Prepared);
+	bDestinationStartPending = true;
+	PendingTravelIntent = Intent;
+	ApplyProtocolAssignmentToRelays();
+	SchedulePendingProtocolPromotion();
+
+	int32 CommandSlotCount = 0;
+	for (const FSeinParticipantBinding& Binding
+		: PendingAuthorityProtocolState.ParticipantBindings)
+	{
+		CommandSlotCount += Binding.CommandSlots.Num();
+	}
+
+	UE_LOG(LogSeinNet, Log,
+		TEXT("PrepareMatchTravel: %s prepared context={%s} participants=%d commandSlots=%d."),
+		Intent == ESeinMatchTravelIntent::NewMatch ? TEXT("NewMatch") : TEXT("ContinueMatch"),
+		*PendingAuthorityProtocolState.Context.ToCanonicalDebugString(),
+		PendingAuthorityProtocolState.ParticipantBindings.Num(),
+		CommandSlotCount);
+	return true;
+}
+
+void USeinNetSubsystem::AbortPreparedMatchTravel(const FString& Reason)
+{
+	if (!PendingAuthorityProtocolState.IsSet()) return;
+	const FSeinProtocolContext CancelledContext =
+		PendingAuthorityProtocolState.Context;
+	PendingAuthorityProtocolState.Reset();
+	bDestinationStartPending = false;
+	ClientHandlePreparedMatchTravelCancelled(CancelledContext);
+	CancelPendingProtocolPromotion();
+
+	for (const TWeakObjectPtr<ASeinNetRelay>& WeakRelay : Relays)
+	{
+		ASeinNetRelay* Relay = WeakRelay.Get();
+		if (!Relay) continue;
+		const APlayerController* PC = Cast<APlayerController>(Relay->GetOwner());
+		if (!PC || !PC->IsLocalController())
+		{
+			Relay->Client_CancelPreparedMatchTravel(CancelledContext);
+		}
+		const FSeinPlayerID Slot = RelayToSlot.FindRef(Relay);
+		const FSeinNetworkParticipantID ParticipantID =
+			SlotToParticipant.FindRef(Slot);
+		Relay->AssignedParticipantID = ParticipantID;
+		Relay->ProtocolContext = ActiveProtocolContext;
+		Relay->SessionSeed = SessionSeed;
+		Relay->ForceNetUpdate();
+	}
+	UE_LOG(LogSeinNet, Error,
+		TEXT("Prepared match travel aborted without mutating the source epoch: %s"),
+		*Reason.Left(512));
+}
+
+bool USeinNetSubsystem::TryPromotePendingAuthorityProtocolState()
+{
+	if (!IsServer() || !PendingAuthorityProtocolState.IsSet()) return false;
+	UWorld* World = GetWorld();
+	const FString PackageName = World && World->GetOutermost()
+		? World->GetOutermost()->GetName()
+		: FString();
+	if (!World || World->bIsTearingDown
+		|| !IsPreparedWorldActivationEligible(
+			World,
+			PendingAuthorityProtocolState.SourceWorld.Get(),
+			PendingAuthorityProtocolState.Activation,
+			SeinComputeDestinationWorldDigest(PackageName),
+			PendingAuthorityProtocolState.Context.DestinationWorldDigest))
+	{
+		return false;
+	}
+	USeinWorldSubsystem* DestinationWorldSub =
+		World->GetSubsystem<USeinWorldSubsystem>();
+	if (!DestinationWorldSub
+		|| !DestinationWorldSub->GetCommandProtocolDigest().IsValid()
+		|| !DestinationWorldSub->IsSimulationContentReady())
+	{
+		return false;
+	}
+	if (DestinationWorldSub->GetCommandProtocolDigest()
+			!= PendingAuthorityProtocolState.Context.CommandProtocolDigest
+		|| DestinationWorldSub->GetSimulationContentDigest()
+			!= PendingAuthorityProtocolState.Context.SimulationContentDigest)
+	{
+		AbortPreparedMatchTravel(
+			TEXT("destination command protocol or simulation content differs from the prepared context"));
+		return false;
+	}
+
+	FSeinPendingAuthorityProtocolState Prepared =
+		MoveTemp(PendingAuthorityProtocolState);
+	PendingAuthorityProtocolState.Reset();
+	FSeinPendingLocalProtocolAssignment PendingLocal =
+		MoveTemp(PendingLocalProtocolAssignment);
+	PendingLocalProtocolAssignment.Reset();
+
+	if (Prepared.Intent == ESeinMatchTravelIntent::NewMatch)
+	{
+		// A prepared travel is still reversible. Retire old-match replay only
+		// after destination identity has committed the new match locally.
+		if (ReplayWriter && ReplayWriter->IsRecording())
+		{
+			ReplayWriter->FinishRecording();
+		}
+		ReplayWriter = nullptr;
+		if (ReplayReader && ReplayReader->IsPlaying())
+		{
+			ReplayReader->Stop();
+		}
+		ReplayReader = nullptr;
+		ResetMatchState(nullptr);
+	}
+	else
+	{
+		ResetLockstepEpochState(nullptr);
+	}
+
+	ActiveProtocolContext = Prepared.Context;
+	ActiveMatchSettings = MoveTemp(Prepared.MatchSettings);
+	bHasActiveMatchSettings = true;
+	SessionSeed = Prepared.Seed;
+	ParticipantBindings = MoveTemp(Prepared.ParticipantBindings);
+	SlotToParticipant = MoveTemp(Prepared.SlotToParticipant);
+	CoordinatorParticipantID = Prepared.CoordinatorParticipantID;
+	SlotLifecycle = MoveTemp(Prepared.SlotLifecycle);
+	FrozenMaxCommandsPerSubmission =
+		Prepared.FrozenMaxCommandsPerSubmission;
+	AcceptedConfigFingerprints.Reset();
+	RelayToParticipant.Reset();
+	for (const TWeakObjectPtr<ASeinNetRelay>& WeakRelay : Relays)
+	{
+		ASeinNetRelay* Relay = WeakRelay.Get();
+		if (!Relay || Relay->GetWorld() != World) continue;
+		const FSeinNetworkParticipantID ParticipantID =
+			SlotToParticipant.FindRef(RelayToSlot.FindRef(Relay));
+		if (ParticipantID.IsValid())
+		{
+			RelayToParticipant.Add(Relay, ParticipantID);
+		}
+	}
+
+	TurnAggregator.Reset();
+	BootstrapConsensus.Reset();
+	if (!ConfigureTurnAggregator() || !ConfigureBootstrapConsensus())
+	{
+		FailBootstrapSession(
+			TEXT("Destination world rejected the prepared manifest or bootstrap membership."),
+			/*bNotifyPeers=*/true);
+		return false;
+	}
+	bDestinationStartPending = true;
+	PendingTravelIntent = Prepared.Intent;
+	if (PendingLocal.IsSet())
+	{
+		PendingLocalProtocolAssignment = MoveTemp(PendingLocal);
+		SchedulePendingProtocolPromotion();
+	}
+	if (IsDedicatedAuthority() && CoordinatorParticipantID.IsValid())
+	{
+		LocalParticipantID = CoordinatorParticipantID;
+		if (const USeinWorldSubsystem* WorldSub =
+			World->GetSubsystem<USeinWorldSubsystem>())
+		{
+			AcceptedConfigFingerprints.Add(
+				CoordinatorParticipantID,
+				WorldSub->GetConfigFingerprint());
+		}
+	}
+	TryPromotePendingLocalProtocolAssignment();
+	UE_LOG(LogSeinNet, Log,
+		TEXT("Promoted prepared protocol context only after destination-world identity matched."));
+	return true;
+}
+
+bool USeinNetSubsystem::TryPromotePendingLocalProtocolAssignment()
+{
+	if (!PendingLocalProtocolAssignment.IsSet()) return false;
+	UWorld* World = GetWorld();
+	const FString PackageName = World && World->GetOutermost()
+		? World->GetOutermost()->GetName()
+		: FString();
+	if (!World || World->bIsTearingDown
+		|| !IsPreparedWorldActivationEligible(
+			World,
+			PendingLocalProtocolAssignment.SourceWorld.Get(),
+			PendingLocalProtocolAssignment.Activation,
+			SeinComputeDestinationWorldDigest(PackageName),
+			PendingLocalProtocolAssignment.Context.DestinationWorldDigest))
+	{
+		return false;
+	}
+
+	FSeinPendingLocalProtocolAssignment Assignment =
+		PendingLocalProtocolAssignment;
+	ASeinNetRelay* Relay = Assignment.Relay.Get();
+	if (!Relay || Relay->GetWorld() != World)
+	{
+		Relay = LocalRelay.Get();
+	}
+	if (!Relay || Relay->GetWorld() != World) return false;
+
+	NotifyLocalProtocolAssigned(
+		Relay,
+		Assignment.Slot,
+		Assignment.ParticipantID,
+		Assignment.Context,
+		Assignment.Seed,
+		Assignment.bSimulates,
+		Assignment.MatchSettings,
+		Assignment.Activation);
+	return ActiveProtocolContext == Assignment.Context
+		&& !PendingLocalProtocolAssignment.IsSet();
+}
+
+void USeinNetSubsystem::SchedulePendingProtocolPromotion()
+{
+	if (PendingProtocolPromotionHandle.IsValid()) return;
+	PendingProtocolPromotionHandle = FTSTicker::GetCoreTicker().AddTicker(
+		FTickerDelegate::CreateUObject(
+			this, &USeinNetSubsystem::TickPendingProtocolPromotion));
+	if (!PendingProtocolPromotionHandle.IsValid())
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("Failed to schedule pending destination protocol promotion."));
+	}
+}
+
+bool USeinNetSubsystem::TickPendingProtocolPromotion(float DeltaSeconds)
+{
+	(void)DeltaSeconds;
+	TryPromotePendingAuthorityProtocolState();
+	TryPromotePendingLocalProtocolAssignment();
+	if (bDestinationStartPending && IsServer())
+	{
+		TryRearmPreparedDestinationStart();
+	}
+	if (PendingAuthorityProtocolState.IsSet()
+		|| PendingLocalProtocolAssignment.IsSet())
+	{
+		return true;
+	}
+	PendingProtocolPromotionHandle.Reset();
+	return false;
+}
+
+void USeinNetSubsystem::CancelPendingProtocolPromotion()
+{
+	if (PendingProtocolPromotionHandle.IsValid())
+	{
+		FTSTicker::GetCoreTicker().RemoveTicker(
+			PendingProtocolPromotionHandle);
+		PendingProtocolPromotionHandle.Reset();
+	}
+}
+
+void USeinNetSubsystem::TryRearmPreparedDestinationStart()
+{
+	if (!bDestinationStartPending || !IsServer()) return;
+	UWorld* World = GetWorld();
+	if (!World || World->bIsTearingDown) return;
+	if (PendingAuthorityProtocolState.IsSet()
+		&& !TryPromotePendingAuthorityProtocolState())
+	{
+		return;
+	}
+	if (!IsCurrentWorldPreparedDestination()) return;
+	if (!BootstrapConsensus.IsConfigured()
+		&& !ConfigureBootstrapConsensus())
+	{
+		FailBootstrapSession(
+			TEXT("Destination world could not re-arm frozen bootstrap consensus."),
+			/*bNotifyPeers=*/true);
+		return;
+	}
+	if (IsDedicatedAuthority() && CoordinatorParticipantID.IsValid())
+	{
+		LocalParticipantID = CoordinatorParticipantID;
+		if (const USeinWorldSubsystem* WorldSub =
+			World->GetSubsystem<USeinWorldSubsystem>())
+		{
+			AcceptedConfigFingerprints.Add(
+				CoordinatorParticipantID,
+				WorldSub->GetConfigFingerprint());
+		}
+	}
+	StartLockstepSession();
+}
+
 void USeinNetSubsystem::OnLogout(AGameModeBase* GameMode, AController* Exiting)
 {
 	if (!Exiting || !IsServer()) return;
@@ -691,12 +2396,6 @@ void USeinNetSubsystem::OnLogout(AGameModeBase* GameMode, AController* Exiting)
 	// stall, and (after timeout) transition the slot to AITakeover. If the
 	// player reconnects, the slot returns to Connected and the relay resumes
 	// normally.
-	//
-	// PRIOR BEHAVIOR (pre-Phase-4): destroy relay + drop slot from RelayToSlot
-	// so the gate ignores the leaving player. Worked but provided no
-	// reconnect/AI-takeover affordance. Old code preserved as commentary at
-	// the bottom for reference.
-
 	const double NowSec = FPlatformTime::Seconds();
 	bool bAnyMarkedDropped = false;
 	for (const TWeakObjectPtr<ASeinNetRelay>& Wp : Relays)
@@ -706,6 +2405,16 @@ void USeinNetSubsystem::OnLogout(AGameModeBase* GameMode, AController* Exiting)
 
 		const FSeinPlayerID Slot = Relay->AssignedPlayerID;
 		if (!Slot.IsValid()) continue;
+		const FSeinNetworkParticipantID ParticipantID =
+			RelayToParticipant.FindRef(Relay);
+		if (bBootstrapLaunchBarrierActive
+			&& RequiredStartParticipants.Contains(ParticipantID)
+			&& BootstrapConsensus.IsLaunchInFlight())
+		{
+			FailBootstrapSession(
+				TEXT("A frozen participant disconnected after bootstrap receipt collection began."),
+				/*bNotifyPeers=*/true);
+		}
 
 		SlotLifecycle.Add(Slot, ESeinSlotLifecycle::Dropped);
 		SlotDroppedAtTime.Add(Slot, NowSec);
@@ -719,38 +2428,37 @@ void USeinNetSubsystem::OnLogout(AGameModeBase* GameMode, AController* Exiting)
 	// Re-check open turns — the just-dropped slot might be the one we were
 	// waiting on. Inject a heartbeat immediately for the most recent open
 	// turn so the gate completes.
-	if (bAnyMarkedDropped && !ServerTurnBuffer.IsEmpty())
+	if (bAnyMarkedDropped)
 	{
-		TArray<int32> OpenTurns;
-		ServerTurnBuffer.GetKeys(OpenTurns);
-		for (int32 TurnId : OpenTurns)
+		for (const int32 TurnId : TurnAggregator.GetPendingTurnIDs())
 		{
 			InjectDroppedSlotHeartbeats(TurnId, /*bAllowAICommands=*/false);
 			ServerCheckTurnComplete(TurnId);
 		}
 	}
 
-	// Hash gossip compares live simulation peers, not occupied gameplay slots.
+	// World-root gossip compares live simulation peers, not occupied gameplay slots.
 	// A dropped slot still receives command heartbeats from the server, but its
-	// vanished process can no longer report hashes. Re-evaluate outstanding
+	// vanished process can no longer report roots. Re-evaluate outstanding
 	// checks against the remaining connected reporter set so they neither
 	// wedge nor accumulate forever.
-	if (bAnyMarkedDropped && !ServerHashReports.IsEmpty())
+	if (bAnyMarkedDropped && !ServerWorldStateRootReports.IsEmpty())
 	{
 		TArray<int32> PendingTurns;
-		ServerHashReports.GetKeys(PendingTurns);
+		ServerWorldStateRootReports.GetKeys(PendingTurns);
 		for (const int32 Turn : PendingTurns)
 		{
-			const TMap<FSeinPlayerID, int32>* Reports = ServerHashReports.Find(Turn);
-			if (Reports && AreExpectedHashReportsComplete(*Reports))
+			const TMap<FSeinNetworkParticipantID, FGuid>* Reports =
+				ServerWorldStateRootReports.Find(Turn);
+			if (Reports && AreExpectedWorldRootReportsComplete(*Reports))
 			{
-				ServerCompareHashesForTurn(Turn);
+				ServerCompareWorldStateRootsForTurn(Turn);
 			}
 		}
 	}
 
-	// A pre-start parity request may have been waiting on this process. Once
-	// its slot is no longer Connected it is no longer a start participant.
+	// Retry only to update diagnostics before receipt collection. Frozen
+	// bootstrap membership never shrinks; loss after dispatch failed above.
 	if (bAnyMarkedDropped)
 	{
 		TryDispatchLockstepSessionStart();
@@ -780,22 +2488,55 @@ void USeinNetSubsystem::RegisterRelay(ASeinNetRelay* Relay)
 			// neutral here (initial rep hasn't arrived yet) — OnRep latches it.
 			if (Relay->AssignedPlayerID.IsValid())
 			{
-				NotifyLocalSlotAssigned(Relay, Relay->AssignedPlayerID, Relay->SessionSeed);
+				NotifyLocalLobbySlotAssigned(Relay, Relay->AssignedPlayerID);
+			}
+			if (Relay->AssignedPlayerID.IsValid()
+				&& Relay->AssignedParticipantID.IsValid()
+				&& Relay->ProtocolContext.IsValid()
+				&& bHasActiveMatchSettings)
+			{
+				NotifyLocalProtocolAssigned(
+					Relay,
+					Relay->AssignedPlayerID,
+					Relay->AssignedParticipantID,
+					Relay->ProtocolContext,
+					Relay->SessionSeed,
+					bLocalParticipantSimulates,
+					ActiveMatchSettings);
 			}
 		}
 	}
+	TryRearmPreparedDestinationStart();
+	TryDispatchLockstepSessionStart();
 }
 
 void USeinNetSubsystem::UnregisterRelay(ASeinNetRelay* Relay)
 {
 	if (!Relay) return;
 	const FSeinPlayerID RemovedSlot = RelayToSlot.FindRef(Relay);
+	const FSeinNetworkParticipantID RemovedParticipant = RelayToParticipant.FindRef(Relay);
+	const bool bVerifyFrozenParticipantStillBound =
+		bBootstrapLaunchBarrierActive
+		&& RequiredStartParticipants.Contains(RemovedParticipant)
+		&& BootstrapConsensus.IsLaunchInFlight();
 	const ESeinSlotLifecycle* RemovedLifecycle = SlotLifecycle.Find(RemovedSlot);
 	const bool bRemovedConnectedParticipant =
 		RemovedSlot.IsValid() && RemovedLifecycle &&
 		*RemovedLifecycle == ESeinSlotLifecycle::Connected;
 	Relays.RemoveAllSwap([Relay](const TWeakObjectPtr<ASeinNetRelay>& Wp) { return Wp.Get() == Relay; });
 	RelayToSlot.Remove(Relay);
+	RelayToParticipant.Remove(Relay);
+	if (bVerifyFrozenParticipantStillBound)
+	{
+		TArray<FSeinNetworkParticipantID> MissingParticipants;
+		AreRequiredStartParticipantsBound(&MissingParticipants);
+		if (MissingParticipants.Contains(RemovedParticipant))
+		{
+			FailBootstrapSession(
+				TEXT("A frozen participant relay disappeared after bootstrap receipt collection began."),
+				/*bNotifyPeers=*/true);
+		}
+	}
 	if (LocalRelay.Get() == Relay)
 	{
 		LocalRelay.Reset();
@@ -805,14 +2546,15 @@ void USeinNetSubsystem::UnregisterRelay(ASeinNetRelay* Relay)
 	}
 
 	// EndPlay can unregister a relay before GameMode's Logout delegate finds
-	// its owner. Removing RelayToSlot has already shrunk the connected parity
-	// set, so retry a deferred start now. Do not do this during world teardown:
+	// its owner. Retry a not-yet-dispatched start for diagnostics/rebinding;
+	// frozen receipt membership is never reduced. Do not retry during teardown:
 	// that request belongs to the retiring epoch and ResetLockstepEpochState
 	// will discard it. Acceptance/lifecycle are deliberately preserved for
 	// same-match travel; a genuinely new relay occupant clears acceptance in
 	// ServerSpawnRelayForController before it can satisfy the barrier.
 	UWorld* RelayWorld = Relay->GetWorld();
-	if (bRemovedConnectedParticipant && RelayWorld && !RelayWorld->bIsTearingDown)
+	if (bRemovedConnectedParticipant && RemovedParticipant.IsValid()
+		&& RelayWorld && !RelayWorld->bIsTearingDown)
 	{
 		TryDispatchLockstepSessionStart();
 	}
@@ -831,13 +2573,20 @@ USeinWorldSubsystem* USeinNetSubsystem::BindLockstepHooksForCurrentWorld()
 		{
 			Previous->TurnReadyResolver.Unbind();
 			Previous->TurnConsumeNotifier.Unbind();
-			Previous->AIEmitInterceptor.Unbind();
+			Previous->ClearAIEmitInterceptor();
+			Previous->ClearLocalCommandSubmitter();
 			if (TickCompletedHandle.IsValid())
 			{
 				Previous->OnSimTickCompleted.Remove(TickCompletedHandle);
 			}
+			if (ExecutionTopologyInvalidatedHandle.IsValid())
+			{
+				Previous->OnExecutionTopologyInvalidated.Remove(
+					ExecutionTopologyInvalidatedHandle);
+			}
 		}
 		TickCompletedHandle.Reset();
+		ExecutionTopologyInvalidatedHandle.Reset();
 		CachedWorldSub = WorldSub;
 	}
 
@@ -854,15 +2603,34 @@ USeinWorldSubsystem* USeinNetSubsystem::BindLockstepHooksForCurrentWorld()
 			Self->ConsumeTurn(Turn);
 		}
 	});
-	WorldSub->AIEmitInterceptor.BindLambda([WeakSelf](FSeinPlayerID Slot, const FSeinCommand& Cmd) -> bool
+	FSeinAIEmitInterceptor AIInterceptor;
+	AIInterceptor.BindLambda([WeakSelf](FSeinPlayerID Slot, const FSeinCommand& Cmd) -> bool
 	{
 		USeinNetSubsystem* Self = WeakSelf.Get();
 		return Self ? Self->HandleAIEmit(Slot, Cmd) : false;
 	});
+	WorldSub->SetAIEmitInterceptor(MoveTemp(AIInterceptor));
+	FSeinLocalCommandSubmitter LocalSubmitter;
+	LocalSubmitter.BindLambda(
+		[WeakSelf](const FSeinCommand& Draft, bool bRequestMatchAdministration)
+		{
+			if (USeinNetSubsystem* Self = WeakSelf.Get())
+			{
+				Self->SubmitLocalCommandDraft(Draft, bRequestMatchAdministration);
+			}
+		});
+	WorldSub->SetLocalCommandSubmitter(MoveTemp(LocalSubmitter));
 
 	if (!TickCompletedHandle.IsValid())
 	{
 		TickCompletedHandle = WorldSub->OnSimTickCompleted.AddUObject(this, &USeinNetSubsystem::OnSimTickCompleted);
+	}
+	if (!ExecutionTopologyInvalidatedHandle.IsValid())
+	{
+		ExecutionTopologyInvalidatedHandle =
+			WorldSub->OnExecutionTopologyInvalidated.AddUObject(
+				this,
+				&USeinNetSubsystem::HandleExecutionTopologyInvalidated);
 	}
 
 	if (bWorldChanged)
@@ -877,18 +2645,21 @@ USeinWorldSubsystem* USeinNetSubsystem::BindLockstepHooksForCurrentWorld()
 bool USeinNetSubsystem::AreNetworkStartPrerequisitesReady(bool bHooksReady) const
 {
 	const bool bHasLocalParticipant =
-		IsDedicatedAuthority() || (LocalRelay.IsValid() && LocalPlayerID.IsValid());
-	return SessionSeed != 0 && bHooksReady && bHasLocalParticipant;
+		(IsDedicatedAuthority() && LocalParticipantID.IsValid())
+		|| (LocalRelay.IsValid() && LocalPlayerID.IsValid() && LocalParticipantID.IsValid());
+	return ActiveProtocolContext.IsValid()
+		&& bHasActiveMatchSettings
+		&& SessionSeed != 0 && bHooksReady && bHasLocalParticipant;
 }
 
 bool USeinNetSubsystem::AreConfigFingerprintsComplete(
-	const TArray<FSeinPlayerID>& ExpectedSlots,
-	const TMap<FSeinPlayerID, int32>& AcceptedFingerprints,
+	const TArray<FSeinNetworkParticipantID>& ExpectedParticipants,
+	const TMap<FSeinNetworkParticipantID, int32>& AcceptedFingerprints,
 	int32 RequiredFingerprint)
 {
-	for (const FSeinPlayerID Slot : ExpectedSlots)
+	for (const FSeinNetworkParticipantID ParticipantID : ExpectedParticipants)
 	{
-		const int32* Accepted = AcceptedFingerprints.Find(Slot);
+		const int32* Accepted = AcceptedFingerprints.Find(ParticipantID);
 		if (!Accepted || *Accepted != RequiredFingerprint)
 		{
 			return false;
@@ -898,57 +2669,308 @@ bool USeinNetSubsystem::AreConfigFingerprintsComplete(
 }
 
 bool USeinNetSubsystem::IsConfigParityStartBarrierSatisfied(
-	TArray<FSeinPlayerID>* OutMissingSlots) const
+	TArray<FSeinNetworkParticipantID>* OutMissingParticipants) const
 {
-	if (OutMissingSlots) OutMissingSlots->Reset();
+	if (OutMissingParticipants) OutMissingParticipants->Reset();
 	if (!IsConfigParityCheckEnabled()) return true;
 
-	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
-	if (!Settings) return false;
-	const int32 RequiredFingerprint = Settings->ComputeConfigFingerprint();
+	const UWorld* World = GetWorld();
+	const USeinWorldSubsystem* WorldSub =
+		World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
+	if (!WorldSub) return false;
+	const int32 RequiredFingerprint = WorldSub->GetConfigFingerprint();
 
-	TArray<FSeinPlayerID> ExpectedSlots;
-	GetExpectedHashReporterSlots(ExpectedSlots);
-	if (OutMissingSlots)
+	TArray<FSeinNetworkParticipantID> ExpectedParticipants;
+	GetExpectedWorldRootReporterParticipants(ExpectedParticipants);
+	if (OutMissingParticipants)
 	{
-		for (const FSeinPlayerID Slot : ExpectedSlots)
+		for (const FSeinNetworkParticipantID ParticipantID : ExpectedParticipants)
 		{
-			const int32* Accepted = AcceptedConfigFingerprints.Find(Slot);
+			const int32* Accepted = AcceptedConfigFingerprints.Find(ParticipantID);
 			if (!Accepted || *Accepted != RequiredFingerprint)
 			{
-				OutMissingSlots->Add(Slot);
+				OutMissingParticipants->Add(ParticipantID);
 			}
 		}
 	}
 
 	return AreConfigFingerprintsComplete(
-		ExpectedSlots, AcceptedConfigFingerprints, RequiredFingerprint);
+		ExpectedParticipants, AcceptedConfigFingerprints, RequiredFingerprint);
 }
 
-void USeinNetSubsystem::NotifyLocalSlotAssigned(ASeinNetRelay* Relay, FSeinPlayerID Slot, int64 Seed)
+void USeinNetSubsystem::NotifyLocalLobbySlotAssigned(
+	ASeinNetRelay* Relay,
+	FSeinPlayerID Slot)
 {
-	if (!Relay) return;
-	if (LocalRelay.Get() != Relay)
-	{
-		// OnRep can fire before RegisterRelay(BeginPlay) has run on the client.
-		// Latch LocalRelay here too — RegisterRelay is idempotent on the
-		// AddUnique path.
-		LocalRelay = Relay;
-	}
-	const bool bSlotChanged = (LocalPlayerID != Slot);
-	LocalPlayerID = Slot;
-	SessionSeed = Seed;
-	UE_LOG(LogSeinNet, Log, TEXT("NotifyLocalSlotAssigned: LocalPlayerID=%u  SessionSeed=%lld"),
-		LocalPlayerID.Value, SessionSeed);
+	if (!Relay || !Slot.IsValid()) return;
+	LocalRelay = Relay;
+	if (LocalPlayerID == Slot) return;
 
-	// Fire local-slot delegates so lobby ViewModel + designer Widget BPs
-	// don't have to poll. Only on actual changes — repeated calls with the
-	// same slot are silent.
-	if (bSlotChanged)
+	LocalPlayerID = Slot;
+	OnLocalSlotChanged.Broadcast(LocalPlayerID);
+	OnLocalSlotChangedBP.Broadcast(LocalPlayerID);
+}
+
+void USeinNetSubsystem::NotifyLocalProtocolAssigned(
+	ASeinNetRelay* Relay,
+	FSeinPlayerID Slot,
+	FSeinNetworkParticipantID ParticipantID,
+	const FSeinProtocolContext& Context,
+	int64 Seed,
+	bool bSimulates,
+	const FSeinMatchSettings& MatchSettings,
+	ESeinPreparedWorldActivation Activation)
+{
+	if (!Relay || !Slot.IsValid() || !ParticipantID.IsValid()
+		|| !Context.IsValid() || Seed == 0 || MatchSettings.Slots.IsEmpty())
 	{
-		OnLocalSlotChanged.Broadcast(LocalPlayerID);
-		OnLocalSlotChangedBP.Broadcast(LocalPlayerID);
+		return;
 	}
+	FGuid LocalCommandProtocolDigest;
+	FGuid LocalMatchSettingsDigest;
+	FGuid LocalSimulationContentDigest;
+	FSeinMatchSettings CanonicalMatchSettings = MatchSettings;
+	const bool bCommandDigestReady =
+		ResolveLocalCommandProtocolDigest(LocalCommandProtocolDigest);
+	const bool bSimulationContentDigestReady =
+		ResolveLocalSimulationContentDigest(
+			LocalSimulationContentDigest);
+	const bool bMatchDigestReady = ComputeMatchSettingsDigest(
+			CanonicalMatchSettings,
+			LocalMatchSettingsDigest,
+			TEXT("NotifyLocalProtocolAssigned"));
+	UWorld* LoadedWorld = GetWorld();
+	const FString LoadedPackage = LoadedWorld && LoadedWorld->GetOutermost()
+		? LoadedWorld->GetOutermost()->GetName()
+		: FString();
+	const FGuid LoadedWorldDigest =
+		SeinComputeDestinationWorldDigest(LoadedPackage);
+	const bool bSamePendingAssignment = PendingLocalProtocolAssignment.IsSet()
+		&& PendingLocalProtocolAssignment.Context == Context
+		&& PendingLocalProtocolAssignment.ParticipantID == ParticipantID
+		&& PendingLocalProtocolAssignment.Slot == Slot
+		&& PendingLocalProtocolAssignment.Seed == Seed;
+	UWorld* AssignmentSourceWorld = bSamePendingAssignment
+		? PendingLocalProtocolAssignment.SourceWorld.Get()
+		: LoadedWorld;
+	const ESeinPreparedWorldActivation EffectiveActivation =
+		bSamePendingAssignment
+			? PendingLocalProtocolAssignment.Activation
+			: Activation;
+	const bool bAlreadyActive = ActiveProtocolContext == Context;
+	const bool bActivationDeferred = !bAlreadyActive
+		&& !IsPreparedWorldActivationEligible(
+			LoadedWorld,
+			AssignmentSourceWorld,
+			EffectiveActivation,
+			LoadedWorldDigest,
+			Context.DestinationWorldDigest);
+	const bool bDigestsMatch = bCommandDigestReady && bMatchDigestReady
+		&& bSimulationContentDigestReady
+		&& LocalCommandProtocolDigest == Context.CommandProtocolDigest
+		&& LocalMatchSettingsDigest == Context.MatchSettingsDigest
+		&& LocalSimulationContentDigest
+			== Context.SimulationContentDigest;
+	if (!bDigestsMatch)
+	{
+		if (bActivationDeferred)
+		{
+			UE_LOG(LogSeinNet, Error,
+				TEXT("NotifyLocalProtocolAssigned: rejected incompatible prepared assignment before destination activation."));
+			return;
+		}
+		const USeinWorldSubsystem* WorldSub =
+			LoadedWorld
+				? LoadedWorld->GetSubsystem<USeinWorldSubsystem>()
+				: nullptr;
+		if (IsNetworkingActive() && WorldSub)
+		{
+			Relay->Server_ReportConfigFingerprint(
+				Context,
+				WorldSub->GetConfigFingerprint(),
+				LocalCommandProtocolDigest,
+				LocalMatchSettingsDigest,
+				LocalSimulationContentDigest);
+		}
+		PendingLocalProtocolAssignment.Reset();
+		if (!PendingAuthorityProtocolState.IsSet())
+		{
+			CancelPendingProtocolPromotion();
+		}
+		UE_LOG(LogSeinNet, Error,
+			TEXT("NotifyLocalProtocolAssigned: local command protocol, canonical match settings, or simulation content differs from the authority context — rejected."));
+		return;
+	}
+	if (ActiveProtocolContext.IsValid()
+		&& ActiveProtocolContext.MatchInstanceID == Context.MatchInstanceID)
+	{
+		if ((bHasActiveMatchSettings
+				&& !AreMatchSettingsIdentical(
+					ActiveMatchSettings, CanonicalMatchSettings))
+			|| Context.LockstepEpoch < ActiveProtocolContext.LockstepEpoch
+			|| Context.CoordinatorTerm < ActiveProtocolContext.CoordinatorTerm
+			|| Context.MembershipRevision
+				!= ActiveProtocolContext.MembershipRevision
+			|| Context.MembershipDigest != ActiveProtocolContext.MembershipDigest
+			|| Context.CommandProtocolDigest
+				!= ActiveProtocolContext.CommandProtocolDigest
+			|| Context.MatchSettingsDigest
+				!= ActiveProtocolContext.MatchSettingsDigest
+			|| Context.SimulationContentDigest
+				!= ActiveProtocolContext.SimulationContentDigest
+			|| (Context.LockstepEpoch == ActiveProtocolContext.LockstepEpoch
+				&& Context.DestinationWorldDigest
+					!= ActiveProtocolContext.DestinationWorldDigest)
+			|| (Context.CoordinatorParticipantID
+					!= ActiveProtocolContext.CoordinatorParticipantID
+				&& Context.CoordinatorTerm
+					<= ActiveProtocolContext.CoordinatorTerm)
+			|| (SessionSeed != 0 && SessionSeed != Seed))
+		{
+			UE_LOG(LogSeinNet, Error,
+				TEXT("NotifyLocalProtocolAssigned: prepared context violates the active match's monotonic contract — rejected."));
+			return;
+		}
+	}
+	if (bActivationDeferred)
+	{
+		if (PendingLocalProtocolAssignment.IsSet()
+			&& (PendingLocalProtocolAssignment.Context != Context
+				|| PendingLocalProtocolAssignment.ParticipantID != ParticipantID
+				|| PendingLocalProtocolAssignment.Slot != Slot
+				|| PendingLocalProtocolAssignment.Seed != Seed
+				|| PendingLocalProtocolAssignment.bSimulates != bSimulates
+				|| PendingLocalProtocolAssignment.Activation != Activation
+				|| !AreMatchSettingsIdentical(
+					PendingLocalProtocolAssignment.MatchSettings,
+					CanonicalMatchSettings)))
+		{
+			UE_LOG(LogSeinNet, Error,
+				TEXT("NotifyLocalProtocolAssigned: conflicting destination assignment arrived while travel was pending — rejected."));
+			return;
+		}
+		PendingLocalProtocolAssignment.Relay = Relay;
+		PendingLocalProtocolAssignment.Slot = Slot;
+		PendingLocalProtocolAssignment.ParticipantID = ParticipantID;
+		PendingLocalProtocolAssignment.Context = Context;
+		PendingLocalProtocolAssignment.Seed = Seed;
+		PendingLocalProtocolAssignment.bSimulates = bSimulates;
+		PendingLocalProtocolAssignment.MatchSettings =
+			MoveTemp(CanonicalMatchSettings);
+		PendingLocalProtocolAssignment.SourceWorld = AssignmentSourceWorld;
+		PendingLocalProtocolAssignment.Activation = EffectiveActivation;
+		SchedulePendingProtocolPromotion();
+		UE_LOG(LogSeinNet, Log,
+			TEXT("NotifyLocalProtocolAssigned: cached destination context without touching the loaded source-world epoch."));
+		return;
+	}
+	if (ActiveProtocolContext.IsValid()
+		&& ActiveProtocolContext.MatchInstanceID == Context.MatchInstanceID
+		&& bHasActiveMatchSettings
+		&& !AreMatchSettingsIdentical(ActiveMatchSettings, CanonicalMatchSettings))
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("NotifyLocalProtocolAssigned: match settings changed inside one match identity — rejected."));
+		return;
+	}
+
+	if (ActiveProtocolContext.IsValid() && ActiveProtocolContext != Context)
+	{
+		if (ActiveProtocolContext.MatchInstanceID != Context.MatchInstanceID)
+		{
+			ResetMatchState(nullptr);
+		}
+		else
+		{
+			if (Context.LockstepEpoch < ActiveProtocolContext.LockstepEpoch
+				|| Context.CoordinatorTerm < ActiveProtocolContext.CoordinatorTerm)
+			{
+				UE_LOG(LogSeinNet, Warning,
+					TEXT("NotifyLocalProtocolAssigned: stale context {%s} rejected; active={%s}."),
+					*Context.ToCanonicalDebugString(),
+					*ActiveProtocolContext.ToCanonicalDebugString());
+				return;
+			}
+			if (Context.MembershipRevision != ActiveProtocolContext.MembershipRevision
+				|| Context.MembershipDigest != ActiveProtocolContext.MembershipDigest)
+			{
+				UE_LOG(LogSeinNet, Error,
+					TEXT("NotifyLocalProtocolAssigned: membership changed without an authenticated manifest transition — rejected."));
+				return;
+			}
+			if (Context.CommandProtocolDigest != ActiveProtocolContext.CommandProtocolDigest
+				|| Context.MatchSettingsDigest != ActiveProtocolContext.MatchSettingsDigest
+				|| Context.SimulationContentDigest
+					!= ActiveProtocolContext.SimulationContentDigest)
+			{
+				UE_LOG(LogSeinNet, Error,
+					TEXT("NotifyLocalProtocolAssigned: compatibility digests changed inside one match identity — rejected."));
+				return;
+			}
+			if (Context.LockstepEpoch == ActiveProtocolContext.LockstepEpoch
+				&& Context.DestinationWorldDigest
+					!= ActiveProtocolContext.DestinationWorldDigest)
+			{
+				UE_LOG(LogSeinNet, Error,
+					TEXT("NotifyLocalProtocolAssigned: destination identity changed inside one lockstep epoch — rejected."));
+				return;
+			}
+			if (Context.CoordinatorParticipantID
+					!= ActiveProtocolContext.CoordinatorParticipantID
+				&& Context.CoordinatorTerm <= ActiveProtocolContext.CoordinatorTerm)
+			{
+				UE_LOG(LogSeinNet, Error,
+					TEXT("NotifyLocalProtocolAssigned: coordinator identity changed without a newer term — rejected."));
+				return;
+			}
+			if (Context.LockstepEpoch != ActiveProtocolContext.LockstepEpoch)
+			{
+				ResetLockstepEpochState(nullptr);
+			}
+		}
+		CancelBootstrapMaterializerRetry();
+		DeferredBootstrapReceiptRequestContext.Reset();
+	}
+	if (ActiveProtocolContext.IsValid()
+		&& ActiveProtocolContext.MatchInstanceID == Context.MatchInstanceID
+		&& SessionSeed != 0 && SessionSeed != Seed)
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("NotifyLocalProtocolAssigned: seed changed inside match — rejected."));
+		return;
+	}
+
+	NotifyLocalLobbySlotAssigned(Relay, Slot);
+	LocalParticipantID = ParticipantID;
+	bLocalParticipantSimulates = bSimulates;
+	CoordinatorParticipantID = Context.CoordinatorParticipantID;
+	ActiveProtocolContext = Context;
+	ActiveMatchSettings = MoveTemp(CanonicalMatchSettings);
+	bHasActiveMatchSettings = true;
+	if (!FreezeAuthorSubmissionPolicy(TEXT("NotifyLocalProtocolAssigned")))
+	{
+		ResetMatchState(nullptr);
+		return;
+	}
+	SessionSeed = Seed;
+	if (PendingLocalProtocolAssignment.IsSet()
+		&& PendingLocalProtocolAssignment.Context == Context)
+	{
+		PendingLocalProtocolAssignment.Reset();
+	}
+	if (UGameInstance* GI = GetGameInstance())
+	{
+		if (USeinLobbySubsystem* Lobby = GI->GetSubsystem<USeinLobbySubsystem>())
+		{
+			Lobby->InstallPreparedMatchSettingsSnapshot(ActiveMatchSettings);
+		}
+	}
+	UE_LOG(LogSeinNet, Log,
+		TEXT("NotifyLocalProtocolAssigned: slot=%u participant=%s seed=%lld context={%s}"),
+		LocalPlayerID.Value,
+		*LocalParticipantID.ToCanonicalString(),
+		SessionSeed,
+		*ActiveProtocolContext.ToCanonicalDebugString());
 
 	// Bind before simulation start so the first tick is gated. This shared path
 	// is also called directly by authority startup; dedicated servers never
@@ -959,115 +2981,1355 @@ void USeinNetSubsystem::NotifyLocalSlotAssigned(ASeinNetRelay* Relay, FSeinPlaye
 	// preference. Enforcement is a host policy: otherwise a client could turn
 	// its own check off, send nothing, and bypass or indefinitely wedge the
 	// host's pre-start barrier. The listen host's relay round-trips harmlessly.
-	if (IsNetworkingActive() && LocalPlayerID.IsValid() && Relay)
+	if (IsNetworkingActive() && LocalParticipantID.IsValid() && Relay)
 	{
-		if (const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>())
+		const UWorld* World = GetWorld();
+		if (const USeinWorldSubsystem* WorldSub =
+			World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr)
 		{
-			Relay->Server_ReportConfigFingerprint(Settings->ComputeConfigFingerprint());
+			Relay->Server_ReportConfigFingerprint(
+				ActiveProtocolContext,
+				WorldSub->GetConfigFingerprint(),
+				LocalCommandProtocolDigest,
+				LocalMatchSettingsDigest,
+				LocalSimulationContentDigest);
 		}
 	}
 
 	// Relay replacement/late assignment is the retry edge for locally frozen
-	// work. Flush exact batches/checkpoints before honoring a deferred start.
+	// work. Flush exact batches/checkpoints before honoring deferred bootstrap
+	// protocol messages.
 	FlushPendingTurnSubmissions();
-	FlushPendingStateHashReports();
-	TryStartLocalSession();
+	FlushPendingWorldStateRootReports();
+	FlushPendingDeterminismSessionFailure();
+	if (PendingLocalBootstrapReceiptReportContext.IsSet()
+		&& LocalBootstrapReceipt.IsSet())
+	{
+		SubmitLocalBootstrapReceipt(
+			PendingLocalBootstrapReceiptReportContext.GetValue(),
+			LocalBootstrapReceipt.GetValue());
+	}
+	if (PendingLocalBootstrapAuthorizedReadyReportContext.IsSet()
+		&& LocalBootstrapReceipt.IsSet())
+	{
+		SubmitLocalBootstrapAuthorizedReady(
+			PendingLocalBootstrapAuthorizedReadyReportContext.GetValue(),
+			LocalBootstrapReceipt.GetValue());
+	}
+	if (DeferredBootstrapReceiptRequestContext.IsSet())
+	{
+		const FSeinProtocolContext Deferred =
+			DeferredBootstrapReceiptRequestContext.GetValue();
+		if (!BootstrapMaterializerRetryHandle.IsValid())
+		{
+			DeferredBootstrapReceiptRequestContext.Reset();
+			ClientHandleBootstrapReceiptRequest(Deferred);
+		}
+	}
+	TryAuthorizeLocalBootstrap();
+	TryLaunchLocalBootstrap();
 }
 
 void USeinNetSubsystem::StartLocalSession()
 {
+	if (IsNetworkingActive())
+	{
+		UE_LOG(LogSeinNet, Warning,
+			TEXT("StartLocalSession: network launch is coordinator-controlled; request rejected."));
+		return;
+	}
 	bStartSessionRequested = true;
 	TryStartLocalSession();
+}
+
+bool USeinNetSubsystem::IsLocalSimulatingParticipant() const
+{
+	const FSeinParticipantBinding* Binding =
+		FindParticipantBinding(LocalParticipantID);
+	return Binding ? Binding->bSimulates : bLocalParticipantSimulates;
+}
+
+bool USeinNetSubsystem::TryMaterializeLocalBootstrapReceipt(
+	const FSeinProtocolContext& Context,
+	FSeinMatchBootstrapReceipt& OutReceipt,
+	FString& OutError)
+{
+	OutReceipt = FSeinMatchBootstrapReceipt();
+	OutError.Reset();
+	if (!Context.IsValid() || !ActiveProtocolContext.IsValid()
+		|| Context != ActiveProtocolContext)
+	{
+		OutError = TEXT("Bootstrap receipt request does not match the prepared protocol context.");
+		return false;
+	}
+	if (!IsLocalSimulatingParticipant() || !bHasActiveMatchSettings
+		|| SessionSeed == 0)
+	{
+		OutError = TEXT("Local simulation identity, match settings, or session seed is unavailable.");
+		return false;
+	}
+	if (!IsCurrentWorldPreparedDestination(&OutError))
+	{
+		return false;
+	}
+
+	USeinWorldSubsystem* WorldSub = BindLockstepHooksForCurrentWorld();
+	if (!WorldSub)
+	{
+		OutError = TEXT("The destination simulation world is unavailable.");
+		return false;
+	}
+	if (WorldSub->GetCommandProtocolDigest() != Context.CommandProtocolDigest)
+	{
+		OutError = TEXT("The destination world's command protocol differs from the prepared context.");
+		return false;
+	}
+	if (!WorldSub->IsSimulationContentReady()
+		|| WorldSub->GetSimulationContentDigest()
+			!= Context.SimulationContentDigest)
+	{
+		OutError =
+			TEXT("The destination world's simulation content differs from the prepared context.");
+		return false;
+	}
+
+	FSeinMatchBootstrapAuthorityHandle ClaimedAuthority;
+	if (!WorldSub->ClaimMatchBootstrapAuthority(
+			GSeinNetworkBootstrapAuthorityID,
+			this,
+			ClaimedAuthority,
+			OutError))
+	{
+		return false;
+	}
+	MatchBootstrapAuthority = ClaimedAuthority;
+
+	const FGuid AuthorizationContextDigest =
+		SeinComputeBootstrapAuthorizationContextDigest(Context, SessionSeed);
+	if (!AuthorizationContextDigest.IsValid())
+	{
+		OutError = TEXT("The bootstrap authorization-context digest is invalid.");
+		return false;
+	}
+
+	// Session seed is deterministic bootstrap state. Apply it before the first
+	// Ensure call; sealed-state retries must never rewind PRNG state.
+	if (WorldSub->GetMatchBootstrapState()
+		== ESeinMatchBootstrapState::Awaiting)
+	{
+		if (!WorldSub->SeedSimRandom(
+				MatchBootstrapAuthority, SessionSeed, OutError))
+		{
+			return false;
+		}
+	}
+	if (!WorldSub->EnsureMatchBootstrapLocallyReady(
+		MatchBootstrapAuthority,
+		ActiveMatchSettings,
+		AuthorizationContextDigest,
+		OutReceipt,
+		OutError))
+	{
+		return false;
+	}
+	LocalBootstrapReceipt = OutReceipt;
+	return true;
+}
+
+void USeinNetSubsystem::ClientHandleBootstrapReceiptRequest(
+	const FSeinProtocolContext& Context)
+{
+	if (bLocalBootstrapIngressClosed)
+	{
+		UE_LOG(LogSeinNet, Verbose,
+			TEXT("Ignoring bootstrap receipt request after local bootstrap ingress closed."));
+		return;
+	}
+	if (!Context.IsValid()) return;
+	if (PendingLocalProtocolAssignment.IsSet()
+		&& PendingLocalProtocolAssignment.Context == Context
+		&& ActiveProtocolContext != Context)
+	{
+		DeferredBootstrapReceiptRequestContext = Context;
+		UE_LOG(LogSeinNet, Verbose,
+			TEXT("Deferring bootstrap receipt request until the prepared destination world is active."));
+		return;
+	}
+	if (!ActiveProtocolContext.IsValid())
+	{
+		DeferredBootstrapReceiptRequestContext = Context;
+		return;
+	}
+	if (!IsCurrentProtocolContext(
+		Context, TEXT("ClientHandleBootstrapReceiptRequest")))
+	{
+		FailBootstrapSession(
+			TEXT("Bootstrap receipt request carried the wrong protocol context."),
+			/*bNotifyPeers=*/IsServer());
+		ReportLocalBootstrapFailure(Context);
+		return;
+	}
+	if (BootstrapMaterializerRetryHandle.IsValid()
+		&& DeferredBootstrapReceiptRequestContext.IsSet()
+		&& DeferredBootstrapReceiptRequestContext.GetValue() == Context)
+	{
+		// An exact retry cannot extend the bounded wait window. The scheduled
+		// callback will observe a newly bound materializer on the next frame.
+		return;
+	}
+	CancelBootstrapMaterializerRetry();
+	DeferredBootstrapReceiptRequestContext.Reset();
+
+	FSeinMatchBootstrapReceipt Receipt;
+	FString Error;
+	if (!TryMaterializeLocalBootstrapReceipt(Context, Receipt, Error))
+	{
+		UWorld* World = GetWorld();
+		USeinWorldSubsystem* WorldSub =
+			World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
+		if (WorldSub
+			&& WorldSub->GetMatchBootstrapState()
+				== ESeinMatchBootstrapState::Awaiting
+			&& !WorldSub->MatchBootstrapMaterializer.IsBound())
+		{
+			DeferredBootstrapReceiptRequestContext = Context;
+			ScheduleBootstrapMaterializerRetry(Context);
+			UE_LOG(LogSeinNet, Verbose,
+				TEXT("Bootstrap receipt request is waiting for the destination materializer."));
+			return;
+		}
+
+		FailBootstrapSession(
+			Error.IsEmpty()
+				? TEXT("Local match bootstrap materialization failed.")
+				: Error,
+			/*bNotifyPeers=*/IsServer());
+		ReportLocalBootstrapFailure(Context);
+		return;
+	}
+	SubmitLocalBootstrapReceipt(Context, Receipt);
+}
+
+void USeinNetSubsystem::ScheduleBootstrapMaterializerRetry(
+	const FSeinProtocolContext& Context)
+{
+	if (BootstrapMaterializerRetryHandle.IsValid())
+	{
+		if (DeferredBootstrapReceiptRequestContext.IsSet()
+			&& DeferredBootstrapReceiptRequestContext.GetValue() == Context)
+		{
+			return;
+		}
+		CancelBootstrapMaterializerRetry();
+	}
+
+	DeferredBootstrapReceiptRequestContext = Context;
+	BootstrapMaterializerRetryAttempts = 0;
+	BootstrapMaterializerRetryHandle = FTSTicker::GetCoreTicker().AddTicker(
+		FTickerDelegate::CreateUObject(
+			this, &USeinNetSubsystem::TickBootstrapMaterializerRetry));
+	if (BootstrapMaterializerRetryHandle.IsValid()) return;
+
+	DeferredBootstrapReceiptRequestContext.Reset();
+	FailBootstrapSession(
+		TEXT("Failed to schedule destination bootstrap materializer retry."),
+		/*bNotifyPeers=*/IsServer());
+	ReportLocalBootstrapFailure(Context);
+}
+
+bool USeinNetSubsystem::TickBootstrapMaterializerRetry(float DeltaSeconds)
+{
+	(void)DeltaSeconds;
+	if (!DeferredBootstrapReceiptRequestContext.IsSet()
+		|| !BootstrapSessionFailureReason.IsEmpty())
+	{
+		BootstrapMaterializerRetryHandle.Reset();
+		BootstrapMaterializerRetryAttempts = 0;
+		return false;
+	}
+
+	const FSeinProtocolContext Context =
+		DeferredBootstrapReceiptRequestContext.GetValue();
+	if (!ActiveProtocolContext.IsValid() || Context != ActiveProtocolContext)
+	{
+		BootstrapMaterializerRetryHandle.Reset();
+		BootstrapMaterializerRetryAttempts = 0;
+		DeferredBootstrapReceiptRequestContext.Reset();
+		FailBootstrapSession(
+			TEXT("Deferred bootstrap materializer request no longer matches the active context."),
+			/*bNotifyPeers=*/IsServer());
+		ReportLocalBootstrapFailure(Context);
+		return false;
+	}
+
+	UWorld* World = GetWorld();
+	USeinWorldSubsystem* WorldSub =
+		World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
+	if (!WorldSub || WorldSub->GetMatchBootstrapState()
+		== ESeinMatchBootstrapState::Failed)
+	{
+		BootstrapMaterializerRetryHandle.Reset();
+		BootstrapMaterializerRetryAttempts = 0;
+		DeferredBootstrapReceiptRequestContext.Reset();
+		FailBootstrapSession(
+			TEXT("Destination bootstrap became unavailable while waiting for its materializer."),
+			/*bNotifyPeers=*/IsServer());
+		ReportLocalBootstrapFailure(Context);
+		return false;
+	}
+
+	const bool bStillWaiting = WorldSub->GetMatchBootstrapState()
+		== ESeinMatchBootstrapState::Awaiting
+		&& !WorldSub->MatchBootstrapMaterializer.IsBound();
+	if (!bStillWaiting)
+	{
+		// Return false before re-entering the request path; that path may schedule
+		// a new bounded retry if a replacement world is still initializing.
+		BootstrapMaterializerRetryHandle.Reset();
+		BootstrapMaterializerRetryAttempts = 0;
+		DeferredBootstrapReceiptRequestContext.Reset();
+		ClientHandleBootstrapReceiptRequest(Context);
+		return false;
+	}
+
+	++BootstrapMaterializerRetryAttempts;
+	if (BootstrapMaterializerRetryAttempts
+		< GSeinMaxBootstrapMaterializerRetryTicks)
+	{
+		return true;
+	}
+
+	BootstrapMaterializerRetryHandle.Reset();
+	BootstrapMaterializerRetryAttempts = 0;
+	DeferredBootstrapReceiptRequestContext.Reset();
+	FailBootstrapSession(
+		TEXT("Destination bootstrap materializer did not bind within the bounded startup window."),
+		/*bNotifyPeers=*/IsServer());
+	ReportLocalBootstrapFailure(Context);
+	return false;
+}
+
+void USeinNetSubsystem::CancelBootstrapMaterializerRetry()
+{
+	if (BootstrapMaterializerRetryHandle.IsValid())
+	{
+		FTSTicker::GetCoreTicker().RemoveTicker(
+			BootstrapMaterializerRetryHandle);
+		BootstrapMaterializerRetryHandle.Reset();
+	}
+	BootstrapMaterializerRetryAttempts = 0;
+}
+
+void USeinNetSubsystem::SubmitLocalBootstrapReceipt(
+	const FSeinProtocolContext& Context,
+	const FSeinMatchBootstrapReceipt& Receipt)
+{
+	if (bLocalBootstrapIngressClosed) return;
+	if (IsServer())
+	{
+		SubmitBootstrapReceiptForParticipant(
+			LocalParticipantID, Context, Receipt);
+		return;
+	}
+	if (ASeinNetRelay* Relay = LocalRelay.Get())
+	{
+		Relay->Server_ReportMatchBootstrapReceipt(Context, Receipt);
+		PendingLocalBootstrapReceiptReportContext.Reset();
+		return;
+	}
+	PendingLocalBootstrapReceiptReportContext = Context;
+}
+
+void USeinNetSubsystem::SubmitLocalBootstrapAuthorizedReady(
+	const FSeinProtocolContext& Context,
+	const FSeinMatchBootstrapReceipt& Receipt)
+{
+	if (bLocalBootstrapIngressClosed) return;
+	if (IsServer())
+	{
+		SubmitBootstrapAuthorizedReadyForParticipant(
+			LocalParticipantID, Context, Receipt);
+		return;
+	}
+	if (ASeinNetRelay* Relay = LocalRelay.Get())
+	{
+		Relay->Server_ReportMatchBootstrapAuthorizedReady(Context, Receipt);
+		PendingLocalBootstrapAuthorizedReadyReportContext.Reset();
+		return;
+	}
+	PendingLocalBootstrapAuthorizedReadyReportContext = Context;
+}
+
+void USeinNetSubsystem::ClientHandleBootstrapAuthorization(
+	const FSeinProtocolContext& Context,
+	const FSeinMatchBootstrapReceipt& Receipt)
+{
+	if (bLocalBootstrapIngressClosed)
+	{
+		UE_LOG(LogSeinNet, Verbose,
+			TEXT("Ignoring bootstrap authorization after local bootstrap ingress closed."));
+		return;
+	}
+	if (!Context.IsValid() || !Receipt.IsValid()
+		|| Receipt.ContractDigest != Context.MatchSettingsDigest
+		|| Receipt.SimulationContentDigest
+			!= Context.SimulationContentDigest)
+	{
+		FailBootstrapSession(
+			TEXT("Coordinator sent an invalid bootstrap authorization."),
+			/*bNotifyPeers=*/IsServer());
+		ReportLocalBootstrapFailure(Context);
+		return;
+	}
+	if (PendingBootstrapAuthorizationContext.IsSet()
+		!= PendingBootstrapAuthorizationReceipt.IsSet()
+		|| (PendingBootstrapAuthorizationContext.IsSet()
+			&& (PendingBootstrapAuthorizationContext.GetValue() != Context
+				|| PendingBootstrapAuthorizationReceipt.GetValue() != Receipt)))
+	{
+		FailBootstrapSession(
+			TEXT("Coordinator equivocated between bootstrap authorizations."),
+			/*bNotifyPeers=*/IsServer());
+		ReportLocalBootstrapFailure(Context);
+		return;
+	}
+	PendingBootstrapAuthorizationContext = Context;
+	PendingBootstrapAuthorizationReceipt = Receipt;
+	if (PendingLocalProtocolAssignment.IsSet()
+		&& PendingLocalProtocolAssignment.Context == Context
+		&& ActiveProtocolContext != Context)
+	{
+		return;
+	}
+	if (!ActiveProtocolContext.IsValid())
+	{
+		return;
+	}
+	if (!IsCurrentProtocolContext(
+		Context, TEXT("ClientHandleBootstrapAuthorization")))
+	{
+		FailBootstrapSession(
+			TEXT("Bootstrap authorization carried the wrong protocol context."),
+			/*bNotifyPeers=*/IsServer());
+		ReportLocalBootstrapFailure(Context);
+		return;
+	}
+
+	TryAuthorizeLocalBootstrap();
+	TryLaunchLocalBootstrap();
+}
+
+void USeinNetSubsystem::ClientHandleBootstrapLaunch(
+	const FSeinProtocolContext& Context,
+	const FSeinMatchBootstrapReceipt& Receipt)
+{
+	if (bLocalBootstrapIngressClosed)
+	{
+		UE_LOG(LogSeinNet, Verbose,
+			TEXT("Ignoring bootstrap launch after local bootstrap ingress closed."));
+		return;
+	}
+	if (!Context.IsValid() || !Receipt.IsValid()
+		|| Receipt.ContractDigest != Context.MatchSettingsDigest
+		|| Receipt.SimulationContentDigest
+			!= Context.SimulationContentDigest)
+	{
+		FailLocalBootstrapAfterCommit(
+			TEXT("Coordinator sent an invalid bootstrap launch."));
+		return;
+	}
+	if (PendingBootstrapLaunchContext.IsSet()
+		!= PendingBootstrapLaunchReceipt.IsSet()
+		|| (PendingBootstrapLaunchContext.IsSet()
+			&& (PendingBootstrapLaunchContext.GetValue() != Context
+				|| PendingBootstrapLaunchReceipt.GetValue() != Receipt)))
+	{
+		FailLocalBootstrapAfterCommit(
+			TEXT("Coordinator equivocated between bootstrap launch envelopes."));
+		return;
+	}
+	PendingBootstrapLaunchContext = Context;
+	PendingBootstrapLaunchReceipt = Receipt;
+	if (PendingLocalProtocolAssignment.IsSet()
+		&& PendingLocalProtocolAssignment.Context == Context
+		&& ActiveProtocolContext != Context)
+	{
+		return;
+	}
+	if (!ActiveProtocolContext.IsValid()) return;
+	if (!IsCurrentProtocolContext(
+		Context, TEXT("ClientHandleBootstrapLaunch")))
+	{
+		FailLocalBootstrapAfterCommit(
+			TEXT("Bootstrap launch carried the wrong protocol context."));
+		return;
+	}
+
+	TryLaunchLocalBootstrap();
+}
+
+void USeinNetSubsystem::ClientHandleBootstrapFailure(
+	const FSeinProtocolContext& Context,
+	const FString& Reason)
+{
+	if (PendingLocalProtocolAssignment.IsSet()
+		&& PendingLocalProtocolAssignment.Context == Context
+		&& ActiveProtocolContext != Context)
+	{
+		ClientHandlePreparedMatchTravelCancelled(Context);
+		UE_LOG(LogSeinNet, Error,
+			TEXT("Prepared destination bootstrap failed before activation; source epoch preserved: %s"),
+			*Reason.Left(512));
+		return;
+	}
+	if (bLocalBootstrapIngressClosed)
+	{
+		UE_LOG(LogSeinNet, Verbose,
+			TEXT("Ignoring bootstrap failure after local bootstrap ingress closed."));
+		return;
+	}
+	if (!ActiveProtocolContext.IsValid())
+	{
+		UE_LOG(LogSeinNet, Warning,
+			TEXT("Ignoring an unbound bootstrap-failure message before protocol assignment."));
+		return;
+	}
+	if (Context != ActiveProtocolContext)
+	{
+		FailBootstrapSession(
+			TEXT("Coordinator bootstrap-failure message carried the wrong context."),
+			/*bNotifyPeers=*/false);
+		return;
+	}
+	FailBootstrapSession(Reason, /*bNotifyPeers=*/false);
+}
+
+void USeinNetSubsystem::ClientHandlePreparedMatchTravelCancelled(
+	const FSeinProtocolContext& Context)
+{
+	if (!PendingLocalProtocolAssignment.IsSet()
+		|| PendingLocalProtocolAssignment.Context != Context)
+	{
+		return;
+	}
+	PendingLocalProtocolAssignment.Reset();
+	if (DeferredBootstrapReceiptRequestContext.IsSet()
+		&& DeferredBootstrapReceiptRequestContext.GetValue() == Context)
+	{
+		DeferredBootstrapReceiptRequestContext.Reset();
+	}
+	if (PendingBootstrapAuthorizationContext.IsSet()
+		&& PendingBootstrapAuthorizationContext.GetValue() == Context)
+	{
+		PendingBootstrapAuthorizationContext.Reset();
+		PendingBootstrapAuthorizationReceipt.Reset();
+	}
+	if (PendingBootstrapLaunchContext.IsSet()
+		&& PendingBootstrapLaunchContext.GetValue() == Context)
+	{
+		PendingBootstrapLaunchContext.Reset();
+		PendingBootstrapLaunchReceipt.Reset();
+	}
+	if (!PendingAuthorityProtocolState.IsSet())
+	{
+		CancelPendingProtocolPromotion();
+	}
+	UE_LOG(LogSeinNet, Log,
+		TEXT("Cancelled an unactivated prepared destination assignment."));
 }
 
 void USeinNetSubsystem::TryStartLocalSession()
 {
 	if (!bStartSessionRequested) return;
-
-	UWorld* World = GetWorld();
-	const bool bNetworked = IsNetworkingActive();
-	if (bNetworked && IsServer())
+	if (IsNetworkingActive())
 	{
-		EnsureSessionSeed();
-	}
-	USeinWorldSubsystem* WorldSub = bNetworked
-		? BindLockstepHooksForCurrentWorld()
-		: (World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr);
-	if (!WorldSub)
-	{
-		UE_LOG(LogSeinNet, Verbose, TEXT("TryStartLocalSession: waiting for USeinWorldSubsystem."));
+		bStartSessionRequested = false;
+		UE_LOG(LogSeinNet, Warning,
+			TEXT("TryStartLocalSession: network launch is coordinator-controlled; request rejected."));
 		return;
 	}
+	UWorld* World = GetWorld();
+	USeinWorldSubsystem* WorldSub =
+		World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
+	if (!WorldSub) return;
 	if (WorldSub->IsSimulationRunning())
 	{
 		bStartSessionRequested = false;
-		UE_LOG(LogSeinNet, Verbose, TEXT("TryStartLocalSession: sim already running — request satisfied."));
+		return;
+	}
+	if (WorldSub->StandaloneBootstrapLauncher.IsBound()
+		&& WorldSub->StandaloneBootstrapLauncher.Execute())
+	{
+		bStartSessionRequested = false;
+	}
+}
+
+void USeinNetSubsystem::TryAuthorizeLocalBootstrap()
+{
+	if (!IsNetworkingActive()
+		|| !PendingBootstrapAuthorizationContext.IsSet()
+		|| !PendingBootstrapAuthorizationReceipt.IsSet()
+		|| !BootstrapSessionFailureReason.IsEmpty())
+	{
 		return;
 	}
 
-	if (bNetworked)
+	USeinWorldSubsystem* WorldSub = BindLockstepHooksForCurrentWorld();
+	if (!WorldSub) return;
+	const bool bHooksReady = CachedWorldSub.Get() == WorldSub
+		&& TickCompletedHandle.IsValid()
+		&& ExecutionTopologyInvalidatedHandle.IsValid()
+		&& WorldSub->TurnReadyResolver.IsBound()
+		&& WorldSub->TurnConsumeNotifier.IsBound()
+		&& WorldSub->HasAIEmitInterceptor()
+		&& WorldSub->HasLocalCommandSubmitter();
+	if (!AreNetworkStartPrerequisitesReady(bHooksReady)) return;
+
+	const FSeinProtocolContext AuthorizationContext =
+		PendingBootstrapAuthorizationContext.GetValue();
+	const FSeinMatchBootstrapReceipt AuthorizationReceipt =
+		PendingBootstrapAuthorizationReceipt.GetValue();
+	if (AuthorizationContext != ActiveProtocolContext
+		|| AuthorizationReceipt.ContractDigest
+			!= AuthorizationContext.MatchSettingsDigest
+		|| AuthorizationReceipt.SimulationContentDigest
+			!= AuthorizationContext.SimulationContentDigest)
 	{
-		const bool bHooksReady =
-			CachedWorldSub.Get() == WorldSub &&
-			TickCompletedHandle.IsValid() &&
-			WorldSub->TurnReadyResolver.IsBound() &&
-			WorldSub->TurnConsumeNotifier.IsBound() &&
-			WorldSub->AIEmitInterceptor.IsBound();
-		if (!AreNetworkStartPrerequisitesReady(bHooksReady))
+		FailBootstrapSession(
+			TEXT("Deferred bootstrap authorization no longer matches the active protocol context."),
+			/*bNotifyPeers=*/IsServer());
+		ReportLocalBootstrapFailure(AuthorizationContext);
+		return;
+	}
+
+	FSeinMatchBootstrapReceipt LocalReceipt;
+	FString Error;
+	if (!TryMaterializeLocalBootstrapReceipt(
+			AuthorizationContext, LocalReceipt, Error)
+		|| LocalReceipt != AuthorizationReceipt)
+	{
+		if (Error.IsEmpty())
 		{
-			UE_LOG(LogSeinNet, Log,
-				TEXT("TryStartLocalSession: deferred (Dedicated=%d Relay=%d Slot=%u SeedReady=%d Hooks=%d)."),
-				IsDedicatedAuthority() ? 1 : 0, LocalRelay.IsValid() ? 1 : 0,
-				LocalPlayerID.Value, SessionSeed != 0 ? 1 : 0, bHooksReady ? 1 : 0);
-			return;
+			Error = TEXT("Coordinator authorization differs from the local sealed bootstrap receipt.");
 		}
+		FailBootstrapSession(Error, /*bNotifyPeers=*/IsServer());
+		ReportLocalBootstrapFailure(AuthorizationContext);
+		return;
 	}
 
-	bStartSessionRequested = false;
-	// Seed the deterministic PRNG with the session seed BEFORE the sim starts.
-	// Every peer (host + clients) calls this with the same SessionSeed (delivered
-	// via the relay's replicated SessionSeed property), so cross-peer rolls
-	// produce identical results from tick 0. Without this, accuracy / damage /
-	// any PRNG-driven sim code diverges across machines from the first call.
-	if (SessionSeed != 0)
+	const FGuid AuthorizationContextDigest =
+		SeinComputeBootstrapAuthorizationContextDigest(
+			AuthorizationContext, SessionSeed);
+	if (!WorldSub->AuthorizeMatchBootstrap(
+			MatchBootstrapAuthority,
+			AuthorizationReceipt,
+			AuthorizationContextDigest,
+			Error))
 	{
-		WorldSub->SeedSimRandom(SessionSeed);
+		if (Error.IsEmpty())
+		{
+			Error = TEXT("Core rejected bootstrap authorization.");
+		}
+		FailBootstrapSession(Error, /*bNotifyPeers=*/IsServer());
+		ReportLocalBootstrapFailure(AuthorizationContext);
+		return;
 	}
 
-	UE_LOG(LogSeinNet, Log, TEXT("TryStartLocalSession: starting sim at tick 0 with gate engaged."));
-	WorldSub->StartSimulation();
+	PendingBootstrapAuthorizationContext.Reset();
+	PendingBootstrapAuthorizationReceipt.Reset();
+	SubmitLocalBootstrapAuthorizedReady(
+		AuthorizationContext, AuthorizationReceipt);
+	UE_LOG(LogSeinNet, Log,
+		TEXT("Network bootstrap is locally authorized and awaiting the coordinator launch barrier."));
 
-	// Pre-fire the first non-grace heartbeat (turn = InputDelayTurns).
-	//
-	// Why: configs with `InputDelayTurns × TicksPerTurn < 2` (only TPT=1 +
-	// ID=1 today, but any future config that lands here) have zero grace
-	// ticks before the first gated boundary — without seeding turn
-	// InputDelayTurns here, the sim hits the gate at tick 1 with nothing
-	// having been submitted yet, sim stalls indefinitely. For commoner
-	// configs (TPT≥2 or ID≥2) OnSimTickCompleted handles it, but pre-firing
-	// is harmless — server's per-slot map dedupes via Add().
-	//
-	// CRITICAL: only advance LastSubmittedTurn if the submission was
-	// ACTUALLY sent. Pre-fire can be silently dropped if LocalRelay is null
-	// at this exact moment (race: OnRep_AssignedPlayerID hasn't fired
-	// before Client_StartSession arrives — possible because both are
-	// replication-channel events delivered together, ordering is "usually
-	// OnRep first" but not contractually guaranteed). If we advance
-	// LastSubmittedTurn unconditionally, the catch-up loop in
-	// OnSimTickCompleted sees the turn as "already submitted" and skips
-	// it — server never gets that client's turn 2 → all peers stall
-	// forever waiting for the missing slot. Caused intermittent freeze
-	// at tick 5 (= last grace-period tick for TPT=3+ID=2).
-	if (LocalPlayerID.IsValid() && bNetworked)
+}
+
+void USeinNetSubsystem::TryLaunchLocalBootstrap()
+{
+	if (!IsNetworkingActive()
+		|| !PendingBootstrapLaunchContext.IsSet()
+		|| !PendingBootstrapLaunchReceipt.IsSet()
+		|| !BootstrapSessionFailureReason.IsEmpty())
+	{
+		return;
+	}
+	if (PendingBootstrapAuthorizationContext.IsSet())
+	{
+		TryAuthorizeLocalBootstrap();
+		if (PendingBootstrapAuthorizationContext.IsSet()) return;
+	}
+	if (PendingBootstrapAuthorizationContext.IsSet()
+		|| PendingBootstrapAuthorizationReceipt.IsSet())
+	{
+		FailLocalBootstrapAfterCommit(
+			TEXT("Local bootstrap authorization cache is internally inconsistent."));
+		return;
+	}
+
+	USeinWorldSubsystem* WorldSub = BindLockstepHooksForCurrentWorld();
+	if (!WorldSub) return;
+	const bool bHooksReady = CachedWorldSub.Get() == WorldSub
+		&& TickCompletedHandle.IsValid()
+		&& ExecutionTopologyInvalidatedHandle.IsValid()
+		&& WorldSub->TurnReadyResolver.IsBound()
+		&& WorldSub->TurnConsumeNotifier.IsBound()
+		&& WorldSub->HasAIEmitInterceptor()
+		&& WorldSub->HasLocalCommandSubmitter();
+	if (!AreNetworkStartPrerequisitesReady(bHooksReady)) return;
+
+	const FSeinProtocolContext LaunchContext =
+		PendingBootstrapLaunchContext.GetValue();
+	const FSeinMatchBootstrapReceipt LaunchReceipt =
+		PendingBootstrapLaunchReceipt.GetValue();
+	if (LaunchContext != ActiveProtocolContext
+		|| LaunchReceipt.ContractDigest != LaunchContext.MatchSettingsDigest
+		|| LaunchReceipt.SimulationContentDigest
+			!= LaunchContext.SimulationContentDigest
+		|| !LocalBootstrapReceipt.IsSet()
+		|| LocalBootstrapReceipt.GetValue() != LaunchReceipt)
+	{
+		FailLocalBootstrapAfterCommit(
+			TEXT("Deferred bootstrap launch no longer matches the locally authorized receipt/context."));
+		return;
+	}
+
+	FString Error;
+	if (!WorldSub->LaunchAuthorizedMatchBootstrap(
+			MatchBootstrapAuthority, Error))
+	{
+		if (Error.IsEmpty())
+		{
+			Error = TEXT("Core rejected the coordinator's tick-zero launch.");
+		}
+		FailLocalBootstrapAfterCommit(Error);
+		return;
+	}
+
+	PendingBootstrapLaunchContext.Reset();
+	PendingBootstrapLaunchReceipt.Reset();
+	bLocalBootstrapIngressClosed = true;
+	CancelBootstrapMaterializerRetry();
+	DeferredBootstrapReceiptRequestContext.Reset();
+	PendingLocalBootstrapReceiptReportContext.Reset();
+	PendingLocalBootstrapAuthorizedReadyReportContext.Reset();
+	PendingBootstrapAuthorizationContext.Reset();
+	PendingBootstrapAuthorizationReceipt.Reset();
+	UE_LOG(LogSeinNet, Log,
+		TEXT("Network bootstrap launch consumed the exact authorized receipt."));
+
+	// Pre-fire the first non-grace heartbeat. Only a successful handoff advances
+	// the queue ledger; relay-assignment races retain this exact heartbeat.
+	if (LocalPlayerID.IsValid())
 	{
 		const int32 InputDelay = GetInputDelayTurns();
 		if (LastQueuedTurn < InputDelay)
 		{
-			UE_LOG(LogSeinNet, Verbose, TEXT("TryStartLocalSession: queueing heartbeat for turn %d (gate seed)."), InputDelay);
-			QueueTurnSubmissionsThrough(InputDelay, /*bAttachCurrentCommands=*/false);
+			QueueTurnSubmissionsThrough(
+				InputDelay, /*bAttachCurrentCommands=*/false);
 			FlushPendingTurnSubmissions();
 		}
 	}
+}
+
+void USeinNetSubsystem::ServerHandleBootstrapReceipt(
+	ASeinNetRelay* SourceRelay,
+	const FSeinProtocolContext& Context,
+	const FSeinMatchBootstrapReceipt& Receipt)
+{
+	if (!IsServer() || !SourceRelay) return;
+	if (!bBootstrapLaunchBarrierActive)
+	{
+		UE_LOG(LogSeinNet, Verbose,
+			TEXT("Ignoring bootstrap receipt outside the coordinator prepare barrier."));
+		return;
+	}
+	const FSeinNetworkParticipantID ParticipantID =
+		RelayToParticipant.FindRef(SourceRelay);
+	if (!ParticipantID.IsValid()) return;
+	SubmitBootstrapReceiptForParticipant(ParticipantID, Context, Receipt);
+}
+
+void USeinNetSubsystem::ServerHandleBootstrapAuthorizedReady(
+	ASeinNetRelay* SourceRelay,
+	const FSeinProtocolContext& Context,
+	const FSeinMatchBootstrapReceipt& Receipt)
+{
+	if (!IsServer() || !SourceRelay) return;
+	if (!bBootstrapLaunchBarrierActive)
+	{
+		UE_LOG(LogSeinNet, Verbose,
+			TEXT("Ignoring bootstrap authorization-ready evidence outside the coordinator prepare barrier."));
+		return;
+	}
+	const FSeinNetworkParticipantID ParticipantID =
+		RelayToParticipant.FindRef(SourceRelay);
+	if (!ParticipantID.IsValid()) return;
+	SubmitBootstrapAuthorizedReadyForParticipant(
+		ParticipantID, Context, Receipt);
+}
+
+void USeinNetSubsystem::ServerHandleBootstrapFailure(
+	ASeinNetRelay* SourceRelay,
+	const FSeinProtocolContext& Context)
+{
+	if (!IsServer() || !SourceRelay) return;
+	if (!bBootstrapLaunchBarrierActive)
+	{
+		UE_LOG(LogSeinNet, Verbose,
+			TEXT("Ignoring bootstrap failure outside the coordinator prepare barrier."));
+		return;
+	}
+	const FSeinNetworkParticipantID ParticipantID =
+		RelayToParticipant.FindRef(SourceRelay);
+	const FSeinParticipantBinding* Binding =
+		FindParticipantBinding(ParticipantID);
+	if (!Binding || !Binding->bSimulates) return;
+	if (Context != ActiveProtocolContext)
+	{
+		FailBootstrapSession(
+			TEXT("A simulating participant reported bootstrap failure under the wrong context."),
+			/*bNotifyPeers=*/true);
+		return;
+	}
+	FailBootstrapSession(
+		FString::Printf(
+			TEXT("Simulating participant %s failed local match bootstrap."),
+			*ParticipantID.ToCanonicalString()),
+		/*bNotifyPeers=*/true);
+}
+
+void USeinNetSubsystem::SubmitBootstrapReceiptForParticipant(
+	FSeinNetworkParticipantID ParticipantID,
+	const FSeinProtocolContext& Context,
+	const FSeinMatchBootstrapReceipt& Receipt)
+{
+	if (!IsServer() || !BootstrapSessionFailureReason.IsEmpty()) return;
+	if (!bBootstrapLaunchBarrierActive)
+	{
+		UE_LOG(LogSeinNet, Verbose,
+			TEXT("Ignoring bootstrap receipt submission after coordinator ingress closed."));
+		return;
+	}
+	const FSeinParticipantBinding* Binding =
+		FindParticipantBinding(ParticipantID);
+	if (!Binding || !Binding->bSimulates) return;
+
+	const ESeinBootstrapConsensusSubmitResult Result =
+		BootstrapConsensus.Submit(Context, ParticipantID, Receipt);
+	switch (Result)
+	{
+	case ESeinBootstrapConsensusSubmitResult::Accepted:
+	case ESeinBootstrapConsensusSubmitResult::IdenticalRetry:
+		return;
+	case ESeinBootstrapConsensusSubmitResult::AgreementReached:
+		DispatchBootstrapAuthorization();
+		return;
+	case ESeinBootstrapConsensusSubmitResult::AlreadyAgreed:
+		return;
+	case ESeinBootstrapConsensusSubmitResult::AlreadyFailed:
+		FailBootstrapSession(
+			TEXT("Tick-zero bootstrap consensus previously failed."),
+			/*bNotifyPeers=*/true);
+		return;
+	case ESeinBootstrapConsensusSubmitResult::InvalidContext:
+		FailBootstrapSession(
+			TEXT("A bootstrap receipt carried the wrong protocol context."),
+			/*bNotifyPeers=*/true);
+		return;
+	case ESeinBootstrapConsensusSubmitResult::InvalidReceipt:
+		FailBootstrapSession(
+			TEXT("A simulating participant reported an invalid bootstrap receipt."),
+			/*bNotifyPeers=*/true);
+		return;
+	case ESeinBootstrapConsensusSubmitResult::ContractDigestMismatch:
+		FailBootstrapSession(
+			TEXT("A bootstrap receipt does not bind the prepared match-settings contract."),
+			/*bNotifyPeers=*/true);
+		return;
+	case ESeinBootstrapConsensusSubmitResult::
+		SimulationContentDigestMismatch:
+		FailBootstrapSession(
+			TEXT("A bootstrap receipt does not bind the prepared simulation content."),
+			/*bNotifyPeers=*/true);
+		return;
+	case ESeinBootstrapConsensusSubmitResult::InvalidParticipant:
+	case ESeinBootstrapConsensusSubmitResult::UnexpectedParticipant:
+		FailBootstrapSession(
+			TEXT("An unauthenticated participant submitted bootstrap evidence."),
+			/*bNotifyPeers=*/true);
+		return;
+	case ESeinBootstrapConsensusSubmitResult::ConflictingRetry:
+		FailBootstrapSession(
+			TEXT("A simulating participant equivocated between bootstrap receipts."),
+			/*bNotifyPeers=*/true);
+		return;
+	case ESeinBootstrapConsensusSubmitResult::ReceiptDisagreement:
+		FailBootstrapSession(
+			TEXT("Simulating participants produced different tick-zero bootstrap receipts."),
+			/*bNotifyPeers=*/true);
+		return;
+	case ESeinBootstrapConsensusSubmitResult::InvalidPhase:
+		FailBootstrapSession(
+			TEXT("Bootstrap receipt evidence arrived in an invalid phase."),
+			/*bNotifyPeers=*/true);
+		return;
+	default:
+		return;
+	}
+}
+
+void USeinNetSubsystem::SubmitBootstrapAuthorizedReadyForParticipant(
+	FSeinNetworkParticipantID ParticipantID,
+	const FSeinProtocolContext& Context,
+	const FSeinMatchBootstrapReceipt& Receipt)
+{
+	if (!IsServer() || !BootstrapSessionFailureReason.IsEmpty()) return;
+	if (!bBootstrapLaunchBarrierActive)
+	{
+		UE_LOG(LogSeinNet, Verbose,
+			TEXT("Ignoring authorization-ready submission after coordinator ingress closed."));
+		return;
+	}
+	const FSeinParticipantBinding* Binding =
+		FindParticipantBinding(ParticipantID);
+	if (!Binding || !Binding->bSimulates) return;
+
+	const ESeinBootstrapConsensusSubmitResult Result =
+		BootstrapConsensus.SubmitAuthorizedReady(
+			Context, ParticipantID, Receipt);
+	switch (Result)
+	{
+	case ESeinBootstrapConsensusSubmitResult::Accepted:
+	case ESeinBootstrapConsensusSubmitResult::IdenticalRetry:
+		return;
+	case ESeinBootstrapConsensusSubmitResult::AuthorizationReady:
+		DispatchBootstrapLaunch();
+		return;
+	case ESeinBootstrapConsensusSubmitResult::ConflictingRetry:
+		FailBootstrapSession(
+			TEXT("A simulating participant equivocated after bootstrap authorization."),
+			/*bNotifyPeers=*/true);
+		return;
+	case ESeinBootstrapConsensusSubmitResult::ReceiptDisagreement:
+		FailBootstrapSession(
+			TEXT("An authorization-ready acknowledgement does not match the agreed receipt."),
+			/*bNotifyPeers=*/true);
+		return;
+	case ESeinBootstrapConsensusSubmitResult::ContractDigestMismatch:
+		FailBootstrapSession(
+			TEXT("An authorization-ready acknowledgement does not bind the prepared match contract."),
+			/*bNotifyPeers=*/true);
+		return;
+	case ESeinBootstrapConsensusSubmitResult::
+		SimulationContentDigestMismatch:
+		FailBootstrapSession(
+			TEXT("An authorization-ready acknowledgement does not bind the prepared simulation content."),
+			/*bNotifyPeers=*/true);
+		return;
+	case ESeinBootstrapConsensusSubmitResult::AlreadyFailed:
+		FailBootstrapSession(
+			TEXT("Bootstrap consensus failed before authorization readiness completed."),
+			/*bNotifyPeers=*/true);
+		return;
+	default:
+		FailBootstrapSession(
+			TEXT("Invalid authorization-ready bootstrap evidence was rejected."),
+			/*bNotifyPeers=*/true);
+		return;
+	}
+}
+
+void USeinNetSubsystem::ReportLocalBootstrapFailure(
+	const FSeinProtocolContext& Context)
+{
+	if (bLocalBootstrapIngressClosed)
+	{
+		UE_LOG(LogSeinNet, Verbose,
+			TEXT("Ignoring local bootstrap failure after bootstrap ingress closed."));
+		return;
+	}
+	if (bBootstrapFailureReported) return;
+	bBootstrapFailureReported = true;
+	if (IsServer())
+	{
+		FailBootstrapSession(
+			TEXT("The coordinator process failed local match bootstrap."),
+			/*bNotifyPeers=*/true);
+	}
+	else if (ASeinNetRelay* Relay = LocalRelay.Get())
+	{
+		Relay->Server_ReportMatchBootstrapFailure(Context);
+	}
+}
+
+void USeinNetSubsystem::FailBootstrapSession(
+	const FString& Reason,
+	bool bNotifyPeers)
+{
+	if ((IsServer() && BootstrapConsensus.IsLaunchComplete())
+		|| (!IsServer() && bLocalBootstrapIngressClosed))
+	{
+		UE_LOG(LogSeinNet, Warning,
+			TEXT("Ignoring bootstrap rollback request after launch commit: %s"),
+			*Reason.Left(512));
+		return;
+	}
+	if (!BootstrapSessionFailureReason.IsEmpty()) return;
+	BootstrapSessionFailureReason = (Reason.IsEmpty()
+		? TEXT("Match bootstrap failed without a diagnostic.")
+		: Reason).Left(512);
+	bServerStartRequested = false;
+	bStartSessionRequested = false;
+	bBootstrapLaunchBarrierActive = false;
+	bLocalBootstrapIngressClosed = true;
+	CancelPendingProtocolPromotion();
+	PendingAuthorityProtocolState.Reset();
+	PendingLocalProtocolAssignment.Reset();
+	CancelBootstrapMaterializerRetry();
+	CancelBootstrapCoordinatorTimeout();
+	DeferredBootstrapReceiptRequestContext.Reset();
+	PendingLocalBootstrapReceiptReportContext.Reset();
+	PendingLocalBootstrapAuthorizedReadyReportContext.Reset();
+	PendingBootstrapAuthorizationContext.Reset();
+	PendingBootstrapAuthorizationReceipt.Reset();
+	PendingBootstrapLaunchContext.Reset();
+	PendingBootstrapLaunchReceipt.Reset();
+
+	if (UWorld* World = GetWorld())
+	{
+		if (USeinWorldSubsystem* WorldSub =
+			World->GetSubsystem<USeinWorldSubsystem>())
+		{
+			WorldSub->StopSimulation();
+			if (MatchBootstrapAuthority.IsValid())
+			{
+				FString FailureError;
+				if (!WorldSub->FailMatchBootstrap(
+						MatchBootstrapAuthority,
+						BootstrapSessionFailureReason,
+						FailureError))
+				{
+					UE_LOG(LogSeinNet, Error,
+						TEXT("Core rejected Net bootstrap failure authority: %s"),
+						*FailureError);
+				}
+			}
+		}
+	}
+	UE_LOG(LogSeinNet, Error, TEXT("Match bootstrap failed: %s"),
+		*BootstrapSessionFailureReason);
+
+	if (bNotifyPeers && IsServer() && ActiveProtocolContext.IsValid())
+	{
+		for (const TWeakObjectPtr<ASeinNetRelay>& WeakRelay : Relays)
+		{
+			if (ASeinNetRelay* Relay = WeakRelay.Get())
+			{
+				Relay->Client_FailMatchBootstrap(
+					ActiveProtocolContext, BootstrapSessionFailureReason);
+			}
+		}
+	}
+}
+
+void USeinNetSubsystem::FailLocalBootstrapAfterCommit(const FString& Reason)
+{
+	if (!BootstrapSessionFailureReason.IsEmpty()) return;
+	BootstrapSessionFailureReason = (Reason.IsEmpty()
+		? TEXT("Local tick-zero launch failed after coordinator commit.")
+		: Reason).Left(512);
+	bServerStartRequested = false;
+	bStartSessionRequested = false;
+	bBootstrapLaunchBarrierActive = false;
+	bLocalBootstrapIngressClosed = true;
+	CancelPendingProtocolPromotion();
+	PendingAuthorityProtocolState.Reset();
+	PendingLocalProtocolAssignment.Reset();
+	CancelBootstrapMaterializerRetry();
+	CancelBootstrapCoordinatorTimeout();
+	DeferredBootstrapReceiptRequestContext.Reset();
+	PendingLocalBootstrapReceiptReportContext.Reset();
+	PendingLocalBootstrapAuthorizedReadyReportContext.Reset();
+	PendingBootstrapAuthorizationContext.Reset();
+	PendingBootstrapAuthorizationReceipt.Reset();
+	PendingBootstrapLaunchContext.Reset();
+	PendingBootstrapLaunchReceipt.Reset();
+
+	if (UWorld* World = GetWorld())
+	{
+		if (USeinWorldSubsystem* WorldSub =
+			World->GetSubsystem<USeinWorldSubsystem>())
+		{
+			WorldSub->StopSimulation();
+			if (MatchBootstrapAuthority.IsValid())
+			{
+				FString FailureError;
+				if (!WorldSub->FailMatchBootstrap(
+						MatchBootstrapAuthority,
+						BootstrapSessionFailureReason,
+						FailureError))
+				{
+					UE_LOG(LogSeinNet, Error,
+						TEXT("Core rejected local post-commit bootstrap failure: %s"),
+						*FailureError);
+				}
+			}
+		}
+	}
+	UE_LOG(LogSeinNet, Error,
+		TEXT("Local bootstrap process failed after launch commit: %s"),
+		*BootstrapSessionFailureReason);
+}
+
+void USeinNetSubsystem::DispatchBootstrapReceiptRequests()
+{
+	if (BootstrapConsensus.GetState()
+		!= ESeinBootstrapConsensusState::CollectingReceipts)
+	{
+		return;
+	}
+	bBootstrapLaunchBarrierActive = true;
+	StartBootstrapCoordinatorTimeout();
+	if (!BootstrapSessionFailureReason.IsEmpty()) return;
+	const TArray<FSeinNetworkParticipantID> Missing =
+		BootstrapConsensus.GetMissingParticipants();
+	TSet<FSeinNetworkParticipantID> MissingSet;
+	for (const FSeinNetworkParticipantID ParticipantID : Missing)
+	{
+		MissingSet.Add(ParticipantID);
+	}
+
+	if (MissingSet.Contains(LocalParticipantID)
+		&& IsLocalSimulatingParticipant())
+	{
+		// The coordinator uses the exact same local request/submit path as peers.
+		ClientHandleBootstrapReceiptRequest(ActiveProtocolContext);
+	}
+
+	TSet<FSeinNetworkParticipantID> Requested;
+	for (const TWeakObjectPtr<ASeinNetRelay>& WeakRelay : Relays)
+	{
+		ASeinNetRelay* Relay = WeakRelay.Get();
+		if (!Relay) continue;
+		const FSeinNetworkParticipantID ParticipantID =
+			RelayToParticipant.FindRef(Relay);
+		if (ParticipantID == LocalParticipantID
+			|| !MissingSet.Contains(ParticipantID)
+			|| Requested.Contains(ParticipantID))
+		{
+			continue;
+		}
+		Requested.Add(ParticipantID);
+		Relay->Client_RequestMatchBootstrapReceipt(ActiveProtocolContext);
+	}
+}
+
+void USeinNetSubsystem::DispatchBootstrapAuthorization()
+{
+	if (!IsServer() || !bServerStartRequested
+		|| !BootstrapSessionFailureReason.IsEmpty())
+	{
+		return;
+	}
+	FSeinMatchBootstrapReceipt AgreedReceipt;
+	if (BootstrapConsensus.GetState()
+			!= ESeinBootstrapConsensusState::ReceiptAgreed
+		|| !BootstrapConsensus.GetAgreedReceipt(AgreedReceipt)
+		|| !BootstrapConsensus.BeginAuthorization())
+	{
+		FailBootstrapSession(
+			TEXT("Bootstrap authorization was requested without receipt agreement."),
+			/*bNotifyPeers=*/true);
+		return;
+	}
+	if (IsLocalSimulatingParticipant()
+		&& (!LocalBootstrapReceipt.IsSet()
+			|| LocalBootstrapReceipt.GetValue() != AgreedReceipt))
+	{
+		FailBootstrapSession(
+			TEXT("Coordinator local receipt differs from the agreed bootstrap receipt."),
+			/*bNotifyPeers=*/true);
+		return;
+	}
+
+	USeinWorldSubsystem* AuthorityWorld = IsLocalSimulatingParticipant()
+		? BindLockstepHooksForCurrentWorld()
+		: nullptr;
+	if (AuthorityWorld)
+	{
+		if (!ReplayWriter) ReplayWriter = NewObject<USeinReplayWriter>(this);
+		if (ReplayWriter && !ReplayWriter->IsRecording())
+		{
+			FSeinReplayHeader Header;
+			Header.CommandProtocolDigest =
+				AuthorityWorld->GetCommandProtocolDigest();
+			Header.MatchSettingsDigest =
+				AuthorityWorld->GetMatchSettingsDigest();
+			Header.BootstrapReceipt = AgreedReceipt;
+			Header.ConfigFingerprint = AuthorityWorld->GetConfigFingerprint();
+			SeinReplayCompatibility::StampCurrent(Header, GetWorld());
+			Header.RandomSeed = AuthorityWorld->GetSessionSeed();
+			Header.SettingsSnapshot = AuthorityWorld->GetMatchSettings();
+			for (const FSeinMatchSlot& Slot : Header.SettingsSnapshot.Slots)
+			{
+				if ((Slot.State != ESeinSlotState::Human
+						&& Slot.State != ESeinSlotState::AI)
+					|| Slot.SlotIndex <= 0 || Slot.SlotIndex > MAX_uint8)
+				{
+					continue;
+				}
+				FSeinPlayerRegistration& Player =
+					Header.Players.Emplace_GetRef();
+				Player.PlayerID = FSeinPlayerID(
+					static_cast<uint8>(Slot.SlotIndex));
+				Player.FactionID = Slot.FactionID;
+				Player.TeamID = Slot.TeamID;
+				Player.bIsAI = Slot.State == ESeinSlotState::AI;
+			}
+			Header.StartTick = AuthorityWorld->GetCurrentTick();
+			Header.RecordedAt = FDateTime::UtcNow();
+			ReplayWriter->StartRecording(Header);
+		}
+	}
+
+	for (const TWeakObjectPtr<ASeinNetRelay>& WeakRelay : Relays)
+	{
+		ASeinNetRelay* Relay = WeakRelay.Get();
+		if (!Relay) continue;
+		const FSeinNetworkParticipantID ParticipantID =
+			RelayToParticipant.FindRef(Relay);
+		const FSeinParticipantBinding* Binding =
+			FindParticipantBinding(ParticipantID);
+		if (!Binding || !Binding->bSimulates
+			|| ParticipantID == LocalParticipantID)
+		{
+			continue;
+		}
+		Relay->Client_AuthorizeMatchBootstrap(
+			ActiveProtocolContext, AgreedReceipt);
+	}
+	if (IsLocalSimulatingParticipant())
+	{
+		ClientHandleBootstrapAuthorization(
+			ActiveProtocolContext, AgreedReceipt);
+	}
+}
+
+void USeinNetSubsystem::DispatchBootstrapLaunch()
+{
+	if (!IsServer() || !bServerStartRequested
+		|| !BootstrapSessionFailureReason.IsEmpty())
+	{
+		return;
+	}
+	FSeinMatchBootstrapReceipt AgreedReceipt;
+	if (BootstrapConsensus.GetState()
+			!= ESeinBootstrapConsensusState::AuthorizedReady
+		|| !BootstrapConsensus.GetAgreedReceipt(AgreedReceipt)
+		|| !BootstrapConsensus.BeginLaunch())
+	{
+		FailBootstrapSession(
+			TEXT("Bootstrap launch was requested before every peer acknowledged authorization."),
+			/*bNotifyPeers=*/true);
+		return;
+	}
+
+	// This transition is the irreversible distributed commit. Close every
+	// coordinator-side prepare ingress before issuing any remote or local launch
+	// so late evidence cannot roll back peers that have already started tick zero.
+	bServerStartRequested = false;
+	bStartSessionRequested = false;
+	bBootstrapLaunchBarrierActive = false;
+	CancelBootstrapCoordinatorTimeout();
+	UE_LOG(LogSeinNet, Log,
+		TEXT("Lockstep tick-zero launch committed after unanimous authorization readiness from %d simulating participant(s)."),
+		BootstrapConsensus.GetAuthorizedReadyParticipantCount());
+
+	for (const TWeakObjectPtr<ASeinNetRelay>& WeakRelay : Relays)
+	{
+		ASeinNetRelay* Relay = WeakRelay.Get();
+		if (!Relay) continue;
+		const FSeinNetworkParticipantID ParticipantID =
+			RelayToParticipant.FindRef(Relay);
+		const FSeinParticipantBinding* Binding =
+			FindParticipantBinding(ParticipantID);
+		if (!Binding || !Binding->bSimulates
+			|| ParticipantID == LocalParticipantID)
+		{
+			continue;
+		}
+		Relay->Client_LaunchMatchBootstrap(
+			ActiveProtocolContext, AgreedReceipt);
+	}
+	if (IsLocalSimulatingParticipant())
+	{
+		ClientHandleBootstrapLaunch(
+			ActiveProtocolContext, AgreedReceipt);
+	}
+}
+
+void USeinNetSubsystem::StartBootstrapCoordinatorTimeout()
+{
+	if (BootstrapCoordinatorTimeoutHandle.IsValid()) return;
+	BootstrapCoordinatorDeadlineSeconds = FPlatformTime::Seconds()
+		+ GSeinBootstrapCoordinatorTimeoutSeconds;
+	BootstrapCoordinatorTimeoutHandle = FTSTicker::GetCoreTicker().AddTicker(
+		FTickerDelegate::CreateUObject(
+			this, &USeinNetSubsystem::TickBootstrapCoordinatorTimeout));
+	if (BootstrapCoordinatorTimeoutHandle.IsValid()) return;
+
+	BootstrapCoordinatorDeadlineSeconds = 0.0;
+	FailBootstrapSession(
+		TEXT("Failed to schedule the bounded bootstrap coordinator timeout."),
+		/*bNotifyPeers=*/true);
+}
+
+bool USeinNetSubsystem::TickBootstrapCoordinatorTimeout(float DeltaSeconds)
+{
+	(void)DeltaSeconds;
+	if (!bBootstrapLaunchBarrierActive
+		|| !BootstrapSessionFailureReason.IsEmpty()
+		|| BootstrapConsensus.IsLaunchComplete())
+	{
+		BootstrapCoordinatorTimeoutHandle.Reset();
+		BootstrapCoordinatorDeadlineSeconds = 0.0;
+		return false;
+	}
+	if (FPlatformTime::Seconds() < BootstrapCoordinatorDeadlineSeconds)
+	{
+		return true;
+	}
+
+	const ESeinBootstrapConsensusState TimedOutState =
+		BootstrapConsensus.GetState();
+	const TArray<FSeinNetworkParticipantID> Missing =
+		BootstrapConsensus.GetMissingParticipants();
+	TArray<FString> MissingNames;
+	MissingNames.Reserve(Missing.Num());
+	for (const FSeinNetworkParticipantID ParticipantID : Missing)
+	{
+		MissingNames.Add(ParticipantID.ToCanonicalString());
+	}
+	BootstrapCoordinatorTimeoutHandle.Reset();
+	BootstrapCoordinatorDeadlineSeconds = 0.0;
+	FailBootstrapSession(
+		FString::Printf(
+			TEXT("Bootstrap coordinator timed out in phase %d awaiting participant(s) [%s]."),
+			static_cast<int32>(TimedOutState),
+			*FString::Join(MissingNames, TEXT(","))),
+		/*bNotifyPeers=*/true);
+	return false;
+}
+
+void USeinNetSubsystem::CancelBootstrapCoordinatorTimeout()
+{
+	if (BootstrapCoordinatorTimeoutHandle.IsValid())
+	{
+		FTSTicker::GetCoreTicker().RemoveTicker(
+			BootstrapCoordinatorTimeoutHandle);
+		BootstrapCoordinatorTimeoutHandle.Reset();
+	}
+	BootstrapCoordinatorDeadlineSeconds = 0.0;
 }
 
 void USeinNetSubsystem::StartLockstepSession()
@@ -1077,83 +4339,135 @@ void USeinNetSubsystem::StartLockstepSession()
 		UE_LOG(LogSeinNet, Warning, TEXT("StartLockstepSession: callable only on server — ignored."));
 		return;
 	}
+	if (PendingAuthorityProtocolState.IsSet())
+	{
+		TryPromotePendingAuthorityProtocolState();
+		if (PendingAuthorityProtocolState.IsSet())
+		{
+			UE_LOG(LogSeinNet, Log,
+				TEXT("StartLockstepSession: destination protocol remains pending until its world identity is loaded."));
+			return;
+		}
+	}
+	if (!ActiveProtocolContext.IsValid())
+	{
+		const UWorld* World = GetWorld();
+		const FName DestinationWorldPackage = World && World->GetOutermost()
+			? World->GetOutermost()->GetFName()
+			: NAME_None;
+		if (!PrepareMatchTravel(
+			ESeinMatchTravelIntent::NewMatch,
+			DestinationWorldPackage,
+			ESeinPreparedWorldActivation::AllowCurrentWorld))
+		{
+			UE_LOG(LogSeinNet, Error,
+				TEXT("StartLockstepSession: protocol preparation failed; start rejected."));
+			return;
+		}
+		if (!TryPromotePendingAuthorityProtocolState())
+		{
+			UE_LOG(LogSeinNet, Error,
+				TEXT("StartLockstepSession: current-world protocol preparation did not become active."));
+			return;
+		}
+	}
+	if (!TurnAggregator.IsConfigured() || ParticipantBindings.IsEmpty()
+		|| !bHasActiveMatchSettings || !BootstrapConsensus.IsConfigured())
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("StartLockstepSession: invalid/empty protocol manifest; start rejected."));
+		return;
+	}
+	if (!BootstrapSessionFailureReason.IsEmpty())
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("StartLockstepSession: bootstrap previously failed (%s)."),
+			*BootstrapSessionFailureReason);
+		return;
+	}
 
+	bDestinationStartPending = false;
 	bServerStartRequested = true;
+	bBootstrapLaunchBarrierActive = true;
+	StartBootstrapCoordinatorTimeout();
+	if (!BootstrapSessionFailureReason.IsEmpty()) return;
 	TryDispatchLockstepSessionStart();
 }
 
 void USeinNetSubsystem::TryDispatchLockstepSessionStart()
 {
 	if (!bServerStartRequested || !IsServer()) return;
+	if (PendingAuthorityProtocolState.IsSet()) return;
+	if (!BootstrapSessionFailureReason.IsEmpty()) return;
 
-	TArray<FSeinPlayerID> MissingSlots;
-	if (!IsConfigParityStartBarrierSatisfied(&MissingSlots))
+	TArray<FSeinNetworkParticipantID> MissingStartParticipants;
+	if (!AreRequiredStartParticipantsBound(&MissingStartParticipants))
 	{
 		TArray<FString> MissingNames;
-		MissingNames.Reserve(MissingSlots.Num());
-		for (const FSeinPlayerID Slot : MissingSlots)
+		MissingNames.Reserve(MissingStartParticipants.Num());
+		for (const FSeinNetworkParticipantID ParticipantID : MissingStartParticipants)
 		{
-			MissingNames.Add(FString::Printf(TEXT("%u"), Slot.Value));
+			MissingNames.Add(ParticipantID.ToCanonicalString());
 		}
 		UE_LOG(LogSeinNet, Log,
-			TEXT("StartLockstepSession: deferred by config parity barrier; awaiting accepted fingerprint from connected slot(s) [%s]."),
+			TEXT("StartLockstepSession: awaiting destination relay/bootstrap for participant(s) [%s]."),
 			*FString::Join(MissingNames, TEXT(",")));
 		return;
 	}
 
-	// Consume before fan-out. Any repeated request is explicitly idempotent
-	// through StartLocalSession, while a later reconnect must not replay this
-	// particular deferred request.
-	bServerStartRequested = false;
-
-	// A dedicated authority may have no local controller and therefore no
-	// PostLogin-driven local relay path. Establish its seed and world hooks
-	// explicitly before replay capture, client fan-out, or tick zero.
-	EnsureSessionSeed();
-	BindLockstepHooksForCurrentWorld();
-
-	UE_LOG(LogSeinNet, Log, TEXT("StartLockstepSession: firing Client_StartSession on %d relay(s) and starting local sim."),
-		Relays.Num());
-
-	// Open the replay writer BEFORE fanning out so RecordTurn captures every
-	// turn from the very first one. Header uses the framework's existing
-	// FSeinReplayHeader (SeinReplayHeader.h) — RandomSeed = SessionSeed so
-	// the deterministic PRNG seed is captured for replay re-runs.
-	if (!ReplayWriter)
+	TArray<FSeinNetworkParticipantID> MissingParticipants;
+	if (!IsConfigParityStartBarrierSatisfied(&MissingParticipants))
 	{
-		ReplayWriter = NewObject<USeinReplayWriter>(this);
-	}
-	if (ReplayWriter && !ReplayWriter->IsRecording())
-	{
-		FSeinReplayHeader Header;
-		Header.FrameworkVersion = TEXT("0.1.0");
-		Header.GameVersion      = TEXT("unset");
-		Header.MapIdentifier    = GetWorld() ? FName(*GetWorld()->GetMapName()) : NAME_None;
-		Header.RandomSeed       = SessionSeed;
-		// SettingsSnapshot + Players left default for now — Phase 4b can
-		// populate from match-flow once lobby is in. Reader compares against
-		// current sim state and warns on mismatch.
-		Header.StartTick        = 0;
-		Header.EndTick          = 0; // updated on FinishRecording if needed
-		Header.RecordedAt       = FDateTime::UtcNow();
-		ReplayWriter->StartRecording(Header);
-	}
-
-	for (const TWeakObjectPtr<ASeinNetRelay>& Wp : Relays)
-	{
-		if (ASeinNetRelay* Target = Wp.Get())
+		TArray<FString> MissingNames;
+		MissingNames.Reserve(MissingParticipants.Num());
+		for (const FSeinNetworkParticipantID ParticipantID : MissingParticipants)
 		{
-			Target->Client_StartSession();
+			MissingNames.Add(ParticipantID.ToCanonicalString());
 		}
+		UE_LOG(LogSeinNet, Log,
+			TEXT("StartLockstepSession: deferred by config parity barrier; awaiting participant(s) [%s]."),
+			*FString::Join(MissingNames, TEXT(",")));
+		return;
 	}
 
-	// Server's own sim. Local-call so the host doesn't depend on receiving
-	// its own Client RPC (which it would, but explicit is safer + cheaper).
-	StartLocalSession();
+	FString DestinationError;
+	if (!IsCurrentWorldPreparedDestination(&DestinationError))
+	{
+		FailBootstrapSession(DestinationError, /*bNotifyPeers=*/true);
+		return;
+	}
+
+	EnsureSessionSeed();
+	switch (BootstrapConsensus.GetState())
+	{
+	case ESeinBootstrapConsensusState::CollectingReceipts:
+		DispatchBootstrapReceiptRequests();
+		return;
+	case ESeinBootstrapConsensusState::ReceiptAgreed:
+		DispatchBootstrapAuthorization();
+		return;
+	case ESeinBootstrapConsensusState::CollectingAuthorizedReady:
+		return;
+	case ESeinBootstrapConsensusState::AuthorizedReady:
+		DispatchBootstrapLaunch();
+		return;
+	case ESeinBootstrapConsensusState::Launched:
+		return;
+	default:
+		FailBootstrapSession(
+			TEXT("Bootstrap consensus is not available for the active context."),
+			/*bNotifyPeers=*/true);
+		return;
+	}
 }
 
 bool USeinNetSubsystem::ResolveTurnReady(int32 Turn)
 {
+	// Root gossip is a proof obligation, not an optional diagnostic. Once the
+	// epoch can no longer produce or complete a due checkpoint, no grace turn,
+	// buffered fan-out, or later restart may advance it.
+	if (DeterminismSessionFailure.IsValid()) return false;
+
 	// Grace period: the first InputDelayTurns turns can never have submissions
 	// (no input could have been issued before sim started), so unconditionally
 	// pass them. This matches the heartbeat schedule below — first heartbeat
@@ -1196,7 +4510,7 @@ bool USeinNetSubsystem::ResolveTurnReady(int32 Turn)
 				{
 					UE_LOG(LogSeinNet, Log,
 						TEXT("[GATE STALL persistent] turn=%d not ready for %.1fs  LocalSlot=%u  ReceivedTurns=%d entries  PendingOutgoing=%d  LastSubmittedTurn=%d. Sim is frozen — one peer's heartbeat dropped."),
-						Turn, StalledFor, LocalPlayerID.Value, ReceivedTurns.Num(), PendingOutgoingCommands.Num(), LastSubmittedTurn);
+						Turn, StalledFor, LocalPlayerID.Value, ReceivedTurns.Num(), PendingOutgoingDrafts.Num(), LastSubmittedTurn);
 					LastStallLogTime = NowSec;
 					bStallLogEscalated = true;
 				}
@@ -1232,7 +4546,8 @@ void USeinNetSubsystem::ConsumeTurn(int32 Turn)
 
 	for (const FSeinCommand& Cmd : Drained)
 	{
-		WorldSub->EnqueueCommand(Cmd);
+		WorldSub->EnqueueAuthenticatedCommand(
+			Cmd, Cmd.PlayerID, Cmd.IssuerKind);
 	}
 	UE_LOG(LogSeinNet, Verbose, TEXT("ConsumeTurn: drained turn %d (%d cmd(s)) into PendingCommands."),
 		Turn, Drained.Num());
@@ -1240,6 +4555,10 @@ void USeinNetSubsystem::ConsumeTurn(int32 Turn)
 
 void USeinNetSubsystem::OnSimTickCompleted(int32 CompletedTick)
 {
+	if (ReplayWriter && ReplayWriter->IsRecording())
+	{
+		ReplayWriter->ObserveCompletedTick(CompletedTick);
+	}
 	if (!IsNetworkingActive()) return;
 
 	const int32 TicksPerTurn = GetTicksPerTurn();
@@ -1253,12 +4572,14 @@ void USeinNetSubsystem::OnSimTickCompleted(int32 CompletedTick)
 	// finished apply at `current_turn + InputDelay`. Idempotent guard against
 	// multiple OnSimTickCompleted fires within the same boundary.
 	const int32 JustFinishedTurn = CompletedTick / TicksPerTurn;
+	ApplyDueAuthenticatedDeterminismSessionFailuresThrough(
+		JustFinishedTurn);
+	if (DeterminismSessionFailure.IsValid()) return;
 	const int32 InputDelay = GetInputDelayTurns();
 	const int32 OutgoingTurn = JustFinishedTurn + InputDelay;
 
-	// Only a process with a local gameplay slot authors the ordinary per-turn
-	// submission and hash report. Dedicated authority still executes all
-	// server maintenance below; it has no synthetic local relay or slot.
+	// Only a local gameplay slot authors ordinary command batches. World-root
+	// identity is participant-scoped, so a dedicated authority reports too.
 	if (LocalPlayerID.IsValid())
 	{
 		// Catch up any skipped non-grace turns with heartbeats, attaching user
@@ -1269,13 +4590,15 @@ void USeinNetSubsystem::OnSimTickCompleted(int32 CompletedTick)
 			FlushPendingTurnSubmissions();
 		}
 
-		// Authority hash participation without a local player identity is a
-		// separate protocol decision (Gate A), so dedicated servers do not
-		// synthesize a reporter here.
-		MaybeSubmitStateHashCheck(JustFinishedTurn);
 	}
+	if (LocalParticipantID.IsValid())
+	{
+		MaybeSubmitWorldStateRootCheck(JustFinishedTurn);
+	}
+	if (DeterminismSessionFailure.IsValid()) return;
 
 	PruneProtocolState(JustFinishedTurn);
+	if (DeterminismSessionFailure.IsValid()) return;
 
 	// Drop-in/drop-out (Phase 4): server-only per-turn polling. Inject
 	// heartbeats for dropped slots so the gate doesn't stall, then evaluate
@@ -1303,8 +4626,7 @@ void USeinNetSubsystem::QueueTurnSubmissionsThrough(int32 FinalTurn, bool bAttac
 		Pending.TurnId = Turn;
 		if (bAttachCurrentCommands && Turn == FinalTurn)
 		{
-			Pending.Commands = MoveTemp(PendingOutgoingCommands);
-			PendingOutgoingCommands.Reset();
+			FreezeLargestOutgoingDraftPrefix(Turn, Pending.Drafts);
 		}
 	}
 	LastQueuedTurn = FinalTurn;
@@ -1319,25 +4641,31 @@ void USeinNetSubsystem::FlushPendingTurnSubmissions()
 #if WITH_DEV_AUTOMATION_TESTS
 		if (TestTurnSubmitOverride)
 		{
-			bSent = TestTurnSubmitOverride(Pending.TurnId, Pending.Commands);
+			TArray<FSeinCommand> Commands;
+			Commands.Reserve(Pending.Drafts.Num());
+			for (const FSeinCommandSubmissionDraft& Draft : Pending.Drafts)
+			{
+				Commands.Add(Draft.Command);
+			}
+			bSent = TestTurnSubmitOverride(Pending.TurnId, Commands);
 		}
 		else
 #endif
 		{
-			bSent = SubmitLocalCommandsAtTurn(Pending.TurnId, Pending.Commands);
+			bSent = SubmitLocalDraftsAtTurn(Pending.TurnId, Pending.Drafts);
 		}
 
 		if (!bSent)
 		{
 			UE_LOG(LogSeinNet, Warning,
 				TEXT("FlushPendingTurnSubmissions: retaining turn=%d cmds=%d for retry."),
-				Pending.TurnId, Pending.Commands.Num());
+				Pending.TurnId, Pending.Drafts.Num());
 			return;
 		}
 
 		UE_LOG(LogSeinNet, Verbose,
 			TEXT("FlushPendingTurnSubmissions: handed off turn=%d cmds=%d heartbeat=%d."),
-			Pending.TurnId, Pending.Commands.Num(), Pending.Commands.IsEmpty() ? 1 : 0);
+			Pending.TurnId, Pending.Drafts.Num(), Pending.Drafts.IsEmpty() ? 1 : 0);
 		LastSubmittedTurn = FMath::Max(LastSubmittedTurn, Pending.TurnId);
 		PendingTurnSubmissions.RemoveAt(0, 1, EAllowShrinking::No);
 	}
@@ -1345,50 +4673,84 @@ void USeinNetSubsystem::FlushPendingTurnSubmissions()
 
 void USeinNetSubsystem::SubmitLocalCommand(const FSeinCommand& Command)
 {
-	TArray<FSeinCommand> Single;
-	Single.Add(Command);
-	SubmitLocalCommands(Single);
+	SubmitLocalCommandDraft(Command, /*bRequestMatchAdministration=*/false);
+}
+
+void USeinNetSubsystem::SubmitLocalCommandDraft(
+	const FSeinCommand& Draft,
+	bool bRequestMatchAdministration)
+{
+	UWorld* World = GetWorld();
+	USeinWorldSubsystem* WorldSub =
+		World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
+	const bool bNetworkingActive = IsNetworkingActive();
+	if (bNetworkingActive)
+	{
+		FSeinCommandSchemaDescriptor Schema;
+		const bool bHasSchema = FindFrozenCommandSchema(
+			Draft.CommandType, Draft.SchemaVersion, Schema);
+		if (IsUnsupportedNetworkPauseCommand(
+				Draft, bHasSchema ? &Schema : nullptr))
+		{
+			UE_LOG(LogSeinNet, Error,
+				TEXT("SubmitLocalCommandDraft: rejected unsupported network pause-control '%s'; the canonical coordinator/digest lane is not installed, so this command must not enter the ordinary turn queue."),
+				*Draft.CommandType.ToString());
+			return;
+		}
+	}
+
+	if (!WorldSub
+		|| WorldSub->GetMatchBootstrapState()
+			!= ESeinMatchBootstrapState::Consumed
+		|| !WorldSub->IsSimulationRunning())
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("SubmitLocalCommandDraft: rejected '%s' because ordinary ingress requires a launched, running match."),
+			*Draft.CommandType.ToString());
+		return;
+	}
+
+	if (bNetworkingActive)
+	{
+		FSeinCommand Untrusted = Draft;
+		Untrusted.PlayerID = FSeinPlayerID::Neutral();
+		Untrusted.IssuerKind = ESeinCommandIssuerKind::Unauthenticated;
+		Untrusted.DerivedResourcePayer = FSeinPlayerID::Neutral();
+		Untrusted.Tick = 0;
+		if (!TryBufferOutgoingDraft(FSeinCommandSubmissionDraft(
+				Untrusted, bRequestMatchAdministration)))
+		{
+			return;
+		}
+	}
+
+	OnLocalCommandIssued.Broadcast(Draft);
+	OnLocalCommandIssuedBP.Broadcast(Draft);
+
+	if (!bNetworkingActive)
+	{
+		if (!WorldSub) return;
+
+		FSeinCommand Canonical = Draft;
+		TArray<FSeinCommand> Single{Canonical};
+		StampAuthoritativeCommandBatch(
+			Single,
+			Draft.PlayerID,
+			bRequestMatchAdministration,
+			/*TurnId=*/0);
+		Single[0].Tick = WorldSub->GetCurrentTick();
+		WorldSub->EnqueueAuthenticatedCommand(
+			Single[0], Single[0].PlayerID, Single[0].IssuerKind);
+	}
 }
 
 void USeinNetSubsystem::SubmitLocalCommands(const TArray<FSeinCommand>& Commands)
 {
-	if (Commands.Num() == 0) return;
-
-	// Phase 4 polish: fire the immediate-feedback delegate FIRST, before any
-	// queueing or network routing. Designers can bind audio/visual cues here
-	// to mask the InputDelayTurns roundtrip.
-	for (const FSeinCommand& Cmd : Commands)
+	for (const FSeinCommand& Command : Commands)
 	{
-		OnLocalCommandIssued.Broadcast(Cmd);
-		OnLocalCommandIssuedBP.Broadcast(Cmd);
+		SubmitLocalCommandDraft(
+			Command, /*bRequestMatchAdministration=*/false);
 	}
-
-	// Standalone path: bypass everything and drop straight into the local
-	// sim's command buffer. Single-player is zero-network-overhead.
-	if (!IsNetworkingActive())
-	{
-		UWorld* World = GetWorld();
-		USeinWorldSubsystem* WorldSub = World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
-		if (!WorldSub)
-		{
-			UE_LOG(LogSeinNet, Warning, TEXT("SubmitLocalCommands [Standalone]: no USeinWorldSubsystem — dropping %d cmd(s)."), Commands.Num());
-			return;
-		}
-		for (const FSeinCommand& Cmd : Commands)
-		{
-			WorldSub->EnqueueCommand(Cmd);
-		}
-		return;
-	}
-
-	// Networked path (Phase 2b): accumulate in PendingOutgoingCommands. The
-	// OnSimTickCompleted handler flushes them at the next turn boundary,
-	// stamped with the correct outgoing TurnId. This guarantees a single
-	// per-turn submission per client (commands + heartbeat in one packet),
-	// which is what the server's gate needs to complete deterministically.
-	PendingOutgoingCommands.Append(Commands);
-	UE_LOG(LogSeinNet, Verbose, TEXT("SubmitLocalCommands: buffered %d cmd(s) (pending=%d) for next turn flush."),
-		Commands.Num(), PendingOutgoingCommands.Num());
 }
 
 bool USeinNetSubsystem::SubmitLocalCommandAtTurn(int32 TurnId, const FSeinCommand& Command)
@@ -1400,34 +4762,89 @@ bool USeinNetSubsystem::SubmitLocalCommandAtTurn(int32 TurnId, const FSeinComman
 
 bool USeinNetSubsystem::SubmitLocalCommandsAtTurn(int32 TurnId, const TArray<FSeinCommand>& Commands)
 {
+	TArray<FSeinCommandSubmissionDraft> Drafts;
+	Drafts.Reserve(Commands.Num());
+	for (const FSeinCommand& Command : Commands)
+	{
+		Drafts.Emplace(Command, false);
+	}
+	return SubmitLocalDraftsAtTurn(TurnId, Drafts);
+}
+
+bool USeinNetSubsystem::SubmitLocalDraftsAtTurn(
+	int32 TurnId,
+	const TArray<FSeinCommandSubmissionDraft>& Drafts)
+{
 	// NOTE: empty `Commands` is intentionally allowed — the heartbeat path
 	// relies on a per-turn submission even when no input was issued, so the
 	// server's gate can complete for that turn. Skipping empties would stall
 	// every peer.
+	const int32 MaxCommandsPerSubmission = IsNetworkingActive()
+		? FrozenMaxCommandsPerSubmission
+		: GetConfiguredMaxCommandsPerSubmission();
+	if (MaxCommandsPerSubmission <= 0)
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("SubmitLocalCommandsAtTurn: per-match author submission policy is not frozen."));
+		return false;
+	}
+	if (Drafts.Num() > MaxCommandsPerSubmission)
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("SubmitLocalCommandsAtTurn: %d commands exceeds protocol cap %d."),
+			Drafts.Num(), MaxCommandsPerSubmission);
+		return false;
+	}
 
 	// Standalone / networking-disabled path: skip the relay entirely and
 	// drop straight into the world subsystem's command buffer. Single-player
 	// is zero-network-overhead; the lockstep wire is purely opt-in.
 	if (!IsNetworkingActive())
 	{
-		if (Commands.Num() == 0) return true; // no heartbeat needed in Standalone (treat as "sent")
+		if (Drafts.Num() == 0) return true; // no heartbeat needed in Standalone (treat as "sent")
 		UWorld* World = GetWorld();
 		USeinWorldSubsystem* WorldSub = World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
 		if (!WorldSub)
 		{
-			UE_LOG(LogSeinNet, Warning, TEXT("SubmitLocalCommandsAtTurn: Standalone but no USeinWorldSubsystem — dropping %d cmd(s)."), Commands.Num());
+			UE_LOG(LogSeinNet, Warning, TEXT("SubmitLocalCommandsAtTurn: Standalone but no USeinWorldSubsystem — dropping %d cmd(s)."), Drafts.Num());
 			return false;
 		}
-		UE_LOG(LogSeinNet, Verbose, TEXT("SubmitLocalCommandsAtTurn [Standalone]: enqueuing %d cmd(s) directly to WorldSubsystem."), Commands.Num());
-		for (const FSeinCommand& Cmd : Commands)
+		UE_LOG(LogSeinNet, Verbose, TEXT("SubmitLocalCommandsAtTurn [Standalone]: enqueuing %d cmd(s) directly to WorldSubsystem."), Drafts.Num());
+		for (const FSeinCommandSubmissionDraft& Draft : Drafts)
 		{
-			WorldSub->EnqueueCommand(Cmd);
+			TArray<FSeinCommand> Stamped{Draft.Command};
+			StampAuthoritativeCommandBatch(
+				Stamped, Draft.Command.PlayerID,
+				Draft.bRequestMatchAdministration,
+				TurnId);
+			WorldSub->EnqueueAuthenticatedCommand(
+				Stamped[0], Stamped[0].PlayerID, Stamped[0].IssuerKind);
 		}
 		return true;
+	}
+	for (const FSeinCommandSubmissionDraft& Draft : Drafts)
+	{
+		FSeinCommandSchemaDescriptor Schema;
+		const bool bHasSchema = FindFrozenCommandSchema(
+			Draft.Command.CommandType, Draft.Command.SchemaVersion, Schema);
+		if (IsUnsupportedNetworkPauseCommand(
+				Draft.Command, bHasSchema ? &Schema : nullptr))
+		{
+			UE_LOG(LogSeinNet, Error,
+				TEXT("SubmitLocalCommandsAtTurn: rejected unsupported network pause-control '%s'; the canonical coordinator/digest lane is not installed."),
+				*Draft.Command.CommandType.ToString());
+			return false;
+		}
 	}
 
 	if (!IsCommandTurnWithinProtocolWindow(TurnId, TEXT("SubmitLocalCommandsAtTurn")))
 	{
+		return false;
+	}
+	if (!ActiveProtocolContext.IsValid() || !LocalParticipantID.IsValid())
+	{
+		UE_LOG(LogSeinNet, Warning,
+			TEXT("SubmitLocalCommandsAtTurn: protocol assignment not ready."));
 		return false;
 	}
 
@@ -1440,38 +4857,486 @@ bool USeinNetSubsystem::SubmitLocalCommandsAtTurn(int32 TurnId, const TArray<FSe
 		// StartLocalSession's pre-fire guard.
 		UE_LOG(LogSeinNet, Warning,
 			TEXT("SubmitLocalCommandsAtTurn: no LocalRelay yet (replication pending?) — dropping %d cmd(s) for TurnId=%d. Caller MUST treat this as not-submitted."),
-			Commands.Num(), TurnId);
+			Drafts.Num(), TurnId);
 		return false;
 	}
 
 	UE_LOG(LogSeinNet, Verbose, TEXT("SubmitLocalCommandsAtTurn: TurnId=%d  Count=%d  Slot=%u  Relay=%s%s"),
-		TurnId, Commands.Num(), LocalPlayerID.Value, *GetNameSafe(Relay),
-		Commands.IsEmpty() ? TEXT("  [HEARTBEAT]") : TEXT(""));
-	Relay->Server_SubmitCommands(TurnId, Commands);
+		TurnId, Drafts.Num(), LocalPlayerID.Value, *GetNameSafe(Relay),
+		Drafts.IsEmpty() ? TEXT("  [HEARTBEAT]") : TEXT(""));
+	TArray<FSeinCommandSubmissionDraft> UntrustedDrafts = Drafts;
+	for (FSeinCommandSubmissionDraft& Draft : UntrustedDrafts)
+	{
+		Draft.Command.PlayerID = FSeinPlayerID::Neutral();
+		Draft.Command.IssuerKind = ESeinCommandIssuerKind::Unauthenticated;
+		Draft.Command.DerivedResourcePayer = FSeinPlayerID::Neutral();
+		Draft.Command.Tick = 0;
+	}
+	FSeinOpaqueCommandBatch OpaqueDrafts;
+	FString WireError;
+	const int32 FrozenAuthorCount = GetFrozenExpectedAuthorCount();
+	if (FrozenAuthorCount <= 0)
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("SubmitLocalCommandsAtTurn: frozen command-author count is unavailable."));
+		return false;
+	}
+	const FSeinAuthorSubmissionBudget AuthorBudget =
+		GetAuthorSubmissionBudget(
+			FrozenAuthorCount, FrozenMaxCommandsPerSubmission);
+	FSeinWireCost WireCost;
+	if (!FSeinNetCommandWireCodec::EncodeDraftsWithCost(
+		UntrustedDrafts,
+		AuthorBudget.MaxCommands,
+		[this](FGameplayTag Type, int32 Version, FSeinCommandSchemaDescriptor& Out)
+		{
+			return FindFrozenCommandSchema(Type, Version, Out);
+		},
+		OpaqueDrafts,
+		WireError,
+		WireCost)
+		|| !ValidateAuthorSubmissionBudget(
+			UntrustedDrafts.Num(), OpaqueDrafts,
+			WireCost.CanonicalCostBytes, WireError))
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("SubmitLocalCommandsAtTurn: opaque encoding failed for turn=%d: %s."),
+			TurnId, *WireError);
+		return false;
+	}
+	Relay->Server_SubmitCommands(ActiveProtocolContext, TurnId, OpaqueDrafts);
 	return true;
 }
 
 void USeinNetSubsystem::StampAuthoritativeCommandBatch(
-	TArray<FSeinCommand>& Commands, FSeinPlayerID Slot, int32 TurnId) const
+	TArray<FSeinCommand>& Commands,
+	FSeinPlayerID Slot,
+	bool bGrantMatchAdministration,
+	int32 TurnId) const
 {
 	const int32 AuthoritativeTick = TurnId * GetTicksPerTurn();
 	for (FSeinCommand& Command : Commands)
 	{
+		FSeinCommandSchemaDescriptor Schema;
+		const bool bIsRegisteredMatchControl =
+			bGrantMatchAdministration
+			&& FindFrozenCommandSchema(
+				Command.CommandType, Command.SchemaVersion, Schema)
+			&& Schema.AuthorityScope == ESeinCommandAuthorityScope::MatchControl;
 		Command.PlayerID = Slot;
+		Command.IssuerKind = bIsRegisteredMatchControl
+			? ESeinCommandIssuerKind::MatchAdministrator
+			: ESeinCommandIssuerKind::Player;
+		Command.DerivedResourcePayer = FSeinPlayerID::Neutral();
 		Command.Tick = AuthoritativeTick;
 	}
 }
 
-bool USeinNetSubsystem::DrainPendingAICommandsForTurn(
+bool USeinNetSubsystem::FindFrozenCommandSchema(
+	FGameplayTag CommandType,
+	int32 SchemaVersion,
+	FSeinCommandSchemaDescriptor& OutSchema) const
+{
+#if WITH_DEV_AUTOMATION_TESTS
+	if (TestFindCommandSchemaOverride)
+	{
+		return TestFindCommandSchemaOverride(
+			CommandType, SchemaVersion, OutSchema);
+	}
+#endif
+	const UWorld* World = GetWorld();
+	const USeinWorldSubsystem* WorldSub =
+		World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
+	return WorldSub
+		&& WorldSub->FindCommandSchema(CommandType, SchemaVersion, OutSchema);
+}
+
+bool USeinNetSubsystem::IsUnsupportedNetworkPauseCommand(
+	const FSeinCommand& Command,
+	const FSeinCommandSchemaDescriptor* Schema)
+{
+	return Command.CommandType == SeinARTSTags::Command_Type_PauseMatchRequest
+		|| (Schema
+			&& (Schema->AllowedExecutionContexts
+				& static_cast<int32>(ESeinCommandExecutionAllowance::FrozenPauseControl)) != 0);
+}
+
+bool USeinNetSubsystem::MeasureOutgoingDraftCost(
+	const FSeinCommandSubmissionDraft& Draft,
+	FSeinQueuedCommandCost& OutCost,
+	FString& OutError) const
+{
+	OutCost = {};
+	FSeinOpaqueCommandBatch Encoded;
+	FSeinWireCost WireCost;
+	if (!FSeinNetCommandWireCodec::EncodeDraftsWithCost(
+		MakeArrayView(&Draft, 1),
+		1,
+		[this](FGameplayTag Type, int32 Version, FSeinCommandSchemaDescriptor& Out)
+		{
+			return FindFrozenCommandSchema(Type, Version, Out);
+		},
+		Encoded,
+		OutError,
+		WireCost)
+		|| Encoded.Bytes.Num() < FSeinNetCommandWireCodec::FixedBatchHeaderBytes)
+	{
+		if (OutError.IsEmpty()) OutError = TEXT("invalid single-draft opaque frame");
+		return false;
+	}
+	OutCost.VariableWireBytes =
+		Encoded.Bytes.Num() - FSeinNetCommandWireCodec::FixedBatchHeaderBytes;
+	if (WireCost.CanonicalCostBytes
+		< static_cast<uint64>(FSeinNetCommandWireCodec::FixedBatchHeaderBytes))
+	{
+		OutError = TEXT("single-draft canonical cost omits its batch header");
+		return false;
+	}
+	OutCost.VariableCanonicalCostBytes = WireCost.CanonicalCostBytes
+		- FSeinNetCommandWireCodec::FixedBatchHeaderBytes;
+	return true;
+}
+
+bool USeinNetSubsystem::MeasureAICommandCost(
+	const FSeinCommand& Command,
+	FSeinQueuedCommandCost& OutCost,
+	FString& OutError) const
+{
+	OutCost = {};
+	FSeinOpaqueCommandBatch Encoded;
+	FSeinWireCost WireCost;
+	if (!FSeinNetCommandWireCodec::EncodeCommandsWithCost(
+		MakeArrayView(&Command, 1),
+		1,
+		[this](FGameplayTag Type, int32 Version, FSeinCommandSchemaDescriptor& Out)
+		{
+			return FindFrozenCommandSchema(Type, Version, Out);
+		},
+		Encoded,
+		OutError,
+		WireCost)
+		|| Encoded.Bytes.Num() < FSeinNetCommandWireCodec::FixedBatchHeaderBytes)
+	{
+		if (OutError.IsEmpty()) OutError = TEXT("invalid single-command opaque frame");
+		return false;
+	}
+	OutCost.VariableWireBytes =
+		Encoded.Bytes.Num() - FSeinNetCommandWireCodec::FixedBatchHeaderBytes;
+	if (WireCost.CanonicalCostBytes
+		< static_cast<uint64>(FSeinNetCommandWireCodec::FixedBatchHeaderBytes))
+	{
+		OutError = TEXT("single-command canonical cost omits its batch header");
+		return false;
+	}
+	OutCost.VariableCanonicalCostBytes = WireCost.CanonicalCostBytes
+		- FSeinNetCommandWireCodec::FixedBatchHeaderBytes;
+	return true;
+}
+
+bool USeinNetSubsystem::TryBufferOutgoingDraft(
+	const FSeinCommandSubmissionDraft& Draft)
+{
+	if (!FreezeAuthorSubmissionPolicy(TEXT("SubmitLocalCommandDraft")))
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("SubmitLocalCommandDraft: dropping command because no frozen match submission policy is installed."));
+		return false;
+	}
+	const FSeinAuthorSubmissionBudget Budget = GetAuthorSubmissionBudget(
+		GetFrozenExpectedAuthorCount(), FrozenMaxCommandsPerSubmission);
+	FSeinQueuedCommandCost Cost;
+	FString Error;
+	if (!MeasureOutgoingDraftCost(Draft, Cost, Error)
+		|| !FitsSingleTurnBudget(Cost, Budget))
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("SubmitLocalCommandDraft: dropping command that cannot fit an empty frozen author share (type=%s version=%d): %s."),
+			*Draft.Command.CommandType.ToString(), Draft.Command.SchemaVersion,
+			Error.IsEmpty() ? TEXT("wire or decoded-allocation share exceeded") : *Error);
+		return false;
+	}
+	if (PendingOutgoingDrafts.Drafts.Num() != PendingOutgoingDrafts.Costs.Num())
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("SubmitLocalCommandDraft: dropping command because outgoing backlog accounting is inconsistent."));
+		return false;
+	}
+	if (!FitsBacklogBudget(
+		PendingOutgoingDrafts.Num(),
+		PendingOutgoingDrafts.VariableWireBytes,
+		PendingOutgoingDrafts.VariableCanonicalCostBytes,
+		Cost,
+		Budget))
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("SubmitLocalCommandDraft: dropping newest command because the bounded outgoing backlog is full (pending=%d, max-turn-shares=%d)."),
+			PendingOutgoingDrafts.Num(), GSeinMaxBufferedAuthorTurns);
+		return false;
+	}
+
+	PendingOutgoingDrafts.Drafts.Add(Draft);
+	PendingOutgoingDrafts.Costs.Add(Cost);
+	PendingOutgoingDrafts.VariableWireBytes += Cost.VariableWireBytes;
+	PendingOutgoingDrafts.VariableCanonicalCostBytes +=
+		Cost.VariableCanonicalCostBytes;
+	return true;
+}
+
+void USeinNetSubsystem::FreezeLargestOutgoingDraftPrefix(
+	int32 TurnId,
+	TArray<FSeinCommandSubmissionDraft>& OutDrafts)
+{
+	OutDrafts.Reset();
+	if (PendingOutgoingDrafts.IsEmpty()) return;
+	if (PendingOutgoingDrafts.Drafts.Num() != PendingOutgoingDrafts.Costs.Num())
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("FreezeLargestOutgoingDraftPrefix: inconsistent backlog accounting; retaining input and submitting heartbeat for turn=%d."),
+			TurnId);
+		return;
+	}
+	const FSeinAuthorSubmissionBudget Budget = GetAuthorSubmissionBudget(
+		GetFrozenExpectedAuthorCount(), FrozenMaxCommandsPerSubmission);
+	while (!PendingOutgoingDrafts.IsEmpty()
+		&& !FitsSingleTurnBudget(PendingOutgoingDrafts.Costs[0], Budget))
+	{
+		const FSeinCommand& Rejected = PendingOutgoingDrafts.Drafts[0].Command;
+		UE_LOG(LogSeinNet, Error,
+			TEXT("FreezeLargestOutgoingDraftPrefix: dropping head command that cannot fit an empty frozen author share (type=%s version=%d turn=%d)."),
+			*Rejected.CommandType.ToString(), Rejected.SchemaVersion, TurnId);
+		RemoveOutgoingPrefix(PendingOutgoingDrafts, 1);
+	}
+	if (PendingOutgoingDrafts.IsEmpty()) return;
+
+	int32 PrefixCount = 0;
+	int64 VariableWireBytes = 0;
+	uint64 VariableCanonicalCostBytes = 0;
+	const uint64 MaxVariableCanonicalCostBytes =
+		Budget.MaxCanonicalCostBytes
+		- FSeinNetCommandWireCodec::FixedBatchHeaderBytes;
+	for (const FSeinQueuedCommandCost& Cost : PendingOutgoingDrafts.Costs)
+	{
+		if (PrefixCount >= Budget.MaxCommands
+			|| Cost.VariableWireBytes > Budget.MaxEncodedBytes
+				- FSeinNetCommandWireCodec::FixedBatchHeaderBytes - VariableWireBytes
+			|| Cost.VariableCanonicalCostBytes
+				> MaxVariableCanonicalCostBytes
+					- VariableCanonicalCostBytes)
+		{
+			break;
+		}
+		VariableWireBytes += Cost.VariableWireBytes;
+		VariableCanonicalCostBytes += Cost.VariableCanonicalCostBytes;
+		++PrefixCount;
+	}
+	if (PrefixCount <= 0) return;
+
+	OutDrafts.Append(PendingOutgoingDrafts.Drafts.GetData(), PrefixCount);
+	FSeinOpaqueCommandBatch Verification;
+	FString Error;
+	FSeinWireCost VerifiedCost;
+	if (!FSeinNetCommandWireCodec::EncodeDraftsWithCost(
+		OutDrafts,
+		Budget.MaxCommands,
+		[this](FGameplayTag Type, int32 Version, FSeinCommandSchemaDescriptor& Out)
+		{
+			return FindFrozenCommandSchema(Type, Version, Out);
+		},
+		Verification,
+		Error,
+		VerifiedCost)
+		|| !ValidateAuthorSubmissionBudget(
+			OutDrafts.Num(), Verification,
+			VerifiedCost.CanonicalCostBytes, Error))
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("FreezeLargestOutgoingDraftPrefix: cached-cost invariant failed for turn=%d; dropping selected prefix so it cannot block future heartbeats: %s."),
+			TurnId, *Error);
+		RemoveOutgoingPrefix(PendingOutgoingDrafts, PrefixCount);
+		OutDrafts.Reset();
+		return;
+	}
+
+	RemoveOutgoingPrefix(PendingOutgoingDrafts, PrefixCount);
+	UE_LOG(LogSeinNet, Verbose,
+		TEXT("FreezeLargestOutgoingDraftPrefix: froze %d command(s) for turn=%d; retained suffix=%d."),
+		PrefixCount, TurnId, PendingOutgoingDrafts.Num());
+}
+
+bool USeinNetSubsystem::TryBufferAICommand(
+	FSeinPlayerID Slot,
+	const FSeinCommand& Command)
+{
+	FString IngressError;
+	if (!IsAICommandSubmissionAllowed(Slot, &IngressError))
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("HandleAIEmit: dropping slot=%u command before queue allocation: %s."),
+			Slot.Value, *IngressError);
+		return false;
+	}
+	FSeinCommandSchemaDescriptor Schema;
+	const bool bHasSchema = FindFrozenCommandSchema(
+		Command.CommandType, Command.SchemaVersion, Schema);
+	if (IsUnsupportedNetworkPauseCommand(
+			Command, bHasSchema ? &Schema : nullptr))
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("HandleAIEmit: dropping unsupported network pause-control slot=%u type=%s; the canonical coordinator/digest lane is not installed."),
+			Slot.Value, *Command.CommandType.ToString());
+		return false;
+	}
+	if (!FreezeAuthorSubmissionPolicy(TEXT("HandleAIEmit")))
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("HandleAIEmit: dropping slot=%u command because no frozen match submission policy is installed."),
+			Slot.Value);
+		return false;
+	}
+	const FSeinAuthorSubmissionBudget Budget = GetAuthorSubmissionBudget(
+		GetFrozenExpectedAuthorCount(), FrozenMaxCommandsPerSubmission);
+	FSeinQueuedCommandCost Cost;
+	FString Error;
+	if (!MeasureAICommandCost(Command, Cost, Error)
+		|| !FitsSingleTurnBudget(Cost, Budget))
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("HandleAIEmit: dropping slot=%u command that cannot fit an empty frozen author share (type=%s version=%d): %s."),
+			Slot.Value, *Command.CommandType.ToString(), Command.SchemaVersion,
+			Error.IsEmpty() ? TEXT("wire or decoded-allocation share exceeded") : *Error);
+		return false;
+	}
+
+	FSeinAICommandBacklog& Backlog = PendingAICommands.FindOrAdd(Slot);
+	if (Backlog.Commands.Num() != Backlog.Costs.Num())
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("HandleAIEmit: dropping slot=%u command because AI backlog accounting is inconsistent."),
+			Slot.Value);
+		return false;
+	}
+	if (!FitsBacklogBudget(
+		Backlog.Num(), Backlog.VariableWireBytes,
+		Backlog.VariableCanonicalCostBytes, Cost, Budget))
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("HandleAIEmit: dropping newest slot=%u command because the bounded AI backlog is full (pending=%d, max-turn-shares=%d)."),
+			Slot.Value, Backlog.Num(), GSeinMaxBufferedAuthorTurns);
+		return false;
+	}
+	Backlog.Commands.Add(Command);
+	Backlog.Costs.Add(Cost);
+	Backlog.VariableWireBytes += Cost.VariableWireBytes;
+	Backlog.VariableCanonicalCostBytes += Cost.VariableCanonicalCostBytes;
+	return true;
+}
+
+void USeinNetSubsystem::ConsumeAICommandPrefix(FSeinPlayerID Slot, int32 Count)
+{
+	FSeinAICommandBacklog* Backlog = PendingAICommands.Find(Slot);
+	if (!Backlog) return;
+	RemoveAICommandPrefix(*Backlog, Count);
+	if (Backlog->IsEmpty()) PendingAICommands.Remove(Slot);
+}
+
+bool USeinNetSubsystem::PeekPendingAICommandsForTurn(
 	FSeinPlayerID Slot, int32 TurnId, TArray<FSeinCommand>& OutCommands)
 {
 	OutCommands.Reset();
-	TArray<FSeinCommand>* Pending = PendingAICommands.Find(Slot);
+	FSeinAICommandBacklog* Pending = PendingAICommands.Find(Slot);
 	if (!Pending || Pending->IsEmpty()) return false;
+	if (Pending->Commands.Num() != Pending->Costs.Num())
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("PeekPendingAICommandsForTurn: slot=%u has inconsistent backlog accounting; retaining commands and submitting heartbeat for turn=%d."),
+			Slot.Value, TurnId);
+		return false;
+	}
+	const FSeinAuthorSubmissionBudget Budget = GetAuthorSubmissionBudget(
+		GetFrozenExpectedAuthorCount(), FrozenMaxCommandsPerSubmission);
+	while (!Pending->IsEmpty() && !FitsSingleTurnBudget(Pending->Costs[0], Budget))
+	{
+		const FSeinCommand& Rejected = Pending->Commands[0];
+		UE_LOG(LogSeinNet, Error,
+			TEXT("PeekPendingAICommandsForTurn: dropping slot=%u head command that cannot fit an empty frozen author share (type=%s version=%d turn=%d)."),
+			Slot.Value, *Rejected.CommandType.ToString(), Rejected.SchemaVersion, TurnId);
+		RemoveAICommandPrefix(*Pending, 1);
+	}
+	if (Pending->IsEmpty())
+	{
+		PendingAICommands.Remove(Slot);
+		return false;
+	}
 
-	OutCommands = MoveTemp(*Pending);
-	Pending->Reset();
-	StampAuthoritativeCommandBatch(OutCommands, Slot, TurnId);
+	int32 PrefixCount = 0;
+	int64 VariableWireBytes = 0;
+	uint64 VariableCanonicalCostBytes = 0;
+	const uint64 MaxVariableCanonicalCostBytes =
+		Budget.MaxCanonicalCostBytes
+		- FSeinNetCommandWireCodec::FixedBatchHeaderBytes;
+	for (const FSeinQueuedCommandCost& Cost : Pending->Costs)
+	{
+		if (PrefixCount >= Budget.MaxCommands
+			|| Cost.VariableWireBytes > Budget.MaxEncodedBytes
+				- FSeinNetCommandWireCodec::FixedBatchHeaderBytes - VariableWireBytes
+			|| Cost.VariableCanonicalCostBytes
+				> MaxVariableCanonicalCostBytes
+					- VariableCanonicalCostBytes)
+		{
+			break;
+		}
+		VariableWireBytes += Cost.VariableWireBytes;
+		VariableCanonicalCostBytes += Cost.VariableCanonicalCostBytes;
+		++PrefixCount;
+	}
+	if (PrefixCount <= 0) return false;
+
+	// Transactional peek: admission/aggregation may reject this batch. The
+	// source queue is consumed only after the author submission is accepted.
+	OutCommands.Append(Pending->Commands.GetData(), PrefixCount);
+	StampAuthoritativeCommandBatch(
+		OutCommands, Slot, /*bParticipantCanAdministerMatch=*/false, TurnId);
+	for (const FSeinCommand& Command : OutCommands)
+	{
+		FSeinCommandSchemaDescriptor Schema;
+		const bool bHasSchema = FindFrozenCommandSchema(
+			Command.CommandType, Command.SchemaVersion, Schema);
+		if (!bHasSchema || IsUnsupportedNetworkPauseCommand(Command, &Schema))
+		{
+			UE_LOG(LogSeinNet, Error,
+				TEXT("PeekPendingAICommandsForTurn: buffered slot=%u prefix failed defensive schema/pause validation at turn=%d; dropping the invalid prefix before aggregation."),
+				Slot.Value, TurnId);
+			RemoveAICommandPrefix(*Pending, PrefixCount);
+			if (Pending->IsEmpty()) PendingAICommands.Remove(Slot);
+			OutCommands.Reset();
+			return false;
+		}
+	}
+	FSeinOpaqueCommandBatch Verification;
+	FString Error;
+	FSeinWireCost VerifiedCost;
+	if (!FSeinNetCommandWireCodec::EncodeCommandsWithCost(
+		OutCommands,
+		Budget.MaxCommands,
+		[this](FGameplayTag Type, int32 Version, FSeinCommandSchemaDescriptor& Out)
+		{
+			return FindFrozenCommandSchema(Type, Version, Out);
+		},
+		Verification,
+		Error,
+		VerifiedCost)
+		|| !ValidateAuthorSubmissionBudget(
+			OutCommands.Num(), Verification,
+			VerifiedCost.CanonicalCostBytes, Error))
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("PeekPendingAICommandsForTurn: cached-cost invariant failed for slot=%u turn=%d; dropping selected prefix so it cannot block later heartbeats: %s."),
+			Slot.Value, TurnId, *Error);
+		RemoveAICommandPrefix(*Pending, PrefixCount);
+		if (Pending->IsEmpty()) PendingAICommands.Remove(Slot);
+		OutCommands.Reset();
+		return false;
+	}
 	return true;
 }
 
@@ -1481,21 +5346,36 @@ bool USeinNetSubsystem::BuildDroppedSlotSubmission(
 {
 	OutCommands.Reset();
 	return bAllowAICommands &&
-		DrainPendingAICommandsForTurn(Slot, TurnId, OutCommands);
+		PeekPendingAICommandsForTurn(Slot, TurnId, OutCommands);
 }
 
-void USeinNetSubsystem::ServerHandleSubmission(ASeinNetRelay* SourceRelay, int32 TurnId, const TArray<FSeinCommand>& Commands)
+void USeinNetSubsystem::ServerHandleSubmission(
+	ASeinNetRelay* SourceRelay,
+	const FSeinProtocolContext& Context,
+	int32 TurnId,
+	const FSeinOpaqueCommandBatch& OpaqueDrafts)
 {
 	if (!IsServer() || !SourceRelay) return;
+	if (!IsCurrentProtocolContext(Context, TEXT("ServerHandleSubmission"))) return;
 
 	const FSeinPlayerID* SlotPtr = RelayToSlot.Find(SourceRelay);
-	if (!SlotPtr || !SlotPtr->IsValid())
+	const FSeinNetworkParticipantID* ParticipantPtr = RelayToParticipant.Find(SourceRelay);
+	if (!SlotPtr || !SlotPtr->IsValid() || !ParticipantPtr || !ParticipantPtr->IsValid())
 	{
-		UE_LOG(LogSeinNet, Warning, TEXT("[Server] Submission from unmapped relay %s — rejecting %d cmd(s)."),
-			*GetNameSafe(SourceRelay), Commands.Num());
+		UE_LOG(LogSeinNet, Warning, TEXT("[Server] opaque submission from unmapped relay %s — rejecting."),
+			*GetNameSafe(SourceRelay));
 		return;
 	}
 	const FSeinPlayerID Slot = *SlotPtr;
+	const FSeinNetworkParticipantID ParticipantID = *ParticipantPtr;
+	const FSeinParticipantBinding* Binding = FindParticipantBinding(ParticipantID);
+	if (!Binding || !Binding->CommandSlots.Contains(Slot))
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("[Server] participant %s is not authorized to author slot=%u turn=%d."),
+			*ParticipantID.ToCanonicalString(), Slot.Value, TurnId);
+		return;
+	}
 	if (!IsCommandSubmissionLifecycleAllowed(Slot))
 	{
 		const ESeinSlotLifecycle* Lifecycle = SlotLifecycle.Find(Slot);
@@ -1511,44 +5391,156 @@ void USeinNetSubsystem::ServerHandleSubmission(ASeinNetRelay* SourceRelay, int32
 		return;
 	}
 
-	if (TurnId <= CompletedTurnRejectionFloor || CompletedTurns.Contains(TurnId))
-	{
-		// Late submission for an already-dispatched turn. Lockstep can't
-		// retroactively splice these in — the turn already shipped. Drop +
-		// log; Phase 4 adaptive-input-delay will preempt this by raising
-		// the delay before stragglers happen.
-		UE_LOG(LogSeinNet, Warning, TEXT("[Server] Late submission slot=%u  TurnId=%d (already dispatched) — dropped."),
-			Slot.Value, TurnId);
-		return;
-	}
-
 	// Stamp authoritative sender on each command. Caller's PlayerID is
 	// untrusted — server overrides.
-	TArray<FSeinCommand> Stamped = Commands;
-	StampAuthoritativeCommandBatch(Stamped, Slot, TurnId);
-
-	const EFirstAcceptResult InsertResult =
-		BufferCommandSubmissionFirstWins(TurnId, Slot, MoveTemp(Stamped));
-	if (InsertResult == EFirstAcceptResult::IdenticalDuplicate)
-	{
-		UE_LOG(LogSeinNet, Verbose,
-			TEXT("[Server] identical duplicate submission slot=%u turn=%d — idempotent no-op."),
-			Slot.Value, TurnId);
-		return;
-	}
-	if (InsertResult == EFirstAcceptResult::ConflictingDuplicate)
+	UWorld* World = GetWorld();
+	USeinWorldSubsystem* WorldSub =
+		World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
+	if (!WorldSub)
 	{
 		UE_LOG(LogSeinNet, Error,
-			TEXT("[Server] conflicting duplicate submission slot=%u turn=%d — rejected; first accepted batch is immutable."),
-			Slot.Value, TurnId);
+			TEXT("[Server] command schema snapshot unavailable; rejecting participant=%s turn=%d."),
+			*ParticipantID.ToCanonicalString(), TurnId);
+		return;
+	}
+	const int32 FrozenAuthorCount = GetFrozenExpectedAuthorCount();
+	if (FrozenAuthorCount <= 0)
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("[Server] frozen command-author count unavailable; rejecting participant=%s turn=%d."),
+			*ParticipantID.ToCanonicalString(), TurnId);
+		return;
+	}
+	const FSeinAuthorSubmissionBudget AuthorBudget =
+		GetAuthorSubmissionBudget(
+			FrozenAuthorCount, FrozenMaxCommandsPerSubmission);
+	if (OpaqueDrafts.Bytes.Num() > AuthorBudget.MaxEncodedBytes)
+	{
+		UE_LOG(LogSeinNet, Warning,
+			TEXT("[Server] rejecting over-share opaque submission participant=%s turn=%d wire=%d/%d."),
+			*ParticipantID.ToCanonicalString(), TurnId,
+			OpaqueDrafts.Bytes.Num(), AuthorBudget.MaxEncodedBytes);
+		return;
+	}
+	TArray<FSeinCommandSubmissionDraft> Drafts;
+	FString WireError;
+	FSeinWireCost DraftCost;
+	if (!FSeinNetCommandWireCodec::DecodeDraftsWithCost(
+		OpaqueDrafts,
+		AuthorBudget.MaxCommands,
+		[WorldSub](FGameplayTag Type, int32 Version, FSeinCommandSchemaDescriptor& Out)
+		{
+			return WorldSub->FindCommandSchema(Type, Version, Out);
+		},
+		Drafts,
+		WireError,
+		DraftCost,
+		FSeinNetCommandWireCodec::MaxNativeAllocationBytes)
+		|| !ValidateAuthorSubmissionBudget(
+			Drafts.Num(), OpaqueDrafts,
+			DraftCost.CanonicalCostBytes, WireError))
+	{
+		UE_LOG(LogSeinNet, Warning,
+			TEXT("[Server] rejecting malformed opaque submission participant=%s turn=%d: %s."),
+			*ParticipantID.ToCanonicalString(), TurnId, *WireError);
+		return;
+	}
+	TArray<FSeinCommand> Stamped;
+	Stamped.Reserve(Drafts.Num());
+	for (const FSeinCommandSubmissionDraft& Draft : Drafts)
+	{
+		TArray<FSeinCommand> Single{Draft.Command};
+		StampAuthoritativeCommandBatch(
+			Single,
+			Slot,
+			Draft.bRequestMatchAdministration && Binding->bCanAdministerMatch,
+			TurnId);
+		FSeinCommandSchemaDescriptor Schema;
+		if (WorldSub->ValidateCommandStructure(Single[0], &Schema)
+			!= ESeinCommandStructureResult::Valid)
+		{
+			UE_LOG(LogSeinNet, Warning,
+				TEXT("[Server] dropping malformed command draft participant=%s slot=%u turn=%d type=%s version=%d."),
+				*ParticipantID.ToCanonicalString(), Slot.Value, TurnId,
+				*Single[0].CommandType.ToString(), Single[0].SchemaVersion);
+			continue;
+		}
+		if (IsUnsupportedNetworkPauseCommand(Single[0], &Schema))
+		{
+			UE_LOG(LogSeinNet, Warning,
+				TEXT("[Server] dropping unsupported network pause-control participant=%s slot=%u turn=%d type=%s until the canonical pause lane is installed."),
+				*ParticipantID.ToCanonicalString(), Slot.Value, TurnId,
+				*Single[0].CommandType.ToString());
+			continue;
+		}
+		Stamped.Add(MoveTemp(Single[0]));
+	}
+	FSeinOpaqueCommandBatch AuthorCanonicalBatch;
+	FSeinWireCost AuthorCanonicalCost;
+	if (!FSeinNetCommandWireCodec::EncodeCommandsWithCost(
+			Stamped,
+			AuthorBudget.MaxCommands,
+			[WorldSub](FGameplayTag Type, int32 Version, FSeinCommandSchemaDescriptor& Out)
+			{
+				return WorldSub->FindCommandSchema(Type, Version, Out);
+			},
+			AuthorCanonicalBatch,
+			WireError,
+			AuthorCanonicalCost)
+		|| !ValidateAuthorSubmissionBudget(
+			Stamped.Num(), AuthorCanonicalBatch,
+			AuthorCanonicalCost.CanonicalCostBytes, WireError))
+	{
+		UE_LOG(LogSeinNet, Warning,
+			TEXT("[Server] rejecting over-share author batch participant=%s slot=%u turn=%d: %s."),
+			*ParticipantID.ToCanonicalString(), Slot.Value, TurnId, *WireError);
 		return;
 	}
 
-	const TMap<FSeinPlayerID, TArray<FSeinCommand>>& BufferForTurn =
-		ServerTurnBuffer.FindChecked(TurnId);
+	const FSeinTurnAuthor Author(ParticipantID, Slot);
+	FString AggregateWireError;
+	const ESeinTurnSubmitResult SubmitResult =
+		TurnAggregator.Submit(
+			Context, TurnId, Author, Stamped,
+			[this, &AggregateWireError](TConstArrayView<FSeinCommand> Prospective)
+			{
+				return PreflightCanonicalTurnBatch(Prospective, AggregateWireError);
+			});
+	if (SubmitResult == ESeinTurnSubmitResult::IdenticalRetry)
+	{
+		UE_LOG(LogSeinNet, Verbose,
+			TEXT("[Server] identical retry participant=%s slot=%u turn=%d — idempotent no-op."),
+			*ParticipantID.ToCanonicalString(), Slot.Value, TurnId);
+		return;
+	}
+	if (SubmitResult == ESeinTurnSubmitResult::ConflictingRetry)
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("[Server] conflicting retry participant=%s slot=%u turn=%d — rejected; first accepted batch is immutable."),
+			*ParticipantID.ToCanonicalString(), Slot.Value, TurnId);
+		return;
+	}
+	if (SubmitResult == ESeinTurnSubmitResult::AggregateRejected)
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("[Server] rejecting aggregate-overflow submission participant=%s slot=%u turn=%d: %s."),
+			*ParticipantID.ToCanonicalString(), Slot.Value, TurnId,
+			*AggregateWireError);
+		return;
+	}
+	if (SubmitResult != ESeinTurnSubmitResult::Accepted)
+	{
+		UE_LOG(LogSeinNet, Warning,
+			TEXT("[Server] rejected submission participant=%s slot=%u turn=%d result=%d."),
+			*ParticipantID.ToCanonicalString(), Slot.Value, TurnId,
+			static_cast<int32>(SubmitResult));
+		return;
+	}
 
-	UE_LOG(LogSeinNet, Verbose, TEXT("[Server] Buffered submission slot=%u  TurnId=%d  Count=%d  (have %d/%d slots)"),
-		Slot.Value, TurnId, Commands.Num(), BufferForTurn.Num(), GetActiveSlotCount());
+	UE_LOG(LogSeinNet, Verbose,
+		TEXT("[Server] buffered participant=%s slot=%u turn=%d commands=%d (have %d/%d authors)."),
+		*ParticipantID.ToCanonicalString(), Slot.Value, TurnId, Drafts.Num(),
+		TurnAggregator.GetSubmittedAuthorCount(TurnId), GetActiveSlotCount());
 
 	ServerCheckTurnComplete(TurnId, Slot);
 }
@@ -1557,9 +5549,13 @@ void USeinNetSubsystem::InjectDroppedSlotHeartbeats(
 	int32 Turn, bool bAllowAICommands)
 {
 	if (!IsServer()) return;
-	if (Turn <= CompletedTurnRejectionFloor || CompletedTurns.Contains(Turn)) return;
+	if (!TurnAggregator.IsConfigured()
+		|| TurnAggregator.IsTurnRetired(Turn)
+		|| TurnAggregator.IsTurnCommitted(Turn))
+	{
+		return;
+	}
 
-	TMap<FSeinPlayerID, TArray<FSeinCommand>>& BufferForTurn = ServerTurnBuffer.FindOrAdd(Turn);
 	TArray<FSeinPlayerID> ExpectedSlots;
 	GetExpectedCommandSlots(ExpectedSlots);
 
@@ -1573,38 +5569,121 @@ void USeinNetSubsystem::InjectDroppedSlotHeartbeats(
 			*Status != ESeinSlotLifecycle::AITakeover) continue;
 
 		if (!Slot.IsValid()) continue;
-		if (BufferForTurn.Contains(Slot)) continue; // already submitted (race)
-
-		// Drain any AI-emitted commands buffered for this slot since the
-		// last turn boundary. If empty, this is a true heartbeat (no
-		// commands this turn). Either way the slot's submission is now
-		// complete for `Turn`, so the gate can finalize.
-		TArray<FSeinCommand> AICommands;
-		if (BuildDroppedSlotSubmission(
-			Slot, Turn, bAllowAICommands, AICommands))
+		const FSeinNetworkParticipantID ParticipantID = FindParticipantForSlot(Slot);
+		if (!ParticipantID.IsValid())
 		{
-			const int32 CommandCount = AICommands.Num();
-			BufferForTurn.Add(Slot, MoveTemp(AICommands));
+			UE_LOG(LogSeinNet, Error,
+				TEXT("[Server] cannot inject slot=%u turn=%d: no manifest participant owns the slot."),
+				Slot.Value, Turn);
+			continue;
+		}
+		const FSeinTurnAuthor Author(ParticipantID, Slot);
+		if (TurnAggregator.HasSubmission(Turn, Author)) continue;
 
+		// Peek any AI-emitted commands buffered since the last boundary. The
+		// source queue remains intact until admission succeeds.
+		TArray<FSeinCommand> AICommands;
+		const int32 QueuedCommandCount = PendingAICommands.Find(Slot)
+			? PendingAICommands.FindChecked(Slot).Num() : 0;
+		BuildDroppedSlotSubmission(Slot, Turn, bAllowAICommands, AICommands);
+		const int32 BufferedCommandCount = AICommands.Num();
+		bool bSubmittingBufferedCommands = BufferedCommandCount > 0;
+		const FSeinAuthorSubmissionBudget AuthorBudget =
+			GetAuthorSubmissionBudget(
+				GetFrozenExpectedAuthorCount(),
+				FrozenMaxCommandsPerSubmission);
+		FString AdmissionError;
+		auto FitsAuthorBudget = [this, &AuthorBudget, &AdmissionError](
+			const TArray<FSeinCommand>& Candidate)
+		{
+			AdmissionError.Reset();
+			FSeinOpaqueCommandBatch Encoded;
+			FSeinWireCost WireCost;
+			return FSeinNetCommandWireCodec::EncodeCommandsWithCost(
+				Candidate,
+				AuthorBudget.MaxCommands,
+				[this](FGameplayTag Type, int32 Version, FSeinCommandSchemaDescriptor& Out)
+				{
+					return FindFrozenCommandSchema(Type, Version, Out);
+				},
+				Encoded,
+				AdmissionError,
+				WireCost)
+				&& ValidateAuthorSubmissionBudget(
+					Candidate.Num(), Encoded,
+					WireCost.CanonicalCostBytes, AdmissionError);
+		};
+		if (!FitsAuthorBudget(AICommands))
+		{
+			UE_LOG(LogSeinNet, Error,
+				TEXT("[Server] AI batch over share participant=%s slot=%u turn=%d; retaining %d command(s) and submitting heartbeat: %s."),
+				*ParticipantID.ToCanonicalString(), Slot.Value, Turn,
+				BufferedCommandCount, *AdmissionError);
+			AICommands.Reset();
+			bSubmittingBufferedCommands = false;
+			if (!FitsAuthorBudget(AICommands))
+			{
+				UE_LOG(LogSeinNet, Error,
+					TEXT("[Server] empty injected heartbeat failed admission participant=%s slot=%u turn=%d: %s."),
+					*ParticipantID.ToCanonicalString(), Slot.Value, Turn, *AdmissionError);
+				continue;
+			}
+		}
+		auto SubmitCandidate = [this, &AdmissionError, Turn, &Author](
+			const TArray<FSeinCommand>& Candidate)
+		{
+			AdmissionError.Reset();
+			return TurnAggregator.Submit(
+				ActiveProtocolContext, Turn, Author, Candidate,
+				[this, &AdmissionError](TConstArrayView<FSeinCommand> Prospective)
+				{
+					return PreflightCanonicalTurnBatch(Prospective, AdmissionError);
+				});
+		};
+		ESeinTurnSubmitResult Result = SubmitCandidate(AICommands);
+		if (Result == ESeinTurnSubmitResult::AggregateRejected
+			&& bSubmittingBufferedCommands)
+		{
+			UE_LOG(LogSeinNet, Error,
+				TEXT("[Server] AI batch failed aggregate preflight participant=%s slot=%u turn=%d; retaining %d command(s) and submitting heartbeat: %s."),
+				*ParticipantID.ToCanonicalString(), Slot.Value, Turn,
+				BufferedCommandCount, *AdmissionError);
+			AICommands.Reset();
+			bSubmittingBufferedCommands = false;
+			Result = SubmitCandidate(AICommands);
+		}
+		if (Result != ESeinTurnSubmitResult::Accepted
+			&& Result != ESeinTurnSubmitResult::IdenticalRetry)
+		{
+			UE_LOG(LogSeinNet, Warning,
+				TEXT("[Server] rejected injected submission participant=%s slot=%u turn=%d result=%d: %s."),
+				*ParticipantID.ToCanonicalString(), Slot.Value, Turn,
+				static_cast<int32>(Result), *AdmissionError);
+			continue;
+		}
+
+		if (Result == ESeinTurnSubmitResult::Accepted && bSubmittingBufferedCommands)
+		{
+			ConsumeAICommandPrefix(Slot, BufferedCommandCount);
 			UE_LOG(LogSeinNet, Verbose,
-				TEXT("[Server] drained %d AI-emitted command(s) for slot=%u into turn=%d"),
-				CommandCount, Slot.Value, Turn);
+				TEXT("[Server] admitted and consumed %d AI command(s) for participant=%s slot=%u into turn=%d."),
+				BufferedCommandCount, *ParticipantID.ToCanonicalString(), Slot.Value, Turn);
 		}
 		else
 		{
-			BufferForTurn.Add(Slot, TArray<FSeinCommand>());
 			UE_LOG(LogSeinNet, Verbose,
-				TEXT("[Server] injected heartbeat on behalf of dropped/AI slot=%u for turn=%d"),
-				Slot.Value, Turn);
+				TEXT("[Server] injected heartbeat for participant=%s slot=%u turn=%d (retained AI commands=%d)."),
+				*ParticipantID.ToCanonicalString(), Slot.Value, Turn,
+				bSubmittingBufferedCommands ? 0 : QueuedCommandCount);
 		}
 	}
 }
 
 bool USeinNetSubsystem::HandleAIEmit(FSeinPlayerID OwnedSlot, const FSeinCommand& Command)
 {
-	// Standalone / networking disabled: return false so the AI controller
-	// falls back to direct local enqueue. There are no other peers to keep
-	// in sync, so the lockstep wire isn't needed.
+	// This adapter is normally unbound outside an active server topology. If a
+	// topology transition leaves it briefly bound, false is a fail-closed drop;
+	// USeinAIController only uses direct enqueue when no adapter is bound.
 	if (!IsServer() || !IsNetworkingActive()) return false;
 
 	if (!OwnedSlot.IsValid())
@@ -1619,7 +5698,7 @@ bool USeinNetSubsystem::HandleAIEmit(FSeinPlayerID OwnedSlot, const FSeinCommand
 	// the turn here would race with what the heartbeat injector picks; we
 	// let the injector own both turn assignment and authority stamping so an
 	// AI-authored PlayerID/Tick can never leak into the canonical stream.
-	PendingAICommands.FindOrAdd(OwnedSlot).Add(Command);
+	if (!TryBufferAICommand(OwnedSlot, Command)) return true;
 	UE_LOG(LogSeinNet, Verbose,
 		TEXT("[Server] AI emit buffered: slot=%u  (pending=%d)"),
 		OwnedSlot.Value, PendingAICommands[OwnedSlot].Num());
@@ -1760,23 +5839,31 @@ void USeinNetSubsystem::TeardownAIForSlot(FSeinPlayerID Slot)
 	if (!IsServer() || !Slot.IsValid()) return;
 
 	TObjectPtr<USeinAIController>* Found = AITakeoverControllers.Find(Slot);
-	if (!Found) return;
-
-	USeinAIController* Controller = Found->Get();
-	if (Controller)
+	USeinAIController* OwnedController = Found ? Found->Get() : nullptr;
+	if (UWorld* World = GetWorld())
 	{
-		if (UWorld* World = GetWorld())
+		if (USeinWorldSubsystem* WorldSub = World->GetSubsystem<USeinWorldSubsystem>())
 		{
-			if (USeinWorldSubsystem* WorldSub = World->GetSubsystem<USeinWorldSubsystem>())
+			// Designer-registered takeover controllers intentionally need not live
+			// in AITakeoverControllers. Remove every controller for the reclaimed
+			// slot from the public world registry, not only the default instance.
+			const TArray<TObjectPtr<USeinAIController>> Registered =
+				WorldSub->GetAIControllers();
+			for (USeinAIController* Controller : Registered)
 			{
-				WorldSub->UnregisterAIController(Controller);
+				if (Controller && Controller->OwnedPlayerID == Slot)
+				{
+					WorldSub->UnregisterAIController(Controller);
+				}
 			}
 		}
+	}
+	if (OwnedController)
+	{
 		// MarkAsGarbage isn't strictly required — losing the strong ref via
 		// the map removal below makes it eligible — but it makes the
-		// teardown intent explicit + lets GC reclaim sooner if there's no
-		// other refholder lingering on a designer subclass.
-		Controller->MarkAsGarbage();
+		// teardown intent explicit for the framework-owned transient instance.
+		OwnedController->MarkAsGarbage();
 	}
 
 	AITakeoverControllers.Remove(Slot);
@@ -1788,7 +5875,7 @@ void USeinNetSubsystem::TeardownAIForSlot(FSeinPlayerID Slot)
 	PendingAICommands.Remove(Slot);
 
 	UE_LOG(LogSeinNet, Log,
-		TEXT("[Drop] slot=%u AI controller torn down (slot reconnected or session ended)."),
+		TEXT("[Drop] slot=%u AI controller/queue state torn down (slot reconnected or session ended)."),
 		Slot.Value);
 }
 
@@ -1809,27 +5896,27 @@ void USeinNetSubsystem::SimulateSlotDisconnect(FSeinPlayerID Slot)
 		Slot.Value, GetDroppedToAITakeoverSeconds());
 
 	// Inject heartbeats for any open turns so the gate doesn't stall.
-	if (!ServerTurnBuffer.IsEmpty())
+	const TArray<int32> OpenTurns = TurnAggregator.GetPendingTurnIDs();
+	if (!OpenTurns.IsEmpty())
 	{
-		TArray<int32> OpenTurns;
-		ServerTurnBuffer.GetKeys(OpenTurns);
-		for (int32 T : OpenTurns)
+		for (const int32 T : OpenTurns)
 		{
 			InjectDroppedSlotHeartbeats(T, /*bAllowAICommands=*/false);
 			ServerCheckTurnComplete(T);
 		}
 	}
 
-	if (!ServerHashReports.IsEmpty())
+	if (!ServerWorldStateRootReports.IsEmpty())
 	{
 		TArray<int32> PendingTurns;
-		ServerHashReports.GetKeys(PendingTurns);
+		ServerWorldStateRootReports.GetKeys(PendingTurns);
 		for (const int32 Turn : PendingTurns)
 		{
-			const TMap<FSeinPlayerID, int32>* Reports = ServerHashReports.Find(Turn);
-			if (Reports && AreExpectedHashReportsComplete(*Reports))
+			const TMap<FSeinNetworkParticipantID, FGuid>* Reports =
+				ServerWorldStateRootReports.Find(Turn);
+			if (Reports && AreExpectedWorldRootReportsComplete(*Reports))
 			{
-				ServerCompareHashesForTurn(Turn);
+				ServerCompareWorldStateRootsForTurn(Turn);
 			}
 		}
 	}
@@ -1873,18 +5960,19 @@ void USeinNetSubsystem::SimulateSlotReconnect(FSeinPlayerID Slot)
 void USeinNetSubsystem::ServerCheckTurnComplete(
 	int32 TurnId, FSeinPlayerID CompletingSubmitter)
 {
-	const TMap<FSeinPlayerID, TArray<FSeinCommand>>* BufferForTurn = ServerTurnBuffer.Find(TurnId);
-	if (!BufferForTurn) return;
-
-	TArray<FSeinPlayerID> ExpectedSlots;
-	GetExpectedCommandSlots(ExpectedSlots);
-	int32 ReceivedExpectedCount = 0;
-	for (const FSeinPlayerID Slot : ExpectedSlots)
+	if (!TurnAggregator.IsConfigured()
+		|| TurnAggregator.IsTurnRetired(TurnId)
+		|| TurnAggregator.IsTurnCommitted(TurnId))
 	{
-		ReceivedExpectedCount += BufferForTurn->Contains(Slot) ? 1 : 0;
+		return;
 	}
 
-	if (!AreExpectedCommandSlotsComplete(ExpectedSlots, *BufferForTurn))
+	const TArray<FSeinTurnAuthor> MissingAuthors =
+		TurnAggregator.GetMissingAuthors(TurnId);
+	const int32 ReceivedExpectedCount =
+		TurnAggregator.GetSubmittedAuthorCount(TurnId);
+	const int32 ExpectedAuthorCount = TurnAggregator.GetExpectedAuthors().Num();
+	if (!MissingAuthors.IsEmpty())
 	{
 		// Persistent-incomplete escalation: most incompletes are transient
 		// pipeline blips. State is per turn because future/open turns can be
@@ -1899,8 +5987,8 @@ void USeinNetSubsystem::ServerCheckTurnComplete(
 			Added.FirstObservedAt = NowSec;
 			Added.LastLoggedAt = NowSec;
 			UE_LOG(LogSeinNet, Verbose,
-				TEXT("[BUFFER INCOMPLETE transient] turn=%d  have=%d/%d slots."),
-				TurnId, ReceivedExpectedCount, ExpectedSlots.Num());
+				TEXT("[BUFFER INCOMPLETE transient] turn=%d have=%d/%d authors."),
+				TurnId, ReceivedExpectedCount, ExpectedAuthorCount);
 			return;
 		}
 
@@ -1909,20 +5997,23 @@ void USeinNetSubsystem::ServerCheckTurnComplete(
 			(!Diagnostic->bEscalated || (NowSec - Diagnostic->LastLoggedAt) >= 2.0))
 		{
 			TArray<FString> Have, Missing;
-			for (const FSeinPlayerID Slot : ExpectedSlots)
+			for (const FSeinTurnAuthor& Author : TurnAggregator.GetExpectedAuthors())
 			{
-				if (BufferForTurn->Contains(Slot))
+				const FString Label = FString::Printf(
+					TEXT("%s/slot-%u"),
+					*Author.ParticipantID.ToCanonicalString(), Author.CommandSlot.Value);
+				if (TurnAggregator.HasSubmission(TurnId, Author))
 				{
-					Have.Add(FString::Printf(TEXT("%u"), Slot.Value));
+					Have.Add(Label);
 				}
 				else
 				{
-					Missing.Add(FString::Printf(TEXT("%u"), Slot.Value));
+					Missing.Add(Label);
 				}
 			}
 			UE_LOG(LogSeinNet, Log,
-				TEXT("[BUFFER INCOMPLETE persistent] turn=%d incomplete for %.1fs  have=%d/%d slots [%s]  missing=[%s]. Server is holding — likely one peer's heartbeat dropped (LocalRelay race or disconnect)."),
-				TurnId, IncompleteFor, ReceivedExpectedCount, ExpectedSlots.Num(),
+				TEXT("[BUFFER INCOMPLETE persistent] turn=%d incomplete for %.1fs have=%d/%d authors [%s] missing=[%s]. Server is holding."),
+				TurnId, IncompleteFor, ReceivedExpectedCount, ExpectedAuthorCount,
 				*FString::Join(Have, TEXT(",")),
 				*FString::Join(Missing, TEXT(",")));
 			Diagnostic->LastLoggedAt = NowSec;
@@ -1930,48 +6021,84 @@ void USeinNetSubsystem::ServerCheckTurnComplete(
 		}
 		return;
 	}
-	// Assemble exactly the canonical expected slot IDs, already sorted by ID.
-	// Extra/stale buffer keys can neither satisfy a missing live slot nor enter
-	// the deterministic command stream.
-	const TArray<FSeinPlayerID>& SortedSlots = ExpectedSlots;
 
 	TArray<FSeinCommand> Assembled;
-	for (const FSeinPlayerID& Slot : SortedSlots)
+	const ESeinTurnCommitResult CommitResult =
+		TurnAggregator.TryCommit(ActiveProtocolContext, TurnId, Assembled);
+	if (CommitResult != ESeinTurnCommitResult::Committed)
 	{
-		const TArray<FSeinCommand>& Sub = BufferForTurn->FindChecked(Slot);
-		Assembled.Append(Sub);
+		UE_LOG(LogSeinNet, Warning,
+			TEXT("[Server] ready turn=%d failed canonical commit result=%d."),
+			TurnId, static_cast<int32>(CommitResult));
+		return;
 	}
 
 	// Per-turn chatter — Verbose. Routine completion isn't worth a log line
 	// every ~100ms in a healthy session. Bump LogSeinNet to Verbose to see.
-	UE_LOG(LogSeinNet, Verbose, TEXT("[Server] Turn complete: TurnId=%d  Slots=%d  TotalCmds=%d — fanning to %d relays."),
-		TurnId, SortedSlots.Num(), Assembled.Num(), Relays.Num());
+	UE_LOG(LogSeinNet, Verbose,
+		TEXT("[Server] turn complete: turn=%d authors=%d commands=%d — fanning to %d relays."),
+		TurnId, ExpectedAuthorCount, Assembled.Num(), Relays.Num());
 
 	FinalizeCompletedTurnDiagnostics(TurnId, CompletingSubmitter);
+
+	FSeinOpaqueCommandBatch OpaqueAssembled;
+	FString WireError;
+	if (!FSeinNetCommandWireCodec::EncodeCommands(
+		Assembled,
+		GetMaxCommandsPerCanonicalTurn(),
+		[this](FGameplayTag Type, int32 Version, FSeinCommandSchemaDescriptor& Out)
+		{
+			return FindFrozenCommandSchema(Type, Version, Out);
+		},
+		OpaqueAssembled,
+		WireError))
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("[Server] committed turn=%d cannot be encoded for fan-out: %s."),
+			TurnId, *WireError);
+		return;
+	}
+	// Dedicated authorities do not receive their own client RPC. Decode the
+	// exact fan-out bytes once locally so their sim and the replay observe the
+	// same canonical representation as every remote peer (including container
+	// normalization performed by the bounded decoder).
+	TArray<FSeinCommand> WireCanonicalAssembled;
+	if (!FSeinNetCommandWireCodec::DecodeCommands(
+		OpaqueAssembled,
+		GetMaxCommandsPerCanonicalTurn(),
+		[this](FGameplayTag Type, int32 Version, FSeinCommandSchemaDescriptor& Out)
+		{
+			return FindFrozenCommandSchema(Type, Version, Out);
+		},
+		WireCanonicalAssembled,
+		WireError))
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("[Server] committed turn=%d failed local canonical wire decode: %s."),
+			TurnId, *WireError);
+		return;
+	}
 
 	// Capture the canonical assembled turn into the replay log BEFORE fan-out.
 	// Recording at the assembly step (rather than per-client receive) gives us
 	// one authoritative copy free of duplicates / ordering ambiguity.
 	if (ReplayWriter && ReplayWriter->IsRecording())
 	{
-		ReplayWriter->RecordTurn(TurnId, Assembled);
+		ReplayWriter->RecordTurn(TurnId, WireCanonicalAssembled);
 	}
 
 	// Listen hosts receive through their owned relay. A dedicated authority has
 	// no local relay/RPC loopback, so feed its gate from the same canonical
 	// assembled payload before fanning out to remote peers.
-	BufferAssembledTurnForDedicatedAuthority(TurnId, Assembled);
+	BufferAssembledTurnForDedicatedAuthority(TurnId, WireCanonicalAssembled);
 
 	for (const TWeakObjectPtr<ASeinNetRelay>& Wp : Relays)
 	{
 		if (ASeinNetRelay* Target = Wp.Get())
 		{
-			Target->Client_ReceiveTurn(TurnId, Assembled);
+			Target->Client_ReceiveTurn(ActiveProtocolContext, TurnId, OpaqueAssembled);
 		}
 	}
-
-	ServerTurnBuffer.Remove(TurnId);
-	CompletedTurns.Add(TurnId);
 }
 
 void USeinNetSubsystem::BufferAssembledTurnForDedicatedAuthority(
@@ -1989,12 +6116,51 @@ void USeinNetSubsystem::BufferReceivedTurn(int32 TurnId, const TArray<FSeinComma
 	OnTurnReceived.Broadcast(TurnId, Commands);
 }
 
-void USeinNetSubsystem::ClientHandleTurn(int32 TurnId, const TArray<FSeinCommand>& Commands)
+void USeinNetSubsystem::ClientHandleTurn(
+	const FSeinProtocolContext& Context,
+	int32 TurnId,
+	const FSeinOpaqueCommandBatch& OpaqueCommands)
 {
+	if (!IsCurrentProtocolContext(Context, TEXT("ClientHandleTurn"))) return;
 	PruneProtocolState(GetCurrentTurn());
 	if (!IsCommandTurnWithinProtocolWindow(TurnId, TEXT("ClientHandleTurn")))
 	{
 		return;
+	}
+	TArray<FSeinCommand> Commands;
+	FString WireError;
+	if (!FSeinNetCommandWireCodec::DecodeCommands(
+		OpaqueCommands,
+		GetMaxCommandsPerCanonicalTurn(),
+		[this](FGameplayTag Type, int32 Version, FSeinCommandSchemaDescriptor& Out)
+		{
+			return FindFrozenCommandSchema(Type, Version, Out);
+		},
+		Commands,
+		WireError))
+	{
+		UE_LOG(LogSeinNet, Warning,
+			TEXT("[Client] rejecting malformed opaque assembled turn=%d: %s."),
+			TurnId, *WireError);
+		return;
+	}
+	for (const FSeinCommand& Command : Commands)
+	{
+		FSeinCommandSchemaDescriptor Schema;
+		const bool bExternalIssuer =
+			Command.IssuerKind == ESeinCommandIssuerKind::Player
+			|| Command.IssuerKind == ESeinCommandIssuerKind::MatchAdministrator;
+		if (!bExternalIssuer || Command.DerivedResourcePayer.IsValid()
+			|| !FindFrozenCommandSchema(
+				Command.CommandType, Command.SchemaVersion, Schema))
+		{
+			UE_LOG(LogSeinNet, Error,
+				TEXT("[Client] rejecting non-canonical assembled turn=%d command=%s issuer=%d derivedPayer=%u."),
+				TurnId, *Command.CommandType.ToString(),
+				static_cast<int32>(Command.IssuerKind),
+				Command.DerivedResourcePayer.Value);
+			return;
+		}
 	}
 
 	// Per-turn chatter — Verbose. See ServerCheckTurnComplete's note for why.
@@ -2006,6 +6172,12 @@ void USeinNetSubsystem::ClientHandleTurn(int32 TurnId, const TArray<FSeinCommand
 	// turn boundary, guaranteeing every client applies turn N's commands
 	// at the same sim tick (= N * TicksPerTurn). Empty turns still get an
 	// entry so the gate sees them as "ready" instead of stalling.
+	if (ReceivedTurns.Contains(TurnId))
+	{
+		UE_LOG(LogSeinNet, Verbose,
+			TEXT("[Client] duplicate assembled turn=%d ignored; first delivery is immutable."), TurnId);
+		return;
+	}
 	BufferReceivedTurn(TurnId, Commands);
 }
 
@@ -2068,82 +6240,166 @@ void USeinNetSubsystem::RecordStragglerIfApplicable(int32 TurnId, FSeinPlayerID 
 }
 
 // ============================================================================
-// Determinism gossip (Phase 4)
+// Determinism gossip
 // ============================================================================
 
-void USeinNetSubsystem::MaybeSubmitStateHashCheck(int32 JustFinishedTurn)
+bool USeinNetSubsystem::ResolveLocalWorldStateRoot(
+	FGuid& OutRoot,
+	FString& OutError) const
+{
+	OutRoot.Invalidate();
+	OutError.Reset();
+
+#if WITH_DEV_AUTOMATION_TESTS
+	if (TestWorldStateRootResolverOverride)
+	{
+		FGuid Candidate;
+		FString CandidateError;
+		if (!TestWorldStateRootResolverOverride(Candidate, CandidateError)
+			|| !Candidate.IsValid())
+		{
+			OutError = CandidateError.IsEmpty()
+				? TEXT("The test world-state-root resolver returned no valid root.")
+				: MoveTemp(CandidateError);
+			return false;
+		}
+		OutRoot = Candidate;
+		return true;
+	}
+#endif
+
+	const UWorld* World = GetWorld();
+	const USeinWorldSubsystem* WorldSub =
+		World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
+	if (!WorldSub)
+	{
+		OutError =
+			TEXT("The current world has no Sein simulation subsystem.");
+		return false;
+	}
+
+	FGuid Candidate;
+	FString CandidateError;
+	if (!WorldSub->ComputeCanonicalStateRoot(Candidate, CandidateError)
+		|| !Candidate.IsValid())
+	{
+		OutError = CandidateError.IsEmpty()
+			? TEXT("Core returned no valid canonical world-state root.")
+			: MoveTemp(CandidateError);
+		return false;
+	}
+
+	OutRoot = Candidate;
+	return true;
+}
+
+void USeinNetSubsystem::MaybeSubmitWorldStateRootCheck(int32 JustFinishedTurn)
 {
 	if (!IsDeterminismGossipEnabled()) return;
 	if (!IsNetworkingActive()) return;
-	if (!LocalPlayerID.IsValid()) return;
+	if (!LocalParticipantID.IsValid()) return;
+	if (DeterminismSessionFailure.IsValid()) return;
 
 	const int32 Interval = GetDeterminismCheckIntervalTurns();
 	if (Interval <= 0) return;
 
 	// Cadence: every N turns, starting at turn 0 (which is grace anyway, so
 	// no real check fires for it; first real check is turn `Interval`).
-	if (JustFinishedTurn % Interval != 0) return;
-	if (JustFinishedTurn <= LastHashReportedTurn || JustFinishedTurn <= LastHashQueuedTurn) return;
-
-	// First time this client reports a hash — log at Log level so the user
-	// sees gossip is live without needing Verbose. Subsequent reports stay
-	// Verbose unless there's a desync.
-	if (LastHashReportedTurn < 0)
+	if (!IsDueWorldStateRootCheckpoint(JustFinishedTurn)) return;
+	if (JustFinishedTurn <= LastWorldStateRootReportedTurn
+		|| JustFinishedTurn <= LastWorldStateRootQueuedTurn)
 	{
-		UE_LOG(LogSeinNet, Log,
-			TEXT("[DETERMINISM] gossip active — reporting state hash every %d turn(s). Server compares + fires red on-screen alarm if peers diverge."),
-			Interval);
-	}
-
-	UWorld* World = GetWorld();
-	USeinWorldSubsystem* WorldSub = World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
-	if (!WorldSub)
-	{
-		UE_LOG(LogSeinNet, Error, TEXT("MaybeSubmitStateHashCheck: no USeinWorldSubsystem at checkpoint turn %d; hash cannot be captured."),
-			JustFinishedTurn);
 		return;
 	}
 
-	const int32 LocalHash = WorldSub->ComputeStateHash();
-	EnqueueStateHashReport(JustFinishedTurn, LocalHash);
-	FlushPendingStateHashReports();
-}
-
-void USeinNetSubsystem::EnqueueStateHashReport(int32 Turn, int32 Hash)
-{
-	if (Turn <= LastHashReportedTurn || Turn <= LastHashQueuedTurn) return;
-	FSeinPendingStateHashReport& Pending = PendingStateHashReports.Emplace_GetRef();
-	Pending.Turn = Turn;
-	Pending.Hash = Hash;
-	LastHashQueuedTurn = Turn;
-}
-
-void USeinNetSubsystem::FlushPendingStateHashReports()
-{
-	while (!PendingStateHashReports.IsEmpty())
+	// First time this peer reports a root — log at Log level so the user
+	// sees gossip is live without needing Verbose. Subsequent reports stay
+	// Verbose unless there's a desync.
+	if (LastWorldStateRootReportedTurn < 0)
 	{
-		const FSeinPendingStateHashReport& Pending = PendingStateHashReports[0];
+		UE_LOG(LogSeinNet, Log,
+			TEXT("[DETERMINISM] gossip active — reporting canonical world-state roots every %d turn(s). Coordinator compares + fires red on-screen alarm if peers diverge."),
+			Interval);
+	}
+
+	FGuid LocalWorldRoot;
+	FString RootError;
+	if (!ResolveLocalWorldStateRoot(LocalWorldRoot, RootError))
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("MaybeSubmitWorldStateRootCheck: canonical root unavailable at due checkpoint turn %d; failing the lockstep epoch: %s"),
+			JustFinishedTurn, *RootError);
+		ReportLocalWorldStateRootCaptureFailure(JustFinishedTurn);
+		return;
+	}
+
+	EnqueueWorldStateRootReport(JustFinishedTurn, LocalWorldRoot);
+	FlushPendingWorldStateRootReports();
+}
+
+void USeinNetSubsystem::EnqueueWorldStateRootReport(
+	int32 Turn,
+	const FGuid& WorldRoot)
+{
+	if (!WorldRoot.IsValid())
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("EnqueueWorldStateRootReport: refusing invalid root for turn=%d."),
+			Turn);
+		return;
+	}
+	if (Turn <= LastWorldStateRootReportedTurn
+		|| Turn <= LastWorldStateRootQueuedTurn)
+	{
+		return;
+	}
+	FSeinPendingWorldStateRootReport& Pending =
+		PendingWorldStateRootReports.Emplace_GetRef();
+	Pending.Turn = Turn;
+	Pending.WorldRoot = WorldRoot;
+	LastWorldStateRootQueuedTurn = Turn;
+}
+
+void USeinNetSubsystem::FlushPendingWorldStateRootReports()
+{
+	while (!PendingWorldStateRootReports.IsEmpty())
+	{
+		const FSeinPendingWorldStateRootReport& Pending =
+			PendingWorldStateRootReports[0];
 		bool bSent = false;
 #if WITH_DEV_AUTOMATION_TESTS
-		if (TestHashSubmitOverride)
+		if (TestWorldStateRootSubmitOverride)
 		{
-			bSent = TestHashSubmitOverride(Pending.Turn, Pending.Hash);
+			bSent = TestWorldStateRootSubmitOverride(
+				Pending.Turn, Pending.WorldRoot);
 		}
 		else
 #endif
 		{
-			if (!IsNetworkingActive() || !LocalPlayerID.IsValid() ||
-				!IsHashTurnWithinProtocolWindow(Pending.Turn, TEXT("FlushPendingStateHashReports")))
+			if (!IsNetworkingActive() || !LocalParticipantID.IsValid()
+				|| !ActiveProtocolContext.IsValid() ||
+				!IsDeterminismEvidenceTurnWithinProtocolWindow(
+					Pending.Turn,
+					TEXT("FlushPendingWorldStateRootReports")))
 			{
 				return;
 			}
 
-			if (ASeinNetRelay* Relay = LocalRelay.Get())
+			if (IsDedicatedAuthority() && IsServer())
+			{
+				ServerHandleWorldStateRootReportForParticipant(
+					LocalParticipantID, Pending.Turn, Pending.WorldRoot);
+				bSent = true;
+			}
+			else if (ASeinNetRelay* Relay = LocalRelay.Get())
 			{
 				UE_LOG(LogSeinNet, Verbose,
-					TEXT("[DETERMINISM] reporting hash=0x%08x for turn=%d slot=%u"),
-					static_cast<uint32>(Pending.Hash), Pending.Turn, LocalPlayerID.Value);
-				Relay->Server_ReportStateHash(Pending.Turn, Pending.Hash);
+					TEXT("[DETERMINISM] reporting worldRoot=%s for turn=%d participant=%s"),
+					*Pending.WorldRoot.ToString(EGuidFormats::Digits),
+					Pending.Turn,
+					*LocalParticipantID.ToCanonicalString());
+				Relay->Server_ReportWorldStateRoot(
+					ActiveProtocolContext, Pending.Turn, Pending.WorldRoot);
 				bSent = true;
 			}
 		}
@@ -2151,49 +6407,398 @@ void USeinNetSubsystem::FlushPendingStateHashReports()
 		if (!bSent)
 		{
 			UE_LOG(LogSeinNet, Warning,
-				TEXT("FlushPendingStateHashReports: retaining exact turn=%d hash=0x%08x for retry."),
-				Pending.Turn, static_cast<uint32>(Pending.Hash));
+				TEXT("FlushPendingWorldStateRootReports: retaining exact turn=%d root=%s for retry."),
+				Pending.Turn,
+				*Pending.WorldRoot.ToString(EGuidFormats::Digits));
 			return;
 		}
 
-		LastHashReportedTurn = FMath::Max(LastHashReportedTurn, Pending.Turn);
-		PendingStateHashReports.RemoveAt(0, 1, EAllowShrinking::No);
+		LastWorldStateRootReportedTurn =
+			FMath::Max(LastWorldStateRootReportedTurn, Pending.Turn);
+		PendingWorldStateRootReports.RemoveAt(
+			0, 1, EAllowShrinking::No);
 	}
 }
 
-void USeinNetSubsystem::ServerHandleConfigFingerprint(ASeinNetRelay* SourceRelay, int32 Fingerprint)
+void USeinNetSubsystem::ReportLocalWorldStateRootCaptureFailure(
+	int32 CheckpointTurn)
+{
+	if (!LocalParticipantID.IsValid()
+		|| !ActiveProtocolContext.IsValid()
+		|| !IsDueWorldStateRootCheckpoint(CheckpointTurn))
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("[DETERMINISM] refusing malformed local canonical-root capture failure turn=%d participant=%s."),
+			CheckpointTurn,
+			*LocalParticipantID.ToCanonicalString());
+		return;
+	}
+
+	FSeinDeterminismSessionFailure Failure;
+	Failure.Kind =
+		ESeinDeterminismSessionFailureKind::CanonicalRootCaptureFailed;
+	Failure.Turn = CheckpointTurn;
+	Failure.ParticipantID = LocalParticipantID;
+	ReportLocalDeterminismSessionFailure(Failure);
+}
+
+void USeinNetSubsystem::SetDeterminismSessionFailureSubmitter(
+	FSeinDeterminismSessionFailureSubmitter Submitter)
+{
+	DeterminismSessionFailureSubmitter = MoveTemp(Submitter);
+}
+
+void USeinNetSubsystem::ClearDeterminismSessionFailureSubmitter()
+{
+	DeterminismSessionFailureSubmitter.Unbind();
+}
+
+bool USeinNetSubsystem::RetryPendingDeterminismSessionFailureReport()
+{
+	FlushPendingDeterminismSessionFailure();
+	return !PendingDeterminismSessionFailureReport.IsSet();
+}
+
+void USeinNetSubsystem::HandleExecutionTopologyInvalidated(
+	const FString& Reason)
+{
+	if (!LocalParticipantID.IsValid() || !ActiveProtocolContext.IsValid())
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("[DETERMINISM] execution topology invalidated outside an active participant protocol context: %s"),
+			*Reason);
+		return;
+	}
+
+	FSeinDeterminismSessionFailure Failure;
+	Failure.Kind =
+		ESeinDeterminismSessionFailureKind::ExecutionTopologyInvalidated;
+	Failure.Turn = GetCurrentTurn();
+	Failure.ParticipantID = LocalParticipantID;
+	UE_LOG(LogSeinNet, Error,
+		TEXT("[DETERMINISM] local execution topology invalidated at turn=%d participant=%s: %s"),
+		Failure.Turn,
+		*Failure.ParticipantID.ToCanonicalString(),
+		*Reason);
+	ReportLocalDeterminismSessionFailure(Failure);
+}
+
+void USeinNetSubsystem::ReportLocalDeterminismSessionFailure(
+	const FSeinDeterminismSessionFailure& Failure)
+{
+	FSeinDeterminismSessionFailure LocalFailure = Failure;
+	LocalFailure.ParticipantID = LocalParticipantID;
+	if (!LocalParticipantID.IsValid()
+		|| !ActiveProtocolContext.IsValid()
+		|| !LocalFailure.IsValid()
+		|| !LocalFailure.IsParticipantReportable())
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("[DETERMINISM] refusing malformed local session-failure report kind=%d turn=%d participant=%s."),
+			static_cast<int32>(LocalFailure.Kind),
+			LocalFailure.Turn,
+			*LocalParticipantID.ToCanonicalString());
+		return;
+	}
+
+	if (IsLocalProtocolCoordinator()
+		&& HandleAuthenticatedDeterminismSessionFailure(
+			ActiveProtocolContext, LocalParticipantID, LocalFailure))
+	{
+		return;
+	}
+
+	// A non-coordinator must stop immediately rather than advancing while its
+	// terminal report is in flight. The coordinator's exact value replaces
+	// this provisional local value when the authoritative notification arrives.
+	EnterDeterminismSessionFailure(
+		LocalFailure,
+		/*bAuthoritative=*/false,
+		/*bNotifyPeers=*/false);
+	if (!PendingDeterminismSessionFailureReport.IsSet())
+	{
+		PendingDeterminismSessionFailureReport = LocalFailure;
+	}
+	FlushPendingDeterminismSessionFailure();
+}
+
+void USeinNetSubsystem::FlushPendingDeterminismSessionFailure()
+{
+	if (!PendingDeterminismSessionFailureReport.IsSet()) return;
+	if (bDeterminismSessionFailureAuthoritative)
+	{
+		PendingDeterminismSessionFailureReport.Reset();
+		return;
+	}
+
+	const FSeinDeterminismSessionFailure Pending =
+		PendingDeterminismSessionFailureReport.GetValue();
+	bool bSent = false;
+#if WITH_DEV_AUTOMATION_TESTS
+	if (TestDeterminismSessionFailureSubmitOverride)
+	{
+		bSent = TestDeterminismSessionFailureSubmitOverride(Pending);
+	}
+	else
+#endif
+	{
+		if ((!IsNetworkingActive()
+				&& !DeterminismSessionFailureSubmitter.IsBound())
+			|| !LocalParticipantID.IsValid()
+			|| !ActiveProtocolContext.IsValid())
+		{
+			return;
+		}
+
+		if (IsLocalProtocolCoordinator())
+		{
+			bSent = HandleAuthenticatedDeterminismSessionFailure(
+				ActiveProtocolContext,
+				LocalParticipantID,
+				Pending);
+		}
+		else if (DeterminismSessionFailureSubmitter.IsBound())
+		{
+			bSent = DeterminismSessionFailureSubmitter.Execute(
+				ActiveProtocolContext,
+				Pending);
+		}
+		else if (ASeinNetRelay* Relay = LocalRelay.Get())
+		{
+			Relay->Server_ReportDeterminismSessionFailure(
+				ActiveProtocolContext,
+				Pending);
+			bSent = true;
+		}
+	}
+
+	if (!bSent)
+	{
+		UE_LOG(LogSeinNet, Warning,
+			TEXT("[DETERMINISM] retaining session-failure report kind=%d turn=%d participant=%s for transport retry."),
+			static_cast<int32>(Pending.Kind),
+			Pending.Turn,
+			*Pending.ParticipantID.ToCanonicalString());
+		return;
+	}
+	PendingDeterminismSessionFailureReport.Reset();
+}
+
+void USeinNetSubsystem::EnterDeterminismSessionFailure(
+	const FSeinDeterminismSessionFailure& Failure,
+	bool bAuthoritative,
+	bool bNotifyPeers)
+{
+	if (!Failure.IsValid()) return;
+
+	bool bStateChanged = false;
+	if (!DeterminismSessionFailure.IsValid())
+	{
+		DeterminismSessionFailure = Failure;
+		bDeterminismSessionFailureAuthoritative = bAuthoritative;
+		bStateChanged = true;
+	}
+	else if (!bDeterminismSessionFailureAuthoritative && bAuthoritative)
+	{
+		DeterminismSessionFailure = Failure;
+		bDeterminismSessionFailureAuthoritative = true;
+		bStateChanged = true;
+	}
+	else
+	{
+		return;
+	}
+	if (bAuthoritative)
+	{
+		PendingDeterminismSessionFailureReport.Reset();
+		PendingAuthenticatedDeterminismSessionFailures.Reset();
+	}
+
+	bStartSessionRequested = false;
+	bServerStartRequested = false;
+	if (UWorld* World = GetWorld())
+	{
+		if (USeinWorldSubsystem* WorldSub =
+			World->GetSubsystem<USeinWorldSubsystem>())
+		{
+			WorldSub->StopSimulation();
+		}
+	}
+
+	const TCHAR* KindText = TEXT("unknown");
+	switch (Failure.Kind)
+	{
+	case ESeinDeterminismSessionFailureKind::CanonicalRootCaptureFailed:
+		KindText = TEXT("canonical root capture failed");
+		break;
+	case ESeinDeterminismSessionFailureKind::CanonicalRootCheckpointExpired:
+		KindText = TEXT("canonical root checkpoint expired incomplete");
+		break;
+	case ESeinDeterminismSessionFailureKind::ExecutionTopologyInvalidated:
+		KindText = TEXT("execution topology invalidated");
+		break;
+	default:
+		break;
+	}
+	UE_LOG(LogSeinNet, Error,
+		TEXT("[DETERMINISM SESSION FAILED] turn=%d participant=%s reason=%s authority=%s. Simulation stopped."),
+		Failure.Turn,
+		*Failure.ParticipantID.ToCanonicalString(),
+		KindText,
+		bAuthoritative ? TEXT("coordinator") : TEXT("local-provisional"));
+
+	if (bStateChanged)
+	{
+		OnDeterminismSessionFailure.Broadcast(
+			DeterminismSessionFailure);
+		OnDeterminismSessionFailureBP.Broadcast(
+			DeterminismSessionFailure);
+	}
+
+	if (bNotifyPeers && IsLocalProtocolCoordinator()
+		&& ActiveProtocolContext.IsValid())
+	{
+		for (const TWeakObjectPtr<ASeinNetRelay>& WeakRelay : Relays)
+		{
+			if (ASeinNetRelay* Relay = WeakRelay.Get())
+			{
+				Relay->Client_NotifyDeterminismSessionFailure(
+					ActiveProtocolContext,
+					DeterminismSessionFailure);
+			}
+		}
+	}
+}
+
+void USeinNetSubsystem::ServerHandleConfigFingerprint(
+	ASeinNetRelay* SourceRelay,
+	const FSeinProtocolContext& Context,
+	int32 Fingerprint,
+	FGuid CommandProtocolDigest,
+	FGuid MatchSettingsDigest,
+	FGuid SimulationContentDigest)
 {
 	if (!IsServer() || !SourceRelay) return;
-	// Clients always report. The host alone chooses whether those reports are
-	// enforced, so a client's local opt-out cannot bypass host policy.
-	if (!IsConfigParityCheckEnabled()) return;
-
-	const FSeinPlayerID* SlotPtr = RelayToSlot.Find(SourceRelay);
-	if (!SlotPtr || !SlotPtr->IsValid())
+	if (!IsCurrentProtocolContext(Context, TEXT("ServerHandleConfigFingerprint"))) return;
+	const FSeinNetworkParticipantID* ParticipantPtr = RelayToParticipant.Find(SourceRelay);
+	if (!ParticipantPtr || !ParticipantPtr->IsValid())
 	{
 		UE_LOG(LogSeinNet, Warning,
 			TEXT("[CONFIG] ServerHandleConfigFingerprint: unmapped relay %s — dropping fingerprint."),
 			*GetNameSafe(SourceRelay));
 		return;
 	}
-	const FSeinPlayerID Slot = *SlotPtr;
-	const ESeinSlotLifecycle* Lifecycle = SlotLifecycle.Find(Slot);
-	if (!Lifecycle || *Lifecycle != ESeinSlotLifecycle::Connected)
+	const FSeinNetworkParticipantID ParticipantID = *ParticipantPtr;
+	if (!MatchSettingsDigest.IsValid()
+		|| MatchSettingsDigest != ActiveProtocolContext.MatchSettingsDigest)
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("[CONFIG] participant=%s match-settings digest MISMATCH — kicking."),
+			*ParticipantID.ToCanonicalString());
+		AcceptedConfigFingerprints.Remove(ParticipantID);
+		FailBootstrapSession(
+			TEXT("A frozen participant has incompatible match settings."),
+			/*bNotifyPeers=*/true);
+		SourceRelay->Client_NotifyKicked(
+			TEXT("Match-settings mismatch: received bootstrap data cannot reproduce the host's canonical settings."));
+		return;
+	}
+	FGuid ServerSimulationContentDigest;
+	if (!ResolveLocalSimulationContentDigest(
+			ServerSimulationContentDigest)
+		|| ServerSimulationContentDigest
+			!= ActiveProtocolContext.SimulationContentDigest)
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("[CONFIG] authority simulation content no longer matches its active context; bootstrap halted."));
+		FailBootstrapSession(
+			TEXT("The coordinator simulation content changed during bootstrap."),
+			/*bNotifyPeers=*/true);
+		return;
+	}
+	if (!SimulationContentDigest.IsValid()
+		|| SimulationContentDigest
+			!= ServerSimulationContentDigest)
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("[CONFIG] participant=%s simulation-content MISMATCH (client %s vs host %s) — kicking."),
+			*ParticipantID.ToCanonicalString(),
+			*SimulationContentDigest.ToString(EGuidFormats::Digits),
+			*ServerSimulationContentDigest.ToString(EGuidFormats::Digits));
+		AcceptedConfigFingerprints.Remove(ParticipantID);
+		FailBootstrapSession(
+			TEXT("A frozen participant has incompatible simulation content."),
+			/*bNotifyPeers=*/true);
+		SourceRelay->Client_NotifyKicked(
+			TEXT("Simulation-content mismatch: generated gameplay content differs from the host."));
+		return;
+	}
+	FGuid ServerCommandProtocolDigest;
+	if (!ResolveLocalCommandProtocolDigest(ServerCommandProtocolDigest)
+		|| ServerCommandProtocolDigest != ActiveProtocolContext.CommandProtocolDigest)
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("[CONFIG] authority command protocol no longer matches its active context; bootstrap halted."));
+		FailBootstrapSession(
+			TEXT("The coordinator command protocol changed during bootstrap."),
+			/*bNotifyPeers=*/true);
+		return;
+	}
+	if (!CommandProtocolDigest.IsValid()
+		|| CommandProtocolDigest != ServerCommandProtocolDigest)
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("[CONFIG] participant=%s command-protocol MISMATCH (client %s vs host %s) — kicking."),
+			*ParticipantID.ToCanonicalString(),
+			*CommandProtocolDigest.ToString(EGuidFormats::Digits),
+			*ServerCommandProtocolDigest.ToString(EGuidFormats::Digits));
+		AcceptedConfigFingerprints.Remove(ParticipantID);
+		FailBootstrapSession(
+			TEXT("A frozen participant has an incompatible command protocol."),
+			/*bNotifyPeers=*/true);
+		SourceRelay->Client_NotifyKicked(
+			TEXT("Command protocol mismatch: installed command schemas or authority policy differ from the host."));
+		return;
+	}
+	if (!FindParticipantBinding(ParticipantID) || !IsParticipantConnected(ParticipantID))
 	{
 		UE_LOG(LogSeinNet, Verbose,
-			TEXT("[CONFIG] ignoring fingerprint from non-connected/unknown slot=%u."), Slot.Value);
+			TEXT("[CONFIG] ignoring fingerprint from non-connected/unknown participant=%s."),
+			*ParticipantID.ToCanonicalString());
 		return;
 	}
 
-	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
-	const int32 ServerFingerprint = Settings ? Settings->ComputeConfigFingerprint() : 0;
+	// Configuration is compatibility-only. Tick-zero readiness is proved
+	// exclusively by the separate materialization receipt consensus.
+	if (!IsConfigParityCheckEnabled())
+	{
+		TryDispatchLockstepSessionStart();
+		return;
+	}
+
+	const UWorld* World = GetWorld();
+	const USeinWorldSubsystem* WorldSub =
+		World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
+	if (!WorldSub)
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("[CONFIG] authority world unavailable; bootstrap halted."));
+		if (bServerStartRequested)
+		{
+			FailBootstrapSession(
+				TEXT("The coordinator world became unavailable during compatibility checks."),
+				/*bNotifyPeers=*/true);
+		}
+		return;
+	}
+	const int32 ServerFingerprint = WorldSub->GetConfigFingerprint();
 
 	if (Fingerprint == ServerFingerprint)
 	{
-		AcceptedConfigFingerprints.Add(Slot, Fingerprint);
+		AcceptedConfigFingerprints.Add(ParticipantID, Fingerprint);
 		UE_LOG(LogSeinNet, Log,
-			TEXT("[CONFIG] slot=%u config parity OK (fingerprint 0x%08x)."),
-			Slot.Value, static_cast<uint32>(ServerFingerprint));
+			TEXT("[CONFIG] participant=%s config parity OK (fingerprint 0x%08x)."),
+			*ParticipantID.ToCanonicalString(), static_cast<uint32>(ServerFingerprint));
 		TryDispatchLockstepSessionStart();
 		return;
 	}
@@ -2203,111 +6808,387 @@ void USeinNetSubsystem::ServerHandleConfigFingerprint(ASeinNetRelay* SourceRelay
 	// lobby kick uses. The disconnect drives the normal leave/logout cleanup (UnregisterRelay clears
 	// RelayToSlot), so the slot frees for a correctly-configured re-join.
 	UE_LOG(LogSeinNet, Error,
-		TEXT("[CONFIG] slot=%u config MISMATCH (client 0x%08x vs host 0x%08x) — kicking."),
-		Slot.Value, static_cast<uint32>(Fingerprint), static_cast<uint32>(ServerFingerprint));
-	AcceptedConfigFingerprints.Remove(Slot);
+		TEXT("[CONFIG] participant=%s config MISMATCH (client 0x%08x vs host 0x%08x) — kicking."),
+		*ParticipantID.ToCanonicalString(), static_cast<uint32>(Fingerprint),
+		static_cast<uint32>(ServerFingerprint));
+	AcceptedConfigFingerprints.Remove(ParticipantID);
+	FailBootstrapSession(
+		TEXT("A frozen participant has an incompatible simulation configuration."),
+		/*bNotifyPeers=*/true);
 	SourceRelay->Client_NotifyKicked(FString::Printf(
 		TEXT("Config mismatch: your SeinARTS sim settings differ from the host's (fingerprint 0x%08x vs 0x%08x). Ensure both use the same DefaultGame.ini."),
 		static_cast<uint32>(Fingerprint), static_cast<uint32>(ServerFingerprint)));
 }
 
-void USeinNetSubsystem::ServerHandleStateHashReport(ASeinNetRelay* SourceRelay, int32 Turn, int32 Hash)
+void USeinNetSubsystem::ServerHandleWorldStateRootReport(
+	ASeinNetRelay* SourceRelay,
+	const FSeinProtocolContext& Context,
+	int32 Turn,
+	FGuid WorldRoot)
 {
 	if (!IsServer() || !SourceRelay) return;
-
-	const FSeinPlayerID* SlotPtr = RelayToSlot.Find(SourceRelay);
-	if (!SlotPtr || !SlotPtr->IsValid())
+	if (!IsCurrentProtocolContext(
+		Context, TEXT("ServerHandleWorldStateRootReport")))
+	{
+		return;
+	}
+	if (!WorldRoot.IsValid())
 	{
 		UE_LOG(LogSeinNet, Warning,
-			TEXT("[DETERMINISM] ServerHandleStateHashReport: unmapped relay %s — dropping hash for turn %d."),
+			TEXT("[DETERMINISM] rejecting invalid world-state root from relay %s for turn %d."),
 			*GetNameSafe(SourceRelay), Turn);
 		return;
 	}
-	const FSeinPlayerID Slot = *SlotPtr;
-	const ESeinSlotLifecycle* Lifecycle = SlotLifecycle.Find(Slot);
-	if (!Lifecycle || *Lifecycle != ESeinSlotLifecycle::Connected)
+
+	const FSeinNetworkParticipantID* ParticipantPtr = RelayToParticipant.Find(SourceRelay);
+	if (!ParticipantPtr || !ParticipantPtr->IsValid())
+	{
+		UE_LOG(LogSeinNet, Warning,
+			TEXT("[DETERMINISM] ServerHandleWorldStateRootReport: unmapped relay %s — dropping root for turn %d."),
+			*GetNameSafe(SourceRelay), Turn);
+		return;
+	}
+	const FSeinNetworkParticipantID ParticipantID = *ParticipantPtr;
+	const FSeinParticipantBinding* Binding = FindParticipantBinding(ParticipantID);
+	if (!Binding || !Binding->bReportsWorldRoots
+		|| !IsParticipantConnected(ParticipantID))
 	{
 		UE_LOG(LogSeinNet, Verbose,
-			TEXT("[DETERMINISM] ignoring hash from non-connected/unknown slot=%u turn=%d."), Slot.Value, Turn);
+			TEXT("[DETERMINISM] ignoring world-state root from unauthorized/non-connected participant=%s turn=%d."),
+			*ParticipantID.ToCanonicalString(), Turn);
+		return;
+	}
+	ServerHandleWorldStateRootReportForParticipant(
+		ParticipantID, Turn, WorldRoot);
+}
+
+void USeinNetSubsystem::ServerHandleDeterminismSessionFailure(
+	ASeinNetRelay* SourceRelay,
+	const FSeinProtocolContext& Context,
+	const FSeinDeterminismSessionFailure& Failure)
+{
+	if (!IsServer() || !SourceRelay) return;
+	if (!IsCurrentProtocolContext(
+		Context,
+		TEXT("ServerHandleDeterminismSessionFailure")))
+	{
+		return;
+	}
+
+	const FSeinNetworkParticipantID* ParticipantPtr =
+		RelayToParticipant.Find(SourceRelay);
+	if (!ParticipantPtr || !ParticipantPtr->IsValid())
+	{
+		UE_LOG(LogSeinNet, Warning,
+			TEXT("[DETERMINISM] session failure from unmapped relay %s at turn=%d was rejected."),
+			*GetNameSafe(SourceRelay),
+			Failure.Turn);
+		return;
+	}
+	if (!FindParticipantBinding(*ParticipantPtr)
+		|| !IsParticipantConnected(*ParticipantPtr))
+	{
+		UE_LOG(LogSeinNet, Warning,
+			TEXT("[DETERMINISM] session failure from unauthorized/non-connected participant=%s at turn=%d was rejected."),
+			*ParticipantPtr->ToCanonicalString(),
+			Failure.Turn);
+		return;
+	}
+	HandleAuthenticatedDeterminismSessionFailure(
+		Context,
+		*ParticipantPtr,
+		Failure);
+}
+
+bool USeinNetSubsystem::HandleAuthenticatedDeterminismSessionFailure(
+	const FSeinProtocolContext& Context,
+	FSeinNetworkParticipantID AuthenticatedParticipantID,
+	const FSeinDeterminismSessionFailure& Failure)
+{
+	if (!IsLocalProtocolCoordinator()
+		|| !IsCurrentProtocolContext(
+			Context,
+			TEXT("HandleAuthenticatedDeterminismSessionFailure")))
+	{
+		return false;
+	}
+
+	FSeinDeterminismSessionFailure AuthenticatedFailure = Failure;
+	AuthenticatedFailure.ParticipantID = AuthenticatedParticipantID;
+	const FSeinParticipantBinding* Binding =
+		FindParticipantBinding(AuthenticatedParticipantID);
+	const bool bAuthorizedKind =
+		Binding
+		&& ((AuthenticatedFailure.Kind
+				== ESeinDeterminismSessionFailureKind::
+					CanonicalRootCaptureFailed
+				&& Binding->bReportsWorldRoots)
+			|| (AuthenticatedFailure.Kind
+				== ESeinDeterminismSessionFailureKind::
+					ExecutionTopologyInvalidated
+				&& Binding->bSimulates));
+	if (!AuthenticatedParticipantID.IsValid()
+		|| !AuthenticatedFailure.IsValid()
+		|| !AuthenticatedFailure.IsParticipantReportable()
+		|| !bAuthorizedKind
+		|| (AuthenticatedFailure.RequiresCanonicalRootCheckpoint()
+			&& !IsDueWorldStateRootCheckpoint(AuthenticatedFailure.Turn))
+		|| !IsDeterminismEvidenceTurnWithinProtocolWindow(
+			AuthenticatedFailure.Turn,
+			TEXT("HandleAuthenticatedDeterminismSessionFailure")))
+	{
+		UE_LOG(LogSeinNet, Warning,
+			TEXT("[DETERMINISM] malformed or unauthorized session failure kind=%d participant=%s turn=%d current=%d was rejected."),
+			static_cast<int32>(AuthenticatedFailure.Kind),
+			*AuthenticatedParticipantID.ToCanonicalString(),
+			AuthenticatedFailure.Turn,
+			GetCurrentTurn());
+		return false;
+	}
+
+	if (AuthenticatedFailure.Kind
+		== ESeinDeterminismSessionFailureKind::CanonicalRootCaptureFailed
+		&& (AuthenticatedFailure.Turn
+				<= CompletedWorldStateRootRejectionFloor
+			|| CompletedWorldStateRootChecks.Contains(
+				AuthenticatedFailure.Turn)))
+	{
+		UE_LOG(LogSeinNet, Verbose,
+			TEXT("[DETERMINISM] late capture failure participant=%s turn=%d arrived after checkpoint completion."),
+			*AuthenticatedParticipantID.ToCanonicalString(),
+			AuthenticatedFailure.Turn);
+		return false;
+	}
+	if (AuthenticatedFailure.Kind
+		== ESeinDeterminismSessionFailureKind::CanonicalRootCaptureFailed)
+	{
+		if (const TMap<FSeinNetworkParticipantID, FGuid>* Existing =
+			ServerWorldStateRootReports.Find(AuthenticatedFailure.Turn))
+		{
+			if (Existing->Contains(AuthenticatedParticipantID))
+			{
+				UE_LOG(LogSeinNet, Warning,
+					TEXT("[DETERMINISM] participant=%s reported both a root and capture failure for turn=%d; first root retained."),
+					*AuthenticatedParticipantID.ToCanonicalString(),
+					AuthenticatedFailure.Turn);
+				return false;
+			}
+		}
+	}
+
+	if (AuthenticatedFailure.Turn > GetCurrentTurn())
+	{
+		TArray<FSeinDeterminismSessionFailure>& Pending =
+			PendingAuthenticatedDeterminismSessionFailures.FindOrAdd(
+				AuthenticatedFailure.Turn);
+		if (!Pending.Contains(AuthenticatedFailure))
+		{
+			Pending.Add(AuthenticatedFailure);
+		}
+		UE_LOG(LogSeinNet, Verbose,
+			TEXT("[DETERMINISM] authenticated future session failure kind=%d participant=%s turn=%d buffered until the coordinator reaches that turn."),
+			static_cast<int32>(AuthenticatedFailure.Kind),
+			*AuthenticatedParticipantID.ToCanonicalString(),
+			AuthenticatedFailure.Turn);
+		return true;
+	}
+
+	EnterDeterminismSessionFailure(
+		AuthenticatedFailure,
+		/*bAuthoritative=*/true,
+		/*bNotifyPeers=*/true);
+	return true;
+}
+
+void USeinNetSubsystem::ApplyDueAuthenticatedDeterminismSessionFailuresThrough(
+	int32 ThroughTurn)
+{
+	if (!IsLocalProtocolCoordinator()
+		|| bDeterminismSessionFailureAuthoritative)
+	{
+		return;
+	}
+
+	TArray<int32> DueTurns;
+	PendingAuthenticatedDeterminismSessionFailures.GetKeys(DueTurns);
+	DueTurns.RemoveAll(
+		[ThroughTurn](int32 Turn) { return Turn > ThroughTurn; });
+	DueTurns.Sort();
+	for (const int32 DueTurn : DueTurns)
+	{
+		TArray<FSeinDeterminismSessionFailure> Failures;
+		if (!PendingAuthenticatedDeterminismSessionFailures
+				.RemoveAndCopyValue(DueTurn, Failures)
+			|| Failures.IsEmpty())
+		{
+			continue;
+		}
+		Failures.Sort([](
+			const FSeinDeterminismSessionFailure& A,
+			const FSeinDeterminismSessionFailure& B)
+		{
+			const uint8 AKind = static_cast<uint8>(A.Kind);
+			const uint8 BKind = static_cast<uint8>(B.Kind);
+			return AKind != BKind
+				? AKind < BKind
+				: A.ParticipantID.ToCanonicalString()
+					< B.ParticipantID.ToCanonicalString();
+		});
+		EnterDeterminismSessionFailure(
+			Failures[0],
+			/*bAuthoritative=*/true,
+			/*bNotifyPeers=*/true);
+		return;
+	}
+}
+
+void USeinNetSubsystem::HandleAuthoritativeDeterminismSessionFailure(
+	const FSeinProtocolContext& Context,
+	const FSeinDeterminismSessionFailure& Failure)
+{
+	if (!IsCurrentProtocolContext(
+			Context,
+			TEXT("HandleAuthoritativeDeterminismSessionFailure"))
+		|| !Failure.IsValid()
+		|| (Failure.RequiresCanonicalRootCheckpoint()
+			&& !IsDueWorldStateRootCheckpoint(Failure.Turn))
+		|| !FindParticipantBinding(Failure.ParticipantID))
+	{
+		UE_LOG(LogSeinNet, Warning,
+			TEXT("[DETERMINISM] invalid authoritative session-failure notification was rejected."));
+		return;
+	}
+	EnterDeterminismSessionFailure(
+		Failure,
+		/*bAuthoritative=*/true,
+		/*bNotifyPeers=*/false);
+}
+
+void USeinNetSubsystem::ServerHandleWorldStateRootReportForParticipant(
+	FSeinNetworkParticipantID ParticipantID,
+	int32 Turn,
+	const FGuid& WorldRoot)
+{
+	if (!IsServer() || !ParticipantID.IsValid() || !WorldRoot.IsValid()
+		|| DeterminismSessionFailure.IsValid())
+	{
 		return;
 	}
 
 	PruneProtocolState(GetCurrentTurn());
-	if (!IsHashTurnWithinProtocolWindow(Turn, TEXT("ServerHandleStateHashReport"))) return;
+	if (DeterminismSessionFailure.IsValid()) return;
+	if (!IsDeterminismEvidenceTurnWithinProtocolWindow(
+		Turn, TEXT("ServerHandleWorldStateRootReportForParticipant")))
+	{
+		return;
+	}
 
-	if (Turn <= CompletedHashRejectionFloor || CompletedHashChecks.Contains(Turn))
+	if (Turn <= CompletedWorldStateRootRejectionFloor
+		|| CompletedWorldStateRootChecks.Contains(Turn))
 	{
 		// Late report for an already-compared turn. Drop silently — the
 		// alarm (if any) already fanned out to all peers, no need to redo.
 		UE_LOG(LogSeinNet, Verbose,
-			TEXT("[DETERMINISM] late hash report from slot=%u for already-compared turn=%d — dropped."),
-			Slot.Value, Turn);
+			TEXT("[DETERMINISM] late world-root report from participant=%s for already-compared turn=%d — dropped."),
+			*ParticipantID.ToCanonicalString(), Turn);
 		return;
 	}
+	if (const TArray<FSeinDeterminismSessionFailure>* PendingFailures =
+		PendingAuthenticatedDeterminismSessionFailures.Find(Turn))
+	{
+		if (PendingFailures->ContainsByPredicate(
+			[ParticipantID](const FSeinDeterminismSessionFailure& Failure)
+			{
+				return Failure.Kind
+						== ESeinDeterminismSessionFailureKind::
+							CanonicalRootCaptureFailed
+					&& Failure.ParticipantID == ParticipantID;
+			}))
+		{
+			UE_LOG(LogSeinNet, Warning,
+				TEXT("[DETERMINISM] participant=%s reported a root after its capture failure was authenticated for turn=%d; first failure retained."),
+				*ParticipantID.ToCanonicalString(),
+				Turn);
+			return;
+		}
+	}
 
-	const EFirstAcceptResult InsertResult = BufferHashReportFirstWins(Turn, Slot, Hash);
+	const EFirstAcceptResult InsertResult =
+		BufferWorldStateRootReportFirstWins(
+			Turn, ParticipantID, WorldRoot);
 	if (InsertResult == EFirstAcceptResult::IdenticalDuplicate)
 	{
 		UE_LOG(LogSeinNet, Verbose,
-			TEXT("[DETERMINISM] identical duplicate hash slot=%u turn=%d — idempotent no-op."),
-			Slot.Value, Turn);
+			TEXT("[DETERMINISM] identical duplicate world root participant=%s turn=%d — idempotent no-op."),
+			*ParticipantID.ToCanonicalString(), Turn);
 		return;
 	}
 	if (InsertResult == EFirstAcceptResult::ConflictingDuplicate)
 	{
 		UE_LOG(LogSeinNet, Error,
-			TEXT("[DETERMINISM] conflicting duplicate hash slot=%u turn=%d old checkpoint retained; new hash=0x%08x rejected."),
-			Slot.Value, Turn, static_cast<uint32>(Hash));
+			TEXT("[DETERMINISM] conflicting duplicate world root participant=%s turn=%d old checkpoint retained; new root=%s rejected."),
+			*ParticipantID.ToCanonicalString(), Turn,
+			*WorldRoot.ToString(EGuidFormats::Digits));
 		return;
 	}
 
-	const TMap<FSeinPlayerID, int32>& BufferForTurn = ServerHashReports.FindChecked(Turn);
-	TArray<FSeinPlayerID> ExpectedSlots;
-	GetExpectedHashReporterSlots(ExpectedSlots);
+	const TMap<FSeinNetworkParticipantID, FGuid>& BufferForTurn =
+		ServerWorldStateRootReports.FindChecked(Turn);
+	TArray<FSeinNetworkParticipantID> ExpectedParticipants;
+	GetExpectedWorldRootReporterParticipants(ExpectedParticipants);
 
 	UE_LOG(LogSeinNet, Verbose,
-		TEXT("[DETERMINISM] buffered hash report  slot=%u  Turn=%d  Hash=0x%08x  (have %d/%d slots)"),
-		Slot.Value, Turn, static_cast<uint32>(Hash), BufferForTurn.Num(), ExpectedSlots.Num());
+		TEXT("[DETERMINISM] buffered world root participant=%s turn=%d root=%s (have %d/%d participants)."),
+		*ParticipantID.ToCanonicalString(), Turn,
+		*WorldRoot.ToString(EGuidFormats::Digits),
+		BufferForTurn.Num(), ExpectedParticipants.Num());
 
-	if (AreExpectedHashReportsComplete(BufferForTurn))
+	if (AreExpectedWorldRootReportsComplete(BufferForTurn))
 	{
-		ServerCompareHashesForTurn(Turn);
+		ServerCompareWorldStateRootsForTurn(Turn);
 	}
 }
 
-void USeinNetSubsystem::ServerCompareHashesForTurn(int32 Turn)
+void USeinNetSubsystem::ServerCompareWorldStateRootsForTurn(int32 Turn)
 {
-	const TMap<FSeinPlayerID, int32>* Buffer = ServerHashReports.Find(Turn);
+	const TMap<FSeinNetworkParticipantID, FGuid>* Buffer =
+		ServerWorldStateRootReports.Find(Turn);
 	if (!Buffer || Buffer->IsEmpty()) return;
-	TArray<FSeinPlayerID> ExpectedSlots;
-	GetExpectedHashReporterSlots(ExpectedSlots);
-	if (ExpectedSlots.IsEmpty() || !AreExpectedHashReportsComplete(*Buffer)) return;
+	TArray<FSeinNetworkParticipantID> ExpectedParticipants;
+	GetExpectedWorldRootReporterParticipants(ExpectedParticipants);
+	if (ExpectedParticipants.IsEmpty()
+		|| !AreExpectedWorldRootReportsComplete(*Buffer))
+	{
+		return;
+	}
 
 	// Compare only live reporter processes. A dropped gameplay slot can still
 	// have an earlier report buffered, but it is no longer a peer in this
 	// checkpoint and must not satisfy or contaminate the live-peer comparison.
-	const int32 Reference = Buffer->FindChecked(ExpectedSlots[0]);
+	const FGuid Reference = Buffer->FindChecked(ExpectedParticipants[0]);
 	bool bAllAgree = true;
-	for (const FSeinPlayerID Slot : ExpectedSlots)
+	for (const FSeinNetworkParticipantID ParticipantID : ExpectedParticipants)
 	{
-		if (Buffer->FindChecked(Slot) != Reference)
+		if (Buffer->FindChecked(ParticipantID) != Reference)
 		{
 			bAllAgree = false;
 			break;
 		}
 	}
 
-	// Build per-slot summary array for either the agreement log OR the
+	// Build a per-participant summary array for either the agreement log or the
 	// fan-out payload — same shape, only the verbosity differs.
-	TArray<FSeinSlotHashEntry> SortedHashes;
-	SortedHashes.Reserve(ExpectedSlots.Num());
-	for (const FSeinPlayerID Slot : ExpectedSlots)
+	TArray<FSeinParticipantWorldRootEntry> SortedRoots;
+	SortedRoots.Reserve(ExpectedParticipants.Num());
+	for (const FSeinNetworkParticipantID ParticipantID : ExpectedParticipants)
 	{
-		SortedHashes.Emplace(Slot, Buffer->FindChecked(Slot));
+		SortedRoots.Emplace(ParticipantID, Buffer->FindChecked(ParticipantID));
 	}
-	SortedHashes.Sort([](const FSeinSlotHashEntry& A, const FSeinSlotHashEntry& B)
+	SortedRoots.Sort([](
+		const FSeinParticipantWorldRootEntry& A,
+		const FSeinParticipantWorldRootEntry& B)
 	{
-		return A.Slot.Value < B.Slot.Value;
+		return A.ParticipantID.ToCanonicalString() < B.ParticipantID.ToCanonicalString();
 	});
 
 	if (bAllAgree)
@@ -2321,26 +7202,31 @@ void USeinNetSubsystem::ServerCompareHashesForTurn(int32 Turn)
 		if (bPeriodicConfirm)
 		{
 			UE_LOG(LogSeinNet, Log,
-				TEXT("[DETERMINISM] turn=%d  %d/%d peers agree on hash 0x%08x — OK."),
-				Turn, ExpectedSlots.Num(), ExpectedSlots.Num(), static_cast<uint32>(Reference));
+				TEXT("[DETERMINISM] turn=%d  %d/%d peers agree on world root %s — OK."),
+				Turn, ExpectedParticipants.Num(), ExpectedParticipants.Num(),
+				*Reference.ToString(EGuidFormats::Digits));
 		}
 		else
 		{
 			UE_LOG(LogSeinNet, Verbose,
-				TEXT("[DETERMINISM] turn=%d  %d/%d peers agree on hash 0x%08x — OK."),
-				Turn, ExpectedSlots.Num(), ExpectedSlots.Num(), static_cast<uint32>(Reference));
+				TEXT("[DETERMINISM] turn=%d  %d/%d peers agree on world root %s — OK."),
+				Turn, ExpectedParticipants.Num(), ExpectedParticipants.Num(),
+				*Reference.ToString(EGuidFormats::Digits));
 		}
 	}
 	else
 	{
-		// Build a diagnostic line listing each slot's hash for the log.
+		// Build a diagnostic line listing each participant's root for the log.
 		FString Report;
-		for (const FSeinSlotHashEntry& Entry : SortedHashes)
+		for (const FSeinParticipantWorldRootEntry& Entry : SortedRoots)
 		{
-			Report += FString::Printf(TEXT("[slot=%u hash=0x%08x] "), Entry.Slot.Value, static_cast<uint32>(Entry.Hash));
+			Report += FString::Printf(
+				TEXT("[participant=%s root=%s] "),
+				*Entry.ParticipantID.ToCanonicalString(),
+				*Entry.WorldRoot.ToString(EGuidFormats::Digits));
 		}
 		UE_LOG(LogSeinNet, Error,
-			TEXT("[DESYNC DETECTED] turn=%d — peer hashes diverge: %s. Fanning Client_NotifyDesync to %d relay(s) so every peer surfaces the on-screen alarm."),
+			TEXT("[DESYNC DETECTED] turn=%d — peer world roots diverge: %s. Fanning Client_NotifyDesync to %d relay(s) so every peer surfaces the on-screen alarm."),
 			Turn, *Report, Relays.Num());
 
 		// Fan to every relay (including host's own — RPC-loopback routes
@@ -2350,37 +7236,47 @@ void USeinNetSubsystem::ServerCompareHashesForTurn(int32 Turn)
 		{
 			if (ASeinNetRelay* Target = Wp.Get())
 			{
-				Target->Client_NotifyDesync(Turn, SortedHashes);
+				Target->Client_NotifyDesync(
+					ActiveProtocolContext, Turn, SortedRoots);
 			}
 		}
 	}
 
-	ServerHashReports.Remove(Turn);
-	CompletedHashChecks.Add(Turn);
+	ServerWorldStateRootReports.Remove(Turn);
+	CompletedWorldStateRootChecks.Add(Turn);
 }
 
-void USeinNetSubsystem::ClientHandleDesyncNotification(int32 Turn, const TArray<FSeinSlotHashEntry>& PeerHashes)
+void USeinNetSubsystem::ClientHandleDesyncNotification(
+	const FSeinProtocolContext& Context,
+	int32 Turn,
+	const TArray<FSeinParticipantWorldRootEntry>& PeerRoots)
 {
+	if (!IsCurrentProtocolContext(Context, TEXT("ClientHandleDesyncNotification"))) return;
 	bDesyncDetected = true;
 
-	// Build a one-line summary listing every peer's hash. Sort by slot for
+	// Build a one-line summary listing every peer's root. Sort by participant for
 	// readability — server already sorted, but be defensive.
-	TArray<FSeinSlotHashEntry> Sorted = PeerHashes;
-	Sorted.Sort([](const FSeinSlotHashEntry& A, const FSeinSlotHashEntry& B)
+	TArray<FSeinParticipantWorldRootEntry> Sorted = PeerRoots;
+	Sorted.Sort([](
+		const FSeinParticipantWorldRootEntry& A,
+		const FSeinParticipantWorldRootEntry& B)
 	{
-		return A.Slot.Value < B.Slot.Value;
+		return A.ParticipantID.ToCanonicalString() < B.ParticipantID.ToCanonicalString();
 	});
 
 	FString PeerSummary;
-	for (const FSeinSlotHashEntry& Entry : Sorted)
+	for (const FSeinParticipantWorldRootEntry& Entry : Sorted)
 	{
-		const TCHAR* MarkLocal = (Entry.Slot == LocalPlayerID) ? TEXT("*") : TEXT("");
-		PeerSummary += FString::Printf(TEXT("slot %u%s = 0x%08x  "), Entry.Slot.Value, MarkLocal, static_cast<uint32>(Entry.Hash));
+		const TCHAR* MarkLocal = (Entry.ParticipantID == LocalParticipantID) ? TEXT("*") : TEXT("");
+		PeerSummary += FString::Printf(
+			TEXT("participant %s%s = %s  "),
+			*Entry.ParticipantID.ToCanonicalString(), MarkLocal,
+			*Entry.WorldRoot.ToString(EGuidFormats::Digits));
 	}
 
 	UE_LOG(LogSeinNet, Error,
-		TEXT("[DESYNC] localSlot=%u  turn=%d  Peers: %s  (* = this peer). Lockstep is broken — sim state has diverged. Capture replay/state dump now; bug repro is in this run."),
-		LocalPlayerID.Value, Turn, *PeerSummary);
+		TEXT("[DESYNC] localParticipant=%s turn=%d peers: %s (* = this peer). Lockstep is broken — sim state has diverged."),
+		*LocalParticipantID.ToCanonicalString(), Turn, *PeerSummary);
 
 	// On-screen RED debug message. AddOnScreenDebugMessage with a stable Key
 	// per-turn so successive desyncs don't all stack identically; we want
@@ -2390,8 +7286,8 @@ void USeinNetSubsystem::ClientHandleDesyncNotification(int32 Turn, const TArray<
 		const int32 KeyBase = 0x5E7DE57C; // arbitrary salt unique to Sein desync
 		const uint64 KeyTurn = static_cast<uint64>(KeyBase) ^ static_cast<uint64>(Turn);
 		const FString HeaderMsg = FString::Printf(
-			TEXT("[SEINARTS DESYNC] turn=%d  localSlot=%u — sim state diverged across peers."),
-			Turn, LocalPlayerID.Value);
+			TEXT("[SEINARTS DESYNC] turn=%d localParticipant=%s — sim state diverged across peers."),
+			Turn, *LocalParticipantID.ToCanonicalString());
 		GEngine->AddOnScreenDebugMessage(static_cast<int32>(KeyTurn & 0x7FFFFFFFull),
 			30.0f, FColor::Red, HeaderMsg, /*bNewerOnTop=*/true,
 			FVector2D(1.25f, 1.25f));

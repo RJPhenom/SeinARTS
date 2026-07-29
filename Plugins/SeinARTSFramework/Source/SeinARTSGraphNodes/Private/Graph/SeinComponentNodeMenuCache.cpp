@@ -80,3 +80,10 @@ void SeinComponentNodeMenu::GetCandidateStructs(TArray<UScriptStruct*>& Out)
 		}
 	}
 }
+
+void SeinComponentNodeMenu::ResetCandidateCache()
+{
+	GCachedCandidates.Reset();
+	GCacheFrame = TNumericLimits<uint64>::Max();
+	GCacheValid = false;
+}

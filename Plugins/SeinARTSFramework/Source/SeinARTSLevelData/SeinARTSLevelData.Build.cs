@@ -4,9 +4,13 @@ public class SeinARTSLevelData : ModuleRules
 {
     public SeinARTSLevelData(ReadOnlyTargetRules Target) : base(Target)
     {
+        PublicDependencyModuleNames.AddRange(new string[] {
+            "SeinARTSCoreEntity"
+        });
+
         PrivateDependencyModuleNames.AddRange(new string[] {
             "Core", "CoreUObject", "Engine",
-            "SeinARTSCore", "SeinARTSCoreEntity",
+            "SeinARTSCore",
             "GameplayTags",
             "PhysicsCore",   // bake resolves a trace hit's physical material → terrain type
             "RenderCore", "RHI"

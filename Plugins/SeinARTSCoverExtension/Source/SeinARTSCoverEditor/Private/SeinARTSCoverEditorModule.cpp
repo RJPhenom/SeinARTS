@@ -81,6 +81,7 @@ void FSeinARTSCoverEditorModule::ShutdownModule()
 		FPropertyEditorModule& PropertyModule =
 			FModuleManager::GetModuleChecked<FPropertyEditorModule>("PropertyEditor");
 		PropertyModule.UnregisterCustomPropertyTypeLayout(TEXT("SeinCoverComponent"));
+		PropertyModule.NotifyCustomizationModuleChanged();
 	}
 
 	// Drop our entity-bridge draw callback. GetModulePtr (not Checked) so a

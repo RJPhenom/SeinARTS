@@ -23,6 +23,7 @@
 void USeinNavigationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
+	Collection.InitializeDependency(USeinWorldSubsystem::StaticClass());
 
 	// Resolve the configured nav class (WYSIWYG). None/empty => navigation is intentionally OFF
 	// (Navigation stays null — every Move order fails and the nav wall-barrier is disabled). A
@@ -82,12 +83,48 @@ void USeinNavigationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 			}
 		}
 	}
+
+	if (Navigation)
+	{
+		if (UWorld* World = GetWorld())
+		{
+			if (USeinWorldSubsystem* Sim =
+					World->GetSubsystem<USeinWorldSubsystem>())
+			{
+				NavBlockerStampSystem =
+					new FSeinNavBlockerStampSystem(Navigation);
+				Sim->RegisterSystem(NavBlockerStampSystem);
+			}
+		}
+	}
 }
 
 void USeinNavigationSubsystem::Deinitialize()
 {
+	ReleaseModuleOwnedStateForModuleUnload();
+	Super::Deinitialize();
+}
+
+void USeinNavigationSubsystem::ReleaseModuleOwnedStateForModuleUnload()
+{
+	check(IsInGameThread());
+	if (UWorld* World = GetWorld())
+	{
+		if (USeinWorldSubsystem* Sim =
+				World->GetSubsystem<USeinWorldSubsystem>())
+		{
+			Sim->TerminateAndReleaseForModuleUnload(
+				FName(TEXT("SeinARTSNavigation")),
+				TEXT("navigation systems and canonical continuation state are unloading"));
+		}
+	}
 	AsyncQueue.Reset();
 	AsyncResults.Reset();
+
+	// Weak UObject bindings protect against object destruction, not DLL
+	// unload. Their lambda bodies live in this module, so sever them while
+	// that code is still executable.
+	UnbindSimDelegates();
 
 	// Unhook from the shared substrate (CP1.1) before Navigation is torn down — we
 	// reference Navigation->GetLevelDataProvider() to unregister.
@@ -106,6 +143,7 @@ void USeinNavigationSubsystem::Deinitialize()
 			}
 		}
 	}
+	LevelDataMutatedHandle.Reset();
 	LevelData = nullptr;
 
 	// Tear down the stamping system before nulling Navigation — the system
@@ -129,7 +167,6 @@ void USeinNavigationSubsystem::Deinitialize()
 		Navigation->OnNavigationDeinitialized();
 	}
 	Navigation = nullptr;
-	Super::Deinitialize();
 }
 
 void USeinNavigationSubsystem::OnWorldBeginPlay(UWorld& InWorld)
@@ -286,25 +323,31 @@ void USeinNavigationSubsystem::BindSimDelegates(UWorld& World)
 			return Nav->ProjectPointToNavFree(InWorld, SelfRadius, AvoidCentres, AvoidRadii, OutProjected);
 		});
 
-	// Hand the dynamic-blocker stamping over to the sim's tick loop. PreTick
-	// priority 7 → after spatial-hash rebuild, before AbilityExecution where
-	// MoveToAction's TickAction calls FindPath. Re-register-safe: unregister
-	// any prior instance first so a level reload doesn't leak.
-	if (NavBlockerStampSystem)
-	{
-		Sim->UnregisterSystem(NavBlockerStampSystem);
-		delete NavBlockerStampSystem;
-		NavBlockerStampSystem = nullptr;
-	}
-	NavBlockerStampSystem = new FSeinNavBlockerStampSystem(Navigation);
-	Sim->RegisterSystem(NavBlockerStampSystem);
-
 	// Reset the path budget tracker. Self-checking reset in RequestPath
 	// handles the per-tick boundary going forward; we just zero state here
 	// at world-begin so the first tick after world load starts clean
 	// regardless of any leftover counter from a prior PIE session.
 	PathRequestsThisTick = 0;
 	LastResetTick = -1;
+}
+
+void USeinNavigationSubsystem::UnbindSimDelegates()
+{
+	UWorld* World = GetWorld();
+	USeinWorldSubsystem* Sim =
+		World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
+	if (!Sim)
+	{
+		return;
+	}
+
+	Sim->PathableTargetResolver.Unbind();
+	Sim->FootprintPlacementResolver.Unbind();
+	Sim->PassableResolver.Unbind();
+	Sim->DynamicPassableResolver.Unbind();
+	Sim->HeightResolver.Unbind();
+	Sim->NavProjectResolver.Unbind();
+	Sim->NavProjectFreeResolver.Unbind();
 }
 
 ESeinPathResult USeinNavigationSubsystem::RequestPath(const FSeinPathRequest& Request, FSeinPath& OutPath)

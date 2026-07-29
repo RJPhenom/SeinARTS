@@ -54,6 +54,12 @@ public:
 	virtual bool IsTickableInEditor() const override { return false; }
 	virtual UWorld* GetTickableGameObjectWorld() const override;
 
+	/**
+	 * Stop ticking, detach from engine/player delegates, and destroy the
+	 * transient preview before module withdrawal.
+	 */
+	void ReleaseModuleOwnedStateForModuleUnload();
+
 	/** Force a refresh of the preview from the current cursor / drag state. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Preview")
 	void RefreshPreview();
@@ -123,4 +129,7 @@ private:
 
 	/** Force a quality re-query next refresh regardless of cursor delta. */
 	bool bQualityDirty = true;
+
+	/** Prevents FTickableGameObject from invoking withdrawn module code. */
+	bool bModuleUnloadStateReleased = false;
 };

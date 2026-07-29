@@ -38,6 +38,18 @@
 class FSeinARTSGraphNodesModule : public IModuleInterface
 {
 public:
-	virtual void StartupModule() override {}
-	virtual void ShutdownModule() override {}
+	virtual void StartupModule() override;
+	virtual void PreUnloadCallback() override;
+	virtual void ShutdownModule() override;
+
+private:
+	/**
+	 * Synchronously sever editor-owned references to this generation's node
+	 * delegates and template nodes. PreUnloadCallback and ShutdownModule share
+	 * this idempotent path so dynamic module reload cannot leave executable
+	 * callbacks into an unloaded DLL.
+	 */
+	void ReleaseModuleOwnedState();
+
+	bool bModuleOwnedStateReleased = false;
 };

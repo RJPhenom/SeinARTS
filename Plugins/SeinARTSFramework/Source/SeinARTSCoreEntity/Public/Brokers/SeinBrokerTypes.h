@@ -12,6 +12,7 @@
 #include "CoreMinimal.h"
 #include "GameplayTagContainer.h"
 #include "Core/SeinEntityHandle.h"
+#include "Core/SeinPlayerID.h"
 #include "Types/Vector.h"
 #include "Types/Quat.h"
 #include "Abilities/SeinTargeterTypes.h"
@@ -20,9 +21,8 @@
 class USeinFormation;
 
 /**
- * One queued order on a broker. Shift-chained dispatches append to
- * FSeinCommandBrokerData::OrderQueue; each is consumed in FIFO order as the
- * previous completes.
+ * One queued order on a broker. Queue order is preserved for orders whose
+ * effective member sets overlap; disjoint subset orders may run concurrently.
  */
 USTRUCT(BlueprintType, meta = (SeinDeterministic))
 struct SEINARTSCOREENTITY_API FSeinBrokerQueuedOrder
@@ -73,6 +73,10 @@ struct SEINARTSCOREENTITY_API FSeinBrokerQueuedOrder
 	 *  (e.g., AutoMoveThen prefix). Designer dispatches leave this false. */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker")
 	bool bIsInternalPrefix = false;
+
+	/** Funding principal preserved only for an internal ability follow-up. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker")
+	FSeinPlayerID DerivedResourcePayer;
 
 	/** Captured targeter points when this order originated from the targeter
 	 *  subsystem (action-slot trigger flow). Empty for right-click smart commands.
@@ -273,17 +277,48 @@ struct SEINARTSCOREENTITY_API FSeinBrokerMemberDispatch
 };
 
 /**
- * Full resolver output for one order. The broker system walks
- * MemberDispatches on the dispatch tick and fires an internal ActivateAbility
- * against each member's FSeinAbilityComponent.
+ * Full side-effect-free resolver output for one order. The broker system
+ * validates the complete plan against unchanged live state, then atomically
+ * commits its optional layout output and execution state before enqueueing the
+ * validated per-member ability commands.
  */
 USTRUCT(BlueprintType, meta = (SeinDeterministic))
 struct SEINARTSCOREENTITY_API FSeinBrokerDispatchPlan
 {
 	GENERATED_BODY()
 
+	/** Unique live dispatchers from the effective member set. The broker carrier
+	 *  itself is the sole exception when it actually owns AbilityTag. Invalid,
+	 *  duplicate, foreign, or schema-oversized output rejects the entire plan. */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker")
 	TArray<FSeinBrokerMemberDispatch> MemberDispatches;
+
+	/** Apply AnchorFacing from this plan when it commits. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker|Layout")
+	bool bApplyAnchorFacing = false;
+
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker|Layout",
+		meta = (EditCondition = "bApplyAnchorFacing"))
+	FFixedQuaternion AnchorFacing = FFixedQuaternion::Identity;
+
+	/** Replace the broker's settled-slot state when this plan commits. Positions
+	 *  may not outnumber broker members; facings must be index-aligned. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker|Layout")
+	bool bApplySettledSlots = false;
+
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker|Layout",
+		meta = (EditCondition = "bApplySettledSlots"))
+	TArray<FFixedVector> SettledSlotPositions;
+
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker|Layout",
+		meta = (EditCondition = "bApplySettledSlots"))
+	TArray<FFixedQuaternion> SettledSlotFacings;
+
+	/** True means slot i belongs to broker member i and therefore requires one
+	 *  settled slot per broker member. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker|Layout",
+		meta = (EditCondition = "bApplySettledSlots"))
+	bool bSettledSlotsMemberAligned = false;
 };
 
 /**

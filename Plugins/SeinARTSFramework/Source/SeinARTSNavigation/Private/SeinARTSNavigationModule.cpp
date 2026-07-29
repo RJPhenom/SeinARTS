@@ -20,13 +20,18 @@
  *          calls can honor the filter.
  *
  *          Shipping strip: the ticker registration, console command, and all
- *          helper draw functions are gated on UE_ENABLE_DEBUG_DRAWING. In
- *          UE_BUILD_SHIPPING the module's StartupModule / ShutdownModule are
- *          no-ops, no console command is registered.
+ *          helper draw functions are gated on UE_ENABLE_DEBUG_DRAWING. Shipping
+ *          still registers the native simulation-content contributor, but no
+ *          console command is registered.
  */
 
 #include "SeinARTSNavigationModule.h"
 #include "SeinARTSNavigationLog.h"
+#include "SeinNavigation.h"
+#include "SeinNavigationSubsystem.h"
+#include "Serialization/SeinNavigationCanonicalStateProvider.h"
+#include "Simulation/SeinWorldSubsystem.h"
+#include "UObject/UObjectIterator.h"
 
 // Module-shared log categories (declared in SeinARTSNavigationLog.h) — defined
 // once here so they register at module load and always show in the Output Log
@@ -35,6 +40,23 @@ DEFINE_LOG_CATEGORY(LogSeinNavSubsystem);
 DEFINE_LOG_CATEGORY(LogSeinNavigationAStar);
 DEFINE_LOG_CATEGORY(LogSeinNavDebug);
 DEFINE_LOG_CATEGORY(LogSeinNavBlockerStamp);
+
+namespace
+{
+	FSeinSimulationContentDiscoveryRoot MakePackageDiscoveryRoot(
+		const UClass* RootClass)
+	{
+		check(RootClass);
+
+		FSeinSimulationContentDiscoveryRoot Root;
+		Root.RootClassPath = RootClass->GetPathName();
+		Root.StableRecordKindId =
+			FSeinSimulationContentManifestCodec::GetCurrentRecordKindId();
+		Root.RecordRevision =
+			FSeinSimulationContentManifestCodec::CurrentRecordRevision;
+		return Root;
+	}
+}
 
 #if UE_ENABLE_DEBUG_DRAWING
 #include "Debug/SeinNavDebugComponent.h"
@@ -45,8 +67,6 @@ DEFINE_LOG_CATEGORY(LogSeinNavBlockerStamp);
 #include "Engine/World.h"
 #include "Engine/GameViewportClient.h"
 #include "ShowFlags.h"
-#include "UObject/UObjectIterator.h"
-
 #if WITH_EDITOR
 #include "LevelEditorViewport.h"
 #include "Editor.h"
@@ -262,6 +282,44 @@ namespace
 
 void FSeinARTSNavigationModule::StartupModule()
 {
+	CanonicalStateRegistrationHandle.Reset();
+	SimulationContentRegistrationHandle.Reset();
+
+	FSeinSimulationContentContributorDescriptor ContentDescriptor;
+	ContentDescriptor.StableContributorId = TEXT("seinarts.navigation");
+	ContentDescriptor.ContributorRevision = 1;
+	ContentDescriptor.DiscoveryRoots = {
+		MakePackageDiscoveryRoot(USeinNavigation::StaticClass()),
+	};
+
+	FString ContentRegistrationError;
+	SimulationContentRegistrationHandle =
+		FSeinSimulationContentRegistry::RegisterContributor(
+			ContentDescriptor,
+			&ContentRegistrationError);
+	if (!SimulationContentRegistrationHandle.IsValid())
+	{
+		UE_LOG(
+			LogSeinNavSubsystem,
+			Error,
+			TEXT("Simulation-content contributor '%s' failed to register: %s"),
+			*ContentDescriptor.StableContributorId,
+			*ContentRegistrationError);
+	}
+
+	FString StateRegistrationError;
+	CanonicalStateRegistrationHandle =
+		SeinRegisterNavigationCanonicalStateProvider(
+			StateRegistrationError);
+	if (!CanonicalStateRegistrationHandle.IsValid())
+	{
+		UE_LOG(
+			LogSeinNavSubsystem,
+			Error,
+			TEXT("Canonical-state contributor 'seinarts.navigation.async-path-continuation' failed to register: %s"),
+			*StateRegistrationError);
+	}
+
 #if UE_ENABLE_DEBUG_DRAWING
 	// Host the nav cell viz on the unified level volume. ASeinLevelVolume can't
 	// link this module (dependencies point the other way), so it exposes a
@@ -312,6 +370,41 @@ void FSeinARTSNavigationModule::StartupModule()
 #endif
 }
 
+void FSeinARTSNavigationModule::PreUnloadCallback()
+{
+	check(IsInGameThread());
+
+#if UE_ENABLE_DEBUG_DRAWING
+	// Destroys live components and drains their scene proxies before this
+	// module's component vtable can disappear.
+	ASeinLevelVolume::UnregisterDebugComponentClass(
+		USeinNavDebugComponent::StaticClass());
+#endif
+
+	for (TObjectIterator<USeinWorldSubsystem> It; It; ++It)
+	{
+		if (!It->HasAnyFlags(RF_ClassDefaultObject))
+		{
+			It->TerminateAndReleaseForModuleUnload(
+				TEXT("SeinARTSNavigation"),
+				TEXT("navigation systems and canonical continuation state are unloading"));
+		}
+	}
+
+	for (TObjectIterator<USeinNavigationSubsystem> It; It; ++It)
+	{
+		if (!It->HasAnyFlags(RF_ClassDefaultObject))
+		{
+			It->ReleaseModuleOwnedStateForModuleUnload();
+		}
+	}
+
+	// Frozen worlds retain only tokens, while the process registry owns
+	// module TFunctions. Withdraw this exact generation before code unload.
+	CanonicalStateRegistrationHandle.Reset();
+	SimulationContentRegistrationHandle.Reset();
+}
+
 void FSeinARTSNavigationModule::ShutdownModule()
 {
 #if UE_ENABLE_DEBUG_DRAWING
@@ -336,4 +429,7 @@ void FSeinARTSNavigationModule::ShutdownModule()
 	}
 #endif
 #endif
+
+	CanonicalStateRegistrationHandle.Reset();
+	SimulationContentRegistrationHandle.Reset();
 }

@@ -7,11 +7,15 @@
 #include "Simulation/SeinSystemHostSubsystem.h"
 #include "Simulation/SeinWorldSubsystem.h"
 
-void USeinSystemHostSubsystem::OnWorldBeginPlay(UWorld& InWorld)
+void USeinSystemHostSubsystem::Initialize(
+	FSubsystemCollectionBase& Collection)
 {
-	Super::OnWorldBeginPlay(InWorld);
+	Super::Initialize(Collection);
+	Collection.InitializeDependency(USeinWorldSubsystem::StaticClass());
 
-	USeinWorldSubsystem* Sim = InWorld.GetSubsystem<USeinWorldSubsystem>();
+	UWorld* World = GetWorld();
+	USeinWorldSubsystem* Sim =
+		World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
 	if (!Sim)
 	{
 		return; // no sim in this world (e.g. a non-game world) — nothing to host
@@ -30,6 +34,19 @@ void USeinSystemHostSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 
 void USeinSystemHostSubsystem::Deinitialize()
 {
+	ReleaseHostedSystems();
+
+	Super::Deinitialize();
+}
+
+void USeinSystemHostSubsystem::ReleaseHostedSystemsForModuleUnload()
+{
+	check(IsInGameThread());
+	ReleaseHostedSystems();
+}
+
+void USeinSystemHostSubsystem::ReleaseHostedSystems()
+{
 	if (USeinWorldSubsystem* Sim = SimRef.Get())
 	{
 		for (const TUniquePtr<ISeinSystem>& System : HostedSystems)
@@ -42,6 +59,4 @@ void USeinSystemHostSubsystem::Deinitialize()
 	}
 	HostedSystems.Empty(); // TUniquePtr destroys each owned system
 	SimRef.Reset();
-
-	Super::Deinitialize();
 }

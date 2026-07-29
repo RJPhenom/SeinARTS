@@ -11,7 +11,7 @@
  *          - Stamp output (CellBitfield): fully FFixedPoint. StampFlatCircle
  *            uses FFixedPoint radius math + cell² integer comparisons; no
  *            float on the stamp path.
- *          - Stamp cadence: driven by USeinWorldSubsystem::OnSimTickCompleted
+ *          - Stamp cadence: driven by an ordered PostTick simulation system,
  *            gated by plugin-settings VisionTickInterval. All clients stamp
  *            against the same tick-N source snapshot — lockstep-safe.
  *          - LOS query: FSeinLineOfSightResolver takes FFixedVector; no
@@ -51,6 +51,7 @@
 class UWorld;
 class USeinLevelData;
 struct FSeinStampShape;
+struct FSeinFogOfWarDefaultStateCodec;
 
 #if WITH_DEV_AUTOMATION_TESTS
 namespace UE::SeinARTSTests
@@ -270,6 +271,8 @@ public:
 		int32& OutWidth, int32& OutHeight) const override;
 
 private:
+
+	friend struct FSeinFogOfWarDefaultStateCodec;
 
 #if WITH_DEV_AUTOMATION_TESTS
 	friend struct UE::SeinARTSTests::FFogOfWarDefaultTestAccess;

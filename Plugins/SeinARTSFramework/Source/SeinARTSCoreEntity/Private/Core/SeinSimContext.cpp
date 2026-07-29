@@ -11,7 +11,22 @@
 
 #include "Core/SeinSimContext.h"
 
-static thread_local bool GIsInSeinSimContext = false;
+static thread_local const USeinWorldSubsystem* GSeinSimContextWorld = nullptr;
 
-bool SeinIsInSimContext() { return GIsInSeinSimContext; }
-void SeinSetSimContext(bool bInSim) { GIsInSeinSimContext = bInSim; }
+bool SeinIsInSimContext() { return GSeinSimContextWorld != nullptr; }
+bool SeinIsInSimContext(const USeinWorldSubsystem* World)
+{
+	return World && GSeinSimContextWorld == World;
+}
+
+FSeinSimContextScope::FSeinSimContextScope(
+	const USeinWorldSubsystem& World)
+	: PreviousWorld(GSeinSimContextWorld)
+{
+	GSeinSimContextWorld = &World;
+}
+
+FSeinSimContextScope::~FSeinSimContextScope()
+{
+	GSeinSimContextWorld = PreviousWorld;
+}

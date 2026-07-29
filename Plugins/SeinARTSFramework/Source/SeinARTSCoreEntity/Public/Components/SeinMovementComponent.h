@@ -148,9 +148,12 @@ struct SEINARTSCOREENTITY_API FSeinMovementComponent : public FSeinComponent
 
 	/** When true, the unit can drive in reverse. Movements auto-engage
 	 *  reverse for destinations BEHIND the unit (per ReverseEngageDotThreshold
-	 *  + ReverseEngageDistanceThreshold), and explicit reverse abilities
-	 *  become active. Off by default; designers opt in per unit type
-	 *  (vehicles yes, infantry no). */
+	 *  + ReverseEngageDistanceThreshold). Off by default; designers opt in per
+	 *  unit type. A movement mode may OR-combine this with its own per-class
+	 *  gate in its sub-data — the Movement+ wheeled mode defaults reverse ON
+	 *  that way, so wheeled units reverse without touching this flag (and the
+	 *  reverse tuning fields below stay LIVE for them even while this
+	 *  EditCondition greys them out). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement")
 	bool bCanReverse = false;
 

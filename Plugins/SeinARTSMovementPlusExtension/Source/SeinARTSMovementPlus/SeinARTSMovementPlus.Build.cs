@@ -4,10 +4,15 @@ public class SeinARTSMovementPlus : ModuleRules
 {
     public SeinARTSMovementPlus(ReadOnlyTargetRules Target) : base(Target)
     {
+        PublicDependencyModuleNames.AddRange(new string[] {
+            "SeinARTSCore",
+            "SeinARTSCoreEntity",
+            "SeinARTSMovement"
+        });
+
         PrivateDependencyModuleNames.AddRange(new string[] {
             "Core", "CoreUObject", "Engine",
-            "SeinARTSCore", "SeinARTSCoreEntity",
-            "SeinARTSNavigation", "SeinARTSMovement",
+            "SeinARTSNavigation",
             "GameplayTags"
         });
 

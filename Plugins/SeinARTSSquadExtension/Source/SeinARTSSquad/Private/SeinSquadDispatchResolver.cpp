@@ -138,6 +138,12 @@ FSeinBrokerDispatchPlan USeinSquadDispatchResolver::ResolveDispatch_Implementati
 	FSeinCommandBrokerData* BrokerData = World->GetComponent<FSeinCommandBrokerData>(BrokerHandle);
 	const FSeinSquadComponent* SquadData = World->GetComponent<FSeinSquadComponent>(BrokerHandle);
 	const FSeinEntity* SquadEntity = World->GetEntity(BrokerHandle);
+	const bool bHadBrokerData = BrokerData != nullptr;
+	const FSeinPlayerID BrokerOwner = bHadBrokerData
+		? World->GetEntityOwner(BrokerHandle) : FSeinPlayerID::Neutral();
+	const int32 BrokerResolverID = bHadBrokerData ? BrokerData->ResolverID : INDEX_NONE;
+	const TArray<FSeinEntityHandle> BrokerMembers = bHadBrokerData
+		? BrokerData->Members : TArray<FSeinEntityHandle>();
 	const FFixedVector CurrentCentroid = BrokerData ? BrokerData->Centroid
 		: (SquadEntity ? SquadEntity->Transform.GetLocation() : FFixedVector::ZeroVector);
 	const FFixedQuaternion CurrentFacing = BrokerData ? BrokerData->AnchorFacing : FFixedQuaternion::Identity;
@@ -181,34 +187,54 @@ FSeinBrokerDispatchPlan USeinSquadDispatchResolver::ResolveDispatch_Implementati
 		const FSeinOrderTarget Target = USeinFormation::MakeInnerLayoutTarget(
 			Order.TargetLocation, CurrentCentroid, CurrentFacing,
 			SquadData ? SquadData->FormationClass : TSoftClassPtr<USeinFormation>());
+
+		// Formation layout reaches designer-pluggable formation and post-process
+		// hooks. Release component references before they can grow storage.
+		BrokerData = nullptr;
+		SquadData = nullptr;
+		SquadEntity = nullptr;
 		const FSeinFormationLayout Layout = ResolveFormationLayout(
 			World, Effective, Target, bReassignLateral, bReassignDepth);
+
+		if (bHadBrokerData)
+		{
+			BrokerData = World->GetComponent<FSeinCommandBrokerData>(BrokerHandle);
+			if (!World->IsEntityAlive(BrokerHandle) || !BrokerData
+				|| World->GetEntityOwner(BrokerHandle) != BrokerOwner
+				|| BrokerData->ResolverID != BrokerResolverID
+				|| BrokerData->Centroid != CurrentCentroid
+				|| BrokerData->Members != BrokerMembers)
+			{
+				// The broker system's outer precondition rejects this stale plan.
+				return Plan;
+			}
+		}
 		FormationFacing = Layout.Facing;
 		Positions = Layout.Positions;
 
-		// Persist the formation facing on the broker so the next move's
-		// "current facing" lookup reflects this dispatch.
 		if (BrokerData)
 		{
-			BrokerData->AnchorFacing = FormationFacing;
+			Plan.bApplyAnchorFacing = true;
+			Plan.AnchorFacing = FormationFacing;
 		}
 
-		// PERSIST THE RESOLVED LAYOUT ON THE BROKER (idle re-seek + settle-facing consumers) —
-		// mirrors the default resolver's capture, with one squad-specific difference:
+		// Return the resolved layout for transactional broker-system commit.
+		// Mirrors the default resolver's capture, with one squad-specific difference:
 		// MEMBER-ALIGNED. Squads have AUTHORED slot roles (the re-match toggles default OFF, so
 		// slot i belongs to member i of this dispatch), and a re-form must send each member back
 		// to ITS OWN slot rather than re-shuffling the roster. Full-squad GROUND orders only:
 		// entity-targeted dispatches carry no slots, and subset/pre-placed orders must not
 		// clobber the squad's standing layout with a partial or re-routed one.
 		if (BrokerData && !bEntityTargeted && Positions.Num() > 0
-			&& Effective.Num() == BrokerData->Members.Num())
+			&& Effective.Num() == BrokerMembers.Num())
 		{
-			BrokerData->SettledSlotPositions = Positions;
 			TArray<FFixedQuaternion> SlotFacings = Layout.Facings;
 			while (SlotFacings.Num() < Positions.Num()) { SlotFacings.Add(FormationFacing); }
 			SlotFacings.SetNum(Positions.Num());
-			BrokerData->SettledSlotFacings = SlotFacings;
-			BrokerData->bSettledSlotsMemberAligned = true;
+			Plan.bApplySettledSlots = true;
+			Plan.SettledSlotPositions = Positions;
+			Plan.SettledSlotFacings = MoveTemp(SlotFacings);
+			Plan.bSettledSlotsMemberAligned = true;
 		}
 	}
 
@@ -217,12 +243,15 @@ FSeinBrokerDispatchPlan USeinSquadDispatchResolver::ResolveDispatch_Implementati
 	for (int32 i = 0; i < Effective.Num(); ++i)
 	{
 		const FSeinEntityHandle Member = Effective[i];
-		const FSeinAbilityComponent* AC = World->GetComponent<FSeinAbilityComponent>(Member);
-		if (!AC) continue;
-
 		const FFixedVector SlotGoal = Positions.IsValidIndex(i) ? Positions[i] : Order.TargetLocation;
+		if (!World->GetComponent<FSeinAbilityComponent>(Member)) continue;
 
 		const FGameplayTag ResolvedTag = ResolveMemberAbility(World, Member, Order.Context);
+
+		// ResolveMemberAbility is Blueprint-pluggable and may reallocate or
+		// replace component storage. Reacquire only after the callback returns.
+		const FSeinAbilityComponent* AC = World->GetComponent<FSeinAbilityComponent>(Member);
+		if (!AC) continue;
 
 		UE_LOG(LogSeinSquadDispatch, Verbose,
 			TEXT("  member[%d] %s â†’ resolved=%s, target=%s, location=%s"),

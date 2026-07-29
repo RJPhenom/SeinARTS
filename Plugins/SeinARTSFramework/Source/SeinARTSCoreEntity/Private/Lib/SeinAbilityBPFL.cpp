@@ -10,6 +10,7 @@
 #include "Components/SeinBrokerMembershipData.h"
 #include "Components/SeinCommandBrokerData.h"
 #include "Core/SeinPlayerState.h"
+#include "Core/SeinSimContext.h"
 #include "Abilities/SeinAbility.h"
 #include "Abilities/SeinAbilityValidation.h"
 #include "Brokers/SeinBrokerTypes.h"
@@ -67,7 +68,11 @@ TArray<FSeinAbilityComponent> USeinAbilityBPFL::SeinGetAbilityDataMany(const UOb
 void USeinAbilityBPFL::SeinActivateAbility(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, FGameplayTag AbilityTag, FSeinEntityHandle TargetEntity, FFixedVector TargetLocation)
 {
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
-	if (!Subsystem) return;
+	if (!Subsystem
+		|| !Subsystem->RequireStateMutationAuthorization(TEXT("ActivateAbilityDirect")))
+	{
+		return;
+	}
 
 	FSeinAbilityComponent* AbilityComp = Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
 	if (!AbilityComp) return;
@@ -97,7 +102,7 @@ void USeinAbilityBPFL::SeinIssueAbilityCommand(const UObject* WorldContextObject
 		*AbilityTag.ToString(), *EntityHandle.ToString(), *TargetEntity.ToString(), *Owner.ToString());
 
 	const FSeinCommand Cmd = FSeinCommand::MakeAbilityCommand(Owner, EntityHandle, AbilityTag, TargetEntity, TargetLocation);
-	Subsystem->EnqueueCommand(Cmd);
+	Subsystem->EnqueueDerivedCommand(Cmd);
 }
 
 void USeinAbilityBPFL::SeinIssueBrokerOrderFromEntity(
@@ -112,6 +117,12 @@ void USeinAbilityBPFL::SeinIssueBrokerOrderFromEntity(
 	if (!Subsystem)
 	{
 		UE_LOG(LogSeinBPFL, Warning, TEXT("IssueBrokerOrderFromEntity: no SeinWorldSubsystem"));
+		return;
+	}
+	if (!SeinIsInSimContext(Subsystem))
+	{
+		UE_LOG(LogSeinBPFL, Error,
+			TEXT("IssueBrokerOrderFromEntity rejected outside simulation context."));
 		return;
 	}
 	if (!AbilityTag.IsValid())
@@ -185,7 +196,11 @@ void USeinAbilityBPFL::SeinIssueBrokerOrderFromEntity(
 void USeinAbilityBPFL::SeinCancelAbility(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle)
 {
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
-	if (!Subsystem) return;
+	if (!Subsystem
+		|| !Subsystem->RequireStateMutationAuthorization(TEXT("CancelAbilityDirect")))
+	{
+		return;
+	}
 
 	FSeinAbilityComponent* AbilityComp = Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
 	if (!AbilityComp) return;
@@ -322,6 +337,10 @@ namespace SeinAbilityGrantLocal
 		if (!Subsystem)
 		{
 			UE_LOG(LogSeinBPFL, Warning, TEXT("GrantAbility: no SeinWorldSubsystem"));
+			return INDEX_NONE;
+		}
+		if (!Subsystem->RequireStateMutationAuthorization(TEXT("GrantAbility")))
+		{
 			return INDEX_NONE;
 		}
 		const FSeinEntity* Entity = Subsystem->GetEntityPool().Get(EntityHandle);
@@ -521,7 +540,12 @@ int32 USeinAbilityBPFL::SeinRevokeAbilityByTag(const UObject* WorldContextObject
 	FGameplayTag AbilityTag)
 {
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
-	if (!Subsystem || !AbilityTag.IsValid()) return 0;
+	if (!Subsystem || !AbilityTag.IsValid()
+		|| !Subsystem->RequireStateMutationAuthorization(
+			TEXT("RevokeAbilityByTag")))
+	{
+		return 0;
+	}
 	FSeinAbilityComponent* AbilityComp = Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
 	if (!AbilityComp) return 0;
 
@@ -576,7 +600,12 @@ int32 USeinAbilityBPFL::SeinRevokeAbilityByClass(const UObject* WorldContextObje
 	TSubclassOf<USeinAbility> AbilityClass)
 {
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
-	if (!Subsystem || !AbilityClass) return 0;
+	if (!Subsystem || !AbilityClass
+		|| !Subsystem->RequireStateMutationAuthorization(
+			TEXT("RevokeAbilityByClass")))
+	{
+		return 0;
+	}
 	FSeinAbilityComponent* AbilityComp = Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
 	if (!AbilityComp) return 0;
 
@@ -613,7 +642,12 @@ int32 USeinAbilityBPFL::SeinRevokeAbilityFromEffect(const UObject* WorldContextO
 	int64 EffectInstanceID)
 {
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
-	if (!Subsystem || !AbilityClass || EffectInstanceID <= 0) return 0;
+	if (!Subsystem || !AbilityClass || EffectInstanceID <= 0
+		|| !Subsystem->RequireStateMutationAuthorization(
+			TEXT("RevokeAbilityFromEffect")))
+	{
+		return 0;
+	}
 	FSeinAbilityComponent* AbilityComp =
 		Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
 	if (!AbilityComp) return 0;
@@ -639,7 +673,12 @@ int32 USeinAbilityBPFL::SeinForceRevokeAbilityByTag(const UObject* WorldContextO
 	FGameplayTag AbilityTag)
 {
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
-	if (!Subsystem || !AbilityTag.IsValid()) return 0;
+	if (!Subsystem || !AbilityTag.IsValid()
+		|| !Subsystem->RequireStateMutationAuthorization(
+			TEXT("ForceRevokeAbilityByTag")))
+	{
+		return 0;
+	}
 	FSeinAbilityComponent* AbilityComp = Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
 	if (!AbilityComp) return 0;
 
@@ -688,7 +727,12 @@ int32 USeinAbilityBPFL::SeinForceRevokeAbilityByClass(const UObject* WorldContex
 	TSubclassOf<USeinAbility> AbilityClass)
 {
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
-	if (!Subsystem || !AbilityClass) return 0;
+	if (!Subsystem || !AbilityClass
+		|| !Subsystem->RequireStateMutationAuthorization(
+			TEXT("ForceRevokeAbilityByClass")))
+	{
+		return 0;
+	}
 	FSeinAbilityComponent* AbilityComp = Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
 	if (!AbilityComp) return 0;
 
@@ -794,7 +838,12 @@ FSeinAbilityAvailability USeinAbilityBPFL::SeinGetAbilityAvailability(
 	Out.bIsActive = Ability->bIsActive;
 
 	const FSeinPlayerID Owner = Subsystem->GetEntityOwner(EntityHandle);
-	Out.bCanAfford = USeinResourceBPFL::SeinCanAfford(WorldContextObject, Owner, Ability->ResourceCost);
+	FSeinResourceCost ActivationCost;
+	FSeinResourceCost CompletionCostUnused;
+	Ability->ResolveActivationCosts(
+		WorldContextObject, ActivationCost, CompletionCostUnused);
+	Out.bCanAfford = USeinResourceBPFL::SeinCanAfford(
+		WorldContextObject, Owner, ActivationCost);
 
 	// Walk the same gate order as ProcessCommands::ActivateAbility and report
 	// the first failing gate.
@@ -851,7 +900,24 @@ FSeinAbilityAvailability USeinAbilityBPFL::SeinGetAbilityAvailability(
 		switch (Validation)
 		{
 			case ESeinAbilityTargetValidationResult::OutOfRange:
-				Out.Reason = ESeinAbilityUnavailableReason::OutOfRange; return Out;
+			{
+				const USeinAbility* MoveAbility =
+					AbilityComp->FindMoveAbility(*Subsystem);
+				if (Ability->OutOfRangeBehavior
+						!= ESeinOutOfRangeBehavior::AutoMoveThen
+					|| !MoveAbility || !MoveAbility->AbilityTag.IsValid())
+				{
+					Out.Reason = ESeinAbilityUnavailableReason::OutOfRange;
+					return Out;
+				}
+				// AutoMoveThen's click-time command preflight checks affordability,
+				// then defers the remaining gates to the eventual follow-up.
+				Out.bAvailable = Out.bCanAfford;
+				Out.Reason = Out.bCanAfford
+					? ESeinAbilityUnavailableReason::None
+					: ESeinAbilityUnavailableReason::Unaffordable;
+				return Out;
+			}
 			case ESeinAbilityTargetValidationResult::InvalidTarget:
 				Out.Reason = ESeinAbilityUnavailableReason::InvalidTarget; return Out;
 			case ESeinAbilityTargetValidationResult::NoLineOfSight:

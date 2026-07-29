@@ -65,6 +65,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Bridge")
 	void UnregisterActor(FSeinEntityHandle Handle);
 
+	/**
+	 * Materialize one already-frozen level actor into the simulation and bind
+	 * its render bridge. Bootstrap planners call this in their own canonical
+	 * order; no discovery or sorting occurs inside this method.
+	 */
+	FSeinEntityHandle RegisterPlacedActor(ASeinActor& PlacedActor);
+
 	/** Walk every level-placed ASeinActor (stable-sorted by actor name) and
 	 *  bind each one to a sim entity. Idempotent — actors already linked
 	 *  are skipped. The stable sort matters for lockstep determinism: every
@@ -74,11 +81,9 @@ public:
 	 *
 	 *  Normally invoked automatically from OnWorldBeginPlay. Match-flow
 	 *  orchestrators (USeinMatchBootstrapSubsystem) disable that auto path
-	 *  via SetAutoRegisterOnBeginPlay(false) and call this method directly,
-	 *  AFTER pre-spawning slot start entities, so the entity-ID ordering
-	 *  matches between server (GameMode pre-spawns in InitGame, then
-	 *  bridge auto-registers in OnWorldBeginPlay) and clients (no GameMode,
-	 *  bootstrap orchestrator does both in sequence). */
+	 *  via SetAutoRegisterOnBeginPlay(false). New bootstrap code freezes a
+	 *  level-qualified plan and calls RegisterPlacedActor in that order; this
+	 *  convenience remains useful to non-match worlds. */
 	void RegisterAllPlacedActors(UWorld& InWorld);
 
 	/** Disable the auto-call from OnWorldBeginPlay. Call from a match-flow

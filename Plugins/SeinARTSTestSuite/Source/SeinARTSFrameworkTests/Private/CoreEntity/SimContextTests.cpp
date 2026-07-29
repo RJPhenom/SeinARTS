@@ -1,21 +1,36 @@
 #include "CQTest.h"
-#include "Core/SeinSimContext.h"
+#include "Components/ActorTestSpawner.h"
+#include "Simulation/SeinTestSimContext.h"
+#include "Simulation/SeinWorldSubsystem.h"
 
 namespace UE::SeinARTSTests
 {
 	TEST(SimContextScopeRestoresNestedState, "SeinARTS.Unit.CoreEntity")
 	{
-		SeinSetSimContext(false);
+		FActorTestSpawner OuterSpawner;
+		FActorTestSpawner InnerSpawner;
+		USeinWorldSubsystem* OuterWorld =
+			OuterSpawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		USeinWorldSubsystem* InnerWorld =
+			InnerSpawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(OuterWorld));
+		ASSERT_THAT(IsNotNull(InnerWorld));
+
 		ASSERT_THAT(IsFalse(SEIN_IS_SIM_CONTEXT()));
 
 		{
-			FSeinSimContextScope Outer;
+			auto Outer = FSeinSimContextTestAccess::Enter(*OuterWorld);
 			ASSERT_THAT(IsTrue(SEIN_IS_SIM_CONTEXT()));
+			ASSERT_THAT(IsTrue(SeinIsInSimContext(OuterWorld)));
+			ASSERT_THAT(IsFalse(SeinIsInSimContext(InnerWorld)));
 			{
-				FSeinSimContextScope Inner;
+				auto Inner = FSeinSimContextTestAccess::Enter(*InnerWorld);
 				ASSERT_THAT(IsTrue(SEIN_IS_SIM_CONTEXT()));
+				ASSERT_THAT(IsFalse(SeinIsInSimContext(OuterWorld)));
+				ASSERT_THAT(IsTrue(SeinIsInSimContext(InnerWorld)));
 			}
 			ASSERT_THAT(IsTrue(SEIN_IS_SIM_CONTEXT()));
+			ASSERT_THAT(IsTrue(SeinIsInSimContext(OuterWorld)));
 		}
 
 		ASSERT_THAT(IsFalse(SEIN_IS_SIM_CONTEXT()));

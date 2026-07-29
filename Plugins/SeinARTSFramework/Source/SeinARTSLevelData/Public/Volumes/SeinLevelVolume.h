@@ -163,9 +163,15 @@ public:
 	// Non-shipping only (mirrors the legacy volumes' debug hosting).
 	// ----------------------------------------------------------------------
 
-	/** Register/unregister a debug component class to auto-attach to every
-	 *  ASeinLevelVolume. Call from the owning module's Startup/ShutdownModule. */
+	/** Register a debug component class and immediately reconcile every live
+	 *  ASeinLevelVolume. Repeated registration is idempotent and heals a
+	 *  missing exact-class instance. */
 	static void RegisterDebugComponentClass(UClass* ComponentClass);
+
+	/** Unregister a debug component class and synchronously destroy every live
+	 *  exact-class instance hosted by ASeinLevelVolume. InstanceComponents is
+	 *  scrubbed and primitive scene-proxy teardown is flushed before return,
+	 *  so the owning module may safely unload. Repeated calls are idempotent. */
 	static void UnregisterDebugComponentClass(UClass* ComponentClass);
 
 	// ----------------------------------------------------------------------

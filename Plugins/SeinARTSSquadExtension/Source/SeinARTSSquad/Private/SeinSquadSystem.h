@@ -635,7 +635,12 @@ public:
 		}
 	}
 
-	virtual ESeinTickPhase GetPhase() const override { return ESeinTickPhase::PostTick; }
-	virtual int32 GetPriority() const override { return SeinSystemPriority::Squad; }
-	virtual FName GetSystemName() const override { return TEXT("Squad"); }
+	virtual FSeinSystemDescriptor DescribeSystem() const override
+	{
+		return FSeinSystemDescriptor::Stateless(
+			FName(TEXT("seinarts.squad.maintenance")),
+			1u,
+			ESeinTickPhase::PostTick,
+			SeinSystemPriority::Squad);
+	}
 };

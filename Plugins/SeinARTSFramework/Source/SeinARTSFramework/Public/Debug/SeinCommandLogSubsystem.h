@@ -58,6 +58,9 @@ public:
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 
+	/** Release Core-owned delegate callbacks before module withdrawal. */
+	void ReleaseModuleOwnedStateForModuleUnload();
+
 	/** Whether the overlay should be drawn by the HUD. */
 	bool bShowOverlay = false;
 

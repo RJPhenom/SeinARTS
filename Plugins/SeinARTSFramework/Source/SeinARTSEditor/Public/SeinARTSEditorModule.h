@@ -14,7 +14,10 @@
 #include "Delegates/Delegate.h"
 
 class IAssetTypeActions;
+class FAutoConsoleCommand;
 class FSeinDeterministicStructValidator;
+class FSeinSimulationContentCookIntegration;
+class FSeinSimulationContentPIEAuthorizer;
 class FPrimitiveDrawInterface;
 struct FGraphPanelPinFactory;
 struct FInstancedStruct;
@@ -62,6 +65,7 @@ public:
 	~FSeinARTSEditorModule();
 
 	virtual void StartupModule() override;
+	virtual void PreUnloadCallback() override;
 	virtual void ShutdownModule() override;
 
 	static EAssetTypeCategories::Type GetAssetCategoryBit();
@@ -94,11 +98,20 @@ public:
 private:
 	void RegisterAssetTypeActions();
 	void UnregisterAssetTypeActions();
+	void ReleaseModuleOwnedState();
 
 	TArray<TSharedPtr<IAssetTypeActions>> RegisteredActions;
 	TSharedPtr<FGraphPanelPinFactory> SeinPinFactory;
 	TUniquePtr<FSeinDeterministicStructValidator> UDSValidator;
+	TUniquePtr<FSeinSimulationContentPIEAuthorizer>
+		SimulationContentPIEAuthorizer;
+	TUniquePtr<FSeinSimulationContentCookIntegration>
+		SimulationContentCookIntegration;
+	TUniquePtr<FAutoConsoleCommand>
+		SimulationContentGenerateCommand;
 	TMap<FName, FSeinComponentDataDrawDelegate> ComponentDataDraws;
+	FDelegateHandle AbilityContinuationPreCompileHandle;
 	FDelegateHandle OnAssetRenamedHandle;  // auto-tag-generation rename hook
+	bool bModuleOwnedStateReleased = false;
 	static EAssetTypeCategories::Type SeinARTSCategoryBit;
 };

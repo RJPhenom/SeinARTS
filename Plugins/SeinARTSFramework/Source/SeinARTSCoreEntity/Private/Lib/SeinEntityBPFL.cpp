@@ -42,7 +42,11 @@ FFixedTransform USeinEntityBPFL::SeinGetEntityTransform(const UObject* WorldCont
 void USeinEntityBPFL::SeinSetEntityTransform(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, const FFixedTransform& Transform)
 {
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
-	if (!Subsystem) return;
+	if (!Subsystem
+		|| !Subsystem->RequireStateMutationAuthorization(TEXT("SetEntityTransform")))
+	{
+		return;
+	}
 	FSeinEntity* Entity = Subsystem->GetEntity(EntityHandle);
 	if (Entity)
 	{

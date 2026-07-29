@@ -118,7 +118,7 @@ void USeinCommandBrokerBPFL::SeinIssueBrokerOrder(
 	Cmd.bQueueCommand = bQueueCommand;
 	Cmd.Payload = FInstancedStruct::Make(Payload);
 
-	Sub->EnqueueCommand(Cmd);
+	Sub->SubmitLocalCommandDraft(Cmd);
 }
 
 namespace SeinFormationPreviewLocal
@@ -166,7 +166,10 @@ TArray<FFixedVector> USeinCommandBrokerBPFL::ComputeMultiBrokerAnchors(
 	Anchors.Init(ClickTarget, N);
 	OutFacings.Reset();
 	OutFacings.Init(FFixedQuaternion::Identity, N);
-	if (N == 0) { return Anchors; }
+	if (N == 0 || !World.IsExecutionTopologyValid())
+	{
+		return Anchors;
+	}
 
 	// The parent layout runs through the project's default resolver CDO (it owns the formation map +
 	// the shaping passes). No resolver (nav-less tests) -> leave every anchor at ClickTarget.
@@ -223,7 +226,12 @@ FSeinFormationLayout USeinCommandBrokerBPFL::SeinComputeFormationPreview(
 {
 	FSeinFormationLayout Empty;
 	USeinWorldSubsystem* World = GetWorldSubsystem(WorldContextObject);
-	if (!World || Members.Num() == 0) return Empty;
+	if (!World
+		|| !World->IsExecutionTopologyValid()
+		|| Members.Num() == 0)
+	{
+		return Empty;
+	}
 
 	// Nav-project the cursor target ONCE up front. The commit projects
 	// Order.TargetLocation before computing per-broker anchors, and every squad's

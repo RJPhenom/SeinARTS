@@ -57,11 +57,8 @@ public:
 	static bool SeinCanAfford(const UObject* WorldContextObject, FSeinPlayerID PlayerID, const FSeinResourceCost& Cost);
 
 	/** Split a cost map into AtEnqueue / AtCompletion buckets according to each
-	 *  resource's `ProductionDeductionTiming` in the catalog. Used by the ability
-	 *  activation gate (AtEnqueue deducts immediately; AtCompletion is held in
-	 *  USeinAbility::PendingCompletionCost for the EnqueueProduction call to
-	 *  seed the queue entry) and by USeinProductionBPFL::SeinEnqueueProduction
-	 *  (snapshots both buckets onto the queue entry).
+	 *  resource's `ProductionDeductionTiming` in the catalog. Ability activation
+	 *  consults this only when its explicit cost timing is Production Queue.
 	 *
 	 *  Resources whose tag is not found in the catalog default to AtEnqueue —
 	 *  fail-safe for partially-authored projects. Empty input → both outputs empty. */

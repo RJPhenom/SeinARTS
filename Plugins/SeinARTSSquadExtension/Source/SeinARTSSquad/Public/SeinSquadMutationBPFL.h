@@ -3,7 +3,9 @@
  * @file    SeinSquadMutationBPFL.h
  * @brief   Restricted-access Blueprint Function Library for mutating squad
  *          sim-side component state. Mirrors USeinSimMutationBPFL's contract:
- *          callable only from USeinAbility and USeinEffect Blueprint graphs.
+ *          callable only from USeinAbility and USeinEffect Blueprint graphs,
+ *          with an all-build world gate that permits tick-zero Applying and
+ *          fixed-tick callbacks but rejects post-seal/off-tick mutation.
  */
 
 #pragma once

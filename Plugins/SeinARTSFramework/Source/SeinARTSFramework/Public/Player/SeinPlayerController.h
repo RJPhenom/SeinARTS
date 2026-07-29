@@ -54,8 +54,9 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FSeinOnCursorUpdated, FVector, Curs
  * - Observer command logging (camera + selection snapshots for replays)
  * - Modifier key tracking (Shift, Ctrl, Alt)
  *
- * All interaction is render-side. The sim is only touched through
- * USeinWorldSubsystem::EnqueueCommand().
+ * All interaction is render-side. Command drafts cross either the active
+ * lockstep transport or the world's authenticated standalone ingress; the
+ * controller never mutates simulation state directly.
  */
 UCLASS(Blueprintable)
 class SEINARTSFRAMEWORK_API ASeinPlayerController : public APlayerController
@@ -68,6 +69,7 @@ public:
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void SetupInputComponent() override;
+	virtual void SeamlessTravelFrom(APlayerController* OldPC) override;
 
 	// ========== Configuration ==========
 

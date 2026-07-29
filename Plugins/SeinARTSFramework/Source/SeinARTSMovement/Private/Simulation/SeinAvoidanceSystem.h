@@ -44,9 +44,16 @@ public:
 		if (Avoidance) Avoidance->ComputeAvoidance(World);
 	}
 
-	virtual ESeinTickPhase GetPhase() const override { return ESeinTickPhase::PreTick; }
-	virtual int32 GetPriority() const override { return SeinSystemPriority::Avoidance; }
-	virtual FName GetSystemName() const override { return TEXT("Avoidance"); }
+	virtual FSeinSystemDescriptor DescribeSystem() const override
+	{
+		return FSeinSystemDescriptor::WithCanonicalState(
+			FName(TEXT("seinarts.movement.avoidance")),
+			1u,
+			ESeinTickPhase::PreTick,
+			SeinSystemPriority::Avoidance,
+			{FName(TEXT(
+				"seinarts.movement/persistent-policy-instances"))});
+	}
 
 private:
 	USeinAvoidance* Avoidance = nullptr;

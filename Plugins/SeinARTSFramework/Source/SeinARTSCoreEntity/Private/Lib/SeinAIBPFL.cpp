@@ -52,8 +52,9 @@ TArray<FSeinEntityHandle> USeinAIBPFL::SeinQueryVisibleEntitiesForPlayer(const U
 
 void USeinAIBPFL::SeinEmitCommand(const UObject* WorldContextObject, const FSeinCommand& Command)
 {
-	if (USeinWorldSubsystem* Sub = GetWorldSubsystem(WorldContextObject))
+	if (USeinAIController* Controller = Cast<USeinAIController>(
+		const_cast<UObject*>(WorldContextObject)))
 	{
-		Sub->EnqueueCommand(Command);
+		Controller->EmitCommand(Command);
 	}
 }

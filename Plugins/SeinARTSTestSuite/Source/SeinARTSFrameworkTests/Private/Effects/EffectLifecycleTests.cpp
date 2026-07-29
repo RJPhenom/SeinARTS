@@ -6,7 +6,7 @@
 #include "Components/SeinActiveEffectsComponent.h"
 #include "Containers/Ticker.h"
 #include "Collision/SeinCollisionSpatialHash.h"
-#include "Core/SeinSimContext.h"
+#include "Simulation/SeinTestSimContext.h"
 #include "Data/SeinWorldSnapshot.h"
 #include "Events/SeinVisualEvent.h"
 #include "Lib/SeinAbilityBPFL.h"
@@ -15,6 +15,7 @@
 #include "Serialization/ObjectAndNameAsStringProxyArchive.h"
 #include "Settings/PluginSettings.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "Simulation/SeinTestMatchBootstrap.h"
 #include "Tags/SeinARTSGameplayTags.h"
 #include "TestTypes/SeinEffectMutationTestTypes.h"
 #include "UObject/UnrealType.h"
@@ -27,15 +28,70 @@ USeinEffectRemovingPassiveTestAbility::FEndCallback
 
 struct FSeinWorldSubsystemTestAccess
 {
+	enum class EObservedApplyStatus : uint8
+	{
+		RejectedNoMutation,
+		Applied,
+		InvalidatedAfterReplacementRemoval
+	};
+
+	struct FObservedApplyResult
+	{
+		EObservedApplyStatus Status = EObservedApplyStatus::RejectedNoMutation;
+		int64 EffectInstanceID = 0;
+	};
+
 	static FSeinEntityTagState& EntityTags(
 		USeinWorldSubsystem& World, FSeinEntityHandle Entity)
 	{
 		return World.EntityTagStates.FindOrAdd(Entity);
 	}
+
+	static void SetNextEffectInstanceID(
+		USeinWorldSubsystem& World, int64 NextID)
+	{
+		World.NextEffectInstanceID = NextID;
+	}
+
+	static FObservedApplyResult ApplyEffectDetailed(USeinWorldSubsystem& World,
+		FSeinEntityHandle Target, TSubclassOf<USeinEffect> EffectClass,
+		FSeinEntityHandle Source)
+	{
+		const USeinWorldSubsystem::FEffectApplyResult Result =
+			World.ApplyEffectTransactional(Target, EffectClass, Source);
+		EObservedApplyStatus Status = EObservedApplyStatus::RejectedNoMutation;
+		switch (Result.Status)
+		{
+			case USeinWorldSubsystem::EEffectApplyStatus::Applied:
+				Status = EObservedApplyStatus::Applied;
+				break;
+			case USeinWorldSubsystem::EEffectApplyStatus::
+				InvalidatedAfterReplacementRemoval:
+				Status = EObservedApplyStatus::
+					InvalidatedAfterReplacementRemoval;
+				break;
+			case USeinWorldSubsystem::EEffectApplyStatus::RejectedNoMutation:
+			default:
+				break;
+		}
+		return {Status, Result.EffectInstanceID};
+	}
 };
 
 namespace
 {
+	bool MaterializeEffectFixture(
+		USeinWorldSubsystem& World,
+		TFunctionRef<void()> AuthorState)
+	{
+		return SeinTestMatchBootstrap::Materialize(
+			World,
+			AuthorState,
+			FSeinMatchSettings(),
+			0,
+			TEXT("SeinARTS.EffectLifecycle"));
+	}
+
 	void ConfigureEffect(USeinEffect& Effect, ESeinModifierScope Scope,
 		ESeinEffectDurationMode DurationMode, FFixedPoint TickInterval = FFixedPoint::Zero)
 	{
@@ -48,21 +104,37 @@ namespace
 
 	FSeinEntityHandle SpawnEffectEntity(USeinWorldSubsystem& World, FSeinPlayerID Owner)
 	{
+		check(World.GetMatchBootstrapState() == ESeinMatchBootstrapState::Applying);
 		const FSeinEntityHandle Handle = World.SpawnAbstractEntity(FFixedTransform(), Owner);
 		World.AddComponent(Handle, FSeinActiveEffectsComponent());
 		return Handle;
 	}
 
-	void TickForOneSimSecond(USeinWorldSubsystem& World)
+	bool StartEffectFixture(USeinWorldSubsystem& World)
+	{
+		if (!SeinTestMatchBootstrap::Start(World))
+		{
+			return false;
+		}
+		return World.GetMatchBootstrapState()
+			== ESeinMatchBootstrapState::Consumed;
+	}
+
+	bool TickForOneSimSecond(USeinWorldSubsystem& World)
 	{
 		const int32 TickRate = GetDefault<USeinARTSCoreSettings>()->SimulationTickRate;
-		World.StartSimulation();
+		if (!World.IsSimulationRunning()
+			&& !SeinTestMatchBootstrap::Start(World))
+		{
+			return false;
+		}
 		// Fixed-point 1/rate truncates, so one extra tick crosses the exact second.
 		for (int32 Tick = 0; Tick <= TickRate; ++Tick)
 		{
 			FTSTicker::GetCoreTicker().Tick(World.GetFixedDeltaTimeSeconds());
 		}
 		World.StopSimulation();
+		return true;
 	}
 
 	struct FScopedEffectCallbackReset
@@ -153,6 +225,76 @@ namespace
 		{
 			Effect.StackingRule = PreviousRule;
 			Effect.MaxStacks = PreviousMaxStacks;
+		}
+	};
+
+	struct FScopedIndependentStackLimit
+	{
+		USeinEffect& Effect;
+		ESeinEffectStackingRule PreviousRule;
+		int32 PreviousMaxStacks;
+
+		FScopedIndependentStackLimit(USeinEffect& InEffect, int32 InMaxStacks)
+			: Effect(InEffect)
+			, PreviousRule(InEffect.StackingRule)
+			, PreviousMaxStacks(InEffect.MaxStacks)
+		{
+			Effect.StackingRule = ESeinEffectStackingRule::Independent;
+			Effect.MaxStacks = InMaxStacks;
+		}
+
+		~FScopedIndependentStackLimit()
+		{
+			Effect.StackingRule = PreviousRule;
+			Effect.MaxStacks = PreviousMaxStacks;
+		}
+	};
+
+	struct FScopedFutureEffectBehavior
+	{
+		USeinEffect& Effect;
+		FGameplayTag PreviousDefaultTargetClassTag;
+		FFixedPoint PreviousTickInterval;
+		bool bPreviousRemoveOnSourceDeath = false;
+		TArray<FSeinModifier> PreviousModifiers;
+
+		explicit FScopedFutureEffectBehavior(USeinEffect& InEffect)
+			: Effect(InEffect)
+			, PreviousDefaultTargetClassTag(InEffect.DefaultTargetClassTag)
+			, PreviousTickInterval(InEffect.TickInterval)
+			, bPreviousRemoveOnSourceDeath(InEffect.bRemoveOnSourceDeath)
+			, PreviousModifiers(InEffect.Modifiers)
+		{
+			Effect.DefaultTargetClassTag = FGameplayTag();
+			Effect.TickInterval = FFixedPoint::Zero;
+			Effect.bRemoveOnSourceDeath = false;
+			Effect.Modifiers.Reset();
+		}
+
+		~FScopedFutureEffectBehavior()
+		{
+			Effect.DefaultTargetClassTag = PreviousDefaultTargetClassTag;
+			Effect.TickInterval = PreviousTickInterval;
+			Effect.bRemoveOnSourceDeath = bPreviousRemoveOnSourceDeath;
+			Effect.Modifiers = MoveTemp(PreviousModifiers);
+		}
+	};
+
+	struct FScopedGrantedTags
+	{
+		USeinEffect& Effect;
+		FGameplayTagContainer Previous;
+
+		FScopedGrantedTags(USeinEffect& InEffect, FGameplayTag Tag)
+			: Effect(InEffect), Previous(InEffect.GrantedTags)
+		{
+			Effect.GrantedTags.Reset();
+			Effect.GrantedTags.AddTag(Tag);
+		}
+
+		~FScopedGrantedTags()
+		{
+			Effect.GrantedTags = Previous;
 		}
 	};
 
@@ -280,23 +422,32 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsNotNull(World));
 
 		const FSeinPlayerID Player(1);
-		World->RegisterPlayer(Player, FSeinFactionID(1));
-		const FSeinEntityHandle First = SpawnEffectEntity(*World, Player);
-		const FSeinEntityHandle Second = SpawnEffectEntity(*World, Player);
-
-		const int64 InstanceA = World->ApplyEffect(First,
-			USeinEffectIdentityInstanceTestEffect::StaticClass(), First);
-		const int64 InstanceB = World->ApplyEffect(Second,
-			USeinEffectIdentityInstanceTestEffect::StaticClass(), First);
-		const int64 ClassEffect = World->ApplyEffect(First,
-			USeinEffectIdentityClassTestEffect::StaticClass(), First);
-		const int64 PlayerEffect = World->ApplyEffect(First,
-			USeinEffectIdentityPlayerTestEffect::StaticClass(), First);
+		FSeinEntityHandle First;
+		FSeinEntityHandle Second;
+		int64 InstanceA = 0;
+		int64 InstanceB = 0;
+		int64 ClassEffect = 0;
+		int64 PlayerEffect = 0;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			World->RegisterPlayer(Player, FSeinFactionID(1));
+			First = SpawnEffectEntity(*World, Player);
+			Second = SpawnEffectEntity(*World, Player);
+			InstanceA = World->ApplyEffect(First,
+				USeinEffectIdentityInstanceTestEffect::StaticClass(), First);
+			InstanceB = World->ApplyEffect(Second,
+				USeinEffectIdentityInstanceTestEffect::StaticClass(), First);
+			ClassEffect = World->ApplyEffect(First,
+				USeinEffectIdentityClassTestEffect::StaticClass(), First);
+			PlayerEffect = World->ApplyEffect(First,
+				USeinEffectIdentityPlayerTestEffect::StaticClass(), First);
+		})));
 
 		ASSERT_THAT(AreEqual(int64{1}, InstanceA));
 		ASSERT_THAT(AreEqual(int64{2}, InstanceB));
 		ASSERT_THAT(AreEqual(int64{3}, ClassEffect));
 		ASSERT_THAT(AreEqual(int64{4}, PlayerEffect));
+		ASSERT_THAT(IsTrue(StartEffectFixture(*World)));
 
 		FSeinWorldSnapshot Captured;
 		World->CaptureSnapshot(Captured);
@@ -318,7 +469,9 @@ namespace UE::SeinARTSTests
 
 		FSeinWorldSnapshot Legacy = Loaded;
 		Legacy.SnapshotVersion = 1;
-		Assert.ExpectError(TEXT("RestoreSnapshot: unsupported version 1 (expected 4)."));
+		Assert.ExpectError(FString::Printf(
+			TEXT("RestoreSnapshot: unsupported version 1 (expected %d)."),
+			FSeinWorldSnapshot::CurrentVersion));
 		ASSERT_THAT(IsFalse(World->RestoreSnapshot(Legacy)));
 
 		FSeinWorldSnapshot DuplicateActiveID = Loaded;
@@ -328,7 +481,7 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(AreEqual(1, DuplicatePlayerState->PlayerEffects.Num()));
 		DuplicatePlayerState->PlayerEffects[0].EffectInstanceID =
 			DuplicatePlayerState->ClassEffects[0].EffectInstanceID;
-		Assert.ExpectError(TEXT("RestoreSnapshot: active effect state is malformed; allocator validation failed."));
+		Assert.ExpectError(TEXT("RestoreSnapshot: authoritative sim state failed structural preflight."));
 		ASSERT_THAT(IsFalse(World->RestoreSnapshot(DuplicateActiveID)));
 
 		FSeinWorldSnapshot ReusingActiveID = Loaded;
@@ -342,13 +495,20 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsFalse(World->GetCollisionSpatialHash().IsStaticDirty()));
 
 		ASSERT_THAT(IsTrue(World->RestoreSnapshot(Loaded)));
-		World->StopSimulation();
 		ASSERT_THAT(IsFalse(World->HasPendingVisualEvents()));
 		ASSERT_THAT(IsTrue(World->GetCollisionSpatialHash().IsStaticDirty()));
 
-		const int64 AfterRestore = World->ApplyEffect(First,
-			USeinEffectIdentityInstanceTestEffect::StaticClass(), First);
-		ASSERT_THAT(AreEqual(int64{5}, AfterRestore));
+		FSeinWorldSubsystemTestAccess::FObservedApplyResult AfterRestore;
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+			AfterRestore = FSeinWorldSubsystemTestAccess::ApplyEffectDetailed(
+				*World, First,
+				USeinEffectIdentityInstanceTestEffect::StaticClass(), First);
+		}
+		ASSERT_THAT(IsTrue(AfterRestore.Status
+			== FSeinWorldSubsystemTestAccess::EObservedApplyStatus::Applied));
+		ASSERT_THAT(AreEqual(int64{5}, AfterRestore.EffectInstanceID));
+		World->StopSimulation();
 	}
 
 	TEST(SnapshotAllocatorRejectsAnActiveInstanceEffectID, "SeinARTS.Unit.Effects")
@@ -356,9 +516,16 @@ namespace UE::SeinARTSTests
 		FActorTestSpawner Spawner;
 		USeinWorldSubsystem* World = Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
 		ASSERT_THAT(IsNotNull(World));
-		const FSeinEntityHandle Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
-		ASSERT_THAT(AreEqual(int64{1}, World->ApplyEffect(
-			Target, USeinEffectIdentityInstanceTestEffect::StaticClass(), Target)));
+		FSeinEntityHandle Target;
+		int64 EffectID = 0;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
+			EffectID = World->ApplyEffect(
+				Target, USeinEffectIdentityInstanceTestEffect::StaticClass(), Target);
+		})));
+		ASSERT_THAT(AreEqual(int64{1}, EffectID));
+		ASSERT_THAT(IsTrue(StartEffectFixture(*World)));
 
 		FSeinWorldSnapshot Snapshot;
 		World->CaptureSnapshot(Snapshot);
@@ -367,6 +534,7 @@ namespace UE::SeinARTSTests
 		Assert.ExpectError(TEXT("RestoreSnapshot: next effect ID 1 must exceed max active effect ID 1."));
 		ASSERT_THAT(IsFalse(World->RestoreSnapshot(Snapshot)));
 		ASSERT_THAT(AreEqual(HashBeforeRejectedRestore, World->ComputeStateHash()));
+		World->StopSimulation();
 	}
 
 	TEST(SnapshotRestoreDropsAppliesFromTheAbandonedTimeline, "SeinARTS.Unit.Effects")
@@ -374,13 +542,17 @@ namespace UE::SeinARTSTests
 		FActorTestSpawner Spawner;
 		USeinWorldSubsystem* World = Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
 		ASSERT_THAT(IsNotNull(World));
-		const FSeinEntityHandle Target =
-			SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
+		FSeinEntityHandle Target;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
+		})));
+		ASSERT_THAT(IsTrue(StartEffectFixture(*World)));
 
 		FSeinWorldSnapshot Snapshot;
 		World->CaptureSnapshot(Snapshot);
 		{
-			FSeinSimContextScope SimScope;
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
 			ASSERT_THAT(AreEqual(int64{0}, World->ApplyEffect(
 				Target, USeinEffectIdentityInstanceTestEffect::StaticClass(), Target)));
 		}
@@ -403,17 +575,36 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsNotNull(FirstWorld));
 		ASSERT_THAT(IsNotNull(SecondWorld));
 
-		const FSeinEntityHandle First = SpawnEffectEntity(*FirstWorld, FSeinPlayerID::Neutral());
-		const FSeinEntityHandle Second = SpawnEffectEntity(*SecondWorld, FSeinPlayerID::Neutral());
-		ASSERT_THAT(AreEqual(FirstWorld->ComputeStateHash(), SecondWorld->ComputeStateHash()));
+		int32 FirstInitialHash = 0;
+		int32 SecondInitialHash = 0;
+		int32 FirstAdvancedHash = 0;
+		int32 SecondAdvancedHash = 0;
+		int64 FirstEffectID = 0;
+		int64 SecondEffectID = 0;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*FirstWorld, [&]()
+		{
+			const FSeinEntityHandle First =
+				SpawnEffectEntity(*FirstWorld, FSeinPlayerID::Neutral());
+			FirstInitialHash = FirstWorld->ComputeStateHash();
+			FirstEffectID = FirstWorld->ApplyEffect(First,
+				USeinEffectIdentityInstantTestEffect::StaticClass(), First);
+			FirstAdvancedHash = FirstWorld->ComputeStateHash();
+		})));
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*SecondWorld, [&]()
+		{
+			const FSeinEntityHandle Second =
+				SpawnEffectEntity(*SecondWorld, FSeinPlayerID::Neutral());
+			SecondInitialHash = SecondWorld->ComputeStateHash();
+			SecondEffectID = SecondWorld->ApplyEffect(Second,
+				USeinEffectIdentityInstantTestEffect::StaticClass(), Second);
+			SecondAdvancedHash = SecondWorld->ComputeStateHash();
+		})));
 
-		ASSERT_THAT(AreEqual(int64{1}, FirstWorld->ApplyEffect(First,
-			USeinEffectIdentityInstantTestEffect::StaticClass(), First)));
-		ASSERT_THAT(IsFalse(FirstWorld->ComputeStateHash() == SecondWorld->ComputeStateHash()));
-
-		ASSERT_THAT(AreEqual(int64{1}, SecondWorld->ApplyEffect(Second,
-			USeinEffectIdentityInstantTestEffect::StaticClass(), Second)));
-		ASSERT_THAT(AreEqual(FirstWorld->ComputeStateHash(), SecondWorld->ComputeStateHash()));
+		ASSERT_THAT(AreEqual(FirstInitialHash, SecondInitialHash));
+		ASSERT_THAT(AreEqual(int64{1}, FirstEffectID));
+		ASSERT_THAT(IsFalse(FirstAdvancedHash == SecondInitialHash));
+		ASSERT_THAT(AreEqual(int64{1}, SecondEffectID));
+		ASSERT_THAT(AreEqual(FirstAdvancedHash, SecondAdvancedHash));
 	}
 
 	TEST(EffectCallbacksMayRemoveSiblingEffectsSafely, "SeinARTS.Unit.Effects")
@@ -422,10 +613,17 @@ namespace UE::SeinARTSTests
 		FActorTestSpawner Spawner;
 		USeinWorldSubsystem* World = Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
 		ASSERT_THAT(IsNotNull(World));
-		const FSeinEntityHandle Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
-
-		const int64 FirstID = World->ApplyEffect(Target, USeinEffectPeriodicATestEffect::StaticClass(), Target);
-		const int64 SecondID = World->ApplyEffect(Target, USeinEffectPeriodicBTestEffect::StaticClass(), Target);
+		FSeinEntityHandle Target;
+		int64 FirstID = 0;
+		int64 SecondID = 0;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
+			FirstID = World->ApplyEffect(
+				Target, USeinEffectPeriodicATestEffect::StaticClass(), Target);
+			SecondID = World->ApplyEffect(
+				Target, USeinEffectPeriodicBTestEffect::StaticClass(), Target);
+		})));
 		ASSERT_THAT(IsTrue(FirstID > 0 && SecondID > FirstID));
 
 		int32 FirstTicks = 0;
@@ -445,7 +643,7 @@ namespace UE::SeinARTSTests
 			}
 		};
 
-		TickForOneSimSecond(*World);
+		ASSERT_THAT(IsTrue(TickForOneSimSecond(*World)));
 		ASSERT_THAT(AreEqual(1, FirstTicks));
 		ASSERT_THAT(AreEqual(0, SecondTicks));
 		const FSeinActiveEffectsComponent* Effects = World->GetComponent<FSeinActiveEffectsComponent>(Target);
@@ -459,10 +657,9 @@ namespace UE::SeinARTSTests
 		FActorTestSpawner Spawner;
 		USeinWorldSubsystem* World = Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
 		ASSERT_THAT(IsNotNull(World));
-		const FSeinEntityHandle Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
-		const int64 FirstID = World->ApplyEffect(Target, USeinEffectPeriodicATestEffect::StaticClass(), Target);
-		const int64 SecondID = World->ApplyEffect(Target, USeinEffectPeriodicBTestEffect::StaticClass(), Target);
-
+		FSeinEntityHandle Target;
+		int64 FirstID = 0;
+		int64 SecondID = 0;
 		int32 RemovalCallbacks = 0;
 		bool bRecursiveSelfRemovalResult = true;
 		USeinEffectMutationTestHook::Callback =
@@ -477,7 +674,17 @@ namespace UE::SeinARTSTests
 			}
 		};
 
-		ASSERT_THAT(IsTrue(World->RemoveEffect(Target, FirstID, false)));
+		bool bInitialRemovalSucceeded = false;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
+			FirstID = World->ApplyEffect(
+				Target, USeinEffectPeriodicATestEffect::StaticClass(), Target);
+			SecondID = World->ApplyEffect(
+				Target, USeinEffectPeriodicBTestEffect::StaticClass(), Target);
+			bInitialRemovalSucceeded = World->RemoveEffect(Target, FirstID, false);
+		})));
+		ASSERT_THAT(IsTrue(bInitialRemovalSucceeded));
 		ASSERT_THAT(IsFalse(bRecursiveSelfRemovalResult));
 		ASSERT_THAT(AreEqual(2, RemovalCallbacks));
 		const FSeinActiveEffectsComponent* Effects = World->GetComponent<FSeinActiveEffectsComponent>(Target);
@@ -491,9 +698,7 @@ namespace UE::SeinARTSTests
 		FActorTestSpawner Spawner;
 		USeinWorldSubsystem* World = Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
 		ASSERT_THAT(IsNotNull(World));
-		const FSeinEntityHandle Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
-		World->FlushVisualEvents();
-
+		FSeinEntityHandle Target;
 		int64 RemovedID = 0;
 		bool bSawActiveInstance = false;
 		bool bRemovalSucceeded = false;
@@ -513,12 +718,23 @@ namespace UE::SeinARTSTests
 			bRemovalSucceeded = World->RemoveEffectByID(RemovedID, /*bByExpiration=*/false);
 		};
 
-		const int64 AppliedID = World->ApplyEffect(
-			Target, USeinEffectPeriodicATestEffect::StaticClass(), Target);
+		int64 AppliedID = 0;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
+			World->FlushVisualEvents();
+			AppliedID = World->ApplyEffect(
+				Target, USeinEffectPeriodicATestEffect::StaticClass(), Target);
+		})));
 		ASSERT_THAT(IsTrue(bSawActiveInstance));
 		ASSERT_THAT(IsTrue(bRemovalSucceeded));
 		ASSERT_THAT(AreEqual(AppliedID, RemovedID));
-		ASSERT_THAT(IsFalse(World->RemoveEffectByID(AppliedID, /*bByExpiration=*/false)));
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World)));
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+			ASSERT_THAT(IsFalse(World->RemoveEffectByID(
+				AppliedID, /*bByExpiration=*/false)));
+		}
 
 		const TArray<FSeinVisualEvent> Events = World->FlushVisualEvents();
 		ASSERT_THAT(AreEqual(2, Events.Num()));
@@ -526,6 +742,7 @@ namespace UE::SeinARTSTests
 			static_cast<uint8>(Events[0].Type)));
 		ASSERT_THAT(AreEqual(static_cast<uint8>(ESeinVisualEventType::EffectRemoved),
 			static_cast<uint8>(Events[1].Type)));
+		World->StopSimulation();
 	}
 
 	TEST(InstantEffectDestroyedTargetStillCompletesRemovalLifecycle, "SeinARTS.Unit.Effects")
@@ -534,10 +751,7 @@ namespace UE::SeinARTSTests
 		FActorTestSpawner Spawner;
 		USeinWorldSubsystem* World = Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
 		ASSERT_THAT(IsNotNull(World));
-		const FSeinEntityHandle Target = SpawnEffectEntity(
-			*World, FSeinPlayerID::Neutral());
-		World->FlushVisualEvents();
-
+		FSeinEntityHandle Target;
 		int32 ApplyCalls = 0;
 		int32 RemovedCalls = 0;
 		USeinEffectMutationTestHook::Callback =
@@ -556,16 +770,27 @@ namespace UE::SeinARTSTests
 			}
 		};
 
-		const int64 EffectID = World->ApplyEffect(Target,
-			USeinEffectIdentityInstantTestEffect::StaticClass(), Target);
+		int64 EffectID = 0;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
+			World->FlushVisualEvents();
+		})));
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World)));
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+			EffectID = FSeinWorldSubsystemTestAccess::ApplyEffectDetailed(
+				*World, Target,
+				USeinEffectIdentityInstantTestEffect::StaticClass(), Target)
+				.EffectInstanceID;
+		}
 		ASSERT_THAT(IsTrue(EffectID > 0));
 		ASSERT_THAT(AreEqual(1, ApplyCalls));
 		ASSERT_THAT(AreEqual(1, RemovedCalls));
 		ASSERT_THAT(IsFalse(World->IsEntityAlive(Target)));
 		const FSeinActiveEffectsComponent* Effects =
 			World->GetComponent<FSeinActiveEffectsComponent>(Target);
-		ASSERT_THAT(IsNotNull(Effects));
-		ASSERT_THAT(AreEqual(0, Effects->ActiveEffects.Num()));
+		ASSERT_THAT(IsNull(Effects));
 
 		const TArray<FSeinVisualEvent> Events = World->FlushVisualEvents();
 		ASSERT_THAT(AreEqual(2, Events.Num()));
@@ -573,6 +798,12 @@ namespace UE::SeinARTSTests
 			static_cast<uint8>(Events[0].Type)));
 		ASSERT_THAT(AreEqual(static_cast<uint8>(ESeinVisualEventType::EffectRemoved),
 			static_cast<uint8>(Events[1].Type)));
+		const int32 TombstoneGeneration =
+			World->GetEntityPool().GetSlotGeneration(Target.Index);
+		FTSTicker::GetCoreTicker().Tick(World->GetFixedDeltaTimeSeconds());
+		ASSERT_THAT(IsFalse(TombstoneGeneration
+			== World->GetEntityPool().GetSlotGeneration(Target.Index)));
+		World->StopSimulation();
 	}
 
 	TEST(PlayerEffectQueriesAreScopeExplicitAndIDsRemoveGlobally, "SeinARTS.Unit.Effects")
@@ -587,14 +818,21 @@ namespace UE::SeinARTSTests
 		FScopedEffectTag PlayerTag(*GetMutableDefault<USeinEffectIdentityPlayerTestEffect>(), QueryTag);
 
 		const FSeinPlayerID Player(9);
-		World->RegisterPlayer(Player, FSeinFactionID(1));
-		const FSeinEntityHandle Target = SpawnEffectEntity(*World, Player);
-		const int64 InstanceID = World->ApplyEffect(
-			Target, USeinEffectIdentityInstanceTestEffect::StaticClass(), Target);
-		const int64 ClassID = World->ApplyEffect(
-			Target, USeinEffectIdentityClassTestEffect::StaticClass(), Target);
-		const int64 PlayerID = World->ApplyEffect(
-			Target, USeinEffectIdentityPlayerTestEffect::StaticClass(), Target);
+		FSeinEntityHandle Target;
+		int64 InstanceID = 0;
+		int64 ClassID = 0;
+		int64 PlayerID = 0;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			World->RegisterPlayer(Player, FSeinFactionID(1));
+			Target = SpawnEffectEntity(*World, Player);
+			InstanceID = World->ApplyEffect(
+				Target, USeinEffectIdentityInstanceTestEffect::StaticClass(), Target);
+			ClassID = World->ApplyEffect(
+				Target, USeinEffectIdentityClassTestEffect::StaticClass(), Target);
+			PlayerID = World->ApplyEffect(
+				Target, USeinEffectIdentityPlayerTestEffect::StaticClass(), Target);
+		})));
 
 		ASSERT_THAT(IsTrue(World->HasInstanceEffectWithTag(Target, QueryTag)));
 		ASSERT_THAT(AreEqual(1, World->GetInstanceEffectStacks(Target, QueryTag)));
@@ -608,13 +846,30 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsFalse(World->HasEffectWithTagForPlayer(Player, ESeinModifierScope::Instance, QueryTag)));
 		ASSERT_THAT(AreEqual(0, World->GetEffectStacksForPlayer(Player, ESeinModifierScope::Instance, QueryTag)));
 
-		ASSERT_THAT(IsTrue(World->RemoveEffectByID(ClassID, /*bByExpiration=*/false)));
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World)));
+		bool bRemovedClass = false;
+		bool bPlayerStillPresentAfterClassRemoval = false;
+		bool bRemovedPlayer = false;
+		bool bRemovedInstance = false;
+		bool bRemovedInstanceTwice = true;
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+			bRemovedClass = World->RemoveEffectByID(ClassID, false);
+			bPlayerStillPresentAfterClassRemoval =
+				World->HasEffectWithTagForPlayer(
+					Player, ESeinModifierScope::Player, QueryTag);
+			bRemovedPlayer = World->RemoveEffectByID(PlayerID, false);
+			bRemovedInstance = World->RemoveEffectByID(InstanceID, false);
+			bRemovedInstanceTwice = World->RemoveEffectByID(InstanceID, false);
+		}
+		ASSERT_THAT(IsTrue(bRemovedClass));
 		ASSERT_THAT(IsFalse(World->HasEffectWithTagForPlayer(Player, ESeinModifierScope::Class, QueryTag)));
-		ASSERT_THAT(IsTrue(World->HasEffectWithTagForPlayer(Player, ESeinModifierScope::Player, QueryTag)));
-		ASSERT_THAT(IsTrue(World->RemoveEffectByID(PlayerID, /*bByExpiration=*/false)));
-		ASSERT_THAT(IsTrue(World->RemoveEffectByID(InstanceID, /*bByExpiration=*/false)));
+		ASSERT_THAT(IsTrue(bPlayerStillPresentAfterClassRemoval));
+		ASSERT_THAT(IsTrue(bRemovedPlayer));
+		ASSERT_THAT(IsTrue(bRemovedInstance));
 		ASSERT_THAT(IsFalse(World->HasInstanceEffectWithTag(Target, QueryTag)));
-		ASSERT_THAT(IsFalse(World->RemoveEffectByID(InstanceID, /*bByExpiration=*/false)));
+		ASSERT_THAT(IsFalse(bRemovedInstanceTwice));
+		World->StopSimulation();
 	}
 
 	TEST(PassiveGrantRemovalSkipsOnApplyAndPublishesNoDeadAbilityID, "SeinARTS.Unit.Effects")
@@ -623,10 +878,7 @@ namespace UE::SeinARTSTests
 		FActorTestSpawner Spawner;
 		USeinWorldSubsystem* World = Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
 		ASSERT_THAT(IsNotNull(World));
-		const FSeinEntityHandle Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
-		World->AddComponent(Target, FSeinAbilityComponent());
-		World->FlushVisualEvents();
-
+		FSeinEntityHandle Target;
 		int32 PassiveActivations = 0;
 		int32 EffectApplyCallbacks = 0;
 		int32 EffectRemovalCallbacks = 0;
@@ -649,8 +901,15 @@ namespace UE::SeinARTSTests
 			if (EventName == GET_FUNCTION_NAME_CHECKED(USeinEffect, OnRemoved)) ++EffectRemovalCallbacks;
 		};
 
-		const int64 AssignedID = World->ApplyEffect(
-			Target, USeinEffectPassiveGrantTestEffect::StaticClass(), Target);
+		int64 AssignedID = 0;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
+			World->AddComponent(Target, FSeinAbilityComponent());
+			World->FlushVisualEvents();
+			AssignedID = World->ApplyEffect(
+				Target, USeinEffectPassiveGrantTestEffect::StaticClass(), Target);
+		})));
 		ASSERT_THAT(IsTrue(AssignedID > 0));
 		ASSERT_THAT(AreEqual(1, PassiveActivations));
 		ASSERT_THAT(IsTrue(bPassiveRemovalSucceeded));
@@ -690,14 +949,8 @@ namespace UE::SeinARTSTests
 		FActorTestSpawner Spawner;
 		USeinWorldSubsystem* World = Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
 		ASSERT_THAT(IsNotNull(World));
-		const FSeinEntityHandle Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
-		World->AddComponent(Target, FSeinAbilityComponent());
-
-		ASSERT_THAT(IsTrue(USeinAbilityBPFL::SeinGrantAbility(
-			World, Target, USeinEffectLedgerTestAbility::StaticClass()) != INDEX_NONE));
-		ASSERT_THAT(AreEqual(1, USeinAbilityBPFL::SeinGetAbilityGrantCount(
-			World, Target, USeinEffectLedgerTestAbility::StaticClass())));
-
+		FSeinEntityHandle Target;
+		int32 PreexistingAbilityID = INDEX_NONE;
 		bool bRemovedDuringFirstGrant = false;
 		USeinEffectRemovingPassiveTestAbility::ActivationCallback =
 			[&](FSeinEntityHandle Owner)
@@ -711,8 +964,18 @@ namespace UE::SeinARTSTests
 			}
 		};
 
-		ASSERT_THAT(IsTrue(World->ApplyEffect(Target,
-			USeinEffectPassiveGrantTestEffect::StaticClass(), Target) > 0));
+		int64 AppliedEffectID = 0;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
+			World->AddComponent(Target, FSeinAbilityComponent());
+			PreexistingAbilityID = USeinAbilityBPFL::SeinGrantAbility(
+				World, Target, USeinEffectLedgerTestAbility::StaticClass());
+			AppliedEffectID = World->ApplyEffect(Target,
+				USeinEffectPassiveGrantTestEffect::StaticClass(), Target);
+		})));
+		ASSERT_THAT(IsTrue(PreexistingAbilityID != INDEX_NONE));
+		ASSERT_THAT(IsTrue(AppliedEffectID > 0));
 		ASSERT_THAT(IsTrue(bRemovedDuringFirstGrant));
 		ASSERT_THAT(AreEqual(1, USeinAbilityBPFL::SeinGetAbilityGrantCount(
 			World, Target, USeinEffectLedgerTestAbility::StaticClass())));
@@ -730,11 +993,17 @@ namespace UE::SeinARTSTests
 		FActorTestSpawner Spawner;
 		USeinWorldSubsystem* World = Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
 		ASSERT_THAT(IsNotNull(World));
-		const FSeinEntityHandle Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
-		World->AddComponent(Target, FSeinAbilityComponent());
-		const int64 EffectID = World->ApplyEffect(Target,
-			USeinEffectIdentityInstanceTestEffect::StaticClass(), Target);
+		FSeinEntityHandle Target;
+		int64 EffectID = 0;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
+			World->AddComponent(Target, FSeinAbilityComponent());
+			EffectID = World->ApplyEffect(Target,
+				USeinEffectIdentityInstanceTestEffect::StaticClass(), Target);
+		})));
 		ASSERT_THAT(IsTrue(EffectID > 0));
+		ASSERT_THAT(IsTrue(StartEffectFixture(*World)));
 
 		FSeinWorldSnapshot Captured;
 		World->CaptureSnapshot(Captured);
@@ -753,7 +1022,10 @@ namespace UE::SeinARTSTests
 			ASSERT_THAT(IsFalse(Reader.IsError()));
 		}
 
-		ASSERT_THAT(IsTrue(World->RemoveEffectByID(EffectID, false)));
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+			ASSERT_THAT(IsTrue(World->RemoveEffectByID(EffectID, false)));
+		}
 		ASSERT_THAT(IsTrue(World->RestoreSnapshot(Loaded)));
 		const FSeinActiveEffectsComponent* RestoredEffects =
 			World->GetComponent<FSeinActiveEffectsComponent>(Target);
@@ -766,9 +1038,13 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(AreEqual(1, USeinAbilityBPFL::SeinGetAbilityGrantCount(
 			World, Target, USeinEffectLedgerTestAbility::StaticClass())));
 
-		ASSERT_THAT(IsTrue(World->RemoveEffectByID(EffectID, false)));
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+			ASSERT_THAT(IsTrue(World->RemoveEffectByID(EffectID, false)));
+		}
 		ASSERT_THAT(AreEqual(0, USeinAbilityBPFL::SeinGetAbilityGrantCount(
 			World, Target, USeinEffectLedgerTestAbility::StaticClass())));
+		World->StopSimulation();
 	}
 
 	TEST(ReplayReResolvesEffectsAfterAPassiveRemovesAnEarlierEntry, "SeinARTS.Unit.Effects")
@@ -792,22 +1068,28 @@ namespace UE::SeinARTSTests
 		USeinWorldSubsystem* World = Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
 		ASSERT_THAT(IsNotNull(World));
 		const FSeinPlayerID Player(12);
-		World->RegisterPlayer(Player, FSeinFactionID(1));
-		const FSeinEntityHandle Driver = SpawnEffectEntity(*World, Player);
-		const int64 FirstID = World->ApplyEffect(Driver,
-			USeinEffectIdentityClassTestEffect::StaticClass(), Driver);
-		const int64 LaterID = World->ApplyEffect(Driver,
-			USeinEffectIdentityPlayerTestEffect::StaticClass(), Driver);
-		ASSERT_THAT(IsTrue(FirstID > 0 && LaterID > FirstID));
-
+		FSeinEntityHandle Driver;
+		FSeinEntityHandle Recipient;
+		int64 FirstID = 0;
+		int64 LaterID = 0;
 		bool bRemovedFirst = false;
 		USeinEffectRemovingPassiveTestAbility::ActivationCallback =
 			[&](FSeinEntityHandle)
 		{
 			bRemovedFirst = World->RemoveEffectByID(FirstID, false);
 		};
-		const FSeinEntityHandle Recipient = World->SpawnEntity(
-			ASeinEffectReplayTestActor::StaticClass(), FFixedTransform(), Player);
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			World->RegisterPlayer(Player, FSeinFactionID(1));
+			Driver = SpawnEffectEntity(*World, Player);
+			FirstID = World->ApplyEffect(Driver,
+				USeinEffectIdentityClassTestEffect::StaticClass(), Driver);
+			LaterID = World->ApplyEffect(Driver,
+				USeinEffectIdentityPlayerTestEffect::StaticClass(), Driver);
+			Recipient = World->SpawnEntity(
+				ASeinEffectReplayTestActor::StaticClass(), FFixedTransform(), Player);
+		})));
+		ASSERT_THAT(IsTrue(FirstID > 0 && LaterID > FirstID));
 		ASSERT_THAT(IsTrue(Recipient.IsValid()));
 		ASSERT_THAT(IsTrue(bRemovedFirst));
 		ASSERT_THAT(AreEqual(0, USeinAbilityBPFL::SeinGetAbilityGrantCount(
@@ -832,17 +1114,25 @@ namespace UE::SeinARTSTests
 		FActorTestSpawner Spawner;
 		USeinWorldSubsystem* World = Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
 		ASSERT_THAT(IsNotNull(World));
-		const FSeinEntityHandle Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
-		const int64 EffectID = World->ApplyEffect(Target,
-			USeinEffectIdentityInstanceTestEffect::StaticClass(), Target);
-		FSeinActiveEffectsComponent* Effects =
+		FSeinEntityHandle Target;
+		int64 EffectID = 0;
+		int64 ReappliedID = 0;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
+			EffectID = World->ApplyEffect(Target,
+				USeinEffectIdentityInstanceTestEffect::StaticClass(), Target);
+			FSeinActiveEffectsComponent* Effects =
+				World->GetComponent<FSeinActiveEffectsComponent>(Target);
+			check(Effects && Effects->ActiveEffects.Num() == 1);
+			Effects->ActiveEffects[0].CurrentStacks = MAX_int32;
+			ReappliedID = World->ApplyEffect(Target,
+				USeinEffectIdentityInstanceTestEffect::StaticClass(), Target);
+		})));
+		const FSeinActiveEffectsComponent* Effects =
 			World->GetComponent<FSeinActiveEffectsComponent>(Target);
 		ASSERT_THAT(IsNotNull(Effects));
-		ASSERT_THAT(AreEqual(1, Effects->ActiveEffects.Num()));
-		Effects->ActiveEffects[0].CurrentStacks = MAX_int32;
-
-		ASSERT_THAT(AreEqual(EffectID, World->ApplyEffect(Target,
-			USeinEffectIdentityInstanceTestEffect::StaticClass(), Target)));
+		ASSERT_THAT(AreEqual(EffectID, ReappliedID));
 		ASSERT_THAT(AreEqual(MAX_int32, Effects->ActiveEffects[0].CurrentStacks));
 	}
 
@@ -855,19 +1145,32 @@ namespace UE::SeinARTSTests
 		FActorTestSpawner Spawner;
 		USeinWorldSubsystem* World = Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
 		ASSERT_THAT(IsNotNull(World));
-		const FSeinEntityHandle Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
-		const FSeinEntityHandle Alternate = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
-		World->AddComponent(Target, FSeinAbilityComponent());
-		ASSERT_THAT(IsTrue(World->ApplyEffect(Target,
-			USeinEffectIdentityInstanceTestEffect::StaticClass(), Target) > 0));
-
-		FSeinActiveEffectsComponent* Effects =
-			World->GetComponent<FSeinActiveEffectsComponent>(Target);
-		ASSERT_THAT(IsNotNull(Effects));
-		ASSERT_THAT(AreEqual(1, Effects->ActiveEffects[0].CommittedAbilityGrants.Num()));
-		const int32 Before = World->ComputeStateHash();
-		Effects->ActiveEffects[0].CommittedAbilityGrants[0].Recipient = Alternate;
-		ASSERT_THAT(IsFalse(Before == World->ComputeStateHash()));
+		int32 Before = 0;
+		int32 After = 0;
+		int32 GrantCount = 0;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			const FSeinEntityHandle Target =
+				SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
+			const FSeinEntityHandle Alternate =
+				SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
+			World->AddComponent(Target, FSeinAbilityComponent());
+			World->ApplyEffect(Target,
+				USeinEffectIdentityInstanceTestEffect::StaticClass(), Target);
+			FSeinActiveEffectsComponent* Effects =
+				World->GetComponent<FSeinActiveEffectsComponent>(Target);
+			check(Effects);
+			GrantCount = Effects->ActiveEffects[0].CommittedAbilityGrants.Num();
+			Before = World->ComputeStateHash();
+			const FSeinEntityHandle OriginalRecipient =
+				Effects->ActiveEffects[0].CommittedAbilityGrants[0].Recipient;
+			Effects->ActiveEffects[0].CommittedAbilityGrants[0].Recipient = Alternate;
+			After = World->ComputeStateHash();
+			Effects->ActiveEffects[0].CommittedAbilityGrants[0].Recipient =
+				OriginalRecipient;
+		})));
+		ASSERT_THAT(AreEqual(1, GrantCount));
+		ASSERT_THAT(IsFalse(Before == After));
 	}
 
 	TEST(ForceRevokeThenRegrantCannotBeStolenByOldEffectRemoval, "SeinARTS.Unit.Effects")
@@ -879,17 +1182,27 @@ namespace UE::SeinARTSTests
 		FActorTestSpawner Spawner;
 		USeinWorldSubsystem* World = Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
 		ASSERT_THAT(IsNotNull(World));
-		const FSeinEntityHandle Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
-		World->AddComponent(Target, FSeinAbilityComponent());
-		const int64 EffectID = World->ApplyEffect(Target,
-			USeinEffectIdentityInstanceTestEffect::StaticClass(), Target);
+		FSeinEntityHandle Target;
+		int64 EffectID = 0;
+		int32 RevokedCount = 0;
+		int32 RegrantID = INDEX_NONE;
+		bool bRemoved = false;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
+			World->AddComponent(Target, FSeinAbilityComponent());
+			EffectID = World->ApplyEffect(Target,
+				USeinEffectIdentityInstanceTestEffect::StaticClass(), Target);
+			RevokedCount = USeinAbilityBPFL::SeinForceRevokeAbilityByClass(
+				World, Target, USeinEffectLedgerTestAbility::StaticClass());
+			RegrantID = USeinAbilityBPFL::SeinGrantAbility(
+				World, Target, USeinEffectLedgerTestAbility::StaticClass());
+			bRemoved = World->RemoveEffectByID(EffectID, false);
+		})));
 		ASSERT_THAT(IsTrue(EffectID > 0));
-
-		ASSERT_THAT(AreEqual(1, USeinAbilityBPFL::SeinForceRevokeAbilityByClass(
-			World, Target, USeinEffectLedgerTestAbility::StaticClass())));
-		ASSERT_THAT(IsTrue(USeinAbilityBPFL::SeinGrantAbility(
-			World, Target, USeinEffectLedgerTestAbility::StaticClass()) != INDEX_NONE));
-		ASSERT_THAT(IsTrue(World->RemoveEffectByID(EffectID, false)));
+		ASSERT_THAT(AreEqual(1, RevokedCount));
+		ASSERT_THAT(IsTrue(RegrantID != INDEX_NONE));
+		ASSERT_THAT(IsTrue(bRemoved));
 		ASSERT_THAT(AreEqual(1, USeinAbilityBPFL::SeinGetAbilityGrantCount(
 			World, Target, USeinEffectLedgerTestAbility::StaticClass())));
 	}
@@ -908,24 +1221,33 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsNotNull(World));
 		const FSeinPlayerID PlayerA(31);
 		const FSeinPlayerID PlayerB(32);
-		World->RegisterPlayer(PlayerA, FSeinFactionID(1));
-		World->RegisterPlayer(PlayerB, FSeinFactionID(1));
-		const FSeinEntityHandle DriverA = SpawnEffectEntity(*World, PlayerA);
-		const FSeinEntityHandle DriverB = SpawnEffectEntity(*World, PlayerB);
-		const int64 EffectA = World->ApplyEffect(DriverA,
-			USeinEffectIdentityClassTestEffect::StaticClass(), DriverA);
-		const int64 EffectB = World->ApplyEffect(DriverB,
-			USeinEffectIdentityClassTestEffect::StaticClass(), DriverB);
+		FSeinEntityHandle Recipient;
+		int64 EffectA = 0;
+		int64 EffectB = 0;
+		int32 ExplicitGrantID = INDEX_NONE;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			World->RegisterPlayer(PlayerA, FSeinFactionID(1));
+			World->RegisterPlayer(PlayerB, FSeinFactionID(1));
+			const FSeinEntityHandle DriverA = SpawnEffectEntity(*World, PlayerA);
+			const FSeinEntityHandle DriverB = SpawnEffectEntity(*World, PlayerB);
+			EffectA = World->ApplyEffect(DriverA,
+				USeinEffectIdentityClassTestEffect::StaticClass(), DriverA);
+			EffectB = World->ApplyEffect(DriverB,
+				USeinEffectIdentityClassTestEffect::StaticClass(), DriverB);
+			Recipient = World->SpawnEntity(
+				ASeinEffectReplayTestActor::StaticClass(), FFixedTransform(), PlayerA);
+			ExplicitGrantID = USeinAbilityBPFL::SeinGrantAbility(
+				World, Recipient, USeinEffectLedgerTestAbility::StaticClass());
+		})));
 		ASSERT_THAT(IsTrue(EffectA > 0 && EffectB > EffectA));
-		const FSeinEntityHandle Recipient = World->SpawnEntity(
-			ASeinEffectReplayTestActor::StaticClass(), FFixedTransform(), PlayerA);
-		ASSERT_THAT(IsTrue(USeinAbilityBPFL::SeinGrantAbility(
-			World, Recipient, USeinEffectLedgerTestAbility::StaticClass()) != INDEX_NONE));
+		ASSERT_THAT(IsTrue(ExplicitGrantID != INDEX_NONE));
 		ASSERT_THAT(AreEqual(2, USeinAbilityBPFL::SeinGetAbilityGrantCount(
 			World, Recipient, USeinEffectLedgerTestAbility::StaticClass())));
 
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World)));
 		{
-			FSeinSimContextScope SimScope;
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
 			World->SetEntityOwner(Recipient, PlayerB);
 		}
 		ASSERT_THAT(IsTrue(World->GetEntityOwner(Recipient) == PlayerB));
@@ -939,6 +1261,69 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(AreEqual(1, StateB->ClassEffects[0].CommittedAbilityGrants.Num()));
 		ASSERT_THAT(IsTrue(StateB->ClassEffects[0].CommittedAbilityGrants[0].Recipient
 			== Recipient));
+		World->StopSimulation();
+	}
+
+	TEST(OwnerTransferCannotReentrantlySealBootstrapFromAbilityEnd,
+		"SeinARTS.Unit.Effects")
+	{
+		FScopedEffectCallbackReset Reset;
+		const FGameplayTag ClassTag = SeinARTSTags::Environment_Default.GetTag();
+		FScopedReplayActorConfig ActorConfig(ClassTag);
+		TArray<TSubclassOf<USeinAbility>> Grants;
+		Grants.Add(USeinEffectRemovingPassiveTestAbility::StaticClass());
+		FScopedEffectAbilityConfig GrantConfig(
+			*GetMutableDefault<USeinEffectIdentityClassTestEffect>(),
+			MoveTemp(Grants), ClassTag);
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+
+		const FSeinPlayerID PlayerA(37);
+		const FSeinPlayerID PlayerB(38);
+		bool bEndCalled = false;
+		bool bReentrantSealSucceeded = true;
+		FString ReentrantSealError;
+		FSeinMatchBootstrapReceipt ReentrantReceipt;
+		USeinEffectRemovingPassiveTestAbility::EndCallback =
+			[&](FSeinEntityHandle)
+			{
+				bEndCalled = true;
+				bReentrantSealSucceeded = World->SealLocalMatchBootstrap(
+					FGuid(0x11000000, 0x22000000, 0x33000000, 0x44000000),
+					ReentrantReceipt,
+					ReentrantSealError);
+			};
+
+		FSeinEntityHandle Recipient;
+		const bool bMaterialized = MaterializeEffectFixture(*World, [&]()
+		{
+			World->RegisterPlayer(PlayerA, FSeinFactionID(1));
+			World->RegisterPlayer(PlayerB, FSeinFactionID(1));
+			const FSeinEntityHandle Driver =
+				SpawnEffectEntity(*World, PlayerA);
+			World->ApplyEffect(
+				Driver,
+				USeinEffectIdentityClassTestEffect::StaticClass(),
+				Driver);
+			Recipient = World->SpawnEntity(
+				ASeinEffectReplayTestActor::StaticClass(),
+				FFixedTransform(),
+				PlayerA);
+			World->SetEntityOwner(Recipient, PlayerB);
+		});
+
+		ASSERT_THAT(IsTrue(bMaterialized));
+		ASSERT_THAT(IsTrue(bEndCalled));
+		ASSERT_THAT(IsFalse(bReentrantSealSucceeded));
+		ASSERT_THAT(IsFalse(ReentrantReceipt.IsValid()));
+		ASSERT_THAT(IsTrue(ReentrantSealError.Contains(
+			TEXT("ownership transition"))));
+		ASSERT_THAT(IsTrue(World->GetEntityOwner(Recipient) == PlayerB));
+		ASSERT_THAT(AreEqual(
+			static_cast<uint8>(ESeinMatchBootstrapState::LocallyReady),
+			static_cast<uint8>(World->GetMatchBootstrapState())));
 	}
 
 	TEST(NestedOwnerTransferReplayKeepsReplacementLedgerClaim, "SeinARTS.Unit.Effects")
@@ -957,14 +1342,19 @@ namespace UE::SeinARTSTests
 		const FSeinPlayerID PlayerA(41);
 		const FSeinPlayerID PlayerB(42);
 		const FSeinPlayerID PlayerC(43);
-		World->RegisterPlayer(PlayerA, FSeinFactionID(1));
-		World->RegisterPlayer(PlayerB, FSeinFactionID(1));
-		World->RegisterPlayer(PlayerC, FSeinFactionID(1));
-		const FSeinEntityHandle Driver = SpawnEffectEntity(*World, PlayerB);
-		const int64 EffectID = World->ApplyEffect(Driver,
-			USeinEffectIdentityClassTestEffect::StaticClass(), Driver);
-		const FSeinEntityHandle Recipient = World->SpawnEntity(
-			ASeinEffectReplayTestActor::StaticClass(), FFixedTransform(), PlayerA);
+		FSeinEntityHandle Recipient;
+		int64 EffectID = 0;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			World->RegisterPlayer(PlayerA, FSeinFactionID(1));
+			World->RegisterPlayer(PlayerB, FSeinFactionID(1));
+			World->RegisterPlayer(PlayerC, FSeinFactionID(1));
+			const FSeinEntityHandle Driver = SpawnEffectEntity(*World, PlayerB);
+			EffectID = World->ApplyEffect(Driver,
+				USeinEffectIdentityClassTestEffect::StaticClass(), Driver);
+			Recipient = World->SpawnEntity(
+				ASeinEffectReplayTestActor::StaticClass(), FFixedTransform(), PlayerA);
+		})));
 
 		int32 Activations = 0;
 		USeinEffectRemovingPassiveTestAbility::ActivationCallback =
@@ -977,8 +1367,9 @@ namespace UE::SeinARTSTests
 				World->SetEntityOwner(Owner, PlayerB);
 			}
 		};
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World)));
 		{
-			FSeinSimContextScope SimScope;
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
 			World->SetEntityOwner(Recipient, PlayerB);
 		}
 
@@ -995,6 +1386,7 @@ namespace UE::SeinARTSTests
 		FSeinWorldSnapshot Snapshot;
 		World->CaptureSnapshot(Snapshot);
 		ASSERT_THAT(IsTrue(World->RestoreSnapshot(Snapshot)));
+		World->StopSimulation();
 	}
 
 	TEST(NestedAwayBackTransferBalancesEveryDetachedAbilityClass, "SeinARTS.Unit.Effects")
@@ -1013,13 +1405,18 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsNotNull(World));
 		const FSeinPlayerID PlayerA(44);
 		const FSeinPlayerID PlayerB(45);
-		World->RegisterPlayer(PlayerA, FSeinFactionID(1));
-		World->RegisterPlayer(PlayerB, FSeinFactionID(1));
-		const FSeinEntityHandle Driver = SpawnEffectEntity(*World, PlayerB);
-		const int64 EffectID = World->ApplyEffect(Driver,
-			USeinEffectIdentityClassTestEffect::StaticClass(), Driver);
-		const FSeinEntityHandle Recipient = World->SpawnEntity(
-			ASeinEffectReplayTestActor::StaticClass(), FFixedTransform(), PlayerB);
+		FSeinEntityHandle Recipient;
+		int64 EffectID = 0;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			World->RegisterPlayer(PlayerA, FSeinFactionID(1));
+			World->RegisterPlayer(PlayerB, FSeinFactionID(1));
+			const FSeinEntityHandle Driver = SpawnEffectEntity(*World, PlayerB);
+			EffectID = World->ApplyEffect(Driver,
+				USeinEffectIdentityClassTestEffect::StaticClass(), Driver);
+			Recipient = World->SpawnEntity(
+				ASeinEffectReplayTestActor::StaticClass(), FFixedTransform(), PlayerB);
+		})));
 		ASSERT_THAT(AreEqual(1, USeinAbilityBPFL::SeinGetAbilityGrantCount(
 			World, Recipient, USeinEffectRemovingPassiveTestAbility::StaticClass())));
 		ASSERT_THAT(AreEqual(1, USeinAbilityBPFL::SeinGetAbilityGrantCount(
@@ -1035,8 +1432,9 @@ namespace UE::SeinARTSTests
 				World->SetEntityOwner(Owner, PlayerB);
 			}
 		};
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World)));
 		{
-			FSeinSimContextScope SimScope;
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
 			World->SetEntityOwner(Recipient, PlayerA);
 		}
 
@@ -1053,11 +1451,15 @@ namespace UE::SeinARTSTests
 		FSeinWorldSnapshot Snapshot;
 		World->CaptureSnapshot(Snapshot);
 		ASSERT_THAT(IsTrue(World->RestoreSnapshot(Snapshot)));
-		ASSERT_THAT(IsTrue(World->RemoveEffectByID(EffectID, false)));
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+			ASSERT_THAT(IsTrue(World->RemoveEffectByID(EffectID, false)));
+		}
 		ASSERT_THAT(AreEqual(0, USeinAbilityBPFL::SeinGetAbilityGrantCount(
 			World, Recipient, USeinEffectRemovingPassiveTestAbility::StaticClass())));
 		ASSERT_THAT(AreEqual(0, USeinAbilityBPFL::SeinGetAbilityGrantCount(
 			World, Recipient, USeinEffectLedgerTestAbility::StaticClass())));
+		World->StopSimulation();
 	}
 
 	TEST(FanoutRechecksRecipientTagAfterPassiveCallback, "SeinARTS.Unit.Effects")
@@ -1075,12 +1477,8 @@ namespace UE::SeinARTSTests
 		USeinWorldSubsystem* World = Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
 		ASSERT_THAT(IsNotNull(World));
 		const FSeinPlayerID Player(51);
-		World->RegisterPlayer(Player, FSeinFactionID(1));
-		const FSeinEntityHandle Driver = SpawnEffectEntity(*World, Player);
-		const FSeinEntityHandle First = World->SpawnEntity(
-			ASeinEffectReplayTestActor::StaticClass(), FFixedTransform(), Player);
-		const FSeinEntityHandle Second = World->SpawnEntity(
-			ASeinEffectReplayTestActor::StaticClass(), FFixedTransform(), Player);
+		FSeinEntityHandle First;
+		FSeinEntityHandle Second;
 		USeinEffectRemovingPassiveTestAbility::ActivationCallback =
 			[&](FSeinEntityHandle Owner)
 		{
@@ -1089,8 +1487,19 @@ namespace UE::SeinARTSTests
 				World->UngrantTag(Owner, ClassTag);
 			}
 		};
-		ASSERT_THAT(IsTrue(World->ApplyEffect(Driver,
-			USeinEffectIdentityClassTestEffect::StaticClass(), Driver) > 0));
+		int64 EffectID = 0;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			World->RegisterPlayer(Player, FSeinFactionID(1));
+			const FSeinEntityHandle Driver = SpawnEffectEntity(*World, Player);
+			First = World->SpawnEntity(
+				ASeinEffectReplayTestActor::StaticClass(), FFixedTransform(), Player);
+			Second = World->SpawnEntity(
+				ASeinEffectReplayTestActor::StaticClass(), FFixedTransform(), Player);
+			EffectID = World->ApplyEffect(Driver,
+				USeinEffectIdentityClassTestEffect::StaticClass(), Driver);
+		})));
+		ASSERT_THAT(IsTrue(EffectID > 0));
 
 		ASSERT_THAT(AreEqual(0, USeinAbilityBPFL::SeinGetAbilityGrantCount(
 			World, First, USeinEffectLedgerTestAbility::StaticClass())));
@@ -1107,8 +1516,7 @@ namespace UE::SeinARTSTests
 		FActorTestSpawner Spawner;
 		USeinWorldSubsystem* World = Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
 		ASSERT_THAT(IsNotNull(World));
-		const FSeinEntityHandle Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
-		World->AddComponent(Target, FSeinAbilityComponent());
+		FSeinEntityHandle Target;
 		int32 ApplyCallbacks = 0;
 		USeinEffectRemovingPassiveTestAbility::ActivationCallback =
 			[&](FSeinEntityHandle Owner) { World->DestroyEntity(Owner); };
@@ -1121,33 +1529,78 @@ namespace UE::SeinARTSTests
 				++ApplyCallbacks;
 			}
 		};
-		ASSERT_THAT(IsTrue(World->ApplyEffect(Target,
-			USeinEffectPassiveGrantTestEffect::StaticClass(), Target) > 0));
+		int64 EffectID = 0;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
+			World->AddComponent(Target, FSeinAbilityComponent());
+		})));
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World)));
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+			EffectID = FSeinWorldSubsystemTestAccess::ApplyEffectDetailed(
+				*World, Target,
+				USeinEffectPassiveGrantTestEffect::StaticClass(), Target)
+				.EffectInstanceID;
+		}
+		ASSERT_THAT(IsTrue(EffectID > 0));
 		ASSERT_THAT(AreEqual(0, ApplyCallbacks));
 		ASSERT_THAT(AreEqual(0, USeinAbilityBPFL::SeinGetAbilityGrantCount(
 			World, Target, USeinEffectLedgerTestAbility::StaticClass())));
+		FTSTicker::GetCoreTicker().Tick(World->GetFixedDeltaTimeSeconds());
+		World->StopSimulation();
 	}
 
-	TEST(DestroyQueuePreservesEntitiesQueuedByCallbacks, "SeinARTS.Unit.Effects")
+	TEST(DestroyObserverIsReadOnlyAndCanInspectTheExactTombstone,
+		"SeinARTS.Unit.Effects")
 	{
 		FActorTestSpawner Spawner;
 		USeinWorldSubsystem* World = Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
 		ASSERT_THAT(IsNotNull(World));
-		const FSeinEntityHandle First = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
-		const FSeinEntityHandle Second = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
+		const FSeinPlayerID Owner(62);
+		FSeinEntityHandle First;
+		FSeinEntityHandle Second;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			World->RegisterPlayer(Owner, FSeinFactionID(1));
+			First = SpawnEffectEntity(*World, Owner);
+			Second = SpawnEffectEntity(*World, Owner);
+		})));
+		bool bSawDestroyingComponent = false;
+		bool bSawDestroyingEntity = false;
+		FSeinPlayerID DestroyingOwner = FSeinPlayerID::Neutral();
 		const FDelegateHandle Callback = World->OnEntityDestroyed.AddLambda(
 			[&](FSeinEntityHandle Destroyed)
 			{
-				if (Destroyed == First) World->DestroyEntity(Second);
+				if (Destroyed != First) return;
+				bSawDestroyingComponent =
+					World->GetDestroyingComponent<FSeinActiveEffectsComponent>(
+						Destroyed) != nullptr;
+				bSawDestroyingEntity =
+					World->GetDestroyingEntity(Destroyed) != nullptr;
+				DestroyingOwner = World->GetDestroyingEntityOwner(Destroyed);
+				World->DestroyEntity(Second);
 			});
-		World->DestroyEntity(First);
-		World->StartSimulation();
+		Assert.ExpectError(TEXT("DestroyEntity rejected outside bootstrap Applying"));
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World)));
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+			World->DestroyEntity(First);
+		}
 		FTSTicker::GetCoreTicker().Tick(World->GetFixedDeltaTimeSeconds());
-		World->StopSimulation();
 		ASSERT_THAT(IsNull(World->GetEntityPool().Get(First)));
+		ASSERT_THAT(IsTrue(bSawDestroyingComponent));
+		ASSERT_THAT(IsTrue(bSawDestroyingEntity));
+		ASSERT_THAT(IsTrue(DestroyingOwner == Owner));
 		ASSERT_THAT(IsNotNull(World->GetEntityPool().Get(Second)));
-		ASSERT_THAT(IsFalse(World->GetEntityPool().Get(Second)->IsAlive()));
-		World->StartSimulation();
+		ASSERT_THAT(IsTrue(World->GetEntityPool().Get(Second)->IsAlive()));
+		ASSERT_THAT(IsNull(
+			World->GetDestroyingComponent<FSeinActiveEffectsComponent>(First)));
+		ASSERT_THAT(IsNull(World->GetDestroyingEntity(First)));
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+			World->DestroyEntity(Second);
+		}
 		FTSTicker::GetCoreTicker().Tick(World->GetFixedDeltaTimeSeconds());
 		World->StopSimulation();
 		ASSERT_THAT(IsNull(World->GetEntityPool().Get(Second)));
@@ -1167,23 +1620,36 @@ namespace UE::SeinARTSTests
 		USeinWorldSubsystem* World = Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
 		ASSERT_THAT(IsNotNull(World));
 		const FSeinPlayerID Player(61);
-		World->RegisterPlayer(Player, FSeinFactionID(1));
-		const FSeinEntityHandle Driver = SpawnEffectEntity(*World, Player);
-		ASSERT_THAT(IsTrue(World->ApplyEffect(Driver,
-			USeinEffectIdentityClassTestEffect::StaticClass(), Driver) > 0));
+		int64 EffectID = 0;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			World->RegisterPlayer(Player, FSeinFactionID(1));
+			const FSeinEntityHandle Driver = SpawnEffectEntity(*World, Player);
+			EffectID = World->ApplyEffect(Driver,
+				USeinEffectIdentityClassTestEffect::StaticClass(), Driver);
+		})));
+		ASSERT_THAT(IsTrue(EffectID > 0));
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World)));
 		for (int32 Iteration = 0; Iteration < 3; ++Iteration)
 		{
-			const FSeinEntityHandle Recipient = World->SpawnEntity(
-				ASeinEffectReplayTestActor::StaticClass(), FFixedTransform(), Player);
+			FSeinEntityHandle Recipient;
+			{
+				auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+				Recipient = World->SpawnEntity(
+					ASeinEffectReplayTestActor::StaticClass(),
+					FFixedTransform(), Player);
+			}
 			ASSERT_THAT(AreEqual(1,
 				World->GetPlayerState(Player)->ClassEffects[0].CommittedAbilityGrants.Num()));
-			World->DestroyEntity(Recipient);
-			World->StartSimulation();
+			{
+				auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+				World->DestroyEntity(Recipient);
+			}
 			FTSTicker::GetCoreTicker().Tick(World->GetFixedDeltaTimeSeconds());
-			World->StopSimulation();
 			ASSERT_THAT(AreEqual(0,
 				World->GetPlayerState(Player)->ClassEffects[0].CommittedAbilityGrants.Num()));
 		}
+		World->StopSimulation();
 	}
 
 	TEST(SnapshotRejectsMalformedStackScopeAndGrantMultiset, "SeinARTS.Unit.Effects")
@@ -1199,17 +1665,23 @@ namespace UE::SeinARTSTests
 		USeinWorldSubsystem* World = Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
 		ASSERT_THAT(IsNotNull(World));
 		const FSeinPlayerID Player(71);
-		World->RegisterPlayer(Player, FSeinFactionID(1));
-		const FSeinEntityHandle Driver = SpawnEffectEntity(*World, Player);
-		World->ApplyEffect(Driver, USeinEffectIdentityClassTestEffect::StaticClass(), Driver);
-		World->SpawnEntity(ASeinEffectReplayTestActor::StaticClass(), FFixedTransform(), Player);
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			World->RegisterPlayer(Player, FSeinFactionID(1));
+			const FSeinEntityHandle Driver = SpawnEffectEntity(*World, Player);
+			World->ApplyEffect(
+				Driver, USeinEffectIdentityClassTestEffect::StaticClass(), Driver);
+			World->SpawnEntity(
+				ASeinEffectReplayTestActor::StaticClass(), FFixedTransform(), Player);
+		})));
+		ASSERT_THAT(IsTrue(StartEffectFixture(*World)));
 		FSeinWorldSnapshot Valid;
 		World->CaptureSnapshot(Valid);
 		const int32 HashBefore = World->ComputeStateHash();
 
 		auto ExpectRejectedWithoutMutation = [&](FSeinWorldSnapshot& Bad)
 		{
-			Assert.ExpectError(TEXT("RestoreSnapshot: active effect state is malformed; allocator validation failed."));
+			Assert.ExpectError(TEXT("RestoreSnapshot: authoritative sim state failed structural preflight."));
 			ASSERT_THAT(IsFalse(World->RestoreSnapshot(Bad)));
 			ASSERT_THAT(AreEqual(HashBefore, World->ComputeStateHash()));
 		};
@@ -1225,6 +1697,324 @@ namespace UE::SeinARTSTests
 		BadLedger.PlayerStates.FindChecked(Player).ClassEffects[0]
 			.CommittedAbilityGrants.Reset();
 		ExpectRejectedWithoutMutation(BadLedger);
+		World->StopSimulation();
+	}
+
+	TEST(ReplacementPreflightRejectsFullIndependentStackWithoutRemovingVictim,
+		"SeinARTS.Unit.Effects")
+	{
+		FScopedEffectCallbackReset Reset;
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+
+		const FGameplayTag RemovedTag = SeinARTSTags::Environment_Default.GetTag();
+		FScopedEffectTag ExistingTag(
+			*GetMutableDefault<USeinEffectPeriodicATestEffect>(), RemovedTag);
+		FScopedIndependentStackLimit StackLimit(
+			*GetMutableDefault<USeinEffectPeriodicBTestEffect>(), 1);
+		FSeinEntityHandle Target;
+		int64 VictimID = 0;
+		int64 ExistingReplacementID = 0;
+		int32 HashBefore = 0;
+		int32 HashAfter = 0;
+		int32 NewEventCount = 0;
+		bool bVictimSurvived = false;
+		int32 RemovalCallbacks = 0;
+		USeinEffectMutationTestHook::Callback =
+			[&](USeinEffectMutationTestHook& Effect, FName EventName,
+				FSeinEntityHandle)
+			{
+				if (Effect.IsA<USeinEffectPeriodicATestEffect>()
+					&& EventName == GET_FUNCTION_NAME_CHECKED(USeinEffect, OnRemoved))
+				{
+					++RemovalCallbacks;
+				}
+			};
+		FSeinWorldSubsystemTestAccess::FObservedApplyResult Result;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
+			VictimID = World->ApplyEffect(
+				Target, USeinEffectPeriodicATestEffect::StaticClass(), Target);
+			ExistingReplacementID = World->ApplyEffect(
+				Target, USeinEffectPeriodicBTestEffect::StaticClass(), Target);
+			World->FlushVisualEvents();
+			HashBefore = World->ComputeStateHash();
+			FScopedRemoveEffectsWithTag ReplacementRule(
+				*GetMutableDefault<USeinEffectPeriodicBTestEffect>(), RemovedTag);
+			Result = FSeinWorldSubsystemTestAccess::ApplyEffectDetailed(
+				*World, Target, USeinEffectPeriodicBTestEffect::StaticClass(), Target);
+			HashAfter = World->ComputeStateHash();
+			NewEventCount = World->FlushVisualEvents().Num();
+			const FSeinActiveEffectsComponent* Effects =
+				World->GetComponent<FSeinActiveEffectsComponent>(Target);
+			bVictimSurvived = Effects && Effects->ActiveEffects.ContainsByPredicate(
+				[VictimID](const FSeinActiveEffect& Effect)
+				{
+					return Effect.EffectInstanceID == VictimID;
+				});
+		})));
+		ASSERT_THAT(IsTrue(VictimID > 0 && ExistingReplacementID > VictimID));
+		ASSERT_THAT(IsTrue(Result.Status == FSeinWorldSubsystemTestAccess::
+			EObservedApplyStatus::RejectedNoMutation));
+		ASSERT_THAT(AreEqual(int64{0}, Result.EffectInstanceID));
+		ASSERT_THAT(AreEqual(0, RemovalCallbacks));
+		ASSERT_THAT(AreEqual(HashBefore, HashAfter));
+		ASSERT_THAT(AreEqual(0, NewEventCount));
+		ASSERT_THAT(IsTrue(bVictimSurvived));
+	}
+
+	TEST(ReplacementPreflightRejectsTagOverflowWithoutRemovingVictim,
+		"SeinARTS.Unit.Effects")
+	{
+		FScopedEffectCallbackReset Reset;
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+
+		const FGameplayTag Tag = SeinARTSTags::Environment_Default.GetTag();
+		FScopedEffectTag ExistingTag(
+			*GetMutableDefault<USeinEffectPeriodicATestEffect>(), Tag);
+		FScopedRemoveEffectsWithTag ReplacementRule(
+			*GetMutableDefault<USeinEffectPeriodicBTestEffect>(), Tag);
+		FScopedGrantedTags GrantedTags(
+			*GetMutableDefault<USeinEffectPeriodicBTestEffect>(), Tag);
+		int64 VictimID = 0;
+		int32 HashBefore = 0;
+		int32 HashAfter = 0;
+		int32 NewEventCount = 0;
+		bool bVictimRemoved = false;
+		int32 RemovalCallbacks = 0;
+		int32 ReplacementRemovalCallbacks = 0;
+		USeinEffectMutationTestHook::Callback =
+			[&](USeinEffectMutationTestHook& Effect, FName EventName,
+				FSeinEntityHandle)
+			{
+				if (Effect.IsA<USeinEffectPeriodicATestEffect>()
+					&& EventName == GET_FUNCTION_NAME_CHECKED(USeinEffect, OnRemoved))
+				{
+					++RemovalCallbacks;
+				}
+			};
+		Assert.ExpectError(TEXT("tag refcount cannot accept"));
+		FSeinWorldSubsystemTestAccess::FObservedApplyResult Result;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			const FSeinEntityHandle Target =
+				SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
+			VictimID = World->ApplyEffect(
+				Target, USeinEffectPeriodicATestEffect::StaticClass(), Target);
+			FSeinEntityTagState& TagState =
+				FSeinWorldSubsystemTestAccess::EntityTags(*World, Target);
+			TagState.TagRefCounts.Add(Tag, MAX_int32);
+			TagState.CombinedTags.AddTag(Tag);
+			World->FlushVisualEvents();
+			HashBefore = World->ComputeStateHash();
+			Result = FSeinWorldSubsystemTestAccess::ApplyEffectDetailed(
+				*World, Target, USeinEffectPeriodicBTestEffect::StaticClass(), Target);
+			HashAfter = World->ComputeStateHash();
+			NewEventCount = World->FlushVisualEvents().Num();
+			ReplacementRemovalCallbacks = RemovalCallbacks;
+			bVictimRemoved = World->RemoveEffectByID(VictimID, false);
+			TagState.TagRefCounts.Reset();
+			TagState.CombinedTags.Reset();
+		})));
+		ASSERT_THAT(IsTrue(VictimID > 0));
+		ASSERT_THAT(IsTrue(Result.Status == FSeinWorldSubsystemTestAccess::
+			EObservedApplyStatus::RejectedNoMutation));
+		ASSERT_THAT(AreEqual(0, ReplacementRemovalCallbacks));
+		ASSERT_THAT(AreEqual(HashBefore, HashAfter));
+		ASSERT_THAT(AreEqual(0, NewEventCount));
+		ASSERT_THAT(IsTrue(bVictimRemoved));
+	}
+
+	TEST(ReplacementPreflightRejectsMalformedAbilityGrantWithoutRemovingVictim,
+		"SeinARTS.Unit.Effects")
+	{
+		FScopedEffectCallbackReset Reset;
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+
+		const FGameplayTag Tag = SeinARTSTags::Environment_Default.GetTag();
+		FScopedEffectTag ExistingTag(
+			*GetMutableDefault<USeinEffectPeriodicATestEffect>(), Tag);
+		FScopedRemoveEffectsWithTag ReplacementRule(
+			*GetMutableDefault<USeinEffectPeriodicBTestEffect>(), Tag);
+		TArray<TSubclassOf<USeinAbility>> Grants;
+		Grants.Add(USeinAbility::StaticClass());
+		ASSERT_THAT(IsTrue(USeinAbility::StaticClass()->HasAnyClassFlags(CLASS_Abstract)));
+		FScopedEffectAbilityConfig GrantConfig(
+			*GetMutableDefault<USeinEffectPeriodicBTestEffect>(), MoveTemp(Grants));
+		Assert.ExpectError(TEXT("contains an unusable GrantedAbilities entry"));
+		int64 VictimID = 0;
+		int32 HashBefore = 0;
+		int32 HashAfter = 0;
+		int32 NewEventCount = 0;
+		bool bVictimRemoved = false;
+		FSeinWorldSubsystemTestAccess::FObservedApplyResult Result;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			const FSeinEntityHandle Target =
+				SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
+			VictimID = World->ApplyEffect(
+				Target, USeinEffectPeriodicATestEffect::StaticClass(), Target);
+			World->FlushVisualEvents();
+			HashBefore = World->ComputeStateHash();
+			Result = FSeinWorldSubsystemTestAccess::ApplyEffectDetailed(
+				*World, Target, USeinEffectPeriodicBTestEffect::StaticClass(), Target);
+			HashAfter = World->ComputeStateHash();
+			NewEventCount = World->FlushVisualEvents().Num();
+			bVictimRemoved = World->RemoveEffectByID(VictimID, false);
+		})));
+		ASSERT_THAT(IsTrue(VictimID > 0));
+		ASSERT_THAT(IsTrue(Result.Status == FSeinWorldSubsystemTestAccess::
+			EObservedApplyStatus::RejectedNoMutation));
+		ASSERT_THAT(AreEqual(HashBefore, HashAfter));
+		ASSERT_THAT(AreEqual(0, NewEventCount));
+		ASSERT_THAT(IsTrue(bVictimRemoved));
+	}
+
+	TEST(ReplacementPreflightRejectsMissingScopeStorageWithoutRemovingPlayerEffect,
+		"SeinARTS.Unit.Effects")
+	{
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+
+		const FSeinPlayerID Player(72);
+		const FGameplayTag Tag = SeinARTSTags::Environment_Default.GetTag();
+		FScopedEffectTag ExistingTag(
+			*GetMutableDefault<USeinEffectIdentityClassTestEffect>(), Tag);
+		FScopedRemoveEffectsWithTag ReplacementRule(
+			*GetMutableDefault<USeinEffectPeriodicBTestEffect>(), Tag);
+		Assert.ExpectError(TEXT("has no storage for scope"));
+		int64 VictimID = 0;
+		int32 HashBefore = 0;
+		int32 HashAfter = 0;
+		int32 NewEventCount = 0;
+		bool bVictimRemoved = false;
+		FSeinWorldSubsystemTestAccess::FObservedApplyResult Result;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			World->RegisterPlayer(Player, FSeinFactionID(1));
+			const FSeinEntityHandle Target = World->SpawnAbstractEntity(
+				FFixedTransform(), Player);
+			VictimID = World->ApplyEffect(Target,
+				USeinEffectIdentityClassTestEffect::StaticClass(), Target);
+			World->FlushVisualEvents();
+			HashBefore = World->ComputeStateHash();
+			Result = FSeinWorldSubsystemTestAccess::ApplyEffectDetailed(
+				*World, Target, USeinEffectPeriodicBTestEffect::StaticClass(), Target);
+			HashAfter = World->ComputeStateHash();
+			NewEventCount = World->FlushVisualEvents().Num();
+			bVictimRemoved = World->RemoveEffectByID(VictimID, false);
+		})));
+		ASSERT_THAT(IsTrue(VictimID > 0));
+		ASSERT_THAT(IsTrue(Result.Status == FSeinWorldSubsystemTestAccess::
+			EObservedApplyStatus::RejectedNoMutation));
+		ASSERT_THAT(AreEqual(HashBefore, HashAfter));
+		ASSERT_THAT(AreEqual(0, NewEventCount));
+		ASSERT_THAT(IsTrue(bVictimRemoved));
+	}
+
+	TEST(ReplacementPreflightRejectsExhaustedEffectIDWithoutRemovingVictim,
+		"SeinARTS.Unit.Effects")
+	{
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+
+		const FGameplayTag Tag = SeinARTSTags::Environment_Default.GetTag();
+		FScopedEffectTag ExistingTag(
+			*GetMutableDefault<USeinEffectPeriodicATestEffect>(), Tag);
+		FScopedRemoveEffectsWithTag ReplacementRule(
+			*GetMutableDefault<USeinEffectPeriodicBTestEffect>(), Tag);
+		Assert.ExpectError(TEXT("Effect ID space exhausted"));
+		int64 VictimID = 0;
+		int32 HashBefore = 0;
+		int32 HashAfter = 0;
+		int32 NewEventCount = 0;
+		bool bVictimRemoved = false;
+		FSeinWorldSubsystemTestAccess::FObservedApplyResult Result;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			const FSeinEntityHandle Target =
+				SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
+			VictimID = World->ApplyEffect(
+				Target, USeinEffectPeriodicATestEffect::StaticClass(), Target);
+			FSeinWorldSubsystemTestAccess::SetNextEffectInstanceID(*World, MAX_int64);
+			World->FlushVisualEvents();
+			HashBefore = World->ComputeStateHash();
+			Result = FSeinWorldSubsystemTestAccess::ApplyEffectDetailed(
+				*World, Target, USeinEffectPeriodicBTestEffect::StaticClass(), Target);
+			HashAfter = World->ComputeStateHash();
+			NewEventCount = World->FlushVisualEvents().Num();
+			bVictimRemoved = World->RemoveEffectByID(VictimID, false);
+			FSeinWorldSubsystemTestAccess::SetNextEffectInstanceID(*World, 2);
+		})));
+		ASSERT_THAT(IsTrue(VictimID > 0));
+		ASSERT_THAT(IsTrue(Result.Status == FSeinWorldSubsystemTestAccess::
+			EObservedApplyStatus::RejectedNoMutation));
+		ASSERT_THAT(AreEqual(HashBefore, HashAfter));
+		ASSERT_THAT(AreEqual(0, NewEventCount));
+		ASSERT_THAT(IsTrue(bVictimRemoved));
+	}
+
+	TEST(ReplacementProjectionCreditsOnlyTagsOwnedByPlannedVictims,
+		"SeinARTS.Unit.Effects")
+	{
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+
+		const FGameplayTag Tag = SeinARTSTags::Environment_Default.GetTag();
+		FScopedEffectTag ExistingTag(
+			*GetMutableDefault<USeinEffectPeriodicATestEffect>(), Tag);
+		FScopedGrantedTags ExistingGrant(
+			*GetMutableDefault<USeinEffectPeriodicATestEffect>(), Tag);
+		FScopedRemoveEffectsWithTag ReplacementRule(
+			*GetMutableDefault<USeinEffectPeriodicBTestEffect>(), Tag);
+		FScopedGrantedTags ReplacementGrant(
+			*GetMutableDefault<USeinEffectPeriodicBTestEffect>(), Tag);
+		int64 VictimID = 0;
+		int32 CountAfterVictim = 0;
+		int32 CountAfterReplacement = 0;
+		bool bVictimStillRemovable = true;
+		FSeinWorldSubsystemTestAccess::FObservedApplyResult Result;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			const FSeinEntityHandle Target =
+				SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
+			FSeinEntityTagState& TagState =
+				FSeinWorldSubsystemTestAccess::EntityTags(*World, Target);
+			TagState.TagRefCounts.Add(Tag, MAX_int32 - 1);
+			TagState.CombinedTags.AddTag(Tag);
+			VictimID = World->ApplyEffect(
+				Target, USeinEffectPeriodicATestEffect::StaticClass(), Target);
+			CountAfterVictim = TagState.TagRefCounts.FindChecked(Tag);
+			Result = FSeinWorldSubsystemTestAccess::ApplyEffectDetailed(
+				*World, Target, USeinEffectPeriodicBTestEffect::StaticClass(), Target);
+			CountAfterReplacement = TagState.TagRefCounts.FindChecked(Tag);
+			bVictimStillRemovable = World->RemoveEffectByID(VictimID, false);
+			World->RemoveEffectByID(Result.EffectInstanceID, false);
+			TagState.TagRefCounts.Reset();
+			TagState.CombinedTags.Reset();
+		})));
+		ASSERT_THAT(IsTrue(VictimID > 0));
+		ASSERT_THAT(AreEqual(MAX_int32, CountAfterVictim));
+		ASSERT_THAT(IsTrue(Result.Status == FSeinWorldSubsystemTestAccess::
+			EObservedApplyStatus::Applied));
+		ASSERT_THAT(IsTrue(Result.EffectInstanceID > VictimID));
+		ASSERT_THAT(AreEqual(MAX_int32, CountAfterReplacement));
+		ASSERT_THAT(IsFalse(bVictimStillRemovable));
 	}
 
 	TEST(EntityTagRefcountSaturationDoesNotOverflow, "SeinARTS.Unit.Effects")
@@ -1244,39 +2034,62 @@ namespace UE::SeinARTSTests
 		FActorTestSpawner Spawner;
 		USeinWorldSubsystem* World = Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
 		ASSERT_THAT(IsNotNull(World));
-		const FSeinEntityHandle Entity = World->SpawnAbstractEntity(
-			FFixedTransform(), FSeinPlayerID::Neutral());
-		World->AddComponent(Entity, FSeinAbilityComponent());
-		FSeinEntityTagState& TagState =
-			FSeinWorldSubsystemTestAccess::EntityTags(*World, Entity);
-		TagState.TagRefCounts.Add(Tag, MAX_int32);
-		TagState.CombinedTags.AddTag(Tag);
-
-		const int32 AbilityID = USeinAbilityBPFL::SeinGrantAbility(
-			World, Entity, USeinEffectLedgerTestAbility::StaticClass());
-		ASSERT_THAT(IsTrue(AbilityID != INDEX_NONE));
-		USeinAbility* Ability = World->GetAbilityInstance(AbilityID);
-		ASSERT_THAT(IsNotNull(Ability));
-		Ability->GrantedTags.Reset();
-		Ability->GrantedTags.AddTag(Tag);
-		Assert.ExpectError(TEXT("GrantTag: refcount saturated"));
+		Assert.ExpectError(TEXT("GrantTag: refcount saturated"), 2);
 		Assert.ExpectError(TEXT("ActivateAbility["));
-		ASSERT_THAT(IsFalse(Ability->ActivateAbility(Entity, FFixedVector::ZeroVector)));
-		ASSERT_THAT(IsFalse(Ability->bIsActive));
-		Ability->CancelAbility();
-		ASSERT_THAT(AreEqual(MAX_int32, TagState.TagRefCounts.FindChecked(Tag)));
-		ASSERT_THAT(AreEqual(0, Ability->CommittedGrantedTags.Num()));
-
-		Assert.ExpectError(TEXT("GrantTag: refcount saturated"));
-		ASSERT_THAT(IsFalse(World->AddBaseTag(Entity, Tag)));
-		ASSERT_THAT(IsFalse(TagState.BaseTags.HasTagExact(Tag)));
-		ASSERT_THAT(AreEqual(MAX_int32, TagState.TagRefCounts.FindChecked(Tag)));
-		FGameplayTagContainer Replacement;
-		Replacement.AddTag(Tag);
 		Assert.ExpectError(TEXT("ReplaceBaseTags: refcount saturated"));
-		World->ReplaceBaseTags(Entity, Replacement);
-		ASSERT_THAT(IsFalse(TagState.BaseTags.HasTagExact(Tag)));
-		ASSERT_THAT(AreEqual(MAX_int32, TagState.TagRefCounts.FindChecked(Tag)));
+		FSeinEntityHandle Entity;
+		int32 AbilityID = INDEX_NONE;
+		bool bActivationSucceeded = true;
+		bool bAbilityActive = true;
+		int32 CommittedTagCount = INDEX_NONE;
+		bool bBaseTagAdded = true;
+		bool bBaseTagPresentAfterAdd = true;
+		bool bBaseTagPresentAfterReplace = true;
+		int32 RefCountAfterActivation = 0;
+		int32 RefCountAfterAdd = 0;
+		int32 RefCountAfterReplace = 0;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			Entity = World->SpawnAbstractEntity(
+				FFixedTransform(), FSeinPlayerID::Neutral());
+			World->AddComponent(Entity, FSeinAbilityComponent());
+			FSeinEntityTagState& TagState =
+				FSeinWorldSubsystemTestAccess::EntityTags(*World, Entity);
+			TagState.TagRefCounts.Add(Tag, MAX_int32);
+			TagState.CombinedTags.AddTag(Tag);
+			AbilityID = USeinAbilityBPFL::SeinGrantAbility(
+				World, Entity, USeinEffectLedgerTestAbility::StaticClass());
+			USeinAbility* Ability = World->GetAbilityInstance(AbilityID);
+			check(Ability);
+			Ability->GrantedTags.Reset();
+			Ability->GrantedTags.AddTag(Tag);
+			bActivationSucceeded =
+				Ability->ActivateAbility(Entity, FFixedVector::ZeroVector);
+			bAbilityActive = Ability->bIsActive;
+			Ability->CancelAbility();
+			RefCountAfterActivation = TagState.TagRefCounts.FindChecked(Tag);
+			CommittedTagCount = Ability->CommittedGrantedTags.Num();
+			bBaseTagAdded = World->AddBaseTag(Entity, Tag);
+			bBaseTagPresentAfterAdd = TagState.BaseTags.HasTagExact(Tag);
+			RefCountAfterAdd = TagState.TagRefCounts.FindChecked(Tag);
+			FGameplayTagContainer Replacement;
+			Replacement.AddTag(Tag);
+			World->ReplaceBaseTags(Entity, Replacement);
+			bBaseTagPresentAfterReplace = TagState.BaseTags.HasTagExact(Tag);
+			RefCountAfterReplace = TagState.TagRefCounts.FindChecked(Tag);
+			TagState.TagRefCounts.Reset();
+			TagState.CombinedTags.Reset();
+		})));
+		ASSERT_THAT(IsTrue(AbilityID != INDEX_NONE));
+		ASSERT_THAT(IsFalse(bActivationSucceeded));
+		ASSERT_THAT(IsFalse(bAbilityActive));
+		ASSERT_THAT(AreEqual(MAX_int32, RefCountAfterActivation));
+		ASSERT_THAT(AreEqual(0, CommittedTagCount));
+		ASSERT_THAT(IsFalse(bBaseTagAdded));
+		ASSERT_THAT(IsFalse(bBaseTagPresentAfterAdd));
+		ASSERT_THAT(AreEqual(MAX_int32, RefCountAfterAdd));
+		ASSERT_THAT(IsFalse(bBaseTagPresentAfterReplace));
+		ASSERT_THAT(AreEqual(MAX_int32, RefCountAfterReplace));
 	}
 
 	TEST(RemovalCallbacksCanInvalidateTheTargetBeforeAReplacementApply, "SeinARTS.Unit.Effects")
@@ -1290,11 +2103,14 @@ namespace UE::SeinARTSTests
 		FScopedEffectTag ExistingTag(*GetMutableDefault<USeinEffectPeriodicATestEffect>(), RemovedTag);
 		FScopedRemoveEffectsWithTag ReplacementRule(
 			*GetMutableDefault<USeinEffectPeriodicBTestEffect>(), RemovedTag);
-		const FSeinEntityHandle Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
-		ASSERT_THAT(IsTrue(World->ApplyEffect(
-			Target, USeinEffectPeriodicATestEffect::StaticClass(), Target) > 0));
-		World->FlushVisualEvents();
-
+		FSeinEntityHandle Target;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
+			World->ApplyEffect(
+				Target, USeinEffectPeriodicATestEffect::StaticClass(), Target);
+			World->FlushVisualEvents();
+		})));
 		int32 RemovalCallbacks = 0;
 		USeinEffectMutationTestHook::Callback =
 			[&](USeinEffectMutationTestHook& Effect, FName EventName, FSeinEntityHandle CallbackTarget)
@@ -1307,21 +2123,167 @@ namespace UE::SeinARTSTests
 			}
 		};
 
-		ASSERT_THAT(AreEqual(int64{0}, World->ApplyEffect(
-			Target, USeinEffectPeriodicBTestEffect::StaticClass(), Target)));
+		Assert.ExpectError(TEXT("replacement callbacks invalidated target"));
+		FSeinWorldSubsystemTestAccess::FObservedApplyResult Result;
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World)));
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+			Result = FSeinWorldSubsystemTestAccess::ApplyEffectDetailed(
+				*World, Target, USeinEffectPeriodicBTestEffect::StaticClass(), Target);
+		}
+		const TArray<FSeinVisualEvent> Events = World->FlushVisualEvents();
+		ASSERT_THAT(IsTrue(Result.Status == FSeinWorldSubsystemTestAccess::
+			EObservedApplyStatus::InvalidatedAfterReplacementRemoval));
+		ASSERT_THAT(AreEqual(int64{0}, Result.EffectInstanceID));
 		ASSERT_THAT(AreEqual(1, RemovalCallbacks));
 		const FSeinEntity* TargetEntity = World->GetEntityPool().Get(Target);
-		ASSERT_THAT(IsNotNull(TargetEntity));
-		ASSERT_THAT(IsFalse(TargetEntity->IsAlive()));
+		ASSERT_THAT(IsNull(TargetEntity));
 		const FSeinActiveEffectsComponent* Effects =
 			World->GetComponent<FSeinActiveEffectsComponent>(Target);
-		ASSERT_THAT(IsNotNull(Effects));
-		ASSERT_THAT(AreEqual(0, Effects->ActiveEffects.Num()));
+		ASSERT_THAT(IsNull(Effects));
 
-		const TArray<FSeinVisualEvent> Events = World->FlushVisualEvents();
 		ASSERT_THAT(AreEqual(1, Events.Num()));
 		ASSERT_THAT(AreEqual(static_cast<uint8>(ESeinVisualEventType::EffectRemoved),
 			static_cast<uint8>(Events[0].Type)));
+		const int32 TombstoneGeneration =
+			World->GetEntityPool().GetSlotGeneration(Target.Index);
+		FTSTicker::GetCoreTicker().Tick(World->GetFixedDeltaTimeSeconds());
+		ASSERT_THAT(IsFalse(TombstoneGeneration
+			== World->GetEntityPool().GetSlotGeneration(Target.Index)));
+		World->StopSimulation();
+	}
+
+	TEST(RemovalCallbackCannotRetargetTheReplacementDefinition,
+		"SeinARTS.Unit.Effects")
+	{
+		FScopedEffectCallbackReset Reset;
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+
+		const FGameplayTag RemovedTag = SeinARTSTags::Environment_Default.GetTag();
+		FScopedEffectTag ExistingTag(
+			*GetMutableDefault<USeinEffectPeriodicATestEffect>(), RemovedTag);
+		USeinEffect* Replacement =
+			GetMutableDefault<USeinEffectPeriodicBTestEffect>();
+		ASSERT_THAT(IsNotNull(Replacement));
+		TGuardValue<ESeinModifierScope> ScopeGuard(
+			Replacement->Scope, ESeinModifierScope::Instance);
+		FScopedRemoveEffectsWithTag ReplacementRule(*Replacement, RemovedTag);
+		FSeinEntityHandle Target;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
+			World->ApplyEffect(
+				Target, USeinEffectPeriodicATestEffect::StaticClass(), Target);
+			World->FlushVisualEvents();
+		})));
+		USeinEffectMutationTestHook::Callback =
+			[&](USeinEffectMutationTestHook& Effect, FName EventName,
+				FSeinEntityHandle)
+			{
+				if (Effect.IsA<USeinEffectPeriodicATestEffect>()
+					&& EventName == GET_FUNCTION_NAME_CHECKED(USeinEffect, OnRemoved))
+				{
+					Replacement->Scope = ESeinModifierScope::Player;
+				}
+			};
+
+		Assert.ExpectError(TEXT("replacement callbacks invalidated target"));
+		FSeinWorldSubsystemTestAccess::FObservedApplyResult Result;
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World)));
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+			Result = FSeinWorldSubsystemTestAccess::ApplyEffectDetailed(
+				*World, Target, USeinEffectPeriodicBTestEffect::StaticClass(), Target);
+		}
+		const TArray<FSeinVisualEvent> Events = World->FlushVisualEvents();
+		ASSERT_THAT(IsTrue(Result.Status == FSeinWorldSubsystemTestAccess::
+			EObservedApplyStatus::InvalidatedAfterReplacementRemoval));
+		ASSERT_THAT(AreEqual(int64{0}, Result.EffectInstanceID));
+		ASSERT_THAT(IsTrue(World->IsEntityAlive(Target)));
+		const FSeinActiveEffectsComponent* Active =
+			World->GetComponent<FSeinActiveEffectsComponent>(Target);
+		ASSERT_THAT(IsNotNull(Active));
+		ASSERT_THAT(AreEqual(0, Active->ActiveEffects.Num()));
+		ASSERT_THAT(AreEqual(1, Events.Num()));
+		ASSERT_THAT(IsTrue(Events[0].Type == ESeinVisualEventType::EffectRemoved));
+		World->StopSimulation();
+	}
+
+	TEST(RemovalCallbackCannotMutateReplacementFutureBehavior,
+		"SeinARTS.Unit.Effects")
+	{
+		FScopedEffectCallbackReset Reset;
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+
+		const FGameplayTag RemovedTag = SeinARTSTags::Environment_Default.GetTag();
+		FScopedEffectTag ExistingTag(
+			*GetMutableDefault<USeinEffectPeriodicATestEffect>(), RemovedTag);
+		USeinEffectPeriodicBTestEffect* Replacement =
+			GetMutableDefault<USeinEffectPeriodicBTestEffect>();
+		ASSERT_THAT(IsNotNull(Replacement));
+		TGuardValue<ESeinModifierScope> ScopeGuard(
+			Replacement->Scope, ESeinModifierScope::Instance);
+		TGuardValue<FFixedPoint> DerivedBehaviorGuard(
+			Replacement->DerivedBehaviorValue, FFixedPoint::Zero);
+		FScopedFutureEffectBehavior FutureBehaviorGuard(*Replacement);
+		FScopedRemoveEffectsWithTag ReplacementRule(*Replacement, RemovedTag);
+		FSeinEntityHandle Target;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
+			World->ApplyEffect(
+				Target, USeinEffectPeriodicATestEffect::StaticClass(), Target);
+			World->FlushVisualEvents();
+		})));
+		USeinEffectMutationTestHook::Callback =
+			[&](USeinEffectMutationTestHook& Effect, FName EventName,
+				FSeinEntityHandle)
+			{
+				if (!Effect.IsA<USeinEffectPeriodicATestEffect>()
+					|| EventName != GET_FUNCTION_NAME_CHECKED(
+						USeinEffect, OnRemoved))
+				{
+					return;
+				}
+
+				Replacement->DefaultTargetClassTag = RemovedTag;
+				Replacement->TickInterval = FFixedPoint::One;
+				Replacement->bRemoveOnSourceDeath = true;
+				FSeinModifier& Modifier = Replacement->Modifiers.AddDefaulted_GetRef();
+				Modifier.TargetFieldName = TEXT("CallbackMutatedField");
+				Modifier.Operation = ESeinModifierOp::Override;
+				Modifier.Value = FFixedPoint::FromInt(7);
+				Modifier.Scope = ESeinModifierScope::Class;
+				Modifier.TargetClassTag = RemovedTag;
+				Replacement->DerivedBehaviorValue = FFixedPoint::FromInt(11);
+			};
+
+		Assert.ExpectError(TEXT("replacement callbacks invalidated target"));
+		FSeinWorldSubsystemTestAccess::FObservedApplyResult Result;
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World)));
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+			Result = FSeinWorldSubsystemTestAccess::ApplyEffectDetailed(
+				*World, Target, USeinEffectPeriodicBTestEffect::StaticClass(), Target);
+		}
+		const TArray<FSeinVisualEvent> Events = World->FlushVisualEvents();
+		ASSERT_THAT(IsTrue(Result.Status == FSeinWorldSubsystemTestAccess::
+			EObservedApplyStatus::InvalidatedAfterReplacementRemoval));
+		ASSERT_THAT(AreEqual(int64{0}, Result.EffectInstanceID));
+		ASSERT_THAT(IsTrue(World->IsEntityAlive(Target)));
+		const FSeinActiveEffectsComponent* Active =
+			World->GetComponent<FSeinActiveEffectsComponent>(Target);
+		ASSERT_THAT(IsNotNull(Active));
+		ASSERT_THAT(AreEqual(0, Active->ActiveEffects.Num()));
+		ASSERT_THAT(AreEqual(1, Events.Num()));
+		ASSERT_THAT(IsTrue(Events[0].Type == ESeinVisualEventType::EffectRemoved));
+		World->StopSimulation();
 	}
 
 	TEST(PeriodicEffectDestructionStopsSiblingAndCatchUpTicks, "SeinARTS.Unit.Effects")
@@ -1330,12 +2292,18 @@ namespace UE::SeinARTSTests
 		FActorTestSpawner Spawner;
 		USeinWorldSubsystem* World = Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
 		ASSERT_THAT(IsNotNull(World));
-		const FSeinEntityHandle Target = SpawnEffectEntity(
-			*World, FSeinPlayerID::Neutral());
-		ASSERT_THAT(IsTrue(World->ApplyEffect(Target,
-			USeinEffectPeriodicATestEffect::StaticClass(), Target) > 0));
-		ASSERT_THAT(IsTrue(World->ApplyEffect(Target,
-			USeinEffectPeriodicBTestEffect::StaticClass(), Target) > 0));
+		FSeinEntityHandle Target;
+		int64 FirstID = 0;
+		int64 SecondID = 0;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
+			FirstID = World->ApplyEffect(
+				Target, USeinEffectPeriodicATestEffect::StaticClass(), Target);
+			SecondID = World->ApplyEffect(
+				Target, USeinEffectPeriodicBTestEffect::StaticClass(), Target);
+		})));
+		ASSERT_THAT(IsTrue(FirstID > 0 && SecondID > FirstID));
 
 		int32 FirstTicks = 0;
 		int32 SiblingTicks = 0;
@@ -1355,7 +2323,7 @@ namespace UE::SeinARTSTests
 			}
 		};
 
-		TickForOneSimSecond(*World);
+		ASSERT_THAT(IsTrue(TickForOneSimSecond(*World)));
 		ASSERT_THAT(AreEqual(1, FirstTicks));
 		ASSERT_THAT(AreEqual(0, SiblingTicks));
 		ASSERT_THAT(IsFalse(World->IsEntityAlive(Target)));
@@ -1370,12 +2338,19 @@ namespace UE::SeinARTSTests
 
 		const FSeinPlayerID LaterPlayer(7);
 		const FSeinPlayerID EarlierPlayer(2);
-		World->RegisterPlayer(LaterPlayer, FSeinFactionID(1));
-		World->RegisterPlayer(EarlierPlayer, FSeinFactionID(1));
-		const FSeinEntityHandle LaterTarget = SpawnEffectEntity(*World, LaterPlayer);
-		const FSeinEntityHandle EarlierTarget = SpawnEffectEntity(*World, EarlierPlayer);
-		World->ApplyEffect(LaterTarget, USeinEffectIdentityPlayerTestEffect::StaticClass(), LaterTarget);
-		World->ApplyEffect(EarlierTarget, USeinEffectIdentityPlayerTestEffect::StaticClass(), EarlierTarget);
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			World->RegisterPlayer(LaterPlayer, FSeinFactionID(1));
+			World->RegisterPlayer(EarlierPlayer, FSeinFactionID(1));
+			const FSeinEntityHandle LaterTarget =
+				SpawnEffectEntity(*World, LaterPlayer);
+			const FSeinEntityHandle EarlierTarget =
+				SpawnEffectEntity(*World, EarlierPlayer);
+			World->ApplyEffect(LaterTarget,
+				USeinEffectIdentityPlayerTestEffect::StaticClass(), LaterTarget);
+			World->ApplyEffect(EarlierTarget,
+				USeinEffectIdentityPlayerTestEffect::StaticClass(), EarlierTarget);
+		})));
 
 		TArray<uint8> CallbackOrder;
 		USeinEffectMutationTestHook::Callback =
@@ -1387,7 +2362,7 @@ namespace UE::SeinARTSTests
 			}
 		};
 
-		TickForOneSimSecond(*World);
+		ASSERT_THAT(IsTrue(TickForOneSimSecond(*World)));
 		ASSERT_THAT(AreEqual(2, CallbackOrder.Num()));
 		ASSERT_THAT(AreEqual(uint8{2}, CallbackOrder[0]));
 		ASSERT_THAT(AreEqual(uint8{7}, CallbackOrder[1]));
@@ -1400,13 +2375,23 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsNotNull(World));
 
 		const FSeinPlayerID Player(4);
-		World->RegisterPlayer(Player, FSeinFactionID(1));
-		const FSeinEntityHandle Target = SpawnEffectEntity(*World, Player);
-		ASSERT_THAT(IsTrue(World->ApplyEffect(Target,
-			USeinEffectTimedPlayerTestEffect::StaticClass(), Target) > 0));
-		World->DestroyEntity(Target);
+		FSeinEntityHandle Target;
+		int64 EffectID = 0;
+		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
+		{
+			World->RegisterPlayer(Player, FSeinFactionID(1));
+			Target = SpawnEffectEntity(*World, Player);
+			EffectID = World->ApplyEffect(Target,
+				USeinEffectTimedPlayerTestEffect::StaticClass(), Target);
+		})));
+		ASSERT_THAT(IsTrue(EffectID > 0));
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World)));
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+			World->DestroyEntity(Target);
+		}
 
-		TickForOneSimSecond(*World);
+		ASSERT_THAT(IsTrue(TickForOneSimSecond(*World)));
 		ASSERT_THAT(IsFalse(World->GetEntityPool().IsValid(Target)));
 		const FSeinPlayerState* State = World->GetPlayerState(Player);
 		ASSERT_THAT(IsNotNull(State));

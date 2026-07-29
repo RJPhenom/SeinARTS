@@ -28,10 +28,14 @@
 #include "PluginSettings.generated.h"
 
 class USeinCommandBrokerResolver;
+class USeinCommandAuthorityPolicy;
+class USeinCommandHandler;
 class USeinFaction;
 class USeinFactionService;
 class USeinAIController;
+class USeinCanonicalStateRecipe;
 class USeinFormation;
+class USeinSimulationContentManifest;
 class UWorld;
 
 /**
@@ -129,6 +133,42 @@ public:
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Simulation", meta = (ClampMin = "1", UIMin = "32", UIMax = "1024"))
 	int32 EffectCountWarningThreshold;
+
+	/**
+	 * Generated source-content proof used by bootstrap, snapshots, replays, and
+	 * network compatibility. Designers continue authoring ordinary Blueprint
+	 * gameplay assets; the editor generator updates this read-only manifest.
+	 *
+	 * The asset may contain several exact contributor-set profiles so one
+	 * project can support Framework-only and opt-in extension combinations
+	 * without weakening the fail-closed compatibility check.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Simulation|Content",
+		meta = (DisplayName = "Simulation Content Manifest"))
+	TSoftObjectPtr<USeinSimulationContentManifest> SimulationContentManifest;
+
+	/**
+	 * Project-owned packages that affect future simulation but are not reached
+	 * through a registered SeinARTS gameplay base class or the configured map
+	 * set. The generator follows their supported package dependencies; this is
+	 * an authoring input, never a runtime fallback or hand-maintained hash list.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Simulation|Content",
+		meta = (DisplayName = "Additional Simulation Content Roots"))
+	TArray<FSoftObjectPath> AdditionalSimulationContentRoots;
+
+	/**
+	 * Blueprint or native recipes that declare passive project-owned
+	 * authoritative state. Each recipe is a synchronous, non-latent function
+	 * of immutable match settings; it is released before tick zero and is
+	 * re-declared locally before checkpoint adoption.
+	 *
+	 * Extensions may add recipes independently through the native registry.
+	 * Project recipes compose additively by globally unique state keys.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Simulation|State",
+		meta = (DisplayName = "Canonical State Recipes"))
+	TArray<TSoftClassPtr<USeinCanonicalStateRecipe>> CanonicalStateRecipes;
 
 	// Simulation — Performance (deterministic multithreading)
 	// ----------------------------------------------------------------------------------------------------
@@ -835,6 +875,56 @@ public:
 		meta = (ClampMin = "1.0", ClampMax = "60.0", UIMin = "5.0", UIMax = "30.0"))
 	float FogRenderTickRate;
 
+	// Command Protocol
+	// ====================================================================================================
+
+	/**
+	 * Stateless policy that authorizes structurally valid canonical commands.
+	 * The shipped default is owner control plus deterministic exact-entity grants;
+	 * custom policies can implement teams, shared control, or different resource
+	 * ownership without changing transport or command handlers. None fails closed.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Commands",
+		meta = (DisplayName = "Authority Policy Class",
+				MetaClass = "/Script/SeinARTSCoreEntity.SeinCommandAuthorityPolicy"))
+	FSoftClassPath CommandAuthorityPolicyClass;
+
+	/**
+	 * Additional Blueprint/native command handlers loaded before simulation.
+	 * Each handler CDO owns one exact tag+version schema. Native extension modules
+	 * may instead register during module startup. Missing/conflicting entries fail
+	 * before tick zero and participate in the compatibility manifest.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Commands",
+		meta = (DisplayName = "Additional Handler Classes",
+				MetaClass = "/Script/SeinARTSCoreEntity.SeinCommandHandler"))
+	TArray<FSoftClassPath> CommandHandlerClasses;
+
+	/**
+	 * Additional concrete types permitted inside a command payload's nested
+	 * FInstancedStruct fields. Values are ignored; exact types and layouts join
+	 * the frozen protocol manifest. Default Match Extensions are included
+	 * automatically, so list only types that can arrive through another path.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Commands",
+		meta = (DisplayName = "Additional Dynamic Payload Schemas",
+				SeinDeterministicOnly))
+	TArray<FInstancedStruct> CommandDynamicPayloadSchemas;
+
+	/**
+	 * Raw FName identifiers available to every frozen command schema and to
+	 * replay/header extension payloads. NAME_None is implicit. Order and authored
+	 * casing do not affect compatibility; the runtime freezes a canonical catalog.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Commands",
+		meta = (DisplayName = "Additional Wire Names"))
+	TArray<FName> AdditionalWireNames;
+
+	/** Hard cap on commands accepted from one author in one lockstep submission. */
+	UPROPERTY(Config, EditAnywhere, Category = "Commands",
+		meta = (ClampMin = "1", ClampMax = "1024", UIMin = "32", UIMax = "256"))
+	int32 MaxCommandsPerSubmission;
+
 	// Network / Lockstep
 	// ====================================================================================================
 
@@ -878,9 +968,9 @@ public:
 	int32 MaxPlayers;
 
 	/**
-	 * Which relay actor carries the lockstep traffic. One is spawned on the host at session start and
-	 * replicated to every client; it holds the RPCs that submit commands to the server and broadcast
-	 * each completed turn back out. Subclass it to layer in custom telemetry, encryption, or per-game
+	 * Which relay actor carries the shipped Unreal transport. One owner-only relay is spawned per
+	 * connected controller; it submits that participant's batches and receives canonical turns.
+	 * Subclass it to layer in custom telemetry, encryption, or per-game
 	 * packet shaping without touching framework code. Set it to None to turn the relay OFF: no relay
 	 * spawns, so lockstep networking can't send or receive commands — only do this if you are not using
 	 * the built-in net layer. A one-time on-screen warning fires while off (suppress it in Editor
@@ -893,9 +983,9 @@ public:
 
 	/**
 	 * Whether clients periodically cross-check that their simulations still agree. When on, every few
-	 * turns (set by Determinism Check Interval) each client hashes its world state and sends the digest
-	 * to the host, which fans the digests back so peers can compare. Any mismatch raises a desync alarm
-	 * to every peer with the full per-slot hash table.
+	 * turns (set by Determinism Check Interval) each simulation peer computes its canonical 128-bit
+	 * world-state root and sends it to the coordinator. Any mismatch raises a desync alarm to every
+	 * peer with the full participant-root table.
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Network")
 	bool bDeterminismChecksEnabled;
@@ -917,7 +1007,7 @@ public:
 
 	/**
 	 * How often the determinism cross-check runs, in turns. Lower catches a desync sooner but spends
-	 * more bandwidth and CPU on hashing. 10 turns (about 1 second at 10 Hz) is a sensible baseline;
+	 * more bandwidth and CPU on canonical root capture. 10 turns (about 1 second at 10 Hz) is a sensible baseline;
 	 * drop it to 1 while hunting a desync.
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Network", meta = (ClampMin = "1", ClampMax = "300", UIMin = "1", UIMax = "60", EditCondition = "bDeterminismChecksEnabled"))
@@ -1014,8 +1104,9 @@ public:
 	 * count, or Max Players if no map is picked). When you Play a level directly, the slot list is
 	 * synthesized from the Sein Player Start actors in that level instead.
 	 *
-	 * The framework does not care what goes in this array — it is just a collection of structs the lobby
-	 * and game mode forward to the sim untouched, which your Blueprint scripts read back by type.
+	 * Values are copied into the canonical match contract and installed by the
+	 * active bootstrap provider. Every concrete struct must be deterministic;
+	 * its exact type and value participate in compatibility and receipt checks.
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Network|Lobby",
 		meta = (DisplayName = "Default Match Extensions"))

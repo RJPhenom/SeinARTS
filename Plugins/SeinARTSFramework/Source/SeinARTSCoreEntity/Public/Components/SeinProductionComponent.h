@@ -14,6 +14,7 @@
 #include "GameplayTagContainer.h"
 #include "Actor/SeinActor.h"
 #include "Core/SeinEntityHandle.h"
+#include "Core/SeinPlayerID.h"
 #include "Components/SeinComponent.h"
 #include "Data/SeinResourceTypes.h"
 #include "SeinProductionComponent.generated.h"
@@ -65,16 +66,20 @@ struct SEINARTSCOREENTITY_API FSeinProductionQueueEntry
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Production")
 	FFixedPoint TotalBuildTime;
 
-	/** Cost portion that was deducted at enqueue time (resources whose catalog
-	 *  `ProductionDeductionTiming == AtEnqueue`). Drives the refund on cancel. */
+	/** Principal deducted when the ability activated. This is the full cost for
+	 *  Immediate abilities or the catalog's AtEnqueue bucket for Production Queue.
+	 *  Drives cancellation refunds. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Production")
 	FSeinResourceCost AtEnqueueCost;
 
-	/** Cost portion deferred to completion time (resources whose catalog
-	 *  `ProductionDeductionTiming == AtCompletion`). Attempted on spawn; may
-	 *  stall if it would exceed cap. Never refunded on cancel (never deducted). */
+	/** Production Queue cost deferred by catalog policy. Attempted on completion
+	 *  and may stall if unaffordable. Empty for Immediate abilities. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Production")
 	FSeinResourceCost AtCompletionCost;
+
+	/** Principal that funded this queue entry, frozen at activation time. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Production")
+	FSeinPlayerID ResourcePayer;
 
 	/** Research entries: USeinEffect class applied to the owner on completion. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Production")
@@ -94,6 +99,7 @@ FORCEINLINE uint32 GetTypeHash(const FSeinProductionQueueEntry& Entry)
 	Hash = HashCombine(Hash, GetTypeHash(Entry.ActorClass.Get()));
 	Hash = HashCombine(Hash, GetTypeHash(Entry.AtEnqueueCost));
 	Hash = HashCombine(Hash, GetTypeHash(Entry.AtCompletionCost));
+	Hash = HashCombine(Hash, GetTypeHash(Entry.ResourcePayer));
 	return Hash;
 }
 

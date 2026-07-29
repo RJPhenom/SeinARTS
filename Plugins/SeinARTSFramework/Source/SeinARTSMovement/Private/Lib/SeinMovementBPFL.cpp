@@ -24,7 +24,8 @@ void USeinMovementBPFL::SeinStopMovement(const UObject* WorldContextObject, FSei
 	// action. The move's OnCancel runs (clears arrival state, fires OnCancelled on its
 	// proxy); the unit then coasts to rest via the idle driver.
 	USeinWorldSubsystem* World = GetWorldSubsystem(WorldContextObject);
-	if (World && World->LatentActionManager)
+	if (World && World->LatentActionManager
+		&& World->RequireStateMutationAuthorization(TEXT("StopMovement")))
 	{
 		World->LatentActionManager->CancelActionsForEntityOfClass(EntityHandle, USeinMoveToAction::StaticClass());
 	}

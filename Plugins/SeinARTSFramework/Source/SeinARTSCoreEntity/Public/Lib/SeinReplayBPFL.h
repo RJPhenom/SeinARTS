@@ -1,10 +1,9 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinReplayBPFL.h
- * @brief   Replay save/load skeleton (DESIGN §18). V1 ships header-only
- *          persistence — `SaveReplay` writes the header struct to disk;
- *          full tick-grouped binary command-log serialization lands when
- *          the replay viewer app materializes.
+ * @brief   Replay-header construction and bounded metadata persistence.
+ *          Executable replay journals are owned by SeinARTSNet's replay
+ *          writer/reader; this CoreEntity library never creates or plays one.
  */
 
 #pragma once
@@ -23,23 +22,49 @@ class SEINARTSCOREENTITY_API USeinReplayBPFL : public UBlueprintFunctionLibrary
 
 public:
 
-	/** Fill a replay header snapshot from the current subsystem state
-	 *  (settings, tick range, registered players). Intended as the header
-	 *  portion of an eventual binary replay file. */
-	UFUNCTION(BlueprintPure, Category = "SeinARTS|Replay",
+	/** Fill replay metadata from the current subsystem state. Executable
+	 *  recorders may use this as the initial header for their command journal.
+	 *  MapIdentifier is retained for Blueprint compatibility; the canonical
+	 *  long package name of the current world always wins. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Replay",
 		meta = (WorldContext = "WorldContextObject", DisplayName = "Build Replay Header"))
 	static FSeinReplayHeader SeinBuildReplayHeader(const UObject* WorldContextObject, FName MapIdentifier);
 
-	/** Write a replay header to disk at `FilePath`. V1 ships header-only;
-	 *  command-log tail serialization lands with the replay viewer app.
-	 *  Returns true on success. */
+	/** Save only a bounded replay-header metadata document. This does not
+	 *  contain a command journal and cannot be used for replay playback. A valid
+	 *  world context binds serialization to that world's frozen protocol catalog
+	 *  and generated simulation-content identity; null is supported for worldless
+	 *  tooling and uses current project defaults. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Replay",
-		meta = (WorldContext = "WorldContextObject", DisplayName = "Save Replay"))
+		meta = (WorldContext = "WorldContextObject", DisplayName = "Save Replay Header Metadata"))
+	static bool SeinSaveReplayHeaderMetadata(const UObject* WorldContextObject,
+		const FSeinReplayHeader& Header, const FString& FilePath);
+
+	/** Load only a bounded replay-header metadata document. This never loads
+	 *  packages or starts executable replay playback. A valid world context uses
+	 *  that world's frozen protocol catalog and rejects foreign simulation
+	 *  content before decoding; null worldless tooling uses current project
+	 *  defaults without claiming active-session compatibility. A non-null
+	 *  context without a simulation world fails. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Replay",
+		meta = (WorldContext = "WorldContextObject", DisplayName = "Load Replay Header Metadata"))
+	static bool SeinLoadReplayHeaderMetadata(const UObject* WorldContextObject,
+		const FString& FilePath, FSeinReplayHeader& OutHeader);
+
+	/** Deprecated compatibility wrapper for Save Replay Header Metadata. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Replay",
+		meta = (WorldContext = "WorldContextObject",
+			DisplayName = "Save Replay (Deprecated: Header Metadata Only)",
+			DeprecatedFunction,
+			DeprecationMessage = "This saves header metadata only, not an executable replay journal. Use Save Replay Header Metadata; executable replay journals use the SeinARTSNet replay writer."))
 	static bool SeinSaveReplay(const UObject* WorldContextObject, const FSeinReplayHeader& Header, const FString& FilePath);
 
-	/** Load a previously-saved replay header from disk. Returns true on success. */
+	/** Deprecated compatibility wrapper for Load Replay Header Metadata. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Replay",
-		meta = (WorldContext = "WorldContextObject", DisplayName = "Load Replay"))
+		meta = (WorldContext = "WorldContextObject",
+			DisplayName = "Load Replay (Deprecated: Header Metadata Only)",
+			DeprecatedFunction,
+			DeprecationMessage = "This loads header metadata only and cannot load an executable replay journal. Use Load Replay Header Metadata; executable replay journals use the SeinARTSNet replay reader."))
 	static bool SeinLoadReplay(const UObject* WorldContextObject, const FString& FilePath, FSeinReplayHeader& OutHeader);
 
 private:

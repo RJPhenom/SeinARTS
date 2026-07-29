@@ -11,7 +11,7 @@
 #include "Core/SeinPlayerID.h"
 #include "Core/SeinFactionID.h"
 #include "Data/SeinMatchSettings.h"
-#include "Types/Vector.h"
+#include "Types/Transform.h"
 #include "SeinPlayerStart.generated.h"
 
 class ASeinActor;
@@ -19,9 +19,9 @@ class ASeinActor;
 /**
  * RTS-aware player start point.
  *
- * Each SeinPlayerStart represents one player slot on the map. The GameMode
- * matches connecting players to starts by PlayerSlot, then spawns the
- * faction's SpawnEntity at this location.
+ * Each SeinPlayerStart represents one player slot on the map. GameMode uses
+ * PlayerSlot only for authority-side controller routing; the shared bootstrap
+ * transaction materializes the optional SpawnEntity on every simulation peer.
  *
  * ## Editor Workflow
  * Place one SeinPlayerStart per player position in the map. Set PlayerSlot
@@ -30,9 +30,9 @@ class ASeinActor;
  *
  * ## SpawnEntity
  * The SpawnEntity is an ASeinActor Blueprint that represents the faction's
- * starting presence (e.g., a headquarters building). Its BeginPlay / abilities
- * can trigger any game-start logic the designer wants (spawn workers, grant
- * starting tech, etc.). This keeps start-of-game setup entirely in Blueprint.
+ * starting presence (e.g., a headquarters building). Its authored sim
+ * components are copied during bootstrap; deterministic follow-up behavior
+ * belongs in abilities/systems after tick zero, not render-actor BeginPlay.
  *
  * ## Networked / Lobby Use
  * For matchmaking or skirmish lobbies, the lobby system assigns each player
@@ -53,14 +53,14 @@ public:
 	/**
 	 * Which player slot this start belongs to (1-based).
 	 * The GameMode assigns players to starts by matching this value.
-	 * 0 = unassigned / available to any player.
+	 * 0 = not part of the default match manifest.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|PlayerStart", meta = (ClampMin = "0", ClampMax = "8"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|PlayerStart", meta = (ClampMin = "0", ClampMax = "16"))
 	int32 PlayerSlot = 0;
 
 	/**
-	 * Faction ID for this start position.
-	 * Overrides the GameMode's DefaultFactionID when set (Value != 0).
+	 * Faction ID authored for this start position's match slot.
+	 * Active Human and AI slots require a valid faction.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|PlayerStart")
 	FSeinFactionID FactionID;
@@ -73,25 +73,23 @@ public:
 	uint8 TeamID = 0;
 
 	/**
-	 * The entity to spawn at this start location when a player claims this slot.
+	 * The entity to spawn at this start's baked transform when the match is materialized.
 	 * Typically a headquarters / base building Blueprint.
-	 * The spawned entity's BeginPlay can trigger any start-of-game logic
-	 * (spawn workers, grant tech, set rally points, etc.).
-	 * Leave null to skip spawn entity (player gets only camera + resources).
+	 * Leave null to skip the entity while still materializing the player state.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|PlayerStart")
 	TSubclassOf<ASeinActor> SpawnEntity;
 
-	/** Editor-baked snapshot of this start's spawn location — see
-	 *  `ASeinActor::PlacedSimLocation` for the cross-platform-determinism
-	 *  rationale. PostEditMove writes; SeinGameMode reads at sim-spawn
-	 *  time. Migration: `bSimLocationBaked` distinguishes fresh placements
-	 *  from legacy levels. */
-	UPROPERTY(VisibleAnywhere, AdvancedDisplay, Category = "SeinARTS|Determinism")
-	FFixedVector PlacedSimLocation = FFixedVector::ZeroVector;
+	/** Editor-baked snapshot of this start's complete spawn transform.
+	 *  `PostEditMove` performs the float-to-fixed conversion once and the
+	 *  serialized fixed-point value is then identical on every peer.
+	 *  `bSimTransformBaked` distinguishes current placements from levels
+	 *  that must be re-saved after upgrading. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, AdvancedDisplay, Category = "SeinARTS|Determinism")
+	FFixedTransform PlacedSimTransform;
 
 	UPROPERTY(VisibleAnywhere, AdvancedDisplay, Category = "SeinARTS|Determinism")
-	bool bSimLocationBaked = false;
+	bool bSimTransformBaked = false;
 
 #if WITH_EDITOR
 	virtual void PostEditMove(bool bFinished) override;
@@ -100,13 +98,13 @@ public:
 	/** Synthesize a default `FSeinMatchSettings` from the level's
 	 *  SeinPlayerStarts. Each PlayerStart with `PlayerSlot > 0` becomes a
 	 *  `Human` slot in the manifest, with FactionID + TeamID copied from
-	 *  the PlayerStart actor. Output is sorted by `SlotIndex` for
-	 *  deterministic iteration order on both server and client.
+	 *  the PlayerStart actor. Project DefaultMatchExtensions are copied into
+	 *  the direct-world contract. Output is sorted by `SlotIndex` for
+	 *  deterministic iteration order on every peer.
 	 *
 	 *  Used by `ASeinGameMode::ResolveMatchSettingsForWorld` and
 	 *  `USeinMatchBootstrapSubsystem::OnWorldBeginPlay` as the PIE-direct
-	 *  fallback when no lobby snapshot is available — both sides walk the
-	 *  same level data, produce the same `FSeinMatchSettings`, and pre-
-	 *  register matching entity IDs for lockstep determinism. */
+	 *  fallback when no lobby snapshot is available. The transaction performs
+	 *  strict semantic, anchor, and baked-transform validation before mutation. */
 	static FSeinMatchSettings SynthesizeMatchSettingsFromLevel(UWorld* World);
 };

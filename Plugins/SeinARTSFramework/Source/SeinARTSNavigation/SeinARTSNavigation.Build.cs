@@ -8,12 +8,13 @@ public class SeinARTSNavigation : ModuleRules
         // ISeinLevelLayerProvider, so the include path must propagate to nav's
         // consumers (SeinARTSMovement, etc.).
         PublicDependencyModuleNames.AddRange(new string[] {
-            "SeinARTSLevelData"
+            "SeinARTSLevelData",
+            "SeinARTSCoreEntity"
         });
 
         PrivateDependencyModuleNames.AddRange(new string[] {
             "Core", "CoreUObject", "Engine",
-            "SeinARTSCore", "SeinARTSCoreEntity",
+            "SeinARTSCore",
             "GameplayTags",
             "RenderCore", "RHI"
         });

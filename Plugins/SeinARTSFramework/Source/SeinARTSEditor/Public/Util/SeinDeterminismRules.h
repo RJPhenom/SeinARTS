@@ -15,32 +15,45 @@
 
 namespace SeinDeterminism
 {
-	/** True if a BP pin type is safe for deterministic sim data: bool, the integer
-	 *  types, FName, enums, and SeinDeterministic-marked structs (native USTRUCTs with
-	 *  the meta, and UDSes tagged by the factory — e.g. FFixedPoint/FFixedVector/...).
-	 *  Rejects float/double/real, object/class/soft/interface refs, delegates,
-	 *  string/text, wildcard, fieldpath. Container-of (array/set/map) inherits its
-	 *  element category's verdict — matching the validator's category-only check. */
-	inline bool IsPinTypeDeterministic(const FEdGraphPinType& PinType)
+	inline bool IsTerminalTypeDeterministic(
+		FName Category,
+		const UObject* TypeObject)
 	{
-		const FName Cat = PinType.PinCategory;
-
-		if (Cat == UEdGraphSchema_K2::PC_Boolean
-		 || Cat == UEdGraphSchema_K2::PC_Byte
-		 || Cat == UEdGraphSchema_K2::PC_Int
-		 || Cat == UEdGraphSchema_K2::PC_Int64
-		 || Cat == UEdGraphSchema_K2::PC_Name
-		 || Cat == UEdGraphSchema_K2::PC_Enum)
+		if (Category == UEdGraphSchema_K2::PC_Boolean
+		 || Category == UEdGraphSchema_K2::PC_Byte
+		 || Category == UEdGraphSchema_K2::PC_Int
+		 || Category == UEdGraphSchema_K2::PC_Int64
+		 || Category == UEdGraphSchema_K2::PC_Name
+		 || Category == UEdGraphSchema_K2::PC_Enum)
 		{
 			return true;
 		}
 
-		if (Cat == UEdGraphSchema_K2::PC_Struct)
+		if (Category == UEdGraphSchema_K2::PC_Struct)
 		{
-			const UStruct* SubStruct = Cast<UStruct>(PinType.PinSubCategoryObject.Get());
-			return USeinSimComponentFactory::IsSeinDeterministicStruct(SubStruct);
+			return USeinSimComponentFactory::IsSeinDeterministicStruct(
+				Cast<UStruct>(TypeObject));
 		}
-
 		return false;
+	}
+
+	/** True if a BP pin type is safe for deterministic sim data: bool, the integer
+	 *  types, FName, enums, and SeinDeterministic-marked structs (native USTRUCTs with
+	 *  the meta, and UDSes tagged by the factory — e.g. FFixedPoint/FFixedVector/...).
+	 *  Rejects float/double/real, object/class/soft/interface refs, delegates,
+	 *  string/text, wildcard, fieldpath. Arrays and sets use the primary terminal
+	 *  type; maps require both their key and value terminals to be deterministic. */
+	inline bool IsPinTypeDeterministic(const FEdGraphPinType& PinType)
+	{
+		if (!IsTerminalTypeDeterministic(
+				PinType.PinCategory,
+				PinType.PinSubCategoryObject.Get()))
+		{
+			return false;
+		}
+		return !PinType.IsMap()
+			|| IsTerminalTypeDeterministic(
+				PinType.PinValueType.TerminalCategory,
+				PinType.PinValueType.TerminalSubCategoryObject.Get());
 	}
 }

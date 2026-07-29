@@ -9,17 +9,34 @@
  *          USeinMovement base, USeinBasicMovement / USeinBasicUnitMovement, the
  *          move-to action + proxy, the movement BPFL, and the debug-draw show
  *          flags stay in the framework's SeinARTSMovement module. Startup /
- *          shutdown are intentionally empty — the classes are discovered via
- *          reflection and selected through FSeinMovementComponent::MovementClass.
+ *          shutdown register this extension's stable simulation-content and
+ *          exact movement-state coverage descriptors; the concrete classes
+ *          are discovered through the framework-owned USeinMovement root and
+ *          selected through FSeinMovementComponent::MovementClass.
  */
 
 #pragma once
 
 #include "Modules/ModuleManager.h"
+#include "Serialization/SeinMovementStateCoverage.h"
+#include "Serialization/SeinSimulationContentRegistry.h"
 
 class FSeinARTSMovementPlusModule : public FDefaultModuleImpl
 {
 public:
 	virtual void StartupModule() override;
+	virtual void PreUnloadCallback() override;
 	virtual void ShutdownModule() override;
+
+	/** False keeps bootstrap fail-closed after a content-registration error. */
+	bool IsSimulationContentContributorReady() const
+	{
+		return SimulationContentRegistrationHandle.IsValid()
+			&& StateCoverageHandles.Num() == 5;
+	}
+
+private:
+	TArray<FSeinMovementStateCoverageRegistrationHandle>
+		StateCoverageHandles;
+	FSeinSimulationContentRegistrationHandle SimulationContentRegistrationHandle;
 };

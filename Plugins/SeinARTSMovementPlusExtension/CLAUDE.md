@@ -72,8 +72,37 @@ override `Tick` wholesale (Tier-2). Per-class tuning now rides entirely on the s
 (`FSeinInfantryMovementData` etc.); the earlier half-finished migration is done — each mode class
 holds only runtime state (e.g. `CurrentSteer`, `bIsReversing`). Wheeled/Tracked are the most-iterated.
 
-Known gaps for the mode-depth work (2026-07-06): aircraft bank is computed then discarded (Flight
-writes yaw-only); Hover turns-to-face rather than strafing; Flight loiter/idle is punted to the AI
-controller; air avoidance is planar (no vertical channel) and Flight doesn't consume it;
-`GetMinTurnRadius` is a producer with no consumer. The aspirational vehicle curve-fitting planner
-(Reeds-Shepp/Dubins) referenced in stale comments is **unbuilt** — see root `CLAUDE.md`.
+**Wheeled maneuver planning landed 2026-07-24** (build-green, PIE-pending — see
+`Docs/Engineering/WheeledVehicleMovement.md`): `USeinWheeledVehicleMovement` now overrides
+`PlanPath` to post-process the coarse A* polyline into a Reeds-Shepp-style start maneuver
+(U-turn arc at the largest feasible radius / straight reverse / 3-point turn / reverse-out of
+corridors) emitted as typed Arc/Straight segments with per-segment `bReverse`, and its `Tick`
+drives typed paths with a geometric segment cursor (curvature feed-forward on arcs with the
+`v <= TurnRate·R` speed law, cusp brake-to-zero gates, anticipatory braking, stuck/orbit
+recovery nudges), falling back to the classic carrot pursuit for the all-forward tail and for
+`bManeuverPlanning = false` (the in-PIE A/B switch). The closed-form maneuver solver lives in
+`Private/Movement/SeinWheeledManeuver.h/.cpp` (pure functions, plan-time only). Wheeled reverse
+now defaults ON via `FSeinWheeledMovementData::bCanReverse` (OR-combined with the unit-level
+flag). `GetMinTurnRadius` finally has its consumer — the wheeled planner itself.
+
+**Tracked maneuver rework landed 2026-07-25** (build-green, red-teamed, PIE-pending):
+`USeinTrackedVehicleMovement` got the same contract fixes as wheeled (harness
+`AdvanceWaypointAlongPath`, `DispatchArrivalMotion` + roll-through arrival, avoidance SpeedScale
+yield, authoritative-dest exemption, reverse-aware overshoot, far prechecks on the >463 m
+fixed-point square wrap, `Super::OnMoveBegin`/`OnMoveEnd`) plus a tracked-flavored maneuver tier
+via `PlanPath`: a segment-native straight-reverse word (replaces the whole-order auto-reverse
+latch) and a momentum U-turn arc word (forward, at speed, R = speed/TurnRate clamped, driven at
+7/8·TurnRate·R with a radial correction); an authored non-zero `MinTurnRadius` switches to the
+FULL shared word ladder (the chassis declared itself non-pivoting). Cusps resolve through the
+existing ARC/PIVOT mode split. Tracked reverse defaults ON via
+`FSeinTrackedMovementData::bCanReverse` (OR-combined with the unit flag). The shared plan-time
+toolkit still lives under `Private/Movement/SeinWheeledManeuver.h/.cpp` — rename to
+`SeinVehicleManeuver` + driver-logic unification (tracked duplicates the segment-cursor helpers)
+are deferred until the wheeled PIE pass lands. KNOWN base gap surfaced by both vehicle reworks:
+the move action calls `OnMoveEnd` only on COMPLETED orders (OnCancel/OnFail skip it), so both
+modes' plan-time hysteresis reads are destination-gated rather than trusting the reset.
+
+Known gaps for the mode-depth work (2026-07-06, minus the vehicle items closed above): aircraft
+bank is computed then discarded (Flight writes yaw-only); Hover turns-to-face rather than
+strafing; Flight loiter/idle is punted to the AI controller; air avoidance is planar (no vertical
+channel) and Flight doesn't consume it.

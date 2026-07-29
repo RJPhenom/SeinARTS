@@ -6,6 +6,7 @@
  */
 
 #include "SeinMovementSubsystem.h"
+#include "Actions/SeinMoveToAction.h"
 #include "Simulation/SeinAvoidanceSystem.h"
 #include "Simulation/SeinMovementDriverSystem.h"
 #include "Simulation/SeinMovementTraceSystem.h"
@@ -18,18 +19,22 @@
 #include "Settings/PluginSettings.h"
 #include "Components/SeinMovementComponent.h"
 #include "SeinARTSCoreEntityLog.h"
+#include "UObject/UObjectIterator.h"
 
 // The movement-trace channel ([EP]/[UNIT]/[ORPHAN]/[ARRIVE]/[THROTTLE] lines).
 // Declared in Simulation/SeinMovementTraceLog.h; one switch: `log LogSeinMoveTrace Verbose`.
 DEFINE_LOG_CATEGORY(LogSeinMoveTrace);
 
-void USeinMovementSubsystem::OnWorldBeginPlay(UWorld& InWorld)
+void USeinMovementSubsystem::Initialize(
+	FSubsystemCollectionBase& Collection)
 {
-	Super::OnWorldBeginPlay(InWorld);
+	Super::Initialize(Collection);
+	Collection.InitializeDependency(USeinWorldSubsystem::StaticClass());
 
-	// Mirrors USeinSquadSubsystem's create + RegisterSystem lifecycle.
-	USeinWorldSubsystem* Sim = InWorld.GetSubsystem<USeinWorldSubsystem>();
-	if (!Sim) return;
+	UWorld* World = GetWorld();
+	USeinWorldSubsystem* Sim =
+		World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
+	if (!World || !Sim) return;
 
 	// Local avoidance — the soft steering layer above the penetration floor. The
 	// MODEL is pluggable (USeinARTSCoreSettings::AvoidanceClass → USeinAvoidanceDefault);
@@ -39,7 +44,6 @@ void USeinMovementSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 	if (UClass* AvoidClass = ResolveAvoidanceClass())
 	{
 		AvoidanceInstance = NewObject<USeinAvoidance>(this, AvoidClass);
-		if (AvoidanceInstance) AvoidanceInstance->OnInitialized(&InWorld);
 		AvoidanceSystem = new FSeinAvoidanceSystem(AvoidanceInstance);
 		Sim->RegisterSystem(AvoidanceSystem);
 	}
@@ -72,12 +76,49 @@ void USeinMovementSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 	Sim->RegisterSystem(TraceSystem);
 }
 
+void USeinMovementSubsystem::OnWorldBeginPlay(UWorld& InWorld)
+{
+	Super::OnWorldBeginPlay(InWorld);
+
+	// System participation freezes from the descriptor registered in
+	// Initialize, but custom avoidance models retain the established
+	// BeginPlay-time hook where every world subsystem already exists.
+	if (AvoidanceInstance)
+	{
+		AvoidanceInstance->OnInitialized(&InWorld);
+	}
+}
+
 void USeinMovementSubsystem::Deinitialize()
 {
+	ReleaseModuleOwnedStateForModuleUnload();
+	Super::Deinitialize();
+}
+
+void USeinMovementSubsystem::ReleaseModuleOwnedStateForModuleUnload()
+{
+	check(IsInGameThread());
 	USeinWorldSubsystem* Sim = nullptr;
 	if (UWorld* World = GetWorld())
 	{
 		Sim = World->GetSubsystem<USeinWorldSubsystem>();
+	}
+	if (Sim)
+	{
+		// Core ignores ordinary world teardown. During DLL unload this stops a
+		// consumed match before any registered system or UObject vtable leaves.
+		Sim->TerminateAndReleaseForModuleUnload(
+			TEXT("SeinARTSMovement"),
+			TEXT("Movement systems and persistent policy instances are being released."));
+	}
+
+	for (TObjectIterator<USeinMoveToAction> It; It; ++It)
+	{
+		if (!It->HasAnyFlags(RF_ClassDefaultObject)
+			&& It->GetWorld() == GetWorld())
+		{
+			It->Movement = nullptr;
+		}
 	}
 
 	if (TraceSystem)
@@ -106,12 +147,115 @@ void USeinMovementSubsystem::Deinitialize()
 	}
 	// AvoidanceInstance is a UPROPERTY → GC owns it; drop the ref AFTER the delegator
 	// system (which holds a raw pointer to it) is gone, so the pointer never dangles.
+	if (AvoidanceInstance)
+	{
+		AvoidanceInstance->OnDeinitialized();
+	}
 	AvoidanceInstance = nullptr;
 
 	MovementInstanceMap.Empty();
 	MovementInstancePool.Empty();
+}
 
-	Super::Deinitialize();
+namespace
+{
+	bool NativeHierarchyTouchesModule(
+		const UClass* Class,
+		FName OwnerModuleId)
+	{
+		if (!Class || OwnerModuleId.IsNone())
+		{
+			return false;
+		}
+		const FString ScriptPackage =
+			TEXT("/Script/") + OwnerModuleId.ToString();
+		for (const UClass* Cursor = Class;
+			Cursor;
+			Cursor = Cursor->GetSuperClass())
+		{
+			if (Cursor->HasAnyClassFlags(CLASS_Native)
+				&& Cursor->GetOutermost()
+				&& Cursor->GetOutermost()->GetName()
+					.Equals(
+						ScriptPackage,
+						ESearchCase::IgnoreCase))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+}
+
+void USeinMovementSubsystem::ReleaseNativeClassStateForModuleUnload(
+	FName OwnerModuleId)
+{
+	check(IsInGameThread());
+	if (OwnerModuleId.IsNone())
+	{
+		return;
+	}
+
+	USeinWorldSubsystem* Sim = nullptr;
+	if (UWorld* World = GetWorld())
+	{
+		Sim = World->GetSubsystem<USeinWorldSubsystem>();
+	}
+	if (Sim)
+	{
+		Sim->TerminateAndReleaseForModuleUnload(
+			OwnerModuleId,
+			FString::Printf(
+				TEXT("Native movement policy module '%s' unloaded during a live world."),
+				*OwnerModuleId.ToString()));
+	}
+
+	for (auto It = MovementInstanceMap.CreateIterator(); It; ++It)
+	{
+		if (!NativeHierarchyTouchesModule(
+			It->Value ? It->Value->GetClass() : nullptr,
+			OwnerModuleId))
+		{
+			continue;
+		}
+		MovementInstancePool.RemoveSingleSwap(It->Value);
+		It.RemoveCurrent();
+	}
+
+	// Active orders also hold a reflected borrowed reference. The simulation
+	// is already stopped above; sever it without dispatching OnMoveEnd into
+	// the implementation module that is unloading.
+	for (TObjectIterator<USeinMoveToAction> It; It; ++It)
+	{
+		if (!It->HasAnyFlags(RF_ClassDefaultObject)
+			&& It->GetWorld() == GetWorld()
+			&& It->Movement
+			&& NativeHierarchyTouchesModule(
+				It->Movement->GetClass(),
+				OwnerModuleId))
+		{
+			It->Movement = nullptr;
+		}
+	}
+
+	if (AvoidanceInstance
+		&& NativeHierarchyTouchesModule(
+			AvoidanceInstance->GetClass(),
+			OwnerModuleId))
+	{
+		if (AvoidanceSystem)
+		{
+			if (Sim)
+			{
+				Sim->UnregisterSystem(AvoidanceSystem);
+			}
+			delete AvoidanceSystem;
+			AvoidanceSystem = nullptr;
+		}
+		AvoidanceInstance->OnDeinitialized();
+		AvoidanceInstance = nullptr;
+	}
 }
 
 UClass* USeinMovementSubsystem::ResolveMovementClass(const FSeinMovementComponent& Move)
@@ -128,7 +272,7 @@ UClass* USeinMovementSubsystem::ResolveMovementClass(const FSeinMovementComponen
 
 UClass* USeinMovementSubsystem::ResolveAvoidanceClass()
 {
-	// WYSIWYG. None/empty => avoidance is intentionally OFF: return null so OnWorldBeginPlay skips
+	// WYSIWYG. None/empty => avoidance is intentionally OFF: return null so Initialize skips
 	// creating + registering the avoidance system. A set-but-unloadable/abstract class is a mistake,
 	// not an off-switch: fall back to the shipped default with a logged error.
 	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();

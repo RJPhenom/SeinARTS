@@ -29,6 +29,9 @@ public:
 	virtual void OnWorldBeginPlay(UWorld& InWorld) override;
 	virtual bool DoesSupportWorldType(const EWorldType::Type WorldType) const override;
 
+	/** Release the active substrate and its provider graph before module unload. */
+	void ReleaseModuleOwnedStateForModuleUnload();
+
 	/** The active substrate for this world (or null pre-init). */
 	USeinLevelData* GetLevelData() const { return LevelData; }
 

@@ -70,8 +70,10 @@ FSeinCommand FSeinCommand::MakeAbilityCommandEx(
 	Cmd.AbilityTag = Tag;
 	Cmd.TargetEntity = Target;
 	Cmd.TargetLocation = Location;
-	Cmd.bQueueCommand = bQueue;
-	Cmd.AuxLocation = FormationEnd;
+	// Queueing/formation are broker-order concerns. These legacy parameters are
+	// retained for source compatibility but no longer produce ignored wire data.
+	(void)bQueue;
+	(void)FormationEnd;
 	return Cmd;
 }
 
@@ -143,4 +145,9 @@ int32 FSeinCommandBuffer::Num() const
 const TArray<FSeinCommand>& FSeinCommandBuffer::GetCommands() const
 {
 	return Commands;
+}
+
+TArray<FSeinCommand> FSeinCommandBuffer::DrainCommands()
+{
+	return MoveTemp(Commands);
 }
