@@ -1,5 +1,6 @@
 #include "CQTest.h"
 
+#include "Abilities/SeinAbility.h"
 #include "Serialization/SeinCanonicalStateCodec.h"
 #include "Serialization/SeinPoolObjectCodecRegistry.h"
 #include "TestTypes/SeinPoolObjectCodecTestTypes.h"
@@ -466,6 +467,17 @@ namespace UE::SeinARTSTests
 			ASSERT_THAT(IsTrue(
 				Error.Contains(
 					TEXT("defaults can allocate variable storage"))));
+		}
+
+		TEST_METHOD(PoolAcceptsFixedLayoutTargeterPointArray)
+		{
+			FString Error;
+			ASSERT_THAT(IsTrue(
+				FSeinPoolObjectCodecRegistry::
+					ValidateReflectedClassSchema(
+						USeinAbility::StaticClass(),
+						Error)));
+			ASSERT_THAT(IsTrue(Error.IsEmpty()));
 		}
 
 		TEST_METHOD(PoolRejectsUnvalidatedGameplayTagQuery)

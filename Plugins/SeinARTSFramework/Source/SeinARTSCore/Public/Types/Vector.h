@@ -315,3 +315,14 @@ FORCEINLINE uint32 GetTypeHash(const FFixedVector& V)
 	Hash = HashCombine(Hash, GetTypeHash(V.Z));
 	return Hash;
 }
+
+/** The default vector is exactly three all-zero FFixedPoint values. */
+template<>
+struct TStructOpsTypeTraits<FFixedVector>
+	: public TStructOpsTypeTraitsBase2<FFixedVector>
+{
+	enum
+	{
+		WithZeroConstructor = true,
+	};
+};

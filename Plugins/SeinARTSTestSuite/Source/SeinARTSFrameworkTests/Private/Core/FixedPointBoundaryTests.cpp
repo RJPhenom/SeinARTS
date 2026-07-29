@@ -1,6 +1,8 @@
 #include "CQTest.h"
 #include "Lib/MathBPFL.h"
 #include "Math/MathLib.h"
+#include "Serialization/MemoryReader.h"
+#include "Serialization/MemoryWriter.h"
 #include "Stamping/SeinStampUtils.h"
 #include "Types/FixedPoint.h"
 #include "Types/Quat.h"
@@ -9,6 +11,44 @@
 
 namespace UE::SeinARTSTests
 {
+	static_assert(TStructOpsTypeTraits<FFixedPoint>::WithSerializer,
+		"FFixedPoint must retain its native serializer to avoid tagged-struct asset serialization.");
+	static_assert(sizeof(FFixedPoint) == sizeof(int64),
+		"FFixedPoint's native serialization contract is exactly one raw int64.");
+
+	TEST(FixedPointNativeSerializerIsRawInt64, "SeinARTS.Unit.Core.FixedPoint.Serialization")
+	{
+		FFixedPoint Source(0x0123456789ABCDEFLL);
+		TArray<uint8> Bytes;
+		{
+			FMemoryWriter Writer(Bytes, /*bIsPersistent=*/true);
+			ASSERT_THAT(IsTrue(Source.Serialize(Writer)));
+			ASSERT_THAT(IsFalse(Writer.IsError()));
+		}
+
+		ASSERT_THAT(AreEqual(static_cast<int32>(sizeof(int64)), Bytes.Num()));
+#if PLATFORM_LITTLE_ENDIAN
+		const TArray<uint8> ExpectedBytes =
+		{
+			0xEF, 0xCD, 0xAB, 0x89, 0x67, 0x45, 0x23, 0x01
+		};
+#else
+		const TArray<uint8> ExpectedBytes =
+		{
+			0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF
+		};
+#endif
+		ASSERT_THAT(IsTrue(Bytes == ExpectedBytes));
+
+		FFixedPoint Restored;
+		{
+			FMemoryReader Reader(Bytes, /*bIsPersistent=*/true);
+			ASSERT_THAT(IsTrue(Restored.Serialize(Reader)));
+			ASSERT_THAT(IsFalse(Reader.IsError()));
+		}
+		ASSERT_THAT(AreEqual(Source.Value, Restored.Value));
+	}
+
 	TEST(FixedPointWrapIsDefined, "SeinARTS.Unit.Core")
 	{
 		ASSERT_THAT(IsTrue((FFixedPoint::MaxValue + FFixedPoint::SmallNumber) == FFixedPoint::MinValue));

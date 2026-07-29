@@ -85,3 +85,17 @@ struct SEINARTSCOREENTITY_API FSeinTargeterPoint
 	FSeinTargeterPoint(const FFixedVector& InLocation, const FFixedVector& InAux)
 		: Location(InLocation), AuxLocation(InAux) {}
 };
+
+/** Every defaulted field above has an all-zero representation. Advertising
+ *  that contract lets bounded reflected decoding allocate targeter-point
+ *  arrays without invoking a native constructor that might hide variable
+ *  storage outside the reflected byte limits. */
+template<>
+struct TStructOpsTypeTraits<FSeinTargeterPoint>
+	: public TStructOpsTypeTraitsBase2<FSeinTargeterPoint>
+{
+	enum
+	{
+		WithZeroConstructor = true,
+	};
+};

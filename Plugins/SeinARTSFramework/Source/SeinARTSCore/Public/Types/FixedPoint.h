@@ -363,6 +363,7 @@ struct TStructOpsTypeTraits<FFixedPoint> : public TStructOpsTypeTraitsBase2<FFix
 {
 	enum
 	{
+		WithZeroConstructor = true,
 		WithSerializer = true,
 	};
 };
