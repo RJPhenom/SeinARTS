@@ -680,11 +680,89 @@ namespace UE::SeinARTSTests
 		{
 			FGuid RootA;
 			FGuid RootB;
-			return A.ComputeCanonicalStateRoot(
+			if (!A.ComputeCanonicalStateRoot(
 					RootA, OutError)
-				&& B.ComputeCanonicalStateRoot(
-					RootB, OutError)
-				&& RootA == RootB;
+				|| !B.ComputeCanonicalStateRoot(
+					RootB, OutError))
+			{
+				return false;
+			}
+			if (RootA == RootB)
+			{
+				return true;
+			}
+
+			FSeinWorldSnapshot SnapshotA;
+			FSeinWorldSnapshot SnapshotB;
+			A.CaptureSnapshot(SnapshotA);
+			B.CaptureSnapshot(SnapshotB);
+
+			const bool bAbilityStateMatches =
+				SnapshotA.AbilityPoolRecords.Num()
+					== SnapshotB.AbilityPoolRecords.Num()
+				&& SnapshotA.AbilityPoolRecords.Num() == 1
+				&& SnapshotA.AbilityPoolRecords[0].StateBytes
+					== SnapshotB.AbilityPoolRecords[0].StateBytes;
+			const bool bLatentStateMatches =
+				SnapshotA.LatentActionRecords.Num()
+					== SnapshotB.LatentActionRecords.Num()
+				&& SnapshotA.LatentActionSequenceDigest
+					== SnapshotB.LatentActionSequenceDigest;
+			const bool bNativeStateMatches =
+				SnapshotA.NativeCanonicalStateRecords.Num()
+					== SnapshotB.NativeCanonicalStateRecords.Num();
+			bool bNativePayloadsMatch = bNativeStateMatches;
+			if (bNativePayloadsMatch)
+			{
+				for (int32 Index = 0;
+					Index
+						< SnapshotA.NativeCanonicalStateRecords.Num();
+					++Index)
+				{
+					const FSeinCanonicalStateContributorRecord& RecordA =
+						SnapshotA.NativeCanonicalStateRecords[Index];
+					const FSeinCanonicalStateContributorRecord& RecordB =
+						SnapshotB.NativeCanonicalStateRecords[Index];
+					if (RecordA.Key != RecordB.Key
+						|| RecordA.LeafDigest != RecordB.LeafDigest)
+					{
+						bNativePayloadsMatch = false;
+						break;
+					}
+				}
+			}
+			bool bComponentsMatch =
+				SnapshotA.ComponentStorageBlobs.Num()
+					== SnapshotB.ComponentStorageBlobs.Num();
+			if (bComponentsMatch)
+			{
+				for (const TPair<
+						FString,
+						FSeinSnapshotComponentStorageBlob>& Pair :
+					SnapshotA.ComponentStorageBlobs)
+				{
+					const FSeinSnapshotComponentStorageBlob* Other =
+						SnapshotB.ComponentStorageBlobs.Find(Pair.Key);
+					if (!Other
+						|| Pair.Value.EntryCount != Other->EntryCount
+						|| Pair.Value.Bytes != Other->Bytes)
+					{
+						bComponentsMatch = false;
+						break;
+					}
+				}
+			}
+
+			OutError = FString::Printf(
+				TEXT("Canonical roots diverged: A=%s B=%s ability=%d latent=%d native=%d components=%d."),
+				*RootA.ToString(),
+				*RootB.ToString(),
+				bAbilityStateMatches,
+				bLatentStateMatches,
+				bNativePayloadsMatch,
+				bComponentsMatch);
+			UE_LOG(LogTemp, Warning, TEXT("%s"), *OutError);
+			return false;
 		}
 
 		bool AllRoutesBound(
@@ -915,11 +993,18 @@ namespace UE::SeinARTSTests
 
 		bool GeneratedMoveResultTempsMatch(
 			USeinAbility& Ability,
-			int32 ExpectedCount,
-			int32 ExpectedNonDefault)
+			int32 ExpectedStorageCount,
+			int32 ExpectedNonDefaultStorage,
+			int32 ExpectedCallbackCount,
+			int32 ExpectedNonDefaultCallbacks,
+			FString* OutDiagnostic = nullptr)
 		{
-			int32 Count = 0;
-			int32 NonDefault = 0;
+			int32 StorageCount = 0;
+			int32 NonDefaultStorage = 0;
+			int32 CallbackCount = 0;
+			int32 NonDefaultCallbacks = 0;
+			int32 UnknownCount = 0;
+			TArray<FString> Properties;
 			for (const UClass* Class = Ability.GetClass();
 				Class; Class = Class->GetSuperClass())
 			{
@@ -949,24 +1034,70 @@ namespace UE::SeinARTSTests
 						CastField<FStructProperty>(Property);
 					if (!StructProperty
 						|| StructProperty->Struct
-							!= FSeinMoveToResult::StaticStruct()
-						|| !IsGeneratedTempName(
-							Property->GetName(),
-							TEXT("K2Node_AsyncAction_Result")))
+							!= FSeinMoveToResult::StaticStruct())
 					{
 						continue;
 					}
-					++Count;
-					if (!Property->Identical_InContainer(
+					const bool bIsNonDefault =
+						!Property->Identical_InContainer(
 							Frame,
-							DefaultFrame.GetStructMemory()))
+							DefaultFrame.GetStructMemory());
+					Properties.Add(FString::Printf(
+						TEXT("%s.%s%s"),
+						*FrameClass->GetPathName(),
+						*Property->GetName(),
+						bIsNonDefault
+							? TEXT("=non-default")
+							: TEXT("=default")));
+					if (!IsGeneratedTempName(
+							Property->GetName(),
+							TEXT("Temp_struct_Variable")))
 					{
-						++NonDefault;
+						if (IsGeneratedTempName(
+								Property->GetName(),
+								TEXT("K2Node_CustomEvent_Result")))
+						{
+							++CallbackCount;
+							if (bIsNonDefault)
+							{
+								++NonDefaultCallbacks;
+							}
+						}
+						else
+						{
+							++UnknownCount;
+						}
+						continue;
+					}
+					++StorageCount;
+					if (bIsNonDefault)
+					{
+						++NonDefaultStorage;
 					}
 				}
 			}
-			return Count == ExpectedCount
-				&& NonDefault == ExpectedNonDefault;
+			if (OutDiagnostic)
+			{
+				*OutDiagnostic = FString::Printf(
+					TEXT("Expected result storage %d/%d non-default and callback params %d/%d non-default; found %d/%d and %d/%d, with %d unknown. All FSeinMoveToResult frame properties: %s"),
+					ExpectedStorageCount,
+					ExpectedNonDefaultStorage,
+					ExpectedCallbackCount,
+					ExpectedNonDefaultCallbacks,
+					StorageCount,
+					NonDefaultStorage,
+					CallbackCount,
+					NonDefaultCallbacks,
+					UnknownCount,
+					*FString::Join(Properties, TEXT(", ")));
+			}
+			return StorageCount == ExpectedStorageCount
+				&& NonDefaultStorage
+					== ExpectedNonDefaultStorage
+				&& CallbackCount == ExpectedCallbackCount
+				&& NonDefaultCallbacks
+					== ExpectedNonDefaultCallbacks
+				&& UnknownCount == 0;
 		}
 
 		bool ReplacePersistentFrameObject(
@@ -1348,7 +1479,8 @@ namespace UE::SeinARTSTests
 			bAdvanceWaypoint = true;
 		Destination.Tick();
 		ASSERT_THAT(IsTrue(CanonicalRootsMatch(
-			*Source.World, *Destination.World, Error)));
+			*Source.World, *Destination.World, Error),
+			Error));
 		ASSERT_THAT(AreEqual(
 			Source.Ability->WaypointCount,
 			Destination.Ability->WaypointCount));
@@ -1411,7 +1543,8 @@ namespace UE::SeinARTSTests
 				*Fixture.Ability, 2, true)));
 		ASSERT_THAT(IsTrue(
 			GeneratedMoveResultTempsMatch(
-				*Fixture.Ability, 2, 1)));
+				*Fixture.Ability, 2, 1, 12, 1, &Error),
+			Error));
 		const TMap<FName, FName>* ActiveCallbackSet =
 			FindExactCallbackSet(
 				*Fixture.Proxy,
@@ -1500,7 +1633,8 @@ namespace UE::SeinARTSTests
 				*Fixture.Ability, 2, false)));
 		ASSERT_THAT(IsTrue(
 			GeneratedMoveResultTempsMatch(
-				*Fixture.Ability, 2, 0)));
+				*Fixture.Ability, 2, 0, 12, 0, &Error),
+			Error));
 		ASSERT_THAT(IsTrue(
 			RoutesExactlyMatch(
 				*Fixture.Proxy,

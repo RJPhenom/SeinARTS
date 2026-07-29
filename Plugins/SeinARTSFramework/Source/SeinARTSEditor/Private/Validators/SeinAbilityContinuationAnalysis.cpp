@@ -139,12 +139,12 @@ namespace
 	const UEdGraphPin* FindMoveResultResiduePin(
 		const UK2Node_BaseAsyncTask& AsyncNode)
 	{
-		// The compiled persistent frame retains only the generated
-		// K2Node_AsyncAction_Result name and struct type, not source-node
-		// provenance. Any async task with this exact callback pin can
-		// therefore produce residue the Move To codec must treat identically.
-		// BaseAsyncTask factory outputs bypass SpawnInternalVariable and keep
-		// CallFunc_<Factory> provenance, so they cannot create this residue.
+		// UE 5.7 BaseAsyncTask expansion retains only generated internal
+		// Result storage plus per-delegate custom-event Result parameters in
+		// the persistent frame, not source-node provenance. Any supported
+		// async task with this exact callback pin must therefore satisfy the
+		// same liveness contract. Factory outputs bypass SpawnInternalVariable
+		// and retain CallFunc_<Factory> provenance.
 		for (const UEdGraphPin* Pin : AsyncNode.Pins)
 		{
 			if (Pin
@@ -160,10 +160,9 @@ namespace
 	bool CanProduceOmittedMoveResultResidue(
 		const UK2Node_BaseAsyncTask& AsyncNode)
 	{
-		// SpawnInternalVariable names from the concrete source node. The
-		// runtime omission pattern is specifically K2Node_AsyncAction_Result;
-		// other BaseAsyncTask subclasses retain a different prefix and fail
-		// closed at runtime instead of entering this explicit-state contract.
+		// The runtime codec certifies the exact expansion topology emitted by
+		// UK2Node_AsyncAction. Other BaseAsyncTask subclasses fail closed
+		// instead of entering this explicit-state contract.
 		return AsyncNode.GetClass()
 				== UK2Node_AsyncAction::StaticClass()
 			&& FindMoveResultResiduePin(AsyncNode);

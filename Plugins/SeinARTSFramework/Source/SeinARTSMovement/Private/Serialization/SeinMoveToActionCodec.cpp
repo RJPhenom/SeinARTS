@@ -155,11 +155,18 @@ namespace
 			TEXT("CallFunc_SeinMoveTo_ReturnValue"));
 	}
 
-	bool IsGeneratedMoveToResultName(const FString& Name)
+	bool IsGeneratedAsyncResultStorageName(const FString& Name)
 	{
 		return IsGeneratedLocalName(
 			Name,
-			TEXT("K2Node_AsyncAction_Result"));
+			TEXT("Temp_struct_Variable"));
+	}
+
+	bool IsGeneratedAsyncCallbackResultName(const FString& Name)
+	{
+		return IsGeneratedLocalName(
+			Name,
+			TEXT("K2Node_CustomEvent_Result"));
 	}
 
 	const UFunction* DelegateSignature(const FMoveToRouteSpec& Spec)
@@ -384,6 +391,41 @@ namespace
 			TArray<const USeinMoveToProxy*,
 				TInlineAllocator<8>> ProxyResults;
 			int32 TrueValidityResults = 0;
+			int32 GeneratedResultStorageCount = 0;
+			int32 GeneratedCallbackResultCount = 0;
+			for (FProperty* Property = Function->PropertyLink;
+				Property;
+				Property = Property->PropertyLinkNext)
+			{
+				const FStructProperty* StructProperty =
+					CastField<FStructProperty>(Property);
+				if (!StructProperty
+					|| Property->HasAnyPropertyFlags(CPF_Parm)
+					|| Property->ArrayDim != 1
+					|| StructProperty->Struct
+						!= FSeinMoveToResult::StaticStruct())
+				{
+					continue;
+				}
+				if (IsGeneratedAsyncResultStorageName(
+						Property->GetName()))
+				{
+					++GeneratedResultStorageCount;
+				}
+				else if (IsGeneratedAsyncCallbackResultName(
+						Property->GetName()))
+				{
+					++GeneratedCallbackResultCount;
+				}
+			}
+			const bool bHasCertifiedGeneratedResultShape =
+				GeneratedResultStorageCount > 0
+				&& GeneratedResultStorageCount
+					<= MaxGeneratedMoveToNodes
+				&& GeneratedCallbackResultCount
+					== GeneratedResultStorageCount
+						* RouteSpecCount;
+			bool bSawGeneratedResultResidue = false;
 
 			for (FProperty* Property = Function->PropertyLink;
 				Property;
@@ -512,19 +554,22 @@ namespace
 						StructProperty
 						&& Property->ArrayDim == 1
 						&& ArrayIndex == 0
-						&& IsGeneratedMoveToResultName(
-							Property->GetName())
 						&& StructProperty->Struct
-							== FSeinMoveToResult::StaticStruct())
+							== FSeinMoveToResult::StaticStruct()
+						&& bHasCertifiedGeneratedResultShape
+						&& (IsGeneratedAsyncResultStorageName(
+								Property->GetName())
+							|| IsGeneratedAsyncCallbackResultName(
+								Property->GetName())))
 					{
-						// The compiler frame has no source-node provenance.
-						// Compile, data-validation, PIE, and cook gates
-						// therefore apply this liveness rule to every async
-						// node that emits this exact Result/type shape:
-						// consume synchronously or promote to canonical state
-						// before the value leaves its producing callback. The
-						// certified residue is dead regardless of which
-						// pluggable async node produced it.
+						// UE 5.7 BaseAsyncTask expansion emits one internal
+						// Result store and one custom-event Result parameter
+						// per delegate. Accept these values only when the
+						// complete generated name/type/count topology is
+						// present. Compile, data-validation, PIE, and cook
+						// gates separately prove that every Result use is
+						// synchronous or promoted to canonical state.
+						bSawGeneratedResultResidue = true;
 						bKnownDeadResidue = true;
 					}
 
@@ -543,7 +588,11 @@ namespace
 
 			if (RouteMasks.Num() > MaxGeneratedMoveToNodes
 				|| ProxyResults.Num() != RouteMasks.Num()
-				|| TrueValidityResults != RouteMasks.Num())
+				|| TrueValidityResults != RouteMasks.Num()
+				|| (bSawGeneratedResultResidue
+					&& (!bHasCertifiedGeneratedResultShape
+						|| RouteMasks.Num()
+							> GeneratedResultStorageCount)))
 			{
 				OutError = FString::Printf(
 					TEXT("%s Move To Blueprint frame has an incomplete generated async-node residue group."),
