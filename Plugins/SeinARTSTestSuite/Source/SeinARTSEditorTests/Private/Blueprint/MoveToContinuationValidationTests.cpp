@@ -1022,7 +1022,7 @@ TEST(
 		ObservedResultName,
 		MoveResultPinType())));
 
-	UK2Node_AsyncAction* Async = AddValidationAsyncAfter(
+	UK2Node_AsyncAction* Async = AddHeterogeneousAsyncAfter(
 		Fixture,
 		*Fixture.MoveTo->FindPinChecked(
 			GET_MEMBER_NAME_CHECKED(
@@ -1040,7 +1040,7 @@ TEST(
 		GetDefault<UEdGraphSchema_K2>();
 	ASSERT_THAT(IsTrue(Schema->TryCreateConnection(
 		Async->FindPinChecked(GET_MEMBER_NAME_CHECKED(
-			USeinAbilityContinuationValidationAsyncProxy,
+			USeinAbilityContinuationValidationHeterogeneousAsyncProxy,
 			OnWithoutResult)),
 		Setter->FindPinChecked(UEdGraphSchema_K2::PN_Execute))));
 	ASSERT_THAT(IsTrue(Schema->TryCreateConnection(

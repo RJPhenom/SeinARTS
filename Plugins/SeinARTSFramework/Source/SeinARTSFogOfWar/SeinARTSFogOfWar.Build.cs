@@ -4,6 +4,10 @@ public class SeinARTSFogOfWar : ModuleRules
 {
     public SeinARTSFogOfWar(ReadOnlyTargetRules Target) : base(Target)
     {
+        // Canonical-state codecs deliberately keep private helpers per source
+        // file; unity merging would collapse their anonymous namespaces.
+        bUseUnity = false;
+
         // PUBLIC because SeinFogOfWarDefault.h (a public header) inherits
         // ISeinLevelLayerProvider — the include path must propagate to any
         // module that includes fog headers (same rationale as nav's dep).

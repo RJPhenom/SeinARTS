@@ -4,6 +4,10 @@ public class SeinARTSEditor : ModuleRules
 {
     public SeinARTSEditor(ReadOnlyTargetRules Target) : base(Target)
     {
+        // Validators intentionally reuse descriptive file-local metadata
+        // identifiers; keep their anonymous namespaces out of unity merges.
+        bUseUnity = false;
+
         PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
 
         PrivateDependencyModuleNames.AddRange(new string[]

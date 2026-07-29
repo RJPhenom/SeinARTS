@@ -6,6 +6,10 @@ public class SeinARTSFramework : ModuleRules
 {
 	public SeinARTSFramework(ReadOnlyTargetRules Target) : base(Target)
 	{
+		// Bootstrap and game-mode implementations use file-local helpers whose
+		// anonymous namespaces must remain separate translation units.
+		bUseUnity = false;
+
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
 		
 		PublicIncludePaths.AddRange(

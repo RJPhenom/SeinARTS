@@ -4,6 +4,10 @@ public class SeinARTSMovementPlus : ModuleRules
 {
     public SeinARTSMovementPlus(ReadOnlyTargetRules Target) : base(Target)
     {
+        // Vehicle implementations reuse private fixed-point helper names;
+        // unity merging collapses their anonymous namespaces and is invalid.
+        bUseUnity = false;
+
         PublicDependencyModuleNames.AddRange(new string[] {
             "SeinARTSCore",
             "SeinARTSCoreEntity",

@@ -43,7 +43,7 @@ FSeinPlayerID USeinPayerContinuityAuthorityPolicy::ResolveResourcePayer_Implemen
 	return Command.PlayerID;
 }
 
-namespace
+namespace SeinPayerContinuityTestPrivate
 {
 	constexpr int32 StartingBalance = 100;
 	constexpr int32 AbilityCost = 25;
@@ -141,6 +141,8 @@ namespace
 
 namespace UE::SeinARTSTests
 {
+	using namespace ::SeinPayerContinuityTestPrivate;
+
 	TEST(AutoMoveThenPreservesThePreflightPayerThroughChargeAndRefund,
 		"SeinARTS.Sim.Authority.DerivedPayer")
 	{

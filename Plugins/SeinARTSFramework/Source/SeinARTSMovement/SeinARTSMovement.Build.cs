@@ -4,6 +4,10 @@ public class SeinARTSMovement : ModuleRules
 {
     public SeinARTSMovement(ReadOnlyTargetRules Target) : base(Target)
     {
+        // Keep movement codec/provider implementation helpers in distinct
+        // translation units; Unreal unity merging breaks that isolation.
+        bUseUnity = false;
+
         PublicDependencyModuleNames.AddRange(new string[] {
             "GameplayTags",   // FGameplayTag is exposed on the public mover/planner handle headers
             "SeinARTSCoreEntity",
