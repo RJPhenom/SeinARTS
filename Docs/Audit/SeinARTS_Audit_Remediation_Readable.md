@@ -9,27 +9,29 @@ the dense tracking tables with narrative sections and checklists.
 
 The engineering ledger remains the canonical audit trail. This copy reflects its working-tree state
 on July 29, 2026; it is not a replacement for it and its completion counts are not effort-weighted.
+PDF exports are point-in-time review artifacts and are regenerated at campaign closure; this
+Markdown file is the live reader's edition.
 
 ## Executive status
 
-The campaign tracks **61 findings and approved work items**.
+The campaign tracks **65 findings and approved work items**.
 
 - **14 are formally closed:** 13 Verified and 1 Fixed.
-- **3 are In progress.**
+- **6 are In progress.**
 - **2 are Approved for implementation but are not complete.**
-- **26 are Confirmed and awaiting their implementation or verification wave.**
+- **27 are Confirmed and awaiting their implementation or verification wave.**
 - **7 are Queued for phase-local revalidation.**
 - **9 are Gates requiring a product or API decision.**
 - Nothing is currently marked Disproved or Deferred.
 
-That is **14 of 61 rows, or 22.95%, formally closed** under the ledger's strict Definition of
+That is **14 of 65 rows, or 21.54%, formally closed** under the ledger's strict Definition of
 Complete. It is deliberately not an estimate of engineering effort completed: foundational work can
 unlock several rows, while a single acceptance row can require substantial multi-process or PIE
 evidence.
 
 By workstream:
 
-- **Correctness, determinism, and lifecycle:** 27 items; 13 formally closed.
+- **Correctness, determinism, and lifecycle:** 31 items; 13 formally closed.
 - **Performance and memory:** 11 items; none formally closed.
 - **API, modularity, and extensibility:** 14 items; 1 formally closed.
 - **Feature and completeness scope:** 9 items; none formally closed.
@@ -236,6 +238,31 @@ Counts at that checkpoint:
 - **Movement+ extension:** 18 files, 2,361 lines; delta from baseline 0, delta from Phase 1 0; 283
   blank and 828 comment-like.
 
+### Phase 5 - live checkpoint and second adversarial pass
+
+The July 29 Fable re-review inspected the working tree that became `aea047a`, ran an incremental
+editor build, and confirmed every sampled Fixed or Verified row. It also confirmed that implementation
+had advanced far beyond the Phase-4 narrative:
+
+- Canonical state now has a BLAKE3-128 world root, authoritative, continuation, and derived-cache
+  roles, a frozen provider registry and restore DAG, snapshot v13, Wait and MoveTo latent codecs, and
+  Movement, Navigation, and FoW providers wired through snapshot, replay, and peer comparison.
+- The latest broad checkpoint passed Unit 292/292 and Determinism 15/15, but
+  `SeinARTS.Editor.Snapshot.Movement` remains red in four Blueprint MoveTo continuation cases. Gate B
+  and `STATE-01` therefore remain open.
+- Snapshot restore currently accepts serialized pending-command authority claims after structural
+  validation instead of passing them through the trusted ingress stamping contract. This is tracked
+  as `COR-08`.
+- Legacy `ComputeStateHash` still uses process-local `FName` identity. This does not disprove the new
+  canonical root, but it prevents `STATE-02` closure.
+- Movement, Navigation, and FoW are the only separately registered subsystem providers. A complete
+  system-by-system inventory must distinguish component-backed state from private continuation state,
+  derived caches, presentation-only state, and truly stateless systems before adding providers.
+- The test runner rejects an invoked run with no report or no matched tests. Retrospective directory
+  tallies can nevertheless omit aborted attempts; `TEST-01` tracks durable run evidence.
+
+The full second-pass delta is recorded in [fable-findings.md](fable-findings.md).
+
 ## Approved architectural and product decisions
 
 - Effects use one simulation-global deterministic identity namespace.
@@ -274,35 +301,42 @@ Counts at that checkpoint:
 
 - [x] **COR-01 - Verified**
   - **Phase:** 2/4
-  - **Finding:** Multiplayer command ownership, sender-role, match-control, payload, and turn-window
-    validation are incomplete.
+  - **Finding:** Multiplayer command ownership, sender-role, payload, and turn-window validation were
+    incomplete. Match administration applies to `EndMatch`; pause and concede intentionally remain
+    authenticated Self-scope commands.
 - [x] **COR-02 - Verified**
   - **Phase:** 1
   - **Finding:** Effect IDs collide across scope/storage; removal identity is ambiguous.
-- [ ] **STATE-01 - Confirmed**
+- [ ] **STATE-01 - In progress**
   - **Phase:** 5
-  - **Finding:** Snapshot capture/restore is not exact continuation state across all future-affecting
-    systems, including centralized ability active-index lifecycle.
+  - **Finding:** Canonical state, provider roles, snapshot v13, and Wait/MoveTo codecs are implemented,
+    but Blueprint MoveTo continuation is red and the complete system/provider coverage inventory is
+    not closed.
 - [x] **COR-03 - Verified**
   - **Phase:** 1
   - **Finding:** Latent-action iteration can be invalidated by synchronous Blueprint callbacks.
-- [ ] **STATE-02 - Confirmed**
+- [ ] **STATE-02 - In progress**
   - **Phase:** 5
-  - **Finding:** StateHash coverage/canonicalization is incomplete and includes process-local
-    `FName` identity.
+  - **Finding:** Canonical BLAKE3-128 roots and peer comparison are implemented, but legacy
+    `ComputeStateHash` still includes process-local `FName` identity and final fresh-process coverage
+    proof is incomplete.
 - [x] **STATE-03 - Fixed**
   - **Phase:** 3/4
   - **Finding:** Tick-zero bootstrap lacked a canonical completion barrier and replay-compatible
     shared materialization contract; server and client derived GameMode defaults and failure paths
     differently.
+- [ ] **COR-08 - Confirmed**
+  - **Phase:** 5
+  - **Finding:** Snapshot restore re-trusts serialized pending-command authority claims instead of
+    re-deriving player, issuer kind, payer, and tick through the trusted ingress context.
 - [ ] **NAV-01 - Confirmed**
   - **Phase:** 5
   - **Finding:** Initial destinations can be silently moved after preview by partial A*, wall push,
     authority recognition, or endpoint restoration.
-- [ ] **NAV-02 - Confirmed**
+- [ ] **NAV-02 - In progress**
   - **Phase:** 5
-  - **Finding:** Budgeted asynchronous repath results can be overwritten or lost when keyed only by
-    requester.
+  - **Finding:** Request-identity protection is implemented, but the async drain still resets
+    unconsumed results before interval repaths poll, allowing repeated compute-and-discard starvation.
 - [ ] **CACHE-01 - In progress**
   - **Phase:** 1/6
   - **Finding:** Structured-XOR and fingerprint keys can collide; FoW source/blocker
@@ -321,7 +355,9 @@ Counts at that checkpoint:
   - **Finding:** Collision overlap pair identity omits entity generation.
 - [ ] **NAV-03 - Queued**
   - **Phase:** 5
-  - **Finding:** Same-cell vehicle paths can contain no drivable segment and fail incorrectly.
+  - **Finding:** Same-cell routes can contain one waypoint and no typed segment. Shipped movement
+    follows waypoints, so the earlier vehicle failure consequence is unsupported; revalidate the
+    path-data extension contract before changing behavior.
 - [ ] **MOVE-01 - Gate**
   - **Phase:** 7
   - **Finding:** Fixed-wing idle/coast behavior can violate continuous-flight expectations.
@@ -350,8 +386,10 @@ Counts at that checkpoint:
   - **Finding:** Terrain vision scaling adjusts radial and rectangular shapes but omits cone length.
 - [x] **MATH-01 - Verified**
   - **Phase:** 1
-  - **Finding:** Extreme fixed-point construction and arithmetic contain signed-overflow and
-    undefined-behavior edges.
+  - **Finding:** Extreme fixed-point construction and arithmetic contained signed-overflow and
+    undefined-behavior edges. The verified quaternion normalization fix intentionally changes
+    overflow-wrapped behavior exposed by the Blueprint `NormalizeQuaternion` node and remains part of
+    the final PIE A/B.
 - [x] **CFG-01 - Verified**
   - **Phase:** 1
   - **Finding:** Cover's simulation-affecting settings are not yet a stable config-fingerprint
@@ -373,6 +411,18 @@ Counts at that checkpoint:
   - **Phase:** 7
   - **Finding:** Four obsolete root-level assets have broken redirected imports during an
     all-content load.
+- [ ] **CONTENT-03 - Confirmed**
+  - **Phase:** Immediate
+  - **Finding:** `main` still contains seven pre-resave fixed-point assets that load silently zeroed;
+    a mixed stale/resaved fleet can silently desync.
+- [ ] **SER-01 - Confirmed**
+  - **Phase:** Immediate
+  - **Finding:** No focused test pins the native eight-byte `FFixedPoint` serializer, exact raw-bit
+    round trip, and `WithSerializer` trait.
+- [ ] **TEST-01 - Confirmed**
+  - **Phase:** 5/8
+  - **Finding:** Retrospective Automation evidence can omit aborted/no-report attempts and has no
+    durable expected-count floor bound to suite, profile, and commit.
 
 ## Performance and memory checklist
 
@@ -381,8 +431,8 @@ Counts at that checkpoint:
   - **Finding:** Redundant full StateHash walks occur at incompatible cadences.
 - [ ] **PERF-02 - Confirmed**
   - **Phase:** 5/8
-  - **Finding:** A* scratch allocation churn is high; retained worker contexts need an explicit
-    memory cap.
+  - **Finding:** Parallel A* creates and destroys seven-array worker scratch contexts for every
+    batch. A future retained pool needs an explicit cap and must preserve generation-reset semantics.
 - [ ] **PERF-03 - Confirmed**
   - **Phase:** 6
   - **Finding:** FoW changed-source footprint generation is roughly cubic in radius.
@@ -409,8 +459,9 @@ Counts at that checkpoint:
   - **Finding:** High effect stack counts materialize one resolved modifier copy per stack.
 - [ ] **PERF-10 - Confirmed**
   - **Phase:** 5/8
-  - **Finding:** Merely enabling Cover binds the authority resolver and globally forces collision
-    serial, even in worlds with no authoritative cover destination.
+  - **Finding:** Merely enabling Cover binds the authority resolver and serializes NavContainment
+    without an authoritative cover destination. It also disables collision parallelism only in
+    projects that opted into the non-default parallel resolver.
 - [ ] **PERF-11 - Confirmed**
   - **Phase:** 5/8
   - **Finding:** StateHash parallel dispatch is budgeted by storage count, so the default minimum
@@ -480,7 +531,9 @@ Counts at that checkpoint:
   - **Work:** Checkpoint plus command-tail reconnect and exact catch-up.
 - [ ] **FEAT-02 - In progress**
   - **Phase:** 5
-  - **Work:** Replay journaling, checkpoints, seeking, validation, and bounded storage.
+  - **Work:** Replay journaling, checkpoints, seeking, validation, and bounded streaming storage. The
+    current 64 MiB limit aborts and discards the complete buffered recording, while per-turn sizing
+    performs a full candidate encode.
 - [ ] **FEAT-03 - Approved**
   - **Phase:** 5
   - **Work:** Tactical cover matching, stable slot identities, reservations, lifecycle, and shared

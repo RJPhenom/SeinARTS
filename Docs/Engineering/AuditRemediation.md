@@ -188,6 +188,36 @@ are frozen; reduction must preserve the tested seams and behavior.
 | Cover extension | 33 | 4,093 | +10 | -1 | 432 | 1,376 |
 | Movement+ extension | 18 | 2,361 | 0 | 0 | 283 | 828 |
 
+### Phase 5 live checkpoint and second adversarial pass
+
+The 2026-07-29 Fable re-review inspected the working tree that became `aea047a`, ran an
+incremental editor build, and re-grounded the current implementation against this ledger. It
+confirmed every sampled Fixed/Verified row, but also confirmed that implementation had advanced
+well beyond the Phase-4 narrative here:
+
+- Canonical state now has a BLAKE3-128 world root, authoritative/continuation/derived-cache roles,
+  a frozen provider registry and restore DAG, snapshot v13, Wait and MoveTo latent codecs, and
+  Movement, Navigation, and FoW providers wired into snapshot, replay, and peer comparison.
+- The last broad evidence before the checkpoint was Unit 292/292 and Determinism 15/15. The
+  focused `SeinARTS.Editor.Snapshot.Movement` suite is currently red in four Blueprint MoveTo
+  continuation-capture cases, so Gate B and `STATE-01` remain open.
+- Snapshot restore validates pending command shape and enum values but currently re-adopts stored
+  `PlayerID`/`IssuerKind`/payer/tick claims without the trusted live-ingress stamping path. This is
+  tracked as `COR-08`.
+- The legacy 32-bit `ComputeStateHash` path still hashes `FName` identities in component-property
+  and effect/grant class keys. The canonical root is not disproved by this residual, but
+  `STATE-02` cannot close while an advertised determinism path remains process-local.
+- Movement, Navigation, and FoW are the only separately registered subsystem canonical providers.
+  That count alone does not prove missing coverage: component-backed extension state may already
+  be captured by Core, while broadphase/cache state may be deterministically derived. `STATE-01`
+  now explicitly requires a system-by-system coverage inventory before closure.
+- `RunTests.ps1` rejects an invoked run with no `index.json` or zero matched tests. Historical
+  evidence tallies that merely enumerate surviving report directories can still omit aborted
+  attempts; `TEST-01` tracks durable attempted-run accounting and expected-count evidence.
+
+The full second-pass delta and the still-open first-pass corrections are preserved in
+`Docs/Audit/fable-findings.md`.
+
 ## Status vocabulary
 
 - **Queued** — audit finding awaiting phase-local revalidation.
@@ -235,19 +265,20 @@ are frozen; reduction must preserve the tested seams and behavior.
 
 | ID | Finding | Phase | Status |
 |---|---|---:|---|
-| COR-01 | Multiplayer command ownership, sender-role, match-control, payload, and turn-window validation are incomplete. | 2/4 | Verified |
+| COR-01 | Multiplayer command ownership, sender-role, payload, and turn-window validation were incomplete. Match administration applies to `EndMatch`; pause and concede intentionally remain authenticated Self-scope commands. | 2/4 | Verified |
 | COR-02 | Effect IDs collide across scope/storage; removal identity is ambiguous. | 1 | Verified |
-| STATE-01 | Snapshot capture/restore is not exact continuation state across all future-affecting systems, including centralized ability active-index lifecycle. | 5 | Confirmed |
+| STATE-01 | Snapshot capture/restore is not yet exact continuation state across every future-affecting system. Canonical state, provider roles, snapshot v13, and Wait/MoveTo codecs are implemented, but Blueprint MoveTo continuation is red and the complete system/provider coverage inventory is not closed. | 5 | In progress |
 | COR-03 | Latent-action iteration can be invalidated by synchronous Blueprint callbacks. | 1 | Verified |
-| STATE-02 | StateHash coverage/canonicalization is incomplete and includes process-local `FName` identity. | 5 | Confirmed |
+| STATE-02 | Canonical BLAKE3-128 world roots and peer comparison are implemented, but legacy `ComputeStateHash` coverage still includes process-local `FName` identity and final fresh-process/full-coverage proof is incomplete. | 5 | In progress |
 | STATE-03 | Tick-zero bootstrap lacked a canonical completion barrier and replay-compatible shared materialization contract; server/client derived GameMode defaults and failure paths differently. | 3/4 | Fixed |
+| COR-08 | Snapshot restore re-trusts serialized pending-command authority claims instead of re-deriving `PlayerID`, `IssuerKind`, payer, and tick through the trusted ingress authority context. | 5 | Confirmed |
 | NAV-01 | Initial destinations can be silently moved after preview by partial A*, wall push, authority recognition, or endpoint restoration. | 5 | Confirmed |
-| NAV-02 | Budgeted asynchronous repath results can be overwritten/lost when keyed only by requester. | 5 | Confirmed |
+| NAV-02 | Request-identity protection is implemented, but `DrainAsyncPathQueue` still resets all unconsumed results before interval repaths poll; busy scenes can repeatedly compute then discard interval results. | 5 | In progress |
 | CACHE-01 | Structured-XOR/fingerprint keys can collide; FoW source/blocker rotation/invalidation is incomplete. Exact nav/FoW cache identities and equal-cell reset are fixed; broader invalidation remains. | 1/6 | In progress |
 | NET-01 | Failed local submission, map restart, retained hash/turn sets, and pruning lifecycle were incomplete. Readiness, ownership, exact travel binding, failure cleanup, retry, bounds, slot/turn, and reset contracts are fixed; checkpoint catch-up and long-session retention remain. | 1/4/5/8 | In progress |
 | COR-04 | Free-rotation placement validates an incorrect/default yaw. | 1 | Verified |
 | COR-05 | Collision overlap pair identity omits entity generation. | 1 | Verified |
-| NAV-03 | Same-cell vehicle paths can contain no drivable segment and fail incorrectly. | 5 | Queued |
+| NAV-03 | Same-cell routes can contain one waypoint and no typed segment. Shipped movement follows waypoints, so the earlier vehicle failure consequence is unsupported; revalidate the path-data/extension contract before changing behavior. | 5 | Queued |
 | MOVE-01 | Fixed-wing idle/coast behavior can violate continuous-flight expectations. | 7 | Gate |
 | COR-06 | Generic component initialization can run twice. | 1 | Verified |
 | EDIT-01 | Editor-owned rooted resources are not reliably released. | 1 | Verified |
@@ -256,19 +287,22 @@ are frozen; reduction must preserve the tested seams and behavior.
 | FOW-02 | FoW stores one blocker height beside an OR'd layer mask, so overlapping layers incorrectly inherit the tallest blocker. | 6 | Confirmed |
 | FOW-03 | Dynamic FoW blocker height ignores the authored extents `LocalOffset.Z`. | 6 | Confirmed |
 | FOW-04 | Terrain vision scaling adjusts radial/rect shapes but omits cone length. | 6 | Confirmed |
-| MATH-01 | Extreme fixed-point construction/arithmetic contains signed-overflow/undefined-behavior edges. | 1 | Verified |
+| MATH-01 | Extreme fixed-point construction/arithmetic contained signed-overflow/undefined-behavior edges. Verified fixes intentionally change overflow-wrapped quaternion normalization visible through the Blueprint `NormalizeQuaternion` node; include that surface in the final PIE A/B. | 1 | Verified |
 | CFG-01 | Cover's sim-affecting settings are not yet a stable config-fingerprint contributor. | 1 | Verified |
 | BUILD-01 | Shipping compile references editor-only `UTexture2D::MipGenSettings` in FoW rendering. | 1 | Verified |
 | BUILD-02 | Uncooked headless `-game` loads `SW_UnitBanner`, whose generated class depends on editor-only `USeinWidgetBlueprint`; the asset class needs an UncookedOnly/runtime-safe ownership seam. | 7 | Confirmed |
 | CONTENT-01 | Existing Blueprint assets emit tagged-property deserialization errors during headless startup. | 1/7 | Verified |
 | CONTENT-02 | Four obsolete root-level assets have broken redirected imports during an all-content load. | 7 | Confirmed |
+| CONTENT-03 | `main` still contains seven pre-resave `FFixedPoint` assets that load silently zeroed under the native serializer; a mixed stale/resaved fleet can silently desync. | Immediate | Confirmed |
+| SER-01 | No focused regression test pins `FFixedPoint`'s native eight-byte serializer, exact raw-bit round trip, and `WithSerializer` trait. | Immediate | Confirmed |
+| TEST-01 | Retrospective Automation evidence can omit aborted/no-report attempts and has no durable expected-count floor bound to suite/profile/commit. | 5/8 | Confirmed |
 
 ## Performance and memory
 
 | ID | Finding/opportunity | Owning phase | Status |
 |---|---|---:|---|
 | PERF-01 | Redundant full StateHash walks occur at incompatible cadences. | 5/8 | Confirmed |
-| PERF-02 | A* scratch allocation churn is high; retained worker contexts need an explicit memory cap. | 5/8 | Confirmed |
+| PERF-02 | Parallel A* creates and destroys seven-array worker scratch contexts for every batch. A future retained pool can remove churn, but it needs an explicit memory cap and must preserve generation-reset semantics. | 5/8 | Confirmed |
 | PERF-03 | FoW changed-source footprint generation is roughly cubic in radius. | 6 | Confirmed |
 | PERF-04 | Any dynamic FoW blocker change invalidates all sources rather than spatially affected sources. | 6 | Confirmed |
 | PERF-05 | Minimap performs dense point queries, buffer churn, and full texture recreation/upload. | 6 | Confirmed |
@@ -276,7 +310,7 @@ are frozen; reduction must preserve the tested seams and behavior.
 | PERF-07 | Squad, avoidance, and collision scan broad entity sets and allocate avoidable per-tick containers. | 7/8 | Confirmed |
 | PERF-08 | Replay and completed/hash/turn histories can grow without practical bounds. | 5/8 | Confirmed |
 | PERF-09 | High effect stack counts materialize one resolved modifier copy per stack. | 8 | Confirmed |
-| PERF-10 | Merely enabling Cover binds the authority resolver and globally forces collision serial, even in worlds with no authoritative cover destination. | 5/8 | Confirmed |
+| PERF-10 | Merely enabling Cover binds the authority resolver and serializes NavContainment even without an authoritative cover destination. Collision parallelism is also disabled only for projects that opted into the non-default parallel resolver. | 5/8 | Confirmed |
 | PERF-11 | StateHash parallel dispatch is budgeted by storage count, so the default minimum batch normally leaves the expensive entity walk serial. | 5/8 | Confirmed |
 
 ## API, modularity, and extensibility
@@ -303,7 +337,7 @@ are frozen; reduction must preserve the tested seams and behavior.
 | ID | Work | Phase | Status |
 |---|---|---:|---|
 | FEAT-01 | Checkpoint plus command-tail reconnect and exact catch-up. | 5 | Queued |
-| FEAT-02 | Replay journaling, checkpoints, seeking, validation, and bounded storage. | 5 | In progress |
+| FEAT-02 | Replay journaling, checkpoints, seeking, validation, and bounded streaming storage. The current 64 MiB cap aborts and discards the complete buffered recording and per-turn sizing performs a full candidate encode. | 5 | In progress |
 | FEAT-03 | Tactical cover matching, stable slot identities, reservations, lifecycle, and shared preview/commit planning. | 5 | Approved |
 | FEAT-04 | Faster height-aware FoW default plus spatial invalidation and performance/quality A/B. | 6 | Approved |
 | FEAT-05 | Rich targeter/gesture registry and public policy composition. | 7 | Gate |
