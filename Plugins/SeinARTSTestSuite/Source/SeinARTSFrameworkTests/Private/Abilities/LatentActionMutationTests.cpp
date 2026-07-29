@@ -7,6 +7,7 @@
 #include "Data/SeinWorldSnapshot.h"
 #include "Lib/SeinAbilityBPFL.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
+#include "Simulation/SeinTestSnapshotRestore.h"
 #include "Simulation/SeinTestSimContext.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "TestTypes/SeinEffectMutationTestTypes.h"
@@ -262,7 +263,8 @@ namespace UE::SeinARTSTests
 			1,
 			false);
 		ASSERT_THAT(IsTrue(
-			Fixture.World->RestoreSnapshot(Snapshot)));
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*Fixture.World, Snapshot)));
 		ASSERT_THAT(AreEqual(1, OldAction->AbandonCount));
 		ASSERT_THAT(IsNotNull(SpawnedFromAbandon));
 		ASSERT_THAT(IsFalse(bRegistrationAccepted));

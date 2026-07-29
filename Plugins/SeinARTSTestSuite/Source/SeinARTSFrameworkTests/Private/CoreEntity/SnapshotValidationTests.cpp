@@ -14,17 +14,58 @@
 #include "Serialization/ObjectAndNameAsStringProxyArchive.h"
 #include "Serialization/SeinCanonicalStateRegistry.h"
 #include "Serialization/SeinLatentActionCodecRegistry.h"
+#include "Serialization/SeinPoolObjectCodecRegistry.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
+#include "Simulation/SeinTestSnapshotRestore.h"
 #include "Simulation/SeinTestSimContext.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Tags/SeinARTSGameplayTags.h"
 #include "TestTypes/SeinEffectMutationTestTypes.h"
 #include "TestTypes/SeinSnapshotValidationTestTypes.h"
+#include "UObject/StrongObjectPtr.h"
 
 USeinSnapshotPassiveTestAbility::USeinSnapshotPassiveTestAbility()
 {
 	bIsPassive = true;
 }
+
+struct FSeinSnapshotPoolTestAccess
+{
+	static bool RewriteAbilityState(
+		USeinWorldSubsystem& World,
+		FSeinSnapshotPoolInstanceRecord& Record,
+		TFunctionRef<void(USeinAbility&)> Mutator)
+	{
+		FString Error;
+		TStrongObjectPtr<UObject> Scratch(
+			FSeinPoolObjectCodecRegistry::MaterializeObject(
+				World.PoolObjectCodecManifest,
+				Record,
+				ESeinPoolObjectKind::Ability,
+				World,
+				Error));
+		USeinAbility* Ability = Cast<USeinAbility>(Scratch.Get());
+		if (!Ability)
+		{
+			return false;
+		}
+
+		Mutator(*Ability);
+		FSeinSnapshotPoolInstanceRecord Rewritten;
+		if (!FSeinPoolObjectCodecRegistry::CaptureObject(
+				World.PoolObjectCodecManifest,
+				*Ability,
+				ESeinPoolObjectKind::Ability,
+				Record.PoolID,
+				Rewritten,
+				Error))
+		{
+			return false;
+		}
+		Record = MoveTemp(Rewritten);
+		return true;
+	}
+};
 
 namespace
 {
@@ -105,35 +146,6 @@ namespace
 			}
 		}
 	};
-
-	bool RewriteAbilityState(FSeinSnapshotPoolInstanceRecord& Record,
-		TFunctionRef<void(USeinAbility&)> Mutator)
-	{
-		UClass* Class = LoadObject<UClass>(nullptr, *Record.ClassPath);
-		if (!Class || !Class->IsChildOf(USeinAbility::StaticClass())) return false;
-		USeinAbility* Scratch = NewObject<USeinAbility>(
-			GetTransientPackage(), Class, NAME_None, RF_Transient);
-		if (!Scratch) return false;
-
-		TArray<uint8> SourceBytes = Record.StateBytes;
-		FMemoryReader MemoryReader(SourceBytes, /*bIsPersistent=*/true);
-		FObjectAndNameAsStringProxyArchive Reader(
-			MemoryReader, /*bInLoadIfFindFails=*/true);
-		Class->SerializeTaggedProperties(
-			Reader, reinterpret_cast<uint8*>(Scratch), Class, nullptr);
-		if (Reader.IsError() || MemoryReader.Tell() != SourceBytes.Num()) return false;
-
-		Mutator(*Scratch);
-		TArray<uint8> RewrittenBytes;
-		FMemoryWriter MemoryWriter(RewrittenBytes, /*bIsPersistent=*/true);
-		FObjectAndNameAsStringProxyArchive Writer(
-			MemoryWriter, /*bInLoadIfFindFails=*/false);
-		Class->SerializeTaggedProperties(
-			Writer, reinterpret_cast<uint8*>(Scratch), Class, nullptr);
-		if (Writer.IsError()) return false;
-		Record.StateBytes = MoveTemp(RewrittenBytes);
-		return true;
-	}
 
 	struct FAbilityBlobEntry
 	{
@@ -223,8 +235,10 @@ namespace UE::SeinARTSTests
 		auto ExpectRejectedWithoutMutation = [&](FSeinWorldSnapshot& Bad)
 		{
 			Assert.ExpectError(TEXT(
-				"RestoreSnapshot: authoritative sim state failed structural preflight."));
-			ASSERT_THAT(IsFalse(Fixture.World->RestoreSnapshot(Bad)));
+				"failed provider materialization"));
+			ASSERT_THAT(IsFalse(
+				SeinTestSnapshotRestore::RestoreTrusted(
+					*Fixture.World, Bad)));
 			ASSERT_THAT(AreEqual(HashBefore, Fixture.World->ComputeStateHash()));
 			ASSERT_THAT(AreEqual(LiveAbility,
 				Fixture.World->GetAbilityInstance(Fixture.OrdinaryAbilityID)));
@@ -264,8 +278,10 @@ namespace UE::SeinARTSTests
 		auto ExpectRejectedWithoutMutation = [&](FSeinWorldSnapshot& Bad)
 		{
 			Assert.ExpectError(TEXT(
-				"RestoreSnapshot: authoritative sim state failed structural preflight."));
-			ASSERT_THAT(IsFalse(Fixture.World->RestoreSnapshot(Bad)));
+				"failed provider materialization"));
+			ASSERT_THAT(IsFalse(
+				SeinTestSnapshotRestore::RestoreTrusted(
+					*Fixture.World, Bad)));
 			ASSERT_THAT(AreEqual(HashBefore, Fixture.World->ComputeStateHash()));
 		};
 
@@ -302,14 +318,17 @@ namespace UE::SeinARTSTests
 		{
 			Assert.ExpectError(TEXT(
 				"RestoreSnapshot: authoritative sim state failed structural preflight."));
-			ASSERT_THAT(IsFalse(Fixture.World->RestoreSnapshot(Bad)));
+			ASSERT_THAT(IsFalse(
+				SeinTestSnapshotRestore::RestoreTrusted(
+					*Fixture.World, Bad)));
 			ASSERT_THAT(AreEqual(HashBefore, Fixture.World->ComputeStateHash()));
 			ASSERT_THAT(AreEqual(LiveOwner, Fixture.World
 				->GetAbilityInstance(Fixture.OrdinaryAbilityID)->OwnerEntity));
 		};
 
 		FSeinWorldSnapshot WrongOwner = Valid;
-		ASSERT_THAT(IsTrue(RewriteAbilityState(
+		ASSERT_THAT(IsTrue(FSeinSnapshotPoolTestAccess::RewriteAbilityState(
+			*Fixture.World,
 			WrongOwner.AbilityPoolRecords[Fixture.OrdinaryAbilityID],
 			[&](USeinAbility& Ability)
 			{
@@ -355,7 +374,9 @@ namespace UE::SeinARTSTests
 
 		Assert.ExpectError(TEXT(
 			"RestoreSnapshot: authoritative sim state failed structural preflight."));
-		ASSERT_THAT(IsFalse(Fixture.World->RestoreSnapshot(Bad)));
+		ASSERT_THAT(IsFalse(
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*Fixture.World, Bad)));
 		ASSERT_THAT(AreEqual(HashBefore, Fixture.World->ComputeStateHash()));
 	}
 
@@ -383,14 +404,16 @@ namespace UE::SeinARTSTests
 				Assert.ExpectError(TEXT(
 					"RestoreSnapshot: authoritative sim state failed structural preflight."));
 				ASSERT_THAT(IsFalse(
-					Fixture.World->RestoreSnapshot(Bad)));
+					SeinTestSnapshotRestore::RestoreTrusted(
+						*Fixture.World, Bad)));
 				ASSERT_THAT(AreEqual(
 					HashBefore,
 					Fixture.World->ComputeStateHash()));
 			};
 
 		FSeinWorldSnapshot Duplicate = Valid;
-		ASSERT_THAT(IsTrue(RewriteAbilityState(
+		ASSERT_THAT(IsTrue(FSeinSnapshotPoolTestAccess::RewriteAbilityState(
+			*Fixture.World,
 			Duplicate.AbilityPoolRecords[
 				Fixture.OrdinaryAbilityID],
 			[ExistingActivationID](USeinAbility& Ability)
@@ -401,7 +424,8 @@ namespace UE::SeinARTSTests
 		ExpectStructuralRejection(Duplicate);
 
 		FSeinWorldSnapshot ActiveZero = Valid;
-		ASSERT_THAT(IsTrue(RewriteAbilityState(
+		ASSERT_THAT(IsTrue(FSeinSnapshotPoolTestAccess::RewriteAbilityState(
+			*Fixture.World,
 			ActiveZero.AbilityPoolRecords[
 				Fixture.OrdinaryAbilityID],
 			[](USeinAbility& Ability)
@@ -432,7 +456,9 @@ namespace UE::SeinARTSTests
 
 		Assert.ExpectError(TEXT(
 			"RestoreSnapshot: authoritative sim state failed structural preflight."));
-		ASSERT_THAT(IsFalse(Fixture.World->RestoreSnapshot(Bad)));
+		ASSERT_THAT(IsFalse(
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*Fixture.World, Bad)));
 		ASSERT_THAT(AreEqual(HashBefore, Fixture.World->ComputeStateHash()));
 	}
 
@@ -453,7 +479,9 @@ namespace UE::SeinARTSTests
 		{
 			Assert.ExpectError(TEXT(
 				"RestoreSnapshot: authoritative sim state failed structural preflight."));
-			ASSERT_THAT(IsFalse(Fixture.World->RestoreSnapshot(Bad)));
+			ASSERT_THAT(IsFalse(
+				SeinTestSnapshotRestore::RestoreTrusted(
+					*Fixture.World, Bad)));
 			ASSERT_THAT(AreEqual(HashBefore, Fixture.World->ComputeStateHash()));
 			ASSERT_THAT(AreEqual(LiveAbility,
 				Fixture.World->GetAbilityInstance(Fixture.OrdinaryAbilityID)));
@@ -492,7 +520,9 @@ namespace UE::SeinARTSTests
 			USeinSnapshotWithinTestResolver::StaticClass()->ClassWithin));
 		FSeinWorldSnapshot First;
 		Fixture.World->CaptureSnapshot(First);
-		ASSERT_THAT(IsTrue(Fixture.World->RestoreSnapshot(First)));
+		ASSERT_THAT(IsTrue(
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*Fixture.World, First)));
 		Fixture.World->StopSimulation();
 
 		const USeinAbility* RestoredPassive =
@@ -507,7 +537,9 @@ namespace UE::SeinARTSTests
 
 		FSeinWorldSnapshot Second;
 		Fixture.World->CaptureSnapshot(Second);
-		ASSERT_THAT(IsTrue(Fixture.World->RestoreSnapshot(Second)));
+		ASSERT_THAT(IsTrue(
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*Fixture.World, Second)));
 		Fixture.World->StopSimulation();
 	}
 
@@ -531,7 +563,9 @@ namespace UE::SeinARTSTests
 		const int32 ExpectedNextAbilityID = First.AbilityPoolFreeList.Last();
 		const int32 ExpectedNextResolverID = First.ResolverPoolFreeList.Last();
 
-		ASSERT_THAT(IsTrue(Fixture.World->RestoreSnapshot(First)));
+		ASSERT_THAT(IsTrue(
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*Fixture.World, First)));
 
 		int32 ReusedAbilityID = INDEX_NONE;
 		int32 ReusedResolverID = INDEX_NONE;
@@ -556,7 +590,9 @@ namespace UE::SeinARTSTests
 			Second.AbilityPoolFreeList == First.AbilityPoolFreeList));
 		ASSERT_THAT(IsTrue(
 			Second.ResolverPoolFreeList == First.ResolverPoolFreeList));
-		ASSERT_THAT(IsTrue(Fixture.World->RestoreSnapshot(Second)));
+		ASSERT_THAT(IsTrue(
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*Fixture.World, Second)));
 		Fixture.World->StopSimulation();
 	}
 
@@ -653,7 +689,8 @@ namespace UE::SeinARTSTests
 			Fixture.World->ComputeStateHash() == SnapshotHash));
 
 		ASSERT_THAT(IsTrue(
-			Fixture.World->RestoreSnapshot(Snapshot)));
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*Fixture.World, Snapshot)));
 		ASSERT_THAT(AreEqual(
 			SnapshotHash, Fixture.World->ComputeStateHash()));
 		ASSERT_THAT(IsTrue(
@@ -697,6 +734,7 @@ namespace UE::SeinARTSTests
 			Fixture.World->GetAbilityInstance(
 				Fixture.OrdinaryAbilityID);
 		ASSERT_THAT(IsNotNull(OldAbility));
+		ASSERT_THAT(IsTrue(Fixture.World->StartSimulation()));
 		{
 			auto SimScope =
 				FSeinSimContextTestAccess::Enter(*Fixture.World);
@@ -719,7 +757,8 @@ namespace UE::SeinARTSTests
 				->GetActiveActionCount()));
 
 		ASSERT_THAT(IsTrue(
-			Fixture.World->RestoreSnapshot(Snapshot)));
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*Fixture.World, Snapshot)));
 		Fixture.World->StopSimulation();
 		ASSERT_THAT(AreEqual(0, OldTimelineAction->CancelCount));
 		ASSERT_THAT(IsFalse(OldTimelineAction->bCancelled));
@@ -812,7 +851,8 @@ namespace UE::SeinARTSTests
 			HashBefore == Fixture.World->ComputeStateHash()));
 
 		ASSERT_THAT(IsTrue(
-			Fixture.World->RestoreSnapshot(Snapshot)));
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*Fixture.World, Snapshot)));
 		ASSERT_THAT(AreEqual(
 			HashBefore, Fixture.World->ComputeStateHash()));
 		FGuid RootAfter;
@@ -870,7 +910,8 @@ namespace UE::SeinARTSTests
 					Snapshot.LatentActionSequenceDigest,
 					DigestError)));
 		ASSERT_THAT(IsTrue(
-			Fixture.World->RestoreSnapshot(Snapshot)));
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*Fixture.World, Snapshot)));
 		ASSERT_THAT(AreEqual(
 			MAX_int64,
 			Fixture.World->LatentActionManager
@@ -1018,7 +1059,8 @@ namespace UE::SeinARTSTests
 				1,
 				false);
 			ASSERT_THAT(IsFalse(
-				Fixture.World->RestoreSnapshot(Snapshot)));
+				SeinTestSnapshotRestore::RestoreTrusted(
+					*Fixture.World, Snapshot)));
 			ASSERT_THAT(IsTrue(bStageCalled));
 			ASSERT_THAT(IsTrue(bCandidateFound));
 			ASSERT_THAT(IsTrue(bCandidateDetached));

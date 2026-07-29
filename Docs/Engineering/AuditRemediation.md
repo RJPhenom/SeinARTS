@@ -198,12 +198,26 @@ well beyond the Phase-4 narrative here:
 - Canonical state now has a BLAKE3-128 world root, authoritative/continuation/derived-cache roles,
   a frozen provider registry and restore DAG, snapshot v13, Wait and MoveTo latent codecs, and
   Movement, Navigation, and FoW providers wired into snapshot, replay, and peer comparison.
-- The last broad evidence before the checkpoint was Unit 292/292 and Determinism 15/15. The
-  focused `SeinARTS.Editor.Snapshot.Movement` suite is currently red in four Blueprint MoveTo
-  continuation-capture cases, so Gate B and `STATE-01` remain open.
-- Snapshot restore validates pending command shape and enum values but currently re-adopts stored
-  `PlayerID`/`IssuerKind`/payer/tick claims without the trusted live-ingress stamping path. This is
-  tracked as `COR-08`.
+- At the re-audit checkpoint, broad evidence was Unit 292/292 and Determinism 15/15, while the
+  focused `SeinARTS.Editor.Snapshot.Movement` suite was red in four Blueprint MoveTo
+  continuation-capture cases. Those cases are now green 8/8. Gate B and `STATE-01` remain open for
+  the complete continuation fallback and future-affecting system/provider coverage contracts.
+- The re-review identified `COR-08` because snapshot restore structurally validated pending commands
+  before re-adopting their stored authority fields. The implemented remediation does not re-stamp
+  those commands through live ingress. Restore now requires a world-scoped, one-shot
+  trusted-envelope authority, consumes it before parsing or staging, validates the already-canonical
+  command continuations, and preserves their `PlayerID`, `IssuerKind`, payer, tick, payload, and order
+  exactly. This capability is procedural authorization between trusted native modules; it is not
+  cryptographic byte authentication and does not replace the bounded authenticated outer envelope
+  required by a network, campaign, cloud-save, or replay adapter.
+- Final current evidence passes the Framework-profile snapshot-restore authority suite 7/7
+  (`SeinARTS.Unit.Authority.SnapshotRestore-20260729-152203`), final-state Unit 318/318 including
+  45 expected-warning passes (`SeinARTS.Unit-20260729-152336`), Integration 12/12
+  (`SeinARTS.Integration-20260729-152016`), Determinism 16/16
+  (`SeinARTS.Determinism-20260729-152039`), and movement snapshot Editor 8/8
+  (`SeinARTS.Editor.Snapshot.Movement-20260729-152129`). `COR-08` deliberately remains Fixed rather
+  than Verified until the authenticated production-envelope reconnect/catch-up path tracked by
+  `FEAT-01` exists for end-to-end acceptance.
 - The legacy 32-bit `ComputeStateHash` path still hashes `FName` identities in component-property
   and effect/grant class keys. The canonical root is not disproved by this residual, but
   `STATE-02` cannot close while an advertised determinism path remains process-local.
@@ -217,6 +231,16 @@ well beyond the Phase-4 narrative here:
 
 The full second-pass delta and the still-open first-pass corrections are preserved in
 `Docs/Audit/fable-findings.md`.
+
+### Current campaign rollup
+
+- **67 total rows.**
+- **15 formally closed:** 13 Verified and 2 Fixed.
+- **6 In progress, 3 Approved, 26 Confirmed, 7 Queued, and 10 Gate.**
+- Correctness/determinism/lifecycle: 31 rows, 14 closed.
+- Performance/memory: 11 rows, none closed.
+- API/modularity/extensibility: 14 rows, 1 closed.
+- Feature/completeness: 11 rows, none closed.
 
 ## Status vocabulary
 
@@ -260,6 +284,13 @@ The full second-pass delta and the still-open first-pass corrections are preserv
   while authority and turn aggregation remain compatible with future elected-P2P and all-peer
   adapters. Authenticated fail-stop peers are the P2P baseline; Byzantine consensus and anti-DoS are
   outside the framework guarantee.
+- Snapshot adoption is topology-neutral: a trusted native adapter must authenticate and authorize
+  the complete outer envelope before claiming the destination world's one-shot restore capability.
+  The core preserves already-canonical command continuations exactly; it neither infers transport
+  trust nor treats its process-local capability as cryptographic authentication.
+- Reconnect/catch-up and any future host migration transfer coordinator capability, not implicit
+  gameplay-player or match-administrator authority. “Host” names an adapter/session role; the
+  deterministic core remains neutral among dedicated, listen, elected-P2P, and all-peer topologies.
 
 ## Correctness, determinism, and lifecycle
 
@@ -267,11 +298,11 @@ The full second-pass delta and the still-open first-pass corrections are preserv
 |---|---|---:|---|
 | COR-01 | Multiplayer command ownership, sender-role, payload, and turn-window validation were incomplete. Match administration applies to `EndMatch`; pause and concede intentionally remain authenticated Self-scope commands. | 2/4 | Verified |
 | COR-02 | Effect IDs collide across scope/storage; removal identity is ambiguous. | 1 | Verified |
-| STATE-01 | Snapshot capture/restore is not yet exact continuation state across every future-affecting system. Canonical state, provider roles, snapshot v13, and Wait/MoveTo codecs are implemented, but Blueprint MoveTo continuation is red and the complete system/provider coverage inventory is not closed. | 5 | In progress |
+| STATE-01 | Snapshot capture/restore is not yet exact continuation state across every future-affecting system. Canonical state, provider roles, snapshot v13, Wait/MoveTo codecs, and the focused Blueprint MoveTo continuation suite are green, but the complete continuation fallback and system/provider coverage inventory are not closed. | 5 | In progress |
 | COR-03 | Latent-action iteration can be invalidated by synchronous Blueprint callbacks. | 1 | Verified |
 | STATE-02 | Canonical BLAKE3-128 world roots and peer comparison are implemented, but legacy `ComputeStateHash` coverage still includes process-local `FName` identity and final fresh-process/full-coverage proof is incomplete. | 5 | In progress |
 | STATE-03 | Tick-zero bootstrap lacked a canonical completion barrier and replay-compatible shared materialization contract; server/client derived GameMode defaults and failure paths differently. | 3/4 | Fixed |
-| COR-08 | Snapshot restore re-trusts serialized pending-command authority claims instead of re-deriving `PlayerID`, `IssuerKind`, payer, and tick through the trusted ingress authority context. | 5 | Confirmed |
+| COR-08 | Snapshot adoption now requires a world-scoped, one-shot trusted-envelope authority that is consumed before validation/staging. Already-canonical pending commands are structurally validated and preserved exactly, including `PlayerID`, `IssuerKind`, payer, tick, payload, and order; they are not re-stamped through live ingress. The capability is procedural native authorization, not cryptographic byte authentication of the snapshot. | 5 | Fixed |
 | NAV-01 | Initial destinations can be silently moved after preview by partial A*, wall push, authority recognition, or endpoint restoration. | 5 | Confirmed |
 | NAV-02 | Request-identity protection is implemented, but `DrainAsyncPathQueue` still resets all unconsumed results before interval repaths poll; busy scenes can repeatedly compute then discard interval results. | 5 | In progress |
 | CACHE-01 | Structured-XOR/fingerprint keys can collide; FoW source/blocker rotation/invalidation is incomplete. Exact nav/FoW cache identities and equal-cell reset are fixed; broader invalidation remains. | 1/6 | In progress |
@@ -336,7 +367,7 @@ The full second-pass delta and the still-open first-pass corrections are preserv
 
 | ID | Work | Phase | Status |
 |---|---|---:|---|
-| FEAT-01 | Checkpoint plus command-tail reconnect and exact catch-up. | 5 | Queued |
+| FEAT-01 | Authenticated checkpoint plus command-tail reconnect/catch-up: a topology-neutral coordinator selects the exact checkpoint frontier, transfer is bounded, the receiver restores stopped with local gameplay input and checkpoint recapture gated, the canonical tail is installed and caught up, and activation requires tail continuity plus canonical-root agreement. | 5 | Queued |
 | FEAT-02 | Replay journaling, checkpoints, seeking, validation, and bounded streaming storage. The current 64 MiB cap aborts and discards the complete buffered recording and per-turn sizing performs a full candidate encode. | 5 | In progress |
 | FEAT-03 | Tactical cover matching, stable slot identities, reservations, lifecycle, and shared preview/commit planning. | 5 | Approved |
 | FEAT-04 | Faster height-aware FoW default plus spatial invalidation and performance/quality A/B. | 6 | Approved |
@@ -345,6 +376,8 @@ The full second-pass delta and the still-open first-pass corrections are preserv
 | FEAT-07 | Production/voting/reinforcement completeness and stable identities. | 7 | Gate |
 | FEAT-08 | Vehicle typed-path producer/validation and flight/3D behavior, consistent with steering-first and offline-authored curves. | 7 | Gate |
 | FEAT-09 | Adaptive input delay after observability and policy review. | 7/8 | Gate |
+| FEAT-10 | Authenticated host migration as topology-neutral coordinator succession: higher-term election, membership transition, agreed-root checkpoint selection, committed turn/control-ledger transfer, stale-term rejection, local-input gating, and root-gated reactivation. | 5/7 | Gate |
+| FEAT-11 | Co-op campaign persistence with exact same-schema checkpoint continuation and explicit versioned campaign-state migration into a new bootstrap; stable participant identities, host/backend source authentication, identical peer distribution, shared/per-player progression, and UE-native Blueprint/C++ authoring seams. | 5/7 | Approved |
 
 Replay's foundation now uses a bounded v6 executable format owned exclusively by
 `SeinARTSNet`: full recordings start at tick 0, retain every applied assembled turn (including empty
@@ -365,6 +398,8 @@ for checkpoints, seeking, and long-session streaming/retention policy.
 | E | Height-aware FoW quality policy and evidence required to replace the default. |
 | F | Public API clusters: targeters, modifiers, terrain, production, team vision, and movement feel. |
 | G | **Approved 2026-07-22.** Canonical match rules and exact peer receipt consensus; world-lifetime inert facade plus one self-culling transient transaction; immediate Blueprint deterministic-value contributions plus native registered contributors; GameMode remains the Unreal authority shell without duplicated deterministic defaults. |
+| H | **Open.** Authenticated host migration policy: topology-neutral higher-term coordinator election, membership transition, agreed-root checkpoint selection, committed turn/control-ledger transfer, stale-term rejection, local-input gating, root-gated reactivation, split-brain rejection, and failure/rollback guarantees. |
+| I | **Scope approved 2026-07-29; design open.** Co-op campaign persistence and migration are product scope. Decide exact-checkpoint compatibility versus versioned campaign-state migration into a new bootstrap, save ownership and signing, host/backend source authentication, identical peer distribution, cloud-conflict policy, and cross-map bootstrap. Preserve explicit native/Blueprint migration seams, stable participant identities, and shared/per-player progression. |
 
 ## Definition of complete
 

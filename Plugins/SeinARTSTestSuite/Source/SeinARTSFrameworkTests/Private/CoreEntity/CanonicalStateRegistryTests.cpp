@@ -4,6 +4,7 @@
 #include "Data/SeinWorldSnapshot.h"
 #include "Serialization/SeinCanonicalStateRegistry.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
+#include "Simulation/SeinTestSnapshotRestore.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "TestTypes/SeinCommandSchemaTestTypes.h"
 
@@ -833,7 +834,9 @@ namespace UE::SeinARTSTests
 				EAutomationExpectedErrorFlags::Contains,
 				1,
 				false);
-			ASSERT_THAT(IsFalse(World->RestoreSnapshot(Snapshot)));
+			ASSERT_THAT(IsFalse(
+				SeinTestSnapshotRestore::RestoreTrusted(
+					*World, Snapshot)));
 			ASSERT_THAT(IsTrue(bMutationAttempted));
 			ASSERT_THAT(IsTrue(bMutationRejected));
 			ASSERT_THAT(IsTrue(bTargetRemainedValid));

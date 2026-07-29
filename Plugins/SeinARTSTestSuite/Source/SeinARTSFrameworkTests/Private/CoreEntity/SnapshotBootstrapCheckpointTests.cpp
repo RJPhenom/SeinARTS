@@ -7,6 +7,7 @@
 #include "Data/SeinFaction.h"
 #include "Data/SeinWorldSnapshot.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
+#include "Simulation/SeinTestSnapshotRestore.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "TestTypes/SeinCommandSchemaTestTypes.h"
 #include "TestTypes/SeinDeferredDestroyTestTypes.h"
@@ -266,7 +267,8 @@ namespace UE::SeinARTSTests
 			1,
 			false);
 		ASSERT_THAT(IsFalse(
-			Destination->RestoreSnapshot(UnsupportedVersion)));
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*Destination, UnsupportedVersion)));
 		AssertDestinationPristine();
 
 		FSeinWorldSnapshot InvalidPayload = Snapshot;
@@ -283,25 +285,31 @@ namespace UE::SeinARTSTests
 			1,
 			false);
 		ASSERT_THAT(IsFalse(
-			Destination->RestoreSnapshot(InvalidPayload)));
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*Destination, InvalidPayload)));
 		AssertDestinationPristine();
 
 		int32 RestoreNotificationCount = 0;
 		bool bReentrantStartAccepted = true;
 		bool bReentrantRestoreAccepted = true;
 		bool bReentrantCaptureAccepted = true;
+		FString ReentrantRestoreClaimError;
 		Destination->OnRestoreSnapshotPostSim.AddLambda(
 			[Destination, &Snapshot, &RestoreNotificationCount,
 				&bReentrantStartAccepted,
 				&bReentrantRestoreAccepted,
-				&bReentrantCaptureAccepted](
+				&bReentrantCaptureAccepted,
+				&ReentrantRestoreClaimError](
 				const FSeinCameraSnapshotData&)
 			{
 				++RestoreNotificationCount;
 				bReentrantStartAccepted = Destination->StartSimulation();
 				Destination->StopSimulation();
 				bReentrantRestoreAccepted =
-					Destination->RestoreSnapshot(Snapshot);
+					SeinTestSnapshotRestore::RestoreTrusted(
+						*Destination,
+						Snapshot,
+						&ReentrantRestoreClaimError);
 				FSeinWorldSnapshot NestedCapture;
 				Destination->CaptureSnapshot(NestedCapture);
 				bReentrantCaptureAccepted =
@@ -314,7 +322,9 @@ namespace UE::SeinARTSTests
 		TestRunner->AddExpectedError(
 			TEXT("RestoreSnapshot: runtime compatibility mismatch"),
 			EAutomationExpectedErrorFlags::Contains, 1, false);
-		ASSERT_THAT(IsFalse(Destination->RestoreSnapshot(WrongMapSnapshot)));
+		ASSERT_THAT(IsFalse(
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*Destination, WrongMapSnapshot)));
 		ASSERT_THAT(AreEqual(0, RestoreNotificationCount));
 		ASSERT_THAT(AreEqual(0, Destination->GetCurrentTick()));
 		ASSERT_THAT(IsFalse(Destination->IsSimulationRunning()));
@@ -330,16 +340,17 @@ namespace UE::SeinARTSTests
 			TEXT("Simulation stop is unavailable during snapshot restore."),
 			EAutomationExpectedErrorFlags::Exact, 1, false);
 		TestRunner->AddExpectedError(
-			TEXT("RestoreSnapshot: recursive or capture-overlapping restore is not permitted."),
-			EAutomationExpectedErrorFlags::Exact, 1, false);
-		TestRunner->AddExpectedError(
 			TEXT("CaptureSnapshot: recursive or restore-overlapping capture is not permitted."),
 			EAutomationExpectedErrorFlags::Exact, 1, false);
-		ASSERT_THAT(IsTrue(Destination->RestoreSnapshot(Snapshot)));
+		ASSERT_THAT(IsTrue(
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*Destination, Snapshot)));
 		ASSERT_THAT(IsTrue(Destination->IsSimulationRunning()));
 		ASSERT_THAT(IsFalse(bReentrantStartAccepted));
 		ASSERT_THAT(IsFalse(bReentrantRestoreAccepted));
 		ASSERT_THAT(IsFalse(bReentrantCaptureAccepted));
+		ASSERT_THAT(IsTrue(ReentrantRestoreClaimError.Contains(
+			TEXT("Snapshot restore authority is unavailable"))));
 		ASSERT_THAT(AreEqual(
 			static_cast<uint8>(ESeinMatchBootstrapState::Consumed),
 			static_cast<uint8>(Destination->GetMatchBootstrapState())));
@@ -408,11 +419,12 @@ namespace UE::SeinARTSTests
 		bool bNestedCaptureAccepted = true;
 		bool bNestedRestoreAccepted = true;
 		bool bNestedStartAccepted = true;
+		FString NestedRestoreClaimError;
 		const FDelegateHandle Handle =
 			World->OnCaptureSnapshotPostSim.AddLambda(
 				[World, &Baseline, &CallbackCount,
 					&bNestedCaptureAccepted, &bNestedRestoreAccepted,
-					&bNestedStartAccepted](
+					&bNestedStartAccepted, &NestedRestoreClaimError](
 					FSeinCameraSnapshotData&)
 				{
 					++CallbackCount;
@@ -422,15 +434,15 @@ namespace UE::SeinARTSTests
 						Nested.SnapshotVersion
 							== FSeinWorldSnapshot::CurrentVersion;
 					bNestedRestoreAccepted =
-						World->RestoreSnapshot(Baseline);
+						SeinTestSnapshotRestore::RestoreTrusted(
+							*World,
+							Baseline,
+							&NestedRestoreClaimError);
 					bNestedStartAccepted = World->StartSimulation();
 					World->StopSimulation();
 				});
 		TestRunner->AddExpectedError(
 			TEXT("CaptureSnapshot: recursive or restore-overlapping capture is not permitted."),
-			EAutomationExpectedErrorFlags::Exact, 1, false);
-		TestRunner->AddExpectedError(
-			TEXT("RestoreSnapshot: recursive or capture-overlapping restore is not permitted."),
 			EAutomationExpectedErrorFlags::Exact, 1, false);
 		TestRunner->AddExpectedError(
 			TEXT("Simulation start is unavailable during snapshot capture."),
@@ -446,6 +458,8 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsFalse(bNestedCaptureAccepted));
 		ASSERT_THAT(IsFalse(bNestedRestoreAccepted));
 		ASSERT_THAT(IsFalse(bNestedStartAccepted));
+		ASSERT_THAT(IsTrue(NestedRestoreClaimError.Contains(
+			TEXT("Snapshot restore authority is unavailable"))));
 		ASSERT_THAT(AreEqual(
 			FSeinWorldSnapshot::CurrentVersion,
 			Outer.SnapshotVersion));
@@ -475,7 +489,9 @@ namespace UE::SeinARTSTests
 		TestRunner->AddExpectedError(
 			TEXT("RestoreSnapshot: invalid consumed-bootstrap checkpoint envelope."),
 			EAutomationExpectedErrorFlags::Exact, 1, false);
-		ASSERT_THAT(IsFalse(Destination->RestoreSnapshot(Snapshot)));
+		ASSERT_THAT(IsFalse(
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*Destination, Snapshot)));
 		ASSERT_THAT(AreEqual(HashBefore, Destination->ComputeStateHash()));
 		ASSERT_THAT(AreEqual(0, Destination->GetCurrentTick()));
 		ASSERT_THAT(IsFalse(Destination->IsSimulationRunning()));
@@ -559,7 +575,9 @@ namespace UE::SeinARTSTests
 		World->CaptureSnapshot(Refused);
 		ASSERT_THAT(AreEqual(0, Refused.SnapshotVersion));
 
-		ASSERT_THAT(IsTrue(World->RestoreSnapshot(Baseline)));
+		ASSERT_THAT(IsTrue(
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*World, Baseline)));
 		ASSERT_THAT(IsTrue(World->IsEntityAlive(Entity)));
 		DestroyMarker =
 			World->GetComponent<FSeinDeferredDestroyTestComponent>(Entity);

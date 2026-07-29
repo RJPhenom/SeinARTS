@@ -16,6 +16,16 @@
 #include "TestTypes/SeinInitialStateDigestTestTypes.h"
 #include "UObject/StrongObjectPtr.h"
 
+struct FSeinMatchBootstrapPoolTestAccess
+{
+	static void AppendDuplicateAbilityPointer(
+		USeinWorldSubsystem& World,
+		USeinAbility& Ability)
+	{
+		World.AbilityPool.Add(&Ability);
+	}
+};
+
 namespace UE::SeinARTSTests
 {
 	namespace
@@ -1040,12 +1050,21 @@ namespace UE::SeinARTSTests
 		FSeinMatchBootstrapAuthorityHandle Authority;
 		ASSERT_THAT(IsTrue(ClaimTestAuthority(
 			*World, Authority, Error)));
+		int32 OriginalID = INDEX_NONE;
+		int32 DuplicateRegistrationID = INDEX_NONE;
 		const auto AuthorState = [&]()
 		{
 			USeinInitialStateDigestTestAbility* Ability =
 				NewObject<USeinInitialStateDigestTestAbility>(World);
-			World->RegisterAbilityInstance(Ability);
-			World->RegisterAbilityInstance(Ability);
+			OriginalID = World->RegisterAbilityInstance(Ability);
+			DuplicateRegistrationID =
+				World->RegisterAbilityInstance(Ability);
+
+			// Public registration rejects the duplicate early. Seed the
+			// otherwise unreachable corruption directly so the digest retains
+			// its defense-in-depth proof against a malformed live pool.
+			FSeinMatchBootstrapPoolTestAccess::
+				AppendDuplicateAbilityPointer(*World, *Ability);
 		};
 		TestRunner->AddExpectedError(
 			TEXT("Match bootstrap failed closed"),
@@ -1065,6 +1084,8 @@ namespace UE::SeinARTSTests
 			AuthorState,
 			Receipt,
 			Error)));
+		ASSERT_THAT(IsTrue(OriginalID != INDEX_NONE));
+		ASSERT_THAT(AreEqual(INDEX_NONE, DuplicateRegistrationID));
 		ASSERT_THAT(IsTrue(
 			Error.Contains(TEXT("duplicate live UObject pointer"))));
 	}

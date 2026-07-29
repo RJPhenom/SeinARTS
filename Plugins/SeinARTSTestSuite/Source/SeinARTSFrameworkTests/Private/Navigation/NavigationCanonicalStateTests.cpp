@@ -5,6 +5,7 @@
 #include "SeinNavigationSubsystem.h"
 #include "SeinPathTypes.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
+#include "Simulation/SeinTestSnapshotRestore.h"
 #include "Simulation/SeinWorldSubsystem.h"
 
 namespace UE::SeinARTSTests
@@ -162,7 +163,9 @@ namespace UE::SeinARTSTests
 			DestinationUnrealWorld.GetSubsystem<USeinNavigationSubsystem>();
 		ASSERT_THAT(IsNotNull(Destination));
 		ASSERT_THAT(IsNotNull(DestinationNavigation));
-		ASSERT_THAT(IsTrue(Destination->RestoreSnapshot(Snapshot)));
+		ASSERT_THAT(IsTrue(
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*Destination, Snapshot)));
 		ASSERT_THAT(IsTrue(
 			FNavigationCanonicalStateTestAccess::MatchesSeed(
 				*DestinationNavigation)));

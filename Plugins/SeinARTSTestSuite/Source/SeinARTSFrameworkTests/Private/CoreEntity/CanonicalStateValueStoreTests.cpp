@@ -48,7 +48,7 @@ namespace UE::SeinARTSTests
 
 		FInstancedStruct MakeLargeValue(
 			int32 Marker,
-			int32 Utf8PayloadBytes)
+			int32 TargetCanonicalBytes)
 		{
 			FInstancedStruct Value =
 				FInstancedStruct::Make<
@@ -57,20 +57,13 @@ namespace UE::SeinARTSTests
 				Value.GetMutable<
 					FSeinCanonicalStateValueStoreLargeTestPayload>();
 			Payload.Marker = Marker;
-			constexpr int32 Utf8BytesPerCharacter = 3;
-			constexpr int32 MaxChunkUtf8Bytes = 900 * 1024;
-			for (int32 RemainingBytes = Utf8PayloadBytes;
-				RemainingBytes >= Utf8BytesPerCharacter;)
-			{
-				const int32 ChunkBytes = FMath::Min(
-					RemainingBytes, MaxChunkUtf8Bytes);
-				const int32 CharacterCount =
-					ChunkBytes / Utf8BytesPerCharacter;
-				Payload.Chunks.Add(FString::ChrN(
-					CharacterCount, static_cast<TCHAR>(0x0800)));
-				RemainingBytes -=
-					CharacterCount * Utf8BytesPerCharacter;
-			}
+			// Array prefix + Marker consume 8 bytes; each int64 element uses an
+			// 8-byte value inside a 4-byte element frame. This drives the
+			// canonical aggregate bound without conflating it with the
+			// intentionally larger hostile UTF conversion budget.
+			const int32 WordCount = FMath::Max(
+				0, (TargetCanonicalBytes - 8) / 12);
+			Payload.Words.SetNum(WordCount);
 			return Value;
 		}
 
@@ -518,7 +511,7 @@ namespace UE::SeinARTSTests
 			Unchanged
 				.Get<
 					FSeinCanonicalStateValueStoreLargeTestPayload>()
-				.Chunks.IsEmpty()));
+				.Words.IsEmpty()));
 		Unchanged.Reset();
 
 		const FSeinCanonicalStateValueSlotDefinition Additional =
@@ -600,7 +593,7 @@ namespace UE::SeinARTSTests
 			Restored
 				.Get<
 					FSeinCanonicalStateValueStoreLargeTestPayload>()
-				.Chunks.IsEmpty()));
+				.Words.IsEmpty()));
 
 		TArray<FSeinCanonicalStateValueRecord> TooManyRecords;
 		TooManyRecords.SetNum(

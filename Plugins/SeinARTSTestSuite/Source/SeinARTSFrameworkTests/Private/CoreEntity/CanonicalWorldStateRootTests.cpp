@@ -4,6 +4,7 @@
 #include "Data/SeinWorldSnapshot.h"
 #include "Input/SeinCommand.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
+#include "Simulation/SeinTestSnapshotRestore.h"
 #include "Simulation/SeinWorldSubsystem.h"
 
 namespace UE::SeinARTSTests
@@ -188,7 +189,9 @@ namespace UE::SeinARTSTests
 		USeinWorldSubsystem* Destination =
 			DestinationSpawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
 		ASSERT_THAT(IsNotNull(Destination));
-		ASSERT_THAT(IsTrue(Destination->RestoreSnapshot(Snapshot)));
+		ASSERT_THAT(IsTrue(
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*Destination, Snapshot)));
 		ASSERT_THAT(IsTrue(Destination->IsSimulationRunning()));
 
 		FGuid DestinationRoot;

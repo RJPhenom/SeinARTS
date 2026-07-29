@@ -6,6 +6,7 @@
 #include "Data/SeinWorldSnapshot.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
+#include "Simulation/SeinTestSnapshotRestore.h"
 #include "Tags/SeinARTSGameplayTags.h"
 
 namespace
@@ -379,7 +380,9 @@ namespace UE::SeinARTSTests
 
 		Fixture.SetPausedInSim(false);
 		ASSERT_THAT(IsTrue(CapturedHash != Fixture.World->ComputeStateHash()));
-		ASSERT_THAT(IsTrue(Fixture.World->RestoreSnapshot(Captured)));
+		ASSERT_THAT(IsTrue(
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*Fixture.World, Captured)));
 		ASSERT_THAT(IsTrue(Fixture.World->IsSimulationPaused()));
 		ASSERT_THAT(AreEqual(CapturedHash, Fixture.World->ComputeStateHash()));
 		ASSERT_THAT(AreEqual(int64(1),
@@ -408,7 +411,9 @@ namespace UE::SeinARTSTests
 			Fixture.MakeCommand(SeinARTSTags::Command_Type_Ping));
 		ASSERT_THAT(IsTrue(CapturedHash != Fixture.World->ComputeStateHash()));
 
-		ASSERT_THAT(IsTrue(Fixture.World->RestoreSnapshot(Captured)));
+		ASSERT_THAT(IsTrue(
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*Fixture.World, Captured)));
 		FSeinWorldSnapshot Restored;
 		Fixture.World->CaptureSnapshot(Restored);
 		ASSERT_THAT(AreEqual(CapturedHash, Fixture.World->ComputeStateHash()));
@@ -436,14 +441,18 @@ namespace UE::SeinARTSTests
 		FSeinWorldSnapshot PlayingButFrozen = Valid;
 		PlayingButFrozen.MatchState = static_cast<uint8>(ESeinMatchState::Playing);
 		Assert.ExpectError(TEXT("RestoreSnapshot: invalid match/pause state."));
-		ASSERT_THAT(IsFalse(Fixture.World->RestoreSnapshot(PlayingButFrozen)));
+		ASSERT_THAT(IsFalse(
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*Fixture.World, PlayingButFrozen)));
 		ASSERT_THAT(AreEqual(HashBefore, Fixture.World->ComputeStateHash()));
 
 		FSeinWorldSnapshot PausedButAdvancing = Valid;
 		PausedButAdvancing.bSimPaused = false;
 		PausedButAdvancing.bSimPausedHard = false;
 		Assert.ExpectError(TEXT("RestoreSnapshot: invalid match/pause state."));
-		ASSERT_THAT(IsFalse(Fixture.World->RestoreSnapshot(PausedButAdvancing)));
+		ASSERT_THAT(IsFalse(
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*Fixture.World, PausedButAdvancing)));
 		ASSERT_THAT(AreEqual(HashBefore, Fixture.World->ComputeStateHash()));
 	}
 

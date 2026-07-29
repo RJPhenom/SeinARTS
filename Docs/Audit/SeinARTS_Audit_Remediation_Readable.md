@@ -14,27 +14,27 @@ Markdown file is the live reader's edition.
 
 ## Executive status
 
-The campaign tracks **65 findings and approved work items**.
+The campaign tracks **67 findings and approved work items**.
 
-- **14 are formally closed:** 13 Verified and 1 Fixed.
+- **15 are formally closed:** 13 Verified and 2 Fixed.
 - **6 are In progress.**
-- **2 are Approved for implementation but are not complete.**
-- **27 are Confirmed and awaiting their implementation or verification wave.**
+- **3 are Approved for implementation but are not complete.**
+- **26 are Confirmed and awaiting their implementation or verification wave.**
 - **7 are Queued for phase-local revalidation.**
-- **9 are Gates requiring a product or API decision.**
+- **10 are Gates requiring a product or API decision.**
 - Nothing is currently marked Disproved or Deferred.
 
-That is **14 of 65 rows, or 21.54%, formally closed** under the ledger's strict Definition of
+That is **15 of 67 rows, or 22.39%, formally closed** under the ledger's strict Definition of
 Complete. It is deliberately not an estimate of engineering effort completed: foundational work can
 unlock several rows, while a single acceptance row can require substantial multi-process or PIE
 evidence.
 
 By workstream:
 
-- **Correctness, determinism, and lifecycle:** 31 items; 13 formally closed.
+- **Correctness, determinism, and lifecycle:** 31 items; 14 formally closed.
 - **Performance and memory:** 11 items; none formally closed.
 - **API, modularity, and extensibility:** 14 items; 1 formally closed.
-- **Feature and completeness scope:** 9 items; none formally closed.
+- **Feature and completeness scope:** 11 items; none formally closed.
 
 ## How to read the checklists
 
@@ -247,12 +247,25 @@ had advanced far beyond the Phase-4 narrative:
 - Canonical state now has a BLAKE3-128 world root, authoritative, continuation, and derived-cache
   roles, a frozen provider registry and restore DAG, snapshot v13, Wait and MoveTo latent codecs, and
   Movement, Navigation, and FoW providers wired through snapshot, replay, and peer comparison.
-- The latest broad checkpoint passed Unit 292/292 and Determinism 15/15, but
-  `SeinARTS.Editor.Snapshot.Movement` remains red in four Blueprint MoveTo continuation cases. Gate B
-  and `STATE-01` therefore remain open.
-- Snapshot restore currently accepts serialized pending-command authority claims after structural
-  validation instead of passing them through the trusted ingress stamping contract. This is tracked
-  as `COR-08`.
+- At the re-audit checkpoint, Unit passed 292/292 and Determinism 15/15, while
+  `SeinARTS.Editor.Snapshot.Movement` was red in four Blueprint MoveTo continuation cases. Those
+  cases are now green 8/8. Gate B and `STATE-01` remain open for the complete continuation fallback
+  and future-affecting system/provider coverage contracts.
+- The re-review identified `COR-08` because snapshot restore structurally validated pending commands
+  before re-adopting their stored authority fields. The implemented remediation does not re-stamp
+  them through live ingress. Restore now requires a world-scoped, one-shot trusted-envelope authority,
+  consumes it before parsing or staging, validates the already-canonical continuations, and preserves
+  their player, issuer kind, payer, tick, payload, and order exactly. This capability is procedural
+  authorization between trusted native modules, not cryptographic byte authentication; network,
+  campaign, cloud-save, and replay adapters still owe a bounded authenticated outer envelope.
+- Final current evidence passes the Framework-profile snapshot-restore authority suite 7/7
+  (`SeinARTS.Unit.Authority.SnapshotRestore-20260729-152203`), final-state Unit 318/318 including
+  45 expected-warning passes (`SeinARTS.Unit-20260729-152336`), Integration 12/12
+  (`SeinARTS.Integration-20260729-152016`), Determinism 16/16
+  (`SeinARTS.Determinism-20260729-152039`), and movement snapshot Editor 8/8
+  (`SeinARTS.Editor.Snapshot.Movement-20260729-152129`). `COR-08` deliberately remains **Fixed**,
+  not **Verified**, until the authenticated production-envelope reconnect/catch-up path tracked by
+  `FEAT-01` exists for end-to-end acceptance.
 - Legacy `ComputeStateHash` still uses process-local `FName` identity. This does not disprove the new
   canonical root, but it prevents `STATE-02` closure.
 - Movement, Navigation, and FoW are the only separately registered subsystem providers. A complete
@@ -296,6 +309,13 @@ The full second-pass delta is recorded in [fable-findings.md](fable-findings.md)
   while authority and turn aggregation remain compatible with future elected-P2P and all-peer
   adapters. Authenticated fail-stop peers are the P2P baseline; Byzantine consensus and anti-DoS are
   outside the framework guarantee.
+- Snapshot adoption is topology-neutral. A trusted native adapter must authenticate and authorize the
+  complete outer envelope before claiming the destination world's one-shot restore capability. The
+  core preserves already-canonical pending commands exactly; it neither infers transport trust nor
+  treats its process-local capability as cryptographic authentication.
+- Reconnect/catch-up and any future host migration transfer coordinator capability, not implicit
+  gameplay-player or match-administrator authority. “Host” is an adapter/session role; the
+  deterministic core stays neutral among dedicated, listen, elected-P2P, and all-peer topologies.
 
 ## Correctness, determinism, and lifecycle checklist
 
@@ -309,9 +329,9 @@ The full second-pass delta is recorded in [fable-findings.md](fable-findings.md)
   - **Finding:** Effect IDs collide across scope/storage; removal identity is ambiguous.
 - [ ] **STATE-01 - In progress**
   - **Phase:** 5
-  - **Finding:** Canonical state, provider roles, snapshot v13, and Wait/MoveTo codecs are implemented,
-    but Blueprint MoveTo continuation is red and the complete system/provider coverage inventory is
-    not closed.
+  - **Finding:** Canonical state, provider roles, snapshot v13, Wait/MoveTo codecs, and the focused
+    Blueprint MoveTo continuation suite are green, but the complete continuation fallback and
+    system/provider coverage inventory are not closed.
 - [x] **COR-03 - Verified**
   - **Phase:** 1
   - **Finding:** Latent-action iteration can be invalidated by synchronous Blueprint callbacks.
@@ -325,10 +345,13 @@ The full second-pass delta is recorded in [fable-findings.md](fable-findings.md)
   - **Finding:** Tick-zero bootstrap lacked a canonical completion barrier and replay-compatible
     shared materialization contract; server and client derived GameMode defaults and failure paths
     differently.
-- [ ] **COR-08 - Confirmed**
+- [x] **COR-08 - Fixed**
   - **Phase:** 5
-  - **Finding:** Snapshot restore re-trusts serialized pending-command authority claims instead of
-    re-deriving player, issuer kind, payer, and tick through the trusted ingress context.
+  - **Finding:** Snapshot adoption now requires a world-scoped, one-shot trusted-envelope authority
+    consumed before validation and staging. Already-canonical pending commands are structurally
+    validated and preserved exactly, including player, issuer kind, payer, tick, payload, and order;
+    they are not re-stamped through live ingress. This process-local capability is procedural native
+    authorization, not cryptographic authentication of snapshot bytes.
 - [ ] **NAV-01 - Confirmed**
   - **Phase:** 5
   - **Finding:** Initial destinations can be silently moved after preview by partial A*, wall push,
@@ -528,7 +551,10 @@ The full second-pass delta is recorded in [fable-findings.md](fable-findings.md)
 
 - [ ] **FEAT-01 - Queued**
   - **Phase:** 5
-  - **Work:** Checkpoint plus command-tail reconnect and exact catch-up.
+  - **Work:** Authenticated checkpoint plus command-tail reconnect/catch-up. A topology-neutral
+    coordinator selects the exact checkpoint frontier; transfer is bounded; the receiver restores
+    stopped with local gameplay input and checkpoint recapture gated; the canonical tail is installed
+    and caught up; activation requires tail continuity plus canonical-root agreement.
 - [ ] **FEAT-02 - In progress**
   - **Phase:** 5
   - **Work:** Replay journaling, checkpoints, seeking, validation, and bounded streaming storage. The
@@ -557,6 +583,17 @@ The full second-pass delta is recorded in [fable-findings.md](fable-findings.md)
 - [ ] **FEAT-09 - Gate**
   - **Phase:** 7/8
   - **Work:** Adaptive input delay after observability and policy review.
+- [ ] **FEAT-10 - Gate**
+  - **Phase:** 5/7
+  - **Work:** Authenticated host migration as topology-neutral coordinator succession: higher-term
+    election, membership transition, agreed-root checkpoint selection, committed turn/control-ledger
+    transfer, stale-term rejection, local-input gating, and root-gated reactivation.
+- [ ] **FEAT-11 - Approved**
+  - **Phase:** 5/7
+  - **Work:** Co-op campaign persistence with exact same-schema checkpoint continuation and explicit
+    versioned campaign-state migration into a new bootstrap; stable participant identities,
+    host/backend source authentication, identical peer distribution, shared and per-player
+    progression, and UE-native Blueprint/C++ authoring seams.
 
 ### Replay foundation boundary
 
@@ -605,8 +642,24 @@ self-culling transient transaction; immediate Blueprint deterministic-value cont
 registered contributors; GameMode remains the Unreal authority shell without duplicated
 deterministic defaults.
 
-Related approved feature rows do not automatically close Gates C through E. Their full design
-questions remain open wherever the canonical ledger still labels them as gates.
+### Gate H - open
+
+Authenticated host migration policy: topology-neutral higher-term coordinator election, membership
+transition, agreed-root checkpoint selection, committed turn/control-ledger transfer, stale-term
+rejection, local-input gating, root-gated reactivation, split-brain rejection, and failure or rollback
+guarantees.
+
+### Gate I - scope approved July 29, 2026; design open
+
+Co-op campaign persistence and migration are product scope. The design must choose exact-checkpoint
+compatibility versus versioned campaign-state migration into a new bootstrap, save ownership and
+signing, host/backend source authentication, identical peer distribution, cloud-conflict policy, and
+cross-map bootstrap. It must preserve explicit native and Blueprint migration seams, stable
+participant identities, and shared and per-player progression.
+
+Related approved feature rows do not automatically close Gates C through E, Gate H, or the open
+portions of Gate I. Their full design questions remain open wherever the canonical ledger still labels
+them as gates.
 
 ## Definition of complete
 

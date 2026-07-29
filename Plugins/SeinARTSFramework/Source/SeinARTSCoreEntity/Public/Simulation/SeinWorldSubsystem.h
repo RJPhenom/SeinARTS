@@ -20,6 +20,7 @@
 #include "Core/SeinTickPhase.h"
 #include "Simulation/ComponentStorage.h"
 #include "Simulation/SeinMatchBootstrapBarrier.h"
+#include "Simulation/SeinSnapshotRestoreAuthority.h"
 #include "Serialization/SeinCanonicalInitialStateDigest.h"
 #include "Serialization/SeinCanonicalStateRegistry.h"
 #include "Serialization/SeinCanonicalStateValueStore.h"
@@ -647,7 +648,10 @@ public:
 	 *  refuses the first Authorized launch. */
 	bool StartSimulation();
 
-	/** Native topology-adapter and teardown entry point. */
+	/** Native topology-adapter and teardown entry point. A RemainStopped
+	 *  snapshot adoption holds a dormant scheduler reservation for infallible
+	 *  later activation; calling StopSimulation again explicitly abandons that
+	 *  reservation. */
 	void StopSimulation();
 
 	/** Functional all-build gate for direct deterministic-state writes. It
@@ -1061,8 +1065,31 @@ public:
 	//
 	// Used by drop-in/drop-out catch-up (snapshot at tick T → catching peer
 	// rehydrates), save/load, and the future state-dump-on-desync path.
-	// Snapshot is owned by the subsystem; the file/wire serializer wraps it
-	// in `FObjectAndNameAsStringProxyArchive` (replay writer pattern).
+	// Snapshot is owned by the subsystem. The current raw
+	// FObjectAndNameAsStringProxyArchive wrapper is trusted local developer
+	// tooling only; production network, campaign, cloud-save, and replay
+	// adapters require a bounded authenticated outer envelope.
+
+	/**
+	 * Claim the one-shot native capability required to adopt an authoritative
+	 * snapshot. The caller must first authenticate and authorize the complete
+	 * outer envelope according to its own topology/session policy. A live
+	 * same-owner retry reissues the exact capability; a different owner fails
+	 * closed. OutHandle must be invalid and is never mutated on failure. The
+	 * capability is consumed by the next exact restore attempt. This is
+	 * procedural authorization between trusted native modules, not
+	 * cryptographic authentication or proof bound to an artifact digest.
+	 */
+	bool ClaimSnapshotRestoreAuthority(
+		FName StableAuthorityID,
+		const UObject* AuthorityOwner,
+		FSeinSnapshotRestoreAuthorityHandle& OutHandle,
+		FString& OutError);
+
+	/** Explicitly abandon an unused exact restore capability. */
+	bool ReleaseSnapshotRestoreAuthority(
+		FSeinSnapshotRestoreAuthorityHandle&& Authority,
+		FString& OutError);
 
 	/** Capture current sim state into the supplied snapshot. A checkpoint is
 	 *  emitted only after bootstrap authorization has been consumed; refusal
@@ -1073,15 +1100,21 @@ public:
 	 *  only the local camera slot and cannot alter authoritative checkpoint data. */
 	void CaptureSnapshot(struct FSeinWorldSnapshot& OutSnapshot);
 
-	/** Validate and restore a consumed-bootstrap checkpoint. An existing match
-	 *  accepts only its exact receipt/context; a fresh target must still be a
-	 *  pristine Awaiting world. Restore is rejected during any fixed-tick
-	 *  dispatch, including completion callbacks. Fallible assets and storage are
-	 *  staged before authoritative replacement, then the sim is restarted.
+	/** Validate and restore a consumed-bootstrap checkpoint from an envelope
+	 *  already trusted by the exact one-shot native authority. An existing
+	 *  match accepts only its exact receipt/context; a fresh target must still
+	 *  be a pristine Awaiting world. Restore is rejected during any fixed-tick
+	 *  dispatch, including completion callbacks. Fallible assets and storage
+	 *  are staged before authoritative replacement, then the sim is restarted.
 	 *  Validation, staging, and scheduler-reservation failures leave the old sim
-	 *  untouched. After commit, restart is infallible and the restore delegate
-	 *  fires only after the sim is live. */
-	bool RestoreSnapshot(const struct FSeinWorldSnapshot& InSnapshot);
+	 *  untouched. After commit, restart is infallible. Local save/load may apply
+	 *  captured presentation; multiplayer catch-up must preserve the peer's
+	 *  current local state and may remain stopped while its authenticated
+	 *  command tail is installed. */
+	bool RestoreSnapshot(
+		FSeinSnapshotRestoreAuthorityHandle&& Authority,
+		const struct FSeinWorldSnapshot& InSnapshot,
+		const FSeinSnapshotRestoreOptions& Options);
 
 	/** Fired after Core capture with access only to the non-authoritative local
 	 *  camera slot. CoreEntity cannot depend on Framework's camera provider, so
@@ -1090,9 +1123,11 @@ public:
 		FOnCaptureSnapshot, struct FSeinCameraSnapshotData& /*CameraState*/);
 	FOnCaptureSnapshot OnCaptureSnapshotPostSim;
 
-	/** Mirror delegate for restore. Fired AFTER sim state is rehydrated and
-	 *  the actor bridge is reconciled, so Framework's camera-restore path
-	 *  hits a fully-live world. */
+	/** Mirror delegate for restore. Fired only when the caller explicitly
+	 *  chooses RestoreCaptured, after sim state is rehydrated and the actor
+	 *  bridge is reconciled. RemainStopped restores still expose a coherent
+	 *  world, but fixed ticks do not resume until the outer coordinator is
+	 *  ready. */
 	DECLARE_MULTICAST_DELEGATE_OneParam(
 		FOnRestoreSnapshot,
 		const struct FSeinCameraSnapshotData& /*CameraState*/);
@@ -1624,7 +1659,9 @@ public:
 	 *
 	 * The output root is changed only on success. This is intentionally callable
 	 * from Blueprint for diagnostics and scripted PIE verification; transports
-	 * consume the same C++ seam.
+	 * consume the same C++ seam. A coherent RemainStopped adoption with its
+	 * dormant scheduler reservation may compute the pre-activation root; an
+	 * ordinary stopped or explicitly abandoned world may not.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Debug",
 		meta = (DisplayName = "Compute Canonical State Root"))
@@ -1642,6 +1679,8 @@ private:
 	// unreachable saturation/corruption boundaries. No test code ships here.
 	friend struct FSeinWorldSubsystemTestAccess;
 	friend struct FSeinCommandIngressTestAccess;
+	friend struct FSeinSnapshotPoolTestAccess;
+	friend struct FSeinMatchBootstrapPoolTestAccess;
 	friend class USeinReplayReader;
 	friend class USeinAIController;
 	friend class USeinAbility;
@@ -1665,6 +1704,9 @@ private:
 	bool FreezeMatchBootstrapNativeContributions(FString& OutError);
 	bool IsExactMatchBootstrapAuthority(
 		const FSeinMatchBootstrapAuthorityHandle& Authority) const;
+	bool IsExactSnapshotRestoreAuthority(
+		const FSeinSnapshotRestoreAuthorityHandle& Authority) const;
+	void ClearSnapshotRestoreAuthority();
 	void FailMatchBootstrapInternal(const FString& Reason);
 	bool ReserveSimulationScheduler(FString& OutError);
 	void ReleaseSimulationScheduler();
@@ -1918,6 +1960,10 @@ private:
 	FName MatchBootstrapAuthorityID;
 	FGuid MatchBootstrapAuthorityToken;
 	TWeakObjectPtr<const UObject> MatchBootstrapAuthorityOwner;
+	/** Process-local, one-shot envelope-adoption authority. Not canonical state. */
+	FName SnapshotRestoreAuthorityID;
+	FGuid SnapshotRestoreAuthorityToken;
+	TWeakObjectPtr<const UObject> SnapshotRestoreAuthorityOwner;
 	/** Lexical provider capability opened only by an authority-gated Ensure call. */
 	bool bMatchBootstrapMaterializerInvocationActive = false;
 	TArray<FSeinCanonicalInitialStateNativeContribution>

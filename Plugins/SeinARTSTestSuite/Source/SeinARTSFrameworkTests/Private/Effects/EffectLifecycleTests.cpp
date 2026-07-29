@@ -16,6 +16,7 @@
 #include "Settings/PluginSettings.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
+#include "Simulation/SeinTestSnapshotRestore.h"
 #include "Tags/SeinARTSGameplayTags.h"
 #include "TestTypes/SeinEffectMutationTestTypes.h"
 #include "UObject/UnrealType.h"
@@ -472,7 +473,8 @@ namespace UE::SeinARTSTests
 		Assert.ExpectError(FString::Printf(
 			TEXT("RestoreSnapshot: unsupported version 1 (expected %d)."),
 			FSeinWorldSnapshot::CurrentVersion));
-		ASSERT_THAT(IsFalse(World->RestoreSnapshot(Legacy)));
+		ASSERT_THAT(IsFalse(
+			SeinTestSnapshotRestore::RestoreTrusted(*World, Legacy)));
 
 		FSeinWorldSnapshot DuplicateActiveID = Loaded;
 		FSeinPlayerState* DuplicatePlayerState = DuplicateActiveID.PlayerStates.Find(Player);
@@ -482,19 +484,24 @@ namespace UE::SeinARTSTests
 		DuplicatePlayerState->PlayerEffects[0].EffectInstanceID =
 			DuplicatePlayerState->ClassEffects[0].EffectInstanceID;
 		Assert.ExpectError(TEXT("RestoreSnapshot: authoritative sim state failed structural preflight."));
-		ASSERT_THAT(IsFalse(World->RestoreSnapshot(DuplicateActiveID)));
+		ASSERT_THAT(IsFalse(
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*World, DuplicateActiveID)));
 
 		FSeinWorldSnapshot ReusingActiveID = Loaded;
 		ReusingActiveID.NextEffectInstanceID = 4;
 		Assert.ExpectError(TEXT("RestoreSnapshot: next effect ID 4 must exceed max active effect ID 4."));
-		ASSERT_THAT(IsFalse(World->RestoreSnapshot(ReusingActiveID)));
+		ASSERT_THAT(IsFalse(
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*World, ReusingActiveID)));
 
 		World->EnqueueVisualEvent(FSeinVisualEvent());
 		World->GetCollisionSpatialHash().FinishStaticRebuild();
 		ASSERT_THAT(IsTrue(World->HasPendingVisualEvents()));
 		ASSERT_THAT(IsFalse(World->GetCollisionSpatialHash().IsStaticDirty()));
 
-		ASSERT_THAT(IsTrue(World->RestoreSnapshot(Loaded)));
+		ASSERT_THAT(IsTrue(
+			SeinTestSnapshotRestore::RestoreTrusted(*World, Loaded)));
 		ASSERT_THAT(IsFalse(World->HasPendingVisualEvents()));
 		ASSERT_THAT(IsTrue(World->GetCollisionSpatialHash().IsStaticDirty()));
 
@@ -532,7 +539,8 @@ namespace UE::SeinARTSTests
 		Snapshot.NextEffectInstanceID = 1;
 		const int32 HashBeforeRejectedRestore = World->ComputeStateHash();
 		Assert.ExpectError(TEXT("RestoreSnapshot: next effect ID 1 must exceed max active effect ID 1."));
-		ASSERT_THAT(IsFalse(World->RestoreSnapshot(Snapshot)));
+		ASSERT_THAT(IsFalse(
+			SeinTestSnapshotRestore::RestoreTrusted(*World, Snapshot)));
 		ASSERT_THAT(AreEqual(HashBeforeRejectedRestore, World->ComputeStateHash()));
 		World->StopSimulation();
 	}
@@ -559,7 +567,8 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(AreEqual(0,
 			World->GetComponent<FSeinActiveEffectsComponent>(Target)->ActiveEffects.Num()));
 
-		ASSERT_THAT(IsTrue(World->RestoreSnapshot(Snapshot)));
+		ASSERT_THAT(IsTrue(
+			SeinTestSnapshotRestore::RestoreTrusted(*World, Snapshot)));
 		FTSTicker::GetCoreTicker().Tick(World->GetFixedDeltaTimeSeconds());
 		World->StopSimulation();
 		ASSERT_THAT(AreEqual(0,
@@ -1026,7 +1035,8 @@ namespace UE::SeinARTSTests
 			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
 			ASSERT_THAT(IsTrue(World->RemoveEffectByID(EffectID, false)));
 		}
-		ASSERT_THAT(IsTrue(World->RestoreSnapshot(Loaded)));
+		ASSERT_THAT(IsTrue(
+			SeinTestSnapshotRestore::RestoreTrusted(*World, Loaded)));
 		const FSeinActiveEffectsComponent* RestoredEffects =
 			World->GetComponent<FSeinActiveEffectsComponent>(Target);
 		ASSERT_THAT(IsNotNull(RestoredEffects));
@@ -1385,7 +1395,8 @@ namespace UE::SeinARTSTests
 			== Recipient));
 		FSeinWorldSnapshot Snapshot;
 		World->CaptureSnapshot(Snapshot);
-		ASSERT_THAT(IsTrue(World->RestoreSnapshot(Snapshot)));
+		ASSERT_THAT(IsTrue(
+			SeinTestSnapshotRestore::RestoreTrusted(*World, Snapshot)));
 		World->StopSimulation();
 	}
 
@@ -1450,7 +1461,8 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(AreEqual(2, State->ClassEffects[0].CommittedAbilityGrants.Num()));
 		FSeinWorldSnapshot Snapshot;
 		World->CaptureSnapshot(Snapshot);
-		ASSERT_THAT(IsTrue(World->RestoreSnapshot(Snapshot)));
+		ASSERT_THAT(IsTrue(
+			SeinTestSnapshotRestore::RestoreTrusted(*World, Snapshot)));
 		{
 			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
 			ASSERT_THAT(IsTrue(World->RemoveEffectByID(EffectID, false)));
@@ -1682,7 +1694,8 @@ namespace UE::SeinARTSTests
 		auto ExpectRejectedWithoutMutation = [&](FSeinWorldSnapshot& Bad)
 		{
 			Assert.ExpectError(TEXT("RestoreSnapshot: authoritative sim state failed structural preflight."));
-			ASSERT_THAT(IsFalse(World->RestoreSnapshot(Bad)));
+			ASSERT_THAT(IsFalse(
+				SeinTestSnapshotRestore::RestoreTrusted(*World, Bad)));
 			ASSERT_THAT(AreEqual(HashBefore, World->ComputeStateHash()));
 		};
 		FSeinWorldSnapshot BadStack = Valid;

@@ -602,6 +602,7 @@ void USeinWorldSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	MatchBootstrapAuthorityID = NAME_None;
 	MatchBootstrapAuthorityToken.Invalidate();
 	MatchBootstrapAuthorityOwner.Reset();
+	ClearSnapshotRestoreAuthority();
 	bMatchBootstrapMaterializerInvocationActive = false;
 	MatchBootstrapNativeContributors.Reset();
 	MatchBootstrapValueContributions.Reset();
@@ -819,6 +820,7 @@ void USeinWorldSubsystem::Deinitialize()
 	MatchBootstrapAuthorityID = NAME_None;
 	MatchBootstrapAuthorityToken.Invalidate();
 	MatchBootstrapAuthorityOwner.Reset();
+	ClearSnapshotRestoreAuthority();
 	bMatchBootstrapClosedBroadcast = false;
 	ExecutionTopologyManifest.Reset();
 	ExecutionTopologyFailureReason.Reset();
@@ -893,6 +895,7 @@ void USeinWorldSubsystem::ReleaseAllModuleOwnedState()
 	MatchBootstrapAuthorityOwner.Reset();
 	MatchBootstrapAuthorityID = NAME_None;
 	MatchBootstrapAuthorityToken.Invalidate();
+	ClearSnapshotRestoreAuthority();
 	bMatchBootstrapMaterializerInvocationActive = false;
 	MatchBootstrapNativeContributors.Reset();
 	MatchBootstrapValueContributions.Reset();
@@ -2132,7 +2135,21 @@ void USeinWorldSubsystem::StopSimulation()
 			bSnapshotCaptureInProgress ? TEXT("capture") : TEXT("restore"));
 		return;
 	}
-	if (!bIsRunning) return;
+	if (!bIsRunning)
+	{
+		// RemainStopped snapshot adoption reserves a dormant callback so the
+		// coordinator can activate without a fallible scheduler acquisition.
+		// An explicit stop is the abort/release operation for that readiness.
+		if (MatchBootstrapState == ESeinMatchBootstrapState::Consumed
+			&& bSimulationSchedulerReserved)
+		{
+			ReleaseSimulationScheduler();
+			UE_LOG(LogSeinSim, Log,
+				TEXT("Dormant simulation scheduler released at tick %d"),
+				CurrentTick);
+		}
+		return;
+	}
 	bIsRunning = false;
 	ReleaseSimulationScheduler();
 
@@ -2150,13 +2167,14 @@ float USeinWorldSubsystem::GetInterpolationAlpha() const
 
 bool USeinWorldSubsystem::TickSimulation(float DeltaTime)
 {
-	// Authorized is the dormant prepared state: keep the reserved callback
-	// registered until the coordinator commits launch or bootstrap fails.
+	// A scheduler reservation is intentionally persistent while the simulation
+	// is stopped. Authorized bootstrap keeps it dormant until launch; stopped
+	// snapshot adoption keeps it dormant while an outer reconnect/catch-up
+	// workflow installs its command tail and agrees the activation root.
+	// StopSimulation and bootstrap failure explicitly release the reservation.
 	if (!bIsRunning)
 	{
-		return bSimulationSchedulerReserved
-			&& (MatchBootstrapState == ESeinMatchBootstrapState::Authorized
-				|| bSnapshotRestoreInProgress);
+		return bSimulationSchedulerReserved;
 	}
 	TGuardValue<bool> TickDispatchGuard(
 		bSimulationTickDispatchInProgress, true);
@@ -6894,13 +6912,189 @@ namespace
 	}
 }
 
-bool USeinWorldSubsystem::RestoreSnapshot(const FSeinWorldSnapshot& InSnapshot)
+bool USeinWorldSubsystem::ClaimSnapshotRestoreAuthority(
+	FName StableAuthorityID,
+	const UObject* AuthorityOwner,
+	FSeinSnapshotRestoreAuthorityHandle& OutHandle,
+	FString& OutError)
 {
-	if (bSimulationTickDispatchInProgress || SeinIsInSimContext()
-		|| OwnerTransitionDepth != 0)
+	OutError.Reset();
+
+	// Never overwrite a live capability supplied as the output slot. It may
+	// belong to another world, whose outstanding claim would otherwise be
+	// stranded with no handle available to release it.
+	if (OutHandle.IsValid())
+	{
+		OutError =
+			TEXT("Snapshot restore authority output handle must be invalid.");
+		return false;
+	}
+	if (!IsInGameThread())
+	{
+		OutError =
+			TEXT("Snapshot restore authority may be claimed only on the game thread.");
+		return false;
+	}
+	if (bExecutionTopologyTeardown
+		|| bSimulationTickDispatchInProgress || SeinIsInSimContext()
+		|| OwnerTransitionDepth != 0
+		|| bSnapshotCaptureInProgress || bSnapshotRestoreInProgress
+		|| bReadOnlyCallbackInProgress || bObserverCallbackInProgress
+		|| bDestroyNotificationInProgress)
+	{
+		OutError =
+			TEXT("Snapshot restore authority is unavailable during simulation dispatch, callbacks, ownership transitions, capture/restore, or teardown.");
+		return false;
+	}
+
+	// A weak owner must never strand the world behind an orphaned token.
+	if (SnapshotRestoreAuthorityToken.IsValid()
+		&& !SnapshotRestoreAuthorityOwner.IsValid())
+	{
+		ClearSnapshotRestoreAuthority();
+	}
+	if (SnapshotRestoreAuthorityToken.IsValid())
+	{
+		if (StableAuthorityID == SnapshotRestoreAuthorityID
+			&& AuthorityOwner
+			&& SnapshotRestoreAuthorityOwner.Get() == AuthorityOwner)
+		{
+			OutHandle.StableAuthorityID = SnapshotRestoreAuthorityID;
+			OutHandle.Token = SnapshotRestoreAuthorityToken;
+			return true;
+		}
+
+		OutError = FString::Printf(
+			TEXT("Snapshot restore authority is already claimed by '%s'."),
+			*SnapshotRestoreAuthorityID.ToString());
+		return false;
+	}
+	if (StableAuthorityID.IsNone() || !AuthorityOwner)
+	{
+		OutError =
+			TEXT("Snapshot restore authority requires a stable ID and concrete UObject owner.");
+		return false;
+	}
+
+	const UWorld* ThisWorld = GetWorld();
+	const UGameInstance* ThisGameInstance = ThisWorld
+		? ThisWorld->GetGameInstance()
+		: nullptr;
+	const bool bOwnerBelongsToWorld = AuthorityOwner == this
+		|| AuthorityOwner == ThisWorld
+		|| AuthorityOwner == ThisGameInstance
+		|| AuthorityOwner->GetWorld() == ThisWorld
+		|| (ThisGameInstance
+			&& AuthorityOwner->GetTypedOuter<UGameInstance>()
+				== ThisGameInstance);
+	if (!ThisWorld || !bOwnerBelongsToWorld)
+	{
+		OutError =
+			TEXT("Snapshot restore authority owner does not belong to this world or its game instance.");
+		return false;
+	}
+
+	const FGuid Token = FGuid::NewGuid();
+	if (!Token.IsValid())
+	{
+		OutError = TEXT("Snapshot restore authority token allocation failed.");
+		return false;
+	}
+	SnapshotRestoreAuthorityID = StableAuthorityID;
+	SnapshotRestoreAuthorityToken = Token;
+	SnapshotRestoreAuthorityOwner = AuthorityOwner;
+	OutHandle.StableAuthorityID = StableAuthorityID;
+	OutHandle.Token = Token;
+	return true;
+}
+
+bool USeinWorldSubsystem::ReleaseSnapshotRestoreAuthority(
+	FSeinSnapshotRestoreAuthorityHandle&& Authority,
+	FString& OutError)
+{
+	OutError.Reset();
+	if (!IsInGameThread())
+	{
+		OutError =
+			TEXT("Snapshot restore authority may be released only on the game thread.");
+		return false;
+	}
+	if (!IsExactSnapshotRestoreAuthority(Authority))
+	{
+		OutError = TEXT("Snapshot restore authority does not match this world.");
+		return false;
+	}
+	Authority.StableAuthorityID = NAME_None;
+	Authority.Token.Invalidate();
+	ClearSnapshotRestoreAuthority();
+	return true;
+}
+
+bool USeinWorldSubsystem::IsExactSnapshotRestoreAuthority(
+	const FSeinSnapshotRestoreAuthorityHandle& Authority) const
+{
+	return SnapshotRestoreAuthorityToken.IsValid()
+		&& SnapshotRestoreAuthorityOwner.IsValid()
+		&& Authority.Token == SnapshotRestoreAuthorityToken
+		&& Authority.StableAuthorityID == SnapshotRestoreAuthorityID;
+}
+
+void USeinWorldSubsystem::ClearSnapshotRestoreAuthority()
+{
+	SnapshotRestoreAuthorityOwner.Reset();
+	SnapshotRestoreAuthorityID = NAME_None;
+	SnapshotRestoreAuthorityToken.Invalidate();
+}
+
+bool USeinWorldSubsystem::RestoreSnapshot(
+	FSeinSnapshotRestoreAuthorityHandle&& Authority,
+	const FSeinWorldSnapshot& InSnapshot,
+	const FSeinSnapshotRestoreOptions& Options)
+{
+	if (!IsInGameThread())
 	{
 		UE_LOG(LogSeinSim, Error,
-			TEXT("RestoreSnapshot: restore is unavailable during fixed-tick dispatch or an ownership transition."));
+			TEXT("RestoreSnapshot: restore is available only on the game thread."));
+		return false;
+	}
+	if (!IsExactSnapshotRestoreAuthority(Authority))
+	{
+		UE_LOG(LogSeinSim, Error,
+			TEXT("RestoreSnapshot: rejected without this world's exact trusted-envelope authority."));
+		return false;
+	}
+
+	// An authenticated envelope authorizes one attempt only. Consume before
+	// parsing or staging so malformed and lifecycle-invalid inputs cannot be
+	// replayed under a stale authorization.
+	const FName ConsumedRestoreAuthorityID = SnapshotRestoreAuthorityID;
+	Authority.StableAuthorityID = NAME_None;
+	Authority.Token.Invalidate();
+	ClearSnapshotRestoreAuthority();
+	if (Options.LocalStatePolicy !=
+			ESeinSnapshotLocalStateRestorePolicy::RestoreCaptured
+		&& Options.LocalStatePolicy !=
+			ESeinSnapshotLocalStateRestorePolicy::PreserveCurrent)
+	{
+		UE_LOG(LogSeinSim, Error,
+			TEXT("RestoreSnapshot: invalid local-state restore policy."));
+		return false;
+	}
+	if (Options.ResumePolicy != ESeinSnapshotResumePolicy::ResumeImmediately
+		&& Options.ResumePolicy != ESeinSnapshotResumePolicy::RemainStopped)
+	{
+		UE_LOG(LogSeinSim, Error,
+			TEXT("RestoreSnapshot: invalid simulation-resume policy."));
+		return false;
+	}
+	if (bExecutionTopologyTeardown
+		|| bSimulationTickDispatchInProgress || SeinIsInSimContext()
+		|| OwnerTransitionDepth != 0
+		|| bReadOnlyCallbackInProgress || bObserverCallbackInProgress
+		|| bDestroyNotificationInProgress)
+	{
+		UE_LOG(LogSeinSim, Error,
+			TEXT("RestoreSnapshot: restore is unavailable during simulation dispatch, callbacks, ownership transitions, or teardown."));
 		return false;
 	}
 	if (bReplayOwnsExternalCommandIngress)
@@ -7959,7 +8153,15 @@ bool USeinWorldSubsystem::RestoreSnapshot(const FSeinWorldSnapshot& InSnapshot)
 	}
 
 	UE_LOG(LogSeinSim, Log,
-		TEXT("RestoreSnapshot: tick=%d  entities=%d  componentStorages=%d  playerStates=%d  abilityPool=%d  latentActions=%d  resolverPool=%d"),
+		TEXT("RestoreSnapshot: authority=%s  localState=%s  resume=%s  tick=%d  entities=%d  componentStorages=%d  playerStates=%d  abilityPool=%d  latentActions=%d  resolverPool=%d"),
+		*ConsumedRestoreAuthorityID.ToString(),
+		Options.LocalStatePolicy
+				== ESeinSnapshotLocalStateRestorePolicy::RestoreCaptured
+			? TEXT("RestoreCaptured")
+			: TEXT("PreserveCurrent"),
+		Options.ResumePolicy == ESeinSnapshotResumePolicy::ResumeImmediately
+			? TEXT("ResumeImmediately")
+			: TEXT("RemainStopped"),
 		CurrentTick, InSnapshot.Entities.Num(),
 		InSnapshot.ComponentStorageBlobs.Num(), PlayerStates.Num(),
 		AbilityPool.Num(),
@@ -7979,14 +8181,18 @@ bool USeinWorldSubsystem::RestoreSnapshot(const FSeinWorldSnapshot& InSnapshot)
 	}
 
 	// Scheduler registration was reserved before commit, so restart is now an
-	// infallible local state transition. The next core-ticker pass performs the
-	// normal sim-to-render transform sync.
+	// infallible local state transition when requested. Catch-up workflows may
+	// instead retain the dormant reservation while installing their command
+	// tail; StartSimulation resumes it after outer readiness/root agreement.
 	TimeAccumulator = 0.0f;
-	bIsRunning = true;
+	bIsRunning =
+		Options.ResumePolicy == ESeinSnapshotResumePolicy::ResumeImmediately;
 
 	// Let upstream modules consume their own slots (camera, UI). Fired
 	// after the sim is fully live + bridge reconciled, so the restore
 	// handlers can read a coherent world.
+	if (Options.LocalStatePolicy
+		== ESeinSnapshotLocalStateRestorePolicy::RestoreCaptured)
 	{
 		TGuardValue<bool> ReadOnlyGuard(bReadOnlyCallbackInProgress, true);
 		TGuardValue<bool> ObserverGuard(bObserverCallbackInProgress, true);

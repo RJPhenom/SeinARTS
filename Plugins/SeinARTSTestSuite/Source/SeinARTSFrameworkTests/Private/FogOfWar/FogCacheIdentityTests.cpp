@@ -6,6 +6,7 @@
 #include "Default/SeinFogOfWarDefault.h"
 #include "SeinFogOfWarSubsystem.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
+#include "Simulation/SeinTestSnapshotRestore.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "TestTypes/SeinLevelDataTestTypes.h"
 
@@ -411,7 +412,8 @@ namespace UE::SeinARTSTests
 			*DestinationFog);
 
 		ASSERT_THAT(IsTrue(
-			Destination->RestoreSnapshot(Snapshot)));
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*Destination, Snapshot)));
 		ASSERT_THAT(IsTrue(
 			FFogOfWarDefaultTestAccess::MatchesCanonicalRuntime(
 				*DestinationFog, SeenEntity, StaleSource)));

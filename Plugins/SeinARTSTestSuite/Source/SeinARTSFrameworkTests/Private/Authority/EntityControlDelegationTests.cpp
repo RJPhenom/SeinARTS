@@ -6,6 +6,7 @@
 #include "Data/SeinWorldSnapshot.h"
 #include "Lib/SeinEntityControlBPFL.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
+#include "Simulation/SeinTestSnapshotRestore.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Tags/SeinARTSGameplayTags.h"
 
@@ -174,7 +175,8 @@ namespace UE::SeinARTSTests
 		}
 		ASSERT_THAT(IsTrue(World->ComputeStateHash() != CapturedHash));
 
-		ASSERT_THAT(IsTrue(World->RestoreSnapshot(Snapshot)));
+		ASSERT_THAT(IsTrue(
+			SeinTestSnapshotRestore::RestoreTrusted(*World, Snapshot)));
 		ASSERT_THAT(AreEqual(CapturedHash, World->ComputeStateHash()));
 		ASSERT_THAT(IsTrue(USeinEntityControlBPFL::IsEntityControlGrantActiveAtTick(
 			*World, FirstID, 0)));

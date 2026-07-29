@@ -8,9 +8,11 @@
  * world, including the consumed bootstrap identity and faction registry.
  * Restore adopts that continuation directly; it never reruns tick-zero work.
  *
- * The outer snapshot serializes via `FObjectAndNameAsStringProxyArchive`
- * (same as the replay writer). Opaque pool and continuation payloads are
- * produced only by providers frozen into the match state contract.
+ * The local developer `.seinsnapshot` console helper currently serializes the
+ * outer USTRUCT via `FObjectAndNameAsStringProxyArchive`. That raw archive is
+ * trusted-local tooling, not a bounded/authenticated multiplayer, campaign,
+ * cloud-save, or replay-checkpoint envelope. Opaque pool and continuation
+ * payloads are produced only by providers frozen into the match state contract.
  *
  * Design note: this is the SIM-side snapshot. Render-side actor positions,
  * particle effects, audio cues, etc. are NOT captured — they're rebuilt
@@ -361,9 +363,10 @@ struct SEINARTSCOREENTITY_API FSeinSnapshotBootstrapCheckpoint
 };
 
 /**
- * Top-level snapshot blob. Serialized as a USTRUCT via
- * `FObjectAndNameAsStringProxyArchive`. Wire-compatible with disk save files
- * (`.seinsnapshot`) and the future drop-in/drop-out catch-up RPC payload.
+ * Top-level deterministic snapshot body. The local developer `.seinsnapshot`
+ * command serializes this USTRUCT through an unbounded trusted-local archive.
+ * Production disk/cloud persistence and network catch-up require their own
+ * bounded, versioned, authenticated envelope before this body is decoded.
  */
 USTRUCT()
 struct SEINARTSCOREENTITY_API FSeinWorldSnapshot

@@ -1208,8 +1208,10 @@ namespace UE::SeinARTSTests
 		FSeinReplayHeader InvalidSettingsHeader = MakeExecutableHeader(*World);
 		FSeinMatchSlot& InvalidSlot =
 			InvalidSettingsHeader.SettingsSnapshot.Slots.AddDefaulted_GetRef();
-		InvalidSlot.SlotIndex = 1;
-		InvalidSlot.State = static_cast<ESeinSlotState>(MAX_uint8);
+		// Slot zero is wire-valid but rejected by the current match contract.
+		// This keeps the fixture encodable so the reader reaches the intended
+		// semantic-validation and failure-atomicity branch.
+		InvalidSlot.SlotIndex = 0;
 		ASSERT_THAT(IsTrue(SeinCanonicalizeAndDigestMatchSettings(
 			InvalidSettingsHeader.SettingsSnapshot,
 			InvalidSettingsHeader.MatchSettingsDigest,

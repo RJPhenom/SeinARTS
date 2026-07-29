@@ -36,6 +36,10 @@ in either pass. Specifically confirmed in live code on 2026-07-29:
 **Currently red:** `SeinARTS.Editor.Snapshot.Movement` — 4 failures, all in BP MoveTo
 continuation capture. This is the Gate B frontier, not a regression.
 
+**Resolution (2026-07-29):** the focused movement snapshot suite is now green 8/8. This clears the
+four concrete BP MoveTo failures; Gate B remains open for the complete continuation fallback and
+future-affecting system/provider coverage contracts tracked by `STATE-01`.
+
 ---
 
 ## 2. New residuals found in the 2026-07-29 pass (not yet in the ledger)
@@ -52,6 +56,20 @@ verbatim. The restore-side validation (`:7126-7132`) checks the enum value is va
 `MatchAdministrator`/`DeterministicSystem` commands that live ingress would have rejected.
 Contained fix: re-stamp (or at minimum re-authenticate issuer claims against the server-side
 binding) on the restore path, same as the four live ingress paths.
+
+**Resolution (2026-07-29) — reframed and remediated.** The original remediation
+recommendation does not apply to checkpoint adoption: snapshot `PendingCommands` are already
+canonical continuation state, not new live ingress. Re-stamping them would corrupt captured
+`DeterministicSystem`, `MatchAdministrator`, or `Player` issuer provenance, resource-payer
+identity, and scheduled tick, breaking exact continuation and peer agreement. Core now preserves
+pending commands exactly and requires an exact, one-shot, world-scoped trusted-envelope authority
+to adopt a snapshot. The design is topology-neutral: an authenticated coordinator selects the
+checkpoint source and claims the destination world's adoption capability; Core neither reconstructs
+nor assumes a host/server topology.
+
+The capability authorizes adoption procedurally; it does **not** authenticate hostile snapshot
+bytes or make arbitrary storage a trusted source. Production authenticated/bounded envelope
+adapters, plus full checkpoint-and-authenticated-command-tail catch-up/resync, remain **FEAT-01**.
 
 ### 2.2 Ledger wording overclaims admin gating on pause/concede
 
@@ -100,10 +118,13 @@ any tally that walks index files. A silently aborted suite can read as "no failu
 1. **CONTENT-03** — the zeroed-assets-on-main hazard is the only item that can desync (or
    silently mis-run) a real fleet *today*. Add the ledger row; cherry-pick or early-merge the
    seven resaves.
-2. **Gate B frontier** — the 4 red `SeinARTS.Editor.Snapshot.Movement` failures (BP MoveTo
-   continuation capture).
-3. **§2.1 restore re-stamping** — small, contained, closes the last gap in an otherwise
-   verified authority perimeter.
+2. **Gate B frontier (focused failures cleared)** — keep the now-green BP MoveTo coverage pinned,
+   then close the complete continuation fallback and future-affecting system/provider inventory
+   tracked by `STATE-01`.
+3. **§2.1 trusted snapshot boundary (Core complete; FEAT-01 next)** — the one-shot,
+   world-scoped adoption authority now preserves exact canonical continuation provenance. Next,
+   add topology-neutral production authenticated/bounded adapters and coordinator-selected
+   checkpoint-plus-tail catch-up under FEAT-01.
 4. **§2.3 FName hashes** — mechanical once the frozen catalog is the source.
 5. Ledger hygiene: rows/amendments from §2.2, §2.4, §3.5, §3.6.
 

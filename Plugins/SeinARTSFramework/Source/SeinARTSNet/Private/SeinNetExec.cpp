@@ -861,9 +861,9 @@ namespace
 			return;
 		}
 
-		// Serialize via FObjectAndNameAsStringProxyArchive (same primitive the
-		// replay writer uses) so TObjectPtr / FInstancedStruct / soft refs
-		// round-trip cleanly.
+		// Trusted-local developer format only. Production multiplayer,
+		// campaign, cloud-save, and replay checkpoints require the future
+		// bounded/versioned envelope instead of this raw UObject archive.
 		TArray<uint8> Buf;
 		FMemoryWriter MemWriter(Buf, /*bIsPersistent*/ true);
 		FObjectAndNameAsStringProxyArchive Writer(MemWriter, /*bInLoadIfFindFails*/ false);
@@ -913,10 +913,10 @@ namespace
 		// network-layer state doesn't (server has already dispatched turns
 		// 100..N, local sim now wants turn 67 again, those turns never re-fire).
 		//
-		// Multi-peer resync (server captures + chunked snapshot RPC + tail
-		// catch-up to all peers) is the right path for live-session restore;
-		// that's the drop-in/drop-out catch-up RPC infrastructure, not yet
-		// built. Until then, refuse with a clear message.
+		// Live resync instead requires an authenticated coordinator-selected
+		// source, bounded checkpoint transfer, and exact command-tail catch-up
+		// for the affected peer(s) while healthy peers continue. That
+		// drop-in/drop-out infrastructure is not yet built.
 		const ENetMode Mode = World->GetNetMode();
 		if (Mode != NM_Standalone)
 		{
@@ -945,6 +945,9 @@ namespace
 			return;
 		}
 
+		// This archive may allocate and resolve object paths while decoding.
+		// Treat the file as local developer input; never reuse this path for an
+		// untrusted network, campaign import, cloud, or replay artifact.
 		FSeinWorldSnapshot Snap;
 		FSeinWorldSnapshotReferenceGuard SnapGCGuard(Snap);
 		FMemoryReader MemReader(Buf, /*bIsPersistent*/ true);
@@ -962,7 +965,39 @@ namespace
 			Snap.CurrentTick, Snap.SessionSeed, *Snap.MapIdentifier.ToString(),
 			*Snap.CapturedAt.ToString(), Snap.Entities.Num(), Snap.ComponentStorageBlobs.Num());
 
-		const bool bOk = WorldSub->RestoreSnapshot(Snap);
+		UGameInstance* GI = World->GetGameInstance();
+		USeinNetSubsystem* Net = GI
+			? GI->GetSubsystem<USeinNetSubsystem>()
+			: nullptr;
+		if (!Net)
+		{
+			Ar.Log(TEXT("[SeinNet] LoadSnapshot: USeinNetSubsystem missing; no trusted local-load adapter is available."));
+			return;
+		}
+
+		// This standalone console command is an explicit local-operator trust
+		// decision. Multiplayer resync will claim the same Core capability only
+		// after its coordinator/session envelope has been authenticated and
+		// bounded before decoding.
+		FSeinSnapshotRestoreAuthorityHandle RestoreAuthority;
+		FString RestoreAuthorityError;
+		if (!WorldSub->ClaimSnapshotRestoreAuthority(
+				TEXT("SeinARTS.Net.LocalSnapshotLoad"),
+				Net,
+				RestoreAuthority,
+				RestoreAuthorityError))
+		{
+			Ar.Logf(TEXT("[SeinNet] LoadSnapshot: restore authority rejected (%s)."),
+				*RestoreAuthorityError);
+			return;
+		}
+
+		const bool bOk = WorldSub->RestoreSnapshot(
+			MoveTemp(RestoreAuthority),
+			Snap,
+			FSeinSnapshotRestoreOptions(
+				ESeinSnapshotLocalStateRestorePolicy::RestoreCaptured,
+				ESeinSnapshotResumePolicy::ResumeImmediately));
 		Ar.Logf(TEXT("[SeinNet] LoadSnapshot: restore result = %s"), bOk ? TEXT("OK") : TEXT("FAILED"));
 	}
 

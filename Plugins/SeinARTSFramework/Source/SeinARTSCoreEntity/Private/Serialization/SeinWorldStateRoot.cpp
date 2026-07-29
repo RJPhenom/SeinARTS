@@ -387,7 +387,10 @@ bool USeinWorldSubsystem::ComputeCanonicalStateRoot(
 			OutError,
 			TEXT("Canonical world-state capture refused an in-flight simulation, ownership, snapshot, destroy, or pause-control transaction."));
 	}
-	if (!bIsRunning
+	const bool bCanonicalTimelineReady =
+		bIsRunning
+		|| (bSimulationSchedulerReserved && TickerHandle.IsValid());
+	if (!bCanonicalTimelineReady
 		|| MatchBootstrapState != ESeinMatchBootstrapState::Consumed
 		|| !MatchBootstrapReceipt.IsValid()
 		|| !MatchBootstrapAuthorizationContextDigest.IsValid()
@@ -401,7 +404,7 @@ bool USeinWorldSubsystem::ComputeCanonicalStateRoot(
 	{
 		return Fail(
 			OutError,
-			TEXT("Canonical world-state capture requires a running consumed bootstrap with frozen protocol, content, settings, and state contracts."));
+			TEXT("Canonical world-state capture requires an active or dormant-ready consumed bootstrap with frozen protocol, content, settings, and state contracts."));
 	}
 	if (bReplayOwnsExternalCommandIngress)
 	{
@@ -1003,28 +1006,45 @@ bool USeinWorldSubsystem::ComputeCanonicalStateRoot(
 	{
 		return false;
 	}
-	int32 NativeRecordIndex = 0;
+	TArray<const FSeinFrozenCanonicalStateContributor*>
+		NativeLeafContributors;
 	for (const FSeinFrozenCanonicalStateContributor& Contributor :
 		NativeCanonicalStateSchema.GetContributors())
 	{
 		if (Contributor.Descriptor.Role
-			== ESeinCanonicalStateRole::DerivedCache)
+			!= ESeinCanonicalStateRole::DerivedCache)
 		{
-			continue;
+			NativeLeafContributors.Add(&Contributor);
 		}
-		if (!NativeRecords.IsValidIndex(NativeRecordIndex))
+	}
+	NativeLeafContributors.Sort(
+		[](const FSeinFrozenCanonicalStateContributor& A,
+			const FSeinFrozenCanonicalStateContributor& B)
 		{
-			return Fail(
-				OutError,
-				TEXT("Native canonical-state record set is incomplete."));
-		}
+			return FSeinCanonicalStateRegistry::CanonicalKey(
+					A.Descriptor.Key)
+				< FSeinCanonicalStateRegistry::CanonicalKey(
+					B.Descriptor.Key);
+		});
+	if (NativeLeafContributors.Num() != NativeRecords.Num())
+	{
+		return Fail(
+			OutError,
+			TEXT("Native canonical-state record set is incomplete or contains unexpected entries."));
+	}
+	for (int32 NativeRecordIndex = 0;
+		NativeRecordIndex < NativeRecords.Num();
+		++NativeRecordIndex)
+	{
+		const FSeinFrozenCanonicalStateContributor& Contributor =
+			*NativeLeafContributors[NativeRecordIndex];
 		const FSeinCanonicalStateContributorRecord& Record =
-			NativeRecords[NativeRecordIndex++];
+			NativeRecords[NativeRecordIndex];
 		if (Record.Key != Contributor.Descriptor.Key)
 		{
 			return Fail(
 				OutError,
-				TEXT("Native canonical-state records do not match the frozen schema order."));
+				TEXT("Native canonical-state records do not match the frozen canonical key set."));
 		}
 
 		FSeinCanonicalStateRootLeaf& Leaf =
@@ -1046,12 +1066,6 @@ bool USeinWorldSubsystem::ComputeCanonicalStateRoot(
 		{
 			return false;
 		}
-	}
-	if (NativeRecordIndex != NativeRecords.Num())
-	{
-		return Fail(
-			OutError,
-			TEXT("Native canonical-state record set contains unexpected entries."));
 	}
 
 	TArray<FSeinCanonicalStateValueRecord> ValueRecords;

@@ -985,7 +985,8 @@ namespace UE::SeinARTSTests
 
 		// The reflected shape and exact wire are identical. Native-only padding
 		// may affect the local safety charge, never the consensus-facing cost.
-		const FSeinStructWireLimits EncodeLimits{ 64, 4, 128, 64, 8192 };
+		const FSeinStructWireLimits EncodeLimits{
+			64, 4, 128, 64, MAX_int32 };
 		TArray<uint8> PaddedBytes;
 		TArray<uint8> CompactBytes;
 		FString Error;
@@ -1005,7 +1006,16 @@ namespace UE::SeinARTSTests
 			PaddedEncodeCost.NativeAllocationBytes
 				> CompactEncodeCost.NativeAllocationBytes));
 
-		const FSeinStructWireLimits DecodeLimits{ 64, 4, 128, 64, 256 };
+		ASSERT_THAT(IsTrue(
+			CompactEncodeCost.NativeAllocationBytes
+				<= static_cast<uint64>(MAX_int32)));
+		const FSeinStructWireLimits DecodeLimits{
+			64,
+			4,
+			128,
+			64,
+			static_cast<int32>(
+				CompactEncodeCost.NativeAllocationBytes) };
 		FSeinCommandSchemaCompactWireArrayPayload CompactDestination;
 		FSeinWireCost CompactDecodeCost;
 		ASSERT_THAT(IsTrue(FSeinCanonicalStateCodec::DecodeWithCost(

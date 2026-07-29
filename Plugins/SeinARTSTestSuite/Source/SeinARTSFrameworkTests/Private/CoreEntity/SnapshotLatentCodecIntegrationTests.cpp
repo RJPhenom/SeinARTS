@@ -13,6 +13,7 @@
 #include "Serialization/SeinLatentActionCodecRegistry.h"
 #include "Settings/PluginSettings.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
+#include "Simulation/SeinTestSnapshotRestore.h"
 #include "Simulation/SeinTestSimContext.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "TestTypes/SeinSnapshotValidationTestTypes.h"
@@ -478,7 +479,8 @@ namespace UE::SeinARTSTests
 				.GetSubsystem<USeinWorldSubsystem>();
 		ASSERT_THAT(IsNotNull(Destination));
 		ASSERT_THAT(IsTrue(
-			Destination->RestoreSnapshot(Snapshot)));
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*Destination, Snapshot)));
 		ASSERT_THAT(AreEqual(
 			Snapshot.CurrentTick,
 			Destination->GetCurrentTick()));
@@ -492,6 +494,9 @@ namespace UE::SeinARTSTests
 					->GetActiveActions()[0]);
 		ASSERT_THAT(IsNotNull(DestinationWait));
 
+		ASSERT_THAT(IsTrue(
+			SourceFixture.World->StartSimulation()));
+		ASSERT_THAT(IsTrue(Destination->StartSimulation()));
 		FGuid SourceRoot;
 		FGuid DestinationRoot;
 		ASSERT_THAT(IsTrue(ComputeRoot(
@@ -500,9 +505,6 @@ namespace UE::SeinARTSTests
 			*Destination, DestinationRoot)));
 		ASSERT_THAT(IsTrue(SourceRoot == DestinationRoot));
 
-		ASSERT_THAT(IsTrue(
-			SourceFixture.World->StartSimulation()));
-		ASSERT_THAT(IsTrue(Destination->StartSimulation()));
 		const int32 FutureTicks =
 			CompletionTicks - PreCaptureTicks;
 		for (int32 Step = 1; Step <= FutureTicks; ++Step)
@@ -600,7 +602,8 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(NativeProbe->CaptureCalls > 0));
 
 		ASSERT_THAT(IsTrue(
-			Destination->RestoreSnapshot(Snapshot)));
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*Destination, Snapshot)));
 		ASSERT_THAT(AreEqual(1, FirstProbe->StageCalls));
 		ASSERT_THAT(AreEqual(1, FirstProbe->CommitCalls));
 		ASSERT_THAT(AreEqual(
@@ -629,6 +632,9 @@ namespace UE::SeinARTSTests
 			SourceAction->TicksExecuted,
 			DestinationAction->TicksExecuted));
 
+		ASSERT_THAT(IsTrue(
+			SourceFixture.World->StartSimulation()));
+		ASSERT_THAT(IsTrue(Destination->StartSimulation()));
 		FGuid SourceRoot;
 		FGuid DestinationRoot;
 		ASSERT_THAT(IsTrue(ComputeRoot(
@@ -636,9 +642,6 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(ComputeRoot(
 			*Destination, DestinationRoot)));
 		ASSERT_THAT(IsTrue(SourceRoot == DestinationRoot));
-		ASSERT_THAT(IsTrue(
-			SourceFixture.World->StartSimulation()));
-		ASSERT_THAT(IsTrue(Destination->StartSimulation()));
 		TickRunningWorlds(*SourceFixture.World, 1);
 		SourceFixture.World->StopSimulation();
 		Destination->StopSimulation();
@@ -648,11 +651,16 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(AreEqual(
 			SourceAction->TicksExecuted,
 			DestinationAction->TicksExecuted));
+		ASSERT_THAT(IsTrue(
+			SourceFixture.World->StartSimulation()));
+		ASSERT_THAT(IsTrue(Destination->StartSimulation()));
 		ASSERT_THAT(IsTrue(ComputeRoot(
 			*SourceFixture.World, SourceRoot)));
 		ASSERT_THAT(IsTrue(ComputeRoot(
 			*Destination, DestinationRoot)));
 		ASSERT_THAT(IsTrue(SourceRoot == DestinationRoot));
+		SourceFixture.World->StopSimulation();
+		Destination->StopSimulation();
 
 		const TSharedRef<FThirdPartyCodecProbe> ReloadedProbe =
 			MakeShared<FThirdPartyCodecProbe>();

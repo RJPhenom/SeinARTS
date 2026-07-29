@@ -25,6 +25,7 @@
 #include "Serialization/SeinLatentActionCodecRegistry.h"
 #include "SeinMovementSubsystem.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
+#include "Simulation/SeinTestSnapshotRestore.h"
 #include "Simulation/SeinTestSimContext.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Testing/SeinMoveToActionContinuationTestAccess.h"
@@ -640,7 +641,8 @@ namespace UE::SeinARTSTests
 				World = Spawner.GetWorld().GetSubsystem<
 					USeinWorldSubsystem>();
 				if (!World
-					|| !World->RestoreSnapshot(Snapshot))
+					|| !SeinTestSnapshotRestore::RestoreTrusted(
+						*World, Snapshot))
 				{
 					return false;
 				}
@@ -1292,7 +1294,8 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(AreEqual(
 			1, Snapshot.LatentActionRecords.Num()));
 		ASSERT_THAT(IsTrue(
-			Fixture.World->RestoreSnapshot(Snapshot)));
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*Fixture.World, Snapshot)));
 		ASSERT_THAT(IsTrue(
 			FMoveToActionContinuationTestAccess::
 				IsSilentlyDetached(*OldProxy)));
@@ -1602,7 +1605,8 @@ namespace UE::SeinARTSTests
 		Assert.ExpectError(TEXT(
 			"RestoreSnapshot: latent continuation state failed staging"));
 		ASSERT_THAT(IsFalse(
-			Fixture.World->RestoreSnapshot(MixedRoutes)));
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*Fixture.World, MixedRoutes)));
 		ASSERT_THAT(AreEqual(
 			SecondProxy,
 			FMoveToActionContinuationTestAccess::
@@ -1613,7 +1617,8 @@ namespace UE::SeinARTSTests
 				.Get()));
 
 		ASSERT_THAT(IsTrue(
-			Fixture.World->RestoreSnapshot(Snapshot)));
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*Fixture.World, Snapshot)));
 		ASSERT_THAT(IsTrue(
 			FMoveToActionContinuationTestAccess::
 				IsSilentlyDetached(*SecondProxy)));
@@ -1906,8 +1911,8 @@ namespace UE::SeinARTSTests
 			Assert.ExpectError(TEXT(
 				"RestoreSnapshot: latent continuation state failed staging"));
 			ASSERT_THAT(IsFalse(
-				Fixture.World->RestoreSnapshot(
-					Corrupted)));
+				SeinTestSnapshotRestore::RestoreTrusted(
+					*Fixture.World, Corrupted)));
 			ASSERT_THAT(AreEqual(
 				LiveAction,
 				Fixture.Manager->GetActiveActions()[0]

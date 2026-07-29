@@ -6,6 +6,7 @@
 #include "Serialization/SeinMovementStateCoverage.h"
 #include "SeinMovementSubsystem.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
+#include "Simulation/SeinTestSnapshotRestore.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "TestTypes/SeinMoveToLifecycleTestTypes.h"
 #include "Testing/SeinMovementCanonicalStateTestAccess.h"
@@ -203,7 +204,9 @@ TEST(MovementReflectedStateRoundTripsTransactionally,
 			GetSubsystem<USeinMovementSubsystem>();
 	ASSERT_THAT(IsNotNull(Destination));
 	ASSERT_THAT(IsNotNull(DestinationMovement));
-	ASSERT_THAT(IsTrue(Destination->RestoreSnapshot(Snapshot)));
+	ASSERT_THAT(IsTrue(
+		SeinTestSnapshotRestore::RestoreTrusted(
+			*Destination, Snapshot)));
 
 	USeinMoveToLifecycleTestMovement* Restored =
 		Cast<USeinMoveToLifecycleTestMovement>(
@@ -229,7 +232,8 @@ TEST(MovementReflectedStateRoundTripsTransactionally,
 		TEXT("Contributor record leaf digest is invalid"),
 		EAutomationExpectedErrorFlags::Contains, 1, false);
 	ASSERT_THAT(IsFalse(
-		Destination->RestoreSnapshot(Corrupted)));
+		SeinTestSnapshotRestore::RestoreTrusted(
+			*Destination, Corrupted)));
 	Restored = Cast<USeinMoveToLifecycleTestMovement>(
 		DestinationMovement->FindMovementInstance(
 			Source.Entities[0]));
@@ -250,7 +254,8 @@ TEST(MovementReflectedStateRoundTripsTransactionally,
 		TEXT("Exact movement policy class"),
 		EAutomationExpectedErrorFlags::Contains, 1, false);
 	ASSERT_THAT(IsFalse(
-		Destination->RestoreSnapshot(MissingClass)));
+		SeinTestSnapshotRestore::RestoreTrusted(
+			*Destination, MissingClass)));
 	Restored = Cast<USeinMoveToLifecycleTestMovement>(
 		DestinationMovement->FindMovementInstance(
 			Source.Entities[0]));

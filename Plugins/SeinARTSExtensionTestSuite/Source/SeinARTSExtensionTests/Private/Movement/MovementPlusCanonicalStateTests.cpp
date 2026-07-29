@@ -13,6 +13,7 @@
 #include "Serialization/SeinMovementStateCoverage.h"
 #include "SeinMovementSubsystem.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
+#include "Simulation/SeinTestSnapshotRestore.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "UObject/UnrealType.h"
 
@@ -197,7 +198,8 @@ TEST(MovementPlusReflectedStateRoundTripsAndContinues,
 	ASSERT_THAT(IsNotNull(Destination));
 	ASSERT_THAT(IsNotNull(DestinationMovement));
 	ASSERT_THAT(IsTrue(
-		Destination->RestoreSnapshot(Snapshot)));
+		SeinTestSnapshotRestore::RestoreTrusted(
+			*Destination, Snapshot)));
 
 	const FName PropertyNames[] = {
 		TEXT("CurrentSteer"),

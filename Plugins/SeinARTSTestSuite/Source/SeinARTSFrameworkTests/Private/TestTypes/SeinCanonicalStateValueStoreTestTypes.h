@@ -33,5 +33,5 @@ struct FSeinCanonicalStateValueStoreLargeTestPayload
 	int32 Marker = 0;
 
 	UPROPERTY()
-	TArray<FString> Chunks;
+	TArray<int64> Words;
 };
