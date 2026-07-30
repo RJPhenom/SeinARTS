@@ -989,6 +989,9 @@ namespace UE::SeinARTSTests
 			ESeinCanonicalStateRole::Authoritative;
 		Descriptor.PayloadStruct =
 			FSeinWaitActionCanonicalState::StaticStruct();
+		// Subsystem-owned test fixture: no test system claims it, so it must
+		// declare external ownership to pass the orphan bootstrap gate.
+		Descriptor.bExternallyOwned = true;
 
 		FSeinCanonicalStateContributorOps Ops;
 		Ops.Capture = [](

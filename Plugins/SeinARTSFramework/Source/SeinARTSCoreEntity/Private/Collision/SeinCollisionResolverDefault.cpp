@@ -12,6 +12,7 @@
  */
 
 #include "Collision/SeinCollisionResolverDefault.h"
+#include "Serialization/SeinCanonicalInitialStateDigest.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Collision/SeinCollisionSpatialHash.h"
 #include "Components/SeinExtentsHelpers.h"
@@ -183,4 +184,73 @@ void USeinCollisionResolverDefault::ResolvePass(USeinWorldSubsystem& World, cons
 			}
 		}
 	});
+}
+
+namespace
+{
+	const UClass* FindNearestNativeCollisionClass(const UClass* Class)
+	{
+		while (Class && !Class->HasAnyClassFlags(CLASS_Native))
+		{
+			Class = Class->GetSuperClass();
+		}
+		return Class;
+	}
+}
+
+bool USeinCollisionResolverDefault::ComputeStateCoverageClaim(
+	FSeinCollisionResolverStateCoverageClaim& OutClaim,
+	FString& OutError) const
+{
+	const UClass* NativeClass =
+		FindNearestNativeCollisionClass(GetClass());
+	if (NativeClass != USeinCollisionResolverDefault::StaticClass())
+	{
+		OutClaim = {};
+		OutError = FString::Printf(
+			TEXT("Native collision-resolver subclass '%s' must explicitly claim exact mutable-state coverage."),
+			*GetClass()->GetPathName());
+		return false;
+	}
+	return ComputeDefaultResolverStateCoverageClaim(OutClaim, OutError);
+}
+
+bool USeinCollisionResolverDefault::ComputeDefaultResolverStateCoverageClaim(
+	FSeinCollisionResolverStateCoverageClaim& OutClaim,
+	FString& OutError) const
+{
+	OutClaim = {};
+	OutError.Reset();
+	OutClaim.StableImplementationId =
+		TEXT("seinarts.collision.resolver.default");
+	OutClaim.BehaviorRevision = 1;
+	OutClaim.CoverageRevision = 1;
+	OutClaim.StateCoverage =
+		ESeinCollisionResolverStateCoverage::Stateless;
+	return true;
+}
+
+bool USeinCollisionResolverDefault::ComputeResolutionConfigDigest(
+	FGuid& OutDigest,
+	FString& OutError) const
+{
+	OutDigest.Invalidate();
+	OutError.Reset();
+	const UClass* NativeClass =
+		FindNearestNativeCollisionClass(GetClass());
+	if (NativeClass != USeinCollisionResolverDefault::StaticClass())
+	{
+		OutError = FString::Printf(
+			TEXT("Native collision-resolver subclass '%s' must override ComputeResolutionConfigDigest to cover its own resolution tuning."),
+			*GetClass()->GetPathName());
+		return false;
+	}
+	FSeinCanonicalDigestWriter Writer(
+		TEXT("SeinARTS.Collision.Default.ResolutionConfig"), 1);
+	if (!Writer.WriteString(GetClass()->GetPathName()))
+	{
+		OutError = Writer.GetError();
+		return false;
+	}
+	return Writer.Finalize(OutDigest, OutError);
 }

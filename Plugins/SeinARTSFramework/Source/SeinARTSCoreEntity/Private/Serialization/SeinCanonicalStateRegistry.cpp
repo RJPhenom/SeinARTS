@@ -19,7 +19,10 @@ DEFINE_LOG_CATEGORY_STATIC(LogSeinCanonicalState, Log, All);
 
 namespace
 {
-	constexpr uint32 ContractFormatVersion = 1;
+	// v2: descriptor identities carry the ownership frame
+	// ("externally-owned"/"system-claimed"), which changes every contributor
+	// digest — pre-v2 checkpoints/replays refuse to restore by design.
+	constexpr uint32 ContractFormatVersion = 2;
 	constexpr int32 MaxNativeCheckpointBytes = 64 * 1024 * 1024;
 
 	bool IsProviderInvocationActive()
@@ -566,6 +569,11 @@ namespace
 		{
 			AppendFramed(OutCanonical, Dependency);
 		}
+		AppendFramed(
+			OutCanonical,
+			Descriptor.bExternallyOwned
+				? TEXT("externally-owned")
+				: TEXT("system-claimed"));
 		OutDigest = DigestUtf8(OutCanonical);
 		return OutDigest.IsValid();
 	}

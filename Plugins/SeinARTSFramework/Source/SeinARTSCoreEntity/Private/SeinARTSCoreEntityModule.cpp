@@ -34,6 +34,7 @@
 #include "Simulation/SeinCanonicalStateRecipe.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Serialization/SeinCanonicalStateCodec.h"
+#include "Serialization/SeinCollisionCanonicalStateProvider.h"
 #include "Subsystems/SeinFactionService.h"
 #include "Tags/SeinARTSGameplayTags.h"
 
@@ -514,6 +515,17 @@ void FSeinARTSCoreEntity::StartupModule()
 			*WaitCodecError);
 	}
 
+	CollisionCanonicalStateHandle.Reset();
+	FString CollisionStateError;
+	CollisionCanonicalStateHandle =
+		SeinRegisterCollisionCanonicalStateProvider(CollisionStateError);
+	if (!CollisionCanonicalStateHandle.IsValid())
+	{
+		UE_LOG(LogSeinSim, Error,
+			TEXT("Canonical-state contributor 'seinarts.collision/resolver-binding' failed to register: %s"),
+			*CollisionStateError);
+	}
+
 	bConfiguredCanonicalStateRecipesReady = false;
 	ReleaseConfiguredCanonicalStateRecipes(
 		ConfiguredCanonicalStateRecipeHandles);
@@ -655,6 +667,7 @@ void FSeinARTSCoreEntity::ShutdownModule()
 {
 	PoolObjectCodecHandles.Reset();
 	WaitActionCodecHandle.Reset();
+	CollisionCanonicalStateHandle.Reset();
 	bConfiguredCanonicalStateRecipesReady = false;
 	ReleaseConfiguredCanonicalStateRecipes(
 		ConfiguredCanonicalStateRecipeHandles);

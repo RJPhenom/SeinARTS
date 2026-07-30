@@ -132,6 +132,9 @@ private:
 	FString StateBindingFailureReason;
 	FString FrozenStateBindingFrame;
 	FGuid FrozenStaticEnvironmentDigest;
+	/** Implementation mutation counter latched at freeze; per-tick recapture
+	 *  fail-stops on drift. Local tamper-evidence only — never peer-compared. */
+	uint64 FrozenStaticEnvironmentGeneration = 0;
 
 	/** Adopt the unified level-data substrate's baked grid into the nav when
 	 *  initial level-data preparation completes. Idempotent. */

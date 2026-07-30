@@ -21,6 +21,7 @@
 
 class USeinCoverSystem;
 class USeinWorldSubsystem;
+struct FSeinCoverCanonicalStateProvider;
 
 UCLASS()
 class SEINARTSCOVER_API USeinCoverSubsystem : public UWorldSubsystem
@@ -51,8 +52,32 @@ public:
 	static USeinCoverSystem* GetCoverSystemForWorld(const UObject* WorldContextObject);
 
 private:
+	friend struct FSeinCoverCanonicalStateProvider;
+
 	UPROPERTY(Transient)
 	TObjectPtr<USeinCoverSystem> CoverSystem;
+
+	/** Exact cover implementation/state-coverage identity frozen into the
+	 *  match StateContract. The frame latches on the bootstrap commit and is
+	 *  re-captured on every per-tick binding revalidation; any drift
+	 *  fail-stops the world. */
+	bool bStateBindingFrozen = false;
+	FString StateBindingFailureReason;
+	FString FrozenStateBindingFrame;
+
+	/** Provider-only exact implementation/state-coverage contract freeze.
+	 *  Validates the active implementation's ComputeStateCoverageClaim
+	 *  fail-closed and frames it (with a stable explicit "disabled" frame when
+	 *  no cover implementation is live). A provisional restore declaration
+	 *  never persists the candidate. */
+	bool FreezeCanonicalStateBinding(
+		bool bCommit,
+		FString& OutFrame,
+		FString& OutError);
+
+	/** Permanently fail subsequent binding capture after an unguarded drift. */
+	void InvalidateCanonicalStateBinding(const FString& Reason);
+	void InvalidateCommittedCanonicalStateBinding(const FString& Reason);
 
 	/** Bind to USeinWorldSubsystem's lifecycle and restore delegates. Initialize
 	 *  declares the Core world dependency; OnWorldBeginPlay remains a defensive

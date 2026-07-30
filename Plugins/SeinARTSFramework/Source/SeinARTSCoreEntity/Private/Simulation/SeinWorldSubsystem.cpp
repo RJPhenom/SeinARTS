@@ -10756,6 +10756,7 @@ bool USeinWorldSubsystem::TryBuildExecutionTopologyCandidate(
 		}
 		AvailableCanonicalStateContributors.Add(CanonicalKey);
 	}
+	TSet<FString> SystemClaimedContributors;
 	for (const FRegisteredSystem& Registered : Systems)
 	{
 		if (Registered.Descriptor.StateCoverage
@@ -10766,15 +10767,43 @@ bool USeinWorldSubsystem::TryBuildExecutionTopologyCandidate(
 		for (FName RequiredKey :
 			Registered.Descriptor.RequiredCanonicalStateContributorKeys)
 		{
-			if (!AvailableCanonicalStateContributors.Contains(
-					RequiredKey.ToString()))
+			// FName round-trips resurrect the first-created casing in the
+			// process, so re-lowercase before comparing against canonical
+			// (always-lowercase) contributor keys — otherwise an unrelated
+			// mixed-case FName created earlier makes this check load-order
+			// dependent.
+			const FString ClaimedKey = RequiredKey.ToString().ToLower();
+			if (!AvailableCanonicalStateContributors.Contains(ClaimedKey))
 			{
 				OutError = FString::Printf(
 					TEXT("Simulation system '%s' requires missing canonical-state contributor '%s'."),
 					*Registered.CanonicalStableID,
-					*RequiredKey.ToString());
+					*ClaimedKey);
 				return false;
 			}
+			SystemClaimedContributors.Add(ClaimedKey);
+		}
+	}
+	// Reverse direction: captured state with no declared owner is a bootstrap
+	// error, not a silent accident. A frozen contributor must either be named
+	// by a registered system's coverage claim or explicitly declare that a
+	// non-system deterministic service owns its lifecycle.
+	for (const FSeinFrozenCanonicalStateContributor& Contributor :
+		NativeCanonicalStateSchema.GetContributors())
+	{
+		if (Contributor.Descriptor.bExternallyOwned)
+		{
+			continue;
+		}
+		const FString CanonicalKey =
+			FSeinCanonicalStateRegistry::CanonicalKey(
+				Contributor.Descriptor.Key);
+		if (!SystemClaimedContributors.Contains(CanonicalKey))
+		{
+			OutError = FString::Printf(
+				TEXT("Canonical-state contributor '%s' is claimed by no registered simulation system and is not marked externally owned."),
+				*CanonicalKey);
+			return false;
 		}
 	}
 

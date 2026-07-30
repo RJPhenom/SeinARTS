@@ -10,6 +10,7 @@
 
 #include "CoreMinimal.h"
 #include "Modules/ModuleManager.h"
+#include "Serialization/SeinCanonicalStateRegistry.h"
 #include "Serialization/SeinSimulationContentRegistry.h"
 #include "Serialization/SeinPoolObjectCodecRegistry.h"
 #include "Settings/SeinConfigFingerprintRegistry.h"
@@ -31,4 +32,5 @@ private:
 	FSeinConfigFingerprintRegistrationHandle ConfigFingerprintRegistrationHandle;
 	FSeinSimulationContentRegistrationHandle SimulationContentRegistrationHandle;
 	FSeinPoolObjectCodecRegistrationHandle PoolObjectCodecHandle;
+	FSeinCanonicalStateRegistrationHandle CanonicalStateRegistrationHandle;
 };

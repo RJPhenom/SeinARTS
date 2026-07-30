@@ -58,6 +58,7 @@ void USeinNavigationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	StateBindingFailureReason.Reset();
 	FrozenStateBindingFrame.Reset();
 	FrozenStaticEnvironmentDigest.Invalidate();
+	FrozenStaticEnvironmentGeneration = 0;
 
 	// Resolve the configured nav class (WYSIWYG). None/empty => navigation is intentionally OFF
 	// (Navigation stays null — every Move order fails and the nav wall-barrier is disabled). A
@@ -242,6 +243,7 @@ void USeinNavigationSubsystem::ReleaseModuleOwnedStateForModuleUnload()
 	StateBindingFailureReason.Reset();
 	FrozenStateBindingFrame.Reset();
 	FrozenStaticEnvironmentDigest.Invalidate();
+	FrozenStaticEnvironmentGeneration = 0;
 }
 
 void USeinNavigationSubsystem::OnWorldBeginPlay(UWorld& InWorld)
@@ -631,6 +633,10 @@ bool USeinNavigationSubsystem::FreezeCanonicalStateBinding(
 			StaticDigest.ToString(EGuidFormats::Digits));
 	}
 
+	const uint64 CurrentGeneration =
+		bNavigationConfigured && Navigation
+			? Navigation->GetStaticEnvironmentGeneration()
+			: 0;
 	if (bStateBindingFrozen
 		&& (FrozenStateBindingFrame != CandidateFrame
 			|| FrozenStaticEnvironmentDigest != StaticDigest))
@@ -640,12 +646,25 @@ bool USeinNavigationSubsystem::FreezeCanonicalStateBinding(
 		OutError = StateBindingFailureReason;
 		return false;
 	}
+	// Generation drift catches an in-place topology write that a cached
+	// content digest cannot see. Local-only: the counter never enters the
+	// peer-compared frame, so identical bakes re-adopted a different number
+	// of times still agree across peers.
+	if (bStateBindingFrozen
+		&& FrozenStaticEnvironmentGeneration != CurrentGeneration)
+	{
+		InvalidateCommittedCanonicalStateBinding(
+			TEXT("Navigation static topology mutated in place after the match StateContract froze."));
+		OutError = StateBindingFailureReason;
+		return false;
+	}
 
 	if (bCommit)
 	{
 		bStateBindingFrozen = true;
 		FrozenStateBindingFrame = CandidateFrame;
 		FrozenStaticEnvironmentDigest = StaticDigest;
+		FrozenStaticEnvironmentGeneration = CurrentGeneration;
 	}
 	OutFrame = MoveTemp(CandidateFrame);
 	OutStaticDigest = StaticDigest;
@@ -693,6 +712,10 @@ void USeinNavigationSubsystem::CommitCanonicalStateBinding(
 	bStateBindingFrozen = true;
 	FrozenStateBindingFrame = Frame;
 	FrozenStaticEnvironmentDigest = StaticDigest;
+	FrozenStaticEnvironmentGeneration =
+		bNavigationConfigured && Navigation
+			? Navigation->GetStaticEnvironmentGeneration()
+			: 0;
 }
 
 bool USeinNavigationSubsystem::ValidateCommittedCanonicalStateBinding()

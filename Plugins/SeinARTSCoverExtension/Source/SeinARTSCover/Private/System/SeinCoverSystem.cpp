@@ -86,6 +86,17 @@ void USeinCoverSystem::RebuildProviderRegistry(
 	}
 }
 
+bool USeinCoverSystem::ComputeStateCoverageClaim(
+	FSeinCoverStateCoverageClaim& OutClaim,
+	FString& OutError) const
+{
+	OutClaim = {};
+	OutError = FString::Printf(
+		TEXT("Cover implementation '%s' does not explicitly claim exact mutable-state coverage."),
+		*GetClass()->GetPathName());
+	return false;
+}
+
 TArray<FSeinCoverContext> USeinCoverSystem::QueryCoverAt(FFixedVector /*WorldPoint*/,
 	FSeinPlayerID /*Observer*/) const
 {

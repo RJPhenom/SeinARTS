@@ -549,6 +549,7 @@ USeinNavigationAStar::LoadFromSubstrateImpl(
 	CellHeight = MoveTemp(NewCellHeight);
 	CellTerrainType = MoveTemp(NewCellTerrainType);
 	StaticGridDigest = NewStaticGridDigest;
+	++StaticGridGeneration;
 
 	// Derived field — pure function of CellCost; recomputed on every grid load.
 	RebuildWallDistanceField();

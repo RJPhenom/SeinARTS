@@ -473,6 +473,10 @@ SeinRegisterFogOfWarCanonicalStateProvider(FString& OutError)
 	Descriptor.Limits.MaxRecursionDepth = 32;
 	Descriptor.Limits.MaxEncodedBytes = 40 * 1024 * 1024;
 	Descriptor.Limits.MaxAggregateElements = 40 * 1024 * 1024;
+	// The FoW subsystem owns this contributor's lifecycle: the stamp system
+	// that names it registers only in FoW-enabled worlds, and a FoW-disabled
+	// world must still bootstrap with the contributor present.
+	Descriptor.bExternallyOwned = true;
 
 	FSeinCanonicalStateContributorOps Ops;
 	Ops.PrepareWorldBinding =

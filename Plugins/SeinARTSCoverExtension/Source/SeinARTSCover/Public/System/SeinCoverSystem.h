@@ -15,7 +15,7 @@
  *          rest of the framework.
  *
  *          Decoupling contract:
- *          - The preview subsystem, BPFL, and per-entity cover state system
+ *          - The preview subsystem, BPFL, and cover-aware dispatch resolvers
  *            call into this class's virtual surface only.
  *          - Concrete subclasses own their own provider index storage.
  *          - Provider data lives on entities (FSeinCoverComponent); the
@@ -31,10 +31,49 @@
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
 #include "GameplayTagContainer.h"
+#include "Serialization/SeinCanonicalStateRegistry.h"
 #include "Types/SeinCoverTypes.h"
 #include "SeinCoverSystem.generated.h"
 
 class USeinWorldSubsystem;
+
+/** How a cover implementation accounts for state beyond the derived provider
+ * registry the subsystem rebuilds from authoritative entities. */
+enum class ESeinCoverStateCoverage : uint8
+{
+	/** No explicit claim. Always rejected before tick zero. */
+	Unspecified,
+
+	/** The implementation retains no other future-affecting mutable state. */
+	Stateless,
+
+	/**
+	 * Opaque mutable state is restored by the named authoritative canonical
+	 * contributors. Their exact presence is verified in the world's frozen
+	 * schema before the cover binding can freeze.
+	 */
+	CanonicalStateContributors,
+};
+
+/**
+ * Explicit exact-state claim made by one concrete cover implementation.
+ *
+ * The base provider registry mirror is rebuilt from authoritative entities on
+ * restore (RebuildProviderRegistry), so a cover implementation may participate
+ * only when it explicitly declares whether every OTHER future-affecting value
+ * is absent or restored by exact canonical contributors. Immutable per-class
+ * tuning belongs to the class identity in the world-binding frame, not this
+ * list.
+ */
+struct SEINARTSCOVER_API FSeinCoverStateCoverageClaim
+{
+	FString StableImplementationId;
+	uint32 BehaviorRevision = 0;
+	uint32 CoverageRevision = 0;
+	ESeinCoverStateCoverage StateCoverage =
+		ESeinCoverStateCoverage::Unspecified;
+	TArray<FSeinCanonicalStateKey> RequiredCanonicalStateContributors;
+};
 
 UCLASS(Abstract, BlueprintType, meta = (DisplayName = "Sein Cover System"))
 class SEINARTSCOVER_API USeinCoverSystem : public UObject
@@ -96,6 +135,24 @@ public:
 	 */
 	void RebuildProviderRegistry(
 		const TArray<FSeinEntityHandle>& ProviderHandles);
+
+	// ----------------------------------------------------------------------
+	// Canonical state coverage
+	// ----------------------------------------------------------------------
+
+	/**
+	 * Claim exact mutable-state coverage for the concrete implementation.
+	 * The base fails closed. Implementations that own no future-affecting
+	 * mutable state beyond the entity-rebuilt provider registry declare
+	 * Stateless. Stateful implementations declare CanonicalStateContributors
+	 * and name every authoritative provider that restores their opaque state.
+	 * A stable implementation id and non-zero behavior/coverage revisions are
+	 * always required. USeinCoverSubsystem folds the validated claim into the
+	 * per-tick-revalidated cover world-binding frame.
+	 */
+	virtual bool ComputeStateCoverageClaim(
+		FSeinCoverStateCoverageClaim& OutClaim,
+		FString& OutError) const;
 
 	// ----------------------------------------------------------------------
 	// Queries

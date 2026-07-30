@@ -27,6 +27,7 @@
  */
 
 #include "Collision/SeinCollisionResolverParallel.h"
+#include "Serialization/SeinCanonicalInitialStateDigest.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Collision/SeinCollisionSpatialHash.h"
 #include "Components/SeinExtentsHelpers.h"
@@ -248,4 +249,67 @@ void USeinCollisionResolverParallel::JacobiPass(USeinWorldSubsystem& World, cons
 		if (!SelfEntityPtr) continue;
 		SelfEntityPtr->Transform.SetLocation(NewPos[i]);
 	}
+}
+
+namespace
+{
+	const UClass* FindNearestNativeCollisionClass(const UClass* Class)
+	{
+		while (Class && !Class->HasAnyClassFlags(CLASS_Native))
+		{
+			Class = Class->GetSuperClass();
+		}
+		return Class;
+	}
+}
+
+bool USeinCollisionResolverParallel::ComputeStateCoverageClaim(
+	FSeinCollisionResolverStateCoverageClaim& OutClaim,
+	FString& OutError) const
+{
+	OutClaim = {};
+	OutError.Reset();
+	const UClass* NativeClass =
+		FindNearestNativeCollisionClass(GetClass());
+	if (NativeClass != USeinCollisionResolverParallel::StaticClass())
+	{
+		OutError = FString::Printf(
+			TEXT("Native collision-resolver subclass '%s' must explicitly claim exact mutable-state coverage."),
+			*GetClass()->GetPathName());
+		return false;
+	}
+	OutClaim.StableImplementationId =
+		TEXT("seinarts.collision.resolver.parallel");
+	OutClaim.BehaviorRevision = 1;
+	OutClaim.CoverageRevision = 1;
+	OutClaim.StateCoverage =
+		ESeinCollisionResolverStateCoverage::Stateless;
+	return true;
+}
+
+bool USeinCollisionResolverParallel::ComputeResolutionConfigDigest(
+	FGuid& OutDigest,
+	FString& OutError) const
+{
+	OutDigest.Invalidate();
+	OutError.Reset();
+	const UClass* NativeClass =
+		FindNearestNativeCollisionClass(GetClass());
+	if (NativeClass != USeinCollisionResolverParallel::StaticClass())
+	{
+		OutError = FString::Printf(
+			TEXT("Native collision-resolver subclass '%s' must override ComputeResolutionConfigDigest to cover its own resolution tuning."),
+			*GetClass()->GetPathName());
+		return false;
+	}
+	FSeinCanonicalDigestWriter Writer(
+		TEXT("SeinARTS.Collision.Parallel.ResolutionConfig"), 1);
+	if (!Writer.WriteString(GetClass()->GetPathName())
+		|| !Writer.WriteInt32(NumPasses)
+		|| !Writer.WriteInt64(Relaxation.Value))
+	{
+		OutError = Writer.GetError();
+		return false;
+	}
+	return Writer.Finalize(OutDigest, OutError);
 }

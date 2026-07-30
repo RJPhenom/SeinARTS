@@ -52,6 +52,19 @@ namespace SeinCoverDefaultLocal
 		return Fog->IsEntityVisibleToObserver(Observer, *WorldSub, ProviderHandle);
 	}
 
+	/** Walk up to the closest C++ class — the tripwire anchor for the shipped
+	 *  Stateless coverage claim. Blueprint children resolve to their native
+	 *  parent (their behavior IS the native code); native children resolve to
+	 *  themselves and are refused until they re-claim explicitly. */
+	static const UClass* FindNearestNativeClass(const UClass* Class)
+	{
+		while (Class && !Class->HasAnyClassFlags(CLASS_Native))
+		{
+			Class = Class->GetSuperClass();
+		}
+		return Class;
+	}
+
 	/** Canonical cover-quality priority: Heavy > Light > <designer tag> > Negative.
 	 *  Mirrors QueryBestCoverQualityAt's ordering so the slot resolver's
 	 *  "best overlapping area" pick and dedup tie-break agree with point cover
@@ -578,4 +591,40 @@ TArray<FSeinCoverSlotCandidate> USeinCoverDefault::FindNearbySlots(FFixedVector 
 	}
 
 	return Result;
+}
+
+// ============================================================================
+// Canonical state coverage
+// ============================================================================
+
+bool USeinCoverDefault::ComputeStateCoverageClaim(
+	FSeinCoverStateCoverageClaim& OutClaim,
+	FString& OutError) const
+{
+	const UClass* NativeClass =
+		SeinCoverDefaultLocal::FindNearestNativeClass(GetClass());
+	if (NativeClass != USeinCoverDefault::StaticClass())
+	{
+		OutClaim = {};
+		OutError = FString::Printf(
+			TEXT("Native cover subclass '%s' must explicitly claim exact mutable-state coverage."),
+			*GetClass()->GetPathName());
+		return false;
+	}
+	return ComputeCoverDefaultStateCoverageClaim(OutClaim, OutError);
+}
+
+bool USeinCoverDefault::ComputeCoverDefaultStateCoverageClaim(
+	FSeinCoverStateCoverageClaim& OutClaim,
+	FString& OutError) const
+{
+	OutClaim = {};
+	OutError.Reset();
+	OutClaim.StableImplementationId =
+		TEXT("seinarts.cover.default");
+	OutClaim.BehaviorRevision = 1;
+	OutClaim.CoverageRevision = 1;
+	OutClaim.StateCoverage =
+		ESeinCoverStateCoverage::Stateless;
+	return true;
 }

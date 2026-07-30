@@ -201,6 +201,115 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsFalse(World->IsSimulationRunning()));
 	}
 
+	TEST(OrphanedUnmarkedContributorFailsBeforeTickZero,
+		"SeinARTS.Unit.CoreEntity.ExecutionTopology")
+	{
+		FSeinCanonicalStateDescriptor Descriptor;
+		Descriptor.Key.StableDomainId =
+			TEXT("seinarts.tests.orphan");
+		Descriptor.Key.StableContributorId =
+			TEXT("unclaimed-state");
+		Descriptor.SchemaVersion = 1;
+		Descriptor.ImplementationRevision = 1;
+		Descriptor.Role = ESeinCanonicalStateRole::DerivedCache;
+
+		FSeinCanonicalStateContributorOps Ops;
+		Ops.StageDerived = [](
+			const FSeinCanonicalStateStageContext&,
+			TUniquePtr<ISeinCanonicalStateRestoreStage>&,
+			FString&)
+			{
+				return true;
+			};
+		Ops.CommitDerived = [](
+			FSeinCanonicalStateCommitContext&,
+			TUniquePtr<ISeinCanonicalStateRestoreStage>&&)
+			{
+			};
+
+		FString RegistrationError;
+		FSeinCanonicalStateRegistrationHandle Provider =
+			FSeinCanonicalStateRegistry::Register(
+				FName(TEXT("SeinFrameworkTests.ExecutionTopology")),
+				Descriptor,
+				MoveTemp(Ops),
+				&RegistrationError);
+		ASSERT_THAT(IsTrue(Provider.IsValid()));
+		ASSERT_THAT(IsTrue(RegistrationError.IsEmpty()));
+
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+
+		TestRunner->AddExpectedError(
+			TEXT("is claimed by no registered simulation system"),
+			EAutomationExpectedErrorFlags::Contains, 2, false);
+		TestRunner->AddExpectedError(
+			TEXT("transaction closed (failed)"),
+			EAutomationExpectedErrorFlags::Contains, 1, false);
+		FString Error;
+		ASSERT_THAT(IsFalse(SeinTestMatchBootstrap::Materialize(
+			*World,
+			FSeinMatchSettings(),
+			0,
+			TEXT("ExecutionTopologyOrphanReject"),
+			&Error)));
+		ASSERT_THAT(IsTrue(Error.Contains(
+			TEXT("seinarts.tests.orphan/unclaimed-state"))));
+		ASSERT_THAT(IsFalse(World->IsExecutionTopologyFrozen()));
+		ASSERT_THAT(IsFalse(World->IsSimulationRunning()));
+	}
+
+	TEST(ExternallyOwnedUnclaimedContributorBootstraps,
+		"SeinARTS.Unit.CoreEntity.ExecutionTopology")
+	{
+		FSeinCanonicalStateDescriptor Descriptor;
+		Descriptor.Key.StableDomainId =
+			TEXT("seinarts.tests.orphan");
+		Descriptor.Key.StableContributorId =
+			TEXT("subsystem-owned-state");
+		Descriptor.SchemaVersion = 1;
+		Descriptor.ImplementationRevision = 1;
+		Descriptor.Role = ESeinCanonicalStateRole::DerivedCache;
+		Descriptor.bExternallyOwned = true;
+
+		FSeinCanonicalStateContributorOps Ops;
+		Ops.StageDerived = [](
+			const FSeinCanonicalStateStageContext&,
+			TUniquePtr<ISeinCanonicalStateRestoreStage>&,
+			FString&)
+			{
+				return true;
+			};
+		Ops.CommitDerived = [](
+			FSeinCanonicalStateCommitContext&,
+			TUniquePtr<ISeinCanonicalStateRestoreStage>&&)
+			{
+			};
+
+		FString RegistrationError;
+		FSeinCanonicalStateRegistrationHandle Provider =
+			FSeinCanonicalStateRegistry::Register(
+				FName(TEXT("SeinFrameworkTests.ExecutionTopology")),
+				Descriptor,
+				MoveTemp(Ops),
+				&RegistrationError);
+		ASSERT_THAT(IsTrue(Provider.IsValid()));
+		ASSERT_THAT(IsTrue(RegistrationError.IsEmpty()));
+
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Materialize(
+			*World,
+			FSeinMatchSettings(),
+			0,
+			TEXT("ExecutionTopologyOrphanAccept"))));
+		ASSERT_THAT(IsTrue(World->IsExecutionTopologyFrozen()));
+	}
+
 	TEST(CanonicalStateKeysAreOrderedAndBoundIntoTopologyDigest,
 		"SeinARTS.Unit.CoreEntity.ExecutionTopology")
 	{
@@ -524,6 +633,10 @@ namespace UE::SeinARTSTests
 		Descriptor.SchemaVersion = 1;
 		Descriptor.ImplementationRevision = 1;
 		Descriptor.Role = ESeinCanonicalStateRole::DerivedCache;
+		// The probe simulates a subsystem-owned binding provider; no test
+		// system claims it, so it must declare external ownership to pass the
+		// orphaned-contributor bootstrap gate.
+		Descriptor.bExternallyOwned = true;
 
 		FSeinCanonicalStateContributorOps Ops;
 		Ops.FreezeWorldBinding =

@@ -192,6 +192,10 @@ namespace UE::SeinARTSTests
 			Descriptor.Limits.MaxRecursionDepth = 4;
 			Descriptor.Limits.MaxEncodedBytes = 64;
 			Descriptor.Limits.MaxAggregateElements = 8;
+			// Simulates a third-party subsystem-owned provider; no test
+			// system claims it, so it must declare external ownership to
+			// pass the orphaned-contributor bootstrap gate.
+			Descriptor.bExternallyOwned = true;
 
 			FSeinCanonicalStateContributorOps Ops;
 			Ops.Capture =

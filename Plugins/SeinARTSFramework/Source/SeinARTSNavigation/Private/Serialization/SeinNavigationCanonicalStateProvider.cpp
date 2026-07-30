@@ -823,6 +823,10 @@ SeinRegisterNavigationCanonicalStateProvider(FString& OutError)
 	Descriptor.Limits.MaxRecursionDepth = 64;
 	Descriptor.Limits.MaxEncodedBytes = 16 * 1024 * 1024;
 	Descriptor.Limits.MaxAggregateElements = 1024 * 1024;
+	// The nav subsystem owns this contributor's lifecycle: the blocker-stamp
+	// system that names it registers only in nav-enabled worlds, and a
+	// nav-disabled world must still bootstrap with the contributor present.
+	Descriptor.bExternallyOwned = true;
 
 	FSeinCanonicalStateContributorOps Ops;
 	Ops.PrepareWorldBinding =

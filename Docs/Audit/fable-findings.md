@@ -266,6 +266,11 @@ SnapshotBootstrapCheckpointTests, EffectLifecycleTests, MoveToContinuationEditor
   const-left site never writes, no `const_cast` was introduced, and both `ForEachEntity`
   overloads iterate identically — zero value/order change in any reachable context.
 
+**Post-merge status:** committed as `af19b64` on `codex/audit-remediation`; local `main`
+fast-forwarded `d22ba71` → `af19b64` (closes the CONTENT-03 hazard locally; `origin/main`
+still stale until pushed). API-14 ledger row → Verified (Editor + Shipping builds green;
+Unit 352 / Integration 12 / Determinism 19 / Editor.Snapshot 8, All profile).
+
 **Latent-hazard notes from the red-team (no action taken; recorded for the ledger):**
 
 1. `SeinSquadDispatchResolver.cpp:138` — a guard-refused `GetComponentMutable` nullptr would
@@ -279,3 +284,143 @@ SnapshotBootstrapCheckpointTests, EffectLifecycleTests, MoveToContinuationEditor
 3. Compile proof covers the Editor Win64 Development target; Sol's 16:57 Shipping green
    predates this sweep, so the next Shipping build re-proves it (sources are target-agnostic —
    low risk).
+
+---
+
+## 7. STATE-01 next chunk — design map (2026-07-29 late evening; investigation only, no code yet)
+
+Deep-read of the canonical-state seams (full file:line detail preserved in the session log;
+summary here is the working spec). Sol's claim/fail-closed pattern already ships for
+**Navigation** (`ComputeStateCoverageClaim` + `ComputeStaticEnvironmentDigest`, fail-closed
+base virtuals, native-subclass tripwire, claim folded into the world-binding frame),
+**FoW** (class-keyed codec registry with subclass admission policy), **Movement/Avoidance**
+(per-native-layer coverage registry), and **pool objects** (resolver/ability codec registry).
+The remaining STATE-01 scope decomposes into four deltas:
+
+1. **Reverse coverage check** — `TryBuildExecutionTopologyCandidate` rejects a system that
+   names a missing contributor, but a registered contributor claimed by NO system is silently
+   accepted (orphaned state gets captured/restored with no declared owner). Needs a descriptor
+   marker before it can be enforced, because legitimately system-less contributors exist
+   (FoW's authoritative provider is owned by a subsystem, not a ticked system).
+2. **Port the claim pattern to Collision + Cover (+ Level Data)** — `USeinCollisionResolver`
+   and `USeinCoverSystem` have zero coverage surface: no claim virtual, no static digest, no
+   world-binding frame, silent snapshot proceed with a custom class active. The collision
+   base's "ActiveOverlaps is transient" contract is docstring-only, and `OnSnapshotRestored`
+   can simply not be forwarded by a subclass. `USeinLevelData` has the post-freeze mutation
+   gate but contributes no binding frame. Mechanism is prescribed (copy the nav shape);
+   no design fork.
+3. **A* static-digest tamper-evidence** — `StaticGridDigest` is computed once at
+   `LoadFromSubstrateImpl` and cached; per-tick revalidation re-emits the cached GUID and
+   checks only array LENGTHS. An in-place `CellCost[i]`/`CellConnections[i]` write that keeps
+   lengths is invisible to `ValidateFrozenCanonicalStateWorldBindings`. Fork: per-tick content
+   re-hash (exact, but a full grid walk every tick) vs. a write-barrier/generation counter
+   folded into the frame (cheap, catches all gated writers; a rogue direct memory write still
+   escapes, as it would under any non-rehash scheme).
+4. **Formation/resolver preview isolation** — `SeinComputeFormationPreview` hands the LIVE
+   pooled resolver (whose reflected state is captured in the canonical root) to
+   `USeinFormationPreviewSubsystem`, a per-render-frame, hover-driven, one-client-only path.
+   A designer subclass writing a member UPROPERTY inside `ResolveFormationLayout` diverges
+   the canonical root from mouse movement. Note statefulness on the COMMIT path is
+   deterministic and captured — the hazard is exclusively the preview borrow. `USeinFormation`
+   is CDO-invoked with a docstring-only statelessness contract and no admission gate; the
+   editor determinism validator warns on float/RNG but not on member writes, and covers
+   neither C++ subclasses nor resolvers. Fork: scratch-instance preview (prevention) vs.
+   reflected-property digest tripwire around the preview call (detection→invalidate) vs.
+   CDO-only preview (breaks preview===commit for stateful-config resolvers).
+
+Recommendations put to RJ (decisions pending as of this writing): generation counter for (3);
+scratch preview instance refreshed off the pool-codec field digest for (4); descriptor-level
+`ExternallyOwned` marker + orphan rejection for (1). Delta (2) proceeds regardless once
+sequencing is confirmed.
+
+### 7.1 Implementation status (same evening — RJ approved all three recommendations)
+
+- **Delta 3 SHIPPED** — `USeinNavigation::GetStaticEnvironmentGeneration()` (base returns 0);
+  the A* bumps a private `StaticGridGeneration` on every substrate adoption (its only grid
+  writer); the nav subsystem latches the value at freeze/commit and fail-stops per-tick
+  recapture on drift ("Navigation static topology mutated in place after the match
+  StateContract froze."). Deliberately NOT in the peer-compared digest/frame — it counts local
+  adoption events, not content, so identical bakes loaded a different number of times still
+  agree across peers. Regression test `PostFreezeInPlaceGridMutationFailStopsDespiteCachedDigest`
+  proves a bumped generation with an UNCHANGED cached digest still fail-stops.
+- **Delta 1 SHIPPED** — `FSeinCanonicalStateDescriptor::bExternallyOwned` (folded into the
+  descriptor digest as "externally-owned"/"system-claimed"); topology freeze now rejects any
+  frozen contributor neither system-claimed nor marked ("Canonical-state contributor '%s' is
+  claimed by no registered simulation system and is not marked externally owned."). Nav + FoW
+  providers marked (their claiming systems register conditionally; nav-/FoW-disabled worlds
+  must still bootstrap); movement stays system-claimed. Contributors referenced only by a
+  PROVIDER's coverage claim (e.g. a stateful custom nav's supplemental contributors) also mark
+  ExternallyOwned — the owning subsystem separately verifies their existence. Four test
+  fixtures needed markers; two new topology tests cover reject + accept.
+- **Delta 4 SHIPPED** — `SeinComputeFormationPreview` never drives the live pooled resolver
+  (or shared CDO): it swaps in a transient scratch clone materialized through the pool-object
+  codec (`CaptureObject`/`MaterializeObject`, so "captured state" keeps exactly one
+  definition), cached per source instance and refreshed only when the source's captured bytes
+  change. Codec-clone failure falls back to the source object with a Verbose log (equals
+  pre-isolation behavior). Residual: `ComputeMultiBrokerAnchors`' INTERNAL CDO use is shared
+  with the commit path and stays unswapped — a stateful formation/resolver CDO remains a
+  documented hazard until the formation admission gate exists.
+- **Delta 2 Collision half SHIPPED** — `USeinCollisionResolver::ComputeStateCoverageClaim` +
+  `ComputeResolutionConfigDigest`, both fail-closed on the base; shipped Default/Parallel claim
+  Stateless with native-subclass tripwires (Parallel's digest covers NumPasses + Relaxation);
+  new binding-only contributor `seinarts.collision/resolver-binding` (DerivedCache,
+  ExternallyOwned) folds claim + config digest into the per-tick-revalidated world-binding
+  frames; None=OFF worlds emit an explicit "disabled" frame. Tests (3/3 green):
+  unclaimed-custom bootstrap reject, claimed-subclass accept, post-freeze NumPasses drift
+  fail-stop.
+- **Delta 2 Cover half SHIPPED** — same pattern ported to the Cover extension (claim types +
+  fail-closed base on `USeinCoverSystem`, `USeinCoverDefault` tripwire + reusable Stateless
+  claim, `USeinCoverSubsystem` freeze/latch/invalidate lifecycle, binding-only contributor
+  `seinarts.cover/system-binding` DerivedCache + ExternallyOwned, module-lifetime registration,
+  4 extension tests). Deliberate deviations from nav: no static digest (no baked topology), no
+  PrepareWorldBinding, no generation counter; restore-into-fresh-world drift is backstopped by
+  core's stored-frame per-tick compare (verified: a cover frame mismatch fails restore via the
+  sealed contract-digest check, it cannot silently pass).
+- **Deferred:** Level Data substrate coverage claim (post-freeze mutation gate already
+  exists; a full claim/binding frame mirrors the same pattern when prioritized); formation
+  statelessness admission gate (Gate F adjacent).
+
+### 7.2 Adversarial review of the wave (same night) and fixes applied
+
+Independent red-team over the full working-tree diff. Three confirmed findings, all addressed
+or dispositioned:
+
+1. **Preview scratch cache lifecycle (CONFIRMED bug, FIXED)** — the scratch was outered to the
+   calling world's subsystem while held by a process-lifetime rooted cache: a preview in any
+   match would pin the dead world at map travel (fatal world-cleanup check), and CDO-keyed
+   entries were immortal and shared one scratch across PIE clients. Fix: scratch now outers to
+   the transient package (never pins a world), the cache keys per (source, world) so clients
+   never share a scratch, and entries prune when source OR world dies.
+2. **Fail-open class fallback (pre-existing, partially addressed)** — a set-but-unloadable
+   custom collision/cover class silently falls back to the shipped default, so the new gates
+   certify the default rather than failing bootstrap. This is the established picker
+   convention ("a mistake is not an off-switch": fallback + logged error) — collision already
+   logged; Cover's silent fallback now logs an Error. RESIDUAL for the ledger: the coverage
+   gate guarantees apply to the class that actually LOADED; asymmetric peer staleness fails
+   loudly via the class path in the binding frame, but symmetric misconfiguration bootstraps
+   on the default with only the error log. Making load-failure fail-closed is a convention
+   change that belongs to RJ.
+3. **Nav/FoW `ExternallyOwned` weakens the orphan gate for shipped state (design residual,
+   RECORDED)** — because their claiming systems register only in enabled worlds, both shipped
+   payload-bearing contributors are marked ExternallyOwned, so the reverse check materially
+   protects only the movement contributor today. The airtight version is a per-world
+   evaluation ("claimed by a system OR the owning subsystem reports itself disabled"), which
+   needs an enabled-query seam on the contributor descriptor — queued as a refinement
+   decision for RJ/Sol rather than redesigned unilaterally.
+
+Sharpenings also applied from the review: preview clone-failure fallback logs upgraded
+Verbose→Warning; the system-claim key comparison re-lowercases FName round-trips (closes a
+load-order-dependent false bootstrap failure if a mixed-case name ever pre-exists);
+`ContractFormatVersion` bumped 1→2 to make the descriptor-digest ownership-frame change an
+explicit compatibility cut (pre-wave checkpoints/replays refuse to restore by design).
+Accepted narrowing (documented, no change): a resolver whose layout output depends on mutable
+reflected members previews from a snapshot that refreshes only when the source's captured
+bytes change — such members are already a commit-path desync bug; prevention beats fidelity.
+One pre-existing test invariant corrected: contributor-record capture skips binding-only
+DerivedCache contributors by design, so the reload-retarget test now compares against the
+persistent-contributor count.
+
+**Final evidence for the wave:** Editor build green; `SeinARTS.Unit` 362 (All profile, incl.
+4 Cover + 3 collision + 3 core new tests), `SeinARTS.Determinism` 19, `SeinARTS.Integration`
+12, `SeinARTS.Editor.Snapshot` 8 — all green on the completed tree (final Unit rerun after
+the red-team fixes pending at this line's writing; superseded by the run IDs in Saved/Automation).

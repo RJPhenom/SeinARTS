@@ -43,6 +43,10 @@ namespace UE::SeinARTSTests
 				Role == ESeinCanonicalStateRole::DerivedCache
 					? nullptr
 					: FSeinCommandSchemaAlternateTestPayload::StaticStruct();
+			// These fixtures simulate subsystem-owned providers; no test system
+			// claims them, so they must declare external ownership to pass the
+			// orphaned-contributor bootstrap gate.
+			Descriptor.bExternallyOwned = true;
 			return Descriptor;
 		}
 
@@ -601,9 +605,20 @@ namespace UE::SeinARTSTests
 				CaptureContext,
 				ReloadedRecords,
 				Error)));
-		ASSERT_THAT(AreEqual(
-			ReloadedSnapshot.GetContributorCount(),
-			ReloadedRecords.Num()));
+		// Capture skips binding-only DerivedCache contributors (collision /
+		// cover world bindings) by design — records cover the PERSISTENT
+		// contributors only.
+		int32 PersistentCount = 0;
+		for (const FSeinFrozenCanonicalStateContributor& Contributor :
+			ReloadedSnapshot.GetContributors())
+		{
+			if (Contributor.Descriptor.Role
+				!= ESeinCanonicalStateRole::DerivedCache)
+			{
+				++PersistentCount;
+			}
+		}
+		ASSERT_THAT(AreEqual(PersistentCount, ReloadedRecords.Num()));
 		ASSERT_THAT(IsTrue(
 			ReloadedRecords.ContainsByPredicate(
 				[&Descriptor](

@@ -557,6 +557,15 @@ public:
 		const FSeinCanonicalStateKey& Key,
 		ESeinCanonicalStateRole RequiredRole) const;
 
+	/** Read-only view of the frozen pool-object codec manifest. Empty until
+	 *  bootstrap freezes it. Render-side consumers (the formation preview's
+	 *  scratch-resolver clone) use it so "captured state" has exactly one
+	 *  definition; it grants no mutation or admission authority. */
+	const FSeinPoolObjectCodecManifest& GetPoolObjectCodecManifest() const
+	{
+		return PoolObjectCodecManifest;
+	}
+
 	/** True once the per-world deterministic system contract is immutable. */
 	bool IsExecutionTopologyFrozen() const
 	{

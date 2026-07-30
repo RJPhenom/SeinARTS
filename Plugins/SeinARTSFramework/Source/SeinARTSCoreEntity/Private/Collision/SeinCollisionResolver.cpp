@@ -22,6 +22,28 @@
 #include "Events/SeinVisualEvent.h"
 #include "Math/MathLib.h"
 
+bool USeinCollisionResolver::ComputeStateCoverageClaim(
+	FSeinCollisionResolverStateCoverageClaim& OutClaim,
+	FString& OutError) const
+{
+	OutClaim = {};
+	OutError = FString::Printf(
+		TEXT("Collision resolver '%s' does not explicitly claim exact mutable-state coverage. Override ComputeStateCoverageClaim to declare Stateless or name the authoritative canonical-state contributors that restore its retained state."),
+		*GetClass()->GetPathName());
+	return false;
+}
+
+bool USeinCollisionResolver::ComputeResolutionConfigDigest(
+	FGuid& OutDigest,
+	FString& OutError) const
+{
+	OutDigest.Invalidate();
+	OutError = FString::Printf(
+		TEXT("Collision resolver '%s' does not provide an explicit resolution-config digest override. Override ComputeResolutionConfigDigest to cover every resolution-affecting tuning value (or make the tuning-less claim explicitly)."),
+		*GetClass()->GetPathName());
+	return false;
+}
+
 USeinCollisionResolver::FCollisionShape2D USeinCollisionResolver::BuildShape2D(const FFixedTransform& Xf, const FSeinExtentsShape& Shape)
 {
 	FCollisionShape2D Out;

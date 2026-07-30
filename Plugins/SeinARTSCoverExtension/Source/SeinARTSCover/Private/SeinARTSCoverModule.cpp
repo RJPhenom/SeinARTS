@@ -4,6 +4,7 @@
  */
 
 #include "SeinARTSCoverModule.h"
+#include "Serialization/SeinCoverCanonicalStateProvider.h"
 #include "Settings/SeinARTSCoverSettings.h"
 #include "Settings/SeinConfigFingerprintRegistry.h"
 #include "Resolvers/SeinCoverAwareDefaultBrokerResolver.h"
@@ -40,6 +41,7 @@ void FSeinARTSCoverModule::StartupModule()
 	ConfigFingerprintRegistrationHandle.Reset();
 	SimulationContentRegistrationHandle.Reset();
 	PoolObjectCodecHandle.Reset();
+	CanonicalStateRegistrationHandle.Reset();
 
 	FSeinPoolObjectCodecDescriptor PoolDescriptor;
 	PoolDescriptor.NativeAnchor =
@@ -105,6 +107,19 @@ void FSeinARTSCoverModule::StartupModule()
 			*ContentRegistrationError);
 	}
 
+	FString StateRegistrationError;
+	CanonicalStateRegistrationHandle =
+		SeinRegisterCoverCanonicalStateProvider(
+			StateRegistrationError);
+	if (!CanonicalStateRegistrationHandle.IsValid())
+	{
+		UE_LOG(
+			LogSeinARTSCover,
+			Error,
+			TEXT("Canonical-state contributor 'seinarts.cover.system-binding' failed to register: %s"),
+			*StateRegistrationError);
+	}
+
 	UE_LOG(LogSeinARTSCover, Log, TEXT("SeinARTSCover module started."));
 }
 
@@ -129,11 +144,16 @@ void FSeinARTSCoverModule::PreUnloadCallback()
 		}
 	}
 	PoolObjectCodecHandle.Reset();
+
+	// Frozen worlds retain only tokens, while the process registry owns
+	// module TFunctions. Withdraw this exact generation before code unload.
+	CanonicalStateRegistrationHandle.Reset();
 }
 
 void FSeinARTSCoverModule::ShutdownModule()
 {
 	PoolObjectCodecHandle.Reset();
+	CanonicalStateRegistrationHandle.Reset();
 	SimulationContentRegistrationHandle.Reset();
 	ConfigFingerprintRegistrationHandle.Reset();
 	UE_LOG(LogSeinARTSCover, Log, TEXT("SeinARTSCover module shut down."));

@@ -362,6 +362,11 @@ protected:
 		FSeinNavigationStateCoverageClaim& OutClaim,
 		FString& OutError) const;
 
+	virtual uint64 GetStaticEnvironmentGeneration() const override
+	{
+		return StaticGridGeneration;
+	}
+
 	/** Walk each waypoint along the WallDistance gradient until it sits in
 	 *  a cell whose distance-to-wall is at least
 	 *  `ceil(AgentFootprintRadius/CellSize) + WallPaddingCells`. Keeps the
@@ -388,6 +393,13 @@ private:
 	 *  successful substrate adoption so per-root StateContract revalidation
 	 *  hashes only this digest plus the small live query-tuning surface. */
 	FGuid StaticGridDigest;
+
+	/** Bumped on every successful substrate adoption — the ONLY static-grid
+	 *  writer. Any future mutation path added to this class must bump it too;
+	 *  the nav subsystem latches it at StateContract freeze and fail-stops on
+	 *  drift (see USeinNavigation::GetStaticEnvironmentGeneration). Not part
+	 *  of the peer-compared digest. */
+	uint64 StaticGridGeneration = 0;
 
 	/** Per-cell A* routing weight + passability. 0 = blocked, 255 = impassable;
 	 *  1..254 = passable, and the value IS the terrain cost multiplier the A*

@@ -8,6 +8,7 @@
 #include "System/SeinCoverDefault.h"
 
 #include "Components/SeinCoverComponent.h"
+#include "Serialization/SeinCanonicalStateRegistry.h"
 #include "Settings/SeinARTSCoverSettings.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "SeinARTSFogOfWarModule.h"   // ResolveLocalObserverPlayerID for the preview quality hook
@@ -17,25 +18,53 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinCoverSubsystem, Log, All);
 
+namespace
+{
+	constexpr int32 MaxCoverStateContributors = 64;
+
+	void AppendFramed(FString& Out, const FString& Value)
+	{
+		const FTCHARToUTF8 Utf8(*Value);
+		Out += FString::Printf(TEXT("%d:"), Utf8.Length());
+		Out += Value;
+		Out += TEXT("\n");
+	}
+}
+
 void USeinCoverSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
 	Collection.InitializeDependency(USeinWorldSubsystem::StaticClass());
+	bStateBindingFrozen = false;
+	StateBindingFailureReason.Reset();
+	FrozenStateBindingFrame.Reset();
 
 	// Resolve the configured class. FSoftClassPath drives the picker — same
 	// pattern as NavigationClass / FogOfWarClass / RelayActorClass — so this
 	// module doesn't need to be loaded for the settings to resolve from disk,
 	// and game teams can swap in a custom impl without touching the framework.
 	TSubclassOf<USeinCoverSystem> CoverClass;
+	bool bConfiguredCoverClass = false;
 	if (const USeinARTSCoverSettings* Settings = GetDefault<USeinARTSCoverSettings>())
 	{
 		if (Settings->CoverSystemClass.IsValid())
 		{
+			bConfiguredCoverClass = true;
 			CoverClass = Settings->CoverSystemClass.TryLoadClass<USeinCoverSystem>();
 		}
 	}
 	if (!CoverClass || CoverClass->HasAnyClassFlags(CLASS_Abstract))
 	{
+		// A set-but-unloadable/abstract class is a mistake, not an off-switch
+		// (same convention as the other pluggable pickers): fall back to the
+		// shipped default LOUDLY — the state-coverage gate then certifies the
+		// default, not the configured class, and a silently swapped custom
+		// implementation would otherwise be invisible.
+		if (bConfiguredCoverClass)
+		{
+			UE_LOG(LogSeinCoverSubsystem, Error,
+				TEXT("Initialize: configured CoverSystemClass could not be loaded (or is abstract); falling back to the shipped default cover system. Fix the class path in SeinARTS Cover settings."));
+		}
 		CoverClass = USeinCoverDefault::StaticClass();
 	}
 
@@ -115,6 +144,236 @@ void USeinCoverSubsystem::ReleaseModuleOwnedStateForModuleUnload()
 	{
 		CoverSystem->OnCoverSystemDeinitialized();
 		CoverSystem = nullptr;
+	}
+	bStateBindingFrozen = false;
+	StateBindingFailureReason.Reset();
+	FrozenStateBindingFrame.Reset();
+}
+
+bool USeinCoverSubsystem::FreezeCanonicalStateBinding(
+	bool bCommit,
+	FString& OutFrame,
+	FString& OutError)
+{
+	OutFrame.Reset();
+	OutError.Reset();
+	if (!StateBindingFailureReason.IsEmpty())
+	{
+		OutError = StateBindingFailureReason;
+		return false;
+	}
+
+	FString CandidateFrame =
+		TEXT("SeinARTS.Cover.WorldBinding\n");
+	AppendFramed(CandidateFrame, TEXT("1"));
+
+	if (!CoverSystem)
+	{
+		// No live cover implementation for this world (instantiation failed or
+		// module-owned state already released). Mirror navigation's disabled
+		// branch: an explicit stable frame — never a silent skip — so a cover
+		// implementation appearing later is a detected contract change.
+		AppendFramed(CandidateFrame, TEXT("disabled"));
+		AppendFramed(CandidateFrame, TEXT("<disabled>"));
+		AppendFramed(CandidateFrame, TEXT("seinarts.cover.disabled"));
+		AppendFramed(CandidateFrame, TEXT("1"));
+		AppendFramed(CandidateFrame, TEXT("1"));
+		AppendFramed(CandidateFrame, TEXT("stateless"));
+		AppendFramed(CandidateFrame, TEXT("0"));
+	}
+	else
+	{
+		FSeinCoverStateCoverageClaim Coverage;
+		bool bCoverageValid =
+			CoverSystem->ComputeStateCoverageClaim(
+				Coverage, OutError)
+			&& !Coverage.StableImplementationId.IsEmpty()
+			&& Coverage.StableImplementationId
+				== Coverage.StableImplementationId.TrimStartAndEnd()
+			&& Coverage.BehaviorRevision != 0
+			&& Coverage.CoverageRevision != 0;
+
+		FString CoverageKind;
+		TArray<FString> CanonicalRequiredKeys;
+		if (bCoverageValid)
+		{
+			switch (Coverage.StateCoverage)
+			{
+			case ESeinCoverStateCoverage::Stateless:
+				CoverageKind = TEXT("stateless");
+				if (!Coverage.RequiredCanonicalStateContributors.IsEmpty())
+				{
+					OutError = FString::Printf(
+						TEXT("Stateless cover implementation '%s' names supplemental canonical-state contributors."),
+						*CoverSystem->GetClass()->GetPathName());
+					bCoverageValid = false;
+				}
+				break;
+
+			case ESeinCoverStateCoverage::CanonicalStateContributors:
+				CoverageKind = TEXT("canonical-state-contributors");
+				if (Coverage.RequiredCanonicalStateContributors.IsEmpty()
+					|| Coverage.RequiredCanonicalStateContributors.Num()
+						> MaxCoverStateContributors)
+				{
+					OutError = FString::Printf(
+						TEXT("Stateful cover implementation '%s' names an invalid supplemental canonical-state contributor count."),
+						*CoverSystem->GetClass()->GetPathName());
+					bCoverageValid = false;
+					break;
+				}
+
+				if (const USeinWorldSubsystem* Sim =
+						GetWorld()
+							? GetWorld()->GetSubsystem<
+								USeinWorldSubsystem>()
+							: nullptr)
+				{
+					CanonicalRequiredKeys.Reserve(
+						Coverage.RequiredCanonicalStateContributors.Num());
+					for (const FSeinCanonicalStateKey& Required :
+						Coverage.RequiredCanonicalStateContributors)
+					{
+						const FString CanonicalKey =
+							FSeinCanonicalStateRegistry::CanonicalKey(
+								Required);
+						if (CanonicalKey.IsEmpty())
+						{
+							OutError = FString::Printf(
+								TEXT("Cover implementation '%s' names an invalid supplemental canonical-state contributor."),
+								*CoverSystem->GetClass()->GetPathName());
+							bCoverageValid = false;
+							break;
+						}
+						if (!Sim->HasFrozenCanonicalStateContributor(
+								Required,
+								ESeinCanonicalStateRole::Authoritative))
+						{
+							OutError = FString::Printf(
+								TEXT("Cover implementation '%s' requires missing authoritative canonical-state contributor '%s'."),
+								*CoverSystem->GetClass()->GetPathName(),
+								*CanonicalKey);
+							bCoverageValid = false;
+							break;
+						}
+						CanonicalRequiredKeys.Add(CanonicalKey);
+					}
+				}
+				else
+				{
+					OutError = FString::Printf(
+						TEXT("Cover implementation '%s' cannot verify supplemental canonical-state contributors without a frozen Core world schema."),
+						*CoverSystem->GetClass()->GetPathName());
+					bCoverageValid = false;
+				}
+
+				CanonicalRequiredKeys.Sort();
+				for (int32 Index = 1;
+					bCoverageValid
+						&& Index < CanonicalRequiredKeys.Num();
+					++Index)
+				{
+					if (CanonicalRequiredKeys[Index - 1]
+						== CanonicalRequiredKeys[Index])
+					{
+						OutError = FString::Printf(
+							TEXT("Cover implementation '%s' names duplicate canonical-state contributor '%s'."),
+							*CoverSystem->GetClass()->GetPathName(),
+							*CanonicalRequiredKeys[Index]);
+						bCoverageValid = false;
+					}
+				}
+				break;
+
+			case ESeinCoverStateCoverage::Unspecified:
+			default:
+				OutError = FString::Printf(
+					TEXT("Cover implementation '%s' did not declare whether its mutable state is stateless or restored by canonical contributors."),
+					*CoverSystem->GetClass()->GetPathName());
+				bCoverageValid = false;
+				break;
+			}
+		}
+
+		if (!bCoverageValid)
+		{
+			if (OutError.IsEmpty())
+			{
+				OutError = FString::Printf(
+					TEXT("Cover implementation '%s' returned an invalid exact-state coverage claim."),
+					*CoverSystem->GetClass()->GetPathName());
+			}
+			if (bStateBindingFrozen)
+			{
+				InvalidateCommittedCanonicalStateBinding(OutError);
+			}
+			return false;
+		}
+
+		AppendFramed(CandidateFrame, TEXT("enabled"));
+		AppendFramed(
+			CandidateFrame, CoverSystem->GetClass()->GetPathName());
+		AppendFramed(
+			CandidateFrame, Coverage.StableImplementationId);
+		AppendFramed(
+			CandidateFrame,
+			LexToString(Coverage.BehaviorRevision));
+		AppendFramed(
+			CandidateFrame,
+			LexToString(Coverage.CoverageRevision));
+		AppendFramed(CandidateFrame, CoverageKind);
+		AppendFramed(
+			CandidateFrame,
+			LexToString(CanonicalRequiredKeys.Num()));
+		for (const FString& RequiredKey : CanonicalRequiredKeys)
+		{
+			AppendFramed(CandidateFrame, RequiredKey);
+		}
+	}
+
+	if (bStateBindingFrozen
+		&& FrozenStateBindingFrame != CandidateFrame)
+	{
+		InvalidateCommittedCanonicalStateBinding(
+			TEXT("The cover implementation or its state-coverage claim changed after the match StateContract froze."));
+		OutError = StateBindingFailureReason;
+		return false;
+	}
+
+	if (bCommit)
+	{
+		bStateBindingFrozen = true;
+		FrozenStateBindingFrame = CandidateFrame;
+	}
+	OutFrame = MoveTemp(CandidateFrame);
+	return true;
+}
+
+void USeinCoverSubsystem::InvalidateCanonicalStateBinding(
+	const FString& Reason)
+{
+	if (StateBindingFailureReason.IsEmpty())
+	{
+		StateBindingFailureReason = Reason.IsEmpty()
+			? TEXT("The frozen cover state-coverage contract became invalid.")
+			: Reason;
+		UE_LOG(LogSeinCoverSubsystem, Error, TEXT("%s"),
+			*StateBindingFailureReason);
+	}
+}
+
+void USeinCoverSubsystem::InvalidateCommittedCanonicalStateBinding(
+	const FString& Reason)
+{
+	InvalidateCanonicalStateBinding(Reason);
+	if (UWorld* World = GetWorld())
+	{
+		if (USeinWorldSubsystem* Sim =
+				World->GetSubsystem<USeinWorldSubsystem>())
+		{
+			Sim->InvalidateDeterministicExecutionContract(
+				StateBindingFailureReason);
+		}
 	}
 }
 

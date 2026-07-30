@@ -200,6 +200,17 @@ struct SEINARTSCOREENTITY_API FSeinCanonicalStateDescriptor
 	TArray<FName> AllowedNames;
 	FSeinCanonicalStateLimits Limits;
 	TArray<FSeinCanonicalStateKey> RestoreAfter;
+
+	/**
+	 * Declares that a deterministic service outside the registered-system list
+	 * (a subsystem, codec manifest, or conditionally-enabled module) owns this
+	 * contributor's lifecycle. Execution-topology freeze rejects any frozen
+	 * contributor that is neither externally owned nor named by at least one
+	 * registered system's coverage claim, so orphaned captured state is a
+	 * bootstrap error instead of a silent accident. Folded into the descriptor
+	 * digest: ownership semantics are part of the exact contract.
+	 */
+	bool bExternallyOwned = false;
 };
 
 /** Read-only capture input supplied only on the game thread. */

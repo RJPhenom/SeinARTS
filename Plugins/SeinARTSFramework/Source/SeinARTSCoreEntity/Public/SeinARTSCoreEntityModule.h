@@ -18,6 +18,7 @@
 #include "Input/SeinCommandSchemaRegistry.h"
 #include "Modules/ModuleInterface.h"
 #include "Modules/ModuleManager.h"
+#include "Serialization/SeinCanonicalStateRegistry.h"
 #include "Serialization/SeinSimulationContentRegistry.h"
 #include "Serialization/SeinLatentActionCodecRegistry.h"
 #include "Serialization/SeinPoolObjectCodecRegistry.h"
@@ -71,6 +72,8 @@ private:
 	TArray<FSeinCommandSchemaRegistrationHandle> BuiltInCommandSchemaHandles;
 	FSeinSimulationContentRegistrationHandle SimulationContentRegistrationHandle;
 	FSeinLatentActionCodecRegistrationHandle WaitActionCodecHandle;
+	FSeinCanonicalStateRegistrationHandle
+		CollisionCanonicalStateHandle;
 	TArray<FSeinPoolObjectCodecRegistrationHandle>
 		PoolObjectCodecHandles;
 	TArray<FSeinCanonicalStateRecipeRegistrationHandle>

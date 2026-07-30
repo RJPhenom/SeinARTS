@@ -81,6 +81,22 @@ public:
 	 *  the shared overlap-event diff. */
 	virtual void Resolve(USeinWorldSubsystem& World) override;
 
+	/** Exact shipped claim: Stateless (NumPasses/Relaxation are config
+	 *  covered by the resolution-config digest, not retained timeline state;
+	 *  the overlap diff is transient render scratch). A native subclass must
+	 *  re-declare its own coverage — inherited state alone never earns a
+	 *  claim. */
+	virtual bool ComputeStateCoverageClaim(
+		FSeinCollisionResolverStateCoverageClaim& OutClaim,
+		FString& OutError) const override;
+
+	/** Exact shipped digest: class identity + NumPasses + Relaxation, so a
+	 *  post-freeze tuning edit fail-stops instead of desyncing peers. Native
+	 *  subclasses must override. */
+	virtual bool ComputeResolutionConfigDigest(
+		FGuid& OutDigest,
+		FString& OutError) const override;
+
 	/** Relaxation passes per tick. Jacobi converges slower than Gauss-Seidel
 	 *  (neighbours don't see each other's in-pass pushes), so this defaults
 	 *  HIGHER than the GS resolver's fixed 4. */

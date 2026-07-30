@@ -41,6 +41,13 @@ namespace UE::SeinARTSTests
 			Navigation.SetDynamicBlockers(Blockers);
 		}
 
+		/** Simulates a post-freeze gated static-grid write: the mutation
+		 *  counter moves while the cached content digest stays identical. */
+		static void BumpStaticGridGeneration(USeinNavigationAStar& Navigation)
+		{
+			++Navigation.StaticGridGeneration;
+		}
+
 		static void Seed(USeinNavigationSubsystem& Navigation)
 		{
 			Navigation.PathRequestsThisTick = 3;
@@ -1279,6 +1286,57 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(
 			World->GetExecutionTopologyFailureReason().Contains(
 				TEXT("Navigation implementation or static environment changed"))));
+	}
+
+	TEST(PostFreezeInPlaceGridMutationFailStopsDespiteCachedDigest,
+		"SeinARTS.Unit.Navigation.CanonicalState")
+	{
+		FActorTestSpawner Spawner;
+		UWorld& UnrealWorld = Spawner.GetWorld();
+		USeinWorldSubsystem* World =
+			UnrealWorld.GetSubsystem<USeinWorldSubsystem>();
+		USeinNavigationSubsystem* NavigationSubsystem =
+			UnrealWorld.GetSubsystem<USeinNavigationSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+		ASSERT_THAT(IsNotNull(NavigationSubsystem));
+		USeinNavigationAStar* Navigation = ConfigureGrid(
+			UnrealWorld, *NavigationSubsystem, 1);
+		ASSERT_THAT(IsNotNull(Navigation));
+
+		FString Error;
+		ASSERT_THAT(IsTrue(StartNavigationStateWorld(
+			*World,
+			TEXT("NavigationState.GenerationFailStop"),
+			Error)));
+		FGuid FrozenDigest;
+		ASSERT_THAT(IsTrue(
+			Navigation->ComputeStaticEnvironmentDigest(
+				FrozenDigest, Error)));
+
+		// An in-place cell write leaves array lengths AND the cached content
+		// digest untouched — only the mutation counter can expose it.
+		FNavigationCanonicalStateTestAccess::
+			BumpStaticGridGeneration(*Navigation);
+		FGuid AfterMutation;
+		ASSERT_THAT(IsTrue(
+			Navigation->ComputeStaticEnvironmentDigest(
+				AfterMutation, Error)));
+		ASSERT_THAT(IsTrue(AfterMutation == FrozenDigest));
+
+		TestRunner->AddExpectedError(
+			TEXT("Navigation static topology mutated in place"),
+			EAutomationExpectedErrorFlags::Contains,
+			2,
+			false);
+		FTSTicker::GetCoreTicker().Tick(
+			World->GetFixedDeltaTimeSeconds());
+
+		ASSERT_THAT(IsFalse(World->IsSimulationRunning()));
+		ASSERT_THAT(IsFalse(
+			World->IsExecutionTopologyValid()));
+		ASSERT_THAT(IsTrue(
+			World->GetExecutionTopologyFailureReason().Contains(
+				TEXT("Navigation static topology mutated in place"))));
 	}
 
 	TEST(UnguardedSubstrateMutationFailStopsFrozenNavigation,

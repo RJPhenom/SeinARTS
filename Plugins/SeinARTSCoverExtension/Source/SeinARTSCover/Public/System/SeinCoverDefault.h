@@ -46,6 +46,15 @@ public:
 	virtual TArray<FSeinCoverSlotCandidate> FindNearbySlots(FFixedVector Origin, FFixedPoint Radius,
 		FSeinPlayerID Observer = FSeinPlayerID()) const override;
 
+	/** Native-subclass tripwire: only the exact shipped class (and its
+	 *  Blueprint children, whose behavior is the shipped native code) may
+	 *  inherit this Stateless claim implicitly. A NATIVE subclass can add
+	 *  future-affecting mutable state the claim cannot see, so it must
+	 *  re-claim explicitly (see ComputeCoverDefaultStateCoverageClaim). */
+	virtual bool ComputeStateCoverageClaim(
+		FSeinCoverStateCoverageClaim& OutClaim,
+		FString& OutError) const override;
+
 	// Tunables
 	// ====================================================================================================
 
@@ -58,6 +67,18 @@ public:
 	FFixedPoint SlotMatchRadius = FFixedPoint::FromInt(75);
 
 protected:
+	/**
+	 * Reusable shipped-default claim: Stateless. The only mutable state this
+	 * implementation owns (RegisteredProviders + RegisteredProviderReaches)
+	 * is a derived mirror rebuilt from authoritative entities on restore via
+	 * RebuildProviderRegistry, so no unrestored future-affecting state
+	 * remains. Native subclasses that keep that property can opt back into
+	 * this claim from their own ComputeStateCoverageClaim override.
+	 */
+	bool ComputeCoverDefaultStateCoverageClaim(
+		FSeinCoverStateCoverageClaim& OutClaim,
+		FString& OutError) const;
+
 	/** Registered cover-provider entity handles. Phase 2a uses a flat list;
 	 *  upgrade to a spatial index (cell hash, BVH, etc.) when provider counts
 	 *  + query rates make the linear scan a profile hit. */

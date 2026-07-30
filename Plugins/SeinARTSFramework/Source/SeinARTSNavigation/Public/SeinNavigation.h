@@ -182,6 +182,20 @@ public:
 		FSeinNavigationStateCoverageClaim& OutClaim,
 		FString& OutError) const;
 
+	/**
+	 * Monotonic per-instance counter that every static-environment mutation
+	 * path MUST bump. The nav subsystem latches the value when the match
+	 * StateContract freezes and re-reads it on every per-tick binding
+	 * revalidation, so an in-place topology write that leaves the (cached)
+	 * static digest unchanged still fail-stops the world. Deliberately kept
+	 * OUT of the peer-compared digest/frame: it counts local adoption events,
+	 * not content, so identical bakes loaded a different number of times
+	 * still agree across peers. Implementations that don't track mutation
+	 * events may leave the default constant 0, which degrades to today's
+	 * digest-only revalidation.
+	 */
+	virtual uint64 GetStaticEnvironmentGeneration() const { return 0; }
+
 	// ----------------------------------------------------------------------
 	// Unified level-data pipeline (CP1.1) — OPT-IN. A nav that registers as a
 	// layer provider on the shared substrate (USeinLevelData) returns its provider

@@ -80,6 +80,26 @@ public:
 	 *  FSeinCollisionResolutionSystem::Tick. */
 	virtual void Resolve(USeinWorldSubsystem& World) override;
 
+	/** Exact shipped claim: Stateless (the overlap diff is transient render
+	 *  scratch re-derived after restore). A native subclass must re-declare
+	 *  its own coverage — inherited state alone never earns a claim. */
+	virtual bool ComputeStateCoverageClaim(
+		FSeinCollisionResolverStateCoverageClaim& OutClaim,
+		FString& OutError) const override;
+
+	/** Exact shipped digest: class identity only (the Gauss-Seidel resolver
+	 *  carries no runtime tuning). Native subclasses must override. */
+	virtual bool ComputeResolutionConfigDigest(
+		FGuid& OutDigest,
+		FString& OutError) const override;
+
+protected:
+	/** Reusable exact-state claim for a native subclass that explicitly adds
+	 *  no future-affecting mutable state beyond inherited shipped state. */
+	bool ComputeDefaultResolverStateCoverageClaim(
+		FSeinCollisionResolverStateCoverageClaim& OutClaim,
+		FString& OutError) const;
+
 private:
 	/** One relaxation pass: separate every Block pair it touches. Reads each
 	 *  self's mid-pass transform (Gauss-Seidel) and writes pushes immediately,

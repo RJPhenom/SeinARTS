@@ -58,6 +58,7 @@
 #include "Collision/SeinCollisionTypes.h"
 #include "Components/SeinExtentsComponent.h"
 #include "Core/SeinEntityHandle.h"
+#include "Serialization/SeinCanonicalStateRegistry.h"
 #include "Types/FixedPoint.h"
 #include "Types/Transform.h"
 #include "Types/Vector.h"
@@ -66,12 +67,68 @@
 class USeinWorldSubsystem;
 class UWorld;
 
+/** How a concrete collision resolver's future-affecting mutable state is
+ *  restored across snapshot/replay boundaries. Unspecified always fails
+ *  closed at the StateContract freeze. */
+enum class ESeinCollisionResolverStateCoverage : uint8
+{
+	Unspecified,
+	/** No future-affecting mutable state beyond the framework-captured
+	 *  authoritative world (transient render scratch like the overlap diff
+	 *  is re-derived after restore, never carried across). */
+	Stateless,
+	/** Future-affecting state exists and is restored exactly by the named
+	 *  authoritative canonical-state contributors. */
+	CanonicalStateContributors,
+};
+
+/** Exact-state coverage claim one concrete collision resolver makes for the
+ *  match StateContract. Mirrors FSeinNavigationStateCoverageClaim. */
+struct SEINARTSCOREENTITY_API FSeinCollisionResolverStateCoverageClaim
+{
+	FString StableImplementationId;
+	uint32 BehaviorRevision = 0;
+	uint32 CoverageRevision = 0;
+	ESeinCollisionResolverStateCoverage StateCoverage =
+		ESeinCollisionResolverStateCoverage::Unspecified;
+	TArray<FSeinCanonicalStateKey> RequiredCanonicalStateContributors;
+};
+
 UCLASS(Abstract, BlueprintType, meta = (DisplayName = "Sein Collision Resolver"))
 class SEINARTSCOREENTITY_API USeinCollisionResolver : public UObject
 {
 	GENERATED_BODY()
 
 public:
+
+	/**
+	 * Claim exact continuation coverage for the concrete implementation. The
+	 * base fails closed. Implementations that retain no future-affecting
+	 * mutable state beyond the framework-captured authoritative world declare
+	 * Stateless; stateful implementations declare CanonicalStateContributors
+	 * and name every authoritative provider that restores their opaque state.
+	 * A stable implementation id and non-zero behavior/coverage revisions are
+	 * always required. The claim is validated and folded into the match
+	 * StateContract's world-binding frames at bootstrap and revalidated at
+	 * every fixed-tick boundary.
+	 */
+	virtual bool ComputeStateCoverageClaim(
+		FSeinCollisionResolverStateCoverageClaim& OutClaim,
+		FString& OutError) const;
+
+	/**
+	 * Digest every resolution-affecting configuration value on the live
+	 * instance (pass counts, relaxation factors, tuning knobs). The match
+	 * StateContract folds this into the collision world-binding frame and
+	 * recomputes it at every fixed-tick boundary, so post-freeze tuning drift
+	 * fail-stops the world instead of silently desyncing peers. Mirrors the
+	 * navigation static-environment digest. Every concrete implementation
+	 * MUST override this — even a tuning-less implementation makes that claim
+	 * explicitly; the base always fails closed.
+	 */
+	virtual bool ComputeResolutionConfigDigest(
+		FGuid& OutDigest,
+		FString& OutError) const;
 
 	// ----------------------------------------------------------------------
 	// Lifecycle — called by USeinWorldSubsystem
