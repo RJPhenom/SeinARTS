@@ -1136,7 +1136,7 @@ namespace UE::SeinARTSTests
 			EffectID = World->ApplyEffect(Target,
 				USeinEffectIdentityInstanceTestEffect::StaticClass(), Target);
 			FSeinActiveEffectsComponent* Effects =
-				World->GetComponent<FSeinActiveEffectsComponent>(Target);
+				World->GetComponentMutable<FSeinActiveEffectsComponent>(Target);
 			check(Effects && Effects->ActiveEffects.Num() == 1);
 			Effects->ActiveEffects[0].CurrentStacks = MAX_int32;
 			ReappliedID = World->ApplyEffect(Target,
@@ -1171,7 +1171,7 @@ namespace UE::SeinARTSTests
 			World->ApplyEffect(Target,
 				USeinEffectIdentityInstanceTestEffect::StaticClass(), Target);
 			FSeinActiveEffectsComponent* Effects =
-				World->GetComponent<FSeinActiveEffectsComponent>(Target);
+				World->GetComponentMutable<FSeinActiveEffectsComponent>(Target);
 			check(Effects);
 			GrantCount = Effects->ActiveEffects[0].CommittedAbilityGrants.Num();
 			Before = World->ComputeStateHash();

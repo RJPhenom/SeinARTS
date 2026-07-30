@@ -128,7 +128,7 @@ namespace SeinProductionLocal
 		}
 
 		FSeinProductionComponent* Production =
-			World.GetComponent<FSeinProductionComponent>(Producer);
+			World.GetComponentMutable<FSeinProductionComponent>(Producer);
 		if (!Production || Production->Queue.IsEmpty()
 			|| !EntriesEqual(Production->Queue[0], Completion.Entry))
 		{
@@ -153,7 +153,7 @@ namespace SeinProductionLocal
 			&World, Completion.Entry.ResourcePayer,
 			Completion.Entry.AtCompletionCost);
 		if (FSeinProductionComponent* Production =
-			World.GetComponent<FSeinProductionComponent>(Producer))
+			World.GetComponentMutable<FSeinProductionComponent>(Producer))
 		{
 			Production->Queue.Insert(Completion.Entry, 0);
 			Production->CurrentBuildProgress = Completion.OriginalProgress;
@@ -170,7 +170,7 @@ namespace SeinProductionLocal
 	{
 		bool bNewlyStalled = false;
 		if (FSeinProductionComponent* Production =
-			World.GetComponent<FSeinProductionComponent>(Producer))
+			World.GetComponentMutable<FSeinProductionComponent>(Producer))
 		{
 			if (!Production->Queue.IsEmpty()
 				&& EntriesEqual(Production->Queue[0], ExpectedFront)
@@ -291,7 +291,7 @@ public:
 		// Phase 1 is deliberately mutation-light: spawning can grow both the entity
 		// pool and component storages, invalidating every reference held by this walk.
 		TArray<FSeinEntityHandle> ReadyProducers;
-		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, FSeinEntity&)
+		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, const FSeinEntity&)
 		{
 			FSeinProductionComponent* ProdComp =
 				World.GetComponentMutable<

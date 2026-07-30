@@ -23,7 +23,7 @@ TArray<FSeinEntityHandle> USeinAIBPFL::SeinQueryAllEntities(const UObject* World
 	if (!Sub) return Out;
 
 	// Perfect-information walk over every live entity.
-	Sub->GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, FSeinEntity& /*Entity*/)
+	Sub->GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, const FSeinEntity& /*Entity*/)
 	{
 		if (Query.IsEmpty())
 		{

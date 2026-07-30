@@ -547,7 +547,7 @@ namespace UE::SeinARTSTests
 						return false;
 					}
 					FSeinAbilityComponent* Component =
-						World->GetComponent<
+						World->GetComponentMutable<
 							FSeinAbilityComponent>(
 								Entity);
 					if (!Component)

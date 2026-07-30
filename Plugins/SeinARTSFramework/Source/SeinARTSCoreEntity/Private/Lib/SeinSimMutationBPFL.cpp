@@ -36,7 +36,7 @@ namespace
 			return false;
 		}
 		if (!Subsystem->RequireStateMutationAuthorization(FnName)) return false;
-		T* Dst = Subsystem->GetComponent<T>(Handle);
+		T* Dst = Subsystem->GetComponentMutable<T>(Handle);
 		if (!Dst)
 		{
 			UE_LOG(LogSeinBPFL, Warning, TEXT("%s: entity %s invalid or has no %s"), FnName, *Handle.ToString(), *T::StaticStruct()->GetName());

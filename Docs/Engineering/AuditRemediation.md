@@ -409,7 +409,7 @@ record:
 | API-11 | Cover authority is a single-cast Boolean with no requester, source, stable slot, or override policy context. | 5 | Confirmed |
 | API-12 | Direct ability activate/end/cancel paths do not centrally maintain `ActiveAbilityID`/`ActivePassiveIDs`; snapshot restore preserves IDs but deliberately deactivates opaque passive execution. | 3/7 | Confirmed |
 | API-13 | Core and Net state machines remain concentrated in roughly 12.4k-line and 7.3k-line implementation files even after canonical-root serialization moved to its own unit; split internal responsibilities without widening public seams or changing execution order. | 8 | Confirmed |
-| API-14 | Public mutable entity-pool, component-storage, and player-state accessors bypass the guarded mutation/bootstrap facade and can violate lifecycle invariants. | 5 | Confirmed |
+| API-14 | Public reads are const-only (`GetComponent`/`GetEntity`/`GetEntityPool`/`GetComponentStorageRaw`/`GetPlayerState`); mutation goes through explicit `*Mutable` accessors that refuse (nullptr + error log) inside read-only/observer callbacks. Full call-site migration across framework, extensions, and test suites; adversarial review confirmed no migrated site is reachable under the guards today, so runtime behavior is unchanged. Gates: Editor + Shipping builds green on the completed sweep; Unit 352, Integration 12, Determinism 19, Editor.Snapshot 8 (All profile, 2026-07-29 evening). Residual: `SeinSquadDispatchResolver.cpp` treats a guard-refused broker fetch as "no broker data" instead of bailing (unreachable today). | 5 | Verified |
 
 ## Approved feature/completeness scope
 

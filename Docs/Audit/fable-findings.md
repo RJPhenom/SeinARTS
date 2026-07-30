@@ -225,3 +225,57 @@ largest open delivery surfaces.
    canonical snapshot/root foundation.
 4. Continue the performance workstream, prioritizing synchronous canonical-state cost,
    minimap refresh cost, and replay streaming/retention without weakening designer-facing seams.
+
+---
+
+## 6. Fable continuation — 2026-07-29 evening: API-14 const-migration completed
+
+**Author:** Claude (Fable 5), picking up from Sol's usage-limit stop. Baseline: `db87535`
+("codex wip"). All work below is in the working tree on top of that commit (git stays
+RJ-controlled).
+
+Sol's WIP flipped `USeinWorldSubsystem` reads to const-only (`GetComponent<T>` → `const T*`,
+const `GetEntityPool()`/`GetEntity()`/`GetComponentStorageRaw()`/`GetPlayerState()`) and added
+`RequireMutableStateAccess`-gated `GetComponentMutable` / `GetEntityMutable` /
+`GetEntityPoolMutable` / `GetCollisionSpatialHashMutable` / `GetComponentStorageMutable`
+(API-14). The call-site sweep was mid-flight — 78 sites across three build waves still failed
+to compile. I finished the sweep following Sol's established pattern: genuinely-mutating sites
+→ `*Mutable` accessors; read-only sites → const pointers / `const FSeinEntity&` lambda params.
+
+**Files touched (working tree):** CoreEntity — SeinAbilityBPFL, SeinEntityControlBPFL,
+SeinSimMutationBPFL, SeinAIBPFL, SeinEntityLookupBPFL, SeinDefaultCommandBrokerResolver,
+SeinWorldSubsystem.cpp (14 internal sites incl. the deferred-teardown containment ternaries),
+SeinActorBridgeSubsystem, CommandBroker/Production/Cooldown/AbilityTick system headers; FoW —
+SeinFogOfWarDefault (3 pool lambdas), SeinFogOfWarVisibilitySubsystem; Movement —
+SeinMovementDriverSystem (mutable pool + guard-bail), SeinARTSMovementModule debug draws
+(const); Squad extension — SeinSquadSystem (mutable pool; 9 sites), SeinSquadMutationBPFL,
+SeinSquadDispatchResolver, SeinAbility_SquadReinforce; tests —
+AbilityCallbackSafetyTests, BrokerCallbackSafetyTests, ProductionCostOwnershipTests,
+SnapshotBootstrapCheckpointTests, EffectLifecycleTests, MoveToContinuationEditorTests.
+
+**Verification (all on the completed working tree):**
+
+- Editor build green, all 17 modules relinked (incl. Cover, CoverSquad, MovementPlus).
+- `SeinARTS.Unit` (All profile): **352/352** — `SeinARTS.Unit-20260729-203031-208f330e`.
+- `SeinARTS.Determinism` (All): **19/19** — run 20260729 evening.
+- `SeinARTS.Editor.Snapshot`: **8/8** — `SeinARTS.Editor.Snapshot-20260729-204118-127f01fb`
+  (Gate B movement coverage stays green through the migration).
+- Independent adversarial review (multi-agent): **zero confirmed problems.** It enumerated
+  every set-site of `bReadOnlyCallbackInProgress`/`bObserverCallbackInProgress` (~23 scopes)
+  and verified every migrated `*Mutable` site is unreachable under those guards today, every
+  const-left site never writes, no `const_cast` was introduced, and both `ForEachEntity`
+  overloads iterate identically — zero value/order change in any reachable context.
+
+**Latent-hazard notes from the red-team (no action taken; recorded for the ledger):**
+
+1. `SeinSquadDispatchResolver.cpp:138` — a guard-refused `GetComponentMutable` nullptr would
+   not bail but silently flip `bHadBrokerData` into the "no broker data" semantic branch.
+   Unreachable today (ResolveDispatch only runs from PostTick dispatch), but it is the one
+   migrated site whose guard-failure mode is reinterpretation rather than refusal. A one-line
+   early-bail would make it uniform.
+2. `SeinMovementDriverSystem.h` / `SeinSquadSystem.h` — the new `if (!Pool) return;` skips a
+   whole system tick if ever run under a guard. Dead branch today (systems tick only from
+   `TickSystems`); flagged in case a future refactor ticks systems re-entrantly.
+3. Compile proof covers the Editor Win64 Development target; Sol's 16:57 Shipping green
+   predates this sweep, so the next Shipping build re-proves it (sources are target-agnostic —
+   low risk).

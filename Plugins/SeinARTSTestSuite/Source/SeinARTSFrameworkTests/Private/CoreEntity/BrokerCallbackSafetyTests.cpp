@@ -56,7 +56,7 @@ FSeinBrokerDispatchPlan USeinBrokerCallbackSafetyResolver::ResolveDispatch_Imple
 			World->DestroyEntity(BrokerHandle);
 		}
 		else if (FSeinCommandBrokerData* Broker =
-			World->GetComponent<FSeinCommandBrokerData>(BrokerHandle))
+			World->GetComponentMutable<FSeinCommandBrokerData>(BrokerHandle))
 		{
 			if (!Broker->OrderQueue.IsEmpty())
 			{
@@ -68,7 +68,7 @@ FSeinBrokerDispatchPlan USeinBrokerCallbackSafetyResolver::ResolveDispatch_Imple
 	if (World && bNestedCommit && World->IsEntityAlive(BrokerHandle))
 	{
 		if (FSeinCommandBrokerData* Broker =
-			World->GetComponent<FSeinCommandBrokerData>(BrokerHandle))
+			World->GetComponentMutable<FSeinCommandBrokerData>(BrokerHandle))
 		{
 			// Simulates a native same-broker nested dispatch that commits layout B
 			// and advances an input token while outer plan A is still resolving.

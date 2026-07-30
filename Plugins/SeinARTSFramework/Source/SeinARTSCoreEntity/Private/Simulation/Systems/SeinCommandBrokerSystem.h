@@ -413,7 +413,7 @@ namespace SeinCommandBrokerDispatch
 		int32 OrderIndex)
 	{
 		FSeinCommandBrokerData* Broker =
-			World.GetComponent<FSeinCommandBrokerData>(BrokerHandle);
+			World.GetComponentMutable<FSeinCommandBrokerData>(BrokerHandle);
 		if (!World.IsEntityAlive(BrokerHandle) || !Broker
 			|| !Broker->OrderQueue.IsValidIndex(OrderIndex)
 			|| Broker->Members.Num() == 0)
@@ -480,7 +480,8 @@ namespace SeinCommandBrokerDispatch
 			// atomically commit layout + the exact snapshotted order. Every reference
 			// dies before command enqueue can call outward.
 			FSeinCommandBrokerData* CurrentBroker =
-				World.GetComponent<FSeinCommandBrokerData>(BrokerHandle);
+				World.GetComponentMutable<FSeinCommandBrokerData>(
+					BrokerHandle);
 			if (!CurrentBroker || !CurrentBroker->OrderQueue.IsValidIndex(OrderIndex))
 			{
 				return false;
@@ -548,7 +549,7 @@ public:
 		TArray<FSeinEntityHandle> LooseReturnList;   // un-brokered units to self-return home (deferred past the pool walk)
 		const USeinARTSCoreSettings* BrokerSettings = GetDefault<USeinARTSCoreSettings>();
 
-		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, FSeinEntity& Entity)
+		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, const FSeinEntity& Entity)
 		{
 			FSeinCommandBrokerData* Broker =
 				World.GetComponentMutable<FSeinCommandBrokerData>(
@@ -603,7 +604,7 @@ public:
 		{
 			if (!World.IsEntityAlive(Handle)) continue;
 			FSeinCommandBrokerData* Broker =
-				World.GetComponent<FSeinCommandBrokerData>(Handle);
+				World.GetComponentMutable<FSeinCommandBrokerData>(Handle);
 			if (!Broker) continue;
 
 			// 1. Strip dead members (belt-and-suspenders — ProcessDeferredDestroys
@@ -720,7 +721,8 @@ public:
 				{
 					// A previous resolver may have grown the broker component
 					// storage. Reacquire at every iteration before reading it.
-					Broker = World.GetComponent<FSeinCommandBrokerData>(Handle);
+					Broker = World.GetComponentMutable<FSeinCommandBrokerData>(
+						Handle);
 					if (!World.IsEntityAlive(Handle) || !Broker
 						|| !Broker->OrderQueue.IsValidIndex(i))
 					{
@@ -761,7 +763,7 @@ public:
 
 			// Dispatch can invalidate every component address or kill this broker.
 			// Reacquire before the non-callback re-seek/cull work below.
-			Broker = World.GetComponent<FSeinCommandBrokerData>(Handle);
+			Broker = World.GetComponentMutable<FSeinCommandBrokerData>(Handle);
 			if (!World.IsEntityAlive(Handle) || !Broker) continue;
 
 			// 4.5 IDLE RE-SEEK (opt-in, default off): a formation whose members were shoved off

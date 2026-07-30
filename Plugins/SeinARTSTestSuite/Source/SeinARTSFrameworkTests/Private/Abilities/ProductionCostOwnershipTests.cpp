@@ -189,10 +189,10 @@ namespace
 			InWorld.GetEntityPool().ForEachEntity(
 				[&InWorld](
 					FSeinEntityHandle Handle,
-					FSeinEntity&)
+					const FSeinEntity&)
 			{
 				FSeinDeferredDestroyTestComponent* Marker =
-					InWorld.GetComponent<
+					InWorld.GetComponentMutable<
 						FSeinDeferredDestroyTestComponent>(Handle);
 				if (!Marker || !Marker->bArmed)
 				{

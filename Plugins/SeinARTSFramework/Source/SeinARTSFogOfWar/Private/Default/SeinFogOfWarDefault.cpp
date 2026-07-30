@@ -656,7 +656,7 @@ void USeinFogOfWarDefault::TickStamps(UWorld* World)
 	WorkItems.Reserve(SourceStates.Num());
 
 	Sim->GetEntityPool().ForEachEntity(
-		[this, Sim, Storage, &AliveSources, &WorkItems, TerrainNav, TerrainSettings](FSeinEntityHandle Handle, FSeinEntity& Entity)
+		[this, Sim, Storage, &AliveSources, &WorkItems, TerrainNav, TerrainSettings](FSeinEntityHandle Handle, const FSeinEntity& Entity)
 		{
 			const void* Raw = Storage->GetComponentRaw(Handle);
 			if (!Raw) return;
@@ -1162,7 +1162,7 @@ bool USeinFogOfWarDefault::RebuildDynamicBlockers(UWorld* World)
 			if (Storage)
 			{
 				Sim->GetEntityPool().ForEachEntity(
-					[Storage, &CurrentSnapshots](FSeinEntityHandle Handle, FSeinEntity& Entity)
+					[Storage, &CurrentSnapshots](FSeinEntityHandle Handle, const FSeinEntity& Entity)
 					{
 						const void* Raw = Storage->GetComponentRaw(Handle);
 						if (!Raw) return;
@@ -1425,7 +1425,7 @@ void USeinFogOfWarDefault::UpdateSeenLatches(USeinWorldSubsystem& Sim)
 	if (!Storage || Storage->GetComponentCount() == 0) return;
 
 	Sim.GetEntityPool().ForEachEntity(
-		[this, &Sim, Storage](FSeinEntityHandle Handle, FSeinEntity& /*Entity*/)
+		[this, &Sim, Storage](FSeinEntityHandle Handle, const FSeinEntity& /*Entity*/)
 		{
 			const void* Raw = Storage->GetComponentRaw(Handle);
 			if (!Raw) return;

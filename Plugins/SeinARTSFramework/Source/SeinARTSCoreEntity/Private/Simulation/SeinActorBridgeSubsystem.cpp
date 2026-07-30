@@ -383,7 +383,7 @@ void USeinActorBridgeSubsystem::ReconcileBridgeAfterRestore()
 	int32 NumActorsSpawned = 0;
 	int32 NumAbstractSkipped = 0;
 	int32 NumMissingClass = 0;
-	Sim->GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, FSeinEntity& Entity)
+	Sim->GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, const FSeinEntity& Entity)
 	{
 		if (EntityActorMap.Contains(Handle)) return;
 

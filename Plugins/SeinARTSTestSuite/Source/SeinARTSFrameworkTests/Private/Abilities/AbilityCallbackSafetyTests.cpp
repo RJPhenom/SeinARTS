@@ -68,7 +68,7 @@ void USeinCallbackRevokeOnCancelAbility::OnEnd_Implementation(bool bWasCancelled
 		WorldSubsystem, OwnerEntity, Replacement->AbilityTag,
 		FSeinEntityHandle::Invalid(), FFixedVector());
 	if (FSeinAbilityComponent* AbilityComponent =
-		WorldSubsystem->GetComponent<FSeinAbilityComponent>(OwnerEntity))
+		WorldSubsystem->GetComponentMutable<FSeinAbilityComponent>(OwnerEntity))
 	{
 		AbilityComponent->ActiveAbilityID = ReplacementID;
 	}

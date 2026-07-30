@@ -72,7 +72,7 @@ void USeinFogOfWarVisibilitySubsystem::Tick(float DeltaTime)
 	// lookups/sec — comfortably under a millisecond on modern hardware.
 	const bool bDisableColl = bDisableCollisionWhenHidden;
 	Sim->GetEntityPool().ForEachEntity(
-		[this, Sim, Bridge, Fog, Observer, bDisableColl](FSeinEntityHandle Handle, FSeinEntity& Entity)
+		[this, Sim, Bridge, Fog, Observer, bDisableColl](FSeinEntityHandle Handle, const FSeinEntity& Entity)
 		{
 			ASeinActor* Actor = Bridge->GetActorForEntity(Handle);
 			if (!Actor) return; // abstract entity (broker/squad) or not yet bridged

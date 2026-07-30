@@ -135,7 +135,7 @@ FSeinBrokerDispatchPlan USeinSquadDispatchResolver::ResolveDispatch_Implementati
 	// toggles (Reassign Slots Lateral / Depth) live on FSeinSquadComponent and are passed into
 	// ResolveFormationLayout below -- the SAME entry point preview consumers call, so commit + preview
 	// never drift. Both default OFF: authored slot roles stay pinned unless the designer opts in.
-	FSeinCommandBrokerData* BrokerData = World->GetComponent<FSeinCommandBrokerData>(BrokerHandle);
+	FSeinCommandBrokerData* BrokerData = World->GetComponentMutable<FSeinCommandBrokerData>(BrokerHandle);
 	const FSeinSquadComponent* SquadData = World->GetComponent<FSeinSquadComponent>(BrokerHandle);
 	const FSeinEntity* SquadEntity = World->GetEntity(BrokerHandle);
 	const bool bHadBrokerData = BrokerData != nullptr;
@@ -198,7 +198,8 @@ FSeinBrokerDispatchPlan USeinSquadDispatchResolver::ResolveDispatch_Implementati
 
 		if (bHadBrokerData)
 		{
-			BrokerData = World->GetComponent<FSeinCommandBrokerData>(BrokerHandle);
+			BrokerData = World->GetComponentMutable<FSeinCommandBrokerData>(
+				BrokerHandle);
 			if (!World->IsEntityAlive(BrokerHandle) || !BrokerData
 				|| World->GetEntityOwner(BrokerHandle) != BrokerOwner
 				|| BrokerData->ResolverID != BrokerResolverID

@@ -26,7 +26,7 @@ class FSeinCooldownSystem final : public ISeinSystem
 public:
 	virtual void Tick(FFixedPoint DeltaTime, USeinWorldSubsystem& World) override
 	{
-		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, FSeinEntity& /*Entity*/)
+		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, const FSeinEntity& /*Entity*/)
 		{
 			FSeinAbilityComponent* AbilityComp =
 				World.GetComponentMutable<FSeinAbilityComponent>(

@@ -94,7 +94,7 @@ bool USeinAbility_SquadReinforce::CanActivate_Implementation()
 void USeinAbility_SquadReinforce::OnActivate_Implementation()
 {
 	if (!WorldSubsystem) { EndAbility(); return; }
-	FSeinSquadComponent* Squad = WorldSubsystem->GetComponent<FSeinSquadComponent>(OwnerEntity);
+	FSeinSquadComponent* Squad = WorldSubsystem->GetComponentMutable<FSeinSquadComponent>(OwnerEntity);
 	if (!Squad) { EndAbility(); return; }
 
 	const int32 SlotIdx = SeinSquadReinforceLocal::FindFirstEnqueuableSlot(*Squad);

@@ -465,7 +465,8 @@ FSeinBrokerDispatchPlan USeinDefaultCommandBrokerResolver::ResolveDispatch_Imple
 		const FSeinFormationLayout Layout = ResolveFormationLayout(
 			World, Effective, Target, bReassignSlotsLateral, bReassignSlotsDepth);
 
-		Broker = World->GetComponent<FSeinCommandBrokerData>(BrokerHandle);
+		Broker = World->GetComponentMutable<FSeinCommandBrokerData>(
+			BrokerHandle);
 		if (!World->IsEntityAlive(BrokerHandle) || !Broker
 			|| World->GetEntityOwner(BrokerHandle) != BrokerOwner
 			|| Broker->ResolverID != BrokerResolverID

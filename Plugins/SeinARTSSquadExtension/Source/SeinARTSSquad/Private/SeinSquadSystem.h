@@ -79,16 +79,18 @@ public:
 		int32 EntitiesSeen = 0;
 		int32 SquadsFound = 0;
 
-		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, FSeinEntity& Entity)
+		FSeinEntityPool* Pool = World.GetEntityPoolMutable();
+		if (!Pool) return;
+		Pool->ForEachEntity([&](FSeinEntityHandle Handle, FSeinEntity& Entity)
 		{
 			++EntitiesSeen;
 
-			FSeinSquadComponent* Squad = World.GetComponent<FSeinSquadComponent>(Handle);
+			FSeinSquadComponent* Squad = World.GetComponentMutable<FSeinSquadComponent>(Handle);
 			if (!Squad) return;
 
 			++SquadsFound;
 
-			FSeinCommandBrokerData* Broker = World.GetComponent<FSeinCommandBrokerData>(Handle);
+			FSeinCommandBrokerData* Broker = World.GetComponentMutable<FSeinCommandBrokerData>(Handle);
 
 			// 0. Lazy initialization: detected by absence of the broker. Runs
 			// once on the first tick after the squad entity spawns. Spawns each
@@ -170,7 +172,7 @@ public:
 				World.AddComponent(Handle, NewBroker);
 
 				// Re-fetch — AddComponent may have relocated component storage.
-				Broker = World.GetComponent<FSeinCommandBrokerData>(Handle);
+				Broker = World.GetComponentMutable<FSeinCommandBrokerData>(Handle);
 				if (!Broker) return;       // unrecoverable; bail this tick
 
 				// Spawn each slot's member entity. Skips slots whose Entity is
@@ -211,7 +213,7 @@ public:
 					for (const FGameplayTag& Tag : Slot.SlotTags) { SlotTag = Tag; break; }
 
 					// Wire FSeinSquadMemberComponent (overwrite any AC-injected default).
-					if (FSeinSquadMemberComponent* ExistingMember = World.GetComponent<FSeinSquadMemberComponent>(Member))
+					if (FSeinSquadMemberComponent* ExistingMember = World.GetComponentMutable<FSeinSquadMemberComponent>(Member))
 					{
 						ExistingMember->SquadEntity = Handle;
 						ExistingMember->SlotIndex = SlotIdx;
@@ -227,7 +229,7 @@ public:
 					}
 
 					// Wire FSeinBrokerMembershipData (back-ref to the squad broker = this squad).
-					if (FSeinBrokerMembershipData* ExistingMemb = World.GetComponent<FSeinBrokerMembershipData>(Member))
+					if (FSeinBrokerMembershipData* ExistingMemb = World.GetComponentMutable<FSeinBrokerMembershipData>(Member))
 					{
 						ExistingMemb->CurrentBrokerHandle = Handle;
 					}
@@ -239,7 +241,7 @@ public:
 					}
 
 					// Re-fetch broker pointer (storage may have moved during AddComponent above).
-					Broker = World.GetComponent<FSeinCommandBrokerData>(Handle);
+					Broker = World.GetComponentMutable<FSeinCommandBrokerData>(Handle);
 					if (!Broker) return;
 
 					Slot.CurrentOccupant = Member;
@@ -286,7 +288,7 @@ public:
 							for (int32 MemberIdx = 0; MemberIdx < LiveMembers.Num(); ++MemberIdx)
 							{
 								if (!InitLayout.Positions.IsValidIndex(MemberIdx)) continue;
-								if (FSeinEntity* MemberEnt = World.GetEntity(LiveMembers[MemberIdx]))
+								if (FSeinEntity* MemberEnt = World.GetEntityMutable(LiveMembers[MemberIdx]))
 								{
 									MemberEnt->Transform.SetLocation(InitLayout.Positions[MemberIdx]);
 									if (InitLayout.Facings.IsValidIndex(MemberIdx))
@@ -544,7 +546,7 @@ public:
 								// SlotIndex is canonical (always unique per array position);
 								// SlotTag is role metadata that may be shared across slots.
 								// Resolvers prefer SlotIndex for formation lookup.
-								if (FSeinSquadMemberComponent* MemberData = World.GetComponent<FSeinSquadMemberComponent>(NewMember))
+								if (FSeinSquadMemberComponent* MemberData = World.GetComponentMutable<FSeinSquadMemberComponent>(NewMember))
 								{
 									MemberData->SquadEntity = Handle;
 									MemberData->SlotIndex = SlotIdx;
@@ -558,7 +560,7 @@ public:
 									NewData.SlotTag = Front.SlotTag;
 									World.AddComponent(NewMember, NewData);
 								}
-								if (FSeinBrokerMembershipData* MembData = World.GetComponent<FSeinBrokerMembershipData>(NewMember))
+								if (FSeinBrokerMembershipData* MembData = World.GetComponentMutable<FSeinBrokerMembershipData>(NewMember))
 								{
 									MembData->CurrentBrokerHandle = Handle;
 								}
@@ -573,7 +575,7 @@ public:
 								Slot.CurrentCooldown = Slot.ReinforceCooldown;
 
 								// Re-fetch broker pointer (storage may have moved during AddComponent).
-								if (FSeinCommandBrokerData* BrokerAfter = World.GetComponent<FSeinCommandBrokerData>(Handle))
+								if (FSeinCommandBrokerData* BrokerAfter = World.GetComponentMutable<FSeinCommandBrokerData>(Handle))
 								{
 									BrokerAfter->Members.AddUnique(NewMember);
 									BrokerAfter->bCapabilityMapDirty = true;

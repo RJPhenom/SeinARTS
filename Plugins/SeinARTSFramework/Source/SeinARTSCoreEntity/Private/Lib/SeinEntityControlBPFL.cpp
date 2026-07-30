@@ -95,11 +95,13 @@ FSeinEntityControlGrantID USeinEntityControlBPFL::SeinGrantEntityControl(
 	}
 
 	FSeinEntityControlComponent* State =
-		World->GetComponent<FSeinEntityControlComponent>(TargetEntity);
+		World->GetComponentMutable<FSeinEntityControlComponent>(
+			TargetEntity);
 	if (!State)
 	{
 		World->AddComponent(TargetEntity, FSeinEntityControlComponent());
-		State = World->GetComponent<FSeinEntityControlComponent>(TargetEntity);
+		State = World->GetComponentMutable<FSeinEntityControlComponent>(
+			TargetEntity);
 	}
 	if (!State || State->NextGrantSerial <= 0)
 	{
@@ -168,7 +170,8 @@ bool USeinEntityControlBPFL::SeinRevokeEntityControl(
 	}
 
 	FSeinEntityControlComponent* State =
-		World->GetComponent<FSeinEntityControlComponent>(GrantID.TargetEntity);
+		World->GetComponentMutable<FSeinEntityControlComponent>(
+			GrantID.TargetEntity);
 	if (!State) return false;
 	const int32 Removed = State->Grants.RemoveAll(
 		[&GrantID](const FSeinEntityControlGrant& Grant)
@@ -191,7 +194,8 @@ int32 USeinEntityControlBPFL::SeinPruneExpiredEntityControlGrants(
 	}
 
 	FSeinEntityControlComponent* State =
-		World->GetComponent<FSeinEntityControlComponent>(TargetEntity);
+		World->GetComponentMutable<FSeinEntityControlComponent>(
+			TargetEntity);
 	if (!State) return 0;
 	const int32 CurrentTick = World->GetCurrentTick();
 	return State->Grants.RemoveAll([CurrentTick](const FSeinEntityControlGrant& Grant)

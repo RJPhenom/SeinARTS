@@ -363,7 +363,8 @@ namespace SeinAbilityGrantLocal
 			return INDEX_NONE;
 		}
 		FSeinAbilityComponent* AbilityComp =
-			Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
+			Subsystem->GetComponentMutable<FSeinAbilityComponent>(
+				EntityHandle);
 		if (!AbilityComp)
 		{
 			UE_LOG(LogSeinBPFL, Warning,
@@ -426,7 +427,9 @@ namespace SeinAbilityGrantLocal
 		{
 			if (!Instance->ActivateAbility(EntityHandle, FFixedVector::ZeroVector))
 			{
-				AbilityComp = Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
+				AbilityComp =
+					Subsystem->GetComponentMutable<FSeinAbilityComponent>(
+						EntityHandle);
 				const int32 FailedIndex = AbilityComp
 					? AbilityComp->AbilityInstanceIDs.IndexOfByKey(AbilityID)
 					: INDEX_NONE;
@@ -436,7 +439,9 @@ namespace SeinAbilityGrantLocal
 				}
 				return INDEX_NONE;
 			}
-			AbilityComp = Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
+			AbilityComp =
+				Subsystem->GetComponentMutable<FSeinAbilityComponent>(
+					EntityHandle);
 			const int32 CurrentIndex = AbilityComp
 				? AbilityComp->AbilityInstanceIDs.IndexOfByKey(AbilityID)
 				: INDEX_NONE;
@@ -586,7 +591,9 @@ int32 USeinAbilityBPFL::SeinRevokeAbilityByTag(const UObject* WorldContextObject
 	int32 NumDestroyed = 0;
 	for (int32 ID : MatchingIDs)
 	{
-		AbilityComp = Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
+		AbilityComp =
+			Subsystem->GetComponentMutable<FSeinAbilityComponent>(
+				EntityHandle);
 		if (!AbilityComp) break;
 		const int32 Idx = AbilityComp->AbilityInstanceIDs.IndexOfByKey(ID);
 		if (Idx == INDEX_NONE) continue;  // already removed by a prior pass
@@ -663,7 +670,8 @@ int32 USeinAbilityBPFL::SeinRevokeAbilityFromEffect(const UObject* WorldContextO
 		return 0;
 	}
 	FSeinAbilityComponent* AbilityComp =
-		Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
+		Subsystem->GetComponentMutable<FSeinAbilityComponent>(
+			EntityHandle);
 	if (!AbilityComp) return 0;
 	const UClass* TargetClass = AbilityClass.Get();
 	const int32 Idx = SeinAbilityGrantLocal::FindInstanceIndex(
@@ -713,7 +721,9 @@ int32 USeinAbilityBPFL::SeinForceRevokeAbilityByTag(const UObject* WorldContextO
 	int32 NumDestroyed = 0;
 	for (int32 ID : MatchingIDs)
 	{
-		AbilityComp = Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
+		AbilityComp =
+			Subsystem->GetComponentMutable<FSeinAbilityComponent>(
+				EntityHandle);
 		if (!AbilityComp) break;
 		const int32 Idx = AbilityComp->AbilityInstanceIDs.IndexOfByKey(ID);
 		if (Idx == INDEX_NONE) continue;

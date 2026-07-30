@@ -3659,7 +3659,7 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleBrokerOr
 							Active->CancelAbility();
 						}
 						MemberAC = IsEntityAlive(Member)
-							? GetComponent<FSeinAbilityComponent>(Member)
+							? GetComponentMutable<FSeinAbilityComponent>(Member)
 							: nullptr;
 						if (MemberAC && MemberAC->ActiveAbilityID == ActiveID
 							&& (!MemberAC->AbilityInstanceIDs.Contains(ActiveID)
@@ -3673,7 +3673,7 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleBrokerOr
 
 			// Cancellation callbacks may replace or destroy broker storage.
 			PersistentBroker = IsEntityAlive(BrokerHandle)
-				? GetComponent<FSeinCommandBrokerData>(BrokerHandle)
+				? GetComponentMutable<FSeinCommandBrokerData>(BrokerHandle)
 				: nullptr;
 			if (!PersistentBroker) { continue; }
 
@@ -3842,7 +3842,7 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleActivate
 			return false;
 		}
 		FSeinAbilityComponent* CurrentComp =
-			GetComponent<FSeinAbilityComponent>(Cmd.EntityHandle);
+			GetComponentMutable<FSeinAbilityComponent>(Cmd.EntityHandle);
 		if (!CurrentComp || !CurrentComp->AbilityInstanceIDs.Contains(AbilityID))
 		{
 			return false;
@@ -4263,7 +4263,7 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleActivate
 		{
 			const int32 OtherID = AbilityIDsToCancel[Index];
 			USeinAbility* const ExpectedAbility = AbilitiesToCancel[Index].Get();
-			FSeinAbilityComponent* CurrentComp =
+			const FSeinAbilityComponent* CurrentComp =
 				GetComponent<FSeinAbilityComponent>(Cmd.EntityHandle);
 			USeinAbility* Other = GetAbilityInstance(OtherID);
 			if (!CurrentComp
@@ -4395,7 +4395,7 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleCancelAb
 	{
 		Active->CancelAbility();
 		AbilityComp = IsEntityAlive(Cmd.EntityHandle)
-			? GetComponent<FSeinAbilityComponent>(Cmd.EntityHandle)
+			? GetComponentMutable<FSeinAbilityComponent>(Cmd.EntityHandle)
 			: nullptr;
 		if (AbilityComp && AbilityComp->ActiveAbilityID == ActiveAbilityID
 			&& (!AbilityComp->AbilityInstanceIDs.Contains(ActiveAbilityID)
@@ -8774,7 +8774,7 @@ FFixedPoint USeinWorldSubsystem::ResolveAttribute(FSeinEntityHandle Handle, UScr
 		GetComponentStorageRaw(ComponentType);
 	if (!Storage) return FFixedPoint::Zero;
 
-	void* CompData = Storage->GetComponentRaw(Handle);
+	const void* CompData = Storage->GetComponentRaw(Handle);
 	if (!CompData) return FFixedPoint::Zero;
 
 	const FFixedPoint BaseValue = FSeinAttributeResolver::ReadFixedPointField(CompData, ComponentType, FieldName);
@@ -9076,7 +9076,8 @@ FSeinActiveEffect* USeinWorldSubsystem::ResolveEffect(const FEffectLocator& Loca
 	if (Locator.Scope == ESeinModifierScope::Instance)
 	{
 		FSeinActiveEffectsComponent* Effects =
-			GetComponent<FSeinActiveEffectsComponent>(Locator.InstanceTarget);
+			GetComponentMutable<FSeinActiveEffectsComponent>(
+				Locator.InstanceTarget);
 		const bool bKnownPendingTombstone =
 			EntityPool.IsDeferredDestroyTombstone(Locator.InstanceTarget)
 			&& (Locator.InstanceTarget == DeferredTeardownHandle
@@ -9309,7 +9310,7 @@ USeinWorldSubsystem::FEffectApplyResult USeinWorldSubsystem::ApplyEffectTransact
 
 	const FSeinPlayerID OwnerID = GetEntityOwner(Target);
 	FSeinActiveEffectsComponent* InstanceComp =
-		GetComponent<FSeinActiveEffectsComponent>(Target);
+		GetComponentMutable<FSeinActiveEffectsComponent>(Target);
 	FSeinPlayerState* OwnerState = GetPlayerStateMutable(OwnerID);
 	auto ResolveApplyStorage = [&]() -> TArray<FSeinActiveEffect>*
 	{
@@ -9686,7 +9687,7 @@ USeinWorldSubsystem::FEffectApplyResult USeinWorldSubsystem::ApplyEffectTransact
 	{
 		return bCommittedReplacementRemoval ? Invalidated() : Reject();
 	}
-	InstanceComp = GetComponent<FSeinActiveEffectsComponent>(Target);
+	InstanceComp = GetComponentMutable<FSeinActiveEffectsComponent>(Target);
 	OwnerState = GetPlayerStateMutable(OwnerID);
 	Storage = ResolveApplyStorage();
 	if (!Storage || !ValidateProjection(*Storage, OwnerState,
@@ -9966,7 +9967,7 @@ bool USeinWorldSubsystem::RemoveEffect(FSeinEntityHandle Target, int64 EffectIns
 		? GetEntityOwner(Target)
 		: EntityPool.GetDeferredDestroyOwner(Target);
 	FSeinActiveEffectsComponent* InstanceComp =
-		GetComponent<FSeinActiveEffectsComponent>(Target);
+		GetComponentMutable<FSeinActiveEffectsComponent>(Target);
 	if (!InstanceComp && bKnownPendingTombstone)
 	{
 			if (ISeinComponentStorage* RawStorage =
@@ -11621,7 +11622,7 @@ FSeinEntityHandle USeinWorldSubsystem::CreateBrokerForMembers(
 					Active->CancelAbility();
 				}
 				AC = IsEntityAlive(M)
-					? GetComponent<FSeinAbilityComponent>(M)
+					? GetComponentMutable<FSeinAbilityComponent>(M)
 					: nullptr;
 				if (AC && AC->ActiveAbilityID == ActiveID
 					&& (!AC->AbilityInstanceIDs.Contains(ActiveID)
@@ -11635,7 +11636,7 @@ FSeinEntityHandle USeinWorldSubsystem::CreateBrokerForMembers(
 		// Ability callbacks may replace component storage or destroy the old
 		// broker. Re-resolve the snapshotted handle before touching its members.
 		OldBroker = IsEntityAlive(OldBrokerHandle)
-			? GetComponent<FSeinCommandBrokerData>(OldBrokerHandle)
+			? GetComponentMutable<FSeinCommandBrokerData>(OldBrokerHandle)
 			: nullptr;
 		if (!OldBroker) continue;
 		OldBroker->Members.Remove(M);
@@ -12367,7 +12368,7 @@ bool USeinWorldSubsystem::ExitContainerInternal(
 
 	FSeinContainmentData* ContComp = bDeferredContainer
 		? GetDeferredTeardownComponent<FSeinContainmentData>(Container)
-		: GetComponent<FSeinContainmentData>(Container);
+		: GetComponentMutable<FSeinContainmentData>(Container);
 	if (!ContComp) return false;
 
 	// Resolve exit world position.
@@ -12405,7 +12406,7 @@ bool USeinWorldSubsystem::ExitContainerInternal(
 	{
 		FSeinAttachmentSpec* Spec = bDeferredContainer
 			? GetDeferredTeardownComponent<FSeinAttachmentSpec>(Container)
-			: GetComponent<FSeinAttachmentSpec>(Container);
+			: GetComponentMutable<FSeinAttachmentSpec>(Container);
 		if (Spec)
 		{
 			Spec->Assignments.Remove(MemComp->CurrentSlot);

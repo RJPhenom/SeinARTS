@@ -115,7 +115,9 @@ public:
 		TArray<FIdleUnit> NativeIdle;   // C++ movement class — parallel-safe
 		TArray<FIdleUnit> ScriptIdle;   // Blueprint movement class — serial only
 
-		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, FSeinEntity& Entity)
+		FSeinEntityPool* Pool = World.GetEntityPoolMutable();
+		if (!Pool) return;
+		Pool->ForEachEntity([&](FSeinEntityHandle Handle, FSeinEntity& Entity)
 		{
 			FSeinMovementComponent* Move =
 				World.GetComponentMutable<FSeinMovementComponent>(
@@ -137,7 +139,9 @@ public:
 			USeinMovement* Movement = Sub->GetOrCreateMovementInstance(Handle, *Move);
 			if (!Movement) return;
 
-			const FIdleUnit Unit{ &Entity, Handle, Move, World.GetComponent<FSeinNavigationComponent>(Handle), Movement };
+			const FIdleUnit Unit{ &Entity, Handle, Move,
+				World.GetComponentMutable<FSeinNavigationComponent>(Handle),
+				Movement };
 			(Movement->GetClass()->IsNative() ? NativeIdle : ScriptIdle).Add(Unit);
 		});
 

@@ -30,10 +30,10 @@ namespace UE::SeinARTSTests
 				InWorld.GetEntityPool().ForEachEntity(
 					[&InWorld](
 						FSeinEntityHandle Handle,
-						FSeinEntity&)
+						const FSeinEntity&)
 				{
 					FSeinDeferredDestroyTestComponent* Marker =
-						InWorld.GetComponent<
+						InWorld.GetComponentMutable<
 							FSeinDeferredDestroyTestComponent>(
 								Handle);
 					if (!Marker || !Marker->bArmed)
@@ -559,7 +559,7 @@ namespace UE::SeinARTSTests
 			FSeinWorldSnapshot::CurrentVersion, Baseline.SnapshotVersion));
 
 		FSeinDeferredDestroyTestComponent* DestroyMarker =
-			World->GetComponent<FSeinDeferredDestroyTestComponent>(
+			World->GetComponentMutable<FSeinDeferredDestroyTestComponent>(
 				Entity);
 		ASSERT_THAT(IsNotNull(DestroyMarker));
 		DestroyMarker->bArmed = true;
@@ -580,7 +580,8 @@ namespace UE::SeinARTSTests
 				*World, Baseline)));
 		ASSERT_THAT(IsTrue(World->IsEntityAlive(Entity)));
 		DestroyMarker =
-			World->GetComponent<FSeinDeferredDestroyTestComponent>(Entity);
+			World->GetComponentMutable<FSeinDeferredDestroyTestComponent>(
+				Entity);
 		ASSERT_THAT(IsNotNull(DestroyMarker));
 		ASSERT_THAT(IsFalse(DestroyMarker->bArmed));
 		FTSTicker::GetCoreTicker().Tick(World->GetFixedDeltaTimeSeconds());

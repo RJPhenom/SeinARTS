@@ -37,7 +37,7 @@ namespace
 			return false;
 		}
 		if (!Subsystem->RequireStateMutationAuthorization(FnName)) return false;
-		T* Dst = Subsystem->GetComponent<T>(Handle);
+		T* Dst = Subsystem->GetComponentMutable<T>(Handle);
 		if (!Dst)
 		{
 			UE_LOG(LogSeinSquadMutBPFL, Warning, TEXT("%s: entity %s invalid or has no %s"), FnName, *Handle.ToString(), *T::StaticStruct()->GetName());
@@ -80,12 +80,12 @@ namespace SeinSquadMutation
 	// when emptying a slot whose CurrentOccupant is being evicted.
 	static void ClearMemberBackref(USeinWorldSubsystem& World, FSeinEntityHandle SquadHandle, FSeinEntityHandle Member)
 	{
-		if (FSeinSquadMemberComponent* MemberData = World.GetComponent<FSeinSquadMemberComponent>(Member))
+		if (FSeinSquadMemberComponent* MemberData = World.GetComponentMutable<FSeinSquadMemberComponent>(Member))
 		{
 			MemberData->SquadEntity = FSeinEntityHandle::Invalid();
 			MemberData->SlotTag = FGameplayTag();
 		}
-		if (FSeinCommandBrokerData* Broker = World.GetComponent<FSeinCommandBrokerData>(SquadHandle))
+		if (FSeinCommandBrokerData* Broker = World.GetComponentMutable<FSeinCommandBrokerData>(SquadHandle))
 		{
 			const int32 NumBefore = Broker->Members.Num();
 			Broker->Members.Remove(Member);
@@ -97,12 +97,12 @@ namespace SeinSquadMutation
 	// filling a slot with a new occupant.
 	static void SetMemberBackref(USeinWorldSubsystem& World, FSeinEntityHandle SquadHandle, FGameplayTag SlotTag, FSeinEntityHandle Member)
 	{
-		if (FSeinSquadMemberComponent* MemberData = World.GetComponent<FSeinSquadMemberComponent>(Member))
+		if (FSeinSquadMemberComponent* MemberData = World.GetComponentMutable<FSeinSquadMemberComponent>(Member))
 		{
 			MemberData->SquadEntity = SquadHandle;
 			MemberData->SlotTag = SlotTag;
 		}
-		if (FSeinCommandBrokerData* Broker = World.GetComponent<FSeinCommandBrokerData>(SquadHandle))
+		if (FSeinCommandBrokerData* Broker = World.GetComponentMutable<FSeinCommandBrokerData>(SquadHandle))
 		{
 			Broker->Members.AddUnique(Member);
 			Broker->bCapabilityMapDirty = true;
@@ -141,7 +141,7 @@ bool USeinSquadMutationBPFL::SeinSetSquadLeader(const UObject* WCO, FSeinEntityH
 	USeinWorldSubsystem* S = GetWorldSubsystem(WCO);
 	if (!S) return false;
 	if (!S->RequireStateMutationAuthorization(TEXT("SetSquadLeader"))) return false;
-	FSeinSquadComponent* D = S->GetComponent<FSeinSquadComponent>(SquadHandle);
+	FSeinSquadComponent* D = S->GetComponentMutable<FSeinSquadComponent>(SquadHandle);
 	if (!D) { UE_LOG(LogSeinSquadMutBPFL, Warning, TEXT("SetSquadLeader: squad %s has no FSeinSquadComponent"), *SquadHandle.ToString()); return false; }
 	if (NewLeader.IsValid() && D->IndexOfSlotByMember(NewLeader) == INDEX_NONE)
 	{
@@ -166,7 +166,7 @@ bool USeinSquadMutationBPFL::SeinFillSquadSlot(const UObject* WCO, FSeinEntityHa
 		UE_LOG(LogSeinSquadMutBPFL, Warning, TEXT("FillSquadSlot: invalid member handle (squad=%s, slot=%s)"), *SquadHandle.ToString(), *SlotTag.ToString());
 		return false;
 	}
-	FSeinSquadComponent* Squad = S->GetComponent<FSeinSquadComponent>(SquadHandle);
+	FSeinSquadComponent* Squad = S->GetComponentMutable<FSeinSquadComponent>(SquadHandle);
 	if (!Squad) { UE_LOG(LogSeinSquadMutBPFL, Warning, TEXT("FillSquadSlot: squad %s has no FSeinSquadComponent"), *SquadHandle.ToString()); return false; }
 
 	const int32 SlotIdx = Squad->IndexOfSlotByTag(SlotTag);
@@ -198,7 +198,7 @@ bool USeinSquadMutationBPFL::SeinEmptySquadSlot(const UObject* WCO, FSeinEntityH
 	USeinWorldSubsystem* S = GetWorldSubsystem(WCO);
 	if (!S) return false;
 	if (!S->RequireStateMutationAuthorization(TEXT("EmptySquadSlot"))) return false;
-	FSeinSquadComponent* Squad = S->GetComponent<FSeinSquadComponent>(SquadHandle);
+	FSeinSquadComponent* Squad = S->GetComponentMutable<FSeinSquadComponent>(SquadHandle);
 	if (!Squad) { UE_LOG(LogSeinSquadMutBPFL, Warning, TEXT("EmptySquadSlot: squad %s has no FSeinSquadComponent"), *SquadHandle.ToString()); return false; }
 
 	const int32 SlotIdx = Squad->IndexOfSlotByTag(SlotTag);
@@ -228,7 +228,7 @@ bool USeinSquadMutationBPFL::SeinAddSquadMember(const UObject* WCO, FSeinEntityH
 	USeinWorldSubsystem* S = GetWorldSubsystem(WCO);
 	if (!S) return false;
 	if (!S->RequireStateMutationAuthorization(TEXT("AddSquadMember"))) return false;
-	FSeinSquadComponent* Squad = S->GetComponent<FSeinSquadComponent>(SquadHandle);
+	FSeinSquadComponent* Squad = S->GetComponentMutable<FSeinSquadComponent>(SquadHandle);
 	if (!Squad) { UE_LOG(LogSeinSquadMutBPFL, Warning, TEXT("AddSquadMember: squad %s has no FSeinSquadComponent"), *SquadHandle.ToString()); return false; }
 
 	const int32 EmptyIdx = Squad->FindFirstEmptySlotIndex();
@@ -251,7 +251,7 @@ bool USeinSquadMutationBPFL::SeinRemoveSquadMember(const UObject* WCO, FSeinEnti
 	USeinWorldSubsystem* S = GetWorldSubsystem(WCO);
 	if (!S) return false;
 	if (!S->RequireStateMutationAuthorization(TEXT("RemoveSquadMember"))) return false;
-	FSeinSquadComponent* Squad = S->GetComponent<FSeinSquadComponent>(SquadHandle);
+	FSeinSquadComponent* Squad = S->GetComponentMutable<FSeinSquadComponent>(SquadHandle);
 	if (!Squad) { UE_LOG(LogSeinSquadMutBPFL, Warning, TEXT("RemoveSquadMember: squad %s has no FSeinSquadComponent"), *SquadHandle.ToString()); return false; }
 
 	const int32 SlotIdx = Squad->IndexOfSlotByMember(MemberToRemove);
@@ -274,7 +274,7 @@ bool USeinSquadMutationBPFL::SeinSetSlotOffsetTransform(const UObject* WCO, FSei
 	USeinWorldSubsystem* S = GetWorldSubsystem(WCO);
 	if (!S) return false;
 	if (!S->RequireStateMutationAuthorization(TEXT("SetSlotOffsetTransform"))) return false;
-	FSeinSquadComponent* Squad = S->GetComponent<FSeinSquadComponent>(SquadHandle);
+	FSeinSquadComponent* Squad = S->GetComponentMutable<FSeinSquadComponent>(SquadHandle);
 	if (!Squad) { UE_LOG(LogSeinSquadMutBPFL, Warning, TEXT("SetSlotOffsetTransform: squad %s has no FSeinSquadComponent"), *SquadHandle.ToString()); return false; }
 
 	const int32 SlotIdx = Squad->IndexOfSlotByTag(SlotTag);

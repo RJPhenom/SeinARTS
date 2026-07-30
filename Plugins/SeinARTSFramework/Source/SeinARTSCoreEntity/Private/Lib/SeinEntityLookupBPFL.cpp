@@ -82,7 +82,7 @@ TArray<FSeinEntityHandle> USeinEntityLookupBPFL::SeinFindEntities(const UObject*
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
 	if (!Subsystem || !Predicate.IsBound()) return Result;
 
-	Subsystem->GetEntityPool().ForEachEntity([&Result, &Predicate](FSeinEntityHandle Handle, FSeinEntity& /*Entity*/)
+	Subsystem->GetEntityPool().ForEachEntity([&Result, &Predicate](FSeinEntityHandle Handle, const FSeinEntity& /*Entity*/)
 	{
 		if (Predicate.Execute(Handle))
 		{

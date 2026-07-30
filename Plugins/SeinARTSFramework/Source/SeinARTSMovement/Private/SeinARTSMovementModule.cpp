@@ -483,8 +483,8 @@ namespace
 		{
 			// PIE / game: sim entity pool, with velocity arrows + camera cull.
 			if (!Sim) return;
-			FSeinEntityPool& Pool = Sim->GetEntityPool();
-			Pool.ForEachEntity([&](FSeinEntityHandle Handle, FSeinEntity& Entity)
+			const FSeinEntityPool& Pool = Sim->GetEntityPool();
+			Pool.ForEachEntity([&](FSeinEntityHandle Handle, const FSeinEntity& Entity)
 			{
 				const FSeinMovementComponent* MovementData = Sim->GetComponent<FSeinMovementComponent>(Handle);
 				if (!MovementData) return;
@@ -732,8 +732,8 @@ namespace
 		{
 			// PIE / game: sim entity pool path.
 			if (!Sim) return;
-			FSeinEntityPool& Pool = Sim->GetEntityPool();
-			Pool.ForEachEntity([&](FSeinEntityHandle Handle, FSeinEntity& Entity)
+			const FSeinEntityPool& Pool = Sim->GetEntityPool();
+			Pool.ForEachEntity([&](FSeinEntityHandle Handle, const FSeinEntity& Entity)
 			{
 				const FSeinExtentsComponent* Extents = Sim->GetComponent<FSeinExtentsComponent>(Handle);
 				if (!Extents || Extents->Shapes.Num() == 0) return;
