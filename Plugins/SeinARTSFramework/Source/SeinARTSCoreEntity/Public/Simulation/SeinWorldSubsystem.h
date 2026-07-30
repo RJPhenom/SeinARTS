@@ -1155,6 +1155,28 @@ public:
 		FSeinSnapshotRestoreAuthorityHandle&& Authority,
 		FString& OutError);
 
+	/**
+	 * Open the resync catch-up window: this world adopted a checkpoint and is
+	 * consuming its authenticated command tail toward the live frontier. While
+	 * open, CaptureSnapshot refuses (a catching-up peer holds pre-frontier
+	 * state and must not emit checkpoints healthy peers could adopt); the
+	 * transport adapter is likewise expected to withhold authorship and
+	 * world-root reports until activation. Refuses on a re-entrant open or
+	 * during capture/restore/tick dispatch. Procedural gating for trusted
+	 * native adapters, like the restore authority — not authentication.
+	 */
+	bool BeginResyncCatchUpWindow(FString& OutError);
+
+	/** Close the resync catch-up window at activation (or on an abandoned
+	 *  resync). Safe to call when no window is open. */
+	void EndResyncCatchUpWindow();
+
+	/** True while this world consumes an adopted checkpoint's command tail. */
+	bool IsResyncCatchUpInProgress() const
+	{
+		return bResyncCatchUpInProgress;
+	}
+
 	/** Capture current sim state into the supplied snapshot. A checkpoint is
 	 *  emitted only after bootstrap authorization has been consumed; refusal
 	 *  clears the output and leaves `SnapshotVersion == 0`. Call only at a
@@ -2076,6 +2098,11 @@ private:
 	 *  authoritative state transition. Callback-capable cancellation and
 	 *  post-restore hooks execute while this guard is set. */
 	bool bSnapshotRestoreInProgress = false;
+	/** True from checkpoint adoption until resync activation: this world is
+	 *  consuming its authenticated command tail and holds pre-frontier state,
+	 *  so it may not produce checkpoints (see the CaptureSnapshot refusal).
+	 *  Owned by the resync coordinator through Begin/EndResyncCatchUpWindow. */
+	bool bResyncCatchUpInProgress = false;
 	/** Suppresses deterministic mutation authority while explicitly read-only
 	 *  observer and host-AI callbacks execute, including during Applying. */
 	bool bReadOnlyCallbackInProgress = false;

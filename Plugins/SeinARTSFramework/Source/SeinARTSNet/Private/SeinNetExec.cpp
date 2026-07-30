@@ -1085,8 +1085,31 @@ namespace
 
 	static FAutoConsoleCommandWithWorldArgsAndOutputDevice GCmdSimulateReconnect(
 		TEXT("Sein.Net.SimulateReconnect"),
-		TEXT("SERVER ONLY. Sein.Net.SimulateReconnect <SlotIndex> — mark a slot back to Connected. NOTE: full snapshot+tail catch-up is a follow-up phase — slot resumes from current sim state."),
+		TEXT("SERVER ONLY. Sein.Net.SimulateReconnect <SlotIndex> — mark a slot back to Connected WITHOUT catch-up (slot resumes from current sim state). For the full checkpoint+tail resync, run Sein.Net.RequestResync on the affected CLIENT instead."),
 		FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(&HandleSimulateReconnect));
+
+	void HandleRequestResync(const TArray<FString>& Args, UWorld* World, FOutputDevice& Ar)
+	{
+		if (!World) { Ar.Log(TEXT("[SeinNet] RequestResync: no World.")); return; }
+		USeinNetSubsystem* Net = World->GetGameInstance()
+			? World->GetGameInstance()->GetSubsystem<USeinNetSubsystem>() : nullptr;
+		if (!Net) { Ar.Log(TEXT("[SeinNet] RequestResync: USeinNetSubsystem missing.")); return; }
+
+		FString Error;
+		if (Net->RequestResync(Error))
+		{
+			Ar.Log(TEXT("[SeinNet] RequestResync: checkpoint+tail resync requested from the coordinator."));
+		}
+		else
+		{
+			Ar.Logf(TEXT("[SeinNet] RequestResync: refused — %s"), *Error);
+		}
+	}
+
+	static FAutoConsoleCommandWithWorldArgsAndOutputDevice GCmdRequestResync(
+		TEXT("Sein.Net.RequestResync"),
+		TEXT("CLIENT (owning peer). Request a full authenticated checkpoint+command-tail resync from the coordinator: the slot is withheld from authorship, a fresh boundary checkpoint transfers in bounded chunks, the retained turn tail replays through the normal gate, and authorship resumes only after an exact canonical-root handshake."),
+		FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(&HandleRequestResync));
 
 	static FAutoConsoleCommandWithWorldArgsAndOutputDevice GCmdSlotStatus(
 		TEXT("Sein.Net.SlotStatus"),

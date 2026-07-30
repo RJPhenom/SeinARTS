@@ -424,3 +424,79 @@ persistent-contributor count.
 4 Cover + 3 collision + 3 core new tests), `SeinARTS.Determinism` 19, `SeinARTS.Integration`
 12, `SeinARTS.Editor.Snapshot` 8 — all green on the completed tree (final Unit rerun after
 the red-team fixes pending at this line's writing; superseded by the run IDs in Saved/Automation).
+
+---
+
+## 8. FEAT-01 — authenticated checkpoint + command-tail resync (2026-07-30, Fable)
+
+Built on the trusted-envelope adoption foundation, per RJ's picks: **both** flows in one wave
+(resync of a stalled/desynced peer AND late-join into an existing/vacated slot — growing the
+membership mid-match stays FEAT-10) with **immediate root-handshake activation**.
+
+### 8.1 What shipped
+
+- **Core catch-up window** (`Begin/EndResyncCatchUpWindow`): while open, CaptureSnapshot
+  refuses (a pre-frontier peer must not emit checkpoints) and the scheduler pump runs a
+  **catch-up burst** — the wall-clock accumulator is topped to a full MaxTicksPerFrame budget
+  each pump, because real-time accumulation can never close a wall-clock deficit. Sim-safe:
+  the accumulator is a scheduler, not sim state; the lockstep gate still bounds the burst to
+  the turns actually available.
+- **Coordinator retained tail**: the EXACT opaque fan-out bytes of every committed turn,
+  bounded by the shared 256-turn protocol window (the replay writer is deliberately NOT the
+  tail source — its cap is abort-and-discard). Serving a tail re-sends those bytes through
+  the same Client_ReceiveTurn as live delivery.
+- **Bounded transfer**: `SeinSnapshotTransfer` maps a captured v13 snapshot into the (until
+  now consumer-less) snapshot envelope codec — one Authoritative section, constant schema/
+  descriptor digests, prefix cross-checks — chunked 48 KB × 4 per turn boundary over new
+  reliable relay RPCs (a one-frame burst would overflow the reliable buffer and kick the
+  peer). 10 new RPCs total, all identity-from-relay-ownership per the authority decisions.
+- **The flow**: request → slot flips Reconnecting (heartbeats keep the gate healthy; open
+  turns are back-filled at the flip, mirroring OnLogout — this is what lets a resync REVIVE
+  an already-stalled session) → live-boundary capture (no sim stall) → paced transfer →
+  client adopts stopped (PreserveCurrent + RemainStopped) under a one-shot restore authority
+  → tail through the NORMAL delivery path → burst catch-up → ready → activation root
+  handshake at an agreed future boundary (server turn + InputDelay + 2; re-ready
+  reschedules) → on exact root agreement the slot returns to Connected with authorship from
+  FirstAuthoredTurn (heartbeat coverage guaranteed through FirstAuthoredTurn − 1, so the
+  first real submission can neither collide with a heartbeat nor leave a gap).
+- **Self-healing triggers**: a peer receiving a live turn far beyond its window, or a world
+  still Awaiting bootstrap while turns flow (late join), auto-requests a resync; a slot
+  parked in Reconnecting with no serve demotes to Dropped after the AI-takeover window so
+  the AI fallback resumes; serves time out at 120 s; a client-side failure aborts the serve
+  and reconciles its cursors. Reconnect into a launched match (bootstrap Consumed) now lands
+  in Reconnecting instead of instantly Connected-with-stale-state; pre-launch rejoins keep
+  the legacy Connected path so session start cannot deadlock.
+
+### 8.2 The red-team cycle (this is why the loop exists)
+
+The first implementation passed all suites — and an adversarial review then found a FATAL
+flaw plus nine independent wedge paths, none reachable by the automation harness: no
+fast-forward mechanism (catch-up could never terminate under real latency), the flip never
+back-filled open turns (wedging exactly the stalled session resync exists to recover),
+one-frame chunk bursts (reliable-buffer kick loop), stranded serves with no timeout, the
+wrong "launched" signal (pre-launch rejoin deadlocked match start), terminal Reconnecting
+parking, stale received-turn blockage, a delayed root-checkpoint session kill, activation
+boundary races, and a failure-path submission burst. All ten were fixed; a verification pass
+then confirmed 9 fully closed with mechanism-level evidence, caught that fix #8 introduced a
+NEW inverse race (a root boundary completed during suppression can never be back-reported →
+expiry kills the session blaming the recovered peer), which was closed with per-participant
+root-report exemptions through FirstAuthoredTurn − 1.
+
+### 8.3 Evidence and residuals
+
+Evidence: Editor build green; Unit 365 / Determinism 19 / Integration 12 / Editor.Snapshot 8
+(All profile). New tests pin: the catch-up burst (>1 tick per pump under the window), the
+capture gate, envelope round-trip + tamper/truncation rejection, and the load-bearing
+end-to-end — a checkpoint captured on a LIVE world, transferred through real envelope bytes,
+adopted stopped, caught up, produces a bit-identical canonical root at a common boundary.
+
+Residuals (recorded, deliberate):
+1. **True multi-process E2E is PIE/cooked verification** — the automation harness cannot run
+   two networked processes; the RPC state machine's live behavior is RJ's-oracle territory
+   (`Sein.Net.RequestResync` on a client; `Sein.Net.SimulateDisconnect` to stage it).
+2. **No activation-failure retry signal**: a root-divergent activation parks the slot until
+   a manual re-request (then demotes to AI) — divergence warrants a deliberate retry, but
+   there is no player-facing surface yet.
+3. **Practical checkpoint ceiling ~49 MB** (pacing × 120 s timeout) despite the codec's
+   256 MiB bound — oversized checkpoints fail cleanly and retry; worth a guard someday.
+4. Host self-resync refused by design (the coordinator IS the timeline).

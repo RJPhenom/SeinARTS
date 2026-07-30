@@ -380,6 +380,115 @@ void ASeinNetRelay::Server_ReportWorldStateRoot_Implementation(
 	}
 }
 
+void ASeinNetRelay::Server_RequestResync_Implementation(
+	const FSeinProtocolContext& Context)
+{
+	if (USeinNetSubsystem* Net = GetNetSubsystem())
+	{
+		Net->ServerHandleResyncRequest(this, Context);
+	}
+}
+
+void ASeinNetRelay::Client_BeginCheckpointTransfer_Implementation(
+	const FSeinProtocolContext& Context,
+	int32 TransferId,
+	int32 CheckpointTurn,
+	int32 TotalChunks,
+	int64 TotalBytes)
+{
+	if (USeinNetSubsystem* Net = GetNetSubsystem())
+	{
+		Net->ClientHandleBeginCheckpointTransfer(
+			Context, TransferId, CheckpointTurn, TotalChunks, TotalBytes);
+	}
+}
+
+void ASeinNetRelay::Client_ReceiveCheckpointChunk_Implementation(
+	const FSeinProtocolContext& Context,
+	int32 TransferId,
+	int32 ChunkIndex,
+	const TArray<uint8>& Bytes)
+{
+	if (USeinNetSubsystem* Net = GetNetSubsystem())
+	{
+		Net->ClientHandleCheckpointChunk(
+			Context, TransferId, ChunkIndex, Bytes);
+	}
+}
+
+void ASeinNetRelay::Client_EndCheckpointTransfer_Implementation(
+	const FSeinProtocolContext& Context,
+	int32 TransferId)
+{
+	if (USeinNetSubsystem* Net = GetNetSubsystem())
+	{
+		Net->ClientHandleEndCheckpointTransfer(Context, TransferId);
+	}
+}
+
+void ASeinNetRelay::Server_RequestResyncTail_Implementation(
+	const FSeinProtocolContext& Context,
+	int32 FromTurn)
+{
+	if (USeinNetSubsystem* Net = GetNetSubsystem())
+	{
+		Net->ServerHandleResyncTailRequest(this, Context, FromTurn);
+	}
+}
+
+void ASeinNetRelay::Server_AbortResync_Implementation(
+	const FSeinProtocolContext& Context)
+{
+	if (USeinNetSubsystem* Net = GetNetSubsystem())
+	{
+		Net->ServerHandleResyncAbort(this, Context);
+	}
+}
+
+void ASeinNetRelay::Server_ReportResyncReady_Implementation(
+	const FSeinProtocolContext& Context)
+{
+	if (USeinNetSubsystem* Net = GetNetSubsystem())
+	{
+		Net->ServerHandleResyncReady(this, Context);
+	}
+}
+
+void ASeinNetRelay::Client_NotifyResyncActivationCheck_Implementation(
+	const FSeinProtocolContext& Context,
+	int32 CheckTurn)
+{
+	if (USeinNetSubsystem* Net = GetNetSubsystem())
+	{
+		Net->ClientHandleResyncActivationCheck(Context, CheckTurn);
+	}
+}
+
+void ASeinNetRelay::Server_ReportResyncActivationRoot_Implementation(
+	const FSeinProtocolContext& Context,
+	int32 CheckTurn,
+	FGuid WorldRoot)
+{
+	if (USeinNetSubsystem* Net = GetNetSubsystem())
+	{
+		Net->ServerHandleResyncActivationRoot(
+			this, Context, CheckTurn, WorldRoot);
+	}
+}
+
+void ASeinNetRelay::Client_NotifyResyncActivation_Implementation(
+	const FSeinProtocolContext& Context,
+	bool bActivated,
+	int32 FirstAuthoredTurn,
+	const FString& Reason)
+{
+	if (USeinNetSubsystem* Net = GetNetSubsystem())
+	{
+		Net->ClientHandleResyncActivation(
+			Context, bActivated, FirstAuthoredTurn, Reason);
+	}
+}
+
 void ASeinNetRelay::Server_ReportDeterminismSessionFailure_Implementation(
 	const FSeinProtocolContext& Context,
 	const FSeinDeterminismSessionFailure& Failure)

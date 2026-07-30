@@ -291,6 +291,89 @@ public:
 		const FSeinProtocolContext& Context,
 		const FSeinDeterminismSessionFailure& Failure);
 
+	// ===== Resync (FEAT-01): bounded checkpoint + exact command tail =====
+	// Identity for every RPC below comes from relay ownership + the protocol
+	// context, per the approved topology-neutral authority decisions. The
+	// coordinator serves; the owning peer adopts, catches up on the retained
+	// tail through the SAME Client_ReceiveTurn path as live delivery, and
+	// activates only after an exact root handshake at an agreed boundary.
+
+	/** Owning peer -> coordinator. Request a fresh checkpoint + tail resync
+	 *  for this relay's slot. The coordinator flips the slot to Reconnecting
+	 *  (heartbeats continue; authorship is withheld until activation). */
+	UFUNCTION(Server, Reliable)
+	void Server_RequestResync(const FSeinProtocolContext& Context);
+
+	/** Coordinator -> owning peer. A bounded checkpoint transfer begins.
+	 *  CheckpointTurn is the frontier the checkpoint's tick corresponds to;
+	 *  the command tail resumes at CheckpointTurn + 1. */
+	UFUNCTION(Client, Reliable)
+	void Client_BeginCheckpointTransfer(
+		const FSeinProtocolContext& Context,
+		int32 TransferId,
+		int32 CheckpointTurn,
+		int32 TotalChunks,
+		int64 TotalBytes);
+
+	/** Coordinator -> owning peer. One bounded envelope chunk, in order. */
+	UFUNCTION(Client, Reliable)
+	void Client_ReceiveCheckpointChunk(
+		const FSeinProtocolContext& Context,
+		int32 TransferId,
+		int32 ChunkIndex,
+		const TArray<uint8>& Bytes);
+
+	/** Coordinator -> owning peer. All chunks sent; the peer validates the
+	 *  reassembled envelope, adopts it stopped, then requests the tail. */
+	UFUNCTION(Client, Reliable)
+	void Client_EndCheckpointTransfer(
+		const FSeinProtocolContext& Context,
+		int32 TransferId);
+
+	/** Owning peer -> coordinator. The checkpoint was adopted; serve the
+	 *  retained assembled turns from FromTurn through the live frontier. */
+	UFUNCTION(Server, Reliable)
+	void Server_RequestResyncTail(
+		const FSeinProtocolContext& Context,
+		int32 FromTurn);
+
+	/** Owning peer -> coordinator. The peer abandoned its resync locally;
+	 *  free the serve so a fresh request is not refused as a duplicate. */
+	UFUNCTION(Server, Reliable)
+	void Server_AbortResync(const FSeinProtocolContext& Context);
+
+	/** Owning peer -> coordinator. The tail is consumed and the peer's sim
+	 *  reached the live frontier; schedule the activation root handshake. */
+	UFUNCTION(Server, Reliable)
+	void Server_ReportResyncReady(const FSeinProtocolContext& Context);
+
+	/** Coordinator -> owning peer. Compute and report the canonical world
+	 *  root at exactly CheckTurn's boundary for activation comparison. */
+	UFUNCTION(Client, Reliable)
+	void Client_NotifyResyncActivationCheck(
+		const FSeinProtocolContext& Context,
+		int32 CheckTurn);
+
+	/** Owning peer -> coordinator. The peer's canonical root at the agreed
+	 *  activation boundary. */
+	UFUNCTION(Server, Reliable)
+	void Server_ReportResyncActivationRoot(
+		const FSeinProtocolContext& Context,
+		int32 CheckTurn,
+		FGuid WorldRoot);
+
+	/** Coordinator -> owning peer. Activation verdict. On success the slot is
+	 *  Connected again and the peer's first authored turn is
+	 *  FirstAuthoredTurn (the coordinator guarantees heartbeat coverage
+	 *  through FirstAuthoredTurn - 1, so authorship resumes gap- and
+	 *  conflict-free). On failure the peer may request a fresh resync. */
+	UFUNCTION(Client, Reliable)
+	void Client_NotifyResyncActivation(
+		const FSeinProtocolContext& Context,
+		bool bActivated,
+		int32 FirstAuthoredTurn,
+		const FString& Reason);
+
 	/** Server -> owning client. Lobby kick notification. The kicked player's
 	 *  process disconnects from the listen server and travels to the project's
 	 *  configured `USeinARTSCoreSettings::MainMenuMap`. Mirrors the same

@@ -639,6 +639,7 @@ void USeinWorldSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	bSnapshotRestoreMutationAuthorized = false;
 	bSnapshotCaptureInProgress = false;
 	bSnapshotRestoreInProgress = false;
+	bResyncCatchUpInProgress = false;
 	bReadOnlyCallbackInProgress = false;
 	bObserverCallbackInProgress = false;
 	ActiveAICommandEmitter = nullptr;
@@ -995,6 +996,7 @@ void USeinWorldSubsystem::ReleaseAllModuleOwnedState()
 	bSnapshotRestoreMutationAuthorized = false;
 	bSnapshotCaptureInProgress = false;
 	bSnapshotRestoreInProgress = false;
+	bResyncCatchUpInProgress = false;
 	bReadOnlyCallbackInProgress = false;
 	bObserverCallbackInProgress = false;
 	bSimulationTickDispatchInProgress = false;
@@ -2268,6 +2270,21 @@ bool USeinWorldSubsystem::TickSimulation(float DeltaTime)
 		: 1;
 
 	TimeAccumulator += DeltaTime;
+
+	// Catch-up burst: a resyncing peer must CLOSE a wall-clock deficit, which
+	// real-time accumulation can never do (the deficit would stay constant
+	// forever). While the catch-up window is open, top the accumulator up to
+	// a full frame's tick budget so the pump runs MaxTicksPerFrame whenever
+	// the lockstep gate has turns available. Sim-safe by design: the
+	// accumulator is a wall-clock scheduler, not sim state — peers are
+	// bit-identical at any tick N regardless of pacing — and the turn gate
+	// still stalls the pump the moment the tail runs dry.
+	if (bResyncCatchUpInProgress)
+	{
+		TimeAccumulator = FMath::Max(
+			TimeAccumulator,
+			FixedDeltaTimeSeconds * static_cast<float>(MaxTicks));
+	}
 
 	int32 TicksProcessed = 0;
 	while (bIsRunning
@@ -5318,6 +5335,48 @@ const FSeinEntity* USeinWorldSubsystem::GetEntity(FSeinEntityHandle Handle) cons
 	return EntityPool.Get(Handle);
 }
 
+bool USeinWorldSubsystem::BeginResyncCatchUpWindow(FString& OutError)
+{
+	OutError.Reset();
+	if (!IsInGameThread())
+	{
+		OutError =
+			TEXT("The resync catch-up window may only be opened on the game thread.");
+		return false;
+	}
+	if (bResyncCatchUpInProgress)
+	{
+		OutError =
+			TEXT("A resync catch-up window is already open for this world.");
+		return false;
+	}
+	if (bSnapshotCaptureInProgress || bSnapshotRestoreInProgress
+		|| bSimulationTickDispatchInProgress || SeinIsInSimContext())
+	{
+		OutError =
+			TEXT("The resync catch-up window may only be opened between fixed ticks, outside capture/restore.");
+		return false;
+	}
+	bResyncCatchUpInProgress = true;
+	return true;
+}
+
+void USeinWorldSubsystem::EndResyncCatchUpWindow()
+{
+	if (!IsInGameThread())
+	{
+		UE_LOG(LogSeinSim, Error,
+			TEXT("EndResyncCatchUpWindow rejected off the game thread."));
+		return;
+	}
+	bResyncCatchUpInProgress = false;
+	// Drop ALL residual burst budget so live pacing resumes immediately —
+	// even one leftover fixed delta would double-tick the next pump. The
+	// cost is at most one frame of deferred real time, which the lockstep
+	// gate absorbs.
+	TimeAccumulator = 0.0f;
+}
+
 FSeinEntityPool* USeinWorldSubsystem::GetEntityPoolMutable()
 {
 	if (!RequireMutableStateAccess(TEXT("GetEntityPoolMutable")))
@@ -5783,6 +5842,16 @@ void USeinWorldSubsystem::CaptureSnapshot(FSeinWorldSnapshot& OutSnapshot)
 	{
 		UE_LOG(LogSeinSim, Error,
 			TEXT("CaptureSnapshot: active replay ingress must stop before checkpoint capture."));
+		return;
+	}
+	if (bResyncCatchUpInProgress)
+	{
+		// A peer that adopted a checkpoint and is still consuming its command
+		// tail holds pre-frontier state. `!bIsRunning` gates its input but NOT
+		// capture, so without this refusal a catching-up peer could emit a
+		// checkpoint healthy peers might treat as authoritative.
+		UE_LOG(LogSeinSim, Error,
+			TEXT("CaptureSnapshot: a world catching up from an adopted checkpoint cannot produce checkpoints until resync activation completes."));
 		return;
 	}
 	if (MatchBootstrapState != ESeinMatchBootstrapState::Consumed

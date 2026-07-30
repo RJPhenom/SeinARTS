@@ -433,6 +433,102 @@ public:
 		int32 Turn,
 		FGuid WorldRoot);
 
+	// ===== Resync (FEAT-01) — coordinator-side handlers =====
+
+	/** Owning peer requested a checkpoint+tail resync: flip its slot to
+	 *  Reconnecting (heartbeats continue, authorship withheld), capture a
+	 *  fresh checkpoint at this boundary, and chunk-transfer the bounded
+	 *  envelope to the requesting relay. */
+	void ServerHandleResyncRequest(
+		ASeinNetRelay* SourceRelay,
+		const FSeinProtocolContext& Context);
+
+	/** The peer adopted the checkpoint; serve the retained assembled turns
+	 *  from FromTurn through the live frontier (fails the resync if the
+	 *  retained window no longer covers FromTurn). */
+	void ServerHandleResyncTailRequest(
+		ASeinNetRelay* SourceRelay,
+		const FSeinProtocolContext& Context,
+		int32 FromTurn);
+
+	/** Owning peer abandoned its resync; free the serve immediately. */
+	void ServerHandleResyncAbort(
+		ASeinNetRelay* SourceRelay,
+		const FSeinProtocolContext& Context);
+
+	/** The peer reached the live frontier; schedule the activation root
+	 *  handshake at an upcoming turn boundary. */
+	void ServerHandleResyncReady(
+		ASeinNetRelay* SourceRelay,
+		const FSeinProtocolContext& Context);
+
+	/** The peer's canonical root at the agreed activation boundary. Compared
+	 *  against the coordinator's own root for the same boundary; agreement
+	 *  activates the slot (Connected + authorship from FirstAuthoredTurn),
+	 *  disagreement fails the resync so the peer may retry. */
+	void ServerHandleResyncActivationRoot(
+		ASeinNetRelay* SourceRelay,
+		const FSeinProtocolContext& Context,
+		int32 CheckTurn,
+		FGuid WorldRoot);
+
+	// ===== Resync (FEAT-01) — owning-peer-side handlers =====
+
+	/** Begin accumulating a bounded checkpoint transfer. */
+	void ClientHandleBeginCheckpointTransfer(
+		const FSeinProtocolContext& Context,
+		int32 TransferId,
+		int32 CheckpointTurn,
+		int32 TotalChunks,
+		int64 TotalBytes);
+
+	/** Accumulate one in-order chunk of the current transfer. */
+	void ClientHandleCheckpointChunk(
+		const FSeinProtocolContext& Context,
+		int32 TransferId,
+		int32 ChunkIndex,
+		const TArray<uint8>& Bytes);
+
+	/** Validate + decode the reassembled envelope, adopt it stopped under
+	 *  the one-shot restore authority, open the core catch-up window, then
+	 *  request the command tail. */
+	void ClientHandleEndCheckpointTransfer(
+		const FSeinProtocolContext& Context,
+		int32 TransferId);
+
+	/** The coordinator scheduled the activation handshake at CheckTurn:
+	 *  report the local canonical root when the sim completes that boundary. */
+	void ClientHandleResyncActivationCheck(
+		const FSeinProtocolContext& Context,
+		int32 CheckTurn);
+
+	/** Activation verdict: on success close the catch-up window, restore the
+	 *  turn cursors to FirstAuthoredTurn, and resume normal authorship. */
+	void ClientHandleResyncActivation(
+		const FSeinProtocolContext& Context,
+		bool bActivated,
+		int32 FirstAuthoredTurn,
+		const FString& Reason);
+
+	/** Owning-peer entry point: request a full checkpoint+tail resync from
+	 *  the coordinator (also exposed via `Sein.Net.RequestResync`). Refuses
+	 *  while another resync is in flight. */
+	bool RequestResync(FString& OutError);
+
+	/** Phase of the local peer's in-flight resync, for diagnostics. */
+	enum class EClientResyncPhase : uint8
+	{
+		None,
+		Transferring,
+		Adopting,
+		CatchingUp,
+		ActivationPending,
+	};
+	EClientResyncPhase GetClientResyncPhase() const
+	{
+		return ClientResyncPhase;
+	}
+
 	/** Shipped relay-adapter ingress. The relay supplies authenticated
 	 *  participant provenance; the payload never chooses its identity. */
 	void ServerHandleDeterminismSessionFailure(
@@ -962,6 +1058,20 @@ private:
 	 *  drainage at the matching sim-tick turn boundary. Keyed by turn ID. */
 	TMap<int32, TArray<FSeinCommand>> ReceivedTurns;
 
+	/** Coordinator-side: the EXACT opaque fan-out bytes of every committed
+	 *  turn inside the shared protocol history window, pruned alongside the
+	 *  other per-turn ledgers. This is the resync command-tail source: serving
+	 *  a tail re-sends these bytes through the same Client_ReceiveTurn as live
+	 *  delivery, so a catching-up peer decodes byte-identical turns. The
+	 *  replay writer is deliberately NOT the tail source (its cap discards the
+	 *  whole buffer). Bounded: <= GSeinRetainedHistoryTurns entries of
+	 *  already-bounded opaque batches. */
+	TMap<int32, FSeinOpaqueCommandBatch> RetainedAssembledTurns;
+
+	/** Turns at or below this floor were pruned from the retained tail; a
+	 *  resync whose frontier falls below it must re-checkpoint instead. */
+	int32 RetainedAssembledTurnFloor = -1;
+
 	/** Client-side input waiting for real turn boundaries. Capped to four
 	 *  author-turn shares by count, wire bytes, and decoded allocation. */
 	FSeinOutgoingDraftBacklog PendingOutgoingDrafts;
@@ -1003,6 +1113,104 @@ private:
 	 *  records the wall-clock timestamp. Used to fire the AI-takeover
 	 *  transition after `DroppedToAITakeoverSeconds` of continuous drop. */
 	TMap<FSeinPlayerID, double> SlotDroppedAtTime;
+
+	// ===== Resync (FEAT-01) state =====
+
+	/** Coordinator-side: one in-flight resync serve per slot. */
+	struct FServerResyncServe
+	{
+		int32 TransferId = 0;
+		int32 CheckpointTurn = -1;
+		/** Encoded envelope pending transfer; chunks are PACED across turn
+		 *  boundaries (a one-frame burst of reliable RPCs overflows the
+		 *  connection's reliable buffer and disconnects the peer). */
+		TArray<uint8> PendingEnvelopeBytes;
+		int32 TotalChunks = 0;
+		int32 NextChunkIndex = 0;
+		bool bTransferComplete = false;
+		/** Activation handshake boundary; -1 until the peer reports ready. */
+		int32 ActivationCheckTurn = -1;
+		/** Coordinator's own root at the handshake boundary, once computed. */
+		TOptional<FGuid> LocalActivationRoot;
+		/** Peer's reported root at the handshake boundary, once received. */
+		TOptional<FGuid> PeerActivationRoot;
+		/** Wall-clock start; a serve that outlives the timeout is abandoned
+		 *  so a vanished peer cannot pin state forever. */
+		double StartedAtSeconds = 0.0;
+	};
+	TMap<FSeinPlayerID, FServerResyncServe> ServerResyncServes;
+
+	/** Coordinator-side: when a slot entered Reconnecting. A slot parked
+	 *  there with no serve in flight past the AI-takeover window demotes to
+	 *  Dropped so the existing AI fallback resumes (a resync can always be
+	 *  re-requested later). */
+	TMap<FSeinPlayerID, double> SlotReconnectingSinceTime;
+
+	/** Chunks pushed per server turn boundary while a transfer is pending. */
+	static constexpr int32 ResyncChunksPerBoundary = 4;
+
+	/** Wall-clock ceiling for one serve before it is abandoned. */
+	static constexpr double ResyncServeTimeoutSeconds = 120.0;
+
+	/** Coordinator-side: slots whose heartbeat coverage is guaranteed
+	 *  through the given turn regardless of lifecycle, so a freshly
+	 *  activated peer's first authored turn can never collide with an
+	 *  injected heartbeat. Pruned once passed. */
+	TMap<FSeinPlayerID, int32> HeartbeatCoverageThroughTurn;
+
+	/** Coordinator-side: world-root report obligations waived per participant
+	 *  through the given turn. A boundary a peer completed while its resync
+	 *  suppression was active can never be back-reported; without the waiver
+	 *  that due turn would expire ~a retention window later as an
+	 *  authoritative session kill blaming the recovered peer. */
+	TMap<FSeinNetworkParticipantID, int32>
+		WorldRootReportExemptionThroughTurn;
+
+	/** Monotonic transfer id source for checkpoint serves. */
+	int32 NextResyncTransferId = 1;
+
+	/** Owning-peer-side resync state. */
+	EClientResyncPhase ClientResyncPhase = EClientResyncPhase::None;
+	int32 ClientResyncTransferId = -1;
+	int32 ClientResyncCheckpointTurn = -1;
+	int32 ClientResyncTotalChunks = 0;
+	int64 ClientResyncTotalBytes = 0;
+	int32 ClientResyncReceivedChunks = 0;
+	TArray<uint8> ClientResyncEnvelopeBytes;
+	/** Activation boundary assigned by the coordinator; -1 until notified. */
+	int32 ClientResyncActivationCheckTurn = -1;
+	/** Highest live turn observed while catching up (frontier estimate). */
+	int32 ClientResyncHighestReceivedTurn = -1;
+
+	/** Bounded per-RPC chunk size for checkpoint transfer. Comfortably under
+	 *  the reliable-bunch ceiling while keeping chunk counts small. */
+	static constexpr int32 ResyncCheckpointChunkBytes = 48 * 1024;
+
+	/** Reset the local peer's resync state (on failure or completion). */
+	void ClientResetResyncState(const TCHAR* Reason);
+
+	/** Coordinator-side terminal failure for one slot's resync serve. */
+	void ServerFailResync(
+		FSeinPlayerID Slot,
+		ASeinNetRelay* Relay,
+		const FString& Reason);
+
+	/** Reverse relay lookup for coordinator-side notifications. */
+	ASeinNetRelay* FindRelayForSlot(FSeinPlayerID Slot) const;
+
+	/** Compare both activation roots once present; activate or fail. */
+	void ServerTryCompleteResyncActivation(FSeinPlayerID Slot);
+
+	/** Tick-completed hooks for resync progression (both roles). */
+	void ServerAdvanceResyncActivation(int32 JustFinishedTurn);
+	void ClientAdvanceResyncCatchUp(int32 JustFinishedTurn);
+
+	/** Paced chunk delivery + serve timeouts, per server turn boundary. */
+	void ServerAdvanceResyncTransfers();
+
+	/** Debounced self-detection: a live turn far beyond this peer's window
+	 *  means it is on a stale timeline — auto-request a resync. */
+	void MaybeAutoRequestResync(int32 RejectedLiveTurn);
 
 	/** Server-side: AI-emitted commands buffered until the next turn boundary,
 	 *  keyed by the AI's owned slot. Populated by the AIEmitInterceptor

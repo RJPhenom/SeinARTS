@@ -465,6 +465,52 @@ namespace UE::SeinARTSTests
 			Outer.SnapshotVersion));
 	}
 
+	TEST(ResyncCatchUpWindowGatesCheckpointCapture,
+		"SeinARTS.Unit.Snapshot.Bootstrap")
+	{
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+
+		FSeinEntityHandle Entity;
+		FString Error;
+		ASSERT_THAT(IsTrue(CreateRunningCheckpointSource(
+			*World, Entity, Error)));
+
+		ASSERT_THAT(IsFalse(World->IsResyncCatchUpInProgress()));
+		ASSERT_THAT(IsTrue(World->BeginResyncCatchUpWindow(Error)));
+		ASSERT_THAT(IsTrue(World->IsResyncCatchUpInProgress()));
+
+		// Re-entrant open refuses without disturbing the open window.
+		ASSERT_THAT(IsFalse(World->BeginResyncCatchUpWindow(Error)));
+		ASSERT_THAT(IsTrue(Error.Contains(
+			TEXT("already open"))));
+		ASSERT_THAT(IsTrue(World->IsResyncCatchUpInProgress()));
+
+		// A catching-up world holds pre-frontier state: capture must refuse
+		// and clear the output so nothing can serialize it as a checkpoint.
+		TestRunner->AddExpectedError(
+			TEXT("cannot produce checkpoints until resync activation completes"),
+			EAutomationExpectedErrorFlags::Contains, 1, false);
+		FSeinWorldSnapshot Gated;
+		World->CaptureSnapshot(Gated);
+		ASSERT_THAT(AreEqual(0, Gated.SnapshotVersion));
+
+		// Activation closes the window and capture works again.
+		World->EndResyncCatchUpWindow();
+		ASSERT_THAT(IsFalse(World->IsResyncCatchUpInProgress()));
+		FSeinWorldSnapshot Live;
+		World->CaptureSnapshot(Live);
+		ASSERT_THAT(AreEqual(
+			FSeinWorldSnapshot::CurrentVersion,
+			Live.SnapshotVersion));
+
+		// Closing an already-closed window stays safe.
+		World->EndResyncCatchUpWindow();
+		ASSERT_THAT(IsFalse(World->IsResyncCatchUpInProgress()));
+	}
+
 	TEST(SnapshotCheckpointPreflightRefusesInvalidEnvelopeWithoutMutation,
 		"SeinARTS.Unit.Snapshot.Bootstrap")
 	{

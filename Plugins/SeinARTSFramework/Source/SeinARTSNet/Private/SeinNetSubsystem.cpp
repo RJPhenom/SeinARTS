@@ -11,7 +11,10 @@
 #include "SeinReplayReader.h"
 #include "SeinReplayFormat.h"
 #include "SeinNetCommandWireCodec.h"
+#include "Serialization/SeinSnapshotTransfer.h"
 #include "Settings/PluginSettings.h"
+#include "Data/SeinWorldSnapshot.h"
+#include "Simulation/SeinSnapshotRestoreAuthority.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Input/SeinCommandSchemaRegistry.h"
 #include "Serialization/SeinDeterministicValueDigest.h"
@@ -541,6 +544,13 @@ void USeinNetSubsystem::ResetLockstepEpochState(UWorld* RetiringWorld)
 	TurnAggregator.Reset();
 	ConfigureTurnAggregator();
 	ReceivedTurns.Reset();
+	RetainedAssembledTurns.Reset();
+	RetainedAssembledTurnFloor = -1;
+	ServerResyncServes.Reset();
+	HeartbeatCoverageThroughTurn.Reset();
+	WorldRootReportExemptionThroughTurn.Reset();
+	SlotReconnectingSinceTime.Reset();
+	ClientResetResyncState(TEXT("protocol session reset"));
 	PendingOutgoingDrafts.Reset();
 	PendingTurnSubmissions.Reset();
 	LastQueuedTurn = -1;
@@ -741,16 +751,38 @@ void USeinNetSubsystem::ExpireIncompleteWorldStateRootCheckpointsThrough(
 
 		FSeinNetworkParticipantID FirstMissing =
 			FSeinNetworkParticipantID::Invalid();
+		bool bAnyExemptMissing = false;
 		for (const FSeinNetworkParticipantID ParticipantID :
 			ExpectedParticipants)
 		{
 			if (!Reports || !Reports->Contains(ParticipantID))
 			{
+				// A boundary this participant completed while its resync
+				// suppression was active can never be back-reported; the
+				// activation flip records an exemption so an unreportable
+				// due turn cannot expire into an authoritative session kill
+				// blaming a recovered peer.
+				const int32* ExemptThrough =
+					WorldRootReportExemptionThroughTurn.Find(ParticipantID);
+				if (ExemptThrough && DueTurn <= *ExemptThrough)
+				{
+					bAnyExemptMissing = true;
+					continue;
+				}
 				FirstMissing = ParticipantID;
 				break;
 			}
 		}
-		if (!FirstMissing.IsValid()) continue;
+		if (!FirstMissing.IsValid())
+		{
+			if (bAnyExemptMissing)
+			{
+				// Every non-exempt reporter delivered: judge the reduced set
+				// now instead of letting the obligation wedge.
+				ServerCompareWorldStateRootsForTurn(DueTurn);
+			}
+			continue;
+		}
 
 		FSeinDeterminismSessionFailure Failure;
 		Failure.Kind =
@@ -790,6 +822,12 @@ void USeinNetSubsystem::PruneProtocolState(int32 ReferenceTurn)
 	{
 		if (It.Key() <= TurnAggregator.GetTurnRejectionFloor()) It.RemoveCurrent();
 	}
+	for (auto It = RetainedAssembledTurns.CreateIterator(); It; ++It)
+	{
+		if (It.Key() <= Cutoff) It.RemoveCurrent();
+	}
+	RetainedAssembledTurnFloor =
+		FMath::Max(RetainedAssembledTurnFloor, Cutoff);
 
 	// A due proof obligation must become an explicit terminal health result
 	// before its evidence is aged out. This also catches the zero-report case,
@@ -1220,18 +1258,46 @@ void USeinNetSubsystem::ServerSpawnRelayForController(APlayerController* PC, FSe
 	RelayToSlot.Add(Relay, Slot);
 	if (ParticipantID.IsValid()) RelayToParticipant.Add(Relay, ParticipantID);
 
-	// Drop-in/drop-out: mark this slot Connected. If it was previously
-	// Dropped (a reconnect), this also clears the heartbeat-injection.
-	// If it was AITakeover (reconnect after the grace period elapsed and
-	// the framework auto-spawned an AI), tear down the AI so it doesn't
-	// fight the now-live human player for command authorship.
+	// Drop-in/drop-out: resolve this slot's lifecycle. Before the match
+	// launches, a (re)joining PC is simply Connected. Once the bootstrap has
+	// been consumed, a returning PC's world holds STALE (or no) match state —
+	// granting instant authorship would inject commands computed from a
+	// pre-frontier timeline. The slot therefore lands in Reconnecting
+	// (heartbeats keep the gate healthy, authorship withheld) until the peer
+	// completes the checkpoint+tail resync and activates. If it was
+	// AITakeover, tear down the AI either way so it doesn't fight the
+	// returning human for the slot.
 	const ESeinSlotLifecycle* Prior = SlotLifecycle.Find(Slot);
 	const bool bWasAITakeover = Prior && *Prior == ESeinSlotLifecycle::AITakeover;
-	SlotLifecycle.Add(Slot, ESeinSlotLifecycle::Connected);
+	// "Launched" means the SIM's bootstrap authorization was consumed — not
+	// merely that match settings were promoted for travel. Gating on the
+	// settings flag would strand a pre-launch rejoin in Reconnecting and
+	// deadlock the whole session start (launch requires Connected slots).
+	const USeinWorldSubsystem* LaunchSim = GetWorld()
+		? GetWorld()->GetSubsystem<USeinWorldSubsystem>() : nullptr;
+	const bool bMatchLaunched = LaunchSim
+		&& LaunchSim->GetMatchBootstrapState()
+			== ESeinMatchBootstrapState::Consumed;
+	const bool bReturningToLaunchedMatch = bMatchLaunched
+		&& Prior
+		&& (*Prior == ESeinSlotLifecycle::Dropped || bWasAITakeover);
+	SlotLifecycle.Add(Slot, bReturningToLaunchedMatch
+		? ESeinSlotLifecycle::Reconnecting
+		: ESeinSlotLifecycle::Connected);
 	SlotDroppedAtTime.Remove(Slot);
+	if (bReturningToLaunchedMatch)
+	{
+		SlotReconnectingSinceTime.Add(Slot, FPlatformTime::Seconds());
+	}
 	if (bWasAITakeover)
 	{
 		TeardownAIForSlot(Slot);
+	}
+	if (bReturningToLaunchedMatch)
+	{
+		UE_LOG(LogSeinNet, Log,
+			TEXT("[Resync] slot=%u returned to a launched match: authorship withheld until the checkpoint+tail resync activates (auto-requested by the client on its first out-of-window turn)."),
+			Slot.Value);
 	}
 
 	Relay->FinishSpawning(FTransform::Identity);
@@ -2419,6 +2485,17 @@ void USeinNetSubsystem::OnLogout(AGameModeBase* GameMode, AController* Exiting)
 		SlotLifecycle.Add(Slot, ESeinSlotLifecycle::Dropped);
 		SlotDroppedAtTime.Add(Slot, NowSec);
 		bAnyMarkedDropped = true;
+
+		// A peer that vanishes mid-resync abandons its serve; a fresh request
+		// restarts from a fresh checkpoint when it returns. Its heartbeat
+		// coverage guarantee dies with the serve.
+		if (ServerResyncServes.Remove(Slot) > 0)
+		{
+			HeartbeatCoverageThroughTurn.Remove(Slot);
+			UE_LOG(LogSeinNet, Log,
+				TEXT("[Resync] slot=%u dropped mid-resync; serve abandoned."),
+				Slot.Value);
+		}
 
 		UE_LOG(LogSeinNet, Log,
 			TEXT("OnLogout: slot %u marked DROPPED (owner=%s left). Server will inject heartbeats; AI takeover scheduled in %.1fs."),
@@ -4578,9 +4655,22 @@ void USeinNetSubsystem::OnSimTickCompleted(int32 CompletedTick)
 	const int32 InputDelay = GetInputDelayTurns();
 	const int32 OutgoingTurn = JustFinishedTurn + InputDelay;
 
+	// A resyncing peer replays the past: it must neither author turns the
+	// coordinator already committed nor report roots for boundaries the
+	// session has moved beyond. Suppression begins at ADOPTION — during the
+	// transfer the local sim is still on its old timeline and keeps
+	// submitting normally (the coordinator's Reconnecting flip rejects and
+	// heartbeat-covers those turns), which closes the request-to-flip RTT
+	// window that would otherwise leave open turns with neither a
+	// submission nor a heartbeat.
+	const bool bResyncSuppressed =
+		ClientResyncPhase != EClientResyncPhase::None
+		&& ClientResyncPhase != EClientResyncPhase::Transferring;
+	ClientAdvanceResyncCatchUp(JustFinishedTurn);
+
 	// Only a local gameplay slot authors ordinary command batches. World-root
 	// identity is participant-scoped, so a dedicated authority reports too.
-	if (LocalPlayerID.IsValid())
+	if (LocalPlayerID.IsValid() && !bResyncSuppressed)
 	{
 		// Catch up any skipped non-grace turns with heartbeats, attaching user
 		// commands only to the latest outgoing turn.
@@ -4591,7 +4681,7 @@ void USeinNetSubsystem::OnSimTickCompleted(int32 CompletedTick)
 		}
 
 	}
-	if (LocalParticipantID.IsValid())
+	if (LocalParticipantID.IsValid() && !bResyncSuppressed)
 	{
 		MaybeSubmitWorldStateRootCheck(JustFinishedTurn);
 	}
@@ -4611,6 +4701,8 @@ void USeinNetSubsystem::OnSimTickCompleted(int32 CompletedTick)
 		InjectDroppedSlotHeartbeats(OutgoingTurn, /*bAllowAICommands=*/true);
 		ServerCheckTurnComplete(OutgoingTurn);
 		EvaluateDroppedSlots();
+		ServerAdvanceResyncTransfers();
+		ServerAdvanceResyncActivation(JustFinishedTurn);
 	}
 }
 
@@ -5564,9 +5656,18 @@ void USeinNetSubsystem::InjectDroppedSlotHeartbeats(
 		const ESeinSlotLifecycle* Status = SlotLifecycle.Find(Slot);
 		if (!Status) continue;
 
-		// Only inject for slots that aren't going to submit themselves.
-		if (*Status != ESeinSlotLifecycle::Dropped &&
-			*Status != ESeinSlotLifecycle::AITakeover) continue;
+		// Only inject for slots that aren't going to submit themselves:
+		// dropped, AI-owned, resyncing (authorship withheld until activation),
+		// and freshly activated slots inside their guaranteed coverage window
+		// (their first authored turn is past it by construction).
+		const int32* CoverageThrough =
+			HeartbeatCoverageThroughTurn.Find(Slot);
+		const bool bInsideCoverageWindow =
+			CoverageThrough && Turn <= *CoverageThrough;
+		if (*Status != ESeinSlotLifecycle::Dropped
+			&& *Status != ESeinSlotLifecycle::AITakeover
+			&& *Status != ESeinSlotLifecycle::Reconnecting
+			&& !bInsideCoverageWindow) continue;
 
 		if (!Slot.IsValid()) continue;
 		const FSeinNetworkParticipantID ParticipantID = FindParticipantForSlot(Slot);
@@ -5740,6 +5841,35 @@ void USeinNetSubsystem::EvaluateDroppedSlots()
 		TryAutoRegisterAIForSlot(Slot);
 		It.RemoveCurrent();
 	}
+
+	// A slot parked in Reconnecting with NO serve in flight (its peer never
+	// requested, or a resync failed and was never retried) must not idle its
+	// units forever: demote to Dropped after the same takeover window so the
+	// existing AI fallback resumes. A live serve resets the clock; a later
+	// resync request can always re-enter Reconnecting.
+	for (auto It = SlotReconnectingSinceTime.CreateIterator(); It; ++It)
+	{
+		const FSeinPlayerID Slot = It.Key();
+		ESeinSlotLifecycle* StatusPtr = SlotLifecycle.Find(Slot);
+		if (!StatusPtr || *StatusPtr != ESeinSlotLifecycle::Reconnecting)
+		{
+			It.RemoveCurrent();
+			continue;
+		}
+		if (ServerResyncServes.Contains(Slot))
+		{
+			It.Value() = NowSec;
+			continue;
+		}
+		if (NowSec - It.Value() < GetDroppedToAITakeoverSeconds()) continue;
+
+		*StatusPtr = ESeinSlotLifecycle::Dropped;
+		SlotDroppedAtTime.Add(Slot, NowSec);
+		UE_LOG(LogSeinNet, Warning,
+			TEXT("[Resync] slot=%u idled in Reconnecting %.1fs with no serve; demoted to Dropped so AI fallback can resume."),
+			Slot.Value, NowSec - It.Value());
+		It.RemoveCurrent();
+	}
 }
 
 double USeinNetSubsystem::GetDroppedToAITakeoverSeconds() const
@@ -5877,6 +6007,882 @@ void USeinNetSubsystem::TeardownAIForSlot(FSeinPlayerID Slot)
 	UE_LOG(LogSeinNet, Log,
 		TEXT("[Drop] slot=%u AI controller/queue state torn down (slot reconnected or session ended)."),
 		Slot.Value);
+}
+
+// ==================== Resync (FEAT-01) ====================
+// Bounded checkpoint + exact command-tail catch-up. The coordinator serves a
+// freshly captured boundary checkpoint (chunked snapshot envelope) plus the
+// retained assembled-turn tail; the peer adopts stopped under the one-shot
+// restore authority, free-runs the normal gate to the frontier, and activates
+// only after an exact canonical-root handshake at an agreed boundary.
+
+ASeinNetRelay* USeinNetSubsystem::FindRelayForSlot(FSeinPlayerID Slot) const
+{
+	for (const TPair<TWeakObjectPtr<ASeinNetRelay>, FSeinPlayerID>& Pair :
+		RelayToSlot)
+	{
+		if (Pair.Value == Slot)
+		{
+			if (ASeinNetRelay* Relay = Pair.Key.Get())
+			{
+				return Relay;
+			}
+		}
+	}
+	return nullptr;
+}
+
+void USeinNetSubsystem::ServerFailResync(
+	FSeinPlayerID Slot,
+	ASeinNetRelay* Relay,
+	const FString& Reason)
+{
+	UE_LOG(LogSeinNet, Error,
+		TEXT("[Resync] serve failed for slot=%u: %s"),
+		Slot.Value, *Reason);
+	ServerResyncServes.Remove(Slot);
+	// The slot stays Reconnecting (heartbeats keep the gate healthy); the
+	// peer may request a fresh resync.
+	if (Relay)
+	{
+		Relay->Client_NotifyResyncActivation(
+			ActiveProtocolContext, /*bActivated=*/false,
+			/*FirstAuthoredTurn=*/-1, Reason);
+	}
+}
+
+void USeinNetSubsystem::ServerHandleResyncRequest(
+	ASeinNetRelay* SourceRelay,
+	const FSeinProtocolContext& Context)
+{
+	if (!IsServer() || !SourceRelay) return;
+	if (!IsCurrentProtocolContext(Context, TEXT("ServerHandleResyncRequest")))
+	{
+		return;
+	}
+	const FSeinPlayerID* Slot = RelayToSlot.Find(SourceRelay);
+	if (!Slot || !Slot->IsValid())
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("[Resync] request from an unmapped relay was refused."));
+		return;
+	}
+	if (ServerResyncServes.Contains(*Slot))
+	{
+		UE_LOG(LogSeinNet, Warning,
+			TEXT("[Resync] slot=%u already has a serve in flight; duplicate request ignored."),
+			Slot->Value);
+		return;
+	}
+	if (DeterminismSessionFailure.IsValid())
+	{
+		ServerFailResync(*Slot, SourceRelay,
+			TEXT("This lockstep epoch is terminally failed; a resync cannot recover it."));
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	USeinWorldSubsystem* WorldSub =
+		World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
+	if (!WorldSub)
+	{
+		ServerFailResync(*Slot, SourceRelay,
+			TEXT("The coordinator has no simulation world to checkpoint."));
+		return;
+	}
+
+	// Withhold authorship for the whole resync: heartbeats keep the gate
+	// healthy (the Reconnecting lifecycle is included in injection), and any
+	// AI takeover ends now — the human is back and catching up.
+	if (const ESeinSlotLifecycle* Lifecycle = SlotLifecycle.Find(*Slot))
+	{
+		if (*Lifecycle == ESeinSlotLifecycle::AITakeover)
+		{
+			TeardownAIForSlot(*Slot);
+		}
+	}
+	SlotLifecycle.Add(*Slot, ESeinSlotLifecycle::Reconnecting);
+	SlotDroppedAtTime.Remove(*Slot);
+	SlotReconnectingSinceTime.Add(*Slot, FPlatformTime::Seconds());
+
+	// The slot may already owe submissions to OPEN turns (a stalled or
+	// suppressed peer is exactly why a resync happens) — back-fill every
+	// pending turn with heartbeats NOW, or the whole session's gate stays
+	// wedged on this slot forever and the sim boundary that drives the rest
+	// of this flow never fires again. Mirrors the OnLogout drop path.
+	for (const int32 PendingTurn : TurnAggregator.GetPendingTurnIDs())
+	{
+		InjectDroppedSlotHeartbeats(PendingTurn, /*bAllowAICommands=*/false);
+		ServerCheckTurnComplete(PendingTurn);
+	}
+	// And re-evaluate outstanding world-root checks against the reduced
+	// reporter set — a due checkpoint waiting on this now-suppressed peer
+	// would otherwise wedge until it expires as an authoritative session
+	// failure long after the peer recovered.
+	if (!ServerWorldStateRootReports.IsEmpty())
+	{
+		TArray<int32> PendingRootTurns;
+		ServerWorldStateRootReports.GetKeys(PendingRootTurns);
+		for (const int32 Turn : PendingRootTurns)
+		{
+			const TMap<FSeinNetworkParticipantID, FGuid>* Reports =
+				ServerWorldStateRootReports.Find(Turn);
+			if (Reports && AreExpectedWorldRootReportsComplete(*Reports))
+			{
+				ServerCompareWorldStateRootsForTurn(Turn);
+			}
+		}
+	}
+
+	// A relay RPC handler runs on the game thread between fixed ticks, and
+	// the deferred queues drain at every PostTick — so this is a legal
+	// quiescent capture boundary. Capture refusal fails the serve loudly.
+	FSeinWorldSnapshot Checkpoint;
+	FSeinWorldSnapshotReferenceGuard CheckpointGCGuard(Checkpoint);
+	WorldSub->CaptureSnapshot(Checkpoint);
+	if (Checkpoint.SnapshotVersion != FSeinWorldSnapshot::CurrentVersion)
+	{
+		ServerFailResync(*Slot, SourceRelay,
+			TEXT("The coordinator could not capture a checkpoint at this boundary."));
+		return;
+	}
+
+	TArray<uint8> EnvelopeBytes;
+	FSeinSnapshotEnvelopeMetadata Metadata;
+	FString EncodeError;
+	if (!SeinSnapshotTransfer::EncodeCheckpointEnvelope(
+		Checkpoint, EnvelopeBytes, Metadata, EncodeError))
+	{
+		ServerFailResync(*Slot, SourceRelay, EncodeError);
+		return;
+	}
+
+	const int32 TicksPerTurn = GetTicksPerTurn();
+	const int32 CheckpointTurn = TicksPerTurn > 0
+		? Checkpoint.CurrentTick / TicksPerTurn
+		: 0;
+	FServerResyncServe& Serve = ServerResyncServes.Add(*Slot);
+	Serve.TransferId = NextResyncTransferId++;
+	Serve.CheckpointTurn = CheckpointTurn;
+	Serve.PendingEnvelopeBytes = MoveTemp(EnvelopeBytes);
+	Serve.TotalChunks = FMath::DivideAndRoundUp(
+		Serve.PendingEnvelopeBytes.Num(), ResyncCheckpointChunkBytes);
+	Serve.NextChunkIndex = 0;
+	Serve.StartedAtSeconds = FPlatformTime::Seconds();
+
+	UE_LOG(LogSeinNet, Log,
+		TEXT("[Resync] serving slot=%u checkpoint tick=%d turn=%d bytes=%d chunks=%d (paced)."),
+		Slot->Value, Checkpoint.CurrentTick, CheckpointTurn,
+		Serve.PendingEnvelopeBytes.Num(), Serve.TotalChunks);
+
+	// Announce now; chunks are PACED across turn boundaries by
+	// ServerAdvanceResyncTransfers — a one-frame reliable-RPC burst would
+	// overflow the connection's reliable buffer and disconnect the peer.
+	SourceRelay->Client_BeginCheckpointTransfer(
+		ActiveProtocolContext, Serve.TransferId, CheckpointTurn,
+		Serve.TotalChunks, Serve.PendingEnvelopeBytes.Num());
+}
+
+void USeinNetSubsystem::ServerAdvanceResyncTransfers()
+{
+	if (ServerResyncServes.IsEmpty()) return;
+	const double NowSeconds = FPlatformTime::Seconds();
+	TArray<FSeinPlayerID> TimedOutSlots;
+	for (TPair<FSeinPlayerID, FServerResyncServe>& Pair : ServerResyncServes)
+	{
+		FServerResyncServe& Serve = Pair.Value;
+		if (NowSeconds - Serve.StartedAtSeconds > ResyncServeTimeoutSeconds)
+		{
+			TimedOutSlots.Add(Pair.Key);
+			continue;
+		}
+		if (Serve.bTransferComplete)
+		{
+			continue;
+		}
+		ASeinNetRelay* Relay = FindRelayForSlot(Pair.Key);
+		if (!Relay)
+		{
+			continue; // OnLogout abandons the serve when the relay dies.
+		}
+		int32 SentThisBoundary = 0;
+		while (Serve.NextChunkIndex < Serve.TotalChunks
+			&& SentThisBoundary < ResyncChunksPerBoundary)
+		{
+			const int32 Offset =
+				Serve.NextChunkIndex * ResyncCheckpointChunkBytes;
+			const int32 Count = FMath::Min(
+				ResyncCheckpointChunkBytes,
+				Serve.PendingEnvelopeBytes.Num() - Offset);
+			TArray<uint8> Chunk(
+				Serve.PendingEnvelopeBytes.GetData() + Offset, Count);
+			Relay->Client_ReceiveCheckpointChunk(
+				ActiveProtocolContext, Serve.TransferId,
+				Serve.NextChunkIndex, Chunk);
+			++Serve.NextChunkIndex;
+			++SentThisBoundary;
+		}
+		if (Serve.NextChunkIndex >= Serve.TotalChunks)
+		{
+			Serve.bTransferComplete = true;
+			Serve.PendingEnvelopeBytes.Empty();
+			Relay->Client_EndCheckpointTransfer(
+				ActiveProtocolContext, Serve.TransferId);
+		}
+	}
+	for (const FSeinPlayerID Slot : TimedOutSlots)
+	{
+		ServerFailResync(Slot, FindRelayForSlot(Slot), FString::Printf(
+			TEXT("The resync serve exceeded %.0f seconds and was abandoned."),
+			ResyncServeTimeoutSeconds));
+	}
+}
+
+void USeinNetSubsystem::ServerHandleResyncAbort(
+	ASeinNetRelay* SourceRelay,
+	const FSeinProtocolContext& Context)
+{
+	if (!IsServer() || !SourceRelay) return;
+	if (!IsCurrentProtocolContext(Context, TEXT("ServerHandleResyncAbort")))
+	{
+		return;
+	}
+	const FSeinPlayerID* Slot = RelayToSlot.Find(SourceRelay);
+	if (Slot && ServerResyncServes.Remove(*Slot) > 0)
+	{
+		UE_LOG(LogSeinNet, Log,
+			TEXT("[Resync] slot=%u aborted its resync; serve freed."),
+			Slot->Value);
+	}
+}
+
+void USeinNetSubsystem::ServerHandleResyncTailRequest(
+	ASeinNetRelay* SourceRelay,
+	const FSeinProtocolContext& Context,
+	int32 FromTurn)
+{
+	if (!IsServer() || !SourceRelay) return;
+	if (!IsCurrentProtocolContext(
+		Context, TEXT("ServerHandleResyncTailRequest")))
+	{
+		return;
+	}
+	const FSeinPlayerID* Slot = RelayToSlot.Find(SourceRelay);
+	FServerResyncServe* Serve =
+		Slot ? ServerResyncServes.Find(*Slot) : nullptr;
+	if (!Slot || !Serve || FromTurn != Serve->CheckpointTurn + 1)
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("[Resync] tail request refused (no serve in flight or wrong FromTurn=%d)."),
+			FromTurn);
+		return;
+	}
+	if (FromTurn <= RetainedAssembledTurnFloor)
+	{
+		ServerFailResync(*Slot, SourceRelay, FString::Printf(
+			TEXT("The retained turn window no longer covers turn %d (floor %d); request a fresh resync."),
+			FromTurn, RetainedAssembledTurnFloor));
+		return;
+	}
+
+	// Serve every retained committed turn from the checkpoint frontier
+	// onward through the SAME delivery path as live fan-out. Gaps are
+	// terminal for this serve: a missing committed turn cannot be
+	// reconstructed. (Turns not yet committed simply arrive live.)
+	int32 Sent = 0;
+	for (int32 Turn = FromTurn;; ++Turn)
+	{
+		const FSeinOpaqueCommandBatch* Retained =
+			RetainedAssembledTurns.Find(Turn);
+		if (!Retained)
+		{
+			if (TurnAggregator.IsTurnCommitted(Turn))
+			{
+				ServerFailResync(*Slot, SourceRelay, FString::Printf(
+					TEXT("Committed turn %d is missing from the retained tail."),
+					Turn));
+				return;
+			}
+			break;
+		}
+		SourceRelay->Client_ReceiveTurn(
+			ActiveProtocolContext, Turn, *Retained);
+		++Sent;
+	}
+	UE_LOG(LogSeinNet, Log,
+		TEXT("[Resync] slot=%u tail served: %d turn(s) from %d."),
+		Slot->Value, Sent, FromTurn);
+}
+
+void USeinNetSubsystem::ServerHandleResyncReady(
+	ASeinNetRelay* SourceRelay,
+	const FSeinProtocolContext& Context)
+{
+	if (!IsServer() || !SourceRelay) return;
+	if (!IsCurrentProtocolContext(Context, TEXT("ServerHandleResyncReady")))
+	{
+		return;
+	}
+	const FSeinPlayerID* Slot = RelayToSlot.Find(SourceRelay);
+	FServerResyncServe* Serve =
+		Slot ? ServerResyncServes.Find(*Slot) : nullptr;
+	if (!Slot || !Serve)
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("[Resync] ready report refused: no serve in flight."));
+		return;
+	}
+	// A repeated ready report RESCHEDULES the handshake: the peer sends it
+	// again when a scheduled boundary already passed on its side (it may run
+	// up to InputDelay turns ahead of the coordinator's execution turn).
+	// The boundary must clear the peer's maximum legal lead plus headroom.
+	Serve->ActivationCheckTurn =
+		GetCurrentTurn() + GetInputDelayTurns() + 2;
+	Serve->LocalActivationRoot.Reset();
+	Serve->PeerActivationRoot.Reset();
+	SourceRelay->Client_NotifyResyncActivationCheck(
+		ActiveProtocolContext, Serve->ActivationCheckTurn);
+	UE_LOG(LogSeinNet, Log,
+		TEXT("[Resync] slot=%u activation handshake scheduled at turn=%d."),
+		Slot->Value, Serve->ActivationCheckTurn);
+}
+
+void USeinNetSubsystem::ServerHandleResyncActivationRoot(
+	ASeinNetRelay* SourceRelay,
+	const FSeinProtocolContext& Context,
+	int32 CheckTurn,
+	FGuid WorldRoot)
+{
+	if (!IsServer() || !SourceRelay) return;
+	if (!IsCurrentProtocolContext(
+		Context, TEXT("ServerHandleResyncActivationRoot")))
+	{
+		return;
+	}
+	const FSeinPlayerID* Slot = RelayToSlot.Find(SourceRelay);
+	FServerResyncServe* Serve =
+		Slot ? ServerResyncServes.Find(*Slot) : nullptr;
+	if (!Slot || !Serve || CheckTurn != Serve->ActivationCheckTurn
+		|| !WorldRoot.IsValid())
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("[Resync] activation root refused (turn=%d)."), CheckTurn);
+		return;
+	}
+	Serve->PeerActivationRoot = WorldRoot;
+	ServerTryCompleteResyncActivation(*Slot);
+}
+
+void USeinNetSubsystem::ServerTryCompleteResyncActivation(FSeinPlayerID Slot)
+{
+	FServerResyncServe* Serve = ServerResyncServes.Find(Slot);
+	if (!Serve
+		|| !Serve->LocalActivationRoot.IsSet()
+		|| !Serve->PeerActivationRoot.IsSet())
+	{
+		return;
+	}
+	ASeinNetRelay* Relay = FindRelayForSlot(Slot);
+	if (Serve->LocalActivationRoot.GetValue()
+		!= Serve->PeerActivationRoot.GetValue())
+	{
+		ServerFailResync(Slot, Relay, FString::Printf(
+			TEXT("Canonical roots diverged at the activation boundary (turn %d); the adopted timeline is not exact."),
+			Serve->ActivationCheckTurn));
+		return;
+	}
+
+	// Exact agreement: the peer is provably on the live timeline. Guarantee
+	// heartbeat coverage through FirstAuthoredTurn - 1 so the peer's first
+	// authored turn can never collide with an injected heartbeat — measured
+	// from the LATER of the scheduled boundary and the coordinator's turn at
+	// completion (a laggy root report must not shrink the coverage below
+	// turns already heartbeat-injected while the slot was Reconnecting).
+	const int32 FirstAuthoredTurn =
+		FMath::Max(Serve->ActivationCheckTurn, GetCurrentTurn())
+		+ GetInputDelayTurns() + 2;
+	HeartbeatCoverageThroughTurn.Add(Slot, FirstAuthoredTurn - 1);
+	// Waive root-report obligations for boundaries the peer completed while
+	// suppressed — they can never be back-reported (see the expiry loop).
+	const FSeinNetworkParticipantID ActivatedParticipant =
+		FindParticipantForSlot(Slot);
+	if (ActivatedParticipant.IsValid())
+	{
+		WorldRootReportExemptionThroughTurn.Add(
+			ActivatedParticipant, FirstAuthoredTurn - 1);
+	}
+	SlotLifecycle.Add(Slot, ESeinSlotLifecycle::Connected);
+	SlotReconnectingSinceTime.Remove(Slot);
+	UE_LOG(LogSeinNet, Log,
+		TEXT("[Resync] slot=%u ACTIVATED at turn=%d; authorship resumes at turn=%d."),
+		Slot.Value, Serve->ActivationCheckTurn, FirstAuthoredTurn);
+	if (Relay)
+	{
+		Relay->Client_NotifyResyncActivation(
+			ActiveProtocolContext, /*bActivated=*/true,
+			FirstAuthoredTurn, FString());
+	}
+	ServerResyncServes.Remove(Slot);
+}
+
+void USeinNetSubsystem::ServerAdvanceResyncActivation(int32 JustFinishedTurn)
+{
+	// Exemptions age out only past the retention window — the expiry loop
+	// they guard evaluates turns up to a full window behind the frontier.
+	for (auto It = WorldRootReportExemptionThroughTurn.CreateIterator();
+		It; ++It)
+	{
+		if (It.Value() < JustFinishedTurn - GSeinRetainedHistoryTurns)
+		{
+			It.RemoveCurrent();
+		}
+	}
+	if (ServerResyncServes.IsEmpty())
+	{
+		for (auto It = HeartbeatCoverageThroughTurn.CreateIterator(); It; ++It)
+		{
+			if (It.Value() < JustFinishedTurn) It.RemoveCurrent();
+		}
+		return;
+	}
+	TArray<FSeinPlayerID> ReadySlots;
+	for (TPair<FSeinPlayerID, FServerResyncServe>& Pair : ServerResyncServes)
+	{
+		FServerResyncServe& Serve = Pair.Value;
+		if (Serve.ActivationCheckTurn != JustFinishedTurn
+			|| Serve.LocalActivationRoot.IsSet())
+		{
+			continue;
+		}
+		FGuid LocalRoot;
+		FString RootError;
+		if (!ResolveLocalWorldStateRoot(LocalRoot, RootError))
+		{
+			ServerFailResync(Pair.Key, FindRelayForSlot(Pair.Key),
+				FString::Printf(
+					TEXT("The coordinator could not compute its activation root: %s"),
+					*RootError));
+			continue;
+		}
+		Serve.LocalActivationRoot = LocalRoot;
+		ReadySlots.Add(Pair.Key);
+	}
+	for (const FSeinPlayerID Slot : ReadySlots)
+	{
+		ServerTryCompleteResyncActivation(Slot);
+	}
+	for (auto It = HeartbeatCoverageThroughTurn.CreateIterator(); It; ++It)
+	{
+		if (It.Value() < JustFinishedTurn) It.RemoveCurrent();
+	}
+}
+
+bool USeinNetSubsystem::RequestResync(FString& OutError)
+{
+	OutError.Reset();
+	if (IsServer())
+	{
+		OutError =
+			TEXT("The coordinator IS the authoritative timeline; resync applies only to owning peers.");
+		return false;
+	}
+	if (ClientResyncPhase != EClientResyncPhase::None)
+	{
+		OutError = TEXT("A resync is already in flight for this peer.");
+		return false;
+	}
+	ASeinNetRelay* Relay = LocalRelay.Get();
+	if (!Relay)
+	{
+		OutError = TEXT("No owned relay: this peer is not connected to a coordinator.");
+		return false;
+	}
+	ClientResyncPhase = EClientResyncPhase::Transferring;
+	ClientResyncTransferId = -1;
+	ClientResyncCheckpointTurn = -1;
+	ClientResyncTotalChunks = 0;
+	ClientResyncTotalBytes = 0;
+	ClientResyncReceivedChunks = 0;
+	ClientResyncEnvelopeBytes.Reset();
+	ClientResyncActivationCheckTurn = -1;
+	ClientResyncHighestReceivedTurn = -1;
+	Relay->Server_RequestResync(ActiveProtocolContext);
+	UE_LOG(LogSeinNet, Log, TEXT("[Resync] requested from the coordinator."));
+	return true;
+}
+
+void USeinNetSubsystem::ClientResetResyncState(const TCHAR* Reason)
+{
+	if (ClientResyncPhase == EClientResyncPhase::None) return;
+	UE_LOG(LogSeinNet, Log, TEXT("[Resync] local state reset: %s"),
+		Reason ? Reason : TEXT("unspecified"));
+	const bool bAdopted =
+		ClientResyncPhase == EClientResyncPhase::CatchingUp
+		|| ClientResyncPhase == EClientResyncPhase::ActivationPending;
+	if (UWorld* World = GetWorld())
+	{
+		if (USeinWorldSubsystem* WorldSub =
+			World->GetSubsystem<USeinWorldSubsystem>())
+		{
+			WorldSub->EndResyncCatchUpWindow();
+			if (bAdopted)
+			{
+				// The world is on the adopted timeline: keep its scheduler
+				// alive (the gate paces it; authorship stays withheld
+				// server-side) and reconcile the authorship cursors to the
+				// adopted frontier so a later boundary cannot burst-submit
+				// thousands of stale-timeline turns.
+				const int32 TicksPerTurn = GetTicksPerTurn();
+				const int32 AdoptedTurn = TicksPerTurn > 0
+					? WorldSub->GetCurrentTick() / TicksPerTurn
+					: 0;
+				const int32 ReconciledCursor =
+					AdoptedTurn + GetInputDelayTurns();
+				LastQueuedTurn =
+					FMath::Max(LastQueuedTurn, ReconciledCursor);
+				LastSubmittedTurn =
+					FMath::Max(LastSubmittedTurn, ReconciledCursor);
+				if (!WorldSub->IsSimulationRunning())
+				{
+					WorldSub->StartSimulation();
+				}
+			}
+		}
+	}
+	// Free the coordinator-side serve so a fresh request is not refused.
+	if (ASeinNetRelay* Relay = LocalRelay.Get())
+	{
+		Relay->Server_AbortResync(ActiveProtocolContext);
+	}
+	ClientResyncPhase = EClientResyncPhase::None;
+	ClientResyncTransferId = -1;
+	ClientResyncEnvelopeBytes.Reset();
+}
+
+void USeinNetSubsystem::ClientHandleBeginCheckpointTransfer(
+	const FSeinProtocolContext& Context,
+	int32 TransferId,
+	int32 CheckpointTurn,
+	int32 TotalChunks,
+	int64 TotalBytes)
+{
+	if (!IsCurrentProtocolContext(
+		Context, TEXT("ClientHandleBeginCheckpointTransfer")))
+	{
+		return;
+	}
+	if (ClientResyncPhase != EClientResyncPhase::Transferring)
+	{
+		UE_LOG(LogSeinNet, Warning,
+			TEXT("[Resync] unexpected checkpoint transfer begin ignored."));
+		return;
+	}
+	if (TotalBytes <= 0 || TotalChunks <= 0
+		|| TotalBytes > static_cast<int64>(
+			FSeinSnapshotEnvelopeCodec::MaxBodyBytes)
+			+ FSeinSnapshotEnvelopeCodec::PrefixBytes
+			+ static_cast<int64>(
+				FSeinSnapshotEnvelopeCodec::MaxDirectoryBytes)
+		|| TotalChunks != FMath::DivideAndRoundUp(
+			static_cast<int32>(TotalBytes), ResyncCheckpointChunkBytes))
+	{
+		ClientResetResyncState(
+			TEXT("checkpoint transfer announced out-of-bounds framing"));
+		return;
+	}
+	ClientResyncTransferId = TransferId;
+	ClientResyncCheckpointTurn = CheckpointTurn;
+	ClientResyncTotalChunks = TotalChunks;
+	ClientResyncTotalBytes = TotalBytes;
+	ClientResyncReceivedChunks = 0;
+	ClientResyncEnvelopeBytes.Reset();
+	ClientResyncEnvelopeBytes.Reserve(static_cast<int32>(TotalBytes));
+}
+
+void USeinNetSubsystem::ClientHandleCheckpointChunk(
+	const FSeinProtocolContext& Context,
+	int32 TransferId,
+	int32 ChunkIndex,
+	const TArray<uint8>& Bytes)
+{
+	if (!IsCurrentProtocolContext(
+		Context, TEXT("ClientHandleCheckpointChunk")))
+	{
+		return;
+	}
+	if (ClientResyncPhase != EClientResyncPhase::Transferring
+		|| TransferId != ClientResyncTransferId
+		|| ChunkIndex != ClientResyncReceivedChunks
+		|| Bytes.IsEmpty()
+		|| Bytes.Num() > ResyncCheckpointChunkBytes
+		|| ClientResyncEnvelopeBytes.Num() + Bytes.Num()
+			> ClientResyncTotalBytes)
+	{
+		ClientResetResyncState(
+			TEXT("checkpoint chunk arrived out of order or out of bounds"));
+		return;
+	}
+	ClientResyncEnvelopeBytes.Append(Bytes);
+	++ClientResyncReceivedChunks;
+}
+
+void USeinNetSubsystem::ClientHandleEndCheckpointTransfer(
+	const FSeinProtocolContext& Context,
+	int32 TransferId)
+{
+	if (!IsCurrentProtocolContext(
+		Context, TEXT("ClientHandleEndCheckpointTransfer")))
+	{
+		return;
+	}
+	if (ClientResyncPhase != EClientResyncPhase::Transferring
+		|| TransferId != ClientResyncTransferId
+		|| ClientResyncReceivedChunks != ClientResyncTotalChunks
+		|| ClientResyncEnvelopeBytes.Num() != ClientResyncTotalBytes)
+	{
+		ClientResetResyncState(
+			TEXT("checkpoint transfer ended incomplete"));
+		return;
+	}
+
+	ClientResyncPhase = EClientResyncPhase::Adopting;
+
+	FSeinWorldSnapshot Checkpoint;
+	FSeinWorldSnapshotReferenceGuard CheckpointGCGuard(Checkpoint);
+	FSeinSnapshotEnvelopeMetadata Metadata;
+	FString DecodeError;
+	if (!SeinSnapshotTransfer::DecodeCheckpointEnvelope(
+		ClientResyncEnvelopeBytes, Checkpoint, Metadata, DecodeError))
+	{
+		ClientResetResyncState(*DecodeError);
+		return;
+	}
+	ClientResyncEnvelopeBytes.Reset();
+
+	UWorld* World = GetWorld();
+	USeinWorldSubsystem* WorldSub =
+		World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
+	if (!WorldSub)
+	{
+		ClientResetResyncState(TEXT("no local simulation world to adopt into"));
+		return;
+	}
+
+	// The gate keeps a stalled peer's sim waiting between ticks, but adoption
+	// itself requires the scheduler idle. Stop explicitly (idempotent) so the
+	// adopted world resumes only when WE start it for catch-up.
+	WorldSub->StopSimulation();
+
+	FSeinSnapshotRestoreAuthorityHandle Authority;
+	FString ClaimError;
+	if (!WorldSub->ClaimSnapshotRestoreAuthority(
+		FName(TEXT("SeinARTSNet.Resync")), this, Authority, ClaimError))
+	{
+		ClientResetResyncState(*ClaimError);
+		return;
+	}
+	if (!WorldSub->RestoreSnapshot(
+		MoveTemp(Authority),
+		Checkpoint,
+		FSeinSnapshotRestoreOptions(
+			ESeinSnapshotLocalStateRestorePolicy::PreserveCurrent,
+			ESeinSnapshotResumePolicy::RemainStopped)))
+	{
+		ClientResetResyncState(
+			TEXT("the transferred checkpoint failed exact adoption"));
+		return;
+	}
+
+	FString WindowError;
+	if (!WorldSub->BeginResyncCatchUpWindow(WindowError))
+	{
+		ClientResetResyncState(*WindowError);
+		return;
+	}
+
+	// Turns delivered before adoption belong to a timeline this world has
+	// left: entries at or below the checkpoint turn can never be consumed
+	// (the sim is already past them) and would block the ready condition
+	// for up to a full retention window.
+	for (auto It = ReceivedTurns.CreateIterator(); It; ++It)
+	{
+		if (It.Key() <= ClientResyncCheckpointTurn) It.RemoveCurrent();
+	}
+
+	// Catch up on the tail through the normal delivery path: request the
+	// retained turns, start the dormant reservation, and let the standard
+	// completeness gate free-run to the frontier under the core's catch-up
+	// burst (the accumulator is topped to MaxTicksPerFrame while the window
+	// is open, so the wall-clock deficit actually closes).
+	ClientResyncPhase = EClientResyncPhase::CatchingUp;
+	ClientResyncHighestReceivedTurn = -1;
+	if (ASeinNetRelay* Relay = LocalRelay.Get())
+	{
+		Relay->Server_RequestResyncTail(
+			ActiveProtocolContext, ClientResyncCheckpointTurn + 1);
+	}
+	if (!WorldSub->StartSimulation())
+	{
+		ClientResetResyncState(
+			TEXT("the adopted world's scheduler could not start for catch-up"));
+		return;
+	}
+	UE_LOG(LogSeinNet, Log,
+		TEXT("[Resync] checkpoint adopted at turn=%d; catching up."),
+		ClientResyncCheckpointTurn);
+}
+
+void USeinNetSubsystem::ClientHandleResyncActivationCheck(
+	const FSeinProtocolContext& Context,
+	int32 CheckTurn)
+{
+	if (!IsCurrentProtocolContext(
+		Context, TEXT("ClientHandleResyncActivationCheck")))
+	{
+		return;
+	}
+	if (ClientResyncPhase != EClientResyncPhase::ActivationPending)
+	{
+		UE_LOG(LogSeinNet, Warning,
+			TEXT("[Resync] unexpected activation check (turn=%d) ignored."),
+			CheckTurn);
+		return;
+	}
+	// This peer may legally run ahead of the coordinator's execution turn;
+	// if the scheduled boundary already completed locally, its root can no
+	// longer be computed — ask for a fresh boundary instead of wedging.
+	const int32 TicksPerTurn = GetTicksPerTurn();
+	UWorld* World = GetWorld();
+	const USeinWorldSubsystem* WorldSub =
+		World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
+	const int32 LastCompletedTurn = (WorldSub && TicksPerTurn > 0)
+		? (WorldSub->GetCurrentTick() / TicksPerTurn) - 1
+		: -1;
+	if (CheckTurn <= LastCompletedTurn)
+	{
+		UE_LOG(LogSeinNet, Log,
+			TEXT("[Resync] activation boundary turn=%d already passed locally (at %d); requesting a reschedule."),
+			CheckTurn, LastCompletedTurn);
+		if (ASeinNetRelay* Relay = LocalRelay.Get())
+		{
+			Relay->Server_ReportResyncReady(ActiveProtocolContext);
+		}
+		return;
+	}
+	ClientResyncActivationCheckTurn = CheckTurn;
+}
+
+void USeinNetSubsystem::ClientHandleResyncActivation(
+	const FSeinProtocolContext& Context,
+	bool bActivated,
+	int32 FirstAuthoredTurn,
+	const FString& Reason)
+{
+	if (!IsCurrentProtocolContext(
+		Context, TEXT("ClientHandleResyncActivation")))
+	{
+		return;
+	}
+	if (!bActivated)
+	{
+		ClientResetResyncState(*FString::Printf(
+			TEXT("the coordinator failed this resync: %s"), *Reason));
+		return;
+	}
+	if (ClientResyncPhase != EClientResyncPhase::ActivationPending)
+	{
+		UE_LOG(LogSeinNet, Warning,
+			TEXT("[Resync] activation verdict arrived in an unexpected phase."));
+		return;
+	}
+
+	// Rejoin the authorship ledger exactly where the coordinator's heartbeat
+	// coverage ends: our first submission is FirstAuthoredTurn, gap-free and
+	// collision-free by construction.
+	LastQueuedTurn = FirstAuthoredTurn - 1;
+	LastSubmittedTurn = FirstAuthoredTurn - 1;
+	if (UWorld* World = GetWorld())
+	{
+		if (USeinWorldSubsystem* WorldSub =
+			World->GetSubsystem<USeinWorldSubsystem>())
+		{
+			WorldSub->EndResyncCatchUpWindow();
+		}
+	}
+	ClientResyncPhase = EClientResyncPhase::None;
+	UE_LOG(LogSeinNet, Log,
+		TEXT("[Resync] ACTIVATED; authorship resumes at turn=%d."),
+		FirstAuthoredTurn);
+}
+
+void USeinNetSubsystem::MaybeAutoRequestResync(int32 RejectedLiveTurn)
+{
+	if (IsServer() || ClientResyncPhase != EClientResyncPhase::None)
+	{
+		return;
+	}
+	// Only turns AHEAD of the window imply a stale timeline (behind-window
+	// turns are ordinary late deliveries). Require a real gap so a boundary
+	// race cannot trigger a spurious resync.
+	const int32 Lead = RejectedLiveTurn - GetCurrentTurn();
+	if (Lead <= GetInputDelayTurns() + GSeinMaxProtocolTurnLead)
+	{
+		return;
+	}
+	FString Error;
+	if (RequestResync(Error))
+	{
+		UE_LOG(LogSeinNet, Log,
+			TEXT("[Resync] auto-requested: live turn %d is %d turn(s) beyond this peer's window."),
+			RejectedLiveTurn, Lead);
+	}
+	else
+	{
+		UE_LOG(LogSeinNet, Warning,
+			TEXT("[Resync] auto-request refused: %s"), *Error);
+	}
+}
+
+void USeinNetSubsystem::ClientAdvanceResyncCatchUp(int32 JustFinishedTurn)
+{
+	if (ClientResyncPhase == EClientResyncPhase::CatchingUp)
+	{
+		// Caught up when every received turn is consumed and the sim reached
+		// the highest turn the wire has shown us.
+		if (ReceivedTurns.IsEmpty()
+			&& ClientResyncHighestReceivedTurn >= 0
+			&& JustFinishedTurn >= ClientResyncHighestReceivedTurn)
+		{
+			ClientResyncPhase = EClientResyncPhase::ActivationPending;
+			if (ASeinNetRelay* Relay = LocalRelay.Get())
+			{
+				Relay->Server_ReportResyncReady(ActiveProtocolContext);
+			}
+			UE_LOG(LogSeinNet, Log,
+				TEXT("[Resync] frontier reached at turn=%d; awaiting activation handshake."),
+				JustFinishedTurn);
+		}
+		return;
+	}
+	if (ClientResyncPhase == EClientResyncPhase::ActivationPending
+		&& ClientResyncActivationCheckTurn == JustFinishedTurn)
+	{
+		FGuid LocalRoot;
+		FString RootError;
+		if (!ResolveLocalWorldStateRoot(LocalRoot, RootError))
+		{
+			ClientResetResyncState(*FString::Printf(
+				TEXT("could not compute the activation root: %s"),
+				*RootError));
+			return;
+		}
+		if (ASeinNetRelay* Relay = LocalRelay.Get())
+		{
+			Relay->Server_ReportResyncActivationRoot(
+				ActiveProtocolContext,
+				ClientResyncActivationCheckTurn, LocalRoot);
+		}
+	}
 }
 
 void USeinNetSubsystem::SimulateSlotDisconnect(FSeinPlayerID Slot)
@@ -6087,6 +7093,13 @@ void USeinNetSubsystem::ServerCheckTurnComplete(
 		ReplayWriter->RecordTurn(TurnId, WireCanonicalAssembled);
 	}
 
+	// Retain the EXACT fan-out bytes so a resync tail is byte-identical to
+	// live delivery (same opaque batch through the same Client_ReceiveTurn).
+	// Bounded by the shared protocol history window; pruned alongside the
+	// other per-turn ledgers in PruneProtocolState. This is the tail source —
+	// the replay writer is NOT (its cap is abort-and-discard-everything).
+	RetainedAssembledTurns.Add(TurnId, OpaqueAssembled);
+
 	// Listen hosts receive through their owned relay. A dedicated authority has
 	// no local relay/RPC loopback, so feed its gate from the same canonical
 	// assembled payload before fanning out to remote peers.
@@ -6113,6 +7126,12 @@ void USeinNetSubsystem::BufferAssembledTurnForDedicatedAuthority(
 void USeinNetSubsystem::BufferReceivedTurn(int32 TurnId, const TArray<FSeinCommand>& Commands)
 {
 	ReceivedTurns.Add(TurnId, Commands);
+	if (ClientResyncPhase == EClientResyncPhase::CatchingUp
+		|| ClientResyncPhase == EClientResyncPhase::Adopting)
+	{
+		ClientResyncHighestReceivedTurn =
+			FMath::Max(ClientResyncHighestReceivedTurn, TurnId);
+	}
 	OnTurnReceived.Broadcast(TurnId, Commands);
 }
 
@@ -6125,7 +7144,33 @@ void USeinNetSubsystem::ClientHandleTurn(
 	PruneProtocolState(GetCurrentTurn());
 	if (!IsCommandTurnWithinProtocolWindow(TurnId, TEXT("ClientHandleTurn")))
 	{
+		// A live turn far beyond this peer's window means we are on a stale
+		// timeline (rejoined a launched match, or fell hopelessly behind).
+		// Self-detect and request the checkpoint+tail resync; the phase
+		// machine debounces repeats.
+		MaybeAutoRequestResync(TurnId);
 		return;
+	}
+	// A world still AWAITING bootstrap while live turns flow is a late
+	// joiner: the match launched without us and no launch RPC is coming.
+	// Turn fan-out only begins after every launch participant consumed its
+	// authorization, so this cannot race a normal match start.
+	if (ClientResyncPhase == EClientResyncPhase::None && !IsServer())
+	{
+		const USeinWorldSubsystem* JoinSim = GetWorld()
+			? GetWorld()->GetSubsystem<USeinWorldSubsystem>() : nullptr;
+		if (JoinSim
+			&& JoinSim->GetMatchBootstrapState()
+				== ESeinMatchBootstrapState::Awaiting)
+		{
+			FString AutoError;
+			if (RequestResync(AutoError))
+			{
+				UE_LOG(LogSeinNet, Log,
+					TEXT("[Resync] auto-requested: live turn %d arrived while this world still awaits bootstrap (late join)."),
+					TurnId);
+			}
+		}
 	}
 	TArray<FSeinCommand> Commands;
 	FString WireError;
