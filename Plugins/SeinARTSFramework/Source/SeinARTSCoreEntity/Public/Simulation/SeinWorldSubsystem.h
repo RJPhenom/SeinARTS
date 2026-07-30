@@ -549,6 +549,14 @@ public:
 		return CanonicalStateValues.GetContractDigest();
 	}
 
+	/**
+	 * Whether this world's frozen native schema contains the exact contributor
+	 * key with the required role. Invalid schemas or keys return false.
+	 */
+	bool HasFrozenCanonicalStateContributor(
+		const FSeinCanonicalStateKey& Key,
+		ESeinCanonicalStateRole RequiredRole) const;
+
 	/** True once the per-world deterministic system contract is immutable. */
 	bool IsExecutionTopologyFrozen() const
 	{
@@ -638,6 +646,16 @@ public:
 
 	/** Native adapter seam for a live-world execution-contract failure. */
 	FOnSeinExecutionTopologyInvalidated OnExecutionTopologyInvalidated;
+
+	/**
+	 * Fail-stop a world after a deterministic extension detects that its
+	 * frozen StateContract can no longer describe future execution. This is
+	 * the module-facing counterpart to registration/unload invalidation:
+	 * before launch it fails bootstrap; after launch it stops the scheduler
+	 * and broadcasts OnExecutionTopologyInvalidated.
+	 */
+	void InvalidateDeterministicExecutionContract(
+		const FString& Reason);
 
 	/** Consume an Authorized bootstrap and launch tick zero. Exact exclusive
 	 *  authority is required; successful retries by the same holder are safe. */
@@ -921,8 +939,15 @@ public:
 	void DestroyEntity(FSeinEntityHandle Handle);
 
 	/** Get entity data by handle. Returns nullptr if handle is stale. */
-	FSeinEntity* GetEntity(FSeinEntityHandle Handle);
 	const FSeinEntity* GetEntity(FSeinEntityHandle Handle) const;
+
+	/**
+	 * Explicit mutable entity access for deterministic implementation code.
+	 * Returns nullptr from read-only/observer callbacks. This accessor does not
+	 * itself grant simulation mutation authority; callers that initiate a write
+	 * must still enter through an authorized mutation front door.
+	 */
+	FSeinEntity* GetEntityMutable(FSeinEntityHandle Handle);
 
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Entity")
 	bool IsEntityAlive(FSeinEntityHandle Handle) const;
@@ -937,16 +962,26 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Entity")
 	void SetEntityOwner(FSeinEntityHandle Handle, FSeinPlayerID NewOwner);
 
-	/** Get the entity pool (for direct iteration). */
-	FSeinEntityPool& GetEntityPool() { return EntityPool; }
+	/** Read-only entity-pool view (for direct canonical iteration/query). */
 	const FSeinEntityPool& GetEntityPool() const { return EntityPool; }
+
+	/**
+	 * Explicit mutable entity-pool access for deterministic systems. Returns
+	 * nullptr from read-only/observer callbacks; no fallback pool is exposed.
+	 */
+	FSeinEntityPool* GetEntityPoolMutable();
 
 	/** Collision broadphase (two-tier static/dynamic bucket grid). Rebuilt each
 	 *  tick by `FSeinCollisionBroadphaseSystem` (PreTick); queried by
 	 *  `FSeinCollisionResolutionSystem` (PostTick). Collision-only — navigation
 	 *  owns its own (A*-grid) structures and does not use this. */
-	FSeinCollisionSpatialHash& GetCollisionSpatialHash() { return CollisionSpatialHash; }
 	const FSeinCollisionSpatialHash& GetCollisionSpatialHash() const { return CollisionSpatialHash; }
+
+	/**
+	 * Explicit mutable broadphase access for its owning deterministic system.
+	 * Returns nullptr from read-only/observer callbacks.
+	 */
+	FSeinCollisionSpatialHash* GetCollisionSpatialHashMutable();
 
 	/** The active collision resolver. Owns one tick's full collider separation +
 	 *  overlap-event emission; the PostTick FSeinCollisionResolutionSystem delegates
@@ -977,10 +1012,15 @@ public:
 	void RemoveComponent(FSeinEntityHandle Handle);
 
 	template<typename T>
-	T* GetComponent(FSeinEntityHandle Handle);
-
-	template<typename T>
 	const T* GetComponent(FSeinEntityHandle Handle) const;
+
+	/**
+	 * Explicit mutable component access for deterministic implementation code.
+	 * Returns nullptr from read-only/observer callbacks. This accessor does not
+	 * itself grant simulation mutation authority.
+	 */
+	template<typename T>
+	T* GetComponentMutable(FSeinEntityHandle Handle);
 
 	template<typename T>
 	bool HasComponent(FSeinEntityHandle Handle) const;
@@ -997,9 +1037,15 @@ public:
 	const FSeinEntity* GetDestroyingEntity(FSeinEntityHandle Handle) const;
 	FSeinPlayerID GetDestroyingEntityOwner(FSeinEntityHandle Handle) const;
 
-	/** Get raw component storage by struct type. */
-	ISeinComponentStorage* GetComponentStorageRaw(UScriptStruct* StructType);
+	/** Get a read-only raw component storage by struct type. */
 	const ISeinComponentStorage* GetComponentStorageRaw(UScriptStruct* StructType) const;
+
+	/**
+	 * Explicit mutable raw-storage access for deterministic implementation
+	 * code. Returns nullptr from read-only/observer callbacks.
+	 */
+	ISeinComponentStorage* GetComponentStorageMutable(
+		UScriptStruct* StructType);
 
 	/** Get or lazily-create the component storage for a struct type. The
 	 *  templated `AddComponent<T>` path goes through this; promoted to
@@ -1008,9 +1054,18 @@ public:
 	 *  without compile-time type info. */
 	ISeinComponentStorage* GetOrCreateStorageForType(UScriptStruct* StructType);
 
-	/** Read-only view over every registered storage (UScriptStruct* → storage). Used by
-	 *  USeinComponentBPFL for "list every component on entity X" iteration. */
-	const TMap<UScriptStruct*, ISeinComponentStorage*>& GetAllComponentStorages() const { return ComponentStorages; }
+	/**
+	 * Copy registered component types without exposing mutable storage
+	 * pointers. Ordering is unspecified; callers that execute deterministically
+	 * must sort by a stable struct identity before iteration.
+	 */
+	TArray<UScriptStruct*> GetComponentStorageTypes() const;
+
+	/** Number of registered component-storage types. */
+	int32 GetComponentStorageCount() const
+	{
+		return ComponentStorages.Num();
+	}
 
 	// ========== Player & Faction ==========
 
@@ -1018,7 +1073,6 @@ public:
 	void RegisterPlayer(FSeinPlayerID PlayerID, FSeinFactionID FactionID, uint8 TeamID = 0);
 
 	/** Get player state by ID. Returns null if not found. C++ only. */
-	FSeinPlayerState* GetPlayerState(FSeinPlayerID PlayerID);
 	const FSeinPlayerState* GetPlayerState(FSeinPlayerID PlayerID) const;
 
 	/** Blueprint-friendly version: returns a copy. */
@@ -1709,6 +1763,7 @@ private:
 
 	template<typename T>
 	T* GetDeferredTeardownComponent(FSeinEntityHandle Handle);
+	bool RequireMutableStateAccess(const TCHAR* Operation) const;
 	bool ExitContainerInternal(FSeinEntityHandle Entity,
 		FFixedVector ExitLocation, bool bAllowDeferredTeardownContainer);
 	friend class USeinNetSubsystem;
@@ -1994,6 +2049,13 @@ private:
 	FSeinLatentActionCodecManifest LatentActionCodecManifest;
 	FSeinPoolObjectCodecManifest PoolObjectCodecManifest;
 	FSeinCanonicalStateValueStore CanonicalStateValues;
+	/**
+	 * Exact provider-bound world identities adopted into the match
+	 * StateContract. Core recaptures these before each fixed tick so no
+	 * command, built-in system, or custom early-priority system can consume a
+	 * drifted static environment.
+	 */
+	TArray<FString> FrozenCanonicalStateWorldBindingFrames;
 	bool bMatchBootstrapClosedBroadcast = false;
 	/** Private capability set only after RestoreSnapshot has fully validated a
 	 *  checkpoint. It never spans scheduler start or external delegates. */
@@ -2079,6 +2141,8 @@ private:
 	};
 
 	bool TickSimulation(float DeltaTime);
+	bool ValidateFrozenConfigFingerprint();
+	bool ValidateFrozenCanonicalStateWorldBindings();
 	void TickSystems(FFixedPoint DeltaTime);
 	void ProcessCommands();
 	void PumpPauseControlFrame();
@@ -2114,6 +2178,7 @@ private:
 		bool bMaterializeInitialValues,
 		const FString& TopologyManifest,
 		FSeinCanonicalStateValueStore& OutStore,
+		TArray<FString>& OutWorldBindingFrames,
 		FString& OutError);
 	bool TryBuildExecutionTopologyCandidate(
 		FExecutionTopologyCandidate& OutCandidate,
@@ -2194,17 +2259,23 @@ void USeinWorldSubsystem::RemoveComponent(FSeinEntityHandle Handle)
 	{
 		return;
 	}
-	if (ISeinComponentStorage* Storage = GetComponentStorageRaw(T::StaticStruct()))
+	if (ISeinComponentStorage* Storage =
+		GetComponentStorageMutable(T::StaticStruct()))
 	{
 		Storage->RemoveComponent(Handle);
 	}
 }
 
 template<typename T>
-T* USeinWorldSubsystem::GetComponent(FSeinEntityHandle Handle)
+T* USeinWorldSubsystem::GetComponentMutable(FSeinEntityHandle Handle)
 {
+	if (!RequireMutableStateAccess(TEXT("GetComponentMutable")))
+	{
+		return nullptr;
+	}
 	if (!EntityPool.IsValid(Handle)) return nullptr;
-	ISeinComponentStorage* Storage = GetComponentStorageRaw(T::StaticStruct());
+	ISeinComponentStorage* Storage =
+		GetComponentStorageMutable(T::StaticStruct());
 	return Storage ? static_cast<T*>(Storage->GetComponentRaw(Handle)) : nullptr;
 }
 
@@ -2251,7 +2322,7 @@ T* USeinWorldSubsystem::GetDeferredTeardownComponent(
 		return nullptr;
 	}
 	ISeinComponentStorage* Storage =
-		GetComponentStorageRaw(T::StaticStruct());
+		GetComponentStorageMutable(T::StaticStruct());
 	return Storage
 		? static_cast<T*>(Storage->GetComponentRaw(Handle))
 		: nullptr;

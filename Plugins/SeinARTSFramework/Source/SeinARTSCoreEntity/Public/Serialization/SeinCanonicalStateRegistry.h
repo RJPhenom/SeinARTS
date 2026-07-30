@@ -210,15 +210,36 @@ struct SEINARTSCOREENTITY_API FSeinCanonicalStateCaptureContext
 };
 
 /**
+ * Whether a world-binding capture is the committing tick-zero declaration or
+ * a provisional declaration used to validate an imported checkpoint.
+ *
+ * Restore must remain transactional: a rejected checkpoint may not seal
+ * provider-local world state. Providers may commit a binding only for
+ * BootstrapCommit; restore candidates are adopted later by CommitRestore.
+ */
+enum class ESeinCanonicalStateWorldBindingDisposition : uint8
+{
+	Provisional,
+	BootstrapCommit,
+};
+
+/**
  * One-world compatibility binding input.
  *
  * This callback may freeze provider-local generation leases and inspect
  * immutable services/static environment. It must not read or mutate live
- * authoritative simulation state.
+ * authoritative simulation state. BindingDisposition explicitly distinguishes
+ * the normal bootstrap commit from a retryable restore declaration.
  */
 struct SEINARTSCOREENTITY_API FSeinCanonicalStateWorldBindingContext
 {
-	USeinWorldSubsystem& Services;
+	/** Const on purpose: preparation providers receive the world lookup seam
+	 *  needed to resolve their own static-environment subsystem, but cannot
+	 *  directly borrow Core's mutable entity/component services. Native
+	 *  providers remain trusted code and must not cast this contract away. */
+	const USeinWorldSubsystem& Services;
+	ESeinCanonicalStateWorldBindingDisposition BindingDisposition =
+		ESeinCanonicalStateWorldBindingDisposition::Provisional;
 };
 
 /**
@@ -334,11 +355,13 @@ struct SEINARTSCOREENTITY_API FSeinCanonicalStateStageContext
 
 /**
  * Private live-world commit input. Commit callbacks must be infallible swaps
- * and must not mutate canonical-state provider registration.
+ * and must not mutate Core simulation state or canonical-state provider
+ * registration. The Core world is const so contributors can resolve their own
+ * subsystem without directly borrowing mutable entity/component services.
  */
 struct SEINARTSCOREENTITY_API FSeinCanonicalStateCommitContext
 {
-	USeinWorldSubsystem& World;
+	const USeinWorldSubsystem& World;
 	int32 Tick = 0;
 };
 
@@ -377,6 +400,16 @@ struct SEINARTSCOREENTITY_API ISeinCanonicalStateRestoreStage
  */
 struct SEINARTSCOREENTITY_API FSeinCanonicalStateContributorOps
 {
+	/**
+	 * Prepare provider-local immutable world inputs before any compatibility
+	 * frame is inspected. This may synchronously load local baked/static data,
+	 * but must not consume imported checkpoint values or mutate authoritative
+	 * simulation state. Optional when the provider needs no world preparation.
+	 */
+	TFunction<bool(
+		const FSeinCanonicalStateWorldBindingContext&,
+		FString&)> PrepareWorldBinding;
+
 	/**
 	 * Freeze one provider-specific world compatibility frame. The registry
 	 * binds the result to the contributor key before folding it into the
@@ -543,6 +576,15 @@ public:
 	 */
 	static FSeinCanonicalStateSchemaSnapshot CaptureSchemaSnapshot(
 		FString* OutError = nullptr);
+
+	/**
+	 * Prepare provider-local immutable world inputs in canonical contributor
+	 * order before any provider world-binding frame is inspected.
+	 */
+	static bool PrepareWorldBindings(
+		const FSeinCanonicalStateSchemaSnapshot& Schema,
+		const FSeinCanonicalStateWorldBindingContext& Context,
+		FString& OutError);
 
 	/**
 	 * Freeze provider-specific world identities in canonical contributor

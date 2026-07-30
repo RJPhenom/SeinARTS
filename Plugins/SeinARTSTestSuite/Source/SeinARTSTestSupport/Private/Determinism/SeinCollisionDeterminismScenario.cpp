@@ -348,7 +348,8 @@ FSeinCollisionDeterminismTrace SeinRunCollisionDeterminismScenario(bool bParalle
 	}
 
 	Trace.SpawnedEntityCount = World->GetEntityPool().GetActiveCount();
-	Trace.ComponentStorageCount = World->GetAllComponentStorages().Num();
+	Trace.ComponentStorageCount =
+		World->GetComponentStorageCount();
 
 	TArray<uint64> InitialPoseWords;
 	if (!CapturePoseWords(*World, Handles, InitialPoseWords, Trace.FailureReason))

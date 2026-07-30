@@ -19,13 +19,17 @@
 #include "CoreMinimal.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "SeinPathTypes.h"
+#include "SeinStaticEnvironmentAdoption.h"
 #include "Core/SeinEntityHandle.h"
 #include "SeinNavigationSubsystem.generated.h"
 
 class USeinNavigation;
 class USeinLevelData;
+class USeinLevelDataSubsystem;
 class ISeinSystem;
+class FSeinNavBlockerStampSystem;
 struct FSeinNavigationCanonicalStateProvider;
+struct FSeinNavigationRestoreStage;
 struct FSeinPathRequest;
 struct FSeinPath;
 
@@ -63,6 +67,20 @@ public:
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Navigation", meta = (WorldContext = "WorldContextObject"))
 	static USeinNavigation* GetNavigationForWorld(const UObject* WorldContextObject);
 
+	/** True once initial Level Data adoption resolved to Adopted or the valid
+	 *  NotApplicable fallback. False while pending or after rejection. */
+	bool IsInitialStaticEnvironmentPrepared() const
+	{
+		return bInitialStaticEnvironmentPrepared;
+	}
+
+	/** Exact result of the latest initial/static-environment adoption attempt. */
+	const FSeinStaticEnvironmentAdoptionResult&
+	GetInitialStaticEnvironmentAdoptionResult() const
+	{
+		return InitialStaticEnvironmentAdoptionResult;
+	}
+
 	/** Budgeted path request. Routes to `Navigation->FindPath` when the
 	 *  per-sim-tick request budget (configured via
 	 *  `USeinARTSCoreSettings::PathRequestsPerTickBudget`) hasn't been spent
@@ -82,6 +100,8 @@ public:
 
 private:
 	friend struct FSeinNavigationCanonicalStateProvider;
+	friend struct FSeinNavigationRestoreStage;
+	friend class FSeinNavBlockerStampSystem;
 #if WITH_DEV_AUTOMATION_TESTS
 	friend struct UE::SeinARTSTests::FNavigationCanonicalStateTestAccess;
 #endif
@@ -95,19 +115,57 @@ private:
 	 *  registers as its "Nav" layer provider and loads its runtime grid from the
 	 *  baked channels when present. Weak — owned by USeinLevelDataSubsystem. */
 	TWeakObjectPtr<USeinLevelData> LevelData;
+	TWeakObjectPtr<USeinLevelDataSubsystem> LevelDataSubsystem;
 
 	/** Handle for our USeinLevelData::OnLevelDataMutated subscription; removed at
 	 *  Deinitialize. */
 	FDelegateHandle LevelDataMutatedHandle;
+	FDelegateHandle InitialLevelDataPreparedHandle;
 
-	/** Called in OnWorldBeginPlay — adopts the unified level-data substrate's
-	 *  baked grid into the nav (when it carries a "Nav" channel). Idempotent. */
-	void LoadBakedAssetIntoNav(UWorld& World);
+	/** Exact static navigation identity frozen into the match StateContract. */
+	bool bNavigationConfigured = false;
+	bool bInitialStaticEnvironmentPrepared = false;
+	bool bStateBindingFrozen = false;
+	FSeinStaticEnvironmentAdoptionResult
+		InitialStaticEnvironmentAdoptionResult;
+	FString ConfiguredNavigationClassPath;
+	FString StateBindingFailureReason;
+	FString FrozenStateBindingFrame;
+	FGuid FrozenStaticEnvironmentDigest;
+
+	/** Adopt the unified level-data substrate's baked grid into the nav when
+	 *  initial level-data preparation completes. Idempotent. */
+	FSeinStaticEnvironmentAdoptionResult LoadBakedAssetIntoNav(
+		UWorld& World);
+	void HandleInitialLevelDataPrepared();
+	bool PrepareInitialCanonicalStateEnvironment(FString& OutError);
 
 	/** Re-adopt the shared substrate's grid when it rebakes / reloads (CP1.1).
-	 *  Bound to USeinLevelData::OnLevelDataMutated. No-op if nav doesn't read the
-	 *  substrate or the substrate has no nav data. */
+	 *  Bound to USeinLevelData::OnLevelDataMutated. Empty Level Data and
+	 *  non-participating navs retain their valid fallback; rejected data clears
+	 *  readiness until a corrected bake is adopted. */
 	void OnLevelDataChanged();
+
+	/** Provider-only exact implementation/static-environment contract freeze.
+	 *  A provisional restore declaration never persists the candidate. */
+	bool FreezeCanonicalStateBinding(
+		bool bCommit,
+		FString& OutFrame,
+		FGuid& OutStaticDigest,
+		FString& OutError);
+
+	bool RevalidateCanonicalStateBindingCandidate(
+		const FString& ExpectedFrame,
+		const FGuid& ExpectedStaticDigest,
+		FString& OutError);
+	void CommitCanonicalStateBinding(
+		const FString& Frame,
+		const FGuid& StaticDigest);
+	bool ValidateCommittedCanonicalStateBinding();
+
+	/** Permanently fail subsequent canonical capture after an unguarded drift. */
+	void InvalidateCanonicalStateBinding(const FString& Reason);
+	void InvalidateCommittedCanonicalStateBinding(const FString& Reason);
 
 	/** Binds cross-module delegates on USeinWorldSubsystem so sim code can
 	 *  query nav reachability without importing nav headers. */

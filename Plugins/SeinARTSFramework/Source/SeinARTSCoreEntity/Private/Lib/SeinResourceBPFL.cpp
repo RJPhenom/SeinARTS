@@ -179,7 +179,8 @@ bool USeinResourceBPFL::SeinDeduct(const UObject* WorldContextObject, FSeinPlaye
 		return false;
 	}
 
-	FSeinPlayerState* State = Subsystem->GetPlayerState(PlayerID);
+	FSeinPlayerState* State =
+		Subsystem->GetPlayerStateMutable(PlayerID);
 	if (!State) { return false; }
 
 	if (!SeinCanAfford(WorldContextObject, PlayerID, Cost)) { return false; }
@@ -213,7 +214,8 @@ void USeinResourceBPFL::SeinRefund(const UObject* WorldContextObject, FSeinPlaye
 		return;
 	}
 
-	FSeinPlayerState* State = Subsystem->GetPlayerState(PlayerID);
+	FSeinPlayerState* State =
+		Subsystem->GetPlayerStateMutable(PlayerID);
 	if (!State) { return; }
 
 	for (const auto& Entry : Cost.Amounts)
@@ -245,7 +247,8 @@ void USeinResourceBPFL::SeinGrantIncome(const UObject* WorldContextObject, FSein
 		return;
 	}
 
-	FSeinPlayerState* State = Subsystem->GetPlayerState(PlayerID);
+	FSeinPlayerState* State =
+		Subsystem->GetPlayerStateMutable(PlayerID);
 	if (!State) { return; }
 
 	for (const auto& Entry : Amount.Amounts)
@@ -273,8 +276,10 @@ bool USeinResourceBPFL::SeinTransfer(const UObject* WorldContextObject, FSeinPla
 	// whatever rule struct or per-pair tag your game uses, then calls
 	// here for the actual deduct + grant.
 
-	FSeinPlayerState* FromState = Subsystem->GetPlayerState(FromPlayer);
-	FSeinPlayerState* ToState = Subsystem->GetPlayerState(ToPlayer);
+	FSeinPlayerState* FromState =
+		Subsystem->GetPlayerStateMutable(FromPlayer);
+	FSeinPlayerState* ToState =
+		Subsystem->GetPlayerStateMutable(ToPlayer);
 	if (!FromState || !ToState) { return false; }
 
 	if (!SeinCanAfford(WorldContextObject, FromPlayer, Amount)) { return false; }

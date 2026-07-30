@@ -54,6 +54,15 @@ public:
 	virtual void ForEachLiveComponent(
 		TFunctionRef<void(FSeinEntityHandle /*Handle*/, void* /*RawComponent*/)> Visitor) = 0;
 
+	/**
+	 * Read-only sparse live-slot iteration with the same ascending-slot and
+	 * generational-handle guarantees as the mutable overload.
+	 */
+	virtual void ForEachLiveComponent(
+		TFunctionRef<void(
+			FSeinEntityHandle /*Handle*/,
+			const void* /*RawComponent*/)> Visitor) const = 0;
+
 	/** Alias for RemoveComponent — clearer intent when cleaning up a destroyed entity. */
 	virtual void RemoveAllForEntity(FSeinEntityHandle Handle) = 0;
 
@@ -466,6 +475,22 @@ public:
 			const int32 SlotIndex = It.GetIndex();
 			Visitor(
 				FSeinEntityHandle(SlotIndex, StoredGenerations[SlotIndex]),
+				GetSlotPtr(SlotIndex));
+		}
+	}
+
+	virtual void ForEachLiveComponent(
+		TFunctionRef<void(
+			FSeinEntityHandle /*Handle*/,
+			const void* /*RawComponent*/)> Visitor) const override
+	{
+		for (TConstSetBitIterator<> It(HasComponentBits); It; ++It)
+		{
+			const int32 SlotIndex = It.GetIndex();
+			Visitor(
+				FSeinEntityHandle(
+					SlotIndex,
+					StoredGenerations[SlotIndex]),
 				GetSlotPtr(SlotIndex));
 		}
 	}

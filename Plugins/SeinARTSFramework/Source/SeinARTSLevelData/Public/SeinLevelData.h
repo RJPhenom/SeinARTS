@@ -38,6 +38,7 @@
 
 class UWorld;
 class USeinLevelDataAsset;
+class USeinLevelDataSubsystem;
 class ISeinLevelLayerProvider;
 class UTexture2D;
 
@@ -63,13 +64,6 @@ class SEINARTSLEVELDATA_API USeinLevelData : public UObject
 	GENERATED_BODY()
 
 public:
-
-	// ----------------------------------------------------------------------
-	// Lifecycle — called by the owning subsystem
-	// ----------------------------------------------------------------------
-	virtual void OnInitialized(UWorld* World) {}
-	virtual void OnDeinitialized() {}
-
 	// ----------------------------------------------------------------------
 	// Canonical grid / coordinate space — at the FINEST layer resolution (D13).
 	// Coarser layers (e.g. FoW) operate their own grid at their own resolution by
@@ -131,16 +125,56 @@ public:
 	// Bake (editor / dev-loop) — ONE pass that runs every registered provider
 	// (one "Bake Level Data" button). Synchronous, like the nav/FoW bakes today.
 	// ----------------------------------------------------------------------
-	virtual bool BeginBake(UWorld* World) { return false; }
+	/**
+	 * Run the configured bake implementation. A world whose deterministic
+	 * StateContract has frozen rejects this before any authoring or runtime
+	 * substrate state can change; restart PIE/the match after rebaking.
+	 */
+	bool BeginBake(UWorld* World);
 	virtual bool IsBaking() const { return false; }
 	virtual void RequestCancelBake() {}
 
 	// ----------------------------------------------------------------------
 	// Runtime load
 	// ----------------------------------------------------------------------
-	virtual void LoadFromAsset(USeinLevelDataAsset* Asset) {}
+	/**
+	 * Adopt one baked asset. Like BeginBake, this is an owner-guarded mutation
+	 * front door: sealed deterministic worlds reject the call before the
+	 * implementation receives it. Returns true only when the implementation
+	 * accepted the asset.
+	 */
+	bool LoadFromAsset(USeinLevelDataAsset* Asset);
 	virtual bool HasRuntimeData() const { return false; }
 
 	/** Broadcast after bake completion / asset swap / mutation. */
 	FSeinOnLevelDataMutated OnLevelDataMutated;
+
+protected:
+	// ----------------------------------------------------------------------
+	// Lifecycle — implementation hooks called only by the owning subsystem.
+	// ----------------------------------------------------------------------
+	virtual void OnInitialized(UWorld* World) {}
+	virtual void OnDeinitialized() {}
+
+	/**
+	 * Custom substrates implement these two hooks rather than overriding the
+	 * public mutation gates. They are called only while static-environment
+	 * mutation is legal for the owning world.
+	 */
+	virtual bool BeginBakeImpl(UWorld* World) { return false; }
+	virtual bool LoadFromAssetImpl(USeinLevelDataAsset* Asset) { return false; }
+
+private:
+	friend class USeinLevelDataSubsystem;
+
+	/** Owner-only lifecycle wrappers ensure custom overrides cannot skip world binding. */
+	void InitializeForWorld(UWorld* World);
+	void DeinitializeFromWorld();
+
+	bool CanMutateStaticEnvironment(
+		const TCHAR* Operation,
+		UWorld* RequestedWorld,
+		FString& OutError) const;
+
+	TWeakObjectPtr<UWorld> OwningWorld;
 };

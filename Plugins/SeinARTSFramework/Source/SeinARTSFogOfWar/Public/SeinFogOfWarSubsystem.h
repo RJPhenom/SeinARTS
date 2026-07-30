@@ -18,11 +18,13 @@
 
 #include "CoreMinimal.h"
 #include "Core/SeinTickPhase.h"
+#include "SeinStaticEnvironmentAdoption.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "SeinFogOfWarSubsystem.generated.h"
 
 class USeinFogOfWar;
 class USeinLevelData;
+class USeinLevelDataSubsystem;
 class FSeinARTSFogOfWarModule;
 class FSeinFogOfWarStateCodecRegistry;
 struct FSeinFogOfWarCanonicalStateProvider;
@@ -47,12 +49,29 @@ public:
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Fog Of War", meta = (WorldContext = "WorldContextObject"))
 	static USeinFogOfWar* GetFogOfWarForWorld(const UObject* WorldContextObject);
 
+	/** True once initial Level Data adoption resolved to Adopted or the valid
+	 *  NotApplicable/no-bake fallback. False while pending or after rejection. */
+	bool IsInitialStaticEnvironmentPrepared() const
+	{
+		return bInitialStaticEnvironmentPrepared;
+	}
+
+	/** Exact result of the latest initial/static-environment adoption attempt. */
+	const FSeinStaticEnvironmentAdoptionResult&
+	GetInitialStaticEnvironmentAdoptionResult() const
+	{
+		return InitialStaticEnvironmentAdoptionResult;
+	}
+
 	/**
 	 * Pre-unload fail-stop. Severs delegates/systems, unregisters the level
 	 * provider, and destroys the active implementation while its module code
 	 * is still executable. Idempotent with ordinary world teardown.
 	 */
 	void ReleaseModuleOwnedStateForModuleUnload();
+
+	/** Internal tick-time exact-static-environment revalidation. */
+	bool ValidateCommittedCanonicalStateBinding();
 
 private:
 	friend class FSeinARTSFogOfWarModule;
@@ -75,28 +94,37 @@ private:
 	 *  registers as its "FogOfWar" layer provider and loads its runtime grid
 	 *  from the baked channel when present. Weak — owned by USeinLevelDataSubsystem. */
 	TWeakObjectPtr<USeinLevelData> LevelData;
+	TWeakObjectPtr<USeinLevelDataSubsystem> LevelDataSubsystem;
 
 	/** Handle for our USeinLevelData::OnLevelDataMutated subscription; removed at
 	 *  Deinitialize. */
 	FDelegateHandle LevelDataMutatedHandle;
+	FDelegateHandle InitialLevelDataPreparedHandle;
 
 	/** Exact concrete state-codec generation selected once for this world. */
 	uint64 StateCodecToken = 0;
 	bool bSimDelegatesBound = false;
 	bool bFogConfigured = false;
+	bool bInitialStaticEnvironmentPrepared = false;
 	bool bStateBindingFrozen = false;
+	FSeinStaticEnvironmentAdoptionResult
+		InitialStaticEnvironmentAdoptionResult;
 	FString ConfiguredFogClassPath;
 	FString StateCodecFailureReason;
 	FString FrozenStateBindingFrame;
 	FGuid FrozenStaticEnvironmentDigest;
 
-	/** Called in OnWorldBeginPlay — adopts the unified level-data substrate's
-	 *  baked "FogOfWar" channel into the fog impl (when present). Idempotent. */
-	void LoadBakedAssetIntoFogOfWar(UWorld& World);
+	/** Adopt/initialize the static fog environment when the shared Level Data
+	 *  readiness barrier completes. */
+	FSeinStaticEnvironmentAdoptionResult
+	LoadBakedAssetIntoFogOfWar(UWorld& World);
+	void HandleInitialLevelDataPrepared();
+	bool PrepareInitialCanonicalStateEnvironment(FString& OutError);
 
 	/** Re-adopt the shared substrate's fog channel when it rebakes / reloads
-	 *  (CP1.1). Bound to USeinLevelData::OnLevelDataMutated. No-op if the fog
-	 *  doesn't read the substrate or the substrate has no fog data. */
+	 *  (CP1.1). Empty Level Data and non-participating fogs retain their valid
+	 *  fallback; rejected data clears readiness until a corrected bake is
+	 *  adopted. */
 	void OnLevelDataChanged();
 
 	/** If no baked data loaded, let the fog impl auto-size its grid from
@@ -116,8 +144,19 @@ private:
 
 	/** Provider-only exact implementation/static-environment contract freeze. */
 	bool FreezeCanonicalStateBinding(
+		bool bCommit,
 		FString& OutFrame,
+		FGuid& OutStaticDigest,
 		FString& OutError);
+	bool RevalidateCanonicalStateBindingCandidate(
+		const FString& ExpectedFrame,
+		const FGuid& ExpectedStaticDigest,
+		FString& OutError);
+	void CommitCanonicalStateBinding(
+		const FString& Frame,
+		const FGuid& StaticDigest);
+	void InvalidateCommittedCanonicalStateBinding(
+		const FString& Reason);
 
 	/** Called by codec withdrawal before the concrete module can unload. */
 	void InvalidateCanonicalStateCodecLease(

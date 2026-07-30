@@ -387,9 +387,11 @@ bool USeinWorldSubsystem::BuildLocallyDeclaredCanonicalState(
 	bool bMaterializeInitialValues,
 	const FString& TopologyManifest,
 	FSeinCanonicalStateValueStore& OutStore,
+	TArray<FString>& OutWorldBindingFrames,
 	FString& OutError)
 {
 	OutError.Reset();
+	OutWorldBindingFrames.Reset();
 	if (!bExecutionTopologyValid || TopologyManifest.IsEmpty())
 	{
 		OutError = ExecutionTopologyFailureReason.IsEmpty()
@@ -408,6 +410,27 @@ bool USeinWorldSubsystem::BuildLocallyDeclaredCanonicalState(
 			.ValidateConfiguredCanonicalStateRecipes(OutError))
 	{
 		return false;
+	}
+
+	const ESeinCanonicalStateWorldBindingDisposition BindingDisposition =
+		bMaterializeInitialValues
+			? ESeinCanonicalStateWorldBindingDisposition::BootstrapCommit
+			: ESeinCanonicalStateWorldBindingDisposition::Provisional;
+	{
+		// Preparation may load provider-local immutable data, but it receives
+		// the world-services surface while bootstrap materialization is active.
+		// Keep every authoritative Core mutation gate closed for the callback.
+		TGuardValue<bool> PreparationReadOnlyGuard(
+			bReadOnlyCallbackInProgress, true);
+		TGuardValue<bool> PreparationObserverGuard(
+			bObserverCallbackInProgress, true);
+		if (!FSeinCanonicalStateRegistry::PrepareWorldBindings(
+			NativeCanonicalStateSchema,
+			{*this, BindingDisposition},
+			OutError))
+		{
+			return false;
+		}
 	}
 
 	// Recipes are passive schema/value composers. Even during Applying they do
@@ -557,13 +580,13 @@ bool USeinWorldSubsystem::BuildLocallyDeclaredCanonicalState(
 	TArray<FString> NativeWorldBindingFrames;
 	if (!FSeinCanonicalStateRegistry::CaptureWorldBindingFrames(
 		NativeCanonicalStateSchema,
-		{ *this },
+		{*this, BindingDisposition},
 		NativeWorldBindingFrames,
 		OutError))
 	{
 		return false;
 	}
-	AdditionalContractFrames.Append(MoveTemp(NativeWorldBindingFrames));
+	AdditionalContractFrames.Append(NativeWorldBindingFrames);
 	if (!Candidate.Seal(
 		NativeCanonicalStateSchema,
 		AdditionalContractFrames,
@@ -573,6 +596,7 @@ bool USeinWorldSubsystem::BuildLocallyDeclaredCanonicalState(
 	}
 
 	OutStore = MoveTemp(Candidate);
+	OutWorldBindingFrames = MoveTemp(NativeWorldBindingFrames);
 	return true;
 }
 
@@ -610,6 +634,7 @@ void USeinWorldSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	LatentActionCodecManifest = FSeinLatentActionCodecManifest();
 	PoolObjectCodecManifest = FSeinPoolObjectCodecManifest();
 	CanonicalStateValues.Reset();
+	FrozenCanonicalStateWorldBindingFrames.Reset();
 	bMatchBootstrapClosedBroadcast = false;
 	bSnapshotRestoreMutationAuthorized = false;
 	bSnapshotCaptureInProgress = false;
@@ -904,6 +929,7 @@ void USeinWorldSubsystem::ReleaseAllModuleOwnedState()
 	LatentActionCodecManifest = FSeinLatentActionCodecManifest();
 	PoolObjectCodecManifest = FSeinPoolObjectCodecManifest();
 	CanonicalStateValues.Reset();
+	FrozenCanonicalStateWorldBindingFrames.Reset();
 	CurrentMatchSettings = FSeinMatchSettings();
 	MatchSettingsDigest.Invalidate();
 
@@ -1196,6 +1222,19 @@ bool USeinWorldSubsystem::RequireStateMutationAuthorization(
 		MatchBootstrapStateName(MatchBootstrapState),
 		bIsRunning ? 1 : 0,
 		CurrentTick);
+	return false;
+}
+
+bool USeinWorldSubsystem::RequireMutableStateAccess(
+	const TCHAR* Operation) const
+{
+	if (!bReadOnlyCallbackInProgress && !bObserverCallbackInProgress)
+	{
+		return true;
+	}
+	UE_LOG(LogSeinSim, Error,
+		TEXT("%s rejected from a read-only callback."),
+		Operation ? Operation : TEXT("Mutable simulation-state access"));
 	return false;
 }
 
@@ -1621,6 +1660,7 @@ void USeinWorldSubsystem::FailMatchBootstrapInternal(const FString& Reason)
 	MatchBootstrapNativeContributors.Reset();
 	MatchBootstrapValueContributions.Reset();
 	CanonicalStateValues.Reset();
+	FrozenCanonicalStateWorldBindingFrames.Reset();
 	UE_LOG(LogSeinSim, Error, TEXT("Match bootstrap failed closed: %s"),
 		*MatchBootstrapFailureReason);
 	if (!bMatchBootstrapClosedBroadcast)
@@ -1782,6 +1822,26 @@ bool USeinWorldSubsystem::GetCanonicalStateValue(
 	return CanonicalStateValues.GetValue(Key, OutValue);
 }
 
+bool USeinWorldSubsystem::HasFrozenCanonicalStateContributor(
+	const FSeinCanonicalStateKey& Key,
+	ESeinCanonicalStateRole RequiredRole) const
+{
+	if (!NativeCanonicalStateSchema.IsValid() || !Key.IsValid())
+	{
+		return false;
+	}
+	for (const FSeinFrozenCanonicalStateContributor& Contributor :
+		NativeCanonicalStateSchema.GetContributors())
+	{
+		if (Contributor.Descriptor.Key == Key
+			&& Contributor.Descriptor.Role == RequiredRole)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
 bool USeinWorldSubsystem::EnsureMatchBootstrapLocallyReady(
 	const FSeinMatchBootstrapAuthorityHandle& Authority,
 	const FSeinMatchSettings& Settings,
@@ -1890,6 +1950,7 @@ bool USeinWorldSubsystem::EnsureMatchBootstrapLocallyReady(
 
 	FSeinMatchBootstrapMaterializer Materializer = MatchBootstrapMaterializer;
 	FSeinMatchBootstrapReceipt MaterializedReceipt;
+	TArray<FString> MaterializedWorldBindingFrames;
 	FString MaterializerError;
 	bool bMaterialized = false;
 	{
@@ -1904,8 +1965,11 @@ bool USeinWorldSubsystem::EnsureMatchBootstrapLocallyReady(
 				true,
 				ExecutionTopologyManifest,
 				CanonicalStateValues,
+				MaterializedWorldBindingFrames,
 				MaterializerError))
 		{
+			FrozenCanonicalStateWorldBindingFrames =
+				MoveTemp(MaterializedWorldBindingFrames);
 			bMaterialized = Materializer.Execute(
 				CanonicalSettings,
 				AuthorizationContextDigest,
@@ -2210,6 +2274,11 @@ bool USeinWorldSubsystem::TickSimulation(float DeltaTime)
 		&& TimeAccumulator >= FixedDeltaTimeSeconds
 		&& TicksProcessed < MaxTicks)
 	{
+		if (!ValidateFrozenConfigFingerprint()
+			|| !ValidateFrozenCanonicalStateWorldBindings())
+		{
+			break;
+		}
 		const int32 NextTick = CurrentTick + 1;
 
 		// Lockstep gate (Phase 2b). At each turn boundary, ask the network
@@ -2350,6 +2419,70 @@ bool USeinWorldSubsystem::TickSimulation(float DeltaTime)
 		TimeAccumulator = FixedDeltaTimeSeconds;
 	}
 
+	return bExecutionTopologyValid;
+}
+
+bool USeinWorldSubsystem::ValidateFrozenConfigFingerprint()
+{
+	const USeinARTSCoreSettings* CurrentSettings =
+		GetDefault<USeinARTSCoreSettings>();
+	const int32 CurrentFingerprint = CurrentSettings
+		? CurrentSettings->ComputeConfigFingerprint()
+		: 0;
+	if (CurrentFingerprint == ConfigFingerprint)
+	{
+		return true;
+	}
+
+	InvalidateDeterministicExecutionContract(FString::Printf(
+		TEXT("Lockstep configuration changed after world initialization (frozen=0x%08x, current=0x%08x). Restart the match/PIE session after changing simulation settings."),
+		static_cast<uint32>(ConfigFingerprint),
+		static_cast<uint32>(CurrentFingerprint)));
+	return false;
+}
+
+bool USeinWorldSubsystem::ValidateFrozenCanonicalStateWorldBindings()
+{
+	TArray<FString> CurrentFrames;
+	FString Error;
+	bool bCaptured = false;
+	{
+		// World-binding providers may inspect immutable subsystem state, but a
+		// tick-boundary validator must never lend them simulation mutation or
+		// command authority.
+		TGuardValue<bool> ReadOnlyGuard(
+			bReadOnlyCallbackInProgress, true);
+		TGuardValue<bool> ObserverGuard(
+			bObserverCallbackInProgress, true);
+		bCaptured =
+			FSeinCanonicalStateRegistry::CaptureWorldBindingFrames(
+				NativeCanonicalStateSchema,
+				{*this,
+					ESeinCanonicalStateWorldBindingDisposition::
+						Provisional},
+				CurrentFrames,
+				Error);
+	}
+
+	if (!bCaptured)
+	{
+		if (bExecutionTopologyValid)
+		{
+			InvalidateDeterministicExecutionContract(
+				Error.IsEmpty()
+					? TEXT("Canonical StateContract world-binding validation failed at the fixed-tick boundary.")
+					: FString::Printf(
+						TEXT("Canonical StateContract world-binding validation failed at the fixed-tick boundary: %s"),
+						*Error));
+		}
+		return false;
+	}
+	if (CurrentFrames != FrozenCanonicalStateWorldBindingFrames)
+	{
+		InvalidateDeterministicExecutionContract(
+			TEXT("Canonical StateContract world bindings changed after bootstrap or checkpoint adoption."));
+		return false;
+	}
 	return bExecutionTopologyValid;
 }
 
@@ -2651,6 +2784,11 @@ void USeinWorldSubsystem::PumpPauseControlFrame()
 {
 	FSeinPauseControlFrame Frame;
 	if (!ResolvePauseControlFrame(Frame))
+	{
+		return;
+	}
+	if (!ValidateFrozenConfigFingerprint()
+		|| !ValidateFrozenCanonicalStateWorldBindings())
 	{
 		return;
 	}
@@ -3489,7 +3627,9 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleBrokerOr
 	{
 		for (const FSeinEntityHandle& BrokerHandle : PersistentBrokerEntities)
 		{
-			FSeinCommandBrokerData* PersistentBroker = GetComponent<FSeinCommandBrokerData>(BrokerHandle);
+			FSeinCommandBrokerData* PersistentBroker =
+				GetComponentMutable<FSeinCommandBrokerData>(
+					BrokerHandle);
 			if (!PersistentBroker) { continue; }
 			const TArray<FSeinEntityHandle> BrokerMembers = PersistentBroker->Members;
 
@@ -3503,7 +3643,9 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleBrokerOr
 				for (const FSeinEntityHandle& Member : BrokerMembers)
 				{
 					if (!IsEntityAlive(Member)) continue;
-					FSeinAbilityComponent* MemberAC = GetComponent<FSeinAbilityComponent>(Member);
+					FSeinAbilityComponent* MemberAC =
+						GetComponentMutable<FSeinAbilityComponent>(
+							Member);
 					if (!MemberAC) continue;
 					const int32 ActiveID = MemberAC->ActiveAbilityID;
 					USeinAbility* Active = GetAbilityInstance(ActiveID);
@@ -3578,7 +3720,9 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleBrokerOr
 		}
 		if (ExistingBroker.IsValid())
 		{
-			if (FSeinCommandBrokerData* Broker = GetComponent<FSeinCommandBrokerData>(ExistingBroker))
+			if (FSeinCommandBrokerData* Broker =
+				GetComponentMutable<FSeinCommandBrokerData>(
+					ExistingBroker))
 			{
 				// Strict subset? Order is TargetMembers-scoped. Full match? All-members.
 				if (EphemeralEntities.Num() < Broker->Members.Num())
@@ -3611,7 +3755,8 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleBrokerOr
 			: 0;
 		auto StampCohesion = [this, CohesionId](const FSeinEntityHandle& U)
 		{
-			if (FSeinBrokerMembershipData* MB = GetComponent<FSeinBrokerMembershipData>(U))
+			if (FSeinBrokerMembershipData* MB =
+				GetComponentMutable<FSeinBrokerMembershipData>(U))
 			{
 				MB->CohesionGroupId = CohesionId;
 			}
@@ -3647,7 +3792,9 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleActivate
 		return ECommandHandleResult::Unhandled;
 	}
 
-	FSeinAbilityComponent* AbilityComp = GetComponent<FSeinAbilityComponent>(Cmd.EntityHandle);
+	FSeinAbilityComponent* AbilityComp =
+		GetComponentMutable<FSeinAbilityComponent>(
+			Cmd.EntityHandle);
 	if (!AbilityComp)
 	{
 		UE_LOG(LogSeinSim, Verbose, TEXT("ActivateAbility[%s]: entity %s has no FSeinAbilityComponent"),
@@ -3929,7 +4076,9 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleActivate
 			}
 			if (ExistingBroker.IsValid() && EntityPool.IsValid(ExistingBroker))
 			{
-				if (FSeinCommandBrokerData* Broker = GetComponent<FSeinCommandBrokerData>(ExistingBroker))
+				if (FSeinCommandBrokerData* Broker =
+					GetComponentMutable<FSeinCommandBrokerData>(
+						ExistingBroker))
 				{
 					// Insert position: right after the LAST currently-executing
 					// order. Under per-order parallelism multiple orders may be
@@ -3969,7 +4118,9 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleActivate
 				SingleMember, GetEntityOwner(Cmd.EntityHandle), MovePrefix);
 			if (BrokerHandle.IsValid())
 			{
-				if (FSeinCommandBrokerData* Broker = GetComponent<FSeinCommandBrokerData>(BrokerHandle))
+				if (FSeinCommandBrokerData* Broker =
+					GetComponentMutable<FSeinCommandBrokerData>(
+						BrokerHandle))
 				{
 					Broker->OrderQueue.Add(Followup);
 					UE_LOG(LogSeinSim, Verbose,
@@ -4228,7 +4379,9 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleCancelAb
 		return ECommandHandleResult::Unhandled;
 	}
 
-	FSeinAbilityComponent* AbilityComp = GetComponent<FSeinAbilityComponent>(Cmd.EntityHandle);
+	FSeinAbilityComponent* AbilityComp =
+		GetComponentMutable<FSeinAbilityComponent>(
+			Cmd.EntityHandle);
 	const int32 ActiveAbilityID = AbilityComp
 		? AbilityComp->ActiveAbilityID
 		: INDEX_NONE;
@@ -4267,7 +4420,9 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleCancelPr
 		return ECommandHandleResult::Unhandled;
 	}
 
-	FSeinProductionComponent* ProdComp = GetComponent<FSeinProductionComponent>(Cmd.EntityHandle);
+	FSeinProductionComponent* ProdComp =
+		GetComponentMutable<FSeinProductionComponent>(
+			Cmd.EntityHandle);
 	if (!ProdComp) { RejectCommand(Cmd, SeinARTSTags::Command_Reject_MissingComponent); return ECommandHandleResult::Handled; }
 
 	const int32 CancelIdx = Cmd.QueueIndex;
@@ -5018,7 +5173,9 @@ void USeinWorldSubsystem::ProcessDeferredDestroys()
 		{
 			if (EntityPool.IsValid(MemComp->CurrentContainer))
 			{
-				if (FSeinContainmentData* Container = GetComponent<FSeinContainmentData>(MemComp->CurrentContainer))
+				if (FSeinContainmentData* Container =
+					GetComponentMutable<FSeinContainmentData>(
+						MemComp->CurrentContainer))
 				{
 					Container->Occupants.Remove(Handle);
 					Container->CurrentLoad = FMath::Max(0, Container->CurrentLoad - MemComp->Size);
@@ -5033,7 +5190,9 @@ void USeinWorldSubsystem::ProcessDeferredDestroys()
 					// Attachment slot (if any) — clear assignment + fire visual event.
 					if (MemComp->CurrentSlot.IsValid())
 					{
-						if (FSeinAttachmentSpec* Spec = GetComponent<FSeinAttachmentSpec>(MemComp->CurrentContainer))
+						if (FSeinAttachmentSpec* Spec =
+							GetComponentMutable<FSeinAttachmentSpec>(
+								MemComp->CurrentContainer))
 						{
 							Spec->Assignments.Remove(MemComp->CurrentSlot);
 						}
@@ -5056,7 +5215,9 @@ void USeinWorldSubsystem::ProcessDeferredDestroys()
 		{
 			if (EntityPool.IsValid(Memb->CurrentBrokerHandle))
 			{
-				if (FSeinCommandBrokerData* Broker = GetComponent<FSeinCommandBrokerData>(Memb->CurrentBrokerHandle))
+				if (FSeinCommandBrokerData* Broker =
+					GetComponentMutable<FSeinCommandBrokerData>(
+						Memb->CurrentBrokerHandle))
 				{
 					Broker->Members.Remove(Handle);
 					Broker->bCapabilityMapDirty = true;
@@ -5142,14 +5303,39 @@ void USeinWorldSubsystem::ProcessDeferredDestroys()
 
 }
 
-FSeinEntity* USeinWorldSubsystem::GetEntity(FSeinEntityHandle Handle)
+FSeinEntity* USeinWorldSubsystem::GetEntityMutable(
+	FSeinEntityHandle Handle)
 {
+	if (!RequireMutableStateAccess(TEXT("GetEntityMutable")))
+	{
+		return nullptr;
+	}
 	return EntityPool.Get(Handle);
 }
 
 const FSeinEntity* USeinWorldSubsystem::GetEntity(FSeinEntityHandle Handle) const
 {
 	return EntityPool.Get(Handle);
+}
+
+FSeinEntityPool* USeinWorldSubsystem::GetEntityPoolMutable()
+{
+	if (!RequireMutableStateAccess(TEXT("GetEntityPoolMutable")))
+	{
+		return nullptr;
+	}
+	return &EntityPool;
+}
+
+FSeinCollisionSpatialHash*
+USeinWorldSubsystem::GetCollisionSpatialHashMutable()
+{
+	if (!RequireMutableStateAccess(
+		TEXT("GetCollisionSpatialHashMutable")))
+	{
+		return nullptr;
+	}
+	return &CollisionSpatialHash;
 }
 
 bool USeinWorldSubsystem::IsEntityAlive(FSeinEntityHandle Handle) const
@@ -5260,6 +5446,10 @@ TSubclassOf<ASeinActor> USeinWorldSubsystem::GetEntityActorClass(FSeinEntityHand
 
 FSeinPlayerState* USeinWorldSubsystem::GetPlayerStateMutable(FSeinPlayerID PlayerID)
 {
+	if (!RequireMutableStateAccess(TEXT("GetPlayerStateMutable")))
+	{
+		return nullptr;
+	}
 	return PlayerStates.Find(PlayerID);
 }
 
@@ -5351,11 +5541,6 @@ void USeinWorldSubsystem::RegisterPlayer(FSeinPlayerID PlayerID, FSeinFactionID 
 
 	UE_LOG(LogSeinSim, Log, TEXT("Registered player %s (faction: %s, team: %d)"),
 		*PlayerID.ToString(), *FactionID.ToString(), TeamID);
-}
-
-FSeinPlayerState* USeinWorldSubsystem::GetPlayerState(FSeinPlayerID PlayerID)
-{
-	return PlayerStates.Find(PlayerID);
 }
 
 const FSeinPlayerState* USeinWorldSubsystem::GetPlayerState(FSeinPlayerID PlayerID) const
@@ -7478,12 +7663,14 @@ bool USeinWorldSubsystem::RestoreSnapshot(
 	FStagedCanonicalStateValueGCGuard StagedCanonicalValueGCGuard(
 		StagedCanonicalStateValues,
 		TEXT("SeinSnapshotStagedCanonicalStateValues"));
+	TArray<FString> StagedWorldBindingFrames;
 	FString StateContractError;
 	if (!BuildLocallyDeclaredCanonicalState(
 			CanonicalSnapshotSettings,
 			false,
 			RestoreTopologyManifest,
 			ExpectedCanonicalStateValues,
+			StagedWorldBindingFrames,
 			StateContractError)
 		|| !StagedCanonicalStateValues.TryRestoreRecords(
 			ExpectedCanonicalStateValues,
@@ -8093,6 +8280,8 @@ bool USeinWorldSubsystem::RestoreSnapshot(
 		// before native contributor commit so continuation adapters can read the
 		// restored values without a second executable Blueprint restore graph.
 		CanonicalStateValues = MoveTemp(StagedCanonicalStateValues);
+		FrozenCanonicalStateWorldBindingFrames =
+			MoveTemp(StagedWorldBindingFrames);
 		OwnerTransitionRevisions.Reset();
 
 		// Timeline-local collision and visual-event state is not authoritative
@@ -8152,6 +8341,17 @@ bool USeinWorldSubsystem::RestoreSnapshot(
 		{
 			Factions = MoveTemp(StagedFactions);
 		}
+	}
+	{
+		// Core's private restore capability ends before any extension-owned
+		// executable code runs. Contributor and latent commits are infallible
+		// swaps of already-validated staged state; they may mutate their own
+		// subsystem/action objects, but cannot borrow authority to invent Core
+		// entities, components, players, or commands absent from the checkpoint.
+		TGuardValue<bool> ReadOnlyGuard(
+			bReadOnlyCallbackInProgress, true);
+		TGuardValue<bool> ObserverGuard(
+			bObserverCallbackInProgress, true);
 		FSeinCanonicalStateCommitContext NativeStateCommitContext{
 			*this, CurrentTick
 		};
@@ -8570,7 +8770,8 @@ void USeinWorldSubsystem::UnregisterNamedEntity(FName Name)
 
 FFixedPoint USeinWorldSubsystem::ResolveAttribute(FSeinEntityHandle Handle, UScriptStruct* ComponentType, FName FieldName)
 {
-	ISeinComponentStorage* Storage = GetComponentStorageRaw(ComponentType);
+	const ISeinComponentStorage* Storage =
+		GetComponentStorageRaw(ComponentType);
 	if (!Storage) return FFixedPoint::Zero;
 
 	void* CompData = Storage->GetComponentRaw(Handle);
@@ -8772,7 +8973,9 @@ FSeinActiveEffect* USeinWorldSubsystem::FindActiveEffectByID(int64 EffectInstanc
 	EntityPool.ForEachEntity([&](FSeinEntityHandle Handle, const FSeinEntity& /*Entity*/)
 	{
 		if (Found) return;
-		if (FSeinActiveEffectsComponent* Effects = GetComponent<FSeinActiveEffectsComponent>(Handle))
+		if (FSeinActiveEffectsComponent* Effects =
+			GetComponentMutable<FSeinActiveEffectsComponent>(
+				Handle))
 		{
 			Found = Effects->ActiveEffects.FindByPredicate([EffectInstanceID](const FSeinActiveEffect& Effect)
 			{
@@ -8850,7 +9053,9 @@ void USeinWorldSubsystem::PruneAllEffectAbilityGrantClaims(
 	};
 	EntityPool.ForEachEntity([&](FSeinEntityHandle Handle, const FSeinEntity& /*Entity*/)
 	{
-		if (FSeinActiveEffectsComponent* Effects = GetComponent<FSeinActiveEffectsComponent>(Handle))
+		if (FSeinActiveEffectsComponent* Effects =
+			GetComponentMutable<FSeinActiveEffectsComponent>(
+				Handle))
 		{
 			Prune(Effects->ActiveEffects);
 		}
@@ -8879,7 +9084,8 @@ FSeinActiveEffect* USeinWorldSubsystem::ResolveEffect(const FEffectLocator& Loca
 		if (!Effects && bKnownPendingTombstone)
 		{
 			if (ISeinComponentStorage* RawStorage =
-				GetComponentStorageRaw(FSeinActiveEffectsComponent::StaticStruct()))
+				GetComponentStorageMutable(
+					FSeinActiveEffectsComponent::StaticStruct()))
 			{
 				Effects = static_cast<FSeinActiveEffectsComponent*>(
 					RawStorage->GetComponentRaw(Locator.InstanceTarget));
@@ -9763,8 +9969,9 @@ bool USeinWorldSubsystem::RemoveEffect(FSeinEntityHandle Target, int64 EffectIns
 		GetComponent<FSeinActiveEffectsComponent>(Target);
 	if (!InstanceComp && bKnownPendingTombstone)
 	{
-		if (ISeinComponentStorage* RawStorage =
-			GetComponentStorageRaw(FSeinActiveEffectsComponent::StaticStruct()))
+			if (ISeinComponentStorage* RawStorage =
+				GetComponentStorageMutable(
+					FSeinActiveEffectsComponent::StaticStruct()))
 		{
 			InstanceComp = static_cast<FSeinActiveEffectsComponent*>(
 				RawStorage->GetComponentRaw(Target));
@@ -9999,8 +10206,15 @@ void USeinWorldSubsystem::RemoveEffectsFromDeadSource(FSeinEntityHandle DeadHand
 
 // ==================== Component Storage Helpers ====================
 
-ISeinComponentStorage* USeinWorldSubsystem::GetComponentStorageRaw(UScriptStruct* StructType)
+ISeinComponentStorage*
+USeinWorldSubsystem::GetComponentStorageMutable(
+	UScriptStruct* StructType)
 {
+	if (!RequireMutableStateAccess(
+		TEXT("GetComponentStorageMutable")))
+	{
+		return nullptr;
+	}
 	ISeinComponentStorage** Found = ComponentStorages.Find(StructType);
 	return Found ? *Found : nullptr;
 }
@@ -10009,6 +10223,13 @@ const ISeinComponentStorage* USeinWorldSubsystem::GetComponentStorageRaw(UScript
 {
 	ISeinComponentStorage* const* Found = ComponentStorages.Find(StructType);
 	return Found ? *Found : nullptr;
+}
+
+TArray<UScriptStruct*> USeinWorldSubsystem::GetComponentStorageTypes() const
+{
+	TArray<UScriptStruct*> Types;
+	ComponentStorages.GetKeys(Types);
+	return Types;
 }
 
 ISeinComponentStorage* USeinWorldSubsystem::GetOrCreateStorageForType(UScriptStruct* StructType)
@@ -10086,6 +10307,14 @@ void USeinWorldSubsystem::InvalidateFrozenExecutionTopology(
 	TGuardValue<bool> ObserverGuard(bObserverCallbackInProgress, true);
 	OnExecutionTopologyInvalidated.Broadcast(
 		ExecutionTopologyFailureReason);
+}
+
+void USeinWorldSubsystem::InvalidateDeterministicExecutionContract(
+	const FString& Reason)
+{
+	checkf(IsInGameThread(),
+		TEXT("A deterministic execution contract was invalidated away from the game thread."));
+	InvalidateFrozenExecutionTopology(Reason);
 }
 
 void USeinWorldSubsystem::TerminateAndReleaseForModuleUnload(
@@ -10913,7 +11142,17 @@ int32 USeinWorldSubsystem::ComputeStateHash() const
 	{
 		TArray<FSeinCanonicalStateContributorRecord> NativeRecords;
 		FString CaptureError;
-		const bool bNativeCaptured = NativeCanonicalStateSchema.IsValid()
+		// Before bootstrap commits, provider preparation is allowed to warm
+		// immutable world-local inputs for a restore candidate. That provisional
+		// readiness is not authoritative sim state and must not make this legacy
+		// fingerprint depend on whether a rejected restore happened to reach the
+		// provider-staging phase. Canonical provider state joins the fold only
+		// after this world's own StateContract/value store is sealed.
+		const bool bCommittedStateContract =
+			CanonicalStateValues.IsSealed()
+			&& MatchBootstrapReceipt.StateContractDigest.IsValid();
+		const bool bNativeCaptured = bCommittedStateContract
+			&& NativeCanonicalStateSchema.IsValid()
 			&& FSeinCanonicalStateRegistry::CaptureContributorRecords(
 				NativeCanonicalStateSchema,
 				{ *this, CurrentTick },
@@ -11127,7 +11366,8 @@ int32 USeinWorldSubsystem::ComputeStateHash() const
 
 void USeinWorldSubsystem::InitializeEntityAbilities(FSeinEntityHandle Handle)
 {
-	FSeinAbilityComponent* AbilityComp = GetComponent<FSeinAbilityComponent>(Handle);
+	FSeinAbilityComponent* AbilityComp =
+		GetComponentMutable<FSeinAbilityComponent>(Handle);
 	if (!AbilityComp)
 	{
 		// Not every entity has abilities (projectiles, static props, resource piles);
@@ -11351,11 +11591,14 @@ FSeinEntityHandle USeinWorldSubsystem::CreateBrokerForMembers(
 	for (const FSeinEntityHandle& M : FilteredMembers)
 	{
 		if (!IsEntityAlive(M)) continue;
-		FSeinBrokerMembershipData* Memb = GetComponent<FSeinBrokerMembershipData>(M);
+		FSeinBrokerMembershipData* Memb =
+			GetComponentMutable<FSeinBrokerMembershipData>(M);
 		if (!Memb || !Memb->CurrentBrokerHandle.IsValid()) continue;
 		const FSeinEntityHandle OldBrokerHandle = Memb->CurrentBrokerHandle;
 		if (!EntityPool.IsValid(OldBrokerHandle)) continue;
-		FSeinCommandBrokerData* OldBroker = GetComponent<FSeinCommandBrokerData>(OldBrokerHandle);
+		FSeinCommandBrokerData* OldBroker =
+			GetComponentMutable<FSeinCommandBrokerData>(
+				OldBrokerHandle);
 		if (!OldBroker) continue;
 
 		// Cancel the member's active primary ability before evicting. The active
@@ -11363,7 +11606,8 @@ FSeinEntityHandle USeinWorldSubsystem::CreateBrokerForMembers(
 		// once we evict, the broker no longer owns it. Cancellation runs the
 		// ability's OnEnd cleanup (latent-action teardown, refunds, tag ungrant).
 		// Safe no-op if the member has no active ability.
-		if (FSeinAbilityComponent* AC = GetComponent<FSeinAbilityComponent>(M))
+		if (FSeinAbilityComponent* AC =
+			GetComponentMutable<FSeinAbilityComponent>(M))
 		{
 			const int32 ActiveID = AC->ActiveAbilityID;
 			USeinAbility* Active = GetAbilityInstance(ActiveID);
@@ -11488,7 +11732,8 @@ FSeinEntityHandle USeinWorldSubsystem::CreateBrokerForMembers(
 	// 5. Update each member's back-reference. Create the component if missing.
 	for (const FSeinEntityHandle& M : LiveMembers)
 	{
-		FSeinBrokerMembershipData* Memb = GetComponent<FSeinBrokerMembershipData>(M);
+		FSeinBrokerMembershipData* Memb =
+			GetComponentMutable<FSeinBrokerMembershipData>(M);
 		if (Memb)
 		{
 			Memb->CurrentBrokerHandle = BrokerHandle;
@@ -12025,7 +12270,8 @@ bool USeinWorldSubsystem::EnterContainer(FSeinEntityHandle Entity, FSeinEntityHa
 		return false;
 	}
 
-	FSeinContainmentMemberData* MemComp = GetComponent<FSeinContainmentMemberData>(Entity);
+	FSeinContainmentMemberData* MemComp =
+		GetComponentMutable<FSeinContainmentMemberData>(Entity);
 	if (!MemComp)
 	{
 		UE_LOG(LogSeinSim, Warning, TEXT("EnterContainer: entity %s has no FSeinContainmentMemberData"), *Entity.ToString());
@@ -12038,7 +12284,8 @@ bool USeinWorldSubsystem::EnterContainer(FSeinEntityHandle Entity, FSeinEntityHa
 		return false;
 	}
 
-	FSeinContainmentData* ContComp = GetComponent<FSeinContainmentData>(Container);
+	FSeinContainmentData* ContComp =
+		GetComponentMutable<FSeinContainmentData>(Container);
 	if (!ContComp)
 	{
 		UE_LOG(LogSeinSim, Warning, TEXT("EnterContainer: container %s has no FSeinContainmentData"), *Container.ToString());
@@ -12098,7 +12345,8 @@ bool USeinWorldSubsystem::ExitContainerInternal(
 {
 	if (!EntityPool.IsValid(Entity)) return false;
 
-	FSeinContainmentMemberData* MemComp = GetComponent<FSeinContainmentMemberData>(Entity);
+	FSeinContainmentMemberData* MemComp =
+		GetComponentMutable<FSeinContainmentMemberData>(Entity);
 	if (!MemComp || !MemComp->CurrentContainer.IsValid())
 	{
 		return false;
@@ -12201,7 +12449,8 @@ bool USeinWorldSubsystem::AttachToSlot(FSeinEntityHandle Entity, FSeinEntityHand
 	if (!EntityPool.IsValid(Entity) || !EntityPool.IsValid(Container)) return false;
 	if (!SlotTag.IsValid()) return false;
 
-	FSeinAttachmentSpec* Spec = GetComponent<FSeinAttachmentSpec>(Container);
+	FSeinAttachmentSpec* Spec =
+		GetComponentMutable<FSeinAttachmentSpec>(Container);
 	if (!Spec) return false;
 
 	// Locate slot by tag.
@@ -12232,7 +12481,8 @@ bool USeinWorldSubsystem::AttachToSlot(FSeinEntityHandle Entity, FSeinEntityHand
 
 	// Stamp slot assignment + member back-ref.
 	Spec->Assignments.Add(SlotTag, Entity);
-	if (FSeinContainmentMemberData* Mem = GetComponent<FSeinContainmentMemberData>(Entity))
+	if (FSeinContainmentMemberData* Mem =
+		GetComponentMutable<FSeinContainmentMemberData>(Entity))
 	{
 		Mem->CurrentSlot = SlotTag;
 	}
@@ -12248,7 +12498,8 @@ bool USeinWorldSubsystem::DetachFromSlot(FSeinEntityHandle Entity)
 		return false;
 	}
 	if (!EntityPool.IsValid(Entity)) return false;
-	FSeinContainmentMemberData* Mem = GetComponent<FSeinContainmentMemberData>(Entity);
+	FSeinContainmentMemberData* Mem =
+		GetComponentMutable<FSeinContainmentMemberData>(Entity);
 	if (!Mem || !Mem->CurrentSlot.IsValid()) return false;
 	// ExitContainer handles slot-assignment removal + visual event; simply delegate.
 	return ExitContainer(Entity);

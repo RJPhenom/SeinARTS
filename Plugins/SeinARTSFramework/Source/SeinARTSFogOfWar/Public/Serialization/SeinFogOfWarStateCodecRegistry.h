@@ -18,17 +18,32 @@ class UScriptStruct;
 struct FSeinFogOfWarCanonicalStateProvider;
 
 /**
+ * Whether one codec may serve classes below its exact SupportedClass.
+ *
+ * ExactClassOnly is the safe default. DataOnlyBlueprintGeneratedChildren is
+ * an explicit opt-in for Blueprint classes that only override inherited
+ * defaults: every intervening class must be Blueprint-generated, non-native,
+ * and declare no new reflected instance properties or functions. A native
+ * subclass always requires its own codec claim.
+ */
+enum class ESeinFogOfWarStateCodecSubclassPolicy : uint8
+{
+	ExactClassOnly,
+	DataOnlyBlueprintGeneratedChildren
+};
+
+/**
  * Stable compatibility claim owned by the concrete implementation module.
  *
- * SupportedClass also covers property-only Blueprint subclasses. Every native
- * subclass must register its own claim so added C++ state/behavior cannot
- * silently inherit an incomplete base codec. Revisions are independent on
- * purpose: schema describes bytes, behavior describes gameplay, and codec
- * describes canonical framing.
+ * Revisions are independent on purpose: schema describes bytes, behavior
+ * describes gameplay, and codec describes canonical framing. Subclass
+ * compatibility is explicit and participates in the descriptor digest.
  */
 struct SEINARTSFOGOFWAR_API FSeinFogOfWarStateCodecDescriptor
 {
 	const UClass* SupportedClass = nullptr;
+	ESeinFogOfWarStateCodecSubclassPolicy SubclassPolicy =
+		ESeinFogOfWarStateCodecSubclassPolicy::ExactClassOnly;
 	FString StableImplementationId;
 	uint32 StateSchemaVersion = 0;
 	uint32 BehaviorRevision = 0;
@@ -62,7 +77,7 @@ struct SEINARTSFOGOFWAR_API FSeinFogOfWarStateStageContext
 
 struct SEINARTSFOGOFWAR_API FSeinFogOfWarStateCommitContext
 {
-	USeinWorldSubsystem& World;
+	const USeinWorldSubsystem& World;
 	USeinFogOfWar& Fog;
 	int32 Tick = 0;
 };
@@ -165,6 +180,11 @@ private:
 		FString& OutError);
 	static bool Resolve(
 		uint64 Token,
+		FResolvedClaim& OutClaim,
+		FString& OutError);
+	static bool ResolveForClass(
+		uint64 Token,
+		const UClass* FogClass,
 		FResolvedClaim& OutClaim,
 		FString& OutError);
 	static bool IsTokenAvailable(uint64 Token);

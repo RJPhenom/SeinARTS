@@ -193,7 +193,8 @@ float USeinEntityViewModel::GetBaseAttribute(UScriptStruct* ComponentType, FName
 		return 0.0f;
 	}
 
-	ISeinComponentStorage* Storage = WorldSubsystem->GetComponentStorageRaw(ComponentType);
+	const ISeinComponentStorage* Storage =
+		WorldSubsystem->GetComponentStorageRaw(ComponentType);
 	if (!Storage)
 	{
 		return 0.0f;

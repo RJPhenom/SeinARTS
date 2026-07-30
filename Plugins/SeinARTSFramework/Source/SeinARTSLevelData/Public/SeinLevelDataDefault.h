@@ -50,7 +50,6 @@ class SEINARTSLEVELDATA_API USeinLevelDataDefault : public USeinLevelData
 public:
 
 	// --- USeinLevelData surface ---
-	virtual void OnDeinitialized() override;
 	virtual FFixedPoint GetFinestCellSize() const override { return CellSizeFP; }
 	virtual FFixedVector GetOrigin() const override { return OriginFP; }
 	virtual FIntPoint GetDimensions() const override { return FIntPoint(Width, Height); }
@@ -61,10 +60,8 @@ public:
 	virtual UTexture2D* GetMinimapTexture() const override { return MinimapTextureRuntime; }
 	virtual void RegisterLayerProvider(ISeinLevelLayerProvider* Provider) override;
 	virtual void UnregisterLayerProvider(ISeinLevelLayerProvider* Provider) override;
-	virtual bool BeginBake(UWorld* World) override;
 	virtual bool IsBaking() const override { return bBaking; }
 	virtual void RequestCancelBake() override { bCancelRequested = true; }
-	virtual void LoadFromAsset(USeinLevelDataAsset* Asset) override;
 	virtual bool HasRuntimeData() const override { return Width > 0 && Height > 0; }
 
 	/** Surface normal · Up at a world XY (the nav layer's slope gate reads this).
@@ -77,8 +74,12 @@ public:
 
 protected:
 
+	virtual void OnDeinitialized() override;
+	virtual bool BeginBakeImpl(UWorld* World) override;
+	virtual bool LoadFromAssetImpl(USeinLevelDataAsset* Asset) override;
+
 	bool DoSyncBake(UWorld* World, USeinLevelDataDefaultAsset*& OutAsset);
-	void ApplyAssetData(const USeinLevelDataDefaultAsset* Asset);
+	bool ApplyAssetData(const USeinLevelDataDefaultAsset* Asset);
 
 	/** Synthesize (or refresh) the asset's top-down minimap background texture from the
 	 *  current runtime surface arrays (Width/Height/SharedHeight/SharedNormalZ/CellFlags).

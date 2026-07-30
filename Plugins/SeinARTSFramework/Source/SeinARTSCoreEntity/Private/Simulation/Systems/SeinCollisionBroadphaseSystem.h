@@ -54,7 +54,10 @@ public:
 			}
 		}
 
-		FSeinCollisionSpatialHash& Hash = World.GetCollisionSpatialHash();
+		FSeinCollisionSpatialHash* MutableHash =
+			World.GetCollisionSpatialHashMutable();
+		if (!MutableHash) return;
+		FSeinCollisionSpatialHash& Hash = *MutableHash;
 
 		const bool bRebuildStatic = Hash.IsStaticDirty();
 		if (bRebuildStatic)
@@ -71,7 +74,9 @@ public:
 		TArray<FSeinCollisionSpatialHash::FDynamicColliderInput> DynamicColliders;
 		DynamicColliders.Reserve(World.GetEntityPool().GetActiveCount());
 
-		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, FSeinEntity& Entity)
+		World.GetEntityPool().ForEachEntity([&](
+			FSeinEntityHandle Handle,
+			const FSeinEntity& Entity)
 		{
 			const FSeinExtentsComponent* Extents = World.GetComponent<FSeinExtentsComponent>(Handle);
 

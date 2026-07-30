@@ -496,7 +496,10 @@ namespace UE::SeinARTSTests
 				*World, ReusingActiveID)));
 
 		World->EnqueueVisualEvent(FSeinVisualEvent());
-		World->GetCollisionSpatialHash().FinishStaticRebuild();
+		FSeinCollisionSpatialHash* MutableHash =
+			World->GetCollisionSpatialHashMutable();
+		ASSERT_THAT(IsNotNull(MutableHash));
+		MutableHash->FinishStaticRebuild();
 		ASSERT_THAT(IsTrue(World->HasPendingVisualEvents()));
 		ASSERT_THAT(IsFalse(World->GetCollisionSpatialHash().IsStaticDirty()));
 

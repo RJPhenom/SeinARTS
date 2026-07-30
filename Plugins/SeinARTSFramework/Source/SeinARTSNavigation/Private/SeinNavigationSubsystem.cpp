@@ -13,6 +13,7 @@
 #include "SeinLevelData.h"
 #include "SeinLevelDataSubsystem.h"
 #include "SeinLevelLayerProvider.h"
+#include "Serialization/SeinCanonicalInitialStateDigest.h"
 
 #include "Engine/World.h"
 #include "Types/FixedPoint.h"
@@ -20,10 +21,43 @@
 
 #include "SeinARTSNavigationLog.h"
 
+namespace
+{
+	constexpr int32 MaxNavigationStateContributors = 64;
+
+	void AppendFramed(FString& Out, const FString& Value)
+	{
+		const FTCHARToUTF8 Utf8(*Value);
+		Out += FString::Printf(TEXT("%d:"), Utf8.Length());
+		Out += Value;
+		Out += TEXT("\n");
+	}
+
+	bool BuildDisabledStaticEnvironmentDigest(
+		FGuid& OutDigest,
+		FString& OutError)
+	{
+		FSeinCanonicalDigestWriter Writer(
+			TEXT("SeinARTS.Navigation.DisabledStaticEnvironment"), 1);
+		return Writer.WriteString(TEXT("disabled"))
+			&& Writer.Finalize(OutDigest, OutError);
+	}
+}
+
 void USeinNavigationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
 	Collection.InitializeDependency(USeinWorldSubsystem::StaticClass());
+	bNavigationConfigured = false;
+	bInitialStaticEnvironmentPrepared = false;
+	bStateBindingFrozen = false;
+	InitialStaticEnvironmentAdoptionResult =
+		FSeinStaticEnvironmentAdoptionResult::NotApplicable(
+			TEXT("Initial navigation substrate adoption has not run."));
+	ConfiguredNavigationClassPath.Reset();
+	StateBindingFailureReason.Reset();
+	FrozenStateBindingFrame.Reset();
+	FrozenStaticEnvironmentDigest.Invalidate();
 
 	// Resolve the configured nav class (WYSIWYG). None/empty => navigation is intentionally OFF
 	// (Navigation stays null — every Move order fails and the nav wall-barrier is disabled). A
@@ -45,10 +79,12 @@ void USeinNavigationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 	if (NavClass)
 	{
+		bNavigationConfigured = true;
+		ConfiguredNavigationClassPath = NavClass->GetPathName();
 		Navigation = NewObject<USeinNavigation>(this, NavClass, TEXT("SeinNavigation"));
 		if (Navigation)
 		{
-			Navigation->OnNavigationInitialized(GetWorld());
+			Navigation->InitializeForWorld(GetWorld());
 		}
 		else
 		{
@@ -70,16 +106,34 @@ void USeinNavigationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	// "Nav" layer provider and subscribe to rebake/reload so the runtime grid tracks
 	// the shared bake. Non-participating navs (the default base) skip all of this.
 	Collection.InitializeDependency(USeinLevelDataSubsystem::StaticClass());
-	if (Navigation)
+	if (UWorld* World = GetWorld())
 	{
-		if (ISeinLevelLayerProvider* Provider = Navigation->GetLevelDataProvider())
+		if (USeinLevelDataSubsystem* LevelSubsystem =
+				World->GetSubsystem<USeinLevelDataSubsystem>())
 		{
-			if (USeinLevelData* Substrate = USeinLevelDataSubsystem::GetLevelDataForWorld(GetWorld()))
+			LevelDataSubsystem = LevelSubsystem;
+			InitialLevelDataPreparedHandle =
+				LevelSubsystem->OnInitialLevelDataPrepared.AddUObject(
+					this,
+					&USeinNavigationSubsystem::
+						HandleInitialLevelDataPrepared);
+			if (USeinLevelData* Substrate = LevelSubsystem->GetLevelData())
 			{
 				LevelData = Substrate;
-				Substrate->RegisterLayerProvider(Provider);
 				LevelDataMutatedHandle = Substrate->OnLevelDataMutated.AddUObject(
 					this, &USeinNavigationSubsystem::OnLevelDataChanged);
+				if (Navigation)
+				{
+					if (ISeinLevelLayerProvider* Provider =
+							Navigation->GetLevelDataProvider())
+					{
+						Substrate->RegisterLayerProvider(Provider);
+					}
+				}
+			}
+			if (LevelSubsystem->IsInitialRuntimeDataPrepared())
+			{
+				HandleInitialLevelDataPrepared();
 			}
 		}
 	}
@@ -92,7 +146,7 @@ void USeinNavigationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 					World->GetSubsystem<USeinWorldSubsystem>())
 			{
 				NavBlockerStampSystem =
-					new FSeinNavBlockerStampSystem(Navigation);
+					new FSeinNavBlockerStampSystem(this, Navigation);
 				Sim->RegisterSystem(NavBlockerStampSystem);
 			}
 		}
@@ -143,8 +197,19 @@ void USeinNavigationSubsystem::ReleaseModuleOwnedStateForModuleUnload()
 			}
 		}
 	}
+	if (USeinLevelDataSubsystem* LevelSubsystem =
+			LevelDataSubsystem.Get())
+	{
+		if (InitialLevelDataPreparedHandle.IsValid())
+		{
+			LevelSubsystem->OnInitialLevelDataPrepared.Remove(
+				InitialLevelDataPreparedHandle);
+		}
+	}
 	LevelDataMutatedHandle.Reset();
+	InitialLevelDataPreparedHandle.Reset();
 	LevelData = nullptr;
+	LevelDataSubsystem = nullptr;
 
 	// Tear down the stamping system before nulling Navigation — the system
 	// holds a weak nav ref but would still leak its own memory if dropped
@@ -164,21 +229,111 @@ void USeinNavigationSubsystem::ReleaseModuleOwnedStateForModuleUnload()
 
 	if (Navigation)
 	{
-		Navigation->OnNavigationDeinitialized();
+		Navigation->DeinitializeFromWorld();
 	}
 	Navigation = nullptr;
+	bNavigationConfigured = false;
+	bInitialStaticEnvironmentPrepared = false;
+	bStateBindingFrozen = false;
+	InitialStaticEnvironmentAdoptionResult =
+		FSeinStaticEnvironmentAdoptionResult::NotApplicable(
+			TEXT("The navigation subsystem is not initialized."));
+	ConfiguredNavigationClassPath.Reset();
+	StateBindingFailureReason.Reset();
+	FrozenStateBindingFrame.Reset();
+	FrozenStaticEnvironmentDigest.Invalidate();
 }
 
 void USeinNavigationSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 {
 	Super::OnWorldBeginPlay(InWorld);
-	LoadBakedAssetIntoNav(InWorld);
+	if (USeinLevelDataSubsystem* LevelSubsystem =
+			LevelDataSubsystem.Get())
+	{
+		LevelSubsystem->EnsureInitialRuntimeDataPrepared(InWorld);
+	}
 	BindSimDelegates(InWorld);
 }
 
-void USeinNavigationSubsystem::LoadBakedAssetIntoNav(UWorld& World)
+void USeinNavigationSubsystem::HandleInitialLevelDataPrepared()
 {
-	if (!Navigation) return;
+	if (bInitialStaticEnvironmentPrepared)
+	{
+		return;
+	}
+	if (UWorld* World = GetWorld())
+	{
+		InitialStaticEnvironmentAdoptionResult =
+			LoadBakedAssetIntoNav(*World);
+		bInitialStaticEnvironmentPrepared =
+			!InitialStaticEnvironmentAdoptionResult.IsRejected();
+	}
+	else
+	{
+		InitialStaticEnvironmentAdoptionResult =
+			FSeinStaticEnvironmentAdoptionResult::Rejected(
+				TEXT("Navigation initial substrate adoption could not resolve its owning world."));
+	}
+}
+
+bool USeinNavigationSubsystem::PrepareInitialCanonicalStateEnvironment(
+	FString& OutError)
+{
+	OutError.Reset();
+	if (bInitialStaticEnvironmentPrepared)
+	{
+		return true;
+	}
+
+	UWorld* World = GetWorld();
+	USeinLevelDataSubsystem* LevelSubsystem =
+		LevelDataSubsystem.Get();
+	if (!World || !LevelSubsystem)
+	{
+		OutError =
+			TEXT("Navigation could not resolve the Level Data readiness service.");
+		return false;
+	}
+	if (!LevelSubsystem->EnsureInitialRuntimeDataPrepared(*World))
+	{
+		OutError =
+			TEXT("Navigation could not prepare the initial Level Data substrate.");
+		return false;
+	}
+	if (!bInitialStaticEnvironmentPrepared)
+	{
+		// Robust when the Level Data barrier completed before our delegate was
+		// bound, or after an earlier rejected attempt was corrected.
+		HandleInitialLevelDataPrepared();
+	}
+	if (!bInitialStaticEnvironmentPrepared)
+	{
+		OutError = InitialStaticEnvironmentAdoptionResult.IsRejected()
+			? FString::Printf(
+				TEXT("Navigation rejected the initial static environment: %s"),
+				*InitialStaticEnvironmentAdoptionResult.Detail)
+			: TEXT("Navigation did not receive the completed Level Data readiness barrier.");
+		return false;
+	}
+	return true;
+}
+
+FSeinStaticEnvironmentAdoptionResult
+USeinNavigationSubsystem::LoadBakedAssetIntoNav(UWorld& World)
+{
+	if (&World != GetWorld())
+	{
+		return FSeinStaticEnvironmentAdoptionResult::Rejected(
+			TEXT("Navigation substrate adoption targeted a world other than the owning world."));
+	}
+	if (!Navigation)
+	{
+		return bNavigationConfigured
+			? FSeinStaticEnvironmentAdoptionResult::Rejected(
+				TEXT("The configured navigation implementation is unavailable."))
+			: FSeinStaticEnvironmentAdoptionResult::NotApplicable(
+				TEXT("Navigation is disabled."));
+	}
 
 	// Unified pipeline (CP1.1): if the shared substrate carries a baked grid + a
 	// "Nav" channel, adopt it. If the substrate isn't loaded yet (subsystem
@@ -186,29 +341,397 @@ void USeinNavigationSubsystem::LoadBakedAssetIntoNav(UWorld& World)
 	// re-adopts it the moment it loads.
 	if (USeinLevelData* Substrate = LevelData.Get())
 	{
-		if (Substrate->HasRuntimeData() && Navigation->LoadFromSubstrate(*Substrate))
+		const FSeinStaticEnvironmentAdoptionResult Result =
+			Navigation->LoadFromSubstrate(*Substrate);
+		if (Result.IsAdopted())
 		{
 			UE_LOG(LogSeinNavSubsystem, Log,
 				TEXT("Nav: loaded grid from the unified level-data substrate (CP1.1 substrate path)."));
-			return;
+			return Result;
 		}
+		if (Result.IsRejected())
+		{
+			UE_LOG(LogSeinNavSubsystem, Error,
+				TEXT("Nav: rejected the unified Level Data substrate: %s"),
+				*Result.Detail);
+			return Result;
+		}
+		UE_LOG(LogSeinNavSubsystem, Log,
+			TEXT("Nav: no applicable baked topology (%s). FindPath returns no-path unless the implementation has another runtime-data source."),
+			*Result.Detail);
+		return Result;
 	}
 	UE_LOG(LogSeinNavSubsystem, Log,
-		TEXT("Nav: no baked level data — run \"Bake Level Data\" on a Sein Level Volume. FindPath returns no-path."));
+		TEXT("Nav: Level Data is disabled or unavailable. FindPath returns no-path unless the implementation has another runtime-data source."));
+	return FSeinStaticEnvironmentAdoptionResult::NotApplicable(
+		TEXT("Level Data is disabled or unavailable."));
 }
 
 void USeinNavigationSubsystem::OnLevelDataChanged()
 {
-	// Shared substrate rebaked / swapped — re-adopt its grid if it now carries nav
-	// data. If not (empty bake / no nav channel), LoadFromSubstrate returns false and
-	// leaves nav as-is, so a prior legacy load (or the next one) still stands.
-	if (!Navigation) return;
-	if (USeinLevelData* Substrate = LevelData.Get())
+	// Shared substrate rebaked / swapped — re-resolve adoption. An absent/empty
+	// substrate keeps the valid no-data fallback, while a participating nav that
+	// rejects present baked data makes readiness false until a corrected bake lands.
+	if (const USeinLevelDataSubsystem* LevelSubsystem =
+			LevelDataSubsystem.Get();
+		LevelSubsystem
+			&& !LevelSubsystem->IsInitialRuntimeDataPrepared())
 	{
-		if (Navigation->LoadFromSubstrate(*Substrate))
+		// Initial asset adoption broadcasts before the shared readiness bit is
+		// published. The one-shot prepared callback performs the sole O(N)
+		// grid adoption after that transaction succeeds.
+		return;
+	}
+	if (bStateBindingFrozen)
+	{
+		InvalidateCommittedCanonicalStateBinding(
+			TEXT("The shared level-data substrate mutated after the navigation StateContract froze."));
+		return;
+	}
+	if (UWorld* World = GetWorld())
+	{
+		InitialStaticEnvironmentAdoptionResult =
+			LoadBakedAssetIntoNav(*World);
+		bInitialStaticEnvironmentPrepared =
+			!InitialStaticEnvironmentAdoptionResult.IsRejected();
+	}
+}
+
+bool USeinNavigationSubsystem::FreezeCanonicalStateBinding(
+	bool bCommit,
+	FString& OutFrame,
+	FGuid& OutStaticDigest,
+	FString& OutError)
+{
+	OutFrame.Reset();
+	OutStaticDigest.Invalidate();
+	OutError.Reset();
+	if (!StateBindingFailureReason.IsEmpty())
+	{
+		OutError = StateBindingFailureReason;
+		return false;
+	}
+	if (!bInitialStaticEnvironmentPrepared)
+	{
+		OutError = InitialStaticEnvironmentAdoptionResult.IsRejected()
+			? FString::Printf(
+				TEXT("Navigation static-environment adoption was rejected: %s"),
+				*InitialStaticEnvironmentAdoptionResult.Detail)
+			: TEXT("Navigation static-environment preparation has not completed. Prepare initial Level Data before bootstrap or restore.");
+		if (bStateBindingFrozen)
 		{
-			UE_LOG(LogSeinNavSubsystem, Log,
-				TEXT("Nav: re-adopted the unified level-data substrate (OnLevelDataMutated)."));
+			InvalidateCommittedCanonicalStateBinding(OutError);
+		}
+		return false;
+	}
+
+	FString CandidateFrame =
+		TEXT("SeinARTS.Navigation.WorldBinding\n");
+	AppendFramed(CandidateFrame, TEXT("3"));
+
+	FGuid StaticDigest;
+	if (!bNavigationConfigured)
+	{
+		if (!BuildDisabledStaticEnvironmentDigest(
+			StaticDigest, OutError))
+		{
+			return false;
+		}
+		AppendFramed(CandidateFrame, TEXT("disabled"));
+		AppendFramed(CandidateFrame, TEXT("<disabled>"));
+		AppendFramed(
+			CandidateFrame, TEXT("seinarts.navigation.disabled"));
+		AppendFramed(CandidateFrame, TEXT("1"));
+		AppendFramed(CandidateFrame, TEXT("1"));
+		AppendFramed(CandidateFrame, TEXT("stateless"));
+		AppendFramed(CandidateFrame, TEXT("0"));
+		AppendFramed(
+			CandidateFrame,
+			StaticDigest.ToString(EGuidFormats::Digits));
+	}
+	else
+	{
+		if (!Navigation)
+		{
+			OutError = FString::Printf(
+				TEXT("Configured navigation implementation '%s' has no live world instance."),
+				*ConfiguredNavigationClassPath);
+			if (bStateBindingFrozen)
+			{
+				InvalidateCommittedCanonicalStateBinding(OutError);
+			}
+			return false;
+		}
+		if (!Navigation->ComputeStaticEnvironmentDigest(
+				StaticDigest, OutError)
+			|| !StaticDigest.IsValid())
+		{
+			if (OutError.IsEmpty())
+			{
+				OutError = FString::Printf(
+					TEXT("Navigation implementation '%s' returned an invalid static-environment digest."),
+					*Navigation->GetClass()->GetPathName());
+			}
+			if (bStateBindingFrozen)
+			{
+				InvalidateCommittedCanonicalStateBinding(OutError);
+			}
+			return false;
+		}
+
+		FSeinNavigationStateCoverageClaim Coverage;
+		bool bCoverageValid =
+			Navigation->ComputeStateCoverageClaim(
+				Coverage, OutError)
+			&& !Coverage.StableImplementationId.IsEmpty()
+			&& Coverage.StableImplementationId
+				== Coverage.StableImplementationId.TrimStartAndEnd()
+			&& Coverage.BehaviorRevision != 0
+			&& Coverage.CoverageRevision != 0;
+
+		FString CoverageKind;
+		TArray<FString> CanonicalRequiredKeys;
+		if (bCoverageValid)
+		{
+			switch (Coverage.StateCoverage)
+			{
+			case ESeinNavigationStateCoverage::Stateless:
+				CoverageKind = TEXT("stateless");
+				if (!Coverage.RequiredCanonicalStateContributors.IsEmpty())
+				{
+					OutError = FString::Printf(
+						TEXT("Stateless navigation implementation '%s' names supplemental canonical-state contributors."),
+						*Navigation->GetClass()->GetPathName());
+					bCoverageValid = false;
+				}
+				break;
+
+			case ESeinNavigationStateCoverage::
+				CanonicalStateContributors:
+				CoverageKind = TEXT("canonical-state-contributors");
+				if (Coverage.RequiredCanonicalStateContributors.IsEmpty()
+					|| Coverage.RequiredCanonicalStateContributors.Num()
+						> MaxNavigationStateContributors)
+				{
+					OutError = FString::Printf(
+						TEXT("Stateful navigation implementation '%s' names an invalid supplemental canonical-state contributor count."),
+						*Navigation->GetClass()->GetPathName());
+					bCoverageValid = false;
+					break;
+				}
+
+				if (const USeinWorldSubsystem* Sim =
+						GetWorld()
+							? GetWorld()->GetSubsystem<
+								USeinWorldSubsystem>()
+							: nullptr)
+				{
+					CanonicalRequiredKeys.Reserve(
+						Coverage.RequiredCanonicalStateContributors.Num());
+					for (const FSeinCanonicalStateKey& Required :
+						Coverage.RequiredCanonicalStateContributors)
+					{
+						const FString CanonicalKey =
+							FSeinCanonicalStateRegistry::CanonicalKey(
+								Required);
+						if (CanonicalKey.IsEmpty())
+						{
+							OutError = FString::Printf(
+								TEXT("Navigation implementation '%s' names an invalid supplemental canonical-state contributor."),
+								*Navigation->GetClass()->GetPathName());
+							bCoverageValid = false;
+							break;
+						}
+						if (!Sim->HasFrozenCanonicalStateContributor(
+								Required,
+								ESeinCanonicalStateRole::Authoritative))
+						{
+							OutError = FString::Printf(
+								TEXT("Navigation implementation '%s' requires missing authoritative canonical-state contributor '%s'."),
+								*Navigation->GetClass()->GetPathName(),
+								*CanonicalKey);
+							bCoverageValid = false;
+							break;
+						}
+						CanonicalRequiredKeys.Add(CanonicalKey);
+					}
+				}
+				else
+				{
+					OutError = FString::Printf(
+						TEXT("Navigation implementation '%s' cannot verify supplemental canonical-state contributors without a frozen Core world schema."),
+						*Navigation->GetClass()->GetPathName());
+					bCoverageValid = false;
+				}
+
+				CanonicalRequiredKeys.Sort();
+				for (int32 Index = 1;
+					bCoverageValid
+						&& Index < CanonicalRequiredKeys.Num();
+					++Index)
+				{
+					if (CanonicalRequiredKeys[Index - 1]
+						== CanonicalRequiredKeys[Index])
+					{
+						OutError = FString::Printf(
+							TEXT("Navigation implementation '%s' names duplicate canonical-state contributor '%s'."),
+							*Navigation->GetClass()->GetPathName(),
+							*CanonicalRequiredKeys[Index]);
+						bCoverageValid = false;
+					}
+				}
+				break;
+
+			case ESeinNavigationStateCoverage::Unspecified:
+			default:
+				OutError = FString::Printf(
+					TEXT("Navigation implementation '%s' did not declare whether its mutable state is stateless or restored by canonical contributors."),
+					*Navigation->GetClass()->GetPathName());
+				bCoverageValid = false;
+				break;
+			}
+		}
+
+		if (!bCoverageValid)
+		{
+			if (OutError.IsEmpty())
+			{
+				OutError = FString::Printf(
+					TEXT("Navigation implementation '%s' returned an invalid exact-state coverage claim."),
+					*Navigation->GetClass()->GetPathName());
+			}
+			if (bStateBindingFrozen)
+			{
+				InvalidateCommittedCanonicalStateBinding(OutError);
+			}
+			return false;
+		}
+
+		AppendFramed(CandidateFrame, TEXT("enabled"));
+		AppendFramed(
+			CandidateFrame, Navigation->GetClass()->GetPathName());
+		AppendFramed(
+			CandidateFrame, Coverage.StableImplementationId);
+		AppendFramed(
+			CandidateFrame,
+			LexToString(Coverage.BehaviorRevision));
+		AppendFramed(
+			CandidateFrame,
+			LexToString(Coverage.CoverageRevision));
+		AppendFramed(CandidateFrame, CoverageKind);
+		AppendFramed(
+			CandidateFrame,
+			LexToString(CanonicalRequiredKeys.Num()));
+		for (const FString& RequiredKey : CanonicalRequiredKeys)
+		{
+			AppendFramed(CandidateFrame, RequiredKey);
+		}
+		AppendFramed(
+			CandidateFrame,
+			StaticDigest.ToString(EGuidFormats::Digits));
+	}
+
+	if (bStateBindingFrozen
+		&& (FrozenStateBindingFrame != CandidateFrame
+			|| FrozenStaticEnvironmentDigest != StaticDigest))
+	{
+		InvalidateCommittedCanonicalStateBinding(
+			TEXT("Navigation implementation or static environment changed after the match StateContract froze."));
+		OutError = StateBindingFailureReason;
+		return false;
+	}
+
+	if (bCommit)
+	{
+		bStateBindingFrozen = true;
+		FrozenStateBindingFrame = CandidateFrame;
+		FrozenStaticEnvironmentDigest = StaticDigest;
+	}
+	OutFrame = MoveTemp(CandidateFrame);
+	OutStaticDigest = StaticDigest;
+	return true;
+}
+
+bool USeinNavigationSubsystem::RevalidateCanonicalStateBindingCandidate(
+	const FString& ExpectedFrame,
+	const FGuid& ExpectedStaticDigest,
+	FString& OutError)
+{
+	FString CurrentFrame;
+	FGuid CurrentStaticDigest;
+	if (!FreezeCanonicalStateBinding(
+			false, CurrentFrame, CurrentStaticDigest, OutError))
+	{
+		return false;
+	}
+	if (CurrentFrame != ExpectedFrame
+		|| CurrentStaticDigest != ExpectedStaticDigest)
+	{
+		OutError =
+			TEXT("Navigation static environment changed during restore staging.");
+		return false;
+	}
+	return true;
+}
+
+void USeinNavigationSubsystem::CommitCanonicalStateBinding(
+	const FString& Frame,
+	const FGuid& StaticDigest)
+{
+	FString Error;
+	const bool bCandidateStillValid =
+		RevalidateCanonicalStateBindingCandidate(
+			Frame, StaticDigest, Error);
+	checkf(bCandidateStillValid,
+		TEXT("Navigation world binding changed after final restore lease verification: %s"),
+		*Error);
+	if (!bCandidateStillValid)
+	{
+		InvalidateCommittedCanonicalStateBinding(Error);
+		return;
+	}
+	bStateBindingFrozen = true;
+	FrozenStateBindingFrame = Frame;
+	FrozenStaticEnvironmentDigest = StaticDigest;
+}
+
+bool USeinNavigationSubsystem::ValidateCommittedCanonicalStateBinding()
+{
+	if (!bStateBindingFrozen)
+	{
+		return true;
+	}
+	FString Frame;
+	FGuid StaticDigest;
+	FString Error;
+	return FreezeCanonicalStateBinding(
+		false, Frame, StaticDigest, Error);
+}
+
+void USeinNavigationSubsystem::InvalidateCanonicalStateBinding(
+	const FString& Reason)
+{
+	if (StateBindingFailureReason.IsEmpty())
+	{
+		StateBindingFailureReason = Reason.IsEmpty()
+			? TEXT("The frozen navigation static-environment contract became invalid.")
+			: Reason;
+		UE_LOG(LogSeinNavSubsystem, Error, TEXT("%s"),
+			*StateBindingFailureReason);
+	}
+}
+
+void USeinNavigationSubsystem::InvalidateCommittedCanonicalStateBinding(
+	const FString& Reason)
+{
+	InvalidateCanonicalStateBinding(Reason);
+	if (UWorld* World = GetWorld())
+	{
+		if (USeinWorldSubsystem* Sim =
+				World->GetSubsystem<USeinWorldSubsystem>())
+		{
+			Sim->InvalidateDeterministicExecutionContract(
+				StateBindingFailureReason);
 		}
 	}
 }

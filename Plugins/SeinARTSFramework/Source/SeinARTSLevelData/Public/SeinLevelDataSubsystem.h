@@ -18,6 +18,12 @@
 class USeinLevelData;
 class USeinLevelDataAsset;
 
+/** Fired exactly once after the world has either adopted its initial baked
+ *  substrate or deliberately resolved to an empty/disabled substrate.
+ *  Static-environment consumers use this as the pre-bootstrap preparation
+ *  barrier; every listener has already initialized before BeginPlay dispatch. */
+DECLARE_MULTICAST_DELEGATE(FSeinOnInitialLevelDataPrepared);
+
 UCLASS()
 class SEINARTSLEVELDATA_API USeinLevelDataSubsystem : public UWorldSubsystem
 {
@@ -32,6 +38,19 @@ public:
 	/** Release the active substrate and its provider graph before module unload. */
 	void ReleaseModuleOwnedStateForModuleUnload();
 
+	/**
+	 * Resolve the initial baked substrate once, before any match StateContract
+	 * freezes. Idempotent. A world with no baked asset (or with Level Data
+	 * disabled) is still a successfully prepared, intentionally empty world.
+	 */
+	bool EnsureInitialRuntimeDataPrepared(UWorld& World);
+	bool IsInitialRuntimeDataPrepared() const
+	{
+		return bInitialRuntimeDataPrepared;
+	}
+
+	FSeinOnInitialLevelDataPrepared OnInitialLevelDataPrepared;
+
 	/** The active substrate for this world (or null pre-init). */
 	USeinLevelData* GetLevelData() const { return LevelData; }
 
@@ -42,8 +61,10 @@ public:
 	static void RequestCancelBake(UWorld* World);
 
 protected:
-	void LoadBakedAsset(UWorld& World);
+	bool LoadBakedAsset(UWorld& World);
 
 	UPROPERTY(Transient)
 	TObjectPtr<USeinLevelData> LevelData;
+
+	bool bInitialRuntimeDataPrepared = false;
 };

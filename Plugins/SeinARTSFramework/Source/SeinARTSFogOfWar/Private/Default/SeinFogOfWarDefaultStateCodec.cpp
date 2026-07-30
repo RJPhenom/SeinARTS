@@ -10,6 +10,7 @@
 #include "Serialization/SeinCanonicalInitialStateDigest.h"
 #include "Serialization/SeinCanonicalStateCodec.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "Hash/Blake3.h"
 #include "UObject/Package.h"
 
 namespace
@@ -17,6 +18,74 @@ namespace
 	const FName OwnerModuleId(TEXT("SeinARTSFogOfWar"));
 	constexpr int32 MaxPayloadBytes = 32 * 1024 * 1024;
 	constexpr int32 MaxPayloadElements = 16 * 1024 * 1024;
+
+	uint32 ReadDigestWord(const uint8* Bytes)
+	{
+		return (static_cast<uint32>(Bytes[0]) << 24)
+			| (static_cast<uint32>(Bytes[1]) << 16)
+			| (static_cast<uint32>(Bytes[2]) << 8)
+			| static_cast<uint32>(Bytes[3]);
+	}
+
+	class FFogStaticGridDigestBuilder
+	{
+	public:
+		FFogStaticGridDigestBuilder()
+		{
+			constexpr uint8 Domain[] = {
+				'S', 'E', 'I', 'N', 'F', 'O', 'G', 'G', 'R', 'I', 'D', 1};
+			Hasher.Update(Domain, UE_ARRAY_COUNT(Domain));
+		}
+
+		void WriteUInt32(uint32 Value)
+		{
+			const uint8 Bytes[4] = {
+				static_cast<uint8>(Value >> 24),
+				static_cast<uint8>(Value >> 16),
+				static_cast<uint8>(Value >> 8),
+				static_cast<uint8>(Value)};
+			Hasher.Update(Bytes, UE_ARRAY_COUNT(Bytes));
+		}
+
+		void WriteUInt64(uint64 Value)
+		{
+			WriteUInt32(static_cast<uint32>(Value >> 32));
+			WriteUInt32(static_cast<uint32>(Value));
+		}
+
+		void WriteInt32(int32 Value)
+		{
+			WriteUInt32(BitCast<uint32>(Value));
+		}
+
+		void WriteInt64(int64 Value)
+		{
+			WriteUInt64(static_cast<uint64>(Value));
+		}
+
+		void WriteBytes(TConstArrayView<uint8> Bytes)
+		{
+			WriteUInt64(static_cast<uint64>(Bytes.Num()));
+			if (!Bytes.IsEmpty())
+			{
+				Hasher.Update(Bytes.GetData(), Bytes.Num());
+			}
+		}
+
+		FGuid Finalize() const
+		{
+			const FBlake3Hash Hash = Hasher.Finalize();
+			const uint8* Bytes = Hash.GetBytes();
+			return FGuid(
+				ReadDigestWord(Bytes),
+				ReadDigestWord(Bytes + 4),
+				ReadDigestWord(Bytes + 8),
+				ReadDigestWord(Bytes + 12));
+		}
+
+	private:
+		FBlake3 Hasher;
+	};
 
 	bool ValidateShape(const FSeinStampShape& Shape, FString& OutError)
 	{
@@ -143,40 +212,38 @@ struct FSeinFogOfWarDefaultStateCodec
 			return false;
 		}
 
-		FSeinCanonicalDigestWriter Writer(
-			TEXT("SeinARTS.FogOfWar.Default.StaticEnvironment"), 1);
-		if (!Writer.WriteInt32(Fog->Width)
-			|| !Writer.WriteInt32(Fog->Height)
-			|| !Writer.WriteInt64(Fog->CellSize.Value)
-			|| !Writer.WriteInt64(Fog->Origin.X.Value)
-			|| !Writer.WriteInt64(Fog->Origin.Y.Value)
-			|| !Writer.WriteInt64(Fog->Origin.Z.Value)
-			|| !Writer.WriteUInt64(static_cast<uint64>(NumCells)))
+		if (Fog->StaticGridDigest.IsValid())
 		{
-			return Writer.Finalize(OutDigest, OutError);
+			OutDigest = Fog->StaticGridDigest;
+			return true;
 		}
+
+		FFogStaticGridDigestBuilder Writer;
+		Writer.WriteInt32(Fog->Width);
+		Writer.WriteInt32(Fog->Height);
+		Writer.WriteInt64(Fog->CellSize.Value);
+		Writer.WriteInt64(Fog->Origin.X.Value);
+		Writer.WriteInt64(Fog->Origin.Y.Value);
+		Writer.WriteInt64(Fog->Origin.Z.Value);
+		Writer.WriteUInt64(static_cast<uint64>(NumCells));
 		for (const FFixedPoint Value : Fog->GroundHeight)
 		{
-			if (!Writer.WriteInt64(Value.Value))
-			{
-				return Writer.Finalize(OutDigest, OutError);
-			}
+			Writer.WriteInt64(Value.Value);
 		}
 		for (const FFixedPoint Value : Fog->BlockerHeight)
 		{
-			if (!Writer.WriteInt64(Value.Value))
-			{
-				return Writer.Finalize(OutDigest, OutError);
-			}
+			Writer.WriteInt64(Value.Value);
 		}
-		for (const uint8 Value : Fog->BlockerLayerMask)
+		Writer.WriteBytes(Fog->BlockerLayerMask);
+		Fog->StaticGridDigest = Writer.Finalize();
+		if (!Fog->StaticGridDigest.IsValid())
 		{
-			if (!Writer.WriteUInt8(Value))
-			{
-				return Writer.Finalize(OutDigest, OutError);
-			}
+			OutError =
+				TEXT("Default fog static-grid digest was invalid.");
+			return false;
 		}
-		return Writer.Finalize(OutDigest, OutError);
+		OutDigest = Fog->StaticGridDigest;
+		return true;
 	}
 
 	static void PackExplored(
@@ -803,11 +870,14 @@ SeinRegisterDefaultFogOfWarStateCodec(FString& OutError)
 	OutError.Reset();
 	FSeinFogOfWarStateCodecDescriptor Descriptor;
 	Descriptor.SupportedClass = USeinFogOfWarDefault::StaticClass();
+	Descriptor.SubclassPolicy =
+		ESeinFogOfWarStateCodecSubclassPolicy::
+			DataOnlyBlueprintGeneratedChildren;
 	Descriptor.StableImplementationId =
 		TEXT("seinarts.fog.default-grid");
 	Descriptor.StateSchemaVersion = 1;
 	Descriptor.BehaviorRevision = 1;
-	Descriptor.CodecRevision = 1;
+	Descriptor.CodecRevision = 3;
 	Descriptor.PayloadStruct =
 		FSeinFogOfWarDefaultCanonicalState::StaticStruct();
 	Descriptor.Limits.MaxRecursionDepth = 32;

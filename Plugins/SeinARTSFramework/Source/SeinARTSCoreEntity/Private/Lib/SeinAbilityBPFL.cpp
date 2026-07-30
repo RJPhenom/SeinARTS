@@ -74,7 +74,9 @@ void USeinAbilityBPFL::SeinActivateAbility(const UObject* WorldContextObject, FS
 		return;
 	}
 
-	FSeinAbilityComponent* AbilityComp = Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
+	FSeinAbilityComponent* AbilityComp =
+		Subsystem->GetComponentMutable<FSeinAbilityComponent>(
+			EntityHandle);
 	if (!AbilityComp) return;
 
 	USeinAbility* Ability = AbilityComp->FindAbilityByTag(*Subsystem, AbilityTag);
@@ -154,7 +156,9 @@ void USeinAbilityBPFL::SeinIssueBrokerOrderFromEntity(
 		return;
 	}
 
-	FSeinCommandBrokerData* Broker = Subsystem->GetComponent<FSeinCommandBrokerData>(BrokerHandle);
+	FSeinCommandBrokerData* Broker =
+		Subsystem->GetComponentMutable<FSeinCommandBrokerData>(
+			BrokerHandle);
 	if (!Broker)
 	{
 		UE_LOG(LogSeinBPFL, Warning,
@@ -202,7 +206,9 @@ void USeinAbilityBPFL::SeinCancelAbility(const UObject* WorldContextObject, FSei
 		return;
 	}
 
-	FSeinAbilityComponent* AbilityComp = Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
+	FSeinAbilityComponent* AbilityComp =
+		Subsystem->GetComponentMutable<FSeinAbilityComponent>(
+			EntityHandle);
 	if (!AbilityComp) return;
 
 	if (USeinAbility* Active = AbilityComp->GetActiveAbility(*Subsystem))
@@ -223,7 +229,9 @@ namespace SeinAbilityGrantLocal
 	{
 		if (const FSeinBrokerMembershipData* Memb = World.GetComponent<FSeinBrokerMembershipData>(Entity))
 		{
-			if (FSeinCommandBrokerData* Broker = World.GetComponent<FSeinCommandBrokerData>(Memb->CurrentBrokerHandle))
+			if (FSeinCommandBrokerData* Broker =
+				World.GetComponentMutable<FSeinCommandBrokerData>(
+					Memb->CurrentBrokerHandle))
 			{
 				Broker->bCapabilityMapDirty = true;
 			}
@@ -232,7 +240,9 @@ namespace SeinAbilityGrantLocal
 		// carrier (squad entity). Squad members route through the line above;
 		// the squad entity itself is the broker carrier and isn't a member of
 		// any other broker.
-		if (FSeinCommandBrokerData* OwnBroker = World.GetComponent<FSeinCommandBrokerData>(Entity))
+		if (FSeinCommandBrokerData* OwnBroker =
+			World.GetComponentMutable<FSeinCommandBrokerData>(
+				Entity))
 		{
 			OwnBroker->bCapabilityMapDirty = true;
 		}
@@ -546,7 +556,9 @@ int32 USeinAbilityBPFL::SeinRevokeAbilityByTag(const UObject* WorldContextObject
 	{
 		return 0;
 	}
-	FSeinAbilityComponent* AbilityComp = Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
+	FSeinAbilityComponent* AbilityComp =
+		Subsystem->GetComponentMutable<FSeinAbilityComponent>(
+			EntityHandle);
 	if (!AbilityComp) return 0;
 
 	// Collect parallel-indices first — mutating during iteration invalidates
@@ -606,7 +618,9 @@ int32 USeinAbilityBPFL::SeinRevokeAbilityByClass(const UObject* WorldContextObje
 	{
 		return 0;
 	}
-	FSeinAbilityComponent* AbilityComp = Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
+	FSeinAbilityComponent* AbilityComp =
+		Subsystem->GetComponentMutable<FSeinAbilityComponent>(
+			EntityHandle);
 	if (!AbilityComp) return 0;
 
 	// One class = one instance per entity (grant is idempotent on class).
@@ -679,7 +693,9 @@ int32 USeinAbilityBPFL::SeinForceRevokeAbilityByTag(const UObject* WorldContextO
 	{
 		return 0;
 	}
-	FSeinAbilityComponent* AbilityComp = Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
+	FSeinAbilityComponent* AbilityComp =
+		Subsystem->GetComponentMutable<FSeinAbilityComponent>(
+			EntityHandle);
 	if (!AbilityComp) return 0;
 
 	// Snapshot matching IDs, then destroy each regardless of refcount.
@@ -733,7 +749,9 @@ int32 USeinAbilityBPFL::SeinForceRevokeAbilityByClass(const UObject* WorldContex
 	{
 		return 0;
 	}
-	FSeinAbilityComponent* AbilityComp = Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
+	FSeinAbilityComponent* AbilityComp =
+		Subsystem->GetComponentMutable<FSeinAbilityComponent>(
+			EntityHandle);
 	if (!AbilityComp) return 0;
 
 	const UClass* TargetClass = AbilityClass.Get();

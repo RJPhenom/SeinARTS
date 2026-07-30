@@ -11,6 +11,7 @@
 #include "SeinARTSFogOfWarLog.h"
 #include "SeinFogOfWar.h"
 #include "SeinFogOfWarSubsystem.h"
+#include "UObject/FieldIterator.h"
 #include "UObject/StrongObjectPtr.h"
 #include "UObject/UObjectIterator.h"
 
@@ -131,8 +132,14 @@ namespace
 
 	int32 InheritanceDistance(
 		const UClass* Concrete,
-		const UClass* Supported)
+		const FSeinFogOfWarStateCodecDescriptor& Descriptor)
 	{
+		const UClass* Supported = Descriptor.SupportedClass;
+		if (!Concrete || !Supported)
+		{
+			return INDEX_NONE;
+		}
+
 		int32 Distance = 0;
 		for (const UClass* Cursor = Concrete;
 			Cursor;
@@ -142,10 +149,29 @@ namespace
 			{
 				return Distance;
 			}
-			// A codec may flow through property-only Blueprint layers, but a
-			// native subclass is a new implementation and must claim its own
-			// exact state/behavior contract.
-			if (!Cursor->HasAnyClassFlags(CLASS_CompiledFromBlueprint))
+			if (Descriptor.SubclassPolicy
+					!= ESeinFogOfWarStateCodecSubclassPolicy::
+						DataOnlyBlueprintGeneratedChildren
+				|| Cursor->HasAnyClassFlags(CLASS_Native)
+				|| !Cursor->HasAnyClassFlags(
+					CLASS_CompiledFromBlueprint))
+			{
+				return INDEX_NONE;
+			}
+
+			// An inherited codec can safely serve only a data-only Blueprint
+			// layer. Added properties may carry future state and added
+			// functions may change future behavior, neither of which the
+			// ancestor codec can describe.
+			if (TFieldIterator<FProperty> Property(
+					Cursor, EFieldIteratorFlags::ExcludeSuper);
+				Property)
+			{
+				return INDEX_NONE;
+			}
+			if (TFieldIterator<UFunction> Function(
+					Cursor, EFieldIteratorFlags::ExcludeSuper);
+				Function)
 			{
 				return INDEX_NONE;
 			}
@@ -172,6 +198,11 @@ namespace
 			|| !OutDescriptor.SupportedClass
 			|| !OutDescriptor.SupportedClass->IsChildOf(
 				USeinFogOfWar::StaticClass())
+			|| static_cast<uint8>(
+				OutDescriptor.SubclassPolicy)
+				> static_cast<uint8>(
+					ESeinFogOfWarStateCodecSubclassPolicy::
+						DataOnlyBlueprintGeneratedChildren)
 			|| !OutDescriptor.PayloadStruct
 			|| OutDescriptor.StateSchemaVersion == 0
 			|| OutDescriptor.BehaviorRevision == 0
@@ -266,9 +297,11 @@ namespace
 		}
 
 		FSeinCanonicalDigestWriter Writer(
-			TEXT("SeinARTS.FogOfWar.StateCodecClaim"), 1);
+			TEXT("SeinARTS.FogOfWar.StateCodecClaim"), 2);
 		if (!Writer.WriteString(
 				OutDescriptor.SupportedClass->GetPathName())
+			|| !Writer.WriteUInt8(static_cast<uint8>(
+				OutDescriptor.SubclassPolicy))
 			|| !Writer.WriteString(
 				OutDescriptor.StableImplementationId)
 			|| !Writer.WriteUInt32(
@@ -522,7 +555,7 @@ bool FSeinFogOfWarStateCodecRegistry::FreezeForClass(
 		}
 		const FCodecClaim& Claim = Entry.Claims.Last();
 		const int32 Distance = InheritanceDistance(
-			FogClass, Claim.Descriptor.SupportedClass);
+			FogClass, Claim.Descriptor);
 		if (Distance != INDEX_NONE && Distance < BestDistance)
 		{
 			Best = &Claim;
@@ -572,6 +605,32 @@ bool FSeinFogOfWarStateCodecRegistry::Resolve(
 	return false;
 }
 
+bool FSeinFogOfWarStateCodecRegistry::ResolveForClass(
+	uint64 Token,
+	const UClass* FogClass,
+	FResolvedClaim& OutClaim,
+	FString& OutError)
+{
+	if (!Resolve(Token, OutClaim, OutError))
+	{
+		return false;
+	}
+	if (InheritanceDistance(FogClass, OutClaim.Descriptor)
+		== INDEX_NONE)
+	{
+		OutError = FString::Printf(
+			TEXT("Fog state codec '%s' for '%s' does not explicitly admit active class '%s'. Native or stateful Blueprint subclasses require their own exact codec claim."),
+			*OutClaim.Descriptor.StableImplementationId,
+			OutClaim.Descriptor.SupportedClass
+				? *OutClaim.Descriptor.SupportedClass->GetPathName()
+				: TEXT("<null>"),
+			FogClass ? *FogClass->GetPathName() : TEXT("<null>"));
+		OutClaim = {};
+		return false;
+	}
+	return true;
+}
+
 bool FSeinFogOfWarStateCodecRegistry::IsTokenAvailable(uint64 Token)
 {
 	FResolvedClaim Ignored;
@@ -588,7 +647,8 @@ bool FSeinFogOfWarStateCodecRegistry::ComputeStaticEnvironmentDigest(
 	OutDigest.Invalidate();
 	FResolvedClaim Claim;
 	if (InvocationDepth() != 0
-		|| !Resolve(Token, Claim, OutError))
+		|| !ResolveForClass(
+			Token, Fog.GetClass(), Claim, OutError))
 	{
 		if (OutError.IsEmpty())
 		{
@@ -622,7 +682,8 @@ bool FSeinFogOfWarStateCodecRegistry::CapturePayload(
 	OutPayload.Reset();
 	FResolvedClaim Claim;
 	if (InvocationDepth() != 0
-		|| !Resolve(Token, Claim, OutError))
+		|| !ResolveForClass(
+			Token, Context.Fog.GetClass(), Claim, OutError))
 	{
 		if (OutError.IsEmpty())
 		{
@@ -658,7 +719,8 @@ bool FSeinFogOfWarStateCodecRegistry::StagePayload(
 	OutStage.Reset();
 	FResolvedClaim Claim;
 	if (InvocationDepth() != 0
-		|| !Resolve(Token, Claim, OutError))
+		|| !ResolveForClass(
+			Token, Context.Fog.GetClass(), Claim, OutError))
 	{
 		if (OutError.IsEmpty())
 		{
@@ -699,7 +761,8 @@ void FSeinFogOfWarStateCodecRegistry::CommitPayload(
 	FResolvedClaim Claim;
 	FString Error;
 	checkf(
-		Resolve(Token, Claim, Error),
+		ResolveForClass(
+			Token, Context.Fog.GetClass(), Claim, Error),
 		TEXT("Fog codec generation disappeared after final lease verification: %s"),
 		*Error);
 	FInvocationScope Scope;

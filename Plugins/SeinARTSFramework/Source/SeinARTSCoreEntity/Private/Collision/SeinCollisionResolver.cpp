@@ -226,10 +226,14 @@ void USeinCollisionResolver::DetectOverlapsAndEmit(USeinWorldSubsystem& World, c
 	TSet<FOverlapPairKey> Current;
 
 	// Hoist the Extents storage once (see ResolvePass) + reusable self-shape scratch.
-	ISeinComponentStorage* ExtentsStorage = World.GetComponentStorageRaw(FSeinExtentsComponent::StaticStruct());
+	const ISeinComponentStorage* ExtentsStorage =
+		World.GetComponentStorageRaw(
+			FSeinExtentsComponent::StaticStruct());
 	TArray<FCollisionShape2D> SelfShapes;
 
-	World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle SelfHandle, FSeinEntity& SelfEntity)
+	World.GetEntityPool().ForEachEntity([&](
+		FSeinEntityHandle SelfHandle,
+		const FSeinEntity& SelfEntity)
 	{
 		const FSeinExtentsComponent* SelfExt = ExtentsStorage
 			? static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(SelfHandle))
@@ -261,7 +265,8 @@ void USeinCollisionResolver::DetectOverlapsAndEmit(USeinWorldSubsystem& World, c
 
 			if (ResolvePairFor(*SelfExt, *OtherExt, ChannelDefaults) != ESeinCollisionResponse::Overlap) continue;
 
-			FSeinEntity* OtherEntity = World.GetEntityPool().Get(OtherHandle);
+			const FSeinEntity* OtherEntity =
+				World.GetEntityPool().Get(OtherHandle);
 			if (!OtherEntity) continue;
 
 			FFixedVector Normal;

@@ -67,7 +67,9 @@ void USeinCollisionResolverParallel::JacobiPass(USeinWorldSubsystem& World, cons
 	// Hoist the Extents storage once per pass (see the default's ResolvePass):
 	// GetComponent<T>() is a hashmap lookup by UScriptStruct* per call; resolving
 	// it once makes every per-self / per-neighbour fetch an O(1) indexed get.
-	ISeinComponentStorage* ExtentsStorage = World.GetComponentStorageRaw(FSeinExtentsComponent::StaticStruct());
+	const ISeinComponentStorage* ExtentsStorage =
+		World.GetComponentStorageRaw(
+			FSeinExtentsComponent::StaticStruct());
 	if (!ExtentsStorage) return;
 
 	// ------------------------------------------------------------------
@@ -87,7 +89,9 @@ void USeinCollisionResolverParallel::JacobiPass(USeinWorldSubsystem& World, cons
 	};
 	TArray<FMover> Movers;
 	Movers.Reserve(World.GetEntityPool().GetActiveCount());
-	World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle SelfHandle, FSeinEntity& /*SelfEntity*/)
+	World.GetEntityPool().ForEachEntity([&](
+		FSeinEntityHandle SelfHandle,
+		const FSeinEntity& /*SelfEntity*/)
 	{
 		const FSeinExtentsComponent* SelfExt =
 			static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(SelfHandle));
@@ -239,7 +243,8 @@ void USeinCollisionResolverParallel::JacobiPass(USeinWorldSubsystem& World, cons
 	// ------------------------------------------------------------------
 	for (int32 i = 0; i < Movers.Num(); ++i)
 	{
-		FSeinEntity* SelfEntityPtr = World.GetEntityPool().Get(Movers[i].Handle);
+		FSeinEntity* SelfEntityPtr =
+			World.GetEntityMutable(Movers[i].Handle);
 		if (!SelfEntityPtr) continue;
 		SelfEntityPtr->Transform.SetLocation(NewPos[i]);
 	}

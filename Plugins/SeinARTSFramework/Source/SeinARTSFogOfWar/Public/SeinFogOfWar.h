@@ -42,6 +42,7 @@
 #include "Core/SeinEntityHandle.h"
 #include "Core/SeinPlayerID.h"
 #include "SeinFogOfWarTypes.h"
+#include "SeinStaticEnvironmentAdoption.h"
 #include "SeinFogOfWar.generated.h"
 
 class UWorld;
@@ -60,17 +61,6 @@ class SEINARTSFOGOFWAR_API USeinFogOfWar : public UObject
 	GENERATED_BODY()
 
 public:
-
-	// ----------------------------------------------------------------------
-	// Lifecycle — called by USeinFogOfWarSubsystem
-	// ----------------------------------------------------------------------
-
-	/** Called once when the subsystem instantiates this impl. Default: no-op. */
-	virtual void OnFogOfWarInitialized(UWorld* World) {}
-
-	/** Called once when the subsystem is tearing down this impl. Default: no-op. */
-	virtual void OnFogOfWarDeinitialized() {}
-
 	// ----------------------------------------------------------------------
 	// Runtime data state
 	// ----------------------------------------------------------------------
@@ -95,10 +85,14 @@ public:
 	 *  the shared bake runs this fog's BakeLayer. Default: null (doesn't participate). */
 	virtual ISeinLevelLayerProvider* GetLevelDataProvider() { return nullptr; }
 
-	/** Load the runtime grid from the unified substrate's baked "FogOfWar" channel
-	 *  + shared coordinate space. Return false if this fog doesn't read the
-	 *  substrate (or the substrate carries no fog channel). Default: false. */
-	virtual bool LoadFromSubstrate(const USeinLevelData& /*Substrate*/) { return false; }
+	/**
+	 * Owner-guarded static-grid adoption. Custom implementations override
+	 * LoadFromSubstrateImpl, not this mutation gate. NotApplicable preserves
+	 * the no-bake/non-participating fallback; Rejected carries the precise
+	 * reason bootstrap must not freeze this static environment.
+	 */
+	FSeinStaticEnvironmentAdoptionResult LoadFromSubstrate(
+		const USeinLevelData& Substrate);
 
 	// ----------------------------------------------------------------------
 	// Vision source management — sim-side, called by the actor bridge /
@@ -136,7 +130,9 @@ public:
 	// the level has been baked.
 	// ----------------------------------------------------------------------
 
-	virtual void InitGridFromVolumes(UWorld* World) {}
+	/** Owner-guarded no-bake static-grid initialization. Custom
+	 *  implementations override InitGridFromVolumesImpl. */
+	void InitGridFromVolumes(UWorld* World);
 
 	// ----------------------------------------------------------------------
 	// Tick — refreshes per-cell visibility from current sources + blockers.
@@ -272,4 +268,31 @@ public:
 	/** Broadcast after bake completion, substrate adoption, dynamic blocker
 	 *  mutation. */
 	FSeinOnFogOfWarMutated OnFogOfWarMutated;
+
+protected:
+	virtual void OnFogOfWarInitialized(UWorld* World) {}
+	virtual void OnFogOfWarDeinitialized() {}
+	/**
+	 * Only Adopted may replace state. NotApplicable and Rejected must leave
+	 * previously usable static and runtime fog state unchanged.
+	 */
+	virtual FSeinStaticEnvironmentAdoptionResult LoadFromSubstrateImpl(
+		const USeinLevelData& /*Substrate*/)
+	{
+		return FSeinStaticEnvironmentAdoptionResult::NotApplicable(
+			TEXT("The fog implementation does not consume the Level Data substrate."));
+	}
+	virtual void InitGridFromVolumesImpl(UWorld* /*World*/) {}
+
+private:
+	friend class USeinFogOfWarSubsystem;
+
+	void InitializeForWorld(UWorld* World);
+	void DeinitializeFromWorld();
+	bool CanMutateStaticEnvironment(
+		const TCHAR* Operation,
+		UWorld* RequestedWorld,
+		FString& OutError) const;
+
+	TWeakObjectPtr<UWorld> OwningWorld;
 };

@@ -69,9 +69,15 @@ public:
 		const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
 		const FFixedPoint PinFloor = Settings->AvoidanceMovingSpeedFloor;
 
-		ISeinComponentStorage* MoveStorage   = World.GetComponentStorageRaw(FSeinMovementComponent::StaticStruct());
-		ISeinComponentStorage* NavStorage    = World.GetComponentStorageRaw(FSeinNavigationComponent::StaticStruct());
-		ISeinComponentStorage* BrokerStorage = World.GetComponentStorageRaw(FSeinBrokerMembershipData::StaticStruct());
+		const ISeinComponentStorage* MoveStorage =
+			World.GetComponentStorageRaw(
+				FSeinMovementComponent::StaticStruct());
+		const ISeinComponentStorage* NavStorage =
+			World.GetComponentStorageRaw(
+				FSeinNavigationComponent::StaticStruct());
+		const ISeinComponentStorage* BrokerStorage =
+			World.GetComponentStorageRaw(
+				FSeinBrokerMembershipData::StaticStruct());
 		USeinLatentActionManager* Actions = World.LatentActionManager;
 
 		// ---- Sweep all commanded units, classify, update per-unit streaks ----
@@ -82,7 +88,9 @@ public:
 		FFixedVector ProblemCentroid = FFixedVector::ZeroVector;
 		TMap<FSeinEntityHandle, int32> ProblemByBroker;
 
-		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, FSeinEntity& Entity)
+		World.GetEntityPool().ForEachEntity([&](
+			FSeinEntityHandle Handle,
+			const FSeinEntity& Entity)
 		{
 			const FSeinMovementComponent* Move = MoveStorage
 				? static_cast<const FSeinMovementComponent*>(MoveStorage->GetComponentRaw(Handle)) : nullptr;

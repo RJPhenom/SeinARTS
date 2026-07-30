@@ -68,7 +68,8 @@ bool USeinSimMutationBPFL::SeinSetComponent(const UObject* WorldContextObject, F
 			*StructType->GetName());
 		return false;
 	}
-	ISeinComponentStorage* Storage = Subsystem->GetComponentStorageRaw(StructType);
+	ISeinComponentStorage* Storage =
+		Subsystem->GetComponentStorageMutable(StructType);
 	if (!Storage)
 	{
 		UE_LOG(LogSeinBPFL, Warning, TEXT("SetComponent: no storage registered for %s"), *StructType->GetName());
@@ -96,7 +97,8 @@ bool USeinSimMutationBPFL::SeinSetRallyPoint(const UObject* WCO, FSeinEntityHand
 	USeinWorldSubsystem* S = GetWorldSubsystem(WCO);
 	if (!S) return false;
 	if (!S->RequireStateMutationAuthorization(TEXT("SetRallyPoint"))) return false;
-	FSeinProductionComponent* D = S->GetComponent<FSeinProductionComponent>(H);
+	FSeinProductionComponent* D =
+		S->GetComponentMutable<FSeinProductionComponent>(H);
 	if (!D) { UE_LOG(LogSeinBPFL, Warning, TEXT("SetRallyPoint: entity %s has no FSeinProductionComponent"), *H.ToString()); return false; }
 	D->bRallyToEntity = false;
 	// Identity rotation — this legacy mutation BPFL takes a location only.
@@ -111,7 +113,8 @@ bool USeinSimMutationBPFL::SeinSetCurrentBuildProgress(const UObject* WCO, FSein
 	USeinWorldSubsystem* S = GetWorldSubsystem(WCO);
 	if (!S) return false;
 	if (!S->RequireStateMutationAuthorization(TEXT("SetCurrentBuildProgress"))) return false;
-	FSeinProductionComponent* D = S->GetComponent<FSeinProductionComponent>(H);
+	FSeinProductionComponent* D =
+		S->GetComponentMutable<FSeinProductionComponent>(H);
 	if (!D) { UE_LOG(LogSeinBPFL, Warning, TEXT("SetCurrentBuildProgress: entity %s has no FSeinProductionComponent"), *H.ToString()); return false; }
 	D->CurrentBuildProgress = V;
 	return true;
@@ -191,7 +194,9 @@ bool USeinSimMutationBPFL::SeinSetChildLocalRotation(const UObject* WCO, FSeinEn
 	USeinWorldSubsystem* S = GetWorldSubsystem(WCO);
 	if (!S) return false;
 	if (!S->RequireStateMutationAuthorization(TEXT("SetChildLocalRotation"))) return false;
-	FSeinChildTransformsComponent* Data = S->GetComponent<FSeinChildTransformsComponent>(Handle);
+	FSeinChildTransformsComponent* Data =
+		S->GetComponentMutable<FSeinChildTransformsComponent>(
+			Handle);
 	if (!Data) { UE_LOG(LogSeinBPFL, Warning, TEXT("SetChildLocalRotation: entity %s has no FSeinChildTransformsComponent"), *Handle.ToString()); return false; }
 	FSeinChildTransform* Found = FindByTagMutable(Data->Children, Tag);
 	if (!Found) { UE_LOG(LogSeinBPFL, Warning, TEXT("SetChildLocalRotation: entity %s has no child with tag %s"), *Handle.ToString(), *Tag.ToString()); return false; }
@@ -204,7 +209,9 @@ bool USeinSimMutationBPFL::SeinSetChildLocalTransform(const UObject* WCO, FSeinE
 	USeinWorldSubsystem* S = GetWorldSubsystem(WCO);
 	if (!S) return false;
 	if (!S->RequireStateMutationAuthorization(TEXT("SetChildLocalTransform"))) return false;
-	FSeinChildTransformsComponent* Data = S->GetComponent<FSeinChildTransformsComponent>(Handle);
+	FSeinChildTransformsComponent* Data =
+		S->GetComponentMutable<FSeinChildTransformsComponent>(
+			Handle);
 	if (!Data) { UE_LOG(LogSeinBPFL, Warning, TEXT("SetChildLocalTransform: entity %s has no FSeinChildTransformsComponent"), *Handle.ToString()); return false; }
 	FSeinChildTransform* Found = FindByTagMutable(Data->Children, Tag);
 	if (!Found) { UE_LOG(LogSeinBPFL, Warning, TEXT("SetChildLocalTransform: entity %s has no child with tag %s"), *Handle.ToString(), *Tag.ToString()); return false; }
@@ -222,7 +229,9 @@ bool USeinSimMutationBPFL::SeinTurnChildToward(const UObject* WCO, FSeinEntityHa
 	const FSeinEntity* Entity = S->GetEntity(Handle);
 	if (!Entity) return false;
 
-	FSeinChildTransformsComponent* Data = S->GetComponent<FSeinChildTransformsComponent>(Handle);
+	FSeinChildTransformsComponent* Data =
+		S->GetComponentMutable<FSeinChildTransformsComponent>(
+			Handle);
 	if (!Data) { UE_LOG(LogSeinBPFL, Warning, TEXT("TurnChildToward: entity %s has no FSeinChildTransformsComponent"), *Handle.ToString()); return false; }
 
 	FSeinChildTransform* Found = FindByTagMutable(Data->Children, Tag);

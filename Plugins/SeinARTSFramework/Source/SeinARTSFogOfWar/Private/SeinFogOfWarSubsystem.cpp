@@ -46,8 +46,11 @@ namespace
 	class FSeinFogOfWarStampSystem final : public ISeinSystem
 	{
 	public:
-		explicit FSeinFogOfWarStampSystem(USeinFogOfWar* InFogOfWar)
-			: FogOfWar(InFogOfWar)
+		FSeinFogOfWarStampSystem(
+			USeinFogOfWarSubsystem* InOwner,
+			USeinFogOfWar* InFogOfWar)
+			: Owner(InOwner)
+			, FogOfWar(InFogOfWar)
 		{
 		}
 
@@ -57,6 +60,13 @@ namespace
 		{
 			USeinFogOfWar* Fog = FogOfWar.Get();
 			if (!Fog)
+			{
+				return;
+			}
+			USeinFogOfWarSubsystem* OwnerPtr = Owner.Get();
+			if (!OwnerPtr
+				|| !OwnerPtr->
+					ValidateCommittedCanonicalStateBinding())
 			{
 				return;
 			}
@@ -85,6 +95,7 @@ namespace
 		}
 
 	private:
+		TWeakObjectPtr<USeinFogOfWarSubsystem> Owner;
 		TWeakObjectPtr<USeinFogOfWar> FogOfWar;
 	};
 }
@@ -96,7 +107,11 @@ void USeinFogOfWarSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	StateCodecToken = 0;
 	bSimDelegatesBound = false;
 	bFogConfigured = false;
+	bInitialStaticEnvironmentPrepared = false;
 	bStateBindingFrozen = false;
+	InitialStaticEnvironmentAdoptionResult =
+		FSeinStaticEnvironmentAdoptionResult::NotApplicable(
+			TEXT("Initial fog substrate adoption has not run."));
 	ConfiguredFogClassPath.Reset();
 	StateCodecFailureReason.Reset();
 	FrozenStateBindingFrame.Reset();
@@ -129,7 +144,7 @@ void USeinFogOfWarSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		FogOfWar = NewObject<USeinFogOfWar>(this, FogClass, TEXT("SeinFogOfWar"));
 		if (FogOfWar)
 		{
-			FogOfWar->OnFogOfWarInitialized(GetWorld());
+			FogOfWar->InitializeForWorld(GetWorld());
 			FString CodecError;
 			if (!FSeinFogOfWarStateCodecRegistry::FreezeForClass(
 				FogOfWar->GetClass(),
@@ -141,7 +156,7 @@ void USeinFogOfWarSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 					TEXT("FogOfWarClass '%s' cannot participate in deterministic state: %s"),
 					*ConfiguredFogClassPath,
 					*StateCodecFailureReason);
-				FogOfWar->OnFogOfWarDeinitialized();
+				FogOfWar->DeinitializeFromWorld();
 				FogOfWar = nullptr;
 			}
 		}
@@ -166,16 +181,34 @@ void USeinFogOfWarSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	// the "FogOfWar" layer provider and subscribe to rebake/reload so the runtime
 	// grid tracks the shared bake. Non-participating fogs (the base) skip all of this.
 	Collection.InitializeDependency(USeinLevelDataSubsystem::StaticClass());
-	if (FogOfWar)
+	if (UWorld* World = GetWorld())
 	{
-		if (ISeinLevelLayerProvider* Provider = FogOfWar->GetLevelDataProvider())
+		if (USeinLevelDataSubsystem* LevelSubsystem =
+				World->GetSubsystem<USeinLevelDataSubsystem>())
 		{
-			if (USeinLevelData* Substrate = USeinLevelDataSubsystem::GetLevelDataForWorld(GetWorld()))
+			LevelDataSubsystem = LevelSubsystem;
+			InitialLevelDataPreparedHandle =
+				LevelSubsystem->OnInitialLevelDataPrepared.AddUObject(
+					this,
+					&USeinFogOfWarSubsystem::
+						HandleInitialLevelDataPrepared);
+			if (USeinLevelData* Substrate = LevelSubsystem->GetLevelData())
 			{
 				LevelData = Substrate;
-				Substrate->RegisterLayerProvider(Provider);
 				LevelDataMutatedHandle = Substrate->OnLevelDataMutated.AddUObject(
 					this, &USeinFogOfWarSubsystem::OnLevelDataChanged);
+				if (FogOfWar)
+				{
+					if (ISeinLevelLayerProvider* Provider =
+							FogOfWar->GetLevelDataProvider())
+					{
+						Substrate->RegisterLayerProvider(Provider);
+					}
+				}
+			}
+			if (LevelSubsystem->IsInitialRuntimeDataPrepared())
+			{
+				HandleInitialLevelDataPrepared();
 			}
 		}
 	}
@@ -236,7 +269,23 @@ void USeinFogOfWarSubsystem::ReleaseModuleOwnedState()
 			}
 		}
 	}
+	if (USeinLevelDataSubsystem* LevelSubsystem =
+			LevelDataSubsystem.Get())
+	{
+		if (InitialLevelDataPreparedHandle.IsValid())
+		{
+			LevelSubsystem->OnInitialLevelDataPrepared.Remove(
+				InitialLevelDataPreparedHandle);
+		}
+	}
+	LevelDataMutatedHandle.Reset();
+	InitialLevelDataPreparedHandle.Reset();
 	LevelData = nullptr;
+	LevelDataSubsystem = nullptr;
+	bInitialStaticEnvironmentPrepared = false;
+	InitialStaticEnvironmentAdoptionResult =
+		FSeinStaticEnvironmentAdoptionResult::NotApplicable(
+			TEXT("The fog subsystem is not initialized."));
 
 	if (StampSystem)
 	{
@@ -251,7 +300,7 @@ void USeinFogOfWarSubsystem::ReleaseModuleOwnedState()
 	}
 	if (FogOfWar)
 	{
-		FogOfWar->OnFogOfWarDeinitialized();
+		FogOfWar->DeinitializeFromWorld();
 	}
 	FogOfWar = nullptr;
 }
@@ -259,14 +308,99 @@ void USeinFogOfWarSubsystem::ReleaseModuleOwnedState()
 void USeinFogOfWarSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 {
 	Super::OnWorldBeginPlay(InWorld);
-	LoadBakedAssetIntoFogOfWar(InWorld);
-	InitGridIfUnbaked(InWorld);
+	if (USeinLevelDataSubsystem* LevelSubsystem =
+			LevelDataSubsystem.Get())
+	{
+		LevelSubsystem->EnsureInitialRuntimeDataPrepared(InWorld);
+	}
 	BindSimDelegates(InWorld);
 }
 
-void USeinFogOfWarSubsystem::LoadBakedAssetIntoFogOfWar(UWorld& World)
+void USeinFogOfWarSubsystem::HandleInitialLevelDataPrepared()
 {
-	if (!FogOfWar) return;
+	if (bInitialStaticEnvironmentPrepared)
+	{
+		return;
+	}
+	if (UWorld* World = GetWorld())
+	{
+		InitialStaticEnvironmentAdoptionResult =
+			LoadBakedAssetIntoFogOfWar(*World);
+		if (!InitialStaticEnvironmentAdoptionResult.IsRejected())
+		{
+			InitGridIfUnbaked(*World);
+			bInitialStaticEnvironmentPrepared = true;
+		}
+	}
+	else
+	{
+		InitialStaticEnvironmentAdoptionResult =
+			FSeinStaticEnvironmentAdoptionResult::Rejected(
+				TEXT("Fog initial substrate adoption could not resolve its owning world."));
+	}
+}
+
+bool USeinFogOfWarSubsystem::PrepareInitialCanonicalStateEnvironment(
+	FString& OutError)
+{
+	OutError.Reset();
+	if (bInitialStaticEnvironmentPrepared)
+	{
+		return true;
+	}
+
+	UWorld* World = GetWorld();
+	USeinLevelDataSubsystem* LevelSubsystem =
+		LevelDataSubsystem.Get();
+	if (!World || !LevelSubsystem)
+	{
+		OutError =
+			TEXT("Fog could not resolve the Level Data readiness service.");
+		return false;
+	}
+	if (!LevelSubsystem->EnsureInitialRuntimeDataPrepared(*World))
+	{
+		OutError =
+			TEXT("Fog could not prepare the initial Level Data substrate.");
+		return false;
+	}
+	if (!bInitialStaticEnvironmentPrepared)
+	{
+		HandleInitialLevelDataPrepared();
+	}
+	if (!bInitialStaticEnvironmentPrepared)
+	{
+		OutError = InitialStaticEnvironmentAdoptionResult.IsRejected()
+			? FString::Printf(
+				TEXT("Fog rejected the initial static environment: %s"),
+				*InitialStaticEnvironmentAdoptionResult.Detail)
+			: TEXT("Fog did not receive the completed Level Data readiness barrier.");
+		return false;
+	}
+	return true;
+}
+
+FSeinStaticEnvironmentAdoptionResult
+USeinFogOfWarSubsystem::LoadBakedAssetIntoFogOfWar(UWorld& World)
+{
+	if (&World != GetWorld())
+	{
+		return FSeinStaticEnvironmentAdoptionResult::Rejected(
+			TEXT("Fog substrate adoption targeted a world other than the owning world."));
+	}
+	if (!FogOfWar)
+	{
+		if (bFogConfigured)
+		{
+			return FSeinStaticEnvironmentAdoptionResult::Rejected(
+				StateCodecFailureReason.IsEmpty()
+					? FString(TEXT(
+						"The configured fog implementation is unavailable."))
+					: StateCodecFailureReason);
+		}
+		return FSeinStaticEnvironmentAdoptionResult::NotApplicable(
+			TEXT("Fog of war is disabled."));
+	}
 
 	// Unified pipeline (CP1.1): if the shared substrate carries a baked grid
 	// + a "FogOfWar" channel, adopt it and we're done. If the substrate isn't
@@ -274,51 +408,61 @@ void USeinFogOfWarSubsystem::LoadBakedAssetIntoFogOfWar(UWorld& World)
 	// OnLevelDataMutated subscription re-adopts it the moment it loads.
 	if (USeinLevelData* Substrate = LevelData.Get())
 	{
-		if (Substrate->HasRuntimeData() && FogOfWar->LoadFromSubstrate(*Substrate))
+		const FSeinStaticEnvironmentAdoptionResult Result =
+			FogOfWar->LoadFromSubstrate(*Substrate);
+		if (Result.IsAdopted())
 		{
 			UE_LOG(LogSeinFogOfWarSubsystem, Log,
 				TEXT("FoW: loaded grid from the unified level-data substrate (CP1.1 substrate path)."));
-			return;
+			return Result;
 		}
+		if (Result.IsRejected())
+		{
+			UE_LOG(LogSeinFogOfWarSubsystem, Error,
+				TEXT("FoW: rejected the unified Level Data substrate: %s"),
+				*Result.Detail);
+			return Result;
+		}
+		UE_LOG(LogSeinFogOfWarSubsystem, Log,
+			TEXT("FoW: no applicable baked channel (%s); no-bake grid initialization may follow."),
+			*Result.Detail);
+		return Result;
 	}
 
 	UE_LOG(LogSeinFogOfWarSubsystem, Log,
-		TEXT("FoW: no baked level data — grid auto-init may follow."));
+		TEXT("FoW: Level Data is disabled or unavailable; no-bake grid initialization may follow."));
+	return FSeinStaticEnvironmentAdoptionResult::NotApplicable(
+		TEXT("Level Data is disabled or unavailable."));
 }
 
 void USeinFogOfWarSubsystem::OnLevelDataChanged()
 {
-	// Shared substrate rebaked / swapped — re-adopt its fog channel if present. If
-	// not (empty bake / no fog channel), LoadFromSubstrate returns false and leaves
-	// fog as-is, so any previously-adopted (or auto-initialized) grid still stands.
-	if (!FogOfWar) return;
-	if (USeinLevelData* Substrate = LevelData.Get())
+	// Shared substrate rebaked / swapped — re-resolve adoption. An absent/empty
+	// substrate keeps the valid no-bake fallback, while a participating fog that
+	// rejects present baked data makes readiness false until a corrected bake lands.
+	if (const USeinLevelDataSubsystem* LevelSubsystem =
+			LevelDataSubsystem.Get();
+		LevelSubsystem
+			&& !LevelSubsystem->IsInitialRuntimeDataPrepared())
 	{
-		if (FogOfWar->LoadFromSubstrate(*Substrate))
+		return;
+	}
+	if (bStateBindingFrozen)
+	{
+		InvalidateCommittedCanonicalStateBinding(
+			TEXT("The shared level-data substrate mutated after the fog StateContract froze."));
+		return;
+	}
+	if (UWorld* World = GetWorld())
+	{
+		InitialStaticEnvironmentAdoptionResult =
+			LoadBakedAssetIntoFogOfWar(*World);
+		if (!InitialStaticEnvironmentAdoptionResult.IsRejected())
 		{
-			UE_LOG(LogSeinFogOfWarSubsystem, Log,
-				TEXT("FoW: re-adopted the unified level-data substrate (OnLevelDataMutated)."));
-			if (bStateBindingFrozen)
-			{
-				FGuid CurrentStaticDigest;
-				FString StaticError;
-				if (!FSeinFogOfWarStateCodecRegistry::
-						ComputeStaticEnvironmentDigest(
-							StateCodecToken,
-							*FogOfWar,
-							CurrentStaticDigest,
-							StaticError)
-					|| CurrentStaticDigest
-						!= FrozenStaticEnvironmentDigest)
-				{
-					InvalidateCanonicalStateCodecLease(
-						StateCodecToken,
-						StaticError.IsEmpty()
-							? TEXT("The fog static environment changed after the match StateContract froze.")
-							: StaticError);
-				}
-			}
+			InitGridIfUnbaked(*World);
 		}
+		bInitialStaticEnvironmentPrepared =
+			!InitialStaticEnvironmentAdoptionResult.IsRejected();
 	}
 }
 
@@ -338,7 +482,8 @@ void USeinFogOfWarSubsystem::RegisterStampSystem(UWorld& World)
 	{
 		Sim->UnregisterSystem(StampSystem.Get());
 	}
-	StampSystem = MakeUnique<FSeinFogOfWarStampSystem>(FogOfWar);
+	StampSystem =
+		MakeUnique<FSeinFogOfWarStampSystem>(this, FogOfWar);
 	Sim->RegisterSystem(StampSystem.Get());
 }
 
@@ -348,12 +493,24 @@ void USeinFogOfWarSubsystem::BindSimDelegates(UWorld& World)
 	if (!Sim || !FogOfWar) return;
 
 	TWeakObjectPtr<USeinFogOfWar> FogWeak = FogOfWar;
+	TWeakObjectPtr<USeinFogOfWarSubsystem> OwnerWeak = this;
 
 	// Note: TargetWorld is FFixedVector end-to-end — sim callers pass fixed
 	// point directly; no FVector round-trip at the boundary.
 	Sim->LineOfSightResolver.BindWeakLambda(this,
-		[FogWeak](FSeinPlayerID ObserverPlayer, const FFixedVector& TargetWorld) -> bool
+		[OwnerWeak, FogWeak](
+			FSeinPlayerID ObserverPlayer,
+			const FFixedVector& TargetWorld) -> bool
 		{
+			USeinFogOfWarSubsystem* Owner = OwnerWeak.Get();
+			if (!Owner
+				|| !Owner->
+					ValidateCommittedCanonicalStateBinding())
+			{
+				// Contract drift is terminalized by validation. Reject this
+				// same-tick gameplay query instead of consuming drifted fog.
+				return false;
+			}
 			USeinFogOfWar* Fog = FogWeak.Get();
 			if (!Fog || !Fog->HasRuntimeData()) return true; // no data = permit (tests, fog-less games)
 			return Fog->IsCellVisible(ObserverPlayer, TargetWorld, SEIN_FOW_BIT_NORMAL);
@@ -382,11 +539,27 @@ void USeinFogOfWarSubsystem::UnbindSimDelegates()
 }
 
 bool USeinFogOfWarSubsystem::FreezeCanonicalStateBinding(
+	bool bCommit,
 	FString& OutFrame,
+	FGuid& OutStaticDigest,
 	FString& OutError)
 {
 	OutFrame.Reset();
+	OutStaticDigest.Invalidate();
 	OutError.Reset();
+	if (!bInitialStaticEnvironmentPrepared)
+	{
+		OutError = InitialStaticEnvironmentAdoptionResult.IsRejected()
+			? FString::Printf(
+				TEXT("Fog static-environment adoption was rejected: %s"),
+				*InitialStaticEnvironmentAdoptionResult.Detail)
+			: TEXT("Fog static-environment preparation has not completed. Prepare initial Level Data before bootstrap or restore.");
+		if (bStateBindingFrozen)
+		{
+			InvalidateCommittedCanonicalStateBinding(OutError);
+		}
+		return false;
+	}
 
 	FString CandidateFrame =
 		TEXT("SeinARTS.FogOfWar.WorldBinding\n");
@@ -397,6 +570,10 @@ bool USeinFogOfWarSubsystem::FreezeCanonicalStateBinding(
 		if (!BuildDisabledStaticEnvironmentDigest(
 			DisabledDigest, OutError))
 		{
+			if (bStateBindingFrozen)
+			{
+				InvalidateCommittedCanonicalStateBinding(OutError);
+			}
 			return false;
 		}
 		AppendFramed(CandidateFrame, TEXT("disabled"));
@@ -417,12 +594,17 @@ bool USeinFogOfWarSubsystem::FreezeCanonicalStateBinding(
 		{
 			OutError =
 				TEXT("Disabled fog state binding changed after freeze.");
+			InvalidateCommittedCanonicalStateBinding(OutError);
 			return false;
 		}
-		bStateBindingFrozen = true;
-		FrozenStateBindingFrame = CandidateFrame;
-		FrozenStaticEnvironmentDigest = DisabledDigest;
+		if (bCommit)
+		{
+			bStateBindingFrozen = true;
+			FrozenStateBindingFrame = CandidateFrame;
+			FrozenStaticEnvironmentDigest = DisabledDigest;
+		}
 		OutFrame = MoveTemp(CandidateFrame);
+		OutStaticDigest = DisabledDigest;
 		return true;
 	}
 
@@ -433,19 +615,28 @@ bool USeinFogOfWarSubsystem::FreezeCanonicalStateBinding(
 		OutError = StateCodecFailureReason.IsEmpty()
 			? TEXT("Configured fog implementation has no live exact-state codec binding.")
 			: StateCodecFailureReason;
+		if (bStateBindingFrozen)
+		{
+			InvalidateCommittedCanonicalStateBinding(OutError);
+		}
 		return false;
 	}
 
 	FSeinFogOfWarStateCodecRegistry::FResolvedClaim Claim;
-	if (!FSeinFogOfWarStateCodecRegistry::Resolve(
-		StateCodecToken, Claim, OutError)
-		|| !FogOfWar->GetClass()->IsChildOf(
-			Claim.Descriptor.SupportedClass))
+	if (!FSeinFogOfWarStateCodecRegistry::ResolveForClass(
+		StateCodecToken,
+		FogOfWar->GetClass(),
+		Claim,
+		OutError))
 	{
 		if (OutError.IsEmpty())
 		{
 			OutError =
 				TEXT("Frozen fog codec no longer matches the active implementation class.");
+		}
+		if (bStateBindingFrozen)
+		{
+			InvalidateCommittedCanonicalStateBinding(OutError);
 		}
 		return false;
 	}
@@ -458,6 +649,20 @@ bool USeinFogOfWarSubsystem::FreezeCanonicalStateBinding(
 			StaticDigest,
 			OutError))
 	{
+		if (bStateBindingFrozen)
+		{
+			InvalidateCommittedCanonicalStateBinding(OutError);
+		}
+		return false;
+	}
+	if (!StaticDigest.IsValid())
+	{
+		OutError =
+			TEXT("Fog state codec returned an invalid static-environment digest.");
+		if (bStateBindingFrozen)
+		{
+			InvalidateCommittedCanonicalStateBinding(OutError);
+		}
 		return false;
 	}
 
@@ -506,14 +711,98 @@ bool USeinFogOfWarSubsystem::FreezeCanonicalStateBinding(
 	{
 		OutError =
 			TEXT("Fog implementation or static environment changed after the match StateContract froze.");
+		InvalidateCommittedCanonicalStateBinding(OutError);
 		return false;
 	}
 
-	bStateBindingFrozen = true;
-	FrozenStateBindingFrame = CandidateFrame;
-	FrozenStaticEnvironmentDigest = StaticDigest;
+	if (bCommit)
+	{
+		bStateBindingFrozen = true;
+		FrozenStateBindingFrame = CandidateFrame;
+		FrozenStaticEnvironmentDigest = StaticDigest;
+	}
 	OutFrame = MoveTemp(CandidateFrame);
+	OutStaticDigest = StaticDigest;
 	return true;
+}
+
+bool USeinFogOfWarSubsystem::RevalidateCanonicalStateBindingCandidate(
+	const FString& ExpectedFrame,
+	const FGuid& ExpectedStaticDigest,
+	FString& OutError)
+{
+	FString CurrentFrame;
+	FGuid CurrentStaticDigest;
+	if (!FreezeCanonicalStateBinding(
+			false, CurrentFrame, CurrentStaticDigest, OutError))
+	{
+		return false;
+	}
+	if (CurrentFrame != ExpectedFrame
+		|| CurrentStaticDigest != ExpectedStaticDigest)
+	{
+		OutError =
+			TEXT("Fog static environment changed during restore staging.");
+		return false;
+	}
+	return true;
+}
+
+void USeinFogOfWarSubsystem::CommitCanonicalStateBinding(
+	const FString& Frame,
+	const FGuid& StaticDigest)
+{
+	FString Error;
+	const bool bCandidateStillValid =
+		RevalidateCanonicalStateBindingCandidate(
+			Frame, StaticDigest, Error);
+	checkf(bCandidateStillValid,
+		TEXT("Fog world binding changed after final restore lease verification: %s"),
+		*Error);
+	if (!bCandidateStillValid)
+	{
+		InvalidateCommittedCanonicalStateBinding(Error);
+		return;
+	}
+	bStateBindingFrozen = true;
+	FrozenStateBindingFrame = Frame;
+	FrozenStaticEnvironmentDigest = StaticDigest;
+}
+
+bool USeinFogOfWarSubsystem::
+	ValidateCommittedCanonicalStateBinding()
+{
+	if (!bStateBindingFrozen)
+	{
+		return true;
+	}
+	FString Frame;
+	FGuid StaticDigest;
+	FString Error;
+	return FreezeCanonicalStateBinding(
+		false, Frame, StaticDigest, Error);
+}
+
+void USeinFogOfWarSubsystem::InvalidateCommittedCanonicalStateBinding(
+	const FString& Reason)
+{
+	if (StateCodecFailureReason.IsEmpty())
+	{
+		StateCodecFailureReason = Reason.IsEmpty()
+			? TEXT("The frozen fog static-environment contract became invalid.")
+			: Reason;
+		UE_LOG(LogSeinFogOfWarSubsystem, Error, TEXT("%s"),
+			*StateCodecFailureReason);
+	}
+	if (UWorld* World = GetWorld())
+	{
+		if (USeinWorldSubsystem* Sim =
+				World->GetSubsystem<USeinWorldSubsystem>())
+		{
+			Sim->InvalidateDeterministicExecutionContract(
+				StateCodecFailureReason);
+		}
+	}
 }
 
 void USeinFogOfWarSubsystem::InvalidateCanonicalStateCodecLease(

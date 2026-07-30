@@ -27,7 +27,8 @@ FFixedPoint USeinAttributeBPFL::SeinGetBaseAttribute(const UObject* WorldContext
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
 	if (!Subsystem || !ComponentType) return FFixedPoint::Zero;
 
-	ISeinComponentStorage* Storage = Subsystem->GetComponentStorageRaw(ComponentType);
+	const ISeinComponentStorage* Storage =
+		Subsystem->GetComponentStorageRaw(ComponentType);
 	if (!Storage) return FFixedPoint::Zero;
 
 	const void* ComponentData = Storage->GetComponentRaw(EntityHandle);
@@ -54,7 +55,8 @@ void USeinAttributeBPFL::SeinSetBaseAttribute(const UObject* WorldContextObject,
 		return;
 	}
 
-	ISeinComponentStorage* Storage = Subsystem->GetComponentStorageRaw(ComponentType);
+	ISeinComponentStorage* Storage =
+		Subsystem->GetComponentStorageMutable(ComponentType);
 	if (!Storage) return;
 
 	void* ComponentData = Storage->GetComponentRaw(EntityHandle);

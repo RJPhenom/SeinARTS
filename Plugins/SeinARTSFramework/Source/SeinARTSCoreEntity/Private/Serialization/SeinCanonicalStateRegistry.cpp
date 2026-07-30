@@ -776,6 +776,56 @@ FSeinCanonicalStateRestorePlan::FindStagedPayload(
 	return Data->StagedPayloads.Find(Canonical);
 }
 
+bool FSeinCanonicalStateRegistry::PrepareWorldBindings(
+	const FSeinCanonicalStateSchemaSnapshot& Schema,
+	const FSeinCanonicalStateWorldBindingContext& Context,
+	FString& OutError)
+{
+	OutError.Reset();
+	if (!IsInGameThread() || !Schema.IsValid())
+	{
+		OutError =
+			TEXT("Canonical state world preparation requires a valid frozen schema on the game thread.");
+		return false;
+	}
+	if (IsProviderInvocationActive())
+	{
+		OutError =
+			TEXT("Canonical state world preparation may not re-enter a provider callback transaction.");
+		return false;
+	}
+	FProviderInvocationScope InvocationScope;
+
+	for (const FSeinFrozenCanonicalStateContributor& Contributor :
+		Schema.GetContributors())
+	{
+		FSeinCanonicalStateContributorOps Ops;
+		if (!ResolveProvider(
+			Contributor.ProviderToken, Ops, &OutError))
+		{
+			return false;
+		}
+		if (!Ops.PrepareWorldBinding)
+		{
+			continue;
+		}
+		if (!Ops.PrepareWorldBinding(Context, OutError))
+		{
+			if (OutError.IsEmpty())
+			{
+				OutError =
+					TEXT("Contributor world-binding preparation failed.");
+			}
+			OutError = FString::Printf(
+				TEXT("%s: %s"),
+				*CanonicalKey(Contributor.Descriptor.Key),
+				*OutError);
+			return false;
+		}
+	}
+	return true;
+}
+
 bool FSeinCanonicalStateRegistry::CaptureWorldBindingFrames(
 	const FSeinCanonicalStateSchemaSnapshot& Schema,
 	const FSeinCanonicalStateWorldBindingContext& Context,

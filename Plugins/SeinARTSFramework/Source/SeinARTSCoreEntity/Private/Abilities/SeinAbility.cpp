@@ -125,7 +125,9 @@ void USeinAbility::EnqueueProduction(TSubclassOf<ASeinActor> ProducibleClass)
 		return;
 	}
 
-	FSeinProductionComponent* ProdComp = WorldSubsystem->GetComponent<FSeinProductionComponent>(OwnerEntity);
+	FSeinProductionComponent* ProdComp =
+		WorldSubsystem->GetComponentMutable<
+			FSeinProductionComponent>(OwnerEntity);
 	if (!ProdComp)
 	{
 		UE_LOG(LogSeinAbilityImpl, Warning,
@@ -225,7 +227,9 @@ void USeinAbility::SetRallyPoint(const FFixedTransform& Transform)
 	{
 		return;
 	}
-	FSeinProductionComponent* ProdComp = WorldSubsystem->GetComponent<FSeinProductionComponent>(OwnerEntity);
+	FSeinProductionComponent* ProdComp =
+		WorldSubsystem->GetComponentMutable<
+			FSeinProductionComponent>(OwnerEntity);
 	if (!ProdComp)
 	{
 		UE_LOG(LogSeinAbilityImpl, Warning,
@@ -245,7 +249,9 @@ void USeinAbility::SetRallyEntity(FSeinEntityHandle RallyEntity)
 	{
 		return;
 	}
-	FSeinProductionComponent* ProdComp = WorldSubsystem->GetComponent<FSeinProductionComponent>(OwnerEntity);
+	FSeinProductionComponent* ProdComp =
+		WorldSubsystem->GetComponentMutable<
+			FSeinProductionComponent>(OwnerEntity);
 	if (!ProdComp)
 	{
 		UE_LOG(LogSeinAbilityImpl, Warning,
@@ -265,7 +271,9 @@ void USeinAbility::ClearRallyPoint()
 	{
 		return;
 	}
-	FSeinProductionComponent* ProdComp = WorldSubsystem->GetComponent<FSeinProductionComponent>(OwnerEntity);
+	FSeinProductionComponent* ProdComp =
+		WorldSubsystem->GetComponentMutable<
+			FSeinProductionComponent>(OwnerEntity);
 	if (!ProdComp) return;
 	ProdComp->bRallyToEntity = false;
 	ProdComp->RallyTransform = FFixedTransform();

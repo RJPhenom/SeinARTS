@@ -14,6 +14,7 @@
 #include "Stamping/SeinStampUtils.h"
 #include "SeinARTSNavigationModule.h"
 #include "SeinLevelData.h"
+#include "Serialization/SeinCanonicalInitialStateDigest.h"
 #include "Volumes/SeinLevelVolume.h"
 #include "Math/MathLib.h"  // SeinMath fixed-point sqrt / trig used by the search + clearance math
 
@@ -21,10 +22,145 @@
 #include "EngineUtils.h"
 #include "CollisionQueryParams.h"
 #include "DrawDebugHelpers.h"
+#include "Hash/Blake3.h"
 #include "Math/Box.h"
 #include "Algo/Reverse.h"
 
 #include "SeinARTSNavigationLog.h"
+
+namespace
+{
+	uint32 ReadDigestWord(const uint8* Bytes)
+	{
+		return (static_cast<uint32>(Bytes[0]) << 24)
+			| (static_cast<uint32>(Bytes[1]) << 16)
+			| (static_cast<uint32>(Bytes[2]) << 8)
+			| static_cast<uint32>(Bytes[3]);
+	}
+
+	class FAStarStaticGridDigestBuilder
+	{
+	public:
+		FAStarStaticGridDigestBuilder()
+		{
+			constexpr uint8 Domain[] = {
+				'S', 'E', 'I', 'N', 'N', 'A', 'V', 'G', 'R', 'I', 'D', 1};
+			Hasher.Update(Domain, UE_ARRAY_COUNT(Domain));
+		}
+
+		void WriteUInt32(uint32 Value)
+		{
+			const uint8 Bytes[4] = {
+				static_cast<uint8>(Value >> 24),
+				static_cast<uint8>(Value >> 16),
+				static_cast<uint8>(Value >> 8),
+				static_cast<uint8>(Value)};
+			Hasher.Update(Bytes, UE_ARRAY_COUNT(Bytes));
+		}
+
+		void WriteUInt64(uint64 Value)
+		{
+			WriteUInt32(static_cast<uint32>(Value >> 32));
+			WriteUInt32(static_cast<uint32>(Value));
+		}
+
+		void WriteInt32(int32 Value)
+		{
+			WriteUInt32(BitCast<uint32>(Value));
+		}
+
+		void WriteInt64(int64 Value)
+		{
+			WriteUInt64(static_cast<uint64>(Value));
+		}
+
+		void WriteBytes(TConstArrayView<uint8> Bytes)
+		{
+			WriteUInt64(static_cast<uint64>(Bytes.Num()));
+			if (!Bytes.IsEmpty())
+			{
+				Hasher.Update(Bytes.GetData(), Bytes.Num());
+			}
+		}
+
+		FGuid Finalize()
+		{
+			const FBlake3Hash Hash = Hasher.Finalize();
+			const uint8* Bytes = Hash.GetBytes();
+			return FGuid(
+				ReadDigestWord(Bytes),
+				ReadDigestWord(Bytes + 4),
+				ReadDigestWord(Bytes + 8),
+				ReadDigestWord(Bytes + 12));
+		}
+
+	private:
+		FBlake3 Hasher;
+	};
+
+	bool BuildAStarStaticGridDigest(
+		int32 Width,
+		int32 Height,
+		FFixedPoint CellSize,
+		const FFixedVector& Origin,
+		TConstArrayView<uint8> CellCost,
+		TConstArrayView<FFixedPoint> CellHeight,
+		TConstArrayView<uint8> CellTerrainType,
+		TConstArrayView<uint8> CellConnections,
+		FGuid& OutDigest,
+		FString& OutError)
+	{
+		OutDigest.Invalidate();
+		OutError.Reset();
+		const int64 NumCells64 =
+			static_cast<int64>(Width) * static_cast<int64>(Height);
+		if (Width <= 0
+			|| Height <= 0
+			|| NumCells64 > MAX_int32
+			|| CellSize <= FFixedPoint::Zero
+			|| CellCost.Num() != NumCells64
+			|| CellHeight.Num() != NumCells64
+			|| CellTerrainType.Num() != NumCells64
+			|| CellConnections.Num() != NumCells64)
+		{
+			OutError =
+				TEXT("A* static grid is incomplete or has inconsistent dimensions.");
+			return false;
+		}
+
+		FAStarStaticGridDigestBuilder Writer;
+		Writer.WriteInt32(Width);
+		Writer.WriteInt32(Height);
+		Writer.WriteInt64(CellSize.Value);
+		Writer.WriteInt64(Origin.X.Value);
+		Writer.WriteInt64(Origin.Y.Value);
+		Writer.WriteInt64(Origin.Z.Value);
+		Writer.WriteBytes(CellCost);
+		Writer.WriteUInt64(static_cast<uint64>(CellHeight.Num()));
+		for (const FFixedPoint HeightValue : CellHeight)
+		{
+			Writer.WriteInt64(HeightValue.Value);
+		}
+		Writer.WriteBytes(CellTerrainType);
+		Writer.WriteBytes(CellConnections);
+		OutDigest = Writer.Finalize();
+		if (!OutDigest.IsValid())
+		{
+			OutError = TEXT("A* static grid digest was invalid.");
+			return false;
+		}
+		return true;
+	}
+
+	const UClass* FindNearestNativeClass(const UClass* Class)
+	{
+		while (Class && !Class->HasAnyClassFlags(CLASS_Native))
+		{
+			Class = Class->GetSuperClass();
+		}
+		return Class;
+	}
+}
 
 // ============================================================================
 // ISeinLevelLayerProvider (CP1.1 nav port)
@@ -301,46 +437,118 @@ void USeinNavigationAStar::BakeLayer(const USeinLevelData& Substrate, UWorld* Wo
 // Runtime load (unified substrate)
 // ============================================================================
 
-bool USeinNavigationAStar::LoadFromSubstrate(const USeinLevelData& Substrate)
+FSeinStaticEnvironmentAdoptionResult
+USeinNavigationAStar::LoadFromSubstrateImpl(
+	const USeinLevelData& Substrate)
 {
-	// Only adopt the substrate when it actually carries a baked grid AND a "Nav"
-	// channel of the expected size. Otherwise return false and leave any existing
-	// grid intact — with no baked level data the nav simply has no runtime grid
-	// (FindPath returns no-path) until a bake / load lands.
-	if (!Substrate.HasRuntimeData()) return false;
-
-	const FIntPoint Dims = Substrate.GetDimensions();
-	const int32 N = Dims.X * Dims.Y;
-	if (N <= 0) return false;
+	// An empty substrate is a valid fallback. Once a participating A* nav is
+	// offered prepared runtime Level Data, its required channel must exist and
+	// validate. All validation and digest construction complete before the live
+	// grid is replaced.
+	if (!Substrate.HasRuntimeData())
+	{
+		return FSeinStaticEnvironmentAdoptionResult::NotApplicable(
+			TEXT("The Level Data substrate has no runtime data."));
+	}
 
 	TArray<uint8> NavChannel;
-	if (!Substrate.GetLayerChannel(TEXT("Nav"), NavChannel) || NavChannel.Num() != 2 * N)
+	if (!Substrate.GetLayerChannel(TEXT("Nav"), NavChannel))
 	{
-		return false;
+		return FSeinStaticEnvironmentAdoptionResult::Rejected(
+			TEXT("The prepared Level Data substrate is missing the required Nav channel; re-bake with the configured navigation provider."));
+	}
+
+	const FIntPoint Dims = Substrate.GetDimensions();
+	const int64 NumCells64 =
+		static_cast<int64>(Dims.X) * static_cast<int64>(Dims.Y);
+	if (Dims.X <= 0
+		|| Dims.Y <= 0
+		|| NumCells64 > MAX_int32 / 2)
+	{
+		return FSeinStaticEnvironmentAdoptionResult::Rejected(
+			FString::Printf(
+				TEXT("The Nav channel targets invalid substrate dimensions %dx%d."),
+				Dims.X,
+				Dims.Y));
+	}
+	const int32 N = static_cast<int32>(NumCells64);
+
+	if (NavChannel.Num() != 2 * N)
+	{
+		return FSeinStaticEnvironmentAdoptionResult::Rejected(
+			FString::Printf(
+				TEXT("The Nav channel is malformed: expected %d bytes for a %dx%d substrate, received %d."),
+				2 * N,
+				Dims.X,
+				Dims.Y,
+				NavChannel.Num()));
+	}
+
+	const FFixedPoint NewCellSize = Substrate.GetFinestCellSize();
+	const FFixedVector NewOrigin = Substrate.GetOrigin();
+
+	// Nav channel layout mirrors BakeLayer exactly: [Cost(N)][Connections(N)].
+	TArray<uint8> NewCellCost;
+	TArray<uint8> NewCellConnections;
+	NewCellCost.SetNumUninitialized(N);
+	NewCellConnections.SetNumUninitialized(N);
+	FMemory::Memcpy(NewCellCost.GetData(), NavChannel.GetData(), N);
+	FMemory::Memcpy(
+		NewCellConnections.GetData(), NavChannel.GetData() + N, N);
+
+	// Cell snap-height reads from the shared substrate surface — the dedup win:
+	// one trace pass feeds nav instead of nav re-tracing every cell.
+	TArray<FFixedPoint> NewCellHeight;
+	TArray<uint8> NewCellTerrainType;
+	NewCellHeight.SetNumUninitialized(N);
+	NewCellTerrainType.SetNumUninitialized(N);
+	for (int32 i = 0; i < N; ++i)
+	{
+		FSeinLevelCellSurface Surf;
+		if (!Substrate.GetCellSurface(i, Surf))
+		{
+			return FSeinStaticEnvironmentAdoptionResult::Rejected(
+				FString::Printf(
+					TEXT("The Nav channel references missing shared substrate cell %d of %d."),
+					i,
+					N));
+		}
+		NewCellHeight[i] = Surf.Height;
+		NewCellTerrainType[i] = Surf.TerrainTypeIndex;
+	}
+
+	FGuid NewStaticGridDigest;
+	FString DigestError;
+	if (!BuildAStarStaticGridDigest(
+		Dims.X,
+		Dims.Y,
+		NewCellSize,
+		NewOrigin,
+		NewCellCost,
+		NewCellHeight,
+		NewCellTerrainType,
+		NewCellConnections,
+		NewStaticGridDigest,
+		DigestError))
+	{
+		UE_LOG(LogSeinNavigationAStar, Error,
+			TEXT("Nav: refused inconsistent substrate grid (%s)."),
+			*DigestError);
+		return FSeinStaticEnvironmentAdoptionResult::Rejected(
+			FString::Printf(
+				TEXT("The Nav channel failed static-grid validation: %s"),
+				*DigestError));
 	}
 
 	Width = Dims.X;
 	Height = Dims.Y;
-	CellSize = Substrate.GetFinestCellSize();
-	Origin = Substrate.GetOrigin();
-
-	// Nav channel layout mirrors BakeLayer exactly: [Cost(N)][Connections(N)].
-	CellCost.SetNumUninitialized(N);
-	CellConnections.SetNumUninitialized(N);
-	FMemory::Memcpy(CellCost.GetData(), NavChannel.GetData(), N);
-	FMemory::Memcpy(CellConnections.GetData(), NavChannel.GetData() + N, N);
-
-	// Cell snap-height reads from the shared substrate surface — the dedup win:
-	// one trace pass feeds nav instead of nav re-tracing every cell.
-	CellHeight.SetNumUninitialized(N);
-	CellTerrainType.SetNumUninitialized(N);
-	for (int32 i = 0; i < N; ++i)
-	{
-		FSeinLevelCellSurface Surf;
-		const bool bOk = Substrate.GetCellSurface(i, Surf);
-		CellHeight[i]      = bOk ? Surf.Height : FFixedPoint::Zero;
-		CellTerrainType[i] = bOk ? Surf.TerrainTypeIndex : 0;   // per-agent BlockedTerrainTags gate reads this
-	}
+	CellSize = NewCellSize;
+	Origin = NewOrigin;
+	CellCost = MoveTemp(NewCellCost);
+	CellConnections = MoveTemp(NewCellConnections);
+	CellHeight = MoveTemp(NewCellHeight);
+	CellTerrainType = MoveTemp(NewCellTerrainType);
+	StaticGridDigest = NewStaticGridDigest;
 
 	// Derived field — pure function of CellCost; recomputed on every grid load.
 	RebuildWallDistanceField();
@@ -360,7 +568,101 @@ bool USeinNavigationAStar::LoadFromSubstrate(const USeinLevelData& Substrate)
 	// Broadcast after runtime state is in sync — subscribers (debug scene proxy,
 	// cached plan invalidation, etc.) see a consistent snapshot.
 	OnNavigationMutated.Broadcast();
+	return FSeinStaticEnvironmentAdoptionResult::Adopted();
+}
+
+bool USeinNavigationAStar::ComputeStaticEnvironmentDigest(
+	FGuid& OutDigest,
+	FString& OutError) const
+{
+	OutDigest.Invalidate();
+	OutError.Reset();
+
+	const UClass* NativeClass = FindNearestNativeClass(GetClass());
+	if (NativeClass != USeinNavigationAStar::StaticClass())
+	{
+		OutError = FString::Printf(
+			TEXT("Native A* subclass '%s' must override ComputeStaticEnvironmentDigest to claim exact static navigation coverage."),
+			*GetClass()->GetPathName());
+		return false;
+	}
+	return ComputeAStarStaticEnvironmentDigest(
+		OutDigest, OutError);
+}
+
+bool USeinNavigationAStar::ComputeStateCoverageClaim(
+	FSeinNavigationStateCoverageClaim& OutClaim,
+	FString& OutError) const
+{
+	const UClass* NativeClass = FindNearestNativeClass(GetClass());
+	if (NativeClass != USeinNavigationAStar::StaticClass())
+	{
+		OutClaim = {};
+		OutError = FString::Printf(
+			TEXT("Native A* subclass '%s' must explicitly claim exact mutable-state coverage."),
+			*GetClass()->GetPathName());
+		return false;
+	}
+	return ComputeAStarStateCoverageClaim(OutClaim, OutError);
+}
+
+bool USeinNavigationAStar::ComputeAStarStateCoverageClaim(
+	FSeinNavigationStateCoverageClaim& OutClaim,
+	FString& OutError) const
+{
+	OutClaim = {};
+	OutError.Reset();
+	OutClaim.StableImplementationId =
+		TEXT("seinarts.navigation.astar");
+	OutClaim.BehaviorRevision = 1;
+	OutClaim.CoverageRevision = 1;
+	OutClaim.StateCoverage =
+		ESeinNavigationStateCoverage::Stateless;
 	return true;
+}
+
+bool USeinNavigationAStar::ComputeAStarStaticEnvironmentDigest(
+	FGuid& OutDigest,
+	FString& OutError) const
+{
+	OutDigest.Invalidate();
+	OutError.Reset();
+	FSeinCanonicalDigestWriter Writer(
+		TEXT("SeinARTS.Navigation.AStar.StaticEnvironment"), 1);
+	if (!Writer.WriteString(GetClass()->GetPathName())
+		|| !Writer.WriteBool(HasRuntimeData())
+		|| !Writer.WriteInt32(AStarHeuristicWeightPercent)
+		|| !Writer.WriteInt32(AStarMaxIterations))
+	{
+		OutError = Writer.GetError();
+		return false;
+	}
+
+	if (!HasRuntimeData())
+	{
+		return Writer.Finalize(OutDigest, OutError);
+	}
+
+	const int64 NumCells64 =
+		static_cast<int64>(Width) * static_cast<int64>(Height);
+	if (!StaticGridDigest.IsValid()
+		|| Width <= 0
+		|| Height <= 0
+		|| NumCells64 > MAX_int32
+		|| CellCost.Num() != NumCells64
+		|| CellHeight.Num() != NumCells64
+		|| CellTerrainType.Num() != NumCells64
+		|| CellConnections.Num() != NumCells64
+		|| WallDistance.Num() != NumCells64
+		|| CellComponent.Num() != NumCells64)
+	{
+		OutError =
+			TEXT("A* runtime grid no longer matches its cached static-environment contract.");
+		return false;
+	}
+
+	return Writer.WriteGuid(StaticGridDigest)
+		&& Writer.Finalize(OutDigest, OutError);
 }
 
 void USeinNavigationAStar::RebuildWallDistanceField()

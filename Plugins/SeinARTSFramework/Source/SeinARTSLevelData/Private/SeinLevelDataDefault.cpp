@@ -128,84 +128,107 @@ void USeinLevelDataDefault::UnregisterLayerProvider(ISeinLevelLayerProvider* Pro
 // Runtime load
 // ============================================================================
 
-void USeinLevelDataDefault::ApplyAssetData(const USeinLevelDataDefaultAsset* Asset)
+bool USeinLevelDataDefault::ApplyAssetData(
+	const USeinLevelDataDefaultAsset* Asset)
 {
-	Width = Asset->Width;
-	Height = Asset->Height;
-	CellSizeFP = Asset->CellSize;
-	OriginFP = Asset->Origin;
-	RuntimeChannels = Asset->Channels;
-	MinimapTextureRuntime = Asset->MinimapTexture; // render artifact — independent of the cell arrays below
-
-	const int32 NumCells = Width * Height;
+	if (!Asset)
+	{
+		UE_LOG(LogSeinLevelData, Error,
+			TEXT("ApplyAssetData: null default level-data asset."));
+		return false;
+	}
+	const int64 NumCells64 =
+		static_cast<int64>(Asset->Width)
+		* static_cast<int64>(Asset->Height);
 
 	// Validate the flat arrays. An OLD-format asset (pre-quantization, when this stored
 	// TArray<FFixedPoint> SharedHeight/SharedNormalZ) loads with these empty → mismatch
-	// → clear + warn so the user re-bakes, instead of reading garbage.
-	if (NumCells <= 0 || Asset->SharedHeightQ.Num() != NumCells
-		|| Asset->SharedNormalZQ.Num() != NumCells || Asset->CellFlags.Num() != NumCells)
+	// → reject transactionally so a previously-valid runtime grid remains intact.
+	if (Asset->Width <= 0
+		|| Asset->Height <= 0
+		|| Asset->CellSize <= FFixedPoint::Zero
+		|| Asset->HeightQuantum <= FFixedPoint::Zero
+		|| NumCells64 <= 0
+		|| NumCells64 > MAX_int32
+		|| Asset->SharedHeightQ.Num() != NumCells64
+		|| Asset->SharedNormalZQ.Num() != NumCells64
+		|| Asset->CellFlags.Num() != NumCells64)
 	{
-		UE_LOG(LogSeinLevelData, Warning,
-			TEXT("ApplyAssetData: cell arrays (%d/%d/%d) don't match %dx%d=%d — clearing (re-bake needed)."),
-			Asset->SharedHeightQ.Num(), Asset->SharedNormalZQ.Num(), Asset->CellFlags.Num(), Width, Height, NumCells);
-		Width = Height = 0;
-		SharedHeight.Reset();
-		SharedNormalZ.Reset();
-		CellFlags.Reset();
-		CellTerrainType.Reset();
-		return;
+		UE_LOG(LogSeinLevelData, Error,
+			TEXT("ApplyAssetData: cell arrays (%d/%d/%d) don't match %dx%d=%lld — rejecting (re-bake needed)."),
+			Asset->SharedHeightQ.Num(), Asset->SharedNormalZQ.Num(),
+			Asset->CellFlags.Num(), Asset->Width, Asset->Height,
+			static_cast<long long>(NumCells64));
+		return false;
 	}
+	const int32 NumCells = static_cast<int32>(NumCells64);
 
-	CellFlags = Asset->CellFlags; // already raw uint8
+	TArray<uint8> NewCellFlags = Asset->CellFlags;
+	TArray<uint8> NewCellTerrainType;
 
 	// Terrain type — additive/lenient: copy when present + correctly sized; otherwise
 	// default every cell to 0 (Default type) so assets baked BEFORE terrain types load
 	// unchanged (no re-bake forced merely to open an old level).
 	if (Asset->CellTerrainType.Num() == NumCells)
 	{
-		CellTerrainType = Asset->CellTerrainType;
+		NewCellTerrainType = Asset->CellTerrainType;
 	}
 	else
 	{
-		CellTerrainType.Init(0, NumCells);
+		NewCellTerrainType.Init(0, NumCells);
 	}
 
 	// Dequantize uint16 height + uint8 normal·Up → FFixedPoint (deterministic fixed math).
 	const FFixedPoint HMin = Asset->HeightMin;
 	const FFixedPoint HQuantum = Asset->HeightQuantum;
 	const FFixedPoint NormalStep = FFixedPoint::FromInt(2) / FFixedPoint::FromInt(255); // [-1,1] over 255 steps
-	SharedHeight.SetNumUninitialized(NumCells);
-	SharedNormalZ.SetNumUninitialized(NumCells);
+	TArray<FFixedPoint> NewSharedHeight;
+	TArray<FFixedPoint> NewSharedNormalZ;
+	NewSharedHeight.SetNumUninitialized(NumCells);
+	NewSharedNormalZ.SetNumUninitialized(NumCells);
 	for (int32 i = 0; i < NumCells; ++i)
 	{
-		SharedHeight[i]  = HMin + HQuantum * FFixedPoint::FromInt(Asset->SharedHeightQ[i]);
-		SharedNormalZ[i] = NormalStep * FFixedPoint::FromInt(Asset->SharedNormalZQ[i]) - FFixedPoint::One;
+		NewSharedHeight[i] =
+			HMin + HQuantum
+				* FFixedPoint::FromInt(Asset->SharedHeightQ[i]);
+		NewSharedNormalZ[i] =
+			NormalStep
+				* FFixedPoint::FromInt(Asset->SharedNormalZQ[i])
+			- FFixedPoint::One;
 	}
+
+	Width = Asset->Width;
+	Height = Asset->Height;
+	CellSizeFP = Asset->CellSize;
+	OriginFP = Asset->Origin;
+	RuntimeChannels = Asset->Channels;
+	MinimapTextureRuntime = Asset->MinimapTexture;
+	CellFlags = MoveTemp(NewCellFlags);
+	CellTerrainType = MoveTemp(NewCellTerrainType);
+	SharedHeight = MoveTemp(NewSharedHeight);
+	SharedNormalZ = MoveTemp(NewSharedNormalZ);
+	return true;
 }
 
-void USeinLevelDataDefault::LoadFromAsset(USeinLevelDataAsset* Asset)
+bool USeinLevelDataDefault::LoadFromAssetImpl(USeinLevelDataAsset* Asset)
 {
-	if (const USeinLevelDataDefaultAsset* DefAsset = Cast<USeinLevelDataDefaultAsset>(Asset))
+	const USeinLevelDataDefaultAsset* DefAsset =
+		Cast<USeinLevelDataDefaultAsset>(Asset);
+	if (!DefAsset || !ApplyAssetData(DefAsset))
 	{
-		ApplyAssetData(DefAsset);
-	}
-	else
-	{
-		Width = Height = 0;
-		SharedHeight.Reset();
-		SharedNormalZ.Reset();
-		CellFlags.Reset();
-		CellTerrainType.Reset();
-		RuntimeChannels.Reset();
+		UE_LOG(LogSeinLevelData, Error,
+			TEXT("LoadFromAsset: expected a valid Sein Level Data (Default Grid) asset; the current runtime substrate was left unchanged."));
+		return false;
 	}
 	OnLevelDataMutated.Broadcast();
+	return true;
 }
 
 // ============================================================================
 // Bake
 // ============================================================================
 
-bool USeinLevelDataDefault::BeginBake(UWorld* World)
+bool USeinLevelDataDefault::BeginBakeImpl(UWorld* World)
 {
 	if (!World) { UE_LOG(LogSeinLevelData, Warning, TEXT("BeginBake: null world")); return false; }
 	if (bBaking) { UE_LOG(LogSeinLevelData, Warning, TEXT("BeginBake: already baking")); return false; }
@@ -227,7 +250,12 @@ bool USeinLevelDataDefault::BeginBake(UWorld* World)
 		It->BakedAsset = NewAsset;
 		It->MarkPackageDirty();
 	}
-	LoadFromAsset(NewAsset);
+	if (!LoadFromAsset(NewAsset))
+	{
+		UE_LOG(LogSeinLevelData, Error,
+			TEXT("BeginBake: the completed asset could not be adopted."));
+		return false;
+	}
 
 	UE_LOG(LogSeinLevelData, Log, TEXT("Level bake complete: %dx%d cells"), NewAsset->Width, NewAsset->Height);
 	return true;
@@ -555,7 +583,12 @@ bool USeinLevelDataDefault::DoSyncBake(UWorld* World, USeinLevelDataDefaultAsset
 
 	// Re-sync the runtime substrate from the (now quantized) asset so this baking
 	// session reads the same dequantized values a reloaded session will.
-	ApplyAssetData(OutAsset);
+	if (!ApplyAssetData(OutAsset))
+	{
+		UE_LOG(LogSeinLevelData, Error,
+			TEXT("Level bake produced an asset that failed its own runtime validation."));
+		return false;
+	}
 
 #if WITH_EDITOR
 	if (!SaveAssetToDisk(OutAsset))

@@ -44,12 +44,53 @@
 #include "Stamping/SeinStampShape.h"
 #include "Components/SeinExtentsComponent.h"
 #include "GameplayTagContainer.h"
+#include "Serialization/SeinCanonicalStateRegistry.h"
 #include "SeinPathTypes.h"
+#include "SeinStaticEnvironmentAdoption.h"
 #include "SeinNavigation.generated.h"
 
 class UWorld;
 class USeinLevelData;
+class USeinNavigationSubsystem;
 class ISeinLevelLayerProvider;
+class FSeinNavBlockerStampSystem;
+
+/** How a navigation implementation accounts for state beyond the framework's
+ * async request/result continuation. */
+enum class ESeinNavigationStateCoverage : uint8
+{
+	/** No explicit claim. Always rejected before tick zero. */
+	Unspecified,
+
+	/** The implementation retains no other future-affecting mutable state. */
+	Stateless,
+
+	/**
+	 * Opaque mutable state is restored by the named authoritative canonical
+	 * contributors. Their exact presence is verified in the world's frozen
+	 * schema before the navigation binding can freeze.
+	 */
+	CanonicalStateContributors,
+};
+
+/**
+ * Explicit exact-state claim made by one concrete navigation implementation.
+ *
+ * The framework provider owns the async request/result continuation. A nav may
+ * participate only when it explicitly declares whether every other
+ * future-affecting value is absent or restored by exact canonical
+ * contributors. Immutable query state belongs in
+ * ComputeStaticEnvironmentDigest, not this list.
+ */
+struct SEINARTSNAVIGATION_API FSeinNavigationStateCoverageClaim
+{
+	FString StableImplementationId;
+	uint32 BehaviorRevision = 0;
+	uint32 CoverageRevision = 0;
+	ESeinNavigationStateCoverage StateCoverage =
+		ESeinNavigationStateCoverage::Unspecified;
+	TArray<FSeinCanonicalStateKey> RequiredCanonicalStateContributors;
+};
 
 /**
  * One runtime path blocker = one FSeinStampShape posed at an entity. Multiple
@@ -102,17 +143,6 @@ class SEINARTSNAVIGATION_API USeinNavigation : public UObject
 	GENERATED_BODY()
 
 public:
-
-	// ----------------------------------------------------------------------
-	// Lifecycle — called by USeinNavigationSubsystem
-	// ----------------------------------------------------------------------
-
-	/** Called once when the subsystem instantiates this nav. Default: no-op. */
-	virtual void OnNavigationInitialized(UWorld* World) {}
-
-	/** Called once when the subsystem is tearing down this nav. Default: no-op. */
-	virtual void OnNavigationDeinitialized() {}
-
 	// ----------------------------------------------------------------------
 	// Runtime data
 	// ----------------------------------------------------------------------
@@ -121,6 +151,36 @@ public:
 	 *  substrate or procedurally initialized). Queries return no-path when
 	 *  false. Default: false — subclasses report their own grid state. */
 	virtual bool HasRuntimeData() const { return false; }
+
+	/**
+	 * Compute the exact static-environment identity that can affect future
+	 * navigation answers. The match StateContract freezes this digest and
+	 * canonical capture revalidates it. Runtime blockers and deferred path
+	 * requests are deliberately excluded: blockers derive from authoritative
+	 * entities each tick, while deferred requests have their own continuation
+	 * contributor.
+	 *
+	 * Every concrete custom implementation MUST override this and cover every
+	 * immutable/procedural topology value plus every query-affecting tuning
+	 * value. Even a deliberately empty/static-less implementation must make
+	 * that claim explicitly; the base always fails closed.
+	 */
+	virtual bool ComputeStaticEnvironmentDigest(
+		FGuid& OutDigest,
+		FString& OutError) const;
+
+	/**
+	 * Claim exact continuation coverage for the concrete implementation.
+	 * The base fails closed. Implementations that own no mutable state beyond
+	 * the framework async continuation declare Stateless. Stateful
+	 * implementations declare CanonicalStateContributors and name every
+	 * authoritative provider that restores their opaque state. Stable
+	 * implementation and non-zero behavior/coverage revisions are always
+	 * required.
+	 */
+	virtual bool ComputeStateCoverageClaim(
+		FSeinNavigationStateCoverageClaim& OutClaim,
+		FString& OutError) const;
 
 	// ----------------------------------------------------------------------
 	// Unified level-data pipeline (CP1.1) — OPT-IN. A nav that registers as a
@@ -135,11 +195,16 @@ public:
 	 *  shared bake runs this nav's BakeLayer. Default: null (doesn't participate). */
 	virtual ISeinLevelLayerProvider* GetLevelDataProvider() { return nullptr; }
 
-	/** Load the runtime grid from the unified substrate's baked channels + shared
-	 *  height. Return false if this nav doesn't read the substrate — it then has
-	 *  no baked data (FindPath returns no-path) until something else loads it.
-	 *  Default: false. */
-	virtual bool LoadFromSubstrate(const USeinLevelData& /*Substrate*/) { return false; }
+	/**
+	 * Load runtime topology from the unified substrate. This public mutation
+	 * front door is owner-guarded: after the match StateContract freezes it
+	 * rejects before subclass state can change. Custom implementations override
+	 * LoadFromSubstrateImpl below, not this gate. NotApplicable is a valid
+	 * no-data/non-participating outcome; Rejected carries the precise reason
+	 * bootstrap must fail rather than silently accepting an empty topology.
+	 */
+	FSeinStaticEnvironmentAdoptionResult LoadFromSubstrate(
+		const USeinLevelData& Substrate);
 
 	// ----------------------------------------------------------------------
 	// Queries — core pathing surface
@@ -287,16 +352,6 @@ public:
 	 */
 	virtual bool IsPlacementValid(const FFixedVector& CenterWorld, FFixedPoint YawDegrees,
 		const FSeinExtentsShape& Shape, uint8 AgentLayerMask) const;
-
-	/** Refresh the runtime dynamic-blocker set. Called by the nav stamping
-	 *  system each PreTick from entities carrying FSeinExtentsComponent with
-	 *  bBlocksNav set. Subclasses store the list and consume it during
-	 *  FindPath (typically rebuilding a dynamic-blocked overlay per call
-	 *  so the requester's own blocker can be excluded + the agent's layer
-	 *  mask can filter out terrain that doesn't apply to this agent class).
-	 *  Default: no-op — subclasses without dynamic blocker support are
-	 *  unaffected. */
-	virtual void SetDynamicBlockers(const TArray<FSeinDynamicBlocker>& /*Blockers*/) {}
 
 	/** Find a nearby "escape" target for an agent that is mechanically stuck — its
 	 *  applied movement step has been ~zero against a blocked footprint while its
@@ -453,4 +508,41 @@ public:
 	/** Broadcast after bake completion, substrate (re-)adoption, or dynamic
 	 *  obstacle mutation. */
 	FSeinOnNavigationMutated OnNavigationMutated;
+
+protected:
+	// ----------------------------------------------------------------------
+	// Lifecycle — implementation hooks called only by the owning subsystem.
+	// ----------------------------------------------------------------------
+	virtual void OnNavigationInitialized(UWorld* World) {}
+	virtual void OnNavigationDeinitialized() {}
+
+	/**
+	 * Implementation hook behind the owner-guarded LoadFromSubstrate gate.
+	 * Only Adopted may replace runtime topology. NotApplicable and Rejected
+	 * must leave the previously usable topology unchanged.
+	 */
+	virtual FSeinStaticEnvironmentAdoptionResult LoadFromSubstrateImpl(
+		const USeinLevelData& /*Substrate*/)
+	{
+		return FSeinStaticEnvironmentAdoptionResult::NotApplicable(
+			TEXT("The navigation implementation does not consume the Level Data substrate."));
+	}
+
+private:
+	friend class USeinNavigationSubsystem;
+	friend class FSeinNavBlockerStampSystem;
+
+	/** Install the authoritative entity-derived blocker set for this PreTick.
+	 *  Ownership is intentionally private: callers cannot inject an
+	 *  uncaptured blocker list between the stamping system and path queries.
+	 *  Custom implementations may override this private virtual normally. */
+	virtual void SetDynamicBlockers(
+		const TArray<FSeinDynamicBlocker>& /*Blockers*/) {}
+
+	/** Owner-only wrappers ensure custom lifecycle overrides cannot skip world binding. */
+	void InitializeForWorld(UWorld* World);
+	void DeinitializeFromWorld();
+	bool CanMutateStaticEnvironment(FString& OutError) const;
+
+	TWeakObjectPtr<UWorld> OwningWorld;
 };

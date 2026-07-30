@@ -37,6 +37,8 @@ struct FSeinFogOfWarCanonicalStateProvider
 		TWeakObjectPtr<USeinFogOfWar> Fog;
 		uint64 CodecToken = 0;
 		bool bDisabled = false;
+		FString BindingFrame;
+		FGuid StaticEnvironmentDigest;
 		TUniquePtr<ISeinFogOfWarStateRestoreStage> ConcreteStage;
 
 		virtual void GatherReferencedObjects(
@@ -56,6 +58,22 @@ struct FSeinFogOfWarCanonicalStateProvider
 		}
 	};
 
+	static bool PrepareWorldBinding(
+		const FSeinCanonicalStateWorldBindingContext& Context,
+		FString& OutError)
+	{
+		USeinFogOfWarSubsystem* Subsystem =
+			ResolveSubsystem(Context.Services);
+		if (!Subsystem)
+		{
+			OutError =
+				TEXT("Fog canonical state could not resolve its world subsystem.");
+			return false;
+		}
+		return Subsystem->
+			PrepareInitialCanonicalStateEnvironment(OutError);
+	}
+
 	static bool FreezeWorldBinding(
 		const FSeinCanonicalStateWorldBindingContext& Context,
 		FString& OutFrame,
@@ -69,8 +87,14 @@ struct FSeinFogOfWarCanonicalStateProvider
 				TEXT("Fog canonical state could not resolve its world subsystem.");
 			return false;
 		}
+		FGuid StaticEnvironmentDigest;
 		return Subsystem->FreezeCanonicalStateBinding(
-			OutFrame, OutError);
+			Context.BindingDisposition
+				== ESeinCanonicalStateWorldBindingDisposition::
+					BootstrapCommit,
+			OutFrame,
+			StaticEnvironmentDigest,
+			OutError);
 	}
 
 	static bool Capture(
@@ -89,15 +113,19 @@ struct FSeinFogOfWarCanonicalStateProvider
 		}
 
 		FString BindingFrame;
+		FGuid StaticEnvironmentDigest;
 		if (!Subsystem->FreezeCanonicalStateBinding(
-			BindingFrame, OutError))
+			false,
+			BindingFrame,
+			StaticEnvironmentDigest,
+			OutError))
 		{
 			return false;
 		}
 
 		FSeinFogOfWarCanonicalStateEnvelope Envelope;
 		Envelope.StaticEnvironmentDigest =
-			Subsystem->FrozenStaticEnvironmentDigest;
+			StaticEnvironmentDigest;
 		if (!Subsystem->bFogConfigured)
 		{
 			Envelope.bEnabled = false;
@@ -114,8 +142,9 @@ struct FSeinFogOfWarCanonicalStateProvider
 		FSeinFogOfWarStateCodecRegistry::FResolvedClaim Claim;
 		if (!Fog
 			|| Subsystem->StateCodecToken == 0
-			|| !FSeinFogOfWarStateCodecRegistry::Resolve(
+			|| !FSeinFogOfWarStateCodecRegistry::ResolveForClass(
 				Subsystem->StateCodecToken,
+				Fog->GetClass(),
 				Claim,
 				OutError))
 		{
@@ -135,7 +164,7 @@ struct FSeinFogOfWarCanonicalStateProvider
 					CurrentStaticDigest,
 					OutError)
 			|| CurrentStaticDigest
-				!= Subsystem->FrozenStaticEnvironmentDigest)
+				!= StaticEnvironmentDigest)
 		{
 			if (OutError.IsEmpty())
 			{
@@ -241,10 +270,14 @@ struct FSeinFogOfWarCanonicalStateProvider
 		}
 
 		FString BindingFrame;
+		FGuid StaticEnvironmentDigest;
 		if (!Subsystem->FreezeCanonicalStateBinding(
-			BindingFrame, OutError)
+			false,
+			BindingFrame,
+			StaticEnvironmentDigest,
+			OutError)
 			|| Envelope->StaticEnvironmentDigest
-				!= Subsystem->FrozenStaticEnvironmentDigest)
+				!= StaticEnvironmentDigest)
 		{
 			if (OutError.IsEmpty())
 			{
@@ -257,6 +290,9 @@ struct FSeinFogOfWarCanonicalStateProvider
 		TUniquePtr<FRestoreStage> Stage =
 			MakeUnique<FRestoreStage>();
 		Stage->Subsystem = Subsystem;
+		Stage->BindingFrame = MoveTemp(BindingFrame);
+		Stage->StaticEnvironmentDigest =
+			StaticEnvironmentDigest;
 		if (!Envelope->bEnabled)
 		{
 			if (Subsystem->bFogConfigured
@@ -288,8 +324,9 @@ struct FSeinFogOfWarCanonicalStateProvider
 		if (!Subsystem->bFogConfigured
 			|| !Fog
 			|| Subsystem->StateCodecToken == 0
-			|| !FSeinFogOfWarStateCodecRegistry::Resolve(
+			|| !FSeinFogOfWarStateCodecRegistry::ResolveForClass(
 				Subsystem->StateCodecToken,
+				Fog->GetClass(),
 				Claim,
 				OutError)
 			|| !MatchesClaim(*Envelope, *Fog, Claim))
@@ -350,12 +387,19 @@ struct FSeinFogOfWarCanonicalStateProvider
 		FString& OutError)
 	{
 		OutError.Reset();
-		const USeinFogOfWarSubsystem* Subsystem =
+		USeinFogOfWarSubsystem* Subsystem =
 			Stage.Subsystem.Get();
 		if (!Subsystem)
 		{
 			OutError =
 				TEXT("Fog world subsystem disappeared before commit.");
+			return false;
+		}
+		if (!Subsystem->RevalidateCanonicalStateBindingCandidate(
+				Stage.BindingFrame,
+				Stage.StaticEnvironmentDigest,
+				OutError))
+		{
 			return false;
 		}
 		if (Stage.bDisabled)
@@ -387,16 +431,19 @@ struct FSeinFogOfWarCanonicalStateProvider
 		FRestoreStage* Stage =
 			static_cast<FRestoreStage*>(OpaqueStage.Get());
 		check(Stage);
+		USeinFogOfWarSubsystem* Subsystem =
+			ResolveSubsystem(Context.World);
+		check(Subsystem);
+		Subsystem->CommitCanonicalStateBinding(
+			Stage->BindingFrame,
+			Stage->StaticEnvironmentDigest);
 		if (Stage->bDisabled)
 		{
 			return;
 		}
 
-		USeinFogOfWarSubsystem* Subsystem =
-			ResolveSubsystem(Context.World);
 		USeinFogOfWar* Fog =
 			Subsystem ? Subsystem->GetFogOfWar() : nullptr;
-		check(Subsystem);
 		check(Fog && Fog == Stage->Fog.Get());
 		check(Subsystem->StateCodecToken == Stage->CodecToken);
 
@@ -428,6 +475,9 @@ SeinRegisterFogOfWarCanonicalStateProvider(FString& OutError)
 	Descriptor.Limits.MaxAggregateElements = 40 * 1024 * 1024;
 
 	FSeinCanonicalStateContributorOps Ops;
+	Ops.PrepareWorldBinding =
+		&FSeinFogOfWarCanonicalStateProvider::
+			PrepareWorldBinding;
 	Ops.FreezeWorldBinding =
 		&FSeinFogOfWarCanonicalStateProvider::
 			FreezeWorldBinding;

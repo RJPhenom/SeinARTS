@@ -245,9 +245,6 @@ public:
 
 	// USeinFogOfWar participation hooks
 	virtual ISeinLevelLayerProvider* GetLevelDataProvider() override { return this; }
-	virtual bool LoadFromSubstrate(const USeinLevelData& Substrate) override;
-
-	virtual void InitGridFromVolumes(UWorld* World) override;
 	virtual void TickStamps(UWorld* World) override;
 
 	virtual uint8 GetCellBitfield(FSeinPlayerID Observer, const FFixedVector& WorldPos) const override;
@@ -269,6 +266,11 @@ public:
 	virtual bool GetObserverGrid(FSeinPlayerID Observer, TArray<uint8>& OutCells,
 		FFixedVector& OutOrigin, FFixedPoint& OutCellSize,
 		int32& OutWidth, int32& OutHeight) const override;
+
+protected:
+	virtual FSeinStaticEnvironmentAdoptionResult LoadFromSubstrateImpl(
+		const USeinLevelData& Substrate) override;
+	virtual void InitGridFromVolumesImpl(UWorld* World) override;
 
 private:
 
@@ -299,6 +301,12 @@ private:
 	 *  vis bits (0xFE) for every detected blocker; per-layer masks
 	 *  (e.g. thermal-see-through-smoke) land with the layer pass. */
 	TArray<uint8> BlockerLayerMask;
+
+	/** Streaming BLAKE3 identity of the immutable static grid. Lazily rebuilt
+	 *  once after substrate adoption / no-bake initialization, then reused by
+	 *  StateContract and snapshot captures so canonical checks stay O(1) for
+	 *  large maps. Every static-grid mutation invalidates it first. */
+	mutable FGuid StaticGridDigest;
 
 	/** Dynamic blocker overlay — absolute world Z of any runtime-authored
 	 *  blocker (smoke grenades, destructibles in progress) at this cell.

@@ -161,18 +161,28 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 	// Hoist component-storage lookups out of the per-entity / per-neighbour loop:
 	// GetComponent<T>() is a hashmap lookup by UScriptStruct* per call; resolving each
 	// storage once turns every access into an O(1) indexed get.
-	ISeinComponentStorage* MoveStorage    = World.GetComponentStorageRaw(FSeinMovementComponent::StaticStruct());
-	ISeinComponentStorage* NavStorage     = World.GetComponentStorageRaw(FSeinNavigationComponent::StaticStruct());
-	ISeinComponentStorage* ExtentsStorage = World.GetComponentStorageRaw(FSeinExtentsComponent::StaticStruct());
+	ISeinComponentStorage* MoveStorage =
+		World.GetComponentStorageMutable(
+			FSeinMovementComponent::StaticStruct());
+	const ISeinComponentStorage* NavStorage =
+		World.GetComponentStorageRaw(
+			FSeinNavigationComponent::StaticStruct());
+	const ISeinComponentStorage* ExtentsStorage =
+		World.GetComponentStorageRaw(
+			FSeinExtentsComponent::StaticStruct());
 	// Group identity — TWO-LAYER, matching the formation model: the immediate broker
 	// (squad / loose-order group) and the per-order cohesion id spanning brokers of one
 	// multi-element order. Same-group neighbours are never avoided (the group converges
 	// and packs; the collision floor keeps bodies apart).
-	ISeinComponentStorage* BrokerStorage  = World.GetComponentStorageRaw(FSeinBrokerMembershipData::StaticStruct());
+	const ISeinComponentStorage* BrokerStorage =
+		World.GetComponentStorageRaw(
+			FSeinBrokerMembershipData::StaticStruct());
 	// Broker-LEVEL data (Centroid / FormationRadius / bAvoidAsCohesiveBody) for the blob-obstacle
 	// scope: read per neighbour via its CurrentBrokerHandle. Prior-tick snapshot (broker maintenance
 	// is PostTick), read-only in the parallel body → contract-safe.
-	ISeinComponentStorage* BrokerDataStorage = World.GetComponentStorageRaw(FSeinCommandBrokerData::StaticStruct());
+	const ISeinComponentStorage* BrokerDataStorage =
+		World.GetComponentStorageRaw(
+			FSeinCommandBrokerData::StaticStruct());
 
 	// Gather live handles (serial, cheap), then fan the per-unit computation across
 	// worker threads under the body contract in the file docstring. The SAME serial
@@ -212,7 +222,9 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 	TArray<FFixedPoint> ActualProgress;
 	ActualDispSq.Reserve(World.GetEntityPool().GetActiveCount());
 	ActualProgress.Reserve(World.GetEntityPool().GetActiveCount());
-	World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, FSeinEntity& Entity)
+	World.GetEntityPool().ForEachEntity([&](
+		FSeinEntityHandle Handle,
+		const FSeinEntity& Entity)
 	{
 		LiveHandles.Add(Handle);
 		ActualDispSq.Add(FFixedPoint::FromInt(-1));
@@ -306,9 +318,10 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 	SeinParallelFor(LiveHandles.Num(), [&](int32 Index)
 	{
 		const FSeinEntityHandle SelfHandle = LiveHandles[Index];
-		FSeinEntity* SelfEntityPtr = World.GetEntityPool().Get(SelfHandle);
+		const FSeinEntity* SelfEntityPtr =
+			World.GetEntityPool().Get(SelfHandle);
 		if (!SelfEntityPtr) return;
-		FSeinEntity& SelfEntity = *SelfEntityPtr;
+		const FSeinEntity& SelfEntity = *SelfEntityPtr;
 
 		// Per-body neighbour scratch — MUST be a local (one buffer per body invocation)
 		// so concurrent QueryRadius calls never share it.

@@ -253,15 +253,32 @@ void USeinFogOfWarDefault::BakeLayer(const USeinLevelData& Substrate, UWorld* Wo
 		FoWW, FoWH, FoWCellF, M, NumBlockers, NumIgnoredActors);
 }
 
-bool USeinFogOfWarDefault::LoadFromSubstrate(const USeinLevelData& Substrate)
+FSeinStaticEnvironmentAdoptionResult
+USeinFogOfWarDefault::LoadFromSubstrateImpl(
+	const USeinLevelData& Substrate)
 {
-	if (!Substrate.HasRuntimeData()) return false;
+	if (!Substrate.HasRuntimeData())
+	{
+		return FSeinStaticEnvironmentAdoptionResult::NotApplicable(
+			TEXT("The Level Data substrate has no runtime data."));
+	}
 
 	TArray<uint8> Blob;
-	if (!Substrate.GetLayerChannel(TEXT("FogOfWar"), Blob)) return false;
+	if (!Substrate.GetLayerChannel(TEXT("FogOfWar"), Blob))
+	{
+		return FSeinStaticEnvironmentAdoptionResult::Rejected(
+			TEXT("The prepared Level Data substrate is missing the required FogOfWar channel; re-bake with the configured fog provider."));
+	}
 
-	const int32 HeaderBytes = 2 * sizeof(int32) + 3 * sizeof(int64);
-	if (Blob.Num() < HeaderBytes) return false;
+	constexpr int64 HeaderBytes = 2 * sizeof(int32) + 3 * sizeof(int64);
+	if (Blob.Num() < HeaderBytes)
+	{
+		return FSeinStaticEnvironmentAdoptionResult::Rejected(
+			FString::Printf(
+				TEXT("The FogOfWar channel is malformed: expected at least %lld header bytes, received %d."),
+				static_cast<long long>(HeaderBytes),
+				Blob.Num()));
+	}
 
 	const uint8* In = Blob.GetData();
 	auto ReadI32 = [&In]() { int32 V; FMemory::Memcpy(&V, In, sizeof(int32)); In += sizeof(int32); return V; };
@@ -272,19 +289,40 @@ bool USeinFogOfWarDefault::LoadFromSubstrate(const USeinLevelData& Substrate)
 	const FFixedPoint MinH = FFixedPoint(ReadI64());
 	const FFixedPoint Quantum = FFixedPoint(ReadI64());
 
-	const int32 NumCells = W * H;
-	if (NumCells <= 0 || Blob.Num() != HeaderBytes + 3 * NumCells)
+	const int64 NumCells64 = static_cast<int64>(W) * static_cast<int64>(H);
+	const bool bDimensionsValid =
+		W > 0
+		&& H > 0
+		&& NumCells64 > 0
+		&& NumCells64 <= MAX_int32;
+	const int64 ExpectedBytes = bDimensionsValid
+		? HeaderBytes + 3 * NumCells64
+		: INDEX_NONE;
+	if (!bDimensionsValid
+		|| CellSizeIn <= FFixedPoint::Zero
+		|| Quantum <= FFixedPoint::Zero
+		|| static_cast<int64>(Blob.Num()) != ExpectedBytes)
 	{
 		UE_LOG(LogSeinFogOfWar, Warning,
 			TEXT("LoadFromSubstrate: FogOfWar channel malformed (%d bytes for %dx%d) — ignoring (re-bake needed)."),
 			Blob.Num(), W, H);
-		return false;
+		return FSeinStaticEnvironmentAdoptionResult::Rejected(
+			FString::Printf(
+				TEXT("The FogOfWar channel is malformed: dimensions=%dx%d, cell size raw=%lld, height quantum raw=%lld, bytes=%d, expected=%lld."),
+				W,
+				H,
+				static_cast<long long>(CellSizeIn.Value),
+				static_cast<long long>(Quantum.Value),
+				Blob.Num(),
+				static_cast<long long>(ExpectedBytes)));
 	}
+	const int32 NumCells = static_cast<int32>(NumCells64);
 
 	Width = W;
 	Height = H;
 	CellSize = CellSizeIn;
 	Origin = Substrate.GetOrigin();
+	StaticGridDigest.Invalidate();
 
 	const uint8* GroundIn  = In;
 	const uint8* BlockerIn = In + NumCells;
@@ -314,14 +352,14 @@ bool USeinFogOfWarDefault::LoadFromSubstrate(const USeinLevelData& Substrate)
 	}
 
 	OnFogOfWarMutated.Broadcast();
-	return true;
+	return FSeinStaticEnvironmentAdoptionResult::Adopted();
 }
 
 // ============================================================================
 // Init (no bake fallback)
 // ============================================================================
 
-void USeinFogOfWarDefault::InitGridFromVolumes(UWorld* World)
+void USeinFogOfWarDefault::InitGridFromVolumesImpl(UWorld* World)
 {
 	if (!World) return;
 
@@ -374,6 +412,17 @@ void USeinFogOfWarDefault::InitGridFromVolumes(UWorld* World)
 	{
 		Width = 0;
 		Height = 0;
+		GroundHeight.Reset();
+		BlockerHeight.Reset();
+		BlockerLayerMask.Reset();
+		DynamicBlockerHeight.Reset();
+		DynamicBlockerLayerMask.Reset();
+		VisionGroups.Empty();
+		SourceStates.Empty();
+		DynamicBlockerSnapshots.Reset();
+		LastDynamicBlockerCells.Reset();
+		StaticGridDigest.Invalidate();
+		OnFogOfWarMutated.Broadcast();
 		return;
 	}
 	if (bAnyUnbaked)
@@ -384,15 +433,46 @@ void USeinFogOfWarDefault::InitGridFromVolumes(UWorld* World)
 				 "bake snapshots. NOT cross-arch deterministic until then."));
 	}
 
-	CellSize = ResolvedCellSize;
-	Origin = UnionMin;
+	if (ResolvedCellSize <= FFixedPoint::Zero)
+	{
+		UE_LOG(LogSeinFogOfWar, Error,
+			TEXT("InitGridFromVolumes: resolved vision cell size is not positive."));
+		return;
+	}
 	const float CellSizeF = ResolvedCellSize.ToFloat();
 	const float SizeXF = (UnionMax.X - UnionMin.X).ToFloat();
 	const float SizeYF = (UnionMax.Y - UnionMin.Y).ToFloat();
-	Width = FMath::Max(1, FMath::CeilToInt(SizeXF / CellSizeF));
-	Height = FMath::Max(1, FMath::CeilToInt(SizeYF / CellSizeF));
+	const int64 Width64 = FMath::Max<int64>(
+		1, FMath::CeilToInt64(
+			static_cast<double>(SizeXF) / CellSizeF));
+	const int64 Height64 = FMath::Max<int64>(
+		1, FMath::CeilToInt64(
+			static_cast<double>(SizeYF) / CellSizeF));
+	if (Width64 > MAX_int32
+		|| Height64 > MAX_int32)
+	{
+		UE_LOG(LogSeinFogOfWar, Error,
+			TEXT("InitGridFromVolumes: resolved grid is too large (%lldx%lld). Bake or increase the configured vision cell size."),
+			static_cast<long long>(Width64),
+			static_cast<long long>(Height64));
+		return;
+	}
+	const int64 NumCells64 = Width64 * Height64;
+	if (NumCells64 <= 0 || NumCells64 > MAX_int32)
+	{
+		UE_LOG(LogSeinFogOfWar, Error,
+			TEXT("InitGridFromVolumes: resolved grid is too large (%lldx%lld). Bake or increase the configured vision cell size."),
+			static_cast<long long>(Width64),
+			static_cast<long long>(Height64));
+		return;
+	}
 
-	const int32 NumCells = Width * Height;
+	CellSize = ResolvedCellSize;
+	Origin = UnionMin;
+	Width = static_cast<int32>(Width64);
+	Height = static_cast<int32>(Height64);
+	StaticGridDigest.Invalidate();
+	const int32 NumCells = static_cast<int32>(NumCells64);
 	GroundHeight.SetNumUninitialized(NumCells);
 	ResetToZeroedSize(BlockerHeight, NumCells);
 	ResetToZeroedSize(BlockerLayerMask, NumCells);

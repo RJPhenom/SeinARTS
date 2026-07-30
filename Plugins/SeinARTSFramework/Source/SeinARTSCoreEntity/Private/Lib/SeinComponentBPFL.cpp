@@ -204,22 +204,20 @@ TArray<FInstancedStruct> USeinComponentBPFL::SeinGetComponents(const UObject* Wo
 	// iteration is pointer-keyed — stable within a process but not guaranteed
 	// across clients. BP designers consuming this array can safely iterate
 	// in order without accidentally introducing desyncs.
-	TArray<UScriptStruct*> SortedTypes;
-	for (const TPair<UScriptStruct*, ISeinComponentStorage*>& Pair : Subsystem->GetAllComponentStorages())
-	{
-		if (Pair.Key && Pair.Value) SortedTypes.Add(Pair.Key);
-	}
+	TArray<UScriptStruct*> SortedTypes =
+		Subsystem->GetComponentStorageTypes();
 	SortedTypes.Sort([](const UScriptStruct& A, const UScriptStruct& B)
 	{
 		return A.GetFName().Compare(B.GetFName()) < 0;
 	});
 
-	const TMap<UScriptStruct*, ISeinComponentStorage*>& AllStorages = Subsystem->GetAllComponentStorages();
 	for (UScriptStruct* StructType : SortedTypes)
 	{
-		ISeinComponentStorage* const* StorageFound = AllStorages.Find(StructType);
-		if (!StorageFound || !*StorageFound) continue;
-		if (const void* Raw = (*StorageFound)->GetComponentRaw(EntityHandle))
+		const ISeinComponentStorage* Storage =
+			Subsystem->GetComponentStorageRaw(StructType);
+		if (!Storage) continue;
+		if (const void* Raw =
+			Storage->GetComponentRaw(EntityHandle))
 		{
 			FInstancedStruct Inst;
 			Inst.InitializeAs(StructType, static_cast<const uint8*>(Raw));

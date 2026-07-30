@@ -293,7 +293,9 @@ public:
 		TArray<FSeinEntityHandle> ReadyProducers;
 		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, FSeinEntity&)
 		{
-			FSeinProductionComponent* ProdComp = World.GetComponent<FSeinProductionComponent>(Handle);
+			FSeinProductionComponent* ProdComp =
+				World.GetComponentMutable<
+					FSeinProductionComponent>(Handle);
 			if (!ProdComp || ProdComp->Queue.Num() == 0) return;
 
 			// Advance progress unless we're already parked at 100% waiting on cap.

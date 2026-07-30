@@ -96,7 +96,7 @@ void USeinSelectionBPFL::SeinSetSelectable(const UObject* WorldContextObject, FS
 	{
 		return;
 	}
-	if (FSeinEntity* E = Sub->GetEntity(Entity))
+	if (FSeinEntity* E = Sub->GetEntityMutable(Entity))
 	{
 		E->SetSelectable(bSelectable);
 	}

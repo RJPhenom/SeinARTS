@@ -6,6 +6,28 @@ namespace UE::SeinARTSTests
 {
 	struct FNavigationAStarTestAccess
 	{
+		struct FStaticGridSnapshot
+		{
+			int32 Width = 0;
+			int32 Height = 0;
+			FFixedPoint CellSize = FFixedPoint::Zero;
+			FFixedVector Origin = FFixedVector::ZeroVector;
+			FGuid StaticGridDigest;
+			TArray<uint8> CellCost;
+			TArray<FFixedPoint> CellHeight;
+			TArray<uint8> CellTerrainType;
+			TArray<uint8> CellConnections;
+			TArray<uint8> WallDistance;
+			TArray<int32> CellComponent;
+		};
+
+		static void InstallDynamicBlockers(
+			USeinNavigationAStar& Nav,
+			const TArray<FSeinDynamicBlocker>& Blockers)
+		{
+			Nav.SetDynamicBlockers(Blockers);
+		}
+
 		static void SeedSerialOverlay(USeinNavigationAStar& Nav, int32 NumCells)
 		{
 			Nav.MainScratch.DynamicBlocked.SetNumZeroed(NumCells);
@@ -20,6 +42,44 @@ namespace UE::SeinARTSTests
 			return Nav.MainScratch.DynamicBlocked.IsEmpty()
 				&& Dirty.Min.X > Dirty.Max.X
 				&& !Nav.MainScratch.bOverlayReuseValid;
+		}
+
+		static FStaticGridSnapshot CaptureStaticGrid(
+			const USeinNavigationAStar& Nav)
+		{
+			FStaticGridSnapshot Snapshot;
+			Snapshot.Width = Nav.Width;
+			Snapshot.Height = Nav.Height;
+			Snapshot.CellSize = Nav.CellSize;
+			Snapshot.Origin = Nav.Origin;
+			Snapshot.StaticGridDigest = Nav.StaticGridDigest;
+			Snapshot.CellCost = Nav.CellCost;
+			Snapshot.CellHeight = Nav.CellHeight;
+			Snapshot.CellTerrainType = Nav.CellTerrainType;
+			Snapshot.CellConnections = Nav.CellConnections;
+			Snapshot.WallDistance = Nav.WallDistance;
+			Snapshot.CellComponent = Nav.CellComponent;
+			return Snapshot;
+		}
+
+		static bool MatchesStaticGrid(
+			const USeinNavigationAStar& Nav,
+			const FStaticGridSnapshot& Expected)
+		{
+			return Nav.Width == Expected.Width
+				&& Nav.Height == Expected.Height
+				&& Nav.CellSize == Expected.CellSize
+				&& Nav.Origin == Expected.Origin
+				&& Nav.StaticGridDigest
+					== Expected.StaticGridDigest
+				&& Nav.CellCost == Expected.CellCost
+				&& Nav.CellHeight == Expected.CellHeight
+				&& Nav.CellTerrainType
+					== Expected.CellTerrainType
+				&& Nav.CellConnections
+					== Expected.CellConnections
+				&& Nav.WallDistance == Expected.WallDistance
+				&& Nav.CellComponent == Expected.CellComponent;
 		}
 	};
 
@@ -62,6 +122,7 @@ namespace UE::SeinARTSTests
 		{
 			LevelData.TestDimensions = Dimensions;
 			const int32 NumCells = Dimensions.X * Dimensions.Y;
+			LevelData.TestSurfaces.SetNumZeroed(NumCells);
 			TArray<uint8>& Channel = LevelData.LayerChannels.FindOrAdd(TEXT("Nav"));
 			Channel.SetNumZeroed(2 * NumCells);
 			for (int32 Index = 0; Index < NumCells; ++Index)
@@ -69,6 +130,57 @@ namespace UE::SeinARTSTests
 				Channel[Index] = 1; // passable cost; connections are irrelevant here
 			}
 		}
+	}
+
+	TEST(RejectedGridAdoptionPreservesPriorTopology,
+		"SeinARTS.Unit.Navigation")
+	{
+		USeinNavigationAStar* Nav =
+			NewObject<USeinNavigationAStar>();
+		USeinLevelDataTestDouble* Valid =
+			NewObject<USeinLevelDataTestDouble>();
+		ASSERT_THAT(IsNotNull(Nav));
+		ASSERT_THAT(IsNotNull(Valid));
+
+		ConfigureNavGrid(*Valid, FIntPoint(2, 3));
+		ASSERT_THAT(IsTrue(
+			Nav->LoadFromSubstrate(*Valid).IsAdopted()));
+		const FNavigationAStarTestAccess::FStaticGridSnapshot
+			Baseline =
+				FNavigationAStarTestAccess::CaptureStaticGrid(
+					*Nav);
+
+		USeinLevelDataTestDouble* Missing =
+			NewObject<USeinLevelDataTestDouble>();
+		ASSERT_THAT(IsNotNull(Missing));
+		Missing->TestDimensions = FIntPoint(2, 3);
+		Missing->TestSurfaces.SetNumZeroed(6);
+		const FSeinStaticEnvironmentAdoptionResult MissingResult =
+			Nav->LoadFromSubstrate(*Missing);
+		ASSERT_THAT(IsTrue(MissingResult.IsRejected()));
+		ASSERT_THAT(IsTrue(
+			MissingResult.Detail.Contains(
+				TEXT("missing the required Nav channel"))));
+		ASSERT_THAT(IsTrue(
+			FNavigationAStarTestAccess::MatchesStaticGrid(
+				*Nav, Baseline)));
+
+		USeinLevelDataTestDouble* Malformed =
+			NewObject<USeinLevelDataTestDouble>();
+		ASSERT_THAT(IsNotNull(Malformed));
+		Malformed->TestDimensions = FIntPoint(2, 3);
+		Malformed->TestSurfaces.SetNumZeroed(6);
+		Malformed->LayerChannels.Add(
+			TEXT("Nav"), { 0x01 });
+		const FSeinStaticEnvironmentAdoptionResult MalformedResult =
+			Nav->LoadFromSubstrate(*Malformed);
+		ASSERT_THAT(IsTrue(MalformedResult.IsRejected()));
+		ASSERT_THAT(IsTrue(
+			MalformedResult.Detail.Contains(
+				TEXT("Nav channel is malformed"))));
+		ASSERT_THAT(IsTrue(
+			FNavigationAStarTestAccess::MatchesStaticGrid(
+				*Nav, Baseline)));
 	}
 
 	TEST(DynamicBlockersInvalidateExactly, "SeinARTS.Unit.Navigation")
@@ -82,26 +194,26 @@ namespace UE::SeinARTSTests
 
 		TArray<FSeinDynamicBlocker> Blockers;
 		Blockers.Add(MakeBlocker());
-		Nav->SetDynamicBlockers(Blockers);
+		FNavigationAStarTestAccess::InstallDynamicBlockers(*Nav, Blockers);
 		ASSERT_THAT(AreEqual(1, MutationCount));
 
-		Nav->SetDynamicBlockers(Blockers);
+		FNavigationAStarTestAccess::InstallDynamicBlockers(*Nav, Blockers);
 		ASSERT_THAT(AreEqual(1, MutationCount));
 
 		Blockers[0].EntityCenter.X += FFixedPoint::SmallNumber;
-		Nav->SetDynamicBlockers(Blockers);
+		FNavigationAStarTestAccess::InstallDynamicBlockers(*Nav, Blockers);
 		ASSERT_THAT(AreEqual(2, MutationCount));
 
 		Blockers[0].EntityRotation.Z = FFixedPoint::SmallNumber;
-		Nav->SetDynamicBlockers(Blockers);
+		FNavigationAStarTestAccess::InstallDynamicBlockers(*Nav, Blockers);
 		ASSERT_THAT(AreEqual(3, MutationCount));
 
 		Blockers[0].Shape.HalfExtentX += FFixedPoint::SmallNumber;
-		Nav->SetDynamicBlockers(Blockers);
+		FNavigationAStarTestAccess::InstallDynamicBlockers(*Nav, Blockers);
 		ASSERT_THAT(AreEqual(4, MutationCount));
 
 		Blockers[0].Owner.Generation += 1;
-		Nav->SetDynamicBlockers(Blockers);
+		FNavigationAStarTestAccess::InstallDynamicBlockers(*Nav, Blockers);
 		ASSERT_THAT(AreEqual(5, MutationCount));
 
 		TArray<FSeinDynamicBlocker> XY;
@@ -110,14 +222,14 @@ namespace UE::SeinARTSTests
 		Swap(YX[0].EntityCenter.X, YX[0].EntityCenter.Y);
 		ASSERT_THAT(AreEqual(LegacyBlockerHash(XY), LegacyBlockerHash(YX)));
 
-		Nav->SetDynamicBlockers(XY);
-		Nav->SetDynamicBlockers(YX);
+		FNavigationAStarTestAccess::InstallDynamicBlockers(*Nav, XY);
+		FNavigationAStarTestAccess::InstallDynamicBlockers(*Nav, YX);
 		ASSERT_THAT(AreEqual(7, MutationCount));
 
 		Blockers.Reset();
-		Nav->SetDynamicBlockers(Blockers);
+		FNavigationAStarTestAccess::InstallDynamicBlockers(*Nav, Blockers);
 		ASSERT_THAT(AreEqual(8, MutationCount));
-		Nav->SetDynamicBlockers(Blockers);
+		FNavigationAStarTestAccess::InstallDynamicBlockers(*Nav, Blockers);
 		ASSERT_THAT(AreEqual(8, MutationCount));
 
 		Nav->OnNavigationMutated.Remove(MutationHandle);
@@ -131,13 +243,15 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsNotNull(LevelData));
 
 		ConfigureNavGrid(*LevelData, FIntPoint(2, 3));
-		ASSERT_THAT(IsTrue(Nav->LoadFromSubstrate(*LevelData)));
+		ASSERT_THAT(IsTrue(
+			Nav->LoadFromSubstrate(*LevelData).IsAdopted()));
 		FNavigationAStarTestAccess::SeedSerialOverlay(*Nav, 6);
 
 		// The linear count remains six, but the row stride and dirty-rect
 		// coordinate space change. Retained bytes must not enter the new grid.
 		ConfigureNavGrid(*LevelData, FIntPoint(3, 2));
-		ASSERT_THAT(IsTrue(Nav->LoadFromSubstrate(*LevelData)));
+		ASSERT_THAT(IsTrue(
+			Nav->LoadFromSubstrate(*LevelData).IsAdopted()));
 		ASSERT_THAT(IsTrue(FNavigationAStarTestAccess::IsSerialOverlayReset(*Nav)));
 	}
 }

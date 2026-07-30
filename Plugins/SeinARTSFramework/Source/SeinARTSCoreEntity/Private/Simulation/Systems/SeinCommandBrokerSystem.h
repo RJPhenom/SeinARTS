@@ -550,7 +550,9 @@ public:
 
 		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, FSeinEntity& Entity)
 		{
-			FSeinCommandBrokerData* Broker = World.GetComponent<FSeinCommandBrokerData>(Handle);
+			FSeinCommandBrokerData* Broker =
+				World.GetComponentMutable<FSeinCommandBrokerData>(
+					Handle);
 			if (!Broker)
 			{
 				// LOOSE-HOME-RETURN (re-seek for the un-brokered). A unit that was never ordered has no

@@ -134,35 +134,42 @@ FSeinPlayerID USeinFogOfWarBPFL::SeinGetLocalObserver(const UObject* WorldContex
 
 namespace
 {
-	/** Shared resolver: validate context + entity, return the mutable
-	 *  FSeinFogVisibilityComponent ptr (where FogVisibilityLayerMask lives).
-	 *  Returns nullptr on any failure (entity invalid, no sim, no fog-vis
-	 *  component authored on the entity). */
-	static FSeinFogVisibilityComponent* FindMutableFogVisibility(
+	static USeinWorldSubsystem* FindFogWorld(
 		const UObject* WorldContextObject,
-		FSeinEntityHandle Entity,
-		const TCHAR* MutationOperation = nullptr)
+		FSeinEntityHandle Entity)
 	{
 		if (!WorldContextObject || !Entity.IsValid()) return nullptr;
 		UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::ReturnNull);
 		if (!World) return nullptr;
-		USeinWorldSubsystem* Sim = World->GetSubsystem<USeinWorldSubsystem>();
+		return World->GetSubsystem<USeinWorldSubsystem>();
+	}
+
+	static FSeinFogVisibilityComponent* FindMutableFogVisibility(
+		const UObject* WorldContextObject,
+		FSeinEntityHandle Entity,
+		const TCHAR* MutationOperation)
+	{
+		USeinWorldSubsystem* Sim =
+			FindFogWorld(WorldContextObject, Entity);
 		if (!Sim) return nullptr;
-		if (MutationOperation
-			&& !Sim->RequireStateMutationAuthorization(MutationOperation))
+		if (!Sim->RequireStateMutationAuthorization(
+			MutationOperation))
 		{
 			return nullptr;
 		}
-		ISeinComponentStorage* Storage = Sim->GetComponentStorageRaw(FSeinFogVisibilityComponent::StaticStruct());
-		if (!Storage) return nullptr;
-		return static_cast<FSeinFogVisibilityComponent*>(Storage->GetComponentRaw(Entity));
+		return Sim->GetComponentMutable<
+			FSeinFogVisibilityComponent>(Entity);
 	}
 }
 
 int32 USeinFogOfWarBPFL::SeinGetEntityEmissionMask(const UObject* WorldContextObject,
 	FSeinEntityHandle Entity)
 {
-	const FSeinFogVisibilityComponent* FogVis = FindMutableFogVisibility(WorldContextObject, Entity);
+	const USeinWorldSubsystem* Sim =
+		FindFogWorld(WorldContextObject, Entity);
+	const FSeinFogVisibilityComponent* FogVis = Sim
+		? Sim->GetComponent<FSeinFogVisibilityComponent>(Entity)
+		: nullptr;
 	return FogVis ? static_cast<int32>(FogVis->FogVisibilityLayerMask) : 0;
 }
 

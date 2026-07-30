@@ -43,11 +43,13 @@ public:
 		World.ProcessPendingEffectApplies();
 
 		TArray<FSeinEntityHandle> EffectEntities;
-		if (ISeinComponentStorage* Storage =
+		if (const ISeinComponentStorage* Storage =
 			World.GetComponentStorageRaw(FSeinActiveEffectsComponent::StaticStruct()))
 		{
-			FSeinEntityPool& Pool = World.GetEntityPool();
-			Storage->ForEachLiveComponent([&](FSeinEntityHandle Handle, void* RawComponent)
+			const FSeinEntityPool& Pool = World.GetEntityPool();
+			Storage->ForEachLiveComponent([&](
+				FSeinEntityHandle Handle,
+				const void* RawComponent)
 			{
 				const FSeinActiveEffectsComponent* EffectsComp = static_cast<const FSeinActiveEffectsComponent*>(RawComponent);
 				if (EffectsComp && EffectsComp->ActiveEffects.Num() > 0
@@ -92,10 +94,13 @@ private:
 	{
 		if (Scope == ESeinModifierScope::Instance)
 		{
-			FSeinActiveEffectsComponent* Component = World.GetComponent<FSeinActiveEffectsComponent>(Entity);
+			FSeinActiveEffectsComponent* Component =
+				World.GetComponentMutable<
+					FSeinActiveEffectsComponent>(Entity);
 			return Component ? &Component->ActiveEffects : nullptr;
 		}
-		FSeinPlayerState* State = World.GetPlayerState(PlayerID);
+		FSeinPlayerState* State =
+			World.GetPlayerStateMutable(PlayerID);
 		if (!State)
 		{
 			return nullptr;

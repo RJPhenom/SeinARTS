@@ -180,7 +180,8 @@ namespace UE::SeinARTSTests
 				SetPaidCost(*PaidAbility);
 			}
 
-			if (FSeinPlayerState* StateB = World->GetPlayerState(PayerB))
+			if (FSeinPlayerState* StateB =
+				World->GetPlayerStateMutable(PayerB))
 			{
 				StateB->SetResource(
 					SeinARTSTags::Resource, FFixedPoint::Zero);
@@ -207,7 +208,8 @@ namespace UE::SeinARTSTests
 		{
 			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
 			World->SetEntityOwner(Entity, PayerB);
-			FSeinEntity* SimEntity = World->GetEntity(Entity);
+			FSeinEntity* SimEntity =
+				World->GetEntityMutable(Entity);
 			ASSERT_THAT(IsNotNull(SimEntity));
 			SimEntity->Transform.SetLocation(FarTarget);
 		}

@@ -8,6 +8,8 @@
 #include "Simulation/SeinWorldSubsystem.h"
 #include "TestTypes/SeinCommandSchemaTestTypes.h"
 
+#include <type_traits>
+
 namespace UE::SeinARTSTests
 {
 	namespace
@@ -549,6 +551,15 @@ namespace UE::SeinARTSTests
 		const FSeinFrozenCanonicalStateContributor* PreviousFrozen =
 			FindFrozen(PreviousSnapshot, Descriptor.Key);
 		ASSERT_THAT(IsNotNull(PreviousFrozen));
+		ASSERT_THAT(IsTrue(
+			FSeinCanonicalStateRegistry::PrepareWorldBindings(
+				PreviousSnapshot,
+				{
+					*World,
+					ESeinCanonicalStateWorldBindingDisposition::
+						Provisional
+				},
+				Error)));
 		const uint64 PreviousToken = PreviousFrozen
 			? PreviousFrozen->ProviderToken
 			: 0;
@@ -700,6 +711,15 @@ namespace UE::SeinARTSTests
 		const FSeinCanonicalStateSchemaSnapshot Snapshot =
 			FSeinCanonicalStateRegistry::CaptureSchemaSnapshot(&Error);
 		ASSERT_THAT(IsTrue(Snapshot.IsValid()));
+		ASSERT_THAT(IsTrue(
+			FSeinCanonicalStateRegistry::PrepareWorldBindings(
+				Snapshot,
+				{
+					*World,
+					ESeinCanonicalStateWorldBindingDisposition::
+						Provisional
+				},
+				Error)));
 		TestRunner->AddExpectedError(
 			TEXT("may not unregister during a provider callback transaction"),
 			EAutomationExpectedErrorFlags::Contains,
@@ -716,6 +736,75 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(bMutationRejected));
 		ASSERT_THAT(IsTrue(bHandleRemainedValid));
 		ASSERT_THAT(IsTrue(Later.IsValid()));
+	}
+
+	TEST(CanonicalStateWorldPreparationCannotBorrowBootstrapMutationCapability,
+		"SeinARTS.Unit.CoreEntity.CanonicalState.Registry")
+	{
+		bool bPreparationCalled = false;
+		FSeinEntityHandle UnauthorizedEntity;
+		FSeinCanonicalStateContributorOps Ops =
+			MakePersistentOps();
+		Ops.PrepareWorldBinding =
+			[&](
+				const FSeinCanonicalStateWorldBindingContext& Context,
+				FString&)
+		{
+			static_assert(std::is_const_v<
+				std::remove_reference_t<
+					decltype(Context.Services)>>,
+				"World-binding preparation must expose only const Core services.");
+			bPreparationCalled = true;
+			// Even a trusted native provider that deliberately resolves the
+			// mutable subsystem through UWorld cannot borrow bootstrap's
+			// applying authority while the preparation guard is active.
+			UWorld* ProviderWorld =
+				Context.Services.GetWorld();
+			USeinWorldSubsystem* MutableServices =
+				ProviderWorld
+					? ProviderWorld->GetSubsystem<
+						USeinWorldSubsystem>()
+					: nullptr;
+			if (MutableServices)
+			{
+				UnauthorizedEntity =
+					MutableServices->SpawnAbstractEntity(
+					FFixedTransform(),
+					FSeinPlayerID(0));
+			}
+			return true;
+		};
+
+		FString Error;
+		FSeinCanonicalStateRegistrationHandle Provider =
+			FSeinCanonicalStateRegistry::Register(
+				StateTestOwner,
+				MakeDescriptor(
+					TEXT("WorldPreparationReadOnly")),
+				MoveTemp(Ops),
+				&Error);
+		ASSERT_THAT(IsTrue(Provider.IsValid()));
+
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<
+				USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+		TestRunner->AddExpectedError(
+			TEXT("SpawnAbstractEntity rejected outside bootstrap Applying or deterministic simulation context"),
+			EAutomationExpectedErrorFlags::Contains,
+			1,
+			false);
+		ASSERT_THAT(IsTrue(
+			SeinTestMatchBootstrap::Materialize(
+				*World,
+				FSeinMatchSettings(),
+				0x50524550,
+				TEXT("CanonicalState.WorldPreparationReadOnly"),
+				&Error)));
+		ASSERT_THAT(IsTrue(bPreparationCalled));
+		ASSERT_THAT(IsFalse(
+			UnauthorizedEntity.IsValid()));
 	}
 
 	TEST(CanonicalStateProviderWithdrawalTerminatesFrozenWorld,
@@ -848,5 +937,104 @@ namespace UE::SeinARTSTests
 			FSeinCanonicalStateRegistry::Unregister(Hostile)));
 		ASSERT_THAT(IsTrue(
 			FSeinCanonicalStateRegistry::Unregister(Target)));
+	}
+
+	TEST(CanonicalStateCommitCannotBorrowCoreRestoreAuthority,
+		"SeinARTS.Unit.Snapshot.Latent.ProviderTransaction")
+	{
+		bool bCommitCalled = false;
+		FSeinEntityHandle UnauthorizedEntity;
+		FSeinCanonicalStateContributorOps Ops =
+			MakePersistentOps();
+		Ops.CommitRestore =
+			[&](
+				FSeinCanonicalStateCommitContext& Context,
+				TUniquePtr<
+					ISeinCanonicalStateRestoreStage>&&)
+		{
+			static_assert(std::is_const_v<
+				std::remove_reference_t<
+					decltype(Context.World)>>,
+				"Canonical contributor commits must receive const Core services.");
+			bCommitCalled = true;
+
+			// A trusted native callback can deliberately resolve the mutable
+			// subsystem through UWorld, but the callback guard must still
+			// deny every sanctioned Core mutation front door.
+			UWorld* ProviderWorld = Context.World.GetWorld();
+			USeinWorldSubsystem* MutableWorld =
+				ProviderWorld
+					? ProviderWorld->GetSubsystem<
+						USeinWorldSubsystem>()
+					: nullptr;
+			if (MutableWorld)
+			{
+				UnauthorizedEntity =
+					MutableWorld->SpawnAbstractEntity(
+						FFixedTransform(),
+						FSeinPlayerID(0));
+			}
+		};
+
+		FString Error;
+		FSeinCanonicalStateRegistrationHandle Provider =
+			FSeinCanonicalStateRegistry::Register(
+				StateTestOwner,
+				MakeDescriptor(
+					TEXT("CommitRestoreReadOnly")),
+				MoveTemp(Ops),
+				&Error);
+		ASSERT_THAT(IsTrue(Provider.IsValid()));
+
+		{
+			FActorTestSpawner Spawner;
+			USeinWorldSubsystem* World =
+				Spawner.GetWorld().GetSubsystem<
+					USeinWorldSubsystem>();
+			ASSERT_THAT(IsNotNull(World));
+			ASSERT_THAT(IsTrue(
+				SeinTestMatchBootstrap::Materialize(
+					*World,
+					FSeinMatchSettings(),
+					0x434F4D4D,
+					TEXT(
+						"CanonicalState.CommitRestoreReadOnly"),
+					&Error)));
+			ASSERT_THAT(IsTrue(
+				SeinTestMatchBootstrap::Start(
+					*World, &Error)));
+
+			FGuid RootBefore;
+			ASSERT_THAT(IsTrue(
+				World->ComputeCanonicalStateRoot(
+					RootBefore, Error)));
+			FSeinWorldSnapshot Snapshot;
+			World->CaptureSnapshot(Snapshot);
+			ASSERT_THAT(AreEqual(
+				FSeinWorldSnapshot::CurrentVersion,
+				Snapshot.SnapshotVersion));
+
+			TestRunner->AddExpectedError(
+				TEXT("SpawnAbstractEntity rejected outside bootstrap Applying or deterministic simulation context"),
+				EAutomationExpectedErrorFlags::Contains,
+				1,
+				false);
+			ASSERT_THAT(IsTrue(
+				SeinTestSnapshotRestore::RestoreTrusted(
+					*World, Snapshot)));
+			ASSERT_THAT(IsTrue(bCommitCalled));
+			ASSERT_THAT(IsFalse(
+				UnauthorizedEntity.IsValid()));
+
+			FGuid RootAfter;
+			ASSERT_THAT(IsTrue(
+				World->ComputeCanonicalStateRoot(
+					RootAfter, Error)));
+			ASSERT_THAT(IsTrue(RootAfter == RootBefore));
+		}
+
+		ASSERT_THAT(IsTrue(
+			FSeinCanonicalStateRegistry::Unregister(
+				Provider)));
 	}
 }

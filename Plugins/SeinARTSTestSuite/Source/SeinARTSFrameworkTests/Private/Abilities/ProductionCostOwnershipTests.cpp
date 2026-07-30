@@ -282,7 +282,8 @@ namespace UE::SeinARTSTests
 					ESeinOutOfRangeBehavior::AutoMoveThen;
 				SetSingleResourceCost(*PaidAbility);
 			}
-			if (FSeinPlayerState* State = World->GetPlayerState(Player))
+			if (FSeinPlayerState* State =
+				World->GetPlayerStateMutable(Player))
 			{
 				State->SetResource(
 					SeinARTSTags::Resource, FFixedPoint::Zero);
@@ -316,7 +317,8 @@ namespace UE::SeinARTSTests
 
 		{
 			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
-			FSeinPlayerState* State = World->GetPlayerState(Player);
+			FSeinPlayerState* State =
+				World->GetPlayerStateMutable(Player);
 			ASSERT_THAT(IsNotNull(State));
 			State->SetResource(
 				SeinARTSTags::Resource, FFixedPoint::FromInt(StartingBalance));
@@ -338,7 +340,8 @@ namespace UE::SeinARTSTests
 
 		{
 			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
-			FSeinEntity* SimEntity = World->GetEntity(Entity);
+			FSeinEntity* SimEntity =
+				World->GetEntityMutable(Entity);
 			ASSERT_THAT(IsNotNull(SimEntity));
 			SimEntity->Transform.SetLocation(FarTarget);
 		}
@@ -645,7 +648,8 @@ namespace UE::SeinARTSTests
 			Ability->EnqueueProduction(ASeinProductionCostTestActor::StaticClass());
 			Ability->CancelAbility();
 			World->SetEntityOwner(Producer, NewOwner);
-			FSeinPlayerState* State = World->GetPlayerState(Player);
+			FSeinPlayerState* State =
+				World->GetPlayerStateMutable(Player);
 			ASSERT_THAT(IsNotNull(State));
 			State->SetResource(SeinARTSTags::Resource, FFixedPoint::Zero);
 		}
@@ -668,7 +672,8 @@ namespace UE::SeinARTSTests
 
 		{
 			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
-			FSeinPlayerState* State = World->GetPlayerState(Player);
+			FSeinPlayerState* State =
+				World->GetPlayerStateMutable(Player);
 			ASSERT_THAT(IsNotNull(State));
 			State->SetResource(
 				SeinARTSTags::Resource, FFixedPoint::FromInt(AbilityCost));

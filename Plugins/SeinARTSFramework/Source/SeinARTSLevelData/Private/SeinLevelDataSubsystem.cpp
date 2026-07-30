@@ -17,6 +17,7 @@
 void USeinLevelDataSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
+	bInitialRuntimeDataPrepared = false;
 
 	// Resolve the configured level-data class; fall back to the shipped default
 	// if the setting is empty or points to a stale / abstract class.
@@ -43,7 +44,7 @@ void USeinLevelDataSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		LevelData = NewObject<USeinLevelData>(this, LevelDataClass, TEXT("SeinLevelData"));
 		if (LevelData)
 		{
-			LevelData->OnInitialized(GetWorld());
+			LevelData->InitializeForWorld(GetWorld());
 		}
 		else
 		{
@@ -67,12 +68,14 @@ void USeinLevelDataSubsystem::Deinitialize()
 void USeinLevelDataSubsystem::ReleaseModuleOwnedStateForModuleUnload()
 {
 	check(IsInGameThread());
+	OnInitialLevelDataPrepared.Clear();
 	if (LevelData)
 	{
 		LevelData->RequestCancelBake();
-		LevelData->OnDeinitialized();
+		LevelData->DeinitializeFromWorld();
 	}
 	LevelData = nullptr;
+	bInitialRuntimeDataPrepared = false;
 }
 
 bool USeinLevelDataSubsystem::DoesSupportWorldType(const EWorldType::Type WorldType) const
@@ -86,22 +89,64 @@ bool USeinLevelDataSubsystem::DoesSupportWorldType(const EWorldType::Type WorldT
 void USeinLevelDataSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 {
 	Super::OnWorldBeginPlay(InWorld);
-	LoadBakedAsset(InWorld);
+	EnsureInitialRuntimeDataPrepared(InWorld);
 }
 
-void USeinLevelDataSubsystem::LoadBakedAsset(UWorld& World)
+bool USeinLevelDataSubsystem::EnsureInitialRuntimeDataPrepared(UWorld& World)
 {
-	if (!LevelData) return;
+	check(IsInGameThread());
+	if (bInitialRuntimeDataPrepared)
+	{
+		return true;
+	}
+	if (&World != GetWorld())
+	{
+		UE_LOG(LogSeinLevelDataSubsystem, Error,
+			TEXT("Initial level-data preparation targeted a different world."));
+		return false;
+	}
+
+	if (!LoadBakedAsset(World))
+	{
+		return false;
+	}
+	bInitialRuntimeDataPrepared = true;
+	OnInitialLevelDataPrepared.Broadcast();
+	return true;
+}
+
+bool USeinLevelDataSubsystem::LoadBakedAsset(UWorld& World)
+{
+	if (!LevelData)
+	{
+		return true;
+	}
 
 	for (TActorIterator<ASeinLevelVolume> It(&World); It; ++It)
 	{
-		if (USeinLevelDataAsset* Asset = It->BakedAsset.LoadSynchronous())
+		if (It->BakedAsset.IsNull())
 		{
-			LevelData->LoadFromAsset(Asset);
-			return;
+			continue;
 		}
+		USeinLevelDataAsset* Asset = It->BakedAsset.LoadSynchronous();
+		if (!Asset)
+		{
+			UE_LOG(LogSeinLevelDataSubsystem, Error,
+				TEXT("Initial baked level-data asset '%s' could not be loaded."),
+				*It->BakedAsset.ToString());
+			return false;
+		}
+		if (!LevelData->LoadFromAsset(Asset))
+		{
+			UE_LOG(LogSeinLevelDataSubsystem, Error,
+				TEXT("Configured level-data implementation rejected initial asset '%s'."),
+				*Asset->GetPathName());
+			return false;
+		}
+		return true;
 	}
 	// No baked asset — substrate stays empty (HasRuntimeData() false).
+	return true;
 }
 
 USeinLevelData* USeinLevelDataSubsystem::GetLevelDataForWorld(const UObject* WorldContextObject)

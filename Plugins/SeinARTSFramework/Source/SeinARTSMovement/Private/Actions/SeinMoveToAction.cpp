@@ -140,7 +140,7 @@ void USeinMoveToAction::Initialize(const FFixedVector& InDestination)
 
 bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& World)
 {
-	FSeinEntity* Entity = World.GetEntity(OwnerEntity);
+	FSeinEntity* Entity = World.GetEntityMutable(OwnerEntity);
 	if (!Entity)
 	{
 		Fail(static_cast<uint8>(ESeinMoveFailureReason::EntityDestroyed));
@@ -155,7 +155,9 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 	// repath cadence, and footprint radius. (Most entity classes will author both,
 	// but a "no nav" entity authored only with a movement component should
 	// still be drivable by abilities that pass an explicit destination.)
-	FSeinMovementComponent* MoveComp = World.GetComponent<FSeinMovementComponent>(OwnerEntity);
+	FSeinMovementComponent* MoveComp =
+		World.GetComponentMutable<FSeinMovementComponent>(
+			OwnerEntity);
 	if (!MoveComp)
 	{
 		Fail(static_cast<uint8>(ESeinMoveFailureReason::NoMovementComponent));
@@ -1158,13 +1160,16 @@ void USeinMoveToAction::FinalizeMovementOnce()
 
 	if (EndingMovement)
 	{
-		if (FSeinEntity* Entity = Sim->GetEntity(OwnerEntity))
+		if (FSeinEntity* Entity =
+			Sim->GetEntityMutable(OwnerEntity))
 		{
 			EndingMovement->OnMoveEnd(*Entity);
 		}
 	}
 
-	FSeinMovementComponent* MoveComp = Sim->GetComponent<FSeinMovementComponent>(OwnerEntity);
+	FSeinMovementComponent* MoveComp =
+		Sim->GetComponentMutable<FSeinMovementComponent>(
+			OwnerEntity);
 	if (!MoveComp) return;
 	MoveComp->bArrivalImminent = false;
 	// Mirror the action lifecycle: action no longer driving the entity →

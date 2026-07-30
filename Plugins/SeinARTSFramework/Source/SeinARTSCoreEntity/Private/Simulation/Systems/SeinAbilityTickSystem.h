@@ -28,7 +28,9 @@ public:
 	{
 		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, FSeinEntity& /*Entity*/)
 		{
-			FSeinAbilityComponent* AbilityComp = World.GetComponent<FSeinAbilityComponent>(Handle);
+			FSeinAbilityComponent* AbilityComp =
+				World.GetComponentMutable<FSeinAbilityComponent>(
+					Handle);
 			if (!AbilityComp)
 			{
 				return;

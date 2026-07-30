@@ -20,6 +20,7 @@
 #include "Types/Entity.h"
 #include "Types/FixedPoint.h"
 #include "SeinNavigation.h"
+#include "SeinNavigationSubsystem.h"
 #include "Logging/LogMacros.h"
 
 // LogSeinNavBlockerStamp (declared in SeinARTSNavigationLog.h): diagnostic log for
@@ -53,13 +54,24 @@
 class FSeinNavBlockerStampSystem final : public ISeinSystem
 {
 public:
-	explicit FSeinNavBlockerStampSystem(USeinNavigation* InNav)
-		: Nav(InNav) {}
+	FSeinNavBlockerStampSystem(
+		USeinNavigationSubsystem* InOwner,
+		USeinNavigation* InNav)
+		: Owner(InOwner)
+		, Nav(InNav)
+	{
+	}
 
 	virtual void Tick(FFixedPoint /*DeltaTime*/, USeinWorldSubsystem& World) override
 	{
 		USeinNavigation* NavPtr = Nav.Get();
 		if (!NavPtr) return;
+		USeinNavigationSubsystem* OwnerPtr = Owner.Get();
+		if (!OwnerPtr
+			|| !OwnerPtr->ValidateCommittedCanonicalStateBinding())
+		{
+			return;
+		}
 
 		Blockers.Reset();
 
@@ -68,17 +80,19 @@ public:
 		// call; resolving the storage once turns the per-entity cost into
 		// a single indexed access. Cheap on its own, compounding with the
 		// dirty-bit work below.
-		ISeinComponentStorage* ExtentsStorage =
+		const ISeinComponentStorage* ExtentsStorage =
 			World.GetComponentStorageRaw(FSeinExtentsComponent::StaticStruct());
 		// Synthetic-radial fallback (no Extents authored) reads
 		// FallbackFootprintRadius from the navigation component. The nav
 		// component is the authoritative source for footprint info when
 		// Extents is absent — matches the runtime cascade used by
 		// USeinMovement::ResolveCollisionRadius (Extents → NavComp → 0).
-		ISeinComponentStorage* NavStorage =
+		const ISeinComponentStorage* NavStorage =
 			World.GetComponentStorageRaw(FSeinNavigationComponent::StaticStruct());
 
-		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, FSeinEntity& Entity)
+		World.GetEntityPool().ForEachEntity([&](
+			FSeinEntityHandle Handle,
+			const FSeinEntity& Entity)
 		{
 			const FFixedVector EntityPos = Entity.Transform.GetLocation();
 			const FFixedQuaternion EntityRot = Entity.Transform.Rotation;
@@ -161,6 +175,7 @@ public:
 	}
 
 private:
+	TWeakObjectPtr<USeinNavigationSubsystem> Owner;
 	TWeakObjectPtr<USeinNavigation> Nav;
 	TArray<FSeinDynamicBlocker> Blockers;
 };

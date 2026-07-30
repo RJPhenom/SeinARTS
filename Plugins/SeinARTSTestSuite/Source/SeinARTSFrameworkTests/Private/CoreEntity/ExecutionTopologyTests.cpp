@@ -4,6 +4,8 @@
 #include "Containers/Ticker.h"
 #include "Core/SeinTickPhase.h"
 #include "Data/SeinWorldSnapshot.h"
+#include "Serialization/SeinCanonicalStateRegistry.h"
+#include "Settings/PluginSettings.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "TestTypes/SeinAIControllerTestTypes.h"
@@ -459,6 +461,149 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(InvalidationReason.Contains(
 			TEXT("test provider is unloading"))));
 		World->OnExecutionTopologyInvalidated.Remove(Handle);
+	}
+
+	TEST(MidMatchConfigMutationFailStopsBeforeNextTick,
+		"SeinARTS.Unit.CoreEntity.ExecutionTopology")
+	{
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		USeinARTSCoreSettings* Settings =
+			GetMutableDefault<USeinARTSCoreSettings>();
+		ASSERT_THAT(IsNotNull(World));
+		ASSERT_THAT(IsNotNull(Settings));
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Materialize(
+			*World, FSeinMatchSettings(), 0,
+			TEXT("ExecutionTopologyConfigFreeze"))));
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World)));
+
+		const int32 SavedPathBudget =
+			Settings->PathRequestsPerTickBudget;
+		ON_SCOPE_EXIT
+		{
+			Settings->PathRequestsPerTickBudget =
+				SavedPathBudget;
+		};
+		Settings->PathRequestsPerTickBudget =
+			SavedPathBudget == MAX_int32
+				? SavedPathBudget - 1
+				: SavedPathBudget + 1;
+
+		int32 InvalidationCount = 0;
+		const FDelegateHandle Handle =
+			World->OnExecutionTopologyInvalidated.AddLambda(
+				[&InvalidationCount](const FString&)
+				{
+					++InvalidationCount;
+				});
+		TestRunner->AddExpectedError(
+			TEXT("Lockstep configuration changed after world initialization"),
+			EAutomationExpectedErrorFlags::Contains, 1, false);
+
+		const int32 TickBefore = World->GetCurrentTick();
+		FTSTicker::GetCoreTicker().Tick(
+			World->GetFixedDeltaTimeSeconds());
+
+		ASSERT_THAT(AreEqual(TickBefore, World->GetCurrentTick()));
+		ASSERT_THAT(IsFalse(World->IsSimulationRunning()));
+		ASSERT_THAT(IsFalse(World->IsExecutionTopologyValid()));
+		ASSERT_THAT(AreEqual(1, InvalidationCount));
+		World->OnExecutionTopologyInvalidated.Remove(Handle);
+	}
+
+	TEST(StaticWorldBindingDriftFailStopsBeforeAnyTickConsumer,
+		"SeinARTS.Unit.CoreEntity.ExecutionTopology")
+	{
+		int32 BindingRevision = 1;
+		FSeinCanonicalStateDescriptor Descriptor;
+		Descriptor.Key.StableDomainId =
+			TEXT("seinarts.tests.fixed-tick-binding");
+		Descriptor.Key.StableContributorId =
+			TEXT("drift-probe");
+		Descriptor.SchemaVersion = 1;
+		Descriptor.ImplementationRevision = 1;
+		Descriptor.Role = ESeinCanonicalStateRole::DerivedCache;
+
+		FSeinCanonicalStateContributorOps Ops;
+		Ops.FreezeWorldBinding =
+			[&BindingRevision](
+				const FSeinCanonicalStateWorldBindingContext&,
+				FString& OutFrame,
+				FString&)
+			{
+				OutFrame = FString::Printf(
+					TEXT("SeinARTSTests.FixedTickBinding\n%d"),
+					BindingRevision);
+				return true;
+			};
+		Ops.StageDerived = [](
+			const FSeinCanonicalStateStageContext&,
+			TUniquePtr<ISeinCanonicalStateRestoreStage>&,
+			FString&)
+			{
+				return true;
+			};
+		Ops.CommitDerived = [](
+			FSeinCanonicalStateCommitContext&,
+			TUniquePtr<ISeinCanonicalStateRestoreStage>&&)
+			{
+			};
+
+		FString RegistrationError;
+		FSeinCanonicalStateRegistrationHandle Provider =
+			FSeinCanonicalStateRegistry::Register(
+				FName(TEXT("SeinFrameworkTests.ExecutionTopology")),
+				Descriptor,
+				MoveTemp(Ops),
+				&RegistrationError);
+		ASSERT_THAT(IsTrue(Provider.IsValid()));
+		ASSERT_THAT(IsTrue(RegistrationError.IsEmpty()));
+
+		TArray<FString> EarlySystemTrace;
+		FTopologyTestSystem EarlySystem(
+			TEXT("seinarts.tests.early-static-consumer"),
+			1u,
+			ESeinTickPhase::PreTick,
+			-100,
+			&EarlySystemTrace);
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+		ASSERT_THAT(IsTrue(World->RegisterSystem(&EarlySystem)));
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Materialize(
+			*World,
+			FSeinMatchSettings(),
+			0,
+			TEXT("ExecutionTopologyStaticBindingGuard"))));
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World)));
+
+		++BindingRevision;
+		int32 InvalidationCount = 0;
+		const FDelegateHandle InvalidationHandle =
+			World->OnExecutionTopologyInvalidated.AddLambda(
+				[&InvalidationCount](const FString&)
+				{
+					++InvalidationCount;
+				});
+		TestRunner->AddExpectedError(
+			TEXT("Canonical StateContract world bindings changed"),
+			EAutomationExpectedErrorFlags::Contains,
+			1,
+			false);
+
+		const int32 TickBefore = World->GetCurrentTick();
+		FTSTicker::GetCoreTicker().Tick(
+			World->GetFixedDeltaTimeSeconds());
+
+		ASSERT_THAT(AreEqual(TickBefore, World->GetCurrentTick()));
+		ASSERT_THAT(IsTrue(EarlySystemTrace.IsEmpty()));
+		ASSERT_THAT(IsFalse(World->IsSimulationRunning()));
+		ASSERT_THAT(IsFalse(World->IsExecutionTopologyValid()));
+		ASSERT_THAT(AreEqual(1, InvalidationCount));
+		World->OnExecutionTopologyInvalidated.Remove(
+			InvalidationHandle);
 	}
 
 	TEST(ModuleUnloadClosesAlreadyInvalidPendingBootstrap,

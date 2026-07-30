@@ -27,6 +27,7 @@ class USeinLevelData;
 namespace UE::SeinARTSTests
 {
 	struct FNavigationAStarTestAccess;
+	struct FNavigationCanonicalStateTestAccess;
 }
 #endif
 
@@ -59,6 +60,7 @@ private:
 
 #if WITH_DEV_AUTOMATION_TESTS
 	friend struct UE::SeinARTSTests::FNavigationAStarTestAccess;
+	friend struct UE::SeinARTSTests::FNavigationCanonicalStateTestAccess;
 #endif
 
 	/** Open-list node, kept as a class-private nested type so the search heap
@@ -234,6 +236,12 @@ public:
 	// ----------------------------------------------------------------------
 
 	virtual bool HasRuntimeData() const override { return CellCost.Num() > 0; }
+	virtual bool ComputeStaticEnvironmentDigest(
+		FGuid& OutDigest,
+		FString& OutError) const override;
+	virtual bool ComputeStateCoverageClaim(
+		FSeinNavigationStateCoverageClaim& OutClaim,
+		FString& OutError) const override;
 
 	virtual bool FindPath(const FSeinPathRequest& Request, FSeinPath& OutPath) const override;
 	virtual bool FindCellPath(const FSeinPathRequest& Request, FSeinPath& OutPath) const override;
@@ -284,8 +292,6 @@ public:
 	virtual bool GetCellHeightAt(const FFixedVector& WorldPos, FFixedPoint& OutZ, bool bWalkableOnly = true) const override;
 	virtual bool NavRaycast(const FFixedVector& From, const FFixedVector& To, FFixedVector& OutHitPoint) const override;
 	virtual int32 GetTerrainTypeAt(const FFixedVector& WorldPos) const override;
-	virtual void SetDynamicBlockers(const TArray<FSeinDynamicBlocker>& InBlockers) override;
-
 	// ----------------------------------------------------------------------
 	// ISeinLevelLayerProvider (CP1.1 nav port) — nav contributes a "Nav" channel
 	// (per-cell Cost + Connections) to the unified level-data bake, reproduced
@@ -300,7 +306,6 @@ public:
 	// runtime loads its grid from the baked "Nav" channel + shared height whenever
 	// the substrate carries data (the only baked-data path; see subsystem).
 	virtual ISeinLevelLayerProvider* GetLevelDataProvider() override { return this; }
-	virtual bool LoadFromSubstrate(const USeinLevelData& Substrate) override;
 
 	// Debug collectors — declarations stay in all build configs (ABI); bodies
 	// are compiled out in shipping via UE_ENABLE_DEBUG_DRAWING in the .cpp.
@@ -338,6 +343,25 @@ public:
 
 protected:
 
+	virtual FSeinStaticEnvironmentAdoptionResult LoadFromSubstrateImpl(
+		const USeinLevelData& Substrate) override;
+
+	/**
+	 * Reusable shipped-A* coverage for native subclasses that explicitly opt
+	 * into the inherited grid/query contract. An override may return this
+	 * directly when it adds no future-affecting state, or fold this digest into
+	 * a subclass-specific digest with its additional state.
+	 */
+	bool ComputeAStarStaticEnvironmentDigest(
+		FGuid& OutDigest,
+		FString& OutError) const;
+
+	/** Reusable exact-state claim for a native subclass that explicitly adds
+	 *  no future-affecting mutable state beyond inherited shipped A* state. */
+	bool ComputeAStarStateCoverageClaim(
+		FSeinNavigationStateCoverageClaim& OutClaim,
+		FString& OutError) const;
+
 	/** Walk each waypoint along the WallDistance gradient until it sits in
 	 *  a cell whose distance-to-wall is at least
 	 *  `ceil(AgentFootprintRadius/CellSize) + WallPaddingCells`. Keeps the
@@ -351,6 +375,7 @@ protected:
 		int32 WallPaddingCells,
 		FAStarScratch& Scratch) const;
 
+private:
 	// ----------------------------------------------------------------------
 	// Runtime grid (populated by LoadFromSubstrate)
 	// ----------------------------------------------------------------------
@@ -358,6 +383,11 @@ protected:
 	int32 Height = 0;
 	FFixedPoint CellSize = FFixedPoint::FromInt(100);
 	FFixedVector Origin = FFixedVector::ZeroVector;
+
+	/** Cached digest of the large immutable grid payload. Rebuilt once on
+	 *  successful substrate adoption so per-root StateContract revalidation
+	 *  hashes only this digest plus the small live query-tuning surface. */
+	FGuid StaticGridDigest;
 
 	/** Per-cell A* routing weight + passability. 0 = blocked, 255 = impassable;
 	 *  1..254 = passable, and the value IS the terrain cost multiplier the A*
@@ -430,6 +460,10 @@ protected:
 	 *  a unit can path out of its own footprint). Shared, immutable during a
 	 *  search — NOT part of FAStarScratch. */
 	TArray<FSeinDynamicBlocker> DynamicBlockers;
+
+protected:
+	virtual void SetDynamicBlockers(
+		const TArray<FSeinDynamicBlocker>& InBlockers) override;
 
 	// ----------------------------------------------------------------------
 	// Grid helpers

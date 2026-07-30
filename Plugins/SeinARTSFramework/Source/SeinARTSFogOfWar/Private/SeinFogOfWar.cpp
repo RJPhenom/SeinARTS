@@ -4,82 +4,175 @@
  */
 
 #include "SeinFogOfWar.h"
-#include "SeinFogOfWarTypes.h"
-#include "Components/SeinVisionComponent.h"
-#include "Components/SeinFogVisibilityComponent.h"
-#include "Components/SeinExtentsComponent.h"
 
-#include "Actor/SeinActor.h"
-#include "Actor/SeinEntityComponent.h"
+#include "SeinFogOfWarTypes.h"
+#include "SeinLevelData.h"
+#include "Components/SeinFogVisibilityComponent.h"
+#include "Engine/World.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "SeinARTSFogOfWarLog.h"
 #include "Types/Entity.h"
 
-#include "Engine/World.h"
-
-uint8 USeinFogOfWar::GetEntityVisibleBits(FSeinPlayerID Observer,
-	USeinWorldSubsystem& Sim, FSeinEntityHandle Target) const
+uint8 USeinFogOfWar::GetEntityVisibleBits(
+	FSeinPlayerID Observer,
+	USeinWorldSubsystem& Sim,
+	FSeinEntityHandle Target) const
 {
 	// Single-point fallback. Subclasses override to do the volumetric
 	// (extents-aware) sweep.
 	const FSeinEntity* Entity = Sim.GetEntity(Target);
-	if (!Entity) return 0;
+	if (!Entity)
+	{
+		return 0;
+	}
 	return GetCellBitfield(Observer, Entity->Transform.GetLocation());
 }
 
-bool USeinFogOfWar::IsEntityVisibleToObserver(FSeinPlayerID Observer,
-	USeinWorldSubsystem& Sim, FSeinEntityHandle Target) const
+bool USeinFogOfWar::IsEntityVisibleToObserver(
+	FSeinPlayerID Observer,
+	USeinWorldSubsystem& Sim,
+	FSeinEntityHandle Target) const
 {
 	// Caller hasn't specified an observer → permissive (no filtering).
-	// Lets cover queries and other consumers opt out cleanly when running
-	// in contexts without a meaningful "viewing player" (replay scrubs,
-	// AI evaluating cover, combat scripts that need the full picture).
-	if (!Observer.IsValid()) return true;
-
-	// Owner-sees-own short-circuit: the player who owns the entity always
-	// sees it regardless of fog. Covers self-deployed cover, units, and
-	// the common "my own buildings" case without a bitfield lookup.
-	if (Sim.GetEntityOwner(Target) == Observer) return true;
-
-	// Resolve the entity's FogVisibilityPolicy + FogVisibilityLayerMask
-	// from FSeinFogVisibilityComponent (a top-level component since the
-	// Phase-5+ split). Defaults apply when not authored — VisionLayersOnly
-	// policy + Normal-bit emission match the historic implicit-defaults
-	// behaviour for entities that previously had no extents.
-	ESeinFogVisibilityPolicy Policy = ESeinFogVisibilityPolicy::VisionLayersOnly;
-	uint8 EmissionMask = SEIN_FOW_BIT_NORMAL;
-	if (const FSeinFogVisibilityComponent* FogVis = Sim.GetComponent<FSeinFogVisibilityComponent>(Target))
+	if (!Observer.IsValid())
 	{
-		Policy = FogVis->FogVisibilityPolicy;
-		EmissionMask = FogVis->FogVisibilityLayerMask;
+		return true;
 	}
 
-	if (Policy == ESeinFogVisibilityPolicy::AlwaysVisible) return true;
+	// The owner always sees its own entities.
+	if (Sim.GetEntityOwner(Target) == Observer)
+	{
+		return true;
+	}
 
-	// VisibleOnceExplored widens the mask to include the sticky per-cell
-	// Explored bit — once that bit is set anywhere in the footprint, the
-	// entity is permanently visible (terrain-scouted ghost reveal). Note this
-	// fires even for entities that arrived AFTER the cell was explored;
-	// VisibleOnceSeen (below) is the per-entity alternative that doesn't.
+	ESeinFogVisibilityPolicy Policy =
+		ESeinFogVisibilityPolicy::VisionLayersOnly;
+	uint8 EmissionMask = SEIN_FOW_BIT_NORMAL;
+	if (const FSeinFogVisibilityComponent* FogVisibility =
+			Sim.GetComponent<FSeinFogVisibilityComponent>(Target))
+	{
+		Policy = FogVisibility->FogVisibilityPolicy;
+		EmissionMask = FogVisibility->FogVisibilityLayerMask;
+	}
+
+	if (Policy == ESeinFogVisibilityPolicy::AlwaysVisible)
+	{
+		return true;
+	}
 	if (Policy == ESeinFogVisibilityPolicy::VisibleOnceExplored)
 	{
 		EmissionMask |= SEIN_FOW_BIT_EXPLORED;
 	}
-	if (EmissionMask == 0) return false;     // entity configured as never-visible
-
-	// Currently spotted? A matching live emission bit anywhere in the
-	// footprint means visible right now — for every policy that got this far.
-	const uint8 ObserverBits = GetEntityVisibleBits(Observer, Sim, Target);
-	if ((ObserverBits & EmissionMask) != 0) return true;
-
-	// VisibleOnceSeen: not spotted this instant, but stays revealed as a ghost
-	// if this observer has ever had live vision of the entity ITSELF. The
-	// latch is maintained deterministically each fog tick (HasObserverSeenEntity);
-	// unlike VisibleOnceExplored it never reveals on terrain-scouting alone, so
-	// a thing that appears in explored-but-unseen fog stays hidden until seen.
-	if (Policy == ESeinFogVisibilityPolicy::VisibleOnceSeen)
+	if (EmissionMask == 0)
 	{
-		return HasObserverSeenEntity(Observer, Target);
+		return false;
 	}
 
-	return false;
+	const uint8 ObserverBits =
+		GetEntityVisibleBits(Observer, Sim, Target);
+	if ((ObserverBits & EmissionMask) != 0)
+	{
+		return true;
+	}
+	return Policy == ESeinFogVisibilityPolicy::VisibleOnceSeen
+		&& HasObserverSeenEntity(Observer, Target);
+}
+
+void USeinFogOfWar::InitializeForWorld(UWorld* World)
+{
+	OwningWorld = World;
+	OnFogOfWarInitialized(World);
+}
+
+void USeinFogOfWar::DeinitializeFromWorld()
+{
+	OnFogOfWarDeinitialized();
+	OwningWorld.Reset();
+}
+
+bool USeinFogOfWar::CanMutateStaticEnvironment(
+	const TCHAR* Operation,
+	UWorld* RequestedWorld,
+	FString& OutError) const
+{
+	OutError.Reset();
+	UWorld* BoundWorld = OwningWorld.Get();
+	if (!BoundWorld)
+	{
+		BoundWorld = GetWorld();
+	}
+	if (RequestedWorld && BoundWorld && RequestedWorld != BoundWorld)
+	{
+		OutError = FString::Printf(
+			TEXT("%s targeted a world other than this fog implementation's owning world."),
+			Operation);
+		return false;
+	}
+
+	UWorld* EffectiveWorld = RequestedWorld ? RequestedWorld : BoundWorld;
+	const USeinWorldSubsystem* Sim = EffectiveWorld
+		? EffectiveWorld->GetSubsystem<USeinWorldSubsystem>()
+		: nullptr;
+	if (Sim && Sim->GetCanonicalStateContractDigest().IsValid())
+	{
+		OutError = FString::Printf(
+			TEXT("%s is not legal after the match StateContract freezes; prepare the static fog environment before bootstrap, then restart the match/PIE session."),
+			Operation);
+		return false;
+	}
+	return true;
+}
+
+FSeinStaticEnvironmentAdoptionResult USeinFogOfWar::LoadFromSubstrate(
+	const USeinLevelData& Substrate)
+{
+	FString Error;
+	if (!CanMutateStaticEnvironment(
+			TEXT("Fog substrate adoption"), nullptr, Error))
+	{
+		UE_LOG(LogSeinFogOfWar, Error, TEXT("%s"), *Error);
+		return FSeinStaticEnvironmentAdoptionResult::Rejected(
+			MoveTemp(Error));
+	}
+	FSeinStaticEnvironmentAdoptionResult Result =
+		LoadFromSubstrateImpl(Substrate);
+	if (!Result.IsAdopted()
+		&& !Result.IsNotApplicable()
+		&& !Result.IsRejected())
+	{
+		Result = FSeinStaticEnvironmentAdoptionResult::Rejected(
+			FString::Printf(
+				TEXT("Fog implementation '%s' returned an invalid substrate-adoption outcome."),
+				*GetClass()->GetPathName()));
+	}
+	else if (Result.IsRejected() && Result.Detail.IsEmpty())
+	{
+		Result.Detail = FString::Printf(
+			TEXT("Fog implementation '%s' rejected the Level Data substrate without a reason."),
+			*GetClass()->GetPathName());
+	}
+	else if (Result.IsNotApplicable()
+		&& Substrate.HasRuntimeData()
+		&& GetLevelDataProvider())
+	{
+		Result = FSeinStaticEnvironmentAdoptionResult::Rejected(
+			FString::Printf(
+				TEXT("Fog implementation '%s' participates in the Level Data bake but did not adopt the prepared runtime substrate%s%s."),
+				*GetClass()->GetPathName(),
+				Result.Detail.IsEmpty() ? TEXT("") : TEXT(": "),
+				*Result.Detail));
+	}
+	return Result;
+}
+
+void USeinFogOfWar::InitGridFromVolumes(UWorld* World)
+{
+	FString Error;
+	if (!CanMutateStaticEnvironment(
+			TEXT("Fog no-bake grid initialization"), World, Error))
+	{
+		UE_LOG(LogSeinFogOfWar, Error, TEXT("%s"), *Error);
+		return;
+	}
+	InitGridFromVolumesImpl(World);
 }

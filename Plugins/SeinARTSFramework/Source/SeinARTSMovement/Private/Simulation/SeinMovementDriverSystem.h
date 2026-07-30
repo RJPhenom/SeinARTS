@@ -117,7 +117,9 @@ public:
 
 		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, FSeinEntity& Entity)
 		{
-			FSeinMovementComponent* Move = World.GetComponent<FSeinMovementComponent>(Handle);
+			FSeinMovementComponent* Move =
+				World.GetComponentMutable<FSeinMovementComponent>(
+					Handle);
 			if (!Move) return;
 
 			// An active move order steered this entity this tick — the order

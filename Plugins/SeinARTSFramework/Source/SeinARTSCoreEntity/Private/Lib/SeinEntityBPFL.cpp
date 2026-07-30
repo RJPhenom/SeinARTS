@@ -47,7 +47,8 @@ void USeinEntityBPFL::SeinSetEntityTransform(const UObject* WorldContextObject, 
 	{
 		return;
 	}
-	FSeinEntity* Entity = Subsystem->GetEntity(EntityHandle);
+	FSeinEntity* Entity =
+		Subsystem->GetEntityMutable(EntityHandle);
 	if (Entity)
 	{
 		Entity->Transform = Transform;

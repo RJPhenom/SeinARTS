@@ -64,7 +64,9 @@ bool USeinConstructionBPFL::SeinAddConstructionProgress(const UObject* WorldCont
 		return false;
 	}
 
-	FSeinConstructionComponent* Data = Sub->GetComponent<FSeinConstructionComponent>(Entity);
+	FSeinConstructionComponent* Data =
+		Sub->GetComponentMutable<FSeinConstructionComponent>(
+			Entity);
 	if (!Data)
 	{
 		// No active construction. Caller's BA_Construct should validate this
@@ -110,7 +112,9 @@ void USeinConstructionBPFL::SeinFinishConstruction(const UObject* WorldContextOb
 	// effect inspect the entity in its just-finished state (no longer "under
 	// construction" — abilities are unblocked, mesh-swap can fire, etc.).
 	TSubclassOf<USeinEffect> CompletionEffect = nullptr;
-	if (FSeinConstructionComponent* Data = Sub->GetComponent<FSeinConstructionComponent>(Entity))
+	if (FSeinConstructionComponent* Data =
+		Sub->GetComponentMutable<FSeinConstructionComponent>(
+			Entity))
 	{
 		CompletionEffect = Data->CompletionEffect;
 	}

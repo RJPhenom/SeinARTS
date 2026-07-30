@@ -62,7 +62,7 @@ public:
 		USeinNavigation* Nav = USeinNavigationSubsystem::GetNavigationForWorld(&World);
 		if (!Nav || !Nav->HasRuntimeData()) return;
 
-		ISeinComponentStorage* ExtentsStorage =
+		const ISeinComponentStorage* ExtentsStorage =
 			World.GetComponentStorageRaw(FSeinExtentsComponent::StaticStruct());
 		if (!ExtentsStorage) return;
 
@@ -80,12 +80,22 @@ public:
 		// forces serial too; the result is bit-identical either way.
 		TArray<FSeinEntityHandle> LiveHandles;
 		LiveHandles.Reserve(World.GetEntityPool().GetActiveCount());
-		World.GetEntityPool().ForEachEntity([&LiveHandles](FSeinEntityHandle Handle, FSeinEntity&) { LiveHandles.Add(Handle); });
+		World.GetEntityPool().ForEachEntity(
+			[&LiveHandles](
+				FSeinEntityHandle Handle,
+				const FSeinEntity&)
+			{
+				LiveHandles.Add(Handle);
+			});
+
+		FSeinEntityPool* MutablePool =
+			World.GetEntityPoolMutable();
+		if (!MutablePool) return;
 
 		SeinParallelFor(LiveHandles.Num(), [&](int32 Index)
 		{
 			const FSeinEntityHandle Handle = LiveHandles[Index];
-			FSeinEntity* EntityPtr = World.GetEntityPool().Get(Handle);
+			FSeinEntity* EntityPtr = MutablePool->Get(Handle);
 			if (!EntityPtr) return;
 			FSeinEntity& Entity = *EntityPtr;
 

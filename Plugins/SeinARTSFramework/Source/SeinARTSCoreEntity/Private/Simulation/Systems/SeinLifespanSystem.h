@@ -28,13 +28,15 @@ public:
 		// DestroyEntity only DEFERS (adds to PendingDestroy + flags the entity
 		// dead); it does not remove this storage's slot mid-iteration, so
 		// walking the live bit-array stays safe.
-		ISeinComponentStorage* Storage =
+		const ISeinComponentStorage* Storage =
 			World.GetComponentStorageRaw(FSeinLifespanData::StaticStruct());
 		if (!Storage) return;
 
 		const int32 CurrentTick = World.GetCurrentTick();
-		FSeinEntityPool& Pool = World.GetEntityPool();
-		Storage->ForEachLiveComponent([&](FSeinEntityHandle Handle, void* RawComponent)
+		const FSeinEntityPool& Pool = World.GetEntityPool();
+		Storage->ForEachLiveComponent([&](
+			FSeinEntityHandle Handle,
+			const void* RawComponent)
 		{
 			if (!Pool.IsValid(Handle))
 			{

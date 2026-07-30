@@ -54,11 +54,18 @@ void USeinCollisionResolverDefault::ResolvePass(USeinWorldSubsystem& World, cons
 	// Hoist the Extents storage once per pass: GetComponent<T>() does a
 	// hashmap lookup by UScriptStruct* per call; resolving the storage once
 	// makes every per-self / per-neighbour fetch an O(1) indexed get.
-	ISeinComponentStorage* ExtentsStorage = World.GetComponentStorageRaw(FSeinExtentsComponent::StaticStruct());
+	const ISeinComponentStorage* ExtentsStorage =
+		World.GetComponentStorageRaw(
+			FSeinExtentsComponent::StaticStruct());
 	// Reused scratch for the self collider's pre-built shapes (see below).
 	TArray<FCollisionShape2D> SelfShapes;
 
-	World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle SelfHandle, FSeinEntity& SelfEntity)
+	FSeinEntityPool* MutablePool =
+		World.GetEntityPoolMutable();
+	if (!MutablePool) return;
+	MutablePool->ForEachEntity([&](
+		FSeinEntityHandle SelfHandle,
+		FSeinEntity& SelfEntity)
 	{
 		const FSeinExtentsComponent* SelfExt = ExtentsStorage
 			? static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(SelfHandle))
@@ -102,7 +109,8 @@ void USeinCollisionResolverDefault::ResolvePass(USeinWorldSubsystem& World, cons
 			// begin/end events are emitted by the overlap system, not here).
 			if (Effective != ESeinCollisionResponse::Block) continue;
 
-			FSeinEntity* OtherEntity = World.GetEntityPool().Get(OtherHandle);
+			FSeinEntity* OtherEntity =
+				MutablePool->Get(OtherHandle);
 			if (!OtherEntity) continue;
 
 			FFixedVector Normal;

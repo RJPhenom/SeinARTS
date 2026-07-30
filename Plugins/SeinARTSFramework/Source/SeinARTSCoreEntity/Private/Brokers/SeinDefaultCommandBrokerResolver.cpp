@@ -337,7 +337,9 @@ FSeinBrokerDispatchPlan USeinDefaultCommandBrokerResolver::ResolveDispatch_Imple
 	FSeinBrokerDispatchPlan Plan;
 	if (!World) return Plan;
 
-	FSeinCommandBrokerData* Broker = World->GetComponent<FSeinCommandBrokerData>(BrokerHandle);
+	FSeinCommandBrokerData* Broker =
+		World->GetComponentMutable<FSeinCommandBrokerData>(
+			BrokerHandle);
 	if (!Broker) return Plan;
 
 	// Iterate the EFFECTIVE members — the subset this order targets (or the full
