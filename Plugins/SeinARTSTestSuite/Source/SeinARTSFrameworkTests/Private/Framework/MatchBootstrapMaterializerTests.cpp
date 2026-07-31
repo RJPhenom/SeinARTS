@@ -93,6 +93,40 @@ namespace UE::SeinARTSTests
 		}
 	}
 
+	TEST(FrameworkBootstrapAcceptsFactionlessOccupiedSlot,
+		"SeinARTS.Unit.Framework.MatchBootstrap")
+	{
+		// Factions are an OPT-IN catalog: a project with zero authored
+		// faction assets fields occupied slots with the invalid/zero
+		// FactionID (the lobby auto-claim assigns none), and bootstrap must
+		// accept them — this is the shipped Sandbox baseline, and requiring
+		// a faction here once refused every factionless project in PIE while
+		// all automation fixtures happened to author factions.
+		FActorTestSpawner Spawner;
+		UWorld& World = Spawner.GetWorld();
+		const FSeinMatchSlot Factionless = MakeActiveSlot(
+			1, ESeinSlotState::Human, /*Faction=*/0, /*Team=*/0);
+		ASSERT_THAT(IsFalse(Factionless.FactionID.IsValid()));
+		ASSERT_THAT(IsNotNull(SpawnBakedPlayerStart(World, Factionless)));
+
+		FSeinMatchSettings Settings;
+		Settings.Slots = {Factionless};
+		FSeinMatchBootstrapReceipt Receipt;
+		FString Error;
+		ASSERT_THAT(IsTrue(Materialize(
+			Spawner, Settings, 777, Receipt, Error)));
+
+		USeinWorldSubsystem* Sim =
+			World.GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(Sim));
+		ASSERT_THAT(IsTrue(Receipt.IsValid()));
+		const FSeinPlayerState* Player =
+			Sim->GetPlayerState(FSeinPlayerID(1));
+		ASSERT_THAT(IsNotNull(Player));
+		ASSERT_THAT(AreEqual(
+			static_cast<uint8>(0), Player->FactionID.Value));
+	}
+
 	TEST(FrameworkBootstrapMaterializesAnExactOptionalSpawnAnchor,
 		"SeinARTS.Unit.Framework.MatchBootstrap")
 	{

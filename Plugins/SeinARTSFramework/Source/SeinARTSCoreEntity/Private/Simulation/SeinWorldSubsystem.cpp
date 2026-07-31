@@ -3015,11 +3015,15 @@ bool USeinWorldSubsystem::ValidateMatchSettings(
 	{
 		const bool bValidState = StaticEnum<ESeinSlotState>()->IsValidEnumValue(
 			static_cast<int64>(Slot.State));
-		const bool bOccupied = Slot.State == ESeinSlotState::Human
-			|| Slot.State == ESeinSlotState::AI;
+		// Factions are an OPT-IN catalog: a project with no authored faction
+		// assets legitimately fields occupied slots with the invalid/zero
+		// FactionID (the sim registers such players as Faction(0), and the
+		// value participates in the canonical settings digest either way).
+		// Requiring a valid faction here would refuse bootstrap for every
+		// factionless project; faction-required is a game-mode policy, not a
+		// core invariant.
 		if (!bValidState || Slot.SlotIndex < 1 || Slot.SlotIndex > MaxSlots
-			|| SlotIndices.Contains(Slot.SlotIndex)
-			|| (bOccupied && !Slot.FactionID.IsValid()))
+			|| SlotIndices.Contains(Slot.SlotIndex))
 		{
 			OutRejectionReason = SeinARTSTags::Command_Reject_Malformed;
 			return false;

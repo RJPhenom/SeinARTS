@@ -202,11 +202,14 @@ bool FSeinMatchBootstrapTransaction::Preflight(FString& OutError)
 		{
 			continue;
 		}
-		if (Slot.SlotIndex <= 0 || Slot.SlotIndex > MAX_uint8
-			|| !Slot.FactionID.IsValid())
+		// Factions are an OPT-IN catalog: a factionless project fields
+		// occupied slots with the invalid/zero FactionID and the sim
+		// registers them as Faction(0) — deterministic, digest-covered.
+		// Faction-required is a game-mode policy, not a bootstrap invariant.
+		if (Slot.SlotIndex <= 0 || Slot.SlotIndex > MAX_uint8)
 		{
 			OutError = FString::Printf(
-				TEXT("Active slot %d requires a representable player ID and explicit valid faction."),
+				TEXT("Active slot %d requires a representable player ID."),
 				Slot.SlotIndex);
 			return false;
 		}

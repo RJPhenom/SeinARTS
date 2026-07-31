@@ -262,8 +262,9 @@ bool USeinWorldSubsystem::ComputeCanonicalInitialStateDigest(
 	for (const FSeinPlayerID PlayerID : PlayerIDs)
 	{
 		const FSeinPlayerState& Player = PlayerStates.FindChecked(PlayerID);
+		// A factionless player (Faction 0) is legal — factions are an opt-in
+		// catalog; the faction VALUE is digested below either way.
 		if (Player.PlayerID != PlayerID
-			|| (PlayerID.IsValid() && !Player.FactionID.IsValid())
 			|| !Writer.WriteUInt8(PlayerID.Value)
 			|| !Writer.WriteUInt8(Player.FactionID.Value)
 			|| !Writer.WriteUInt8(Player.TeamID)
