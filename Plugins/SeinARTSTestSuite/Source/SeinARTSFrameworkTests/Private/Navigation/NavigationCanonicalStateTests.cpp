@@ -1421,9 +1421,16 @@ namespace UE::SeinARTSTests
 		World->StopSimulation();
 	}
 
-	TEST(NavigationCaptureRejectsCompletePathWithWrongTerminal,
+	TEST(NavigationCaptureAcceptsCompletePathWithNudgedTerminal,
 		"SeinARTS.Unit.Navigation.CanonicalState")
 	{
+		// Regression (2026-08 PIE session kill): the exact final waypoint is
+		// pipeline-internal, NOT a canonical invariant — a complete ready
+		// path legitimately ends near-but-not-at Request.End whenever
+		// PushWaypointsAwayFromWalls nudges a terminal clicked near a wall
+		// edge (only authoritative cover-slot destinations restore the exact
+		// End). Capture must accept such a path; asserting terminal equality
+		// killed healthy live sessions at the first gossip checkpoint.
 		FActorTestSpawner Spawner;
 		UWorld& UnrealWorld = Spawner.GetWorld();
 		USeinWorldSubsystem* World =
@@ -1441,14 +1448,9 @@ namespace UE::SeinARTSTests
 		FNavigationCanonicalStateTestAccess::
 			SeedCompletePathWithWrongTerminal(*Navigation);
 
-		TestRunner->AddExpectedError(
-			TEXT("does not terminate at its requested destination"),
-			EAutomationExpectedErrorFlags::Contains,
-			1,
-			false);
 		FSeinWorldSnapshot Snapshot;
 		World->CaptureSnapshot(Snapshot);
-		ASSERT_THAT(AreEqual(0, Snapshot.SnapshotVersion));
+		ASSERT_THAT(IsTrue(Snapshot.SnapshotVersion != 0));
 		ASSERT_THAT(IsTrue(World->IsSimulationRunning()));
 		World->StopSimulation();
 	}
@@ -1738,9 +1740,14 @@ namespace UE::SeinARTSTests
 					Sentinel)));
 	}
 
-	TEST(NavigationRestoreRejectsPartialPathAtExactDestination,
+	TEST(NavigationRestoreAcceptsPartialFlagOnTerminalPath,
 		"SeinARTS.Unit.Navigation.CanonicalState")
 	{
+		// Companion to NavigationCaptureAcceptsCompletePathWithNudgedTerminal:
+		// the terminal waypoint's relation to Request.End is pipeline-internal
+		// (wall-push nudging, same-cell partial upgrades), not a canonical
+		// invariant — the shared validator must accept it on restore exactly
+		// as it does on capture.
 		FSeinWorldSnapshot Snapshot;
 		FString Error;
 		ASSERT_THAT(IsTrue(CaptureValidArcSnapshot(
@@ -1768,36 +1775,11 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsNotNull(DestinationNavigation));
 		FNavigationCanonicalStateTestAccess::SeedRestoreSentinel(
 			*DestinationNavigation);
-		const FNavigationCanonicalStateTestAccess::
-			FContinuationSnapshot Sentinel =
-				FNavigationCanonicalStateTestAccess::
-					CaptureContinuation(
-						*DestinationNavigation);
 
-		TestRunner->AddExpectedError(
-			TEXT("partial ready path"),
-			EAutomationExpectedErrorFlags::Contains,
-			1,
-			false);
-		ASSERT_THAT(IsFalse(
+		ASSERT_THAT(IsTrue(
 			SeinTestSnapshotRestore::RestoreTrusted(
 				*Destination, Snapshot)));
-		ASSERT_THAT(IsFalse(
-			Destination->IsSimulationRunning()));
-		ASSERT_THAT(AreEqual(
-			static_cast<uint8>(
-				ESeinMatchBootstrapState::Awaiting),
-			static_cast<uint8>(
-				Destination->GetMatchBootstrapState())));
-		ASSERT_THAT(AreEqual(
-			0, Destination->GetCurrentTick()));
-		ASSERT_THAT(IsTrue(
-			Destination->IsExecutionTopologyValid()));
-		ASSERT_THAT(IsTrue(
-			FNavigationCanonicalStateTestAccess::
-				MatchesContinuation(
-					*DestinationNavigation,
-					Sentinel)));
+		Destination->StopSimulation();
 	}
 
 	TEST(NavigationContinuationRoundTripsThroughSnapshot,

@@ -269,22 +269,14 @@ namespace
 				*Requester.ToString());
 			return false;
 		}
-		if (!Path.bIsPartial
-			&& Path.Waypoints.Last() != Request.End)
-		{
-			OutError = FString::Printf(
-				TEXT("Navigation complete ready path for entity %s does not terminate at its requested destination."),
-				*Requester.ToString());
-			return false;
-		}
-		if (Path.bIsPartial
-			&& Path.Waypoints.Last() == Request.End)
-		{
-			OutError = FString::Printf(
-				TEXT("Navigation partial ready path for entity %s already terminates at its requested destination."),
-				*Requester.ToString());
-			return false;
-		}
+		// Deliberately NO terminal-position invariant here: the exact final
+		// waypoint is pipeline-internal, not canonical. A complete path may
+		// legitimately end near-but-not-at Request.End (PushWaypointsAwayFromWalls
+		// nudges a terminal waypoint clicked near a wall edge inward; only
+		// authoritative cover-slot destinations restore the exact End), and the
+		// same-cell partial-to-complete upgrade means partial terminals are
+		// cell-quantized. Asserting either equality killed healthy live
+		// sessions at the first gossip checkpoint (2026-08 PIE regression).
 
 		bool bAllStraight = true;
 		FFixedPoint ExpectedTotalCost = FFixedPoint::Zero;
