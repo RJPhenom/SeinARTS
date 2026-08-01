@@ -597,3 +597,71 @@ rather than a hostile import/cloud format; filesystem symlink/junction containme
 boundary; frozen-time pause-control replay is unsupported; synchronous checkpoint encoding and
 durable flush cost now
 belongs to the performance-measurement workstream.
+
+### Fable independent verification of FEAT-02 (2026-08-01) — claims CONFIRMED
+
+Full re-verification of `01878e9`: independent suite runs (Unit 371/371, Determinism 20/20,
+Integration 15/15 — supersets of Sol's cited subset counts, all green) + two adversarial
+agents (writer, reader) instructed to REFUTE each claim against live code. No claim was
+refuted. Highlights: the old accumulate-then-discard-at-64MiB writer is verifiably gone
+(checked against `01878e9^`; failure mode is now stop-and-preserve); resident memory is
+hard-bounded (max(8, InputDelay+TurnRate+4) turns × 8MiB batch cap); every append is
+length-prefixed + BLAKE3-chained + full-fsync'd before the durable frontier advances;
+checkpoint restore reuses the FEAT-01 trusted machinery call-for-call (no bespoke clone);
+seek arithmetic at checkpoint boundaries is exact (no double-apply; determinism test pins
+it); v8 compat is a genuine frozen-codec byte-stream parse with end-to-end playback tests;
+malformed-input bounds discipline is clean (caps precede every allocation; hostile
+PayloadBytes=MAX_uint32 tested).
+
+Caveats + latent hazards recorded for the cleanup/bugfix passes (none block closeout):
+1. **Pause-lane landmine (sharpest)**: the writer ABORTS recording if a pause command ever
+   reaches an aggregated turn (SeinReplayWriter.cpp:458-468). Unreachable today (server
+   drops pause pre-aggregation) — but installing the canonical pause lane without updating
+   the writer would silently kill every paused match's replay.
+2. **Crash-tail recovery = process-crash semantics, not power-loss**: clean size-truncation
+   tears recover; a zero-extended/garbage tail ≥64 bytes (NTFS valid-data-length after power
+   cut) parses as a complete-but-invalid header and rejects the WHOLE journal despite
+   provably-durable earlier frames. Deliberate tamper-evidence posture; read the claim
+   narrowly.
+3. **No runtime recorded-vs-resimulated root cross-check during playback** — root agreement
+   is pinned by tests only. Cheap upgrade: when playback passes a later recorded
+   checkpoint's tick, decode + compare roots.
+4. **Perf-stream items**: per-append game-thread fsync (~1-2/s) + up to 64MiB synchronous
+   checkpoint burst every ~3000 turns (hitch risk, no determinism impact); a snapshot
+   exceeding the 64MiB checkpoint body ceiling degrades checkpoint cadence to permanent
+   backoff-retry with only log warnings.
+5. **Non-lockstep map change during playback** (console `open`) leaves the reader stuck
+   IsPlaying against a dead world until Sein.Net.StopReplay — recoverable, not unsafe.
+6. **Ingress friend-bypass drift risk**: PlayV9 sets bReplayOwnsExternalCommandIngress
+   directly (checkpoint continuations legitimately carry PendingCommands), re-implementing
+   the sanctioned API's other guards inline — add a pointer comment on
+   BeginReplayExclusiveCommandIngress so a future invariant lands in both places.
+7. **Dead code**: SeinReplayFileIO::WriteNewAtomically has zero callers post-v8-writer.
+8. Minor test gaps: out-of-range seek rejection, torn-header (<64B) branch, mid-playback
+   file-mutation revalidation — all have clean code behind them, just unexercised.
+
+FEAT-02 verification verdict: ledger honest, evidence real, scope boundaries stated
+accurately. Remaining acceptance = RJ's PIE replay/load/seek pass (the runtime oracle).
+
+### FEAT-02 finishing batch (2026-08-01, Fable) — verification caveats closed or dispositioned
+
+Applied (build green; Unit 371 / Integration 15 / Determinism 20 all green):
+- Caveat 5 FIXED: OnWorldCleanup now closes the replay pair on a NON-lockstep map change —
+  publishes an active recording (was: silently lost) and stops an active playback (was:
+  stuck IsPlaying until manual Sein.Net.StopReplay). Guards reuse the existing GI +
+  bound-world checks; committed lockstep travel is unaffected (already retired by then).
+- Caveat 4 partially: chronic checkpoint failure (saturated backoff) now escalates ONCE to
+  Error stating seek/recovery granularity is frozen; the fsync/burst cost measurement stays
+  with the perf stream.
+- Caveat 1 mitigated: pause-lane tripwire documented at BOTH ends (server drop site ↔ writer
+  abort) so installing the canonical pause lane leads the author to the replay-format work.
+- Caveat 6 closed: drift-guard comment on BeginReplayExclusiveCommandIngress pointing at the
+  reader's sanctioned inline guard copy.
+- Caveat 7 closed: dead SeinReplayFileIO::WriteNewAtomically deleted.
+- Caveat 8 partially: torn-HEADER (<64B) recovery + out-of-range PlayFromTick rejection now
+  asserted (in ReplayWriterPublishesAfterTrimmingARecordedFutureTail); the mid-playback
+  file-mutation revalidation test remains a noted gap.
+Deferred with reasons: playback root cross-check (needs a root field in the frozen v9 frame
+layout — polish backlog, high leverage as an automatic desync detector); power-loss tear
+posture (deliberate tamper-evidence design, no change); fsync/checkpoint-burst costs (perf
+pass). Working tree holds these changes UNCOMMITTED — commit is RJ's.

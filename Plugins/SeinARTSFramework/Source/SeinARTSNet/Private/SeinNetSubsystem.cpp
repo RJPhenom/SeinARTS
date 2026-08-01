@@ -358,6 +358,36 @@ void USeinNetSubsystem::OnWorldCleanup(UWorld* World, bool bSessionEnded, bool b
 		if (BoundWorldSub->GetWorld() != World) return;
 	}
 
+	// A NON-lockstep map change (console `open`, editor travel) bypasses
+	// RetireReplayEpochForCommittedTravel, which is the path that normally
+	// closes the replay pair at travel commit. Without this, an active
+	// reader stays IsPlaying against the dead world and refuses every
+	// LoadFromFile until a manual Sein.Net.StopReplay, and an active writer
+	// never publishes its journal. The GameInstance + bound-world guards
+	// above already ensure this cleanup is for the world they're driving;
+	// for committed lockstep travel both are null here (no-op).
+	if (ReplayWriter && ReplayWriter->IsRecording())
+	{
+		const FString PublishedReplay = ReplayWriter->FinishRecording();
+		if (PublishedReplay.IsEmpty())
+		{
+			UE_LOG(LogSeinNet, Warning,
+				TEXT("OnWorldCleanup: could not publish the replay for world %s; its valid partial remains at %s."),
+				*GetNameSafe(World), *ReplayWriter->GetActivePartialPath());
+		}
+		else
+		{
+			UE_LOG(LogSeinNet, Log,
+				TEXT("OnWorldCleanup: replay flushed -> %s"), *PublishedReplay);
+		}
+	}
+	ReplayWriter = nullptr;
+	if (ReplayReader && ReplayReader->IsPlaying())
+	{
+		ReplayReader->Stop();
+	}
+	ReplayReader = nullptr;
+
 	const bool bHadState =
 		!TurnAggregator.GetPendingTurnIDs().IsEmpty() ||
 		!ReceivedTurns.IsEmpty() ||
@@ -5585,6 +5615,11 @@ void USeinNetSubsystem::ServerHandleSubmission(
 				*Single[0].CommandType.ToString(), Single[0].SchemaVersion);
 			continue;
 		}
+		// This drop is what keeps pause-control out of aggregated turns; the
+		// replay writer FAILS RECORDING if one ever reaches it (v9 has no
+		// frozen-time journal — see USeinReplayWriter::RecordEncodedTurn).
+		// Installing the canonical pause lane means extending the replay
+		// format in the same change, or every paused match loses its replay.
 		if (IsUnsupportedNetworkPauseCommand(Single[0], &Schema))
 		{
 			UE_LOG(LogSeinNet, Warning,

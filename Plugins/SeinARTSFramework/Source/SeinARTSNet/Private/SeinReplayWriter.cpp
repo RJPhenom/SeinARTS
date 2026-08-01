@@ -455,6 +455,12 @@ void USeinReplayWriter::RecordEncodedTurn(
 				TurnId, *Error));
 			return;
 		}
+		// Tripwire, not dead code: the server currently drops pause-control
+		// BEFORE aggregation (USeinNetSubsystem's IsUnsupportedNetworkPauseCommand
+		// gate), so this abort is unreachable today. It exists so that
+		// installing the canonical pause lane without extending the replay
+		// format fails loudly here instead of journaling turns v9 cannot
+		// faithfully replay.
 		if (Command.CommandType
 				== SeinARTSTags::Command_Type_PauseMatchRequest
 			|| (Schema.AllowedExecutionContexts
@@ -943,6 +949,19 @@ bool USeinReplayWriter::CaptureCheckpoint(bool bRequired)
 			UE_LOG(LogSeinNet, Warning,
 				TEXT("ReplayWriter: periodic checkpoint skipped; retry in %d tick(s): %s."),
 				CheckpointRetryBackoffTicks, *Reason);
+			// Recording survives checkpoint failure, but seek/recovery
+			// granularity silently degrades to the last successful
+			// checkpoint. Once backoff saturates the failure is chronic
+			// (e.g. the snapshot outgrew the checkpoint body ceiling) —
+			// escalate once so it can't hide among routine warnings.
+			if (CheckpointRetryBackoffTicks >= MaxBackoff
+				&& !bLoggedChronicCheckpointFailure)
+			{
+				bLoggedChronicCheckpointFailure = true;
+				UE_LOG(LogSeinNet, Error,
+					TEXT("ReplayWriter: periodic checkpoints are chronically failing; this replay records turns but its seek/recovery granularity is frozen at the last successful checkpoint. Last reason: %s"),
+					*Reason);
+			}
 		}
 		return false;
 	};

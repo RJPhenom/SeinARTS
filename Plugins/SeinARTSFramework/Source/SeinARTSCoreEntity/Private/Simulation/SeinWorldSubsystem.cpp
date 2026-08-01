@@ -4763,6 +4763,12 @@ void USeinWorldSubsystem::SubmitLocalCommandDraft(
 
 bool USeinWorldSubsystem::BeginReplayExclusiveCommandIngress(FString& OutError)
 {
+	// NOTE: v9 checkpoint playback does NOT call this — a continuation
+	// checkpoint legitimately restores with PendingCommands, so
+	// USeinReplayReader::PlayV9 (a friend) re-implements every guard here
+	// EXCEPT the pending-command refusal and sets the flag directly. If a
+	// new invariant is added to this function, mirror it in the reader's
+	// inline copy.
 	SEIN_CHECK_NOT_PARALLEL();
 	OutError.Reset();
 	if (bReplayOwnsExternalCommandIngress)

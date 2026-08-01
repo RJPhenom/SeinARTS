@@ -1061,6 +1061,7 @@ namespace UE::SeinARTSTests
 
 		// A partial recording may ignore only a torn terminal frame. The forced
 		// Progress immediately before Finalize still proves this exact frontier.
+		const TArray<uint8> FullV9Bytes = V9Bytes;
 		ASSERT_THAT(IsTrue(V9Bytes.Num()
 			> SeinReplayJournalFormat::FrameHeaderBytes));
 		V9Bytes.SetNum(V9Bytes.Num() - 8, EAllowShrinking::No);
@@ -1077,6 +1078,57 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(PartialReader->LoadFromFile(PartialFile.Path)));
 		ASSERT_THAT(AreEqual(1, PartialReader->GetTurnCount()));
 		ASSERT_THAT(AreEqual(EndTick, PartialReader->GetHeader().EndTick));
+
+		// The second recoverable tear shape: a tail torn INSIDE the final
+		// frame header (fewer than FrameHeaderBytes remaining). The durable
+		// frontier before the torn frame must still load.
+		int64 LastFrameOffset = SeinReplayJournalFormat::PrefixBytes;
+		{
+			int64 WalkOffset = SeinReplayJournalFormat::PrefixBytes;
+			while (WalkOffset + SeinReplayJournalFormat::FrameHeaderBytes
+				<= FullV9Bytes.Num())
+			{
+				SeinReplayJournalFormat::FFrameHeader WalkHeader;
+				ASSERT_THAT(IsTrue(
+					SeinReplayJournalFormat::ParseFrameHeader(
+						MakeArrayView(
+							FullV9Bytes.GetData() + WalkOffset,
+							SeinReplayJournalFormat::FrameHeaderBytes),
+						WalkHeader,
+						JournalError)));
+				LastFrameOffset = WalkOffset;
+				WalkOffset += SeinReplayJournalFormat::FrameHeaderBytes
+					+ static_cast<int64>(WalkHeader.PayloadBytes);
+			}
+			ASSERT_THAT(IsTrue(WalkOffset == FullV9Bytes.Num()));
+		}
+		TArray<uint8> TornHeaderBytes = FullV9Bytes;
+		TornHeaderBytes.SetNum(
+			static_cast<int32>(LastFrameOffset + 32), EAllowShrinking::No);
+		FScopedReplayFile TornHeaderFile{
+			FPaths::ProjectSavedDir()
+				/ TEXT("Replays")
+				/ FString::Printf(
+					TEXT("TornHeader_%s.seinreplay.partial"),
+					*FGuid::NewGuid().ToString(EGuidFormats::Digits))};
+		ASSERT_THAT(IsTrue(FFileHelper::SaveArrayToFile(
+			TornHeaderBytes, *TornHeaderFile.Path)));
+		USeinReplayReader* TornHeaderReader = NewObject<USeinReplayReader>(
+			&Spawner.GetWorld());
+		ASSERT_THAT(IsTrue(
+			TornHeaderReader->LoadFromFile(TornHeaderFile.Path)));
+		ASSERT_THAT(AreEqual(1, TornHeaderReader->GetTurnCount()));
+		ASSERT_THAT(AreEqual(
+			EndTick, TornHeaderReader->GetHeader().EndTick));
+
+		// Seeking outside the recorded range must reject cleanly, before any
+		// world interaction.
+		TestRunner->AddExpectedError(
+			TEXT("is outside 0.."),
+			EAutomationExpectedErrorFlags::Contains, 2, false);
+		ASSERT_THAT(IsFalse(TornHeaderReader->PlayFromTick(-1)));
+		ASSERT_THAT(IsFalse(TornHeaderReader->PlayFromTick(
+			TornHeaderReader->GetHeader().EndTick + 1)));
 	}
 
 	TEST(ReplayV9StaleFailureCallbackCannotStopANewerPlayback,

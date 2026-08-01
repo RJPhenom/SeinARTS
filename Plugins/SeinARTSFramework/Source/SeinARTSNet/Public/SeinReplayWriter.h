@@ -139,4 +139,9 @@ private:
 	int32 LastCheckpointPersistedTurnCount = 0;
 	int32 NextCheckpointRetryTick = 0;
 	int32 CheckpointRetryBackoffTicks = 0;
+
+	/** One-shot escalation latch: set when checkpoint retry backoff saturates
+	 *  (chronic capture failure), so the Error-level surfacing fires once
+	 *  per recording instead of drowning in the per-retry warnings. */
+	bool bLoggedChronicCheckpointFailure = false;
 };

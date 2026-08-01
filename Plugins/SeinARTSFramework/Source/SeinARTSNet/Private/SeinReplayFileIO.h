@@ -58,10 +58,4 @@ namespace SeinReplayFileIO
 		int64 MaxBytes,
 		TArray<uint8>& OutBytes,
 		FString& OutError);
-
-	/** Publish a new file only after its sibling temporary file closes successfully. */
-	bool WriteNewAtomically(
-		const FString& FilePath,
-		const TArray<uint8>& Bytes,
-		FString& OutError);
 }
