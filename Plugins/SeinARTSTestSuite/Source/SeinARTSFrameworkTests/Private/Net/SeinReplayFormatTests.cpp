@@ -8,15 +8,61 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "SeinReplayFormat.h"
+#include "SeinReplayJournalFormat.h"
 #include "SeinReplayReader.h"
 #include "SeinReplayWriter.h"
 #include "SeinReplayWireCodec.h"
 #include "Settings/PluginSettings.h"
 #include "Simulation/SeinTestSimContext.h"
+#include "Simulation/SeinTestMatchBootstrap.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Tags/SeinARTSGameplayTags.h"
 #include "TestTypes/SeinReplayTestTypes.h"
 #include "TestTypes/SeinCommandSchemaTestTypes.h"
+
+struct FSeinReplayReaderTestAccess
+{
+	static uint64 BeginSyntheticPlayback(USeinReplayReader& Reader)
+	{
+		++Reader.PlaybackGeneration;
+		Reader.bPlaying = true;
+		Reader.bJournalFailureScheduled = true;
+		Reader.PendingJournalFailureReason = TEXT("synthetic failure");
+		return Reader.PlaybackGeneration;
+	}
+
+	static void DeliverFailure(
+		USeinReplayReader& Reader,
+		uint64 ExpectedPlaybackGeneration)
+	{
+		Reader.HandleJournalPlaybackFailure(ExpectedPlaybackGeneration);
+	}
+
+	static bool IsPlaying(const USeinReplayReader& Reader)
+	{
+		return Reader.bPlaying;
+	}
+
+	static bool IsFailureScheduled(const USeinReplayReader& Reader)
+	{
+		return Reader.bJournalFailureScheduled;
+	}
+
+	static void EndSyntheticPlayback(USeinReplayReader& Reader)
+	{
+		Reader.bPlaying = false;
+		Reader.Stop();
+	}
+};
+
+struct FSeinWorldSubsystemTestAccess
+{
+	static bool IsSchedulerReserved(const USeinWorldSubsystem& World)
+	{
+		return World.bSimulationSchedulerReserved
+			&& World.TickerHandle.IsValid();
+	}
+};
 
 namespace UE::SeinARTSTests
 {
@@ -240,6 +286,136 @@ namespace UE::SeinARTSTests
 				}
 			}
 		};
+
+		/** Freeze a legacy v8 executable fixture so reader compatibility tests do
+		 *  not depend on the current writer, which intentionally emits v9 only. */
+		FString WriteLegacyV8Replay(
+			USeinWorldSubsystem& IdentityWorld,
+			FSeinReplayHeader Header,
+			TArray<FSeinReplayTurnRecord> Turns,
+			int32 EndTick)
+		{
+			Header.EndTick = EndTick;
+			FSeinReplay Replay;
+			Replay.Header = MoveTemp(Header);
+			Replay.Turns = MoveTemp(Turns);
+
+			TArray<uint8> Body;
+			FString Error;
+			if (!FSeinReplayWireCodec::Encode(
+					Replay,
+					{
+						IdentityWorld.GetCommandAdditionalDynamicPayloadStructs(),
+						IdentityWorld.GetCommandAdditionalWireNames()
+					},
+					[&IdentityWorld](
+						FGameplayTag Type,
+						int32 Version,
+						FSeinCommandSchemaDescriptor& Out)
+					{
+						return IdentityWorld.FindCommandSchema(Type, Version, Out);
+					},
+					Body,
+					Error))
+			{
+				return FString();
+			}
+
+			TArray<uint8> FileBytes;
+			if (!SeinReplayFormat::BuildPrefix(
+					Replay.Header.CommandProtocolDigest,
+					Replay.Header.MatchSettingsDigest,
+					Replay.Header.BootstrapReceipt,
+					Replay.Header.ConfigFingerprint,
+					Body,
+					FileBytes,
+					Error))
+			{
+				return FString();
+			}
+			FileBytes.Append(Body);
+
+			const FString Directory =
+				FPaths::ProjectSavedDir() / TEXT("Replays");
+			IFileManager::Get().MakeDirectory(*Directory, /*Tree=*/true);
+			const FString Path = Directory / FString::Printf(
+				TEXT("LegacyV8_%s.seinreplay"),
+				*FGuid::NewGuid().ToString(EGuidFormats::Digits));
+			return FFileHelper::SaveArrayToFile(FileBytes, *Path)
+				? Path
+				: FString();
+		}
+
+		FSeinReplayHeader MakePreparedWorldHeader(
+			USeinWorldSubsystem& World)
+		{
+			FSeinReplayHeader Header;
+			SeinReplayCompatibility::StampCurrent(Header, World.GetWorld());
+			Header.CommandProtocolDigest = World.GetCommandProtocolDigest();
+			Header.MatchSettingsDigest = World.GetMatchSettingsDigest();
+			Header.BootstrapReceipt = World.GetMatchBootstrapReceipt();
+			Header.ConfigFingerprint = World.GetConfigFingerprint();
+			Header.RandomSeed = World.GetSessionSeed();
+			Header.SettingsSnapshot = World.GetMatchSettings();
+			Header.StartTick = World.GetCurrentTick();
+			Header.RecordedAt = FDateTime::UtcNow();
+			for (const FSeinMatchSlot& Slot : Header.SettingsSnapshot.Slots)
+			{
+				if (Slot.State != ESeinSlotState::Human
+					&& Slot.State != ESeinSlotState::AI)
+				{
+					continue;
+				}
+				FSeinPlayerRegistration& Player =
+					Header.Players.AddDefaulted_GetRef();
+				Player.PlayerID = FSeinPlayerID(
+					static_cast<uint8>(Slot.SlotIndex));
+				Player.FactionID = Slot.FactionID;
+				Player.TeamID = Slot.TeamID;
+				Player.bIsAI = Slot.State == ESeinSlotState::AI;
+			}
+			return Header;
+		}
+
+		FSeinMatchSettings MakeOnePlayerMatchSettings()
+		{
+			FSeinMatchSettings Settings;
+			FSeinMatchSlot& Slot = Settings.Slots.AddDefaulted_GetRef();
+			Slot.SlotIndex = 1;
+			Slot.State = ESeinSlotState::Human;
+			return Settings;
+		}
+
+		USeinReplayWriter* StartV9Recording(
+			USeinWorldSubsystem& World,
+			const FSeinMatchSettings& MatchSettings = FSeinMatchSettings())
+		{
+			FString Error;
+			if (!SeinTestMatchBootstrap::Materialize(
+					World,
+					MatchSettings,
+					/*SessionSeed=*/0,
+					FName(TEXT("SeinFrameworkTests.ReplayV9Writer")),
+					&Error)
+				|| !SeinTestMatchBootstrap::Authorize(World, &Error))
+			{
+				return nullptr;
+			}
+
+			USeinReplayWriter* Writer =
+				NewObject<USeinReplayWriter>(&World);
+			Writer->StartRecording(MakePreparedWorldHeader(World));
+			if (!Writer->IsRecording()
+				|| !SeinTestMatchBootstrap::Start(World, &Error)
+				|| !Writer->CaptureCheckpoint(/*bRequired=*/true))
+			{
+				return nullptr;
+			}
+			// Unit/integration fixtures advance the writer's observation contract
+			// explicitly; do not leave the world ticker free-running beside them.
+			World.StopSimulation();
+			return Writer;
+		}
 	}
 
 	TEST(ReplayV8PrefixRoundTripsAndProtectsBody, "SeinARTS.Unit.Network.ReplayFormat")
@@ -577,6 +753,7 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsNotNull(Writer));
 		Writer->StartRecording(Header);
 		ASSERT_THAT(IsTrue(Writer->IsRecording()));
+		FScopedReplayFile PartialFile{Writer->GetActivePartialPath()};
 	}
 
 	TEST(ReplayWriterRequiresContiguousCompletedTickObservations,
@@ -593,6 +770,7 @@ namespace UE::SeinARTSTests
 		USeinReplayWriter* Writer = NewObject<USeinReplayWriter>();
 		ASSERT_THAT(IsNotNull(Writer));
 		Writer->StartRecording(Header);
+		FScopedReplayFile PartialFile{Writer->GetActivePartialPath()};
 		Writer->ObserveCompletedTick(1);
 		ASSERT_THAT(AreEqual(1, Writer->GetObservedEndTick()));
 		ASSERT_THAT(IsFalse(Writer->HasTickObservationFailure()));
@@ -652,6 +830,7 @@ namespace UE::SeinARTSTests
 		USeinReplayWriter* Writer = NewObject<USeinReplayWriter>();
 		Writer->StartRecording(Header);
 		ASSERT_THAT(IsTrue(Writer->IsRecording()));
+		FScopedReplayFile PartialFile{Writer->GetActivePartialPath()};
 
 		TArray<FSeinCommand> Oversized;
 		Oversized.SetNum(SeinReplayFormat::MaxCommandsPerTurn + 1);
@@ -736,6 +915,10 @@ namespace UE::SeinARTSTests
 	TEST(ReplayWriterPublishesAfterTrimmingARecordedFutureTail,
 		"SeinARTS.Integration.Network.Replay")
 	{
+		FActorTestSpawner SourceSpawner;
+		USeinWorldSubsystem* SourceWorld =
+			SourceSpawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(SourceWorld));
 		FActorTestSpawner Spawner;
 		USeinWorldSubsystem* World =
 			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
@@ -751,22 +934,393 @@ namespace UE::SeinARTSTests
 			: 3;
 		const int32 EndTick = FirstTurn * TicksPerTurn;
 
-		USeinReplayWriter* Writer = NewObject<USeinReplayWriter>();
-		Writer->StartRecording(MakeExecutableHeader(*World));
+		USeinReplayWriter* Writer = StartV9Recording(*SourceWorld);
+		ASSERT_THAT(IsNotNull(Writer));
 		Writer->RecordTurn(FirstTurn, {});
 		Writer->RecordTurn(FirstTurn + 1, {}); // unapplied input-delay tail
 		for (int32 Tick = 1; Tick <= EndTick; ++Tick)
 		{
 			Writer->ObserveCompletedTick(Tick);
 		}
+		Writer->FlushAppliedProgressForTests();
+		ASSERT_THAT(IsTrue(Writer->IsRecording()));
+		ASSERT_THAT(AreEqual(1, Writer->GetPersistedTurnCount()));
+		ASSERT_THAT(AreEqual(1, Writer->GetResidentTurnCount()));
+
+		// Model interruption before Finish: the applied turn and Progress are
+		// durable, while the input-delay future turn exists only in RAM.
+		TArray<uint8> LivePartialBytes;
+		ASSERT_THAT(IsTrue(FFileHelper::LoadFileToArray(
+			LivePartialBytes, *Writer->GetActivePartialPath())));
+		FScopedReplayFile LivePartialFile{
+			FPaths::ProjectSavedDir()
+				/ TEXT("Replays")
+				/ FString::Printf(
+					TEXT("LiveInterrupted_%s.seinreplay.partial"),
+					*FGuid::NewGuid().ToString(EGuidFormats::Digits))};
+		ASSERT_THAT(IsTrue(FFileHelper::SaveArrayToFile(
+			LivePartialBytes, *LivePartialFile.Path)));
+		USeinReplayReader* LivePartialReader = NewObject<USeinReplayReader>(
+			&Spawner.GetWorld());
+		ASSERT_THAT(IsTrue(
+			LivePartialReader->LoadFromFile(LivePartialFile.Path)));
+		ASSERT_THAT(AreEqual(1, LivePartialReader->GetTurnCount()));
+		ASSERT_THAT(AreEqual(
+			EndTick, LivePartialReader->GetHeader().EndTick));
+
 		FScopedReplayFile ReplayFile{Writer->FinishRecording()};
 		ASSERT_THAT(IsFalse(ReplayFile.Path.IsEmpty()));
+		TArray<uint8> V9Bytes;
+		ASSERT_THAT(IsTrue(FFileHelper::LoadFileToArray(
+			V9Bytes, *ReplayFile.Path)));
+		ASSERT_THAT(IsTrue(
+			V9Bytes.Num() >= SeinReplayJournalFormat::PrefixBytes));
+		ASSERT_THAT(AreEqual(static_cast<uint8>('9'), V9Bytes[7]));
+
+		// Recomputing only the outer frame digest must not hide a damaged inner
+		// snapshot envelope. BuildFrame performs the same full
+		// semantic validation as the reader before it signs a Checkpoint frame.
+		int64 FrameOffset = SeinReplayJournalFormat::PrefixBytes;
+		bool bFoundCheckpoint = false;
+		FString JournalError;
+		while (FrameOffset + SeinReplayJournalFormat::FrameHeaderBytes
+			<= V9Bytes.Num())
+		{
+			SeinReplayJournalFormat::FFrameHeader FrameHeader;
+			ASSERT_THAT(IsTrue(
+				SeinReplayJournalFormat::ParseFrameHeader(
+					MakeArrayView(
+						V9Bytes.GetData() + FrameOffset,
+						SeinReplayJournalFormat::FrameHeaderBytes),
+					FrameHeader,
+					JournalError)));
+			const int64 PayloadOffset = FrameOffset
+				+ SeinReplayJournalFormat::FrameHeaderBytes;
+			const int64 NextFrameOffset = PayloadOffset
+				+ static_cast<int64>(FrameHeader.PayloadBytes);
+			ASSERT_THAT(IsTrue(NextFrameOffset <= V9Bytes.Num()));
+			if (FrameHeader.Type
+				== SeinReplayJournalFormat::EFrameType::Checkpoint)
+			{
+				TArray<uint8> DamagedCheckpoint;
+				DamagedCheckpoint.Append(
+					V9Bytes.GetData() + PayloadOffset,
+					static_cast<int32>(FrameHeader.PayloadBytes));
+				DamagedCheckpoint.Last() ^= 1u;
+				TArray<uint8> RefusedFrame;
+				SeinReplayJournalFormat::FFrameHeader RefusedHeader;
+				ASSERT_THAT(IsFalse(
+					SeinReplayJournalFormat::BuildFrame(
+						FrameHeader.Type,
+						FrameHeader.Flags,
+						FrameHeader.Sequence,
+						FrameHeader.FirstTurn,
+						FrameHeader.LastTurn,
+						FrameHeader.TimelineTick,
+						FrameHeader.PreviousDigest,
+						DamagedCheckpoint,
+						RefusedFrame,
+						RefusedHeader,
+						JournalError)));
+				ASSERT_THAT(IsTrue(
+					JournalError.Contains(TEXT("Checkpoint"))));
+				bFoundCheckpoint = true;
+				break;
+			}
+			FrameOffset = NextFrameOffset;
+		}
+		ASSERT_THAT(IsTrue(bFoundCheckpoint));
 
 		USeinReplayReader* Reader = NewObject<USeinReplayReader>(
 			&Spawner.GetWorld());
 		ASSERT_THAT(IsTrue(Reader->LoadFromFile(ReplayFile.Path)));
 		ASSERT_THAT(AreEqual(1, Reader->GetTurnCount()));
 		ASSERT_THAT(AreEqual(EndTick, Reader->GetHeader().EndTick));
+
+		// A complete but corrupt terminal frame is not a recoverable crash tail,
+		// even when the file carries the partial extension.
+		TArray<uint8> CorruptBytes = V9Bytes;
+		CorruptBytes.Last() ^= 1u;
+		FScopedReplayFile CorruptPartialFile{
+			FPaths::ProjectSavedDir()
+				/ TEXT("Replays")
+				/ FString::Printf(
+					TEXT("Corrupt_%s.seinreplay.partial"),
+					*FGuid::NewGuid().ToString(EGuidFormats::Digits))};
+		ASSERT_THAT(IsTrue(FFileHelper::SaveArrayToFile(
+			CorruptBytes, *CorruptPartialFile.Path)));
+		TestRunner->AddExpectedError(
+			TEXT("rejected v9 journal"),
+			EAutomationExpectedErrorFlags::Contains,
+			1,
+			false);
+		USeinReplayReader* CorruptReader = NewObject<USeinReplayReader>(
+			&Spawner.GetWorld());
+		ASSERT_THAT(IsFalse(
+			CorruptReader->LoadFromFile(CorruptPartialFile.Path)));
+
+		// A partial recording may ignore only a torn terminal frame. The forced
+		// Progress immediately before Finalize still proves this exact frontier.
+		ASSERT_THAT(IsTrue(V9Bytes.Num()
+			> SeinReplayJournalFormat::FrameHeaderBytes));
+		V9Bytes.SetNum(V9Bytes.Num() - 8, EAllowShrinking::No);
+		FScopedReplayFile PartialFile{
+			FPaths::ProjectSavedDir()
+				/ TEXT("Replays")
+				/ FString::Printf(
+					TEXT("Interrupted_%s.seinreplay.partial"),
+					*FGuid::NewGuid().ToString(EGuidFormats::Digits))};
+		ASSERT_THAT(IsTrue(FFileHelper::SaveArrayToFile(
+			V9Bytes, *PartialFile.Path)));
+		USeinReplayReader* PartialReader = NewObject<USeinReplayReader>(
+			&Spawner.GetWorld());
+		ASSERT_THAT(IsTrue(PartialReader->LoadFromFile(PartialFile.Path)));
+		ASSERT_THAT(AreEqual(1, PartialReader->GetTurnCount()));
+		ASSERT_THAT(AreEqual(EndTick, PartialReader->GetHeader().EndTick));
+	}
+
+	TEST(ReplayV9StaleFailureCallbackCannotStopANewerPlayback,
+		"SeinARTS.Unit.Network.ReplayFormat.V9")
+	{
+		USeinReplayReader* Reader = NewObject<USeinReplayReader>();
+		ASSERT_THAT(IsNotNull(Reader));
+		const uint64 OldGeneration =
+			FSeinReplayReaderTestAccess::BeginSyntheticPlayback(*Reader);
+		Reader->Stop();
+		const uint64 NewGeneration =
+			FSeinReplayReaderTestAccess::BeginSyntheticPlayback(*Reader);
+		ASSERT_THAT(IsTrue(NewGeneration != OldGeneration));
+
+		FSeinReplayReaderTestAccess::DeliverFailure(
+			*Reader, OldGeneration);
+		ASSERT_THAT(IsTrue(
+			FSeinReplayReaderTestAccess::IsPlaying(*Reader)));
+		ASSERT_THAT(IsTrue(
+			FSeinReplayReaderTestAccess::IsFailureScheduled(*Reader)));
+		FSeinReplayReaderTestAccess::EndSyntheticPlayback(*Reader);
+	}
+
+	TEST(ReplayV9StreamsBeyondTheLegacySixtyFourMiBLimit,
+		"SeinARTS.Integration.Network.Replay")
+	{
+		FActorTestSpawner SourceSpawner;
+		USeinWorldSubsystem* Source =
+			SourceSpawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(Source));
+		USeinReplayWriter* Writer = StartV9Recording(
+			*Source, MakeOnePlayerMatchSettings());
+		ASSERT_THAT(IsNotNull(Writer));
+
+		const USeinARTSCoreSettings* Settings =
+			GetDefault<USeinARTSCoreSettings>();
+		ASSERT_THAT(IsNotNull(Settings));
+		const int32 TicksPerTurn = Settings->TurnRate > 0
+			? FMath::Max(1, Settings->SimulationTickRate / Settings->TurnRate)
+			: 1;
+		const int32 FirstTurn = Settings->InputDelayTurns > 0
+			? Settings->InputDelayTurns
+			: 3;
+
+		// Observer selections are valid replay traffic and let this regression
+		// cross the retired v8 whole-body ceiling in only a handful of turns.
+		TArray<FSeinEntityHandle> LargeSelection;
+		LargeSelection.Reserve(4096);
+		for (int32 Index = 1; Index <= 4096; ++Index)
+		{
+			LargeSelection.Emplace(Index, 1);
+		}
+		TArray<FSeinCommand> Commands;
+		Commands.Reserve(224);
+		for (int32 Index = 0; Index < 224; ++Index)
+		{
+			FSeinCommand Command = FSeinCommand::MakeSelectionChangedCommand(
+				FSeinPlayerID(1), LargeSelection, 0);
+			Command.IssuerKind = ESeinCommandIssuerKind::Player;
+			Commands.Add(MoveTemp(Command));
+		}
+
+		int32 ObservedTick = 0;
+		int32 Turn = FirstTurn;
+		constexpr int32 MaximumRegressionTurns = 32;
+		while (Writer->GetPersistedBytes() <= SeinReplayFormat::MaxBodyBytes
+			&& Turn < FirstTurn + MaximumRegressionTurns)
+		{
+			const int32 CanonicalTick = Turn * TicksPerTurn;
+			for (FSeinCommand& Command : Commands)
+			{
+				Command.Tick = CanonicalTick;
+			}
+			Writer->RecordTurn(Turn, Commands);
+			while (ObservedTick < CanonicalTick)
+			{
+				Writer->ObserveCompletedTick(++ObservedTick);
+			}
+			Writer->FlushAppliedProgressForTests();
+			ASSERT_THAT(IsTrue(Writer->IsRecording()));
+			ASSERT_THAT(AreEqual(0, Writer->GetResidentTurnCount()));
+			++Turn;
+		}
+
+		const int32 ExpectedTurns = Turn - FirstTurn;
+		ASSERT_THAT(IsTrue(
+			Writer->GetPersistedBytes() > SeinReplayFormat::MaxBodyBytes));
+		ASSERT_THAT(AreEqual(ExpectedTurns, Writer->GetPersistedTurnCount()));
+		ASSERT_THAT(IsTrue(Writer->GetPeakResidentTurnCount() <= 1));
+		ASSERT_THAT(IsTrue(
+			Writer->GetPeakResidentBytes() > 0
+			&& Writer->GetPeakResidentBytes()
+				<= FSeinOpaqueCommandBatch::MaxBytes));
+
+		FScopedReplayFile ReplayFile{Writer->FinishRecording()};
+		ASSERT_THAT(IsFalse(ReplayFile.Path.IsEmpty()));
+		ASSERT_THAT(IsTrue(
+			IFileManager::Get().FileSize(*ReplayFile.Path)
+				> static_cast<int64>(SeinReplayFormat::MaxBodyBytes)));
+
+		FActorTestSpawner TargetSpawner;
+		USeinReplayReader* Reader = NewObject<USeinReplayReader>(
+			&TargetSpawner.GetWorld());
+		ASSERT_THAT(IsTrue(Reader->LoadFromFile(ReplayFile.Path)));
+		ASSERT_THAT(AreEqual(ExpectedTurns, Reader->GetTurnCount()));
+		ASSERT_THAT(AreEqual(0, Reader->GetResidentTurnCount()));
+	}
+
+	TEST(ReplayV9CheckpointSeekMatchesTheSourceCanonicalRoot,
+		"SeinARTS.Determinism.Network.Replay")
+	{
+		FActorTestSpawner SourceSpawner;
+		USeinWorldSubsystem* Source =
+			SourceSpawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(Source));
+		USeinReplayWriter* Writer = StartV9Recording(
+			*Source, MakeOnePlayerMatchSettings());
+		ASSERT_THAT(IsNotNull(Writer));
+
+		const USeinARTSCoreSettings* Settings =
+			GetDefault<USeinARTSCoreSettings>();
+		ASSERT_THAT(IsNotNull(Settings));
+		const int32 TicksPerTurn = Settings->TurnRate > 0
+			? FMath::Max(1, Settings->SimulationTickRate / Settings->TurnRate)
+			: 1;
+		const int32 FirstTurn = Settings->InputDelayTurns > 0
+			? Settings->InputDelayTurns
+			: 3;
+		const int32 CheckpointTick = FirstTurn * TicksPerTurn;
+		const int32 EndTick = (FirstTurn + 1) * TicksPerTurn;
+		Writer->RecordTurn(FirstTurn, {});
+		FSeinCommand Concede;
+		Concede.PlayerID = FSeinPlayerID(1);
+		Concede.IssuerKind = ESeinCommandIssuerKind::Player;
+		Concede.CommandType = SeinARTSTags::Command_Type_ConcedeMatch;
+		Concede.Tick = EndTick;
+		Writer->RecordTurn(FirstTurn + 1, {Concede});
+		FString Error;
+		FGuid SourceCheckpointRoot;
+
+		ASSERT_THAT(IsTrue(Source->StartSimulation()));
+		for (int32 ExpectedTick = 1; ExpectedTick <= EndTick; ++ExpectedTick)
+		{
+			if (ExpectedTick == EndTick)
+			{
+				Source->SubmitLocalCommandDraft(Concede);
+			}
+			FTSTicker::GetCoreTicker().Tick(
+				Source->GetFixedDeltaTimeSeconds());
+			ASSERT_THAT(AreEqual(ExpectedTick, Source->GetCurrentTick()));
+			Writer->ObserveCompletedTick(ExpectedTick);
+			if (ExpectedTick == CheckpointTick)
+			{
+				ASSERT_THAT(IsTrue(
+					Writer->CaptureCheckpoint(/*bRequired=*/false)));
+				ASSERT_THAT(IsTrue(Source->ComputeCanonicalStateRoot(
+					SourceCheckpointRoot, Error)));
+			}
+		}
+
+		FGuid SourceRoot;
+		ASSERT_THAT(IsTrue(
+			Source->ComputeCanonicalStateRoot(SourceRoot, Error)));
+		Source->StopSimulation();
+		FScopedReplayFile ReplayFile{Writer->FinishRecording()};
+		ASSERT_THAT(IsFalse(ReplayFile.Path.IsEmpty()));
+
+		// A seek must first reproduce the selected checkpoint exactly, before
+		// any later journal turn is allowed to advance the restored world.
+		FActorTestSpawner CheckpointProbeSpawner;
+		USeinWorldSubsystem* CheckpointProbe =
+			CheckpointProbeSpawner.GetWorld()
+				.GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(CheckpointProbe));
+		USeinReplayReader* CheckpointProbeReader =
+			NewObject<USeinReplayReader>(&CheckpointProbeSpawner.GetWorld());
+		ASSERT_THAT(IsTrue(
+			CheckpointProbeReader->LoadFromFile(ReplayFile.Path)));
+		ASSERT_THAT(IsTrue(
+			CheckpointProbeReader->PlayFromTick(CheckpointTick)));
+		CheckpointProbeReader->Stop();
+		FGuid RestoredCheckpointRoot;
+		ASSERT_THAT(IsTrue(CheckpointProbe->ComputeCanonicalStateRoot(
+			RestoredCheckpointRoot, Error)));
+		ASSERT_THAT(AreEqual(
+			SourceCheckpointRoot.ToString(EGuidFormats::Digits),
+			RestoredCheckpointRoot.ToString(EGuidFormats::Digits)));
+
+		FActorTestSpawner TargetSpawner;
+		USeinWorldSubsystem* Target =
+			TargetSpawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(Target));
+		USeinReplayReader* Reader = NewObject<USeinReplayReader>(
+			&TargetSpawner.GetWorld());
+		ASSERT_THAT(IsTrue(Reader->LoadFromFile(ReplayFile.Path)));
+		ASSERT_THAT(IsTrue(
+			Reader->PlayFromTick(CheckpointTick + 1)));
+		for (int32 Pump = 0; Pump < EndTick * 4 && Reader->IsPlaying(); ++Pump)
+		{
+			FTSTicker::GetCoreTicker().Tick(
+				Target->GetFixedDeltaTimeSeconds());
+		}
+		ASSERT_THAT(AreEqual(EndTick, Target->GetCurrentTick()));
+		ASSERT_THAT(IsFalse(Reader->IsPlaying()));
+
+		// Natural replay completion explicitly releases the scheduler. Re-arm
+		// it without pumping a tick so the canonical-root API has its required
+		// active timeline boundary for the source/target comparison.
+		ASSERT_THAT(IsTrue(Target->StartSimulation()));
+		FGuid TargetRoot;
+		ASSERT_THAT(IsTrue(
+			Target->ComputeCanonicalStateRoot(TargetRoot, Error)));
+		ASSERT_THAT(AreEqual(
+			SourceRoot.ToString(EGuidFormats::Digits),
+			TargetRoot.ToString(EGuidFormats::Digits)));
+		Target->StopSimulation();
+
+		// Tick-zero Play uses the mandatory initial checkpoint and must converge
+		// to the same state after executing the post-checkpoint command.
+		FActorTestSpawner FullTargetSpawner;
+		USeinWorldSubsystem* FullTarget =
+			FullTargetSpawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(FullTarget));
+		USeinReplayReader* FullReader = NewObject<USeinReplayReader>(
+			&FullTargetSpawner.GetWorld());
+		ASSERT_THAT(IsTrue(FullReader->LoadFromFile(ReplayFile.Path)));
+		ASSERT_THAT(IsTrue(FullReader->Play()));
+		for (int32 Pump = 0;
+			Pump < EndTick * 4 && FullReader->IsPlaying();
+			++Pump)
+		{
+			FTSTicker::GetCoreTicker().Tick(
+				FullTarget->GetFixedDeltaTimeSeconds());
+		}
+		ASSERT_THAT(AreEqual(EndTick, FullTarget->GetCurrentTick()));
+		ASSERT_THAT(IsFalse(FullReader->IsPlaying()));
+		ASSERT_THAT(IsTrue(FullTarget->StartSimulation()));
+		FGuid FullTargetRoot;
+		ASSERT_THAT(IsTrue(FullTarget->ComputeCanonicalStateRoot(
+			FullTargetRoot, Error)));
+		ASSERT_THAT(AreEqual(
+			SourceRoot.ToString(EGuidFormats::Digits),
+			FullTargetRoot.ToString(EGuidFormats::Digits)));
+		FullTarget->StopSimulation();
 	}
 
 	TEST(ReplayTurnEnvelopeRejectsImpossibleTimingAndForgedProvenance,
@@ -893,9 +1447,8 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(World->IsSimulationContentReady()));
 		BindReplayTestMaterializer(*World);
 
-		USeinReplayWriter* Writer = NewObject<USeinReplayWriter>();
-		Writer->StartRecording(MakeExecutableHeader(*World));
-		FScopedReplayFile SourceFile{Writer->FinishRecording()};
+		FScopedReplayFile SourceFile{WriteLegacyV8Replay(
+			*World, MakeExecutableHeader(*World), {}, /*EndTick=*/0)};
 		ASSERT_THAT(IsFalse(SourceFile.Path.IsEmpty()));
 
 		TArray<uint8> Bytes;
@@ -938,9 +1491,8 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsNotNull(World));
 		BindReplayTestMaterializer(*World);
 
-		USeinReplayWriter* Writer = NewObject<USeinReplayWriter>();
-		Writer->StartRecording(MakeExecutableHeader(*World));
-		FScopedReplayFile ReplayFile{Writer->FinishRecording()};
+		FScopedReplayFile ReplayFile{WriteLegacyV8Replay(
+			*World, MakeExecutableHeader(*World), {}, /*EndTick=*/0)};
 		ASSERT_THAT(IsFalse(ReplayFile.Path.IsEmpty()));
 
 		USeinReplayReader* Reader = NewObject<USeinReplayReader>(
@@ -950,6 +1502,10 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(AreEqual(0, World->GetCurrentTick()));
 		ASSERT_THAT(IsFalse(World->IsSimulationRunning()));
 		ASSERT_THAT(IsFalse(Reader->IsPlaying()));
+		ASSERT_THAT(IsTrue(World->GetMatchBootstrapState()
+			== ESeinMatchBootstrapState::Consumed));
+		ASSERT_THAT(IsFalse(
+			FSeinWorldSubsystemTestAccess::IsSchedulerReserved(*World)));
 	}
 
 	TEST(ReplayNaturallyStopsAtInclusiveEndTickUnderCatchUp,
@@ -961,11 +1517,8 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsNotNull(World));
 		BindReplayTestMaterializer(*World);
 
-		USeinReplayWriter* Writer = NewObject<USeinReplayWriter>();
-		Writer->StartRecording(MakeExecutableHeader(*World));
-		Writer->ObserveCompletedTick(1);
-		Writer->ObserveCompletedTick(2);
-		FScopedReplayFile ReplayFile{Writer->FinishRecording()};
+		FScopedReplayFile ReplayFile{WriteLegacyV8Replay(
+			*World, MakeExecutableHeader(*World), {}, /*EndTick=*/2)};
 		ASSERT_THAT(IsFalse(ReplayFile.Path.IsEmpty()));
 
 		USeinReplayReader* Reader = NewObject<USeinReplayReader>(
@@ -995,11 +1548,8 @@ namespace UE::SeinARTSTests
 		Slot.FactionID = FSeinFactionID(1);
 		FSeinReplayHeader Header = MakeExecutableHeader(*World, MatchSettings);
 
-		USeinReplayWriter* Writer = NewObject<USeinReplayWriter>();
-		Writer->StartRecording(Header);
-		Writer->ObserveCompletedTick(1);
-		Writer->ObserveCompletedTick(2);
-		FScopedReplayFile ReplayFile{Writer->FinishRecording()};
+		FScopedReplayFile ReplayFile{WriteLegacyV8Replay(
+			*World, Header, {}, /*EndTick=*/2)};
 		ASSERT_THAT(IsFalse(ReplayFile.Path.IsEmpty()));
 
 		USeinReplayReader* Reader = NewObject<USeinReplayReader>(
@@ -1057,14 +1607,11 @@ namespace UE::SeinARTSTests
 		Pause.CommandType = SeinARTSTags::Command_Type_PauseMatchRequest;
 		Pause.Tick = EndTick;
 
-		USeinReplayWriter* Writer = NewObject<USeinReplayWriter>();
-		Writer->StartRecording(Header);
-		Writer->RecordTurn(FirstTurn, {Pause});
-		for (int32 Tick = 1; Tick <= EndTick; ++Tick)
-		{
-			Writer->ObserveCompletedTick(Tick);
-		}
-		FScopedReplayFile ReplayFile{Writer->FinishRecording()};
+		FSeinReplayTurnRecord PauseTurn;
+		PauseTurn.TurnId = FirstTurn;
+		PauseTurn.Commands.Add(Pause);
+		FScopedReplayFile ReplayFile{WriteLegacyV8Replay(
+			*World, Header, {PauseTurn}, EndTick)};
 		ASSERT_THAT(IsFalse(ReplayFile.Path.IsEmpty()));
 
 		USeinReplayReader* Reader = NewObject<USeinReplayReader>(
@@ -1073,6 +1620,77 @@ namespace UE::SeinARTSTests
 			TEXT("contains unsupported pause-control"),
 			EAutomationExpectedErrorFlags::Contains, 1, false);
 		ASSERT_THAT(IsFalse(Reader->LoadFromFile(ReplayFile.Path)));
+	}
+
+	TEST(ReplayV9WriterRejectsPauseCommandsWithoutAFrozenTimeJournal,
+		"SeinARTS.Integration.Network.Replay")
+	{
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+		const USeinARTSCoreSettings* Settings =
+			GetDefault<USeinARTSCoreSettings>();
+		ASSERT_THAT(IsNotNull(Settings));
+		const int32 TicksPerTurn = Settings->TurnRate > 0
+			? FMath::Max(1, Settings->SimulationTickRate / Settings->TurnRate)
+			: 1;
+		const int32 FirstTurn = Settings->InputDelayTurns > 0
+			? Settings->InputDelayTurns
+			: 3;
+
+		USeinReplayWriter* Writer = StartV9Recording(
+			*World, MakeOnePlayerMatchSettings());
+		ASSERT_THAT(IsNotNull(Writer));
+		FScopedReplayFile PartialFile{Writer->GetActivePartialPath()};
+
+		FSeinCommand Pause;
+		Pause.PlayerID = FSeinPlayerID(1);
+		Pause.IssuerKind = ESeinCommandIssuerKind::Player;
+		Pause.CommandType = SeinARTSTags::Command_Type_PauseMatchRequest;
+		Pause.Tick = FirstTurn * TicksPerTurn;
+
+		TestRunner->AddExpectedError(
+			TEXT("contains unsupported pause-control"),
+			EAutomationExpectedErrorFlags::Contains, 1, false);
+		Writer->RecordTurn(FirstTurn, {Pause});
+		ASSERT_THAT(IsFalse(Writer->IsRecording()));
+		ASSERT_THAT(IsTrue(IFileManager::Get().FileExists(
+			*PartialFile.Path)));
+
+		TestRunner->AddExpectedError(
+			TEXT("recording was aborted by an invalid or oversized journal"),
+			EAutomationExpectedErrorFlags::Contains, 1, false);
+		ASSERT_THAT(IsTrue(Writer->FinishRecording().IsEmpty()));
+	}
+
+	TEST(ReplayV9TerminalCheckpointReleasesItsDormantScheduler,
+		"SeinARTS.Integration.Network.Replay")
+	{
+		FActorTestSpawner SourceSpawner;
+		USeinWorldSubsystem* Source =
+			SourceSpawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(Source));
+		USeinReplayWriter* Writer = StartV9Recording(
+			*Source, MakeOnePlayerMatchSettings());
+		ASSERT_THAT(IsNotNull(Writer));
+		FScopedReplayFile ReplayFile{Writer->FinishRecording()};
+		ASSERT_THAT(IsFalse(ReplayFile.Path.IsEmpty()));
+
+		FActorTestSpawner TargetSpawner;
+		USeinWorldSubsystem* Target =
+			TargetSpawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(Target));
+		ASSERT_THAT(IsFalse(
+			FSeinWorldSubsystemTestAccess::IsSchedulerReserved(*Target)));
+		USeinReplayReader* Reader = NewObject<USeinReplayReader>(
+			&TargetSpawner.GetWorld());
+		ASSERT_THAT(IsTrue(Reader->LoadFromFile(ReplayFile.Path)));
+		ASSERT_THAT(IsTrue(Reader->Play()));
+		ASSERT_THAT(IsFalse(Reader->IsPlaying()));
+		ASSERT_THAT(IsFalse(Target->IsSimulationRunning()));
+		ASSERT_THAT(IsFalse(
+			FSeinWorldSubsystemTestAccess::IsSchedulerReserved(*Target)));
 	}
 
 	TEST(ReplayStopRetractsAPrimedFutureTurnBeforeReleasingIngress,
@@ -1106,14 +1724,11 @@ namespace UE::SeinARTSTests
 			PlayerID, FFixedVector());
 		Recorded.IssuerKind = ESeinCommandIssuerKind::Player;
 		Recorded.Tick = EndTick;
-		USeinReplayWriter* Writer = NewObject<USeinReplayWriter>();
-		Writer->StartRecording(Header);
-		Writer->RecordTurn(FirstTurn, {Recorded});
-		for (int32 Tick = 1; Tick <= EndTick; ++Tick)
-		{
-			Writer->ObserveCompletedTick(Tick);
-		}
-		FScopedReplayFile ReplayFile{Writer->FinishRecording()};
+		FSeinReplayTurnRecord RecordedTurn;
+		RecordedTurn.TurnId = FirstTurn;
+		RecordedTurn.Commands.Add(Recorded);
+		FScopedReplayFile ReplayFile{WriteLegacyV8Replay(
+			*World, Header, {RecordedTurn}, EndTick)};
 		ASSERT_THAT(IsFalse(ReplayFile.Path.IsEmpty()));
 
 		USeinReplayReader* Reader = NewObject<USeinReplayReader>(
@@ -1164,16 +1779,12 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsNotNull(World));
 		BindReplayTestMaterializer(*World);
 
-		USeinReplayWriter* ActiveWriter = NewObject<USeinReplayWriter>();
-		ActiveWriter->StartRecording(MakeExecutableHeader(*World));
-		ActiveWriter->ObserveCompletedTick(1);
-		ActiveWriter->ObserveCompletedTick(2);
-		FScopedReplayFile ActiveFile{ActiveWriter->FinishRecording()};
+		FScopedReplayFile ActiveFile{WriteLegacyV8Replay(
+			*World, MakeExecutableHeader(*World), {}, /*EndTick=*/2)};
 		ASSERT_THAT(IsFalse(ActiveFile.Path.IsEmpty()));
 
-		USeinReplayWriter* ReplacementWriter = NewObject<USeinReplayWriter>();
-		ReplacementWriter->StartRecording(MakeExecutableHeader(*World));
-		FScopedReplayFile ReplacementFile{ReplacementWriter->FinishRecording()};
+		FScopedReplayFile ReplacementFile{WriteLegacyV8Replay(
+			*World, MakeExecutableHeader(*World), {}, /*EndTick=*/0)};
 		ASSERT_THAT(IsFalse(ReplacementFile.Path.IsEmpty()));
 
 		USeinReplayReader* Reader = NewObject<USeinReplayReader>(
@@ -1217,11 +1828,8 @@ namespace UE::SeinARTSTests
 			InvalidSettingsHeader.MatchSettingsDigest,
 			nullptr)));
 		StampSyntheticBootstrapReceipt(InvalidSettingsHeader);
-		USeinReplayWriter* InvalidSettingsWriter =
-			NewObject<USeinReplayWriter>();
-		InvalidSettingsWriter->StartRecording(InvalidSettingsHeader);
-		FScopedReplayFile InvalidSettingsFile{
-			InvalidSettingsWriter->FinishRecording()};
+		FScopedReplayFile InvalidSettingsFile{WriteLegacyV8Replay(
+			*World, InvalidSettingsHeader, {}, /*EndTick=*/0)};
 		ASSERT_THAT(IsFalse(InvalidSettingsFile.Path.IsEmpty()));
 
 		TestRunner->AddExpectedError(
@@ -1265,14 +1873,11 @@ namespace UE::SeinARTSTests
 		BrokerCommand.Tick = EndTick;
 		BrokerCommand.Payload = FInstancedStruct::Make(FSeinBrokerOrderPayload());
 
-		USeinReplayWriter* Writer = NewObject<USeinReplayWriter>();
-		Writer->StartRecording(Header);
-		Writer->RecordTurn(FirstTurn, {BrokerCommand});
-		for (int32 Tick = 1; Tick <= EndTick; ++Tick)
-		{
-			Writer->ObserveCompletedTick(Tick);
-		}
-		FScopedReplayFile ReplayFile{Writer->FinishRecording()};
+		FSeinReplayTurnRecord BrokerTurn;
+		BrokerTurn.TurnId = FirstTurn;
+		BrokerTurn.Commands.Add(BrokerCommand);
+		FScopedReplayFile ReplayFile{WriteLegacyV8Replay(
+			*World, Header, {BrokerTurn}, EndTick)};
 		ASSERT_THAT(IsFalse(ReplayFile.Path.IsEmpty()));
 
 		USeinReplayReader* Reader = NewObject<USeinReplayReader>(

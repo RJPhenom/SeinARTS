@@ -720,6 +720,9 @@ private:
 	 *  replay, desync alarm, or drop lifecycle survive travel. */
 	void ResetLockstepEpochState(UWorld* RetiringWorld);
 	void ResetMatchState(UWorld* RetiringWorld);
+	/** Publish or preserve the source epoch's replay, then release all replay
+	 *  ownership before a committed destination starts at tick zero. */
+	void RetireReplayEpochForCommittedTravel();
 
 	/** Release Net-owned AI takeover objects tied to RetiringWorld and discard
 	 *  commands they authored for its obsolete turn epoch. */

@@ -1,25 +1,27 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinReplayWriter.h
- * @brief   Server-side replay capture. Buffers every dispatched turn in
- *          memory; flushes to disk on FinishRecording.
+ * @brief   Bounded, append-only v9 replay recording.
  *
- * Lifecycle:
- *   1. USeinNetSubsystem::StartLockstepSession (server) → StartRecording
- *   2. USeinNetSubsystem::ServerCheckTurnComplete (each fan-out) → RecordTurn
- *   3. USeinNetSubsystem::Deinitialize (or Sein.Net.SaveReplay) → FinishRecording
- *
- * In-memory buffer keeps writes fast (no per-turn IO at 10 Hz). If the
- * editor crashes mid-match, the in-memory buffer is lost — Phase 4b can
- * add periodic flushing if needed.
+ * The recorder persists a digest-chained chunk journal while the match is
+ * running. Only turns whose first simulation tick has completed are promoted
+ * to the durable timeline; the ordinary input-delay future tail remains in a
+ * small resident queue and is never made executable by an interrupted file.
  */
 
 #pragma once
 
 #include "CoreMinimal.h"
 #include "UObject/Object.h"
-#include "Data/SeinReplayTurn.h"
+#include "Data/SeinReplayHeader.h"
+#include "SeinNetProtocolTypes.h"
 #include "SeinReplayWriter.generated.h"
+
+struct FSeinReplayWriterPendingTurn
+{
+	int32 TurnId = INDEX_NONE;
+	FSeinOpaqueCommandBatch OpaqueCommands;
+};
 
 UCLASS()
 class SEINARTSNET_API USeinReplayWriter : public UObject
@@ -27,44 +29,114 @@ class SEINARTSNET_API USeinReplayWriter : public UObject
 	GENERATED_BODY()
 
 public:
-	/** Open a new recording. Resets the buffer and stores the header. Idempotent
-	 *  if called while already recording (logs warning, replaces header). */
+	/** Validate and open a unique Saved/Replays/*.seinreplay.partial v9 journal.
+	 *  Re-entering preserves the previous partial recording and starts a new one. */
 	void StartRecording(const FSeinReplayHeader& Header);
 
-	/** Append one assembled-turn record. No-op if not recording. */
+	/** Encode then record one canonical assembled turn. This convenience seam is
+	 *  retained for tests/tooling; live fan-out should pass its exact wire bytes
+	 *  to RecordEncodedTurn instead. */
 	void RecordTurn(int32 TurnId, const TArray<FSeinCommand>& Commands);
 
-	/** Observe one completed sim tick. Calls must be contiguous from tick 1;
-	 *  FinishRecording stamps the last observed value as inclusive EndTick. */
+	/** Validate and retain the exact opaque fan-out bytes for one assembled turn. */
+	void RecordEncodedTurn(
+		int32 TurnId,
+		const FSeinOpaqueCommandBatch& OpaqueCommands);
+
+	/** Observe one completed sim tick. Calls must be contiguous from tick 1.
+	 *  File/checkpoint maintenance is deferred beyond the completion callback. */
 	void ObserveCompletedTick(int32 CompletedTick);
 
-	/** Serialize the buffer to disk and close. Returns the resolved file path
-	 *  on success, empty string on failure (or if not recording). Writes to
-	 *  Saved/Replays/<MapName>_<UTCStamp>.seinreplay by default. */
+	/** Capture and append a checkpoint at the current quiescent tick boundary.
+	 *  The first checkpoint is mandatory and must be tick zero. A required
+	 *  failure aborts recording; an optional periodic capture is retried later. */
+	bool CaptureCheckpoint(bool bRequired);
+
+	/** Flush the applied journal, append a terminal frontier, and atomically
+	 *  publish the partial as *.seinreplay. Future input-delay turns are omitted. */
 	FString FinishRecording();
 
-	/** True if StartRecording was called and FinishRecording hasn't run yet. */
 	bool IsRecording() const { return bRecording; }
 
-	/** How many turn records are in the buffer. */
-	int32 GetBufferedTurnCount() const { return Buffer.Turns.Num(); }
+	/** Historical API name retained for compatibility. This is the total number
+	 *  of accepted turn records, not the number currently resident in memory. */
+	int32 GetBufferedTurnCount() const { return TotalRecordedTurnCount; }
 
-	/** Inclusive terminal tick observed so far (zero before the first tick). */
 	int32 GetObservedEndTick() const { return LastObservedCompletedTick; }
-
-	/** True after a missing, duplicate, or out-of-order completed-tick callback. */
 	bool HasTickObservationFailure() const { return bTickObservationFailed; }
 
+	/** Streaming diagnostics used by tests and server telemetry. */
+	const FString& GetActivePartialPath() const { return ActivePartialPath; }
+	const FString& GetLastPublishedPath() const { return LastPublishedPath; }
+	uint64 GetPersistedBytes() const { return PersistedBytes; }
+	int32 GetPersistedTurnCount() const { return PersistedTurnCount; }
+	int32 GetResidentTurnCount() const { return PendingTurns.Num(); }
+	int32 GetPeakResidentTurnCount() const { return PeakResidentTurnCount; }
+	uint64 GetResidentBytes() const { return ResidentBytes; }
+	uint64 GetPeakResidentBytes() const { return PeakResidentBytes; }
+
+#if WITH_DEV_AUTOMATION_TESTS
+	/** Force the same applied-turn/progress flush used by deferred maintenance. */
+	void FlushAppliedProgressForTests();
+#endif
+
 private:
+	void ScheduleMaintenance();
+	void RunDeferredMaintenance(bool bForce);
+	bool FlushEligibleTurns(bool bForce);
+	bool AppendProgress(int32 EndTick, bool bForceDuplicate);
+	bool AppendFrontierFrame(uint8 FrameType, int32 EndTick);
+	bool AppendJournalFrame(
+		uint8 FrameType,
+		int32 FirstTurn,
+		int32 LastTurn,
+		int32 TimelineTick,
+		TConstArrayView<uint8> Payload);
+	bool CanPublishFrontier(int32 EndTick, FString& OutError) const;
+	bool IsPeriodicCheckpointDue() const;
+	void FailRecording(
+		const FString& Reason,
+		bool bTickFailure = false);
+	void ReleaseResidentTurns();
+	void ResetForNewRecording();
+	int32 GetEligiblePendingTurnCount() const;
+	uint64 GetMaximumFileBytes() const;
+	uint64 GetMaximumResidentBytes() const;
+	int32 GetMaximumResidentTurns() const;
+
 	UPROPERTY()
-	FSeinReplay Buffer;
+	FSeinReplayHeader RecordingHeader;
+
+	TArray<FSeinReplayWriterPendingTurn> PendingTurns;
+	FString ActivePartialPath;
+	FString FinalFilePath;
+	FString LastPublishedPath;
+	FGuid PreviousFrameDigest;
+	/** Source simulation identity for this epoch. The UObject outer may already
+	 *  resolve to a destination world while committed travel retires the journal. */
+	TWeakObjectPtr<UWorld> RecordingWorld;
 
 	bool bRecording = false;
 	bool bTickObservationFailed = false;
 	bool bJournalObservationFailed = false;
-	uint64 BaselineBodyBytes = 0;
-	uint64 BaselineDecodedAllocationBytes = 0;
-	uint64 BufferedBodyBytes = 0;
-	uint64 BufferedDecodedAllocationBytes = 0;
+	bool bHasInitialCheckpoint = false;
+	bool bMaintenanceScheduled = false;
+	bool bMaintenanceRunning = false;
+	bool bFinalizing = false;
+	uint64 RecordingGeneration = 0;
+	uint64 NextFrameSequence = 0;
+	uint64 PersistedBytes = 0;
+	uint64 ResidentBytes = 0;
+	uint64 PeakResidentBytes = 0;
+	int32 PeakResidentTurnCount = 0;
+	int32 TotalRecordedTurnCount = 0;
+	int32 PersistedTurnCount = 0;
+	int32 FirstPersistedTurn = INDEX_NONE;
+	int32 LastPersistedTurn = INDEX_NONE;
+	int64 NextExpectedTurn = INDEX_NONE;
 	int32 LastObservedCompletedTick = 0;
+	int32 LastProgressTick = INDEX_NONE;
+	int32 LastCheckpointPersistedTurnCount = 0;
+	int32 NextCheckpointRetryTick = 0;
+	int32 CheckpointRetryBackoffTicks = 0;
 };

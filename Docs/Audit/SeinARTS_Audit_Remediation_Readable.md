@@ -8,7 +8,7 @@ statuses, approved decisions, evidence, and completion gates recorded in that le
 the dense tracking tables with narrative sections and checklists.
 
 The engineering ledger remains the canonical audit trail. This copy reflects its working-tree state
-on July 29, 2026; it is not a replacement for it and its completion counts are not effort-weighted.
+on August 1, 2026; it is not a replacement for it and its completion counts are not effort-weighted.
 PDF exports are point-in-time review artifacts and are regenerated at campaign closure; this
 Markdown file is the live reader's edition.
 
@@ -16,25 +16,25 @@ Markdown file is the live reader's edition.
 
 The campaign tracks **67 findings and approved work items**.
 
-- **18 are formally closed:** 16 Verified and 2 Fixed.
-- **8 are In progress.**
+- **23 are formally closed:** 17 Verified and 6 Fixed.
+- **5 are In progress.**
 - **3 are Approved for implementation but are not complete.**
-- **23 are Confirmed and awaiting their implementation or verification wave.**
-- **5 are Queued for phase-local revalidation.**
+- **22 are Confirmed and awaiting their implementation or verification wave.**
+- **4 are Queued for phase-local revalidation.**
 - **10 are Gates requiring a product or API decision.**
 - Nothing is currently marked Disproved or Deferred.
 
-That is **18 of 67 rows, or 26.87%, formally closed** under the ledger's strict Definition of
+That is **23 of 67 rows, or 34.33%, formally closed** under the ledger's strict Definition of
 Complete. It is deliberately not an estimate of engineering effort completed: foundational work can
 unlock several rows, while a single acceptance row can require substantial multi-process or PIE
 evidence.
 
 By workstream:
 
-- **Correctness, determinism, and lifecycle:** 31 items; 17 formally closed.
-- **Performance and memory:** 11 items; none formally closed.
-- **API, modularity, and extensibility:** 14 items; 1 formally closed.
-- **Feature and completeness scope:** 11 items; none formally closed.
+- **Correctness, determinism, and lifecycle:** 31 items; 18 formally closed.
+- **Performance and memory:** 11 items; 1 formally closed.
+- **API, modularity, and extensibility:** 14 items; 2 formally closed.
+- **Feature and completeness scope:** 11 items; 2 formally closed.
 
 ## How to read the checklists
 
@@ -188,8 +188,8 @@ Additional evidence and contracts:
 - The canonical receipt binds the frozen contract, authorization context, materialization plan, and
   initial state. Native contributors use registration handles with teardown. Blueprint and extension
   code can contribute immediate deterministic `FInstancedStruct` values. Seed installation and
-  Applying-phase mutators require the exact lexical materializer capability. Legacy mutable storage
-  access remains tracked as `API-14`.
+  Applying-phase mutators require the exact lexical materializer capability. `API-14` later closed
+  the legacy mutable-storage escape hatches with const-only reads and guarded explicit mutation.
 - Bootstrap consensus is transport-neutral. The shipped Unreal relay supports standalone,
   dedicated, and listen-server topologies without encoding those shapes into authority policy.
   Pending travel state is bound to source world and destination, same-map travel is explicit,
@@ -263,9 +263,9 @@ had advanced far beyond the Phase-4 narrative:
   45 expected-warning passes (`SeinARTS.Unit-20260729-152336`), Integration 12/12
   (`SeinARTS.Integration-20260729-152016`), Determinism 16/16
   (`SeinARTS.Determinism-20260729-152039`), and movement snapshot Editor 8/8
-  (`SeinARTS.Editor.Snapshot.Movement-20260729-152129`). `COR-08` deliberately remains **Fixed**,
-  not **Verified**, until the authenticated production-envelope reconnect/catch-up path tracked by
-  `FEAT-01` exists for end-to-end acceptance.
+  (`SeinARTS.Editor.Snapshot.Movement-20260729-152129`). `COR-08` remained **Fixed** at that
+  checkpoint; the bounded coordinator-selected reconnect/catch-up path is now built under `FEAT-01`,
+  with true multi-process PIE/cooked behavior retained as the runtime oracle.
 - Legacy `ComputeStateHash` still uses process-local `FName` identity. This does not disprove the new
   canonical root, but it prevents `STATE-02` closure.
 - Movement, Navigation, and FoW are the only separately registered subsystem providers. A complete
@@ -416,11 +416,12 @@ This current boundary supersedes the evidence snapshot above without erasing its
   - **Finding:** Structured-XOR and fingerprint keys can collide; FoW source/blocker
     rotation/invalidation is incomplete. Exact nav/FoW cache identities and equal-cell reset are
     fixed; broader invalidation remains.
-- [ ] **NET-01 - In progress**
+- [x] **NET-01 - Fixed**
   - **Phase:** 1/4/5/8
-  - **Finding:** Failed local submission, map restart, retained hash/turn sets, and pruning lifecycle
-    were incomplete. Readiness, ownership, exact travel binding, failure cleanup, retry, bounds,
-    slot/turn, and reset contracts are fixed; checkpoint catch-up and long-session retention remain.
+  - **Finding:** Failed submission, map restart, retained protocol history, pruning, reconnect, and
+    replay lifecycle were incomplete. Readiness, ownership, travel binding, failure cleanup/retry,
+    bounded history, checkpoint-plus-tail catch-up, and one replay journal per lockstep epoch are now
+    built.
 - [x] **COR-04 - Verified**
   - **Phase:** 1
   - **Finding:** Free-rotation placement validates an incorrect or default yaw.
@@ -531,11 +532,13 @@ This current boundary supersedes the evidence snapshot above without erasing its
   - **Phase:** 7/8
   - **Finding:** Squad, avoidance, and collision scan broad entity sets and allocate avoidable
     per-tick containers.
-- [ ] **PERF-08 - In progress**
+- [x] **PERF-08 - Fixed**
   - **Phase:** 5/8
-  - **Finding:** Network turn/root histories are pruned to a 256-turn window and replay has a 64 MiB
-    cap, but cap exhaustion aborts and discards the complete buffered recording; journal streaming
-    and long-session retention remain open.
+  - **Finding:** Network turn/root histories remain pruned to a 256-turn window. Replay v9 streams
+    applied opaque turns and checkpoints, retains only the bounded future-input tail, and indexes
+    bounded frames for lazy decode. A 68.28 MiB regression crossed the retired whole-body ceiling
+    with at most one resident turn batch. Synchronous checkpoint/file-flush cost remains performance
+    measurement work, not an unbounded-retention defect.
 - [ ] **PERF-09 - Confirmed**
   - **Phase:** 8
   - **Finding:** High effect stack counts materialize one resolved modifier copy per stack.
@@ -604,24 +607,28 @@ This current boundary supersedes the evidence snapshot above without erasing its
   - **Finding:** Core and Net state machines remain concentrated in roughly 12.4k-line and 7.3k-line
     implementation files even after canonical-root serialization moved to its own unit; split
     internal responsibilities without widening public seams or changing execution order.
-- [ ] **API-14 - Confirmed**
+- [x] **API-14 - Verified**
   - **Phase:** 5
-  - **Finding:** Public mutable entity-pool, component-storage, and player-state accessors bypass the
-    guarded mutation/bootstrap facade and can violate lifecycle invariants.
+  - **Finding:** Public reads are const-only; mutation uses explicit guarded `*Mutable` accessors.
+    The framework, extensions, and tests were migrated, adversarially reviewed, and passed Editor,
+    Shipping, Unit, Integration, Determinism, and Editor.Snapshot gates.
 
 ## Feature and completeness checklist
 
-- [ ] **FEAT-01 - Queued**
+- [x] **FEAT-01 - Fixed**
   - **Phase:** 5
-  - **Work:** Authenticated checkpoint plus command-tail reconnect/catch-up. A topology-neutral
-    coordinator selects the exact checkpoint frontier; transfer is bounded; the receiver restores
-    stopped with local gameplay input and checkpoint recapture gated; the canonical tail is installed
-    and caught up; activation requires tail continuity plus canonical-root agreement.
-- [ ] **FEAT-02 - In progress**
+  - **Work:** Coordinator-selected bounded checkpoint plus exact opaque command-tail reconnect is
+    built. The receiver adopts stopped, catches up through the normal gate, and activates only after
+    exact frontier continuity and canonical-root agreement. True multi-process PIE/cooked behavior
+    remains the final runtime oracle.
+- [x] **FEAT-02 - Fixed**
   - **Phase:** 5
-  - **Work:** Replay journaling, checkpoints, seeking, validation, and bounded streaming storage. The
-    current 64 MiB limit aborts and discards the complete buffered recording, while per-turn sizing
-    performs a full candidate encode.
+  - **Work:** Trusted-local replay v9 now provides append-only digest-chained frames, mandatory
+    tick-zero and periodic checkpoints, exact opaque turns, durable frontiers, crash-tail recovery,
+    bounded indexed/lazy reads, and checkpoint seek/catch-up. One journal is closed per lockstep
+    epoch across NewMatch/ContinueMatch travel; frozen v8 remains readable. Focused automation is
+    green; PIE replay/load/seek remains the final runtime oracle. Hostile import/cloud authentication
+    and frozen-time replay are explicit future adapter/policy boundaries.
 - [ ] **FEAT-03 - Approved**
   - **Phase:** 5
   - **Work:** Tactical cover matching, stable slot identities, reservations, lifecycle, and shared
@@ -659,15 +666,17 @@ This current boundary supersedes the evidence snapshot above without erasing its
 
 ### Replay foundation boundary
 
-The current replay foundation is a bounded v8 executable format owned exclusively by
-`SeinARTSNet`. Full recordings start at tick zero, retain every applied assembled turn including
-empty heartbeats, stop on the exact inclusive `EndTick`, bind executable command decoding to the
-world's frozen schema/name catalog, and carry the agreed bootstrap receipt.
+The current writer emits v9 append-only executable journals owned exclusively by `SeinARTSNet`; the
+reader also preserves frozen bounded v8 compatibility. Full recordings start at tick zero, retain
+every applied assembled turn including empty heartbeats, stop on the exact inclusive `EndTick`, bind
+command decoding to the world's frozen schema/name catalog, and carry the agreed bootstrap receipt.
+V9 adds bounded long-session storage, crash-tail recovery, periodic checkpoints, and seek/catch-up
+without changing the exact command bytes used by multiplayer fan-out.
 
 The similarly named CoreEntity Blueprint helpers are bounded v6
 **header-metadata-only** documents. The ambiguous legacy nodes remain as deprecated wrappers and
-cannot create or load an executable journal. `FEAT-02` remains open for checkpoints, seeking,
-long-session streaming, and retention policy.
+cannot create or load an executable journal. Shared/imported/cloud replay remains an adapter boundary
+that must authenticate and bound the complete artifact before placing it in the trusted-local lane.
 
 ## Design gates
 

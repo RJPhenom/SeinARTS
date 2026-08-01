@@ -579,6 +579,7 @@ struct FSeinNetSubsystemTestAccess
 	}
 	static void ConsumePreparedDestination(USeinNetSubsystem& Net)
 	{
+		Net.RetireReplayEpochForCommittedTravel();
 		Net.CancelPendingProtocolPromotion();
 		Net.PendingLocalProtocolAssignment.Reset();
 		FSeinPendingAuthorityProtocolState Prepared =
@@ -1715,7 +1716,12 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(AreEqual(
 			Seed, FSeinNetSubsystemTestAccess::PreparedSeed(*Net)));
 
+		FSeinNetSubsystemTestAccess::InstallReplayObjects(*Net);
+		ASSERT_THAT(IsTrue(
+			FSeinNetSubsystemTestAccess::HasReplayObjects(*Net)));
 		FSeinNetSubsystemTestAccess::ConsumePreparedDestination(*Net);
+		ASSERT_THAT(IsFalse(
+			FSeinNetSubsystemTestAccess::HasReplayObjects(*Net)));
 		ASSERT_THAT(IsTrue(FSeinNetSubsystemTestAccess::PrepareTravel(
 			*Net, ESeinMatchTravelIntent::ContinueMatch)));
 		const FSeinProtocolContext Continued =
@@ -1731,6 +1737,15 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(
 			NewMatch.SimulationContentDigest
 				== Continued.SimulationContentDigest));
+
+		FSeinNetSubsystemTestAccess::InstallReplayObjects(*Net);
+		ASSERT_THAT(IsTrue(
+			FSeinNetSubsystemTestAccess::HasReplayObjects(*Net)));
+		FSeinNetSubsystemTestAccess::ConsumePreparedDestination(*Net);
+		ASSERT_THAT(IsFalse(
+			FSeinNetSubsystemTestAccess::HasReplayObjects(*Net)));
+		ASSERT_THAT(IsTrue(Continued
+			== FSeinNetSubsystemTestAccess::Context(*Net)));
 	}
 
 	TEST(AbortedPreparedTravelPreservesSourceProtocolAndReplay,

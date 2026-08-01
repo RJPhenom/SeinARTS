@@ -1013,6 +1013,44 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Network", meta = (ClampMin = "1", ClampMax = "300", UIMin = "1", UIMax = "60", EditCondition = "bDeterminismChecksEnabled"))
 	int32 DeterminismCheckIntervalTurns;
 
+	// Network — Replay (recording storage/performance policy; not lockstep state)
+	// ----------------------------------------------------------------------------------------------------
+
+	/**
+	 * How many completed lockstep turns pass between replay checkpoints. Checkpoints let long replays
+	 * seek and recover without replaying the entire match from tick zero. Smaller intervals make seeking
+	 * faster and interrupted recordings more useful, but spend more disk bandwidth and storage. This is
+	 * recording policy only: it never changes simulation timing or state and is deliberately excluded
+	 * from the deterministic configuration fingerprint. Default 3000 turns.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Network|Replay",
+		meta = (DisplayName = "Checkpoint Interval (turns)",
+				ClampMin = "1", ClampMax = "1000000", UIMin = "100", UIMax = "30000"))
+	int32 ReplayCheckpointIntervalTurns;
+
+	/**
+	 * How many consecutive committed turns the replay recorder groups into one streamed disk batch.
+	 * Larger batches reduce per-batch file overhead; smaller batches reduce buffered memory and limit
+	 * how much recent data an interrupted write can leave pending. This storage/performance choice does
+	 * not affect the commands a replay executes and is excluded from the deterministic configuration
+	 * fingerprint. Default 64 turns.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Network|Replay",
+		meta = (DisplayName = "Turn Batch Size",
+				ClampMin = "1", ClampMax = "1024", UIMin = "1", UIMax = "256"))
+	int32 ReplayTurnBatchSize;
+
+	/**
+	 * Maximum size of one replay recording, in mebibytes. The streaming writer stops appending before
+	 * crossing this bound while preserving the already durable recording, so a long-running server
+	 * cannot grow one file without limit. This is local storage policy only and is deliberately excluded
+	 * from multiplayer compatibility and the deterministic configuration fingerprint. Default 16384 MiB.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Network|Replay",
+		meta = (DisplayName = "Maximum File Size (MiB)",
+				ClampMin = "64", ClampMax = "65536", UIMin = "1024", UIMax = "65536"))
+	int32 ReplayMaxFileSizeMiB;
+
 	// Drop-in / drop-out policy (Phase 4)
 	// ----------------------------------------------------------------------------------------------------
 

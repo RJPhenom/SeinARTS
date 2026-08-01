@@ -184,10 +184,22 @@ bool USeinWorldSubsystem::ComputeCanonicalInitialStateDigest(
 		|| MatchBootstrapState == ESeinMatchBootstrapState::LocallyReady
 		|| MatchBootstrapState == ESeinMatchBootstrapState::Authorized
 		|| MatchBootstrapState == ESeinMatchBootstrapState::Consumed;
-	if (!bDigestiblePhase || bIsRunning || TickerHandle.IsValid()
+	// RemainStopped snapshot adoption deliberately reserves a dormant ticker
+	// before committing authoritative state. It cannot execute while bIsRunning
+	// is false, and tick-zero replay/resync must be able to revalidate the exact
+	// initial root before flipping that prepared scheduler live.
+	const bool bAllowedDormantConsumedScheduler =
+		MatchBootstrapState == ESeinMatchBootstrapState::Consumed
+		&& !bIsRunning
+		&& bSimulationSchedulerReserved
+		&& TickerHandle.IsValid();
+	const bool bHasDisallowedSchedulerState =
+		(bSimulationSchedulerReserved || TickerHandle.IsValid())
+		&& !bAllowedDormantConsumedScheduler;
+	if (!bDigestiblePhase || bIsRunning || bHasDisallowedSchedulerState
 		|| CurrentTick != 0 || MatchState != ESeinMatchState::Starting)
 	{
-		OutError = TEXT("Canonical initial state exists only in a stopped tick-zero Starting bootstrap world.");
+		OutError = TEXT("Canonical initial state exists only in a stopped tick-zero Starting bootstrap world with no scheduler or its exact dormant consumed reservation.");
 		return false;
 	}
 	if (!CommandProtocolDigest.IsValid() || !MatchSettingsDigest.IsValid()

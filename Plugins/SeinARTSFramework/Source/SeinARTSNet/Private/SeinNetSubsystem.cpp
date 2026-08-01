@@ -2260,20 +2260,12 @@ bool USeinNetSubsystem::TryPromotePendingAuthorityProtocolState()
 		MoveTemp(PendingLocalProtocolAssignment);
 	PendingLocalProtocolAssignment.Reset();
 
+	RetireReplayEpochForCommittedTravel();
+
 	if (Prepared.Intent == ESeinMatchTravelIntent::NewMatch)
 	{
-		// A prepared travel is still reversible. Retire old-match replay only
-		// after destination identity has committed the new match locally.
-		if (ReplayWriter && ReplayWriter->IsRecording())
-		{
-			ReplayWriter->FinishRecording();
-		}
-		ReplayWriter = nullptr;
-		if (ReplayReader && ReplayReader->IsPlaying())
-		{
-			ReplayReader->Stop();
-		}
-		ReplayReader = nullptr;
+		// A prepared travel is still reversible. Retire match-scoped state only
+		// after destination identity has committed locally.
 		ResetMatchState(nullptr);
 	}
 	else
@@ -2336,6 +2328,31 @@ bool USeinNetSubsystem::TryPromotePendingAuthorityProtocolState()
 	UE_LOG(LogSeinNet, Log,
 		TEXT("Promoted prepared protocol context only after destination-world identity matched."));
 	return true;
+}
+
+void USeinNetSubsystem::RetireReplayEpochForCommittedTravel()
+{
+	// Replay journals are lockstep-epoch artifacts. Committed travel ends the
+	// source epoch for both NewMatch and ContinueMatch; retaining its writer
+	// would carry old tick/turn/checkpoint counters into destination tick zero.
+	// The writer pins the source-world identity captured at StartRecording, so
+	// late retirement cannot accidentally validate against the destination.
+	if (ReplayWriter && ReplayWriter->IsRecording())
+	{
+		const FString PublishedReplay = ReplayWriter->FinishRecording();
+		if (PublishedReplay.IsEmpty())
+		{
+			UE_LOG(LogSeinNet, Warning,
+				TEXT("Committed travel could not publish the source replay epoch; its valid partial remains at %s."),
+				*ReplayWriter->GetActivePartialPath());
+		}
+	}
+	ReplayWriter = nullptr;
+	if (ReplayReader && ReplayReader->IsPlaying())
+	{
+		ReplayReader->Stop();
+	}
+	ReplayReader = nullptr;
 }
 
 bool USeinNetSubsystem::TryPromotePendingLocalProtocolAssignment()
@@ -3780,6 +3797,17 @@ void USeinNetSubsystem::TryLaunchLocalBootstrap()
 		}
 		FailLocalBootstrapAfterCommit(Error);
 		return;
+	}
+
+	// V9 replays restore the original network bootstrap identity instead of
+	// synthesizing a replay-specific tick-zero world. Launch only arms the
+	// dormant scheduler, so this is the one exact quiescent boundary where the
+	// mandatory initial checkpoint can be captured before tick 1 executes.
+	if (ReplayWriter && ReplayWriter->IsRecording()
+		&& !ReplayWriter->CaptureCheckpoint(/*bRequired=*/true))
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("Replay recording stopped because its mandatory tick-zero checkpoint could not be captured; the match will continue."));
 	}
 
 	PendingBootstrapLaunchContext.Reset();
@@ -7085,19 +7113,20 @@ void USeinNetSubsystem::ServerCheckTurnComplete(
 		return;
 	}
 
-	// Capture the canonical assembled turn into the replay log BEFORE fan-out.
-	// Recording at the assembly step (rather than per-client receive) gives us
-	// one authoritative copy free of duplicates / ordering ambiguity.
+	// Capture the exact canonical fan-out bytes into the replay journal BEFORE
+	// fan-out. Recording at the assembly step gives one authoritative copy free
+	// of duplicates or ordering ambiguity, while retaining byte identity with
+	// every peer's bounded decoder.
 	if (ReplayWriter && ReplayWriter->IsRecording())
 	{
-		ReplayWriter->RecordTurn(TurnId, WireCanonicalAssembled);
+		ReplayWriter->RecordEncodedTurn(TurnId, OpaqueAssembled);
 	}
 
 	// Retain the EXACT fan-out bytes so a resync tail is byte-identical to
 	// live delivery (same opaque batch through the same Client_ReceiveTurn).
 	// Bounded by the shared protocol history window; pruned alongside the
-	// other per-turn ledgers in PruneProtocolState. This is the tail source —
-	// the replay writer is NOT (its cap is abort-and-discard-everything).
+	// other per-turn ledgers in PruneProtocolState. This remains FEAT-01's
+	// short-lived recovery-tail source; persistent replay storage is independent.
 	RetainedAssembledTurns.Add(TurnId, OpaqueAssembled);
 
 	// Listen hosts receive through their owned relay. A dedicated authority has

@@ -354,7 +354,7 @@ record:
 | NAV-01 | Initial destinations can be silently moved after preview by partial A*, wall push, authority recognition, or endpoint restoration. | 5 | Confirmed |
 | NAV-02 | Request-identity protection is implemented, but `DrainAsyncPathQueue` still resets all unconsumed results before interval repaths poll; busy scenes can repeatedly compute then discard interval results. | 5 | In progress |
 | CACHE-01 | Structured-XOR/fingerprint keys can collide; FoW source/blocker rotation/invalidation is incomplete. Exact nav/FoW cache identities and equal-cell reset are fixed; broader invalidation remains. | 1/6 | In progress |
-| NET-01 | Failed local submission, map restart, retained hash/turn sets, and pruning lifecycle were incomplete. Readiness, ownership, exact travel binding, failure cleanup, retry, bounds, slot/turn, and reset contracts are fixed; checkpoint catch-up is now built (FEAT-01); long-session replay retention remains (FEAT-02/PERF-08). | 1/4/5/8 | In progress |
+| NET-01 | Failed local submission, map restart, retained hash/turn sets, pruning, reconnect, and replay lifecycle were incomplete. Readiness, ownership, exact travel binding, failure cleanup/retry, bounded protocol history, checkpoint-plus-tail catch-up, and one-journal-per-lockstep-epoch travel retirement are now built. | 1/4/5/8 | Fixed |
 | COR-04 | Free-rotation placement validates an incorrect/default yaw. | 1 | Verified |
 | COR-05 | Collision overlap pair identity omits entity generation. | 1 | Verified |
 | NAV-03 | Same-cell routes can contain one waypoint and no typed segment. Shipped movement follows waypoints, so the earlier vehicle failure consequence is unsupported; revalidate the path-data/extension contract before changing behavior. | 5 | Queued |
@@ -387,7 +387,7 @@ record:
 | PERF-05 | Minimap reuses its texture at a stable resolution, but every refresh still allocates full pixel buffers, performs dense world-to-fixed fog lookups and optional blur, copies the complete mip, and calls `UpdateResource`. | 6 | Confirmed |
 | PERF-06 | Cover provider/slot work has quadratic paths and duplicated allocation bodies. | 5/8 | Confirmed |
 | PERF-07 | Squad, avoidance, and collision scan broad entity sets and allocate avoidable per-tick containers. | 7/8 | Confirmed |
-| PERF-08 | Network turn/root histories are pruned to a 256-turn window and replay has a 64 MiB cap, but cap exhaustion aborts and discards the complete buffered recording; journal streaming and long-session retention remain open. | 5/8 | In progress |
+| PERF-08 | Network turn/root histories remain pruned to a 256-turn window. Replay v9 streams applied opaque turns and periodic checkpoints to an append-only journal, retains only the bounded future-input tail, and indexes/lazily decodes bounded frames on read. A 68,281,279-byte regression crosses the retired 64 MiB whole-body ceiling with at most one resident turn batch. Synchronous checkpoint encoding and durable file flush cost remains measurement work for the performance stream, not unbounded retention. | 5/8 | Fixed |
 | PERF-09 | High effect stack counts materialize one resolved modifier copy per stack. | 8 | Confirmed |
 | PERF-10 | Merely enabling Cover binds the authority resolver and serializes NavContainment even without an authoritative cover destination. Collision parallelism is also disabled only for projects that opted into the non-default parallel resolver. | 5/8 | Confirmed |
 | PERF-11 | Legacy `ComputeStateHash` parallel dispatch is budgeted by storage count and normally leaves the entity walk serial. That path is now deprecated/local-only; production canonical-root encoding and hashing is a separate synchronous cost to profile. | 5/8 | Confirmed |
@@ -416,7 +416,7 @@ record:
 | ID | Work | Phase | Status |
 |---|---|---:|---|
 | FEAT-01 | Authenticated checkpoint plus command-tail reconnect/catch-up is BUILT: the coordinator live-boundary-captures at the exact frontier, transfers a bounded paced snapshot envelope, retains the exact opaque fan-out bytes of every committed turn inside the protocol window as the tail source, and the receiver adopts stopped (input + recapture gated by the core catch-up window), catches up through the normal gate under a scheduler burst, and activates only on an exact canonical-root handshake at an agreed boundary with gap-/collision-free authorship handoff. Late join into an existing slot rides the fresh-adoption branch with auto-request triggers; membership growth stays FEAT-10. Independently red-teamed (10 findings fixed, incl. the fast-forward gap and four session-wedge paths) and re-verified; automation pins the burst, capture gate, envelope tamper rejection, and root-identical catch-up. Residual: true multi-process E2E is PIE/cooked verification (automation cannot host two networked processes); no activation-failure retry surface; ~49 MB practical checkpoint ceiling from pacing×timeout. | 5 | Fixed |
-| FEAT-02 | Replay journaling, checkpoints, seeking, validation, and bounded streaming storage. The current 64 MiB cap aborts and discards the complete buffered recording and per-turn sizing performs a full candidate encode. | 5 | In progress |
+| FEAT-02 | Replay v9 is BUILT as a trusted-local, append-only journal: mandatory tick-zero and periodic checkpoint envelopes, exact opaque assembled-turn batches, digest-chained bounded frames, durable Progress/Finalize frontiers, crash-tail recovery, bounded indexes with lazy turn decode, and nearest-checkpoint seek/catch-up. The writer retains only the unapplied input-delay tail, reserves terminal frame count/bytes, and publishes by atomic sibling rename; committed NewMatch and ContinueMatch transitions close one journal per lockstep epoch. Frozen v8 files remain readable. Focused evidence: ReplayFormat 23/23 (v9 subset 5/5), replay integration 12/12 (including 68.28 MiB streaming, partial recovery, terminal lifecycle, and pause rejection), replay determinism 1/1, resync 2/2, protocol 35/35, plus adversarial writer/reader review. Residual: v9 is a Saved/Replays trusted-local artifact rather than a hostile imported/cloud envelope; symlink/junction containment is not a security boundary; pause/frozen-time replay remains deliberately unsupported; PIE replay/load/seek is the final runtime oracle. | 5 | Fixed |
 | FEAT-03 | Tactical cover matching, stable slot identities, reservations, lifecycle, and shared preview/commit planning. | 5 | Approved |
 | FEAT-04 | Faster height-aware FoW default plus spatial invalidation and performance/quality A/B. | 6 | Approved |
 | FEAT-05 | Rich targeter/gesture registry and public policy composition. | 7 | Gate |
@@ -427,13 +427,15 @@ record:
 | FEAT-10 | Authenticated host migration as topology-neutral coordinator succession: higher-term election, membership transition, agreed-root checkpoint selection, committed turn/control-ledger transfer, stale-term rejection, local-input gating, and root-gated reactivation. | 5/7 | Gate |
 | FEAT-11 | Co-op campaign persistence with exact same-schema checkpoint continuation and explicit versioned campaign-state migration into a new bootstrap; stable participant identities, host/backend source authentication, identical peer distribution, shared/per-player progression, and UE-native Blueprint/C++ authoring seams. | 5/7 | Approved |
 
-Replay's current foundation uses a bounded v8 executable format owned exclusively by
-`SeinARTSNet`: full recordings start at tick 0, retain every applied assembled turn (including empty
-heartbeats), stop on the exact inclusive `EndTick`, bind executable command decoding to the world's
-frozen schema/name catalog, and carry the agreed bootstrap receipt. The similarly named CoreEntity
-Blueprint helpers are bounded v6 **header-metadata-only** documents; the ambiguous legacy nodes
-remain as deprecated wrappers and cannot create or load an executable journal. FEAT-02 remains open
-for checkpoints, seeking, and long-session streaming/retention policy.
+Replay's current writer emits v9 append-only journals owned exclusively by `SeinARTSNet`; the reader
+also preserves the frozen bounded v8 compatibility path. Full recordings start at tick 0, retain
+every applied assembled turn including empty heartbeats, stop on the exact inclusive `EndTick`, bind
+decoding to the world's frozen schema/name catalog, and carry the agreed bootstrap receipt. V9 adds
+checkpoint seek/catch-up and bounded long-session storage without changing the exact command bytes
+used by multiplayer fan-out. The similarly named CoreEntity Blueprint helpers are bounded v6
+**header-metadata-only** documents; the ambiguous legacy nodes remain deprecated wrappers and cannot
+create or load an executable journal. Shared/imported/cloud replay remains an adapter boundary that
+must authenticate and bound the complete artifact before placing it in the trusted-local lane.
 
 ## Design gates
 

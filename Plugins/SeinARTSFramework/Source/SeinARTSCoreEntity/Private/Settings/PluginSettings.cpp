@@ -99,6 +99,11 @@ USeinARTSCoreSettings::USeinARTSCoreSettings()
 	, RelayActorClass(FSoftClassPath(TEXT("/Script/SeinARTSNet.SeinNetRelay")))
 	, bDeterminismChecksEnabled(true)
 	, DeterminismCheckIntervalTurns(10)
+	// Replay recording policy. These bound local memory/disk work only and are
+	// deliberately absent from ComputeConfigFingerprint's sim-affecting field list.
+	, ReplayCheckpointIntervalTurns(3000)
+	, ReplayTurnBatchSize(64)
+	, ReplayMaxFileSizeMiB(16384)
 	// Drop-in/drop-out: BasicAI policy + 30s grace period default. Ships
 	// `USeinNullAIController` as the framework no-op fallback so the auto-spawn
 	// path is exercised end-to-end even before designers wire their own AI

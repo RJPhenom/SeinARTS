@@ -779,9 +779,16 @@ namespace
 	void HandleLoadReplay(const TArray<FString>& Args, UWorld* World, FOutputDevice& Ar)
 	{
 		if (!World) { Ar.Log(TEXT("[SeinNet] LoadReplay: no World.")); return; }
-		if (Args.Num() < 1)
+		if (Args.Num() < 1 || Args.Num() > 2)
 		{
-			Ar.Log(TEXT("[SeinNet] LoadReplay: usage: Sein.Net.LoadReplay <FileNameOrPath>  (resolves bare filenames against Saved/Replays/)."));
+			Ar.Log(TEXT("[SeinNet] LoadReplay: usage: Sein.Net.LoadReplay <FileNameOrPath> [StartTick]  (resolves bare filenames against Saved/Replays/)."));
+			return;
+		}
+		int32 StartTick = 0;
+		if (Args.Num() == 2
+			&& (!LexTryParseString(StartTick, *Args[1]) || StartTick < 0))
+		{
+			Ar.Log(TEXT("[SeinNet] LoadReplay: StartTick must be a non-negative integer."));
 			return;
 		}
 		UGameInstance* GI = World->GetGameInstance();
@@ -808,13 +815,13 @@ namespace
 		Ar.Logf(TEXT("[SeinNet] LoadReplay: loaded %d turn(s)  seed=%lld  map=%s  recorded=%s"),
 			Reader->GetTurnCount(), H.RandomSeed, *H.MapIdentifier, *H.RecordedAt.ToString());
 
-		if (Reader->Play())
+		if (Reader->PlayFromTick(StartTick))
 		{
-			Ar.Log(TEXT("[SeinNet] LoadReplay: playback started. Use Sein.Net.StopReplay to halt."));
+			Ar.Logf(TEXT("[SeinNet] LoadReplay: playback started from tick %d. Use Sein.Net.StopReplay to halt."), StartTick);
 		}
 		else
 		{
-			Ar.Log(TEXT("[SeinNet] LoadReplay: load OK but Play() rejected — check log (likely networked world; replay needs Standalone)."));
+			Ar.Log(TEXT("[SeinNet] LoadReplay: load OK but playback was rejected — check the log for format, tick-range, pristine-world, compatibility, or Standalone-state details."));
 		}
 	}
 
@@ -836,7 +843,7 @@ namespace
 
 	static FAutoConsoleCommandWithWorldArgsAndOutputDevice GCmdLoadReplay(
 		TEXT("Sein.Net.LoadReplay"),
-		TEXT("Sein.Net.LoadReplay <FileNameOrPath> — load + play a .seinreplay file. Bare filenames resolve against Saved/Replays/. Standalone-mode only (close any multiplayer session first)."),
+		TEXT("Sein.Net.LoadReplay <FileNameOrPath> [StartTick] — load + play a .seinreplay file, optionally seeking from its nearest checkpoint. Bare filenames resolve against Saved/Replays/. Standalone-mode only (close any multiplayer session first)."),
 		FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(&HandleLoadReplay));
 
 	static FAutoConsoleCommandWithWorldArgsAndOutputDevice GCmdStopReplay(
@@ -1174,11 +1181,10 @@ namespace
 		}
 		if (!Writer->IsRecording())
 		{
-			Ar.Log(TEXT("[SeinNet] SaveReplay: writer is not recording (StartMatch hasn't been called yet?)."));
+			Ar.Log(TEXT("[SeinNet] SaveReplay: no active recording (it may not have started, or may already be finalized/aborted)."));
 			return;
 		}
 
-		const int32 BufferedTurns = Writer->GetBufferedTurnCount();
 		const FString Path = Writer->FinishRecording();
 		if (Path.IsEmpty())
 		{
@@ -1186,7 +1192,8 @@ namespace
 		}
 		else
 		{
-			Ar.Logf(TEXT("[SeinNet] SaveReplay: wrote %d turn(s) -> %s"), BufferedTurns, *Path);
+			Ar.Logf(TEXT("[SeinNet] SaveReplay: finalized %d applied turn(s) -> %s"),
+				Writer->GetPersistedTurnCount(), *Path);
 		}
 	}
 
@@ -1245,7 +1252,7 @@ namespace
 
 	static FAutoConsoleCommandWithWorldArgsAndOutputDevice GCmdSaveReplay(
 		TEXT("Sein.Net.SaveReplay"),
-		TEXT("SERVER ONLY. Manually flush the in-memory replay buffer to Saved/Replays/. Otherwise auto-flushes on session teardown (PIE Stop)."),
+		TEXT("SERVER ONLY. Finalize and publish the active streaming replay journal to Saved/Replays/; recording stops. Active journals otherwise finalize on session teardown (PIE Stop)."),
 		FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(&HandleSaveReplay));
 
 	static FAutoConsoleCommandWithWorldArgsAndOutputDevice GCmdDumpState(

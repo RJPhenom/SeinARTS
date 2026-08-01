@@ -555,3 +555,45 @@ shipping upgrade path for legacy content, verified from a stale asset, not just 
 3. **Video memory exhausted** (~884 MB over): new symptom, likely the same RT-geometry
    pressure — standalone PIE is a second process duplicating GPU residency. Perf-pass item.
 RJ reports further issues in 2-player listen-server PIE — not yet enumerated here.
+
+### 2-player listen-server PIE triage (2026-08-01) — clean; two more deferred polish items
+The first live multi-peer session since the audit waves: canonical world roots agreed 2/2
+every gossip interval, turns 50–600 (~10 min, with live orders) — zero divergence. Config
+parity, unanimous launch barrier, factionless slots, and replay flush all behaved. Deferred:
+4. **[ADAPTIVE INPUT DELAY] warning spam**: in a 2-peer listen server the client is ALWAYS
+   the last submitter by construction (host commands are local), so the 100%-last heuristic
+   re-warns every ~50 turns forever. Log once / suppress the structural case.
+5. **Teardown OnLogout cosmetics**: PIE shutdown destroys the host controller and trips
+   drop-handling ("slot 1 marked DROPPED... AI takeover scheduled") on a dying world.
+   Harmless; gate on world teardown to silence.
+Baton note (2026-08-01): RJ handed FEAT-02 + remaining feature rounding to Codex Sol.
+
+---
+
+## 11. FEAT-02 — streaming checkpointed replay journals (2026-08-01, Codex)
+
+FEAT-02 is implemented and focused-green, with RJ's PIE replay/load/seek pass remaining the
+runtime oracle. The writer now emits v9 append-only journals under `Saved/Replays`: mandatory
+tick-zero and periodic checkpoint envelopes, exact opaque assembled-turn batches, digest-chained
+bounded frames, durable Progress/Finalize frontiers, and atomic sibling publication. Applied turns
+stream to disk while only the unapplied input-delay tail remains resident; committed NewMatch and
+ContinueMatch travel close the source epoch's journal, while aborted travel preserves it. The reader
+keeps frozen v8 compatibility and adds bounded frame indexing, lazy turn decode, recoverable torn
+partial tails, full checkpoint/bootstrap cross-binding, and nearest-checkpoint seek/catch-up.
+
+The adversarial closeout caught and fixed: source/destination world confusion across travel; writer
+and reader frame-cap disagreement; terminal frame-slot and byte reservations; a dangling non-owning
+schema callback; wrong-world and stale-generation reader callbacks; checkpoint bootstrap
+under-binding; durable-frontier replacement races; delegate takeover after restore; case-sensitive
+trusted-path containment; and dormant scheduler leaks on terminal or failed playback. Normal
+tick-zero playback and checkpoint seek both converge to the source canonical root. A dedicated
+regression writes and reloads 68,281,279 bytes while retaining at most one turn batch, directly
+retiring the old 64 MiB abort-and-discard failure.
+
+Focused evidence on the final state: ReplayFormat 23/23 (v9 subset 5/5), replay integration 12/12,
+replay determinism 1/1, resync 2/2, and network protocol 35/35, plus a green ordinary Editor build
+and independent writer/reader red-team passes. Explicit boundaries remain: v9 is trusted-local
+rather than a hostile import/cloud format; filesystem symlink/junction containment is not a security
+boundary; frozen-time pause-control replay is unsupported; synchronous checkpoint encoding and
+durable flush cost now
+belongs to the performance-measurement workstream.

@@ -515,6 +515,8 @@ public:
 	/**
 	 * Canonical tick-zero receipt hook. Its implementation is intentionally
 	 * separate from the legacy diagnostic StateHash and snapshot serializer.
+	 * A consumed snapshot may hold its intentionally dormant, pre-reserved
+	 * scheduler while this stopped-state digest is recomputed.
 	 */
 	bool ComputeCanonicalInitialStateDigest(
 		FGuid& OutDigest,
