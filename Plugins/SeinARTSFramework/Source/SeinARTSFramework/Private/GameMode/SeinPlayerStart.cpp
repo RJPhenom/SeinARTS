@@ -8,6 +8,7 @@
 #include "EngineUtils.h"
 #include "Engine/World.h"
 #include "Settings/PluginSettings.h"
+#include "UObject/ObjectSaveContext.h"
 
 ASeinPlayerStart::ASeinPlayerStart(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -54,6 +55,40 @@ FSeinMatchSettings ASeinPlayerStart::SynthesizeMatchSettingsFromLevel(UWorld* Wo
 	return Out;
 }
 
+void ASeinPlayerStart::PostLoad()
+{
+	Super::PostLoad();
+
+#if WITH_EDITOR
+	// Self-heal a legacy placement the moment it loads in the editor:
+	// levels saved before PlacedSimTransform existed deserialize with
+	// bSimTransformBaked=false and would fail the bootstrap's fail-closed
+	// baked-transform check forever (PostEditMove only fires on an actual
+	// move, and a clean package never reaches PreSave). Baking here makes
+	// the in-memory actor — and every PIE duplicate of it — valid
+	// immediately; the upgrade persists whenever the level is next saved.
+	// Editor-only on purpose: cooked clients must NOT convert at load
+	// (float→fixed is not bit-identical across architectures), so an
+	// unbaked level in a shipped build still fails closed.
+	// Components are not registered yet at PostLoad, so the composed
+	// GetActorTransform() is not trustworthy here — read the serialized
+	// relative transform off the root, which IS world space for a placed
+	// (unattached) actor. If somehow rootless, leave unbaked: the check
+	// stays fail-closed rather than baking an identity transform.
+	if (!bSimTransformBaked && !IsTemplate())
+	{
+		if (const USceneComponent* Root = GetRootComponent())
+		{
+			PlacedSimTransform = FFixedTransform::FromTransform(FTransform(
+				Root->GetRelativeRotation(),
+				Root->GetRelativeLocation(),
+				Root->GetRelativeScale3D()));
+			bSimTransformBaked = true;
+		}
+	}
+#endif
+}
+
 #if WITH_EDITOR
 void ASeinPlayerStart::PostEditMove(bool bFinished)
 {
@@ -69,6 +104,23 @@ void ASeinPlayerStart::PostEditMove(bool bFinished)
 	if (bFinished)
 	{
 		MarkPackageDirty();
+	}
+}
+
+void ASeinPlayerStart::PreSave(FObjectPreSaveContext SaveContext)
+{
+	Super::PreSave(SaveContext);
+
+	// Upgrade-on-save for placements that predate the baked snapshot: the
+	// bootstrap fails closed on an unbaked start with "re-save the level",
+	// so a plain save must actually perform the bake. Already-baked starts
+	// are left untouched — only PostEditMove re-bakes, when the designer
+	// actually moved the actor.
+	if (!bSimTransformBaked && !IsTemplate())
+	{
+		PlacedSimTransform =
+			FFixedTransform::FromTransform(GetActorTransform());
+		bSimTransformBaked = true;
 	}
 }
 #endif

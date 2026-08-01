@@ -500,3 +500,58 @@ Residuals (recorded, deliberate):
 3. **Practical checkpoint ceiling ~49 MB** (pacing × 120 s timeout) despite the codec's
    256 MiB bound — oversized checkpoints fail cleanly and retry; worth a guard someday.
 4. Host self-resync refused by design (the coordinator IS the timeline).
+
+---
+
+## 9. PIE regression: factionless bootstrap refusal (2026-07-30, fixed as `04d75d4`)
+
+RJ's first PIE since the audit branch began could not load the baseline Sandbox map:
+"Match bootstrap failed closed: Local match bootstrap settings are invalid
+(SeinARTS.Command.Reject.Malformed)." Root cause: the `aea047a` hardening made occupied
+match slots require a valid `FactionID` at THREE independent sites (ValidateMatchSettings,
+the bootstrap transaction's active-slot check, and the initial-state digest). Factions are
+an opt-in catalog — RJ's project has zero faction assets, the lobby auto-claim assigns
+none, and the sim registers such players as Faction(0) (digest-covered either way) — so the
+requirement refused bootstrap for every factionless project.
+
+**Why 396 green tests missed it:** every fixture that authored slots authored factions, and
+the shared `FSeinMatchSettings()` fixture has EMPTY slots, which bypasses the occupied-slot
+checks entirely. A genuinely PIE-only hole. All three sites now accept factionless slots
+(faction-required stays available as game-mode policy), and a regression test walks the full
+materialization path with a factionless Human slot. Note for Codex: when hardening a
+validation surface, add the *baseline-project* fixture (default-config, content-less) to the
+suite alongside the fully-authored one — the shipped Sandbox is the real contract.
+
+---
+
+## 10. PIE regression: unbaked PlayerStart transform (2026-07-30/31, fixed) + deferred PIE triage
+
+Second gate behind §9, same `aea047a` era: "PlayerStart ... has no baked fixed transform;
+re-save the level." The invariant is CORRECT (editor-baked `PlacedSimTransform` — load-time
+float→fixed is not cross-arch identical), but the remedy was broken twice over:
+`PostEditMove` only bakes on an actual MOVE, and a clean (non-dirty) package never reaches a
+save at all, so "re-save the level" could not repair a legacy level. Fixed in
+`ASeinPlayerStart` with three bake paths, all touching ONLY unbaked starts (a baked value is
+never recomputed — sim data must not change silently on save):
+- `PostEditMove` — authoritative re-bake on designer move (pre-existing);
+- `PostLoad` (editor-only body) — self-heal a legacy placement in memory at level load, so
+  PIE passes with no save ritual; reads the root's serialized RELATIVE transform (composed
+  world transform is not trustworthy at PostLoad); cooked builds compile it out and still
+  fail closed;
+- `PreSave` — belt-and-suspenders for an unbaked start reaching a real save.
+Lesson for the ledger's next hardening wave: a fail-closed check on ASSET state needs a
+shipping upgrade path for legacy content, verified from a stale asset, not just fresh fixtures.
+
+### Deferred PIE triage (2026-08-01, RJ standalone session) — none are red flags
+1. **Legacy-fingerprint exclusion warnings** (`Component '...' has field(s) excluded from
+   the legacy local state fingerprint`): benign BY DESIGN — dev-only, once per component
+   type at storage creation; the canonical world root covers those fields. Noisy in every
+   PIE. Deferred polish: emit only when the legacy fingerprint is actually consulted
+   (`Sein.Sim.StateHash` / its log CVar). NOTE: several suites `AddExpectedError` on this
+   text — changing emission timing requires a full suite run.
+2. **Ray-tracing geometry over budget** (3.2 GiB vs 400 MiB default pool): render config,
+   long-standing, orthogonal to the audit. Perf-pass item (HWRT settings vs budget raise —
+   RJ's visual-intent call).
+3. **Video memory exhausted** (~884 MB over): new symptom, likely the same RT-geometry
+   pressure — standalone PIE is a second process duplicating GPU residency. Perf-pass item.
+RJ reports further issues in 2-player listen-server PIE — not yet enumerated here.

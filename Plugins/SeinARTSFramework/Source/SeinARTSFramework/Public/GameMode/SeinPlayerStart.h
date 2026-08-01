@@ -91,8 +91,25 @@ public:
 	UPROPERTY(VisibleAnywhere, AdvancedDisplay, Category = "SeinARTS|Determinism")
 	bool bSimTransformBaked = false;
 
+	/** Editor-side self-heal for legacy placements (body is editor-only):
+	 *  a level authored before the baked snapshot existed bakes in memory
+	 *  as soon as it loads in the editor, so PIE passes the fail-closed
+	 *  bootstrap check without any save ritual, and the next legitimate
+	 *  save persists the upgrade. Cooked builds compile the heal out —
+	 *  an unbaked level in a shipped game still fails closed, because a
+	 *  load-time float-to-fixed conversion is not cross-arch identical.
+	 *  Already-baked placements are never touched. */
+	virtual void PostLoad() override;
+
 #if WITH_EDITOR
 	virtual void PostEditMove(bool bFinished) override;
+
+	/** Second upgrade hook: an unbaked placement also bakes on save, so
+	 *  "re-save the level" works even for a start spawned unbaked at
+	 *  editor time (PostEditMove alone only fires when the actor is
+	 *  MOVED). Already-baked placements keep their exact serialized
+	 *  value — a save must never silently change sim data. */
+	virtual void PreSave(FObjectPreSaveContext SaveContext) override;
 #endif
 
 	/** Synthesize a default `FSeinMatchSettings` from the level's
