@@ -62,6 +62,20 @@ Movement+ is not a full arbitrary Reeds-Shepp/Dubins route solver. Its wheeled a
 - Resync transfers an authenticated bounded checkpoint envelope plus the exact retained command tail, catches up through the normal gate, and reactivates on an agreed root.
 - Replay v9 is an append-only digest-chained journal with periodic checkpoints, opaque turn batches, durable frontiers, bounded indexes, lazy decode, crash-tail recovery, and atomic publication. Frozen v8 reading remains supported.
 
+### Fog of war
+
+FoW source stamps are deterministic grid shapes with radial, rectangle, or cone range semantics.
+Terrain vision multipliers scale only the active shape range (`Radius`, `HalfExtents`, or
+`ConeLength`), keeping cache identity and behavior free of irrelevant-field churn. Extents-authored
+blockers fold their local Z offset into the snapshotted world-space base before computing the top.
+
+The dynamic blocker hot path keeps one dense maximum-top grid plus the layer mask. Cells whose
+overlapping layers have different tops carry a sparse eight-entry exact-height exception. Opacity
+queries therefore use the true maximum for the requested layer subset without multiplying the dense
+grid footprint by every layer. The sparse exceptions participate in capture, restore, reset, and
+canonical comparison; behavior revision 2 / codec revision 5 deliberately rejects older semantic
+descriptors even though the serialized payload schema itself did not grow.
+
 ### Presentation performance policy
 
 Ordinary RTS visual meshes use Unreal update-rate optimization and skip animation-to-physics bone/overlap work; crowd skinned meshes are excluded from hardware ray-tracing geometry. Designers can opt actors back into UE component defaults or the physics-mesh policy. These choices are render-only and never enter lockstep state.

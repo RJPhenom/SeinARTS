@@ -138,6 +138,10 @@ struct FSeinFogSourceState
  *  equivalent. */
 struct FSeinFogDynamicBlockerSnapshot
 {
+	/** Planar entity origin in XY; shape-base world Z in Z. The planar
+	 *  FSeinStampShape still owns/rotates LocalOffset.XY, while folding the
+	 *  extents shape's LocalOffset.Z into WorldPos.Z preserves its authored
+	 *  vertical placement without adding Z semantics to shared 2D stamps. */
 	FFixedVector WorldPos;
 	FFixedQuaternion Rotation;
 	FSeinStampShape Shape;
@@ -154,6 +158,36 @@ struct FSeinFogDynamicBlockerSnapshot
 	}
 
 	FORCEINLINE bool operator!=(const FSeinFogDynamicBlockerSnapshot& Other) const
+	{
+		return !(*this == Other);
+	}
+};
+
+/** Exact per-layer blocker tops for one ambiguous dynamic-overlay cell.
+ *  Most blockers occlude the same layers at the same height and use only the
+ *  dense max-height + union-mask arrays. An entry exists only when overlapping
+ *  blockers produce different top Z values for different visibility bits. */
+struct FSeinFogDynamicBlockerLayerHeights
+{
+	/** Indexed by EVNNNNNN bit position. Bit 0 is unused; active-layer
+	 *  presence is carried by DynamicBlockerLayerMask. */
+	FFixedPoint LayerTopZ[8] = {};
+
+	FORCEINLINE bool operator==(
+		const FSeinFogDynamicBlockerLayerHeights& Other) const
+	{
+		for (int32 Bit = 1; Bit <= 7; ++Bit)
+		{
+			if (LayerTopZ[Bit] != Other.LayerTopZ[Bit])
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	FORCEINLINE bool operator!=(
+		const FSeinFogDynamicBlockerLayerHeights& Other) const
 	{
 		return !(*this == Other);
 	}
@@ -309,7 +343,7 @@ private:
 	 *  large maps. Every static-grid mutation invalidates it first. */
 	mutable FGuid StaticGridDigest;
 
-	/** Dynamic blocker overlay — absolute world Z of any runtime-authored
+	/** Dynamic blocker overlay — maximum absolute world Z of any runtime-authored
 	 *  blocker (smoke grenades, destructibles in progress) at this cell.
 	 *  Rebuilt each `TickStamps` from entities carrying `FSeinExtentsComponent` with bBlocksFogOfWar set
 	 *  in sim component storage. Zero = no dynamic blocker this tick.
@@ -317,11 +351,18 @@ private:
 	 *  is honored separately — see IsCellOpaqueToEye). */
 	TArray<FFixedPoint> DynamicBlockerHeight;
 
-	/** Parallel to `DynamicBlockerHeight` — which EVNNNNNN bits the
-	 *  dynamic blocker at this cell occludes. OR'd across overlapping
-	 *  blockers (e.g. two smoke grenades at the same cell combine their
-	 *  masks). */
+	/** Parallel to `DynamicBlockerHeight` — the union of EVNNNNNN bits
+	 *  occluded by any dynamic blocker in this cell. When every active bit
+	 *  shares the dense maximum height, no sparse exception is needed. */
 	TArray<uint8> DynamicBlockerLayerMask;
+
+	/** Sparse exact per-layer tops for cells where overlapping blockers have
+	 *  different heights and masks. This prevents a short Thermal-only blocker
+	 *  from inheriting a taller Normal-only blocker's height without paying
+	 *  seven dense 64-bit height grids on every map. Rebuilt from canonical
+	 *  DynamicBlockerSnapshots and read-only during parallel source stamping. */
+	TMap<int32, FSeinFogDynamicBlockerLayerHeights>
+		DynamicBlockerHeightExceptions;
 
 	/** Exact ordered rasterization inputs currently represented in the
 	 *  dynamic overlay. An identical next-tick list retains the overlay; a
@@ -465,6 +506,12 @@ private:
 		FFixedPoint EyeHeight, uint8 StampBit,
 		TArray<int32>& OutCells) const;
 
+	/** Apply the terrain vision multiplier to the active range parameter only.
+	 *  Keeping unused shape fields unchanged avoids false cache invalidation. */
+	static void ScaleStampRangeForTerrain(
+		FSeinStampShape& Shape,
+		FFixedPoint Multiplier);
+
 	/** Diff `OldSorted` against `NewSorted` (both ascending, multiset
 	 *  semantics — duplicates pair off in iteration order) and apply the
 	 *  minimal refcount + bitfield delta to `Group` for `StampBit`:
@@ -512,6 +559,13 @@ private:
 	 *  correctly alongside baked geometry. */
 	bool IsCellOpaqueToEye(int32 X, int32 Y, FFixedPoint EyeZ, uint8 StampBitMask) const;
 
+	/** Exact dynamic blocker top for the requested visible-layer mask. Returns
+	 *  zero when no matching blocker exists; callers must consult the union
+	 *  mask when zero could also be a valid world height. */
+	FFixedPoint GetDynamicBlockerTopForMask(
+		int32 CellIdx,
+		uint8 StampBitMask) const;
+
 	/** Clear the dynamic blocker overlay, then walk every entity carrying
 	 *  `FSeinExtentsComponent` (with bBlocksFogOfWar) and stamp its shape contribution into the
 	 *  overlay. Runs at the top of TickStamps so the vision passes below
@@ -531,16 +585,15 @@ private:
 	 *  empty baseline). */
 	void DecrementFootprintsForState(FSeinFogSourceState& State, FSeinFogVisionGroup& Group);
 
-	/** Stamp one shape's footprint of effective height + layer mask into
-	 *  the dynamic blocker overlay. `HeightAboveGround` applies uniformly
-	 *  across the shape's cells; at each cell the stored value is
-	 *  `GroundHeight[Idx] + HeightAboveGround` (absolute world Z, matching
-	 *  the static array convention). Multiple overlapping stamps take the
-	 *  taller height + OR'd layer mask per cell. */
+	/** Stamp one shape's vertical extent + layer mask into the dynamic blocker
+	 *  overlay. EntityWorldPos.Z is the authored shape-base world Z, so every
+	 *  covered cell receives `EntityWorldPos.Z + VerticalExtent`. Overlapping
+	 *  layers retain exact per-layer tops; dense max height + union mask remain
+	 *  the common fast path. */
 	void StampDynamicBlockerShape(const FSeinStampShape& Shape,
 		const FFixedVector& EntityWorldPos,
 		const FFixedQuaternion& EntityRotation,
-		FFixedPoint HeightAboveGround, uint8 LayerMask);
+		FFixedPoint VerticalExtent, uint8 LayerMask);
 
 	void MarkRoutineExploredCellDirty(
 		FSeinPlayerID Observer, int32 CellIndex);

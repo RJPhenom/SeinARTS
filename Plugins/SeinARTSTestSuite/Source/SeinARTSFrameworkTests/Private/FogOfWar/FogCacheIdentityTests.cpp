@@ -20,6 +20,8 @@ namespace UE::SeinARTSTests
 		{
 			TArray<FFixedPoint> DynamicBlockerHeight;
 			TArray<uint8> DynamicBlockerLayerMask;
+			TMap<int32, FSeinFogDynamicBlockerLayerHeights>
+				DynamicBlockerHeightExceptions;
 			TArray<FSeinFogDynamicBlockerSnapshot>
 				DynamicBlockerSnapshots;
 			TArray<int32> LastDynamicBlockerCells;
@@ -50,6 +52,7 @@ namespace UE::SeinARTSTests
 		{
 			if (Fog.DynamicBlockerHeight.Num() != ExpectedCells
 				|| Fog.DynamicBlockerLayerMask.Num() != ExpectedCells
+				|| !Fog.DynamicBlockerHeightExceptions.IsEmpty()
 				|| !Fog.DynamicBlockerSnapshots.IsEmpty()
 				|| !Fog.LastDynamicBlockerCells.IsEmpty())
 			{
@@ -132,10 +135,89 @@ namespace UE::SeinARTSTests
 			Fog.StaticGridDigest.Invalidate();
 			Fog.DynamicBlockerHeight.SetNumZeroed(NumCells);
 			Fog.DynamicBlockerLayerMask.SetNumZeroed(NumCells);
+			Fog.DynamicBlockerHeightExceptions.Reset();
 			Fog.DynamicBlockerSnapshots.Reset();
 			Fog.LastDynamicBlockerCells.Reset();
 			Fog.VisionGroups.Reset();
 			Fog.SourceStates.Reset();
+		}
+
+		static void SeedOneCellDynamicGrid(
+			USeinFogOfWarDefault& Fog)
+		{
+			Fog.Width = 1;
+			Fog.Height = 1;
+			Fog.CellSize = FFixedPoint::FromInt(100);
+			Fog.Origin = FFixedVector::ZeroVector;
+			Fog.GroundHeight.SetNumZeroed(1);
+			Fog.BlockerHeight.SetNumZeroed(1);
+			Fog.BlockerLayerMask.SetNumZeroed(1);
+			Fog.DynamicBlockerHeight.SetNumZeroed(1);
+			Fog.DynamicBlockerLayerMask.SetNumZeroed(1);
+			Fog.DynamicBlockerHeightExceptions.Reset();
+			Fog.DynamicBlockerSnapshots.Reset();
+			Fog.LastDynamicBlockerCells.Reset();
+		}
+
+		static void StampOneCellDynamicBlocker(
+			USeinFogOfWarDefault& Fog,
+			FFixedPoint ShapeBaseZ,
+			FFixedPoint VerticalExtent,
+			uint8 LayerMask)
+		{
+			FSeinStampShape Shape;
+			Shape.Shape = ESeinStampShape::Radial;
+			Shape.Radius = FFixedPoint::FromInt(60);
+			Fog.StampDynamicBlockerShape(
+				Shape,
+				FFixedVector(
+					FFixedPoint::FromInt(50),
+					FFixedPoint::FromInt(50),
+					ShapeBaseZ),
+				FFixedQuaternion::Identity,
+				VerticalExtent,
+				LayerMask);
+		}
+
+		static bool IsOneCellOpaque(
+			const USeinFogOfWarDefault& Fog,
+			FFixedPoint RayZ,
+			uint8 LayerMask)
+		{
+			return Fog.IsCellOpaqueToEye(
+				0, 0, RayZ, LayerMask);
+		}
+
+		static FFixedPoint GetOneCellDynamicTop(
+			const USeinFogOfWarDefault& Fog,
+			uint8 LayerMask)
+		{
+			return Fog.GetDynamicBlockerTopForMask(
+				0, LayerMask);
+		}
+
+		static void ScaleStampRangeForTerrain(
+			FSeinStampShape& Shape,
+			FFixedPoint Multiplier)
+		{
+			USeinFogOfWarDefault::ScaleStampRangeForTerrain(
+				Shape, Multiplier);
+		}
+
+		static bool RebuildDynamicBlockers(
+			USeinFogOfWarDefault& Fog,
+			UWorld& World)
+		{
+			return Fog.RebuildDynamicBlockers(&World);
+		}
+
+		static const FSeinFogDynamicBlockerSnapshot*
+			GetFirstDynamicBlocker(
+				const USeinFogOfWarDefault& Fog)
+		{
+			return Fog.DynamicBlockerSnapshots.IsEmpty()
+				? nullptr
+				: &Fog.DynamicBlockerSnapshots[0];
 		}
 
 		static bool MatchesCanonicalStaticGrid(
@@ -190,6 +272,8 @@ namespace UE::SeinARTSTests
 				Fog.DynamicBlockerHeight;
 			Snapshot.DynamicBlockerLayerMask =
 				Fog.DynamicBlockerLayerMask;
+			Snapshot.DynamicBlockerHeightExceptions =
+				Fog.DynamicBlockerHeightExceptions;
 			Snapshot.DynamicBlockerSnapshots =
 				Fog.DynamicBlockerSnapshots;
 			Snapshot.LastDynamicBlockerCells =
@@ -207,6 +291,9 @@ namespace UE::SeinARTSTests
 					!= Expected.DynamicBlockerHeight
 				|| Fog.DynamicBlockerLayerMask
 					!= Expected.DynamicBlockerLayerMask
+				|| !Fog.DynamicBlockerHeightExceptions
+					.OrderIndependentCompareEqual(
+						Expected.DynamicBlockerHeightExceptions)
 				|| Fog.DynamicBlockerSnapshots
 					!= Expected.DynamicBlockerSnapshots
 				|| Fog.LastDynamicBlockerCells
@@ -519,6 +606,187 @@ namespace UE::SeinARTSTests
 		TArray<FSeinFogDynamicBlockerSnapshot> Stable;
 		Stable.Add(Base);
 		ASSERT_THAT(IsTrue(Stable == Stable));
+	}
+
+	TEST(DynamicFogOverlapRetainsExactPerLayerHeights,
+		"SeinARTS.Unit.FogOfWar")
+	{
+		const uint8 Thermal = static_cast<uint8>(
+			ESeinFogOfWarLayerBit::N0);
+		const FFixedPoint RayBelowTall =
+			FFixedPoint::FromInt(200);
+		const FFixedPoint RayBelowBoth =
+			FFixedPoint::FromInt(50);
+
+		for (const bool bTallFirst : { true, false })
+		{
+			USeinFogOfWarDefault* Fog =
+				NewObject<USeinFogOfWarDefault>();
+			ASSERT_THAT(IsNotNull(Fog));
+			FFogOfWarDefaultTestAccess::
+				SeedOneCellDynamicGrid(*Fog);
+
+			auto StampTallNormal = [&]()
+			{
+				FFogOfWarDefaultTestAccess::
+					StampOneCellDynamicBlocker(
+						*Fog,
+						FFixedPoint::Zero,
+						FFixedPoint::FromInt(300),
+						SEIN_FOW_BIT_NORMAL);
+			};
+			auto StampShortThermal = [&]()
+			{
+				FFogOfWarDefaultTestAccess::
+					StampOneCellDynamicBlocker(
+						*Fog,
+						FFixedPoint::Zero,
+						FFixedPoint::FromInt(100),
+						Thermal);
+			};
+			if (bTallFirst)
+			{
+				StampTallNormal();
+				StampShortThermal();
+			}
+			else
+			{
+				StampShortThermal();
+				StampTallNormal();
+			}
+
+			ASSERT_THAT(IsTrue(
+				FFogOfWarDefaultTestAccess::IsOneCellOpaque(
+					*Fog, RayBelowTall, SEIN_FOW_BIT_NORMAL)));
+			ASSERT_THAT(IsFalse(
+				FFogOfWarDefaultTestAccess::IsOneCellOpaque(
+					*Fog, RayBelowTall, Thermal)));
+			ASSERT_THAT(IsTrue(
+				FFogOfWarDefaultTestAccess::IsOneCellOpaque(
+					*Fog, RayBelowBoth, Thermal)));
+			ASSERT_THAT(IsTrue(
+				FFogOfWarDefaultTestAccess::
+					GetOneCellDynamicTop(
+						*Fog, SEIN_FOW_BIT_NORMAL)
+					== FFixedPoint::FromInt(300)));
+			ASSERT_THAT(IsTrue(
+				FFogOfWarDefaultTestAccess::
+					GetOneCellDynamicTop(*Fog, Thermal)
+					== FFixedPoint::FromInt(100)));
+		}
+	}
+
+	TEST(DynamicFogBlockerHonorsExtentsLocalZOffset,
+		"SeinARTS.Unit.FogOfWar")
+	{
+		FActorTestSpawner Spawner;
+		UWorld& UnrealWorld = Spawner.GetWorld();
+		USeinWorldSubsystem* World =
+			UnrealWorld.GetSubsystem<USeinWorldSubsystem>();
+		USeinFogOfWarSubsystem* FogSubsystem =
+			UnrealWorld.GetSubsystem<USeinFogOfWarSubsystem>();
+		USeinFogOfWarDefault* Fog = FogSubsystem
+			? Cast<USeinFogOfWarDefault>(
+				FogSubsystem->GetFogOfWar())
+			: nullptr;
+		ASSERT_THAT(IsNotNull(World));
+		ASSERT_THAT(IsNotNull(Fog));
+		FFogOfWarDefaultTestAccess::SeedOneCellDynamicGrid(*Fog);
+
+		FSeinEntityHandle Blocker;
+		FString Error;
+		ASSERT_THAT(IsTrue(
+			SeinTestMatchBootstrap::Materialize(
+				*World,
+				[&]()
+				{
+					Blocker = World->SpawnAbstractEntity(
+						FFixedTransform(FFixedVector(
+							FFixedPoint::FromInt(50),
+							FFixedPoint::FromInt(50),
+							FFixedPoint::FromInt(100))),
+						FSeinPlayerID::Neutral());
+					FSeinExtentsComponent Extents;
+					Extents.bBlocksFogOfWar = true;
+					Extents.BlockedFogOfWarLayerMask =
+						SEIN_FOW_BIT_NORMAL;
+					FSeinExtentsShape& Shape =
+						Extents.Shapes.AddDefaulted_GetRef();
+					Shape.Shape = ESeinExtentsShape::Capsule;
+					Shape.Radius = FFixedPoint::FromInt(60);
+					Shape.LocalOffset.Z =
+						FFixedPoint::FromInt(200);
+					Shape.Height = FFixedPoint::FromInt(100);
+					World->AddComponent(Blocker, Extents);
+				},
+				FSeinMatchSettings(),
+				0x464F575A,
+				TEXT("Fog.DynamicBlocker.LocalZ"),
+				&Error)));
+		ASSERT_THAT(IsTrue(
+			SeinTestMatchBootstrap::Start(*World, &Error)));
+		ASSERT_THAT(IsTrue(
+			FFogOfWarDefaultTestAccess::RebuildDynamicBlockers(
+				*Fog, UnrealWorld)));
+
+		const FSeinFogDynamicBlockerSnapshot* Snapshot =
+			FFogOfWarDefaultTestAccess::GetFirstDynamicBlocker(
+				*Fog);
+		ASSERT_THAT(IsNotNull(Snapshot));
+		ASSERT_THAT(IsTrue(
+			Snapshot->WorldPos.Z == FFixedPoint::FromInt(300)));
+		ASSERT_THAT(IsTrue(
+			FFogOfWarDefaultTestAccess::
+				GetOneCellDynamicTop(*Fog, SEIN_FOW_BIT_NORMAL)
+				== FFixedPoint::FromInt(400)));
+		ASSERT_THAT(IsTrue(
+			FFogOfWarDefaultTestAccess::IsOneCellOpaque(
+				*Fog,
+				FFixedPoint::FromInt(350),
+				SEIN_FOW_BIT_NORMAL)));
+		ASSERT_THAT(IsFalse(
+			FFogOfWarDefaultTestAccess::IsOneCellOpaque(
+				*Fog,
+				FFixedPoint::FromInt(450),
+				SEIN_FOW_BIT_NORMAL)));
+		World->StopSimulation();
+	}
+
+	TEST(TerrainVisionMultiplierScalesEveryStampShapeRange,
+		"SeinARTS.Unit.FogOfWar")
+	{
+		const FFixedPoint Half = FFixedPoint::One
+			/ FFixedPoint::FromInt(2);
+
+		FSeinStampShape Radial;
+		Radial.Shape = ESeinStampShape::Radial;
+		Radial.Radius = FFixedPoint::FromInt(100);
+		FFogOfWarDefaultTestAccess::ScaleStampRangeForTerrain(
+			Radial, Half);
+		ASSERT_THAT(IsTrue(
+			Radial.Radius == FFixedPoint::FromInt(50)));
+
+		FSeinStampShape Rect;
+		Rect.Shape = ESeinStampShape::Rect;
+		Rect.HalfExtentX = FFixedPoint::FromInt(150);
+		Rect.HalfExtentY = FFixedPoint::FromInt(100);
+		FFogOfWarDefaultTestAccess::ScaleStampRangeForTerrain(
+			Rect, Half);
+		ASSERT_THAT(IsTrue(
+			Rect.HalfExtentX == FFixedPoint::FromInt(75)));
+		ASSERT_THAT(IsTrue(
+			Rect.HalfExtentY == FFixedPoint::FromInt(50)));
+
+		FSeinStampShape Cone;
+		Cone.Shape = ESeinStampShape::Conical;
+		Cone.ConeLength = FFixedPoint::FromInt(500);
+		Cone.ConeAngleDegrees = FFixedPoint::FromInt(60);
+		FFogOfWarDefaultTestAccess::ScaleStampRangeForTerrain(
+			Cone, Half);
+		ASSERT_THAT(IsTrue(
+			Cone.ConeLength == FFixedPoint::FromInt(250)));
+		ASSERT_THAT(IsTrue(
+			Cone.ConeAngleDegrees == FFixedPoint::FromInt(60)));
 	}
 
 	TEST(SameDimensionGridReloadClearsDynamicOverlay, "SeinARTS.Unit.FogOfWar")

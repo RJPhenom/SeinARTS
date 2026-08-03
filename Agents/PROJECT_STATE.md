@@ -37,12 +37,12 @@ The post-audit performance/remediation work is now committed and fast-forwarded 
 ## Current verification
 
 The latest integration-candidate source was rebuilt and re-run after closing the async navigation
-continuation lifecycle:
+continuation lifecycle and the known FoW blocker-height/stamp-scaling defects:
 
 | Gate | Result |
 |---|---:|
-| `SeinARTS.Unit`, profile All | 388 passed, 0 failed |
-| `SeinARTS.Unit`, profile Framework | 380 passed, 0 failed |
+| `SeinARTS.Unit`, profile All | 391 passed, 0 failed |
+| `SeinARTS.Unit`, profile Framework | 383 passed, 0 failed |
 | `SeinARTS.Integration`, profile All | 15 passed, 0 failed |
 | `SeinARTS.Integration`, profile Framework | 14 passed, 0 failed |
 | `SeinARTS.Determinism`, profile All | 20 passed, 0 failed |
@@ -54,14 +54,14 @@ continuation lifecycle:
 
 Latest local evidence is under ignored `Saved/Automation/`:
 
-- `SeinARTS.Unit-20260802-220626-5b70f341` (All)
-- `SeinARTS.Unit-20260802-221022-8f37f505` (Framework)
-- `SeinARTS.Integration-20260802-220733-7f002d1d` (All)
+- `SeinARTS.Unit-20260802-222947-1673cc5e` (All)
+- `SeinARTS.Unit-20260802-223506-791aa8df` (Framework)
+- `SeinARTS.Integration-20260802-223244-69f8359b` (All)
 - `SeinARTS.Integration-20260802-221111-4daa9477` (Framework)
-- `SeinARTS.Determinism-20260802-220755-b67f76df` (All)
+- `SeinARTS.Determinism-20260802-223309-55b25461` (All)
 - `SeinARTS.Determinism-20260802-221127-c0c69aae` (Framework)
-- `SeinARTS.Determinism.Process.SerialCollisionTrace-20260802-220830-2574c220`
-- `SeinARTS.Determinism.Process.ParallelCollisionTrace-20260802-220844-b2c0b06d`
+- `SeinARTS.Determinism.Process.SerialCollisionTrace-20260802-223432-00b8b11f`
+- `SeinARTS.Determinism.Process.ParallelCollisionTrace-20260802-223446-be58c9e3`
 
 ## Integration-candidate progress
 
@@ -71,6 +71,11 @@ Latest local evidence is under ignored `Saved/Automation/`:
   cancelled.
 - `USeinMoveToAction` cancels its continuation before Blueprint-capable terminal hooks, preventing
   both leaks and re-entrant cancellation of a newly issued order.
+- Dynamic FoW blockers retain exact per-layer top heights on mixed-layer overlaps without paying
+  for seven additional dense height grids; only exceptional cells allocate sparse layer tops.
+- Extents-authored FoW sources now include their local Z offset in the world-space blocker top,
+  and terrain vision multipliers scale the active range parameter for radial, rectangle, and cone
+  shapes.
 - Focused async lifecycle and navigation canonical-state regressions passed before the full gates.
 
 ## Evidence limits

@@ -333,6 +333,7 @@ USeinFogOfWarDefault::LoadFromSubstrateImpl(
 	BlockerLayerMask.SetNumUninitialized(NumCells);
 	ResetToZeroedSize(DynamicBlockerHeight, NumCells);
 	ResetToZeroedSize(DynamicBlockerLayerMask, NumCells);
+	DynamicBlockerHeightExceptions.Reset();
 	VisionGroups.Empty(); // per-player state recreates lazily on next stamp
 	SourceStates.Empty();
 	DynamicBlockerSnapshots.Reset();
@@ -418,6 +419,7 @@ void USeinFogOfWarDefault::InitGridFromVolumesImpl(UWorld* World)
 		BlockerLayerMask.Reset();
 		DynamicBlockerHeight.Reset();
 		DynamicBlockerLayerMask.Reset();
+		DynamicBlockerHeightExceptions.Reset();
 		VisionGroups.Empty();
 		SourceStates.Empty();
 		DynamicBlockerSnapshots.Reset();
@@ -480,6 +482,7 @@ void USeinFogOfWarDefault::InitGridFromVolumesImpl(UWorld* World)
 	ResetToZeroedSize(BlockerLayerMask, NumCells);
 	ResetToZeroedSize(DynamicBlockerHeight, NumCells);
 	ResetToZeroedSize(DynamicBlockerLayerMask, NumCells);
+	DynamicBlockerHeightExceptions.Reset();
 	VisionGroups.Empty();
 	SourceStates.Empty();
 	DynamicBlockerSnapshots.Reset();
@@ -596,7 +599,8 @@ void USeinFogOfWarDefault::TickStamps(UWorld* World)
 
 	// Rebuild dynamic blocker overlay first — smoke grenades / destructible
 	// mid-animation / any runtime USeinExtentsComponent (bBlocksFogOfWar) entities stamp
-	// their discs into DynamicBlockerHeight + DynamicBlockerLayerMask here,
+	// their shapes into the dense dynamic overlay plus sparse per-layer
+	// height exceptions here,
 	// so the vision passes below see the freshest occlusion state.
 	const bool bDynamicBlockersChanged = RebuildDynamicBlockers(World);
 	if (bDynamicBlockersChanged)
@@ -702,9 +706,7 @@ void USeinFogOfWarDefault::TickStamps(UWorld* World)
 				ScaledStamps = VData->VisionStamps;
 				for (FSeinVisionStamp& S : ScaledStamps)
 				{
-					S.Shape.Radius      = S.Shape.Radius * VisMult;
-					S.Shape.HalfExtentX = S.Shape.HalfExtentX * VisMult;
-					S.Shape.HalfExtentY = S.Shape.HalfExtentY * VisMult;
+					ScaleStampRangeForTerrain(S.Shape, VisMult);
 				}
 				StampsToUse = &ScaledStamps;
 			}
@@ -959,6 +961,27 @@ void USeinFogOfWarDefault::GenerateLayerFootprintCells(
 		});
 }
 
+void USeinFogOfWarDefault::ScaleStampRangeForTerrain(
+	FSeinStampShape& Shape,
+	FFixedPoint Multiplier)
+{
+	switch (Shape.Shape)
+	{
+	case ESeinStampShape::Radial:
+		Shape.Radius = Shape.Radius * Multiplier;
+		break;
+
+	case ESeinStampShape::Rect:
+		Shape.HalfExtentX = Shape.HalfExtentX * Multiplier;
+		Shape.HalfExtentY = Shape.HalfExtentY * Multiplier;
+		break;
+
+	case ESeinStampShape::Conical:
+		Shape.ConeLength = Shape.ConeLength * Multiplier;
+		break;
+	}
+}
+
 void USeinFogOfWarDefault::ApplyFootprintDiff(
 	FSeinPlayerID Observer,
 	FSeinFogVisionGroup& Group,
@@ -1132,8 +1155,9 @@ bool USeinFogOfWarDefault::IsCellOpaqueToEye(int32 X, int32 Y, FFixedPoint EyeZ,
 	// Dynamic blocker (runtime — smoke grenades, destructibles mid-anim)
 	// tests independently. A short-but-layered dynamic blocker doesn't
 	// inherit a tall static's reach, and vice versa.
-	const FFixedPoint DynZ = DynamicBlockerHeight.IsValidIndex(Idx) ? DynamicBlockerHeight[Idx] : FFixedPoint::Zero;
 	const uint8 DynMask = DynamicBlockerLayerMask.IsValidIndex(Idx) ? DynamicBlockerLayerMask[Idx] : 0;
+	const FFixedPoint DynZ = GetDynamicBlockerTopForMask(
+		Idx, StampBitMask);
 
 	// Per-cell LOS-vs-dynamic-blocker trace. Fires once per cell-walked-by-
 	// LOS-into-a-stamped-blocker — extremely high volume on busy frames, so
@@ -1160,12 +1184,57 @@ bool USeinFogOfWarDefault::IsCellOpaqueToEye(int32 X, int32 Y, FFixedPoint EyeZ,
 			bWouldBlock ? TEXT("=> BLOCKED") : TEXT("=> PASSED-THROUGH"));
 	}
 
-	if (DynZ > EyeZ)
+	if ((DynMask & StampBitMask) != 0 && DynZ > EyeZ)
 	{
-		if ((DynMask & StampBitMask) != 0) return true;
+		return true;
 	}
 
 	return false;
+}
+
+FFixedPoint USeinFogOfWarDefault::GetDynamicBlockerTopForMask(
+	int32 CellIdx,
+	uint8 StampBitMask) const
+{
+	if (!DynamicBlockerLayerMask.IsValidIndex(CellIdx)
+		|| !DynamicBlockerHeight.IsValidIndex(CellIdx))
+	{
+		return FFixedPoint::Zero;
+	}
+
+	const uint8 MatchingMask = static_cast<uint8>(
+		DynamicBlockerLayerMask[CellIdx]
+		& StampBitMask
+		& SEIN_FOW_MASK_VISIBLE);
+	if (MatchingMask == 0)
+	{
+		return FFixedPoint::Zero;
+	}
+
+	const FSeinFogDynamicBlockerLayerHeights* Exact =
+		DynamicBlockerHeightExceptions.Find(CellIdx);
+	if (!Exact)
+	{
+		return DynamicBlockerHeight[CellIdx];
+	}
+
+	bool bFound = false;
+	FFixedPoint Highest = FFixedPoint::Zero;
+	for (uint8 Bit = 1; Bit <= 7; ++Bit)
+	{
+		const uint8 BitMask = static_cast<uint8>(1u << Bit);
+		if ((MatchingMask & BitMask) == 0)
+		{
+			continue;
+		}
+		const FFixedPoint TopZ = Exact->LayerTopZ[Bit];
+		if (!bFound || TopZ > Highest)
+		{
+			Highest = TopZ;
+			bFound = true;
+		}
+	}
+	return bFound ? Highest : FFixedPoint::Zero;
 }
 
 bool USeinFogOfWarDefault::RebuildDynamicBlockers(UWorld* World)
@@ -1195,8 +1264,11 @@ bool USeinFogOfWarDefault::RebuildDynamicBlockers(UWorld* World)
 						if (!Raw) return;
 						const FSeinExtentsComponent* Extents =
 							static_cast<const FSeinExtentsComponent*>(Raw);
+						const uint8 LayerMask = static_cast<uint8>(
+							Extents->BlockedFogOfWarLayerMask
+							& SEIN_FOW_MASK_VISIBLE);
 						if (!Extents->bBlocksFogOfWar
-							|| Extents->BlockedFogOfWarLayerMask == 0
+							|| LayerMask == 0
 							|| Extents->Shapes.IsEmpty())
 						{
 							return;
@@ -1210,10 +1282,11 @@ bool USeinFogOfWarDefault::RebuildDynamicBlockers(UWorld* World)
 							FSeinFogDynamicBlockerSnapshot& Snapshot =
 								CurrentSnapshots.AddDefaulted_GetRef();
 							Snapshot.WorldPos = Pos;
+							Snapshot.WorldPos.Z += ExtShape.LocalOffset.Z;
 							Snapshot.Rotation = Rot;
 							Snapshot.Shape = ExtShape.AsStampShape();
 							Snapshot.Height = ExtShape.Height;
-							Snapshot.LayerMask = Extents->BlockedFogOfWarLayerMask;
+							Snapshot.LayerMask = LayerMask;
 						}
 					});
 			}
@@ -1253,6 +1326,7 @@ bool USeinFogOfWarDefault::RebuildDynamicBlockers(UWorld* World)
 		}
 	}
 	LastDynamicBlockerCells.Reset();
+	DynamicBlockerHeightExceptions.Reset();
 
 	for (const FSeinFogDynamicBlockerSnapshot& Snapshot : CurrentSnapshots)
 	{
@@ -1270,9 +1344,10 @@ bool USeinFogOfWarDefault::RebuildDynamicBlockers(UWorld* World)
 
 void USeinFogOfWarDefault::StampDynamicBlockerShape(const FSeinStampShape& Shape,
 	const FFixedVector& EntityWorldPos, const FFixedQuaternion& EntityRotation,
-	FFixedPoint HeightAboveGround, uint8 LayerMask)
+	FFixedPoint VerticalExtent, uint8 LayerMask)
 {
-	if (HeightAboveGround <= FFixedPoint::Zero) return;
+	if (VerticalExtent <= FFixedPoint::Zero) return;
+	LayerMask = static_cast<uint8>(LayerMask & SEIN_FOW_MASK_VISIBLE);
 	if (LayerMask == 0) return;
 
 	// Per-stamp trace. Height + Mask + shape geometry one line per call,
@@ -1283,7 +1358,7 @@ void USeinFogOfWarDefault::StampDynamicBlockerShape(const FSeinStampShape& Shape
 		TEXT("StampDynamicBlockerShape: pos=(%lld,%lld,%lld) Height=%lld Mask=0x%02X "
 			 "Shape=%d Radius=%lld HalfX=%lld HalfY=%lld"),
 		EntityWorldPos.X.Value, EntityWorldPos.Y.Value, EntityWorldPos.Z.Value,
-		HeightAboveGround.Value, LayerMask,
+		VerticalExtent.Value, LayerMask,
 		static_cast<int32>(Shape.Shape),
 		Shape.Radius.Value, Shape.HalfExtentX.Value, Shape.HalfExtentY.Value);
 
@@ -1296,28 +1371,39 @@ void USeinFogOfWarDefault::StampDynamicBlockerShape(const FSeinStampShape& Shape
 	// standing ~180, tank ~150, building ~300 per FSeinExtentsShape::Height
 	// docs). Warning fires per-stamp until the asset is fixed; verbose-spam
 	// is the point — it's pointing at a real bug.
-	UE_CLOG(HeightAboveGround < FFixedPoint::FromInt(50),
+	UE_CLOG(VerticalExtent < FFixedPoint::FromInt(50),
 		LogSeinFogOfWar, Warning,
 		TEXT("StampDynamicBlockerShape: Height=%.1fcm is suspiciously short — "
 			 "the lampshade LOS test will let typical (180cm eye) sources see "
 			 "right over this blocker. Check FSeinExtentsShape::Height on the "
 			 "spawning ability or actor (typical: smoke ~300-400, low cover "
 			 "~150, prone-infantry ~80)."),
-		HeightAboveGround.ToFloat());
+		VerticalExtent.ToFloat());
 
 	// Lazily resize the dynamic-blocker overlay to grid extent if the
 	// caller forgot to (defensive — RebuildDynamicBlockers handles the
 	// clear, but a fresh load with no clear yet would otherwise crash on
 	// the IsValidIndex below).
 	const int32 NumCells = Width * Height;
-	if (DynamicBlockerHeight.Num() != NumCells) DynamicBlockerHeight.SetNumZeroed(NumCells);
-	if (DynamicBlockerLayerMask.Num() != NumCells) DynamicBlockerLayerMask.SetNumZeroed(NumCells);
+	if (DynamicBlockerHeight.Num() != NumCells
+		|| DynamicBlockerLayerMask.Num() != NumCells)
+	{
+		ResetToZeroedSize(DynamicBlockerHeight, NumCells);
+		ResetToZeroedSize(DynamicBlockerLayerMask, NumCells);
+		DynamicBlockerHeightExceptions.Reset();
+		LastDynamicBlockerCells.Reset();
+	}
 
-	// Walk the shape's covered cells; OR the layer mask + take the taller
-	// of (existing height, ground + this stamp's height) per cell. Multiple
-	// overlapping stamps on the same blocker (or multiple blockers stamping
-	// the same cell) correctly produce the union of layers + the highest
-	// occluder height.
+	// A dynamic extents shape is a world-space vertical volume. WorldPos.Z
+	// already includes the authored LocalOffset.Z; every covered planar cell
+	// therefore receives the same absolute top instead of incorrectly growing
+	// upward from whatever baked ground happens to be under that cell.
+	const FFixedPoint TopZ = EntityWorldPos.Z + VerticalExtent;
+
+	// Walk the shape's covered cells. Dense arrays retain the union mask and
+	// overall maximum height. When overlaps give different layers different
+	// tops, a sparse exception stores the seven exact per-layer values. The
+	// common all-layer/same-height path never allocates an exception.
 	//
 	// Dirty-rect bookkeeping: append each cell to LastDynamicBlockerCells
 	// the first time it gets written this tick (detected via pre-write
@@ -1331,13 +1417,92 @@ void USeinFogOfWarDefault::StampDynamicBlockerShape(const FSeinStampShape& Shape
 		[&](int32 X, int32 Y)
 		{
 			const int32 Idx = CellIndex(X, Y);
-			const bool bFirstWriteThisTick = (DynamicBlockerLayerMask[Idx] == 0);
+			const uint8 ExistingMask = DynamicBlockerLayerMask[Idx];
+			const bool bFirstWriteThisTick = ExistingMask == 0;
 
-			const FFixedPoint GroundZ = GroundHeight.IsValidIndex(Idx)
-				? GroundHeight[Idx] : FFixedPoint::Zero;
-			const FFixedPoint TopZ = GroundZ + HeightAboveGround;
-			if (TopZ > DynamicBlockerHeight[Idx]) DynamicBlockerHeight[Idx] = TopZ;
-			DynamicBlockerLayerMask[Idx] |= LayerMask;
+			if (bFirstWriteThisTick)
+			{
+				DynamicBlockerHeight[Idx] = TopZ;
+				DynamicBlockerLayerMask[Idx] = LayerMask;
+			}
+			else
+			{
+				const FFixedPoint ExistingMax =
+					DynamicBlockerHeight[Idx];
+				const uint8 CombinedMask = static_cast<uint8>(
+					ExistingMask | LayerMask);
+				FSeinFogDynamicBlockerLayerHeights* ExistingExact =
+					DynamicBlockerHeightExceptions.Find(Idx);
+
+				// Equal-height contributions collapse into the dense fast path
+				// unless this cell was already ambiguous for another layer.
+				if (!ExistingExact && TopZ == ExistingMax)
+				{
+					DynamicBlockerLayerMask[Idx] = CombinedMask;
+				}
+				else
+				{
+					FSeinFogDynamicBlockerLayerHeights Exact;
+					if (ExistingExact)
+					{
+						Exact = *ExistingExact;
+					}
+					else
+					{
+						for (uint8 Bit = 1; Bit <= 7; ++Bit)
+						{
+							const uint8 BitMask =
+								static_cast<uint8>(1u << Bit);
+							if ((ExistingMask & BitMask) != 0)
+							{
+								Exact.LayerTopZ[Bit] = ExistingMax;
+							}
+						}
+					}
+
+					for (uint8 Bit = 1; Bit <= 7; ++Bit)
+					{
+						const uint8 BitMask =
+							static_cast<uint8>(1u << Bit);
+						if ((LayerMask & BitMask) == 0)
+						{
+							continue;
+						}
+						if ((ExistingMask & BitMask) == 0
+							|| TopZ > Exact.LayerTopZ[Bit])
+						{
+							Exact.LayerTopZ[Bit] = TopZ;
+						}
+					}
+
+					const FFixedPoint CombinedMax =
+						TopZ > ExistingMax ? TopZ : ExistingMax;
+					DynamicBlockerHeight[Idx] = CombinedMax;
+					DynamicBlockerLayerMask[Idx] = CombinedMask;
+
+					bool bAllLayersShareMax = true;
+					for (uint8 Bit = 1; Bit <= 7; ++Bit)
+					{
+						const uint8 BitMask =
+							static_cast<uint8>(1u << Bit);
+						if ((CombinedMask & BitMask) != 0
+							&& Exact.LayerTopZ[Bit] != CombinedMax)
+						{
+							bAllLayersShareMax = false;
+							break;
+						}
+					}
+					if (bAllLayersShareMax)
+					{
+						DynamicBlockerHeightExceptions.Remove(Idx);
+					}
+					else
+					{
+						DynamicBlockerHeightExceptions.Add(
+							Idx, MoveTemp(Exact));
+					}
+				}
+			}
 
 			if (bFirstWriteThisTick)
 			{
@@ -1550,7 +1715,9 @@ void USeinFogOfWarDefault::CollectDebugCellQuads(FSeinPlayerID Observer,
 
 			const FFixedPoint GroundZ  = GroundHeight.IsValidIndex(Idx) ? GroundHeight[Idx] : Origin.Z;
 			const FFixedPoint StaticZ  = (StaticMask != 0 && BlockerHeight.IsValidIndex(Idx)) ? BlockerHeight[Idx] : GroundZ;
-			const FFixedPoint DynZ     = (DynMask != 0 && DynamicBlockerHeight.IsValidIndex(Idx)) ? DynamicBlockerHeight[Idx] : GroundZ;
+			const FFixedPoint DynZ = bHasDynamicBlocker
+				? GetDynamicBlockerTopForMask(Idx, VisibleMask)
+				: GroundZ;
 			// Render at the tallest occluder so smoke + wall at the same
 			// cell draws at the smoke top if smoke is taller (which is
 			// visually correct — it's what the unit sees).
@@ -1573,7 +1740,7 @@ void USeinFogOfWarDefault::CollectDebugCellQuads(FSeinPlayerID Observer,
 			if (bHasDynamicBlocker)
 			{
 				Color = Red;
-				// Render at ground (not DynZ = ground + HeightAboveGround).
+				// Render at ground rather than at the blocker top.
 				// Tall smoke (~400cm) at DynZ would float a quad 400cm above
 				// the surrounding grid; flush-with-grid reads cleaner and the
 				// blocker height still drives shadowcast correctly.

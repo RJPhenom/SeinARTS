@@ -433,6 +433,7 @@ struct FSeinFogOfWarDefaultStateCodec
 		Target.BlockerLayerMask = Source.BlockerLayerMask;
 		Target.DynamicBlockerHeight.SetNumZeroed(NumCells);
 		Target.DynamicBlockerLayerMask.SetNumZeroed(NumCells);
+		Target.DynamicBlockerHeightExceptions.Reset();
 		Target.DynamicBlockerSnapshots.Reset();
 		Target.LastDynamicBlockerCells.Reset();
 		Target.VisionGroups.Reset();
@@ -715,6 +716,9 @@ struct FSeinFogOfWarDefaultStateCodec
 				!= Candidate.DynamicBlockerHeight
 			|| Live.DynamicBlockerLayerMask
 				!= Candidate.DynamicBlockerLayerMask
+			|| !Live.DynamicBlockerHeightExceptions
+				.OrderIndependentCompareEqual(
+					Candidate.DynamicBlockerHeightExceptions)
 			|| Live.DynamicBlockerSnapshots
 				!= Candidate.DynamicBlockerSnapshots
 			|| Live.LastDynamicBlockerCells
@@ -1386,6 +1390,8 @@ struct FSeinFogOfWarDefaultStateCodec
 			MoveTemp(Candidate.DynamicBlockerHeight);
 		Live->DynamicBlockerLayerMask =
 			MoveTemp(Candidate.DynamicBlockerLayerMask);
+		Live->DynamicBlockerHeightExceptions =
+			MoveTemp(Candidate.DynamicBlockerHeightExceptions);
 		Live->DynamicBlockerSnapshots =
 			MoveTemp(Candidate.DynamicBlockerSnapshots);
 		Live->LastDynamicBlockerCells =
@@ -1408,8 +1414,8 @@ SeinRegisterDefaultFogOfWarStateCodec(FString& OutError)
 	Descriptor.StableImplementationId =
 		TEXT("seinarts.fog.default-grid");
 	Descriptor.StateSchemaVersion = 1;
-	Descriptor.BehaviorRevision = 1;
-	Descriptor.CodecRevision = 4;
+	Descriptor.BehaviorRevision = 2;
+	Descriptor.CodecRevision = 5;
 	Descriptor.PayloadStruct =
 		FSeinFogOfWarDefaultCanonicalState::StaticStruct();
 	Descriptor.Limits.MaxRecursionDepth = 32;
