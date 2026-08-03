@@ -1125,10 +1125,11 @@ void USeinNetSubsystem::OnPostLogin(AGameModeBase* GameMode, APlayerController* 
 		return;
 	}
 
-	// Phase 3a: relay spawn moved into ServerSpawnRelayForController, which
-	// is invoked by ASeinGameMode::HandleStartingNewPlayer AFTER it binds
-	// the controller's slot. This eliminates the dual-source-of-truth bug
-	// where the old auto-spawn-here path independently sequenced slots
+	// Relay spawn moved into ServerSpawnRelayForController, which is invoked
+	// only after an authority has chosen the controller's exact slot: either
+	// ASeinGameMode's frozen match manifest or the lobby's final launch
+	// bindings. This eliminates the dual-source-of-truth bug where the old
+	// auto-spawn-here path independently sequenced slots
 	// (NextSlotToAssign++) while GameMode independently picked from match
 	// settings — they could disagree if connection order ≠ slot order.
 	//
@@ -1174,14 +1175,14 @@ void USeinNetSubsystem::ServerSpawnRelayForController(APlayerController* PC, FSe
 		return;
 	}
 
-	// SLOT COLLISION GUARD: refuse to bind `Slot` to this PC if a DIFFERENT PC
-	// already owns a relay with that slot. Without this guard, GameMode bugs
-	// that double-route two PCs to the same SeinPlayerStart (the visual spawn
-	// bug + the [BUFFER INCOMPLETE missing=[3,3]] freeze bug) silently produce
-	// two relays with AssignedPlayerID=N, the server's per-turn TMap<Slot,...>
-	// buffer gets one entry per duplicated slot (overwritten), and the missing
-	// slot (the one that should have been bound to the second PC) never
-	// submits — gate stalls forever. Caller (GameMode) must fix its slot pick.
+	// SLOT COLLISION GUARD / RECONNECT RECLAIM. A Connected slot may never be
+	// rebound to a different controller: that would produce two relays for one
+	// command author and wedge the lockstep gate. A Dropped/AITakeover/
+	// Reconnecting slot is different: OnLogout deliberately retains its relay
+	// as the server-side continuity anchor, so a legitimate returning
+	// controller must take ownership of that exact actor instead of being
+	// rejected as a collision or spawning a duplicate.
+	ASeinNetRelay* ReclaimableRelay = nullptr;
 	for (const TWeakObjectPtr<ASeinNetRelay>& Wp : Relays)
 	{
 		ASeinNetRelay* R = Wp.Get();
@@ -1190,11 +1191,96 @@ void USeinNetSubsystem::ServerSpawnRelayForController(APlayerController* PC, FSe
 		const FSeinPlayerID* ExistingSlot = RelayToSlot.Find(R);
 		if (ExistingSlot && *ExistingSlot == Slot)
 		{
+			const ESeinSlotLifecycle* Lifecycle = SlotLifecycle.Find(Slot);
+			if (Lifecycle && *Lifecycle != ESeinSlotLifecycle::Connected)
+			{
+				ReclaimableRelay = R;
+				break;
+			}
 			UE_LOG(LogSeinNet, Error,
 				TEXT("[SLOT COLLISION] ServerSpawnRelayForController: slot %u is ALREADY bound to %s (relay %s). Refusing to bind %s to the same slot — would produce dual-binding and freeze the lockstep gate. GameMode bug: two controllers were routed to the same SeinPlayerStart. Investigate ChoosePlayerStart_Implementation and ClaimedSlots tracking."),
 				Slot.Value, *GetNameSafe(R->GetOwner()), *GetNameSafe(R), *GetNameSafe(PC));
 			return;
 		}
+	}
+
+	if (ReclaimableRelay)
+	{
+		const ESeinSlotLifecycle PriorLifecycle =
+			SlotLifecycle.FindRef(Slot);
+		const bool bWasAITakeover =
+			PriorLifecycle == ESeinSlotLifecycle::AITakeover;
+		if (bWasAITakeover)
+		{
+			TeardownAIForSlot(Slot);
+		}
+
+		// A returning process must prove config parity again. The participant ID
+		// is frozen by the match manifest and remains stable for this slot, but
+		// acceptance belongs to the vanished connection, not the slot itself.
+		const FSeinNetworkParticipantID PreviousParticipant =
+			RelayToParticipant.FindRef(ReclaimableRelay);
+		if (PreviousParticipant.IsValid())
+		{
+			AcceptedConfigFingerprints.Remove(PreviousParticipant);
+		}
+		if (ParticipantID.IsValid())
+		{
+			AcceptedConfigFingerprints.Remove(ParticipantID);
+		}
+
+		ReclaimableRelay->SetOwner(PC);
+		ReclaimableRelay->AssignedPlayerID = Slot;
+		ReclaimableRelay->AssignedParticipantID = ParticipantID;
+		ReclaimableRelay->ProtocolContext = ActiveProtocolContext;
+		ReclaimableRelay->SessionSeed = SessionSeed;
+		RelayToSlot.Add(ReclaimableRelay, Slot);
+		if (ParticipantID.IsValid())
+		{
+			RelayToParticipant.Add(ReclaimableRelay, ParticipantID);
+		}
+
+		const USeinWorldSubsystem* LaunchSim = GetWorld()
+			? GetWorld()->GetSubsystem<USeinWorldSubsystem>() : nullptr;
+		const bool bMatchLaunched = LaunchSim
+			&& LaunchSim->GetMatchBootstrapState()
+				== ESeinMatchBootstrapState::Consumed;
+		SlotLifecycle.Add(Slot, bMatchLaunched
+			? ESeinSlotLifecycle::Reconnecting
+			: ESeinSlotLifecycle::Connected);
+		SlotDroppedAtTime.Remove(Slot);
+		if (bMatchLaunched)
+		{
+			SlotReconnectingSinceTime.Add(Slot, FPlatformTime::Seconds());
+		}
+		else
+		{
+			SlotReconnectingSinceTime.Remove(Slot);
+		}
+
+		ReclaimableRelay->ForceNetUpdate();
+		if (ParticipantID.IsValid() && ActiveProtocolContext.IsValid()
+			&& bHasActiveMatchSettings)
+		{
+			ReclaimableRelay->Client_PrepareMatchBootstrap(
+				Slot,
+				ParticipantID,
+				ActiveProtocolContext,
+				SessionSeed,
+				FindParticipantBinding(ParticipantID)
+					&& FindParticipantBinding(ParticipantID)->bSimulates,
+				/*bAllowCurrentWorldActivation=*/true,
+				ActiveMatchSettings);
+		}
+		UE_LOG(LogSeinNet, Log,
+			TEXT("[Resync] slot=%u reclaimed retained relay %s for returning controller %s; lifecycle=%s."),
+			Slot.Value,
+			*GetNameSafe(ReclaimableRelay),
+			*GetNameSafe(PC),
+			bMatchLaunched ? TEXT("Reconnecting") : TEXT("Connected"));
+		TryRearmPreparedDestinationStart();
+		TryDispatchLockstepSessionStart();
+		return;
 	}
 
 	// Idempotence: if this PC already has a relay (re-bind / seamless travel),
@@ -1374,8 +1460,10 @@ void USeinNetSubsystem::ServerSpawnRelayForController(APlayerController* PC, FSe
 		}
 	}
 
-	UE_LOG(LogSeinNet, Log, TEXT("ServerSpawnRelayForController: spawned %s for %s  slot=%u  seed=%lld  lifecycle=Connected"),
-		*GetNameSafe(Relay), *GetNameSafe(PC), Slot.Value, SessionSeed);
+	UE_LOG(LogSeinNet, Log,
+		TEXT("ServerSpawnRelayForController: spawned %s for %s  slot=%u  seed=%lld  lifecycle=%s"),
+		*GetNameSafe(Relay), *GetNameSafe(PC), Slot.Value, SessionSeed,
+		bReturningToLaunchedMatch ? TEXT("Reconnecting") : TEXT("Connected"));
 	TryRearmPreparedDestinationStart();
 	TryDispatchLockstepSessionStart();
 }

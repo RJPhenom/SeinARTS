@@ -4,13 +4,11 @@ This is the actionable remainder after consolidating the historical audits. It i
 
 ## Release-blocking foundation risks
 
-1. **Clean consumer multiplayer runtime is not yet qualified.** Editor/Shipping source builds,
-   exact uncooked map loads, cook/package, and real Shipping startup pass in disposable consumers.
-   Match start, snapshot, replay seek/load, resync, reconnect, and multi-process network behavior
-   still need a clean-consumer runtime harness.
-2. **Launcher UE cannot prove Client/Server targets.** Epic's installed 5.7 distribution rejects
+1. **Launcher UE cannot prove Client/Server targets.** Epic's installed 5.7 distribution rejects
    Client targets before project compilation. Development Client and Dedicated Server must run in
-   CI or another source/installed engine distribution that supports those target types.
+   CI or another source/installed engine distribution that supports those target types. The real
+   packaged listen-server/client/reconnect/replay harness is green, but a Game-target listen server
+   does not prove a true headless dedicated-server binary.
 
 ## Gameplay-backbone gaps
 
@@ -26,7 +24,9 @@ This is the actionable remainder after consolidating the historical audits. It i
 2. Canonical divergence detection is not anti-cheat; lockstep clients can possess hidden world state.
 3. Co-op campaign save ownership, schema migration, cloud conflict, account identity, and cross-map bootstrap are unbuilt.
 4. True listen-host migration is unbuilt. Dedicated-server co-op can defer peer host migration but cannot defer crash recovery.
-5. Multi-process/cooked client-server reconnect and replay workflows remain runtime validation gates.
+5. WAN/backend-adapter behavior, true dedicated-server reconnect, process-crash recovery, and
+   adversarial network conditions remain runtime/product validation gates. Local packaged
+   listen-server reconnect and replay checkpoint seek are qualified.
 
 ## Performance and scale risks
 

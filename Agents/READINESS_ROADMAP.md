@@ -19,8 +19,9 @@ Exit: clean tree, no obsolete tracked artifacts, exact gate evidence, and one un
 
 ## 2. Produce the first downstream Integration Candidate
 
-**Status:** source-contract, plugin-topology, and clean-consumer packaging work is complete;
-multi-process runtime qualification remains.
+**Status:** complete for the local Epic-launcher-engine scope. The clean packaged Game-target
+listen-server/runtime proof is green. Development Client and Dedicated Server remain an external
+CI gate because this engine distribution rejects those target types before project compilation.
 
 - Async path continuation ownership is closed: budget tails persist, results survive unrelated
   drains, and terminal move actions cancel their state before re-entrant hooks.
@@ -45,13 +46,24 @@ multi-process runtime qualification remains.
   - UE 5.7 Editor and Shipping targets locally.
   - Clean cook/load of a minimal consumer map and consumer-owned simulation-content manifest.
 - Clean consumers have no hidden dependency on this host project's `/Game/SeinARTS` content.
-- Remaining before this stage exits:
-  - Run Development Client and Dedicated Server builds under a source/installed UE distribution
-    that supports those targets; Epic's launcher build rejects them before compiling the project.
-  - Exercise a commit-pinned clean consumer through real multi-process match start, exact snapshot,
-    replay seek/load, forced resync, reconnect, and packaged client/server startup.
+- The Framework consumer now drives real packaged Shipping processes through:
+  - listen-server creation and a two-player lobby-to-match travel;
+  - membership/config-gated lockstep command flow;
+  - forced checkpoint-plus-command-tail resync;
+  - physical client disconnect and reconnect, retained-slot relay reclaim, a second resync, and
+    canonical-root-gated authorship activation;
+  - streaming replay finalization and standalone checkpoint seek; and
+  - exact end-tick and canonical-root agreement between replay and authoritative server.
+- The packaged run exposed and closed three release-only integration defects: lobby maps now
+  materialize relays from their final authoritative slot bindings, Shipping builds no longer hide
+  restore work inside compiled-out assertions, and dropped slots can reclaim their retained relay
+  without weakening live-slot collision rejection.
+- Remaining external release gate: run Development Client and Dedicated Server builds, then repeat
+  the runtime topology with a true headless server, under a source/installed UE distribution that
+  supports those targets.
 
-Exit: a commit-pinned source consumer can build, cook, start a match, snapshot, replay, and reconnect using supported plugin combinations.
+Exit: reached locally for the supported packaged Game/listen-server topology. The source-engine
+Client/Dedicated Server CI gate remains explicitly red rather than inferred from this result.
 
 ## 3. Qualify the CoH-style gameplay backbone
 

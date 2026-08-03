@@ -778,9 +778,17 @@ void FSeinLatentActionRestorePlan::Commit(
 	check(IsInGameThread());
 	check(IsReady());
 	FString LeaseError;
-	checkf(VerifyProviderLeases(LeaseError),
+	const bool bLeasesValid = VerifyProviderLeases(LeaseError);
+	checkf(bLeasesValid,
 		TEXT("Latent codec generation disappeared after final lease verification: %s"),
 		*LeaseError);
+	if (!bLeasesValid)
+	{
+		UE_LOG(LogSeinSim, Fatal,
+			TEXT("Latent codec generation disappeared after final lease verification: %s"),
+			*LeaseError);
+		return;
+	}
 
 	TArray<TObjectPtr<USeinLatentAction>> Restored;
 	Restored.Reserve(Data->Items.Num());

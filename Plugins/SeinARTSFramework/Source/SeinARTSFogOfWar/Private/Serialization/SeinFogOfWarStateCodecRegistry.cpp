@@ -814,11 +814,19 @@ void FSeinFogOfWarStateCodecRegistry::CommitPayload(
 	check(InvocationDepth() == 0);
 	FResolvedClaim Claim;
 	FString Error;
+	const bool bResolved = ResolveForClass(
+		Token, Context.Fog.GetClass(), Claim, Error);
 	checkf(
-		ResolveForClass(
-			Token, Context.Fog.GetClass(), Claim, Error),
+		bResolved,
 		TEXT("Fog codec generation disappeared after final lease verification: %s"),
 		*Error);
+	if (!bResolved || !Claim.Ops.CommitRestore)
+	{
+		UE_LOG(LogSeinFogOfWar, Fatal,
+			TEXT("Fog codec commit lost its verified generation: %s"),
+			Error.IsEmpty() ? TEXT("commit callback is unavailable") : *Error);
+		return;
+	}
 	FInvocationScope Scope;
 	Claim.Ops.CommitRestore(Context, MoveTemp(Stage));
 }

@@ -1017,10 +1017,18 @@ void FSeinCanonicalStateRestorePlan::Commit(
 			TEXT("Canonical-state commit re-entered a provider callback transaction."));
 	}
 	FString LeaseError;
+	const bool bLeasesValid = VerifyProviderLeases(LeaseError);
 	checkf(
-		VerifyProviderLeases(LeaseError),
+		bLeasesValid,
 		TEXT("Canonical state provider lease invalidated after restore adoption: %s"),
 		*LeaseError);
+	if (!bLeasesValid)
+	{
+		UE_LOG(LogSeinCanonicalState, Fatal,
+			TEXT("Canonical state provider lease invalidated after restore adoption: %s"),
+			*LeaseError);
+		return;
+	}
 	FProviderInvocationScope InvocationScope;
 	for (FData::FItem& Item : Data->Items)
 	{

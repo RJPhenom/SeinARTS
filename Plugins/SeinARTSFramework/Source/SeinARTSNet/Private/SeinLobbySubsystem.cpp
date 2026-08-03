@@ -1143,6 +1143,45 @@ bool USeinLobbySubsystem::ServerStartMatch(bool bTravelToGameplayMap)
 	// Snapshot the lobby state into the GI override so whichever GameMode
 	// runs next (current world OR the post-travel world) picks it up.
 	PublishMatchSettingsSnapshot();
+	USeinNetSubsystem* Net = nullptr;
+	if (bNetworked)
+	{
+		UGameInstance* GI = GetGameInstance();
+		Net = GI ? GI->GetSubsystem<USeinNetSubsystem>() : nullptr;
+		if (!Net)
+		{
+			UE_LOG(LogSeinNet, Warning,
+				TEXT("[Lobby] ServerStartMatch: USeinNetSubsystem missing — could not prepare match."));
+			return false;
+		}
+
+		// A menu/lobby world legitimately has no resolved match manifest, so
+		// ASeinGameMode cannot bind gameplay slots or spawn relays there. At the
+		// launch boundary the lobby's final ControllerToSlot map is authoritative:
+		// materialize those relays now, in canonical slot order, before preparing
+		// the protocol context that must be delivered ahead of travel. The spawn
+		// API is idempotent, so gameplay maps that already bound a relay are safe.
+		TArray<TPair<int32, TWeakObjectPtr<APlayerController>>> LaunchBindings;
+		LaunchBindings.Reserve(ControllerToSlot.Num());
+		for (const TPair<TWeakObjectPtr<APlayerController>, int32>& Pair
+			: ControllerToSlot)
+		{
+			LaunchBindings.Emplace(Pair.Value, Pair.Key);
+		}
+		LaunchBindings.Sort([](const auto& A, const auto& B)
+		{
+			return A.Key < B.Key;
+		});
+		for (const auto& Binding : LaunchBindings)
+		{
+			if (APlayerController* Controller = Binding.Value.Get())
+			{
+				Net->ServerSpawnRelayForController(
+					Controller,
+					FSeinPlayerID(static_cast<uint8>(Binding.Key)));
+			}
+		}
+	}
 	if (!bNetworked)
 	{
 		if (bTravelToGameplayMap)
@@ -1183,14 +1222,6 @@ bool USeinLobbySubsystem::ServerStartMatch(bool bTravelToGameplayMap)
 		return true;
 	}
 
-	UGameInstance* GI = GetGameInstance();
-	USeinNetSubsystem* Net = GI ? GI->GetSubsystem<USeinNetSubsystem>() : nullptr;
-	if (!Net)
-	{
-		UE_LOG(LogSeinNet, Warning,
-			TEXT("[Lobby] ServerStartMatch: USeinNetSubsystem missing — could not prepare match."));
-		return false;
-	}
 	const FName DestinationWorldPackage = bTravelToGameplayMap
 		? FName(*TravelMapURL)
 		: (World && World->GetOutermost()

@@ -279,9 +279,11 @@ public:
 	int32 GetActiveSlotCount() const { return TurnAggregator.GetExpectedAuthors().Num(); }
 
 	/** Server-only: spawn the lockstep relay for a given PlayerController
-	 *  with the slot already chosen by the match-flow / lobby authority
-	 *  (typically `ASeinGameMode::HandleStartingNewPlayer` after it sets
-	 *  `SeinPC->SeinPlayerID`). This REPLACES the old auto-spawn-on-
+	 *  with the slot already chosen by the match-flow / lobby authority.
+	 *  Called by `ASeinGameMode::HandleStartingNewPlayer` after it sets
+	 *  `SeinPC->SeinPlayerID`, or by the lobby's match-start boundary from
+	 *  its final authoritative controller/slot bindings before travel.
+	 *  This REPLACES the old auto-spawn-on-
 	 *  PostLogin path, which independently sequenced slots via
 	 *  NextSlotToAssign and could disagree with GameMode's match-settings-
 	 *  driven binding when controllers connected in non-slot order — a

@@ -8,7 +8,11 @@ another Unreal project.” Generated consumers are disposable evidence, not sour
 Run from the repository root:
 
 ```powershell
-& "D:/Projects/Unreal Engine/SeinARTS/Tools/ConsumerMatrix/Verify-ConsumerMatrix.ps1"
+# Epic launcher engine: all source/package/runtime gates it supports.
+& "D:/Projects/Unreal Engine/SeinARTS/Tools/ConsumerMatrix/Verify-ConsumerMatrix.ps1" -SkipClientServer
+
+# Source/installed engine with Client and Server target support: release gate.
+& "D:/Projects/Unreal Engine/SeinARTS/Tools/ConsumerMatrix/Verify-ConsumerMatrix.ps1" -EngineRoot "D:/Engines/UE_5.7"
 ```
 
 The tool creates projects beneath ignored `Saved/ConsumerMatrix` for five profiles:
@@ -33,29 +37,39 @@ For every selected profile the tool:
 5. builds Shipping;
 6. cooks, stages, packages, and archives the consumer map; and
 7. starts the real packaged `SeinConsumer-Win64-Shipping.exe`, requires it to remain alive through
-   a bounded startup window, then terminates that exact process.
+   a bounded startup window, then terminates that exact process; and
+8. for the Framework profile, drives a packaged listen server and client through lobby travel,
+   lockstep command flow, forced checkpoint-plus-tail resync, physical disconnect/reconnect,
+   reconnect resync/activation, streaming replay finalization, checkpoint seek, and exact terminal
+   canonical-root agreement.
 
 An initially empty consumer necessarily emits the two manifest-bootstrap simulation-content errors
 before the manifest exists. The harness accepts only those exact bootstrap messages, and only when
 manifest generation then succeeds. Later passes must use the generated manifest normally.
 
-`-ReuseGenerated` reuses the disposable project after a successful generation pass. `-SkipCook`
-is useful for iterating on source/map verification, but it is not package evidence.
+`-ReuseGenerated` preserves expensive generated maps and build products while synchronizing the
+current checkout's distributable plugin files and qualification templates. It therefore cannot
+silently test stale plugin source. `-SkipCook` is useful for iterating on source/map verification,
+but it is not package evidence. `-SkipRuntimeQualification` and `-SkipClientServer` are diagnostic
+escapes, not complete release evidence.
 
 ## Current evidence and limits
 
 On 2026-08-03 all five post-split profiles passed Editor and Shipping builds, exact uncooked map
 loading, cook/package, and real packaged Shipping startup. Cover-only and Squad-only contained no
-bridge plugin or module; Full mounted and started the bridge and shut it down cleanly. The host
-project also passed Development Editor and Shipping builds, all checked-in
-Unit/Integration/Determinism/Editor floors, and the 120-tick serial-versus-parallel process A/B.
+bridge plugin or module; Full mounted and started the bridge and shut it down cleanly. Framework
+also passed the complete packaged multiplayer/replay leg: two real Shipping processes completed a
+match start, two resyncs around a real reconnect, and a standalone checkpoint-seek replay whose end
+tick (272 in the qualifying run) and canonical root
+(`EC430EB37C82744C60C69D6C8805748B`) exactly matched the authoritative server. Generated replay
+files and exact packaged processes are cleaned by the harness.
 
 The local Epic launcher engine cannot build Client targets; UnrealBuildTool reports that Client
 targets are unsupported by that engine distribution before it reaches project compilation. A
 source/installed UE build and CI runner must therefore prove Development Client and Dedicated
-Server. The current harness also does not yet start a real multiplayer match or drive snapshot,
-replay, forced resync, and reconnect in the clean consumer. Those are explicit remaining gates—not
-inferred from package startup.
+Server binaries and repeat the runtime topology with a true headless server. The local listen-
+server qualification is real packaged multiplayer evidence, but it is not a substitute for that
+dedicated-target gate or the remaining human PIE oracles.
 
 The generated projects, packages, logs, and temporary Python scripts are regenerable and should be
 deleted after evidence is recorded. Do not commit `Saved/ConsumerMatrix`.

@@ -65,6 +65,7 @@ formation/resolver state coverage, provider teardown, and downstream content own
 | Clean consumer: Framework + Squad only | fresh Editor + Shipping build, exact map load, cook/package, real Shipping startup passed; Cover/bridge absent |
 | Clean consumer: Framework + Movement+ | fresh Editor + Shipping build, exact map load, cook/package, real Shipping startup passed |
 | Clean consumer: all five production plugins | fresh Editor + Shipping build, exact map load, cook/package, real Shipping startup passed; bridge mounted/started/shut down |
+| Packaged Framework multiplayer/replay | Shipping listen server + client passed lobby travel, lockstep commands, forced resync, physical reconnect, reconnect resync/activation, replay seek, and exact terminal-root agreement at tick 272 (`EC430EB37C82744C60C69D6C8805748B`) |
 | Generated simulation-content manifest | 10 contributors, 93 records, digest `0E018D9C38BD9389BF25B7648F54A87B` |
 | Staged diff validation | no whitespace errors; line-ending notices only |
 
@@ -80,6 +81,9 @@ Latest local evidence is under ignored `Saved/Automation/`:
 - `SeinARTS.Editor-20260803-095029-89627fda` (Framework; checked-in floor)
 - `SeinARTS.Determinism.Process.SerialCollisionTrace-20260803-092256-63018e6b`
 - `SeinARTS.Determinism.Process.ParallelCollisionTrace-20260803-092310-7a4edeb3`
+- `SeinARTS.Unit-20260803-111739-444c4c59` (Framework, post-runtime fixes)
+- `SeinARTS.Integration-20260803-111857-4fb48cf2` (Framework, post-runtime fixes)
+- `SeinARTS.Determinism-20260803-111857-fe97367f` (Framework, post-runtime fixes)
 
 ## Integration-candidate progress
 
@@ -133,6 +137,16 @@ Latest local evidence is under ignored `Saved/Automation/`:
 - The consumer matrix has direct Framework-only, Cover-only, Squad-only, Movement+-only-extension,
   and Full profiles. This proves both parents survive physical bridge stripping and the bridge
   remains loadable when its required parents are present.
+- The Framework profile now owns a packaged runtime qualification subsystem only in its disposable
+  generated consumer. It proves a real listen-server/client match, forced checkpoint resync,
+  disconnect/reconnect with authorship withheld until exact catch-up, streaming replay publication,
+  checkpoint seek, and terminal canonical-root agreement.
+- Pure lobby maps now materialize relays from the lobby's final authoritative controller/slot map
+  before protocol preparation. Reconnect reuses a dropped slot's retained relay by transferring
+  ownership to the returning controller; a genuinely Connected duplicate still fails closed.
+- Restore generation/lease checks execute in Shipping instead of hiding required work inside
+  compiled-out `check`/`checkf` expressions. This closes the packaged Fog restore crash found by
+  the clean-consumer harness and preserves fail-closed behavior if a verified provider vanishes.
 
 ## Evidence limits
 
@@ -140,7 +154,6 @@ Automation proves the tested contracts, not full production readiness. The remai
 
 - Multi-world PIE performance and interaction under the intended listen-server/client topology.
 - Movement, collision settling, formation preview, cover arrival, animation recovery, fog transitions, UI, and input feel.
-- Multi-process reconnect, replay seek/load, and cooked client/server behavior.
 - Development Client and Dedicated Server target compilation: the installed Epic launcher engine
   rejects Client targets before project compilation (`Client targets are not currently supported
   from this engine distribution`). These gates require a source/installed engine with target support
@@ -149,4 +162,10 @@ Automation proves the tested contracts, not full production readiness. The remai
 
 ## Immediate working boundary
 
-The old audit/remediation campaign is closed as a source of truth. Its durable results are consolidated in this directory. The Cover/Squad topology decision is closed through the opt-in bridge plugin. Remaining Integration Candidate work is the real multi-process consumer runtime/Client/Server evidence recorded in the roadmap, plus the explicit PIE oracles.
+The old audit/remediation campaign is closed as a source of truth. Its durable results are
+consolidated in this directory. The Cover/Squad topology decision is closed through the opt-in
+bridge plugin, and the supported local packaged multiplayer/replay consumer gate is green. The
+remaining Integration Candidate release evidence is the Development Client/Dedicated Server gate
+on a capable engine distribution plus the explicit PIE oracles. Local implementation can proceed
+to the Vehicle Gym and CoH-style gameplay-backbone qualification without pretending those external
+gates are green.
