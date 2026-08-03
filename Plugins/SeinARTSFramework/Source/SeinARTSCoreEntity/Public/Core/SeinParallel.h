@@ -62,7 +62,8 @@ SEINARTSCOREENTITY_API bool SeinSimParallelEnabled();
 SEINARTSCOREENTITY_API int32 SeinSimParallelMinBatch();
 
 /** Async pathfinding toggle (Sein.Sim.AsyncPathfinding != 0). When set, path requests are
- *  queued and run as a deterministic BATCH one tick later instead of inline-synchronous. Reads
+ *  queued and run as deterministic budgeted batches beginning on the next tick instead of
+ *  inline-synchronous. Reads
  *  ONLY the async cvar, NOT Sein.Sim.Parallel: the batch runs parallel when Parallel is on and
  *  byte-identically serial when off, so the deferred (sim-affecting, fingerprinted) timing is the
  *  same on every peer regardless of the per-machine Parallel toggle. Default ON. */

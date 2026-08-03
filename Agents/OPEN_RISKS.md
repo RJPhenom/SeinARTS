@@ -5,9 +5,8 @@ This is the actionable remainder after consolidating the historical audits. It i
 ## Release-blocking foundation risks
 
 1. **Checkpoint-safe Blueprint continuation is bounded, not arbitrary.** Wait/MoveTo and registered native codecs are covered; arbitrary Blueprint VM latent/async frames are not. Define the supported authoring contract and fail unsupported graphs early.
-2. **Async interval path results can be discarded before consumption.** Request identity is protected, but the result-drain lifecycle still needs correction and a busy-scene regression.
-3. **Custom stateful providers need complete admission contracts.** Collision and Cover have explicit coverage claims; remaining Level Data, formation/resolver statefulness, and conditional ownership/orphan evaluation require a closed design.
-4. **Downstream packaging is unproven.** The monorepo builds, but clean consumer matrices and plugin-stripping packages are not automated.
+2. **Custom stateful providers need complete admission contracts.** Collision and Cover have explicit coverage claims; remaining Level Data, formation/resolver statefulness, and conditional ownership/orphan evaluation require a closed design.
+3. **Downstream packaging is unproven.** The monorepo builds, but clean consumer matrices and plugin-stripping packages are not automated.
 
 ## Gameplay-backbone gaps
 

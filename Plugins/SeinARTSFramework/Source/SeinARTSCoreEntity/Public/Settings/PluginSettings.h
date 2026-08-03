@@ -175,7 +175,8 @@ public:
 	// These three drive the `Sein.Sim.*` console variables; the console still wins at runtime for
 	// live A/B testing. Parallel passes are designed BIT-IDENTICAL to serial, so toggling them is
 	// deterministic (verify with canonical-root A/B plus peer/replay agreement). Exception: Async
-	// Pathfinding shifts WHEN a path arrives by one tick — see its note; it must match across clients.
+	// Pathfinding shifts WHEN a path arrives into a deterministic budgeted queue — see its note;
+	// it must match across clients.
 
 	/**
 	 * Master switch for spreading the simulation's per-entity work across CPU worker threads. When
@@ -203,13 +204,14 @@ public:
 	int32 ParallelMinBatch = 64;
 
 	/**
-	 * Gather path requests and solve them as one deterministic parallel batch the tick after they
-	 * are made, instead of solving each inline the moment it is asked for. This is how large-scale
+	 * Gather path requests and solve them in deterministic budgeted batches beginning the tick after
+	 * they are made, instead of solving each inline the moment it is asked for. This is how large-scale
 	 * RTS engines pathfind at scale — it lifts the single most expensive sim system off the critical
-	 * tick. The path a unit gets is unchanged; the only cost is about one tick (~33 ms at 30 Hz) of
-	 * delay before a move order produces its path, which is imperceptible in play. The batch runs in
-	 * parallel when Parallel Simulation is on and byte-identically serial when off, so the deferred
-	 * timing is the same regardless of that per-machine toggle.
+	 * tick. The path a unit gets is unchanged. An uncongested request arrives on the next tick
+	 * (~33 ms at 30 Hz); requests above PathRequestsPerTickBudget remain queued in canonical entity
+	 * order until later ticks. The batch runs in parallel when Parallel Simulation is on and
+	 * byte-identically serial when off, so the delivery schedule is the same regardless of that
+	 * per-machine toggle.
 	 *
 	 * Sim-affecting and lockstep-critical: because it shifts WHICH tick a unit receives its path on,
 	 * every client in a multiplayer match must use the same value — treat it as a build-wide default
@@ -220,9 +222,9 @@ public:
 	 * (destination + agent params, deliberately NOT the per-tick-resampled Start) and rejects any
 	 * cached path whose destination no longer matches the live request. So a re-ordered unit never
 	 * consumes a prior order's path, a group given one order can't split, and a stale NotFound can't
-	 * fail a valid move; a stale pending request self-clears via key-overwrite, and dead/consumed
-	 * results via the per-drain reset. The timing is fixed-1-tick-deferred, drained and consumed
-	 * within one tick, so it is bit-deterministic across peers: validate via the
+	 * fail a valid move. A stale pending request self-clears via key-overwrite; budget-deferred
+	 * requests and ready results remain canonical state until consumed, superseded, or explicitly
+	 * cancelled by their owner. The timing is deterministic across peers: validate via the
 	 * Sein.Sim.Parallel 0-vs-1 canonical-root gate with async on, then peer/replay agreement.
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Navigation",
@@ -520,8 +522,8 @@ public:
 
 	/**
 	 * How many path searches the planner runs per simulation tick — the planner's speed limit. If more
-	 * units ask for paths in one tick than the budget allows, the extras wait a tick and try again, so
-	 * a big selection staggers its searches instead of spiking the CPU.
+	 * units ask for paths in one tick than the budget allows, the extras remain queued in canonical
+	 * entity order for later ticks, so a big selection staggers its searches instead of spiking the CPU.
 	 *
 	 * Default 32 covers typical RTS group sizes with no visible stagger (a 50-unit selection spreads
 	 * over about 2 ticks). Lower it (4-8) to hard-cap per-tick path cost on low-spec targets or huge

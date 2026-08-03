@@ -19,7 +19,11 @@ Exit: clean tree, no obsolete tracked artifacts, exact gate evidence, and one un
 
 ## 2. Produce the first downstream Integration Candidate
 
-- Close correctness items that affect ordinary game authoring: async path result retention, FoW overlapping-height/local-offset/cone correctness, ability/passive lifecycle identities, and per-unit terrain/nav policy propagation.
+- Async path continuation ownership is closed: budget tails persist, results survive unrelated
+  drains, and terminal move actions cancel their state before re-entrant hooks.
+- Close the remaining correctness items that affect ordinary game authoring: FoW
+  overlapping-height/local-offset/cone correctness, ability/passive lifecycle identities, and
+  per-unit terrain/nav policy propagation.
 - Define a checkpoint-safe latent-authoring contract. Supported Blueprint latent nodes require exact codecs; unsupported continuation shapes must fail during authoring/compile/save rather than during a live reconnect.
 - Resolve remaining state-coverage admission contracts for mutable Level Data, stateful formation/resolver implementations, and conditional provider ownership.
 - Add automated package/consumer proof for:

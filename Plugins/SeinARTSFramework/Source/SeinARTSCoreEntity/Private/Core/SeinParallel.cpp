@@ -34,7 +34,7 @@ namespace
 	FAutoConsoleVariableRef CVarSeinSimAsyncPathfinding(
 		TEXT("Sein.Sim.AsyncPathfinding"),
 		GSeinSimAsyncPathfinding,
-		TEXT("Run path requests as a deterministic BATCH one tick after they're made, instead of\n")
+		TEXT("Run path requests as deterministic budgeted BATCHES beginning one tick after they're made, instead of\n")
 		TEXT("inline-synchronous. NOT gated on Sein.Sim.Parallel: the batch runs parallel when Parallel\n")
 		TEXT("is on and byte-identically serial when off, so the deferred timing is the same on every\n")
 		TEXT("peer regardless of that per-machine toggle. Cached results are keyed by request CONTENT\n")

@@ -924,10 +924,11 @@ ESeinPathResult USeinNavigationSubsystem::RequestPath(const FSeinPathRequest& Re
 	}
 	// ── Async pathfinding (opt-in) ────────────────────────────────────────────
 	// When Sein.Sim.AsyncPathfinding is on, requests don't run inline — they queue
-	// and run as a deterministic BATCH one tick later (header + SeinParallel.h). Deliberately NOT
-	// gated on Sein.Sim.Parallel: the determinism is the fixed 1-tick defer + in-tick join, not the
-	// threading. RunPathBatch runs the batch parallel when Parallel is on and byte-identically serial
-	// when off, so the deferred (sim-affecting, fingerprinted) timing is identical on every peer no
+	// and run in deterministic budgeted batches beginning one tick later (header + SeinParallel.h).
+	// Deliberately NOT gated on Sein.Sim.Parallel: determinism comes from the canonical queue order,
+	// shared budget, and in-tick join, not the threading. RunPathBatch runs the batch parallel when
+	// Parallel is on and byte-identically serial when off, so the deferred (sim-affecting,
+	// fingerprinted) delivery schedule is identical on every peer no
 	// matter the per-machine Parallel toggle; gating on it would let a Parallel-off peer run paths
 	// inline same-tick and desync. Needs a valid Requester to key results; one-shot queries (BPFL,
 	// reachability) call Navigation->FindPath directly and never reach this branch.
@@ -937,7 +938,7 @@ ESeinPathResult USeinNavigationSubsystem::RequestPath(const FSeinPathRequest& Re
 		// tick (deterministic: latent actions tick in a fixed order across clients).
 		if (CurrentSimTick != LastDrainTick)
 		{
-			DrainAsyncPathQueue(CurrentSimTick);
+			DrainAsyncPathQueue();
 			LastDrainTick = CurrentSimTick;
 		}
 
@@ -1024,6 +1025,22 @@ ESeinPathResult USeinNavigationSubsystem::RequestPath(const FSeinPathRequest& Re
 	return ESeinPathResult::NotFound;
 }
 
+void USeinNavigationSubsystem::CancelPathRequest(
+	FSeinEntityHandle Requester)
+{
+	if (!Requester.IsValid())
+	{
+		return;
+	}
+
+	const int32 Removed = AsyncQueue.Remove(Requester)
+		+ AsyncResults.Remove(Requester);
+	if (Removed > 0)
+	{
+		MarkCanonicalStateDirty();
+	}
+}
+
 bool USeinNavigationSubsystem::PathRequestIdentityMatches(const FSeinPathRequest& A, const FSeinPathRequest& B)
 {
 	// Deliberately EXCLUDES Start (re-sampled to the unit's live position every repath tick, so a
@@ -1039,16 +1056,10 @@ bool USeinNavigationSubsystem::PathRequestIdentityMatches(const FSeinPathRequest
 		&& A.BlockedTerrainTags        == B.BlockedTerrainTags;
 }
 
-void USeinNavigationSubsystem::DrainAsyncPathQueue(int32 CurrentTick)
+void USeinNavigationSubsystem::DrainAsyncPathQueue()
 {
-	// Drop any un-consumed results from the previous drain: each is normally consumed
-	// the same tick it's produced (the requesting action retries that tick), so a
-	// leftover belongs to a unit that canceled/died — safe to discard. Keeps it bounded.
-	AsyncResults.Reset();
-
 	if (!Navigation || AsyncQueue.Num() == 0)
 	{
-		AsyncQueue.Reset();
 		return;
 	}
 
@@ -1088,12 +1099,13 @@ void USeinNavigationSubsystem::DrainAsyncPathQueue(int32 CurrentTick)
 		Entry.Request = Batch[i];
 		Entry.Path    = MoveTemp(Results[i]);
 		AsyncResults.Add(Keys[i], MoveTemp(Entry));
+		AsyncQueue.Remove(Keys[i]);
 	}
 
-	// Clear the whole queue: served units consume their result (and stop requesting);
-	// the unserved tail re-enqueues next tick via the action's Throttled retry — so no
-	// stale/dead entries accumulate and the per-tick serve order stays canonical.
-	AsyncQueue.Reset();
+	// The unserved budget tail stays queued. This is required for consumers such
+	// as interval repaths that do not retry every tick after Throttled; clearing
+	// it here could starve the same high-handle request forever under sustained
+	// load. The next drain again chooses the canonical lowest-handle subset.
 }
 
 void USeinNavigationSubsystem::MarkCanonicalStateDirty()

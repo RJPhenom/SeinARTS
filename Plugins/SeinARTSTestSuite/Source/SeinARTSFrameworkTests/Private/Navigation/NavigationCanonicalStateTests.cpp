@@ -328,6 +328,78 @@ namespace UE::SeinARTSTests
 			Navigation.OnLevelDataChanged();
 		}
 
+		static FSeinPathRequest MakeAsyncRequest(
+			FSeinEntityHandle Requester,
+			int32 StartX,
+			int32 EndX)
+		{
+			FSeinPathRequest Request;
+			Request.Start = FFixedVector(
+				FFixedPoint::FromInt(StartX),
+				FFixedPoint::Zero,
+				FFixedPoint::Zero);
+			Request.End = FFixedVector(
+				FFixedPoint::FromInt(EndX),
+				FFixedPoint::Zero,
+				FFixedPoint::Zero);
+			Request.Requester = Requester;
+			return Request;
+		}
+
+		static void AddQueued(
+			USeinNavigationSubsystem& Navigation,
+			const FSeinPathRequest& Request)
+		{
+			Navigation.AsyncQueue.Add(Request.Requester, Request);
+		}
+
+		static void AddReady(
+			USeinNavigationSubsystem& Navigation,
+			const FSeinPathRequest& Request)
+		{
+			USeinNavigationSubsystem::FSeinAsyncPathResult Ready;
+			Ready.Request = Request;
+			Ready.Path.Waypoints = { Request.Start, Request.End };
+			Ready.Path.bIsValid = true;
+			Ready.Path.DeriveSegmentsFromWaypoints();
+			Navigation.AsyncResults.Add(
+				Request.Requester, MoveTemp(Ready));
+		}
+
+		static void DrainAsyncQueue(
+			USeinNavigationSubsystem& Navigation,
+			int32 CurrentTick)
+		{
+			Navigation.DrainAsyncPathQueue();
+			Navigation.LastDrainTick = CurrentTick;
+		}
+
+		static bool HasQueued(
+			const USeinNavigationSubsystem& Navigation,
+			FSeinEntityHandle Requester)
+		{
+			return Navigation.AsyncQueue.Contains(Requester);
+		}
+
+		static bool HasReady(
+			const USeinNavigationSubsystem& Navigation,
+			FSeinEntityHandle Requester)
+		{
+			return Navigation.AsyncResults.Contains(Requester);
+		}
+
+		static int32 QueuedCount(
+			const USeinNavigationSubsystem& Navigation)
+		{
+			return Navigation.AsyncQueue.Num();
+		}
+
+		static int32 ReadyCount(
+			const USeinNavigationSubsystem& Navigation)
+		{
+			return Navigation.AsyncResults.Num();
+		}
+
 	private:
 		static bool PathRequestsEqual(
 			const FSeinPathRequest& A,
@@ -417,6 +489,50 @@ namespace UE::SeinARTSTests
 
 			USeinARTSCoreSettings* Settings = nullptr;
 			FSoftClassPath SavedNavigationClass;
+		};
+
+		struct FScopedPathBudgetOverride
+		{
+			explicit FScopedPathBudgetOverride(int32 NewBudget)
+				: Settings(GetMutableDefault<USeinARTSCoreSettings>())
+				, SavedBudget(Settings
+					? Settings->PathRequestsPerTickBudget
+					: 0)
+			{
+				check(Settings);
+				Settings->PathRequestsPerTickBudget = NewBudget;
+			}
+
+			~FScopedPathBudgetOverride()
+			{
+				Settings->PathRequestsPerTickBudget = SavedBudget;
+			}
+
+			USeinARTSCoreSettings* Settings = nullptr;
+			int32 SavedBudget = 0;
+		};
+
+		struct FScopedAsyncPathfindingOverride
+		{
+			FScopedAsyncPathfindingOverride()
+				: Settings(GetMutableDefault<USeinARTSCoreSettings>())
+				, bSavedEnabled(Settings
+					? Settings->bAsyncPathfinding
+					: false)
+			{
+				check(Settings);
+				Settings->bAsyncPathfinding = true;
+				Settings->ApplySimPerformanceCvars();
+			}
+
+			~FScopedAsyncPathfindingOverride()
+			{
+				Settings->bAsyncPathfinding = bSavedEnabled;
+				Settings->ApplySimPerformanceCvars();
+			}
+
+			USeinARTSCoreSettings* Settings = nullptr;
+			bool bSavedEnabled = false;
 		};
 
 		bool StartNavigationStateWorld(
@@ -1389,6 +1505,144 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsFalse(
 			World->ComputeCanonicalStateRoot(Root, Error)));
 		ASSERT_THAT(IsFalse(Error.IsEmpty()));
+	}
+
+	TEST(AsyncReadyResultSurvivesUnrelatedDrainUntilConsumed,
+		"SeinARTS.Unit.Navigation.Async")
+	{
+		FScopedAsyncPathfindingOverride AsyncOverride;
+		FScopedPathBudgetOverride BudgetOverride(1);
+		FActorTestSpawner Spawner;
+		UWorld& UnrealWorld = Spawner.GetWorld();
+		USeinWorldSubsystem* World =
+			UnrealWorld.GetSubsystem<USeinWorldSubsystem>();
+		USeinNavigationSubsystem* Navigation =
+			UnrealWorld.GetSubsystem<USeinNavigationSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+		ASSERT_THAT(IsNotNull(Navigation));
+		ASSERT_THAT(IsNotNull(ConfigureGrid(
+			UnrealWorld, *Navigation, 1)));
+
+		FString Error;
+		ASSERT_THAT(IsTrue(StartNavigationStateWorld(
+			*World, TEXT("Navigation.Async.ResultRetention"), Error)));
+
+		const FSeinPathRequest Retained =
+			FNavigationCanonicalStateTestAccess::MakeAsyncRequest(
+				FSeinEntityHandle(21, 1), -50, 50);
+		const FSeinPathRequest Unrelated =
+			FNavigationCanonicalStateTestAccess::MakeAsyncRequest(
+				FSeinEntityHandle(10, 1), -40, 40);
+		FNavigationCanonicalStateTestAccess::AddReady(
+			*Navigation, Retained);
+		FNavigationCanonicalStateTestAccess::AddQueued(
+			*Navigation, Unrelated);
+
+		FNavigationCanonicalStateTestAccess::DrainAsyncQueue(
+			*Navigation, World->GetCurrentTick());
+		ASSERT_THAT(IsTrue(
+			FNavigationCanonicalStateTestAccess::HasReady(
+				*Navigation, Retained.Requester)));
+
+		FSeinPath Delivered;
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(ESeinPathResult::Found),
+			static_cast<int32>(
+				Navigation->RequestPath(Retained, Delivered))));
+		ASSERT_THAT(IsTrue(Delivered.bIsValid));
+		ASSERT_THAT(IsTrue(
+			Delivered.Waypoints.Last() == Retained.End));
+		ASSERT_THAT(IsFalse(
+			FNavigationCanonicalStateTestAccess::HasReady(
+				*Navigation, Retained.Requester)));
+		World->StopSimulation();
+	}
+
+	TEST(AsyncDrainRetainsUnservedCanonicalBudgetTail,
+		"SeinARTS.Unit.Navigation.Async")
+	{
+		FScopedPathBudgetOverride BudgetOverride(1);
+		FActorTestSpawner Spawner;
+		UWorld& UnrealWorld = Spawner.GetWorld();
+		USeinWorldSubsystem* World =
+			UnrealWorld.GetSubsystem<USeinWorldSubsystem>();
+		USeinNavigationSubsystem* Navigation =
+			UnrealWorld.GetSubsystem<USeinNavigationSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+		ASSERT_THAT(IsNotNull(Navigation));
+		ASSERT_THAT(IsNotNull(ConfigureGrid(
+			UnrealWorld, *Navigation, 1)));
+
+		FString Error;
+		ASSERT_THAT(IsTrue(StartNavigationStateWorld(
+			*World, TEXT("Navigation.Async.BudgetTail"), Error)));
+		const FSeinPathRequest First =
+			FNavigationCanonicalStateTestAccess::MakeAsyncRequest(
+				FSeinEntityHandle(10, 1), -50, 50);
+		const FSeinPathRequest Tail =
+			FNavigationCanonicalStateTestAccess::MakeAsyncRequest(
+				FSeinEntityHandle(20, 1), -40, 40);
+		FNavigationCanonicalStateTestAccess::AddQueued(
+			*Navigation, Tail);
+		FNavigationCanonicalStateTestAccess::AddQueued(
+			*Navigation, First);
+
+		FNavigationCanonicalStateTestAccess::DrainAsyncQueue(
+			*Navigation, World->GetCurrentTick());
+		ASSERT_THAT(AreEqual(
+			1,
+			FNavigationCanonicalStateTestAccess::ReadyCount(
+				*Navigation)));
+		ASSERT_THAT(AreEqual(
+			1,
+			FNavigationCanonicalStateTestAccess::QueuedCount(
+				*Navigation)));
+		ASSERT_THAT(IsTrue(
+			FNavigationCanonicalStateTestAccess::HasReady(
+				*Navigation, First.Requester)));
+		ASSERT_THAT(IsTrue(
+			FNavigationCanonicalStateTestAccess::HasQueued(
+				*Navigation, Tail.Requester)));
+		World->StopSimulation();
+	}
+
+	TEST(AsyncCancellationRemovesOnlyRequesterContinuation,
+		"SeinARTS.Unit.Navigation.Async")
+	{
+		FActorTestSpawner Spawner;
+		USeinNavigationSubsystem* Navigation =
+			Spawner.GetWorld().GetSubsystem<
+				USeinNavigationSubsystem>();
+		ASSERT_THAT(IsNotNull(Navigation));
+
+		const FSeinPathRequest Cancelled =
+			FNavigationCanonicalStateTestAccess::MakeAsyncRequest(
+				FSeinEntityHandle(31, 2), 0, 10);
+		const FSeinPathRequest Preserved =
+			FNavigationCanonicalStateTestAccess::MakeAsyncRequest(
+				FSeinEntityHandle(32, 2), 0, 20);
+		FNavigationCanonicalStateTestAccess::AddQueued(
+			*Navigation, Cancelled);
+		FNavigationCanonicalStateTestAccess::AddReady(
+			*Navigation, Cancelled);
+		FNavigationCanonicalStateTestAccess::AddQueued(
+			*Navigation, Preserved);
+		FNavigationCanonicalStateTestAccess::AddReady(
+			*Navigation, Preserved);
+
+		Navigation->CancelPathRequest(Cancelled.Requester);
+		ASSERT_THAT(IsFalse(
+			FNavigationCanonicalStateTestAccess::HasQueued(
+				*Navigation, Cancelled.Requester)));
+		ASSERT_THAT(IsFalse(
+			FNavigationCanonicalStateTestAccess::HasReady(
+				*Navigation, Cancelled.Requester)));
+		ASSERT_THAT(IsTrue(
+			FNavigationCanonicalStateTestAccess::HasQueued(
+				*Navigation, Preserved.Requester)));
+		ASSERT_THAT(IsTrue(
+			FNavigationCanonicalStateTestAccess::HasReady(
+				*Navigation, Preserved.Requester)));
 	}
 
 	TEST(NavigationContinuationChangesCanonicalWorldRoot,

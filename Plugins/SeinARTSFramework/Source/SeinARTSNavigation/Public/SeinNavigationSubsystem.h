@@ -86,8 +86,8 @@ public:
 	 *  per-sim-tick request budget (configured via
 	 *  `USeinARTSCoreSettings::PathRequestsPerTickBudget`) hasn't been spent
 	 *  yet; otherwise returns `Throttled` without doing any A* work — caller
-	 *  retries next tick. Counter resets on every
-	 *  `USeinWorldSubsystem::OnSimTickCompleted`.
+	 *  retries next tick. The synchronous counter resets lazily when the
+	 *  subsystem observes a new simulation tick.
 	 *
 	 *  Lockstep-deterministic: all clients increment the counter in the same
 	 *  order (latent-action tick order) so all clients agree which requests
@@ -96,8 +96,17 @@ public:
 	 *  Use this from any tickable consumer (latent move actions, abilities)
 	 *  that can wait a tick for a path. One-shot callers (BPFL queries,
 	 *  reachability checks) should call `Navigation->FindPath` directly to
-	 *  bypass the budget. */
+	 *  bypass the budget. Async continuations remain owned by the requester
+	 *  until they are consumed, superseded, or explicitly cancelled; custom
+	 *  consumers must call CancelPathRequest when they terminate without
+	 *  consuming their result. */
 	ESeinPathResult RequestPath(const FSeinPathRequest& Request, FSeinPath& OutPath);
+
+	/** Cancel all queued and ready async path state owned by Requester.
+	 *  Safe and idempotent when async pathfinding is disabled or no request is
+	 *  pending. Terminal tickable consumers must call this so abandoned
+	 *  continuations do not remain part of canonical simulation state. */
+	void CancelPathRequest(FSeinEntityHandle Requester);
 
 private:
 	friend struct FSeinNavigationCanonicalStateProvider;
@@ -201,7 +210,8 @@ private:
 
 	// ── Async pathfinding (Sein.Sim.AsyncPathfinding) ─────────────────────────
 	// Opt-in: requests queue here keyed by Requester (re-requests dedup) and run as
-	// a deterministic parallel batch one tick later via Navigation->RunPathBatch.
+	// deterministic budgeted batches beginning one tick later via
+	// Navigation->RunPathBatch.
 	// See RequestPath / DrainAsyncPathQueue.
 
 	/** Pending requests, keyed by Requester (latest request per unit wins). */
@@ -216,7 +226,8 @@ private:
 		FSeinPath Path;
 	};
 
-	/** Ready results from the last drain, consumed on the requester's next RequestPath. */
+	/** Ready results retained until the requester consumes, supersedes, or
+	 *  explicitly cancels them. */
 	TMap<FSeinEntityHandle, FSeinAsyncPathResult> AsyncResults;
 
 	/** Sim tick the async queue was last drained (drain runs once per tick). */
@@ -228,9 +239,10 @@ private:
 	void MarkCanonicalStateDirty();
 
 	/** Drain the async queue: serve up to PathRequestsPerTickBudget requests in
-	 *  canonical handle order via Navigation->RunPathBatch, caching the results.
-	 *  Runs once per tick at the first async RequestPath of that tick. */
-	void DrainAsyncPathQueue(int32 CurrentTick);
+	 *  canonical handle order via Navigation->RunPathBatch, caching the results
+	 *  and retaining the unserved budget tail. Runs once per tick at the first
+	 *  async RequestPath of that tick. */
+	void DrainAsyncPathQueue();
 
 	/** True if two path requests would resolve to the SAME route: every path-affecting field
 	 *  matches EXCEPT Start (re-sampled to the unit's live position on every repath, so a

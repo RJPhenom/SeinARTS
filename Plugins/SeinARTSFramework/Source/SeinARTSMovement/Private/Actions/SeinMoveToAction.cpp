@@ -1181,6 +1181,14 @@ void USeinMoveToAction::FinalizeMovementOnce()
 	if (!OwningAbility) return;
 	UWorld* World = OwningAbility->GetWorld();
 	if (!World) return;
+	// Cancel before any Blueprint-capable end hook. OnMoveEnd may synchronously
+	// issue a new order for this entity; cancelling afterward would erase that
+	// new order's continuation instead of the one owned by this action.
+	if (USeinNavigationSubsystem* NavigationSub =
+		World->GetSubsystem<USeinNavigationSubsystem>())
+	{
+		NavigationSub->CancelPathRequest(OwnerEntity);
+	}
 	USeinWorldSubsystem* Sim = World->GetSubsystem<USeinWorldSubsystem>();
 	if (!Sim) return;
 
