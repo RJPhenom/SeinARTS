@@ -1,7 +1,7 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinARTSCoverSquadModule.h
- * @brief   Module declaration for the Cover-Squad bridge module.
+ * @brief   Module declaration for the opt-in Cover + Squad bridge plugin.
  */
 
 #pragma once

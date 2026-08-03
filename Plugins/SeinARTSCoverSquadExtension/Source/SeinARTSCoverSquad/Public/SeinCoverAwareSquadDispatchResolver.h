@@ -3,7 +3,8 @@
  * @file    SeinCoverAwareSquadDispatchResolver.h
  * @brief   Squad dispatch resolver with automatic cover-snap.
  *
- *          Same cover-snap behavior as USeinCoverAwareDefaultBrokerResolver
+ *          Lives in the optional Cover + Squad bridge plugin. It provides the
+ *          same cover-snap behavior as USeinCoverAwareDefaultBrokerResolver
  *          but inherits from USeinSquadDispatchResolver so squads with
  *          authored slot offsets get cover-snap on top of their per-slot
  *          formation positions + the backward-walk slot mirror. Designer
@@ -26,9 +27,9 @@ class SEINARTSCOVERSQUAD_API USeinCoverAwareSquadDispatchResolver : public USein
 public:
 	// Tuning lives in Project Settings → SeinARTS Plugin → Cover:
 	//   * Cover Snap Radius — distance gate around the move target.
-	//   * Cover Wrong-Side Penalty Radius — bias to keep snap on the cursor side.
-	// See SeinCoverAwareDefaultBrokerResolver.h for the full rationale on why
-	// these are settings-driven rather than per-resolver UPROPERTYs.
+	// Cursor-side preference is a deterministic preferred-pass plus wrong-side
+	// capacity fallback. See SeinCoverAwareDefaultBrokerResolver.h for the full
+	// rationale on sharing the radius instead of duplicating BP CDO tuning.
 
 	virtual void PostProcessPositions_Implementation(
 		USeinWorldSubsystem* World,

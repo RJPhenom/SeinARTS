@@ -1,0 +1,34 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "SeinARTS Cover + Squads",
+	"Description": "Optional bridge between the SeinARTS Cover and Squad extensions — cover-aware squad dispatch without coupling either extension to the other.",
+	"Category": "Gameplay",
+	"CreatedBy": "Phenom Studios",
+	"CanContainContent": false,
+	"Installed": false,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Modules": [
+		{
+			"Name": "SeinARTSCoverSquad",
+			"Type": "Runtime",
+			"LoadingPhase": "PostDefault"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "SeinARTSFramework",
+			"Enabled": true
+		},
+		{
+			"Name": "SeinARTSCoverExtension",
+			"Enabled": true
+		},
+		{
+			"Name": "SeinARTSSquadExtension",
+			"Enabled": true
+		}
+	]
+}

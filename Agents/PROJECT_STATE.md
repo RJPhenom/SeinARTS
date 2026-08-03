@@ -33,6 +33,10 @@ The post-audit performance/remediation work is now committed and fast-forwarded 
 - Designer-facing reflected APIs were not removed merely because native code does not include them. `UMathBPFL`, `FSeinBasicMatchSettings`, and `FSeinGarrisonSpec` remain intentional public authoring surfaces.
 - Example maps, gameplay Blueprints, and mannequin content now belong to the host project under `/Game/SeinARTSExamples`; the base plugin retains only its runtime-owned UI content. Framework packages no longer reference host `/Game/SeinARTS` content or opt-in extension packages.
 - The unreachable simulation-content manifest commandlet was removed. Clean consumers invoke the registered editor console command through Python instead of relying on a commandlet class hidden in a `PostEngineInit` module.
+- Cover and Squad are now physically independent production plugins. Their shared
+  `SeinARTSCoverSquad` runtime module lives in the separate opt-in
+  `SeinARTSCoverSquadExtension`; its reflected script path, simulation-content contributor ID,
+  pool-codec ID, and schema/revision identities did not change.
 - Fixed-vector absolute-component queries now preserve 32.32 values and saturate the unrepresentable absolute minimum.
 - Stateful PRNG spatial/rotator draws are explicitly ordered across compilers; `RandomRotator` converts its radian samples to the degree-based rotator contract.
 - Fixed ray/box queries no longer impose an arbitrary 10,000-unit hit ceiling.
@@ -57,23 +61,25 @@ formation/resolver state coverage, provider teardown, and downstream content own
 | `SeinARTSEditor Win64 Development` | succeeded / target current |
 | `SeinARTS Win64 Shipping` | succeeded / target current |
 | Clean consumer: Framework | fresh Editor + Shipping build, exact map load, cook/package, real Shipping startup passed |
+| Clean consumer: Framework + Cover only | fresh Editor + Shipping build, exact map load, cook/package, real Shipping startup passed; Squad/bridge absent |
+| Clean consumer: Framework + Squad only | fresh Editor + Shipping build, exact map load, cook/package, real Shipping startup passed; Cover/bridge absent |
 | Clean consumer: Framework + Movement+ | fresh Editor + Shipping build, exact map load, cook/package, real Shipping startup passed |
-| Clean consumer: all production plugins | fresh Editor + Shipping build, exact map load, cook/package, real Shipping startup passed |
+| Clean consumer: all five production plugins | fresh Editor + Shipping build, exact map load, cook/package, real Shipping startup passed; bridge mounted/started/shut down |
 | Generated simulation-content manifest | 10 contributors, 93 records, digest `0E018D9C38BD9389BF25B7648F54A87B` |
 | Staged diff validation | no whitespace errors; line-ending notices only |
 
 Latest local evidence is under ignored `Saved/Automation/`:
 
-- `SeinARTS.Unit-20260803-024142-7baac61d` (All)
-- `SeinARTS.Unit-20260803-024239-0dc98cd8` (Framework)
-- `SeinARTS.Integration-20260803-024324-b7757f8c` (All)
-- `SeinARTS.Integration-20260803-024344-95b4351a` (Framework)
-- `SeinARTS.Determinism-20260803-024407-b7abece3` (All)
-- `SeinARTS.Determinism-20260803-024431-0c094bbf` (Framework)
-- `SeinARTS.Editor-20260803-025624-690e4c29` (All; checked-in floor)
-- `SeinARTS.Editor-20260803-025638-e2fb00c2` (Framework; checked-in floor)
-- `SeinARTS.Determinism.Process.SerialCollisionTrace-20260803-024504-090e4e16`
-- `SeinARTS.Determinism.Process.ParallelCollisionTrace-20260803-024518-e35d5550`
+- `SeinARTS.Unit-20260803-092025-a47e1818` (All)
+- `SeinARTS.Unit-20260803-092204-6014d34e` (Framework)
+- `SeinARTS.Integration-20260803-092115-78560738` (All)
+- `SeinARTS.Integration-20260803-094952-e1952b89` (Framework)
+- `SeinARTS.Determinism-20260803-092131-e9853584` (All)
+- `SeinARTS.Determinism-20260803-095010-0388823a` (Framework)
+- `SeinARTS.Editor-20260803-095812-6c947010` (All; checked-in floor, after redirect cleanup)
+- `SeinARTS.Editor-20260803-095029-89627fda` (Framework; checked-in floor)
+- `SeinARTS.Determinism.Process.SerialCollisionTrace-20260803-092256-63018e6b`
+- `SeinARTS.Determinism.Process.ParallelCollisionTrace-20260803-092310-7a4edeb3`
 
 ## Integration-candidate progress
 
@@ -124,6 +130,9 @@ Latest local evidence is under ignored `Saved/Automation/`:
 - `Tools/ConsumerMatrix/Verify-ConsumerMatrix.ps1` creates disposable external consumers from
   selected source plugins, generates a consumer-owned manifest and map, rejects host-content
   dependencies, and exercises uncooked load plus packaged Shipping startup.
+- The consumer matrix has direct Framework-only, Cover-only, Squad-only, Movement+-only-extension,
+  and Full profiles. This proves both parents survive physical bridge stripping and the bridge
+  remains loadable when its required parents are present.
 
 ## Evidence limits
 
@@ -140,4 +149,4 @@ Automation proves the tested contracts, not full production readiness. The remai
 
 ## Immediate working boundary
 
-The old audit/remediation campaign is closed as a source of truth. Its durable results are consolidated in this directory. The next non-PIE source decision is whether Cover's Squad bridge becomes a separate opt-in plugin or Squad becomes a required Cover dependency; the current descriptor is not physically strip-safe. All other work should follow the ordered roadmap from live code.
+The old audit/remediation campaign is closed as a source of truth. Its durable results are consolidated in this directory. The Cover/Squad topology decision is closed through the opt-in bridge plugin. Remaining Integration Candidate work is the real multi-process consumer runtime/Client/Server evidence recorded in the roadmap, plus the explicit PIE oracles.

@@ -5,8 +5,8 @@
  *          Cover-snap implementation parallel to the default-resolver variant
  *          — both apply the same cursor-side global filter + two-pass greedy
  *          allocation. We duplicate the body here rather than share a static
- *          helper across the two .cpp files to keep each resolver class
- *          self-contained and avoid header coupling between the two; the
+ *          helper across plugin modules to keep each resolver class
+ *          self-contained and avoid cross-module private-header coupling; the
  *          logic is small + identical enough that drift risk is minimal.
  */
 
@@ -95,11 +95,9 @@ void USeinCoverAwareSquadDispatchResolver::PostProcessPositions_Implementation(
 	TArray<FFixedVector>& InOutPositions,
 	FFixedVector TargetLocation)
 {
-	// Tuning sourced from plugin settings — single config surface shared
-	// with the default broker resolver. The wrong-side penalty radius
-	// became vestigial when we switched from soft per-slot penalty to the
-	// global cursor-side filter + two-pass fallback; only the snap radius
-	// is read here.
+	// Tuning comes from the single Cover settings surface shared with the
+	// default broker resolver. Cursor-side preference is deterministic policy;
+	// CoverSnapRadius is the only distance gate.
 	const USeinARTSCoverSettings* Settings = GetDefault<USeinARTSCoverSettings>();
 	const FFixedPoint CoverSnapRadius =
 		(Settings ? Settings->CoverSnapRadius : FFixedPoint::FromInt(500));

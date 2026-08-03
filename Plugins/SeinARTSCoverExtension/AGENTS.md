@@ -13,13 +13,10 @@ Nothing in the framework may depend on Cover.
 |---|---|---|
 | `SeinARTSCover` | Runtime | Provider data, cover system/default, subsystem, default broker resolver, settings, tags, and Blueprint queries. |
 | `SeinARTSCoverEditor` | Editor | Details customization, slot generation, and entity-bridge authoring visualization. |
-| `SeinARTSCoverSquad` | Runtime bridge | Cover-aware Squad dispatch resolver. |
 
-Framework is required. Squad is declared optional at the plugin level, but the descriptor always
-declares `SeinARTSCoverSquad` and that module hard-links `SeinARTSSquad`. A Cover target with Squad
-physically absent currently fails to compile; it does not degrade by skipping the bridge. The base
-runtime/editor source modules are independent of Squad, but a module/plugin split is required to
-make that independence packageable.
+Framework is required. Cover has no Squad dependency and must build/cook with Squad physically
+absent. Cover-aware Squad dispatch lives in the separate, explicitly enabled
+`SeinARTSCoverSquadExtension`, which depends on both parent plugins.
 
 ## Provider and query model
 
@@ -106,7 +103,7 @@ Cover changes need synthetic and world-level scenarios for:
 - Reservation acquire/release, provider destruction, cancellation, failed movement, and restore.
 - Preview artifact versus every first path request.
 - Provider registration-order permutations and serial/parallel state agreement.
-- Cover without Squad, Cover with Squad, and framework-only builds.
+- Cover without Squad, the separate Cover+Squad bridge, and framework-only builds.
 
 For small allocation matrices, compare the optimized solver against exhaustive brute force. Use
 PIE for tactical plausibility, approach/facing feel, preview clarity, and visual quality.

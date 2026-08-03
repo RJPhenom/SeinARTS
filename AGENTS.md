@@ -1,12 +1,12 @@
 # SeinARTS — Project Root Guide
 
 This is the **project-level** guide, loaded by every session rooted at `D:/Projects/Unreal Engine/SeinARTS`.
-It owns the cross-cutting rules that apply to **all four production plugins** and the two test suites. Each plugin has its own
+It owns the cross-cutting rules that apply to **all five production plugins** and the two test suites. Each plugin has its own
 `AGENTS.md` with the deep, plugin-specific detail — read the relevant one when you scope into it
 (pointers below).
 
 > Sessions used to be scoped to the `SeinARTSFramework` plugin directory only. They now run from
-> this project root so a single session has native visibility across the four production plugins
+> this project root so a single session has native visibility across the five production plugins
 > and both disabled test plugins. When you start work, read this file first, then the plugin-specific
 > `AGENTS.md` for whatever you're touching.
 
@@ -33,7 +33,7 @@ nothing and adds synchronization overhead.
   Feature work is naturally module-scoped, so conflicts between parallel agents are rare.
 
 > Note: as of 2026-06-02 the project root **is** a git repository — a single project-wide monorepo
-> (`main`, initial commit `ecf6068`) tracking the host, four production plugins, and two disabled
+> (`main`, initial commit `ecf6068`) tracking the host, five production plugins, and two disabled
 > test plugins, with **Git LFS**
 > for binary assets (`*.uasset`/`*.umap` + common media). Baked level data (`**/Content/LevelData/` + legacy patterns)
 > is gitignored as a regenerable build artifact — **re-bake after a fresh clone** via the one
@@ -140,7 +140,8 @@ D:/Projects/Unreal Engine/SeinARTS/
 └── Plugins/
     ├── SeinARTSFramework/             The core. 12 modules. → Plugins/SeinARTSFramework/AGENTS.md
     ├── SeinARTSSquadExtension/        Opt-in squads.  1 module. → .../SeinARTSSquadExtension/AGENTS.md
-    ├── SeinARTSCoverExtension/        Opt-in cover.   3 modules. → .../SeinARTSCoverExtension/AGENTS.md
+    ├── SeinARTSCoverExtension/        Opt-in cover.   2 modules. → .../SeinARTSCoverExtension/AGENTS.md
+    ├── SeinARTSCoverSquadExtension/   Opt-in Cover+Squad bridge. 1 module. → .../SeinARTSCoverSquadExtension/AGENTS.md
     ├── SeinARTSMovementPlusExtension/ Opt-in movement modes. 1 module ("SeinARTS Movement+"). → .../SeinARTSMovementPlusExtension/AGENTS.md
     ├── SeinARTSTestSuite/              Disabled framework/editor tests. 3 modules. → .../SeinARTSTestSuite/AGENTS.md
     └── SeinARTSExtensionTestSuite/     Disabled all-extension tests. 2 modules. → .../SeinARTSExtensionTestSuite/AGENTS.md
@@ -152,10 +153,10 @@ D:/Projects/Unreal Engine/SeinARTS/
 SeinARTSFramework ................... base; depends on no other Sein plugin
    ├── SeinARTSSquadExtension ............. REQUIRES SeinARTSFramework
    ├── SeinARTSCoverExtension ............. REQUIRES SeinARTSFramework
-   │                                        its SeinARTSCoverSquad module also REQUIRES SeinARTSSquadExtension
-   │                                        (declared "Optional" in the .uplugin, but see the gotcha below)
-   └── SeinARTSMovementPlusExtension ...... REQUIRES SeinARTSFramework
-                                            (concrete movement modes; framework keeps Basic / Basic Unit)
+   ├── SeinARTSMovementPlusExtension ...... REQUIRES SeinARTSFramework
+   │                                        (concrete movement modes; framework keeps Basic / Basic Unit)
+   └── SeinARTSCoverSquadExtension ........ REQUIRES Framework + Cover + Squad
+                                            (optional integration bridge only)
 
 SeinARTSTestSuite ................... disabled development-only Framework consumer
 SeinARTSExtensionTestSuite ......... disabled consumer of the base test suite + all extensions;
@@ -163,14 +164,9 @@ SeinARTSExtensionTestSuite ......... disabled consumer of the base test suite + 
 ```
 
 Dependencies point **up** toward the framework, never down. The framework knows nothing about the
-extensions; an extension may be stripped and the framework still builds and runs. The Cover
-extension can use the Squad extension but treats it as optional at the plugin level.
-
-> **Gotcha:** Cover does not currently support a physically stripped Squad plugin. Although the
-> `.uplugin` marks Squad optional, that same descriptor always declares `SeinARTSCoverSquad`, whose
-> `Build.cs` hard-links `SeinARTSSquad` without guards. A target compiling Cover with Squad absent
-> therefore fails rather than merely skipping the bridge. The base Cover source modules do not
-> themselves use Squad, but packaging them independently requires a future module/plugin split.
+extensions; an extension may be stripped and the framework still builds and runs. Cover and Squad
+are physically independent plugins. Their only cross-extension integration lives in the separate
+`SeinARTSCoverSquadExtension`, so games enable that bridge only when they use both parent features.
 
 ## Which AGENTS.md to read
 
@@ -179,6 +175,7 @@ extension can use the Squad extension but treats it as optional at the plugin le
 | Sim core, entities, abilities, effects, nav, movement base/steering, FoW, net, editor tooling, UI, gameplay shell | `Plugins/SeinARTSFramework/AGENTS.md` |
 | Persistent squads, formation dispatch, reinforcement | `Plugins/SeinARTSSquadExtension/AGENTS.md` |
 | Cover providers/geometry, cover-aware dispatch, formation preview | `Plugins/SeinARTSCoverExtension/AGENTS.md` |
+| Cover-aware Squad dispatch integration | `Plugins/SeinARTSCoverSquadExtension/AGENTS.md` |
 | Infantry/Wheeled/Tracked/Hover/Flight movement modes + per-class tuning | `Plugins/SeinARTSMovementPlusExtension/AGENTS.md` |
 | Automated tests, fixtures, scripted maps, and test runners | `Plugins/SeinARTSTestSuite/AGENTS.md` |
 | Tests intentionally linking every opt-in extension | `Plugins/SeinARTSExtensionTestSuite/AGENTS.md` |

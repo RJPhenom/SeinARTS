@@ -24,6 +24,10 @@
       "Enabled": true
     },
     {
+      "Name": "SeinARTSCoverSquadExtension",
+      "Enabled": true
+    },
+    {
       "Name": "SeinARTSMovementPlusExtension",
       "Enabled": true
     }

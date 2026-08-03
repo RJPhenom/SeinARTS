@@ -19,8 +19,8 @@ Exit: clean tree, no obsolete tracked artifacts, exact gate evidence, and one un
 
 ## 2. Produce the first downstream Integration Candidate
 
-**Status:** source-contract and clean-consumer packaging work is complete; multi-process runtime
-qualification and one plugin-topology decision remain.
+**Status:** source-contract, plugin-topology, and clean-consumer packaging work is complete;
+multi-process runtime qualification remains.
 
 - Async path continuation ownership is closed: budget tails persist, results survive unrelated
   drains, and terminal move actions cancel their state before re-entrant hooks.
@@ -38,13 +38,14 @@ qualification and one plugin-topology decision remain.
   explicit state-coverage/admission contracts. Movement+ batch withdrawal is atomic.
 - Automated package/consumer proof now covers:
   - Framework only.
+  - Framework + Cover, with Squad and the bridge physically stripped.
+  - Framework + Squad, with Cover and the bridge physically stripped.
   - Framework + Movement+.
-  - Framework + Squad + Cover + Movement+.
+  - Framework + Squad + Cover + CoverSquad bridge + Movement+.
   - UE 5.7 Editor and Shipping targets locally.
   - Clean cook/load of a minimal consumer map and consumer-owned simulation-content manifest.
 - Clean consumers have no hidden dependency on this host project's `/Game/SeinARTS` content.
 - Remaining before this stage exits:
-  - Resolve the Cover/Squad physical-stripping topology.
   - Run Development Client and Dedicated Server builds under a source/installed UE distribution
     that supports those targets; Epic's launcher build rejects them before compiling the project.
   - Exercise a commit-pinned clean consumer through real multi-process match start, exact snapshot,

@@ -1,7 +1,7 @@
 # SeinARTS — Project Root Guide
 
 This is the **project-level** guide, loaded by every session rooted at `D:/Projects/Unreal Engine/SeinARTS`.
-It owns the cross-cutting rules that apply to **all four plugins**. Each plugin has its own
+It owns the cross-cutting rules that apply to **all five production plugins**. Each plugin has its own
 `CLAUDE.md` with the deep, plugin-specific detail — read the relevant one when you scope into it
 (pointers below).
 
@@ -33,7 +33,7 @@ nothing and adds synchronization overhead.
   Feature work is naturally module-scoped, so conflicts between parallel agents are rare.
 
 > Note: as of 2026-06-02 the project root **is** a git repository — a single project-wide monorepo
-> (`main`, initial commit `ecf6068`) tracking the host project and all four plugins, with **Git LFS**
+> (`main`, initial commit `ecf6068`) tracking the host project and all five production plugins, with **Git LFS**
 > for binary assets (`*.uasset`/`*.umap` + common media). Baked level data (`**/Content/LevelData/` + legacy patterns)
 > is gitignored as a regenerable build artifact — **re-bake after a fresh clone** via the one
 > "Bake Level Data" button on `ASeinLevelVolume` (unified pipeline, CP1.1). History
@@ -133,7 +133,8 @@ D:/Projects/Unreal Engine/SeinARTS/
 └── Plugins/
     ├── SeinARTSFramework/             The core. 12 modules. → Plugins/SeinARTSFramework/CLAUDE.md
     ├── SeinARTSSquadExtension/        Opt-in squads.  1 module. → .../SeinARTSSquadExtension/CLAUDE.md
-    ├── SeinARTSCoverExtension/        Opt-in cover.   3 modules. → .../SeinARTSCoverExtension/CLAUDE.md
+    ├── SeinARTSCoverExtension/        Opt-in cover.   2 modules. → .../SeinARTSCoverExtension/CLAUDE.md
+    ├── SeinARTSCoverSquadExtension/   Opt-in Cover+Squad bridge. 1 module. → .../SeinARTSCoverSquadExtension/CLAUDE.md
     └── SeinARTSMovementPlusExtension/ Opt-in movement modes. 1 module ("SeinARTS Movement+"). → .../SeinARTSMovementPlusExtension/CLAUDE.md
 ```
 
@@ -143,20 +144,16 @@ D:/Projects/Unreal Engine/SeinARTS/
 SeinARTSFramework ................... base; depends on no other Sein plugin
    ├── SeinARTSSquadExtension ............. REQUIRES SeinARTSFramework
    ├── SeinARTSCoverExtension ............. REQUIRES SeinARTSFramework
-   │                                        its SeinARTSCoverSquad module also REQUIRES SeinARTSSquadExtension
-   │                                        (declared "Optional" in the .uplugin, but see the gotcha below)
-   └── SeinARTSMovementPlusExtension ...... REQUIRES SeinARTSFramework
-                                            (concrete movement modes; framework keeps Basic / Basic Unit)
+   ├── SeinARTSMovementPlusExtension ...... REQUIRES SeinARTSFramework
+   │                                        (concrete movement modes; framework keeps Basic / Basic Unit)
+   └── SeinARTSCoverSquadExtension ........ REQUIRES Framework + Cover + Squad
+                                            (optional integration bridge only)
 ```
 
 Dependencies point **up** toward the framework, never down. The framework knows nothing about the
-extensions; an extension may be stripped and the framework still builds and runs. The Cover
-extension can use the Squad extension but treats it as optional at the plugin level.
-
-> **Gotcha:** the Cover extension's optional dependency on Squad is enforced **only** in the
-> `.uplugin` (`Optional: true`), not in code — the `SeinARTSCoverSquad` module's `Build.cs`
-> hard-links `SeinARTSSquad` with no `#if` guards. So if Squad is absent, `SeinARTSCoverSquad`
-> simply doesn't load; it does not degrade to a stub. The other two cover modules are unaffected.
+extensions; an extension may be stripped and the framework still builds and runs. Cover and Squad
+are physically independent; their shared resolver lives only in the explicitly enabled
+`SeinARTSCoverSquadExtension` bridge.
 
 ## Which CLAUDE.md to read
 
@@ -165,6 +162,7 @@ extension can use the Squad extension but treats it as optional at the plugin le
 | Sim core, entities, abilities, effects, nav, movement base/steering, FoW, net, editor tooling, UI, gameplay shell | `Plugins/SeinARTSFramework/CLAUDE.md` |
 | Persistent squads, formation dispatch, reinforcement | `Plugins/SeinARTSSquadExtension/CLAUDE.md` |
 | Cover providers/geometry, cover-aware dispatch, formation preview | `Plugins/SeinARTSCoverExtension/CLAUDE.md` |
+| Cover-aware Squad dispatch integration | `Plugins/SeinARTSCoverSquadExtension/CLAUDE.md` |
 | Infantry/Wheeled/Tracked/Hover/Flight movement modes + per-class tuning | `Plugins/SeinARTSMovementPlusExtension/CLAUDE.md` |
 
 ---

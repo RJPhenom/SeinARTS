@@ -8,24 +8,22 @@ nothing in the framework depends on it.
 > **Read the project-root `CLAUDE.md` first** for the cross-cutting rules. This file covers cover
 > mechanics only.
 
-- **Depends on:** `SeinARTSFramework` (required), `SeinARTSSquadExtension` (optional — see gotcha),
-  `EnhancedInput`.
+- **Depends on:** `SeinARTSFramework` and `EnhancedInput`.
+- **Does not depend on Squad.** Cover-aware Squad dispatch lives in the separate
+  `SeinARTSCoverSquadExtension` bridge.
 
 ---
 
-## Three modules
+## Two modules
 
 | Module | Type | Role |
 |---|---|---|
-| **SeinARTSCover** | Runtime | The cover system: components, geometry, query system, the cover-aware default broker resolver, formation preview actor, settings, tags. |
+| **SeinARTSCover** | Runtime | The cover system: components, geometry, query system, the cover-aware default broker resolver, preview-quality provider, settings, tags. |
 | **SeinARTSCoverEditor** | Editor (PostEngineInit) | Cover-component Details panel (Generate Slots button) + entity-bridge cover draw callback. |
-| **SeinARTSCoverSquad** | Runtime | The optional **Cover↔Squad bridge**: cover-aware *squad* dispatch resolver + the formation-preview subsystem. |
 
-> **Optional-dependency gotcha:** Squad is optional **only in the `.uplugin`** (`Optional: true`).
-> In code, `SeinARTSCoverSquad`'s `Build.cs` hard-links `SeinARTSSquad` (and `SeinARTSFramework`,
-> `SeinARTSFogOfWar`) with **no `#if` guards anywhere**. So if the Squad extension is absent,
-> `SeinARTSCoverSquad` simply doesn't load — it does **not** compile a degraded stub. The other two
-> cover modules are unaffected and work without Squad.
+Cover and Squad are physically independent. The optional bridge is its own production plugin and
+declares Framework, Cover, and Squad as required dependencies. Neither parent plugin depends back
+on it.
 
 ---
 
@@ -59,9 +57,9 @@ nothing in the framework depends on it.
 
 ## Resolvers
 
-Two resolvers share the same cover-snap idea but plug in at different layers. **Both are selected by
-config**, so if this plugin is absent the settings fall back to the framework defaults and behavior
-is unchanged.
+The Cover plugin owns the loose-unit/default-broker resolver. The separate Cover+Squad bridge owns
+the Squad-derived resolver. Both are opt-in through class settings, so absent plugins fall back to
+framework/Squad defaults.
 
 - **`USeinCoverAwareDefaultBrokerResolver`** (subclasses the framework's
   `USeinDefaultCommandBrokerResolver`) — overrides `PostProcessPositions`: reads `CoverSnapRadius`,
@@ -70,16 +68,9 @@ is unchanged.
   allocation (preferred side, then wrong-side fallback) onto members carrying
   `SeinARTS.Cover.UsesCover`. Enabled by pointing
   `USeinARTSCoreSettings::DefaultBrokerResolverClass` at this class.
-- **`USeinCoverAwareSquadDispatchResolver`** (subclasses the Squad extension's
-  `USeinSquadDispatchResolver`) — overrides the squad resolver's `PostProcessPositions` hook with the
-  same snap logic. Enabled per squad via `FSeinSquadComponent::DispatchResolverClass`. **The snap
-  body is deliberately duplicated between the two resolvers, not shared via a common helper.**
-
-## SeinARTSCoverSquad — the preview subsystem
-`USeinFormationPreviewSubsystem` (LocalPlayerSubsystem + Tickable) drives the destination preview:
-binds the PC's `OnSelectionChanged` / `OnCursorUpdated` (lazy tick-based bind), expands squad/lone
-selections, calls `SeinComputeFormationPreview`, queries per-cell best cover quality (FoW-observer
-gated, throttled/cached), and pushes tinted decals to `ASeinFormationPreviewActor`.
+- **`USeinCoverAwareSquadDispatchResolver`** lives in `SeinARTSCoverSquadExtension`. It subclasses
+  `USeinSquadDispatchResolver` and overrides the same `PostProcessPositions` hook. Enable it per
+  squad via `FSeinSquadComponent::DispatchResolverClass` or as the Squad default resolver.
 
 ## SeinARTSCoverEditor
 - **`FSeinCoverComponentDetails`** — PropertyEditor custom layout for `FSeinCoverComponent` adding a
@@ -92,13 +83,7 @@ gated, throttled/cached), and pushes tinted decals to `ASeinFormationPreviewActo
 ---
 
 ## Current state
-**Substantially complete and functional**, not stubs — the query system, default impl, both
-resolvers, FoW gating, slot generation (edge/area/scatter), preview pipeline with cover-quality
+**Substantially complete and functional**, not stubs — the query system, default implementation,
+loose-unit resolver, FoW gating, slot generation (edge/area/scatter), preview pipeline with cover-quality
 tinting, and editor viz / Generate button are all fully wired end-to-end. Determinism holds
 (sim-affecting math is all fixed-point; the lone `FMath::FRand` is editor-time, serialized).
-
-> **Stale docstrings:** `SeinARTSCoverModule.h` and `SeinFormationPreviewSubsystem.h` still say
-> "Phase 1: neutral decals only, no cover queries/color-coding," but color-coding is fully
-> implemented. `USeinCoverSystem.h` references a "per-entity cover state system" that isn't here. A
-> "Cover Wrong-Side Penalty Radius" setting is mentioned in comments but no longer exists (replaced
-> by the cursor-side partition; only `CoverSnapRadius` is read).

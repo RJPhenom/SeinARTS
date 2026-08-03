@@ -2,6 +2,8 @@
 
 using UnrealBuildTool;
 
+// Optional integration module. Plugin-level dependencies guarantee that the
+// Framework, Cover, and Squad modules are present before this module loads.
 public class SeinARTSCoverSquad : ModuleRules
 {
 	public SeinARTSCoverSquad(ReadOnlyTargetRules Target) : base(Target)
@@ -13,18 +15,14 @@ public class SeinARTSCoverSquad : ModuleRules
 			"Core",
 			"CoreUObject",
 			"Engine",
+			"SeinARTSCore",
 			"SeinARTSCoreEntity",
+			"SeinARTSSquad",
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
-			"InputCore",
-			"GameplayTags",
-			"SeinARTSCore",
 			"SeinARTSCover",
-			"SeinARTSSquad",
-			"SeinARTSFramework",       // FormationPreviewSubsystem uses ASeinPlayerController + USeinTargeterSubsystem
-			"SeinARTSFogOfWar",        // Cover queries gate by per-observer fog visibility
 		});
 	}
 }

@@ -88,11 +88,12 @@ adds a **constructor** that selects its formation:
   replaced the old `ResolvePositions` override (squads now go through the same formation pipeline as
   loose units).
 - **Cover extension point** — the inherited `ResolveFormationLayout` calls `PostProcessPositions`
-  (empty base impl) after layout; the Cover extension's `USeinCoverAwareSquadDispatchResolver`
-  overrides exactly that to snap final member positions to cover.
+  (empty base impl) after layout; the separate Cover+Squad bridge's
+  `USeinCoverAwareSquadDispatchResolver` overrides exactly that to snap final member positions to
+  cover.
 
 **Resolver selection order:** per-squad `FSeinSquadComponent::DispatchResolverClass` → settings
-`DefaultSquadDispatchResolverClass` (soft path; null if Cover absent) → framework default. A squad
+`DefaultSquadDispatchResolverClass` (soft path; null if the bridge is absent) → framework default. A squad
 registers its chosen resolver instance into its broker via `World.RegisterCommandBrokerResolver` at
 lazy-init.
 

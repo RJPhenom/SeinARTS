@@ -14,13 +14,15 @@ The Blueprint actor is the unit authoring surface. `ASeinActor` owns one `USeinE
 SeinARTSFramework
 ├── SeinARTSSquadExtension
 ├── SeinARTSCoverExtension
-│   └── SeinARTSCoverSquad bridge -> Squad
-└── SeinARTSMovementPlusExtension
+├── SeinARTSMovementPlusExtension
+└── SeinARTSCoverSquadExtension -> Framework + Cover + Squad
 
 SeinARTSTestSuite + SeinARTSExtensionTestSuite are disabled, non-shipping consumers.
 ```
 
-The Framework must not depend on an extension. Cover's current descriptor still declares a bridge module that hard-links Squad, so a physically stripped Squad plugin is not yet a supported Cover packaging combination.
+The Framework must not depend on an extension. Cover and Squad are physically independent. Their
+only cross-extension code is the optional `SeinARTSCoverSquadExtension`, which owns the existing
+`SeinARTSCoverSquad` module and requires both parent plugins.
 
 Framework-owned runtime UI content remains inside the Framework plugin. Example maps, example
 gameplay Blueprints, and mannequin assets belong to the host project under
@@ -121,7 +123,8 @@ Ordinary RTS visual meshes use Unreal update-rate optimization and skip animatio
 ## Extension responsibilities
 
 - **Squad:** persistent heterogeneous slots, member lifecycle, centroid, broker synchronization, formation dispatch, reinforcement state.
-- **Cover:** provider geometry/slots, visibility-gated queries, cover-aware destination post-processing, editor generation. Stable reservation/allocation is still missing.
+- **Cover:** provider geometry/slots, visibility-gated queries, loose-unit cover-aware destination post-processing, editor generation. Stable reservation/allocation is still missing.
+- **Cover+Squad bridge:** the cover-aware Squad dispatch resolver and its stable codec/content contributor registrations; no parent-plugin behavior is duplicated here.
 - **Movement+:** Infantry, Wheeled, Tracked, Hover, and Flight policies plus class-specific deterministic tuning/state.
 
 ## Sacred contracts
@@ -137,7 +140,7 @@ Ordinary RTS visual meshes use Unreal update-rate optimization and skip animatio
 
 `Tools/ConsumerMatrix/Verify-ConsumerMatrix.ps1` creates disposable projects under ignored
 `Saved/ConsumerMatrix`, copies only selected distributable plugin inputs, and verifies Framework,
-Framework+Movement+, and all-production-plugin profiles. It generates a consumer-owned map and
+Cover-only, Squad-only, Framework+Movement+, and all-production-plugin profiles. It generates a consumer-owned map and
 manifest, rejects host-project package references, builds Editor and Shipping, loads the exact map,
 cooks/packages it, and starts the real packaged Shipping executable. Client/Dedicated Server target
 proof is intentionally still open because Epic's launcher UE distribution does not expose those

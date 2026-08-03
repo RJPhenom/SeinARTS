@@ -101,6 +101,7 @@ if (-not (Test-Path -LiteralPath $EditorCmd)) {
 $ExtensionPlugins = @(
 	'SeinARTSSquadExtension',
 	'SeinARTSCoverExtension',
+	'SeinARTSCoverSquadExtension',
 	'SeinARTSMovementPlusExtension'
 )
 $EnabledTestPlugins = @('SeinARTSTestSuite')

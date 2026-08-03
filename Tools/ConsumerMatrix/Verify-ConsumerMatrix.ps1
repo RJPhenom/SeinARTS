@@ -16,7 +16,7 @@
 #>
 [CmdletBinding()]
 param(
-	[ValidateSet('Framework', 'MovementPlus', 'Full', 'All')]
+	[ValidateSet('Framework', 'Cover', 'Squad', 'MovementPlus', 'Full', 'All')]
 	[string] $Profile = 'All',
 
 	[switch] $SkipCook,
@@ -43,7 +43,7 @@ foreach ($Required in @($BuildBat, $EditorCmd, $RunUat)) {
 }
 
 $Profiles = if ($Profile -eq 'All') {
-	@('Framework', 'MovementPlus', 'Full')
+	@('Framework', 'Cover', 'Squad', 'MovementPlus', 'Full')
 } else {
 	@($Profile)
 }
@@ -184,21 +184,26 @@ function New-ConsumerProject([string] $ProfileName)
 		$ExtraIncludes += '#include "Movement/SeinWheeledVehicleMovement.h"'
 		$HeaderProof += '(void)USeinWheeledVehicleMovement::StaticClass();'
 	}
+	if ($ProfileName -in @('Cover', 'Full')) {
+		$Plugins += 'SeinARTSCoverExtension'
+		$ModuleDependencies += 'SeinARTSCover'
+		$Definitions += 'SEIN_CONSUMER_WITH_COVER=1'
+		$ExtraIncludes += '#include "Components/SeinCoverComponent.h"'
+		$HeaderProof += '(void)FSeinCoverComponent::StaticStruct();'
+	}
+	if ($ProfileName -in @('Squad', 'Full')) {
+		$Plugins += 'SeinARTSSquadExtension'
+		$ModuleDependencies += 'SeinARTSSquad'
+		$Definitions += 'SEIN_CONSUMER_WITH_SQUAD=1'
+		$ExtraIncludes += '#include "SeinSquadDispatchResolver.h"'
+		$HeaderProof += '(void)USeinSquadDispatchResolver::StaticClass();'
+	}
 	if ($ProfileName -eq 'Full') {
-		$Plugins += @('SeinARTSSquadExtension', 'SeinARTSCoverExtension')
-		$ModuleDependencies += @(
-			'SeinARTSSquad',
-			'SeinARTSCover',
-			'SeinARTSCoverSquad')
+		$Plugins += 'SeinARTSCoverSquadExtension'
+		$ModuleDependencies += 'SeinARTSCoverSquad'
 		$Definitions += 'SEIN_CONSUMER_WITH_FULL_EXTENSIONS=1'
-		$ExtraIncludes += @(
-			'#include "SeinSquadDispatchResolver.h"',
-			'#include "Components/SeinCoverComponent.h"',
-			'#include "SeinCoverAwareSquadDispatchResolver.h"')
-		$HeaderProof += @(
-			'(void)USeinSquadDispatchResolver::StaticClass();',
-			'(void)FSeinCoverComponent::StaticStruct();',
-			'(void)USeinCoverAwareSquadDispatchResolver::StaticClass();')
+		$ExtraIncludes += '#include "SeinCoverAwareSquadDispatchResolver.h"'
+		$HeaderProof += '(void)USeinCoverAwareSquadDispatchResolver::StaticClass();'
 	}
 
 	foreach ($PluginName in $Plugins) {
@@ -404,10 +409,14 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 		if ($ProfileName -in @('MovementPlus', 'Full')) {
 			$ExistingPlugins += 'SeinARTSMovementPlusExtension'
 		}
+		if ($ProfileName -in @('Cover', 'Full')) {
+			$ExistingPlugins += 'SeinARTSCoverExtension'
+		}
+		if ($ProfileName -in @('Squad', 'Full')) {
+			$ExistingPlugins += 'SeinARTSSquadExtension'
+		}
 		if ($ProfileName -eq 'Full') {
-			$ExistingPlugins += @(
-				'SeinARTSSquadExtension',
-				'SeinARTSCoverExtension')
+			$ExistingPlugins += 'SeinARTSCoverSquadExtension'
 		}
 		$Project = [pscustomobject]@{
 			Name = $ProfileName

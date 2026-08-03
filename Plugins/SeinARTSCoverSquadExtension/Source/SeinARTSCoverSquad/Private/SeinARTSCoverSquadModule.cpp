@@ -1,6 +1,7 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinARTSCoverSquadModule.cpp
+ * @brief   Runtime registration for the opt-in Cover + Squad bridge plugin.
  */
 
 #include "SeinARTSCoverSquadModule.h"

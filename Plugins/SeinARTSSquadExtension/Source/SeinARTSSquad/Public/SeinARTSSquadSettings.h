@@ -40,12 +40,13 @@ public:
 	 *
 	 * Empty path = use the framework-default `USeinSquadDispatchResolver`
 	 * (plain per-slot formation, no cover-snap). Projects wanting cover-aware
-	 * squad dispatch out of the box point this at the Cover Extension's
+	 * squad dispatch out of the box enable `SeinARTSCoverSquadExtension` and
+	 * point this at its
 	 * `/Script/SeinARTSCoverSquad.SeinCoverAwareSquadDispatchResolver`.
 	 *
-	 * Soft path so the Squad Extension stays decoupled from the Cover Extension
-	 * — the bridge resolver only loads when this path is set AND the cover
-	 * modules are present.
+	 * Soft path so the Squad Extension stays decoupled from Cover and the bridge;
+	 * the resolver loads only when this path is set and the bridge plugin is
+	 * enabled with both required parents.
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Dispatch",
 		meta = (DisplayName = "Default Squad Dispatch Resolver Class"))

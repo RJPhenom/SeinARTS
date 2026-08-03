@@ -49,8 +49,8 @@ are lockstep compatibility data: do not rename them without an explicit protocol
 - Preview and commit must use the same inner-layout computation.
 - `USeinSlotFormation` uses authored slot transforms. A squad may override its formation class;
   non-slot formations must not accidentally consume authored slot offsets.
-- Cover integration belongs in the Cover extension through `PostProcessPositions`; Squad must not
-  depend on Cover.
+- Cover integration belongs in `SeinARTSCoverSquadExtension` through `PostProcessPositions`; Squad
+  must not depend on Cover or on the bridge.
 - `bAvoidAsBlob` and the broker's multi-squad pacing fields are the intended squad-to-base
   avoidance data seam; the framework does not load Squad settings directly.
 

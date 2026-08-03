@@ -31,9 +31,10 @@ class SEINARTSCOVER_API USeinCoverAwareDefaultBrokerResolver : public USeinDefau
 public:
 	// Tuning lives in Project Settings → SeinARTS Plugin → Cover:
 	//   * Cover Snap Radius — distance gate around the move target.
-	//   * Cover Wrong-Side Penalty Radius — bias to keep snap on the cursor side.
-	// Reading from a single settings source keeps the default broker resolver
-	// and the squad dispatch resolver in sync without two BP CDOs to maintain.
+	// Cursor-side preference is deterministic policy, not a second radius:
+	// preferred-side candidates allocate first, then wrong-side candidates are
+	// a capacity fallback. Reading the shared snap radius from Cover settings
+	// keeps the default and optional Squad bridge resolvers aligned.
 	// Designers wanting per-resolver overrides can subclass and override
 	// PostProcessPositions to read different values.
 

@@ -11,11 +11,13 @@ Run from the repository root:
 & "D:/Projects/Unreal Engine/SeinARTS/Tools/ConsumerMatrix/Verify-ConsumerMatrix.ps1"
 ```
 
-The tool creates projects beneath ignored `Saved/ConsumerMatrix` for three profiles:
+The tool creates projects beneath ignored `Saved/ConsumerMatrix` for five profiles:
 
 - `Framework`: the base Framework plugin only.
+- `Cover`: Framework plus Cover, with Squad and the bridge physically absent.
+- `Squad`: Framework plus Squad, with Cover and the bridge physically absent.
 - `MovementPlus`: Framework plus Movement+.
-- `Full`: Framework, Squad, Cover, and Movement+.
+- `Full`: Framework, Squad, Cover, the Cover+Squad bridge, and Movement+.
 
 It copies distributable source/content/config/resources/shaders only—never repository `Binaries`
 or `Intermediate` output. Each consumer owns its map and generated simulation-content manifest.
@@ -42,10 +44,11 @@ is useful for iterating on source/map verification, but it is not package eviden
 
 ## Current evidence and limits
 
-On 2026-08-03 all three profiles passed fresh Editor and Shipping builds, exact map loading,
-cook/package, and real packaged Shipping startup. The host project also passed Development Editor
-and Shipping builds, all checked-in Unit/Integration/Determinism/Editor floors, and the 120-tick
-serial-versus-parallel process A/B.
+On 2026-08-03 all five post-split profiles passed Editor and Shipping builds, exact uncooked map
+loading, cook/package, and real packaged Shipping startup. Cover-only and Squad-only contained no
+bridge plugin or module; Full mounted and started the bridge and shut it down cleanly. The host
+project also passed Development Editor and Shipping builds, all checked-in
+Unit/Integration/Determinism/Editor floors, and the 120-tick serial-versus-parallel process A/B.
 
 The local Epic launcher engine cannot build Client targets; UnrealBuildTool reports that Client
 targets are unsupported by that engine distribution before it reaches project compilation. A

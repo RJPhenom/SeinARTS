@@ -3,9 +3,9 @@
  * @file    SeinCoverSubsystem.h
  * @brief   Thin world subsystem that owns the active USeinCoverSystem instance.
  *
- *          Reads `USeinARTSCoreSettings::CoverSystemClass` on Initialize, new's
- *          up that class, and exposes it to consumers (preview decals, BPFL,
- *          per-entity cover state).
+ *          Reads `USeinARTSCoverSettings::CoverSystemClass` on Initialize,
+ *          constructs that class, and exposes it to preview-quality queries,
+ *          Blueprint libraries, resolvers, and combat systems.
  *
  *          The subsystem does NOT know what a "slot" or "area" is — it only
  *          knows a USeinCoverSystem exists. All cover semantics live on the

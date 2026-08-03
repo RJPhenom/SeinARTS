@@ -12,15 +12,10 @@
 			"Name": "SeinARTSCoverEditor",
 			"Type": "Editor",
 			"LoadingPhase": "PostEngineInit"
-		},
-		{
-			"Name": "SeinARTSCoverSquad",
-			"Type": "Runtime",
-			"LoadingPhase": "PostDefault"
 		}
 	],
 	"FriendlyName": "SeinARTS Cover",
-	"Description": "Cover system extension for SeinARTS Framework — cover components, cover-aware dispatch resolvers, formation preview.",
+	"Description": "Cover system extension for SeinARTS Framework — cover components, providers, queries, and cover-aware default dispatch.",
 	"Category": "Other",
 	"CreatedBy": "Phenom Studios",
 	"CreatedByURL": "",
@@ -35,11 +30,6 @@
 		{
 			"Name": "SeinARTSFramework",
 			"Enabled": true
-		},
-		{
-			"Name": "SeinARTSSquadExtension",
-			"Enabled": true,
-			"Optional": true
 		},
 		{
 			"Name": "EnhancedInput",
