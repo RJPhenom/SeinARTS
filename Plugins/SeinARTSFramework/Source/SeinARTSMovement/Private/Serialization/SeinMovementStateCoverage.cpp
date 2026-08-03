@@ -10,6 +10,7 @@
 #include "SeinARTSMovementModule.h"
 #include "Serialization/SeinCanonicalInitialStateDigest.h"
 #include "Serialization/SeinMovementStateCoverageInternal.h"
+#include "CoreGlobals.h"
 #include "Modules/ModuleManager.h"
 #include "UObject/StrongObjectPtr.h"
 #include "UObject/UObjectIterator.h"
@@ -173,7 +174,12 @@ namespace
 
 	bool RefreshCanonicalProvider(FString& OutError)
 	{
-		if (!ProviderRefreshEnabled())
+		// Module ShutdownModule callbacks run after UObject class teardown has
+		// begun during final process exit. No world can observe a new contract at
+		// that point, and attempting to rebuild one would dereference class
+		// identities UE has deliberately retired. Live module unload and hot
+		// reload still refresh because no exit has been requested there.
+		if (!ProviderRefreshEnabled() || IsEngineExitRequested())
 		{
 			return true;
 		}
@@ -225,6 +231,19 @@ namespace
 			return true;
 		}
 		return false;
+	}
+
+	bool ContainsToken(uint64 Token)
+	{
+		return Token != 0 && Registry().ContainsByPredicate(
+			[Token](const FCoverageEntry& Entry)
+			{
+				return Entry.Claims.ContainsByPredicate(
+					[Token](const FCoverageClaim& Claim)
+					{
+						return Claim.Token == Token;
+					});
+			});
 	}
 }
 
@@ -381,6 +400,58 @@ bool FSeinMovementStateCoverageRegistry::Unregister(
 		return false;
 	}
 	Handle.Token = 0;
+	return true;
+}
+
+bool FSeinMovementStateCoverageRegistry::UnregisterAll(
+	TArray<FSeinMovementStateCoverageRegistrationHandle>& Handles,
+	FString* OutError)
+{
+	check(IsInGameThread());
+	SetError(OutError, FString());
+	if (Handles.IsEmpty())
+	{
+		return true;
+	}
+
+	TSet<uint64> Tokens;
+	Tokens.Reserve(Handles.Num());
+	for (const FSeinMovementStateCoverageRegistrationHandle& Handle : Handles)
+	{
+		if (!Handle.IsValid()
+			|| Tokens.Contains(Handle.Token)
+			|| !ContainsToken(Handle.Token))
+		{
+			SetError(OutError,
+				TEXT("Movement state coverage batch contains an invalid, duplicate, or stale handle."));
+			return false;
+		}
+		Tokens.Add(Handle.Token);
+	}
+
+	bool bManifestChanged = false;
+	for (FSeinMovementStateCoverageRegistrationHandle& Handle : Handles)
+	{
+		bool bEntryChanged = false;
+		const bool bRemoved =
+			RemoveToken(Handle.Token, false, bEntryChanged);
+		check(bRemoved);
+		bManifestChanged |= bEntryChanged;
+		Handle.Token = 0;
+	}
+	Handles.Reset();
+
+	if (bManifestChanged)
+	{
+		FString RefreshError;
+		if (!RefreshCanonicalProvider(RefreshError))
+		{
+			SetError(OutError, FString::Printf(
+				TEXT("Movement canonical provider refresh failed after atomic coverage withdrawal: %s"),
+				*RefreshError));
+			return false;
+		}
+	}
 	return true;
 }
 

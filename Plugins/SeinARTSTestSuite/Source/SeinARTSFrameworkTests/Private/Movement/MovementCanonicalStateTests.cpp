@@ -376,6 +376,35 @@ TEST(MovementCoverageDuplicateGenerationIsReloadSafe,
 	Fixture.World->StopSimulation();
 }
 
+TEST(MovementCoverageBatchWithdrawalIsAtomic,
+	"SeinARTS.Unit.Movement.CanonicalState")
+{
+	FSeinMovementStateCoverageDescriptor Descriptor;
+	Descriptor.NativeClass =
+		USeinMoveToLifecycleTestMovement::StaticClass();
+	Descriptor.Coverage =
+		ESeinMovementStateCoverage::ReflectedComplete;
+
+	TArray<FSeinMovementStateCoverageRegistrationHandle> Handles;
+	for (int32 Index = 0; Index < 2; ++Index)
+	{
+		FString Error;
+		FSeinMovementStateCoverageRegistrationHandle Handle =
+			FSeinMovementStateCoverageRegistry::Register(
+				TEXT("SeinARTSFrameworkTests"),
+				Descriptor,
+				&Error);
+		ASSERT_THAT(IsTrue(Handle.IsValid()));
+		Handles.Add(MoveTemp(Handle));
+	}
+
+	FString Error;
+	ASSERT_THAT(IsTrue(
+		FSeinMovementStateCoverageRegistry::UnregisterAll(
+			Handles, &Error)));
+	ASSERT_THAT(IsTrue(Handles.IsEmpty()));
+}
+
 TEST(MovementExtensionUnloadSeversNativeInstances,
 	"SeinARTS.Unit.Movement.CanonicalState")
 {

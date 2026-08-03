@@ -93,6 +93,15 @@ public:
 	static bool Unregister(
 		FSeinMovementStateCoverageRegistrationHandle& Handle);
 
+	/**
+	 * Withdraw a module-owned generation atomically and refresh the canonical
+	 * provider once. This avoids publishing transient partial coverage while a
+	 * module is hot-reloaded or unloaded.
+	 */
+	static bool UnregisterAll(
+		TArray<FSeinMovementStateCoverageRegistrationHandle>& Handles,
+		FString* OutError = nullptr);
+
 	static int32 GetRegisteredClassCount();
 
 private:

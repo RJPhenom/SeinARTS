@@ -32,6 +32,19 @@ namespace
 		return FSeinMovementStateCoverageRegistry::Register(
 			TEXT("SeinARTSMovementPlus"), Descriptor, &OutError);
 	}
+
+	void WithdrawCoverage(
+		TArray<FSeinMovementStateCoverageRegistrationHandle>& Handles)
+	{
+		FString Error;
+		if (!FSeinMovementStateCoverageRegistry::UnregisterAll(
+			Handles, &Error))
+		{
+			UE_LOG(LogSeinARTSMovementPlus, Error,
+				TEXT("Atomic state coverage withdrawal failed: %s"),
+				*Error);
+		}
+	}
 }
 
 void FSeinARTSMovementPlusModule::StartupModule()
@@ -124,12 +137,12 @@ void FSeinARTSMovementPlusModule::PreUnloadCallback()
 			TEXT("SeinARTSMovementPlus"));
 	}
 
-	StateCoverageHandles.Reset();
+	WithdrawCoverage(StateCoverageHandles);
 	SimulationContentRegistrationHandle.Reset();
 }
 
 void FSeinARTSMovementPlusModule::ShutdownModule()
 {
-	StateCoverageHandles.Reset();
+	WithdrawCoverage(StateCoverageHandles);
 	SimulationContentRegistrationHandle.Reset();
 }
