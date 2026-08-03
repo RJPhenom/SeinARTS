@@ -109,7 +109,7 @@ FFixedPoint WrapPositive(FFixedPoint A)
 bool ProbeClearAt(const FInputs& In, const FFixedVector& Pos)
 {
 	if (!In.Nav) return true;
-	if (!In.Nav->IsWorldPositionClear(Pos, In.NavLayerMask)) return false;
+	if (!In.Nav->IsWorldPositionClearForAgent(Pos, In.Agent)) return false;
 	if (In.FootprintRadius <= FFixedPoint::Zero) return true;
 	// 4-ring at the footprint radius — go/no-go for a plan candidate; the
 	// runtime nav floor still owns the exact 8-ring enforcement.
@@ -121,7 +121,7 @@ bool ProbeClearAt(const FInputs& In, const FFixedVector& Pos)
 		FFixedVector(Pos.X, Pos.Y - R, Pos.Z) };
 	for (const FFixedVector& Sample : Ring)
 	{
-		if (!In.Nav->IsWorldPositionClear(Sample, In.NavLayerMask)) return false;
+		if (!In.Nav->IsWorldPositionClearForAgent(Sample, In.Agent)) return false;
 	}
 	return true;
 }

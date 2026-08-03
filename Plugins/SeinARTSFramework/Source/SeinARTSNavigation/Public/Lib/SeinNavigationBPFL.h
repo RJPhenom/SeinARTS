@@ -56,11 +56,13 @@ public:
 		FGameplayTagContainer BlockedTerrainTags,
 		int64 GroupId = 0);
 
-	/** Can a unit get from one point to another at all? Returns true if a route exists.
+	/** Can an agent class get from one point to another at all? Returns true if a route exists.
 	 *
 	 *  A fast connectivity check, cheaper than Find Path — it answers reachability without building the
-	 *  route. Agent Tags select which terrain the unit treats as blocked. Use it to gate an order ("can
-	 *  this unit even reach there?") before committing to a full path. */
+	 *  route. Agent Tags identify capabilities/classification to a custom navigation implementation;
+	 *  the shipped grid has no tag-selected topology and therefore ignores them. Entity command
+	 *  validation automatically uses the unit's complete authored policy, including blocked terrain,
+	 *  footprint, and wall padding; prefer that path when gating real orders. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Navigation",
 		meta = (WorldContext = "WorldContextObject", DisplayName = "Is Location Reachable"))
 	static bool SeinIsLocationReachable(

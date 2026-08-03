@@ -334,13 +334,18 @@ FGameplayTag USeinMoverHandle::GetTerrainTagAt(const FFixedVector& WorldPos) con
 
 bool USeinMoverHandle::IsPositionClear(const FFixedVector& WorldPos) const
 {
-	// Mask MUST be non-zero: (BlockedNavLayerMask & 0) == 0 skips EVERY dynamic blocker,
-	// silently degrading this to a static-only query that reports a dynamic-wall cell as
-	// clear — the exact trap SeinNavigationBPFL documents. Use the agent's own nav layer
-	// (0x01 ground fallback), matching the movement floor's CachedNavLayerMask.
 	if (!Ctx || !Ctx->Nav) return false;
-	const uint8 Mask = Ctx->NavData ? Ctx->NavData->NavLayerMask : uint8(0x01);
-	return Ctx->Nav->IsWorldPositionClear(WorldPos, Mask);
+	FSeinNavAgentProfile Agent;
+	Agent.Requester = Ctx->SelfHandle;
+	Agent.AgentFootprintRadius = GetFootprintRadius();
+	if (Ctx->NavData)
+	{
+		Agent.BlockedTerrainTags = Ctx->NavData->BlockedTerrainTags;
+		Agent.AgentNavLayerMask = Ctx->NavData->NavLayerMask;
+		Agent.AgentWallPaddingCells = Ctx->NavData->WallPadding;
+	}
+	return Ctx->Nav->IsWorldPositionClearForAgent(
+		WorldPos, Agent);
 }
 
 FFixedVector USeinMoverHandle::QueryNavDirection(FFixedVector Goal, int64 GroupId) const
@@ -350,6 +355,12 @@ FFixedVector USeinMoverHandle::QueryNavDirection(FFixedVector Goal, int64 GroupI
 	Query.From                = Ctx->Entity.Transform.GetLocation();
 	Query.Goal                = Goal;
 	Query.Requester           = Ctx->SelfHandle;
+	if (Ctx->NavData)
+	{
+		Query.BlockedTerrainTags = Ctx->NavData->BlockedTerrainTags;
+		Query.AgentNavLayerMask = Ctx->NavData->NavLayerMask;
+		Query.AgentWallPaddingCells = Ctx->NavData->WallPadding;
+	}
 	Query.AgentFootprintRadius = GetFootprintRadius();
 	Query.GroupId             = GroupId;
 	return Ctx->Nav->QueryDirection(Query);

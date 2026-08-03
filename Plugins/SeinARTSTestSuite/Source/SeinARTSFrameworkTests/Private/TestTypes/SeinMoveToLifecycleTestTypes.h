@@ -31,6 +31,56 @@ public:
 
 	static void Reset();
 
+	void SetCachedNavigationPolicyForTest(
+		FGameplayTag BlockedTerrainTag,
+		FSeinEntityHandle Requester)
+	{
+		CachedCollisionRadius = FFixedPoint::FromInt(81);
+		CachedNumFootprintSamples = 8;
+		for (int32 Index = 0; Index < 8; ++Index)
+		{
+			CachedFootprintSamples[Index] = FFixedVector(
+				FFixedPoint::FromInt(Index + 1),
+				FFixedPoint::FromInt(-(Index + 1)),
+				FFixedPoint::Zero);
+		}
+		CachedMaxStepHeight = FFixedPoint::FromInt(123);
+		CachedNavLayerMask = 0x04;
+		CachedNavWallPaddingCells = 7;
+		CachedBlockedTerrainTags.Reset();
+		CachedBlockedTerrainTags.AddTag(BlockedTerrainTag);
+		CachedNavRequester = Requester;
+	}
+
+	bool HasCachedNavigationPolicyForTest(
+		FGameplayTag BlockedTerrainTag,
+		FSeinEntityHandle Requester) const
+	{
+		if (CachedCollisionRadius != FFixedPoint::FromInt(81)
+			|| CachedNumFootprintSamples != 8
+			|| CachedMaxStepHeight != FFixedPoint::FromInt(123)
+			|| CachedNavLayerMask != 0x04
+			|| CachedNavWallPaddingCells != 7
+			|| CachedNavRequester != Requester
+			|| !CachedBlockedTerrainTags.HasTagExact(
+				BlockedTerrainTag))
+		{
+			return false;
+		}
+		for (int32 Index = 0; Index < 8; ++Index)
+		{
+			const FFixedVector Expected(
+				FFixedPoint::FromInt(Index + 1),
+				FFixedPoint::FromInt(-(Index + 1)),
+				FFixedPoint::Zero);
+			if (CachedFootprintSamples[Index] != Expected)
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
 	virtual ESeinPathResult PlanPath(
 		const FSeinPlanPathContext& Ctx, FSeinPath& OutPath) const override;
 	virtual void OnMoveBegin(const FSeinMovementContext& Ctx) override;

@@ -131,6 +131,7 @@ private:
 	 *  Deinitialize. */
 	FDelegateHandle LevelDataMutatedHandle;
 	FDelegateHandle InitialLevelDataPreparedHandle;
+	FDelegateHandle EntitySpawnedProfileWarmHandle;
 
 	/** Exact static navigation identity frozen into the match StateContract. */
 	bool bNavigationConfigured = false;
@@ -158,6 +159,9 @@ private:
 	 *  non-participating navs retain their valid fallback; rejected data clears
 	 *  readiness until a corrected bake is adopted. */
 	void OnLevelDataChanged();
+	void WarmExistingAgentProfiles();
+	void HandleEntitySpawnedForProfileWarm(
+		FSeinEntityHandle Handle);
 
 	/** Provider-only exact implementation/static-environment contract freeze.
 	 *  A provisional restore declaration never persists the candidate. */

@@ -344,7 +344,14 @@ ESeinPathResult USeinTrackedVehicleMovement::PlanPath(const FSeinPlanPathContext
 	In.Pos = Ctx.Entity.Transform.GetLocation();
 	In.Yaw = YawFromRotation(Ctx.Entity.Transform.Rotation);
 	In.FootprintRadius = ResolveCollisionRadius(Ctx.World, Ctx.SelfHandle, Ctx.NavData);
-	In.NavLayerMask = Ctx.NavData ? Ctx.NavData->NavLayerMask : 0x01;
+	In.Agent.Requester = Ctx.SelfHandle;
+	In.Agent.AgentFootprintRadius = In.FootprintRadius;
+	if (Ctx.NavData)
+	{
+		In.Agent.BlockedTerrainTags = Ctx.NavData->BlockedTerrainTags;
+		In.Agent.AgentNavLayerMask = Ctx.NavData->NavLayerMask;
+		In.Agent.AgentWallPaddingCells = Ctx.NavData->WallPadding;
+	}
 	In.ReverseSpeedPenalty = (RevTop > FFixedPoint::Epsilon)
 		? MaxFP2(FFixedPoint::One, MovementData.TopSpeed / RevTop) : FFixedPoint::Two;
 	In.ForwardPathBias = MaxFP2(FFixedPoint::One, Tracked.ForwardPathBias);

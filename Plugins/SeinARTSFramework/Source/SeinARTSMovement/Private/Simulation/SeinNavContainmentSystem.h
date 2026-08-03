@@ -46,6 +46,8 @@
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Core/SeinParallel.h"
 #include "Components/SeinExtentsComponent.h"
+#include "Components/SeinNavigationComponent.h"
+#include "Movement/SeinMovement.h"
 #include "SeinNavigation.h"
 #include "SeinNavigationSubsystem.h"
 #include "Types/Entity.h"
@@ -65,6 +67,9 @@ public:
 		const ISeinComponentStorage* ExtentsStorage =
 			World.GetComponentStorageRaw(FSeinExtentsComponent::StaticStruct());
 		if (!ExtentsStorage) return;
+		const ISeinComponentStorage* NavigationStorage =
+			World.GetComponentStorageRaw(
+				FSeinNavigationComponent::StaticStruct());
 
 		const bool bHasAuthoritative = World.AuthoritativeDestinationResolver.IsBound();
 
@@ -115,6 +120,25 @@ public:
 			if (Ext->Mobility != ESeinCollisionMobility::Movable) return;
 
 			const FFixedVector Pos = Entity.Transform.GetLocation();
+			const FSeinNavigationComponent* NavData =
+				NavigationStorage
+				? static_cast<const FSeinNavigationComponent*>(
+					NavigationStorage->GetComponentRaw(Handle))
+				: nullptr;
+			FSeinNavAgentProfile Agent;
+			Agent.Requester = Handle;
+			Agent.AgentFootprintRadius =
+				USeinMovement::ResolveCollisionRadius(
+					Ext, NavData);
+			if (NavData)
+			{
+				Agent.BlockedTerrainTags =
+					NavData->BlockedTerrainTags;
+				Agent.AgentNavLayerMask =
+					NavData->NavLayerMask;
+				Agent.AgentWallPaddingCells =
+					NavData->WallPadding;
+			}
 
 			// Already on clear ground → nothing to do (the overwhelming common case).
 			// DYNAMIC-aware: IsWorldPositionClear rejects the static bake AND the runtime
@@ -122,23 +146,25 @@ public:
 			// LEFT STANDING on a non-baked cover wall / deployable dropped over it — the
 			// idle-side twin of the collision-floor and movement-floor fixes. Static
 			// IsPassable saw only the bake and left such a unit stuck inside the wall.
-			// Ground layer 0x01 matches the DynamicPassableResolver binding. (The
-			// ProjectPointToNav pull-back below is still static, so it lands on a
-			// bake-walkable cell that a dynamic blocker could also cover — that self-
-			// corrects on the next tick's re-detection; a dynamic-aware projection is a
-			// later refinement.)
-			if (Nav->IsWorldPositionClear(Pos, /*AgentNavLayerMask=*/0x01)) return;
+			if (Nav->IsFootprintClearForAgent(Pos, Agent)) return;
 
 			// Cover-slot exemption: a unit on an authoritative destination may
 			// stand on a bake-blocked cell — leave it where it is.
-			if (bHasAuthoritative && World.AuthoritativeDestinationResolver.Execute(Pos)) return;
+			if (bHasAuthoritative
+				&& World.AuthoritativeDestinationResolver.Execute(Pos)
+				&& Nav->IsAuthoritativeFootprintSafeForAgent(
+					Pos, Agent))
+			{
+				return;
+			}
 
 			// Shoved off the walkable area (into a baked wall, or off the nav
 			// edge) → pull back onto the nearest walkable cell. ProjectPointToNav
 			// fails only when there's no reachable cell at all (no bake / fully
 			// sealed pocket) — there we leave the unit put rather than teleport it.
 			FFixedVector Projected;
-			if (Nav->ProjectPointToNav(Pos, Projected))
+			if (Nav->ProjectPointToNavForAgent(
+				Pos, Agent, Projected))
 			{
 				// Planar correction only — vertical (ground snap) is the movement
 				// tick's job; preserve the unit's current Z.
@@ -172,7 +198,7 @@ public:
 	{
 		return FSeinSystemDescriptor::Stateless(
 			FName(TEXT("seinarts.movement.nav_containment")),
-			1u,
+			2u,
 			ESeinTickPhase::PostTick,
 			SeinSystemPriority::NavContainment);
 	}

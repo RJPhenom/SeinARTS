@@ -147,6 +147,27 @@ TEST(MovementReflectedStateChangesCanonicalRoot,
 	Fixture.World->StopSimulation();
 }
 
+TEST(MovementFootprintIncludesCompoundShapeOffset,
+	"SeinARTS.Unit.Movement.NavigationPolicy")
+{
+	FSeinExtentsComponent Extents;
+	FSeinExtentsShape Shape;
+	Shape.Shape = ESeinExtentsShape::Capsule;
+	Shape.Radius = FFixedPoint::FromInt(50);
+	Shape.LocalOffset = FFixedVector(
+		FFixedPoint::FromInt(300),
+		FFixedPoint::FromInt(400),
+		FFixedPoint::Zero);
+	Extents.Shapes.Add(Shape);
+
+	const FFixedPoint Resolved =
+		USeinMovement::ResolveCollisionRadius(&Extents, nullptr);
+	// Fixed-point sqrt is intentionally approximate; verify the geometry
+	// contract without demanding an impossible integer-exact hypotenuse.
+	ASSERT_THAT(IsTrue(Resolved > FFixedPoint::FromInt(549)));
+	ASSERT_THAT(IsTrue(Resolved < FFixedPoint::FromInt(551)));
+}
+
 TEST(MovementRoutineRootTracksDirtyInstanceAndMatchesForcedRebuild,
 	"SeinARTS.Unit.Movement.CanonicalState")
 {
@@ -228,6 +249,12 @@ TEST(MovementReflectedStateRoundTripsTransactionally,
 	ASSERT_THAT(IsNotNull(Source.Instance(0)));
 	Source.Instance(0)->PersistentTestValue =
 		FFixedPoint::FromInt(73);
+	const FGameplayTag BlockedTerrainTag =
+		FGameplayTag::RequestGameplayTag(TEXT("Test"), false);
+	ASSERT_THAT(IsTrue(BlockedTerrainTag.IsValid()));
+	Source.Instance(0)->SetCachedNavigationPolicyForTest(
+		BlockedTerrainTag,
+		Source.Entities[0]);
 
 	FString Error;
 	FGuid SourceRoot;
@@ -264,6 +291,10 @@ TEST(MovementReflectedStateRoundTripsTransactionally,
 	ASSERT_THAT(IsTrue(
 		Restored->PersistentTestValue
 			== FFixedPoint::FromInt(73)));
+	ASSERT_THAT(IsTrue(
+		Restored->HasCachedNavigationPolicyForTest(
+			BlockedTerrainTag,
+			Source.Entities[0])));
 	FGuid DestinationRoot;
 	ASSERT_THAT(IsTrue(
 		Destination->ComputeCanonicalStateRoot(

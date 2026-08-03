@@ -160,6 +160,7 @@ ESeinPathResult USeinPlannerHandle::RequestNavPath()
 	Req.Requester = Ctx->SelfHandle;
 	if (Ctx->NavData)
 	{
+		Req.BlockedTerrainTags   = Ctx->NavData->BlockedTerrainTags;
 		Req.AgentNavLayerMask     = Ctx->NavData->NavLayerMask;
 		Req.AgentWallPaddingCells = Ctx->NavData->WallPadding;
 		Req.AgentMaxSearchNodes   = Ctx->NavData->MaxSearchNodes;   // 0 = project default
@@ -214,7 +215,18 @@ bool USeinPlannerHandle::SampleGroundHeight(const FFixedVector& WorldPos, bool b
 bool USeinPlannerHandle::ProjectToNav(const FFixedVector& WorldPos, FFixedVector& OutProjected) const
 {
 	OutProjected = WorldPos;
-	return (Ctx && Ctx->Nav) ? Ctx->Nav->ProjectPointToNav(WorldPos, OutProjected) : false;
+	if (!Ctx || !Ctx->Nav) return false;
+	FSeinNavAgentProfile Agent;
+	Agent.Requester = Ctx->SelfHandle;
+	Agent.AgentFootprintRadius = GetFootprintRadius();
+	if (Ctx->NavData)
+	{
+		Agent.BlockedTerrainTags = Ctx->NavData->BlockedTerrainTags;
+		Agent.AgentNavLayerMask = Ctx->NavData->NavLayerMask;
+		Agent.AgentWallPaddingCells = Ctx->NavData->WallPadding;
+	}
+	return Ctx->Nav->ProjectPointToNavForAgent(
+		WorldPos, Agent, OutProjected);
 }
 
 int32 USeinPlannerHandle::GetTerrainTypeAt(const FFixedVector& WorldPos) const
@@ -230,13 +242,18 @@ FGameplayTag USeinPlannerHandle::GetTerrainTagAt(const FFixedVector& WorldPos) c
 
 bool USeinPlannerHandle::IsPositionClear(const FFixedVector& WorldPos) const
 {
-	// Mask MUST be non-zero: (BlockedNavLayerMask & 0) == 0 skips EVERY dynamic blocker,
-	// silently degrading this to a static-only query that reports a dynamic-wall cell as
-	// clear — the exact trap SeinNavigationBPFL documents. Use the agent's own nav layer
-	// (0x01 ground fallback); this Ctx already reads NavData->NavLayerMask for path requests.
 	if (!Ctx || !Ctx->Nav) return false;
-	const uint8 Mask = Ctx->NavData ? Ctx->NavData->NavLayerMask : uint8(0x01);
-	return Ctx->Nav->IsWorldPositionClear(WorldPos, Mask);
+	FSeinNavAgentProfile Agent;
+	Agent.Requester = Ctx->SelfHandle;
+	Agent.AgentFootprintRadius = GetFootprintRadius();
+	if (Ctx->NavData)
+	{
+		Agent.BlockedTerrainTags = Ctx->NavData->BlockedTerrainTags;
+		Agent.AgentNavLayerMask = Ctx->NavData->NavLayerMask;
+		Agent.AgentWallPaddingCells = Ctx->NavData->WallPadding;
+	}
+	return Ctx->Nav->IsWorldPositionClearForAgent(
+		WorldPos, Agent);
 }
 
 FFixedPoint USeinPlannerHandle::GetCellSize() const

@@ -7,7 +7,32 @@
 #include "SeinNavigation.h"
 #include "SeinNavigationSubsystem.h"
 #include "Settings/PluginSettings.h"
+#include "Simulation/SeinWorldSubsystem.h"
 #include "Types/Random.h"
+
+namespace
+{
+	bool ResolveRequesterPolicy(
+		const UObject* WorldContextObject,
+		FSeinEntityHandle Requester,
+		FSeinNavAgentProfile& OutAgent)
+	{
+		if (!WorldContextObject || !Requester.IsValid())
+		{
+			return false;
+		}
+		const UWorld* World = WorldContextObject->GetWorld();
+		const USeinWorldSubsystem* Sim = World
+			? World->GetSubsystem<USeinWorldSubsystem>()
+			: nullptr;
+		if (!Sim || !Sim->IsEntityAlive(Requester))
+		{
+			return false;
+		}
+		OutAgent = Sim->BuildNavAgentProfile(Requester);
+		return true;
+	}
+}
 
 FSeinPath USeinNavigationBPFL::SeinFindPath(const UObject* WorldContextObject, FFixedVector Start, FFixedVector End, FSeinEntityHandle Requester, FGameplayTagContainer BlockedTerrainTags)
 {
@@ -20,6 +45,18 @@ FSeinPath USeinNavigationBPFL::SeinFindPath(const UObject* WorldContextObject, F
 	Req.End = End;
 	Req.Requester = Requester;
 	Req.BlockedTerrainTags = BlockedTerrainTags;
+	FSeinNavAgentProfile Agent;
+	if (ResolveRequesterPolicy(
+		WorldContextObject, Requester, Agent))
+	{
+		Req.BlockedTerrainTags.AppendTags(
+			Agent.BlockedTerrainTags);
+		Req.AgentNavLayerMask = Agent.AgentNavLayerMask;
+		Req.AgentFootprintRadius =
+			Agent.AgentFootprintRadius;
+		Req.AgentWallPaddingCells =
+			Agent.AgentWallPaddingCells;
+	}
 	Nav->FindPath(Req, Result);
 	return Result;
 }
@@ -35,6 +72,18 @@ FFixedVector USeinNavigationBPFL::SeinQueryNavDirection(const UObject* WorldCont
 	Query.Requester = Requester;
 	Query.BlockedTerrainTags = BlockedTerrainTags;
 	Query.GroupId = GroupId;
+	FSeinNavAgentProfile Agent;
+	if (ResolveRequesterPolicy(
+		WorldContextObject, Requester, Agent))
+	{
+		Query.BlockedTerrainTags.AppendTags(
+			Agent.BlockedTerrainTags);
+		Query.AgentNavLayerMask = Agent.AgentNavLayerMask;
+		Query.AgentFootprintRadius =
+			Agent.AgentFootprintRadius;
+		Query.AgentWallPaddingCells =
+			Agent.AgentWallPaddingCells;
+	}
 	return Nav->QueryDirection(Query);
 }
 

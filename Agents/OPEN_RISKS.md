@@ -12,11 +12,10 @@ This is the actionable remainder after consolidating the historical audits. It i
 
 1. Cover has deterministic provider/query infrastructure but lacks stable reservations and a shared selection-wide tactical allocator.
 2. Squad reinforcement/loss lifecycle is not complete enough for production tactics gameplay.
-3. Per-unit terrain restrictions and nav layers do not yet propagate through every MoveTo/repath/containment path.
-4. FoW still needs an explicit team/shared vision policy; the known blocker-height, authored-Z, and cone terrain-scaling defects are closed.
-5. Public targeting lacks the complete line/corridor/gesture policy surface needed by a modern tactical RTS.
-6. Movement+ needs behavior qualification and telemetry; Flight is not a production 3D avoidance/collision model.
-7. Cover's optional Squad declaration is not physically strip-safe because the declared bridge module hard-links Squad.
+3. FoW still needs an explicit team/shared vision policy; the known blocker-height, authored-Z, and cone terrain-scaling defects are closed.
+4. Public targeting lacks the complete line/corridor/gesture policy surface needed by a modern tactical RTS.
+5. Movement+ needs behavior qualification and telemetry; Flight is not a production 3D avoidance/collision model.
+6. Cover's optional Squad declaration is not physically strip-safe because the declared bridge module hard-links Squad.
 
 ## Online-product gaps
 
@@ -36,7 +35,7 @@ This is the actionable remainder after consolidating the historical audits. It i
 
 ## Explicit product decisions still required
 
-- Full cover scoring/contention/reservation policy and moving-provider behavior.
+- Full cover scoring/contention/reservation policy, requester-aware post-processing, and moving-provider behavior.
 - Public targeter/modifier/terrain/production/team-vision API shapes.
 - Flight and advanced vehicle-feel defaults after Vehicle Gym evidence.
 - Listen-host migration versus dedicated-only supported topology for each game mode.

@@ -253,7 +253,8 @@ bool USeinCollisionResolverParallel::JacobiPass(USeinWorldSubsystem& World, cons
 			if (Push == FFixedVector::ZeroVector) continue;
 			FFixedVector Candidate = Running + Push;
 			Candidate.Z = SelfPos0.Z;
-			if (CanOccupy(World, Candidate, Self.Radius))
+			if (CanOccupy(
+				World, Self.Handle, Candidate, Self.Radius))
 			{
 				Running = Candidate;
 			}
@@ -318,7 +319,7 @@ bool USeinCollisionResolverParallel::ComputeStateCoverageClaim(
 	}
 	OutClaim.StableImplementationId =
 		TEXT("seinarts.collision.resolver.parallel");
-	OutClaim.BehaviorRevision = 1;
+	OutClaim.BehaviorRevision = 2;
 	OutClaim.CoverageRevision = 1;
 	OutClaim.StateCoverage =
 		ESeinCollisionResolverStateCoverage::Stateless;

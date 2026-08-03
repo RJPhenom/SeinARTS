@@ -22,8 +22,11 @@ Exit: clean tree, no obsolete tracked artifacts, exact gate evidence, and one un
 - Async path continuation ownership is closed: budget tails persist, results survive unrelated
   drains, and terminal move actions cancel their state before re-entrant hooks.
 - FoW overlapping layer heights, authored local-Z blocker tops, and cone terrain scaling are
-  closed with canonical-state coverage. Close the remaining ordinary-authoring correctness items:
-  ability/passive lifecycle identities and per-unit terrain/nav policy propagation.
+  closed with canonical-state coverage.
+- Per-unit terrain, nav-layer, wall-padding, and compound-footprint policy now propagates through
+  command admission, pathing/repathing, movement, collision, containment, formation projection,
+  requester-aware Blueprint queries, and Movement+ maneuver probes. Close the remaining
+  ordinary-authoring correctness item: ability/passive lifecycle identity and ownership.
 - Define a checkpoint-safe latent-authoring contract. Supported Blueprint latent nodes require exact codecs; unsupported continuation shapes must fail during authoring/compile/save rather than during a live reconnect.
 - Resolve remaining state-coverage admission contracts for mutable Level Data, stateful formation/resolver implementations, and conditional provider ownership.
 - Add automated package/consumer proof for:
@@ -60,7 +63,9 @@ Complete reinforcement request identity, cancel/refund, queue replacement, squad
 
 ### Terrain, vision, targeting, and containment
 
-- Per-unit navigation layers, tags, and clearance end to end.
+- Author and qualify game terrain catalogs and movement profiles on top of the now-complete
+  framework-level per-unit navigation/clearance policy. Shipped `AgentTags` remain classification
+  metadata; forbidden terrain is expressed explicitly through the navigation component.
 - Height-correct and team/shared FoW policy.
 - Line/corridor targeters needed by tactical weapons and formations.
 - Stable garrison/transport/containment state and shared observer/team policy.

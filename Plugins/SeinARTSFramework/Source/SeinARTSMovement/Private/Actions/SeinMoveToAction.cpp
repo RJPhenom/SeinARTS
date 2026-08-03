@@ -1037,8 +1037,11 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 						EscQ.Requester = OwnerEntity;
 						EscQ.AgentNavLayerMask = NavComp ? NavComp->NavLayerMask : 0x01;
 						EscQ.AgentFootprintRadius = FootR;
-						// BlockedTerrainTags left empty — matches what this
-						// action's own path requests carry today.
+						if (NavComp)
+						{
+							EscQ.BlockedTerrainTags =
+								NavComp->BlockedTerrainTags;
+						}
 						bGotTarget = Nav->QueryEscapeTarget(EscQ, Target);
 					}
 					if (bGotTarget)

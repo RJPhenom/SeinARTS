@@ -23,6 +23,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Navigation/SeinNavAgentProfile.h"
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
 
@@ -68,7 +69,7 @@ struct FInputs
 	FFixedPoint MinTurnRadius = FFixedPoint::Zero;    // bicycle R_min, must be > 0
 	FFixedPoint CruiseTurnRadius = FFixedPoint::Zero; // max(R_min, TopSpeed / TurnRate)
 	FFixedPoint FootprintRadius = FFixedPoint::Zero;  // shared collision-cascade radius
-	uint8 NavLayerMask = 0x01;
+	FSeinNavAgentProfile Agent;
 	FFixedPoint ReverseSpeedPenalty = FFixedPoint::One; // TopSpeed / effective reverse speed, >= 1
 	FFixedPoint ForwardPathBias = FFixedPoint::One;     // >= 1; forward-only wins unless this much longer
 	FFixedPoint ReverseEngageDistance = FFixedPoint::Zero;

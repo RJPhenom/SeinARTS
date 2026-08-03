@@ -25,6 +25,7 @@
 #include "Components/SeinComponent.h"
 #include "Components/SeinExtentsComponent.h"  // ESeinNavLayerBit
 #include "Types/FixedPoint.h"
+#include "GameplayTagContainer.h"
 #include "SeinNavigationComponent.generated.h"
 
 /** When the move-to action recomputes its path during execution. The original
@@ -101,19 +102,32 @@ struct SEINARTSCOREENTITY_API FSeinNavigationComponent : public FSeinComponent
 		meta = (ClampMin = "0.0"))
 	FFixedPoint AcceptanceRadius = DefaultArrivalAcceptance();
 
-	/** Which terrain classes this unit is affected by — a bitmask where each bit is a nav
-	 *  layer defined in plugin settings (water, lava, no-build, etc.). The unit is blocked
-	 *  from a cell only when at least one of its bits is also set in that cell's blocker.
-	 *  Default 0x01 (bit 0 = "Default" = normal ground units).
+	/** Which runtime blocker classes affect this unit. The unit is blocked by an
+	 *  `FSeinExtentsComponent` dynamic-nav stamp only when at least one bit is
+	 *  shared with that stamp's `BlockedNavLayerMask`. Static baked terrain is
+	 *  deliberately separate; use Blocked Terrain Tags below for per-unit
+	 *  ground restrictions. Default 0x01 (bit 0 = normal ground units).
 	 *
-	 *  Example, "amphibious skips water": author the water blocker with the Default bit;
-	 *  normal infantry keep NavLayerMask = Default so water blocks them; the amphibious
-	 *  unit drops Default and sets Amphibious, so it shares no bit with the water blocker
-	 *  and walks through. A multi-class unit (e.g. an amphibious tank that blocks ground
-	 *  units AND crosses water) sets both bits. */
+	 *  Example: a temporary ground barricade stamps only the Default bit;
+	 *  infantry keeps Default and routes around it, while a hover unit using a
+	 *  distinct bit ignores it. Use Blocked Terrain Tags—not this mask—for baked
+	 *  water, mud, road, or other ground classifications. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Navigation",
 		meta = (Bitmask, BitmaskEnum = "/Script/SeinARTSCoreEntity.ESeinNavLayerBit"))
 	uint8 NavLayerMask = 0x01;
+
+	/** Baked terrain classes this unit treats as impassable. Matching is
+	 *  hierarchical, so blocking `SeinARTS.Terrain.Water` also blocks authored
+	 *  child types such as `SeinARTS.Terrain.Water.Deep`. The policy is carried through the
+	 *  initial path, every repath, field-direction and escape query, the runtime
+	 *  movement floor, collision/containment correction, and formation-slot
+	 *  projection. Empty means no per-unit terrain restriction.
+	 *
+	 *  This is a hard topology rule, not a cost preference. Global terrain
+	 *  `Nav Cost` and `Speed Multiplier` remain independent soft policies. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Navigation",
+		meta = (Categories = "SeinARTS.Terrain", DisplayName = "Blocked Terrain Tags"))
+	FGameplayTagContainer BlockedTerrainTags;
 
 	/** When a moving unit re-runs the pathfinder to react to world changes — turn drift,
 	 *  blocker changes, new buildings appearing. Repathing keeps the unit honest. See
@@ -174,6 +188,19 @@ FORCEINLINE uint32 GetTypeHash(const FSeinNavigationComponent& C)
 	H = HashCombine(H, GetTypeHash(C.WallPadding));
 	H = HashCombine(H, GetTypeHash(C.AcceptanceRadius));
 	H = HashCombine(H, GetTypeHash(C.NavLayerMask));
+	{
+		TArray<FGameplayTag> Tags;
+		C.BlockedTerrainTags.GetGameplayTagArray(Tags);
+		Tags.Sort([](const FGameplayTag& A, const FGameplayTag& B)
+		{
+			return A.GetTagName().LexicalLess(B.GetTagName());
+		});
+		H = HashCombine(H, GetTypeHash(Tags.Num()));
+		for (const FGameplayTag& Tag : Tags)
+		{
+			H = HashCombine(H, GetTypeHash(Tag));
+		}
+	}
 	H = HashCombine(H, GetTypeHash(static_cast<uint8>(C.RepathMode)));
 	H = HashCombine(H, GetTypeHash(C.RepathInterval));
 	H = HashCombine(H, GetTypeHash(C.RepathFailureLimit));

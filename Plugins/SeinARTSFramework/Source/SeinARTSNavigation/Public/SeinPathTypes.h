@@ -58,7 +58,7 @@ struct SEINARTSNAVIGATION_API FSeinPathRequest
 	/** Terrain classes this agent treats as impassable. The shipped USeinNavigationAStar
 	 *  honors this as a HARD filter: cells whose baked terrain type maps to any listed tag
 	 *  are excluded from both the A* topology and the line-of-sight smoother for this
-	 *  request (e.g. an amphibious-only unit that lists "Water"). Matching is hierarchical —
+	 *  request (e.g. a ground-only unit that lists `SeinARTS.Terrain.Water`). Matching is hierarchical —
 	 *  listing a parent tag bars its child types. Pass/block only; there is no per-tag soft
 	 *  routing COST (that is the separate, unbuilt cost-region work). A custom
 	 *  USeinNavigation may interpret it differently. Empty = no filter. */
@@ -70,7 +70,7 @@ struct SEINARTSNAVIGATION_API FSeinPathRequest
 	 *  whose `BlockedNavLayerMask & AgentNavLayerMask == 0`. Default 0xFF
 	 *  (matches all blockers — preserves single-layer behavior when the
 	 *  caller doesn't fill this in). MoveToAction populates from
-	 *  FSeinMovementData::NavLayerMask at request time. */
+	 *  FSeinNavigationComponent::NavLayerMask at request time. */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Navigation|Path")
 	uint8 AgentNavLayerMask = 0xFF;
 
@@ -168,6 +168,11 @@ struct SEINARTSNAVIGATION_API FSeinDirectionQuery
 	/** Agent body radius (clearance), world units. Default 0. */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Navigation|Direction")
 	FFixedPoint AgentFootprintRadius;
+
+	/** Extra whole-cell wall spacing — same semantics as
+	 *  FSeinPathRequest::AgentWallPaddingCells. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Navigation|Direction")
+	int32 AgentWallPaddingCells = 0;
 
 	/** Group / region key for shared-field navs (see FSeinPathRequest::GroupId). 0 = lone.
 	 *  A field nav keys ONE field per (GroupId, Goal) and samples it for every member;

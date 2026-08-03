@@ -183,7 +183,11 @@ FFixedPoint USeinCollisionResolver::ResolveColliderMass(const FSeinExtentsCompon
 	return (Ext.Mass > FFixedPoint::Epsilon) ? Ext.Mass : FFixedPoint::Epsilon;
 }
 
-bool USeinCollisionResolver::CanOccupy(USeinWorldSubsystem& World, const FFixedVector& P, FFixedPoint Radius)
+bool USeinCollisionResolver::CanOccupy(
+	USeinWorldSubsystem& World,
+	FSeinEntityHandle Agent,
+	const FFixedVector& P,
+	FFixedPoint Radius)
 {
 	// Hard-barrier gate: the push must never move a unit's FOOTPRINT onto a
 	// non-walkable cell — a baked nav wall, a runtime DYNAMIC nav blocker
@@ -201,21 +205,40 @@ bool USeinCollisionResolver::CanOccupy(USeinWorldSubsystem& World, const FFixedV
 	// shoved units straight into them and they got nav-stuck. Cover slots
 	// (authoritative destinations) are exempt: a unit may be delivered onto a
 	// bake-blocked slot. Unbound (nav-less / tests) → ungated, identical to prior.
-	if (!World.DynamicPassableResolver.IsBound()) return true;
+	const bool bAgentAware =
+		World.AgentDynamicPassableResolver.IsBound();
+	if (!bAgentAware
+		&& !World.DynamicPassableResolver.IsBound()) return true;
+	const FSeinNavAgentProfile AgentProfile =
+		World.BuildNavAgentProfile(Agent, Radius);
+	const auto IsPassable = [&](const FFixedVector& Position)
+	{
+		return bAgentAware
+			? World.AgentDynamicPassableResolver.Execute(
+				AgentProfile, Position)
+			: World.DynamicPassableResolver.Execute(Position);
+	};
 	// Center walkability FIRST. The cover-slot exemption only matters when the cell is bake-BLOCKED,
 	// so consult the (potentially expensive — a cover-slot spatial query) AuthoritativeDestination-
 	// Resolver ONLY on the blocked path, never on the common push onto walkable ground. (It used to
 	// run on EVERY push candidate, thrashing the cover query near walls where pushes are most frequent.)
-	if (!World.DynamicPassableResolver.Execute(P))
+	if (!IsPassable(P))
 	{
 		// Center blocked (static bake OR a dynamic nav blocker) — allow only if it's an
 		// authoritative cover slot that overrules the bake. A cover slot sits ~one footprint
 		// outside its wall, so its own cell is normally clear of the wall's stamp; the exemption
 		// stays for the low-res-bake-false-negative case, unchanged.
-		return World.AuthoritativeDestinationResolver.IsBound() && World.AuthoritativeDestinationResolver.Execute(P);
+		const bool bAuthoritative =
+			World.AuthoritativeDestinationResolver.IsBound()
+			&& World.AuthoritativeDestinationResolver.Execute(P);
+		const bool bSafeForAgent =
+			!World.AgentAuthoritativeDestinationSafetyResolver.IsBound()
+			|| World.AgentAuthoritativeDestinationSafetyResolver.Execute(
+				AgentProfile, P);
+		return bAuthoritative && bSafeForAgent;
 	}
 	// Center walkable — the body footprint must clear walls too.
-	if (Radius > FFixedPoint::Zero)
+	if (!bAgentAware && Radius > FFixedPoint::Zero)
 	{
 		// 8 unit-ring directions (45° spacing), sampled at the collider radius —
 		// the body footprint, not just the center.
@@ -236,7 +259,7 @@ bool USeinCollisionResolver::CanOccupy(USeinWorldSubsystem& World, const FFixedV
 		for (int32 i = 0; i < 8; ++i)
 		{
 			const FFixedVector S(P.X + BarrierRing[i].X * Radius, P.Y + BarrierRing[i].Y * Radius, P.Z);
-			if (!World.DynamicPassableResolver.Execute(S)) return false;
+			if (!IsPassable(S)) return false;
 		}
 	}
 	return true;

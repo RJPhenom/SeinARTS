@@ -537,6 +537,20 @@ public:
 				DisplayName = "Path Requests Per Tick Budget"))
 	int32 PathRequestsPerTickBudget;
 
+	/** Maximum number of agent-specific static connectivity fields retained by
+	 *  the shipped A* planner. One entry costs four bytes per nav cell and turns
+	 *  `bRequiresPathableTarget` validation into two O(1) label reads after its
+	 *  loading/spawn-time warm-up. FIFO eviction is result-neutral: it can only
+	 *  cause a later profile to rebuild, never change reachability. Raise this
+	 *  for games with many simultaneous footprint/terrain-policy combinations;
+	 *  lower it on memory-constrained targets. Default 8. */
+	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Performance",
+		meta = (ClampMin = "1", ClampMax = "64", UIMin = "1", UIMax = "32",
+			DisplayName = "Reachability Profile Cache Capacity",
+			EditCondition = "IsUsingShippedAStar",
+			EditConditionHides))
+	int32 NavReachabilityProfileCacheCapacity;
+
 	/**
 	 * How close in height a candidate cell must be to count as "the same level" when the planner snaps
 	 * a destination onto walkable ground. Clicks (and formation slots) snap to the nearest passable

@@ -37,12 +37,13 @@ The post-audit performance/remediation work is now committed and fast-forwarded 
 ## Current verification
 
 The latest integration-candidate source was rebuilt and re-run after closing the async navigation
-continuation lifecycle and the known FoW blocker-height/stamp-scaling defects:
+continuation lifecycle, the known FoW blocker-height/stamp-scaling defects, and the framework-wide
+per-unit navigation policy path:
 
 | Gate | Result |
 |---|---:|
-| `SeinARTS.Unit`, profile All | 391 passed, 0 failed |
-| `SeinARTS.Unit`, profile Framework | 383 passed, 0 failed |
+| `SeinARTS.Unit`, profile All | 397 passed, 0 failed |
+| `SeinARTS.Unit`, profile Framework | 389 passed, 0 failed |
 | `SeinARTS.Integration`, profile All | 15 passed, 0 failed |
 | `SeinARTS.Integration`, profile Framework | 14 passed, 0 failed |
 | `SeinARTS.Determinism`, profile All | 20 passed, 0 failed |
@@ -54,14 +55,14 @@ continuation lifecycle and the known FoW blocker-height/stamp-scaling defects:
 
 Latest local evidence is under ignored `Saved/Automation/`:
 
-- `SeinARTS.Unit-20260802-222947-1673cc5e` (All)
-- `SeinARTS.Unit-20260802-223506-791aa8df` (Framework)
-- `SeinARTS.Integration-20260802-223244-69f8359b` (All)
-- `SeinARTS.Integration-20260802-221111-4daa9477` (Framework)
-- `SeinARTS.Determinism-20260802-223309-55b25461` (All)
-- `SeinARTS.Determinism-20260802-221127-c0c69aae` (Framework)
-- `SeinARTS.Determinism.Process.SerialCollisionTrace-20260802-223432-00b8b11f`
-- `SeinARTS.Determinism.Process.ParallelCollisionTrace-20260802-223446-be58c9e3`
+- `SeinARTS.Unit-20260802-234503-de8ce1f0` (All)
+- `SeinARTS.Unit-20260802-234623-4788584f` (Framework)
+- `SeinARTS.Integration-20260802-234713-a112c2b7` (All)
+- `SeinARTS.Integration-20260802-234740-03430434` (Framework)
+- `SeinARTS.Determinism-20260802-234808-1ced6b0f` (All)
+- `SeinARTS.Determinism-20260802-234838-0205358a` (Framework)
+- `SeinARTS.Determinism.Process.SerialCollisionTrace-20260802-234914-32e4b4d8`
+- `SeinARTS.Determinism.Process.ParallelCollisionTrace-20260802-234934-379af585`
 
 ## Integration-candidate progress
 
@@ -76,7 +77,21 @@ Latest local evidence is under ignored `Saved/Automation/`:
 - Extents-authored FoW sources now include their local Z offset in the world-space blocker top,
   and terrain vision multipliers scale the active range parameter for radial, rectangle, and cone
   shapes.
-- Focused async lifecycle and navigation canonical-state regressions passed before the full gates.
+- `FSeinNavAgentProfile` now centralizes an entity's nav-layer mask, forbidden terrain, wall
+  padding, whole compound-collider radius, and classification tags. Initial paths, repaths,
+  escape/floor probes, collision containment, formation projection, Movement+ maneuver probes,
+  and Blueprint requests with a requester use that same policy.
+- Forbidden terrain is hard route topology and footprint clearance. An authoritative destination
+  may override only the coarse static bake; it cannot bypass forbidden terrain or a dynamic
+  blocker. Dynamic blockers can change the route while remaining transient for fundamental
+  command-admission reachability.
+- A* caches static connectivity by exact agent profile in a bounded, configurable cache and warms
+  profiles for path-requiring entities. Capacity affects rebuild frequency, not simulation results.
+- Legacy `AgentTags` remain a classification seam, not terrain topology in the shipped A*. Cover's
+  final destination post-processing is not yet requester/context-rich; that remains part of the
+  shared tactical allocation work rather than being hidden inside navigation.
+- Focused async lifecycle, per-agent path/clearance/projection, and navigation canonical-state
+  regressions passed before the full gates.
 
 ## Evidence limits
 

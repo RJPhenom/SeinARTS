@@ -292,7 +292,11 @@ protected:
 	 *  (nav-less / tests) → always true (ungated), identical to the prior behavior.
 	 *  Shared by every resolver so the "never through a wall" rule is one
 	 *  implementation. */
-	static bool CanOccupy(USeinWorldSubsystem& World, const FFixedVector& P, FFixedPoint Radius);
+	static bool CanOccupy(
+		USeinWorldSubsystem& World,
+		FSeinEntityHandle Agent,
+		const FFixedVector& P,
+		FFixedPoint Radius);
 
 	/** Build a canonical pair key ordered by full generational handle. */
 	static FORCEINLINE FOverlapPairKey MakePairKey(FSeinEntityHandle A, FSeinEntityHandle B)

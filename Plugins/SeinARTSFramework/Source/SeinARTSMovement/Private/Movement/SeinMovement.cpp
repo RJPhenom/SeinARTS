@@ -1045,6 +1045,8 @@ void USeinMovement::BP_TickIdle_Implementation(USeinMoverHandle* Mover)
 bool USeinMovement::IsFootprintPassable(const FFixedVector& Pos, USeinNavigation* Nav) const
 {
 	if (!Nav) return true;
+	const FSeinNavAgentProfile Agent =
+		BuildCachedNavAgentProfile();
 	// Dynamic-AWARE floor: IsWorldPositionClear rejects the static bake AND runtime
 	// dynamic nav blockers (bBlocksNav — non-baked cover walls / deployables). A
 	// static-only check (the former IsPassable) let a body slide THROUGH a dynamic
@@ -1052,14 +1054,14 @@ bool USeinMovement::IsFootprintPassable(const FFixedVector& Pos, USeinNavigation
 	// perfectly on-path and nothing downstream stopped it. Mask = the agent's own
 	// layer, so a blocker only stops layers it's authored to hit; by default units
 	// don't stamp nav, so this blocks against structures, not other units.
-	if (!Nav->IsWorldPositionClear(Pos, CachedNavLayerMask)) return false;
+	if (!Nav->IsWorldPositionClearForAgent(Pos, Agent)) return false;
 	for (int32 i = 0; i < CachedNumFootprintSamples; ++i)
 	{
 		const FFixedVector SamplePos(
 			Pos.X + CachedFootprintSamples[i].X,
 			Pos.Y + CachedFootprintSamples[i].Y,
 			Pos.Z);
-		if (!Nav->IsWorldPositionClear(SamplePos, CachedNavLayerMask)) return false;
+		if (!Nav->IsWorldPositionClearForAgent(SamplePos, Agent)) return false;
 	}
 	return true;
 }
@@ -1118,7 +1120,9 @@ FFixedVector USeinMovement::ResolveNavCollisionStep(
 	// Center-only (not the footprint) so it never false-triggers on a unit merely
 	// grazing a wall edge — that case still wants the normal clamp below. Pairs with
 	// A*'s dynamic-blocked-start tolerance so a spawn-on-a-blocker unit can extract.
-	if (!Nav->IsWorldPositionClear(OldPos, CachedNavLayerMask)) return NewPos;
+	const FSeinNavAgentProfile Agent =
+		BuildCachedNavAgentProfile();
+	if (!Nav->IsWorldPositionClearForAgent(OldPos, Agent)) return NewPos;
 
 	// Authoritative-destination overrule: when the candidate sits within reach of
 	// an authoritative destination (a cover slot), let the unit move there even
@@ -1131,7 +1135,9 @@ FFixedVector USeinMovement::ResolveNavCollisionStep(
 		FFixedVector ToDest = NewPos - *AuthoritativeDest;
 		ToDest.Z = FFixedPoint::Zero;
 		const FFixedPoint ExemptRadius = CachedCollisionRadius + FFixedPoint::FromInt(50);
-		if (ToDest.SizeSquared() <= ExemptRadius * ExemptRadius)
+		if (ToDest.SizeSquared() <= ExemptRadius * ExemptRadius
+			&& Nav->IsAuthoritativeFootprintSafeForAgent(
+				NewPos, Agent))
 		{
 			return NewPos;
 		}
@@ -1387,12 +1393,13 @@ FFixedPoint USeinMovement::ResolveCollisionRadius(
 {
 	// Cascade for the effective collision radius:
 	//   Tier 1: FSeinExtentsComponent on the entity (if present).
-	//           Per-shape bounding radius via SeinExtentsHelpers::BoundingRadius:
+	//           Whole-collider radius via GetColliderBoundingRadius:
 	//             - Capsule → Shape.Radius
 	//             - Box     → sqrt(HalfExtentX² + HalfExtentY²) (DIAGONAL)
 	//           Diagonal — not max half-extent — is the smallest circle
 	//           that fully contains the box (center-to-corner reach).
-	//           Compound entities take the max across all shapes.
+	//           Compound entities include each shape's planar LocalOffset, then
+	//           take the maximum total reach from the entity origin.
 	//   Tier 2: FSeinNavigationComponent.FallbackFootprintRadius.
 	//   Tier 3: 0 — point-only fallback.
 	//
@@ -1417,11 +1424,8 @@ FFixedPoint USeinMovement::ResolveCollisionRadius(
 	FFixedPoint Radius = FFixedPoint::Zero;
 	if (Extents && Extents->Shapes.Num() > 0)
 	{
-		for (const FSeinExtentsShape& Shape : Extents->Shapes)
-		{
-			const FFixedPoint ShapeRadius = SeinExtentsHelpers::BoundingRadius(Shape);
-			if (ShapeRadius > Radius) Radius = ShapeRadius;
-		}
+		Radius =
+			SeinExtentsHelpers::GetColliderBoundingRadius(*Extents);
 	}
 	if (Radius <= FFixedPoint::Zero && NavData)
 	{
@@ -1441,6 +1445,13 @@ void USeinMovement::CacheFootprintFromContext(const FSeinMovementContext& Ctx)
 	// Agent nav layer (default ground 0x01) — the nav floor passes this to
 	// IsWorldPositionClear so a dynamic blocker only stops layers it's authored to.
 	CachedNavLayerMask = Ctx.NavData ? Ctx.NavData->NavLayerMask : uint8(0x01);
+	CachedNavWallPaddingCells = Ctx.NavData
+		? Ctx.NavData->WallPadding
+		: 0;
+	CachedBlockedTerrainTags = Ctx.NavData
+		? Ctx.NavData->BlockedTerrainTags
+		: FGameplayTagContainer();
+	CachedNavRequester = Ctx.SelfHandle;
 
 	if (Radius > FFixedPoint::Zero)
 	{
@@ -1463,6 +1474,17 @@ void USeinMovement::CacheFootprintFromContext(const FSeinMovementContext& Ctx)
 	{
 		CachedNumFootprintSamples = 0;
 	}
+}
+
+FSeinNavAgentProfile USeinMovement::BuildCachedNavAgentProfile() const
+{
+	FSeinNavAgentProfile Agent;
+	Agent.Requester = CachedNavRequester;
+	Agent.BlockedTerrainTags = CachedBlockedTerrainTags;
+	Agent.AgentNavLayerMask = CachedNavLayerMask;
+	Agent.AgentFootprintRadius = CachedCollisionRadius;
+	Agent.AgentWallPaddingCells = CachedNavWallPaddingCells;
+	return Agent;
 }
 
 bool USeinMovement::IsOvershootArrival(

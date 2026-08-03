@@ -1,5 +1,6 @@
 #include "CQTest.h"
 #include "SeinNavigationAStar.h"
+#include "Settings/PluginSettings.h"
 #include "TestTypes/SeinLevelDataTestTypes.h"
 
 namespace UE::SeinARTSTests
@@ -42,6 +43,12 @@ namespace UE::SeinARTSTests
 			return Nav.MainScratch.DynamicBlocked.IsEmpty()
 				&& Dirty.Min.X > Dirty.Max.X
 				&& !Nav.MainScratch.bOverlayReuseValid;
+		}
+
+		static int32 ReachabilityProfileCacheSize(
+			const USeinNavigationAStar& Nav)
+		{
+			return Nav.ReachabilityProfileCache.Num();
 		}
 
 		static FStaticGridSnapshot CaptureStaticGrid(
@@ -129,6 +136,49 @@ namespace UE::SeinARTSTests
 			{
 				Channel[Index] = 1; // passable cost; connections are irrelevant here
 			}
+		}
+
+		void ConfigureOpenConnectedNavGrid(
+			USeinLevelDataTestDouble& LevelData,
+			FIntPoint Dimensions)
+		{
+			ConfigureNavGrid(LevelData, Dimensions);
+			TArray<uint8>& Channel =
+				LevelData.LayerChannels.FindChecked(TEXT("Nav"));
+			const int32 NumCells = Dimensions.X * Dimensions.Y;
+			static const int32 DX[8] =
+				{ 1, -1, 0, 0, 1, 1, -1, -1 };
+			static const int32 DY[8] =
+				{ 0, 0, 1, -1, 1, -1, 1, -1 };
+			for (int32 Y = 0; Y < Dimensions.Y; ++Y)
+			{
+				for (int32 X = 0; X < Dimensions.X; ++X)
+				{
+					uint8 Connections = 0;
+					for (int32 Direction = 0;
+						Direction < 8;
+						++Direction)
+					{
+						const int32 NX = X + DX[Direction];
+						const int32 NY = Y + DY[Direction];
+						if (NX >= 0 && NX < Dimensions.X
+							&& NY >= 0 && NY < Dimensions.Y)
+						{
+							Connections |= (1 << Direction);
+						}
+					}
+					Channel[NumCells + Y * Dimensions.X + X]
+						= Connections;
+				}
+			}
+		}
+
+		FFixedVector CellCenter(int32 X, int32 Y)
+		{
+			return FFixedVector(
+				FFixedPoint::FromInt(X * 100 + 50),
+				FFixedPoint::FromInt(Y * 100 + 50),
+				FFixedPoint::Zero);
 		}
 	}
 
@@ -246,6 +296,10 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(
 			Nav->LoadFromSubstrate(*LevelData).IsAdopted()));
 		FNavigationAStarTestAccess::SeedSerialOverlay(*Nav, 6);
+		Nav->WarmAgentProfile(FSeinNavAgentProfile());
+		ASSERT_THAT(AreEqual(1,
+			FNavigationAStarTestAccess::
+				ReachabilityProfileCacheSize(*Nav)));
 
 		// The linear count remains six, but the row stride and dirty-rect
 		// coordinate space change. Retained bytes must not enter the new grid.
@@ -253,5 +307,225 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(
 			Nav->LoadFromSubstrate(*LevelData).IsAdopted()));
 		ASSERT_THAT(IsTrue(FNavigationAStarTestAccess::IsSerialOverlayReset(*Nav)));
+		ASSERT_THAT(AreEqual(0,
+			FNavigationAStarTestAccess::
+				ReachabilityProfileCacheSize(*Nav)));
+	}
+
+	TEST(AgentTerrainPolicyOwnsPathAndReachabilityTopology,
+		"SeinARTS.Unit.Navigation")
+	{
+		const FGameplayTag TerrainTag =
+			FGameplayTag::RequestGameplayTag(
+				TEXT("Test"), false);
+		ASSERT_THAT(IsTrue(TerrainTag.IsValid()));
+
+		USeinNavigationAStar* Nav =
+			NewObject<USeinNavigationAStar>();
+		USeinLevelDataTestDouble* LevelData =
+			NewObject<USeinLevelDataTestDouble>();
+		ASSERT_THAT(IsNotNull(Nav));
+		ASSERT_THAT(IsNotNull(LevelData));
+		ConfigureOpenConnectedNavGrid(
+			*LevelData, FIntPoint(5, 3));
+		for (int32 Y = 0; Y < 3; ++Y)
+		{
+			LevelData->TestSurfaces[Y * 5 + 2]
+				.TerrainTypeIndex = 1;
+		}
+		ASSERT_THAT(IsTrue(
+			Nav->LoadFromSubstrate(*LevelData).IsAdopted()));
+
+		FSeinNavAgentProfile GroundAgent;
+		GroundAgent.BlockedTerrainTags.AddTag(TerrainTag);
+		ASSERT_THAT(IsFalse(Nav->IsReachableForAgent(
+			CellCenter(0, 1), CellCenter(4, 1), GroundAgent)));
+		ASSERT_THAT(AreEqual(1,
+			FNavigationAStarTestAccess::
+				ReachabilityProfileCacheSize(*Nav)));
+		ASSERT_THAT(IsFalse(Nav->IsReachableForAgent(
+			CellCenter(0, 1), CellCenter(4, 1), GroundAgent)));
+		ASSERT_THAT(AreEqual(1,
+			FNavigationAStarTestAccess::
+				ReachabilityProfileCacheSize(*Nav)));
+
+		FSeinNavAgentProfile UnrestrictedAgent;
+		ASSERT_THAT(IsTrue(Nav->IsReachableForAgent(
+			CellCenter(0, 1),
+			CellCenter(4, 1),
+			UnrestrictedAgent)));
+
+		FSeinPathRequest Request;
+		Request.Start = CellCenter(0, 1);
+		Request.End = CellCenter(4, 1);
+		Request.BlockedTerrainTags.AddTag(TerrainTag);
+		FSeinPath Path;
+		ASSERT_THAT(IsTrue(Nav->FindPath(Request, Path)));
+		ASSERT_THAT(IsTrue(Path.bIsPartial));
+	}
+
+	TEST(DynamicBlockersAffectRoutesNotFundamentalReachability,
+		"SeinARTS.Unit.Navigation")
+	{
+		USeinNavigationAStar* Nav =
+			NewObject<USeinNavigationAStar>();
+		USeinLevelDataTestDouble* LevelData =
+			NewObject<USeinLevelDataTestDouble>();
+		ASSERT_THAT(IsNotNull(Nav));
+		ASSERT_THAT(IsNotNull(LevelData));
+		ConfigureOpenConnectedNavGrid(
+			*LevelData, FIntPoint(5, 3));
+		ASSERT_THAT(IsTrue(
+			Nav->LoadFromSubstrate(*LevelData).IsAdopted()));
+
+		FSeinDynamicBlocker Wall;
+		Wall.Owner = FSeinEntityHandle(9, 1);
+		Wall.EntityCenter = CellCenter(2, 1);
+		Wall.EntityRotation = FFixedQuaternion::Identity;
+		Wall.Shape.Shape = ESeinStampShape::Rect;
+		Wall.Shape.HalfExtentX = FFixedPoint::FromInt(49);
+		Wall.Shape.HalfExtentY = FFixedPoint::FromInt(149);
+		Wall.BlockedNavLayerMask = 0x01;
+		FNavigationAStarTestAccess::InstallDynamicBlockers(
+			*Nav, { Wall });
+
+		FSeinNavAgentProfile BlockedLayerAgent;
+		BlockedLayerAgent.AgentNavLayerMask = 0x01;
+		ASSERT_THAT(IsTrue(Nav->IsReachableForAgent(
+			CellCenter(0, 1),
+			CellCenter(4, 1),
+			BlockedLayerAgent)));
+
+		FSeinPathRequest BlockedRequest;
+		BlockedRequest.Start = CellCenter(0, 1);
+		BlockedRequest.End = CellCenter(4, 1);
+		BlockedRequest.AgentNavLayerMask = 0x01;
+		FSeinPath BlockedPath;
+		ASSERT_THAT(IsTrue(Nav->FindPath(
+			BlockedRequest, BlockedPath)));
+		ASSERT_THAT(IsTrue(BlockedPath.bIsPartial));
+
+		FSeinPathRequest IgnoringRequest = BlockedRequest;
+		IgnoringRequest.AgentNavLayerMask = 0x02;
+		FSeinPath IgnoringPath;
+		ASSERT_THAT(IsTrue(Nav->FindPath(
+			IgnoringRequest, IgnoringPath)));
+		ASSERT_THAT(IsFalse(IgnoringPath.bIsPartial));
+	}
+
+	TEST(AgentTerrainParticipatesInFootprintClearance,
+		"SeinARTS.Unit.Navigation")
+	{
+		const FGameplayTag TerrainTag =
+			FGameplayTag::RequestGameplayTag(
+				TEXT("Test"), false);
+		ASSERT_THAT(IsTrue(TerrainTag.IsValid()));
+
+		USeinNavigationAStar* Nav =
+			NewObject<USeinNavigationAStar>();
+		USeinLevelDataTestDouble* LevelData =
+			NewObject<USeinLevelDataTestDouble>();
+		ASSERT_THAT(IsNotNull(Nav));
+		ASSERT_THAT(IsNotNull(LevelData));
+		ConfigureOpenConnectedNavGrid(
+			*LevelData, FIntPoint(7, 7));
+		LevelData->TestSurfaces[3 * 7 + 3]
+			.TerrainTypeIndex = 1;
+		ASSERT_THAT(IsTrue(
+			Nav->LoadFromSubstrate(*LevelData).IsAdopted()));
+
+		FSeinPathRequest Request;
+		Request.Start = CellCenter(0, 3);
+		Request.End = CellCenter(6, 3);
+		Request.AgentFootprintRadius =
+			FFixedPoint::FromInt(60);
+		Request.BlockedTerrainTags.AddTag(TerrainTag);
+		FSeinPath Path;
+		ASSERT_THAT(IsTrue(Nav->FindPath(Request, Path)));
+		ASSERT_THAT(IsFalse(Path.bIsPartial));
+
+		bool bRoutedOutsideAdjacentRows = false;
+		for (const FFixedVector& Waypoint : Path.Waypoints)
+		{
+			const int32 Row = (Waypoint.Y
+				/ FFixedPoint::FromInt(100)).ToInt();
+			if (Row <= 1 || Row >= 5)
+			{
+				bRoutedOutsideAdjacentRows = true;
+				break;
+			}
+		}
+		ASSERT_THAT(IsTrue(bRoutedOutsideAdjacentRows));
+	}
+
+	TEST(AgentProjectionMatchesTerrainWallPadding,
+		"SeinARTS.Unit.Navigation")
+	{
+		const FGameplayTag TerrainTag =
+			FGameplayTag::RequestGameplayTag(
+				TEXT("Test"), false);
+		ASSERT_THAT(IsTrue(TerrainTag.IsValid()));
+
+		USeinNavigationAStar* Nav =
+			NewObject<USeinNavigationAStar>();
+		USeinLevelDataTestDouble* LevelData =
+			NewObject<USeinLevelDataTestDouble>();
+		ASSERT_THAT(IsNotNull(Nav));
+		ASSERT_THAT(IsNotNull(LevelData));
+		ConfigureOpenConnectedNavGrid(
+			*LevelData, FIntPoint(5, 3));
+		LevelData->TestSurfaces[1 * 5 + 2]
+			.TerrainTypeIndex = 1;
+		ASSERT_THAT(IsTrue(
+			Nav->LoadFromSubstrate(*LevelData).IsAdopted()));
+
+		FSeinNavAgentProfile Agent;
+		Agent.BlockedTerrainTags.AddTag(TerrainTag);
+		Agent.AgentWallPaddingCells = 2;
+		FFixedVector Projected;
+		ASSERT_THAT(IsTrue(Nav->ProjectPointToNavForAgent(
+			CellCenter(1, 1), Agent, Projected)));
+		ASSERT_THAT(IsTrue(Projected != CellCenter(1, 1)));
+		const int32 ProjectedX =
+			(Projected.X / FFixedPoint::FromInt(100)).ToInt();
+		const int32 ProjectedY =
+			(Projected.Y / FFixedPoint::FromInt(100)).ToInt();
+		ASSERT_THAT(IsTrue(
+			FMath::Max(
+				FMath::Abs(ProjectedX - 2),
+				FMath::Abs(ProjectedY - 1)) >= 2));
+	}
+
+	TEST(AuthoritativeDestinationCannotOverrideAgentHazards,
+		"SeinARTS.Unit.Navigation")
+	{
+		const FGameplayTag TerrainTag =
+			FGameplayTag::RequestGameplayTag(
+				TEXT("Test"), false);
+		ASSERT_THAT(IsTrue(TerrainTag.IsValid()));
+
+		USeinNavigationAStar* Nav =
+			NewObject<USeinNavigationAStar>();
+		USeinLevelDataTestDouble* LevelData =
+			NewObject<USeinLevelDataTestDouble>();
+		ASSERT_THAT(IsNotNull(Nav));
+		ASSERT_THAT(IsNotNull(LevelData));
+		ConfigureOpenConnectedNavGrid(
+			*LevelData, FIntPoint(3, 3));
+		LevelData->TestSurfaces[1 * 3 + 1]
+			.TerrainTypeIndex = 1;
+		ASSERT_THAT(IsTrue(
+			Nav->LoadFromSubstrate(*LevelData).IsAdopted()));
+
+		FSeinPathRequest Request;
+		Request.Start = CellCenter(0, 1);
+		Request.End = CellCenter(1, 1);
+		Request.BlockedTerrainTags.AddTag(TerrainTag);
+		Request.bAuthoritativeDestination = true;
+		FSeinPath Path;
+		ASSERT_THAT(IsTrue(Nav->FindPath(Request, Path)));
+		ASSERT_THAT(IsTrue(Path.bIsPartial));
+		ASSERT_THAT(IsTrue(Path.Waypoints.Last()
+			!= Request.End));
 	}
 }

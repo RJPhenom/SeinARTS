@@ -33,6 +33,7 @@
 #include "CoreMinimal.h"
 #include "UObject/Object.h"
 #include "Core/SeinEntityHandle.h"
+#include "Navigation/SeinNavAgentProfile.h"
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
 #include "Types/Quat.h"
@@ -576,16 +577,19 @@ protected:
 
 	/** Effective collision radius (world units) from the
 	 *  Extents → FallbackFootprintRadius → 0 cascade. 0 = point-only check. */
+	UPROPERTY()
 	FFixedPoint CachedCollisionRadius = FFixedPoint::Zero;
 
 	/** Number of ring samples in CachedFootprintSamples. 0 when
 	 *  CachedCollisionRadius == 0 (point-only). Otherwise 8 (45° spacing). */
+	UPROPERTY()
 	int32 CachedNumFootprintSamples = 0;
 
 	/** Local-space XY offsets for footprint sampling. Computed from
 	 *  CachedCollisionRadius once per move action; sampled via IsWorldPositionClear
 	 *  at each ResolveNavCollision call. Fixed-size to avoid per-tick
 	 *  allocations. */
+	UPROPERTY()
 	FFixedVector CachedFootprintSamples[8];
 
 	/** Maximum traversable height difference between adjacent positions.
@@ -593,13 +597,33 @@ protected:
 	 *  passable (connected to ground elsewhere). Default 75 world units —
 	 *  allows slopes up to ~78° at typical per-tick step distances while
 	 *  rejecting multi-meter wall step-ups. Set 0 to disable. */
+	UPROPERTY()
 	FFixedPoint CachedMaxStepHeight = FFixedPoint::FromInt(75);
 
 	/** Agent's nav layer mask (`FSeinNavigationComponent::NavLayerMask`, default
 	 *  0x01 = ground), cached alongside the footprint. Passed to the nav floor's
 	 *  `IsWorldPositionClear` so a dynamic blocker only stops agents its authored
 	 *  `BlockedNavLayerMask` intersects. */
+	UPROPERTY()
 	uint8 CachedNavLayerMask = 0x01;
+
+	/** Extra configuration-space spacing authored on the Navigation component.
+	 *  Retained with the rest of the profile for custom navigation probes and
+	 *  exact checkpoint continuation. */
+	UPROPERTY()
+	int32 CachedNavWallPaddingCells = 0;
+
+	/** Per-unit hard terrain exclusions cached with the other navigation
+	 *  policy so the runtime movement floor cannot drift from its path request. */
+	UPROPERTY()
+	FGameplayTagContainer CachedBlockedTerrainTags;
+
+	/** Requester identity used to exclude an entity's own dynamic blocker stamp
+	 *  from runtime occupancy probes. */
+	UPROPERTY()
+	FSeinEntityHandle CachedNavRequester;
+
+	FSeinNavAgentProfile BuildCachedNavAgentProfile() const;
 
 	// ----------------------------------------------------------------------
 	// Settle-facing cache (per movement instance). The idle settle resolves

@@ -180,7 +180,8 @@ bool USeinCollisionResolverDefault::ResolvePass(USeinWorldSubsystem& World, cons
 			const FFixedVector SelfPosNow = SelfEntity.Transform.GetLocation();
 			FFixedVector SelfNew = SelfPosNow - Normal * (Depth * SelfShare);
 			SelfNew.Z = SelfPosNow.Z;
-			if (CanOccupy(World, SelfNew, SelfRadius))
+			if (CanOccupy(
+				World, SelfHandle, SelfNew, SelfRadius))
 			{
 				if (SelfNew != SelfPosNow)
 				{
@@ -198,7 +199,12 @@ bool USeinCollisionResolverDefault::ResolvePass(USeinWorldSubsystem& World, cons
 				FFixedVector OtherNew = OtherPosNow + Normal * (Depth * OtherShare);
 				OtherNew.Z = OtherPosNow.Z;
 				const FFixedPoint OtherRadius = SeinExtentsHelpers::GetColliderBoundingRadius(*OtherExt);
-				if (OtherNew != OtherPosNow && CanOccupy(World, OtherNew, OtherRadius))
+				if (OtherNew != OtherPosNow
+					&& CanOccupy(
+						World,
+						OtherHandle,
+						OtherNew,
+						OtherRadius))
 				{
 					OtherEntity->Transform.SetLocation(OtherNew);
 					bAnyTransformChanged = true;
@@ -246,7 +252,7 @@ bool USeinCollisionResolverDefault::ComputeDefaultResolverStateCoverageClaim(
 	OutError.Reset();
 	OutClaim.StableImplementationId =
 		TEXT("seinarts.collision.resolver.default");
-	OutClaim.BehaviorRevision = 1;
+	OutClaim.BehaviorRevision = 2;
 	OutClaim.CoverageRevision = 1;
 	OutClaim.StateCoverage =
 		ESeinCollisionResolverStateCoverage::Stateless;

@@ -60,6 +60,7 @@ USeinARTSCoreSettings::USeinARTSCoreSettings()
 	// units) without any per-tick stagger — a 20-unit move resolves all paths
 	// same tick. (A* heuristic weight + iteration cap moved to USeinNavigationAStar's CDO.)
 	, PathRequestsPerTickBudget(32)
+	, NavReachabilityProfileCacheCapacity(8)
 	// Nav projection tunables — see PluginSettings.h for rationale on each.
 	// 100cm tolerance covers typical curb / step deltas without crossing
 	// platform-height boundaries; 30-cell ring radius is ~30m on a 100cm grid,

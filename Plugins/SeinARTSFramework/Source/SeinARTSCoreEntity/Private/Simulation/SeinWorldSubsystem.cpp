@@ -42,6 +42,7 @@
 #include "Components/SeinConstructionComponent.h"
 #include "Components/SeinContainmentData.h"
 #include "Components/SeinContainmentMemberData.h"
+#include "Components/SeinNavigationComponent.h"
 #include "Components/SeinProductionComponent.h"
 #include "Components/SeinTransportSpec.h"
 #include "Actor/SeinEntityComponent.h"
@@ -885,9 +886,12 @@ void USeinWorldSubsystem::ReleaseAllModuleOwnedState()
 	FootprintPlacementResolver.Unbind();
 	PassableResolver.Unbind();
 	DynamicPassableResolver.Unbind();
+	AgentDynamicPassableResolver.Unbind();
 	NavProjectResolver.Unbind();
 	NavProjectFreeResolver.Unbind();
+	NavProjectAgentFreeResolver.Unbind();
 	AuthoritativeDestinationResolver.Unbind();
+	AgentAuthoritativeDestinationSafetyResolver.Unbind();
 	PreviewQualityProvider.Unbind();
 	HeightResolver.Unbind();
 	SpatialGridRegisterCallback.Unbind();
@@ -4230,10 +4234,12 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleActivate
 		{
 			const FFixedVector FromWorld = ActingEntity->Transform.GetLocation();
 			const FFixedVector ToWorld = Cmd.TargetLocation;
+			const FSeinNavAgentProfile Agent =
+				BuildNavAgentProfile(Cmd.EntityHandle);
 
-			const FGameplayTagContainer AgentTags = GetEntityTags(Cmd.EntityHandle);
 			const bool bPathable =
-				PathableTargetResolver.Execute(FromWorld, ToWorld, AgentTags);
+				PathableTargetResolver.Execute(
+					FromWorld, ToWorld, Agent);
 			if (!RefreshAbility())
 			{
 				return RejectRevokedAbility();
@@ -8837,6 +8843,44 @@ const FGameplayTagContainer& USeinWorldSubsystem::GetEntityTags(FSeinEntityHandl
 	static const FGameplayTagContainer Empty;
 	const FSeinEntityTagState* TagState = EntityTagStates.Find(Handle);
 	return TagState ? TagState->CombinedTags : Empty;
+}
+
+FSeinNavAgentProfile USeinWorldSubsystem::BuildNavAgentProfile(
+	FSeinEntityHandle Handle) const
+{
+	const FSeinExtentsComponent* Extents =
+		GetComponent<FSeinExtentsComponent>(Handle);
+	const FSeinNavigationComponent* Navigation =
+		GetComponent<FSeinNavigationComponent>(Handle);
+	FFixedPoint Radius = Extents
+		? SeinExtentsHelpers::GetColliderBoundingRadius(*Extents)
+		: FFixedPoint::Zero;
+	if (Radius <= FFixedPoint::Zero && Navigation)
+	{
+		Radius = Navigation->FallbackFootprintRadius;
+	}
+	return BuildNavAgentProfile(Handle, Radius);
+}
+
+FSeinNavAgentProfile USeinWorldSubsystem::BuildNavAgentProfile(
+	FSeinEntityHandle Handle,
+	FFixedPoint ResolvedFootprintRadius) const
+{
+	FSeinNavAgentProfile Profile;
+	Profile.Requester = Handle;
+	Profile.AgentTags = GetEntityTags(Handle);
+	Profile.AgentFootprintRadius = ResolvedFootprintRadius;
+	if (const FSeinNavigationComponent* Navigation =
+		GetComponent<FSeinNavigationComponent>(Handle))
+	{
+		Profile.BlockedTerrainTags =
+			Navigation->BlockedTerrainTags;
+		Profile.AgentNavLayerMask =
+			Navigation->NavLayerMask;
+		Profile.AgentWallPaddingCells =
+			Navigation->WallPadding;
+	}
+	return Profile;
 }
 
 const FGameplayTagContainer& USeinWorldSubsystem::GetEntityBaseTags(FSeinEntityHandle Handle) const

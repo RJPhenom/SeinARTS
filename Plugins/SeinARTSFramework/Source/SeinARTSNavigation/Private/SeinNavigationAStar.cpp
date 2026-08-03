@@ -30,6 +30,19 @@
 
 namespace
 {
+	/** Canonical 8-neighbor ordering shared by bake-derived connectivity,
+	 *  reachability components, A*, smoothing, and diagnostics. */
+	static const int32 SeinNeighborDX[8] =
+		{ 1, -1, 0, 0, 1, 1, -1, -1 };
+	static const int32 SeinNeighborDY[8] =
+		{ 0, 0, 1, -1, 1, -1, 1, -1 };
+	static const int32 SeinNeighborCost[8] =
+		{ 10, 10, 10, 10, 14, 14, 14, 14 };
+	static const uint8 SeinDiagCardinalA[4] =
+		{ 0, 0, 1, 1 };
+	static const uint8 SeinDiagCardinalB[4] =
+		{ 2, 3, 2, 3 };
+
 	uint32 ReadDigestWord(const uint8* Bytes)
 	{
 		return (static_cast<uint32>(Bytes[0]) << 24)
@@ -557,6 +570,7 @@ USeinNavigationAStar::LoadFromSubstrateImpl(
 	// Derived field — pure function of CellCost/CellConnections; backs O(1)
 	// IsReachable. Recomputed on every grid load alongside WallDistance.
 	RebuildConnectivityComponents();
+	ReachabilityProfileCache.Reset();
 
 	// Grid adoption can change width/height while retaining the same total cell
 	// count. Drop both overlay bytes and their 2D dirty rectangle so neither is
@@ -615,7 +629,7 @@ bool USeinNavigationAStar::ComputeAStarStateCoverageClaim(
 	OutError.Reset();
 	OutClaim.StableImplementationId =
 		TEXT("seinarts.navigation.astar");
-	OutClaim.BehaviorRevision = 1;
+	OutClaim.BehaviorRevision = 2;
 	OutClaim.CoverageRevision = 1;
 	OutClaim.StateCoverage =
 		ESeinNavigationStateCoverage::Stateless;
@@ -932,6 +946,333 @@ bool USeinNavigationAStar::IsReachable(const FFixedVector& From, const FFixedVec
 	return FromComp >= 0 && FromComp == ToComp;
 }
 
+bool USeinNavigationAStar::IsReachableForAgent(
+	const FFixedVector& From,
+	const FFixedVector& To,
+	const FSeinNavAgentProfile& Agent) const
+{
+	if (!HasRuntimeData()) return false;
+
+	// Command validation asks whether the STATIC terrain is fundamentally
+	// reachable for this unit class. It deliberately ignores transient blockers:
+	// a parked vehicle may change the route A* chooses, but must not reject the
+	// order itself. The first query for a distinct (clearance, blocked-terrain)
+	// profile builds a component field; subsequent units of that profile compare
+	// two integers instead of running a duplicate A* before their real path.
+	const FReachabilityProfileKey Key =
+		MakeReachabilityProfileKey(Agent);
+	const TArray<int32>* Components =
+		FindOrBuildReachabilityComponents(Key);
+	if (!Components || Components->Num() != Width * Height)
+	{
+		return false;
+	}
+
+	auto ProjectToProfileCell =
+		[this, Components](
+			const FFixedVector& World,
+			int32& OutX,
+			int32& OutY) -> bool
+	{
+		int32 X = 0;
+		int32 Y = 0;
+		if (!WorldToGrid(World, X, Y))
+		{
+			if (Width <= 0 || Height <= 0
+				|| CellSize <= FFixedPoint::Zero)
+			{
+				return false;
+			}
+			const FFixedPoint LocalX = World.X - Origin.X;
+			const FFixedPoint LocalY = World.Y - Origin.Y;
+			X = FMath::Clamp(
+				(LocalX / CellSize).ToInt(), 0, Width - 1);
+			Y = FMath::Clamp(
+				(LocalY / CellSize).ToInt(), 0, Height - 1);
+		}
+
+		const USeinARTSCoreSettings* Settings =
+			GetDefault<USeinARTSCoreSettings>();
+		const int32 MaxRing = Settings
+			? Settings->NavProjectionMaxRingRadius
+			: 30;
+		FFixedVector Projected;
+		if (!RingScanForCell(
+			X,
+			Y,
+			MaxRing,
+			[this, Components](int32 CX, int32 CY)
+			{
+				return Components->IsValidIndex(CellIndex(CX, CY))
+					&& (*Components)[CellIndex(CX, CY)] >= 0;
+			},
+			Projected))
+		{
+			return false;
+		}
+		return WorldToGrid(Projected, OutX, OutY);
+	};
+
+	int32 FromX = 0;
+	int32 FromY = 0;
+	int32 ToX = 0;
+	int32 ToY = 0;
+	if (!ProjectToProfileCell(From, FromX, FromY)
+		|| !ProjectToProfileCell(To, ToX, ToY))
+	{
+		return false;
+	}
+	const int32 FromComponent =
+		(*Components)[CellIndex(FromX, FromY)];
+	const int32 ToComponent =
+		(*Components)[CellIndex(ToX, ToY)];
+	return FromComponent >= 0
+		&& FromComponent == ToComponent;
+}
+
+void USeinNavigationAStar::WarmAgentProfile(
+	const FSeinNavAgentProfile& Agent) const
+{
+	if (!HasRuntimeData()) return;
+	FindOrBuildReachabilityComponents(
+		MakeReachabilityProfileKey(Agent));
+}
+
+bool USeinNavigationAStar::BuildBlockedTerrainTypeLookup(
+	const FGameplayTagContainer& BlockedTerrainTags,
+	TArray<uint8>& OutBlockedTypes) const
+{
+	OutBlockedTypes.Init(0, 256);
+	if (BlockedTerrainTags.IsEmpty()) return false;
+
+	const USeinARTSCoreSettings* Settings =
+		GetDefault<USeinARTSCoreSettings>();
+	if (!Settings) return false;
+
+	bool bAny = false;
+	const int32 TypeCount = FMath::Min(
+		Settings->TerrainTypes.Num(), 255);
+	for (int32 TypeIndex = 0; TypeIndex < TypeCount; ++TypeIndex)
+	{
+		if (BlockedTerrainTags.HasTag(
+			Settings->TerrainTypes[TypeIndex].TerrainTag))
+		{
+			OutBlockedTypes[TypeIndex + 1] = 1;
+			bAny = true;
+		}
+	}
+	return bAny;
+}
+
+USeinNavigationAStar::FReachabilityProfileKey
+USeinNavigationAStar::MakeReachabilityProfileKey(
+	const FSeinNavAgentProfile& Agent) const
+{
+	FReachabilityProfileKey Key;
+	Key.RequiredClearance = ComputeRequiredClearance(
+		Agent.AgentFootprintRadius,
+		Agent.AgentWallPaddingCells);
+
+	TArray<uint8> BlockedTypes;
+	if (BuildBlockedTerrainTypeLookup(
+		Agent.BlockedTerrainTags, BlockedTypes))
+	{
+		for (int32 StoredType = 0;
+			StoredType < BlockedTypes.Num();
+			++StoredType)
+		{
+			if (BlockedTypes[StoredType] == 0) continue;
+			Key.BlockedTerrainTypeWords[StoredType / 64]
+				|= uint64(1) << (StoredType % 64);
+		}
+	}
+	return Key;
+}
+
+const TArray<int32>*
+USeinNavigationAStar::FindOrBuildReachabilityComponents(
+	const FReachabilityProfileKey& Key) const
+{
+	for (const FReachabilityProfileCacheEntry& Entry
+		: ReachabilityProfileCache)
+	{
+		if (Entry.Key == Key)
+		{
+			return &Entry.Components;
+		}
+	}
+
+	FReachabilityProfileCacheEntry NewEntry;
+	NewEntry.Key = Key;
+	BuildReachabilityComponents(Key, NewEntry.Components);
+	const USeinARTSCoreSettings* Settings =
+		GetDefault<USeinARTSCoreSettings>();
+	const int32 CacheCapacity = FMath::Clamp(
+		Settings
+			? Settings->NavReachabilityProfileCacheCapacity
+			: 8,
+		1,
+		64);
+	if (ReachabilityProfileCache.Num() >= CacheCapacity)
+	{
+		ReachabilityProfileCache.RemoveAt(0, 1,
+			EAllowShrinking::No);
+	}
+	ReachabilityProfileCache.Add(MoveTemp(NewEntry));
+	return &ReachabilityProfileCache.Last().Components;
+}
+
+void USeinNavigationAStar::BuildReachabilityComponents(
+	const FReachabilityProfileKey& Key,
+	TArray<int32>& OutComponents) const
+{
+	const int32 N = Width * Height;
+	OutComponents.Init(-1, N);
+	if (N == 0 || WallDistance.Num() != N) return;
+
+	auto IsTerrainTypeBlocked = [&Key](uint8 StoredType)
+	{
+		return (Key.BlockedTerrainTypeWords[StoredType / 64]
+			& (uint64(1) << (StoredType % 64))) != 0;
+	};
+
+	// Start with the baked static wall-distance field, then add this profile's
+	// forbidden terrain cells as extra zero-distance sources. The bounded BFS
+	// produces the exact same Chebyshev clearance metric used by A*, once per
+	// profile instead of ring-scanning every command.
+	TArray<uint8> ProfileWallDistance = WallDistance;
+	TArray<int32> Frontier;
+	Frontier.Reserve(256);
+	for (int32 Idx = 0; Idx < N; ++Idx)
+	{
+		if (CellTerrainType.IsValidIndex(Idx)
+			&& IsTerrainTypeBlocked(CellTerrainType[Idx])
+			&& ProfileWallDistance[Idx] != 0)
+		{
+			ProfileWallDistance[Idx] = 0;
+			Frontier.Add(Idx);
+		}
+	}
+
+	int32 FrontierHead = 0;
+	while (FrontierHead < Frontier.Num())
+	{
+		const int32 Cur = Frontier[FrontierHead++];
+		const uint8 CurDistance = ProfileWallDistance[Cur];
+		if (CurDistance >= WallDistanceCap - 1) continue;
+		const int32 CurX = Cur % Width;
+		const int32 CurY = Cur / Width;
+		const uint8 NextDistance = CurDistance + 1;
+		for (int32 Direction = 0; Direction < 8; ++Direction)
+		{
+			const int32 NextX = CurX + SeinNeighborDX[Direction];
+			const int32 NextY = CurY + SeinNeighborDY[Direction];
+			if (!IsValidCoord(NextX, NextY)) continue;
+			const int32 Next = CellIndex(NextX, NextY);
+			if (ProfileWallDistance[Next] > NextDistance)
+			{
+				ProfileWallDistance[Next] = NextDistance;
+				Frontier.Add(Next);
+			}
+		}
+	}
+
+	auto IsEligible =
+		[this, &Key, &ProfileWallDistance,
+			&IsTerrainTypeBlocked](int32 X, int32 Y)
+	{
+		if (!IsCellPassable(X, Y)) return false;
+		const int32 Idx = CellIndex(X, Y);
+		if (CellTerrainType.IsValidIndex(Idx)
+			&& IsTerrainTypeBlocked(CellTerrainType[Idx]))
+		{
+			return false;
+		}
+		return Key.RequiredClearance <= 0
+			|| ProfileWallDistance[Idx]
+				>= Key.RequiredClearance;
+	};
+
+	TArray<int32> Stack;
+	Stack.Reserve(256);
+	int32 NextLabel = 0;
+	for (int32 Seed = 0; Seed < N; ++Seed)
+	{
+		if (OutComponents[Seed] != -1) continue;
+		const int32 SeedX = Seed % Width;
+		const int32 SeedY = Seed / Width;
+		if (!IsEligible(SeedX, SeedY)) continue;
+
+		const int32 Label = NextLabel++;
+		Stack.Reset();
+		Stack.Add(Seed);
+		OutComponents[Seed] = Label;
+		while (!Stack.IsEmpty())
+		{
+			const int32 Cur = Stack.Pop(EAllowShrinking::No);
+			const int32 CurX = Cur % Width;
+			const int32 CurY = Cur / Width;
+			const uint8 CurConnections =
+				CellConnections[Cur];
+			for (int32 Direction = 0;
+				Direction < 8;
+				++Direction)
+			{
+				if ((CurConnections
+					& (1 << Direction)) == 0)
+				{
+					continue;
+				}
+				const int32 NextX =
+					CurX + SeinNeighborDX[Direction];
+				const int32 NextY =
+					CurY + SeinNeighborDY[Direction];
+				if (!IsEligible(NextX, NextY)) continue;
+
+				if (Direction >= 4)
+				{
+					const uint8 CardinalA =
+						SeinDiagCardinalA[Direction - 4];
+					const uint8 CardinalB =
+						SeinDiagCardinalB[Direction - 4];
+					if ((CurConnections & (1 << CardinalA)) == 0
+						|| (CurConnections & (1 << CardinalB)) == 0)
+					{
+						continue;
+					}
+					if (Key.RequiredClearance > 0)
+					{
+						const int32 CardAX =
+							CurX + SeinNeighborDX[CardinalA];
+						const int32 CardAY =
+							CurY + SeinNeighborDY[CardinalA];
+						const int32 CardBX =
+							CurX + SeinNeighborDX[CardinalB];
+						const int32 CardBY =
+							CurY + SeinNeighborDY[CardinalB];
+						if (!IsValidCoord(CardAX, CardAY)
+							|| !IsValidCoord(CardBX, CardBY)
+							|| ProfileWallDistance[
+								CellIndex(CardAX, CardAY)]
+								< Key.RequiredClearance
+							|| ProfileWallDistance[
+								CellIndex(CardBX, CardBY)]
+								< Key.RequiredClearance)
+						{
+							continue;
+						}
+					}
+				}
+
+				const int32 Next = CellIndex(NextX, NextY);
+				if (OutComponents[Next] != -1) continue;
+				OutComponents[Next] = Label;
+				Stack.Add(Next);
+			}
+		}
+	}
+}
+
 bool USeinNavigationAStar::GetRandomReachablePoint(const FFixedVector& QueryOrigin, FFixedPoint Radius, FFixedRandom& Rng, FFixedVector& OutPoint) const
 {
 	if (CellComponent.Num() != Width * Height || Width <= 0 || Height <= 0) return false;
@@ -977,11 +1318,42 @@ bool USeinNavigationAStar::GetRandomReachablePoint(const FFixedVector& QueryOrig
 	return false;
 }
 
-bool USeinNavigationAStar::IsWorldPositionClear(const FFixedVector& WorldPos, uint8 AgentNavLayerMask) const
+bool USeinNavigationAStar::IsTerrainBlockedAtCell(
+	int32 X,
+	int32 Y,
+	const FGameplayTagContainer& BlockedTerrainTags) const
+{
+	if (BlockedTerrainTags.IsEmpty()
+		|| !IsValidCoord(X, Y))
+	{
+		return false;
+	}
+	const USeinARTSCoreSettings* Settings =
+		GetDefault<USeinARTSCoreSettings>();
+	if (!Settings)
+	{
+		return false;
+	}
+	const int32 StoredType = CellTerrainType.IsValidIndex(
+		CellIndex(X, Y))
+		? static_cast<int32>(CellTerrainType[CellIndex(X, Y)])
+		: 0;
+	const FGameplayTag TerrainTag =
+		Settings->GetTerrainTag(StoredType);
+	return TerrainTag.IsValid()
+		&& BlockedTerrainTags.HasTag(TerrainTag);
+}
+
+bool USeinNavigationAStar::IsWorldPositionDynamicallyClear(
+	const FFixedVector& WorldPos,
+	uint8 AgentNavLayerMask,
+	FSeinEntityHandle Exclude) const
 {
 	int32 X, Y;
-	if (!WorldToGrid(WorldPos, X, Y)) return false;   // off-grid → not a place to stand
-	if (!IsCellPassable(X, Y))        return false;   // static bake (bBakesIntoNav / terrain)
+	if (!WorldToGrid(WorldPos, X, Y))
+	{
+		return false;
+	}
 
 	// Dynamic blockers (bBlocksNav on SeinExtents — the cover walls themselves,
 	// vehicles, deployable cover). Reuse the EXACT per-blocker cell coverage the
@@ -991,6 +1363,7 @@ bool USeinNavigationAStar::IsWorldPositionClear(const FFixedVector& WorldPos, ui
 	// owning entity, so every layer-matching blocker counts.
 	for (const FSeinDynamicBlocker& B : DynamicBlockers)
 	{
+		if (B.Owner == Exclude) continue;
 		if ((B.BlockedNavLayerMask & AgentNavLayerMask) == 0) continue;
 
 		// Cheap bounding-circle reject before the O(covered-cells) rasterization.
@@ -1024,6 +1397,119 @@ bool USeinNavigationAStar::IsWorldPositionClear(const FFixedVector& WorldPos, ui
 				if (CX == X && CY == Y) { bBlocked = true; }
 			});
 		if (bBlocked) return false;
+	}
+	return true;
+}
+
+bool USeinNavigationAStar::IsWorldPositionClear(
+	const FFixedVector& WorldPos,
+	uint8 AgentNavLayerMask) const
+{
+	int32 X, Y;
+	return WorldToGrid(WorldPos, X, Y)
+		&& IsCellPassable(X, Y)
+		&& IsWorldPositionDynamicallyClear(
+			WorldPos,
+			AgentNavLayerMask,
+			FSeinEntityHandle());
+}
+
+bool USeinNavigationAStar::IsWorldPositionClearForAgent(
+	const FFixedVector& WorldPos,
+	const FSeinNavAgentProfile& Agent) const
+{
+	int32 X, Y;
+	return WorldToGrid(WorldPos, X, Y)
+		&& IsCellPassable(X, Y)
+		&& !IsTerrainBlockedAtCell(
+			X, Y, Agent.BlockedTerrainTags)
+		&& IsWorldPositionDynamicallyClear(
+			WorldPos,
+			Agent.AgentNavLayerMask,
+			Agent.Requester);
+}
+
+bool USeinNavigationAStar::IsAuthoritativeDestinationSafeForAgent(
+	const FFixedVector& WorldPos,
+	const FSeinNavAgentProfile& Agent) const
+{
+	int32 X, Y;
+	return WorldToGrid(WorldPos, X, Y)
+		&& !IsTerrainBlockedAtCell(
+			X, Y, Agent.BlockedTerrainTags)
+		&& IsWorldPositionDynamicallyClear(
+			WorldPos,
+			Agent.AgentNavLayerMask,
+			Agent.Requester);
+}
+
+bool USeinNavigationAStar::IsCellClearForAgent(
+	int32 X,
+	int32 Y,
+	const FSeinNavAgentProfile& Agent) const
+{
+	if (!IsCellPassable(X, Y)
+		|| IsTerrainBlockedAtCell(
+			X, Y, Agent.BlockedTerrainTags))
+	{
+		return false;
+	}
+
+	const int32 RequiredClearance = ComputeRequiredClearance(
+		Agent.AgentFootprintRadius,
+		Agent.AgentWallPaddingCells);
+	const int32 Idx = CellIndex(X, Y);
+	if (RequiredClearance > 0
+		&& (!WallDistance.IsValidIndex(Idx)
+			|| WallDistance[Idx] < RequiredClearance))
+	{
+		return false;
+	}
+	if (RequiredClearance > 1
+		&& !IsAgentSpecificClearanceSatisfied(
+			X, Y, RequiredClearance, Agent))
+	{
+		return false;
+	}
+
+	const FFixedVector Center = GridToWorld(X, Y);
+	return IsFootprintClearForAgent(Center, Agent);
+}
+
+bool USeinNavigationAStar::IsAgentSpecificClearanceSatisfied(
+	int32 X,
+	int32 Y,
+	int32 RequiredClearance,
+	const FSeinNavAgentProfile& Agent) const
+{
+	// Static WallDistance already handled the baked obstacle field. Repeat the
+	// same Chebyshev threshold only for request-specific obstacles: forbidden
+	// terrain and layer-matching dynamic stamps. Without this, an agent-aware
+	// formation projection could choose a cell beside water/a deployable even
+	// though the first A* request rejects that cell for the same wall padding.
+	const int32 ScanRadius = FMath::Max(RequiredClearance - 1, 0);
+	for (int32 DY = -ScanRadius; DY <= ScanRadius; ++DY)
+	{
+		for (int32 DX = -ScanRadius; DX <= ScanRadius; ++DX)
+		{
+			const int32 SampleX = X + DX;
+			const int32 SampleY = Y + DY;
+			if (!IsValidCoord(SampleX, SampleY)) continue;
+			if (IsTerrainBlockedAtCell(
+				SampleX,
+				SampleY,
+				Agent.BlockedTerrainTags))
+			{
+				return false;
+			}
+			if (!IsWorldPositionDynamicallyClear(
+				GridToWorld(SampleX, SampleY),
+				Agent.AgentNavLayerMask,
+				Agent.Requester))
+			{
+				return false;
+			}
+		}
 	}
 	return true;
 }
@@ -1166,20 +1652,39 @@ int32 USeinNavigationAStar::GetEffectiveWD(int32 X, int32 Y, int32 MaxR, FAStarS
 	const int32 StaticWD = WallDistance.IsValidIndex(Idx)
 		? static_cast<int32>(WallDistance[Idx]) : 0;
 
-	// Fast paths — if any of these trip, dynamic contribution is "no nearby
-	// blocker" and the static WallDistance answer is correct as-is.
-	if (Scratch.DynamicBlocked.Num() != WallDistance.Num()) return StaticWD;
-	if (MaxR <= 0)                                          return StaticWD;
+	// Fast paths — if this request has neither a valid dynamic overlay nor
+	// barred terrain, the baked static WallDistance is already the answer.
+	const bool bHasDynamicOverlay =
+		Scratch.DynamicBlocked.Num() == WallDistance.Num();
+	if (!bHasDynamicOverlay && !Scratch.bRequestHasBlockedTypes)
+	{
+		return StaticWD;
+	}
+	if (MaxR <= 0) return StaticWD;
 
 	// Rect-based early-out: if (X, Y) is outside the dirty rect inflated by
 	// MaxR, no dyn-blocked cell can be within MaxR Chebyshev distance.
 	// `Min.X > Max.X` is the sentinel for "empty overlay" (set in
 	// BuildDynamicBlockedOverlay reset path).
-	if (Scratch.LastOverlayDirtyRect.Min.X > Scratch.LastOverlayDirtyRect.Max.X) return StaticWD;
-	if (X < Scratch.LastOverlayDirtyRect.Min.X - MaxR) return StaticWD;
-	if (X > Scratch.LastOverlayDirtyRect.Max.X + MaxR) return StaticWD;
-	if (Y < Scratch.LastOverlayDirtyRect.Min.Y - MaxR) return StaticWD;
-	if (Y > Scratch.LastOverlayDirtyRect.Max.Y + MaxR) return StaticWD;
+	// A blocked terrain type can occur anywhere in the grid, so the dynamic
+	// overlay's dirty rectangle is a valid early-out only for the common
+	// no-terrain-filter case.
+	if (!Scratch.bRequestHasBlockedTypes)
+	{
+		if (Scratch.LastOverlayDirtyRect.Min.X
+			> Scratch.LastOverlayDirtyRect.Max.X)
+		{
+			return StaticWD;
+		}
+		if (X < Scratch.LastOverlayDirtyRect.Min.X - MaxR)
+			return StaticWD;
+		if (X > Scratch.LastOverlayDirtyRect.Max.X + MaxR)
+			return StaticWD;
+		if (Y < Scratch.LastOverlayDirtyRect.Min.Y - MaxR)
+			return StaticWD;
+		if (Y > Scratch.LastOverlayDirtyRect.Max.Y + MaxR)
+			return StaticWD;
+	}
 
 	// Per-request cache lookup (lazy validation via gen tag, same pattern as
 	// the A* SearchCellGen state).
@@ -1191,7 +1696,8 @@ int32 USeinNavigationAStar::GetEffectiveWD(int32 X, int32 Y, int32 MaxR, FAStarS
 	}
 
 	// Slow path — ring scan from (X, Y) outward.
-	const int32 DynWD = ComputeDynamicWDRingScan(X, Y, MaxR, Scratch);
+	const int32 DynWD = ComputeRequestObstacleDistanceRingScan(
+		X, Y, MaxR, Scratch);
 
 	// Cache the dynamic component. Capped to 255 (uint8 storage). Subsequent
 	// reads (A* diagonal anti-squeeze, Push gradient walk) get O(1).
@@ -1204,13 +1710,17 @@ int32 USeinNavigationAStar::GetEffectiveWD(int32 X, int32 Y, int32 MaxR, FAStarS
 	return FMath::Min(StaticWD, DynWD);
 }
 
-int32 USeinNavigationAStar::ComputeDynamicWDRingScan(int32 X, int32 Y, int32 MaxR, FAStarScratch& Scratch) const
+int32 USeinNavigationAStar::ComputeRequestObstacleDistanceRingScan(
+	int32 X,
+	int32 Y,
+	int32 MaxR,
+	FAStarScratch& Scratch) const
 {
 	// Cell itself blocked → distance 0. (Shouldn't happen if caller filtered
 	// via IsCellPassableForPath, but defensive — A* C-space gate reads the
 	// CURRENT cell's WD too, not just neighbors.)
 	const int32 Idx = CellIndex(X, Y);
-	if (Scratch.DynamicBlocked[Idx] != 0) return 0;
+	if (IsRequestObstacleCell(Idx, Scratch)) return 0;
 
 	// Walk outward in Chebyshev rings (R=1, 2, 3, ...). At each ring, scan
 	// only the FRAME (top row, bottom row, left col, right col minus corners).
@@ -1232,7 +1742,8 @@ int32 USeinNavigationAStar::ComputeDynamicWDRingScan(int32 X, int32 Y, int32 Max
 			const int32 DXMax = FMath::Min( R, Width - 1 - X);
 			for (int32 DX = DXMin; DX <= DXMax; ++DX)
 			{
-				if (Scratch.DynamicBlocked[CellIndex(X + DX, YTop)] != 0) return R;
+				if (IsRequestObstacleCell(
+					CellIndex(X + DX, YTop), Scratch)) return R;
 			}
 		}
 		if (YBot >= 0 && YBot < Height)
@@ -1241,7 +1752,8 @@ int32 USeinNavigationAStar::ComputeDynamicWDRingScan(int32 X, int32 Y, int32 Max
 			const int32 DXMax = FMath::Min( R, Width - 1 - X);
 			for (int32 DX = DXMin; DX <= DXMax; ++DX)
 			{
-				if (Scratch.DynamicBlocked[CellIndex(X + DX, YBot)] != 0) return R;
+				if (IsRequestObstacleCell(
+					CellIndex(X + DX, YBot), Scratch)) return R;
 			}
 		}
 
@@ -1251,8 +1763,10 @@ int32 USeinNavigationAStar::ComputeDynamicWDRingScan(int32 X, int32 Y, int32 Max
 		for (int32 DY = DYMin; DY <= DYMax; ++DY)
 		{
 			const int32 NY = Y + DY;
-			if (XLeft >= 0          && Scratch.DynamicBlocked[CellIndex(XLeft,  NY)] != 0) return R;
-			if (XRight < Width      && Scratch.DynamicBlocked[CellIndex(XRight, NY)] != 0) return R;
+			if (XLeft >= 0 && IsRequestObstacleCell(
+				CellIndex(XLeft, NY), Scratch)) return R;
+			if (XRight < Width && IsRequestObstacleCell(
+				CellIndex(XRight, NY), Scratch)) return R;
 		}
 	}
 
@@ -1402,6 +1916,45 @@ bool USeinNavigationAStar::ProjectPointToNav(const FFixedVector& WorldPos, FFixe
 		OutProjected);
 }
 
+bool USeinNavigationAStar::ProjectPointToNavForAgent(
+	const FFixedVector& WorldPos,
+	const FSeinNavAgentProfile& Agent,
+	FFixedVector& OutProjected) const
+{
+	if (!HasRuntimeData()) return false;
+
+	int32 X, Y;
+	if (!WorldToGrid(WorldPos, X, Y))
+	{
+		if (Width <= 0 || Height <= 0
+			|| CellSize <= FFixedPoint::Zero)
+		{
+			return false;
+		}
+		const FFixedPoint LocalX = WorldPos.X - Origin.X;
+		const FFixedPoint LocalY = WorldPos.Y - Origin.Y;
+		X = FMath::Clamp(
+			(LocalX / CellSize).ToInt(), 0, Width - 1);
+		Y = FMath::Clamp(
+			(LocalY / CellSize).ToInt(), 0, Height - 1);
+	}
+
+	const USeinARTSCoreSettings* Settings =
+		GetDefault<USeinARTSCoreSettings>();
+	const int32 MaxProjectionRingRadius = Settings
+		? Settings->NavProjectionMaxRingRadius
+		: 30;
+	return RingScanForCell(
+		X,
+		Y,
+		MaxProjectionRingRadius,
+		[this, &Agent](int32 CX, int32 CY)
+		{
+			return IsCellClearForAgent(CX, CY, Agent);
+		},
+		OutProjected);
+}
+
 bool USeinNavigationAStar::ProjectPointToNavOnElevation(const FFixedVector& WorldPos, FFixedVector& OutProjected) const
 {
 	if (!HasRuntimeData()) return false;
@@ -1454,6 +2007,39 @@ bool USeinNavigationAStar::ProjectPointToNavFree(
 	const TArray<FFixedPoint>& AvoidRadii,
 	FFixedVector& OutProjected) const
 {
+	return ProjectPointToNavFreeInternal(
+		WorldPos,
+		SelfRadius,
+		nullptr,
+		AvoidCentres,
+		AvoidRadii,
+		OutProjected);
+}
+
+bool USeinNavigationAStar::ProjectPointToNavFreeForAgent(
+	const FFixedVector& WorldPos,
+	const FSeinNavAgentProfile& Agent,
+	const TArray<FFixedVector>& AvoidCentres,
+	const TArray<FFixedPoint>& AvoidRadii,
+	FFixedVector& OutProjected) const
+{
+	return ProjectPointToNavFreeInternal(
+		WorldPos,
+		Agent.AgentFootprintRadius,
+		&Agent,
+		AvoidCentres,
+		AvoidRadii,
+		OutProjected);
+}
+
+bool USeinNavigationAStar::ProjectPointToNavFreeInternal(
+	const FFixedVector& WorldPos,
+	FFixedPoint SelfRadius,
+	const FSeinNavAgentProfile* Agent,
+	const TArray<FFixedVector>& AvoidCentres,
+	const TArray<FFixedPoint>& AvoidRadii,
+	FFixedVector& OutProjected) const
+{
 	if (!HasRuntimeData()) return false;
 
 	int32 X, Y;
@@ -1495,7 +2081,14 @@ bool USeinNavigationAStar::ProjectPointToNavFree(
 	// the elevation constraint so a free cell on the wrong elevation still beats overflowing the map.
 	auto IsAcceptable = [&](int32 CX, int32 CY, bool bRequireElevation) -> bool
 	{
-		if (!IsCellPassable(CX, CY)) return false;
+		if (Agent)
+		{
+			if (!IsCellClearForAgent(CX, CY, *Agent)) return false;
+		}
+		else if (!IsCellPassable(CX, CY))
+		{
+			return false;
+		}
 		if (bRequireElevation)
 		{
 			const FFixedPoint CellZ = CellHeight[CellIndex(CX, CY)];
@@ -1522,7 +2115,11 @@ bool USeinNavigationAStar::ProjectPointToNavFree(
 
 	// No free cell within scan radius (dense crowd / tiny pocket) — never drop the slot: fall back to
 	// the occupancy-blind nearest walkable cell. The resolver's de-overlap pass remains the last word.
-	return ProjectPointToNavOnElevation(WorldPos, OutProjected);
+	return Agent
+		? ProjectPointToNavForAgent(
+			WorldPos, *Agent, OutProjected)
+		: ProjectPointToNavOnElevation(
+			WorldPos, OutProjected);
 }
 
 // ============================================================================
@@ -1557,16 +2154,9 @@ namespace
 	/** 8-neighbor offsets, indexed by direction:
 	 *    0:E(+1,0) 1:W(-1,0) 2:N(0,+1) 3:S(0,-1)
 	 *    4:NE(+1,+1) 5:SE(+1,-1) 6:NW(-1,+1) 7:SW(-1,-1) */
-	static const int32 SeinNeighborDX[8]   = { 1, -1,  0,  0,  1,  1, -1, -1 };
-	static const int32 SeinNeighborDY[8]   = { 0,  0,  1, -1,  1, -1,  1, -1 };
-	static const int32 SeinNeighborCost[8] = { 10, 10, 10, 10, 14, 14, 14, 14 };
-
 	/** For a diagonal direction index (4..7), the two cardinal direction indices
 	 *  that flank it (used by the diagonal anti-squeeze checks). Index with
 	 *  (DirIdx - 4). */
-	static const uint8 SeinDiagCardinalA[4] = { 0, 0, 1, 1 };
-	static const uint8 SeinDiagCardinalB[4] = { 2, 3, 2, 3 };
-
 	/** Map a single grid step (dx, dy) ∈ {-1,0,+1}² to its 8-neighbor direction
 	 *  index, or -1 for a no-move (0,0). Matches the bake-time bitmask ordering. */
 	FORCEINLINE int32 SeinStepToDirIdx(int32 StepDX, int32 StepDY)
@@ -2312,7 +2902,8 @@ int32 USeinNavigationAStar::ComputeRequiredClearance(FFixedPoint FootprintRadius
 		FootprintCells = Ratio.CeilToInt();
 	}
 
-	int32 Required = FootprintCells + WallPaddingCells;
+	int32 Required = FootprintCells
+		+ FMath::Max(WallPaddingCells, 0);
 	if (Required > static_cast<int32>(WallDistanceCap))
 	{
 		Required = WallDistanceCap;
@@ -2344,6 +2935,7 @@ FFixedVector USeinNavigationAStar::QueryDirection(const FSeinDirectionQuery& Que
 	Req.BlockedTerrainTags   = Query.BlockedTerrainTags;
 	Req.AgentNavLayerMask    = Query.AgentNavLayerMask;
 	Req.AgentFootprintRadius = Query.AgentFootprintRadius;
+	Req.AgentWallPaddingCells = Query.AgentWallPaddingCells;
 	Req.GroupId              = Query.GroupId;
 
 	FSeinPath Path;
@@ -2363,6 +2955,17 @@ bool USeinNavigationAStar::FindCellPathInternal(const FSeinPathRequest& Request,
 {
 	OutPath.Clear();
 	if (!HasRuntimeData()) return false;
+
+	FSeinNavAgentProfile RequestAgent;
+	RequestAgent.Requester = Request.Requester;
+	RequestAgent.BlockedTerrainTags =
+		Request.BlockedTerrainTags;
+	RequestAgent.AgentNavLayerMask =
+		Request.AgentNavLayerMask;
+	RequestAgent.AgentFootprintRadius =
+		Request.AgentFootprintRadius;
+	RequestAgent.AgentWallPaddingCells =
+		Request.AgentWallPaddingCells;
 
 	// Diagnostic: dump per-request clearance inputs. Lets us confirm at log
 	// time that the caller-provided WallPaddingCells + FootprintRadius reach
@@ -2419,19 +3022,10 @@ bool USeinNavigationAStar::FindCellPathInternal(const FSeinPathRequest& Request,
 	Scratch.bRequestHasBlockedTypes = false;
 	if (!Request.BlockedTerrainTags.IsEmpty() && CellTerrainType.Num() == Width * Height)
 	{
-		if (Scratch.RequestBlockedType.Num() != 256) Scratch.RequestBlockedType.SetNumZeroed(256);
-		else FMemory::Memzero(Scratch.RequestBlockedType.GetData(), Scratch.RequestBlockedType.Num());
-		if (const USeinARTSCoreSettings* TerrainSettings = GetDefault<USeinARTSCoreSettings>())
-		{
-			for (int32 t = 0; t < TerrainSettings->TerrainTypes.Num(); ++t)
-			{
-				if (Request.BlockedTerrainTags.HasTag(TerrainSettings->TerrainTypes[t].TerrainTag))
-				{
-					Scratch.RequestBlockedType[t + 1] = 1; // stored index = array pos + 1 (reserved-0 Default)
-					Scratch.bRequestHasBlockedTypes = true;
-				}
-			}
-		}
+		Scratch.bRequestHasBlockedTypes =
+			BuildBlockedTerrainTypeLookup(
+				Request.BlockedTerrainTags,
+				Scratch.RequestBlockedType);
 	}
 
 	// Invalidate the per-request dynamic-WD cache by bumping the gen — ALWAYS, even when the overlay
@@ -2583,7 +3177,12 @@ bool USeinNavigationAStar::FindCellPathInternal(const FSeinPathRequest& Request,
 			// genuinely sealed deep in a wall), keep the cell-center stop so we never
 			// path the unit through the wall.
 			int32 GoalX, GoalY, LastX, LastY;
-			if (WorldToGrid(Request.End, GoalX, GoalY)
+			const bool bGoalInGrid =
+				WorldToGrid(Request.End, GoalX, GoalY);
+			if (bGoalInGrid
+				&& IsAuthoritativeFootprintSafeForAgent(
+					Request.End,
+					RequestAgent)
 				&& WorldToGrid(OutPath.Waypoints.Last(), LastX, LastY)
 				&& FMath::Max(FMath::Abs(GoalX - LastX), FMath::Abs(GoalY - LastY)) <= 1)
 			{
@@ -2614,6 +3213,17 @@ bool USeinNavigationAStar::FindPath(const FSeinPathRequest& Request, FSeinPath& 
 
 bool USeinNavigationAStar::FindPathInternal(const FSeinPathRequest& Request, FSeinPath& OutPath, FAStarScratch& Scratch) const
 {
+	FSeinNavAgentProfile RequestAgent;
+	RequestAgent.Requester = Request.Requester;
+	RequestAgent.BlockedTerrainTags =
+		Request.BlockedTerrainTags;
+	RequestAgent.AgentNavLayerMask =
+		Request.AgentNavLayerMask;
+	RequestAgent.AgentFootprintRadius =
+		Request.AgentFootprintRadius;
+	RequestAgent.AgentWallPaddingCells =
+		Request.AgentWallPaddingCells;
+
 	// 2D configuration-space cell A* + LoS smoothing. A* runs in the unit's
 	// configuration space (cells where `WallDistance >= Required` for this
 	// footprint), so emitted waypoints and the segments between them are
@@ -2640,7 +3250,12 @@ bool USeinNavigationAStar::FindPathInternal(const FSeinPathRequest& Request, FSe
 		// The wall-push must NOT relocate an authoritative destination (cover slot)
 		// off its slot — the slot belongs AT the wall. Restore the exact End that
 		// FindCellPath committed as the final waypoint (root CLAUDE.md #6).
-		if (Request.bAuthoritativeDestination && OutPath.Waypoints.Num() > 0)
+		if (Request.bAuthoritativeDestination
+			&& !OutPath.bIsPartial
+			&& IsAuthoritativeFootprintSafeForAgent(
+				Request.End,
+				RequestAgent)
+			&& OutPath.Waypoints.Num() > 0)
 		{
 			OutPath.Waypoints.Last() = Request.End;
 		}
@@ -3174,12 +3789,16 @@ bool USeinNavigationAStar::QueryEscapeTarget(
 	//   3. the STRAIGHT segment From→candidate is clear at half-cell samples —
 	//      the greedy chain can bend around a wall tip the straight leg would
 	//      then cross.
-	const USeinARTSCoreSettings* TerrainSettings = !Query.BlockedTerrainTags.IsEmpty()
-		? GetDefault<USeinARTSCoreSettings>() : nullptr;
+	FSeinNavAgentProfile Agent;
+	Agent.Requester = Query.Requester;
+	Agent.BlockedTerrainTags = Query.BlockedTerrainTags;
+	Agent.AgentNavLayerMask = Query.AgentNavLayerMask;
+	Agent.AgentFootprintRadius =
+		Query.AgentFootprintRadius;
 
 	auto IsFootprintClearAt = [&](const FFixedVector& Center) -> bool
 	{
-		if (!IsWorldPositionClear(Center, Query.AgentNavLayerMask)) return false;
+		if (!IsWorldPositionClearForAgent(Center, Agent)) return false;
 		const FFixedPoint R = Query.AgentFootprintRadius;
 		if (R <= FFixedPoint::Zero) return true;
 		// 4 axis + 4 diagonal ring samples (diagonal offset = R·sin45°),
@@ -3196,7 +3815,7 @@ bool USeinNavigationAStar::QueryEscapeTarget(
 			FFixedVector(Center.X - D, Center.Y - D, Center.Z) };
 		for (const FFixedVector& S : Ring)
 		{
-			if (!IsWorldPositionClear(S, Query.AgentNavLayerMask)) return false;
+			if (!IsWorldPositionClearForAgent(S, Agent)) return false;
 		}
 		return true;
 	};
@@ -3216,7 +3835,7 @@ bool USeinNavigationAStar::QueryEscapeTarget(
 			const FFixedPoint T = FFixedPoint::FromInt(s) / FFixedPoint::FromInt(Steps);
 			const FFixedVector Sample(
 				From.X + Delta.X * T, From.Y + Delta.Y * T, From.Z);
-			if (!IsWorldPositionClear(Sample, Query.AgentNavLayerMask)) return false;
+			if (!IsWorldPositionClearForAgent(Sample, Agent)) return false;
 		}
 		return true;
 	};
@@ -3226,16 +3845,6 @@ bool USeinNavigationAStar::QueryEscapeTarget(
 		const int32 CX = Chain[i].Key;
 		const int32 CY = Chain[i].Value;
 		const FFixedVector Candidate = GridToWorld(CX, CY);
-		if (TerrainSettings)
-		{
-			const int32 CIdx = CellIndex(CX, CY);
-			const int32 T = CellTerrainType.IsValidIndex(CIdx) ? CellTerrainType[CIdx] : 0;
-			if (TerrainSettings->TerrainTypes.IsValidIndex(T)
-				&& Query.BlockedTerrainTags.HasTag(TerrainSettings->TerrainTypes[T].TerrainTag))
-			{
-				continue;
-			}
-		}
 		if (!IsFootprintClearAt(Candidate)) continue;
 		if (!IsSegmentClear(Query.From, Candidate)) continue;
 		OutTarget = Candidate;

@@ -275,17 +275,39 @@ private:
 
 public:
 	virtual bool IsReachable(const FFixedVector& From, const FFixedVector& To, const FGameplayTagContainer& AgentTags) const override;
+	virtual bool IsReachableForAgent(
+		const FFixedVector& From,
+		const FFixedVector& To,
+		const FSeinNavAgentProfile& Agent) const override;
+	virtual void WarmAgentProfile(
+		const FSeinNavAgentProfile& Agent) const override;
 	virtual bool GetRandomReachablePoint(const FFixedVector& QueryOrigin, FFixedPoint Radius, FFixedRandom& Rng, FFixedVector& OutPoint) const override;
 	virtual bool IsPassable(const FFixedVector& WorldPos) const override;
 	virtual bool IsWorldPositionClear(const FFixedVector& WorldPos, uint8 AgentNavLayerMask) const override;
+	virtual bool IsWorldPositionClearForAgent(
+		const FFixedVector& WorldPos,
+		const FSeinNavAgentProfile& Agent) const override;
+	virtual bool IsAuthoritativeDestinationSafeForAgent(
+		const FFixedVector& WorldPos,
+		const FSeinNavAgentProfile& Agent) const override;
 	virtual bool IsPlacementValid(const FFixedVector& CenterWorld, FFixedPoint YawDegrees,
 		const FSeinExtentsShape& Shape, uint8 AgentLayerMask) const override;
 	virtual FFixedPoint GetCellSize() const override { return CellSize; }
 	virtual bool ProjectPointToNav(const FFixedVector& WorldPos, FFixedVector& OutProjected) const override;
+	virtual bool ProjectPointToNavForAgent(
+		const FFixedVector& WorldPos,
+		const FSeinNavAgentProfile& Agent,
+		FFixedVector& OutProjected) const override;
 	virtual bool ProjectPointToNavOnElevation(const FFixedVector& WorldPos, FFixedVector& OutProjected) const override;
 	virtual bool ProjectPointToNavFree(
 		const FFixedVector& WorldPos,
 		FFixedPoint SelfRadius,
+		const TArray<FFixedVector>& AvoidCentres,
+		const TArray<FFixedPoint>& AvoidRadii,
+		FFixedVector& OutProjected) const override;
+	virtual bool ProjectPointToNavFreeForAgent(
+		const FFixedVector& WorldPos,
+		const FSeinNavAgentProfile& Agent,
 		const TArray<FFixedVector>& AvoidCentres,
 		const TArray<FFixedPoint>& AvoidRadii,
 		FFixedVector& OutProjected) const override;
@@ -466,6 +488,36 @@ private:
 	 *  serialized. Recomputed on every grid load alongside WallDistance. */
 	TArray<int32> CellComponent;
 
+	/** Canonical key for a unit class's STATIC navigation topology. Dynamic
+	 *  blocker masks and requester identity are deliberately absent: command
+	 *  validation answers whether the terrain is fundamentally reachable, not
+	 *  whether a transient blocker happens to occupy the route this tick. */
+	struct FReachabilityProfileKey
+	{
+		int32 RequiredClearance = 0;
+		uint64 BlockedTerrainTypeWords[4] = { 0, 0, 0, 0 };
+
+		bool operator==(const FReachabilityProfileKey& Other) const
+		{
+			return RequiredClearance == Other.RequiredClearance
+				&& BlockedTerrainTypeWords[0] == Other.BlockedTerrainTypeWords[0]
+				&& BlockedTerrainTypeWords[1] == Other.BlockedTerrainTypeWords[1]
+				&& BlockedTerrainTypeWords[2] == Other.BlockedTerrainTypeWords[2]
+				&& BlockedTerrainTypeWords[3] == Other.BlockedTerrainTypeWords[3];
+		}
+	};
+
+	/** Lazily built component labels for one static agent topology. A bounded
+	 *  FIFO keeps large maps from accumulating one grid-sized array per
+	 *  designer experiment while making the common case (many units sharing a
+	 *  handful of movement profiles) O(1) per command after the first use. */
+	struct FReachabilityProfileCacheEntry
+	{
+		FReachabilityProfileKey Key;
+		TArray<int32> Components;
+	};
+	mutable TArray<FReachabilityProfileCacheEntry> ReachabilityProfileCache;
+
 	/** Runtime list of dynamic blockers, refreshed each PreTick by the
 	 *  nav-blocker stamping system. FindPath rebuilds the per-call
 	 *  DynamicBlocked overlay from this list (excluding the requester so
@@ -489,6 +541,35 @@ protected:
 		return C > 0 && C < 255;
 	}
 
+	bool IsTerrainBlockedAtCell(
+		int32 X,
+		int32 Y,
+		const FGameplayTagContainer& BlockedTerrainTags) const;
+
+	bool IsWorldPositionDynamicallyClear(
+		const FFixedVector& WorldPos,
+		uint8 AgentNavLayerMask,
+		FSeinEntityHandle Exclude) const;
+
+	bool IsCellClearForAgent(
+		int32 X,
+		int32 Y,
+		const FSeinNavAgentProfile& Agent) const;
+
+	bool IsAgentSpecificClearanceSatisfied(
+		int32 X,
+		int32 Y,
+		int32 RequiredClearance,
+		const FSeinNavAgentProfile& Agent) const;
+
+	bool ProjectPointToNavFreeInternal(
+		const FFixedVector& WorldPos,
+		FFixedPoint SelfRadius,
+		const FSeinNavAgentProfile* Agent,
+		const TArray<FFixedVector>& AvoidCentres,
+		const TArray<FFixedPoint>& AvoidRadii,
+		FFixedVector& OutProjected) const;
+
 	/** Effective passability for a FindPath in progress: static cell + the
 	 *  current request's dynamic-blocked overlay. DynamicBlocked is rebuilt
 	 *  at the top of FindPath (with the requester excluded + agent mask
@@ -508,6 +589,15 @@ protected:
 		return Scratch.DynamicBlocked[Idx] == 0;
 	}
 
+	FORCEINLINE bool IsRequestObstacleCell(int32 Idx, const FAStarScratch& Scratch) const
+	{
+		const bool bTerrainBlocked = Scratch.bRequestHasBlockedTypes
+			&& Scratch.RequestBlockedType[CellTerrainType[Idx]] != 0;
+		const bool bDynamicBlocked = Scratch.DynamicBlocked.IsValidIndex(Idx)
+			&& Scratch.DynamicBlocked[Idx] != 0;
+		return bTerrainBlocked || bDynamicBlocked;
+	}
+
 	/** Stamp DynamicBlockers (skipping `Exclude` + filtering to those whose
 	 *  BlockedNavLayerMask intersects `AgentNavLayerMask`) into DynamicBlocked.
 	 *  Called at the top of FindPath so the overlay matches BOTH the
@@ -515,8 +605,10 @@ protected:
 	 *  doesn't stamp for amphibious agents). */
 	void BuildDynamicBlockedOverlay(FSeinEntityHandle Exclude, uint8 AgentNavLayerMask, FAStarScratch& Scratch) const;
 
-	/** Effective wall-distance at (X, Y): `min(static WallDistance, dynamic-
-	 *  blocker Chebyshev distance)`, capped at `MaxR` for the dynamic side.
+	/** Effective wall-distance at (X, Y): `min(static WallDistance, distance
+	 *  to the nearest request-specific obstacle)`, capped at `MaxR` for the
+	 *  request-specific side. Obstacles are both matching dynamic blockers and
+	 *  terrain types barred by this agent.
 	 *
 	 *  Returns the static WallDistance if (a) the dynamic overlay is empty,
 	 *  (b) the cell is outside `LastOverlayDirtyRect` inflated by MaxR (no
@@ -531,14 +623,32 @@ protected:
 	 *
 	 *  Called from A* C-space gate, HasLineOfSight clearance gate, and
 	 *  PushWaypointsAwayFromWalls. All three observe the same effective
-	 *  clearance — so dynamic blockers act on path topology, smoothing,
-	 *  AND waypoint push, exactly like static walls do. */
+	 *  clearance — so per-agent terrain and dynamic blockers act on path
+	 *  topology, smoothing, AND waypoint push exactly like static walls do. */
 	int32 GetEffectiveWD(int32 X, int32 Y, int32 MaxR, FAStarScratch& Scratch) const;
 
 private:
-	/** Slow-path ring scan for `GetEffectiveWD` — exits early on first
-	 *  encountered dyn-blocked cell. Caller guarantees (X, Y) is valid. */
-	int32 ComputeDynamicWDRingScan(int32 X, int32 Y, int32 MaxR, FAStarScratch& Scratch) const;
+	/** Slow-path ring scan for `GetEffectiveWD` — exits early on the first
+	 *  terrain- or dynamically-blocked cell. Caller guarantees validity. */
+	int32 ComputeRequestObstacleDistanceRingScan(
+		int32 X,
+		int32 Y,
+		int32 MaxR,
+		FAStarScratch& Scratch) const;
+
+	/** Resolve hierarchical terrain tags once into the stored 0..255 terrain
+	 *  index domain used by both path scratch and reachability caches. */
+	bool BuildBlockedTerrainTypeLookup(
+		const FGameplayTagContainer& BlockedTerrainTags,
+		TArray<uint8>& OutBlockedTypes) const;
+
+	FReachabilityProfileKey MakeReachabilityProfileKey(
+		const FSeinNavAgentProfile& Agent) const;
+	const TArray<int32>* FindOrBuildReachabilityComponents(
+		const FReachabilityProfileKey& Key) const;
+	void BuildReachabilityComponents(
+		const FReachabilityProfileKey& Key,
+		TArray<int32>& OutComponents) const;
 
 	/** Shared O(8R)-per-ring outward scan around (StartX, StartY) used by the three
 	 *  ProjectPointToNav* publics. Checks the start cell first, then each ring at

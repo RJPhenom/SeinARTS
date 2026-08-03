@@ -18,6 +18,7 @@
 #include "Core/SeinFactionID.h"
 #include "Core/SeinPlayerState.h"
 #include "Core/SeinTickPhase.h"
+#include "Navigation/SeinNavAgentProfile.h"
 #include "Simulation/ComponentStorage.h"
 #include "Simulation/SeinMatchBootstrapBarrier.h"
 #include "Simulation/SeinSnapshotRestoreAuthority.h"
@@ -187,7 +188,8 @@ DECLARE_MULTICAST_DELEGATE_ThreeParams(
  *
  *   From:      entity's current sim position (fixed-point)
  *   To:        target sim position the command asked to activate against
- *   AgentTags: owning entity's tag container (for navlink eligibility filtering)
+ *   Agent:     complete policy resolved once from the acting entity's core
+ *              components and tags.
  *
  * Return true = target is reachable. False = pre-reject with PathUnreachable.
  * Sim skips the gate if no resolver is registered (tests, nav-less games).
@@ -197,7 +199,8 @@ DECLARE_MULTICAST_DELEGATE_ThreeParams(
  * pathability check is fixed-point throughout.
  */
 DECLARE_DELEGATE_RetVal_ThreeParams(bool, FSeinPathableTargetResolver,
-	const FFixedVector& /*FromWorld*/, const FFixedVector& /*ToWorld*/, const FGameplayTagContainer& /*AgentTags*/);
+	const FFixedVector& /*FromWorld*/, const FFixedVector& /*ToWorld*/,
+	const FSeinNavAgentProfile& /*Agent*/);
 
 /**
  * Delegate sim uses to ask "is this target visible for the owner's VisionGroup?"
@@ -256,6 +259,13 @@ DECLARE_DELEGATE_RetVal_FourParams(bool, FSeinFootprintPlacementResolver,
 DECLARE_DELEGATE_RetVal_OneParam(bool, FSeinPassableResolver,
 	const FFixedVector& /*WorldPos*/);
 
+/** Per-agent dynamic passability. Unlike the generic ground-agent resolver,
+ *  this carries the already-resolved terrain, nav-layer, footprint, and
+ *  self-exclusion policy. */
+DECLARE_DELEGATE_RetVal_TwoParams(bool, FSeinAgentPassableResolver,
+	const FSeinNavAgentProfile& /*Agent*/,
+	const FFixedVector& /*WorldPos*/);
+
 /**
  * Delegate sim uses to snap a world position to the nearest passable cell.
  * Registered by USeinNavigationSubsystem (SeinARTSNavigation) at OnWorldBeginPlay.
@@ -296,6 +306,25 @@ DECLARE_DELEGATE_RetVal_FiveParams(bool, FSeinNavProjectFreeResolver,
 	const FFixedVector& /*InWorld*/, FFixedPoint /*SelfRadius*/,
 	const TArray<FFixedVector>& /*AvoidCentres*/, const TArray<FFixedPoint>& /*AvoidRadii*/,
 	FFixedVector& /*OutProjected*/);
+
+/** Heterogeneous-agent sibling of FSeinNavProjectFreeResolver. Used by
+ *  formation layout so infantry, amphibious units, and vehicles do not share
+ *  a generic projection policy merely because they received one order. */
+DECLARE_DELEGATE_RetVal_FiveParams(bool, FSeinNavProjectAgentFreeResolver,
+	const FSeinNavAgentProfile& /*Agent*/,
+	const FFixedVector& /*InWorld*/,
+	const TArray<FFixedVector>& /*AvoidCentres*/,
+	const TArray<FFixedPoint>& /*AvoidRadii*/,
+	FFixedVector& /*OutProjected*/);
+
+/** True when an authoritative destination is safe for this agent after
+ *  ignoring only the coarse static bake. Dynamic blockers and forbidden
+ *  terrain remain hard failures. */
+DECLARE_DELEGATE_RetVal_TwoParams(
+	bool,
+	FSeinAgentAuthoritativeDestinationSafetyResolver,
+	const FSeinNavAgentProfile& /*Agent*/,
+	const FFixedVector& /*WorldPos*/);
 
 /**
  * Delegate the sim uses to ask whether a world position is an AUTHORITATIVE
@@ -843,6 +872,7 @@ public:
 	 *  units are never dispatched onto a cell a dynamically-blocking wall occupies.
 	 *  If unbound, defaults to permit (tests / nav-less games). */
 	FSeinPassableResolver DynamicPassableResolver;
+	FSeinAgentPassableResolver AgentDynamicPassableResolver;
 
 	/** Cross-module resolver for "snap to nearest passable cell" — used by
 	 *  formation resolvers to ensure slot positions land on walkable
@@ -856,6 +886,11 @@ public:
 	 *  USeinFormation::ProjectPositionsToNavigable to clamp off-nav formation slots onto free play-area
 	 *  space without piling. */
 	FSeinNavProjectFreeResolver NavProjectFreeResolver;
+	FSeinNavProjectAgentFreeResolver NavProjectAgentFreeResolver;
+
+	/** Agent-aware safety half of authoritative destination admission. */
+	FSeinAgentAuthoritativeDestinationSafetyResolver
+		AgentAuthoritativeDestinationSafetyResolver;
 
 	/** Cross-module resolver: "is this world position an AUTHORITATIVE destination
 	 *  (a cover slot) that overrules the coarse nav bake?" Bound by
@@ -1329,6 +1364,16 @@ public:
 	/** Return the entity's CombinedTags (the refcount > 0 projection). Returns
 	 *  a const ref to the empty container if the entity has no tag state. */
 	const FGameplayTagContainer& GetEntityTags(FSeinEntityHandle Handle) const;
+
+	/** Resolve the complete navigation policy owned by the entity's canonical
+	 *  tags, Navigation component, and Extents footprint. The overload accepts
+	 *  a radius already hoisted by a hot caller (collision/formation) so it does
+	 *  not repeat the Extents shape scan. */
+	FSeinNavAgentProfile BuildNavAgentProfile(
+		FSeinEntityHandle Handle) const;
+	FSeinNavAgentProfile BuildNavAgentProfile(
+		FSeinEntityHandle Handle,
+		FFixedPoint ResolvedFootprintRadius) const;
 
 	/** Return the entity's BaseTags (designer-authored set). Returns a const
 	 *  ref to the empty container if the entity has no tag state. */

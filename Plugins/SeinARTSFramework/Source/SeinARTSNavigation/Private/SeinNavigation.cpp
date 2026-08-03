@@ -9,6 +9,7 @@
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Engine/World.h"
 #include "SeinARTSNavigationLog.h"
+#include "Settings/PluginSettings.h"
 
 void USeinNavigation::InitializeForWorld(UWorld* World)
 {
@@ -107,12 +108,185 @@ bool USeinNavigation::ComputeStateCoverageClaim(
 
 bool USeinNavigation::IsReachable(const FFixedVector& From, const FFixedVector& To, const FGameplayTagContainer& AgentTags) const
 {
+	FSeinNavAgentProfile Agent;
+	Agent.AgentTags = AgentTags;
+	return IsReachableForAgent(From, To, Agent);
+}
+
+bool USeinNavigation::IsReachableForAgent(
+	const FFixedVector& From,
+	const FFixedVector& To,
+	const FSeinNavAgentProfile& Agent) const
+{
 	FSeinPathRequest Request;
 	Request.Start = From;
 	Request.End = To;
-	Request.BlockedTerrainTags = AgentTags;
+	Request.Requester = Agent.Requester;
+	Request.BlockedTerrainTags = Agent.BlockedTerrainTags;
+	Request.AgentNavLayerMask = Agent.AgentNavLayerMask;
+	Request.AgentFootprintRadius = Agent.AgentFootprintRadius;
+	Request.AgentWallPaddingCells = Agent.AgentWallPaddingCells;
 	FSeinPath Path;
-	return FindPath(Request, Path) && Path.bIsValid;
+	return FindPath(Request, Path)
+		&& Path.bIsValid
+		&& !Path.bIsPartial;
+}
+
+bool USeinNavigation::IsWorldPositionClearForAgent(
+	const FFixedVector& WorldPos,
+	const FSeinNavAgentProfile& Agent) const
+{
+	if (!IsWorldPositionClear(
+		WorldPos, Agent.AgentNavLayerMask))
+	{
+		return false;
+	}
+	if (Agent.BlockedTerrainTags.IsEmpty())
+	{
+		return true;
+	}
+	const USeinARTSCoreSettings* Settings =
+		GetDefault<USeinARTSCoreSettings>();
+	const int32 TerrainType = GetTerrainTypeAt(WorldPos);
+	return !Settings
+		|| !Settings->TerrainTypes.IsValidIndex(TerrainType - 1)
+		|| !Agent.BlockedTerrainTags.HasTag(
+			Settings->TerrainTypes[TerrainType - 1].TerrainTag);
+}
+
+bool USeinNavigation::IsFootprintClearForAgent(
+	const FFixedVector& WorldPos,
+	const FSeinNavAgentProfile& Agent) const
+{
+	if (!IsWorldPositionClearForAgent(WorldPos, Agent))
+	{
+		return false;
+	}
+	const FFixedPoint Radius = Agent.AgentFootprintRadius;
+	if (Radius <= FFixedPoint::Zero)
+	{
+		return true;
+	}
+	static const FFixedPoint RingDiag(3036971375LL);
+	static const FFixedVector Ring[8] = {
+		FFixedVector(FFixedPoint::One, FFixedPoint::Zero, FFixedPoint::Zero),
+		FFixedVector(RingDiag, RingDiag, FFixedPoint::Zero),
+		FFixedVector(FFixedPoint::Zero, FFixedPoint::One, FFixedPoint::Zero),
+		FFixedVector(-RingDiag, RingDiag, FFixedPoint::Zero),
+		FFixedVector(-FFixedPoint::One, FFixedPoint::Zero, FFixedPoint::Zero),
+		FFixedVector(-RingDiag, -RingDiag, FFixedPoint::Zero),
+		FFixedVector(FFixedPoint::Zero, -FFixedPoint::One, FFixedPoint::Zero),
+		FFixedVector(RingDiag, -RingDiag, FFixedPoint::Zero),
+	};
+	for (const FFixedVector& Offset : Ring)
+	{
+		const FFixedVector Sample(
+			WorldPos.X + Offset.X * Radius,
+			WorldPos.Y + Offset.Y * Radius,
+			WorldPos.Z);
+		if (!IsWorldPositionClearForAgent(Sample, Agent))
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+bool USeinNavigation::IsAuthoritativeDestinationSafeForAgent(
+	const FFixedVector& WorldPos,
+	const FSeinNavAgentProfile& Agent) const
+{
+	if (!HasRuntimeData())
+	{
+		return false;
+	}
+	if (Agent.BlockedTerrainTags.IsEmpty())
+	{
+		return true;
+	}
+	const USeinARTSCoreSettings* Settings =
+		GetDefault<USeinARTSCoreSettings>();
+	const int32 TerrainType = GetTerrainTypeAt(WorldPos);
+	return !Settings
+		|| !Settings->TerrainTypes.IsValidIndex(TerrainType - 1)
+		|| !Agent.BlockedTerrainTags.HasTag(
+			Settings->TerrainTypes[TerrainType - 1].TerrainTag);
+}
+
+bool USeinNavigation::IsAuthoritativeFootprintSafeForAgent(
+	const FFixedVector& WorldPos,
+	const FSeinNavAgentProfile& Agent) const
+{
+	if (!IsAuthoritativeDestinationSafeForAgent(WorldPos, Agent))
+	{
+		return false;
+	}
+	const FFixedPoint Radius = Agent.AgentFootprintRadius;
+	if (Radius <= FFixedPoint::Zero)
+	{
+		return true;
+	}
+	static const FFixedPoint RingDiag(3036971375LL);
+	static const FFixedVector Ring[8] = {
+		FFixedVector(FFixedPoint::One, FFixedPoint::Zero, FFixedPoint::Zero),
+		FFixedVector(RingDiag, RingDiag, FFixedPoint::Zero),
+		FFixedVector(FFixedPoint::Zero, FFixedPoint::One, FFixedPoint::Zero),
+		FFixedVector(-RingDiag, RingDiag, FFixedPoint::Zero),
+		FFixedVector(-FFixedPoint::One, FFixedPoint::Zero, FFixedPoint::Zero),
+		FFixedVector(-RingDiag, -RingDiag, FFixedPoint::Zero),
+		FFixedVector(FFixedPoint::Zero, -FFixedPoint::One, FFixedPoint::Zero),
+		FFixedVector(RingDiag, -RingDiag, FFixedPoint::Zero),
+	};
+	for (const FFixedVector& Offset : Ring)
+	{
+		const FFixedVector Sample(
+			WorldPos.X + Offset.X * Radius,
+			WorldPos.Y + Offset.Y * Radius,
+			WorldPos.Z);
+		if (!IsAuthoritativeDestinationSafeForAgent(Sample, Agent))
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+bool USeinNavigation::ProjectPointToNavForAgent(
+	const FFixedVector& WorldPos,
+	const FSeinNavAgentProfile& Agent,
+	FFixedVector& OutProjected) const
+{
+	FFixedVector Candidate;
+	if (!ProjectPointToNav(WorldPos, Candidate)
+		|| !IsFootprintClearForAgent(Candidate, Agent))
+	{
+		return false;
+	}
+	OutProjected = Candidate;
+	return true;
+}
+
+bool USeinNavigation::ProjectPointToNavFreeForAgent(
+	const FFixedVector& WorldPos,
+	const FSeinNavAgentProfile& Agent,
+	const TArray<FFixedVector>& AvoidCentres,
+	const TArray<FFixedPoint>& AvoidRadii,
+	FFixedVector& OutProjected) const
+{
+	FFixedVector Candidate;
+	if (ProjectPointToNavFree(
+			WorldPos,
+			Agent.AgentFootprintRadius,
+			AvoidCentres,
+			AvoidRadii,
+			Candidate)
+		&& IsFootprintClearForAgent(Candidate, Agent))
+	{
+		OutProjected = Candidate;
+		return true;
+	}
+	return ProjectPointToNavForAgent(
+		WorldPos, Agent, OutProjected);
 }
 
 FFixedVector USeinNavigation::QueryDirection(const FSeinDirectionQuery& Query) const

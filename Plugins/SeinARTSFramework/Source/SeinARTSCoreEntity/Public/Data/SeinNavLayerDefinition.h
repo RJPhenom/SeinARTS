@@ -3,7 +3,7 @@
  * @file    SeinNavLayerDefinition.h
  * @brief   Plugin-settings row defining one designer-configurable nav layer.
  *          Up to 7 layers map to bits 1..7 of the agent / blocker layer mask
- *          on `FSeinMovementData::NavLayerMask` and `FSeinExtentsComponent::
+ *          on `FSeinNavigationComponent::NavLayerMask` and `FSeinExtentsComponent::
  *          BlockedNavLayerMask`.
  *
  *          NOTE: the "Default" layer is NOT in this array — it's reserved as
@@ -26,7 +26,7 @@
  * (0..6) maps to bit (1 + N) of the agent/blocker layer mask.
  *
  *  - bEnabled toggles the slot without shifting bit indices.
- *  - LayerName is displayed in the bitmask combos on FSeinMovementData and
+ *  - LayerName is displayed in the bitmask combos on FSeinNavigationComponent and
  *    FSeinExtentsComponent (BlockedNavLayerMask) for designer clarity.
  *  - DebugColor used by the nav debug overlay to tint blocker stamps that
  *    occupy this layer (mixed-layer blockers blend toward the dominant bit).

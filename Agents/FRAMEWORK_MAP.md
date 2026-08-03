@@ -51,6 +51,23 @@ The Framework must not depend on an extension. Cover's current descriptor still 
 
 The shipped navigation A* emits a coarse straight-segment route. `USeinMovement::PlanPath` is the per-unit shaping seam; `FSeinPath` supports `Straight`, `AbstractEdge`, `Field`, `Arc`, and `Jump` segments.
 
+`FSeinNavAgentProfile` is the module-neutral policy passed across navigation, movement, collision,
+formation, and extension boundaries. `USeinWorldSubsystem` builds it from the entity's navigation,
+tags, and extents components: nav-layer mask selects dynamic blockers; `BlockedTerrainTags` defines
+hard terrain topology; wall padding and the complete compound collider define clearance. The same
+profile reaches command pathability, initial and replacement paths, direction/escape/floor probes,
+collision barriers, navigation containment, formation projection, requester-aware Blueprint calls,
+and Movement+ maneuver probes.
+
+The A* implementation uses a bounded cache of static connected components keyed by exact agent
+profile. It ignores transient dynamic blockers for fundamental order admission, while individual
+path searches still route around those blockers. Cache eviction can cause a later deterministic
+rebuild but cannot change a result. Forbidden terrain participates in full-footprint clearance and
+cannot be bypassed by authoritative-destination handling. `AgentTags` remain available to custom
+navigation implementations but the shipped A* does not reinterpret them as terrain exclusions.
+Cover's final post-processing can still replace a generic formation destination without the full
+requester context; closing that seam belongs to the shared tactical allocation work.
+
 Movement+ is not a full arbitrary Reeds-Shepp/Dubins route solver. Its wheeled and tracked modes can run a deterministic curated Reeds-Shepp-style **start-maneuver** planner at plan/repath time. That planner considers bounded closed-form candidates such as a departure arc, straight reverse, and K-turn, probes clearance, emits typed `Arc`/`Straight` legs, then hands the remaining coarse route to the normal runtime follower. Wheeled driving uses bicycle kinematics and arc/pursuit tracking; tracked driving selects pivot/arc/reverse behavior. This live behavior supersedes older notes claiming that no shipped vehicle mode emits arcs.
 
 ### Canonical state, resync, and replay

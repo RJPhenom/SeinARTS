@@ -10,6 +10,7 @@
 #include "Core/SeinParallel.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Simulation/Systems/SeinNavBlockerStampSystem.h"
+#include "Components/SeinAbilityComponent.h"
 #include "SeinLevelData.h"
 #include "SeinLevelDataSubsystem.h"
 #include "SeinLevelLayerProvider.h"
@@ -42,6 +43,27 @@ namespace
 		return Writer.WriteString(TEXT("disabled"))
 			&& Writer.Finalize(OutDigest, OutError);
 	}
+
+	bool EntityNeedsPathableTargetProfile(
+		const USeinWorldSubsystem& Sim,
+		FSeinEntityHandle Handle)
+	{
+		const FSeinAbilityComponent* Abilities =
+			Sim.GetComponent<FSeinAbilityComponent>(Handle);
+		if (!Abilities) return false;
+		for (const int32 AbilityID
+			: Abilities->AbilityInstanceIDs)
+		{
+			const USeinAbility* Ability =
+				Sim.GetAbilityInstance(AbilityID);
+			if (Ability && Ability->bRequiresPathableTarget)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
 }
 
 void USeinNavigationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
@@ -349,6 +371,7 @@ USeinNavigationSubsystem::LoadBakedAssetIntoNav(UWorld& World)
 		{
 			UE_LOG(LogSeinNavSubsystem, Log,
 				TEXT("Nav: loaded grid from the unified level-data substrate (CP1.1 substrate path)."));
+			WarmExistingAgentProfiles();
 			return Result;
 		}
 		if (Result.IsRejected())
@@ -765,13 +788,30 @@ void USeinNavigationSubsystem::BindSimDelegates(UWorld& World)
 	if (!Sim || !Navigation) return;
 
 	TWeakObjectPtr<USeinNavigation> NavWeak = Navigation;
+	if (EntitySpawnedProfileWarmHandle.IsValid())
+	{
+		Sim->OnEntitySpawned.Remove(
+			EntitySpawnedProfileWarmHandle);
+		EntitySpawnedProfileWarmHandle.Reset();
+	}
+	EntitySpawnedProfileWarmHandle =
+		Sim->OnEntitySpawned.AddUObject(
+			this,
+			&USeinNavigationSubsystem::
+				HandleEntitySpawnedForProfileWarm);
+	WarmExistingAgentProfiles();
 
 	Sim->PathableTargetResolver.BindWeakLambda(this,
-		[NavWeak](const FFixedVector& FromWorld, const FFixedVector& ToWorld, const FGameplayTagContainer& AgentTags) -> bool
+		[NavWeak](const FFixedVector& FromWorld,
+			const FFixedVector& ToWorld,
+			const FSeinNavAgentProfile& Agent) -> bool
 		{
 			USeinNavigation* Nav = NavWeak.Get();
-			if (!Nav || !Nav->HasRuntimeData()) return true; // no data = permit (tests, nav-less games)
-			return Nav->IsReachable(FromWorld, ToWorld, AgentTags);
+			if (!Nav || !Nav->HasRuntimeData()) return true;
+			return Nav->IsReachableForAgent(
+				FromWorld,
+				ToWorld,
+				Agent);
 		});
 
 	// Footprint placement resolver — gates abilities that have bRequiresFreeFootprint
@@ -811,6 +851,27 @@ void USeinNavigationSubsystem::BindSimDelegates(UWorld& World)
 			USeinNavigation* Nav = NavWeak.Get();
 			if (!Nav || !Nav->HasRuntimeData()) return true;
 			return Nav->IsWorldPositionClear(WorldPos, /*AgentNavLayerMask=*/ 0x01);
+		});
+
+	Sim->AgentDynamicPassableResolver.BindWeakLambda(this,
+		[NavWeak](const FSeinNavAgentProfile& Agent,
+			const FFixedVector& WorldPos) -> bool
+		{
+			USeinNavigation* Nav = NavWeak.Get();
+			if (!Nav || !Nav->HasRuntimeData()) return true;
+			return Nav->IsFootprintClearForAgent(
+				WorldPos, Agent);
+		});
+
+	Sim->AgentAuthoritativeDestinationSafetyResolver.BindWeakLambda(
+		this,
+		[NavWeak](const FSeinNavAgentProfile& Agent,
+			const FFixedVector& WorldPos) -> bool
+		{
+			USeinNavigation* Nav = NavWeak.Get();
+			if (!Nav || !Nav->HasRuntimeData()) return true;
+			return Nav->IsAuthoritativeFootprintSafeForAgent(
+				WorldPos, Agent);
 		});
 
 	// Ground-height resolver — used by penetration resolution's step-height
@@ -869,6 +930,27 @@ void USeinNavigationSubsystem::BindSimDelegates(UWorld& World)
 			return Nav->ProjectPointToNavFree(InWorld, SelfRadius, AvoidCentres, AvoidRadii, OutProjected);
 		});
 
+	Sim->NavProjectAgentFreeResolver.BindWeakLambda(this,
+		[NavWeak](const FSeinNavAgentProfile& Agent,
+			const FFixedVector& InWorld,
+			const TArray<FFixedVector>& AvoidCentres,
+			const TArray<FFixedPoint>& AvoidRadii,
+			FFixedVector& OutProjected) -> bool
+		{
+			USeinNavigation* Nav = NavWeak.Get();
+			if (!Nav || !Nav->HasRuntimeData())
+			{
+				OutProjected = InWorld;
+				return true;
+			}
+			return Nav->ProjectPointToNavFreeForAgent(
+				InWorld,
+				Agent,
+				AvoidCentres,
+				AvoidRadii,
+				OutProjected);
+		});
+
 	// Reset the path budget tracker. Self-checking reset in RequestPath
 	// handles the per-tick boundary going forward; we just zero state here
 	// at world-begin so the first tick after world load starts clean
@@ -885,16 +967,63 @@ void USeinNavigationSubsystem::UnbindSimDelegates()
 		World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
 	if (!Sim)
 	{
+		EntitySpawnedProfileWarmHandle.Reset();
 		return;
+	}
+	if (EntitySpawnedProfileWarmHandle.IsValid())
+	{
+		Sim->OnEntitySpawned.Remove(
+			EntitySpawnedProfileWarmHandle);
+		EntitySpawnedProfileWarmHandle.Reset();
 	}
 
 	Sim->PathableTargetResolver.Unbind();
 	Sim->FootprintPlacementResolver.Unbind();
 	Sim->PassableResolver.Unbind();
 	Sim->DynamicPassableResolver.Unbind();
+	Sim->AgentDynamicPassableResolver.Unbind();
+	Sim->AgentAuthoritativeDestinationSafetyResolver.Unbind();
 	Sim->HeightResolver.Unbind();
 	Sim->NavProjectResolver.Unbind();
 	Sim->NavProjectFreeResolver.Unbind();
+	Sim->NavProjectAgentFreeResolver.Unbind();
+}
+
+void USeinNavigationSubsystem::WarmExistingAgentProfiles()
+{
+	if (!Navigation || !Navigation->HasRuntimeData()) return;
+	UWorld* World = GetWorld();
+	const USeinWorldSubsystem* Sim = World
+		? World->GetSubsystem<USeinWorldSubsystem>()
+		: nullptr;
+	if (!Sim) return;
+
+	Sim->GetEntityPool().ForEachEntity(
+		[this, Sim](FSeinEntityHandle Handle,
+			const FSeinEntity&)
+		{
+			if (!EntityNeedsPathableTargetProfile(
+				*Sim, Handle)) return;
+			Navigation->WarmAgentProfile(
+				Sim->BuildNavAgentProfile(Handle));
+		});
+}
+
+void USeinNavigationSubsystem::
+HandleEntitySpawnedForProfileWarm(FSeinEntityHandle Handle)
+{
+	if (!Navigation || !Navigation->HasRuntimeData()) return;
+	UWorld* World = GetWorld();
+	const USeinWorldSubsystem* Sim = World
+		? World->GetSubsystem<USeinWorldSubsystem>()
+		: nullptr;
+	if (!Sim) return;
+	if (!EntityNeedsPathableTargetProfile(*Sim, Handle))
+	{
+		return;
+	}
+	Navigation->WarmAgentProfile(
+		Sim->BuildNavAgentProfile(Handle));
 }
 
 ESeinPathResult USeinNavigationSubsystem::RequestPath(const FSeinPathRequest& Request, FSeinPath& OutPath)

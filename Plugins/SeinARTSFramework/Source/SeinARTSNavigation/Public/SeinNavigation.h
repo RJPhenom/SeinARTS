@@ -35,6 +35,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Navigation/SeinNavAgentProfile.h"
 #include "UObject/Object.h"
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
@@ -282,11 +283,31 @@ public:
 	 *  nav answers SOMETHING; override for obstacle-aware or field-based direction. */
 	virtual FFixedVector QueryDirection(const FSeinDirectionQuery& Query) const;
 
-	/** Fast reachability check. Default: falls back to FindPath. Subclasses
-	 *  should override with a cheaper reachability component / flood-fill if
-	 *  the FindPath cost is prohibitive on the query hot path (ability
-	 *  validation runs this per activation). */
+	/** Legacy tag-only reachability seam. The tags describe the agent's
+	 *  capabilities/classification for custom navigation implementations; they
+	 *  are not terrain exclusions. The default forwards to the complete-profile
+	 *  query with otherwise neutral policy. New entity-aware command validation
+	 *  uses IsReachableForAgent so authored blocked terrain, body clearance, and
+	 *  wall padding cannot be lost. */
 	virtual bool IsReachable(const FFixedVector& From, const FFixedVector& To, const FGameplayTagContainer& AgentTags) const;
+
+	/** Agent-complete reachability gate used by authoritative command
+	 *  validation. The default runs an exact unbudgeted path request and rejects
+	 *  partial results. Implementations may override with an equivalent cached
+	 *  connectivity query, but must honor the complete profile. Dynamic blockers
+	 *  may be ignored here because this asks fundamental reachability, not whether
+	 *  a transient doorway is clear on this tick. */
+	virtual bool IsReachableForAgent(
+		const FFixedVector& From,
+		const FFixedVector& To,
+		const FSeinNavAgentProfile& Agent) const;
+
+	/** Optional loading/spawn-time performance hook. Implementations with
+	 *  profile-specific derived topology may prepare it here so the first
+	 *  player order does not pay an O(map) cache build. Purely derived state:
+	 *  this must never change navigation answers or canonical simulation state. */
+	virtual void WarmAgentProfile(
+		const FSeinNavAgentProfile& Agent) const {}
 
 	/** Find a random walkable world point within `Radius` of `Origin` that is
 	 *  REACHABLE from `Origin` (same static nav region — uses the same component
@@ -333,6 +354,34 @@ public:
 	 *  unreachable spot. Default: static-only (delegates to IsPassable);
 	 *  USeinNavigationAStar overrides with dynamic-blocker awareness. */
 	virtual bool IsWorldPositionClear(const FFixedVector& WorldPos, uint8 AgentNavLayerMask) const { return IsPassable(WorldPos); }
+
+	/** Agent-complete occupancy query. The base combines the implementation's
+	 *  static/dynamic layer query with the authored blocked-terrain policy.
+	 *  Footprint sampling remains the caller's responsibility so hot movement
+	 *  loops can reuse their cached ring. */
+	virtual bool IsWorldPositionClearForAgent(
+		const FFixedVector& WorldPos,
+		const FSeinNavAgentProfile& Agent) const;
+
+	/** Center plus deterministic eight-sample body ring through the complete
+	 *  agent occupancy query. */
+	bool IsFootprintClearForAgent(
+		const FFixedVector& WorldPos,
+		const FSeinNavAgentProfile& Agent) const;
+
+	/** Whether an authoritative destination may safely overrule only the coarse
+	 *  static bake at this point. Terrain forbidden by the agent must still fail;
+	 *  implementations with dynamic blockers override to reject those too. */
+	virtual bool IsAuthoritativeDestinationSafeForAgent(
+		const FFixedVector& WorldPos,
+		const FSeinNavAgentProfile& Agent) const;
+
+	/** Body-aware form of authoritative safety. Static bake obstruction may be
+	 *  ignored, but no footprint sample may overlap agent-forbidden terrain or
+	 *  a dynamic blocker. */
+	bool IsAuthoritativeFootprintSafeForAgent(
+		const FFixedVector& WorldPos,
+		const FSeinNavAgentProfile& Agent) const;
 
 	/** World units per nav grid cell. Used by callers that need to align
 	 *  to actual grid edges (e.g. extracting axis-aligned passable/impassable
@@ -396,6 +445,14 @@ public:
 		return HasRuntimeData();
 	}
 
+	/** Nearest position valid for this complete agent profile. Unlike the plain
+	 *  projection, the result must respect blocked terrain, dynamic nav layers,
+	 *  body clearance, and wall padding. */
+	virtual bool ProjectPointToNavForAgent(
+		const FFixedVector& WorldPos,
+		const FSeinNavAgentProfile& Agent,
+		FFixedVector& OutProjected) const;
+
 	/** Snap to the nearest walkable cell AT the input's elevation — the elevation-aware step up
 	 *  from ProjectPointToNav, preferring cells whose stored height is close to `WorldPos.Z`. When
 	 *  the input lands at a platform edge, regular `ProjectPointToNav` would snap to the
@@ -438,6 +495,16 @@ public:
 	{
 		return ProjectPointToNavOnElevation(WorldPos, OutProjected);
 	}
+
+	/** Occupancy-aware agent projection used for heterogeneous formation slots.
+	 *  Default implementations may ignore peer occupancy only as a last-resort
+	 *  fallback, but may never return a position forbidden by Agent. */
+	virtual bool ProjectPointToNavFreeForAgent(
+		const FFixedVector& WorldPos,
+		const FSeinNavAgentProfile& Agent,
+		const TArray<FFixedVector>& AvoidCentres,
+		const TArray<FFixedPoint>& AvoidRadii,
+		FFixedVector& OutProjected) const;
 
 	/** Sample the baked top-of-surface Z at a world-space XY.
 	 *

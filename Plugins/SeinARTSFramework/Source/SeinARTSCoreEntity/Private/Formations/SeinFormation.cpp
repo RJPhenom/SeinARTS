@@ -478,7 +478,8 @@ void USeinFormation::ProjectPositionsToNavigable(
 	const int32 N = Positions.Num();
 	if (!World || N == 0) return;
 	// No nav projection bound (tests / nav-less games) → nothing to clamp to; leave positions as-is.
-	if (!World->NavProjectFreeResolver.IsBound()) return;
+	if (!World->NavProjectAgentFreeResolver.IsBound()
+		&& !World->NavProjectFreeResolver.IsBound()) return;
 
 	// PARKED-UNIT OCCUPANCY. Gather idle bodies near the formation footprint so no slot is placed
 	// ON one — the "order into a settled crowd" case, where occupancy-blind slots made arrivers
@@ -546,11 +547,14 @@ void USeinFormation::ProjectPositionsToNavigable(
 	// them identical (root CLAUDE.md #6). Cover slots are unaffected: the cover PostProcessPositions hook
 	// runs AFTER this and overrides, sourcing slots from FindNearbySlots (itself dynamic-filtered) near
 	// the target — so this can't relocate a cover slot out from under the hook. (The relocation target
-	// below, NavProjectFreeResolver, is still static-only; a relocated slot lands on the nearest
-	// bake-walkable + peer-free cell, which is almost always dynamic-clear too since blockers are sparse.
-	// A relocation landing on ANOTHER dynamic blocker is a rare residual, tracked separately.)
+	// below prefers NavProjectAgentFreeResolver, so the relocated slot obeys
+	// the specific member's terrain, nav-layer, footprint, and wall-padding
+	// policy as well as peer occupancy.)
 	// With no resolver we can't tell → treat everything as on-nav (permit-on-no-data).
-	const bool bCanTestPassable = World->DynamicPassableResolver.IsBound();
+	const bool bCanTestAgentPassable =
+		World->AgentDynamicPassableResolver.IsBound();
+	const bool bCanTestGenericPassable =
+		World->DynamicPassableResolver.IsBound();
 
 	auto RadiusAt = [&Radii](int32 i) -> FFixedPoint
 	{
@@ -581,7 +585,18 @@ void USeinFormation::ProjectPositionsToNavigable(
 	OccupiedRadii.Reserve(ParkedRadii.Num() + N);
 	for (int32 i = 0; i < N; ++i)
 	{
-		const bool bOnNav = !bCanTestPassable || World->DynamicPassableResolver.Execute(Positions[i]);
+		const bool bUseAgent = bCanTestAgentPassable
+			&& ExcludeFromOccupancy.IsValidIndex(i);
+		const FSeinNavAgentProfile Agent = bUseAgent
+			? World->BuildNavAgentProfile(
+				ExcludeFromOccupancy[i], RadiusAt(i))
+			: FSeinNavAgentProfile();
+		const bool bOnNav =
+			bUseAgent
+			? World->AgentDynamicPassableResolver.Execute(
+				Agent, Positions[i])
+			: (!bCanTestGenericPassable
+				|| World->DynamicPassableResolver.Execute(Positions[i]));
 		if (bOnNav && !OverlapsParked(Positions[i], RadiusAt(i)))
 		{
 			Occupied.Add(Positions[i]);
@@ -600,7 +615,25 @@ void USeinFormation::ProjectPositionsToNavigable(
 	{
 		const FFixedPoint Ri = RadiusAt(i);
 		FFixedVector Projected;
-		if (World->NavProjectFreeResolver.Execute(Positions[i], Ri, Occupied, OccupiedRadii, Projected))
+		bool bProjected = false;
+		if (World->NavProjectAgentFreeResolver.IsBound()
+			&& ExcludeFromOccupancy.IsValidIndex(i))
+		{
+			const FSeinNavAgentProfile Agent =
+				World->BuildNavAgentProfile(
+					ExcludeFromOccupancy[i], Ri);
+			bProjected =
+				World->NavProjectAgentFreeResolver.Execute(
+					Agent, Positions[i],
+					Occupied, OccupiedRadii, Projected);
+		}
+		else if (World->NavProjectFreeResolver.IsBound())
+		{
+			bProjected = World->NavProjectFreeResolver.Execute(
+				Positions[i], Ri,
+				Occupied, OccupiedRadii, Projected);
+		}
+		if (bProjected)
 		{
 			Positions[i] = Projected;
 		}
