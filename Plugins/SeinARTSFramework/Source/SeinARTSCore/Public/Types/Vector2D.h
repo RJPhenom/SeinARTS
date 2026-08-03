@@ -149,16 +149,16 @@ struct SEINARTSCORE_API FFixedVector2D
 
 	FORCEINLINE static FFixedPoint GetAbsMax(const FFixedVector2D& V)
 	{
-		const int32 AbsX = V.X < 0 ? -V.X : V.X;
-		const int32 AbsY = V.Y < 0 ? -V.Y : V.Y;
-		return FFixedPoint(AbsX > AbsY ? AbsX : AbsY);
+		const FFixedPoint AbsX = SeinMath::Abs(V.X);
+		const FFixedPoint AbsY = SeinMath::Abs(V.Y);
+		return AbsX > AbsY ? AbsX : AbsY;
 	}
 
 	FORCEINLINE static FFixedPoint GetAbsMin(const FFixedVector2D& V)
 	{
-		const int32 AbsX = V.X < 0 ? -V.X : V.X;
-		const int32 AbsY = V.Y < 0 ? -V.Y : V.Y;
-		return FFixedPoint(AbsX < AbsY ? AbsX : AbsY);
+		const FFixedPoint AbsX = SeinMath::Abs(V.X);
+		const FFixedPoint AbsY = SeinMath::Abs(V.Y);
+		return AbsX < AbsY ? AbsX : AbsY;
 	}
 
 	// Conversion

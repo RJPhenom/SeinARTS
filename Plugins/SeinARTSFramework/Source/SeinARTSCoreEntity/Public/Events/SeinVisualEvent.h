@@ -37,7 +37,7 @@ enum class ESeinVisualEventType : uint8
 	/** Entity entered or exited under-construction state. `Value` = 1.0 means
 	 *  entering construction (placement visual should appear, main mesh hidden);
 	 *  `Value` = 0.0 means leaving construction (placement visual destroyed,
-	 *  main mesh restored). Routed to the entity's USeinConstructionComponent
+	 *  main mesh restored). Routed to the entity's USeinConstructionRenderComponent
 	 *  on the bridged actor. */
 	ConstructionStateChanged,
 	ResourceChanged,
@@ -180,7 +180,7 @@ struct SEINARTSCOREENTITY_API FSeinVisualEvent
 
 	/** Create a ConstructionStateChanged event. `bUnderConstruction = true` for
 	 *  spawn-time entry into construction state; false for completion. The
-	 *  bridged actor's USeinConstructionComponent consumes this to drive the
+	 *  bridged actor's USeinConstructionRenderComponent consumes this to drive the
 	 *  placement-visual swap (hide main mesh + spawn placement visual on enter,
 	 *  reverse on exit). */
 	static FSeinVisualEvent MakeConstructionStateChangedEvent(FSeinEntityHandle Entity, bool bUnderConstruction);

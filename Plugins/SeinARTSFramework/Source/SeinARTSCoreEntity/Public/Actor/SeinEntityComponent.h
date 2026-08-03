@@ -246,9 +246,8 @@ public:
 	}
 
 	/** Iterate ComponentData and inject every entry into the world subsystem's
-	 *  component storage for `Handle`. Called by `USeinWorldSubsystem::SpawnEntity`
-	 *  after the legacy typed-AC walk; duplicate struct types (already injected
-	 *  by a typed AC) overwrite with a warning during the migration window. */
+	 *  component storage for `Handle`. Duplicate authored struct types are an
+	 *  authoring error; the deterministic later-entry value wins with a warning. */
 	void InjectAuthoredComponents(USeinWorldSubsystem& World, FSeinEntityHandle Handle) const;
 
 	// =========================================================================

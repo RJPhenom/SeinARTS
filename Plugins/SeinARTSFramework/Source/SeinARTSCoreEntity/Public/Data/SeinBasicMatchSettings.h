@@ -7,8 +7,8 @@
  * as a designer convenience — a pre-defined `FInstancedStruct` payload
  * shape that covers the most common RTS match-level knobs. Designers add
  * an instance to `FSeinMatchSettings::Extensions` and read it from BP
- * scripts via `FindMatchExtension<FSeinBasicMatchSettings>` (or the BPFL
- * wrapper `SeinFindBasicMatchSettings`).
+ * scripts via `FindMatchExtension<FSeinBasicMatchSettings>` in C++, or by
+ * reading `SeinGetMatchExtensions` and matching the struct type in Blueprint.
  *
  * Per-field designer responsibility:
  *   - `bFriendlyFire`     — designer's ability scripts read this and skip

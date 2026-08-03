@@ -102,11 +102,11 @@ resolutions while sharing the substrate coordinate contract.
 
 `FSeinPath` is a typed-segment seam. Navigation may emit topology kinds such as `Field` or
 `AbstractEdge`; per-unit `USeinMovement::PlanPath` may shape kinematic kinds through the
-`USeinPlannerHandle`/`USeinMoverHandle` seam. `Arc` and `Jump` are represented and flattened by
-consumers, but the shipped A* currently emits straight segments and no shipped vehicle class
-produces Reeds-Shepp/Dubins curves. Do not add runtime Reeds-Shepp/Dubins search under the guise of
-movement feel; future high-fidelity curves are steering-first and, if used, approved as
-offline/authored data.
+`USeinPlannerHandle`/`USeinMoverHandle` seam. The shipped A* emits straight segments. Movement+
+Wheeled and Tracked can prepend a bounded, clearance-probed Reeds-Shepp-style start maneuver as typed
+`Arc`/`Straight` segments before runtime steering follows the coarse tail. That is a curated candidate
+set, not a general Reeds-Shepp/Dubins route search; do not broaden it or replace it without the
+Movement+ Vehicle Gym and product-feel decision.
 
 ## Movement ownership
 

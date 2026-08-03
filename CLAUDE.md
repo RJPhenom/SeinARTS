@@ -14,8 +14,9 @@ It owns the cross-cutting rules that apply to **all four plugins**. Each plugin 
 > pluggable (`USeinAvoidance` / `USeinCollisionResolver` / `USeinNavigation` abstract-base + settings
 > picker; the `FSeinPath` typed-segment seam); current work is deflating localized bloat in a few
 > function bodies (A* diagnostics, the `TickAction` re-seek tangle, the avoidance kernel) without
-> redesigning the seams, plus future high-fidelity vehicle movement (steering-first; Reeds-Shepp baked
-> offline, never runtime). The nav↔movement seam is still evolving — re-ground against live code before asserting.
+> redesigning the seams, plus qualification of Movement+'s shipped steering-first, curated
+> Reeds-Shepp-style start-maneuver planner. It is not a general Reeds-Shepp/Dubins route solver. The
+> nav↔movement seam is still evolving — re-ground against live code before asserting.
 
 ---
 
@@ -100,6 +101,12 @@ learned from the sessions that *worked*:
   subagent's or workflow's own synthesis (they err too, and the workflows themselves sometimes fail or
   return stubs; read their output critically). See "Source of truth" below on stale docstrings.
 - **Defer explicitly, don't gold-plate.** Record deferred items where a future dev will find them.
+
+### Engineering-document artifacts
+
+- `Docs/` is reserved for deliberate product/developer documentation, not audit scratch or agent handoffs.
+- Durable agent engineering context belongs in `Agents/`; short-lived exploration stays untracked.
+- Do not create a repository `Output/` tree. Put requested PDF exports in the user's Downloads directory.
 
 ---
 
@@ -244,10 +251,13 @@ sim-system specifics — but **trust the code's behavior over comments**, becaus
 docstrings lag the implementation. The retired `DESIGN.md` / `PLAN.md` (gone post-Phase-5) are
 still cited in some headers (e.g. "DESIGN §11") — those references are dangling.
 
-Known stale-comment traps (verified against code during the 2026-06 doc rebuild):
-- **Reeds-Shepp / Dubins vehicle curve-fitting is unbuilt.** `FitVehicleCurve` exists only in
-  aspirational comments; path segments are `Straight`-only. Wheeled driving feel comes from runtime
-  pure-pursuit steering + nav corner-rounding, not a curve planner.
+Known stale-comment traps (re-grounded against live code):
+- **Vehicle curves are bounded start maneuvers, not a full route solver.** The shipped A*/default
+  planner emits straight segments. Movement+ Wheeled and Tracked may post-process the route head with
+  a deterministic curated Reeds-Shepp-style candidate set (departure arc, straight reverse, K-turn,
+  reverse-out), emit typed `Arc`/`Straight` segments, then follow the coarse tail with runtime steering.
+  Older claims that no shipped vehicle emits arcs are false; claims that this is a general
+  Reeds-Shepp/Dubins family search are also false.
 - **Net is not "Phase 0."** Despite file docstrings saying "just logs"/"passthrough," real lockstep
   aggregation, replay, lobby, and desync handling are implemented.
 - **Squads are not abstract.** A squad is a real lightweight (non-abstract) `ASeinActor` so banners

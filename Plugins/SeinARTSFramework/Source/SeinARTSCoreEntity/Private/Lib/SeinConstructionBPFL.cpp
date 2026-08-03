@@ -136,7 +136,7 @@ void USeinConstructionBPFL::SeinFinishConstruction(const UObject* WorldContextOb
 	//    "under construction" — IsUnderConstruction now returns false.
 	Sub->RemoveComponent<FSeinConstructionComponent>(Entity);
 
-	// 3. Notify the render layer — the entity's USeinConstructionComponent
+	// 3. Notify the render layer — the entity's USeinConstructionRenderComponent
 	//    consumes this and reverses the placement-visual swap (destroys the
 	//    spawned placement primitive + decal, restores main mesh visibility).
 	//    Symmetric with the spawn-time MakeConstructionStateChangedEvent.

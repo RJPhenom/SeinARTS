@@ -41,7 +41,7 @@
  *   - AuxLocation:  secondary world point for drag specs (line endpoint).
  *                   Zero when the spec is point-only.
  *   - RotationStep: 0..N-1 quantized rotation index for drag-rotate specs.
- *                   N defaults to 4 (90° steps, matches FSeinFootprintData::Rotation)
+ *                   N defaults to 4 (90° steps, matching the placement-yaw convention)
  *                   but specs can declare different step counts.
  */
 USTRUCT(BlueprintType, meta = (SeinDeterministic))
@@ -65,7 +65,7 @@ struct SEINARTSCOREENTITY_API FSeinTargeterPoint
 	 *  Most ability OnActivate logic should read YawDegrees instead — it works
 	 *  uniformly for both snapped and free rotation. RotationStep is kept for
 	 *  legacy + cases where the integer step is genuinely useful (e.g. mapping
-	 *  to FSeinFootprintData::Rotation). */
+	 *  to the navigation placement gate's discrete yaw convention). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Targeter")
 	uint8 RotationStep = 0;
 

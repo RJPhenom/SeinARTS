@@ -242,27 +242,27 @@ struct SEINARTSCORE_API FFixedVector
 	// Get absolute maximum component
 	FORCEINLINE static FFixedPoint GetAbsMax(const FFixedVector& V)
 	{
-		const int64 AbsX = V.X < 0 ? -V.X : V.X;
-		const int64 AbsY = V.Y < 0 ? -V.Y : V.Y;
-		const int64 AbsZ = V.Z < 0 ? -V.Z : V.Z;
+		const FFixedPoint AbsX = SeinMath::Abs(V.X);
+		const FFixedPoint AbsY = SeinMath::Abs(V.Y);
+		const FFixedPoint AbsZ = SeinMath::Abs(V.Z);
 		
-		int64 MaxVal = AbsX;
+		FFixedPoint MaxVal = AbsX;
 		if (AbsY > MaxVal) MaxVal = AbsY;
 		if (AbsZ > MaxVal) MaxVal = AbsZ;
-		return FFixedPoint(MaxVal);
+		return MaxVal;
 	}
 
 	// Get absolute minimum component
 	FORCEINLINE static FFixedPoint GetAbsMin(const FFixedVector& V)
 	{
-		const int64 AbsX = V.X < 0 ? -V.X : V.X;
-		const int64 AbsY = V.Y < 0 ? -V.Y : V.Y;
-		const int64 AbsZ = V.Z < 0 ? -V.Z : V.Z;
+		const FFixedPoint AbsX = SeinMath::Abs(V.X);
+		const FFixedPoint AbsY = SeinMath::Abs(V.Y);
+		const FFixedPoint AbsZ = SeinMath::Abs(V.Z);
 		
-		int64 MinVal = AbsX;
+		FFixedPoint MinVal = AbsX;
 		if (AbsY < MinVal) MinVal = AbsY;
 		if (AbsZ < MinVal) MinVal = AbsZ;
-		return FFixedPoint(MinVal);
+		return MinVal;
 	}
 
 	// Mirror vector by plane

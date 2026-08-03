@@ -2,8 +2,8 @@
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinWheeledManeuver.cpp
  * @brief   Closed-form Reeds-Shepp-style start-maneuver planning for the
- *          wheeled vehicle mode. See the header for the design contract and
- *          Docs/Engineering/WheeledVehicleMovement.md for the candidate ladder.
+ *          wheeled vehicle mode. See the header for the live design contract;
+ *          PlanStartManeuver below owns the canonical candidate ladder.
  */
 
 #include "Movement/SeinWheeledManeuver.h"

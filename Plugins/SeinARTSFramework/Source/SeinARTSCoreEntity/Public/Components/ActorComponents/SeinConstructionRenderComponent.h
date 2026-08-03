@@ -19,9 +19,8 @@
  *           configured placement visual (+ optional ground decal); restores
  *           on construction-complete.
  *
- *           Replaces the legacy USeinConstructionComponent's render
- *           behavior. The legacy AC stays in tree for migration but is
- *           deleted in Phase-5 cleanup.
+ *           Presentation counterpart to the deterministic
+ *           FSeinConstructionComponent payload.
  */
 
 #pragma once

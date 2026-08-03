@@ -72,8 +72,8 @@ override `Tick` wholesale (Tier-2). Per-class tuning now rides entirely on the s
 (`FSeinInfantryMovementData` etc.); the earlier half-finished migration is done — each mode class
 holds only runtime state (e.g. `CurrentSteer`, `bIsReversing`). Wheeled/Tracked are the most-iterated.
 
-**Wheeled maneuver planning landed 2026-07-24** (build-green, PIE-pending — see
-`Docs/Engineering/WheeledVehicleMovement.md`): `USeinWheeledVehicleMovement` now overrides
+**Wheeled maneuver planning landed 2026-07-24** (see `Agents/FRAMEWORK_MAP.md` and live source):
+`USeinWheeledVehicleMovement` overrides
 `PlanPath` to post-process the coarse A* polyline into a Reeds-Shepp-style start maneuver
 (U-turn arc at the largest feasible radius / straight reverse / 3-point turn / reverse-out of
 corridors) emitted as typed Arc/Straight segments with per-segment `bReverse`, and its `Tick`

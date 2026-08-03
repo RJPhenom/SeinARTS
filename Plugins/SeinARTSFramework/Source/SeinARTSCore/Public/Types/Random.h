@@ -308,10 +308,10 @@ struct SEINARTSCORE_API FFixedRandom
 	 */
 	FORCEINLINE FFixedVector2D PointInRect(FFixedVector2D Centre, FFixedVector2D HalfExtents, FFixedVector Normal = FFixedVector::UpVector)
 	{
-		FFixedVector2D Offset(
-			Range(-HalfExtents.X, HalfExtents.X),
-			Range(-HalfExtents.Y, HalfExtents.Y)
-		);
+		// Stateful draws must be explicitly sequenced for cross-compiler lockstep.
+		const FFixedPoint OffsetX = Range(-HalfExtents.X, HalfExtents.X);
+		const FFixedPoint OffsetY = Range(-HalfExtents.Y, HalfExtents.Y);
+		const FFixedVector2D Offset(OffsetX, OffsetY);
 		
 		return Centre + Offset;
 	}
@@ -323,11 +323,11 @@ struct SEINARTSCORE_API FFixedRandom
 	 */
 	FORCEINLINE FFixedVector PointInBox(FFixedVector Centre, FFixedVector HalfExtents)
 	{
-		FFixedVector Offset(
-			Range(-HalfExtents.X, HalfExtents.X),
-			Range(-HalfExtents.Y, HalfExtents.Y),
-			Range(-HalfExtents.Z, HalfExtents.Z)
-		);
+		// Stateful draws must be explicitly sequenced for cross-compiler lockstep.
+		const FFixedPoint OffsetX = Range(-HalfExtents.X, HalfExtents.X);
+		const FFixedPoint OffsetY = Range(-HalfExtents.Y, HalfExtents.Y);
+		const FFixedPoint OffsetZ = Range(-HalfExtents.Z, HalfExtents.Z);
+		const FFixedVector Offset(OffsetX, OffsetY, OffsetZ);
 		
 		return Centre + Offset;
 	}
@@ -415,11 +415,18 @@ struct SEINARTSCORE_API FFixedRandom
 	}
 
 	/**
-	 * Generate random rotator with random pitch, yaw, and roll.
+	 * Generate a random degree-based rotator. Pitch(), Yaw(), and Roll()
+	 * intentionally expose radians; convert at this type boundary because
+	 * FFixedRotator stores degrees.
 	 */
 	FORCEINLINE FFixedRotator RandomRotator()
 	{
-		return FFixedRotator(Pitch(), Yaw(), Roll());
+		// Sequence the stateful draws explicitly. Function-argument evaluation
+		// order is not portable enough to define a lockstep RNG contract.
+		const FFixedPoint PitchDegrees = Pitch() * FFixedPoint::RadToDeg;
+		const FFixedPoint YawDegrees = Yaw() * FFixedPoint::RadToDeg;
+		const FFixedPoint RollDegrees = Roll() * FFixedPoint::RadToDeg;
+		return FFixedRotator(PitchDegrees, YawDegrees, RollDegrees);
 	}
 
 	// Operators

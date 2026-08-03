@@ -184,7 +184,7 @@ namespace SeinGeometry
 	FORCEINLINE bool RayIntersectsBox(const FFixedRay& Ray, const FFixedBox& Box, FFixedPoint& OutHitDistance)
 	{
 		FFixedPoint TMin = FFixedPoint::Zero;
-		FFixedPoint TMax = FFixedPoint::FromInt(10000); // Large number
+		FFixedPoint TMax = FFixedPoint::MaxValue;
 
 		// Check each axis
 		for (int32 Axis = 0; Axis < 3; ++Axis)

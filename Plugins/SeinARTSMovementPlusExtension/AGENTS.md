@@ -49,10 +49,12 @@ Navigation produces topology/reachability. Per-unit kinematic shaping belongs to
 `USeinMovement::PlanPath` through the planner/mover handles and typed `FSeinPath` segments.
 
 - `Straight`, `Field`, `AbstractEdge`, `Arc`, and `Jump` are typed contracts.
-- The shipped vehicle modes currently rely primarily on straight paths plus runtime steering.
-- `GetMinTurnRadius` and planner Arc helpers are seams, not evidence that a curve producer exists.
-- Do not add runtime Reeds-Shepp/Dubins search. The approved future direction is steering-first,
-  with any high-fidelity curve data authored/baked offline.
+- The shipped A* emits a straight coarse route. Wheeled/Tracked may prepend a bounded,
+  clearance-probed Reeds-Shepp-style start maneuver (departure arc, reverse, K-turn/reverse-out)
+  through typed `Arc`/`Straight` segments, then use runtime steering for the remaining route.
+- The start-maneuver toolkit is a curated deterministic candidate set, not a general
+  Reeds-Shepp/Dubins family solver or full-route curvature smoother.
+- Do not broaden or replace that planner without the Vehicle Gym evidence and RJ's feel decision.
 - A path producer must validate segment continuity, endpoints, direction, and drivable expansion.
 
 ## Known mode-depth areas

@@ -5011,7 +5011,7 @@ FSeinEntityHandle USeinWorldSubsystem::SpawnEntity(
 	EnqueueVisualEvent(FSeinVisualEvent::MakeSpawnEvent(Handle, SafeTransform.GetLocation()));
 
 	// Construction-state notification — drives the placement-visual swap on the
-	// bridged actor's USeinConstructionComponent. Only fired when the entity
+	// bridged actor's USeinConstructionRenderComponent. Only fired when the entity
 	// actually carries a construction component (which is also what drove the
 	// auto-grant above). Symmetric with the un-grant + event in SeinFinishConstruction.
 	if (bHasConstructionComponent)

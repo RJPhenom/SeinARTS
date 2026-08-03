@@ -214,8 +214,8 @@ public:
 	 *
 	 *  Most OnActivate logic should read YawDegrees uniformly — it works for
 	 *  both snapped and free modes. RotationStep is kept for cases where the
-	 *  integer step is genuinely useful (mapping to FSeinFootprintData's
-	 *  90°-stepped Rotation, etc.). */
+	 *  integer step is genuinely useful (mapping to the navigation placement
+	 *  gate's discrete yaw convention). */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Targeter",
 		meta = (ClampMin = "0", ClampMax = "360", UIMin = "0", UIMax = "180"))
 	int32 RotationStepDegrees = 0;

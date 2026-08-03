@@ -45,6 +45,10 @@ ehthumbs.db
 __pycache__/
 *.pyc
 
+# ── Generated reports ──
+# Requested PDFs belong in the user's Downloads directory, never in-tree.
+/[Oo]utput/
+
 # ── Claude Code local state (settings.local, worktrees, transcripts, etc.) ──
 .claude/
 

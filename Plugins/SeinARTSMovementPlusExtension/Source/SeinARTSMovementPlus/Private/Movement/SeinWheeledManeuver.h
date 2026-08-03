@@ -143,9 +143,9 @@ FFixedPoint PolylineLengthFrom(const TArray<FFixedVector>& Waypoints, int32 From
 
 /** Choose a start maneuver for a coarse nav polyline, or return false to drive
  *  it unmodified (aligned enough / nothing feasible / reverse not allowed
- *  where required). See the candidate ladder in
- *  Docs/Engineering/WheeledVehicleMovement.md. Deterministic: fixed candidate
- *  order, fixed probe spacings, all-fixed-point math. */
+ *  where required). The candidate types and evaluation order in this module
+ *  are the live contract. Deterministic: fixed candidate order, fixed probe
+ *  spacings, all-fixed-point math. */
 bool PlanStartManeuver(const FInputs& In, const TArray<FFixedVector>& Waypoints, FPlan& Out);
 
 } // namespace SeinWheeledManeuver

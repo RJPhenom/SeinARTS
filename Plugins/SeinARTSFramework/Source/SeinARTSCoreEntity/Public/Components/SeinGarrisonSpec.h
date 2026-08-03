@@ -14,10 +14,10 @@
 #include "SeinGarrisonSpec.generated.h"
 
 /**
- * Per-container garrison metadata. Ships empty-ish — designer authors the
- * `FiringSlotTags` list against their own `SeinARTS.Slot.*` vocabulary,
- * and the starter `Ability_GarrisonFire` BP reads these to decide where
- * garrisoned infantry fire out of. Framework never interprets the tags.
+ * Per-container garrison metadata. The designer authors `FiringSlotTags`
+ * against their game's slot vocabulary and reads them from a garrison-fire
+ * ability. The framework deliberately stores, fingerprints, and exposes the
+ * tags without assigning game-specific firing behavior to them.
  */
 USTRUCT(BlueprintType, meta = (SeinDeterministic, SeinSubData))
 struct SEINARTSCOREENTITY_API FSeinGarrisonSpec : public FSeinComponent

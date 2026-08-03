@@ -58,13 +58,9 @@ void USeinEntityComponent::InjectAuthoredComponents(USeinWorldSubsystem& World, 
 	// this on the picker); we guard against an empty array entry (a designer
 	// might add a row and not pick a type yet).
 	//
-	// Duplicate-struct policy during Phase-1/3 migration: if a legacy typed
-	// AC (USeinMovementComponent, ...) injected this
-	// struct type earlier in the spawn flow's first pass, the array entry
-	// overwrites it and emits a warning naming the owning actor. This is the
-	// expected migration behavior â€” designers populate the new array, leave
-	// the old AC for reference, and the array wins. Phase 4 deletes the
-	// legacy ACs and the warning becomes unreachable.
+	// One simulation storage exists per struct type. A duplicate authored entry
+	// would otherwise silently overwrite the earlier value, so retain the
+	// deterministic last-entry-wins behavior but surface the authoring error.
 	for (const FInstancedStruct& Entry : ComponentData)
 	{
 		if (!Entry.IsValid())
@@ -85,9 +81,9 @@ void USeinEntityComponent::InjectAuthoredComponents(USeinWorldSubsystem& World, 
 		if (bAlreadyInjected)
 		{
 			UE_LOG(LogSeinEntityComp, Warning,
-				TEXT("Entity %s already has component %s from legacy typed-AC walk â€” "
-					 "USeinEntityComponent's array entry will OVERWRITE it. "
-					 "Remove the legacy AC from %s to silence this warning."),
+				TEXT("Entity %s has duplicate authored component type %s; "
+					 "the later USeinEntityComponent entry will overwrite the earlier value. "
+					 "Remove the duplicate entry from %s."),
 				*Handle.ToString(), *StructType->GetName(), *GetNameSafe(GetOwner()));
 			// Storage->AddComponent overwrites; intentional.
 		}

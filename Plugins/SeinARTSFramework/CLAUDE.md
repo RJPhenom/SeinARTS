@@ -30,7 +30,7 @@ SeinARTSLevelData    The unified level-bake pipeline (CP1.1, Decisions D10–D17
                      ISeinLevelLayerProvider registry, ASeinLevelVolume (brush-shape play-area
                      mask, multi-volume union, per-layer config, the ONE "Bake Level Data"
                      button, debug-viz component registry), channel-extensible baked asset,
-                     USeinLevelLoS. Nav + FoW are layer providers on it.
+                     Nav and FoW consume the baked layers through their own providers.
 SeinARTSNavigation   Pluggable nav: abstract USeinNavigation base; ships USeinNavigationAStar
                      (single-layer 2D grid, synchronous A*, LoS smoothing) as the default/
                      reference. Bakes as the "Nav" layer provider on SeinARTSLevelData and loads
@@ -128,8 +128,8 @@ All `: FSeinComponent`, all `SeinDeterministic`:
 `FSeinFogVisibilityComponent`, `FSeinChildTransformsComponent`, `FSeinSquadComponent`,
 `FSeinSquadMemberComponent`, `FSeinCommandBrokerData`, `FSeinBrokerMembershipData`,
 `FSeinContainmentData`, `FSeinContainmentMemberData`, `FSeinAttachmentSpec`, `FSeinTransportSpec`,
-`FSeinGarrisonSpec`, `FSeinLifespanData`. (`FSeinCapturePointData` is a sim struct but **not** a
-component.) Note: the `FSeinMovementComponent` / `FSeinNavigationComponent` payloads are *defined*
+`FSeinGarrisonSpec`, `FSeinLifespanData`. Note: the `FSeinMovementComponent` /
+`FSeinNavigationComponent` payloads are *defined*
 here, but their *systems* live in the Movement / Navigation modules.
 
 > **Not components:** entity tags are **not** a component — tag state is centralized in
@@ -185,8 +185,8 @@ factories. Everything behavioral — `FSeinSquadSystem`, `USeinSquadSubsystem`,
 Header-only, `FORCEINLINE`-heavy leaf module (depends only on `Core`/`CoreUObject`). Full
 fixed-point suite: `FFixedPoint` (32.32, platform-split 128-bit mul/div), `FFixedVector`,
 `FFixedVector2D`, `FFixedQuaternion`, `FFixedRotator`, `FFixedTransform`; geometry primitives
-(`FFixedBox/Sphere/Capsule/Plane/Ray/Bounds`); `FFixedRandom` (Xorshift128+ / SplitMix64 seeding);
-`FFixedTime`; namespaces `SeinMath` (sqrt, LUT trig, exp/log), `SeinGeometry`, `SeinTime`. BP
+(`FFixedBox/Sphere/Capsule/Plane/Ray`); `FFixedRandom` (Xorshift128+ / SplitMix64 seeding);
+`FFixedTime`; namespaces `SeinMath` (sqrt, LUT trig, exp/log) and `SeinGeometry`. BP
 make/break for fixed-point lives in `MathBPFL` (in CoreEntity). The `SEIN_SIM_SCOPE` asserts are
 **not** here — they're in `SeinARTSCoreEntity/Core/SeinSimContext.h`.
 
@@ -276,9 +276,9 @@ The **concrete modes** — Infantry, Wheeled, Tracked, Hover, Flight — and the
 live in the opt-in **SeinARTSMovementPlus** extension, not here. They derive from the base classes
 above (Infantry from `USeinBasicMovement`; the rest from `USeinMovement`) and are resolved through
 the soft `MovementClass` path, so the framework has **no compile-time dependency** on them. See
-`Plugins/SeinARTSMovementPlusExtension/CLAUDE.md`. (Wheeled feel = runtime bicycle pure-pursuit
-steering; NOT a Reeds-Shepp curve fit — see root doc. `GetMinTurnRadius` is a producer with NO
-consumer yet — the future curve planner / corner-rounding pass plugs in via `PlanPath`.)
+`Plugins/SeinARTSMovementPlusExtension/CLAUDE.md`. Wheeled/Tracked may prepend the shipped bounded,
+clearance-probed Reeds-Shepp-style start maneuver as typed Arc/Straight segments; this is not a full
+route-family solver. The remaining coarse path is driven by runtime steering.
 
 ## Networking (`SeinARTSNet`)
 GameInstance-subsystem-scoped (survives map travel). Real lockstep: `ASeinNetRelay` (per-PC RPC
@@ -344,8 +344,8 @@ registers `"SeinVisionComponent"`; the Cover editor module registers `"SeinCover
   `TSubclassOf<USeinEffect>`) drives research completion; the production system calls
   `World.ApplyEffect(...)`, routing modifiers + tags by the effect's scope. Player tags are
   refcounted via `GrantPlayerTag` / `UngrantPlayerTag`.
-- **Trust code over docstrings.** See the root `CLAUDE.md` "Source of truth" section for the full
-  list of known-stale comments (DESIGN/PLAN references, Net "Phase 0", Reeds-Shepp, etc.).
+- **Trust code over docstrings.** See the root `CLAUDE.md` "Source of truth" section for known-stale
+  narration such as retired DESIGN/PLAN references and Net "Phase 0" wording.
 
 ---
 
@@ -358,12 +358,13 @@ registers `"SeinVisionComponent"`; the Cover editor module registers `"SeinCover
   path; lockstep gate / AI-emit interceptor are delegate hooks bound by the Net module; some
   cross-module resolvers no-op until Nav/FoW register.
 - **SeinARTSLevelData** — built 2026-06 (CP1.1): substrate + provider registry + unified volume +
-  channel asset + LoS interface; both shipped layers ported onto it; legacy scaffolding removed.
+  channel asset; both shipped layers consume it; legacy scaffolding removed.
   CP1.1 closed 2026-06-10 — fresh-level E2E + network-determinism state-hash agreement
   user-verified.
-- **SeinARTSNavigation** — complete & hardened (lazy A* alloc, dynamic blockers, escape-nudge).
-  Bakes/loads via the unified level-data pipeline. (An empty `Public/Data/` dir exists; the
-  vehicle curve planner is unbuilt.)
+- **SeinARTSNavigation** — mature default grid A* (lazy allocation, dynamic blockers,
+  escape-nudge) with remaining policy-propagation work recorded in `Agents/OPEN_RISKS.md`.
+  It bakes and loads through the unified level-data pipeline; vehicle start-maneuver shaping
+  belongs to Movement+, downstream of this coarse route.
 - **SeinARTSMovement** — base + shared steering toolkit + Basic/BasicUnit + MoveTo action/proxy/BPFL;
   complete. The concrete modes (Infantry/Wheeled/Tracked/Hover/Flight) were extracted to the
   **SeinARTSMovementPlus** extension on 2026-06-02 — see that plugin's CLAUDE.md for their state.
