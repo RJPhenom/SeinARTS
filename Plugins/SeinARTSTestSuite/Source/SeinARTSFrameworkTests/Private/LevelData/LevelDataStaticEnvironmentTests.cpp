@@ -1,6 +1,7 @@
 #include "CQTest.h"
 #include "Components/ActorTestSpawner.h"
 #include "Engine/Texture2D.h"
+#include "Containers/Ticker.h"
 
 #include "SeinLevelDataDefault.h"
 #include "SeinLevelDataDefaultAsset.h"
@@ -64,6 +65,32 @@ namespace UE::SeinARTSTests
 					SavedNavigationClass;
 				Settings->FogOfWarClass =
 					SavedFogOfWarClass;
+			}
+
+			USeinARTSCoreSettings* Settings = nullptr;
+			FSoftClassPath SavedLevelDataClass;
+			FSoftClassPath SavedNavigationClass;
+			FSoftClassPath SavedFogOfWarClass;
+		};
+
+		struct FScopedLevelDataAdmissionClass
+		{
+			explicit FScopedLevelDataAdmissionClass(UClass* LevelDataClass)
+				: Settings(GetMutableDefault<USeinARTSCoreSettings>())
+				, SavedLevelDataClass(Settings->LevelDataClass)
+				, SavedNavigationClass(Settings->NavigationClass)
+				, SavedFogOfWarClass(Settings->FogOfWarClass)
+			{
+				Settings->LevelDataClass = FSoftClassPath(LevelDataClass);
+				Settings->NavigationClass.Reset();
+				Settings->FogOfWarClass.Reset();
+			}
+
+			~FScopedLevelDataAdmissionClass()
+			{
+				Settings->LevelDataClass = SavedLevelDataClass;
+				Settings->NavigationClass = SavedNavigationClass;
+				Settings->FogOfWarClass = SavedFogOfWarClass;
 			}
 
 			USeinARTSCoreSettings* Settings = nullptr;
@@ -290,6 +317,92 @@ namespace UE::SeinARTSTests
 				World->GetMatchBootstrapState())));
 		ASSERT_THAT(IsTrue(
 			World->GetCanonicalStateContractDigest().IsValid()));
+	}
+
+	TEST(NativeLevelDataSubclassMustClaimExactStateCoverage,
+		"SeinARTS.Unit.LevelData.StaticEnvironment")
+	{
+		FScopedLevelDataAdmissionClass Admission(
+			USeinLevelDataDefaultInheritedUnclaimedTest::StaticClass());
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+
+		TestRunner->AddExpectedError(
+			TEXT("must explicitly override ComputeStaticEnvironmentDigest"),
+			EAutomationExpectedErrorFlags::Contains, 2, false);
+		TestRunner->AddExpectedError(
+			TEXT("transaction closed (failed)"),
+			EAutomationExpectedErrorFlags::Contains, 1, false);
+		FString Error;
+		ASSERT_THAT(IsFalse(SeinTestMatchBootstrap::Materialize(
+			*World,
+			FSeinMatchSettings(),
+			0x4C44554E,
+			TEXT("LevelData.UnclaimedNativeSubclass"),
+			&Error)));
+		ASSERT_THAT(IsTrue(Error.Contains(
+			TEXT("ComputeStaticEnvironmentDigest"))));
+	}
+
+	TEST(ExplicitlyClaimedLevelDataSubclassBootstraps,
+		"SeinARTS.Unit.LevelData.StaticEnvironment")
+	{
+		FScopedLevelDataAdmissionClass Admission(
+			USeinLevelDataDefaultClaimedTest::StaticClass());
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+		FString Error;
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Materialize(
+			*World,
+			FSeinMatchSettings(),
+			0x4C44434C,
+			TEXT("LevelData.ClaimedNativeSubclass"),
+			&Error)));
+		ASSERT_THAT(IsTrue(
+			World->GetCanonicalStateContractDigest().IsValid()));
+	}
+
+	TEST(PostFreezeLevelDataGenerationDriftFailStops,
+		"SeinARTS.Unit.LevelData.StaticEnvironment")
+	{
+		FScopedLevelDataAdmissionClass Admission(
+			USeinLevelDataDefaultClaimedTest::StaticClass());
+		FActorTestSpawner Spawner;
+		UWorld& UnrealWorld = Spawner.GetWorld();
+		USeinWorldSubsystem* World =
+			UnrealWorld.GetSubsystem<USeinWorldSubsystem>();
+		USeinLevelDataSubsystem* LevelDataSubsystem =
+			UnrealWorld.GetSubsystem<USeinLevelDataSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+		ASSERT_THAT(IsNotNull(LevelDataSubsystem));
+		USeinLevelDataDefaultClaimedTest* LevelData =
+			Cast<USeinLevelDataDefaultClaimedTest>(
+				LevelDataSubsystem->GetLevelData());
+		ASSERT_THAT(IsNotNull(LevelData));
+
+		FString Error;
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Materialize(
+			*World,
+			FSeinMatchSettings(),
+			0x4C444452,
+			TEXT("LevelData.GenerationDrift"),
+			&Error)));
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World, &Error)));
+		LevelData->ForceStaticMutationForTests();
+
+		TestRunner->AddExpectedError(
+			TEXT("Level Data static substrate mutated in place"),
+			EAutomationExpectedErrorFlags::Contains, 1, false);
+		const int32 TickBefore = World->GetCurrentTick();
+		FTSTicker::GetCoreTicker().Tick(
+			World->GetFixedDeltaTimeSeconds());
+		ASSERT_THAT(AreEqual(TickBefore, World->GetCurrentTick()));
+		ASSERT_THAT(IsFalse(World->IsSimulationRunning()));
+		ASSERT_THAT(IsFalse(World->IsExecutionTopologyValid()));
 	}
 
 	TEST(MissingNavChannelBlocksCanonicalBootstrap,
@@ -578,5 +691,87 @@ namespace UE::SeinARTSTests
 
 		LevelData->OnLevelDataMutated.Remove(
 			MutationHandle);
+	}
+
+	TEST(DefaultLevelDataDigestIsContentExactAndChannelOrderIndependent,
+		"SeinARTS.Unit.LevelData.StaticEnvironment")
+	{
+		FActorTestSpawner Spawner;
+		UWorld& UnrealWorld = Spawner.GetWorld();
+		USeinLevelDataDefault* LevelData =
+			NewObject<USeinLevelDataDefault>(&UnrealWorld);
+		ASSERT_THAT(IsNotNull(LevelData));
+
+		USeinLevelDataDefaultAsset* First =
+			MakeValidDefaultAsset(&UnrealWorld);
+		ASSERT_THAT(IsNotNull(First));
+		FSeinLevelChannelBlock& ExtraFirst =
+			First->Channels.AddDefaulted_GetRef();
+		ExtraFirst.LayerId = TEXT("Alpha");
+		ExtraFirst.CellSizeMultiple = 1;
+		ExtraFirst.Data = { 7, 8, 9 };
+		ASSERT_THAT(IsTrue(LevelData->LoadFromAsset(First)));
+		FGuid FirstDigest;
+		FString Error;
+		ASSERT_THAT(IsTrue(LevelData->ComputeStaticEnvironmentDigest(
+			FirstDigest, Error)));
+
+		USeinLevelDataDefaultAsset* Reordered =
+			MakeValidDefaultAsset(&UnrealWorld);
+		ASSERT_THAT(IsNotNull(Reordered));
+		Reordered->Channels.InsertDefaulted(0);
+		FSeinLevelChannelBlock& ExtraReordered =
+			Reordered->Channels[0];
+		ExtraReordered.LayerId = TEXT("Alpha");
+		ExtraReordered.CellSizeMultiple = 1;
+		ExtraReordered.Data = { 7, 8, 9 };
+		ASSERT_THAT(IsTrue(LevelData->LoadFromAsset(Reordered)));
+		FGuid ReorderedDigest;
+		ASSERT_THAT(IsTrue(LevelData->ComputeStaticEnvironmentDigest(
+			ReorderedDigest, Error)));
+		ASSERT_THAT(IsTrue(FirstDigest == ReorderedDigest));
+
+		Reordered->SharedHeightQ[2] += 1;
+		ASSERT_THAT(IsTrue(LevelData->LoadFromAsset(Reordered)));
+		FGuid ChangedDigest;
+		ASSERT_THAT(IsTrue(LevelData->ComputeStaticEnvironmentDigest(
+			ChangedDigest, Error)));
+		ASSERT_THAT(IsFalse(ChangedDigest == FirstDigest));
+	}
+
+	TEST(DefaultLevelDataRejectsDuplicateLayerIdentityTransactionally,
+		"SeinARTS.Unit.LevelData.StaticEnvironment")
+	{
+		FActorTestSpawner Spawner;
+		UWorld& UnrealWorld = Spawner.GetWorld();
+		USeinLevelDataDefault* LevelData =
+			NewObject<USeinLevelDataDefault>(&UnrealWorld);
+		ASSERT_THAT(IsNotNull(LevelData));
+		USeinLevelDataDefaultAsset* Valid =
+			MakeValidDefaultAsset(&UnrealWorld);
+		ASSERT_THAT(IsNotNull(Valid));
+		ASSERT_THAT(IsTrue(LevelData->LoadFromAsset(Valid)));
+		FGuid Before;
+		FString Error;
+		ASSERT_THAT(IsTrue(LevelData->ComputeStaticEnvironmentDigest(
+			Before, Error)));
+
+		USeinLevelDataDefaultAsset* Duplicate =
+			MakeValidDefaultAsset(&UnrealWorld);
+		ASSERT_THAT(IsNotNull(Duplicate));
+		const FSeinLevelChannelBlock DuplicateChannel =
+			Duplicate->Channels[0];
+		Duplicate->Channels.Add(DuplicateChannel);
+		TestRunner->AddExpectedError(
+			TEXT("layer channels require unique"),
+			EAutomationExpectedErrorFlags::Contains, 1, false);
+		TestRunner->AddExpectedError(
+			TEXT("current runtime substrate was left unchanged"),
+			EAutomationExpectedErrorFlags::Contains, 1, false);
+		ASSERT_THAT(IsFalse(LevelData->LoadFromAsset(Duplicate)));
+		FGuid After;
+		ASSERT_THAT(IsTrue(LevelData->ComputeStaticEnvironmentDigest(
+			After, Error)));
+		ASSERT_THAT(IsTrue(Before == After));
 	}
 }

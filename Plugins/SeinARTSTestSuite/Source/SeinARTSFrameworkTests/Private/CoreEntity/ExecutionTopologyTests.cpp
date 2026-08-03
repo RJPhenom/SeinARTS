@@ -310,6 +310,131 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(World->IsExecutionTopologyFrozen()));
 	}
 
+	TEST(ConditionalContributorRequiresSystemWhileFeatureIsActive,
+		"SeinARTS.Unit.CoreEntity.ExecutionTopology")
+	{
+		FSeinCanonicalStateDescriptor Descriptor;
+		Descriptor.Key.StableDomainId =
+			TEXT("seinarts.tests.orphan");
+		Descriptor.Key.StableContributorId =
+			TEXT("conditional-active-state");
+		Descriptor.SchemaVersion = 1;
+		Descriptor.ImplementationRevision = 1;
+		Descriptor.Role = ESeinCanonicalStateRole::DerivedCache;
+		Descriptor.bExternallyOwned = true;
+		Descriptor.bExternalOwnershipOnlyWhenWorldInactive = true;
+
+		FSeinCanonicalStateContributorOps Ops;
+		Ops.QueryWorldInactive = [](
+			const FSeinCanonicalStateWorldBindingContext&,
+			bool& bOutInactive,
+			FString&)
+			{
+				bOutInactive = false;
+				return true;
+			};
+		Ops.StageDerived = [](
+			const FSeinCanonicalStateStageContext&,
+			TUniquePtr<ISeinCanonicalStateRestoreStage>&,
+			FString&)
+			{
+				return true;
+			};
+		Ops.CommitDerived = [](
+			FSeinCanonicalStateCommitContext&,
+			TUniquePtr<ISeinCanonicalStateRestoreStage>&&)
+			{
+			};
+
+		FString RegistrationError;
+		FSeinCanonicalStateRegistrationHandle Provider =
+			FSeinCanonicalStateRegistry::Register(
+				FName(TEXT("SeinFrameworkTests.ExecutionTopology")),
+				Descriptor,
+				MoveTemp(Ops),
+				&RegistrationError);
+		ASSERT_THAT(IsTrue(Provider.IsValid()));
+		ASSERT_THAT(IsTrue(RegistrationError.IsEmpty()));
+
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+		TestRunner->AddExpectedError(
+			TEXT("belongs to an enabled world feature"),
+			EAutomationExpectedErrorFlags::Contains, 2, false);
+		TestRunner->AddExpectedError(
+			TEXT("transaction closed (failed)"),
+			EAutomationExpectedErrorFlags::Contains, 1, false);
+		FString Error;
+		ASSERT_THAT(IsFalse(SeinTestMatchBootstrap::Materialize(
+			*World,
+			FSeinMatchSettings(),
+			0,
+			TEXT("ExecutionTopologyConditionalActiveReject"),
+			&Error)));
+		ASSERT_THAT(IsTrue(Error.Contains(
+			TEXT("conditional-active-state"))));
+	}
+
+	TEST(ConditionalContributorAllowsExplicitlyInactiveWorld,
+		"SeinARTS.Unit.CoreEntity.ExecutionTopology")
+	{
+		FSeinCanonicalStateDescriptor Descriptor;
+		Descriptor.Key.StableDomainId =
+			TEXT("seinarts.tests.orphan");
+		Descriptor.Key.StableContributorId =
+			TEXT("conditional-inactive-state");
+		Descriptor.SchemaVersion = 1;
+		Descriptor.ImplementationRevision = 1;
+		Descriptor.Role = ESeinCanonicalStateRole::DerivedCache;
+		Descriptor.bExternallyOwned = true;
+		Descriptor.bExternalOwnershipOnlyWhenWorldInactive = true;
+
+		FSeinCanonicalStateContributorOps Ops;
+		Ops.QueryWorldInactive = [](
+			const FSeinCanonicalStateWorldBindingContext&,
+			bool& bOutInactive,
+			FString&)
+			{
+				bOutInactive = true;
+				return true;
+			};
+		Ops.StageDerived = [](
+			const FSeinCanonicalStateStageContext&,
+			TUniquePtr<ISeinCanonicalStateRestoreStage>&,
+			FString&)
+			{
+				return true;
+			};
+		Ops.CommitDerived = [](
+			FSeinCanonicalStateCommitContext&,
+			TUniquePtr<ISeinCanonicalStateRestoreStage>&&)
+			{
+			};
+
+		FString RegistrationError;
+		FSeinCanonicalStateRegistrationHandle Provider =
+			FSeinCanonicalStateRegistry::Register(
+				FName(TEXT("SeinFrameworkTests.ExecutionTopology")),
+				Descriptor,
+				MoveTemp(Ops),
+				&RegistrationError);
+		ASSERT_THAT(IsTrue(Provider.IsValid()));
+		ASSERT_THAT(IsTrue(RegistrationError.IsEmpty()));
+
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Materialize(
+			*World,
+			FSeinMatchSettings(),
+			0,
+			TEXT("ExecutionTopologyConditionalInactiveAccept"))));
+		ASSERT_THAT(IsTrue(World->IsExecutionTopologyFrozen()));
+	}
+
 	TEST(CanonicalStateKeysAreOrderedAndBoundIntoTopologyDigest,
 		"SeinARTS.Unit.CoreEntity.ExecutionTopology")
 	{

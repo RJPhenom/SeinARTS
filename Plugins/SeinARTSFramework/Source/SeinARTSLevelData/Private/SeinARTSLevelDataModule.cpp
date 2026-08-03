@@ -6,6 +6,7 @@
 #include "SeinLevelData.h"
 #include "SeinLevelDataSubsystem.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "Serialization/SeinLevelDataCanonicalStateProvider.h"
 #include "UObject/UObjectIterator.h"
 
 #if WITH_EDITOR
@@ -40,6 +41,18 @@ namespace
 void FSeinARTSLevelDataModule::StartupModule()
 {
 	SimulationContentRegistrationHandle.Reset();
+	CanonicalStateRegistrationHandle.Reset();
+
+	FString CanonicalStateError;
+	CanonicalStateRegistrationHandle =
+		SeinRegisterLevelDataCanonicalStateProvider(
+			CanonicalStateError);
+	if (!CanonicalStateRegistrationHandle.IsValid())
+	{
+		UE_LOG(LogSeinLevelData, Error,
+			TEXT("Level Data canonical-state provider failed to register: %s"),
+			*CanonicalStateError);
+	}
 
 	FSeinSimulationContentContributorDescriptor ContentDescriptor;
 	ContentDescriptor.StableContributorId = TEXT("seinarts.leveldata");
@@ -119,6 +132,7 @@ void FSeinARTSLevelDataModule::ReleaseModuleOwnedState()
 #endif
 
 	SimulationContentRegistrationHandle.Reset();
+	CanonicalStateRegistrationHandle.Reset();
 }
 
 IMPLEMENT_MODULE(FSeinARTSLevelDataModule, SeinARTSLevelData)

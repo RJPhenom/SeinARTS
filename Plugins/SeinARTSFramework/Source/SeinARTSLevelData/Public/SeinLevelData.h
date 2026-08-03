@@ -34,6 +34,7 @@
 #include "UObject/Object.h"
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
+#include "Serialization/SeinCanonicalStateRegistry.h"
 #include "SeinLevelData.generated.h"
 
 class UWorld;
@@ -58,12 +59,62 @@ struct FSeinLevelCellSurface
  *  Cached consumers (nav/FoW runtime grids, debug proxies) re-query on this signal. */
 DECLARE_MULTICAST_DELEGATE(FSeinOnLevelDataMutated);
 
+/** How a Level Data implementation accounts for mutable runtime state beyond
+ * its immutable baked/static substrate. */
+enum class ESeinLevelDataStateCoverage : uint8
+{
+	/** No explicit claim. Always rejected before tick zero. */
+	Unspecified,
+
+	/** No future-affecting mutable state beyond the static-environment digest. */
+	Stateless,
+
+	/** Opaque mutable state is restored by the named authoritative providers. */
+	CanonicalStateContributors,
+};
+
+/** Exact-state admission claim for one concrete Level Data implementation. */
+struct SEINARTSLEVELDATA_API FSeinLevelDataStateCoverageClaim
+{
+	FString StableImplementationId;
+	uint32 BehaviorRevision = 0;
+	uint32 CoverageRevision = 0;
+	ESeinLevelDataStateCoverage StateCoverage =
+		ESeinLevelDataStateCoverage::Unspecified;
+	TArray<FSeinCanonicalStateKey> RequiredCanonicalStateContributors;
+};
+
 UCLASS(Abstract, BlueprintType, meta = (DisplayName = "Sein Level Data"))
 class SEINARTSLEVELDATA_API USeinLevelData : public UObject
 {
 	GENERATED_BODY()
 
 public:
+	/**
+	 * Compute the exact identity of every immutable substrate value that can
+	 * affect deterministic runtime queries. Custom implementations must cover
+	 * dimensions/origin/resolution, shared surfaces, terrain, and every opaque
+	 * runtime layer channel they expose. The base fails closed.
+	 */
+	virtual bool ComputeStaticEnvironmentDigest(
+		FGuid& OutDigest,
+		FString& OutError) const;
+
+	/**
+	 * Declare whether the implementation retains mutable future-affecting
+	 * state beyond the static substrate. The base fails closed; a custom
+	 * implementation must explicitly claim Stateless or name all authoritative
+	 * canonical contributors that restore its state.
+	 */
+	virtual bool ComputeStateCoverageClaim(
+		FSeinLevelDataStateCoverageClaim& OutClaim,
+		FString& OutError) const;
+
+	/** Local mutation evidence latched at StateContract freeze. Every static
+	 * substrate writer must bump this. It does not enter peer identity because
+	 * peers may adopt identical data a different number of times. */
+	virtual uint64 GetStaticEnvironmentGeneration() const { return 0; }
+
 	// ----------------------------------------------------------------------
 	// Canonical grid / coordinate space — at the FINEST layer resolution (D13).
 	// Coarser layers (e.g. FoW) operate their own grid at their own resolution by

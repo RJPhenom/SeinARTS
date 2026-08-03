@@ -22,7 +22,7 @@ namespace
 	// v2: descriptor identities carry the ownership frame
 	// ("externally-owned"/"system-claimed"), which changes every contributor
 	// digest — pre-v2 checkpoints/replays refuse to restore by design.
-	constexpr uint32 ContractFormatVersion = 2;
+	constexpr uint32 ContractFormatVersion = 3;
 	constexpr int32 MaxNativeCheckpointBytes = 64 * 1024 * 1024;
 
 	bool IsProviderInvocationActive()
@@ -571,9 +571,11 @@ namespace
 		}
 		AppendFramed(
 			OutCanonical,
-			Descriptor.bExternallyOwned
-				? TEXT("externally-owned")
-				: TEXT("system-claimed"));
+			Descriptor.bExternalOwnershipOnlyWhenWorldInactive
+				? TEXT("conditional-system-or-inactive")
+				: Descriptor.bExternallyOwned
+					? TEXT("externally-owned")
+					: TEXT("system-claimed"));
 		OutDigest = DigestUtf8(OutCanonical);
 		return OutDigest.IsValid();
 	}
@@ -583,6 +585,27 @@ namespace
 		const FSeinCanonicalStateContributorOps& Ops,
 		FString& OutError)
 	{
+		if (Descriptor.bExternalOwnershipOnlyWhenWorldInactive)
+		{
+			if (!Descriptor.bExternallyOwned)
+			{
+				OutError =
+					TEXT("Conditional external ownership requires bExternallyOwned.");
+				return false;
+			}
+			if (!Ops.QueryWorldInactive)
+			{
+				OutError =
+					TEXT("Conditional external ownership requires a world-inactive query callback.");
+				return false;
+			}
+		}
+		else if (Ops.QueryWorldInactive)
+		{
+			OutError =
+				TEXT("A world-inactive query callback requires conditional external ownership.");
+			return false;
+		}
 		if (Descriptor.Role == ESeinCanonicalStateRole::DerivedCache)
 		{
 			if (!Ops.StageDerived || !Ops.CommitDerived)
@@ -898,6 +921,86 @@ bool FSeinCanonicalStateRegistry::CaptureWorldBindingFrames(
 	}
 
 	OutFrames = MoveTemp(Candidate);
+	return true;
+}
+
+bool FSeinCanonicalStateRegistry::ValidateWorldOwnershipClaims(
+	const FSeinCanonicalStateSchemaSnapshot& Schema,
+	const FSeinCanonicalStateWorldBindingContext& Context,
+	TConstArrayView<FString> SystemClaimedCanonicalKeys,
+	FString& OutError)
+{
+	OutError.Reset();
+	if (!IsInGameThread() || !Schema.IsValid())
+	{
+		OutError =
+			TEXT("Canonical state ownership validation requires a valid frozen schema on the game thread.");
+		return false;
+	}
+	if (IsProviderInvocationActive())
+	{
+		OutError =
+			TEXT("Canonical state ownership validation may not re-enter a provider callback transaction.");
+		return false;
+	}
+
+	TSet<FString> Claimed;
+	Claimed.Reserve(SystemClaimedCanonicalKeys.Num());
+	for (const FString& Key : SystemClaimedCanonicalKeys)
+	{
+		Claimed.Add(Key.ToLower());
+	}
+
+	FProviderInvocationScope InvocationScope;
+	for (const FSeinFrozenCanonicalStateContributor& Contributor :
+		Schema.GetContributors())
+	{
+		const FString Key = CanonicalKey(Contributor.Descriptor.Key);
+		if (Claimed.Contains(Key))
+		{
+			continue;
+		}
+		if (!Contributor.Descriptor.bExternallyOwned)
+		{
+			OutError = FString::Printf(
+				TEXT("Canonical-state contributor '%s' is claimed by no registered simulation system and is not marked externally owned."),
+				*Key);
+			return false;
+		}
+		if (!Contributor.Descriptor.
+			bExternalOwnershipOnlyWhenWorldInactive)
+		{
+			continue;
+		}
+
+		FSeinCanonicalStateContributorOps Ops;
+		if (!ResolveProvider(
+			Contributor.ProviderToken, Ops, &OutError))
+		{
+			return false;
+		}
+		bool bWorldInactive = false;
+		if (!Ops.QueryWorldInactive
+			|| !Ops.QueryWorldInactive(
+				Context, bWorldInactive, OutError))
+		{
+			if (OutError.IsEmpty())
+			{
+				OutError =
+					TEXT("Conditional contributor world-inactive query failed.");
+			}
+			OutError = FString::Printf(
+				TEXT("%s: %s"), *Key, *OutError);
+			return false;
+		}
+		if (!bWorldInactive)
+		{
+			OutError = FString::Printf(
+				TEXT("Canonical-state contributor '%s' belongs to an enabled world feature but is claimed by no registered simulation system."),
+				*Key);
+			return false;
+		}
+	}
 	return true;
 }
 

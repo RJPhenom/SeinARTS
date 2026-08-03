@@ -593,6 +593,23 @@ struct FSeinNavigationRestoreStage final
 
 struct FSeinNavigationCanonicalStateProvider
 {
+	static bool QueryWorldInactive(
+		const FSeinCanonicalStateWorldBindingContext& Context,
+		bool& bOutInactive,
+		FString& OutError)
+	{
+		USeinNavigationSubsystem* NavigationSubsystem =
+			ResolveSubsystem(Context.Services);
+		if (!NavigationSubsystem)
+		{
+			OutError =
+				TEXT("Navigation canonical state could not resolve its world subsystem.");
+			return false;
+		}
+		bOutInactive = NavigationSubsystem->GetNavigation() == nullptr;
+		return true;
+	}
+
 	static bool PrepareWorldBinding(
 		const FSeinCanonicalStateWorldBindingContext& Context,
 		FString& OutError)
@@ -905,8 +922,11 @@ SeinRegisterNavigationCanonicalStateProvider(FString& OutError)
 	// system that names it registers only in nav-enabled worlds, and a
 	// nav-disabled world must still bootstrap with the contributor present.
 	Descriptor.bExternallyOwned = true;
+	Descriptor.bExternalOwnershipOnlyWhenWorldInactive = true;
 
 	FSeinCanonicalStateContributorOps Ops;
+	Ops.QueryWorldInactive =
+		&FSeinNavigationCanonicalStateProvider::QueryWorldInactive;
 	Ops.PrepareWorldBinding =
 		&FSeinNavigationCanonicalStateProvider::PrepareWorldBinding;
 	Ops.FreezeWorldBinding =

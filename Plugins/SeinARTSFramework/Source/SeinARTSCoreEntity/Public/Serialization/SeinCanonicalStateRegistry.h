@@ -225,6 +225,16 @@ struct SEINARTSCOREENTITY_API FSeinCanonicalStateDescriptor
 	 * digest: ownership semantics are part of the exact contract.
 	 */
 	bool bExternallyOwned = false;
+
+	/**
+	 * Narrow external-ownership exemption for a contributor normally claimed
+	 * by a conditionally registered simulation system. When no live system
+	 * claims it, the provider must prove through QueryWorldInactive that its
+	 * owning feature is explicitly disabled in this world. This prevents an
+	 * enabled subsystem from silently losing its system/state ownership edge.
+	 * Requires bExternallyOwned; folded into the descriptor digest.
+	 */
+	bool bExternalOwnershipOnlyWhenWorldInactive = false;
 };
 
 /** Read-only capture input supplied only on the game thread. */
@@ -425,6 +435,17 @@ struct SEINARTSCOREENTITY_API ISeinCanonicalStateRestoreStage
  */
 struct SEINARTSCOREENTITY_API FSeinCanonicalStateContributorOps
 {
+	/**
+	 * Required only by descriptors whose external-ownership exemption is
+	 * conditional. Return true when the query itself succeeded and set
+	 * bOutInactive only when the owning feature is explicitly disabled for
+	 * this world. The callback is a read-only bootstrap query.
+	 */
+	TFunction<bool(
+		const FSeinCanonicalStateWorldBindingContext&,
+		bool& /*bOutInactive*/,
+		FString&)> QueryWorldInactive;
+
 	/**
 	 * Prepare provider-local immutable world inputs before any compatibility
 	 * frame is inspected. This may synchronously load local baked/static data,
@@ -630,6 +651,18 @@ public:
 		const FSeinCanonicalStateSchemaSnapshot& Schema,
 		const FSeinCanonicalStateWorldBindingContext& Context,
 		TArray<FString>& OutFrames,
+		FString& OutError);
+
+	/**
+	 * Close the reverse ownership edge for the current world. Ordinary
+	 * contributors must be system-claimed, unconditional external services
+	 * use bExternallyOwned, and conditional-system contributors may use their
+	 * exemption only when QueryWorldInactive proves the feature is disabled.
+	 */
+	static bool ValidateWorldOwnershipClaims(
+		const FSeinCanonicalStateSchemaSnapshot& Schema,
+		const FSeinCanonicalStateWorldBindingContext& Context,
+		TConstArrayView<FString> SystemClaimedCanonicalKeys,
 		FString& OutError);
 
 	/** Capture all persistent native contributors into canonical key order. */

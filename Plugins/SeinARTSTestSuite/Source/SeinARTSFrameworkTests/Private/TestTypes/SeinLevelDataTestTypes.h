@@ -1,6 +1,7 @@
 #pragma once
 
 #include "SeinLevelData.h"
+#include "SeinLevelDataDefault.h"
 #include "SeinLevelDataTestTypes.generated.h"
 
 /** Minimal runtime substrate shared by focused layer-adoption tests. */
@@ -54,5 +55,43 @@ protected:
 	{
 		++BakeCallCount;
 		return true;
+	}
+};
+
+/** Proves native subclasses do not silently inherit the shipped claim. */
+UCLASS()
+class USeinLevelDataDefaultInheritedUnclaimedTest
+	: public USeinLevelDataDefault
+{
+	GENERATED_BODY()
+};
+
+/** Explicit test-only native admission of the shipped stateless contract. */
+UCLASS()
+class USeinLevelDataDefaultClaimedTest
+	: public USeinLevelDataDefault
+{
+	GENERATED_BODY()
+
+public:
+	virtual bool ComputeStaticEnvironmentDigest(
+		FGuid& OutDigest,
+		FString& OutError) const override
+	{
+		return ComputeDefaultStaticEnvironmentDigest(
+			OutDigest, OutError);
+	}
+
+	virtual bool ComputeStateCoverageClaim(
+		FSeinLevelDataStateCoverageClaim& OutClaim,
+		FString& OutError) const override
+	{
+		return ComputeDefaultStateCoverageClaim(
+			OutClaim, OutError);
+	}
+
+	void ForceStaticMutationForTests()
+	{
+		MarkStaticEnvironmentMutated();
 	}
 };

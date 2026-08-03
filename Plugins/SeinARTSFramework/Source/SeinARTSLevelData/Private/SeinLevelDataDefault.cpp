@@ -22,6 +22,7 @@
 #include "CollisionQueryParams.h"
 #include "Misc/ScopedSlowTask.h"
 #include "TextureResource.h"
+#include "Hash/Blake3.h"
 
 #if WITH_EDITOR
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -31,6 +32,273 @@
 #endif
 
 #include "SeinARTSLevelDataLog.h"
+
+namespace
+{
+	class FLevelDataDigestStream
+	{
+	public:
+		FLevelDataDigestStream()
+		{
+			WriteString(TEXT("SeinARTS.LevelData.Default.StaticEnvironment"));
+			WriteUInt32(1);
+		}
+
+		void WriteUInt8(uint8 Value)
+		{
+			Hasher.Update(&Value, sizeof(Value));
+		}
+
+		void WriteUInt32(uint32 Value)
+		{
+			uint8 Bytes[4];
+			for (int32 Index = 0; Index < 4; ++Index)
+			{
+				Bytes[Index] = static_cast<uint8>(
+					Value >> ((3 - Index) * 8));
+			}
+			Hasher.Update(Bytes, sizeof(Bytes));
+		}
+
+		void WriteInt32(int32 Value)
+		{
+			WriteUInt32(BitCast<uint32>(Value));
+		}
+
+		void WriteUInt64(uint64 Value)
+		{
+			uint8 Bytes[8];
+			for (int32 Index = 0; Index < 8; ++Index)
+			{
+				Bytes[Index] = static_cast<uint8>(
+					Value >> ((7 - Index) * 8));
+			}
+			Hasher.Update(Bytes, sizeof(Bytes));
+		}
+
+		void WriteInt64(int64 Value)
+		{
+			WriteUInt64(BitCast<uint64>(Value));
+		}
+
+		void WriteString(const FString& Value)
+		{
+			const FTCHARToUTF8 Utf8(*Value, Value.Len());
+			WriteUInt64(static_cast<uint64>(Utf8.Length()));
+			Hasher.Update(Utf8.Get(), Utf8.Length());
+		}
+
+		void WriteBytes(TConstArrayView<uint8> Bytes)
+		{
+			WriteUInt64(static_cast<uint64>(Bytes.Num()));
+			if (!Bytes.IsEmpty())
+			{
+				Hasher.Update(Bytes.GetData(), Bytes.Num());
+			}
+		}
+
+		FGuid Finalize() const
+		{
+			const FBlake3Hash Hash = Hasher.Finalize();
+			const uint8* Bytes = Hash.GetBytes();
+			auto ReadUInt32 = [](const uint8* In)
+			{
+				return static_cast<uint32>(In[0]) << 24
+					| static_cast<uint32>(In[1]) << 16
+					| static_cast<uint32>(In[2]) << 8
+					| static_cast<uint32>(In[3]);
+			};
+			return FGuid(
+				ReadUInt32(Bytes),
+				ReadUInt32(Bytes + 4),
+				ReadUInt32(Bytes + 8),
+				ReadUInt32(Bytes + 12));
+		}
+
+	private:
+		FBlake3 Hasher;
+	};
+
+	bool BuildDefaultStaticEnvironmentDigest(
+		const FString& ClassPath,
+		int32 Width,
+		int32 Height,
+		FFixedPoint CellSize,
+		const FFixedVector& Origin,
+		TConstArrayView<FFixedPoint> SharedHeight,
+		TConstArrayView<FFixedPoint> SharedNormalZ,
+		TConstArrayView<uint8> CellFlags,
+		TConstArrayView<uint8> CellTerrainType,
+		TConstArrayView<FSeinLevelChannelBlock> Channels,
+		FGuid& OutDigest,
+		FString& OutError)
+	{
+		OutDigest.Invalidate();
+		OutError.Reset();
+		const bool bHasRuntimeData = Width > 0 && Height > 0;
+		const int64 NumCells64 =
+			static_cast<int64>(Width) * static_cast<int64>(Height);
+		if ((bHasRuntimeData
+				&& (CellSize <= FFixedPoint::Zero
+					|| NumCells64 <= 0
+					|| NumCells64 > MAX_int32
+					|| SharedHeight.Num() != NumCells64
+					|| SharedNormalZ.Num() != NumCells64
+					|| CellFlags.Num() != NumCells64
+					|| CellTerrainType.Num() != NumCells64))
+			|| (!bHasRuntimeData
+				&& (!SharedHeight.IsEmpty()
+					|| !SharedNormalZ.IsEmpty()
+					|| !CellFlags.IsEmpty()
+					|| !CellTerrainType.IsEmpty()
+					|| !Channels.IsEmpty())))
+		{
+			OutError =
+				TEXT("Default Level Data runtime arrays do not match their static-environment dimensions.");
+			return false;
+		}
+
+		FLevelDataDigestStream Stream;
+		Stream.WriteString(ClassPath);
+		Stream.WriteUInt8(bHasRuntimeData ? 1 : 0);
+		Stream.WriteInt32(Width);
+		Stream.WriteInt32(Height);
+		Stream.WriteInt64(CellSize.Value);
+		Stream.WriteInt64(Origin.X.Value);
+		Stream.WriteInt64(Origin.Y.Value);
+		Stream.WriteInt64(Origin.Z.Value);
+		Stream.WriteUInt64(static_cast<uint64>(SharedHeight.Num()));
+		for (const FFixedPoint Value : SharedHeight)
+		{
+			Stream.WriteInt64(Value.Value);
+		}
+		Stream.WriteUInt64(static_cast<uint64>(SharedNormalZ.Num()));
+		for (const FFixedPoint Value : SharedNormalZ)
+		{
+			Stream.WriteInt64(Value.Value);
+		}
+		Stream.WriteBytes(CellFlags);
+		Stream.WriteBytes(CellTerrainType);
+		Stream.WriteUInt64(static_cast<uint64>(Channels.Num()));
+		FString PreviousLayerId;
+		for (const FSeinLevelChannelBlock& Channel : Channels)
+		{
+			const FString LayerId =
+				Channel.LayerId.ToString().ToLower();
+			if (LayerId.IsEmpty()
+				|| (!PreviousLayerId.IsEmpty()
+					&& LayerId <= PreviousLayerId)
+				|| Channel.CellSizeMultiple <= 0)
+			{
+				OutError =
+					TEXT("Default Level Data channels must have unique IDs in canonical order and positive cell-size multiples.");
+				return false;
+			}
+			Stream.WriteString(LayerId);
+			Stream.WriteInt32(Channel.CellSizeMultiple);
+			Stream.WriteBytes(Channel.Data);
+			PreviousLayerId = LayerId;
+		}
+
+		OutDigest = Stream.Finalize();
+		if (!OutDigest.IsValid())
+		{
+			OutError =
+				TEXT("Default Level Data produced an invalid static-environment digest.");
+			return false;
+		}
+		return true;
+	}
+}
+
+bool USeinLevelDataDefault::ComputeStaticEnvironmentDigest(
+	FGuid& OutDigest,
+	FString& OutError) const
+{
+	if (GetClass() != USeinLevelDataDefault::StaticClass())
+	{
+		OutDigest.Invalidate();
+		OutError = FString::Printf(
+			TEXT("Native Level Data subclass '%s' must explicitly override ComputeStaticEnvironmentDigest."),
+			*GetClass()->GetPathName());
+		return false;
+	}
+	return ComputeDefaultStaticEnvironmentDigest(OutDigest, OutError);
+}
+
+bool USeinLevelDataDefault::ComputeStateCoverageClaim(
+	FSeinLevelDataStateCoverageClaim& OutClaim,
+	FString& OutError) const
+{
+	if (GetClass() != USeinLevelDataDefault::StaticClass())
+	{
+		OutClaim = {};
+		OutError = FString::Printf(
+			TEXT("Native Level Data subclass '%s' must explicitly override ComputeStateCoverageClaim."),
+			*GetClass()->GetPathName());
+		return false;
+	}
+	return ComputeDefaultStateCoverageClaim(OutClaim, OutError);
+}
+
+bool USeinLevelDataDefault::ComputeDefaultStateCoverageClaim(
+	FSeinLevelDataStateCoverageClaim& OutClaim,
+	FString& OutError) const
+{
+	OutClaim = {};
+	OutError.Reset();
+	OutClaim.StableImplementationId =
+		TEXT("seinarts.level-data.default-grid");
+	OutClaim.BehaviorRevision = 1;
+	OutClaim.CoverageRevision = 1;
+	OutClaim.StateCoverage = ESeinLevelDataStateCoverage::Stateless;
+	return true;
+}
+
+bool USeinLevelDataDefault::ComputeDefaultStaticEnvironmentDigest(
+	FGuid& OutDigest,
+	FString& OutError) const
+{
+	if (!HasRuntimeData())
+	{
+		return BuildDefaultStaticEnvironmentDigest(
+			GetClass()->GetPathName(),
+			0,
+			0,
+			FFixedPoint::FromInt(100),
+			FFixedVector::ZeroVector,
+			{}, {}, {}, {}, {},
+			OutDigest,
+			OutError);
+	}
+	const int64 NumCells64 =
+		static_cast<int64>(Width) * static_cast<int64>(Height);
+	if (!StaticEnvironmentDigest.IsValid()
+		|| NumCells64 <= 0
+		|| NumCells64 > MAX_int32
+		|| SharedHeight.Num() != NumCells64
+		|| SharedNormalZ.Num() != NumCells64
+		|| CellFlags.Num() != NumCells64
+		|| CellTerrainType.Num() != NumCells64)
+	{
+		OutDigest.Invalidate();
+		OutError =
+			TEXT("Default Level Data runtime state no longer matches its cached static-environment contract.");
+		return false;
+	}
+	OutDigest = StaticEnvironmentDigest;
+	OutError.Reset();
+	return true;
+}
+
+void USeinLevelDataDefault::MarkStaticEnvironmentMutated()
+{
+	++StaticEnvironmentGeneration;
+	if (StaticEnvironmentGeneration == 0)
+	{
+		++StaticEnvironmentGeneration;
+	}
+}
 
 // ============================================================================
 // Runtime queries (reentrant — threading contract)
@@ -112,6 +380,8 @@ void USeinLevelDataDefault::OnDeinitialized()
 	MinimapTextureRuntime = nullptr;
 	Width = 0;
 	Height = 0;
+	StaticEnvironmentDigest.Invalidate();
+	MarkStaticEnvironmentMutated();
 }
 
 void USeinLevelDataDefault::RegisterLayerProvider(ISeinLevelLayerProvider* Provider)
@@ -165,6 +435,8 @@ bool USeinLevelDataDefault::ApplyAssetData(
 
 	TArray<uint8> NewCellFlags = Asset->CellFlags;
 	TArray<uint8> NewCellTerrainType;
+	TArray<FSeinLevelChannelBlock> NewRuntimeChannels =
+		Asset->Channels;
 
 	// Terrain type — additive/lenient: copy when present + correctly sized; otherwise
 	// default every cell to 0 (Default type) so assets baked BEFORE terrain types load
@@ -176,6 +448,31 @@ bool USeinLevelDataDefault::ApplyAssetData(
 	else
 	{
 		NewCellTerrainType.Init(0, NumCells);
+	}
+
+	NewRuntimeChannels.Sort(
+		[](const FSeinLevelChannelBlock& A,
+			const FSeinLevelChannelBlock& B)
+		{
+			return A.LayerId.ToString().ToLower()
+				< B.LayerId.ToString().ToLower();
+		});
+	for (int32 Index = 0; Index < NewRuntimeChannels.Num(); ++Index)
+	{
+		const FSeinLevelChannelBlock& Channel =
+			NewRuntimeChannels[Index];
+		const FString LayerId =
+			Channel.LayerId.ToString().ToLower();
+		if (LayerId.IsEmpty()
+			|| Channel.CellSizeMultiple <= 0
+			|| (Index > 0
+				&& NewRuntimeChannels[Index - 1].LayerId
+					.ToString().ToLower() == LayerId))
+		{
+			UE_LOG(LogSeinLevelData, Error,
+				TEXT("ApplyAssetData: layer channels require unique non-empty IDs and positive cell-size multiples."));
+			return false;
+		}
 	}
 
 	// Dequantize uint16 height + uint8 normal·Up → FFixedPoint (deterministic fixed math).
@@ -197,16 +494,39 @@ bool USeinLevelDataDefault::ApplyAssetData(
 			- FFixedPoint::One;
 	}
 
+	FGuid NewStaticEnvironmentDigest;
+	FString DigestError;
+	if (!BuildDefaultStaticEnvironmentDigest(
+		GetClass()->GetPathName(),
+		Asset->Width,
+		Asset->Height,
+		Asset->CellSize,
+		Asset->Origin,
+		NewSharedHeight,
+		NewSharedNormalZ,
+		NewCellFlags,
+		NewCellTerrainType,
+		NewRuntimeChannels,
+		NewStaticEnvironmentDigest,
+		DigestError))
+	{
+		UE_LOG(LogSeinLevelData, Error,
+			TEXT("ApplyAssetData: %s"), *DigestError);
+		return false;
+	}
+
 	Width = Asset->Width;
 	Height = Asset->Height;
 	CellSizeFP = Asset->CellSize;
 	OriginFP = Asset->Origin;
-	RuntimeChannels = Asset->Channels;
+	RuntimeChannels = MoveTemp(NewRuntimeChannels);
 	MinimapTextureRuntime = Asset->MinimapTexture;
 	CellFlags = MoveTemp(NewCellFlags);
 	CellTerrainType = MoveTemp(NewCellTerrainType);
 	SharedHeight = MoveTemp(NewSharedHeight);
 	SharedNormalZ = MoveTemp(NewSharedNormalZ);
+	StaticEnvironmentDigest = NewStaticEnvironmentDigest;
+	MarkStaticEnvironmentMutated();
 	return true;
 }
 

@@ -10,6 +10,28 @@
 #include "Engine/World.h"
 #include "SeinARTSLevelDataLog.h"
 
+bool USeinLevelData::ComputeStaticEnvironmentDigest(
+	FGuid& OutDigest,
+	FString& OutError) const
+{
+	OutDigest.Invalidate();
+	OutError = FString::Printf(
+		TEXT("Level Data implementation '%s' did not declare an exact static-environment digest."),
+		*GetClass()->GetPathName());
+	return false;
+}
+
+bool USeinLevelData::ComputeStateCoverageClaim(
+	FSeinLevelDataStateCoverageClaim& OutClaim,
+	FString& OutError) const
+{
+	OutClaim = {};
+	OutError = FString::Printf(
+		TEXT("Level Data implementation '%s' did not declare exact mutable-state coverage."),
+		*GetClass()->GetPathName());
+	return false;
+}
+
 FSeinStaticEnvironmentAdoptionResult::
 	FSeinStaticEnvironmentAdoptionResult() = default;
 

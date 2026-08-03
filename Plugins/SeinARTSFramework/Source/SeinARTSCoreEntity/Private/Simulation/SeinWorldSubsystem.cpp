@@ -11166,27 +11166,20 @@ bool USeinWorldSubsystem::TryBuildExecutionTopologyCandidate(
 			SystemClaimedContributors.Add(ClaimedKey);
 		}
 	}
-	// Reverse direction: captured state with no declared owner is a bootstrap
-	// error, not a silent accident. A frozen contributor must either be named
-	// by a registered system's coverage claim or explicitly declare that a
-	// non-system deterministic service owns its lifecycle.
-	for (const FSeinFrozenCanonicalStateContributor& Contributor :
-		NativeCanonicalStateSchema.GetContributors())
+	// Reverse direction: captured state with no live owner is a bootstrap
+	// error. Conditional providers may use their external exemption only when
+	// their owning subsystem proves that the corresponding world feature is
+	// explicitly disabled; an enabled feature still requires its system edge.
+	const TArray<FString> ClaimedContributorKeys =
+		SystemClaimedContributors.Array();
+	if (!FSeinCanonicalStateRegistry::ValidateWorldOwnershipClaims(
+		NativeCanonicalStateSchema,
+		{*this,
+			ESeinCanonicalStateWorldBindingDisposition::Provisional},
+		ClaimedContributorKeys,
+		OutError))
 	{
-		if (Contributor.Descriptor.bExternallyOwned)
-		{
-			continue;
-		}
-		const FString CanonicalKey =
-			FSeinCanonicalStateRegistry::CanonicalKey(
-				Contributor.Descriptor.Key);
-		if (!SystemClaimedContributors.Contains(CanonicalKey))
-		{
-			OutError = FString::Printf(
-				TEXT("Canonical-state contributor '%s' is claimed by no registered simulation system and is not marked externally owned."),
-				*CanonicalKey);
-			return false;
-		}
+		return false;
 	}
 
 	TArray<FRegisteredSystem> CanonicalSystems = Systems;

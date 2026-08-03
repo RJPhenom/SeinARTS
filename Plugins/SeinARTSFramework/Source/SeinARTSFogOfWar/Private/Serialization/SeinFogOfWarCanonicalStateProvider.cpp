@@ -31,6 +31,23 @@ namespace
 
 struct FSeinFogOfWarCanonicalStateProvider
 {
+	static bool QueryWorldInactive(
+		const FSeinCanonicalStateWorldBindingContext& Context,
+		bool& bOutInactive,
+		FString& OutError)
+	{
+		USeinFogOfWarSubsystem* Subsystem =
+			ResolveSubsystem(Context.Services);
+		if (!Subsystem)
+		{
+			OutError =
+				TEXT("Fog canonical state could not resolve its world subsystem.");
+			return false;
+		}
+		bOutInactive = Subsystem->GetFogOfWar() == nullptr;
+		return true;
+	}
+
 	struct FRestoreStage final
 		: ISeinCanonicalStateRestoreStage
 	{
@@ -595,8 +612,11 @@ SeinRegisterFogOfWarCanonicalStateProvider(FString& OutError)
 	// that names it registers only in FoW-enabled worlds, and a FoW-disabled
 	// world must still bootstrap with the contributor present.
 	Descriptor.bExternallyOwned = true;
+	Descriptor.bExternalOwnershipOnlyWhenWorldInactive = true;
 
 	FSeinCanonicalStateContributorOps Ops;
+	Ops.QueryWorldInactive =
+		&FSeinFogOfWarCanonicalStateProvider::QueryWorldInactive;
 	Ops.PrepareWorldBinding =
 		&FSeinFogOfWarCanonicalStateProvider::
 			PrepareWorldBinding;

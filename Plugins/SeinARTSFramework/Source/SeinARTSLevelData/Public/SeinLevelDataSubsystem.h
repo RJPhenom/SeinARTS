@@ -49,6 +49,14 @@ public:
 		return bInitialRuntimeDataPrepared;
 	}
 
+	/** Internal StateContract binding. Validates the active implementation's
+	 * exact mutable-state claim and static substrate digest, then latches local
+	 * mutation evidence only for the committing bootstrap transaction. */
+	bool FreezeCanonicalStateBinding(
+		bool bCommit,
+		FString& OutFrame,
+		FString& OutError);
+
 	FSeinOnInitialLevelDataPrepared OnInitialLevelDataPrepared;
 
 	/** The active substrate for this world (or null pre-init). */
@@ -67,4 +75,8 @@ protected:
 	TObjectPtr<USeinLevelData> LevelData;
 
 	bool bInitialRuntimeDataPrepared = false;
+	bool bStateBindingFrozen = false;
+	FString FrozenStateBindingFrame;
+	FGuid FrozenStaticEnvironmentDigest;
+	uint64 FrozenStaticEnvironmentGeneration = 0;
 };

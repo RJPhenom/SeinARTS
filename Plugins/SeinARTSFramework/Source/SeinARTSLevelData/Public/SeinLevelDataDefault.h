@@ -50,6 +50,16 @@ class SEINARTSLEVELDATA_API USeinLevelDataDefault : public USeinLevelData
 public:
 
 	// --- USeinLevelData surface ---
+	virtual bool ComputeStaticEnvironmentDigest(
+		FGuid& OutDigest,
+		FString& OutError) const override;
+	virtual bool ComputeStateCoverageClaim(
+		FSeinLevelDataStateCoverageClaim& OutClaim,
+		FString& OutError) const override;
+	virtual uint64 GetStaticEnvironmentGeneration() const override
+	{
+		return StaticEnvironmentGeneration;
+	}
 	virtual FFixedPoint GetFinestCellSize() const override { return CellSizeFP; }
 	virtual FFixedVector GetOrigin() const override { return OriginFP; }
 	virtual FIntPoint GetDimensions() const override { return FIntPoint(Width, Height); }
@@ -73,6 +83,15 @@ public:
 	int32 WorldToCellIndex(const FFixedVector& WorldPos) const;
 
 protected:
+	/** Reusable only by a native subclass that explicitly re-asserts this
+	 * implementation's exact stateless contract from its own override. */
+	bool ComputeDefaultStateCoverageClaim(
+		FSeinLevelDataStateCoverageClaim& OutClaim,
+		FString& OutError) const;
+	bool ComputeDefaultStaticEnvironmentDigest(
+		FGuid& OutDigest,
+		FString& OutError) const;
+	void MarkStaticEnvironmentMutated();
 
 	virtual void OnDeinitialized() override;
 	virtual bool BeginBakeImpl(UWorld* World) override;
@@ -120,4 +139,6 @@ protected:
 
 	bool bBaking = false;
 	bool bCancelRequested = false;
+	FGuid StaticEnvironmentDigest;
+	uint64 StaticEnvironmentGeneration = 0;
 };

@@ -2,6 +2,7 @@
 
 #include "Modules/ModuleManager.h"
 #include "Serialization/SeinSimulationContentRegistry.h"
+#include "Serialization/SeinCanonicalStateRegistry.h"
 
 class FSeinARTSLevelDataModule : public FDefaultModuleImpl
 {
@@ -13,10 +14,12 @@ public:
 	/** False keeps bootstrap fail-closed after a content-registration error. */
 	bool IsSimulationContentContributorReady() const
 	{
-		return SimulationContentRegistrationHandle.IsValid();
+		return SimulationContentRegistrationHandle.IsValid()
+			&& CanonicalStateRegistrationHandle.IsValid();
 	}
 
 private:
 	void ReleaseModuleOwnedState();
 	FSeinSimulationContentRegistrationHandle SimulationContentRegistrationHandle;
+	FSeinCanonicalStateRegistrationHandle CanonicalStateRegistrationHandle;
 };
