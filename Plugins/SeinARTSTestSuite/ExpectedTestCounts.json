@@ -4,38 +4,50 @@
     {
       "profile": "All",
       "suite": "SeinARTS.Unit",
-      "minimumCount": 321,
-      "establishedAtCommit": "9a991f544a59d1b63395fb8a9a783c6d7d1c2e30"
+      "minimumCount": 388,
+      "establishedAtCommit": "1e57243"
     },
     {
       "profile": "Framework",
       "suite": "SeinARTS.Unit",
-      "minimumCount": 317,
-      "establishedAtCommit": "9a991f544a59d1b63395fb8a9a783c6d7d1c2e30"
+      "minimumCount": 380,
+      "establishedAtCommit": "1e57243"
     },
     {
       "profile": "All",
       "suite": "SeinARTS.Integration",
-      "minimumCount": 12,
-      "establishedAtCommit": "9a991f544a59d1b63395fb8a9a783c6d7d1c2e30"
-    },
-    {
-      "profile": "Framework",
-      "suite": "SeinARTS.Integration",
-      "minimumCount": 11,
-      "establishedAtCommit": "9a991f544a59d1b63395fb8a9a783c6d7d1c2e30"
-    },
-    {
-      "profile": "All",
-      "suite": "SeinARTS.Determinism",
-      "minimumCount": 16,
-      "establishedAtCommit": "9a991f544a59d1b63395fb8a9a783c6d7d1c2e30"
-    },
-    {
-      "profile": "Framework",
-      "suite": "SeinARTS.Determinism",
       "minimumCount": 15,
-      "establishedAtCommit": "9a991f544a59d1b63395fb8a9a783c6d7d1c2e30"
+      "establishedAtCommit": "1e57243"
+    },
+    {
+      "profile": "Framework",
+      "suite": "SeinARTS.Integration",
+      "minimumCount": 14,
+      "establishedAtCommit": "1e57243"
+    },
+    {
+      "profile": "All",
+      "suite": "SeinARTS.Determinism",
+      "minimumCount": 20,
+      "establishedAtCommit": "1e57243"
+    },
+    {
+      "profile": "Framework",
+      "suite": "SeinARTS.Determinism",
+      "minimumCount": 19,
+      "establishedAtCommit": "1e57243"
+    },
+    {
+      "profile": "Framework",
+      "suite": "SeinARTS.Determinism.Process.SerialCollisionTrace",
+      "minimumCount": 1,
+      "establishedAtCommit": "1e57243"
+    },
+    {
+      "profile": "Framework",
+      "suite": "SeinARTS.Determinism.Process.ParallelCollisionTrace",
+      "minimumCount": 1,
+      "establishedAtCommit": "1e57243"
     }
   ]
 }
