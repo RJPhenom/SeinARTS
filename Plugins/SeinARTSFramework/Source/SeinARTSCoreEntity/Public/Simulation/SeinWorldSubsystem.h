@@ -42,6 +42,7 @@ class ASeinActor;
 class USeinFaction;
 class USeinAbility;
 class USeinCommandBrokerResolver;
+class USeinFormation;
 class USeinCollisionResolver;
 class USeinAIController;
 class USeinEffect;
@@ -2144,6 +2145,15 @@ private:
 	uint64 CommandBrokerResolverPoolMutationRevision = 0;
 	uint64 CommandBrokerResolverPoolTopologyRevision = 1;
 
+	/** Non-authoritative, per-world formation evaluators. Each entry is copied
+	 *  from its class CDO and may be reused only while it remains byte-for-byte
+	 *  reflected-state-identical to that configuration. */
+	UPROPERTY(Transient)
+	TMap<TObjectPtr<UClass>, TObjectPtr<USeinFormation>> FormationExecutionScratch;
+	/** Call-stack guard; entries are also strongly held by the map or a local
+	 *  strong pointer. Reentrant evaluation gets an isolated temporary object. */
+	TSet<USeinFormation*> ActiveFormationExecutionScratch;
+
 	/** Non-authoritative cache of canonical leaf digests. It is rebuilt from
 	 *  live state after bootstrap/restore and is never serialized. */
 	mutable TSharedPtr<FSeinWorldStateRootCache> CanonicalStateRootCache;
@@ -2152,6 +2162,8 @@ private:
 	// Tick the registered AI controllers. Called from TickSystems at
 	// CommandProcessing phase, right before ProcessCommands.
 	void TickAIControllers(FFixedPoint DeltaTime);
+
+	friend class USeinFormation;
 
 	// Compatibility projection used by the deferred/public int64 path.
 	int64 ApplyEffectInternal(FSeinEntityHandle Target, TSubclassOf<USeinEffect> EffectClass, FSeinEntityHandle Source);

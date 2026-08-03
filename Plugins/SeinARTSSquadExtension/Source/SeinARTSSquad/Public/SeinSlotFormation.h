@@ -25,6 +25,11 @@ class SEINARTSSQUAD_API USeinSlotFormation : public USeinFormation
 	GENERATED_BODY()
 
 public:
+	virtual bool IsStatelessExecutionAdmitted(FString& OutError) const override
+	{
+		return AdmitStatelessNativeAnchor(StaticClass(), OutError);
+	}
+
 	virtual FSeinFormationLayout BuildFormation_Implementation(
 		USeinWorldSubsystem* World,
 		const TArray<FSeinEntityHandle>& Members,

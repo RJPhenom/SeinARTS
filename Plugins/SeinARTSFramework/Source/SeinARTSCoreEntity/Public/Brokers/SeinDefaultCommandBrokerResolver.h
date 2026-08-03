@@ -143,10 +143,10 @@ public:
 	// dispatch layout pass above AND the broker tick's idle re-seek pairing.
 
 protected:
-	/** Resolve the USeinFormation that lays out this order. Looks up `FormationTag`
+	/** Resolve the USeinFormation configuration that lays out this order. Looks up `FormationTag`
 	 *  in FormationsByTag, falls back to DefaultFormationClass, and returns the class
-	 *  CDO (formations are stateless / pure compute — invoked on the CDO, never
-	 *  instanced). Null when neither resolves → the caller uses the ResolvePositions
+	 *  CDO as read-only configuration. Runtime evaluation occurs on the formation's
+	 *  per-world stateless scratch instance. Null when neither resolves → the caller uses the ResolvePositions
 	 *  blob fallback. Loads the soft class synchronously (loader-cached). */
-	USeinFormation* ResolveFormation(FGameplayTag FormationTag) const;
+	const USeinFormation* ResolveFormation(FGameplayTag FormationTag) const;
 };

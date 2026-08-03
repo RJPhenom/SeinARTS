@@ -39,6 +39,11 @@ class SEINARTSCOREENTITY_API USeinBlobFormation : public USeinFormation
 {
 	GENERATED_BODY()
 
+	virtual bool IsStatelessExecutionAdmitted(FString& OutError) const override
+	{
+		return AdmitStatelessNativeAnchor(StaticClass(), OutError);
+	}
+
 	// Intentionally empty: the base USeinFormation default layout IS the blob
 	// (every member → Target.Anchor). Exists as a concrete, designer-pickable class.
 };

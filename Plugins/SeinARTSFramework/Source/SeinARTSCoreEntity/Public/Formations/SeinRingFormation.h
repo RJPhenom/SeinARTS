@@ -40,6 +40,11 @@ class SEINARTSCOREENTITY_API USeinRingFormation : public USeinFormation
 	GENERATED_BODY()
 
 public:
+	virtual bool IsStatelessExecutionAdmitted(FString& OutError) const override
+	{
+		return AdmitStatelessNativeAnchor(StaticClass(), OutError);
+	}
+
 	/** Defaults FacingMode to RadialOutward — members face away from the ring centre. */
 	USeinRingFormation();
 

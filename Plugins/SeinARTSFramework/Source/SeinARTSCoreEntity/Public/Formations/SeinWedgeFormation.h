@@ -38,6 +38,11 @@ class SEINARTSCOREENTITY_API USeinWedgeFormation : public USeinFormation
 	GENERATED_BODY()
 
 public:
+	virtual bool IsStatelessExecutionAdmitted(FString& OutError) const override
+	{
+		return AdmitStatelessNativeAnchor(StaticClass(), OutError);
+	}
+
 	/** EXTRA gap added to the footprint DIAMETER when spacing units along the chevron arms (UE world
 	 *  units, cm). 0 (the default) = footprints touch — the densest non-overlapping spacing; raise to
 	 *  open the arms up. Also added to the perpendicular gap between nested chevron layers. */

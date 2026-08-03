@@ -36,6 +36,11 @@ class SEINARTSCOREENTITY_API USeinGridFormation : public USeinFormation
 	GENERATED_BODY()
 
 public:
+	virtual bool IsStatelessExecutionAdmitted(FString& OutError) const override
+	{
+		return AdmitStatelessNativeAnchor(StaticClass(), OutError);
+	}
+
 	/** World-space spacing between units in the grid. Scale in UE world units (cm).
 	 *  150 ≈ one infantryman's personal-space radius. (Moved here from the default
 	 *  broker resolver's InterUnitSpacing.) */

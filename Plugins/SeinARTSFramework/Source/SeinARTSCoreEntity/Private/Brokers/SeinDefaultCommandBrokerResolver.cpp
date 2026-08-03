@@ -264,20 +264,29 @@ FSeinFormationLayout USeinDefaultCommandBrokerResolver::ResolveFormationLayout_I
 	ESeinFormationFacing FacingMode = ESeinFormationFacing::Uniform;
 	// An explicit class override (e.g. a squad's authored FormationClass) wins over the tag map; else
 	// resolve the gesture FormationTag via FormationsByTag / DefaultFormationClass as usual.
-	USeinFormation* Formation = nullptr;
+	const USeinFormation* Formation = nullptr;
 	if (!Target.FormationClass.IsNull())
 	{
 		if (UClass* OverrideClass = Target.FormationClass.LoadSynchronous())
 		{
-			if (!OverrideClass->HasAnyClassFlags(CLASS_Abstract)) { Formation = GetMutableDefault<USeinFormation>(OverrideClass); }
+			if (!OverrideClass->HasAnyClassFlags(CLASS_Abstract))
+			{
+				Formation = GetDefault<USeinFormation>(OverrideClass);
+			}
 		}
 	}
 	if (!Formation) { Formation = ResolveFormation(Target.FormationTag); }
 	if (Formation)
 	{
-		// Pluggable formation owns positions + facing. The exact call the preview makes.
-		FacingMode = Formation->FacingMode;
-		Layout = Formation->BuildFormation(World, Members, Target);
+		// Pluggable formation owns positions + facing. Preview and commit both
+		// enter the same stateless scratch boundary; the CDO is config only.
+		USeinFormation::ExecuteStateless(
+			World,
+			Formation->GetClass(),
+			Members,
+			Target,
+			Layout,
+			FacingMode);
 	}
 	else
 	{
@@ -596,7 +605,7 @@ TArray<FFixedVector> USeinDefaultCommandBrokerResolver::ResolvePositions_Impleme
 	return Out;
 }
 
-USeinFormation* USeinDefaultCommandBrokerResolver::ResolveFormation(FGameplayTag FormationTag) const
+const USeinFormation* USeinDefaultCommandBrokerResolver::ResolveFormation(FGameplayTag FormationTag) const
 {
 	TSoftClassPtr<USeinFormation> ClassPtr;
 	if (FormationTag.IsValid())
@@ -624,7 +633,7 @@ USeinFormation* USeinDefaultCommandBrokerResolver::ResolveFormation(FGameplayTag
 			{
 				if (!DefaultClass->HasAnyClassFlags(CLASS_Abstract))
 				{
-					return GetMutableDefault<USeinFormation>(DefaultClass);
+					return GetDefault<USeinFormation>(DefaultClass);
 				}
 			}
 			else
@@ -644,6 +653,7 @@ USeinFormation* USeinDefaultCommandBrokerResolver::ResolveFormation(FGameplayTag
 	{
 		return nullptr;
 	}
-	// Stateless formations — invoke on the (mutable) CDO; no per-order state written.
-	return GetMutableDefault<USeinFormation>(FormationClass);
+	// The CDO supplies immutable configuration. ResolveFormationLayout executes
+	// on the per-world stateless scratch boundary.
+	return GetDefault<USeinFormation>(FormationClass);
 }

@@ -44,6 +44,11 @@ class SEINARTSCOREENTITY_API USeinBoxFormation : public USeinFormation
 	GENERATED_BODY()
 
 public:
+	virtual bool IsStatelessExecutionAdmitted(FString& OutError) const override
+	{
+		return AdmitStatelessNativeAnchor(StaticClass(), OutError);
+	}
+
 	/** World-space spacing between files (across the front) and ranks (in depth).
 	 *  Scale in UE world units (cm). Front-rank column count = how many fit across
 	 *  the drag width at this spacing (capped at N). */

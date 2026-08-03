@@ -34,6 +34,11 @@ class SEINARTSCOREENTITY_API USeinSquareFormation : public USeinFormation
 	GENERATED_BODY()
 
 public:
+	virtual bool IsStatelessExecutionAdmitted(FString& OutError) const override
+	{
+		return AdmitStatelessNativeAnchor(StaticClass(), OutError);
+	}
+
 	/** Defaults FacingMode to RadialOutward — members face away from the square centre. */
 	USeinSquareFormation();
 

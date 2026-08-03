@@ -473,18 +473,30 @@ public:
 						// members ACTUALLY go (else white space when slots are wider than the shape, overlap when
 						// narrower). Rotation-invariant (a radius), so identity facing is fine. Deterministic.
 						const TArray<FSeinEntityHandle> LiveMembers = Squad->GetLiveMembers();
-						USeinFormation* FpFormation = nullptr;
+						const UClass* FpFormationClass = nullptr;
 						if (UClass* FpClass = Squad->FormationClass.LoadSynchronous())
 						{
-							if (!FpClass->HasAnyClassFlags(CLASS_Abstract)) { FpFormation = GetMutableDefault<USeinFormation>(FpClass); }
+							if (!FpClass->HasAnyClassFlags(CLASS_Abstract))
+							{
+								FpFormationClass = FpClass;
+							}
 						}
-						if (FpFormation && LiveMembers.Num() > 0)
+						if (FpFormationClass && LiveMembers.Num() > 0)
 						{
 							FSeinOrderTarget FpTarget;
 							FpTarget.Anchor          = FFixedVector::ZeroVector;
 							FpTarget.CurrentCentroid = FFixedVector::ZeroVector;
 							FpTarget.CurrentFacing   = FFixedQuaternion::Identity;
-							const FSeinFormationLayout FpLayout = FpFormation->BuildFormation(&World, LiveMembers, FpTarget);
+							FSeinFormationLayout FpLayout;
+							ESeinFormationFacing IgnoredFacingMode =
+								ESeinFormationFacing::Uniform;
+							USeinFormation::ExecuteStateless(
+								&World,
+								FpFormationClass,
+								LiveMembers,
+								FpTarget,
+								FpLayout,
+								IgnoredFacingMode);
 							for (int32 m = 0; m < LiveMembers.Num(); ++m)
 							{
 								const FFixedVector P = FpLayout.Positions.IsValidIndex(m) ? FpLayout.Positions[m] : FFixedVector::ZeroVector;

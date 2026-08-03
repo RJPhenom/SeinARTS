@@ -16,6 +16,265 @@
 #include "Math/MathLib.h"
 #include "Types/FixedPoint.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
+#include "UObject/StrongObjectPtr.h"
+#include "UObject/UnrealType.h"
+
+namespace SeinFormationExecutionLocal
+{
+	bool ReflectedStateMatches(
+		const USeinFormation& Instance,
+		const USeinFormation& Defaults,
+		FString& OutDifference)
+	{
+		OutDifference.Reset();
+		if (Instance.GetClass() != Defaults.GetClass())
+		{
+			OutDifference = TEXT("exact class changed");
+			return false;
+		}
+		for (TFieldIterator<FProperty> It(
+				Instance.GetClass(), EFieldIterationFlags::IncludeSuper);
+			It; ++It)
+		{
+			const FProperty* Property = *It;
+			if (Property
+				&& !Property->Identical_InContainer(
+					&Instance, &Defaults, PPF_None))
+			{
+				OutDifference = Property->GetPathName();
+				return false;
+			}
+		}
+		return true;
+	}
+
+	bool Reject(
+		USeinWorldSubsystem* World,
+		const FString& Reason,
+		FString* OutError)
+	{
+		if (OutError)
+		{
+			*OutError = Reason;
+		}
+		if (World)
+		{
+			World->InvalidateDeterministicExecutionContract(Reason);
+		}
+		else
+		{
+			UE_LOG(LogTemp, Error, TEXT("%s"), *Reason);
+		}
+		return false;
+	}
+}
+
+bool USeinFormation::AdmitStatelessNativeAnchor(
+	const UClass* ExpectedNativeAnchor,
+	FString& OutError) const
+{
+	OutError.Reset();
+	const UClass* ExactClass = GetClass();
+	if (!ExpectedNativeAnchor || !ExactClass
+		|| !ExpectedNativeAnchor->IsChildOf(USeinFormation::StaticClass()))
+	{
+		OutError = TEXT("Formation admission received an invalid native anchor.");
+		return false;
+	}
+
+	if (ExactClass == ExpectedNativeAnchor)
+	{
+		return true;
+	}
+	if (!ExactClass->HasAnyClassFlags(CLASS_CompiledFromBlueprint))
+	{
+		OutError = FString::Printf(
+			TEXT("Native formation '%s' inherited the stateless claim from '%s'. Every concrete native formation must override IsStatelessExecutionAdmitted and explicitly claim its own exact anchor."),
+			*ExactClass->GetPathName(),
+			*ExpectedNativeAnchor->GetPathName());
+		return false;
+	}
+
+	const UClass* NativeAnchor = ExactClass;
+	while (NativeAnchor
+		&& !NativeAnchor->HasAnyClassFlags(CLASS_Native))
+	{
+		NativeAnchor = NativeAnchor->GetSuperClass();
+	}
+	if (NativeAnchor != ExpectedNativeAnchor)
+	{
+		OutError = FString::Printf(
+			TEXT("Formation Blueprint '%s' resolved native anchor '%s', not the explicitly claimed anchor '%s'."),
+			*ExactClass->GetPathName(),
+			NativeAnchor ? *NativeAnchor->GetPathName() : TEXT("<none>"),
+			*ExpectedNativeAnchor->GetPathName());
+		return false;
+	}
+	return true;
+}
+
+bool USeinFormation::IsStatelessExecutionAdmitted(
+	FString& OutError) const
+{
+	return AdmitStatelessNativeAnchor(
+		USeinFormation::StaticClass(), OutError);
+}
+
+bool USeinFormation::ExecuteStateless(
+	USeinWorldSubsystem* World,
+	const UClass* FormationClass,
+	const TArray<FSeinEntityHandle>& Members,
+	const FSeinOrderTarget& Target,
+	FSeinFormationLayout& OutLayout,
+	ESeinFormationFacing& OutFacingMode,
+	FString* OutError)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Formation_ExecuteStateless);
+	OutLayout = {};
+	OutFacingMode = ESeinFormationFacing::Uniform;
+	if (OutError)
+	{
+		OutError->Reset();
+	}
+	if (!FormationClass
+		|| !FormationClass->IsChildOf(USeinFormation::StaticClass())
+		|| FormationClass->HasAnyClassFlags(CLASS_Abstract))
+	{
+		return SeinFormationExecutionLocal::Reject(
+			World,
+			TEXT("Formation execution requires a concrete USeinFormation class."),
+			OutError);
+	}
+
+	const USeinFormation* Defaults =
+		FormationClass->GetDefaultObject<USeinFormation>();
+	FString Error;
+	if (!Defaults
+		|| !Defaults->IsStatelessExecutionAdmitted(Error))
+	{
+		if (Error.IsEmpty())
+		{
+			Error = FString::Printf(
+				TEXT("Formation '%s' has no stateless execution claim."),
+				*FormationClass->GetPathName());
+		}
+		return SeinFormationExecutionLocal::Reject(
+			World, Error, OutError);
+	}
+
+	USeinFormation* Scratch = nullptr;
+	bool bCachedScratch = false;
+	TStrongObjectPtr<USeinFormation> IsolatedScratch;
+	if (World)
+	{
+		if (TObjectPtr<USeinFormation>* Existing =
+				World->FormationExecutionScratch.Find(
+					const_cast<UClass*>(FormationClass)))
+		{
+			Scratch = Existing->Get();
+		}
+		if (Scratch
+			&& World->ActiveFormationExecutionScratch.Contains(Scratch))
+		{
+			Scratch = nullptr;
+		}
+		if (Scratch)
+		{
+			FString Difference;
+			if (!SeinFormationExecutionLocal::ReflectedStateMatches(
+					*Scratch, *Defaults, Difference))
+			{
+				World->FormationExecutionScratch.Remove(
+					const_cast<UClass*>(FormationClass));
+				return SeinFormationExecutionLocal::Reject(
+					World,
+					FString::Printf(
+						TEXT("Formation configuration for '%s' changed after its per-world evaluator was frozen (first differing property: %s)."),
+						*FormationClass->GetPathName(),
+						*Difference),
+					OutError);
+			}
+			bCachedScratch = true;
+		}
+		else if (!World->FormationExecutionScratch.Contains(
+				const_cast<UClass*>(FormationClass)))
+		{
+			Scratch = NewObject<USeinFormation>(
+				World,
+				const_cast<UClass*>(FormationClass),
+				NAME_None,
+				RF_Transient);
+			if (Scratch)
+			{
+				World->FormationExecutionScratch.Add(
+					const_cast<UClass*>(FormationClass), Scratch);
+				bCachedScratch = true;
+			}
+		}
+	}
+	if (!Scratch)
+	{
+		Scratch = NewObject<USeinFormation>(
+			GetTransientPackage(),
+			const_cast<UClass*>(FormationClass),
+			NAME_None,
+			RF_Transient);
+		IsolatedScratch.Reset(Scratch);
+	}
+	if (!Scratch)
+	{
+		return SeinFormationExecutionLocal::Reject(
+			World,
+			FString::Printf(
+				TEXT("Formation evaluator construction failed for '%s'."),
+				*FormationClass->GetPathName()),
+			OutError);
+	}
+
+	if (World)
+	{
+		World->ActiveFormationExecutionScratch.Add(Scratch);
+	}
+	OutFacingMode = Scratch->FacingMode;
+	FSeinFormationLayout ExecutedLayout;
+	if (World)
+	{
+		TGuardValue<bool> ReadOnlyGuard(
+			World->bReadOnlyCallbackInProgress, true);
+		ExecutedLayout = Scratch->BuildFormation(
+			World, Members, Target);
+	}
+	else
+	{
+		ExecutedLayout = Scratch->BuildFormation(
+			nullptr, Members, Target);
+	}
+	if (World)
+	{
+		World->ActiveFormationExecutionScratch.Remove(Scratch);
+	}
+
+	FString Difference;
+	if (!SeinFormationExecutionLocal::ReflectedStateMatches(
+			*Scratch, *Defaults, Difference))
+	{
+		if (World && bCachedScratch)
+		{
+			World->FormationExecutionScratch.Remove(
+				const_cast<UClass*>(FormationClass));
+		}
+		OutLayout = {};
+		return SeinFormationExecutionLocal::Reject(
+			World,
+			FString::Printf(
+				TEXT("Formation '%s' mutated reflected member '%s' during Build Formation. Formations are pure configuration evaluators; keep per-order state in local variables."),
+				*FormationClass->GetPathName(),
+				*Difference),
+			OutError);
+	}
+	OutLayout = MoveTemp(ExecutedLayout);
+	return true;
+}
 
 FFixedQuaternion USeinFormation::FacingFromDirection(FFixedVector DirectionXY)
 {

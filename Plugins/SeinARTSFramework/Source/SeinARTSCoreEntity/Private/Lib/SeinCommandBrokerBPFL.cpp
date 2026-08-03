@@ -129,10 +129,10 @@ namespace SeinFormationPreviewLocal
 {
 	/** Resolve the framework's default broker resolver class — settings override
 	 *  if present, USeinDefaultCommandBrokerResolver::StaticClass() otherwise.
-	 *  Returns the CDO of the chosen class for stateless preview dispatch.
+	 *  Returns the read-only CDO of the chosen class as scratch-clone source.
 	 *  Mirrors the same fallback chain SeinWorldSubsystem::ProcessCommands uses
 	 *  when spawning a fresh broker. */
-	static USeinCommandBrokerResolver* ResolveDefaultResolverCDO()
+	static const USeinCommandBrokerResolver* ResolveDefaultResolverCDO()
 	{
 		const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
 		// WYSIWYG. None/empty => broker dispatch is OFF → return null; callers already treat a null
@@ -158,9 +158,10 @@ namespace SeinFormationPreviewLocal
 	 *  instead runs on a transient scratch clone materialized through the
 	 *  pool-object codec, so "captured state" keeps exactly one definition.
 	 *  The clone refreshes only when the source's captured bytes change; a
-	 *  stateful designer bug stays a local cosmetic artifact instead of a
-	 *  cross-client desync. Falls back to the source object only when the
-	 *  codec cannot clone it (then behavior equals the pre-isolation code).
+	 *  caller finalizes the clone after layout: unchanged scratch may be reused;
+	 *  mutated scratch is discarded so state never leaks between previews.
+	 *  A codec failure invalidates the deterministic execution contract rather
+	 *  than invoking a pooled resolver or CDO through an unsafe fallback.
 	 *
 	 *  Lifecycle: the scratch is outered to the TRANSIENT PACKAGE (never to a
 	 *  world — a rooted chain into a dead world would fail map-travel world
@@ -175,14 +176,14 @@ namespace SeinFormationPreviewLocal
 		TStrongObjectPtr<USeinCommandBrokerResolver> Scratch;
 		TArray<uint8> SourceCapturedBytes;
 	};
+	static TArray<FPreviewScratchEntry> PreviewScratchCache;
 
 	static USeinCommandBrokerResolver* GetPreviewScratchResolver(
 		USeinWorldSubsystem& World,
-		USeinCommandBrokerResolver& Pooled)
+		const USeinCommandBrokerResolver& Source)
 	{
-		static TArray<FPreviewScratchEntry> Cache;
 		const UWorld* CacheWorld = World.GetWorld();
-		Cache.RemoveAll([](const FPreviewScratchEntry& Entry)
+		PreviewScratchCache.RemoveAll([](const FPreviewScratchEntry& Entry)
 		{
 			return !Entry.Source.IsValid()
 				|| !Entry.World.IsValid()
@@ -193,21 +194,22 @@ namespace SeinFormationPreviewLocal
 		FSeinSnapshotPoolInstanceRecord Record;
 		if (!FSeinPoolObjectCodecRegistry::CaptureObject(
 			World.GetPoolObjectCodecManifest(),
-			Pooled,
+			Source,
 			ESeinPoolObjectKind::CommandBrokerResolver,
 			/*PoolId=*/0,
 			Record,
 			Error))
 		{
-			UE_LOG(LogSeinBroker, Warning,
-				TEXT("Formation preview could not clone resolver '%s' (%s); previewing on the shared instance."),
-				*Pooled.GetPathName(), *Error);
-			return &Pooled;
+			World.InvalidateDeterministicExecutionContract(
+				FString::Printf(
+					TEXT("Formation layout could not capture resolver '%s' for isolated evaluation: %s"),
+					*Source.GetPathName(), *Error));
+			return nullptr;
 		}
 
-		for (FPreviewScratchEntry& Entry : Cache)
+		for (FPreviewScratchEntry& Entry : PreviewScratchCache)
 		{
-			if (Entry.Source.Get() != &Pooled
+			if (Entry.Source.Get() != &Source
 				|| Entry.World.Get() != CacheWorld)
 			{
 				continue;
@@ -230,27 +232,86 @@ namespace SeinFormationPreviewLocal
 			Cast<USeinCommandBrokerResolver>(ScratchObject);
 		if (!Scratch)
 		{
-			UE_LOG(LogSeinBroker, Warning,
-				TEXT("Formation preview could not materialize a scratch resolver for '%s' (%s); previewing on the shared instance."),
-				*Pooled.GetPathName(), *Error);
-			return &Pooled;
+			World.InvalidateDeterministicExecutionContract(
+				FString::Printf(
+					TEXT("Formation layout could not materialize an isolated resolver '%s': %s"),
+					*Source.GetPathName(), *Error));
+			return nullptr;
 		}
 
-		FPreviewScratchEntry* Entry = Cache.FindByPredicate(
-			[&Pooled, CacheWorld](const FPreviewScratchEntry& Existing)
+		FPreviewScratchEntry* Entry = PreviewScratchCache.FindByPredicate(
+			[&Source, CacheWorld](const FPreviewScratchEntry& Existing)
 			{
-				return Existing.Source.Get() == &Pooled
+				return Existing.Source.Get() == &Source
 					&& Existing.World.Get() == CacheWorld;
 			});
 		if (!Entry)
 		{
-			Entry = &Cache.AddDefaulted_GetRef();
-			Entry->Source = &Pooled;
+			Entry = &PreviewScratchCache.AddDefaulted_GetRef();
+			Entry->Source = &Source;
 			Entry->World = CacheWorld;
 		}
 		Entry->Scratch = TStrongObjectPtr<USeinCommandBrokerResolver>(Scratch);
 		Entry->SourceCapturedBytes = MoveTemp(Record.StateBytes);
 		return Entry->Scratch.Get();
+	}
+
+	/** Keep a scratch only when layout was observationally pure. Stateful
+	 *  resolvers remain supported in their authoritative pool, but preview and
+	 *  the ownerless outer-selection evaluator never persist their writes. */
+	static void FinalizePreviewScratchResolver(
+		USeinWorldSubsystem& World,
+		const USeinCommandBrokerResolver& Source,
+		const USeinCommandBrokerResolver& Scratch)
+	{
+		const UWorld* CacheWorld = World.GetWorld();
+		FPreviewScratchEntry* Entry =
+			PreviewScratchCache.FindByPredicate(
+				[&Source, &Scratch, CacheWorld](
+					const FPreviewScratchEntry& Candidate)
+				{
+					return Candidate.Source.Get() == &Source
+						&& Candidate.World.Get() == CacheWorld
+						&& Candidate.Scratch.Get() == &Scratch;
+				});
+		FString Error;
+		FSeinSnapshotPoolInstanceRecord ScratchRecord;
+		const bool bCaptured = Entry
+			&& FSeinPoolObjectCodecRegistry::CaptureObject(
+				World.GetPoolObjectCodecManifest(), Scratch,
+				ESeinPoolObjectKind::CommandBrokerResolver, 0,
+				ScratchRecord, Error);
+		const bool bMatches = bCaptured
+			&& Entry->SourceCapturedBytes == ScratchRecord.StateBytes;
+		if (!bMatches)
+		{
+			// A mutation is legal for a pooled resolver but not reusable on this
+			// non-authoritative evaluator. Force the next acquire to rematerialize
+			// by dropping its strong cache entry.
+			UE_LOG(LogSeinBroker, VeryVerbose,
+				TEXT("Discarding mutated formation-layout scratch for '%s'%s%s."),
+				*Source.GetPathName(),
+				Error.IsEmpty() ? TEXT("") : TEXT(": "),
+				*Error);
+			PreviewScratchCache.RemoveAll(
+				[&Source, &Scratch, CacheWorld](
+					const FPreviewScratchEntry& Entry)
+				{
+					return Entry.Source.Get() == &Source
+						&& Entry.World.Get() == CacheWorld
+						&& Entry.Scratch.Get() == &Scratch;
+				});
+			if (!Entry || !Error.IsEmpty())
+			{
+				World.InvalidateDeterministicExecutionContract(
+					FString::Printf(
+						TEXT("Formation-layout scratch for resolver '%s' could not be revalidated: %s"),
+						*Source.GetPathName(),
+						Error.IsEmpty()
+							? TEXT("cache ownership was lost")
+							: *Error));
+			}
+		}
 	}
 }
 
@@ -281,7 +342,12 @@ TArray<FFixedVector> USeinCommandBrokerBPFL::ComputeMultiBrokerAnchors(
 
 	// The parent layout runs through the project's default resolver CDO (it owns the formation map +
 	// the shaping passes). No resolver (nav-less tests) -> leave every anchor at ClickTarget.
-	USeinCommandBrokerResolver* Resolver = SeinFormationPreviewLocal::ResolveDefaultResolverCDO();
+	const USeinCommandBrokerResolver* ResolverSource =
+		SeinFormationPreviewLocal::ResolveDefaultResolverCDO();
+	if (!ResolverSource) { return Anchors; }
+	USeinCommandBrokerResolver* Resolver =
+		SeinFormationPreviewLocal::GetPreviewScratchResolver(
+			World, *ResolverSource);
 	if (!Resolver) { return Anchors; }
 
 	// Selection centroid (XY, RTS plane) -> the formation rotates its facing from centroid to target.
@@ -317,6 +383,8 @@ TArray<FFixedVector> USeinCommandBrokerBPFL::ComputeMultiBrokerAnchors(
 	Target.CurrentFacing = FFixedQuaternion::Identity;
 
 	const FSeinFormationLayout Layout = Resolver->ResolveFormationLayout(&World, Brokers, Target, bLateral, bDepth);
+	SeinFormationPreviewLocal::FinalizePreviewScratchResolver(
+		World, *ResolverSource, *Resolver);
 	for (int32 i = 0; i < N; ++i)
 	{
 		Anchors[i]    = Layout.Positions.IsValidIndex(i) ? Layout.Positions[i] : ClickTarget;
@@ -448,12 +516,18 @@ FSeinFormationLayout USeinCommandBrokerBPFL::SeinComputeFormationPreview(
 			Centroid = SquadData->ComputeCentroid(Fallback);
 		}
 
-		if (!Resolver) { Resolver = SeinFormationPreviewLocal::ResolveDefaultResolverCDO(); }
+		if (!Resolver)
+		{
+			Resolver = const_cast<USeinCommandBrokerResolver*>(
+				SeinFormationPreviewLocal::ResolveDefaultResolverCDO());
+		}
 		if (!Resolver) { continue; }
+		const USeinCommandBrokerResolver* ResolverSource = Resolver;
 		// Never drive the live pooled instance (or a shared CDO) from this
 		// render-rate path — preview on a captured-state scratch clone.
 		Resolver = SeinFormationPreviewLocal::GetPreviewScratchResolver(
 			*World, *Resolver);
+		if (!Resolver) { continue; }
 
 		const FFixedVector SquadAnchor =
 			ElementPositions.IsValidIndex(s) ? ElementPositions[s] : TargetLocation;
@@ -469,6 +543,8 @@ FSeinFormationLayout USeinCommandBrokerBPFL::SeinComputeFormationPreview(
 			SquadData ? SquadData->FormationClass : TSoftClassPtr<USeinFormation>());
 		const FSeinFormationLayout SquadLayout = Resolver->ResolveFormationLayout(
 			World, SquadMembers, SquadTarget, bReassignLateral, bReassignDepth);
+		SeinFormationPreviewLocal::FinalizePreviewScratchResolver(
+			*World, *ResolverSource, *Resolver);
 
 		// Scatter the squad's positions (+ footprint radii) back to the ORIGINAL member indices.
 		for (int32 k = 0; k < Indices.Num(); ++k)

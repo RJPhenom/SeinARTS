@@ -7,8 +7,9 @@
  *          The pluggable "how do N units arrange" seam, decoupled from dispatch
  *          (which ability / which member — that stays on the command broker
  *          resolver). Stateless / pure compute: the framework invokes formations
- *          on their CDO (formations carry only config UPROPERTYs, never per-order
- *          state), so there is no instancing or pooling. Deterministic — fixed-
+ *          on per-world scratch instances copied from their CDO configuration;
+ *          reflected writes are rejected and never persist between calls.
+ *          Deterministic — fixed-
  *          point only, no float / RNG — because the destination preview calls this
  *          EXACTLY as the commit dispatch does and the two must agree bit-for-bit
  *          (root CLAUDE invariant #6) and lockstep must not desync.
@@ -89,8 +90,8 @@ enum class ESeinFormationFacing : uint8
  * (index-aligned with the members) and the formation's facing. It is the pluggable "how do N units
  * arrange" seam, kept separate from dispatch (which ability runs, which member gets it — that stays
  * on the command broker resolver). Formations are stateless pure compute: the framework runs them on
- * their class default object (they carry only config properties, never per-order state), so there is
- * no instancing or pooling. They are strictly deterministic — fixed-point math only, no float and no
+ * per-world scratch instances initialized from class-default configuration, and rejects any reflected
+ * state written by an invocation. They are strictly deterministic — fixed-point math only, no float and no
  * RNG — because the on-screen destination preview calls the exact same formation code the committed
  * order does, and the two must agree bit-for-bit while lockstep networking must never desync.
  *
@@ -136,6 +137,32 @@ public:
 		USeinWorldSubsystem* World,
 		const TArray<FSeinEntityHandle>& Members,
 		const FSeinOrderTarget& Target);
+
+	/**
+	 * Execute one formation through the framework's stateless boundary.
+	 *
+	 * The CDO is configuration only. Runtime work happens on a per-world scratch
+	 * instance, under read-only world access, and every reflected property must
+	 * still match the CDO after the call. A violation fail-stops the world's
+	 * deterministic execution contract. Reentrant calls receive an isolated
+	 * temporary instance, so nested preview/dispatch cannot observe partial state.
+	 */
+	static bool ExecuteStateless(
+		USeinWorldSubsystem* World,
+		const UClass* FormationClass,
+		const TArray<FSeinEntityHandle>& Members,
+		const FSeinOrderTarget& Target,
+		FSeinFormationLayout& OutLayout,
+		ESeinFormationFacing& OutFacingMode,
+		FString* OutError = nullptr);
+
+	/**
+	 * Native admission tripwire for the stateless execution boundary. The base
+	 * admits Blueprints whose nearest native anchor is USeinFormation. Every
+	 * concrete native subclass must override and explicitly admit its own anchor;
+	 * admission is never inherited accidentally by a later native subclass.
+	 */
+	virtual bool IsStatelessExecutionAdmitted(FString& OutError) const;
 
 	/**
 	 * Whether this formation places members at their squad's AUTHORED per-slot OffsetTransforms
@@ -331,4 +358,10 @@ public:
 		FFixedVector Center,
 		FFixedQuaternion UniformFacing,
 		TArray<FFixedQuaternion>& OutFacings);
+
+protected:
+	/** Shared exact-native-or-Blueprint-child admission helper. */
+	bool AdmitStatelessNativeAnchor(
+		const UClass* ExpectedNativeAnchor,
+		FString& OutError) const;
 };

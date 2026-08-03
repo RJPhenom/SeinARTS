@@ -645,6 +645,8 @@ void USeinWorldSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	bReadOnlyCallbackInProgress = false;
 	bObserverCallbackInProgress = false;
 	ActiveAICommandEmitter = nullptr;
+	FormationExecutionScratch.Reset();
+	ActiveFormationExecutionScratch.Reset();
 	bDestroyNotificationInProgress = false;
 	DeferredTeardownHandle = FSeinEntityHandle::Invalid();
 	bSimulationTickDispatchInProgress = false;
@@ -843,6 +845,8 @@ void USeinWorldSubsystem::PreDeinitialize()
 void USeinWorldSubsystem::Deinitialize()
 {
 	ReleaseAllModuleOwnedState();
+	FormationExecutionScratch.Reset();
+	ActiveFormationExecutionScratch.Reset();
 	MatchBootstrapState = ESeinMatchBootstrapState::Awaiting;
 	MatchBootstrapReceipt = FSeinMatchBootstrapReceipt();
 	MatchBootstrapAuthorizationContextDigest.Invalidate();
