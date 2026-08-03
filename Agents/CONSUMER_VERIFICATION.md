@@ -39,8 +39,9 @@ For every selected profile the tool:
 7. starts the real packaged `SeinConsumer-Win64-Shipping.exe`, requires it to remain alive through
    a bounded startup window, then terminates that exact process; and
 8. for the Framework profile, drives a packaged listen server and client through lobby travel,
-   lockstep command flow, forced checkpoint-plus-tail resync, physical disconnect/reconnect,
-   reconnect resync/activation, streaming replay finalization, checkpoint seek, and exact terminal
+   lockstep command flow, a mandatory two-peer canonical-root comparison before reporter topology
+   changes, forced checkpoint-plus-tail resync, physical disconnect/reconnect, reconnect
+   resync/activation, streaming replay finalization, checkpoint seek, and exact terminal
    canonical-root agreement.
 
 An initially empty consumer necessarily emits the two manifest-bootstrap simulation-content errors
@@ -59,9 +60,9 @@ On 2026-08-03 all five post-split profiles passed Editor and Shipping builds, ex
 loading, cook/package, and real packaged Shipping startup. Cover-only and Squad-only contained no
 bridge plugin or module; Full mounted and started the bridge and shut it down cleanly. Framework
 also passed the complete packaged multiplayer/replay leg: two real Shipping processes completed a
-match start, two resyncs around a real reconnect, and a standalone checkpoint-seek replay whose end
-tick (272 in the qualifying run) and canonical root
-(`EC430EB37C82744C60C69D6C8805748B`) exactly matched the authoritative server. Generated replay
+match start, a 2-of-2 equal world-root checkpoint at turn 5, two resyncs around a real reconnect,
+and a standalone checkpoint-seek replay whose end tick (272 in the qualifying run) and canonical
+root (`D4BC19B203F0DBCB0F8ACD46BD1EEFC0`) exactly matched the authoritative server. Generated replay
 files and exact packaged processes are cleaned by the harness.
 
 The local Epic launcher engine cannot build Client targets; UnrealBuildTool reports that Client

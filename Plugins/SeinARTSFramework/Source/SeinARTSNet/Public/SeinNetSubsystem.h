@@ -170,6 +170,7 @@ struct FSeinPendingLocalProtocolAssignment
 	FSeinProtocolContext Context;
 	int64 Seed = 0;
 	bool bSimulates = false;
+	TArray<FSeinParticipantBinding> ParticipantBindings;
 	FSeinMatchSettings MatchSettings;
 	TWeakObjectPtr<UWorld> SourceWorld;
 	ESeinPreparedWorldActivation Activation =
@@ -298,9 +299,9 @@ public:
 	 *  is established separately when a prepared match assignment arrives. */
 	void NotifyLocalLobbySlotAssigned(ASeinNetRelay* Relay, FSeinPlayerID Slot);
 
-	/** Called by ASeinNetRelay replication on the owning client when its slot
-	 *  and seed arrive. Latches local identity, ensures the current world's
-	 *  lockstep hooks are bound, and retries deferred work. */
+	/** Called by the relay's atomic bootstrap assignment. Authenticates and
+	 *  installs local identity plus the frozen participant manifest, binds the
+	 *  current world's lockstep hooks, and retries deferred work. */
 	void NotifyLocalProtocolAssigned(
 		ASeinNetRelay* Relay,
 		FSeinPlayerID Slot,
@@ -308,6 +309,7 @@ public:
 		const FSeinProtocolContext& Context,
 		int64 Seed,
 		bool bSimulates,
+		const TArray<FSeinParticipantBinding>& InParticipantBindings,
 		const FSeinMatchSettings& MatchSettings,
 		ESeinPreparedWorldActivation Activation =
 			ESeinPreparedWorldActivation::RequiresWorldTransition);
@@ -580,6 +582,18 @@ public:
 	 *  sim on detection (default: continue ticking, just show alarm). */
 	bool IsLocalDesyncDetected() const { return bDesyncDetected; }
 
+	/** Coordinator-side, non-authoritative qualification telemetry. These
+	 *  values advance only after every expected live reporter supplied the
+	 *  same canonical world root. They never participate in simulation state. */
+	int32 GetLatestSuccessfulWorldStateRootCheckTurn() const
+	{
+		return LatestSuccessfulWorldStateRootCheckTurn;
+	}
+	int32 GetLatestSuccessfulWorldStateRootReporterCount() const
+	{
+		return LatestSuccessfulWorldStateRootReporterCount;
+	}
+
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Network|Determinism")
 	bool HasDeterminismSessionFailure() const
 	{
@@ -743,6 +757,20 @@ private:
 		TMap<FSeinPlayerID, FSeinNetworkParticipantID>& OutSlotToParticipant,
 		FSeinNetworkParticipantID& OutCoordinatorParticipantID,
 		TMap<FSeinPlayerID, ESeinSlotLifecycle>& OutSlotLifecycle);
+	/** Validate the authority-supplied frozen manifest transactionally before a
+	 *  local assignment adopts it. The protocol digest authenticates the exact
+	 *  capabilities and slot ownership; the match settings independently pin
+	 *  the command-author set used for deterministic submission budgets. */
+	bool ValidateParticipantManifestAssignment(
+		const FSeinProtocolContext& Context,
+		FSeinPlayerID LocalSlot,
+		FSeinNetworkParticipantID AssignedParticipantID,
+		bool bLocalSimulates,
+		const TArray<FSeinParticipantBinding>& InBindings,
+		const FSeinMatchSettings& MatchSettings,
+		TArray<FSeinParticipantBinding>& OutCanonicalBindings,
+		TMap<FSeinPlayerID, FSeinNetworkParticipantID>& OutSlotToParticipant,
+		FString& OutError) const;
 	bool ConfigureTurnAggregator();
 	bool ConfigureBootstrapConsensus();
 	bool ResolveLocalCommandProtocolDigest(FGuid& OutDigest) const;
@@ -1305,6 +1333,8 @@ private:
 	 *  late report doesn't re-trigger the alarm. Pruned periodically. */
 	TSet<int32> CompletedWorldStateRootChecks;
 	int32 CompletedWorldStateRootRejectionFloor = -1;
+	int32 LatestSuccessfulWorldStateRootCheckTurn = -1;
+	int32 LatestSuccessfulWorldStateRootReporterCount = 0;
 
 	/** Local-side: set when ClientHandleDesyncNotification fires. Stays true
 	 *  until manually cleared. Surfaces via IsLocalDesyncDetected() for

@@ -252,6 +252,27 @@ void USeinConsumerQualificationSubsystem::TickServer(UWorld& World)
 			TEXT("server-match-started.marker"),
 			FString::Printf(TEXT("tick=%d\n"), Sim->GetCurrentTick()));
 	}
+	if (Net->IsLocalDesyncDetected()
+		|| Net->HasDeterminismSessionFailure())
+	{
+		Fail(TEXT("server observed a determinism failure"));
+		return;
+	}
+	if (!bServerRootGossipCompleted
+		&& Net->GetLatestSuccessfulWorldStateRootReporterCount() >= 2)
+	{
+		bServerRootGossipCompleted = WriteMarker(
+			TEXT("server-root-gossip-complete.marker"),
+			FString::Printf(
+				TEXT("Turn=%d\nReporters=%d\n"),
+				Net->GetLatestSuccessfulWorldStateRootCheckTurn(),
+				Net->GetLatestSuccessfulWorldStateRootReporterCount()));
+		if (!bServerRootGossipCompleted)
+		{
+			Fail(TEXT("server could not publish root-gossip completion"));
+			return;
+		}
+	}
 	if (!bPingSubmitted && Sim->GetCurrentTick() >= 6
 		&& Net->GetLocalPlayerID().IsValid())
 	{
@@ -423,6 +444,14 @@ void USeinConsumerQualificationSubsystem::TickClient(UWorld& World)
 			Net->SubmitLocalCommand(FSeinCommand::MakePingCommand(
 				Net->GetLocalPlayerID(), FFixedVector()));
 			bPingSubmitted = true;
+		}
+		// Prove both initially connected simulation peers completed a canonical
+		// root comparison before resync or disconnect changes reporter topology.
+		const FString RootGossipMarker = FPaths::Combine(
+			MarkerDirectory, TEXT("server-root-gossip-complete.marker"));
+		if (!IFileManager::Get().FileExists(*RootGossipMarker))
+		{
+			return;
 		}
 		if (!bInitialResyncRequested
 			&& Sim->GetCurrentTick() >= InitialResyncStartTick)

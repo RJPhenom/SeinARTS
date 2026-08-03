@@ -15,7 +15,8 @@ The post-audit performance/remediation work is now committed and fast-forwarded 
 - Exact settled-work exits and reduced narrow-phase work in the collision resolvers.
 - Gauss-Seidel as the project default collision policy; deterministic Jacobi remains selectable and covered.
 - Incremental BLAKE3-128 routine world roots, sealed only at protocol checkpoint boundaries, with forced-rebuild verification.
-- Correct peer-report liveness based on the frozen epoch participant manifest.
+- Correct peer-report liveness based on the frozen epoch participant manifest, including
+  authenticated authority-to-peer manifest delivery and digest validation during bootstrap.
 - Frame-coalesced presentation updates while network/replay observers remain tick-exact.
 - Event/cadence-driven fog presentation and cached navigation debug geometry.
 - Cached selection ability aggregation and bulk/linear-time minimap fog generation.
@@ -49,8 +50,8 @@ formation/resolver state coverage, provider teardown, and downstream content own
 
 | Gate | Result |
 |---|---:|
-| `SeinARTS.Unit`, profile All | 411 passed, 0 failed |
-| `SeinARTS.Unit`, profile Framework | 403 passed, 0 failed |
+| `SeinARTS.Unit`, profile All | 412 passed, 0 failed |
+| `SeinARTS.Unit`, profile Framework | 404 passed, 0 failed |
 | `SeinARTS.Integration`, profile All | 20 passed, 0 failed |
 | `SeinARTS.Integration`, profile Framework | 14 passed, 0 failed |
 | `SeinARTS.Determinism`, profile All | 25 passed, 0 failed |
@@ -65,7 +66,7 @@ formation/resolver state coverage, provider teardown, and downstream content own
 | Clean consumer: Framework + Squad only | fresh Editor + Shipping build, exact map load, cook/package, real Shipping startup passed; Cover/bridge absent |
 | Clean consumer: Framework + Movement+ | fresh Editor + Shipping build, exact map load, cook/package, real Shipping startup passed |
 | Clean consumer: all five production plugins | fresh Editor + Shipping build, exact map load, cook/package, real Shipping startup passed; bridge mounted/started/shut down |
-| Packaged Framework multiplayer/replay | Shipping listen server + client passed lobby travel, lockstep commands, forced resync, physical reconnect, reconnect resync/activation, replay seek, and exact terminal-root agreement at tick 272 (`EC430EB37C82744C60C69D6C8805748B`) |
+| Packaged Framework multiplayer/replay | Shipping listen server + client completed a 2-of-2 equal world-root checkpoint at turn 5, then passed lobby travel, lockstep commands, forced resync, physical reconnect, reconnect resync/activation, replay seek, and exact terminal-root agreement at tick 272 (`D4BC19B203F0DBCB0F8ACD46BD1EEFC0`) |
 | Generated simulation-content manifest | 10 contributors, 93 records, digest `0E018D9C38BD9389BF25B7648F54A87B` |
 | Staged diff validation | no whitespace errors; line-ending notices only |
 
@@ -90,6 +91,10 @@ Latest local evidence is under ignored `Saved/Automation/`:
 - `SeinARTS.Integration-20260803-122715-95e9ce08` (All, 20 passed)
 - `SeinARTS.Determinism-20260803-122841-6c52d746` (All, 25 passed)
 - `SeinARTS.Unit-20260803-122946-4c898aa0` (All, 411 passed)
+- `SeinARTS.Unit-20260803-125931-a30e5277` (All, 412 passed after authenticated
+  participant-manifest regression coverage)
+- `SeinARTS.Unit-20260803-131428-3570e331` (Framework, 404 passed)
+- `SeinARTS.Unit.Network.Protocol-20260803-131114-4cd02bbc` (38 passed)
 
 ## Integration-candidate progress
 
@@ -144,7 +149,8 @@ Latest local evidence is under ignored `Saved/Automation/`:
   and Full profiles. This proves both parents survive physical bridge stripping and the bridge
   remains loadable when its required parents are present.
 - The Framework profile now owns a packaged runtime qualification subsystem only in its disposable
-  generated consumer. It proves a real listen-server/client match, forced checkpoint resync,
+  generated consumer. It proves a real listen-server/client match, requires a successful two-peer
+  world-root comparison before topology changes, then exercises forced checkpoint resync,
   disconnect/reconnect with authorship withheld until exact catch-up, streaming replay publication,
   checkpoint seek, and terminal canonical-root agreement.
 - Pure lobby maps now materialize relays from the lobby's final authoritative controller/slot map

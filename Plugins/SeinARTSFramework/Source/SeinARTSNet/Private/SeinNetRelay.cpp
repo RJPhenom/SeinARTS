@@ -217,6 +217,7 @@ void ASeinNetRelay::Client_PrepareMatchBootstrap_Implementation(
 	int64 Seed,
 	bool bSimulates,
 	bool bAllowCurrentWorldActivation,
+	const TArray<FSeinParticipantBinding>& ParticipantBindings,
 	const FSeinMatchSettings& MatchSettings)
 {
 	if (USeinNetSubsystem* Net = GetNetSubsystem())
@@ -228,6 +229,7 @@ void ASeinNetRelay::Client_PrepareMatchBootstrap_Implementation(
 			Context,
 			Seed,
 			bSimulates,
+			ParticipantBindings,
 			MatchSettings,
 			bAllowCurrentWorldActivation
 				? ESeinPreparedWorldActivation::AllowCurrentWorld

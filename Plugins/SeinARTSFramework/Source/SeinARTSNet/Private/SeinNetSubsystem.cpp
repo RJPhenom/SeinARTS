@@ -590,6 +590,8 @@ void USeinNetSubsystem::ResetLockstepEpochState(UWorld* RetiringWorld)
 	ServerWorldStateRootReports.Reset();
 	CompletedWorldStateRootChecks.Reset();
 	CompletedWorldStateRootRejectionFloor = -1;
+	LatestSuccessfulWorldStateRootCheckTurn = -1;
+	LatestSuccessfulWorldStateRootReporterCount = 0;
 	PendingWorldStateRootReports.Reset();
 	LastWorldStateRootQueuedTurn = -1;
 	LastWorldStateRootReportedTurn = -1;
@@ -1270,6 +1272,7 @@ void USeinNetSubsystem::ServerSpawnRelayForController(APlayerController* PC, FSe
 				FindParticipantBinding(ParticipantID)
 					&& FindParticipantBinding(ParticipantID)->bSimulates,
 				/*bAllowCurrentWorldActivation=*/true,
+				ParticipantBindings,
 				ActiveMatchSettings);
 		}
 		UE_LOG(LogSeinNet, Log,
@@ -1321,6 +1324,7 @@ void USeinNetSubsystem::ServerSpawnRelayForController(APlayerController* PC, FSe
 							SessionSeed,
 							FindParticipantBinding(ParticipantID)
 								&& FindParticipantBinding(ParticipantID)->bSimulates,
+							ParticipantBindings,
 							ActiveMatchSettings,
 							ESeinPreparedWorldActivation::AllowCurrentWorld);
 					}
@@ -1336,6 +1340,7 @@ void USeinNetSubsystem::ServerSpawnRelayForController(APlayerController* PC, FSe
 						FindParticipantBinding(ParticipantID)
 							&& FindParticipantBinding(ParticipantID)->bSimulates,
 						/*bAllowCurrentWorldActivation=*/true,
+						ParticipantBindings,
 						ActiveMatchSettings);
 				}
 				UE_LOG(LogSeinNet, Log,
@@ -1456,6 +1461,7 @@ void USeinNetSubsystem::ServerSpawnRelayForController(APlayerController* PC, FSe
 				FindParticipantBinding(ParticipantID)
 					&& FindParticipantBinding(ParticipantID)->bSimulates,
 				/*bAllowCurrentWorldActivation=*/true,
+				ParticipantBindings,
 				ActiveMatchSettings);
 		}
 	}
@@ -2055,6 +2061,119 @@ bool USeinNetSubsystem::BuildCanonicalParticipantManifest(
 	return true;
 }
 
+bool USeinNetSubsystem::ValidateParticipantManifestAssignment(
+	const FSeinProtocolContext& Context,
+	FSeinPlayerID LocalSlot,
+	FSeinNetworkParticipantID AssignedParticipantID,
+	bool bLocalSimulates,
+	const TArray<FSeinParticipantBinding>& InBindings,
+	const FSeinMatchSettings& MatchSettings,
+	TArray<FSeinParticipantBinding>& OutCanonicalBindings,
+	TMap<FSeinPlayerID, FSeinNetworkParticipantID>& OutSlotToParticipant,
+	FString& OutError) const
+{
+	OutCanonicalBindings.Reset();
+	OutSlotToParticipant.Reset();
+	OutError.Reset();
+
+	FSeinTurnAggregator ManifestValidator;
+	const ESeinTurnAggregatorConfigResult ValidationResult =
+		ManifestValidator.Configure(Context, InBindings);
+	if (ValidationResult != ESeinTurnAggregatorConfigResult::Configured)
+	{
+		OutError = FString::Printf(
+			TEXT("participant manifest failed protocol validation (result=%d)"),
+			static_cast<int32>(ValidationResult));
+		return false;
+	}
+
+	TMap<FSeinPlayerID, FSeinNetworkParticipantID> CandidateSlotMap;
+	for (const FSeinParticipantBinding& Binding : InBindings)
+	{
+		for (const FSeinPlayerID Slot : Binding.CommandSlots)
+		{
+			CandidateSlotMap.Add(Slot, Binding.ParticipantID);
+		}
+	}
+
+	TSet<FSeinPlayerID> SettingsCommandSlots;
+	for (const FSeinMatchSlot& MatchSlot : MatchSettings.Slots)
+	{
+		if (MatchSlot.State != ESeinSlotState::Human
+			&& MatchSlot.State != ESeinSlotState::AI)
+		{
+			continue;
+		}
+		if (MatchSlot.SlotIndex <= 0 || MatchSlot.SlotIndex > MAX_uint8)
+		{
+			OutError = FString::Printf(
+				TEXT("active match slot index %d is outside protocol range"),
+				MatchSlot.SlotIndex);
+			return false;
+		}
+		const FSeinPlayerID CommandSlot(
+			static_cast<uint8>(MatchSlot.SlotIndex));
+		if (SettingsCommandSlots.Contains(CommandSlot))
+		{
+			OutError = FString::Printf(
+				TEXT("active match settings repeat command slot %u"),
+				CommandSlot.Value);
+			return false;
+		}
+		SettingsCommandSlots.Add(CommandSlot);
+	}
+	if (SettingsCommandSlots.IsEmpty()
+		|| SettingsCommandSlots.Num() != CandidateSlotMap.Num())
+	{
+		OutError = FString::Printf(
+			TEXT("participant manifest command-author count %d disagrees with active match settings count %d"),
+			CandidateSlotMap.Num(), SettingsCommandSlots.Num());
+		return false;
+	}
+	for (const FSeinPlayerID CommandSlot : SettingsCommandSlots)
+	{
+		if (!CandidateSlotMap.Contains(CommandSlot))
+		{
+			OutError = FString::Printf(
+				TEXT("participant manifest omits active command slot %u"),
+				CommandSlot.Value);
+			return false;
+		}
+	}
+
+	const FSeinNetworkParticipantID* SlotOwner =
+		CandidateSlotMap.Find(LocalSlot);
+	if (!SlotOwner || *SlotOwner != AssignedParticipantID)
+	{
+		OutError = FString::Printf(
+			TEXT("local slot %u is not owned by assigned participant %s"),
+			LocalSlot.Value, *AssignedParticipantID.ToCanonicalString());
+		return false;
+	}
+	const FSeinParticipantBinding* LocalBinding =
+		InBindings.FindByPredicate(
+			[AssignedParticipantID](const FSeinParticipantBinding& Binding)
+			{
+				return Binding.ParticipantID == AssignedParticipantID;
+			});
+	if (!LocalBinding || LocalBinding->bSimulates != bLocalSimulates)
+	{
+		OutError = TEXT("local simulation capability disagrees with the authenticated participant manifest");
+		return false;
+	}
+
+	OutCanonicalBindings = InBindings;
+	OutCanonicalBindings.Sort([](
+		const FSeinParticipantBinding& A,
+		const FSeinParticipantBinding& B)
+	{
+		return A.ParticipantID.ToCanonicalString()
+			< B.ParticipantID.ToCanonicalString();
+	});
+	OutSlotToParticipant = MoveTemp(CandidateSlotMap);
+	return true;
+}
+
 void USeinNetSubsystem::ApplyProtocolAssignmentToRelays()
 {
 	const bool bUsePending = PendingAuthorityProtocolState.IsSet();
@@ -2116,6 +2235,8 @@ void USeinNetSubsystem::ApplyProtocolAssignmentToRelays()
 				PendingLocalProtocolAssignment.Context = AssignmentContext;
 				PendingLocalProtocolAssignment.Seed = AssignmentSeed;
 				PendingLocalProtocolAssignment.bSimulates = bSimulates;
+				PendingLocalProtocolAssignment.ParticipantBindings =
+					AssignmentBindings;
 				PendingLocalProtocolAssignment.MatchSettings =
 					AssignmentSettings;
 				PendingLocalProtocolAssignment.SourceWorld =
@@ -2133,6 +2254,7 @@ void USeinNetSubsystem::ApplyProtocolAssignmentToRelays()
 					AssignmentContext,
 					AssignmentSeed,
 					bSimulates,
+					AssignmentBindings,
 					AssignmentSettings,
 					AssignmentActivation);
 			}
@@ -2147,6 +2269,7 @@ void USeinNetSubsystem::ApplyProtocolAssignmentToRelays()
 				bSimulates,
 				AssignmentActivation
 					== ESeinPreparedWorldActivation::AllowCurrentWorld,
+				AssignmentBindings,
 				AssignmentSettings);
 		}
 	}
@@ -2532,6 +2655,7 @@ bool USeinNetSubsystem::TryPromotePendingLocalProtocolAssignment()
 		Assignment.Context,
 		Assignment.Seed,
 		Assignment.bSimulates,
+		Assignment.ParticipantBindings,
 		Assignment.MatchSettings,
 		Assignment.Activation);
 	return ActiveProtocolContext == Assignment.Context
@@ -2739,6 +2863,7 @@ void USeinNetSubsystem::RegisterRelay(ASeinNetRelay* Relay)
 					Relay->ProtocolContext,
 					Relay->SessionSeed,
 					bLocalParticipantSimulates,
+					ParticipantBindings,
 					ActiveMatchSettings);
 			}
 		}
@@ -2955,6 +3080,7 @@ void USeinNetSubsystem::NotifyLocalProtocolAssigned(
 	const FSeinProtocolContext& Context,
 	int64 Seed,
 	bool bSimulates,
+	const TArray<FSeinParticipantBinding>& InParticipantBindings,
 	const FSeinMatchSettings& MatchSettings,
 	ESeinPreparedWorldActivation Activation)
 {
@@ -2967,6 +3093,26 @@ void USeinNetSubsystem::NotifyLocalProtocolAssigned(
 	FGuid LocalMatchSettingsDigest;
 	FGuid LocalSimulationContentDigest;
 	FSeinMatchSettings CanonicalMatchSettings = MatchSettings;
+	TArray<FSeinParticipantBinding> CanonicalParticipantBindings;
+	TMap<FSeinPlayerID, FSeinNetworkParticipantID>
+		CanonicalSlotToParticipant;
+	FString ParticipantManifestError;
+	if (!ValidateParticipantManifestAssignment(
+			Context,
+			Slot,
+			ParticipantID,
+			bSimulates,
+			InParticipantBindings,
+			CanonicalMatchSettings,
+			CanonicalParticipantBindings,
+			CanonicalSlotToParticipant,
+			ParticipantManifestError))
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("NotifyLocalProtocolAssigned: rejected unauthenticated or inconsistent participant manifest: %s."),
+			*ParticipantManifestError);
+		return;
+	}
 	const bool bCommandDigestReady =
 		ResolveLocalCommandProtocolDigest(LocalCommandProtocolDigest);
 	const bool bSimulationContentDigestReady =
@@ -3092,6 +3238,8 @@ void USeinNetSubsystem::NotifyLocalProtocolAssigned(
 		PendingLocalProtocolAssignment.Context = Context;
 		PendingLocalProtocolAssignment.Seed = Seed;
 		PendingLocalProtocolAssignment.bSimulates = bSimulates;
+		PendingLocalProtocolAssignment.ParticipantBindings =
+			CanonicalParticipantBindings;
 		PendingLocalProtocolAssignment.MatchSettings =
 			MoveTemp(CanonicalMatchSettings);
 		PendingLocalProtocolAssignment.SourceWorld = AssignmentSourceWorld;
@@ -3184,6 +3332,8 @@ void USeinNetSubsystem::NotifyLocalProtocolAssigned(
 	ActiveProtocolContext = Context;
 	ActiveMatchSettings = MoveTemp(CanonicalMatchSettings);
 	bHasActiveMatchSettings = true;
+	ParticipantBindings = MoveTemp(CanonicalParticipantBindings);
+	SlotToParticipant = MoveTemp(CanonicalSlotToParticipant);
 	if (!FreezeAuthorSubmissionPolicy(TEXT("NotifyLocalProtocolAssigned")))
 	{
 		ResetMatchState(nullptr);
@@ -8518,6 +8668,12 @@ void USeinNetSubsystem::ServerCompareWorldStateRootsForTurn(int32 Turn)
 
 	if (bAllAgree)
 	{
+		if (Turn > LatestSuccessfulWorldStateRootCheckTurn)
+		{
+			LatestSuccessfulWorldStateRootCheckTurn = Turn;
+			LatestSuccessfulWorldStateRootReporterCount =
+				ExpectedParticipants.Num();
+		}
 		// Most check-turns are silent (Verbose). Promote the first successful
 		// comparison and every 5th thereafter so a short validation run proves
 		// both reporters reached the coordinator without spamming long matches.

@@ -134,6 +134,14 @@ try {
 		(New-QuotedArgument 'SeinConsumerServerAddress' $ServerAddress)
 	) + $CommonArguments)
 
+	$RootGossipPath = Wait-QualificationMarker `
+		'server-root-gossip-complete.marker' @($Server, $Client)
+	$RootGossipResult = Read-KeyValueMarker $RootGossipPath
+	if (-not $RootGossipResult.ContainsKey('Turn') -or
+		-not $RootGossipResult.ContainsKey('Reporters') -or
+		[int]$RootGossipResult.Reporters -lt 2) {
+		throw 'Packaged qualification did not complete a two-peer world-root comparison.'
+	}
 	Wait-QualificationMarker `
 		'client-resync-complete.marker' @($Server, $Client) | Out-Null
 	Wait-QualificationMarker `
@@ -201,11 +209,14 @@ try {
 		listenServer = 'Passed'
 		twoPlayerLobbyTravel = 'Passed'
 		lockstepCommandFlow = 'Passed'
+		determinismWorldRootGossip = 'Passed'
 		checkpointTailResync = 'Passed'
 		disconnectReconnect = 'Passed'
 		replayCheckpointSeek = 'Passed'
 		endTick = [int]$ServerResult.EndTick
 		canonicalRoot = $ServerResult.Root
+		rootGossipTurn = [int]$RootGossipResult.Turn
+		rootGossipReporters = [int]$RootGossipResult.Reporters
 		replayFile = [System.IO.Path]::GetFileName($ReplayArtifactPath)
 		replayArtifact = 'RemovedAfterVerification'
 		port = $Port

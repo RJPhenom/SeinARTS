@@ -230,6 +230,29 @@ struct FSeinNetSubsystemTestAccess
 	{
 		Net.TestWorldStateRootResolverOverride = MoveTemp(Resolver);
 	}
+	static bool ValidateParticipantManifestAssignment(
+		const USeinNetSubsystem& Net,
+		const FSeinProtocolContext& Context,
+		FSeinPlayerID LocalSlot,
+		FSeinNetworkParticipantID LocalParticipantID,
+		bool bLocalSimulates,
+		const TArray<FSeinParticipantBinding>& Bindings,
+		const FSeinMatchSettings& MatchSettings,
+		TArray<FSeinParticipantBinding>& OutCanonicalBindings,
+		TMap<FSeinPlayerID, FSeinNetworkParticipantID>& OutSlotMap,
+		FString& OutError)
+	{
+		return Net.ValidateParticipantManifestAssignment(
+			Context,
+			LocalSlot,
+			LocalParticipantID,
+			bLocalSimulates,
+			Bindings,
+			MatchSettings,
+			OutCanonicalBindings,
+			OutSlotMap,
+			OutError);
+	}
 	static void SetDeterminismSchedule(
 		USeinNetSubsystem& Net,
 		bool bEnabled,
@@ -327,6 +350,8 @@ struct FSeinNetSubsystemTestAccess
 		Net.ServerWorldStateRootReports.FindOrAdd(10);
 		Net.CompletedWorldStateRootChecks.Add(5);
 		Net.CompletedWorldStateRootRejectionFloor = 1;
+		Net.LatestSuccessfulWorldStateRootCheckTurn = 5;
+		Net.LatestSuccessfulWorldStateRootReporterCount = 2;
 		Net.PendingWorldStateRootReports.Add(
 			{11, FGuid(1, 2, 3, 4)});
 		Net.LastWorldStateRootQueuedTurn = 11;
@@ -398,6 +423,8 @@ struct FSeinNetSubsystemTestAccess
 			Net.ServerWorldStateRootReports.IsEmpty()
 			&& Net.CompletedWorldStateRootChecks.IsEmpty()
 			&& Net.CompletedWorldStateRootRejectionFloor == -1
+			&& Net.LatestSuccessfulWorldStateRootCheckTurn == -1
+			&& Net.LatestSuccessfulWorldStateRootReporterCount == 0
 			&& Net.PendingWorldStateRootReports.IsEmpty()
 			&& Net.LastWorldStateRootQueuedTurn == -1
 			&& Net.LastWorldStateRootReportedTurn == -1
@@ -1085,6 +1112,79 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(AreEqual(
 			30,
 			FSeinNetSubsystemTestAccess::LastWorldRootReported(*Net)));
+	}
+
+	TEST(AuthenticatedBootstrapManifestPinsClientReporterTopology,
+		"SeinARTS.Unit.Network.Protocol.Security")
+	{
+		USeinNetSubsystem* Net =
+			FSeinNetSubsystemTestAccess::NewSubsystem();
+		ASSERT_THAT(IsNotNull(Net));
+		const TArray<FSeinParticipantBinding> Bindings{
+			FSeinNetSubsystemTestAccess::Binding(1, 1),
+			FSeinNetSubsystemTestAccess::Binding(2, 2)};
+		const FSeinProtocolContext Context =
+			FSeinNetSubsystemTestAccess::ContextFor(Bindings);
+		FSeinMatchSettings MatchSettings;
+		for (int32 SlotIndex = 1; SlotIndex <= 2; ++SlotIndex)
+		{
+			FSeinMatchSlot& Slot = MatchSettings.Slots.Emplace_GetRef();
+			Slot.SlotIndex = SlotIndex;
+			Slot.State = ESeinSlotState::Human;
+		}
+
+		TArray<FSeinParticipantBinding> CanonicalBindings;
+		TMap<FSeinPlayerID, FSeinNetworkParticipantID> SlotMap;
+		FString Error;
+		ASSERT_THAT(IsTrue(
+			FSeinNetSubsystemTestAccess::
+				ValidateParticipantManifestAssignment(
+					*Net,
+					Context,
+					FSeinPlayerID(2),
+					FSeinNetSubsystemTestAccess::Participant(2),
+					/*bLocalSimulates=*/true,
+					Bindings,
+					MatchSettings,
+					CanonicalBindings,
+					SlotMap,
+					Error)));
+		ASSERT_THAT(AreEqual(2, CanonicalBindings.Num()));
+		ASSERT_THAT(IsTrue(
+			SlotMap.FindRef(FSeinPlayerID(2))
+				== FSeinNetSubsystemTestAccess::Participant(2)));
+
+		TArray<FSeinParticipantBinding> TamperedBindings = Bindings;
+		TamperedBindings[1].bReportsWorldRoots = false;
+		ASSERT_THAT(IsFalse(
+			FSeinNetSubsystemTestAccess::
+				ValidateParticipantManifestAssignment(
+					*Net,
+					Context,
+					FSeinPlayerID(2),
+					FSeinNetSubsystemTestAccess::Participant(2),
+					/*bLocalSimulates=*/true,
+					TamperedBindings,
+					MatchSettings,
+					CanonicalBindings,
+					SlotMap,
+					Error)));
+		ASSERT_THAT(AreEqual(0, CanonicalBindings.Num()));
+		ASSERT_THAT(AreEqual(0, SlotMap.Num()));
+
+		ASSERT_THAT(IsFalse(
+			FSeinNetSubsystemTestAccess::
+				ValidateParticipantManifestAssignment(
+					*Net,
+					Context,
+					FSeinPlayerID(2),
+					FSeinNetSubsystemTestAccess::Participant(2),
+					/*bLocalSimulates=*/false,
+					Bindings,
+					MatchSettings,
+					CanonicalBindings,
+					SlotMap,
+					Error)));
 	}
 
 	TEST(InvalidWorldRootCannotEnterRetryQueue, "SeinARTS.Unit.Network.Protocol")

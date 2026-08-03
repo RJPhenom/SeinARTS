@@ -179,7 +179,8 @@ public:
 
 	/** Server -> owning client. Atomic pre-travel match bootstrap. The owning
 	 *  GameInstance stores this before destination world initialization so
-	 *  client pre-registration and tick zero use the authority's exact settings. */
+	 *  client pre-registration and tick zero use the authority's exact settings
+	 *  and authenticated participant manifest. */
 	UFUNCTION(Client, Reliable)
 	void Client_PrepareMatchBootstrap(
 		FSeinPlayerID Slot,
@@ -188,6 +189,7 @@ public:
 		int64 Seed,
 		bool bSimulates,
 		bool bAllowCurrentWorldActivation,
+		const TArray<FSeinParticipantBinding>& ParticipantBindings,
 		const FSeinMatchSettings& MatchSettings);
 
 	/** Coordinator cancelled a prepared travel before destination activation. */

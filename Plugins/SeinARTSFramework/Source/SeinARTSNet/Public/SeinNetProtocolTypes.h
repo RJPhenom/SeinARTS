@@ -219,7 +219,7 @@ struct SEINARTSNET_API FSeinProtocolContext
 	GENERATED_BODY()
 
 	/** Increment when the wire contract changes incompatibly. */
-	static constexpr int32 CurrentProtocolVersion = 10;
+	static constexpr int32 CurrentProtocolVersion = 11;
 
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Network")
 	int32 ProtocolVersion = CurrentProtocolVersion;

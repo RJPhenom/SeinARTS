@@ -53,6 +53,7 @@ private:
 	bool bServerReadyWritten = false;
 	bool bMatchStartRequested = false;
 	bool bServerMatchStarted = false;
+	bool bServerRootGossipCompleted = false;
 	bool bServerSawDrop = false;
 	bool bServerSawReconnect = false;
 	bool bServerReplayPublished = false;
