@@ -5,6 +5,7 @@
 **Stabilization commit:** `27cb490` (`Stabilize post-audit performance and determinism`)
 **Cleanup boundary:** `1bebf91` (`Clean and harden the post-audit baseline`)
 **Content/consumer boundary:** `1438051` (`Add clean downstream consumer verification`)
+**Reporter-bootstrap fix:** `89f1b5d` (`Fix remote determinism reporter bootstrap`)
 **Remote posture:** local `main` and the integration-candidate branch have not been pushed in this pass.
 
 ## Stabilized capability boundary
@@ -93,7 +94,8 @@ Latest local evidence is under ignored `Saved/Automation/`:
 - `SeinARTS.Unit-20260803-122946-4c898aa0` (All, 411 passed)
 - `SeinARTS.Unit-20260803-125931-a30e5277` (All, 412 passed after authenticated
   participant-manifest regression coverage)
-- `SeinARTS.Unit-20260803-131428-3570e331` (Framework, 404 passed)
+- `SeinARTS.Unit-20260803-131608-f3fcc8a9` (Framework, 404 passed with the
+  checked-in regression floor applied)
 - `SeinARTS.Unit.Network.Protocol-20260803-131114-4cd02bbc` (38 passed)
 
 ## Integration-candidate progress
