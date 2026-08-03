@@ -16,8 +16,8 @@
     {
       "profile": "All",
       "suite": "SeinARTS.Integration",
-      "minimumCount": 15,
-      "establishedAtCommit": "1e57243444cb42281690e65bb921b00af1aa689f"
+      "minimumCount": 20,
+      "establishedAtCommit": "07ba42faefc13d65adbbe273b2d4c31655a9cd16"
     },
     {
       "profile": "Framework",
@@ -28,8 +28,8 @@
     {
       "profile": "All",
       "suite": "SeinARTS.Determinism",
-      "minimumCount": 20,
-      "establishedAtCommit": "1e57243444cb42281690e65bb921b00af1aa689f"
+      "minimumCount": 25,
+      "establishedAtCommit": "07ba42faefc13d65adbbe273b2d4c31655a9cd16"
     },
     {
       "profile": "Framework",
