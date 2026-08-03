@@ -52,6 +52,7 @@ class UWorld;
 class USeinLevelData;
 struct FSeinStampShape;
 struct FSeinFogOfWarDefaultStateCodec;
+struct FSeinFogOfWarDefaultRoutineRootCache;
 
 #if WITH_DEV_AUTOMATION_TESTS
 namespace UE::SeinARTSTests
@@ -355,6 +356,11 @@ private:
 	 *  removed) get their footprint torn down on the next tick. */
 	TMap<FSeinEntityHandle, FSeinFogSourceState> SourceStates;
 
+	/** Non-authoritative digest acceleration. It is created only when routine
+	 *  multiplayer verification is active and is rebuilt after restore/grid
+	 *  adoption. Authoritative fog state never depends on this cache. */
+	mutable TSharedPtr<FSeinFogOfWarDefaultRoutineRootCache> RoutineRootCache;
+
 	// ----------------------------------------------------------------------
 	// Bake state
 	// ----------------------------------------------------------------------
@@ -478,6 +484,7 @@ private:
 	 *  IsValidIndex pattern). RefCounts[StampBit] is lazy-allocated to
 	 *  Width*Height on first stamp into this bit. */
 	void ApplyFootprintDiff(
+		FSeinPlayerID Observer,
 		FSeinFogVisionGroup& Group,
 		uint8 StampBit,
 		const TArray<int32>& OldSorted,
@@ -534,4 +541,12 @@ private:
 		const FFixedVector& EntityWorldPos,
 		const FFixedQuaternion& EntityRotation,
 		FFixedPoint HeightAboveGround, uint8 LayerMask);
+
+	void MarkRoutineExploredCellDirty(
+		FSeinPlayerID Observer, int32 CellIndex);
+	void MarkRoutineSeenEntityDirty(
+		FSeinPlayerID Observer, FSeinEntityHandle Handle);
+	void MarkRoutineSourceDirty(FSeinEntityHandle Handle);
+	void MarkRoutineDynamicBlockersDirty();
+	void ResetRoutineRootCache();
 };

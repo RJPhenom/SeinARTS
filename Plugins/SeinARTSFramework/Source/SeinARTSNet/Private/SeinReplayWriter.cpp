@@ -102,6 +102,10 @@ namespace
 
 void USeinReplayWriter::ResetForNewRecording()
 {
+	// Re-entry is rare and explicit. Finish any worker that still owns the old
+	// journal path before forgetting its state, so the preserved partial has a
+	// stable length when the new recording begins.
+	WaitAndDiscardPendingAppend();
 	++RecordingGeneration;
 	bRecording = false;
 	bTickObservationFailed = false;
@@ -579,6 +583,13 @@ void USeinReplayWriter::RunDeferredMaintenance(bool bForce)
 		bMaintenanceRunning = false;
 		return;
 	}
+	if (HasPendingAppend())
+	{
+		// One ordered append is now owned by the worker. Its completion queues
+		// another maintenance pass; no later digest-chained frame may overtake it.
+		bMaintenanceRunning = false;
+		return;
+	}
 
 	const bool bProgressDue = bForce
 		|| LastProgressTick == INDEX_NONE
@@ -591,7 +602,8 @@ void USeinReplayWriter::RunDeferredMaintenance(bool bForce)
 		{
 			AppendProgress(
 				LastObservedCompletedTick,
-				/*bForceDuplicate=*/bForce);
+				/*bForceDuplicate=*/bForce,
+				/*bAsync=*/!bForce);
 		}
 		else if (bForce)
 		{
@@ -603,7 +615,99 @@ void USeinReplayWriter::RunDeferredMaintenance(bool bForce)
 	bMaintenanceRunning = false;
 }
 
+bool USeinReplayWriter::ResolvePendingAppend(bool bWait)
+{
+	if (!HasPendingAppend())
+	{
+		return true;
+	}
+	if (!bWait && !PendingAppendFuture.IsReady())
+	{
+		return true;
+	}
+	if (bWait)
+	{
+		PendingAppendFuture.Wait();
+	}
+
+	FSeinReplayAsyncAppendResult Result = PendingAppendFuture.Get();
+	PendingAppendFuture = {};
+	if (!Result.bSucceeded)
+	{
+		PendingAppendKind = ESeinReplayAsyncAppendKind::None;
+		FailRecording(FString::Printf(
+			TEXT("replay background append failed: %s"),
+			*Result.Error));
+		return false;
+	}
+
+	PersistedBytes += PendingAppendByteCount;
+	PreviousFrameDigest = PendingAppendDigest;
+	++NextFrameSequence;
+
+	if (PendingAppendKind == ESeinReplayAsyncAppendKind::TurnBatch)
+	{
+		if (PendingAppendTurnCount <= 0
+			|| PendingTurns.Num() < PendingAppendTurnCount
+			|| PendingTurns[0].TurnId != PendingAppendFirstTurn
+			|| PendingTurns[PendingAppendTurnCount - 1].TurnId
+				!= PendingAppendLastTurn
+			|| PendingAppendResidentBytes > ResidentBytes)
+		{
+			PendingAppendKind = ESeinReplayAsyncAppendKind::None;
+			FailRecording(TEXT("replay resident turn queue changed while its ordered append was in flight"));
+			return false;
+		}
+		ResidentBytes -= PendingAppendResidentBytes;
+		if (FirstPersistedTurn == INDEX_NONE)
+		{
+			FirstPersistedTurn = PendingAppendFirstTurn;
+		}
+		LastPersistedTurn = PendingAppendLastTurn;
+		PersistedTurnCount += PendingAppendTurnCount;
+		PendingTurns.RemoveAt(
+			0, PendingAppendTurnCount, EAllowShrinking::No);
+	}
+	else if (PendingAppendKind == ESeinReplayAsyncAppendKind::Progress)
+	{
+		LastProgressTick = PendingAppendTimelineTick;
+	}
+
+	PendingAppendKind = ESeinReplayAsyncAppendKind::None;
+	PendingAppendDigest.Invalidate();
+	PendingAppendByteCount = 0;
+	PendingAppendResidentBytes = 0;
+	PendingAppendTurnCount = 0;
+	PendingAppendFirstTurn = INDEX_NONE;
+	PendingAppendLastTurn = INDEX_NONE;
+	PendingAppendTimelineTick = INDEX_NONE;
+	return true;
+}
+
+void USeinReplayWriter::WaitAndDiscardPendingAppend()
+{
+	if (HasPendingAppend())
+	{
+		PendingAppendFuture.Wait();
+		PendingAppendFuture.Get();
+		PendingAppendFuture = {};
+	}
+	PendingAppendKind = ESeinReplayAsyncAppendKind::None;
+	PendingAppendDigest.Invalidate();
+	PendingAppendByteCount = 0;
+	PendingAppendResidentBytes = 0;
+	PendingAppendTurnCount = 0;
+	PendingAppendFirstTurn = INDEX_NONE;
+	PendingAppendLastTurn = INDEX_NONE;
+	PendingAppendTimelineTick = INDEX_NONE;
+}
+
 #if WITH_DEV_AUTOMATION_TESTS
+void USeinReplayWriter::QueueAppliedProgressForTests()
+{
+	RunDeferredMaintenance(/*bForce=*/false);
+}
+
 void USeinReplayWriter::FlushAppliedProgressForTests()
 {
 	RunDeferredMaintenance(/*bForce=*/true);
@@ -632,6 +736,14 @@ bool USeinReplayWriter::FlushEligibleTurns(bool bForce)
 	if (!bRecording || !bHasInitialCheckpoint)
 	{
 		return bRecording;
+	}
+	if (!ResolvePendingAppend(/*bWait=*/bForce))
+	{
+		return false;
+	}
+	if (HasPendingAppend())
+	{
+		return true;
 	}
 	int32 EligibleCount = GetEligiblePendingTurnCount();
 	if (EligibleCount == 0)
@@ -691,7 +803,8 @@ bool USeinReplayWriter::FlushEligibleTurns(bool bForce)
 				Records[0].TurnId,
 				Records.Last().TurnId,
 				LastObservedCompletedTick,
-				Payload))
+				Payload,
+				/*bAsync=*/!bForce))
 		{
 			if (bRecording)
 			{
@@ -700,6 +813,12 @@ bool USeinReplayWriter::FlushEligibleTurns(bool bForce)
 					*Error));
 			}
 			return false;
+		}
+		if (!bForce)
+		{
+			// Commit/removal happens only after the ordered worker reports that the
+			// complete frame is durably present at the expected offset.
+			return true;
 		}
 
 		for (int32 Index = 0; Index < BatchCount; ++Index)
@@ -765,7 +884,8 @@ bool USeinReplayWriter::CanPublishFrontier(
 
 bool USeinReplayWriter::AppendProgress(
 	int32 EndTick,
-	bool bForceDuplicate)
+	bool bForceDuplicate,
+	bool bAsync)
 {
 	if (!bForceDuplicate && EndTick == LastProgressTick)
 	{
@@ -779,17 +899,22 @@ bool USeinReplayWriter::AppendProgress(
 	if (!AppendFrontierFrame(
 		static_cast<uint8>(
 			SeinReplayJournalFormat::EFrameType::Progress),
-		EndTick))
+		EndTick,
+		bAsync))
 	{
 		return false;
 	}
-	LastProgressTick = EndTick;
+	if (!bAsync)
+	{
+		LastProgressTick = EndTick;
+	}
 	return true;
 }
 
 bool USeinReplayWriter::AppendFrontierFrame(
 	uint8 FrameType,
-	int32 EndTick)
+	int32 EndTick,
+	bool bAsync)
 {
 	FString Error;
 	if (!CanPublishFrontier(EndTick, Error))
@@ -824,7 +949,8 @@ bool USeinReplayWriter::AppendFrontierFrame(
 		FirstPersistedTurn,
 		LastPersistedTurn,
 		EndTick,
-		Payload);
+		Payload,
+		bAsync);
 }
 
 bool USeinReplayWriter::AppendJournalFrame(
@@ -832,9 +958,10 @@ bool USeinReplayWriter::AppendJournalFrame(
 	int32 FirstTurn,
 	int32 LastTurn,
 	int32 TimelineTick,
-	TConstArrayView<uint8> Payload)
+	TConstArrayView<uint8> Payload,
+	bool bAsync)
 {
-	if (!bRecording)
+	if (!bRecording || (bAsync && HasPendingAppend()))
 	{
 		return false;
 	}
@@ -890,6 +1017,68 @@ bool USeinReplayWriter::AppendJournalFrame(
 		FailRecording(TEXT("replay file-size policy is exhausted after reserving its terminal frontier"));
 		return false;
 	}
+	if (bAsync)
+	{
+		PendingAppendKind = TypedFrame
+			== SeinReplayJournalFormat::EFrameType::TurnBatch
+			? ESeinReplayAsyncAppendKind::TurnBatch
+			: ESeinReplayAsyncAppendKind::Progress;
+		PendingAppendDigest = Frame.CurrentDigest;
+		PendingAppendByteCount = FrameByteCount;
+		PendingAppendFirstTurn = FirstTurn;
+		PendingAppendLastTurn = LastTurn;
+		PendingAppendTimelineTick = TimelineTick;
+		PendingAppendTurnCount = PendingAppendKind
+			== ESeinReplayAsyncAppendKind::TurnBatch
+			? LastTurn - FirstTurn + 1
+			: 0;
+		PendingAppendResidentBytes = 0;
+		for (int32 Index = 0; Index < PendingAppendTurnCount; ++Index)
+		{
+			if (!PendingTurns.IsValidIndex(Index))
+			{
+				PendingAppendKind = ESeinReplayAsyncAppendKind::None;
+				FailRecording(TEXT("replay async TurnBatch exceeds the resident queue"));
+				return false;
+			}
+			PendingAppendResidentBytes += static_cast<uint64>(
+				PendingTurns[Index].OpaqueCommands.Bytes.Num());
+		}
+
+		const FString AppendPath = ActivePartialPath;
+		const int64 ExpectedOffset = static_cast<int64>(PersistedBytes);
+		const uint64 ScheduledGeneration = RecordingGeneration;
+		TWeakObjectPtr<USeinReplayWriter> WeakThis(this);
+		PendingAppendFuture = Async(
+			EAsyncExecution::ThreadPool,
+			[AppendPath,
+			 ExpectedOffset,
+			 FrameBytes = MoveTemp(FrameBytes),
+			 WeakThis,
+			 ScheduledGeneration]() mutable
+			{
+				FSeinReplayAsyncAppendResult Result;
+				Result.bSucceeded = SeinReplayFileIO::AppendAtExpectedOffset(
+					AppendPath,
+					ExpectedOffset,
+					FrameBytes,
+					Result.Error);
+				AsyncTask(ENamedThreads::GameThread,
+					[WeakThis, ScheduledGeneration]()
+					{
+						USeinReplayWriter* Writer = WeakThis.Get();
+						if (Writer
+							&& Writer->RecordingGeneration
+								== ScheduledGeneration)
+						{
+							Writer->ScheduleMaintenance();
+						}
+					});
+				return Result;
+			});
+		return true;
+	}
+
 	if (!SeinReplayFileIO::AppendAtExpectedOffset(
 			ActivePartialPath,
 			static_cast<int64>(PersistedBytes),
@@ -1037,6 +1226,7 @@ bool USeinReplayWriter::CaptureCheckpoint(bool bRequired)
 bool USeinReplayWriter::IsPeriodicCheckpointDue() const
 {
 	if (!bRecording || !bHasInitialCheckpoint
+		|| HasPendingAppend()
 		|| LastObservedCompletedTick < NextCheckpointRetryTick)
 	{
 		return false;

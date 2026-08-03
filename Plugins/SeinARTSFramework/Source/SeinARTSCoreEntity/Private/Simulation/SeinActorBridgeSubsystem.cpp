@@ -13,6 +13,7 @@
 #include "Types/FixedPoint.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 #include "SeinARTSCoreEntityLog.h"  // LogSeinBridge (module-shared)
 
@@ -43,8 +44,8 @@ void USeinActorBridgeSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	SimSubsystem = GetWorld()->GetSubsystem<USeinWorldSubsystem>();
 	if (SimSubsystem.IsValid())
 	{
-		SimTickDelegateHandle = SimSubsystem->OnSimTickCompleted.AddUObject(
-			this, &USeinActorBridgeSubsystem::HandleSimTick);
+		SimFrameDelegateHandle = SimSubsystem->OnSimFrameCompleted.AddUObject(
+			this, &USeinActorBridgeSubsystem::HandleSimFrame);
 	}
 
 	UE_LOG(LogSeinBridge, Log, TEXT("SeinActorBridgeSubsystem initialized"));
@@ -135,9 +136,10 @@ void USeinActorBridgeSubsystem::Deinitialize()
 {
 	if (SimSubsystem.IsValid())
 	{
-		SimSubsystem->OnSimTickCompleted.Remove(SimTickDelegateHandle);
+		SimSubsystem->OnSimFrameCompleted.Remove(SimFrameDelegateHandle);
 	}
-	SimTickDelegateHandle.Reset();
+	SimFrameDelegateHandle.Reset();
+	OnActorRegistered.Clear();
 	EntityActorMap.Empty();
 
 	Super::Deinitialize();
@@ -177,16 +179,18 @@ bool USeinActorBridgeSubsystem::IsTickable() const
 {
 	// Only tick when there is render-side work: pending visual events to drain, or actors under
 	// management. When the sim is dormant (no entities, no events) this returns false, so the bridge
-	// costs zero per frame. Transform sync runs on the OnSimTickCompleted delegate, not this Tick, so
+	// costs zero per frame. Transform sync runs on the OnSimFrameCompleted delegate, not this Tick, so
 	// skipping the engine Tick never affects it.
 	return SimSubsystem.IsValid()
 		&& (SimSubsystem->HasPendingVisualEvents() || EntityActorMap.Num() > 0);
 }
 
-// ==================== Sim Tick Callback ====================
+// ==================== Simulation Frame Callback ====================
 
-void USeinActorBridgeSubsystem::HandleSimTick(int32 Tick)
+void USeinActorBridgeSubsystem::HandleSimFrame(
+	int32 /*LatestTick*/, int32 TicksProcessed)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Presentation_ActorBridgeSync);
 	for (auto It = EntityActorMap.CreateIterator(); It; ++It)
 	{
 		if (!It->Value.IsValid())
@@ -202,9 +206,9 @@ void USeinActorBridgeSubsystem::HandleSimTick(int32 Tick)
 		// component IS the bridge surface — render-side ACs that need sim
 		// state subscribe to its OnVisualEvent multicast or query sim
 		// storage directly.
-		if (USeinEntityComponent* Comp = Actor->FindComponentByClass<USeinEntityComponent>())
+		if (USeinEntityComponent* Comp = Actor->GetEntityBridge())
 		{
-			Comp->OnSimTick();
+			Comp->OnSimFrame(TicksProcessed);
 		}
 	}
 }
@@ -427,6 +431,19 @@ ASeinActor* USeinActorBridgeSubsystem::GetActorForEntity(FSeinEntityHandle Handl
 	return (Found && Found->IsValid()) ? Found->Get() : nullptr;
 }
 
+void USeinActorBridgeSubsystem::ForEachRegisteredActor(
+	TFunctionRef<void(FSeinEntityHandle, ASeinActor&)> Visitor) const
+{
+	for (const TPair<FSeinEntityHandle, TWeakObjectPtr<ASeinActor>>& Pair :
+		EntityActorMap)
+	{
+		if (ASeinActor* Actor = Pair.Value.Get())
+		{
+			Visitor(Pair.Key, *Actor);
+		}
+	}
+}
+
 void USeinActorBridgeSubsystem::RegisterActor(FSeinEntityHandle Handle, ASeinActor* Actor)
 {
 	if (!Handle.IsValid() || !Actor)
@@ -436,6 +453,7 @@ void USeinActorBridgeSubsystem::RegisterActor(FSeinEntityHandle Handle, ASeinAct
 	}
 
 	EntityActorMap.Add(Handle, Actor);
+	OnActorRegistered.Broadcast(Handle);
 
 	UE_LOG(LogSeinBridge, Verbose,
 		TEXT("RegisterActor: %s linked to entity %s."),

@@ -43,6 +43,10 @@ public:
 
 	virtual void OnMoveBegin(const FSeinMovementContext& Ctx) override;
 	virtual bool Tick(const FSeinMovementContext& Ctx) override;
+	virtual bool SupportsExactIdleMutationTracking() const override
+	{
+		return GetClass() == StaticClass();
+	}
 
 	/** Per-class sub-data this movement consumes (FSeinHoverMovementData) —
 	 *  holds the persistent current Altitude that lerps toward this class's

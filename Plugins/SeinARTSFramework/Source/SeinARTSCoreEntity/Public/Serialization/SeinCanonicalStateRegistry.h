@@ -185,6 +185,20 @@ struct SEINARTSCOREENTITY_API FSeinCanonicalStateContributorRecord
 	FGuid LeafDigest;
 };
 
+/** Digest-only live projection used by routine peer checks. A provider may
+ * maintain this incrementally; snapshot payloads remain independently exact
+ * and reversible. MutationRevision is cache evidence only and never enters the
+ * root. */
+struct SEINARTSCOREENTITY_API FSeinCanonicalStateRoutineRootRecord
+{
+	FSeinCanonicalStateKey Key;
+	uint32 SchemaVersion = 0;
+	FGuid DescriptorDigest;
+	uint64 MutationRevision = 0;
+	uint64 ProjectedPayloadBytes = 0;
+	FGuid LeafDigest;
+};
+
 /**
  * Frozen schema and ordering contract. PayloadStruct is null only for a
  * DerivedCache. RestoreAfter forms a dependency DAG within the full manifest.
@@ -436,6 +450,16 @@ struct SEINARTSCOREENTITY_API FSeinCanonicalStateContributorOps
 		FInstancedStruct&,
 		FString&)> Capture;
 
+	/** Optional high-frequency live-root projection. Providers with large or
+	 * frequently changing payloads should maintain indexed leaf digests and
+	 * make this O(changes). When absent, Core falls back to exact Capture for
+	 * correctness; profiling exposes that fallback so it cannot hide. */
+	TFunction<bool(
+		const FSeinCanonicalStateCaptureContext&,
+		bool /*bForceFullRebuild*/,
+		FSeinCanonicalStateRoutineRootRecord&,
+		FString&)> CaptureRoutineRoot;
+
 	TFunction<bool(
 		const FSeinCanonicalStateStageContext&,
 		const FInstancedStruct&,
@@ -613,6 +637,17 @@ public:
 		const FSeinCanonicalStateSchemaSnapshot& Schema,
 		const FSeinCanonicalStateCaptureContext& Context,
 		TArray<FSeinCanonicalStateContributorRecord>& OutRecords,
+		FString& OutError);
+
+	/** Capture digest-only routine roots in canonical key order. Custom
+	 * incremental projections are preferred; missing projections fall back to
+	 * the exact reversible capture and report the fallback count. */
+	static bool CaptureRoutineRootRecords(
+		const FSeinCanonicalStateSchemaSnapshot& Schema,
+		const FSeinCanonicalStateCaptureContext& Context,
+		bool bForceFullRebuild,
+		TArray<FSeinCanonicalStateRoutineRootRecord>& OutRecords,
+		int32& OutSynchronousFallbackCount,
 		FString& OutError);
 
 	static int32 GetRegisteredContributorCount();

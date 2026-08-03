@@ -114,6 +114,43 @@ static FAutoConsoleCommandWithWorldAndArgs CmdSeinDumpStateRoot(
 				}
 			}
 		}));
+
+static FAutoConsoleCommandWithWorldAndArgs CmdSeinVerifyIncrementalStateRoot(
+	TEXT("Sein.Sim.StateRoot.VerifyIncremental"),
+	TEXT("Explicitly compare the maintained multiplayer root with a from-scratch rebuild. Diagnostic only; the rebuild may be expensive."),
+	FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(
+		[](const TArray<FString>& /*Args*/, UWorld* World)
+		{
+			if (!World)
+			{
+				return;
+			}
+			if (USeinWorldSubsystem* Sub =
+				World->GetSubsystem<USeinWorldSubsystem>())
+			{
+				FGuid Root;
+				FString Error;
+				if (Sub->VerifyIncrementalCanonicalStateRoot(
+					Root, Error))
+				{
+					UE_LOG(
+						LogSeinStateHashCmd,
+						Log,
+						TEXT("Incremental StateRoot verified at tick %d: %s"),
+						Sub->GetCurrentTick(),
+						*Root.ToString(EGuidFormats::Digits));
+				}
+				else
+				{
+					UE_LOG(
+						LogSeinStateHashCmd,
+						Error,
+						TEXT("Incremental StateRoot verification FAILED at tick %d: %s"),
+						Sub->GetCurrentTick(),
+						*Error);
+				}
+			}
+		}));
 #endif // !UE_BUILD_SHIPPING
 
 IMPLEMENT_MODULE(FSeinARTSCoreEntity, SeinARTSCoreEntity);
@@ -162,9 +199,9 @@ namespace
 			Descriptor.NativeAnchor = Spec.Anchor;
 			Descriptor.Kind = Spec.Kind;
 			Descriptor.StableProviderId = Spec.StableProviderId;
-			Descriptor.StateSchemaVersion = 1;
+			Descriptor.StateSchemaVersion = 2;
 			Descriptor.BehaviorRevision = 1;
-			Descriptor.CodecRevision = 2;
+			Descriptor.CodecRevision = 3;
 			Descriptor.MaxStateBytes =
 				FSeinPoolObjectCodecRegistry::MaxStateBytes;
 			Descriptor.bAllowBlueprintChildren = true;

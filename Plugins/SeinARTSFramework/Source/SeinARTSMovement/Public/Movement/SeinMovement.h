@@ -276,6 +276,18 @@ public:
 	 *  GetAltitude / QueryReferenceZ virtuals) hover + flight classes. */
 	virtual void TickIdle(const FSeinMovementContext& Ctx);
 
+	/** Internal performance contract for the always-on movement driver. True
+	 *  only for an exact shipped native class whose idle implementation is known
+	 *  to mutate entity transform plus the base runtime movement fields tracked
+	 *  by the driver's deferred-revision apply. Custom native classes default to
+	 *  false and keep conservative dirty tracking; Blueprint classes are always
+	 *  conservative. Exact-class checks in shipped overrides prevent an unknown
+	 *  subclass from inheriting this promise accidentally. */
+	virtual bool SupportsExactIdleMutationTracking() const
+	{
+		return false;
+	}
+
 	/** Runs every frame while the unit stands still (no move order). Use it for idle motion.
 	 *
 	 *  Optional; the default keeps the unit on the ground, coasts any leftover speed to a stop, and

@@ -10,6 +10,7 @@
 #include "Player/SeinPlayerController.h"
 #include "Actor/SeinActor.h"
 #include "Engine/World.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 void USeinSelectionModel::Initialize(USeinUISubsystem* InOwningSubsystem)
 {
@@ -58,12 +59,27 @@ void USeinSelectionModel::Deinitialize()
 	}
 	CachedPlayerController.Reset();
 	SelectedViewModels.Empty();
+	CachedSelectionAbilities.Empty();
+	BuiltAbilityCacheGeneration = 0;
 }
 
 void USeinSelectionModel::HandleSelectionChanged()
 {
 	RebuildFromController();
+	InvalidateAbilityCache();
 	OnSelectionChanged.Broadcast();
+}
+
+void USeinSelectionModel::InvalidateAbilityCache()
+{
+	++AbilityCacheGeneration;
+	if (AbilityCacheGeneration == 0)
+	{
+		// A wrap is practically unreachable, but preserving a distinct invalid
+		// generation keeps the contract total even in a soak test lasting years.
+		AbilityCacheGeneration = 1;
+		BuiltAbilityCacheGeneration = 0;
+	}
 }
 
 void USeinSelectionModel::RebuildFromController()
@@ -139,7 +155,20 @@ USeinEntityViewModel* USeinSelectionModel::GetPrimaryViewModel() const
 
 TArray<FSeinAbilityInfo> USeinSelectionModel::GetSelectionAbilities() const
 {
-	TArray<FSeinAbilityInfo> Out;
+	TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Selection_GetAbilities);
+	EnsureAbilityCache();
+	return CachedSelectionAbilities;
+}
+
+void USeinSelectionModel::EnsureAbilityCache() const
+{
+	if (BuiltAbilityCacheGeneration == AbilityCacheGeneration)
+	{
+		return;
+	}
+
+	TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Selection_RebuildAbilityCache);
+	CachedSelectionAbilities.Reset();
 
 	// Group by tag across all selected view models. Each view model returns
 	// per-entity-aggregated infos (squad-aware for squads, single-AC for
@@ -163,44 +192,35 @@ TArray<FSeinAbilityInfo> USeinSelectionModel::GetSelectionAbilities() const
 		}
 	}
 
-	Out.Reserve(TagOrder.Num());
+	CachedSelectionAbilities.Reserve(TagOrder.Num());
 	for (const FGameplayTag& Tag : TagOrder)
 	{
-		Out.Add(USeinEntityViewModel::MergeAbilityInfos(PerTag[Tag]));
+		CachedSelectionAbilities.Add(USeinEntityViewModel::MergeAbilityInfos(PerTag[Tag]));
 	}
-	return Out;
+	BuiltAbilityCacheGeneration = AbilityCacheGeneration;
 }
 
 FSeinAbilityInfo USeinSelectionModel::GetSelectionAbilityByTag(FGameplayTag Tag) const
 {
 	if (!Tag.IsValid()) return FSeinAbilityInfo();
-
-	// Collect per-view-model infos for this specific tag, then merge.
-	// Each view model's GetAbilityByTag is squad-aware (returns the
-	// per-tag merged info across the squad's contributors); composing
-	// across the selection's view models gives the final selection-wide
-	// merged info via MergeAbilityInfos.
-	TArray<FSeinAbilityInfo> Infos;
-	for (const TObjectPtr<USeinEntityViewModel>& VM : SelectedViewModels)
+	EnsureAbilityCache();
+	for (const FSeinAbilityInfo& Info : CachedSelectionAbilities)
 	{
-		if (!VM) continue;
-		FSeinAbilityInfo Info = VM->GetAbilityByTag(Tag);
-		if (Info.AbilityTag.IsValid())
+		if (Info.AbilityTag == Tag)
 		{
-			Infos.Add(Info);
+			return Info;
 		}
 	}
-
-	if (Infos.Num() == 0) return FSeinAbilityInfo();
-	return USeinEntityViewModel::MergeAbilityInfos(Infos);
+	return FSeinAbilityInfo();
 }
 
 bool USeinSelectionModel::SelectionHasAbilityWithTag(FGameplayTag Tag) const
 {
 	if (!Tag.IsValid()) return false;
-	for (const TObjectPtr<USeinEntityViewModel>& VM : SelectedViewModels)
+	EnsureAbilityCache();
+	for (const FSeinAbilityInfo& Info : CachedSelectionAbilities)
 	{
-		if (VM && VM->HasAbilityWithTag(Tag))
+		if (Info.AbilityTag == Tag)
 		{
 			return true;
 		}

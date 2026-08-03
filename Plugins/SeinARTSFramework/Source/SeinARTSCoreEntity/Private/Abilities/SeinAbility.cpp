@@ -370,6 +370,7 @@ bool USeinAbility::ActivateAbility(FSeinEntityHandle Target, FFixedVector Locati
 	{
 		return false;
 	}
+	MarkDeterministicStateDirty();
 	if (!AcquireGrantedTags())
 	{
 		UE_LOG(LogSeinAbilityImpl, Error,
@@ -420,6 +421,7 @@ bool USeinAbility::ActivateAbilityWithTargeterPoints(FSeinEntityHandle Target, F
 	{
 		return false;
 	}
+	MarkDeterministicStateDirty();
 	if (!AcquireGrantedTags())
 	{
 		UE_LOG(LogSeinAbilityImpl, Error,
@@ -460,6 +462,9 @@ void USeinAbility::TickAbility(FFixedPoint DeltaTime)
 {
 	if (bIsActive)
 	{
+		// The callback is the normal Blueprint write barrier: derived Blueprint
+		// variables may change even when native fields do not.
+		MarkDeterministicStateDirty();
 		OnTick(DeltaTime);
 	}
 }
@@ -475,6 +480,7 @@ void USeinAbility::DeactivateAbility(bool bCancelled)
 	{
 		return;
 	}
+	MarkDeterministicStateDirty();
 
 	bIsActive = false;
 
@@ -527,10 +533,19 @@ void USeinAbility::CancelAbility()
 	DeactivateAbility(true);
 }
 
+void USeinAbility::MarkDeterministicStateDirty()
+{
+	if (WorldSubsystem)
+	{
+		WorldSubsystem->MarkAbilityRuntimeStateDirty(this);
+	}
+}
+
 void USeinAbility::TickCooldown(FFixedPoint DeltaTime)
 {
 	if (CooldownRemaining > FFixedPoint::Zero)
 	{
+		MarkDeterministicStateDirty();
 		CooldownRemaining = CooldownRemaining - DeltaTime;
 		if (CooldownRemaining < FFixedPoint::Zero)
 		{

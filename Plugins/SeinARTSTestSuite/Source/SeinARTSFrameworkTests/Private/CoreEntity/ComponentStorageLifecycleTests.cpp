@@ -162,4 +162,41 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsFalse(Pool.IsValid(Visited[0])));
 		ASSERT_THAT(IsTrue(Pool.IsValid(Reused)));
 	}
+
+	TEST(DeferredMutationRevisionsPublishOnlyOnCommit,
+		"SeinARTS.Unit.Entity")
+	{
+		FSeinEntityPool Pool;
+		Pool.Initialize(1);
+		const FSeinEntityHandle Handle = Pool.Acquire(
+			FFixedTransform(), FSeinPlayerID::Neutral());
+		const uint64 EntityRevisionBefore =
+			Pool.GetLatestMutationRevision();
+		FSeinEntity* Entity = Pool.GetForDeferredMutation(Handle);
+		ASSERT_THAT(IsNotNull(Entity));
+		Entity->Flags |= FSeinEntity::FLAG_INVULNERABLE;
+		ASSERT_THAT(AreEqual(
+			EntityRevisionBefore, Pool.GetLatestMutationRevision()));
+		Pool.CommitDeferredMutation(Handle);
+		ASSERT_THAT(IsTrue(
+			Pool.GetLatestMutationRevision() > EntityRevisionBefore));
+
+		FSeinGenericComponentStorage Storage(
+			FSeinComponentStorageLifecycleProbe::StaticStruct(), 1);
+		Storage.AddComponent(Handle, nullptr);
+		const uint64 ComponentRevisionBefore =
+			Storage.GetLatestMutationRevision();
+		auto* Component =
+			static_cast<FSeinComponentStorageLifecycleProbe*>(
+				Storage.GetComponentRawForDeferredMutation(Handle));
+		ASSERT_THAT(IsNotNull(Component));
+		Component->Values.Add(7);
+		ASSERT_THAT(AreEqual(
+			ComponentRevisionBefore,
+			Storage.GetLatestMutationRevision()));
+		Storage.CommitDeferredMutation(Handle);
+		ASSERT_THAT(IsTrue(
+			Storage.GetLatestMutationRevision()
+				> ComponentRevisionBefore));
+	}
 }

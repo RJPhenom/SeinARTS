@@ -74,6 +74,19 @@ void USeinCallbackRevokeOnCancelAbility::OnEnd_Implementation(bool bWasCancelled
 	}
 }
 
+USeinCallbackTickProbeAbility::FTickCallback
+	USeinCallbackTickProbeAbility::TickCallback;
+
+void USeinCallbackTickProbeAbility::OnTick_Implementation(
+	FFixedPoint /*DeltaTime*/)
+{
+	++TickCount;
+	if (TickCallback)
+	{
+		TickCallback(*this);
+	}
+}
+
 namespace
 {
 	struct FScopedBrokerResolver
@@ -142,8 +155,104 @@ namespace
 
 namespace UE::SeinARTSTests
 {
+	TEST(AbilityTickUsesFrozenPhaseAndPassiveTraversalMembership,
+		"SeinARTS.Unit.Abilities.CallbackSafety")
+	{
+		struct FResetProbeCallback
+		{
+			~FResetProbeCallback()
+			{
+				USeinCallbackTickProbeAbility::TickCallback = nullptr;
+			}
+		} ResetProbeCallback;
+		ExpectAbilityHashDiagnostic(*TestRunner);
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+
+		const FSeinPlayerID Player(1);
+		FSeinEntityHandle ParentEntity;
+		USeinCallbackTickProbeAbility* Parent = nullptr;
+		struct FProbeInstance
+		{
+			USeinCallbackTickProbeAbility* Ability = nullptr;
+			int32 ID = INDEX_NONE;
+		};
+		const auto CreateProbe = [&](FSeinEntityHandle Entity)
+		{
+			FProbeInstance Result;
+			Result.Ability = NewObject<USeinCallbackTickProbeAbility>(World);
+			Result.Ability->InitializeAbility(Entity, World);
+			Result.ID = World->RegisterAbilityInstance(Result.Ability);
+			FSeinAbilityComponent* Component =
+				World->GetComponentMutable<FSeinAbilityComponent>(Entity);
+			Component->AbilityInstanceIDs.Add(Result.ID);
+			Component->AbilityGrantOwnership.AddDefaulted();
+			Result.Ability->bIsActive = true;
+			return Result;
+		};
+		const auto AuthorState = [&]()
+		{
+			World->RegisterPlayer(Player, FSeinFactionID(1));
+			ParentEntity = World->SpawnAbstractEntity(
+				FFixedTransform(), Player);
+			World->AddComponent(ParentEntity, FSeinAbilityComponent());
+			const FProbeInstance ParentProbe = CreateProbe(ParentEntity);
+			Parent = ParentProbe.Ability;
+			World->GetComponentMutable<FSeinAbilityComponent>(
+				ParentEntity)->ActiveAbilityID = ParentProbe.ID;
+		};
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Materialize(
+			*World, AuthorState)));
+		ASSERT_THAT(IsNotNull(Parent));
+
+		USeinCallbackTickProbeAbility* SpawnedEntityAbility = nullptr;
+		USeinCallbackTickProbeAbility* AddedDuringPassive = nullptr;
+		USeinCallbackTickProbeAbility* FirstPassive = nullptr;
+		USeinCallbackTickProbeAbility::TickCallback =
+			[&](USeinCallbackTickProbeAbility& Ability)
+			{
+				if (&Ability == Parent && !SpawnedEntityAbility)
+				{
+					const FSeinEntityHandle Spawned =
+						World->SpawnAbstractEntity(FFixedTransform(), Player);
+					World->AddComponent(Spawned, FSeinAbilityComponent());
+					const FProbeInstance SpawnedProbe = CreateProbe(Spawned);
+					SpawnedEntityAbility = SpawnedProbe.Ability;
+					World->GetComponentMutable<FSeinAbilityComponent>(Spawned)
+						->ActiveAbilityID = SpawnedProbe.ID;
+
+					const FProbeInstance PassiveProbe = CreateProbe(ParentEntity);
+					FirstPassive = PassiveProbe.Ability;
+					World->GetComponentMutable<FSeinAbilityComponent>(
+						ParentEntity)->ActivePassiveIDs.Add(PassiveProbe.ID);
+				}
+				else if (&Ability == FirstPassive && !AddedDuringPassive)
+				{
+					const FProbeInstance PassiveProbe = CreateProbe(ParentEntity);
+					AddedDuringPassive = PassiveProbe.Ability;
+					World->GetComponentMutable<FSeinAbilityComponent>(
+						ParentEntity)->ActivePassiveIDs.Add(PassiveProbe.ID);
+				}
+			};
+
+		TickOnce(*World);
+		ASSERT_THAT(IsNotNull(SpawnedEntityAbility));
+		ASSERT_THAT(IsNotNull(FirstPassive));
+		ASSERT_THAT(IsNotNull(AddedDuringPassive));
+		ASSERT_THAT(AreEqual(0, SpawnedEntityAbility->TickCount));
+		ASSERT_THAT(AreEqual(1, FirstPassive->TickCount));
+		ASSERT_THAT(AreEqual(0, AddedDuringPassive->TickCount));
+
+		TickOnce(*World);
+		ASSERT_THAT(AreEqual(1, SpawnedEntityAbility->TickCount));
+		ASSERT_THAT(AreEqual(2, FirstPassive->TickCount));
+		ASSERT_THAT(AreEqual(1, AddedDuringPassive->TickCount));
+	}
+
 	TEST(ActivationCallbacksCannotResurrectOrWriteThroughInvalidatedAbilityState,
-		"SeinARTS.Sim.Ability.CallbackSafety")
+		"SeinARTS.Unit.Abilities.CallbackSafety")
 	{
 		ExpectAbilityHashDiagnostic(*TestRunner);
 		FScopedBrokerResolver Settings;
@@ -223,7 +332,7 @@ namespace UE::SeinARTSTests
 	}
 
 	TEST(CancelAndBrokerReplacementPreserveCallbackInstalledAbilityIdentity,
-		"SeinARTS.Sim.Ability.CallbackSafety")
+		"SeinARTS.Unit.Abilities.CallbackSafety")
 	{
 		ExpectAbilityHashDiagnostic(*TestRunner);
 		FScopedBrokerResolver Settings;

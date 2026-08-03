@@ -54,6 +54,7 @@ class USeinNetSubsystem;
 class FSeinProductionSystem;
 struct FSeinActiveEffect;
 struct FSeinModifier;
+struct FSeinWorldStateRootCache;
 
 /**
  * Scratch record for an effect apply queued during a tick hook. Drained at the
@@ -126,6 +127,14 @@ struct SEINARTSCOREENTITY_API FSeinEntityTagState
 
 /** Broadcast after each sim tick completes (for actor bridge, replay, etc.). */
 DECLARE_MULTICAST_DELEGATE_OneParam(FOnSimTickCompleted, int32 /*Tick*/);
+
+/** Broadcast once after the current engine-frame simulation pump finishes.
+ *  Presentation consumers receive the latest completed tick without repeating
+ *  work for every catch-up tick. Never use for simulation or network logic. */
+DECLARE_MULTICAST_DELEGATE_TwoParams(
+	FOnSimFrameCompleted,
+	int32 /*LatestTick*/,
+	int32 /*TicksProcessed*/);
 
 /** Broadcast just before commands are processed each tick (for debug logging). */
 DECLARE_MULTICAST_DELEGATE_TwoParams(FOnCommandsProcessing, int32 /*Tick*/, const TArray<FSeinCommand>& /*Commands*/);
@@ -785,6 +794,10 @@ public:
 	 *  lifecycle observers; listeners cannot mutate sim state or enqueue work. */
 	FOnSimTickCompleted OnSimTickCompleted;
 
+	/** Latest completed state, once per engine frame that advanced simulation.
+	 *  Presentation-only: actor snapshots, UI, and other render consumers. */
+	FOnSimFrameCompleted OnSimFrameCompleted;
+
 	/** Fired immediately after a new entity is spawned + initialized. Used by
 	 *  optional systems (SeinARTSCover) to discover entities with relevant
 	 *  components and self-register them in their per-system registry. See
@@ -1033,6 +1046,15 @@ public:
 	template<typename T>
 	T* GetComponentMutable(FSeinEntityHandle Handle);
 
+	/** Deferred-revision mutation access for disjoint-write kernels. The caller
+	 *  must compare before/after and invoke CommitComponentMutation serially iff
+	 *  deterministic component state changed. */
+	template<typename T>
+	T* GetComponentForDeferredMutation(FSeinEntityHandle Handle);
+
+	template<typename T>
+	void CommitComponentMutation(FSeinEntityHandle Handle);
+
 	template<typename T>
 	bool HasComponent(FSeinEntityHandle Handle) const;
 
@@ -1263,6 +1285,11 @@ public:
 
 	/** Reverse lookup used by exact continuation capture; INDEX_NONE if absent. */
 	int32 FindAbilityInstanceID(const USeinAbility* Ability) const;
+	/** Notify the incremental canonical-root cache that reflected runtime state
+	 *  on this pooled ability may have changed. Ordinary ability callbacks call
+	 *  this automatically; custom cross-object Blueprint writes must call the
+	 *  ability's Mark Deterministic State Dirty node explicitly. */
+	void MarkAbilityRuntimeStateDirty(const USeinAbility* Ability);
 
 	int64 GetNextAbilityActivationID() const
 	{
@@ -1273,6 +1300,8 @@ public:
 	int32 RegisterCommandBrokerResolver(USeinCommandBrokerResolver* Resolver);
 	void UnregisterCommandBrokerResolver(int32 ResolverID);
 	USeinCommandBrokerResolver* GetCommandBrokerResolver(int32 ResolverID) const;
+	void MarkCommandBrokerResolverRuntimeStateDirty(
+		const USeinCommandBrokerResolver* Resolver);
 
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Player")
 	int32 GetPlayerCount() const { return PlayerStates.Num(); }
@@ -1769,6 +1798,15 @@ public:
 		FGuid& OutRoot,
 		FString& OutError) const;
 
+	/** Explicit diagnostic gate: compare the maintained multiplayer root with
+	 *  an independent from-live-state rebuild at the same stable boundary.
+	 *  This may be expensive and is never scheduled by the shipping cadence. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Debug",
+		meta = (DisplayName = "Verify Incremental Canonical State Root"))
+	bool VerifyIncrementalCanonicalStateRoot(
+		FGuid& OutRoot,
+		FString& OutError) const;
+
 	/** Legacy in-process transactional fingerprint only. This intentionally
 	 *  cannot fail closed and is neither complete nor cross-process canonical.
 	 *  Do not use for peer compatibility, checkpoints, replay validation, or
@@ -1797,6 +1835,27 @@ private:
 	template<typename T>
 	T* GetDeferredTeardownComponent(FSeinEntityHandle Handle);
 	bool RequireMutableStateAccess(const TCHAR* Operation) const;
+	/** Refresh only mutation-affected Core leaves in the routine root cache.
+	 *  ForceFullRebuild is the independent verifier path. */
+	bool RefreshCanonicalStateRootCacheCore(
+		bool bForceFullRebuild,
+		FString& OutError) const;
+	bool RefreshCanonicalStateRootCacheContinuation(
+		bool bForceFullRebuild,
+		FString& OutError) const;
+	/** Maintain the multiplayer root at a completed-tick boundary. Ordinary
+	 *  calls are O(changes); ForceFullRebuild independently reprojects live
+	 *  state and is reserved for verification. */
+	bool SealRoutineCanonicalStateRoot(
+		int32 CompletedTick,
+		bool bForceFullRebuild,
+		FGuid& OutRoot,
+		FString& OutError) const;
+	bool GetSealedRoutineCanonicalStateRoot(
+		int32 ExpectedCompletedTick,
+		FGuid& OutRoot,
+		FString& OutError) const;
+	void MarkCanonicalAuxiliaryStateDirty();
 	bool ExitContainerInternal(FSeinEntityHandle Entity,
 		FFixedVector ExitLocation, bool bAllowDeferredTeardownContainer);
 	friend class USeinNetSubsystem;
@@ -2022,11 +2081,22 @@ private:
 	UPROPERTY()
 	TArray<TObjectPtr<USeinAbility>> AbilityPool;
 	TArray<int32> AbilityPoolFreeList;
+	TArray<uint64> AbilityPoolStateRevisions;
+	uint64 AbilityPoolMutationRevision = 0;
+	uint64 AbilityPoolTopologyRevision = 1;
 	int64 NextAbilityActivationID = 1;
 
 	UPROPERTY()
 	TArray<TObjectPtr<USeinCommandBrokerResolver>> CommandBrokerResolverPool;
 	TArray<int32> CommandBrokerResolverPoolFreeList;
+	TArray<uint64> CommandBrokerResolverPoolStateRevisions;
+	uint64 CommandBrokerResolverPoolMutationRevision = 0;
+	uint64 CommandBrokerResolverPoolTopologyRevision = 1;
+
+	/** Non-authoritative cache of canonical leaf digests. It is rebuilt from
+	 *  live state after bootstrap/restore and is never serialized. */
+	mutable TSharedPtr<FSeinWorldStateRootCache> CanonicalStateRootCache;
+	uint64 CanonicalAuxiliaryMutationRevision = 1;
 
 	// Tick the registered AI controllers. Called from TickSystems at
 	// CommandProcessing phase, right before ProcessCommands.
@@ -2132,6 +2202,9 @@ private:
 	int64 SimSessionSeed = 0;
 	bool bSimSessionSeedInstalled = false;
 	FTSTicker::FDelegateHandle TickerHandle;
+	/** Cached once at initialization so multi-world PIE traces attribute the
+	 *  complete simulation pump to the exact world without per-frame strings. */
+	FString SimulationTraceScopeName;
 
 	// Match state (DESIGN §18). State machine drives pre-match countdown,
 	// end-match cleanup, spectator + pause filters in ProcessCommands. Reflected
@@ -2315,6 +2388,40 @@ T* USeinWorldSubsystem::GetComponentMutable(FSeinEntityHandle Handle)
 	ISeinComponentStorage* Storage =
 		GetComponentStorageMutable(T::StaticStruct());
 	return Storage ? static_cast<T*>(Storage->GetComponentRaw(Handle)) : nullptr;
+}
+
+template<typename T>
+T* USeinWorldSubsystem::GetComponentForDeferredMutation(
+	FSeinEntityHandle Handle)
+{
+	if (!RequireMutableStateAccess(
+		TEXT("GetComponentForDeferredMutation")))
+	{
+		return nullptr;
+	}
+	if (!EntityPool.IsValid(Handle)) return nullptr;
+	ISeinComponentStorage* Storage =
+		GetComponentStorageMutable(T::StaticStruct());
+	return Storage
+		? static_cast<T*>(
+			Storage->GetComponentRawForDeferredMutation(Handle))
+		: nullptr;
+}
+
+template<typename T>
+void USeinWorldSubsystem::CommitComponentMutation(
+	FSeinEntityHandle Handle)
+{
+	if (!RequireMutableStateAccess(TEXT("CommitComponentMutation"))
+		|| !EntityPool.IsValid(Handle))
+	{
+		return;
+	}
+	if (ISeinComponentStorage* Storage =
+		GetComponentStorageMutable(T::StaticStruct()))
+	{
+		Storage->CommitDeferredMutation(Handle);
+	}
 }
 
 template<typename T>

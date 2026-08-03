@@ -9,6 +9,7 @@
 #include "Containers/Ticker.h"
 #include "Core/SeinParallel.h"
 #include "HAL/IConsoleManager.h"
+#include "Settings/PluginSettings.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
 #include "Simulation/SeinWorldSubsystem.h"
 
@@ -19,6 +20,42 @@ namespace
 	constexpr int32 StationaryCount = 4;
 	constexpr uint64 FnvOffsetBasis = 14695981039346656037ull;
 	constexpr uint64 FnvPrime = 1099511628211ull;
+
+	/** The serial-vs-parallel scenario exercises the Jacobi resolver's own
+	 *  execution switch, independent of whichever resolver a consuming project
+	 *  selects as its normal default. The world must be created after this
+	 *  override; declaration order below also guarantees it is destroyed before
+	 *  the project setting is restored. */
+	class FScopedParallelCollisionResolver
+	{
+	public:
+		FScopedParallelCollisionResolver()
+			: Settings(GetMutableDefault<USeinARTSCoreSettings>())
+			, PreviousClass(Settings
+				? Settings->CollisionResolverClass
+				: FSoftClassPath())
+		{
+			if (Settings)
+			{
+				Settings->CollisionResolverClass =
+					FSoftClassPath(USeinCollisionResolverParallel::StaticClass());
+			}
+		}
+
+		~FScopedParallelCollisionResolver()
+		{
+			if (Settings)
+			{
+				Settings->CollisionResolverClass = PreviousClass;
+			}
+		}
+
+		bool IsValid() const { return Settings != nullptr; }
+
+	private:
+		USeinARTSCoreSettings* Settings = nullptr;
+		FSoftClassPath PreviousClass;
+	};
 
 	class FScopedParallelCvars
 	{
@@ -231,6 +268,13 @@ FSeinCollisionDeterminismTrace SeinRunCollisionDeterminismScenario(bool bParalle
 	if (TickCount <= 0)
 	{
 		Trace.FailureReason = TEXT("TickCount must be positive.");
+		return Trace;
+	}
+
+	FScopedParallelCollisionResolver ResolverOverride;
+	if (!ResolverOverride.IsValid())
+	{
+		Trace.FailureReason = TEXT("The collision resolver project setting was unavailable.");
 		return Trace;
 	}
 

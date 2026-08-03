@@ -21,6 +21,7 @@
 #include "Types/Vector.h"
 #include "Engine/World.h"
 #include "Simulation/SeinMovementTraceLog.h"  // [ARRIVE]/[THROTTLE] movement-trace events
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinMove, Log, All);
 
@@ -140,6 +141,7 @@ void USeinMoveToAction::Initialize(const FFixedVector& InDestination)
 
 bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& World)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(Sein_MoveTo_TickAction);
 	FSeinEntity* Entity = World.GetEntityMutable(OwnerEntity);
 	if (!Entity)
 	{
@@ -228,7 +230,11 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 			OwnerEntity,
 			&World    // World subsystem for the Extents-cascade footprint lookup.
 		};
-		const ESeinPathResult Result = Movement->PlanPath(PlanCtx, Path);
+		ESeinPathResult Result;
+		{
+			TRACE_CPUPROFILER_EVENT_SCOPE(Sein_MoveTo_InitialPlanPath);
+			Result = Movement->PlanPath(PlanCtx, Path);
+		}
 
 		// Initial-resolve diagnostic: log PlanPath outcome with start/end pose
 		// + path shape summary so corridor no-op cases (chassis sits still,
@@ -393,6 +399,14 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		// from the very first tick. Single-shot lookup; the cache is
 		// entity-stable across the move action.
 		Movement->CacheFootprintFromContext(BeginCtx);
+		if (UWorld* UnrealWorld = World.GetWorld())
+		{
+			if (USeinMovementSubsystem* MovementSub =
+				UnrealWorld->GetSubsystem<USeinMovementSubsystem>())
+			{
+				MovementSub->MarkMovementStateDirty(OwnerEntity);
+			}
+		}
 		Movement->OnMoveBegin(BeginCtx);
 	}
 
@@ -704,7 +718,19 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 	TickCtx.TerrainSpeedMultiplier = TerrainSpeedMult;
 	// Non-const: the near-goal stall-settle below can promote this to true to
 	// force arrival when the unit is pinned short of an unreachable goal.
-	bool bReachedEnd = Movement->Tick(TickCtx);
+	if (UWorld* UnrealWorld = World.GetWorld())
+	{
+		if (USeinMovementSubsystem* MovementSub =
+			UnrealWorld->GetSubsystem<USeinMovementSubsystem>())
+		{
+			MovementSub->MarkMovementStateDirty(OwnerEntity);
+		}
+	}
+	bool bReachedEnd;
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_MoveTo_MovementTick);
+		bReachedEnd = Movement->Tick(TickCtx);
+	}
 
 	// ESCAPE-LEG TICK EPILOGUE — while the hold-escape ladder's internal leg is
 	// in flight, the whole order-progress tail below (waypoint notify,
@@ -1160,6 +1186,11 @@ void USeinMoveToAction::FinalizeMovementOnce()
 
 	if (EndingMovement)
 	{
+		if (USeinMovementSubsystem* MovementSub =
+			World->GetSubsystem<USeinMovementSubsystem>())
+		{
+			MovementSub->MarkMovementStateDirty(OwnerEntity);
+		}
 		if (FSeinEntity* Entity =
 			Sim->GetEntityMutable(OwnerEntity))
 		{

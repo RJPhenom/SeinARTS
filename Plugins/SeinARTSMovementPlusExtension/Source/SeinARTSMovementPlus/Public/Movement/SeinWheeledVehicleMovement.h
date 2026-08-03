@@ -54,6 +54,10 @@ public:
 
 	virtual void OnMoveBegin(const FSeinMovementContext& Ctx) override;
 	virtual bool Tick(const FSeinMovementContext& Ctx) override;
+	virtual bool SupportsExactIdleMutationTracking() const override
+	{
+		return GetClass() == StaticClass();
+	}
 
 	/** Reset the driver/planner instance state when an order ends. Load-bearing
 	 *  for the engage-hysteresis read in PlanPath: a NEW order's initial plan

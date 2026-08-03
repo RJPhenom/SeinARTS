@@ -231,6 +231,35 @@ public:
 		FGuid& OutSequenceDigest,
 		FString& OutError);
 
+	/** Capture one already-validated live action for the incremental root.
+	 *  Snapshot capture continues to use CaptureRecords; this seam lets the
+	 *  routine root reuse unchanged record digests instead of walking every
+	 *  action through its codec on a checkpoint frame. */
+	static bool CaptureRecordForVerifiedRoot(
+		const FSeinLatentActionCodecManifest& Manifest,
+		const USeinWorldSubsystem& World,
+		const USeinLatentAction& Action,
+		int32 Tick,
+		int32 Ordinal,
+		int64 NextActionId,
+		int64 NextAbilityActivationId,
+		FSeinSnapshotLatentActionRecord& OutRecord,
+		FString& OutError);
+
+	/** Canonically fold cached records and allocator cursors. */
+	static bool ComputeSequenceDigestForVerifiedRoot(
+		int64 NextActionId,
+		int64 NextAbilityActivationId,
+		TConstArrayView<FSeinSnapshotLatentActionRecord> Records,
+		FGuid& OutSequenceDigest,
+		FString& OutError);
+
+	/** Rebind a cached record after its manager ordinal changes. Payload bytes
+	 *  and payload digest remain exact; only the framed record digest changes. */
+	static bool RecomputeRecordDigestForVerifiedRoot(
+		FSeinSnapshotLatentActionRecord& InOutRecord,
+		FString& OutError);
+
 	static bool StageRecords(
 		const FSeinLatentActionCodecManifest& Manifest,
 		const ISeinCanonicalStateCandidateView& Candidate,

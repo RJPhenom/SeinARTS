@@ -36,6 +36,7 @@ public:
 	ASeinActor();
 
 	// AActor interface
+	virtual void PostRegisterAllComponents() override;
 	virtual void BeginPlay() override;
 
 #if WITH_EDITOR
@@ -76,6 +77,10 @@ public:
 	 */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Entity")
 	bool HasValidEntity() const;
+
+	/** Direct native access to this actor's single sim/render bridge component.
+	 *  Avoids repeated component discovery in framework presentation systems. */
+	USeinEntityComponent* GetEntityBridge() const { return EntityBridge.Get(); }
 
 	/** Owner slot for level-placed instances (1-based; 0 = neutral). Read by
 	 *  `USeinActorBridgeSubsystem::OnWorldBeginPlay` and stamped onto the

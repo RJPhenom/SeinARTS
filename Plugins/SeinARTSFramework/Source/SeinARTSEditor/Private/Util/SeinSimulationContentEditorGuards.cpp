@@ -6,17 +6,32 @@
 #include "Util/SeinSimulationContentEditorGuards.h"
 
 #include "CookOnTheSide/CookOnTheFlyServer.h"
-#include "Misc/MessageDialog.h"
+#include "HAL/IConsoleManager.h"
 #include "UObject/ICookInfo.h"
 #include "UObject/SoftObjectPath.h"
 #include "Util/SeinSimulationContentManifestBuilder.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinSimulationContentEditor, Log, All);
 
+namespace
+{
+	TAutoConsoleVariable<int32> CVarRequireFreshManifestForPIE(
+		TEXT("Sein.SimulationContent.RequireFreshManifestForPIE"),
+		0,
+		TEXT("When 1, PIE requires the saved Simulation Content Manifest to match all saved simulation-content packages. Disabled by default for normal editor iteration."),
+		ECVF_Default);
+}
+
 bool FSeinSimulationContentPIEAuthorizer::RequestPIEPermission(
 	bool /*bIsSimulateInEditor*/,
 	FString& OutReason) const
 {
+	if (CVarRequireFreshManifestForPIE.GetValueOnGameThread() == 0)
+	{
+		OutReason.Reset();
+		return true;
+	}
+
 	FSeinSimulationContentManifestBuildResult Result;
 	FString Error;
 	if (FSeinSimulationContentManifestBuilder::
@@ -27,15 +42,10 @@ bool FSeinSimulationContentPIEAuthorizer::RequestPIEPermission(
 	}
 
 	OutReason = FString::Printf(
-		TEXT("SeinARTS simulation-content preflight failed: %s"),
+		TEXT("Strict SeinARTS simulation-content PIE validation failed: %s"),
 		Error.IsEmpty()
 			? TEXT("unknown validation error")
 			: *Error);
-	FMessageDialog::Open(
-		EAppMsgType::Ok,
-		FText::FromString(OutReason),
-		FText::FromString(
-			TEXT("Play In Editor Blocked")));
 	return false;
 }
 

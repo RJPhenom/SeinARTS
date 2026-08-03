@@ -220,8 +220,15 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 	const FFixedPoint ProgressUnknown = FFixedPoint::FromInt(-1000000);
 	TArray<FFixedPoint> ActualDispSq;
 	TArray<FFixedPoint> ActualProgress;
+	struct FDeferredMovementState
+	{
+		FFixedVector PrevTickLocation;
+		FSeinAvoidanceOutput AvoidanceOutput;
+	};
+	TArray<FDeferredMovementState> PreviousMovementState;
 	ActualDispSq.Reserve(World.GetEntityPool().GetActiveCount());
 	ActualProgress.Reserve(World.GetEntityPool().GetActiveCount());
+	PreviousMovementState.Reserve(World.GetEntityPool().GetActiveCount());
 	World.GetEntityPool().ForEachEntity([&](
 		FSeinEntityHandle Handle,
 		const FSeinEntity& Entity)
@@ -229,9 +236,16 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 		LiveHandles.Add(Handle);
 		ActualDispSq.Add(FFixedPoint::FromInt(-1));
 		ActualProgress.Add(ProgressUnknown);
+		PreviousMovementState.AddDefaulted();
 		FSeinMovementComponent* Move = MoveStorage
-			? static_cast<FSeinMovementComponent*>(MoveStorage->GetComponentRaw(Handle)) : nullptr;
+			? static_cast<FSeinMovementComponent*>(
+				MoveStorage->GetComponentRawForDeferredMutation(Handle))
+			: nullptr;
 		if (!Move) return;
+		PreviousMovementState.Last().PrevTickLocation =
+			Move->PrevTickLocation;
+		PreviousMovementState.Last().AvoidanceOutput =
+			Move->AvoidanceOutput;
 
 		// ACTUAL-MOTION SAMPLE — every movement-carrying entity, every tick, idle or
 		// ordered. Velocity cannot answer "did this body actually move": it is the unit's own
@@ -327,7 +341,10 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 		// so concurrent QueryRadius calls never share it.
 		TArray<FSeinEntityHandle> Neighbors;
 
-		FSeinMovementComponent* Move = MoveStorage ? static_cast<FSeinMovementComponent*>(MoveStorage->GetComponentRaw(SelfHandle)) : nullptr;
+		FSeinMovementComponent* Move = MoveStorage
+			? static_cast<FSeinMovementComponent*>(
+				MoveStorage->GetComponentRawForDeferredMutation(SelfHandle))
+			: nullptr;
 		if (!Move) return;
 		// Opted out → leave AvoidanceOutput UNTOUCHED (its default zero steer / unit scale),
 		// so the unit's motion is bit-identical to a world with no avoidance.
@@ -1140,4 +1157,28 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 		}
 		Move->AvoidanceOutput.SpeedScale = SmoothedScale;
 	});
+
+	// Publish only real state changes, serially and in canonical handle order.
+	// The old mutable raw accessor touched every movement component merely for
+	// being inspected (and did so from workers), forcing hundreds of reflected
+	// re-hashes at every state-root boundary even in a completely idle world.
+	for (int32 Index = 0; Index < LiveHandles.Num(); ++Index)
+	{
+		FSeinMovementComponent* Move = MoveStorage
+			? static_cast<FSeinMovementComponent*>(
+				MoveStorage->GetComponentRawForDeferredMutation(
+					LiveHandles[Index]))
+			: nullptr;
+		if (!Move) continue;
+		const FDeferredMovementState& Before =
+			PreviousMovementState[Index];
+		if (Move->PrevTickLocation != Before.PrevTickLocation
+			|| Move->AvoidanceOutput.SteerDir
+				!= Before.AvoidanceOutput.SteerDir
+			|| Move->AvoidanceOutput.SpeedScale
+				!= Before.AvoidanceOutput.SpeedScale)
+		{
+			MoveStorage->CommitDeferredMutation(LiveHandles[Index]);
+		}
+	}
 }

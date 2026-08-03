@@ -11,6 +11,9 @@
 #include "Graph/K2Node_SeinGetComponent.h"
 #include "Graph/K2Node_SeinSetComponent.h"
 #include "Graph/SeinComponentNodeMenuCache.h"
+#include "Widgets/SeinWidgetBlueprint.h"
+#include "WidgetBlueprint.h"
+#include "KismetCompiler.h"
 #include "UObject/ObjectKey.h"
 #include "UObject/UObjectGlobals.h"
 
@@ -49,6 +52,15 @@ namespace
 void FSeinARTSGraphNodesModule::StartupModule()
 {
 	bModuleOwnedStateReleased = false;
+
+	// UMG's compiler registry is keyed by the exact Blueprint asset class and
+	// does not walk its inheritance chain. Register from this UncookedOnly
+	// module (rather than the Editor-typed tooling module) so editor, cook
+	// commandlets, and UnrealEditor -game all compile/load Sein widget assets
+	// with their WidgetTree intact.
+	FKismetCompilerContext::RegisterCompilerForBP(
+		USeinWidgetBlueprint::StaticClass(),
+		&UWidgetBlueprint::GetCompilerForWidgetBP);
 }
 
 void FSeinARTSGraphNodesModule::PreUnloadCallback()

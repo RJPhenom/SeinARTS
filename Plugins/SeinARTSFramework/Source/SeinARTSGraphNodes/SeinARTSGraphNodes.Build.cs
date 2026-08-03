@@ -13,6 +13,8 @@ public class SeinARTSGraphNodes : ModuleRules
 			"Core",
 			"CoreUObject",
 			"Engine",
+			"UMG",
+			"UMGEditor",                   // USeinWidgetBlueprint source-asset class
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[]

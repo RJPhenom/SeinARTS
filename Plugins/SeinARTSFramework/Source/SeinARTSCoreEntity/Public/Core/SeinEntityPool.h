@@ -112,6 +112,11 @@ public:
 
 	/** Get a mutable pointer to the entity at Handle, or nullptr if the handle is stale/invalid. */
 	FSeinEntity* Get(FSeinEntityHandle Handle);
+	/** Mutable access without eagerly advancing the canonical-state revision.
+	 *  CommitDeferredMutation must be called serially iff the entity changed. */
+	FSeinEntity* GetForDeferredMutation(FSeinEntityHandle Handle);
+	/** Publish an actual write obtained through GetForDeferredMutation. */
+	void CommitDeferredMutation(FSeinEntityHandle Handle);
 
 	/** Get a const pointer to the entity at Handle, or nullptr if the handle is stale/invalid. */
 	const FSeinEntity* Get(FSeinEntityHandle Handle) const;
@@ -127,6 +132,14 @@ public:
 
 	FORCEINLINE int32 GetActiveCount() const { return ActiveCount; }
 	FORCEINLINE int32 GetCapacity() const { return Capacity; }
+	/** Process-local mutation evidence used by the incremental canonical-root
+	 *  cache. Revisions are neither serialized nor part of deterministic state. */
+	uint64 GetMutationRevision(FSeinEntityHandle Handle) const;
+	uint64 GetLatestMutationRevision() const
+	{
+		return MutationRevisionCounter;
+	}
+	uint64 GetTopologyRevision() const { return TopologyRevision; }
 
 	/**
 	 * Current generation counter for a slot index, or 0 (invalid) if the slot
@@ -185,6 +198,7 @@ public:
 			if (Entities[i].IsAlive())
 			{
 				FSeinEntityHandle Handle(i, Generations[i]);
+				TouchSlot(i);
 				Callback(Handle, Entities[i]);
 			}
 		}
@@ -221,6 +235,8 @@ private:
 
 	/** Grow the pool by doubling (or to MinCapacity if larger). */
 	void Grow(int32 MinCapacity);
+	void TouchSlot(int32 SlotIndex);
+	void BumpTopologyRevision();
 
 	TArray<FSeinEntity> Entities;
 	TArray<int32> Generations;
@@ -228,7 +244,10 @@ private:
 	/** Generation-exhausted slots. Kept separate from deferred-destroy
 	 *  tombstones so an exact max-generation handle cannot be torn down twice. */
 	TArray<uint8> RetiredSlots;
+	TArray<uint64> SlotMutationRevisions;
 	TArray<int32> FreeList;
+	uint64 MutationRevisionCounter = 0;
+	uint64 TopologyRevision = 1;
 
 	int32 ActiveCount;
 	int32 Capacity;

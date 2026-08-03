@@ -74,6 +74,10 @@ public:
 
 	virtual void OnMoveBegin(const FSeinMovementContext& Ctx) override;
 	virtual bool Tick(const FSeinMovementContext& Ctx) override;
+	virtual bool SupportsExactIdleMutationTracking() const override
+	{
+		return GetClass() == StaticClass();
+	}
 
 	/** Reset the driver/planner instance state when an order ends — the NEXT
 	 *  order's initial plan runs BEFORE OnMoveBegin's reset, so stale

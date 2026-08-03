@@ -60,6 +60,7 @@
 #include "UObject/StructOnScope.h"
 #include "UObject/GCObject.h"
 #include "Hash/Blake3.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 // Built-in systems
 #include "Simulation/Systems/SeinEffectTickSystem.h"
@@ -659,6 +660,8 @@ void USeinWorldSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	MatchState = ESeinMatchState::Lobby;
 	CurrentMatchSettings = FSeinMatchSettings();
 	MatchSettingsDigest.Invalidate();
+	SimulationTraceScopeName = FString::Printf(
+		TEXT("Sein TickSimulation [%s]"), *GetPathNameSafe(GetWorld()));
 
 	// Create latent action manager
 	LatentActionManager = NewObject<USeinLatentActionManager>(this);
@@ -872,6 +875,7 @@ void USeinWorldSubsystem::ReleaseAllModuleOwnedState()
 	ClearLocalCommandSubmitter();
 
 	OnSimTickCompleted.Clear();
+	OnSimFrameCompleted.Clear();
 	OnEntitySpawned.Clear();
 	OnEntityDestroyed.Clear();
 	OnCommandsProcessing.Clear();
@@ -956,8 +960,15 @@ void USeinWorldSubsystem::ReleaseAllModuleOwnedState()
 	}
 	AbilityPool.Reset();
 	AbilityPoolFreeList.Reset();
+	AbilityPoolStateRevisions.Reset();
+	AbilityPoolMutationRevision = 0;
+	AbilityPoolTopologyRevision = 1;
 	CommandBrokerResolverPool.Reset();
 	CommandBrokerResolverPoolFreeList.Reset();
+	CommandBrokerResolverPoolStateRevisions.Reset();
+	CommandBrokerResolverPoolMutationRevision = 0;
+	CommandBrokerResolverPoolTopologyRevision = 1;
+	CanonicalStateRootCache.Reset();
 	if (CollisionResolver)
 	{
 		TGuardValue<bool> ReadOnlyGuard(bReadOnlyCallbackInProgress, true);
@@ -2234,6 +2245,7 @@ float USeinWorldSubsystem::GetInterpolationAlpha() const
 
 bool USeinWorldSubsystem::TickSimulation(float DeltaTime)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(*SimulationTraceScopeName);
 	// A scheduler reservation is intentionally persistent while the simulation
 	// is stopped. Authorized bootstrap keeps it dormant until launch; stopped
 	// snapshot adoption keeps it dormant while an outer reconnect/catch-up
@@ -2287,6 +2299,7 @@ bool USeinWorldSubsystem::TickSimulation(float DeltaTime)
 	}
 
 	int32 TicksProcessed = 0;
+	int32 LastCompletedTickThisFrame = INDEX_NONE;
 	while (bIsRunning
 		&& TimeAccumulator >= FixedDeltaTimeSeconds
 		&& TicksProcessed < MaxTicks)
@@ -2397,12 +2410,26 @@ bool USeinWorldSubsystem::TickSimulation(float DeltaTime)
 		}
 #endif
 
-		ReplayCommandBoundaryNotifier.Broadcast(CurrentTick);
 		{
+			TRACE_CPUPROFILER_EVENT_SCOPE(Sein_World_ReplayCommandBoundary);
+			ReplayCommandBoundaryNotifier.Broadcast(CurrentTick);
+		}
+		{
+			TRACE_CPUPROFILER_EVENT_SCOPE(Sein_World_TickCompletedObservers);
 			TGuardValue<bool> ReadOnlyGuard(bReadOnlyCallbackInProgress, true);
 			TGuardValue<bool> ObserverGuard(bObserverCallbackInProgress, true);
 			OnSimTickCompleted.Broadcast(CurrentTick);
 		}
+		LastCompletedTickThisFrame = CurrentTick;
+	}
+
+	if (LastCompletedTickThisFrame != INDEX_NONE)
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_World_FrameCompletedObservers);
+		TGuardValue<bool> ReadOnlyGuard(bReadOnlyCallbackInProgress, true);
+		TGuardValue<bool> ObserverGuard(bObserverCallbackInProgress, true);
+		OnSimFrameCompleted.Broadcast(
+			LastCompletedTickThisFrame, TicksProcessed);
 	}
 
 	if (TicksProcessed >= MaxTicks && TimeAccumulator > FixedDeltaTimeSeconds)
@@ -2441,6 +2468,7 @@ bool USeinWorldSubsystem::TickSimulation(float DeltaTime)
 
 bool USeinWorldSubsystem::ValidateFrozenConfigFingerprint()
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(Sein_World_ValidateConfigFingerprint);
 	const USeinARTSCoreSettings* CurrentSettings =
 		GetDefault<USeinARTSCoreSettings>();
 	const int32 CurrentFingerprint = CurrentSettings
@@ -2460,6 +2488,7 @@ bool USeinWorldSubsystem::ValidateFrozenConfigFingerprint()
 
 bool USeinWorldSubsystem::ValidateFrozenCanonicalStateWorldBindings()
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(Sein_World_ValidateCanonicalBindings);
 	TArray<FString> CurrentFrames;
 	FString Error;
 	bool bCaptured = false;
@@ -2505,6 +2534,7 @@ bool USeinWorldSubsystem::ValidateFrozenCanonicalStateWorldBindings()
 
 void USeinWorldSubsystem::TickSystems(FFixedPoint DeltaTime)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(Sein_World_TickSystems);
 	if (!bExecutionTopologyFrozen || !bExecutionTopologyValid)
 	{
 		InvalidateFrozenExecutionTopology(
@@ -2520,29 +2550,43 @@ void USeinWorldSubsystem::TickSystems(FFixedPoint DeltaTime)
 			if (Registered.System
 				&& Registered.Descriptor.Phase == ESeinTickPhase::PreTick)
 			{
+				TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(*Registered.CanonicalStableID);
 				Registered.System->Tick(DeltaTime, *this);
 				if (!bExecutionTopologyValid) return;
 			}
 		}
 
 		// Advance deterministic match state and expire idle votes.
-		TickMatchState();
-		TickVotes();
+		{
+			TRACE_CPUPROFILER_EVENT_SCOPE(Sein_World_TickMatchState);
+			TickMatchState();
+		}
+		{
+			TRACE_CPUPROFILER_EVENT_SCOPE(Sein_World_TickVotes);
+			TickVotes();
+		}
 	}
 
 	// Host-only AI reasoning is intentionally outside mutation authority. Its
 	// sole write seam is EmitCommand, which routes through lockstep ingress.
-	TickAIControllers(DeltaTime);
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_World_TickAIControllers);
+		TickAIControllers(DeltaTime);
+	}
 	{
 		SEIN_SIM_SCOPE(*this)
 		// Phase 2: process AI-emitted/external commands, then deterministic systems.
-		ProcessCommands();
+		{
+			TRACE_CPUPROFILER_EVENT_SCOPE(Sein_World_ProcessCommands);
+			ProcessCommands();
+		}
 		for (const FRegisteredSystem& Registered : Systems)
 		{
 			if (Registered.System
 				&& Registered.Descriptor.Phase
 				== ESeinTickPhase::CommandProcessing)
 			{
+				TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(*Registered.CanonicalStableID);
 				Registered.System->Tick(DeltaTime, *this);
 				if (!bExecutionTopologyValid) return;
 			}
@@ -2551,6 +2595,7 @@ void USeinWorldSubsystem::TickSystems(FFixedPoint DeltaTime)
 		// Phase 3: AbilityExecution — tick active abilities and latent actions
 		if (LatentActionManager)
 		{
+			TRACE_CPUPROFILER_EVENT_SCOPE(Sein_World_TickLatentActions);
 			LatentActionManager->TickAll(DeltaTime, *this);
 		}
 		for (const FRegisteredSystem& Registered : Systems)
@@ -2559,18 +2604,23 @@ void USeinWorldSubsystem::TickSystems(FFixedPoint DeltaTime)
 				&& Registered.Descriptor.Phase
 				== ESeinTickPhase::AbilityExecution)
 			{
+				TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(*Registered.CanonicalStableID);
 				Registered.System->Tick(DeltaTime, *this);
 				if (!bExecutionTopologyValid) return;
 			}
 		}
 
 		// Phase 4: PostTick — cleanup and settled tick state
-		ProcessDeferredDestroys();
+		{
+			TRACE_CPUPROFILER_EVENT_SCOPE(Sein_World_ProcessDeferredDestroys);
+			ProcessDeferredDestroys();
+		}
 		for (const FRegisteredSystem& Registered : Systems)
 		{
 			if (Registered.System
 				&& Registered.Descriptor.Phase == ESeinTickPhase::PostTick)
 			{
+				TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(*Registered.CanonicalStableID);
 				Registered.System->Tick(DeltaTime, *this);
 				if (!bExecutionTopologyValid) return;
 			}
@@ -5519,7 +5569,20 @@ FSeinPlayerState* USeinWorldSubsystem::GetPlayerStateMutable(FSeinPlayerID Playe
 	{
 		return nullptr;
 	}
-	return PlayerStates.Find(PlayerID);
+	FSeinPlayerState* State = PlayerStates.Find(PlayerID);
+	if (State)
+	{
+		MarkCanonicalAuxiliaryStateDirty();
+	}
+	return State;
+}
+
+void USeinWorldSubsystem::MarkCanonicalAuxiliaryStateDirty()
+{
+	CanonicalAuxiliaryMutationRevision =
+		CanonicalAuxiliaryMutationRevision == MAX_uint64
+			? 1
+			: CanonicalAuxiliaryMutationRevision + 1;
 }
 
 // ==================== Player & Faction ====================
@@ -5607,6 +5670,7 @@ void USeinWorldSubsystem::RegisterPlayer(FSeinPlayerID PlayerID, FSeinFactionID 
 	}
 
 	PlayerStates.Add(PlayerID, MoveTemp(NewState));
+	MarkCanonicalAuxiliaryStateDirty();
 
 	UE_LOG(LogSeinSim, Log, TEXT("Registered player %s (faction: %s, team: %d)"),
 		*PlayerID.ToString(), *FactionID.ToString(), TeamID);
@@ -5651,6 +5715,7 @@ void USeinWorldSubsystem::RegisterFaction(USeinFaction* Faction)
 	}
 	if (!Faction) return;
 	Factions.Add(Faction->FactionID, Faction);
+	MarkCanonicalAuxiliaryStateDirty();
 	UE_LOG(LogSeinSim, Log, TEXT("Registered faction: %s (FactionID=%u)"),
 		*Faction->FactionName.ToString(), Faction->FactionID.Value);
 }
@@ -5748,6 +5813,21 @@ int32 USeinWorldSubsystem::RegisterAbilityInstance(USeinAbility* Ability)
 	if (ID != INDEX_NONE)
 	{
 		Ability->RuntimePoolID = ID;
+		// Preserve existing slot revisions when the pool grows. SetNumZeroed
+		// clears the whole allocation and would make unchanged live objects look
+		// untracked every time a new ability occupied an appended slot.
+		AbilityPoolStateRevisions.SetNum(AbilityPool.Num());
+		++AbilityPoolMutationRevision;
+		if (AbilityPoolMutationRevision == 0)
+		{
+			++AbilityPoolMutationRevision;
+		}
+		AbilityPoolStateRevisions[ID] = AbilityPoolMutationRevision;
+		++AbilityPoolTopologyRevision;
+		if (AbilityPoolTopologyRevision == 0)
+		{
+			++AbilityPoolTopologyRevision;
+		}
 	}
 	return ID;
 }
@@ -5763,6 +5843,15 @@ void USeinWorldSubsystem::UnregisterAbilityInstance(int32 AbilityID)
 		Ability->RuntimePoolID = INDEX_NONE;
 	}
 	PoolUnregister(AbilityPool, AbilityPoolFreeList, AbilityID);
+	if (AbilityPoolStateRevisions.IsValidIndex(AbilityID))
+	{
+		AbilityPoolStateRevisions[AbilityID] = 0;
+	}
+	++AbilityPoolTopologyRevision;
+	if (AbilityPoolTopologyRevision == 0)
+	{
+		++AbilityPoolTopologyRevision;
+	}
 }
 
 USeinAbility* USeinWorldSubsystem::GetAbilityInstance(int32 AbilityID) const
@@ -5784,6 +5873,26 @@ int32 USeinWorldSubsystem::FindAbilityInstanceID(
 			: INDEX_NONE;
 }
 
+void USeinWorldSubsystem::MarkAbilityRuntimeStateDirty(
+	const USeinAbility* Ability)
+{
+	if (!Ability)
+	{
+		return;
+	}
+	const int32 ID = FindAbilityInstanceID(Ability);
+	if (!AbilityPoolStateRevisions.IsValidIndex(ID))
+	{
+		return;
+	}
+	++AbilityPoolMutationRevision;
+	if (AbilityPoolMutationRevision == 0)
+	{
+		++AbilityPoolMutationRevision;
+	}
+	AbilityPoolStateRevisions[ID] = AbilityPoolMutationRevision;
+}
+
 bool USeinWorldSubsystem::TryAllocateAbilityActivationID(
 	int64& OutID)
 {
@@ -5803,7 +5912,28 @@ int32 USeinWorldSubsystem::RegisterCommandBrokerResolver(USeinCommandBrokerResol
 	{
 		return INDEX_NONE;
 	}
-	return PoolRegister(CommandBrokerResolverPool, CommandBrokerResolverPoolFreeList, Resolver);
+	const int32 ID = PoolRegister(
+		CommandBrokerResolverPool,
+		CommandBrokerResolverPoolFreeList,
+		Resolver);
+	if (ID != INDEX_NONE)
+	{
+		CommandBrokerResolverPoolStateRevisions.SetNum(
+			CommandBrokerResolverPool.Num());
+		++CommandBrokerResolverPoolMutationRevision;
+		if (CommandBrokerResolverPoolMutationRevision == 0)
+		{
+			++CommandBrokerResolverPoolMutationRevision;
+		}
+		CommandBrokerResolverPoolStateRevisions[ID] =
+			CommandBrokerResolverPoolMutationRevision;
+		++CommandBrokerResolverPoolTopologyRevision;
+		if (CommandBrokerResolverPoolTopologyRevision == 0)
+		{
+			++CommandBrokerResolverPoolTopologyRevision;
+		}
+	}
+	return ID;
 }
 
 void USeinWorldSubsystem::UnregisterCommandBrokerResolver(int32 ResolverID)
@@ -5813,11 +5943,45 @@ void USeinWorldSubsystem::UnregisterCommandBrokerResolver(int32 ResolverID)
 		return;
 	}
 	PoolUnregister(CommandBrokerResolverPool, CommandBrokerResolverPoolFreeList, ResolverID);
+	if (CommandBrokerResolverPoolStateRevisions.IsValidIndex(ResolverID))
+	{
+		CommandBrokerResolverPoolStateRevisions[ResolverID] = 0;
+	}
+	++CommandBrokerResolverPoolTopologyRevision;
+	if (CommandBrokerResolverPoolTopologyRevision == 0)
+	{
+		++CommandBrokerResolverPoolTopologyRevision;
+	}
 }
 
 USeinCommandBrokerResolver* USeinWorldSubsystem::GetCommandBrokerResolver(int32 ResolverID) const
 {
 	return PoolGet(CommandBrokerResolverPool, ResolverID);
+}
+
+void USeinWorldSubsystem::MarkCommandBrokerResolverRuntimeStateDirty(
+	const USeinCommandBrokerResolver* Resolver)
+{
+	if (!Resolver)
+	{
+		return;
+	}
+	const int32 ID = CommandBrokerResolverPool.IndexOfByPredicate(
+		[Resolver](const TObjectPtr<USeinCommandBrokerResolver>& Candidate)
+		{
+			return Candidate.Get() == Resolver;
+		});
+	if (!CommandBrokerResolverPoolStateRevisions.IsValidIndex(ID))
+	{
+		return;
+	}
+	++CommandBrokerResolverPoolMutationRevision;
+	if (CommandBrokerResolverPoolMutationRevision == 0)
+	{
+		++CommandBrokerResolverPoolMutationRevision;
+	}
+	CommandBrokerResolverPoolStateRevisions[ID] =
+		CommandBrokerResolverPoolMutationRevision;
 }
 
 // ============================================================================
@@ -8407,6 +8571,21 @@ bool USeinWorldSubsystem::RestoreSnapshot(
 			}
 		}
 		AbilityPoolFreeList = MoveTemp(StagedAbilityFreeList);
+		AbilityPoolStateRevisions.SetNumZeroed(AbilityPool.Num());
+		for (int32 Index = 0; Index < AbilityPool.Num(); ++Index)
+		{
+			if (AbilityPool[Index])
+			{
+				++AbilityPoolMutationRevision;
+				if (AbilityPoolMutationRevision == 0)
+				{
+					++AbilityPoolMutationRevision;
+				}
+				AbilityPoolStateRevisions[Index] =
+					AbilityPoolMutationRevision;
+			}
+		}
+		++AbilityPoolTopologyRevision;
 
 		CommandBrokerResolverPool.Reset();
 		CommandBrokerResolverPool.SetNum(StagedResolverPool.Num());
@@ -8416,6 +8595,25 @@ bool USeinWorldSubsystem::RestoreSnapshot(
 		}
 		CommandBrokerResolverPoolFreeList =
 			MoveTemp(StagedResolverFreeList);
+		CommandBrokerResolverPoolStateRevisions.SetNumZeroed(
+			CommandBrokerResolverPool.Num());
+		for (int32 Index = 0;
+			Index < CommandBrokerResolverPool.Num();
+			++Index)
+		{
+			if (CommandBrokerResolverPool[Index])
+			{
+				++CommandBrokerResolverPoolMutationRevision;
+				if (CommandBrokerResolverPoolMutationRevision == 0)
+				{
+					++CommandBrokerResolverPoolMutationRevision;
+				}
+				CommandBrokerResolverPoolStateRevisions[Index] =
+					CommandBrokerResolverPoolMutationRevision;
+			}
+		}
+		++CommandBrokerResolverPoolTopologyRevision;
+		CanonicalStateRootCache.Reset();
 		if (bFreshBootstrapAdoption)
 		{
 			Factions = MoveTemp(StagedFactions);
@@ -8670,6 +8868,7 @@ bool USeinWorldSubsystem::GrantTag(FSeinEntityHandle Handle, FGameplayTag Tag)
 			*Tag.ToString(), *Handle.ToString());
 		return false;
 	}
+	MarkCanonicalAuxiliaryStateDirty();
 
 	if (TagState.GrantTagInternal(Tag))
 	{
@@ -8684,6 +8883,7 @@ void USeinWorldSubsystem::UngrantTag(FSeinEntityHandle Handle, FGameplayTag Tag)
 	if (!Tag.IsValid()) return;
 	FSeinEntityTagState* TagState = EntityTagStates.Find(Handle);
 	if (!TagState) return;
+	MarkCanonicalAuxiliaryStateDirty();
 
 	if (TagState->UngrantTagInternal(Tag))
 	{
@@ -8827,6 +9027,7 @@ void USeinWorldSubsystem::RegisterNamedEntity(FName Name, FSeinEntityHandle Hand
 	if (Name.IsNone()) return;
 	if (!EntityPool.IsValid(Handle)) return;
 	NamedEntityRegistry.Add(Name, Handle);
+	MarkCanonicalAuxiliaryStateDirty();
 }
 
 FSeinEntityHandle USeinWorldSubsystem::LookupNamedEntity(FName Name) const
@@ -8842,7 +9043,10 @@ FSeinEntityHandle USeinWorldSubsystem::LookupNamedEntity(FName Name) const
 void USeinWorldSubsystem::UnregisterNamedEntity(FName Name)
 {
 	if (!RequireStateMutationAuthorization(TEXT("UnregisterNamedEntity"))) return;
-	NamedEntityRegistry.Remove(Name);
+	if (NamedEntityRegistry.Remove(Name) > 0)
+	{
+		MarkCanonicalAuxiliaryStateDirty();
+	}
 }
 
 // ==================== Attribute Resolution ====================
@@ -11610,6 +11814,7 @@ void USeinWorldSubsystem::SeedEntityTagsFromBase(FSeinEntityHandle Handle)
 	// Ensure the tag-state entry exists first (creates an empty record if
 	// the entity is brand-new and hasn't had any tags touched yet).
 	FSeinEntityTagState& TagState = EntityTagStates.FindOrAdd(Handle);
+	MarkCanonicalAuxiliaryStateDirty();
 
 	// Snapshot first — GrantTag doesn't touch BaseTags, but a stable
 	// iteration source is cheap and makes the intent obvious.
@@ -11641,16 +11846,23 @@ void USeinWorldSubsystem::UnindexEntityTags(FSeinEntityHandle Handle)
 
 	// Free the tag-state entry — entity is being destroyed.
 	EntityTagStates.Remove(Handle);
+	MarkCanonicalAuxiliaryStateDirty();
 }
 
 void USeinWorldSubsystem::UnregisterHandleFromNames(FSeinEntityHandle Handle)
 {
+	bool bRemovedAny = false;
 	for (auto It = NamedEntityRegistry.CreateIterator(); It; ++It)
 	{
 		if (It.Value() == Handle)
 		{
 			It.RemoveCurrent();
+			bRemovedAny = true;
 		}
+	}
+	if (bRemovedAny)
+	{
+		MarkCanonicalAuxiliaryStateDirty();
 	}
 }
 
@@ -12055,6 +12267,7 @@ void USeinWorldSubsystem::StartVote(FGameplayTag VoteType, ESeinVoteResolution R
 	Vote.ExpiresAtTick = (ExpiresInTicks > 0) ? CurrentTick + ExpiresInTicks : INT32_MAX;
 	Vote.Initiator = Initiator;
 	ActiveVotes.Add(VoteType, MoveTemp(Vote));
+	MarkCanonicalAuxiliaryStateDirty();
 
 	EnqueueVisualEvent(FSeinVisualEvent::MakeVoteStartedEvent(VoteType, Initiator, RequiredThreshold));
 }
@@ -12068,6 +12281,7 @@ void USeinWorldSubsystem::CastVote(FGameplayTag VoteType, FSeinPlayerID Voter, i
 	if (!VoteType.IsValid()) return;
 	FSeinVoteState* Vote = ActiveVotes.Find(VoteType);
 	if (!Vote) return;
+	MarkCanonicalAuxiliaryStateDirty();
 	Vote->Votes.Add(Voter, VoteValue);
 
 	int32 Yes = 0, No = 0;
@@ -12150,6 +12364,7 @@ bool USeinWorldSubsystem::EvaluateAndResolveVote(FGameplayTag VoteType)
 		const FGameplayTag Resolved = Vote->VoteType;
 		EnqueueVisualEvent(FSeinVisualEvent::MakeVoteResolvedEvent(Resolved, bPassed));
 		ActiveVotes.Remove(VoteType);
+		MarkCanonicalAuxiliaryStateDirty();
 		return true;
 	}
 	return false;
@@ -12168,6 +12383,7 @@ void USeinWorldSubsystem::TickVotes()
 		// Expired votes that haven't passed on their own fail deterministically.
 		EnqueueVisualEvent(FSeinVisualEvent::MakeVoteResolvedEvent(Tag, /*bPassed=*/false));
 		ActiveVotes.Remove(Tag);
+		MarkCanonicalAuxiliaryStateDirty();
 	}
 }
 

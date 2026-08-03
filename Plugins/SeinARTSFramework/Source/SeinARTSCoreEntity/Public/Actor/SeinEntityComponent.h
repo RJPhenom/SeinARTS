@@ -57,6 +57,49 @@
 class USeinWorldSubsystem;
 struct FSeinVisualEvent;
 
+/** Render-only ray-tracing geometry policy for one simulation-backed actor.
+ *  Large RTS crowds should not put every skinned unit mesh into the hardware
+ *  ray-tracing geometry pool: animation forces expensive BLAS updates and the
+ *  aggregate geometry can exhaust both UE's RT pool and GPU-local memory.
+ *  This policy never enters deterministic state and does not affect gameplay. */
+UENUM(BlueprintType)
+enum class ESeinRayTracingGeometryPolicy : uint8
+{
+	/** Preserve every primitive component's authored Unreal setting. */
+	ComponentDefaults UMETA(DisplayName = "Component Defaults"),
+
+	/** Exclude skinned meshes while preserving static/other primitives. This is
+	 *  the crowd-safe default; unit actors remain visible in the raster passes. */
+	ExcludeSkinnedMeshes UMETA(DisplayName = "Exclude Skinned Meshes"),
+
+	/** Exclude every primitive owned by this actor from ray-tracing geometry. */
+	ExcludeAllPrimitives UMETA(DisplayName = "Exclude All Primitives"),
+};
+
+/** Render-only skeletal-mesh update policy for simulation-backed actors.
+ *  SeinARTS transforms, collision, targeting, and lockstep state never depend
+ *  on Unreal skeletal physics, so ordinary RTS unit meshes can use the
+ *  engine's crowd update-rate path and avoid rebuilding kinematic physics
+ *  bodies for every animated bone. Units that deliberately use partial
+ *  ragdolls, physical animation, or bone-driven UE overlap queries retain a
+ *  separate policy. This policy never enters deterministic state. */
+UENUM(BlueprintType)
+enum class ESeinSkeletalMeshPerformancePolicy : uint8
+{
+	/** Preserve all skeletal-mesh component settings authored in Unreal. */
+	ComponentDefaults UMETA(DisplayName = "Component Defaults"),
+
+	/** Standard sim-authoritative RTS unit. Enables Unreal's animation
+	 *  update-rate optimization, stops full AnimBP work when not rendered,
+	 *  and skips animation-to-physics bone copies and overlap refreshes. */
+	RTSVisualMesh UMETA(DisplayName = "RTS Visual Mesh"),
+
+	/** Retains authored kinematic-bone and overlap behavior for units whose
+	 *  visual mesh participates in partial ragdolls or UE-side physics, while
+	 *  still enabling update-rate and offscreen animation optimization. */
+	RTSPhysicsMesh UMETA(DisplayName = "RTS Physics Mesh"),
+};
+
 /** Per-entity multicast delegate fired by `USeinEntityComponent::HandleVisualEvent`
  *  when the bridge subsystem routes a visual event to this entity. Subscribed
  *  to by render-side components (e.g. `USeinConstructionRenderComponent`) so
@@ -286,10 +329,28 @@ public:
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Sync")
 	bool IsTransformSyncEnabled() const { return bSyncTransform; }
 
-	/** Called by the subsystem after each simulation tick to capture
-	 *  transform snapshots for interpolation. Shifts CurrentSimTransform
-	 *  into PreviousSimTransform, then reads the new current from the entity. */
-	void OnSimTick();
+	/** Apply RayTracingGeometryPolicy to the owner's current primitive
+	 *  components. ASeinActor applies it after component registration in editor
+	 *  and runtime worlds, then BeginPlay reapplies it for runtime safety. Call
+	 *  again after adding render components dynamically. Render-only and
+	 *  lockstep-safe. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Rendering",
+		meta = (DisplayName = "Apply Ray Tracing Geometry Policy"))
+	void ApplyRayTracingGeometryPolicy();
+
+	/** Apply SkeletalMeshPerformancePolicy to the owner's current skeletal mesh
+	 *  components. ASeinActor applies it after component registration in editor
+	 *  and runtime worlds, then BeginPlay reapplies it for runtime safety. Call
+	 *  again after adding skeletal components dynamically or changing policy. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Rendering",
+		meta = (DisplayName = "Apply Skeletal Mesh Performance Policy"))
+	void ApplySkeletalMeshPerformancePolicy();
+
+	/** Called after an engine-frame simulation pump to capture the latest
+	 *  transform. A single completed tick advances the interpolation pair.
+	 *  Catch-up pumps snap both snapshots to the latest state because the
+	 *  render alpha represents only one fixed-tick interval. */
+	void OnSimFrame(int32 TicksProcessed);
 
 	/** Handle a visual event dispatched from the simulation. Two outputs:
 	 *    1. Routes the event to the owning ASeinActor's Receive* BlueprintImplementable
@@ -319,6 +380,24 @@ protected:
 	/** Whether to interpolate between sim tick snapshots for smooth visuals */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Sync")
 	bool bInterpolateTransform = true;
+
+	/** Controls whether this entity contributes primitive geometry to hardware
+	 *  ray tracing. The crowd-safe default excludes animated/skinned meshes,
+	 *  avoiding per-unit BLAS memory and update cost while retaining ordinary
+	 *  raster visibility, shadows, and static ray-traced scene geometry. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Rendering")
+	ESeinRayTracingGeometryPolicy RayTracingGeometryPolicy =
+		ESeinRayTracingGeometryPolicy::ExcludeSkinnedMeshes;
+
+	/** Controls native Unreal animation/physics work for the render meshes on
+	 *  this sim-backed actor. RTS Visual Mesh is the crowd-safe default: the
+	 *  deterministic sim remains authoritative for collision and gameplay,
+	 *  while animation stays a scalable presentation concern. Select RTS
+	 *  Physics Mesh for partial ragdolls/physical animation, or Component
+	 *  Defaults when a Blueprint owns the complete policy. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Rendering")
+	ESeinSkeletalMeshPerformancePolicy SkeletalMeshPerformancePolicy =
+		ESeinSkeletalMeshPerformancePolicy::RTSVisualMesh;
 
 private:
 	/** Cached subsystem reference */

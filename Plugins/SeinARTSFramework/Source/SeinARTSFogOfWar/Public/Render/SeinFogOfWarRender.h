@@ -8,8 +8,9 @@
  *          Drop one into a level and assign a fog post-process material; it
  *          tints the whole view with no further wiring (its UPostProcessComponent
  *          is unbound, so the actor's position is irrelevant). It does NOT compute
- *          vision — it READS the active USeinFogOfWar each time vision changes
- *          (OnFogOfWarMutated), bakes the local observer's per-cell EVNNNNNN
+ *          vision — it READS the active USeinFogOfWar. Vision mutations mark
+ *          the render data dirty; updates are coalesced at FogRenderTickRate
+ *          before baking the local observer's per-cell EVNNNNNN
  *          bitfield into a tiny tint texture (BGRA: rgb = fog color, a = darken
  *          amount), and feeds that + the grid's world bounds to the base fog
  *          material that does `lerp(scene, tint.rgb, tint.a)`.
@@ -211,6 +212,7 @@ private:
 	/** Local observer this actor is currently painting for. */
 	FSeinPlayerID CachedObserver;
 	bool bObserverResolved = false;
+	bool bTextureDirty = true;
 
 	int32 TexWidth = 0;
 	int32 TexHeight = 0;
@@ -237,7 +239,8 @@ private:
 
 	/** Pull the observer's grid, bake tints into PixelBuffer, upload, push world
 	 *  bounds to the material. */
-	void RebuildTexture();
+	/** Returns true when a valid observer grid was uploaded. */
+	bool RebuildTexture();
 
 	/** Stream PixelBuffer to the GPU texture (render-thread safe). */
 	void UploadPixels();

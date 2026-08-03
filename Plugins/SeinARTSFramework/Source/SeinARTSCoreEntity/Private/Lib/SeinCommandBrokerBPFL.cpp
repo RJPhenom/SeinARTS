@@ -21,6 +21,7 @@
 #include "StructUtils/InstancedStruct.h"
 #include "Engine/World.h"
 #include "UObject/StrongObjectPtr.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinBroker, Log, All);
 
@@ -261,6 +262,7 @@ TArray<FFixedVector> USeinCommandBrokerBPFL::ComputeMultiBrokerAnchors(
 	FGameplayTag FormationTag,
 	TArray<FFixedQuaternion>& OutFacings)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Formation_ComputeMultiBrokerAnchors);
 	// Lay the brokers (squads) out as ELEMENTS of the gesture formation: each squad is ONE element,
 	// sized by its FormationRadius (its whole footprint) through the SAME footprint-aware
 	// ResolveFormationLayout loose units use, so a multi-squad order takes the chosen shape
@@ -330,6 +332,7 @@ FSeinFormationLayout USeinCommandBrokerBPFL::SeinComputeFormationPreview(
 	const TArray<FFixedVector>& GuidePoints,
 	FGameplayTag FormationTag)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Formation_ComputePreview);
 	FSeinFormationLayout Empty;
 	USeinWorldSubsystem* World = GetWorldSubsystem(WorldContextObject);
 	if (!World

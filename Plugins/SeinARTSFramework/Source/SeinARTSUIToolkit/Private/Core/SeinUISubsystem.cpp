@@ -13,6 +13,7 @@
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Player/SeinPlayerController.h"
 #include "Engine/World.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinUI, Log, All);
 
@@ -26,8 +27,8 @@ void USeinUISubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	WorldSubsystem = GetWorld()->GetSubsystem<USeinWorldSubsystem>();
 	if (WorldSubsystem.IsValid())
 	{
-		SimTickDelegateHandle = WorldSubsystem->OnSimTickCompleted.AddUObject(
-			this, &USeinUISubsystem::HandleSimTick);
+		SimFrameDelegateHandle = WorldSubsystem->OnSimFrameCompleted.AddUObject(
+			this, &USeinUISubsystem::HandleSimFrame);
 	}
 
 	// Create the selection model
@@ -53,9 +54,9 @@ void USeinUISubsystem::ReleaseModuleOwnedStateForModuleUnload()
 	check(IsInGameThread());
 	if (WorldSubsystem.IsValid())
 	{
-		WorldSubsystem->OnSimTickCompleted.Remove(SimTickDelegateHandle);
+		WorldSubsystem->OnSimFrameCompleted.Remove(SimFrameDelegateHandle);
 	}
-	SimTickDelegateHandle.Reset();
+	SimFrameDelegateHandle.Reset();
 
 	if (SelectionModel)
 	{
@@ -165,16 +166,23 @@ USeinMinimapViewModel* USeinUISubsystem::GetMinimapViewModel()
 	return MinimapViewModel;
 }
 
-// ==================== Sim Tick Refresh ====================
+// ==================== Latest-State Refresh ====================
 
-void USeinUISubsystem::HandleSimTick(int32 Tick)
+void USeinUISubsystem::HandleSimFrame(
+	int32 LatestTick, int32 /*TicksProcessed*/)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Presentation_UIRefresh);
 	// Lazy-bind the selection model to the local player controller. Cheap
 	// no-op once bound — the PC doesn't exist at subsystem Initialize time,
 	// so we retry here until it comes up.
 	if (SelectionModel)
 	{
 		SelectionModel->EnsurePlayerControllerBound();
+		// Ability availability can change every sim tick, but a single UI frame
+		// may ask for the same selection aggregate dozens of times through BP
+		// events/bindings. Invalidate once; the first read rebuilds and the rest
+		// share that exact latest-state snapshot.
+		SelectionModel->InvalidateAbilityCache();
 	}
 
 	// Refresh all entity ViewModels
@@ -201,10 +209,13 @@ void USeinUISubsystem::HandleSimTick(int32 Tick)
 		MinimapViewModel->Refresh();
 	}
 
-	// Periodically clean up stale entity ViewModels (every 30 ticks ~ 1 second)
-	if (Tick % 30 == 0)
+	// Crossing a 30-tick bucket is sufficient; inequality also handles snapshot
+	// restore/rewind, where the latest tick can move to an earlier bucket.
+	const int32 CleanupBucket = LatestTick / 30;
+	if (CleanupBucket != LastCleanupBucket)
 	{
 		CleanupStaleViewModels();
+		LastCleanupBucket = CleanupBucket;
 	}
 }
 

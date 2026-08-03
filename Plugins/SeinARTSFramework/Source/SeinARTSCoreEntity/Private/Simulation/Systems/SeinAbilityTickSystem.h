@@ -10,6 +10,7 @@
 #include "Core/SeinTickPhase.h"
 #include "Core/SeinSystemPriority.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "Simulation/ComponentStorage.h"
 #include "Components/SeinAbilityComponent.h"
 #include "Abilities/SeinAbility.h"
 
@@ -26,14 +27,28 @@ class FSeinAbilityTickSystem final : public ISeinSystem
 public:
 	virtual void Tick(FFixedPoint DeltaTime, USeinWorldSubsystem& World) override
 	{
-		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, const FSeinEntity& /*Entity*/)
+		const ISeinComponentStorage* Storage =
+			World.GetComponentStorageRaw(FSeinAbilityComponent::StaticStruct());
+		if (!Storage) return;
+
+		// Ability callbacks may alter component storage. Snapshot the sparse,
+		// ascending handle list, then reacquire each component before use.
+		AbilityHandles.Reset();
+		AbilityHandles.Reserve(Storage->GetComponentCount());
+		Storage->ForEachLiveComponent([this](
+			FSeinEntityHandle Handle, const void* /*RawComponent*/)
 		{
-			FSeinAbilityComponent* AbilityComp =
-				World.GetComponentMutable<FSeinAbilityComponent>(
+			AbilityHandles.Add(Handle);
+		});
+		for (const FSeinEntityHandle Handle : AbilityHandles)
+		{
+			if (!World.GetEntityPool().IsValid(Handle)) continue;
+			const FSeinAbilityComponent* AbilityComp =
+				World.GetComponent<FSeinAbilityComponent>(
 					Handle);
 			if (!AbilityComp)
 			{
-				return;
+				continue;
 			}
 
 			// Tick primary active ability.
@@ -43,8 +58,13 @@ public:
 				Active->TickAbility(DeltaTime);
 			}
 
-			// Tick all active passive abilities.
-			for (int32 ID : AbilityComp->ActivePassiveIDs)
+			// A primary callback can grow or alter component storage. Reacquire,
+			// then snapshot passive IDs so no callback leaves a stale array view.
+			AbilityComp = World.GetComponent<FSeinAbilityComponent>(Handle);
+			if (!AbilityComp) continue;
+			TArray<int32, TInlineAllocator<8>> PassiveIDs;
+			PassiveIDs.Append(AbilityComp->ActivePassiveIDs);
+			for (int32 ID : PassiveIDs)
 			{
 				if (USeinAbility* Passive = World.GetAbilityInstance(ID))
 				{
@@ -54,15 +74,18 @@ public:
 					}
 				}
 			}
-		});
+		}
 	}
 
 	virtual FSeinSystemDescriptor DescribeSystem() const override
 	{
 		return FSeinSystemDescriptor::Stateless(
 			FName(TEXT("seinarts.core.ability_tick")),
-			1u,
+			2u,
 			ESeinTickPhase::AbilityExecution,
 			SeinSystemPriority::AbilityTick);
 	}
+
+private:
+	TArray<FSeinEntityHandle> AbilityHandles;
 };

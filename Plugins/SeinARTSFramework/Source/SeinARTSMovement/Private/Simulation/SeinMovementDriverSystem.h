@@ -48,6 +48,7 @@
 #include "Core/SeinTickPhase.h"
 #include "Core/SeinSystemPriority.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "Simulation/ComponentStorage.h"
 #include "Core/SeinParallel.h"
 #include "SeinMovementSubsystem.h"
 #include "Movement/SeinMovement.h"
@@ -109,25 +110,36 @@ public:
 			FSeinEntity* Entity;
 			FSeinEntityHandle Handle;
 			FSeinMovementComponent* Move;
-			FSeinNavigationComponent* NavComp;
+			const FSeinNavigationComponent* NavComp;
 			USeinMovement* Movement;
+			FSeinEntity EntityBefore;
+			FFixedVector VelocityBefore;
+			FFixedPoint SmoothedPitchBefore;
+			FFixedPoint SmoothedRollBefore;
+			bool bInitialGroundSnapDoneBefore;
+			FFixedVector HomePosBefore;
+			bool bHomeSeededBefore;
+			bool bDeferredStateTracking;
 		};
 		TArray<FIdleUnit> NativeIdle;   // C++ movement class — parallel-safe
 		TArray<FIdleUnit> ScriptIdle;   // Blueprint movement class — serial only
 
 		FSeinEntityPool* Pool = World.GetEntityPoolMutable();
-		if (!Pool) return;
-		Pool->ForEachEntity([&](FSeinEntityHandle Handle, FSeinEntity& Entity)
+		ISeinComponentStorage* MoveStorage =
+			World.GetComponentStorageMutable(
+				FSeinMovementComponent::StaticStruct());
+		if (!Pool || !MoveStorage) return;
+		World.GetEntityPool().ForEachEntity([&](
+			FSeinEntityHandle Handle, const FSeinEntity& ReadEntity)
 		{
-			FSeinMovementComponent* Move =
-				World.GetComponentMutable<FSeinMovementComponent>(
-					Handle);
-			if (!Move) return;
+			const FSeinMovementComponent* ReadMove =
+				World.GetComponent<FSeinMovementComponent>(Handle);
+			if (!ReadMove) return;
 
 			// An active move order steered this entity this tick — the order
 			// owns the tick. (Set every USeinMoveToAction::TickAction; cleared
 			// on complete / cancel / fail via ResetTransientMoveState.)
-			if (Move->bHasTarget) return;
+			if (ReadMove->bHasTarget) return;
 
 			// Contained entities are posed by their container.
 			if (const FSeinContainmentMemberData* Containment =
@@ -136,13 +148,44 @@ public:
 				if (Containment->CurrentContainer.IsValid()) return;
 			}
 
-			USeinMovement* Movement = Sub->GetOrCreateMovementInstance(Handle, *Move);
+			USeinMovement* Movement =
+				Sub->GetOrCreateMovementInstance(Handle, *ReadMove);
 			if (!Movement) return;
+			// Blueprint movement classes may mutate their own reflected variables in
+			// BP_TickIdle, so conservatively invalidate their policy object. The
+			// shipped native classes all use USeinMovement's native idle implementation;
+			// its persistent state lives on Entity/MovementData, not reflected policy
+			// fields, so invalidating every native policy object here only forced a
+			// redundant UObject serialization on every root boundary.
+			const bool bScriptMovement = !Movement->GetClass()->IsNative();
+			const bool bDeferredStateTracking =
+				!bScriptMovement
+				&& Movement->SupportsExactIdleMutationTracking();
+			FSeinEntity* Entity = bDeferredStateTracking
+				? Pool->GetForDeferredMutation(Handle)
+				: World.GetEntityMutable(Handle);
+			FSeinMovementComponent* Move = bDeferredStateTracking
+				? static_cast<FSeinMovementComponent*>(
+					MoveStorage->GetComponentRawForDeferredMutation(Handle))
+				: World.GetComponentMutable<FSeinMovementComponent>(Handle);
+			if (!Entity || !Move) return;
+			if (!bDeferredStateTracking)
+			{
+				Sub->MarkMovementStateDirty(Handle);
+			}
 
-			const FIdleUnit Unit{ &Entity, Handle, Move,
-				World.GetComponentMutable<FSeinNavigationComponent>(Handle),
-				Movement };
-			(Movement->GetClass()->IsNative() ? NativeIdle : ScriptIdle).Add(Unit);
+			const FIdleUnit Unit{ Entity, Handle, Move,
+				World.GetComponent<FSeinNavigationComponent>(Handle),
+				Movement,
+				ReadEntity,
+				Move->Velocity,
+				Move->SmoothedPitch,
+				Move->SmoothedRoll,
+				Move->bInitialGroundSnapDone,
+				Move->HomePos,
+				Move->bHomeSeeded,
+				bDeferredStateTracking };
+			(bScriptMovement ? ScriptIdle : NativeIdle).Add(Unit);
 		});
 
 		// Tick one idle unit: builds the per-unit context (own WaypointIndex local
@@ -167,6 +210,30 @@ public:
 
 		// Native modes → parallel. Blueprint modes → serial (BP VM not thread-safe).
 		SeinParallelFor(NativeIdle.Num(), [&](int32 Index) { TickOneIdle(NativeIdle[Index]); });
+		for (const FIdleUnit& Unit : NativeIdle)
+		{
+			if (!Unit.bDeferredStateTracking) continue;
+			const bool bEntityChanged =
+				Unit.Entity->ID != Unit.EntityBefore.ID
+				|| Unit.Entity->Transform != Unit.EntityBefore.Transform
+				|| Unit.Entity->Flags != Unit.EntityBefore.Flags;
+			if (bEntityChanged)
+			{
+				Pool->CommitDeferredMutation(Unit.Handle);
+			}
+			const bool bMovementChanged =
+				Unit.Move->Velocity != Unit.VelocityBefore
+				|| Unit.Move->SmoothedPitch != Unit.SmoothedPitchBefore
+				|| Unit.Move->SmoothedRoll != Unit.SmoothedRollBefore
+				|| Unit.Move->bInitialGroundSnapDone
+					!= Unit.bInitialGroundSnapDoneBefore
+				|| Unit.Move->HomePos != Unit.HomePosBefore
+				|| Unit.Move->bHomeSeeded != Unit.bHomeSeededBefore;
+			if (bMovementChanged)
+			{
+				MoveStorage->CommitDeferredMutation(Unit.Handle);
+			}
+		}
 		for (const FIdleUnit& Unit : ScriptIdle) { TickOneIdle(Unit); }
 	}
 

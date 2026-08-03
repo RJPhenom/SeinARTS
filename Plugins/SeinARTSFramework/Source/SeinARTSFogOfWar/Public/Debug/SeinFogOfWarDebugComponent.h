@@ -14,9 +14,9 @@
  *          volume's resolved vision cell size so designers get immediate viz.
  *
  *          Subscribes to `USeinFogOfWar::OnFogOfWarMutated` — bake /
- *          substrate adoption / dynamic blocker change triggers
- *          `MarkRenderStateDirty`, forcing UE to rebuild the proxy with
- *          fresh cell data. Mirrors `USeinNavDebugComponent`'s behavior.
+ *          substrate adoption / dynamic blocker changes rebuild the proxy
+ *          only while at least one viewport displays the FogOfWar show flag.
+ *          Hidden debug visualization therefore has no recurring stamp cost.
  */
 
 #pragma once
@@ -44,7 +44,7 @@ protected:
 
 private:
 
-	/** Called whenever the active fog impl broadcasts OnFogOfWarMutated. */
+	/** Rebuild the proxy after a fog mutation only when it is visible. */
 	void HandleFogMutated();
 
 	/** In editor (pre-PIE) the world subsystem doesn't auto-load fog volume

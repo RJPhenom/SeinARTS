@@ -337,6 +337,7 @@ USeinFogOfWarDefault::LoadFromSubstrateImpl(
 	SourceStates.Empty();
 	DynamicBlockerSnapshots.Reset();
 	LastDynamicBlockerCells.Reset();
+	ResetRoutineRootCache();
 
 	// Dequantize. Runtime stores ABSOLUTE world Z for both (Ground = MinHeight
 	// + Q·steps; Blocker = Ground + Q·steps) so shadowcast's lampshade test is
@@ -422,6 +423,7 @@ void USeinFogOfWarDefault::InitGridFromVolumesImpl(UWorld* World)
 		DynamicBlockerSnapshots.Reset();
 		LastDynamicBlockerCells.Reset();
 		StaticGridDigest.Invalidate();
+		ResetRoutineRootCache();
 		OnFogOfWarMutated.Broadcast();
 		return;
 	}
@@ -482,6 +484,7 @@ void USeinFogOfWarDefault::InitGridFromVolumesImpl(UWorld* World)
 	SourceStates.Empty();
 	DynamicBlockerSnapshots.Reset();
 	LastDynamicBlockerCells.Reset();
+	ResetRoutineRootCache();
 
 	// Per-cell downward trace capped at InitTraceCellCap — no-bake fallback.
 	// Trace endpoints are runtime-only (the trace itself is non-deterministic
@@ -540,11 +543,16 @@ void USeinFogOfWarDefault::InitGridFromVolumesImpl(UWorld* World)
 
 FSeinFogVisionGroup& USeinFogOfWarDefault::GetOrCreateGroup(FSeinPlayerID PlayerID)
 {
+	const bool bWasPresent = VisionGroups.Contains(PlayerID);
 	FSeinFogVisionGroup& Group = VisionGroups.FindOrAdd(PlayerID);
 	const int32 NumCells = Width * Height;
 	if (Group.CellBitfield.Num() != NumCells)
 	{
 		Group.CellBitfield.SetNumZeroed(NumCells);
+	}
+	if (!bWasPresent)
+	{
+		MarkRoutineExploredCellDirty(PlayerID, INDEX_NONE);
 	}
 	return Group;
 }
@@ -591,6 +599,10 @@ void USeinFogOfWarDefault::TickStamps(UWorld* World)
 	// their discs into DynamicBlockerHeight + DynamicBlockerLayerMask here,
 	// so the vision passes below see the freshest occlusion state.
 	const bool bDynamicBlockersChanged = RebuildDynamicBlockers(World);
+	if (bDynamicBlockersChanged)
+	{
+		MarkRoutineDynamicBlockersDirty();
+	}
 
 	// If dynamic blockers changed, every source's LOS may have shifted —
 	// flip bValid=false on every source so the change-detection stable-
@@ -655,18 +667,19 @@ void USeinFogOfWarDefault::TickStamps(UWorld* World)
 	TArray<FSeinFogStampWork> WorkItems;
 	WorkItems.Reserve(SourceStates.Num());
 
-	Sim->GetEntityPool().ForEachEntity(
-		[this, Sim, Storage, &AliveSources, &WorkItems, TerrainNav, TerrainSettings](FSeinEntityHandle Handle, const FSeinEntity& Entity)
+	Storage->ForEachLiveComponent(
+		[this, Sim, &AliveSources, &WorkItems, TerrainNav, TerrainSettings](FSeinEntityHandle Handle, const void* Raw)
 		{
-			const void* Raw = Storage->GetComponentRaw(Handle);
-			if (!Raw) return;
+			if (!Sim->GetEntityPool().IsValid(Handle)) return;
+			const FSeinEntity* Entity = Sim->GetEntity(Handle);
+			if (!Entity || !Raw) return;
 			const FSeinVisionComponent* VData = static_cast<const FSeinVisionComponent*>(Raw);
 			if (!VData) return;
 
 			AliveSources.Add(Handle);
 			const FSeinPlayerID OwnerPlayer = Sim->GetEntityOwner(Handle);
-			const FFixedVector SourcePos = Entity.Transform.GetLocation();
-			const FFixedQuaternion SourceRot = Entity.Transform.Rotation;
+			const FFixedVector SourcePos = Entity->Transform.GetLocation();
+			const FFixedQuaternion SourceRot = Entity->Transform.Rotation;
 
 			// Terrain vision scale at the source's cell (1 = unchanged → unscaled fast path).
 			FFixedPoint VisMult = FFixedPoint::One;
@@ -803,7 +816,12 @@ void USeinFogOfWarDefault::TickStamps(UWorld* World)
 		// tick's diff. Bit 0 (Explored) is sticky and handled inside Increment.
 		for (uint8 Bit = 1; Bit <= 7; ++Bit)
 		{
-			ApplyFootprintDiff(NewGroup, Bit, State.Footprints[Bit], Work.GenScratch[Bit]);
+			ApplyFootprintDiff(
+				Work.Owner,
+				NewGroup,
+				Bit,
+				State.Footprints[Bit],
+				Work.GenScratch[Bit]);
 			State.Footprints[Bit] = MoveTemp(Work.GenScratch[Bit]);
 		}
 
@@ -814,6 +832,7 @@ void USeinFogOfWarDefault::TickStamps(UWorld* World)
 		State.Rotation  = Work.Rotation;
 		State.EyeHeight = Work.EyeHeight;
 		State.Stamps    = Work.Stamps;
+		MarkRoutineSourceDirty(Work.Handle);
 
 		// DIAGNOSTIC (2026-05-02 smoke-not-blocking regression): one line per
 		// source per re-stamp. EyeZ here is the same value passed to LOS — if
@@ -879,6 +898,7 @@ void USeinFogOfWarDefault::RemoveSourceStamp(FSeinEntityHandle Handle)
 	{
 		DecrementFootprintsForState(*State, *Group);
 	}
+	MarkRoutineSourceDirty(Handle);
 	SourceStates.Remove(Handle);
 }
 
@@ -940,6 +960,7 @@ void USeinFogOfWarDefault::GenerateLayerFootprintCells(
 }
 
 void USeinFogOfWarDefault::ApplyFootprintDiff(
+	FSeinPlayerID Observer,
 	FSeinFogVisionGroup& Group,
 	uint8 StampBit,
 	const TArray<int32>& OldSorted,
@@ -983,7 +1004,13 @@ void USeinFogOfWarDefault::ApplyFootprintDiff(
 		++Count;
 		if (Group.CellBitfield.IsValidIndex(CellIdx))
 		{
+			const bool bWasExplored =
+				(Group.CellBitfield[CellIdx] & SEIN_FOW_BIT_EXPLORED) != 0;
 			Group.CellBitfield[CellIdx] |= SEIN_FOW_BIT_EXPLORED;
+			if (!bWasExplored)
+			{
+				MarkRoutineExploredCellDirty(Observer, CellIdx);
+			}
 		}
 	};
 
@@ -1454,6 +1481,7 @@ void USeinFogOfWarDefault::UpdateSeenLatches(USeinWorldSubsystem& Sim)
 				if ((Bits & LiveMask) != 0)
 				{
 					Group.SeenEntities.Add(Handle);
+					MarkRoutineSeenEntityDirty(Pair.Key, Handle);
 				}
 			}
 		});

@@ -1,7 +1,7 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinSimulationContentEditorGuards.h
- * @brief   Reload-safe PIE and cook admission gates for generated content evidence.
+ * @brief   Opt-in PIE and mandatory cook admission gates for generated content evidence.
  */
 
 #pragma once
@@ -9,7 +9,7 @@
 #include "CoreMinimal.h"
 #include "IPIEAuthorizer.h"
 
-/** Registered as a private modular feature by FSeinARTSEditorModule. */
+/** Strict manifest freshness check, disabled by default for normal iteration. */
 class FSeinSimulationContentPIEAuthorizer final : public IPIEAuthorizer
 {
 public:

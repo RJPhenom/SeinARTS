@@ -24,4 +24,8 @@ class SEINARTSMOVEMENT_API USeinBasicUnitMovement : public USeinMovement
 
 public:
 	virtual FSeinMotion ComputeMotion_Implementation(USeinMoverHandle* Mover) override;
+	virtual bool SupportsExactIdleMutationTracking() const override
+	{
+		return GetClass() == StaticClass();
+	}
 };

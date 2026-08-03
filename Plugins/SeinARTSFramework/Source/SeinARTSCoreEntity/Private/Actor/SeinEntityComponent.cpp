@@ -19,6 +19,9 @@
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Events/SeinVisualEvent.h"
 #include "Types/Entity.h"
+#include "Components/PrimitiveComponent.h"
+#include "Components/SkinnedMeshComponent.h"
+#include "Components/SkeletalMeshComponent.h"
 
 #if WITH_EDITOR
 #include "Editor.h"                       // GEditor for viewport redraw
@@ -123,6 +126,9 @@ void USeinEntityComponent::BeginPlay()
 
 	// Cache subsystem reference early
 	GetSubsystem();
+	ApplyRayTracingGeometryPolicy();
+	ApplySkeletalMeshPerformancePolicy();
+	SetComponentTickEnabled(bSyncTransform);
 }
 
 void USeinEntityComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
@@ -346,9 +352,92 @@ bool USeinEntityComponent::HasValidEntity() const
 void USeinEntityComponent::SetTransformSyncEnabled(bool bEnable)
 {
 	bSyncTransform = bEnable;
+	SetComponentTickEnabled(bEnable);
 }
 
-void USeinEntityComponent::OnSimTick()
+void USeinEntityComponent::ApplyRayTracingGeometryPolicy()
+{
+	if (RayTracingGeometryPolicy == ESeinRayTracingGeometryPolicy::ComponentDefaults)
+	{
+		return;
+	}
+
+	AActor* Owner = GetOwner();
+	if (!Owner)
+	{
+		return;
+	}
+
+	TArray<UPrimitiveComponent*> PrimitiveComponents;
+	Owner->GetComponents<UPrimitiveComponent>(PrimitiveComponents);
+
+	for (UPrimitiveComponent* Primitive : PrimitiveComponents)
+	{
+		if (!Primitive)
+		{
+			continue;
+		}
+
+		const bool bExclude =
+			RayTracingGeometryPolicy == ESeinRayTracingGeometryPolicy::ExcludeAllPrimitives
+			|| Primitive->IsA<USkinnedMeshComponent>();
+		if (bExclude)
+		{
+			Primitive->SetVisibleInRayTracing(false);
+		}
+	}
+}
+
+void USeinEntityComponent::ApplySkeletalMeshPerformancePolicy()
+{
+	if (SkeletalMeshPerformancePolicy ==
+		ESeinSkeletalMeshPerformancePolicy::ComponentDefaults)
+	{
+		return;
+	}
+
+	AActor* Owner = GetOwner();
+	if (!Owner)
+	{
+		return;
+	}
+
+	TArray<USkeletalMeshComponent*> SkeletalMeshes;
+	Owner->GetComponents<USkeletalMeshComponent>(SkeletalMeshes);
+	for (USkeletalMeshComponent* SkeletalMesh : SkeletalMeshes)
+	{
+		if (!SkeletalMesh)
+		{
+			continue;
+		}
+
+		// URO chooses an evaluation cadence from visibility and screen size,
+		// interpolating skipped frames. The two skip flags avoid paying the
+		// expensive physics/bounds copies on those interpolation-only frames.
+		SkeletalMesh->bEnableUpdateRateOptimizations = true;
+		SkeletalMesh->bSkipKinematicUpdateWhenInterpolating = true;
+		SkeletalMesh->bSkipBoundsUpdateWhenInterpolating = true;
+
+		// Preserve montage timing when hidden (attacks/deaths may use montages),
+		// but do not evaluate the complete AnimBP graph or refresh bones until
+		// the mesh is rendered again.
+		SkeletalMesh->VisibilityBasedAnimTickOption =
+			EVisibilityBasedAnimTickOption::OnlyTickMontagesWhenNotRendered;
+
+		if (SkeletalMeshPerformancePolicy ==
+			ESeinSkeletalMeshPerformancePolicy::RTSVisualMesh)
+		{
+			// Gameplay collision lives in deterministic extents, not in an
+			// animated UE physics asset. Avoid copying every animated bone into
+			// Chaos and recomputing overlaps for purely visual unit meshes.
+			SkeletalMesh->KinematicBonesUpdateType =
+				EKinematicBonesUpdateToPhysics::SkipAllBones;
+			SkeletalMesh->bUpdateOverlapsOnAnimationFinalize = false;
+		}
+	}
+}
+
+void USeinEntityComponent::OnSimFrame(int32 TicksProcessed)
 {
 	USeinWorldSubsystem* Subsystem = GetSubsystem();
 	if (!Subsystem || !EntityHandle.IsValid())
@@ -362,9 +451,20 @@ void USeinEntityComponent::OnSimTick()
 		return;
 	}
 
-	// Shift current snapshot into previous, then capture new current
-	PreviousSimTransform = CurrentSimTransform;
-	CurrentSimTransform = Entity->Transform;
+	// The render interpolation alpha is the residual fraction of one fixed
+	// tick. Preserve normal adjacent snapshots for the common single-tick
+	// frame, but snap a coalesced catch-up pump instead of interpolating across
+	// several ticks with a one-tick alpha (which produces visual lag/smearing).
+	if (TicksProcessed > 1 || !bHasSimSnapshot)
+	{
+		PreviousSimTransform = Entity->Transform;
+		CurrentSimTransform = Entity->Transform;
+	}
+	else
+	{
+		PreviousSimTransform = CurrentSimTransform;
+		CurrentSimTransform = Entity->Transform;
+	}
 	bHasSimSnapshot = true;
 
 	UE_LOG(LogSeinBridge, Verbose,
@@ -503,6 +603,15 @@ void USeinEntityComponent::SyncTransformToActor()
 	{
 		// No interpolation: use the entity's current sim transform directly
 		TargetTransform = Entity->Transform.ToTransform();
+	}
+
+	// Idle entities produce the same fixed->float transform every frame. Avoid
+	// pushing an unchanged transform through UE: even a no-op SetActorTransform
+	// dirties component transforms/bounds and can cascade into skeletal render
+	// and ray-tracing update work for hundreds of RTS actors.
+	if (Owner->GetActorTransform().Equals(TargetTransform))
+	{
+		return;
 	}
 
 	Owner->SetActorTransform(TargetTransform);

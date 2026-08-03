@@ -238,6 +238,12 @@ struct FSeinNetSubsystemTestAccess
 		Net.TestDeterminismGossipEnabledOverride = bEnabled;
 		Net.TestDeterminismCheckIntervalOverride = Interval;
 	}
+	static void SetDeterminismGossipEnabledWithoutScheduleOverride(
+		USeinNetSubsystem& Net)
+	{
+		Net.TestDeterminismGossipEnabledOverride = true;
+		Net.TestDeterminismCheckIntervalOverride.Reset();
+	}
 	static void SetCurrentTurn(USeinNetSubsystem& Net, int32 Turn)
 	{
 		Net.TestCurrentTurnOverride = Turn;
@@ -986,6 +992,98 @@ namespace UE::SeinARTSTests
 			FSeinNetSubsystemTestAccess::PendingWorldRootCount(*Net)));
 		ASSERT_THAT(AreEqual(
 			10,
+			FSeinNetSubsystemTestAccess::LastWorldRootReported(*Net)));
+	}
+
+	TEST(SoleReporterSkipsRoutineWorldRootCapture,
+		"SeinARTS.Unit.Network.Protocol")
+	{
+		USeinNetSubsystem* Net =
+			FSeinNetSubsystemTestAccess::NewSubsystem();
+		ASSERT_THAT(IsNotNull(Net));
+		FSeinNetSubsystemTestAccess::SeedConfiguredProtocol(*Net, 1);
+		FSeinNetSubsystemTestAccess::SetNetworkingActive(*Net, true);
+		FSeinNetSubsystemTestAccess::
+			SetDeterminismGossipEnabledWithoutScheduleOverride(*Net);
+		FSeinNetSubsystemTestAccess::SetCurrentTurn(*Net, 10);
+		FSeinNetSubsystemTestAccess::SetLocalParticipant(
+			*Net, FSeinNetSubsystemTestAccess::Participant());
+
+		bool bRootCaptureAttempted = false;
+		FSeinNetSubsystemTestAccess::SetWorldRootResolver(
+			*Net,
+			[&bRootCaptureAttempted](FGuid& OutRoot, FString&)
+			{
+				bRootCaptureAttempted = true;
+				OutRoot = FGuid(1, 2, 3, 4);
+				return true;
+			});
+		bool bTransportAttempted = false;
+		FSeinNetSubsystemTestAccess::SetWorldRootTransport(
+			*Net,
+			[&bTransportAttempted](int32, const FGuid&)
+			{
+				bTransportAttempted = true;
+				return true;
+			});
+
+		FSeinNetSubsystemTestAccess::MaybeSubmitWorldRoot(*Net, 10);
+
+		ASSERT_THAT(IsFalse(bRootCaptureAttempted));
+		ASSERT_THAT(IsFalse(bTransportAttempted));
+		ASSERT_THAT(AreEqual(
+			0,
+			FSeinNetSubsystemTestAccess::PendingWorldRootCount(*Net)));
+		ASSERT_THAT(AreEqual(
+			-1,
+			FSeinNetSubsystemTestAccess::LastWorldRootReported(*Net)));
+	}
+
+	TEST(ClientManifestPeerSubmitsWithoutCoordinatorRelayMap,
+		"SeinARTS.Unit.Network.Protocol")
+	{
+		USeinNetSubsystem* Net =
+			FSeinNetSubsystemTestAccess::NewSubsystem();
+		ASSERT_THAT(IsNotNull(Net));
+		// Client-shaped state: the frozen manifest contains both simulation
+		// participants, while the coordinator-only RelayToParticipant map is
+		// intentionally empty.
+		FSeinNetSubsystemTestAccess::SeedConfiguredProtocol(*Net, 2);
+		FSeinNetSubsystemTestAccess::SetNetworkingActive(*Net, true);
+		FSeinNetSubsystemTestAccess::
+			SetDeterminismGossipEnabledWithoutScheduleOverride(*Net);
+		FSeinNetSubsystemTestAccess::SetCurrentTurn(*Net, 30);
+		FSeinNetSubsystemTestAccess::SetLocalParticipant(
+			*Net, FSeinNetSubsystemTestAccess::Participant(2));
+
+		bool bRootCaptureAttempted = false;
+		const FGuid CapturedRoot(9, 8, 7, 6);
+		FSeinNetSubsystemTestAccess::SetWorldRootResolver(
+			*Net,
+			[&](FGuid& OutRoot, FString&)
+			{
+				bRootCaptureAttempted = true;
+				OutRoot = CapturedRoot;
+				return true;
+			});
+		int32 SentTurn = INDEX_NONE;
+		FGuid SentRoot;
+		FSeinNetSubsystemTestAccess::SetWorldRootTransport(
+			*Net,
+			[&](int32 Turn, const FGuid& WorldRoot)
+			{
+				SentTurn = Turn;
+				SentRoot = WorldRoot;
+				return true;
+			});
+
+		FSeinNetSubsystemTestAccess::MaybeSubmitWorldRoot(*Net, 30);
+
+		ASSERT_THAT(IsTrue(bRootCaptureAttempted));
+		ASSERT_THAT(AreEqual(30, SentTurn));
+		ASSERT_THAT(IsTrue(SentRoot == CapturedRoot));
+		ASSERT_THAT(AreEqual(
+			30,
 			FSeinNetSubsystemTestAccess::LastWorldRootReported(*Net)));
 	}
 

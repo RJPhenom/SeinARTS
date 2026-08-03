@@ -2,16 +2,16 @@
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinFogOfWarVisibilitySubsystem.h
  * @brief   Render-side actor visibility toggle driven by fog stamp state.
- *          Walks the actor bridge's entity-to-actor map each render frame,
+ *          Walks bridged actors only when fog, observer, actor membership, or
+ *          simulation state changes,
  *          queries the local PC's VisionGroup for each entity's cell, and
  *          calls SetActorHiddenInGame + SetActorEnableCollision based on
  *          the result. Owned-by-observer actors are always visible — unit
  *          owners see their own units regardless of fog.
  *
- *          This is the "higher-tickrate responsiveness" path the original
- *          system used: stamp compute runs at sim-tick cadence (~10 Hz)
- *          with the stamp engine, while this subsystem polls those stamps
- *          at render-tick cadence (~60 Hz) and reacts by toggling actors.
+ *          Stamp compute and simulation-frame notifications dirty this
+ *          presentation cache. Render-only frames do not repeat the O(N)
+ *          actor visibility walk, and catch-up ticks are coalesced.
  *          Non-deterministic cadence is fine because the POLL READS are
  *          deterministic per tick — every client sees the same entity
  *          appear/disappear at the same sim tick, just with wall-clock
@@ -22,6 +22,8 @@
 
 #include "CoreMinimal.h"
 #include "Subsystems/WorldSubsystem.h"
+#include "Core/SeinPlayerID.h"
+#include "Core/SeinEntityHandle.h"
 #include "SeinFogOfWarVisibilitySubsystem.generated.h"
 
 UCLASS()
@@ -54,6 +56,9 @@ public:
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 
+	/** Sever cross-module callbacks before the FogOfWar DLL unloads. */
+	void ReleaseModuleOwnedStateForModuleUnload();
+
 	// ========== UTickableWorldSubsystem ==========
 
 	virtual void Tick(float DeltaTime) override;
@@ -63,4 +68,19 @@ public:
 private:
 
 	float TimeSinceLastPoll = 0.f;
+	FSeinPlayerID CachedObserver;
+	bool bObserverResolved = false;
+	bool bVisibilityDirty = true;
+	TWeakObjectPtr<class USeinFogOfWar> SubscribedFog;
+	FDelegateHandle FogMutatedHandle;
+	TWeakObjectPtr<class USeinActorBridgeSubsystem> SubscribedBridge;
+	FDelegateHandle ActorRegisteredHandle;
+	TWeakObjectPtr<class USeinWorldSubsystem> SubscribedSim;
+	FDelegateHandle SimFrameHandle;
+	bool bModuleStateReleased = false;
+
+	void ReleaseSubscriptions();
+	void HandleFogMutated();
+	void HandleActorRegistered(FSeinEntityHandle Handle);
+	void HandleSimFrame(int32 LatestTick, int32 TicksProcessed);
 };

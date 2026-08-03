@@ -171,6 +171,7 @@ void FSeinEntityPool::Initialize(int32 InitialCapacity)
 	Generations.SetNum(TotalSlots);
 	OwnerPlayerIDs.SetNum(TotalSlots);
 	RetiredSlots.Init(0, TotalSlots);
+	SlotMutationRevisions.Init(0, TotalSlots);
 	FreeList.Empty(InitialCapacity);
 
 	// Zero out generations
@@ -192,6 +193,7 @@ void FSeinEntityPool::Initialize(int32 InitialCapacity)
 
 	ActiveCount = 0;
 	Capacity = InitialCapacity;
+	BumpTopologyRevision();
 }
 
 FSeinEntityHandle FSeinEntityPool::Acquire(
@@ -236,6 +238,8 @@ FSeinEntityHandle FSeinEntityPool::Acquire(
 	RetiredSlots[SlotIndex] = 0;
 	OwnerPlayerIDs[SlotIndex] = OwnerID;
 	ActiveCount++;
+	TouchSlot(SlotIndex);
+	BumpTopologyRevision();
 
 	UE_LOG(LogTemp, Verbose, TEXT("EntityPool: Acquired slot %d gen %d (active: %d)"),
 		SlotIndex, Gen, ActiveCount);
@@ -289,6 +293,8 @@ void FSeinEntityPool::Release(FSeinEntityHandle Handle)
 			Handle.Index);
 	}
 	ActiveCount--;
+	TouchSlot(Handle.Index);
+	BumpTopologyRevision();
 
 	UE_LOG(LogTemp, Verbose, TEXT("EntityPool: Released slot %d (active: %d)"),
 		Handle.Index, ActiveCount);
@@ -303,7 +309,30 @@ FSeinEntity* FSeinEntityPool::Get(FSeinEntityHandle Handle)
 	{
 		return nullptr;
 	}
+	TouchSlot(Handle.Index);
 	return &Entities[Handle.Index];
+}
+
+FSeinEntity* FSeinEntityPool::GetForDeferredMutation(
+	FSeinEntityHandle Handle)
+{
+	if (!Handle.IsValid()
+		|| !Entities.IsValidIndex(Handle.Index)
+		|| Generations[Handle.Index] != Handle.Generation
+		|| !Entities[Handle.Index].IsAlive())
+	{
+		return nullptr;
+	}
+	return &Entities[Handle.Index];
+}
+
+void FSeinEntityPool::CommitDeferredMutation(
+	FSeinEntityHandle Handle)
+{
+	if (IsValid(Handle))
+	{
+		TouchSlot(Handle.Index);
+	}
 }
 
 const FSeinEntity* FSeinEntityPool::Get(FSeinEntityHandle Handle) const
@@ -324,6 +353,15 @@ bool FSeinEntityPool::IsValid(FSeinEntityHandle Handle) const
 		&& Entities.IsValidIndex(Handle.Index)
 		&& Generations[Handle.Index] == Handle.Generation
 		&& Entities[Handle.Index].IsAlive();
+}
+
+uint64 FSeinEntityPool::GetMutationRevision(
+	FSeinEntityHandle Handle) const
+{
+	return IsValid(Handle)
+		&& SlotMutationRevisions.IsValidIndex(Handle.Index)
+			? SlotMutationRevisions[Handle.Index]
+			: 0;
 }
 
 bool FSeinEntityPool::IsDeferredDestroyTombstone(
@@ -376,6 +414,8 @@ void FSeinEntityPool::ReleaseDeferredDestroy(FSeinEntityHandle Handle)
 			Handle.Index);
 	}
 	ActiveCount--;
+	TouchSlot(Handle.Index);
+	BumpTopologyRevision();
 }
 
 FSeinPlayerID FSeinEntityPool::GetOwner(FSeinEntityHandle Handle) const
@@ -395,6 +435,7 @@ void FSeinEntityPool::SetOwner(FSeinEntityHandle Handle, FSeinPlayerID NewOwner)
 		return;
 	}
 	OwnerPlayerIDs[Handle.Index] = NewOwner;
+	TouchSlot(Handle.Index);
 }
 
 void FSeinEntityPool::Reset()
@@ -403,9 +444,11 @@ void FSeinEntityPool::Reset()
 	Generations.Empty();
 	OwnerPlayerIDs.Empty();
 	RetiredSlots.Empty();
+	SlotMutationRevisions.Empty();
 	FreeList.Empty();
 	ActiveCount = 0;
 	Capacity = 0;
+	BumpTopologyRevision();
 }
 
 bool FSeinEntityPool::CaptureExactState(
@@ -508,6 +551,7 @@ bool FSeinEntityPool::TryStageExactState(
 	Staged.Generations.SetNum(State.Slots.Num());
 	Staged.OwnerPlayerIDs.SetNum(State.Slots.Num());
 	Staged.RetiredSlots.SetNum(State.Slots.Num());
+	Staged.SlotMutationRevisions.SetNum(State.Slots.Num());
 	for (int32 SlotIndex = 0; SlotIndex < State.Slots.Num(); ++SlotIndex)
 	{
 		const FSeinEntityPoolSlotState& Slot = State.Slots[SlotIndex];
@@ -515,8 +559,10 @@ bool FSeinEntityPool::TryStageExactState(
 		Staged.Generations[SlotIndex] = Slot.Generation;
 		Staged.OwnerPlayerIDs[SlotIndex] = Slot.Owner;
 		Staged.RetiredSlots[SlotIndex] = Slot.bRetired ? 1 : 0;
+		Staged.TouchSlot(SlotIndex);
 	}
 	Staged.FreeList = State.FreeList;
+	Staged.BumpTopologyRevision();
 
 	*this = MoveTemp(Staged);
 	OutError.Reset();
@@ -613,6 +659,7 @@ void FSeinEntityPool::Grow(int32 MinCapacity)
 	Generations.SetNum(NewTotalSlots);
 	OwnerPlayerIDs.SetNum(NewTotalSlots);
 	RetiredSlots.SetNum(NewTotalSlots);
+	SlotMutationRevisions.SetNumZeroed(NewTotalSlots);
 
 	// Reset leaves no arrays. Re-establish the permanently invalid sentinel
 	// before exposing newly grown slots to Acquire.
@@ -638,6 +685,30 @@ void FSeinEntityPool::Grow(int32 MinCapacity)
 	}
 
 	Capacity = MinCapacity;
+	BumpTopologyRevision();
 
 	UE_LOG(LogTemp, Log, TEXT("EntityPool: Grew from %d to %d slots"), OldTotalSlots, NewTotalSlots);
+}
+
+void FSeinEntityPool::TouchSlot(int32 SlotIndex)
+{
+	if (!SlotMutationRevisions.IsValidIndex(SlotIndex))
+	{
+		return;
+	}
+	++MutationRevisionCounter;
+	if (MutationRevisionCounter == 0)
+	{
+		++MutationRevisionCounter;
+	}
+	SlotMutationRevisions[SlotIndex] = MutationRevisionCounter;
+}
+
+void FSeinEntityPool::BumpTopologyRevision()
+{
+	++TopologyRevision;
+	if (TopologyRevision == 0)
+	{
+		++TopologyRevision;
+	}
 }

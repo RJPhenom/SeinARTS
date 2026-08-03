@@ -46,6 +46,11 @@ public:
 
 	/** Activation generation captured when this action entered manager order. */
 	int64 GetAbilityActivationID() const { return AbilityActivationID; }
+	/** Process-local write evidence for the incremental checkpoint digest. */
+	uint64 GetCanonicalMutationRevision() const
+	{
+		return CanonicalMutationRevision;
+	}
 
 	/**
 	 * Called each sim tick while the action is active.
@@ -77,6 +82,7 @@ public:
 private:
 	int64 ActionID = 0;
 	int64 AbilityActivationID = 0;
+	uint64 CanonicalMutationRevision = 0;
 
 	friend class USeinLatentActionManager;
 	friend class FSeinLatentActionRestorePlan;

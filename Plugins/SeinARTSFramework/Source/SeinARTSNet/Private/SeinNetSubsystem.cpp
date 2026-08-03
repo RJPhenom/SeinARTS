@@ -753,7 +753,19 @@ void USeinNetSubsystem::ExpireIncompleteWorldStateRootCheckpointsThrough(
 
 	TArray<FSeinNetworkParticipantID> ExpectedParticipants;
 	GetExpectedWorldRootReporterParticipants(ExpectedParticipants);
-	if (ExpectedParticipants.IsEmpty()) return;
+	// A root has value only as a peer comparison. Capturing and reporting it
+	// for a sole reporter performs the complete stop-the-world audit without
+	// any possibility of detecting divergence.
+	bool bForceSingleReporterObligationForTests = false;
+#if WITH_DEV_AUTOMATION_TESTS
+	bForceSingleReporterObligationForTests =
+		TestDeterminismCheckIntervalOverride.IsSet();
+#endif
+	if (ExpectedParticipants.Num() <= 1
+		&& !bForceSingleReporterObligationForTests)
+	{
+		return;
+	}
 
 	const int32 Interval = GetDeterminismCheckIntervalTurns();
 	if (Interval <= 0) return;
@@ -997,6 +1009,19 @@ void USeinNetSubsystem::GetExpectedWorldRootReporterParticipants(
 	{
 		return A.ToCanonicalString() < B.ToCanonicalString();
 	});
+}
+
+bool USeinNetSubsystem::HasComparableWorldRootPeerInManifest() const
+{
+	int32 ReporterCount = 0;
+	for (const FSeinParticipantBinding& Binding : ParticipantBindings)
+	{
+		if (Binding.bReportsWorldRoots && ++ReporterCount > 1)
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 bool USeinNetSubsystem::AreExpectedWorldRootReportsComplete(
@@ -3840,6 +3865,34 @@ void USeinNetSubsystem::TryLaunchLocalBootstrap()
 			TEXT("Replay recording stopped because its mandatory tick-zero checkpoint could not be captured; the match will continue."));
 	}
 
+	// Prime the incremental world-root cache at the already-quiescent tick-zero
+	// launch boundary. This moves the one unavoidable full cache construction
+	// into match startup (beside the mandatory replay checkpoint) rather than
+	// letting the first three-second gossip checkpoint become an in-play hitch.
+	// Later checkpoints update only leaves mutated since the preceding report.
+	if (IsDeterminismGossipEnabled()
+		&& LocalParticipantID.IsValid()
+		&& GetDeterminismCheckIntervalTurns() > 0
+		&& HasComparableWorldRootPeerInManifest())
+	{
+		FGuid PrimedRoot;
+		FString PrimeError;
+		if (!WorldSub->SealRoutineCanonicalStateRoot(
+				WorldSub->GetCurrentTick(),
+				/*bForceFullRebuild=*/false,
+				PrimedRoot,
+				PrimeError))
+		{
+			UE_LOG(
+				LogSeinNet,
+				Warning,
+				TEXT("Tick-zero routine world-root cache priming was deferred: %s"),
+				PrimeError.IsEmpty()
+					? TEXT("canonical root unavailable")
+					: *PrimeError);
+		}
+	}
+
 	PendingBootstrapLaunchContext.Reset();
 	PendingBootstrapLaunchReceipt.Reset();
 	bLocalBootstrapIngressClosed = true;
@@ -4695,18 +4748,64 @@ void USeinNetSubsystem::OnSimTickCompleted(int32 CompletedTick)
 		ReplayWriter->ObserveCompletedTick(CompletedTick);
 	}
 	if (!IsNetworkingActive()) return;
-
 	const int32 TicksPerTurn = GetTicksPerTurn();
 	const int32 NextTick = CompletedTick + 1;
+	const bool bCompletedTurnBoundary =
+		TicksPerTurn > 0 && NextTick % TicksPerTurn == 0;
 
 	// Fire only on turn boundaries — i.e., the tick we just completed was the
 	// last tick of a turn (so the next tick starts a new turn).
-	if (NextTick % TicksPerTurn != 0) return;
+	if (!bCompletedTurnBoundary) return;
 
 	// Compute outgoing turn: commands accumulated during the turn we just
 	// finished apply at `current_turn + InputDelay`. Idempotent guard against
 	// multiple OnSimTickCompleted fires within the same boundary.
 	const int32 JustFinishedTurn = CompletedTick / TicksPerTurn;
+
+	// Routine gossip asks for an exact root only at its configured checkpoint
+	// cadence (30 turns / 3 seconds by default). The incremental cache already
+	// coalesces every mutation since the preceding checkpoint into the exact
+	// latest leaf value, so sealing the same dirty leaves after every intervening
+	// turn multiplied reflection and tree-update work without adding evidence.
+	//
+	// Reporter eligibility comes from the frozen participant manifest. A client
+	// does not own the coordinator's complete RelayToParticipant lifecycle map;
+	// consulting that server-only view here made clients incorrectly skip every
+	// checkpoint and eventually triggered an "expired incomplete" session stop.
+	bool bMaintainRoutineRootForTests = false;
+#if WITH_DEV_AUTOMATION_TESTS
+	bMaintainRoutineRootForTests =
+		TestDeterminismCheckIntervalOverride.IsSet();
+#endif
+	if (IsDeterminismGossipEnabled()
+		&& LocalParticipantID.IsValid()
+		&& IsDueWorldStateRootCheckpoint(JustFinishedTurn)
+		&& (HasComparableWorldRootPeerInManifest()
+			|| bMaintainRoutineRootForTests))
+	{
+		UWorld* World = GetWorld();
+		USeinWorldSubsystem* WorldSub = World
+			? World->GetSubsystem<USeinWorldSubsystem>()
+			: nullptr;
+		FGuid MaintainedRoot;
+		FString MaintenanceError;
+		if (!WorldSub
+			|| !WorldSub->SealRoutineCanonicalStateRoot(
+				CompletedTick,
+				/*bForceFullRebuild=*/false,
+				MaintainedRoot,
+				MaintenanceError))
+		{
+			UE_LOG(
+				LogSeinNet,
+				VeryVerbose,
+				TEXT("Routine world-root maintenance unavailable at tick %d: %s"),
+				CompletedTick,
+				MaintenanceError.IsEmpty()
+					? TEXT("no simulation subsystem")
+					: *MaintenanceError);
+		}
+	}
 	ApplyDueAuthenticatedDeterminismSessionFailuresThrough(
 		JustFinishedTurn);
 	if (DeterminismSessionFailure.IsValid()) return;
@@ -7389,11 +7488,30 @@ bool USeinNetSubsystem::ResolveLocalWorldStateRoot(
 
 	FGuid Candidate;
 	FString CandidateError;
-	if (!WorldSub->ComputeCanonicalStateRoot(Candidate, CandidateError)
-		|| !Candidate.IsValid())
+	const int32 CompletedTick = WorldSub->GetCurrentTick();
+	if (!WorldSub->GetSealedRoutineCanonicalStateRoot(
+			CompletedTick, Candidate, CandidateError))
+	{
+		// Pause-control and bootstrap paths may request a root outside the ordinary
+		// completed-tick observer. They are rare; seal the same incremental root
+		// lazily, never fall back to the full snapshot serializer.
+		CandidateError.Reset();
+		if (!WorldSub->SealRoutineCanonicalStateRoot(
+				CompletedTick,
+				/*bForceFullRebuild=*/false,
+				Candidate,
+				CandidateError))
+		{
+			OutError = CandidateError.IsEmpty()
+				? TEXT("Core returned no valid routine canonical world-state root.")
+				: MoveTemp(CandidateError);
+			return false;
+		}
+	}
+	if (!Candidate.IsValid())
 	{
 		OutError = CandidateError.IsEmpty()
-			? TEXT("Core returned no valid canonical world-state root.")
+			? TEXT("Core returned no valid routine canonical world-state root.")
 			: MoveTemp(CandidateError);
 		return false;
 	}
@@ -7408,9 +7526,19 @@ void USeinNetSubsystem::MaybeSubmitWorldStateRootCheck(int32 JustFinishedTurn)
 	if (!IsNetworkingActive()) return;
 	if (!LocalParticipantID.IsValid()) return;
 	if (DeterminismSessionFailure.IsValid()) return;
-
 	const int32 Interval = GetDeterminismCheckIntervalTurns();
 	if (Interval <= 0) return;
+
+	bool bForceSingleReporterObligationForTests = false;
+#if WITH_DEV_AUTOMATION_TESTS
+	bForceSingleReporterObligationForTests =
+		TestDeterminismCheckIntervalOverride.IsSet();
+#endif
+	if (!HasComparableWorldRootPeerInManifest()
+		&& !bForceSingleReporterObligationForTests)
+	{
+		return;
+	}
 
 	// Cadence: every N turns, starting at turn 0 (which is grace anyway, so
 	// no real check fires for it; first real check is turn `Interval`).
@@ -8302,12 +8430,12 @@ void USeinNetSubsystem::ServerCompareWorldStateRootsForTurn(int32 Turn)
 
 	if (bAllAgree)
 	{
-		// Most check-turns are silent (Verbose). Promote every 5th to Log
-		// level so the user has periodic visible confirmation that gossip
-		// is working without spam — also serves as the "all green" signal
-		// during long matches.
+		// Most check-turns are silent (Verbose). Promote the first successful
+		// comparison and every 5th thereafter so a short validation run proves
+		// both reporters reached the coordinator without spamming long matches.
 		const int32 Interval = GetDeterminismCheckIntervalTurns();
-		const bool bPeriodicConfirm = (Interval > 0) && ((Turn / Interval) % 5 == 0);
+		const bool bPeriodicConfirm = CompletedWorldStateRootChecks.IsEmpty()
+			|| ((Interval > 0) && ((Turn / Interval) % 5 == 0));
 		if (bPeriodicConfirm)
 		{
 			UE_LOG(LogSeinNet, Log,

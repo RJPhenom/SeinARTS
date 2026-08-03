@@ -6,6 +6,7 @@
 #include "Serialization/SeinFogOfWarCanonicalStateProvider.h"
 
 #include "Serialization/SeinFogOfWarCanonicalState.h"
+#include "Serialization/SeinCanonicalInitialStateDigest.h"
 #include "SeinFogOfWar.h"
 #include "SeinFogOfWarSubsystem.h"
 #include "Simulation/SeinWorldSubsystem.h"
@@ -244,6 +245,123 @@ struct FSeinFogOfWarCanonicalStateProvider
 				<= Claim.Descriptor.Limits.MaxEncodedBytes;
 	}
 
+	static bool CaptureRoutineRoot(
+		const FSeinCanonicalStateCaptureContext& Context,
+		bool bForceFullRebuild,
+		FSeinCanonicalStateRoutineRootRecord& OutRecord,
+		FString& OutError)
+	{
+		OutRecord = {};
+		USeinFogOfWarSubsystem* Subsystem =
+			ResolveSubsystem(Context.World);
+		if (!Subsystem)
+		{
+			OutError =
+				TEXT("Fog routine root could not resolve its world subsystem.");
+			return false;
+		}
+
+		FString BindingFrame;
+		FGuid StaticEnvironmentDigest;
+		if (!Subsystem->FreezeCanonicalStateBinding(
+			false,
+			BindingFrame,
+			StaticEnvironmentDigest,
+			OutError))
+		{
+			return false;
+		}
+
+		FSeinCanonicalDigestWriter Writer(
+			TEXT("SeinARTS.Fog.Routine.Contributor"), 1);
+		if (!Writer.WriteGuid(StaticEnvironmentDigest)
+			|| !Writer.WriteBool(Subsystem->bFogConfigured))
+		{
+			OutError = Writer.GetError();
+			return false;
+		}
+		if (!Subsystem->bFogConfigured)
+		{
+			if (!Writer.WriteString(DisabledClassPath)
+				|| !Writer.WriteString(DisabledImplementationId)
+				|| !Writer.Finalize(OutRecord.LeafDigest, OutError))
+			{
+				return false;
+			}
+			OutRecord.ProjectedPayloadBytes = 2 * sizeof(FGuid);
+			return true;
+		}
+
+		USeinFogOfWar* Fog = Subsystem->FogOfWar;
+		FSeinFogOfWarStateCodecRegistry::FResolvedClaim Claim;
+		if (!Fog
+			|| Subsystem->StateCodecToken == 0
+			|| !FSeinFogOfWarStateCodecRegistry::ResolveForClass(
+				Subsystem->StateCodecToken,
+				Fog->GetClass(),
+				Claim,
+				OutError))
+		{
+			if (OutError.IsEmpty())
+			{
+				OutError =
+					TEXT("Configured fog implementation lost its exact codec binding.");
+			}
+			return false;
+		}
+
+		FGuid CurrentStaticDigest;
+		if (!FSeinFogOfWarStateCodecRegistry::ComputeStaticEnvironmentDigest(
+				Subsystem->StateCodecToken,
+				*Fog,
+				CurrentStaticDigest,
+				OutError)
+			|| CurrentStaticDigest != StaticEnvironmentDigest)
+		{
+			if (OutError.IsEmpty())
+			{
+				OutError =
+					TEXT("Fog static environment no longer matches the frozen StateContract.");
+			}
+			return false;
+		}
+
+		FGuid PayloadDigest;
+		uint64 ProjectedBytes = 0;
+		uint64 MutationRevision = 0;
+		if (!FSeinFogOfWarStateCodecRegistry::CaptureRoutineRoot(
+			Subsystem->StateCodecToken,
+			{ Context.World, *Fog, Context.Tick },
+			bForceFullRebuild,
+			PayloadDigest,
+			ProjectedBytes,
+			MutationRevision,
+			OutError))
+		{
+			return false;
+		}
+
+		if (!Writer.WriteString(Fog->GetClass()->GetPathName())
+			|| !Writer.WriteString(Claim.Descriptor.StableImplementationId)
+			|| !Writer.WriteUInt32(Claim.Descriptor.StateSchemaVersion)
+			|| !Writer.WriteUInt32(Claim.Descriptor.BehaviorRevision)
+			|| !Writer.WriteUInt32(Claim.Descriptor.CodecRevision)
+			|| !Writer.WriteGuid(Claim.Descriptor.PayloadSchemaDigest)
+			|| !Writer.WriteGuid(Claim.CodecDescriptorDigest)
+			|| !Writer.WriteInt32(Claim.Descriptor.Limits.MaxRecursionDepth)
+			|| !Writer.WriteInt32(Claim.Descriptor.Limits.MaxEncodedBytes)
+			|| !Writer.WriteInt32(Claim.Descriptor.Limits.MaxAggregateElements)
+			|| !Writer.WriteGuid(PayloadDigest)
+			|| !Writer.Finalize(OutRecord.LeafDigest, OutError))
+		{
+			return false;
+		}
+		OutRecord.ProjectedPayloadBytes =
+			ProjectedBytes + 8 * sizeof(FGuid);
+		OutRecord.MutationRevision = MutationRevision;
+		return true;
+	}
+
 	static bool StageRestore(
 		const FSeinCanonicalStateStageContext& Context,
 		const FInstancedStruct& State,
@@ -466,7 +584,7 @@ SeinRegisterFogOfWarCanonicalStateProvider(FString& OutError)
 	Descriptor.Key.StableContributorId =
 		TEXT("canonical-state");
 	Descriptor.SchemaVersion = 1;
-	Descriptor.ImplementationRevision = 1;
+	Descriptor.ImplementationRevision = 2;
 	Descriptor.Role = ESeinCanonicalStateRole::Authoritative;
 	Descriptor.PayloadStruct =
 		FSeinFogOfWarCanonicalStateEnvelope::StaticStruct();
@@ -487,6 +605,8 @@ SeinRegisterFogOfWarCanonicalStateProvider(FString& OutError)
 			FreezeWorldBinding;
 	Ops.Capture =
 		&FSeinFogOfWarCanonicalStateProvider::Capture;
+	Ops.CaptureRoutineRoot =
+		&FSeinFogOfWarCanonicalStateProvider::CaptureRoutineRoot;
 	Ops.StageRestore =
 		&FSeinFogOfWarCanonicalStateProvider::StageRestore;
 	Ops.CommitRestore =

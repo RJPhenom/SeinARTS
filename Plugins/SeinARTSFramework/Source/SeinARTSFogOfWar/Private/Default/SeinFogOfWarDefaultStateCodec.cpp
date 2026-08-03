@@ -7,11 +7,41 @@
 
 #include "Default/SeinFogOfWarDefault.h"
 #include "Default/SeinFogOfWarDefaultCanonicalState.h"
+#include "Serialization/SeinCanonicalDigestTree.h"
 #include "Serialization/SeinCanonicalInitialStateDigest.h"
+#include "Serialization/SeinCanonicalReflectedStateDigest.h"
 #include "Serialization/SeinCanonicalStateCodec.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Hash/Blake3.h"
 #include "UObject/Package.h"
+
+struct FSeinFogOfWarDefaultRoutineRootCache
+{
+	struct FObserverCache
+	{
+		FSeinCanonicalDigestTree ExploredCells;
+		FSeinCanonicalDigestTree SeenEntities;
+		FGuid Digest;
+	};
+
+	FSeinCanonicalDigestTree Observers;
+	FSeinCanonicalDigestTree Sources;
+	FSeinCanonicalDigestTree DynamicBlockers;
+	TMap<FSeinPlayerID, FObserverCache> ObserverCaches;
+	TMap<FSeinPlayerID, TSet<int32>> DirtyExploredCells;
+	TMap<FSeinPlayerID, TSet<FSeinEntityHandle>> DirtySeenEntities;
+	TSet<FSeinEntityHandle> DirtySources;
+	FGuid ExploredCellDigest;
+	FGuid SourceSchemaDigest;
+	FGuid DynamicBlockerSchemaDigest;
+	FGuid PayloadDigest;
+	int32 NumCells = INDEX_NONE;
+	int32 EntitySlotCount = INDEX_NONE;
+	int32 DynamicBlockerCount = INDEX_NONE;
+	uint64 EntityTopologyRevision = 0;
+	uint64 MutationRevision = 1;
+	bool bDynamicBlockersDirty = true;
+};
 
 namespace
 {
@@ -143,6 +173,96 @@ namespace
 		}
 		return true;
 	}
+
+	void AdvanceRevision(uint64& Revision)
+	{
+		Revision = Revision == MAX_uint64 ? 1 : Revision + 1;
+	}
+
+	FSeinCanonicalReflectedStateLimits RoutineReflectedLimits()
+	{
+		FSeinCanonicalReflectedStateLimits Limits;
+		Limits.MaxAggregateElements = 64 * 1024;
+		Limits.MaxStringCharacters = 16 * 1024;
+		Limits.MaxTotalStringCharacters = 64 * 1024;
+		Limits.MaxRecursionDepth = 32;
+		Limits.MaxInstancedObjects = 0;
+		return Limits;
+	}
+
+	bool ComputeSeenEntityDigest(
+		FSeinEntityHandle Handle,
+		FGuid& OutDigest,
+		FString& OutError)
+	{
+		FSeinCanonicalDigestWriter Writer(
+			TEXT("SeinARTS.Fog.Default.Routine.SeenEntity"), 1);
+		return Writer.WriteInt32(Handle.Index)
+			&& Writer.WriteInt32(Handle.Generation)
+			&& Writer.Finalize(OutDigest, OutError);
+	}
+
+	bool ComputeObserverDigest(
+		FSeinPlayerID Observer,
+		const FGuid& ExploredRoot,
+		const FGuid& SeenRoot,
+		FGuid& OutDigest,
+		FString& OutError)
+	{
+		FSeinCanonicalDigestWriter Writer(
+			TEXT("SeinARTS.Fog.Default.Routine.Observer"), 1);
+		return Writer.WriteUInt8(Observer.Value)
+			&& Writer.WriteGuid(ExploredRoot)
+			&& Writer.WriteGuid(SeenRoot)
+			&& Writer.Finalize(OutDigest, OutError);
+	}
+}
+
+void USeinFogOfWarDefault::MarkRoutineExploredCellDirty(
+	FSeinPlayerID Observer, int32 CellIndex)
+{
+	if (!RoutineRootCache.IsValid())
+	{
+		return;
+	}
+	RoutineRootCache->DirtyExploredCells.FindOrAdd(Observer).Add(CellIndex);
+	AdvanceRevision(RoutineRootCache->MutationRevision);
+}
+
+void USeinFogOfWarDefault::MarkRoutineSeenEntityDirty(
+	FSeinPlayerID Observer, FSeinEntityHandle Handle)
+{
+	if (!RoutineRootCache.IsValid())
+	{
+		return;
+	}
+	RoutineRootCache->DirtySeenEntities.FindOrAdd(Observer).Add(Handle);
+	AdvanceRevision(RoutineRootCache->MutationRevision);
+}
+
+void USeinFogOfWarDefault::MarkRoutineSourceDirty(FSeinEntityHandle Handle)
+{
+	if (!RoutineRootCache.IsValid())
+	{
+		return;
+	}
+	RoutineRootCache->DirtySources.Add(Handle);
+	AdvanceRevision(RoutineRootCache->MutationRevision);
+}
+
+void USeinFogOfWarDefault::MarkRoutineDynamicBlockersDirty()
+{
+	if (!RoutineRootCache.IsValid())
+	{
+		return;
+	}
+	RoutineRootCache->bDynamicBlockersDirty = true;
+	AdvanceRevision(RoutineRootCache->MutationRevision);
+}
+
+void USeinFogOfWarDefault::ResetRoutineRootCache()
+{
+	RoutineRootCache.Reset();
 }
 
 struct FSeinFogOfWarDefaultStateCodec
@@ -537,7 +657,7 @@ struct FSeinFogOfWarDefaultStateCodec
 				}
 				const TArray<int32> Empty;
 				Candidate->ApplyFootprintDiff(
-					Group, Bit, Empty, Cells);
+					Input.Owner, Group, Bit, Empty, Cells);
 			}
 		}
 
@@ -800,6 +920,417 @@ struct FSeinFogOfWarDefaultStateCodec
 		return true;
 	}
 
+	static bool CaptureRoutineRoot(
+		const FSeinFogOfWarStateCaptureContext& Context,
+		bool bForceFullRebuild,
+		FGuid& OutPayloadDigest,
+		uint64& OutProjectedPayloadBytes,
+		uint64& OutMutationRevision,
+		FString& OutError)
+	{
+		OutPayloadDigest.Invalidate();
+		OutProjectedPayloadBytes = 0;
+		OutMutationRevision = 0;
+		OutError.Reset();
+		const USeinFogOfWarDefault* Live =
+			Cast<USeinFogOfWarDefault>(&Context.Fog);
+		int32 NumCells = 0;
+		if (!Live
+			|| !ValidateStaticGrid(*Live, NumCells, OutError)
+			|| Live->DynamicBlockerHeight.Num() != NumCells
+			|| Live->DynamicBlockerLayerMask.Num() != NumCells)
+		{
+			if (OutError.IsEmpty())
+			{
+				OutError = TEXT("Default fog routine root requires a complete runtime grid.");
+			}
+			return false;
+		}
+
+		FGuid StaticDigest;
+		if (!ComputeStaticEnvironmentDigest(*Live, StaticDigest, OutError))
+		{
+			return false;
+		}
+		const int32 EntitySlotCount =
+			Context.World.GetEntityPool().GetCapacity() + 1;
+		const uint64 EntityTopologyRevision =
+			Context.World.GetEntityPool().GetTopologyRevision();
+
+		const TSharedPtr<FSeinFogOfWarDefaultRoutineRootCache> Existing =
+			Live->RoutineRootCache;
+		const bool bNeedFreshCache = bForceFullRebuild
+			|| !Existing.IsValid()
+			|| Existing->NumCells != NumCells;
+		TSharedPtr<FSeinFogOfWarDefaultRoutineRootCache> Working =
+			bNeedFreshCache
+				? MakeShared<FSeinFogOfWarDefaultRoutineRootCache>()
+				: Existing;
+		FSeinFogOfWarDefaultRoutineRootCache& Cache = *Working;
+		if (bNeedFreshCache && Existing.IsValid())
+		{
+			Cache.MutationRevision = Existing->MutationRevision;
+		}
+
+		if (!Cache.ExploredCellDigest.IsValid())
+		{
+			FSeinCanonicalDigestWriter Writer(
+				TEXT("SeinARTS.Fog.Default.Routine.ExploredCell"), 1);
+			if (!Writer.WriteBool(true)
+				|| !Writer.Finalize(Cache.ExploredCellDigest, OutError))
+			{
+				return false;
+			}
+		}
+		const FSeinCanonicalReflectedStateLimits Limits =
+			RoutineReflectedLimits();
+		if ((!Cache.SourceSchemaDigest.IsValid()
+				&& !FSeinCanonicalReflectedStateDigest::ComputeSchemaDigest(
+					FSeinFogDefaultSourceInput::StaticStruct(),
+					Limits,
+					Cache.SourceSchemaDigest,
+					OutError))
+			|| (!Cache.DynamicBlockerSchemaDigest.IsValid()
+				&& !FSeinCanonicalReflectedStateDigest::ComputeSchemaDigest(
+					FSeinFogDefaultDynamicBlockerInput::StaticStruct(),
+					Limits,
+					Cache.DynamicBlockerSchemaDigest,
+					OutError)))
+		{
+			return false;
+		}
+
+		auto ComputeSourceLeaf =
+			[&](FSeinEntityHandle Handle,
+				const FSeinFogSourceState& Source,
+				FGuid& OutDigest) -> bool
+			{
+				if (!Handle.IsValid() || !Source.bValid)
+				{
+					OutError = TEXT("Default fog routine root encountered an invalid source cache.");
+					return false;
+				}
+				FSeinFogDefaultSourceInput Value;
+				Value.Source = Handle;
+				Value.Owner = Source.Owner;
+				Value.WorldPos = Source.WorldPos;
+				Value.Rotation = Source.Rotation;
+				Value.EyeHeight = Source.EyeHeight;
+				Value.Stamps = Source.Stamps;
+				return FSeinCanonicalReflectedStateDigest::ComputeStructValueDigest(
+					FSeinFogDefaultSourceInput::StaticStruct(),
+					&Value,
+					Cache.SourceSchemaDigest,
+					Limits,
+					OutDigest,
+					OutError);
+			};
+
+		auto BuildObserver =
+			[&](FSeinPlayerID Observer,
+				bool bRebuildExplored,
+				bool bRebuildSeen) -> bool
+			{
+				const FSeinFogVisionGroup* Group =
+					Live->VisionGroups.Find(Observer);
+				if (!Group)
+				{
+					Cache.ObserverCaches.Remove(Observer);
+					return Cache.Observers.SetLeafDigest(
+						Observer.Value, FGuid(), OutError);
+				}
+				if (Group->CellBitfield.Num() != NumCells)
+				{
+					OutError = TEXT("Default fog routine root found an incomplete observer grid.");
+					return false;
+				}
+				FSeinFogOfWarDefaultRoutineRootCache::FObserverCache& ObserverCache =
+					Cache.ObserverCaches.FindOrAdd(Observer);
+				if (bRebuildExplored
+					|| ObserverCache.ExploredCells.Num() != NumCells)
+				{
+					if (!ObserverCache.ExploredCells.Reset(
+							FString::Printf(
+								TEXT("fog.default.observer.%u.explored"),
+								Observer.Value),
+							NumCells,
+							OutError))
+					{
+						return false;
+					}
+					for (int32 CellIndex = 0; CellIndex < NumCells; ++CellIndex)
+					{
+						if ((Group->CellBitfield[CellIndex]
+							& SEIN_FOW_BIT_EXPLORED) != 0
+							&& !ObserverCache.ExploredCells.SetLeafDigest(
+								CellIndex,
+								Cache.ExploredCellDigest,
+								OutError))
+						{
+							return false;
+						}
+					}
+				}
+				else if (const TSet<int32>* DirtyCells =
+					Cache.DirtyExploredCells.Find(Observer))
+				{
+					for (const int32 CellIndex : *DirtyCells)
+					{
+						if (CellIndex == INDEX_NONE)
+						{
+							continue;
+						}
+						if (!Group->CellBitfield.IsValidIndex(CellIndex)
+							|| !ObserverCache.ExploredCells.SetLeafDigest(
+								CellIndex,
+								(Group->CellBitfield[CellIndex]
+									& SEIN_FOW_BIT_EXPLORED) != 0
+									? Cache.ExploredCellDigest
+									: FGuid(),
+								OutError))
+						{
+							return false;
+						}
+					}
+				}
+
+				if (bRebuildSeen
+					|| ObserverCache.SeenEntities.Num() != EntitySlotCount)
+				{
+					if (!ObserverCache.SeenEntities.Reset(
+							FString::Printf(
+								TEXT("fog.default.observer.%u.seen"),
+								Observer.Value),
+							EntitySlotCount,
+							OutError))
+					{
+						return false;
+					}
+					for (const FSeinEntityHandle Handle : Group->SeenEntities)
+					{
+						if (!Context.World.IsEntityAlive(Handle))
+						{
+							continue;
+						}
+						FGuid SeenDigest;
+						if (!ComputeSeenEntityDigest(Handle, SeenDigest, OutError)
+							|| !ObserverCache.SeenEntities.SetLeafDigest(
+								Handle.Index, SeenDigest, OutError))
+						{
+							return false;
+						}
+					}
+				}
+				else if (const TSet<FSeinEntityHandle>* DirtySeen =
+					Cache.DirtySeenEntities.Find(Observer))
+				{
+					for (const FSeinEntityHandle Handle : *DirtySeen)
+					{
+						FGuid SeenDigest;
+						if (Group->SeenEntities.Contains(Handle)
+							&& Context.World.IsEntityAlive(Handle)
+							&& !ComputeSeenEntityDigest(
+								Handle, SeenDigest, OutError))
+						{
+							return false;
+						}
+						if (!ObserverCache.SeenEntities.SetLeafDigest(
+							Handle.Index, SeenDigest, OutError))
+						{
+							return false;
+						}
+					}
+				}
+				if (!ObserverCache.ExploredCells.FinalizeUpdates(OutError)
+					|| !ObserverCache.SeenEntities.FinalizeUpdates(OutError)
+					|| !ComputeObserverDigest(
+						Observer,
+						ObserverCache.ExploredCells.GetRoot(),
+						ObserverCache.SeenEntities.GetRoot(),
+						ObserverCache.Digest,
+						OutError)
+					|| !Cache.Observers.SetLeafDigest(
+						Observer.Value,
+						ObserverCache.Digest,
+						OutError))
+				{
+					return false;
+				}
+				return true;
+			};
+
+		const bool bRebuildObservers = bNeedFreshCache
+			|| Cache.Observers.Num() != 256;
+		const bool bRebuildEntityIndexed = bNeedFreshCache
+			|| Cache.EntitySlotCount != EntitySlotCount;
+		const bool bRebuildSeen = bRebuildEntityIndexed
+			|| Cache.EntityTopologyRevision != EntityTopologyRevision;
+		if (bRebuildObservers
+			&& !Cache.Observers.Reset(
+				TEXT("fog.default.observers"), 256, OutError))
+		{
+			return false;
+		}
+		if (bRebuildObservers || bRebuildSeen)
+		{
+			TArray<FSeinPlayerID> Observers;
+			Live->VisionGroups.GetKeys(Observers);
+			Observers.Sort();
+			for (const FSeinPlayerID Observer : Observers)
+			{
+				if (!BuildObserver(
+					Observer,
+					bRebuildObservers,
+					true))
+				{
+					return false;
+				}
+			}
+		}
+		else
+		{
+			TSet<FSeinPlayerID> DirtyObservers;
+			for (const TPair<FSeinPlayerID, TSet<int32>>& Pair :
+				Cache.DirtyExploredCells)
+			{
+				DirtyObservers.Add(Pair.Key);
+			}
+			for (const TPair<FSeinPlayerID, TSet<FSeinEntityHandle>>& Pair :
+				Cache.DirtySeenEntities)
+			{
+				DirtyObservers.Add(Pair.Key);
+			}
+			for (const FSeinPlayerID Observer : DirtyObservers)
+			{
+				if (!BuildObserver(Observer, false, false))
+				{
+					return false;
+				}
+			}
+		}
+		if (!Cache.Observers.FinalizeUpdates(OutError))
+		{
+			return false;
+		}
+
+		if (bRebuildEntityIndexed)
+		{
+			if (!Cache.Sources.Reset(
+					TEXT("fog.default.sources"),
+					EntitySlotCount,
+					OutError))
+			{
+				return false;
+			}
+			for (const TPair<FSeinEntityHandle, FSeinFogSourceState>& Pair :
+				Live->SourceStates)
+			{
+				FGuid SourceDigest;
+				if (!ComputeSourceLeaf(Pair.Key, Pair.Value, SourceDigest)
+					|| !Cache.Sources.SetLeafDigest(
+						Pair.Key.Index, SourceDigest, OutError))
+				{
+					return false;
+				}
+			}
+		}
+		else
+		{
+			for (const FSeinEntityHandle Handle : Cache.DirtySources)
+			{
+				FGuid SourceDigest;
+				if (const FSeinFogSourceState* Source =
+					Live->SourceStates.Find(Handle))
+				{
+					if (!ComputeSourceLeaf(Handle, *Source, SourceDigest))
+					{
+						return false;
+					}
+				}
+				if (!Cache.Sources.SetLeafDigest(
+					Handle.Index, SourceDigest, OutError))
+				{
+					return false;
+				}
+			}
+		}
+		if (!Cache.Sources.FinalizeUpdates(OutError))
+		{
+			return false;
+		}
+
+		const bool bRebuildDynamic = bNeedFreshCache
+			|| Cache.bDynamicBlockersDirty
+			|| Cache.DynamicBlockerCount
+				!= Live->DynamicBlockerSnapshots.Num();
+		if (bRebuildDynamic)
+		{
+			if (!Cache.DynamicBlockers.Reset(
+					TEXT("fog.default.dynamic-blockers"),
+					Live->DynamicBlockerSnapshots.Num(),
+					OutError))
+			{
+				return false;
+			}
+			for (int32 Index = 0;
+				Index < Live->DynamicBlockerSnapshots.Num();
+				++Index)
+			{
+				const FSeinFogDynamicBlockerSnapshot& Snapshot =
+					Live->DynamicBlockerSnapshots[Index];
+				FSeinFogDefaultDynamicBlockerInput Value;
+				Value.WorldPos = Snapshot.WorldPos;
+				Value.Rotation = Snapshot.Rotation;
+				Value.Shape = Snapshot.Shape;
+				Value.Height = Snapshot.Height;
+				Value.LayerMask = Snapshot.LayerMask;
+				FGuid Digest;
+				if (!FSeinCanonicalReflectedStateDigest::ComputeStructValueDigest(
+						FSeinFogDefaultDynamicBlockerInput::StaticStruct(),
+						&Value,
+						Cache.DynamicBlockerSchemaDigest,
+						Limits,
+						Digest,
+						OutError)
+					|| !Cache.DynamicBlockers.SetLeafDigest(
+						Index, Digest, OutError))
+				{
+					return false;
+				}
+			}
+		}
+		if (!Cache.DynamicBlockers.FinalizeUpdates(OutError))
+		{
+			return false;
+		}
+
+		FSeinCanonicalDigestWriter PayloadWriter(
+			TEXT("SeinARTS.Fog.Default.Routine.Payload"), 1);
+		if (!PayloadWriter.WriteGuid(StaticDigest)
+			|| !PayloadWriter.WriteGuid(Cache.Observers.GetRoot())
+			|| !PayloadWriter.WriteGuid(Cache.Sources.GetRoot())
+			|| !PayloadWriter.WriteGuid(Cache.DynamicBlockers.GetRoot())
+			|| !PayloadWriter.Finalize(Cache.PayloadDigest, OutError))
+		{
+			return false;
+		}
+
+		Cache.NumCells = NumCells;
+		Cache.EntitySlotCount = EntitySlotCount;
+		Cache.DynamicBlockerCount =
+			Live->DynamicBlockerSnapshots.Num();
+		Cache.EntityTopologyRevision = EntityTopologyRevision;
+		Cache.DirtyExploredCells.Reset();
+		Cache.DirtySeenEntities.Reset();
+		Cache.DirtySources.Reset();
+		Cache.bDynamicBlockersDirty = false;
+		Live->RoutineRootCache = Working;
+		OutPayloadDigest = Cache.PayloadDigest;
+		OutProjectedPayloadBytes = 4 * sizeof(FGuid);
+		OutMutationRevision = Cache.MutationRevision;
+		return true;
+	}
+
 	static bool StageRestore(
 		const FSeinFogOfWarStateStageContext& Context,
 		const FInstancedStruct& Payload,
@@ -861,6 +1392,7 @@ struct FSeinFogOfWarDefaultStateCodec
 			MoveTemp(Candidate.LastDynamicBlockerCells);
 		Live->VisionGroups = MoveTemp(Candidate.VisionGroups);
 		Live->SourceStates = MoveTemp(Candidate.SourceStates);
+		Live->ResetRoutineRootCache();
 	}
 };
 
@@ -877,7 +1409,7 @@ SeinRegisterDefaultFogOfWarStateCodec(FString& OutError)
 		TEXT("seinarts.fog.default-grid");
 	Descriptor.StateSchemaVersion = 1;
 	Descriptor.BehaviorRevision = 1;
-	Descriptor.CodecRevision = 3;
+	Descriptor.CodecRevision = 4;
 	Descriptor.PayloadStruct =
 		FSeinFogOfWarDefaultCanonicalState::StaticStruct();
 	Descriptor.Limits.MaxRecursionDepth = 32;
@@ -896,6 +1428,8 @@ SeinRegisterDefaultFogOfWarStateCodec(FString& OutError)
 		&FSeinFogOfWarDefaultStateCodec::
 			ComputeStaticEnvironmentDigest;
 	Ops.Capture = &FSeinFogOfWarDefaultStateCodec::Capture;
+	Ops.CaptureRoutineRoot =
+		&FSeinFogOfWarDefaultStateCodec::CaptureRoutineRoot;
 	Ops.StageRestore =
 		&FSeinFogOfWarDefaultStateCodec::StageRestore;
 	Ops.CommitRestore =

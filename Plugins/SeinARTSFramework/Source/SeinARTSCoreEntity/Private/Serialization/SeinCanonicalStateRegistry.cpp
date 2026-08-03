@@ -1589,6 +1589,134 @@ bool FSeinCanonicalStateRegistry::CaptureContributorRecords(
 	return true;
 }
 
+bool FSeinCanonicalStateRegistry::CaptureRoutineRootRecords(
+	const FSeinCanonicalStateSchemaSnapshot& Schema,
+	const FSeinCanonicalStateCaptureContext& Context,
+	bool bForceFullRebuild,
+	TArray<FSeinCanonicalStateRoutineRootRecord>& OutRecords,
+	int32& OutSynchronousFallbackCount,
+	FString& OutError)
+{
+	OutRecords.Reset();
+	OutSynchronousFallbackCount = 0;
+	OutError.Reset();
+	if (!IsInGameThread() || !Schema.IsValid())
+	{
+		OutError =
+			TEXT("Routine canonical-state capture requires a valid frozen schema on the game thread.");
+		return false;
+	}
+	if (IsProviderInvocationActive())
+	{
+		OutError =
+			TEXT("Routine canonical-state capture may not re-enter a provider callback transaction.");
+		return false;
+	}
+	FProviderInvocationScope InvocationScope;
+
+	TArray<FSeinCanonicalStateRoutineRootRecord> Candidate;
+	Candidate.Reserve(Schema.GetContributorCount());
+	uint64 AggregateProjectedBytes = 0;
+	for (const FSeinFrozenCanonicalStateContributor& Contributor :
+		Schema.GetContributors())
+	{
+		if (Contributor.Descriptor.Role
+			== ESeinCanonicalStateRole::DerivedCache)
+		{
+			continue;
+		}
+		FSeinCanonicalStateContributorOps Ops;
+		if (!ResolveProvider(
+			Contributor.ProviderToken, Ops, &OutError))
+		{
+			return false;
+		}
+
+		FSeinCanonicalStateRoutineRootRecord Record;
+		if (Ops.CaptureRoutineRoot)
+		{
+			if (!Ops.CaptureRoutineRoot(
+				Context,
+				bForceFullRebuild,
+				Record,
+				OutError))
+			{
+				if (OutError.IsEmpty())
+				{
+					OutError =
+						TEXT("Contributor routine-root callback failed.");
+				}
+				OutError = FString::Printf(
+					TEXT("%s: %s"),
+					*CanonicalKey(Contributor.Descriptor.Key),
+					*OutError);
+				return false;
+			}
+		}
+		else
+		{
+			FInstancedStruct Payload;
+			TArray<uint8> PayloadBytes;
+			if (!Ops.Capture
+				|| !Ops.Capture(Context, Payload, OutError)
+				|| !EncodeContributorPayload(
+					Contributor,
+					Payload,
+					PayloadBytes,
+					Record.LeafDigest,
+					OutError))
+			{
+				if (OutError.IsEmpty())
+				{
+					OutError =
+						TEXT("Contributor exact routine-root fallback failed.");
+				}
+				OutError = FString::Printf(
+					TEXT("%s: %s"),
+					*CanonicalKey(Contributor.Descriptor.Key),
+					*OutError);
+				return false;
+			}
+			Record.ProjectedPayloadBytes =
+				static_cast<uint64>(PayloadBytes.Num());
+			++OutSynchronousFallbackCount;
+		}
+
+		Record.Key = Contributor.Descriptor.Key;
+		Record.SchemaVersion = Contributor.Descriptor.SchemaVersion;
+		Record.DescriptorDigest = Contributor.DescriptorDigest;
+		if (!Record.LeafDigest.IsValid()
+			|| Record.ProjectedPayloadBytes
+				> static_cast<uint64>(
+					Contributor.Descriptor.Limits.MaxEncodedBytes))
+		{
+			OutError = FString::Printf(
+				TEXT("%s: routine-root projection returned an invalid digest or exceeded its payload bound."),
+				*CanonicalKey(Contributor.Descriptor.Key));
+			return false;
+		}
+		AggregateProjectedBytes += Record.ProjectedPayloadBytes;
+		if (AggregateProjectedBytes
+			> static_cast<uint64>(MaxNativeCheckpointBytes))
+		{
+			OutError =
+				TEXT("Native routine-root projections exceed the aggregate checkpoint bound.");
+			return false;
+		}
+		Candidate.Add(MoveTemp(Record));
+	}
+
+	Candidate.Sort(
+		[](const FSeinCanonicalStateRoutineRootRecord& A,
+			const FSeinCanonicalStateRoutineRootRecord& B)
+		{
+			return FSeinCanonicalStateRegistry::CanonicalKey(A.Key)
+				< FSeinCanonicalStateRegistry::CanonicalKey(B.Key);
+		});
+	OutRecords = MoveTemp(Candidate);
+	return true;
+}
+
 bool FSeinCanonicalStateRegistry::TryStageContributorRestore(
 	const FSeinCanonicalStateSchemaSnapshot& Schema,
 	const FSeinCanonicalStateStageContext& Context,

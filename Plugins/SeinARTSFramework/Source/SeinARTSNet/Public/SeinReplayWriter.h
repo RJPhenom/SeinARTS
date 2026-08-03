@@ -23,6 +23,19 @@ struct FSeinReplayWriterPendingTurn
 	FSeinOpaqueCommandBatch OpaqueCommands;
 };
 
+struct FSeinReplayAsyncAppendResult
+{
+	bool bSucceeded = false;
+	FString Error;
+};
+
+enum class ESeinReplayAsyncAppendKind : uint8
+{
+	None,
+	TurnBatch,
+	Progress,
+};
+
 UCLASS()
 class SEINARTSNET_API USeinReplayWriter : public UObject
 {
@@ -76,6 +89,8 @@ public:
 	uint64 GetPeakResidentBytes() const { return PeakResidentBytes; }
 
 #if WITH_DEV_AUTOMATION_TESTS
+	/** Queue one ordinary non-blocking maintenance pass for worker/drain tests. */
+	void QueueAppliedProgressForTests();
 	/** Force the same applied-turn/progress flush used by deferred maintenance. */
 	void FlushAppliedProgressForTests();
 #endif
@@ -83,15 +98,25 @@ public:
 private:
 	void ScheduleMaintenance();
 	void RunDeferredMaintenance(bool bForce);
+	bool ResolvePendingAppend(bool bWait);
+	bool HasPendingAppend() const { return PendingAppendFuture.IsValid(); }
+	void WaitAndDiscardPendingAppend();
 	bool FlushEligibleTurns(bool bForce);
-	bool AppendProgress(int32 EndTick, bool bForceDuplicate);
-	bool AppendFrontierFrame(uint8 FrameType, int32 EndTick);
+	bool AppendProgress(
+		int32 EndTick,
+		bool bForceDuplicate,
+		bool bAsync = false);
+	bool AppendFrontierFrame(
+		uint8 FrameType,
+		int32 EndTick,
+		bool bAsync = false);
 	bool AppendJournalFrame(
 		uint8 FrameType,
 		int32 FirstTurn,
 		int32 LastTurn,
 		int32 TimelineTick,
-		TConstArrayView<uint8> Payload);
+		TConstArrayView<uint8> Payload,
+		bool bAsync = false);
 	bool CanPublishFrontier(int32 EndTick, FString& OutError) const;
 	bool IsPeriodicCheckpointDue() const;
 	void FailRecording(
@@ -112,6 +137,20 @@ private:
 	FString FinalFilePath;
 	FString LastPublishedPath;
 	FGuid PreviousFrameDigest;
+	/** At most one append may be in flight because every frame commits the
+	 *  previous frame digest and exact byte offset. The worker owns only copied
+	 *  path/byte data; all UObject and journal-state mutation remains on the
+	 *  game thread when ResolvePendingAppend observes completion. */
+	TFuture<FSeinReplayAsyncAppendResult> PendingAppendFuture;
+	ESeinReplayAsyncAppendKind PendingAppendKind =
+		ESeinReplayAsyncAppendKind::None;
+	FGuid PendingAppendDigest;
+	uint64 PendingAppendByteCount = 0;
+	uint64 PendingAppendResidentBytes = 0;
+	int32 PendingAppendTurnCount = 0;
+	int32 PendingAppendFirstTurn = INDEX_NONE;
+	int32 PendingAppendLastTurn = INDEX_NONE;
+	int32 PendingAppendTimelineTick = INDEX_NONE;
 	/** Source simulation identity for this epoch. The UObject outer may already
 	 *  resolve to a destination world while committed travel retires the journal. */
 	TWeakObjectPtr<UWorld> RecordingWorld;

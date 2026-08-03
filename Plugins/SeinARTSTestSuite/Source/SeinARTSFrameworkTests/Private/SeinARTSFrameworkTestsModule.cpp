@@ -65,9 +65,9 @@ public:
 				TEXT("seinarts.tests.pool.%s.%s.reflection"),
 				*KindId,
 				*Class->GetName().ToLower());
-			PoolDescriptor.StateSchemaVersion = 1;
+			PoolDescriptor.StateSchemaVersion = 2;
 			PoolDescriptor.BehaviorRevision = 1;
-			PoolDescriptor.CodecRevision = 2;
+			PoolDescriptor.CodecRevision = 3;
 			PoolDescriptor.MaxStateBytes =
 				FSeinPoolObjectCodecRegistry::MaxStateBytes;
 			PoolDescriptor.bAllowBlueprintChildren = true;

@@ -29,6 +29,7 @@ class USeinLevelDataSubsystem;
 class ISeinSystem;
 class FSeinNavBlockerStampSystem;
 struct FSeinNavigationCanonicalStateProvider;
+struct FSeinNavigationRoutineRootCache;
 struct FSeinNavigationRestoreStage;
 struct FSeinPathRequest;
 struct FSeinPath;
@@ -220,6 +221,11 @@ private:
 
 	/** Sim tick the async queue was last drained (drain runs once per tick). */
 	int32 LastDrainTick = -1;
+
+	/** Cache-only write evidence for the async continuation contributor. */
+	uint64 CanonicalStateMutationRevision = 0;
+	mutable TSharedPtr<FSeinNavigationRoutineRootCache> RoutineRootCache;
+	void MarkCanonicalStateDirty();
 
 	/** Drain the async queue: serve up to PathRequestsPerTickBudget requests in
 	 *  canonical handle order via Navigation->RunPathBatch, caching the results.

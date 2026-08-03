@@ -709,6 +709,60 @@ bool FSeinFogOfWarStateCodecRegistry::CapturePayload(
 	return true;
 }
 
+bool FSeinFogOfWarStateCodecRegistry::CaptureRoutineRoot(
+	uint64 Token,
+	const FSeinFogOfWarStateCaptureContext& Context,
+	bool bForceFullRebuild,
+	FGuid& OutPayloadDigest,
+	uint64& OutProjectedPayloadBytes,
+	uint64& OutMutationRevision,
+	FString& OutError)
+{
+	OutPayloadDigest.Invalidate();
+	OutProjectedPayloadBytes = 0;
+	OutMutationRevision = 0;
+	FResolvedClaim Claim;
+	if (InvocationDepth() != 0
+		|| !ResolveForClass(
+			Token, Context.Fog.GetClass(), Claim, OutError))
+	{
+		if (OutError.IsEmpty())
+		{
+			OutError =
+				TEXT("Fog codec callback transaction is already active.");
+		}
+		return false;
+	}
+	if (!Claim.Ops.CaptureRoutineRoot)
+	{
+		OutError = FString::Printf(
+			TEXT("Fog codec '%s' does not provide a non-blocking routine-root projection."),
+			*Claim.Descriptor.StableImplementationId);
+		return false;
+	}
+	FInvocationScope Scope;
+	if (!Claim.Ops.CaptureRoutineRoot(
+			Context,
+			bForceFullRebuild,
+			OutPayloadDigest,
+			OutProjectedPayloadBytes,
+			OutMutationRevision,
+			OutError)
+		|| !OutPayloadDigest.IsValid())
+	{
+		if (OutError.IsEmpty())
+		{
+			OutError =
+				TEXT("Fog codec returned an invalid routine-root digest.");
+		}
+		OutPayloadDigest.Invalidate();
+		OutProjectedPayloadBytes = 0;
+		OutMutationRevision = 0;
+		return false;
+	}
+	return true;
+}
+
 bool FSeinFogOfWarStateCodecRegistry::StagePayload(
 	uint64 Token,
 	const FSeinFogOfWarStateStageContext& Context,

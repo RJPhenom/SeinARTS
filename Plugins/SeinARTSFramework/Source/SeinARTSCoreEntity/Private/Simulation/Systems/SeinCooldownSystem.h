@@ -10,6 +10,7 @@
 #include "Core/SeinTickPhase.h"
 #include "Core/SeinSystemPriority.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "Simulation/ComponentStorage.h"
 #include "Components/SeinAbilityComponent.h"
 #include "Abilities/SeinAbility.h"
 
@@ -26,11 +27,16 @@ class FSeinCooldownSystem final : public ISeinSystem
 public:
 	virtual void Tick(FFixedPoint DeltaTime, USeinWorldSubsystem& World) override
 	{
-		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, const FSeinEntity& /*Entity*/)
+		const ISeinComponentStorage* Storage =
+			World.GetComponentStorageRaw(FSeinAbilityComponent::StaticStruct());
+		if (!Storage) return;
+
+		Storage->ForEachLiveComponent([&](
+			FSeinEntityHandle Handle, const void* RawComponent)
 		{
-			FSeinAbilityComponent* AbilityComp =
-				World.GetComponentMutable<FSeinAbilityComponent>(
-					Handle);
+			if (!World.GetEntityPool().IsValid(Handle)) return;
+			const FSeinAbilityComponent* AbilityComp =
+				static_cast<const FSeinAbilityComponent*>(RawComponent);
 			if (!AbilityComp)
 			{
 				return;

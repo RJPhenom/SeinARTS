@@ -19,6 +19,7 @@
 #include "Core/SeinTickPhase.h"
 #include "Core/SeinSystemPriority.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "Simulation/ComponentStorage.h"
 #include "Components/SeinCommandBrokerData.h"
 #include "Components/SeinBrokerMembershipData.h"
 #include "Components/SeinAbilityComponent.h"
@@ -549,57 +550,71 @@ public:
 		TArray<FSeinEntityHandle> LooseReturnList;   // un-brokered units to self-return home (deferred past the pool walk)
 		const USeinARTSCoreSettings* BrokerSettings = GetDefault<USeinARTSCoreSettings>();
 
-		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, const FSeinEntity& Entity)
+		// Broker work is sparse: walk the exact live component slots rather than
+		// probing every entity in the world for a broker component.
+		if (const ISeinComponentStorage* BrokerStorage =
+			World.GetComponentStorageRaw(FSeinCommandBrokerData::StaticStruct()))
 		{
-			FSeinCommandBrokerData* Broker =
-				World.GetComponentMutable<FSeinCommandBrokerData>(
-					Handle);
-			if (!Broker)
+			BrokerStorage->ForEachLiveComponent([&](
+				FSeinEntityHandle Handle, const void* /*RawComponent*/)
 			{
-				// LOOSE-HOME-RETURN (re-seek for the un-brokered). A unit that was never ordered has no
-				// broker and no SettledSlotPositions, so the broker re-seek below can't reach it. If it is
-				// idle, settled, un-contained, and shoved off its seeded HOME, queue a self-return home:
-				// acted on AFTER this pool walk (CreateBrokerForMembers spawns an entity — unsafe to do
-				// mid-iteration). The return mints the unit's persistent broker via the normal order path
-				// (dispatch captures HomePos as its settled slot), so every LATER shove is owned by the
-				// broker re-seek below. Same bIdleReseek master switch + displacement threshold as re-seek.
-				if (BrokerSettings && BrokerSettings->bIdleReseek)
+				if (World.GetEntityPool().IsValid(Handle))
 				{
-					const FSeinMovementComponent* Move = World.GetComponent<FSeinMovementComponent>(Handle);
-					if (Move && Move->bHomeSeeded && !Move->bHasTarget
-						&& Move->Velocity.SizeSquared() <= FFixedPoint::Epsilon)
-					{
-						// Member of a live broker already? Its broker's re-seek owns it — skip.
-						const FSeinBrokerMembershipData* Memb = World.GetComponent<FSeinBrokerMembershipData>(Handle);
-						const bool bBrokered = Memb && Memb->CurrentBrokerHandle.IsValid()
-							&& World.GetEntityPool().IsValid(Memb->CurrentBrokerHandle);
-						// Contained (garrison / transport / attachment)? Its container poses it — skip.
-						const FSeinContainmentMemberData* Cont = World.GetComponent<FSeinContainmentMemberData>(Handle);
-						const bool bContained = Cont && Cont->CurrentContainer.IsValid();
-						// Busy in an ability? Leave it be.
-						const FSeinAbilityComponent* AC = World.GetComponent<FSeinAbilityComponent>(Handle);
-						const USeinAbility* Active = AC ? AC->GetActiveAbility(World) : nullptr;
-						const bool bBusy = Active && Active->bIsActive;
-						if (!bBrokered && !bContained && !bBusy)
-						{
-							FFixedVector Delta = Entity.Transform.GetLocation() - Move->HomePos;
-							Delta.Z = FFixedPoint::Zero;
-							const FFixedPoint Thresh = BrokerSettings->ReseekDisplacementThreshold;
-							if (Delta.SizeSquared() > Thresh * Thresh)
-							{
-								LooseReturnList.Add(Handle);
-							}
-						}
-					}
+					BrokerHandles.Add(Handle);
 				}
-				return;
+			});
+		}
+
+		// LOOSE-HOME-RETURN (re-seek for un-brokered units). Only movers can
+		// qualify, so this second sparse walk replaces the old whole-pool scan.
+		if (BrokerSettings && BrokerSettings->bIdleReseek)
+		{
+			if (const ISeinComponentStorage* MovementStorage =
+				World.GetComponentStorageRaw(FSeinMovementComponent::StaticStruct()))
+			{
+				MovementStorage->ForEachLiveComponent([&](
+					FSeinEntityHandle Handle, const void* RawComponent)
+				{
+					if (!World.GetEntityPool().IsValid(Handle)) return;
+					// Preserve the former broker-first branch: an entity carrying a
+					// broker component is never evaluated as a loose member.
+					if (World.GetComponent<FSeinCommandBrokerData>(Handle)) return;
+					const FSeinMovementComponent* Move =
+						static_cast<const FSeinMovementComponent*>(RawComponent);
+					const FSeinEntity* Entity = World.GetEntity(Handle);
+					if (!Move || !Entity || !Move->bHomeSeeded || Move->bHasTarget
+						|| Move->Velocity.SizeSquared() > FFixedPoint::Epsilon)
+					{
+						return;
+					}
+
+					const FSeinBrokerMembershipData* Memb =
+						World.GetComponent<FSeinBrokerMembershipData>(Handle);
+					const bool bBrokered = Memb && Memb->CurrentBrokerHandle.IsValid()
+						&& World.GetEntityPool().IsValid(Memb->CurrentBrokerHandle);
+					const FSeinContainmentMemberData* Cont =
+						World.GetComponent<FSeinContainmentMemberData>(Handle);
+					const bool bContained = Cont && Cont->CurrentContainer.IsValid();
+					const FSeinAbilityComponent* AC =
+						World.GetComponent<FSeinAbilityComponent>(Handle);
+					const USeinAbility* Active = AC ? AC->GetActiveAbility(World) : nullptr;
+					if (bBrokered || bContained || (Active && Active->bIsActive)) return;
+
+					FFixedVector Delta = Entity->Transform.GetLocation() - Move->HomePos;
+					Delta.Z = FFixedPoint::Zero;
+					const FFixedPoint Threshold =
+						BrokerSettings->ReseekDisplacementThreshold;
+					if (Delta.SizeSquared() > Threshold * Threshold)
+					{
+						LooseReturnList.Add(Handle);
+					}
+				});
 			}
-			BrokerHandles.Add(Handle);
-		});
+		}
 
 		// Resolve designer callbacks only after the pool walk. A resolver may
 		// synchronously spawn/destroy entities or grow component storage, so even a
-		// seemingly read-only callback is not safe beneath ForEachEntity.
+		// seemingly read-only callback is not safe beneath a storage walk.
 		for (const FSeinEntityHandle& Handle : BrokerHandles)
 		{
 			if (!World.IsEntityAlive(Handle)) continue;

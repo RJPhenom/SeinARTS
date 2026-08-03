@@ -81,6 +81,15 @@ namespace SeinDispatchPolicyLocal
 	}
 }
 
+void USeinCommandBrokerResolver::MarkDeterministicStateDirty(
+	USeinWorldSubsystem* World)
+{
+	if (World)
+	{
+		World->MarkCommandBrokerResolverRuntimeStateDirty(this);
+	}
+}
+
 TArray<FSeinEntityHandle> USeinCommandBrokerResolver::ApplyAbilityDispatchPolicy(
 	USeinWorldSubsystem* World,
 	FSeinEntityHandle BrokerHandle,

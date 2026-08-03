@@ -875,6 +875,7 @@ void USeinNavigationSubsystem::BindSimDelegates(UWorld& World)
 	// regardless of any leftover counter from a prior PIE session.
 	PathRequestsThisTick = 0;
 	LastResetTick = -1;
+	MarkCanonicalStateDirty();
 }
 
 void USeinNavigationSubsystem::UnbindSimDelegates()
@@ -903,6 +904,9 @@ ESeinPathResult USeinNavigationSubsystem::RequestPath(const FSeinPathRequest& Re
 		OutPath.Clear();
 		return ESeinPathResult::NoNavigation;
 	}
+	// RequestPath owns every runtime write to the path budget and async
+	// continuation queues. One barrier covers all branches below.
+	MarkCanonicalStateDirty();
 
 	// Self-checking per-tick reset. Read the sim tick from the world
 	// subsystem; if it advanced since our last reset, clear the budget.
@@ -1090,6 +1094,15 @@ void USeinNavigationSubsystem::DrainAsyncPathQueue(int32 CurrentTick)
 	// the unserved tail re-enqueues next tick via the action's Throttled retry — so no
 	// stale/dead entries accumulate and the per-tick serve order stays canonical.
 	AsyncQueue.Reset();
+}
+
+void USeinNavigationSubsystem::MarkCanonicalStateDirty()
+{
+	++CanonicalStateMutationRevision;
+	if (CanonicalStateMutationRevision == 0)
+	{
+		++CanonicalStateMutationRevision;
+	}
 }
 
 USeinNavigation* USeinNavigationSubsystem::GetNavigationForWorld(const UObject* WorldContextObject)

@@ -130,6 +130,16 @@ private:
 	/** Force a quality re-query next refresh regardless of cursor delta. */
 	bool bQualityDirty = true;
 
+	/** Last exact presentation key that produced the visible layout. Repeated
+	 *  cursor broadcasts between fixed simulation ticks are common at high
+	 *  render rates; they must not rerun the O(N^2) slot match when neither
+	 *  simulation state nor gesture input changed. */
+	FVector LastLayoutCursor = FVector::ZeroVector;
+	int32 LastLayoutSimTick = MIN_int32;
+	int32 LastLayoutDragPointCount = INDEX_NONE;
+	bool bLastLayoutWasCommandDrag = false;
+	bool bLayoutDirty = true;
+
 	/** Prevents FTickableGameObject from invoking withdrawn module code. */
 	bool bModuleUnloadStateReleased = false;
 };

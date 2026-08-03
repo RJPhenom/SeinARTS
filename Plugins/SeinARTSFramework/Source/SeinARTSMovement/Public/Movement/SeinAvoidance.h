@@ -78,4 +78,9 @@ public:
 	 *  unit's output at its zero-steer / unity-scale default → a world with no
 	 *  avoidance). Subclasses override. */
 	virtual void ComputeAvoidance(USeinWorldSubsystem& /*World*/) {}
+
+	/** True only for an exact native implementation whose per-tick compute does
+	 *  not mutate reflected fields on the policy UObject itself. Unknown native
+	 *  and Blueprint implementations remain conservatively dirty-tracked. */
+	virtual bool HasImmutableRuntimePolicyState() const { return false; }
 };

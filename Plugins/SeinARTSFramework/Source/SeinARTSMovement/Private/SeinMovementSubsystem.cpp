@@ -44,7 +44,7 @@ void USeinMovementSubsystem::Initialize(
 	if (UClass* AvoidClass = ResolveAvoidanceClass())
 	{
 		AvoidanceInstance = NewObject<USeinAvoidance>(this, AvoidClass);
-		AvoidanceSystem = new FSeinAvoidanceSystem(AvoidanceInstance);
+		AvoidanceSystem = new FSeinAvoidanceSystem(this, AvoidanceInstance);
 		Sim->RegisterSystem(AvoidanceSystem);
 	}
 	else
@@ -155,6 +155,9 @@ void USeinMovementSubsystem::ReleaseModuleOwnedStateForModuleUnload()
 
 	MovementInstanceMap.Empty();
 	MovementInstancePool.Empty();
+	MovementStateRevisions.Reset();
+	RoutineRootCache.Reset();
+	BumpMovementTopologyRevision();
 }
 
 namespace
@@ -220,7 +223,9 @@ void USeinMovementSubsystem::ReleaseNativeClassStateForModuleUnload(
 			continue;
 		}
 		MovementInstancePool.RemoveSingleSwap(It->Value);
+		MovementStateRevisions.Remove(It->Key);
 		It.RemoveCurrent();
+		BumpMovementTopologyRevision();
 	}
 
 	// Active orders also hold a reflected borrowed reference. The simulation
@@ -294,10 +299,23 @@ UClass* USeinMovementSubsystem::ResolveAvoidanceClass()
 USeinMovement* USeinMovementSubsystem::GetOrCreateMovementInstance(
 	FSeinEntityHandle Handle, const FSeinMovementComponent& Move)
 {
-	UClass* DesiredClass = ResolveMovementClass(Move);
-
+	UClass* DesiredClass = nullptr;
 	if (USeinMovement** Existing = MovementInstanceMap.Find(Handle))
 	{
+		if (*Existing)
+		{
+			UClass* ExistingClass = (*Existing)->GetClass();
+			// The overwhelmingly common path is a stable authored mode. Avoid a
+			// soft-class load/lookup for every moving entity on every sim tick.
+			if ((Move.MovementClass.IsNull()
+					&& ExistingClass == USeinBasicMovement::StaticClass())
+				|| Move.MovementClass.ResolveClass() == ExistingClass)
+			{
+				return *Existing;
+			}
+		}
+
+		DesiredClass = ResolveMovementClass(Move);
 		if (*Existing && (*Existing)->GetClass() == DesiredClass)
 		{
 			return *Existing;
@@ -307,6 +325,13 @@ USeinMovement* USeinMovementSubsystem::GetOrCreateMovementInstance(
 		// state (a different mode's steer/ramp state is meaningless to carry).
 		MovementInstancePool.RemoveSingleSwap(*Existing);
 		MovementInstanceMap.Remove(Handle);
+		MovementStateRevisions.Remove(Handle);
+		BumpMovementTopologyRevision();
+	}
+
+	if (!DesiredClass)
+	{
+		DesiredClass = ResolveMovementClass(Move);
 	}
 
 	USeinMovement* NewInstance = NewObject<USeinMovement>(this, DesiredClass);
@@ -319,6 +344,8 @@ USeinMovement* USeinMovementSubsystem::GetOrCreateMovementInstance(
 
 	MovementInstanceMap.Add(Handle, NewInstance);
 	MovementInstancePool.Add(NewInstance);
+	MarkMovementStateDirty(Handle);
+	BumpMovementTopologyRevision();
 	return NewInstance;
 }
 
@@ -328,6 +355,47 @@ void USeinMovementSubsystem::SweepStaleMovementInstances(USeinWorldSubsystem& Wo
 	{
 		if (World.GetEntityPool().IsValid(It->Key)) continue;
 		MovementInstancePool.RemoveSingleSwap(It->Value);
+		MovementStateRevisions.Remove(It->Key);
 		It.RemoveCurrent();
+		BumpMovementTopologyRevision();
+	}
+}
+
+void USeinMovementSubsystem::MarkMovementStateDirty(
+	FSeinEntityHandle Handle)
+{
+	if (!Handle.IsValid())
+	{
+		return;
+	}
+	++MovementStateMutationRevision;
+	if (MovementStateMutationRevision == 0)
+	{
+		++MovementStateMutationRevision;
+	}
+	MovementStateRevisions.Add(Handle, MovementStateMutationRevision);
+}
+
+void USeinMovementSubsystem::MarkAvoidanceStateDirty()
+{
+	++MovementStateMutationRevision;
+	if (MovementStateMutationRevision == 0)
+	{
+		++MovementStateMutationRevision;
+	}
+	AvoidanceStateRevision = MovementStateMutationRevision;
+}
+
+void USeinMovementSubsystem::BumpMovementTopologyRevision()
+{
+	++MovementStateMutationRevision;
+	if (MovementStateMutationRevision == 0)
+	{
+		++MovementStateMutationRevision;
+	}
+	++MovementStateTopologyRevision;
+	if (MovementStateTopologyRevision == 0)
+	{
+		++MovementStateTopologyRevision;
 	}
 }

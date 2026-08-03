@@ -324,7 +324,7 @@ namespace UE::SeinARTSTests
 					State.Footprints[Bit]);
 				State.Footprints[Bit].Sort();
 				Fog.ApplyFootprintDiff(
-					Group, Bit, Empty, State.Footprints[Bit]);
+					Owner, Group, Bit, Empty, State.Footprints[Bit]);
 			}
 			return StaleSource;
 		}

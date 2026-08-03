@@ -33,9 +33,11 @@
 #include "Components/SeinExtentsHelpers.h"
 #include "Settings/PluginSettings.h"
 #include "Core/SeinParallel.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 void USeinCollisionResolverParallel::Resolve(USeinWorldSubsystem& World)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Collision_Parallel_Resolve);
 	// Shared floor: channel default responses resolved once per tick. Identical
 	// to the Gauss-Seidel resolver.
 	TMap<FName, ESeinCollisionResponse> ChannelDefaults;
@@ -52,16 +54,26 @@ void USeinCollisionResolverParallel::Resolve(USeinWorldSubsystem& World)
 	const int32 Passes = (NumPasses > 0) ? NumPasses : 1;
 	for (int32 Pass = 0; Pass < Passes; ++Pass)
 	{
-		JacobiPass(World, ChannelDefaults, MassRatioCutoff);
+		if (!JacobiPass(World, ChannelDefaults, MassRatioCutoff))
+		{
+			// This pass made no exact fixed-point transform changes. Repeating
+			// the same deterministic calculation from the same state cannot
+			// create one, so the remaining relaxation passes are redundant.
+			break;
+		}
 	}
 
 	// Overlap events run on the SETTLED positions (after Block separation),
 	// exactly like the default.
-	DetectOverlapsAndEmit(World, ChannelDefaults);
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Collision_OverlapEvents);
+		DetectOverlapsAndEmit(World, ChannelDefaults);
+	}
 }
 
-void USeinCollisionResolverParallel::JacobiPass(USeinWorldSubsystem& World, const TMap<FName, ESeinCollisionResponse>& ChannelDefaults, const FFixedPoint MassRatioCutoff)
+bool USeinCollisionResolverParallel::JacobiPass(USeinWorldSubsystem& World, const TMap<FName, ESeinCollisionResponse>& ChannelDefaults, const FFixedPoint MassRatioCutoff)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Collision_JacobiPass);
 	const FSeinCollisionSpatialHash& Hash = World.GetCollisionSpatialHash();
 	const FFixedPoint CellSize = Hash.GetCellSize();
 
@@ -71,7 +83,7 @@ void USeinCollisionResolverParallel::JacobiPass(USeinWorldSubsystem& World, cons
 	const ISeinComponentStorage* ExtentsStorage =
 		World.GetComponentStorageRaw(
 			FSeinExtentsComponent::StaticStruct());
-	if (!ExtentsStorage) return;
+	if (!ExtentsStorage) return false;
 
 	// ------------------------------------------------------------------
 	// 1) Gather every MOVABLE collider into a flat, indexable array (serial).
@@ -90,24 +102,27 @@ void USeinCollisionResolverParallel::JacobiPass(USeinWorldSubsystem& World, cons
 	};
 	TArray<FMover> Movers;
 	Movers.Reserve(World.GetEntityPool().GetActiveCount());
-	World.GetEntityPool().ForEachEntity([&](
-		FSeinEntityHandle SelfHandle,
-		const FSeinEntity& /*SelfEntity*/)
 	{
-		const FSeinExtentsComponent* SelfExt =
-			static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(SelfHandle));
-		if (!IsCollider(SelfExt)) return;
-		// Non-movable colliders (Static + Stationary) never initiate a push — they
-		// are only ever the queried neighbour of a movable, so skip them as "self".
-		if (SelfExt->Mobility != ESeinCollisionMobility::Movable) return;
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Collision_GatherMovers);
+		World.GetEntityPool().ForEachEntity([&](
+			FSeinEntityHandle SelfHandle,
+			const FSeinEntity& /*SelfEntity*/)
+		{
+			const FSeinExtentsComponent* SelfExt =
+				static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(SelfHandle));
+			if (!IsCollider(SelfExt)) return;
+			// Non-movable colliders (Static + Stationary) never initiate a push — they
+			// are only ever the queried neighbour of a movable, so skip them as "self".
+			if (SelfExt->Mobility != ESeinCollisionMobility::Movable) return;
 
-		const FFixedPoint SelfRadius = SeinExtentsHelpers::GetColliderBoundingRadius(*SelfExt);
-		if (SelfRadius <= FFixedPoint::Zero) return;
+			const FFixedPoint SelfRadius = SeinExtentsHelpers::GetColliderBoundingRadius(*SelfExt);
+			if (SelfRadius <= FFixedPoint::Zero) return;
 
-		Movers.Add(FMover{ SelfHandle, SelfExt, SelfRadius, ResolveColliderMass(*SelfExt) });
-	});
+			Movers.Add(FMover{ SelfHandle, SelfExt, SelfRadius, ResolveColliderMass(*SelfExt) });
+		});
+	}
 
-	if (Movers.Num() == 0) return;
+	if (Movers.Num() == 0) return false;
 
 	// Output slot per mover — the disjoint write target for the parallel compute.
 	TArray<FFixedVector> NewPos;
@@ -125,8 +140,10 @@ void USeinCollisionResolverParallel::JacobiPass(USeinWorldSubsystem& World, cons
 	// ------------------------------------------------------------------
 	const bool bForceSerial = World.AuthoritativeDestinationResolver.IsBound();
 
-	SeinParallelFor(Movers.Num(), [&](int32 i)
 	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Collision_JacobiCompute);
+		SeinParallelFor(Movers.Num(), [&](int32 i)
+		{
 		const FMover& Self = Movers[i];
 		const FSeinEntity* SelfEntityPtr = World.GetEntityPool().Get(Self.Handle);
 		if (!SelfEntityPtr)
@@ -148,15 +165,20 @@ void USeinCollisionResolverParallel::JacobiPass(USeinWorldSubsystem& World, cons
 		// never share a buffer.
 		TArray<FSeinEntityHandle> Neighbors;
 		TArray<FCollisionShape2D> SelfShapes;
-		// Self's collision shapes from the SNAPSHOT transform, built once and
-		// reused across the whole neighbour loop.
-		BuildShapes2D(*Self.Ext, SelfEntityPtr->Transform, SelfShapes);
 
 		// Footprint-stamped broadphase: a query radius covering self's footprint
 		// finds any overlapping collider; +1 cell of slack absorbs drift.
 		const FFixedPoint QueryRadius = Self.Radius + CellSize;
-		Neighbors.Reset();
 		Hash.QueryRadius(SelfPos0, QueryRadius, Neighbors, Self.Handle);
+		if (Neighbors.Num() == 0)
+		{
+			NewPos[i] = SelfPos0;
+			return;
+		}
+
+		// Build the self shapes only when the broadphase found a possible pair.
+		// Settled, isolated bodies therefore avoid all narrowphase setup.
+		BuildShapes2D(*Self.Ext, SelfEntityPtr->Transform, SelfShapes);
 
 		// Barrier-gated running position. Starts at the snapshot and only ever
 		// accepts a push that CanOccupy allows (never crosses a wall / the grid
@@ -220,6 +242,7 @@ void USeinCollisionResolverParallel::JacobiPass(USeinWorldSubsystem& World, cons
 					SelfShare = (MassSum > FFixedPoint::Epsilon) ? (MassOther / MassSum) : FFixedPoint::Half;
 				}
 			}
+			if (SelfShare <= FFixedPoint::Zero) continue;
 
 			// Self moves along -Normal (away from other), scaled by its share and
 			// the relaxation factor; preserve the snapshot Z. Per-push barrier
@@ -227,6 +250,7 @@ void USeinCollisionResolverParallel::JacobiPass(USeinWorldSubsystem& World, cons
 			// the grid edge (cover exempt) — else skip this push, so the body
 			// never crosses a barrier even mid-accumulation.
 			const FFixedVector Push = -Normal * (Depth * SelfShare * Relaxation);
+			if (Push == FFixedVector::ZeroVector) continue;
 			FFixedVector Candidate = Running + Push;
 			Candidate.Z = SelfPos0.Z;
 			if (CanOccupy(World, Candidate, Self.Radius))
@@ -235,20 +259,34 @@ void USeinCollisionResolverParallel::JacobiPass(USeinWorldSubsystem& World, cons
 			}
 		}
 
-		NewPos[i] = Running;
-	}, bForceSerial);
+			NewPos[i] = Running;
+		}, bForceSerial);
+	}
 
 	// ------------------------------------------------------------------
 	// 3) SERIAL apply. Disjoint per self (each writes only its own transform),
 	//    deferred out of the compute so no mover read another's mid-pass move.
 	// ------------------------------------------------------------------
-	for (int32 i = 0; i < Movers.Num(); ++i)
+	bool bAnyChanged = false;
 	{
-		FSeinEntity* SelfEntityPtr =
-			World.GetEntityMutable(Movers[i].Handle);
-		if (!SelfEntityPtr) continue;
-		SelfEntityPtr->Transform.SetLocation(NewPos[i]);
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Collision_Apply);
+		for (int32 i = 0; i < Movers.Num(); ++i)
+		{
+			const FSeinEntity* CurrentEntity =
+				World.GetEntity(Movers[i].Handle);
+			if (!CurrentEntity
+				|| CurrentEntity->Transform.GetLocation() == NewPos[i])
+			{
+				continue;
+			}
+			FSeinEntity* SelfEntityPtr =
+				World.GetEntityMutable(Movers[i].Handle);
+			if (!SelfEntityPtr) continue;
+			SelfEntityPtr->Transform.SetLocation(NewPos[i]);
+			bAnyChanged = true;
+		}
 	}
+	return bAnyChanged;
 }
 
 namespace

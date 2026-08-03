@@ -28,9 +28,28 @@ public:
 	virtual bool HasComponent(FSeinEntityHandle Handle) const = 0;
 	virtual void* GetComponentRaw(FSeinEntityHandle Handle) = 0;
 	virtual const void* GetComponentRaw(FSeinEntityHandle Handle) const = 0;
+	/** Mutable access without eagerly advancing the canonical-state revision.
+	 *  The caller must compare its result and call CommitDeferredMutation exactly
+	 *  once, on the serial spine, when deterministic state actually changed. This
+	 *  is intended for disjoint-write parallel kernels; ordinary callers should
+	 *  use GetComponentRaw, whose conservative touch remains fail-safe. */
+	virtual void* GetComponentRawForDeferredMutation(
+		FSeinEntityHandle Handle) = 0;
+	/** Publish an actual write obtained through
+	 *  GetComponentRawForDeferredMutation. Not thread-safe: canonical merge/apply
+	 *  code must invoke this serially in stable handle order. */
+	virtual void CommitDeferredMutation(FSeinEntityHandle Handle) = 0;
 	virtual uint32 ComputeHash() const = 0;
 	virtual int32 GetComponentCount() const = 0;
 	virtual void Clear() = 0;
+	/** Process-local mutation evidence for incremental canonical digests. The
+	 *  revision is never serialized or included as state; it only tells the
+	 *  cache whether the exact value for this handle must be projected again. */
+	virtual uint64 GetMutationRevision(FSeinEntityHandle Handle) const = 0;
+	/** Latest revision assigned to any slot; zero means never touched. */
+	virtual uint64 GetLatestMutationRevision() const = 0;
+	/** Changes whenever the occupied-handle set or storage capacity changes. */
+	virtual uint64 GetTopologyRevision() const = 0;
 
 	/**
 	 * Sparse live-slot iteration: invoke Visitor for every alive slot exactly
@@ -123,6 +142,7 @@ public:
 			Data.SetNumZeroed(TotalSlots * StructSize);
 			HasComponentBits.Init(false, TotalSlots);
 			StoredGenerations.Init(0, TotalSlots);
+			SlotMutationRevisions.Init(0, TotalSlots);
 			SlotCapacity = TotalSlots;
 
 			// Initialize all slots with default-constructed structs
@@ -164,6 +184,7 @@ public:
 			HasComponentBits.Add(false, BitsToAdd);
 		}
 		StoredGenerations.SetNumZeroed(NewTotalSlots);
+		SlotMutationRevisions.SetNumZeroed(NewTotalSlots);
 
 		SlotCapacity = NewTotalSlots;
 
@@ -172,6 +193,7 @@ public:
 		{
 			StructType->InitializeStruct(GetSlotPtr(i));
 		}
+		BumpTopologyRevision();
 	}
 
 	virtual void AddComponent(FSeinEntityHandle Handle, const void* ComponentData) override
@@ -214,6 +236,11 @@ public:
 
 		HasComponentBits[SlotIndex] = true;
 		StoredGenerations[SlotIndex] = Handle.Generation;
+		TouchSlot(SlotIndex);
+		if (!bHadComponent || bRecycledSlot)
+		{
+			BumpTopologyRevision();
+		}
 	}
 
 	virtual void RemoveComponent(FSeinEntityHandle Handle) override
@@ -225,6 +252,8 @@ public:
 			StoredGenerations[SlotIndex] = 0;
 			ResetSlot(SlotIndex);
 			ComponentCount--;
+			TouchSlot(SlotIndex);
+			BumpTopologyRevision();
 		}
 	}
 
@@ -243,6 +272,7 @@ public:
 		const int32 SlotIndex = static_cast<int32>(Handle.Index);
 		if (IsStoredHandle(Handle))
 		{
+			TouchSlot(SlotIndex);
 			return GetSlotPtr(SlotIndex);
 		}
 		return nullptr;
@@ -256,6 +286,22 @@ public:
 			return GetSlotPtr(SlotIndex);
 		}
 		return nullptr;
+	}
+
+	virtual void* GetComponentRawForDeferredMutation(
+		FSeinEntityHandle Handle) override
+	{
+		const int32 SlotIndex = static_cast<int32>(Handle.Index);
+		return IsStoredHandle(Handle) ? GetSlotPtr(SlotIndex) : nullptr;
+	}
+
+	virtual void CommitDeferredMutation(
+		FSeinEntityHandle Handle) override
+	{
+		if (IsStoredHandle(Handle))
+		{
+			TouchSlot(static_cast<int32>(Handle.Index));
+		}
 	}
 
 	virtual uint32 ComputeHash() const override
@@ -453,6 +499,25 @@ public:
 		return ComponentCount;
 	}
 
+	virtual uint64 GetMutationRevision(
+		FSeinEntityHandle Handle) const override
+	{
+		return IsStoredHandle(Handle)
+			&& SlotMutationRevisions.IsValidIndex(Handle.Index)
+				? SlotMutationRevisions[Handle.Index]
+				: 0;
+	}
+
+	virtual uint64 GetTopologyRevision() const override
+	{
+		return TopologyRevision;
+	}
+
+	virtual uint64 GetLatestMutationRevision() const override
+	{
+		return MutationRevisionCounter;
+	}
+
 	virtual void Clear() override
 	{
 		for (TConstSetBitIterator<> It(HasComponentBits); It; ++It)
@@ -462,6 +527,7 @@ public:
 		HasComponentBits.Init(false, HasComponentBits.Num());
 		StoredGenerations.Init(0, StoredGenerations.Num());
 		ComponentCount = 0;
+		BumpTopologyRevision();
 	}
 
 	virtual void ForEachLiveComponent(
@@ -473,6 +539,7 @@ public:
 		for (TConstSetBitIterator<> It(HasComponentBits); It; ++It)
 		{
 			const int32 SlotIndex = It.GetIndex();
+			TouchSlot(SlotIndex);
 			Visitor(
 				FSeinEntityHandle(SlotIndex, StoredGenerations[SlotIndex]),
 				GetSlotPtr(SlotIndex));
@@ -570,7 +637,9 @@ public:
 				{
 					return i;
 				}
+				TouchSlot(Slot);
 			}
+			BumpTopologyRevision();
 			return EntryCount;
 		}
 	}
@@ -591,6 +660,29 @@ private:
 		// ClearScriptStruct destroys and reconstructs the payload. Calling
 		// InitializeStruct again would double-construct resource-owning fields.
 		StructType->ClearScriptStruct(GetSlotPtr(SlotIndex));
+	}
+
+	void TouchSlot(int32 SlotIndex)
+	{
+		if (!SlotMutationRevisions.IsValidIndex(SlotIndex))
+		{
+			return;
+		}
+		++MutationRevisionCounter;
+		if (MutationRevisionCounter == 0)
+		{
+			++MutationRevisionCounter;
+		}
+		SlotMutationRevisions[SlotIndex] = MutationRevisionCounter;
+	}
+
+	void BumpTopologyRevision()
+	{
+		++TopologyRevision;
+		if (TopologyRevision == 0)
+		{
+			++TopologyRevision;
+		}
 	}
 
 	bool EnsureSlotCapacity(int32 SlotIndex)
@@ -623,6 +715,9 @@ private:
 	TArray<uint8> Data;
 	TBitArray<> HasComponentBits;
 	TArray<int32> StoredGenerations;
+	TArray<uint64> SlotMutationRevisions;
+	uint64 MutationRevisionCounter = 0;
+	uint64 TopologyRevision = 1;
 	int32 SlotCapacity = 0;
 	int32 ComponentCount;
 };

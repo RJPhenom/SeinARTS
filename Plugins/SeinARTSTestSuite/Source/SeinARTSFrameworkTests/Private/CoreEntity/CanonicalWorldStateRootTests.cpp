@@ -7,6 +7,31 @@
 #include "Simulation/SeinTestSnapshotRestore.h"
 #include "Simulation/SeinWorldSubsystem.h"
 
+struct FSeinWorldSubsystemTestAccess
+{
+	static bool SealRoutineRoot(
+		USeinWorldSubsystem& World,
+		bool bForceFullRebuild,
+		FGuid& OutRoot,
+		FString& OutError)
+	{
+		return World.SealRoutineCanonicalStateRoot(
+			World.GetCurrentTick(),
+			bForceFullRebuild,
+			OutRoot,
+			OutError);
+	}
+
+	static bool GetSealedRoutineRoot(
+		const USeinWorldSubsystem& World,
+		FGuid& OutRoot,
+		FString& OutError)
+	{
+		return World.GetSealedRoutineCanonicalStateRoot(
+			World.GetCurrentTick(), OutRoot, OutError);
+	}
+};
+
 namespace UE::SeinARTSTests
 {
 	namespace
@@ -128,6 +153,56 @@ namespace UE::SeinARTSTests
 			World->ComputeCanonicalStateRoot(PendingCommandRoot, Error)));
 		ASSERT_THAT(IsTrue(PendingCommandRoot.IsValid()));
 		ASSERT_THAT(IsTrue(EmptyQueueRoot != PendingCommandRoot));
+
+		World->StopSimulation();
+	}
+
+	TEST(RoutineWorldStateRootMatchesForcedRebuildAndTracksMutation,
+		"SeinARTS.Unit.CoreEntity.CanonicalState.WorldRoot")
+	{
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+
+		FString Error;
+		ASSERT_THAT(IsTrue(StartRootTestWorld(
+			*World, TEXT("CanonicalRoot.RoutineIncremental"), Error)));
+
+		FGuid InitialFullRoot;
+		ASSERT_THAT(IsTrue(
+			FSeinWorldSubsystemTestAccess::SealRoutineRoot(
+				*World, true, InitialFullRoot, Error)));
+		ASSERT_THAT(IsTrue(InitialFullRoot.IsValid()));
+
+		FGuid InitialIncrementalRoot;
+		ASSERT_THAT(IsTrue(
+			FSeinWorldSubsystemTestAccess::SealRoutineRoot(
+				*World, false, InitialIncrementalRoot, Error)));
+		ASSERT_THAT(IsTrue(InitialIncrementalRoot == InitialFullRoot));
+
+		World->SubmitLocalCommandDraft(FSeinCommand::MakePingCommand(
+			FSeinPlayerID(1), FFixedVector()));
+		ASSERT_THAT(AreEqual(1, World->GetPendingCommands().Num()));
+
+		FGuid MutatedIncrementalRoot;
+		ASSERT_THAT(IsTrue(
+			FSeinWorldSubsystemTestAccess::SealRoutineRoot(
+				*World, false, MutatedIncrementalRoot, Error)));
+		ASSERT_THAT(IsTrue(MutatedIncrementalRoot.IsValid()));
+		ASSERT_THAT(IsTrue(MutatedIncrementalRoot != InitialFullRoot));
+
+		FGuid MutatedFullRoot;
+		ASSERT_THAT(IsTrue(
+			FSeinWorldSubsystemTestAccess::SealRoutineRoot(
+				*World, true, MutatedFullRoot, Error)));
+		ASSERT_THAT(IsTrue(MutatedFullRoot == MutatedIncrementalRoot));
+
+		FGuid SealedRoot;
+		ASSERT_THAT(IsTrue(
+			FSeinWorldSubsystemTestAccess::GetSealedRoutineRoot(
+				*World, SealedRoot, Error)));
+		ASSERT_THAT(IsTrue(SealedRoot == MutatedFullRoot));
 
 		World->StopSimulation();
 	}

@@ -15,6 +15,7 @@
 #include "Components/SeinNavigationComponent.h"
 #include "Math/MathLib.h"
 #include "Types/FixedPoint.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 FFixedQuaternion USeinFormation::FacingFromDirection(FFixedVector DirectionXY)
 {
@@ -336,48 +337,135 @@ void USeinFormation::SeparatePositions(
 {
 	const int32 N = Positions.Num();
 	if (N < 2) return;
-	const FFixedPoint Eps = FFixedPoint::One / FFixedPoint::FromInt(100);
-	for (int32 Iter = 0; Iter < MaxIterations; ++Iter)
+
+	// Blob/click formations enter this safety net with every point exactly on
+	// the same anchor. The relaxation result is translation-invariant: its
+	// pair order, fixed-point normals, and pushes depend only on the ordered
+	// footprint radii + iteration count. Cache those exact solved OFFSETS so a
+	// render-rate preview does the O(Iterations*N^2) solve once per footprint
+	// signature, while the command and later anchors receive byte-identical
+	// slots. Shaped/custom formations keep the ordinary path below.
+	bool bAllCoincident = true;
+	const FFixedVector CommonAnchor = Positions[0];
+	for (int32 i = 1; i < N; ++i)
 	{
-		bool bMoved = false;
+		if (Positions[i] != Positions[0])
+		{
+			bAllCoincident = false;
+			break;
+		}
+	}
+
+	struct FBlobSeparationCacheEntry
+	{
+		TArray<int64> RadiusValues;
+		TArray<FFixedVector> Offsets;
+		int32 Iterations = 0;
+	};
+	static TArray<FBlobSeparationCacheEntry> BlobCache;
+	constexpr int32 MaxBlobCacheEntries = 64;
+
+	TArray<int64, TInlineAllocator<64>> RadiusKey;
+	if (bAllCoincident)
+	{
+		RadiusKey.Reserve(N);
 		for (int32 i = 0; i < N; ++i)
 		{
-			for (int32 j = i + 1; j < N; ++j)
-			{
-				FFixedVector D = Positions[j] - Positions[i]; D.Z = FFixedPoint::Zero;
-				const FFixedPoint DistSq = D.X * D.X + D.Y * D.Y;
-				const FFixedPoint Ri = Radii.IsValidIndex(i) ? Radii[i] : FFixedPoint::Zero;
-				const FFixedPoint Rj = Radii.IsValidIndex(j) ? Radii[j] : FFixedPoint::Zero;
-				// Rest with breathing room: space slots a small margin BEYOND footprint contact
-				// (Ri+Rj) so units settled onto them sit just OUTSIDE the collision floor's
-				// separation threshold — the floor then never fires at rest and a formation holds
-				// its shape instead of being shoved apart. In the shared resolver path, so the
-				// preview shows the same spacing the commit lands on (root CLAUDE.md #6).
-				const FFixedPoint RestMargin = FFixedPoint::FromInt(25);
-				const FFixedPoint MinDist = Ri + Rj + RestMargin;
-				if (DistSq >= MinDist * MinDist) { continue; } // touching or clear — leave it
-				FFixedPoint Dist = SeinMath::Sqrt(DistSq);
-				FFixedVector Dir;
-				if (Dist > Eps)
-				{
-					Dir = FFixedVector(D.X / Dist, D.Y / Dist, FFixedPoint::Zero);
-				}
-				else
-				{
-					// Coincident → deterministic arbitrary direction derived from the index pair.
-					const FFixedPoint Ang = FFixedPoint::TwoPi * FFixedPoint::FromInt((i * 7 + j) % 16) / FFixedPoint::FromInt(16);
-					Dir = FFixedVector(SeinMath::Cos(Ang), SeinMath::Sin(Ang), FFixedPoint::Zero);
-					Dist = FFixedPoint::Zero;
-				}
-				const FFixedPoint Push = (MinDist - Dist) / FFixedPoint::Two; // each moves half the overlap
-				Positions[i].X = Positions[i].X - Dir.X * Push;
-				Positions[i].Y = Positions[i].Y - Dir.Y * Push;
-				Positions[j].X = Positions[j].X + Dir.X * Push;
-				Positions[j].Y = Positions[j].Y + Dir.Y * Push;
-				bMoved = true;
-			}
+			RadiusKey.Add(Radii.IsValidIndex(i) ? Radii[i].Value : 0);
 		}
-		if (!bMoved) break;
+		for (const FBlobSeparationCacheEntry& Entry : BlobCache)
+		{
+			if (Entry.Iterations != MaxIterations
+				|| Entry.RadiusValues.Num() != RadiusKey.Num())
+			{
+				continue;
+			}
+			bool bSame = true;
+			for (int32 i = 0; i < RadiusKey.Num(); ++i)
+			{
+				if (Entry.RadiusValues[i] != RadiusKey[i])
+				{
+					bSame = false;
+					break;
+				}
+			}
+			if (!bSame) continue;
+
+			TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Formation_SeparateBlobCacheHit);
+			for (int32 i = 0; i < N; ++i)
+			{
+				Positions[i] = CommonAnchor + Entry.Offsets[i];
+			}
+			return;
+		}
+	}
+
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Formation_SeparateRelaxation);
+		const FFixedPoint Eps = FFixedPoint::One / FFixedPoint::FromInt(100);
+		for (int32 Iter = 0; Iter < MaxIterations; ++Iter)
+		{
+			bool bMoved = false;
+			for (int32 i = 0; i < N; ++i)
+			{
+				for (int32 j = i + 1; j < N; ++j)
+				{
+					FFixedVector D = Positions[j] - Positions[i]; D.Z = FFixedPoint::Zero;
+					const FFixedPoint Ri = Radii.IsValidIndex(i) ? Radii[i] : FFixedPoint::Zero;
+					const FFixedPoint Rj = Radii.IsValidIndex(j) ? Radii[j] : FFixedPoint::Zero;
+					// Rest with breathing room: space slots a small margin BEYOND footprint contact
+					// (Ri+Rj) so units settled onto them sit just OUTSIDE the collision floor's
+					// separation threshold — the floor then never fires at rest and a formation holds
+					// its shape instead of being shoved apart. In the shared resolver path, so the
+					// preview shows the same spacing the commit lands on (root CLAUDE.md #6).
+					const FFixedPoint RestMargin = FFixedPoint::FromInt(25);
+					const FFixedPoint MinDist = Ri + Rj + RestMargin;
+					// Cheap exact broadphase: if either planar axis alone clears
+					// MinDist, the full Euclidean distance necessarily clears it.
+					// This preserves the canonical pair order and settled result while
+					// avoiding three 64x64 fixed-point multiplies for most shaped slots.
+					const FFixedPoint NegMinDist = -MinDist;
+					if (D.X >= MinDist || D.X <= NegMinDist
+						|| D.Y >= MinDist || D.Y <= NegMinDist)
+					{
+						continue;
+					}
+					const FFixedPoint DistSq = D.X * D.X + D.Y * D.Y;
+					if (DistSq >= MinDist * MinDist) { continue; }
+					FFixedPoint Dist = SeinMath::Sqrt(DistSq);
+					FFixedVector Dir;
+					if (Dist > Eps)
+					{
+						Dir = FFixedVector(D.X / Dist, D.Y / Dist, FFixedPoint::Zero);
+					}
+					else
+					{
+						const FFixedPoint Ang = FFixedPoint::TwoPi * FFixedPoint::FromInt((i * 7 + j) % 16) / FFixedPoint::FromInt(16);
+						Dir = FFixedVector(SeinMath::Cos(Ang), SeinMath::Sin(Ang), FFixedPoint::Zero);
+						Dist = FFixedPoint::Zero;
+					}
+					const FFixedPoint Push = (MinDist - Dist) / FFixedPoint::Two;
+					Positions[i].X = Positions[i].X - Dir.X * Push;
+					Positions[i].Y = Positions[i].Y - Dir.Y * Push;
+					Positions[j].X = Positions[j].X + Dir.X * Push;
+					Positions[j].Y = Positions[j].Y + Dir.Y * Push;
+					bMoved = true;
+				}
+			}
+			if (!bMoved) break;
+		}
+	}
+
+	if (bAllCoincident && BlobCache.Num() < MaxBlobCacheEntries)
+	{
+		FBlobSeparationCacheEntry& Entry = BlobCache.AddDefaulted_GetRef();
+		Entry.Iterations = MaxIterations;
+		Entry.RadiusValues.Append(RadiusKey.GetData(), RadiusKey.Num());
+		Entry.Offsets.SetNum(N);
+		for (int32 i = 0; i < N; ++i)
+		{
+			Entry.Offsets[i] = Positions[i] - CommonAnchor;
+		}
 	}
 }
 

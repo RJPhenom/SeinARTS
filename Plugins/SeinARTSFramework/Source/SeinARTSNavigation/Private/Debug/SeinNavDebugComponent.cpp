@@ -20,6 +20,7 @@
  */
 
 #include "Debug/SeinNavDebugComponent.h"
+#include "SeinARTSNavigationModule.h"
 #include "SeinNavigation.h"
 #include "SeinNavigationSubsystem.h"
 #include "Volumes/SeinLevelVolume.h"
@@ -55,18 +56,25 @@ struct FSeinNavBlockerBucket
 	TArray<FVector> Centers;
 };
 
+/** Immutable baked-grid payload. Shared between the game-thread component and
+ *  render-thread scene proxies so a moving dynamic blocker never forces an
+ *  O(all nav cells) recollect/rebucket/copy on the game thread. */
+struct FSeinNavDebugStaticSnapshot
+{
+	TArray<FSeinNavBlockerBucket> Buckets;
+	float HalfExtent = 0.0f;
+};
+
 class FSeinNavDebugProxy final : public FPrimitiveSceneProxy
 {
 public:
 	FSeinNavDebugProxy(UPrimitiveComponent* InComponent,
-	                   TArray<FSeinNavBlockerBucket>&& InStaticBuckets,
+	                   TSharedPtr<const FSeinNavDebugStaticSnapshot, ESPMode::ThreadSafe> InStaticSnapshot,
 	                   TArray<FSeinNavBlockerBucket>&& InBlockerBuckets,
-	                   float InHalfExtent,
 	                   float InBlockerHalfExtent)
 		: FPrimitiveSceneProxy(InComponent)
-		, StaticBuckets(MoveTemp(InStaticBuckets))
+		, StaticSnapshot(MoveTemp(InStaticSnapshot))
 		, BlockerBuckets(MoveTemp(InBlockerBuckets))
-		, HalfExtent(InHalfExtent)
 		, BlockerHalfExtent(InBlockerHalfExtent)
 	{
 		bWillEverBeLit = false;
@@ -81,9 +89,7 @@ public:
 	virtual uint32 GetMemoryFootprint() const override
 	{
 		uint32 Bytes = sizeof(*this)
-		     + StaticBuckets.GetAllocatedSize()
 		     + BlockerBuckets.GetAllocatedSize();
-		for (const FSeinNavBlockerBucket& B : StaticBuckets)  { Bytes += B.Centers.GetAllocatedSize(); }
 		for (const FSeinNavBlockerBucket& B : BlockerBuckets) { Bytes += B.Centers.GetAllocatedSize(); }
 		return Bytes;
 	}
@@ -129,16 +135,19 @@ public:
 			// Static nav cells — one batched mesh per color bucket (walkable green,
 			// blocked red, terrain-type DebugColor). Renders each cell's TRUE color
 			// from the collector instead of snapping every cell to a fixed green/red.
-			for (const FSeinNavBlockerBucket& Bucket : StaticBuckets)
+			if (StaticSnapshot.IsValid())
 			{
-				if (Bucket.Centers.Num() == 0) continue;
-				const FColoredMaterialRenderProxy* BucketMat = &Collector.AllocateOneFrameResource<FColoredMaterialRenderProxy>(
-					BaseProxy, Bucket.Color);
-				FDynamicMeshBuilder Builder(View->GetFeatureLevel());
-				EmitQuads(Builder, Bucket.Centers, HalfExtent, View);
-				Builder.GetMesh(FMatrix::Identity, BucketMat, SDPG_World,
-					true /*bDisableBackfaceCulling*/, false /*bReceivesDecals*/,
-					ViewIdx, Collector);
+				for (const FSeinNavBlockerBucket& Bucket : StaticSnapshot->Buckets)
+				{
+					if (Bucket.Centers.Num() == 0) continue;
+					const FColoredMaterialRenderProxy* BucketMat = &Collector.AllocateOneFrameResource<FColoredMaterialRenderProxy>(
+						BaseProxy, Bucket.Color);
+					FDynamicMeshBuilder Builder(View->GetFeatureLevel());
+					EmitQuads(Builder, Bucket.Centers, StaticSnapshot->HalfExtent, View);
+					Builder.GetMesh(FMatrix::Identity, BucketMat, SDPG_World,
+						true /*bDisableBackfaceCulling*/, false /*bReceivesDecals*/,
+						ViewIdx, Collector);
+				}
 			}
 			// One mesh per dynamic-blocker color bucket (own half-extent). Typical scene
 			// has 1-3 buckets (single layer most blockers) so the per-view cost stays small.
@@ -247,9 +256,8 @@ private:
 		}
 	}
 
-	TArray<FSeinNavBlockerBucket> StaticBuckets;
+	TSharedPtr<const FSeinNavDebugStaticSnapshot, ESPMode::ThreadSafe> StaticSnapshot;
 	TArray<FSeinNavBlockerBucket> BlockerBuckets;
-	float HalfExtent;
 	float BlockerHalfExtent;
 };
 
@@ -278,9 +286,8 @@ FPrimitiveSceneProxy* USeinNavDebugComponent::CreateSceneProxy()
 	UWorld* World = GetWorld();
 	if (!World) return nullptr;
 
-	TArray<FSeinNavBlockerBucket> StaticBuckets;
+	TSharedPtr<const FSeinNavDebugStaticSnapshot, ESPMode::ThreadSafe> StaticSnapshot;
 	TArray<FSeinNavBlockerBucket> BlockerBuckets;
-	float HalfExtent = 0.0f;
 	float BlockerHalfExtent = 0.0f;
 
 	// Bucket (centers, colors) by EXACT color into per-color groups — shared by the live
@@ -311,10 +318,25 @@ FPrimitiveSceneProxy* USeinNavDebugComponent::CreateSceneProxy()
 	USeinNavigation* Nav = Sub ? Sub->GetNavigation() : nullptr;
 	if (Nav && Nav->HasRuntimeData())
 	{
-		TArray<FVector> Centers;
-		TArray<FColor> Colors;
-		Nav->CollectDebugCellQuads(Centers, Colors, HalfExtent);
-		BucketByColor(Centers, Colors, StaticBuckets);
+		const uint64 StaticGeneration = Nav->GetStaticEnvironmentGeneration();
+		if (!CachedStaticSnapshot.IsValid()
+			|| CachedStaticNav.Get() != Nav
+			|| CachedStaticGeneration != StaticGeneration)
+		{
+			TArray<FVector> Centers;
+			TArray<FColor> Colors;
+			float HalfExtent = 0.0f;
+			Nav->CollectDebugCellQuads(Centers, Colors, HalfExtent);
+
+			TSharedRef<FSeinNavDebugStaticSnapshot, ESPMode::ThreadSafe> NewSnapshot =
+				MakeShared<FSeinNavDebugStaticSnapshot, ESPMode::ThreadSafe>();
+			NewSnapshot->HalfExtent = HalfExtent;
+			BucketByColor(Centers, Colors, NewSnapshot->Buckets);
+			CachedStaticSnapshot = NewSnapshot;
+			CachedStaticNav = Nav;
+			CachedStaticGeneration = StaticGeneration;
+		}
+		StaticSnapshot = CachedStaticSnapshot;
 
 		// Dynamic blocker cells (overlay above static cells). Routed through the
 		// same scene proxy — folds the previously-per-frame DrawDebugSolidBox
@@ -350,11 +372,17 @@ FPrimitiveSceneProxy* USeinNavDebugComponent::CreateSceneProxy()
 		// directly. No blocker cells: dynamic blockers only exist in a live sim.
 		TArray<FVector> Centers;
 		TArray<FColor> Colors;
+		float HalfExtent = 0.0f;
 		CollectAssetPreviewQuads(Centers, Colors, HalfExtent);
-		BucketByColor(Centers, Colors, StaticBuckets);
+		TSharedRef<FSeinNavDebugStaticSnapshot, ESPMode::ThreadSafe> NewSnapshot =
+			MakeShared<FSeinNavDebugStaticSnapshot, ESPMode::ThreadSafe>();
+		NewSnapshot->HalfExtent = HalfExtent;
+		BucketByColor(Centers, Colors, NewSnapshot->Buckets);
+		StaticSnapshot = NewSnapshot;
 	}
 
-	if (StaticBuckets.Num() == 0 && BlockerBuckets.Num() == 0)
+	const int32 StaticBucketCount = StaticSnapshot.IsValid() ? StaticSnapshot->Buckets.Num() : 0;
+	if (StaticBucketCount == 0 && BlockerBuckets.Num() == 0)
 	{
 		UE_LOG(LogSeinNavDebug, Verbose, TEXT("CreateSceneProxy: 0 static + 0 blocker cells (no live nav grid + no baked asset preview)"));
 		return nullptr;
@@ -362,11 +390,12 @@ FPrimitiveSceneProxy* USeinNavDebugComponent::CreateSceneProxy()
 
 	UE_LOG(LogSeinNavDebug, Verbose,
 		TEXT("CreateSceneProxy: %d static color buckets + %d blocker color buckets, staticHE=%.1f blockerHE=%.1f"),
-		StaticBuckets.Num(), BlockerBuckets.Num(), HalfExtent, BlockerHalfExtent);
+		StaticBucketCount, BlockerBuckets.Num(),
+		StaticSnapshot.IsValid() ? StaticSnapshot->HalfExtent : 0.0f,
+		BlockerHalfExtent);
 
 	return new FSeinNavDebugProxy(this,
-		MoveTemp(StaticBuckets), MoveTemp(BlockerBuckets),
-		HalfExtent, BlockerHalfExtent);
+		MoveTemp(StaticSnapshot), MoveTemp(BlockerBuckets), BlockerHalfExtent);
 #else
 	return nullptr;
 #endif
@@ -407,6 +436,9 @@ void USeinNavDebugComponent::OnUnregister()
 	}
 	SubscribedNav.Reset();
 	NavMutatedHandle.Reset();
+	CachedStaticSnapshot.Reset();
+	CachedStaticNav.Reset();
+	CachedStaticGeneration = MAX_uint64;
 #endif
 	Super::OnUnregister();
 }
@@ -414,6 +446,14 @@ void USeinNavDebugComponent::OnUnregister()
 void USeinNavDebugComponent::HandleNavMutated()
 {
 #if UE_ENABLE_DEBUG_DRAWING
+	// Navigation can mutate every fixed tick while units carrying blocker
+	// stamps move. A hidden debug viewer must have zero rebuild cost. Enabling
+	// the showflag explicitly dirties all proxies, so the first visible frame
+	// still receives the latest blocker state.
+	if (!UE::SeinARTSNavigation::IsNavigationShowFlagOnForWorld(GetWorld()))
+	{
+		return;
+	}
 	MarkRenderStateDirty();
 #endif
 }

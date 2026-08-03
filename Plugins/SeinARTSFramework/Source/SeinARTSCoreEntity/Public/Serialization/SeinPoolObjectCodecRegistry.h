@@ -214,6 +214,28 @@ public:
 		FSeinSnapshotPoolInstanceRecord& OutRecord,
 		FString& OutError);
 
+	/** Capture the same complete canonical runtime state for live-root hashing,
+	 *  without allocating/copying the snapshot record's repeated class strings.
+	 *  The caller must verify Manifest provider leases once immediately before a
+	 *  stable-boundary batch and must not yield the game thread during the batch. */
+	static bool CaptureObjectForVerifiedRoot(
+		const FSeinPoolObjectCodecManifest& Manifest,
+		const UObject& Object,
+		ESeinPoolObjectKind ExpectedKind,
+		TArray<uint8>& OutStateBytes,
+		FGuid& OutRootClassContractDigest,
+		FString& OutError);
+
+	/** Resolve whether the admitted root capture is the built-in reflected path,
+	 *  which is a pure read and may join a stable-boundary ParallelFor. Explicit
+	 *  third-party provider callbacks remain game-thread-only. */
+	static bool ResolveVerifiedRootCaptureMode(
+		const FSeinPoolObjectCodecManifest& Manifest,
+		const UObject& Object,
+		ESeinPoolObjectKind ExpectedKind,
+		bool& bOutParallelReflected,
+		FString& OutError);
+
 	/**
 	 * Validate the imported descriptor against the local catalog, then create
 	 * the final candidate exactly once. The caller must retain/adopt that same

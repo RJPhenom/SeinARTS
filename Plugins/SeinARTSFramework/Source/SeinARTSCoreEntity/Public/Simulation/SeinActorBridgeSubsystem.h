@@ -3,7 +3,8 @@
  * @file    SeinActorBridgeSubsystem.h
  * @brief   Bridges the deterministic simulation and Unreal's visual layer.
  *          Spawns/destroys actors for sim entities, syncs transforms via
- *          OnSimTick, and routes visual events to actors each render frame.
+ *          frame-coalesced transform capture, and routes visual events to
+ *          actors each render frame.
  */
 
 #pragma once
@@ -25,11 +26,15 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnTechResearched, FSeinPlayerID, P
 /** Broadcast for every visual event dispatched (for global UI listeners like combat text). */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnVisualEventDispatched, const FSeinVisualEvent&, Event);
 
+/** Native presentation notification after an entity's visual actor enters the bridge map. */
+DECLARE_MULTICAST_DELEGATE_OneParam(FOnSeinActorRegistered, FSeinEntityHandle);
+
 /**
  * World subsystem that bridges the deterministic simulation with Unreal actors.
  *
  * Responsibilities:
- * - Listens to sim tick completion and calls OnSimTick() on all managed actors
+ * - Listens to simulation-frame completion and captures the latest state on
+ *   all managed actors once (catch-up ticks snap; single ticks interpolate)
  * - Flushes visual events each render frame and dispatches them:
  *     - EntitySpawned → spawns the Blueprint actor, calls InitializeWithEntity
  *     - EntityDestroyed → fires death events, sets actor lifespan for cleanup
@@ -56,6 +61,11 @@ public:
 	/** Get the visual actor for a sim entity. Returns nullptr if no actor exists. */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Bridge")
 	ASeinActor* GetActorForEntity(FSeinEntityHandle Handle) const;
+
+	/** Visit live render actors without walking the full sim entity pool or
+	 *  repeating handle-map lookups. Presentation-only; ordering is undefined. */
+	void ForEachRegisteredActor(
+		TFunctionRef<void(FSeinEntityHandle, ASeinActor&)> Visitor) const;
 
 	/** Manually register an actor for an entity (for pre-placed level actors). */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Bridge")
@@ -129,6 +139,10 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "SeinARTS|Bridge")
 	FOnVisualEventDispatched OnVisualEventDispatched;
 
+	/** Render-side consumers use this to update sparse actor-derived caches
+	 *  without rescanning the simulation every frame. */
+	FOnSeinActorRegistered OnActorRegistered;
+
 private:
 	/** Map of entity handles to their visual actors. */
 	TMap<FSeinEntityHandle, TWeakObjectPtr<ASeinActor>> EntityActorMap;
@@ -142,11 +156,11 @@ private:
 	 *  registration deterministically. */
 	bool bAutoRegisterOnBeginPlay = true;
 
-	/** Delegate handle for sim tick callback. */
-	FDelegateHandle SimTickDelegateHandle;
+	/** Delegate handle for the presentation-frame callback. */
+	FDelegateHandle SimFrameDelegateHandle;
 
-	/** Called after each sim tick — syncs transform snapshots on all actors. */
-	void HandleSimTick(int32 Tick);
+	/** Called after the frame's sim pump — syncs latest transform snapshots. */
+	void HandleSimFrame(int32 LatestTick, int32 TicksProcessed);
 
 	/** Process a single visual event. */
 	void DispatchVisualEvent(const FSeinVisualEvent& Event);

@@ -26,6 +26,7 @@
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
 #include "Stats/Stats.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinFormationPreviewSubsystem, Log, All);
 
@@ -54,6 +55,7 @@ void USeinFormationPreviewSubsystem::Initialize(FSubsystemCollectionBase& Collec
 		{
 			HookPlayerControllerDelegates();
 			bQualityDirty = true;
+			bLayoutDirty = true;
 			CachedQualities.Reset();
 		});
 
@@ -85,6 +87,9 @@ void USeinFormationPreviewSubsystem::ReleaseModuleOwnedStateForModuleUnload()
 	CachedQualities.Reset();
 	bLastCursorValid = false;
 	bQualityDirty = true;
+	bLayoutDirty = true;
+	LastLayoutSimTick = MIN_int32;
+	LastLayoutDragPointCount = INDEX_NONE;
 }
 
 void USeinFormationPreviewSubsystem::HookPlayerControllerDelegates()
@@ -125,6 +130,7 @@ void USeinFormationPreviewSubsystem::HandleSelectionChanged()
 {
 	// New selection → different member count / footprint → cached qualities stale.
 	bQualityDirty = true;
+	bLayoutDirty = true;
 
 	if (BoundPC.IsValid() && BoundPC->GetSelectionCount() == 0)
 	{
@@ -140,11 +146,34 @@ void USeinFormationPreviewSubsystem::HandleCursorUpdated(FVector CursorWorld, bo
 {
 	LastCursorWorld = CursorWorld;
 	bLastCursorValid = bValidTrace;
+
+	// The player controller broadcasts at render rate, while authoritative unit
+	// positions advance at the fixed simulation rate. If the cursor and gesture
+	// are also unchanged, the complete preview input is identical and repeating
+	// the footprint separation + anti-cross assignment is wasted work.
+	if (bValidTrace && !bLayoutDirty)
+	{
+		ASeinPlayerController* PC = BoundPC.Get();
+		USeinWorldSubsystem* WorldSub = PC && PC->GetWorld()
+			? PC->GetWorld()->GetSubsystem<USeinWorldSubsystem>()
+			: nullptr;
+		const int32 SimTick = WorldSub ? WorldSub->GetCurrentTick() : MIN_int32;
+		const int32 DragPointCount = PC ? PC->CommandDragPath.Num() : INDEX_NONE;
+		const bool bCommandDrag = PC && PC->bIsCommandDragging;
+		if (SimTick == LastLayoutSimTick
+			&& DragPointCount == LastLayoutDragPointCount
+			&& bCommandDrag == bLastLayoutWasCommandDrag
+			&& CursorWorld.Equals(LastLayoutCursor, 0.01f))
+		{
+			return;
+		}
+	}
 	RefreshPreview();
 }
 
 void USeinFormationPreviewSubsystem::RefreshPreview()
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(Sein_FormationPreview_Refresh);
 	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
 	if (Settings && !Settings->bEnableFormationPreview)
 	{
@@ -181,7 +210,11 @@ void USeinFormationPreviewSubsystem::RefreshPreview()
 		return;
 	}
 
-	const TArray<FSeinEntityHandle> Members = ResolveSelectionToMembers(PC);
+	TArray<FSeinEntityHandle> Members;
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_FormationPreview_ResolveSelection);
+		Members = ResolveSelectionToMembers(PC);
+	}
 	if (Members.Num() == 0)
 	{
 		HidePreview();
@@ -195,15 +228,22 @@ void USeinFormationPreviewSubsystem::RefreshPreview()
 	FVector OrderAnchor;
 	TArray<FVector> OrderGuide;
 	FGameplayTag OrderFormationTag;
-	PC->BuildPreviewOrder(LastCursorWorld, OrderAnchor, OrderGuide, OrderFormationTag);
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_FormationPreview_BuildOrder);
+		PC->BuildPreviewOrder(LastCursorWorld, OrderAnchor, OrderGuide, OrderFormationTag);
+	}
 
 	const FFixedVector AnchorFixed = FFixedVector::FromVector(OrderAnchor);
 	TArray<FFixedVector> GuideFixed;
 	GuideFixed.Reserve(OrderGuide.Num());
 	for (const FVector& G : OrderGuide) { GuideFixed.Add(FFixedVector::FromVector(G)); }
 
-	const FSeinFormationLayout Layout = USeinCommandBrokerBPFL::SeinComputeFormationPreview(
-		PC, Members, AnchorFixed, GuideFixed, OrderFormationTag);
+	FSeinFormationLayout Layout;
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_FormationPreview_ComputeLayout);
+		Layout = USeinCommandBrokerBPFL::SeinComputeFormationPreview(
+			PC, Members, AnchorFixed, GuideFixed, OrderFormationTag);
+	}
 
 	if (Layout.Positions.Num() == 0)
 	{
@@ -239,6 +279,7 @@ void USeinFormationPreviewSubsystem::RefreshPreview()
 
 	if (bQualityDirty || bCursorMoved || bCellCountChanged)
 	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_FormationPreview_QueryQuality);
 		CachedQualities.Reset();
 		if (USeinWorldSubsystem* WorldSub = PC->GetWorld() ? PC->GetWorld()->GetSubsystem<USeinWorldSubsystem>() : nullptr)
 		{
@@ -251,9 +292,25 @@ void USeinFormationPreviewSubsystem::RefreshPreview()
 		bQualityDirty = false;
 	}
 
-	PreviewActor->SetPositions(WorldPositions, CachedQualities, RadiiUU);
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_FormationPreview_PushActor);
+		PreviewActor->SetPositions(WorldPositions, CachedQualities, RadiiUU);
+	}
 	PreviewActor->SetActorHiddenInGame(false);
 	bIsVisible = true;
+	bLayoutDirty = false;
+	LastLayoutCursor = LastCursorWorld;
+	if (USeinWorldSubsystem* WorldSub = PC->GetWorld()
+		? PC->GetWorld()->GetSubsystem<USeinWorldSubsystem>() : nullptr)
+	{
+		LastLayoutSimTick = WorldSub->GetCurrentTick();
+	}
+	else
+	{
+		LastLayoutSimTick = MIN_int32;
+	}
+	LastLayoutDragPointCount = PC->CommandDragPath.Num();
+	bLastLayoutWasCommandDrag = PC->bIsCommandDragging;
 }
 
 void USeinFormationPreviewSubsystem::HidePreview()
@@ -264,6 +321,9 @@ void USeinFormationPreviewSubsystem::HidePreview()
 		PreviewActor->SetActorHiddenInGame(true);
 	}
 	bIsVisible = false;
+	// A later valid cursor/targeter exit must rebuild even if it happens in the
+	// same sim tick at the same world location as the last visible layout.
+	bLayoutDirty = true;
 }
 
 void USeinFormationPreviewSubsystem::EnsurePreviewActorSpawned()

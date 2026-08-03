@@ -102,6 +102,17 @@ struct SEINARTSFOGOFWAR_API FSeinFogOfWarStateCodecOps
 		FInstancedStruct&,
 		FString&)> Capture;
 
+	/** Optional high-frequency digest projection. A production codec used by
+	 *  multiplayer must provide this without serializing its full snapshot.
+	 *  ForceFullRebuild is the independent verifier path. */
+	TFunction<bool(
+		const FSeinFogOfWarStateCaptureContext&,
+		bool /*bForceFullRebuild*/,
+		FGuid& /*OutPayloadDigest*/,
+		uint64& /*OutProjectedPayloadBytes*/,
+		uint64& /*OutMutationRevision*/,
+		FString&)> CaptureRoutineRoot;
+
 	TFunction<bool(
 		const FSeinFogOfWarStateStageContext&,
 		const FInstancedStruct&,
@@ -197,6 +208,14 @@ private:
 		uint64 Token,
 		const FSeinFogOfWarStateCaptureContext& Context,
 		FInstancedStruct& OutPayload,
+		FString& OutError);
+	static bool CaptureRoutineRoot(
+		uint64 Token,
+		const FSeinFogOfWarStateCaptureContext& Context,
+		bool bForceFullRebuild,
+		FGuid& OutPayloadDigest,
+		uint64& OutProjectedPayloadBytes,
+		uint64& OutMutationRevision,
 		FString& OutError);
 	static bool StagePayload(
 		uint64 Token,

@@ -79,25 +79,34 @@ public:
 		// Execute call only ever runs on the main thread). `Sein.Sim.Parallel 0`
 		// forces serial too; the result is bit-identical either way.
 		TArray<FSeinEntityHandle> LiveHandles;
-		LiveHandles.Reserve(World.GetEntityPool().GetActiveCount());
-		World.GetEntityPool().ForEachEntity(
-			[&LiveHandles](
+		LiveHandles.Reserve(ExtentsStorage->GetComponentCount());
+		ExtentsStorage->ForEachLiveComponent(
+			[&LiveHandles, &World](
 				FSeinEntityHandle Handle,
-				const FSeinEntity&)
+				const void* RawComponent)
 			{
-				LiveHandles.Add(Handle);
+				const FSeinExtentsComponent* Ext =
+					static_cast<const FSeinExtentsComponent*>(RawComponent);
+				if (World.GetEntityPool().IsValid(Handle) && Ext
+					&& Ext->bCollisionEnabled && !Ext->Shapes.IsEmpty()
+					&& Ext->Mobility == ESeinCollisionMobility::Movable)
+				{
+					LiveHandles.Add(Handle);
+				}
 			});
 
-		FSeinEntityPool* MutablePool =
-			World.GetEntityPoolMutable();
-		if (!MutablePool) return;
+		const FSeinEntityPool& EntityPool = World.GetEntityPool();
+		TArray<FFixedVector> CorrectedPositions;
+		CorrectedPositions.SetNum(LiveHandles.Num());
+		TArray<uint8> NeedsCorrection;
+		NeedsCorrection.SetNumZeroed(LiveHandles.Num());
 
 		SeinParallelFor(LiveHandles.Num(), [&](int32 Index)
 		{
 			const FSeinEntityHandle Handle = LiveHandles[Index];
-			FSeinEntity* EntityPtr = MutablePool->Get(Handle);
+			const FSeinEntity* EntityPtr = EntityPool.Get(Handle);
 			if (!EntityPtr) return;
-			FSeinEntity& Entity = *EntityPtr;
+			const FSeinEntity& Entity = *EntityPtr;
 
 			const FSeinExtentsComponent* Ext =
 				static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(Handle));
@@ -134,9 +143,29 @@ public:
 				// Planar correction only — vertical (ground snap) is the movement
 				// tick's job; preserve the unit's current Z.
 				Projected.Z = Pos.Z;
-				Entity.Transform.SetLocation(Projected);
+				if (Projected != Pos)
+				{
+					CorrectedPositions[Index] = Projected;
+					NeedsCorrection[Index] = 1;
+				}
 			}
 		}, /*bForceSerial=*/bHasAuthoritative);
+
+		// Canonical serial apply: only entities whose location actually changed
+		// receive mutable access (and therefore a mutation revision). This also
+		// avoids racing the revision counter from parallel worker bodies.
+		for (int32 Index = 0; Index < LiveHandles.Num(); ++Index)
+		{
+			if (NeedsCorrection[Index] == 0)
+			{
+				continue;
+			}
+			if (FSeinEntity* Entity =
+				World.GetEntityMutable(LiveHandles[Index]))
+			{
+				Entity->Transform.SetLocation(CorrectedPositions[Index]);
+			}
+		}
 	}
 
 	virtual FSeinSystemDescriptor DescribeSystem() const override

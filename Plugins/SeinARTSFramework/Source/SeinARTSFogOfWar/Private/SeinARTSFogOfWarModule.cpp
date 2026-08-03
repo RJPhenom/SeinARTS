@@ -35,6 +35,7 @@
 #include "SeinFogOfWar.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "SeinFogOfWarSubsystem.h"
+#include "SeinFogOfWarVisibilitySubsystem.h"
 #include "Serialization/SeinFogOfWarCanonicalStateProvider.h"
 
 #include "Engine/World.h"
@@ -265,6 +266,7 @@ namespace
 			}
 		}
 		SetFogOfWarShowFlag(bEnable);
+		MarkAllFogDebugProxiesDirty();
 		UE_LOG(LogTemp, Log, TEXT("Sein.FogOfWar.Show = %s (ShowFlags.FogOfWar)"),
 			bEnable ? TEXT("ON") : TEXT("OFF"));
 	}
@@ -380,6 +382,14 @@ void FSeinARTSFogOfWarModule::PreUnloadCallback()
 		}
 	}
 
+	for (TObjectIterator<USeinFogOfWarVisibilitySubsystem> It; It; ++It)
+	{
+		if (!It->HasAnyFlags(RF_ClassDefaultObject))
+		{
+			It->ReleaseModuleOwnedStateForModuleUnload();
+		}
+	}
+
 	for (TObjectIterator<USeinFogOfWarSubsystem> It; It; ++It)
 	{
 		if (!It->HasAnyFlags(RF_ClassDefaultObject))
@@ -427,6 +437,15 @@ void FSeinARTSFogOfWarModule::ShutdownModule()
 
 namespace UE::SeinARTSFogOfWar
 {
+	bool IsAnyDebugViewportEnabled()
+	{
+#if UE_ENABLE_DEBUG_DRAWING
+		return IsFogOfWarShowFlagOn();
+#else
+		return false;
+#endif
+	}
+
 	bool TryGetDebugObserverOverride(FSeinPlayerID& OutObserver)
 	{
 #if UE_ENABLE_DEBUG_DRAWING

@@ -58,6 +58,11 @@ public:
 	}
 
 	int64 GetNextActionID() const { return NextActionID; }
+	uint64 GetLatestMutationRevision() const
+	{
+		return MutationRevisionCounter;
+	}
+	uint64 GetTopologyRevision() const { return TopologyRevision; }
 
 	/** True if the entity has any active (not completed/cancelled) latent action.
 	 *  Callers use this to tell "idle" from "executing an order" — e.g. gating a
@@ -84,6 +89,12 @@ private:
 
 	/** MAX_int64 is a valid exhausted cursor; it is never allocated as an ID. */
 	int64 NextActionID = 1;
+
+	/** Cache-only revisions. They are deliberately absent from snapshots. */
+	uint64 MutationRevisionCounter = 0;
+	uint64 TopologyRevision = 1;
+	void MarkActionDirty(USeinLatentAction& Action);
+	void BumpTopologyRevision();
 
 	friend class USeinWorldSubsystem;
 	friend class FSeinLatentActionRestorePlan;

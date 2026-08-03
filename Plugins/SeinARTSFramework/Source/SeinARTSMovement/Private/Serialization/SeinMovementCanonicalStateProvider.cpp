@@ -6,6 +6,7 @@
 #include "Serialization/SeinMovementCanonicalStateProvider.h"
 
 #include "Components/SeinMovementComponent.h"
+#include "Core/SeinParallel.h"
 #include "Movement/SeinAvoidance.h"
 #include "Movement/SeinBasicMovement.h"
 #include "Movement/SeinMovement.h"
@@ -13,6 +14,7 @@
 #include "Serialization/MemoryWriter.h"
 #include "Serialization/ObjectAndNameAsStringProxyArchive.h"
 #include "Serialization/SeinCanonicalInitialStateDigest.h"
+#include "Serialization/SeinCanonicalDigestTree.h"
 #include "Serialization/SeinCanonicalReflectedStateDigest.h"
 #include "Serialization/SeinCanonicalStatePropertyPolicy.h"
 #include "Serialization/SeinCanonicalStateCodec.h"
@@ -23,6 +25,27 @@
 #include "StructUtils/InstancedStruct.h"
 #include "Testing/SeinMovementCanonicalStateTestAccess.h"
 #include "UObject/UnrealType.h"
+
+struct FSeinMovementRoutineRootCache
+{
+	struct FEntry
+	{
+		uint64 Revision = 0;
+		FGuid LeafDigest;
+		uint64 PayloadBytes = 0;
+	};
+
+	uint64 TopologyRevision = 0;
+	uint64 LatestMutationRevision = 0;
+	TMap<FSeinEntityHandle, FEntry> Entries;
+	FSeinCanonicalDigestTree Tree;
+	FGuid AvoidanceDigest;
+	uint64 AvoidanceRevision = 0;
+	uint64 AvoidancePayloadBytes = 0;
+	uint64 AggregatePayloadBytes = 0;
+	FGuid CoverageDigest;
+	FGuid SectionDigest;
+};
 
 namespace
 {
@@ -286,6 +309,62 @@ namespace
 			return false;
 		}
 		return true;
+	}
+
+	bool ComputePolicyObjectLeafDigest(
+		FStringView Kind,
+		FSeinEntityHandle Handle,
+		const FSeinMovementPolicyObjectState& State,
+		FGuid& OutDigest,
+		FString& OutError)
+	{
+		FSeinCanonicalDigestWriter Writer(
+			TEXT("SeinARTS.Movement.RoutinePolicyLeaf"), 1);
+		return Writer.WriteString(FString(Kind))
+			&& Writer.WriteInt32(Handle.Index)
+			&& Writer.WriteInt32(Handle.Generation)
+			&& Writer.WriteString(State.ExactClassPath)
+			&& Writer.WriteGuid(State.ReflectedSchemaDigest)
+			&& Writer.WriteGuid(State.ReflectedValueDigest)
+			&& Writer.WriteBytes(State.StateBytes)
+			&& Writer.Finalize(OutDigest, OutError);
+	}
+
+	bool ComputeMovementCoverageDigest(
+		const FSeinMovementStateCoverageSnapshot& Coverage,
+		FGuid& OutDigest,
+		FString& OutError)
+	{
+		FSeinCanonicalDigestWriter Writer(
+			TEXT("SeinARTS.Movement.RoutineCoverage"), 1);
+		if (!Writer.WriteName(Coverage.Identity)
+			|| !Writer.WriteUInt32(
+				static_cast<uint32>(Coverage.Claims.Num())))
+		{
+			return false;
+		}
+		for (const FString& Claim : Coverage.Claims)
+		{
+			if (!Writer.WriteString(Claim))
+			{
+				return false;
+			}
+		}
+		if (!Writer.WriteUInt32(static_cast<uint32>(
+			Coverage.SupplementalProviders.Num())))
+		{
+			return false;
+		}
+		for (const FSeinCanonicalStateKey& Key :
+			Coverage.SupplementalProviders)
+		{
+			if (!Writer.WriteString(
+				FSeinCanonicalStateRegistry::CanonicalKey(Key)))
+			{
+				return false;
+			}
+		}
+		return Writer.Finalize(OutDigest, OutError);
 	}
 
 	bool ValidateExactClass(
@@ -600,11 +679,42 @@ struct FSeinMovementCanonicalStateProvider
 		FSeinMovementCanonicalState State;
 		State.CoverageIdentity = Coverage.Identity;
 		State.CoverageClaims = Coverage.Claims;
-		State.MovementInstances.Reserve(Handles.Num());
+		State.MovementInstances.SetNum(Handles.Num());
 		int64 AggregateBytes = 0;
 		TMap<const UClass*, FGuid> SchemaCache;
-		for (const FSeinEntityHandle Handle : Handles)
+		for (const USeinMovement* Movement : InstancePool)
 		{
+			const UClass* Class = Movement ? Movement->GetClass() : nullptr;
+			if (Class && !SchemaCache.Contains(Class))
+			{
+				FGuid Schema;
+				if (!ValidateReflectedClass(Class, Schema, OutError))
+				{
+					return false;
+				}
+				SchemaCache.Add(Class, Schema);
+			}
+		}
+		if (Subsystem->AvoidanceInstance)
+		{
+			const UClass* Class =
+				Subsystem->AvoidanceInstance->GetClass();
+			if (Class && !SchemaCache.Contains(Class))
+			{
+				FGuid Schema;
+				if (!ValidateReflectedClass(Class, Schema, OutError))
+				{
+					return false;
+				}
+				SchemaCache.Add(Class, Schema);
+			}
+		}
+
+		TArray<const USeinMovement*> OrderedMovements;
+		OrderedMovements.SetNum(Handles.Num());
+		for (int32 Index = 0; Index < Handles.Num(); ++Index)
+		{
+			const FSeinEntityHandle Handle = Handles[Index];
 			const USeinMovement* Movement =
 				InstanceMap.FindRef(Handle);
 			const FSeinMovementComponent* Component =
@@ -627,31 +737,53 @@ struct FSeinMovementCanonicalStateProvider
 				}
 				return false;
 			}
-
-			FSeinMovementPolicyInstanceState& Record =
-				State.MovementInstances.AddDefaulted_GetRef();
-			Record.Entity = Handle;
-			if (!SerializePolicyObject(
-				*Movement,
-				Record.Object,
-				OutError,
-				&SchemaCache))
-			{
-				return false;
-			}
-			AggregateBytes += Record.Object.StateBytes.Num();
-			if (AggregateBytes > MaxAggregateStateBytes)
-			{
-				OutError =
-					TEXT("Movement policy state exceeds its aggregate byte bound.");
-				return false;
-			}
+			State.MovementInstances[Index].Entity = Handle;
+			OrderedMovements[Index] = Movement;
 		}
 		if (!Pooled.IsEmpty())
 		{
 			OutError =
 				TEXT("Movement instance pool contains an object absent from the handle map.");
 			return false;
+		}
+
+		TArray<FString> CaptureErrors;
+		CaptureErrors.SetNum(Handles.Num());
+		SeinParallelFor(
+			Handles.Num(),
+			[&State,
+			 &OrderedMovements,
+			 &SchemaCache,
+			 &CaptureErrors](const int32 Index)
+			{
+				SerializePolicyObject(
+					*OrderedMovements[Index],
+					State.MovementInstances[Index].Object,
+					CaptureErrors[Index],
+					&SchemaCache);
+			});
+		for (int32 Index = 0; Index < Handles.Num(); ++Index)
+		{
+			if (!CaptureErrors[Index].IsEmpty())
+			{
+				OutError = MoveTemp(CaptureErrors[Index]);
+				return false;
+			}
+			const FSeinMovementPolicyObjectState& Object =
+				State.MovementInstances[Index].Object;
+			if (!Object.ReflectedValueDigest.IsValid())
+			{
+				OutError =
+					TEXT("Movement policy capture produced no canonical value digest.");
+				return false;
+			}
+			AggregateBytes += Object.StateBytes.Num();
+			if (AggregateBytes > MaxAggregateStateBytes)
+			{
+				OutError =
+					TEXT("Movement policy state exceeds its aggregate byte bound.");
+				return false;
+			}
 		}
 
 		if (Subsystem->AvoidanceInstance)
@@ -681,6 +813,262 @@ struct FSeinMovementCanonicalStateProvider
 		}
 
 		OutState = FInstancedStruct::Make(MoveTemp(State));
+		return true;
+	}
+
+	static bool CaptureRoutineRoot(
+		const FSeinMovementStateCoverageSnapshot& Coverage,
+		const FSeinCanonicalStateCaptureContext& Context,
+		bool bForceFullRebuild,
+		FSeinCanonicalStateRoutineRootRecord& OutRecord,
+		FString& OutError)
+	{
+		OutRecord = {};
+		if (!ValidateCoverageSnapshot(Coverage, OutError))
+		{
+			return false;
+		}
+		UWorld* UnrealWorld = Context.World.GetWorld();
+		USeinMovementSubsystem* Subsystem = UnrealWorld
+			? UnrealWorld->GetSubsystem<USeinMovementSubsystem>()
+			: nullptr;
+		if (!Subsystem)
+		{
+			OutError =
+				TEXT("Movement routine root could not resolve its world subsystem.");
+			return false;
+		}
+		if (!Subsystem->RoutineRootCache.IsValid())
+		{
+			Subsystem->RoutineRootCache =
+				MakeShared<FSeinMovementRoutineRootCache>();
+			bForceFullRebuild = true;
+		}
+		FSeinMovementRoutineRootCache& Cache =
+			*Subsystem->RoutineRootCache;
+		if (!bForceFullRebuild
+			&& Cache.SectionDigest.IsValid()
+			&& Cache.TopologyRevision
+				== Subsystem->MovementStateTopologyRevision
+			&& Cache.LatestMutationRevision
+				== Subsystem->MovementStateMutationRevision)
+		{
+			// Movement policy state is revision-gated. When neither policy
+			// membership nor reflected policy state changed, the previously
+			// sealed section digest is already the exact routine result.
+			OutRecord.MutationRevision =
+				Subsystem->MovementStateMutationRevision;
+			OutRecord.ProjectedPayloadBytes = Cache.AggregatePayloadBytes;
+			OutRecord.LeafDigest = Cache.SectionDigest;
+			return true;
+		}
+
+		const TMap<FSeinEntityHandle, USeinMovement*>& InstanceMap =
+			Subsystem->MovementInstanceMap;
+		const TArray<TObjectPtr<USeinMovement>>& InstancePool =
+			Subsystem->MovementInstancePool;
+		if (InstanceMap.Num() != InstancePool.Num()
+			|| InstanceMap.Num() > MaxPolicyObjects)
+		{
+			OutError =
+				TEXT("Movement routine-root instance map/pool cardinality is invalid.");
+			return false;
+		}
+		TSet<const USeinMovement*> Pooled;
+		for (const USeinMovement* Movement : InstancePool)
+		{
+			if (!Movement
+				|| Movement->GetOuter() != Subsystem
+				|| Pooled.Contains(Movement))
+			{
+				OutError =
+					TEXT("Movement routine-root pool contains a null, duplicate, or wrongly-owned object.");
+				return false;
+			}
+			Pooled.Add(Movement);
+		}
+
+		TArray<FSeinEntityHandle> Handles;
+		InstanceMap.GetKeys(Handles);
+		Handles.Sort();
+		TSet<FSeinEntityHandle> CurrentHandles;
+		CurrentHandles.Reserve(Handles.Num());
+		for (const FSeinEntityHandle Handle : Handles)
+		{
+			CurrentHandles.Add(Handle);
+		}
+		const int32 SlotCount =
+			Context.World.GetEntityPool().GetCapacity() + 1;
+		const bool bTreeReset = bForceFullRebuild
+			|| Cache.Tree.Num() != SlotCount;
+		if (bTreeReset
+			&& !Cache.Tree.Reset(
+				TEXT("movement.policy-instances"),
+				SlotCount,
+				OutError))
+		{
+			return false;
+		}
+		if (bForceFullRebuild)
+		{
+			Cache.Entries.Reset();
+			Cache.AvoidanceDigest.Invalidate();
+			Cache.AvoidanceRevision = 0;
+			Cache.CoverageDigest.Invalidate();
+		}
+
+		for (auto It = Cache.Entries.CreateIterator(); It; ++It)
+		{
+			if (CurrentHandles.Contains(It->Key))
+			{
+				continue;
+			}
+			if (!bTreeReset
+				&& !Cache.Tree.SetLeafDigest(
+					It->Key.Index, FGuid(), OutError))
+			{
+				return false;
+			}
+			It.RemoveCurrent();
+		}
+
+		uint64 AggregateBytes = 0;
+		TMap<const UClass*, FGuid> SchemaCache;
+		for (const FSeinEntityHandle Handle : Handles)
+		{
+			USeinMovement* Movement = InstanceMap.FindRef(Handle);
+			const FSeinMovementComponent* Component =
+				Context.World.GetComponent<FSeinMovementComponent>(Handle);
+			if (!Handle.IsValid()
+				|| !Context.World.GetEntityPool().IsValid(Handle)
+				|| !Movement
+				|| !Pooled.Remove(Movement)
+				|| !Component
+				|| !ValidateAuthoredMovementClass(
+					*Component, Movement->GetClass(), OutError))
+			{
+				if (OutError.IsEmpty())
+				{
+					OutError =
+						TEXT("Movement routine-root map/pool/entity/component bijection is invalid.");
+				}
+				return false;
+			}
+
+			const uint64 Revision =
+				Subsystem->MovementStateRevisions.FindRef(Handle);
+			FSeinMovementRoutineRootCache::FEntry* Existing =
+				Cache.Entries.Find(Handle);
+			if (!Existing || Existing->Revision != Revision)
+			{
+				FSeinMovementPolicyObjectState State;
+				FGuid LeafDigest;
+				if (!SerializePolicyObject(
+					*Movement, State, OutError, &SchemaCache)
+					|| !ComputePolicyObjectLeafDigest(
+						TEXT("movement"),
+						Handle,
+						State,
+						LeafDigest,
+						OutError))
+				{
+					return false;
+				}
+				FSeinMovementRoutineRootCache::FEntry Entry;
+				Entry.Revision = Revision;
+				Entry.LeafDigest = LeafDigest;
+				Entry.PayloadBytes = State.StateBytes.Num();
+				Existing = &Cache.Entries.Add(Handle, MoveTemp(Entry));
+			}
+			if (!Cache.Tree.SetLeafDigest(
+				Handle.Index, Existing->LeafDigest, OutError))
+			{
+				return false;
+			}
+			AggregateBytes += Existing->PayloadBytes;
+		}
+		if (!Pooled.IsEmpty()
+			|| !Cache.Tree.FinalizeUpdates(OutError))
+		{
+			return !Pooled.IsEmpty()
+				? (OutError =
+					TEXT("Movement routine-root pool contains an object absent from its handle map."),
+					false)
+				: false;
+		}
+
+		if (Subsystem->AvoidanceInstance)
+		{
+			if (Subsystem->AvoidanceInstance->GetOuter() != Subsystem)
+			{
+				OutError =
+					TEXT("Movement avoidance singleton has invalid ownership.");
+				return false;
+			}
+			if (!Cache.AvoidanceDigest.IsValid()
+				|| Cache.AvoidanceRevision
+					!= Subsystem->AvoidanceStateRevision)
+			{
+				FSeinMovementPolicyObjectState State;
+				if (!SerializePolicyObject(
+					*Subsystem->AvoidanceInstance,
+					State,
+					OutError,
+					&SchemaCache)
+					|| !ComputePolicyObjectLeafDigest(
+						TEXT("avoidance"),
+						FSeinEntityHandle(),
+						State,
+						Cache.AvoidanceDigest,
+						OutError))
+				{
+					return false;
+				}
+				Cache.AvoidanceRevision =
+					Subsystem->AvoidanceStateRevision;
+				Cache.AvoidancePayloadBytes = State.StateBytes.Num();
+			}
+			AggregateBytes += Cache.AvoidancePayloadBytes;
+		}
+		else
+		{
+			Cache.AvoidanceDigest.Invalidate();
+			Cache.AvoidancePayloadBytes = 0;
+		}
+		if (AggregateBytes > MaxAggregateStateBytes)
+		{
+			OutError =
+				TEXT("Movement routine-root state exceeds its aggregate byte bound.");
+			return false;
+		}
+		if (!Cache.CoverageDigest.IsValid()
+			&& !ComputeMovementCoverageDigest(
+				Coverage, Cache.CoverageDigest, OutError))
+		{
+			return false;
+		}
+
+		FSeinCanonicalDigestWriter Writer(
+			TEXT("SeinARTS.Movement.RoutineRoot"), 1);
+		if (!Writer.WriteGuid(Cache.CoverageDigest)
+			|| !Writer.WriteInt32(Handles.Num())
+			|| !Writer.WriteGuid(Cache.Tree.GetRoot())
+			|| !Writer.WriteBool(Subsystem->AvoidanceInstance != nullptr)
+			|| (Subsystem->AvoidanceInstance
+				&& !Writer.WriteGuid(Cache.AvoidanceDigest))
+			|| !Writer.Finalize(Cache.SectionDigest, OutError))
+		{
+			return false;
+		}
+		Cache.TopologyRevision =
+			Subsystem->MovementStateTopologyRevision;
+		Cache.LatestMutationRevision =
+			Subsystem->MovementStateMutationRevision;
+		Cache.AggregatePayloadBytes = AggregateBytes;
+		OutRecord.MutationRevision =
+			Subsystem->MovementStateMutationRevision;
+		OutRecord.ProjectedPayloadBytes = AggregateBytes;
+		OutRecord.LeafDigest = Cache.SectionDigest;
 		return true;
 	}
 
@@ -876,6 +1264,13 @@ struct FSeinMovementCanonicalStateProvider
 			MoveTemp(Stage->InstanceMap);
 		Subsystem->MovementInstancePool =
 			MoveTemp(Stage->InstancePool);
+		Subsystem->MovementStateRevisions.Reset();
+		for (const auto& Pair : Subsystem->MovementInstanceMap)
+		{
+			Subsystem->MarkMovementStateDirty(Pair.Key);
+		}
+		Subsystem->BumpMovementTopologyRevision();
+		Subsystem->RoutineRootCache.Reset();
 
 		if (Stage->StagedAvoidance)
 		{
@@ -907,7 +1302,7 @@ SeinRegisterMovementCanonicalStateProvider(
 	Descriptor.Key.StableContributorId =
 		TEXT("persistent-policy-instances");
 	Descriptor.SchemaVersion = 1;
-	Descriptor.ImplementationRevision = 1;
+	Descriptor.ImplementationRevision = 2;
 	Descriptor.Role = ESeinCanonicalStateRole::Continuation;
 	Descriptor.PayloadStruct =
 		FSeinMovementCanonicalState::StaticStruct();
@@ -928,6 +1323,21 @@ SeinRegisterMovementCanonicalStateProvider(
 		{
 			return FSeinMovementCanonicalStateProvider::Capture(
 				Coverage, Context, OutState, Error);
+		};
+	Ops.CaptureRoutineRoot =
+		[Coverage](
+			const FSeinCanonicalStateCaptureContext& Context,
+			bool bForceFullRebuild,
+			FSeinCanonicalStateRoutineRootRecord& OutRecord,
+			FString& Error)
+		{
+			return FSeinMovementCanonicalStateProvider::
+				CaptureRoutineRoot(
+					Coverage,
+					Context,
+					bForceFullRebuild,
+					OutRecord,
+					Error);
 		};
 	Ops.StageRestore =
 		[Coverage](

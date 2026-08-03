@@ -44,3 +44,17 @@ class USeinCallbackRevokeOnCancelAbility : public USeinAbility
 public:
 	virtual void OnEnd_Implementation(bool bWasCancelled) override;
 };
+
+UCLASS()
+class USeinCallbackTickProbeAbility : public USeinAbility
+{
+	GENERATED_BODY()
+
+public:
+	using FTickCallback =
+		TFunction<void(USeinCallbackTickProbeAbility&)>;
+	static FTickCallback TickCallback;
+
+	int32 TickCount = 0;
+	virtual void OnTick_Implementation(FFixedPoint DeltaTime) override;
+};

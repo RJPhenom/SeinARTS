@@ -7,10 +7,18 @@
 #include "Serialization/SeinNavigationCanonicalStateProvider.h"
 
 #include "Serialization/SeinNavigationCanonicalState.h"
+#include "Serialization/SeinCanonicalInitialStateDigest.h"
+#include "Serialization/SeinCanonicalReflectedStateDigest.h"
 #include "SeinNavigationSubsystem.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Engine/World.h"
 #include "Math/MathLib.h"
+
+struct FSeinNavigationRoutineRootCache
+{
+	uint64 Revision = 0;
+	FGuid LeafDigest;
+};
 
 namespace
 {
@@ -700,6 +708,82 @@ struct FSeinNavigationCanonicalStateProvider
 		return true;
 	}
 
+	static bool CaptureRoutineRoot(
+		const FSeinCanonicalStateCaptureContext& Context,
+		bool bForceFullRebuild,
+		FSeinCanonicalStateRoutineRootRecord& OutRecord,
+		FString& OutError)
+	{
+		OutRecord = {};
+		USeinNavigationSubsystem* NavigationSubsystem =
+			ResolveSubsystem(Context.World);
+		if (!NavigationSubsystem)
+		{
+			OutError =
+				TEXT("Navigation routine root could not resolve its world subsystem.");
+			return false;
+		}
+		if (!NavigationSubsystem->RoutineRootCache.IsValid())
+		{
+			NavigationSubsystem->RoutineRootCache =
+				MakeShared<FSeinNavigationRoutineRootCache>();
+			bForceFullRebuild = true;
+		}
+		FSeinNavigationRoutineRootCache& Cache =
+			*NavigationSubsystem->RoutineRootCache;
+		if (bForceFullRebuild
+			|| Cache.Revision
+				!= NavigationSubsystem->CanonicalStateMutationRevision
+			|| !Cache.LeafDigest.IsValid())
+		{
+			FInstancedStruct Payload;
+			if (!Capture(Context, Payload, OutError))
+			{
+				return false;
+			}
+			const FSeinNavigationContinuationState* State =
+				Payload.GetPtr<FSeinNavigationContinuationState>();
+			if (!State)
+			{
+				OutError =
+					TEXT("Navigation routine root captured the wrong payload type.");
+				return false;
+			}
+			FSeinCanonicalReflectedStateLimits Limits;
+			FGuid SchemaDigest;
+			FGuid ValueDigest;
+			if (!FSeinCanonicalReflectedStateDigest::ComputeSchemaDigest(
+				FSeinNavigationContinuationState::StaticStruct(),
+				Limits,
+				SchemaDigest,
+				OutError)
+				|| !FSeinCanonicalReflectedStateDigest::
+					ComputeStructValueDigest(
+						FSeinNavigationContinuationState::StaticStruct(),
+						State,
+						SchemaDigest,
+						Limits,
+						ValueDigest,
+						OutError))
+			{
+				return false;
+			}
+			FSeinCanonicalDigestWriter Writer(
+				TEXT("SeinARTS.Navigation.RoutineRoot"), 1);
+			if (!Writer.WriteGuid(SchemaDigest)
+				|| !Writer.WriteGuid(ValueDigest)
+				|| !Writer.Finalize(Cache.LeafDigest, OutError))
+			{
+				return false;
+			}
+			Cache.Revision =
+				NavigationSubsystem->CanonicalStateMutationRevision;
+		}
+		OutRecord.MutationRevision = Cache.Revision;
+		OutRecord.LeafDigest = Cache.LeafDigest;
+		return true;
+	}
+
 	static bool StageRestore(
 		const FSeinCanonicalStateStageContext& Context,
 		const FInstancedStruct& State,
@@ -797,6 +881,8 @@ struct FSeinNavigationCanonicalStateProvider
 			NavigationSubsystem->AsyncResults.Add(
 				Record.Request.Requester, MoveTemp(Result));
 		}
+		NavigationSubsystem->MarkCanonicalStateDirty();
+		NavigationSubsystem->RoutineRootCache.Reset();
 	}
 };
 
@@ -808,7 +894,7 @@ SeinRegisterNavigationCanonicalStateProvider(FString& OutError)
 	Descriptor.Key.StableContributorId =
 		TEXT("async-path-continuation");
 	Descriptor.SchemaVersion = 1;
-	Descriptor.ImplementationRevision = 3;
+	Descriptor.ImplementationRevision = 4;
 	Descriptor.Role = ESeinCanonicalStateRole::Continuation;
 	Descriptor.PayloadStruct =
 		FSeinNavigationContinuationState::StaticStruct();
@@ -826,6 +912,8 @@ SeinRegisterNavigationCanonicalStateProvider(FString& OutError)
 	Ops.FreezeWorldBinding =
 		&FSeinNavigationCanonicalStateProvider::FreezeWorldBinding;
 	Ops.Capture = &FSeinNavigationCanonicalStateProvider::Capture;
+	Ops.CaptureRoutineRoot =
+		&FSeinNavigationCanonicalStateProvider::CaptureRoutineRoot;
 	Ops.StageRestore =
 		&FSeinNavigationCanonicalStateProvider::StageRestore;
 	Ops.CommitRestore =

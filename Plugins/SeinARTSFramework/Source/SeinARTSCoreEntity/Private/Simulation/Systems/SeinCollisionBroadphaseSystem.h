@@ -20,6 +20,7 @@
 #include "Core/SeinTickPhase.h"
 #include "Core/SeinSystemPriority.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "Simulation/ComponentStorage.h"
 #include "Collision/SeinCollisionSpatialHash.h"
 #include "Components/SeinExtentsComponent.h"
 #include "Components/SeinExtentsHelpers.h"  // GetColliderBoundingRadius — shared with the resolver
@@ -72,13 +73,21 @@ public:
 		// result, replacing the old per-collider Hash.InsertDynamic loop (and its
 		// per-cell TMap hashing) with a sort-grid rebuild.
 		TArray<FSeinCollisionSpatialHash::FDynamicColliderInput> DynamicColliders;
-		DynamicColliders.Reserve(World.GetEntityPool().GetActiveCount());
+		const ISeinComponentStorage* ExtentsStorage =
+			World.GetComponentStorageRaw(FSeinExtentsComponent::StaticStruct());
+		DynamicColliders.Reserve(ExtentsStorage ? ExtentsStorage->GetComponentCount() : 0);
 
-		World.GetEntityPool().ForEachEntity([&](
-			FSeinEntityHandle Handle,
-			const FSeinEntity& Entity)
+		if (ExtentsStorage)
 		{
-			const FSeinExtentsComponent* Extents = World.GetComponent<FSeinExtentsComponent>(Handle);
+			ExtentsStorage->ForEachLiveComponent([&](
+			FSeinEntityHandle Handle,
+			const void* RawComponent)
+		{
+			if (!World.GetEntityPool().IsValid(Handle)) return;
+			const FSeinEntity* Entity = World.GetEntity(Handle);
+			const FSeinExtentsComponent* Extents =
+				static_cast<const FSeinExtentsComponent*>(RawComponent);
+			if (!Entity || !Extents) return;
 
 #if !UE_BUILD_SHIPPING
 			// Mis-config warning: an entity with Extents shapes that won't actually
@@ -139,7 +148,7 @@ public:
 			if (!Extents || !Extents->bCollisionEnabled) return;
 			if (Extents->Shapes.Num() == 0 || Extents->ObjectType.Channel.IsNone()) return;
 
-			const FFixedVector Pos = Entity.Transform.GetLocation();
+			const FFixedVector Pos = Entity->Transform.GetLocation();
 			const FFixedPoint Radius = SeinExtentsHelpers::GetColliderBoundingRadius(*Extents);
 			if (Extents->Mobility == ESeinCollisionMobility::Static)
 			{
@@ -157,7 +166,8 @@ public:
 				// Collected here; stamped in one parallel BuildDynamic pass below.
 				DynamicColliders.Add(FSeinCollisionSpatialHash::FDynamicColliderInput{ Handle, Pos, Radius });
 			}
-		});
+			});
+		}
 
 		// One batched rebuild of the dynamic sort grid (parallel per-collider stamp +
 		// canonicalizing sort). Replaces the per-collider InsertDynamic + ClearDynamic.

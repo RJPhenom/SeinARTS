@@ -942,6 +942,13 @@ namespace UE::SeinARTSTests
 		{
 			Writer->ObserveCompletedTick(Tick);
 		}
+		Writer->QueueAppliedProgressForTests();
+		// Ordinary maintenance transfers the eligible batch to the worker but
+		// does not claim it durable or release resident bytes until completion is
+		// observed on the game thread. The forced seam below must drain that same
+		// in-flight append before publishing Progress.
+		ASSERT_THAT(AreEqual(0, Writer->GetPersistedTurnCount()));
+		ASSERT_THAT(AreEqual(2, Writer->GetResidentTurnCount()));
 		Writer->FlushAppliedProgressForTests();
 		ASSERT_THAT(IsTrue(Writer->IsRecording()));
 		ASSERT_THAT(AreEqual(1, Writer->GetPersistedTurnCount()));

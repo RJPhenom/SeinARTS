@@ -44,8 +44,6 @@
 #include "Effects/SeinEffectBlueprint.h"
 #include "Formations/SeinFormationBlueprint.h"
 #include "Widgets/SeinWidgetBlueprint.h"
-#include "WidgetBlueprint.h"
-#include "KismetCompiler.h"
 #include "K2Node_AsyncAction.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "EdGraphUtilities.h"
@@ -278,17 +276,6 @@ void FSeinARTSEditorModule::StartupModule()
 	}
 
 	RegisterAssetTypeActions();
-
-	// UMG's widget compiler is registered per-class via a direct map lookup
-	// (no hierarchy walk) — see FKismetCompilerContext::GetCompilerForBP.
-	// We must register USeinWidgetBlueprint explicitly, otherwise the lookup
-	// misses, falls back to the generic FKismetCompilerContext, and the
-	// WidgetTree never gets copied into the generated class (AddToViewport
-	// would render nothing despite compilation succeeding).
-	FKismetCompilerContext::RegisterCompilerForBP(
-		USeinWidgetBlueprint::StaticClass(),
-		&UWidgetBlueprint::GetCompilerForWidgetBP
-	);
 
 	if (GEditor != nullptr)
 	{

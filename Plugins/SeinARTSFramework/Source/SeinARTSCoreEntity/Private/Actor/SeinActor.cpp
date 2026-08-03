@@ -17,7 +17,10 @@
 
 ASeinActor::ASeinActor()
 {
-	PrimaryActorTick.bCanEverTick = true;
+	// ASeinActor has no Tick implementation. Per-frame render interpolation is
+	// owned by USeinEntityComponent, so registering an actor tick for every RTS
+	// entity is pure scheduler overhead.
+	PrimaryActorTick.bCanEverTick = false;
 
 	// The ONLY default subobject. Holds the entity handle + transform sync +
 	// visual event forwarding (old "bridge" role) AND the unified authoring
@@ -30,6 +33,23 @@ ASeinActor::ASeinActor()
 	// typed-wrapper sim ACs) have been excised. Sim data + tags live on
 	// the entity bridge: BaseTags UPROPERTY for tags, ComponentData
 	// (TArray<FInstancedStruct>) for component authoring.
+}
+
+void ASeinActor::PostRegisterAllComponents()
+{
+	Super::PostRegisterAllComponents();
+
+	// The level-editor world registers every placed unit too. Applying these
+	// policies only from BeginPlay protects standalone/cooked worlds but leaves
+	// the editor's duplicate 200-unit scene contributing animated BLAS memory
+	// throughout PIE. This hook runs after the actor's complete component set is
+	// registered in both editor and runtime worlds, before the renderer can keep
+	// treating ordinary RTS crowd meshes as ray-traced geometry.
+	if (EntityBridge)
+	{
+		EntityBridge->ApplyRayTracingGeometryPolicy();
+		EntityBridge->ApplySkeletalMeshPerformancePolicy();
+	}
 }
 
 void ASeinActor::BeginPlay()

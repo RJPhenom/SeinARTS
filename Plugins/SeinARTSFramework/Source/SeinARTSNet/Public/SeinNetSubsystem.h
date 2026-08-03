@@ -925,6 +925,11 @@ private:
 	bool IsDeterminismEvidenceTurnWithinProtocolWindow(
 		int32 Turn, const TCHAR* Context) const;
 	void PruneProtocolState(int32 ReferenceTurn);
+	/** True when the frozen epoch manifest contains more than one process that
+	 *  can contribute a comparable world root. This is deliberately independent
+	 *  of the coordinator-only relay/lifecycle map: ordinary clients do not own
+	 *  that complete connection view. */
+	bool HasComparableWorldRootPeerInManifest() const;
 	void GetExpectedWorldRootReporterParticipants(
 		TArray<FSeinNetworkParticipantID>& OutParticipants) const;
 	bool AreExpectedWorldRootReportsComplete(

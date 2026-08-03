@@ -25,6 +25,7 @@
 #include "Core/SeinSystemPriority.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Movement/SeinAvoidance.h"
+#include "SeinMovementSubsystem.h"
 #include "Types/FixedPoint.h"
 
 /**
@@ -37,11 +38,31 @@ public:
 	 *  created once at world begin-play and never re-created, so this raw pointer is
 	 *  valid for the system's whole lifetime (the subsystem deletes this system before
 	 *  releasing the impl). */
-	explicit FSeinAvoidanceSystem(USeinAvoidance* InAvoidance) : Avoidance(InAvoidance) {}
+	explicit FSeinAvoidanceSystem(
+		USeinMovementSubsystem* InOwner,
+		USeinAvoidance* InAvoidance)
+		: OwnerSubsystem(InOwner)
+		, Avoidance(InAvoidance)
+	{}
 
 	virtual void Tick(FFixedPoint /*DeltaTime*/, USeinWorldSubsystem& World) override
 	{
-		if (Avoidance) Avoidance->ComputeAvoidance(World);
+		if (Avoidance)
+		{
+			// Blueprint implementations may update reflected policy variables from
+			// ComputeAvoidance, so conservatively invalidate their canonical policy
+			// state. Shipped native implementations keep all evolving state in sim
+			// components; invalidating their immutable policy object every tick forced
+			// a redundant UObject serialization at each root boundary.
+			if (!Avoidance->HasImmutableRuntimePolicyState())
+			{
+				if (USeinMovementSubsystem* Owner = OwnerSubsystem.Get())
+				{
+					Owner->MarkAvoidanceStateDirty();
+				}
+			}
+			Avoidance->ComputeAvoidance(World);
+		}
 	}
 
 	virtual FSeinSystemDescriptor DescribeSystem() const override
@@ -56,5 +77,6 @@ public:
 	}
 
 private:
+	TWeakObjectPtr<USeinMovementSubsystem> OwnerSubsystem;
 	USeinAvoidance* Avoidance = nullptr;
 };

@@ -11,6 +11,22 @@
 #include "TestTypes/SeinMoveToLifecycleTestTypes.h"
 #include "Testing/SeinMovementCanonicalStateTestAccess.h"
 
+struct FSeinWorldSubsystemTestAccess
+{
+	static bool SealRoutineRoot(
+		USeinWorldSubsystem& World,
+		bool bForceFullRebuild,
+		FGuid& OutRoot,
+		FString& OutError)
+	{
+		return World.SealRoutineCanonicalStateRoot(
+			World.GetCurrentTick(),
+			bForceFullRebuild,
+			OutRoot,
+			OutError);
+	}
+};
+
 namespace
 {
 	struct FMovementCanonicalFixture
@@ -128,6 +144,38 @@ TEST(MovementReflectedStateChangesCanonicalRoot,
 	ASSERT_THAT(IsTrue(
 		Fixture.World->ComputeCanonicalStateRoot(After, Error)));
 	ASSERT_THAT(IsTrue(Before != After));
+	Fixture.World->StopSimulation();
+}
+
+TEST(MovementRoutineRootTracksDirtyInstanceAndMatchesForcedRebuild,
+	"SeinARTS.Unit.Movement.CanonicalState")
+{
+	FMovementCanonicalFixture Fixture;
+	const int32 Order[] = { 0 };
+	ASSERT_THAT(IsTrue(Fixture.Initialize(
+		Order, TEXT("MovementState.RoutineRoot"))));
+	USeinMoveToLifecycleTestMovement* Instance = Fixture.Instance(0);
+	ASSERT_THAT(IsNotNull(Instance));
+
+	FString Error;
+	FGuid Before;
+	ASSERT_THAT(IsTrue(
+		FSeinWorldSubsystemTestAccess::SealRoutineRoot(
+			*Fixture.World, true, Before, Error)));
+
+	Instance->PersistentTestValue = FFixedPoint::FromInt(37);
+	Fixture.Movement->MarkMovementStateDirty(Fixture.Entities[0]);
+	FGuid Incremental;
+	ASSERT_THAT(IsTrue(
+		FSeinWorldSubsystemTestAccess::SealRoutineRoot(
+			*Fixture.World, false, Incremental, Error)));
+	ASSERT_THAT(IsTrue(Incremental != Before));
+
+	FGuid Forced;
+	ASSERT_THAT(IsTrue(
+		FSeinWorldSubsystemTestAccess::SealRoutineRoot(
+			*Fixture.World, true, Forced, Error)));
+	ASSERT_THAT(IsTrue(Forced == Incremental));
 	Fixture.World->StopSimulation();
 }
 

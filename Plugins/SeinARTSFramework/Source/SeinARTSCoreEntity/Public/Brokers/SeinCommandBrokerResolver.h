@@ -56,6 +56,13 @@ class SEINARTSCOREENTITY_API USeinCommandBrokerResolver : public UObject
 	GENERATED_BODY()
 
 public:
+	/** Explicit write barrier for a custom stateful resolver. Shipped resolver
+	 *  hooks are pure by contract; a Blueprint that deliberately stores
+	 *  future-affecting state must call this after the write. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Broker|State",
+		meta = (DisplayName = "Mark Deterministic State Dirty"))
+	void MarkDeterministicStateDirty(USeinWorldSubsystem* World);
+
 	/**
 	 * Per-member tag resolution hook — "which ability does THIS member want to
 	 * run for THIS click context?" The default implementation delegates to the

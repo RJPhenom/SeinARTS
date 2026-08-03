@@ -13,12 +13,14 @@
 #include "Materials/MaterialInterface.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "RHI.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 #include "SeinFogOfWar.h"
 #include "SeinFogOfWarSubsystem.h"
 #include "SeinFogOfWarTypes.h"
 #include "SeinARTSFogOfWarModule.h"
 #include "SeinARTSFogOfWarLog.h"
+#include "Settings/PluginSettings.h"
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
 
@@ -74,6 +76,14 @@ void ASeinFogOfWarRender::BeginPlay()
 {
 	Super::BeginPlay();
 
+	// This is presentation pacing only. The deterministic vision grid keeps its
+	// own simulation cadence; the actor coalesces however many mutations arrive
+	// between two render readbacks.
+	if (const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>())
+	{
+		PrimaryActorTick.TickInterval = 1.0f / FMath::Max(1.0f, Settings->FogRenderTickRate);
+	}
+
 	if (UMaterialInterface* Mat = FogPostProcessMaterial.LoadSynchronous())
 	{
 		FogMID = UMaterialInstanceDynamic::Create(Mat, this);
@@ -94,7 +104,7 @@ void ASeinFogOfWarRender::BeginPlay()
 	}
 
 	ResolveObserver();
-	RebuildTexture();
+	bTextureDirty = !RebuildTexture();
 }
 
 void ASeinFogOfWarRender::EndPlay(const EEndPlayReason::Type Reason)
@@ -116,9 +126,9 @@ void ASeinFogOfWarRender::Tick(float DeltaSeconds)
 	// built (covers the case where the fog grid wasn't ready at BeginPlay and
 	// no mutate has fired yet).
 	const bool bObserverChanged = ResolveObserver();
-	if (bObserverChanged || !FogTexture)
+	if (bObserverChanged || bTextureDirty || !FogTexture)
 	{
-		RebuildTexture();
+		bTextureDirty = !RebuildTexture();
 	}
 }
 
@@ -140,7 +150,7 @@ void ASeinFogOfWarRender::SetActiveVisionLayer(int32 LayerIndex)
 
 	ActiveVisionLayer = LayerIndex;
 	UpdateStyleBlendable();   // swap the full-screen style for the new layer
-	RebuildTexture();         // re-bake the fog reveal from the new layer's bit
+	bTextureDirty = !RebuildTexture(); // re-bake immediately for explicit view changes
 }
 
 void ASeinFogOfWarRender::CycleVisionLayer()
@@ -161,7 +171,7 @@ void ASeinFogOfWarRender::CycleVisionLayer()
 void ASeinFogOfWarRender::RefreshFogRender()
 {
 	ResolveObserver();
-	RebuildTexture();
+	bTextureDirty = !RebuildTexture();
 }
 
 USeinFogOfWar* ASeinFogOfWarRender::ResolveFog() const
@@ -248,20 +258,21 @@ void ASeinFogOfWarRender::EnsureTexture(int32 W, int32 H)
 	}
 }
 
-void ASeinFogOfWarRender::RebuildTexture()
+bool ASeinFogOfWarRender::RebuildTexture()
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Fog_Render_RebuildTexture);
 	USeinFogOfWar* Fog = ResolveFog();
-	if (!Fog) return;
+	if (!Fog) return false;
 
 	TArray<uint8> Cells;
 	FFixedVector Origin = FFixedVector::ZeroVector;
 	FFixedPoint CellSize = FFixedPoint::Zero;
 	int32 W = 0, H = 0;
-	if (!Fog->GetObserverGrid(CachedObserver, Cells, Origin, CellSize, W, H)) return;
-	if (W <= 0 || H <= 0 || Cells.Num() != W * H) return;
+	if (!Fog->GetObserverGrid(CachedObserver, Cells, Origin, CellSize, W, H)) return false;
+	if (W <= 0 || H <= 0 || Cells.Num() != W * H) return false;
 
 	EnsureTexture(W, H);
-	if (!FogTexture || PixelBuffer.Num() != W * H * 4) return;
+	if (!FogTexture || PixelBuffer.Num() != W * H * 4) return false;
 
 	const uint8 VisibleMask = ComputeVisibleMask();
 	for (int32 i = 0; i < Cells.Num(); ++i)
@@ -288,6 +299,7 @@ void ASeinFogOfWarRender::RebuildTexture()
 		FogMID->SetVectorParameterValue(P_WorldMin, FLinearColor(OX, OY, 0.f, 0.f));
 		FogMID->SetVectorParameterValue(P_WorldSize, FLinearColor(W * Csz, H * Csz, 0.f, 0.f));
 	}
+	return true;
 }
 
 void ASeinFogOfWarRender::UploadPixels()
@@ -390,7 +402,9 @@ FLinearColor ASeinFogOfWarRender::TintForCell(uint8 Bits, uint8 VisibleMask) con
 
 void ASeinFogOfWarRender::HandleFogMutated()
 {
-	RebuildTexture();
+	// Coalesce simulation mutations. A full grid copy, tint bake, blur, allocation,
+	// and texture upload now occurs at FogRenderTickRate instead of once per stamp.
+	bTextureDirty = true;
 }
 
 #if WITH_EDITOR
@@ -405,6 +419,6 @@ void ASeinFogOfWarRender::PostEditChangeProperty(FPropertyChangedEvent& Event)
 	FogTexture = nullptr;
 	TexWidth = TexHeight = 0;
 	UpdateStyleBlendable();
-	RebuildTexture();
+	bTextureDirty = !RebuildTexture();
 }
 #endif

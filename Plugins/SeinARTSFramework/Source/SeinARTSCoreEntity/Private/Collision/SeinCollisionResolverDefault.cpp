@@ -17,9 +17,11 @@
 #include "Collision/SeinCollisionSpatialHash.h"
 #include "Components/SeinExtentsHelpers.h"
 #include "Settings/PluginSettings.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 void USeinCollisionResolverDefault::Resolve(USeinWorldSubsystem& World)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Collision_Default_Resolve);
 	// Channel default responses, resolved once per tick (defaults don't
 	// change mid-tick). Per-pair lookups are then O(1) map gets.
 	TMap<FName, ESeinCollisionResponse> ChannelDefaults;
@@ -38,16 +40,24 @@ void USeinCollisionResolverDefault::Resolve(USeinWorldSubsystem& World)
 	constexpr int32 NumPasses = 4;
 	for (int32 Pass = 0; Pass < NumPasses; ++Pass)
 	{
-		ResolvePass(World, ChannelDefaults, MassRatioCutoff);
+		// A no-write pass is a fixed point: rerunning the same deterministic
+		// contacts against identical transforms cannot produce a later push.
+		// Dense moving clusters retain all four bounded relaxation passes; idle
+		// or already-settled worlds stop paying for redundant scans.
+		if (!ResolvePass(World, ChannelDefaults, MassRatioCutoff)) break;
 	}
 
 	// Overlap events run on the SETTLED positions (after Block separation),
 	// so Overlap-responding pairs report their final overlap state this tick.
-	DetectOverlapsAndEmit(World, ChannelDefaults);
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Collision_OverlapEvents);
+		DetectOverlapsAndEmit(World, ChannelDefaults);
+	}
 }
 
-void USeinCollisionResolverDefault::ResolvePass(USeinWorldSubsystem& World, const TMap<FName, ESeinCollisionResponse>& ChannelDefaults, const FFixedPoint MassRatioCutoff)
+bool USeinCollisionResolverDefault::ResolvePass(USeinWorldSubsystem& World, const TMap<FName, ESeinCollisionResponse>& ChannelDefaults, const FFixedPoint MassRatioCutoff)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Collision_GaussSeidelPass);
 	const FSeinCollisionSpatialHash& Hash = World.GetCollisionSpatialHash();
 	const FFixedPoint CellSize = Hash.GetCellSize();
 	TArray<FSeinEntityHandle> Neighbors;
@@ -63,7 +73,8 @@ void USeinCollisionResolverDefault::ResolvePass(USeinWorldSubsystem& World, cons
 
 	FSeinEntityPool* MutablePool =
 		World.GetEntityPoolMutable();
-	if (!MutablePool) return;
+	if (!MutablePool) return false;
+	bool bAnyTransformChanged = false;
 	MutablePool->ForEachEntity([&](
 		FSeinEntityHandle SelfHandle,
 		FSeinEntity& SelfEntity)
@@ -89,6 +100,7 @@ void USeinCollisionResolverDefault::ResolvePass(USeinWorldSubsystem& World, cons
 
 		Neighbors.Reset();
 		Hash.QueryRadius(SelfQueryPos, QueryRadius, Neighbors, SelfHandle);
+		bool bSelfShapesDirty = true;
 
 		for (const FSeinEntityHandle& OtherHandle : Neighbors)
 		{
@@ -116,10 +128,14 @@ void USeinCollisionResolverDefault::ResolvePass(USeinWorldSubsystem& World, cons
 
 			FFixedVector Normal;
 			FFixedPoint  Depth;
-			// Rebuild self's shapes from its CURRENT transform: self is pushed
-			// (below) as it resolves earlier neighbours this pass, so later pairs
-			// must see the moved position (matches the pre-opt per-pair rebuild).
-			BuildShapes2D(*SelfExt, SelfEntity.Transform, SelfShapes);
+			// Rebuild from the CURRENT transform only when an earlier accepted push
+			// actually changed self. Most candidates do not overlap, so rebuilding
+			// identical shape arrays for every broadphase neighbour was pure cost.
+			if (bSelfShapesDirty)
+			{
+				BuildShapes2D(*SelfExt, SelfEntity.Transform, SelfShapes);
+				bSelfShapesDirty = false;
+			}
 			if (!ComputeDeepestContact(SelfShapes, *OtherExt, OtherEntity->Transform, Normal, Depth)) continue;
 			if (Depth <= FFixedPoint::Zero) continue;
 
@@ -166,7 +182,12 @@ void USeinCollisionResolverDefault::ResolvePass(USeinWorldSubsystem& World, cons
 			SelfNew.Z = SelfPosNow.Z;
 			if (CanOccupy(World, SelfNew, SelfRadius))
 			{
-				SelfEntity.Transform.SetLocation(SelfNew);
+				if (SelfNew != SelfPosNow)
+				{
+					SelfEntity.Transform.SetLocation(SelfNew);
+					bSelfShapesDirty = true;
+					bAnyTransformChanged = true;
+				}
 			}
 
 			// Other moves along +Normal, unless it's an immovable static —
@@ -177,13 +198,15 @@ void USeinCollisionResolverDefault::ResolvePass(USeinWorldSubsystem& World, cons
 				FFixedVector OtherNew = OtherPosNow + Normal * (Depth * OtherShare);
 				OtherNew.Z = OtherPosNow.Z;
 				const FFixedPoint OtherRadius = SeinExtentsHelpers::GetColliderBoundingRadius(*OtherExt);
-				if (CanOccupy(World, OtherNew, OtherRadius))
+				if (OtherNew != OtherPosNow && CanOccupy(World, OtherNew, OtherRadius))
 				{
 					OtherEntity->Transform.SetLocation(OtherNew);
+					bAnyTransformChanged = true;
 				}
 			}
 		}
 	});
+	return bAnyTransformChanged;
 }
 
 namespace

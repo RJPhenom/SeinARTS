@@ -50,6 +50,7 @@
 #include "ShowFlags.h"
 #include "Components/BrushComponent.h"
 #include "CollisionQueryParams.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 #include "SeinARTSFogOfWarLog.h"
 
 // LogSeinFogOfWarDebug is module-declared (SeinARTSFogOfWarLog.h) so it is reliably
@@ -385,6 +386,7 @@ USeinFogOfWarDebugComponent::USeinFogOfWarDebugComponent()
 FPrimitiveSceneProxy* USeinFogOfWarDebugComponent::CreateSceneProxy()
 {
 #if UE_ENABLE_DEBUG_DRAWING
+	TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Fog_Debug_CreateSceneProxy);
 	UWorld* World = GetWorld();
 	if (!World) return nullptr;
 
@@ -570,6 +572,12 @@ void USeinFogOfWarDebugComponent::OnUnregister()
 void USeinFogOfWarDebugComponent::HandleFogMutated()
 {
 #if UE_ENABLE_DEBUG_DRAWING
-	MarkRenderStateDirty();
+	// MarkRenderStateDirty destroys and recreates the entire cell proxy on the
+	// game thread. Fog mutations are frequent, while this developer overlay is
+	// normally hidden, so never pay that cost without a visible consumer.
+	if (UE::SeinARTSFogOfWar::IsAnyDebugViewportEnabled())
+	{
+		MarkRenderStateDirty();
+	}
 #endif
 }

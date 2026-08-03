@@ -11,12 +11,11 @@
 #include "CoreMinimal.h"
 #include "GameplayTagContainer.h"
 #include "Core/SeinEntityHandle.h"
+#include "ViewModel/SeinEntityViewModel.h"
 #include "SeinSelectionModel.generated.h"
 
-class USeinEntityViewModel;
 class USeinUISubsystem;
 class ASeinPlayerController;
-struct FSeinAbilityInfo;
 
 /** Broadcast when the selection or active focus changes. */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnSelectionModelChanged);
@@ -129,7 +128,18 @@ public:
 	 */
 	void EnsurePlayerControllerBound();
 
+	/**
+	 * Mark selection-wide ability state stale for the next UI read. Called once
+	 * after each completed simulation frame. The first action-panel query rebuilds
+	 * the aggregate; every other Blueprint binding/event in that presentation
+	 * frame reuses it instead of rescanning the whole selection.
+	 */
+	void InvalidateAbilityCache();
+
 private:
+	/** Lazily rebuild the per-presentation-frame ability aggregate. */
+	void EnsureAbilityCache() const;
+
 	/** Rebuild the ViewModel list from the current selection. */
 	void RebuildFromController();
 
@@ -150,4 +160,13 @@ private:
 
 	/** Cached active focus index. */
 	int32 CachedFocusIndex = -1;
+
+	/** Selection-wide aggregate shared by all action-panel queries in one UI
+	 *  refresh. Mutable because the Blueprint getters are logically const. */
+	mutable TArray<FSeinAbilityInfo> CachedSelectionAbilities;
+
+	/** Monotonic invalidation generation. A selection change or completed sim
+	 *  frame advances it; the first reader records the generation it built. */
+	uint64 AbilityCacheGeneration = 1;
+	mutable uint64 BuiltAbilityCacheGeneration = 0;
 };

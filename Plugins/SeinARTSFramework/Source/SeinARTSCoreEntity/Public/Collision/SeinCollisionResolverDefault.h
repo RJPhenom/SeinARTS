@@ -101,8 +101,9 @@ protected:
 		FString& OutError) const;
 
 private:
-	/** One relaxation pass: separate every Block pair it touches. Reads each
+	/** One relaxation pass: separate every Block pair it touches and report
+	 *  whether any transform actually changed. Reads each
 	 *  self's mid-pass transform (Gauss-Seidel) and writes pushes immediately,
 	 *  so it must run serially. */
-	static void ResolvePass(USeinWorldSubsystem& World, const TMap<FName, ESeinCollisionResponse>& ChannelDefaults, const FFixedPoint MassRatioCutoff);
+	static bool ResolvePass(USeinWorldSubsystem& World, const TMap<FName, ESeinCollisionResponse>& ChannelDefaults, const FFixedPoint MassRatioCutoff);
 };

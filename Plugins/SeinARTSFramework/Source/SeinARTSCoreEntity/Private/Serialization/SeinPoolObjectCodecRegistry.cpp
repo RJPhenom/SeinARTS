@@ -342,6 +342,23 @@ namespace
 			return true;
 		}
 
+		// Native EditDefaultsOnly fields are immutable class configuration, not
+		// per-instance continuation state. Their values are already covered by the
+		// frozen simulation-content digest, and a materialized object receives the
+		// same values from its exact-class CDO before runtime state is decoded.
+		// Keeping them in every pool record duplicated large tag/config payloads
+		// hundreds of times. Do not apply this rule to Blueprint-declared variables:
+		// designers commonly leave runtime BP state non-instance-editable, so those
+		// fields must remain in the reflected pool contract.
+		const UClass* OwnerClass = Cast<UClass>(Property.GetOwnerStruct());
+		if (OwnerClass
+			&& !OwnerClass->HasAnyClassFlags(CLASS_CompiledFromBlueprint)
+			&& Property.HasAllPropertyFlags(
+				CPF_Edit | CPF_DisableEditOnInstance))
+		{
+			return true;
+		}
+
 		const UStruct* Owner = Property.GetOwnerStruct();
 		const FName Name = Property.GetFName();
 		if (Owner == USeinAbility::StaticClass())
@@ -380,6 +397,62 @@ namespace
 	bool ShouldSerializeReflectedProperty(const FProperty& Property)
 	{
 		return !ShouldSkipReflectedProperty(Property);
+	}
+
+	bool CaptureReflectedPoolObjectState(
+		const UObject& Object,
+		TArray<uint8>& OutBytes,
+		FString& OutError)
+	{
+		OutBytes.Reset();
+		OutError.Reset();
+		TArray<uint8> ReflectedBytes;
+		if (!FSeinCanonicalStateCodec::EncodeObject(
+				Object,
+				{},
+				MakeReflectedWireLimits(),
+				&ShouldSerializeReflectedProperty,
+				ReflectedBytes,
+				OutError))
+		{
+			if (OutError.IsEmpty())
+			{
+				OutError =
+					TEXT("Reflected pool state failed bounded serialization.");
+			}
+			OutBytes.Reset();
+			return false;
+		}
+		const USeinAbility* Ability = Cast<USeinAbility>(&Object);
+		AppendUInt32(OutBytes, 0x53504f52); // "SPOR"
+		AppendUInt32(OutBytes, ReflectedEnvelopeVersion);
+		AppendUInt32(OutBytes, Ability ? 1u : 0u);
+		AppendUInt32(
+			OutBytes,
+			static_cast<uint32>(ReflectedBytes.Num()));
+		OutBytes.Append(ReflectedBytes);
+		if (Ability
+			&& (!AppendResourceCost(
+					Ability->DeductedCost,
+					OutBytes,
+					OutError)
+				|| !AppendResourceCost(
+					Ability->PendingCompletionCost,
+					OutBytes,
+					OutError)))
+		{
+			OutBytes.Reset();
+			return false;
+		}
+		if (OutBytes.Num()
+			> FSeinPoolObjectCodecRegistry::MaxStateBytes)
+		{
+			OutError =
+				TEXT("Reflected pool envelope exceeds its byte bound.");
+			OutBytes.Reset();
+			return false;
+		}
+		return true;
 	}
 
 	bool StructMayCopyVariableDefaults(
@@ -796,6 +869,7 @@ struct FSeinPoolObjectCodecManifest::FData
 		FSeinPoolObjectCodecDescriptor Descriptor;
 		FGuid DescriptorDigest;
 		FString CanonicalDescriptor;
+		FSeinPoolObjectCodecOps Ops;
 		TStrongObjectPtr<UClass> AnchorRoot;
 	};
 
@@ -805,12 +879,14 @@ struct FSeinPoolObjectCodecManifest::FData
 		ESeinPoolObjectKind Kind = ESeinPoolObjectKind::Ability;
 		int32 ProviderIndex = INDEX_NONE;
 		FGuid ClassSchemaDigest;
+		FGuid RootClassContractDigest;
 		uint64 TestAdmissionToken = 0;
 		TStrongObjectPtr<UClass> ClassRoot;
 	};
 
 	TArray<FProvider> Providers;
 	TArray<FAdmittedClass> Classes;
+	TMap<const UClass*, int32> ClassIndexByPointer;
 	FString CanonicalManifest;
 	FGuid Digest;
 };
@@ -835,6 +911,25 @@ namespace
 				return Candidate.Kind == Kind
 					&& Candidate.ExactClassPath == ExactClassPath;
 			});
+	}
+
+	const FSeinPoolObjectCodecManifest::FData::FAdmittedClass*
+	FindAdmittedClass(
+		const FSeinPoolObjectCodecManifest::FData* Data,
+		const UClass* ExactClass,
+		ESeinPoolObjectKind Kind)
+	{
+		if (!Data || !ExactClass)
+		{
+			return nullptr;
+		}
+		const int32* Index =
+			Data->ClassIndexByPointer.Find(ExactClass);
+		return Index
+			&& Data->Classes.IsValidIndex(*Index)
+			&& Data->Classes[*Index].Kind == Kind
+				? &Data->Classes[*Index]
+				: nullptr;
 	}
 
 	bool AddAdmittedClass(
@@ -939,6 +1034,22 @@ namespace
 		{
 			Admitted.ClassSchemaDigest =
 				Provider.DescriptorDigest;
+		}
+		FSeinCanonicalDigestWriter RootContractWriter(
+			TEXT("SeinARTS.PoolObject.RootClassContract"), 1);
+		if (!RootContractWriter.WriteUInt8(
+				static_cast<uint8>(Kind))
+			|| !RootContractWriter.WriteString(Path)
+			|| !RootContractWriter.WriteGuid(
+				Provider.DescriptorDigest)
+			|| !RootContractWriter.WriteGuid(
+				Admitted.ClassSchemaDigest)
+			|| !RootContractWriter.Finalize(
+				Admitted.RootClassContractDigest,
+				OutError))
+		{
+			Data.Classes.Pop();
+			return false;
 		}
 		Admitted.ClassRoot.Reset(&ExactClass);
 		return true;
@@ -1322,6 +1433,7 @@ FSeinPoolObjectCodecRegistry::CaptureManifest(
 		Frozen.Descriptor = Claim.Descriptor;
 		Frozen.DescriptorDigest = Claim.DescriptorDigest;
 		Frozen.CanonicalDescriptor = Claim.CanonicalDescriptor;
+		Frozen.Ops = Claim.Ops;
 		Frozen.AnchorRoot.Reset(
 			const_cast<UClass*>(
 				Claim.Descriptor.NativeAnchor));
@@ -1370,6 +1482,15 @@ FSeinPoolObjectCodecRegistry::CaptureManifest(
 	IAssetRegistry& AssetRegistry =
 		FModuleManager::LoadModuleChecked<FAssetRegistryModule>(
 			TEXT("AssetRegistry")).Get();
+	// Standalone/cooked worlds can freeze their lockstep contracts while the
+	// registry's initial disk scan is still running. Querying listed packages
+	// before that scan completes silently admits only native anchors, even when
+	// the validated content profile explicitly contains Blueprint abilities and
+	// resolvers. Contract freeze is a one-time pre-match boundary, so finish the
+	// scan here rather than producing a manifest that cannot checkpoint the live
+	// objects the same profile is allowed to spawn.
+	AssetRegistry.WaitForCompletion();
+	TSet<FString> SynchronouslyScannedPackagePaths;
 	TSet<FString> SeenGeneratedClassPaths;
 	for (const FSeinSimulationContentRecord& Record :
 		ContentProfile.Records)
@@ -1387,6 +1508,31 @@ FSeinPoolObjectCodecRegistry::CaptureManifest(
 			Assets,
 			true,
 			false);
+		if (Assets.IsEmpty())
+		{
+			// Editor -game starts before plugin content is necessarily present in
+			// the registry's searched roots. The content profile itself is the
+			// bounded allow-list, so synchronously scan only the missing record's
+			// containing package path and retry. One directory is scanned at most
+			// once even when it contains many admitted classes.
+			const FString PackagePath =
+				FPackageName::GetLongPackagePath(
+					Record.CanonicalRecordId);
+			if (!PackagePath.IsEmpty()
+				&& !SynchronouslyScannedPackagePaths.Contains(PackagePath))
+			{
+				SynchronouslyScannedPackagePaths.Add(PackagePath);
+				AssetRegistry.ScanPathsSynchronous(
+					{ PackagePath },
+					/*bForceRescan=*/true,
+					/*bIgnoreDenyListScanFilters=*/false);
+			}
+			AssetRegistry.GetAssetsByPackageName(
+				FName(*Record.CanonicalRecordId),
+				Assets,
+				true,
+				false);
+		}
 		for (const FAssetData& Asset : Assets)
 		{
 			const FString NativeAnchorExport =
@@ -1477,6 +1623,12 @@ FSeinPoolObjectCodecRegistry::CaptureManifest(
 		{
 			return A.ExactClassPath < B.ExactClassPath;
 		});
+	Data->ClassIndexByPointer.Reserve(Data->Classes.Num());
+	for (int32 Index = 0; Index < Data->Classes.Num(); ++Index)
+	{
+		Data->ClassIndexByPointer.Add(
+			Data->Classes[Index].ClassRoot.Get(), Index);
+	}
 
 	FSeinCanonicalDigestWriter Writer(
 		TEXT("SeinARTS.PoolObject.CodecManifest"),
@@ -1619,6 +1771,105 @@ bool FSeinPoolObjectCodecRegistry::CaptureObject(
 	return true;
 }
 
+bool FSeinPoolObjectCodecRegistry::ResolveVerifiedRootCaptureMode(
+	const FSeinPoolObjectCodecManifest& Manifest,
+	const UObject& Object,
+	ESeinPoolObjectKind ExpectedKind,
+	bool& bOutParallelReflected,
+	FString& OutError)
+{
+	check(IsInGameThread());
+	bOutParallelReflected = false;
+	OutError.Reset();
+	const FSeinPoolObjectCodecManifest::FData::FAdmittedClass* Class =
+		FindAdmittedClass(
+			Manifest.Data.Get(), Object.GetClass(), ExpectedKind);
+	if (!Manifest.IsValid()
+		|| !Class
+		|| Class->ClassRoot.Get() != Object.GetClass()
+		|| !Class->RootClassContractDigest.IsValid()
+		|| !Manifest.Data->Providers.IsValidIndex(
+			Class->ProviderIndex))
+	{
+		OutError = FString::Printf(
+			TEXT("Pool class '%s' is absent from the verified local manifest."),
+			*Object.GetClass()->GetPathName());
+		return false;
+	}
+	bOutParallelReflected = Manifest.Data->Providers[
+		Class->ProviderIndex].Descriptor.bUsesReflectedState;
+	return true;
+}
+
+bool FSeinPoolObjectCodecRegistry::CaptureObjectForVerifiedRoot(
+	const FSeinPoolObjectCodecManifest& Manifest,
+	const UObject& Object,
+	ESeinPoolObjectKind ExpectedKind,
+	TArray<uint8>& OutStateBytes,
+	FGuid& OutRootClassContractDigest,
+	FString& OutError)
+{
+	OutStateBytes.Reset();
+	OutRootClassContractDigest.Invalidate();
+	OutError.Reset();
+	if (!Manifest.IsValid())
+	{
+		OutError =
+			TEXT("Root pool capture requires a verified manifest.");
+		return false;
+	}
+
+	const FSeinPoolObjectCodecManifest::FData::FAdmittedClass*
+		Class = FindAdmittedClass(
+			Manifest.Data.Get(), Object.GetClass(), ExpectedKind);
+	if (!Class
+		|| Class->ClassRoot.Get() != Object.GetClass()
+		|| !Class->RootClassContractDigest.IsValid()
+		|| !Manifest.Data->Providers.IsValidIndex(
+			Class->ProviderIndex))
+	{
+		OutError = FString::Printf(
+			TEXT("Pool class '%s' is absent from the verified local manifest."),
+			*Object.GetClass()->GetPathName());
+		return false;
+	}
+
+	const FSeinPoolObjectCodecManifest::FData::FProvider& Provider =
+		Manifest.Data->Providers[Class->ProviderIndex];
+	if (!Provider.Ops.Capture)
+	{
+		OutError = TEXT("Verified pool provider has no capture callback.");
+		return false;
+	}
+
+	const bool bCaptured = Provider.Descriptor.bUsesReflectedState
+		? CaptureReflectedPoolObjectState(
+			Object, OutStateBytes, OutError)
+		: (IsInGameThread()
+			&& !FSeinStateProviderTransactionScope::IsActive()
+			&& [&Provider, &Object, &OutStateBytes, &OutError]()
+			{
+				FSeinStateProviderTransactionScope Transaction;
+				return Provider.Ops.Capture(
+					{ Object }, OutStateBytes, OutError);
+			}());
+	if (!bCaptured
+		|| OutStateBytes.Num() > Provider.Descriptor.MaxStateBytes)
+	{
+		if (OutError.IsEmpty())
+		{
+			OutError = Provider.Descriptor.bUsesReflectedState
+				? TEXT("Root pool object capture exceeded its provider bound.")
+				: TEXT("Explicit root pool providers require the game-thread callback boundary.");
+		}
+		OutStateBytes.Reset();
+		return false;
+	}
+
+	OutRootClassContractDigest = Class->RootClassContractDigest;
+	return true;
+}
+
 UObject* FSeinPoolObjectCodecRegistry::MaterializeObject(
 	const FSeinPoolObjectCodecManifest& Manifest,
 	const FSeinSnapshotPoolInstanceRecord& Record,
@@ -1715,56 +1966,8 @@ FSeinPoolObjectCodecRegistry::MakeReflectedOps()
 		TArray<uint8>& OutBytes,
 		FString& OutError)
 	{
-		OutBytes.Reset();
-		OutError.Reset();
-		TArray<uint8> ReflectedBytes;
-		if (!FSeinCanonicalStateCodec::EncodeObject(
-				Context.Object,
-				{},
-				MakeReflectedWireLimits(),
-				&ShouldSerializeReflectedProperty,
-				ReflectedBytes,
-				OutError))
-		{
-			if (OutError.IsEmpty())
-			{
-				OutError =
-					TEXT("Reflected pool state failed bounded serialization.");
-			}
-			OutBytes.Reset();
-			return false;
-		}
-		const USeinAbility* Ability =
-			Cast<USeinAbility>(&Context.Object);
-		AppendUInt32(OutBytes, 0x53504f52); // "SPOR"
-		AppendUInt32(OutBytes, ReflectedEnvelopeVersion);
-		AppendUInt32(OutBytes, Ability ? 1u : 0u);
-		AppendUInt32(
-			OutBytes,
-			static_cast<uint32>(ReflectedBytes.Num()));
-		OutBytes.Append(ReflectedBytes);
-		if (Ability
-			&& (!AppendResourceCost(
-					Ability->DeductedCost,
-					OutBytes,
-					OutError)
-				|| !AppendResourceCost(
-					Ability->PendingCompletionCost,
-					OutBytes,
-					OutError)))
-		{
-			OutBytes.Reset();
-			return false;
-		}
-		if (OutBytes.Num()
-			> FSeinPoolObjectCodecRegistry::MaxStateBytes)
-		{
-			OutError =
-				TEXT("Reflected pool envelope exceeds its byte bound.");
-			OutBytes.Reset();
-			return false;
-		}
-		return true;
+		return CaptureReflectedPoolObjectState(
+			Context.Object, OutBytes, OutError);
 	};
 	Ops.Materialize = [](
 		const FSeinPoolObjectMaterializeContext& Context,

@@ -15,6 +15,7 @@
 #include "Core/SeinPlayerState.h"
 #include "SeinARTSCoreEntityLog.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "Simulation/ComponentStorage.h"
 #include "Components/SeinProductionComponent.h"
 #include "Components/SeinIdentityComponent.h"
 #include "Components/SeinAbilityComponent.h"
@@ -291,24 +292,42 @@ public:
 		// Phase 1 is deliberately mutation-light: spawning can grow both the entity
 		// pool and component storages, invalidating every reference held by this walk.
 		TArray<FSeinEntityHandle> ReadyProducers;
-		World.GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, const FSeinEntity&)
+		TArray<FSeinEntityHandle> ActiveProducers;
+		const ISeinComponentStorage* ProductionStorage =
+			World.GetComponentStorageRaw(FSeinProductionComponent::StaticStruct());
+		if (ProductionStorage)
 		{
-			FSeinProductionComponent* ProdComp =
-				World.GetComponentMutable<
-					FSeinProductionComponent>(Handle);
-			if (!ProdComp || ProdComp->Queue.Num() == 0) return;
-
-			// Advance progress unless we're already parked at 100% waiting on cap.
-			if (!ProdComp->bStalledAtCompletion)
+			ReadyProducers.Reserve(ProductionStorage->GetComponentCount());
+			ActiveProducers.Reserve(ProductionStorage->GetComponentCount());
+			ProductionStorage->ForEachLiveComponent([&](
+				FSeinEntityHandle Handle, const void* RawComponent)
 			{
-				ProdComp->CurrentBuildProgress = ProdComp->CurrentBuildProgress + DeltaTime;
-			}
-
-			if (ProdComp->CurrentBuildProgress >= ProdComp->Queue[0].TotalBuildTime)
+				if (!World.GetEntityPool().IsValid(Handle)) return;
+				const FSeinProductionComponent* ProdComp =
+					static_cast<const FSeinProductionComponent*>(RawComponent);
+				if (ProdComp && ProdComp->Queue.Num() != 0)
+				{
+					ActiveProducers.Add(Handle);
+				}
+			});
+			for (const FSeinEntityHandle Handle : ActiveProducers)
 			{
-				ReadyProducers.Add(Handle);
+				FSeinProductionComponent* ProdComp =
+					World.GetComponentMutable<FSeinProductionComponent>(Handle);
+				if (!ProdComp || ProdComp->Queue.Num() == 0) continue;
+
+				// Advance progress unless we're already parked at 100% waiting on cap.
+				if (!ProdComp->bStalledAtCompletion)
+				{
+					ProdComp->CurrentBuildProgress = ProdComp->CurrentBuildProgress + DeltaTime;
+				}
+
+				if (ProdComp->CurrentBuildProgress >= ProdComp->Queue[0].TotalBuildTime)
+				{
+					ReadyProducers.Add(Handle);
+				}
 			}
-		});
+		}
 
 		// Phase 2 processes the stable handle snapshot in ascending slot order.
 		// Every producer/component/queue value is reacquired between operations.

@@ -544,6 +544,7 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(World->IsTerminalAfterModuleUnload()));
 		ASSERT_THAT(IsNull(World->LatentActionManager));
 		ASSERT_THAT(IsFalse(World->OnSimTickCompleted.IsBound()));
+		ASSERT_THAT(IsFalse(World->OnSimFrameCompleted.IsBound()));
 		ASSERT_THAT(IsFalse(World->OnCaptureSnapshotPostSim.IsBound()));
 		ASSERT_THAT(IsFalse(World->GetCommandProtocolDigest().IsValid()));
 		ASSERT_THAT(IsFalse(World->GetMatchSettingsDigest().IsValid()));
@@ -555,11 +556,14 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsNull(RetainedController->WorldSubsystem.Get()));
 
 		World->OnSimTickCompleted.AddLambda([](int32) {});
+		World->OnSimFrameCompleted.AddLambda([](int32, int32) {});
 		ASSERT_THAT(IsTrue(World->OnSimTickCompleted.IsBound()));
+		ASSERT_THAT(IsTrue(World->OnSimFrameCompleted.IsBound()));
 		World->TerminateAndReleaseForModuleUnload(
 			FName(TEXT("SeinARTSTests")),
 			TEXT("test provider is unloading"));
 		ASSERT_THAT(IsFalse(World->OnSimTickCompleted.IsBound()));
+		ASSERT_THAT(IsFalse(World->OnSimFrameCompleted.IsBound()));
 		ASSERT_THAT(AreEqual(1, RetainedController->UnregisteredCount));
 
 		ASSERT_THAT(IsFalse(World->IsExecutionTopologyValid()));

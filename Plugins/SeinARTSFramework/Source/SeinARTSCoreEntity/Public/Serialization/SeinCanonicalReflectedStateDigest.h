@@ -63,6 +63,18 @@ public:
 		FGuid& OutDigest,
 		FString& OutError);
 
+	/** Hash an ordered sequence of values of one struct type using one bounded
+	 *  projection context and one digest writer. This is equivalent canonical
+	 *  evidence for callers that separately bind the ordered keys, without the
+	 *  allocation and BLAKE3 setup cost of one nested digest per value. */
+	static bool ComputeStructSequenceValueDigest(
+		const UScriptStruct* Type,
+		TConstArrayView<const void*> StructValues,
+		const FGuid& SchemaDigest,
+		const FSeinCanonicalReflectedStateLimits& Limits,
+		FGuid& OutDigest,
+		FString& OutError);
+
 	/** Hash one UObject's reflected value without including outer/name identity. */
 	static bool ComputeObjectValueDigest(
 		const UObject* Object,

@@ -78,7 +78,8 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|UI|Minimap", meta = (ClampMin = "16", ClampMax = "512"))
 	int32 FogTextureResolution = 256;
 
-	/** Rebuild the fog overlay every N refreshes (sim ticks). 1 = every tick. */
+	/** Rebuild the fog overlay every N presentation refreshes. 1 = every engine
+	 *  frame that completed simulation work. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|UI|Minimap", meta = (ClampMin = "1"))
 	int32 FogUpdateInterval = 4;
 
@@ -111,4 +112,12 @@ private:
 	TWeakObjectPtr<UWorld> WorldPtr;
 
 	int32 RefreshCounter = 0;
+
+	/** Reused render-only scratch. Keeping capacity removes four transient heap
+	 *  allocations from every minimap fog upload. */
+	TArray<uint8> FogCellScratch;
+	TArray<FColor> FogPixelScratch;
+	TArray<FColor> FogBlurScratch;
+	TArray<int32> FogSampleXScratch;
+	TArray<int32> FogSampleYScratch;
 };

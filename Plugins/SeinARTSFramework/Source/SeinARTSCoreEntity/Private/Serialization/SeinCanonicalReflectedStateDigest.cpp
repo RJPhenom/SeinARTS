@@ -13,6 +13,7 @@ namespace
 {
 	constexpr uint32 ReflectedSchemaFormatVersion = 2;
 	constexpr uint32 ReflectedValueFormatVersion = 2;
+	constexpr uint32 ReflectedSequenceValueFormatVersion = 3;
 
 	FString CanonicalNameText(const FName Name)
 	{
@@ -110,12 +111,19 @@ namespace
 	struct FProjectionContext
 	{
 		explicit FProjectionContext(
-			const FSeinCanonicalReflectedStateLimits& InLimits)
+			const FSeinCanonicalReflectedStateLimits& InLimits,
+			const bool bInOmitSchemaBoundValueIdentity = false)
 			: Limits(InLimits)
+			, bOmitSchemaBoundValueIdentity(
+				bInOmitSchemaBoundValueIdentity)
 		{
 		}
 
 		const FSeinCanonicalReflectedStateLimits& Limits;
+		// Sequence callers already bind one exact schema digest. Re-emitting the
+		// same type, owner, property name, and array-shape identities for every
+		// value adds no evidence and dominates large homogeneous storage walks.
+		const bool bOmitSchemaBoundValueIdentity;
 		FString Error;
 		int64 AggregateElements = 0;
 		int64 TotalStringCharacters = 0;
@@ -124,7 +132,30 @@ namespace
 		TArray<const UObject*> ObjectStack;
 		TMap<const UObject*, uint32> ObjectEncounterIDs;
 		TMap<const UStruct*, FGuid> SchemaDigests;
+		/** A value sequence can visit the same reflected struct hundreds of times.
+		 *  Freeze its already-filtered canonical property order once per projection
+		 *  instead of re-walking and path-sorting the identical metadata for every
+		 *  component instance. Results are copied out because recursive projection
+		 *  may grow this TMap and invalidate references to its value storage. */
+		TMap<const UStruct*, TArray<const FProperty*>> CanonicalProperties;
 		TArray<const UStruct*> SchemaStack;
+
+		void GetCanonicalProperties(
+			const UStruct* Type,
+			TArray<const FProperty*>& OutProperties)
+		{
+			if (const TArray<const FProperty*>* Existing =
+				CanonicalProperties.Find(Type))
+			{
+				OutProperties = *Existing;
+				return;
+			}
+
+			TArray<const FProperty*> Frozen;
+			GatherCanonicalProperties(Type, Frozen);
+			CanonicalProperties.Add(Type, Frozen);
+			OutProperties = MoveTemp(Frozen);
+		}
 
 		bool Fail(const FString& FieldPath, const FString& Message)
 		{
@@ -487,7 +518,7 @@ namespace
 		}
 
 		TArray<const FProperty*> Properties;
-		GatherCanonicalProperties(Type, Properties);
+		Context.GetCanonicalProperties(Type, Properties);
 		if (!Context.Write(
 			Writer,
 			Writer.WriteUInt32(static_cast<uint32>(Properties.Num())),
@@ -1129,18 +1160,20 @@ namespace
 				TEXT("Reflected state type or value memory is null."));
 		}
 		if (!Context.CheckDepth(Depth, FieldPath)
-			|| !Context.WriteString(
-				Writer, Type->GetPathName(), FieldPath))
+			|| (!Context.bOmitSchemaBoundValueIdentity
+				&& !Context.WriteString(
+					Writer, Type->GetPathName(), FieldPath)))
 		{
 			return false;
 		}
 
 		TArray<const FProperty*> Properties;
-		GatherCanonicalProperties(Type, Properties);
-		if (!Context.Write(
-			Writer,
-			Writer.WriteUInt32(static_cast<uint32>(Properties.Num())),
-			FieldPath))
+		Context.GetCanonicalProperties(Type, Properties);
+		if (!Context.bOmitSchemaBoundValueIdentity
+			&& !Context.Write(
+				Writer,
+				Writer.WriteUInt32(static_cast<uint32>(Properties.Num())),
+				FieldPath))
 		{
 			return false;
 		}
@@ -1148,14 +1181,15 @@ namespace
 		{
 			const FString PropertyPath =
 				ChildPath(FieldPath, *Property);
-			if (!Context.WriteString(
-					Writer, PropertyOwnerPath(*Property), PropertyPath)
-				|| !Context.WriteName(
-					Writer, Property->GetFName(), PropertyPath)
-				|| !Context.Write(
-					Writer,
-					Writer.WriteInt32(Property->ArrayDim),
-					PropertyPath))
+			if (!Context.bOmitSchemaBoundValueIdentity
+				&& (!Context.WriteString(
+						Writer, PropertyOwnerPath(*Property), PropertyPath)
+					|| !Context.WriteName(
+						Writer, Property->GetFName(), PropertyPath)
+					|| !Context.Write(
+						Writer,
+						Writer.WriteInt32(Property->ArrayDim),
+						PropertyPath)))
 			{
 				return false;
 			}
@@ -1263,6 +1297,62 @@ bool FSeinCanonicalReflectedStateDigest::ComputeStructValueDigest(
 			? Writer.GetError()
 			: MoveTemp(Context.Error);
 		return false;
+	}
+	return FinishRoot(Writer, Context, OutDigest, OutError);
+}
+
+bool FSeinCanonicalReflectedStateDigest::ComputeStructSequenceValueDigest(
+	const UScriptStruct* Type,
+	TConstArrayView<const void*> StructValues,
+	const FGuid& SchemaDigest,
+	const FSeinCanonicalReflectedStateLimits& Limits,
+	FGuid& OutDigest,
+	FString& OutError)
+{
+	OutDigest.Invalidate();
+	OutError.Reset();
+	if (!Type || !SchemaDigest.IsValid())
+	{
+		OutError =
+			TEXT("Canonical reflected struct sequence requires a type and valid schema digest.");
+		return false;
+	}
+
+	FProjectionContext Context(
+		Limits,
+		/*bInOmitSchemaBoundValueIdentity=*/true);
+	Context.SchemaDigests.Add(Type, SchemaDigest);
+	FSeinCanonicalDigestWriter Writer(
+		TEXT("SeinARTS.ReflectedState.StructSequenceValue"),
+		ReflectedSequenceValueFormatVersion);
+	if (!Context.Write(
+			Writer, Writer.WriteGuid(SchemaDigest), Type->GetPathName())
+		|| !Context.Write(
+			Writer,
+			Writer.WriteUInt32(static_cast<uint32>(StructValues.Num())),
+			Type->GetPathName()))
+	{
+		OutError = Context.Error.IsEmpty()
+			? Writer.GetError()
+			: MoveTemp(Context.Error);
+		return false;
+	}
+	for (int32 Index = 0; Index < StructValues.Num(); ++Index)
+	{
+		if (!StructValues[Index]
+			|| !WriteReflectedValue(
+				Type,
+				StructValues[Index],
+				Context,
+				Writer,
+				0,
+				Type->GetPathName()))
+		{
+			OutError = Context.Error.IsEmpty()
+				? TEXT("Canonical reflected struct sequence contains a null value.")
+				: MoveTemp(Context.Error);
+			return false;
+		}
 	}
 	return FinishRoot(Writer, Context, OutDigest, OutError);
 }

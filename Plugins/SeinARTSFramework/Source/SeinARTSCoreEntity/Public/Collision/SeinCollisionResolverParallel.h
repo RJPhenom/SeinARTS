@@ -112,6 +112,8 @@ public:
 private:
 	/** One Jacobi relaxation pass: gather movers (serial), compute each mover's
 	 *  own barrier-gated separation from the FROZEN snapshot (parallel), then
-	 *  apply all moves (serial, disjoint). */
-	void JacobiPass(USeinWorldSubsystem& World, const TMap<FName, ESeinCollisionResponse>& ChannelDefaults, const FFixedPoint MassRatioCutoff);
+	 *  apply only changed moves (serial, disjoint). Returns true when at least
+	 *  one transform changed; an unchanged pass is an exact fixed point, so no
+	 *  later pass could produce a different result from the same state. */
+	bool JacobiPass(USeinWorldSubsystem& World, const TMap<FName, ESeinCollisionResponse>& ChannelDefaults, const FFixedPoint MassRatioCutoff);
 };

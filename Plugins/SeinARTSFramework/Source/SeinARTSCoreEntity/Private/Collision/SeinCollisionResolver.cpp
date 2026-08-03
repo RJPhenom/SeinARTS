@@ -219,8 +219,11 @@ bool USeinCollisionResolver::CanOccupy(USeinWorldSubsystem& World, const FFixedV
 	{
 		// 8 unit-ring directions (45° spacing), sampled at the collider radius —
 		// the body footprint, not just the center.
-		const FFixedPoint RingDiag = FFixedPoint::FromInt(7071) / FFixedPoint::FromInt(10000); // ≈ cos 45°
-		const FFixedVector BarrierRing[8] = {
+		// Exact raw result of FromInt(7071) / FromInt(10000). Keep the
+		// established approximation byte-identical without rerunning the fixed
+		// point software divider for every collision push candidate.
+		static const FFixedPoint RingDiag(3036971375LL); // ≈ cos 45°
+		static const FFixedVector BarrierRing[8] = {
 			FFixedVector( FFixedPoint::One,   FFixedPoint::Zero, FFixedPoint::Zero),
 			FFixedVector( RingDiag,           RingDiag,          FFixedPoint::Zero),
 			FFixedVector( FFixedPoint::Zero,  FFixedPoint::One,  FFixedPoint::Zero),

@@ -34,6 +34,10 @@ class SEINARTSMOVEMENTPLUS_API USeinInfantryMovement : public USeinBasicMovement
 public:
 	virtual void OnMoveBegin(const FSeinMovementContext& Ctx) override;
 	virtual FSeinMotion ComputeMotion_Implementation(USeinMoverHandle* Mover) override;
+	virtual bool SupportsExactIdleMutationTracking() const override
+	{
+		return GetClass() == StaticClass();
+	}
 
 	/** Returns FSeinInfantryMovementData so the editor auto-attaches it to
 	 *  MovementClassData when Infantry is selected (carries Acceleration /

@@ -1314,6 +1314,139 @@ bool FSeinLatentActionCodecRegistry::CaptureRecords(
 		OutError);
 }
 
+bool FSeinLatentActionCodecRegistry::CaptureRecordForVerifiedRoot(
+	const FSeinLatentActionCodecManifest& Manifest,
+	const USeinWorldSubsystem& World,
+	const USeinLatentAction& Action,
+	int32 Tick,
+	int32 Ordinal,
+	int64 NextActionID,
+	int64 NextAbilityActivationID,
+	FSeinSnapshotLatentActionRecord& OutRecord,
+	FString& OutError)
+{
+	check(IsInGameThread());
+	OutRecord = FSeinSnapshotLatentActionRecord();
+	OutError.Reset();
+	if (!Manifest.IsValid() || !Manifest.GetDigest().IsValid()
+		|| FSeinStateProviderTransactionScope::IsActive()
+		|| Ordinal < 0
+		|| NextActionID <= 0
+		|| NextAbilityActivationID <= 0
+		|| Action.bCompleted
+		|| Action.bCancelled
+		|| Action.bFailed
+		|| Action.GetActionID() <= 0
+		|| Action.GetActionID() >= NextActionID)
+	{
+		OutError =
+			TEXT("Incremental latent capture requires one live action and valid frozen allocator context.");
+		return false;
+	}
+
+	const USeinAbility* Ability = Action.OwningAbility.Get();
+	const int32 AbilityPoolID = World.FindAbilityInstanceID(Ability);
+	if (!Ability
+		|| AbilityPoolID == INDEX_NONE
+		|| !Ability->bIsActive
+		|| Ability->OwnerEntity != Action.OwnerEntity
+		|| !World.IsEntityAlive(Action.OwnerEntity)
+		|| Action.GetAbilityActivationID() <= 0
+		|| Action.GetAbilityActivationID() != Ability->GetActivationID()
+		|| Action.GetAbilityActivationID() >= NextAbilityActivationID)
+	{
+		OutError =
+			TEXT("Incremental latent action does not belong to one exact live ability activation.");
+		return false;
+	}
+
+	const int32 EntryIndex = FindManifestEntryIndex(
+		Manifest, Action.GetClass());
+	if (EntryIndex == INDEX_NONE)
+	{
+		OutError = FString::Printf(
+			TEXT("Active latent continuation '%s' has no exact checkpoint codec."),
+			*Action.GetClass()->GetPathName());
+		return false;
+	}
+	const FSeinLatentActionCodecManifest::FData::FEntry& Entry =
+		Manifest.Data->Entries[EntryIndex];
+
+	// The copied claim owns module callables. Bound both invocation and
+	// destruction to this synchronous game-thread transaction.
+	FInvocationScope ProviderTransaction;
+	FCodecClaim Claim;
+	if (!ResolveClaim(Entry.Token, Claim, OutError)
+		|| Claim.DescriptorDigest != Entry.DescriptorDigest
+		|| Claim.Descriptor.SupportedClass != Action.GetClass())
+	{
+		return false;
+	}
+
+	FInstancedStruct Payload;
+	if (!Claim.Ops.Capture(
+		{ World,
+			Action,
+			Tick,
+			AbilityPoolID,
+			Action.GetAbilityActivationID() },
+		Payload,
+		OutError))
+	{
+		if (OutError.IsEmpty())
+		{
+			OutError =
+				TEXT("Latent codec capture failed without a diagnostic.");
+		}
+		return false;
+	}
+
+	OutRecord.Ordinal = Ordinal;
+	OutRecord.ActionID = Action.GetActionID();
+	OutRecord.AbilityPoolID = AbilityPoolID;
+	OutRecord.AbilityActivationID = Action.GetAbilityActivationID();
+	OutRecord.OwnerEntity = Action.OwnerEntity;
+	OutRecord.ActionClassPath = Action.GetClass()->GetPathName();
+	OutRecord.StableCodecID = Claim.Descriptor.StableCodecId;
+	OutRecord.StateSchemaVersion = Claim.Descriptor.StateSchemaVersion;
+	OutRecord.BehaviorRevision = Claim.Descriptor.BehaviorRevision;
+	OutRecord.CodecRevision = Claim.Descriptor.CodecRevision;
+	OutRecord.CodecDescriptorDigest = Claim.DescriptorDigest;
+	OutRecord.PayloadSchemaDigest = Claim.Descriptor.PayloadSchemaDigest;
+	return EncodePayload(
+			Claim.Descriptor,
+			Payload,
+			OutRecord.PayloadBytes,
+			OutError)
+		&& ComputePayloadDigest(
+			OutRecord, OutRecord.PayloadDigest, OutError)
+		&& ComputeRecordDigest(
+			OutRecord, OutRecord.RecordDigest, OutError);
+}
+
+bool FSeinLatentActionCodecRegistry::ComputeSequenceDigestForVerifiedRoot(
+	int64 NextActionID,
+	int64 NextAbilityActivationID,
+	TConstArrayView<FSeinSnapshotLatentActionRecord> Records,
+	FGuid& OutSequenceDigest,
+	FString& OutError)
+{
+	return ComputeSequenceDigest(
+		NextActionID,
+		NextAbilityActivationID,
+		Records,
+		OutSequenceDigest,
+		OutError);
+}
+
+bool FSeinLatentActionCodecRegistry::RecomputeRecordDigestForVerifiedRoot(
+	FSeinSnapshotLatentActionRecord& InOutRecord,
+	FString& OutError)
+{
+	return ComputeRecordDigest(
+		InOutRecord, InOutRecord.RecordDigest, OutError);
+}
+
 bool FSeinLatentActionCodecRegistry::StageRecords(
 	const FSeinLatentActionCodecManifest& Manifest,
 	const ISeinCanonicalStateCandidateView& Candidate,

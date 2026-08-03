@@ -62,6 +62,10 @@ public:
 	 *  AvoidanceOutput (SteerDir + SpeedScale). See the file docstring for the model
 	 *  and USeinAvoidance::ComputeAvoidance for the seam contract. */
 	virtual void ComputeAvoidance(USeinWorldSubsystem& World) override;
+	virtual bool HasImmutableRuntimePolicyState() const override
+	{
+		return GetClass() == StaticClass();
+	}
 
 	// ====================================================================================
 	// Model tuning — authored on this class's CDO. To tune, subclass this as a Blueprint, set the

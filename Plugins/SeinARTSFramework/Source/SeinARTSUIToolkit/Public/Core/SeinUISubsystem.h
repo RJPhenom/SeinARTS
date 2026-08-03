@@ -2,7 +2,7 @@
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinUISubsystem.h
  * @brief   Central hub for the SeinARTS UI Toolkit. Manages ViewModel lifecycle,
- *          caching, and sim-tick-driven refresh for all active ViewModels.
+ *          caching, and latest-state refresh for all active ViewModels.
  */
 
 #pragma once
@@ -27,7 +27,7 @@ class USeinWorldSubsystem;
  * - Creates and caches entity ViewModels (one per observed entity)
  * - Creates and caches player ViewModels (one per player)
  * - Owns the selection model (one per world)
- * - Subscribes to OnSimTickCompleted and refreshes all active ViewModels
+ * - Refreshes active ViewModels once after each engine frame's sim pump
  * - Cleans up ViewModels for dead entities
  */
 UCLASS()
@@ -86,15 +86,16 @@ public:
 	/**
 	 * Get the minimap view-model (singleton per world), lazily creating it on first
 	 * access. Projects that never show a minimap never create it (and so pay nothing);
-	 * once created it refreshes each sim tick. Drives a minimap Blueprint's blips, fog
+	 * once created it refreshes from the latest completed state once per engine frame.
+	 * Drives a minimap Blueprint's blips, fog
 	 * overlay, and background.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|UI|Minimap")
 	USeinMinimapViewModel* GetMinimapViewModel();
 
 private:
-	/** Called after each sim tick — refreshes all active ViewModels. */
-	void HandleSimTick(int32 Tick);
+	/** Called once after the frame's sim pump — refreshes latest presentation state. */
+	void HandleSimFrame(int32 LatestTick, int32 TicksProcessed);
 
 	/** Remove ViewModels for entities that are no longer alive. */
 	void CleanupStaleViewModels();
@@ -123,6 +124,10 @@ private:
 	UPROPERTY()
 	TObjectPtr<USeinMinimapViewModel> MinimapViewModel;
 
-	/** Delegate handle for sim tick. */
-	FDelegateHandle SimTickDelegateHandle;
+	/** Delegate handle for simulation-frame completion. */
+	FDelegateHandle SimFrameDelegateHandle;
+
+	/** Last cleanup bucket, preserving the ~1-second stale-VM cadence even
+	 *  when multiple simulation ticks were coalesced into one callback. */
+	int32 LastCleanupBucket = 0;
 };

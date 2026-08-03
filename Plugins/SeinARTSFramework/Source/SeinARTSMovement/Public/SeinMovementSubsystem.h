@@ -36,6 +36,7 @@ class USeinMovement;
 class USeinWorldSubsystem;
 struct FSeinMovementCanonicalStateProvider;
 struct FSeinMovementComponent;
+struct FSeinMovementRoutineRootCache;
 
 UCLASS()
 class SEINARTSMOVEMENT_API USeinMovementSubsystem : public UWorldSubsystem
@@ -89,6 +90,11 @@ public:
 		return MovementInstanceMap.Num();
 	}
 
+	/** Automatic write barriers for the open movement/avoidance policy seams.
+	 *  Revisions are local digest-cache evidence and are never serialized. */
+	void MarkMovementStateDirty(FSeinEntityHandle Handle);
+	void MarkAvoidanceStateDirty();
+
 	/**
 	 * Tear down every system and UObject reference whose executable behavior
 	 * lives in this module. Called from both PreUnloadCallback and Deinitialize;
@@ -141,4 +147,11 @@ private:
 	 *  lockstep with MovementInstanceMap. */
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<USeinMovement>> MovementInstancePool;
+
+	TMap<FSeinEntityHandle, uint64> MovementStateRevisions;
+	uint64 MovementStateMutationRevision = 0;
+	uint64 MovementStateTopologyRevision = 1;
+	uint64 AvoidanceStateRevision = 0;
+	mutable TSharedPtr<FSeinMovementRoutineRootCache> RoutineRootCache;
+	void BumpMovementTopologyRevision();
 };

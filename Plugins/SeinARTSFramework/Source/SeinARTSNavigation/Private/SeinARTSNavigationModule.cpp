@@ -159,6 +159,8 @@ namespace
 	FDelegateHandle GPostPIEStartedHandle;
 #endif
 
+	static void MarkAllNavDebugProxiesDirty();
+
 	static void SetNavigationShowFlag(bool bEnable)
 	{
 #if WITH_EDITOR
@@ -193,6 +195,14 @@ namespace
 		// Persist intent so a future PIE startup picks it up even though
 		// the GameViewport above didn't exist at toggle time.
 		GShowNavigationIntent = bEnable;
+
+		// Hidden proxies intentionally ignore nav mutation broadcasts. Refresh
+		// every proxy when the viewer is enabled so the first visible frame uses
+		// current static and blocker data.
+		if (bEnable)
+		{
+			MarkAllNavDebugProxiesDirty();
+		}
 	}
 
 	static bool IsNavigationShowFlagOn()

@@ -485,6 +485,14 @@ public:
 		meta = (SeinContinuationSafe))
 	void CancelAbility();
 
+	/** Explicit write barrier for custom Blueprint code that mutates this
+	 *  ability from outside its own activation/tick/end callback. Ordinary
+	 *  self-state changes are tracked automatically by the framework. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Ability|State",
+		meta = (DisplayName = "Mark Deterministic State Dirty",
+			SeinContinuationSafe))
+	void MarkDeterministicStateDirty();
+
 	// ─── Internal ───
 
 	void InitializeAbility(FSeinEntityHandle Owner, USeinWorldSubsystem* Subsystem);
@@ -510,8 +518,16 @@ public:
 
 	/** Stamp the cost snapshot on activation. Called by ProcessCommands after
 	 *  a successful USeinResourceBPFL::SeinDeduct. */
-	void RecordDeductedCost(const FSeinResourceCost& Cost) { DeductedCost = Cost; }
-	void RecordResourcePayer(FSeinPlayerID Payer) { ResourcePayer = Payer; }
+	void RecordDeductedCost(const FSeinResourceCost& Cost)
+	{
+		DeductedCost = Cost;
+		MarkDeterministicStateDirty();
+	}
+	void RecordResourcePayer(FSeinPlayerID Payer)
+	{
+		ResourcePayer = Payer;
+		MarkDeterministicStateDirty();
+	}
 
 	/** Resolve the exact cost charged by activation and any amount transferred to
 	 *  production completion. Shared by command preflight, commit, and UI reads. */
@@ -520,7 +536,11 @@ public:
 		FSeinResourceCost& OutProductionCompletionCost) const;
 
 	/** Stamp the Production Queue completion bucket on activation. */
-	void RecordPendingCompletionCost(const FSeinResourceCost& Cost) { PendingCompletionCost = Cost; }
+	void RecordPendingCompletionCost(const FSeinResourceCost& Cost)
+	{
+		PendingCompletionCost = Cost;
+		MarkDeterministicStateDirty();
+	}
 
 	// ─── BP-callable convenience methods (production / rally) ───
 	//

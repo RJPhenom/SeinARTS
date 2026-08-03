@@ -34,6 +34,7 @@
 #include "Settings/PluginSettings.h"
 #include "Math/MathLib.h"
 #include "Types/Entity.h" // FSeinEntity — current member positions for the slot match
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 namespace SeinDefaultBrokerLocal
 {
@@ -85,6 +86,7 @@ namespace SeinDefaultBrokerLocal
 		const TArray<FFixedVector>& MemberPos,
 		TArray<FFixedVector>& Positions)
 	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Formation_Reassign2D);
 		const int32 N = Positions.Num();
 
 		// Align both clouds by their own centroids: only the relative arrangement drives the match, and
@@ -257,6 +259,7 @@ FSeinFormationLayout USeinDefaultCommandBrokerResolver::ResolveFormationLayout_I
 	bool bReassignLateral,
 	bool bReassignDepth)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Formation_ResolveLayout);
 	FSeinFormationLayout Layout;
 	ESeinFormationFacing FacingMode = ESeinFormationFacing::Uniform;
 	// An explicit class override (e.g. a squad's authored FormationClass) wins over the tag map; else
@@ -290,7 +293,10 @@ FSeinFormationLayout USeinDefaultCommandBrokerResolver::ResolveFormationLayout_I
 	// that nav-projected to the same nearest free cell when snapped off the play-area edge. For
 	// degenerate layouts this pass CREATES the real geometry — Blob emits every position ON the
 	// anchor and relies on this scatter. Shared path → preview === commit.
-	USeinFormation::SeparatePositions(Layout.Radii, Layout.Positions, 16);
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Formation_Separate);
+		USeinFormation::SeparatePositions(Layout.Radii, Layout.Positions, 16);
+	}
 
 	// Placement safety net: the de-overlap above is nav- and occupancy-blind, so it can shove an edge
 	// slot off the play area, and raw layouts can drop slots onto PARKED units (an order into a settled
@@ -298,7 +304,10 @@ FSeinFormationLayout USeinDefaultCommandBrokerResolver::ResolveFormationLayout_I
 	// occupancy-aware so they pack open ground without piling. Members of THIS order are excluded from
 	// the occupancy read — they vacate their spots. Runs BEFORE the cover hook so authoritative cover
 	// slots (which intentionally overrule the bake) are the last word. Shared path → preview === commit.
-	USeinFormation::ProjectPositionsToNavigable(World, Layout.Radii, Layout.Positions, Members);
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Formation_ProjectNavigable);
+		USeinFormation::ProjectPositionsToNavigable(World, Layout.Radii, Layout.Positions, Members);
+	}
 
 	// ANTI-CROSS SLOT MATCH. Re-match members to slots so a rotating/translating formation doesn't
 	// make everyone cross to their old INDEX slot (the cross-cutting-paths bug). Runs on the FINAL
@@ -314,12 +323,18 @@ FSeinFormationLayout USeinDefaultCommandBrokerResolver::ResolveFormationLayout_I
 	// passes the squad's per-squad opt-IN flags. Both paths run THROUGH this shared call, so preview
 	// and commit stay byte-identical. Deterministic. Stays BEFORE the cover hook: cover snap binds a
 	// specific member's slot to a cover position, so the member↔slot pairing must be final first.
-	ReassignSlots(World, Members, Layout.Positions, Layout.Facing, bReassignLateral, bReassignDepth);
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Formation_ReassignSlots);
+		ReassignSlots(World, Members, Layout.Positions, Layout.Facing, bReassignLateral, bReassignDepth);
+	}
 
 	// Hook subclasses (e.g. cover-aware resolvers) to mutate positions before
 	// the layout returns. Empty default impl on the base class — no-op for
 	// non-overriding subclasses.
-	PostProcessPositions(World, Members, Layout.Positions, Target.Anchor);
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Formation_PostProcess);
+		PostProcessPositions(World, Members, Layout.Positions, Target.Anchor);
+	}
 
 	// Per-member facing from the formation's FacingMode, computed from the FINAL positions (a ring
 	// faces each member radially out). Carried to consumers — a squad rotates its whole authored body

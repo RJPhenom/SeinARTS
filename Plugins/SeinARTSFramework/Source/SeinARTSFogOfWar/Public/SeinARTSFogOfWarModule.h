@@ -29,6 +29,11 @@ private:
 
 namespace UE::SeinARTSFogOfWar
 {
+	/** True when at least one editor or game viewport is actively displaying
+	 *  the FogOfWar debug show flag. Mutation listeners use this to avoid
+	 *  rebuilding an invisible scene proxy. Shipping: always false. */
+	SEINARTSFOGOFWAR_API bool IsAnyDebugViewportEnabled();
+
 	/** Debug proxy observer override, driven by the
 	 *  `Sein.FogOfWar.Show.Player <id>` console command.
 	 *  Writes OutObserver + returns true when an override is active (the

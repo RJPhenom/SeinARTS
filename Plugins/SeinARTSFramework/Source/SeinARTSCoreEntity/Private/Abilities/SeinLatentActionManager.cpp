@@ -15,6 +15,7 @@
 #include "Serialization/SeinStateProviderTransaction.h"
 #include "SeinARTSCoreEntityLog.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 namespace
 {
@@ -59,32 +60,50 @@ bool USeinLatentActionManager::RegisterAction(USeinLatentAction* Action)
 	Action->ActionID = NextActionID++;
 	Action->AbilityActivationID = Ability->GetActivationID();
 	ActiveActions.Add(Action);
+	MarkActionDirty(*Action);
+	BumpTopologyRevision();
 	return true;
 }
 
 void USeinLatentActionManager::TickAll(FFixedPoint DeltaTime, USeinWorldSubsystem& World)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Latent_TickAll);
 	// Tick the entry snapshot. Blueprint delegates may synchronously register,
 	// cancel, or hard-reset actions; new registrations start next sim tick.
-	const FActionSnapshot Snapshot = SnapshotActions(ActiveActions);
-	for (USeinLatentAction* Action : Snapshot)
+	FActionSnapshot Snapshot;
 	{
-		if (!Action || Action->bCompleted || Action->bCancelled)
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Latent_Snapshot);
+		Snapshot = SnapshotActions(ActiveActions);
+	}
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Latent_TickActions);
+		for (USeinLatentAction* Action : Snapshot)
 		{
-			continue;
-		}
+			if (!Action || Action->bCompleted || Action->bCancelled)
+			{
+				continue;
+			}
 
-		const bool bFinished = Action->TickAction(DeltaTime, World);
-		// TickAction may synchronously cancel or complete itself (including via a
-		// recursive manager cancellation). Preserve that terminal outcome instead
-		// of overwriting cancellation with natural completion.
-		if (bFinished && !Action->bCompleted && !Action->bCancelled)
-		{
-			Action->Complete();
+			// TickAction is an open native extension seam. Mark before dispatch so
+			// any future-affecting subclass state is reprojected at this tick's
+			// stable boundary without requiring every action author to remember an
+			// extra checksum call.
+			MarkActionDirty(*Action);
+			const bool bFinished = Action->TickAction(DeltaTime, World);
+			// TickAction may synchronously cancel or complete itself (including via a
+			// recursive manager cancellation). Preserve that terminal outcome instead
+			// of overwriting cancellation with natural completion.
+			if (bFinished && !Action->bCompleted && !Action->bCancelled)
+			{
+				Action->Complete();
+			}
 		}
 	}
 
-	CleanupCompleted();
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Latent_Cleanup);
+		CleanupCompleted();
+	}
 }
 
 void USeinLatentActionManager::CancelActionsForEntity(FSeinEntityHandle Handle)
@@ -132,6 +151,7 @@ void USeinLatentActionManager::CancelAllActions()
 	// Detach first so callbacks cannot invalidate this pass. Registration is
 	// rejected until every cancellation callback has returned.
 	ActiveActions.Reset();
+	BumpTopologyRevision();
 	for (USeinLatentAction* Action : Snapshot)
 	{
 		if (Action && !Action->bCompleted && !Action->bCancelled)
@@ -147,6 +167,7 @@ void USeinLatentActionManager::AbandonAllForSnapshotRestore()
 {
 	const FActionSnapshot Snapshot = SnapshotActions(ActiveActions);
 	ActiveActions.Reset();
+	BumpTopologyRevision();
 	// OnTimelineAbandoned is a module-owned virtual. Treat cleanup and any
 	// destructor it triggers as part of the cross-registry provider transaction.
 	FSeinStateProviderTransactionScope ProviderTransaction;
@@ -177,14 +198,26 @@ void USeinLatentActionManager::AdoptRestoredActions(
 	}
 	ActiveActions = MoveTemp(Actions);
 	NextActionID = InNextActionID;
+	for (USeinLatentAction* Action : ActiveActions)
+	{
+		if (Action)
+		{
+			MarkActionDirty(*Action);
+		}
+	}
+	BumpTopologyRevision();
 }
 
 void USeinLatentActionManager::CleanupCompleted()
 {
-	ActiveActions.RemoveAll([](const TObjectPtr<USeinLatentAction>& Action)
+	const int32 Removed = ActiveActions.RemoveAll([](const TObjectPtr<USeinLatentAction>& Action)
 	{
 		return !Action || Action->bCompleted || Action->bCancelled;
 	});
+	if (Removed > 0)
+	{
+		BumpTopologyRevision();
+	}
 }
 
 int32 USeinLatentActionManager::GetActiveActionCount() const
@@ -202,4 +235,23 @@ bool USeinLatentActionManager::HasActiveActionForEntity(FSeinEntityHandle Handle
 		}
 	}
 	return false;
+}
+
+void USeinLatentActionManager::MarkActionDirty(USeinLatentAction& Action)
+{
+	++MutationRevisionCounter;
+	if (MutationRevisionCounter == 0)
+	{
+		++MutationRevisionCounter;
+	}
+	Action.CanonicalMutationRevision = MutationRevisionCounter;
+}
+
+void USeinLatentActionManager::BumpTopologyRevision()
+{
+	++TopologyRevision;
+	if (TopologyRevision == 0)
+	{
+		++TopologyRevision;
+	}
 }

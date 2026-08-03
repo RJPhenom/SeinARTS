@@ -26,6 +26,9 @@
 #include "SeinNavDebugComponent.generated.h"
 
 class USeinNavigation;
+#if UE_ENABLE_DEBUG_DRAWING
+struct FSeinNavDebugStaticSnapshot;
+#endif
 
 UCLASS(ClassGroup = (SeinARTS), meta = (DisplayName = "Sein Nav Debug Component"))
 class SEINARTSNAVIGATION_API USeinNavDebugComponent : public UPrimitiveComponent
@@ -59,4 +62,14 @@ private:
 	TWeakObjectPtr<USeinNavigation> SubscribedNav;
 
 	FDelegateHandle NavMutatedHandle;
+
+#if UE_ENABLE_DEBUG_DRAWING
+	/** Immutable static-cell snapshot shared with each render-thread proxy.
+	 *  Dynamic blockers may change every sim tick; retaining this snapshot means
+	 *  those changes rebuild only the small blocker overlay, not the full baked
+	 *  nav grid. The nav's monotonic static generation is the invalidation key. */
+	TSharedPtr<const FSeinNavDebugStaticSnapshot, ESPMode::ThreadSafe> CachedStaticSnapshot;
+	TWeakObjectPtr<USeinNavigation> CachedStaticNav;
+	uint64 CachedStaticGeneration = MAX_uint64;
+#endif
 };

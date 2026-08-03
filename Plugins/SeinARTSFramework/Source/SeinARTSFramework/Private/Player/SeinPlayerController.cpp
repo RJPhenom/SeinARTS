@@ -12,6 +12,7 @@
 #include "Actor/SeinActor.h"
 #include "Actor/SeinEntityComponent.h"
 #include "Components/SeinAbilityComponent.h"
+#include "Components/SeinMovementComponent.h"
 #include "Components/SeinSquadMemberComponent.h"
 #include "Abilities/SeinTargeterTypes.h"
 #include "Brokers/SeinBrokerTypes.h"
@@ -29,10 +30,214 @@
 #include "StructUtils/InstancedStruct.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/HUD.h"
 #include "DrawDebugHelpers.h"
+#include "HAL/IConsoleManager.h"
+
+#if !UE_BUILD_SHIPPING
+namespace
+{
+	bool GSeinPerfFixedCursorEnabled = false;
+	FVector GSeinPerfFixedCursorWorld = FVector::ZeroVector;
+
+	ASeinPlayerController* FindLocalSeinPlayerController(UWorld& World)
+	{
+		for (TActorIterator<ASeinPlayerController> It(&World); It; ++It)
+		{
+			if (It->IsLocalController())
+			{
+				return *It;
+			}
+		}
+		return nullptr;
+	}
+
+	void HandlePerfMoveOwned(
+		const TArray<FString>& Args,
+		UWorld* World,
+		FOutputDevice& Ar)
+	{
+		if (!World)
+		{
+			Ar.Log(TEXT("Sein.Perf.MoveOwned: no world."));
+			return;
+		}
+
+		ASeinPlayerController* Controller =
+			FindLocalSeinPlayerController(*World);
+		USeinWorldSubsystem* Sim =
+			World->GetSubsystem<USeinWorldSubsystem>();
+		if (!Controller || !Sim)
+		{
+			Ar.Log(TEXT("Sein.Perf.MoveOwned: local Sein player controller or simulation is unavailable."));
+			return;
+		}
+
+		const int32 RequestedCount = Args.Num() > 0
+			? FMath::Max(0, FCString::Atoi(*Args[0]))
+			: 100;
+		TArray<ASeinActor*> Candidates;
+		for (TActorIterator<ASeinActor> It(World); It; ++It)
+		{
+			ASeinActor* Actor = *It;
+			if (!Actor || !Actor->HasValidEntity())
+			{
+				continue;
+			}
+			const FSeinEntityHandle Handle = Actor->GetEntityHandle();
+			if (Sim->GetEntityOwner(Handle) != Controller->SeinPlayerID
+				|| !Sim->GetComponent<FSeinMovementComponent>(Handle))
+			{
+				continue;
+			}
+			Candidates.Add(Actor);
+		}
+
+		Candidates.Sort([](const ASeinActor& Left, const ASeinActor& Right)
+		{
+			return Left.GetEntityHandle() < Right.GetEntityHandle();
+		});
+		if (Candidates.Num() > RequestedCount)
+		{
+			Candidates.SetNum(RequestedCount, EAllowShrinking::No);
+		}
+		if (Candidates.IsEmpty())
+		{
+			Ar.Logf(
+				TEXT("Sein.Perf.MoveOwned: no movable actors owned by %s (requested=%d)."),
+				*Controller->SeinPlayerID.ToString(), RequestedCount);
+			return;
+		}
+
+		FVector Centroid = FVector::ZeroVector;
+		FVector Min = Candidates[0]->GetActorLocation();
+		FVector Max = Min;
+		for (const ASeinActor* Actor : Candidates)
+		{
+			const FVector Location = Actor->GetActorLocation();
+			Centroid += Location;
+			Min = Min.ComponentMin(Location);
+			Max = Max.ComponentMax(Location);
+		}
+		Centroid /= static_cast<double>(Candidates.Num());
+
+		FVector Destination = Centroid + FVector(3000.0, 0.0, 0.0);
+		if (Args.Num() >= 3)
+		{
+			Destination.X = FCString::Atod(*Args[1]);
+			Destination.Y = FCString::Atod(*Args[2]);
+			Destination.Z = Args.Num() >= 4
+				? FCString::Atod(*Args[3])
+				: Centroid.Z;
+		}
+
+		Controller->SetSelection(Candidates);
+		Controller->IssueSmartCommand(Destination, nullptr);
+		Ar.Logf(
+			TEXT("Sein.Perf.MoveOwned: issued one real smart-command order for %d/%d owned movable actors; bounds=(%.1f,%.1f,%.1f)..(%.1f,%.1f,%.1f), centroid=(%.1f,%.1f,%.1f), destination=(%.1f,%.1f,%.1f)."),
+			Candidates.Num(), RequestedCount,
+			Min.X, Min.Y, Min.Z, Max.X, Max.Y, Max.Z,
+			Centroid.X, Centroid.Y, Centroid.Z,
+			Destination.X, Destination.Y, Destination.Z);
+	}
+
+	void ApplyPerfSkeletalMode(
+		const TArray<FString>& Args,
+		UWorld* World,
+		FOutputDevice& Ar)
+	{
+		if (!World || Args.IsEmpty())
+		{
+			Ar.Log(TEXT("Usage: Sein.Perf.SkeletalMode <NoAnim|Hidden>"));
+			return;
+		}
+		const bool bHidden = Args[0].Equals(
+			TEXT("Hidden"), ESearchCase::IgnoreCase);
+		const bool bNoAnim = bHidden || Args[0].Equals(
+			TEXT("NoAnim"), ESearchCase::IgnoreCase);
+		if (!bNoAnim)
+		{
+			Ar.Log(TEXT("Usage: Sein.Perf.SkeletalMode <NoAnim|Hidden>"));
+			return;
+		}
+
+		int32 MeshCount = 0;
+		for (TActorIterator<ASeinActor> It(World); It; ++It)
+		{
+			TArray<USkeletalMeshComponent*> Meshes;
+			It->GetComponents<USkeletalMeshComponent>(Meshes);
+			for (USkeletalMeshComponent* Mesh : Meshes)
+			{
+				if (!Mesh)
+				{
+					continue;
+				}
+				Mesh->bPauseAnims = true;
+				Mesh->SetComponentTickEnabled(false);
+				if (bHidden)
+				{
+					Mesh->SetVisibility(false, true);
+				}
+				++MeshCount;
+			}
+		}
+		Ar.Logf(
+			TEXT("Sein.Perf.SkeletalMode: applied %s to %d skeletal meshes."),
+			bHidden ? TEXT("Hidden") : TEXT("NoAnim"), MeshCount);
+	}
+
+	void ApplyPerfFixedCursor(
+		const TArray<FString>& Args,
+		UWorld* /*World*/,
+		FOutputDevice& Ar)
+	{
+		if (Args.Num() == 1 && (Args[0] == TEXT("0")
+			|| Args[0].Equals(TEXT("off"), ESearchCase::IgnoreCase)))
+		{
+			GSeinPerfFixedCursorEnabled = false;
+			Ar.Log(TEXT("Sein.Perf.FixedCursor: disabled."));
+			return;
+		}
+		if (Args.Num() < 2)
+		{
+			Ar.Log(TEXT("Usage: Sein.Perf.FixedCursor <X Y [Z]> | off"));
+			return;
+		}
+		GSeinPerfFixedCursorWorld.X = FCString::Atod(*Args[0]);
+		GSeinPerfFixedCursorWorld.Y = FCString::Atod(*Args[1]);
+		GSeinPerfFixedCursorWorld.Z = Args.Num() >= 3
+			? FCString::Atod(*Args[2]) : 0.0;
+		GSeinPerfFixedCursorEnabled = true;
+		Ar.Logf(TEXT("Sein.Perf.FixedCursor: enabled at (%.1f, %.1f, %.1f)."),
+			GSeinPerfFixedCursorWorld.X, GSeinPerfFixedCursorWorld.Y,
+			GSeinPerfFixedCursorWorld.Z);
+	}
+
+	FAutoConsoleCommandWithWorldArgsAndOutputDevice
+		CCmdSeinPerfMoveOwned(
+			TEXT("Sein.Perf.MoveOwned"),
+			TEXT("Development-only repeatable movement profile: select the first N local-player-owned movable Sein actors and issue the real smart-command path. Usage: Sein.Perf.MoveOwned [Count=100] [DestinationX DestinationY DestinationZ]. Without a destination, moves 3000 uu +X from the selected centroid."),
+			FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(
+				&HandlePerfMoveOwned));
+
+	FAutoConsoleCommandWithWorldArgsAndOutputDevice
+		CCmdSeinPerfSkeletalMode(
+			TEXT("Sein.Perf.SkeletalMode"),
+			TEXT("Development-only presentation A/B. NoAnim freezes visible skeletal meshes; Hidden also removes them from rendering. Usage: Sein.Perf.SkeletalMode <NoAnim|Hidden>."),
+			FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(
+				&ApplyPerfSkeletalMode));
+
+	FAutoConsoleCommandWithWorldArgsAndOutputDevice
+		CCmdSeinPerfFixedCursor(
+			TEXT("Sein.Perf.FixedCursor"),
+			TEXT("Development-only formation-preview stress harness. Replaces the physical cursor ground trace with a fixed valid world point. Usage: Sein.Perf.FixedCursor <X Y [Z]> | off."),
+			FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateStatic(
+				&ApplyPerfFixedCursor));
+}
+#endif
 
 ASeinPlayerController::ASeinPlayerController()
 {
@@ -134,6 +339,13 @@ void ASeinPlayerController::Tick(float DeltaSeconds)
 	// result. No subscribers = no cost — the ground resolve is skipped entirely.
 	if (OnCursorUpdated.IsBound())
 	{
+	#if !UE_BUILD_SHIPPING
+		if (GSeinPerfFixedCursorEnabled)
+		{
+			OnCursorUpdated.Broadcast(GSeinPerfFixedCursorWorld, true);
+			return;
+		}
+	#endif
 		FVector CursorGround;
 		const bool bValidGround = GetGroundPointUnderCursor(CursorGround);
 		OnCursorUpdated.Broadcast(bValidGround ? CursorGround : FVector::ZeroVector, bValidGround);
