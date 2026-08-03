@@ -16,7 +16,7 @@
 #include "Types/Vector.h"
 #include "SeinStampShape.generated.h"
 
-UENUM(BlueprintType)
+UENUM(BlueprintType, meta = (ScriptName = "SeinStampShapeEnum"))
 enum class ESeinStampShape : uint8
 {
 	/** Disc centered at the stamp origin. Use for circular footprints

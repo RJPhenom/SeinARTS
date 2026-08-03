@@ -118,19 +118,6 @@ void FSeinARTSEditorStyle::Initialize()
 		new FSlateImageBrush(StyleSet->RootToContentDir(TEXT("SeinDataIcon92"), TEXT(".png")), FVector2D(92.0f, 92.0f))
 	);
 
-	// ==================== Generic Sein Asset ====================
-	// Fallback icon for any SeinARTS asset lacking a type-specific thumbnail.
-
-	StyleSet->Set(
-		"ClassIcon.SeinAsset",
-		new FSlateImageBrush(StyleSet->RootToContentDir(TEXT("SeinAssetIcon16"), TEXT(".png")), FVector2D(16.0f, 16.0f))
-	);
-
-	StyleSet->Set(
-		"ClassThumbnail.SeinAsset",
-		new FSlateImageBrush(StyleSet->RootToContentDir(TEXT("SeinAssetIcon92"), TEXT(".png")), FVector2D(92.0f, 92.0f))
-	);
-
 	// ==================== Component ====================
 
 	// Per §2, "components" split into two tracks: (a) the UDS factory's
@@ -243,7 +230,6 @@ void FSeinARTSEditorStyle::Initialize()
 	LoadAndCacheIcon(FName(TEXT("SeinFormationIcon92")),  TEXT("SeinFormationIcon92.png"));
 	LoadAndCacheIcon(FName(TEXT("SeinMovementIcon92")),   TEXT("SeinMovementIcon92.png"));
 	LoadAndCacheIcon(FName(TEXT("SeinWidgetIcon92")),     TEXT("SeinWidgetIcon92.png"));
-	LoadAndCacheIcon(FName(TEXT("SeinAssetIcon92")),      TEXT("SeinAssetIcon92.png"));
 }
 
 UTexture2D* FSeinARTSEditorStyle::LoadAndCacheIcon(const FName& TextureName, const FString& Filename)

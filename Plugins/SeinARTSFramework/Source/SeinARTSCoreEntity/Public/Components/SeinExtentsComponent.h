@@ -32,7 +32,7 @@
 #include "Collision/SeinCollisionTypes.h"
 #include "SeinExtentsComponent.generated.h"
 
-UENUM(BlueprintType)
+UENUM(BlueprintType, meta = (ScriptName = "SeinExtentsShapeEnum"))
 enum class ESeinExtentsShape : uint8
 {
 	/** Vertical capsule — top-down disc of `Radius`, vertical axis of length
