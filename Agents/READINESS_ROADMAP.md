@@ -69,7 +69,17 @@ Client/Dedicated Server CI gate remains explicitly red rather than inferred from
 
 ### Movement+
 
-Build a deterministic Vehicle Gym before rewriting algorithms. Cover MBT, IFV/APC, wheeled scout, and logistics-truck archetypes across open U-turns, reverse-behind goals, K-turns, narrow corridors/gates, S-turns, dynamic repaths, formation-facing arrival, stop/reissue, mixed infantry/vehicle congestion, and different body sizes/speeds. Snapshot/replay in the middle of arcs, reverse cusps, and recovery.
+**Automated baseline complete.** The deterministic Vehicle Gym covers MBT, IFV/APC, wheeled
+scout, and logistics-truck contracts across open U-turns, reverse-behind goals, an explicit
+K-turn, narrow-corridor reverse-out, S-turns, interval repaths, formation-facing arrival,
+cancel/reissue, recovery, and mixed infantry/vehicle congestion with different body sizes,
+speeds, and masses. Checkpoints taken during arcs, reverse legs, recovery, and close mixed traffic
+continue with exact canonical roots. See `Agents/VEHICLE_GYM.md` for the evidence and PIE matrix.
+
+Still required before Movement+ is production-qualified: the human PIE feel/performance matrix,
+a Movement+-specific replay-file/network combination test, and presentation telemetry for
+steering/yaw/throttle/brake plus track/wheel animation. The current general replay qualification
+and Vehicle Gym snapshot proof cover the mechanisms separately, not their combined scenario.
 
 Use evidence to decide whether the curated start-maneuver head plus coarse-route pursuit tail is sufficient or whether downstream A* corners need a broader curvature-shaping stage. Add animation telemetry for steering/yaw/reverse/throttle/brake and track/wheel presentation without making Unreal animation authoritative.
 

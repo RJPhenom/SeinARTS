@@ -98,9 +98,9 @@ existing ARC/PIVOT mode split. Tracked reverse defaults ON via
 `FSeinTrackedMovementData::bCanReverse` (OR-combined with the unit flag). The shared plan-time
 toolkit still lives under `Private/Movement/SeinWheeledManeuver.h/.cpp` — rename to
 `SeinVehicleManeuver` + driver-logic unification (tracked duplicates the segment-cursor helpers)
-are deferred until the wheeled PIE pass lands. KNOWN base gap surfaced by both vehicle reworks:
-the move action calls `OnMoveEnd` only on COMPLETED orders (OnCancel/OnFail skip it), so both
-modes' plan-time hysteresis reads are destination-gated rather than trusting the reset.
+are deferred until the wheeled PIE pass lands. Move actions now finalize movement exactly once on
+completion, cancellation, or failure. Both vehicle modes also destination-gate plan-time
+hysteresis as defensive protection against stale state crossing an order boundary.
 
 Known gaps for the mode-depth work (2026-07-06, minus the vehicle items closed above): aircraft
 bank is computed then discarded (Flight writes yaw-only); Hover turns-to-face rather than

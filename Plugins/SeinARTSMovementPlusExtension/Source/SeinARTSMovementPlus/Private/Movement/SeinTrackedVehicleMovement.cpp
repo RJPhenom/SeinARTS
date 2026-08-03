@@ -232,10 +232,9 @@ void USeinTrackedVehicleMovement::OnMoveEnd(FSeinEntity& Entity)
 {
 	Super::OnMoveEnd(Entity);
 	// The NEXT order's initial PlanPath runs BEFORE OnMoveBegin's reset — the
-	// engage-hysteresis / recovery reads must not see the finished order's
-	// state. NOTE: the action calls OnMoveEnd only on COMPLETED orders
-	// (OnCancel/OnFail skip it — base gap), so PlanPath's hysteresis read is
-	// additionally destination-gated rather than trusting this reset alone.
+	// engage-hysteresis / recovery reads must not see the terminal order's
+	// state. MoveTo finalization dispatches this hook for completion, cancel,
+	// and failure; the destination gate in PlanPath remains a defensive guard.
 	ResetDriverState();
 	bIsReversing = false;
 }
@@ -368,12 +367,10 @@ ESeinPathResult USeinTrackedVehicleMovement::PlanPath(const FSeinPlanPathContext
 			&& MovementData.Velocity.SizeSquared() > CuspFlipSpeed * CuspFlipSpeed;
 	}
 	In.Nav = Ctx.Nav;
-	// Engage hysteresis, RESET-SAFE: OnMoveEnd fires only on COMPLETED orders
-	// (the action's OnCancel/OnFail skip it — base gap, shared with wheeled),
-	// so a cancelled-mid-maneuver order could leak a stale in-maneuver flag
-	// into the next order's initial plan. Gate the hysteresis on the plan
-	// request targeting the SAME destination as the cached in-flight path
-	// (byte-exact) — a reissue to a new goal always plans cold.
+	// Engage hysteresis, reset-safe: terminal action paths reset driver state
+	// through OnMoveEnd. Gate the hysteresis on the plan request targeting the
+	// SAME destination as the cached in-flight path (byte-exact) as a second
+	// line of defense — a reissue to a new goal always plans cold.
 	const bool bSameDestination =
 		Ctx.Destination.X == CachedPathLastWp.X
 		&& Ctx.Destination.Y == CachedPathLastWp.Y
@@ -769,11 +766,27 @@ bool USeinTrackedVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 
 	if (bRecovering)
 	{
-		RecoveryTime -= DeltaTime;
-		if (RecoveryTime <= FFixedPoint::Zero) { RecoveryDir = 0; }
-		const FFixedPoint Mag = MinFP2(RecoverySpeedCap, (RecoveryDir < 0) ? RevTop : Cruise);
-		TargetSpeed = (RecoveryDir < 0) ? -Mag : Mag;
-		bDriveReverse = RecoveryDir < 0;
+		// Count the recovery window only after the hull has shed opposite
+		// signed speed and its commanded motion reaches the escape direction.
+		// A fixed wall-clock window can expire entirely during braking.
+		const int32 ActiveRecoveryDir = RecoveryDir;
+		const bool bTravellingRecoveryDirection =
+			(ActiveRecoveryDir < 0 && CurrentSpeed < FFixedPoint::Zero)
+			|| (ActiveRecoveryDir > 0 && CurrentSpeed > FFixedPoint::Zero);
+		if (bTravellingRecoveryDirection)
+		{
+			RecoveryTime -= DeltaTime;
+		}
+		const FFixedPoint Mag = MinFP2(
+			RecoverySpeedCap,
+			(ActiveRecoveryDir < 0) ? RevTop : Cruise);
+		TargetSpeed = (ActiveRecoveryDir < 0) ? -Mag : Mag;
+		bDriveReverse = ActiveRecoveryDir < 0;
+		if (RecoveryTime <= FFixedPoint::Zero)
+		{
+			RecoveryTime = FFixedPoint::Zero;
+			RecoveryDir = 0;
+		}
 		// No steering demand — let any residual hull rotation ease out
 		// through the inertia slew instead of stopping dead (no-op when
 		// TurnAcceleration is 0).

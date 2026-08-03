@@ -65,7 +65,8 @@ void FSeinPath::FlattenToWaypoints(FFixedPoint MaxChordError)
 			// Fidelity CEILING (deterministic — identical cap on every peer): a very long / very
 			// tight arc that would want > 256 sub-arcs is coarsened to 256, so realized deviation
 			// there exceeds ChordError. Raise it (or split the arc upstream) if a real producer
-			// needs finer sampling on huge sweeps. No shipped producer emits arcs today.
+			// needs finer sampling on huge sweeps. Movement+ wheeled and tracked
+			// planners emit bounded start-maneuver arcs within this ceiling.
 			if (Steps > 256) Steps = 256;
 
 			// Start angle at Center->From; step the SIGNED sweep toward To. The endpoint (i ==

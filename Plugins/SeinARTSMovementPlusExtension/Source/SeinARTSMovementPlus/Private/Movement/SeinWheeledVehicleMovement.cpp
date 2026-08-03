@@ -605,12 +605,29 @@ bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 	if (bRecovering)
 	{
 		// Probe-gated straight nudge to break a wall/crowd pin; the normal
-		// repath then replans the maneuver from the freed pose.
-		RecoveryTime -= DeltaTime;
-		if (RecoveryTime <= FFixedPoint::Zero) { RecoveryDir = 0; }
-		const FFixedPoint Mag = MinFP2(RecoverySpeedCap, (RecoveryDir < 0) ? RevTop : Cruise);
-		TargetSpeed = (RecoveryDir < 0) ? -Mag : Mag;
-		bDriveReverse = RecoveryDir < 0;
+		// repath then replans the maneuver from the freed pose. RecoveryTime
+		// starts counting only after signed motion reaches the chosen direction,
+		// not during the braking interval needed to shed opposite speed;
+		// otherwise a fast pinned chassis can consume the whole nudge without
+		// moving away.
+		const int32 ActiveRecoveryDir = RecoveryDir;
+		const bool bTravellingRecoveryDirection =
+			(ActiveRecoveryDir < 0 && CurrentSpeed < FFixedPoint::Zero)
+			|| (ActiveRecoveryDir > 0 && CurrentSpeed > FFixedPoint::Zero);
+		if (bTravellingRecoveryDirection)
+		{
+			RecoveryTime -= DeltaTime;
+		}
+		const FFixedPoint Mag = MinFP2(
+			RecoverySpeedCap,
+			(ActiveRecoveryDir < 0) ? RevTop : Cruise);
+		TargetSpeed = (ActiveRecoveryDir < 0) ? -Mag : Mag;
+		bDriveReverse = ActiveRecoveryDir < 0;
+		if (RecoveryTime <= FFixedPoint::Zero)
+		{
+			RecoveryTime = FFixedPoint::Zero;
+			RecoveryDir = 0;
+		}
 	}
 	else if (bManeuverMode)
 	{

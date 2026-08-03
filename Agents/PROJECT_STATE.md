@@ -51,9 +51,9 @@ formation/resolver state coverage, provider teardown, and downstream content own
 |---|---:|
 | `SeinARTS.Unit`, profile All | 411 passed, 0 failed |
 | `SeinARTS.Unit`, profile Framework | 403 passed, 0 failed |
-| `SeinARTS.Integration`, profile All | 15 passed, 0 failed |
+| `SeinARTS.Integration`, profile All | 20 passed, 0 failed |
 | `SeinARTS.Integration`, profile Framework | 14 passed, 0 failed |
-| `SeinARTS.Determinism`, profile All | 20 passed, 0 failed |
+| `SeinARTS.Determinism`, profile All | 25 passed, 0 failed |
 | `SeinARTS.Determinism`, profile Framework | 19 passed, 0 failed |
 | `SeinARTS.Editor`, profile All | 36 passed, 0 failed |
 | `SeinARTS.Editor`, profile Framework | 36 passed, 0 failed |
@@ -84,6 +84,12 @@ Latest local evidence is under ignored `Saved/Automation/`:
 - `SeinARTS.Unit-20260803-111739-444c4c59` (Framework, post-runtime fixes)
 - `SeinARTS.Integration-20260803-111857-4fb48cf2` (Framework, post-runtime fixes)
 - `SeinARTS.Determinism-20260803-111857-fe97367f` (Framework, post-runtime fixes)
+- `SeinARTS.Integration.MovementPlus.VehicleGym-20260803-121632-b7f862f0` (5 passed)
+- `SeinARTS.Determinism.MovementPlus.VehicleGym-20260803-122625-0265a447` (5 passed,
+  including forced serial/parallel recovery roots)
+- `SeinARTS.Integration-20260803-122715-95e9ce08` (All, 20 passed)
+- `SeinARTS.Determinism-20260803-122841-6c52d746` (All, 25 passed)
+- `SeinARTS.Unit-20260803-122946-4c898aa0` (All, 411 passed)
 
 ## Integration-candidate progress
 
@@ -147,6 +153,12 @@ Latest local evidence is under ignored `Saved/Automation/`:
 - Restore generation/lease checks execute in Shipping instead of hiding required work inside
   compiled-out `check`/`checkf` expressions. This closes the packaged Fog restore crash found by
   the clean-consumer harness and preserves fail-closed behavior if a verified provider vanishes.
+- The non-shipping extension suite now owns a deterministic Movement+ Vehicle Gym. Its real
+  production planners/drivers cover representative wheeled/tracked archetypes, U-turns, reverse,
+  K-turns, corridor escape, S-bends, repath and order replacement, formation-facing settle,
+  recovery, and mixed infantry/vehicle collision. Active arc, reverse, recovery, and congestion
+  checkpoints continue with exact roots after restore. Human feel, scale, combined replay/network,
+  and the missing vehicle animation telemetry remain explicit gates in `Agents/VEHICLE_GYM.md`.
 
 ## Evidence limits
 

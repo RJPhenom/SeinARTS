@@ -528,11 +528,12 @@ public:
 	 *  units (long tanks): the planner refuses corridors narrower than the
 	 *  bounding circle even when the body could fit if perfectly oriented.
 	 *
-	 *  FUTURE / UNBUILT: this conservative bounding circle is the right trade-off for
-	 *  generic / infantry-centric unit sets. Two SEPARATE future pieces would relax it for
-	 *  long vehicles — and they live in DIFFERENT layers, so don't conflate them:
-	 *    - Drivable arcs + reversing (Reeds-Shepp / curve fitting) -> a Movement+ vehicle
-	 *      planner via PlanPath (per-unit kinematics), NOT a nav class.
+	 *  This conservative bounding circle is the right trade-off for generic /
+	 *  infantry-centric unit sets. Two SEPARATE pieces address different
+	 *  long-vehicle concerns in different layers, so don't conflate them:
+	 *    - Drivable start maneuvers with arcs + reversing are shipped by the
+	 *      Movement+ wheeled/tracked PlanPath overrides (per-unit kinematics),
+	 *      NOT by a nav class. General curve-fitting over the full path is not shipped.
 	 *    - Threading a long tank through a corridor narrower than its bounding circle
 	 *      (orientation-aware A* that tracks facing per node) -> a future USeinNavigation
 	 *      subclass, NOT here on the base. */
