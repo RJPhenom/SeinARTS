@@ -41,6 +41,21 @@ The Framework must not depend on an extension. Cover's current descriptor still 
 
 `USeinWorldSubsystem` advances fixed ticks through `PreTick`, `CommandProcessing`, `AbilityExecution`, and `PostTick`. Phase, priority, and stable system ID are compatibility state. Parallel work must read immutable snapshots, write disjoint local/self state, and merge in canonical order.
 
+### Ability lifecycle
+
+Runtime abilities are world-pooled UObjects referenced from `FSeinAbilityComponent` by stable pool
+IDs. Grant ownership is source-aware and refcounted across native/anonymous and exact effect IDs.
+Passive abilities activate on first grant; primary abilities enter through commands or an explicit
+simulation-only direct seam.
+
+Activity identity has one owner. Activation publishes the exact primary/passive component locator
+before `OnActivate`; deactivation removes it before refunds, latent cancellation, and `OnEnd`.
+This makes callback reads truthful and lets re-entrant revoke/regrant reuse a pool slot without the
+old instance clearing its replacement. An entity has one ticked primary; a second primary fails
+until broker or cancellation-tag arbitration ends the current one. Passives remain an ordered set.
+Snapshot admission requires both directions of the invariant: active objects are indexed in the
+correct role, and indexed objects are active. The base ability pool provider behavior revision is 2.
+
 ### Collision
 
 - `USeinCollisionResolverDefault` performs deterministic in-place Gauss-Seidel relaxation. It is the current project default because it wins at the measured 100-148 mover scale.

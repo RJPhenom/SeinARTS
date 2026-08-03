@@ -546,16 +546,6 @@ namespace UE::SeinARTSTests
 					{
 						return false;
 					}
-					FSeinAbilityComponent* Component =
-						World->GetComponentMutable<
-							FSeinAbilityComponent>(
-								Entity);
-					if (!Component)
-					{
-						return false;
-					}
-					Component->ActiveAbilityID =
-						AbilityID;
 					if (bInvokeMoveTo)
 					{
 						UFunction* Entry =

@@ -37,13 +37,13 @@ The post-audit performance/remediation work is now committed and fast-forwarded 
 ## Current verification
 
 The latest integration-candidate source was rebuilt and re-run after closing the async navigation
-continuation lifecycle, the known FoW blocker-height/stamp-scaling defects, and the framework-wide
-per-unit navigation policy path:
+continuation lifecycle, the known FoW blocker-height/stamp-scaling defects, the framework-wide
+per-unit navigation policy path, and exact ability/passive activity ownership:
 
 | Gate | Result |
 |---|---:|
-| `SeinARTS.Unit`, profile All | 397 passed, 0 failed |
-| `SeinARTS.Unit`, profile Framework | 389 passed, 0 failed |
+| `SeinARTS.Unit`, profile All | 400 passed, 0 failed |
+| `SeinARTS.Unit`, profile Framework | 392 passed, 0 failed |
 | `SeinARTS.Integration`, profile All | 15 passed, 0 failed |
 | `SeinARTS.Integration`, profile Framework | 14 passed, 0 failed |
 | `SeinARTS.Determinism`, profile All | 20 passed, 0 failed |
@@ -55,14 +55,14 @@ per-unit navigation policy path:
 
 Latest local evidence is under ignored `Saved/Automation/`:
 
-- `SeinARTS.Unit-20260802-234503-de8ce1f0` (All)
-- `SeinARTS.Unit-20260802-234623-4788584f` (Framework)
-- `SeinARTS.Integration-20260802-234713-a112c2b7` (All)
-- `SeinARTS.Integration-20260802-234740-03430434` (Framework)
-- `SeinARTS.Determinism-20260802-234808-1ced6b0f` (All)
-- `SeinARTS.Determinism-20260802-234838-0205358a` (Framework)
-- `SeinARTS.Determinism.Process.SerialCollisionTrace-20260802-234914-32e4b4d8`
-- `SeinARTS.Determinism.Process.ParallelCollisionTrace-20260802-234934-379af585`
+- `SeinARTS.Unit-20260803-001242-2d304acc` (All)
+- `SeinARTS.Unit-20260803-001329-808fa917` (Framework)
+- `SeinARTS.Integration-20260803-001423-53ef339e` (All)
+- `SeinARTS.Integration-20260803-001439-74d6e6d1` (Framework)
+- `SeinARTS.Determinism-20260803-001455-0454e86a` (All)
+- `SeinARTS.Determinism-20260803-001515-22d961ce` (Framework)
+- `SeinARTS.Determinism.Process.SerialCollisionTrace-20260803-001638-76115644`
+- `SeinARTS.Determinism.Process.ParallelCollisionTrace-20260803-001652-9acaae75`
 
 ## Integration-candidate progress
 
@@ -92,6 +92,17 @@ Latest local evidence is under ignored `Saved/Automation/`:
   shared tactical allocation work rather than being hidden inside navigation.
 - Focused async lifecycle, per-agent path/clearance/projection, and navigation canonical-state
   regressions passed before the full gates.
+- Ability activation now publishes its exact pool identity before `OnActivate`; end/cancel removes
+  it before refund, latent teardown, or `OnEnd`. Direct, command, passive-grant, and re-entrant
+  callback paths therefore share one lifecycle owner.
+- The singular primary slot now fails closed when another live primary is still active instead of
+  silently orphaning the older ability from ticking, cancellation, and snapshots. Existing broker
+  and cancellation-tag arbitration remains the explicit replacement policy.
+- Snapshot admission enforces the bidirectional activity contract: every active ability must be
+  indexed in the correct primary/passive role and every indexed ability must be active. Passive
+  execution state survives exact restore through the registered pool codec.
+- Per-activation cooldown-start state resets correctly, so `OnEnd`-timed cooldowns start on every
+  activation rather than only the first.
 
 ## Evidence limits
 

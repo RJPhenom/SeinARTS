@@ -2,7 +2,9 @@
 #include "Components/ActorTestSpawner.h"
 
 #include "Actions/SeinMoveToAction.h"
+#include "Components/SeinAbilityComponent.h"
 #include "Components/SeinMovementComponent.h"
+#include "Lib/SeinAbilityBPFL.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
 #include "Simulation/SeinTestSimContext.h"
 #include "Simulation/SeinWorldSubsystem.h"
@@ -123,6 +125,7 @@ namespace
 		USeinMoveToProxy* Proxy = nullptr;
 		USeinMoveToLifecycleTestObserver* Observer = nullptr;
 		FSeinEntityHandle Entity;
+		int32 AbilityID = INDEX_NONE;
 
 		bool Initialize(bool bFinishOnFirstTick)
 		{
@@ -141,6 +144,10 @@ namespace
 					MovementComponent.MovementClass = FSoftClassPath(
 						USeinMoveToLifecycleTestMovement::StaticClass()->GetPathName());
 					World->AddComponent(Entity, MovementComponent);
+					World->AddComponent(Entity, FSeinAbilityComponent());
+					AbilityID = USeinAbilityBPFL::SeinGrantAbility(
+						World, Entity,
+						USeinMoveToLifecycleTestAbility::StaticClass());
 				});
 			if (!bMaterialized || !Entity.IsValid()
 				|| !SeinTestMatchBootstrap::Start(*World))
@@ -154,8 +161,12 @@ namespace
 				return false;
 			}
 
-			Ability = NewObject<USeinMoveToLifecycleTestAbility>(World);
-			Ability->InitializeAbility(Entity, World);
+			Ability = Cast<USeinMoveToLifecycleTestAbility>(
+				World->GetAbilityInstance(AbilityID));
+			if (!Ability)
+			{
+				return false;
+			}
 			{
 				auto SimScope = FSeinSimContextTestAccess::Enter(*World);
 				if (!Ability->ActivateAbility(

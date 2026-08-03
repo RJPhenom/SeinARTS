@@ -1923,6 +1923,12 @@ private:
 	void ReleaseSimulationScheduler();
 	bool StartSimulationInternal(FString& OutError);
 	bool TryAllocateAbilityActivationID(int64& OutID);
+	/** Publish/remove the exact component-side activity identity owned by a
+	 *  pooled ability. There is one primary slot; passive identities form an
+	 *  ordered set. Activation refuses an occupied live primary rather than
+	 *  silently orphaning it from the tick/cancel/snapshot lifecycle. */
+	bool RegisterAbilityActivity(USeinAbility* Ability);
+	void UnregisterAbilityActivity(const USeinAbility* Ability);
 
 	/** Transport-only ingress. Caller-authored provenance and derived funding
 	 *  are discarded before the authenticated principal is buffered. Keeping

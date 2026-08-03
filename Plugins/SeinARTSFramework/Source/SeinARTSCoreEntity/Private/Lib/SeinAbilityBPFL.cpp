@@ -456,7 +456,6 @@ namespace SeinAbilityGrantLocal
 			{
 				return INDEX_NONE;
 			}
-			AbilityComp->ActivePassiveIDs.Add(AbilityID);
 		}
 
 		DirtyBrokerCapability(*Subsystem, EntityHandle);

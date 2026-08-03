@@ -3724,7 +3724,6 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleBrokerOr
 					if (!MemberAC) continue;
 					const int32 ActiveID = MemberAC->ActiveAbilityID;
 					USeinAbility* Active = GetAbilityInstance(ActiveID);
-					const TStrongObjectPtr<USeinAbility> ActiveIdentity(Active);
 					if (MemberAC->AbilityInstanceIDs.Contains(ActiveID)
 						&& Active
 						&& Active->OwnerEntity == Member)
@@ -3732,15 +3731,6 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleBrokerOr
 						if (Active->bIsActive)
 						{
 							Active->CancelAbility();
-						}
-						MemberAC = IsEntityAlive(Member)
-							? GetComponentMutable<FSeinAbilityComponent>(Member)
-							: nullptr;
-						if (MemberAC && MemberAC->ActiveAbilityID == ActiveID
-							&& (!MemberAC->AbilityInstanceIDs.Contains(ActiveID)
-								|| GetAbilityInstance(ActiveID) == ActiveIdentity.Get()))
-						{
-							MemberAC->ActiveAbilityID = INDEX_NONE;
 						}
 					}
 				}
@@ -4431,20 +4421,6 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleActivate
 		// only avoid writing through storage that the callback invalidated.
 		return ECommandHandleResult::Handled;
 	}
-	if (!Ability->bIsPassive)
-	{
-		if (Ability->bIsActive)
-		{
-			AbilityComp->ActiveAbilityID = AbilityID;
-		}
-		else if (AbilityComp->ActiveAbilityID == AbilityID)
-		{
-			// OnActivate may synchronously EndAbility. Do not resurrect it as
-			// the component's active primary after its lifecycle has completed.
-			AbilityComp->ActiveAbilityID = INDEX_NONE;
-		}
-	}
-
 	return ECommandHandleResult::Handled;
 }
 
@@ -4463,7 +4439,6 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleCancelAb
 		? AbilityComp->ActiveAbilityID
 		: INDEX_NONE;
 	USeinAbility* Active = GetAbilityInstance(ActiveAbilityID);
-	const TStrongObjectPtr<USeinAbility> ActiveIdentity(Active);
 	if (AbilityComp
 		&& AbilityComp->AbilityInstanceIDs.Contains(ActiveAbilityID)
 		&& Active
@@ -4471,15 +4446,6 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleCancelAb
 		&& Active->bIsActive)
 	{
 		Active->CancelAbility();
-		AbilityComp = IsEntityAlive(Cmd.EntityHandle)
-			? GetComponentMutable<FSeinAbilityComponent>(Cmd.EntityHandle)
-			: nullptr;
-		if (AbilityComp && AbilityComp->ActiveAbilityID == ActiveAbilityID
-			&& (!AbilityComp->AbilityInstanceIDs.Contains(ActiveAbilityID)
-				|| GetAbilityInstance(ActiveAbilityID) == ActiveIdentity.Get()))
-		{
-			AbilityComp->ActiveAbilityID = INDEX_NONE;
-		}
 	}
 	else
 	{
@@ -5912,6 +5878,92 @@ bool USeinWorldSubsystem::TryAllocateAbilityActivationID(
 	return true;
 }
 
+bool USeinWorldSubsystem::RegisterAbilityActivity(USeinAbility* Ability)
+{
+	if (!Ability || Ability->WorldSubsystem != this || !Ability->bIsActive)
+	{
+		return false;
+	}
+	const int32 AbilityID = FindAbilityInstanceID(Ability);
+	FSeinAbilityComponent* Component =
+		GetComponentMutable<FSeinAbilityComponent>(Ability->OwnerEntity);
+	if (AbilityID == INDEX_NONE || !Component
+		|| !Component->AbilityInstanceIDs.Contains(AbilityID))
+	{
+		UE_LOG(LogSeinSim, Error,
+			TEXT("RegisterAbilityActivity[%s]: pooled ability is not owned by entity %s."),
+			*Ability->GetName(), *Ability->OwnerEntity.ToString());
+		return false;
+	}
+
+	if (Ability->bIsPassive)
+	{
+		if (Component->ActiveAbilityID == AbilityID)
+		{
+			UE_LOG(LogSeinSim, Error,
+				TEXT("RegisterAbilityActivity[%s]: passive ability occupies the primary slot."),
+				*Ability->GetName());
+			return false;
+		}
+		Component->ActivePassiveIDs.AddUnique(AbilityID);
+		return true;
+	}
+
+	if (Component->ActivePassiveIDs.Contains(AbilityID))
+	{
+		UE_LOG(LogSeinSim, Error,
+			TEXT("RegisterAbilityActivity[%s]: primary ability occupies the passive list."),
+			*Ability->GetName());
+		return false;
+	}
+	if (Component->ActiveAbilityID != INDEX_NONE
+		&& Component->ActiveAbilityID != AbilityID)
+	{
+		const int32 OccupantID = Component->ActiveAbilityID;
+		const USeinAbility* Occupant = GetAbilityInstance(OccupantID);
+		const bool bLiveOwnedPrimary = Occupant
+			&& !Occupant->bIsPassive
+			&& Occupant->bIsActive
+			&& Occupant->OwnerEntity == Ability->OwnerEntity
+			&& Component->AbilityInstanceIDs.Contains(OccupantID);
+		if (bLiveOwnedPrimary)
+		{
+			UE_LOG(LogSeinSim, Warning,
+				TEXT("RegisterAbilityActivity[%s]: entity %s already has active primary %s; use broker or cancellation-tag arbitration before activation."),
+				*Ability->GetName(), *Ability->OwnerEntity.ToString(),
+				*Occupant->GetName());
+			return false;
+		}
+		// Repair only an impossible stale locator. Live conflicting ownership
+		// always fails closed above; it is never silently displaced.
+		Component->ActiveAbilityID = INDEX_NONE;
+	}
+	Component->ActiveAbilityID = AbilityID;
+	return true;
+}
+
+void USeinWorldSubsystem::UnregisterAbilityActivity(
+	const USeinAbility* Ability)
+{
+	if (!Ability || Ability->WorldSubsystem != this)
+	{
+		return;
+	}
+	const int32 AbilityID = FindAbilityInstanceID(Ability);
+	FSeinAbilityComponent* Component =
+		GetComponentMutable<FSeinAbilityComponent>(Ability->OwnerEntity);
+	if (AbilityID == INDEX_NONE || !Component
+		|| !Component->AbilityInstanceIDs.Contains(AbilityID))
+	{
+		return;
+	}
+	if (Component->ActiveAbilityID == AbilityID)
+	{
+		Component->ActiveAbilityID = INDEX_NONE;
+	}
+	Component->ActivePassiveIDs.Remove(AbilityID);
+}
+
 int32 USeinWorldSubsystem::RegisterCommandBrokerResolver(USeinCommandBrokerResolver* Resolver)
 {
 	if (!RequireStateMutationAuthorization(TEXT("RegisterCommandBrokerResolver")))
@@ -7315,12 +7367,15 @@ namespace
 				}
 				const bool bIsPrimary = Component.ActiveAbilityID == PoolID;
 				const bool bIsListedPassive = ActivePassiveIDs.Contains(PoolID);
-				// Public direct activation/end paths do not yet centralize the
-				// bIsActive <-> component-index relationship. Enforce only the
-				// structural role each populated index claims: primary IDs must be
-				// non-passive and passive-list IDs must be passive.
-				if ((bIsPrimary && AbilityState.bIsPassive)
-					|| (bIsListedPassive && !AbilityState.bIsPassive))
+				const bool bMustBePrimary =
+					AbilityState.bIsActive && !AbilityState.bIsPassive;
+				const bool bMustBeListedPassive =
+					AbilityState.bIsActive && AbilityState.bIsPassive;
+				// Activity identity is an exact bidirectional lifecycle contract:
+				// every active ability is indexed in its role, and no inactive
+				// ability may remain tickable/cancellable through a stale locator.
+				if (bIsPrimary != bMustBePrimary
+					|| bIsListedPassive != bMustBeListedPassive)
 				{
 					return false;
 				}
@@ -11976,7 +12031,6 @@ FSeinEntityHandle USeinWorldSubsystem::CreateBrokerForMembers(
 		{
 			const int32 ActiveID = AC->ActiveAbilityID;
 			USeinAbility* Active = GetAbilityInstance(ActiveID);
-			const TStrongObjectPtr<USeinAbility> ActiveIdentity(Active);
 			if (AC->AbilityInstanceIDs.Contains(ActiveID)
 				&& Active
 				&& Active->OwnerEntity == M)
@@ -11984,15 +12038,6 @@ FSeinEntityHandle USeinWorldSubsystem::CreateBrokerForMembers(
 				if (Active->bIsActive)
 				{
 					Active->CancelAbility();
-				}
-				AC = IsEntityAlive(M)
-					? GetComponentMutable<FSeinAbilityComponent>(M)
-					: nullptr;
-				if (AC && AC->ActiveAbilityID == ActiveID
-					&& (!AC->AbilityInstanceIDs.Contains(ActiveID)
-						|| GetAbilityInstance(ActiveID) == ActiveIdentity.Get()))
-				{
-					AC->ActiveAbilityID = INDEX_NONE;
 				}
 			}
 		}

@@ -25,8 +25,10 @@ Exit: clean tree, no obsolete tracked artifacts, exact gate evidence, and one un
   closed with canonical-state coverage.
 - Per-unit terrain, nav-layer, wall-padding, and compound-footprint policy now propagates through
   command admission, pathing/repathing, movement, collision, containment, formation projection,
-  requester-aware Blueprint queries, and Movement+ maneuver probes. Close the remaining
-  ordinary-authoring correctness item: ability/passive lifecycle identity and ownership.
+  requester-aware Blueprint queries, and Movement+ maneuver probes.
+- Ability/passive lifecycle identity is centralized: activity is coherent during callbacks,
+  primary ownership is singular and fail-closed, re-entrant replacements are pointer-safe, and
+  snapshot admission requires exact active/index agreement.
 - Define a checkpoint-safe latent-authoring contract. Supported Blueprint latent nodes require exact codecs; unsupported continuation shapes must fail during authoring/compile/save rather than during a live reconnect.
 - Resolve remaining state-coverage admission contracts for mutable Level Data, stateful formation/resolver implementations, and conditional provider ownership.
 - Add automated package/consumer proof for:

@@ -50,8 +50,11 @@ public:
 	/** Activate an ability DIRECTLY, bypassing the command queue. Skips ALL
 	 *  activation gates — no range check, no AutoMoveThen, no cost validation,
 	 *  no BlockedTags / RequiredEntityTags / RequiredPlayerTags, no rejection
-	 *  logging. Returns silently on failure (ability missing, on cooldown, or
-	 *  already active).
+	 *  logging. It still obeys exact lifecycle ownership: activity indexes are
+	 *  coherent during callbacks, and a live primary must be ended through the
+	 *  normal cancellation-tag/broker policy before another primary can start.
+	 *  Returns silently on failure (ability missing, on cooldown, already
+	 *  active, or primary slot occupied).
 	 *
 	 *  Use this only for low-level scripting where the gates are intentionally
 	 *  unwanted (cheats, debug commands, replay reconstruction). For ability

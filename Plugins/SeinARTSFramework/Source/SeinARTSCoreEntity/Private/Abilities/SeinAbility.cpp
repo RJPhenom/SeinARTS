@@ -361,59 +361,23 @@ void USeinAbility::ReleaseCommittedGrantedTags()
 
 bool USeinAbility::ActivateAbility(FSeinEntityHandle Target, FFixedVector Location)
 {
-	if (!WorldSubsystem
-		|| !WorldSubsystem->RequireStateMutationAuthorization(TEXT("ActivateAbility")))
-	{
-		return false;
-	}
-	if (bIsActive)
-	{
-		return false;
-	}
-	MarkDeterministicStateDirty();
-	if (!AcquireGrantedTags())
-	{
-		UE_LOG(LogSeinAbilityImpl, Error,
-			TEXT("ActivateAbility[%s]: refused because an owned tag is saturated on %s"),
-			*GetName(), *OwnerEntity.ToString());
-		return false;
-	}
-	int64 NewActivationID = 0;
-	if (!WorldSubsystem->TryAllocateAbilityActivationID(NewActivationID))
-	{
-		ReleaseCommittedGrantedTags();
-		UE_LOG(LogSeinAbilityImpl, Error,
-			TEXT("ActivateAbility[%s]: deterministic activation ID space is exhausted."),
-			*GetName());
-		return false;
-	}
-
-	// Right-click / direct-activation path — no targeter points captured.
-	// Empty TargeterPoints array signals "trigger came from the smart-command
-	// flow" to OnActivate; ability reads TargetLocation alone.
-	TargeterPoints.Reset();
-	TargetEntity = Target;
-	TargetLocation = Location;
-	AbilityActivationID = NewActivationID;
-	bIsActive = true;
-
-	// Start cooldown if the ability's timing fires on activate. OnEnd-timed abilities
-	// defer cooldown until DeactivateAbility.
-	if (CooldownStartTiming == ESeinCooldownStartTiming::OnActivate)
-	{
-		StartCooldownInternal();
-	}
-
-	OnActivate();
-	return true;
+	return ActivateAbilityInternal(Target, Location, nullptr);
 }
 
 bool USeinAbility::ActivateAbilityWithTargeterPoints(FSeinEntityHandle Target, FFixedVector Location,
 	const TArray<FSeinTargeterPoint>& Points)
 {
+	return ActivateAbilityInternal(Target, Location, &Points);
+}
+
+bool USeinAbility::ActivateAbilityInternal(FSeinEntityHandle Target,
+	FFixedVector Location,
+	const TArray<FSeinTargeterPoint>* Points)
+{
 	if (!WorldSubsystem
 		|| !WorldSubsystem->RequireStateMutationAuthorization(
-			TEXT("ActivateAbilityWithTargeterPoints")))
+			Points ? TEXT("ActivateAbilityWithTargeterPoints")
+				: TEXT("ActivateAbility")))
 	{
 		return false;
 	}
@@ -439,16 +403,45 @@ bool USeinAbility::ActivateAbilityWithTargeterPoints(FSeinEntityHandle Target, F
 		return false;
 	}
 
-	// Targeter-originated activation. TargetLocation mirrors Points[0].Location
-	// when available so single-point ability OnActivate logic that only reads
-	// TargetLocation continues to work — multi-target abilities iterate
-	// TargeterPoints directly.
-	TargeterPoints = Points;
+	// Publish complete runtime identity before executing designer code. This
+	// makes GetActiveAbility/GetActivePassives truthful from inside OnActivate,
+	// and lets synchronous EndAbility detach the exact identity immediately.
+	const int64 PreviousActivationID = AbilityActivationID;
+	const FSeinEntityHandle PreviousTargetEntity = TargetEntity;
+	const FFixedVector PreviousTargetLocation = TargetLocation;
+	const bool bPreviousCooldownStarted = bCooldownStarted;
+	TArray<FSeinTargeterPoint> PreviousTargeterPoints = MoveTemp(TargeterPoints);
+	if (Points)
+	{
+		TargeterPoints = *Points;
+	}
+	else
+	{
+		// Right-click / direct-activation path — no targeter points captured.
+		// Empty means the ability should read TargetLocation alone.
+		TargeterPoints.Reset();
+	}
 	TargetEntity = Target;
-	TargetLocation = Points.Num() > 0 ? Points[0].Location : Location;
+	TargetLocation = Points && Points->Num() > 0
+		? (*Points)[0].Location
+		: Location;
 	AbilityActivationID = NewActivationID;
 	bIsActive = true;
+	bCooldownStarted = false;
+	if (!WorldSubsystem->RegisterAbilityActivity(this))
+	{
+		bIsActive = false;
+		AbilityActivationID = PreviousActivationID;
+		TargetEntity = PreviousTargetEntity;
+		TargetLocation = PreviousTargetLocation;
+		TargeterPoints = MoveTemp(PreviousTargeterPoints);
+		bCooldownStarted = bPreviousCooldownStarted;
+		ReleaseCommittedGrantedTags();
+		return false;
+	}
 
+	// Start cooldown if the ability's timing fires on activate. OnEnd-timed abilities
+	// defer cooldown until DeactivateAbility.
 	if (CooldownStartTiming == ESeinCooldownStartTiming::OnActivate)
 	{
 		StartCooldownInternal();
@@ -483,6 +476,11 @@ void USeinAbility::DeactivateAbility(bool bCancelled)
 	MarkDeterministicStateDirty();
 
 	bIsActive = false;
+	// Detach before any refund, latent cancellation, or OnEnd callback can
+	// synchronously grant/activate a replacement. The old ability may be
+	// revoked and its pool slot recycled during OnEnd; pointer-validated world
+	// ownership ensures it can never clear the replacement afterwards.
+	WorldSubsystem->UnregisterAbilityActivity(this);
 
 	// Refund on cancel ─ drive DESIGN §7 Q2a / Q3c policy
 	if (bCancelled && WorldSubsystem)

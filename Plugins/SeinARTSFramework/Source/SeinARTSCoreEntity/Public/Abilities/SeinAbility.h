@@ -591,6 +591,9 @@ public:
 private:
 	int32 RuntimePoolID = INDEX_NONE;
 
+	bool ActivateAbilityInternal(FSeinEntityHandle Target,
+		FFixedVector Location,
+		const TArray<FSeinTargeterPoint>* Points);
 	bool AcquireGrantedTags();
 	void ReleaseCommittedGrantedTags();
 

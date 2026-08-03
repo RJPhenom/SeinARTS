@@ -355,6 +355,53 @@ namespace UE::SeinARTSTests
 			})));
 		ExpectRejectedWithoutMutation(NonPassiveInPassiveList);
 
+		FSeinWorldSnapshot InactiveIndexedPassive = Valid;
+		ASSERT_THAT(IsTrue(FSeinSnapshotPoolTestAccess::RewriteAbilityState(
+			*Fixture.World,
+			InactiveIndexedPassive.AbilityPoolRecords[Fixture.PassiveAbilityID],
+			[](USeinAbility& Ability)
+			{
+				Ability.bIsActive = false;
+			})));
+		ExpectRejectedWithoutMutation(InactiveIndexedPassive);
+
+	}
+
+	TEST(SnapshotRejectsUnindexedActivePrimaryWithoutMutation,
+		"SeinARTS.Unit.Snapshot")
+	{
+		FActorTestSpawner Spawner;
+		FSnapshotAbilityFixture Fixture(Spawner);
+		ASSERT_THAT(IsTrue(Fixture.bBootstrapConsumed));
+		USeinAbility* Ordinary = Fixture.World->GetAbilityInstance(
+			Fixture.OrdinaryAbilityID);
+		ASSERT_THAT(IsNotNull(Ordinary));
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*Fixture.World)));
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*Fixture.World);
+			ASSERT_THAT(IsTrue(Ordinary->ActivateAbility(
+				FSeinEntityHandle::Invalid(), FFixedVector::ZeroVector)));
+		}
+
+		FSeinWorldSnapshot Bad;
+		Fixture.World->CaptureSnapshot(Bad);
+		const int32 HashBefore = Fixture.World->ComputeStateHash();
+		ASSERT_THAT(IsTrue(RewriteAbilityComponent(
+			Bad, Fixture.Entity.Index,
+			[](FSeinAbilityComponent& Component)
+			{
+				Component.ActiveAbilityID = INDEX_NONE;
+			})));
+
+		Assert.ExpectError(TEXT(
+			"RestoreSnapshot: authoritative sim state failed structural preflight."));
+		ASSERT_THAT(IsFalse(SeinTestSnapshotRestore::RestoreTrusted(
+			*Fixture.World, Bad)));
+		ASSERT_THAT(AreEqual(HashBefore, Fixture.World->ComputeStateHash()));
+		ASSERT_THAT(IsTrue(Ordinary->bIsActive));
+		ASSERT_THAT(AreEqual(Fixture.OrdinaryAbilityID,
+			Fixture.World->GetComponent<FSeinAbilityComponent>(Fixture.Entity)
+				->ActiveAbilityID));
 	}
 
 	TEST(SnapshotRejectsComponentGenerationMismatchWithoutMutation,

@@ -58,3 +58,17 @@ public:
 	int32 TickCount = 0;
 	virtual void OnTick_Implementation(FFixedPoint DeltaTime) override;
 };
+
+UCLASS()
+class USeinCallbackPassiveIdentityAbility : public USeinAbility
+{
+	GENERATED_BODY()
+
+public:
+	using FActivationCallback =
+		TFunction<void(USeinCallbackPassiveIdentityAbility&)>;
+	static FActivationCallback ActivationCallback;
+
+	USeinCallbackPassiveIdentityAbility();
+	virtual void OnActivate_Implementation() override;
+};

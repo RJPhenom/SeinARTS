@@ -67,11 +67,6 @@ void USeinCallbackRevokeOnCancelAbility::OnEnd_Implementation(bool bWasCancelled
 	USeinAbilityBPFL::SeinActivateAbility(
 		WorldSubsystem, OwnerEntity, Replacement->AbilityTag,
 		FSeinEntityHandle::Invalid(), FFixedVector());
-	if (FSeinAbilityComponent* AbilityComponent =
-		WorldSubsystem->GetComponentMutable<FSeinAbilityComponent>(OwnerEntity))
-	{
-		AbilityComponent->ActiveAbilityID = ReplacementID;
-	}
 }
 
 USeinCallbackTickProbeAbility::FTickCallback
@@ -84,6 +79,22 @@ void USeinCallbackTickProbeAbility::OnTick_Implementation(
 	if (TickCallback)
 	{
 		TickCallback(*this);
+	}
+}
+
+USeinCallbackPassiveIdentityAbility::FActivationCallback
+	USeinCallbackPassiveIdentityAbility::ActivationCallback;
+
+USeinCallbackPassiveIdentityAbility::USeinCallbackPassiveIdentityAbility()
+{
+	bIsPassive = true;
+}
+
+void USeinCallbackPassiveIdentityAbility::OnActivate_Implementation()
+{
+	if (ActivationCallback)
+	{
+		ActivationCallback(*this);
 	}
 }
 
@@ -155,6 +166,137 @@ namespace
 
 namespace UE::SeinARTSTests
 {
+	TEST(PassiveIdentityIsPublishedDuringActivationAndRemovedOnEnd,
+		"SeinARTS.Unit.Abilities.CallbackSafety")
+	{
+		struct FResetPassiveCallback
+		{
+			~FResetPassiveCallback()
+			{
+				USeinCallbackPassiveIdentityAbility::ActivationCallback = nullptr;
+			}
+		} ResetPassiveCallback;
+		ExpectAbilityHashDiagnostic(*TestRunner);
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+
+		FSeinEntityHandle Entity;
+		int32 PassiveID = INDEX_NONE;
+		bool bObservedExactIdentity = false;
+		USeinCallbackPassiveIdentityAbility::ActivationCallback =
+			[&](USeinCallbackPassiveIdentityAbility& Ability)
+			{
+				const FSeinAbilityComponent* Component =
+					World->GetComponent<FSeinAbilityComponent>(Entity);
+				bObservedExactIdentity = Component
+					&& Component->ActivePassiveIDs.Contains(
+						Ability.GetRuntimePoolID())
+					&& Component->GetActivePassives(*World).Contains(&Ability);
+			};
+		const auto AuthorState = [&]()
+		{
+			Entity = World->SpawnAbstractEntity(
+				FFixedTransform(), FSeinPlayerID::Neutral());
+			World->AddComponent(Entity, FSeinAbilityComponent());
+			PassiveID = USeinAbilityBPFL::SeinGrantAbility(
+				World, Entity,
+				USeinCallbackPassiveIdentityAbility::StaticClass());
+		};
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Materialize(
+			*World, AuthorState)));
+		ASSERT_THAT(IsTrue(bObservedExactIdentity));
+		ASSERT_THAT(IsTrue(PassiveID != INDEX_NONE));
+		USeinAbility* Passive = World->GetAbilityInstance(PassiveID);
+		ASSERT_THAT(IsNotNull(Passive));
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World)));
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+			Passive->EndAbility();
+		}
+		const FSeinAbilityComponent* Component =
+			World->GetComponent<FSeinAbilityComponent>(Entity);
+		ASSERT_THAT(IsNotNull(Component));
+		ASSERT_THAT(IsFalse(Passive->bIsActive));
+		ASSERT_THAT(IsFalse(Component->ActivePassiveIDs.Contains(PassiveID)));
+	}
+
+	TEST(AbilityLifecycleOwnsPrimaryIdentityAndRefusesSilentDisplacement,
+		"SeinARTS.Unit.Abilities.CallbackSafety")
+	{
+		ExpectAbilityHashDiagnostic(*TestRunner);
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+
+		FSeinEntityHandle Entity;
+		USeinAbility* First = nullptr;
+		USeinAbility* Second = nullptr;
+		const auto AuthorState = [&]()
+		{
+			Entity = World->SpawnAbstractEntity(
+				FFixedTransform(), FSeinPlayerID::Neutral());
+			World->AddComponent(Entity, FSeinAbilityComponent());
+			First = GrantAbility(*World, Entity,
+				USeinCallbackCancelReplacementAbility::StaticClass(),
+				SeinARTSTags::Command_Context_AbilityTriggered);
+			Second = GrantAbility(*World, Entity,
+				USeinCallbackGrowComponentStorageAbility::StaticClass(),
+				SeinARTSTags::Command_Context_Target_Ground);
+		};
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Materialize(
+			*World, AuthorState)));
+		ASSERT_THAT(IsNotNull(First));
+		ASSERT_THAT(IsNotNull(Second));
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World)));
+
+		auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+		ASSERT_THAT(IsTrue(First->ActivateAbility(
+			FSeinEntityHandle::Invalid(), FFixedVector::ZeroVector)));
+		const int32 FirstID = First->GetRuntimePoolID();
+		const int32 SecondID = Second->GetRuntimePoolID();
+		const FSeinAbilityComponent* Component =
+			World->GetComponent<FSeinAbilityComponent>(Entity);
+		ASSERT_THAT(IsNotNull(Component));
+		ASSERT_THAT(AreEqual(FirstID, Component->ActiveAbilityID));
+
+		TestRunner->AddExpectedError(
+			TEXT("already has active primary"),
+			EAutomationExpectedErrorFlags::Contains, 1, false);
+		ASSERT_THAT(IsFalse(Second->ActivateAbility(
+			FSeinEntityHandle::Invalid(), FFixedVector::ZeroVector)));
+		Component = World->GetComponent<FSeinAbilityComponent>(Entity);
+		ASSERT_THAT(IsNotNull(Component));
+		ASSERT_THAT(AreEqual(FirstID, Component->ActiveAbilityID));
+		ASSERT_THAT(IsTrue(First->bIsActive));
+		ASSERT_THAT(IsFalse(Second->bIsActive));
+
+		First->EndAbility();
+		Component = World->GetComponent<FSeinAbilityComponent>(Entity);
+		ASSERT_THAT(IsNotNull(Component));
+		ASSERT_THAT(AreEqual(INDEX_NONE, Component->ActiveAbilityID));
+
+		Second->CooldownStartTiming = ESeinCooldownStartTiming::OnEnd;
+		Second->Cooldown = FFixedPoint::FromInt(5);
+		ASSERT_THAT(IsTrue(Second->ActivateAbility(
+			FSeinEntityHandle::Invalid(), FFixedVector::ZeroVector)));
+		ASSERT_THAT(AreEqual(SecondID,
+			World->GetComponent<FSeinAbilityComponent>(Entity)->ActiveAbilityID));
+		Second->EndAbility();
+		ASSERT_THAT(AreEqual(FFixedPoint::FromInt(5),
+			Second->CooldownRemaining));
+		Second->TickCooldown(FFixedPoint::FromInt(5));
+		ASSERT_THAT(IsTrue(Second->ActivateAbility(
+			FSeinEntityHandle::Invalid(), FFixedVector::ZeroVector)));
+		Second->EndAbility();
+		ASSERT_THAT(AreEqual(FFixedPoint::FromInt(5),
+			Second->CooldownRemaining));
+		ASSERT_THAT(AreEqual(INDEX_NONE,
+			World->GetComponent<FSeinAbilityComponent>(Entity)->ActiveAbilityID));
+	}
+
 	TEST(AbilityTickUsesFrozenPhaseAndPassiveTraversalMembership,
 		"SeinARTS.Unit.Abilities.CallbackSafety")
 	{

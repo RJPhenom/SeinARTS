@@ -106,11 +106,15 @@ struct SEINARTSCOREENTITY_API FSeinAbilityComponent : public FSeinComponent
 	TArray<FSeinAbilityGrantOwnership> AbilityGrantOwnership;
 
 	/** Pool ID of the currently-active primary ability (not passive).
-	 *  INDEX_NONE = nothing active. */
+	 *  INDEX_NONE = nothing active. The lifecycle owner publishes this before
+	 *  OnActivate and clears it before OnEnd. A second primary cannot silently
+	 *  displace a live one: cancellation-tag or broker arbitration must end the
+	 *  current primary first. */
 	UPROPERTY()
 	int32 ActiveAbilityID = INDEX_NONE;
 
-	/** Pool IDs for currently-running passive abilities. */
+	/** Pool IDs for currently-running passive abilities, in activation order.
+	 *  Each ID is present throughout OnActivate and removed before OnEnd. */
 	UPROPERTY()
 	TArray<int32> ActivePassiveIDs;
 
