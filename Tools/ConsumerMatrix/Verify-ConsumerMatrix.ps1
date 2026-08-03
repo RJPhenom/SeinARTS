@@ -6,9 +6,10 @@
 .DESCRIPTION
   Creates isolated projects under Saved/ConsumerMatrix, copies only the
   selected production plugins (never their Binaries/Intermediate state), and
-  builds the Editor, Client, Server, and Shipping game targets. It then creates
-  a consumer-owned map, generates the consumer-owned simulation-content
-  manifest, loads the map, cooks/packages it, and smoke-loads the packaged game.
+  builds the Editor and Shipping game targets, plus Client and Server when the
+  engine distribution supports them. It then creates a consumer-owned map,
+  generates the consumer-owned simulation-content manifest, loads the exact
+  map, cooks/packages it, and smoke-loads the packaged game.
 
   No generated artifact is written to the repository's tracked Output or Docs
   trees. The generated projects are disposable evidence, not source fixtures.
@@ -367,6 +368,23 @@ unreal.log("Verified generated manifest " + manifest_path)
 		(Join-Path $ProjectRoot 'GenerateSimulationContentManifest.py') `
 		$GenerateManifestPy
 
+	$VerifyMapPy = @'
+import unreal
+
+asset_path = "/Game/Maps/ConsumerMap"
+level_editor = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
+if not level_editor.load_level(asset_path):
+    raise RuntimeError("Could not load consumer-owned map " + asset_path)
+world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world()
+if world is None or not world.get_path_name().startswith(asset_path + "."):
+    actual = "<none>" if world is None else world.get_path_name()
+    raise RuntimeError(
+        "Consumer map load resolved the wrong editor world: " + actual
+    )
+unreal.log("Verified loaded consumer world " + world.get_path_name())
+'@
+	Write-Utf8NoBom (Join-Path $ProjectRoot 'VerifyConsumerMap.py') $VerifyMapPy
+
 	Assert-NoHostGameDependency $ProjectRoot
 	return [pscustomobject]@{
 		Name = $ProfileName
@@ -452,9 +470,9 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 	Assert-NoHostGameDependency $Project.Root
 	Invoke-Checked "$ProfileName uncooked map load" $EditorCmd @(
 		$Project.Uproject,
-		'/Game/Maps/ConsumerMap',
-		'-game', '-unattended', '-nop4', '-nosplash', '-nullrhi', '-nosound',
-		'-ExecCmds=quit')
+		'-run=pythonscript',
+		"-script=$(Join-Path $Project.Root 'VerifyConsumerMap.py')",
+		'-unattended', '-nop4', '-nosplash', '-nullrhi', '-stdout')
 
 	$ArchiveRoot = Join-Path $Project.Root 'Saved\Packaged'
 	if (-not $SkipCook) {

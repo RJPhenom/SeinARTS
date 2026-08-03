@@ -4,9 +4,16 @@ This is the actionable remainder after consolidating the historical audits. It i
 
 ## Release-blocking foundation risks
 
-1. **Checkpoint-safe Blueprint continuation is bounded, not arbitrary.** Wait/MoveTo and registered native codecs are covered; arbitrary Blueprint VM latent/async frames are not. Define the supported authoring contract and fail unsupported graphs early.
-2. **Custom stateful providers need complete admission contracts.** Collision and Cover have explicit coverage claims; remaining Level Data, formation/resolver statefulness, and conditional ownership/orphan evaluation require a closed design.
-3. **Downstream packaging is unproven.** The monorepo builds, but clean consumer matrices and plugin-stripping packages are not automated.
+1. **Clean consumer multiplayer runtime is not yet qualified.** Editor/Shipping source builds,
+   exact uncooked map loads, cook/package, and real Shipping startup pass in disposable consumers.
+   Match start, snapshot, replay seek/load, resync, reconnect, and multi-process network behavior
+   still need a clean-consumer runtime harness.
+2. **Launcher UE cannot prove Client/Server targets.** Epic's installed 5.7 distribution rejects
+   Client targets before project compilation. Development Client and Dedicated Server must run in
+   CI or another source/installed engine distribution that supports those target types.
+3. **Cover is not physically strip-safe from Squad.** Cover marks Squad optional but always declares
+   `SeinARTSCoverSquad`, whose build dependency is hard. The bridge must become a separate opt-in
+   plugin or Squad must become a required Cover dependency.
 
 ## Gameplay-backbone gaps
 
@@ -15,7 +22,6 @@ This is the actionable remainder after consolidating the historical audits. It i
 3. FoW still needs an explicit team/shared vision policy; the known blocker-height, authored-Z, and cone terrain-scaling defects are closed.
 4. Public targeting lacks the complete line/corridor/gesture policy surface needed by a modern tactical RTS.
 5. Movement+ needs behavior qualification and telemetry; Flight is not a production 3D avoidance/collision model.
-6. Cover's optional Squad declaration is not physically strip-safe because the declared bridge module hard-links Squad.
 
 ## Online-product gaps
 
@@ -41,5 +47,7 @@ This is the actionable remainder after consolidating the historical audits. It i
 - Listen-host migration versus dedicated-only supported topology for each game mode.
 - Co-op campaign persistence/migration/ownership policy.
 - Adaptive input-delay policy after observability data.
+- Cover/Squad packaging topology: separate opt-in bridge plugin (flexible, more package surface) or
+  make Squad a required dependency of Cover (simpler, less modular).
 
 These decisions should be presented with live-code options and a recommendation. Do not silently choose them during cleanup or unrelated fixes.

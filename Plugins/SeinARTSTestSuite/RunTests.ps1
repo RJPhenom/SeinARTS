@@ -213,7 +213,8 @@ else {
 		$CanonicalBroadSuites = @(
 			'SeinARTS.Unit',
 			'SeinARTS.Integration',
-			'SeinARTS.Determinism'
+			'SeinARTS.Determinism',
+			'SeinARTS.Editor'
 		)
 		if ($CanonicalBroadSuites | Where-Object { $_ -ieq $Suite }) {
 			throw "Missing expected-count baseline for canonical suite '$Profile' / '$Suite'."

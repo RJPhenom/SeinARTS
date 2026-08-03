@@ -19,6 +19,9 @@ Exit: clean tree, no obsolete tracked artifacts, exact gate evidence, and one un
 
 ## 2. Produce the first downstream Integration Candidate
 
+**Status:** source-contract and clean-consumer packaging work is complete; multi-process runtime
+qualification and one plugin-topology decision remain.
+
 - Async path continuation ownership is closed: budget tails persist, results survive unrelated
   drains, and terminal move actions cancel their state before re-entrant hooks.
 - FoW overlapping layer heights, authored local-Z blocker tops, and cone terrain scaling are
@@ -29,15 +32,23 @@ Exit: clean tree, no obsolete tracked artifacts, exact gate evidence, and one un
 - Ability/passive lifecycle identity is centralized: activity is coherent during callbacks,
   primary ownership is singular and fail-closed, re-entrant replacements are pointer-safe, and
   snapshot admission requires exact active/index agreement.
-- Define a checkpoint-safe latent-authoring contract. Supported Blueprint latent nodes require exact codecs; unsupported continuation shapes must fail during authoring/compile/save rather than during a live reconnect.
-- Resolve remaining state-coverage admission contracts for mutable Level Data, stateful formation/resolver implementations, and conditional provider ownership.
-- Add automated package/consumer proof for:
+- Checkpoint-safe latent authoring is admitted at compile/save: supported Blueprint continuation
+  nodes require exact codecs, while unsupported shapes fail before runtime.
+- Mutable Level Data, formation/resolver statefulness, and conditional provider ownership now have
+  explicit state-coverage/admission contracts. Movement+ batch withdrawal is atomic.
+- Automated package/consumer proof now covers:
   - Framework only.
   - Framework + Movement+.
   - Framework + Squad + Cover + Movement+.
-  - UE 5.7 Editor, Development Client, Dedicated Server, and Shipping targets.
+  - UE 5.7 Editor and Shipping targets locally.
   - Clean cook/load of a minimal consumer map and consumer-owned simulation-content manifest.
-- Ensure consuming projects have no hidden dependency on this host project's `/Game/SeinARTS` content.
+- Clean consumers have no hidden dependency on this host project's `/Game/SeinARTS` content.
+- Remaining before this stage exits:
+  - Resolve the Cover/Squad physical-stripping topology.
+  - Run Development Client and Dedicated Server builds under a source/installed UE distribution
+    that supports those targets; Epic's launcher build rejects them before compiling the project.
+  - Exercise a commit-pinned clean consumer through real multi-process match start, exact snapshot,
+    replay seek/load, forced resync, reconnect, and packaged client/server startup.
 
 Exit: a commit-pinned source consumer can build, cook, start a match, snapshot, replay, and reconnect using supported plugin combinations.
 

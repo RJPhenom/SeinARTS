@@ -22,6 +22,12 @@ SeinARTSTestSuite + SeinARTSExtensionTestSuite are disabled, non-shipping consum
 
 The Framework must not depend on an extension. Cover's current descriptor still declares a bridge module that hard-links Squad, so a physically stripped Squad plugin is not yet a supported Cover packaging combination.
 
+Framework-owned runtime UI content remains inside the Framework plugin. Example maps, example
+gameplay Blueprints, and mannequin assets belong to the host project under
+`/Game/SeinARTSExamples`; downstream consumers must provide their own project content and
+simulation-content manifest. This boundary prevents the distributable plugin from silently relying
+on this repository's host `/Game` packages or on opt-in extensions.
+
 ## Framework modules and core algorithms
 
 | Module | Core responsibility and algorithms |
@@ -126,3 +132,13 @@ Ordinary RTS visual meshes use Unreal update-rate optimization and skip animatio
 - Entity identity includes generation.
 - Runtime state that affects a future tick must participate in hash/capture/restore/reset/replay/reconnect.
 - Lockstep settings and implementation choices participate in frozen compatibility fingerprints.
+
+## Downstream verification
+
+`Tools/ConsumerMatrix/Verify-ConsumerMatrix.ps1` creates disposable projects under ignored
+`Saved/ConsumerMatrix`, copies only selected distributable plugin inputs, and verifies Framework,
+Framework+Movement+, and all-production-plugin profiles. It generates a consumer-owned map and
+manifest, rejects host-project package references, builds Editor and Shipping, loads the exact map,
+cooks/packages it, and starts the real packaged Shipping executable. Client/Dedicated Server target
+proof is intentionally still open because Epic's launcher UE distribution does not expose those
+target builds.

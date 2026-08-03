@@ -9,6 +9,7 @@ Use the repository and plugin-level `AGENTS.md` files for hard working rules and
 - `PROJECT_STATE.md` — current Git/build/test/runtime posture and the exact stabilization boundary.
 - `FRAMEWORK_MAP.md` — concise live architecture and algorithm map grounded in the current source.
 - `PERFORMANCE_BASELINE.md` — repeatable benchmark contract, measured baseline, and profiling rules.
+- `CONSUMER_VERIFICATION.md` — clean downstream project/build/cook/package verification contract.
 - `READINESS_ROADMAP.md` — ordered path from the stabilized framework to a game-ready, online-capable SDK.
 - `OPEN_RISKS.md` — unresolved correctness, state, extensibility, gameplay, and release risks.
 

@@ -8,7 +8,7 @@
 A result is comparable only when these are fixed or recorded:
 
 - UE 5.7 Development Editor executable in standalone `-game` mode.
-- `/SeinARTSFramework/Levels/Sandbox`.
+- `/Game/SeinARTSExamples/Levels/Sandbox`.
 - One complete game world at 1280x720 with audio disabled.
 - A settled 15-second window containing 452 sampled engine ticks.
 - `Sein.Nav.Show 0` and `Sein.FogOfWar.Show 0`, unless measuring a debug overlay explicitly.
