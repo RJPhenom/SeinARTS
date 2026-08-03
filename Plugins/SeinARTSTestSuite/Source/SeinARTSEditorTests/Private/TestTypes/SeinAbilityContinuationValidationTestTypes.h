@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Abilities/SeinAbility.h"
+#include "Abilities/SeinLatentAction.h"
 #include "Abilities/SeinMoveToProxy.h"
 #include "Engine/LatentActionManager.h"
 #include "Kismet/BlueprintAsyncActionBase.h"
@@ -30,6 +31,37 @@ public:
 		meta = (BlueprintInternalUseOnly = "true"))
 	static USeinAbilityContinuationValidationAsyncProxy*
 		StartValidationAsync();
+
+	virtual void Activate() override {}
+};
+
+/** Concrete action deliberately omitted from the production codec registry. */
+UCLASS()
+class USeinAbilityContinuationValidationUnregisteredAction
+	: public USeinLatentAction
+{
+	GENERATED_BODY()
+};
+
+/** Declares an exact action class, but that class has no checkpoint codec. */
+UCLASS()
+class USeinAbilityContinuationValidationUnregisteredProxy
+	: public UBlueprintAsyncActionBase
+{
+	GENERATED_BODY()
+
+public:
+	UPROPERTY(BlueprintAssignable)
+	FSeinAbilityContinuationValidationNoResultDelegate OnFinished;
+
+	UFUNCTION(
+		BlueprintCallable,
+		meta = (
+			BlueprintInternalUseOnly = "true",
+			SeinCheckpointActionClass =
+				"/Script/SeinARTSEditorTests.SeinAbilityContinuationValidationUnregisteredAction"))
+	static USeinAbilityContinuationValidationUnregisteredProxy*
+		StartUnregisteredValidationAsync();
 
 	virtual void Activate() override {}
 };
@@ -76,7 +108,10 @@ public:
 	UPROPERTY(Transient)
 	FSeinMoveToResult UnsafeTransientResult;
 
-	UPROPERTY(meta = (SeinStateIgnore))
+	UPROPERTY(
+		BlueprintReadOnly,
+		Category = "SeinARTS|Test",
+		meta = (SeinStateIgnore))
 	int32 MetadataOnlyIgnoreAttempt = 11;
 
 	UPROPERTY()

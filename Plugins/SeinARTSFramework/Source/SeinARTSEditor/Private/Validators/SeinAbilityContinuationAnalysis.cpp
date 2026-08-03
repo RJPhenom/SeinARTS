@@ -1,6 +1,7 @@
 #include "Validators/SeinAbilityContinuationAnalysis.h"
 
 #include "Abilities/SeinAbility.h"
+#include "Abilities/SeinLatentAction.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphPin.h"
 #include "EdGraphSchema_K2.h"
@@ -21,15 +22,18 @@
 #include "K2Node_MacroInstance.h"
 #include "K2Node_Self.h"
 #include "K2Node_TemporaryVariable.h"
+#include "K2Node_Timeline.h"
 #include "K2Node_Tunnel.h"
 #include "K2Node_Variable.h"
 #include "K2Node_VariableSet.h"
 #include "K2Node_Switch.h"
 #include "Serialization/SeinCanonicalStatePropertyPolicy.h"
+#include "Serialization/SeinLatentActionCodecRegistry.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Misc/ScopeExit.h"
 #include "Util/SeinDeterminismRules.h"
 #include "UObject/UnrealType.h"
+#include "UObject/UObjectGlobals.h"
 
 namespace
 {
@@ -38,6 +42,8 @@ namespace
 
 	const FName MoveToResultPinName(TEXT("Result"));
 	const FName SeinContinuationSafeMeta(TEXT("SeinContinuationSafe"));
+	const FName SeinCheckpointActionClassMeta(
+		TEXT("SeinCheckpointActionClass"));
 	const FString MoveToResultStructPath(
 		TEXT("/Script/SeinARTSMovement.SeinMoveToResult"));
 
@@ -50,6 +56,70 @@ namespace
 		const FString Title =
 			Node->GetNodeTitle(ENodeTitleType::ListView).ToString();
 		return Title.IsEmpty() ? Node->GetClass()->GetName() : Title;
+	}
+
+	bool IsCheckpointSupportedAsync(
+		const UK2Node_BaseAsyncTask& AsyncNode,
+		FString* OutReason = nullptr)
+	{
+		auto Fail = [OutReason](FString Reason)
+		{
+			if (OutReason)
+			{
+				*OutReason = MoveTemp(Reason);
+			}
+			return false;
+		};
+		if (OutReason)
+		{
+			OutReason->Reset();
+		}
+
+		// Only the stock expansion is modeled by the checkpoint contract.
+		// Custom BaseAsyncTask subclasses may generate additional persistent
+		// frame state and must remain closed until explicitly supported.
+		if (AsyncNode.GetClass() != UK2Node_AsyncAction::StaticClass())
+		{
+			return Fail(FString::Printf(
+				TEXT("custom async K2 node class '%s' has no checkpoint expansion contract"),
+				*AsyncNode.GetClass()->GetPathName()));
+		}
+
+		const UFunction* Factory = AsyncNode.GetFactoryFunction();
+		if (!Factory)
+		{
+			return Fail(TEXT("the async factory function cannot be resolved"));
+		}
+		if (!Factory->HasMetaData(SeinCheckpointActionClassMeta))
+		{
+			return Fail(FString::Printf(
+				TEXT("factory '%s' does not declare an exact SeinCheckpointActionClass"),
+				*Factory->GetPathName()));
+		}
+
+		const FString ClassPath =
+			Factory->GetMetaData(SeinCheckpointActionClassMeta);
+		UClass* ActionClass = FindObject<UClass>(nullptr, *ClassPath);
+		if (!ActionClass)
+		{
+			ActionClass = LoadObject<UClass>(nullptr, *ClassPath);
+		}
+		if (!ActionClass
+			|| !ActionClass->IsChildOf(USeinLatentAction::StaticClass()))
+		{
+			return Fail(FString::Printf(
+				TEXT("factory '%s' declares invalid Sein latent action class '%s'"),
+				*Factory->GetPathName(),
+				*ClassPath));
+		}
+
+		FString CodecError;
+		if (!FSeinLatentActionCodecRegistry::
+				HasRegisteredCodecForExactClass(ActionClass, &CodecError))
+		{
+			return Fail(MoveTemp(CodecError));
+		}
+		return true;
 	}
 
 	bool IsMoveResultStructPin(const UEdGraphPin& Pin)
@@ -163,8 +233,7 @@ namespace
 		// The runtime codec certifies the exact expansion topology emitted by
 		// UK2Node_AsyncAction. Other BaseAsyncTask subclasses fail closed
 		// instead of entering this explicit-state contract.
-		return AsyncNode.GetClass()
-				== UK2Node_AsyncAction::StaticClass()
+		return IsCheckpointSupportedAsync(AsyncNode)
 			&& FindMoveResultResiduePin(AsyncNode);
 	}
 
@@ -603,6 +672,13 @@ namespace
 		return true;
 	}
 
+	const UEdGraphPin* FindVariableSetValuePin(
+		const UK2Node_VariableSet& Variable)
+	{
+		const UEdGraphPin* Pin = Variable.FindPin(Variable.GetVarName());
+		return Pin && Pin->Direction == EGPD_Input ? Pin : nullptr;
+	}
+
 	class FResultUseAnalysis
 	{
 	public:
@@ -646,12 +722,12 @@ namespace
 					if (!IsSerializableSelfMember(
 							Blueprint,
 							*Variable,
-							Variable->GetValuePin(),
+							FindVariableSetValuePin(*Variable),
 							MemberReason))
 					{
 						AddFinding(
 							Variable,
-							Variable->GetValuePin(),
+							FindVariableSetValuePin(*Variable),
 							FString::Printf(
 								TEXT("Result is promoted into %s"),
 								*MemberReason),
@@ -865,7 +941,7 @@ namespace
 					if (!IsSerializableSelfMember(
 							Blueprint,
 							*Variable,
-							Variable->GetValuePin(),
+							FindVariableSetValuePin(*Variable),
 							MemberReason))
 					{
 						OutReason = FString::Printf(
@@ -939,10 +1015,202 @@ namespace
 		TMap<FName, FString> FailedFunctions;
 		TSet<FName> ActiveFunctions;
 	};
+
+	struct FContinuationGraphScan
+	{
+		const UEdGraph* Graph = nullptr;
+		/** The source-Blueprint node through which a nested graph is reached. */
+		const UEdGraphNode* AttributionNode = nullptr;
+	};
+
+	void AddBoundaryFinding(
+		ESeinAbilityContinuationFindingKind Kind,
+		const UEdGraphNode* ReportNode,
+		const UEdGraphNode* InternalNode,
+		FString Reason,
+		TArray<FSeinAbilityContinuationFinding>& Findings,
+		TSet<FString>& FindingKeys)
+	{
+		const UEdGraphNode* Node = ReportNode ? ReportNode : InternalNode;
+		const FString Key = FString::Printf(
+			TEXT("%u|%s|%s"),
+			static_cast<uint8>(Kind),
+			Node ? *Node->GetPathName() : TEXT("none"),
+			InternalNode
+				? *InternalNode->GetPathName() : TEXT("none"));
+		if (FindingKeys.Contains(Key))
+		{
+			return;
+		}
+		FindingKeys.Add(Key);
+
+		if (ReportNode && InternalNode && ReportNode != InternalNode)
+		{
+			Reason += FString::Printf(
+				TEXT(" (expanded node '%s' in '%s')"),
+				*DescribeNode(InternalNode),
+				*InternalNode->GetPathName());
+		}
+		FSeinAbilityContinuationFinding& Finding = Findings.AddDefaulted_GetRef();
+		Finding.AsyncNode = Node;
+		Finding.SourceNode = Node;
+		Finding.Reason = MoveTemp(Reason);
+		Finding.Kind = Kind;
+	}
+
+	void AnalyzeCheckpointBoundaries(
+		const UBlueprint& Blueprint,
+		TArray<FSeinAbilityContinuationFinding>& Findings,
+		TSet<FString>& FindingKeys)
+	{
+		TArray<FContinuationGraphScan> Queue;
+		auto AddRootGraphs = [&Queue](const TArray<TObjectPtr<UEdGraph>>& Graphs)
+		{
+			for (const UEdGraph* Graph : Graphs)
+			{
+				if (Graph)
+				{
+					Queue.Add({Graph, nullptr});
+				}
+			}
+		};
+		AddRootGraphs(Blueprint.UbergraphPages);
+		AddRootGraphs(Blueprint.FunctionGraphs);
+		AddRootGraphs(Blueprint.DelegateSignatureGraphs);
+
+		TSet<FString> VisitedGraphs;
+		int32 AnalyzedNodes = 0;
+		for (int32 QueueIndex = 0; QueueIndex < Queue.Num(); ++QueueIndex)
+		{
+			const FContinuationGraphScan& Scan = Queue[QueueIndex];
+			if (!Scan.Graph)
+			{
+				continue;
+			}
+			const FString VisitKey = FString::Printf(
+				TEXT("%s|%s"),
+				*Scan.Graph->GetPathName(),
+				Scan.AttributionNode
+					? *Scan.AttributionNode->GetPathName() : TEXT("root"));
+			if (VisitedGraphs.Contains(VisitKey))
+			{
+				continue;
+			}
+			VisitedGraphs.Add(VisitKey);
+
+			TArray<const UEdGraphNode*> Nodes;
+			Nodes.Reserve(Scan.Graph->Nodes.Num());
+			for (const UEdGraphNode* Node : Scan.Graph->Nodes)
+			{
+				if (Node)
+				{
+					Nodes.Add(Node);
+				}
+			}
+			Nodes.Sort(
+				[](const UEdGraphNode& A, const UEdGraphNode& B)
+				{
+					return A.NodeGuid != B.NodeGuid
+						? A.NodeGuid < B.NodeGuid
+						: A.GetPathName() < B.GetPathName();
+				});
+
+			for (const UEdGraphNode* Node : Nodes)
+			{
+				if (++AnalyzedNodes > MaxAnalyzedNodes)
+				{
+					AddBoundaryFinding(
+						ESeinAbilityContinuationFindingKind::
+							UninspectableContinuationGraph,
+						Scan.AttributionNode,
+						Node,
+						TEXT("the ability's expanded continuation graph exceeds the bounded checkpoint analysis"),
+						Findings,
+						FindingKeys);
+					return;
+				}
+
+				const UEdGraphNode* ReportNode =
+					Scan.AttributionNode ? Scan.AttributionNode : Node;
+				if (const UK2Node_BaseAsyncTask* Async =
+						Cast<UK2Node_BaseAsyncTask>(Node))
+				{
+					FString Reason;
+					if (!IsCheckpointSupportedAsync(*Async, &Reason))
+					{
+						AddBoundaryFinding(
+							ESeinAbilityContinuationFindingKind::
+								UnsupportedAsyncBoundary,
+							ReportNode,
+							Node,
+							MoveTemp(Reason),
+							Findings,
+							FindingKeys);
+					}
+				}
+				if (const UK2Node_CallFunction* Call =
+						Cast<UK2Node_CallFunction>(Node);
+					Call && Call->IsLatentFunction())
+				{
+					const UFunction* Function = Call->GetTargetFunction();
+					AddBoundaryFinding(
+						ESeinAbilityContinuationFindingKind::
+							UnsupportedLatentFunction,
+						ReportNode,
+						Node,
+						FString::Printf(
+							TEXT("UE latent function '%s' stores resume state outside the Sein checkpoint"),
+							Function
+								? *Function->GetPathName()
+								: *DescribeNode(Call)),
+						Findings,
+						FindingKeys);
+				}
+				if (Node->IsA<UK2Node_Timeline>())
+				{
+					AddBoundaryFinding(
+						ESeinAbilityContinuationFindingKind::
+							UnsupportedTimeline,
+						ReportNode,
+						Node,
+						TEXT("Blueprint Timeline playback state is outside the Sein checkpoint"),
+						Findings,
+						FindingKeys);
+				}
+
+				const UEdGraphNode* NestedAttribution =
+					Scan.AttributionNode ? Scan.AttributionNode : Node;
+				if (const UK2Node_MacroInstance* Macro =
+						Cast<UK2Node_MacroInstance>(Node))
+				{
+					if (const UEdGraph* MacroGraph = Macro->GetMacroGraph())
+					{
+						Queue.Add({MacroGraph, NestedAttribution});
+					}
+				}
+				for (const UEdGraph* SubGraph : Node->GetSubGraphs())
+				{
+					if (SubGraph)
+					{
+						Queue.Add({SubGraph, NestedAttribution});
+					}
+				}
+			}
+		}
+	}
 }
 
 FString FSeinAbilityContinuationFinding::ToDiagnostic() const
 {
+	if (Kind != ESeinAbilityContinuationFindingKind::
+			UnsafeMoveToResultResidue)
+	{
+		return FString::Printf(
+			TEXT("[SEIN-CHECKPOINT-CONTINUATION] Unsupported checkpoint continuation at '%s' (%s). Ability Blueprints may cross time only through an exact admitted Sein async factory whose declared latent-action class has a registered checkpoint codec. Persist ordinary values in deterministic ability/component state; replace UE latent, Timeline, or unregistered async work with a checkpoint-aware Sein action."),
+			*DescribeNode(AsyncNode),
+			*Reason);
+	}
+
 	const FString SourceLabel = SourcePin.IsNone()
 		? DescribeNode(SourceNode)
 		: FString::Printf(
@@ -1008,6 +1276,10 @@ void FSeinAbilityContinuationAnalysis::Analyze(
 		});
 
 	TSet<FString> FindingKeys;
+	AnalyzeCheckpointBoundaries(
+		Blueprint,
+		OutFindings,
+		FindingKeys);
 	for (const UK2Node_BaseAsyncTask* AsyncNode : AsyncNodes)
 	{
 		const UEdGraphPin* ResultPin =

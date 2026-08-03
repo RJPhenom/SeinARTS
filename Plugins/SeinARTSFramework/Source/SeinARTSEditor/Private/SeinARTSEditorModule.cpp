@@ -187,13 +187,13 @@ namespace SeinAbilityContinuationCompilerGate
 		FSeinAbilityContinuationAnalysis::Analyze(*Blueprint, Findings);
 		for (const FSeinAbilityContinuationFinding& Finding : Findings)
 		{
-			const UEdGraphNode* AsyncNode = Finding.AsyncNode;
+			const UEdGraphNode* BoundaryNode = Finding.AsyncNode;
 			const UEdGraphNode* SourceNode =
-				Finding.SourceNode ? Finding.SourceNode : AsyncNode;
+				Finding.SourceNode ? Finding.SourceNode : BoundaryNode;
 			Blueprint->Message_Error(
 				Finding.ToDiagnostic()
-					+ TEXT(" Async node: @@. Unsafe source: @@."),
-				AsyncNode,
+					+ TEXT(" Boundary node: @@. Related source: @@."),
+				BoundaryNode,
 				SourceNode);
 		}
 	}

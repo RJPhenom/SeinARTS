@@ -976,7 +976,7 @@ namespace
 							Findings.Num() - ReportedCount)
 						: FString();
 					OutError = FString::Printf(
-						TEXT("Ability Blueprint '%s' violates the deterministic Move To continuation contract. Persist future-needed values in deterministic ability state before downstream async boundaries, then compile and save the Blueprint:\n- %s%s"),
+						TEXT("Ability Blueprint '%s' violates the deterministic checkpoint continuation contract. Use only admitted Sein async actions, persist future-needed values in deterministic ability state, then compile and save the Blueprint:\n- %s%s"),
 						*Asset.GetObjectPathString(),
 						*FString::Join(
 							Diagnostics,

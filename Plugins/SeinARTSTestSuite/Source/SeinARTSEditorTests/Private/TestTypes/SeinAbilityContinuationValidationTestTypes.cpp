@@ -7,6 +7,14 @@ USeinAbilityContinuationValidationAsyncProxy::StartValidationAsync()
 		USeinAbilityContinuationValidationAsyncProxy>();
 }
 
+USeinAbilityContinuationValidationUnregisteredProxy*
+USeinAbilityContinuationValidationUnregisteredProxy::
+	StartUnregisteredValidationAsync()
+{
+	return NewObject<
+		USeinAbilityContinuationValidationUnregisteredProxy>();
+}
+
 USeinAbilityContinuationValidationHeterogeneousAsyncProxy*
 USeinAbilityContinuationValidationHeterogeneousAsyncProxy::
 	StartHeterogeneousValidationAsync()

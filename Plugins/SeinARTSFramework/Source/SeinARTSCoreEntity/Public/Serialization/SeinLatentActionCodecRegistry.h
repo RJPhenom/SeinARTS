@@ -275,6 +275,14 @@ public:
 
 	static int32 GetRegisteredCodecCount();
 
+	/** Authoring-time exact-class admission query. This inspects the live
+	 *  process registry, not a world's frozen manifest, and exists so editor
+	 *  compiler/save/cook gates can prove an async factory's declared action
+	 *  class actually has a codec before admitting the node. */
+	static bool HasRegisteredCodecForExactClass(
+		const UClass* ExactClass,
+		FString* OutError = nullptr);
+
 #if WITH_DEV_AUTOMATION_TESTS
 	/**
 	 * Test-only tamper helper. Preserves record order/ordinals and recomputes

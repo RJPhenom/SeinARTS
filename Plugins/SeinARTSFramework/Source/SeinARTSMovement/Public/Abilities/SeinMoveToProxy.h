@@ -50,7 +50,7 @@ namespace UE::SeinARTSTests
  * event channel; fields that do not apply to that channel retain their
  * defaults.
  */
-USTRUCT(BlueprintType)
+USTRUCT(BlueprintType, meta = (SeinDeterministic))
 struct SEINARTSMOVEMENT_API FSeinMoveToResult
 {
 	GENERATED_BODY()
@@ -108,7 +108,8 @@ public:
 	 *  `FSeinNavigationComponent::AcceptanceRadius`. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Ability|Movement",
 	          meta = (BlueprintInternalUseOnly = "true", DefaultToSelf = "Ability",
-	                  DisplayName = "Move To"))
+	                  DisplayName = "Move To",
+	                  SeinCheckpointActionClass = "/Script/SeinARTSMovement.SeinMoveToAction"))
 	static USeinMoveToProxy* SeinMoveTo(
 		USeinAbility* Ability,
 		FFixedVector Destination);

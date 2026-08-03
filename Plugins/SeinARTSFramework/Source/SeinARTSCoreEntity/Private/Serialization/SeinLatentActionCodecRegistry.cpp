@@ -1757,3 +1757,38 @@ int32 FSeinLatentActionCodecRegistry::GetRegisteredCodecCount()
 	}
 	return Count;
 }
+
+bool FSeinLatentActionCodecRegistry::HasRegisteredCodecForExactClass(
+	const UClass* ExactClass,
+	FString* OutError)
+{
+	check(IsInGameThread());
+	SetError(OutError, FString());
+	if (!ExactClass
+		|| !ExactClass->IsChildOf(USeinLatentAction::StaticClass())
+		|| ExactClass->HasAnyClassFlags(
+			CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists))
+	{
+		SetError(
+			OutError,
+			TEXT("Checkpoint authoring requires an exact concrete USeinLatentAction class."));
+		return false;
+	}
+
+	const FCodecEntry* Entry = Registry().FindByPredicate(
+		[ExactClass](const FCodecEntry& Candidate)
+		{
+			return Candidate.ClassPath == ExactClass->GetPathName();
+		});
+	if (!Entry || Entry->Claims.IsEmpty()
+		|| Entry->Claims.Last().Descriptor.SupportedClass != ExactClass)
+	{
+		SetError(
+			OutError,
+			FString::Printf(
+				TEXT("Exact latent action class '%s' has no live checkpoint codec registration."),
+				*ExactClass->GetPathName()));
+		return false;
+	}
+	return true;
+}
