@@ -29,7 +29,7 @@ struct SEINARTSCORE_API FFixedPoint
 {
 	GENERATED_BODY()
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Math|Fixed Point")
 	int64 Value;
 
 	// Constructors

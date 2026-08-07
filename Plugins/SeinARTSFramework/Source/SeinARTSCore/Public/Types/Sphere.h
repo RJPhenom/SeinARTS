@@ -26,10 +26,10 @@ struct SEINARTSCORE_API FFixedSphere
 {
 	GENERATED_BODY()
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Math|Sphere")
 	FFixedVector Center;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Math|Sphere")
 	FFixedPoint Radius;
 
 	// Constructors

@@ -4,6 +4,7 @@
  */
 
 #include "System/SeinCoverSubsystem.h"
+#include "Templates/SubclassOf.h"
 #include "System/SeinCoverSystem.h"
 #include "System/SeinCoverDefault.h"
 

@@ -5,6 +5,7 @@
  */
 
 #include "Player/SeinPlayerController.h"
+#include "Engine/GameInstance.h"
 #include "Player/SeinCameraPawn.h"
 #include "Player/SeinTargeterSubsystem.h"
 #include "Player/SeinOrderGesture.h"

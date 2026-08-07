@@ -4,6 +4,7 @@
  */
 
 #include "Lib/SeinCommandBrokerBPFL.h"
+#include "Engine/Engine.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Components/SeinBrokerMembershipData.h"
 #include "Components/SeinSquadComponent.h"

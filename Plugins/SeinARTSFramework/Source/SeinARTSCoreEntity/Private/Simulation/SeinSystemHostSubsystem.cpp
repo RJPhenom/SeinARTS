@@ -5,6 +5,8 @@
  */
 
 #include "Simulation/SeinSystemHostSubsystem.h"
+#include "Engine/World.h"
+#include "Subsystems/SubsystemCollection.h"
 #include "Simulation/SeinWorldSubsystem.h"
 
 void USeinSystemHostSubsystem::Initialize(

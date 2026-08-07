@@ -5,6 +5,8 @@
  */
 
 #include "SeinSquadBPFL.h"
+#include "Engine/Engine.h"
+#include "Engine/World.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Components/SeinSquadComponent.h"
 #include "Components/SeinSquadMemberComponent.h"

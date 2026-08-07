@@ -12,6 +12,7 @@
 #pragma once
 
 #include "Modules/ModuleManager.h"
+#include "EngineDefines.h"
 #include "Serialization/SeinCanonicalStateRegistry.h"
 #include "Serialization/SeinLatentActionCodecRegistry.h"
 #include "Serialization/SeinMovementStateCoverage.h"

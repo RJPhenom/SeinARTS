@@ -4,6 +4,8 @@
  */
 
 #include "Lib/SeinChildTransformsBPFL.h"
+#include "Engine/Engine.h"
+#include "Engine/World.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Types/Entity.h"
 

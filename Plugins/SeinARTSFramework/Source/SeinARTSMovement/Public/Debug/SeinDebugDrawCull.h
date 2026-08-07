@@ -33,6 +33,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "EngineDefines.h"
 
 #if UE_ENABLE_DEBUG_DRAWING
 

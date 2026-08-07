@@ -25,10 +25,10 @@ struct SEINARTSCORE_API FFixedBox
 {
 	GENERATED_BODY()
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Math|Box")
 	FFixedVector Min;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Math|Box")
 	FFixedVector Max;
 
 	// Constructors

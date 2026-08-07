@@ -9,6 +9,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Templates/SubclassOf.h"
 #include "GameplayTagContainer.h"
 #include "Core/SeinEntityHandle.h"
 #include "Components/SeinComponent.h"

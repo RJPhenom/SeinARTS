@@ -8,6 +8,7 @@
  */
 
 #include "Movement/SeinTrackedVehicleMovement.h"
+#include "EngineDefines.h"
 // Chassis-generic plan-time toolkit (tangent solves, probes, the full word
 // ladder). Lives under the wheeled name for now — renaming to
 // SeinVehicleManeuver is deferred until the wheeled PIE pass lands so this

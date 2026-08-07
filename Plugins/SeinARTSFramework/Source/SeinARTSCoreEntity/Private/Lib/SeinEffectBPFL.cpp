@@ -6,6 +6,8 @@
  */
 
 #include "Lib/SeinEffectBPFL.h"
+#include "Engine/Engine.h"
+#include "Engine/World.h"
 #include "Simulation/SeinWorldSubsystem.h"
 
 USeinWorldSubsystem* USeinEffectBPFL::GetWorldSubsystem(const UObject* WorldContextObject)

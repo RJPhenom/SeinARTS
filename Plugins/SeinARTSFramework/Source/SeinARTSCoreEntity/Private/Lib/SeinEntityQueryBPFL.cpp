@@ -4,6 +4,8 @@
  */
 
 #include "Lib/SeinEntityQueryBPFL.h"
+#include "Engine/Engine.h"
+#include "Engine/World.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Core/SeinEntityPool.h"
 

@@ -26,11 +26,11 @@ struct SEINARTSCORE_API FFixedTime
 	GENERATED_BODY()
 
 	/** Current tick count. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Math|Time")
 	int64 Tick;
 
 	/** Ticks per second (tick rate). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Math|Time")
 	int32 TickRate;
 
 	// Constructors

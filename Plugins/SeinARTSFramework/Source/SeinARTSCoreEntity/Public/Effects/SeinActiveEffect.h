@@ -9,6 +9,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Templates/SubclassOf.h"
 #include "Abilities/SeinAbility.h"
 #include "Types/FixedPoint.h"
 #include "Core/SeinEntityHandle.h"

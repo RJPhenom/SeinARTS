@@ -24,6 +24,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Containers/Ticker.h"
 #include "UObject/Object.h"
 #include "UObject/SoftObjectPtr.h"
 #include "Core/SeinPlayerID.h"

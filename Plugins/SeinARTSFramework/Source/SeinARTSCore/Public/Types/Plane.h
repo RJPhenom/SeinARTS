@@ -28,11 +28,11 @@ struct SEINARTSCORE_API FFixedPlane
 	GENERATED_BODY()
 
 	/** Normal vector of the plane (should be normalized). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Math|Plane")
 	FFixedVector Normal;
 
 	/** Distance from origin along the normal. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Math|Plane")
 	FFixedPoint D;
 
 	// Constructors

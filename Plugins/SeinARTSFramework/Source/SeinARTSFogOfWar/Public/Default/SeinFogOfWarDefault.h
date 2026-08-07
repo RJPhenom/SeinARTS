@@ -36,6 +36,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Engine/EngineTypes.h"
 #include "SeinFogOfWar.h"
 #include "SeinLevelLayerProvider.h"
 #include "Core/SeinPlayerID.h"

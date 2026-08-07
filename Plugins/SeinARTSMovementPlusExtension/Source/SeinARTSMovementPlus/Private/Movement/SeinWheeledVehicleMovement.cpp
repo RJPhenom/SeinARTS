@@ -6,6 +6,7 @@
  */
 
 #include "Movement/SeinWheeledVehicleMovement.h"
+#include "EngineDefines.h"
 #include "Movement/SeinWheeledManeuver.h"
 #include "Movement/SeinPlannerHandle.h"
 #include "Movement/SeinMoverHandle.h"

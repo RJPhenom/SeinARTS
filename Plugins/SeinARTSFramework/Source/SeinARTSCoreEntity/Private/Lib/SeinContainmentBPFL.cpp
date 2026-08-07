@@ -4,6 +4,7 @@
  */
 
 #include "Lib/SeinContainmentBPFL.h"
+#include "Engine/Engine.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Components/SeinAttachmentSpec.h"
 #include "Engine/World.h"

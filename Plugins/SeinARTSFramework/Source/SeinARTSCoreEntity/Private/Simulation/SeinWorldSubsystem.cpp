@@ -5,6 +5,7 @@
  */
 
 #include "Simulation/SeinWorldSubsystem.h"
+#include "Engine/World.h"
 #include "Simulation/SeinActorBridgeSubsystem.h"
 #include "Actor/SeinActor.h"
 #include "AI/SeinAIController.h"

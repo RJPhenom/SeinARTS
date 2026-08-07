@@ -37,6 +37,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Templates/SubclassOf.h"
 #include "Core/SeinTickPhase.h"
 #include "Core/SeinSystemPriority.h"
 #include "Simulation/SeinWorldSubsystem.h"

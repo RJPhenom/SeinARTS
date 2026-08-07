@@ -4,6 +4,7 @@
  */
 
 #include "Lib/SeinReplayBPFL.h"
+#include "Engine/Engine.h"
 #include "Serialization/SeinCanonicalStateCodec.h"
 #include "Settings/PluginSettings.h"
 #include "Simulation/SeinWorldSubsystem.h"

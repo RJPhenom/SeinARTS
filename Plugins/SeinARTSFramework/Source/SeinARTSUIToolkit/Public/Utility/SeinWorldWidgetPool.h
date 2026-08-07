@@ -8,6 +8,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Templates/SubclassOf.h"
 #include "Core/SeinEntityHandle.h"
 #include "SeinWorldWidgetPool.generated.h"
 

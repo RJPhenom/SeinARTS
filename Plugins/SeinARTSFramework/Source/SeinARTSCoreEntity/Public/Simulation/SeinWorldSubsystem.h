@@ -7,6 +7,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Containers/Ticker.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "Types/Entity.h"
 #include "Types/EntityID.h"

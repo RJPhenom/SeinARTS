@@ -6,6 +6,8 @@
  */
 
 #include "Lib/SeinEntityLookupBPFL.h"
+#include "Engine/Engine.h"
+#include "Engine/World.h"
 #include "Simulation/SeinWorldSubsystem.h"
 
 USeinWorldSubsystem* USeinEntityLookupBPFL::GetWorldSubsystem(const UObject* WorldContextObject)

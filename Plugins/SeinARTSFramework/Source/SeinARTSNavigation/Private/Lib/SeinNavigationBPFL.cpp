@@ -4,6 +4,7 @@
  */
 
 #include "Lib/SeinNavigationBPFL.h"
+#include "Engine/World.h"
 #include "SeinNavigation.h"
 #include "SeinNavigationSubsystem.h"
 #include "Settings/PluginSettings.h"

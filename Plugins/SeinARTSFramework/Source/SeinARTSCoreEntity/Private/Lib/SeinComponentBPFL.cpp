@@ -4,6 +4,8 @@
  */
 
 #include "Lib/SeinComponentBPFL.h"
+#include "Engine/Engine.h"
+#include "Engine/World.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Simulation/ComponentStorage.h"
 

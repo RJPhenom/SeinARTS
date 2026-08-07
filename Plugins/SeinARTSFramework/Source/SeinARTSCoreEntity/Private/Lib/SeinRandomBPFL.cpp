@@ -4,6 +4,8 @@
  */
 
 #include "Lib/SeinRandomBPFL.h"
+#include "Engine/Engine.h"
+#include "Engine/World.h"
 #include "Simulation/SeinWorldSubsystem.h"
 
 USeinWorldSubsystem* USeinRandomBPFL::GetWorldSubsystem(const UObject* WorldContextObject)
