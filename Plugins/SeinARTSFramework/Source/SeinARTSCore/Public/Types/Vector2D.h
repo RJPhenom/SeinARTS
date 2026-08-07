@@ -23,10 +23,10 @@ struct SEINARTSCORE_API FFixedVector2D
 {
 	GENERATED_BODY()
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Math|Vector 2D")
 	FFixedPoint X;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Math|Vector 2D")
 	FFixedPoint Y;
 
 	// Constructors

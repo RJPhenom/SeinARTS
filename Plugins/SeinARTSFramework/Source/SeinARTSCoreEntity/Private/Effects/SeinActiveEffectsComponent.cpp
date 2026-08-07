@@ -6,6 +6,7 @@
  */
 
 #include "Components/SeinActiveEffectsComponent.h"
+#include "Templates/SubclassOf.h"
 #include "Effects/SeinEffect.h"
 
 namespace SeinActiveEffectsInternal

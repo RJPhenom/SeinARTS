@@ -5,6 +5,8 @@
  */
 
 #include "Lib/SeinAbilityBPFL.h"
+#include "Engine/Engine.h"
+#include "Engine/World.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Components/SeinAbilityComponent.h"
 #include "Components/SeinBrokerMembershipData.h"

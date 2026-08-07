@@ -4,6 +4,7 @@
  */
 
 #include "Data/SeinReplayHeader.h"
+#include "UObject/Package.h"
 
 #include "Engine/World.h"
 #include "Misc/NetworkVersion.h"

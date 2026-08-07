@@ -1,4 +1,5 @@
 #include "Serialization/SeinCanonicalReflectedStateDigest.h"
+#include "UObject/TextProperty.h"
 
 #include "GameplayTagContainer.h"
 #include "Serialization/SeinCanonicalInitialStateDigest.h"

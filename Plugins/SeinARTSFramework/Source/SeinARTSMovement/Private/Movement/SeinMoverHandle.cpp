@@ -7,6 +7,7 @@
  */
 
 #include "Movement/SeinMoverHandle.h"
+#include "EngineDefines.h"
 #include "Movement/SeinMovement.h"
 #include "Components/SeinMovementComponent.h"
 #include "Components/SeinNavigationComponent.h"

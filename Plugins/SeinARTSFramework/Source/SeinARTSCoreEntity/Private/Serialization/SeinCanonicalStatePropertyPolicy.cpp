@@ -4,6 +4,7 @@
  */
 
 #include "Serialization/SeinCanonicalStatePropertyPolicy.h"
+#include "UObject/TextProperty.h"
 
 #include "Abilities/SeinAbility.h"
 #include "Abilities/SeinTargeterSpec.h"

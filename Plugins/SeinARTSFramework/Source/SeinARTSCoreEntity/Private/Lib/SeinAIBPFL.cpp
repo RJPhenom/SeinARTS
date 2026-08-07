@@ -4,6 +4,7 @@
  */
 
 #include "Lib/SeinAIBPFL.h"
+#include "Engine/Engine.h"
 #include "AI/SeinAIController.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Input/SeinCommand.h"

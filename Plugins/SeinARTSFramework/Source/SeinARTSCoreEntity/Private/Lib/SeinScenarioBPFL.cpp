@@ -4,6 +4,7 @@
  */
 
 #include "Lib/SeinScenarioBPFL.h"
+#include "Engine/Engine.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Events/SeinVisualEvent.h"
 #include "Engine/World.h"

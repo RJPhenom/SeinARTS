@@ -4,6 +4,7 @@
  */
 
 #include "Serialization/SeinMovementCanonicalStateProvider.h"
+#include "Engine/World.h"
 
 #include "Components/SeinMovementComponent.h"
 #include "Core/SeinParallel.h"

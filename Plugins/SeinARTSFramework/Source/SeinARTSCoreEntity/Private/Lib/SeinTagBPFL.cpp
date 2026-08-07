@@ -7,6 +7,8 @@
  */
 
 #include "Lib/SeinTagBPFL.h"
+#include "Engine/Engine.h"
+#include "Engine/World.h"
 #include "Simulation/SeinWorldSubsystem.h"
 
 USeinWorldSubsystem* USeinTagBPFL::GetWorldSubsystem(const UObject* WorldContextObject)

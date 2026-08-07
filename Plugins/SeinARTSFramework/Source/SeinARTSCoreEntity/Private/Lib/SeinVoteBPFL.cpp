@@ -4,6 +4,7 @@
  */
 
 #include "Lib/SeinVoteBPFL.h"
+#include "Engine/Engine.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Input/SeinCommand.h"
 #include "Tags/SeinARTSGameplayTags.h"

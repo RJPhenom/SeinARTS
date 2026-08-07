@@ -5,6 +5,7 @@
  */
 
 #include "HUD/SeinHUD.h"
+#include "Engine/Engine.h"
 #include "Player/SeinPlayerController.h"
 #include "Debug/SeinCommandLogSubsystem.h"
 #include "Simulation/SeinWorldSubsystem.h"

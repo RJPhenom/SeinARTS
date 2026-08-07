@@ -5,6 +5,8 @@
  */
 
 #include "Lib/SeinSimMutationBPFL.h"
+#include "Engine/Engine.h"
+#include "Engine/World.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Simulation/ComponentStorage.h"
 #include "Core/SeinEntityPool.h"

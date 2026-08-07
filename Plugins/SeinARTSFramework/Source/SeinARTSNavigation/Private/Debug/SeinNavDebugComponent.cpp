@@ -20,6 +20,7 @@
  */
 
 #include "Debug/SeinNavDebugComponent.h"
+#include "SceneView.h"
 #include "SeinARTSNavigationModule.h"
 #include "SeinNavigation.h"
 #include "SeinNavigationSubsystem.h"

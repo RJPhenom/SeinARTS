@@ -28,11 +28,11 @@ struct SEINARTSCORE_API FFixedRay
 	GENERATED_BODY()
 
 	/** Origin point of the ray. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Math|Ray")
 	FFixedVector Origin;
 
 	/** Direction vector of the ray (should be normalized). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Math|Ray")
 	FFixedVector Direction;
 
 	// Constructors

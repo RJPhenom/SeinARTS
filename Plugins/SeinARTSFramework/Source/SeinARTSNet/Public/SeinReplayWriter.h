@@ -12,6 +12,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Async/Future.h"
 #include "UObject/Object.h"
 #include "Data/SeinReplayHeader.h"
 #include "SeinNetProtocolTypes.h"

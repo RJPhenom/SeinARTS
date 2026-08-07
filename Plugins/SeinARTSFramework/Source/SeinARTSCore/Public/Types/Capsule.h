@@ -28,15 +28,15 @@ struct SEINARTSCORE_API FFixedCapsule
 	GENERATED_BODY()
 
 	/** Start point of the capsule's central axis. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Math|Capsule")
 	FFixedVector Start;
 
 	/** End point of the capsule's central axis. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Math|Capsule")
 	FFixedVector End;
 
 	/** Radius of the capsule. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Math|Capsule")
 	FFixedPoint Radius;
 
 	// Constructors

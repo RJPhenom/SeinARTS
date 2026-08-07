@@ -15,6 +15,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Engine/World.h"
 #include "Core/SeinEntityHandle.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "SeinCoverSubsystem.generated.h"

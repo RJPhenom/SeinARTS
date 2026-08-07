@@ -25,15 +25,15 @@ struct SEINARTSCORE_API FFixedRotator
 	GENERATED_BODY()
 
 	/** Pitch in fixed-point degrees */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Math|Rotator")
 	FFixedPoint Pitch;
 
 	/** Yaw in fixed-point degrees */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Math|Rotator")
 	FFixedPoint Yaw;
 
 	/** Roll in fixed-point degrees */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Math|Rotator")
 	FFixedPoint Roll;
 
 	// Constructors

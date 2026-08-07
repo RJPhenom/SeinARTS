@@ -4,6 +4,7 @@
  */
 
 #include "Player/SeinCameraSnapshotSubsystem.h"
+#include "GameFramework/Pawn.h"
 
 #include "Data/SeinWorldSnapshot.h"
 #include "Engine/World.h"

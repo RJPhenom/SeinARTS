@@ -4,6 +4,7 @@
  */
 
 #include "Serialization/SeinPoolObjectCodecRegistry.h"
+#include "UObject/TextProperty.h"
 
 #include "Abilities/SeinAbility.h"
 #include "AssetRegistry/AssetRegistryModule.h"

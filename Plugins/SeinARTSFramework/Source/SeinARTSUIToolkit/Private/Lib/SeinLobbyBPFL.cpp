@@ -4,6 +4,7 @@
  */
 
 #include "Lib/SeinLobbyBPFL.h"
+#include "Engine/Engine.h"
 #include "ViewModel/SeinLobbyViewModel.h"
 #include "Core/SeinUISubsystem.h"
 #include "SeinNetSubsystem.h"

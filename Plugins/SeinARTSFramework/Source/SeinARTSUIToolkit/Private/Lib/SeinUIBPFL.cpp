@@ -5,6 +5,7 @@
  */
 
 #include "Lib/SeinUIBPFL.h"
+#include "Engine/Engine.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Simulation/SeinActorBridgeSubsystem.h"
 #include "Actor/SeinActor.h"

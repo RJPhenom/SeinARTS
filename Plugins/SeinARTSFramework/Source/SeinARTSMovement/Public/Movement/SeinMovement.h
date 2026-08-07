@@ -31,6 +31,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "EngineDefines.h"
 #include "UObject/Object.h"
 #include "Core/SeinEntityHandle.h"
 #include "Navigation/SeinNavAgentProfile.h"

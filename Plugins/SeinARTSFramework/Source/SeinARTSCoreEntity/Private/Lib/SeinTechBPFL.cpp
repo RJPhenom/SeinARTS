@@ -5,6 +5,7 @@
  */
 
 #include "Lib/SeinTechBPFL.h"
+#include "Engine/Engine.h"
 #include "Core/SeinPlayerState.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Engine/World.h"

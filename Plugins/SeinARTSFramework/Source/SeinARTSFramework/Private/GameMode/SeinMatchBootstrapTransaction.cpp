@@ -4,6 +4,7 @@
  */
 
 #include "GameMode/SeinMatchBootstrapTransaction.h"
+#include "UObject/Package.h"
 
 #include "Actor/SeinActor.h"
 #include "Actor/SeinEntityComponent.h"

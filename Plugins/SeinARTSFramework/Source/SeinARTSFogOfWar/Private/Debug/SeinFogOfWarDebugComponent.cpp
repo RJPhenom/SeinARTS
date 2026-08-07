@@ -23,6 +23,7 @@
  */
 
 #include "Debug/SeinFogOfWarDebugComponent.h"
+#include "SceneView.h"
 #include "SeinFogOfWar.h"
 #include "SeinFogOfWarSubsystem.h"
 #include "SeinFogOfWarTypes.h"
