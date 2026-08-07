@@ -5,7 +5,9 @@
  */
 
 #include "Simulation/SeinWorldSubsystem.h"
+#include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "Logging/MessageLog.h"
 #include "Simulation/SeinActorBridgeSubsystem.h"
 #include "Actor/SeinActor.h"
 #include "AI/SeinAIController.h"
@@ -751,6 +753,43 @@ void USeinWorldSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		&& bStateSchemaReady
 		&& bSimulationContentReadyForWorld
 		&& InitializeCommandProtocol();
+	if (!bCommandProtocolReady)
+	{
+		// Each failed leg already logged its own detailed error above; this is
+		// the on-screen shout so the disabled protocol can't hide in the log.
+		TArray<FString> DisabledReasons;
+		if (!bSimulationContentReadyForWorld)
+		{
+			DisabledReasons.Add(SimulationContentFailureReason);
+		}
+		if (!bMatchDigestReady)
+		{
+			DisabledReasons.Add(TEXT("default match settings cannot be digested"));
+		}
+		if (!bNativeStateSchemaReady)
+		{
+			DisabledReasons.Add(TEXT("canonical state schema could not freeze"));
+		}
+		if (!bLatentCodecManifestReady)
+		{
+			DisabledReasons.Add(TEXT("latent-action codec manifest could not freeze"));
+		}
+		if (!bConfiguredRecipesReady)
+		{
+			DisabledReasons.Add(TEXT("canonical-state recipe registration failed"));
+		}
+		if (!bPoolCodecManifestReady)
+		{
+			DisabledReasons.Add(TEXT("pool-object codec manifest could not freeze"));
+		}
+		if (DisabledReasons.IsEmpty())
+		{
+			DisabledReasons.Add(TEXT("command protocol initialization failed (see LogSeinSim)"));
+		}
+		ShowSimulationErrorOnScreen(FString::Printf(
+			TEXT("Simulation protocol disabled: %s"),
+			*FString::Join(DisabledReasons, TEXT(" | "))));
+	}
 
 	// Collision broadphase — cell size 200 cm balances bucket fan-out cost
 	// against query precision. Origin = world (0,0,0); levels offset from origin
@@ -1685,6 +1724,8 @@ void USeinWorldSubsystem::FailMatchBootstrapInternal(const FString& Reason)
 	FrozenCanonicalStateWorldBindingFrames.Reset();
 	UE_LOG(LogSeinSim, Error, TEXT("Match bootstrap failed closed: %s"),
 		*MatchBootstrapFailureReason);
+	ShowSimulationErrorOnScreen(FString::Printf(
+		TEXT("Match bootstrap failed: %s"), *MatchBootstrapFailureReason));
 	if (!bMatchBootstrapClosedBroadcast)
 	{
 		bMatchBootstrapClosedBroadcast = true;
@@ -1692,6 +1733,25 @@ void USeinWorldSubsystem::FailMatchBootstrapInternal(const FString& Reason)
 		TGuardValue<bool> ObserverGuard(bObserverCallbackInProgress, true);
 		OnMatchBootstrapClosed.Broadcast(false);
 	}
+}
+
+void USeinWorldSubsystem::ShowSimulationErrorOnScreen(
+	const FString& Message) const
+{
+#if !UE_BUILD_SHIPPING
+	const FString Banner = FString::Printf(TEXT("SEINARTS: %s"), *Message);
+	if (GEngine)
+	{
+		// Keyed to this subsystem instance: reposts replace instead of stack,
+		// and multi-client PIE worlds each keep their own line.
+		GEngine->AddOnScreenDebugMessage(
+			static_cast<uint64>(reinterpret_cast<UPTRINT>(this)),
+			60.0f, FColor::Red, Banner);
+	}
+#if WITH_EDITOR
+	FMessageLog(TEXT("PIE")).Error(FText::FromString(Banner));
+#endif
+#endif
 }
 
 bool USeinWorldSubsystem::FreezeMatchBootstrapNativeContributions(

@@ -1921,6 +1921,11 @@ private:
 		const FSeinSnapshotRestoreAuthorityHandle& Authority) const;
 	void ClearSnapshotRestoreAuthority();
 	void FailMatchBootstrapInternal(const FString& Reason);
+	/** Surface a simulation-fatal configuration error where a dev actually
+	 *  looks: red on-screen message (keyed per subsystem, so reposts update in
+	 *  place) plus an editor Message Log entry. Log output stays the canonical
+	 *  record; this is the shout for anyone not watching it. No-op in Shipping. */
+	void ShowSimulationErrorOnScreen(const FString& Message) const;
 	bool ReserveSimulationScheduler(FString& OutError);
 	void ReleaseSimulationScheduler();
 	bool StartSimulationInternal(FString& OutError);
