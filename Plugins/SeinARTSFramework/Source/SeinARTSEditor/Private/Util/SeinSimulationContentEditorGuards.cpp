@@ -22,14 +22,12 @@ namespace
 		ECVF_Default);
 }
 
-bool FSeinSimulationContentPIEAuthorizer::RequestPIEPermission(
-	bool /*bIsSimulateInEditor*/,
-	FString& OutReason) const
+TValueOrError<bool, FText> FSeinSimulationContentPIEAuthorizer::
+	IsPIEAuthorizedInternal(bool /*bIsSimulateInEditor*/) const
 {
 	if (CVarRequireFreshManifestForPIE.GetValueOnGameThread() == 0)
 	{
-		OutReason.Reset();
-		return true;
+		return MakeValue(true);
 	}
 
 	FSeinSimulationContentManifestBuildResult Result;
@@ -37,16 +35,14 @@ bool FSeinSimulationContentPIEAuthorizer::RequestPIEPermission(
 	if (FSeinSimulationContentManifestBuilder::
 		ValidateConfiguredManifest(Result, Error))
 	{
-		OutReason.Reset();
-		return true;
+		return MakeValue(true);
 	}
 
-	OutReason = FString::Printf(
+	return MakeError(FText::FromString(FString::Printf(
 		TEXT("Strict SeinARTS simulation-content PIE validation failed: %s"),
 		Error.IsEmpty()
 			? TEXT("unknown validation error")
-			: *Error);
-	return false;
+			: *Error)));
 }
 
 FSeinSimulationContentCookIntegration::

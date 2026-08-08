@@ -7,7 +7,7 @@
   Thin wrapper over UnrealBuildTool's Build.bat for THIS project. Defaults to the
   editor target (SeinARTSEditor / Win64 / Development). The engine is resolved
   from a known install first, then the registry via the .uproject's
-  EngineAssociation, so this keeps working if 5.7 moves or bumps a patch path.
+  EngineAssociation, so this keeps working if 5.8 moves or bumps a patch path.
   Returns UBT's exit code (0 = success).
 
 .EXAMPLE
@@ -36,7 +36,7 @@ $ProjectRoot = $PSScriptRoot
 $Uproject    = Join-Path $ProjectRoot 'SeinARTS.uproject'
 
 # --- Resolve the engine (known path first, registry fallback) -----------------
-$Engine = 'C:\Program Files\Epic Games\UE_5.7'
+$Engine = 'C:\Program Files\Epic Games\UE_5.8'
 if (-not (Test-Path $Engine)) {
     $assoc = (Get-Content $Uproject -Raw | ConvertFrom-Json).EngineAssociation
     foreach ($root in @('HKLM:\SOFTWARE\EpicGames\Unreal Engine',
@@ -50,7 +50,7 @@ if (-not (Test-Path $Engine)) {
 
 $BuildBat = Join-Path $Engine 'Engine\Build\BatchFiles\Build.bat'
 if (-not (Test-Path $BuildBat)) {
-    throw "UE Build.bat not found at '$BuildBat'. Edit `$Engine in Build.ps1 to point at your UE 5.7 install."
+    throw "UE Build.bat not found at '$BuildBat'. Edit `$Engine in Build.ps1 to point at your UE 5.8 install."
 }
 
 # --- Warn if the editor is open (locked DLLs -> link failure) -----------------

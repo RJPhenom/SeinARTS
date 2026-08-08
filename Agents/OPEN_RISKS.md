@@ -4,7 +4,7 @@ This is the actionable remainder after consolidating the historical audits. It i
 
 ## Release-blocking foundation risks
 
-1. **Launcher UE cannot prove Client/Server targets.** Epic's installed 5.7 distribution rejects
+1. **Launcher UE cannot prove Client/Server targets.** Epic's installed 5.8 distribution rejects
    Client targets before project compilation. Development Client and Dedicated Server must run in
    CI or another source/installed engine distribution that supports those target types. The real
    packaged listen-server/client/reconnect/replay harness is green, but a Game-target listen server

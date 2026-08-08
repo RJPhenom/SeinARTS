@@ -47,8 +47,8 @@ nothing and adds synchronization overhead.
 
 ## Building & compiling
 
-**Do not disc-search for the engine.** It's UE **5.7** at `C:/Program Files/Epic Games/UE_5.7`
-(the `.uproject` `EngineAssociation` is `"5.7"`). Host project: `SeinARTS.uproject`. Editor target:
+**Do not disc-search for the engine.** It's UE **5.8** at `C:/Program Files/Epic Games/UE_5.8`
+(the `.uproject` `EngineAssociation` is `"5.8"`). Host project: `SeinARTS.uproject`. Editor target:
 `SeinARTSEditor`. Use the repo build script:
 
 ```powershell
@@ -61,7 +61,7 @@ nothing and adds synchronization overhead.
 the editor is open, and returns UBT's exit code. Equivalent raw one-liner if the script is ever gone:
 
 ```powershell
-& "C:/Program Files/Epic Games/UE_5.7/Engine/Build/BatchFiles/Build.bat" SeinARTSEditor Win64 Development -Project="D:/Projects/Unreal Engine/SeinARTS/SeinARTS.uproject" -WaitMutex
+& "C:/Program Files/Epic Games/UE_5.8/Engine/Build/BatchFiles/Build.bat" SeinARTSEditor Win64 Development -Project="D:/Projects/Unreal Engine/SeinARTS/SeinARTS.uproject" -WaitMutex
 ```
 
 - **Run builds in the background** (`run_in_background`) — even incremental is tens of seconds; a

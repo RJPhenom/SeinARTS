@@ -1028,7 +1028,7 @@ namespace
 		if (PackageSavedHash.IsZero())
 		{
 			OutError = FString::Printf(
-				TEXT("Package '%s' has no PackageSavedHash. Resave it with Unreal Engine 5.7 before regenerating the manifest."),
+				TEXT("Package '%s' has no PackageSavedHash. Resave it with Unreal Engine 5.8 before regenerating the manifest."),
 				*CorrectCasePackageName);
 			return false;
 		}

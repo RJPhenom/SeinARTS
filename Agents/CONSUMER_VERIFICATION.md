@@ -12,7 +12,7 @@ Run from the repository root:
 & "D:/Projects/Unreal Engine/SeinARTS/Tools/ConsumerMatrix/Verify-ConsumerMatrix.ps1" -SkipClientServer
 
 # Source/installed engine with Client and Server target support: release gate.
-& "D:/Projects/Unreal Engine/SeinARTS/Tools/ConsumerMatrix/Verify-ConsumerMatrix.ps1" -EngineRoot "D:/Engines/UE_5.7"
+& "D:/Projects/Unreal Engine/SeinARTS/Tools/ConsumerMatrix/Verify-ConsumerMatrix.ps1" -EngineRoot "D:/Engines/UE_5.8"
 ```
 
 The tool creates projects beneath ignored `Saved/ConsumerMatrix` for five profiles:
@@ -31,7 +31,7 @@ or `Intermediate` output. Each consumer owns its map and generated simulation-co
 For every selected profile the tool:
 
 1. rejects references to host `/Game/SeinARTS` packages;
-2. builds a fresh UE 5.7 Development Editor target;
+2. builds a fresh UE 5.8 Development Editor target;
 3. generates and reloads the consumer's simulation-content manifest;
 4. loads `/Game/Maps/ConsumerMap` and verifies that exact editor world path;
 5. builds Shipping;

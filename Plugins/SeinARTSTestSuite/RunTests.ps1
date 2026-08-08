@@ -36,7 +36,7 @@ $PluginRoot = $PSScriptRoot
 $ProjectRoot = (Resolve-Path (Join-Path $PluginRoot '..\..')).Path
 $Uproject = Join-Path $ProjectRoot 'SeinARTS.uproject'
 $BuildScript = Join-Path $ProjectRoot 'Build.ps1'
-$EditorCmd = 'C:\Program Files\Epic Games\UE_5.7\Engine\Binaries\Win64\UnrealEditor-Cmd.exe'
+$EditorCmd = 'C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe'
 $SafeSuite = $Suite -replace '[^A-Za-z0-9_.-]', '_'
 $Stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $AttemptId = [Guid]::NewGuid().ToString('N')
@@ -95,7 +95,7 @@ Write-SeinAttemptManifest
 try {
 
 if (-not (Test-Path -LiteralPath $EditorCmd)) {
-	throw "UE 5.7 command-line editor was not found at '$EditorCmd'."
+	throw "UE 5.8 command-line editor was not found at '$EditorCmd'."
 }
 
 $ExtensionPlugins = @(
