@@ -12,10 +12,9 @@
 /** Strict manifest freshness check, disabled by default for normal iteration. */
 class FSeinSimulationContentPIEAuthorizer final : public IPIEAuthorizer
 {
-public:
-	virtual bool RequestPIEPermission(
-		bool bIsSimulateInEditor,
-		FString& OutReason) const override;
+protected:
+	virtual TValueOrError<bool, FText> IsPIEAuthorizedInternal(
+		bool bIsSimulateInEditor) const override;
 };
 
 /** Owns the cook delegate lease and removes it on module shutdown/reload. */

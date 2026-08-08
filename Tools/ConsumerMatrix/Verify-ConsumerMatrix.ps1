@@ -20,7 +20,7 @@ param(
 	[ValidateSet('Framework', 'Cover', 'Squad', 'MovementPlus', 'Full', 'All')]
 	[string] $Profile = 'All',
 
-	[string] $EngineRoot = 'C:\Program Files\Epic Games\UE_5.7',
+	[string] $EngineRoot = 'C:\Program Files\Epic Games\UE_5.8',
 
 	[switch] $SkipCook,
 
@@ -45,7 +45,7 @@ $GeneratedRoot = Join-Path $RepoRoot 'Saved\ConsumerMatrix'
 
 foreach ($Required in @($BuildBat, $EditorCmd, $RunUat)) {
 	if (-not (Test-Path -LiteralPath $Required)) {
-		throw "Required UE 5.7 tool is missing: '$Required'."
+		throw "Required UE 5.8 tool is missing: '$Required'."
 	}
 }
 
@@ -329,7 +329,7 @@ function New-ConsumerProject([string] $ProfileName)
 	)
 	$Uproject = [ordered]@{
 		FileVersion = 3
-		EngineAssociation = '5.7'
+		EngineAssociation = '5.8'
 		Category = 'SeinARTS Consumer Matrix'
 		Description = "Generated clean $ProfileName consumer"
 		Modules = @([ordered]@{
@@ -351,8 +351,8 @@ public class SeinConsumerTarget : TargetRules
 	public SeinConsumerTarget(TargetInfo Target) : base(Target)
 	{
 		Type = TargetType.Game;
-		DefaultBuildSettings = BuildSettingsVersion.V6;
-		IncludeOrderVersion = EngineIncludeOrderVersion.Unreal5_7;
+		DefaultBuildSettings = BuildSettingsVersion.V7;
+		IncludeOrderVersion = EngineIncludeOrderVersion.Unreal5_8;
 		ExtraModuleNames.Add("SeinConsumer");
 	}
 }

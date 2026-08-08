@@ -43,7 +43,7 @@ CI gate because this engine distribution rejects those target types before proje
   - Framework + Squad, with Cover and the bridge physically stripped.
   - Framework + Movement+.
   - Framework + Squad + Cover + CoverSquad bridge + Movement+.
-  - UE 5.7 Editor and Shipping targets locally.
+  - UE 5.8 Editor and Shipping targets locally (originally proven on 5.7; re-proven on 5.8 by the 2026-08 packaging pipeline builds).
   - Clean cook/load of a minimal consumer map and consumer-owned simulation-content manifest.
 - Clean consumers have no hidden dependency on this host project's `/Game/SeinARTS` content.
 - The Framework consumer now drives real packaged Shipping processes through:

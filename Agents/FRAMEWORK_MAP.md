@@ -4,7 +4,7 @@ This is a compact code-navigation map, not an exhaustive user manual. Live sourc
 
 ## Product model
 
-SeinARTS is a deterministic lockstep RTS framework for Unreal Engine 5.7. Authoritative simulation uses 32.32 fixed-point values and generational entity handles. Unreal actors, animation, UI, effects presentation, and rendering consume simulation output; input enters authoritative state through registered commands.
+SeinARTS is a deterministic lockstep RTS framework for Unreal Engine 5.8. Authoritative simulation uses 32.32 fixed-point values and generational entity handles. Unreal actors, animation, UI, effects presentation, and rendering consume simulation output; input enters authoritative state through registered commands.
 
 The Blueprint actor is the unit authoring surface. `ASeinActor` owns one `USeinEntityComponent`, whose `ComponentData` array is copied into reflection-backed simulation storage at spawn.
 

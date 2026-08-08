@@ -8,6 +8,8 @@
 A result is comparable only when these are fixed or recorded:
 
 - UE 5.7 Development Editor executable in standalone `-game` mode.
+  (The recorded baseline below was captured on UE 5.7. The project moved to UE 5.8
+  on 2026-08-08 — the next capture is on 5.8 and starts a fresh comparable series.)
 - `/Game/SeinARTSExamples/Levels/Sandbox`.
 - One complete game world at 1280x720 with audio disabled.
 - A settled 15-second window containing 452 sampled engine ticks.
