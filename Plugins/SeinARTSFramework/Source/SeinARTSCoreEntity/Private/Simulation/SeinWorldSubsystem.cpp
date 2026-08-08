@@ -1739,6 +1739,12 @@ void USeinWorldSubsystem::ShowSimulationErrorOnScreen(
 	const FString& Message) const
 {
 #if !UE_BUILD_SHIPPING
+	// The automation suites trigger these failures deliberately; an extra
+	// error surface would fail every such test on unexpected error output.
+	if (GIsAutomationTesting)
+	{
+		return;
+	}
 	const FString Banner = FString::Printf(TEXT("SEINARTS: %s"), *Message);
 	if (GEngine)
 	{
@@ -1749,7 +1755,12 @@ void USeinWorldSubsystem::ShowSimulationErrorOnScreen(
 			60.0f, FColor::Red, Banner);
 	}
 #if WITH_EDITOR
-	FMessageLog(TEXT("PIE")).Error(FText::FromString(Banner));
+	// The UE_LOG at each call site is the canonical record; without
+	// suppression the Message Log would mirror a duplicate Error line into
+	// the output log.
+	FMessageLog PIEMessageLog(TEXT("PIE"));
+	PIEMessageLog.SuppressLoggingToOutputLog(true);
+	PIEMessageLog.Error(FText::FromString(Banner));
 #endif
 #endif
 }
