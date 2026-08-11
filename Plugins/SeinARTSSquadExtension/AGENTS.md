@@ -1,9 +1,8 @@
 # SeinARTSSquadExtension — Plugin Guide
 
 This opt-in runtime extension adds persistent heterogeneous-slot squads, formation dispatch,
-reinforcement, and squad lifecycle behavior. Read the project-root `AGENTS.md` first. The adjacent
-`CLAUDE.md` remains for Claude compatibility and must not be deleted. It may lag live code, so live
-behavior and this concise guide win when they conflict.
+reinforcement, and squad lifecycle behavior. Read the project-root guide and `Agents/WORKFLOW.md`
+first.
 
 ## Boundary and dependency
 

@@ -1,380 +1,153 @@
 # SeinARTSFramework — Plugin Guide
 
-The core plugin: the deterministic sim, the entity/ability/effect systems, pluggable navigation
-and fog-of-war, movement, lockstep networking, and the entire render/
-editor/UI/gameplay layer.
+The core plugin owns the deterministic simulation, entity/ability/effect infrastructure,
+level data, navigation, movement foundations, fog of war, lockstep transport, and the host
+gameplay/editor/UI layers.
 
-> **Read the project-root `CLAUDE.md` first.** It owns the cross-cutting rules this plugin obeys:
-> the no-worktree hard rule, sim/render separation, determinism, the designer-first / everything-
-> is-an-ability / blueprint-is-the-unit principles, naming conventions, and the "code over
-> comments" rule. This file does not repeat them — it covers framework **mechanics**.
+Read the project-root guide and `Agents/WORKFLOW.md` first. They own cross-plugin invariants,
+build commands, workflow, naming, and verification discipline. This file is intentionally narrower.
 
-The opt-in **Squad** and **Cover** features used to live here; they were extracted into separate
-extension plugins. The framework retains only squad **data** structs (see "Squad data" below); it
-contains **no cover code at all**.
+The Squad, Cover, and Movement+ behaviors are opt-in extensions. Core may expose neutral data
+contracts used by them, but it must never depend on an extension module.
 
----
+## Module map
 
-## Module structure (12 modules)
+| Module | Responsibility |
+|---|---|
+| `SeinARTSCore` | Fixed-point math, deterministic geometry, time, and PRNG. Leaf dependency. |
+| `SeinARTSCoreEntity` | Entity pool/storage, actor bridge, sim tick, commands/brokers, abilities/latent actions, effects/attributes, production, containment, resources, match state, snapshots, and visual events. |
+| `SeinARTSLevelData` | Unified baked substrate, canonical grid, shared traces, layer-provider registry, level volume, and baked channels. |
+| `SeinARTSNavigation` | Abstract navigation contract, shipped A* implementation, path requests, reachability, direction queries, and typed path data. |
+| `SeinARTSMovement` | Abstract movement/avoidance contracts, Basic defaults, persistent movement instances, Move To action/proxy, planner/mover handles, shared steering, and movement driver. |
+| `SeinARTSFogOfWar` | Abstract FoW contract, shipped grid implementation, visibility state/queries, layer bake, and sim-side stamping. |
+| `SeinARTSNet` | Lockstep turn aggregation, relays, lobby, replay, state-hash exchange, and session lifecycle. |
+| `SeinARTSFramework` | Player controller, camera, HUD, selection, targeters/previews, game mode, and match bootstrap. |
+| `SeinARTSUIToolkit` | Read-only view models, selection model, widget pooling, and UI helpers. |
+| `SeinARTSEditor` | Factories, validators, Details customizations, graph pins, thumbnails, and entity-bridge visualization registry. |
+| `SeinARTSGraphNodes` | Uncooked typed Blueprint component get/set nodes. |
+| `SeinARTSFogOfWarEditor` | FoW authoring visualization registered with `SeinARTSEditor`. |
 
-```
-── Sim layer (deterministic; fixed-point; no float/AActor*) ──
-SeinARTSCore         Fixed-point math suite, deterministic primitives, PRNG, geometry, time.
-SeinARTSCoreEntity   The sim heart: entity pool, reflection-backed component storage, the entity
-                     bridge (USeinEntityComponent), the phase-based tick, abilities + latent
-                     actions, effects/modifiers/attributes, command buffer + brokers, production,
-                     containment, tech, resources, match-flow/voting, squad DATA, visual events,
-                     ~26 BPFLs. Also hosts the render-bridge types (ASeinActor, USeinEntityComponent).
-SeinARTSLevelData    The unified level-bake pipeline (CP1.1, Decisions D10–D17): swappable
-                     USeinLevelData substrate (canonical grid + ONE shared trace pass) + the
-                     ISeinLevelLayerProvider registry, ASeinLevelVolume (brush-shape play-area
-                     mask, multi-volume union, per-layer config, the ONE "Bake Level Data"
-                     button, debug-viz component registry), channel-extensible baked asset,
-                     Nav and FoW consume the baked layers through their own providers.
-SeinARTSNavigation   Pluggable nav: abstract USeinNavigation base; ships USeinNavigationAStar
-                     (single-layer 2D grid, synchronous A*, LoS smoothing) as the default/
-                     reference. Bakes as the "Nav" layer provider on SeinARTSLevelData and loads
-                     its runtime grid from the substrate. Owns pathfinding, reachability,
-                     SeinMoveToAction.
-SeinARTSMovement     Movement base + shared steering toolkit: abstract USeinMovement, the
-                     USeinBasicMovement / USeinBasicUnitMovement defaults, USeinMoveToAction + the
-                     "Move To" proxy, the movement BPFL, and the steering/debug show-flags. The
-                     concrete modes (Infantry/Wheeled/Tracked/Hover/Flight) + per-class data moved
-                     to the SeinARTSMovementPlus extension (see root CLAUDE.md).
-SeinARTSFogOfWar     Pluggable vision/FoW: abstract USeinFogOfWar base + default impl; stamping,
-                     visibility queries, show-flag debug viz. Bakes as the "FogOfWar" layer
-                     provider on SeinARTSLevelData (own occluder box-sweep at its own coarser
-                     resolution; adopts the shared ground height, D17).
+Editor companion modules load after `SeinARTSEditor` so registry hooks are available.
 
-── Transport ──
-SeinARTSNet          Lockstep networking: per-PC RPC relay, server-authoritative turn aggregation,
-                     lobby, replay reader/writer, desync gossip, drop-in/out. (Real, not "Phase 0.")
+## Entity and component mechanics
 
-── Render / editor / UI / gameplay layer (reads sim; writes sim only via command buffer) ──
-SeinARTSFramework    Gameplay shell: player controller, camera pawn, HUD (marquee + drag orders),
-                     selection/control groups, targeter subsystem + previews, game mode, match
-                     bootstrap.
-SeinARTSUIToolkit    UI runtime: read-only view-models, selection model, widget pool, UI BPFLs.
-SeinARTSEditor       Content Browser factories, fixed-point pin factory, thumbnails, class picker,
-                     Details customizations, and the entity-bridge visualizer with its
-                     per-component DRAW-CALLBACK REGISTRY (extensions register against this).
-SeinARTSGraphNodes   UncookedOnly: K2Node_SeinGetComponent / SeinSetComponent (typed BP component access).
-SeinARTSFogOfWarEditor  Editor companion to FoW: vision-stamp draw callback on the bridge visualizer.
-```
+- `FSeinEntityPool` is generational. Slot 0 and generation 0 are invalid. Identity comparisons
+  and cache keys must include the generation, not only the slot index.
+- Runtime component storage is reflection-backed `FSeinGenericComponentStorage`, keyed by
+  `UScriptStruct*`. Typed accessors are facades over the raw storage.
+- `ASeinActor` owns the `USeinEntityComponent` actor bridge. Its `ComponentData` is an authoring
+  template copied into sim storage at spawn; it is not a live mirror of runtime components.
+- Blueprint CDO component discovery must use `AActor::GetActorClassDefaultComponents`, which
+  includes native and Blueprint SCS components. `GetComponents` on a CDO is insufficient.
+- Storage may reallocate on `AddComponent`; never retain a component pointer across an add.
+- Entity tags are centralized state on `USeinWorldSubsystem`, not a component payload.
+- Component payloads are pure deterministic data. Put behavior in systems, policies, abilities,
+  effects, controllers, or brokers.
 
-(Editor companions are split into their own `PostEngineInit` modules to avoid a load-order race
-against `SeinARTSEditor`'s registry.)
+## Simulation and state
 
----
+`USeinWorldSubsystem` advances fixed ticks through ordered phases:
 
-## The sim core (`SeinARTSCoreEntity`)
+1. `PreTick`
+2. `CommandProcessing`
+3. `AbilityExecution`
+4. `PostTick`
 
-### Entities & storage
-- **Entity pool** (`FSeinEntityPool`): generational slot pool with free-list recycling. Slot 0 is
-  reserved/invalid. `FSeinEntityHandle` = index + generation; generation 0 = invalid.
-- **Component storage** is reflection-backed and **generic**: all live storage is
-  `FSeinGenericComponentStorage` (implements `ISeinComponentStorage`), keyed by `UScriptStruct*`,
-  storing raw bytes. It handles GC ref collection, reflection-driven deterministic hashing, and
-  archive serialization. There is **no runtime typed-storage registration** — `GetComponent<T>` /
-  `AddComponent<T>` / `MutateComponent<T>` are templated façades over the raw-bytes interface.
-- **The entity bridge** is `USeinEntityComponent` ("SeinARTS Entity Bridge"), auto-attached by
-  `ASeinActor`. Authoring surface = `ComponentData: TArray<FInstancedStruct>` plus `bIsAbstract`,
-  `BaseTags`, and FoW authoring fields. At spawn it injects authored components, then handles
-  transform interpolation and visual-event routing for the render side.
+Registration order, phase, and priority are simulation contracts. New systems need a documented
+position and a deterministic total order. Parallel work must follow parallel-read/serial-apply or
+otherwise prove disjoint deterministic mutation.
 
-### Spawn flow
-`USeinWorldSubsystem::SpawnEntity(ActorClass, …)` acquires a pool slot, walks the CDO's entity
-bridge `ComponentData`, and copies each `FInstancedStruct` into component storage. Use
-`SpawnAbstractEntity` for presence-less entities (e.g. squads were once modeled this way).
+`TimeAccumulator` is intentionally a render/wall-clock `float`; the delta entering simulation is
+fixed-point. Do not make scheduler time part of authoritative state.
 
-### The sim tick — 4 phases
-`USeinWorldSubsystem::TickSimulation → TickSystems` runs registered `ISeinSystem`s, grouped into
-phases and ordered by priority within a phase:
-1. **PreTick** — cooldown reduction, effect expiration, resource income, nav-blocker stamping.
-2. **CommandProcessing** — dequeue the command buffer; process commands.
-3. **AbilityExecution** — `USeinLatentActionManager` ticks running latent actions; the ability tick
-   system ticks active primary + passive abilities (movement runs here).
-4. **PostTick** — command-broker dispatch resolution, deferred destroy cleanup, state hash.
+Every value that can affect a future tick must eventually participate in the canonical state
+contract: hash, capture, restore, reset, replay, and reconnect. Process-local identities such as
+pointer values and `FName` pool indices are never canonical serialization or hash material.
 
-Built-in systems in CoreEntity: AbilityTick, CommandBroker, CollisionBroadphase (PreTick),
-CollisionResolution (PostTick), Cooldown, EffectTick, Lifespan, Production, StateHash. Other
-modules register their own systems into the loop (e.g. `SeinNavBlockerStampSystem` from Nav;
-`FSeinSquadSystem` from the Squad extension).
+Sim-affecting settings owned by this plugin or an extension participate in
+`FSeinConfigFingerprintRegistry` under frozen contributor IDs and exact reflected property names.
 
-**Collision (extent-vs-extent)** is a deterministic layer. Its overlap/separation is authored
-independently of navigation — the overlap test never consults `bBlocksNav` / the nav grid, and nav
-never consults collision. The one nav touch-point: the resolution floor's **hard-barrier gate** refuses
-to push a unit onto a non-walkable cell (baked wall / grid edge) via the pluggable `PassableResolver`
-delegate (cover slots exempt), so a unit is never shoved through a wall or off the grid. Authored on `FSeinExtentsComponent`'s
-collision section (`bCollisionEnabled` / `Mobility` / `ObjectType` / response matrix) against a
-settings-driven channel registry (`USeinARTSCoreSettings::CollisionChannels`). Broadphase =
-`FSeinCollisionSpatialHash` (two-tier: cached static + per-tick dynamic, footprint cell-stamped,
-rebuilt by `FSeinCollisionBroadphaseSystem`); narrowphase = MTV queries in
-`SeinARTSCore/Math/CollisionQueries.h` (planar 2D disc/OBB SAT). `FSeinCollisionResolutionSystem`
-Block-separates with infinite-mass statics (a unit can't be pushed through a wall) and emits
-`CollisionOverlapBegin/End` visual events for Overlap responses. Editor matrix UX (Ignore/Overlap/
-Block per channel) = `FSeinCollisionResponseDetails`. (This replaced the old circle-only
-`PenetrationResolution` + generic `SpatialHash`, which were retired.)
+## Abilities, effects, and commands
 
-> **`TimeAccumulator` is a `float` on purpose** — it's a wall-clock scheduler, not sim state. The
-> delta fed into `TickSystems` is fixed-point (`FFixedPoint::One / FromInt(TickRate)`). Clients can
-> drift on wall clock yet remain bit-identical at any tick N. Don't "fix" it to fixed-point.
+- Gameplay behavior is normally a Blueprintable `USeinAbility`; latent actions provide explicit
+  cooperative multi-tick state.
+- Ability completion is explicit. Terminal latent pins do not automatically end or cancel the
+  owning ability.
+- Ability arbitration is tag-based through blocked, owned, and cancel tags.
+- Commands use a gameplay tag plus `FInstancedStruct` payload. Transport/control plumbing may
+  register command handlers, but ordinary gameplay remains ability-driven.
+- Command brokers expand a logical recipient into deterministic performers. Resolver selection
+  and provider composition require stable identities and ordering.
+- Effects support instance, class-per-player, and player scopes. Identity and future state must
+  remain unambiguous across every storage scope.
 
-### Component payload structs (the `ComponentData` vocabulary)
-All `: FSeinComponent`, all `SeinDeterministic`:
-`FSeinIdentityComponent`, `FSeinAbilityComponent`, `FSeinActiveEffectsComponent`,
-`FSeinProductionComponent`, `FSeinProducibleComponent`, `FSeinConstructionComponent`,
-`FSeinExtentsComponent`, `FSeinMovementComponent`, `FSeinNavigationComponent`,
-`FSeinFogVisibilityComponent`, `FSeinChildTransformsComponent`, `FSeinSquadComponent`,
-`FSeinSquadMemberComponent`, `FSeinCommandBrokerData`, `FSeinBrokerMembershipData`,
-`FSeinContainmentData`, `FSeinContainmentMemberData`, `FSeinAttachmentSpec`, `FSeinTransportSpec`,
-`FSeinGarrisonSpec`, `FSeinLifespanData`. Note: the `FSeinMovementComponent` /
-`FSeinNavigationComponent` payloads are *defined*
-here, but their *systems* live in the Movement / Navigation modules.
+## Pluggable system seams
 
-> **Not components:** entity tags are **not** a component — tag state is centralized in
-> `USeinWorldSubsystem::EntityTagStates`, seeded from `USeinEntityComponent::BaseTags`. FoW
-> visibility is authored on the bridge (its `FSeinFogVisibilityComponent` is `SeinSubData`, hidden
-> from the picker).
+The shipped implementation is a default, not a mandatory genre rule:
 
-### Abilities & latent actions
-- `USeinAbility` (Blueprintable) is the unit of behavior: cost/cooldown, dispatch policy,
-  declarative targeting (`FSeinTargeterSpec`), tag-based arbitration, production/rally helpers,
-  lifecycle hooks. Ability instances are stored as **int32 pool IDs** (Phase-4 indirection), not
-  `TObjectPtr`.
-- `USeinLatentAction` / `USeinLatentActionManager` provide cooperative multi-tick execution with no
-  threads. Shipped actions: `SeinWaitAction` (here) and `SeinMoveToAction` (Movement module).
+- `USeinLevelData` — baked substrate and provider registry.
+- `USeinNavigation` — paths and direction queries.
+- `USeinMovement`, `USeinAvoidance`, and `USeinCollisionResolver` — movement policy and collision.
+- `USeinFogOfWar` — authoritative visibility implementation.
 
-### Effects, modifiers, attributes
-- **Attributes** use FProperty reflection: designers define USTRUCT attribute sets; modifiers
-  target fields by `FName` + `UScriptStruct*`. Any field type is supported, not just `FFixedPoint`.
-- **Modifiers** have three scopes via `ESeinModifierScope`: **Instance** (one entity, via
-  `FSeinActiveEffectsComponent`), **Class** (all entities of an identity tag for one player, via
-  `FSeinPlayerState::ClassEffects` + the modifier's `TargetClassTag`), **Player** (whole-player, via
-  `FSeinPlayerState::PlayerEffects`). Class scope is per-player: player A's Infantry buff doesn't
-  touch player B's Infantry.
-- **Effects** (`USeinEffect`, Blueprintable) carry modifiers + granted tags and route by scope.
-  Duration via `ESeinEffectDurationMode` (Instant/Persistent/Timed).
+Concrete classes are selected through project settings or per-entity soft class paths. Base
+modules must tolerate an owning optional module being absent; an unbound cross-module resolver
+uses its documented neutral fallback.
 
-### Commands & brokers
-- The command buffer holds `FSeinCommand`s. **Command type is a gameplay tag** (`CommandType`),
-  **not** an enum, with an `FInstancedStruct Payload`. Observer (non-sim-affecting) commands exist.
-- **Command brokers** resolve which entities a command fans out to (e.g. a squad-targeted order →
-  its members). `USeinDefaultCommandBrokerResolver` is the base; the Squad and Cover extensions
-  subclass it. Brokers are registered per entity via `World.RegisterCommandBrokerResolver`.
+The unified level bake is synchronous and writes regenerable assets beneath the configured
+LevelData folder. Navigation and FoW contribute independent layer providers and may use different
+resolutions while sharing the substrate coordinate contract.
 
-### Other sim systems
-- **Production**: `FSeinProductionComponent` (single queue per building); `FSeinProducibleComponent`
-  carries cost and `GrantedTechEffect`. Tech is emergent from build/research chains, not a graph asset.
-- **Containment**: enter/exit/attach — garrison, transport, attachment (`FSeinContainmentData`,
-  `FSeinGarrisonSpec`, `FSeinTransportSpec`, `FSeinAttachmentSpec`).
-- **Resources, match-flow, voting, scenario, snapshot capture/restore** all have BPFLs.
-- **Visual events** (`FSeinVisualEvent`): the one-way sim→render signal channel; the render layer
-  drains and reacts.
+`FSeinPath` is a typed-segment seam. Navigation may emit topology kinds such as `Field` or
+`AbstractEdge`; per-unit `USeinMovement::PlanPath` may shape kinematic kinds through the
+`USeinPlannerHandle`/`USeinMoverHandle` seam. The shipped A* emits straight segments. Movement+
+Wheeled and Tracked can prepend a bounded, clearance-probed Reeds-Shepp-style start maneuver as typed
+`Arc`/`Straight` segments before runtime steering follows the coarse tail. That is a curated candidate
+set, not a general Reeds-Shepp/Dubins route search; do not broaden it or replace it without the
+Movement+ Vehicle Gym and product-feel decision.
 
-### Squad data (system lives in the extension)
-Only squad **data + pure-read helpers** remain in CoreEntity: `FSeinSquadComponent` (slots, leader,
-reinforce queue, `GetLiveMembers`/`ComputeCentroid`, `ESeinSquadContainmentMode`),
-`FSeinSquadMemberComponent`, `FSeinSquadSlot`, `FSeinSquadReinforceEntry`, plus squad visual-event
-factories. Everything behavioral — `FSeinSquadSystem`, `USeinSquadSubsystem`,
-`USeinSquadDispatchResolver`, the squad BPFLs, settings — is in **SeinARTSSquadExtension**.
+## Movement ownership
 
----
+- `USeinMovementSubsystem` owns persistent movement instances per entity; orders borrow them.
+- `OnMoveBegin` resets per-order state. Idle ticks handle ground snap, coast-down, and shove
+  settling without inventing a return-to-home destination.
+- Avoidance outputs a lateral steer plus speed scale; it is not a full velocity replacement.
+- Concrete Infantry/Wheeled/Tracked/Hover/Flight modes belong to Movement+, never core.
+- Persistent future-affecting state may live on the movement instance and mutable component
+  subdata; both sides obey the canonical state contract.
 
-## `SeinARTSCore` — fixed-point foundation
-Header-only, `FORCEINLINE`-heavy leaf module (depends only on `Core`/`CoreUObject`). Full
-fixed-point suite: `FFixedPoint` (32.32, platform-split 128-bit mul/div), `FFixedVector`,
-`FFixedVector2D`, `FFixedQuaternion`, `FFixedRotator`, `FFixedTransform`; geometry primitives
-(`FFixedBox/Sphere/Capsule/Plane/Ray`); `FFixedRandom` (Xorshift128+ / SplitMix64 seeding);
-`FFixedTime`; namespaces `SeinMath` (sqrt, LUT trig, exp/log) and `SeinGeometry`. BP
-make/break for fixed-point lives in `MathBPFL` (in CoreEntity). The `SEIN_SIM_SCOPE` asserts are
-**not** here — they're in `SeinARTSCoreEntity/Core/SeinSimContext.h`.
+## Render/editor boundary
 
-## Pluggable subsystems & the unified level-data bake (CP1.1)
-Three subsystems follow the same pattern — an abstract base + a shipped default impl, concrete
-class chosen via `USeinARTSCoreSettings` — and the bake pipeline is UNIFIED behind the third:
+- Simulation emits `FSeinVisualEvent`; presentation consumes it one-way.
+- Input and UI may mutate sim only through commands.
+- `SeinARTSEditor` exposes a keyed component-data draw registry. Extensions own both registration
+  and unregistration and must use stable unique keys.
+- Editor-only random authoring is permitted only when its fixed-point result is serialized and
+  runtime behavior never repeats the random operation.
 
-- **Level data** (`USeinARTSCoreSettings::LevelDataClass`): abstract `USeinLevelData` substrate +
-  default `USeinLevelDataDefault`. Owns the canonical grid (finest resolution = nav's cell size),
-  the ONE shared down-trace pass (height + normal·Up + in-brush flags), the
-  `ISeinLevelLayerProvider` registry, and the channel-extensible `USeinLevelDataDefaultAsset`.
-  `ASeinLevelVolume` = the single bounds/config/bake-button actor (brush-shape play-area mask,
-  multi-volume union, per-layer config sections, debug-viz component registry). **Bake is
-  synchronous**; saves to `LevelDataSaveFolder` (default `/Game/LevelData` — gitignored,
-  regenerable). The legacy `ASeinNavVolume` / `ASeinFogOfWarVolume` + per-system baked assets
-  were retired with this (Decisions D16).
-- **Navigation** (`USeinARTSCoreSettings::NavigationClass`): abstract `USeinNavigation`. Default
-  `USeinNavigationAStar` (single-layer 2D grid, C-space footprint-aware A*, LoS smoothing,
-  escape-nudge for stuck units) — bakes its "Nav" channel as a layer provider (slope gate on the
-  shared normal, own connectivity midpoint traces, island-prune→threshold, elevated-obstacle-tops
-  prune) and loads its runtime grid from the substrate. `USeinMoveToAction` is impl-agnostic. No
-  UE NavMesh. **Seams for non-polyline planners:** a `QueryDirection(FSeinDirectionQuery) → unit dir`
-  virtual (the "pull" complement to the "push" `FindPath`, so a FIELD-shaped nav — flow field /
-  continuum crowds — answers "which way from here" natively; A* answers it via the first path step);
-  `ESeinPathSegmentType` carries `Field` + `AbstractEdge` kinds (a field / HPA* nav emits these,
-  consumers default-handle them as straights); and `FSeinPathRequest` / `FSeinDirectionQuery` carry a
-  `GroupId` so a shared-field / hierarchical nav can key ONE field/route per ordered group (contract
-  only — the shipped A* nav ignores it; building the cache is the impl's job). BP exposure: `Query Nav
-  Direction` on the nav BPFL + Mover Handle (for field-follower movement modes).
-- **Fog of War** (`USeinARTSCoreSettings::FogOfWarClass`): abstract `USeinFogOfWar` + default
-  `USeinFogOfWarDefault` (single-layer grid, Bresenham LOS, per-player refcounted VisionGroups,
-  delta-refcount source caching) — bakes its "FogOfWar" channel as a layer provider at its OWN
-  coarser resolution (snapped to an integer multiple of the shared grid; own occluder box-sweep
-  for thin walls; adopts the shared ground height, D17). Queries are **observer-gated**
-  (`IsEntityVisibleToObserver`) and are the gate the Cover extension reuses.
+## Common failure modes
 
-> Cross-module resolvers/queries **no-op until their owning module registers** (e.g. nav projection
-> returns identity until Nav is present). This is the pluggability seam, not a bug. Custom
-> nav/fog classes that DON'T participate in the unified bake (the base-class hooks default to
-> "no") simply carry no baked data until they load their own — modularity D12 preserved.
+- Treating `ComponentData` as runtime state.
+- Holding component pointers across storage mutation.
+- Keying entity state by index without generation.
+- Depending on `TMap`/`TSet` iteration order in sim output.
+- Calling Blueprint or delegates while iterating a container they may synchronously mutate.
+- Hashing `FName` comparison indices instead of canonical names/schema IDs.
+- Letting navigation silently relocate an initial destination after preview resolution.
+- Adding an extension dependency to core or a Public header dependency only to `PrivateDependencyModuleNames`.
+- Trusting old `DESIGN`/`PLAN` references or “Phase 0” narration over live behavior.
 
-## Movement
-The framework ships the movement **base + shared steering toolkit** and the two built-in defaults:
-abstract `USeinMovement` (the big static steering library — look-ahead, kinematic arrival braking,
-nav collision, slope smoothing), `USeinBasicMovement` (raw seek+arrive; the null/invalid fallback)
-and `USeinBasicUnitMovement` (RTS face-velocity default). `USeinMoveToAction` consumes an `FSeinPath`
-and stays impl-agnostic; `USeinMoveToProxy` is the BP async "Move To" node; `USeinMovementBPFL`
-exposes AnimBP-shaped movement state. Selection is per unit via `FSeinMovementComponent` — a
-**`FSoftClassPath` `MovementClass`** (resolved at runtime via `TryLoadClass`) plus a polymorphic
-`MovementClassData`.
+## Verification expectations
 
-**Persistent per-unit movement (CP2.1, Decisions D-R2 — landed 2026-06-10, pending PIE
-verification).** Movement instances are persistent per UNIT, not per order:
-`USeinMovementSubsystem` owns a handle-keyed registry (lazy creation from
-`FSeinMovementComponent::MovementClass`; orders BORROW the instance, `OnMoveBegin` is the
-per-order reset point) and registers two sim systems on world begin-play:
-`FSeinAvoidanceSystem` (PreTick 6) and the always-on
-**`FSeinMovementDriverSystem`** (AbilityExecution 10 — after the latent/order ticks;
-`bHasTarget` discriminates ordered-this-tick from idle). The driver calls
-`USeinMovement::TickIdle` on every idle unit each tick: first-contact ground snap (this
-subsumed the retired `FSeinInitialSnapSystem`), coast-down of residual order momentum
-through the decel ramp, and per-tick shove-settle (Z + slope re-snap where the unit
-stands — settle-in-place semantics, **no return-to-home**; the earlier `FSeinPositionKeepSystem`
-stripped 2026-06-03 is superseded by this, not reinstated). Contained entities are
-skipped (their container poses them). Ordered steering still runs inside
-`USeinMoveToAction`'s tick this checkpoint; the full move-step migration into the driver
-is CP2.3's decision/integration split (where the momentum push needs it).
+For deterministic framework changes, verification normally includes:
 
-**Avoidance is pluggable** (same abstract-base + settings-picker pattern as Navigation /
-Collision / FoW): abstract `USeinAvoidance` + `USeinARTSCoreSettings::AvoidanceClass`
-(default `USeinAvoidanceDefault` = a **full lateral-steer + brake-to-yield model** rebuilt through
-2026-07: deterministic do-si-do crossing resolution [shared world-axis, antisymmetric by handle
-order], formation-scoped cohesion [SpeedScale hold-back/catch-up keyed on ACTUAL displacement],
-per-squad blob-obstacle opt-in [`bAvoidAsBlob`], and a goal-relative bend cap [`AvoidanceBendCapCos`]
-that guarantees forward progress so dense melees can't orbit; `None` still = OFF). The
-PreTick `FSeinAvoidanceSystem` is a thin delegator → `ComputeAvoidance`; the instance is
-owned + GC-rooted by `USeinMovementSubsystem`. The per-tick OUTPUT contract is
-`FSeinAvoidanceOutput { SteerDir, SpeedScale }` on `FSeinMovementComponent` — a lateral
-steer (consumed by `USeinMovement::ApplyAvoidanceSteer`) PLUS a [0,1] cruise-speed yield
-(consumed by `GetAvoidanceSpeedScale`, default 1 = no-op; lets a model give way by
-braking, not only turning). NOT velocity-replacement (no ORCA): avoidance runs as a
-speed-agnostic PreTick precompute, so the output is a nudge+scale, not a full velocity.
-Swap the model (a different boids/flocking model, a flow-field separation pass) with zero
-core edits.
+- Focused native regression tests under explicit non-shipping test organization.
+- Headless subsystem/world scenarios where integration matters.
+- Development build plus relevant clean/Shipping and plugin-stripping builds.
+- `Sein.Sim.Parallel 0` versus `1` canonical state comparison.
+- Snapshot restore followed by next-N-tick equivalence when state is touched.
+- Replay/peer comparison when command timing or networking is touched.
+- An independent adversarial review and RJ's PIE A/B for behavior or feel.
 
-The **concrete modes** — Infantry, Wheeled, Tracked, Hover, Flight — and their per-class data structs
-live in the opt-in **SeinARTSMovementPlus** extension, not here. They derive from the base classes
-above (Infantry from `USeinBasicMovement`; the rest from `USeinMovement`) and are resolved through
-the soft `MovementClass` path, so the framework has **no compile-time dependency** on them. See
-`Plugins/SeinARTSMovementPlusExtension/CLAUDE.md`. Wheeled/Tracked may prepend the shipped bounded,
-clearance-probed Reeds-Shepp-style start maneuver as typed Arc/Straight segments; this is not a full
-route-family solver. The remaining coarse path is driven by runtime steering.
-
-## Networking (`SeinARTSNet`)
-GameInstance-subsystem-scoped (survives map travel). Real lockstep: `ASeinNetRelay` (per-PC RPC
-relay) + `USeinNetSubsystem` (per-slot turn buffering, completeness gate against active slots,
-deterministic command ordering before fan-out, seed distribution, replay, drop-in/out, desync
-gossip). `USeinLobbySubsystem` + `ASeinLobbyState` drive the pre-match lobby; `USeinReplayWriter/
-Reader` serialize turns to `.seinreplay`. Feeds the sim one-way via `SubmitLocalCommand`.
-
-## Render / editor / UI layer
-- **`SeinARTSFramework` (gameplay):** `ASeinPlayerController` (selection, smart commands, control
-  groups; touches sim only via `EnqueueCommand`), `ASeinCameraPawn` (implements
-  `ISeinSnapshotCameraProvider`), `ASeinHUD` (marquee, drag-order lines, command log),
-  `USeinTargeterSubsystem` + `SeinTargeterPreview` actors + `USeinTargeterBPFL` (the "Targeter"
-  feature — point spec complete; drag/point-facing scaffolded), `ASeinGameMode`,
-  `USeinMatchBootstrapSubsystem`, `USeinInputConfig` (Enhanced Input). **No animation subsystem
-  exists** — only an incidental building-hologram bind-pose use.
-- **`SeinARTSUIToolkit`:** read-only `USein*ViewModel`s refreshed each sim tick, `USeinSelectionModel`,
-  lobby view-model/verbs, `USeinWorldWidgetPool`, `USeinUIBPFL` (projection, minimap, formatting).
-- **`SeinARTSEditor`:** factories (Ability/Actor/Effect/Widget BP, **Component-as-UDS** via
-  `USeinSimComponentFactory`), fixed-point pin factory, thumbnails, class picker, Details
-  customizations, the deterministic-struct validator, auto-tag generator, and the
-  **entity-bridge visualizer + draw-callback registry** (see below).
-- **`SeinARTSGraphNodes`:** `UK2Node_SeinGetComponent` / `SeinSetComponent` — typed BP get/set that
-  expand to `USeinComponentBPFL::SeinGet/SetComponentTyped` (CustomThunk), one menu action per
-  eligible `FSeinComponent` substruct.
-
-### The editor draw-callback registry (extension point)
-On `FSeinARTSEditorModule`:
-```cpp
-DECLARE_DELEGATE_FourParams(FSeinComponentDataDrawDelegate,
-    const TArray<FInstancedStruct>& /*ComponentData*/, const FQuat&, const FVector&, FPrimitiveDrawInterface*);
-void RegisterComponentDataDraw(FName Key, FSeinComponentDataDrawDelegate Draw);   // FindOrAdd
-void UnregisterComponentDataDraw(FName Key);
-const TMap<FName, FSeinComponentDataDrawDelegate>& GetComponentDataDraws() const;
-```
-`FSeinEntityComponentVisualizer::DrawVisualization` fans out to every registered delegate (each
-callback filters `ComponentData` for its own struct type) plus built-in layers (Extents, Production
-spawn points, Navigation footprint). Registrants own their un-registration. The FoW editor module
-registers `"SeinVisionComponent"`; the Cover editor module registers `"SeinCoverComponent"`.
-
----
-
-## Pitfalls worth remembering
-- **CDO component iteration:** `AActor::GetComponents<T>()` on a CDO misses BP-SCS components. Use
-  `AActor::GetActorClassDefaultComponents<T>(ActorClass, OutArray)` — walks native + SCS in a stable
-  order. `SpawnEntity` depends on this.
-- **`ComponentData` is the authoring path, not a runtime mirror.** It's walked once at spawn to
-  populate storage; runtime mutations go through `World.AddComponent<T>` / `RemoveComponent<T>` /
-  `MutateComponent<T>`. "Entity X has no FSeinAbilityComponent" after spawn usually means (a) the BP
-  had no entry in `ComponentData`, (b) the CDO-iteration helper wasn't used, or (c) `SpawnEntity`
-  got a non-Sein actor class.
-- **Always re-fetch a component after `AddComponent`** — storage can reallocate; cached pointers
-  dangle.
-- **Ability lifecycle is explicit; arbitration is tag-based.** A BP ability is not auto-ended when a
-  latent node's terminal pin fires — wire `End Ability` / `Cancel Ability` on Completed/Failed/
-  Cancelled. Cross-ability interactions use three containers on `USeinAbility`:
-  `ActivationBlockedTags` (entity tags that refuse this ability), `OwnedTags` (granted on activate,
-  ungranted on deactivate — refcount-routed via `GrantTag`/`UngrantTag` so overlapping grants
-  survive a single deactivate), and `CancelAbilitiesWithTag` (cancels active abilities whose
-  `OwnedTags` intersect). Listing one of your own `OwnedTags` in `CancelAbilitiesWithTag` gives
-  self-cancelling reissue (e.g. Move-reissue cancels previous Move).
-- **Tech is not a primitive.** `FSeinProducibleComponent::GrantedTechEffect` (a
-  `TSubclassOf<USeinEffect>`) drives research completion; the production system calls
-  `World.ApplyEffect(...)`, routing modifiers + tags by the effect's scope. Player tags are
-  refcounted via `GrantPlayerTag` / `UngrantPlayerTag`.
-- **Trust code over docstrings.** See the root `CLAUDE.md` "Source of truth" section for known-stale
-  narration such as retired DESIGN/PLAN references and Net "Phase 0" wording.
-
----
-
-## Current state (per module)
-- **SeinARTSCore** — complete.
-- **SeinARTSCoreEntity** — mature/feature-complete: pool, generic storage, BP-CDO spawn flow,
-  4-phase tick, ability + latent infra, 3-scope effects/modifiers/attributes, production,
-  containment, command brokers, tech-as-effect, resources, match-flow/voting, snapshot capture/
-  restore, ~26 BPFLs. WIP seams (by design): PRNG seeding not yet wired into the live session-start
-  path; lockstep gate / AI-emit interceptor are delegate hooks bound by the Net module; some
-  cross-module resolvers no-op until Nav/FoW register.
-- **SeinARTSLevelData** — built 2026-06 (CP1.1): substrate + provider registry + unified volume +
-  channel asset; both shipped layers consume it; legacy scaffolding removed.
-  CP1.1 closed 2026-06-10 — fresh-level E2E + network-determinism state-hash agreement
-  user-verified.
-- **SeinARTSNavigation** — mature default grid A* (lazy allocation, dynamic blockers,
-  escape-nudge) with remaining policy-propagation work recorded in `Agents/OPEN_RISKS.md`.
-  It bakes and loads through the unified level-data pipeline; vehicle start-maneuver shaping
-  belongs to Movement+, downstream of this coarse route.
-- **SeinARTSMovement** — base + shared steering toolkit + Basic/BasicUnit + MoveTo action/proxy/BPFL;
-  complete. The concrete modes (Infantry/Wheeled/Tracked/Hover/Flight) were extracted to the
-  **SeinARTSMovementPlus** extension on 2026-06-02 — see that plugin's CLAUDE.md for their state.
-- **SeinARTSFogOfWar** (+Editor) — substantially complete: stamping, observer-gated queries,
-  dynamic blockers, vision-stamp authoring viz. Bakes/loads via the unified level-data pipeline.
-- **SeinARTSNet** — substantially implemented, ahead of its own docstrings. Deferred: full reconnect
-  snapshot + tail catch-up; adaptive input-delay (observability only); snapshot restore skips
-  ability/resolver-pool reconstruction. `SeinReplayBPFL` is a header-only skeleton.
-- **SeinARTSEditor / SeinARTSGraphNodes** — complete (registry, factories, visualizer, validator,
-  K2 nodes).
-- **SeinARTSFramework (gameplay)** — largely complete; targeter phased (point done, drag/line
-  scaffolded); `SeinWorldSettings` is a forward-compat placeholder.
-- **SeinARTSUIToolkit** — complete/mature (squad-aware ability aggregation, lobby flow).
+Do not freeze incidental implementation details in tests. Assert public contracts, invariant
+properties, canonical state, and explicitly versioned compatibility outputs.
