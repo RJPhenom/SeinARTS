@@ -1,10 +1,8 @@
 # SeinARTSMovementPlusExtension — Plugin Guide
 
 This opt-in runtime extension supplies concrete Infantry, Wheeled, Tracked, Hover, and Flight
-movement modes plus their per-class tuning data. Read the project-root `AGENTS.md` first and the
-framework guide for movement/navigation infrastructure. The adjacent `CLAUDE.md` remains for
-Claude compatibility and must not be deleted. It may lag live code, so live behavior and this
-concise guide win when they conflict.
+movement modes plus their per-class tuning data. Read the project-root guide and
+`Agents/WORKFLOW.md` first, then the Framework guide for movement/navigation infrastructure.
 
 The framework ships abstract movement plus Basic/Basic Unit defaults and must remain fully usable
 without Movement+.

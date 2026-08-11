@@ -1,10 +1,21 @@
 # SeinARTS — Style Guide
 
-This is the **style layer**: how to write code, comments, and Blueprint-facing surface so the
-codebase stays consistent and designer-friendly. It does **not** repeat architecture or invariants —
-those live in the root `CLAUDE.md` and each plugin's `CLAUDE.md` (determinism, sim/render
-separation, module topology, the "code over comments" rule). Read those first; this covers *how to
-write*, not *what the systems are*.
+This is the local operational mirror of the human [Style Guide](https://docs.google.com/document/d/1-IT4RRpU2jR3yT5RI_bOM4Iq3s54Y9Fgy9gtBAJjshs), source policy version 1.1. It defines how to write code, comments, and
+Blueprint-facing surfaces so the codebase stays consistent and designer-friendly. It does **not**
+repeat architecture or invariants; those live in the root and plugin guides. Read the relevant
+technical guide first. Update both style guides in the same task when a style rule changes.
+
+---
+
+## Commits
+
+Commits mark major code waves, feature completion, or safe WIP rollback points.
+
+- Titles are approximately 50 characters or less.
+- Omit the description unless it helps.
+- Use direct language.
+- For large or foundational changes, use short line-broken bullets.
+- Explain what changed and why. Do not inventory every edit.
 
 ---
 
@@ -133,3 +144,28 @@ own settings page.
 - **No dead outputs / always-on log spam.** A BP-exposed field that's never populated, or a
   per-tick `UE_LOG`, erodes trust — either make it real or remove it; gate diagnostics behind a
   verbosity level or a show-flag.
+
+---
+
+## C++ file headers
+
+Each new production C++ file begins with a header containing the copyright notice, `@file`,
+`@author`, `@created`, `@latest`, a concise `@brief`, and an AI-assistance disclaimer when applicable.
+
+Keep `@brief` to the file's purpose. Add architectural context only when it helps explain ownership,
+boundaries, or non-obvious behavior. Update it when the file's purpose changes.
+
+```cpp
+/**
+ * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
+ *
+ * @file         FileName.h
+ * @author       RJ Macklem
+ * @created      10 Aug 2026
+ * @latest       10 Aug 2026
+ * @brief        One-sentence purpose of the file.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
+ */
+```

@@ -1,47 +1,37 @@
 # SeinARTS — Project Root Guide
 
 This is the **project-level** guide, loaded by every session rooted at `D:/Projects/Unreal Engine/SeinARTS`.
-It owns the cross-cutting rules that apply to **all five production plugins**. Each plugin has its own
-`CLAUDE.md` with the deep, plugin-specific detail — read the relevant one when you scope into it
+It owns the cross-cutting rules that apply to **all five production plugins** and the two test suites. Each plugin has a
+local guide with the deep, plugin-specific detail — read the relevant one when you scope into it
 (pointers below).
 
 > Sessions used to be scoped to the `SeinARTSFramework` plugin directory only. They now run from
-> this project root so a single session has native visibility across the framework **and** all
-> three extension plugins. When you start work, read this file first, then the plugin-specific
-> `CLAUDE.md` for whatever you're touching.
+> this project root so a single session has native visibility across the five production plugins
+> and both disabled test plugins. When you start work, read this file first, then the matching
+> plugin guide for whatever you're touching.
 
-> **Active initiative — movement & navigation depth.** The movement/avoidance/nav seams are clean and
-> pluggable (`USeinAvoidance` / `USeinCollisionResolver` / `USeinNavigation` abstract-base + settings
-> picker; the `FSeinPath` typed-segment seam); current work is deflating localized bloat in a few
-> function bodies (A* diagnostics, the `TickAction` re-seek tangle, the avoidance kernel) without
-> redesigning the seams, plus qualification of Movement+'s shipped steering-first, curated
-> Reeds-Shepp-style start-maneuver planner. It is not a general Reeds-Shepp/Dubins route solver. The
-> nav↔movement seam is still evolving — re-ground against live code before asserting.
+> Current campaigns, accepted evidence, and open risks live in `Agents/PROJECT_STATE.md`,
+> `Agents/OPEN_RISKS.md`, and task records under `Agents/Tasks/`. Do not infer current priorities
+> from this stable project guide.
 
 ---
 
-## HARD RULE: never use worktrees
+## Workflow
 
-**No exceptions.** This is a solo-dev local project — forking work into a separate worktree buys
-nothing and adds synchronization overhead.
-
-- **Never** spawn `Agent` calls with `isolation: "worktree"`. Use the default (no isolation).
-- **Never** create or work inside a `.claude/worktrees/<...>/` path. If a turn starts and the
-  working directory contains `.claude/worktrees/`, **stop, tell the user, and switch back to the
-  main checkout at `D:/Projects/Unreal Engine/SeinARTS/` before doing anything else.**
-- Parallelism is still encouraged — just spawn parallel agents against the **main checkout**.
-  Feature work is naturally module-scoped, so conflicts between parallel agents are rare.
+Read `Agents/WORKFLOW.md` before changing code or documentation. It is the local operational mirror
+of the human Workflow Policy and governs branches, worktrees, handoffs, decisions, validation,
+documentation impact, and releases. This guide owns technical boundaries and implementation rules.
 
 > Note: as of 2026-06-02 the project root **is** a git repository — a single project-wide monorepo
-> (`main`, initial commit `ecf6068`) tracking the host project and all five production plugins, with **Git LFS**
+> (`main`, initial commit `ecf6068`) tracking the host, five production plugins, and two disabled
+> test plugins, with **Git LFS**
 > for binary assets (`*.uasset`/`*.umap` + common media). Baked level data (`**/Content/LevelData/` + legacy patterns)
 > is gitignored as a regenerable build artifact — **re-bake after a fresh clone** via the one
 > "Bake Level Data" button on `ASeinLevelVolume` (unified pipeline, CP1.1). History
 > starts fresh from the plugin split; the framework's pre-split history is archived at
 > `https://github.com/RJPhenom/SeinARTSFramework`. The monorepo's `origin` remote is
 > `https://github.com/RJPhenom/SeinARTS.git`, and `gh` (v2.94.0) is installed — but may be
-> unauthenticated; run `gh auth login` if PR/remote tooling reports expired auth. The no-worktree
-> HARD RULE above still applies.
+> unauthenticated; run `gh auth login` if PR/remote tooling reports expired auth.
 
 ---
 
@@ -64,13 +54,19 @@ the editor is open, and returns UBT's exit code. Equivalent raw one-liner if the
 & "C:/Program Files/Epic Games/UE_5.8/Engine/Build/BatchFiles/Build.bat" SeinARTSEditor Win64 Development -Project="D:/Projects/Unreal Engine/SeinARTS/SeinARTS.uproject" -WaitMutex
 ```
 
-- **Run builds in the background** (`run_in_background`) — even incremental is tens of seconds; a
-  clean build is minutes.
+- Run builds in the background when the active environment supports it. Otherwise, keep build work
+  isolated and report its outcome before starting a conflicting operation.
 - **Close the editor first**, or hot-patch in-editor with **Live Coding (Ctrl+Alt+F11)**. A running
   editor locks the module DLLs, so a command-line **link** fails on `*.dll in use` — the *compile*
   still runs, so you can build-to-check-errors with the editor open, just not relink.
 - Success = exit `0` / `Result: Succeeded`. UBT prints `Compile [x64] <file>.cpp` and
   `Link [x64] UnrealEditor-<Module>.dll` lines — confirm the module you changed actually rebuilt.
+
+### Automated tests
+
+Automated tests live in the disabled, non-shipping `Plugins/SeinARTSTestSuite` plugin; read its
+`AGENTS.md` before adding or running tests. Production modules never depend on that plugin or
+`CQTest`. Enable it explicitly through its `RunTests.ps1`; ordinary and Shipping builds leave it out.
 
 ---
 
@@ -81,12 +77,10 @@ failure mode that ends in rollback (this project's owner has lived many). The di
 learned from the sessions that *worked*:
 
 - **Match verification to blast radius.** A change touching the sim spine, determinism, or multiple
-  modules earns the full loop: investigate against **live code** → design and present the real fork(s)
-  for RJ to decide → implement → **adversarially red-team the change** (independent agents whose job is
-  to *refute* it) → build green (read the log, not just the exit code) → hand RJ the A/B. Trivial
-  mechanical edits skip the ceremony. Turn **ultracode ON** for the former (it defaults you to workflow
-  orchestration + adversarial verification); leave it off for the latter — the verification is
-  token-expensive and only earns its cost when a missed bug means a rollback.
+  modules earns the full loop: investigate against **live code** → present real forks for a product
+  decision when one exists → implement → **adversarially red-team the change** → build green (read the
+  log, not just the exit code) → provide the required runtime A/B. Trivial mechanical edits skip the
+  ceremony.
 - **Determinism is invisible to code-reading — verify, don't trust confidence.** "This is bit-identical
   / deterministic" is a **hypothesis** until an independent adversarial pass has tried and failed to
   refute it AND the `Sein.Sim.Parallel 0`-vs-`1` StateHash agrees (plus peer/replay for anything that
@@ -106,6 +100,7 @@ learned from the sessions that *worked*:
 
 - `Docs/` is reserved for deliberate product/developer documentation, not audit scratch or agent handoffs.
 - Durable agent engineering context belongs in `Agents/`; short-lived exploration stays untracked.
+- Private design, strategy, planning, and progress documents belong in Google Drive.
 - Do not create a repository `Output/` tree. Put requested PDF exports in the user's Downloads directory.
 
 ---
@@ -113,7 +108,7 @@ learned from the sessions that *worked*:
 ## What this is
 
 A deterministic **lockstep RTS framework** for Unreal Engine 5, delivered as one core plugin plus
-three opt-in extension plugins. The simulation layer runs entirely on fixed-point math
+four opt-in production extensions. The simulation layer runs entirely on fixed-point math
 (`FFixedPoint`, 32.32) for cross-platform bit-determinism. Unreal is the renderer — the sim never
 touches `float`, `AActor*`, or any non-deterministic UE system. Data flows one way: **sim → render**.
 
@@ -131,11 +126,13 @@ D:/Projects/Unreal Engine/SeinARTS/
 ├── Source/SeinARTS/         Thin host game module — nothing of substance lives here
 ├── Config/ Content/         Host project config + content
 └── Plugins/
-    ├── SeinARTSFramework/             The core. 12 modules. → Plugins/SeinARTSFramework/CLAUDE.md
-    ├── SeinARTSSquadExtension/        Opt-in squads.  1 module. → .../SeinARTSSquadExtension/CLAUDE.md
-    ├── SeinARTSCoverExtension/        Opt-in cover.   2 modules. → .../SeinARTSCoverExtension/CLAUDE.md
-    ├── SeinARTSCoverSquadExtension/   Opt-in Cover+Squad bridge. 1 module. → .../SeinARTSCoverSquadExtension/CLAUDE.md
-    └── SeinARTSMovementPlusExtension/ Opt-in movement modes. 1 module ("SeinARTS Movement+"). → .../SeinARTSMovementPlusExtension/CLAUDE.md
+    ├── SeinARTSFramework/             The core. 12 modules. → Plugins/SeinARTSFramework/AGENTS.md
+    ├── SeinARTSSquadExtension/        Opt-in squads.  1 module. → .../SeinARTSSquadExtension/AGENTS.md
+    ├── SeinARTSCoverExtension/        Opt-in cover.   2 modules. → .../SeinARTSCoverExtension/AGENTS.md
+    ├── SeinARTSCoverSquadExtension/   Opt-in Cover+Squad bridge. 1 module. → .../SeinARTSCoverSquadExtension/AGENTS.md
+    ├── SeinARTSMovementPlusExtension/ Opt-in movement modes. 1 module ("SeinARTS Movement+"). → .../SeinARTSMovementPlusExtension/AGENTS.md
+    ├── SeinARTSTestSuite/              Disabled framework/editor tests. 3 modules. → .../SeinARTSTestSuite/AGENTS.md
+    └── SeinARTSExtensionTestSuite/     Disabled all-extension tests. 2 modules. → .../SeinARTSExtensionTestSuite/AGENTS.md
 ```
 
 ## Plugin topology & dependency chain
@@ -148,22 +145,28 @@ SeinARTSFramework ................... base; depends on no other Sein plugin
    │                                        (concrete movement modes; framework keeps Basic / Basic Unit)
    └── SeinARTSCoverSquadExtension ........ REQUIRES Framework + Cover + Squad
                                             (optional integration bridge only)
+
+SeinARTSTestSuite ................... disabled development-only Framework consumer
+SeinARTSExtensionTestSuite ......... disabled consumer of the base test suite + all extensions;
+                                     no production plugin may depend on either test plugin
 ```
 
 Dependencies point **up** toward the framework, never down. The framework knows nothing about the
 extensions; an extension may be stripped and the framework still builds and runs. Cover and Squad
-are physically independent; their shared resolver lives only in the explicitly enabled
-`SeinARTSCoverSquadExtension` bridge.
+are physically independent plugins. Their only cross-extension integration lives in the separate
+`SeinARTSCoverSquadExtension`, so games enable that bridge only when they use both parent features.
 
-## Which CLAUDE.md to read
+## Which plugin guide to read
 
 | If you're working on… | Read |
 |---|---|
-| Sim core, entities, abilities, effects, nav, movement base/steering, FoW, net, editor tooling, UI, gameplay shell | `Plugins/SeinARTSFramework/CLAUDE.md` |
-| Persistent squads, formation dispatch, reinforcement | `Plugins/SeinARTSSquadExtension/CLAUDE.md` |
-| Cover providers/geometry, cover-aware dispatch, formation preview | `Plugins/SeinARTSCoverExtension/CLAUDE.md` |
-| Cover-aware Squad dispatch integration | `Plugins/SeinARTSCoverSquadExtension/CLAUDE.md` |
-| Infantry/Wheeled/Tracked/Hover/Flight movement modes + per-class tuning | `Plugins/SeinARTSMovementPlusExtension/CLAUDE.md` |
+| Sim core, entities, abilities, effects, nav, movement base/steering, FoW, net, editor tooling, UI, gameplay shell | `Plugins/SeinARTSFramework/AGENTS.md` or `CLAUDE.md` |
+| Persistent squads, formation dispatch, reinforcement | `Plugins/SeinARTSSquadExtension/AGENTS.md` or `CLAUDE.md` |
+| Cover providers/geometry, cover-aware dispatch, formation preview | `Plugins/SeinARTSCoverExtension/AGENTS.md` or `CLAUDE.md` |
+| Cover-aware Squad dispatch integration | `Plugins/SeinARTSCoverSquadExtension/AGENTS.md` or `CLAUDE.md` |
+| Infantry/Wheeled/Tracked/Hover/Flight movement modes + per-class tuning | `Plugins/SeinARTSMovementPlusExtension/AGENTS.md` or `CLAUDE.md` |
+| Automated tests, fixtures, scripted maps, and test runners | `Plugins/SeinARTSTestSuite/AGENTS.md` or `CLAUDE.md` |
+| Tests intentionally linking every opt-in extension | `Plugins/SeinARTSExtensionTestSuite/AGENTS.md` or `CLAUDE.md` |
 
 ---
 
@@ -214,6 +217,12 @@ are physically independent; their shared resolver lives only in the explicitly e
    slots are authoritative**: a designer-authored slot overrules the coarse nav bake (a blocked/"red"
    cell under a slot is a low-resolution false-negative, not a reason to move the slot); the unit is
    delivered to the exact slot and the preview shows the exact slot.
+
+7. **Lockstep configuration is state.** Every plugin that owns sim-affecting project settings must
+   register them with `FSeinConfigFingerprintRegistry` under a frozen stable contributor ID. Reflected
+   property names must match exactly, ordering must be canonical, and contributors unregister on
+   module shutdown. A missing extension or mismatched setting must fail compatibility at join instead
+   of becoming a silent desync.
 
 ---
 
