@@ -4,10 +4,8 @@ The core plugin owns the deterministic simulation, entity/ability/effect infrast
 level data, navigation, movement foundations, fog of war, lockstep transport, and the host
 gameplay/editor/UI layers.
 
-Read the project-root `AGENTS.md` first. It owns the cross-plugin invariants, build commands,
-no-worktree rule, naming, and verification discipline. This file is intentionally narrower.
-The adjacent `CLAUDE.md` is retained for Claude compatibility; do not delete it. It may lag live
-code, so live behavior and this concise guide win when they conflict.
+Read the project-root guide and `Agents/WORKFLOW.md` first. They own cross-plugin invariants,
+build commands, workflow, naming, and verification discipline. This file is intentionally narrower.
 
 The Squad, Cover, and Movement+ behaviors are opt-in extensions. Core may expose neutral data
 contracts used by them, but it must never depend on an extension module.

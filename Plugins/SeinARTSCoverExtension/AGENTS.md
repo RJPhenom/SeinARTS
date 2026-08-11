@@ -1,9 +1,8 @@
 # SeinARTSCoverExtension — Plugin Guide
 
 This opt-in extension currently provides deterministic cover providers and queries, resolver-local
-cover-aware destinations, preview quality, and editor authoring tools. Read the project-root
-`AGENTS.md` first. The adjacent `CLAUDE.md` remains for Claude compatibility and must not be
-deleted. It may lag live code, so live behavior and this concise guide win when they conflict.
+cover-aware destinations, preview quality, and editor authoring tools. Read the project-root guide
+and `Agents/WORKFLOW.md` first.
 
 Nothing in the framework may depend on Cover.
 
