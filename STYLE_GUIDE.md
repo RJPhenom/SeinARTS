@@ -1,10 +1,9 @@
 # SeinARTS — Style Guide
 
-This is the **style layer**: how to write code, comments, and Blueprint-facing surface so the
-codebase stays consistent and designer-friendly. It does **not** repeat architecture or invariants —
-those live in the root `CLAUDE.md` and each plugin's `CLAUDE.md` (determinism, sim/render
-separation, module topology, the "code over comments" rule). Read those first; this covers *how to
-write*, not *what the systems are*.
+This is the local operational mirror of the human [Style Guide](https://docs.google.com/document/d/1-IT4RRpU2jR3yT5RI_bOM4Iq3s54Y9Fgy9gtBAJjshs). It defines how to write code, comments, and
+Blueprint-facing surfaces so the codebase stays consistent and designer-friendly. It does **not**
+repeat architecture or invariants; those live in the root and plugin guides. Read the relevant
+technical guide first. Update both style guides in the same task when a style rule changes.
 
 ---
 

@@ -1,107 +1,99 @@
 # SeinARTSSquadExtension — Plugin Guide
 
-Opt-in extension adding **persistent, heterogeneous-slot squads** on top of
-`SeinARTSFramework`: per-tick squad lifecycle, formation dispatch, and reinforcement. Strippable —
-when this plugin is absent, the framework carries no squad *behavior* (only the data structs).
+This opt-in runtime extension adds persistent heterogeneous-slot squads, formation dispatch,
+reinforcement, and squad lifecycle behavior. Read the project-root guide and `Agents/WORKFLOW.md`
+first.
 
-> **Read the project-root `CLAUDE.md` first** for the cross-cutting rules (determinism, sim/render
-> separation, naming, no-worktrees, code-over-comments). This file covers squad mechanics only.
+## Boundary and dependency
 
-- **Module:** one runtime module, `SeinARTSSquad` (Default loading phase).
-- **Depends on:** `SeinARTSFramework` (required). Build deps: Core, CoreUObject, Engine,
-  DeveloperSettings, GameplayTags, `SeinARTSCore`, `SeinARTSCoreEntity`.
+- Runtime module: `SeinARTSSquad`.
+- Required dependency: `SeinARTSFramework` and its core modules.
+- The framework owns neutral squad data; this extension owns all squad behavior.
+- The framework must continue to build and run when this extension is absent.
 
----
+Core-defined data includes `FSeinSquadComponent`, `FSeinSquadMemberComponent`, slots,
+reinforcement entries, containment mode, and squad visual-event factories. This plugin adds the
+system, subsystem, formation, dispatch resolver, Blueprint libraries, settings, and starter
+reinforcement ability. Do not duplicate the payload structs in the extension.
 
-## The data/behavior boundary
+A squad is a lightweight non-abstract `ASeinActor`; presentation such as a banner can follow the
+squad entity's centroid.
 
-This is the single most important thing to understand here: **the data lives in the framework
-core; the behavior lives in this extension.**
+## Runtime flow
 
-Defined in **`SeinARTSFramework/SeinARTSCoreEntity`** (NOT here):
-`FSeinSquadComponent` (slots, leader, reinforce queue; fields incl. `DispatchResolverClass`,
-`bReassignSlotsLateral`/`bReassignSlotsDepth`; helpers `GetLiveMembers`, `ComputeCentroid`,
-`IndexOfSlotByTag/ByMember`), `FSeinSquadMemberComponent`, `FSeinSquadSlot`,
-`FSeinSquadReinforceEntry`, `ESeinSquadContainmentMode`, and the squad visual-event factories.
+`USeinSquadSubsystem` registers `FSeinSquadSystem` with the world simulation and owns its lifetime.
+The system performs deterministic lifecycle work including:
 
-Defined **here**: the systems, the dispatch resolver, the BPFLs, the reinforce ability, settings.
-This extension declares **no new USTRUCTs** — it operates entirely on the core's squad data.
+- Lazy initialization and member spawning.
+- Member back-references, leader promotion, and dead-member removal.
+- Persistent command-broker creation and membership synchronization.
+- Squad centroid/actor transform and formation-radius maintenance.
+- Slot cooldowns, reinforcement progress, and member spawn.
+- Empty-squad cleanup.
 
-> A squad is a **real lightweight (non-abstract) `ASeinActor`**, not an abstract presence-less
-> entity — so a banner/health widget can follow the squad's centroid. (Older framework docs called
-> squads "abstract"; that's obsolete.)
+The system runs in a stable PostTick position before command-broker dispatch. Reverify the live
+priority before changing its registration or moving work between phases.
 
----
+The module registers the frozen `SquadExtension` config-fingerprint contributor for
+`bPaceSquadsTogether` and `DefaultSquadDispatchResolverClass`. The contributor ID and property names
+are lockstep compatibility data: do not rename them without an explicit protocol/config migration.
 
-## Files & key types
+## Dispatch and formation
 
-- **`SeinARTSSquadModule.{h,cpp}`** — `IModuleInterface` with empty startup/shutdown. All work is
-  subsystem-driven; there is **no module-startup registry hook**.
-- **`SeinSquadSubsystem.{h,cpp}`** — `USeinSquadSubsystem` (UWorldSubsystem). On
-  `OnWorldBeginPlay` it `new`s `FSeinSquadSystem` and calls `Sim->RegisterSystem(...)`; deletes/
-  unregisters on `Deinitialize`. This is the **only** integration mechanism with the framework.
-- **`SeinSquadSystem.h`** — `FSeinSquadSystem` (`ISeinSystem`, **PostTick**, priority ~30, runs
-  before the CommandBroker system). Owns the whole squad lifecycle:
-  - lazy init (detected by broker absence → spawns slot members, wires member back-refs, builds the
-    persistent command broker),
-  - dead-member strip + `SquadMemberDied` events, leader promotion,
-  - centroid → squad-actor transform + broker sync, `FormationWidth` calc,
-  - slot cooldown decay, reinforce-queue progression + member spawn,
-  - empty-squad cull.
-- **`SeinSquadDispatchResolver.{h,cpp}`** — `USeinSquadDispatchResolver` (subclasses
-  `USeinDefaultCommandBrokerResolver`). See "Dispatch" below.
-- **`SeinSquadBPFL.{h,cpp}`** — `USeinSquadBPFL`, BlueprintPure queries: Get Squad/Member Data
-  (+ batch), Get Squad Members/Leader/Size, Get Entity Squad, Is Squad Member.
-- **`SeinSquadMutationBPFL.{h,cpp}`** — `USeinSquadMutationBPFL`, BlueprintCallable mutations,
-  `meta=(RestrictedToClasses="SeinAbility,SeinEffect")`, each asserting `SEIN_CHECK_SIM()`: Set
-  Squad/Member Data, Set Leader, Add/Remove Member, Fill/Empty Slot, Set Slot Offset. Each keeps the
-  broker member-list, member back-refs, and leader consistent.
-- **`SeinAbility_SquadReinforce.{h,cpp}`** — `USeinAbility_SquadReinforce`, a starter ability. Fills
-  the first empty + off-cooldown slot in declaration order; charges the slot's `ReinforceCost` at
-  enqueue, then enqueues a `FSeinSquadReinforceEntry` the system builds over `ReinforceBuildTime`.
-  Per-slot cost (clears the ability-level cost); `CooldownScope::Squad`.
-- **`SeinARTSSquadSettings.{h,cpp}`** — `USeinARTSSquadSettings` (UDeveloperSettings). One field:
-  `DefaultSquadDispatchResolverClass` (`TSoftClassPtr`).
+`USeinSquadDispatchResolver` derives from the framework default broker resolver:
 
----
+- Predetermined abilities use the broker capability map plus the ability's dispatch policy.
+- Smart movement treats the squad as one outer formation element, then creates the squad's compact
+  inner layout through `USeinFormation::MakeInnerLayoutTarget`.
+- Preview and commit must use the same inner-layout computation.
+- `USeinSlotFormation` uses authored slot transforms. A squad may override its formation class;
+  non-slot formations must not accidentally consume authored slot offsets.
+- Cover integration belongs in `SeinARTSCoverSquadExtension` through `PostProcessPositions`; Squad
+  must not depend on Cover or on the bridge.
+- `bAvoidAsBlob` and the broker's multi-squad pacing fields are the intended squad-to-base
+  avoidance data seam; the framework does not load Squad settings directly.
 
-## Dispatch (and the Cover extension point)
+Resolver selection is per-squad class, then squad settings default, then the Squad extension's
+`USeinSquadDispatchResolver` fallback. Soft
+class references and neutral fallbacks preserve extension stripping.
 
-`USeinSquadDispatchResolver` (subclass of the default resolver) overrides **`ResolveDispatch`** and
-adds a **constructor** that selects its formation:
+`bPaceSquadsTogether` is a sim-affecting outer-cohesion policy stamped onto squad broker data; it
+must stay synchronized with the config fingerprint and must not make the framework read extension
+settings directly.
 
-- **`ResolveDispatch`** — for predetermined-ability orders, dispatches via the broker capability map
-  filtered by the ability's own dispatch policy (`ApplyAbilityDispatchPolicy`) — leader-performs
-  semantics (the squad leader performs the ability). Smart right-click orders route each member to its slot's world position, and DROP the
-  order's gesture guide/formation tag so each squad keeps its own COMPACT shape at the anchor the parent formation gave it. Squads now
-  participate in the multi-unit formation as ELEMENTS (sized by `FSeinCommandBrokerData::FormationRadius`
-  = the squad's own footprint); the parent gesture spaces the squad ANCHORS, never each squad's
-  internals. The gesture-free squad-internal target is built via `USeinFormation::MakeInnerLayoutTarget`,
-  used by this resolver AND the preview (`SeinComputeFormationPreview`) so the two can't drift and the
-  drag can never re-expand a squad's own formation.
-- **Slot layout** — the constructor sets `DefaultFormationClass = USeinSlotFormation` as the DEFAULT, overridable
-  per-squad via `FSeinSquadComponent::FormationClass` (Grid/Wedge/Ring/custom; the framework editor
-  hides the per-slot `OffsetTransform` authoring for non-slot picks via `FSeinSquadSlotDetails` +
-  `USeinFormation::UsesAuthoredSlotOffsets`). The slot formation reads
-  each member's slot `OffsetTransform` (by `SlotIndex`, tag fallback) rotated by anchor facing and
-  nav-projected; unauthored squads / unresolved members fall back to a blob at the anchor. This
-  replaced the old `ResolvePositions` override (squads now go through the same formation pipeline as
-  loose units).
-- **Cover extension point** — the inherited `ResolveFormationLayout` calls `PostProcessPositions`
-  (empty base impl) after layout; the separate Cover+Squad bridge's
-  `USeinCoverAwareSquadDispatchResolver` overrides exactly that to snap final member positions to
-  cover.
+## Mutation invariants
 
-**Resolver selection order:** per-squad `FSeinSquadComponent::DispatchResolverClass` → settings
-`DefaultSquadDispatchResolverClass` (soft path; null if the bridge is absent) → framework default. A squad
-registers its chosen resolver instance into its broker via `World.RegisterCommandBrokerResolver` at
-lazy-init.
+Squad Blueprint mutation helpers are sim-only operations. Any mutation must preserve all of:
 
----
+- Member-to-squad back-reference.
+- Slot occupancy and slot index/tag identity.
+- Broker member list.
+- Leader validity.
+- Deterministic declaration/handle ordering.
+- Reinforcement and cooldown state.
 
-## Current state
-**Complete and functional** — system, resolver, both BPFLs, the reinforce ability, and settings are
-all fully implemented with defensive re-fetch-after-`AddComponent` discipline and diagnostic
-logging (recently demoted from Warning to Log/Verbose after a "culled-at-PIE-start" regression was
-fixed — i.e. this module saw recent active iteration). Only the module startup/shutdown bodies are
-empty, by design.
+Re-fetch components after storage additions. Never retain raw component pointers across an add or
+spawn. Do not derive stable identity from a mutable array index when reinforcement or slot edits can
+reorder data.
+
+## Reinforcement
+
+The starter reinforce ability selects an eligible empty slot in deterministic declaration order,
+charges the slot-authored cost at enqueue, and adds a deterministic build entry. Projects may
+replace this ability; reinforcement policy must not become a mandatory core rule.
+
+## Verification
+
+Squad changes need focused coverage for:
+
+- Lazy initialization and destruction.
+- Leader death/promotion and member back-references.
+- Reinforcement enqueue, cooldown, completion, cancellation, and snapshot state.
+- Mixed loose-unit/multi-squad dispatch.
+- Preview versus first path destinations.
+- Formation translation/rotation and deterministic member ordering.
+- Framework-without-Squad and Squad-without-Cover builds.
+- Serial/parallel state agreement and a PIE tactics-gym review for formation feel.
+
+Prefer semantic assertions—membership, destination, slot identity, arrival, and state digest—over
+brittle snapshots of every intermediate formation coordinate.
