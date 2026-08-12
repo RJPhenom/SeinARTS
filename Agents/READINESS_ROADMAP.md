@@ -54,6 +54,11 @@ CI gate because this engine distribution rejects those target types before proje
     canonical-root-gated authorship activation;
   - streaming replay finalization and standalone checkpoint seek; and
   - exact end-tick and canonical-root agreement between replay and authoritative server.
+- Replay v9 automatic periodic checkpoint frames use the ordered background durable-append worker; checkpoint
+  persistence state advances only after worker success. Integration coverage proves asynchronous
+  worker failure and real write denial stop recording without publishing false durability or deleting
+  the partial journal. Snapshot capture/envelope encoding and pressure-forced drains remain main-thread
+  work pending measured long-session and slow/exhausted-storage qualification.
 - The packaged run exposed and closed three release-only integration defects: lobby maps now
   materialize relays from their final authoritative slot bindings, Shipping builds no longer hide
   restore work inside compiled-out assertions, and dropped slots can reclaim their retained relay
@@ -76,33 +81,64 @@ cancel/reissue, recovery, and mixed infantry/vehicle congestion with different b
 speeds, and masses. Checkpoints taken during arcs, reverse legs, recovery, and close mixed traffic
 continue with exact canonical roots. See `Agents/VEHICLE_GYM.md` for the evidence and PIE matrix.
 
-Still required before Movement+ is production-qualified: the human PIE feel/performance matrix,
-a Movement+-specific replay-file/network combination test, and presentation telemetry for
-steering/yaw/throttle/brake plus track/wheel animation. The current general replay qualification
-and Vehicle Gym snapshot proof cover the mechanisms separately, not their combined scenario.
+Still required before Movement+ is production-qualified: the human PIE feel/performance and real
+multi-client network matrix. Typed render-only presentation telemetry for steering/yaw/throttle/
+brake plus track/wheel animation is complete, including correction-resistant driver intent,
+wrapped long-run wheel phase, teardown/restore reset, hidden raw render state, and rejection from
+deterministic movement and Ability Blueprints.
+Movement+-specific automation now drives live wheeled
+movement through both replay-file checkpoint continuation and the bounded reconnect envelope into a
+fresh world, then proves exact terminal roots and canonical movement state.
 
-Use evidence to decide whether the curated start-maneuver head plus coarse-route pursuit tail is sufficient or whether downstream A* corners need a broader curvature-shaping stage. Add animation telemetry for steering/yaw/reverse/throttle/brake and track/wheel presentation without making Unreal animation authoritative.
+Use evidence to decide whether the curated start-maneuver head plus coarse-route pursuit tail is
+sufficient or whether downstream A* corners need a broader curvature-shaping stage. Qualify the
+new animation telemetry in PIE without making Unreal animation authoritative.
 
 Flight remains a separate scope: current behavior is not a production 3D aircraft collision/avoidance solution.
 
 ### Tactical cover and squads
 
-Implement FEAT-03 as one shared preview/commit planner:
+FEAT-03 progress: ordinary and Squad adapters now delegate to one pure Cover-owned allocator. It
+maximizes assignment cardinality, minimizes wrong-side use, then minimizes exact fixed-point
+squared distance; invalid/duplicate inputs and unrepresentable distance ranges fail closed. The
+duplicate greedy bodies are gone, resolver behavior revisions were advanced, exhaustive small
+matrices match brute force, and the latest dense 128x128 solver-only stress case averages 11.998 ms
+on the current machine. A separate real-world public-layout fixture now covers 64/128-member
+coverless and dense-Cover paths, exact repeated output, all-member snapping, and unchanged canonical
+roots; the 128-member dense case measures 3.181 ms median / 3.324 ms p95. This excludes selection,
+quality, rendering, and the rest of the frame, and allocation remains exact only within one resolver
+invocation, not yet across the whole mixed selection.
 
-- Stable provider/slot identities.
-- Maximum-cardinality/minimum-cost deterministic allocation.
-- Explicit reservations and lifecycle for cancel, failure, death, provider movement/destruction, snapshot, replay, reconnect, and queued orders.
-- Context-rich authoritative-destination composition.
-- No duplicated ordinary/squad greedy allocation bodies.
+Fresh UE 5.8 full-game profiling now qualifies continuous preview for the current 100-owned-mover
+Sandbox workload. Exact selected-member blocker exclusions preserve group placement semantics, and
+a derived sparse blocker-cell index removes repeated shape rasterization from candidate probes.
+Repeated matched captures measured a 1.60-2.86 ms complete-frame preview delta; Unit, Integration,
+Determinism, and independent fresh-process serial/parallel roots remain exact. Larger-selection,
+multi-world, and 300/500/1,000-unit moving-combat captures remain scale gates rather than inferred.
 
-Complete reinforcement request identity, cancel/refund, queue replacement, squad wipe/recreation/retreat, and snapshot/replay coverage.
+Remaining FEAT-03 work:
+
+- Aggregate ordinary and persistent-Squad destinations through one context-rich selection plan.
+- Carry the exact preview artifact into deterministic command admission.
+- Add explicit reservations and lifecycle for cancel, failure, death, provider movement/destruction,
+  snapshot, replay, reconnect, and queued orders.
+- Freeze the conflict policy: exact artifact rejection versus an explicitly approved preview-changing fallback.
+
+Squad reinforcement request identity, exact slot selection, atomic charge, exact cancel/refund,
+completion membership, structural restore admission, and snapshot continuation are complete.
+Remaining Squad work requires product policy for explicit squad destruction refunds, queue
+replacement UX, wipe/recreation, and retreat; then add the corresponding command/replay and PIE
+tactics coverage.
 
 ### Terrain, vision, targeting, and containment
 
 - Author and qualify game terrain catalogs and movement profiles on top of the now-complete
   framework-level per-unit navigation/clearance policy. Shipped `AgentTags` remain classification
   metadata; forbidden terrain is expressed explicitly through the navigation component.
-- Height-correct and team/shared FoW policy.
+- Height-correct FoW is complete. The deterministic directional pair-capability ledger required by
+  team/shared vision is complete through command timing, cache validation, canonical lifecycle,
+  packaged reconnect, and replay. The FoW sharing consumer and its designer policy remain the next
+  explicit layer.
 - Line/corridor targeters needed by tactical weapons and formations.
 - Stable garrison/transport/containment state and shared observer/team policy.
 
@@ -122,10 +158,30 @@ Exit: game UI and progression can target stable provider-neutral interfaces whil
 
 ## 5. Public SDK and release automation
 
-- Establish semantic plugin versions, compatibility policy, migration notes, and release tags.
-- Add automated clean package/build/cook/test matrices on GitHub-hosted or self-hosted UE-capable runners.
+- Semantic release tags, one-version production-plugin cohorts, deterministic compatibility
+  boundaries, and current-wave migration steps are documented under `Docs/`.
+- Release packaging now validates SemVer and refuses to publish dirty or mid-build-drifted source
+  under a clean commit/tag identity. It emits SHA-256 artifact/dependency provenance and release
+  publication is gated on fresh consumers built from the exact five ZIPs. Package-only diagnostics
+  may still exercise local changes.
+- A machine-readable release-gate entrypoint and manual self-hosted Windows workflow now compose
+  Editor/Shipping builds, both test profiles, standalone packaging, and the exact-ZIP consumer
+  matrix. Receipts bind exact attempt/run IDs, source and engine identity, indexes, binary and
+  metadata hashes, public-header manifest, packaged-runtime result, artifacts, and evidence archive.
+  Publication compiles each shipped `Public` header independently, verifies remote draft assets
+  byte-for-byte, and resumes only an exact matching interrupted draft. Executing the workflow still
+  requires a UE-capable runner with Client/Server support.
 - Test plugin stripping and downstream consumers from fresh checkouts.
 - Publish packaged plugin artifacts for releases, while daily game development uses commit-pinned source integration.
-- Provide purposeful user documentation, sample content, diagnostics, error UX, and upgrade guidance.
+- Compatibility, upgrade, and getting-started guidance now exist. A read-only installation
+  diagnostic validates engine identity, exact plugin closure/cohort, test stripping, recursive
+  duplicate installs, source identity, and canonical project-owned manifest containment; it ships
+  in the Framework ZIP, binds every consumer profile, and is retained in release evidence. Public
+  troubleshooting guidance covers stable diagnostic codes and common build, manifest,
+  compatibility, and lockstep-latency failures. A Windows PowerShell 5.1 self-test prevents the
+  shipped diagnostic's pass/adversarial contract from drifting. First-skirmish guidance now
+  separates host examples from shipped plugin content and walks project-owned settings, unit, map,
+  manifest, and two-player qualification. Deeper subsystem tutorials and broader in-editor error UX
+  remain.
 
 Exit: a studio can adopt the framework without relying on this repository's private history or an agent to explain hidden setup.

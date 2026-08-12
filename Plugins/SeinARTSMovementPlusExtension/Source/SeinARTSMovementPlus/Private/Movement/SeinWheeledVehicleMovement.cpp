@@ -14,6 +14,7 @@
 #include "SeinNavigation.h"
 #include "SeinPathTypes.h"
 #include "Math/MathLib.h"
+#include "Lib/SeinMovementPlusBPFL.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Types/Entity.h"
 #include "Types/FixedPoint.h"
@@ -190,6 +191,72 @@ void USeinWheeledVehicleMovement::OnMoveEnd(FSeinEntity& Entity)
 	bIsReversing = false;
 }
 
+void USeinWheeledVehicleMovement::UpdateSettledRenderState(
+	const FSeinSettledMovementRenderContext& Context,
+	const FSeinMovementComponent& MovementData,
+	FSeinMovementRenderStateWriter& Writer) const
+{
+	using namespace UE::SeinARTSMovementPlus::Telemetry;
+	const FSeinWheeledMovementData* Wheeled =
+		MovementData.MovementClassData.GetPtr<FSeinWheeledMovementData>();
+	if (!Wheeled || !Context.bHasPreviousSample
+		|| Context.DeltaTime <= FFixedPoint::Epsilon)
+	{
+		Writer.Reset();
+		Writer.SetValue(SteeringAngleSlot, CurrentSteer);
+		return;
+	}
+
+	const FFixedPoint PreviousYaw =
+		YawFromRotation(Context.PreviousTransform.Rotation);
+	const FFixedPoint CurrentYaw =
+		YawFromRotation(Context.CurrentTransform.Rotation);
+	const FFixedPoint YawRate =
+		ShortestAngleDelta(PreviousYaw, CurrentYaw) / Context.DeltaTime;
+	const FFixedPoint PreviousDriverSpeed =
+		Context.PreviousDriverVelocity.Size();
+	const FFixedPoint DriverSpeed = Context.DriverVelocity.Size();
+	const FFixedPoint SpeedDelta =
+		DriverSpeed - PreviousDriverSpeed;
+	const FFixedPoint AccelDenom =
+		Wheeled->Acceleration * Context.DeltaTime;
+	const FFixedPoint DecelDenom =
+		Wheeled->Deceleration * Context.DeltaTime;
+	const FFixedPoint Throttle =
+		SpeedDelta > FFixedPoint::Zero
+			&& AccelDenom > FFixedPoint::Epsilon
+		? Clamp01(SpeedDelta / AccelDenom)
+		: FFixedPoint::Zero;
+	const FFixedPoint Brake =
+		SpeedDelta < FFixedPoint::Zero
+			&& DecelDenom > FFixedPoint::Epsilon
+		? Clamp01((-SpeedDelta) / DecelDenom)
+		: FFixedPoint::Zero;
+
+	const FFixedVector Forward =
+		Context.CurrentTransform.Rotation.RotateVector(
+			FFixedVector::ForwardVector);
+	const FFixedVector SettledDelta =
+		Context.SettledVelocity * Context.DeltaTime;
+	const FFixedPoint SettledForwardSpeed =
+		Context.SettledVelocity.X * Forward.X
+			+ Context.SettledVelocity.Y * Forward.Y;
+	const FFixedPoint SettledForwardDistance =
+		SettledDelta.X * Forward.X + SettledDelta.Y * Forward.Y;
+	const FFixedPoint PreviousTravelDistance =
+		Writer.GetValue(WheelTravelDistanceSlot);
+
+	Writer.SetValue(SteeringAngleSlot, CurrentSteer);
+	Writer.SetValue(YawRateSlot, YawRate);
+	Writer.SetValue(NormalizedThrottleSlot, Throttle);
+	Writer.SetValue(NormalizedBrakeSlot, Brake);
+	Writer.SetValue(
+		WheelTravelDistanceSlot,
+		AccumulateWheelTravel(
+			PreviousTravelDistance, SettledForwardDistance));
+	Writer.SetValue(SettledForwardSpeedSlot, SettledForwardSpeed);
+}
+
 void USeinWheeledVehicleMovement::OnMoveBegin(const FSeinMovementContext& Ctx)
 {
 	// Base dispatcher: fires BP_OnMoveBegin for BP subclasses and re-runs the
@@ -197,7 +264,6 @@ void USeinWheeledVehicleMovement::OnMoveBegin(const FSeinMovementContext& Ctx)
 	Super::OnMoveBegin(Ctx);
 
 	if (!Ctx.MovementData) return;
-
 	FSeinEntity& Entity = Ctx.Entity;
 	FSeinMovementComponent& MovementData = *Ctx.MovementData;
 	const FSeinPath& Path = Ctx.Path;

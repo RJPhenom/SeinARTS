@@ -78,6 +78,19 @@ direction before changing the shipped default behavior.
 - Parallel computation may read immutable snapshots but commits in a canonical deterministic order.
 - Contained entities are posed by containment and must not be independently moved.
 
+## Presentation telemetry
+
+- Wheeled and Tracked publish typed AnimBP telemetry through `USeinMovementPlusBPFL`: steering
+  angle, yaw rate, normalized throttle/brake, wrapped wheel phase, and left/right track velocity.
+- Telemetry is sampled in FinalObservation. Wheel/track motion and yaw use settled post-collision
+  transforms; throttle/brake use the movement driver's velocity output so collision correction or
+  containment cannot masquerade as input.
+- `FSeinMovementComponent::RenderState` and sampler history are Transient, non-canonical, reset on
+  spawn/restore/class loss, and may never feed simulation. The raw field is not Blueprint-visible;
+  movement and Ability Blueprint validators block presentation-only getters from simulation graphs.
+- Wheel phase is returned in `[0, 2*pi)` after a double-precision render-boundary conversion. The
+  fixed-point travel accumulator has a distant rollover guard; neither value affects movement.
+
 ## Verification
 
 Movement+ changes require:
@@ -88,6 +101,8 @@ Movement+ changes require:
 - Serial/parallel and replay state agreement.
 - Asset redirect/soft-path loading with Movement+ present and clean fallback when absent.
 - Long-run idle and order-transition state tests.
+- Telemetry signs/bounds/reset, missing-instance cleanup, restore behavior, and canonical-state
+  neutrality; validate the final animation mapping in PIE.
 - Scripted PIE tactics-gym A/Bs for wheeled cornering, tracked pivoting, hover strafe, flight
   banking/loiter, crowd behavior, and animation readability.
 

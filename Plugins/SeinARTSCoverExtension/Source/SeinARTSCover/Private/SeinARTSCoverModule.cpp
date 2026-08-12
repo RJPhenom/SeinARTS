@@ -51,7 +51,7 @@ void FSeinARTSCoverModule::StartupModule()
 	PoolDescriptor.StableProviderId =
 		TEXT("seinarts.cover.pool.default-resolver.reflection");
 	PoolDescriptor.StateSchemaVersion = 1;
-	PoolDescriptor.BehaviorRevision = 1;
+	PoolDescriptor.BehaviorRevision = 2;
 	PoolDescriptor.CodecRevision = 2;
 	PoolDescriptor.MaxStateBytes =
 		FSeinPoolObjectCodecRegistry::MaxStateBytes;

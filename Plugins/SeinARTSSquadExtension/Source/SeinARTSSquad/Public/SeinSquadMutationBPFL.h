@@ -29,7 +29,8 @@ class SEINARTSSQUAD_API USeinSquadMutationBPFL : public UBlueprintFunctionLibrar
 
 public:
 
-	// Whole-struct setters
+	// Legacy whole-struct setters. These are restricted to uninitialized,
+	// unassigned tick-zero data; live topology routes through exact APIs below.
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Squad", meta = (WorldContext = "WorldContextObject", DisplayName = "Set Squad Data"))
 	static bool SeinSetSquadData(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, const FSeinSquadComponent& NewData);
 
@@ -49,11 +50,27 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Squad|Slot", meta = (WorldContext = "WorldContextObject", DisplayName = "Fill Squad Slot"))
 	static bool SeinFillSquadSlot(const UObject* WorldContextObject, FSeinEntityHandle SquadHandle, FGameplayTag SlotTag, FSeinEntityHandle Member);
 
+	/** Exact identity variant. Prefer this when role tags may be shared. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Squad|Slot", meta = (WorldContext = "WorldContextObject", DisplayName = "Fill Squad Slot by Index"))
+	static bool SeinFillSquadSlotByIndex(const UObject* WorldContextObject, FSeinEntityHandle SquadHandle, int32 SlotIndex, FSeinEntityHandle Member);
+
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Squad|Slot", meta = (WorldContext = "WorldContextObject", DisplayName = "Empty Squad Slot"))
 	static bool SeinEmptySquadSlot(const UObject* WorldContextObject, FSeinEntityHandle SquadHandle, FGameplayTag SlotTag);
 
+	/** Exact identity variant. Prefer this when role tags may be shared. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Squad|Slot", meta = (WorldContext = "WorldContextObject", DisplayName = "Empty Squad Slot by Index"))
+	static bool SeinEmptySquadSlotByIndex(const UObject* WorldContextObject, FSeinEntityHandle SquadHandle, int32 SlotIndex);
+
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Squad|Slot", meta = (WorldContext = "WorldContextObject", DisplayName = "Set Slot Offset Transform"))
 	static bool SeinSetSlotOffsetTransform(const UObject* WorldContextObject, FSeinEntityHandle SquadHandle, FGameplayTag SlotTag, FFixedTransform NewOffset);
+
+	/** Queue one exact slot and return its monotonic request identity. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Squad|Reinforcement", meta = (WorldContext = "WorldContextObject", DisplayName = "Queue Squad Reinforcement"))
+	static bool SeinQueueSquadReinforcement(const UObject* WorldContextObject, FSeinEntityHandle SquadHandle, int32 SlotIndex, int64& OutRequestID);
+
+	/** Cancel one exact request and refund its snapshotted payer/cost. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Squad|Reinforcement", meta = (WorldContext = "WorldContextObject", DisplayName = "Cancel Squad Reinforcement"))
+	static bool SeinCancelSquadReinforcement(const UObject* WorldContextObject, FSeinEntityHandle SquadHandle, int64 RequestID);
 
 private:
 	static USeinWorldSubsystem* GetWorldSubsystem(const UObject* WorldContextObject);

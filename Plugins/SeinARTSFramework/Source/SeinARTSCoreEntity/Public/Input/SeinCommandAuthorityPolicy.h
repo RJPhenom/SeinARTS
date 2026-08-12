@@ -71,6 +71,12 @@ public:
 		FSeinEntityHandle Entity,
 		FGameplayTag CommandType) const;
 
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|Command|Authority")
+	bool HasPairCapability(
+		FSeinPlayerID SourcePlayer,
+		FSeinPlayerID TargetPlayer,
+		FGameplayTag CapabilityTag) const;
+
 private:
 	void Initialize(USeinWorldSubsystem* InWorld) { World = InWorld; }
 

@@ -5,11 +5,9 @@
 
 #include "Resolvers/SeinCoverAwareDefaultBrokerResolver.h"
 
-#include "Lib/SeinCoverGeometry.h"
+#include "Lib/SeinCoverAssignmentPlanner.h"
 #include "System/SeinCoverSubsystem.h"
 #include "System/SeinCoverSystem.h"
-#include "Tags/SeinCoverGameplayTags.h"
-#include "Types/SeinCoverTypes.h"
 
 #include "Settings/SeinARTSCoverSettings.h"
 #include "Simulation/SeinWorldSubsystem.h"
@@ -30,126 +28,6 @@ namespace SeinCoverSnapLocal
 		return CoverSub ? CoverSub->GetCoverSystem() : nullptr;
 	}
 
-	/** Tag-based eligibility check — uses cover iff the entity carries the
-	 *  `SeinARTS.Cover.UsesCover` tag (typically authored on the entity
-	 *  bridge's BaseTags and propagated through the spawn pipeline). O(1)
-	 *  via the world subsystem's tag-state map. */
-	static bool EntityUsesCover(USeinWorldSubsystem* WorldSub, FSeinEntityHandle Handle)
-	{
-		return WorldSub && WorldSub->HasTag(Handle, SeinCoverTags::Cover_UsesCover);
-	}
-
-	/** One-pass greedy nearest allocator over an INDEX-FILTERED slot list.
-	 *  Walks `MemberOrder` (member indices remaining to allocate) and for
-	 *  each member, finds the cheapest unallocated slot in `SlotIndices`
-	 *  within `SnapRadiusSq`. Allocated slots are inserted into
-	 *  `InOutAllocatedSlotIndices` so a subsequent pass can skip them.
-	 *  Members that successfully snap are removed from `MemberOrder` (so
-	 *  the next pass only sees still-unallocated members).
-	 *
-	 *  Cost is plain squared distance — no side penalty. The side decision
-	 *  is made up front by `PartitionSlotsByCursorSide`; within a pass,
-	 *  greedy-nearest is the right policy. */
-	static int32 GreedyAllocatePass(
-		const TArray<FSeinCoverSlotCandidate>& Slots,
-		const TArray<int32>& SlotIndices,
-		TArray<FFixedVector>& InOutPositions,
-		TArray<int32>& MemberOrder,
-		TSet<int32>& InOutAllocatedSlotIndices,
-		FFixedPoint SnapRadiusSq)
-	{
-		int32 NumSnapped = 0;
-		for (int32 MemberCursor = 0; MemberCursor < MemberOrder.Num(); )
-		{
-			const int32 MemberIdx = MemberOrder[MemberCursor];
-
-			int32 BestSlotIdx = INDEX_NONE;
-			FFixedPoint BestDistSq = FFixedPoint::MaxValue;
-			for (int32 SlotIdx : SlotIndices)
-			{
-				if (InOutAllocatedSlotIndices.Contains(SlotIdx)) continue;
-				const FFixedPoint DistSq = FFixedVector::DistSquared(InOutPositions[MemberIdx], Slots[SlotIdx].WorldPosition);
-				if (DistSq > SnapRadiusSq) continue;
-				if (DistSq < BestDistSq)
-				{
-					BestDistSq = DistSq;
-					BestSlotIdx = SlotIdx;
-				}
-			}
-
-			if (BestSlotIdx != INDEX_NONE)
-			{
-				InOutPositions[MemberIdx] = Slots[BestSlotIdx].WorldPosition;
-				InOutAllocatedSlotIndices.Add(BestSlotIdx);
-				MemberOrder.RemoveAt(MemberCursor);
-				++NumSnapped;
-			}
-			else
-			{
-				++MemberCursor;
-			}
-		}
-		return NumSnapped;
-	}
-
-	/** Two-pass cover-snap allocator implementing the cursor-side global
-	 *  filter described in DESIGN option D:
-	 *    Pass 1 — greedy nearest over PREFERRED-side slots (slots on the
-	 *             same side of the cover body as the cursor, or slots
-	 *             from non-directional providers).
-	 *    Pass 2 — for any members still unallocated, greedy nearest over
-	 *             WRONG-side slots. Wrap-around fallback so a squad larger
-	 *             than the preferred-side capacity still snaps cleanly.
-	 *
-	 *  Walks Members in index order (matches the broker resolver's per-
-	 *  member iteration). Lower slot indices get first pick — typically
-	 *  the leader / front row, which is the natural priority. */
-	static void SnapMembersToSlots(
-		USeinWorldSubsystem* WorldSub,
-		const TArray<FSeinEntityHandle>& Members,
-		TArray<FFixedVector>& InOutPositions,
-		TArray<FSeinCoverSlotCandidate>& Slots,
-		FFixedVector TargetLocation,
-		FFixedPoint SnapRadius)
-	{
-		const FFixedPoint SnapRadiusSq = SnapRadius * SnapRadius;
-
-		// Partition slot candidates by cursor side. One outward-from-extents
-		// call per provider (cached internally); slots with zero WPFD
-		// (non-directional providers) go into preferred.
-		TArray<int32> PreferredIndices;
-		TArray<int32> WrongSideIndices;
-		SeinCoverGeometry::PartitionSlotsByCursorSide(WorldSub, Slots, TargetLocation,
-			PreferredIndices, WrongSideIndices);
-
-		// Build the working member list: only cover-eligible members with a
-		// valid InOutPositions index. Order preserves the input order so the
-		// leader / front row gets first pick.
-		TArray<int32> RemainingMembers;
-		RemainingMembers.Reserve(Members.Num());
-		for (int32 i = 0; i < Members.Num(); ++i)
-		{
-			if (i >= InOutPositions.Num()) break;
-			if (!EntityUsesCover(WorldSub, Members[i])) continue;
-			RemainingMembers.Add(i);
-		}
-		const int32 TotalEligible = RemainingMembers.Num();
-
-		TSet<int32> AllocatedSlots;
-		AllocatedSlots.Reserve(Slots.Num());
-
-		const int32 SnappedPreferred = GreedyAllocatePass(
-			Slots, PreferredIndices, InOutPositions, RemainingMembers, AllocatedSlots, SnapRadiusSq);
-
-		const int32 SnappedWrongSide = GreedyAllocatePass(
-			Slots, WrongSideIndices, InOutPositions, RemainingMembers, AllocatedSlots, SnapRadiusSq);
-
-		UE_LOG(LogSeinCoverResolver, Verbose,
-			TEXT("Cover-snap: %d/%d members snapped (preferred=%d, wrong-side fallback=%d; %d preferred slots, %d wrong-side slots in candidate set)"),
-			SnappedPreferred + SnappedWrongSide, TotalEligible,
-			SnappedPreferred, SnappedWrongSide,
-			PreferredIndices.Num(), WrongSideIndices.Num());
-	}
 }
 
 void USeinCoverAwareDefaultBrokerResolver::PostProcessPositions_Implementation(
@@ -207,13 +85,20 @@ void USeinCoverAwareDefaultBrokerResolver::PostProcessPositions_Implementation(
 	// Reachability is handled by the authoritative-destination path: the unit is
 	// delivered to the exact slot, and the preview shows the exact slot.
 
-	// Tag check before allocation so we can see who's eligible.
-	for (int32 i = 0; i < Members.Num(); ++i)
-	{
-		const bool bUses = SeinCoverSnapLocal::EntityUsesCover(WorldSub, Members[i]);
-		UE_LOG(LogSeinCoverResolver, Verbose,
-			TEXT("  Member[%d] %s: UsesCover=%s"), i, *Members[i].ToString(), bUses ? TEXT("true") : TEXT("false"));
-	}
+	const FSeinCoverAssignmentPlan Plan =
+		FSeinCoverAssignmentPlanner::PlanForMembers(
+			WorldSub,
+			Members,
+			InOutPositions,
+			NearbySlots,
+			TargetLocation,
+			CoverSnapRadius);
+	Plan.Apply(InOutPositions, NearbySlots);
 
-	SeinCoverSnapLocal::SnapMembersToSlots(WorldSub, Members, InOutPositions, NearbySlots, TargetLocation, CoverSnapRadius);
+	UE_LOG(LogSeinCoverResolver, Verbose,
+		TEXT("Cover-snap: %d/%d members snapped (preferred=%d, wrong-side=%d)."),
+		Plan.Num(),
+		Plan.EligibleMemberCount,
+		Plan.PreferredAssignmentCount,
+		Plan.WrongSideAssignmentCount());
 }

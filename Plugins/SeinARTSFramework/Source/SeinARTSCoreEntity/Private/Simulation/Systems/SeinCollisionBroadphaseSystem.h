@@ -98,10 +98,9 @@ public:
 			// unset-ObjectType, and renamed/removed-channel traps. Stripped in shipping.
 			if (Extents && Extents->Shapes.Num() > 0)
 			{
-				static TSet<int32> SeinLoggedColliderGate;
-				if (!SeinLoggedColliderGate.Contains(Handle.Index))
+				if (!LoggedColliderGate.Contains(Handle))
 				{
-					SeinLoggedColliderGate.Add(Handle.Index);
+					LoggedColliderGate.Add(Handle);
 
 					FString Why;
 					if (!Extents->bCollisionEnabled)
@@ -187,4 +186,11 @@ public:
 			ESeinTickPhase::PreTick,
 			SeinSystemPriority::CollisionBroadphase);
 	}
+
+private:
+#if !UE_BUILD_SHIPPING
+	// Diagnostic-only state is scoped to this world's system instance. Full
+	// handles keep recycled slots and separate PIE worlds independently visible.
+	TSet<FSeinEntityHandle> LoggedColliderGate;
+#endif
 };

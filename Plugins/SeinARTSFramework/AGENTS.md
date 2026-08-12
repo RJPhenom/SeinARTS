@@ -83,6 +83,21 @@ Sim-affecting settings owned by this plugin or an extension participate in
 - Effects support instance, class-per-player, and player scopes. Identity and future state must
   remain unambiguous across every storage scope.
 
+## Player-pair capabilities
+
+- Ordered player-pair capability grants are the authoritative relationship substrate. Direction
+  matters: `A -> B` may differ from `B -> A`; for ShareVision, `A -> B` means B may consume A's
+  vision. Self is implicit and self-pairs are never stored.
+- Every grant carries a capability tag, source-kind tag, stable positive source-instance ID, and
+  refcount. Overlapping sources compose; revocation removes only the exact matching source.
+- Source records are canonical. The effective pair refcount map is a derived query cache that must
+  validate, rebuild, hash, snapshot, restore, replay, and reconnect consistently with those records.
+- Team ID is bootstrap seeding only. Team ID 0 preserves free-for-all defaults; after bootstrap the
+  ledger is authoritative. Friendly/Enemy/Neutral remain UI disposition projections, not Core
+  diplomacy state. Treaty/posture policy and capability consumers belong in optional layers.
+- Canonical ordering and hashing use exact gameplay-tag names, never process-local `FName` or tag
+  indices. Mutations occur only through authorized deterministic command timing.
+
 ## Pluggable system seams
 
 The shipped implementation is a default, not a mandatory genre rule:

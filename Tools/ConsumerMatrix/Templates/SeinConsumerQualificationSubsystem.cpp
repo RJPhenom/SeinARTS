@@ -6,6 +6,7 @@
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "HAL/FileManager.h"
+#include "Data/SeinRelationshipTypes.h"
 #include "Input/SeinCommand.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/CommandLine.h"
@@ -18,6 +19,8 @@
 #include "SeinReplayReader.h"
 #include "SeinReplayWriter.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "StructUtils/InstancedStruct.h"
+#include "Tags/SeinARTSGameplayTags.h"
 #include "Types/Vector.h"
 
 namespace
@@ -26,6 +29,69 @@ namespace
 	constexpr double ReconnectDelaySeconds = 2.0;
 	constexpr int32 InitialResyncStartTick = 30;
 	constexpr int32 ReplayTailAfterReconnectTicks = 60;
+	constexpr int64 QualificationRelationshipSourceInstanceID =
+		0x5155414C;
+
+	bool ResolveQualificationPair(
+		const USeinWorldSubsystem& Sim,
+		FSeinPlayerID& OutSource,
+		FSeinPlayerID& OutTarget)
+	{
+		TArray<FSeinPlayerID> Players = Sim.GetRegisteredPlayerIDs();
+		Players.RemoveAll([](const FSeinPlayerID Player)
+		{
+			return !Player.IsValid() || Player.IsNeutral();
+		});
+		Players.Sort();
+		if (Players.Num() != 2)
+		{
+			return false;
+		}
+		OutSource = Players[0];
+		OutTarget = Players[1];
+		return true;
+	}
+
+	bool HasQualificationPairCapability(const USeinWorldSubsystem& Sim)
+	{
+		FSeinPlayerID Source;
+		FSeinPlayerID Target;
+		return ResolveQualificationPair(Sim, Source, Target)
+			&& Sim.HasPairCapability(
+				Source,
+				Target,
+				SeinARTSTags::Relationship_Capability_ShareVision);
+	}
+
+	FSeinCommand MakeQualificationPairCapabilityCommand(
+		const USeinWorldSubsystem& Sim,
+		bool bGrant)
+	{
+		FSeinPlayerID Source;
+		FSeinPlayerID Target;
+		if (!ResolveQualificationPair(Sim, Source, Target))
+		{
+			return FSeinCommand();
+		}
+
+		FSeinSetPairCapabilityCommandPayload Payload;
+		Payload.SourcePlayer = Source;
+		Payload.TargetPlayer = Target;
+		Payload.CapabilityTag =
+			SeinARTSTags::Relationship_Capability_ShareVision;
+		Payload.SourceKindTag =
+			SeinARTSTags::Relationship_Source_MatchAdministration;
+		Payload.SourceInstanceID =
+			QualificationRelationshipSourceInstanceID;
+		Payload.bGrant = bGrant;
+
+		FSeinCommand Command;
+		Command.CommandType =
+			SeinARTSTags::Command_Type_SetPairCapability;
+		Command.SchemaVersion = 1;
+		Command.Payload = FInstancedStruct::Make(Payload);
+		return Command;
+	}
 
 	FString GuidDigits(const FGuid& Guid)
 	{
@@ -84,6 +150,13 @@ void USeinConsumerQualificationSubsystem::Deinitialize()
 		TickHandle.Reset();
 	}
 	ActiveReplayReader.Reset();
+	if (USeinWorldSubsystem* ReplayWorld = ReplayObserverWorld.Get())
+	{
+		ReplayWorld->OnCommandsProcessing.Remove(
+			ReplayCommandObserverHandle);
+	}
+	ReplayCommandObserverHandle.Reset();
+	ReplayObserverWorld.Reset();
 	InitialClientMatchWorld.Reset();
 	Super::Deinitialize();
 }
@@ -280,6 +353,28 @@ void USeinConsumerQualificationSubsystem::TickServer(UWorld& World)
 			Net->GetLocalPlayerID(), FFixedVector()));
 		bPingSubmitted = true;
 	}
+	if (!bServerPairGrantSubmitted && Sim->GetCurrentTick() >= 6)
+	{
+		const FSeinCommand Grant =
+			MakeQualificationPairCapabilityCommand(*Sim, true);
+		if (!Grant.CommandType.IsValid())
+		{
+			return;
+		}
+		Net->SubmitLocalCommandDraft(
+			Grant, /*bRequestMatchAdministration=*/true);
+		bServerPairGrantSubmitted = true;
+		WriteMarker(
+			TEXT("server-pair-grant-submitted.marker"),
+			FString::Printf(TEXT("tick=%d\n"), Sim->GetCurrentTick()));
+	}
+	if (bServerPairGrantSubmitted && !bServerPairGrantObserved
+		&& HasQualificationPairCapability(*Sim))
+	{
+		bServerPairGrantObserved = WriteMarker(
+			TEXT("server-pair-grant-observed.marker"),
+			FString::Printf(TEXT("tick=%d\n"), Sim->GetCurrentTick()));
+	}
 
 	int32 Connected = 0;
 	bool bHasDropped = false;
@@ -319,8 +414,43 @@ void USeinConsumerQualificationSubsystem::TickServer(UWorld& World)
 			TEXT("server-reconnect-activated.marker"),
 			FString::Printf(TEXT("tick=%d\n"), ServerReconnectTick));
 	}
+	if (bServerSawReconnect && !bServerPairRevokeSubmitted)
+	{
+		const FString PreservedMarker = FPaths::Combine(
+			MarkerDirectory,
+			TEXT("client-reconnect-capability-preserved.marker"));
+		if (!IFileManager::Get().FileExists(*PreservedMarker)
+			|| !HasQualificationPairCapability(*Sim))
+		{
+			return;
+		}
+		const FSeinCommand Revoke =
+			MakeQualificationPairCapabilityCommand(*Sim, false);
+		if (!Revoke.CommandType.IsValid())
+		{
+			Fail(TEXT("server could not resolve qualification pair for revoke"));
+			return;
+		}
+		Net->SubmitLocalCommandDraft(
+			Revoke, /*bRequestMatchAdministration=*/true);
+		bServerPairRevokeSubmitted = true;
+		WriteMarker(
+			TEXT("server-pair-revoke-submitted.marker"),
+			FString::Printf(TEXT("tick=%d\n"), Sim->GetCurrentTick()));
+	}
+	if (bServerPairRevokeSubmitted && !bServerPairRevokeObserved
+		&& !HasQualificationPairCapability(*Sim))
+	{
+		bServerPairRevokeObserved = WriteMarker(
+			TEXT("server-pair-revoke-observed.marker"),
+			FString::Printf(TEXT("tick=%d\n"), Sim->GetCurrentTick()));
+	}
 
-	if (!bServerSawReconnect || bServerReplayPublished
+	const FString ClientRevokeMarker = FPaths::Combine(
+		MarkerDirectory, TEXT("client-pair-revoke-observed.marker"));
+	if (!bServerSawReconnect || !bServerPairRevokeObserved
+		|| !IFileManager::Get().FileExists(*ClientRevokeMarker)
+		|| bServerReplayPublished
 		|| Sim->GetCurrentTick()
 			< ServerReconnectTick + ReplayTailAfterReconnectTicks)
 	{
@@ -439,6 +569,22 @@ void USeinConsumerQualificationSubsystem::TickClient(UWorld& World)
 		{
 			return;
 		}
+		if (!bClientPairGrantObserved)
+		{
+			if (!HasQualificationPairCapability(*Sim))
+			{
+				return;
+			}
+			bClientPairGrantObserved = WriteMarker(
+				TEXT("client-pair-grant-observed.marker"),
+				FString::Printf(
+					TEXT("tick=%d\n"), Sim->GetCurrentTick()));
+			if (!bClientPairGrantObserved)
+			{
+				Fail(TEXT("client could not publish pair-grant witness"));
+				return;
+			}
+		}
 		if (!bPingSubmitted && Sim->GetCurrentTick() >= 6)
 		{
 			Net->SubmitLocalCommand(FSeinCommand::MakePingCommand(
@@ -528,6 +674,11 @@ void USeinConsumerQualificationSubsystem::TickClient(UWorld& World)
 		&& Sim->IsSimulationRunning()
 		&& Sim->GetCurrentTick() > ReconnectResyncRequestTick)
 	{
+		if (!HasQualificationPairCapability(*Sim))
+		{
+			Fail(TEXT("pair capability was absent after production reconnect resync"));
+			return;
+		}
 		FGuid Root;
 		FString Error;
 		if (!Sim->ComputeCanonicalStateRoot(Root, Error))
@@ -536,12 +687,60 @@ void USeinConsumerQualificationSubsystem::TickClient(UWorld& World)
 				TEXT("reconnected client root failed: %s"), *Error));
 			return;
 		}
+		bReconnectPairCapabilityPreserved = WriteMarker(
+			TEXT("client-reconnect-capability-preserved.marker"),
+			FString::Printf(TEXT("tick=%d\n"), Sim->GetCurrentTick()));
+		if (!bReconnectPairCapabilityPreserved)
+		{
+			Fail(TEXT("client could not publish reconnect capability witness"));
+			return;
+		}
 		bReconnectCompleted = true;
 		WriteMarker(
 			TEXT("client-reconnect-complete.marker"),
 			FString::Printf(
 				TEXT("tick=%d\nRoot=%s\n"),
 				Sim->GetCurrentTick(), *GuidDigits(Root)));
+	}
+	if (bReconnectCompleted && !bClientPairRevokeObserved
+		&& !HasQualificationPairCapability(*Sim))
+	{
+		bClientPairRevokeObserved = WriteMarker(
+			TEXT("client-pair-revoke-observed.marker"),
+			FString::Printf(TEXT("tick=%d\n"), Sim->GetCurrentTick()));
+	}
+}
+
+void USeinConsumerQualificationSubsystem::ObserveReplayCommands(
+	int32 Tick,
+	const TArray<FSeinCommand>& Commands)
+{
+	(void)Tick;
+	for (const FSeinCommand& Command : Commands)
+	{
+		if (Command.CommandType
+			!= SeinARTSTags::Command_Type_SetPairCapability)
+		{
+			continue;
+		}
+		const FSeinSetPairCapabilityCommandPayload* Payload =
+			Command.Payload.GetPtr<FSeinSetPairCapabilityCommandPayload>();
+		if (!Payload
+			|| Payload->SourceKindTag
+				!= SeinARTSTags::Relationship_Source_MatchAdministration
+			|| Payload->SourceInstanceID
+				!= QualificationRelationshipSourceInstanceID)
+		{
+			continue;
+		}
+		if (Payload->bGrant)
+		{
+			bReplayObservedPairGrant = true;
+		}
+		else
+		{
+			bReplayObservedPairRevoke = true;
+		}
 	}
 }
 
@@ -605,8 +804,13 @@ void USeinConsumerQualificationSubsystem::TickReplay(UWorld& World)
 				Reader->GetHeader().EndTick, ExpectedReplayEndTick));
 			return;
 		}
+		ReplayObserverWorld = Sim;
+		ReplayCommandObserverHandle =
+			Sim->OnCommandsProcessing.AddUObject(
+				this,
+				&USeinConsumerQualificationSubsystem::ObserveReplayCommands);
 		const int32 SeekTick = FMath::Clamp(
-			ExpectedReplayEndTick / 2, 1, ExpectedReplayEndTick - 1);
+			InitialResyncStartTick, 1, ExpectedReplayEndTick - 1);
 		if (!Reader->PlayFromTick(SeekTick))
 		{
 			Fail(FString::Printf(
@@ -614,6 +818,9 @@ void USeinConsumerQualificationSubsystem::TickReplay(UWorld& World)
 			return;
 		}
 		ActiveReplayReader = Reader;
+		bReplayObservedPairGrant =
+			bReplayObservedPairGrant
+			|| HasQualificationPairCapability(*Sim);
 		bReplayStarted = true;
 		bReplayObservedPlaying = Reader->IsPlaying();
 		WriteMarker(
@@ -638,6 +845,12 @@ void USeinConsumerQualificationSubsystem::TickReplay(UWorld& World)
 		Fail(FString::Printf(
 			TEXT("replay stopped at tick %d instead of %d"),
 			Sim->GetCurrentTick(), ExpectedReplayEndTick));
+		return;
+	}
+	if (!bReplayObservedPairGrant || !bReplayObservedPairRevoke
+		|| HasQualificationPairCapability(*Sim))
+	{
+		Fail(TEXT("replay did not witness the pair-capability grant/revoke lifecycle"));
 		return;
 	}
 
@@ -673,7 +886,7 @@ void USeinConsumerQualificationSubsystem::TickReplay(UWorld& World)
 	WriteMarker(
 		TEXT("replay-complete.marker"),
 		FString::Printf(
-			TEXT("EndTick=%d\nRoot=%s\n"),
+			TEXT("EndTick=%d\nRoot=%s\nPairGrantWitness=Passed\nPairRevokeWitness=Passed\n"),
 			ExpectedReplayEndTick, *ReplayRootText));
 	FPlatformMisc::RequestExit(false);
 }

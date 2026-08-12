@@ -192,6 +192,14 @@ bool USeinNavigation::IsFootprintClearForAgent(
 	return true;
 }
 
+bool USeinNavigation::IsFootprintClearForAgentIgnoringDynamicBlockers(
+	const FFixedVector& WorldPos,
+	const FSeinNavAgentProfile& Agent,
+	const TSet<FSeinEntityHandle>& /*IgnoredDynamicBlockerOwners*/) const
+{
+	return IsFootprintClearForAgent(WorldPos, Agent);
+}
+
 bool USeinNavigation::IsAuthoritativeDestinationSafeForAgent(
 	const FFixedVector& WorldPos,
 	const FSeinNavAgentProfile& Agent) const
@@ -287,6 +295,18 @@ bool USeinNavigation::ProjectPointToNavFreeForAgent(
 	}
 	return ProjectPointToNavForAgent(
 		WorldPos, Agent, OutProjected);
+}
+
+bool USeinNavigation::ProjectPointToNavFreeForAgentIgnoringDynamicBlockers(
+	const FFixedVector& WorldPos,
+	const FSeinNavAgentProfile& Agent,
+	const TSet<FSeinEntityHandle>& /*IgnoredDynamicBlockerOwners*/,
+	const TArray<FFixedVector>& AvoidCentres,
+	const TArray<FFixedPoint>& AvoidRadii,
+	FFixedVector& OutProjected) const
+{
+	return ProjectPointToNavFreeForAgent(
+		WorldPos, Agent, AvoidCentres, AvoidRadii, OutProjected);
 }
 
 FFixedVector USeinNavigation::QueryDirection(const FSeinDirectionQuery& Query) const

@@ -3,7 +3,7 @@
  * @file    SeinSnapshotTransfer.h
  * @brief   Bounded checkpoint transfer framing for resync (FEAT-01).
  *
- *          Maps a captured v13 world snapshot into the canonical snapshot
+ *          Maps a captured v15 world snapshot into the canonical snapshot
  *          envelope (one Authoritative section) for coordinator→peer
  *          transfer, and validates + decodes the received bytes back into a
  *          snapshot the trusted restore path can adopt. The envelope proves

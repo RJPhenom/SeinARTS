@@ -14,6 +14,8 @@ public class SeinARTSExtensionEditorTests : ModuleRules
 			"Slate",
 			"CQTest",
 			"UnrealEd",
+			"BlueprintGraph",
+			"DataValidation",
 			"Kismet",
 			"KismetCompiler",
 			"AssetRegistry",

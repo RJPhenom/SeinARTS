@@ -12,11 +12,21 @@ This is the actionable remainder after consolidating the historical audits. It i
 
 ## Gameplay-backbone gaps
 
-1. Cover has deterministic provider/query infrastructure but lacks stable reservations and a shared selection-wide tactical allocator.
-2. Squad reinforcement/loss lifecycle is not complete enough for production tactics gameplay.
-3. FoW still needs an explicit team/shared vision policy; the known blocker-height, authored-Z, and cone terrain-scaling defects are closed.
+1. Cover now has one exact deterministic max-cardinality/min-wrong-side/min-distance allocator
+   shared by the ordinary and Squad resolver adapters. It still lacks cross-broker aggregation,
+   stable reservations, and the exact preview-artifact commit/reject lifecycle, so separate
+   squad/loose resolver calls can claim the same authored slot.
+2. Squad reinforcement requests now have exact slot and monotonic request identity, atomic
+   payer/cost snapshots, exact cancel/refund, deterministic completion, reciprocal membership, and
+   snapshot continuation. Explicit squad destruction still needs product policy for queued refunds,
+   wipe/recreation, retreat, and queue replacement UX.
+3. FoW still needs an explicit team/shared vision policy and consumer. The directional,
+   source-attributed pair-capability substrate now exists in the current development wave; the known
+   blocker-height, authored-Z, and cone terrain-scaling defects are closed.
 4. Public targeting lacks the complete line/corridor/gesture policy surface needed by a modern tactical RTS.
-5. Movement+ needs behavior qualification and telemetry; Flight is not a production 3D avoidance/collision model.
+5. Movement+ needs the human behavior/performance and real multi-client network matrix. Typed
+   render-only vehicle telemetry plus replay-file and bounded reconnect continuation are automated.
+   Flight is not a production 3D avoidance/collision model.
 
 ## Online-product gaps
 
@@ -30,15 +40,26 @@ This is the actionable remainder after consolidating the historical audits. It i
 
 ## Performance and scale risks
 
-1. Large continuous formation previews remain the clearest measured framework authoring hotspot.
-2. Dense active collision beyond 148 movers lacks a measured scale curve.
+1. Continuous 100-unit formation preview is now qualified in a fresh UE 5.8 one-world Sandbox A/B.
+   Sparse dynamic-blocker indexing reduced refresh from 11.490 to 4.518 ms; repeated matched captures
+   observed a 1.60-2.86 ms complete-frame delta. The independent 128-member public-layout sentinel
+   remains 1.337 ms p95 coverless and 3.324 ms p95 with dense Cover. Larger selections, multi-world
+   PIE, configured game renderers, and 300/500/1,000-unit moving combat remain open scale gates.
+2. The isolated real fixed-tick dense-collision curve is now measured at 64/128/256 packed movers
+   (1.257/3.114/7.214 ms median in the All profile on the current machine). It does not replace a large moving-combat
+   PIE/Insights curve with movement, avoidance, navigation, abilities, animation, and presentation.
 3. Game-specific animation complexity can exceed the default mannequin baseline.
-4. Replay checkpoints and durable flushes are synchronous; long-session hitch and storage behavior need soak evidence.
+4. Replay automatic periodic checkpoint full-flushes now use the ordered background append worker. Complete
+   snapshot capture/envelope encoding, mandatory initial/final publication, and pressure-forced
+   drains remain synchronous. Automated integration now proves fail-closed behavior for asynchronous
+   append failure and real write denial while retaining the partial journal; long-session hitch and
+   slow/exhausted-storage behavior still need Insights and soak evidence.
 5. Debug navigation rendering is intentionally expensive and can invalidate profiling if left enabled.
 
 ## Explicit product decisions still required
 
 - Full cover scoring/contention/reservation policy, requester-aware post-processing, and moving-provider behavior.
+- Squad destruction, wipe/recreation, retreat, and reinforcement queue-replacement policy.
 - Public targeter/modifier/terrain/production/team-vision API shapes.
 - Flight and advanced vehicle-feel defaults after Vehicle Gym evidence.
 - Listen-host migration versus dedicated-only supported topology for each game mode.

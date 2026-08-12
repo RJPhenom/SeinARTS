@@ -294,11 +294,21 @@ namespace SeinReplayFormat
 					*Command.CommandType.ToString());
 				return false;
 			}
-			if (!IsActiveMatchSlot(Command.PlayerID))
+			if (Command.IssuerKind == ESeinCommandIssuerKind::Player
+				&& !IsActiveMatchSlot(Command.PlayerID))
 			{
 				OutError = FString::Printf(
 					TEXT("command '%s' names inactive player slot %u"),
 					*Command.CommandType.ToString(), Command.PlayerID.Value);
+				return false;
+			}
+			if (Command.IssuerKind
+					== ESeinCommandIssuerKind::MatchAdministrator
+				&& !Command.PlayerID.IsNeutral())
+			{
+				OutError = FString::Printf(
+					TEXT("match-administrator command '%s' must use neutral player identity"),
+					*Command.CommandType.ToString());
 				return false;
 			}
 			if (Command.Tick != static_cast<int32>(CanonicalTick))

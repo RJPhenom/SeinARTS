@@ -1,6 +1,7 @@
 #include "CQTest.h"
 #include "SeinNavigationAStar.h"
 #include "Settings/PluginSettings.h"
+#include "Stamping/SeinStampUtils.h"
 #include "TestTypes/SeinLevelDataTestTypes.h"
 
 namespace UE::SeinARTSTests
@@ -180,6 +181,42 @@ namespace UE::SeinARTSTests
 				FFixedPoint::FromInt(Y * 100 + 50),
 				FFixedPoint::Zero);
 		}
+
+		bool ReferenceDynamicCellBlocked(
+			const TArray<FSeinDynamicBlocker>& Blockers,
+			int32 QueryX,
+			int32 QueryY,
+			uint8 AgentMask,
+			FSeinEntityHandle Exclude,
+			const TSet<FSeinEntityHandle>* IgnoredOwners = nullptr)
+		{
+			for (const FSeinDynamicBlocker& Blocker : Blockers)
+			{
+				if (Blocker.Owner == Exclude
+					|| (IgnoredOwners
+						&& IgnoredOwners->Contains(Blocker.Owner))
+					|| (Blocker.BlockedNavLayerMask & AgentMask) == 0)
+				{
+					continue;
+				}
+				bool bCovered = false;
+				SeinStampUtils::ForEachCoveredCell(
+					Blocker.Shape,
+					Blocker.EntityCenter,
+					Blocker.EntityRotation,
+					FFixedPoint::FromInt(100),
+					FFixedVector::ZeroVector,
+					9,
+					9,
+					[&](int32 X, int32 Y)
+					{
+						bCovered = bCovered
+							|| (X == QueryX && Y == QueryY);
+					});
+				if (bCovered) return true;
+			}
+			return false;
+		}
 	}
 
 	TEST(RejectedGridAdoptionPreservesPriorTopology,
@@ -283,6 +320,95 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(AreEqual(8, MutationCount));
 
 		Nav->OnNavigationMutated.Remove(MutationHandle);
+	}
+
+	TEST(DynamicBlockerCellIndexMatchesExactStampCoverage,
+		"SeinARTS.Unit.Navigation")
+	{
+		USeinNavigationAStar* Nav =
+			NewObject<USeinNavigationAStar>();
+		USeinLevelDataTestDouble* LevelData =
+			NewObject<USeinLevelDataTestDouble>();
+		ASSERT_THAT(IsNotNull(Nav));
+		ASSERT_THAT(IsNotNull(LevelData));
+		ConfigureOpenConnectedNavGrid(*LevelData, FIntPoint(9, 9));
+		ASSERT_THAT(IsTrue(
+			Nav->LoadFromSubstrate(*LevelData).IsAdopted()));
+
+		FSeinDynamicBlocker Radial;
+		Radial.Owner = FSeinEntityHandle(10, 1);
+		Radial.EntityCenter = CellCenter(2, 2);
+		Radial.EntityRotation = FFixedQuaternion::Identity;
+		Radial.Shape.Shape = ESeinStampShape::Radial;
+		Radial.Shape.Radius = FFixedPoint::FromInt(125);
+		Radial.Shape.LocalOffset = FFixedVector(
+			FFixedPoint::FromInt(20), FFixedPoint::FromInt(-15),
+			FFixedPoint::Zero);
+		Radial.BlockedNavLayerMask = 0x01;
+
+		FSeinDynamicBlocker Rect;
+		Rect.Owner = FSeinEntityHandle(11, 2);
+		Rect.EntityCenter = CellCenter(4, 4);
+		Rect.EntityRotation = FFixedQuaternion::Identity;
+		Rect.Shape.Shape = ESeinStampShape::Rect;
+		Rect.Shape.HalfExtentX = FFixedPoint::FromInt(145);
+		Rect.Shape.HalfExtentY = FFixedPoint::FromInt(65);
+		Rect.Shape.YawOffsetDegrees = FFixedPoint::FromInt(35);
+		Rect.BlockedNavLayerMask = 0x02;
+
+		FSeinDynamicBlocker Cone;
+		Cone.Owner = FSeinEntityHandle(12, 3);
+		Cone.EntityCenter = CellCenter(6, 6);
+		Cone.EntityRotation = FFixedQuaternion::Identity;
+		Cone.Shape.Shape = ESeinStampShape::Conical;
+		Cone.Shape.ConeAngleDegrees = FFixedPoint::FromInt(80);
+		Cone.Shape.ConeLength = FFixedPoint::FromInt(225);
+		Cone.Shape.YawOffsetDegrees = FFixedPoint::FromInt(-40);
+		Cone.Shape.bConeRoundEdge = false;
+		Cone.BlockedNavLayerMask = 0x03;
+
+		const TArray<FSeinDynamicBlocker> Blockers = {
+			Radial, Rect, Cone,
+		};
+		FNavigationAStarTestAccess::InstallDynamicBlockers(
+			*Nav, Blockers);
+
+		TSet<FSeinEntityHandle> GroupIgnored;
+		GroupIgnored.Add(Rect.Owner);
+		GroupIgnored.Add(FSeinEntityHandle(Cone.Owner.Index, 99));
+		for (const uint8 Mask : { uint8(0x01), uint8(0x02), uint8(0x03) })
+		{
+			for (int32 Y = 0; Y < 9; ++Y)
+			{
+				for (int32 X = 0; X < 9; ++X)
+				{
+					const FFixedVector Position = CellCenter(X, Y);
+					const bool bOrdinaryExpected =
+						!ReferenceDynamicCellBlocked(
+							Blockers, X, Y, Mask, FSeinEntityHandle());
+					ASSERT_THAT(AreEqual(
+						bOrdinaryExpected,
+						Nav->IsWorldPositionClear(Position, Mask)));
+
+					FSeinNavAgentProfile Agent;
+					Agent.Requester = Radial.Owner;
+					Agent.AgentNavLayerMask = Mask;
+					const bool bGroupExpected =
+						!ReferenceDynamicCellBlocked(
+							Blockers, X, Y, Mask, Agent.Requester,
+							&GroupIgnored);
+					ASSERT_THAT(AreEqual(
+						bGroupExpected,
+						Nav->IsFootprintClearForAgentIgnoringDynamicBlockers(
+							Position, Agent, GroupIgnored)));
+				}
+			}
+		}
+
+		ASSERT_THAT(IsTrue(
+			Nav->LoadFromSubstrate(*LevelData).IsAdopted()));
+		ASSERT_THAT(IsFalse(Nav->IsWorldPositionClear(
+			CellCenter(2, 2), 0x01)));
 	}
 
 	TEST(EqualCellCountGridReloadDropsOverlayCoordinates, "SeinARTS.Unit.Navigation")
@@ -411,6 +537,88 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(Nav->FindPath(
 			IgnoringRequest, IgnoringPath)));
 		ASSERT_THAT(IsFalse(IgnoringPath.bIsPartial));
+	}
+
+	TEST(FormationProjectionIgnoresExactGroupDynamicBlockersOnly,
+		"SeinARTS.Unit.Navigation")
+	{
+		USeinNavigationAStar* Nav =
+			NewObject<USeinNavigationAStar>();
+		USeinLevelDataTestDouble* LevelData =
+			NewObject<USeinLevelDataTestDouble>();
+		ASSERT_THAT(IsNotNull(Nav));
+		ASSERT_THAT(IsNotNull(LevelData));
+		ConfigureOpenConnectedNavGrid(
+			*LevelData, FIntPoint(7, 7));
+		TArray<uint8>& Channel =
+			LevelData->LayerChannels.FindChecked(TEXT("Nav"));
+		Channel[1 * 7 + 1] = 255;
+		ASSERT_THAT(IsTrue(
+			Nav->LoadFromSubstrate(*LevelData).IsAdopted()));
+
+		const FSeinEntityHandle BlockerOwner(9, 1);
+		FSeinDynamicBlocker Blocker;
+		Blocker.Owner = BlockerOwner;
+		Blocker.EntityCenter = CellCenter(3, 3);
+		Blocker.EntityRotation = FFixedQuaternion::Identity;
+		Blocker.Shape.Shape = ESeinStampShape::Rect;
+		Blocker.Shape.HalfExtentX = FFixedPoint::FromInt(49);
+		Blocker.Shape.HalfExtentY = FFixedPoint::FromInt(49);
+		Blocker.BlockedNavLayerMask = 0x01;
+		FNavigationAStarTestAccess::InstallDynamicBlockers(
+			*Nav, { Blocker });
+
+		FSeinNavAgentProfile Agent;
+		Agent.Requester = FSeinEntityHandle(1, 1);
+		Agent.AgentNavLayerMask = 0x01;
+		const FFixedVector BlockedPosition = CellCenter(3, 3);
+		ASSERT_THAT(IsFalse(Nav->IsFootprintClearForAgent(
+			BlockedPosition, Agent)));
+
+		TSet<FSeinEntityHandle> WrongGeneration;
+		WrongGeneration.Add(FSeinEntityHandle(9, 2));
+		ASSERT_THAT(IsFalse(
+			Nav->IsFootprintClearForAgentIgnoringDynamicBlockers(
+				BlockedPosition, Agent, WrongGeneration)));
+
+		TSet<FSeinEntityHandle> ExactOwner;
+		ExactOwner.Add(BlockerOwner);
+		ASSERT_THAT(IsTrue(
+			Nav->IsFootprintClearForAgentIgnoringDynamicBlockers(
+				BlockedPosition, Agent, ExactOwner)));
+		ASSERT_THAT(IsFalse(
+			Nav->IsFootprintClearForAgentIgnoringDynamicBlockers(
+				CellCenter(1, 1), Agent, ExactOwner)));
+
+		const TArray<FFixedVector> AvoidCentres;
+		const TArray<FFixedPoint> AvoidRadii;
+		FFixedVector OrdinaryProjection;
+		ASSERT_THAT(IsTrue(Nav->ProjectPointToNavFreeForAgent(
+			BlockedPosition, Agent, AvoidCentres, AvoidRadii,
+			OrdinaryProjection)));
+		ASSERT_THAT(IsTrue(OrdinaryProjection != BlockedPosition));
+
+		FFixedVector GroupProjection;
+		ASSERT_THAT(IsTrue(
+			Nav->ProjectPointToNavFreeForAgentIgnoringDynamicBlockers(
+				BlockedPosition, Agent, ExactOwner,
+				AvoidCentres, AvoidRadii, GroupProjection)));
+		ASSERT_THAT(IsTrue(GroupProjection == BlockedPosition));
+
+		const TArray<FFixedVector> SaturatedAvoidCentres = {
+			BlockedPosition,
+		};
+		const TArray<FFixedPoint> SaturatedAvoidRadii = {
+			FFixedPoint::FromInt(100000),
+		};
+		FFixedVector GroupFallbackProjection;
+		ASSERT_THAT(IsTrue(
+			Nav->ProjectPointToNavFreeForAgentIgnoringDynamicBlockers(
+				BlockedPosition, Agent, ExactOwner,
+				SaturatedAvoidCentres, SaturatedAvoidRadii,
+				GroupFallbackProjection)));
+		ASSERT_THAT(IsTrue(
+			GroupFallbackProjection == BlockedPosition));
 	}
 
 	TEST(AgentTerrainParticipatesInFootprintClearance,

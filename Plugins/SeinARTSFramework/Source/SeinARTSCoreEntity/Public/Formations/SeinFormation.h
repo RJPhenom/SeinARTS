@@ -319,12 +319,14 @@ public:
 		int32 MaxIterations);
 
 	/**
-	 * Final placement safety pass: any position that landed off the nav area, or on top of a PARKED
-	 * unit's body, is projected to the nearest free cell instead.
+	 * Final placement safety pass: any position that landed off the nav area, on an unrelated runtime
+	 * blocker, or on top of a PARKED unit's body is projected to the nearest free cell instead.
 	 *
 	 * Free = walkable, clear of runtime nav blockers, not within footprint distance of any other slot,
-	 * and not on a parked unit (an idle body that is not part of this order — Exclude From Occupancy
-	 * lists this order's own members, since they vacate their spots). Every peer slot and parked body
+	 * and not on a parked unit (an idle body that is not part of this order). Exclude From Occupancy
+	 * lists this order's own members, since they vacate their spots; their exact generational owner
+	 * handles are also ignored as dynamic nav blockers, while unrelated blockers still apply. Every
+	 * peer slot and parked body
 	 * is treated as occupied during relocation so two overflowing slots never resolve onto the same
 	 * spot. Positions already on free ground are left EXACTLY where they are (this never reshapes a
 	 * clean formation). The shared net the resolver runs AFTER Separate Positions, so a formation

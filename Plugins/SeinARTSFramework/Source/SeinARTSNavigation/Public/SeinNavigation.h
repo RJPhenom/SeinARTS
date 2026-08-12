@@ -369,6 +369,15 @@ public:
 		const FFixedVector& WorldPos,
 		const FSeinNavAgentProfile& Agent) const;
 
+	/** Formation-only footprint query. Owners in the ignore set are members of
+	 *  the same pending order and therefore vacate their current dynamic blocker
+	 *  stamps. Implementations without owner-addressable runtime blockers may
+	 *  use the ordinary complete-agent result. */
+	virtual bool IsFootprintClearForAgentIgnoringDynamicBlockers(
+		const FFixedVector& WorldPos,
+		const FSeinNavAgentProfile& Agent,
+		const TSet<FSeinEntityHandle>& IgnoredDynamicBlockerOwners) const;
+
 	/** Whether an authoritative destination may safely overrule only the coarse
 	 *  static bake at this point. Terrain forbidden by the agent must still fail;
 	 *  implementations with dynamic blockers override to reject those too. */
@@ -502,6 +511,17 @@ public:
 	virtual bool ProjectPointToNavFreeForAgent(
 		const FFixedVector& WorldPos,
 		const FSeinNavAgentProfile& Agent,
+		const TArray<FFixedVector>& AvoidCentres,
+		const TArray<FFixedPoint>& AvoidRadii,
+		FFixedVector& OutProjected) const;
+
+	/** Formation-only agent projection with exact dynamic-blocker owner
+	 *  exclusions. Static nav, terrain policy, wall clearance, and the supplied
+	 *  peer-footprint avoidance remain in force. */
+	virtual bool ProjectPointToNavFreeForAgentIgnoringDynamicBlockers(
+		const FFixedVector& WorldPos,
+		const FSeinNavAgentProfile& Agent,
+		const TSet<FSeinEntityHandle>& IgnoredDynamicBlockerOwners,
 		const TArray<FFixedVector>& AvoidCentres,
 		const TArray<FFixedPoint>& AvoidRadii,
 		FFixedVector& OutProjected) const;

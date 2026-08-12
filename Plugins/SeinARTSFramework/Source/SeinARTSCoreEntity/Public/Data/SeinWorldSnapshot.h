@@ -29,6 +29,7 @@
 #include "Core/SeinPlayerID.h"
 #include "Core/SeinPlayerState.h"
 #include "Data/SeinMatchSettings.h"
+#include "Data/SeinRelationshipTypes.h"
 #include "Data/SeinCameraSnapshotData.h"
 #include "Data/SeinSnapshotComponentStorageBlob.h"
 #include "Data/SeinVoteState.h"
@@ -373,7 +374,7 @@ struct SEINARTSCOREENTITY_API FSeinWorldSnapshot
 {
 	GENERATED_BODY()
 
-	static constexpr int32 CurrentVersion = 13;
+	static constexpr int32 CurrentVersion = 15;
 	/** Defensive reconstruction bound for an imported checkpoint. The runtime
 	 *  pool remains independently extensible; snapshots above this generous
 	 *  simultaneous-entity ceiling fail before allocating slot-indexed state. */
@@ -501,6 +502,11 @@ struct SEINARTSCOREENTITY_API FSeinWorldSnapshot
 
 	UPROPERTY()
 	TMap<FSeinPlayerID, FSeinPlayerState> PlayerStates;
+
+	/** Authoritative directional player-pair capability grants. Effective
+	 *  caches are rebuilt from this source-record list on restore. */
+	UPROPERTY()
+	TArray<FSeinPairCapabilityGrantRecord> PairCapabilityGrants;
 
 	/** Per-entity tag state in canonical entity-handle order. */
 	UPROPERTY()

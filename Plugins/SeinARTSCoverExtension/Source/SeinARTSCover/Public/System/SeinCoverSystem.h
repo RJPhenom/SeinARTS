@@ -201,8 +201,8 @@ public:
 	 *  cover-aware broker resolvers to snap eligible squad members to cover
 	 *  when a move order targets a position near cover providers. Result
 	 *  ordering is implementation-defined; the default impl returns them
-	 *  sorted by ascending distance from Origin for greedy nearest-first
-	 *  allocation by the caller.
+	 *  sorted by ascending distance from Origin with stable provider/slot
+	 *  tie-breaks for deterministic selection-wide assignment.
 	 *
 	 *  When `Observer` is valid, only slots from cover providers visible to
 	 *  that observer are returned (per-player snap respects fog). Snap

@@ -33,12 +33,15 @@ namespace SeinSystemPriority
 	inline constexpr int32 MovementDriver = 10;
 	inline constexpr int32 Production     = 50;
 
-	// ── PostTick ──
+	// PostTick
 	inline constexpr int32 Lifespan            = -10;
 	inline constexpr int32 CollisionResolution = 10;
 	inline constexpr int32 NavContainment      = 11;
 	inline constexpr int32 Squad               = 30;
 	inline constexpr int32 CommandBroker       = 40;
 	inline constexpr int32 FogOfWar            = 80;
-	inline constexpr int32 MovementTrace       = 90;   // observation-only; sees the tick's final transforms
+
+	// FinalObservation (stateless, non-canonical writes only)
+	inline constexpr int32 MovementPresentation = 0;
+	inline constexpr int32 MovementTrace        = 10;
 }

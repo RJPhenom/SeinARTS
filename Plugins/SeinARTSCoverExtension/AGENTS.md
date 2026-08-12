@@ -23,8 +23,8 @@ absent. Cover-aware Squad dispatch lives in the separate, explicitly enabled
 - `FSeinCoverComponent` is deterministic provider data authored in `ComponentData`: quality,
   directionality, slots, area, and editor generation settings.
 - `USeinCoverSystem` is currently the replaceable provider-lifecycle and query surface.
-  `USeinCoverDefault` is the shipped query policy; allocation still lives as duplicated greedy
-  logic in the ordinary and Squad resolvers and is an active remediation item.
+  `USeinCoverDefault` is the shipped query policy. `FSeinCoverAssignmentPlanner` owns the shared
+  pure ordinary/Squad max-cardinality, min-wrong-side, min-distance assignment path.
 - `USeinCoverSubsystem` owns the selected system and registers providers from entity lifecycle
   events.
 - Shipped geometry queries with a valid observer gate providers through the active FoW
@@ -63,8 +63,12 @@ single-cast Boolean hook is not sufficient for framework-grade composition or co
 ## Dispatch and allocation
 
 Cover post-processing runs after base formation layout and is shared by preview and commit.
-Ordinary and Squad movement must delegate to one cover planning/allocation implementation rather
-than carrying duplicated greedy snap bodies.
+Ordinary and Squad movement delegate to `FSeinCoverAssignmentPlanner`; do not fork allocation logic
+back into either resolver adapter.
+
+The shipped planner currently solves one resolver invocation exactly. It does not yet coordinate
+claims across separate ordinary and persistent-Squad broker invocations, so do not describe the
+current result as globally selection-wide until the reservation/artifact layer below lands.
 
 The intended tactical allocator is selection-wide and deterministic:
 

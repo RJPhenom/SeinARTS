@@ -16,6 +16,7 @@
 #include "Types/Quat.h"
 #include "Types/Transform.h"
 #include "Core/SeinEntityHandle.h"
+#include "Core/SeinPlayerID.h"
 #include "Actor/SeinActor.h"
 #include "Components/SeinComponent.h"
 #include "Data/SeinResourceTypes.h"
@@ -56,24 +57,19 @@ enum class ESeinSquadContainmentMode : uint8
 /**
  * One slot in a squad's canonical recipe + runtime occupancy. Heterogeneous:
  * each slot defines its own entity class, formation offset, reinforce cost and
- * timings. Identified by its `SlotTags` container â€” designers ensure each
- * slot carries at least one tag unique within the squad (e.g.,
- * `Squad.Slot.Sergeant`, `Squad.Slot.Rifle.0`, `Squad.Slot.Rifle.1`, â€¦),
- * which doubles as the discriminator for member back-refs and as descriptive
- * metadata for promotion priority, reinforce ordering, ability dispatch.
+ * timings. Runtime identity is the slot's declaration index. `SlotTags` are
+ * descriptive role/query metadata and may be shared by multiple slots.
  */
 USTRUCT(BlueprintType, meta = (SeinDeterministic))
 struct SEINARTSCOREENTITY_API FSeinSquadSlot
 {
 	GENERATED_BODY()
 
-	/** Tag container identifying this slot. Each slot must carry at least one
-	 *  tag unique within the squad's slot list â€” that tag is the stable
-	 *  back-reference key (`FSeinSquadMemberComponent::SlotTag`,
-	 *  `FSeinSquadReinforceEntry::SlotTag`). Additional tags are descriptive:
-	 *  e.g., a sergeant slot might carry `Squad.Slot.Sergeant` (unique) plus
-	 *  `Squad.Slot.Leader` (shared / role marker). Lookup walks slots and
-	 *  matches the first slot whose container has the queried tag. */
+	/** Descriptive role/query tags. They may be shared by multiple slots;
+	 *  `FSeinSquadMemberComponent::SlotIndex` and reinforcement
+	 *  `RequestedSlotIndex` are the exact runtime identities. Tag-based helper
+	 *  APIs retain first-match compatibility and should be used only when that
+	 *  behavior is intended. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Squad")
 	FGameplayTagContainer SlotTags;
 
@@ -119,6 +115,26 @@ struct SEINARTSCOREENTITY_API FSeinSquadSlot
 	 *  Decremented by FSeinSquadSystem each tick. Zero = ready. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
 	FFixedPoint CurrentCooldown = FFixedPoint::Zero;
+
+	/** Lowest valid tag by exact tag-name string. Shared by runtime mutation,
+	 *  event metadata, and snapshot validation; FName index/numeric ordering is
+	 *  never part of this canonical contract. */
+	FGameplayTag GetCanonicalSlotTag() const
+	{
+		FGameplayTag Result;
+		FString ResultName;
+		for (const FGameplayTag Candidate : SlotTags)
+		{
+			if (!Candidate.IsValid()) continue;
+			const FString CandidateName = Candidate.GetTagName().ToString();
+			if (!Result.IsValid() || CandidateName < ResultName)
+			{
+				Result = Candidate;
+				ResultName = CandidateName;
+			}
+		}
+		return Result;
+	}
 };
 
 FORCEINLINE uint32 GetTypeHash(const FSeinSquadSlot& Slot)
@@ -144,9 +160,15 @@ struct SEINARTSCOREENTITY_API FSeinSquadReinforceEntry
 {
 	GENERATED_BODY()
 
-	/** Discriminator tag â€” the unique-per-squad tag carried by the slot this
-	 *  entry will fill on completion. Resolved against the squad's slot list
-	 *  via `IndexOfSlotByTag(SlotTag)`. */
+	/** Monotonic identity unique within the owning squad. Never reused. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
+	int64 RequestID = 0;
+
+	/** Exact slot declaration index captured at enqueue. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
+	int32 RequestedSlotIndex = INDEX_NONE;
+
+	/** Canonically selected tag-name metadata for UI/events. Not identity. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
 	FGameplayTag SlotTag;
 
@@ -164,14 +186,21 @@ struct SEINARTSCOREENTITY_API FSeinSquadReinforceEntry
 	 *  Drives refund-on-cancel without re-resolving cost at cancel time. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
 	FSeinResourceCost DeductedCost;
+
+	/** Funding principal captured at enqueue so ownership changes cannot redirect refunds. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
+	FSeinPlayerID ResourcePayer;
 };
 
 FORCEINLINE uint32 GetTypeHash(const FSeinSquadReinforceEntry& Entry)
 {
-	uint32 Hash = GetTypeHash(Entry.SlotTag);
+	uint32 Hash = GetTypeHash(Entry.RequestID);
+	Hash = HashCombine(Hash, GetTypeHash(Entry.RequestedSlotIndex));
+	Hash = HashCombine(Hash, GetTypeHash(Entry.SlotTag));
 	Hash = HashCombine(Hash, GetTypeHash(Entry.BuildProgress));
 	Hash = HashCombine(Hash, GetTypeHash(Entry.TotalBuildTime));
 	Hash = HashCombine(Hash, GetTypeHash(Entry.DeductedCost));
+	Hash = HashCombine(Hash, GetTypeHash(Entry.ResourcePayer));
 	return Hash;
 }
 
@@ -204,7 +233,7 @@ struct SEINARTSCOREENTITY_API FSeinSquadComponent : public FSeinComponent
 
 	/** Canonical slot list. Each slot is heterogeneous (own entity class, cost,
 	 *  formation offset). Mutating this array at runtime requires routing
-	 *  through the mutation BPFL so member SlotID back-refs stay consistent. */
+	 *  through the mutation BPFL so member slot-index back-refs stay consistent. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Squad")
 	TArray<FSeinSquadSlot> Slots;
 
@@ -306,10 +335,14 @@ struct SEINARTSCOREENTITY_API FSeinSquadComponent : public FSeinComponent
 	// the top of this file.
 
 	/** Pending reinforcements. Ticked by `FSeinSquadSystem`; on entry build
-	 *  completion, the slot's entity class spawns at the squad's transform and the
-	 *  member walks to its slot offset. */
+	 *  completion, the exact declaration-index slot's entity class spawns at the
+	 *  squad's transform and the member walks to its slot offset. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
 	TArray<FSeinSquadReinforceEntry> ReinforceQueue;
+
+	/** Next monotonic request identity. Canonical state; starts at one and never wraps. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
+	int64 NextReinforceRequestID = 1;
 
 	// â”€â”€â”€ Helpers (pure read; routed-mutations live in the mutation BPFL) â”€â”€â”€
 
@@ -325,10 +358,9 @@ struct SEINARTSCOREENTITY_API FSeinSquadComponent : public FSeinComponent
 
 	bool HasLeader() const { return Leader.IsValid(); }
 
-	/** Linear lookup â€” slots are short, no need for a map. Returns INDEX_NONE if
-	 *  no slot has the given tag in its `SlotTags` container. Designers must
-	 *  ensure each slot has at least one tag unique within this squad for
-	 *  back-ref roundtrips to be deterministic. */
+	/** First declaration-order slot carrying the tag, or INDEX_NONE. This is a
+	 *  compatibility/query helper only: tags may be shared and are not runtime
+	 *  slot identity. Use exact slot-index APIs for mutation. */
 	int32 IndexOfSlotByTag(FGameplayTag SlotTag) const;
 
 	/** Find which slot a member occupies. INDEX_NONE if the member isn't in
@@ -365,5 +397,6 @@ FORCEINLINE uint32 GetTypeHash(const FSeinSquadComponent& Component)
 	{
 		Hash = HashCombine(Hash, GetTypeHash(Entry));
 	}
+	Hash = HashCombine(Hash, GetTypeHash(Component.NextReinforceRequestID));
 	return Hash;
 }

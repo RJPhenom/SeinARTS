@@ -863,6 +863,17 @@ void USeinNavigationSubsystem::BindSimDelegates(UWorld& World)
 				WorldPos, Agent);
 		});
 
+	Sim->AgentDynamicPassableIgnoringResolver.BindWeakLambda(this,
+		[NavWeak](const FSeinNavAgentProfile& Agent,
+			const FFixedVector& WorldPos,
+			const TSet<FSeinEntityHandle>& IgnoredOwners) -> bool
+		{
+			USeinNavigation* Nav = NavWeak.Get();
+			if (!Nav || !Nav->HasRuntimeData()) return true;
+			return Nav->IsFootprintClearForAgentIgnoringDynamicBlockers(
+				WorldPos, Agent, IgnoredOwners);
+		});
+
 	Sim->AgentAuthoritativeDestinationSafetyResolver.BindWeakLambda(
 		this,
 		[NavWeak](const FSeinNavAgentProfile& Agent,
@@ -951,6 +962,29 @@ void USeinNavigationSubsystem::BindSimDelegates(UWorld& World)
 				OutProjected);
 		});
 
+	Sim->NavProjectAgentFreeIgnoringResolver.BindWeakLambda(this,
+		[NavWeak](const FSeinNavAgentProfile& Agent,
+			const FFixedVector& InWorld,
+			const TSet<FSeinEntityHandle>& IgnoredOwners,
+			const TArray<FFixedVector>& AvoidCentres,
+			const TArray<FFixedPoint>& AvoidRadii,
+			FFixedVector& OutProjected) -> bool
+		{
+			USeinNavigation* Nav = NavWeak.Get();
+			if (!Nav || !Nav->HasRuntimeData())
+			{
+				OutProjected = InWorld;
+				return true;
+			}
+			return Nav->ProjectPointToNavFreeForAgentIgnoringDynamicBlockers(
+				InWorld,
+				Agent,
+				IgnoredOwners,
+				AvoidCentres,
+				AvoidRadii,
+				OutProjected);
+		});
+
 	// Reset the path budget tracker. Self-checking reset in RequestPath
 	// handles the per-tick boundary going forward; we just zero state here
 	// at world-begin so the first tick after world load starts clean
@@ -982,11 +1016,13 @@ void USeinNavigationSubsystem::UnbindSimDelegates()
 	Sim->PassableResolver.Unbind();
 	Sim->DynamicPassableResolver.Unbind();
 	Sim->AgentDynamicPassableResolver.Unbind();
+	Sim->AgentDynamicPassableIgnoringResolver.Unbind();
 	Sim->AgentAuthoritativeDestinationSafetyResolver.Unbind();
 	Sim->HeightResolver.Unbind();
 	Sim->NavProjectResolver.Unbind();
 	Sim->NavProjectFreeResolver.Unbind();
 	Sim->NavProjectAgentFreeResolver.Unbind();
+	Sim->NavProjectAgentFreeIgnoringResolver.Unbind();
 }
 
 void USeinNavigationSubsystem::WarmExistingAgentProfiles()

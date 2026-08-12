@@ -287,6 +287,10 @@ public:
 	virtual bool IsWorldPositionClearForAgent(
 		const FFixedVector& WorldPos,
 		const FSeinNavAgentProfile& Agent) const override;
+	virtual bool IsFootprintClearForAgentIgnoringDynamicBlockers(
+		const FFixedVector& WorldPos,
+		const FSeinNavAgentProfile& Agent,
+		const TSet<FSeinEntityHandle>& IgnoredDynamicBlockerOwners) const override;
 	virtual bool IsAuthoritativeDestinationSafeForAgent(
 		const FFixedVector& WorldPos,
 		const FSeinNavAgentProfile& Agent) const override;
@@ -308,6 +312,13 @@ public:
 	virtual bool ProjectPointToNavFreeForAgent(
 		const FFixedVector& WorldPos,
 		const FSeinNavAgentProfile& Agent,
+		const TArray<FFixedVector>& AvoidCentres,
+		const TArray<FFixedPoint>& AvoidRadii,
+		FFixedVector& OutProjected) const override;
+	virtual bool ProjectPointToNavFreeForAgentIgnoringDynamicBlockers(
+		const FFixedVector& WorldPos,
+		const FSeinNavAgentProfile& Agent,
+		const TSet<FSeinEntityHandle>& IgnoredDynamicBlockerOwners,
 		const TArray<FFixedVector>& AvoidCentres,
 		const TArray<FFixedPoint>& AvoidRadii,
 		FFixedVector& OutProjected) const override;
@@ -525,6 +536,12 @@ private:
 	 *  search — NOT part of FAStarScratch. */
 	TArray<FSeinDynamicBlocker> DynamicBlockers;
 
+	/** Sparse derived lookup from grid cell to indices in DynamicBlockers.
+	 *  Rebuilt with the exact shared stamp iterator whenever blockers or the
+	 *  static grid change, then read concurrently without mutation. This avoids
+	 *  re-rasterizing whole nearby shapes for every point/footprint probe. */
+	TMultiMap<int32, int32> DynamicBlockerIndicesByCell;
+
 protected:
 	virtual void SetDynamicBlockers(
 		const TArray<FSeinDynamicBlocker>& InBlockers) override;
@@ -549,23 +566,33 @@ protected:
 	bool IsWorldPositionDynamicallyClear(
 		const FFixedVector& WorldPos,
 		uint8 AgentNavLayerMask,
-		FSeinEntityHandle Exclude) const;
+		FSeinEntityHandle Exclude,
+		const TSet<FSeinEntityHandle>* IgnoredDynamicBlockerOwners = nullptr) const;
+	void RebuildDynamicBlockerCellIndex();
+
+	bool IsWorldPositionClearForAgentIgnoringDynamicBlockers(
+		const FFixedVector& WorldPos,
+		const FSeinNavAgentProfile& Agent,
+		const TSet<FSeinEntityHandle>& IgnoredDynamicBlockerOwners) const;
 
 	bool IsCellClearForAgent(
 		int32 X,
 		int32 Y,
-		const FSeinNavAgentProfile& Agent) const;
+		const FSeinNavAgentProfile& Agent,
+		const TSet<FSeinEntityHandle>* IgnoredDynamicBlockerOwners = nullptr) const;
 
 	bool IsAgentSpecificClearanceSatisfied(
 		int32 X,
 		int32 Y,
 		int32 RequiredClearance,
-		const FSeinNavAgentProfile& Agent) const;
+		const FSeinNavAgentProfile& Agent,
+		const TSet<FSeinEntityHandle>* IgnoredDynamicBlockerOwners = nullptr) const;
 
 	bool ProjectPointToNavFreeInternal(
 		const FFixedVector& WorldPos,
 		FFixedPoint SelfRadius,
 		const FSeinNavAgentProfile* Agent,
+		const TSet<FSeinEntityHandle>* IgnoredDynamicBlockerOwners,
 		const TArray<FFixedVector>& AvoidCentres,
 		const TArray<FFixedPoint>& AvoidRadii,
 		FFixedVector& OutProjected) const;

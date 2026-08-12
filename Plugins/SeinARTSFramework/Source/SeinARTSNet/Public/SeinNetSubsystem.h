@@ -127,6 +127,7 @@ struct FSeinIncompleteTurnDiagnostic
 	double FirstObservedAt = 0.0;
 	double LastLoggedAt = 0.0;
 	bool bEscalated = false;
+	bool bReachedExecutionGate = false;
 };
 
 /**
@@ -1411,8 +1412,8 @@ private:
 	// disagreement on outgoing-turn arithmetic. Today designers can manually
 	// raise InputDelayTurns in settings + restart the session.
 
-	/** Server-side: per-peer count of "this slot was last to submit for a
-	 *  turn the server had to wait on" events. Surfaces in
+	/** Server-side: per-peer count of "this slot completed a turn after its
+	 *  execution gate was reached" events. Surfaces in
 	 *  Sein.Net.LatencyReport so designers can identify which peer's
 	 *  connection is the bottleneck. */
 	TMap<FSeinPlayerID, int32> StragglerCounts;
@@ -1422,7 +1423,8 @@ private:
 	int32 TurnsCompletedCount = 0;
 
 	/** Server-side helper: bump straggler count for the slot whose submission
-	 *  pushed a turn into completion AFTER it had been logged as INCOMPLETE.
+	 *  pushed a turn into completion after the sim reached that turn's gate.
+	 *  Ordinary first-author/last-author arrival ordering is not lateness.
 	 *  Called from ServerCheckTurnComplete on the completion path. */
 	void FinalizeCompletedTurnDiagnostics(
 		int32 TurnId, FSeinPlayerID CompletingSubmitter);

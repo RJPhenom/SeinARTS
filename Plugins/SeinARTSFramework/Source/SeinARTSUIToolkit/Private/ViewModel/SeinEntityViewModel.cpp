@@ -321,11 +321,8 @@ ESeinRelation USeinEntityViewModel::GetRelationToPlayer(FSeinPlayerID PlayerID) 
 		return ESeinRelation::Friendly;
 	}
 
-	// Check team alliance
-	const FSeinPlayerState* OwnerState = WorldSubsystem->GetPlayerState(OwnerPlayerID);
-	const FSeinPlayerState* OtherState = WorldSubsystem->GetPlayerState(PlayerID);
-
-	if (OwnerState && OtherState && OwnerState->TeamID != 0 && OwnerState->TeamID == OtherState->TeamID)
+	if (WorldSubsystem->ShouldPresentPlayerAsFriendly(
+		OwnerPlayerID, PlayerID))
 	{
 		return ESeinRelation::Friendly;
 	}

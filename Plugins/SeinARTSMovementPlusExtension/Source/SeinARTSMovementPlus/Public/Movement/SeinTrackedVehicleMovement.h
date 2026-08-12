@@ -74,6 +74,10 @@ public:
 
 	virtual void OnMoveBegin(const FSeinMovementContext& Ctx) override;
 	virtual bool Tick(const FSeinMovementContext& Ctx) override;
+	virtual void UpdateSettledRenderState(
+		const FSeinSettledMovementRenderContext& Context,
+		const FSeinMovementComponent& MovementData,
+		FSeinMovementRenderStateWriter& Writer) const override;
 	virtual bool SupportsExactIdleMutationTracking() const override
 	{
 		return GetClass() == StaticClass();

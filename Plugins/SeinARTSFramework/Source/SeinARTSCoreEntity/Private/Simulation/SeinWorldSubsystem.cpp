@@ -47,6 +47,8 @@
 #include "Components/SeinContainmentMemberData.h"
 #include "Components/SeinNavigationComponent.h"
 #include "Components/SeinProductionComponent.h"
+#include "Components/SeinSquadComponent.h"
+#include "Components/SeinSquadMemberComponent.h"
 #include "Components/SeinTransportSpec.h"
 #include "Actor/SeinEntityComponent.h"
 #include "Brokers/SeinCommandBrokerResolver.h"
@@ -147,6 +149,20 @@ namespace
 		Options.bTrustCookedTypesWithoutMetadata = true;
 #endif
 		return Options;
+	}
+
+	bool IsPairCapabilityTag(const FGameplayTag Tag)
+	{
+		return Tag.IsValid()
+			&& Tag != SeinARTSTags::Relationship_Capability
+			&& Tag.MatchesTag(SeinARTSTags::Relationship_Capability);
+	}
+
+	bool IsPairCapabilitySourceKindTag(const FGameplayTag Tag)
+	{
+		return Tag.IsValid()
+			&& Tag != SeinARTSTags::Relationship_Source
+			&& Tag.MatchesTag(SeinARTSTags::Relationship_Source);
 	}
 
 	const TCHAR* MatchBootstrapStateName(ESeinMatchBootstrapState State)
@@ -931,9 +947,11 @@ void USeinWorldSubsystem::ReleaseAllModuleOwnedState()
 	PassableResolver.Unbind();
 	DynamicPassableResolver.Unbind();
 	AgentDynamicPassableResolver.Unbind();
+	AgentDynamicPassableIgnoringResolver.Unbind();
 	NavProjectResolver.Unbind();
 	NavProjectFreeResolver.Unbind();
 	NavProjectAgentFreeResolver.Unbind();
+	NavProjectAgentFreeIgnoringResolver.Unbind();
 	AuthoritativeDestinationResolver.Unbind();
 	AgentAuthoritativeDestinationSafetyResolver.Unbind();
 	PreviewQualityProvider.Unbind();
@@ -1025,6 +1043,8 @@ void USeinWorldSubsystem::ReleaseAllModuleOwnedState()
 	}
 	CollisionResolver = nullptr;
 	PlayerStates.Reset();
+	PairCapabilitySourceRefCounts.Reset();
+	PairCapabilityEffectiveRefCounts.Reset();
 	Factions.Reset();
 	EntityActorClassMap.Reset();
 
@@ -2705,6 +2725,19 @@ void USeinWorldSubsystem::TickSystems(FFixedPoint DeltaTime)
 				if (!bExecutionTopologyValid) return;
 			}
 		}
+
+		// Phase 5: terminal, stateless observation of settled authoritative state.
+		for (const FRegisteredSystem& Registered : Systems)
+		{
+			if (Registered.System
+				&& Registered.Descriptor.Phase
+					== ESeinTickPhase::FinalObservation)
+			{
+				TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(*Registered.CanonicalStableID);
+				Registered.System->Tick(DeltaTime, *this);
+				if (!bExecutionTopologyValid) return;
+			}
+		}
 	}
 }
 
@@ -3102,6 +3135,7 @@ bool USeinWorldSubsystem::ExecuteBuiltInCommand(
 	}
 	if (TryHandleMatchFlowOrVoteCommand(Command) == ECommandHandleResult::Handled
 		|| TryHandlePingCommand(Command) == ECommandHandleResult::Handled
+		|| TryHandleSetPairCapabilityCommand(Command) == ECommandHandleResult::Handled
 		|| TryHandleBrokerOrderCommand(
 			Command, CommandCohesionOrderSequence) == ECommandHandleResult::Handled)
 	{
@@ -3349,6 +3383,21 @@ bool USeinWorldSubsystem::ValidateBuiltInCommandSemantics(
 				|| Payload->PredeterminedAbilityTag.IsValid())
 			? true : FailMalformed();
 	}
+	if (Command.CommandType
+		== SeinARTSTags::Command_Type_SetPairCapability)
+	{
+		const FSeinSetPairCapabilityCommandPayload* Payload =
+			Command.Payload.GetPtr<FSeinSetPairCapabilityCommandPayload>();
+		return Payload
+			&& Payload->SourcePlayer.IsValid()
+			&& Payload->TargetPlayer.IsValid()
+			&& Payload->SourcePlayer != Payload->TargetPlayer
+			&& IsPairCapabilityTag(Payload->CapabilityTag)
+			&& IsPairCapabilitySourceKindTag(Payload->SourceKindTag)
+			&& Payload->SourceInstanceID > 0
+			&& HasNoActionEnvelope()
+			? true : FailMalformed();
+	}
 
 	if (Command.CommandType == SeinARTSTags::Command_Type_EndMatch
 		|| Command.CommandType == SeinARTSTags::Command_Type_PauseMatchRequest
@@ -3531,6 +3580,44 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandlePingComm
 	}
 
 	return ECommandHandleResult::Unhandled;
+}
+
+USeinWorldSubsystem::ECommandHandleResult
+USeinWorldSubsystem::TryHandleSetPairCapabilityCommand(
+	const FSeinCommand& Cmd)
+{
+	if (Cmd.CommandType != SeinARTSTags::Command_Type_SetPairCapability)
+	{
+		return ECommandHandleResult::Unhandled;
+	}
+	if (!Cmd.Payload.IsValid()
+		|| Cmd.Payload.GetScriptStruct()
+			!= FSeinSetPairCapabilityCommandPayload::StaticStruct())
+	{
+		RejectCommand(Cmd, SeinARTSTags::Command_Reject_Malformed);
+		return ECommandHandleResult::Handled;
+	}
+
+	const FSeinSetPairCapabilityCommandPayload& Payload =
+		Cmd.Payload.Get<FSeinSetPairCapabilityCommandPayload>();
+	const bool bApplied = Payload.bGrant
+		? GrantPairCapability(
+			Payload.SourcePlayer,
+			Payload.TargetPlayer,
+			Payload.CapabilityTag,
+			Payload.SourceKindTag,
+			Payload.SourceInstanceID)
+		: RevokePairCapability(
+			Payload.SourcePlayer,
+			Payload.TargetPlayer,
+			Payload.CapabilityTag,
+			Payload.SourceKindTag,
+			Payload.SourceInstanceID);
+	if (!bApplied)
+	{
+		RejectCommand(Cmd, SeinARTSTags::Command_Reject_Malformed);
+	}
+	return ECommandHandleResult::Handled;
 }
 
 USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleBrokerOrderCommand(
@@ -4710,8 +4797,11 @@ void USeinWorldSubsystem::EnqueueAuthenticatedCommand(
 	}
 
 	FSeinCommand Canonical = Command;
-	Canonical.PlayerID = AuthenticatedPlayer;
 	Canonical.IssuerKind = AuthenticatedIssuerKind;
+	Canonical.PlayerID = AuthenticatedIssuerKind
+			== ESeinCommandIssuerKind::MatchAdministrator
+		? FSeinPlayerID::Neutral()
+		: AuthenticatedPlayer;
 	Canonical.DerivedResourcePayer = FSeinPlayerID::Neutral();
 	if (bSimPausedHard)
 	{
@@ -5718,6 +5808,7 @@ void USeinWorldSubsystem::RegisterPlayer(FSeinPlayerID PlayerID, FSeinFactionID 
 	}
 
 	PlayerStates.Add(PlayerID, MoveTemp(NewState));
+	SeedTeamPairCapabilitiesForPlayer(PlayerID);
 	MarkCanonicalAuxiliaryStateDirty();
 
 	UE_LOG(LogSeinSim, Log, TEXT("Registered player %s (faction: %s, team: %d)"),
@@ -5746,6 +5837,354 @@ TArray<FSeinPlayerID> USeinWorldSubsystem::GetRegisteredPlayerIDs() const
 	PlayerStates.GetKeys(PlayerIDs);
 	PlayerIDs.Sort();
 	return PlayerIDs;
+}
+
+bool USeinWorldSubsystem::HasPairCapability(
+	FSeinPlayerID SourcePlayer,
+	FSeinPlayerID TargetPlayer,
+	FGameplayTag CapabilityTag) const
+{
+	if (!IsPairCapabilityTag(CapabilityTag))
+	{
+		return false;
+	}
+	if (SourcePlayer == TargetPlayer)
+	{
+		return SourcePlayer.IsValid() && PlayerStates.Contains(SourcePlayer);
+	}
+	FSeinPairCapabilityKey Key;
+	Key.SourcePlayer = SourcePlayer;
+	Key.TargetPlayer = TargetPlayer;
+	Key.CapabilityTag = CapabilityTag;
+	const int32* Count = PairCapabilityEffectiveRefCounts.Find(Key);
+	return Count && *Count > 0;
+}
+
+bool USeinWorldSubsystem::ShouldPresentPlayerAsFriendly(
+	FSeinPlayerID SourcePlayer,
+	FSeinPlayerID ViewingPlayer) const
+{
+	return HasPairCapability(
+		SourcePlayer,
+		ViewingPlayer,
+		SeinARTSTags::Relationship_Capability_PresentAsFriendly);
+}
+
+bool USeinWorldSubsystem::GrantPairCapability(
+	FSeinPlayerID SourcePlayer,
+	FSeinPlayerID TargetPlayer,
+	FGameplayTag CapabilityTag,
+	FGameplayTag SourceKindTag,
+	int64 SourceInstanceID)
+{
+	if (!RequireStateMutationAuthorization(TEXT("GrantPairCapability")))
+	{
+		return false;
+	}
+	if (!SourcePlayer.IsValid() || !TargetPlayer.IsValid()
+		|| SourcePlayer == TargetPlayer
+		|| !IsPairCapabilityTag(CapabilityTag)
+		|| !IsPairCapabilitySourceKindTag(SourceKindTag)
+		|| SourceInstanceID <= 0
+		|| !PlayerStates.Contains(SourcePlayer)
+		|| !PlayerStates.Contains(TargetPlayer))
+	{
+		return false;
+	}
+	if (!ValidatePairCapabilityState())
+	{
+		UE_LOG(LogSeinSim, Error,
+			TEXT("GrantPairCapability: repairing inconsistent derived pair-capability cache."));
+		RebuildPairCapabilityEffectiveCache();
+		if (!ValidatePairCapabilityState())
+		{
+			UE_LOG(LogSeinSim, Error,
+				TEXT("GrantPairCapability: authoritative pair-capability state is invalid; mutation rejected."));
+			return false;
+		}
+	}
+
+	FSeinPairCapabilitySourceKey SourceKey;
+	SourceKey.SourcePlayer = SourcePlayer;
+	SourceKey.TargetPlayer = TargetPlayer;
+	SourceKey.CapabilityTag = CapabilityTag;
+	SourceKey.SourceKindTag = SourceKindTag;
+	SourceKey.SourceInstanceID = SourceInstanceID;
+	int32& SourceCount =
+		PairCapabilitySourceRefCounts.FindOrAdd(SourceKey);
+	if (SourceCount == MAX_int32)
+	{
+		UE_LOG(LogSeinSim, Error,
+			TEXT("GrantPairCapability: source refcount saturated for %s -> %s capability %s source %s:%lld."),
+			*SourcePlayer.ToString(), *TargetPlayer.ToString(),
+			*CapabilityTag.ToString(), *SourceKindTag.ToString(),
+			SourceInstanceID);
+		return false;
+	}
+	++SourceCount;
+
+	FSeinPairCapabilityKey EffectiveKey;
+	EffectiveKey.SourcePlayer = SourcePlayer;
+	EffectiveKey.TargetPlayer = TargetPlayer;
+	EffectiveKey.CapabilityTag = CapabilityTag;
+	int32& EffectiveCount =
+		PairCapabilityEffectiveRefCounts.FindOrAdd(EffectiveKey);
+	if (EffectiveCount == MAX_int32)
+	{
+		--SourceCount;
+		if (SourceCount == 0)
+		{
+			PairCapabilitySourceRefCounts.Remove(SourceKey);
+		}
+		UE_LOG(LogSeinSim, Error,
+			TEXT("GrantPairCapability: effective refcount saturated for %s -> %s capability %s."),
+			*SourcePlayer.ToString(), *TargetPlayer.ToString(),
+			*CapabilityTag.ToString());
+		return false;
+	}
+	++EffectiveCount;
+	MarkCanonicalAuxiliaryStateDirty();
+	return true;
+}
+
+bool USeinWorldSubsystem::RevokePairCapability(
+	FSeinPlayerID SourcePlayer,
+	FSeinPlayerID TargetPlayer,
+	FGameplayTag CapabilityTag,
+	FGameplayTag SourceKindTag,
+	int64 SourceInstanceID)
+{
+	if (!RequireStateMutationAuthorization(TEXT("RevokePairCapability")))
+	{
+		return false;
+	}
+	if (!SourcePlayer.IsValid() || !TargetPlayer.IsValid()
+		|| SourcePlayer == TargetPlayer
+		|| !IsPairCapabilityTag(CapabilityTag)
+		|| !IsPairCapabilitySourceKindTag(SourceKindTag)
+		|| SourceInstanceID <= 0)
+	{
+		return false;
+	}
+	if (!ValidatePairCapabilityState())
+	{
+		UE_LOG(LogSeinSim, Error,
+			TEXT("RevokePairCapability: repairing inconsistent derived pair-capability cache."));
+		RebuildPairCapabilityEffectiveCache();
+		if (!ValidatePairCapabilityState())
+		{
+			UE_LOG(LogSeinSim, Error,
+				TEXT("RevokePairCapability: authoritative pair-capability state is invalid; mutation rejected."));
+			return false;
+		}
+	}
+
+	FSeinPairCapabilitySourceKey SourceKey;
+	SourceKey.SourcePlayer = SourcePlayer;
+	SourceKey.TargetPlayer = TargetPlayer;
+	SourceKey.CapabilityTag = CapabilityTag;
+	SourceKey.SourceKindTag = SourceKindTag;
+	SourceKey.SourceInstanceID = SourceInstanceID;
+	int32* SourceCount =
+		PairCapabilitySourceRefCounts.Find(SourceKey);
+	if (!SourceCount || *SourceCount <= 0)
+	{
+		return false;
+	}
+	--(*SourceCount);
+	if (*SourceCount == 0)
+	{
+		PairCapabilitySourceRefCounts.Remove(SourceKey);
+	}
+
+	FSeinPairCapabilityKey EffectiveKey;
+	EffectiveKey.SourcePlayer = SourcePlayer;
+	EffectiveKey.TargetPlayer = TargetPlayer;
+	EffectiveKey.CapabilityTag = CapabilityTag;
+	if (int32* EffectiveCount =
+		PairCapabilityEffectiveRefCounts.Find(EffectiveKey))
+	{
+		--(*EffectiveCount);
+		if (*EffectiveCount <= 0)
+		{
+			PairCapabilityEffectiveRefCounts.Remove(EffectiveKey);
+		}
+	}
+	else
+	{
+		UE_LOG(LogSeinSim, Error,
+			TEXT("RevokePairCapability: missing effective cache for %s -> %s capability %s."),
+			*SourcePlayer.ToString(), *TargetPlayer.ToString(),
+			*CapabilityTag.ToString());
+		RebuildPairCapabilityEffectiveCache();
+	}
+	MarkCanonicalAuxiliaryStateDirty();
+	return true;
+}
+
+TArray<FSeinPairCapabilityGrantRecord>
+USeinWorldSubsystem::GetPairCapabilityGrantRecords() const
+{
+	TArray<FSeinPairCapabilitySourceKey> Keys;
+	PairCapabilitySourceRefCounts.GetKeys(Keys);
+	Keys.Sort([](
+		const FSeinPairCapabilitySourceKey& A,
+		const FSeinPairCapabilitySourceKey& B)
+	{
+		if (A.SourcePlayer != B.SourcePlayer)
+		{
+			return A.SourcePlayer < B.SourcePlayer;
+		}
+		if (A.TargetPlayer != B.TargetPlayer)
+		{
+			return A.TargetPlayer < B.TargetPlayer;
+		}
+		const int32 CapabilityOrder = A.CapabilityTag.GetTagName().Compare(
+			B.CapabilityTag.GetTagName());
+		if (CapabilityOrder != 0)
+		{
+			return CapabilityOrder < 0;
+		}
+		const int32 SourceKindOrder = A.SourceKindTag.GetTagName().Compare(
+			B.SourceKindTag.GetTagName());
+		return SourceKindOrder != 0
+			? SourceKindOrder < 0
+			: A.SourceInstanceID < B.SourceInstanceID;
+	});
+
+	TArray<FSeinPairCapabilityGrantRecord> Records;
+	Records.Reserve(Keys.Num());
+	for (const FSeinPairCapabilitySourceKey& Key : Keys)
+	{
+		const int32 Count =
+			PairCapabilitySourceRefCounts.FindChecked(Key);
+		if (Count <= 0)
+		{
+			continue;
+		}
+		FSeinPairCapabilityGrantRecord& Record =
+			Records.AddDefaulted_GetRef();
+		Record.SourcePlayer = Key.SourcePlayer;
+		Record.TargetPlayer = Key.TargetPlayer;
+		Record.CapabilityTag = Key.CapabilityTag;
+		Record.SourceKindTag = Key.SourceKindTag;
+		Record.SourceInstanceID = Key.SourceInstanceID;
+		Record.RefCount = Count;
+	}
+	return Records;
+}
+
+void USeinWorldSubsystem::SeedTeamPairCapabilitiesForPlayer(
+	FSeinPlayerID PlayerID)
+{
+	const FSeinPlayerState* NewState = PlayerStates.Find(PlayerID);
+	if (!NewState || NewState->TeamID == 0 || PlayerID.IsNeutral())
+	{
+		return;
+	}
+	TArray<FSeinPlayerID> ExistingPlayers;
+	PlayerStates.GetKeys(ExistingPlayers);
+	ExistingPlayers.Sort();
+	for (const FSeinPlayerID OtherID : ExistingPlayers)
+	{
+		if (OtherID == PlayerID || OtherID.IsNeutral())
+		{
+			continue;
+		}
+		const FSeinPlayerState* OtherState = PlayerStates.Find(OtherID);
+		if (!OtherState || OtherState->TeamID != NewState->TeamID)
+		{
+			continue;
+		}
+		GrantPairCapability(
+			PlayerID,
+			OtherID,
+			SeinARTSTags::Relationship_Capability_PresentAsFriendly,
+			SeinARTSTags::Relationship_Source_TeamBootstrap,
+			static_cast<int64>(NewState->TeamID));
+		GrantPairCapability(
+			OtherID,
+			PlayerID,
+			SeinARTSTags::Relationship_Capability_PresentAsFriendly,
+			SeinARTSTags::Relationship_Source_TeamBootstrap,
+			static_cast<int64>(NewState->TeamID));
+	}
+}
+
+void USeinWorldSubsystem::RebuildPairCapabilityEffectiveCache()
+{
+	PairCapabilityEffectiveRefCounts.Reset();
+	for (const TPair<FSeinPairCapabilitySourceKey, int32>& Pair :
+		PairCapabilitySourceRefCounts)
+	{
+		if (Pair.Value <= 0)
+		{
+			continue;
+		}
+		FSeinPairCapabilityKey EffectiveKey;
+		EffectiveKey.SourcePlayer = Pair.Key.SourcePlayer;
+		EffectiveKey.TargetPlayer = Pair.Key.TargetPlayer;
+		EffectiveKey.CapabilityTag = Pair.Key.CapabilityTag;
+		int32& Count =
+			PairCapabilityEffectiveRefCounts.FindOrAdd(EffectiveKey);
+		const int64 NewCount =
+			static_cast<int64>(Count) + static_cast<int64>(Pair.Value);
+		if (NewCount > MAX_int32)
+		{
+			UE_LOG(LogSeinSim, Error,
+				TEXT("RebuildPairCapabilityEffectiveCache: aggregate refcount overflow."));
+			PairCapabilityEffectiveRefCounts.Reset();
+			return;
+		}
+		Count = static_cast<int32>(NewCount);
+	}
+}
+
+bool USeinWorldSubsystem::ValidatePairCapabilityState() const
+{
+	TMap<FSeinPairCapabilityKey, int32> ExpectedEffective;
+	for (const TPair<FSeinPairCapabilitySourceKey, int32>& Pair :
+		PairCapabilitySourceRefCounts)
+	{
+		const FSeinPairCapabilitySourceKey& Key = Pair.Key;
+		if (Pair.Value <= 0 || !Key.SourcePlayer.IsValid()
+			|| !Key.TargetPlayer.IsValid()
+			|| Key.SourcePlayer == Key.TargetPlayer
+			|| !IsPairCapabilityTag(Key.CapabilityTag)
+			|| !IsPairCapabilitySourceKindTag(Key.SourceKindTag)
+			|| Key.SourceInstanceID <= 0
+			|| !PlayerStates.Contains(Key.SourcePlayer)
+			|| !PlayerStates.Contains(Key.TargetPlayer))
+		{
+			return false;
+		}
+		FSeinPairCapabilityKey EffectiveKey;
+		EffectiveKey.SourcePlayer = Key.SourcePlayer;
+		EffectiveKey.TargetPlayer = Key.TargetPlayer;
+		EffectiveKey.CapabilityTag = Key.CapabilityTag;
+		int32& ExpectedCount = ExpectedEffective.FindOrAdd(EffectiveKey);
+		if (ExpectedCount > MAX_int32 - Pair.Value)
+		{
+			return false;
+		}
+		ExpectedCount += Pair.Value;
+	}
+	if (ExpectedEffective.Num()
+		!= PairCapabilityEffectiveRefCounts.Num())
+	{
+		return false;
+	}
+	for (const TPair<FSeinPairCapabilityKey, int32>& Pair :
+		ExpectedEffective)
+	{
+		const int32* Actual =
+			PairCapabilityEffectiveRefCounts.Find(Pair.Key);
+		if (!Actual || *Actual != Pair.Value || *Actual <= 0)
+		{
+			return false;
+		}
+	}
+	return true;
 }
 
 void USeinWorldSubsystem::RegisterFaction(USeinFaction* Faction)
@@ -6124,6 +6563,8 @@ void USeinWorldSubsystem::MarkCommandBrokerResolverRuntimeStateDirty(
 
 void USeinWorldSubsystem::CaptureSnapshot(FSeinWorldSnapshot& OutSnapshot)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(Sein_World_CaptureSnapshot);
+
 	// The API predates fallible checkpoint capture. Clear a reused destination
 	// and leave version zero on refusal so callers cannot serialize stale or
 	// default-initialized data as a valid checkpoint.
@@ -6302,6 +6743,15 @@ void USeinWorldSubsystem::CaptureSnapshot(FSeinWorldSnapshot& OutSnapshot)
 		PendingStandalonePauseControlCommands;
 
 	OutSnapshot.PlayerStates = PlayerStates;
+	if (!ValidatePairCapabilityState())
+	{
+		OutSnapshot = FSeinWorldSnapshot();
+		OutSnapshot.SnapshotVersion = 0;
+		UE_LOG(LogSeinSim, Error,
+			TEXT("CaptureSnapshot: invalid pair-capability source records or cache."));
+		return;
+	}
+	OutSnapshot.PairCapabilityGrants = GetPairCapabilityGrantRecords();
 	const auto TagLess = [](const FGameplayTag& A, const FGameplayTag& B)
 	{
 		return A.GetTagName().Compare(B.GetTagName()) < 0;
@@ -7144,6 +7594,180 @@ namespace
 			}
 		}
 
+		TMap<FSeinEntityHandle, FSeinSquadComponent> Squads;
+		TMap<FSeinEntityHandle, FSeinSquadMemberComponent> SquadMembers;
+		TMap<FSeinEntityHandle, FSeinCommandBrokerData> Brokers;
+		TMap<FSeinEntityHandle, FSeinBrokerMembershipData> BrokerMemberships;
+		auto DecodeComponents = [&]<typename ComponentType>(
+			TMap<FSeinEntityHandle, ComponentType>& OutComponents)
+		{
+			return DecodeSnapshotComponentBlob<ComponentType>(
+				Snapshot,
+				AliveHandleBySlot,
+				[&](int32 Slot, const ComponentType& Component)
+				{
+					const FSeinEntityHandle* Handle =
+						AliveHandleBySlot.Find(Slot);
+					if (!Handle) return false;
+					OutComponents.Add(*Handle, Component);
+					return true;
+				});
+		};
+		if (!DecodeComponents(Squads)
+			|| !DecodeComponents(SquadMembers)
+			|| !DecodeComponents(Brokers)
+			|| !DecodeComponents(BrokerMemberships))
+		{
+			return false;
+		}
+
+		TMap<FSeinEntityHandle, FSeinEntityHandle> OccupantSquad;
+		for (const auto& SquadPair : Squads)
+		{
+			const FSeinEntityHandle SquadHandle = SquadPair.Key;
+			const FSeinSquadComponent& Squad = SquadPair.Value;
+			if (Squad.NextReinforceRequestID <= 0)
+			{
+				return false;
+			}
+
+			TSet<FSeinEntityHandle> Occupants;
+			for (int32 SlotIndex = 0;
+				SlotIndex < Squad.Slots.Num(); ++SlotIndex)
+			{
+				const FSeinSquadSlot& Slot = Squad.Slots[SlotIndex];
+				if (Slot.CurrentCooldown < FFixedPoint::Zero)
+				{
+					return false;
+				}
+				if (!Slot.CurrentOccupant.IsValid()) continue;
+				if (!AliveEntityHandles.Contains(Slot.CurrentOccupant)
+					|| Occupants.Contains(Slot.CurrentOccupant)
+					|| OccupantSquad.Contains(Slot.CurrentOccupant))
+				{
+					return false;
+				}
+				Occupants.Add(Slot.CurrentOccupant);
+				OccupantSquad.Add(Slot.CurrentOccupant, SquadHandle);
+
+				const FSeinSquadMemberComponent* Member =
+					SquadMembers.Find(Slot.CurrentOccupant);
+				const FSeinBrokerMembershipData* Membership =
+					BrokerMemberships.Find(Slot.CurrentOccupant);
+				if (!Member || Member->SquadEntity != SquadHandle
+					|| Member->SlotIndex != SlotIndex
+					|| Member->SlotTag != Slot.GetCanonicalSlotTag()
+					|| !Membership
+					|| Membership->CurrentBrokerHandle != SquadHandle)
+				{
+					return false;
+				}
+			}
+			if (Squad.Leader.IsValid()
+				&& !Occupants.Contains(Squad.Leader))
+			{
+				return false;
+			}
+
+			TSet<int64> RequestIDs;
+			TSet<int32> RequestedSlots;
+			for (const FSeinSquadReinforceEntry& Entry :
+				Squad.ReinforceQueue)
+			{
+				if (Entry.RequestID <= 0
+					|| Entry.RequestID >= Squad.NextReinforceRequestID
+					|| RequestIDs.Contains(Entry.RequestID)
+					|| !Squad.Slots.IsValidIndex(Entry.RequestedSlotIndex)
+					|| RequestedSlots.Contains(Entry.RequestedSlotIndex)
+					|| Squad.Slots[Entry.RequestedSlotIndex].
+						CurrentOccupant.IsValid()
+					|| Entry.BuildProgress < FFixedPoint::Zero
+					|| Entry.TotalBuildTime < FFixedPoint::Zero
+					|| Entry.BuildProgress > Entry.TotalBuildTime
+					|| Entry.SlotTag !=
+						Squad.Slots[Entry.RequestedSlotIndex].
+							GetCanonicalSlotTag()
+					|| !Snapshot.PlayerStates.Contains(Entry.ResourcePayer))
+				{
+					return false;
+				}
+				for (const auto& CostPair : Entry.DeductedCost.Amounts)
+				{
+					if (!CostPair.Key.IsValid()
+						|| CostPair.Value < FFixedPoint::Zero)
+					{
+						return false;
+					}
+				}
+				RequestIDs.Add(Entry.RequestID);
+				RequestedSlots.Add(Entry.RequestedSlotIndex);
+			}
+
+			const FSeinCommandBrokerData* Broker =
+				Brokers.Find(SquadHandle);
+			if (!Broker)
+			{
+				if (!Occupants.IsEmpty()) return false;
+				continue;
+			}
+			TSet<FSeinEntityHandle> BrokerMembers;
+			for (const FSeinEntityHandle Member : Broker->Members)
+			{
+				if (!Occupants.Contains(Member)
+					|| BrokerMembers.Contains(Member))
+				{
+					return false;
+				}
+				BrokerMembers.Add(Member);
+			}
+			if (Broker->bSelfCullOnEmpty
+				|| BrokerMembers.Num() != Occupants.Num()
+				|| Broker->SettledSlotPositions.Num()
+					!= Broker->SettledSlotFacings.Num()
+				|| (Broker->bSettledSlotsMemberAligned
+					&& Broker->SettledSlotPositions.Num()
+						!= Broker->Members.Num()))
+			{
+				return false;
+			}
+		}
+		for (const auto& MemberPair : SquadMembers)
+		{
+			const FSeinSquadMemberComponent& Member = MemberPair.Value;
+			if (!Member.SquadEntity.IsValid())
+			{
+				if (Member.SlotIndex != INDEX_NONE
+					|| Member.SlotTag.IsValid())
+				{
+					return false;
+				}
+				continue;
+			}
+			const FSeinEntityHandle* ExpectedSquad =
+				OccupantSquad.Find(MemberPair.Key);
+			if (!ExpectedSquad || *ExpectedSquad != Member.SquadEntity)
+			{
+				return false;
+			}
+		}
+		for (const auto& MembershipPair : BrokerMemberships)
+		{
+			const FSeinBrokerMembershipData& Membership =
+				MembershipPair.Value;
+			if (!Membership.CurrentBrokerHandle.IsValid()
+				|| !Squads.Contains(Membership.CurrentBrokerHandle))
+			{
+				continue;
+			}
+			const FSeinEntityHandle* ExpectedSquad =
+				OccupantSquad.Find(MembershipPair.Key);
+			if (!ExpectedSquad
+				|| *ExpectedSquad != Membership.CurrentBrokerHandle)
+			{
+				return false;
+			}
+		}
+
 		auto ValidatePoolTopology = [](
 			const TArray<FSeinSnapshotPoolInstanceRecord>& Records,
 			const TArray<int32>& FreeList,
@@ -7300,6 +7924,48 @@ namespace
 			{
 				if (!State.PlayerTagRefCounts.Contains(Tag)) return false;
 			}
+		}
+		TMap<FSeinPairCapabilitySourceKey, int32> PairSourceCounts;
+		TMap<FSeinPairCapabilityKey, int32> PairEffectiveCounts;
+		for (const FSeinPairCapabilityGrantRecord& Grant :
+			Snapshot.PairCapabilityGrants)
+		{
+			if (!Grant.SourcePlayer.IsValid()
+				|| !Grant.TargetPlayer.IsValid()
+				|| Grant.SourcePlayer == Grant.TargetPlayer
+				|| !IsPairCapabilityTag(Grant.CapabilityTag)
+				|| !IsPairCapabilitySourceKindTag(Grant.SourceKindTag)
+				|| Grant.SourceInstanceID <= 0
+				|| Grant.RefCount <= 0
+				|| !Snapshot.PlayerStates.Contains(Grant.SourcePlayer)
+				|| !Snapshot.PlayerStates.Contains(Grant.TargetPlayer))
+			{
+				return false;
+			}
+			FSeinPairCapabilitySourceKey Key;
+			Key.SourcePlayer = Grant.SourcePlayer;
+			Key.TargetPlayer = Grant.TargetPlayer;
+			Key.CapabilityTag = Grant.CapabilityTag;
+			Key.SourceKindTag = Grant.SourceKindTag;
+			Key.SourceInstanceID = Grant.SourceInstanceID;
+			int32& Count = PairSourceCounts.FindOrAdd(Key);
+			if (Count != 0 || Count > MAX_int32 - Grant.RefCount)
+			{
+				return false;
+			}
+			Count += Grant.RefCount;
+
+			FSeinPairCapabilityKey EffectiveKey;
+			EffectiveKey.SourcePlayer = Grant.SourcePlayer;
+			EffectiveKey.TargetPlayer = Grant.TargetPlayer;
+			EffectiveKey.CapabilityTag = Grant.CapabilityTag;
+			int32& EffectiveCount =
+				PairEffectiveCounts.FindOrAdd(EffectiveKey);
+			if (EffectiveCount > MAX_int32 - Grant.RefCount)
+			{
+				return false;
+			}
+			EffectiveCount += Grant.RefCount;
 		}
 
 		TSet<int64> SeenIDs;
@@ -8656,6 +9322,19 @@ bool USeinWorldSubsystem::RestoreSnapshot(
 			InSnapshot.LastAppliedPauseControlSequence;
 
 		PlayerStates = InSnapshot.PlayerStates;
+		PairCapabilitySourceRefCounts.Reset();
+		for (const FSeinPairCapabilityGrantRecord& Grant :
+			InSnapshot.PairCapabilityGrants)
+		{
+			FSeinPairCapabilitySourceKey Key;
+			Key.SourcePlayer = Grant.SourcePlayer;
+			Key.TargetPlayer = Grant.TargetPlayer;
+			Key.CapabilityTag = Grant.CapabilityTag;
+			Key.SourceKindTag = Grant.SourceKindTag;
+			Key.SourceInstanceID = Grant.SourceInstanceID;
+			PairCapabilitySourceRefCounts.Add(Key, Grant.RefCount);
+		}
+		RebuildPairCapabilityEffectiveCache();
 		// Passive designer values are Core authoritative state. Adopt them
 		// before native contributor commit so continuation adapters can read the
 		// restored values without a second executable Blueprint restore graph.
@@ -10941,11 +11620,20 @@ bool USeinWorldSubsystem::RegisterSystem(
 			true);
 	}
 	if (static_cast<uint8>(Descriptor.Phase)
-		> static_cast<uint8>(ESeinTickPhase::PostTick))
+		> static_cast<uint8>(ESeinTickPhase::FinalObservation))
 	{
 		return Reject(
 			FString::Printf(
 				TEXT("Simulation system '%s' has an invalid tick phase."),
+				*CanonicalStableID),
+			true);
+	}
+	if (Descriptor.Phase == ESeinTickPhase::FinalObservation
+		&& Descriptor.StateCoverage != ESeinSystemStateCoverage::Stateless)
+	{
+		return Reject(
+			FString::Printf(
+				TEXT("Final-observation system '%s' must declare stateless coverage."),
 				*CanonicalStableID),
 			true);
 	}
@@ -11504,6 +12192,30 @@ namespace
 		}
 		return Hash;
 	}
+
+	uint32 HashPairCapabilitySourceKey(
+		const FSeinPairCapabilitySourceKey& Key,
+		int32 RefCount)
+	{
+		uint32 Hash = GetTypeHash(Key.SourcePlayer);
+		Hash = HashCombine(Hash, GetTypeHash(Key.TargetPlayer));
+		Hash = HashCombine(Hash, HashCanonicalTag(Key.CapabilityTag));
+		Hash = HashCombine(Hash, HashCanonicalTag(Key.SourceKindTag));
+		Hash = HashCombine(Hash, GetTypeHash(Key.SourceInstanceID));
+		Hash = HashCombine(Hash, GetTypeHash(RefCount));
+		return Hash;
+	}
+
+	uint32 HashPairCapabilityEffectiveKey(
+		const FSeinPairCapabilityKey& Key,
+		int32 RefCount)
+	{
+		uint32 Hash = GetTypeHash(Key.SourcePlayer);
+		Hash = HashCombine(Hash, GetTypeHash(Key.TargetPlayer));
+		Hash = HashCombine(Hash, HashCanonicalTag(Key.CapabilityTag));
+		Hash = HashCombine(Hash, GetTypeHash(RefCount));
+		return Hash;
+	}
 }
 
 int32 USeinWorldSubsystem::ComputeStateHash() const
@@ -11571,6 +12283,71 @@ int32 USeinWorldSubsystem::ComputeStateHash() const
 		for (const FSeinPlayerID& PID : Keys)
 		{
 			Hash = HashCombine(Hash, HashPlayerStateFields(PlayerStates[PID]));
+		}
+	}
+	{
+		TArray<FSeinPairCapabilitySourceKey> Keys;
+		PairCapabilitySourceRefCounts.GetKeys(Keys);
+		Keys.Sort([](
+			const FSeinPairCapabilitySourceKey& A,
+			const FSeinPairCapabilitySourceKey& B)
+		{
+			if (A.SourcePlayer != B.SourcePlayer)
+			{
+				return A.SourcePlayer < B.SourcePlayer;
+			}
+			if (A.TargetPlayer != B.TargetPlayer)
+			{
+				return A.TargetPlayer < B.TargetPlayer;
+			}
+			const int32 CapabilityOrder =
+				A.CapabilityTag.GetTagName().Compare(
+					B.CapabilityTag.GetTagName());
+			if (CapabilityOrder != 0)
+			{
+				return CapabilityOrder < 0;
+			}
+			const int32 SourceKindOrder =
+				A.SourceKindTag.GetTagName().Compare(
+					B.SourceKindTag.GetTagName());
+			return SourceKindOrder != 0
+				? SourceKindOrder < 0
+				: A.SourceInstanceID < B.SourceInstanceID;
+		});
+		Hash = HashCombine(Hash, GetTypeHash(Keys.Num()));
+		for (const FSeinPairCapabilitySourceKey& Key : Keys)
+		{
+			Hash = HashCombine(
+				Hash,
+				HashPairCapabilitySourceKey(
+					Key,
+					PairCapabilitySourceRefCounts[Key]));
+		}
+		TArray<FSeinPairCapabilityKey> EffectiveKeys;
+		PairCapabilityEffectiveRefCounts.GetKeys(EffectiveKeys);
+		EffectiveKeys.Sort([](
+			const FSeinPairCapabilityKey& A,
+			const FSeinPairCapabilityKey& B)
+		{
+			if (A.SourcePlayer != B.SourcePlayer)
+			{
+				return A.SourcePlayer < B.SourcePlayer;
+			}
+			if (A.TargetPlayer != B.TargetPlayer)
+			{
+				return A.TargetPlayer < B.TargetPlayer;
+			}
+			return A.CapabilityTag.GetTagName().Compare(
+				B.CapabilityTag.GetTagName()) < 0;
+		});
+		Hash = HashCombine(Hash, GetTypeHash(EffectiveKeys.Num()));
+		for (const FSeinPairCapabilityKey& Key : EffectiveKeys)
+		{
+			Hash = HashCombine(
+				Hash,
+				HashPairCapabilityEffectiveKey(
+					Key,
+					PairCapabilityEffectiveRefCounts[Key]));
 		}
 	}
 

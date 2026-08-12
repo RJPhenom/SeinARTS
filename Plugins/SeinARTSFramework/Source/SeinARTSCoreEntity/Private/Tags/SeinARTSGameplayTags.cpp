@@ -33,6 +33,7 @@ namespace SeinARTSTags
 	// Command_Type_SetRallyPoint removed: rally via SA_SetRallyPoint abilities + SeinSetRallyPoint BPFL.
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Type_Ping,              "SeinARTS.Command.Type.Ping",              "Ping a location (visible to all players)");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Type_BrokerOrder,       "SeinARTS.Command.Type.BrokerOrder",       "Multi-unit dispatch routed through a CommandBroker (DESIGN §5)");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Type_SetPairCapability, "SeinARTS.Command.Type.SetPairCapability", "Match-control mutation of one directional player-pair capability grant");
 
 	// Match flow (DESIGN §18).
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Type_PauseMatchRequest,   "SeinARTS.Command.Type.PauseMatchRequest",   "Request a sim pause (may be a vote trigger)");
@@ -95,6 +96,15 @@ namespace SeinARTSTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Formation_Ring,   "SeinARTS.Formation.Ring",   "Defensive ring: members evenly around a circle about the anchor; large selections fan into concentric rings");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Formation_Square, "SeinARTS.Formation.Square", "A hollow rank-and-file square outline about the anchor; large selections fan into concentric nested squares");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Formation_Blob,   "SeinARTS.Formation.Blob",   "Every member converges on the single order point (the classic single-destination move); the default gesture nominates this for a plain click when single-click formations are off");
+
+	// --- Relationship ---
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Relationship, "SeinARTS.Relationship", "Root for directional player-pair relationship capability tags");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Relationship_Capability, "SeinARTS.Relationship.Capability", "Root for precise directional player-pair capabilities");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Relationship_Capability_ShareVision, "SeinARTS.Relationship.Capability.ShareVision", "A -> B means B may consume A's vision");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Relationship_Capability_PresentAsFriendly, "SeinARTS.Relationship.Capability.PresentAsFriendly", "A -> B means B should present A-owned entities as friendly for compatibility UI");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Relationship_Source, "SeinARTS.Relationship.Source", "Root for source identities that contribute pair-capability grants");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Relationship_Source_TeamBootstrap, "SeinARTS.Relationship.Source.TeamBootstrap", "Initial same-team compatibility grants seeded from nonzero TeamID");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Relationship_Source_MatchAdministration, "SeinARTS.Relationship.Source.MatchAdministration", "Authorized direct match-control pair-capability grants");
 
 	// --- UI ---
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(UI_Minimap_Hidden, "SeinARTS.UI.Minimap.Hidden", "Entity opts out of appearing as a minimap blip (smoke / vfx emitters, environmental props, etc.). Authored via the entity bridge's BaseTags; default (no tag) = shown.");

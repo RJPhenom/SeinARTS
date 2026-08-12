@@ -143,13 +143,23 @@ try {
 		throw 'Packaged qualification did not complete a two-peer world-root comparison.'
 	}
 	Wait-QualificationMarker `
+		'server-pair-grant-observed.marker' @($Server, $Client) | Out-Null
+	Wait-QualificationMarker `
+		'client-pair-grant-observed.marker' @($Server, $Client) | Out-Null
+	Wait-QualificationMarker `
 		'client-resync-complete.marker' @($Server, $Client) | Out-Null
 	Wait-QualificationMarker `
 		'server-drop-observed.marker' @($Server, $Client) | Out-Null
 	Wait-QualificationMarker `
 		'client-reconnect-complete.marker' @($Server, $Client) | Out-Null
 	Wait-QualificationMarker `
+		'client-reconnect-capability-preserved.marker' @($Server, $Client) | Out-Null
+	Wait-QualificationMarker `
 		'server-reconnect-activated.marker' @($Server, $Client) | Out-Null
+	Wait-QualificationMarker `
+		'server-pair-revoke-observed.marker' @($Server, $Client) | Out-Null
+	Wait-QualificationMarker `
+		'client-pair-revoke-observed.marker' @($Server, $Client) | Out-Null
 	$ServerCompletePath = Wait-QualificationMarker `
 		'server-complete.marker' @($Server, $Client)
 	$ServerResult = Read-KeyValueMarker $ServerCompletePath
@@ -191,7 +201,9 @@ try {
 		'replay-complete.marker' @($Replay)
 	$ReplayResult = Read-KeyValueMarker $ReplayCompletePath
 	if ($ReplayResult.EndTick -ne $ServerResult.EndTick -or
-		$ReplayResult.Root -ne $ServerResult.Root) {
+		$ReplayResult.Root -ne $ServerResult.Root -or
+		$ReplayResult.PairGrantWitness -ne 'Passed' -or
+		$ReplayResult.PairRevokeWitness -ne 'Passed') {
 		throw 'Replay completion marker disagreed with the authoritative server frontier.'
 	}
 	$Replay.Refresh()
@@ -205,7 +217,7 @@ try {
 	}
 
 	$Result = [ordered]@{
-		schemaVersion = 1
+		schemaVersion = 2
 		listenServer = 'Passed'
 		twoPlayerLobbyTravel = 'Passed'
 		lockstepCommandFlow = 'Passed'
@@ -213,6 +225,9 @@ try {
 		checkpointTailResync = 'Passed'
 		disconnectReconnect = 'Passed'
 		replayCheckpointSeek = 'Passed'
+		pairCapabilityCommandFlow = 'Passed'
+		pairCapabilityReconnectPersistence = 'Passed'
+		pairCapabilityReplayWitness = 'Passed'
 		endTick = [int]$ServerResult.EndTick
 		canonicalRoot = $ServerResult.Root
 		rootGossipTurn = [int]$RootGossipResult.Turn

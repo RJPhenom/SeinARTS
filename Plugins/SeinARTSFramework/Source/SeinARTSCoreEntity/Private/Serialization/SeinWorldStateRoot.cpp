@@ -97,10 +97,11 @@ struct FSeinWorldStateRootCache
 
 namespace
 {
-	constexpr uint32 CoreAuthoritativeSchemaVersion = 6;
+	constexpr uint32 CoreAuthoritativeSchemaVersion = 8;
 	constexpr uint32 CoreContinuationSchemaVersion = 2;
-	constexpr uint32 RoutineCoreAuthoritativeSchemaVersion = 1;
+	constexpr uint32 RoutineCoreAuthoritativeSchemaVersion = 3;
 	constexpr uint32 RoutineCoreContinuationSchemaVersion = 1;
+	constexpr uint32 RoutineAuxiliarySchemaVersion = 2;
 
 	TAutoConsoleVariable<int32> CVarSeinStateRootProfile(
 		TEXT("Sein.Sim.StateRoot.Profile"),
@@ -301,6 +302,29 @@ namespace
 		for (const FGameplayTag Tag : Tags)
 		{
 			if (!WriteGameplayTag(Writer, Tag))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	bool WritePairCapabilityGrants(
+		FSeinCanonicalDigestWriter& Writer,
+		const TArray<FSeinPairCapabilityGrantRecord>& Grants)
+	{
+		if (!Writer.WriteUInt32(static_cast<uint32>(Grants.Num())))
+		{
+			return false;
+		}
+		for (const FSeinPairCapabilityGrantRecord& Grant : Grants)
+		{
+			if (!Writer.WriteUInt8(Grant.SourcePlayer.Value)
+				|| !Writer.WriteUInt8(Grant.TargetPlayer.Value)
+				|| !WriteGameplayTag(Writer, Grant.CapabilityTag)
+				|| !WriteGameplayTag(Writer, Grant.SourceKindTag)
+				|| !Writer.WriteInt64(Grant.SourceInstanceID)
+				|| !Writer.WriteInt32(Grant.RefCount))
 			{
 				return false;
 			}
@@ -1481,6 +1505,12 @@ bool USeinWorldSubsystem::SealRoutineCanonicalStateRoot(
 			OutError,
 			TEXT("Routine canonical root refused an in-flight simulation transaction."));
 	}
+	if (!ValidatePairCapabilityState())
+	{
+		return Fail(
+			OutError,
+			TEXT("Routine canonical root refused inconsistent pair-capability source records or effective cache."));
+	}
 	const bool bCanonicalTimelineReady =
 		bIsRunning
 		|| (bSimulationSchedulerReserved && TickerHandle.IsValid());
@@ -1547,7 +1577,8 @@ bool USeinWorldSubsystem::SealRoutineCanonicalStateRoot(
 	{
 		FReflectedDigestContext Reflected(OutError);
 		FSeinCanonicalDigestWriter AuxiliaryWriter(
-			TEXT("SeinARTS.LiveWorld.Routine.Auxiliary"), 1);
+			TEXT("SeinARTS.LiveWorld.Routine.Auxiliary"),
+			RoutineAuxiliarySchemaVersion);
 		FGuid MatchSettingsSchema;
 		FGuid MatchSettingsValue;
 		if (!Reflected.DigestStruct(
@@ -1590,6 +1621,13 @@ bool USeinWorldSubsystem::SealRoutineCanonicalStateRoot(
 			{
 				return false;
 			}
+		}
+		if (!WritePairCapabilityGrants(
+				AuxiliaryWriter, GetPairCapabilityGrantRecords()))
+		{
+			return Fail(OutError, AuxiliaryWriter.GetError().IsEmpty()
+				? TEXT("Routine pair-capability encoding failed.")
+				: AuxiliaryWriter.GetError());
 		}
 
 		TArray<FSeinEntityHandle> TagStateHandles;
@@ -2200,6 +2238,12 @@ bool USeinWorldSubsystem::ComputeCanonicalStateRoot(
 			OutError,
 			TEXT("Canonical world-state capture refused an in-flight simulation, ownership, snapshot, destroy, or pause-control transaction."));
 	}
+	if (!ValidatePairCapabilityState())
+	{
+		return Fail(
+			OutError,
+			TEXT("Canonical world-state capture refused inconsistent pair-capability source records or effective cache."));
+	}
 	const bool bCanonicalTimelineReady =
 		bIsRunning
 		|| (bSimulationSchedulerReserved && TickerHandle.IsValid());
@@ -2341,6 +2385,13 @@ bool USeinWorldSubsystem::ComputeCanonicalStateRoot(
 			}
 			return false;
 		}
+	}
+	if (!WritePairCapabilityGrants(
+			CoreWriter, GetPairCapabilityGrantRecords()))
+	{
+		return Fail(OutError, CoreWriter.GetError().IsEmpty()
+			? TEXT("Core pair-capability encoding failed.")
+			: CoreWriter.GetError());
 	}
 	ProfileMark(ProfileCorePreludeMs);
 

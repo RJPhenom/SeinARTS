@@ -20,7 +20,8 @@ enum class ESeinTickPhase : uint8
 	PreTick,            // Cooldowns, effect expiration, modifier cleanup, resource income
 	CommandProcessing,  // Dequeue player/AI commands, activate/cancel abilities
 	AbilityExecution,   // All active abilities tick via latent action manager, production
-	PostTick            // Deferred destroy, pool recycle, settled tick state
+	PostTick,           // Deferred destroy, pool recycle, settled authoritative state
+	FinalObservation    // Stateless diagnostics and render-only settled-state sampling
 };
 
 /**
@@ -52,6 +53,8 @@ enum class ESeinSystemStateCoverage : uint8
  * "stable-domain/stable-contributor" spelling. They cover persistent state
  * retained by the system or an implementation object it invokes; component,
  * entity-pool, and other state already owned by Core's snapshot is not repeated.
+ * FinalObservation is reserved for stateless observers after every authoritative
+ * phase. Systems in that phase must not mutate canonical simulation state.
  */
 struct SEINARTSCOREENTITY_API FSeinSystemDescriptor
 {

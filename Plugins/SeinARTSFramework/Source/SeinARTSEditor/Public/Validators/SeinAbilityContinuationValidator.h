@@ -6,7 +6,9 @@
  * The compiler gate and this validator both cover every Blueprint whose class
  * derives USeinAbility, including generic/imported/legacy UBlueprint assets.
  * The validator is save/Validate redundancy for the blocking compiler rule.
- * Native/external impure functions intentionally used after a restored
+ * Presentation-only functions are also rejected anywhere in an Ability graph
+ * so transient render state cannot feed the deterministic sim. Native/external
+ * impure functions intentionally used after a restored
  * callback must declare UFUNCTION(meta=(SeinContinuationSafe)); that contract
  * promises their future-affecting mutations use canonical Sein state.
  */

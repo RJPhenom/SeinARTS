@@ -4,13 +4,14 @@
   Proves SeinARTS from a clean, generated downstream C++ project.
 
 .DESCRIPTION
-  Creates isolated projects under Saved/ConsumerMatrix, copies only the
-  selected production plugins (never their Binaries/Intermediate state), and
-  builds the Editor and Shipping game targets, plus Client and Server when the
-  engine distribution supports them. It then creates a consumer-owned map,
-  generates the consumer-owned simulation-content manifest, loads the exact
-  maps, cooks/packages them, smoke-loads the packaged game, and drives a real
-  packaged listen-server/client/replay qualification for the Framework profile.
+  Creates isolated projects under Saved/ConsumerMatrix and installs either
+  selected production-plugin source from this checkout or exact packaged ZIPs
+  supplied through -ArtifactDirectory. It builds the Editor and Shipping game
+  targets, plus Client and Server when the engine distribution supports them.
+  It then creates a consumer-owned map, generates the consumer-owned
+  simulation-content manifest, loads the exact maps, cooks/packages them,
+  smoke-loads the packaged game, and drives a real packaged
+  listen-server/client/replay qualification for the Framework profile.
 
   No generated artifact is written to the repository's tracked Output or Docs
   trees. The generated projects are disposable evidence, not source fixtures.
@@ -21,6 +22,23 @@ param(
 	[string] $Profile = 'All',
 
 	[string] $EngineRoot = 'C:\Program Files\Epic Games\UE_5.8',
+
+	# Stable identity supplied by the release orchestrator. Direct runs receive
+	# a fresh identity so receipts from overlapping invocations cannot alias.
+	[string] $QualificationRunId,
+
+	# Directory containing <PluginName>.zip files produced by PackagePlugins.ps1.
+	# Artifact mode validates and installs the exact ZIP contents instead of
+	# copying source directly from this checkout.
+	[string] $ArtifactDirectory,
+
+	# Validate and extract the required ZIP set, then stop before generating or
+	# building consumer projects. Useful as a fast packaging preflight.
+	[switch] $ValidateArtifactsOnly,
+
+	# Generate isolated non-unity Editor translation units for every Public
+	# header in the selected production plugins.
+	[switch] $AuditPublicHeaders,
 
 	[switch] $SkipCook,
 
@@ -38,10 +56,58 @@ param(
 $ErrorActionPreference = 'Stop'
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $EngineRoot = (Resolve-Path -LiteralPath $EngineRoot).Path
+$EngineBuildVersionPath = Join-Path $EngineRoot 'Engine\Build\Build.version'
+if (-not (Test-Path -LiteralPath $EngineBuildVersionPath -PathType Leaf)) {
+	throw "UE build identity is missing: '$EngineBuildVersionPath'."
+}
+$EngineBuildVersion = Get-Content -Raw -LiteralPath $EngineBuildVersionPath |
+	ConvertFrom-Json
+$EngineBuildFingerprint = (Get-FileHash -LiteralPath $EngineBuildVersionPath `
+	-Algorithm SHA256).Hash
+if ([int]$EngineBuildVersion.MajorVersion -ne 5 -or
+	[int]$EngineBuildVersion.MinorVersion -ne 8) {
+	throw "SeinARTS consumer qualification requires UE 5.8; '$EngineRoot' reports $($EngineBuildVersion.MajorVersion).$($EngineBuildVersion.MinorVersion)."
+}
 $BuildBat = Join-Path $EngineRoot 'Engine\Build\BatchFiles\Build.bat'
 $EditorCmd = Join-Path $EngineRoot 'Engine\Binaries\Win64\UnrealEditor-Cmd.exe'
 $RunUat = Join-Path $EngineRoot 'Engine\Build\BatchFiles\RunUAT.bat'
 $GeneratedRoot = Join-Path $RepoRoot 'Saved\ConsumerMatrix'
+$PluginSourceRoot = Join-Path $RepoRoot 'Plugins'
+$ArtifactHashes = @{}
+$ArtifactVersion = $null
+$QualificationRunId = if ($QualificationRunId) {
+	$QualificationRunId.ToLowerInvariant()
+} else {
+	[Guid]::NewGuid().ToString('N')
+}
+if ($QualificationRunId -notmatch '^[0-9a-f]{32}$') {
+	throw "QualificationRunId '$QualificationRunId' must be 32 lowercase hexadecimal characters."
+}
+$PipelineMutex = [System.Threading.Mutex]::new(
+	$false, 'Local\SeinARTS.ArtifactPipeline')
+$PipelineMutexAcquired = $false
+try {
+	$PipelineMutexAcquired = $PipelineMutex.WaitOne(0)
+}
+catch [System.Threading.AbandonedMutexException] {
+	$PipelineMutexAcquired = $true
+}
+if (-not $PipelineMutexAcquired) {
+	$PipelineMutex.Dispose()
+	throw 'Another SeinARTS release, packaging, or consumer qualification run owns the artifact pipeline.'
+}
+
+try {
+
+if ($ArtifactDirectory -and $ReuseGenerated) {
+	throw '-ArtifactDirectory cannot be combined with -ReuseGenerated; release artifacts require fresh consumers.'
+}
+if ($AuditPublicHeaders -and $ReuseGenerated) {
+	throw '-AuditPublicHeaders cannot be combined with -ReuseGenerated; header evidence requires a fresh generated module set.'
+}
+if ($ValidateArtifactsOnly -and -not $ArtifactDirectory) {
+	throw '-ValidateArtifactsOnly requires -ArtifactDirectory.'
+}
 
 foreach ($Required in @($BuildBat, $EditorCmd, $RunUat)) {
 	if (-not (Test-Path -LiteralPath $Required)) {
@@ -67,6 +133,28 @@ function Write-Utf8NoBom([string] $Path, [string] $Text)
 		[System.Text.UTF8Encoding]::new($false))
 }
 
+function Get-ChildRelativePath([string] $Root, [string] $Path)
+{
+	$ResolvedRoot = [System.IO.Path]::GetFullPath($Root).TrimEnd('\', '/')
+	$ResolvedPath = [System.IO.Path]::GetFullPath($Path)
+	$RequiredPrefix = $ResolvedRoot + [System.IO.Path]::DirectorySeparatorChar
+	if (-not $ResolvedPath.StartsWith(
+			$RequiredPrefix,
+			[System.StringComparison]::OrdinalIgnoreCase)) {
+		throw "Path '$ResolvedPath' is not a child of '$ResolvedRoot'."
+	}
+	return $ResolvedPath.Substring($RequiredPrefix.Length)
+}
+
+function Test-SeinSemVer([string] $Version)
+{
+	return $Version -match (
+		'^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)' +
+		'(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)' +
+		'(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?' +
+		'(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$')
+}
+
 function Invoke-Checked(
 	[string] $Description,
 	[string] $Executable,
@@ -77,6 +165,212 @@ function Invoke-Checked(
 	if ($LASTEXITCODE -ne 0) {
 		throw "$Description failed with exit code $LASTEXITCODE."
 	}
+}
+
+function Get-RequiredArtifactPlugins
+{
+	$Required = [System.Collections.Generic.HashSet[string]]::new(
+		[System.StringComparer]::OrdinalIgnoreCase)
+	[void]$Required.Add('SeinARTSFramework')
+	foreach ($ProfileName in $Profiles) {
+		if ($ProfileName -in @('MovementPlus', 'Full')) {
+			[void]$Required.Add('SeinARTSMovementPlusExtension')
+		}
+		if ($ProfileName -in @('Cover', 'Full')) {
+			[void]$Required.Add('SeinARTSCoverExtension')
+		}
+		if ($ProfileName -in @('Squad', 'Full')) {
+			[void]$Required.Add('SeinARTSSquadExtension')
+		}
+		if ($ProfileName -eq 'Full') {
+			[void]$Required.Add('SeinARTSCoverSquadExtension')
+		}
+	}
+	return @($Required | Sort-Object)
+}
+
+function Initialize-ArtifactPluginSource([string] $Directory)
+{
+	$ResolvedArtifacts = (Resolve-Path -LiteralPath $Directory).Path
+	$StageRoot = Join-Path $GeneratedRoot '_ArtifactPlugins'
+	$ResolvedGeneratedRoot = [System.IO.Path]::GetFullPath($GeneratedRoot)
+	$ResolvedStageRoot = [System.IO.Path]::GetFullPath($StageRoot)
+	if (-not $ResolvedStageRoot.StartsWith(
+		$ResolvedGeneratedRoot + [System.IO.Path]::DirectorySeparatorChar,
+		[System.StringComparison]::OrdinalIgnoreCase)) {
+		throw "Refusing to stage release artifacts outside '$GeneratedRoot'."
+	}
+	if (Test-Path -LiteralPath $StageRoot) {
+		Remove-Item -LiteralPath $StageRoot -Recurse -Force
+	}
+	New-Item -ItemType Directory -Path $StageRoot -Force | Out-Null
+	$ArchiveSnapshotRoot = Join-Path $StageRoot '_Archives'
+	New-Item -ItemType Directory -Path $ArchiveSnapshotRoot -Force | Out-Null
+
+	Add-Type -AssemblyName System.IO.Compression.FileSystem
+	$ExpectedVersion = $null
+	$InvalidFileNameChars = [System.IO.Path]::GetInvalidFileNameChars()
+	$ReservedDeviceName = '^(?i:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)'
+	foreach ($PluginName in Get-RequiredArtifactPlugins) {
+		$ZipPath = Join-Path $ResolvedArtifacts "$PluginName.zip"
+		if (-not (Test-Path -LiteralPath $ZipPath -PathType Leaf)) {
+			throw "Required packaged plugin is missing: '$ZipPath'."
+		}
+
+		$QualifiedZipPath = Join-Path $ArchiveSnapshotRoot "$PluginName.zip"
+		$SourceStream = [System.IO.File]::Open(
+			$ZipPath,
+			[System.IO.FileMode]::Open,
+			[System.IO.FileAccess]::Read,
+			[System.IO.FileShare]::Read)
+		try {
+			$SnapshotStream = [System.IO.File]::Open(
+				$QualifiedZipPath,
+				[System.IO.FileMode]::Create,
+				[System.IO.FileAccess]::Write,
+				[System.IO.FileShare]::None)
+			try {
+				$SourceStream.CopyTo($SnapshotStream)
+				$SnapshotStream.Flush()
+			}
+			finally {
+				$SnapshotStream.Dispose()
+			}
+		}
+		finally {
+			$SourceStream.Dispose()
+		}
+
+		$QualifiedZipLock = [System.IO.File]::Open(
+			$QualifiedZipPath,
+			[System.IO.FileMode]::Open,
+			[System.IO.FileAccess]::Read,
+			[System.IO.FileShare]::Read)
+		try {
+		$Archive = [System.IO.Compression.ZipFile]::OpenRead($QualifiedZipPath)
+		try {
+			$DescriptorEntries = 0
+			[uint64]$ExpandedBytes = 0
+			$EntryCount = 0
+			$SeenEntryPaths = [System.Collections.Generic.HashSet[string]]::new(
+				[System.StringComparer]::OrdinalIgnoreCase)
+			foreach ($Entry in $Archive.Entries) {
+				$EntryPath = $Entry.FullName.Replace('\', '/')
+				++$EntryCount
+				if ($EntryCount -gt 100000) {
+					throw "Archive '$ZipPath' exceeds the 100000-entry qualification bound."
+				}
+				$CanonicalEntryPath = $EntryPath.TrimEnd('/')
+				if (-not $CanonicalEntryPath -or
+					$CanonicalEntryPath.Contains('//') -or
+					[System.IO.Path]::IsPathRooted($CanonicalEntryPath)) {
+					throw "Archive '$ZipPath' contains an entry outside '$PluginName/': '$EntryPath'."
+				}
+				$Parts = @($CanonicalEntryPath.Split('/'))
+				foreach ($Part in $Parts) {
+					if (-not $Part -or
+						$Part -in @('.', '..') -or
+						$Part -cne $Part.TrimEnd(' ', '.') -or
+						$Part.IndexOfAny($InvalidFileNameChars) -ge 0 -or
+						$Part -match $ReservedDeviceName) {
+						throw "Archive '$ZipPath' contains a Windows-unsafe path '$EntryPath'."
+					}
+				}
+				if ($Parts[0] -cne $PluginName) {
+					throw "Archive '$ZipPath' contains an entry outside '$PluginName/': '$EntryPath'."
+				}
+				$CanonicalEntryPath = $Parts -join '/'
+				if (-not $SeenEntryPaths.Add($CanonicalEntryPath)) {
+					throw "Archive '$ZipPath' contains a duplicate or case-colliding entry '$EntryPath'."
+				}
+				if ($CanonicalEntryPath -ceq "$PluginName/$PluginName.uplugin") {
+					++$DescriptorEntries
+				}
+				if ($CanonicalEntryPath -match "^$([regex]::Escape($PluginName))/Intermediate(?:/|$)" -or
+					$CanonicalEntryPath.EndsWith('.pdb',
+						[System.StringComparison]::OrdinalIgnoreCase)) {
+					throw "Release archive '$ZipPath' contains stripped build scratch '$EntryPath'."
+				}
+				if ([uint64]$Entry.Length -gt 2GB) {
+					throw "Release archive '$ZipPath' contains an entry larger than 2 GiB: '$EntryPath'."
+				}
+				if ($Entry.Length -gt 64MB -and
+					$Entry.CompressedLength -gt 0 -and
+					([double]$Entry.Length / [double]$Entry.CompressedLength) -gt 1000.0) {
+					throw "Release archive '$ZipPath' contains an excessive compression ratio: '$EntryPath'."
+				}
+				$ExpandedBytes += [uint64]$Entry.Length
+				if ($ExpandedBytes -gt 8GB) {
+					throw "Release archive '$ZipPath' expands beyond the 8 GiB qualification bound."
+				}
+			}
+			if ($DescriptorEntries -ne 1) {
+				throw "Release archive '$ZipPath' must contain exactly one root descriptor."
+			}
+		}
+		finally {
+			$Archive.Dispose()
+		}
+
+		Expand-Archive -LiteralPath $QualifiedZipPath -DestinationPath $StageRoot -Force
+		$ExtractedRoot = Join-Path $StageRoot $PluginName
+		$DescriptorPath = Join-Path $ExtractedRoot "$PluginName.uplugin"
+		$SourcePath = Join-Path $ExtractedRoot 'Source'
+		if (-not (Test-Path -LiteralPath $DescriptorPath -PathType Leaf) -or
+			-not (Test-Path -LiteralPath $SourcePath -PathType Container)) {
+			throw "Release archive '$ZipPath' lacks its root descriptor or Source tree."
+		}
+		$Descriptor = Get-Content -Raw -LiteralPath $DescriptorPath |
+			ConvertFrom-Json
+		if ($Descriptor.Installed -ne $true) {
+			throw "Release descriptor '$DescriptorPath' is not stamped Installed:true."
+		}
+		$VersionName = [string]$Descriptor.VersionName
+		if (-not (Test-SeinSemVer $VersionName)) {
+			throw "Release descriptor '$DescriptorPath' has an invalid SemVer VersionName '$VersionName'."
+		}
+		if ($null -eq $ExpectedVersion) {
+			$ExpectedVersion = $VersionName
+		}
+		elseif ($VersionName -cne $ExpectedVersion) {
+			throw "Release archive versions disagree: expected '$ExpectedVersion', '$PluginName' is '$VersionName'."
+		}
+		if ($PluginName -ceq 'SeinARTSFramework') {
+			$RequiredPublicFiles = @(
+				'Documentation\README.md',
+				'Documentation\GETTING_STARTED.md',
+				'Tools\Diagnostics\Test-SeinARTSInstallation.ps1')
+			foreach ($RelativePath in $RequiredPublicFiles) {
+				$RequiredPath = Join-Path $ExtractedRoot $RelativePath
+				if (-not (Test-Path -LiteralPath $RequiredPath -PathType Leaf)) {
+					throw "Framework release archive lacks required public file '$RelativePath'."
+				}
+			}
+			$DiagnosticPath = Join-Path $ExtractedRoot `
+				'Tools\Diagnostics\Test-SeinARTSInstallation.ps1'
+			$Tokens = $null
+			$ParseErrors = $null
+			[void][System.Management.Automation.Language.Parser]::ParseFile(
+				$DiagnosticPath,
+				[ref]$Tokens,
+				[ref]$ParseErrors)
+			if ($ParseErrors.Count -ne 0) {
+				throw "Framework installation diagnostic does not parse: $($ParseErrors[0].Message)"
+			}
+		}
+		$ArtifactHashes[$PluginName] =
+			(Get-FileHash -LiteralPath $QualifiedZipPath -Algorithm SHA256).Hash
+		}
+		finally {
+			$QualifiedZipLock.Dispose()
+		}
+	}
+
+	$script:PluginSourceRoot = $StageRoot
+	$script:ArtifactVersion = $ExpectedVersion
+	Write-Host `
+		"[ConsumerMatrix] qualifying exact plugin artifacts v$ExpectedVersion from '$ResolvedArtifacts'." `
+		-ForegroundColor Green
 }
 
 function Invoke-ManifestBootstrap(
@@ -131,10 +425,16 @@ function Invoke-ManifestBootstrap(
 
 function Copy-CleanPlugin([string] $PluginName, [string] $ProjectRoot)
 {
-	$Source = Join-Path $RepoRoot "Plugins\$PluginName"
+	$Source = Join-Path $PluginSourceRoot $PluginName
 	$Destination = Join-Path $ProjectRoot "Plugins\$PluginName"
 	if (-not (Test-Path -LiteralPath $Source)) {
 		throw "Production plugin '$PluginName' is missing."
+	}
+	if ($ArtifactDirectory) {
+		$PluginParent = Split-Path -Parent $Destination
+		New-Item -ItemType Directory -Path $PluginParent -Force | Out-Null
+		Copy-Item -LiteralPath $Source -Destination $PluginParent -Recurse
+		return
 	}
 	New-Item -ItemType Directory -Path $Destination -Force | Out-Null
 
@@ -160,7 +460,7 @@ function Refresh-ConsumerPlugins(
 		throw "Refusing to refresh consumer plugins outside '$GeneratedRoot'."
 	}
 	foreach ($PluginName in $PluginNames) {
-		$SourceRoot = Join-Path $RepoRoot "Plugins\$PluginName"
+		$SourceRoot = Join-Path $PluginSourceRoot $PluginName
 		$DestinationRoot = Join-Path $ProjectRoot "Plugins\$PluginName"
 		New-Item -ItemType Directory -Path $DestinationRoot -Force | Out-Null
 
@@ -195,30 +495,20 @@ function Refresh-ConsumerPlugins(
 			$SourceFiles = @{}
 			foreach ($SourceFile in Get-ChildItem `
 				-LiteralPath $SourceDirectory -Recurse -File) {
-				$Relative = [System.IO.Path]::GetRelativePath(
-					$SourceDirectory, $SourceFile.FullName)
+				$Relative = Get-ChildRelativePath `
+					$SourceDirectory $SourceFile.FullName
 				$SourceFiles[$Relative] = $SourceFile
 			}
 			foreach ($DestinationFile in Get-ChildItem `
 				-LiteralPath $DestinationDirectory -Recurse -File) {
-				$Relative = [System.IO.Path]::GetRelativePath(
-					$DestinationDirectory, $DestinationFile.FullName)
+				$Relative = Get-ChildRelativePath `
+					$DestinationDirectory $DestinationFile.FullName
 				if (-not $SourceFiles.ContainsKey($Relative)) {
 					Remove-Item -LiteralPath $DestinationFile.FullName -Force
 				}
 			}
 			foreach ($Pair in $SourceFiles.GetEnumerator()) {
 				$DestinationFile = Join-Path $DestinationDirectory $Pair.Key
-				$DestinationInfo = Get-Item `
-					-LiteralPath $DestinationFile -ErrorAction SilentlyContinue
-				if (
-					$DestinationInfo -and
-					$DestinationInfo.Length -eq $Pair.Value.Length -and
-					$DestinationInfo.LastWriteTimeUtc -eq
-						$Pair.Value.LastWriteTimeUtc
-				) {
-					continue
-				}
 				New-Item -ItemType Directory `
 					-Path (Split-Path -Parent $DestinationFile) `
 					-Force | Out-Null
@@ -257,6 +547,99 @@ function Install-ConsumerRuntimeQualificationTemplates([string] $ProjectRoot)
 		Copy-Item -LiteralPath $TemplatePath `
 			-Destination (Join-Path $ProjectRoot "Source\SeinConsumer\$TemplateName") `
 			-Force
+	}
+}
+
+function Install-PublicHeaderAuditModules(
+	[string[]] $PluginNames,
+	[string] $ProjectRoot)
+{
+	$ModuleEntries = [System.Collections.Generic.List[object]]::new()
+	$ModuleNames = [System.Collections.Generic.List[string]]::new()
+	$HeaderManifest = [ordered]@{}
+	$HeaderCount = 0
+
+	foreach ($PluginName in $PluginNames) {
+		$PluginRoot = Join-Path $PluginSourceRoot $PluginName
+		$DescriptorPath = Join-Path $PluginRoot "$PluginName.uplugin"
+		$Descriptor = Get-Content -Raw -LiteralPath $DescriptorPath |
+			ConvertFrom-Json
+		foreach ($Module in @($Descriptor.Modules)) {
+			$ProductionModuleName = [string]$Module.Name
+			$PublicRoot = Join-Path $PluginRoot (
+				"Source\$ProductionModuleName\Public")
+			if (-not (Test-Path -LiteralPath $PublicRoot -PathType Container)) {
+				continue
+			}
+			$Headers = @(Get-ChildItem -LiteralPath $PublicRoot -Recurse -File |
+				Where-Object { $_.Extension -in @('.h', '.hpp', '.inl') } |
+				Sort-Object FullName)
+			if ($Headers.Count -eq 0) {
+				continue
+			}
+
+			$AuditModuleName = (
+				"SeinHeaderAudit_$ProductionModuleName" -replace '[^A-Za-z0-9_]', '_')
+			$AuditRoot = Join-Path $ProjectRoot "Source\$AuditModuleName"
+			New-Item -ItemType Directory -Path $AuditRoot -Force | Out-Null
+			$BuildCs = @"
+using UnrealBuildTool;
+
+public class $AuditModuleName : ModuleRules
+{
+	public $AuditModuleName(ReadOnlyTargetRules Target) : base(Target)
+	{
+		PCHUsage = PCHUsageMode.NoPCHs;
+		bUseUnity = false;
+		PrivateDependencyModuleNames.AddRange(
+			new string[] { "Core", "$ProductionModuleName" });
+	}
+}
+"@
+			Write-Utf8NoBom (
+				Join-Path $AuditRoot "$AuditModuleName.Build.cs") $BuildCs
+			Write-Utf8NoBom (
+				Join-Path $AuditRoot "$AuditModuleName.cpp") @"
+#include "Modules/ModuleManager.h"
+
+IMPLEMENT_MODULE(FDefaultModuleImpl, $AuditModuleName)
+"@
+
+			$RelativeHeaders = [System.Collections.Generic.List[string]]::new()
+			for ($HeaderIndex = 0;
+				$HeaderIndex -lt $Headers.Count;
+				++$HeaderIndex) {
+				$RelativeHeader = (Get-ChildRelativePath `
+					$PublicRoot $Headers[$HeaderIndex].FullName).Replace('\', '/')
+				$RelativeHeaders.Add($RelativeHeader)
+				$HeaderSource = ('#include "{0}"' -f $RelativeHeader) +
+					[Environment]::NewLine
+				Write-Utf8NoBom (
+					Join-Path $AuditRoot (
+						'Header{0:D4}.cpp' -f $HeaderIndex)) $HeaderSource
+				++$HeaderCount
+			}
+			$HeaderManifest[$ProductionModuleName] = $RelativeHeaders
+			$ModuleNames.Add($AuditModuleName)
+			$ModuleEntries.Add([ordered]@{
+				Name = $AuditModuleName
+				Type = 'Editor'
+				LoadingPhase = 'Default'
+			})
+		}
+	}
+
+	$ManifestPath = Join-Path $ProjectRoot 'Saved\PublicHeaderAudit.json'
+	Write-Utf8NoBom $ManifestPath ([ordered]@{
+		schemaVersion = 1
+		headerCount = $HeaderCount
+		modules = $HeaderManifest
+	} | ConvertTo-Json -Depth 8)
+	return [pscustomobject]@{
+		ModuleEntries = @($ModuleEntries)
+		ModuleNames = @($ModuleNames)
+		HeaderCount = $HeaderCount
+		ManifestPath = $ManifestPath
 	}
 }
 
@@ -318,6 +701,16 @@ function New-ConsumerProject([string] $ProfileName)
 	foreach ($PluginName in $Plugins) {
 		Copy-CleanPlugin $PluginName $ProjectRoot
 	}
+	$HeaderAudit = if ($AuditPublicHeaders) {
+		Install-PublicHeaderAuditModules $Plugins $ProjectRoot
+	} else {
+		[pscustomobject]@{
+			ModuleEntries = @()
+			ModuleNames = @()
+			HeaderCount = 0
+			ManifestPath = $null
+		}
+	}
 
 	$PluginEntries = @(
 		foreach ($PluginName in $Plugins) {
@@ -327,16 +720,20 @@ function New-ConsumerProject([string] $ProfileName)
 		[ordered]@{ Name = 'EditorScriptingUtilities'; Enabled = $true }
 		[ordered]@{ Name = 'OnlineSubsystemNull'; Enabled = $true }
 	)
+	$ProjectModules = @(
+		[ordered]@{
+			Name = 'SeinConsumer'
+			Type = 'Runtime'
+			LoadingPhase = 'Default'
+		}
+		$HeaderAudit.ModuleEntries
+	)
 	$Uproject = [ordered]@{
 		FileVersion = 3
 		EngineAssociation = '5.8'
 		Category = 'SeinARTS Consumer Matrix'
 		Description = "Generated clean $ProfileName consumer"
-		Modules = @([ordered]@{
-			Name = 'SeinConsumer'
-			Type = 'Runtime'
-			LoadingPhase = 'Default'
-		})
+		Modules = $ProjectModules
 		Plugins = $PluginEntries
 	}
 	$UprojectPath = Join-Path $ProjectRoot 'SeinConsumer.uproject'
@@ -361,6 +758,14 @@ public class SeinConsumerTarget : TargetRules
 		'class SeinConsumerTarget', 'class SeinConsumerEditorTarget').Replace(
 		'SeinConsumerTarget(TargetInfo', 'SeinConsumerEditorTarget(TargetInfo').Replace(
 		'TargetType.Game', 'TargetType.Editor')
+	if ($HeaderAudit.ModuleNames.Count -gt 0) {
+		$AuditTargetLines = ($HeaderAudit.ModuleNames | ForEach-Object {
+			"`t`tExtraModuleNames.Add(`"$_`");"
+		}) -join "`r`n"
+		$TargetEditor = $TargetEditor.Replace(
+			'ExtraModuleNames.Add("SeinConsumer");',
+			"ExtraModuleNames.Add(`"SeinConsumer`");`r`n$AuditTargetLines")
+	}
 	$TargetClient = $TargetCommon.Replace(
 		'class SeinConsumerTarget', 'class SeinConsumerClientTarget').Replace(
 		'SeinConsumerTarget(TargetInfo', 'SeinConsumerClientTarget(TargetInfo').Replace(
@@ -566,6 +971,8 @@ for asset_path in ("/Game/Maps/ConsumerLobbyMap", "/Game/Maps/ConsumerMap"):
 		Root = $ProjectRoot
 		Uproject = $UprojectPath
 		Plugins = $Plugins
+		PublicHeaderCount = $HeaderAudit.HeaderCount
+		PublicHeaderManifest = $HeaderAudit.ManifestPath
 	}
 }
 
@@ -591,6 +998,8 @@ DefaultGameplayMap=/Game/Maps/ConsumerMap.ConsumerMap
 function Invoke-ConsumerProfile([string] $ProfileName)
 {
 	$StartedAt = [DateTime]::UtcNow
+	$RuntimeResult = $null
+	$InstallationDiagnosticReceipt = $null
 	$ExistingRoot = Join-Path $GeneratedRoot $ProfileName
 	$ExistingUproject = Join-Path $ExistingRoot 'SeinConsumer.uproject'
 	if ($ReuseGenerated -and (Test-Path -LiteralPath $ExistingUproject)) {
@@ -612,6 +1021,8 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 			Root = $ExistingRoot
 			Uproject = $ExistingUproject
 			Plugins = $ExistingPlugins
+			PublicHeaderCount = 0
+			PublicHeaderManifest = $null
 		}
 	} else {
 		$Project = New-ConsumerProject $ProfileName
@@ -673,6 +1084,55 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 	if (-not (Test-Path -LiteralPath $ManifestPath)) {
 		throw "$ProfileName manifest generation produced no '$ManifestPath'."
 	}
+	$InstallationDiagnostic = if ($ArtifactDirectory) {
+		Join-Path $Project.Root `
+			'Plugins\SeinARTSFramework\Tools\Diagnostics\Test-SeinARTSInstallation.ps1'
+	} else {
+		Join-Path $RepoRoot `
+			'Tools\Diagnostics\Test-SeinARTSInstallation.ps1'
+	}
+	if (-not (Test-Path -LiteralPath $InstallationDiagnostic -PathType Leaf)) {
+		throw "$ProfileName installation diagnostic is missing: '$InstallationDiagnostic'."
+	}
+	$WindowsPowerShell = Join-Path $env:SystemRoot `
+		'System32\WindowsPowerShell\v1.0\powershell.exe'
+	$DiagnosticJson = @(& $WindowsPowerShell `
+		-NoProfile `
+		-ExecutionPolicy Bypass `
+		-File $InstallationDiagnostic `
+		-Project $Project.Uproject `
+		-EngineRoot $EngineRoot `
+		-Json)
+	if ($LASTEXITCODE -ne 0) {
+		throw "$ProfileName installation diagnostic failed with exit code $LASTEXITCODE."
+	}
+	$DiagnosticReport = ($DiagnosticJson -join "`r`n") | ConvertFrom-Json
+	$ExpectedDiagnosticMode = if ($ArtifactDirectory) { 'Release' } else { 'Source' }
+	$ExpectedManifestObject =
+		'/Game/Generated/SeinSimulationContentManifest.SeinSimulationContentManifest'
+	$DiagnosticPlugins = @($DiagnosticReport.enabledProductionPlugins | Sort-Object)
+	if ([int]$DiagnosticReport.schemaVersion -ne 1 -or
+		[string]$DiagnosticReport.result -cne 'Passed' -or
+		[int]$DiagnosticReport.errorCount -ne 0 -or
+		-not ([System.IO.Path]::GetFullPath([string]$DiagnosticReport.project).Equals(
+			[System.IO.Path]::GetFullPath($Project.Uproject),
+			[System.StringComparison]::OrdinalIgnoreCase)) -or
+		-not ([System.IO.Path]::GetFullPath([string]$DiagnosticReport.engineRoot).Equals(
+			[System.IO.Path]::GetFullPath($EngineRoot),
+			[System.StringComparison]::OrdinalIgnoreCase)) -or
+		[string]$DiagnosticReport.integrationMode -cne $ExpectedDiagnosticMode -or
+		($ArtifactDirectory -and
+			[string]$DiagnosticReport.cohortVersion -cne $ArtifactVersion) -or
+		-not $DiagnosticReport.cohortVersion -or
+		[string]$DiagnosticReport.simulationContentManifest -cne $ExpectedManifestObject -or
+		$DiagnosticPlugins.Count -ne $Project.Plugins.Count -or
+		(@(Compare-Object $DiagnosticPlugins @($Project.Plugins | Sort-Object))).Count -ne 0) {
+		throw "$ProfileName installation diagnostic returned an invalid pass receipt."
+	}
+	$InstallationDiagnosticReceipt = Join-Path $Project.Root `
+		'Saved\Qualification\installation-diagnostic.json'
+	Write-Utf8NoBom $InstallationDiagnosticReceipt `
+		($DiagnosticReport | ConvertTo-Json -Depth 8)
 
 	Assert-NoHostGameDependency $Project.Root
 	Invoke-Checked "$ProfileName uncooked map load" $EditorCmd @(
@@ -757,10 +1217,38 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 	}
 
 	$Result = [ordered]@{
-		schemaVersion = 1
+		schemaVersion = 5
+		qualificationRunId = $QualificationRunId
 		profile = $ProfileName
 		plugins = $Project.Plugins
+		pluginSource = if ($ArtifactDirectory) {
+			'PackagedArtifacts'
+		} else {
+			'RepositorySource'
+		}
+		artifactVersion = if ($ArtifactDirectory) {
+			$ArtifactVersion
+		} else {
+			$null
+		}
+		artifactSha256 = if ($ArtifactDirectory) {
+			$ProfileHashes = [ordered]@{}
+			foreach ($PluginName in $Project.Plugins) {
+				$ProfileHashes[$PluginName] = $ArtifactHashes[$PluginName]
+			}
+			$ProfileHashes
+		} else {
+			$null
+		}
 		engine = $EngineRoot
+		engineBuildFingerprint = $EngineBuildFingerprint
+		publicHeaderAudit = if ($AuditPublicHeaders) { 'Passed' } else { 'Skipped' }
+		publicHeaderCount = $Project.PublicHeaderCount
+		publicHeaderManifest = $Project.PublicHeaderManifest
+		publicHeaderManifestSha256 = if ($Project.PublicHeaderManifest) {
+			(Get-FileHash -LiteralPath $Project.PublicHeaderManifest `
+				-Algorithm SHA256).Hash
+		} else { $null }
 		editorBuild = 'Passed'
 		clientBuild = if ($SkipClientServer) { 'Skipped' } else { 'Passed' }
 		serverBuild = if ($SkipClientServer) { 'Skipped' } else { 'Passed' }
@@ -769,6 +1257,19 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 			'/Game/Maps/ConsumerLobbyMap',
 			'/Game/Maps/ConsumerMap')
 		consumerManifest = '/Game/Generated/SeinSimulationContentManifest'
+		installationDiagnostic = 'Passed'
+		installationDiagnosticReceipt = $InstallationDiagnosticReceipt
+		installationDiagnosticReceiptSha256 =
+			(Get-FileHash -LiteralPath $InstallationDiagnosticReceipt `
+				-Algorithm SHA256).Hash
+		installationDiagnosticIntegrationMode =
+			[string]$DiagnosticReport.integrationMode
+		installationDiagnosticCohortVersion =
+			[string]$DiagnosticReport.cohortVersion
+		installationDiagnosticSourceCohortIdentity =
+			[string]$DiagnosticReport.sourceCohortIdentity
+		installationDiagnosticManifest =
+			[string]$DiagnosticReport.simulationContentManifest
 		uncookedLoad = 'Passed'
 		cookAndPackagedLoad = if ($SkipCook) { 'Skipped' } else { 'Passed' }
 		packagedRuntimeQualification = if ($ProfileName -ne 'Framework') {
@@ -778,6 +1279,9 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 		} else {
 			'Passed'
 		}
+		runtimeResultSha256 = if ($RuntimeResult) {
+			(Get-FileHash -LiteralPath $RuntimeResult -Algorithm SHA256).Hash
+		} else { $null }
 		startedAtUtc = $StartedAt.ToString('o')
 		completedAtUtc = [DateTime]::UtcNow.ToString('o')
 	}
@@ -787,6 +1291,36 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 }
 
 New-Item -ItemType Directory -Path $GeneratedRoot -Force | Out-Null
+if ($ArtifactDirectory) {
+	Initialize-ArtifactPluginSource $ArtifactDirectory
+}
+if ($ValidateArtifactsOnly) {
+	$ValidationResult = [ordered]@{
+		schemaVersion = 2
+		qualificationRunId = $QualificationRunId
+		artifactVersion = $ArtifactVersion
+		artifactSha256 = [ordered]@{}
+		engine = $EngineRoot
+		engineBuildFingerprint = $EngineBuildFingerprint
+		validatedAtUtc = [DateTime]::UtcNow.ToString('o')
+	}
+	foreach ($PluginName in Get-RequiredArtifactPlugins) {
+		$ValidationResult.artifactSha256[$PluginName] =
+			$ArtifactHashes[$PluginName]
+	}
+	$ValidationPath = Join-Path $GeneratedRoot 'artifact-validation.json'
+	Write-Utf8NoBom $ValidationPath `
+		($ValidationResult | ConvertTo-Json -Depth 6)
+	Write-Host `
+		"[ConsumerMatrix] artifact validation passed: $ValidationPath" `
+		-ForegroundColor Green
+	return
+}
 foreach ($ProfileName in $Profiles) {
 	Invoke-ConsumerProfile $ProfileName
+}
+}
+finally {
+	$PipelineMutex.ReleaseMutex()
+	$PipelineMutex.Dispose()
 }

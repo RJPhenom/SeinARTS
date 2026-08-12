@@ -1,0 +1,59 @@
+name: SeinARTS Release Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: SemVer release number without the v prefix
+        required: true
+        type: string
+      engine_root:
+        description: Absolute UE 5.8 root on the self-hosted Windows runner
+        required: true
+        default: D:\Engines\UE_5.8
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: seinarts-release-gate
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: [self-hosted, Windows]
+    timeout-minutes: 720
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          lfs: true
+          fetch-depth: 0
+
+      - name: Run complete release gate
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SEIN_RELEASE_VERSION: ${{ inputs.version }}
+          SEIN_ENGINE_ROOT: ${{ inputs.engine_root }}
+        run: |
+          & ./Tools/Release/Invoke-ReleaseGate.ps1 `
+            -Version $env:SEIN_RELEASE_VERSION `
+            -EngineRoot $env:SEIN_ENGINE_ROOT
+
+      - name: Upload gate evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: seinarts-release-gate-${{ inputs.version }}
+          if-no-files-found: warn
+          path: |
+            Saved/ReleaseGate/*.json
+            Saved/Automation/*/attempt.json
+            Saved/Automation/*/index.json
+            Saved/ConsumerMatrix/*/matrix-result.json
+            Saved/ConsumerMatrix/*/Saved/PublicHeaderAudit.json
+            dist/logs/*.log
+            dist/release-manifest.json
+            dist/SeinARTS-release-evidence.zip

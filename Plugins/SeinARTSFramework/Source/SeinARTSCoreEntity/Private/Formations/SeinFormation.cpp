@@ -737,7 +737,8 @@ void USeinFormation::ProjectPositionsToNavigable(
 	const int32 N = Positions.Num();
 	if (!World || N == 0) return;
 	// No nav projection bound (tests / nav-less games) → nothing to clamp to; leave positions as-is.
-	if (!World->NavProjectAgentFreeResolver.IsBound()
+	if (!World->NavProjectAgentFreeIgnoringResolver.IsBound()
+		&& !World->NavProjectAgentFreeResolver.IsBound()
 		&& !World->NavProjectFreeResolver.IsBound()) return;
 
 	// PARKED-UNIT OCCUPANCY. Gather idle bodies near the formation footprint so no slot is placed
@@ -750,7 +751,14 @@ void USeinFormation::ProjectPositionsToNavigable(
 	// footprint). Query = the collision hash's start-of-tick snapshot, handle-sorted → deterministic.
 	TArray<FFixedVector> ParkedCentres;
 	TArray<FFixedPoint>  ParkedRadii;
+	TSet<FSeinEntityHandle> Excluded;
+	Excluded.Reserve(ExcludeFromOccupancy.Num());
+	for (const FSeinEntityHandle& H : ExcludeFromOccupancy)
 	{
+		Excluded.Add(H);
+	}
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Formation_ProjectNavigable_GatherOccupancy);
 		// Formation bounds → one hash query covering every slot plus a body-sized margin.
 		FFixedVector Min = Positions[0];
 		FFixedVector Max = Positions[0];
@@ -765,10 +773,6 @@ void USeinFormation::ProjectPositionsToNavigable(
 			(Min.X + Max.X) / FFixedPoint::Two, (Min.Y + Max.Y) / FFixedPoint::Two, Positions[0].Z);
 		FFixedVector HalfSpan(Max.X - Centre.X, Max.Y - Centre.Y, FFixedPoint::Zero);
 		const FFixedPoint QueryRadius = HalfSpan.Size() + FFixedPoint::FromInt(300); // body-sized margin
-
-		TSet<FSeinEntityHandle> Excluded;
-		Excluded.Reserve(ExcludeFromOccupancy.Num());
-		for (const FSeinEntityHandle& H : ExcludeFromOccupancy) { Excluded.Add(H); }
 
 		TArray<FSeinEntityHandle> Nearby;
 		World->GetCollisionSpatialHash().QueryRadius(Centre, QueryRadius, Nearby, FSeinEntityHandle());
@@ -811,7 +815,8 @@ void USeinFormation::ProjectPositionsToNavigable(
 	// policy as well as peer occupancy.)
 	// With no resolver we can't tell → treat everything as on-nav (permit-on-no-data).
 	const bool bCanTestAgentPassable =
-		World->AgentDynamicPassableResolver.IsBound();
+		World->AgentDynamicPassableIgnoringResolver.IsBound()
+		|| World->AgentDynamicPassableResolver.IsBound();
 	const bool bCanTestGenericPassable =
 		World->DynamicPassableResolver.IsBound();
 
@@ -842,62 +847,92 @@ void USeinFormation::ProjectPositionsToNavigable(
 	TArray<int32>        Relocate;
 	Occupied.Reserve(ParkedCentres.Num() + N);
 	OccupiedRadii.Reserve(ParkedRadii.Num() + N);
-	for (int32 i = 0; i < N; ++i)
 	{
-		const bool bUseAgent = bCanTestAgentPassable
-			&& ExcludeFromOccupancy.IsValidIndex(i);
-		const FSeinNavAgentProfile Agent = bUseAgent
-			? World->BuildNavAgentProfile(
-				ExcludeFromOccupancy[i], RadiusAt(i))
-			: FSeinNavAgentProfile();
-		const bool bOnNav =
-			bUseAgent
-			? World->AgentDynamicPassableResolver.Execute(
-				Agent, Positions[i])
-			: (!bCanTestGenericPassable
-				|| World->DynamicPassableResolver.Execute(Positions[i]));
-		if (bOnNav && !OverlapsParked(Positions[i], RadiusAt(i)))
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Formation_ProjectNavigable_ClassifySlots);
+		for (int32 i = 0; i < N; ++i)
 		{
-			Occupied.Add(Positions[i]);
-			OccupiedRadii.Add(RadiusAt(i));
-		}
-		else
-		{
-			Relocate.Add(i);
+			const bool bUseAgent = bCanTestAgentPassable
+				&& ExcludeFromOccupancy.IsValidIndex(i);
+			const FSeinNavAgentProfile Agent = bUseAgent
+				? World->BuildNavAgentProfile(
+					ExcludeFromOccupancy[i], RadiusAt(i))
+				: FSeinNavAgentProfile();
+			bool bOnNav = true;
+			if (bUseAgent
+				&& World->AgentDynamicPassableIgnoringResolver.IsBound())
+			{
+				bOnNav =
+					World->AgentDynamicPassableIgnoringResolver.Execute(
+						Agent, Positions[i], Excluded);
+			}
+			else
+			{
+				bOnNav = bUseAgent
+					? World->AgentDynamicPassableResolver.Execute(
+						Agent, Positions[i])
+					: (!bCanTestGenericPassable
+						|| World->DynamicPassableResolver.Execute(Positions[i]));
+			}
+			const bool bOverlapsParked = bOnNav
+				&& OverlapsParked(Positions[i], RadiusAt(i));
+			if (bOnNav && !bOverlapsParked)
+			{
+				Occupied.Add(Positions[i]);
+				OccupiedRadii.Add(RadiusAt(i));
+			}
+			else
+			{
+				Relocate.Add(i);
+			}
 		}
 	}
 	if (Relocate.Num() == 0) return; // whole formation already clean — common case, zero work
 
 	// Relocate each flagged slot to its nearest free cell, accumulating occupancy as we go so the
 	// overflowing slots neither collide with parked bodies, the clean slots, nor each other.
-	for (const int32 i : Relocate)
 	{
-		const FFixedPoint Ri = RadiusAt(i);
-		FFixedVector Projected;
-		bool bProjected = false;
-		if (World->NavProjectAgentFreeResolver.IsBound()
-			&& ExcludeFromOccupancy.IsValidIndex(i))
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Formation_ProjectNavigable_RelocateSlots);
+		for (const int32 i : Relocate)
 		{
-			const FSeinNavAgentProfile Agent =
-				World->BuildNavAgentProfile(
-					ExcludeFromOccupancy[i], Ri);
-			bProjected =
-				World->NavProjectAgentFreeResolver.Execute(
-					Agent, Positions[i],
+			const FFixedPoint Ri = RadiusAt(i);
+			FFixedVector Projected;
+			bool bProjected = false;
+			if (World->NavProjectAgentFreeIgnoringResolver.IsBound()
+				&& ExcludeFromOccupancy.IsValidIndex(i))
+			{
+				const FSeinNavAgentProfile Agent =
+					World->BuildNavAgentProfile(
+						ExcludeFromOccupancy[i], Ri);
+				bProjected =
+					World->NavProjectAgentFreeIgnoringResolver.Execute(
+						Agent, Positions[i],
+						Excluded,
+						Occupied, OccupiedRadii, Projected);
+			}
+			else if (World->NavProjectAgentFreeResolver.IsBound()
+				&& ExcludeFromOccupancy.IsValidIndex(i))
+			{
+				const FSeinNavAgentProfile Agent =
+					World->BuildNavAgentProfile(
+						ExcludeFromOccupancy[i], Ri);
+				bProjected =
+					World->NavProjectAgentFreeResolver.Execute(
+						Agent, Positions[i],
+						Occupied, OccupiedRadii, Projected);
+			}
+			else if (World->NavProjectFreeResolver.IsBound())
+			{
+				bProjected = World->NavProjectFreeResolver.Execute(
+					Positions[i], Ri,
 					Occupied, OccupiedRadii, Projected);
+			}
+			if (bProjected)
+			{
+				Positions[i] = Projected;
+			}
+			Occupied.Add(Positions[i]);
+			OccupiedRadii.Add(Ri);
 		}
-		else if (World->NavProjectFreeResolver.IsBound())
-		{
-			bProjected = World->NavProjectFreeResolver.Execute(
-				Positions[i], Ri,
-				Occupied, OccupiedRadii, Projected);
-		}
-		if (bProjected)
-		{
-			Positions[i] = Projected;
-		}
-		Occupied.Add(Positions[i]);
-		OccupiedRadii.Add(Ri);
 	}
 }
 

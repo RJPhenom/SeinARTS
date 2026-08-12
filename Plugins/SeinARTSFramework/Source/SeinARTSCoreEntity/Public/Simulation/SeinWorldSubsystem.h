@@ -36,6 +36,7 @@
 #include "Components/SeinContainmentTypes.h"
 #include "Components/SeinExtentsComponent.h"
 #include "Data/SeinMatchSettings.h"
+#include "Data/SeinRelationshipTypes.h"
 #include "Data/SeinVoteState.h"
 #include "SeinWorldSubsystem.generated.h"
 
@@ -70,6 +71,54 @@ struct FSeinPendingEffectApply
 	TSubclassOf<USeinEffect> EffectClass;
 	FSeinEntityHandle Source;
 };
+
+/** Runtime key for one ordered player-pair capability. */
+struct SEINARTSCOREENTITY_API FSeinPairCapabilityKey
+{
+	FSeinPlayerID SourcePlayer;
+	FSeinPlayerID TargetPlayer;
+	FGameplayTag CapabilityTag;
+
+	bool operator==(const FSeinPairCapabilityKey& Other) const
+	{
+		return SourcePlayer == Other.SourcePlayer
+			&& TargetPlayer == Other.TargetPlayer
+			&& CapabilityTag == Other.CapabilityTag;
+	}
+};
+
+FORCEINLINE uint32 GetTypeHash(const FSeinPairCapabilityKey& Key)
+{
+	return HashCombine(
+		HashCombine(GetTypeHash(Key.SourcePlayer), GetTypeHash(Key.TargetPlayer)),
+		GetTypeHash(Key.CapabilityTag));
+}
+
+/** Runtime key for one source-attributed ordered player-pair grant. */
+struct SEINARTSCOREENTITY_API FSeinPairCapabilitySourceKey
+	: public FSeinPairCapabilityKey
+{
+	FGameplayTag SourceKindTag;
+	int64 SourceInstanceID = 0;
+
+	bool operator==(const FSeinPairCapabilitySourceKey& Other) const
+	{
+		return SourcePlayer == Other.SourcePlayer
+			&& TargetPlayer == Other.TargetPlayer
+			&& CapabilityTag == Other.CapabilityTag
+			&& SourceKindTag == Other.SourceKindTag
+			&& SourceInstanceID == Other.SourceInstanceID;
+	}
+};
+
+FORCEINLINE uint32 GetTypeHash(const FSeinPairCapabilitySourceKey& Key)
+{
+	return HashCombine(
+		HashCombine(
+			GetTypeHash(static_cast<const FSeinPairCapabilityKey&>(Key)),
+			GetTypeHash(Key.SourceKindTag)),
+		GetTypeHash(Key.SourceInstanceID));
+}
 
 /**
  * Per-entity tag state. Replaces the deleted `FSeinTagData` sim-component
@@ -268,6 +317,18 @@ DECLARE_DELEGATE_RetVal_TwoParams(bool, FSeinAgentPassableResolver,
 	const FSeinNavAgentProfile& /*Agent*/,
 	const FFixedVector& /*WorldPos*/);
 
+/** Formation-specific agent passability. `IgnoredDynamicBlockerOwners` are
+ *  members of the same order: they are expected to vacate their current
+ *  footprints, so only their runtime blocker stamps are ignored. Static nav,
+ *  terrain policy, unrelated blockers, and the querying agent's footprint
+ *  remain authoritative. */
+DECLARE_DELEGATE_RetVal_ThreeParams(
+	bool,
+	FSeinAgentPassableIgnoringResolver,
+	const FSeinNavAgentProfile& /*Agent*/,
+	const FFixedVector& /*WorldPos*/,
+	const TSet<FSeinEntityHandle>& /*IgnoredDynamicBlockerOwners*/);
+
 /**
  * Delegate sim uses to snap a world position to the nearest passable cell.
  * Registered by USeinNavigationSubsystem (SeinARTSNavigation) at OnWorldBeginPlay.
@@ -315,6 +376,19 @@ DECLARE_DELEGATE_RetVal_FiveParams(bool, FSeinNavProjectFreeResolver,
 DECLARE_DELEGATE_RetVal_FiveParams(bool, FSeinNavProjectAgentFreeResolver,
 	const FSeinNavAgentProfile& /*Agent*/,
 	const FFixedVector& /*InWorld*/,
+	const TArray<FFixedVector>& /*AvoidCentres*/,
+	const TArray<FFixedPoint>& /*AvoidRadii*/,
+	FFixedVector& /*OutProjected*/);
+
+/** Formation-specific heterogeneous-agent projection. Ignores runtime blocker
+ *  stamps owned by members of this order while preserving all other agent and
+ *  peer-footprint constraints. */
+DECLARE_DELEGATE_RetVal_SixParams(
+	bool,
+	FSeinNavProjectAgentFreeIgnoringResolver,
+	const FSeinNavAgentProfile& /*Agent*/,
+	const FFixedVector& /*InWorld*/,
+	const TSet<FSeinEntityHandle>& /*IgnoredDynamicBlockerOwners*/,
 	const TArray<FFixedVector>& /*AvoidCentres*/,
 	const TArray<FFixedPoint>& /*AvoidRadii*/,
 	FFixedVector& /*OutProjected*/);
@@ -875,6 +949,8 @@ public:
 	 *  If unbound, defaults to permit (tests / nav-less games). */
 	FSeinPassableResolver DynamicPassableResolver;
 	FSeinAgentPassableResolver AgentDynamicPassableResolver;
+	FSeinAgentPassableIgnoringResolver
+		AgentDynamicPassableIgnoringResolver;
 
 	/** Cross-module resolver for "snap to nearest passable cell" — used by
 	 *  formation resolvers to ensure slot positions land on walkable
@@ -889,6 +965,8 @@ public:
 	 *  space without piling. */
 	FSeinNavProjectFreeResolver NavProjectFreeResolver;
 	FSeinNavProjectAgentFreeResolver NavProjectAgentFreeResolver;
+	FSeinNavProjectAgentFreeIgnoringResolver
+		NavProjectAgentFreeIgnoringResolver;
 
 	/** Agent-aware safety half of authoritative destination admission. */
 	FSeinAgentAuthoritativeDestinationSafetyResolver
@@ -1552,6 +1630,46 @@ public:
 	// ========== Relationships (DESIGN §14) ==========
 
 	/**
+	 * True if SourcePlayer grants CapabilityTag to TargetPlayer. Direction is
+	 * capability-specific; ShareVision uses A -> B to mean B may consume A's
+	 * vision. Self-pairs short-circuit true and are never stored.
+	 */
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|Relationship",
+		meta = (DisplayName = "Has Pair Capability",
+			Categories = "SeinARTS.Relationship.Capability"))
+	bool HasPairCapability(
+		FSeinPlayerID SourcePlayer,
+		FSeinPlayerID TargetPlayer,
+		FGameplayTag CapabilityTag) const;
+
+	/** Compatibility UI projection. Not an authoritative diplomacy posture. */
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|Relationship",
+		meta = (DisplayName = "Should Present Player As Friendly"))
+	bool ShouldPresentPlayerAsFriendly(
+		FSeinPlayerID SourcePlayer,
+		FSeinPlayerID ViewingPlayer) const;
+
+	/** Grant one exact source-instance directional capability ref from authorized
+	 *  simulation/bootstrap code. External mutation must use the command path. */
+	bool GrantPairCapability(
+		FSeinPlayerID SourcePlayer,
+		FSeinPlayerID TargetPlayer,
+		FGameplayTag CapabilityTag,
+		FGameplayTag SourceKindTag,
+		int64 SourceInstanceID);
+
+	/** Revoke one exact source-attributed directional capability ref from
+	 *  authorized simulation code. External mutation must use the command path. */
+	bool RevokePairCapability(
+		FSeinPlayerID SourcePlayer,
+		FSeinPlayerID TargetPlayer,
+		FGameplayTag CapabilityTag,
+		FGameplayTag SourceKindTag,
+		int64 SourceInstanceID);
+
+	TArray<FSeinPairCapabilityGrantRecord> GetPairCapabilityGrantRecords() const;
+
+	/**
 	 * Move `Entity` into `Container` as a plain occupant.
 	 *
 	 * Validates: both handles alive; entity has `FSeinContainmentMemberData`;
@@ -1974,6 +2092,8 @@ private:
 	// active effect ledgers remain reachable through GC.
 	UPROPERTY(Transient)
 	TMap<FSeinPlayerID, FSeinPlayerState> PlayerStates;
+	TMap<FSeinPairCapabilitySourceKey, int32> PairCapabilitySourceRefCounts;
+	TMap<FSeinPairCapabilityKey, int32> PairCapabilityEffectiveRefCounts;
 
 	// Factions
 	UPROPERTY(Transient)
@@ -2387,7 +2507,11 @@ private:
 	ECommandHandleResult TryHandleActivateAbilityCommand(const FSeinCommand& Command);
 	ECommandHandleResult TryHandleCancelAbilityCommand(const FSeinCommand& Command);
 	ECommandHandleResult TryHandleCancelProductionCommand(const FSeinCommand& Command);
+	ECommandHandleResult TryHandleSetPairCapabilityCommand(const FSeinCommand& Command);
 	void ProcessDeferredDestroys();
+	void SeedTeamPairCapabilitiesForPlayer(FSeinPlayerID PlayerID);
+	void RebuildPairCapabilityEffectiveCache();
+	bool ValidatePairCapabilityState() const;
 
 	// Ability initialization for spawned entities
 	void InitializeEntityAbilities(FSeinEntityHandle Handle);

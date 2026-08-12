@@ -203,7 +203,7 @@ namespace UE::SeinARTSTests
 		}
 	}
 
-	TEST(SnapshotV13EnvelopeHasFrozenBigEndianFramingAndCanonicalOrder,
+	TEST(SnapshotV15EnvelopeHasFrozenBigEndianFramingAndCanonicalOrder,
 		"SeinARTS.Unit.CoreEntity.SnapshotEnvelope")
 	{
 		const FSeinSnapshotEnvelope Source = MakeCanonicalFixture();
@@ -215,15 +215,15 @@ namespace UE::SeinARTSTests
 		const FBlake3Hash FrozenFileHash = FBlake3::HashBuffer(
 			FMemoryView(Bytes.GetData(), Bytes.Num()));
 		ASSERT_THAT(AreEqual(
-			FString(TEXT("2EDEFC9B695E7E028779E54F1C93E8CB")),
+			FString(TEXT("8BC01310DF56953E3229D2CE952535FB")),
 			Metadata.AggregateStateRoot.ToString(EGuidFormats::Digits)));
 		ASSERT_THAT(AreEqual(
 			FString(TEXT("8F6E11B2EA6DCFABF443CE46B9FB86F8")),
 			Metadata.BodyDigest.ToString(EGuidFormats::Digits)));
 		ASSERT_THAT(AreEqual(
 			FString(TEXT(
-				"5B8C588BD42495E99A2057C503BDB1B7"
-				"6BB1C4EBAFFF6081A24460EDE2EE0B03")),
+				"DADADA87615DF4FC8AE1F48292FBEE48"
+				"76DB135FEF7BFEEE7E2CFCA0CA2394C8")),
 			BytesToHex(FrozenFileHash.GetBytes(), 32)));
 
 		const uint8 ExpectedMagic[8] =
@@ -297,7 +297,7 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(PermutedBytes == Bytes));
 	}
 
-	TEST(SnapshotV13AggregateRootIncludesOnlyFutureAffectingSections,
+	TEST(SnapshotV15AggregateRootIncludesOnlyFutureAffectingSections,
 		"SeinARTS.Unit.CoreEntity.SnapshotEnvelope")
 	{
 		const FSeinSnapshotEnvelope Baseline = MakeCanonicalFixture();
@@ -392,7 +392,7 @@ namespace UE::SeinARTSTests
 			&& RejectedMetadata.SnapshotTick == 999));
 	}
 
-	TEST(SnapshotV13EmptyEnvelopeRoundTripsWithoutExposingOutputsOnFailure,
+	TEST(SnapshotV15EmptyEnvelopeRoundTripsWithoutExposingOutputsOnFailure,
 		"SeinARTS.Unit.CoreEntity.SnapshotEnvelope")
 	{
 		FSeinSnapshotEnvelope Empty;
@@ -423,7 +423,7 @@ namespace UE::SeinARTSTests
 			&& DecodedMetadata.BodyDigest == Metadata.BodyDigest));
 	}
 
-	TEST(SnapshotV13PrefixRejectsHostileBoundsBeforeBodyDecode,
+	TEST(SnapshotV15PrefixRejectsHostileBoundsBeforeBodyDecode,
 		"SeinARTS.Unit.CoreEntity.SnapshotEnvelope.Security")
 	{
 		const FSeinSnapshotEnvelope Source = MakeCanonicalFixture();
@@ -502,7 +502,7 @@ namespace UE::SeinARTSTests
 			Bad, TEXT("exactly match file length"), Error)));
 	}
 
-	TEST(SnapshotV13RejectsNoncanonicalDirectoriesAndDigestForgeries,
+	TEST(SnapshotV15RejectsNoncanonicalDirectoriesAndDigestForgeries,
 		"SeinARTS.Unit.CoreEntity.SnapshotEnvelope.Security")
 	{
 		const FSeinSnapshotEnvelope Source = MakeCanonicalFixture();

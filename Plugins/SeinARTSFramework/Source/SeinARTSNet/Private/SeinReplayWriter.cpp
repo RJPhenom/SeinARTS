@@ -24,6 +24,22 @@
 #include "Misc/DateTime.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
+#include "UObject/GarbageCollection.h"
+#include "UObject/StrongObjectPtr.h"
+
+struct FSeinReplayCheckpointEncodeWork
+{
+	TStrongObjectPtr<USeinReplayWriter> WriterRoot;
+	FSeinWorldSnapshot Snapshot;
+	FSeinWorldSnapshotReferenceGuard SnapshotGuard;
+
+	explicit FSeinReplayCheckpointEncodeWork(USeinReplayWriter* Writer)
+		: WriterRoot(Writer)
+		, SnapshotGuard(Snapshot)
+	{
+	}
+};
 
 namespace
 {
@@ -105,6 +121,7 @@ void USeinReplayWriter::ResetForNewRecording()
 	// Re-entry is rare and explicit. Finish any worker that still owns the old
 	// journal path before forgetting its state, so the preserved partial has a
 	// stable length when the new recording begins.
+	WaitAndDiscardPendingCheckpointEncode();
 	WaitAndDiscardPendingAppend();
 	++RecordingGeneration;
 	bRecording = false;
@@ -133,8 +150,13 @@ void USeinReplayWriter::ResetForNewRecording()
 	LastObservedCompletedTick = 0;
 	LastProgressTick = INDEX_NONE;
 	LastCheckpointPersistedTurnCount = 0;
+	PersistedCheckpointCount = 0;
 	NextCheckpointRetryTick = 0;
 	CheckpointRetryBackoffTicks = 0;
+	bLoggedChronicCheckpointFailure = false;
+#if WITH_DEV_AUTOMATION_TESTS
+	bFailNextBackgroundAppendForTests = false;
+#endif
 }
 
 void USeinReplayWriter::StartRecording(const FSeinReplayHeader& Header)
@@ -557,18 +579,31 @@ void USeinReplayWriter::ScheduleMaintenance()
 			{
 				return;
 			}
-			Writer->bMaintenanceScheduled = false;
-			if (!Writer->bRecording)
-			{
-				return;
-			}
-			Writer->RunDeferredMaintenance(/*bForce=*/false);
-			if (Writer->bRecording
-				&& Writer->IsPeriodicCheckpointDue())
-			{
-				Writer->CaptureCheckpoint(/*bRequired=*/false);
-			}
+			Writer->RunScheduledMaintenancePass();
 		});
+}
+
+void USeinReplayWriter::RunScheduledMaintenancePass()
+{
+	bMaintenanceScheduled = false;
+	if (!bRecording)
+	{
+		return;
+	}
+	if (!ResolvePendingCheckpointEncode(
+			/*bWait=*/false,
+			/*bAppendSynchronously=*/false)
+		|| PendingCheckpointEncodeFuture.IsValid())
+	{
+		return;
+	}
+	RunDeferredMaintenance(/*bForce=*/false);
+	if (bRecording && IsPeriodicCheckpointDue())
+	{
+		CaptureCheckpointInternal(
+			/*bRequired=*/false,
+			/*bAllowBackgroundAppend=*/true);
+	}
 }
 
 void USeinReplayWriter::RunDeferredMaintenance(bool bForce)
@@ -578,6 +613,20 @@ void USeinReplayWriter::RunDeferredMaintenance(bool bForce)
 		return;
 	}
 	bMaintenanceRunning = true;
+	if (!ResolvePendingCheckpointEncode(
+			/*bWait=*/bForce,
+			/*bAppendSynchronously=*/bForce))
+	{
+		bMaintenanceRunning = false;
+		return;
+	}
+	if (PendingCheckpointEncodeFuture.IsValid())
+	{
+		// The checkpoint owns the next digest-chain position. Resident turns may
+		// accumulate, but no later frame may overtake its captured frontier.
+		bMaintenanceRunning = false;
+		return;
+	}
 	if (!FlushEligibleTurns(bForce))
 	{
 		bMaintenanceRunning = false;
@@ -613,6 +662,100 @@ void USeinReplayWriter::RunDeferredMaintenance(bool bForce)
 		}
 	}
 	bMaintenanceRunning = false;
+}
+
+bool USeinReplayWriter::ResolvePendingCheckpointEncode(
+	bool bWait,
+	bool bAppendSynchronously)
+{
+	if (!PendingCheckpointEncodeFuture.IsValid())
+	{
+		return true;
+	}
+	if (!bWait && !PendingCheckpointEncodeFuture.IsReady())
+	{
+		return true;
+	}
+	if (bWait)
+	{
+		PendingCheckpointEncodeFuture.Wait();
+	}
+
+	FSeinReplayAsyncCheckpointEncodeResult Result =
+		PendingCheckpointEncodeFuture.Get();
+	PendingCheckpointEncodeFuture = {};
+	PendingCheckpointEncodeGeneration = MAX_uint64;
+	// The worker has released its shared reference before Get returns. Dropping
+	// the writer's final reference here destroys the GC guard on the game thread.
+	PendingCheckpointEncodeWork.Reset();
+	if (!Result.bSucceeded)
+	{
+		HandleCheckpointFailure(
+			/*bRequired=*/false,
+			FString::Printf(
+				TEXT("checkpoint envelope encode failed: %s"),
+				*Result.Error));
+		return bRecording;
+	}
+	if (Result.SnapshotTick <= 0)
+	{
+		HandleCheckpointFailure(
+			/*bRequired=*/false,
+			TEXT("background checkpoint encode returned an invalid tick"));
+		return bRecording;
+	}
+
+	if (!AppendJournalFrame(
+			static_cast<uint8>(
+				SeinReplayJournalFormat::EFrameType::Checkpoint),
+			INDEX_NONE,
+			INDEX_NONE,
+			Result.SnapshotTick,
+			Result.Envelope,
+			/*bAsync=*/!bAppendSynchronously))
+	{
+		return false;
+	}
+	if (bAppendSynchronously)
+	{
+		LastCheckpointPersistedTurnCount = PersistedTurnCount;
+		++PersistedCheckpointCount;
+		NextCheckpointRetryTick = 0;
+		CheckpointRetryBackoffTicks = 0;
+	}
+	UE_LOG(LogSeinNet, Verbose,
+		TEXT("ReplayWriter: %s encoded checkpoint at tick %d (%d bytes)."),
+		bAppendSynchronously ? TEXT("appended") : TEXT("queued"),
+		Result.SnapshotTick,
+		Result.Envelope.Num());
+	return true;
+}
+
+void USeinReplayWriter::WaitAndDiscardPendingCheckpointEncode()
+{
+	if (PendingCheckpointEncodeFuture.IsValid())
+	{
+		PendingCheckpointEncodeFuture.Wait();
+		PendingCheckpointEncodeFuture.Get();
+		PendingCheckpointEncodeFuture = {};
+	}
+	PendingCheckpointEncodeGeneration = MAX_uint64;
+	PendingCheckpointEncodeWork.Reset();
+}
+
+void USeinReplayWriter::DiscardCompletedCheckpointEncode(
+	uint64 ExpectedGeneration)
+{
+	if (PendingCheckpointEncodeGeneration != ExpectedGeneration
+		|| !PendingCheckpointEncodeFuture.IsValid()
+		|| !PendingCheckpointEncodeFuture.IsReady())
+	{
+		return;
+	}
+	PendingCheckpointEncodeFuture.Get();
+	PendingCheckpointEncodeFuture = {};
+	PendingCheckpointEncodeGeneration = MAX_uint64;
+	PendingCheckpointEncodeWork.Reset();
 }
 
 bool USeinReplayWriter::ResolvePendingAppend(bool bWait)
@@ -672,6 +815,21 @@ bool USeinReplayWriter::ResolvePendingAppend(bool bWait)
 	{
 		LastProgressTick = PendingAppendTimelineTick;
 	}
+	else if (PendingAppendKind == ESeinReplayAsyncAppendKind::Checkpoint)
+	{
+		if (PendingAppendCheckpointTurnCount < 0
+			|| PendingAppendCheckpointTurnCount > PersistedTurnCount)
+		{
+			PendingAppendKind = ESeinReplayAsyncAppendKind::None;
+			FailRecording(TEXT("replay checkpoint completion carried an invalid durable turn count"));
+			return false;
+		}
+		LastCheckpointPersistedTurnCount =
+			PendingAppendCheckpointTurnCount;
+		++PersistedCheckpointCount;
+		NextCheckpointRetryTick = 0;
+		CheckpointRetryBackoffTicks = 0;
+	}
 
 	PendingAppendKind = ESeinReplayAsyncAppendKind::None;
 	PendingAppendDigest.Invalidate();
@@ -681,6 +839,7 @@ bool USeinReplayWriter::ResolvePendingAppend(bool bWait)
 	PendingAppendFirstTurn = INDEX_NONE;
 	PendingAppendLastTurn = INDEX_NONE;
 	PendingAppendTimelineTick = INDEX_NONE;
+	PendingAppendCheckpointTurnCount = INDEX_NONE;
 	return true;
 }
 
@@ -700,6 +859,7 @@ void USeinReplayWriter::WaitAndDiscardPendingAppend()
 	PendingAppendFirstTurn = INDEX_NONE;
 	PendingAppendLastTurn = INDEX_NONE;
 	PendingAppendTimelineTick = INDEX_NONE;
+	PendingAppendCheckpointTurnCount = INDEX_NONE;
 }
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -708,9 +868,21 @@ void USeinReplayWriter::QueueAppliedProgressForTests()
 	RunDeferredMaintenance(/*bForce=*/false);
 }
 
+void USeinReplayWriter::RunScheduledMaintenanceForTests()
+{
+	RunScheduledMaintenancePass();
+}
+
 void USeinReplayWriter::FlushAppliedProgressForTests()
 {
 	RunDeferredMaintenance(/*bForce=*/true);
+}
+
+void USeinReplayWriter::ResolveCheckpointEncodeForTests()
+{
+	ResolvePendingCheckpointEncode(
+		/*bWait=*/true,
+		/*bAppendSynchronously=*/false);
 }
 #endif
 
@@ -1019,15 +1191,30 @@ bool USeinReplayWriter::AppendJournalFrame(
 	}
 	if (bAsync)
 	{
-		PendingAppendKind = TypedFrame
-			== SeinReplayJournalFormat::EFrameType::TurnBatch
-			? ESeinReplayAsyncAppendKind::TurnBatch
-			: ESeinReplayAsyncAppendKind::Progress;
+		switch (TypedFrame)
+		{
+		case SeinReplayJournalFormat::EFrameType::TurnBatch:
+			PendingAppendKind = ESeinReplayAsyncAppendKind::TurnBatch;
+			break;
+		case SeinReplayJournalFormat::EFrameType::Progress:
+			PendingAppendKind = ESeinReplayAsyncAppendKind::Progress;
+			break;
+		case SeinReplayJournalFormat::EFrameType::Checkpoint:
+			PendingAppendKind = ESeinReplayAsyncAppendKind::Checkpoint;
+			break;
+		default:
+			FailRecording(TEXT("replay frame type does not support background append"));
+			return false;
+		}
 		PendingAppendDigest = Frame.CurrentDigest;
 		PendingAppendByteCount = FrameByteCount;
 		PendingAppendFirstTurn = FirstTurn;
 		PendingAppendLastTurn = LastTurn;
 		PendingAppendTimelineTick = TimelineTick;
+		PendingAppendCheckpointTurnCount = PendingAppendKind
+			== ESeinReplayAsyncAppendKind::Checkpoint
+			? PersistedTurnCount
+			: INDEX_NONE;
 		PendingAppendTurnCount = PendingAppendKind
 			== ESeinReplayAsyncAppendKind::TurnBatch
 			? LastTurn - FirstTurn + 1
@@ -1048,6 +1235,13 @@ bool USeinReplayWriter::AppendJournalFrame(
 		const FString AppendPath = ActivePartialPath;
 		const int64 ExpectedOffset = static_cast<int64>(PersistedBytes);
 		const uint64 ScheduledGeneration = RecordingGeneration;
+#if WITH_DEV_AUTOMATION_TESTS
+		const bool bForceBackgroundFailure =
+			bFailNextBackgroundAppendForTests;
+		bFailNextBackgroundAppendForTests = false;
+#else
+		constexpr bool bForceBackgroundFailure = false;
+#endif
 		TWeakObjectPtr<USeinReplayWriter> WeakThis(this);
 		PendingAppendFuture = Async(
 			EAsyncExecution::ThreadPool,
@@ -1055,14 +1249,24 @@ bool USeinReplayWriter::AppendJournalFrame(
 			 ExpectedOffset,
 			 FrameBytes = MoveTemp(FrameBytes),
 			 WeakThis,
-			 ScheduledGeneration]() mutable
+			 ScheduledGeneration,
+			 bForceBackgroundFailure]() mutable
 			{
 				FSeinReplayAsyncAppendResult Result;
-				Result.bSucceeded = SeinReplayFileIO::AppendAtExpectedOffset(
-					AppendPath,
-					ExpectedOffset,
-					FrameBytes,
-					Result.Error);
+				if (bForceBackgroundFailure)
+				{
+					Result.Error = TEXT(
+						"synthetic background append failure");
+				}
+				else
+				{
+					Result.bSucceeded =
+						SeinReplayFileIO::AppendAtExpectedOffset(
+							AppendPath,
+							ExpectedOffset,
+							FrameBytes,
+							Result.Error);
+				}
 				AsyncTask(ENamedThreads::GameThread,
 					[WeakThis, ScheduledGeneration]()
 					{
@@ -1097,6 +1301,59 @@ bool USeinReplayWriter::AppendJournalFrame(
 
 bool USeinReplayWriter::CaptureCheckpoint(bool bRequired)
 {
+	return CaptureCheckpointInternal(
+		bRequired,
+		/*bAllowBackgroundAppend=*/false);
+}
+
+bool USeinReplayWriter::HandleCheckpointFailure(
+	bool bRequired,
+	const FString& Reason)
+{
+	if (bRequired)
+	{
+		FailRecording(FString::Printf(
+			TEXT("required replay checkpoint failed: %s"), *Reason));
+		return false;
+	}
+
+	const int32 BaseBackoff = GetProgressIntervalTicks();
+	const int32 MaxBackoff = BaseBackoff > MAX_int32 / 64
+		? MAX_int32 : BaseBackoff * 64;
+	CheckpointRetryBackoffTicks = CheckpointRetryBackoffTicks <= 0
+		? BaseBackoff
+		: FMath::Min(
+			MaxBackoff,
+			CheckpointRetryBackoffTicks > MAX_int32 / 2
+				? MAX_int32
+				: CheckpointRetryBackoffTicks * 2);
+	NextCheckpointRetryTick = LastObservedCompletedTick
+		> MAX_int32 - CheckpointRetryBackoffTicks
+		? MAX_int32
+		: LastObservedCompletedTick + CheckpointRetryBackoffTicks;
+	UE_LOG(LogSeinNet, Warning,
+		TEXT("ReplayWriter: periodic checkpoint skipped; retry in %d tick(s): %s."),
+		CheckpointRetryBackoffTicks, *Reason);
+	// Recording survives checkpoint failure, but seek/recovery granularity
+	// silently degrades to the last successful checkpoint. Escalate chronic
+	// failure once so it cannot hide among routine retry warnings.
+	if (CheckpointRetryBackoffTicks >= MaxBackoff
+		&& !bLoggedChronicCheckpointFailure)
+	{
+		bLoggedChronicCheckpointFailure = true;
+		UE_LOG(LogSeinNet, Error,
+			TEXT("ReplayWriter: periodic checkpoints are chronically failing; this replay records turns but its seek/recovery granularity is frozen at the last successful checkpoint. Last reason: %s"),
+			*Reason);
+	}
+	return false;
+}
+
+bool USeinReplayWriter::CaptureCheckpointInternal(
+	bool bRequired,
+	bool bAllowBackgroundAppend)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Replay_CaptureCheckpoint);
+
 	if (!bRecording)
 	{
 		return false;
@@ -1106,6 +1363,8 @@ bool USeinReplayWriter::CaptureCheckpoint(bool bRequired)
 	{
 		bRequired = true;
 	}
+	const bool bBackgroundCheckpoint = bAllowBackgroundAppend
+		&& !bRequired && !bInitial;
 
 	UWorld* World = RecordingWorld.Get();
 	USeinWorldSubsystem* WorldSub = World
@@ -1113,46 +1372,7 @@ bool USeinReplayWriter::CaptureCheckpoint(bool bRequired)
 		: nullptr;
 	auto RefuseCapture = [this, bRequired](const FString& Reason)
 	{
-		if (bRequired)
-		{
-			FailRecording(FString::Printf(
-				TEXT("required replay checkpoint failed: %s"), *Reason));
-		}
-		else
-		{
-			const int32 BaseBackoff = GetProgressIntervalTicks();
-			const int32 MaxBackoff = BaseBackoff > MAX_int32 / 64
-				? MAX_int32 : BaseBackoff * 64;
-			CheckpointRetryBackoffTicks = CheckpointRetryBackoffTicks <= 0
-				? BaseBackoff
-				: FMath::Min(
-					MaxBackoff,
-					CheckpointRetryBackoffTicks > MAX_int32 / 2
-						? MAX_int32
-						: CheckpointRetryBackoffTicks * 2);
-			NextCheckpointRetryTick = LastObservedCompletedTick
-				> MAX_int32 - CheckpointRetryBackoffTicks
-				? MAX_int32
-				: LastObservedCompletedTick
-					+ CheckpointRetryBackoffTicks;
-			UE_LOG(LogSeinNet, Warning,
-				TEXT("ReplayWriter: periodic checkpoint skipped; retry in %d tick(s): %s."),
-				CheckpointRetryBackoffTicks, *Reason);
-			// Recording survives checkpoint failure, but seek/recovery
-			// granularity silently degrades to the last successful
-			// checkpoint. Once backoff saturates the failure is chronic
-			// (e.g. the snapshot outgrew the checkpoint body ceiling) —
-			// escalate once so it can't hide among routine warnings.
-			if (CheckpointRetryBackoffTicks >= MaxBackoff
-				&& !bLoggedChronicCheckpointFailure)
-			{
-				bLoggedChronicCheckpointFailure = true;
-				UE_LOG(LogSeinNet, Error,
-					TEXT("ReplayWriter: periodic checkpoints are chronically failing; this replay records turns but its seek/recovery granularity is frozen at the last successful checkpoint. Last reason: %s"),
-					*Reason);
-			}
-		}
-		return false;
+		return HandleCheckpointFailure(bRequired, Reason);
 	};
 	if (!WorldSub)
 	{
@@ -1170,7 +1390,10 @@ bool USeinReplayWriter::CaptureCheckpoint(bool bRequired)
 
 	FSeinWorldSnapshot Snapshot;
 	FSeinWorldSnapshotReferenceGuard SnapshotGuard(Snapshot);
-	WorldSub->CaptureSnapshot(Snapshot);
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Replay_Checkpoint_CaptureSnapshot);
+		WorldSub->CaptureSnapshot(Snapshot);
+	}
 	if (Snapshot.SnapshotVersion != FSeinWorldSnapshot::CurrentVersion)
 	{
 		return RefuseCapture(TEXT("Core refused quiescent snapshot capture"));
@@ -1189,10 +1412,85 @@ bool USeinReplayWriter::CaptureCheckpoint(bool bRequired)
 			TEXT("checkpoint frontier is not durable: %s"), *Error));
 	}
 
+	if (bBackgroundCheckpoint)
+	{
+		if (PendingCheckpointEncodeFuture.IsValid() || HasPendingAppend())
+		{
+			return RefuseCapture(
+				TEXT("ordered checkpoint pipeline is already occupied"));
+		}
+
+		PendingCheckpointEncodeWork = MakeShared<
+			FSeinReplayCheckpointEncodeWork, ESPMode::ThreadSafe>(this);
+		PendingCheckpointEncodeWork->Snapshot = MoveTemp(Snapshot);
+		const TSharedRef<FSeinReplayCheckpointEncodeWork, ESPMode::ThreadSafe>
+			EncodeWork = PendingCheckpointEncodeWork.ToSharedRef();
+		const uint64 ScheduledGeneration = RecordingGeneration;
+		PendingCheckpointEncodeGeneration = ScheduledGeneration;
+		TWeakObjectPtr<USeinReplayWriter> WeakThis(this);
+		PendingCheckpointEncodeFuture = Async(
+			EAsyncExecution::ThreadPool,
+			[EncodeWork, WeakThis, ScheduledGeneration]() mutable
+			{
+				FSeinReplayAsyncCheckpointEncodeResult Result;
+				Result.SnapshotTick = EncodeWork->Snapshot.CurrentTick;
+				FSeinSnapshotEnvelopeMetadata Metadata;
+				{
+					// Reflected serialization reads frozen UObject class/path metadata.
+					// The work's snapshot guard pins references; this guard prevents GC
+					// from mutating object reachability while the worker reads them.
+					FGCScopeGuard GCScopeGuard;
+					Result.bSucceeded =
+						SeinSnapshotTransfer::EncodeCheckpointEnvelope(
+							EncodeWork->Snapshot,
+							Result.Envelope,
+							Metadata,
+							Result.Error);
+				}
+				if (Result.bSucceeded
+					&& Metadata.SnapshotTick != Result.SnapshotTick)
+				{
+					Result.bSucceeded = false;
+					Result.Error = TEXT(
+						"checkpoint envelope tick disagrees with Core");
+					Result.Envelope.Reset();
+				}
+				AsyncTask(ENamedThreads::GameThread,
+					[WeakThis, ScheduledGeneration]()
+					{
+						USeinReplayWriter* Writer = WeakThis.Get();
+						if (!Writer)
+						{
+							return;
+						}
+						if (Writer->RecordingGeneration
+							== ScheduledGeneration)
+						{
+							Writer->ScheduleMaintenance();
+						}
+						else
+						{
+							Writer->DiscardCompletedCheckpointEncode(
+								ScheduledGeneration);
+						}
+					});
+				return Result;
+			});
+		UE_LOG(LogSeinNet, Verbose,
+			TEXT("ReplayWriter: encoding periodic checkpoint at tick %d in the background."),
+			PendingCheckpointEncodeWork->Snapshot.CurrentTick);
+		return true;
+	}
+
 	TArray<uint8> Envelope;
 	FSeinSnapshotEnvelopeMetadata Metadata;
-	if (!SeinSnapshotTransfer::EncodeCheckpointEnvelope(
-			Snapshot, Envelope, Metadata, Error))
+	bool bEnvelopeEncoded = false;
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Replay_Checkpoint_EncodeEnvelope);
+		bEnvelopeEncoded = SeinSnapshotTransfer::EncodeCheckpointEnvelope(
+			Snapshot, Envelope, Metadata, Error);
+	}
+	if (!bEnvelopeEncoded)
 	{
 		return RefuseCapture(FString::Printf(
 			TEXT("checkpoint envelope encode failed: %s"), *Error));
@@ -1207,13 +1505,15 @@ bool USeinReplayWriter::CaptureCheckpoint(bool bRequired)
 			INDEX_NONE,
 			INDEX_NONE,
 			Snapshot.CurrentTick,
-			Envelope))
+			Envelope,
+			/*bAsync=*/false))
 	{
 		return false;
 	}
 
 	bHasInitialCheckpoint = true;
 	LastCheckpointPersistedTurnCount = PersistedTurnCount;
+	++PersistedCheckpointCount;
 	NextCheckpointRetryTick = 0;
 	CheckpointRetryBackoffTicks = 0;
 	UE_LOG(LogSeinNet, Verbose,
@@ -1226,6 +1526,7 @@ bool USeinReplayWriter::CaptureCheckpoint(bool bRequired)
 bool USeinReplayWriter::IsPeriodicCheckpointDue() const
 {
 	if (!bRecording || !bHasInitialCheckpoint
+		|| PendingCheckpointEncodeFuture.IsValid()
 		|| HasPendingAppend()
 		|| LastObservedCompletedTick < NextCheckpointRetryTick)
 	{
@@ -1269,6 +1570,13 @@ FString USeinReplayWriter::FinishRecording()
 		return FString();
 	}
 	if (!bRecording)
+	{
+		return FString();
+	}
+	if (!ResolvePendingCheckpointEncode(
+			/*bWait=*/true,
+			/*bAppendSynchronously=*/true)
+		|| !bRecording)
 	{
 		return FString();
 	}

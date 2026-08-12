@@ -25,6 +25,7 @@
 #include "Hash/Blake3.h"
 #include "Math/Box.h"
 #include "Algo/Reverse.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 #include "SeinARTSNavigationLog.h"
 
@@ -579,6 +580,7 @@ USeinNavigationAStar::LoadFromSubstrateImpl(
 	MainScratch.LastOverlayDirtyRect =
 		FIntRect(INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN);
 	MainScratch.bOverlayReuseValid = false;
+	RebuildDynamicBlockerCellIndex();
 
 	// Broadcast after runtime state is in sync — subscribers (debug scene proxy,
 	// cached plan invalidation, etc.) see a consistent snapshot.
@@ -1347,7 +1349,8 @@ bool USeinNavigationAStar::IsTerrainBlockedAtCell(
 bool USeinNavigationAStar::IsWorldPositionDynamicallyClear(
 	const FFixedVector& WorldPos,
 	uint8 AgentNavLayerMask,
-	FSeinEntityHandle Exclude) const
+	FSeinEntityHandle Exclude,
+	const TSet<FSeinEntityHandle>* IgnoredDynamicBlockerOwners) const
 {
 	int32 X, Y;
 	if (!WorldToGrid(WorldPos, X, Y))
@@ -1355,48 +1358,23 @@ bool USeinNavigationAStar::IsWorldPositionDynamicallyClear(
 		return false;
 	}
 
-	// Dynamic blockers (bBlocksNav on SeinExtents — the cover walls themselves,
-	// vehicles, deployable cover). Reuse the EXACT per-blocker cell coverage the
-	// path planner stamps in BuildDynamicBlockedOverlay, so this query and
-	// pathfinding agree on which cells a blocker occupies — a slot we accept here
-	// is one A* will actually let a unit path to. No self-exclusion: a slot has no
-	// owning entity, so every layer-matching blocker counts.
-	for (const FSeinDynamicBlocker& B : DynamicBlockers)
+	// The sparse index is rebuilt from the same shared stamp iterator used by
+	// path overlays, so this point query and A* agree exactly without repeatedly
+	// rasterizing a nearby wall/vehicle shape for every footprint sample.
+	for (auto It = DynamicBlockerIndicesByCell.CreateConstKeyIterator(
+		CellIndex(X, Y)); It; ++It)
 	{
-		if (B.Owner == Exclude) continue;
-		if ((B.BlockedNavLayerMask & AgentNavLayerMask) == 0) continue;
-
-		// Cheap bounding-circle reject before the O(covered-cells) rasterization.
-		// Conservative reach = shape's max linear extent + |local offset| (both
-		// axes — upper-bounds the rotated magnitude) + one cell of half-cell-pad
-		// slack. If WorldPos is provably outside that, the blocker can't cover the
-		// query cell, so skip it. This query runs per movement-floor footprint
-		// sample (9× per step attempt, ×3 attempts), so open-space queries must
-		// stay O(blockers), not O(blockers × cells); the full rasterization is
-		// paid only for a blocker the unit is actually next to.
-		FFixedPoint Reach;
-		switch (B.Shape.Shape)
+		const int32 BlockerIndex = It.Value();
+		if (!DynamicBlockers.IsValidIndex(BlockerIndex)) continue;
+		const FSeinDynamicBlocker& B = DynamicBlockers[BlockerIndex];
+		if (B.Owner == Exclude
+			|| (IgnoredDynamicBlockerOwners
+				&& IgnoredDynamicBlockerOwners->Contains(B.Owner)))
 		{
-		case ESeinStampShape::Rect:    Reach = B.Shape.HalfExtentX + B.Shape.HalfExtentY; break;
-		case ESeinStampShape::Conical: Reach = B.Shape.ConeLength; break;
-		default:                       Reach = B.Shape.Radius; break; // Radial
+			continue;
 		}
-		const FFixedPoint AbsOffX = (B.Shape.LocalOffset.X < FFixedPoint::Zero) ? -B.Shape.LocalOffset.X : B.Shape.LocalOffset.X;
-		const FFixedPoint AbsOffY = (B.Shape.LocalOffset.Y < FFixedPoint::Zero) ? -B.Shape.LocalOffset.Y : B.Shape.LocalOffset.Y;
-		const FFixedPoint BoundR = Reach + AbsOffX + AbsOffY + CellSize;
-		const FFixedPoint DX = WorldPos.X - B.EntityCenter.X;
-		const FFixedPoint DY = WorldPos.Y - B.EntityCenter.Y;
-		if (DX * DX + DY * DY > BoundR * BoundR) continue;
-
-		bool bBlocked = false;
-		SeinStampUtils::ForEachCoveredCell(
-			B.Shape, B.EntityCenter, B.EntityRotation,
-			CellSize, Origin, Width, Height,
-			[X, Y, &bBlocked](int32 CX, int32 CY)
-			{
-				if (CX == X && CY == Y) { bBlocked = true; }
-			});
-		if (bBlocked) return false;
+		if ((B.BlockedNavLayerMask & AgentNavLayerMask) == 0) continue;
+		return false;
 	}
 	return true;
 }
@@ -1419,6 +1397,34 @@ bool USeinNavigationAStar::IsWorldPositionClearForAgent(
 	const FSeinNavAgentProfile& Agent) const
 {
 	int32 X, Y;
+	if (!WorldToGrid(WorldPos, X, Y))
+	{
+		return false;
+	}
+	if (!IsCellPassable(X, Y))
+	{
+		return false;
+	}
+	if (IsTerrainBlockedAtCell(X, Y, Agent.BlockedTerrainTags))
+	{
+		return false;
+	}
+	if (!IsWorldPositionDynamicallyClear(
+		WorldPos,
+		Agent.AgentNavLayerMask,
+		Agent.Requester))
+	{
+		return false;
+	}
+	return true;
+}
+
+bool USeinNavigationAStar::IsWorldPositionClearForAgentIgnoringDynamicBlockers(
+	const FFixedVector& WorldPos,
+	const FSeinNavAgentProfile& Agent,
+	const TSet<FSeinEntityHandle>& IgnoredDynamicBlockerOwners) const
+{
+	int32 X, Y;
 	return WorldToGrid(WorldPos, X, Y)
 		&& IsCellPassable(X, Y)
 		&& !IsTerrainBlockedAtCell(
@@ -1426,7 +1432,49 @@ bool USeinNavigationAStar::IsWorldPositionClearForAgent(
 		&& IsWorldPositionDynamicallyClear(
 			WorldPos,
 			Agent.AgentNavLayerMask,
-			Agent.Requester);
+			Agent.Requester,
+			&IgnoredDynamicBlockerOwners);
+}
+
+bool USeinNavigationAStar::IsFootprintClearForAgentIgnoringDynamicBlockers(
+	const FFixedVector& WorldPos,
+	const FSeinNavAgentProfile& Agent,
+	const TSet<FSeinEntityHandle>& IgnoredDynamicBlockerOwners) const
+{
+	if (!IsWorldPositionClearForAgentIgnoringDynamicBlockers(
+		WorldPos, Agent, IgnoredDynamicBlockerOwners))
+	{
+		return false;
+	}
+	const FFixedPoint Radius = Agent.AgentFootprintRadius;
+	if (Radius <= FFixedPoint::Zero)
+	{
+		return true;
+	}
+	static const FFixedPoint RingDiag(3036971375LL);
+	static const FFixedVector Ring[8] = {
+		FFixedVector(FFixedPoint::One, FFixedPoint::Zero, FFixedPoint::Zero),
+		FFixedVector(RingDiag, RingDiag, FFixedPoint::Zero),
+		FFixedVector(FFixedPoint::Zero, FFixedPoint::One, FFixedPoint::Zero),
+		FFixedVector(-RingDiag, RingDiag, FFixedPoint::Zero),
+		FFixedVector(-FFixedPoint::One, FFixedPoint::Zero, FFixedPoint::Zero),
+		FFixedVector(-RingDiag, -RingDiag, FFixedPoint::Zero),
+		FFixedVector(FFixedPoint::Zero, -FFixedPoint::One, FFixedPoint::Zero),
+		FFixedVector(RingDiag, -RingDiag, FFixedPoint::Zero),
+	};
+	for (const FFixedVector& Offset : Ring)
+	{
+		const FFixedVector Sample(
+			WorldPos.X + Offset.X * Radius,
+			WorldPos.Y + Offset.Y * Radius,
+			WorldPos.Z);
+		if (!IsWorldPositionClearForAgentIgnoringDynamicBlockers(
+			Sample, Agent, IgnoredDynamicBlockerOwners))
+		{
+			return false;
+		}
+	}
+	return true;
 }
 
 bool USeinNavigationAStar::IsAuthoritativeDestinationSafeForAgent(
@@ -1446,7 +1494,8 @@ bool USeinNavigationAStar::IsAuthoritativeDestinationSafeForAgent(
 bool USeinNavigationAStar::IsCellClearForAgent(
 	int32 X,
 	int32 Y,
-	const FSeinNavAgentProfile& Agent) const
+	const FSeinNavAgentProfile& Agent,
+	const TSet<FSeinEntityHandle>* IgnoredDynamicBlockerOwners) const
 {
 	if (!IsCellPassable(X, Y)
 		|| IsTerrainBlockedAtCell(
@@ -1467,20 +1516,25 @@ bool USeinNavigationAStar::IsCellClearForAgent(
 	}
 	if (RequiredClearance > 1
 		&& !IsAgentSpecificClearanceSatisfied(
-			X, Y, RequiredClearance, Agent))
+			X, Y, RequiredClearance, Agent,
+			IgnoredDynamicBlockerOwners))
 	{
 		return false;
 	}
 
 	const FFixedVector Center = GridToWorld(X, Y);
-	return IsFootprintClearForAgent(Center, Agent);
+	return IgnoredDynamicBlockerOwners
+		? IsFootprintClearForAgentIgnoringDynamicBlockers(
+			Center, Agent, *IgnoredDynamicBlockerOwners)
+		: IsFootprintClearForAgent(Center, Agent);
 }
 
 bool USeinNavigationAStar::IsAgentSpecificClearanceSatisfied(
 	int32 X,
 	int32 Y,
 	int32 RequiredClearance,
-	const FSeinNavAgentProfile& Agent) const
+	const FSeinNavAgentProfile& Agent,
+	const TSet<FSeinEntityHandle>* IgnoredDynamicBlockerOwners) const
 {
 	// Static WallDistance already handled the baked obstacle field. Repeat the
 	// same Chebyshev threshold only for request-specific obstacles: forbidden
@@ -1505,7 +1559,8 @@ bool USeinNavigationAStar::IsAgentSpecificClearanceSatisfied(
 			if (!IsWorldPositionDynamicallyClear(
 				GridToWorld(SampleX, SampleY),
 				Agent.AgentNavLayerMask,
-				Agent.Requester))
+				Agent.Requester,
+				IgnoredDynamicBlockerOwners))
 			{
 				return false;
 			}
@@ -1567,8 +1622,40 @@ void USeinNavigationAStar::SetDynamicBlockers(const TArray<FSeinDynamicBlocker>&
 	if (DynamicBlockers == InBlockers) return;
 
 	DynamicBlockers = InBlockers;
+	RebuildDynamicBlockerCellIndex();
 	MainScratch.bOverlayReuseValid = false;
 	OnNavigationMutated.Broadcast();
+}
+
+void USeinNavigationAStar::RebuildDynamicBlockerCellIndex()
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Nav_RebuildDynamicBlockerCellIndex);
+	DynamicBlockerIndicesByCell.Reset();
+	if (Width <= 0 || Height <= 0 || CellSize <= FFixedPoint::Zero)
+	{
+		return;
+	}
+
+	for (int32 BlockerIndex = 0;
+		BlockerIndex < DynamicBlockers.Num();
+		++BlockerIndex)
+	{
+		const FSeinDynamicBlocker& Blocker =
+			DynamicBlockers[BlockerIndex];
+		SeinStampUtils::ForEachCoveredCell(
+			Blocker.Shape,
+			Blocker.EntityCenter,
+			Blocker.EntityRotation,
+			CellSize,
+			Origin,
+			Width,
+			Height,
+			[this, BlockerIndex](int32 X, int32 Y)
+			{
+				DynamicBlockerIndicesByCell.Add(
+					CellIndex(X, Y), BlockerIndex);
+			});
+	}
 }
 
 void USeinNavigationAStar::BuildDynamicBlockedOverlay(FSeinEntityHandle Exclude, uint8 AgentNavLayerMask, FAStarScratch& Scratch) const
@@ -2011,6 +2098,7 @@ bool USeinNavigationAStar::ProjectPointToNavFree(
 		WorldPos,
 		SelfRadius,
 		nullptr,
+		nullptr,
 		AvoidCentres,
 		AvoidRadii,
 		OutProjected);
@@ -2027,6 +2115,25 @@ bool USeinNavigationAStar::ProjectPointToNavFreeForAgent(
 		WorldPos,
 		Agent.AgentFootprintRadius,
 		&Agent,
+		nullptr,
+		AvoidCentres,
+		AvoidRadii,
+		OutProjected);
+}
+
+bool USeinNavigationAStar::ProjectPointToNavFreeForAgentIgnoringDynamicBlockers(
+	const FFixedVector& WorldPos,
+	const FSeinNavAgentProfile& Agent,
+	const TSet<FSeinEntityHandle>& IgnoredDynamicBlockerOwners,
+	const TArray<FFixedVector>& AvoidCentres,
+	const TArray<FFixedPoint>& AvoidRadii,
+	FFixedVector& OutProjected) const
+{
+	return ProjectPointToNavFreeInternal(
+		WorldPos,
+		Agent.AgentFootprintRadius,
+		&Agent,
+		&IgnoredDynamicBlockerOwners,
 		AvoidCentres,
 		AvoidRadii,
 		OutProjected);
@@ -2036,6 +2143,7 @@ bool USeinNavigationAStar::ProjectPointToNavFreeInternal(
 	const FFixedVector& WorldPos,
 	FFixedPoint SelfRadius,
 	const FSeinNavAgentProfile* Agent,
+	const TSet<FSeinEntityHandle>* IgnoredDynamicBlockerOwners,
 	const TArray<FFixedVector>& AvoidCentres,
 	const TArray<FFixedPoint>& AvoidRadii,
 	FFixedVector& OutProjected) const
@@ -2083,7 +2191,11 @@ bool USeinNavigationAStar::ProjectPointToNavFreeInternal(
 	{
 		if (Agent)
 		{
-			if (!IsCellClearForAgent(CX, CY, *Agent)) return false;
+			if (!IsCellClearForAgent(
+				CX, CY, *Agent, IgnoredDynamicBlockerOwners))
+			{
+				return false;
+			}
 		}
 		else if (!IsCellPassable(CX, CY))
 		{
@@ -2115,11 +2227,27 @@ bool USeinNavigationAStar::ProjectPointToNavFreeInternal(
 
 	// No free cell within scan radius (dense crowd / tiny pocket) — never drop the slot: fall back to
 	// the occupancy-blind nearest walkable cell. The resolver's de-overlap pass remains the last word.
-	return Agent
-		? ProjectPointToNavForAgent(
-			WorldPos, *Agent, OutProjected)
-		: ProjectPointToNavOnElevation(
+	if (!Agent)
+	{
+		return ProjectPointToNavOnElevation(
 			WorldPos, OutProjected);
+	}
+	if (!IgnoredDynamicBlockerOwners)
+	{
+		return ProjectPointToNavForAgent(
+			WorldPos, *Agent, OutProjected);
+	}
+
+	return RingScanForCell(
+		X,
+		Y,
+		MaxProjectionRingRadius,
+		[this, Agent, IgnoredDynamicBlockerOwners](int32 CX, int32 CY)
+		{
+			return IsCellClearForAgent(
+				CX, CY, *Agent, IgnoredDynamicBlockerOwners);
+		},
+		OutProjected);
 }
 
 // ============================================================================

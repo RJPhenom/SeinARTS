@@ -51,7 +51,8 @@ public:
 	static FFixedPoint SeinGetResourceCap(const UObject* WorldContextObject, FSeinPlayerID PlayerID, FGameplayTag ResourceTag);
 
 	/** Returns true if the player can afford the full cost. Uses the resource's CostDirection
-	 *  (DeductFromBalance vs AddTowardCap) when consulting each entry. */
+	 *  (DeductFromBalance vs AddTowardCap) when consulting each entry. Invalid tags, negative
+	 *  amounts, and fixed-point overflow/underflow fail closed before mutation. */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Economy",
 		meta = (WorldContext = "WorldContextObject", DisplayName = "Can Afford"))
 	static bool SeinCanAfford(const UObject* WorldContextObject, FSeinPlayerID PlayerID, const FSeinResourceCost& Cost);
@@ -83,6 +84,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Economy",
 		meta = (WorldContext = "WorldContextObject", DisplayName = "Refund"))
 	static void SeinRefund(const UObject* WorldContextObject, FSeinPlayerID PlayerID, const FSeinResourceCost& Cost);
+
+	/** Exactly reverses a prior successful Deduct operation. Unlike the general
+	 *  Refund/income operation, this intentionally bypasses caps so cancellation
+	 *  cannot lose committed value if unrelated income arrived meanwhile. Fails
+	 *  atomically on invalid cost data, a missing player, or fixed-point overflow. */
+	static bool SeinTryReverseDeduction(const UObject* WorldContextObject, FSeinPlayerID PlayerID, const FSeinResourceCost& Cost);
 
 	/** One-shot income grant (ability drop, scavenge loot, tech completion bonus). Equivalent to Refund
 	 *  semantically — applies regardless of cap-overflow policy with clamp-at-cap. */

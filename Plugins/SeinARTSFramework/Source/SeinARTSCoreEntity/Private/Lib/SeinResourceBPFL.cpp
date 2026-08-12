@@ -113,12 +113,20 @@ bool USeinResourceBPFL::SeinCanAfford(const UObject* WorldContextObject, FSeinPl
 
 	for (const auto& Entry : Cost.Amounts)
 	{
+		if (!Entry.Key.IsValid() || Entry.Value < FFixedPoint::Zero)
+		{
+			return false;
+		}
 		const FSeinResourceDefinition* Def = SeinResourceInternal::FindCatalogEntry(Entry.Key);
 		const ESeinCostDirection Direction = Def ? Def->CostDirection : ESeinCostDirection::DeductFromBalance;
 		const FFixedPoint Balance = State->GetResource(Entry.Key);
 
 		if (Direction == ESeinCostDirection::AddTowardCap)
 		{
+			if (Balance.Value > INT64_MAX - Entry.Value.Value)
+			{
+				return false;
+			}
 			const FFixedPoint Cap = SeinResourceInternal::ResolveCap(*State, Entry.Key);
 			// If cap is uncapped (Zero) treat AddTowardCap as always-affordable; otherwise check room.
 			if (Cap > FFixedPoint::Zero && (Balance + Entry.Value) > Cap)
@@ -128,6 +136,10 @@ bool USeinResourceBPFL::SeinCanAfford(const UObject* WorldContextObject, FSeinPl
 		}
 		else // DeductFromBalance
 		{
+			if (Balance.Value < INT64_MIN + Entry.Value.Value)
+			{
+				return false;
+			}
 			const ESeinResourceSpendBehavior Spend = Def ? Def->SpendBehavior : ESeinResourceSpendBehavior::RejectOnInsufficient;
 			if (Spend == ESeinResourceSpendBehavior::RejectOnInsufficient && Balance < Entry.Value)
 			{
@@ -234,6 +246,62 @@ void USeinResourceBPFL::SeinRefund(const UObject* WorldContextObject, FSeinPlaye
 			SeinResourceInternal::AddWithCap(*State, Entry.Key, Entry.Value);
 		}
 	}
+}
+
+bool USeinResourceBPFL::SeinTryReverseDeduction(
+	const UObject* WorldContextObject,
+	FSeinPlayerID PlayerID,
+	const FSeinResourceCost& Cost)
+{
+	if (Cost.IsEmpty()) { return true; }
+	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
+	if (!Subsystem
+		|| !Subsystem->RequireStateMutationAuthorization(
+			TEXT("ReverseResourceDeduction")))
+	{
+		return false;
+	}
+	FSeinPlayerState* State = Subsystem->GetPlayerStateMutable(PlayerID);
+	if (!State) return false;
+
+	// Validate the entire inverse before mutating any resource. Cancellation
+	// must either restore every committed entry or leave both balance and owner
+	// transaction intact; fixed-point arithmetic otherwise wraps by contract.
+	for (const auto& Entry : Cost.Amounts)
+	{
+		if (!Entry.Key.IsValid() || Entry.Value < FFixedPoint::Zero)
+		{
+			return false;
+		}
+		const FSeinResourceDefinition* Def =
+			SeinResourceInternal::FindCatalogEntry(Entry.Key);
+		const ESeinCostDirection Direction = Def
+			? Def->CostDirection
+			: ESeinCostDirection::DeductFromBalance;
+		const int64 CurrentRaw = State->GetResource(Entry.Key).Value;
+		const int64 AmountRaw = Entry.Value.Value;
+		if ((Direction == ESeinCostDirection::AddTowardCap
+				&& CurrentRaw < INT64_MIN + AmountRaw)
+			|| (Direction == ESeinCostDirection::DeductFromBalance
+				&& CurrentRaw > INT64_MAX - AmountRaw))
+		{
+			return false;
+		}
+	}
+
+	for (const auto& Entry : Cost.Amounts)
+	{
+		const FSeinResourceDefinition* Def =
+			SeinResourceInternal::FindCatalogEntry(Entry.Key);
+		const ESeinCostDirection Direction = Def
+			? Def->CostDirection
+			: ESeinCostDirection::DeductFromBalance;
+		FFixedPoint& Current = State->Resources.FindOrAdd(Entry.Key);
+		Current = Direction == ESeinCostDirection::AddTowardCap
+			? Current - Entry.Value
+			: Current + Entry.Value;
+	}
+	return true;
 }
 
 void USeinResourceBPFL::SeinGrantIncome(const UObject* WorldContextObject, FSeinPlayerID PlayerID, const FSeinResourceCost& Amount)

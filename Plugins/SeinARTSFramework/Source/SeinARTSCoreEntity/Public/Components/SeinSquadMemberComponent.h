@@ -51,7 +51,7 @@ struct SEINARTSCOREENTITY_API FSeinSquadMemberComponent : public FSeinComponent
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
 	int32 SlotIndex = INDEX_NONE;
 
-	/** Role / discriminator tag — the first tag of the slot's `SlotTags`
+	/** Role metadata selected canonically by tag name from the slot's `SlotTags`
 	 *  container at spawn time. Often shared across slots (multiple
 	 *  rifleman slots all tagged `Squad.Slot.Rifleman`); use for role-
 	 *  based queries ("find the leader slot," "find any medic slot"),
