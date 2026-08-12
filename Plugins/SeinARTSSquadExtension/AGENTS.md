@@ -1,7 +1,7 @@
 # SeinARTSSquadExtension — Plugin Guide
 
 This opt-in runtime extension adds persistent heterogeneous-slot squads, formation dispatch,
-reinforcement, and squad lifecycle behavior. Read the project-root guide and `Agents/WORKFLOW.md`
+reinforcement, and squad lifecycle behavior. Read the project-root guide and `.agents/WORKFLOW.md`
 first.
 
 ## Boundary and dependency

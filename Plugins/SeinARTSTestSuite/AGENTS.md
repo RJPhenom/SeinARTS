@@ -1,6 +1,6 @@
 # SeinARTS Test Suite — Local Guide
 
-Read the project-root guide and `Agents/WORKFLOW.md` first. This plugin is test-only infrastructure;
+Read the project-root guide and `.agents/WORKFLOW.md` first. This plugin is test-only infrastructure;
 it must never become a runtime dependency of a production SeinARTS module.
 
 ## Packaging boundary

@@ -10,17 +10,18 @@ local guide with the deep, plugin-specific detail — read the relevant one when
 > and both disabled test plugins. When you start work, read this file first, then the matching
 > plugin guide for whatever you're touching.
 
-> Current campaigns, accepted evidence, and open risks live in `Agents/PROJECT_STATE.md`,
-> `Agents/OPEN_RISKS.md`, and task records under `Agents/Tasks/`. Do not infer current priorities
+> Current campaigns, accepted evidence, and open risks live in `.agents/PROJECT_STATE.md`,
+> `.agents/OPEN_RISKS.md`, and task records under `.agents/Tasks/`. Do not infer current priorities
 > from this stable project guide.
 
 ---
 
 ## Workflow
 
-Read `Agents/WORKFLOW.md` before changing code or documentation. It is the local operational mirror
-of the human Workflow Policy and governs branches, worktrees, handoffs, decisions, validation,
-documentation impact, and releases. This guide owns technical boundaries and implementation rules.
+Read `.agents/WORKFLOW.md` and `.agents/STYLE_GUIDE.md` before changing code or documentation. They
+are the local operational mirrors of the human Workflow Policy and Style Guide. They govern workflow,
+style, branches, worktrees, handoffs, decisions, validation, documentation impact, and releases. This
+guide owns technical boundaries and implementation rules.
 
 > Note: as of 2026-06-02 the project root **is** a git repository — a single project-wide monorepo
 > (`main`, initial commit `ecf6068`) tracking the host, five production plugins, and two disabled
@@ -42,12 +43,12 @@ documentation impact, and releases. This guide owns technical boundaries and imp
 `SeinARTSEditor`. Use the repo build script:
 
 ```powershell
-& "D:/Projects/Unreal Engine/SeinARTS/Build.ps1"                       # SeinARTSEditor Win64 Development (incremental ≈ 20s)
-& "D:/Projects/Unreal Engine/SeinARTS/Build.ps1" -ExtraArgs '-Clean'   # clean rebuild
-& "D:/Projects/Unreal Engine/SeinARTS/Build.ps1" -Target SeinARTS -Config Shipping
+& "D:/Projects/Unreal Engine/SeinARTS/Scripts/Build.ps1"                       # SeinARTSEditor Win64 Development (incremental ≈ 20s)
+& "D:/Projects/Unreal Engine/SeinARTS/Scripts/Build.ps1" -ExtraArgs '-Clean'   # clean rebuild
+& "D:/Projects/Unreal Engine/SeinARTS/Scripts/Build.ps1" -Target SeinARTS -Config Shipping
 ```
 
-`Build.ps1` resolves the engine (known path → registry fallback via `EngineAssociation`), warns if
+`Scripts/Build.ps1` resolves the engine (known path → registry fallback via `EngineAssociation`), warns if
 the editor is open, and returns UBT's exit code. Equivalent raw one-liner if the script is ever gone:
 
 ```powershell
@@ -99,7 +100,7 @@ learned from the sessions that *worked*:
 ### Engineering-document artifacts
 
 - `Docs/` is reserved for deliberate product/developer documentation, not audit scratch or agent handoffs.
-- Durable agent engineering context belongs in `Agents/`; short-lived exploration stays untracked.
+- Durable agent engineering context belongs in `.agents/`; short-lived exploration stays untracked.
 - Private design, strategy, planning, and progress documents belong in Google Drive.
 - Do not create a repository `Output/` tree. Put requested PDF exports in the user's Downloads directory.
 

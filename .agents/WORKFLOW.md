@@ -27,7 +27,7 @@ Before removing a completed worktree, confirm that its work is committed, merged
 
 Commit intentional work at stable restore points. Before a session ends or a usage limit interrupts work, commit intentional changes, including WIP when necessary.
 
-Record what completed, what remains, known risks or unresolved decisions, validation performed, and the recommended next action. Use a pull request, issue, or a task record under `Agents/Tasks`.
+Record what completed, what remains, known risks or unresolved decisions, validation performed, and the recommended next action. Use a pull request, issue, or a task record under `.agents/Tasks`.
 
 Proceed autonomously within an approved direction. Ask for user input when a change materially affects product direction, player experience, public APIs or authoring workflows, compatibility or migration policy, or the agreed order or scope of work.
 
@@ -45,7 +45,7 @@ Documentation has three audiences:
 
 - Public documentation: the customer and developer documentation website.
 - Private human documentation: design, strategy, planning, and progress documents in Google Drive.
-- Operational documentation: agent instructions, handoffs, and engineering records under `Agents/`, issues, or pull requests.
+- Operational documentation: agent instructions, handoffs, and engineering records under `.agents/`, issues, or pull requests.
 
 Do not put temporary notes or agent reports in the public documentation tree. Declare the documentation impact of every completed code task as `none`, `internal`, `public`, or `both`.
 

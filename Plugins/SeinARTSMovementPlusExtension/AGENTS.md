@@ -2,7 +2,7 @@
 
 This opt-in runtime extension supplies concrete Infantry, Wheeled, Tracked, Hover, and Flight
 movement modes plus their per-class tuning data. Read the project-root guide and
-`Agents/WORKFLOW.md` first, then the Framework guide for movement/navigation infrastructure.
+`.agents/WORKFLOW.md` first, then the Framework guide for movement/navigation infrastructure.
 
 The framework ships abstract movement plus Basic/Basic Unit defaults and must remain fully usable
 without Movement+.

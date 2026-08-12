@@ -2,7 +2,7 @@
 
 This opt-in extension currently provides deterministic cover providers and queries, resolver-local
 cover-aware destinations, preview quality, and editor authoring tools. Read the project-root guide
-and `Agents/WORKFLOW.md` first.
+and `.agents/WORKFLOW.md` first.
 
 Nothing in the framework may depend on Cover.
 
