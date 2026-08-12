@@ -11,11 +11,11 @@
   Returns UBT's exit code (0 = success).
 
 .EXAMPLE
-  .\Build.ps1
+  .\Scripts\Build.ps1
   # SeinARTSEditor Win64 Development — the usual incremental compile (~20s)
 
 .EXAMPLE
-  .\Build.ps1 -ExtraArgs '-Clean'
+  .\Scripts\Build.ps1 -ExtraArgs '-Clean'
   # force a clean rebuild
 
 .NOTES
@@ -32,7 +32,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ProjectRoot = $PSScriptRoot
+$ProjectRoot = Split-Path -Parent $PSScriptRoot
 $Uproject    = Join-Path $ProjectRoot 'SeinARTS.uproject'
 
 # --- Resolve the engine (known path first, registry fallback) -----------------
@@ -50,7 +50,7 @@ if (-not (Test-Path $Engine)) {
 
 $BuildBat = Join-Path $Engine 'Engine\Build\BatchFiles\Build.bat'
 if (-not (Test-Path $BuildBat)) {
-    throw "UE Build.bat not found at '$BuildBat'. Edit `$Engine in Build.ps1 to point at your UE 5.8 install."
+    throw "UE Build.bat not found at '$BuildBat'. Edit `$Engine in Scripts/Build.ps1 to point at your UE 5.8 install."
 }
 
 # --- Warn if the editor is open (locked DLLs -> link failure) -----------------

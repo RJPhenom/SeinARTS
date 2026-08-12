@@ -24,11 +24,11 @@
   `git pull` in WARSEIN.
 
 .EXAMPLE
-  .\PackagePlugins.ps1 -Version 1.2.0
+  .\Scripts\PackagePlugins.ps1 -Version 1.2.0
   # package all five + publish release v1.2.0 (HEAD must be pushed to origin)
 
 .EXAMPLE
-  .\PackagePlugins.ps1 -Only SeinARTSFramework -PackageOnly
+  .\Scripts\PackagePlugins.ps1 -Only SeinARTSFramework -PackageOnly
   # dry-run: package just the framework, no release
 
 .NOTES
@@ -43,7 +43,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ProjectRoot = $PSScriptRoot
+$ProjectRoot = Split-Path -Parent $PSScriptRoot
 
 # Dependency order matters: the framework must be staged into the engine before
 # any extension packages; Cover+Squad bridge needs all three of its deps staged.
@@ -81,7 +81,7 @@ $RunUAT = Join-Path $Engine 'Engine\Build\BatchFiles\RunUAT.bat'
 if (-not (Test-Path $RunUAT)) { throw "RunUAT.bat not found at '$RunUAT'." }
 
 $Marketplace = Join-Path $Engine 'Engine\Plugins\Marketplace'
-$Dist        = Join-Path $ProjectRoot 'dist'
+$Dist        = Join-Path $ProjectRoot '.dist'
 $Logs        = Join-Path $Dist 'logs'
 
 if (Test-Path $Dist) { Remove-Item $Dist -Recurse -Force }
