@@ -32,7 +32,7 @@ namespace
 	constexpr int32 CheckpointTick = 4;
 	constexpr int32 ReplayEndTick = 8;
 
-	FFixedVector Point(int32 X, int32 Y = 0, int32 Z = 0)
+	FFixedVector ReplayPoint(int32 X, int32 Y = 0, int32 Z = 0)
 	{
 		return FFixedVector(
 			FFixedPoint::FromInt(X),
@@ -40,9 +40,9 @@ namespace
 			FFixedPoint::FromInt(Z));
 	}
 
-	struct FScopedVehicleGymSettings
+	struct FScopedReplayVehicleGymSettings
 	{
-		explicit FScopedVehicleGymSettings(
+		explicit FScopedReplayVehicleGymSettings(
 			const FSeinVehicleGymNavigationRecipe& Recipe)
 			: Settings(GetMutableDefault<USeinARTSCoreSettings>())
 			, SavedNavigationClass(Settings->NavigationClass)
@@ -57,7 +57,7 @@ namespace
 			Settings->ApplySimPerformanceCvars();
 		}
 
-		~FScopedVehicleGymSettings()
+		~FScopedReplayVehicleGymSettings()
 		{
 			Settings->NavigationClass = SavedNavigationClass;
 			Settings->bAsyncPathfinding = bSavedAsyncPathfinding;
@@ -222,8 +222,8 @@ TEST(MovementPlusReplayFileCheckpointRestoresExactCompletionState,
 {
 	FSeinVehicleGymNavigationRecipe Recipe;
 	Recipe.ScenarioId = TEXT("MovementPlusReplayFile");
-	Recipe.Route = {Point(-400)};
-	FScopedVehicleGymSettings SettingsScope(Recipe);
+	Recipe.Route = {ReplayPoint(-400)};
+	FScopedReplayVehicleGymSettings SettingsScope(Recipe);
 
 	FActorTestSpawner SourceSpawner;
 	USeinWorldSubsystem* Source =
@@ -307,7 +307,7 @@ TEST(MovementPlusReplayFileCheckpointRestoresExactCompletionState,
 			const FSeinEntity* MidVehicle = Source->GetEntity(Vehicle);
 			ASSERT_THAT(IsNotNull(MidVehicle));
 			ASSERT_THAT(IsTrue(
-				MidVehicle->Transform.GetLocation() != Point(0)));
+				MidVehicle->Transform.GetLocation() != ReplayPoint(0)));
 			ASSERT_THAT(AreEqual(
 				1, Source->LatentActionManager->GetActiveActionCount()));
 			ASSERT_THAT(IsTrue(
@@ -400,8 +400,8 @@ TEST(MovementPlusReconnectTransferContinuesToIdenticalCanonicalState,
 {
 	FSeinVehicleGymNavigationRecipe Recipe;
 	Recipe.ScenarioId = TEXT("MovementPlusReconnect");
-	Recipe.Route = {Point(-400)};
-	FScopedVehicleGymSettings SettingsScope(Recipe);
+	Recipe.Route = {ReplayPoint(-400)};
+	FScopedReplayVehicleGymSettings SettingsScope(Recipe);
 
 	FActorTestSpawner SourceSpawner;
 	USeinWorldSubsystem* Source =

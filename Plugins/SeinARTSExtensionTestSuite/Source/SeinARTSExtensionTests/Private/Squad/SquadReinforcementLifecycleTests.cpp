@@ -135,7 +135,9 @@ namespace
 		}
 	};
 
-	bool ComputeRoot(USeinWorldSubsystem& World, FGuid& OutRoot)
+	bool ComputeReinforcementRoot(
+		USeinWorldSubsystem& World,
+		FGuid& OutRoot)
 	{
 		FString Error;
 		return World.ComputeCanonicalStateRoot(OutRoot, Error);
@@ -528,15 +530,19 @@ TEST(SquadReinforcementSnapshotRestoresAndContinuesCanonically,
 
 	FGuid SourceRoot;
 	FGuid DestinationRoot;
-	ASSERT_THAT(IsTrue(ComputeRoot(*Source.World, SourceRoot)));
-	ASSERT_THAT(IsTrue(ComputeRoot(*Destination, DestinationRoot)));
+	ASSERT_THAT(IsTrue(ComputeReinforcementRoot(
+		*Source.World, SourceRoot)));
+	ASSERT_THAT(IsTrue(ComputeReinforcementRoot(
+		*Destination, DestinationRoot)));
 	ASSERT_THAT(IsTrue(SourceRoot == DestinationRoot));
 	for (int32 Tick = 0; Tick < 65; ++Tick)
 	{
 		FTSTicker::GetCoreTicker().Tick(
 			Source.World->GetFixedDeltaTimeSeconds());
-		ASSERT_THAT(IsTrue(ComputeRoot(*Source.World, SourceRoot)));
-		ASSERT_THAT(IsTrue(ComputeRoot(*Destination, DestinationRoot)));
+		ASSERT_THAT(IsTrue(ComputeReinforcementRoot(
+			*Source.World, SourceRoot)));
+		ASSERT_THAT(IsTrue(ComputeReinforcementRoot(
+			*Destination, DestinationRoot)));
 		ASSERT_THAT(IsTrue(SourceRoot == DestinationRoot));
 	}
 
