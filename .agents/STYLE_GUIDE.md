@@ -1,130 +1,135 @@
-# SeinARTS Style Guide
+# SeinARTS — Style Guide
 
-This is the local operational mirror of the human [Style Guide](https://docs.google.com/document/d/1-IT4RRpU2jR3yT5RI_bOM4Iq3s54Y9Fgy9gtBAJjshs), source guide version 1.4. The human guide owns writing and presentation style. Architecture, ownership, and invariants remain in the repository and plugin guides.
+This is the **style layer**: how to write code, comments, and Blueprint-facing surface so the
+codebase stays consistent and designer-friendly. It does **not** repeat architecture or invariants —
+those live in the root `CLAUDE.md` and each plugin's `CLAUDE.md` (determinism, sim/render
+separation, module topology, the "code over comments" rule). Read those first; this covers *how to
+write*, not *what the systems are*.
 
-## 1. Code
+---
 
-### 1.1 File comment headers
+## Blueprint-facing tooltips (doc comments)
 
-Each production C++ source file begins with a header containing the copyright notice, filename, author, creation date, latest update date, concise file purpose, and an AI-assistance disclaimer when applicable.
+Every `UFUNCTION` / `UPROPERTY` / `BlueprintNativeEvent` a designer can see gets a doc comment in
+this format. The doc comment **is** the tooltip UE shows in-graph, so write it for the designer, not
+the maintainer.
 
-```cpp
-/**
- * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
- *
- * @file         FileName.h
- * @author       RJ Macklem
- * @created      10 Aug 2026
- * @latest       10 Aug 2026
- * @brief        One-sentence purpose of the file.
- *
- *               Add short architectural context only when it helps a reader
- *               understand ownership, boundaries, or non-obvious behavior.
- *
- * @disclaimer   This code was generated in whole or in part with the assistance
- *               of an AI language model.
- */
-```
-
-Keep `@brief` concise. Update it when the file's purpose changes. Add a missing header when substantially editing an existing production file; do not mass-retrofit untouched files.
-
-### 1.2 Components and data
-
-- Components are pure data.
-- Every simulation USTRUCT uses `USTRUCT(meta = (SeinDeterministic))`.
-- `FInstancedStruct` ships in `CoreUObject`; do not add `StructUtils` as a module dependency.
-
-### 1.3 Deterministic simulation
-
-Simulation code remains bit-deterministic across peers and platforms.
-
-- Use fixed-point types for simulation math.
-- Use `FSeinEntityHandle` instead of raw `AActor` or `UObject` pointers.
-- Use `FFixedRandom` for simulation randomness.
-- Do not use `float`, `FVector`, `FMath`, or `rand()` in simulation code.
-- Float/fixed conversions are editor or debug boundaries only and never feed hashed simulation state.
-
-### 1.4 Comments and documentation
-
-Comments explain current behavior and useful intent. They do not compete with code as a second implementation.
-
-- Correct stale or contradictory docstrings as part of the change.
-- Do not name external games, engines, or franchises in tooltips, code comments, or product documentation. Describe behavior or technique instead.
-- `AoE` may mean Area of Effect. Technical names such as A*, boids, Gauss-Seidel, Jacobi, Reeds-Shepp, Dubins, Bresenham, and Xorshift are allowed.
-- Do not reference retired documents. Cite live code or current documentation.
-- Do not leave dead Blueprint outputs or always-on log spam. Make outputs real or remove them, and gate diagnostics behind verbosity or show flags.
-
-## 2. Editor
-
-### 2.1 Designer-facing comments
-
-Every editor-visible `UPROPERTY`, `UFUNCTION`, and `BlueprintNativeEvent` has a doc comment. It is a designer-facing tooltip first and a maintainer reference second.
-
-Begin with one to three plain-English sentences explaining what the property or node does. Add a blank line and fuller technical detail only when needed.
-
-- Use plain text; Unreal tooltips do not parse Markdown.
-- Lead with the user-facing effect, not implementation details.
-- Give trivial getters one clear sentence.
-- Refer to other nodes by Blueprint `DisplayName`, not C++ symbol.
-- State units, sign conventions, and zero or sentinel meanings.
-- For override hooks, explain what to return, when it runs, the default, and when to override it.
+**Format:** a 1–3 sentence plain-English ELI5, then a blank line, then the complete description.
 
 ```cpp
 /** Decides how fast the unit wants to go this frame. Return its target cruise speed.
  *
- *  Called by the default loop. Whatever you return is then capped so the unit can
- *  still brake to a clean stop at its goal, so this sets cruise speed rather than
- *  the brake curve. Override it to slow for sharp turns. */
-UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Movement")
+ *  Called by the default loop. Whatever you return is then capped so the unit can still brake to a
+ *  clean stop at its goal (from its Deceleration) — so this sets cruise speed, not the brake curve.
+ *  The default returns the unit's terrain-adjusted top speed. Override to slow for sharp turns. */
+UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Movement", meta = (DisplayName = "Compute Speed"))
 FFixedPoint ComputeSpeed(USeinMoverHandle* Mover);
 ```
 
-### 2.2 Naming
+Rules:
+- **Plain text only — no Markdown.** UE tooltips do not parse it: `**bold**` and `` `backticks` ``
+  render literally as noise. No `**`, no backtick code spans, no bullet syntax.
+- **No external game or IP names** (see Comments & docs) — describe the behavior, not the game.
+- **Lead with what it does for the user**, not the implementation. "How fast the unit wants to go,"
+  not "returns the terrain-scaled `TopSpeed` before the arrival cap."
+- **Trivial getters get one clear sentence** — the ELI5 *is* the complete description, so no second
+  paragraph. (`/** Where the unit is right now. */`)
+- **Refer to other nodes by their DisplayName**, not the C++ symbol: "feed into Set Rotation," not
+  "pass to `SetRotation_Implementation`."
+- **State units and sign conventions**: radians vs degrees, world units, "positive = uphill,"
+  "0 = ground-bound," what a sentinel/zero return means.
+- **For override hooks**, cover: what to return, when it's called, what the default does, and when
+  you'd override it.
 
-Type names are predictable in C++ and clean in Blueprint.
+---
 
-- Prefix simulation USTRUCTs with `FSein`, simulation UObjects with `USein`, actors with `ASein`, and fixed-point types with `FFixed`.
-- Component payload structs use the `Component` suffix. Blueprint function libraries use `BPFL`.
-- Blueprint categories use `SeinARTS|<Subsystem>[|<Subgroup>]`; category nouns are singular except `Tags`.
-- Drop a subsystem qualifier when the asset type already supplies that context.
-- Drop the `Sein` prefix from Blueprint `DisplayName`. Add an explicit `DisplayName` when the C++ symbol begins with `Sein`.
-- Blueprint function-library classes use `SeinARTS X Library`. Actor components use `X Component` and `ClassGroup = (SeinARTS)`.
-- UPROPERTY field names never carry the `Sein` prefix.
-- Set `Category` and `DisplayName` when creating the API.
+## Naming
 
-### 2.3 Blueprint exposure
+**C++ prefixes:** sim USTRUCTs `FSein…`, sim UObjects `USein…`, actors `ASein…`, fixed-point types
+`FFixed…`. Component **payload** structs carry the `Component` suffix (`FSeinExtentsComponent`).
+Blueprint function libraries carry the `BPFL` suffix.
 
-Expose APIs when they simplify a real workflow or provide an intuitive designer override. Exposure is deliberate, not automatic.
+**Blueprint Category:** `SeinARTS|<Subsystem>[|<Subgroup>]` — singular nouns (`Tags` is the only
+plural exception). Examples: `SeinARTS|Movement`, `SeinARTS|Movement|Toolkit`, `SeinARTS|Navigation`.
+**Drop a subsystem qualifier that's redundant with the asset's own type.** A movement-mode
+Blueprint's own Class-Defaults properties use `SeinARTS`, not `SeinARTS|Movement` — every property on
+it is already movement, so the extra level only hides them behind a collapse. (A *component* among
+many on a unit still qualifies — there the subsystem name disambiguates.)
 
-- Use a `BlueprintNativeEvent` with a functional C++ default when designers need an override without replacing the surrounding system.
-- A node does exactly what its name says. Broad and selective behaviors use separate, clearly named nodes.
-- Offer variants through a clear picker rather than boolean collections.
-- Prefer one general tool over near-duplicate nodes.
-- Use properties for constant per-class traits and hooks for per-unit runtime values.
+**Blueprint DisplayName:** drop the `Sein` prefix (`DisplayName = "Has Tag"`, not `"Sein Has Tag"`).
+Add an explicit `DisplayName` whenever the C++ symbol starts with `Sein`, to suppress UE's
+auto-derivation. BPFL `UCLASS` DisplayName = `"SeinARTS X Library"`; ActorComponents use plain
+`"X Component"` + `ClassGroup = (SeinARTS)`. UPROPERTY field names never carry the `Sein` prefix.
 
-### 2.4 Settings
+**Write the Category + DisplayName before the body**, not as a cleanup pass later — retroactive
+naming cleanup is a whole separate session of work.
 
-Keep settings lean and easy to scan. Avoid redundant nesting and repeated qualifiers. Put a qualifier in the category path or `DisplayName`, not both. Base-module settings use the shared SeinARTS page; opt-in extensions use their own pages.
+---
 
-## 3. Font
+## Blueprint exposure
 
-### 3.1 Font
+- **Lean toward BP-authorable / overridable** where it has real utility — simplifies a real
+  workflow, or is intuitive — not gratuitously. A `BlueprintNativeEvent` hook the C++ default routes
+  to (keep the C++ virtual, route its base body to the `BP_` hook) lets designers go lazy (tune) or
+  power-route (override) by choice, without breaking C++ overriders.
+- **A node must do EXACTLY what its name says — never more.** Over-broad scope behind a narrow name
+  is unacceptable. If you need a broad variant and a selective one, make them **separate, named**
+  nodes; don't widen one behind its name.
+- **Offer variants as a clear picker set**, not a pile of boolean flags.
+- **Keep the API lean** — no near-duplicate nodes; expose the one general tool (e.g. a `Draw Debug`
+  node an author calls themselves) over many narrow built-ins.
+- Constant per-class traits belong as **properties** (a checkbox), not no-arg computation hooks;
+  per-unit values that vary belong as **hooks** that read hydrated tuning.
 
-SeinARTS Framework documentation uses Google Urbanist with Light weighting.
+---
 
-### 3.2 Colours
+## Components & data
 
-Documentation uses white (`#FFFFFF`) on black (`#000000`). Highlight colours are Phenom Studios Light Blue (`#0095FF`) and Red (`#FF0000`).
+- **Components are pure data.** No event graphs, no state-mutating methods. Logic lives in abilities,
+  effects, AI controllers, command brokers, and sim systems.
+- **`SeinDeterministic` meta** on every sim USTRUCT (`USTRUCT(meta = (SeinDeterministic))`) — the
+  marker the editor uses to accept a struct as a valid `ComponentData` entry, and the marker the
+  determinism validators trust to whitelist a type/library.
+- **`FInstancedStruct` ships in `CoreUObject`** — do not add `StructUtils` as a module dependency
+  (the standalone plugin is deprecated in UE 5.5+).
 
-## 4. Git
+---
 
-### 4.1 Commits
+## Determinism (style implications)
 
-Commits are major code-wave completions, safe WIP checkpoints, or major feature completions, which are usually merge commits.
+Sim code uses fixed-point types only (`FFixedPoint` / `FFixedVector` / `FFixedTransform` /
+`FFixedQuaternion`), `FSeinEntityHandle` (never raw `AActor*` / `UObject*`), and the deterministic
+PRNG (`FFixedRandom`). No `float`, `FVector`, `FMath::`, or `rand()` in sim. Float↔fixed conversions
+are **editor/debug-only** and must never feed back into hashed sim state — e.g. a `Draw Debug` node
+converting `FFixedVector → FVector` to render is fine; using a float result to drive sim is not.
 
-- Keep titles to approximately 50 characters.
-- Omit descriptions unless needed.
-- Use direct language.
-- For large or cross-cutting changes, use short line-broken bullets.
-- Explain what changed and why.
-- Do not inventory every line edit.
+---
+
+## Settings
+
+Keep the settings tree lean (`USeinARTSCoreSettings`): no redundant deep nesting, no duplicated
+qualifiers. Put a qualifier in the category path **or** the DisplayName, not both. Base-module
+settings go under the shared `SeinARTS` page (Category = `"<Subsystem>"`); only extensions get their
+own settings page.
+
+---
+
+## Comments & docs
+
+- **Trust code over comments** — the architecture has stabilized but some docstrings lag the
+  implementation. When you find a docstring that contradicts the code, fix the docstring as part of
+  your change (don't leave a known-stale comment behind).
+- **No external game, engine, or IP names.** Never name other games, engines, or franchises
+  (Company of Heroes, StarCraft, Age of Empires, Supreme Commander, Total War, SpringRTS, Beyond All
+  Reason, and the like) in tooltips, code comments, or docs — this framework is genre-neutral.
+  Describe the *behavior* or *technique* instead: "a height-aware true-line-of-sight fog model," not
+  "CoH TrueSight"; "a rank-and-file block," not "a Total-War square"; "settle-in-place, no
+  return-to-home," not "BAR semantics." Algorithm and math names (A*, boids, Gauss-Seidel, Jacobi,
+  Reeds-Shepp, Dubins, Bresenham, Xorshift) are fine — those are technical terms, not trademarks.
+  (Note: `AoE` in this codebase almost always means *Area of Effect*, which is fine — only the
+  game "Age of Empires" is off-limits.)
+- **Don't reference retired docs** (`DESIGN.md`, `PLAN.md`, `API_Cleanup_Pass.md`, and the retired
+  porting-program planning docs) — they're gone; cite live code or the current plan docs instead.
+- **No dead outputs / always-on log spam.** A BP-exposed field that's never populated, or a
+  per-tick `UE_LOG`, erodes trust — either make it real or remove it; gate diagnostics behind a
+  verbosity level or a show-flag.
