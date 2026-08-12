@@ -1,6 +1,6 @@
 # SeinARTS — Style Guide
 
-This is the local operational mirror of the human [Style Guide](https://docs.google.com/document/d/1-IT4RRpU2jR3yT5RI_bOM4Iq3s54Y9Fgy9gtBAJjshs), source policy version 1.1. It defines how to write code, comments, and
+This is the local operational mirror of the human [Style Guide](https://docs.google.com/document/d/1-IT4RRpU2jR3yT5RI_bOM4Iq3s54Y9Fgy9gtBAJjshs), source policy version 1.2. It defines how to write code, comments, and
 Blueprint-facing surfaces so the codebase stays consistent and designer-friendly. It does **not**
 repeat architecture or invariants; those live in the root and plugin guides. Read the relevant
 technical guide first. Update both style guides in the same task when a style rule changes.
@@ -154,6 +154,9 @@ Each new production C++ file begins with a header containing the copyright notic
 
 Keep `@brief` to the file's purpose. Add architectural context only when it helps explain ownership,
 boundaries, or non-obvious behavior. Update it when the file's purpose changes.
+
+When a change substantially edits an existing production file that is missing its header, add the
+header as part of that change. Do not mass-retrofit headers across otherwise untouched files.
 
 ```cpp
 /**
