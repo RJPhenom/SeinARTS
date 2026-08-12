@@ -314,6 +314,19 @@ namespace UE::SeinARTSTests
 			int32 PreviousTurnBatchSize = 0;
 		};
 
+		struct FScopedReplayAppendGateRelease
+		{
+			USeinReplayWriter* Writer = nullptr;
+
+			~FScopedReplayAppendGateRelease()
+			{
+				if (Writer)
+				{
+					Writer->ReleaseHeldBackgroundAppendForTests();
+				}
+			}
+		};
+
 		/** Freeze a legacy v8 executable fixture so reader compatibility tests do
 		 *  not depend on the current writer, which intentionally emits v9 only. */
 		FString WriteLegacyV8Replay(
@@ -1550,6 +1563,144 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(AreEqual(1, DeniedWriter->GetPersistedCheckpointCount()));
 		ASSERT_THAT(IsTrue(IFileManager::Get().FileExists(
 			*DeniedPartial.Path)));
+	}
+
+	TEST(ReplaySlowCheckpointStoragePreservesBoundedOrderedDurability,
+		"SeinARTS.Integration.Network.Replay")
+	{
+		FScopedFastReplayMaintenance MaintenanceSettings;
+		FActorTestSpawner SourceSpawner;
+		USeinWorldSubsystem* Source =
+			SourceSpawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(Source));
+		USeinReplayWriter* Writer = StartV9Recording(
+			*Source, MakeOnePlayerMatchSettings());
+		ASSERT_THAT(IsNotNull(Writer));
+		FScopedReplayFile PartialFile{Writer->GetActivePartialPath()};
+
+		const USeinARTSCoreSettings* Settings =
+			GetDefault<USeinARTSCoreSettings>();
+		ASSERT_THAT(IsNotNull(Settings));
+		const int32 TicksPerTurn = FMath::Max(
+			1, Settings->SimulationTickRate / Settings->TurnRate);
+		const int32 FirstTurn = Settings->InputDelayTurns;
+		const int32 FirstTurnEndTick = FirstTurn * TicksPerTurn;
+		const int32 MaximumResidentTurns =
+			Writer->GetMaximumResidentTurnsForTests();
+		ASSERT_THAT(IsTrue(MaximumResidentTurns >= 8));
+
+		Writer->RecordTurn(FirstTurn, {});
+		ASSERT_THAT(IsTrue(Source->StartSimulation()));
+		for (int32 Tick = 1; Tick <= FirstTurnEndTick; ++Tick)
+		{
+			FTSTicker::GetCoreTicker().Tick(
+				Source->GetFixedDeltaTimeSeconds());
+			ASSERT_THAT(AreEqual(Tick, Source->GetCurrentTick()));
+			Writer->ObserveCompletedTick(Tick);
+		}
+		Source->StopSimulation();
+		Writer->FlushAppliedProgressForTests();
+		ASSERT_THAT(AreEqual(1, Writer->GetPersistedTurnCount()));
+		ASSERT_THAT(AreEqual(0, Writer->GetResidentTurnCount()));
+
+		Writer->HoldNextBackgroundAppendForTests();
+		FScopedReplayAppendGateRelease GateRelease{Writer};
+		Writer->RunScheduledMaintenanceForTests();
+		ASSERT_THAT(IsTrue(Writer->IsCheckpointEncodePending()));
+		Writer->ResolveCheckpointEncodeForTests();
+		ASSERT_THAT(IsTrue(Writer->IsCheckpointAppendPending()));
+		constexpr uint32 GateWaitMilliseconds = 10000;
+		ASSERT_THAT(IsTrue(Writer->WaitForHeldBackgroundAppendForTests(
+			GateWaitMilliseconds)));
+
+		const uint64 DurableBytesBeforePressure = Writer->GetPersistedBytes();
+		ASSERT_THAT(AreEqual(1, Writer->GetPersistedTurnCount()));
+		ASSERT_THAT(AreEqual(1, Writer->GetPersistedCheckpointCount()));
+		ASSERT_THAT(AreEqual(
+			static_cast<int64>(DurableBytesBeforePressure),
+			IFileManager::Get().FileSize(*PartialFile.Path)));
+
+		int32 ObservedTick = FirstTurnEndTick;
+		ASSERT_THAT(IsTrue(Source->StartSimulation()));
+		for (int32 Turn = FirstTurn + 1;
+			Turn <= FirstTurn + MaximumResidentTurns;
+			++Turn)
+		{
+			Writer->RecordTurn(Turn, {});
+			const int32 TurnEndTick = Turn * TicksPerTurn;
+			while (ObservedTick < TurnEndTick)
+			{
+				FTSTicker::GetCoreTicker().Tick(
+					Source->GetFixedDeltaTimeSeconds());
+				++ObservedTick;
+				ASSERT_THAT(AreEqual(
+					ObservedTick, Source->GetCurrentTick()));
+				Writer->ObserveCompletedTick(ObservedTick);
+			}
+		}
+		Source->StopSimulation();
+		ASSERT_THAT(AreEqual(
+			MaximumResidentTurns, Writer->GetResidentTurnCount()));
+		ASSERT_THAT(AreEqual(
+			MaximumResidentTurns, Writer->GetPeakResidentTurnCount()));
+		ASSERT_THAT(AreEqual(1, Writer->GetPersistedTurnCount()));
+		ASSERT_THAT(AreEqual(1, Writer->GetPersistedCheckpointCount()));
+		ASSERT_THAT(AreEqual(
+			DurableBytesBeforePressure, Writer->GetPersistedBytes()));
+		ASSERT_THAT(AreEqual(
+			static_cast<int64>(DurableBytesBeforePressure),
+			IFileManager::Get().FileSize(*PartialFile.Path)));
+
+		TFuture<bool> PressureRelease =
+			Writer->ReleaseHeldBackgroundAppendAfterWriterWaitForTests(
+				GateWaitMilliseconds);
+		const int32 LastTurn = FirstTurn + MaximumResidentTurns + 1;
+		Writer->RecordTurn(LastTurn, {});
+		ASSERT_THAT(IsTrue(PressureRelease.Get()));
+		ASSERT_THAT(IsTrue(Writer->IsRecording()));
+		ASSERT_THAT(AreEqual(
+			MaximumResidentTurns + 1, Writer->GetPersistedTurnCount()));
+		ASSERT_THAT(AreEqual(2, Writer->GetPersistedCheckpointCount()));
+		ASSERT_THAT(IsFalse(Writer->IsCheckpointAppendPending()));
+		ASSERT_THAT(AreEqual(1, Writer->GetResidentTurnCount()));
+		ASSERT_THAT(AreEqual(
+			MaximumResidentTurns, Writer->GetPeakResidentTurnCount()));
+		ASSERT_THAT(IsTrue(
+			Writer->GetPeakResidentBytes()
+				<= static_cast<uint64>(MaximumResidentTurns)
+					* FSeinOpaqueCommandBatch::MaxBytes));
+		ASSERT_THAT(IsTrue(
+			Writer->GetPersistedBytes() > DurableBytesBeforePressure));
+		ASSERT_THAT(AreEqual(
+			static_cast<int64>(Writer->GetPersistedBytes()),
+			IFileManager::Get().FileSize(*PartialFile.Path)));
+
+		const int32 LastTurnEndTick = LastTurn * TicksPerTurn;
+		ASSERT_THAT(IsTrue(Source->StartSimulation()));
+		while (ObservedTick < LastTurnEndTick)
+		{
+			FTSTicker::GetCoreTicker().Tick(
+				Source->GetFixedDeltaTimeSeconds());
+			++ObservedTick;
+			ASSERT_THAT(AreEqual(
+				ObservedTick, Source->GetCurrentTick()));
+			Writer->ObserveCompletedTick(ObservedTick);
+		}
+		Source->StopSimulation();
+		Writer->FlushAppliedProgressForTests();
+		const int32 ExpectedTurnCount = MaximumResidentTurns + 2;
+		ASSERT_THAT(IsTrue(Writer->IsRecording()));
+		ASSERT_THAT(AreEqual(
+			ExpectedTurnCount, Writer->GetPersistedTurnCount()));
+		ASSERT_THAT(AreEqual(0, Writer->GetResidentTurnCount()));
+
+		FScopedReplayFile ReplayFile{Writer->FinishRecording()};
+		ASSERT_THAT(IsFalse(ReplayFile.Path.IsEmpty()));
+		USeinReplayReader* Reader = NewObject<USeinReplayReader>(
+			&SourceSpawner.GetWorld());
+		ASSERT_THAT(IsTrue(Reader->LoadFromFile(ReplayFile.Path)));
+		ASSERT_THAT(AreEqual(ExpectedTurnCount, Reader->GetTurnCount()));
+		ASSERT_THAT(AreEqual(LastTurnEndTick, Reader->GetHeader().EndTick));
 	}
 
 	TEST(ReplayTurnEnvelopeRejectsImpossibleTimingAndForgedProvenance,

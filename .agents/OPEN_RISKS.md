@@ -49,11 +49,14 @@ This is the actionable remainder after consolidating the historical audits. It i
    (1.257/3.114/7.214 ms median in the All profile on the current machine). It does not replace a large moving-combat
    PIE/Insights curve with movement, avoidance, navigation, abilities, animation, and presentation.
 3. Game-specific animation complexity can exceed the default mannequin baseline.
-4. Replay automatic periodic checkpoint full-flushes now use the ordered background append worker. Complete
-   snapshot capture/envelope encoding, mandatory initial/final publication, and pressure-forced
-   drains remain synchronous. Automated integration now proves fail-closed behavior for asynchronous
-   append failure and real write denial while retaining the partial journal; long-session hitch and
-   slow/exhausted-storage behavior still need Insights and soak evidence.
+4. Replay automatic periodic checkpoint envelope encoding and full-flush use one ordered background
+   pipeline; periodic snapshot capture, mandatory initial/direct writes, final publication, and
+   pressure-forced drains remain synchronous. Automated integration now holds a periodic checkpoint
+   before file I/O, accumulates eligible turns to the exact resident bound without false durability
+   or frame overtaking, and proves the forced wait drains and publishes a valid ordered journal after
+   release. Asynchronous failure and real write denial also fail closed while retaining the partial.
+   Real-device long-session hitch, latency, and exhausted-storage behavior still need Insights and
+   soak evidence.
 5. Debug navigation rendering is intentionally expensive and can invalidate profiling if left enabled.
 
 ## Explicit product decisions still required

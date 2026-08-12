@@ -101,7 +101,11 @@ capture/materialization/revalidation, provider gathering, slot resolution/dedupl
 eligible-edge construction, cost-matrix construction, and Hungarian solve scopes. Replay checkpoint
 qualification should include `Sein_Replay_CaptureCheckpoint`,
 `Sein_Replay_Checkpoint_CaptureSnapshot`, `Sein_World_CaptureSnapshot`, and
-`Sein_Replay_Checkpoint_EncodeEnvelope`. Keep looking after the first expensive scope: the original
-regression had independent sim, UI, animation, debug-render, and GPU-memory causes.
+`Sein_Replay_Checkpoint_EncodeEnvelope`. Storage qualification should correlate
+`Sein_Replay_BackgroundDurableAppend`, `Sein_Replay_SynchronousDurableAppend`, and
+`Sein_Replay_WaitForBackgroundAppend`; the deterministic held-append regression proves ordering and
+bounded pressure behavior, not a target device's latency distribution. Keep looking after the first
+expensive scope: the original regression had independent sim, UI, animation, debug-render, and
+GPU-memory causes.
 
 Every simulation optimization that changes traversal or mutation timing must rerun Unit, Integration, Determinism, fresh-process serial/parallel traces, and a PIE behavior A/B. Presentation-only changes still need visual/editor validation.
