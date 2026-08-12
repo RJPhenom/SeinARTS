@@ -1,6 +1,6 @@
 # SeinARTS Agent Engineering Records
 
-This hidden directory contains durable internal engineering context for Codex, Claude, and future maintainers. It is not the public product documentation tree.
+This dot-prefixed directory contains durable internal engineering context for contributors and future maintainers. It is not the public product documentation tree.
 
 Use `WORKFLOW.md` for operational rules. Use the repository and plugin-level guides for technical invariants. Use the remaining files here for current state, accepted evidence, remaining work, and cross-session handoff context.
 
@@ -14,6 +14,7 @@ Use `WORKFLOW.md` for operational rules. Use the repository and plugin-level gui
 - `CONSUMER_VERIFICATION.md` — clean downstream project/build/cook/package verification contract.
 - `READINESS_ROADMAP.md` — ordered path from the stabilized framework to a game-ready, online-capable SDK.
 - `OPEN_RISKS.md` — unresolved correctness, state, extensibility, gameplay, and release risks.
+- `.agents/Docs/` — current release-documentation source retained for packaging and evidence until the deliberate public `Docs/` tree replaces it.
 
 ## Artifact policy
 

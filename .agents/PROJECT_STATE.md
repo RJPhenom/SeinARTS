@@ -28,9 +28,9 @@ The post-audit performance/remediation work is now committed and fast-forwarded 
 
 ## Baseline cleanup
 
-- Historical audit/report artifacts were removed. `Docs/` now contains deliberate public
-  compatibility and upgrade contracts; audit scratch remains excluded.
-- Durable current state was consolidated under hidden `.agents/`; generated PDF output now belongs outside the repository.
+- Historical audit/report artifacts were removed. Current release-documentation inputs are staged
+  under `.agents/Docs/`; `Docs/` is reserved for the future customer-facing documentation set.
+- Durable current state was consolidated under `.agents/`; generated PDF output now belongs outside the repository.
 - Empty scratch directories, duplicate/template config entries, stale comments, and dead source surfaces were removed.
 - Removed reflected/source surfaces had no source, config, or binary-asset consumers: `ESeinElevationMode`, `FFixedBounds`, `SeinTime`, `FSeinCapturePointData`, `FSeinFootprintData`, and `USeinLevelLoS`.
 - Designer-facing reflected APIs were not removed merely because native code does not include them. `UMathBPFL`, `FSeinBasicMatchSettings`, and `FSeinGarrisonSpec` remain intentional public authoring surfaces.
@@ -153,7 +153,7 @@ Latest local evidence is under ignored `Saved/Automation/`:
 - `SeinARTS.Determinism-20260811-215801-1038a89a` (Framework, 29 passed)
 - `SeinARTS.Integration-20260811-215830-3f71fd56` (Framework, 14 passed)
 - `SeinARTS.Editor-20260811-215856-23e0f0ed` (All, 36 passed)
-- `Tools/ConsumerMatrix/Verify-ConsumerMatrix.ps1 -Profile All -SkipClientServer`
+- `Scripts/ConsumerMatrix/Verify-ConsumerMatrix.ps1 -Profile All -SkipClientServer`
   (2026-08-12; Framework, Cover-only, Squad-only, Movement+-only, and Full all passed fresh
   Editor/Shipping build, consumer-manifest/map load, cook/package, and packaged startup; Framework
   also passed two-peer root gossip, forced resync, physical reconnect, and replay seek at tick 236,
@@ -235,7 +235,7 @@ Latest local evidence is under ignored `Saved/Automation/`:
   successfully with the development-only replay fault seam compiled out)
 - `Scripts/PackagePlugins.ps1 -PackageOnly` (2026-08-12; all five UE 5.8 Marketplace-style Editor,
   Development Game, and Shipping Game builds passed; exact `0.0.120` archive preflight passed)
-- `Tools/ConsumerMatrix/Verify-ConsumerMatrix.ps1 -Profile All -ArtifactDirectory .dist -SkipClientServer`
+- `Scripts/ConsumerMatrix/Verify-ConsumerMatrix.ps1 -Profile All -ArtifactDirectory .dist -SkipClientServer`
   (run `5136cb01289342429a61f491bc78e5d0`; all five fresh exact-ZIP profiles passed Editor,
   Shipping, release-mode installation diagnostics, consumer-owned manifest/map load,
   cook/package, and packaged startup; Framework also passed the multiplayer/reconnect/capability/
@@ -287,7 +287,7 @@ Latest local evidence is under ignored `Saved/Automation/`:
   stateful implementations must declare and register their state ownership.
 - Movement+ coverage-provider withdrawal is atomic. Live unload removes the provider's complete
   claim set before one registry refresh, so no transient partial ownership can be observed.
-- `Tools/ConsumerMatrix/Verify-ConsumerMatrix.ps1` creates disposable external consumers from
+- `Scripts/ConsumerMatrix/Verify-ConsumerMatrix.ps1` creates disposable external consumers from
   selected source plugins, generates a consumer-owned manifest and map, rejects host-content
   dependencies, and exercises uncooked load plus packaged Shipping startup.
 - The consumer matrix has direct Framework-only, Cover-only, Squad-only, Movement+-only-extension,

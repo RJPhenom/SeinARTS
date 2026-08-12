@@ -11,7 +11,7 @@ It owns the cross-cutting rules that apply to **all five production plugins** an
 > `AGENTS.md` for whatever you're touching.
 
 > Read `.agents/WORKFLOW.md` and `.agents/STYLE_GUIDE.md` before changing code or documentation.
-> `.agents/` is hidden but mandatory agent context; this guide owns technical boundaries and
+> `.agents/` is dot-prefixed but mandatory agent context; this guide owns technical boundaries and
 > implementation rules.
 
 > **Active initiative — movement & navigation depth.** The movement/avoidance/nav seams are clean and
@@ -114,7 +114,7 @@ learned from the sessions that *worked*:
 ### Engineering-document artifacts
 
 - `Docs/` is reserved for deliberate product/developer documentation, not audit scratch or agent handoffs.
-- Durable agent engineering context belongs in hidden `.agents/`; short-lived exploration stays untracked.
+- Durable agent engineering context belongs in `.agents/`; short-lived exploration stays untracked.
 - Do not create a repository `Output/` tree. Put requested PDF exports in the user's Downloads directory.
 
 ---

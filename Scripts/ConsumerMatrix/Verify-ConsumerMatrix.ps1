@@ -1089,7 +1089,7 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 			'Plugins\SeinARTSFramework\Tools\Diagnostics\Test-SeinARTSInstallation.ps1'
 	} else {
 		Join-Path $RepoRoot `
-			'Tools\Diagnostics\Test-SeinARTSInstallation.ps1'
+			'Scripts\Diagnostics\Test-SeinARTSInstallation.ps1'
 	}
 	if (-not (Test-Path -LiteralPath $InstallationDiagnostic -PathType Leaf)) {
 		throw "$ProfileName installation diagnostic is missing: '$InstallationDiagnostic'."

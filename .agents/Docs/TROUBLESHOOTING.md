@@ -1,10 +1,10 @@
 # Troubleshooting SeinARTS
 
-**Document version:** 0.1
+**Document version:** 0.2
 
 ## Installation diagnostic
 
-Run `Tools/Diagnostics/Test-SeinARTSInstallation.ps1` with `-Json` for a machine-readable receipt.
+Run `Scripts/Diagnostics/Test-SeinARTSInstallation.ps1` with `-Json` for a machine-readable receipt.
 Errors return exit code 1; warnings keep exit code 0 but identify evidence that was not provable.
 
 | Codes | Meaning | Action |

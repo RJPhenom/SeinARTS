@@ -84,11 +84,15 @@ if ([int]$EngineBuildVersion.MajorVersion -ne 5 -or
 $BuildScript = Join-Path $RepoRoot 'Scripts\Build.ps1'
 $TestScript = Join-Path $RepoRoot 'Plugins\SeinARTSTestSuite\RunTests.ps1'
 $PackageScript = Join-Path $RepoRoot 'Scripts\PackagePlugins.ps1'
-$ConsumerScript = Join-Path $RepoRoot 'Tools\ConsumerMatrix\Verify-ConsumerMatrix.ps1'
+$ConsumerScript = Join-Path $RepoRoot 'Scripts\ConsumerMatrix\Verify-ConsumerMatrix.ps1'
 $DiagnosticScript = Join-Path $RepoRoot `
-	'Tools\Diagnostics\Test-SeinARTSInstallation.ps1'
+	'Scripts\Diagnostics\Test-SeinARTSInstallation.ps1'
 $DiagnosticSelfTestScript = Join-Path $RepoRoot `
-	'Tools\Diagnostics\Invoke-InstallationDiagnosticSelfTest.ps1'
+	'Scripts\Diagnostics\Invoke-InstallationDiagnosticSelfTest.ps1'
+$DocumentationRoot = Join-Path $RepoRoot 'Docs'
+if (-not (Test-Path -LiteralPath $DocumentationRoot -PathType Container)) {
+	$DocumentationRoot = Join-Path $RepoRoot '.agents\Docs'
+}
 $Dist = Join-Path $RepoRoot '.dist'
 $ReceiptRoot = Join-Path $RepoRoot 'Saved\ReleaseGate'
 $ProductionPlugins = @(
@@ -596,7 +600,7 @@ function New-ReleaseEvidenceArchive
 		'Saved\ConsumerMatrix\Framework\Saved\RuntimeQualification\runtime-result.json'
 	$EvidenceSourcePaths.Add($RuntimeSource)
 	foreach ($Document in @('COMPATIBILITY.md', 'UPGRADING.md')) {
-		$EvidenceSourcePaths.Add((Join-Path $RepoRoot "Docs\$Document"))
+		$EvidenceSourcePaths.Add((Join-Path $DocumentationRoot $Document))
 	}
 	$EvidenceSourceLocks =
 		[System.Collections.Generic.List[System.IO.FileStream]]::new()
@@ -695,7 +699,7 @@ function New-ReleaseEvidenceArchive
 	Copy-Item -LiteralPath $RuntimeSource `
 		-Destination $RuntimeDestination -Force
 	foreach ($Document in @('COMPATIBILITY.md', 'UPGRADING.md')) {
-		Copy-Item -LiteralPath (Join-Path $RepoRoot "Docs\$Document") `
+		Copy-Item -LiteralPath (Join-Path $DocumentationRoot $Document) `
 			-Destination (Join-Path $EvidenceRoot $Document) -Force
 	}
 	}

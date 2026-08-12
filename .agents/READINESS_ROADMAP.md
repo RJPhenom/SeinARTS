@@ -159,7 +159,8 @@ Exit: game UI and progression can target stable provider-neutral interfaces whil
 ## 5. Public SDK and release automation
 
 - Semantic release tags, one-version production-plugin cohorts, deterministic compatibility
-  boundaries, and current-wave migration steps are documented under `Docs/`.
+  boundaries, and current-wave migration steps remain staged under `.agents/Docs/` until the
+  deliberate customer-facing `Docs/` tree replaces them.
 - Release packaging now validates SemVer and refuses to publish dirty or mid-build-drifted source
   under a clean commit/tag identity. It emits SHA-256 artifact/dependency provenance and release
   publication is gated on fresh consumers built from the exact five ZIPs. Package-only diagnostics

@@ -138,7 +138,7 @@ Ordinary RTS visual meshes use Unreal update-rate optimization and skip animatio
 
 ## Downstream verification
 
-`Tools/ConsumerMatrix/Verify-ConsumerMatrix.ps1` creates disposable projects under ignored
+`Scripts/ConsumerMatrix/Verify-ConsumerMatrix.ps1` creates disposable projects under ignored
 `Saved/ConsumerMatrix`, copies only selected distributable plugin inputs, and verifies Framework,
 Cover-only, Squad-only, Framework+Movement+, and all-production-plugin profiles. It generates a consumer-owned map and
 manifest, rejects host-project package references, builds Editor and Shipping, loads the exact map,
