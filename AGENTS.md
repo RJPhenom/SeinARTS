@@ -10,6 +10,9 @@ It owns the cross-cutting rules that apply to **all five production plugins** an
 > and both disabled test plugins. When you start work, read this file first, then the plugin-specific
 > `AGENTS.md` for whatever you're touching.
 
+> Read `Agents/WORKFLOW.md` before changing code or documentation. It owns operational workflow;
+> this guide owns technical boundaries and implementation rules.
+
 > **Active initiative — movement & navigation depth.** The movement/avoidance/nav seams are clean and
 > pluggable (`USeinAvoidance` / `USeinCollisionResolver` / `USeinNavigation` abstract-base + settings
 > picker; the `FSeinPath` typed-segment seam); current work is deflating localized bloat in a few
@@ -22,15 +25,13 @@ It owns the cross-cutting rules that apply to **all five production plugins** an
 
 ## HARD RULE: never use worktrees
 
-**No exceptions.** This is a solo-dev local project — forking work into a separate worktree buys
-nothing and adds synchronization overhead.
+**No exceptions.** Git worktrees are banned across all branches.
 
-- **Never** spawn `Agent` calls with `isolation: "worktree"`. Use the default (no isolation).
-- **Never** create or work inside a `.Codex/worktrees/<...>/` path. If a turn starts and the
-  working directory contains `.Codex/worktrees/`, **stop, tell the user, and switch back to the
-  main checkout at `D:/Projects/Unreal Engine/SeinARTS/` before doing anything else.**
-- Parallelism is still encouraged — just spawn parallel agents against the **main checkout**.
-  Feature work is naturally module-scoped, so conflicts between parallel agents are rare.
+- **Never** create, enter, or delegate work through a Git worktree.
+- If a session starts outside `D:/Projects/Unreal Engine/SeinARTS`, stop and return to the primary
+  checkout before changing files.
+- One author writes to the checkout at a time. Preserve work and complete the handoff review before
+  taking over.
 
 > Note: as of 2026-06-02 the project root **is** a git repository — a single project-wide monorepo
 > (`main`, initial commit `ecf6068`) tracking the host, five production plugins, and two disabled
