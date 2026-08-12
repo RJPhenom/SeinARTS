@@ -1,6 +1,6 @@
 # SeinARTS Agent Engineering Records
 
-This directory contains durable internal engineering context for Codex, Claude, and future maintainers. It is not the public product documentation tree.
+This hidden directory contains durable internal engineering context for Codex, Claude, and future maintainers. It is not the public product documentation tree.
 
 Use `WORKFLOW.md` for operational rules. Use the repository and plugin-level guides for technical invariants. Use the remaining files here for current state, accepted evidence, remaining work, and cross-session handoff context.
 
@@ -8,6 +8,7 @@ Use `WORKFLOW.md` for operational rules. Use the repository and plugin-level gui
 
 - `PROJECT_STATE.md` — current Git/build/test/runtime posture and the exact stabilization boundary.
 - `WORKFLOW.md` — local operational mirror of the human Workflow Policy.
+- `STYLE_GUIDE.md` — local operational mirror of the human Style Guide.
 - `FRAMEWORK_MAP.md` — concise live architecture and algorithm map grounded in the current source.
 - `PERFORMANCE_BASELINE.md` — repeatable benchmark contract, measured baseline, and profiling rules.
 - `CONSUMER_VERIFICATION.md` — clean downstream project/build/cook/package verification contract.

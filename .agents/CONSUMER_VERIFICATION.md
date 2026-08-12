@@ -15,7 +15,7 @@ Run from the repository root:
 & "D:/Projects/Unreal Engine/SeinARTS/Tools/ConsumerMatrix/Verify-ConsumerMatrix.ps1" -EngineRoot "D:/Engines/UE_5.8"
 
 # Qualify the exact ZIPs emitted by PackagePlugins.ps1, not repository source.
-& "D:/Projects/Unreal Engine/SeinARTS/Tools/ConsumerMatrix/Verify-ConsumerMatrix.ps1" -EngineRoot "D:/Engines/UE_5.8" -ArtifactDirectory "D:/Projects/Unreal Engine/SeinARTS/dist" -AuditPublicHeaders
+& "D:/Projects/Unreal Engine/SeinARTS/Tools/ConsumerMatrix/Verify-ConsumerMatrix.ps1" -EngineRoot "D:/Engines/UE_5.8" -ArtifactDirectory "D:/Projects/Unreal Engine/SeinARTS/.dist" -AuditPublicHeaders
 
 # Complete build/test/package/artifact-consumer gate; publication is the final step.
 & "D:/Projects/Unreal Engine/SeinARTS/Tools/Release/Invoke-ReleaseGate.ps1" -Version 1.2.0 -EngineRoot "D:/Engines/UE_5.8"

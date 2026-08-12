@@ -37,7 +37,7 @@ $ErrorActionPreference = 'Stop'
 $PluginRoot = $PSScriptRoot
 $ProjectRoot = (Resolve-Path (Join-Path $PluginRoot '..\..')).Path
 $Uproject = Join-Path $ProjectRoot 'SeinARTS.uproject'
-$BuildScript = Join-Path $ProjectRoot 'Build.ps1'
+$BuildScript = Join-Path $ProjectRoot 'Scripts\Build.ps1'
 $ResolvedEngineRoot = if ($EngineRoot) {
 	(Resolve-Path -LiteralPath $EngineRoot).Path
 } else {
