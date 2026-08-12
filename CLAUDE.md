@@ -10,8 +10,9 @@ It owns the cross-cutting rules that apply to **all five production plugins** an
 > and both disabled test plugins. When you start work, read this file first, then the plugin-specific
 > `AGENTS.md` for whatever you're touching.
 
-> Read `Agents/WORKFLOW.md` before changing code or documentation. It owns operational workflow;
-> this guide owns technical boundaries and implementation rules.
+> Read `.agents/WORKFLOW.md` and `.agents/STYLE_GUIDE.md` before changing code or documentation.
+> `.agents/` is hidden but mandatory agent context; this guide owns technical boundaries and
+> implementation rules.
 
 > **Active initiative — movement & navigation depth.** The movement/avoidance/nav seams are clean and
 > pluggable (`USeinAvoidance` / `USeinCollisionResolver` / `USeinNavigation` abstract-base + settings
@@ -54,12 +55,12 @@ It owns the cross-cutting rules that apply to **all five production plugins** an
 `SeinARTSEditor`. Use the repo build script:
 
 ```powershell
-& "D:/Projects/Unreal Engine/SeinARTS/Build.ps1"                       # SeinARTSEditor Win64 Development (incremental ≈ 20s)
-& "D:/Projects/Unreal Engine/SeinARTS/Build.ps1" -ExtraArgs '-Clean'   # clean rebuild
-& "D:/Projects/Unreal Engine/SeinARTS/Build.ps1" -Target SeinARTS -Config Shipping
+& "D:/Projects/Unreal Engine/SeinARTS/Scripts/Build.ps1"                       # SeinARTSEditor Win64 Development (incremental ≈ 20s)
+& "D:/Projects/Unreal Engine/SeinARTS/Scripts/Build.ps1" -ExtraArgs '-Clean'   # clean rebuild
+& "D:/Projects/Unreal Engine/SeinARTS/Scripts/Build.ps1" -Target SeinARTS -Config Shipping
 ```
 
-`Build.ps1` resolves the engine (known path → registry fallback via `EngineAssociation`), warns if
+`Scripts/Build.ps1` resolves the engine (known path → registry fallback via `EngineAssociation`), warns if
 the editor is open, and returns UBT's exit code. Equivalent raw one-liner if the script is ever gone:
 
 ```powershell
@@ -113,7 +114,7 @@ learned from the sessions that *worked*:
 ### Engineering-document artifacts
 
 - `Docs/` is reserved for deliberate product/developer documentation, not audit scratch or agent handoffs.
-- Durable agent engineering context belongs in `Agents/`; short-lived exploration stays untracked.
+- Durable agent engineering context belongs in hidden `.agents/`; short-lived exploration stays untracked.
 - Do not create a repository `Output/` tree. Put requested PDF exports in the user's Downloads directory.
 
 ---

@@ -23,11 +23,11 @@
   qualification, immutable hash verification, evidence, and GitHub release creation.
 
 .EXAMPLE
-  .\PackagePlugins.ps1 -Version 1.2.0 -PackageOnly
+  .\Scripts\PackagePlugins.ps1 -Version 1.2.0 -PackageOnly
   # package all five for release-gate qualification
 
 .EXAMPLE
-  .\PackagePlugins.ps1 -Only SeinARTSFramework -PackageOnly
+  .\Scripts\PackagePlugins.ps1 -Only SeinARTSFramework -PackageOnly
   # dry-run: package just the framework, no release
 
 .NOTES
@@ -43,7 +43,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ProjectRoot = $PSScriptRoot
+$ProjectRoot = Split-Path -Parent $PSScriptRoot
 $PipelineMutex = [System.Threading.Mutex]::new(
     $false, 'Local\SeinARTS.ArtifactPipeline')
 $PipelineMutexAcquired = $false
@@ -149,7 +149,7 @@ if ([int]$EngineBuildVersion.MajorVersion -ne 5 -or
 }
 
 $Marketplace = Join-Path $Engine 'Engine\Plugins\Marketplace'
-$Dist        = Join-Path $ProjectRoot 'dist'
+$Dist        = Join-Path $ProjectRoot '.dist'
 $Logs        = Join-Path $Dist 'logs'
 $StagingMarkerName = '.seinarts-package-staging.json'
 

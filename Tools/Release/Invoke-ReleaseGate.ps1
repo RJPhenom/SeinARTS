@@ -81,15 +81,15 @@ if ([int]$EngineBuildVersion.MajorVersion -ne 5 -or
 	[int]$EngineBuildVersion.MinorVersion -ne 8) {
 	throw "SeinARTS release gates require UE 5.8; '$EngineRoot' reports $($EngineBuildVersion.MajorVersion).$($EngineBuildVersion.MinorVersion)."
 }
-$BuildScript = Join-Path $RepoRoot 'Build.ps1'
+$BuildScript = Join-Path $RepoRoot 'Scripts\Build.ps1'
 $TestScript = Join-Path $RepoRoot 'Plugins\SeinARTSTestSuite\RunTests.ps1'
-$PackageScript = Join-Path $RepoRoot 'PackagePlugins.ps1'
+$PackageScript = Join-Path $RepoRoot 'Scripts\PackagePlugins.ps1'
 $ConsumerScript = Join-Path $RepoRoot 'Tools\ConsumerMatrix\Verify-ConsumerMatrix.ps1'
 $DiagnosticScript = Join-Path $RepoRoot `
 	'Tools\Diagnostics\Test-SeinARTSInstallation.ps1'
 $DiagnosticSelfTestScript = Join-Path $RepoRoot `
 	'Tools\Diagnostics\Invoke-InstallationDiagnosticSelfTest.ps1'
-$Dist = Join-Path $RepoRoot 'dist'
+$Dist = Join-Path $RepoRoot '.dist'
 $ReceiptRoot = Join-Path $RepoRoot 'Saved\ReleaseGate'
 $ProductionPlugins = @(
 	'SeinARTSFramework',

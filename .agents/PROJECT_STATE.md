@@ -30,7 +30,7 @@ The post-audit performance/remediation work is now committed and fast-forwarded 
 
 - Historical audit/report artifacts were removed. `Docs/` now contains deliberate public
   compatibility and upgrade contracts; audit scratch remains excluded.
-- Durable current state was consolidated under `Agents/`; generated PDF output now belongs outside the repository.
+- Durable current state was consolidated under hidden `.agents/`; generated PDF output now belongs outside the repository.
 - Empty scratch directories, duplicate/template config entries, stale comments, and dead source surfaces were removed.
 - Removed reflected/source surfaces had no source, config, or binary-asset consumers: `ESeinElevationMode`, `FFixedBounds`, `SeinTime`, `FSeinCapturePointData`, `FSeinFootprintData`, and `USeinLevelLoS`.
 - Designer-facing reflected APIs were not removed merely because native code does not include them. `UMathBPFL`, `FSeinBasicMatchSettings`, and `FSeinGarrisonSpec` remain intentional public authoring surfaces.
@@ -231,11 +231,11 @@ Latest local evidence is under ignored `Saved/Automation/`:
   1.257/3.114/7.214 ms, worst-case 128x128 Cover assignment 11.998 ms, and the
   public 128-member formation layout 1.255/1.337 ms median/p95 coverless versus
   3.181/3.324 ms with 16 providers, 128 accepted slots, and every member snapped)
-- `Build.ps1 -Target SeinARTS -Config Shipping` (2026-08-12; Net rebuilt and Shipping linked
+- `Scripts/Build.ps1 -Target SeinARTS -Config Shipping` (2026-08-12; Net rebuilt and Shipping linked
   successfully with the development-only replay fault seam compiled out)
-- `PackagePlugins.ps1 -PackageOnly` (2026-08-12; all five UE 5.8 Marketplace-style Editor,
+- `Scripts/PackagePlugins.ps1 -PackageOnly` (2026-08-12; all five UE 5.8 Marketplace-style Editor,
   Development Game, and Shipping Game builds passed; exact `0.0.120` archive preflight passed)
-- `Tools/ConsumerMatrix/Verify-ConsumerMatrix.ps1 -Profile All -ArtifactDirectory dist -SkipClientServer`
+- `Tools/ConsumerMatrix/Verify-ConsumerMatrix.ps1 -Profile All -ArtifactDirectory .dist -SkipClientServer`
   (run `5136cb01289342429a61f491bc78e5d0`; all five fresh exact-ZIP profiles passed Editor,
   Shipping, release-mode installation diagnostics, consumer-owned manifest/map load,
   cook/package, and packaged startup; Framework also passed the multiplayer/reconnect/capability/
@@ -309,7 +309,7 @@ Latest local evidence is under ignored `Saved/Automation/`:
   K-turns, corridor escape, S-bends, repath and order replacement, formation-facing settle,
   recovery, and mixed infantry/vehicle collision. Active arc, reverse, recovery, and congestion
   checkpoints continue with exact roots after restore. Human feel, scale, and combined
-  real multi-client PIE remain explicit gates in `Agents/VEHICLE_GYM.md`.
+  real multi-client PIE remain explicit gates in `.agents/VEHICLE_GYM.md`.
 
 ## Current development wave
 

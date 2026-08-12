@@ -11,5 +11,5 @@
 - `FIRST_SKIRMISH.md`: project-owned settings, unit, map, manifest, and two-player prototype
   authoring sequence.
 
-Internal engineering state and qualification receipts live under `Agents/`; they are not a
+Internal engineering state and qualification receipts live under hidden `.agents/`; they are not a
 substitute for these public adoption contracts.
