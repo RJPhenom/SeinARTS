@@ -240,6 +240,15 @@ Latest local evidence is under ignored `Saved/Automation/`:
   Shipping, release-mode installation diagnostics, consumer-owned manifest/map load,
   cook/package, and packaged startup; Framework also passed the multiplayer/reconnect/capability/
   replay leg at tick 239, root `1CC3EC718160314CD4433EB0DCCB1C10`)
+- `SeinARTS.Integration.Network.Replay.ReplaySlowCheckpointStoragePreservesBoundedOrderedDurability-20260812-184415-e3dcf255`
+  (1 passed; a held periodic checkpoint accumulated eligible turns to the exact resident bound,
+  published no false bytes/counters, forced the production wait, then drained and loaded in order)
+- `SeinARTS.Integration.Network.Replay-20260812-183830-21bc9da2` (Framework, 15 passed)
+- `SeinARTS.Integration-20260812-183947-0e277b66` (Framework, 17 passed)
+- `SeinARTS.Determinism-20260812-184013-e47d2779` (Framework, 30 passed)
+- `SeinARTS.Integration-20260812-184042-76386474` (All, 23 passed)
+- `Scripts/Build.ps1 -Target SeinARTS -Config Shipping` (2026-08-12; Net rebuilt and
+  `SeinARTS-Win64-Shipping.exe` linked with the slow-storage test gate compiled out)
 
 ## Integration-candidate progress
 
@@ -311,9 +320,9 @@ Latest local evidence is under ignored `Saved/Automation/`:
   checkpoints continue with exact roots after restore. Human feel, scale, and combined
   real multi-client PIE remain explicit gates in `.agents/VEHICLE_GYM.md`.
 
-## Current development wave
+## Current development state
 
-The uncommitted `codex/pair-capabilities-telemetry-m1` wave adds a directional,
+The completed pair-capability and Movement+ telemetry milestone adds a directional,
 source-attributed capability ledger for ordered player pairs. Team IDs seed the existing friendly
 default, while exact grants become authoritative after bootstrap. The ledger participates in
 initial compatibility, canonical roots, snapshot/reset/restore, replay command execution, and
@@ -337,14 +346,16 @@ real replay-file continuation, bounded reconnect transfer, and both broad test p
 The human PIE animation/performance matrix remains open; the supplied two-player PIE run found no
 framework regression.
 
-Replay v9 automatic periodic checkpoints now send their completed frame bytes through the existing ordered
-background full-flush pipeline. Frame digest/sequence and checkpoint persistence diagnostics commit
-on the game thread only after the worker reports durable success; mandatory initial checkpoints and
-direct checkpoint calls plus final publication remain synchronous. File-backed integration coverage proves the pending-to-durable
-transition, indexes both checkpoints in the published replay, retains the >64 MiB bounded-memory
-journal proof, and proves that asynchronous failure or real write denial fails closed while preserving
-the partial journal. Complete snapshot capture/envelope encoding and queue-pressure forced drains remain
-main-thread scale risks; slow and exhausted storage still require a measured long-session soak.
+Replay v9 automatic periodic checkpoints encode and durably append through the existing ordered
+background pipeline. Frame digest/sequence and checkpoint persistence diagnostics commit on the game
+thread only after worker success; periodic snapshot capture, mandatory initial/direct writes, final
+publication, and pressure-forced drains remain synchronous. File-backed integration now holds the
+periodic checkpoint before file I/O, advances the real fixed-tick world while eligible turns accumulate
+to the exact resident bound, proves no false bytes/counters or frame overtaking, then forces the
+production wait and validates the published journal after release. The >64 MiB bounded-memory proof,
+asynchronous failure, and real write denial remain green. New Insights scopes separate checkpoint
+capture/encode, background/synchronous durable append, and game-thread append waits. Real slow-device
+latency, long-session hitch distribution, and exhausted storage still require measured soak evidence.
 
 The supplied 2026-08-11 two-player PIE log contains two healthy sessions: lockstep configuration
 and participant roots agree throughout, with no gate stall, persistent incomplete turn, retransmit,
@@ -430,5 +441,5 @@ current dirty diagnostic cohort has also passed a complete exact-ZIP five-profil
 it is qualification evidence, not a publishable release identity. The
 remaining Integration Candidate release evidence is the Development Client/Dedicated Server gate
 on a capable engine distribution plus the explicit PIE oracles. Local implementation can proceed
-to the Vehicle Gym and CoH-style gameplay-backbone qualification without pretending those external
+to the Vehicle Gym and squad-tactical gameplay-backbone qualification without pretending those external
 gates are green.

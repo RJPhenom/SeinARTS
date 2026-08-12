@@ -1,12 +1,20 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
- * @file    SeinReplayWriter.h
- * @brief   Bounded, append-only v9 replay recording.
  *
- * The recorder persists a digest-chained chunk journal while the match is
- * running. Only turns whose first simulation tick has completed are promoted
- * to the durable timeline; the ordinary input-delay future tail remains in a
- * small resident queue and is never made executable by an interrupted file.
+ * @file         SeinReplayWriter.h
+ * @author       RJ Macklem
+ * @created      02 Jun 2026
+ * @latest       12 Aug 2026
+ * @brief        Bounded, ordered, append-only v9 replay recording.
+ *
+ *               The recorder persists a digest-chained chunk journal while
+ *               the match is running. Only turns whose first simulation tick
+ *               has completed are promoted to the durable timeline; the
+ *               ordinary input-delay future tail remains in a small resident
+ *               queue and is never made executable by an interrupted file.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
  */
 
 #pragma once
@@ -31,6 +39,9 @@ struct FSeinReplayAsyncAppendResult
 };
 
 struct FSeinReplayCheckpointEncodeWork;
+#if WITH_DEV_AUTOMATION_TESTS
+struct FSeinReplayAsyncAppendTestGate;
+#endif
 
 struct FSeinReplayAsyncCheckpointEncodeResult
 {
@@ -128,6 +139,20 @@ public:
 	void FailNextBackgroundAppendForTests()
 	{
 		bFailNextBackgroundAppendForTests = true;
+	}
+	/** Hold the next background append before it touches the replay file. */
+	void HoldNextBackgroundAppendForTests();
+	/** Wait until the held append worker has reached its storage boundary. */
+	bool WaitForHeldBackgroundAppendForTests(uint32 WaitTimeMilliseconds) const;
+	/** Release the held append after the writer enters its forced wait. */
+	TFuture<bool> ReleaseHeldBackgroundAppendAfterWriterWaitForTests(
+		uint32 WaitTimeMilliseconds) const;
+	/** Release any armed or active append gate without waiting for pressure. */
+	void ReleaseHeldBackgroundAppendForTests();
+	/** Return the exact resident-turn limit used by the production writer. */
+	int32 GetMaximumResidentTurnsForTests() const
+	{
+		return GetMaximumResidentTurns();
 	}
 #endif
 
@@ -244,5 +269,9 @@ private:
 	bool bLoggedChronicCheckpointFailure = false;
 #if WITH_DEV_AUTOMATION_TESTS
 	bool bFailNextBackgroundAppendForTests = false;
+	TSharedPtr<FSeinReplayAsyncAppendTestGate, ESPMode::ThreadSafe>
+		NextBackgroundAppendTestGate;
+	TSharedPtr<FSeinReplayAsyncAppendTestGate, ESPMode::ThreadSafe>
+		ActiveBackgroundAppendTestGate;
 #endif
 };

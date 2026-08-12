@@ -1,6 +1,14 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
- * @file SeinReplayWriter.cpp
+ *
+ * @file         SeinReplayWriter.cpp
+ * @author       RJ Macklem
+ * @created      02 Jun 2026
+ * @latest       12 Aug 2026
+ * @brief        Persists bounded replay journals and ordered checkpoints.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
  */
 
 #include "SeinReplayWriter.h"
@@ -20,6 +28,7 @@
 
 #include "Async/Async.h"
 #include "Engine/World.h"
+#include "HAL/Event.h"
 #include "HAL/FileManager.h"
 #include "Misc/DateTime.h"
 #include "Misc/PackageName.h"
@@ -27,6 +36,15 @@
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 #include "UObject/GarbageCollection.h"
 #include "UObject/StrongObjectPtr.h"
+
+#if WITH_DEV_AUTOMATION_TESTS
+struct FSeinReplayAsyncAppendTestGate
+{
+	FSharedEventRef WorkerEntered{EEventMode::ManualReset};
+	FSharedEventRef WriterWaitEntered{EEventMode::ManualReset};
+	FSharedEventRef ReleaseWorker{EEventMode::ManualReset};
+};
+#endif
 
 struct FSeinReplayCheckpointEncodeWork
 {
@@ -770,11 +788,21 @@ bool USeinReplayWriter::ResolvePendingAppend(bool bWait)
 	}
 	if (bWait)
 	{
+#if WITH_DEV_AUTOMATION_TESTS
+		if (ActiveBackgroundAppendTestGate)
+		{
+			ActiveBackgroundAppendTestGate->WriterWaitEntered->Trigger();
+		}
+#endif
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Replay_WaitForBackgroundAppend);
 		PendingAppendFuture.Wait();
 	}
 
 	FSeinReplayAsyncAppendResult Result = PendingAppendFuture.Get();
 	PendingAppendFuture = {};
+#if WITH_DEV_AUTOMATION_TESTS
+	ActiveBackgroundAppendTestGate.Reset();
+#endif
 	if (!Result.bSucceeded)
 	{
 		PendingAppendKind = ESeinReplayAsyncAppendKind::None;
@@ -845,8 +873,12 @@ bool USeinReplayWriter::ResolvePendingAppend(bool bWait)
 
 void USeinReplayWriter::WaitAndDiscardPendingAppend()
 {
+#if WITH_DEV_AUTOMATION_TESTS
+	ReleaseHeldBackgroundAppendForTests();
+#endif
 	if (HasPendingAppend())
 	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Replay_WaitForBackgroundAppend);
 		PendingAppendFuture.Wait();
 		PendingAppendFuture.Get();
 		PendingAppendFuture = {};
@@ -860,6 +892,9 @@ void USeinReplayWriter::WaitAndDiscardPendingAppend()
 	PendingAppendLastTurn = INDEX_NONE;
 	PendingAppendTimelineTick = INDEX_NONE;
 	PendingAppendCheckpointTurnCount = INDEX_NONE;
+#if WITH_DEV_AUTOMATION_TESTS
+	ActiveBackgroundAppendTestGate.Reset();
+#endif
 }
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -883,6 +918,60 @@ void USeinReplayWriter::ResolveCheckpointEncodeForTests()
 	ResolvePendingCheckpointEncode(
 		/*bWait=*/true,
 		/*bAppendSynchronously=*/false);
+}
+
+void USeinReplayWriter::HoldNextBackgroundAppendForTests()
+{
+	check(IsInGameThread());
+	check(!HasPendingAppend());
+	check(!NextBackgroundAppendTestGate);
+	check(!ActiveBackgroundAppendTestGate);
+	NextBackgroundAppendTestGate = MakeShared<
+		FSeinReplayAsyncAppendTestGate, ESPMode::ThreadSafe>();
+}
+
+bool USeinReplayWriter::WaitForHeldBackgroundAppendForTests(
+	uint32 WaitTimeMilliseconds) const
+{
+	check(IsInGameThread());
+	const TSharedPtr<FSeinReplayAsyncAppendTestGate, ESPMode::ThreadSafe> Gate =
+		ActiveBackgroundAppendTestGate;
+	return Gate && Gate->WorkerEntered->Wait(WaitTimeMilliseconds);
+}
+
+TFuture<bool>
+USeinReplayWriter::ReleaseHeldBackgroundAppendAfterWriterWaitForTests(
+	uint32 WaitTimeMilliseconds) const
+{
+	check(IsInGameThread());
+	const TSharedPtr<FSeinReplayAsyncAppendTestGate, ESPMode::ThreadSafe> Gate =
+		ActiveBackgroundAppendTestGate;
+	return Async(EAsyncExecution::Thread,
+		[Gate, WaitTimeMilliseconds]()
+		{
+			if (!Gate)
+			{
+				return false;
+			}
+			const bool bWriterWaited =
+				Gate->WriterWaitEntered->Wait(WaitTimeMilliseconds);
+			Gate->ReleaseWorker->Trigger();
+			return bWriterWaited;
+		});
+}
+
+void USeinReplayWriter::ReleaseHeldBackgroundAppendForTests()
+{
+	check(IsInGameThread());
+	if (NextBackgroundAppendTestGate)
+	{
+		NextBackgroundAppendTestGate->ReleaseWorker->Trigger();
+		NextBackgroundAppendTestGate.Reset();
+	}
+	if (ActiveBackgroundAppendTestGate)
+	{
+		ActiveBackgroundAppendTestGate->ReleaseWorker->Trigger();
+	}
 }
 #endif
 
@@ -1239,6 +1328,9 @@ bool USeinReplayWriter::AppendJournalFrame(
 		const bool bForceBackgroundFailure =
 			bFailNextBackgroundAppendForTests;
 		bFailNextBackgroundAppendForTests = false;
+		TSharedPtr<FSeinReplayAsyncAppendTestGate, ESPMode::ThreadSafe>
+			BackgroundAppendTestGate = MoveTemp(NextBackgroundAppendTestGate);
+		ActiveBackgroundAppendTestGate = BackgroundAppendTestGate;
 #else
 		constexpr bool bForceBackgroundFailure = false;
 #endif
@@ -1250,16 +1342,36 @@ bool USeinReplayWriter::AppendJournalFrame(
 			 FrameBytes = MoveTemp(FrameBytes),
 			 WeakThis,
 			 ScheduledGeneration,
+#if WITH_DEV_AUTOMATION_TESTS
+			 BackgroundAppendTestGate,
+#endif
 			 bForceBackgroundFailure]() mutable
 			{
 				FSeinReplayAsyncAppendResult Result;
-				if (bForceBackgroundFailure)
+				bool bAppendAllowed = true;
+#if WITH_DEV_AUTOMATION_TESTS
+				if (BackgroundAppendTestGate)
+				{
+					BackgroundAppendTestGate->WorkerEntered->Trigger();
+					constexpr uint32 TestGateTimeoutMilliseconds = 30000;
+					bAppendAllowed = BackgroundAppendTestGate->ReleaseWorker->Wait(
+						TestGateTimeoutMilliseconds);
+					if (!bAppendAllowed)
+					{
+						Result.Error = TEXT(
+							"background append test gate timed out");
+					}
+				}
+#endif
+				if (bAppendAllowed && bForceBackgroundFailure)
 				{
 					Result.Error = TEXT(
 						"synthetic background append failure");
 				}
-				else
+				else if (bAppendAllowed)
 				{
+					TRACE_CPUPROFILER_EVENT_SCOPE(
+						Sein_Replay_BackgroundDurableAppend);
 					Result.bSucceeded =
 						SeinReplayFileIO::AppendAtExpectedOffset(
 							AppendPath,
@@ -1283,11 +1395,16 @@ bool USeinReplayWriter::AppendJournalFrame(
 		return true;
 	}
 
-	if (!SeinReplayFileIO::AppendAtExpectedOffset(
+	bool bAppendSucceeded = false;
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Replay_SynchronousDurableAppend);
+		bAppendSucceeded = SeinReplayFileIO::AppendAtExpectedOffset(
 			ActivePartialPath,
 			static_cast<int64>(PersistedBytes),
 			FrameBytes,
-			Error))
+			Error);
+	}
+	if (!bAppendSucceeded)
 	{
 		FailRecording(FString::Printf(
 			TEXT("replay append failed: %s"), *Error));
@@ -1436,6 +1553,8 @@ bool USeinReplayWriter::CaptureCheckpointInternal(
 				Result.SnapshotTick = EncodeWork->Snapshot.CurrentTick;
 				FSeinSnapshotEnvelopeMetadata Metadata;
 				{
+					TRACE_CPUPROFILER_EVENT_SCOPE(
+						Sein_Replay_Checkpoint_EncodeEnvelope);
 					// Reflected serialization reads frozen UObject class/path metadata.
 					// The work's snapshot guard pins references; this guard prevents GC
 					// from mutating object reachability while the worker reads them.
@@ -1659,6 +1778,9 @@ void USeinReplayWriter::FailRecording(
 	const FString& Reason,
 	bool bTickFailure)
 {
+#if WITH_DEV_AUTOMATION_TESTS
+	ReleaseHeldBackgroundAppendForTests();
+#endif
 	if (bTickFailure)
 	{
 		bTickObservationFailed = true;

@@ -13,7 +13,7 @@ This order minimizes rework. Do not start a later stage by weakening an earlier 
 - Foundation fixed-vector, PRNG draw-order/unit, and ray/box defects have focused regression tests.
 - Development/UHT, Shipping, Unit, Integration, Determinism, and fresh-process A/B passed after the trim.
 - PIE-only gates remain explicitly recorded as human runtime oracles.
-- The clean local `main` is not pushed unless the user requests it.
+- The consolidated baseline is preserved on synchronized local and remote `main`.
 
 Exit: clean tree, no obsolete tracked artifacts, exact gate evidence, and one unambiguous roadmap.
 
@@ -54,11 +54,13 @@ CI gate because this engine distribution rejects those target types before proje
     canonical-root-gated authorship activation;
   - streaming replay finalization and standalone checkpoint seek; and
   - exact end-tick and canonical-root agreement between replay and authoritative server.
-- Replay v9 automatic periodic checkpoint frames use the ordered background durable-append worker; checkpoint
-  persistence state advances only after worker success. Integration coverage proves asynchronous
-  worker failure and real write denial stop recording without publishing false durability or deleting
-  the partial journal. Snapshot capture/envelope encoding and pressure-forced drains remain main-thread
-  work pending measured long-session and slow/exhausted-storage qualification.
+- Replay v9 automatic periodic checkpoints encode and durably append through one ordered background
+  pipeline; persistence state advances only after worker success. Integration coverage holds that
+  append before file I/O, accumulates eligible turns to the exact resident bound without false
+  durability or overtaking, and proves the pressure-forced wait drains and publishes a valid ordered
+  journal after release. Worker failure and real write denial stop recording without deleting the
+  partial journal. Periodic snapshot capture, mandatory writes/final publication, and pressure drains
+  remain main-thread work pending real-device long-session and exhausted-storage qualification.
 - The packaged run exposed and closed three release-only integration defects: lobby maps now
   materialize relays from their final authoritative slot bindings, Shipping builds no longer hide
   restore work inside compiled-out assertions, and dropped slots can reclaim their retained relay
@@ -70,7 +72,7 @@ CI gate because this engine distribution rejects those target types before proje
 Exit: reached locally for the supported packaged Game/listen-server topology. The source-engine
 Client/Dedicated Server CI gate remains explicitly red rather than inferred from this result.
 
-## 3. Qualify the CoH-style gameplay backbone
+## 3. Qualify the squad-tactical gameplay backbone
 
 ### Movement+
 
