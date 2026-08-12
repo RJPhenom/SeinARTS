@@ -1,6 +1,6 @@
 # Getting Started with SeinARTS
 
-**Document version:** 0.3
+**Document version:** 0.4
 
 ## Install
 
@@ -39,7 +39,7 @@ the asset before entering PIE; do not weaken runtime or cook compatibility check
 From the repository source integration:
 
 ```powershell
-& ".\Tools\Diagnostics\Test-SeinARTSInstallation.ps1" `
+& ".\Scripts\Diagnostics\Test-SeinARTSInstallation.ps1" `
   -Project "C:\Projects\Game\Game.uproject"
 ```
 
@@ -56,7 +56,7 @@ sequence after installation is healthy.
 2. Regenerate the simulation-content manifest and re-bake required level data.
 3. Compile representative maps and Blueprint assets.
 4. Run project automation plus the maintained multiplayer PIE matrix.
-5. For framework release work, run `Tools/Release/Invoke-ReleaseGate.ps1`; its exact-ZIP consumers,
+5. For framework release work, run `Scripts/Release/Invoke-ReleaseGate.ps1`; its exact-ZIP consumers,
    public-header compile gate, bound installation receipts, packaged runtime, reconnect, and replay
    evidence are the release qualification contract.
 

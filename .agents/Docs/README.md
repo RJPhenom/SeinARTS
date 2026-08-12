@@ -1,6 +1,6 @@
 # SeinARTS Documentation
 
-**Document version:** 0.4
+**Document version:** 0.5
 
 - `GETTING_STARTED.md`: installation, deterministic-content setup, diagnostics, and qualification.
 - `COMPATIBILITY.md`: supported engine, release cohort, SemVer, deterministic compatibility, and
@@ -11,5 +11,5 @@
 - `FIRST_SKIRMISH.md`: project-owned settings, unit, map, manifest, and two-player prototype
   authoring sequence.
 
-Internal engineering state and qualification receipts live under hidden `.agents/`; they are not a
+Internal engineering state and qualification receipts live under `.agents/`; they are not a
 substitute for these public adoption contracts.

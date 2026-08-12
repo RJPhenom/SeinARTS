@@ -18,7 +18,7 @@
   Engine/Plugins/Marketplace while its dependents build, then removed again
   (exactly how FAB resolves plugin-on-plugin dependencies).
 
-  This helper never publishes. Tools/Release/Invoke-ReleaseGate.ps1 is the only
+  This helper never publishes. Scripts/Release/Invoke-ReleaseGate.ps1 is the only
   publication entrypoint; it owns host builds, tests, exact-artifact consumer
   qualification, immutable hash verification, evidence, and GitHub release creation.
 
@@ -75,7 +75,7 @@ catch {
 
 try {
 if (-not $PackageOnly) {
-    throw 'PackagePlugins.ps1 is package-only. Use Tools/Release/Invoke-ReleaseGate.ps1 to qualify and publish, or pass -PackageOnly for diagnostics.'
+    throw 'PackagePlugins.ps1 is package-only. Use Scripts/Release/Invoke-ReleaseGate.ps1 to qualify and publish, or pass -PackageOnly for diagnostics.'
 }
 
 function Test-SeinSemVer([string] $Candidate)
@@ -209,7 +209,10 @@ try {
 
         if ($p -ceq 'SeinARTSFramework') {
             $PublicDocs = Join-Path $ProjectRoot 'Docs'
-            $PublicDiagnostics = Join-Path $ProjectRoot 'Tools\Diagnostics'
+            if (-not (Test-Path -LiteralPath $PublicDocs -PathType Container)) {
+                $PublicDocs = Join-Path $ProjectRoot '.agents\Docs'
+            }
+            $PublicDiagnostics = Join-Path $ProjectRoot 'Scripts\Diagnostics'
             if (-not (Test-Path -LiteralPath $PublicDocs -PathType Container) -or
                 -not (Test-Path -LiteralPath $PublicDiagnostics -PathType Container)) {
                 throw 'Framework public documentation or diagnostics are missing.'
@@ -312,7 +315,7 @@ $ReleaseManifestPath = Join-Path $Dist 'release-manifest.json'
     -LiteralPath $ReleaseManifestPath -Encoding utf8
 
 $ConsumerMatrix = Join-Path $ProjectRoot `
-    'Tools\ConsumerMatrix\Verify-ConsumerMatrix.ps1'
+    'Scripts\ConsumerMatrix\Verify-ConsumerMatrix.ps1'
 if (-not (Test-Path -LiteralPath $ConsumerMatrix -PathType Leaf)) {
     throw "Release consumer-matrix gate is missing: '$ConsumerMatrix'."
 }

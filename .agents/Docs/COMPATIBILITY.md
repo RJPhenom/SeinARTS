@@ -1,6 +1,6 @@
 # SeinARTS Compatibility Policy
 
-**Document version:** 0.3
+**Document version:** 0.4
 
 SeinARTS ships its five production plugins as one versioned cohort. Install Framework, Squad,
 Cover, Movement+, and Cover+Squad artifacts from the same release. Mixing release versions is
@@ -41,7 +41,7 @@ diagnostic evidence must remain inspectable.
 ## Release evidence
 
 A publishable release must come from one clean, pushed commit and pass
-`Tools/Release/Invoke-ReleaseGate.ps1`. The release manifest binds that commit to the UE version,
+`Scripts/Release/Invoke-ReleaseGate.ps1`. The release manifest binds that commit to the UE version,
 artifact dependency set, sizes, and SHA-256 hashes. Exact packaged ZIPs, not repository source,
 then pass the downstream consumer matrix and independent public-header compilation gate. The
 qualified receipt also binds exact test attempts/indexes/build provenance, consumer run IDs,

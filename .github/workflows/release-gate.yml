@@ -38,7 +38,7 @@ jobs:
           SEIN_RELEASE_VERSION: ${{ inputs.version }}
           SEIN_ENGINE_ROOT: ${{ inputs.engine_root }}
         run: |
-          & ./Tools/Release/Invoke-ReleaseGate.ps1 `
+          & ./Scripts/Release/Invoke-ReleaseGate.ps1 `
             -Version $env:SEIN_RELEASE_VERSION `
             -EngineRoot $env:SEIN_ENGINE_ROOT
 
@@ -54,6 +54,6 @@ jobs:
             Saved/Automation/*/index.json
             Saved/ConsumerMatrix/*/matrix-result.json
             Saved/ConsumerMatrix/*/Saved/PublicHeaderAudit.json
-            dist/logs/*.log
-            dist/release-manifest.json
-            dist/SeinARTS-release-evidence.zip
+            .dist/logs/*.log
+            .dist/release-manifest.json
+            .dist/SeinARTS-release-evidence.zip

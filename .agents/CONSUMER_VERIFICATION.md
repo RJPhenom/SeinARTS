@@ -9,16 +9,16 @@ Run from the repository root:
 
 ```powershell
 # Epic launcher engine: all source/package/runtime gates it supports.
-& "D:/Projects/Unreal Engine/SeinARTS/Tools/ConsumerMatrix/Verify-ConsumerMatrix.ps1" -SkipClientServer
+& "D:/Projects/Unreal Engine/SeinARTS/Scripts/ConsumerMatrix/Verify-ConsumerMatrix.ps1" -SkipClientServer
 
 # Source/installed engine with Client and Server target support: release gate.
-& "D:/Projects/Unreal Engine/SeinARTS/Tools/ConsumerMatrix/Verify-ConsumerMatrix.ps1" -EngineRoot "D:/Engines/UE_5.8"
+& "D:/Projects/Unreal Engine/SeinARTS/Scripts/ConsumerMatrix/Verify-ConsumerMatrix.ps1" -EngineRoot "D:/Engines/UE_5.8"
 
 # Qualify the exact ZIPs emitted by PackagePlugins.ps1, not repository source.
-& "D:/Projects/Unreal Engine/SeinARTS/Tools/ConsumerMatrix/Verify-ConsumerMatrix.ps1" -EngineRoot "D:/Engines/UE_5.8" -ArtifactDirectory "D:/Projects/Unreal Engine/SeinARTS/.dist" -AuditPublicHeaders
+& "D:/Projects/Unreal Engine/SeinARTS/Scripts/ConsumerMatrix/Verify-ConsumerMatrix.ps1" -EngineRoot "D:/Engines/UE_5.8" -ArtifactDirectory "D:/Projects/Unreal Engine/SeinARTS/.dist" -AuditPublicHeaders
 
 # Complete build/test/package/artifact-consumer gate; publication is the final step.
-& "D:/Projects/Unreal Engine/SeinARTS/Tools/Release/Invoke-ReleaseGate.ps1" -Version 1.2.0 -EngineRoot "D:/Engines/UE_5.8"
+& "D:/Projects/Unreal Engine/SeinARTS/Scripts/Release/Invoke-ReleaseGate.ps1" -Version 1.2.0 -EngineRoot "D:/Engines/UE_5.8"
 ```
 
 The tool creates projects beneath ignored `Saved/ConsumerMatrix` for five profiles:
@@ -69,7 +69,7 @@ header audit writes an exact header manifest and count into the consumer evidenc
 but it is not package evidence. `-SkipRuntimeQualification` and `-SkipClientServer` are diagnostic
 escapes, not complete release evidence.
 
-`Tools/Release/Invoke-ReleaseGate.ps1` is the one release entrypoint. It runs Development Editor
+`Scripts/Release/Invoke-ReleaseGate.ps1` is the one release entrypoint. It runs Development Editor
 and Shipping builds, both test profiles across Unit/Integration/Determinism/Editor/Sim/Perf, all
 five standalone packages, and the exact-artifact consumer matrix. It writes a JSON receipt under
 `Saved/ReleaseGate`. Publication mode permits no skipped gate; `-PackageOnly` is the diagnostic mode.
