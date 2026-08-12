@@ -193,19 +193,22 @@ namespace SeinFormationPreviewLocal
 
 		FString Error;
 		FSeinSnapshotPoolInstanceRecord Record;
-		if (!FSeinPoolObjectCodecRegistry::CaptureObject(
-			World.GetPoolObjectCodecManifest(),
-			Source,
-			ESeinPoolObjectKind::CommandBrokerResolver,
-			/*PoolId=*/0,
-			Record,
-			Error))
 		{
-			World.InvalidateDeterministicExecutionContract(
-				FString::Printf(
-					TEXT("Formation layout could not capture resolver '%s' for isolated evaluation: %s"),
-					*Source.GetPathName(), *Error));
-			return nullptr;
+			TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Formation_PreviewScratchCapture);
+			if (!FSeinPoolObjectCodecRegistry::CaptureObject(
+				World.GetPoolObjectCodecManifest(),
+				Source,
+				ESeinPoolObjectKind::CommandBrokerResolver,
+				/*PoolId=*/0,
+				Record,
+				Error))
+			{
+				World.InvalidateDeterministicExecutionContract(
+					FString::Printf(
+						TEXT("Formation layout could not capture resolver '%s' for isolated evaluation: %s"),
+						*Source.GetPathName(), *Error));
+				return nullptr;
+			}
 		}
 
 		for (FPreviewScratchEntry& Entry : PreviewScratchCache)
@@ -222,13 +225,16 @@ namespace SeinFormationPreviewLocal
 			break;
 		}
 
-		UObject* ScratchObject = FSeinPoolObjectCodecRegistry::
-			MaterializeObject(
+		UObject* ScratchObject = nullptr;
+		{
+			TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Formation_PreviewScratchMaterialize);
+			ScratchObject = FSeinPoolObjectCodecRegistry::MaterializeObject(
 				World.GetPoolObjectCodecManifest(),
 				Record,
 				ESeinPoolObjectKind::CommandBrokerResolver,
 				*GetTransientPackage(),
 				Error);
+		}
 		USeinCommandBrokerResolver* Scratch =
 			Cast<USeinCommandBrokerResolver>(ScratchObject);
 		if (!Scratch)
@@ -277,11 +283,15 @@ namespace SeinFormationPreviewLocal
 				});
 		FString Error;
 		FSeinSnapshotPoolInstanceRecord ScratchRecord;
-		const bool bCaptured = Entry
-			&& FSeinPoolObjectCodecRegistry::CaptureObject(
+		bool bCaptured = false;
+		if (Entry)
+		{
+			TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Formation_PreviewScratchRevalidate);
+			bCaptured = FSeinPoolObjectCodecRegistry::CaptureObject(
 				World.GetPoolObjectCodecManifest(), Scratch,
 				ESeinPoolObjectKind::CommandBrokerResolver, 0,
 				ScratchRecord, Error);
+		}
 		const bool bMatches = bCaptured
 			&& Entry->SourceCapturedBytes == ScratchRecord.StateBytes;
 		if (!bMatches)

@@ -81,6 +81,15 @@ bool USeinCommandAuthorityView::CanPlayerControlEntity(
 		*World, Player, Entity, CommandType, World->GetCurrentTick());
 }
 
+bool USeinCommandAuthorityView::HasPairCapability(
+	FSeinPlayerID SourcePlayer,
+	FSeinPlayerID TargetPlayer,
+	FGameplayTag CapabilityTag) const
+{
+	return World && World->HasPairCapability(
+		SourcePlayer, TargetPlayer, CapabilityTag);
+}
+
 bool USeinCommandAuthorityPolicy::AuthorizeCommand_Implementation(
 	const USeinCommandAuthorityView* View,
 	const FSeinCommand& Command,

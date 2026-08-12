@@ -28,15 +28,20 @@ param(
     [string]   $Platform = 'Win64',
     [ValidateSet('Debug', 'DebugGame', 'Development', 'Shipping', 'Test')]
     [string]   $Config   = 'Development',
-    [string[]] $ExtraArgs
+    [string[]] $ExtraArgs,
+    [string]   $EngineRoot
 )
 
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = $PSScriptRoot
 $Uproject    = Join-Path $ProjectRoot 'SeinARTS.uproject'
 
-# --- Resolve the engine (known path first, registry fallback) -----------------
-$Engine = 'C:\Program Files\Epic Games\UE_5.8'
+# --- Resolve the engine (explicit path, known path, registry fallback) --------
+$Engine = if ($EngineRoot) {
+    (Resolve-Path -LiteralPath $EngineRoot).Path
+} else {
+    'C:\Program Files\Epic Games\UE_5.8'
+}
 if (-not (Test-Path $Engine)) {
     $assoc = (Get-Content $Uproject -Raw | ConvertFrom-Json).EngineAssociation
     foreach ($root in @('HKLM:\SOFTWARE\EpicGames\Unreal Engine',
@@ -50,7 +55,16 @@ if (-not (Test-Path $Engine)) {
 
 $BuildBat = Join-Path $Engine 'Engine\Build\BatchFiles\Build.bat'
 if (-not (Test-Path $BuildBat)) {
-    throw "UE Build.bat not found at '$BuildBat'. Edit `$Engine in Build.ps1 to point at your UE 5.8 install."
+    throw "UE Build.bat not found at '$BuildBat'. Pass -EngineRoot with a UE 5.8 installation."
+}
+$EngineVersionPath = Join-Path $Engine 'Engine\Build\Build.version'
+if (-not (Test-Path -LiteralPath $EngineVersionPath -PathType Leaf)) {
+    throw "UE build identity is missing: '$EngineVersionPath'."
+}
+$EngineVersion = Get-Content -Raw -LiteralPath $EngineVersionPath | ConvertFrom-Json
+if ([int]$EngineVersion.MajorVersion -ne 5 -or
+    [int]$EngineVersion.MinorVersion -ne 8) {
+    throw "SeinARTS requires UE 5.8; '$Engine' reports $($EngineVersion.MajorVersion).$($EngineVersion.MinorVersion)."
 }
 
 # --- Warn if the editor is open (locked DLLs -> link failure) -----------------

@@ -19,6 +19,7 @@
 #include "Math/MathLib.h"
 
 #include "Engine/World.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinCoverDefault, Log, All);
 
@@ -348,6 +349,7 @@ FGameplayTag USeinCoverDefault::QueryBestCoverQualityAt(FFixedVector WorldPoint,
 TArray<FSeinCoverSlotCandidate> USeinCoverDefault::FindNearbySlots(FFixedVector Origin,
 	FFixedPoint Radius, FSeinPlayerID Observer) const
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Cover_FindNearbySlots);
 	TArray<FSeinCoverSlotCandidate> Result;
 
 	USeinWorldSubsystem* WorldSub = World.Get();
@@ -391,34 +393,37 @@ TArray<FSeinCoverSlotCandidate> USeinCoverDefault::FindNearbySlots(FFixedVector 
 	};
 	TArray<FGatheredProvider> Providers;
 	Providers.Reserve(RegisteredProviders.Num());
-	for (int32 ProviderIdx = 0; ProviderIdx < RegisteredProviders.Num(); ++ProviderIdx)
 	{
-		const FSeinEntityHandle& ProviderHandle = RegisteredProviders[ProviderIdx];
-		const FSeinEntity* Entity = WorldSub->GetEntity(ProviderHandle);
-		if (!Entity) continue;
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Cover_GatherProviders);
+		for (int32 ProviderIdx = 0; ProviderIdx < RegisteredProviders.Num(); ++ProviderIdx)
+		{
+			const FSeinEntityHandle& ProviderHandle = RegisteredProviders[ProviderIdx];
+			const FSeinEntity* Entity = WorldSub->GetEntity(ProviderHandle);
+			if (!Entity) continue;
 
-		const FFixedVector ProviderLocation = Entity->Transform.GetLocation();
-		const FFixedPoint Reach = RegisteredProviderReaches.IsValidIndex(ProviderIdx)
-			? RegisteredProviderReaches[ProviderIdx] : FFixedPoint::Zero;
-		const FFixedPoint TotalReach = Radius + Reach;
-		if (FFixedVector::DistSquared(ProviderLocation, Origin) > TotalReach * TotalReach) continue;
+			const FFixedVector ProviderLocation = Entity->Transform.GetLocation();
+			const FFixedPoint Reach = RegisteredProviderReaches.IsValidIndex(ProviderIdx)
+				? RegisteredProviderReaches[ProviderIdx] : FFixedPoint::Zero;
+			const FFixedPoint TotalReach = Radius + Reach;
+			if (FFixedVector::DistSquared(ProviderLocation, Origin) > TotalReach * TotalReach) continue;
 
-		// Per-observer fog filter — snap callers pass the ordering player so cover
-		// they haven't scouted doesn't influence the result; combat / AI pass an
-		// invalid Observer to disable filtering.
-		if (!SeinCoverDefaultLocal::IsProviderVisibleToObserver(WorldSub, ProviderHandle, Observer)) continue;
+			// Per-observer fog filter — snap callers pass the ordering player so cover
+			// they haven't scouted doesn't influence the result; combat / AI pass an
+			// invalid Observer to disable filtering.
+			if (!SeinCoverDefaultLocal::IsProviderVisibleToObserver(WorldSub, ProviderHandle, Observer)) continue;
 
-		const FSeinCoverComponent* Cover = WorldSub->GetComponent<FSeinCoverComponent>(ProviderHandle);
-		if (!Cover) continue;
+			const FSeinCoverComponent* Cover = WorldSub->GetComponent<FSeinCoverComponent>(ProviderHandle);
+			if (!Cover) continue;
 
-		FGatheredProvider GP;
-		GP.Handle   = ProviderHandle;
-		GP.Index    = ProviderIdx;
-		GP.Location = ProviderLocation;
-		GP.Rotation = Entity->Transform.GetQuaternionRotation();
-		GP.Extents  = WorldSub->GetComponent<FSeinExtentsComponent>(ProviderHandle);
-		GP.Cover    = Cover;
-		Providers.Add(GP);
+			FGatheredProvider GP;
+			GP.Handle   = ProviderHandle;
+			GP.Index    = ProviderIdx;
+			GP.Location = ProviderLocation;
+			GP.Rotation = Entity->Transform.GetQuaternionRotation();
+			GP.Extents  = WorldSub->GetComponent<FSeinExtentsComponent>(ProviderHandle);
+			GP.Cover    = Cover;
+			Providers.Add(GP);
+		}
 	}
 	if (Providers.Num() == 0) return Result;
 
@@ -446,54 +451,57 @@ TArray<FSeinCoverSlotCandidate> USeinCoverDefault::FindNearbySlots(FFixedVector 
 		int32             Priority;
 	};
 	TArray<FResolvedSlot> Slots;
-	for (const FGatheredProvider& P : Providers)
 	{
-		const FFixedPoint SlotR = P.Cover->SlotRadius;
-		for (int32 SlotIdx = 0; SlotIdx < P.Cover->Slots.Num(); ++SlotIdx)
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Cover_ResolveSlots);
+		for (const FGatheredProvider& P : Providers)
 		{
-			const FFixedVector WorldPos = P.Location + P.Rotation.RotateVector(P.Cover->Slots[SlotIdx]);
-
-			// (a) Extents reject — slot circle overlaps any provider's solid body.
-			bool bRejected = false;
-			for (const FGatheredProvider& Q : Providers)
+			const FFixedPoint SlotR = P.Cover->SlotRadius;
+			for (int32 SlotIdx = 0; SlotIdx < P.Cover->Slots.Num(); ++SlotIdx)
 			{
-				if (Q.Extents && SeinCoverGeometry::CircleOverlapsExtents(
-						Q.Extents, Q.Location, Q.Rotation, WorldPos, SlotR))
-				{
-					bRejected = true;
-					break;
-				}
-			}
-			if (bRejected) continue;
+				const FFixedVector WorldPos = P.Location + P.Rotation.RotateVector(P.Cover->Slots[SlotIdx]);
 
-			// (b) Quality = best cover area the slot's circle overlaps.
-			FGameplayTag Quality = P.Cover->QualityTag;
-			int32 BestPriority = SeinCoverDefaultLocal::CoverQualityPriority(Quality);
-			for (const FGatheredProvider& Q : Providers)
-			{
-				if (Q.Cover->Area.Shape == ESeinCoverAreaShape::None) continue;
-				const int32 QPriority = SeinCoverDefaultLocal::CoverQualityPriority(Q.Cover->QualityTag);
-				if (QPriority <= BestPriority) continue;   // can't beat current best
-				if (SeinCoverGeometry::CircleOverlapsCoverArea(
-						Q.Cover->Area, Q.Location, Q.Rotation, WorldPos, SlotR))
+				// (a) Extents reject — slot circle overlaps any provider's solid body.
+				bool bRejected = false;
+				for (const FGatheredProvider& Q : Providers)
 				{
-					Quality = Q.Cover->QualityTag;
-					BestPriority = QPriority;
+					if (Q.Extents && SeinCoverGeometry::CircleOverlapsExtents(
+							Q.Extents, Q.Location, Q.Rotation, WorldPos, SlotR))
+					{
+						bRejected = true;
+						break;
+					}
 				}
-			}
+				if (bRejected) continue;
 
-			FResolvedSlot RS;
-			RS.WorldPos      = WorldPos;
-			RS.R             = SlotR;
-			RS.Quality       = Quality;
-			RS.ProtectedDir  = (P.Cover->bIsDirectional && P.Extents)
-				? SeinCoverGeometry::OutwardFromExtentsCached(P.Extents, P.Location, P.Rotation, WorldPos)
-				: FFixedVector::ZeroVector;
-			RS.Provider      = P.Handle;
-			RS.ProviderIndex = P.Index;
-			RS.SlotIndex     = SlotIdx;
-			RS.Priority      = BestPriority;
-			Slots.Add(RS);
+				// (b) Quality = best cover area the slot's circle overlaps.
+				FGameplayTag Quality = P.Cover->QualityTag;
+				int32 BestPriority = SeinCoverDefaultLocal::CoverQualityPriority(Quality);
+				for (const FGatheredProvider& Q : Providers)
+				{
+					if (Q.Cover->Area.Shape == ESeinCoverAreaShape::None) continue;
+					const int32 QPriority = SeinCoverDefaultLocal::CoverQualityPriority(Q.Cover->QualityTag);
+					if (QPriority <= BestPriority) continue;   // can't beat current best
+					if (SeinCoverGeometry::CircleOverlapsCoverArea(
+							Q.Cover->Area, Q.Location, Q.Rotation, WorldPos, SlotR))
+					{
+						Quality = Q.Cover->QualityTag;
+						BestPriority = QPriority;
+					}
+				}
+
+				FResolvedSlot RS;
+				RS.WorldPos      = WorldPos;
+				RS.R             = SlotR;
+				RS.Quality       = Quality;
+				RS.ProtectedDir  = (P.Cover->bIsDirectional && P.Extents)
+					? SeinCoverGeometry::OutwardFromExtentsCached(P.Extents, P.Location, P.Rotation, WorldPos)
+					: FFixedVector::ZeroVector;
+				RS.Provider      = P.Handle;
+				RS.ProviderIndex = P.Index;
+				RS.SlotIndex     = SlotIdx;
+				RS.Priority      = BestPriority;
+				Slots.Add(RS);
+			}
 		}
 	}
 
@@ -505,32 +513,35 @@ TArray<FSeinCoverSlotCandidate> USeinCoverDefault::FindNearbySlots(FFixedVector 
 	// winner of each overlapping cluster is its highest-quality member.
 	// ======================================================================
 	TArray<int32> Order;
-	Order.Reserve(Slots.Num());
-	for (int32 i = 0; i < Slots.Num(); ++i) Order.Add(i);
-	Order.Sort([&Slots](int32 A, int32 B)
-	{
-		if (Slots[A].Priority != Slots[B].Priority)           return Slots[A].Priority > Slots[B].Priority;
-		if (Slots[A].ProviderIndex != Slots[B].ProviderIndex) return Slots[A].ProviderIndex < Slots[B].ProviderIndex;
-		return Slots[A].SlotIndex < Slots[B].SlotIndex;
-	});
-
 	TArray<int32> Accepted;
-	Accepted.Reserve(Slots.Num());
-	for (int32 OrderIdx : Order)
 	{
-		const FResolvedSlot& S = Slots[OrderIdx];
-		bool bOverlaps = false;
-		for (int32 AcceptedIdx : Accepted)
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Cover_DeduplicateSlots);
+		Order.Reserve(Slots.Num());
+		for (int32 i = 0; i < Slots.Num(); ++i) Order.Add(i);
+		Order.Sort([&Slots](int32 A, int32 B)
 		{
-			const FResolvedSlot& A = Slots[AcceptedIdx];
-			if (SeinGeometry::SphereIntersectsSphere(
-					FFixedSphere(S.WorldPos, S.R), FFixedSphere(A.WorldPos, A.R)))
+			if (Slots[A].Priority != Slots[B].Priority)           return Slots[A].Priority > Slots[B].Priority;
+			if (Slots[A].ProviderIndex != Slots[B].ProviderIndex) return Slots[A].ProviderIndex < Slots[B].ProviderIndex;
+			return Slots[A].SlotIndex < Slots[B].SlotIndex;
+		});
+
+		Accepted.Reserve(Slots.Num());
+		for (int32 OrderIdx : Order)
+		{
+			const FResolvedSlot& S = Slots[OrderIdx];
+			bool bOverlaps = false;
+			for (int32 AcceptedIdx : Accepted)
 			{
-				bOverlaps = true;
-				break;
+				const FResolvedSlot& A = Slots[AcceptedIdx];
+				if (SeinGeometry::SphereIntersectsSphere(
+						FFixedSphere(S.WorldPos, S.R), FFixedSphere(A.WorldPos, A.R)))
+				{
+					bOverlaps = true;
+					break;
+				}
 			}
+			if (!bOverlaps) Accepted.Add(OrderIdx);
 		}
-		if (!bOverlaps) Accepted.Add(OrderIdx);
 	}
 
 	// ======================================================================
@@ -541,23 +552,26 @@ TArray<FSeinCoverSlotCandidate> USeinCoverDefault::FindNearbySlots(FFixedVector 
 	// ======================================================================
 	TArray<FFixedPoint> DistSqByCandidate;
 	DistSqByCandidate.Reserve(Accepted.Num());
-	for (int32 AcceptedIdx : Accepted)
 	{
-		const FResolvedSlot& S = Slots[AcceptedIdx];
-		const FFixedPoint DistSq = FFixedVector::DistSquared(Origin, S.WorldPos);
-		if (DistSq > RadiusSq) continue;
-		if (WorldSub->DynamicPassableResolver.IsBound() &&
-			!WorldSub->DynamicPassableResolver.Execute(S.WorldPos)) continue;
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Cover_EmitCandidates);
+		for (int32 AcceptedIdx : Accepted)
+		{
+			const FResolvedSlot& S = Slots[AcceptedIdx];
+			const FFixedPoint DistSq = FFixedVector::DistSquared(Origin, S.WorldPos);
+			if (DistSq > RadiusSq) continue;
+			if (WorldSub->DynamicPassableResolver.IsBound() &&
+				!WorldSub->DynamicPassableResolver.Execute(S.WorldPos)) continue;
 
-		FSeinCoverSlotCandidate Candidate;
-		Candidate.WorldPosition               = S.WorldPos;
-		Candidate.WorldProtectedFromDirection = S.ProtectedDir;
-		Candidate.QualityTag                  = S.Quality;
-		Candidate.ProviderHandle              = S.Provider;
-		Candidate.SlotIndex                   = S.SlotIndex;
-		Candidate.Radius                      = S.R;
-		Result.Add(MoveTemp(Candidate));
-		DistSqByCandidate.Add(DistSq);
+			FSeinCoverSlotCandidate Candidate;
+			Candidate.WorldPosition               = S.WorldPos;
+			Candidate.WorldProtectedFromDirection = S.ProtectedDir;
+			Candidate.QualityTag                  = S.Quality;
+			Candidate.ProviderHandle              = S.Provider;
+			Candidate.SlotIndex                   = S.SlotIndex;
+			Candidate.Radius                      = S.R;
+			Result.Add(MoveTemp(Candidate));
+			DistSqByCandidate.Add(DistSq);
+		}
 	}
 
 	// Sort by ascending DistSq using the cached values rather than recomputing

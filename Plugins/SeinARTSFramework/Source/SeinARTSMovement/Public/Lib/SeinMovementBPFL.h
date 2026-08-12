@@ -23,6 +23,7 @@
 #include "CoreMinimal.h"
 #include "Kismet/BlueprintFunctionLibrary.h"
 #include "Core/SeinEntityHandle.h"
+#include "Types/FixedPoint.h"
 #include "SeinMovementBPFL.generated.h"
 
 class USeinWorldSubsystem;
@@ -151,8 +152,19 @@ public:
 
 	/** Reads a custom render/anim value a movement mode wrote at a slot (see Set Render Value on the Sein
 	 *  Mover Handle). Returns 0 if the unit has no value at that slot. Drives visuals only. */
-	UFUNCTION(BlueprintPure, Category = "SeinARTS|Movement", meta = (WorldContext = "WorldContextObject", DisplayName = "Get Movement Render Value"))
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|Movement",
+		meta = (WorldContext = "WorldContextObject",
+			DisplayName = "Get Movement Render Value",
+			SeinPresentationOnly))
 	static float SeinGetMovementRenderValue(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, int32 Slot);
+
+	/** Native presentation read that preserves fixed-point precision until the
+	 * caller performs its final render-boundary conversion. */
+	static bool GetMovementRenderValueFixed(
+		const UObject* WorldContextObject,
+		FSeinEntityHandle EntityHandle,
+		int32 Slot,
+		FFixedPoint& OutValue);
 
 	// ===== Movement control =====
 

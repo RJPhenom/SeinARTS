@@ -36,6 +36,7 @@
 #include "Core/SeinEntityHandle.h"
 #include "Navigation/SeinNavAgentProfile.h"
 #include "Types/FixedPoint.h"
+#include "Types/Transform.h"
 #include "Types/Vector.h"
 #include "Types/Quat.h"
 #include "SeinPathTypes.h"
@@ -91,6 +92,63 @@ struct FSeinMovementContext
 	 *  applied via USeinMovement::EffectiveTopSpeed so every mode scales uniformly.
 	 *  Independent of nav routing cost. Default 1 (no terrain effect / no data). */
 	FFixedPoint TerrainSpeedMultiplier = FFixedPoint::One;
+};
+
+/** Restricted write surface for presentation-only movement output. It cannot
+ * expose or mutate any canonical FSeinMovementComponent field. */
+class FSeinMovementRenderStateWriter
+{
+public:
+	explicit FSeinMovementRenderStateWriter(
+		TArray<FFixedPoint>& InRenderState)
+		: RenderState(InRenderState)
+	{
+	}
+
+	void SetValue(int32 Slot, FFixedPoint Value)
+	{
+		if (Slot < 0 || Slot >= 64)
+		{
+			return;
+		}
+		if (Slot >= RenderState.Num())
+		{
+			RenderState.SetNumZeroed(Slot + 1);
+		}
+		RenderState[Slot] = Value;
+	}
+
+	FFixedPoint GetValue(int32 Slot) const
+	{
+		return RenderState.IsValidIndex(Slot)
+			? RenderState[Slot]
+			: FFixedPoint::Zero;
+	}
+
+	void Reset()
+	{
+		RenderState.Reset();
+	}
+
+private:
+	TArray<FFixedPoint>& RenderState;
+};
+
+/** Final transform delta observed after collision, containment, and all other
+ * authoritative PostTick mutation, plus the movement driver's own velocity
+ * output before those corrections. This is presentation input only: movement
+ * modes may write Transient render state from it but must not feed it back into
+ * simulation state. The first sample after spawn/restore has no predecessor. */
+struct FSeinSettledMovementRenderContext
+{
+	FFixedTransform PreviousTransform;
+	FFixedTransform CurrentTransform;
+	FFixedVector PreviousSettledVelocity = FFixedVector::ZeroVector;
+	FFixedVector SettledVelocity = FFixedVector::ZeroVector;
+	FFixedVector PreviousDriverVelocity = FFixedVector::ZeroVector;
+	FFixedVector DriverVelocity = FFixedVector::ZeroVector;
+	FFixedPoint DeltaTime = FFixedPoint::Zero;
+	bool bHasPreviousSample = false;
 };
 
 /**
@@ -201,6 +259,17 @@ public:
 	 *  BP-authored modes). A mode that needs full control of the tick (the Movement+ vehicles)
 	 *  overrides Tick(Ctx) directly and bypasses the harness + ComputeMotion entirely. */
 	virtual bool Tick(const FSeinMovementContext& Ctx);
+
+	/** Presentation-only FinalObservation hook. Called after collision and nav
+	 * containment with the body's final transform delta plus the movement
+	 * driver's velocity output. Implementations may update only
+	 * FSeinMovementComponent::RenderState. */
+	virtual void UpdateSettledRenderState(
+		const FSeinSettledMovementRenderContext& Context,
+		const FSeinMovementComponent& MovementData,
+		FSeinMovementRenderStateWriter& Writer) const
+	{
+	}
 
 	/** The single steering-POLICY hook: return this unit's desired motion for the current tick — the
 	 *  intended planar velocity, and the yaw to turn toward (or bUpdateFacing = false to hold facing).
@@ -427,7 +496,8 @@ public:
 
 	/** Minimum turn radius (world units) the unit's steering can physically
 	 *  execute — 0 means it can pivot in place (no radius constraint). This is a
-	 *  per-unit QUERY: it REPORTS the radius; nothing in the base acts on it yet.
+	 *  per-unit QUERY: base movement reports the radius while opt-in planners may
+	 *  use it to shape typed path segments.
 	 *
 	 *  SANCTIONED base seam (NOT extension-anticipation): the movement base is
 	 *  deliberately purpose-built for vehicle movement — PlanPath / PlannerHandle /
@@ -436,10 +506,10 @@ public:
 	 *  the base; the producer (the curve planner) is a Movement+ concern. Do not flag
 	 *  this as a "base must not anticipate extensions" violation.
 	 *
-	 *  Intended consumer: a Movement+ vehicle planner (see PlanPath) would read it
-	 *  to round path corners into drivable arcs and to slow before turns tighter
-	 *  than the radius. That curve-fitting / curvature-throttle is NOT built today —
-	 *  this hook exists so the planner can read the radius when it lands.
+	 *  Movement+ Wheeled and Tracked read it while evaluating their bounded,
+	 *  clearance-probed start-maneuver candidates. The shipped planner may prepend
+	 *  departure arcs, reverse, K-turn, or reverse-out segments; it is not a general
+	 *  downstream route curve fitter and base movement remains a neutral consumer.
 	 *
 	 *  Default 0. Infantry, BasicMovement, and tracked vehicles (which pivot in
 	 *  place) leave it at 0. Wheeled overrides via the bicycle identity
@@ -451,10 +521,10 @@ public:
 
 	/** The tightest turn the unit can make, in world units. Return 0 for no limit (it can pivot).
 	 *
-	 *  Reports the unit's turn radius so a vehicle planner can shape its driving (round corners into
-	 *  drivable arcs, slow before tight turns). That planner is a Movement+ feature not yet built, so
-	 *  today the value is read but nothing acts on it. A wheeled vehicle computes it from its wheelbase
-	 *  and steering angle; pivoting units leave it 0. Read it from your tuning variables (per unit). */
+	 *  Reports the unit's turn radius so a vehicle planner can shape its driving. Movement+ uses this
+	 *  for bounded start-maneuver planning; it does not currently curve-fit the full downstream route.
+	 *  A wheeled vehicle computes it from wheelbase and steering angle; pivoting units leave it 0.
+	 *  Read it from your tuning variables (per unit). */
 	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Movement", meta = (DisplayName = "Get Min Turn Radius"))
 	FFixedPoint BP_GetMinTurnRadius() const;
 	virtual FFixedPoint BP_GetMinTurnRadius_Implementation() const { return FFixedPoint::Zero; }

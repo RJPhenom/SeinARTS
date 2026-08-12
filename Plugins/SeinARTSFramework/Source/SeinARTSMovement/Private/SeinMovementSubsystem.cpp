@@ -9,6 +9,7 @@
 #include "Actions/SeinMoveToAction.h"
 #include "Simulation/SeinAvoidanceSystem.h"
 #include "Simulation/SeinMovementDriverSystem.h"
+#include "Simulation/SeinMovementPresentationSystem.h"
 #include "Simulation/SeinMovementTraceSystem.h"
 #include "Simulation/SeinNavContainmentSystem.h"
 #include "Simulation/SeinWorldSubsystem.h"
@@ -69,6 +70,14 @@ void USeinMovementSubsystem::Initialize(
 	NavContainmentSystem = new FSeinNavContainmentSystem();
 	Sim->RegisterSystem(NavContainmentSystem);
 
+	// Presentation telemetry samples the final PostTick transform after every
+	// authoritative mover. It writes only Transient RenderState values.
+	PresentationSystem = new FSeinMovementPresentationSystem(this);
+	Sim->RegisterSystem(PresentationSystem);
+	Sim->OnAuthoritativeStateRestored.AddUObject(
+		this,
+		&USeinMovementSubsystem::HandleAuthoritativeStateRestored);
+
 	// Observation-only crowd-jam trace (PostTick 90). Registered unconditionally on
 	// every client — it no-ops unless `log LogSeinMoveTrace Verbose` and never writes
 	// sim state, so lockstep is indifferent to it.
@@ -105,6 +114,7 @@ void USeinMovementSubsystem::ReleaseModuleOwnedStateForModuleUnload()
 	}
 	if (Sim)
 	{
+		Sim->OnAuthoritativeStateRestored.RemoveAll(this);
 		// Core ignores ordinary world teardown. During DLL unload this stops a
 		// consumed match before any registered system or UObject vtable leaves.
 		Sim->TerminateAndReleaseForModuleUnload(
@@ -126,6 +136,12 @@ void USeinMovementSubsystem::ReleaseModuleOwnedStateForModuleUnload()
 		if (Sim) Sim->UnregisterSystem(TraceSystem);
 		delete TraceSystem;
 		TraceSystem = nullptr;
+	}
+	if (PresentationSystem)
+	{
+		if (Sim) Sim->UnregisterSystem(PresentationSystem);
+		delete PresentationSystem;
+		PresentationSystem = nullptr;
 	}
 	if (NavContainmentSystem)
 	{
@@ -158,6 +174,14 @@ void USeinMovementSubsystem::ReleaseModuleOwnedStateForModuleUnload()
 	MovementStateRevisions.Reset();
 	RoutineRootCache.Reset();
 	BumpMovementTopologyRevision();
+}
+
+void USeinMovementSubsystem::HandleAuthoritativeStateRestored()
+{
+	if (PresentationSystem)
+	{
+		PresentationSystem->ResetSamples();
+	}
 }
 
 namespace

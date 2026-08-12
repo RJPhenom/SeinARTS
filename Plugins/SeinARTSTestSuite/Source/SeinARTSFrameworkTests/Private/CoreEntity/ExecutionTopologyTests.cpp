@@ -310,6 +310,30 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(World->IsExecutionTopologyFrozen()));
 	}
 
+	TEST(FinalObservationRejectsCanonicalStateOwnership,
+		"SeinARTS.Unit.CoreEntity.ExecutionTopology")
+	{
+		FTopologyTestSystem InvalidObserver(
+			FSeinSystemDescriptor::WithCanonicalState(
+				TEXT("seinarts.tests.final_observation.invalid"),
+				1u,
+				ESeinTickPhase::FinalObservation,
+				0,
+				{FName(TEXT("seinarts.tests/persistent"))}));
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+
+		TestRunner->AddExpectedError(
+			TEXT("must declare stateless coverage"),
+			EAutomationExpectedErrorFlags::Contains,
+			1,
+			false);
+		ASSERT_THAT(IsFalse(World->RegisterSystem(&InvalidObserver)));
+		ASSERT_THAT(IsFalse(World->IsExecutionTopologyValid()));
+	}
+
 	TEST(ConditionalContributorRequiresSystemWhileFeatureIsActive,
 		"SeinARTS.Unit.CoreEntity.ExecutionTopology")
 	{

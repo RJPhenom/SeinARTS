@@ -10,6 +10,7 @@
 #include "Serialization/MemoryReader.h"
 #include "Serialization/MemoryWriter.h"
 #include "Serialization/ObjectAndNameAsStringProxyArchive.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 namespace SeinSnapshotTransfer
 {
@@ -19,7 +20,7 @@ namespace SeinSnapshotTransfer
 	namespace
 	{
 		/** Deterministic constant binding the section to the exact snapshot
-		 *  wire schema. Version participates so a future v14 cannot alias. */
+		 *  wire schema. Version participates so a future v15 cannot alias. */
 		bool ComputeCheckpointSchemaDigest(
 			FGuid& OutDigest, FString& OutError)
 		{
@@ -54,6 +55,7 @@ namespace SeinSnapshotTransfer
 		FSeinSnapshotEnvelopeMetadata& OutMetadata,
 		FString& OutError)
 	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_SnapshotTransfer_EncodeCheckpoint);
 		OutError.Reset();
 		if (Snapshot.SnapshotVersion != FSeinWorldSnapshot::CurrentVersion)
 		{
@@ -75,21 +77,26 @@ namespace SeinSnapshotTransfer
 			return false;
 		}
 
-		FMemoryWriter MemWriter(Section.Payload, /*bIsPersistent*/ true);
-		FObjectAndNameAsStringProxyArchive Writer(
-			MemWriter, /*bInLoadIfFindFails*/ false);
-		FSeinWorldSnapshot::StaticStruct()->SerializeItem(
-			Writer,
-			// SerializeItem is non-const by signature; saving does not mutate.
-			const_cast<FSeinWorldSnapshot*>(&Snapshot),
-			nullptr);
-		if (Writer.IsError() || Writer.IsCriticalError()
-			|| MemWriter.IsError() || MemWriter.IsCriticalError()
-			|| MemWriter.Tell() != Section.Payload.Num())
+		FSeinWorldSnapshotReferenceGuard SnapshotGCGuard(Snapshot);
 		{
-			OutError =
-				TEXT("Checkpoint payload serialization failed; no envelope was produced.");
-			return false;
+			TRACE_CPUPROFILER_EVENT_SCOPE(
+				Sein_SnapshotTransfer_SerializePayload);
+			FMemoryWriter MemWriter(Section.Payload, /*bIsPersistent*/ true);
+			FObjectAndNameAsStringProxyArchive Writer(
+				MemWriter, /*bInLoadIfFindFails*/ false);
+			FSeinWorldSnapshot::StaticStruct()->SerializeItem(
+				Writer,
+				// SerializeItem is non-const by signature; saving does not mutate.
+				const_cast<FSeinWorldSnapshot*>(&Snapshot),
+				nullptr);
+			if (Writer.IsError() || Writer.IsCriticalError()
+				|| MemWriter.IsError() || MemWriter.IsCriticalError()
+				|| MemWriter.Tell() != Section.Payload.Num())
+			{
+				OutError =
+					TEXT("Checkpoint payload serialization failed; no envelope was produced.");
+				return false;
+			}
 		}
 
 		FSeinSnapshotEnvelope Envelope;
@@ -97,8 +104,12 @@ namespace SeinSnapshotTransfer
 		Envelope.CommandProtocolDigest = Snapshot.CommandProtocolDigest;
 		Envelope.CompatibilityDigest = Snapshot.BootstrapCheckpoint.Receipt.StateContractDigest;
 		Envelope.Sections.Add(MoveTemp(Section));
-		return FSeinSnapshotEnvelopeCodec::Encode(
-			Envelope, OutBytes, OutMetadata, OutError);
+		{
+			TRACE_CPUPROFILER_EVENT_SCOPE(
+				Sein_SnapshotTransfer_FrameEnvelope);
+			return FSeinSnapshotEnvelopeCodec::Encode(
+				Envelope, OutBytes, OutMetadata, OutError);
+		}
 	}
 
 	bool DecodeCheckpointEnvelope(

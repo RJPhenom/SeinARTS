@@ -22,8 +22,10 @@
  *            4. Sync broker.Centroid + anchor from the recomputed centroid.
  *            5. Decrement per-slot CurrentCooldown toward zero.
  *            6. Tick the reinforce queue: progress front entry, on completion
- *               spawn the slot's entity class at the squad's transform and wire
- *               the new member through the standard fill path.
+ *               spawn its exact declaration-index slot's entity class at the
+ *               squad transform and wire the new member through the standard
+ *               back-reference path. Permanent invalidation refunds; transient
+ *               spawn failure remains queued for deterministic retry.
  *            7. Cull the squad when all slots are empty AND the reinforce
  *               queue is empty AND the broker has no pending orders.
  *
@@ -50,6 +52,8 @@
 #include "SeinSquadDispatchResolver.h"
 #include "SeinARTSSquadSettings.h"
 #include "Events/SeinVisualEvent.h"
+#include "Lib/SeinResourceBPFL.h"
+#include "Reinforcement/SeinSquadReinforcementService.h"
 #include "Types/Entity.h"
 
 DECLARE_LOG_CATEGORY_EXTERN(LogSeinSquadSystem, Log, All);
@@ -92,6 +96,12 @@ public:
 			++SquadsFound;
 
 			FSeinCommandBrokerData* Broker = World.GetComponentMutable<FSeinCommandBrokerData>(Handle);
+			if (Broker)
+			{
+				// Squad lifetime belongs to this system. Normalize author-injected
+				// or restored brokers before the later broker-system cull phase.
+				Broker->bSelfCullOnEmpty = false;
+			}
 
 			// 0. Lazy initialization: detected by absence of the broker. Runs
 			// once on the first tick after the squad entity spawns. Spawns each
@@ -192,10 +202,12 @@ public:
 				int32 SkippedSpawnFail = 0;
 				for (int32 SlotIdx = 0; SlotIdx < Squad->Slots.Num(); ++SlotIdx)
 				{
-					FSeinSquadSlot& Slot = Squad->Slots[SlotIdx];
+					// SpawnEntity can grow both entity and component storage. Copy
+					// every spawn input and re-fetch live storage before committing.
+					const FSeinSquadSlot SlotSnapshot = Squad->Slots[SlotIdx];
 
-					if (!Slot.Entity || Slot.Entity->HasAnyClassFlags(CLASS_Abstract)) { ++SkippedNullEntity; continue; }
-					if (SquadActorClass && Slot.Entity.Get() == SquadActorClass) { ++SkippedRecursion; continue; }
+					if (!SlotSnapshot.Entity || SlotSnapshot.Entity->HasAnyClassFlags(CLASS_Abstract)) { ++SkippedNullEntity; continue; }
+					if (SquadActorClass && SlotSnapshot.Entity.Get() == SquadActorClass) { ++SkippedRecursion; continue; }
 
 					// Slot offsets are POSITIONAL anchors — compose location +
 					// rotation only, never scale. A slot's authored Scale must not
@@ -203,15 +215,26 @@ public:
 					// the actor's render scale from it, so a degenerate authored
 					// scale (e.g. the zeroed FFixedPoint values from the fix-1
 					// serializer window) yields invisible-but-functional members.
-					FFixedTransform MemberXform = SquadXform * Slot.OffsetTransform;
+					FFixedTransform MemberXform = SquadXform * SlotSnapshot.OffsetTransform;
 					MemberXform.Scale = FFixedVector::Identity;
-					const FSeinEntityHandle Member = World.SpawnEntity(Slot.Entity, MemberXform, OwnerPlayer);
+					const FSeinEntityHandle Member = World.SpawnEntity(
+						SlotSnapshot.Entity, MemberXform, OwnerPlayer);
 					if (!Member.IsValid()) { ++SkippedSpawnFail; continue; }
+
+					Squad = World.GetComponentMutable<FSeinSquadComponent>(Handle);
+					if (!Squad || !Squad->Slots.IsValidIndex(SlotIdx)
+						|| Squad->Slots[SlotIdx].CurrentOccupant.IsValid())
+					{
+						World.DestroyEntity(Member);
+						++SkippedSpawnFail;
+						continue;
+					}
+					FSeinSquadSlot& LiveSlot = Squad->Slots[SlotIdx];
 					++SpawnedCount;
 
-					// Resolve slot's discriminator tag (first tag in container).
-					FGameplayTag SlotTag;
-					for (const FGameplayTag& Tag : Slot.SlotTags) { SlotTag = Tag; break; }
+					const FGameplayTag SlotTag =
+						FSeinSquadReinforcementService::
+							ResolveCanonicalSlotTag(LiveSlot);
 
 					// Wire FSeinSquadMemberComponent (overwrite any AC-injected default).
 					if (FSeinSquadMemberComponent* ExistingMember = World.GetComponentMutable<FSeinSquadMemberComponent>(Member))
@@ -245,7 +268,7 @@ public:
 					Broker = World.GetComponentMutable<FSeinCommandBrokerData>(Handle);
 					if (!Broker) return;
 
-					Slot.CurrentOccupant = Member;
+					LiveSlot.CurrentOccupant = Member;
 					Broker->Members.AddUnique(Member);
 
 					World.EnqueueVisualEvent(FSeinVisualEvent::MakeSquadMemberAddedEvent(Handle, Member, SlotTag));
@@ -349,8 +372,8 @@ public:
 
 				// Member entity is gone — strip the slot, emit event, drop from broker.
 				const FSeinEntityHandle Dead = Slot.CurrentOccupant;
-				FGameplayTag SlotTag;
-				for (const FGameplayTag& Tag : Slot.SlotTags) { SlotTag = Tag; break; }
+				const FGameplayTag SlotTag =
+					FSeinSquadReinforcementService::ResolveCanonicalSlotTag(Slot);
 				UE_LOG(LogSeinSquadSystem, Log,
 					TEXT("[SquadStrip] %s: member %s (slot tag=%s) is no longer alive in pool — stripping"),
 					*Handle.ToString(), *Dead.ToString(), *SlotTag.ToString());
@@ -361,7 +384,15 @@ public:
 				{
 					const int32 NumBefore = Broker->Members.Num();
 					Broker->Members.Remove(Dead);
-					if (Broker->Members.Num() != NumBefore) { Broker->bCapabilityMapDirty = true; }
+					if (Broker->Members.Num() != NumBefore)
+					{
+						Broker->bCapabilityMapDirty = true;
+						Broker->SettledSlotPositions.Reset();
+						Broker->SettledSlotFacings.Reset();
+						Broker->bSettledSlotsMemberAligned = false;
+						Broker->NextReseekAllowedTick = 0;
+						Broker->ReseekEpisodeStartTick = 0;
+					}
 				}
 			}
 
@@ -405,7 +436,10 @@ public:
 				if (Count > 0)
 				{
 					const FFixedVector Centroid = Sum / FFixedPoint::FromInt(Count);
-					Entity.Transform.Location = Centroid;
+					if (FSeinEntity* SquadEntity = World.GetEntityMutable(Handle))
+					{
+						SquadEntity->Transform.Location = Centroid;
+					}
 					if (Broker)
 					{
 						Broker->Centroid = Centroid;
@@ -534,46 +568,107 @@ public:
 			if (Squad->ReinforceQueue.Num() > 0)
 			{
 				FSeinSquadReinforceEntry& Front = Squad->ReinforceQueue[0];
-				Front.BuildProgress = Front.BuildProgress + DeltaTime;
+				if (Front.BuildProgress < Front.TotalBuildTime)
+				{
+					Front.BuildProgress = Front.BuildProgress + DeltaTime;
+					if (Front.BuildProgress > Front.TotalBuildTime)
+					{
+						Front.BuildProgress = Front.TotalBuildTime;
+					}
+				}
 
 				if (Front.BuildProgress >= Front.TotalBuildTime)
 				{
-					// Resolve target slot. If it's been refilled meanwhile (designer
-					// flow), the entry silently drops without spawning — no double-fill.
-					const int32 SlotIdx = Squad->IndexOfSlotByTag(Front.SlotTag);
-					if (SlotIdx != INDEX_NONE)
+					const FSeinSquadReinforceEntry Completed = Front;
+					const int32 SlotIdx = Completed.RequestedSlotIndex;
+					auto CancelCompleted = [&World, Squad, &Completed]()
 					{
-						FSeinSquadSlot& Slot = Squad->Slots[SlotIdx];
-						if (!Slot.CurrentOccupant.IsValid() && Slot.Entity && !Slot.Entity->HasAnyClassFlags(CLASS_Abstract))
+						if (!USeinResourceBPFL::SeinTryReverseDeduction(
+								&World,
+								Completed.ResourcePayer,
+								Completed.DeductedCost))
 						{
-							const FSeinPlayerID OwnerPlayer = World.GetEntityOwner(Handle);
-							const FFixedTransform SquadXform = Entity.Transform;
-							// Positional anchor only — see the lazy-init spawn above.
-							FFixedTransform MemberXform = SquadXform * Slot.OffsetTransform;
-							MemberXform.Scale = FFixedVector::Identity;
+							return false;
+						}
+						Squad->ReinforceQueue.RemoveAt(0);
+						return true;
+					};
 
-							const FSeinEntityHandle NewMember = World.SpawnEntity(Slot.Entity, MemberXform, OwnerPlayer);
+					if (Completed.RequestID <= 0
+						|| !Squad->Slots.IsValidIndex(SlotIdx))
+					{
+						CancelCompleted();
+					}
+					else
+					{
+						const FSeinSquadSlot& Slot = Squad->Slots[SlotIdx];
+						const UClass* SquadActorClass =
+							World.GetEntityActorClass(Handle).Get();
+						if (Slot.CurrentOccupant.IsValid()
+							|| !Slot.Entity
+							|| Slot.Entity->HasAnyClassFlags(CLASS_Abstract)
+							|| Slot.Entity.Get() == SquadActorClass)
+						{
+							CancelCompleted();
+						}
+						else
+						{
+							const FSeinPlayerID OwnerPlayer =
+								World.GetEntityOwner(Handle);
+							const FSeinEntity* SquadEntity =
+								World.GetEntity(Handle);
+							if (!SquadEntity)
+							{
+								CancelCompleted();
+								return;
+							}
+							FFixedTransform MemberXform =
+								SquadEntity->Transform * Slot.OffsetTransform;
+							MemberXform.Scale = FFixedVector::Identity;
+							const TSubclassOf<ASeinActor> MemberClass = Slot.Entity;
+							const FSeinEntityHandle NewMember =
+								World.SpawnEntity(
+									MemberClass, MemberXform, OwnerPlayer);
 							if (NewMember.IsValid())
 							{
-								// Wire member back-refs (overwrite any AC-injected defaults).
-								// SlotIndex is canonical (always unique per array position);
-								// SlotTag is role metadata that may be shared across slots.
-								// Resolvers prefer SlotIndex for formation lookup.
-								if (FSeinSquadMemberComponent* MemberData = World.GetComponentMutable<FSeinSquadMemberComponent>(NewMember))
+								// Spawn may grow component storage; never retain Slot,
+								// Squad, or Front references across it.
+								Squad = World.GetComponentMutable<
+									FSeinSquadComponent>(Handle);
+								if (!Squad
+									|| Squad->ReinforceQueue.IsEmpty()
+									|| Squad->ReinforceQueue[0].RequestID
+										!= Completed.RequestID
+									|| !Squad->Slots.IsValidIndex(SlotIdx)
+									|| Squad->Slots[SlotIdx].CurrentOccupant.IsValid())
+								{
+									World.DestroyEntity(NewMember);
+									return;
+								}
+
+								FSeinSquadSlot& LiveSlot = Squad->Slots[SlotIdx];
+								const FGameplayTag SlotTag =
+									FSeinSquadReinforcementService::
+										ResolveCanonicalSlotTag(LiveSlot);
+								if (FSeinSquadMemberComponent* MemberData =
+									World.GetComponentMutable<
+										FSeinSquadMemberComponent>(NewMember))
 								{
 									MemberData->SquadEntity = Handle;
 									MemberData->SlotIndex = SlotIdx;
-									MemberData->SlotTag = Front.SlotTag;
+									MemberData->SlotTag = SlotTag;
 								}
 								else
 								{
 									FSeinSquadMemberComponent NewData;
 									NewData.SquadEntity = Handle;
 									NewData.SlotIndex = SlotIdx;
-									NewData.SlotTag = Front.SlotTag;
+									NewData.SlotTag = SlotTag;
 									World.AddComponent(NewMember, NewData);
 								}
-								if (FSeinBrokerMembershipData* MembData = World.GetComponentMutable<FSeinBrokerMembershipData>(NewMember))
+								if (FSeinBrokerMembershipData* MembData =
+									World.GetComponentMutable<
+										FSeinBrokerMembershipData>(NewMember))
 								{
 									MembData->CurrentBrokerHandle = Handle;
 								}
@@ -584,29 +679,38 @@ public:
 									World.AddComponent(NewMember, NewMemb);
 								}
 
-								Slot.CurrentOccupant = NewMember;
-								Slot.CurrentCooldown = Slot.ReinforceCooldown;
-
-								// Re-fetch broker pointer (storage may have moved during AddComponent).
-								if (FSeinCommandBrokerData* BrokerAfter = World.GetComponentMutable<FSeinCommandBrokerData>(Handle))
+								LiveSlot.CurrentOccupant = NewMember;
+								LiveSlot.CurrentCooldown =
+									LiveSlot.ReinforceCooldown;
+								Squad->ReinforceQueue.RemoveAt(0);
+								if (FSeinCommandBrokerData* BrokerAfter =
+									World.GetComponentMutable<
+										FSeinCommandBrokerData>(Handle))
 								{
 									BrokerAfter->Members.AddUnique(NewMember);
 									BrokerAfter->bCapabilityMapDirty = true;
+									BrokerAfter->SettledSlotPositions.Reset();
+									BrokerAfter->SettledSlotFacings.Reset();
+									BrokerAfter->bSettledSlotsMemberAligned = false;
+									BrokerAfter->NextReseekAllowedTick = 0;
+									BrokerAfter->ReseekEpisodeStartTick = 0;
 								}
-
-								World.EnqueueVisualEvent(FSeinVisualEvent::MakeSquadMemberAddedEvent(Handle, NewMember, Front.SlotTag));
-
-								// Promote leader if the squad had none (first reinforce on a
-								// fully-emptied squad re-establishes leadership).
+								World.EnqueueVisualEvent(
+									FSeinVisualEvent::MakeSquadMemberAddedEvent(
+										Handle, NewMember, SlotTag));
 								if (!Squad->Leader.IsValid())
 								{
 									Squad->Leader = NewMember;
-									World.EnqueueVisualEvent(FSeinVisualEvent::MakeSquadLeaderChangedEvent(Handle, NewMember));
+									World.EnqueueVisualEvent(
+										FSeinVisualEvent::
+											MakeSquadLeaderChangedEvent(
+												Handle, NewMember));
 								}
 							}
+							// A transient spawn failure keeps the completed request
+							// at the front for deterministic retry without losing cost.
 						}
 					}
-					Squad->ReinforceQueue.RemoveAt(0);
 				}
 			}
 
@@ -654,7 +758,7 @@ public:
 	{
 		return FSeinSystemDescriptor::Stateless(
 			FName(TEXT("seinarts.squad.maintenance")),
-			1u,
+			3u,
 			ESeinTickPhase::PostTick,
 			SeinSystemPriority::Squad);
 	}

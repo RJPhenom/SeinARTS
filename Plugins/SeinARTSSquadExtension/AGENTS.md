@@ -67,21 +67,35 @@ settings directly.
 Squad Blueprint mutation helpers are sim-only operations. Any mutation must preserve all of:
 
 - Member-to-squad back-reference.
-- Slot occupancy and slot index/tag identity.
+- Slot occupancy and exact declaration-index identity; tags are query metadata.
 - Broker member list.
 - Leader validity.
 - Deterministic declaration/handle ordering.
 - Reinforcement and cooldown state.
+- Squad brokers must keep `bSelfCullOnEmpty=false`; Squad owns lifetime and snapshot preflight
+  rejects an unsafe broker before state commit.
 
 Re-fetch components after storage additions. Never retain raw component pointers across an add or
-spawn. Do not derive stable identity from a mutable array index when reinforcement or slot edits can
-reorder data.
+spawn. Slot declaration indices are runtime identity: do not reorder the slot array after
+initialization. Legacy whole-struct setters reject live topology; use exact index mutations.
 
 ## Reinforcement
 
 The starter reinforce ability selects an eligible empty slot in deterministic declaration order,
-charges the slot-authored cost at enqueue, and adds a deterministic build entry. Projects may
-replace this ability; reinforcement policy must not become a mandatory core rule.
+charges the slot-authored cost atomically, and adds a monotonic request carrying exact slot index,
+canonical tag metadata, snapshotted payer/cost, and build time. Exact cancellation reverses the
+deduction before removing the request. Projects may replace this ability; reinforcement policy
+must not become a mandatory core rule.
+
+Canonical slot-tag metadata is the valid tag whose exact tag-name string sorts first. Runtime,
+state hashing, and restore validation must use `FSeinSquadSlot::GetCanonicalSlotTag`; do not use
+`FName::Compare` or process-local name/tag indices.
+
+The request allocator, queue, slots, member back-references, and broker membership are canonical
+snapshot state. Restore preflight rejects non-monotonic/duplicate requests, invalid or duplicate
+slot occupancy, stale metadata, missing payers, and non-reciprocal membership before state commit.
+Advance snapshot/envelope semantics and the Squad behavior/content revisions when these contracts
+change.
 
 ## Verification
 

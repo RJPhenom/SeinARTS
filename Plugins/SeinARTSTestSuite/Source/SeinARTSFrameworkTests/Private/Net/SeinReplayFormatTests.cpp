@@ -5,6 +5,7 @@
 #include "Brokers/SeinBrokerTypes.h"
 #include "Engine/World.h"
 #include "HAL/FileManager.h"
+#include "HAL/PlatformFileManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "SeinReplayFormat.h"
@@ -19,6 +20,7 @@
 #include "Tags/SeinARTSGameplayTags.h"
 #include "TestTypes/SeinReplayTestTypes.h"
 #include "TestTypes/SeinCommandSchemaTestTypes.h"
+#include "UObject/GarbageCollection.h"
 
 struct FSeinReplayReaderTestAccess
 {
@@ -285,6 +287,31 @@ namespace UE::SeinARTSTests
 					IFileManager::Get().Delete(*Path, false, true);
 				}
 			}
+		};
+
+		struct FScopedFastReplayMaintenance
+		{
+			FScopedFastReplayMaintenance()
+			{
+				Settings = GetMutableDefault<USeinARTSCoreSettings>();
+				check(Settings);
+				PreviousCheckpointInterval =
+					Settings->ReplayCheckpointIntervalTurns;
+				PreviousTurnBatchSize = Settings->ReplayTurnBatchSize;
+				Settings->ReplayCheckpointIntervalTurns = 1;
+				Settings->ReplayTurnBatchSize = 1;
+			}
+
+			~FScopedFastReplayMaintenance()
+			{
+				Settings->ReplayCheckpointIntervalTurns =
+					PreviousCheckpointInterval;
+				Settings->ReplayTurnBatchSize = PreviousTurnBatchSize;
+			}
+
+			USeinARTSCoreSettings* Settings = nullptr;
+			int32 PreviousCheckpointInterval = 0;
+			int32 PreviousTurnBatchSize = 0;
 		};
 
 		/** Freeze a legacy v8 executable fixture so reader compatibility tests do
@@ -1382,6 +1409,149 @@ namespace UE::SeinARTSTests
 		FullTarget->StopSimulation();
 	}
 
+	TEST(ReplayScheduledCheckpointFinalizationDrainsBackgroundDurability,
+		"SeinARTS.Integration.Network.Replay")
+	{
+		FScopedFastReplayMaintenance MaintenanceSettings;
+		FActorTestSpawner SourceSpawner;
+		USeinWorldSubsystem* Source =
+			SourceSpawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(Source));
+		USeinReplayWriter* Writer = StartV9Recording(
+			*Source, MakeOnePlayerMatchSettings());
+		ASSERT_THAT(IsNotNull(Writer));
+		ASSERT_THAT(AreEqual(1, Writer->GetPersistedCheckpointCount()));
+		ASSERT_THAT(IsFalse(Writer->IsCheckpointAppendPending()));
+
+		const USeinARTSCoreSettings* Settings =
+			GetDefault<USeinARTSCoreSettings>();
+		ASSERT_THAT(IsNotNull(Settings));
+		const int32 TicksPerTurn = FMath::Max(
+			1, Settings->SimulationTickRate / Settings->TurnRate);
+		const int32 FirstTurn = Settings->InputDelayTurns;
+		const int32 EndTick = FirstTurn * TicksPerTurn;
+		Writer->RecordTurn(FirstTurn, {});
+		ASSERT_THAT(IsTrue(Source->StartSimulation()));
+		for (int32 Tick = 1; Tick <= EndTick; ++Tick)
+		{
+			FTSTicker::GetCoreTicker().Tick(
+				Source->GetFixedDeltaTimeSeconds());
+			ASSERT_THAT(AreEqual(Tick, Source->GetCurrentTick()));
+			Writer->ObserveCompletedTick(Tick);
+		}
+		Source->StopSimulation();
+
+		Writer->RunScheduledMaintenanceForTests();
+		ASSERT_THAT(AreEqual(0, Writer->GetPersistedTurnCount()));
+		Writer->FlushAppliedProgressForTests();
+		ASSERT_THAT(AreEqual(1, Writer->GetPersistedTurnCount()));
+		Writer->RunScheduledMaintenanceForTests();
+		ASSERT_THAT(IsTrue(Writer->IsCheckpointEncodePending()));
+		ASSERT_THAT(IsFalse(Writer->IsCheckpointAppendPending()));
+		CollectGarbage(RF_NoFlags);
+		ASSERT_THAT(IsTrue(Writer->IsCheckpointEncodePending()));
+		Writer->ResolveCheckpointEncodeForTests();
+		ASSERT_THAT(IsFalse(Writer->IsCheckpointEncodePending()));
+		ASSERT_THAT(IsTrue(Writer->IsCheckpointAppendPending()));
+		ASSERT_THAT(AreEqual(1, Writer->GetPersistedCheckpointCount()));
+
+		FScopedReplayFile ReplayFile{Writer->FinishRecording()};
+		ASSERT_THAT(IsFalse(ReplayFile.Path.IsEmpty()));
+		ASSERT_THAT(IsFalse(Writer->IsCheckpointAppendPending()));
+		ASSERT_THAT(AreEqual(2, Writer->GetPersistedCheckpointCount()));
+
+		FActorTestSpawner TargetSpawner;
+		USeinReplayReader* Reader = NewObject<USeinReplayReader>(
+			&TargetSpawner.GetWorld());
+		ASSERT_THAT(IsTrue(Reader->LoadFromFile(ReplayFile.Path)));
+		ASSERT_THAT(AreEqual(1, Reader->GetTurnCount()));
+		ASSERT_THAT(AreEqual(3, Reader->GetIndexedFrameCount()));
+	}
+
+	TEST(ReplayStorageFailuresStopRecordingAndPreserveThePartialJournal,
+		"SeinARTS.Integration.Network.Replay")
+	{
+		FScopedFastReplayMaintenance MaintenanceSettings;
+		const USeinARTSCoreSettings* Settings =
+			GetDefault<USeinARTSCoreSettings>();
+		ASSERT_THAT(IsNotNull(Settings));
+		const int32 TicksPerTurn = FMath::Max(
+			1, Settings->SimulationTickRate / Settings->TurnRate);
+		const int32 FirstTurn = Settings->InputDelayTurns;
+		const int32 EndTick = FirstTurn * TicksPerTurn;
+
+		FActorTestSpawner AsyncSpawner;
+		USeinWorldSubsystem* AsyncWorld =
+			AsyncSpawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(AsyncWorld));
+		USeinReplayWriter* AsyncWriter = StartV9Recording(
+			*AsyncWorld, MakeOnePlayerMatchSettings());
+		ASSERT_THAT(IsNotNull(AsyncWriter));
+		FScopedReplayFile AsyncPartial{AsyncWriter->GetActivePartialPath()};
+		AsyncWriter->RecordTurn(FirstTurn, {});
+		ASSERT_THAT(IsTrue(AsyncWorld->StartSimulation()));
+		for (int32 Tick = 1; Tick <= EndTick; ++Tick)
+		{
+			FTSTicker::GetCoreTicker().Tick(
+				AsyncWorld->GetFixedDeltaTimeSeconds());
+			ASSERT_THAT(AreEqual(Tick, AsyncWorld->GetCurrentTick()));
+			AsyncWriter->ObserveCompletedTick(Tick);
+		}
+		AsyncWorld->StopSimulation();
+		AsyncWriter->FlushAppliedProgressForTests();
+		ASSERT_THAT(AreEqual(1, AsyncWriter->GetPersistedTurnCount()));
+		ASSERT_THAT(AreEqual(1, AsyncWriter->GetPersistedCheckpointCount()));
+
+		AsyncWriter->FailNextBackgroundAppendForTests();
+		AsyncWriter->RunScheduledMaintenanceForTests();
+		ASSERT_THAT(IsTrue(AsyncWriter->IsCheckpointEncodePending()));
+		AsyncWriter->ResolveCheckpointEncodeForTests();
+		ASSERT_THAT(IsFalse(AsyncWriter->IsCheckpointEncodePending()));
+		ASSERT_THAT(IsTrue(AsyncWriter->IsCheckpointAppendPending()));
+		TestRunner->AddExpectedError(
+			TEXT("synthetic background append failure"),
+			EAutomationExpectedErrorFlags::Contains, 1, false);
+		AsyncWriter->FlushAppliedProgressForTests();
+		ASSERT_THAT(IsFalse(AsyncWriter->IsRecording()));
+		ASSERT_THAT(IsFalse(AsyncWriter->IsCheckpointAppendPending()));
+		ASSERT_THAT(AreEqual(1, AsyncWriter->GetPersistedCheckpointCount()));
+		ASSERT_THAT(IsTrue(IFileManager::Get().FileExists(
+			*AsyncPartial.Path)));
+
+		FActorTestSpawner DeniedSpawner;
+		USeinWorldSubsystem* DeniedWorld =
+			DeniedSpawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(DeniedWorld));
+		USeinReplayWriter* DeniedWriter = StartV9Recording(
+			*DeniedWorld, MakeOnePlayerMatchSettings());
+		ASSERT_THAT(IsNotNull(DeniedWriter));
+		FScopedReplayFile DeniedPartial{DeniedWriter->GetActivePartialPath()};
+		DeniedWriter->RecordTurn(FirstTurn, {});
+		ASSERT_THAT(IsTrue(DeniedWorld->StartSimulation()));
+		for (int32 Tick = 1; Tick <= EndTick; ++Tick)
+		{
+			FTSTicker::GetCoreTicker().Tick(
+				DeniedWorld->GetFixedDeltaTimeSeconds());
+			ASSERT_THAT(AreEqual(Tick, DeniedWorld->GetCurrentTick()));
+			DeniedWriter->ObserveCompletedTick(Tick);
+		}
+		DeniedWorld->StopSimulation();
+		IPlatformFile& PlatformFile =
+			FPlatformFileManager::Get().GetPlatformFile();
+		ASSERT_THAT(IsTrue(PlatformFile.SetReadOnly(
+			*DeniedPartial.Path, true)));
+		TestRunner->AddExpectedError(
+			TEXT("replay append failed"),
+			EAutomationExpectedErrorFlags::Contains, 1, false);
+		DeniedWriter->FlushAppliedProgressForTests();
+		PlatformFile.SetReadOnly(*DeniedPartial.Path, false);
+		ASSERT_THAT(IsFalse(DeniedWriter->IsRecording()));
+		ASSERT_THAT(AreEqual(0, DeniedWriter->GetPersistedTurnCount()));
+		ASSERT_THAT(AreEqual(1, DeniedWriter->GetPersistedCheckpointCount()));
+		ASSERT_THAT(IsTrue(IFileManager::Get().FileExists(
+			*DeniedPartial.Path)));
+	}
+
 	TEST(ReplayTurnEnvelopeRejectsImpossibleTimingAndForgedProvenance,
 		"SeinARTS.Unit.Network.ReplayFormat")
 	{
@@ -1412,6 +1582,16 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsFalse(SeinReplayFormat::ValidateTurnEnvelope(
 			Header, Turn, TicksPerTurn, InputDelayTurns, Error)));
 		ASSERT_THAT(IsTrue(Error.Contains(TEXT("inactive player slot"))));
+
+		Turn = MakeCanonicalTurn(InputDelayTurns, TicksPerTurn);
+		Turn.Commands[0].IssuerKind =
+			ESeinCommandIssuerKind::MatchAdministrator;
+		ASSERT_THAT(IsFalse(SeinReplayFormat::ValidateTurnEnvelope(
+			Header, Turn, TicksPerTurn, InputDelayTurns, Error)));
+		ASSERT_THAT(IsTrue(Error.Contains(TEXT("neutral player identity"))));
+		Turn.Commands[0].PlayerID = FSeinPlayerID::Neutral();
+		ASSERT_THAT(IsTrue(SeinReplayFormat::ValidateTurnEnvelope(
+			Header, Turn, TicksPerTurn, InputDelayTurns, Error)));
 
 		Turn = MakeCanonicalTurn(InputDelayTurns, TicksPerTurn);
 		Turn.Commands[0].DerivedResourcePayer = FSeinPlayerID(1);

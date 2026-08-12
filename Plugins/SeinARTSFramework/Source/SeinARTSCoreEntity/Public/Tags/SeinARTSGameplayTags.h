@@ -87,6 +87,7 @@ namespace SeinARTSTags
 	// abilities calling USeinProductionBPFL::SeinSetRallyPoint.
 	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Command_Type_Ping);
 	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Command_Type_BrokerOrder);
+	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Command_Type_SetPairCapability);
 
 	// In-match flow commands. State-machine transitions that don't
 	// target a specific entity — `FSeinCommand::EntityHandle` is unused.
@@ -160,6 +161,17 @@ namespace SeinARTSTags
 	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Formation_Ring);
 	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Formation_Square);
 	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Formation_Blob);
+
+	// --- Relationship ---
+	// Directional player-pair capabilities. Consumers query precise capability
+	// tags; these are not a diplomacy/posture state machine.
+	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Relationship);
+	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Relationship_Capability);
+	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Relationship_Capability_ShareVision);
+	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Relationship_Capability_PresentAsFriendly);
+	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Relationship_Source);
+	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Relationship_Source_TeamBootstrap);
+	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Relationship_Source_MatchAdministration);
 
 	// --- UI ---
 	// Render/UI-facing entity tags consumed by the UI Toolkit.

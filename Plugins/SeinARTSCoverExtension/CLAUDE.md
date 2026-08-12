@@ -64,13 +64,17 @@ framework/Squad defaults.
 - **`USeinCoverAwareDefaultBrokerResolver`** (subclasses the framework's
   `USeinDefaultCommandBrokerResolver`) — overrides `PostProcessPositions`: reads `CoverSnapRadius`,
   derives the FoW observer from member[0]'s owner, calls `FindNearbySlots`, partitions candidates by
-  cursor side (`SeinCoverGeometry::PartitionSlotsByCursorSide`), then runs two-pass greedy-nearest
-  allocation (preferred side, then wrong-side fallback) onto members carrying
+  cursor side (`SeinCoverGeometry::PartitionSlotsByCursorSide`), then runs the shared deterministic
+  max-cardinality/min-wrong-side/min-distance allocation onto members carrying
   `SeinARTS.Cover.UsesCover`. Enabled by pointing
   `USeinARTSCoreSettings::DefaultBrokerResolverClass` at this class.
 - **`USeinCoverAwareSquadDispatchResolver`** lives in `SeinARTSCoverSquadExtension`. It subclasses
   `USeinSquadDispatchResolver` and overrides the same `PostProcessPositions` hook. Enable it per
   squad via `FSeinSquadComponent::DispatchResolverClass` or as the Squad default resolver.
+
+The shared allocator is exact within one resolver call. Cross-broker slot contention and the
+preview-artifact reservation lifecycle remain explicit follow-up work; separate squad/loose calls
+can still nominate the same authored slot until that layer is complete.
 
 ## SeinARTSCoverEditor
 - **`FSeinCoverComponentDetails`** — PropertyEditor custom layout for `FSeinCoverComponent` adding a

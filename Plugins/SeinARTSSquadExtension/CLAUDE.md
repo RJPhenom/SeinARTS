@@ -35,11 +35,12 @@ This extension declares **no new USTRUCTs** — it operates entirely on the core
 
 ## Files & key types
 
-- **`SeinARTSSquadModule.{h,cpp}`** — `IModuleInterface` with empty startup/shutdown. All work is
-  subsystem-driven; there is **no module-startup registry hook**.
-- **`SeinSquadSubsystem.{h,cpp}`** — `USeinSquadSubsystem` (UWorldSubsystem). On
-  `OnWorldBeginPlay` it `new`s `FSeinSquadSystem` and calls `Sim->RegisterSystem(...)`; deletes/
-  unregisters on `Deinitialize`. This is the **only** integration mechanism with the framework.
+- **`SeinARTSSquadModule.{h,cpp}`** — registers the frozen config-fingerprint contributor,
+  simulation-content contributor, and reflected pool codecs for the reinforcement ability and
+  dispatch resolver. Pre-unload terminates affected worlds and releases hosted systems before
+  withdrawing codecs.
+- **`SeinSquadSubsystem.{h,cpp}`** — `USeinSquadSubsystem` (`USeinSystemHostSubsystem`) creates and
+  owns `FSeinSquadSystem` through the framework's hosted-system lifecycle.
 - **`SeinSquadSystem.h`** — `FSeinSquadSystem` (`ISeinSystem`, **PostTick**, priority ~30, runs
   before the CommandBroker system). Owns the whole squad lifecycle:
   - lazy init (detected by broker absence → spawns slot members, wires member back-refs, builds the
@@ -52,14 +53,14 @@ This extension declares **no new USTRUCTs** — it operates entirely on the core
   `USeinDefaultCommandBrokerResolver`). See "Dispatch" below.
 - **`SeinSquadBPFL.{h,cpp}`** — `USeinSquadBPFL`, BlueprintPure queries: Get Squad/Member Data
   (+ batch), Get Squad Members/Leader/Size, Get Entity Squad, Is Squad Member.
-- **`SeinSquadMutationBPFL.{h,cpp}`** — `USeinSquadMutationBPFL`, BlueprintCallable mutations,
-  `meta=(RestrictedToClasses="SeinAbility,SeinEffect")`, each asserting `SEIN_CHECK_SIM()`: Set
-  Squad/Member Data, Set Leader, Add/Remove Member, Fill/Empty Slot, Set Slot Offset. Each keeps the
-  broker member-list, member back-refs, and leader consistent.
-- **`SeinAbility_SquadReinforce.{h,cpp}`** — `USeinAbility_SquadReinforce`, a starter ability. Fills
-  the first empty + off-cooldown slot in declaration order; charges the slot's `ReinforceCost` at
-  enqueue, then enqueues a `FSeinSquadReinforceEntry` the system builds over `ReinforceBuildTime`.
-  Per-slot cost (clears the ability-level cost); `CooldownScope::Squad`.
+- **`SeinSquadMutationBPFL.{h,cpp}`** — exact-index BlueprintCallable member/slot mutations plus
+  reinforcement enqueue/cancel. They preserve broker membership, member back-references, leader,
+  layout/reseek caches, queue accounting, and cooldown state. Legacy whole-struct setters reject
+  live topology.
+- **`SeinAbility_SquadReinforce.{h,cpp}`** — starter ability using the shared reinforcement service.
+  It selects the first eligible exact slot in declaration order and atomically stores a monotonic
+  request ID, canonical tag metadata, payer/cost snapshot, and build time. Exact cancellation
+  reverses the committed deduction before removing the request.
 - **`SeinARTSSquadSettings.{h,cpp}`** — `USeinARTSSquadSettings` (UDeveloperSettings). One field:
   `DefaultSquadDispatchResolverClass` (`TSoftClassPtr`).
 
@@ -83,7 +84,7 @@ adds a **constructor** that selects its formation:
   per-squad via `FSeinSquadComponent::FormationClass` (Grid/Wedge/Ring/custom; the framework editor
   hides the per-slot `OffsetTransform` authoring for non-slot picks via `FSeinSquadSlotDetails` +
   `USeinFormation::UsesAuthoredSlotOffsets`). The slot formation reads
-  each member's slot `OffsetTransform` (by `SlotIndex`, tag fallback) rotated by anchor facing and
+  each member's slot `OffsetTransform` by exact `SlotIndex`, rotated by anchor facing and
   nav-projected; unauthored squads / unresolved members fall back to a blob at the anchor. This
   replaced the old `ResolvePositions` override (squads now go through the same formation pipeline as
   loose units).
@@ -100,8 +101,7 @@ lazy-init.
 ---
 
 ## Current state
-**Complete and functional** — system, resolver, both BPFLs, the reinforce ability, and settings are
-all fully implemented with defensive re-fetch-after-`AddComponent` discipline and diagnostic
-logging (recently demoted from Warning to Log/Verbose after a "culled-at-PIE-start" regression was
-fixed — i.e. this module saw recent active iteration). Only the module startup/shutdown bodies are
-empty, by design.
+**Implemented and under qualification** — exact reinforcement identity/accounting, completion,
+membership reciprocity, snapshot v15 continuation, and structural restore admission are automated.
+Product policy remains open for explicit squad destruction refunds, queue replacement,
+wipe/recreation, and retreat; do not invent those semantics during unrelated maintenance.

@@ -140,13 +140,16 @@ namespace
 			FFixedPoint::FromInt(100), FFixedPoint::Zero, FFixedPoint::Zero);
 		int32 CapacityBeforeCallback = 0;
 
-		FBrokerCallbackFixture()
+		explicit FBrokerCallbackFixture(
+			TFunction<void(USeinBrokerCallbackSafetyResolver&)>
+				ConfigureResolver = {})
 		{
 			World = Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
 			check(World);
 			const FSeinPlayerID Player(1);
 			const FSeinPlayerID Enemy(2);
-			const auto AuthorState = [this, Player, Enemy]()
+			const auto AuthorState =
+				[this, Player, Enemy, &ConfigureResolver]()
 			{
 				World->RegisterPlayer(Player, FSeinFactionID(1));
 				World->RegisterPlayer(Enemy, FSeinFactionID(2));
@@ -174,6 +177,10 @@ namespace
 				Resolver = NewObject<USeinBrokerCallbackSafetyResolver>(World);
 				check(Resolver);
 				Resolver->InjectedMember = Outsider;
+				if (ConfigureResolver)
+				{
+					ConfigureResolver(*Resolver);
+				}
 				const int32 ResolverID =
 					World->RegisterCommandBrokerResolver(Resolver);
 				check(ResolverID != INDEX_NONE);
@@ -221,14 +228,19 @@ namespace UE::SeinARTSTests
 		"SeinARTS.Sim.Broker.CallbackSafety")
 	{
 		ExpectAbilityHashDiagnostic(*TestRunner);
-		FBrokerCallbackFixture Fixture;
+		FBrokerCallbackFixture Fixture(
+			[](USeinBrokerCallbackSafetyResolver& Resolver)
+			{
+				Resolver.ReplacementTarget = FFixedVector(
+					FFixedPoint::FromInt(900), FFixedPoint::FromInt(25),
+					FFixedPoint::Zero);
+				Resolver.bMutateOrderOnNextResolve = true;
+			});
 		ASSERT_THAT(IsNotNull(Fixture.World));
 		ASSERT_THAT(IsNotNull(Fixture.Resolver));
 
 		const FFixedVector Replacement(
 			FFixedPoint::FromInt(900), FFixedPoint::FromInt(25), FFixedPoint::Zero);
-		Fixture.Resolver->ReplacementTarget = Replacement;
-		Fixture.Resolver->bMutateOrderOnNextResolve = true;
 
 		TickOnce(*Fixture.World);
 		const FSeinCommandBrokerData* Broker =
@@ -271,8 +283,11 @@ namespace UE::SeinARTSTests
 		"SeinARTS.Sim.Broker.CallbackSafety")
 	{
 		ExpectAbilityHashDiagnostic(*TestRunner);
-		FBrokerCallbackFixture Fixture;
-		Fixture.Resolver->bDestroyBrokerOnNextResolve = true;
+		FBrokerCallbackFixture Fixture(
+			[](USeinBrokerCallbackSafetyResolver& Resolver)
+			{
+				Resolver.bDestroyBrokerOnNextResolve = true;
+			});
 		bool bSawDestroyNotification = false;
 		bool bSawUncommittedBrokerState = false;
 		const FDelegateHandle DestroyCallback =
@@ -314,8 +329,11 @@ namespace UE::SeinARTSTests
 		"SeinARTS.Sim.Broker.CallbackSafety")
 	{
 		ExpectAbilityHashDiagnostic(*TestRunner);
-		FBrokerCallbackFixture Fixture;
-		Fixture.Resolver->bReturnNonMemberOnNextResolve = true;
+		FBrokerCallbackFixture Fixture(
+			[](USeinBrokerCallbackSafetyResolver& Resolver)
+			{
+				Resolver.bReturnNonMemberOnNextResolve = true;
+			});
 
 		TickOnce(*Fixture.World);
 		const FSeinCommandBrokerData* Broker =
@@ -330,8 +348,11 @@ namespace UE::SeinARTSTests
 		"SeinARTS.Sim.Broker.CallbackSafety")
 	{
 		ExpectAbilityHashDiagnostic(*TestRunner);
-		FBrokerCallbackFixture Fixture;
-		Fixture.Resolver->bReturnDuplicateOnNextResolve = true;
+		FBrokerCallbackFixture Fixture(
+			[](USeinBrokerCallbackSafetyResolver& Resolver)
+			{
+				Resolver.bReturnDuplicateOnNextResolve = true;
+			});
 
 		TickOnce(*Fixture.World);
 		const FSeinCommandBrokerData* Broker =
@@ -345,8 +366,11 @@ namespace UE::SeinARTSTests
 		"SeinARTS.Sim.Broker.CallbackSafety")
 	{
 		ExpectAbilityHashDiagnostic(*TestRunner);
-		FBrokerCallbackFixture Fixture;
-		Fixture.Resolver->bReturnOversizedTargeterPointsOnNextResolve = true;
+		FBrokerCallbackFixture Fixture(
+			[](USeinBrokerCallbackSafetyResolver& Resolver)
+			{
+				Resolver.bReturnOversizedTargeterPointsOnNextResolve = true;
+			});
 
 		TickOnce(*Fixture.World);
 		const FSeinCommandBrokerData* Broker =
@@ -360,8 +384,11 @@ namespace UE::SeinARTSTests
 		"SeinARTS.Sim.Broker.CallbackSafety")
 	{
 		ExpectAbilityHashDiagnostic(*TestRunner);
-		FBrokerCallbackFixture Fixture;
-		Fixture.Resolver->bReturnBrokerCarrierOnNextResolve = true;
+		FBrokerCallbackFixture Fixture(
+			[](USeinBrokerCallbackSafetyResolver& Resolver)
+			{
+				Resolver.bReturnBrokerCarrierOnNextResolve = true;
+			});
 
 		TickOnce(*Fixture.World);
 		const FSeinCommandBrokerData* Broker =
@@ -375,19 +402,24 @@ namespace UE::SeinARTSTests
 		"SeinARTS.Sim.Broker.CallbackSafety")
 	{
 		ExpectAbilityHashDiagnostic(*TestRunner);
-		FBrokerCallbackFixture Fixture;
 		const FFixedVector NestedPosition(
 			FFixedPoint::FromInt(777), FFixedPoint::FromInt(-40),
 			FFixedPoint::Zero);
 		const FFixedVector ReplacementTarget(
 			FFixedPoint::FromInt(930), FFixedPoint::FromInt(20),
 			FFixedPoint::Zero);
-		Fixture.Resolver->NestedSettledPosition = NestedPosition;
-		Fixture.Resolver->NestedFacing = FFixedQuaternion(
+		const FFixedQuaternion NestedFacing(
 			FFixedPoint::Zero, FFixedPoint::One,
 			FFixedPoint::Zero, FFixedPoint::Zero);
-		Fixture.Resolver->ReplacementTarget = ReplacementTarget;
-		Fixture.Resolver->bCommitNestedOutputAndStaleOuter = true;
+		FBrokerCallbackFixture Fixture(
+			[NestedPosition, NestedFacing, ReplacementTarget](
+				USeinBrokerCallbackSafetyResolver& Resolver)
+			{
+				Resolver.NestedSettledPosition = NestedPosition;
+				Resolver.NestedFacing = NestedFacing;
+				Resolver.ReplacementTarget = ReplacementTarget;
+				Resolver.bCommitNestedOutputAndStaleOuter = true;
+			});
 
 		TickOnce(*Fixture.World);
 		const FSeinCommandBrokerData* Broker =

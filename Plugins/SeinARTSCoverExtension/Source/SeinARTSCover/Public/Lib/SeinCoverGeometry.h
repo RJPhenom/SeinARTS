@@ -7,7 +7,7 @@
  *          helper (`USeinCoverBPFL::SeinGetCoverDirection`) computes
  *          per-shot cover direction; the cover-aware snap resolvers use
  *          the same direction primitive to partition slots by the cursor's
- *          side of cover before two-pass allocation. Kept inline in a
+ *          side of cover before selection-wide assignment. Kept inline in a
  *          header to share without introducing a cpp-level dependency
  *          between the BPFL, the default cover impl, and the resolvers.
  */
@@ -259,16 +259,9 @@ namespace SeinCoverGeometry
 
 	/** Partition a list of slot candidates into "preferred side" (same outward
 	 *  side as the cursor relative to the provider's SeinExtents body) and
-	 *  "wrong side" (opposite). Used by the cover-aware broker resolvers to
-	 *  implement two-pass allocation: greedy-nearest over preferred first,
-	 *  then fall back to wrong-side for any squad members still unallocated.
-	 *
-	 *  Why a global filter and not a per-slot penalty: cursor-side is a single
-	 *  decision per provider (cursor is east of THIS wall or west, not both).
-	 *  Treating it as one decision rather than weighting per-slot avoids the
-	 *  failure mode where a member's per-member-radius gate excludes every
-	 *  preferred-side slot and a wrong-side slot wins by default because the
-	 *  comparative penalty has nothing to lose to.
+	 *  "wrong side" (opposite). The shared assignment planner maximizes total
+	 *  coverage first, then minimizes wrong-side use and total distance. This
+	 *  keeps side preference from reducing assignment cardinality.
 	 *
 	 *  Slots from non-directional providers (foxholes — `WorldProtectedFromDirection`
 	 *  is zero) go into the preferred set unconditionally: omni cover has no
@@ -276,8 +269,8 @@ namespace SeinCoverGeometry
 	 *  extra cost per provider regardless of slot count.
 	 *
 	 *  Output arrays are filled with indices into the input `Slots` array;
-	 *  callers preserve the original slot ordering for the greedy-nearest
-	 *  scan that follows. */
+	 *  callers preserve the original slot ordering as the final deterministic
+	 *  assignment tie-break. */
 	inline void PartitionSlotsByCursorSide(
 		USeinWorldSubsystem* WorldSub,
 		const TArray<FSeinCoverSlotCandidate>& Slots,

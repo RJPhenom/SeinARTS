@@ -28,7 +28,9 @@ param(
 	[int] $MinimumExpectedTests = 0,
 
 	[ValidateRange(30, 7200)]
-	[int] $TimeoutSeconds = 600
+	[int] $TimeoutSeconds = 600,
+
+	[string] $EngineRoot
 )
 
 $ErrorActionPreference = 'Stop'
@@ -36,7 +38,43 @@ $PluginRoot = $PSScriptRoot
 $ProjectRoot = (Resolve-Path (Join-Path $PluginRoot '..\..')).Path
 $Uproject = Join-Path $ProjectRoot 'SeinARTS.uproject'
 $BuildScript = Join-Path $ProjectRoot 'Build.ps1'
-$EditorCmd = 'C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe'
+$ResolvedEngineRoot = if ($EngineRoot) {
+	(Resolve-Path -LiteralPath $EngineRoot).Path
+} else {
+	'C:\Program Files\Epic Games\UE_5.8'
+}
+if (-not (Test-Path -LiteralPath $ResolvedEngineRoot)) {
+	$Association = (Get-Content -Raw -LiteralPath $Uproject |
+		ConvertFrom-Json).EngineAssociation
+	foreach ($RegistryRoot in @(
+		'HKLM:\SOFTWARE\EpicGames\Unreal Engine',
+		'HKLM:\SOFTWARE\Epic Games\Unreal Engine')) {
+		try {
+			$Candidate = (Get-ItemProperty `
+				-Path "$RegistryRoot\$Association" `
+				-ErrorAction Stop).InstalledDirectory
+			if ($Candidate -and (Test-Path -LiteralPath $Candidate)) {
+				$ResolvedEngineRoot = (Resolve-Path -LiteralPath $Candidate).Path
+				break
+			}
+		}
+		catch {}
+	}
+}
+$EngineBuildVersionPath = Join-Path $ResolvedEngineRoot 'Engine\Build\Build.version'
+if (-not (Test-Path -LiteralPath $EngineBuildVersionPath -PathType Leaf)) {
+	throw "UE build identity is missing: '$EngineBuildVersionPath'."
+}
+$EngineBuildVersion = Get-Content -Raw -LiteralPath $EngineBuildVersionPath |
+	ConvertFrom-Json
+if ([int]$EngineBuildVersion.MajorVersion -ne 5 -or
+	[int]$EngineBuildVersion.MinorVersion -ne 8) {
+	throw "SeinARTS tests require UE 5.8; '$ResolvedEngineRoot' reports $($EngineBuildVersion.MajorVersion).$($EngineBuildVersion.MinorVersion)."
+}
+$EngineBuildFingerprint = (Get-FileHash -LiteralPath $EngineBuildVersionPath `
+	-Algorithm SHA256).Hash
+$EditorCmd = Join-Path $ResolvedEngineRoot `
+	'Engine\Binaries\Win64\UnrealEditor-Cmd.exe'
 $SafeSuite = $Suite -replace '[^A-Za-z0-9_.-]', '_'
 $Stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $AttemptId = [Guid]::NewGuid().ToString('N')
@@ -45,8 +83,60 @@ $LogPath = Join-Path $ReportPath 'Automation.log'
 $StdoutPath = Join-Path $ReportPath 'EditorStdout.log'
 $StderrPath = Join-Path $ReportPath 'EditorStderr.log'
 $AttemptPath = Join-Path $ReportPath 'attempt.json'
+$AttemptBuildProvenancePath = Join-Path $ReportPath 'build-provenance.json'
 $ExpectedCountsPath = Join-Path $PluginRoot 'ExpectedTestCounts.json'
+$BuildProvenancePath = Join-Path $ProjectRoot `
+	"Saved\Automation\TestBuildProvenance-$Profile.json"
 New-Item -ItemType Directory -Path $ReportPath -Force | Out-Null
+
+function Get-SeinCompileSourceFingerprint
+{
+	$Extensions = [System.Collections.Generic.HashSet[string]]::new(
+		[System.StringComparer]::OrdinalIgnoreCase)
+	foreach ($Extension in @(
+		'.h', '.hpp', '.inl', '.c', '.cpp', '.cs', '.ini',
+		'.uplugin', '.uproject', '.ps1', '.json')) {
+		[void]$Extensions.Add($Extension)
+	}
+	$Files = @(
+		Get-ChildItem -LiteralPath (Join-Path $ProjectRoot 'Source') `
+			-Recurse -File
+		Get-ChildItem -LiteralPath (Join-Path $ProjectRoot 'Config') `
+			-Recurse -File
+		Get-ChildItem -LiteralPath (Join-Path $ProjectRoot 'Plugins') `
+			-Recurse -File | Where-Object {
+				$_.FullName -notmatch '\\(Binaries|Intermediate|Saved|DerivedDataCache)\\'
+			}
+		Get-Item -LiteralPath $Uproject
+		Get-Item -LiteralPath $BuildScript
+		Get-Item -LiteralPath $PSCommandPath
+		Get-Item -LiteralPath $ExpectedCountsPath
+	) | Where-Object { $Extensions.Contains($_.Extension) -or $_.Name -eq 'Build.ps1' } |
+		Sort-Object FullName -Unique
+
+	$Manifest = [System.Text.StringBuilder]::new()
+	foreach ($File in $Files) {
+		$RelativePath = $File.FullName.Substring($ProjectRoot.Length).
+			TrimStart([char[]]@('\', '/')).Replace('\', '/')
+		$FileHash = (Get-FileHash -LiteralPath $File.FullName `
+			-Algorithm SHA256).Hash
+		[void]$Manifest.Append($RelativePath)
+		[void]$Manifest.Append([char]0)
+		[void]$Manifest.Append($FileHash)
+		[void]$Manifest.Append("`n")
+	}
+	$Hasher = [System.Security.Cryptography.SHA256]::Create()
+	try {
+		$Bytes = [System.Text.Encoding]::UTF8.GetBytes($Manifest.ToString())
+		return ([System.BitConverter]::ToString(
+			$Hasher.ComputeHash($Bytes))).Replace('-', '')
+	}
+	finally {
+		$Hasher.Dispose()
+	}
+}
+
+$CompileSourceFingerprint = Get-SeinCompileSourceFingerprint
 
 $GitCommit = 'unavailable'
 $GitDirty = $null
@@ -60,7 +150,7 @@ if ($LASTEXITCODE -eq 0 -and $GitCommitOutput) {
 }
 
 $Attempt = [pscustomobject][ordered]@{
-	schemaVersion = 1
+	schemaVersion = 4
 	attemptId = $AttemptId
 	suite = $Suite
 	profile = $Profile
@@ -73,6 +163,13 @@ $Attempt = [pscustomobject][ordered]@{
 	skipBuild = [bool]$SkipBuild
 	keepRendering = [bool]$KeepRendering
 	allowKnownStartupErrors = [bool]$AllowKnownStartupErrors
+	engineRoot = $ResolvedEngineRoot
+	engineBuildFingerprint = $EngineBuildFingerprint
+	compileSourceFingerprint = $CompileSourceFingerprint
+	testBuildProvenance = $null
+	testBuildProvenanceFile = [System.IO.Path]::GetFileName(
+		$AttemptBuildProvenancePath)
+	testBuildProvenanceSha256 = $null
 	expectedMinimumCount = $null
 	expectedCountSource = $null
 	expectedBaselineCommit = $null
@@ -80,6 +177,8 @@ $Attempt = [pscustomobject][ordered]@{
 	editorExitCode = $null
 	discoveredTestCount = $null
 	unsuccessfulTestCount = $null
+	testIndexFile = $null
+	testIndexSha256 = $null
 	failure = $null
 	reportPath = $ReportPath
 }
@@ -92,6 +191,8 @@ function Write-SeinAttemptManifest
 
 Write-SeinAttemptManifest
 
+$QualificationFileLocks =
+	[System.Collections.Generic.List[System.IO.FileStream]]::new()
 try {
 
 if (-not (Test-Path -LiteralPath $EditorCmd)) {
@@ -119,13 +220,13 @@ if (-not $SkipBuild) {
 	$TestBuildExitCode = $null
 	$ReceiptRestoreExitCode = $null
 	try {
-		& $BuildScript -ExtraArgs $BuildArgs
+		& $BuildScript -EngineRoot $ResolvedEngineRoot -ExtraArgs $BuildArgs
 		$TestBuildExitCode = $LASTEXITCODE
 	}
 	finally {
 		# UBT writes profile plugin states into the shared editor receipt. Restore the ordinary
 		# project receipt before launching Automation so normal Editor startup is never contaminated.
-		& $BuildScript
+		& $BuildScript -EngineRoot $ResolvedEngineRoot
 		$ReceiptRestoreExitCode = $LASTEXITCODE
 	}
 
@@ -135,6 +236,39 @@ if (-not $SkipBuild) {
 	if ($ReceiptRestoreExitCode -ne 0) {
 		throw "Tests compiled, but restoring the ordinary editor receipt failed with exit code $ReceiptRestoreExitCode."
 	}
+	$BuildProvenance = [ordered]@{
+		schemaVersion = 4
+		profile = $Profile
+		compileSourceFingerprint = $CompileSourceFingerprint
+		engineRoot = $ResolvedEngineRoot
+		engineBuildFingerprint = $EngineBuildFingerprint
+		commit = $GitCommit
+		dirtyWorkingTree = $GitDirty
+		builtAtUtc = [DateTime]::UtcNow.ToString('o')
+		dllSha256 = [ordered]@{}
+		productionDllSha256 = [ordered]@{}
+		metadataSha256 = [ordered]@{}
+	}
+	$Attempt.testBuildProvenance = 'BuiltThisAttempt'
+}
+else {
+	if (-not (Test-Path -LiteralPath $BuildProvenancePath -PathType Leaf)) {
+		throw "-SkipBuild requires '$BuildProvenancePath'. Run this profile once without -SkipBuild."
+	}
+	$BuildProvenance = Get-Content -Raw -LiteralPath $BuildProvenancePath |
+		ConvertFrom-Json
+	if ($BuildProvenance.schemaVersion -ne 4 -or
+		[string]$BuildProvenance.profile -cne $Profile -or
+		[string]$BuildProvenance.compileSourceFingerprint -cne
+			$CompileSourceFingerprint -or
+		[string]$BuildProvenance.engineRoot -cne $ResolvedEngineRoot -or
+		[string]$BuildProvenance.engineBuildFingerprint -cne
+			$EngineBuildFingerprint -or
+		[string]$BuildProvenance.commit -cne $GitCommit -or
+		[bool]$BuildProvenance.dirtyWorkingTree -ne [bool]$GitDirty) {
+		throw "-SkipBuild refused stale or foreign test binaries for profile '$Profile'. Run again without -SkipBuild."
+	}
+	$Attempt.testBuildProvenance = 'ValidatedProfileReceipt'
 }
 
 $RequiredTestDlls = @(
@@ -148,9 +282,150 @@ if ($Profile -eq 'All') {
 		'Plugins\SeinARTSExtensionTestSuite\Binaries\Win64\UnrealEditor-SeinARTSExtensionEditorTests.dll'
 	)
 }
+$ProductionPluginNames = if ($Profile -eq 'All') {
+	@(
+		'SeinARTSFramework',
+		'SeinARTSCoverExtension',
+		'SeinARTSSquadExtension',
+		'SeinARTSMovementPlusExtension',
+		'SeinARTSCoverSquadExtension')
+} else {
+	@('SeinARTSFramework')
+}
+$RequiredProductionDlls = @(
+	foreach ($PluginName in $ProductionPluginNames) {
+		$BinaryRoot = Join-Path $ProjectRoot "Plugins\$PluginName\Binaries\Win64"
+		if (-not (Test-Path -LiteralPath $BinaryRoot -PathType Container)) {
+			throw "Production binary directory is missing: '$BinaryRoot'. Run again without -SkipBuild."
+		}
+		Get-ChildItem -LiteralPath $BinaryRoot -File -Filter 'UnrealEditor-*.dll' |
+			ForEach-Object {
+				$_.FullName.Substring($ProjectRoot.Length).TrimStart([char[]]@('\', '/'))
+			}
+	}
+	'Binaries\Win64\UnrealEditor-SeinARTS.dll'
+) | Sort-Object -Unique
+if ($RequiredProductionDlls.Count -eq 0) {
+	throw 'No production editor DLLs were discovered for provenance.'
+}
+$RequiredMetadataFiles = @(
+	'Binaries\Win64\SeinARTSEditor.target',
+	'Binaries\Win64\UnrealEditor.modules',
+	'Plugins\SeinARTSTestSuite\Binaries\Win64\UnrealEditor.modules'
+	foreach ($PluginName in $ProductionPluginNames) {
+		"Plugins\$PluginName\Binaries\Win64\UnrealEditor.modules"
+	}
+)
+if ($Profile -eq 'All') {
+	$RequiredMetadataFiles +=
+		'Plugins\SeinARTSExtensionTestSuite\Binaries\Win64\UnrealEditor.modules'
+}
+$RequiredMetadataFiles = @($RequiredMetadataFiles | Sort-Object -Unique)
 foreach ($RelativeDll in $RequiredTestDlls) {
 	if (-not (Test-Path -LiteralPath (Join-Path $ProjectRoot $RelativeDll))) {
 		throw "Missing test module '$RelativeDll'. Run again without -SkipBuild."
+	}
+}
+$CurrentDllHashes = [ordered]@{}
+foreach ($RelativeDll in $RequiredTestDlls) {
+	$CurrentDllHashes[$RelativeDll] = (Get-FileHash -LiteralPath `
+		(Join-Path $ProjectRoot $RelativeDll) -Algorithm SHA256).Hash
+}
+$CurrentProductionDllHashes = [ordered]@{}
+foreach ($RelativeDll in $RequiredProductionDlls) {
+	$DllPath = Join-Path $ProjectRoot $RelativeDll
+	if (-not (Test-Path -LiteralPath $DllPath -PathType Leaf)) {
+		throw "Missing production module '$RelativeDll'. Run again without -SkipBuild."
+	}
+	$CurrentProductionDllHashes[$RelativeDll] =
+		(Get-FileHash -LiteralPath $DllPath -Algorithm SHA256).Hash
+}
+$CurrentMetadataHashes = [ordered]@{}
+foreach ($RelativeMetadata in $RequiredMetadataFiles) {
+	$MetadataPath = Join-Path $ProjectRoot $RelativeMetadata
+	if (-not (Test-Path -LiteralPath $MetadataPath -PathType Leaf)) {
+		throw "Missing build metadata '$RelativeMetadata'. Run again without -SkipBuild."
+	}
+	$CurrentMetadataHashes[$RelativeMetadata] =
+		(Get-FileHash -LiteralPath $MetadataPath -Algorithm SHA256).Hash
+}
+if ($SkipBuild) {
+	$ExpectedDllProperties = @($BuildProvenance.dllSha256.PSObject.Properties)
+	if ($ExpectedDllProperties.Count -ne $RequiredTestDlls.Count) {
+		throw "-SkipBuild provenance has the wrong test-DLL set for profile '$Profile'. Run again without -SkipBuild."
+	}
+	foreach ($RelativeDll in $RequiredTestDlls) {
+		$ExpectedHash = [string](
+			$BuildProvenance.dllSha256.PSObject.Properties[$RelativeDll].Value)
+		if ($ExpectedHash -cne $CurrentDllHashes[$RelativeDll]) {
+			throw "-SkipBuild refused modified test module '$RelativeDll'. Run again without -SkipBuild."
+		}
+	}
+	$ExpectedProductionProperties = @(
+		$BuildProvenance.productionDllSha256.PSObject.Properties)
+	if ($ExpectedProductionProperties.Count -ne $RequiredProductionDlls.Count) {
+		throw "-SkipBuild provenance has the wrong production-DLL set for profile '$Profile'. Run again without -SkipBuild."
+	}
+	foreach ($RelativeDll in $RequiredProductionDlls) {
+		$ExpectedHash = [string](
+			$BuildProvenance.productionDllSha256.PSObject.Properties[$RelativeDll].Value)
+		if ($ExpectedHash -cne $CurrentProductionDllHashes[$RelativeDll]) {
+			throw "-SkipBuild refused modified production module '$RelativeDll'. Run again without -SkipBuild."
+		}
+	}
+	$ExpectedMetadataProperties = @(
+		$BuildProvenance.metadataSha256.PSObject.Properties)
+	if ($ExpectedMetadataProperties.Count -ne $RequiredMetadataFiles.Count) {
+		throw "-SkipBuild provenance has the wrong build-metadata set for profile '$Profile'. Run again without -SkipBuild."
+	}
+	foreach ($RelativeMetadata in $RequiredMetadataFiles) {
+		$ExpectedHash = [string](
+			$BuildProvenance.metadataSha256.PSObject.Properties[$RelativeMetadata].Value)
+		if ($ExpectedHash -cne $CurrentMetadataHashes[$RelativeMetadata]) {
+			throw "-SkipBuild refused modified build metadata '$RelativeMetadata'. Run again without -SkipBuild."
+		}
+	}
+}
+else {
+	$BuildProvenance.dllSha256 = $CurrentDllHashes
+	$BuildProvenance.productionDllSha256 = $CurrentProductionDllHashes
+	$BuildProvenance.metadataSha256 = $CurrentMetadataHashes
+	$BuildProvenance | ConvertTo-Json -Depth 6 |
+		Set-Content -LiteralPath $BuildProvenancePath -Encoding UTF8
+}
+Copy-Item -LiteralPath $BuildProvenancePath `
+	-Destination $AttemptBuildProvenancePath -Force
+$Attempt.testBuildProvenanceSha256 =
+	(Get-FileHash -LiteralPath $AttemptBuildProvenancePath -Algorithm SHA256).Hash
+Write-SeinAttemptManifest
+
+# Hold the exact binaries and build metadata read-only until Automation exits.
+# A competing build therefore fails closed instead of changing what this
+# attempt actually loads after its provenance snapshot was captured.
+foreach ($RelativePath in @(
+		$RequiredTestDlls + $RequiredProductionDlls + $RequiredMetadataFiles)) {
+	$QualificationFileLocks.Add([System.IO.File]::Open(
+		(Join-Path $ProjectRoot $RelativePath),
+		[System.IO.FileMode]::Open,
+		[System.IO.FileAccess]::Read,
+		[System.IO.FileShare]::Read))
+}
+foreach ($RelativeDll in $RequiredTestDlls) {
+	if ((Get-FileHash -LiteralPath (Join-Path $ProjectRoot $RelativeDll) `
+			-Algorithm SHA256).Hash -cne $CurrentDllHashes[$RelativeDll]) {
+		throw "Test module '$RelativeDll' changed before its qualification lock was acquired."
+	}
+}
+foreach ($RelativeDll in $RequiredProductionDlls) {
+	if ((Get-FileHash -LiteralPath (Join-Path $ProjectRoot $RelativeDll) `
+			-Algorithm SHA256).Hash -cne $CurrentProductionDllHashes[$RelativeDll]) {
+		throw "Production module '$RelativeDll' changed before its qualification lock was acquired."
+	}
+}
+foreach ($RelativeMetadata in $RequiredMetadataFiles) {
+	if ((Get-FileHash -LiteralPath (Join-Path $ProjectRoot $RelativeMetadata) `
+			-Algorithm SHA256).Hash -cne $CurrentMetadataHashes[$RelativeMetadata]) {
+		throw "Build metadata '$RelativeMetadata' changed before its qualification lock was acquired."
 	}
 }
 
@@ -355,6 +630,9 @@ if ($EditorExitCode -ne 0 -or $Unsuccessful.Count -gt 0 -or $StartupErrors.Count
 	throw "Automation failed (editor exit $EditorExitCode). $States See '$IndexPath'. -AllowKnownStartupErrors accepts only the exact checked-in signature multiset."
 }
 
+$Attempt.testIndexFile = [System.IO.Path]::GetFileName($IndexPath)
+$Attempt.testIndexSha256 =
+	(Get-FileHash -LiteralPath $IndexPath -Algorithm SHA256).Hash
 $Attempt.status = 'Passed'
 $Attempt.completedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
 Write-SeinAttemptManifest
@@ -372,4 +650,9 @@ catch {
 		Write-Warning "Could not finalize attempt manifest '$AttemptPath': $($_.Exception.Message)"
 	}
 	throw
+}
+finally {
+	foreach ($Stream in $QualificationFileLocks) {
+		$Stream.Dispose()
+	}
 }

@@ -97,11 +97,7 @@ ESeinRelation USeinUIBPFL::SeinGetEntityRelation(const UObject* WorldContextObje
 		return ESeinRelation::Friendly;
 	}
 
-	// Check team alliance
-	const FSeinPlayerState* OwnerState = SimSub->GetPlayerState(Owner);
-	const FSeinPlayerState* OtherState = SimSub->GetPlayerState(PlayerID);
-
-	if (OwnerState && OtherState && OwnerState->TeamID != 0 && OwnerState->TeamID == OtherState->TeamID)
+	if (SimSub->ShouldPresentPlayerAsFriendly(Owner, PlayerID))
 	{
 		return ESeinRelation::Friendly;
 	}

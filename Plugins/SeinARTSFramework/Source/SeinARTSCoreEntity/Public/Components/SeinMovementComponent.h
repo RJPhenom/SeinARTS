@@ -317,12 +317,11 @@ struct SEINARTSCOREENTITY_API FSeinMovementComponent : public FSeinComponent
 	UPROPERTY()
 	bool bHomeSeeded = false;
 
-	/** Per-unit custom render/anim values a movement mode writes each tick for the render layer to read
-	 *  (e.g. a hover's bank angle in slot 0, a tank's tread-speed delta in slot 1). Render-only: written
-	 *  via Set Render Value (Sein Mover Handle), read via Get Movement Render Value (Sein Movement
-	 *  Library). NOT part of the deterministic state hash — it's cosmetic output the mode computes
-	 *  deterministically, so it never affects the sim. */
-	UPROPERTY(BlueprintReadOnly, Transient, Category = "SeinARTS|Movement|State")
+	/** Per-unit custom render/anim values a movement mode writes for the render layer to read. Render-
+	 *  only: written through the restricted movement presentation surface or Set Render Value, and
+	 *  read through presentation libraries. Transient, omitted from canonical state/snapshots, reset
+	 *  after restore or movement-class loss, and forbidden as input to deterministic movement graphs. */
+	UPROPERTY(Transient)
 	TArray<FFixedPoint> RenderState;
 };
 

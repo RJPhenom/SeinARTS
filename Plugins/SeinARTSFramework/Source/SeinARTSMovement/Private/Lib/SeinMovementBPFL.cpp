@@ -243,8 +243,31 @@ bool USeinMovementBPFL::SeinHasMovementInput(const UObject* WorldContextObject, 
 
 float USeinMovementBPFL::SeinGetMovementRenderValue(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, int32 Slot)
 {
+	FFixedPoint Value = FFixedPoint::Zero;
+	return GetMovementRenderValueFixed(
+		WorldContextObject, EntityHandle, Slot, Value)
+		? Value.ToFloat()
+		: 0.0f;
+}
+
+bool USeinMovementBPFL::GetMovementRenderValueFixed(
+	const UObject* WorldContextObject,
+	FSeinEntityHandle EntityHandle,
+	int32 Slot,
+	FFixedPoint& OutValue)
+{
+	OutValue = FFixedPoint::Zero;
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
-	if (!Subsystem) return 0.0f;
-	const FSeinMovementComponent* MoveData = Subsystem->GetComponent<FSeinMovementComponent>(EntityHandle);
-	return (MoveData && MoveData->RenderState.IsValidIndex(Slot)) ? MoveData->RenderState[Slot].ToFloat() : 0.0f;
+	if (!Subsystem)
+	{
+		return false;
+	}
+	const FSeinMovementComponent* MoveData =
+		Subsystem->GetComponent<FSeinMovementComponent>(EntityHandle);
+	if (!MoveData || !MoveData->RenderState.IsValidIndex(Slot))
+	{
+		return false;
+	}
+	OutValue = MoveData->RenderState[Slot];
+	return true;
 }

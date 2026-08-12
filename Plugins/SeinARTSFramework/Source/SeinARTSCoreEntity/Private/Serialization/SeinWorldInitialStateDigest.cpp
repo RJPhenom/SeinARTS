@@ -83,6 +83,29 @@ namespace
 		return true;
 	}
 
+	bool WritePairCapabilityGrants(
+		FSeinCanonicalDigestWriter& Writer,
+		const TArray<FSeinPairCapabilityGrantRecord>& Grants)
+	{
+		if (!Writer.WriteUInt32(static_cast<uint32>(Grants.Num())))
+		{
+			return false;
+		}
+		for (const FSeinPairCapabilityGrantRecord& Grant : Grants)
+		{
+			if (!Writer.WriteUInt8(Grant.SourcePlayer.Value)
+				|| !Writer.WriteUInt8(Grant.TargetPlayer.Value)
+				|| !WriteGameplayTag(Writer, Grant.CapabilityTag)
+				|| !WriteGameplayTag(Writer, Grant.SourceKindTag)
+				|| !Writer.WriteInt64(Grant.SourceInstanceID)
+				|| !Writer.WriteInt32(Grant.RefCount))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
 	template<typename TValue, typename WriteValue>
 	bool WriteTagMap(
 		FSeinCanonicalDigestWriter& Writer,
@@ -234,6 +257,11 @@ bool USeinWorldSubsystem::ComputeCanonicalInitialStateDigest(
 		OutError = TEXT("Canonical initial-state digest refused a non-quiescent command, mutation, ownership, vote, or pause-control transaction.");
 		return false;
 	}
+	if (!ValidatePairCapabilityState())
+	{
+		OutError = TEXT("Canonical initial-state digest refused inconsistent pair-capability source records or effective cache.");
+		return false;
+	}
 
 	FSeinCanonicalDigestWriter Writer(
 		TEXT("SeinARTS.InitialState"),
@@ -311,6 +339,14 @@ bool USeinWorldSubsystem::ComputeCanonicalInitialStateDigest(
 			}
 			return false;
 		}
+	}
+	if (!WritePairCapabilityGrants(
+			Writer, GetPairCapabilityGrantRecords()))
+	{
+		OutError = Writer.GetError().IsEmpty()
+			? TEXT("Canonical pair-capability encoding failed.")
+			: Writer.GetError();
+		return false;
 	}
 
 	// Include every allocator slot and the exact LIFO free-list order. This is

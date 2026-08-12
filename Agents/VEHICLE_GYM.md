@@ -1,6 +1,6 @@
 # Movement+ Vehicle Gym
 
-**Evidence date:** 2026-08-03
+**Evidence date:** 2026-08-11
 
 **Scope:** deterministic wheeled/tracked movement qualification; automated source evidence plus a human PIE acceptance matrix.
 
@@ -32,21 +32,27 @@ The Vehicle Gym lives in the disabled, non-shipping `SeinARTSExtensionTestSuite`
 | Recovery | A blocked wheeled vehicle enters the production reverse-recovery state deterministically without tunneling through the navigation floor. |
 | Serial/parallel equivalence | Separate transient serial and forced-parallel (minimum batch 1) recovery timelines produce the same canonical root at every tick. |
 | Checkpoint continuation | Snapshots taken during a live arc, reverse leg, and recovery restore into a second world; canonical roots and latent-action lifecycles remain equal on every following tick. |
+| Replay and reconnect | A live wheeled move continues from a real replay-file checkpoint and from the bounded reconnect-transfer envelope in fresh worlds; terminal root, transform, velocity, steering state, and latent actions match exactly. |
 | Mixed traffic | Two vehicles and two infantry units with different dimensions, masses, speeds, and opposing destinations meet under collision/avoidance; a close-contact checkpoint restores and both worlds remain root-identical until all orders clear. |
+| Presentation telemetry | Typed steering angle, yaw rate, normalized throttle/brake, wheel rotation, and left/right track velocity are bounded/reset correctly and do not change the canonical root. |
 
 Run the focused gates from the project root:
 
 ```powershell
 & "Plugins/SeinARTSTestSuite/RunTests.ps1" -Suite "SeinARTS.Integration.MovementPlus.VehicleGym" -Profile All
 & "Plugins/SeinARTSTestSuite/RunTests.ps1" -Suite "SeinARTS.Determinism.MovementPlus.VehicleGym" -Profile All
+& "Plugins/SeinARTSTestSuite/RunTests.ps1" -Suite "SeinARTS.Determinism.MovementPlus" -Profile All
 ```
 
 ## What automation does not prove
 
-This suite proves exact state and bounded completion for its scenarios. It does not prove designer-perceived motion quality, arbitrary-map clearance, large-scale performance, network transport, or replay-file I/O in the same scenario.
+This suite proves exact state and bounded completion for its scenarios. It does not prove designer-perceived motion quality, arbitrary-map clearance, large-scale performance, or real multi-client network transport.
 
-- Snapshot continuation is covered directly. The packaged multiplayer qualification separately proves replay/checkpoint seek and exact terminal roots, but a Movement+-specific replay-file scenario is still required before claiming that combined path green.
-- Presentation currently exposes truthful settled ground speed and reverse state. It does not yet expose a complete vehicle animation payload for steering angle, yaw rate, normalized throttle/brake, wheel rotation, or left/right track velocity.
+- Snapshot continuation, replay-file checkpoint continuation, and bounded reconnect transfer are
+  covered directly for Movement+. Real multi-client PIE remains the transport and presentation oracle.
+- Presentation exposes truthful settled ground speed/reverse state plus typed render-only steering
+  angle, yaw rate, normalized throttle/brake, wheel rotation, and left/right track velocity through
+  `USeinMovementPlusBPFL`. Animation Blueprint readability remains a PIE oracle.
 - The mixed-traffic fixture is a correctness stress, not a scale benchmark.
 - The planner reshapes the route head only. Whether ordinary downstream A* corners also need curvature shaping is a feel/performance decision that must be based on PIE evidence, not inferred from these tests.
 
@@ -62,6 +68,7 @@ Use the same authored vehicle Blueprint with `bManeuverPlanning` on and off. Res
 6. **Formation:** mix vehicle and infantry footprints, then test slot arrival/facing and a formation repath around a blocker.
 7. **Congestion:** run representative counts through opposing and crossing flows. Capture `stat unit`, Insights/GameThread samples, simulation-behind warnings, and movement/collision counters.
 8. **Snapshot/network/replay:** checkpoint during an arc, cusp, and recovery in the intended multiplayer topology; reconnect and replay through each point, comparing canonical roots.
-9. **Presentation:** verify animation reads settled post-collision motion and reverse correctly; add the missing vehicle telemetry before wheel/track animation is signed off.
+9. **Presentation:** verify animation reads settled post-collision motion, reverse, steering/yaw,
+   throttle/brake, wheel rotation, and differential track velocity correctly.
 
 Do not broaden the production planner until this matrix identifies a concrete failure. If tail corners are the failing case, compare a bounded path-tail curvature stage against the existing head-only planner behind the current A/B seam. If the head maneuvers already feel wrong, tune or replace the curated word selection first; those are different problems.

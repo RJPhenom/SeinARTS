@@ -30,11 +30,22 @@ struct FSeinReplayAsyncAppendResult
 	FString Error;
 };
 
+struct FSeinReplayCheckpointEncodeWork;
+
+struct FSeinReplayAsyncCheckpointEncodeResult
+{
+	bool bSucceeded = false;
+	int32 SnapshotTick = INDEX_NONE;
+	TArray<uint8> Envelope;
+	FString Error;
+};
+
 enum class ESeinReplayAsyncAppendKind : uint8
 {
 	None,
 	TurnBatch,
 	Progress,
+	Checkpoint,
 };
 
 UCLASS()
@@ -61,9 +72,12 @@ public:
 	 *  File/checkpoint maintenance is deferred beyond the completion callback. */
 	void ObserveCompletedTick(int32 CompletedTick);
 
-	/** Capture and append a checkpoint at the current quiescent tick boundary.
-	 *  The first checkpoint is mandatory and must be tick zero. A required
-	 *  failure aborts recording; an optional periodic capture is retried later. */
+	/** Capture and durably append a checkpoint at the current quiescent tick
+	 *  boundary before returning success. The first checkpoint is mandatory and
+	 *  must be tick zero. A required failure aborts recording; an optional
+	 *  capture/encode failure is retried later. Automatic periodic maintenance
+	 *  keeps capture synchronous, then performs encoding and append in one
+	 *  ordered background pipeline. */
 	bool CaptureCheckpoint(bool bRequired);
 
 	/** Flush the applied journal, append a terminal frontier, and atomically
@@ -88,17 +102,50 @@ public:
 	int32 GetPeakResidentTurnCount() const { return PeakResidentTurnCount; }
 	uint64 GetResidentBytes() const { return ResidentBytes; }
 	uint64 GetPeakResidentBytes() const { return PeakResidentBytes; }
+	int32 GetPersistedCheckpointCount() const
+	{
+		return PersistedCheckpointCount;
+	}
+	bool IsCheckpointAppendPending() const
+	{
+		return PendingAppendKind == ESeinReplayAsyncAppendKind::Checkpoint;
+	}
+	bool IsCheckpointEncodePending() const
+	{
+		return PendingCheckpointEncodeFuture.IsValid();
+	}
 
 #if WITH_DEV_AUTOMATION_TESTS
 	/** Queue one ordinary non-blocking maintenance pass for worker/drain tests. */
 	void QueueAppliedProgressForTests();
+	/** Run the exact scheduled maintenance body, including checkpoint cadence. */
+	void RunScheduledMaintenanceForTests();
 	/** Force the same applied-turn/progress flush used by deferred maintenance. */
 	void FlushAppliedProgressForTests();
+	/** Wait for checkpoint encoding and start its ordinary background append. */
+	void ResolveCheckpointEncodeForTests();
+	/** Fail the next scheduled worker append before touching the file. */
+	void FailNextBackgroundAppendForTests()
+	{
+		bFailNextBackgroundAppendForTests = true;
+	}
 #endif
 
 private:
 	void ScheduleMaintenance();
+	void RunScheduledMaintenancePass();
+	bool CaptureCheckpointInternal(
+		bool bRequired,
+		bool bAllowBackgroundAppend);
+	bool HandleCheckpointFailure(
+		bool bRequired,
+		const FString& Reason);
 	void RunDeferredMaintenance(bool bForce);
+	bool ResolvePendingCheckpointEncode(
+		bool bWait,
+		bool bAppendSynchronously);
+	void WaitAndDiscardPendingCheckpointEncode();
+	void DiscardCompletedCheckpointEncode(uint64 ExpectedGeneration);
 	bool ResolvePendingAppend(bool bWait);
 	bool HasPendingAppend() const { return PendingAppendFuture.IsValid(); }
 	void WaitAndDiscardPendingAppend();
@@ -143,6 +190,15 @@ private:
 	 *  path/byte data; all UObject and journal-state mutation remains on the
 	 *  game thread when ResolvePendingAppend observes completion. */
 	TFuture<FSeinReplayAsyncAppendResult> PendingAppendFuture;
+	/** Periodic checkpoint capture remains at a quiescent game-thread boundary.
+	 *  Its detached, immutable snapshot is then encoded on the worker pool while
+	 *  this game-thread-owned work object keeps every reflected reference rooted.
+	 *  No journal append may overtake this future. */
+	TSharedPtr<FSeinReplayCheckpointEncodeWork, ESPMode::ThreadSafe>
+		PendingCheckpointEncodeWork;
+	TFuture<FSeinReplayAsyncCheckpointEncodeResult>
+		PendingCheckpointEncodeFuture;
+	uint64 PendingCheckpointEncodeGeneration = MAX_uint64;
 	ESeinReplayAsyncAppendKind PendingAppendKind =
 		ESeinReplayAsyncAppendKind::None;
 	FGuid PendingAppendDigest;
@@ -152,6 +208,7 @@ private:
 	int32 PendingAppendFirstTurn = INDEX_NONE;
 	int32 PendingAppendLastTurn = INDEX_NONE;
 	int32 PendingAppendTimelineTick = INDEX_NONE;
+	int32 PendingAppendCheckpointTurnCount = INDEX_NONE;
 	/** Source simulation identity for this epoch. The UObject outer may already
 	 *  resolve to a destination world while committed travel retires the journal. */
 	TWeakObjectPtr<UWorld> RecordingWorld;
@@ -177,6 +234,7 @@ private:
 	int32 LastObservedCompletedTick = 0;
 	int32 LastProgressTick = INDEX_NONE;
 	int32 LastCheckpointPersistedTurnCount = 0;
+	int32 PersistedCheckpointCount = 0;
 	int32 NextCheckpointRetryTick = 0;
 	int32 CheckpointRetryBackoffTicks = 0;
 
@@ -184,4 +242,7 @@ private:
 	 *  (chronic capture failure), so the Error-level surfacing fires once
 	 *  per recording instead of drowning in the per-retry warnings. */
 	bool bLoggedChronicCheckpointFailure = false;
+#if WITH_DEV_AUTOMATION_TESTS
+	bool bFailNextBackgroundAppendForTests = false;
+#endif
 };

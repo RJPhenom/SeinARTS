@@ -4904,6 +4904,25 @@ bool USeinNetSubsystem::ResolveTurnReady(int32 Turn)
 	const bool bReady = ReceivedTurns.Contains(Turn);
 	if (!bReady)
 	{
+		// Only a turn that reaches its execution boundary without fan-out is
+		// evidence that the configured input delay failed to absorb latency.
+		// Merely observing the first of several author submissions is normal
+		// ordering and must not be reported as a straggler event.
+		if (TurnAggregator.IsConfigured()
+			&& !TurnAggregator.IsTurnCommitted(Turn)
+			&& !TurnAggregator.IsTurnRetired(Turn))
+		{
+			const double NowSec = FPlatformTime::Seconds();
+			FSeinIncompleteTurnDiagnostic& Diagnostic =
+				IncompleteTurnDiagnostics.FindOrAdd(Turn);
+			if (Diagnostic.FirstObservedAt <= 0.0)
+			{
+				Diagnostic.FirstObservedAt = NowSec;
+				Diagnostic.LastLoggedAt = NowSec;
+			}
+			Diagnostic.bReachedExecutionGate = true;
+		}
+
 		// Per-tick stall noise — Verbose.
 		UE_LOG(LogSeinNet, Verbose, TEXT("ResolveTurnReady: turn %d NOT ready — sim stalls."), Turn);
 
@@ -5410,10 +5429,12 @@ void USeinNetSubsystem::StampAuthoritativeCommandBatch(
 			&& FindFrozenCommandSchema(
 				Command.CommandType, Command.SchemaVersion, Schema)
 			&& Schema.AuthorityScope == ESeinCommandAuthorityScope::MatchControl;
-		Command.PlayerID = Slot;
 		Command.IssuerKind = bIsRegisteredMatchControl
 			? ESeinCommandIssuerKind::MatchAdministrator
 			: ESeinCommandIssuerKind::Player;
+		Command.PlayerID = bIsRegisteredMatchControl
+			? FSeinPlayerID::Neutral()
+			: Slot;
 		Command.DerivedResourcePayer = FSeinPlayerID::Neutral();
 		Command.Tick = AuthoritativeTick;
 	}
@@ -7653,7 +7674,9 @@ void USeinNetSubsystem::FinalizeCompletedTurnDiagnostics(
 	}
 
 	++TurnsCompletedCount;
-	if (bCompletedAfterIncomplete && CompletingSubmitter.IsValid())
+	if (bCompletedAfterIncomplete
+		&& Diagnostic.bReachedExecutionGate
+		&& CompletingSubmitter.IsValid())
 	{
 		RecordStragglerIfApplicable(TurnId, CompletingSubmitter);
 	}
@@ -7679,7 +7702,7 @@ void USeinNetSubsystem::RecordStragglerIfApplicable(int32 TurnId, FSeinPlayerID 
 		if (Rate > 0.05f)
 		{
 			UE_LOG(LogSeinNet, Warning,
-				TEXT("[ADAPTIVE INPUT DELAY] slot=%u is consistently the last to submit (%d / %d turns, %.1f%%). Consider raising USeinARTSCoreSettings::InputDelayTurns to absorb this peer's latency. Today this is a manual change; automatic dynamic adjustment is a future polish item."),
+				TEXT("[ADAPTIVE INPUT DELAY] slot=%u completed after the execution gate on %d / %d turns (%.1f%%). Consider raising USeinARTSCoreSettings::InputDelayTurns to absorb this peer's latency. Today this is a manual change; automatic dynamic adjustment is a future polish item."),
 				LastSubmittingSlot.Value, Count, TurnsCompletedCount, Rate * 100.0f);
 		}
 	}

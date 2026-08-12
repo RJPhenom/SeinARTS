@@ -25,6 +25,7 @@
 #include "Collision/SeinCollisionResolver.h"
 #include "Data/SeinFaction.h"
 #include "Data/SeinMatchSettings.h"
+#include "Data/SeinRelationshipTypes.h"
 #include "Data/SeinVoteState.h"
 #include "Effects/SeinEffect.h"
 #include "Formations/SeinFormation.h"
@@ -159,7 +160,7 @@ namespace
 {
 	const TCHAR* GCoreEntitySimulationContentContributorId =
 		TEXT("seinarts.coreentity");
-	constexpr uint32 GSimulationContentContributorRevision = 1;
+	constexpr uint32 GSimulationContentContributorRevision = 2;
 	const FName GProjectSettingsCanonicalStateRecipeOwner(
 		TEXT("seinarts.projectsettings"));
 	const FName GWaitActionCodecOwner(TEXT("seinartscoreentity"));
@@ -337,7 +338,7 @@ namespace
 
 	const FName BuiltInCommandSchemaOwner(TEXT("SeinARTSCoreEntity.Commands"));
 	// Bump whenever built-in command semantics change without a wire-shape change.
-	constexpr int32 BuiltInCommandImplementationRevision = 1;
+	constexpr int32 BuiltInCommandImplementationRevision = 2;
 
 	constexpr int32 AllCommandExecutionAllowances =
 		static_cast<int32>(ESeinCommandExecutionAllowance::Spectator)
@@ -585,6 +586,9 @@ void FSeinARTSCoreEntity::StartupModule()
 		{ TEXT("SeinARTS.Core.Command.BrokerOrder.V1"), SeinARTSTags::Command_Type_BrokerOrder,
 			FSeinBrokerOrderPayload::StaticStruct(), ESeinCommandAuthorityScope::EntitySet,
 			4096, 0, 128 * 1024, 4096, 0 },
+		{ TEXT("SeinARTS.Core.Command.SetPairCapability.V1"), SeinARTSTags::Command_Type_SetPairCapability,
+			FSeinSetPairCapabilityCommandPayload::StaticStruct(), ESeinCommandAuthorityScope::MatchControl,
+			0, 0, 256, 0, AllCommandExecutionAllowances },
 
 		{ TEXT("SeinARTS.Core.Command.PauseMatchRequest.V1"), SeinARTSTags::Command_Type_PauseMatchRequest,
 			nullptr, ESeinCommandAuthorityScope::Self, 0, 0, 0, 0, ActiveParticipantControlAllowances },

@@ -112,7 +112,7 @@ private:
 class SEINARTSCOREENTITY_API FSeinCanonicalInitialStateDigest
 {
 public:
-	static constexpr uint32 CurrentFormatVersion = 4;
+	static constexpr uint32 CurrentFormatVersion = 5;
 	static constexpr int32 MaxReloadClaimsPerContributor = 64;
 
 	/** Register one stable module-owned contribution for future worlds.

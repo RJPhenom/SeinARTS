@@ -34,17 +34,20 @@ namespace
 			const UClass* Anchor;
 			ESeinPoolObjectKind Kind;
 			const TCHAR* StableProviderId;
+			uint32 BehaviorRevision;
 		};
 		const FSpec Specs[] = {
 			{
 				USeinAbility_SquadReinforce::StaticClass(),
 				ESeinPoolObjectKind::Ability,
 				TEXT("seinarts.squad.pool.reinforce.reflection"),
+				3,
 			},
 			{
 				USeinSquadDispatchResolver::StaticClass(),
 				ESeinPoolObjectKind::CommandBrokerResolver,
 				TEXT("seinarts.squad.pool.dispatch-resolver.reflection"),
+				1,
 			},
 		};
 		for (const FSpec& Spec : Specs)
@@ -54,7 +57,7 @@ namespace
 			Descriptor.Kind = Spec.Kind;
 			Descriptor.StableProviderId = Spec.StableProviderId;
 			Descriptor.StateSchemaVersion = 1;
-			Descriptor.BehaviorRevision = 1;
+			Descriptor.BehaviorRevision = Spec.BehaviorRevision;
 			Descriptor.CodecRevision = 2;
 			Descriptor.MaxStateBytes =
 				FSeinPoolObjectCodecRegistry::MaxStateBytes;
@@ -111,7 +114,7 @@ void FSeinARTSSquadModule::StartupModule()
 
 	FSeinSimulationContentContributorDescriptor ContentDescriptor;
 	ContentDescriptor.StableContributorId = TEXT("seinarts.squad");
-	ContentDescriptor.ContributorRevision = 1;
+	ContentDescriptor.ContributorRevision = 3;
 
 	FString ContentRegistrationError;
 	SimulationContentRegistrationHandle =

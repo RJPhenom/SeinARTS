@@ -32,7 +32,8 @@
  *          client unconditionally; a client with the channel silent simply logs
  *          nothing — authoritative sim state is untouched either way.
  *
- * Phase: PostTick | Priority: MovementTrace (90) — after CommandBroker (40).
+ * Phase: FinalObservation | Priority: MovementTrace (10), after presentation
+ * sampling and every authoritative PostTick system.
  */
 
 #pragma once
@@ -316,8 +317,8 @@ public:
 	{
 		return FSeinSystemDescriptor::Stateless(
 			FName(TEXT("seinarts.movement.trace")),
-			1u,
-			ESeinTickPhase::PostTick,
+			2u,
+			ESeinTickPhase::FinalObservation,
 			SeinSystemPriority::MovementTrace);
 	}
 

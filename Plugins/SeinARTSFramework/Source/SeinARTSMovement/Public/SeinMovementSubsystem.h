@@ -29,6 +29,7 @@
 
 class FSeinAvoidanceSystem;
 class FSeinMovementDriverSystem;
+class FSeinMovementPresentationSystem;
 class FSeinMovementTraceSystem;
 class FSeinNavContainmentSystem;
 class USeinAvoidance;
@@ -111,6 +112,8 @@ public:
 
 private:
 	friend struct FSeinMovementCanonicalStateProvider;
+	friend struct FSeinMovementSubsystemTestAccess;
+	void HandleAuthoritativeStateRestored();
 
 	/** Local unit-unit avoidance steering system (PreTick). A thin delegator owned
 	 *  here; registered with the sim loop during initialization, unregistered + deleted
@@ -132,7 +135,12 @@ private:
 	 *  Same ownership / lifecycle as the others. */
 	FSeinNavContainmentSystem* NavContainmentSystem = nullptr;
 
-	/** Observation-only movement trace (PostTick 90, after everything that moves
+	/** Render-only final-motion sampler (FinalObservation 89). It observes transforms
+	 * after collision/containment and dispatches typed presentation updates to
+	 * the persistent movement instance without committing canonical state. */
+	FSeinMovementPresentationSystem* PresentationSystem = nullptr;
+
+	/** Observation-only movement trace (FinalObservation 90, after everything that moves
 	 *  bodies): the crowd-jam "written picture" logger behind `log LogSeinMoveTrace
 	 *  Verbose`. Silent by default; never touches sim state. Same ownership /
 	 *  lifecycle as the others. */

@@ -575,14 +575,20 @@ struct FSeinNetSubsystemTestAccess
 		Net.StampAuthoritativeCommandBatch(
 			Commands, Slot, bParticipantCanAdministerMatch, Turn);
 	}
-	static void MarkTurnIncomplete(USeinNetSubsystem& Net, int32 Turn)
+	static void MarkTurnIncomplete(
+		USeinNetSubsystem& Net, int32 Turn, bool bReachedExecutionGate = false)
 	{
-		Net.IncompleteTurnDiagnostics.Add(Turn, {1.0, 1.0, false});
+		Net.IncompleteTurnDiagnostics.Add(
+			Turn, {1.0, 1.0, false, bReachedExecutionGate});
 	}
 	static void FinalizeTurnDiagnostics(
 		USeinNetSubsystem& Net, int32 Turn, FSeinPlayerID CompletingSubmitter)
 	{
 		Net.FinalizeCompletedTurnDiagnostics(Turn, CompletingSubmitter);
+	}
+	static bool ResolveTurnReady(USeinNetSubsystem& Net, int32 Turn)
+	{
+		return Net.ResolveTurnReady(Turn);
 	}
 	static bool HasIncompleteTurn(const USeinNetSubsystem& Net, int32 Turn)
 	{
@@ -1849,17 +1855,21 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(AreEqual(
 			static_cast<int32>(ESeinCommandIssuerKind::MatchAdministrator),
 			static_cast<int32>(Batch[0].IssuerKind)));
+		ASSERT_THAT(IsTrue(Batch[0].PlayerID.IsNeutral()));
 	}
 
-	TEST(InterleavedIncompleteTurnsPreserveActualCompletingSubmitters, "SeinARTS.Unit.Network")
+	TEST(GateLateTurnsPreserveActualCompletingSubmitters, "SeinARTS.Unit.Network")
 	{
 		USeinNetSubsystem* Net = FSeinNetSubsystemTestAccess::NewSubsystem();
 		ASSERT_THAT(IsNotNull(Net));
 		const FSeinPlayerID SlotA(1);
 		const FSeinPlayerID SlotB(2);
+		FSeinNetSubsystemTestAccess::SeedConfiguredProtocol(*Net, 2);
 
-		FSeinNetSubsystemTestAccess::MarkTurnIncomplete(*Net, 7);
-		FSeinNetSubsystemTestAccess::MarkTurnIncomplete(*Net, 8);
+		ASSERT_THAT(IsFalse(
+			FSeinNetSubsystemTestAccess::ResolveTurnReady(*Net, 7)));
+		ASSERT_THAT(IsFalse(
+			FSeinNetSubsystemTestAccess::ResolveTurnReady(*Net, 8)));
 		// SlotA is deliberately lower than canonical last SlotB: attribution
 		// must follow the RPC that actually completed the turn, not sort order.
 		FSeinNetSubsystemTestAccess::FinalizeTurnDiagnostics(*Net, 7, SlotA);
@@ -1876,8 +1886,9 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(AreEqual(1, FSeinNetSubsystemTestAccess::StragglerCount(*Net, SlotA)));
 		ASSERT_THAT(AreEqual(1, FSeinNetSubsystemTestAccess::StragglerCount(*Net, SlotB)));
 
-		// An ordinarily completed turn increments the denominator without
-		// inventing another straggler event.
+		// Ordinary interleaving can make one author complete an incomplete
+		// aggregate, but it is not late unless the execution gate was reached.
+		FSeinNetSubsystemTestAccess::MarkTurnIncomplete(*Net, 9);
 		FSeinNetSubsystemTestAccess::FinalizeTurnDiagnostics(*Net, 9, SlotA);
 		ASSERT_THAT(AreEqual(3, Net->GetTurnsCompletedCount()));
 		ASSERT_THAT(AreEqual(1, FSeinNetSubsystemTestAccess::StragglerCount(*Net, SlotA)));

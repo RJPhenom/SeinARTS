@@ -6,6 +6,8 @@
 #include "SeinConsumerQualificationSubsystem.generated.h"
 
 class USeinReplayReader;
+class USeinWorldSubsystem;
+struct FSeinCommand;
 
 /**
  * Generated-consumer-only packaged runtime driver.
@@ -29,6 +31,9 @@ private:
 	void TickServer(UWorld& World);
 	void TickClient(UWorld& World);
 	void TickReplay(UWorld& World);
+	void ObserveReplayCommands(
+		int32 Tick,
+		const TArray<FSeinCommand>& Commands);
 
 	bool IsMap(const UWorld& World, const TCHAR* PackageName) const;
 	bool WriteMarker(const TCHAR* FileName, const FString& Body) const;
@@ -54,13 +59,18 @@ private:
 	bool bMatchStartRequested = false;
 	bool bServerMatchStarted = false;
 	bool bServerRootGossipCompleted = false;
+	bool bServerPairGrantSubmitted = false;
+	bool bServerPairGrantObserved = false;
 	bool bServerSawDrop = false;
 	bool bServerSawReconnect = false;
+	bool bServerPairRevokeSubmitted = false;
+	bool bServerPairRevokeObserved = false;
 	bool bServerReplayPublished = false;
 	bool bPingSubmitted = false;
 	bool bInitialResyncRequested = false;
 	bool bInitialResyncObserved = false;
 	bool bInitialResyncCompleted = false;
+	bool bClientPairGrantObserved = false;
 	bool bInitialConnectTravelIssued = false;
 	bool bDisconnectIssued = false;
 	bool bReconnectTravelIssued = false;
@@ -69,9 +79,15 @@ private:
 	bool bReconnectResyncRequested = false;
 	bool bReconnectResyncObserved = false;
 	bool bReconnectCompleted = false;
+	bool bReconnectPairCapabilityPreserved = false;
+	bool bClientPairRevokeObserved = false;
 	bool bReplayTravelIssued = false;
 	bool bReplayStarted = false;
 	bool bReplayObservedPlaying = false;
+	bool bReplayObservedPairGrant = false;
+	bool bReplayObservedPairRevoke = false;
+	FDelegateHandle ReplayCommandObserverHandle;
 	TWeakObjectPtr<UWorld> InitialClientMatchWorld;
 	TWeakObjectPtr<USeinReplayReader> ActiveReplayReader;
+	TWeakObjectPtr<USeinWorldSubsystem> ReplayObserverWorld;
 };

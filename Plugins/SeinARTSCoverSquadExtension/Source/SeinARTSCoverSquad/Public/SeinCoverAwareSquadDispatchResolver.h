@@ -27,9 +27,9 @@ class SEINARTSCOVERSQUAD_API USeinCoverAwareSquadDispatchResolver : public USein
 public:
 	// Tuning lives in Project Settings → SeinARTS Plugin → Cover:
 	//   * Cover Snap Radius — distance gate around the move target.
-	// Cursor-side preference is a deterministic preferred-pass plus wrong-side
-	// capacity fallback. See SeinCoverAwareDefaultBrokerResolver.h for the full
-	// rationale on sharing the radius instead of duplicating BP CDO tuning.
+	// Cover's shared deterministic planner maximizes coverage, then minimizes
+	// wrong-side use and total squared distance. See the default cover-aware
+	// resolver for the rationale on sharing one radius setting.
 
 	virtual void PostProcessPositions_Implementation(
 		USeinWorldSubsystem* World,
