@@ -8,7 +8,7 @@ This order minimizes rework. Do not start a later stage by weakening an earlier 
 
 **Status:** complete in the commit containing this file; performance/remediation was merged locally to `main` at `27cb490` and then cleaned/hardened.
 
-- Durable engineering state is consolidated under `Agents/`; generated reports and historical audit scratch are gone.
+- Durable engineering state is consolidated under `.agents/`; generated reports and historical audit scratch are gone.
 - Proven-dead types/config/code are removed, and touched stale comments now match live behavior.
 - Foundation fixed-vector, PRNG draw-order/unit, and ray/box defects have focused regression tests.
 - Development/UHT, Shipping, Unit, Integration, Determinism, and fresh-process A/B passed after the trim.
@@ -74,7 +74,7 @@ scout, and logistics-truck contracts across open U-turns, reverse-behind goals, 
 K-turn, narrow-corridor reverse-out, S-turns, interval repaths, formation-facing arrival,
 cancel/reissue, recovery, and mixed infantry/vehicle congestion with different body sizes,
 speeds, and masses. Checkpoints taken during arcs, reverse legs, recovery, and close mixed traffic
-continue with exact canonical roots. See `Agents/VEHICLE_GYM.md` for the evidence and PIE matrix.
+continue with exact canonical roots. See `.agents/VEHICLE_GYM.md` for the evidence and PIE matrix.
 
 Still required before Movement+ is production-qualified: the human PIE feel/performance matrix,
 a Movement+-specific replay-file/network combination test, and presentation telemetry for

@@ -28,8 +28,8 @@ The post-audit performance/remediation work is now committed and fast-forwarded 
 
 ## Baseline cleanup
 
-- Historical audit/report artifacts were removed; `Docs/` is physically empty and reserved for deliberate product documentation.
-- Durable current state was consolidated under `Agents/`; generated PDF output now belongs outside the repository.
+- Historical audit/report artifacts were removed; `Docs/` is reserved for deliberate product documentation.
+- Durable current state was consolidated under `.agents/`; generated PDF output now belongs outside the repository.
 - Empty scratch directories, duplicate/template config entries, stale comments, and dead source surfaces were removed.
 - Removed reflected/source surfaces had no source, config, or binary-asset consumers: `ESeinElevationMode`, `FFixedBounds`, `SeinTime`, `FSeinCapturePointData`, `FSeinFootprintData`, and `USeinLevelLoS`.
 - Designer-facing reflected APIs were not removed merely because native code does not include them. `UMathBPFL`, `FSeinBasicMatchSettings`, and `FSeinGarrisonSpec` remain intentional public authoring surfaces.
@@ -166,7 +166,7 @@ Latest local evidence is under ignored `Saved/Automation/`:
   K-turns, corridor escape, S-bends, repath and order replacement, formation-facing settle,
   recovery, and mixed infantry/vehicle collision. Active arc, reverse, recovery, and congestion
   checkpoints continue with exact roots after restore. Human feel, scale, combined replay/network,
-  and the missing vehicle animation telemetry remain explicit gates in `Agents/VEHICLE_GYM.md`.
+  and the missing vehicle animation telemetry remain explicit gates in `.agents/VEHICLE_GYM.md`.
 
 ## Evidence limits
 

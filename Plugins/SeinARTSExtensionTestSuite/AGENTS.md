@@ -1,6 +1,6 @@
 # SeinARTS Extension Test Suite — Local Guide
 
-Read the root guide, `Agents/WORKFLOW.md`, and the SeinARTSTestSuite guide first. This disabled non-shipping
+Read the root guide, `.agents/WORKFLOW.md`, and the SeinARTSTestSuite guide first. This disabled non-shipping
 companion owns tests that intentionally link the Squad, Cover, Cover+Squad bridge, and Movement+
 modules.
 Keeping it separate lets the base test suite compile and run with every extension stripped.

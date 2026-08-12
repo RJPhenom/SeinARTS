@@ -4,7 +4,7 @@ The core plugin owns the deterministic simulation, entity/ability/effect infrast
 level data, navigation, movement foundations, fog of war, lockstep transport, and the host
 gameplay/editor/UI layers.
 
-Read the project-root guide and `Agents/WORKFLOW.md` first. They own cross-plugin invariants,
+Read the project-root guide and `.agents/WORKFLOW.md` first. They own cross-plugin invariants,
 build commands, workflow, naming, and verification discipline. This file is intentionally narrower.
 
 The Squad, Cover, and Movement+ behaviors are opt-in extensions. Core may expose neutral data

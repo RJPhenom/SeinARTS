@@ -1,7 +1,7 @@
 # SeinARTS Cover + Squad Bridge — Plugin Guide
 
 This opt-in production plugin is the only package allowed to depend on both the Cover and Squad
-extensions. Read the project-root guide and `Agents/WORKFLOW.md` first. It exists so Cover and Squad
+extensions. Read the project-root guide and `.agents/WORKFLOW.md` first. It exists so Cover and Squad
 remain independently strippable while games that enable both can select a cover-aware squad dispatch resolver.
 
 ## Boundary
