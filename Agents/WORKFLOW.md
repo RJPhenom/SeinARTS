@@ -1,6 +1,6 @@
 # SeinARTS Agent Workflow
 
-This is the local operational mirror of the human [Workflow Policy](https://docs.google.com/document/d/1pb3Z0DdQKAIJ610cMOy1yOP9_RQj1jtzMupfhkyrlfw), source policy version 1.0. The human policy owns contributor workflow. Update both in the same task when workflow changes.
+This is the local operational mirror of the human [Workflow Policy](https://docs.google.com/document/d/1pb3Z0DdQKAIJ610cMOy1yOP9_RQj1jtzMupfhkyrlfw), source policy version 2.0. The human policy owns contributor workflow. Update both in the same task when workflow changes.
 
 ## Worktrees
 
