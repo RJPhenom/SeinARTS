@@ -1,93 +1,113 @@
 # SeinARTSCoverExtension — Plugin Guide
 
-Opt-in **cover system** for the SeinARTS lockstep RTS: deterministic cover providers (slots + area
-volumes) on sim entities, a pluggable cover-query system, automatic cover-snap dispatch resolvers,
-and a per-player destination-preview decal layer tinted by cover quality. Cleanly strippable —
-nothing in the framework depends on it.
+This opt-in extension currently provides deterministic cover providers and queries, resolver-local
+cover-aware destinations, preview quality, and editor authoring tools. Read the project-root
+`AGENTS.md` first. The adjacent `CLAUDE.md` remains for Claude compatibility and must not be
+deleted. It may lag live code, so live behavior and this concise guide win when they conflict.
 
-> **Read the project-root `CLAUDE.md` first** for the cross-cutting rules. This file covers cover
-> mechanics only.
+Nothing in the framework may depend on Cover.
 
-- **Depends on:** `SeinARTSFramework` and `EnhancedInput`.
-- **Does not depend on Squad.** Cover-aware Squad dispatch lives in the separate
-  `SeinARTSCoverSquadExtension` bridge.
+## Modules and dependencies
 
----
-
-## Two modules
-
-| Module | Type | Role |
+| Module | Type | Responsibility |
 |---|---|---|
-| **SeinARTSCover** | Runtime | The cover system: components, geometry, query system, the cover-aware default broker resolver, preview-quality provider, settings, tags. |
-| **SeinARTSCoverEditor** | Editor (PostEngineInit) | Cover-component Details panel (Generate Slots button) + entity-bridge cover draw callback. |
+| `SeinARTSCover` | Runtime | Provider data, cover system/default, subsystem, default broker resolver, settings, tags, and Blueprint queries. |
+| `SeinARTSCoverEditor` | Editor | Details customization, slot generation, and entity-bridge authoring visualization. |
 
-Cover and Squad are physically independent. The optional bridge is its own production plugin and
-declares Framework, Cover, and Squad as required dependencies. Neither parent plugin depends back
-on it.
+Framework is required. Cover has no Squad dependency and must build/cook with Squad physically
+absent. Cover-aware Squad dispatch lives in the separate, explicitly enabled
+`SeinARTSCoverSquadExtension`, which depends on both parent plugins.
 
----
+## Provider and query model
 
-## SeinARTSCover (runtime)
+- `FSeinCoverComponent` is deterministic provider data authored in `ComponentData`: quality,
+  directionality, slots, area, and editor generation settings.
+- `USeinCoverSystem` is currently the replaceable provider-lifecycle and query surface.
+  `USeinCoverDefault` is the shipped query policy. `FSeinCoverAssignmentPlanner` owns the shared
+  pure ordinary/Squad max-cardinality, min-wrong-side, min-distance assignment path.
+- `USeinCoverSubsystem` owns the selected system and registers providers from entity lifecycle
+  events.
+- Shipped geometry queries with a valid observer gate providers through the active FoW
+  implementation. An invalid observer deliberately requests ground truth. Terrain-derived cover is
+  not hidden by provider visibility.
+- `TerrainCoverQuality` maps baked terrain gameplay tags to cover quality; navigation is currently
+  the runtime terrain-query owner, so keep this seam explicit and deterministic.
+- Editor-time scatter may use nondeterministic randomness only because the resulting fixed-point
+  slots are serialized before runtime.
 
-- **`FSeinCoverComponent`** (BP, `SeinDeterministic`) — the sim cover provider authored in an
-  entity's `ComponentData`: `QualityTag`, `bIsDirectional`, `Slots` (`TArray<FFixedVector>` — pure
-  positions), `Area`, plus edit-time Generate params. `GenerateSlots()` is deterministic
-  (`FFixedPoint` math). The only non-deterministic call is `FMath::FRand` for **editor-time** scatter
-  authoring, whose output is serialized to fixed-point — deterministic at runtime (documented safe).
-- **`FSeinCoverArea`** (Box/Sphere/None), **`FSeinCoverContext`**, **`FSeinCoverSlotCandidate`** —
-  all BP types.
-- **`USeinCoverSystem`** (abstract BP UObject) — the pluggable query surface:
-  `Register/UnregisterProvider`, `QueryCoverAt`, `QueryBestCoverQualityAt`, `FindNearbySlots`. Every
-  query takes a fog-of-war **`Observer`** and gates on `USeinFogOfWar::IsEntityVisibleToObserver` —
-  you can't snap to cover you can't see.
-- **`USeinCoverDefault`** — the shipped impl: flat provider list, per-provider cached "reach"
-  distance gate, priority Heavy > Light > Negative > other.
-- **`USeinCoverSubsystem`** (WorldSubsystem) — owns the active system (class from settings),
-  auto-registers/unregisters providers via `USeinWorldSubsystem::OnEntitySpawned/Destroyed`.
-- **`USeinCoverBPFL`** — `SeinQueryCoverAt`, `SeinQueryBestCoverQualityAt`, `SeinGetCoverDirection`.
-- **Destination preview** — now a BASE framework feature: `ASeinFormationPreviewActor` + its
-  swappable render backends (default = ghost-free mesh quads; Decal / ISM subclasses) live in
-  SeinARTSFramework. Cover only feeds it per-cell quality tags via
-  `USeinWorldSubsystem::PreviewQualityProvider`; the `CoverQualityTints` (green/yellow/red) are
-  authored on the preview BP.
-- **`USeinARTSCoverSettings`** (DeveloperSettings) — `CoverSystemClass`, `CoverSnapRadius`
-  (default 500). (`FormationPreviewActorClass` / `bEnableFormationPreview` moved to
-  `USeinARTSCoreSettings`.)
-- Native gameplay tags: `SeinARTS.Cover.{Heavy, Light, Negative, UsesCover}`.
+Provider and slot identities must be stable and generational. A slot identity is conceptually the
+provider handle plus authored slot identity/index; proximity alone is not sufficient for authority,
+reservation, snapshot, or replay state.
 
-## Resolvers
+## Destination authority
 
-The Cover plugin owns the loose-unit/default-broker resolver. The separate Cover+Squad bridge owns
-the Squad-derived resolver. Both are opt-in through class settings, so absent plugins fall back to
-framework/Squad defaults.
+The root invariant applies without exception: preview destinations equal the command's first path
+destinations, and an authored cover slot is authoritative over a coarse-nav false negative.
 
-- **`USeinCoverAwareDefaultBrokerResolver`** (subclasses the framework's
-  `USeinDefaultCommandBrokerResolver`) — overrides `PostProcessPositions`: reads `CoverSnapRadius`,
-  derives the FoW observer from member[0]'s owner, calls `FindNearbySlots`, partitions candidates by
-  cursor side (`SeinCoverGeometry::PartitionSlotsByCursorSide`), then runs the shared deterministic
-  max-cardinality/min-wrong-side/min-distance allocation onto members carrying
-  `SeinARTS.Cover.UsesCover`. Enabled by pointing
-  `USeinARTSCoreSettings::DefaultBrokerResolverClass` at this class.
-- **`USeinCoverAwareSquadDispatchResolver`** lives in `SeinARTSCoverSquadExtension`. It subclasses
-  `USeinSquadDispatchResolver` and overrides the same `PostProcessPositions` hook. Enable it per
-  squad via `FSeinSquadComponent::DispatchResolverClass` or as the Squad default resolver.
+Keep these concepts separate:
 
-The shared allocator is exact within one resolver call. Cross-broker slot contention and the
-preview-artifact reservation lifecycle remain explicit follow-up work; separate squad/loose calls
-can still nominate the same authored slot until that layer is complete.
+1. Raw authored-slot discovery/identity.
+2. Static coarse-nav reachability.
+3. The owning provider's own obstruction.
+4. Unrelated dynamic blockers or physical occupants.
+5. Reservation and gameplay eligibility policy.
 
-## SeinARTSCoverEditor
-- **`FSeinCoverComponentDetails`** — PropertyEditor custom layout for `FSeinCoverComponent` adding a
-  **Generate Slots** button; drives changes through `IPropertyHandle::SetPerObjectValues` for correct
-  archetype propagation.
-- **`SeinCoverEntityDraw::DrawCoverEntries`** — registered against the framework editor's draw
-  registry as `RegisterComponentDataDraw(FName("SeinCoverComponent"), …)` for area + slot viz
-  (unregistered on shutdown).
+Authority may bypass the coarse static bake and owning provider obstruction. It must not
+accidentally make unrelated wrecks, deployables, reservations, or hazards disappear. Never
+recognize authority by recursively calling a query that has already filtered out the authored
+slot.
 
----
+The generic authority seam must compose multiple deterministic providers by stable key/order; a
+single-cast Boolean hook is not sufficient for framework-grade composition or contextual policy.
 
-## Current state
-**Substantially complete and functional**, not stubs — the query system, default implementation,
-loose-unit resolver, FoW gating, slot generation (edge/area/scatter), preview pipeline with cover-quality
-tinting, and editor viz / Generate button are all fully wired end-to-end. Determinism holds
-(sim-affecting math is all fixed-point; the lone `FMath::FRand` is editor-time, serialized).
+## Dispatch and allocation
+
+Cover post-processing runs after base formation layout and is shared by preview and commit.
+Ordinary and Squad movement delegate to `FSeinCoverAssignmentPlanner`; do not fork allocation logic
+back into either resolver adapter.
+
+The shipped planner currently solves one resolver invocation exactly. It does not yet coordinate
+claims across separate ordinary and persistent-Squad broker invocations, so do not describe the
+current result as globally selection-wide until the reservation/artifact layer below lands.
+
+The intended tactical allocator is selection-wide and deterministic:
+
+- Stable member and slot ordering.
+- Maximum-cardinality/minimum-cost matching with fixed-point policy inputs.
+- Pure preview planning followed by explicit commit-time reservation.
+- No duplicate member or slot claims.
+- Replaceable native allocator/system plus BlueprintNativeEvent eligibility/scoring policy.
+- Reservation lifecycle included in canonical state, snapshot, replay, reset, and reconnect.
+
+Do not silently replan an initial destination after preview. If reservation state changed before
+execution, commit accepts the exact resolved artifact or rejects according to the approved policy;
+later movement repaths may re-resolve.
+
+## Editor and preview
+
+- Slot generation must use transaction/property APIs that propagate correctly to archetypes.
+- `SeinARTSCoverEditor` registers and unregisters its unique draw key with the framework editor.
+- Formation-preview rendering lives in the framework; Cover supplies quality and slot planning,
+  not a second render pipeline.
+- Preview is read-only. It may create provisional claims but never mutate authoritative sim state.
+
+`CoverSystemClass`, `CoverSnapRadius`, and `TerrainCoverQuality` affect sim outcomes. The module
+registers all three under the frozen `CoverExtension` config-fingerprint ID. Map entries are
+canonically sorted by the base registry, so insertion order is not compatibility state.
+
+## Verification
+
+Cover changes need synthetic and world-level scenarios for:
+
+- Coarse-red authored slots and exact arrival.
+- Long providers and authored slots beyond area bounds.
+- Owning-provider blocker exemption versus unrelated live blocker rejection.
+- Fog-observer filtering and every supported vision layer.
+- Multi-squad/loose-unit contention and deterministic matching.
+- Reservation acquire/release, provider destruction, cancellation, failed movement, and restore.
+- Preview artifact versus every first path request.
+- Provider registration-order permutations and serial/parallel state agreement.
+- Cover without Squad, the separate Cover+Squad bridge, and framework-only builds.
+
+For small allocation matrices, compare the optimized solver against exhaustive brute force. Use
+PIE for tactical plausibility, approach/facing feel, preview clarity, and visual quality.
