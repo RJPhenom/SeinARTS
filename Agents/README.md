@@ -8,6 +8,7 @@ Use `WORKFLOW.md` for operational rules. Use the repository and plugin guides fo
 
 - `PROJECT_STATE.md` — current Git/build/test/runtime posture and the exact stabilization boundary.
 - `WORKFLOW.md` — local operational mirror of the human Workflow Policy.
+- `STYLE_GUIDE.md` — local operational mirror of the human Style Guide.
 - `FRAMEWORK_MAP.md` — concise live architecture and algorithm map grounded in the current source.
 - `PERFORMANCE_BASELINE.md` — repeatable benchmark contract, measured baseline, and profiling rules.
 - `CONSUMER_VERIFICATION.md` — clean downstream project/build/cook/package verification contract.

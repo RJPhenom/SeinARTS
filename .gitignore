@@ -11,7 +11,7 @@ DerivedDataCache/
 Saved/
 
 # ── Plugin packaging output (PackagePlugins.ps1 → GitHub release zips) ──
-/dist/
+/.dist/
 
 # ── Baked SeinARTS data (regenerable build artifacts — re-bake after clone) ──
 # Level-data bakes are derived from level geometry + plugin code. After clone,
