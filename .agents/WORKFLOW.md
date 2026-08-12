@@ -1,34 +1,152 @@
 # SeinARTS Agent Workflow
 
-This is the local operational mirror of the human [Workflow Policy](https://docs.google.com/document/d/1pb3Z0DdQKAIJ610cMOy1yOP9_RQj1jtzMupfhkyrlfw), source policy version 2.0. The human policy owns contributor workflow. Update both in the same task when workflow changes.
+This is the local operational mirror of the human [Workflow Policy](https://docs.google.com/document/d/1pb3Z0DdQKAIJ610cMOy1yOP9_RQj1jtzMupfhkyrlfw), source policy version 2.2. The human policy owns contributor workflow. Update both in the same task when workflow changes.
 
-## Worktrees
+## About
 
-Git worktrees are banned across all branches.
+This policy defines the workflows and restrictions for developing, testing, and using the SeinARTS Framework.
 
-- Work in the primary checkout at `D:/Projects/Unreal Engine/SeinARTS`.
-- Do not create, enter, or delegate work through another worktree.
-- If a session starts outside the primary checkout, stop and return to it before changing files.
-- One author writes to the checkout at a time. Preserve work and complete the handoff review before taking over.
+## Agents
 
-## Handoffs
+### Markdown files
 
-WIP may be committed or uncommitted. It must be preserved and understandable.
+Agent-authored Markdown belongs in `.agents/`. Keep the repository root clear. Toolchain-loaded `AGENTS.md` and `CLAUDE.md` files at repository and plugin scopes are the exceptions.
 
-Before continuing inherited work:
+### PowerShell
 
-- Adversarially review it for bugs.
-- Confirm the direction, plan, and implementation remain sound.
-- Confirm it is safe to continue.
+SeinARTS uses PowerShell (`.ps1`) for agent development because Windows is the primary development environment and target platform.
+
+Persistent scripts belong in `Scripts/` under the repository root.
+
+- Keep PowerShell scripts in `Scripts/`.
+- Make scripts resolve and operate on the repository root from their own location.
+- Delete one-time scripts after use.
+- Reuse persistent utilities such as `Build.ps1` instead of creating duplicates.
 
 ## Development
 
-Before changing code or documentation, understand the requested result, inspect live code, and check current Git state. Notes provide context; live code and current evidence take priority when they disagree.
+### Starting work
 
-Proceed autonomously when the result and constraints are clear. Ask for input when work materially changes product direction, player experience, public APIs or authoring workflows, compatibility or migration policy, or agreed scope or order.
+Before changing code, understand the requested result, inspect the live implementation, and check the current Git state. Notes and comments provide context; live code and current evidence take priority when they disagree.
 
-## Validation and documentation
+Before continuing inherited work, complete the handoff review below.
 
-Match validation to risk. A successful build proves only that the project compiles.
+### Decisions
 
-Record completed work, remaining work, risks or decisions, validation, and the next action at meaningful handoffs. Every completed code task declares its documentation impact: `none`, `internal`, `public`, or `both`.
+Proceed autonomously when the result and constraints are clear. Ask for input when work changes:
+
+- Product direction or player experience.
+- Public APIs or authoring workflows.
+- Compatibility or migration policy.
+- The agreed order or scope of work.
+
+Routine implementation choices should not create unnecessary pauses.
+
+### Validation
+
+Validation must match the risk of the change. A successful build proves only that the project compiles.
+
+Routine code changes require a final diff review, the relevant build and tests, and a documentation-impact decision.
+
+Changes affecting determinism, simulation timing, networking, replay, persistence, public APIs, module boundaries, or critical performance require stronger evidence as appropriate:
+
+- Independent adversarial review.
+- Development and Shipping builds.
+- Serial-versus-parallel state-hash comparison.
+- Peer, replay, resynchronization, or persistence testing.
+- Profiling against the accepted baseline.
+- PIE validation.
+
+## Documentation
+
+### Document types
+
+Documentation has three audiences:
+
+- Public documentation: customer and developer documentation published through the documentation website.
+- Private human documentation: design, strategy, planning, and progress documents in Google Drive.
+- Operational documentation: agent instructions, handoffs, and engineering records under `.agents/`, issues, or pull requests.
+
+Agent reports and temporary working notes do not belong in the public documentation tree.
+
+### Keeping documentation current
+
+Every completed code task declares its documentation impact: `none`, `internal`, `public`, or `both`.
+
+Public APIs, Blueprint workflows, setup requirements, compatibility changes, and migration steps are documented as part of the associated release. Link documentation changes in another repository to the code change so they can be reviewed together.
+
+Project documents such as the design document, Workflow Policy, and Style Guide use a `major.minor` version on their cover. Increment the minor version whenever the document changes. Only the authoritative decision-maker increments the major version.
+
+## Git
+
+### Commits
+
+Commits are not limited to completed features or functions. They mark clear points in history and serve as restore points during lengthy WIP refactors and feature work.
+
+Files must be committed or deliberately ignored. Do not leave unexplained pending changes at a commit boundary.
+
+### Handoffs
+
+WIP does not need to be cleaned up before another author takes over. It may be committed or uncommitted; what matters is that the work is preserved and its current state can be understood.
+
+Picking up another author's work does not mean assuming it is correct. Before continuing:
+
+- Adversarially review the current state for bugs and confirm that the direction still makes sense.
+- Confirm the plan and implementation are sound.
+- Confirm it is safe to continue.
+
+Correct unsafe work or request authoritative input when a real product or architectural decision is required.
+
+### Branches
+
+Branches belong to tasks, not authors. Authors may continue an existing branch after completing the handoff review.
+
+`main` is the shared integration branch. Merge work once it has been reviewed and validated appropriately for its risk.
+
+Use branches for:
+
+- New features.
+- Major refactors involving one or more modules.
+- Extended bug-fixing or performance work.
+- Release preparation.
+- Work that must remain isolated from `main` or another active task.
+
+### Worktrees
+
+Git worktrees are banned across all environments for this project.
+
+- Work only in the primary checkout at `D:/Projects/Unreal Engine/SeinARTS`.
+- Do not create, enter, or delegate through another worktree.
+- If a session starts elsewhere, stop and return to the primary checkout before changing files.
+- Only one author writes to the checkout at a time.
+
+## Versioning and releases
+
+### Versioning
+
+SeinARTS uses Semantic Versioning:
+
+- Major: breaking public API, authoring, saved-data, replay, snapshot, or compatibility changes.
+- Minor: backward-compatible features and capability additions.
+- Patch: backward-compatible fixes, tuning, performance improvements, and documentation corrections.
+
+The production plugin suite normally ships as one coordinated version. Extensions identify the framework versions they support.
+
+Semantic versions do not guarantee multiplayer compatibility. Released builds also identify their network, simulation, replay, snapshot, persistent-data, simulation-content, engine, and plugin-build compatibility.
+
+### Releases
+
+`main` is the shared integration branch. Immutable Git tags identify released versions, never a moving branch. Use a release branch only when stabilization must continue separately from new work.
+
+A production release requires:
+
+- An agreed version and scope.
+- Clean Development and Shipping builds.
+- Required automated and deterministic checks.
+- Appropriate multiplayer, replay, resynchronization, and persistence checks.
+- Performance comparison against the accepted baseline.
+- Installation and packaging validation in a clean consumer project.
+- Updated documentation, changelog, and migration notes.
+- Versioned plugin artifacts and an immutable Git tag.
+
+Critical fixes branch from the affected release and produce a patch version.
