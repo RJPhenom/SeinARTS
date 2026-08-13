@@ -29,10 +29,9 @@ This is the actionable remainder after consolidating the historical audits. It i
    through resync, physical reconnect, and checkpoint-seek replay are automated. Flight is not a
    production 3D avoidance/collision model.
 6. Containment now has fail-closed acyclic/reciprocal structural state, overflow-safe mutation,
-   quiescent-root/checkpoint validation, and fresh-world snapshot continuation. Production
-   garrison/transport still needs representative ability/command and replay/reconnect mutation
-   workflows, large-fan-out performance evidence, multi-client PIE, and shared observer/team
-   presentation policy.
+   quiescent-root/checkpoint validation, fresh-world snapshot continuation, representative
+   ability-command/checkpoint/replay mutation workflows, and measured 100/500/1,000-occupant
+   root/checkpoint curves. Multi-client PIE and shared observer/team presentation policy remain.
 
 ## Online-product gaps
 

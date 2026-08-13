@@ -52,25 +52,25 @@ formation/resolver state coverage, provider teardown, and downstream content own
 
 | Gate | Result |
 |---|---:|
-| `SeinARTS.Unit`, profile All | 445 passed, 0 failed |
-| `SeinARTS.Unit`, profile Framework | 427 passed, 0 failed |
+| `SeinARTS.Unit`, profile All | 446 passed, 0 failed |
+| `SeinARTS.Unit`, profile Framework | 428 passed, 0 failed |
 | `SeinARTS.Integration`, profile All | 25 passed, 0 failed |
 | `SeinARTS.Integration`, profile Framework | 19 passed, 0 failed |
-| `SeinARTS.Determinism`, profile All | 41 passed, 0 failed |
-| `SeinARTS.Determinism`, profile Framework | 31 passed, 0 failed |
+| `SeinARTS.Determinism`, profile All | 43 passed, 0 failed |
+| `SeinARTS.Determinism`, profile Framework | 33 passed, 0 failed |
 | `SeinARTS.Editor`, profile All | 38 passed, 0 failed |
 | `SeinARTS.Editor`, profile Framework | 36 passed, 0 failed |
 | `SeinARTS.Sim`, profile All | 30 passed, 0 failed |
 | `SeinARTS.Sim`, profile Framework | 27 passed, 0 failed |
-| `SeinARTS.Perf`, profile All | 4 passed, 0 failed; cover 128x128 averaged 11.998 ms; public 128-member preview measured 1.255/1.337 ms median/p95 coverless and 3.181/3.324 ms dense; collision full-tick medians 1.257/3.114/7.214 ms at 64/128/256 movers |
-| `SeinARTS.Perf`, profile Framework | 2 passed, 0 failed; checkpoint snapshot-capture medians 2.037/7.815/15.288 ms at 100/500/1,000 moving entities; collision full-tick medians 1.401/3.035/7.494 ms at 64/128/256 movers |
-| Fresh-process collision trace | 2026-08-13 serial and parallel roots/poses identical for all 120 ticks; final root `D3851A40010AA2B04998D131EAC6A804`, pose `0x8B576390ECC600E1` |
+| `SeinARTS.Perf`, profile All | 5 passed, 0 failed; cover 128x128 averaged 11.998 ms; public 128-member preview measured 1.255/1.337 ms median/p95 coverless and 3.181/3.324 ms dense; collision full-tick medians 1.257/3.114/7.214 ms at 64/128/256 movers |
+| `SeinARTS.Perf`, profile Framework | 3 passed, 0 failed; containment at 1,000 occupants measured 2.825 ms canonical root, 4.328 ms invalidated checkpoint, and 0.926 ms warm checkpoint; moving-entity checkpoint medians remain 2.037/7.815/15.288 ms at 100/500/1,000 entities; collision full-tick medians 1.401/3.035/7.494 ms at 64/128/256 movers |
+| Fresh-process collision trace | 2026-08-13 serial and parallel roots/poses identical for all 120 ticks under `SeinARTS.Replay.6`; final root `58DA3B5A4281F117CB3F7471624DDCB4`, pose `0x8B576390ECC600E1` |
 | `SeinARTSEditor Win64 Development` | succeeded / target current |
 | `SeinARTS Win64 Shipping` | succeeded / target current |
-| Focused Core boundary/epoch | 2026-08-13 `SeinARTS.Unit.Core` Framework profile: 131 passed, including opposite-endpoint saturated distance, maximum-diagonal normalization, and exact `SeinARTS.Replay.5` behavior epoch |
+| Focused Core boundary/epoch | 2026-08-13 exact epoch test passed with `SeinARTS.Replay.6`; prior `SeinARTS.Unit.Core` Framework profile passed 131 tests including opposite-endpoint saturated distance and maximum-diagonal normalization |
 | Focused Net protocol | 2026-08-13 `SeinARTS.Unit.Network.Protocol` Framework profile: 40 passed through production listen-authority commit and disconnect pipeline-backfill entry points |
 | Focused Movement+ | 2026-08-13 unit 5/5, determinism 9/9, movement snapshot 8/8, and continuation 1/1 passed |
-| Focused containment integrity | 2026-08-13 Unit 3/3 and Determinism 1/1 passed; covers cycle/overflow admission, bootstrap/root/checkpoint refusal, fresh-world post-restore mutation continuation, and malformed-restore failure atomicity |
+| Focused containment integrity | 2026-08-13 Unit 4/4, Determinism 3/3, and Perf 1/1 passed; covers cycle/overflow admission, bootstrap/root/checkpoint refusal, failure-atomic malformed restore, rotated local deploy offsets, ability commands, pre/post checkpoint roots, per-tick replay roots, and 100/500/1,000-occupant invalidated/warm checkpoint curves |
 | Clean consumer: Framework | fresh 2026-08-12 Editor + Shipping build, exact map load, cook/package, real Shipping startup passed |
 | Clean consumer: Framework + Cover only | fresh 2026-08-12 Editor + Shipping build, exact map load, cook/package, real Shipping startup passed; Squad/bridge absent |
 | Clean consumer: Framework + Squad only | fresh 2026-08-12 Editor + Shipping build, exact map load, cook/package, real Shipping startup passed; Cover/bridge absent |
