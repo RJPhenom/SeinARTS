@@ -63,8 +63,8 @@ formation/resolver state coverage, provider teardown, and downstream content own
 | `SeinARTS.Sim`, profile All | 30 passed, 0 failed |
 | `SeinARTS.Sim`, profile Framework | 27 passed, 0 failed |
 | `SeinARTS.Perf`, profile All | 6 passed, 0 failed; cover 128x128 averaged 11.998 ms; public 128-member preview measured 1.255/1.337 ms median/p95 coverless and 3.181/3.324 ms dense; collision full-tick medians 1.257/3.114/7.214 ms at 64/128/256 movers |
-| `SeinARTS.Perf`, profile Framework | 4 passed, 0 failed; replay operational soak wrote 135,244,673 bytes over 449 turns with 34.862/101.058/101.371 ms checkpoint p50/p95/max; containment at 1,000 occupants measured 2.825 ms canonical root, 4.328 ms invalidated checkpoint, and 0.926 ms warm checkpoint; moving-entity checkpoint medians remain 2.037/7.815/15.288 ms at 100/500/1,000 entities; collision full-tick medians 1.401/3.035/7.494 ms at 64/128/256 movers |
-| Replay Memory Insights (development) | Full-callstack bookmark-bounded attribution reduced replay-retained growth from 8,388,688 bytes to 80 bytes; the fixed 4 KiB receipt gate is implemented, but a committed clean post-fix trace and production `Qualified` receipt remain pending |
+| `SeinARTS.Perf`, profile Framework | 4 passed, 0 failed; latest replay operational soak wrote 135,244,673 bytes over 449 turns with 135.552/203.523/211.276 ms checkpoint p50/p95/max; containment at 1,000 occupants measured 2.825 ms canonical root, 4.328 ms invalidated checkpoint, and 0.926 ms warm checkpoint; moving-entity checkpoint medians remain 2.037/7.815/15.288 ms at 100/500/1,000 entities; collision full-tick medians 1.401/3.035/7.494 ms at 64/128/256 movers |
+| Replay Memory Insights (qualified) | Clean commit `8178dec` has a same-attempt build and production `Qualified` receipt; the warmed 56-checkpoint interval retained zero production replay allocations/bytes against the fixed 4 KiB ceiling, with complete callstacks and separately validated allocator sentinels |
 | Fresh-process collision trace | 2026-08-13 serial and parallel roots/poses identical for all 120 ticks under `SeinARTS.Replay.6`; final root `58DA3B5A4281F117CB3F7471624DDCB4`, pose `0x8B576390ECC600E1` |
 | `SeinARTSEditor Win64 Development` | succeeded / target current |
 | `SeinARTS Win64 Shipping` | succeeded / target current |
@@ -491,22 +491,27 @@ capture cache hits/live serialization/encode, background/synchronous durable app
 append waits. Accelerated real-file automation now covers 449 turns (448 across the periodic cycles
 plus one journal catch-up turn) and 64 natural periodic
 checkpoints over 128 entities with eight full-GC boundaries, sampled exact seek/root/capability
-checks, full playback, and process working-set/private-commit/late-growth sentinels. The qualifying
-  run wrote 135,244,673 bytes with 34.862 ms p50, 101.058 ms p95, and 101.371 ms maximum checkpoint
-  latency across eight guaranteed GC/exclusion overlaps; final and observed-peak working-set growth
-  were 44.87 MiB, private-commit growth was 43.70 MiB, and late growth was 40.94 MiB. A configured
+checks, full playback, and process working-set/private-commit/late-growth sentinels. Clean commit
+`8178dec` passed attempt `SeinARTS.Perf.Replay.OperationalSoak-20260813-133014-e47a257d`, writing
+135,244,673 bytes with 135.552 ms p50, 203.523 ms p95, and 211.276 ms maximum checkpoint latency
+across eight guaranteed GC/exclusion overlaps. Final and observed-peak working-set growth were
+12.24 MiB, private-commit growth was 9.06 MiB, and late growth was 8.56 MiB. A configured
 64 MiB file-policy exhaustion test stops recording without deleting the
 partial, then replays that partial to the exact last durable tick, capability state, and canonical
 root. Full `default,memory,metadata` tracing over the operational-soak bookmarks attributed
 8,388,688 retained replay bytes in the clean pre-fix run, including one 8,388,608-byte checkpoint
-envelope buffer copied out of its completed future. Consuming completed replay futures removed that
-copy; the development rerun retained 80 replay-attributed bytes. All exported allocations had
-recorded callstacks, and the 21 Insights heap-reconstruction warnings occurred only during startup before the
-measurement interval. The receipt-bound exporter validates every attempt/build/trace/analyzer input,
-enforces a fixed 4 KiB replay ceiling, and publishes CSV/log/receipt artifacts only on success. A
-committed clean post-fix trace and production `Qualified` receipt remain pending. Multi-hour
-real-device latency/hitch and allocator-high-water distributions, platform storage matrices, and
-true OS disk-full behavior remain open.
+envelope buffer copied out of its completed future. Consuming completed futures, making checkpoint
+buffer ownership explicit, and draining only matching worker operations removed the retained
+production replay allocations. The production `Qualified` receipt for that clean commit measures
+the 56 periodic checkpoints after an eight-checkpoint warmup: 1,295 retained allocations and
+48,393,922 bytes overall, all with callstacks, but zero production `SeinARTS/Replay/*` allocations
+or bytes against the fixed 4 KiB ceiling. Two allocator-attribution sentinel rows totaling
+35,651,648 bytes are validated separately and excluded from the production budget. The 21 Insights
+heap-reconstruction warnings occurred only during startup, before the measurement interval. The
+receipt-bound exporter validates every attempt/build/trace/analyzer input and publishes
+CSV/log/receipt artifacts only on success. This closes the local warmed allocator-retention gate.
+Multi-hour real-device latency/hitch and allocator-high-water distributions, platform storage
+matrices, and true OS disk-full behavior remain open.
 
 A compressed 128-entity repeated-lifecycle fixture now captures 25 periodic checkpoints plus the
 required initial checkpoint through the real ordered background encode/append bodies. Alternating
