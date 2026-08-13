@@ -6,6 +6,25 @@
 int32 FSeinComponentStorageLifecycleProbe::ConstructionCount = 0;
 int32 FSeinComponentStorageLifecycleProbe::DestructionCount = 0;
 
+struct FSeinComponentStorageTestAccess
+{
+	static void ForceMutationRevision(
+		FSeinGenericComponentStorage& Storage,
+		uint64 Revision)
+	{
+		Storage.MutationRevisionCounter = Revision;
+		Storage.bRevisionWrapped = false;
+	}
+
+	static void ForceTopologyRevision(
+		FSeinGenericComponentStorage& Storage,
+		uint64 Revision)
+	{
+		Storage.TopologyRevision = Revision;
+		Storage.bRevisionWrapped = false;
+	}
+};
+
 namespace UE::SeinARTSTests
 {
 	TEST(ComponentStorageLifecycle, "SeinARTS.Unit.Entity")
@@ -65,6 +84,33 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(Pool.IsValid(Reused)));
 		ASSERT_THAT(IsTrue(Reused.Index == First.Index));
 		ASSERT_THAT(IsTrue(Reused.Generation != First.Generation));
+	}
+
+	TEST(ComponentStorageRevisionWrapDisablesSnapshotReuse,
+		"SeinARTS.Unit.Entity")
+	{
+		const FSeinEntityHandle Handle(1, 1);
+		FSeinGenericComponentStorage MutationStorage(
+			FSeinComponentStorageLifecycleProbe::StaticStruct(), 1);
+		MutationStorage.AddComponent(Handle, nullptr);
+		ASSERT_THAT(IsTrue(MutationStorage.CanReuseSnapshotSerialization()));
+		FSeinComponentStorageTestAccess::ForceMutationRevision(
+			MutationStorage, MAX_uint64);
+		MutationStorage.AddComponent(Handle, nullptr);
+		ASSERT_THAT(AreEqual(
+			static_cast<uint64>(1),
+			MutationStorage.GetLatestMutationRevision()));
+		ASSERT_THAT(IsFalse(MutationStorage.CanReuseSnapshotSerialization()));
+
+		FSeinGenericComponentStorage TopologyStorage(
+			FSeinComponentStorageLifecycleProbe::StaticStruct(), 1);
+		FSeinComponentStorageTestAccess::ForceTopologyRevision(
+			TopologyStorage, MAX_uint64);
+		TopologyStorage.Grow(2);
+		ASSERT_THAT(AreEqual(
+			static_cast<uint64>(1),
+			TopologyStorage.GetTopologyRevision()));
+		ASSERT_THAT(IsFalse(TopologyStorage.CanReuseSnapshotSerialization()));
 	}
 
 	TEST(EntityPoolResetRegrowsWithoutAllocatingReservedSlotZero,

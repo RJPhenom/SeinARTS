@@ -59,8 +59,12 @@ CI gate because this engine distribution rejects those target types before proje
   append before file I/O, accumulates eligible turns to the exact resident bound without false
   durability or overtaking, and proves the pressure-forced wait drains and publishes a valid ordered
   journal after release. Worker failure and real write denial stop recording without deleting the
-  partial journal. Periodic snapshot capture, mandatory writes/final publication, and pressure drains
-  remain main-thread work pending real-device long-session and exhausted-storage qualification.
+  partial journal. Periodic snapshot capture remains main-thread work, but exact revision tracking now
+  reuses unchanged process-local component-storage blobs only while no mutable payload pointer has
+  escaped; retained bytes are capped at 64 MiB per world. The measured 100/500/1,000-entity moving
+  capture curve improved from 4.033/14.245/27.831 ms to 2.037/7.815/15.288 ms. Mandatory writes,
+  final publication, and pressure drains remain main-thread work pending real-device long-session,
+  allocator/GC, slow-storage, and exhausted-storage qualification.
 - The packaged run exposed and closed three release-only integration defects: lobby maps now
   materialize relays from their final authoritative slot bindings, Shipping builds no longer hide
   restore work inside compiled-out assertions, and dropped slots can reclaim their retained relay

@@ -377,7 +377,31 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(DestinationRoot == SourceRoot));
 		ASSERT_THAT(AreEqual(1, RestoreNotificationCount));
 		FSeinWorldSnapshot RoundTripSnapshot;
+		const int64 RestoreCacheHitsBefore =
+			Destination->GetComponentStorageSnapshotCacheHitCountForTests();
+		const int64 RestoreCacheMissesBefore =
+			Destination->GetComponentStorageSnapshotCacheMissCountForTests();
 		Destination->CaptureSnapshot(RoundTripSnapshot);
+		const int64 RestoreCacheHitsAfterFirst =
+			Destination->GetComponentStorageSnapshotCacheHitCountForTests();
+		const int64 RestoreCacheMissesAfterFirst =
+			Destination->GetComponentStorageSnapshotCacheMissCountForTests();
+		FSeinWorldSnapshot CachedRoundTripSnapshot;
+		Destination->CaptureSnapshot(CachedRoundTripSnapshot);
+		ASSERT_THAT(AreEqual(
+			RestoreCacheHitsBefore, RestoreCacheHitsAfterFirst));
+		ASSERT_THAT(AreEqual(
+			RoundTripSnapshot.ComponentStorageBlobs.Num(),
+			static_cast<int32>(
+				RestoreCacheMissesAfterFirst - RestoreCacheMissesBefore)));
+		ASSERT_THAT(AreEqual(
+			RoundTripSnapshot.ComponentStorageBlobs.Num(),
+			static_cast<int32>(
+				Destination->GetComponentStorageSnapshotCacheHitCountForTests()
+					- RestoreCacheHitsAfterFirst)));
+		ASSERT_THAT(AreEqual(
+			RestoreCacheMissesAfterFirst,
+			Destination->GetComponentStorageSnapshotCacheMissCountForTests()));
 		ASSERT_THAT(AreEqual(
 			Snapshot.BootstrapCheckpoint.FactionRegistrations.Num(),
 			RoundTripSnapshot.BootstrapCheckpoint.FactionRegistrations.Num()));

@@ -50,12 +50,15 @@ This is the actionable remainder after consolidating the historical audits. It i
    PIE/Insights curve with movement, avoidance, navigation, abilities, animation, and presentation.
 3. Game-specific animation complexity can exceed the default mannequin baseline.
 4. Replay automatic periodic checkpoint envelope encoding and full-flush use one ordered background
-   pipeline; periodic snapshot capture, mandatory initial/direct writes, final publication, and
-   pressure-forced drains remain synchronous. Automated integration now holds a periodic checkpoint
-   before file I/O, accumulates eligible turns to the exact resident bound without false durability
-   or frame overtaking, and proves the forced wait drains and publishes a valid ordered journal after
-   release. Asynchronous failure and real write denial also fail closed while retaining the partial.
-   Real-device long-session hitch, latency, and exhausted-storage behavior still need Insights and
+   pipeline. Periodic snapshot capture remains synchronous, but unchanged cache-safe component
+   storages now reuse process-local serialized blobs under exact revision checks; any storage that
+   exposes a mutable payload pointer always serializes live. The cache copies into each snapshot and
+   is capped at 64 MiB per world. The measured moving-storage capture curve improved from
+   4.033/14.245/27.831 ms to 2.037/7.815/15.288 ms at 100/500/1,000 entities without changing
+   snapshot or canonical schemas. Mandatory initial/direct writes, final publication, and
+   pressure-forced drains remain synchronous. Automated integration proves ordered bounded pressure,
+   and failure/write denial retain the partial journal. Real-device long-session hitch, allocator
+   high-water/RSS, GC interaction, latency, and exhausted-storage behavior still need Insights and
    soak evidence.
 5. Debug navigation rendering is intentionally expensive and can invalidate profiling if left enabled.
 

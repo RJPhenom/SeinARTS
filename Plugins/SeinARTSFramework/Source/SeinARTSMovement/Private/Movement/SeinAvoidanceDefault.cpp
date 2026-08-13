@@ -164,6 +164,7 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 	ISeinComponentStorage* MoveStorage =
 		World.GetComponentStorageMutable(
 			FSeinMovementComponent::StaticStruct());
+	const ISeinComponentStorage* ReadOnlyMoveStorage = MoveStorage;
 	const ISeinComponentStorage* NavStorage =
 		World.GetComponentStorageRaw(
 			FSeinNavigationComponent::StaticStruct());
@@ -384,7 +385,10 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 			{
 				const FSeinEntity* OtherEntity = World.GetEntityPool().Get(OtherHandle);
 				if (!OtherEntity) continue;
-				const FSeinMovementComponent* OtherMove = MoveStorage ? static_cast<const FSeinMovementComponent*>(MoveStorage->GetComponentRaw(OtherHandle)) : nullptr;
+				const FSeinMovementComponent* OtherMove = ReadOnlyMoveStorage
+					? static_cast<const FSeinMovementComponent*>(
+						ReadOnlyMoveStorage->GetComponentRaw(OtherHandle))
+					: nullptr;
 				if (!OtherMove) continue;
 				// Only a REAL ORDERED MOVER triggers a dodge. bHasTarget=true is the CASCADE CUTOFF —
 				// a dodging idler has bHasTarget=false, so it can never trigger another idler's dodge.
@@ -500,7 +504,10 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 				{
 					const FSeinEntity* OtherEntity = World.GetEntityPool().Get(OtherHandle);
 					if (!OtherEntity) continue;
-					const FSeinMovementComponent* OtherMove = MoveStorage ? static_cast<const FSeinMovementComponent*>(MoveStorage->GetComponentRaw(OtherHandle)) : nullptr;
+					const FSeinMovementComponent* OtherMove = ReadOnlyMoveStorage
+						? static_cast<const FSeinMovementComponent*>(
+							ReadOnlyMoveStorage->GetComponentRaw(OtherHandle))
+						: nullptr;
 					if (!OtherMove) { ++NStatic; continue; }
 					FFixedVector ToOther = OtherEntity->Transform.GetLocation() - DiagPos;
 					ToOther.Z = FFixedPoint::Zero;
@@ -631,7 +638,10 @@ void USeinAvoidanceDefault::ComputeAvoidance(USeinWorldSubsystem& World)
 			// — a wall, a building, a prop — and nav blocking already routes units clear of
 			// those. (The spatial hash holds ALL colliders, walls included, so the filter
 			// must live here.) Fetched once and reused for head-on below.
-			const FSeinMovementComponent* OtherMove = MoveStorage ? static_cast<const FSeinMovementComponent*>(MoveStorage->GetComponentRaw(OtherHandle)) : nullptr;
+			const FSeinMovementComponent* OtherMove = ReadOnlyMoveStorage
+				? static_cast<const FSeinMovementComponent*>(
+					ReadOnlyMoveStorage->GetComponentRaw(OtherHandle))
+				: nullptr;
 			if (!OtherMove) continue;
 
 			// Neighbour's group — drives BOTH the cohesion skip and group-vs-group passing.
