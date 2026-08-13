@@ -168,6 +168,34 @@ function Invoke-Checked(
 	}
 }
 
+function Assert-NoRunningConsumerEditor([string] $UprojectPath)
+{
+	$ResolvedUproject = [System.IO.Path]::GetFullPath($UprojectPath).Replace('/', '\')
+	$UprojectLeaf = [System.IO.Path]::GetFileName($ResolvedUproject)
+	try {
+		$EditorProcesses = @(Get-CimInstance Win32_Process -Filter (
+			"Name = 'UnrealEditor.exe' OR Name = 'UnrealEditor-Cmd.exe'"))
+	}
+	catch {
+		throw "Cannot safely inspect running Unreal Editor processes before building '$ResolvedUproject': $($_.Exception.Message)"
+	}
+
+	foreach ($EditorProcess in $EditorProcesses) {
+		if ([string]::IsNullOrWhiteSpace([string]$EditorProcess.CommandLine)) {
+			throw "Cannot safely inspect Unreal Editor process $($EditorProcess.ProcessId) before building '$ResolvedUproject': its command line is unavailable."
+		}
+		$CommandLine = ([string]$EditorProcess.CommandLine).Replace('/', '\')
+		if ($CommandLine.IndexOf(
+			$ResolvedUproject,
+			[System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+			$CommandLine.IndexOf(
+				$UprojectLeaf,
+				[System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+			throw "Generated consumer project '$ResolvedUproject' is open in Unreal Editor process $($EditorProcess.ProcessId). Close it before qualification."
+		}
+	}
+}
+
 function Get-RequiredArtifactPlugins
 {
 	$Required = [System.Collections.Generic.HashSet[string]]::new(
@@ -1188,8 +1216,16 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 		Refresh-ConsumerPlugins $Project.Plugins $Project.Root
 	}
 	Install-ConsumerRuntimeQualificationTemplates $Project.Root $ProfileName
-	$CommonBuildArgs = @('Win64', 'Development', "-Project=$($Project.Uproject)", '-WaitMutex')
-	Invoke-Checked "$ProfileName Editor build" $BuildBat (@('SeinConsumerEditor') + $CommonBuildArgs)
+	# Consumer outputs live beneath Saved/ConsumerMatrix and cannot overlap the
+	# loaded host project's modules. UBT's Live Coding mutex keys off the shared
+	# UnrealEditor executable path and mistakes the host editor for this generated
+	# Editor target, so bypass that guard only after proving no consumer is open.
+	Assert-NoRunningConsumerEditor $Project.Uproject
+	$CommonBuildArgs = @(
+		'Win64', 'Development', "-Project=$($Project.Uproject)",
+		'-WaitMutex')
+	Invoke-Checked "$ProfileName Editor build" $BuildBat (
+		@('SeinConsumerEditor') + $CommonBuildArgs + '-NoHotReloadFromIDE')
 	if (-not $SkipClientServer) {
 		Invoke-Checked "$ProfileName Client build" $BuildBat (@('SeinConsumerClient') + $CommonBuildArgs)
 		Invoke-Checked "$ProfileName Server build" $BuildBat (@('SeinConsumerServer') + $CommonBuildArgs)

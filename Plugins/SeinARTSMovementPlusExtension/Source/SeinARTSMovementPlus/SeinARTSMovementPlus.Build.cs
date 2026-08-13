@@ -9,13 +9,13 @@ public class SeinARTSMovementPlus : ModuleRules
         bUseUnity = false;
 
         PublicDependencyModuleNames.AddRange(new string[] {
+            "Core", "CoreUObject", "Engine",
             "SeinARTSCore",
             "SeinARTSCoreEntity",
             "SeinARTSMovement"
         });
 
         PrivateDependencyModuleNames.AddRange(new string[] {
-            "Core", "CoreUObject", "Engine",
             "SeinARTSNavigation",
             "GameplayTags"
         });

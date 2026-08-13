@@ -13,17 +13,17 @@ public class SeinARTSCoverEditor : ModuleRules
 			"Core",
 			"CoreUObject",
 			"Engine",
+			"SlateCore",                    // FReply is public API
+			"PropertyEditor",               // IPropertyTypeCustomization is public API
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
 			"Slate",
-			"SlateCore",
 			"InputCore",
 			"UnrealEd",
 			"Kismet",                       // FBlueprintEditorUtils — propagate BP-CDO edits through the BP editor refresh pipeline
 			"ComponentVisualizers",
-			"PropertyEditor",
 			"GameplayTags",
 			"SeinARTSCore",
 			"SeinARTSCoreEntity",           // FInstancedStruct walk in the bridge draw delegate
