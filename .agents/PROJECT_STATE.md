@@ -220,8 +220,10 @@ Latest local evidence is under ignored `Saved/Automation/`:
   file-append midpoints with exact resident-byte accounting and callback-only catch-up)
 - `SeinARTS.Integration.Network.Replay-20260812-215224-211024c6` (Framework,
   17 passed after controlled replay worker-overlap qualification)
-- `SeinARTS.Integration-20260812-215325-f290acdf` (Framework, 19 passed)
-- `SeinARTS.Integration-20260812-215415-793bd836` (All, 25 passed)
+- `SeinARTS.Integration-20260812-215854-4c2bb8a8` (Framework, 19 passed with
+  the checked-in floor bound to implementation commit `f85bef0`)
+- `SeinARTS.Integration-20260812-220022-750991d8` (All, 25 passed with the
+  checked-in floor bound to implementation commit `f85bef0`)
 - `SeinARTS.Determinism-20260812-032246-84a12b7c` (All, 40 passed)
 - `SeinARTS.Determinism-20260812-032321-853573ea` (Framework, 30 passed)
 - `SeinARTS.Integration-20260812-032358-75874dd5` (All, 21 passed)
