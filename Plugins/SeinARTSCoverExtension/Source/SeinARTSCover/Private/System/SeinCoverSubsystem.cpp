@@ -22,6 +22,9 @@ DEFINE_LOG_CATEGORY_STATIC(LogSeinCoverSubsystem, Log, All);
 namespace
 {
 	constexpr int32 MaxCoverStateContributors = 64;
+	constexpr uint32 AuthoritativeDestinationBehaviorRevision = 1;
+	const TCHAR* AuthoritativeDestinationProviderId =
+		TEXT("seinarts.cover.authoritative-destination");
 
 	void AppendFramed(FString& Out, const FString& Value)
 	{
@@ -39,6 +42,7 @@ void USeinCoverSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	bStateBindingFrozen = false;
 	StateBindingFailureReason.Reset();
 	FrozenStateBindingFrame.Reset();
+	AuthoritativeDestinationProviderToken = 0;
 
 	// Resolve the configured class. FSoftClassPath drives the picker — same
 	// pattern as NavigationClass / FogOfWarClass / RelayActorClass — so this
@@ -127,10 +131,9 @@ void USeinCoverSubsystem::ReleaseModuleOwnedStateForModuleUnload()
 		{
 			CachedSimWorld->OnAuthoritativeStateRestored.Remove(RestoredHandle);
 		}
-		if (CachedSimWorld->AuthoritativeDestinationResolver.IsBoundToObject(this))
-		{
-			CachedSimWorld->AuthoritativeDestinationResolver.Unbind();
-		}
+		// Core's terminal release already severed every registered callback. The
+		// token is world-local and must not survive into a replacement world.
+		AuthoritativeDestinationProviderToken = 0;
 		if (CachedSimWorld->PreviewQualityProvider.IsBoundToObject(this))
 		{
 			CachedSimWorld->PreviewQualityProvider.Unbind();
@@ -394,32 +397,59 @@ void USeinCoverSubsystem::HookSimWorldEvents()
 	if (CachedSimWorld == WorldSub
 		&& SpawnedHandle.IsValid()
 		&& DestroyedHandle.IsValid()
-		&& RestoredHandle.IsValid())
+		&& RestoredHandle.IsValid()
+		&& AuthoritativeDestinationProviderToken != 0)
 	{
 		return;
 	}
 
 	CachedSimWorld = WorldSub;
-	SpawnedHandle = WorldSub->OnEntitySpawned.AddUObject(
-		this, &USeinCoverSubsystem::HandleEntitySpawned);
-	DestroyedHandle = WorldSub->OnEntityDestroyed.AddUObject(
-		this, &USeinCoverSubsystem::HandleEntityDestroyed);
-	RestoredHandle = WorldSub->OnAuthoritativeStateRestored.AddUObject(
-		this, &USeinCoverSubsystem::ReconcileProviderRegistry);
+	if (!SpawnedHandle.IsValid())
+	{
+		SpawnedHandle = WorldSub->OnEntitySpawned.AddUObject(
+			this, &USeinCoverSubsystem::HandleEntitySpawned);
+	}
+	if (!DestroyedHandle.IsValid())
+	{
+		DestroyedHandle = WorldSub->OnEntityDestroyed.AddUObject(
+			this, &USeinCoverSubsystem::HandleEntityDestroyed);
+	}
+	if (!RestoredHandle.IsValid())
+	{
+		RestoredHandle = WorldSub->OnAuthoritativeStateRestored.AddUObject(
+			this, &USeinCoverSubsystem::ReconcileProviderRegistry);
+	}
 
-	// Authoritative-destination resolver: tell the sim's path/movement layer that a
-	// cover slot is a valid destination that OVERRULES the coarse nav bake (root
-	// CLAUDE.md invariant #6 — the destination is an INPUT, not an opinion nav may
-	// relocate). No FoW gating (invalid observer) — a cover slot is a valid standing
-	// spot regardless of who can see it. Tiny radius = "is this exact position a
-	// registered slot?" (the cover snap dispatches the exact slot world position).
-	WorldSub->AuthoritativeDestinationResolver.BindWeakLambda(this,
-		[this](const FFixedVector& WorldPos) -> bool
+	// Stable-keyed destination authority composes with other deterministic
+	// providers and is bound into the match StateContract by Core. No FoW gate:
+	// authored standing-position validity is independent of observer knowledge.
+	if (AuthoritativeDestinationProviderToken == 0)
+	{
+		FSeinAuthoritativeDestinationProviderResolver DestinationResolver;
+		DestinationResolver.BindWeakLambda(this,
+			[this](const FSeinAuthoritativeDestinationQuery& Query) -> bool
+			{
+				if (!CoverSystem) return false;
+				const FFixedPoint Eps = FFixedPoint::FromInt(10);
+				return CoverSystem->FindNearbySlots(
+					Query.WorldPosition,
+					Eps,
+					FSeinPlayerID()).Num() > 0;
+			});
+		FString DestinationProviderError;
+		if (!WorldSub->RegisterAuthoritativeDestinationProvider(
+				AuthoritativeDestinationProviderId,
+				AuthoritativeDestinationBehaviorRevision,
+				MoveTemp(DestinationResolver),
+				AuthoritativeDestinationProviderToken,
+				&DestinationProviderError))
 		{
-			if (!CoverSystem) return false;
-			const FFixedPoint Eps = FFixedPoint::FromInt(10); // 10cm — exact-ish match
-			return CoverSystem->FindNearbySlots(WorldPos, Eps, FSeinPlayerID()).Num() > 0;
-		});
+			UE_LOG(LogSeinCoverSubsystem, Error,
+				TEXT("HookSimWorldEvents: authoritative-destination provider registration failed: %s"),
+				*DestinationProviderError);
+			return;
+		}
+	}
 
 		// Destination-preview quality provider: supply per-cell cover quality for the
 		// BASE preview's decal tints, FoW-observer-gated (preview can't leak cover the

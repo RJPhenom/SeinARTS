@@ -89,10 +89,9 @@ struct FSeinMovementContext
 	USeinWorldSubsystem* World;     // gives access to spatial hash + components
 	FSeinEntityHandle SelfHandle;   // self-exclusion in spatial queries
 
-	/** True when the move's final destination (Path's last waypoint) is an
-	 *  AUTHORITATIVE position — a cover slot that overrules the coarse nav bake.
-	 *  The mover may step onto / occupy it even if its cell is bake-blocked.
-	 *  Set by USeinMoveToAction from the AuthoritativeDestinationResolver. */
+	/** True when the move's final destination is accepted by Core's composed
+	 *  authoritative-destination providers. The mover may occupy it across a
+	 *  coarse-bake false negative; separate dynamic/agent safety gates still apply. */
 	bool bAuthoritativeDestination = false;
 
 	/** Terrain SPEED multiplier at the unit's position this tick (1 = normal; <1 mud,

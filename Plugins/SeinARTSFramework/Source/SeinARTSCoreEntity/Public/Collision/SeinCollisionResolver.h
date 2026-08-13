@@ -287,9 +287,9 @@ protected:
 	 *  center plus an 8-direction unit ring at the collider radius (the body, not
 	 *  just the center) through the world subsystem's DynamicPassableResolver,
 	 *  so the collision floor stays nav-impl-agnostic — a one-way "walkable?"
-	 *  query, no hard nav dependency. An AuthoritativeDestinationResolver may
-	 *  exempt an exact authored destination from the center-cell rejection. Unbound
-	 *  (nav-less / tests) → always true (ungated), identical to the prior behavior.
+	 *  query, no hard nav dependency. A composed authoritative-destination provider
+	 *  may exempt an exact authored destination from center-cell rejection. With no
+	 *  providers (nav-less / tests), behavior remains ungated as before.
 	 *  Shared by every resolver so the "never through a wall" rule is one
 	 *  implementation. */
 	static bool CanOccupy(

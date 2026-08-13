@@ -132,13 +132,14 @@ bool USeinCollisionResolverParallel::JacobiPass(USeinWorldSubsystem& World, cons
 	// 2) PARALLEL compute. Each mover reads ONLY immutable state (its frozen
 	//    snapshot transform + neighbours' frozen snapshot transforms + the
 	//    PreTick broadphase + Extents storage) and writes ONLY NewPos[i].
-	//    bForceSerial when a cover AuthoritativeDestinationResolver is bound:
-	//    that cross-module delegate's thread-safety isn't guaranteed, so the
+	//    bForceSerial when an authoritative-destination provider is live: provider
+	//    callback thread-safety is not part of the registry contract, so the
 	//    CanOccupy executes only on the main thread — exactly the nav-containment
 	//    pattern. `Sein.Sim.Parallel 0` forces serial too; the result is
 	//    bit-identical either way.
 	// ------------------------------------------------------------------
-	const bool bForceSerial = World.AuthoritativeDestinationResolver.IsBound();
+	const bool bForceSerial =
+		World.HasAuthoritativeDestinationProviders();
 
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Collision_JacobiCompute);

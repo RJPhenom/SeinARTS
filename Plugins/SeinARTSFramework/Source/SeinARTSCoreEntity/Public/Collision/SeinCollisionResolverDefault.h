@@ -14,8 +14,8 @@
  *          a unit on a non-walkable cell (a baked nav wall, or off the grid edge)
  *          is REFUSED — the unit holds at the barrier instead of being shoved
  *          across it. That walkability test goes through the world subsystem's
- *          pluggable PassableResolver delegate (cover slots exempt via
- *          AuthoritativeDestinationResolver), so the floor stays nav-impl-agnostic:
+ *          pluggable PassableResolver delegate (exact authored destinations may
+ *          be exempt through Core's provider registry), so the floor stays nav-impl-agnostic:
  *          it asks "walkable?" through a seam, it doesn't know any nav. Net result:
  *          sein-extents colliders block by the MTV separation; baked nav walls and
  *          the grid edge block by this gate; both are never-crossable.

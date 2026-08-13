@@ -552,12 +552,10 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 			FootprintRadius, FFixedPoint::FromInt(100));
 		if (BodyBand > StallBand) { StallBand = BodyBand; }
 
-		// Authoritative destination: is this move's target a position that overrules
-		// the coarse nav bake (a cover slot)? Queried ONCE here (not per-tick) and
-		// carried on the movement tick context so ResolveNavCollision lets the unit
-		// stand on it. Unbound (cover absent) → false. See root CLAUDE.md #6.
-		bAuthoritativeDestination = World.AuthoritativeDestinationResolver.IsBound()
-			&& World.AuthoritativeDestinationResolver.Execute(Destination);
+		// Query the composed provider registry once, then carry the result on the
+		// movement context so ResolveNavCollision can honor the exact destination.
+		bAuthoritativeDestination = World.IsAuthoritativeDestination(
+			Destination, OwnerEntity);
 
 		FSeinMovementContext BeginCtx{
 			*Entity,

@@ -106,11 +106,10 @@ private:
 	int32 CurrentWaypointIndex = 0;
 	bool bPathResolved = false;
 
-	/** True when this move's Destination is an AUTHORITATIVE position (a cover slot)
-	 *  that overrules the coarse nav bake. Queried ONCE at first-tick setup from
-	 *  USeinWorldSubsystem::AuthoritativeDestinationResolver and carried on the
-	 *  movement tick context so ResolveNavCollision lets the unit stand on it even
-	 *  when its cell is bake-blocked. See root CLAUDE.md invariant #6. */
+	/** True when this move's destination is accepted by Core's composed
+	 *  authoritative-destination providers. Queried once at first-tick setup and
+	 *  carried on the movement context so a coarse-bake false negative cannot
+	 *  relocate the exact destination. */
 	bool bAuthoritativeDestination = false;
 
 	/** Agent's position at the moment the current `Path` was committed

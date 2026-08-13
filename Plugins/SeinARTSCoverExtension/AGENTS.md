@@ -57,8 +57,11 @@ accidentally make unrelated wrecks, deployables, reservations, or hazards disapp
 recognize authority by recursively calling a query that has already filtered out the authored
 slot.
 
-The generic authority seam must compose multiple deterministic providers by stable key/order; a
-single-cast Boolean hook is not sufficient for framework-grade composition or contextual policy.
+The generic authority seam is Core's stable-keyed authoritative-destination provider registry.
+Providers register before topology freeze, execute in canonical key order, and bind their stable ID
+plus behavior revision into the match StateContract. Do not bind the legacy single-cast compatibility
+hook from shipped code; deterministic bootstrap rejects it because it cannot identify provider
+behavior or support requester-aware policy.
 
 ## Dispatch and allocation
 

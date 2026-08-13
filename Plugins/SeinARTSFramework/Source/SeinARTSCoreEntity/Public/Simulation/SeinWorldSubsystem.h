@@ -402,17 +402,30 @@ DECLARE_DELEGATE_RetVal_TwoParams(
 	const FSeinNavAgentProfile& /*Agent*/,
 	const FFixedVector& /*WorldPos*/);
 
+/** Context supplied to deterministic authoritative-destination providers. */
+struct SEINARTSCOREENTITY_API FSeinAuthoritativeDestinationQuery
+{
+	FFixedVector WorldPosition;
+	/** Entity whose destination is being admitted. Invalid when no requester is
+	 *  available; providers must document whether they require one. */
+	FSeinEntityHandle Requester = FSeinEntityHandle::Invalid();
+};
+
 /**
- * Delegate the sim uses to ask whether a world position is an AUTHORITATIVE
- * destination — one that OVERRULES the coarse nav bake (a cover slot). Registered
- * by USeinCoverSubsystem (SeinARTSCover) at world begin-play; unbound when the
- * cover extension is absent (→ no authoritative destinations, default behavior).
- *
- * When true, the path/movement layer delivers the unit to the EXACT position even
- * if its cell is bake-blocked: a cover slot is a valid standing spot, and a
- * blocked ("red") cell under it is a low-resolution false-negative, not a reason
- * to relocate the destination (root CLAUDE.md invariant #6 — the destination is an
- * INPUT, not an opinion nav may move).
+ * One deterministic provider in the ordered authoritative-destination registry.
+ * Providers are pure read-only queries composed in stable-ID order. Returning
+ * true means the exact position may overrule only the coarse static nav bake;
+ * agent safety and unrelated dynamic blockers remain separate hard gates.
+ */
+DECLARE_DELEGATE_RetVal_OneParam(
+	bool,
+	FSeinAuthoritativeDestinationProviderResolver,
+	const FSeinAuthoritativeDestinationQuery& /*Query*/);
+
+/**
+ * Legacy single-provider compatibility hook. New integrations must use
+ * RegisterAuthoritativeDestinationProvider so provider identity and behavior
+ * revision enter the match StateContract and multiple providers can compose.
  */
 DECLARE_DELEGATE_RetVal_OneParam(bool, FSeinAuthoritativeDestinationResolver,
 	const FFixedVector& /*WorldPos*/);
@@ -972,11 +985,57 @@ public:
 	FSeinAgentAuthoritativeDestinationSafetyResolver
 		AgentAuthoritativeDestinationSafetyResolver;
 
-	/** Cross-module resolver: "is this world position an AUTHORITATIVE destination
-	 *  (a cover slot) that overrules the coarse nav bake?" Bound by
-	 *  USeinCoverSubsystem. Unbound → no authoritative destinations (default: nav
-	 *  decides reachability; partial paths stop at the nearest reachable cell). */
+	/**
+	 * Register one pure deterministic destination provider before topology freeze.
+	 * StableProviderId is ASCII-canonicalized and folded in lexical order;
+	 * BehaviorRevision must increase whenever identical queries may return a
+	 * different result. Duplicate IDs, invalid callbacks, and post-freeze
+	 * registration fail closed. OutRegistrationToken owns exact unregistration.
+	 */
+	bool RegisterAuthoritativeDestinationProvider(
+		const FString& StableProviderId,
+		uint32 BehaviorRevision,
+		FSeinAuthoritativeDestinationProviderResolver Resolver,
+		uint64& OutRegistrationToken,
+		FString* OutError = nullptr);
+
+	/** Remove exactly one registration generation. Post-freeze removal invalidates
+	 *  the live execution contract unless the world is already tearing down. */
+	bool UnregisterAuthoritativeDestinationProvider(
+		uint64 RegistrationToken,
+		FString* OutError = nullptr);
+
+	/** True when at least one keyed provider or the legacy fallback is live. */
+	bool HasAuthoritativeDestinationProviders() const;
+
+	/** Compose keyed providers in canonical order, then consult the legacy
+	 *  fallback. Provider callbacks execute under Core's read-only guard. The
+	 *  legacy fallback is rejected when deterministic match bootstrap seals. */
+	bool IsAuthoritativeDestination(
+		const FSeinAuthoritativeDestinationQuery& Query);
+
+	bool IsAuthoritativeDestination(
+		const FFixedVector& WorldPosition,
+		FSeinEntityHandle Requester = FSeinEntityHandle::Invalid())
+	{
+		return IsAuthoritativeDestination({WorldPosition, Requester});
+	}
+
+	/**
+	 * Position-only compatibility hook. It remains source-compatible for existing
+	 * integrations but cannot describe an implementation identity, so deterministic
+	 * match bootstrap rejects it while bound. Migrate to the keyed registry.
+	 */
 	FSeinAuthoritativeDestinationResolver AuthoritativeDestinationResolver;
+
+#if WITH_DEV_AUTOMATION_TESTS
+	/** Detach optional extension providers from an isolated kernel workload. */
+	void ClearAuthoritativeDestinationProvidersForTests()
+	{
+		AuthoritativeDestinationProviders.Reset();
+		AuthoritativeDestinationResolver.Unbind();
+	}
+#endif
 
 	/** Cross-module hook: per-cell QUALITY tags for the destination preview (the
 	 *  preview actor tints decals by tag). Bound by USeinCoverSubsystem (cover
@@ -2068,6 +2127,11 @@ private:
 	bool RefreshCanonicalStateRootCacheContinuation(
 		bool bForceFullRebuild,
 		FString& OutError) const;
+	/** Frame the exact keyed-provider set into the match StateContract. The legacy
+	 *  hook contributes an explicit compatibility-presence bit. */
+	bool BuildAuthoritativeDestinationProviderBindingFrame(
+		FString& OutFrame,
+		FString& OutError) const;
 	/** Maintain the multiplayer root at a completed-tick boundary. Ordinary
 	 *  calls are O(changes); ForceFullRebuild independently reprojects live
 	 *  state and is reserved for verification. */
@@ -2186,6 +2250,21 @@ private:
 		FSeinSystemDescriptor Descriptor;
 		FString CanonicalStableID;
 	};
+
+	struct FRegisteredAuthoritativeDestinationProvider
+	{
+		FString CanonicalStableID;
+		uint32 BehaviorRevision = 0;
+		uint64 RegistrationToken = 0;
+		FSeinAuthoritativeDestinationProviderResolver Resolver;
+	};
+
+	/** Stable-ID ordered, world-local provider set. It is immutable after topology
+	 *  freeze and therefore safe to inspect before serializing callback execution. */
+	TArray<FRegisteredAuthoritativeDestinationProvider>
+		AuthoritativeDestinationProviders;
+	uint64 NextAuthoritativeDestinationProviderToken = 1;
+	bool bAuthoritativeDestinationQueryInProgress = false;
 
 	struct FExecutionTopologyCandidate
 	{

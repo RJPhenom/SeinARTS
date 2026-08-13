@@ -19,6 +19,7 @@
 #include "Serialization/SeinDeterministicValueDigest.h"
 #include "Serialization/SeinLatentActionCodecRegistry.h"
 #include "Serialization/SeinPoolObjectCodecRegistry.h"
+#include "Serialization/SeinSimulationContentManifest.h"
 #include "Serialization/SeinSimulationContentRegistry.h"
 #include "Simulation/SeinCanonicalStateRecipeRegistry.h"
 #include "Simulation/SeinContainmentStateValidation.h"
@@ -88,6 +89,16 @@
 
 namespace
 {
+	constexpr int32 MaxAuthoritativeDestinationProviders = 128;
+
+	void AppendUtf8Framed(FString& Out, const FString& Value)
+	{
+		const FTCHARToUTF8 Utf8(*Value);
+		Out += FString::Printf(TEXT("%d:"), Utf8.Length());
+		Out += Value;
+		Out += TEXT("\n");
+	}
+
 	void AppendUInt32BigEndian(TArray<uint8>& Bytes, uint32 Value)
 	{
 		Bytes.Add(static_cast<uint8>((Value >> 24) & 0xff));
@@ -404,6 +415,64 @@ bool USeinWorldSubsystem::IsCurrentWorldCoveredBySimulationContent(
 	return false;
 }
 
+bool USeinWorldSubsystem::BuildAuthoritativeDestinationProviderBindingFrame(
+	FString& OutFrame,
+	FString& OutError) const
+{
+	OutFrame.Reset();
+	OutError.Reset();
+	if (AuthoritativeDestinationResolver.IsBound())
+	{
+		OutError =
+			TEXT("The legacy authoritative-destination resolver cannot enter a deterministic match because it has no stable provider identity or behavior revision. Migrate it to RegisterAuthoritativeDestinationProvider.");
+		return false;
+	}
+	if (AuthoritativeDestinationProviders.Num()
+		> MaxAuthoritativeDestinationProviders)
+	{
+		OutError =
+			TEXT("The authoritative-destination provider count exceeds the deterministic contract limit.");
+		return false;
+	}
+
+	FString PreviousStableID;
+	OutFrame = TEXT("SeinARTS.AuthoritativeDestinationProviders\n");
+	AppendUtf8Framed(OutFrame, TEXT("1"));
+	AppendUtf8Framed(
+		OutFrame,
+		FString::FromInt(AuthoritativeDestinationProviders.Num()));
+	for (const FRegisteredAuthoritativeDestinationProvider& Provider :
+		AuthoritativeDestinationProviders)
+	{
+		FString CanonicalStableID;
+		FString StableIDError;
+		if (Provider.RegistrationToken == 0
+			|| Provider.BehaviorRevision == 0
+			|| !Provider.Resolver.IsBound()
+			|| !FSeinSimulationContentManifestCodec::CanonicalizeStableId(
+				Provider.CanonicalStableID,
+				CanonicalStableID,
+				StableIDError)
+			|| CanonicalStableID != Provider.CanonicalStableID
+			|| (!PreviousStableID.IsEmpty()
+				&& PreviousStableID.Compare(CanonicalStableID) >= 0))
+		{
+			OutError = FString::Printf(
+				TEXT("Authoritative-destination provider '%s' has an invalid, unbound, duplicated, or non-canonical registration."),
+				*Provider.CanonicalStableID);
+			return false;
+		}
+		AppendUtf8Framed(OutFrame, CanonicalStableID);
+		AppendUtf8Framed(
+			OutFrame,
+			LexToString(Provider.BehaviorRevision));
+		PreviousStableID = MoveTemp(CanonicalStableID);
+	}
+
+	AppendUtf8Framed(OutFrame, TEXT("legacy-unbound"));
+	return true;
+}
+
 bool USeinWorldSubsystem::BuildLocallyDeclaredCanonicalState(
 	const FSeinMatchSettings& MatchSettings,
 	bool bMaterializeInitialValues,
@@ -608,6 +677,15 @@ bool USeinWorldSubsystem::BuildLocallyDeclaredCanonicalState(
 	{
 		return false;
 	}
+	FString AuthoritativeDestinationProviderFrame;
+	if (!BuildAuthoritativeDestinationProviderBindingFrame(
+			AuthoritativeDestinationProviderFrame,
+			OutError))
+	{
+		return false;
+	}
+	NativeWorldBindingFrames.Add(
+		MoveTemp(AuthoritativeDestinationProviderFrame));
 	AdditionalContractFrames.Append(NativeWorldBindingFrames);
 	if (!Candidate.Seal(
 		NativeCanonicalStateSchema,
@@ -634,6 +712,9 @@ void USeinWorldSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	NextAbilityActivationID = 1;
 	TimeAccumulator = 0.0f;
 	Systems.Reset();
+	AuthoritativeDestinationProviders.Reset();
+	NextAuthoritativeDestinationProviderToken = 1;
+	bAuthoritativeDestinationQueryInProgress = false;
 	ExecutionTopologyManifest.Reset();
 	ExecutionTopologyFailureReason.Reset();
 	ExecutionTopologyDigest.Invalidate();
@@ -953,6 +1034,9 @@ void USeinWorldSubsystem::ReleaseAllModuleOwnedState()
 	NavProjectFreeResolver.Unbind();
 	NavProjectAgentFreeResolver.Unbind();
 	NavProjectAgentFreeIgnoringResolver.Unbind();
+	AuthoritativeDestinationProviders.Reset();
+	NextAuthoritativeDestinationProviderToken = 1;
+	bAuthoritativeDestinationQueryInProgress = false;
 	AuthoritativeDestinationResolver.Unbind();
 	AgentAuthoritativeDestinationSafetyResolver.Unbind();
 	PreviewQualityProvider.Unbind();
@@ -2625,6 +2709,18 @@ bool USeinWorldSubsystem::ValidateFrozenCanonicalStateWorldBindings()
 						Provisional},
 				CurrentFrames,
 				Error);
+		if (bCaptured)
+		{
+			FString AuthoritativeDestinationProviderFrame;
+			bCaptured = BuildAuthoritativeDestinationProviderBindingFrame(
+				AuthoritativeDestinationProviderFrame,
+				Error);
+			if (bCaptured)
+			{
+				CurrentFrames.Add(
+					MoveTemp(AuthoritativeDestinationProviderFrame));
+			}
+		}
 	}
 
 	if (!bCaptured)
@@ -11652,6 +11748,268 @@ void USeinWorldSubsystem::TerminateAndReleaseForModuleUnload(
 
 	bModuleUnloadStateReleased = true;
 	ReleaseAllModuleOwnedState();
+}
+
+bool USeinWorldSubsystem::RegisterAuthoritativeDestinationProvider(
+	const FString& StableProviderId,
+	uint32 BehaviorRevision,
+	FSeinAuthoritativeDestinationProviderResolver Resolver,
+	uint64& OutRegistrationToken,
+	FString* OutError)
+{
+	OutRegistrationToken = 0;
+	if (OutError)
+	{
+		OutError->Reset();
+	}
+	const auto Reject = [&](const FString& Error, bool bPoison)
+	{
+		if (OutError)
+		{
+			*OutError = Error;
+		}
+		if (bPoison)
+		{
+			if (bExecutionTopologyFrozen)
+			{
+				InvalidateFrozenExecutionTopology(Error);
+			}
+			else
+			{
+				RecordExecutionTopologyFailure(Error);
+			}
+		}
+		return false;
+	};
+
+	if (!IsInGameThread())
+	{
+		return Reject(
+			TEXT("Authoritative-destination providers must register on the game thread."),
+			false);
+	}
+	if (bExecutionTopologyTeardown || bModuleUnloadStateReleased)
+	{
+		return Reject(
+			TEXT("Authoritative-destination providers cannot register after world teardown or terminal module unload."),
+			false);
+	}
+	if (bReadOnlyCallbackInProgress
+		|| bObserverCallbackInProgress
+		|| bSimulationTickDispatchInProgress
+		|| bSnapshotCaptureInProgress
+		|| bSnapshotRestoreInProgress
+		|| bMatchBootstrapMaterializerInvocationActive)
+	{
+		return Reject(
+			TEXT("Authoritative-destination provider registration cannot mutate topology during a callback or state transaction."),
+			true);
+	}
+	if (bExecutionTopologyFrozen)
+	{
+		return Reject(
+			TEXT("Authoritative-destination providers must register before deterministic topology freeze."),
+			true);
+	}
+	if (!bExecutionTopologyValid)
+	{
+		return Reject(
+			ExecutionTopologyFailureReason.IsEmpty()
+				? TEXT("The deterministic execution topology is already invalid.")
+				: ExecutionTopologyFailureReason,
+			false);
+	}
+
+	FString CanonicalStableID;
+	FString StableIDError;
+	if (!FSeinSimulationContentManifestCodec::CanonicalizeStableId(
+			StableProviderId,
+			CanonicalStableID,
+			StableIDError))
+	{
+		return Reject(
+			FString::Printf(
+				TEXT("Invalid authoritative-destination provider ID '%s': %s"),
+				*StableProviderId,
+				*StableIDError),
+			true);
+	}
+	if (BehaviorRevision == 0 || !Resolver.IsBound())
+	{
+		return Reject(
+			TEXT("Authoritative-destination providers require a positive behavior revision and a bound resolver."),
+			true);
+	}
+	if (AuthoritativeDestinationProviders.Num()
+		>= MaxAuthoritativeDestinationProviders)
+	{
+		return Reject(
+			TEXT("The authoritative-destination provider registry reached its deterministic capacity."),
+			true);
+	}
+	if (AuthoritativeDestinationProviders.ContainsByPredicate(
+			[&CanonicalStableID](
+				const FRegisteredAuthoritativeDestinationProvider& Existing)
+			{
+				return Existing.CanonicalStableID == CanonicalStableID;
+			}))
+	{
+		return Reject(
+			FString::Printf(
+				TEXT("Duplicate authoritative-destination provider ID '%s'."),
+				*CanonicalStableID),
+			true);
+	}
+	if (NextAuthoritativeDestinationProviderToken == 0
+		|| NextAuthoritativeDestinationProviderToken == MAX_uint64)
+	{
+		return Reject(
+			TEXT("The authoritative-destination provider token space is exhausted."),
+			true);
+	}
+
+	FRegisteredAuthoritativeDestinationProvider Registered;
+	Registered.CanonicalStableID = MoveTemp(CanonicalStableID);
+	Registered.BehaviorRevision = BehaviorRevision;
+	Registered.RegistrationToken =
+		NextAuthoritativeDestinationProviderToken++;
+	Registered.Resolver = MoveTemp(Resolver);
+	OutRegistrationToken = Registered.RegistrationToken;
+	AuthoritativeDestinationProviders.Add(MoveTemp(Registered));
+	AuthoritativeDestinationProviders.Sort(
+		[](const FRegisteredAuthoritativeDestinationProvider& Left,
+			const FRegisteredAuthoritativeDestinationProvider& Right)
+		{
+			return Left.CanonicalStableID < Right.CanonicalStableID;
+		});
+	return true;
+}
+
+bool USeinWorldSubsystem::UnregisterAuthoritativeDestinationProvider(
+	uint64 RegistrationToken,
+	FString* OutError)
+{
+	if (OutError)
+	{
+		OutError->Reset();
+	}
+	if (!IsInGameThread())
+	{
+		if (OutError)
+		{
+			*OutError =
+				TEXT("Authoritative-destination providers must unregister on the game thread.");
+		}
+		return false;
+	}
+	if (RegistrationToken == 0)
+	{
+		if (OutError)
+		{
+			*OutError =
+				TEXT("Authoritative-destination provider unregistration requires a valid token.");
+		}
+		return false;
+	}
+	if (bReadOnlyCallbackInProgress
+		|| bObserverCallbackInProgress
+		|| bSimulationTickDispatchInProgress
+		|| bSnapshotCaptureInProgress
+		|| bSnapshotRestoreInProgress
+		|| bMatchBootstrapMaterializerInvocationActive)
+	{
+		const FString Error =
+			TEXT("Authoritative-destination provider unregistration cannot mutate topology during a callback or state transaction.");
+		if (OutError)
+		{
+			*OutError = Error;
+		}
+		if (bExecutionTopologyFrozen)
+		{
+			InvalidateFrozenExecutionTopology(Error);
+		}
+		else
+		{
+			RecordExecutionTopologyFailure(Error);
+		}
+		return false;
+	}
+
+	const int32 ProviderIndex =
+		AuthoritativeDestinationProviders.IndexOfByPredicate(
+			[RegistrationToken](
+				const FRegisteredAuthoritativeDestinationProvider& Existing)
+			{
+				return Existing.RegistrationToken == RegistrationToken;
+			});
+	if (ProviderIndex == INDEX_NONE)
+	{
+		if (OutError)
+		{
+			*OutError =
+				TEXT("The authoritative-destination provider token is no longer registered.");
+		}
+		return false;
+	}
+
+	const FString RemovedStableID =
+		AuthoritativeDestinationProviders[ProviderIndex].CanonicalStableID;
+	AuthoritativeDestinationProviders.RemoveAt(ProviderIndex);
+	if (bExecutionTopologyFrozen
+		&& !bExecutionTopologyTeardown
+		&& !bModuleUnloadStateReleased)
+	{
+		InvalidateFrozenExecutionTopology(FString::Printf(
+			TEXT("Authoritative-destination provider '%s' unregistered after deterministic topology freeze."),
+			*RemovedStableID));
+	}
+	return true;
+}
+
+bool USeinWorldSubsystem::HasAuthoritativeDestinationProviders() const
+{
+	return !AuthoritativeDestinationProviders.IsEmpty()
+		|| AuthoritativeDestinationResolver.IsBound();
+}
+
+bool USeinWorldSubsystem::IsAuthoritativeDestination(
+	const FSeinAuthoritativeDestinationQuery& Query)
+{
+	checkf(IsInGameThread(),
+		TEXT("Authoritative-destination providers may only execute on the game thread."));
+	if (bAuthoritativeDestinationQueryInProgress)
+	{
+		const FString Error =
+			TEXT("Authoritative-destination provider queries may not re-enter the registry.");
+		if (bExecutionTopologyFrozen)
+		{
+			InvalidateFrozenExecutionTopology(Error);
+		}
+		else
+		{
+			RecordExecutionTopologyFailure(Error);
+		}
+		return false;
+	}
+
+	TGuardValue<bool> QueryGuard(
+		bAuthoritativeDestinationQueryInProgress, true);
+	TGuardValue<bool> ReadOnlyGuard(bReadOnlyCallbackInProgress, true);
+	TGuardValue<bool> ObserverGuard(bObserverCallbackInProgress, true);
+	for (const FRegisteredAuthoritativeDestinationProvider& Provider :
+		AuthoritativeDestinationProviders)
+	{
+		if (!Provider.Resolver.IsBound())
+		{
+			return false;
+		}
+		if (Provider.Resolver.Execute(Query))
+		{
+			return true;
+		}
+	}
+	return AuthoritativeDestinationResolver.IsBound()
+		&& AuthoritativeDestinationResolver.Execute(Query.WorldPosition);
 }
 
 bool USeinWorldSubsystem::RegisterSystem(
