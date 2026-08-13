@@ -131,22 +131,24 @@ public static class MockUnrealInsights
 		string callstack = trace.IndexOf("NoCallstack", StringComparison.OrdinalIgnoreCase) >= 0
 			? "  no callstack recorded  "
 			: "Mock!Resolved";
-		string tag = trace.IndexOf("NoReplayTag", StringComparison.OrdinalIgnoreCase) >= 0
+		string sentinelTag = trace.IndexOf("NoReplayTag", StringComparison.OrdinalIgnoreCase) >= 0
 			? "Untagged"
-			: "SeinARTS/Replay/Checkpoint/Encode";
+			: "SeinARTS/Replay/Qualification/Sentinel";
 		Directory.CreateDirectory(Path.GetDirectoryName(csv));
 		File.WriteAllText(
 			csv,
 			"Size,Tag,AllocThread,AllocFunction,AllocSourceFile,AllocCallstack\r\n" +
+			"64," + sentinelTag +
+			",2,Mock!Allocate,Mock.cpp,Mock!ReplayOperationalSoakKeepsWorkersMemoryAndLatencyBounded\r\n" +
 			size.ToString() +
-			"," + tag + ",2,Mock!Allocate,Mock.cpp," + callstack + "\r\n",
+			",SeinARTS/Replay/DurableAppend,2,Mock!Allocate,Mock.cpp," + callstack + "\r\n",
             new UTF8Encoding(false));
         Directory.CreateDirectory(Path.GetDirectoryName(log));
         string logText =
             "LogInit: Command Line: -OpenTraceFile=\"" + trace + "\" " + command + "\r\n" +
             "LogMemoryExporter: Found bookmark 'Sein.ReplayOperationalSoak.Begin' at time 10.000\r\n" +
             "LogMemoryExporter: Found bookmark 'Sein.ReplayOperationalSoak.End' at time 20.000\r\n" +
-            "LogMemoryProfiler: SUCCESS! Exported 1 allocations\r\n";
+            "LogMemoryProfiler: SUCCESS! Exported 2 allocations\r\n";
         File.WriteAllText(log, logText, new UTF8Encoding(false));
         return 0;
     }
@@ -307,7 +309,7 @@ try {
 	}
 	$PassReceipt = Get-Content -Raw -LiteralPath $PassReceiptPath |
 		ConvertFrom-Json
-	if ([int]$PassReceipt.schemaVersion -ne 1 -or
+	if ([int]$PassReceipt.schemaVersion -ne 2 -or
 		[string]$PassReceipt.status -cne 'SelfTestOnly' -or
 		[string]$PassReceipt.qualificationMode -cne 'MockAnalyzer' -or
 		-not [System.IO.Path]::GetFullPath(
@@ -316,9 +318,11 @@ try {
 			[System.StringComparison]::OrdinalIgnoreCase) -or
 		[string]$PassReceipt.qualificationScriptSha256 -cne
 			(Get-FileHash -LiteralPath $Exporter -Algorithm SHA256).Hash -or
-		[int]$PassReceipt.allocationCount -ne 1 -or
-		[int]$PassReceipt.recordedCallstackCount -ne 1 -or
+		[int]$PassReceipt.allocationCount -ne 2 -or
+		[int]$PassReceipt.recordedCallstackCount -ne 2 -or
+		[int]$PassReceipt.replayAllocationCount -ne 1 -or
 		[int64]$PassReceipt.replayRetainedBytes -ne 80 -or
+		[int64]$PassReceipt.qualificationSentinelBytes -ne 64 -or
 		[int]$PassReceipt.heapReconstructionErrorCount -ne 0) {
 		throw 'Valid fixture produced an unexpected replay-memory receipt.'
 	}

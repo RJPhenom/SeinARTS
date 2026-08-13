@@ -42,6 +42,11 @@ $ExpectedFullTestPath =
 	'SeinARTS.Perf.Replay.OperationalSoak.ReplayOperationalSoakKeepsWorkersMemoryAndLatencyBounded.ReplayOperationalSoakKeepsWorkersMemoryAndLatencyBounded_Method'
 $ExpectedChannels = @('default', 'memory', 'metadata')
 $MaximumReplayRetainedBytes = [uint64]4096
+$QualificationSentinelTag =
+	'SeinARTS/Replay/Qualification/Sentinel'
+$QualificationSentinelBytes = [uint64]64
+$QualificationSentinelCallstack =
+	'ReplayOperationalSoakKeepsWorkersMemoryAndLatencyBounded'
 $ExpectedInsightsSha256 =
 	'1ECDE931BCBB6150A85BAAD666CE76413E45B9D66F254BA3A6B4B833FD4FF206'
 $ExpectedCsvHeader =
@@ -503,6 +508,7 @@ try {
 	[uint64]$RetainedBytes = 0
 	[uint64]$ReplayRetainedBytes = 0
 	$ReplayRows = [System.Collections.Generic.List[object]]::new()
+	$ProductionReplayRows = [System.Collections.Generic.List[object]]::new()
 	foreach ($Row in $Rows) {
 		[uint64]$Size = 0
 		if (-not [uint64]::TryParse([string]$Row.Size, [ref]$Size)) {
@@ -518,22 +524,28 @@ try {
 			throw 'Full memory trace contains an allocation without a callstack.'
 		}
 		if ([string]$Row.Tag -like 'SeinARTS/Replay/*') {
-			if ([uint64]::MaxValue - $ReplayRetainedBytes -lt $Size) {
-				throw 'Replay retained-byte total overflowed uint64.'
-			}
-			$ReplayRetainedBytes += $Size
 			$ReplayRows.Add($Row)
+			if ([string]$Row.Tag -cne $QualificationSentinelTag) {
+				if ([uint64]::MaxValue - $ReplayRetainedBytes -lt $Size) {
+					throw 'Replay retained-byte total overflowed uint64.'
+				}
+				$ReplayRetainedBytes += $Size
+				$ProductionReplayRows.Add($Row)
+			}
 		}
+	}
+	$QualificationSentinelRows = @($ReplayRows | Where-Object {
+		[string]$_.Tag -ceq $QualificationSentinelTag
+	})
+	if ($QualificationSentinelRows.Count -ne 1 -or
+		[uint64]$QualificationSentinelRows[0].Size -ne
+			$QualificationSentinelBytes -or
+		-not ([string]$QualificationSentinelRows[0].AllocCallstack).Contains(
+			$QualificationSentinelCallstack)) {
+		throw 'Replay allocator attribution sentinel is missing or invalid.'
 	}
 	if ($ReplayRetainedBytes -gt $MaximumReplayRetainedBytes) {
 		throw "Replay-attributed retained growth is $ReplayRetainedBytes bytes; the qualification ceiling is $MaximumReplayRetainedBytes bytes."
-	}
-	if ($ReplayRows.Count -lt 1 -or
-		$ReplayRetainedBytes -lt 1 -or
-		@($ReplayRows | Where-Object {
-			[string]$_.Tag -ceq 'SeinARTS/Replay/Checkpoint/Encode'
-		}).Count -lt 1) {
-		throw 'Replay allocator attribution sentinel is missing from the measured interval.'
 	}
 
 	$ReplayTagSummaries = @($ReplayRows | Group-Object Tag |
@@ -595,7 +607,7 @@ try {
 	$TempDirectory = $null
 	$ReceiptStatus = if ($TestMode) { 'SelfTestOnly' } else { 'Qualified' }
 	$Receipt = [pscustomobject][ordered]@{
-		schemaVersion = 1
+		schemaVersion = 2
 		status = $ReceiptStatus
 		qualificationMode = if ($SelfTest) {
 			'MockAnalyzer'
@@ -631,9 +643,11 @@ try {
 		allocationCount = $Rows.Count
 		retainedBytes = $RetainedBytes
 		recordedCallstackCount = $Rows.Count
-		replayAllocationCount = $ReplayRows.Count
+		replayAllocationCount = $ProductionReplayRows.Count
 		replayRetainedBytes = $ReplayRetainedBytes
 		maximumReplayRetainedBytes = $MaximumReplayRetainedBytes
+		qualificationSentinelTag = $QualificationSentinelTag
+		qualificationSentinelBytes = $QualificationSentinelBytes
 		replayTags = $ReplayTagSummaries
 		heapReconstructionErrorCount = $HeapErrorCount
 		latestHeapReconstructionErrorSeconds = $LatestHeapErrorTime
