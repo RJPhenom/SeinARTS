@@ -52,12 +52,12 @@ formation/resolver state coverage, provider teardown, and downstream content own
 
 | Gate | Result |
 |---|---:|
-| `SeinARTS.Unit`, profile All | 442 passed, 0 failed |
-| `SeinARTS.Unit`, profile Framework | 424 passed, 0 failed |
+| `SeinARTS.Unit`, profile All | 445 passed, 0 failed |
+| `SeinARTS.Unit`, profile Framework | 427 passed, 0 failed |
 | `SeinARTS.Integration`, profile All | 25 passed, 0 failed |
 | `SeinARTS.Integration`, profile Framework | 19 passed, 0 failed |
-| `SeinARTS.Determinism`, profile All | 40 passed, 0 failed |
-| `SeinARTS.Determinism`, profile Framework | 30 passed, 0 failed |
+| `SeinARTS.Determinism`, profile All | 41 passed, 0 failed |
+| `SeinARTS.Determinism`, profile Framework | 31 passed, 0 failed |
 | `SeinARTS.Editor`, profile All | 38 passed, 0 failed |
 | `SeinARTS.Editor`, profile Framework | 36 passed, 0 failed |
 | `SeinARTS.Sim`, profile All | 30 passed, 0 failed |
@@ -70,6 +70,7 @@ formation/resolver state coverage, provider teardown, and downstream content own
 | Focused Core boundary/epoch | 2026-08-13 `SeinARTS.Unit.Core` Framework profile: 131 passed, including opposite-endpoint saturated distance, maximum-diagonal normalization, and exact `SeinARTS.Replay.5` behavior epoch |
 | Focused Net protocol | 2026-08-13 `SeinARTS.Unit.Network.Protocol` Framework profile: 40 passed through production listen-authority commit and disconnect pipeline-backfill entry points |
 | Focused Movement+ | 2026-08-13 unit 5/5, determinism 9/9, movement snapshot 8/8, and continuation 1/1 passed |
+| Focused containment integrity | 2026-08-13 Unit 3/3 and Determinism 1/1 passed; covers cycle/overflow admission, bootstrap/root/checkpoint refusal, fresh-world post-restore mutation continuation, and malformed-restore failure atomicity |
 | Clean consumer: Framework | fresh 2026-08-12 Editor + Shipping build, exact map load, cook/package, real Shipping startup passed |
 | Clean consumer: Framework + Cover only | fresh 2026-08-12 Editor + Shipping build, exact map load, cook/package, real Shipping startup passed; Squad/bridge absent |
 | Clean consumer: Framework + Squad only | fresh 2026-08-12 Editor + Shipping build, exact map load, cook/package, real Shipping startup passed; Cover/bridge absent |
@@ -310,6 +311,19 @@ Latest local evidence is under ignored `Saved/Automation/`:
   hardening; all touched production modules rebuilt and `SeinARTS-Win64-Shipping.exe` linked)
 - `Scripts/Build.ps1 -Target SeinARTS -Config Shipping` (2026-08-12 after controlled replay
   worker-overlap qualification; Net rebuilt and linked with midpoint hooks compiled out)
+- `SeinARTS.Unit-20260813-070821-4393ec61` (Framework, 427 passed) and
+  `SeinARTS.Unit-20260813-071047-b4979d0f` (All, 445 passed)
+- `SeinARTS.Determinism-20260813-070909-4eda967e` (Framework, 31 passed) and
+  `SeinARTS.Determinism-20260813-071154-8242e50a` (All, 41 passed)
+- `SeinARTS.Integration-20260813-070938-96575b09` (Framework, 19 passed) and
+  `SeinARTS.Integration-20260813-071231-a73e1ffd` (All, 25 passed)
+- `SeinARTS.Sim-20260813-071025-b907e33c` (Framework, 27 passed) and
+  `SeinARTS.Sim-20260813-071317-747a5987` (All, 30 passed)
+- `SeinARTS.Determinism.Process.SerialCollisionTrace-20260813-071345-8b6b8314` and
+  `SeinARTS.Determinism.Process.ParallelCollisionTrace-20260813-071402-23fe6f4b`
+  (fresh processes; canonical roots and raw poses matched for all 120 ticks)
+- `Scripts/Build.ps1 -Target SeinARTS -Config Shipping` (2026-08-13 after containment
+  integrity hardening; 152 production actions compiled and `SeinARTS-Win64-Shipping.exe` linked)
 
 ## Integration-candidate progress
 
@@ -410,6 +424,17 @@ exposed and closed fixed-point squared-distance wrap beyond the 32.32 squared ra
 zero-author reconnect gate, and listen-authority dependence on local Client RPC loopback.
 The human PIE animation/performance matrix remains open; the supplied two-player PIE run found no
 framework regression.
+
+Containment now rejects cyclic admission, signed-load overflow, non-reciprocal occupants, stale
+visual/attachment slots, and malformed ancestry. One linear validator owns both destination
+preflight and whole-world checks at bootstrap, routine/full canonical roots, snapshot capture, and
+staged restore before authoritative mutation. Hierarchy queries terminate defensively on malformed
+graphs, and exit/death load cleanup avoids signed arithmetic overflow. Focused fresh-world coverage
+restores nested attachment/visual state, performs matching post-restore containment mutations,
+continues both worlds to exact roots, and proves a corrupt restore leaves root, tick, load, slot,
+attachment, and future continuation unchanged. This closes structural-state integrity, not the
+remaining representative garrison/transport command/replay, large-fan-out, multi-client PIE, or
+shared observer/team presentation work.
 
 Replay v9 automatic periodic checkpoints encode and durably append through the existing ordered
 background pipeline. Frame digest/sequence and checkpoint persistence diagnostics commit on the game

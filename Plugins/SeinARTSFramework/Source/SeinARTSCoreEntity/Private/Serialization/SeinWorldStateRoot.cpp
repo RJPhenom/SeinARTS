@@ -1511,6 +1511,15 @@ bool USeinWorldSubsystem::SealRoutineCanonicalStateRoot(
 			OutError,
 			TEXT("Routine canonical root refused inconsistent pair-capability source records or effective cache."));
 	}
+	FString ContainmentError;
+	if (!ValidateContainmentState(ContainmentError))
+	{
+		return Fail(
+			OutError,
+			FString::Printf(
+				TEXT("Routine canonical root refused invalid containment state (%s)."),
+				*ContainmentError));
+	}
 	const bool bCanonicalTimelineReady =
 		bIsRunning
 		|| (bSimulationSchedulerReserved && TickerHandle.IsValid());
@@ -2243,6 +2252,15 @@ bool USeinWorldSubsystem::ComputeCanonicalStateRoot(
 		return Fail(
 			OutError,
 			TEXT("Canonical world-state capture refused inconsistent pair-capability source records or effective cache."));
+	}
+	FString ContainmentError;
+	if (!ValidateContainmentState(ContainmentError))
+	{
+		return Fail(
+			OutError,
+			FString::Printf(
+				TEXT("Canonical world-state capture refused invalid containment state (%s)."),
+				*ContainmentError));
 	}
 	const bool bCanonicalTimelineReady =
 		bIsRunning

@@ -1,9 +1,9 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinContainmentMemberData.h
- * @brief   Back-reference for containable entities (DESIGN §14). Added
- *          designer-time on entity types that can enter a container; the
- *          framework populates CurrentContainer / CurrentSlot on enter.
+ * @brief   Back-reference for containable entities. Added at designer time on
+ *          entity types that can enter a container; the framework populates
+ *          CurrentContainer / CurrentSlot on enter.
  */
 
 #pragma once

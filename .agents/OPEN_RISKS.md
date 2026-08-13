@@ -28,6 +28,11 @@ This is the actionable remainder after consolidating the historical audits. It i
    matrices. Typed render-only vehicle telemetry and a real packaged two-process listen-server flow
    through resync, physical reconnect, and checkpoint-seek replay are automated. Flight is not a
    production 3D avoidance/collision model.
+6. Containment now has fail-closed acyclic/reciprocal structural state, overflow-safe mutation,
+   quiescent-root/checkpoint validation, and fresh-world snapshot continuation. Production
+   garrison/transport still needs representative ability/command and replay/reconnect mutation
+   workflows, large-fan-out performance evidence, multi-client PIE, and shared observer/team
+   presentation policy.
 
 ## Online-product gaps
 

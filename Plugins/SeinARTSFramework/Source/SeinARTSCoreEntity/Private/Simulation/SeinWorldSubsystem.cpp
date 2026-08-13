@@ -21,6 +21,7 @@
 #include "Serialization/SeinPoolObjectCodecRegistry.h"
 #include "Serialization/SeinSimulationContentRegistry.h"
 #include "Simulation/SeinCanonicalStateRecipeRegistry.h"
+#include "Simulation/SeinContainmentStateValidation.h"
 #include "Components/SeinIdentityComponent.h"
 #include "Data/SeinFaction.h"
 #include "Data/SeinMatchBootstrapRules.h"
@@ -1538,6 +1539,14 @@ bool USeinWorldSubsystem::SealLocalMatchBootstrap(
 	if (!PlanDigest.IsValid())
 	{
 		OutError = TEXT("Local match bootstrap cannot seal an invalid plan digest.");
+		FailMatchBootstrapInternal(OutError);
+		return false;
+	}
+	if (!ValidateContainmentState(OutError))
+	{
+		OutError = FString::Printf(
+			TEXT("Local match bootstrap has invalid containment state (%s)."),
+			*OutError);
 		FailMatchBootstrapInternal(OutError);
 		return false;
 	}
@@ -5380,7 +5389,7 @@ void USeinWorldSubsystem::ProcessDeferredDestroys()
 		// effect's state while the removal hooks fire.
 		RemoveEffectsFromDeadSource(Handle);
 
-		// Containment death propagation (DESIGN §14) runs before storages clear so
+		// Containment death propagation runs before storages clear so
 		// PropagateContainerDeath can still read the container's Occupants list +
 		// OnEject/OnContainerDeath effect classes off FSeinContainmentData.
 		if (GetDeferredTeardownComponent<FSeinContainmentData>(Handle))
@@ -5401,7 +5410,14 @@ void USeinWorldSubsystem::ProcessDeferredDestroys()
 						MemComp->CurrentContainer))
 				{
 					Container->Occupants.Remove(Handle);
-					Container->CurrentLoad = FMath::Max(0, Container->CurrentLoad - MemComp->Size);
+					const int64 RemainingLoad =
+						static_cast<int64>(Container->CurrentLoad)
+						- static_cast<int64>(MemComp->Size);
+					Container->CurrentLoad = RemainingLoad <= 0
+						? 0
+						: RemainingLoad >= MAX_int32
+							? MAX_int32
+							: static_cast<int32>(RemainingLoad);
 					if (Container->bTracksVisualSlots)
 					{
 						const int32 Idx = MemComp->VisualSlotIndex;
@@ -6660,6 +6676,14 @@ void USeinWorldSubsystem::CaptureSnapshot(FSeinWorldSnapshot& OutSnapshot)
 		UE_LOG(LogSeinSim, Error,
 			TEXT("CaptureSnapshot: pool-object provider lease expired (%s)."),
 			*PoolLeaseError);
+		return;
+	}
+	FString ContainmentError;
+	if (!ValidateContainmentState(ContainmentError))
+	{
+		UE_LOG(LogSeinSim, Error,
+			TEXT("CaptureSnapshot: invalid containment state (%s)."),
+			*ContainmentError);
 		return;
 	}
 
@@ -9215,6 +9239,41 @@ bool USeinWorldSubsystem::RestoreSnapshot(
 		StagedAbilityPool,
 		StagedResolverPool,
 		StagedCanonicalStateValues);
+	TArray<FSeinEntityHandle> StagedEntityHandles;
+	StagedEntityHandles.Reserve(InSnapshot.Entities.Num());
+	for (const FSeinSnapshotEntityRecord& Entity : InSnapshot.Entities)
+	{
+		StagedEntityHandles.Emplace(Entity.SlotIndex, Entity.Generation);
+	}
+	FString ContainmentError;
+	if (!UE::SeinARTSCoreEntity::ValidateContainmentState(
+			StagedEntityHandles,
+			[&StagedCandidateView](FSeinEntityHandle Handle)
+			{
+				return StagedCandidateView.IsEntityValid(Handle);
+			},
+			[&StagedCandidateView](FSeinEntityHandle Handle)
+			{
+				return StagedCandidateView
+					.FindComponent<FSeinContainmentData>(Handle);
+			},
+			[&StagedCandidateView](FSeinEntityHandle Handle)
+			{
+				return StagedCandidateView
+					.FindComponent<FSeinContainmentMemberData>(Handle);
+			},
+			[&StagedCandidateView](FSeinEntityHandle Handle)
+			{
+				return StagedCandidateView
+					.FindComponent<FSeinAttachmentSpec>(Handle);
+			},
+			ContainmentError))
+	{
+		UE_LOG(LogSeinSim, Error,
+			TEXT("RestoreSnapshot: containment state failed structural preflight (%s)."),
+			*ContainmentError);
+		return false;
+	}
 
 	FSeinCanonicalStateRestorePlan StagedNativeState;
 	FSeinCanonicalStateStageContext NativeStageContext;
@@ -13562,7 +13621,7 @@ void USeinWorldSubsystem::TickAIControllers(FFixedPoint DeltaTime)
 	}
 }
 
-// ==================== Relationships (DESIGN §14) ====================
+// ==================== Pair capabilities and containment ====================
 
 namespace
 {
@@ -13587,6 +13646,36 @@ namespace
 		}
 		return INDEX_NONE;
 	}
+}
+
+bool USeinWorldSubsystem::ValidateContainmentState(FString& OutError) const
+{
+	TArray<FSeinEntityHandle> Entities;
+	Entities.Reserve(EntityPool.GetActiveCount());
+	EntityPool.ForEachEntity(
+		[&Entities](FSeinEntityHandle Handle, const FSeinEntity&)
+		{
+			Entities.Add(Handle);
+		});
+	return UE::SeinARTSCoreEntity::ValidateContainmentState(
+		Entities,
+		[this](FSeinEntityHandle Handle)
+		{
+			return EntityPool.IsValid(Handle);
+		},
+		[this](FSeinEntityHandle Handle)
+		{
+			return GetComponent<FSeinContainmentData>(Handle);
+		},
+		[this](FSeinEntityHandle Handle)
+		{
+			return GetComponent<FSeinContainmentMemberData>(Handle);
+		},
+		[this](FSeinEntityHandle Handle)
+		{
+			return GetComponent<FSeinAttachmentSpec>(Handle);
+		},
+		OutError);
 }
 
 bool USeinWorldSubsystem::EnterContainer(FSeinEntityHandle Entity, FSeinEntityHandle Container)
@@ -13626,9 +13715,72 @@ bool USeinWorldSubsystem::EnterContainer(FSeinEntityHandle Entity, FSeinEntityHa
 		UE_LOG(LogSeinSim, Warning, TEXT("EnterContainer: container %s has no FSeinContainmentData"), *Container.ToString());
 		return false;
 	}
+	if (MemComp->Size <= 0 || MemComp->CurrentSlot.IsValid()
+		|| MemComp->VisualSlotIndex != INDEX_NONE)
+	{
+		UE_LOG(LogSeinSim, Warning,
+			TEXT("EnterContainer: entity %s has invalid uncontained member state"),
+			*Entity.ToString());
+		return false;
+	}
+	FString ContainerError;
+	if (!UE::SeinARTSCoreEntity::ValidateContainmentContainer(
+			Container,
+			*ContComp,
+			[this](FSeinEntityHandle Handle)
+			{
+				return EntityPool.IsValid(Handle);
+			},
+			[this](FSeinEntityHandle Handle)
+			{
+				return GetComponent<FSeinContainmentMemberData>(Handle);
+			},
+			GetComponent<FSeinAttachmentSpec>(Container),
+			ContainerError))
+	{
+		UE_LOG(LogSeinSim, Warning,
+			TEXT("EnterContainer: container %s has invalid state (%s)"),
+			*Container.ToString(), *ContainerError);
+		return false;
+	}
+
+	TSet<FSeinEntityHandle> VisitedAncestors;
+	FSeinEntityHandle Ancestor = Container;
+	while (EntityPool.IsValid(Ancestor))
+	{
+		if (Ancestor == Entity || VisitedAncestors.Contains(Ancestor))
+		{
+			UE_LOG(LogSeinSim, Warning,
+				TEXT("EnterContainer: placing %s in %s would create or extend a containment cycle"),
+				*Entity.ToString(), *Container.ToString());
+			return false;
+		}
+		VisitedAncestors.Add(Ancestor);
+		const FSeinContainmentMemberData* AncestorMember =
+			GetComponent<FSeinContainmentMemberData>(Ancestor);
+		if (!AncestorMember || !AncestorMember->CurrentContainer.IsValid())
+		{
+			break;
+		}
+		const FSeinEntityHandle NextAncestor =
+			AncestorMember->CurrentContainer;
+		const FSeinContainmentData* NextContainer =
+			GetComponent<FSeinContainmentData>(NextAncestor);
+		if (!EntityPool.IsValid(NextAncestor) || !NextContainer
+			|| !NextContainer->Occupants.Contains(Ancestor))
+		{
+			UE_LOG(LogSeinSim, Warning,
+				TEXT("EnterContainer: ancestor %s references invalid container %s"),
+				*Ancestor.ToString(), *NextAncestor.ToString());
+			return false;
+		}
+		Ancestor = NextAncestor;
+	}
 
 	// Capacity
-	if (ContComp->CurrentLoad + MemComp->Size > ContComp->TotalCapacity)
+	const int64 NewLoad = static_cast<int64>(ContComp->CurrentLoad)
+		+ static_cast<int64>(MemComp->Size);
+	if (NewLoad > static_cast<int64>(ContComp->TotalCapacity))
 	{
 		return false;
 	}
@@ -13644,7 +13796,7 @@ bool USeinWorldSubsystem::EnterContainer(FSeinEntityHandle Entity, FSeinEntityHa
 
 	// Commit state
 	ContComp->Occupants.Add(Entity);
-	ContComp->CurrentLoad += MemComp->Size;
+	ContComp->CurrentLoad = static_cast<int32>(NewLoad);
 	MemComp->CurrentContainer = Container;
 	MemComp->VisualSlotIndex = AssignFirstFreeVisualSlot(*ContComp, Entity);
 	// CurrentSlot stays empty — set by AttachToSlot when attachment is used.
@@ -13757,7 +13909,13 @@ bool USeinWorldSubsystem::ExitContainerInternal(
 
 	// Occupant-list cleanup.
 	ContComp->Occupants.Remove(Entity);
-	ContComp->CurrentLoad = FMath::Max(0, ContComp->CurrentLoad - MemComp->Size);
+	const int64 RemainingLoad = static_cast<int64>(ContComp->CurrentLoad)
+		- static_cast<int64>(MemComp->Size);
+	ContComp->CurrentLoad = RemainingLoad <= 0
+		? 0
+		: RemainingLoad >= MAX_int32
+			? MAX_int32
+			: static_cast<int32>(RemainingLoad);
 	MemComp->CurrentContainer = FSeinEntityHandle();
 	MemComp->CurrentSlot = FGameplayTag();
 	MemComp->VisualSlotIndex = INDEX_NONE;
@@ -13899,16 +14057,23 @@ FSeinEntityHandle USeinWorldSubsystem::GetRootContainer(FSeinEntityHandle Entity
 {
 	FSeinEntityHandle Cursor = GetImmediateContainer(Entity);
 	if (!Cursor.IsValid()) return FSeinEntityHandle();
-	// Walk up; cap at 32 to guard against pathological loops.
-	for (int32 Depth = 0; Depth < 32; ++Depth)
+	TSet<FSeinEntityHandle> Seen;
+	Seen.Add(Entity);
+	while (Cursor.IsValid())
 	{
+		if (Seen.Contains(Cursor))
+		{
+			UE_LOG(LogSeinSim, Warning,
+				TEXT("GetRootContainer: containment cycle reached from %s"),
+				*Entity.ToString());
+			return FSeinEntityHandle();
+		}
+		Seen.Add(Cursor);
 		const FSeinEntityHandle Next = GetImmediateContainer(Cursor);
 		if (!Next.IsValid()) return Cursor;
 		Cursor = Next;
 	}
-	UE_LOG(LogSeinSim, Warning, TEXT("GetRootContainer: depth limit hit on %s — likely a containment cycle"),
-		*Entity.ToString());
-	return Cursor;
+	return FSeinEntityHandle();
 }
 
 bool USeinWorldSubsystem::IsContained(FSeinEntityHandle Entity) const
@@ -13924,10 +14089,13 @@ TArray<FSeinEntityHandle> USeinWorldSubsystem::GetAllNestedOccupants(FSeinEntity
 	if (!Cont) return Out;
 
 	TArray<FSeinEntityHandle> Frontier = Cont->Occupants;
+	TSet<FSeinEntityHandle> Seen;
+	Seen.Add(Container);
 	while (Frontier.Num() > 0)
 	{
 		FSeinEntityHandle Current = Frontier.Pop();
-		if (!EntityPool.IsValid(Current)) continue;
+		if (!EntityPool.IsValid(Current) || Seen.Contains(Current)) continue;
+		Seen.Add(Current);
 		Out.Add(Current);
 		if (const FSeinContainmentData* Nested = GetComponent<FSeinContainmentData>(Current))
 		{
@@ -13948,11 +14116,16 @@ FSeinContainmentTree USeinWorldSubsystem::BuildContainmentTree(FSeinEntityHandle
 	TArray<FFrame> Stack;
 	Stack.Reserve(8);
 	Stack.Push({Container, 0, INDEX_NONE});
+	TSet<FSeinEntityHandle> Seen;
 
 	while (Stack.Num() > 0)
 	{
 		const FFrame Frame = Stack.Pop();
-		if (!EntityPool.IsValid(Frame.Entity)) continue;
+		if (!EntityPool.IsValid(Frame.Entity) || Seen.Contains(Frame.Entity))
+		{
+			continue;
+		}
+		Seen.Add(Frame.Entity);
 
 		FSeinContainmentTreeEntry Entry;
 		Entry.Entity = Frame.Entity;

@@ -445,10 +445,10 @@ DECLARE_DELEGATE_RetVal_TwoParams(bool, FSeinHeightResolver,
 	const FFixedVector& /*WorldPos*/, FFixedPoint& /*OutZ*/);
 
 /**
- * Delegates sim uses to (un)register entities in the spatial tile grid
- * (DESIGN §13 broadphase). Bound by USeinNavigationSubsystem at
- * OnWorldBeginPlay. Invoked by containment (DESIGN §14) when visibility-
- * mode transitions take an entity off the grid (`Hidden`) or put it back on.
+ * Delegates sim uses to (un)register entities in the spatial tile grid.
+ * Bound by USeinNavigationSubsystem at OnWorldBeginPlay. Containment invokes
+ * them when visibility-mode transitions take an entity off the grid or put it
+ * back on.
  * Unbound delegates are no-ops — tests and nav-less games skip.
  */
 DECLARE_DELEGATE_OneParam(FSeinSpatialGridRegister,   FSeinEntityHandle /*Entity*/);
@@ -1627,7 +1627,7 @@ public:
 	 *  ProcessDeferredDestroys before the pool releases the handle. */
 	void RemoveEffectsFromDeadSource(FSeinEntityHandle DeadHandle);
 
-	// ========== Relationships (DESIGN §14) ==========
+	// ========== Pair capabilities and containment ==========
 
 	/**
 	 * True if SourcePlayer grants CapabilityTag to TargetPlayer. Direction is
@@ -1674,9 +1674,10 @@ public:
 	 *
 	 * Validates: both handles alive; entity has `FSeinContainmentMemberData`;
 	 * container has `FSeinContainmentData`; entity not already contained;
-	 * accepted-query match; capacity + Size fits. On success: updates
+	 * acyclic reciprocal container state; accepted-query match; capacity + Size
+	 * fits. On success: updates
 	 * occupant list, bumps `CurrentLoad`, assigns visual slot if tracking
-	 * enabled, unregisters from spatial grid if `Visibility == Hidden`,
+	 * enabled, unregisters from spatial grid unless positioned relative,
 	 * emits `EntityEnteredContainer` event.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Containment")
@@ -1712,7 +1713,7 @@ public:
 	bool DetachFromSlot(FSeinEntityHandle Entity);
 
 	/**
-	 * Propagate container death per DESIGN §14 rules. Called by
+	 * Propagate container death using the container's authored policy. Called by
 	 * `ProcessDeferredDestroys` when a dying entity has `FSeinContainmentData`.
 	 *   bEjectOnContainerDeath=true: eject each occupant at container's last
 	 *     transform; apply `OnEjectEffect` to each if set; occupants survive.
@@ -2592,6 +2593,7 @@ private:
 	void SeedTeamPairCapabilitiesForPlayer(FSeinPlayerID PlayerID);
 	void RebuildPairCapabilityEffectiveCache();
 	bool ValidatePairCapabilityState() const;
+	bool ValidateContainmentState(FString& OutError) const;
 
 	// Ability initialization for spawned entities
 	void InitializeEntityAbilities(FSeinEntityHandle Handle);
