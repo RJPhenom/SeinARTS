@@ -21,6 +21,7 @@
 #include "Data/SeinReplayHeader.h"
 #include "Engine/World.h"
 #include "HAL/FileManager.h"
+#include "HAL/LowLevelMemTracker.h"
 #include "HAL/MemoryMisc.h"
 #include "HAL/PlatformMemory.h"
 #include "HAL/PlatformProcess.h"
@@ -421,6 +422,11 @@ namespace UE::SeinARTSTests
 		TArray<bool> SampleCapabilityStates;
 
 		TRACE_BOOKMARK(TEXT("Sein.ReplayOperationalSoak.Begin"));
+		TArray<uint8> ReplayAllocatorAttributionSentinel;
+		{
+			LLM_SCOPE_BYNAME(TEXT("SeinARTS/Replay/Checkpoint/Encode"));
+			ReplayAllocatorAttributionSentinel.SetNumUninitialized(64);
+		}
 		ASSERT_THAT(IsTrue(Source->StartSimulation()));
 		for (int32 TurnOrdinal = 0; TurnOrdinal < TotalTurns; ++TurnOrdinal)
 		{
@@ -627,6 +633,7 @@ namespace UE::SeinARTSTests
 			EpochWorkingSets.Num()
 				== PeriodicCheckpointCount / GcIntervalCheckpoints));
 		TRACE_BOOKMARK(TEXT("Sein.ReplayOperationalSoak.End"));
+		ReplayAllocatorAttributionSentinel.Empty();
 
 		ASSERT_THAT(AreEqual(SampleTicks.Num(), SampleRoots.Num()));
 		ASSERT_THAT(AreEqual(
