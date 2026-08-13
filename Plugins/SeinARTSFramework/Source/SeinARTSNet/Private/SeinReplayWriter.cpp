@@ -31,6 +31,7 @@
 #include "Engine/World.h"
 #include "HAL/Event.h"
 #include "HAL/FileManager.h"
+#include "HAL/LowLevelMemTracker.h"
 #include "HAL/PlatformProcess.h"
 #include "HAL/PlatformTime.h"
 #include "Misc/DateTime.h"
@@ -1466,6 +1467,7 @@ bool USeinReplayWriter::AppendJournalFrame(
 				}
 				else
 				{
+					LLM_SCOPE_BYNAME(TEXT("SeinARTS/Replay/DurableAppend"));
 					TRACE_CPUPROFILER_EVENT_SCOPE(
 						Sein_Replay_BackgroundDurableAppend);
 #if WITH_DEV_AUTOMATION_TESTS
@@ -1523,6 +1525,7 @@ bool USeinReplayWriter::AppendJournalFrame(
 
 	bool bAppendSucceeded = false;
 	{
+		LLM_SCOPE_BYNAME(TEXT("SeinARTS/Replay/DurableAppend"));
 		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Replay_SynchronousDurableAppend);
 		bAppendSucceeded = SeinReplayFileIO::AppendAtExpectedOffset(
 			ActivePartialPath,
@@ -1634,6 +1637,7 @@ bool USeinReplayWriter::CaptureCheckpointInternal(
 	FSeinWorldSnapshot Snapshot;
 	FSeinWorldSnapshotReferenceGuard SnapshotGuard(Snapshot);
 	{
+		LLM_SCOPE_BYNAME(TEXT("SeinARTS/Replay/Checkpoint/Snapshot"));
 		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Replay_Checkpoint_CaptureSnapshot);
 		WorldSub->CaptureSnapshot(Snapshot);
 	}
@@ -1688,6 +1692,7 @@ bool USeinReplayWriter::CaptureCheckpointInternal(
 #endif
 			]() mutable
 			{
+				LLM_SCOPE_BYNAME(TEXT("SeinARTS/Replay/Checkpoint/Encode"));
 				FSeinReplayAsyncCheckpointEncodeResult Result;
 				Result.SnapshotTick = EncodeWork->Snapshot.CurrentTick;
 				FSeinSnapshotEnvelopeMetadata Metadata;
@@ -1775,6 +1780,7 @@ bool USeinReplayWriter::CaptureCheckpointInternal(
 	FSeinSnapshotEnvelopeMetadata Metadata;
 	bool bEnvelopeEncoded = false;
 	{
+		LLM_SCOPE_BYNAME(TEXT("SeinARTS/Replay/Checkpoint/Encode"));
 		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Replay_Checkpoint_EncodeEnvelope);
 		bEnvelopeEncoded = SeinSnapshotTransfer::EncodeCheckpointEnvelope(
 			Snapshot, Envelope, Metadata, Error);
