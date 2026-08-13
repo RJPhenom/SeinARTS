@@ -6,7 +6,7 @@
 **Cleanup boundary:** `1bebf91` (`Clean and harden the post-audit baseline`)
 **Content/consumer boundary:** `1438051` (`Add clean downstream consumer verification`)
 **Reporter-bootstrap fix:** `89f1b5d` (`Fix remote determinism reporter bootstrap`)
-**Remote posture:** this state is intended for the next clean `main` integration and push.
+**Remote posture:** this qualified state is integrated on `main` and synchronized with `origin/main`.
 
 ## Stabilized capability boundary
 
