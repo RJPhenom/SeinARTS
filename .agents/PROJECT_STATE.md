@@ -84,6 +84,15 @@ formation/resolver state coverage, provider teardown, and downstream content own
 
 Latest local evidence is under ignored `Saved/Automation/`:
 
+- `SeinARTS.Unit.Navigation-20260813-140554-b71dccb6` and
+  `SeinARTS.Unit.Navigation-20260813-141012-e758b08b` (Framework, 34 passed before and after
+  extracting the non-shipping A* path reporters)
+- `SeinARTS.Unit-20260813-141200-c31acc38` (Framework, 428 passed) and
+  `SeinARTS.Determinism-20260813-141249-1eed39dc` (Framework, 33 passed)
+- `SeinARTS.Determinism.Process.SerialCollisionTrace-20260813-141326-d7d20de1` and
+  `SeinARTS.Determinism.Process.ParallelCollisionTrace-20260813-141343-d2646e6e`
+  (fresh processes; all 120 canonical roots and raw poses matched exactly after the A* diagnostic
+  extraction)
 - `SeinARTS.Sim.Broker.IdleReseek-20260813-140051-0ebee27d` (Framework,
   7 passed; exact nonzero jitter, watch/release cadence and episode-cap boundaries, aligned and
   claimed/free-slot pairing, moving-traffic clearance, and multi-candidate loose returns)
@@ -442,6 +451,15 @@ Latest local evidence is under ignored `Saved/Automation/`:
   real multi-client PIE remain explicit gates in `.agents/VEHICLE_GYM.md`.
 
 ## Current development state
+
+A* partial-path, unreachable-segment, and clearance reporters now live in one adjacent private
+implementation include instead of interrupting the search and path-pipeline bodies. They remain in
+the same translation unit behind the same non-shipping declarations, calls, and compile guard.
+Independent token-level review found their branches, log strings, levels, gates, iteration order,
+and helper visibility unchanged. The focused Navigation Unit suite passed 34/34 both before and
+after extraction, Framework Unit passed 428/428, Framework Determinism passed 33/33, fresh-process
+serial/parallel roots and poses agree for all 120 ticks, and Development plus Shipping builds
+succeeded. No public API, path output, canonical state, tuning, schema, or behavior revision changed.
 
 Command-broker idle re-seek is now isolated from the broker tick in one private deterministic
 kernel. The extraction stages loose-candidate collection, broker pairing/traffic/release work, and
