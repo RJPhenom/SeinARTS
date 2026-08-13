@@ -64,6 +64,7 @@ formation/resolver state coverage, provider teardown, and downstream content own
 | `SeinARTS.Sim`, profile Framework | 27 passed, 0 failed |
 | `SeinARTS.Perf`, profile All | 6 passed, 0 failed; cover 128x128 averaged 11.998 ms; public 128-member preview measured 1.255/1.337 ms median/p95 coverless and 3.181/3.324 ms dense; collision full-tick medians 1.257/3.114/7.214 ms at 64/128/256 movers |
 | `SeinARTS.Perf`, profile Framework | 4 passed, 0 failed; replay operational soak wrote 135,244,673 bytes over 449 turns with 34.862/101.058/101.371 ms checkpoint p50/p95/max; containment at 1,000 occupants measured 2.825 ms canonical root, 4.328 ms invalidated checkpoint, and 0.926 ms warm checkpoint; moving-entity checkpoint medians remain 2.037/7.815/15.288 ms at 100/500/1,000 entities; collision full-tick medians 1.401/3.035/7.494 ms at 64/128/256 movers |
+| Replay Memory Insights (development) | Full-callstack bookmark-bounded attribution reduced replay-retained growth from 8,388,688 bytes to 80 bytes; the fixed 4 KiB receipt gate is implemented, but a committed clean post-fix trace and production `Qualified` receipt remain pending |
 | Fresh-process collision trace | 2026-08-13 serial and parallel roots/poses identical for all 120 ticks under `SeinARTS.Replay.6`; final root `58DA3B5A4281F117CB3F7471624DDCB4`, pose `0x8B576390ECC600E1` |
 | `SeinARTSEditor Win64 Development` | succeeded / target current |
 | `SeinARTS Win64 Shipping` | succeeded / target current |
@@ -83,6 +84,13 @@ formation/resolver state coverage, provider teardown, and downstream content own
 
 Latest local evidence is under ignored `Saved/Automation/`:
 
+- `SeinARTS.Perf.Replay.OperationalSoak-20260813-103957-dfe48bc9` (Framework,
+  clean pre-fix full-memory trace; 47,573,706 retained bytes overall and 8,388,688 under replay tags)
+- `Saved/Profiling/Insights/ReplayOperationalMemoryConsume-20260813-104559.utrace`
+  (development rerun; 22,443,426 retained bytes overall and 80 under replay tags)
+- `Scripts/Qualification/Invoke-ReplayMemoryInsightsSelfTest.ps1` (Windows PowerShell 5.1 valid,
+  over-retention, and tampered-trace fixtures passed); the exporter independently rejected the clean
+  pre-fix trace without publishing a qualification directory
 - `SeinARTS.Perf.Replay.OperationalSoak-20260813-100340-b1db339d` (Framework,
   1 passed; 449 turns, 64 natural periodic checkpoints, eight proven GC/exclusion overlaps,
   uncheckpointed final grant replay, sampled exact seeks, and full canonical-root playback)
@@ -489,8 +497,16 @@ checks, full playback, and process working-set/private-commit/late-growth sentin
   were 44.87 MiB, private-commit growth was 43.70 MiB, and late growth was 40.94 MiB. A configured
 64 MiB file-policy exhaustion test stops recording without deleting the
 partial, then replays that partial to the exact last durable tick, capability state, and canonical
-root. Multi-hour real-device latency/hitch distributions, allocator attribution through Insights,
-platform storage matrices, and true OS disk-full behavior remain open.
+root. Full `default,memory,metadata` tracing over the operational-soak bookmarks attributed
+8,388,688 retained replay bytes in the clean pre-fix run, including one 8,388,608-byte checkpoint
+envelope buffer copied out of its completed future. Consuming completed replay futures removed that
+copy; the development rerun retained 80 replay-attributed bytes. All exported allocations had
+recorded callstacks, and the 21 Insights heap-reconstruction warnings occurred only during startup before the
+measurement interval. The receipt-bound exporter validates every attempt/build/trace/analyzer input,
+enforces a fixed 4 KiB replay ceiling, and publishes CSV/log/receipt artifacts only on success. A
+committed clean post-fix trace and production `Qualified` receipt remain pending. Multi-hour
+real-device latency/hitch and allocator-high-water distributions, platform storage matrices, and
+true OS disk-full behavior remain open.
 
 A compressed 128-entity repeated-lifecycle fixture now captures 25 periodic checkpoints plus the
 required initial checkpoint through the real ordered background encode/append bodies. Alternating
@@ -505,7 +521,7 @@ ticks and alternating authoritative mutations continue for two turns in each hel
 resident bytes, file/durability non-advancement, production-callback catch-up, checkpoint index,
 seek/root/capability state, and full playback remain exact. These controlled internal-midpoint tests
 are complemented by the accelerated operational soak above; they still do not replace multi-hour
-real-device timing, allocator attribution, platform storage matrices, or true OS disk-full evidence.
+real-device timing and allocator-high-water, platform storage matrices, or true OS disk-full evidence.
 
 The supplied 2026-08-11 two-player PIE log contains two healthy sessions: lockstep configuration
 and participant roots agree throughout, with no gate stall, persistent incomplete turn, retransmit,

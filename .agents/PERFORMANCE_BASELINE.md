@@ -55,6 +55,21 @@ seek continuation, and full tick-zero playback all agreed. This is controlled op
 backpressure evidence, not an uncontrolled local-disk timing, target-device latency, RSS, allocator,
 GC, long-session, or exhausted-storage qualification.
 
+**UE 5.8 replay allocator attribution:** 2026-08-13, full `default,memory,metadata` traces bounded by
+the operational-soak begin/end bookmarks. The clean pre-fix run
+`SeinARTS.Perf.Replay.OperationalSoak-20260813-103957-dfe48bc9` retained 47,573,706 bytes in
+1,610 allocations over the measured interval, including 8,388,688 replay-attributed bytes. The
+checkpoint envelope accounted for 8,388,608 bytes of that replay growth. Replacing result copies
+from completed replay futures with `TFuture::Consume()` reduced the development rerun to 22,443,426
+bytes in 1,256 allocations overall and 80 replay-attributed bytes. Every exported allocation had a
+recorded callstack. Unreal Insights reported 21 heap-reconstruction errors only during startup, with
+the latest at trace time 2.240 seconds, before the 30.598-second measurement boundary. The receipt-bound
+`Export-ReplayMemoryInsights.ps1` accepts only a clean passed attempt with exact trace/provenance
+hashes and rejects more than 4 KiB of replay-attributed retained growth before publishing output.
+The 80-byte result is developmental evidence until a committed clean post-fix trace produces a
+production `Qualified` receipt. It does not prove whole-process leak freedom or multi-hour
+target-device behavior.
+
 **UE 5.8 collision scale microbenchmark:** 2026-08-12, real canonical bootstrap and complete
 fixed ticks with reset packed contacts: 64 movers 1.257 ms median, 128 movers 3.114 ms, and
 256 movers 7.214 ms (`SeinARTS.Perf-20260812-081656-9a968ce2`). The enforced
@@ -128,8 +143,9 @@ The final GPU/resource capture did not reproduce the prior ray-tracing geometry 
 4. Complex game AnimBPs, Control Rig, cloth, physics, and unique meshes can exceed the mannequin baseline.
 5. Checkpoint snapshot capture remains synchronous. Cached storage blobs reduce the measured cost,
    and controlled internal-midpoint tests cover ordered encode/append overlap and exact resident
-   pressure, but real-device long-session hitch distribution, allocator high-water/RSS, GC
-   interaction, slow storage, and exhausted-storage behavior remain open soak gates.
+   pressure. The accelerated soak also has bookmark-bounded full-callstack allocator attribution,
+   but real-device long-session hitch distribution and allocator high-water/RSS, GC interaction,
+   slow storage, and exhausted-storage behavior remain open soak gates.
 6. `Sein.Nav.Show 1` is a correctness visualization, not a performance-safe overlay. A measured 100-mover run rose from 18.62 ms to 64.62 ms before the latest debug caching work; always record the flag.
 7. Multi-client PIE intentionally hosts multiple complete simulations/presentations in one process. Record world count and do not present it as one shipped client's cost.
 
@@ -150,5 +166,13 @@ qualification should include `Sein_Replay_CaptureCheckpoint`,
 bounded pressure behavior, not a target device's latency distribution. Keep looking after the first
 expensive scope: the original regression had independent sim, UI, animation, debug-render, and
 GPU-memory causes.
+
+For the accelerated replay allocator gate, run the operational soak with exact trace channels
+`default,memory,metadata`, then pass its clean `attempt.json` to
+`Scripts/Qualification/Export-ReplayMemoryInsights.ps1`. The exporter validates source/build/trace
+identities, exports allocations created after `Sein.ReplayOperationalSoak.Begin` and still live at
+`Sein.ReplayOperationalSoak.End`, requires recorded callstacks, and emits `receipt.json` only when
+replay-attributed retained growth is at most 4 KiB. Run
+`Scripts/Qualification/Invoke-ReplayMemoryInsightsSelfTest.ps1` after changing that contract.
 
 Every simulation optimization that changes traversal or mutation timing must rerun Unit, Integration, Determinism, fresh-process serial/parallel traces, and a PIE behavior A/B. Presentation-only changes still need visual/editor validation.

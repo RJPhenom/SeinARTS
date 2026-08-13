@@ -78,8 +78,13 @@ CI gate because this engine distribution rejects those target types before proje
   periodic checkpoints, eight full-GC boundaries, 128 entities,
   sampled exact seek/root/capability checks, full playback, process-memory/late-growth sentinels,
   and checkpoint latency tails. A configured 64 MiB file-policy exhaustion test also proves the
-  preserved partial replays to its exact last durable tick and root. Multi-hour real-device timing,
-  Insights allocator attribution, platform storage matrices, and true OS disk-full behavior remain
+  preserved partial replays to its exact last durable tick and root. Full bookmark-bounded Memory
+  Insights attribution found an 8 MiB retained completed-future envelope copy; consuming future
+  results reduced replay-attributed retained growth to 80 bytes in a development trace. A
+  receipt-bound headless exporter now enforces a fixed 4 KiB ceiling with exact source, trace,
+  engine, trusted-analyzer, and output identities. A clean post-fix production receipt remains
+  required before this local attribution gate closes. Multi-hour real-device timing and
+  allocator-high-water behavior, platform storage matrices, and true OS disk-full behavior remain
   open.
 - The packaged run exposed and closed three release-only integration defects: lobby maps now
   materialize relays from their final authoritative slot bindings, Shipping builds no longer hide
