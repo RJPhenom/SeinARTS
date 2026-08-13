@@ -68,6 +68,15 @@ namespace
 		return true;
 	}
 
+	int32 GetReseekJitterWindow(const USeinARTSCoreSettings& Settings)
+	{
+		const int32 TickRate = Settings.SimulationTickRate > 1
+			? Settings.SimulationTickRate
+			: 1;
+		const int32 JitterWindow = (TickRate * 3) / 2;
+		return JitterWindow > 1 ? JitterWindow : 1;
+	}
+
 	const FSeinBrokerQueuedOrder* FindInternalReturn(
 		const FSeinCommandBrokerData& Broker,
 		FSeinEntityHandle Member)
@@ -96,7 +105,8 @@ namespace
 
 		bool Initialize(
 			bool bWithForeignOrder = false,
-			int32 InitialEpisodeStartTick = 0)
+			int32 InitialEpisodeStartTick = 0,
+			int32 RequiredJitter = INDEX_NONE)
 		{
 			World = Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
 			if (!World)
@@ -108,8 +118,17 @@ namespace
 			return SeinTestMatchBootstrap::Materialize(*World, [&]()
 			{
 				World->RegisterPlayer(Player, FSeinFactionID(1));
-				Member = World->SpawnAbstractEntity(
-					FFixedTransform(DisplacedPosition), Player);
+				const int32 WindowTicks = GetReseekJitterWindow(
+					*GetDefault<USeinARTSCoreSettings>());
+				do
+				{
+					Member = World->SpawnAbstractEntity(
+						FFixedTransform(DisplacedPosition), Player);
+				}
+				while (RequiredJitter != INDEX_NONE
+					&& static_cast<int32>(GetTypeHash(Member)
+						% static_cast<uint32>(WindowTicks))
+						!= RequiredJitter);
 				Broker = World->SpawnAbstractEntity(FFixedTransform(), Player);
 
 				FSeinMovementComponent Movement;
@@ -153,17 +172,39 @@ namespace UE::SeinARTSTests
 	{
 		FScopedIdleReseekSettings Settings;
 		FBrokeredReseekFixture Fixture;
-		ASSERT_THAT(IsTrue(Fixture.Initialize()));
+		constexpr int32 ExpectedJitter = 3;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(
+			false, 0, ExpectedJitter)));
 
-		const FSeinBrokerQueuedOrder* ReturnOrder = nullptr;
-		for (int32 Attempt = 0; Attempt < 64 && !ReturnOrder; ++Attempt)
+		ASSERT_THAT(IsTrue(TickOnce(*Fixture.World)));
+		const FSeinCommandBrokerData* Broker =
+			Fixture.World->GetComponent<FSeinCommandBrokerData>(Fixture.Broker);
+		ASSERT_THAT(IsNotNull(Broker));
+		ASSERT_THAT(IsNull(FindInternalReturn(*Broker, Fixture.Member)));
+		const int32 EpisodeStartTick = Broker->ReseekEpisodeStartTick;
+		ASSERT_THAT(AreEqual(
+			Fixture.World->GetCurrentTick(), EpisodeStartTick));
+		const int32 ExpectedReleaseTick = EpisodeStartTick + ExpectedJitter;
+
+		while (Fixture.World->GetCurrentTick() + 1 < ExpectedReleaseTick)
 		{
 			ASSERT_THAT(IsTrue(TickOnce(*Fixture.World)));
-			const FSeinCommandBrokerData* Broker =
+			Broker =
 				Fixture.World->GetComponent<FSeinCommandBrokerData>(Fixture.Broker);
 			ASSERT_THAT(IsNotNull(Broker));
-			ReturnOrder = FindInternalReturn(*Broker, Fixture.Member);
+			ASSERT_THAT(IsNull(FindInternalReturn(*Broker, Fixture.Member)));
 		}
+		ASSERT_THAT(AreEqual(
+			ExpectedReleaseTick - 1, Fixture.World->GetCurrentTick()));
+
+		ASSERT_THAT(IsTrue(TickOnce(*Fixture.World)));
+		Broker = Fixture.World->GetComponent<FSeinCommandBrokerData>(
+			Fixture.Broker);
+		ASSERT_THAT(IsNotNull(Broker));
+		ASSERT_THAT(AreEqual(
+			ExpectedReleaseTick, Fixture.World->GetCurrentTick()));
+		const FSeinBrokerQueuedOrder* ReturnOrder =
+			FindInternalReturn(*Broker, Fixture.Member);
 
 		ASSERT_THAT(IsNotNull(ReturnOrder));
 		ASSERT_THAT(AreEqual(1, ReturnOrder->PreplacedMembers.Num()));
@@ -177,6 +218,42 @@ namespace UE::SeinARTSTests
 			SeinARTSTags::Command_Context_RightClick)));
 		ASSERT_THAT(IsTrue(ReturnOrder->Context.HasTagExact(
 			SeinARTSTags::Command_Context_Target_Ground)));
+	}
+
+	TEST(IdleReseekWatchCadenceAdvancesOnExactBoundary,
+		"SeinARTS.Sim.Broker.IdleReseek")
+	{
+		FScopedIdleReseekSettings Settings;
+		Settings.Settings->ReseekWatchInterval = FFixedPoint::One;
+		FBrokeredReseekFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(true)));
+
+		ASSERT_THAT(IsTrue(TickOnce(*Fixture.World)));
+		const int32 FirstScanTick = Fixture.World->GetCurrentTick();
+		const int32 WatchTicks = Settings.Settings->SimulationTickRate;
+		const int32 FirstBoundary = FirstScanTick + WatchTicks;
+		const FSeinCommandBrokerData* Broker =
+			Fixture.World->GetComponent<FSeinCommandBrokerData>(Fixture.Broker);
+		ASSERT_THAT(IsNotNull(Broker));
+		ASSERT_THAT(AreEqual(FirstBoundary, Broker->NextReseekAllowedTick));
+
+		while (Fixture.World->GetCurrentTick() + 1 < FirstBoundary)
+		{
+			ASSERT_THAT(IsTrue(TickOnce(*Fixture.World)));
+			Broker = Fixture.World->GetComponent<FSeinCommandBrokerData>(
+				Fixture.Broker);
+			ASSERT_THAT(IsNotNull(Broker));
+			ASSERT_THAT(AreEqual(
+				FirstBoundary, Broker->NextReseekAllowedTick));
+		}
+
+		ASSERT_THAT(IsTrue(TickOnce(*Fixture.World)));
+		Broker = Fixture.World->GetComponent<FSeinCommandBrokerData>(
+			Fixture.Broker);
+		ASSERT_THAT(IsNotNull(Broker));
+		ASSERT_THAT(AreEqual(FirstBoundary, Fixture.World->GetCurrentTick()));
+		ASSERT_THAT(AreEqual(
+			FirstBoundary + WatchTicks, Broker->NextReseekAllowedTick));
 	}
 
 	TEST(ForeignOrderSuppressesIdleReseek,
@@ -199,7 +276,7 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(AreEqual(0, Broker->ReseekEpisodeStartTick));
 	}
 
-	TEST(FreeReseekPairingKeepsSwappedMembersOnNearestSlots,
+	TEST(FreeReseekPairingRematchesUnreleasedMembersAroundClaimedSlot,
 		"SeinARTS.Sim.Broker.IdleReseek")
 	{
 		FScopedIdleReseekSettings Settings;
@@ -208,27 +285,52 @@ namespace UE::SeinARTSTests
 			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
 		ASSERT_THAT(IsNotNull(World));
 
-		FSeinEntityHandle FirstMember;
-		FSeinEntityHandle SecondMember;
+		FSeinEntityHandle ClaimedMember;
+		FSeinEntityHandle UpperMember;
+		FSeinEntityHandle LowerMember;
 		FSeinEntityHandle BrokerHandle;
 		const FFixedVector FirstSlot = FFixedVector::ZeroVector;
 		const FFixedVector SecondSlot(
 			FFixedPoint::FromInt(1000), FFixedPoint::Zero,
 			FFixedPoint::Zero);
+		const FFixedVector ThirdSlot(
+			FFixedPoint::FromInt(2000), FFixedPoint::Zero,
+			FFixedPoint::Zero);
+		const FFixedVector UpperPosition(
+			FFixedPoint::FromInt(1700), FFixedPoint::Zero,
+			FFixedPoint::Zero);
+		const FFixedVector LowerPosition(
+			FFixedPoint::FromInt(1300), FFixedPoint::Zero,
+			FFixedPoint::Zero);
 		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Materialize(*World, [&]()
 		{
 			const FSeinPlayerID Player(1);
 			World->RegisterPlayer(Player, FSeinFactionID(1));
-			FirstMember = World->SpawnAbstractEntity(
-				FFixedTransform(SecondSlot), Player);
-			SecondMember = World->SpawnAbstractEntity(
+			ClaimedMember = World->SpawnAbstractEntity(
 				FFixedTransform(FirstSlot), Player);
+			const int32 WindowTicks = GetReseekJitterWindow(
+				*Settings.Settings);
+			do
+			{
+				UpperMember = World->SpawnAbstractEntity(
+					FFixedTransform(UpperPosition), Player);
+			}
+			while (GetTypeHash(UpperMember)
+				% static_cast<uint32>(WindowTicks) != 0);
+			do
+			{
+				LowerMember = World->SpawnAbstractEntity(
+					FFixedTransform(LowerPosition), Player);
+			}
+			while (GetTypeHash(LowerMember)
+				% static_cast<uint32>(WindowTicks) != 0);
 			BrokerHandle = World->SpawnAbstractEntity(
 				FFixedTransform(), Player);
 
 			for (const TPair<FSeinEntityHandle, FFixedVector>& Entry : {
-				TPair<FSeinEntityHandle, FFixedVector>(FirstMember, SecondSlot),
-				TPair<FSeinEntityHandle, FFixedVector>(SecondMember, FirstSlot)})
+				TPair<FSeinEntityHandle, FFixedVector>(ClaimedMember, FirstSlot),
+				TPair<FSeinEntityHandle, FFixedVector>(UpperMember, UpperPosition),
+				TPair<FSeinEntityHandle, FFixedVector>(LowerMember, LowerPosition)})
 			{
 				FSeinMovementComponent Movement;
 				Movement.bHomeSeeded = true;
@@ -243,29 +345,44 @@ namespace UE::SeinARTSTests
 			}
 
 			FSeinCommandBrokerData Broker;
-			Broker.Members = {FirstMember, SecondMember};
-			Broker.SettledSlotPositions = {FirstSlot, SecondSlot};
+			Broker.Members = {ClaimedMember, UpperMember, LowerMember};
+			Broker.SettledSlotPositions = {FirstSlot, SecondSlot, ThirdSlot};
 			Broker.bSettledSlotsMemberAligned = false;
 			Broker.bSelfCullOnEmpty = false;
+			FSeinBrokerQueuedOrder ClaimedOrder;
+			ClaimedOrder.TargetMembers.Add(ClaimedMember);
+			ClaimedOrder.PreplacedMembers.Add(ClaimedMember);
+			ClaimedOrder.PreplacedPositions.Add(FirstSlot);
+			ClaimedOrder.bIsInternalPrefix = true;
+			ClaimedOrder.bIsExecuting = true;
+			ClaimedOrder.LastDispatchTick = MAX_int32;
+			Broker.OrderQueue.Add(ClaimedOrder);
 			World->AddComponent(BrokerHandle, Broker);
 		})));
 
-		for (int32 Tick = 0; Tick < 4; ++Tick)
-		{
-			ASSERT_THAT(IsTrue(TickOnce(*World)));
-		}
+		ASSERT_THAT(IsTrue(TickOnce(*World)));
 
 		const FSeinCommandBrokerData* Broker =
 			World->GetComponent<FSeinCommandBrokerData>(BrokerHandle);
 		ASSERT_THAT(IsNotNull(Broker));
-		ASSERT_THAT(AreEqual(0, Broker->OrderQueue.Num()));
-		ASSERT_THAT(AreEqual(0, Broker->ReseekEpisodeStartTick));
+		ASSERT_THAT(AreEqual(3, Broker->OrderQueue.Num()));
+		const FSeinBrokerQueuedOrder* UpperReturn =
+			FindInternalReturn(*Broker, UpperMember);
+		const FSeinBrokerQueuedOrder* LowerReturn =
+			FindInternalReturn(*Broker, LowerMember);
+		ASSERT_THAT(IsNotNull(UpperReturn));
+		ASSERT_THAT(IsNotNull(LowerReturn));
+		ASSERT_THAT(IsTrue(
+			UpperReturn->PreplacedPositions[0] == ThirdSlot));
+		ASSERT_THAT(IsTrue(
+			LowerReturn->PreplacedPositions[0] == SecondSlot));
 	}
 
 	TEST(MovingTrafficBlocksReturnUntilItsCorridorClears,
 		"SeinARTS.Sim.Broker.IdleReseek")
 	{
 		FScopedIdleReseekSettings Settings;
+		Settings.Settings->ReseekReleaseInterval = FFixedPoint::One;
 		FActorTestSpawner Spawner;
 		USeinWorldSubsystem* World =
 			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
@@ -283,7 +400,7 @@ namespace UE::SeinARTSTests
 			const FSeinPlayerID Player(1);
 			World->RegisterPlayer(Player, FSeinFactionID(1));
 			const int32 WindowTicks =
-				(Settings.Settings->SimulationTickRate * 3) / 2;
+				GetReseekJitterWindow(*Settings.Settings);
 			do
 			{
 				Member = World->SpawnAbstractEntity(
@@ -341,6 +458,10 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsNotNull(Broker));
 		ASSERT_THAT(IsNull(FindInternalReturn(*Broker, Member)));
 		ASSERT_THAT(IsTrue(Broker->ReseekEpisodeStartTick != 0));
+		const int32 ExpectedReleaseTick =
+			World->GetCurrentTick() + Settings.Settings->SimulationTickRate;
+		ASSERT_THAT(AreEqual(
+			ExpectedReleaseTick, Broker->NextReseekAllowedTick));
 
 		{
 			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
@@ -350,10 +471,18 @@ namespace UE::SeinARTSTests
 			TrafficMovement->bHasTarget = false;
 			TrafficMovement->Velocity = FFixedVector::ZeroVector;
 		}
+		while (World->GetCurrentTick() + 1 < ExpectedReleaseTick)
+		{
+			ASSERT_THAT(IsTrue(TickOnce(*World)));
+			Broker = World->GetComponent<FSeinCommandBrokerData>(BrokerHandle);
+			ASSERT_THAT(IsNotNull(Broker));
+			ASSERT_THAT(IsNull(FindInternalReturn(*Broker, Member)));
+		}
 		ASSERT_THAT(IsTrue(TickOnce(*World)));
 
 		Broker = World->GetComponent<FSeinCommandBrokerData>(BrokerHandle);
 		ASSERT_THAT(IsNotNull(Broker));
+		ASSERT_THAT(AreEqual(ExpectedReleaseTick, World->GetCurrentTick()));
 		const FSeinBrokerQueuedOrder* ReturnOrder =
 			FindInternalReturn(*Broker, Member);
 		ASSERT_THAT(IsNotNull(ReturnOrder));
@@ -364,13 +493,13 @@ namespace UE::SeinARTSTests
 		"SeinARTS.Sim.Broker.IdleReseek")
 	{
 		FScopedIdleReseekSettings Settings;
-		Settings.Settings->ReseekMaxEpisodeSeconds =
-			FFixedPoint::One
-			/ FFixedPoint::FromInt(Settings.Settings->SimulationTickRate);
+		Settings.Settings->ReseekMaxEpisodeSeconds = FFixedPoint::One;
 		FBrokeredReseekFixture Fixture;
 		ASSERT_THAT(IsTrue(Fixture.Initialize(true, 1)));
 
-		for (int32 Tick = 0; Tick < 6; ++Tick)
+		const int32 CapBoundary =
+			1 + Settings.Settings->SimulationTickRate;
+		while (Fixture.World->GetCurrentTick() < CapBoundary)
 		{
 			ASSERT_THAT(IsTrue(TickOnce(*Fixture.World)));
 		}
@@ -379,13 +508,23 @@ namespace UE::SeinARTSTests
 			Fixture.World->GetComponent<FSeinCommandBrokerData>(
 			Fixture.Broker);
 		ASSERT_THAT(IsNotNull(Broker));
+		ASSERT_THAT(AreEqual(CapBoundary, Fixture.World->GetCurrentTick()));
+		ASSERT_THAT(AreEqual(1, Broker->ReseekEpisodeStartTick));
+		ASSERT_THAT(AreEqual(CapBoundary + 1, Broker->NextReseekAllowedTick));
+
+		ASSERT_THAT(IsTrue(TickOnce(*Fixture.World)));
+		Broker = Fixture.World->GetComponent<FSeinCommandBrokerData>(
+			Fixture.Broker);
+		ASSERT_THAT(IsNotNull(Broker));
 		ASSERT_THAT(AreEqual(0, Broker->ReseekEpisodeStartTick));
-		ASSERT_THAT(IsTrue(
-			Broker->NextReseekAllowedTick > Fixture.World->GetCurrentTick()));
+		ASSERT_THAT(AreEqual(
+			Fixture.World->GetCurrentTick()
+				+ Settings.Settings->SimulationTickRate * 2,
+			Broker->NextReseekAllowedTick));
 		ASSERT_THAT(AreEqual(1, Broker->OrderQueue.Num()));
 	}
 
-	TEST(UnbrokeredIdleMemberCreatesHomeReturnBroker,
+	TEST(MultipleUnbrokeredIdleMembersCreateIndependentHomeReturnBrokers,
 		"SeinARTS.Sim.Broker.IdleReseek")
 	{
 		FScopedIdleReseekSettings Settings;
@@ -394,36 +533,52 @@ namespace UE::SeinARTSTests
 			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
 		ASSERT_THAT(IsNotNull(World));
 
-		FSeinEntityHandle Member;
-		const FFixedVector Home = FFixedVector::ZeroVector;
-		const FFixedVector Displaced(
-			FFixedPoint::FromInt(500), FFixedPoint::Zero, FFixedPoint::Zero);
+		TArray<FSeinEntityHandle> Members;
+		TArray<FFixedVector> Homes;
 		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Materialize(*World, [&]()
 		{
 			const FSeinPlayerID Player(1);
 			World->RegisterPlayer(Player, FSeinFactionID(1));
-			Member = World->SpawnAbstractEntity(FFixedTransform(Displaced), Player);
-			FSeinMovementComponent Movement;
-			Movement.bHomeSeeded = true;
-			Movement.HomePos = Home;
-			World->AddComponent(Member, Movement);
+			for (int32 Index = 0; Index < 3; ++Index)
+			{
+				const FFixedVector Home(
+					FFixedPoint::FromInt(Index * 100), FFixedPoint::Zero,
+					FFixedPoint::Zero);
+				const FFixedVector Displaced = Home + FFixedVector(
+					FFixedPoint::FromInt(500), FFixedPoint::Zero,
+					FFixedPoint::Zero);
+				const FSeinEntityHandle Member = World->SpawnAbstractEntity(
+					FFixedTransform(Displaced), Player);
+				FSeinMovementComponent Movement;
+				Movement.bHomeSeeded = true;
+				Movement.HomePos = Home;
+				World->AddComponent(Member, Movement);
+				Members.Add(Member);
+				Homes.Add(Home);
+			}
 		})));
 
 		ASSERT_THAT(IsTrue(TickOnce(*World)));
 
-		const FSeinBrokerMembershipData* Membership =
-			World->GetComponent<FSeinBrokerMembershipData>(Member);
-		ASSERT_THAT(IsNotNull(Membership));
-		ASSERT_THAT(IsTrue(Membership->CurrentBrokerHandle.IsValid()));
-		ASSERT_THAT(IsTrue(World->IsEntityAlive(
-			Membership->CurrentBrokerHandle)));
+		TSet<FSeinEntityHandle> BrokerHandles;
+		for (int32 Index = 0; Index < Members.Num(); ++Index)
+		{
+			const FSeinBrokerMembershipData* Membership =
+				World->GetComponent<FSeinBrokerMembershipData>(Members[Index]);
+			ASSERT_THAT(IsNotNull(Membership));
+			ASSERT_THAT(IsTrue(Membership->CurrentBrokerHandle.IsValid()));
+			ASSERT_THAT(IsTrue(World->IsEntityAlive(
+				Membership->CurrentBrokerHandle)));
+			BrokerHandles.Add(Membership->CurrentBrokerHandle);
 
-		const FSeinCommandBrokerData* Broker =
-			World->GetComponent<FSeinCommandBrokerData>(
-				Membership->CurrentBrokerHandle);
-		ASSERT_THAT(IsNotNull(Broker));
-		ASSERT_THAT(IsTrue(Broker->Anchor == Home));
-		ASSERT_THAT(AreEqual(1, Broker->Members.Num()));
-		ASSERT_THAT(IsTrue(Broker->Members[0] == Member));
+			const FSeinCommandBrokerData* Broker =
+				World->GetComponent<FSeinCommandBrokerData>(
+					Membership->CurrentBrokerHandle);
+			ASSERT_THAT(IsNotNull(Broker));
+			ASSERT_THAT(IsTrue(Broker->Anchor == Homes[Index]));
+			ASSERT_THAT(AreEqual(1, Broker->Members.Num()));
+			ASSERT_THAT(IsTrue(Broker->Members[0] == Members[Index]));
+		}
+		ASSERT_THAT(AreEqual(Members.Num(), BrokerHandles.Num()));
 	}
 }
