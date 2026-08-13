@@ -159,7 +159,11 @@ tactics coverage.
   packaged reconnect, and replay. The FoW sharing consumer and its designer policy remain the next
   explicit layer.
 - Line/corridor targeters needed by tactical weapons and formations.
-- Stable garrison/transport/containment state and shared observer/team policy.
+- Containment structural integrity is complete: admission prevents cycles and overflow, reciprocal
+  load/slot/attachment state fails closed at bootstrap and canonical/checkpoint boundaries, malformed
+  restores are failure-atomic, and fresh-world mutation continuation is exact. Representative
+  garrison/transport command/replay workflows, large-fan-out and PIE qualification, and shared
+  observer/team presentation policy remain.
 
 Exit: designers can build representative infantry, squad, cover, vehicle, garrison, and tactical targeting gameplay without modifying framework internals.
 

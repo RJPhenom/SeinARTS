@@ -1,8 +1,8 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinContainmentData.h
- * @brief   Container component (DESIGN §14). Hybrid-primitive base — adopt
- *          one of the spec companions (attachment / transport / garrison)
+ * @brief   Container component. Hybrid-primitive base — adopt one of the
+ *          spec companions (attachment / transport / garrison)
  *          to layer on type-specific behavior.
  */
 
@@ -25,7 +25,7 @@ class USeinEffect;
  *
  * Members are not reassigned to the container's owner on enter — they keep
  * their original `FSeinPlayerID` so stats / pop accounting follows each
- * entity's true owner (DESIGN §14).
+ * entity's true owner.
  */
 USTRUCT(BlueprintType, meta = (SeinDeterministic, SeinSubData))
 struct SEINARTSCOREENTITY_API FSeinContainmentData : public FSeinComponent

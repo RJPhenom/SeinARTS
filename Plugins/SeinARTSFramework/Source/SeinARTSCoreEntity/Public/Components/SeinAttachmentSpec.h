@@ -1,8 +1,8 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinAttachmentSpec.h
- * @brief   Attachment-specialization spec (DESIGN §14). Layer on
- *          `FSeinContainmentData` when the container has named slots
+ * @brief   Attachment-specialization spec. Layer on `FSeinContainmentData`
+ *          when the container has named slots
  *          (driver/gunner/passenger, hero-in-regiment, mounted crew).
  */
 
