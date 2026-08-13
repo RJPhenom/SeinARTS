@@ -67,6 +67,11 @@ struct FSeinReplayCheckpointEncodeWork
 		, SnapshotGuard(Snapshot)
 	{
 	}
+
+	~FSeinReplayCheckpointEncodeWork()
+	{
+		check(IsInGameThread());
+	}
 };
 
 namespace
@@ -710,13 +715,12 @@ bool USeinReplayWriter::ResolvePendingCheckpointEncode(
 	}
 
 	FSeinReplayAsyncCheckpointEncodeResult Result =
-		PendingCheckpointEncodeFuture.Get();
-	PendingCheckpointEncodeFuture = {};
+		PendingCheckpointEncodeFuture.Consume();
 #if WITH_DEV_AUTOMATION_TESTS
 	ActiveCheckpointEncodeTestGate.Reset();
 #endif
 	PendingCheckpointEncodeGeneration = MAX_uint64;
-	// The worker has released its shared reference before Get returns. Dropping
+	// The worker has released its shared reference before Consume returns. Dropping
 	// the writer's final reference here destroys the GC guard on the game thread.
 	PendingCheckpointEncodeWork.Reset();
 	if (!Result.bSucceeded)
@@ -770,8 +774,7 @@ void USeinReplayWriter::WaitAndDiscardPendingCheckpointEncode()
 	if (PendingCheckpointEncodeFuture.IsValid())
 	{
 		PendingCheckpointEncodeFuture.Wait();
-		PendingCheckpointEncodeFuture.Get();
-		PendingCheckpointEncodeFuture = {};
+		PendingCheckpointEncodeFuture.Consume();
 	}
 #if WITH_DEV_AUTOMATION_TESTS
 	ActiveCheckpointEncodeTestGate.Reset();
@@ -789,8 +792,7 @@ void USeinReplayWriter::DiscardCompletedCheckpointEncode(
 	{
 		return;
 	}
-	PendingCheckpointEncodeFuture.Get();
-	PendingCheckpointEncodeFuture = {};
+	PendingCheckpointEncodeFuture.Consume();
 #if WITH_DEV_AUTOMATION_TESTS
 	ActiveCheckpointEncodeTestGate.Reset();
 #endif
@@ -820,8 +822,7 @@ bool USeinReplayWriter::ResolvePendingAppend(bool bWait)
 		PendingAppendFuture.Wait();
 	}
 
-	FSeinReplayAsyncAppendResult Result = PendingAppendFuture.Get();
-	PendingAppendFuture = {};
+	FSeinReplayAsyncAppendResult Result = PendingAppendFuture.Consume();
 #if WITH_DEV_AUTOMATION_TESTS
 	ActiveBackgroundAppendTestGate.Reset();
 #endif
@@ -902,8 +903,7 @@ void USeinReplayWriter::WaitAndDiscardPendingAppend()
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Replay_WaitForBackgroundAppend);
 		PendingAppendFuture.Wait();
-		PendingAppendFuture.Get();
-		PendingAppendFuture = {};
+		PendingAppendFuture.Consume();
 	}
 	PendingAppendKind = ESeinReplayAsyncAppendKind::None;
 	PendingAppendDigest.Invalidate();
@@ -1670,8 +1670,8 @@ bool USeinReplayWriter::CaptureCheckpointInternal(
 		PendingCheckpointEncodeWork = MakeShared<
 			FSeinReplayCheckpointEncodeWork, ESPMode::ThreadSafe>(this);
 		PendingCheckpointEncodeWork->Snapshot = MoveTemp(Snapshot);
-		const TSharedRef<FSeinReplayCheckpointEncodeWork, ESPMode::ThreadSafe>
-			EncodeWork = PendingCheckpointEncodeWork.ToSharedRef();
+		TSharedPtr<FSeinReplayCheckpointEncodeWork, ESPMode::ThreadSafe>
+			EncodeWork = PendingCheckpointEncodeWork;
 		const uint64 ScheduledGeneration = RecordingGeneration;
 		PendingCheckpointEncodeGeneration = ScheduledGeneration;
 		TWeakObjectPtr<USeinReplayWriter> WeakThis(this);
@@ -1768,6 +1768,7 @@ bool USeinReplayWriter::CaptureCheckpointInternal(
 								ScheduledGeneration);
 						}
 					});
+				EncodeWork.Reset();
 				return Result;
 			});
 		UE_LOG(LogSeinNet, Verbose,

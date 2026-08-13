@@ -72,9 +72,13 @@ This is the actionable remainder after consolidating the historical audits. It i
    natural checkpoint cycles plus one uncheckpointed command catch-up turn), 64 natural
    periodic checkpoints, eight full GCs, exact sampled seeks/full playback, bounded process working
    set/private commit/late growth, and measured latency tails. Configured 64 MiB policy exhaustion
-   preserves a partial that replays to the exact last durable root. Multi-hour real-device hitch
-   distributions, allocator attribution through Insights, platform storage matrices, and true OS
-   disk-full behavior remain open.
+   preserves a partial that replays to the exact last durable root. Bookmark-bounded full Memory
+   Insights attribution found and removed an 8 MiB completed-future envelope copy; the same
+   accelerated development interval now retains only 80 replay-attributed bytes, with every
+   allocation carrying a recorded callstack. A receipt-bound exporter rejects more than 4 KiB before
+   publication. A committed clean post-fix trace and production `Qualified` receipt remain required;
+   multi-hour real-device hitch and allocator-high-water distributions, platform storage matrices,
+   and true OS disk-full behavior remain open.
 5. Debug navigation rendering is intentionally expensive and can invalidate profiling if left enabled.
 
 ## Explicit product decisions still required
