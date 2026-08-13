@@ -189,7 +189,9 @@ private:
 		bool bWait,
 		bool bAppendSynchronously);
 	void WaitAndDiscardPendingCheckpointEncode();
-	void DiscardCompletedCheckpointEncode(uint64 ExpectedGeneration);
+	void DiscardCompletedCheckpointEncode(
+		uint64 ExpectedGeneration,
+		uint64 ExpectedOperationId);
 	bool ResolvePendingAppend(bool bWait);
 	bool HasPendingAppend() const { return PendingAppendFuture.IsValid(); }
 	void WaitAndDiscardPendingAppend();
@@ -243,6 +245,9 @@ private:
 	TFuture<FSeinReplayAsyncCheckpointEncodeResult>
 		PendingCheckpointEncodeFuture;
 	uint64 PendingCheckpointEncodeGeneration = MAX_uint64;
+	uint64 PendingCheckpointEncodeOperationId = MAX_uint64;
+	uint64 PendingAppendOperationId = MAX_uint64;
+	uint64 NextAsyncOperationId = 1;
 	ESeinReplayAsyncAppendKind PendingAppendKind =
 		ESeinReplayAsyncAppendKind::None;
 	FGuid PendingAppendDigest;

@@ -720,8 +720,9 @@ bool USeinReplayWriter::ResolvePendingCheckpointEncode(
 	ActiveCheckpointEncodeTestGate.Reset();
 #endif
 	PendingCheckpointEncodeGeneration = MAX_uint64;
-	// The worker has released its shared reference before Consume returns. Dropping
-	// the writer's final reference here destroys the GC guard on the game thread.
+	PendingCheckpointEncodeOperationId = MAX_uint64;
+	// The worker borrows this object from the writer. Consume proves the callable
+	// has returned, so dropping the sole owner destroys the GC guard here.
 	PendingCheckpointEncodeWork.Reset();
 	if (!Result.bSucceeded)
 	{
@@ -740,14 +741,17 @@ bool USeinReplayWriter::ResolvePendingCheckpointEncode(
 		return bRecording;
 	}
 
-	if (!AppendJournalFrame(
+	const int32 EncodedCheckpointBytes = Result.Envelope.Num();
+	const bool bAppended = AppendJournalFrame(
 			static_cast<uint8>(
 				SeinReplayJournalFormat::EFrameType::Checkpoint),
 			INDEX_NONE,
 			INDEX_NONE,
 			Result.SnapshotTick,
 			Result.Envelope,
-			/*bAsync=*/!bAppendSynchronously))
+			/*bAsync=*/!bAppendSynchronously);
+	Result.Envelope.Reset();
+	if (!bAppended)
 	{
 		return false;
 	}
@@ -762,7 +766,7 @@ bool USeinReplayWriter::ResolvePendingCheckpointEncode(
 		TEXT("ReplayWriter: %s encoded checkpoint at tick %d (%d bytes)."),
 		bAppendSynchronously ? TEXT("appended") : TEXT("queued"),
 		Result.SnapshotTick,
-		Result.Envelope.Num());
+		EncodedCheckpointBytes);
 	return true;
 }
 
@@ -780,23 +784,27 @@ void USeinReplayWriter::WaitAndDiscardPendingCheckpointEncode()
 	ActiveCheckpointEncodeTestGate.Reset();
 #endif
 	PendingCheckpointEncodeGeneration = MAX_uint64;
+	PendingCheckpointEncodeOperationId = MAX_uint64;
 	PendingCheckpointEncodeWork.Reset();
 }
 
 void USeinReplayWriter::DiscardCompletedCheckpointEncode(
-	uint64 ExpectedGeneration)
+	uint64 ExpectedGeneration,
+	uint64 ExpectedOperationId)
 {
 	if (PendingCheckpointEncodeGeneration != ExpectedGeneration
-		|| !PendingCheckpointEncodeFuture.IsValid()
-		|| !PendingCheckpointEncodeFuture.IsReady())
+		|| PendingCheckpointEncodeOperationId != ExpectedOperationId
+		|| !PendingCheckpointEncodeFuture.IsValid())
 	{
 		return;
 	}
+	PendingCheckpointEncodeFuture.Wait();
 	PendingCheckpointEncodeFuture.Consume();
 #if WITH_DEV_AUTOMATION_TESTS
 	ActiveCheckpointEncodeTestGate.Reset();
 #endif
 	PendingCheckpointEncodeGeneration = MAX_uint64;
+	PendingCheckpointEncodeOperationId = MAX_uint64;
 	PendingCheckpointEncodeWork.Reset();
 }
 
@@ -823,6 +831,7 @@ bool USeinReplayWriter::ResolvePendingAppend(bool bWait)
 	}
 
 	FSeinReplayAsyncAppendResult Result = PendingAppendFuture.Consume();
+	PendingAppendOperationId = MAX_uint64;
 #if WITH_DEV_AUTOMATION_TESTS
 	ActiveBackgroundAppendTestGate.Reset();
 #endif
@@ -905,6 +914,7 @@ void USeinReplayWriter::WaitAndDiscardPendingAppend()
 		PendingAppendFuture.Wait();
 		PendingAppendFuture.Consume();
 	}
+	PendingAppendOperationId = MAX_uint64;
 	PendingAppendKind = ESeinReplayAsyncAppendKind::None;
 	PendingAppendDigest.Invalidate();
 	PendingAppendByteCount = 0;
@@ -1425,6 +1435,9 @@ bool USeinReplayWriter::AppendJournalFrame(
 		const FString AppendPath = ActivePartialPath;
 		const int64 ExpectedOffset = static_cast<int64>(PersistedBytes);
 		const uint64 ScheduledGeneration = RecordingGeneration;
+		check(NextAsyncOperationId != MAX_uint64);
+		const uint64 ScheduledOperationId = NextAsyncOperationId++;
+		PendingAppendOperationId = ScheduledOperationId;
 #if WITH_DEV_AUTOMATION_TESTS
 		const bool bForceBackgroundFailure =
 			bFailNextBackgroundAppendForTests;
@@ -1454,6 +1467,7 @@ bool USeinReplayWriter::AppendJournalFrame(
 			 FrameBytes = MoveTemp(FrameBytes),
 			 WeakThis,
 			 ScheduledGeneration,
+			 ScheduledOperationId,
 #if WITH_DEV_AUTOMATION_TESTS
 			 BackgroundAppendTestGate,
 #endif
@@ -1508,13 +1522,19 @@ bool USeinReplayWriter::AppendJournalFrame(
 					}
 				}
 				AsyncTask(ENamedThreads::GameThread,
-					[WeakThis, ScheduledGeneration]()
+					[WeakThis, ScheduledGeneration, ScheduledOperationId]()
 					{
 						USeinReplayWriter* Writer = WeakThis.Get();
 						if (Writer
 							&& Writer->RecordingGeneration
-								== ScheduledGeneration)
+								== ScheduledGeneration
+							&& Writer->PendingAppendOperationId
+								== ScheduledOperationId)
 						{
+							if (Writer->PendingAppendFuture.IsValid())
+							{
+								Writer->PendingAppendFuture.Wait();
+							}
 							Writer->ScheduleMaintenance();
 						}
 					});
@@ -1670,10 +1690,16 @@ bool USeinReplayWriter::CaptureCheckpointInternal(
 		PendingCheckpointEncodeWork = MakeShared<
 			FSeinReplayCheckpointEncodeWork, ESPMode::ThreadSafe>(this);
 		PendingCheckpointEncodeWork->Snapshot = MoveTemp(Snapshot);
-		TSharedPtr<FSeinReplayCheckpointEncodeWork, ESPMode::ThreadSafe>
-			EncodeWork = PendingCheckpointEncodeWork;
+		// The writer is the sole owner and never resets it until this future has
+		// completed. The worker borrows the stable address so final destruction
+		// remains a game-thread operation.
+		FSeinReplayCheckpointEncodeWork* const EncodeWork =
+			PendingCheckpointEncodeWork.Get();
 		const uint64 ScheduledGeneration = RecordingGeneration;
+		check(NextAsyncOperationId != MAX_uint64);
+		const uint64 ScheduledOperationId = NextAsyncOperationId++;
 		PendingCheckpointEncodeGeneration = ScheduledGeneration;
+		PendingCheckpointEncodeOperationId = ScheduledOperationId;
 		TWeakObjectPtr<USeinReplayWriter> WeakThis(this);
 #if WITH_DEV_AUTOMATION_TESTS
 		TSharedPtr<
@@ -1686,7 +1712,8 @@ bool USeinReplayWriter::CaptureCheckpointInternal(
 			EAsyncExecution::ThreadPool,
 			[EncodeWork,
 			 WeakThis,
-			 ScheduledGeneration
+			 ScheduledGeneration,
+			 ScheduledOperationId
 #if WITH_DEV_AUTOMATION_TESTS
 			 , CheckpointEncodeTestGate
 #endif
@@ -1750,7 +1777,7 @@ bool USeinReplayWriter::CaptureCheckpointInternal(
 					Result.Envelope.Reset();
 				}
 				AsyncTask(ENamedThreads::GameThread,
-					[WeakThis, ScheduledGeneration]()
+					[WeakThis, ScheduledGeneration, ScheduledOperationId]()
 					{
 						USeinReplayWriter* Writer = WeakThis.Get();
 						if (!Writer)
@@ -1758,17 +1785,23 @@ bool USeinReplayWriter::CaptureCheckpointInternal(
 							return;
 						}
 						if (Writer->RecordingGeneration
-							== ScheduledGeneration)
+							== ScheduledGeneration
+							&& Writer->PendingCheckpointEncodeOperationId
+								== ScheduledOperationId)
 						{
+							if (Writer->PendingCheckpointEncodeFuture.IsValid())
+							{
+								Writer->PendingCheckpointEncodeFuture.Wait();
+							}
 							Writer->ScheduleMaintenance();
 						}
 						else
 						{
 							Writer->DiscardCompletedCheckpointEncode(
-								ScheduledGeneration);
+								ScheduledGeneration,
+								ScheduledOperationId);
 						}
 					});
-				EncodeWork.Reset();
 				return Result;
 			});
 		UE_LOG(LogSeinNet, Verbose,
@@ -1959,6 +1992,8 @@ void USeinReplayWriter::FailRecording(
 	ReleaseHeldCheckpointEncodeForTests();
 	ReleaseHeldBackgroundAppendForTests();
 #endif
+	WaitAndDiscardPendingCheckpointEncode();
+	WaitAndDiscardPendingAppend();
 	if (bTickFailure)
 	{
 		bTickObservationFailed = true;
