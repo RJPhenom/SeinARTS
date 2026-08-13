@@ -1,6 +1,6 @@
 # Upgrading SeinARTS
 
-**Document version:** 0.4
+**Document version:** 0.5
 
 ## Release upgrade
 
@@ -20,9 +20,9 @@ boundary. Never weaken those checks to make an old snapshot, replay, or peer joi
 
 ## Current development wave
 
-The current development wave advances world snapshots and canonical envelopes to schema v15 and
-compiled deterministic behavior to `SeinARTS.Replay.5`. Older live peers, Replay.4 artifacts, and
-v14 snapshot payloads are intentionally incompatible.
+The current development wave uses world snapshots and canonical envelopes at schema v15 and
+advances compiled deterministic behavior to `SeinARTS.Replay.6`. Older live peers, Replay.5
+artifacts, and v14 snapshot payloads are intentionally incompatible.
 
 It also adds:
 
@@ -32,8 +32,10 @@ It also adds:
   driver-output throttle/brake, wrapped wheel phase, and movement/ability graph validation;
 - exact Cover assignment within one resolver invocation;
 - deterministic Squad reinforcement request/accounting/snapshot lifecycle; and
-- background durable append for automatic replay checkpoints.
+- background durable append for automatic replay checkpoints; and
+- container-local transport deployment offsets that rotate with the authoritative container
+  transform.
 
 After adopting this wave, regenerate the simulation-content manifest and run a full editor restart.
-Keep the older executable/plugin cohort for any v14 snapshots or Replay.4 artifacts that must be
-inspected; there is no automatic migration to v15/Replay.5.
+Keep the older executable/plugin cohort for any v14 snapshots or Replay.5 artifacts that must be
+inspected; there is no automatic migration to v15/Replay.6.

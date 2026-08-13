@@ -161,9 +161,12 @@ tactics coverage.
 - Line/corridor targeters needed by tactical weapons and formations.
 - Containment structural integrity is complete: admission prevents cycles and overflow, reciprocal
   load/slot/attachment state fails closed at bootstrap and canonical/checkpoint boundaries, malformed
-  restores are failure-atomic, and fresh-world mutation continuation is exact. Representative
-  garrison/transport command/replay workflows, large-fan-out and PIE qualification, and shared
-  observer/team presentation policy remain.
+  restores are failure-atomic, and fresh-world mutation continuation is exact. Test-only
+  designer-style transport abilities now qualify canonical command timing, encoded checkpoint
+  continuation, and per-tick replay roots; container-local deploy offsets rotate with authoritative
+  facing under behavior epoch `SeinARTS.Replay.6`. Valid 100/500/1,000-occupant roots plus
+  invalidated/warm checkpoint captures are measured. Multi-client PIE and shared observer/team
+  presentation policy remain.
 
 Exit: designers can build representative infantry, squad, cover, vehicle, garrison, and tactical targeting gameplay without modifying framework internals.
 

@@ -1,8 +1,8 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinTransportSpec.h
- * @brief   Transport specialization spec (DESIGN §14). Optional — layer on
- *          `FSeinContainmentData` when you want load/unload timing hints
+ * @brief   Transport specialization spec. Optionally layer it on
+ *          `FSeinContainmentData` for load/unload timing hints
  *          + a deploy offset for exit spawn placement.
  */
 

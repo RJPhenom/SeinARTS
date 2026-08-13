@@ -1,6 +1,6 @@
 # SeinARTS Compatibility Policy
 
-**Document version:** 0.5
+**Document version:** 0.6
 
 SeinARTS ships its five production plugins as one versioned cohort. Install Framework, Squad,
 Cover, Movement+, and Cover+Squad artifacts from the same release. Mixing release versions is
@@ -38,9 +38,10 @@ Snapshots, reconnect envelopes, and replay checkpoints are admitted by explicit 
 compatibility checks. A changed schema fails closed unless a documented migration exists. Do not
 bypass an incompatibility check or deserialize old deterministic state into a newer build.
 
-The current behavior epoch is `SeinARTS.Replay.5`. It is embedded in snapshots and replay headers
-and folded into live peer admission. Replay.4 snapshots, replays, and peers therefore fail closed;
-retain the producing executable cohort when those artifacts must be inspected.
+The current behavior epoch is `SeinARTS.Replay.6`. It is embedded in snapshots and replay headers
+and folded into live peer admission. Replay.5 snapshots, replays, and peers therefore fail closed;
+retain the producing executable cohort when those artifacts must be inspected. Replay.6 corrects
+transport deployment so container-local offsets rotate with the authoritative container transform.
 
 A release may legitimately change deterministic behavior in a patch. All peers and the authority
 must still run the exact qualified release cohort. Retain the producing build when old replay or

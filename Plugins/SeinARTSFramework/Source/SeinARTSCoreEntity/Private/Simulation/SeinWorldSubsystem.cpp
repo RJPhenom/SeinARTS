@@ -13875,7 +13875,11 @@ bool USeinWorldSubsystem::ExitContainerInternal(
 			: GetComponent<FSeinTransportSpec>(Container);
 		if (TransportSpec)
 		{
-			FinalExit = ContainerLoc + TransportSpec->DeployOffset;
+			const FFixedVector WorldDeployOffset = ContEntity
+				? ContEntity->Transform.TransformVector(
+					TransportSpec->DeployOffset)
+				: TransportSpec->DeployOffset;
+			FinalExit = ContainerLoc + WorldDeployOffset;
 		}
 	}
 
