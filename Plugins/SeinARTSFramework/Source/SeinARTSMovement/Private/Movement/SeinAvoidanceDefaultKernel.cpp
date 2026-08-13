@@ -43,6 +43,53 @@ DEFINE_LOG_CATEGORY_STATIC(LogSeinAvoidance, Log, All);
 
 namespace
 {
+	struct FCohesionAggregate
+	{
+		int32 Count = 0;
+		FFixedPoint SumDist;
+		int64 CohesionGroupId = 0;
+		bool bPaceSquads = false;
+		bool bStamped = false;
+	};
+
+	struct FOuterCohesionAggregate
+	{
+		int32 DistinctBrokerCount = 0;
+		FFixedPoint SumOfBrokerMeans;
+	};
+
+	struct FDeferredMovementState
+	{
+		FFixedVector PrevTickLocation;
+		FSeinAvoidanceOutput AvoidanceOutput;
+	};
+
+	struct FAvoidanceTickState
+	{
+		TMap<FSeinEntityHandle, FCohesionAggregate> GroupAggregates;
+		TMap<int64, FOuterCohesionAggregate> OuterAggregates;
+		TArray<FSeinEntityHandle> LiveHandles;
+		TArray<FFixedPoint> ActualProgress;
+		TArray<FDeferredMovementState> PreviousMovementState;
+	};
+
+	struct FAvoidanceOutputParameters
+	{
+		const TMap<FSeinEntityHandle, FCohesionAggregate>& GroupAggregates;
+		const TMap<int64, FOuterCohesionAggregate>& OuterAggregates;
+		const TArray<FFixedPoint>& ActualProgress;
+		bool bCohesionEnabled = false;
+		FFixedPoint ProgressUnknown;
+		FFixedPoint FloorPerTick;
+		FFixedPoint MovingSpeedFloor;
+		FFixedPoint MaxSteerMagnitude;
+		FFixedPoint SmoothKeep;
+		FFixedPoint BrakeStrength;
+		FFixedPoint CohesionHoldBack;
+		FFixedPoint CohesionBoost;
+		FFixedPoint CohesionRangeRadii;
+	};
+
 	/**
 	 * Deterministic, antisymmetric "do-si-do": the WORLD-SPACE unit direction THIS unit should
 	 * slide toward so it passes an oncoming/crossing partner cleanly instead of mirror-dancing.
@@ -78,6 +125,725 @@ namespace
 		Perp.Y = Perp.Y / Len;
 		// Lo pushes to the +perp end, Hi to the −perp end → opposite sides for head-on AND crossing.
 		return bSelfIsLo ? Perp : FFixedVector(-Perp.X, -Perp.Y, FFixedPoint::Zero);
+	}
+
+	static void ClearAvoidanceOutput(FSeinMovementComponent& Movement)
+	{
+		Movement.AvoidanceOutput.SteerDir = FFixedVector::ZeroVector;
+		Movement.AvoidanceOutput.SpeedScale = FFixedPoint::One;
+	}
+
+	static void ComputeIdleDodge(
+		USeinWorldSubsystem& World,
+		const FSeinCollisionSpatialHash& Hash,
+		const ISeinComponentStorage* MoveStorage,
+		const ISeinComponentStorage* NavStorage,
+		const ISeinComponentStorage* ExtentsStorage,
+		FSeinEntityHandle SelfHandle,
+		const FSeinEntity& SelfEntity,
+		FSeinMovementComponent& Move,
+		bool bIdleDodgeEnabled,
+		FFixedPoint MovingSpeedFloor,
+		FFixedPoint FalloffRadii,
+		FFixedPoint MaxSteerMagnitude,
+		FFixedPoint IdleDodgeStrength,
+		FFixedPoint SmoothKeep)
+	{
+		if (!bIdleDodgeEnabled)
+		{
+			ClearAvoidanceOutput(Move);
+			return;
+		}
+
+		const FSeinNavigationComponent* SelfNavigation = NavStorage
+			? static_cast<const FSeinNavigationComponent*>(
+				NavStorage->GetComponentRaw(SelfHandle))
+			: nullptr;
+		const FSeinExtentsComponent* SelfExtents = ExtentsStorage
+			? static_cast<const FSeinExtentsComponent*>(
+				ExtentsStorage->GetComponentRaw(SelfHandle))
+			: nullptr;
+		const FFixedPoint SelfRadius = USeinMovement::ResolveCollisionRadius(
+			SelfExtents, SelfNavigation);
+		if (SelfRadius <= FFixedPoint::Zero)
+		{
+			ClearAvoidanceOutput(Move);
+			return;
+		}
+
+		const FFixedVector SelfPosition = SelfEntity.Transform.GetLocation();
+		const FFixedPoint Perception =
+			SelfRadius * FFixedPoint::FromInt(2);
+		TArray<FSeinEntityHandle> Neighbors;
+		Hash.QueryRadius(SelfPosition, Perception, Neighbors, SelfHandle);
+
+		FFixedVector DodgeAccum = FFixedVector::ZeroVector;
+		for (const FSeinEntityHandle& OtherHandle : Neighbors)
+		{
+			const FSeinEntity* OtherEntity =
+				World.GetEntityPool().Get(OtherHandle);
+			if (!OtherEntity) continue;
+			const FSeinMovementComponent* OtherMove = MoveStorage
+				? static_cast<const FSeinMovementComponent*>(
+					MoveStorage->GetComponentRaw(OtherHandle))
+				: nullptr;
+			if (!OtherMove || !OtherMove->bHasTarget) continue;
+			const FFixedVector OtherVelocity = OtherMove->Velocity;
+			if (OtherVelocity.SizeSquared()
+				<= MovingSpeedFloor * MovingSpeedFloor)
+			{
+				continue;
+			}
+			const bool bQualifies = Move.bAvoidSameWeights
+				? OtherMove->AvoidanceWeight >= Move.AvoidanceWeight
+				: OtherMove->AvoidanceWeight > Move.AvoidanceWeight;
+			if (!bQualifies) continue;
+
+			FFixedVector ToSelf =
+				SelfPosition - OtherEntity->Transform.GetLocation();
+			ToSelf.Z = FFixedPoint::Zero;
+			if (ToSelf.X * OtherVelocity.X + ToSelf.Y * OtherVelocity.Y
+				<= FFixedPoint::Zero)
+			{
+				continue;
+			}
+			const FSeinNavigationComponent* OtherNavigation = NavStorage
+				? static_cast<const FSeinNavigationComponent*>(
+					NavStorage->GetComponentRaw(OtherHandle))
+				: nullptr;
+			const FSeinExtentsComponent* OtherExtents = ExtentsStorage
+				? static_cast<const FSeinExtentsComponent*>(
+					ExtentsStorage->GetComponentRaw(OtherHandle))
+				: nullptr;
+			const FFixedPoint OtherRadius =
+				USeinMovement::ResolveCollisionRadius(
+					OtherExtents, OtherNavigation);
+			if (OtherRadius <= FFixedPoint::Zero) continue;
+			const FFixedPoint DodgeRange =
+				(SelfRadius + OtherRadius) * FalloffRadii;
+			if (DodgeRange <= FFixedPoint::Epsilon) continue;
+			const FFixedPoint Distance = SeinMath::Sqrt(ToSelf.SizeSquared());
+			if (Distance >= DodgeRange) continue;
+			const FFixedPoint Falloff =
+				FFixedPoint::One - (Distance / DodgeRange);
+
+			const FFixedPoint OtherSpeed = OtherVelocity.Size();
+			const FFixedVector OtherHeading(
+				OtherVelocity.X / OtherSpeed,
+				OtherVelocity.Y / OtherSpeed,
+				FFixedPoint::Zero);
+			const FFixedVector MoverRight(
+				OtherHeading.Y, -OtherHeading.X, FFixedPoint::Zero);
+			const FFixedPoint SideDot =
+				ToSelf.X * MoverRight.X + ToSelf.Y * MoverRight.Y;
+			const FFixedPoint Band = SelfRadius / FFixedPoint::FromInt(4);
+			const FFixedPoint TurnSign = SideDot > Band
+				? FFixedPoint::One
+				: SideDot < -Band
+					? -FFixedPoint::One
+					: SelfHandle.Index < OtherHandle.Index
+						? FFixedPoint::One
+						: -FFixedPoint::One;
+			DodgeAccum.X += MoverRight.X * (Falloff * TurnSign);
+			DodgeAccum.Y += MoverRight.Y * (Falloff * TurnSign);
+		}
+
+		if (DodgeAccum.SizeSquared() <= FFixedPoint::Epsilon)
+		{
+			ClearAvoidanceOutput(Move);
+			return;
+		}
+
+		const FFixedPoint DodgeLength = DodgeAccum.Size();
+		if (DodgeLength > MaxSteerMagnitude
+			&& DodgeLength > FFixedPoint::Epsilon)
+		{
+			const FFixedPoint Scale = MaxSteerMagnitude / DodgeLength;
+			DodgeAccum.X = DodgeAccum.X * Scale;
+			DodgeAccum.Y = DodgeAccum.Y * Scale;
+		}
+		const FFixedVector DodgeScaled(
+			DodgeAccum.X * IdleDodgeStrength,
+			DodgeAccum.Y * IdleDodgeStrength,
+			FFixedPoint::Zero);
+		FFixedVector DodgeSmoothed(
+			DodgeScaled.X * (FFixedPoint::One - SmoothKeep)
+				+ Move.AvoidanceOutput.SteerDir.X * SmoothKeep,
+			DodgeScaled.Y * (FFixedPoint::One - SmoothKeep)
+				+ Move.AvoidanceOutput.SteerDir.Y * SmoothKeep,
+			FFixedPoint::Zero);
+		if (DodgeSmoothed.SizeSquared() <= FFixedPoint::Epsilon)
+		{
+			DodgeSmoothed = FFixedVector::ZeroVector;
+		}
+		Move.AvoidanceOutput.SteerDir = DodgeSmoothed;
+		Move.AvoidanceOutput.SpeedScale = FFixedPoint::One;
+	}
+
+#if !UE_BUILD_SHIPPING
+	static void ReportPinnedMover(
+		USeinWorldSubsystem& World,
+		const FSeinCollisionSpatialHash& Hash,
+		const ISeinComponentStorage* MoveStorage,
+		const ISeinComponentStorage* NavStorage,
+		const ISeinComponentStorage* ExtentsStorage,
+		const ISeinComponentStorage* BrokerStorage,
+		FSeinEntityHandle SelfHandle,
+		const FSeinEntity& SelfEntity,
+		const FSeinMovementComponent& Move,
+		const FFixedVector& Velocity,
+		FFixedPoint MovingSpeedFloor,
+		FFixedPoint FalloffRadii)
+	{
+		if (!Move.bHasTarget
+			|| !UE_LOG_ACTIVE(LogSeinAvoidance, Verbose)
+			|| (World.GetCurrentTick() % 15) != 0)
+		{
+			return;
+		}
+
+		const FFixedVector Position = SelfEntity.Transform.GetLocation();
+		FFixedVector ToGoal = Move.TargetLocation - Position;
+		ToGoal.Z = FFixedPoint::Zero;
+		const FFixedPoint GoalDistance = ToGoal.Size();
+		FFixedVector Heading = FFixedVector::ZeroVector;
+		if (GoalDistance > FFixedPoint::Epsilon)
+		{
+			Heading = FFixedVector(
+				ToGoal.X / GoalDistance,
+				ToGoal.Y / GoalDistance,
+				FFixedPoint::Zero);
+		}
+		const FSeinNavigationComponent* Navigation = NavStorage
+			? static_cast<const FSeinNavigationComponent*>(
+				NavStorage->GetComponentRaw(SelfHandle))
+			: nullptr;
+		const FSeinExtentsComponent* Extents = ExtentsStorage
+			? static_cast<const FSeinExtentsComponent*>(
+				ExtentsStorage->GetComponentRaw(SelfHandle))
+			: nullptr;
+		FFixedPoint Radius =
+			USeinMovement::ResolveCollisionRadius(Extents, Navigation);
+		if (Radius <= FFixedPoint::Zero)
+		{
+			Radius = FFixedPoint::FromInt(50);
+		}
+		const FSeinBrokerMembershipData* Broker = BrokerStorage
+			? static_cast<const FSeinBrokerMembershipData*>(
+				BrokerStorage->GetComponentRaw(SelfHandle))
+			: nullptr;
+		const FSeinEntityHandle BrokerHandle = Broker
+			? Broker->CurrentBrokerHandle
+			: FSeinEntityHandle();
+		const int64 CohesionId = Broker ? Broker->CohesionGroupId : 0;
+
+		TArray<FSeinEntityHandle> Neighbors;
+		Hash.QueryRadius(
+			Position, Radius * FFixedPoint::FromInt(4),
+			Neighbors, SelfHandle);
+		int32 Kept = 0;
+		int32 Static = 0;
+		int32 Group = 0;
+		int32 IdleTrue = 0;
+		int32 IdlePinned = 0;
+		int32 Weight = 0;
+		int32 Behind = 0;
+		int32 NotClosing = 0;
+		int32 PastGoal = 0;
+		int32 Far = 0;
+		FFixedPoint MinDistanceSquared = FFixedPoint::FromInt(999999);
+		for (const FSeinEntityHandle& OtherHandle : Neighbors)
+		{
+			const FSeinEntity* OtherEntity =
+				World.GetEntityPool().Get(OtherHandle);
+			if (!OtherEntity) continue;
+			const FSeinMovementComponent* OtherMove = MoveStorage
+				? static_cast<const FSeinMovementComponent*>(
+					MoveStorage->GetComponentRaw(OtherHandle))
+				: nullptr;
+			if (!OtherMove)
+			{
+				++Static;
+				continue;
+			}
+			FFixedVector ToOther =
+				OtherEntity->Transform.GetLocation() - Position;
+			ToOther.Z = FFixedPoint::Zero;
+			const FFixedPoint DistanceSquared = ToOther.SizeSquared();
+			if (DistanceSquared < MinDistanceSquared)
+			{
+				MinDistanceSquared = DistanceSquared;
+			}
+			const FSeinBrokerMembershipData* OtherBroker = BrokerStorage
+				? static_cast<const FSeinBrokerMembershipData*>(
+					BrokerStorage->GetComponentRaw(OtherHandle))
+				: nullptr;
+			const bool bSameBroker = BrokerHandle.IsValid()
+				&& OtherBroker
+				&& OtherBroker->CurrentBrokerHandle == BrokerHandle;
+			const bool bSameCohesion = CohesionId != 0
+				&& OtherBroker
+				&& OtherBroker->CohesionGroupId == CohesionId;
+			if (bSameBroker || bSameCohesion)
+			{
+				++Group;
+				continue;
+			}
+			if (OtherMove->Velocity.SizeSquared()
+				<= MovingSpeedFloor * MovingSpeedFloor)
+			{
+				OtherMove->bHasTarget ? ++IdlePinned : ++IdleTrue;
+				continue;
+			}
+			const bool bQualifies = Move.bAvoidSameWeights
+				? OtherMove->AvoidanceWeight >= Move.AvoidanceWeight
+				: OtherMove->AvoidanceWeight > Move.AvoidanceWeight;
+			if (!bQualifies)
+			{
+				++Weight;
+				continue;
+			}
+			if (ToOther.X * Heading.X + ToOther.Y * Heading.Y
+				<= FFixedPoint::Zero)
+			{
+				++Behind;
+				continue;
+			}
+			const FFixedVector RelativeVelocity(
+				Velocity.X - OtherMove->Velocity.X,
+				Velocity.Y - OtherMove->Velocity.Y,
+				FFixedPoint::Zero);
+			if (ToOther.X * RelativeVelocity.X
+					+ ToOther.Y * RelativeVelocity.Y
+				<= FFixedPoint::Zero)
+			{
+				++NotClosing;
+				continue;
+			}
+			if (GoalDistance > FFixedPoint::Zero
+				&& DistanceSquared >= GoalDistance * GoalDistance)
+			{
+				++PastGoal;
+				continue;
+			}
+			const FSeinNavigationComponent* OtherNavigation = NavStorage
+				? static_cast<const FSeinNavigationComponent*>(
+					NavStorage->GetComponentRaw(OtherHandle))
+				: nullptr;
+			const FSeinExtentsComponent* OtherExtents = ExtentsStorage
+				? static_cast<const FSeinExtentsComponent*>(
+					ExtentsStorage->GetComponentRaw(OtherHandle))
+				: nullptr;
+			const FFixedPoint OtherRadius =
+				USeinMovement::ResolveCollisionRadius(
+					OtherExtents, OtherNavigation);
+			const FFixedPoint Range =
+				(Radius + OtherRadius) * FalloffRadii;
+			if (DistanceSquared >= Range * Range)
+			{
+				++Far;
+				continue;
+			}
+			++Kept;
+		}
+
+		UE_LOG(LogSeinAvoidance, Verbose,
+			TEXT("[GRIND] t=%d h=%d:%d grp=%d:%d coh=%lld goalDist=%.0f tgt=(%.0f,%.0f) nbrs=%d kept=%d skip{static=%d grp=%d idleTrue=%d idlePinned=%d wt=%d behind=%d notClosing=%d pastGoal=%d far=%d} minD=%.0f steer=%.3f scale=%.3f"),
+			World.GetCurrentTick(), SelfHandle.Index, SelfHandle.Generation,
+			BrokerHandle.Index, BrokerHandle.Generation, CohesionId,
+			GoalDistance.ToFloat(),
+			Move.TargetLocation.X.ToFloat(), Move.TargetLocation.Y.ToFloat(),
+			Neighbors.Num(), Kept,
+			Static, Group, IdleTrue, IdlePinned, Weight, Behind,
+			NotClosing, PastGoal, Far,
+			SeinMath::Sqrt(MinDistanceSquared).ToFloat(),
+			Move.AvoidanceOutput.SteerDir.Size().ToFloat(),
+			Move.AvoidanceOutput.SpeedScale.ToFloat());
+	}
+#endif
+
+	static void FinalizeMovingOutput(
+		const FAvoidanceOutputParameters& Parameters,
+		int32 Index,
+		FSeinMovementComponent& Movement,
+		FFixedVector Accum,
+		FFixedPoint SelfRadius,
+		FFixedPoint GoalDistanceSquared,
+		FSeinEntityHandle SelfBrokerHandle,
+		int64 SelfCohesionId,
+		const FSeinCommandBrokerData* SelfBrokerData)
+	{
+		FFixedPoint AccumLength = Accum.Size();
+		if (AccumLength > Parameters.MaxSteerMagnitude
+			&& AccumLength > FFixedPoint::Epsilon)
+		{
+			const FFixedPoint Scale =
+				Parameters.MaxSteerMagnitude / AccumLength;
+			Accum.X = Accum.X * Scale;
+			Accum.Y = Accum.Y * Scale;
+			AccumLength = Parameters.MaxSteerMagnitude;
+		}
+
+		const FFixedVector Scaled(
+			Accum.X * Movement.AvoidanceStrength,
+			Accum.Y * Movement.AvoidanceStrength,
+			FFixedPoint::Zero);
+		FFixedVector Smoothed(
+			Scaled.X * (FFixedPoint::One - Parameters.SmoothKeep)
+				+ Movement.AvoidanceOutput.SteerDir.X
+					* Parameters.SmoothKeep,
+			Scaled.Y * (FFixedPoint::One - Parameters.SmoothKeep)
+				+ Movement.AvoidanceOutput.SteerDir.Y
+					* Parameters.SmoothKeep,
+			FFixedPoint::Zero);
+		const bool bSteerCleared =
+			Smoothed.SizeSquared() <= FFixedPoint::Epsilon;
+		if (bSteerCleared)
+		{
+			Smoothed = FFixedVector::ZeroVector;
+		}
+		Movement.AvoidanceOutput.SteerDir = Smoothed;
+
+		FFixedPoint BrakeTerm = FFixedPoint::One;
+		if (Parameters.BrakeStrength > FFixedPoint::Zero
+			&& Parameters.MaxSteerMagnitude > FFixedPoint::Zero
+			&& !bSteerCleared)
+		{
+			FFixedPoint Yield =
+				(AccumLength * Movement.AvoidanceStrength)
+				/ Parameters.MaxSteerMagnitude;
+			if (Yield > FFixedPoint::One)
+			{
+				Yield = FFixedPoint::One;
+			}
+			BrakeTerm =
+				FFixedPoint::One - Parameters.BrakeStrength * Yield;
+		}
+
+		// Inner cohesion compares one member against its immediate broker.
+		FFixedPoint InnerTerm = FFixedPoint::One;
+		if (Parameters.bCohesionEnabled && SelfBrokerHandle.IsValid())
+		{
+			if (const FCohesionAggregate* Aggregate =
+				Parameters.GroupAggregates.Find(SelfBrokerHandle))
+			{
+				if (Aggregate->Count >= 2)
+				{
+					const FFixedPoint Mean = Aggregate->SumDist
+						/ FFixedPoint::FromInt(Aggregate->Count);
+					const FFixedPoint SelfDistance =
+						SeinMath::Sqrt(GoalDistanceSquared);
+					const FFixedPoint Normalization =
+						SelfRadius * Parameters.CohesionRangeRadii;
+					FFixedPoint Deviation =
+						(SelfDistance - Mean) / Normalization;
+					if (Deviation > FFixedPoint::One)
+					{
+						Deviation = FFixedPoint::One;
+					}
+					if (Deviation < -FFixedPoint::One)
+					{
+						Deviation = -FFixedPoint::One;
+					}
+					const FFixedPoint Deadband =
+						FFixedPoint::FromInt(3) / FFixedPoint::FromInt(20);
+					const FFixedPoint Span = FFixedPoint::One - Deadband;
+					if (Deviation > Deadband)
+					{
+						const FFixedPoint SelfProgress =
+							Parameters.ActualProgress[Index];
+						const bool bMakingHeadway =
+							SelfProgress == Parameters.ProgressUnknown
+							|| SelfProgress > Parameters.FloorPerTick;
+						if (bMakingHeadway)
+						{
+							const FFixedPoint T =
+								(Deviation - Deadband) / Span;
+							InnerTerm = FFixedPoint::One
+								+ (Parameters.CohesionBoost
+									- FFixedPoint::One) * T;
+						}
+					}
+					else if (Deviation < -Deadband)
+					{
+						const FFixedPoint T =
+							(-Deviation - Deadband) / Span;
+						InnerTerm = FFixedPoint::One
+							- Parameters.CohesionHoldBack * T;
+					}
+				}
+			}
+		}
+
+		// Outer cohesion compares the broker against the multi-broker order.
+		FFixedPoint OuterTerm = FFixedPoint::One;
+		if (Parameters.bCohesionEnabled
+			&& SelfCohesionId != 0
+			&& SelfBrokerData
+			&& SelfBrokerData->bPaceSquadsTogether)
+		{
+			if (const FOuterCohesionAggregate* OuterAggregate =
+				Parameters.OuterAggregates.Find(SelfCohesionId))
+			{
+				if (OuterAggregate->DistinctBrokerCount >= 2)
+				{
+					if (const FCohesionAggregate* SelfAggregate =
+						Parameters.GroupAggregates.Find(SelfBrokerHandle))
+					{
+						if (SelfAggregate->Count >= 1)
+						{
+							const FFixedPoint SelfBrokerMean =
+								SelfAggregate->SumDist
+								/ FFixedPoint::FromInt(SelfAggregate->Count);
+							const FFixedPoint GroupMean =
+								OuterAggregate->SumOfBrokerMeans
+								/ FFixedPoint::FromInt(
+									OuterAggregate->DistinctBrokerCount);
+							const FFixedPoint Normalization =
+								SelfRadius * Parameters.CohesionRangeRadii;
+							FFixedPoint Deviation =
+								(SelfBrokerMean - GroupMean) / Normalization;
+							if (Deviation > FFixedPoint::One)
+							{
+								Deviation = FFixedPoint::One;
+							}
+							if (Deviation < -FFixedPoint::One)
+							{
+								Deviation = -FFixedPoint::One;
+							}
+							const FFixedPoint Deadband =
+								FFixedPoint::FromInt(3)
+								/ FFixedPoint::FromInt(20);
+							const FFixedPoint Span = FFixedPoint::One - Deadband;
+							if (Deviation > Deadband)
+							{
+								const FFixedPoint T =
+									(Deviation - Deadband) / Span;
+								OuterTerm = FFixedPoint::One
+									+ (Parameters.CohesionBoost
+										- FFixedPoint::One) * T;
+							}
+							else if (Deviation < -Deadband)
+							{
+								const FFixedPoint T =
+									(-Deviation - Deadband) / Span;
+								OuterTerm = FFixedPoint::One
+									- Parameters.CohesionHoldBack * T;
+							}
+						}
+					}
+				}
+			}
+		}
+
+		FFixedPoint CohesionTerm;
+		if (InnerTerm > FFixedPoint::One)
+		{
+			const FFixedPoint OuterAdd = OuterTerm > FFixedPoint::One
+				? OuterTerm
+				: FFixedPoint::One;
+			CohesionTerm = InnerTerm * OuterAdd;
+		}
+		else if (InnerTerm < FFixedPoint::One)
+		{
+			const FFixedPoint Product = InnerTerm * OuterTerm;
+			CohesionTerm = Product < FFixedPoint::One
+				? Product
+				: FFixedPoint::One;
+		}
+		else
+		{
+			CohesionTerm = OuterTerm;
+		}
+
+		const FFixedPoint TargetScale = BrakeTerm * CohesionTerm;
+		FFixedPoint SmoothedScale =
+			TargetScale * (FFixedPoint::One - Parameters.SmoothKeep)
+			+ Movement.AvoidanceOutput.SpeedScale * Parameters.SmoothKeep;
+		FFixedPoint OneDelta = FFixedPoint::One - SmoothedScale;
+		if (OneDelta < FFixedPoint::Zero)
+		{
+			OneDelta = -OneDelta;
+		}
+		if (OneDelta <= FFixedPoint::Epsilon)
+		{
+			SmoothedScale = FFixedPoint::One;
+		}
+		if (SmoothedScale < FFixedPoint::Zero)
+		{
+			SmoothedScale = FFixedPoint::Zero;
+		}
+
+		if (SmoothedScale < FFixedPoint::One
+			&& Movement.TopSpeed > FFixedPoint::Zero)
+		{
+			FFixedPoint MinimumScale =
+				(Parameters.MovingSpeedFloor * FFixedPoint::FromInt(2))
+				/ Movement.TopSpeed;
+			if (MinimumScale > FFixedPoint::One)
+			{
+				MinimumScale = FFixedPoint::One;
+			}
+			if (SmoothedScale < MinimumScale)
+			{
+				SmoothedScale = MinimumScale;
+			}
+		}
+		Movement.AvoidanceOutput.SpeedScale = SmoothedScale;
+	}
+
+	static void GatherStartOfTickState(
+		USeinWorldSubsystem& World,
+		ISeinComponentStorage* MoveStorage,
+		const ISeinComponentStorage* BrokerStorage,
+		const ISeinComponentStorage* BrokerDataStorage,
+		bool bCohesionEnabled,
+		FFixedPoint MovingSpeedFloor,
+		FFixedPoint FloorPerTickSq,
+		FFixedPoint ProgressUnknown,
+		FAvoidanceTickState& OutState)
+	{
+		const int32 ActiveCount = World.GetEntityPool().GetActiveCount();
+		OutState.LiveHandles.Reserve(ActiveCount);
+		TArray<FFixedPoint> ActualDispSq;
+		ActualDispSq.Reserve(ActiveCount);
+		OutState.ActualProgress.Reserve(ActiveCount);
+		OutState.PreviousMovementState.Reserve(ActiveCount);
+
+		World.GetEntityPool().ForEachEntity([&](
+			FSeinEntityHandle Handle,
+			const FSeinEntity& Entity)
+		{
+			OutState.LiveHandles.Add(Handle);
+			ActualDispSq.Add(FFixedPoint::FromInt(-1));
+			OutState.ActualProgress.Add(ProgressUnknown);
+			OutState.PreviousMovementState.AddDefaulted();
+			FSeinMovementComponent* Move = MoveStorage
+				? static_cast<FSeinMovementComponent*>(
+					MoveStorage->GetComponentRawForDeferredMutation(Handle))
+				: nullptr;
+			if (!Move) return;
+			OutState.PreviousMovementState.Last().PrevTickLocation =
+				Move->PrevTickLocation;
+			OutState.PreviousMovementState.Last().AvoidanceOutput =
+				Move->AvoidanceOutput;
+
+			// Velocity is pre-collision intent. The transform delta is the honest
+			// previous-tick displacement and progress sample.
+			const FFixedVector PosNow = Entity.Transform.GetLocation();
+			const bool bHasSample = Move->PrevTickLocation.X != FFixedPoint::Zero
+				|| Move->PrevTickLocation.Y != FFixedPoint::Zero
+				|| Move->PrevTickLocation.Z != FFixedPoint::Zero;
+			if (bHasSample)
+			{
+				FFixedVector ActualDelta = PosNow - Move->PrevTickLocation;
+				ActualDelta.Z = FFixedPoint::Zero;
+				ActualDispSq.Last() = ActualDelta.SizeSquared();
+				if (Move->bHasTarget)
+				{
+					FFixedVector PrevToGoal =
+						Move->TargetLocation - Move->PrevTickLocation;
+					PrevToGoal.Z = FFixedPoint::Zero;
+					FFixedVector NowToGoal = Move->TargetLocation - PosNow;
+					NowToGoal.Z = FFixedPoint::Zero;
+					OutState.ActualProgress.Last() =
+						PrevToGoal.Size() - NowToGoal.Size();
+				}
+			}
+			Move->PrevTickLocation = PosNow;
+
+			if (!bCohesionEnabled
+				|| !Move->bHasTarget
+				|| Move->AvoidanceStrength <= FFixedPoint::Zero)
+			{
+				return;
+			}
+			const FSeinBrokerMembershipData* Broker = BrokerStorage
+				? static_cast<const FSeinBrokerMembershipData*>(
+					BrokerStorage->GetComponentRaw(Handle))
+				: nullptr;
+			if (!Broker || !Broker->CurrentBrokerHandle.IsValid()) return;
+
+			const FFixedPoint DispSq = ActualDispSq.Last();
+			const bool bActuallyMoving = DispSq >= FFixedPoint::Zero
+				? DispSq > FloorPerTickSq
+				: Move->Velocity.SizeSquared()
+					> MovingSpeedFloor * MovingSpeedFloor;
+			if (!bActuallyMoving) return;
+
+			FFixedVector ToGoal =
+				Move->TargetLocation - Entity.Transform.GetLocation();
+			ToGoal.Z = FFixedPoint::Zero;
+			FCohesionAggregate& Aggregate =
+				OutState.GroupAggregates.FindOrAdd(
+					Broker->CurrentBrokerHandle);
+			if (!Aggregate.bStamped)
+			{
+				Aggregate.CohesionGroupId = Broker->CohesionGroupId;
+				const FSeinCommandBrokerData* BrokerData = BrokerDataStorage
+					? static_cast<const FSeinCommandBrokerData*>(
+						BrokerDataStorage->GetComponentRaw(
+							Broker->CurrentBrokerHandle))
+					: nullptr;
+				Aggregate.bPaceSquads = BrokerData
+					&& BrokerData->bPaceSquadsTogether;
+				Aggregate.bStamped = true;
+			}
+			Aggregate.Count += 1;
+			Aggregate.SumDist = Aggregate.SumDist + ToGoal.Size();
+		});
+	}
+
+	static void BuildOuterCohesionAggregates(
+		bool bCohesionEnabled,
+		const TMap<FSeinEntityHandle, FCohesionAggregate>& GroupAggregates,
+		TMap<int64, FOuterCohesionAggregate>& OutAggregates)
+	{
+		if (!bCohesionEnabled) return;
+
+		for (const TPair<FSeinEntityHandle, FCohesionAggregate>& Pair
+			: GroupAggregates)
+		{
+			const FCohesionAggregate& Aggregate = Pair.Value;
+			if (Aggregate.Count <= 0
+				|| !Aggregate.bPaceSquads
+				|| Aggregate.CohesionGroupId == 0)
+			{
+				continue;
+			}
+			const FFixedPoint BrokerMean = Aggregate.SumDist
+				/ FFixedPoint::FromInt(Aggregate.Count);
+			FOuterCohesionAggregate& Outer =
+				OutAggregates.FindOrAdd(Aggregate.CohesionGroupId);
+			Outer.DistinctBrokerCount += 1;
+			Outer.SumOfBrokerMeans =
+				Outer.SumOfBrokerMeans + BrokerMean;
+		}
+	}
+
+	static void PublishDeferredMovementState(
+		ISeinComponentStorage* MoveStorage,
+		const FAvoidanceTickState& State)
+	{
+		for (int32 Index = 0; Index < State.LiveHandles.Num(); ++Index)
+		{
+			FSeinMovementComponent* Move = MoveStorage
+				? static_cast<FSeinMovementComponent*>(
+					MoveStorage->GetComponentRawForDeferredMutation(
+						State.LiveHandles[Index]))
+				: nullptr;
+			if (!Move) continue;
+			const FDeferredMovementState& Before =
+				State.PreviousMovementState[Index];
+			if (Move->PrevTickLocation != Before.PrevTickLocation
+				|| Move->AvoidanceOutput.SteerDir
+					!= Before.AvoidanceOutput.SteerDir
+				|| Move->AvoidanceOutput.SpeedScale
+					!= Before.AvoidanceOutput.SpeedScale)
+			{
+				MoveStorage->CommitDeferredMutation(State.LiveHandles[Index]);
+			}
+		}
 	}
 }
 
@@ -184,150 +950,38 @@ void FSeinAvoidanceDefaultKernel::Execute(
 		World.GetComponentStorageRaw(
 			FSeinCommandBrokerData::StaticStruct());
 
-	// Gather live handles (serial, cheap), then fan the per-unit computation across
-	// worker threads under the body contract in the file docstring. The SAME serial
-	// walk builds the per-formation cohesion aggregate: for every actively-moving
-	// broker member, its planar remaining distance to its own goal, summed per broker.
-	// Serial pool-order accumulation → deterministic; the parallel pass below only
-	// READS the finished map (immutable snapshot), preserving the body contract.
-	// Broker-scoped = the INNER formation layer (a squad, or a loose-order group).
-	// Cross-broker cohesion for a multi-squad order (the outer CohesionGroupId layer —
-	// squads keeping pace with squads) is a deliberate follow-up, not implemented here.
-	// Per-broker (INNER) aggregate. Also carries the broker's CohesionGroupId + the outer-pacing
-	// flag, captured once from the first admitted member (all members of one broker share both), so
-	// the OUTER aggregate-of-aggregates below can be built without a broker→members reverse walk.
-	struct FCohesionAggregate
-	{
-		int32 Count = 0;
-		FFixedPoint SumDist;
-		int64 CohesionGroupId = 0;
-		bool bPaceSquads = false;
-		bool bStamped = false;
-	};
-	TMap<FSeinEntityHandle, FCohesionAggregate> GroupAggregates;
-	TArray<FSeinEntityHandle> LiveHandles;
-	LiveHandles.Reserve(World.GetEntityPool().GetActiveCount());
-	// Per-entity honest-motion samples over the previous tick, aligned index-for-index with
-	// LiveHandles. Built serially here, read-only in the parallel pass below (immutable
-	// snapshot — contract-safe). Two channels answering two different questions:
-	//   ActualDispSq   — planar displacement² ("did this body move at all"); negative =
-	//                    unknown (no movement component, or no sample yet).
-	//   ActualProgress — planar headway toward the unit's CURRENT goal, signed ("did it
-	//                    gain ground") — a churned unit extruded sideways at speed displaces
-	//                    plenty while gaining nothing; ProgressUnknown sentinel = no sample /
-	//                    no goal. Goal changes mid-order measure old-position-vs-new-goal,
-	//                    which is still the honest "did it gain ground on where it is going".
+	// Serial pool-order gather. Every array remains index-aligned with the
+	// canonical live-handle sequence consumed by the parallel stage.
 	const FFixedPoint ProgressUnknown = FFixedPoint::FromInt(-1000000);
-	TArray<FFixedPoint> ActualDispSq;
-	TArray<FFixedPoint> ActualProgress;
-	struct FDeferredMovementState
-	{
-		FFixedVector PrevTickLocation;
-		FSeinAvoidanceOutput AvoidanceOutput;
-	};
-	TArray<FDeferredMovementState> PreviousMovementState;
-	ActualDispSq.Reserve(World.GetEntityPool().GetActiveCount());
-	ActualProgress.Reserve(World.GetEntityPool().GetActiveCount());
-	PreviousMovementState.Reserve(World.GetEntityPool().GetActiveCount());
-	World.GetEntityPool().ForEachEntity([&](
-		FSeinEntityHandle Handle,
-		const FSeinEntity& Entity)
-	{
-		LiveHandles.Add(Handle);
-		ActualDispSq.Add(FFixedPoint::FromInt(-1));
-		ActualProgress.Add(ProgressUnknown);
-		PreviousMovementState.AddDefaulted();
-		FSeinMovementComponent* Move = MoveStorage
-			? static_cast<FSeinMovementComponent*>(
-				MoveStorage->GetComponentRawForDeferredMutation(Handle))
-			: nullptr;
-		if (!Move) return;
-		PreviousMovementState.Last().PrevTickLocation =
-			Move->PrevTickLocation;
-		PreviousMovementState.Last().AvoidanceOutput =
-			Move->AvoidanceOutput;
+	FAvoidanceTickState TickState;
+	GatherStartOfTickState(
+		World, MoveStorage, BrokerStorage, BrokerDataStorage,
+		bCohesionEnabled, MovingSpeedFloor, FloorPerTickSq,
+		ProgressUnknown, TickState);
+	BuildOuterCohesionAggregates(
+		bCohesionEnabled, TickState.GroupAggregates,
+		TickState.OuterAggregates);
 
-		// ACTUAL-MOTION SAMPLE — every movement-carrying entity, every tick, idle or
-		// ordered. Velocity cannot answer "did this body actually move": it is the unit's own
-		// commanded step (post nav-floor, PRE body-collision — the resolver never writes it
-		// back), so a body-blocked presser reads ~full speed while standing still. The
-		// start-of-tick location against last PreTick's sample is the true world displacement
-		// across the whole previous tick, collision included. Sample advances serially in
-		// pool order — deterministic.
-		const FFixedVector PosNow = Entity.Transform.GetLocation();
-		const bool bHasSample = Move->PrevTickLocation.X != FFixedPoint::Zero
-			|| Move->PrevTickLocation.Y != FFixedPoint::Zero
-			|| Move->PrevTickLocation.Z != FFixedPoint::Zero;
-		if (bHasSample)
-		{
-			FFixedVector ActualDelta = PosNow - Move->PrevTickLocation;
-			ActualDelta.Z = FFixedPoint::Zero;
-			ActualDispSq.Last() = ActualDelta.SizeSquared();
-			if (Move->bHasTarget)
-			{
-				FFixedVector PrevToGoal = Move->TargetLocation - Move->PrevTickLocation;
-				PrevToGoal.Z = FFixedPoint::Zero;
-				FFixedVector NowToGoal = Move->TargetLocation - PosNow;
-				NowToGoal.Z = FFixedPoint::Zero;
-				ActualProgress.Last() = PrevToGoal.Size() - NowToGoal.Size();
-			}
-		}
-		Move->PrevTickLocation = PosNow;
-
-		if (!bCohesionEnabled) return;
-		if (!Move->bHasTarget || Move->AvoidanceStrength <= FFixedPoint::Zero) return;
-		const FSeinBrokerMembershipData* Broker = BrokerStorage
-			? static_cast<const FSeinBrokerMembershipData*>(BrokerStorage->GetComponentRaw(Handle)) : nullptr;
-		if (!Broker || !Broker->CurrentBrokerHandle.IsValid()) return;
-		// FREE-TO-MOVE members only, judged on ACTUAL displacement. A body-blocked member —
-		// whether it reads pinned (commanded ~zero) or presser (commanding plenty, displacing
-		// nothing; the population the movement trace exposed) — is EXCLUDED: counting it
-		// inflates the group mean so mobile members hold back for units that cannot be helped
-		// by waiting, exactly when the crowd needs to spread. Hold-back/catch-up respond to
-		// spread among members that are genuinely moving. No sample yet (first tick after
-		// spawn) → fall back to the commanded-velocity test.
-		const FFixedPoint DispSq = ActualDispSq.Last();
-		const bool bActuallyMoving = DispSq >= FFixedPoint::Zero
-			? DispSq > FloorPerTickSq
-			: Move->Velocity.SizeSquared() > MovingSpeedFloor * MovingSpeedFloor;
-		if (!bActuallyMoving) return;
-		FFixedVector ToGoal = Move->TargetLocation - Entity.Transform.GetLocation();
-		ToGoal.Z = FFixedPoint::Zero;
-		FCohesionAggregate& Agg = GroupAggregates.FindOrAdd(Broker->CurrentBrokerHandle);
-		if (!Agg.bStamped)
-		{
-			// Capture the broker's order id + outer-pacing flag once (deterministic — every admitted
-			// member of this broker shares both; the flag is a per-broker property).
-			Agg.CohesionGroupId = Broker->CohesionGroupId;
-			const FSeinCommandBrokerData* BD = BrokerDataStorage
-				? static_cast<const FSeinCommandBrokerData*>(BrokerDataStorage->GetComponentRaw(Broker->CurrentBrokerHandle)) : nullptr;
-			Agg.bPaceSquads = BD && BD->bPaceSquadsTogether;
-			Agg.bStamped = true;
-		}
-		Agg.Count += 1;
-		Agg.SumDist = Agg.SumDist + ToGoal.Size();
-	});
-
-	// OUTER cohesion aggregate-of-aggregates (squads pacing squads). Serial, after the per-broker
-	// sums finalize and before the parallel pass. For each DISTINCT flagged broker in a multi-squad
-	// order (keyed on the shared CohesionGroupId), accumulate its mean remaining distance with EQUAL
-	// SQUAD WEIGHT (mean-of-broker-means, not member-weighted). Only flagged brokers enter, so the
-	// setting OFF → empty map → OuterTerm==One everywhere → bit-exact inner-only. Commutative sums →
-	// order-independent → deterministic despite TMap iteration order.
-	struct FOuterCohesionAggregate { int32 DistinctBrokerCount = 0; FFixedPoint SumOfBrokerMeans; };
-	TMap<int64, FOuterCohesionAggregate> OuterAggregates;
-	if (bCohesionEnabled)
-	{
-		for (const TPair<FSeinEntityHandle, FCohesionAggregate>& Pair : GroupAggregates)
-		{
-			const FCohesionAggregate& A = Pair.Value;
-			if (A.Count <= 0 || !A.bPaceSquads || A.CohesionGroupId == 0) continue;
-			const FFixedPoint BrokerMean = A.SumDist / FFixedPoint::FromInt(A.Count);
-			FOuterCohesionAggregate& O = OuterAggregates.FindOrAdd(A.CohesionGroupId);
-			O.DistinctBrokerCount += 1;
-			O.SumOfBrokerMeans = O.SumOfBrokerMeans + BrokerMean;
-		}
-	}
+	const TArray<FSeinEntityHandle>& LiveHandles = TickState.LiveHandles;
+	const TArray<FFixedPoint>& ActualProgress = TickState.ActualProgress;
+	const TMap<FSeinEntityHandle, FCohesionAggregate>& GroupAggregates =
+		TickState.GroupAggregates;
+	const TMap<int64, FOuterCohesionAggregate>& OuterAggregates =
+		TickState.OuterAggregates;
+	const FAvoidanceOutputParameters OutputParameters{
+		GroupAggregates,
+		OuterAggregates,
+		ActualProgress,
+		bCohesionEnabled,
+		ProgressUnknown,
+		FloorPerTick,
+		MovingSpeedFloor,
+		MaxSteerMagnitude,
+		SmoothKeep,
+		BrakeStrength,
+		CohesionHoldBack,
+		CohesionBoost,
+		CohesionRangeRadii};
 
 	SeinParallelFor(LiveHandles.Num(), [&](int32 Index)
 	{
@@ -350,107 +1004,15 @@ void FSeinAvoidanceDefaultKernel::Execute(
 		// so the unit's motion is bit-identical to a world with no avoidance.
 		if (Move->AvoidanceStrength <= FFixedPoint::Zero) return;
 
-		// Full-release helper for the "not participating this tick" exits below: both output
-		// channels return to their exact no-op values so nothing stale lingers in the state
-		// hash, the debug viz, or a consumer that reads them next tick.
-		const auto ClearOutput = [Move]()
-		{
-			Move->AvoidanceOutput.SteerDir = FFixedVector::ZeroVector;
-			Move->AvoidanceOutput.SpeedScale = FFixedPoint::One;
-		};
-
-		// No active move order → IDLE. Default: release and bail (avoidance only steers movers). But
-		// when idle-dodge is on, an idle unit steps ASIDE for an approaching qualifying mover — a
-		// one-sided lateral nudge computed here (the sanctioned whole-world PreTick pass), applied
-		// pure-self in TickIdle, with the shipped re-seek owning the return (the dodge suppresses
-		// re-seek's release while its SteerDir is non-zero; see the broker system).
+		// Idle dodge is a one-sided self write. Ordered movers cannot be
+		// triggered by another idler, so the branch cannot cascade in this pass.
 		if (!Move->bHasTarget)
 		{
-			if (!bIdleDodgeEnabled) { ClearOutput(); return; }
-
-			const FSeinNavigationComponent* IdleSelfNav = NavStorage ? static_cast<const FSeinNavigationComponent*>(NavStorage->GetComponentRaw(SelfHandle)) : nullptr;
-			const FSeinExtentsComponent* IdleSelfExt = ExtentsStorage ? static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(SelfHandle)) : nullptr;
-			const FFixedPoint IdleSelfRadius = USeinMovement::ResolveCollisionRadius(IdleSelfExt, IdleSelfNav);
-			if (IdleSelfRadius <= FFixedPoint::Zero) { ClearOutput(); return; }
-			const FFixedVector IdleSelfPos = SelfEntity.Transform.GetLocation();
-
-			// Idlers don't cruise → no lookahead term; personal-space perception only.
-			const FFixedPoint IdlePerception = IdleSelfRadius * FFixedPoint::FromInt(2);
-			Neighbors.Reset();
-			Hash.QueryRadius(IdleSelfPos, IdlePerception, Neighbors, SelfHandle);
-
-			FFixedVector DodgeAccum = FFixedVector::ZeroVector;
-			for (const FSeinEntityHandle& OtherHandle : Neighbors)
-			{
-				const FSeinEntity* OtherEntity = World.GetEntityPool().Get(OtherHandle);
-				if (!OtherEntity) continue;
-				const FSeinMovementComponent* OtherMove = ReadOnlyMoveStorage
-					? static_cast<const FSeinMovementComponent*>(
-						ReadOnlyMoveStorage->GetComponentRaw(OtherHandle))
-					: nullptr;
-				if (!OtherMove) continue;
-				// Only a REAL ORDERED MOVER triggers a dodge. bHasTarget=true is the CASCADE CUTOFF —
-				// a dodging idler has bHasTarget=false, so it can never trigger another idler's dodge.
-				if (!OtherMove->bHasTarget) continue;
-				const FFixedVector OtherVel = OtherMove->Velocity;
-				if (OtherVel.SizeSquared() <= MovingSpeedFloor * MovingSpeedFloor) continue;
-				// WEIGHT LEVER, idler as SELF: yield only to a heavier-or-equal mover (a heavy idler
-				// holds its ground for a light mover). Same comparison the mover-vs-mover gate uses.
-				const bool bDodgeQualifies = Move->bAvoidSameWeights
-					? (OtherMove->AvoidanceWeight >= Move->AvoidanceWeight)
-					: (OtherMove->AvoidanceWeight >  Move->AvoidanceWeight);
-				if (!bDodgeQualifies) continue;
-				FFixedVector ToSelf = IdleSelfPos - OtherEntity->Transform.GetLocation();
-				ToSelf.Z = FFixedPoint::Zero;
-				// APPROACHING gate (hysteresis): the mover must be heading toward this idler; a mover
-				// already past + receding fails, so a passing tail can't re-fire the dodge.
-				if (ToSelf.X * OtherVel.X + ToSelf.Y * OtherVel.Y <= FFixedPoint::Zero) continue;
-				const FSeinNavigationComponent* ONav = NavStorage ? static_cast<const FSeinNavigationComponent*>(NavStorage->GetComponentRaw(OtherHandle)) : nullptr;
-				const FSeinExtentsComponent* OExt = ExtentsStorage ? static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(OtherHandle)) : nullptr;
-				const FFixedPoint OtherRadius = USeinMovement::ResolveCollisionRadius(OExt, ONav);
-				if (OtherRadius <= FFixedPoint::Zero) continue;
-				const FFixedPoint DodgeRange = (IdleSelfRadius + OtherRadius) * FalloffRadii;
-				if (DodgeRange <= FFixedPoint::Epsilon) continue;
-				const FFixedPoint Dist = SeinMath::Sqrt(ToSelf.SizeSquared());
-				if (Dist >= DodgeRange) continue;
-				const FFixedPoint Falloff = FFixedPoint::One - (Dist / DodgeRange);
-				// Step aside PERPENDICULAR to the mover's travel, on the side the idler already sits
-				// (make a lane, don't cross the mover's path). Dead-ahead → deterministic handle tie.
-				const FFixedPoint OtherSpeed = OtherVel.Size();
-				const FFixedVector OtherVelN(OtherVel.X / OtherSpeed, OtherVel.Y / OtherSpeed, FFixedPoint::Zero);
-				const FFixedVector MoverRight(OtherVelN.Y, -OtherVelN.X, FFixedPoint::Zero);
-				const FFixedPoint SideDot = ToSelf.X * MoverRight.X + ToSelf.Y * MoverRight.Y;
-				const FFixedPoint Band = IdleSelfRadius / FFixedPoint::FromInt(4);
-				const FFixedPoint TurnSign = (SideDot > Band) ? FFixedPoint::One
-					: (SideDot < -Band) ? -FFixedPoint::One
-					: ((SelfHandle.Index < OtherHandle.Index) ? FFixedPoint::One : -FFixedPoint::One);
-				DodgeAccum.X += MoverRight.X * (Falloff * TurnSign);
-				DodgeAccum.Y += MoverRight.Y * (Falloff * TurnSign);
-			}
-
-			// No qualifying approaching mover → HARD release (bit-exact today). The hard zero is what
-			// lifts the re-seek suppression next tick, so the shipped re-seek can walk the (now
-			// off-slot) idler home — instead of a smoothed decay that would keep shuffling it aside.
-			if (DodgeAccum.SizeSquared() <= FFixedPoint::Epsilon) { ClearOutput(); return; }
-
-			// Same clamp → scale → smooth-ramp → snap tail as the mover path (scaled by the global
-			// idle-dodge strength). Smoothing only ramps the dodge IN; the empty-Accum hard release
-			// above ends it crisply.
-			FFixedPoint DodgeLen = DodgeAccum.Size();
-			if (DodgeLen > MaxSteerMagnitude && DodgeLen > FFixedPoint::Epsilon)
-			{
-				const FFixedPoint Scale = MaxSteerMagnitude / DodgeLen;
-				DodgeAccum.X = DodgeAccum.X * Scale;
-				DodgeAccum.Y = DodgeAccum.Y * Scale;
-			}
-			const FFixedVector DodgeScaled(DodgeAccum.X * IdleDodgeStrength, DodgeAccum.Y * IdleDodgeStrength, FFixedPoint::Zero);
-			FFixedVector DodgeSmoothed(
-				DodgeScaled.X * (FFixedPoint::One - SmoothKeep) + Move->AvoidanceOutput.SteerDir.X * SmoothKeep,
-				DodgeScaled.Y * (FFixedPoint::One - SmoothKeep) + Move->AvoidanceOutput.SteerDir.Y * SmoothKeep,
-				FFixedPoint::Zero);
-			if (DodgeSmoothed.SizeSquared() <= FFixedPoint::Epsilon) DodgeSmoothed = FFixedVector::ZeroVector;
-			Move->AvoidanceOutput.SteerDir = DodgeSmoothed;
-			Move->AvoidanceOutput.SpeedScale = FFixedPoint::One;   // idlers don't brake/cohesion
+			ComputeIdleDodge(
+				World, Hash, ReadOnlyMoveStorage, NavStorage,
+				ExtentsStorage, SelfHandle, SelfEntity, *Move,
+				bIdleDodgeEnabled, MovingSpeedFloor, FalloffRadii,
+				MaxSteerMagnitude, IdleDodgeStrength, SmoothKeep);
 			return;
 		}
 
@@ -461,104 +1023,13 @@ void FSeinAvoidanceDefaultKernel::Execute(
 		if (Speed <= MovingSpeedFloor)
 		{
 #if !UE_BUILD_SHIPPING
-			// GRIND DIAGNOSTIC — pure observation, behaviour unchanged. A COMMANDED unit here
-			// COMMANDED ~zero motion last tick (Velocity is the unit's own movement step —
-			// the body-collision floor never writes it, so "pinned" is never collision-zeroed;
-			// think path-budget wait, mode-policy zero, nav-floor hold). When the channel is
-			// Verbose, dump this unit's neighbourhood every ~half second with per-gate skip
-			// counts — replaying the live gate chain as if the unit were heading toward its
-			// goal — so a PIE repro shows WHY no separation force is acting on it. Body-blocked
-			// PRESSERS (commanding plenty, displacing nothing) never reach this early-out —
-			// the movement trace ([EP]/[UNIT], `log LogSeinMoveTrace Verbose`) owns that
-			// population. Enable: `log LogSeinAvoidance Verbose`.
-			if (Move->bHasTarget
-				&& UE_LOG_ACTIVE(LogSeinAvoidance, Verbose)
-				&& (World.GetCurrentTick() % 15) == 0)
-			{
-				const FFixedVector DiagPos = SelfEntity.Transform.GetLocation();
-				FFixedVector DiagToGoal = Move->TargetLocation - DiagPos;
-				DiagToGoal.Z = FFixedPoint::Zero;
-				const FFixedPoint DiagGoalDist = DiagToGoal.Size();
-				FFixedVector DiagHeading = FFixedVector::ZeroVector;
-				if (DiagGoalDist > FFixedPoint::Epsilon)
-				{
-					DiagHeading = FFixedVector(
-						DiagToGoal.X / DiagGoalDist, DiagToGoal.Y / DiagGoalDist, FFixedPoint::Zero);
-				}
-				const FSeinNavigationComponent* DiagNav = NavStorage ? static_cast<const FSeinNavigationComponent*>(NavStorage->GetComponentRaw(SelfHandle)) : nullptr;
-				const FSeinExtentsComponent* DiagExt = ExtentsStorage ? static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(SelfHandle)) : nullptr;
-				FFixedPoint DiagRadius = USeinMovement::ResolveCollisionRadius(DiagExt, DiagNav);
-				if (DiagRadius <= FFixedPoint::Zero) { DiagRadius = FFixedPoint::FromInt(50); }
-				const FSeinBrokerMembershipData* DiagBroker = BrokerStorage
-					? static_cast<const FSeinBrokerMembershipData*>(BrokerStorage->GetComponentRaw(SelfHandle)) : nullptr;
-				const FSeinEntityHandle DiagBrokerHandle = DiagBroker ? DiagBroker->CurrentBrokerHandle : FSeinEntityHandle();
-				const int64 DiagCohesionId = DiagBroker ? DiagBroker->CohesionGroupId : 0;
-
-				Neighbors.Reset();
-				Hash.QueryRadius(DiagPos, DiagRadius * FFixedPoint::FromInt(4), Neighbors, SelfHandle);
-				int32 NKept = 0, NStatic = 0, NGroup = 0, NIdleTrue = 0, NIdlePinned = 0;
-				int32 NWeight = 0, NBehind = 0, NNotClosing = 0, NPastGoal = 0, NFar = 0;
-				FFixedPoint MinDistSq = FFixedPoint::FromInt(999999);
-				for (const FSeinEntityHandle& OtherHandle : Neighbors)
-				{
-					const FSeinEntity* OtherEntity = World.GetEntityPool().Get(OtherHandle);
-					if (!OtherEntity) continue;
-					const FSeinMovementComponent* OtherMove = ReadOnlyMoveStorage
-						? static_cast<const FSeinMovementComponent*>(
-							ReadOnlyMoveStorage->GetComponentRaw(OtherHandle))
-						: nullptr;
-					if (!OtherMove) { ++NStatic; continue; }
-					FFixedVector ToOther = OtherEntity->Transform.GetLocation() - DiagPos;
-					ToOther.Z = FFixedPoint::Zero;
-					const FFixedPoint DistSq = ToOther.SizeSquared();
-					if (DistSq < MinDistSq) { MinDistSq = DistSq; }
-					const FSeinBrokerMembershipData* OtherBroker = BrokerStorage
-						? static_cast<const FSeinBrokerMembershipData*>(BrokerStorage->GetComponentRaw(OtherHandle)) : nullptr;
-					const bool bSameBroker = DiagBrokerHandle.IsValid() && OtherBroker && OtherBroker->CurrentBrokerHandle == DiagBrokerHandle;
-					const bool bSameCohesion = DiagCohesionId != 0 && OtherBroker && OtherBroker->CohesionGroupId == DiagCohesionId;
-					if (bSameBroker || bSameCohesion) { ++NGroup; continue; }
-					if (OtherMove->Velocity.SizeSquared() <= MovingSpeedFloor * MovingSpeedFloor)
-					{
-						// The deadlock's smoking gun: bulldoze-skipped neighbours that are
-						// THEMSELVES commanded-but-pinned (idlePinned) vs true idlers (idleTrue).
-						if (OtherMove->bHasTarget) { ++NIdlePinned; } else { ++NIdleTrue; }
-						continue;
-					}
-					const bool bQualifiesDiag = Move->bAvoidSameWeights
-						? (OtherMove->AvoidanceWeight >= Move->AvoidanceWeight)
-						: (OtherMove->AvoidanceWeight >  Move->AvoidanceWeight);
-					if (!bQualifiesDiag) { ++NWeight; continue; }
-					const FFixedPoint Ahead = ToOther.X * DiagHeading.X + ToOther.Y * DiagHeading.Y;
-					if (Ahead <= FFixedPoint::Zero) { ++NBehind; continue; }
-					const FFixedVector RelVelDiag(
-						Vel.X - OtherMove->Velocity.X, Vel.Y - OtherMove->Velocity.Y, FFixedPoint::Zero);
-					if (ToOther.X * RelVelDiag.X + ToOther.Y * RelVelDiag.Y <= FFixedPoint::Zero) { ++NNotClosing; continue; }
-					if (DiagGoalDist > FFixedPoint::Zero && DistSq >= DiagGoalDist * DiagGoalDist) { ++NPastGoal; continue; }
-					const FSeinNavigationComponent* ONav = NavStorage ? static_cast<const FSeinNavigationComponent*>(NavStorage->GetComponentRaw(OtherHandle)) : nullptr;
-					const FSeinExtentsComponent* OExt = ExtentsStorage ? static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(OtherHandle)) : nullptr;
-					const FFixedPoint ORadius = USeinMovement::ResolveCollisionRadius(OExt, ONav);
-					const FFixedPoint Range = (DiagRadius + ORadius) * FalloffRadii;
-					if (DistSq >= Range * Range) { ++NFar; continue; }
-					++NKept;
-				}
-				// steer/scale caveat: the pinned early-out CLEARS the output every pinned
-				// tick, so on any dump after the first these print the reset values
-				// (0 / 1.0), not what carried the unit into the pin — the movement
-				// trace's [UNIT] lastLive fields hold that (log LogSeinMoveTrace Verbose).
-				UE_LOG(LogSeinAvoidance, Verbose,
-					TEXT("[GRIND] t=%d h=%d:%d grp=%d:%d coh=%lld goalDist=%.0f tgt=(%.0f,%.0f) nbrs=%d kept=%d skip{static=%d grp=%d idleTrue=%d idlePinned=%d wt=%d behind=%d notClosing=%d pastGoal=%d far=%d} minD=%.0f steer=%.3f scale=%.3f"),
-					World.GetCurrentTick(), SelfHandle.Index, SelfHandle.Generation,
-					DiagBrokerHandle.Index, DiagBrokerHandle.Generation, DiagCohesionId,
-					DiagGoalDist.ToFloat(),
-					Move->TargetLocation.X.ToFloat(), Move->TargetLocation.Y.ToFloat(),
-					Neighbors.Num(), NKept,
-					NStatic, NGroup, NIdleTrue, NIdlePinned, NWeight, NBehind, NNotClosing, NPastGoal, NFar,
-					SeinMath::Sqrt(MinDistSq).ToFloat(),
-					Move->AvoidanceOutput.SteerDir.Size().ToFloat(),
-					Move->AvoidanceOutput.SpeedScale.ToFloat());
-			}
+			ReportPinnedMover(
+				World, Hash, ReadOnlyMoveStorage, NavStorage,
+				ExtentsStorage, BrokerStorage, SelfHandle,
+				SelfEntity, *Move, Vel, MovingSpeedFloor,
+				FalloffRadii);
 #endif
-			ClearOutput();
+			ClearAvoidanceOutput(*Move);
 			return;
 		}
 		const FFixedVector Heading(Vel.X / Speed, Vel.Y / Speed, FFixedPoint::Zero);
@@ -569,7 +1040,11 @@ void FSeinAvoidanceDefaultKernel::Execute(
 		const FSeinNavigationComponent* SelfNav = NavStorage ? static_cast<const FSeinNavigationComponent*>(NavStorage->GetComponentRaw(SelfHandle)) : nullptr;
 		const FSeinExtentsComponent* SelfExt = ExtentsStorage ? static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(SelfHandle)) : nullptr;
 		const FFixedPoint SelfRadius = USeinMovement::ResolveCollisionRadius(SelfExt, SelfNav);
-		if (SelfRadius <= FFixedPoint::Zero) { ClearOutput(); return; }
+		if (SelfRadius <= FFixedPoint::Zero)
+		{
+			ClearAvoidanceOutput(*Move);
+			return;
+		}
 
 		// Self's two-layer group identity (see the storage-hoist comment above).
 		const FSeinBrokerMembershipData* SelfBroker = BrokerStorage
@@ -601,7 +1076,11 @@ void FSeinAvoidanceDefaultKernel::Execute(
 		// destination inside/behind a standing cluster makes the unit orbit the perimeter
 		// forever. (This is the mechanism that was dead in the original model.)
 		const FFixedPoint ReleaseRadius = SelfRadius * ArrivalReleaseRadii;
-		if (GoalDistSq <= ReleaseRadius * ReleaseRadius) { ClearOutput(); return; }
+		if (GoalDistSq <= ReleaseRadius * ReleaseRadius)
+		{
+			ClearAvoidanceOutput(*Move);
+			return;
+		}
 
 		// Speed-scaled perception radius (footprint-based; "personal space" needs no
 		// separate authored radius).
@@ -977,217 +1456,12 @@ void FSeinAvoidanceDefaultKernel::Execute(
 			}
 		}
 
-		// Clamp the accumulated lateral nudge (bounds a crowd repulsor sum + fixed-point
-		// blow-up) BEFORE strength-scale + smoothing. The nudge bends a UNIT direction
-		// downstream, so the cap is in that same unit space.
-		FFixedPoint AccumLen = Accum.Size();
-		if (AccumLen > MaxSteerMagnitude && AccumLen > FFixedPoint::Epsilon)
-		{
-			const FFixedPoint Scale = MaxSteerMagnitude / AccumLen;
-			Accum.X = Accum.X * Scale;
-			Accum.Y = Accum.Y * Scale;
-			AccumLen = MaxSteerMagnitude;
-		}
-
-		// Strength-scale, then temporally smooth against the previous steer (damps the
-		// perception-boundary snap as neighbours enter/leave). Snap negligible results to
-		// exactly zero so a unit clear of traffic returns to a true no-op.
-		const FFixedVector Scaled(
-			Accum.X * Move->AvoidanceStrength,
-			Accum.Y * Move->AvoidanceStrength,
-			FFixedPoint::Zero);
-		FFixedVector Smoothed(
-			Scaled.X * (FFixedPoint::One - SmoothKeep) + Move->AvoidanceOutput.SteerDir.X * SmoothKeep,
-			Scaled.Y * (FFixedPoint::One - SmoothKeep) + Move->AvoidanceOutput.SteerDir.Y * SmoothKeep,
-			FFixedPoint::Zero);
-		const bool bSteerCleared = Smoothed.SizeSquared() <= FFixedPoint::Epsilon;
-		if (bSteerCleared) Smoothed = FFixedVector::ZeroVector;
-		Move->AvoidanceOutput.SteerDir = Smoothed;
-
-		// SPEED-SCALE PRODUCER — two composed terms, each independently dial-able to a
-		// bit-exact One so PIE sessions can attribute feel per mechanism:
-		//
-		// 1. BRAKE (yield-by-slowing, layered on yield-by-turning). Steer saturation is
-		//    the congestion proxy: the harder this unit is pushed sideways, the more it
-		//    eases off cruise — a unit swerving at its cap through a dense weave slows
-		//    into it instead of sliding through at full tilt. Linear ramp to
-		//    (1 − BrakeStrength) at full saturation. BrakeStrength 0 = term pinned at One.
-		FFixedPoint BrakeTerm = FFixedPoint::One;
-		if (BrakeStrength > FFixedPoint::Zero && MaxSteerMagnitude > FFixedPoint::Zero && !bSteerCleared)
-		{
-			FFixedPoint YieldT = (AccumLen * Move->AvoidanceStrength) / MaxSteerMagnitude;
-			if (YieldT > FFixedPoint::One) YieldT = FFixedPoint::One;
-			BrakeTerm = FFixedPoint::One - BrakeStrength * YieldT;
-		}
-
-		// 2. FORMATION COHESION (broker-scoped — the inner formation layer). Compare this
-		//    member's remaining distance to its group's mean (the serial pre-pass
-		//    aggregate): AHEAD of the group → hold back toward (1 − HoldBack); BEHIND →
-		//    catch-up boost toward CohesionBoost (> 1 — the widened SpeedScale contract's
-		//    first producer). Deviation is normalized by the mean (floored at 4 footprints
-		//    so an arriving group doesn't blow the ratio up) with a deadband so a
-		//    steady formation doesn't oscillate around its own average. Solo units,
-		//    single-member groups, and disabled dials all leave the term at exactly One.
-		FFixedPoint InnerTerm = FFixedPoint::One;
-		if (bCohesionEnabled && SelfBrokerHandle.IsValid())
-		{
-			if (const FCohesionAggregate* Agg = GroupAggregates.Find(SelfBrokerHandle))
-			{
-				if (Agg->Count >= 2)
-				{
-					const FFixedPoint Mean = Agg->SumDist / FFixedPoint::FromInt(Agg->Count);
-					const FFixedPoint SelfDist = SeinMath::Sqrt(GoalDistSq);
-					// SPATIAL normalization — deviation measured in body-lengths (footprint ×
-					// CohesionRangeRadii), NOT as a fraction of remaining trip. Normalizing by
-					// the mean made cohesion invisible on long moves: a 200cm lag was 0.07 of a
-					// 3000cm march (under the deadband) but 0.4 of a 500cm hop — the same
-					// physical strung-out-ness must read the same at any order length.
-					const FFixedPoint Norm = SelfRadius * CohesionRangeRadii;
-					FFixedPoint DevT = (SelfDist - Mean) / Norm;                 // + = behind, − = ahead
-					if (DevT >  FFixedPoint::One) DevT =  FFixedPoint::One;
-					if (DevT < -FFixedPoint::One) DevT = -FFixedPoint::One;
-					const FFixedPoint Deadband = FFixedPoint::FromInt(3) / FFixedPoint::FromInt(20); // 0.15
-					const FFixedPoint Span = FFixedPoint::One - Deadband;
-					if (DevT > Deadband)
-					{
-						// CATCH-UP only for a member that is GAINING GROUND on its goal, judged
-						// on ACTUAL progress — not commanded velocity (a body-blocked straggler
-						// commands plenty while standing still) and not raw displacement either
-						// (a churned unit extruded sideways at 100+ cm/s displaces plenty while
-						// gaining nothing; the movement trace measured both populations drawing
-						// boost into the jam). More throttle without headway is pure collision
-						// load, so the boost waits until the unit genuinely closes on its goal.
-						// No sample yet → boost (the pinned early-out above vouched for motion).
-						const FFixedPoint SelfProgress = ActualProgress[Index];
-						const bool bMakingHeadway = SelfProgress == ProgressUnknown
-							|| SelfProgress > FloorPerTick;
-						if (bMakingHeadway)
-						{
-							const FFixedPoint T = (DevT - Deadband) / Span;      // (0,1]
-							InnerTerm = FFixedPoint::One + (CohesionBoost - FFixedPoint::One) * T;
-						}
-					}
-					else if (DevT < -Deadband)
-					{
-						const FFixedPoint T = (-DevT - Deadband) / Span;         // (0,1]
-						InnerTerm = FFixedPoint::One - CohesionHoldBack * T;
-					}
-				}
-			}
-		}
-
-		// 3. OUTER COHESION (squads pacing squads). A member's SQUAD position vs the group-of-squads'
-		//    mean progress (EQUAL squad weight = mean-of-broker-means), same ramp shape as inner.
-		//    Engages ONLY when this member's cohesion group spans >= 2 distinct FLAGGED brokers (a
-		//    multi-squad order); single-squad / loose / setting-off all leave OuterTerm == One (→
-		//    inner-only, bit-exact). Self-broker must itself be flagged (symmetric: an opted-out squad
-		//    is neither paced nor a pacer — inert under the global setting, correct if it ever goes
-		//    per-squad). Outer catch-up is NOT progress-gated: a whole squad lagging is a spacing fact.
-		FFixedPoint OuterTerm = FFixedPoint::One;
-		if (bCohesionEnabled && SelfCohesionId != 0
-			&& SelfBrokerData && SelfBrokerData->bPaceSquadsTogether)
-		{
-			if (const FOuterCohesionAggregate* OAgg = OuterAggregates.Find(SelfCohesionId))
-			{
-				if (OAgg->DistinctBrokerCount >= 2)
-				{
-					if (const FCohesionAggregate* SelfAgg = GroupAggregates.Find(SelfBrokerHandle))
-					{
-						if (SelfAgg->Count >= 1)
-						{
-							const FFixedPoint SelfBrokerMean = SelfAgg->SumDist / FFixedPoint::FromInt(SelfAgg->Count);
-							const FFixedPoint GroupMean = OAgg->SumOfBrokerMeans / FFixedPoint::FromInt(OAgg->DistinctBrokerCount);
-							const FFixedPoint Norm = SelfRadius * CohesionRangeRadii;
-							FFixedPoint DevO = (SelfBrokerMean - GroupMean) / Norm;   // + = my squad behind, − = ahead
-							if (DevO >  FFixedPoint::One) DevO =  FFixedPoint::One;
-							if (DevO < -FFixedPoint::One) DevO = -FFixedPoint::One;
-							const FFixedPoint Deadband = FFixedPoint::FromInt(3) / FFixedPoint::FromInt(20); // 0.15
-							const FFixedPoint Span = FFixedPoint::One - Deadband;
-							if (DevO > Deadband)
-							{
-								const FFixedPoint T = (DevO - Deadband) / Span;
-								OuterTerm = FFixedPoint::One + (CohesionBoost - FFixedPoint::One) * T;
-							}
-							else if (DevO < -Deadband)
-							{
-								const FFixedPoint T = (-DevO - Deadband) / Span;
-								OuterTerm = FFixedPoint::One - CohesionHoldBack * T;
-							}
-						}
-					}
-				}
-			}
-		}
-
-		// QUADRANT COMPOSE (RJ's model), two exact invariants: an inner-LEADER (ahead of its own
-		// squad, InnerTerm < 1) NEVER speeds up (clamped ≤ 1); an inner-STRAGGLER (behind, InnerTerm
-		// > 1) ALWAYS keeps its full inner catch-up and outer can only ADD, never cancel it (≥
-		// InnerTerm — so case 3, squad-ahead, is ignored). NEUTRAL-inner takes the pure outer term.
-		// Together: a squad's leaders can never outrun its own stragglers to chase macro pacing.
-		FFixedPoint CohesionTerm;
-		if (InnerTerm > FFixedPoint::One)
-		{
-			const FFixedPoint OuterAdd = (OuterTerm > FFixedPoint::One) ? OuterTerm : FFixedPoint::One;
-			CohesionTerm = InnerTerm * OuterAdd;                                   // straggler: outer adds only
-		}
-		else if (InnerTerm < FFixedPoint::One)
-		{
-			const FFixedPoint Prod = InnerTerm * OuterTerm;
-			CohesionTerm = (Prod < FFixedPoint::One) ? Prod : FFixedPoint::One;    // leader: never > 1
-		}
-		else
-		{
-			CohesionTerm = OuterTerm;                                              // neutral: pure outer
-		}
-
-		// Compose multiplicatively, smooth like the steer (damps enter/leave snaps), snap
-		// near-One back to EXACTLY One so a unit under neither term is a bit-exact no-op.
-		const FFixedPoint TargetScale = BrakeTerm * CohesionTerm;
-		FFixedPoint SmoothedScale =
-			TargetScale * (FFixedPoint::One - SmoothKeep) + Move->AvoidanceOutput.SpeedScale * SmoothKeep;
-		FFixedPoint OneDelta = FFixedPoint::One - SmoothedScale;
-		if (OneDelta < FFixedPoint::Zero) OneDelta = -OneDelta;
-		if (OneDelta <= FFixedPoint::Epsilon) SmoothedScale = FFixedPoint::One;
-		if (SmoothedScale < FFixedPoint::Zero) SmoothedScale = FFixedPoint::Zero;
-
-		// PHYSICAL FLOOR — a produced scale must never command a crawl at or below the
-		// moving-speed floor. Brake × hold-back can compose arbitrarily small; below
-		// MovingSpeedFloor/TopSpeed the unit reads as PINNED to every velocity-gated
-		// consumer (the pinned early-out above, bulldoze-idle, the cohesion gather) and
-		// self-stalls in a limit cycle: crawl → classified pinned → gates release →
-		// re-accelerate → crawl. Floored at 2× so commanded speed sits decisively above
-		// the classifier. Derived per-unit from TopSpeed — no dial: a floor that exists
-		// only to stay above a fixed classifier threshold has exactly one correct value.
-		if (SmoothedScale < FFixedPoint::One && Move->TopSpeed > FFixedPoint::Zero)
-		{
-			FFixedPoint MinScale = (MovingSpeedFloor * FFixedPoint::FromInt(2)) / Move->TopSpeed;
-			if (MinScale > FFixedPoint::One) MinScale = FFixedPoint::One;
-			if (SmoothedScale < MinScale) SmoothedScale = MinScale;
-		}
-		Move->AvoidanceOutput.SpeedScale = SmoothedScale;
+		FinalizeMovingOutput(
+			OutputParameters, Index, *Move, Accum, SelfRadius,
+			GoalDistSq, SelfBrokerHandle, SelfCohesionId,
+			SelfBrokerData);
 	});
 
-	// Publish only real state changes, serially and in canonical handle order.
-	// The old mutable raw accessor touched every movement component merely for
-	// being inspected (and did so from workers), forcing hundreds of reflected
-	// re-hashes at every state-root boundary even in a completely idle world.
-	for (int32 Index = 0; Index < LiveHandles.Num(); ++Index)
-	{
-		FSeinMovementComponent* Move = MoveStorage
-			? static_cast<FSeinMovementComponent*>(
-				MoveStorage->GetComponentRawForDeferredMutation(
-					LiveHandles[Index]))
-			: nullptr;
-		if (!Move) continue;
-		const FDeferredMovementState& Before =
-			PreviousMovementState[Index];
-		if (Move->PrevTickLocation != Before.PrevTickLocation
-			|| Move->AvoidanceOutput.SteerDir
-				!= Before.AvoidanceOutput.SteerDir
-			|| Move->AvoidanceOutput.SpeedScale
-				!= Before.AvoidanceOutput.SpeedScale)
-		{
-			MoveStorage->CommitDeferredMutation(LiveHandles[Index]);
-		}
-	}
+	// Publish only real state changes, serially in canonical handle order.
+	PublishDeferredMovementState(MoveStorage, TickState);
 }
