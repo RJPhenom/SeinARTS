@@ -61,7 +61,7 @@ formation/resolver state coverage, provider teardown, and downstream content own
 | `SeinARTS.Editor`, profile All | 38 passed, 0 failed |
 | `SeinARTS.Editor`, profile Framework | 36 passed, 0 failed |
 | `SeinARTS.Sim`, profile All | 30 passed, 0 failed |
-| `SeinARTS.Sim`, profile Framework | 27 passed, 0 failed |
+| `SeinARTS.Sim`, profile Framework | 34 passed, 0 failed |
 | `SeinARTS.Perf`, profile All | 6 passed, 0 failed; cover 128x128 averaged 11.998 ms; public 128-member preview measured 1.255/1.337 ms median/p95 coverless and 3.181/3.324 ms dense; collision full-tick medians 1.257/3.114/7.214 ms at 64/128/256 movers |
 | `SeinARTS.Perf`, profile Framework | 4 passed, 0 failed; latest replay operational soak wrote 135,244,673 bytes over 449 turns with 135.552/203.523/211.276 ms checkpoint p50/p95/max; containment at 1,000 occupants measured 2.825 ms canonical root, 4.328 ms invalidated checkpoint, and 0.926 ms warm checkpoint; moving-entity checkpoint medians remain 2.037/7.815/15.288 ms at 100/500/1,000 entities; collision full-tick medians 1.401/3.035/7.494 ms at 64/128/256 movers |
 | Replay Memory Insights (qualified) | Clean commit `8178dec` has a same-attempt build and production `Qualified` receipt; the warmed 56-checkpoint interval retained zero production replay allocations/bytes against the fixed 4 KiB ceiling, with complete callstacks and separately validated allocator sentinels |
@@ -84,6 +84,15 @@ formation/resolver state coverage, provider teardown, and downstream content own
 
 Latest local evidence is under ignored `Saved/Automation/`:
 
+- `SeinARTS.Sim.Broker.IdleReseek-20260813-140051-0ebee27d` (Framework,
+  7 passed; exact nonzero jitter, watch/release cadence and episode-cap boundaries, aligned and
+  claimed/free-slot pairing, moving-traffic clearance, and multi-candidate loose returns)
+- `SeinARTS.Sim-20260813-140128-4432a579` (Framework, 34 passed) and
+  `SeinARTS.Determinism-20260813-140151-361b76f8` (Framework, 33 passed)
+- `SeinARTS.Determinism.Process.SerialCollisionTrace-20260813-135404-64435211` and
+  `SeinARTS.Determinism.Process.ParallelCollisionTrace-20260813-135421-0aa49a32`
+  (fresh processes; all 120 canonical roots and raw poses matched exactly after the broker re-seek
+  extraction)
 - `SeinARTS.Perf.Replay.OperationalSoak-20260813-103957-dfe48bc9` (Framework,
   clean pre-fix full-memory trace; 47,573,706 retained bytes overall and 8,388,688 under replay tags)
 - `Saved/Profiling/Insights/ReplayOperationalMemoryConsume-20260813-104559.utrace`
@@ -433,6 +442,16 @@ Latest local evidence is under ignored `Saved/Automation/`:
   real multi-client PIE remain explicit gates in `.agents/VEHICLE_GYM.md`.
 
 ## Current development state
+
+Command-broker idle re-seek is now isolated from the broker tick in one private deterministic
+kernel. The extraction stages loose-candidate collection, broker pairing/traffic/release work, and
+post-iteration broker creation while leaving every persistent field in the existing canonical
+components. It changes no public API, state codec, behavior revision, command timing, or tuning.
+Independent adversarial comparison against the prior inline body found no semantic defect; its
+coverage findings were closed with exact tick-boundary assertions, a required free-slot rematch
+around an in-flight claimed slot, and multi-candidate storage-growth coverage. Focused re-seek is
+green at 7/7, Framework Sim at 34/34, Framework Determinism at 33/33, fresh-process serial/parallel
+roots and poses agree for all 120 ticks, and Development plus Shipping builds succeeded.
 
 The completed pair-capability and Movement+ telemetry milestone adds a directional,
 source-attributed capability ledger for ordered player pairs. Team IDs seed the existing friendly
