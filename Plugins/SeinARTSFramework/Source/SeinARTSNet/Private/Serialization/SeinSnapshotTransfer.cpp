@@ -1,9 +1,19 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
- * @file    SeinSnapshotTransfer.cpp
+ *
+ * @file         SeinSnapshotTransfer.cpp
+ * @author       RJ Macklem
+ * @created      30 Jul 2026
+ * @latest       12 Aug 2026
+ * @brief        Encodes and decodes versioned deterministic snapshot envelopes.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
  */
 
 #include "Serialization/SeinSnapshotTransfer.h"
+
+#include "Serialization/SeinSnapshotTransferTestHooks.h"
 
 #include "Data/SeinWorldSnapshot.h"
 #include "Serialization/SeinCanonicalInitialStateDigest.h"
@@ -47,6 +57,76 @@ namespace SeinSnapshotTransfer
 			}
 			return Writer.Finalize(OutDigest, OutError);
 		}
+
+		bool EncodeCheckpointEnvelopeInternal(
+			const FSeinWorldSnapshot& Snapshot,
+			TArray<uint8>& OutBytes,
+			FSeinSnapshotEnvelopeMetadata& OutMetadata,
+			FString& OutError,
+			TFunctionRef<bool(FString&)> AfterPayloadSerialized)
+		{
+			TRACE_CPUPROFILER_EVENT_SCOPE(
+				Sein_SnapshotTransfer_EncodeCheckpoint);
+			OutError.Reset();
+			if (Snapshot.SnapshotVersion != FSeinWorldSnapshot::CurrentVersion)
+			{
+				OutError =
+					TEXT("Checkpoint transfer requires a freshly captured current-version snapshot.");
+				return false;
+			}
+
+			FSeinSnapshotEnvelopeSection Section;
+			Section.SectionId = CheckpointSectionId;
+			Section.Role = ESeinSnapshotSectionRole::Authoritative;
+			Section.Codec = ESeinSnapshotSectionCodec::CanonicalBytes;
+			Section.SchemaVersion =
+				static_cast<uint32>(FSeinWorldSnapshot::CurrentVersion);
+			if (!ComputeCheckpointSchemaDigest(Section.SchemaDigest, OutError)
+				|| !ComputeCheckpointDescriptorDigest(
+					Section.DescriptorDigest, OutError))
+			{
+				return false;
+			}
+
+			FSeinWorldSnapshotReferenceGuard SnapshotGCGuard(Snapshot);
+			{
+				TRACE_CPUPROFILER_EVENT_SCOPE(
+					Sein_SnapshotTransfer_SerializePayload);
+				FMemoryWriter MemWriter(Section.Payload, /*bIsPersistent*/ true);
+				FObjectAndNameAsStringProxyArchive Writer(
+					MemWriter, /*bInLoadIfFindFails*/ false);
+				FSeinWorldSnapshot::StaticStruct()->SerializeItem(
+					Writer,
+					// SerializeItem is non-const by signature; saving does not mutate.
+					const_cast<FSeinWorldSnapshot*>(&Snapshot),
+					nullptr);
+				if (Writer.IsError() || Writer.IsCriticalError()
+					|| MemWriter.IsError() || MemWriter.IsCriticalError()
+					|| MemWriter.Tell() != Section.Payload.Num())
+				{
+					OutError =
+						TEXT("Checkpoint payload serialization failed; no envelope was produced.");
+					return false;
+				}
+			}
+			if (!AfterPayloadSerialized(OutError))
+			{
+				return false;
+			}
+
+			FSeinSnapshotEnvelope Envelope;
+			Envelope.SnapshotTick = Snapshot.CurrentTick;
+			Envelope.CommandProtocolDigest = Snapshot.CommandProtocolDigest;
+			Envelope.CompatibilityDigest =
+				Snapshot.BootstrapCheckpoint.Receipt.StateContractDigest;
+			Envelope.Sections.Add(MoveTemp(Section));
+			{
+				TRACE_CPUPROFILER_EVENT_SCOPE(
+					Sein_SnapshotTransfer_FrameEnvelope);
+				return FSeinSnapshotEnvelopeCodec::Encode(
+					Envelope, OutBytes, OutMetadata, OutError);
+			}
+		}
 	}
 
 	bool EncodeCheckpointEnvelope(
@@ -55,62 +135,30 @@ namespace SeinSnapshotTransfer
 		FSeinSnapshotEnvelopeMetadata& OutMetadata,
 		FString& OutError)
 	{
-		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_SnapshotTransfer_EncodeCheckpoint);
-		OutError.Reset();
-		if (Snapshot.SnapshotVersion != FSeinWorldSnapshot::CurrentVersion)
-		{
-			OutError =
-				TEXT("Checkpoint transfer requires a freshly captured current-version snapshot.");
-			return false;
-		}
-
-		FSeinSnapshotEnvelopeSection Section;
-		Section.SectionId = CheckpointSectionId;
-		Section.Role = ESeinSnapshotSectionRole::Authoritative;
-		Section.Codec = ESeinSnapshotSectionCodec::CanonicalBytes;
-		Section.SchemaVersion =
-			static_cast<uint32>(FSeinWorldSnapshot::CurrentVersion);
-		if (!ComputeCheckpointSchemaDigest(Section.SchemaDigest, OutError)
-			|| !ComputeCheckpointDescriptorDigest(
-				Section.DescriptorDigest, OutError))
-		{
-			return false;
-		}
-
-		FSeinWorldSnapshotReferenceGuard SnapshotGCGuard(Snapshot);
-		{
-			TRACE_CPUPROFILER_EVENT_SCOPE(
-				Sein_SnapshotTransfer_SerializePayload);
-			FMemoryWriter MemWriter(Section.Payload, /*bIsPersistent*/ true);
-			FObjectAndNameAsStringProxyArchive Writer(
-				MemWriter, /*bInLoadIfFindFails*/ false);
-			FSeinWorldSnapshot::StaticStruct()->SerializeItem(
-				Writer,
-				// SerializeItem is non-const by signature; saving does not mutate.
-				const_cast<FSeinWorldSnapshot*>(&Snapshot),
-				nullptr);
-			if (Writer.IsError() || Writer.IsCriticalError()
-				|| MemWriter.IsError() || MemWriter.IsCriticalError()
-				|| MemWriter.Tell() != Section.Payload.Num())
-			{
-				OutError =
-					TEXT("Checkpoint payload serialization failed; no envelope was produced.");
-				return false;
-			}
-		}
-
-		FSeinSnapshotEnvelope Envelope;
-		Envelope.SnapshotTick = Snapshot.CurrentTick;
-		Envelope.CommandProtocolDigest = Snapshot.CommandProtocolDigest;
-		Envelope.CompatibilityDigest = Snapshot.BootstrapCheckpoint.Receipt.StateContractDigest;
-		Envelope.Sections.Add(MoveTemp(Section));
-		{
-			TRACE_CPUPROFILER_EVENT_SCOPE(
-				Sein_SnapshotTransfer_FrameEnvelope);
-			return FSeinSnapshotEnvelopeCodec::Encode(
-				Envelope, OutBytes, OutMetadata, OutError);
-		}
+		return EncodeCheckpointEnvelopeInternal(
+			Snapshot,
+			OutBytes,
+			OutMetadata,
+			OutError,
+			[](FString&) { return true; });
 	}
+
+#if WITH_DEV_AUTOMATION_TESTS
+	bool EncodeCheckpointEnvelopeWithMidpointForTests(
+		const FSeinWorldSnapshot& Snapshot,
+		TArray<uint8>& OutBytes,
+		FSeinSnapshotEnvelopeMetadata& OutMetadata,
+		FString& OutError,
+		TFunctionRef<bool(FString&)> AfterPayloadSerialized)
+	{
+		return EncodeCheckpointEnvelopeInternal(
+			Snapshot,
+			OutBytes,
+			OutMetadata,
+			OutError,
+			AfterPayloadSerialized);
+	}
+#endif
 
 	bool DecodeCheckpointEnvelope(
 		TConstArrayView<uint8> Bytes,

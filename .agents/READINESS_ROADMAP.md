@@ -56,7 +56,7 @@ CI gate because this engine distribution rejects those target types before proje
   - exact end-tick and canonical-root agreement between replay and authoritative server.
 - Replay v9 automatic periodic checkpoints encode and durably append through one ordered background
   pipeline; persistence state advances only after worker success. Integration coverage holds that
-  append before file I/O, accumulates eligible turns to the exact resident bound without false
+  append after file open/positioning but before byte writes, accumulates eligible turns to the exact resident bound without false
   durability or overtaking, and proves the pressure-forced wait drains and publishes a valid ordered
   journal after release. Worker failure and real write denial stop recording without deleting the
   partial journal. Periodic snapshot capture remains main-thread work, but exact revision tracking now
@@ -66,9 +66,12 @@ CI gate because this engine distribution rejects those target types before proje
   final publication, and pressure drains remain main-thread work. A compressed 128-entity,
   25-periodic-checkpoint integration session now proves every ordered encode/append cycle, alternating
   authoritative mutation replay, exact seek/root at every checkpoint, terminal continuation, and
-  stable cache payload/allocation across restore. It waits between forced cycles, so real-device
-  long-session, natural worker overlap, allocator/GC, slow-storage, and exhausted-storage
-  qualification remain open.
+  stable cache payload/allocation across restore. A separate eight-cycle, 128-entity integration
+  fixture advances fixed ticks and authoritative mutations while checkpoint encode is paused after
+  payload serialization and checkpoint append is paused with the real file open at the verified
+  offset. Exact resident command bytes, no false durability/overtaking, callback-only catch-up,
+  checkpoint index/seek/root, and full playback remain exact. Uncontrolled device timing,
+  long-session, allocator/GC/RSS, slow-storage, and exhausted-storage qualification remain open.
 - The packaged run exposed and closed three release-only integration defects: lobby maps now
   materialize relays from their final authoritative slot bindings, Shipping builds no longer hide
   restore work inside compiled-out assertions, and dropped slots can reclaim their retained relay

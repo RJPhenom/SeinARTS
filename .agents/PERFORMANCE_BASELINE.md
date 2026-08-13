@@ -42,6 +42,19 @@ for each forced maintenance cycle, so it proves repeated lifecycle, ordering, re
 cache retention rather than natural worker overlap, target-device latency, RSS, allocator high-water,
 or GC behavior.
 
+**UE 5.8 controlled replay worker-overlap qualification:** 2026-08-12, Framework-profile run
+`SeinARTS.Integration.Network.Replay.ReplayCheckpointWorkersOverlapTicksAndCatchUpWithoutManualDrains-20260812-215135-b0b0321f`.
+A 128-entity session completed eight controlled cycles while fixed ticks and authoritative
+pair-capability mutations advanced across two internal worker boundaries: checkpoint encoding was
+paused after snapshot payload serialization, and checkpoint append was paused after opening and
+positioning the real file handle at the verified offset. Two turns advanced during each held stage.
+The writer retained the independently encoded exact command-byte total, published no file bytes or
+durability counters ahead of either operation, then caught up through production scheduled callbacks
+without manual resolve/drain calls. Exact checkpoint index ticks, capability state, canonical roots,
+seek continuation, and full tick-zero playback all agreed. This is controlled operation-overlap and
+backpressure evidence, not an uncontrolled local-disk timing, target-device latency, RSS, allocator,
+GC, long-session, or exhausted-storage qualification.
+
 **UE 5.8 collision scale microbenchmark:** 2026-08-12, real canonical bootstrap and complete
 fixed ticks with reset packed contacts: 64 movers 1.257 ms median, 128 movers 3.114 ms, and
 256 movers 7.214 ms (`SeinARTS.Perf-20260812-081656-9a968ce2`). The enforced
@@ -114,8 +127,9 @@ The final GPU/resource capture did not reproduce the prior ray-tracing geometry 
    movers; 300/500/1,000 moving-combat populations still require game-world Insights captures.
 4. Complex game AnimBPs, Control Rig, cloth, physics, and unique meshes can exceed the mannequin baseline.
 5. Checkpoint snapshot capture remains synchronous. Cached storage blobs reduce the measured cost,
-   but real-device long-session hitch distribution, allocator high-water/RSS, GC interaction, slow
-   storage, and exhausted-storage behavior remain open soak gates.
+   and controlled internal-midpoint tests cover ordered encode/append overlap and exact resident
+   pressure, but real-device long-session hitch distribution, allocator high-water/RSS, GC
+   interaction, slow storage, and exhausted-storage behavior remain open soak gates.
 6. `Sein.Nav.Show 1` is a correctness visualization, not a performance-safe overlay. A measured 100-mover run rose from 18.62 ms to 64.62 ms before the latest debug caching work; always record the flag.
 7. Multi-client PIE intentionally hosts multiple complete simulations/presentations in one process. Record world count and do not present it as one shipped client's cost.
 

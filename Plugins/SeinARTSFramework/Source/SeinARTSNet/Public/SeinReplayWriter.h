@@ -41,6 +41,7 @@ struct FSeinReplayAsyncAppendResult
 struct FSeinReplayCheckpointEncodeWork;
 #if WITH_DEV_AUTOMATION_TESTS
 struct FSeinReplayAsyncAppendTestGate;
+struct FSeinReplayAsyncCheckpointEncodeTestGate;
 #endif
 
 struct FSeinReplayAsyncCheckpointEncodeResult
@@ -135,13 +136,24 @@ public:
 	void FlushAppliedProgressForTests();
 	/** Wait for checkpoint encoding and start its ordinary background append. */
 	void ResolveCheckpointEncodeForTests();
+	/** Hold the next checkpoint encode after snapshot payload serialization and
+	 *  before envelope framing, without changing the production data path. */
+	void HoldNextCheckpointEncodeForTests();
+	/** Wait until the held checkpoint encode has entered its worker boundary. */
+	bool WaitForHeldCheckpointEncodeForTests(uint32 WaitTimeMilliseconds) const;
+	/** Release any armed or active checkpoint-encode gate. */
+	void ReleaseHeldCheckpointEncodeForTests();
 	/** Fail the next scheduled worker append before touching the file. */
 	void FailNextBackgroundAppendForTests()
 	{
 		bFailNextBackgroundAppendForTests = true;
 	}
-	/** Hold the next background append before it touches the replay file. */
+	/** Hold the next background append after opening and positioning its file
+	 *  handle, but before writing any bytes. */
 	void HoldNextBackgroundAppendForTests();
+	/** Hold the next checkpoint append after its file is open at the verified
+	 *  offset, without consuming the gate on preceding turn/progress frames. */
+	void HoldNextCheckpointAppendForTests();
 	/** Wait until the held append worker has reached its storage boundary. */
 	bool WaitForHeldBackgroundAppendForTests(uint32 WaitTimeMilliseconds) const;
 	/** Release the held append after the writer enters its forced wait. */
@@ -149,6 +161,9 @@ public:
 		uint32 WaitTimeMilliseconds) const;
 	/** Release any armed or active append gate without waiting for pressure. */
 	void ReleaseHeldBackgroundAppendForTests();
+	/** Invalidate callbacks, release gates, and synchronously quiesce both
+	 *  worker stages before a failed test tears down their world and file. */
+	void AbortAndDrainBackgroundWorkForTests();
 	/** Return the exact resident-turn limit used by the production writer. */
 	int32 GetMaximumResidentTurnsForTests() const
 	{
@@ -269,8 +284,14 @@ private:
 	bool bLoggedChronicCheckpointFailure = false;
 #if WITH_DEV_AUTOMATION_TESTS
 	bool bFailNextBackgroundAppendForTests = false;
+	TSharedPtr<FSeinReplayAsyncCheckpointEncodeTestGate, ESPMode::ThreadSafe>
+		NextCheckpointEncodeTestGate;
+	TSharedPtr<FSeinReplayAsyncCheckpointEncodeTestGate, ESPMode::ThreadSafe>
+		ActiveCheckpointEncodeTestGate;
 	TSharedPtr<FSeinReplayAsyncAppendTestGate, ESPMode::ThreadSafe>
 		NextBackgroundAppendTestGate;
+	TSharedPtr<FSeinReplayAsyncAppendTestGate, ESPMode::ThreadSafe>
+		NextCheckpointAppendTestGate;
 	TSharedPtr<FSeinReplayAsyncAppendTestGate, ESPMode::ThreadSafe>
 		ActiveBackgroundAppendTestGate;
 #endif
