@@ -16,6 +16,19 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinHover, Log, All);
 
+namespace
+{
+	FFixedPoint ScalePositiveRadius(FFixedPoint Radius, FFixedPoint Scale)
+	{
+		if (Radius > FFixedPoint::Zero && Scale > FFixedPoint::Zero
+			&& Radius > FFixedPoint::MaxValue / Scale)
+		{
+			return FFixedPoint::MaxValue;
+		}
+		return Radius * Scale;
+	}
+}
+
 UScriptStruct* USeinHoverMovement::GetMovementDataStruct() const
 {
 	return FSeinHoverMovementData::StaticStruct();
@@ -64,7 +77,7 @@ bool USeinHoverMovement::Tick(const FSeinMovementContext& Ctx)
 	const FSeinHoverMovementData& HoverTuning = HoverPtr ? *HoverPtr : DefaultsHover;
 	const FSeinPath& Path = Ctx.Path;
 	int32& CurrentWaypointIndex = Ctx.CurrentWaypointIndex;
-	const FFixedPoint AcceptanceRadiusSq = Ctx.AcceptanceRadiusSq;
+	const FFixedPoint AcceptanceRadius = Ctx.GetAcceptanceRadius();
 	const FFixedPoint DeltaTime = Ctx.DeltaTime;
 	USeinNavigation* Nav = Ctx.Nav;
 
@@ -83,15 +96,22 @@ bool USeinHoverMovement::Tick(const FSeinMovementContext& Ctx)
 
 	// XY-only arrival check. Altitude is independent.
 	{
-		FFixedVector ToFinal = FinalWp - AgentPos;
-		ToFinal.Z = FFixedPoint::Zero;
-		const bool bWithinAcceptance = ToFinal.SizeSquared() <= AcceptanceRadiusSq;
+		const bool bWithinAcceptance =
+			Ctx.IsWithinPlanarAcceptance(AgentPos, FinalWp);
 
-		const FFixedPoint VicinityRadiusSq = AcceptanceRadiusSq * FFixedPoint::FromInt(4);
+		const FFixedPoint VicinityRadius = ScalePositiveRadius(
+			AcceptanceRadius, FFixedPoint::Two);
 		const FFixedPoint OvershootSpeedCap = MovementData.TopSpeed / FFixedPoint::FromInt(3);
-		const bool bOvershoot = IsOvershootArrival(
-			AgentPos, FinalWp, Entity.Transform.Rotation,
-			CurrentSpeed, VicinityRadiusSq, OvershootSpeedCap);
+		const bool bOvershoot = Ctx.HasExactAcceptanceRadius()
+			? IsOvershootArrivalRadius(
+				AgentPos, FinalWp, Entity.Transform.Rotation,
+				CurrentSpeed, VicinityRadius, OvershootSpeedCap)
+			: IsOvershootArrival(
+				AgentPos, FinalWp, Entity.Transform.Rotation,
+				CurrentSpeed,
+				ScalePositiveRadius(
+					Ctx.AcceptanceRadiusSq, FFixedPoint::FromInt(4)),
+				OvershootSpeedCap);
 
 		if (bWithinAcceptance || bOvershoot)
 		{
@@ -104,15 +124,19 @@ bool USeinHoverMovement::Tick(const FSeinMovementContext& Ctx)
 	// Steering target on the (straight-line) polyline.
 	const FFixedPoint LookAhead = (HoverTuning.LookAheadDistance > FFixedPoint::Zero)
 		? HoverTuning.LookAheadDistance : FFixedPoint::FromInt(100);
-	const FFixedVector LookAheadPoint = ResolveLookAheadPoint(AgentPos, Path, CurrentWaypointIndex, LookAhead);
-
-	FFixedVector ToTarget = LookAheadPoint - AgentPos;
-	ToTarget.Z = FFixedPoint::Zero;
+	FFixedVector LookAheadPoint = ResolveLookAheadPoint(
+		AgentPos, Path, CurrentWaypointIndex, LookAhead);
+	LookAheadPoint.Z = AgentPos.Z;
+	const bool bHasTarget = !FFixedVector::IsPlanarDistanceWithin(
+		AgentPos, LookAheadPoint, FFixedPoint::Epsilon);
+	FFixedVector ToTarget = bHasTarget
+		? FFixedVector::GetSafeNormalDifference(AgentPos, LookAheadPoint)
+		: FFixedVector::ZeroVector;
 
 	// Local avoidance — bend the carrot direction around nearby units. Normalized
 	// in/out (angular effect independent of look-ahead distance); only the yaw target
 	// below consumes ToTarget. Soft layer; the floor still guarantees no overlap.
-	if (ToTarget.SizeSquared() > FFixedPoint::Epsilon)
+	if (bHasTarget)
 	{
 		ToTarget = ApplyAvoidanceSteer(Ctx, FFixedVector::GetSafeNormal(ToTarget));
 	}
@@ -123,7 +147,7 @@ bool USeinHoverMovement::Tick(const FSeinMovementContext& Ctx)
 	// constraint — it can pivot in place at full TurnRate regardless of
 	// speed. Same model as Infantry, just with airborne Z handling.
 	FFixedPoint NewYaw = CurrentYaw;
-	if (ToTarget.SizeSquared() > FFixedPoint::Epsilon)
+	if (bHasTarget)
 	{
 		const FFixedPoint DesiredYaw = SeinMath::Atan2(ToTarget.Y, ToTarget.X);
 		const FFixedPoint YawDelta = ShortestAngleDelta(CurrentYaw, DesiredYaw);
@@ -134,9 +158,10 @@ bool USeinHoverMovement::Tick(const FSeinMovementContext& Ctx)
 	Entity.Transform.Rotation = YawOnly(NewYaw);
 
 	// Speed ramp toward MoveSpeed, capped by kinematic arrival brake.
-	FFixedVector ToFinal = FinalWp - AgentPos;
-	ToFinal.Z = FFixedPoint::Zero;
-	const FFixedPoint DistFinal = ToFinal.Size();
+	FFixedVector PlanarFinal = FinalWp;
+	PlanarFinal.Z = AgentPos.Z;
+	const FFixedPoint DistFinal =
+		FFixedVector::DistanceSaturated(AgentPos, PlanarFinal);
 	const FFixedPoint MaxArrivalSpeed = KinematicArrivalSpeedCap(DistFinal, HoverTuning.Deceleration);
 	FFixedPoint TargetSpeed = MovementData.TopSpeed;
 	if (MaxArrivalSpeed < TargetSpeed) TargetSpeed = MaxArrivalSpeed;

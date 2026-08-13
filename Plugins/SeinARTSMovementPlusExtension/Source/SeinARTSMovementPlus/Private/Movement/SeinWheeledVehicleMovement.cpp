@@ -73,6 +73,15 @@ namespace
 	FFixedPoint AbsFP2(FFixedPoint V) { return V < FFixedPoint::Zero ? -V : V; }
 	FFixedPoint MinFP2(FFixedPoint A, FFixedPoint B) { return A < B ? A : B; }
 	FFixedPoint MaxFP2(FFixedPoint A, FFixedPoint B) { return A > B ? A : B; }
+	FFixedPoint ScalePositiveRadius(FFixedPoint Radius, FFixedPoint Scale)
+	{
+		if (Radius > FFixedPoint::Zero && Scale > FFixedPoint::Zero
+			&& Radius > FFixedPoint::MaxValue / Scale)
+		{
+			return FFixedPoint::MaxValue;
+		}
+		return Radius * Scale;
+	}
 
 	/** Robust angular progress along an arc segment: how much of |Sweep| the
 	 *  position at `Pos` has consumed, with the wrap ambiguity resolved by
@@ -474,7 +483,7 @@ bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 	FSeinMovementComponent& MovementData = *Ctx.MovementData;
 	const FSeinPath& Path = Ctx.Path;
 	int32& CurrentWaypointIndex = Ctx.CurrentWaypointIndex;
-	const FFixedPoint AcceptanceRadiusSq = Ctx.AcceptanceRadiusSq;
+	const FFixedPoint AcceptanceRadius = Ctx.GetAcceptanceRadius();
 	const FFixedPoint DeltaTime = Ctx.DeltaTime;
 	USeinNavigation* Nav = Ctx.Nav;
 
@@ -534,30 +543,33 @@ bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 	//    applies — the Tier-2 contract.
 	// -------------------------------------------------------------------
 	{
-		FFixedVector ToFinal = FinalWp - AgentPos;
-		ToFinal.Z = FFixedPoint::Zero;
-		// Far precheck: a goal beyond the fixed-point square wrap (~463 m)
-		// would read as a NEGATIVE SizeSquared and instantly "arrive". Skip
-		// both arrival tests entirely while definitely far.
-		if (!IsPlanarFar(ToFinal))
+		const bool bWithinAcceptance =
+			Ctx.IsWithinPlanarAcceptance(AgentPos, FinalWp);
+		const FFixedPoint VicinityRadius = ScalePositiveRadius(
+			AcceptanceRadius, FFixedPoint::Two);
+		const FFixedPoint OvershootSpeedCap =
+			MovementData.TopSpeed / FFixedPoint::FromInt(3);
+		const FFixedQuaternion TravelRot = bDriveReverse
+			? YawOnly(CurrentYaw + FFixedPoint::Pi) : EntryRot;
+		// The overshoot guard exists to stop a chassis orbiting a goal it
+		// can't circle into — but a maneuver head IS a planned circle-back;
+		// while one is being driven, only the acceptance ring may complete.
+		const bool bOvershoot = !bManeuverMode
+			&& (Ctx.HasExactAcceptanceRadius()
+				? IsOvershootArrivalRadius(
+					AgentPos, FinalWp, TravelRot,
+					CurrentSpeed, VicinityRadius, OvershootSpeedCap)
+				: IsOvershootArrival(
+					AgentPos, FinalWp, TravelRot,
+					CurrentSpeed,
+					ScalePositiveRadius(
+						Ctx.AcceptanceRadiusSq, FFixedPoint::FromInt(4)),
+					OvershootSpeedCap));
+		if (bWithinAcceptance || bOvershoot)
 		{
-			const bool bWithinAcceptance = ToFinal.SizeSquared() <= AcceptanceRadiusSq;
-			const FFixedPoint VicinityRadiusSq = AcceptanceRadiusSq * FFixedPoint::FromInt(4);
-			const FFixedPoint OvershootSpeedCap = MovementData.TopSpeed / FFixedPoint::FromInt(3);
-			const FFixedQuaternion TravelRot = bDriveReverse
-				? YawOnly(CurrentYaw + FFixedPoint::Pi) : EntryRot;
-			// The overshoot guard exists to stop a chassis orbiting a goal it
-			// can't circle into — but a maneuver head IS a planned circle-back;
-			// while one is being driven, only the acceptance ring may complete.
-			const bool bOvershoot = !bManeuverMode && IsOvershootArrival(
-				AgentPos, FinalWp, TravelRot,
-				CurrentSpeed, VicinityRadiusSq, OvershootSpeedCap);
-			if (bWithinAcceptance || bOvershoot)
-			{
-				DispatchArrivalMotion(Ctx);
-				CurrentSteer = FFixedPoint::Zero;
-				return true;
-			}
+			DispatchArrivalMotion(Ctx);
+			CurrentSteer = FFixedPoint::Zero;
+			return true;
 		}
 	}
 
@@ -586,26 +598,27 @@ bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 
 	// Final-approach kinematic cap (v^2 = 2*a*d toward the acceptance-ring
 	// EDGE) + optional linear slowdown floor — shared by every steering mode.
-	// DistFinal is the far-sentinel when the goal is beyond the fixed-point
-	// square wrap: no braking (or near-goal logic) applies out there.
+	// DistFinal saturates only beyond the representable scalar range, where no
+	// braking or near-goal policy should apply.
 	FFixedPoint MaxArrivalSpeed = FFixedPoint::FromInt(1000000);
-	FFixedPoint DistFinal = FFixedPoint::FromInt(100000);
+	FFixedPoint DistFinal;
 	{
-		FFixedVector ToFinal = FinalWp - AgentPos;
-		ToFinal.Z = FFixedPoint::Zero;
-		if (!IsPlanarFar(ToFinal))
+		FFixedVector PlanarFinal = FinalWp;
+		PlanarFinal.Z = AgentPos.Z;
+		DistFinal = FFixedVector::DistanceSaturated(
+			AgentPos, PlanarFinal);
+		const FFixedPoint Acceptance = Ctx.GetAcceptanceRadius();
+		const FFixedPoint BrakeDist = (DistFinal > Acceptance)
+			? (DistFinal - Acceptance)
+			: FFixedPoint::Zero;
+		MaxArrivalSpeed = KinematicArrivalSpeedCap(
+			BrakeDist, Wheeled.Deceleration);
+		if (Wheeled.ArrivalSlowdownDistance > FFixedPoint::Zero
+			&& DistFinal < Wheeled.ArrivalSlowdownDistance)
 		{
-			DistFinal = ToFinal.Size();
-			const FFixedPoint Acceptance = Ctx.NavData ? Ctx.NavData->AcceptanceRadius : FFixedPoint::Zero;
-			const FFixedPoint BrakeDist = (DistFinal > Acceptance)
-				? (DistFinal - Acceptance)
-				: FFixedPoint::Zero;
-			MaxArrivalSpeed = KinematicArrivalSpeedCap(BrakeDist, Wheeled.Deceleration);
-			if (Wheeled.ArrivalSlowdownDistance > FFixedPoint::Zero && DistFinal < Wheeled.ArrivalSlowdownDistance)
-			{
-				const FFixedPoint LinearCap = MovementData.TopSpeed * (DistFinal / Wheeled.ArrivalSlowdownDistance);
-				if (LinearCap < MaxArrivalSpeed) MaxArrivalSpeed = LinearCap;
-			}
+			const FFixedPoint LinearCap = MovementData.TopSpeed
+				* (DistFinal / Wheeled.ArrivalSlowdownDistance);
+			if (LinearCap < MaxArrivalSpeed) MaxArrivalSpeed = LinearCap;
 		}
 	}
 
@@ -884,19 +897,22 @@ bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 			? Wheeled.LookAheadDistance : FFixedPoint::FromInt(100);
 		const FFixedPoint LookAhead = ComputeAdaptiveLookAhead(
 			LookAheadFloor, Wheeled.LookAheadTimeHorizon, AbsCurrentSpeed);
-		const FFixedVector LookAheadPoint = ResolveLookAheadPoint(
+		FFixedVector LookAheadPoint = ResolveLookAheadPoint(
 			AgentPos, Path, CurrentWaypointIndex, LookAhead);
-
-		FFixedVector ToTarget = LookAheadPoint - AgentPos;
-		ToTarget.Z = FFixedPoint::Zero;
+		LookAheadPoint.Z = AgentPos.Z;
+		const bool bHasTarget = !FFixedVector::IsPlanarDistanceWithin(
+			AgentPos, LookAheadPoint, FFixedPoint::Epsilon);
+		FFixedVector ToTarget = bHasTarget
+			? FFixedVector::GetSafeNormalDifference(AgentPos, LookAheadPoint)
+			: FFixedVector::ZeroVector;
 
 		// Local avoidance — bend the carrot direction in the FORWARD frame,
 		// BEFORE the auto-reverse yaw-flip, so the dodge isn't inverted when
 		// backing up. Soft layer; the penetration floor still guarantees no
 		// overlap.
-		if (ToTarget.SizeSquared() > FFixedPoint::Epsilon)
+		if (bHasTarget)
 		{
-			ToTarget = ApplyAvoidanceSteer(Ctx, FFixedVector::GetSafeNormal(ToTarget));
+			ToTarget = ApplyAvoidanceSteer(Ctx, ToTarget);
 		}
 #if UE_ENABLE_DEBUG_DRAWING
 		DebugSteerTarget = LookAheadPoint;

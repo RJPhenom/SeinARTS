@@ -390,7 +390,7 @@ function Get-QualifiedMatrixReceiptPath(
 	$InstallationDiagnosticReceipt = [string]$Matrix.installationDiagnosticReceipt
 	$ExpectedInstallationDiagnosticReceipt = Join-Path $RepoRoot `
 		"Saved\ConsumerMatrix\$Profile\Saved\Qualification\installation-diagnostic.json"
-	if ($Matrix.schemaVersion -ne 5 -or
+	if ($Matrix.schemaVersion -ne 6 -or
 		[string]$Matrix.profile -cne $Profile -or
 		[string]$Matrix.qualificationRunId -cne $MatrixRunId -or
 		[string]$Matrix.pluginSource -cne 'PackagedArtifacts' -or
@@ -446,13 +446,14 @@ function Get-QualifiedMatrixReceiptPath(
 			[string]$InstallationDiagnostic.simulationContentManifest) {
 		throw "Installation diagnostic for '$Profile' does not bind the qualified release profile."
 	}
+	$RequiresPackagedRuntime = $Profile -in @('Framework', 'MovementPlus')
 	if (-not $PackageOnly -and
 		([string]$Matrix.clientBuild -cne 'Passed' -or
 		[string]$Matrix.serverBuild -cne 'Passed' -or
 		[string]$Matrix.cookAndPackagedLoad -cne 'Passed' -or
-		($Profile -eq 'Framework' -and
+		($RequiresPackagedRuntime -and
 			[string]$Matrix.packagedRuntimeQualification -cne 'Passed') -or
-		($Profile -ne 'Framework' -and
+		(-not $RequiresPackagedRuntime -and
 			[string]$Matrix.packagedRuntimeQualification -cne 'NotApplicable'))) {
 		throw "Consumer matrix receipt '$Path' used a release-prohibited skip or failed a required gate."
 	}
@@ -477,9 +478,10 @@ function Get-QualifiedMatrixReceiptPath(
 			(Get-FileHash -LiteralPath $HeaderPath -Algorithm SHA256).Hash) {
 		throw "Public-header evidence for '$Profile' is missing or does not match its matrix receipt."
 	}
-	if ($Profile -eq 'Framework' -and -not $PackageOnly) {
+	if ($RequiresPackagedRuntime -and -not $PackageOnly) {
 		$RuntimePath = Join-Path $RepoRoot `
-			'Saved\ConsumerMatrix\Framework\Saved\RuntimeQualification\runtime-result.json'
+			("Saved\ConsumerMatrix\{0}\Saved\RuntimeQualification\runtime-result.json" -f
+				$Profile)
 		$Runtime = Get-Content -Raw -LiteralPath $RuntimePath | ConvertFrom-Json
 		$RequiredRuntimeFields = @(
 			'listenServer', 'twoPlayerLobbyTravel', 'lockstepCommandFlow',
@@ -488,13 +490,51 @@ function Get-QualifiedMatrixReceiptPath(
 			'pairCapabilityCommandFlow',
 			'pairCapabilityReconnectPersistence',
 			'pairCapabilityReplayWitness')
-		if ($Runtime.schemaVersion -ne 2 -or
+		$ExpectedMovementResult = if ($Profile -eq 'MovementPlus') {
+			'Passed'
+		} else {
+			'NotApplicable'
+		}
+		$ExpectedMovementClass = if ($Profile -eq 'MovementPlus') {
+			'/Script/SeinARTSMovementPlus.SeinWheeledVehicleMovement'
+		} else {
+			'NotApplicable'
+		}
+		$ExpectedMovementDestination = if ($Profile -eq 'MovementPlus') {
+			'214748364800000:21474836480000:0'
+		} else {
+			'NotApplicable'
+		}
+		$MovementEvidenceFields = @(
+			'serverMovementState', 'clientMovementState',
+			'reconnectMovementState', 'replayMovementState',
+			'serverMovementTelemetry', 'clientMovementTelemetry',
+			'reconnectMovementTelemetry', 'replayMovementTelemetry')
+		if ($Runtime.schemaVersion -ne 4 -or
+			[string]$Runtime.profile -cne $Profile -or
+			[string]::IsNullOrWhiteSpace([string]$Runtime.executableSha256) -or
 			@($RequiredRuntimeFields | Where-Object {
 				[string]$Runtime.$_ -cne 'Passed' }).Count -ne 0 -or
+			[string]$Runtime.movementPlusCommandFlow -cne
+				$ExpectedMovementResult -or
+			[string]$Runtime.movementPlusReconnectPersistence -cne
+				$ExpectedMovementResult -or
+			[string]$Runtime.movementPlusReplayWitness -cne
+				$ExpectedMovementResult -or
+			[string]$Runtime.movementClass -cne $ExpectedMovementClass -or
+			[string]$Runtime.movementDestination -cne
+				$ExpectedMovementDestination -or
+			@($MovementEvidenceFields | Where-Object {
+				if ($Profile -eq 'MovementPlus') {
+					[string]::IsNullOrWhiteSpace([string]$Runtime.$_)
+				} else {
+					[string]$Runtime.$_ -cne 'NotApplicable'
+				}
+			}).Count -ne 0 -or
 			[string]$Runtime.replayArtifact -cne 'RemovedAfterVerification' -or
 			[string]$Matrix.runtimeResultSha256 -cne
 				(Get-FileHash -LiteralPath $RuntimePath -Algorithm SHA256).Hash) {
-			throw 'Framework runtime evidence did not pass the complete network, reconnect, and replay contract.'
+			throw "$Profile runtime evidence did not pass its complete network, reconnect, and replay contract."
 		}
 	}
 	return $Path
@@ -596,9 +636,14 @@ function New-ReleaseEvidenceArchive
 		$EvidenceSourcePaths.Add((Join-Path $RepoRoot (
 			'Saved\ConsumerMatrix\{0}\Saved\Qualification\installation-diagnostic.json' -f $ProfileName)))
 	}
-	$RuntimeSource = Join-Path $RepoRoot `
-		'Saved\ConsumerMatrix\Framework\Saved\RuntimeQualification\runtime-result.json'
-	$EvidenceSourcePaths.Add($RuntimeSource)
+	$RuntimeSources = [ordered]@{}
+	foreach ($RuntimeProfile in @('Framework', 'MovementPlus')) {
+		$RuntimeSource = Join-Path $RepoRoot (
+			'Saved\ConsumerMatrix\{0}\Saved\RuntimeQualification\runtime-result.json' -f
+				$RuntimeProfile)
+		$RuntimeSources[$RuntimeProfile] = $RuntimeSource
+		$EvidenceSourcePaths.Add($RuntimeSource)
+	}
 	foreach ($Document in @('COMPATIBILITY.md', 'UPGRADING.md')) {
 		$EvidenceSourcePaths.Add((Join-Path $DocumentationRoot $Document))
 	}
@@ -695,9 +740,12 @@ function New-ReleaseEvidenceArchive
 		throw "Release evidence expected 5 exact consumer receipts, found $($Receipt.matrixReceipts.Count)."
 	}
 
-	$RuntimeDestination = Join-Path $EvidenceRoot 'framework-runtime-result.json'
-	Copy-Item -LiteralPath $RuntimeSource `
-		-Destination $RuntimeDestination -Force
+	foreach ($RuntimeProfile in $RuntimeSources.Keys) {
+		$RuntimeDestination = Join-Path $EvidenceRoot (
+			'{0}-runtime-result.json' -f $RuntimeProfile.ToLowerInvariant())
+		Copy-Item -LiteralPath $RuntimeSources[$RuntimeProfile] `
+			-Destination $RuntimeDestination -Force
+	}
 	foreach ($Document in @('COMPATIBILITY.md', 'UPGRADING.md')) {
 		Copy-Item -LiteralPath (Join-Path $DocumentationRoot $Document) `
 			-Destination (Join-Path $EvidenceRoot $Document) -Force

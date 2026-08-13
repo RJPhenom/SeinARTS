@@ -101,7 +101,7 @@ private:
 	FFixedVector Destination;
 
 	/** Resolved at first TickAction from FSeinNavigationComponent::AcceptanceRadius. */
-	FFixedPoint AcceptanceRadiusSq = FFixedPoint::Zero;
+	FFixedPoint AcceptanceRadius = FFixedPoint::Zero;
 
 	int32 CurrentWaypointIndex = 0;
 	bool bPathResolved = false;
@@ -124,8 +124,8 @@ private:
 	 *  many meters ahead. An agent walking from its start position toward
 	 *  `Waypoints[0]` is on-path, but a naive perpendicular-to-polyline
 	 *  measurement reads it as "off-path" by the full agent→Waypoints[0]
-	 *  distance (T<0 in `OffPathSegDistSqXY` clamps to the segment-start
-	 *  endpoint). Storing the origin lets the drift calc include an
+	 *  distance (projection before the segment start clamps to that endpoint).
+	 *  Storing the origin lets the drift predicate include an
 	 *  implicit `[PathOriginAgentPos → Waypoints[0]]` segment, capturing
 	 *  the "approach the first waypoint along its line" semantic. */
 	FFixedVector PathOriginAgentPos = FFixedVector::ZeroVector;
@@ -146,11 +146,11 @@ private:
 	 *  physically occupy (a nav-reachable cell whose body footprint is wall/crowd-blocked) never
 	 *  satisfies the harness arrival — it is never within AcceptanceRadius, and it heads INTO the
 	 *  obstacle so the overshoot guard (which needs "heading away") won't fire — so without this it
-	 *  would push forever. `BestDistToFinalSq` is the closest planar distance² reached this approach
+	 *  would push forever. `BestDistToFinal` is the closest planar distance reached this approach
 	 *  (a monotonic high-water, so jitter/orbit never resets the clock); `TimeStalledNearGoal` accrues
 	 *  while near + not closing. Once it stalls a short while inside the tight band, the move arrives —
 	 *  this is as near as the body fits. See TickAction. */
-	FFixedPoint BestDistToFinalSq = FFixedPoint::FromInt(1000000);
+	FFixedPoint BestDistToFinal = FFixedPoint::FromInt(1000);
 	FFixedPoint TimeStalledNearGoal = FFixedPoint::Zero;
 
 	/** Movement-trace bookkeeping only (LogSeinMoveTrace): consecutive ticks the
@@ -189,8 +189,8 @@ private:
 	/** Escape leg in flight: `Path` temporarily holds [AgentPos → EscapeTarget]. */
 	bool bEscapeMode = false;
 	FFixedVector EscapeTarget = FFixedVector::ZeroVector;
-	/** Escape-leg acceptance² (entry-gated so the leg can never instant-arrive). */
-	FFixedPoint EscapeAcceptSq = FFixedPoint::Zero;
+	/** Escape-leg acceptance radius (entry-gated so the leg can never instant-arrive). */
+	FFixedPoint EscapeAcceptanceRadius = FFixedPoint::Zero;
 	/** Per-attempt hold clock while the escape leg itself is walked. */
 	FFixedPoint EscapeHoldTime = FFixedPoint::Zero;
 	/** CONSECUTIVE failed escape attempts within the current stuck episode
@@ -214,7 +214,7 @@ private:
 	 *  its final waypoint no matter how small the authored acceptance is; that
 	 *  stop belongs to the failsafe (settle: as near as the body fits), never
 	 *  to the ladder (escaping it would oscillate forever). */
-	FFixedPoint StallBandSq = FFixedPoint::Zero;
+	FFixedPoint StallBand = FFixedPoint::Zero;
 
 	/** BORROWED reference to the entity's PERSISTENT movement instance,
 	 *  acquired on first tick from USeinMovementSubsystem's registry (CP2.1,

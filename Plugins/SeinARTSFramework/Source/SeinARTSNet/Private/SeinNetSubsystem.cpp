@@ -597,6 +597,7 @@ void USeinNetSubsystem::ResetLockstepEpochState(UWorld* RetiringWorld)
 	LastWorldStateRootReportedTurn = -1;
 	DeterminismSessionFailure = FSeinDeterminismSessionFailure();
 	bDeterminismSessionFailureAuthoritative = false;
+	LocalDeterminismFailureDiagnostic.Reset();
 	PendingDeterminismSessionFailureReport.Reset();
 	PendingAuthenticatedDeterminismSessionFailures.Reset();
 	BootstrapConsensus.Reset();
@@ -2786,16 +2787,12 @@ void USeinNetSubsystem::OnLogout(AGameModeBase* GameMode, AController* Exiting)
 			Slot.Value, *GetNameSafe(Exiting), GetDroppedToAITakeoverSeconds());
 	}
 
-	// Re-check open turns — the just-dropped slot might be the one we were
-	// waiting on. Inject a heartbeat immediately for the most recent open
-	// turn so the gate completes.
+	// Cover both existing partial turns and unopened zero-author turns. A drop
+	// immediately after resync activation can occur before either author has
+	// opened the next gate turn; GetPendingTurnIDs alone cannot see that gap.
 	if (bAnyMarkedDropped)
 	{
-		for (const int32 TurnId : TurnAggregator.GetPendingTurnIDs())
-		{
-			InjectDroppedSlotHeartbeats(TurnId, /*bAllowAICommands=*/false);
-			ServerCheckTurnComplete(TurnId);
-		}
+		BackfillSuppressedSlotHeartbeatsThroughPipelineWindow();
 	}
 
 	// World-root gossip compares live simulation peers, not occupied gameplay slots.
@@ -6201,6 +6198,29 @@ void USeinNetSubsystem::InjectDroppedSlotHeartbeats(
 	}
 }
 
+void USeinNetSubsystem::
+	BackfillSuppressedSlotHeartbeatsThroughPipelineWindow()
+{
+	if (!IsServer() || !TurnAggregator.IsConfigured())
+	{
+		return;
+	}
+
+	TArray<int32> Turns = TurnAggregator.GetPendingTurnIDs();
+	const int32 CurrentTurn = GetCurrentTurn();
+	const int32 PipelineEndTurn = CurrentTurn + GetInputDelayTurns();
+	for (int32 Turn = CurrentTurn; Turn <= PipelineEndTurn; ++Turn)
+	{
+		Turns.AddUnique(Turn);
+	}
+	Turns.Sort();
+	for (const int32 Turn : Turns)
+	{
+		InjectDroppedSlotHeartbeats(Turn, /*bAllowAICommands=*/false);
+		ServerCheckTurnComplete(Turn);
+	}
+}
+
 bool USeinNetSubsystem::HandleAIEmit(FSeinPlayerID OwnedSlot, const FSeinCommand& Command)
 {
 	// This adapter is normally unbound outside an active server topology. If a
@@ -6531,11 +6551,7 @@ void USeinNetSubsystem::ServerHandleResyncRequest(
 	// pending turn with heartbeats NOW, or the whole session's gate stays
 	// wedged on this slot forever and the sim boundary that drives the rest
 	// of this flow never fires again. Mirrors the OnLogout drop path.
-	for (const int32 PendingTurn : TurnAggregator.GetPendingTurnIDs())
-	{
-		InjectDroppedSlotHeartbeats(PendingTurn, /*bAllowAICommands=*/false);
-		ServerCheckTurnComplete(PendingTurn);
-	}
+	BackfillSuppressedSlotHeartbeatsThroughPipelineWindow();
 	// And re-evaluate outstanding world-root checks against the reduced
 	// reporter set — a due checkpoint waiting on this now-suppressed peer
 	// would otherwise wedge until it expires as an authoritative session
@@ -7322,16 +7338,9 @@ void USeinNetSubsystem::SimulateSlotDisconnect(FSeinPlayerID Slot)
 		TEXT("[Drop] SimulateSlotDisconnect: slot %u marked DROPPED. Heartbeat injection active; AI takeover scheduled in %.1fs."),
 		Slot.Value, GetDroppedToAITakeoverSeconds());
 
-	// Inject heartbeats for any open turns so the gate doesn't stall.
-	const TArray<int32> OpenTurns = TurnAggregator.GetPendingTurnIDs();
-	if (!OpenTurns.IsEmpty())
-	{
-		for (const int32 T : OpenTurns)
-		{
-			InjectDroppedSlotHeartbeats(T, /*bAllowAICommands=*/false);
-			ServerCheckTurnComplete(T);
-		}
-	}
+	// Cover both already-open turns and the full input-delay pipeline. A slot
+	// can disconnect before any author has opened a future gate turn.
+	BackfillSuppressedSlotHeartbeatsThroughPipelineWindow();
 
 	if (!ServerWorldStateRootReports.IsEmpty())
 	{
@@ -7522,27 +7531,39 @@ void USeinNetSubsystem::ServerCheckTurnComplete(
 	// short-lived recovery-tail source; persistent replay storage is independent.
 	RetainedAssembledTurns.Add(TurnId, OpaqueAssembled);
 
-	// Listen hosts receive through their owned relay. A dedicated authority has
-	// no local relay/RPC loopback, so feed its gate from the same canonical
-	// assembled payload before fanning out to remote peers.
-	BufferAssembledTurnForDedicatedAuthority(TurnId, WireCanonicalAssembled);
+	// Feed a co-located authority directly from the exact decoded fan-out bytes.
+	// Depending on a local Client RPC can strand a listen host when a turn is
+	// committed synchronously from logout/reconnect recovery.
+	const bool bBufferedLocalAuthority =
+		BufferAssembledTurnForLocalAuthority(
+			TurnId, WireCanonicalAssembled);
 
 	for (const TWeakObjectPtr<ASeinNetRelay>& Wp : Relays)
 	{
 		if (ASeinNetRelay* Target = Wp.Get())
 		{
+			const APlayerController* OwnerController =
+				Cast<APlayerController>(Target->GetOwner());
+			if (bBufferedLocalAuthority
+				&& OwnerController
+				&& OwnerController->IsLocalController())
+			{
+				continue;
+			}
 			Target->Client_ReceiveTurn(ActiveProtocolContext, TurnId, OpaqueAssembled);
 		}
 	}
 }
 
-void USeinNetSubsystem::BufferAssembledTurnForDedicatedAuthority(
+bool USeinNetSubsystem::BufferAssembledTurnForLocalAuthority(
 	int32 TurnId, const TArray<FSeinCommand>& Commands)
 {
-	if (IsDedicatedAuthority())
+	if (IsServer())
 	{
 		BufferReceivedTurn(TurnId, Commands);
+		return true;
 	}
+	return false;
 }
 
 void USeinNetSubsystem::BufferReceivedTurn(int32 TurnId, const TArray<FSeinCommand>& Commands)
@@ -7824,6 +7845,7 @@ void USeinNetSubsystem::MaybeSubmitWorldStateRootCheck(int32 JustFinishedTurn)
 	FString RootError;
 	if (!ResolveLocalWorldStateRoot(LocalWorldRoot, RootError))
 	{
+		LocalDeterminismFailureDiagnostic = RootError.Left(512);
 		UE_LOG(LogSeinNet, Error,
 			TEXT("MaybeSubmitWorldStateRootCheck: canonical root unavailable at due checkpoint turn %d; failing the lockstep epoch: %s"),
 			JustFinishedTurn, *RootError);

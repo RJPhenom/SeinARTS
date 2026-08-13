@@ -1,12 +1,12 @@
 # SeinARTS Project State
 
-**State date:** 2026-08-12
-**Baseline branch:** `codex/integration-candidate`
+**State date:** 2026-08-13
+**Baseline branch:** `main`
 **Stabilization commit:** `27cb490` (`Stabilize post-audit performance and determinism`)
 **Cleanup boundary:** `1bebf91` (`Clean and harden the post-audit baseline`)
 **Content/consumer boundary:** `1438051` (`Add clean downstream consumer verification`)
 **Reporter-bootstrap fix:** `89f1b5d` (`Fix remote determinism reporter bootstrap`)
-**Remote posture:** local `main` and the integration-candidate branch have not been pushed in this pass.
+**Remote posture:** this state is intended for the next clean `main` integration and push.
 
 ## Stabilized capability boundary
 
@@ -52,10 +52,10 @@ formation/resolver state coverage, provider teardown, and downstream content own
 
 | Gate | Result |
 |---|---:|
-| `SeinARTS.Unit`, profile All | 432 passed, 0 failed |
-| `SeinARTS.Unit`, profile Framework | 414 passed, 0 failed |
-| `SeinARTS.Integration`, profile All | 24 passed, 0 failed |
-| `SeinARTS.Integration`, profile Framework | 18 passed, 0 failed |
+| `SeinARTS.Unit`, profile All | 442 passed, 0 failed |
+| `SeinARTS.Unit`, profile Framework | 424 passed, 0 failed |
+| `SeinARTS.Integration`, profile All | 25 passed, 0 failed |
+| `SeinARTS.Integration`, profile Framework | 19 passed, 0 failed |
 | `SeinARTS.Determinism`, profile All | 40 passed, 0 failed |
 | `SeinARTS.Determinism`, profile Framework | 30 passed, 0 failed |
 | `SeinARTS.Editor`, profile All | 38 passed, 0 failed |
@@ -64,15 +64,19 @@ formation/resolver state coverage, provider teardown, and downstream content own
 | `SeinARTS.Sim`, profile Framework | 27 passed, 0 failed |
 | `SeinARTS.Perf`, profile All | 4 passed, 0 failed; cover 128x128 averaged 11.998 ms; public 128-member preview measured 1.255/1.337 ms median/p95 coverless and 3.181/3.324 ms dense; collision full-tick medians 1.257/3.114/7.214 ms at 64/128/256 movers |
 | `SeinARTS.Perf`, profile Framework | 2 passed, 0 failed; checkpoint snapshot-capture medians 2.037/7.815/15.288 ms at 100/500/1,000 moving entities; collision full-tick medians 1.401/3.035/7.494 ms at 64/128/256 movers |
-| Fresh-process collision trace | 2026-08-12 serial and parallel roots/poses identical for all 120 ticks; final root `C7F80677E49318A724E8BD8A99C57022`, pose `0x8B576390ECC600E1` |
+| Fresh-process collision trace | 2026-08-13 serial and parallel roots/poses identical for all 120 ticks; final root `D3851A40010AA2B04998D131EAC6A804`, pose `0x8B576390ECC600E1` |
 | `SeinARTSEditor Win64 Development` | succeeded / target current |
 | `SeinARTS Win64 Shipping` | succeeded / target current |
+| Focused Core boundary/epoch | 2026-08-13 `SeinARTS.Unit.Core` Framework profile: 131 passed, including opposite-endpoint saturated distance, maximum-diagonal normalization, and exact `SeinARTS.Replay.5` behavior epoch |
+| Focused Net protocol | 2026-08-13 `SeinARTS.Unit.Network.Protocol` Framework profile: 40 passed through production listen-authority commit and disconnect pipeline-backfill entry points |
+| Focused Movement+ | 2026-08-13 unit 5/5, determinism 9/9, movement snapshot 8/8, and continuation 1/1 passed |
 | Clean consumer: Framework | fresh 2026-08-12 Editor + Shipping build, exact map load, cook/package, real Shipping startup passed |
 | Clean consumer: Framework + Cover only | fresh 2026-08-12 Editor + Shipping build, exact map load, cook/package, real Shipping startup passed; Squad/bridge absent |
 | Clean consumer: Framework + Squad only | fresh 2026-08-12 Editor + Shipping build, exact map load, cook/package, real Shipping startup passed; Cover/bridge absent |
-| Clean consumer: Framework + Movement+ | fresh 2026-08-12 Editor + Shipping build, exact map load, cook/package, real Shipping startup passed |
+| Clean consumer: Framework + Movement+ | 2026-08-13 Editor + Shipping build, exact map load, cook/package, real Shipping startup, two-peer lockstep movement, resync/reconnect continuation, and checkpoint-seek replay passed |
 | Clean consumer: all five production plugins | fresh 2026-08-12 Editor + Shipping build, exact map load, cook/package, real Shipping startup passed; bridge mounted/started/shut down |
 | Packaged Framework multiplayer/replay | 2026-08-12 Shipping listen server + client completed a 2-of-2 equal world-root checkpoint at turn 5, then passed lobby travel, lockstep and pair-capability commands, forced resync, physical reconnect, pair-capability persistence, replay witness/seek, and exact terminal-root agreement at tick 239 (`753757B5C66CAB58D25E1075AF4E41A6`) |
+| Packaged Movement+ multiplayer/replay | 2026-08-13 run `818e493845364517a476b594ccf25809` regenerated a Shipping listen server + client and passed two-peer root gossip, a real 50,000/5,000-unit wheeled Move command, exact instantiated-class/target/telemetry witnesses, forced resync, physical reconnect, exact movement/capability persistence, grant/revoke, and checkpoint-seek replay at tick 251 (`639951F0AE0379BF84FD98044686F64D`); executable SHA-256 `215F1AE76D1075FE51E3A1A7966A2F48C6D95458F0DB3782DF2C44089D2FB016` |
 | Generated simulation-content manifest | All profile: 10 contributors, 93 records, digest `ECADF1E2FA666B99B967ECDBD5BD5E57`; Framework profile: 6 contributors, 93 records, digest `49DEFB62286E02460B89441C0D418543` |
 | Staged diff validation | no whitespace errors; line-ending notices only |
 
@@ -110,6 +114,30 @@ Latest local evidence is under ignored `Saved/Automation/`:
 - `SeinARTS.Editor-20260811-130509-9e408b46` (All, 36 passed)
 - `SeinARTS.Determinism.MovementPlus-20260811-130229-79933669` (9 passed,
   including replay-file and bounded reconnect continuation)
+- `SeinARTS.Unit.Core-20260813-005443-4b9170b5` (Framework, 130 passed,
+  including exact saturated long-range fixed-vector magnitude)
+- `SeinARTS.Unit.Network.Protocol-20260813-013344-fb6e6463` (Framework,
+  40 passed, including zero-author suppressed-slot backfill and listen-authority turn delivery)
+- `SeinARTS.Unit.MovementPlus-20260813-013531-ecfa8b25` (All, 5 passed)
+- `SeinARTS.Determinism.MovementPlus-20260813-013610-4b4fbc01` (All, 9 passed)
+- `SeinARTS.Editor.Snapshot.Movement-20260813-013650-4dd4d203` (All, 8 passed)
+- `SeinARTS.Unit.Movement.Continuation-20260813-013713-82f0ff5c` (All, 1 passed)
+- `SeinARTS.Unit.Movement.LongRange-20260813-052542-8f679b7b` (Framework,
+  6 passed, including exact sloped endpoint clamping and legacy raw-unit squared-radius semantics)
+- `SeinARTS.Unit-20260813-053858-20c9324c` (All, 442 passed)
+- `SeinARTS.Determinism-20260813-054003-4ba20115` (All, 40 passed)
+- `SeinARTS.Integration-20260813-054035-efcf90b3` (All, 25 passed)
+- `SeinARTS.Sim-20260813-054117-61733d2f` (All, 30 passed)
+- `SeinARTS.Editor-20260813-054135-0802c166` (All, 38 passed)
+- `SeinARTS.Editor.Snapshot.Movement-20260813-054152-b4a63a2e` (All, 8 passed)
+- `SeinARTS.Unit-20260813-054208-aee2ef60` (Framework, 424 passed)
+- `SeinARTS.Determinism-20260813-054256-921d00b5` (Framework, 30 passed)
+- `SeinARTS.Integration-20260813-054320-b1924431` (Framework, 19 passed)
+- `SeinARTS.Sim-20260813-054402-2499ed98` (Framework, 27 passed)
+- `SeinARTS.Editor-20260813-054420-a0129ca4` (Framework, 36 passed)
+- `SeinARTS.Determinism.Process.SerialCollisionTrace-20260813-054436-298a6a1a`
+  and `SeinARTS.Determinism.Process.ParallelCollisionTrace-20260813-054453-6a2f1605`
+  (fresh processes; all 120 canonical roots and raw poses matched exactly)
 - `SeinARTS.Determinism.Process.SerialCollisionTrace-20260811-130538-ba506961`
 - `SeinARTS.Determinism.Process.ParallelCollisionTrace-20260811-130553-1a34b7ac`
 - `SeinARTS.Unit.Network-20260811-200749-dfabc4c1` (78 passed, including
@@ -374,8 +402,12 @@ post-collision transforms drive wheel/track motion while movement-driver velocit
 throttle/brake, so correction displacement cannot masquerade as input. Missing movement instances,
 class swaps, and snapshot restore clear stale telemetry. Raw render state is not Blueprint-visible,
 and validation blocks presentation-only getters from deterministic movement and Ability graphs.
-Focused relationship Unit/Determinism tests, telemetry tests, a
-real replay-file continuation, bounded reconnect transfer, and both broad test profiles are green.
+Focused relationship Unit/Determinism tests, telemetry tests, replay-file continuation, bounded
+reconnect transfer, and both broad test profiles are green. A generated downstream Shipping
+Movement+ consumer now also executes a real long-range wheeled command through two peers, resync,
+physical reconnect, exact terminal movement state, and checkpoint-seek replay. That qualification
+exposed and closed fixed-point squared-distance wrap beyond the 32.32 squared range, an unopened
+zero-author reconnect gate, and listen-authority dependence on local Client RPC loopback.
 The human PIE animation/performance matrix remains open; the supplied two-player PIE run found no
 framework regression.
 

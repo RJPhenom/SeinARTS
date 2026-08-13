@@ -11,7 +11,7 @@
   It then creates a consumer-owned map, generates the consumer-owned
   simulation-content manifest, loads the exact maps, cooks/packages them,
   smoke-loads the packaged game, and drives a real packaged
-  listen-server/client/replay qualification for the Framework profile.
+  listen-server/client/replay qualification for Framework and Movement+.
 
   No generated artifact is written to the repository's tracked Output or Docs
   trees. The generated projects are disposable evidence, not source fixtures.
@@ -73,6 +73,7 @@ $EditorCmd = Join-Path $EngineRoot 'Engine\Binaries\Win64\UnrealEditor-Cmd.exe'
 $RunUat = Join-Path $EngineRoot 'Engine\Build\BatchFiles\RunUAT.bat'
 $GeneratedRoot = Join-Path $RepoRoot 'Saved\ConsumerMatrix'
 $PluginSourceRoot = Join-Path $RepoRoot 'Plugins'
+$ConsumerGenerationSchemaVersion = 5
 $ArtifactHashes = @{}
 $ArtifactVersion = $null
 $QualificationRunId = if ($QualificationRunId) {
@@ -405,21 +406,21 @@ function Invoke-ManifestBootstrap(
 		return
 	}
 
-	# On the first-ever launch there is necessarily no configured manifest yet.
-	# USeinWorldSubsystem reports that absence while the Python commandlet's
-	# transient editor world starts, which makes UE return 1 even though the
-	# builder subsequently succeeds. Permit only those two exact protocol errors;
-	# the next editor invocation must start clean from the generated asset.
+	# The bootstrap world necessarily starts before the newly generated profile
+	# exists. It may therefore see either no configured manifest or a stale
+	# contributor-set profile. Permit only those exact protocol errors; the next
+	# editor invocation must start clean from the generated asset.
 	$UnexpectedErrors = @($BootstrapLines | Where-Object {
 		$_ -match 'Error:' -and
 		$_ -notmatch 'Configured Simulation Content Manifest .* could not be loaded' -and
+		$_ -notmatch 'Simulation-content container has no exact profile for the active contributor set' -and
 		$_ -notmatch 'pool-object codec manifest could not freeze'
 	})
 	if ($BootstrapExitCode -ne 1 -or $UnexpectedErrors.Count -gt 0) {
 		throw "$ProfileName bootstrap manifest process failed unexpectedly (exit $BootstrapExitCode). See '$BootstrapLog'."
 	}
 	Write-Host `
-		"[ConsumerMatrix] $ProfileName accepted the one-time empty-consumer bootstrap diagnostics." `
+		"[ConsumerMatrix] $ProfileName accepted the one-time stale-manifest bootstrap diagnostics." `
 		-ForegroundColor DarkYellow
 }
 
@@ -535,11 +536,32 @@ function Assert-NoHostGameDependency([string] $ProjectRoot)
 	}
 }
 
-function Install-ConsumerRuntimeQualificationTemplates([string] $ProjectRoot)
+function Install-ConsumerRuntimeQualificationTemplates(
+	[string] $ProjectRoot,
+	[string] $ProfileName)
 {
+	$TemplateNames = [System.Collections.Generic.List[string]]::new()
 	foreach ($TemplateName in @(
 		'SeinConsumerQualificationSubsystem.h',
 		'SeinConsumerQualificationSubsystem.cpp')) {
+		$TemplateNames.Add($TemplateName)
+	}
+	$MovementTemplateNames = @(
+		'SeinConsumerMovementQualification.h',
+		'SeinConsumerMovementQualification.cpp')
+	if ($ProfileName -eq 'MovementPlus') {
+		foreach ($TemplateName in $MovementTemplateNames) {
+			$TemplateNames.Add($TemplateName)
+		}
+	} else {
+		foreach ($TemplateName in $MovementTemplateNames) {
+			$Destination = Join-Path $ProjectRoot "Source\SeinConsumer\$TemplateName"
+			if (Test-Path -LiteralPath $Destination) {
+				Remove-Item -LiteralPath $Destination -Force
+			}
+		}
+	}
+	foreach ($TemplateName in $TemplateNames) {
 		$TemplatePath = Join-Path $PSScriptRoot "Templates\$TemplateName"
 		if (-not (Test-Path -LiteralPath $TemplatePath)) {
 			throw "Consumer runtime qualification template is missing: '$TemplatePath'."
@@ -663,6 +685,7 @@ function New-ConsumerProject([string] $ProfileName)
 		'Core',
 		'CoreUObject',
 		'Engine',
+		'SeinARTSCore',
 		'SeinARTSFramework',
 		'SeinARTSCoreEntity',
 		'SeinARTSNet')
@@ -671,10 +694,17 @@ function New-ConsumerProject([string] $ProfileName)
 	$HeaderProof = @()
 	if ($ProfileName -in @('MovementPlus', 'Full')) {
 		$Plugins += 'SeinARTSMovementPlusExtension'
-		$ModuleDependencies += 'SeinARTSMovementPlus'
+		$ModuleDependencies += @(
+			'GameplayTags',
+			'SeinARTSMovement',
+			'SeinARTSMovementPlus',
+			'SeinARTSNavigation')
 		$Definitions += 'SEIN_CONSUMER_WITH_MOVEMENT_PLUS=1'
 		$ExtraIncludes += '#include "Movement/SeinWheeledVehicleMovement.h"'
 		$HeaderProof += '(void)USeinWheeledVehicleMovement::StaticClass();'
+	}
+	if ($ProfileName -eq 'MovementPlus') {
+		$Definitions += 'SEIN_CONSUMER_QUALIFY_MOVEMENT_PLUS=1'
 	}
 	if ($ProfileName -in @('Cover', 'Full')) {
 		$Plugins += 'SeinARTSCoverExtension'
@@ -804,7 +834,12 @@ $DefinitionLines
 	$ModuleCpp = @"
 #include "Modules/ModuleManager.h"
 #include "Abilities/SeinAbility.h"
+#include "Serialization/SeinPoolObjectCodecRegistry.h"
+#include "Serialization/SeinSimulationContentRegistry.h"
 $IncludeLines
+#if defined(SEIN_CONSUMER_QUALIFY_MOVEMENT_PLUS)
+#include "SeinConsumerMovementQualification.h"
+#endif
 
 namespace
 {
@@ -815,7 +850,78 @@ $ProofLines
 	}
 }
 
-IMPLEMENT_PRIMARY_GAME_MODULE(FDefaultGameModuleImpl, SeinConsumer, "SeinConsumer");
+class FSeinConsumerModule final : public FDefaultGameModuleImpl
+{
+public:
+	virtual void StartupModule() override
+	{
+		FDefaultGameModuleImpl::StartupModule();
+#if defined(SEIN_CONSUMER_QUALIFY_MOVEMENT_PLUS)
+		FSeinSimulationContentDiscoveryRoot Root;
+		Root.RootClassPath =
+			USeinConsumerQualificationMoveAbility::StaticClass()->GetPathName();
+		Root.StableRecordKindId =
+			FSeinSimulationContentManifestCodec::GetCurrentRecordKindId();
+		Root.RecordRevision =
+			FSeinSimulationContentManifestCodec::CurrentRecordRevision;
+
+		FSeinSimulationContentContributorDescriptor Descriptor;
+		Descriptor.StableContributorId = TEXT("seinconsumer.qualification");
+		Descriptor.ContributorRevision = 1;
+		Descriptor.DiscoveryRoots.Add(MoveTemp(Root));
+		FString Error;
+		SimulationContentHandle =
+			FSeinSimulationContentRegistry::RegisterContributor(
+				Descriptor, &Error);
+		if (!SimulationContentHandle.IsValid())
+		{
+			UE_LOG(
+				LogTemp,
+				Error,
+				TEXT("Consumer qualification content registration failed: %s"),
+				*Error);
+		}
+
+		FSeinPoolObjectCodecDescriptor CodecDescriptor;
+		CodecDescriptor.NativeAnchor =
+			USeinConsumerQualificationMoveAbility::StaticClass();
+		CodecDescriptor.Kind = ESeinPoolObjectKind::Ability;
+		CodecDescriptor.StableProviderId =
+			TEXT("seinconsumer.qualification.move.reflection");
+		CodecDescriptor.StateSchemaVersion = 2;
+		CodecDescriptor.BehaviorRevision = 1;
+		CodecDescriptor.CodecRevision = 3;
+		CodecDescriptor.MaxStateBytes =
+			FSeinPoolObjectCodecRegistry::MaxStateBytes;
+		PoolObjectCodecHandle = FSeinPoolObjectCodecRegistry::Register(
+			FName(TEXT("seinconsumer")),
+			CodecDescriptor,
+			FSeinPoolObjectCodecRegistry::MakeReflectedOps(),
+			&Error);
+		if (!PoolObjectCodecHandle.IsValid())
+		{
+			UE_LOG(
+				LogTemp,
+				Error,
+				TEXT("Consumer qualification ability codec registration failed: %s"),
+				*Error);
+		}
+#endif
+	}
+
+	virtual void ShutdownModule() override
+	{
+		PoolObjectCodecHandle.Reset();
+		SimulationContentHandle.Reset();
+		FDefaultGameModuleImpl::ShutdownModule();
+	}
+
+private:
+	FSeinPoolObjectCodecRegistrationHandle PoolObjectCodecHandle;
+	FSeinSimulationContentRegistrationHandle SimulationContentHandle;
+};
+
+IMPLEMENT_PRIMARY_GAME_MODULE(FSeinConsumerModule, SeinConsumer, "SeinConsumer");
 "@
 	Write-Utf8NoBom (Join-Path $ProjectRoot 'Source\SeinConsumer\SeinConsumer.cpp') $ModuleCpp
 	$DefaultEngine = @'
@@ -845,6 +951,11 @@ bAutoLoginAtStartup=True
 '@
 	Write-Utf8NoBom (Join-Path $ProjectRoot 'Config\DefaultEngine.ini') $DefaultEngine
 
+	$NavigationClassPath = if ($ProfileName -eq 'MovementPlus') {
+		'/Script/SeinConsumer.SeinConsumerQualificationNavigation'
+	} else {
+		'/Script/SeinARTSNavigation.SeinNavigationAStar'
+	}
 	$DefaultGame = @'
 [/Script/EngineSettings.GeneralProjectSettings]
 ProjectID=E42D638747C4108CCF59B1A7AB1A57D4
@@ -852,7 +963,7 @@ ProjectID=E42D638747C4108CCF59B1A7AB1A57D4
 [/Script/SeinARTSCoreEntity.SeinARTSCoreSettings]
 SimulationContentManifest=/Game/Generated/SeinSimulationContentManifest.SeinSimulationContentManifest
 DefaultBrokerResolverClass=/Script/SeinARTSCoreEntity.SeinDefaultCommandBrokerResolver
-NavigationClass=/Script/SeinARTSNavigation.SeinNavigationAStar
+NavigationClass=__SEIN_CONSUMER_NAVIGATION_CLASS__
 LevelDataClass=/Script/SeinARTSLevelData.SeinLevelDataDefault
 FogOfWarClass=/Script/SeinARTSFogOfWar.SeinFogOfWarDefault
 AvoidanceClass=/Script/SeinARTSMovement.SeinAvoidanceDefault
@@ -878,8 +989,15 @@ LobbyReconnectGraceSeconds=60.0
 +MapsToCook=(FilePath="/Game/Maps/ConsumerLobbyMap")
 +MapsToCook=(FilePath="/Game/Maps/ConsumerMap")
 '@
+	$DefaultGame = $DefaultGame.Replace(
+		'__SEIN_CONSUMER_NAVIGATION_CLASS__', $NavigationClassPath)
 	Write-Utf8NoBom (Join-Path $ProjectRoot 'Config\DefaultGame.ini') $DefaultGame
 
+	$MovementFixtureClassExpression = if ($ProfileName -eq 'MovementPlus') {
+		'unreal.load_class(None, "/Script/SeinConsumer.SeinConsumerMovementUnit")'
+	} else {
+		'None'
+	}
 	$CreateMapPy = @'
 import unreal
 
@@ -919,9 +1037,17 @@ if not starts:
             raise RuntimeError("Could not spawn SeinPlayerStart for slot " + str(slot))
         start.set_editor_property("player_slot", slot)
         start.set_actor_label("ConsumerPlayerStart_" + str(slot))
+        starts.append(start)
+movement_unit_class = __SEIN_MOVEMENT_FIXTURE_CLASS__
+for start in starts:
+    slot = start.get_editor_property("player_slot")
+    spawn_class = movement_unit_class if slot == 2 else None
+    start.set_editor_property("spawn_entity", spawn_class)
 if not unreal.EditorAssetLibrary.save_asset(match_path, only_if_is_dirty=False):
     raise RuntimeError("Could not save consumer-owned match map " + match_path)
 '@
+	$CreateMapPy = $CreateMapPy.Replace(
+		'__SEIN_MOVEMENT_FIXTURE_CLASS__', $MovementFixtureClassExpression)
 	Write-Utf8NoBom (Join-Path $ProjectRoot 'CreateConsumerMap.py') $CreateMapPy
 
 	$GenerateManifestPy = @'
@@ -939,6 +1065,11 @@ unreal.log("Verified generated manifest " + manifest_path)
 		(Join-Path $ProjectRoot 'GenerateSimulationContentManifest.py') `
 		$GenerateManifestPy
 
+	$ExpectedMovementFixtureClassPath = if ($ProfileName -eq 'MovementPlus') {
+		'/Script/SeinConsumer.SeinConsumerMovementUnit'
+	} else {
+		''
+	}
 	$VerifyMapPy = @'
 import unreal
 
@@ -954,16 +1085,34 @@ for asset_path in ("/Game/Maps/ConsumerLobbyMap", "/Game/Maps/ConsumerMap"):
             "Consumer map load resolved the wrong editor world: " + actual
         )
     if asset_path.endswith("ConsumerMap"):
-        slots = sorted(
-            actor.get_editor_property("player_slot")
-            for actor in actor_editor.get_all_level_actors()
+        starts = [
+            actor for actor in actor_editor.get_all_level_actors()
             if isinstance(actor, unreal.SeinPlayerStart)
-        )
+        ]
+        slots = sorted(actor.get_editor_property("player_slot") for actor in starts)
         if slots != [1, 2]:
             raise RuntimeError("Consumer match map has wrong player slots: " + str(slots))
+        expected_fixture = "__SEIN_EXPECTED_MOVEMENT_FIXTURE_CLASS__"
+        fixture_paths = {}
+        for start in starts:
+            spawn_class = start.get_editor_property("spawn_entity")
+            fixture_paths[start.get_editor_property("player_slot")] = (
+                "" if spawn_class is None else spawn_class.get_path_name()
+            )
+        expected_paths = {1: "", 2: expected_fixture}
+        if fixture_paths != expected_paths:
+            raise RuntimeError(
+                "Consumer match map has wrong spawn fixtures: " + str(fixture_paths)
+            )
     unreal.log("Verified loaded consumer world " + world.get_path_name())
 '@
+	$VerifyMapPy = $VerifyMapPy.Replace(
+		'__SEIN_EXPECTED_MOVEMENT_FIXTURE_CLASS__',
+		$ExpectedMovementFixtureClassPath)
 	Write-Utf8NoBom (Join-Path $ProjectRoot 'VerifyConsumerMap.py') $VerifyMapPy
+	Write-Utf8NoBom `
+		(Join-Path $ProjectRoot '.consumer-matrix-schema') `
+		("$ConsumerGenerationSchemaVersion`n")
 
 	Assert-NoHostGameDependency $ProjectRoot
 	return [pscustomobject]@{
@@ -1002,7 +1151,13 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 	$InstallationDiagnosticReceipt = $null
 	$ExistingRoot = Join-Path $GeneratedRoot $ProfileName
 	$ExistingUproject = Join-Path $ExistingRoot 'SeinConsumer.uproject'
-	if ($ReuseGenerated -and (Test-Path -LiteralPath $ExistingUproject)) {
+	$ExistingSchemaPath = Join-Path $ExistingRoot '.consumer-matrix-schema'
+	$CanReuseGenerated = $ReuseGenerated `
+		-and (Test-Path -LiteralPath $ExistingUproject) `
+		-and (Test-Path -LiteralPath $ExistingSchemaPath) `
+		-and (Get-Content -Raw -LiteralPath $ExistingSchemaPath).Trim() -eq
+			[string]$ConsumerGenerationSchemaVersion
+	if ($CanReuseGenerated) {
 		$ExistingPlugins = @('SeinARTSFramework')
 		if ($ProfileName -in @('MovementPlus', 'Full')) {
 			$ExistingPlugins += 'SeinARTSMovementPlusExtension'
@@ -1032,7 +1187,7 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 		# evidence must always come from the current checkout.
 		Refresh-ConsumerPlugins $Project.Plugins $Project.Root
 	}
-	Install-ConsumerRuntimeQualificationTemplates $Project.Root
+	Install-ConsumerRuntimeQualificationTemplates $Project.Root $ProfileName
 	$CommonBuildArgs = @('Win64', 'Development', "-Project=$($Project.Uproject)", '-WaitMutex')
 	Invoke-Checked "$ProfileName Editor build" $BuildBat (@('SeinConsumerEditor') + $CommonBuildArgs)
 	if (-not $SkipClientServer) {
@@ -1059,7 +1214,7 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 	$MapPath = Join-Path $Project.Root 'Content\Maps\ConsumerMap.umap'
 	$LobbyMapPath = Join-Path `
 		$Project.Root 'Content\Maps\ConsumerLobbyMap.umap'
-	if (-not ($ReuseGenerated -and
+	if ($ProfileName -eq 'MovementPlus' -or -not ($ReuseGenerated -and
 		(Test-Path -LiteralPath $MapPath) -and
 		(Test-Path -LiteralPath $LobbyMapPath))) {
 		Invoke-Checked "$ProfileName consumer map generation" $EditorCmd @(
@@ -1195,7 +1350,7 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 			}
 		}
 
-		if ($ProfileName -eq 'Framework' -and
+		if ($ProfileName -in @('Framework', 'MovementPlus') -and
 			-not $SkipRuntimeQualification) {
 			$RuntimeScript = Join-Path `
 				$PSScriptRoot 'Invoke-PackagedRuntimeQualification.ps1'
@@ -1204,7 +1359,8 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 			}
 			& $RuntimeScript `
 				-GameExecutable $GameExe.FullName `
-				-ProjectRoot $Project.Root
+				-ProjectRoot $Project.Root `
+				-Profile $ProfileName
 			if ($LASTEXITCODE -ne 0) {
 				throw "$ProfileName packaged runtime qualification failed with exit code $LASTEXITCODE."
 			}
@@ -1217,7 +1373,7 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 	}
 
 	$Result = [ordered]@{
-		schemaVersion = 5
+		schemaVersion = 6
 		qualificationRunId = $QualificationRunId
 		profile = $ProfileName
 		plugins = $Project.Plugins
@@ -1272,7 +1428,8 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 			[string]$DiagnosticReport.simulationContentManifest
 		uncookedLoad = 'Passed'
 		cookAndPackagedLoad = if ($SkipCook) { 'Skipped' } else { 'Passed' }
-		packagedRuntimeQualification = if ($ProfileName -ne 'Framework') {
+		packagedRuntimeQualification = if (
+			$ProfileName -notin @('Framework', 'MovementPlus')) {
 			'NotApplicable'
 		} elseif ($SkipCook -or $SkipRuntimeQualification) {
 			'Skipped'

@@ -14,7 +14,7 @@ namespace
 {
 	// Manual compatibility epoch for deterministic framework behaviour that is
 	// not already represented by the command/config/settings digests.
-	constexpr TCHAR GSeinReplayFrameworkVersion[] = TEXT("SeinARTS.Replay.4");
+	constexpr TCHAR GSeinReplayFrameworkVersion[] = TEXT("SeinARTS.Replay.5");
 }
 
 FString SeinReplayCompatibility::GetFrameworkVersion()

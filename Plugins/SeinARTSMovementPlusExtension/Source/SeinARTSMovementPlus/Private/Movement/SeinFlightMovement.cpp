@@ -16,6 +16,19 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinFlight, Log, All);
 
+namespace
+{
+	FFixedPoint ScalePositiveRadius(FFixedPoint Radius, FFixedPoint Scale)
+	{
+		if (Radius > FFixedPoint::Zero && Scale > FFixedPoint::Zero
+			&& Radius > FFixedPoint::MaxValue / Scale)
+		{
+			return FFixedPoint::MaxValue;
+		}
+		return Radius * Scale;
+	}
+}
+
 UScriptStruct* USeinFlightMovement::GetMovementDataStruct() const
 {
 	return FSeinFlyingMovementData::StaticStruct();
@@ -78,7 +91,7 @@ bool USeinFlightMovement::Tick(const FSeinMovementContext& Ctx)
 	const FSeinFlyingMovementData& FlyingData = FlyingPtr ? *FlyingPtr : DefaultsFlying;
 	const FSeinPath& Path = Ctx.Path;
 	int32& CurrentWaypointIndex = Ctx.CurrentWaypointIndex;
-	const FFixedPoint AcceptanceRadiusSq = Ctx.AcceptanceRadiusSq;
+	const FFixedPoint AcceptanceRadius = Ctx.GetAcceptanceRadius();
 	const FFixedPoint DeltaTime = Ctx.DeltaTime;
 	USeinNavigation* Nav = Ctx.Nav;
 
@@ -98,16 +111,24 @@ bool USeinFlightMovement::Tick(const FSeinMovementContext& Ctx)
 	// XY arrival. Speed is NOT zeroed — minimum speed constraint means
 	// the plane keeps flying even after the action ends.
 	{
-		FFixedVector ToFinal = FinalWp - AgentPos;
-		ToFinal.Z = FFixedPoint::Zero;
-		const bool bWithinAcceptance = ToFinal.SizeSquared() <= AcceptanceRadiusSq;
+		const bool bWithinAcceptance =
+			Ctx.IsWithinPlanarAcceptance(AgentPos, FinalWp);
 
 		// Wider overshoot vicinity for planes — they can't slow precisely.
-		const FFixedPoint VicinityRadiusSq = AcceptanceRadiusSq * FFixedPoint::FromInt(6);
+		const FFixedPoint VicinityRadius = ScalePositiveRadius(
+			AcceptanceRadius,
+			SeinMath::Sqrt(FFixedPoint::FromInt(6)));
 		const FFixedPoint OvershootSpeedCap = MovementData.TopSpeed; // any speed counts
-		const bool bOvershoot = IsOvershootArrival(
-			AgentPos, FinalWp, Entity.Transform.Rotation,
-			CurrentSpeed, VicinityRadiusSq, OvershootSpeedCap);
+		const bool bOvershoot = Ctx.HasExactAcceptanceRadius()
+			? IsOvershootArrivalRadius(
+				AgentPos, FinalWp, Entity.Transform.Rotation,
+				CurrentSpeed, VicinityRadius, OvershootSpeedCap)
+			: IsOvershootArrival(
+				AgentPos, FinalWp, Entity.Transform.Rotation,
+				CurrentSpeed,
+				ScalePositiveRadius(
+					Ctx.AcceptanceRadiusSq, FFixedPoint::FromInt(6)),
+				OvershootSpeedCap);
 
 		if (bWithinAcceptance || bOvershoot)
 		{
@@ -126,16 +147,20 @@ bool USeinFlightMovement::Tick(const FSeinMovementContext& Ctx)
 	// Steering target on the polyline.
 	const FFixedPoint LookAhead = (FlyingData.LookAheadDistance > FFixedPoint::Zero)
 		? FlyingData.LookAheadDistance : FFixedPoint::FromInt(200);
-	const FFixedVector LookAheadPoint = ResolveLookAheadPoint(AgentPos, Path, CurrentWaypointIndex, LookAhead);
-
-	FFixedVector ToTarget = LookAheadPoint - AgentPos;
-	ToTarget.Z = FFixedPoint::Zero;
+	FFixedVector LookAheadPoint = ResolveLookAheadPoint(
+		AgentPos, Path, CurrentWaypointIndex, LookAhead);
+	LookAheadPoint.Z = AgentPos.Z;
+	const bool bHasTarget = !FFixedVector::IsPlanarDistanceWithin(
+		AgentPos, LookAheadPoint, FFixedPoint::Epsilon);
+	const FFixedVector ToTarget = bHasTarget
+		? FFixedVector::GetSafeNormalDifference(AgentPos, LookAheadPoint)
+		: FFixedVector::ZeroVector;
 
 	const FFixedPoint CurrentYaw = YawFromRotation(Entity.Transform.Rotation);
 
 	// Aim error -> desired bank angle.
 	FFixedPoint DesiredSteer = FFixedPoint::Zero;
-	if (ToTarget.SizeSquared() > FFixedPoint::Epsilon)
+	if (bHasTarget)
 	{
 		const FFixedPoint DesiredYaw = SeinMath::Atan2(ToTarget.Y, ToTarget.X);
 		const FFixedPoint YawErr = ShortestAngleDelta(CurrentYaw, DesiredYaw);

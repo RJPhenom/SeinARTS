@@ -361,21 +361,20 @@ namespace
 		int32 Waypoint = 0;
 		const FFixedPoint DeltaTime = FFixedPoint::One
 			/ FFixedPoint::FromInt(DriverTickRate);
-		const FFixedPoint AcceptanceSq =
-			Navigation.AcceptanceRadius
-			* Navigation.AcceptanceRadius;
 		FSeinMovementContext Context{
 			Entity,
 			&Movement,
 			&Navigation,
 			Result.PlannedPath,
 			Waypoint,
-			AcceptanceSq,
+			FFixedVector::SquareSaturated(
+				Navigation.AcceptanceRadius),
 			DeltaTime,
 			NavigationPolicy,
 			nullptr,
 			FSeinEntityHandle(1, 1),
 		};
+		Context.ExactAcceptanceRadius = Navigation.AcceptanceRadius;
 		Planner->OnMoveBegin(Context);
 
 		for (int32 Tick = 0; Tick < MaxDriverTicks; ++Tick)

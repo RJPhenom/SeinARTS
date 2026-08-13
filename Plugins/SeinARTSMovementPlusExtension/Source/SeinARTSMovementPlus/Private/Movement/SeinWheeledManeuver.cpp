@@ -373,13 +373,15 @@ FCandidate BuildStraightReverse(const FInputs& In, const TArray<FFixedVector>& W
 	const int32 N = Waypoints.Num();
 	if (!In.bCanReverse || N == 0 || N > StraightReverseMaxWaypoints) return Out;
 
-	FFixedVector ToFinal = Waypoints[N - 1] - In.Pos;
-	ToFinal.Z = FFixedPoint::Zero;
-	const FFixedPoint Dist = ToFinal.Size();
+	FFixedVector PlanarFinal = Waypoints[N - 1];
+	PlanarFinal.Z = In.Pos.Z;
+	const FFixedPoint Dist =
+		FFixedVector::DistanceSaturated(In.Pos, PlanarFinal);
 	if (Dist <= FFixedPoint::Epsilon || Dist > In.ReverseEngageDistance) return Out;
 
 	const FFixedVector Fwd(SeinMath::Cos(In.Yaw), SeinMath::Sin(In.Yaw), FFixedPoint::Zero);
-	const FFixedVector ToFinalN = FFixedVector::GetSafeNormal(ToFinal);
+	const FFixedVector ToFinalN =
+		FFixedVector::GetSafeNormalDifference(In.Pos, PlanarFinal);
 	if (Fwd.X * ToFinalN.X + Fwd.Y * ToFinalN.Y > In.ReverseEngageDot) return Out;
 
 	// Near-straight gate: total direction change along Pos→W0→…→Wlast.

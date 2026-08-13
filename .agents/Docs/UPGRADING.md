@@ -1,6 +1,6 @@
 # Upgrading SeinARTS
 
-**Document version:** 0.3
+**Document version:** 0.4
 
 ## Release upgrade
 
@@ -20,8 +20,9 @@ boundary. Never weaken those checks to make an old snapshot, replay, or peer joi
 
 ## Current development wave
 
-The uncommitted integration-candidate wave advances world snapshots and canonical envelopes to
-schema v15. Older live peers and v14 snapshot payloads are intentionally incompatible.
+The current development wave advances world snapshots and canonical envelopes to schema v15 and
+compiled deterministic behavior to `SeinARTS.Replay.5`. Older live peers, Replay.4 artifacts, and
+v14 snapshot payloads are intentionally incompatible.
 
 It also adds:
 
@@ -34,5 +35,5 @@ It also adds:
 - background durable append for automatic replay checkpoints.
 
 After adopting this wave, regenerate the simulation-content manifest and run a full editor restart.
-Keep the older executable/plugin cohort for any v14 snapshots or replays that must be inspected;
-there is no automatic v14-to-v15 migration.
+Keep the older executable/plugin cohort for any v14 snapshots or Replay.4 artifacts that must be
+inspected; there is no automatic migration to v15/Replay.5.

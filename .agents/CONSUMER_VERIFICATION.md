@@ -51,12 +51,13 @@ For every selected profile the tool:
 7. cooks, stages, packages, and archives the consumer map; and
 8. starts the real packaged `SeinConsumer-Win64-Shipping.exe`, requires it to remain alive through
    a bounded startup window, then terminates that exact process; and
-9. for the Framework profile, drives a packaged listen server and client through lobby travel,
+9. for the Framework and Movement+ profiles, drives a packaged listen server and client through lobby travel,
    lockstep command flow, a mandatory two-peer canonical-root comparison before reporter topology
    changes, forced checkpoint-plus-tail resync, physical disconnect/reconnect, reconnect
    resync/activation, directional pair-capability grant/revoke plus reconnect persistence and replay
    witness, streaming replay finalization, checkpoint seek, and exact terminal canonical-root
-   agreement.
+   agreement. Movement+ additionally issues a real wheeled Move command and requires exact movement
+   state on both peers, after reconnect, and after replay checkpoint seek.
 
 An initially empty consumer necessarily emits the two manifest-bootstrap simulation-content errors
 before the manifest exists. The harness accepts only those exact bootstrap messages, and only when
@@ -97,6 +98,18 @@ The exact Framework archive SHA-256 was
 the remaining four archive hashes and dependency closure. This dirty diagnostic cohort is not a
 publishable release identity. Generated replay files and exact packaged processes are cleaned by
 the harness.
+
+On 2026-08-13 the repository-source Movement+ profile passed its expanded packaged runtime leg.
+Two Shipping processes completed root gossip, a real 50,000-unit wheeled Move command, forced
+resync, physical reconnect, capability and movement continuation, exact grant/revoke, and standalone
+checkpoint-seek replay. The replay matched the authoritative terminal state at tick 251 and root
+`3B0BF5488C62CFE2F0F27B11017A2C78`. The schema-4 runtime receipt additionally binds the exact
+`USeinWheeledVehicleMovement` instance, raw 50,000/5,000/0 target, bounded nonzero typed telemetry
+on server/client/reconnect/replay, and packaged executable SHA-256
+`F8554A6F0D4D48CA725F4B4AED7EC3471683D1D54419D6DA0C40DEAE9C68D63A`. Matrix run
+`8cbee57da1734a75b8c223b9b886a1a6` recorded runtime-result SHA-256
+`D71015DE218559ADDDFF31DD5A613D2E6B27800A20C9F6323DCC9A302F562535`. This is source diagnostic
+evidence, not exact-ZIP release evidence.
 
 The local Epic launcher engine cannot build Client targets; UnrealBuildTool reports that Client
 targets are unsupported by that engine distribution before it reaches project compilation. A

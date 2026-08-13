@@ -4,12 +4,15 @@
 #include "Components/SeinMovementComponent.h"
 #include "Data/SeinWorldSnapshot.h"
 #include "Serialization/SeinMovementStateCoverage.h"
+#include "Movement/SeinMovement.h"
+#include "SeinPathTypes.h"
 #include "SeinMovementSubsystem.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
 #include "Simulation/SeinTestSnapshotRestore.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "TestTypes/SeinMoveToLifecycleTestTypes.h"
 #include "Testing/SeinMovementCanonicalStateTestAccess.h"
+#include "Testing/SeinMoveToActionContinuationTestAccess.h"
 
 struct FSeinWorldSubsystemTestAccess
 {
@@ -122,6 +125,296 @@ namespace
 							== FName(TEXT("persistent-policy-instances"));
 				});
 	}
+}
+
+namespace UE::SeinARTSTests
+{
+	struct FSeinMovementLongRangeTestAccess
+	{
+		static void AdvanceWaypointAlongPath(
+			int32& WaypointIndex,
+			const FSeinPath& Path,
+			const FFixedVector& AgentPosition,
+			FFixedPoint CloseRadius)
+		{
+			USeinMovement::AdvanceWaypointAlongPath(
+				WaypointIndex, Path, AgentPosition, CloseRadius);
+		}
+
+		static FFixedVector ResolveLookAheadPoint(
+			const FFixedVector& AgentPosition,
+			const FSeinPath& Path,
+			int32 WaypointIndex,
+			FFixedPoint LookAhead)
+		{
+			return USeinMovement::ResolveLookAheadPoint(
+				AgentPosition, Path, WaypointIndex, LookAhead);
+		}
+
+		static bool LegacyOvershoot(
+			const FFixedVector& AgentPosition,
+			const FFixedVector& FinalWaypoint,
+			FFixedPoint VicinityRadiusSq)
+		{
+			return USeinMovement::IsOvershootArrival(
+				AgentPosition,
+				FinalWaypoint,
+				FFixedQuaternion::Identity,
+				FFixedPoint::Zero,
+				VicinityRadiusSq,
+				FFixedPoint::One);
+		}
+
+		static bool ExactOvershoot(
+			const FFixedVector& AgentPosition,
+			const FFixedVector& FinalWaypoint,
+			FFixedPoint VicinityRadius)
+		{
+			return USeinMovement::IsOvershootArrivalRadius(
+				AgentPosition,
+				FinalWaypoint,
+				FFixedQuaternion::Identity,
+				FFixedPoint::Zero,
+				VicinityRadius,
+				FFixedPoint::One);
+		}
+	};
+}
+
+TEST(MovementLegacySquaredRadiusContextRemainsCompatible,
+	"SeinARTS.Unit.Movement.LongRange")
+{
+	FSeinEntity Entity;
+	FSeinPath Path;
+	int32 WaypointIndex = 0;
+	FSeinMovementContext LegacyContext{
+		Entity,
+		nullptr,
+		nullptr,
+		Path,
+		WaypointIndex,
+		FFixedPoint::FromInt(2500),
+		FFixedPoint::One,
+		nullptr,
+		nullptr,
+		FSeinEntityHandle(),
+	};
+	ASSERT_THAT(IsTrue(
+		SeinMath::Abs(
+			LegacyContext.GetAcceptanceRadius()
+				- FFixedPoint::FromInt(50))
+			< FFixedPoint::KindaSmallNumber));
+	LegacyContext.AcceptanceRadiusSq = FFixedPoint::FromInt(2);
+	ASSERT_THAT(IsTrue(LegacyContext.IsWithinPlanarAcceptance(
+		FFixedVector(
+			FFixedPoint::One, FFixedPoint::One, FFixedPoint::Zero),
+		FFixedVector::ZeroVector)));
+	ASSERT_THAT(IsFalse(LegacyContext.IsWithinPlanarAcceptance(
+		FFixedVector(
+			FFixedPoint::FromInt(2), FFixedPoint::Zero, FFixedPoint::Zero),
+		FFixedVector::ZeroVector)));
+	LegacyContext.AcceptanceRadiusSq = FFixedPoint::FromInt(2500);
+	ASSERT_THAT(IsTrue(LegacyContext.IsWithinPlanarAcceptance(
+		FFixedVector(
+			FFixedPoint::FromInt(50), FFixedPoint(1), FFixedPoint::Zero),
+		FFixedVector::ZeroVector)));
+	LegacyContext.AcceptanceRadiusSq = FFixedPoint::MaxValue;
+	ASSERT_THAT(IsFalse(LegacyContext.IsWithinPlanarAcceptance(
+		FFixedVector(
+			FFixedPoint::MinValue, FFixedPoint::Zero, FFixedPoint::Zero),
+		FFixedVector(
+			FFixedPoint::MaxValue, FFixedPoint::Zero, FFixedPoint::Zero))));
+
+	const FFixedVector Agent(
+		FFixedPoint::FromInt(100),
+		FFixedPoint::Zero,
+		FFixedPoint::Zero);
+	ASSERT_THAT(IsTrue(
+		UE::SeinARTSTests::FSeinMovementLongRangeTestAccess::
+			LegacyOvershoot(
+				Agent,
+				FFixedVector::ZeroVector,
+				FFixedPoint::FromInt(10000))));
+	ASSERT_THAT(IsTrue(
+		UE::SeinARTSTests::FSeinMovementLongRangeTestAccess::
+			ExactOvershoot(
+				Agent,
+				FFixedVector::ZeroVector,
+				FFixedPoint::FromInt(100))));
+	ASSERT_THAT(IsTrue(
+		UE::SeinARTSTests::FSeinMovementLongRangeTestAccess::
+			LegacyOvershoot(
+				FFixedVector(
+					FFixedPoint::One,
+					FFixedPoint::One,
+					FFixedPoint::Zero),
+				FFixedVector::ZeroVector,
+				FFixedPoint::FromInt(2))));
+}
+
+TEST(MovementLongRangeWaypointAdvanceUsesExactDistance,
+	"SeinARTS.Unit.Movement.LongRange")
+{
+	FSeinPath Path;
+	Path.Waypoints = {
+		FFixedVector(FFixedPoint::FromInt(50000),
+			FFixedPoint::Zero, FFixedPoint::Zero),
+		FFixedVector(FFixedPoint::FromInt(60000),
+			FFixedPoint::Zero, FFixedPoint::Zero),
+	};
+
+	int32 WaypointIndex = 0;
+	UE::SeinARTSTests::FSeinMovementLongRangeTestAccess::
+		AdvanceWaypointAlongPath(
+		WaypointIndex,
+		Path,
+		FFixedVector::ZeroVector,
+		FFixedPoint::FromInt(50));
+	ASSERT_THAT(AreEqual(0, WaypointIndex));
+}
+
+TEST(MovementLongRangeOffPathSegmentProjectionIsExact,
+	"SeinARTS.Unit.Movement.LongRange")
+{
+	const FFixedVector Start(
+		FFixedPoint::MinValue,
+		FFixedPoint::Zero,
+		FFixedPoint::Zero);
+	const FFixedVector End(
+		FFixedPoint::MaxValue,
+		FFixedPoint::Zero,
+		FFixedPoint::Zero);
+	ASSERT_THAT(IsTrue(
+		UE::SeinARTSTests::IsPointWithinMoveToSegmentForTest(
+			FFixedVector::ZeroVector,
+			Start,
+			End,
+			FFixedPoint::One)));
+	ASSERT_THAT(IsFalse(
+		UE::SeinARTSTests::IsPointWithinMoveToSegmentForTest(
+			FFixedVector(
+				FFixedPoint::Zero,
+				FFixedPoint::FromInt(10),
+				FFixedPoint::Zero),
+			Start,
+			End,
+			FFixedPoint::One)));
+}
+
+TEST(MovementLongRangeWaypointCrossoverUsesDirection,
+	"SeinARTS.Unit.Movement.LongRange")
+{
+	FSeinPath Path;
+	Path.Waypoints = {
+		FFixedVector::ZeroVector,
+		FFixedVector(FFixedPoint::FromInt(50000),
+			FFixedPoint::Zero, FFixedPoint::Zero),
+		FFixedVector(FFixedPoint::FromInt(60000),
+			FFixedPoint::Zero, FFixedPoint::Zero),
+	};
+
+	int32 WaypointIndex = 1;
+	UE::SeinARTSTests::FSeinMovementLongRangeTestAccess::
+		AdvanceWaypointAlongPath(
+		WaypointIndex,
+		Path,
+		FFixedVector(FFixedPoint::FromInt(40000),
+			FFixedPoint::Zero, FFixedPoint::Zero),
+		FFixedPoint::FromInt(50));
+	ASSERT_THAT(AreEqual(1, WaypointIndex));
+
+	UE::SeinARTSTests::FSeinMovementLongRangeTestAccess::
+		AdvanceWaypointAlongPath(
+		WaypointIndex,
+		Path,
+		FFixedVector(FFixedPoint::FromInt(51000),
+			FFixedPoint::Zero, FFixedPoint::Zero),
+		FFixedPoint::FromInt(50));
+	ASSERT_THAT(AreEqual(2, WaypointIndex));
+}
+
+TEST(MovementLongRangeLookAheadUsesExactDirection,
+	"SeinARTS.Unit.Movement.LongRange")
+{
+	const FFixedVector Agent(
+		FFixedPoint::MinValue + FFixedPoint::FromInt(100),
+		FFixedPoint::Zero,
+		FFixedPoint::Zero);
+	FSeinPath Path;
+	Path.Waypoints = {
+		FFixedVector(
+			FFixedPoint::MaxValue,
+			FFixedPoint::Zero,
+			FFixedPoint::Zero),
+	};
+	const FFixedVector LookAhead =
+		UE::SeinARTSTests::FSeinMovementLongRangeTestAccess::
+			ResolveLookAheadPoint(
+				Agent, Path, 0, FFixedPoint::FromInt(50));
+	ASSERT_THAT(IsTrue(LookAhead.X > Agent.X));
+	ASSERT_THAT(IsTrue(FFixedVector::IsDistanceWithin(
+		Agent, LookAhead, FFixedPoint::FromInt(50))));
+
+	const FFixedVector SlopedAgent(
+		Agent.X,
+		FFixedPoint::Zero,
+		FFixedPoint::MinValue);
+	Path.Waypoints[0].Z = FFixedPoint::MaxValue;
+	const FFixedVector SlopedLookAhead =
+		UE::SeinARTSTests::FSeinMovementLongRangeTestAccess::
+			ResolveLookAheadPoint(
+				SlopedAgent, Path, 0, FFixedPoint::FromInt(50));
+	ASSERT_THAT(IsTrue(SlopedLookAhead.Z > SlopedAgent.Z));
+	ASSERT_THAT(IsTrue(
+		SlopedLookAhead.Z
+			< SlopedAgent.Z + FFixedPoint::FromInt(100)));
+
+	FSeinPath EndpointPath;
+	const FFixedVector Endpoint(
+		FFixedPoint::FromInt(300),
+		FFixedPoint::FromInt(300),
+		FFixedPoint::MaxValue);
+	EndpointPath.Waypoints = { Endpoint };
+	const FFixedVector ExactEndpoint =
+		UE::SeinARTSTests::FSeinMovementLongRangeTestAccess::
+			ResolveLookAheadPoint(
+				FFixedVector(
+					FFixedPoint::Zero,
+					FFixedPoint::Zero,
+					FFixedPoint::MinValue),
+				EndpointPath,
+				0,
+				FFixedPoint(1822200300701LL));
+	ASSERT_THAT(IsTrue(ExactEndpoint == Endpoint));
+}
+
+TEST(MovementLongRangeArrivalSpeedCapSaturatesSafely,
+	"SeinARTS.Unit.Movement.LongRange")
+{
+	const FFixedPoint Near = USeinMovement::KinematicArrivalSpeedCap(
+		FFixedPoint::FromInt(100), FFixedPoint::FromInt(900));
+	const FFixedPoint Far = USeinMovement::KinematicArrivalSpeedCap(
+		FFixedPoint::FromInt(1000), FFixedPoint::FromInt(900));
+	const FFixedPoint BeyondScalarSquare =
+		USeinMovement::KinematicArrivalSpeedCap(
+			FFixedPoint::FromInt(2000000),
+			FFixedPoint::FromInt(2000));
+	const FFixedPoint BillionScale =
+		USeinMovement::KinematicArrivalSpeedCap(
+			FFixedPoint::FromInt(1000000000),
+			FFixedPoint::FromInt(1000000000));
+
+	ASSERT_THAT(IsTrue(Near > FFixedPoint::Zero));
+	ASSERT_THAT(AreEqual(int64(1822200299985LL), Near.Value));
+	ASSERT_THAT(IsTrue(Far > Near));
+	ASSERT_THAT(IsTrue(
+		BeyondScalarSquare > FFixedPoint::FromInt(89000)));
+	ASSERT_THAT(IsTrue(
+		BeyondScalarSquare < FFixedPoint::FromInt(90000)));
+	ASSERT_THAT(IsTrue(
+		BillionScale > FFixedPoint::FromInt(1414213561)));
+	ASSERT_THAT(IsTrue(
+		BillionScale < FFixedPoint::FromInt(1414213563)));
 }
 
 TEST(MovementReflectedStateChangesCanonicalRoot,

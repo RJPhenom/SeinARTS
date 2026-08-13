@@ -1,6 +1,8 @@
 #include "SeinConsumerQualificationSubsystem.h"
 
 #include "Containers/Ticker.h"
+#include "Components/SeinMovementComponent.h"
+#include "Core/SeinEntityPool.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
@@ -23,12 +25,21 @@
 #include "Tags/SeinARTSGameplayTags.h"
 #include "Types/Vector.h"
 
+#if defined(SEIN_CONSUMER_QUALIFY_MOVEMENT_PLUS)
+#include "Lib/SeinMovementPlusBPFL.h"
+#include "Movement/SeinMovement.h"
+#include "Movement/SeinWheeledVehicleMovement.h"
+#include "SeinConsumerMovementQualification.h"
+#include "SeinMovementSubsystem.h"
+#endif
+
 namespace
 {
 	constexpr double QualificationTimeoutSeconds = 180.0;
 	constexpr double ReconnectDelaySeconds = 2.0;
 	constexpr int32 InitialResyncStartTick = 30;
 	constexpr int32 ReplayTailAfterReconnectTicks = 60;
+	constexpr int32 MovementCommandStartTick = 35;
 	constexpr int64 QualificationRelationshipSourceInstanceID =
 		0x5155414C;
 
@@ -97,6 +108,185 @@ namespace
 	{
 		return Guid.ToString(EGuidFormats::Digits);
 	}
+
+#if defined(SEIN_CONSUMER_QUALIFY_MOVEMENT_PLUS)
+	FFixedVector QualificationMovementDestination();
+
+	struct FQualificationMovementObservation
+	{
+		FSeinEntityHandle Entity;
+		FFixedVector Location;
+		FFixedVector Velocity;
+		FFixedVector Target;
+		FString MovementClass;
+		FSeinMovementPlusPresentationState Telemetry;
+		bool bHasTarget = false;
+		bool bExpectedTarget = false;
+		bool bExpectedClass = false;
+		bool bTelemetryValid = false;
+		bool bTelemetryActive = false;
+		bool bAdvanced = false;
+	};
+
+	FSeinEntityHandle FindQualificationMovementEntity(
+		const USeinWorldSubsystem& Sim)
+	{
+		FSeinEntityHandle Result;
+		const FSeinEntityPool& Pool = Sim.GetEntityPool();
+		Pool.ForEachEntity(
+			[&](FSeinEntityHandle Handle, const FSeinEntity& Entity)
+			{
+				(void)Entity;
+				const FSeinMovementComponent* Movement =
+					Sim.GetComponent<FSeinMovementComponent>(Handle);
+				if (!Result.IsValid()
+					&& Pool.GetOwner(Handle) == FSeinPlayerID(2)
+					&& Movement
+					&& Movement->MovementClass == FSoftClassPath(
+						USeinWheeledVehicleMovement::StaticClass()))
+				{
+					Result = Handle;
+				}
+			});
+		return Result;
+	}
+
+	bool ObserveQualificationMovement(
+		const USeinWorldSubsystem& Sim,
+		FQualificationMovementObservation& OutObservation)
+	{
+		OutObservation = FQualificationMovementObservation();
+		const FSeinEntityHandle Handle =
+			FindQualificationMovementEntity(Sim);
+		const FSeinEntity* Entity = Sim.GetEntity(Handle);
+		const FSeinMovementComponent* Movement =
+			Sim.GetComponent<FSeinMovementComponent>(Handle);
+		if (!Entity || !Movement)
+		{
+			return false;
+		}
+
+		OutObservation.Entity = Handle;
+		OutObservation.Location = Entity->Transform.GetLocation();
+		OutObservation.Velocity = Movement->Velocity;
+		OutObservation.Target = Movement->TargetLocation;
+		OutObservation.bHasTarget = Movement->bHasTarget;
+		OutObservation.bExpectedTarget =
+			OutObservation.bHasTarget
+			&& OutObservation.Target == QualificationMovementDestination();
+
+		UWorld* World = Sim.GetWorld();
+		const USeinMovementSubsystem* MovementSubsystem = World
+			? World->GetSubsystem<USeinMovementSubsystem>()
+			: nullptr;
+		const USeinMovement* MovementInstance = MovementSubsystem
+			? MovementSubsystem->FindMovementInstance(Handle)
+			: nullptr;
+		if (MovementInstance)
+		{
+			OutObservation.MovementClass =
+				MovementInstance->GetClass()->GetPathName();
+			OutObservation.bExpectedClass =
+				MovementInstance->GetClass()
+				== USeinWheeledVehicleMovement::StaticClass();
+		}
+
+		FSeinMovementPlusPresentationDimensions Dimensions;
+		OutObservation.Telemetry =
+			USeinMovementPlusBPFL::SeinGetMovementPlusPresentationState(
+				&Sim, Handle, Dimensions);
+		const FSeinMovementPlusPresentationState& Telemetry =
+			OutObservation.Telemetry;
+		OutObservation.bTelemetryValid =
+			FMath::IsFinite(Telemetry.SteeringAngleRadians)
+			&& FMath::IsFinite(Telemetry.YawRateRadiansPerSecond)
+			&& FMath::IsFinite(Telemetry.NormalizedThrottle)
+			&& FMath::IsFinite(Telemetry.NormalizedBrake)
+			&& FMath::IsFinite(Telemetry.WheelRotationRadians)
+			&& FMath::IsFinite(Telemetry.LeftTrackVelocityCmPerSecond)
+			&& FMath::IsFinite(Telemetry.RightTrackVelocityCmPerSecond)
+			&& Telemetry.NormalizedThrottle >= 0.0f
+			&& Telemetry.NormalizedThrottle <= 1.0f
+			&& Telemetry.NormalizedBrake >= 0.0f
+			&& Telemetry.NormalizedBrake <= 1.0f
+			&& Telemetry.WheelRotationRadians >= 0.0f
+			&& Telemetry.WheelRotationRadians < 2.0f * PI;
+		OutObservation.bTelemetryActive =
+			OutObservation.bTelemetryValid
+			&& (FMath::Abs(Telemetry.WheelRotationRadians) > KINDA_SMALL_NUMBER
+				|| FMath::Abs(Telemetry.LeftTrackVelocityCmPerSecond)
+					> KINDA_SMALL_NUMBER
+				|| FMath::Abs(Telemetry.RightTrackVelocityCmPerSecond)
+					> KINDA_SMALL_NUMBER);
+		OutObservation.bAdvanced =
+			OutObservation.Location.X != FFixedPoint::FromInt(200)
+			|| OutObservation.Location.Y != FFixedPoint::Zero;
+		return true;
+	}
+
+	bool IsQualifiedMovementObservation(
+		const FQualificationMovementObservation& Observation)
+	{
+		return Observation.bExpectedClass
+			&& Observation.bExpectedTarget
+			&& Observation.bTelemetryActive
+			&& Observation.bAdvanced;
+	}
+
+	FString EncodeQualificationMovementState(
+		const FQualificationMovementObservation& Observation)
+	{
+		return FString::Printf(
+			TEXT("%d:%d:%lld:%lld:%lld:%lld:%lld:%lld:%d:%lld:%lld:%lld"),
+			Observation.Entity.Index,
+			Observation.Entity.Generation,
+			static_cast<long long>(Observation.Location.X.Value),
+			static_cast<long long>(Observation.Location.Y.Value),
+			static_cast<long long>(Observation.Location.Z.Value),
+			static_cast<long long>(Observation.Velocity.X.Value),
+			static_cast<long long>(Observation.Velocity.Y.Value),
+			static_cast<long long>(Observation.Velocity.Z.Value),
+			Observation.bHasTarget ? 1 : 0,
+			static_cast<long long>(Observation.Target.X.Value),
+			static_cast<long long>(Observation.Target.Y.Value),
+			static_cast<long long>(Observation.Target.Z.Value));
+	}
+
+	FString EncodeQualificationMovementEvidence(
+		const FQualificationMovementObservation& Observation)
+	{
+		const FSeinMovementPlusPresentationState& Telemetry =
+			Observation.Telemetry;
+		return FString::Printf(
+			TEXT("MovementState=%s\n")
+			TEXT("MovementClass=%s\n")
+			TEXT("MovementDestination=%lld:%lld:%lld\n")
+			TEXT("MovementTargetWitness=%s\n")
+			TEXT("MovementTelemetry=%.9g:%.9g:%.9g:%.9g:%.9g:%.9g:%.9g\n"),
+			*EncodeQualificationMovementState(Observation),
+			*Observation.MovementClass,
+			static_cast<long long>(Observation.Target.X.Value),
+			static_cast<long long>(Observation.Target.Y.Value),
+			static_cast<long long>(Observation.Target.Z.Value),
+			Observation.bExpectedTarget ? TEXT("Passed") : TEXT("Failed"),
+			Telemetry.SteeringAngleRadians,
+			Telemetry.YawRateRadiansPerSecond,
+			Telemetry.NormalizedThrottle,
+			Telemetry.NormalizedBrake,
+			Telemetry.WheelRotationRadians,
+			Telemetry.LeftTrackVelocityCmPerSecond,
+			Telemetry.RightTrackVelocityCmPerSecond);
+	}
+
+	FFixedVector QualificationMovementDestination()
+	{
+		return FFixedVector(
+			FFixedPoint::FromInt(50000),
+			FFixedPoint::FromInt(5000),
+			FFixedPoint::Zero);
+	}
+#endif
+
 }
 
 void USeinConsumerQualificationSubsystem::Initialize(
@@ -119,6 +309,9 @@ void USeinConsumerQualificationSubsystem::Initialize(
 		FCommandLine::Get(), TEXT("SeinConsumerReplayPath="), ReplayPath);
 	FParse::Value(
 		FCommandLine::Get(), TEXT("SeinConsumerExpectedRoot="), ExpectedReplayRoot);
+	FParse::Value(
+		FCommandLine::Get(), TEXT("SeinConsumerExpectedMovementState="),
+		ExpectedMovementState);
 	FParse::Value(
 		FCommandLine::Get(), TEXT("SeinConsumerExpectedEndTick="), ExpectedReplayEndTick);
 
@@ -312,6 +505,19 @@ void USeinConsumerQualificationSubsystem::TickServer(UWorld& World)
 		? GameInstance->GetSubsystem<USeinNetSubsystem>()
 		: nullptr;
 	USeinWorldSubsystem* Sim = World.GetSubsystem<USeinWorldSubsystem>();
+	if (Net && Sim && Net->HasDeterminismSessionFailure())
+	{
+		const FSeinDeterminismSessionFailure Failure =
+			Net->GetDeterminismSessionFailure();
+		Fail(FString::Printf(
+			TEXT("server determinism failure kind=%d turn=%d participant=%s authority=%d; localDiagnostic=%s"),
+			static_cast<int32>(Failure.Kind),
+			Failure.Turn,
+			*Failure.ParticipantID.ToCanonicalString(),
+			Net->IsDeterminismSessionFailureAuthoritative() ? 1 : 0,
+			*Net->GetLocalDeterminismFailureDiagnostic()));
+		return;
+	}
 	if (!Net || !Sim || !Net->IsNetworkingActive()
 		|| !Sim->IsSimulationRunning())
 	{
@@ -325,8 +531,7 @@ void USeinConsumerQualificationSubsystem::TickServer(UWorld& World)
 			TEXT("server-match-started.marker"),
 			FString::Printf(TEXT("tick=%d\n"), Sim->GetCurrentTick()));
 	}
-	if (Net->IsLocalDesyncDetected()
-		|| Net->HasDeterminismSessionFailure())
+	if (Net->IsLocalDesyncDetected())
 	{
 		Fail(TEXT("server observed a determinism failure"));
 		return;
@@ -375,6 +580,27 @@ void USeinConsumerQualificationSubsystem::TickServer(UWorld& World)
 			TEXT("server-pair-grant-observed.marker"),
 			FString::Printf(TEXT("tick=%d\n"), Sim->GetCurrentTick()));
 	}
+#if defined(SEIN_CONSUMER_QUALIFY_MOVEMENT_PLUS)
+	if (!bServerMovementObserved)
+	{
+		FQualificationMovementObservation Observation;
+		if (ObserveQualificationMovement(*Sim, Observation)
+			&& IsQualifiedMovementObservation(Observation))
+		{
+			bServerMovementObserved = WriteMarker(
+				TEXT("server-movement-observed.marker"),
+				FString::Printf(
+					TEXT("tick=%d\n%s"),
+					Sim->GetCurrentTick(),
+					*EncodeQualificationMovementEvidence(Observation)));
+			if (!bServerMovementObserved)
+			{
+				Fail(TEXT("server could not publish movement witness"));
+				return;
+			}
+		}
+	}
+#endif
 
 	int32 Connected = 0;
 	bool bHasDropped = false;
@@ -424,6 +650,15 @@ void USeinConsumerQualificationSubsystem::TickServer(UWorld& World)
 		{
 			return;
 		}
+#if defined(SEIN_CONSUMER_QUALIFY_MOVEMENT_PLUS)
+		const FString MovementPreservedMarker = FPaths::Combine(
+			MarkerDirectory,
+			TEXT("client-reconnect-movement-preserved.marker"));
+		if (!IFileManager::Get().FileExists(*MovementPreservedMarker))
+		{
+			return;
+		}
+#endif
 		const FSeinCommand Revoke =
 			MakeQualificationPairCapabilityCommand(*Sim, false);
 		if (!Revoke.CommandType.IsValid())
@@ -473,6 +708,18 @@ void USeinConsumerQualificationSubsystem::TickServer(UWorld& World)
 		return;
 	}
 	const int32 EndTick = Writer->GetObservedEndTick();
+	FString MovementMarker;
+#if defined(SEIN_CONSUMER_QUALIFY_MOVEMENT_PLUS)
+	FQualificationMovementObservation MovementObservation;
+	if (!ObserveQualificationMovement(*Sim, MovementObservation)
+		|| !IsQualifiedMovementObservation(MovementObservation))
+	{
+		Fail(TEXT("server lost the active Movement+ fixture before replay publication"));
+		return;
+	}
+	MovementMarker = EncodeQualificationMovementEvidence(
+		MovementObservation);
+#endif
 	const FString PublishedPath = Writer->FinishRecording();
 	if (PublishedPath.IsEmpty())
 	{
@@ -482,10 +729,11 @@ void USeinConsumerQualificationSubsystem::TickServer(UWorld& World)
 
 	bServerReplayPublished = true;
 	const FString Marker = FString::Printf(
-		TEXT("Path=%s\nEndTick=%d\nRoot=%s\n"),
+		TEXT("Path=%s\nEndTick=%d\nRoot=%s\n%s"),
 		*PublishedPath,
 		EndTick,
-		*GuidDigits(FinalRoot));
+		*GuidDigits(FinalRoot),
+		*MovementMarker);
 	if (!WriteMarker(TEXT("server-complete.marker"), Marker))
 	{
 		Fail(TEXT("server could not publish its completion marker"));
@@ -551,14 +799,6 @@ void USeinConsumerQualificationSubsystem::TickClient(UWorld& World)
 	{
 		return;
 	}
-	if (bReconnectTravelIssued && !bReconnectBound)
-	{
-		bReconnectBound = WriteMarker(
-			TEXT("client-reconnect-bound.marker"),
-			FString::Printf(
-				TEXT("slot=%u\n"), Net->GetLocalPlayerID().Value));
-	}
-
 	if (!bReconnectTravelIssued)
 	{
 		if (!InitialClientMatchWorld.IsValid())
@@ -577,14 +817,63 @@ void USeinConsumerQualificationSubsystem::TickClient(UWorld& World)
 			}
 			bClientPairGrantObserved = WriteMarker(
 				TEXT("client-pair-grant-observed.marker"),
-				FString::Printf(
-					TEXT("tick=%d\n"), Sim->GetCurrentTick()));
+				FString::Printf(TEXT("tick=%d\n"), Sim->GetCurrentTick()));
 			if (!bClientPairGrantObserved)
 			{
 				Fail(TEXT("client could not publish pair-grant witness"));
 				return;
 			}
 		}
+#if defined(SEIN_CONSUMER_QUALIFY_MOVEMENT_PLUS)
+		if (!bClientMovementCommandSubmitted
+			&& Sim->GetCurrentTick() >= MovementCommandStartTick)
+		{
+			const FSeinEntityHandle Vehicle =
+				FindQualificationMovementEntity(*Sim);
+			if (!Vehicle.IsValid())
+			{
+				return;
+			}
+			const FGameplayTag MoveTag =
+				GetDefault<USeinConsumerQualificationMoveAbility>()->AbilityTag;
+			Net->SubmitLocalCommand(FSeinCommand::MakeAbilityCommand(
+				Net->GetLocalPlayerID(),
+				Vehicle,
+				MoveTag,
+				FSeinEntityHandle::Invalid(),
+				QualificationMovementDestination()));
+			bClientMovementCommandSubmitted = WriteMarker(
+				TEXT("client-movement-command-submitted.marker"),
+				FString::Printf(
+					TEXT("tick=%d\nentity=%s\n"),
+					Sim->GetCurrentTick(),
+					*Vehicle.ToString()));
+			if (!bClientMovementCommandSubmitted)
+			{
+				Fail(TEXT("client could not publish movement-command witness"));
+				return;
+			}
+		}
+		if (bClientMovementCommandSubmitted && !bClientMovementObserved)
+		{
+			FQualificationMovementObservation Observation;
+			if (ObserveQualificationMovement(*Sim, Observation)
+				&& IsQualifiedMovementObservation(Observation))
+			{
+				bClientMovementObserved = WriteMarker(
+					TEXT("client-movement-observed.marker"),
+					FString::Printf(
+						TEXT("tick=%d\n%s"),
+						Sim->GetCurrentTick(),
+						*EncodeQualificationMovementEvidence(Observation)));
+				if (!bClientMovementObserved)
+				{
+					Fail(TEXT("client could not publish movement-state witness"));
+					return;
+				}
+			}
+		}
+#endif
 		if (!bPingSubmitted && Sim->GetCurrentTick() >= 6)
 		{
 			Net->SubmitLocalCommand(FSeinCommand::MakePingCommand(
@@ -599,6 +888,15 @@ void USeinConsumerQualificationSubsystem::TickClient(UWorld& World)
 		{
 			return;
 		}
+#if defined(SEIN_CONSUMER_QUALIFY_MOVEMENT_PLUS)
+		const FString ServerMovementMarker = FPaths::Combine(
+			MarkerDirectory, TEXT("server-movement-observed.marker"));
+		if (!bClientMovementObserved
+			|| !IFileManager::Get().FileExists(*ServerMovementMarker))
+		{
+			return;
+		}
+#endif
 		if (!bInitialResyncRequested
 			&& Sim->GetCurrentTick() >= InitialResyncStartTick)
 		{
@@ -647,8 +945,7 @@ void USeinConsumerQualificationSubsystem::TickClient(UWorld& World)
 		return;
 	}
 
-	if (&World == InitialClientMatchWorld.Get()
-		|| !Sim->IsSimulationRunning())
+	if (&World == InitialClientMatchWorld.Get())
 	{
 		return;
 	}
@@ -679,6 +976,25 @@ void USeinConsumerQualificationSubsystem::TickClient(UWorld& World)
 			Fail(TEXT("pair capability was absent after production reconnect resync"));
 			return;
 		}
+#if defined(SEIN_CONSUMER_QUALIFY_MOVEMENT_PLUS)
+		FQualificationMovementObservation MovementObservation;
+		if (!ObserveQualificationMovement(*Sim, MovementObservation)
+			|| !IsQualifiedMovementObservation(MovementObservation))
+		{
+			return;
+		}
+		bReconnectMovementPreserved = WriteMarker(
+			TEXT("client-reconnect-movement-preserved.marker"),
+			FString::Printf(
+				TEXT("tick=%d\n%s"),
+				Sim->GetCurrentTick(),
+				*EncodeQualificationMovementEvidence(MovementObservation)));
+		if (!bReconnectMovementPreserved)
+		{
+			Fail(TEXT("client could not publish reconnect movement witness"));
+			return;
+		}
+#endif
 		FGuid Root;
 		FString Error;
 		if (!Sim->ComputeCanonicalStateRoot(Root, Error))
@@ -718,6 +1034,15 @@ void USeinConsumerQualificationSubsystem::ObserveReplayCommands(
 	(void)Tick;
 	for (const FSeinCommand& Command : Commands)
 	{
+#if defined(SEIN_CONSUMER_QUALIFY_MOVEMENT_PLUS)
+		if (Command.CommandType
+				== SeinARTSTags::Command_Type_ActivateAbility
+			&& Command.AbilityTag
+				== GetDefault<USeinConsumerQualificationMoveAbility>()->AbilityTag)
+		{
+			bReplayObservedMovementCommand = true;
+		}
+#endif
 		if (Command.CommandType
 			!= SeinARTSTags::Command_Type_SetPairCapability)
 		{
@@ -785,6 +1110,13 @@ void USeinConsumerQualificationSubsystem::TickReplay(UWorld& World)
 			Fail(TEXT("replay role is missing path/root/end-tick arguments"));
 			return;
 		}
+#if defined(SEIN_CONSUMER_QUALIFY_MOVEMENT_PLUS)
+		if (ExpectedMovementState.IsEmpty())
+		{
+			Fail(TEXT("replay role is missing expected Movement+ state"));
+			return;
+		}
+#endif
 		if (Sim->IsSimulationRunning() || Sim->GetCurrentTick() != 0)
 		{
 			Fail(TEXT("replay world was not pristine at qualification start"));
@@ -835,6 +1167,20 @@ void USeinConsumerQualificationSubsystem::TickReplay(UWorld& World)
 		Fail(TEXT("replay reader disappeared during playback"));
 		return;
 	}
+#if defined(SEIN_CONSUMER_QUALIFY_MOVEMENT_PLUS)
+	FQualificationMovementObservation MovementObservation;
+	if (ObserveQualificationMovement(*Sim, MovementObservation))
+	{
+		bReplayObservedMovementActive =
+			bReplayObservedMovementActive
+			|| (MovementObservation.bExpectedClass
+				&& MovementObservation.bExpectedTarget);
+		bReplayObservedMovementAdvanced =
+			bReplayObservedMovementAdvanced
+			|| (MovementObservation.bAdvanced
+				&& MovementObservation.bTelemetryActive);
+	}
+#endif
 	bReplayObservedPlaying = bReplayObservedPlaying || Reader->IsPlaying();
 	if (!bReplayObservedPlaying || Reader->IsPlaying())
 	{
@@ -853,6 +1199,32 @@ void USeinConsumerQualificationSubsystem::TickReplay(UWorld& World)
 		Fail(TEXT("replay did not witness the pair-capability grant/revoke lifecycle"));
 		return;
 	}
+#if defined(SEIN_CONSUMER_QUALIFY_MOVEMENT_PLUS)
+	if (!bReplayObservedMovementCommand
+		|| !bReplayObservedMovementActive
+		|| !bReplayObservedMovementAdvanced)
+	{
+		Fail(TEXT("replay did not witness the Movement+ command and active motion"));
+		return;
+	}
+	if (!ObserveQualificationMovement(*Sim, MovementObservation)
+		|| !IsQualifiedMovementObservation(MovementObservation))
+	{
+		Fail(TEXT("replay lost the qualified Movement+ fixture at its terminal frontier"));
+		return;
+	}
+	const FString ReplayMovementState =
+		EncodeQualificationMovementState(MovementObservation);
+	if (!ReplayMovementState.Equals(
+		ExpectedMovementState, ESearchCase::CaseSensitive))
+	{
+		Fail(FString::Printf(
+			TEXT("replay Movement+ state %s did not match server %s"),
+			*ReplayMovementState,
+			*ExpectedMovementState));
+		return;
+	}
+#endif
 
 	// Natural replay completion releases its scheduler reservation. Re-arm the
 	// consumed timeline without pumping another tick so the canonical-root API
@@ -883,11 +1255,19 @@ void USeinConsumerQualificationSubsystem::TickReplay(UWorld& World)
 		return;
 	}
 
+	FString MovementMarker;
+#if defined(SEIN_CONSUMER_QUALIFY_MOVEMENT_PLUS)
+	MovementMarker = FString::Printf(
+		TEXT("MovementCommandWitness=Passed\n")
+		TEXT("MovementStateWitness=Passed\n")
+		TEXT("MovementFinalStateWitness=Passed\n%s"),
+		*EncodeQualificationMovementEvidence(MovementObservation));
+#endif
 	WriteMarker(
 		TEXT("replay-complete.marker"),
 		FString::Printf(
-			TEXT("EndTick=%d\nRoot=%s\nPairGrantWitness=Passed\nPairRevokeWitness=Passed\n"),
-			ExpectedReplayEndTick, *ReplayRootText));
+			TEXT("EndTick=%d\nRoot=%s\nPairGrantWitness=Passed\nPairRevokeWitness=Passed\n%s"),
+			ExpectedReplayEndTick, *ReplayRootText, *MovementMarker));
 	FPlatformMisc::RequestExit(false);
 }
 

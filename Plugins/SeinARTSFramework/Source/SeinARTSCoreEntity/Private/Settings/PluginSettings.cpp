@@ -11,6 +11,7 @@
 
 #include "Settings/PluginSettings.h"
 #include "Settings/SeinConfigFingerprintRegistry.h"
+#include "Data/SeinReplayHeader.h"
 #include "Formations/SeinBoxFormation.h"
 #include "HAL/IConsoleManager.h"
 #include "Engine/Engine.h"
@@ -347,6 +348,12 @@ int32 USeinARTSCoreSettings::ComputeConfigFingerprint() const
 
 	FString Fp;
 	Fp.Reserve(2048);
+	// Compiled deterministic behavior is part of live admission, not only
+	// snapshot/replay compatibility. Bumping the epoch makes mixed binaries
+	// fail the existing config-parity barrier before lockstep starts.
+	Fp += TEXT("FrameworkBehaviorEpoch=");
+	Fp += SeinReplayCompatibility::GetFrameworkVersion();
+	Fp += TEXT(";");
 	const UClass* Cls = GetClass();
 	for (const TCHAR* FieldName : Fields)
 	{

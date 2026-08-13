@@ -23,12 +23,157 @@
 #include "Movement/SeinPlannerHandle.h"
 #include "Simulation/SeinMovementTraceLog.h"       // [ARRIVE] movement-trace events
 #include "StructUtils/InstancedStruct.h"
+#include "Math/BigInt.h"
 #include "UObject/UnrealType.h"
 
 #if UE_ENABLE_DEBUG_DRAWING
 #include "Debug/SeinDebugDrawCull.h"
 #include "DrawDebugHelpers.h"
 #endif
+
+namespace
+{
+	FFixedPoint SaturatingPositiveAdd(FFixedPoint A, FFixedPoint B)
+	{
+		if (A > FFixedPoint::Zero && B > FFixedPoint::Zero
+			&& A > FFixedPoint::MaxValue - B)
+		{
+			return FFixedPoint::MaxValue;
+		}
+		return A + B;
+	}
+
+	FFixedPoint SaturatingPositiveScale(FFixedPoint Value, int32 Scale)
+	{
+		const FFixedPoint FixedScale = FFixedPoint::FromInt(Scale);
+		if (Value > FFixedPoint::Zero && Scale > 0
+			&& Value > FFixedPoint::MaxValue / FixedScale)
+		{
+			return FFixedPoint::MaxValue;
+		}
+		return Value * FixedScale;
+	}
+
+	struct FSeinUInt128
+	{
+		uint64 High = 0;
+		uint64 Low = 0;
+	};
+
+	FSeinUInt128 MultiplyUnsigned64(uint64 A, uint64 B)
+	{
+		FSeinUInt128 Result;
+#if defined(__GNUC__) || defined(__clang__)
+		const unsigned __int128 Product =
+			static_cast<unsigned __int128>(A) * B;
+		Result.High = static_cast<uint64>(Product >> 64);
+		Result.Low = static_cast<uint64>(Product);
+#elif defined(_MSC_VER)
+		Result.Low = _umul128(A, B, &Result.High);
+#else
+#error "Platform does not support 128-bit multiplication"
+#endif
+		return Result;
+	}
+
+	bool IsSquareWithin(uint64 Value, const FSeinUInt128& Limit)
+	{
+		const FSeinUInt128 Square = MultiplyUnsigned64(Value, Value);
+		return Square.High < Limit.High
+			|| (Square.High == Limit.High && Square.Low <= Limit.Low);
+	}
+
+	FFixedPoint FloorSqrtTwiceRawProduct(
+		FFixedPoint A,
+		FFixedPoint B)
+	{
+		FSeinUInt128 Radicand = MultiplyUnsigned64(
+			static_cast<uint64>(A.Value),
+			static_cast<uint64>(B.Value));
+		Radicand.High = (Radicand.High << 1) | (Radicand.Low >> 63);
+		Radicand.Low <<= 1;
+
+		uint64 Low = 0;
+		uint64 High = static_cast<uint64>(INT64_MAX);
+		while (Low < High)
+		{
+			const uint64 Span = High - Low;
+			const uint64 Mid = Low + (Span >> 1) + (Span & 1ULL);
+			if (IsSquareWithin(Mid, Radicand))
+			{
+				Low = Mid;
+			}
+			else
+			{
+				High = Mid - 1;
+			}
+		}
+		return FFixedPoint(static_cast<int64>(Low));
+	}
+
+	int512 MakeSignedInt512(int64 Value)
+	{
+		int512 Result(Value);
+		if (Value < 0)
+		{
+			uint32* Words = Result.GetBits();
+			for (int32 WordIndex = 2; WordIndex < 512 / 32; ++WordIndex)
+			{
+				Words[WordIndex] = MAX_uint32;
+			}
+		}
+		return Result;
+	}
+
+	int512 ExactPlanarLengthRawFloor(
+		const FFixedVector& Start,
+		const FFixedVector& End)
+	{
+		const int512 DX = MakeSignedInt512(End.X.Value)
+			- MakeSignedInt512(Start.X.Value);
+		const int512 DY = MakeSignedInt512(End.Y.Value)
+			- MakeSignedInt512(Start.Y.Value);
+		const int512 LengthSquared = DX * DX + DY * DY;
+		const int512 One(int64(1));
+		int512 Low(int64(0));
+		int512 High = One << 65;
+		while (High - Low > One)
+		{
+			const int512 Mid = (Low + High) >> 1;
+			if (Mid * Mid <= LengthSquared)
+			{
+				Low = Mid;
+			}
+			else
+			{
+				High = Mid;
+			}
+		}
+		return Low;
+	}
+
+	FFixedPoint InterpolateZByPlanarDistanceExact(
+		const FFixedVector& Start,
+		const FFixedVector& End,
+		FFixedPoint PlanarDistance,
+		const int512& PlanarLengthRaw)
+	{
+		const int512 DeltaZ = MakeSignedInt512(End.Z.Value)
+			- MakeSignedInt512(Start.Z.Value);
+		const int512 Adjustment =
+			(DeltaZ * int512(PlanarDistance.Value)) / PlanarLengthRaw;
+		return FFixedPoint(
+			(MakeSignedInt512(Start.Z.Value) + Adjustment).ToInt());
+	}
+
+	bool IsRawDifferenceRepresentable(int64 A, int64 B)
+	{
+		const uint64 Magnitude = A >= B
+			? static_cast<uint64>(A) - static_cast<uint64>(B)
+			: static_cast<uint64>(B) - static_cast<uint64>(A);
+		return Magnitude <= static_cast<uint64>(INT64_MAX);
+	}
+}
 
 // ======================================================================================
 // Steering seam (two-tier). The base Tick(Ctx) is the shared MECHANISM HARNESS: waypoint advance →
@@ -55,6 +200,7 @@ bool USeinMovement::Tick(const FSeinMovementContext& Ctx)
 
 	const FFixedVector PrePos  = Entity.Transform.GetLocation();
 	const FFixedVector FinalWp = Path.Waypoints[N - 1];
+	const FFixedPoint AcceptanceRadius = Ctx.GetAcceptanceRadius();
 
 	// MECHANISM: advance past any waypoint the unit has crossed/reached (incoming-direction
 	// crossover + distance fallback), so the policy always steers at a waypoint ahead of it.
@@ -67,14 +213,22 @@ bool USeinMovement::Tick(const FSeinMovementContext& Ctx)
 	// POLICY (ComputeArrivalMotion — default hard stop), applied via DispatchArrivalMotion so
 	// the action's crowd-stall failsafe leaves the unit in the same per-class state.
 	{
-		FFixedVector ToFinal = FinalWp - PrePos;
-		ToFinal.Z = FFixedPoint::Zero;
-		const bool bWithinAcceptance = ToFinal.SizeSquared() <= Ctx.AcceptanceRadiusSq;
+		const bool bWithinAcceptance =
+			Ctx.IsWithinPlanarAcceptance(PrePos, FinalWp);
 		const FFixedPoint EntrySpeed        = MovementData.Velocity.Size();
-		const FFixedPoint VicinityRadiusSq  = Ctx.AcceptanceRadiusSq * FFixedPoint::FromInt(4);
+		const FFixedPoint VicinityRadius =
+			SaturatingPositiveScale(AcceptanceRadius, 2);
 		const FFixedPoint OvershootSpeedCap = MovementData.TopSpeed / FFixedPoint::FromInt(3);
-		if (bWithinAcceptance || IsOvershootArrival(PrePos, FinalWp, Entity.Transform.Rotation,
-				EntrySpeed, VicinityRadiusSq, OvershootSpeedCap))
+		const bool bOvershoot = Ctx.HasExactAcceptanceRadius()
+			? IsOvershootArrivalRadius(
+				PrePos, FinalWp, Entity.Transform.Rotation,
+				EntrySpeed, VicinityRadius, OvershootSpeedCap)
+			: IsOvershootArrival(
+				PrePos, FinalWp, Entity.Transform.Rotation,
+				EntrySpeed,
+				SaturatingPositiveScale(Ctx.AcceptanceRadiusSq, 4),
+				OvershootSpeedCap);
+		if (bWithinAcceptance || bOvershoot)
 		{
 #if !UE_BUILD_SHIPPING
 			// Movement-trace event: WHICH trigger arrived the unit. An "overshoot" burst
@@ -86,8 +240,8 @@ bool USeinMovement::Tick(const FSeinMovementContext& Ctx)
 				Ctx.World ? Ctx.World->GetCurrentTick() : -1,
 				Ctx.SelfHandle.Index, Ctx.SelfHandle.Generation,
 				bWithinAcceptance ? TEXT("ring") : TEXT("overshoot"),
-				ToFinal.Size().ToFloat(),
-				SeinMath::Sqrt(Ctx.AcceptanceRadiusSq).ToFloat(),
+				FFixedVector::DistanceSaturated(PrePos, FinalWp).ToFloat(),
+				AcceptanceRadius.ToFloat(),
 				EntrySpeed.ToFloat());
 #endif
 			DispatchArrivalMotion(Ctx);
@@ -109,7 +263,12 @@ bool USeinMovement::Tick(const FSeinMovementContext& Ctx)
 		FFixedVector Step(Motion.Velocity.X * DeltaTime, Motion.Velocity.Y * DeltaTime, FFixedPoint::Zero);
 		FFixedVector ToWp = Path.Waypoints[CurrentWaypointIndex] - PrePos;
 		ToWp.Z = FFixedPoint::Zero;
-		const FFixedPoint DistWp  = ToWp.Size();
+		const FFixedPoint DistWp  = FFixedVector::DistanceSaturated(
+			FFixedVector(PrePos.X, PrePos.Y, FFixedPoint::Zero),
+			FFixedVector(
+				Path.Waypoints[CurrentWaypointIndex].X,
+				Path.Waypoints[CurrentWaypointIndex].Y,
+				FFixedPoint::Zero));
 		const FFixedPoint StepLen = Step.Size();
 		if (StepLen > DistWp && StepLen > FFixedPoint::Epsilon)
 		{
@@ -187,11 +346,17 @@ FSeinMotion USeinMovement::ComputeMotion_Implementation(USeinMoverHandle* Mover)
 	const int32 N = Ctx.Path.Waypoints.Num();
 	if (N == 0 || Ctx.CurrentWaypointIndex >= N) return Motion;
 
-	FFixedVector ToWp = Ctx.Path.Waypoints[Ctx.CurrentWaypointIndex] - Ctx.Entity.Transform.GetLocation();
-	ToWp.Z = FFixedPoint::Zero;
-	if (ToWp.SizeSquared() <= FFixedPoint::Epsilon) return Motion;
+	const FFixedVector CurrentLocation = Ctx.Entity.Transform.GetLocation();
+	FFixedVector Waypoint = Ctx.Path.Waypoints[Ctx.CurrentWaypointIndex];
+	Waypoint.Z = CurrentLocation.Z;
+	if (FFixedVector::IsDistanceWithin(
+		CurrentLocation, Waypoint, FFixedPoint::Epsilon))
+	{
+		return Motion;
+	}
 
-	const FFixedVector Dir   = ApplyAvoidanceSteer(Ctx, FFixedVector::GetSafeNormal(ToWp));
+	const FFixedVector Dir   = ApplyAvoidanceSteer(
+		Ctx, FFixedVector::GetSafeNormalDifference(CurrentLocation, Waypoint));
 	const FFixedPoint  Speed = EffectiveTopSpeed(Ctx) * GetAvoidanceSpeedScale(Ctx);
 	Motion.Velocity     = FFixedVector(Dir.X * Speed, Dir.Y * Speed, FFixedPoint::Zero);
 	Motion.TargetYaw    = SeinMath::Atan2(Dir.Y, Dir.X);
@@ -498,14 +663,9 @@ void USeinMovement::AdvanceWaypointAlongPath(
 	if (N <= 1) return;
 	if (CurrentWaypointIndex < 0) CurrentWaypointIndex = 0;
 
-	const FFixedPoint CloseRadiusSq = CloseRadius * CloseRadius;
-
 	while (CurrentWaypointIndex < N - 1)
 	{
 		const FFixedVector& Wp = Path.Waypoints[CurrentWaypointIndex];
-		const FFixedPoint OffDx = AgentPos.X - Wp.X;
-		const FFixedPoint OffDy = AgentPos.Y - Wp.Y;
-
 		bool bAdvance = false;
 
 		// Overshoot test — has the agent passed Wp ALONG THE INCOMING travel
@@ -525,15 +685,23 @@ void USeinMovement::AdvanceWaypointAlongPath(
 		if (CurrentWaypointIndex > 0)
 		{
 			const FFixedVector& PrevWp = Path.Waypoints[CurrentWaypointIndex - 1];
-			const FFixedPoint InDx = Wp.X - PrevWp.X;
-			const FFixedPoint InDy = Wp.Y - PrevWp.Y;
-			if (OffDx * InDx + OffDy * InDy > FFixedPoint::Zero) bAdvance = true;
+			const FFixedVector OffsetDirection =
+				FFixedVector::GetSafeNormalDifference(Wp, AgentPos);
+			const FFixedVector IncomingDirection =
+				FFixedVector::GetSafeNormalDifference(PrevWp, Wp);
+			if (OffsetDirection.X * IncomingDirection.X
+					+ OffsetDirection.Y * IncomingDirection.Y
+				> FFixedPoint::Zero)
+			{
+				bAdvance = true;
+			}
 		}
 
 		// Distance test — genuinely within CloseRadius of Wp. Primary trigger for
 		// normal arrival (the mode steers straight at Wp, so the agent always passes
 		// within CloseRadius of it) and the sole trigger for the first waypoint.
-		if (!bAdvance && (OffDx * OffDx + OffDy * OffDy) <= CloseRadiusSq)
+		if (!bAdvance && FFixedVector::IsPlanarDistanceWithin(
+			AgentPos, Wp, CloseRadius))
 		{
 			bAdvance = true;
 		}
@@ -617,18 +785,24 @@ FFixedVector USeinMovement::ResolveLookAheadPoint(
 		const FFixedVector PrevPos = (Thinned.Num() > 0) ? Thinned.Last() : AgentPos;
 		const FFixedVector& NextRaw = Path.Waypoints[i + 1];
 
-		FFixedVector PrevToCand = Cand - PrevPos;
-		FFixedVector CandToNext = NextRaw - Cand;
-		PrevToCand.Z = FFixedPoint::Zero;
-		CandToNext.Z = FFixedPoint::Zero;
-		const FFixedPoint LenA = PrevToCand.Size();
-		const FFixedPoint LenB = CandToNext.Size();
+		const FFixedVector PlanarPrev(
+			PrevPos.X, PrevPos.Y, FFixedPoint::Zero);
+		const FFixedVector PlanarCand(
+			Cand.X, Cand.Y, FFixedPoint::Zero);
+		const FFixedVector PlanarNext(
+			NextRaw.X, NextRaw.Y, FFixedPoint::Zero);
+		const FFixedPoint LenA = FFixedVector::DistanceSaturated(
+			PlanarPrev, PlanarCand);
+		const FFixedPoint LenB = FFixedVector::DistanceSaturated(
+			PlanarCand, PlanarNext);
 
 		if (LenA > FFixedPoint::Epsilon && LenA < CloseSegThreshold
 			&& LenB > FFixedPoint::Epsilon)
 		{
-			const FFixedVector NormA = PrevToCand / LenA;
-			const FFixedVector NormB = CandToNext / LenB;
+			const FFixedVector NormA =
+				FFixedVector::GetSafeNormalDifference(PlanarPrev, PlanarCand);
+			const FFixedVector NormB =
+				FFixedVector::GetSafeNormalDifference(PlanarCand, PlanarNext);
 			const FFixedPoint Dot = NormA.X * NormB.X + NormA.Y * NormB.Y;
 			if (Dot >= CollinearCosThreshold)
 			{
@@ -657,22 +831,59 @@ FFixedVector USeinMovement::ResolveLookAheadPoint(
 
 	while (true)
 	{
-		FFixedVector Seg = SegEnd - SegStart;
-		Seg.Z = FFixedPoint::Zero;
-		const FFixedPoint SegLen = Seg.Size();
+		const FFixedVector PlanarStart(
+			SegStart.X, SegStart.Y, FFixedPoint::Zero);
+		const FFixedVector PlanarEnd(
+			SegEnd.X, SegEnd.Y, FFixedPoint::Zero);
+		const FFixedPoint ApproximateSegLen = FFixedVector::DistanceSaturated(
+			PlanarStart, PlanarEnd);
+		const bool bNeedsExactLength =
+			ApproximateSegLen == FFixedPoint::MaxValue
+			|| !IsRawDifferenceRepresentable(
+				SegStart.Z.Value, SegEnd.Z.Value);
+		int512 ExactSegLenRaw(int64(0));
+		bool bExactLengthRepresentable = false;
+		FFixedPoint SegLen = ApproximateSegLen;
+		if (bNeedsExactLength)
+		{
+			ExactSegLenRaw = ExactPlanarLengthRawFloor(SegStart, SegEnd);
+			bExactLengthRepresentable =
+				ExactSegLenRaw <= int512(int64(INT64_MAX));
+			if (bExactLengthRepresentable)
+			{
+				SegLen = FFixedPoint(ExactSegLenRaw.ToInt());
+			}
+		}
 
 		if (Remaining <= SegLen)
 		{
+			// Exact floor equality is the endpoint. Returning it directly keeps
+			// XY and Z from using an approximate direction or overshooting by the
+			// sub-raw-unit remainder discarded by the integer square root.
+			if (bNeedsExactLength && bExactLengthRepresentable
+				&& int512(Remaining.Value) >= ExactSegLenRaw)
+			{
+				return SegEnd;
+			}
 			// Carrot lands within this segment.
 			if (SegLen > FFixedPoint::Epsilon)
 			{
-				const FFixedVector Dir = FFixedVector::GetSafeNormal(Seg);
+				const FFixedVector Dir =
+					FFixedVector::GetSafeNormalDifference(PlanarStart, PlanarEnd);
 				FFixedVector Out = SegStart + Dir * Remaining;
 				// Z interpolation along the segment by XY fraction so the
 				// carrot's elevation tracks the path's slope continuously
 				// between waypoints (steering-vector debug viz consumes this).
-				const FFixedPoint T = Remaining / SegLen;
-				Out.Z = SegStart.Z + (SegEnd.Z - SegStart.Z) * T;
+				if (bNeedsExactLength)
+				{
+					Out.Z = InterpolateZByPlanarDistanceExact(
+						SegStart, SegEnd, Remaining, ExactSegLenRaw);
+				}
+				else
+				{
+					const FFixedPoint T = Remaining / SegLen;
+					Out.Z = SegStart.Z + (SegEnd.Z - SegStart.Z) * T;
+				}
 				return Out;
 			}
 			// Zero-length segment with Remaining ≈ 0 → sit at SegEnd.
@@ -745,9 +956,10 @@ FFixedPoint USeinMovement::KinematicArrivalSpeedCap(
 	if (Deceleration <= FFixedPoint::Zero) return FFixedPoint::FromInt(1000000);
 	if (DistToFinal <= FFixedPoint::Zero) return FFixedPoint::Zero;
 
-	const FFixedPoint TwoAD = FFixedPoint::Two * Deceleration * DistToFinal;
-	if (TwoAD <= FFixedPoint::Zero) return FFixedPoint::Zero;
-	return SeinMath::Sqrt(TwoAD);
+	// speedRaw^2 = 2 * distanceRaw * decelerationRaw. Floor the exact
+	// 128-bit radicand so the cap is conservative and cannot overstate the
+	// speed that can brake inside the remaining distance.
+	return FloorSqrtTwiceRawProduct(DistToFinal, Deceleration);
 }
 
 bool USeinMovement::QueryReferenceZ(USeinNavigation* Nav, const FFixedVector& WorldPos, FFixedPoint& OutZ) const
@@ -1132,10 +1344,14 @@ FFixedVector USeinMovement::ResolveNavCollisionStep(
 	// it never lets the body clip walls anywhere else along the path.
 	if (AuthoritativeDest)
 	{
-		FFixedVector ToDest = NewPos - *AuthoritativeDest;
-		ToDest.Z = FFixedPoint::Zero;
-		const FFixedPoint ExemptRadius = CachedCollisionRadius + FFixedPoint::FromInt(50);
-		if (ToDest.SizeSquared() <= ExemptRadius * ExemptRadius
+		const FFixedPoint ExemptRadius = SaturatingPositiveAdd(
+			CachedCollisionRadius, FFixedPoint::FromInt(50));
+		const FFixedVector PlanarNewPos(
+			NewPos.X, NewPos.Y, FFixedPoint::Zero);
+		const FFixedVector PlanarDestination(
+			AuthoritativeDest->X, AuthoritativeDest->Y, FFixedPoint::Zero);
+		if (FFixedVector::IsPlanarDistanceWithin(
+				PlanarNewPos, PlanarDestination, ExemptRadius)
 			&& Nav->IsAuthoritativeFootprintSafeForAgent(
 				NewPos, Agent))
 		{
@@ -1246,7 +1462,8 @@ FFixedVector USeinMovement::ApplyAvoidanceSteer(const FSeinMovementContext& Ctx,
 	if (Ctx.Nav)
 	{
 		const FFixedVector Pos = Ctx.Entity.Transform.GetLocation();
-		const FFixedPoint Probe = CachedCollisionRadius + FFixedPoint::FromInt(50);
+		const FFixedPoint Probe = SaturatingPositiveAdd(
+			CachedCollisionRadius, FFixedPoint::FromInt(50));
 		const FFixedVector BentCand(Pos.X + Bent.X * Probe, Pos.Y + Bent.Y * Probe, Pos.Z);
 		if (!IsFootprintPassable(BentCand, Ctx.Nav))
 		{
@@ -1495,9 +1712,46 @@ bool USeinMovement::IsOvershootArrival(
 	FFixedPoint VicinityRadiusSq,
 	FFixedPoint MaxSpeedForOvershoot)
 {
-	FFixedVector ToFinal = FinalWp - AgentPos;
-	ToFinal.Z = FFixedPoint::Zero;
-	if (ToFinal.SizeSquared() > VicinityRadiusSq) return false;
+	const FFixedVector PlanarAgent(
+		AgentPos.X, AgentPos.Y, FFixedPoint::Zero);
+	const FFixedVector PlanarFinal(
+		FinalWp.X, FinalWp.Y, FFixedPoint::Zero);
+	if (!FFixedVector::IsPlanarDistSquaredWithin(
+		PlanarAgent, PlanarFinal, VicinityRadiusSq))
+	{
+		return false;
+	}
+
+	const FFixedPoint AbsSpeed = CurrentSpeed < FFixedPoint::Zero
+		? -CurrentSpeed : CurrentSpeed;
+	if (AbsSpeed > MaxSpeedForOvershoot)
+	{
+		return false;
+	}
+	const FFixedVector ToFinal =
+		FFixedVector::GetSafeNormalDifference(PlanarAgent, PlanarFinal);
+	const FFixedVector Forward = Rotation.RotateVector(FFixedVector::ForwardVector);
+	return Forward.X * ToFinal.X + Forward.Y * ToFinal.Y
+		< FFixedPoint::Zero;
+}
+
+bool USeinMovement::IsOvershootArrivalRadius(
+	const FFixedVector& AgentPos,
+	const FFixedVector& FinalWp,
+	const FFixedQuaternion& Rotation,
+	FFixedPoint CurrentSpeed,
+	FFixedPoint VicinityRadius,
+	FFixedPoint MaxSpeedForOvershoot)
+{
+	const FFixedVector PlanarAgent(
+		AgentPos.X, AgentPos.Y, FFixedPoint::Zero);
+	const FFixedVector PlanarFinal(
+		FinalWp.X, FinalWp.Y, FFixedPoint::Zero);
+	if (!FFixedVector::IsPlanarDistanceWithin(
+		PlanarAgent, PlanarFinal, VicinityRadius))
+	{
+		return false;
+	}
 
 	const FFixedPoint AbsSpeed = (CurrentSpeed < FFixedPoint::Zero) ? -CurrentSpeed : CurrentSpeed;
 	if (AbsSpeed > MaxSpeedForOvershoot) return false;
@@ -1505,6 +1759,8 @@ bool USeinMovement::IsOvershootArrival(
 	// "Heading away" — forward · toFinal < 0. ToFinal is non-zero here only
 	// if the unit is offset from FinalWp; degenerate-zero falls through to
 	// the dot returning 0 and not triggering.
+	const FFixedVector ToFinal =
+		FFixedVector::GetSafeNormalDifference(PlanarAgent, PlanarFinal);
 	const FFixedVector Forward = Rotation.RotateVector(FFixedVector::ForwardVector);
 	const FFixedPoint Dot = Forward.X * ToFinal.X + Forward.Y * ToFinal.Y;
 	return Dot < FFixedPoint::Zero;
@@ -1518,16 +1774,26 @@ bool USeinMovement::ShouldAutoReverse(
 {
 	if (!MovementData.bCanReverse) return false;
 
-	FFixedVector ToGoal = FinalGoal - AgentPos;
-	ToGoal.Z = FFixedPoint::Zero;
-	const FFixedPoint DistSq = ToGoal.SizeSquared();
-	const FFixedPoint MaxDistSq = MovementData.ReverseEngageDistanceThreshold * MovementData.ReverseEngageDistanceThreshold;
-	if (DistSq > MaxDistSq) return false;
-	if (DistSq <= FFixedPoint::Epsilon) return false; // already on goal
+	const FFixedVector PlanarAgent(
+		AgentPos.X, AgentPos.Y, FFixedPoint::Zero);
+	const FFixedVector PlanarGoal(
+		FinalGoal.X, FinalGoal.Y, FFixedPoint::Zero);
+	if (!FFixedVector::IsPlanarDistanceWithin(
+		PlanarAgent, PlanarGoal,
+		MovementData.ReverseEngageDistanceThreshold))
+	{
+		return false;
+	}
+	if (FFixedVector::IsPlanarDistanceWithin(
+		PlanarAgent, PlanarGoal, FFixedPoint::Epsilon))
+	{
+		return false;
+	}
 
 	// Compare normalized dot against threshold. Threshold is typically
 	// negative (target is behind) — using <= so the boundary case engages.
-	const FFixedVector ToGoalN = FFixedVector::GetSafeNormal(ToGoal);
+	const FFixedVector ToGoalN =
+		FFixedVector::GetSafeNormalDifference(PlanarAgent, PlanarGoal);
 	const FFixedVector Forward = Rotation.RotateVector(FFixedVector::ForwardVector);
 	const FFixedPoint Dot = Forward.X * ToGoalN.X + Forward.Y * ToGoalN.Y;
 	return Dot <= MovementData.ReverseEngageDotThreshold;

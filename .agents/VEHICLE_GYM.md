@@ -1,6 +1,6 @@
 # Movement+ Vehicle Gym
 
-**Evidence date:** 2026-08-11
+**Evidence date:** 2026-08-13
 
 **Scope:** deterministic wheeled/tracked movement qualification; automated source evidence plus a human PIE acceptance matrix.
 
@@ -46,10 +46,14 @@ Run the focused gates from the project root:
 
 ## What automation does not prove
 
-This suite proves exact state and bounded completion for its scenarios. It does not prove designer-perceived motion quality, arbitrary-map clearance, large-scale performance, or real multi-client network transport.
+This suite proves exact state and bounded completion for its scenarios. The generated downstream
+consumer separately proves a real packaged Shipping listen server/client movement, resync,
+reconnect, and replay path. Neither proves designer-perceived motion quality, arbitrary-map
+clearance, large-scale performance, dedicated-server transport, or adversarial network conditions.
 
-- Snapshot continuation, replay-file checkpoint continuation, and bounded reconnect transfer are
-  covered directly for Movement+. Real multi-client PIE remains the transport and presentation oracle.
+- Snapshot continuation, replay-file checkpoint continuation, bounded reconnect transfer, and the
+  packaged two-process listen-server path are covered directly for Movement+. Real multi-client PIE
+  remains the feel, presentation, and configured-game oracle.
 - Presentation exposes truthful settled ground speed/reverse state plus typed render-only steering
   angle, yaw rate, normalized throttle/brake, wheel rotation, and left/right track velocity through
   `USeinMovementPlusBPFL`. Animation Blueprint readability remains a PIE oracle.

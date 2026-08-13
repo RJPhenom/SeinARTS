@@ -61,12 +61,15 @@ FSeinMotion USeinInfantryMovement::ComputeMotion_Implementation(USeinMoverHandle
 	const FFixedVector Forward = Ctx.Entity.Transform.Rotation.RotateVector(FFixedVector::ForwardVector);
 
 	// Desired direction toward the current waypoint, bent by local avoidance.
-	FFixedVector ToWp = Path.Waypoints[Ctx.CurrentWaypointIndex] - Pos;
-	ToWp.Z = FFixedPoint::Zero;
+	FFixedVector Waypoint = Path.Waypoints[Ctx.CurrentWaypointIndex];
+	Waypoint.Z = Pos.Z;
+	const bool bHasDirection = !FFixedVector::IsPlanarDistanceWithin(
+		Pos, Waypoint, FFixedPoint::Epsilon);
 	FFixedVector Dir = FFixedVector::ZeroVector;
-	if (ToWp.SizeSquared() > FFixedPoint::Epsilon)
+	if (bHasDirection)
 	{
-		Dir = ApplyAvoidanceSteer(Ctx, FFixedVector::GetSafeNormal(ToWp));
+		Dir = ApplyAvoidanceSteer(
+			Ctx, FFixedVector::GetSafeNormalDifference(Pos, Waypoint));
 	}
 
 	// Alignment-scaled cruise: full speed when facing the desired dir, zero at 90°+ off (so the unit
@@ -78,9 +81,11 @@ FSeinMotion USeinInfantryMovement::ComputeMotion_Implementation(USeinMoverHandle
 
 	// Kinematic arrival brake against the final waypoint (v² = 2·a·d).
 	{
-		FFixedVector ToFinal = Path.Waypoints[N - 1] - Pos;
-		ToFinal.Z = FFixedPoint::Zero;
-		const FFixedPoint MaxArrival = KinematicArrivalSpeedCap(ToFinal.Size(), Data.Deceleration);
+		FFixedVector FinalWaypoint = Path.Waypoints[N - 1];
+		FinalWaypoint.Z = Pos.Z;
+		const FFixedPoint MaxArrival = KinematicArrivalSpeedCap(
+			FFixedVector::DistanceSaturated(Pos, FinalWaypoint),
+			Data.Deceleration);
 		if (MaxArrival < TargetSpeed) TargetSpeed = MaxArrival;
 	}
 
