@@ -750,7 +750,7 @@ bool USeinReplayWriter::ResolvePendingCheckpointEncode(
 			Result.SnapshotTick,
 			Result.Envelope,
 			/*bAsync=*/!bAppendSynchronously);
-	Result.Envelope.Reset();
+	Result.Envelope.Empty();
 	if (!bAppended)
 	{
 		return false;
@@ -1775,7 +1775,7 @@ bool USeinReplayWriter::CaptureCheckpointInternal(
 						Result.bSucceeded = false;
 						Result.Error = TEXT(
 							"checkpoint envelope tick disagrees with Core");
-						Result.Envelope.Reset();
+						Result.Envelope.Empty();
 					}
 				}
 				AsyncTask(ENamedThreads::GameThread,
