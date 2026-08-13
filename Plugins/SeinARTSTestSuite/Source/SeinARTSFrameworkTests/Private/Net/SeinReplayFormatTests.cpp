@@ -1,6 +1,8 @@
 #include "CQTest.h"
 #include "Components/ActorTestSpawner.h"
 
+#include "Data/SeinRelationshipTypes.h"
+#include "Data/SeinWorldSnapshot.h"
 #include "Containers/Ticker.h"
 #include "Brokers/SeinBrokerTypes.h"
 #include "Engine/World.h"
@@ -18,6 +20,7 @@
 #include "Simulation/SeinTestMatchBootstrap.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Tags/SeinARTSGameplayTags.h"
+#include "TestTypes/SeinComponentStorageTestTypes.h"
 #include "TestTypes/SeinReplayTestTypes.h"
 #include "TestTypes/SeinCommandSchemaTestTypes.h"
 #include "UObject/GarbageCollection.h"
@@ -282,9 +285,13 @@ namespace UE::SeinARTSTests
 
 			~FScopedReplayFile()
 			{
-				if (!Path.IsEmpty())
+				if (!Path.IsEmpty()
+					&& IFileManager::Get().FileExists(*Path)
+					&& !IFileManager::Get().Delete(*Path, false, true))
 				{
-					IFileManager::Get().Delete(*Path, false, true);
+					UE_LOG(LogTemp, Error,
+						TEXT("Could not delete replay test artifact: %s"),
+						*Path);
 				}
 			}
 		};
@@ -426,6 +433,43 @@ namespace UE::SeinARTSTests
 			return Settings;
 		}
 
+		FSeinMatchSettings MakeTwoPlayerMatchSettings()
+		{
+			FSeinMatchSettings Settings;
+			for (int32 SlotIndex = 1; SlotIndex <= 2; ++SlotIndex)
+			{
+				FSeinMatchSlot& Slot = Settings.Slots.AddDefaulted_GetRef();
+				Slot.SlotIndex = SlotIndex;
+				Slot.State = ESeinSlotState::Human;
+			}
+			return Settings;
+		}
+
+		FSeinCommand MakeCheckpointSessionMutation(
+			int32 Tick,
+			bool bGrant)
+		{
+			FSeinSetPairCapabilityCommandPayload Payload;
+			Payload.SourcePlayer = FSeinPlayerID(1);
+			Payload.TargetPlayer = FSeinPlayerID(2);
+			Payload.CapabilityTag =
+				SeinARTSTags::Relationship_Capability_ShareVision;
+			Payload.SourceKindTag =
+				SeinARTSTags::Relationship_Source_TeamBootstrap;
+			Payload.SourceInstanceID = 0x43485054;
+			Payload.bGrant = bGrant;
+
+			FSeinCommand Command;
+			Command.CommandType =
+				SeinARTSTags::Command_Type_SetPairCapability;
+			Command.SchemaVersion = 1;
+			Command.Tick = Tick;
+			Command.IssuerKind =
+				ESeinCommandIssuerKind::MatchAdministrator;
+			Command.Payload = FInstancedStruct::Make(Payload);
+			return Command;
+		}
+
 		USeinReplayWriter* StartV9Recording(
 			USeinWorldSubsystem& World,
 			const FSeinMatchSettings& MatchSettings = FSeinMatchSettings())
@@ -453,6 +497,80 @@ namespace UE::SeinARTSTests
 			}
 			// Unit/integration fixtures advance the writer's observation contract
 			// explicitly; do not leave the world ticker free-running beside them.
+			World.StopSimulation();
+			return Writer;
+		}
+
+		USeinReplayWriter* StartPopulatedV9Recording(
+			USeinWorldSubsystem& World,
+			const FSeinMatchSettings& MatchSettings,
+			int32 Population,
+			FString& OutPartialPath,
+			FString& OutError)
+		{
+			bool bAuthoringSucceeded = true;
+			const auto AuthorState = [&]()
+			{
+				for (const FSeinMatchSlot& Slot : MatchSettings.Slots)
+				{
+					if (Slot.State != ESeinSlotState::Human
+						&& Slot.State != ESeinSlotState::AI)
+					{
+						continue;
+					}
+					World.RegisterPlayer(
+						FSeinPlayerID(static_cast<uint8>(Slot.SlotIndex)),
+						Slot.FactionID,
+						Slot.TeamID);
+				}
+				for (int32 Index = 0; Index < Population; ++Index)
+				{
+					const FSeinEntityHandle Handle = World.SpawnAbstractEntity(
+						FFixedTransform(FFixedVector(
+							FFixedPoint::FromInt(Index * 100),
+							FFixedPoint::Zero,
+							FFixedPoint::Zero)),
+						FSeinPlayerID::Neutral());
+					if (!Handle.IsValid())
+					{
+						bAuthoringSucceeded = false;
+						OutError = TEXT(
+							"Could not spawn the checkpoint-session population.");
+						return;
+					}
+
+					FSeinComponentStorageLifecycleProbe Probe;
+					Probe.Values = {Index, Index * 3, Index % 11};
+					World.AddComponent(Handle, Probe);
+				}
+			};
+			if (!SeinTestMatchBootstrap::Materialize(
+					World,
+					AuthorState,
+					MatchSettings,
+					/*SessionSeed=*/0,
+					FName(TEXT("SeinFrameworkTests.ReplayCheckpointSession")),
+					&OutError)
+				|| !bAuthoringSucceeded
+				|| !SeinTestMatchBootstrap::Authorize(World, &OutError))
+			{
+				return nullptr;
+			}
+
+			USeinReplayWriter* Writer = NewObject<USeinReplayWriter>(&World);
+			Writer->StartRecording(MakePreparedWorldHeader(World));
+			OutPartialPath = Writer->GetActivePartialPath();
+			if (!Writer->IsRecording()
+				|| !SeinTestMatchBootstrap::Start(World, &OutError)
+				|| !Writer->CaptureCheckpoint(/*bRequired=*/true))
+			{
+				if (OutError.IsEmpty())
+				{
+					OutError = TEXT(
+						"Could not start the populated replay checkpoint session.");
+				}
+				return nullptr;
+			}
 			World.StopSimulation();
 			return Writer;
 		}
@@ -1418,6 +1536,288 @@ namespace UE::SeinARTSTests
 			FullTargetRoot, Error)));
 		ASSERT_THAT(AreEqual(
 			SourceRoot.ToString(EGuidFormats::Digits),
+			FullTargetRoot.ToString(EGuidFormats::Digits)));
+		FullTarget->StopSimulation();
+	}
+
+	TEST(ReplayPeriodicCheckpointSessionStaysBoundedAndEveryCheckpointSeeksExact,
+		"SeinARTS.Integration.Network.Replay")
+	{
+		constexpr int32 Population = 128;
+		constexpr int32 PeriodicCheckpointCount = 25;
+		FScopedFastReplayMaintenance MaintenanceSettings;
+		FActorTestSpawner SourceSpawner;
+		USeinWorldSubsystem* Source =
+			SourceSpawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(Source));
+		FString Error;
+		FString PartialPath;
+		USeinReplayWriter* Writer = StartPopulatedV9Recording(
+			*Source,
+			MakeTwoPlayerMatchSettings(),
+			Population,
+			PartialPath,
+			Error);
+		FScopedReplayFile ReplayFile{MoveTemp(PartialPath)};
+		if (!Writer)
+		{
+			UE_LOG(LogTemp, Error,
+				TEXT("Populated replay checkpoint session failed: %s"),
+				*Error);
+		}
+		ASSERT_THAT(IsNotNull(Writer));
+		if (!Writer)
+		{
+			return;
+		}
+		ASSERT_THAT(AreEqual(1, Writer->GetPersistedCheckpointCount()));
+		ASSERT_THAT(AreEqual(
+			1, Source->GetComponentStorageSnapshotCacheEntryCountForTests()));
+		ASSERT_THAT(IsTrue(
+			Source->HasComponentStorageSnapshotCacheEntryForTests(
+				FSeinComponentStorageLifecycleProbe::StaticStruct())));
+		const uint64 StableCacheBytes =
+			Source->GetComponentStorageSnapshotCacheBytesForTests();
+		const uint64 StableAllocatedCacheBytes =
+			Source
+				->CalculateComponentStorageSnapshotCacheAllocatedBytesForTests();
+		const int64 InitialCacheHits =
+			Source->GetComponentStorageSnapshotCacheHitCountForTests();
+		ASSERT_THAT(IsTrue(StableCacheBytes > 0));
+		ASSERT_THAT(AreEqual(
+			StableCacheBytes,
+			Source->CalculateComponentStorageSnapshotCachePayloadBytesForTests()));
+		ASSERT_THAT(IsTrue(StableAllocatedCacheBytes >= StableCacheBytes));
+		ASSERT_THAT(IsTrue(
+			StableCacheBytes
+				<= Source->GetDefaultComponentStorageSnapshotCacheBudgetForTests()));
+
+		const USeinARTSCoreSettings* Settings =
+			GetDefault<USeinARTSCoreSettings>();
+		ASSERT_THAT(IsNotNull(Settings));
+		const int32 TicksPerTurn = FMath::Max(
+			1, Settings->SimulationTickRate / Settings->TurnRate);
+		const int32 FirstTurn = FMath::Max(1, Settings->InputDelayTurns);
+		TArray<int32> CheckpointTicks;
+		TArray<FGuid> CheckpointRoots;
+		TArray<bool> CheckpointCapabilityStates;
+		CheckpointTicks.Reserve(PeriodicCheckpointCount);
+		CheckpointRoots.Reserve(PeriodicCheckpointCount);
+		CheckpointCapabilityStates.Reserve(PeriodicCheckpointCount);
+		ASSERT_THAT(IsTrue(Source->StartSimulation()));
+		for (int32 CheckpointIndex = 0;
+			CheckpointIndex < PeriodicCheckpointCount;
+			++CheckpointIndex)
+		{
+			const int32 Turn = FirstTurn + CheckpointIndex;
+			const int32 CheckpointTick = Turn * TicksPerTurn;
+			const bool bGrant = (CheckpointIndex % 2) == 0;
+			const FSeinCommand Mutation =
+				MakeCheckpointSessionMutation(CheckpointTick, bGrant);
+			Writer->RecordTurn(Turn, {Mutation});
+			while (Source->GetCurrentTick() < CheckpointTick)
+			{
+				const int32 ExpectedTick = Source->GetCurrentTick() + 1;
+				if (ExpectedTick == CheckpointTick)
+				{
+					Source->SubmitLocalCommandDraft(
+						Mutation, /*bRequestMatchAdministration=*/true);
+				}
+				FTSTicker::GetCoreTicker().Tick(
+					Source->GetFixedDeltaTimeSeconds());
+				ASSERT_THAT(AreEqual(ExpectedTick, Source->GetCurrentTick()));
+				Writer->ObserveCompletedTick(ExpectedTick);
+			}
+			ASSERT_THAT(AreEqual(
+				bGrant,
+				Source->HasPairCapability(
+					FSeinPlayerID(1),
+					FSeinPlayerID(2),
+					SeinARTSTags::Relationship_Capability_ShareVision)));
+
+			Writer->FlushAppliedProgressForTests();
+			ASSERT_THAT(AreEqual(
+				CheckpointIndex + 1, Writer->GetPersistedTurnCount()));
+			Writer->RunScheduledMaintenanceForTests();
+			ASSERT_THAT(IsTrue(Writer->IsCheckpointEncodePending()));
+			Writer->ResolveCheckpointEncodeForTests();
+			ASSERT_THAT(IsFalse(Writer->IsCheckpointEncodePending()));
+			ASSERT_THAT(IsTrue(Writer->IsCheckpointAppendPending()));
+			Writer->FlushAppliedProgressForTests();
+			ASSERT_THAT(IsFalse(Writer->IsCheckpointAppendPending()));
+			ASSERT_THAT(AreEqual(
+				CheckpointIndex + 2,
+				Writer->GetPersistedCheckpointCount()));
+
+			ASSERT_THAT(AreEqual(
+				StableCacheBytes,
+				Source->GetComponentStorageSnapshotCacheBytesForTests()));
+			ASSERT_THAT(AreEqual(
+				StableCacheBytes,
+				Source
+					->CalculateComponentStorageSnapshotCachePayloadBytesForTests()));
+			ASSERT_THAT(AreEqual(
+				StableAllocatedCacheBytes,
+				Source
+					->CalculateComponentStorageSnapshotCacheAllocatedBytesForTests()));
+			ASSERT_THAT(AreEqual(
+				1,
+				Source->GetComponentStorageSnapshotCacheEntryCountForTests()));
+			ASSERT_THAT(AreEqual(
+				InitialCacheHits + CheckpointIndex + 1,
+				Source->GetComponentStorageSnapshotCacheHitCountForTests()));
+
+			FGuid Root;
+			ASSERT_THAT(IsTrue(
+				Source->ComputeCanonicalStateRoot(Root, Error)));
+			CheckpointTicks.Add(CheckpointTick);
+			CheckpointRoots.Add(Root);
+			CheckpointCapabilityStates.Add(bGrant);
+		}
+
+		ASSERT_THAT(AreEqual(
+			PeriodicCheckpointCount, CheckpointTicks.Num()));
+		ASSERT_THAT(AreEqual(
+			CheckpointTicks.Num(), CheckpointRoots.Num()));
+		ASSERT_THAT(AreEqual(
+			CheckpointTicks.Num(), CheckpointCapabilityStates.Num()));
+		const int32 FinalTick = Source->GetCurrentTick();
+		const FGuid SourceFinalRoot = CheckpointRoots.Last();
+		Source->StopSimulation();
+		const FString PublishedPath = Writer->FinishRecording();
+		ASSERT_THAT(IsFalse(PublishedPath.IsEmpty()));
+		if (!PublishedPath.IsEmpty())
+		{
+			ReplayFile.Path = PublishedPath;
+		}
+		ASSERT_THAT(AreEqual(
+			PeriodicCheckpointCount + 1,
+			Writer->GetPersistedCheckpointCount()));
+
+		for (int32 CheckpointIndex = 0;
+			CheckpointIndex < CheckpointTicks.Num();
+			++CheckpointIndex)
+		{
+			FActorTestSpawner ProbeSpawner;
+			USeinWorldSubsystem* Probe =
+				ProbeSpawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+			ASSERT_THAT(IsNotNull(Probe));
+			USeinReplayReader* ProbeReader = NewObject<USeinReplayReader>(
+				&ProbeSpawner.GetWorld());
+			ASSERT_THAT(IsTrue(ProbeReader->LoadFromFile(ReplayFile.Path)));
+			ASSERT_THAT(IsTrue(
+				ProbeReader->PlayFromTick(CheckpointTicks[CheckpointIndex])));
+			const bool bTerminalCheckpoint =
+				CheckpointIndex == CheckpointTicks.Num() - 1;
+			ASSERT_THAT(AreEqual(
+				!bTerminalCheckpoint, ProbeReader->IsPlaying()));
+			ASSERT_THAT(AreEqual(
+				!bTerminalCheckpoint, Probe->IsSimulationRunning()));
+			if (!bTerminalCheckpoint)
+			{
+				ProbeReader->Stop();
+			}
+			ASSERT_THAT(AreEqual(
+				CheckpointTicks[CheckpointIndex], Probe->GetCurrentTick()));
+			if (bTerminalCheckpoint)
+			{
+				ASSERT_THAT(IsTrue(Probe->StartSimulation()));
+			}
+			ASSERT_THAT(AreEqual(
+				CheckpointCapabilityStates[CheckpointIndex],
+				Probe->HasPairCapability(
+					FSeinPlayerID(1),
+					FSeinPlayerID(2),
+					SeinARTSTags::Relationship_Capability_ShareVision)));
+			FGuid ProbeRoot;
+			ASSERT_THAT(IsTrue(
+				Probe->ComputeCanonicalStateRoot(ProbeRoot, Error)));
+			ASSERT_THAT(AreEqual(
+				CheckpointRoots[CheckpointIndex].ToString(EGuidFormats::Digits),
+				ProbeRoot.ToString(EGuidFormats::Digits)));
+
+			FSeinWorldSnapshot ColdAfterRestore;
+			FSeinWorldSnapshot HotAfterRestore;
+			const int64 MissesBeforeColdCapture =
+				Probe->GetComponentStorageSnapshotCacheMissCountForTests();
+			const int64 HitsBeforeColdCapture =
+				Probe->GetComponentStorageSnapshotCacheHitCountForTests();
+			Probe->CaptureSnapshot(ColdAfterRestore);
+			const int64 HitsAfterColdCapture =
+				Probe->GetComponentStorageSnapshotCacheHitCountForTests();
+			const int64 MissesAfterColdCapture =
+				Probe->GetComponentStorageSnapshotCacheMissCountForTests();
+			Probe->CaptureSnapshot(HotAfterRestore);
+			ASSERT_THAT(AreEqual(
+				HitsBeforeColdCapture, HitsAfterColdCapture));
+			ASSERT_THAT(AreEqual(
+				MissesBeforeColdCapture + 1, MissesAfterColdCapture));
+			ASSERT_THAT(AreEqual(
+				StableCacheBytes,
+				Probe->GetComponentStorageSnapshotCacheBytesForTests()));
+			ASSERT_THAT(AreEqual(
+				StableCacheBytes,
+				Probe
+					->CalculateComponentStorageSnapshotCachePayloadBytesForTests()));
+			ASSERT_THAT(AreEqual(
+				StableAllocatedCacheBytes,
+				Probe
+					->CalculateComponentStorageSnapshotCacheAllocatedBytesForTests()));
+			ASSERT_THAT(AreEqual(
+				HitsAfterColdCapture + 1,
+				Probe->GetComponentStorageSnapshotCacheHitCountForTests()));
+			ASSERT_THAT(AreEqual(
+				MissesAfterColdCapture,
+				Probe->GetComponentStorageSnapshotCacheMissCountForTests()));
+			if (bTerminalCheckpoint)
+			{
+				Probe->StopSimulation();
+			}
+		}
+
+		FActorTestSpawner FullTargetSpawner;
+		USeinWorldSubsystem* FullTarget =
+			FullTargetSpawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(FullTarget));
+		USeinReplayReader* FullReader = NewObject<USeinReplayReader>(
+			&FullTargetSpawner.GetWorld());
+		ASSERT_THAT(IsTrue(FullReader->LoadFromFile(ReplayFile.Path)));
+		ASSERT_THAT(IsTrue(FullReader->Play()));
+		int32 FullCheckpointIndex = 0;
+		for (int32 Pump = 0;
+			Pump < FinalTick * 4 && FullReader->IsPlaying();
+			++Pump)
+		{
+			FTSTicker::GetCoreTicker().Tick(
+				FullTarget->GetFixedDeltaTimeSeconds());
+			if (FullCheckpointIndex < CheckpointTicks.Num()
+				&& FullTarget->GetCurrentTick()
+					== CheckpointTicks[FullCheckpointIndex])
+			{
+				ASSERT_THAT(AreEqual(
+					CheckpointCapabilityStates[FullCheckpointIndex],
+					FullTarget->HasPairCapability(
+						FSeinPlayerID(1),
+						FSeinPlayerID(2),
+						SeinARTSTags::Relationship_Capability_ShareVision)));
+				++FullCheckpointIndex;
+			}
+		}
+		ASSERT_THAT(IsFalse(FullReader->IsPlaying()));
+		ASSERT_THAT(AreEqual(FinalTick, FullTarget->GetCurrentTick()));
+		ASSERT_THAT(AreEqual(
+			CheckpointTicks.Num(), FullCheckpointIndex));
+		ASSERT_THAT(IsTrue(FullTarget->HasPairCapability(
+			FSeinPlayerID(1),
+			FSeinPlayerID(2),
+			SeinARTSTags::Relationship_Capability_ShareVision)));
+		ASSERT_THAT(IsFalse(FullTarget->IsSimulationRunning()));
+		ASSERT_THAT(IsTrue(FullTarget->StartSimulation()));
+		FGuid FullTargetRoot;
+		ASSERT_THAT(IsTrue(
+			FullTarget->ComputeCanonicalStateRoot(FullTargetRoot, Error)));
+		ASSERT_THAT(AreEqual(
+			SourceFinalRoot.ToString(EGuidFormats::Digits),
 			FullTargetRoot.ToString(EGuidFormats::Digits)));
 		FullTarget->StopSimulation();
 	}

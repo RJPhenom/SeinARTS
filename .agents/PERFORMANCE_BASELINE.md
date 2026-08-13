@@ -30,6 +30,18 @@ mutation, restore, zero-budget admission, exact retained-byte accounting, and re
 snapshot schema and canonical state are unchanged. This is a local regression sentinel, not a
 target-device long-session hitch or allocator/RSS qualification.
 
+**UE 5.8 repeated replay-checkpoint lifecycle qualification:** 2026-08-12, Framework-profile run
+`SeinARTS.Integration.Network.Replay-20260812-205238-97d76772`. A compressed 128-entity session
+captured 25 periodic checkpoints plus the required initial checkpoint through the real ordered
+background encode/append bodies. Each turn alternated an authoritative pair-capability grant/revoke;
+all 25 checkpoints restored to their exact tick, capability state, and canonical root, while full
+tick-zero playback observed every mutation and reached the same non-empty terminal state/root.
+Component-storage cache payload bytes, `TArray` allocated bytes, entry count, and hit/miss transitions
+remained exact across every cycle and cold/hot post-restore capture. The fixture deliberately waits
+for each forced maintenance cycle, so it proves repeated lifecycle, ordering, restore, and bounded
+cache retention rather than natural worker overlap, target-device latency, RSS, allocator high-water,
+or GC behavior.
+
 **UE 5.8 collision scale microbenchmark:** 2026-08-12, real canonical bootstrap and complete
 fixed ticks with reset packed contacts: 64 movers 1.257 ms median, 128 movers 3.114 ms, and
 256 movers 7.214 ms (`SeinARTS.Perf-20260812-081656-9a968ce2`). The enforced

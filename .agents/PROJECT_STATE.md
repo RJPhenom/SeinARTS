@@ -54,8 +54,8 @@ formation/resolver state coverage, provider teardown, and downstream content own
 |---|---:|
 | `SeinARTS.Unit`, profile All | 432 passed, 0 failed |
 | `SeinARTS.Unit`, profile Framework | 414 passed, 0 failed |
-| `SeinARTS.Integration`, profile All | 23 passed, 0 failed |
-| `SeinARTS.Integration`, profile Framework | 17 passed, 0 failed |
+| `SeinARTS.Integration`, profile All | 24 passed, 0 failed |
+| `SeinARTS.Integration`, profile Framework | 18 passed, 0 failed |
 | `SeinARTS.Determinism`, profile All | 40 passed, 0 failed |
 | `SeinARTS.Determinism`, profile Framework | 30 passed, 0 failed |
 | `SeinARTS.Editor`, profile All | 38 passed, 0 failed |
@@ -208,6 +208,13 @@ Latest local evidence is under ignored `Saved/Automation/`:
 - `SeinARTS.Unit-20260812-032031-07ac28fa` (All, 428 passed)
 - `SeinARTS.Editor-20260812-032127-798cf7c8` (Framework, 36 passed)
 - `SeinARTS.Unit-20260812-032158-993b7d71` (Framework, 410 passed)
+- `SeinARTS.Integration.Network.Replay.ReplayPeriodicCheckpointSessionStaysBoundedAndEveryCheckpointSeeksExact-20260812-205135-f0f4323a`
+  (1 passed; 25 periodic checkpoints, every exact seek/root, full command replay, and stable cache
+  payload/allocation across cold/hot restore)
+- `SeinARTS.Integration.Network.Replay-20260812-205238-97d76772` (Framework,
+  16 passed after repeated-checkpoint lifecycle qualification)
+- `SeinARTS.Integration-20260812-205322-54064b7e` (Framework, 18 passed)
+- `SeinARTS.Integration-20260812-205410-9b12aff9` (All, 24 passed)
 - `SeinARTS.Determinism-20260812-032246-84a12b7c` (All, 40 passed)
 - `SeinARTS.Determinism-20260812-032321-853573ea` (Framework, 30 passed)
 - `SeinARTS.Integration-20260812-032358-75874dd5` (All, 21 passed)
@@ -378,6 +385,15 @@ asynchronous failure, and real write denial remain green. New Insights scopes se
 capture cache hits/live serialization/encode, background/synchronous durable append, and game-thread
 append waits. Real slow-device latency, allocator high-water/RSS, GC interaction, long-session hitch
 distribution, and exhausted storage still require measured soak evidence.
+
+A compressed 128-entity repeated-lifecycle fixture now captures 25 periodic checkpoints plus the
+required initial checkpoint through the real ordered background encode/append bodies. Alternating
+authoritative pair-capability commands leave a non-empty terminal state; every checkpoint exact-seeks
+to its source capability state and canonical root, and full tick-zero playback observes every command
+transition before reaching the same terminal root. Cache payload bytes, `TArray` allocation, entry
+count, and cold-miss/hot-hit behavior remain exact across each cycle and fresh-world restore. The
+fixture intentionally forces and waits for maintenance each cycle, so it does not replace natural
+asynchronous-overlap, slow-device, RSS/allocator high-water, GC, or exhausted-storage soak.
 
 The supplied 2026-08-11 two-player PIE log contains two healthy sessions: lockstep configuration
 and participant roots agree throughout, with no gate stall, persistent incomplete turn, retransmit,

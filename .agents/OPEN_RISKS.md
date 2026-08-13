@@ -57,9 +57,12 @@ This is the actionable remainder after consolidating the historical audits. It i
    4.033/14.245/27.831 ms to 2.037/7.815/15.288 ms at 100/500/1,000 entities without changing
    snapshot or canonical schemas. Mandatory initial/direct writes, final publication, and
    pressure-forced drains remain synchronous. Automated integration proves ordered bounded pressure,
-   and failure/write denial retain the partial journal. Real-device long-session hitch, allocator
-   high-water/RSS, GC interaction, latency, and exhausted-storage behavior still need Insights and
-   soak evidence.
+   failure/write denial retain the partial journal, and a compressed 25-periodic-checkpoint session
+   proves exact repeated encode/append, authoritative mutation replay, every-checkpoint seek/root,
+   stable cache payload/allocation, and cold/hot restore behavior. That fixture intentionally waits
+   between forced maintenance cycles; natural asynchronous overlap, real-device long-session hitch,
+   allocator high-water/RSS, GC interaction, latency, and exhausted-storage behavior still need
+   Insights and soak evidence.
 5. Debug navigation rendering is intentionally expensive and can invalidate profiling if left enabled.
 
 ## Explicit product decisions still required
