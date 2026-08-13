@@ -83,6 +83,22 @@ formation/resolver state coverage, provider teardown, and downstream content own
 
 Latest local evidence is under ignored `Saved/Automation/`:
 
+- `SeinARTS.Unit-20260813-085708-60185381` (All, 446 passed with exact floor)
+- `SeinARTS.Unit-20260813-085611-d820118f` (Framework, 428 passed with exact floor)
+- `SeinARTS.Integration-20260813-083308-613d2a27` (All, 25 passed)
+- `SeinARTS.Integration-20260813-082942-5be7722d` (Framework, 19 passed)
+- `SeinARTS.Determinism-20260813-085838-340f6f0b` (All, 43 passed with exact floor)
+- `SeinARTS.Determinism-20260813-085805-c728eb8a` (Framework, 33 passed with exact floor)
+- `SeinARTS.Sim-20260813-084439-750e0f11` (All, 30 passed)
+- `SeinARTS.Sim-20260813-083034-3a5ac5dc` (Framework, 27 passed)
+- `SeinARTS.Perf-20260813-085943-4887bf37` (All, 5 passed with exact floor)
+- `SeinARTS.Perf-20260813-085918-29f85569` (Framework, 3 passed with exact floor)
+- `SeinARTS.Determinism.CoreEntity.Containment-20260813-083917-86078194`
+  (3 passed, including checkpoint transfer and per-tick replay-prefix roots)
+- `SeinARTS.Perf.Containment-20260813-085323-24d4a6e3`
+  (1 passed, including invalidated and warm checkpoint curves)
+- `SeinARTS.Determinism.Process.SerialCollisionTrace-20260813-084522-3cbeb406`
+- `SeinARTS.Determinism.Process.ParallelCollisionTrace-20260813-084543-f955cbb9`
 - `SeinARTS.Unit-20260803-092025-a47e1818` (All)
 - `SeinARTS.Unit-20260803-092204-6014d34e` (Framework)
 - `SeinARTS.Integration-20260803-092115-78560738` (All)
