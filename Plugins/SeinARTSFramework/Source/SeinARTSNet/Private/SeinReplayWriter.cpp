@@ -1719,62 +1719,64 @@ bool USeinReplayWriter::CaptureCheckpointInternal(
 #endif
 			]() mutable
 			{
-				LLM_SCOPE_BYNAME(TEXT("SeinARTS/Replay/Checkpoint/Encode"));
 				FSeinReplayAsyncCheckpointEncodeResult Result;
 				Result.SnapshotTick = EncodeWork->Snapshot.CurrentTick;
 				FSeinSnapshotEnvelopeMetadata Metadata;
+				{
+					LLM_SCOPE_BYNAME(TEXT("SeinARTS/Replay/Checkpoint/Encode"));
 #if WITH_DEV_AUTOMATION_TESTS
-				if (CheckpointEncodeTestGate)
-				{
-					TRACE_CPUPROFILER_EVENT_SCOPE(
-						Sein_Replay_Checkpoint_EncodeEnvelope);
-					FGCScopeGuard GCScopeGuard;
-					Result.bSucceeded = SeinSnapshotTransfer::
-						EncodeCheckpointEnvelopeWithMidpointForTests(
-							EncodeWork->Snapshot,
-							Result.Envelope,
-							Metadata,
-							Result.Error,
-							[CheckpointEncodeTestGate](FString& GateError)
-							{
-								CheckpointEncodeTestGate
-									->WorkerEntered->Trigger();
-								constexpr uint32
-									TestGateTimeoutMilliseconds = 30000;
-								if (!CheckpointEncodeTestGate
-									->ReleaseWorker->Wait(
-										TestGateTimeoutMilliseconds))
+					if (CheckpointEncodeTestGate)
+					{
+						TRACE_CPUPROFILER_EVENT_SCOPE(
+							Sein_Replay_Checkpoint_EncodeEnvelope);
+						FGCScopeGuard GCScopeGuard;
+						Result.bSucceeded = SeinSnapshotTransfer::
+							EncodeCheckpointEnvelopeWithMidpointForTests(
+								EncodeWork->Snapshot,
+								Result.Envelope,
+								Metadata,
+								Result.Error,
+								[CheckpointEncodeTestGate](FString& GateError)
 								{
-									GateError = TEXT(
-										"checkpoint encode test gate timed out");
-									return false;
-								}
-								return true;
-							});
-				}
-				else
+									CheckpointEncodeTestGate
+										->WorkerEntered->Trigger();
+									constexpr uint32
+										TestGateTimeoutMilliseconds = 30000;
+									if (!CheckpointEncodeTestGate
+										->ReleaseWorker->Wait(
+											TestGateTimeoutMilliseconds))
+									{
+										GateError = TEXT(
+											"checkpoint encode test gate timed out");
+										return false;
+									}
+									return true;
+								});
+					}
+					else
 #endif
-				{
-					TRACE_CPUPROFILER_EVENT_SCOPE(
-						Sein_Replay_Checkpoint_EncodeEnvelope);
-					// Reflected serialization reads frozen UObject class/path metadata.
-					// The work's snapshot guard pins references; this guard prevents GC
-					// from mutating object reachability while the worker reads them.
-					FGCScopeGuard GCScopeGuard;
-					Result.bSucceeded =
-						SeinSnapshotTransfer::EncodeCheckpointEnvelope(
-							EncodeWork->Snapshot,
-							Result.Envelope,
-							Metadata,
-							Result.Error);
-				}
-				if (Result.bSucceeded
-					&& Metadata.SnapshotTick != Result.SnapshotTick)
-				{
-					Result.bSucceeded = false;
-					Result.Error = TEXT(
-						"checkpoint envelope tick disagrees with Core");
-					Result.Envelope.Reset();
+					{
+						TRACE_CPUPROFILER_EVENT_SCOPE(
+							Sein_Replay_Checkpoint_EncodeEnvelope);
+						// Reflected serialization reads frozen UObject class/path metadata.
+						// The work's snapshot guard pins references; this guard prevents GC
+						// from mutating object reachability while the worker reads them.
+						FGCScopeGuard GCScopeGuard;
+						Result.bSucceeded =
+							SeinSnapshotTransfer::EncodeCheckpointEnvelope(
+								EncodeWork->Snapshot,
+								Result.Envelope,
+								Metadata,
+								Result.Error);
+					}
+					if (Result.bSucceeded
+						&& Metadata.SnapshotTick != Result.SnapshotTick)
+					{
+						Result.bSucceeded = false;
+						Result.Error = TEXT(
+							"checkpoint envelope tick disagrees with Core");
+						Result.Envelope.Reset();
+					}
 				}
 				AsyncTask(ENamedThreads::GameThread,
 					[WeakThis, ScheduledGeneration, ScheduledOperationId]()
