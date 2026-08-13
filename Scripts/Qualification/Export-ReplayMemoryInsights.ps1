@@ -42,9 +42,10 @@ $ExpectedFullTestPath =
 	'SeinARTS.Perf.Replay.OperationalSoak.ReplayOperationalSoakKeepsWorkersMemoryAndLatencyBounded.ReplayOperationalSoakKeepsWorkersMemoryAndLatencyBounded_Method'
 $ExpectedChannels = @('default', 'memory', 'metadata')
 $MaximumReplayRetainedBytes = [uint64]4096
+$MeasurementWarmupCheckpointCount = 8
 $QualificationSentinelTag =
 	'SeinARTS/Replay/Qualification/Sentinel'
-$QualificationSentinelBytes = [uint64]64
+$QualificationSentinelBytes = [uint64](16 * 1024 * 1024 + 64)
 $QualificationSentinelCallstack =
 	'ReplayOperationalSoakKeepsWorkersMemoryAndLatencyBounded'
 $ExpectedInsightsSha256 =
@@ -537,12 +538,25 @@ try {
 	$QualificationSentinelRows = @($ReplayRows | Where-Object {
 		[string]$_.Tag -ceq $QualificationSentinelTag
 	})
-	if ($QualificationSentinelRows.Count -ne 1 -or
-		[uint64]$QualificationSentinelRows[0].Size -ne
-			$QualificationSentinelBytes -or
-		-not ([string]$QualificationSentinelRows[0].AllocCallstack).Contains(
-			$QualificationSentinelCallstack)) {
+	$ExactQualificationSentinelRows = @(
+		$QualificationSentinelRows | Where-Object {
+			[uint64]$_.Size -eq $QualificationSentinelBytes
+		})
+	if ($QualificationSentinelRows.Count -lt 1 -or
+		$QualificationSentinelRows.Count -gt 2 -or
+		$ExactQualificationSentinelRows.Count -ne 1 -or
+		@($QualificationSentinelRows | Where-Object {
+			-not ([string]$_.AllocCallstack).Contains(
+				$QualificationSentinelCallstack) -or
+			[uint64]$_.Size -lt $QualificationSentinelBytes -or
+			[uint64]$_.Size -gt $QualificationSentinelBytes + 4MB
+		}).Count -gt 0) {
 		throw 'Replay allocator attribution sentinel is missing or invalid.'
+	}
+	[uint64]$QualificationSentinelRetainedBytes = 0
+	foreach ($QualificationSentinelRow in $QualificationSentinelRows) {
+		$QualificationSentinelRetainedBytes +=
+			[uint64]$QualificationSentinelRow.Size
 	}
 	if ($ReplayRetainedBytes -gt $MaximumReplayRetainedBytes) {
 		throw "Replay-attributed retained growth is $ReplayRetainedBytes bytes; the qualification ceiling is $MaximumReplayRetainedBytes bytes."
@@ -607,7 +621,7 @@ try {
 	$TempDirectory = $null
 	$ReceiptStatus = if ($TestMode) { 'SelfTestOnly' } else { 'Qualified' }
 	$Receipt = [pscustomobject][ordered]@{
-		schemaVersion = 2
+		schemaVersion = 4
 		status = $ReceiptStatus
 		qualificationMode = if ($SelfTest) {
 			'MockAnalyzer'
@@ -646,8 +660,14 @@ try {
 		replayAllocationCount = $ProductionReplayRows.Count
 		replayRetainedBytes = $ReplayRetainedBytes
 		maximumReplayRetainedBytes = $MaximumReplayRetainedBytes
+		measurementWarmupCheckpointCount =
+			$MeasurementWarmupCheckpointCount
 		qualificationSentinelTag = $QualificationSentinelTag
 		qualificationSentinelBytes = $QualificationSentinelBytes
+		qualificationSentinelAllocationCount =
+			$QualificationSentinelRows.Count
+		qualificationSentinelRetainedBytes =
+			$QualificationSentinelRetainedBytes
 		replayTags = $ReplayTagSummaries
 		heapReconstructionErrorCount = $HeapErrorCount
 		latestHeapReconstructionErrorSeconds = $LatestHeapErrorTime

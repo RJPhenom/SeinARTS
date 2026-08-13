@@ -131,24 +131,35 @@ public static class MockUnrealInsights
 		string callstack = trace.IndexOf("NoCallstack", StringComparison.OrdinalIgnoreCase) >= 0
 			? "  no callstack recorded  "
 			: "Mock!Resolved";
+		string tag = "SeinARTS/Replay/DurableAppend";
 		string sentinelTag = trace.IndexOf("NoReplayTag", StringComparison.OrdinalIgnoreCase) >= 0
 			? "Untagged"
 			: "SeinARTS/Replay/Qualification/Sentinel";
+		bool emptyExport = trace.IndexOf("EmptyExport", StringComparison.OrdinalIgnoreCase) >= 0;
+		bool twoRowSentinel = trace.IndexOf("TwoRowSentinel", StringComparison.OrdinalIgnoreCase) >= 0;
+		string sentinelRows =
+			"16777280," + sentinelTag + ",2,Mock!Allocate,Mock.cpp,Mock!ReplayOperationalSoakKeepsWorkersMemoryAndLatencyBounded\r\n" +
+			(twoRowSentinel
+				? "18874368," + sentinelTag + ",2,Mock!Allocate,Mock.cpp,Mock!ReplayOperationalSoakKeepsWorkersMemoryAndLatencyBounded\r\n"
+				: "");
 		Directory.CreateDirectory(Path.GetDirectoryName(csv));
 		File.WriteAllText(
 			csv,
-			"Size,Tag,AllocThread,AllocFunction,AllocSourceFile,AllocCallstack\r\n" +
-			"64," + sentinelTag +
-			",2,Mock!Allocate,Mock.cpp,Mock!ReplayOperationalSoakKeepsWorkersMemoryAndLatencyBounded\r\n" +
-			size.ToString() +
-			",SeinARTS/Replay/DurableAppend,2,Mock!Allocate,Mock.cpp," + callstack + "\r\n",
+			emptyExport
+				? "Size,Tag,AllocThread,AllocFunction,AllocSourceFile,AllocCallstack\r\n"
+				: "Size,Tag,AllocThread,AllocFunction,AllocSourceFile,AllocCallstack\r\n" +
+				  sentinelRows +
+				  size.ToString() +
+				  "," + tag + ",2,Mock!Allocate,Mock.cpp," + callstack + "\r\n",
             new UTF8Encoding(false));
         Directory.CreateDirectory(Path.GetDirectoryName(log));
         string logText =
             "LogInit: Command Line: -OpenTraceFile=\"" + trace + "\" " + command + "\r\n" +
             "LogMemoryExporter: Found bookmark 'Sein.ReplayOperationalSoak.Begin' at time 10.000\r\n" +
             "LogMemoryExporter: Found bookmark 'Sein.ReplayOperationalSoak.End' at time 20.000\r\n" +
-            "LogMemoryProfiler: SUCCESS! Exported 2 allocations\r\n";
+            "LogMemoryProfiler: SUCCESS! Exported " +
+			(emptyExport ? "0" : (twoRowSentinel ? "3" : "2")) +
+			" allocations\r\n";
         File.WriteAllText(log, logText, new UTF8Encoding(false));
         return 0;
     }
@@ -309,7 +320,7 @@ try {
 	}
 	$PassReceipt = Get-Content -Raw -LiteralPath $PassReceiptPath |
 		ConvertFrom-Json
-	if ([int]$PassReceipt.schemaVersion -ne 2 -or
+	if ([int]$PassReceipt.schemaVersion -ne 4 -or
 		[string]$PassReceipt.status -cne 'SelfTestOnly' -or
 		[string]$PassReceipt.qualificationMode -cne 'MockAnalyzer' -or
 		-not [System.IO.Path]::GetFullPath(
@@ -322,9 +333,32 @@ try {
 		[int]$PassReceipt.recordedCallstackCount -ne 2 -or
 		[int]$PassReceipt.replayAllocationCount -ne 1 -or
 		[int64]$PassReceipt.replayRetainedBytes -ne 80 -or
-		[int64]$PassReceipt.qualificationSentinelBytes -ne 64 -or
+		[int]$PassReceipt.measurementWarmupCheckpointCount -ne 8 -or
+		[int64]$PassReceipt.qualificationSentinelBytes -ne 16777280 -or
+		[int]$PassReceipt.qualificationSentinelAllocationCount -ne 1 -or
+		[int64]$PassReceipt.qualificationSentinelRetainedBytes -ne 16777280 -or
 		[int]$PassReceipt.heapReconstructionErrorCount -ne 0) {
 		throw 'Valid fixture produced an unexpected replay-memory receipt.'
+	}
+	$TwoRowAttempt = New-AttemptFixture `
+		(Join-Path $FixtureRoot 'TwoRowSentinel') `
+		$Engine 'ReplayTwoRowSentinel.utrace'
+	$TwoRowOutput = Join-Path $FixtureRoot 'TwoRowSentinelOutput'
+	$TwoRow = Invoke-Exporter $TwoRowAttempt $TwoRowOutput
+	$TwoRowReceiptPath = Join-Path $TwoRowOutput 'receipt.json'
+	if ($TwoRow.ExitCode -ne 0 -or
+		-not (Test-Path -LiteralPath $TwoRowReceiptPath -PathType Leaf)) {
+		throw "Two-row sentinel fixture failed qualification: $($TwoRow.Output)"
+	}
+	$TwoRowReceipt = Get-Content -Raw -LiteralPath $TwoRowReceiptPath |
+		ConvertFrom-Json
+	if ([int]$TwoRowReceipt.allocationCount -ne 3 -or
+		[int]$TwoRowReceipt.replayAllocationCount -ne 1 -or
+		[int64]$TwoRowReceipt.replayRetainedBytes -ne 80 -or
+		[int]$TwoRowReceipt.qualificationSentinelAllocationCount -ne 2 -or
+		[int64]$TwoRowReceipt.qualificationSentinelRetainedBytes -ne
+			35651648) {
+		throw 'Two-row sentinel fixture produced an unexpected receipt.'
 	}
 	$FakeProductionOutput = Join-Path $FixtureRoot 'FakeProductionOutput'
 	$FakeProduction = Invoke-Exporter `
@@ -370,6 +404,15 @@ try {
 	if ($NoReplayTag.ExitCode -eq 0 -or
 		(Test-Path -LiteralPath $NoReplayTagOutput)) {
 		throw 'Missing replay-attribution sentinel did not fail before publication.'
+	}
+
+	$EmptyExportAttempt = New-AttemptFixture `
+		(Join-Path $FixtureRoot 'EmptyExport') $Engine 'ReplayEmptyExport.utrace'
+	$EmptyExportOutput = Join-Path $FixtureRoot 'EmptyExportOutput'
+	$EmptyExport = Invoke-Exporter $EmptyExportAttempt $EmptyExportOutput
+	if ($EmptyExport.ExitCode -eq 0 -or
+		(Test-Path -LiteralPath $EmptyExportOutput)) {
+		throw 'Empty allocator evidence did not fail before publication.'
 	}
 
 	$TamperedAttempt = New-AttemptFixture `
@@ -507,7 +550,7 @@ try {
 	}
 
 	Write-Host `
-		'[ReplayMemoryInsightsSelfTest] Windows PowerShell 5.1 pass, analyzer trust, retention, callstack, replay-sentinel, tamper, provenance, property-presence, and publication fixtures succeeded.' `
+		'[ReplayMemoryInsightsSelfTest] Windows PowerShell 5.1 pass, analyzer trust, retention, callstack, replay-sentinel, empty-evidence, tamper, provenance, property-presence, and publication fixtures succeeded.' `
 		-ForegroundColor Green
 }
 finally {

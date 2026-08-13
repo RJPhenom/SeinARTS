@@ -25,6 +25,7 @@
 #include "HAL/MemoryMisc.h"
 #include "HAL/PlatformMemory.h"
 #include "HAL/PlatformProcess.h"
+#include "HAL/UnrealMemory.h"
 #include "Misc/Paths.h"
 #include "ProfilingDebugging/MiscTrace.h"
 #include "SeinReplayFormat.h"
@@ -52,6 +53,22 @@ namespace UE::SeinARTSTests
 	namespace ReplayOperationalSoakTestLocal
 	{
 		constexpr uint64 MiB = 1024ULL * 1024ULL;
+
+		struct FScopedReplayAllocatorSentinel
+		{
+			~FScopedReplayAllocatorSentinel()
+			{
+				FMemory::Free(Allocation);
+			}
+
+			void Allocate(SIZE_T Size)
+			{
+				check(!Allocation);
+				Allocation = FMemory::Malloc(Size);
+			}
+
+			void* Allocation = nullptr;
+		};
 
 		struct FScopedReplaySettings
 		{
@@ -348,6 +365,8 @@ namespace UE::SeinARTSTests
 		constexpr uint64 MaximumWorkingSetGrowthBytes = 256 * MiB;
 		constexpr uint64 MaximumCommitGrowthBytes = 128 * MiB;
 		constexpr uint64 MaximumPeakGrowthBytes = 768 * MiB;
+		constexpr int32 QualificationSentinelBytes =
+			16 * 1024 * 1024 + 64;
 		constexpr uint64 MaximumLateGrowthBytes = 128 * MiB;
 		constexpr double MaximumP95LatencyMilliseconds = 1000.0;
 		constexpr double MaximumLatencyMilliseconds = 5000.0;
@@ -420,9 +439,9 @@ namespace UE::SeinARTSTests
 		TArray<int32> SampleTicks;
 		TArray<FGuid> SampleRoots;
 		TArray<bool> SampleCapabilityStates;
-		TArray<uint8> ReplayAllocatorAttributionSentinel;
+		FScopedReplayAllocatorSentinel ReplayAllocatorAttributionSentinel;
+		bool bAllocatorMeasurementBegun = false;
 
-		TRACE_BOOKMARK(TEXT("Sein.ReplayOperationalSoak.Begin"));
 		ASSERT_THAT(IsTrue(Source->StartSimulation()));
 		for (int32 TurnOrdinal = 0; TurnOrdinal < TotalTurns; ++TurnOrdinal)
 		{
@@ -443,11 +462,6 @@ namespace UE::SeinARTSTests
 			const double StartedAt = FPlatformTime::Seconds();
 			ASSERT_THAT(IsTrue(AdvanceTurn(
 				*Source, *Writer, Turn, TicksPerTurn, bGrant)));
-			if (TurnOrdinal == 0)
-			{
-				LLM_SCOPE_BYNAME(TEXT("SeinARTS/Replay/Qualification/Sentinel"));
-				ReplayAllocatorAttributionSentinel.SetNumUninitialized(64);
-			}
 			if (!Writer->IsRecording())
 			{
 				break;
@@ -538,6 +552,11 @@ namespace UE::SeinARTSTests
 				EpochWorkingSets.Add(
 					FPlatformMemory::GetStats().UsedPhysical);
 			}
+			if (CheckpointOrdinal == GcIntervalCheckpoints)
+			{
+				TRACE_BOOKMARK(TEXT("Sein.ReplayOperationalSoak.Begin"));
+				bAllocatorMeasurementBegun = true;
+			}
 		}
 
 		ASSERT_THAT(IsTrue(Writer->IsRecording()));
@@ -622,6 +641,13 @@ namespace UE::SeinARTSTests
 			static_cast<double>(CommitGrowth) / MiB,
 			BaselineObjectCount,
 			FinalObjectCount);
+		{
+			LLM_SCOPE_BYNAME(TEXT("SeinARTS/Replay/Qualification/Sentinel"));
+			ReplayAllocatorAttributionSentinel.Allocate(
+				QualificationSentinelBytes);
+		}
+		ASSERT_THAT(IsNotNull(
+			ReplayAllocatorAttributionSentinel.Allocation));
 		ASSERT_THAT(IsTrue(P95Latency < MaximumP95LatencyMilliseconds));
 		ASSERT_THAT(IsTrue(MaximumLatency < MaximumLatencyMilliseconds));
 		ASSERT_THAT(IsTrue(
@@ -633,6 +659,7 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(
 			EpochWorkingSets.Num()
 				== PeriodicCheckpointCount / GcIntervalCheckpoints));
+		ASSERT_THAT(IsTrue(bAllocatorMeasurementBegun));
 		TRACE_BOOKMARK(TEXT("Sein.ReplayOperationalSoak.End"));
 
 		ASSERT_THAT(AreEqual(SampleTicks.Num(), SampleRoots.Num()));
@@ -704,7 +731,6 @@ namespace UE::SeinARTSTests
 			FSeinPlayerID(2),
 			SeinARTSTags::Relationship_Capability_ShareVision)));
 		FullTarget->StopSimulation();
-		ReplayAllocatorAttributionSentinel.Empty();
 	}
 
 	TEST(ReplayCapacityExhaustionPreservesTheLastDurableFrontier,
