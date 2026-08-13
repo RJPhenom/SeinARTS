@@ -48,6 +48,8 @@ struct FSeinReplayAsyncCheckpointEncodeResult
 {
 	bool bSucceeded = false;
 	int32 SnapshotTick = INDEX_NONE;
+	/** Compatibility slot. Live checkpoint bytes remain on the private work
+	 *  object so future shared state cannot extend their lifetime. */
 	TArray<uint8> Envelope;
 	FString Error;
 };
