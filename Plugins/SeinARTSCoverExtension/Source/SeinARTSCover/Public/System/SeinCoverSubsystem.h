@@ -108,4 +108,5 @@ private:
 	FDelegateHandle SpawnedHandle;
 	FDelegateHandle DestroyedHandle;
 	FDelegateHandle RestoredHandle;
+	uint64 AuthoritativeDestinationProviderToken = 0;
 };

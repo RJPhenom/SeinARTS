@@ -179,11 +179,11 @@ ESeinPathResult USeinPlannerHandle::RequestNavPath()
 			Req.GroupId = Membership->CohesionGroupId;
 		}
 	}
-	// Authoritative destination (a cover slot overruling the coarse bake): honored as the exact
-	// final waypoint even on a partial path. Unbound -> false (default nearest-reachable).
+	// An authoritative provider may preserve the exact final waypoint across a
+	// coarse-bake false negative. No providers means default nearest-reachable.
 	Req.bAuthoritativeDestination = Ctx->World
-		&& Ctx->World->AuthoritativeDestinationResolver.IsBound()
-		&& Ctx->World->AuthoritativeDestinationResolver.Execute(Ctx->Destination);
+		&& Ctx->World->IsAuthoritativeDestination(
+			Ctx->Destination, Ctx->SelfHandle);
 
 	return Ctx->NavSub->RequestPath(Req, *OutPath);
 }

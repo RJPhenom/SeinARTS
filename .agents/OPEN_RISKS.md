@@ -13,9 +13,10 @@ This is the actionable remainder after consolidating the historical audits. It i
 ## Gameplay-backbone gaps
 
 1. Cover now has one exact deterministic max-cardinality/min-wrong-side/min-distance allocator
-   shared by the ordinary and Squad resolver adapters. It still lacks cross-broker aggregation,
-   stable reservations, and the exact preview-artifact commit/reject lifecycle, so separate
-   squad/loose resolver calls can claim the same authored slot.
+   shared by the ordinary and Squad resolver adapters, plus a stable-keyed authoritative-destination
+   provider registered in Core's StateContract. It still lacks cross-broker aggregation, stable
+   reservations, and the exact preview-artifact commit/reject lifecycle, so separate squad/loose
+   resolver calls can claim the same authored slot.
 2. Squad reinforcement requests now have exact slot and monotonic request identity, atomic
    payer/cost snapshots, exact cancel/refund, deterministic completion, reciprocal membership, and
    snapshot continuation. Explicit squad destruction still needs product policy for queued refunds,

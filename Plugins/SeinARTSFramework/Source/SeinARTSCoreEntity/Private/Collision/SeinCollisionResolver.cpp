@@ -218,24 +218,22 @@ bool USeinCollisionResolver::CanOccupy(
 				AgentProfile, Position)
 			: World.DynamicPassableResolver.Execute(Position);
 	};
-	// Center walkability FIRST. The cover-slot exemption only matters when the cell is bake-BLOCKED,
-	// so consult the (potentially expensive — a cover-slot spatial query) AuthoritativeDestination-
-	// Resolver ONLY on the blocked path, never on the common push onto walkable ground. (It used to
-	// run on EVERY push candidate, thrashing the cover query near walls where pushes are most frequent.)
+	// Center walkability first. Destination authority only matters on the blocked
+	// path, and an empty registry must return here before parallel workers touch
+	// the game-thread-only provider query.
 	if (!IsPassable(P))
 	{
-		// Center blocked (static bake OR a dynamic nav blocker) — allow only if it's an
-		// authoritative cover slot that overrules the bake. A cover slot sits ~one footprint
-		// outside its wall, so its own cell is normally clear of the wall's stamp; the exemption
-		// stays for the low-res-bake-false-negative case, unchanged.
-		const bool bAuthoritative =
-			World.AuthoritativeDestinationResolver.IsBound()
-			&& World.AuthoritativeDestinationResolver.Execute(P);
-		const bool bSafeForAgent =
-			!World.AgentAuthoritativeDestinationSafetyResolver.IsBound()
+		if (!World.HasAuthoritativeDestinationProviders())
+		{
+			return false;
+		}
+		if (!World.IsAuthoritativeDestination(P, Agent))
+		{
+			return false;
+		}
+		return !World.AgentAuthoritativeDestinationSafetyResolver.IsBound()
 			|| World.AgentAuthoritativeDestinationSafetyResolver.Execute(
 				AgentProfile, P);
-		return bAuthoritative && bSafeForAgent;
 	}
 	// Center walkable — the body footprint must clear walls too.
 	if (!bAgentAware && Radius > FFixedPoint::Zero)

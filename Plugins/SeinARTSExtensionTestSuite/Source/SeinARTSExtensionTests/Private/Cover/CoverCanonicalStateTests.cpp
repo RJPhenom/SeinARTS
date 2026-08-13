@@ -165,6 +165,10 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsNotNull(Cover));
 		ASSERT_THAT(IsNotNull(Cast<USeinCoverDefault>(
 			Cover->GetCoverSystem())));
+		ASSERT_THAT(IsTrue(
+			World->HasAuthoritativeDestinationProviders()));
+		ASSERT_THAT(IsFalse(
+			World->AuthoritativeDestinationResolver.IsBound()));
 
 		FString Error;
 		ASSERT_THAT(IsTrue(StartCoverStateWorld(

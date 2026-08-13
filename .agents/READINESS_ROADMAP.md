@@ -148,6 +148,12 @@ Repeated matched captures measured a 1.60-2.86 ms complete-frame preview delta; 
 Determinism, and independent fresh-process serial/parallel roots remain exact. Larger-selection,
 multi-world, and 300/500/1,000-unit moving-combat captures remain scale gates rather than inferred.
 
+Core's authoritative-destination seam now composes deterministic providers by canonical stable ID,
+passes requester context, and binds provider identity plus behavior revision into the match
+StateContract. Cover uses the keyed registry, and all shipped movement/collision consumers query the
+composed authority result. The legacy position-only hook remains compatibility-only and is not a
+shipping integration surface; deterministic bootstrap rejects it while bound.
+
 Remaining FEAT-03 work:
 
 - Aggregate ordinary and persistent-Squad destinations through one context-rich selection plan.

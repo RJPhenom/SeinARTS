@@ -24,10 +24,9 @@
  *          off the bake, a bake change under a standing unit, or any residual the
  *          per-push gate didn't cover. Prevent + correct, by design; keep both.
  *
- *          COVER EXEMPTION: a unit delivered to an AUTHORITATIVE destination (a
- *          cover slot that overrules the coarse bake) may legitimately stand on a
- *          bake-blocked cell, so positions the AuthoritativeDestinationResolver
- *          accepts are left untouched.
+ *          AUTHORITY EXEMPTION: a unit delivered to an authoritative destination
+ *          may legitimately stand on a bake-blocked cell, so positions accepted
+ *          by the composed provider registry are left untouched.
  *
  *          DETERMINISM: entity-pool order; pure per-unit (reads the deterministic
  *          nav bake + this unit's own transform, writes only this unit); all
@@ -71,17 +70,17 @@ public:
 			World.GetComponentStorageRaw(
 				FSeinNavigationComponent::StaticStruct());
 
-		const bool bHasAuthoritative = World.AuthoritativeDestinationResolver.IsBound();
+		const bool bHasAuthoritative =
+			World.HasAuthoritativeDestinationProviders();
 
 		// Gather live handles, then project off-nav movable colliders back on. Pure
 		// per-unit: reads the immutable nav bake + this tick's FROZEN dynamic-blocker
 		// list (IsWorldPositionClear / ProjectPointToNav are scratch-free const reads;
 		// the blocker list is stamped at PreTick 7 and never mutated during this
 		// PostTick pass, so parallel reads are race-free) + own transform, writes only
-		// own transform — a clean SeinParallelFor body. EXCEPTION: when a cover AuthoritativeDestination-
-		// Resolver is bound, that cross-module delegate's thread-safety isn't
-		// guaranteed, so cover projects run this serial via bForceSerial (then the
-		// Execute call only ever runs on the main thread). `Sein.Sim.Parallel 0`
+		// own transform — a clean SeinParallelFor body. EXCEPTION: registered
+		// authoritative-destination callbacks are game-thread-only, so worlds with
+		// providers run this pass serially. `Sein.Sim.Parallel 0`
 		// forces serial too; the result is bit-identical either way.
 		TArray<FSeinEntityHandle> LiveHandles;
 		LiveHandles.Reserve(ExtentsStorage->GetComponentCount());
@@ -148,10 +147,9 @@ public:
 			// IsPassable saw only the bake and left such a unit stuck inside the wall.
 			if (Nav->IsFootprintClearForAgent(Pos, Agent)) return;
 
-			// Cover-slot exemption: a unit on an authoritative destination may
-			// stand on a bake-blocked cell — leave it where it is.
+			// An exact authoritative destination may stand on a bake-blocked cell.
 			if (bHasAuthoritative
-				&& World.AuthoritativeDestinationResolver.Execute(Pos)
+				&& World.IsAuthoritativeDestination(Pos, Handle)
 				&& Nav->IsAuthoritativeFootprintSafeForAgent(
 					Pos, Agent))
 			{

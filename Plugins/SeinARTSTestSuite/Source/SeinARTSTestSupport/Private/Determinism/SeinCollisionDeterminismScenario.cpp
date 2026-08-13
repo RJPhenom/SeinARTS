@@ -9,6 +9,7 @@
 #include "Containers/Ticker.h"
 #include "Core/SeinParallel.h"
 #include "HAL/IConsoleManager.h"
+#include "HAL/ThreadSafeCounter.h"
 #include "Settings/PluginSettings.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
 #include "Simulation/SeinWorldSubsystem.h"
@@ -213,7 +214,7 @@ FString FSeinCollisionDeterminismTrace::Validate(bool bExpectedParallel, int32 E
 	}
 	if (bAuthoritativeDestinationResolverBound)
 	{
-		return TEXT("An authoritative-destination resolver was bound, which force-serializes collision resolution.");
+		return TEXT("An authoritative-destination provider was live, which force-serializes collision resolution.");
 	}
 	if (ComponentStorageCount < 4)
 	{
@@ -297,19 +298,32 @@ FSeinCollisionDeterminismTrace SeinRunCollisionDeterminismScenario(bool bParalle
 		SeinSimParallelEnabled() == bParallel && SeinSimParallelMinBatch() == 1;
 	Trace.bParallelResolverSelected =
 		Cast<USeinCollisionResolverParallel>(World->GetCollisionResolver()) != nullptr;
-	// The optional Cover extension binds this delegate for authoritative slot
+	// The optional Cover extension registers a provider for authoritative slot
 	// delivery, which deliberately routes collision through its serial seam.
 	// This isolated kernel workload owns a fresh world and has no cover state,
-	// so detach the unrelated extension hook before proving the parallel path.
-	World->AuthoritativeDestinationResolver.Unbind();
+	// so detach unrelated providers before proving the parallel path.
+	World->ClearAuthoritativeDestinationProvidersForTests();
 	Trace.bAuthoritativeDestinationResolverBound =
-		World->AuthoritativeDestinationResolver.IsBound();
+		World->HasAuthoritativeDestinationProviders();
 	if (!Trace.bParallelModeObserved || !Trace.bParallelResolverSelected
 		|| Trace.bAuthoritativeDestinationResolverBound)
 	{
 		Trace.FailureReason = TEXT("The transient world could not enter the requested collision execution mode.");
 		return Trace;
 	}
+	FThreadSafeCounter RejectedPassabilityProbeCount;
+	World->AgentDynamicPassableResolver.BindLambda(
+		[&RejectedPassabilityProbeCount](
+			const FSeinNavAgentProfile&,
+			const FFixedVector& Position)
+		{
+			const bool bPassable = Position.X >= FFixedPoint::Zero;
+			if (!bPassable)
+			{
+				RejectedPassabilityProbeCount.Increment();
+			}
+			return bPassable;
+		});
 
 	TArray<FSeinEntityHandle> Handles;
 	Handles.Reserve(Trace.ExpectedEntityCount);
@@ -440,6 +454,12 @@ FSeinCollisionDeterminismTrace SeinRunCollisionDeterminismScenario(bool bParalle
 		Trace.Frames.Add(MoveTemp(Frame));
 	}
 	World->StopSimulation();
+	if (Trace.FailureReason.IsEmpty()
+		&& RejectedPassabilityProbeCount.GetValue() <= 0)
+	{
+		Trace.FailureReason =
+			TEXT("The collision scenario did not exercise a blocked passability candidate.");
+	}
 
 	Trace.FinalEntityCount = World->GetEntityPool().GetActiveCount();
 	return Trace;
