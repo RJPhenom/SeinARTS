@@ -54,16 +54,16 @@ formation/resolver state coverage, provider teardown, and downstream content own
 |---|---:|
 | `SeinARTS.Unit`, profile All | 446 passed, 0 failed |
 | `SeinARTS.Unit`, profile Framework | 428 passed, 0 failed |
-| `SeinARTS.Integration`, profile All | 25 passed, 0 failed |
-| `SeinARTS.Integration`, profile Framework | 19 passed, 0 failed |
+| `SeinARTS.Integration`, profile All | 26 passed, 0 failed |
+| `SeinARTS.Integration`, profile Framework | 20 passed, 0 failed |
 | `SeinARTS.Determinism`, profile All | 43 passed, 0 failed |
 | `SeinARTS.Determinism`, profile Framework | 33 passed, 0 failed |
 | `SeinARTS.Editor`, profile All | 38 passed, 0 failed |
 | `SeinARTS.Editor`, profile Framework | 36 passed, 0 failed |
 | `SeinARTS.Sim`, profile All | 30 passed, 0 failed |
 | `SeinARTS.Sim`, profile Framework | 27 passed, 0 failed |
-| `SeinARTS.Perf`, profile All | 5 passed, 0 failed; cover 128x128 averaged 11.998 ms; public 128-member preview measured 1.255/1.337 ms median/p95 coverless and 3.181/3.324 ms dense; collision full-tick medians 1.257/3.114/7.214 ms at 64/128/256 movers |
-| `SeinARTS.Perf`, profile Framework | 3 passed, 0 failed; containment at 1,000 occupants measured 2.825 ms canonical root, 4.328 ms invalidated checkpoint, and 0.926 ms warm checkpoint; moving-entity checkpoint medians remain 2.037/7.815/15.288 ms at 100/500/1,000 entities; collision full-tick medians 1.401/3.035/7.494 ms at 64/128/256 movers |
+| `SeinARTS.Perf`, profile All | 6 passed, 0 failed; cover 128x128 averaged 11.998 ms; public 128-member preview measured 1.255/1.337 ms median/p95 coverless and 3.181/3.324 ms dense; collision full-tick medians 1.257/3.114/7.214 ms at 64/128/256 movers |
+| `SeinARTS.Perf`, profile Framework | 4 passed, 0 failed; replay operational soak wrote 135,244,673 bytes over 449 turns with 34.862/101.058/101.371 ms checkpoint p50/p95/max; containment at 1,000 occupants measured 2.825 ms canonical root, 4.328 ms invalidated checkpoint, and 0.926 ms warm checkpoint; moving-entity checkpoint medians remain 2.037/7.815/15.288 ms at 100/500/1,000 entities; collision full-tick medians 1.401/3.035/7.494 ms at 64/128/256 movers |
 | Fresh-process collision trace | 2026-08-13 serial and parallel roots/poses identical for all 120 ticks under `SeinARTS.Replay.6`; final root `58DA3B5A4281F117CB3F7471624DDCB4`, pose `0x8B576390ECC600E1` |
 | `SeinARTSEditor Win64 Development` | succeeded / target current |
 | `SeinARTS Win64 Shipping` | succeeded / target current |
@@ -83,6 +83,19 @@ formation/resolver state coverage, provider teardown, and downstream content own
 
 Latest local evidence is under ignored `Saved/Automation/`:
 
+- `SeinARTS.Perf.Replay.OperationalSoak-20260813-100340-b1db339d` (Framework,
+  1 passed; 449 turns, 64 natural periodic checkpoints, eight proven GC/exclusion overlaps,
+  uncheckpointed final grant replay, sampled exact seeks, and full canonical-root playback)
+- `SeinARTS.Integration.Network.Replay.Capacity-20260813-094103-b4d4bfab` (Framework,
+  1 passed; configured 64 MiB policy exhaustion preserved an exactly replayable durable partial)
+- `SeinARTS.Integration-20260813-095954-a5eac1ab` (All, 26 passed) and
+  `SeinARTS.Integration-20260813-095858-2b1c72b7` (Framework, 20 passed)
+- `SeinARTS.Perf-20260813-100529-fc6b3112` (All, 6 passed) and
+  `SeinARTS.Perf-20260813-100437-70690a7c` (Framework, 4 passed)
+- `SeinARTS.Unit-20260813-100626-7d1b4eca` (All, 446 passed)
+- `SeinARTS.Determinism-20260813-100723-2c586db7` (All, 43 passed)
+- `Scripts/Build.ps1` and `Scripts/Build.ps1 -Target SeinARTS -Config Shipping`
+  (2026-08-13; Development current, Net recompiled in Shipping, and Shipping executable linked)
 - `SeinARTS.Unit-20260813-085708-60185381` (All, 446 passed with exact floor)
 - `SeinARTS.Unit-20260813-085611-d820118f` (Framework, 428 passed with exact floor)
 - `SeinARTS.Integration-20260813-083308-613d2a27` (All, 25 passed)
@@ -467,8 +480,17 @@ to the exact resident bound, proves no false bytes/counters or frame overtaking,
 production wait and validates the published journal after release. The >64 MiB bounded-memory proof,
 asynchronous failure, and real write denial remain green. New Insights scopes separate checkpoint
 capture cache hits/live serialization/encode, background/synchronous durable append, and game-thread
-append waits. Real slow-device latency, allocator high-water/RSS, GC interaction, long-session hitch
-distribution, and exhausted storage still require measured soak evidence.
+append waits. Accelerated real-file automation now covers 449 turns (448 across the periodic cycles
+plus one journal catch-up turn) and 64 natural periodic
+checkpoints over 128 entities with eight full-GC boundaries, sampled exact seek/root/capability
+checks, full playback, and process working-set/private-commit/late-growth sentinels. The qualifying
+  run wrote 135,244,673 bytes with 34.862 ms p50, 101.058 ms p95, and 101.371 ms maximum checkpoint
+  latency across eight guaranteed GC/exclusion overlaps; final and observed-peak working-set growth
+  were 44.87 MiB, private-commit growth was 43.70 MiB, and late growth was 40.94 MiB. A configured
+64 MiB file-policy exhaustion test stops recording without deleting the
+partial, then replays that partial to the exact last durable tick, capability state, and canonical
+root. Multi-hour real-device latency/hitch distributions, allocator attribution through Insights,
+platform storage matrices, and true OS disk-full behavior remain open.
 
 A compressed 128-entity repeated-lifecycle fixture now captures 25 periodic checkpoints plus the
 required initial checkpoint through the real ordered background encode/append bodies. Alternating
@@ -482,8 +504,8 @@ checkpoint append after the real file is open and positioned at its exact expect
 ticks and alternating authoritative mutations continue for two turns in each held stage; exact
 resident bytes, file/durability non-advancement, production-callback catch-up, checkpoint index,
 seek/root/capability state, and full playback remain exact. These controlled internal-midpoint tests
-do not replace uncontrolled slow-device timing, long-session, RSS/allocator high-water, GC, or
-exhausted-storage soak.
+are complemented by the accelerated operational soak above; they still do not replace multi-hour
+real-device timing, allocator attribution, platform storage matrices, or true OS disk-full evidence.
 
 The supplied 2026-08-11 two-player PIE log contains two healthy sessions: lockstep configuration
 and participant roots agree throughout, with no gate stall, persistent incomplete turn, retransmit,

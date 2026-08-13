@@ -4,7 +4,7 @@
  * @file         SeinReplayWriter.cpp
  * @author       RJ Macklem
  * @created      02 Jun 2026
- * @latest       12 Aug 2026
+ * @latest       13 Aug 2026
  * @brief        Persists bounded replay journals and ordered checkpoints.
  *
  * @disclaimer   This code was generated in whole or in part with the assistance
@@ -31,6 +31,8 @@
 #include "Engine/World.h"
 #include "HAL/Event.h"
 #include "HAL/FileManager.h"
+#include "HAL/PlatformProcess.h"
+#include "HAL/PlatformTime.h"
 #include "Misc/DateTime.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
@@ -979,6 +981,29 @@ void USeinReplayWriter::ReleaseHeldCheckpointEncodeForTests()
 	{
 		ActiveCheckpointEncodeTestGate->ReleaseWorker->Trigger();
 	}
+}
+
+TFuture<double>
+USeinReplayWriter::ReleaseHeldCheckpointEncodeAfterDelayForTests(
+	uint32 DelayMilliseconds) const
+{
+	check(IsInGameThread());
+	const TSharedPtr<
+		FSeinReplayAsyncCheckpointEncodeTestGate,
+		ESPMode::ThreadSafe> Gate = ActiveCheckpointEncodeTestGate;
+	return Async(EAsyncExecution::Thread,
+		[Gate, DelayMilliseconds]()
+		{
+			if (!Gate)
+			{
+				return 0.0;
+			}
+			FPlatformProcess::SleepNoStats(
+				static_cast<float>(DelayMilliseconds) / 1000.0f);
+			const double ReleasedAt = FPlatformTime::Seconds();
+			Gate->ReleaseWorker->Trigger();
+			return ReleasedAt;
+		});
 }
 
 void USeinReplayWriter::HoldNextCheckpointAppendForTests()
