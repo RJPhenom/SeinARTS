@@ -59,16 +59,19 @@ GC, long-session, or exhausted-storage qualification.
 the operational-soak begin/end bookmarks. The clean pre-fix run
 `SeinARTS.Perf.Replay.OperationalSoak-20260813-103957-dfe48bc9` retained 47,573,706 bytes in
 1,610 allocations over the measured interval, including 8,388,688 replay-attributed bytes. The
-checkpoint envelope accounted for 8,388,608 bytes of that replay growth. Replacing result copies
-from completed replay futures with `TFuture::Consume()` reduced the development rerun to 22,443,426
-bytes in 1,256 allocations overall and 80 replay-attributed bytes. Every exported allocation had a
-recorded callstack. Unreal Insights reported 21 heap-reconstruction errors only during startup, with
-the latest at trace time 2.240 seconds, before the 30.598-second measurement boundary. The receipt-bound
-`Export-ReplayMemoryInsights.ps1` accepts only a clean passed attempt with exact trace/provenance
-hashes and rejects more than 4 KiB of replay-attributed retained growth before publishing output.
-The 80-byte result is developmental evidence until a committed clean post-fix trace produces a
-production `Qualified` receipt. It does not prove whole-process leak freedom or multi-hour
-target-device behavior.
+checkpoint envelope accounted for 8,388,608 bytes of that replay growth. Consuming completed
+futures, making checkpoint buffer ownership explicit, and draining only the matching worker
+operation removed the retained replay allocations. Clean commit `8178dec` passed attempt
+`SeinARTS.Perf.Replay.OperationalSoak-20260813-133014-e47a257d` with a same-attempt build. Its
+production `Qualified` receipt measures the 56 periodic checkpoints after an eight-checkpoint
+warmup: 1,295 retained allocations and 48,393,922 bytes overall, all with recorded callstacks, and
+zero production `SeinARTS/Replay/*` allocations/bytes retained against a 4 KiB ceiling. Two
+allocator-attribution sentinel rows totaling 35,651,648 bytes are separately validated and excluded
+from the production budget. The 21 Insights heap-reconstruction warnings ended at trace time 2.170
+seconds, before the 32.786-second measurement boundary. `Export-ReplayMemoryInsights.ps1` accepts
+only a clean passed attempt with exact source/build/trace/analyzer hashes and publishes output only
+after every gate passes. This closes the local warmed allocator-retention gate; it does not prove
+whole-process leak freedom or multi-hour target-device behavior.
 
 **UE 5.8 collision scale microbenchmark:** 2026-08-12, real canonical bootstrap and complete
 fixed ticks with reset packed contacts: 64 movers 1.257 ms median, 128 movers 3.114 ms, and

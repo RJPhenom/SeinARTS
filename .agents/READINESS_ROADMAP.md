@@ -79,13 +79,15 @@ CI gate because this engine distribution rejects those target types before proje
   sampled exact seek/root/capability checks, full playback, process-memory/late-growth sentinels,
   and checkpoint latency tails. A configured 64 MiB file-policy exhaustion test also proves the
   preserved partial replays to its exact last durable tick and root. Full bookmark-bounded Memory
-  Insights attribution found an 8 MiB retained completed-future envelope copy; consuming future
-  results reduced replay-attributed retained growth to 80 bytes in a development trace. A
-  receipt-bound headless exporter now enforces a fixed 4 KiB ceiling with exact source, trace,
-  engine, trusted-analyzer, and output identities. A clean post-fix production receipt remains
-  required before this local attribution gate closes. Multi-hour real-device timing and
-  allocator-high-water behavior, platform storage matrices, and true OS disk-full behavior remain
-  open.
+  Insights attribution found an 8 MiB retained completed-future envelope copy. Completed-future
+  consumption, explicit checkpoint-buffer ownership, and operation-matched worker drains removed
+  the retained production replay allocations. Clean commit `8178dec` has a same-attempt build and
+  production `Qualified` receipt over the warmed final 56 checkpoints: zero production replay bytes
+  retained against the fixed 4 KiB ceiling, with complete callstacks and separately validated
+  allocator-attribution sentinels. The headless exporter binds source, build, trace, engine,
+  trusted-analyzer, and output identities. This closes the local warmed allocator-retention gate.
+  Multi-hour real-device timing and allocator-high-water behavior, platform storage matrices, and
+  true OS disk-full behavior remain open.
 - The packaged run exposed and closed three release-only integration defects: lobby maps now
   materialize relays from their final authoritative slot bindings, Shipping builds no longer hide
   restore work inside compiled-out assertions, and dropped slots can reclaim their retained relay
