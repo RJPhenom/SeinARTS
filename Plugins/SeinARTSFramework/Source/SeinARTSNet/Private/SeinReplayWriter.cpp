@@ -61,6 +61,7 @@ struct FSeinReplayCheckpointEncodeWork
 	TStrongObjectPtr<USeinReplayWriter> WriterRoot;
 	FSeinWorldSnapshot Snapshot;
 	FSeinWorldSnapshotReferenceGuard SnapshotGuard;
+	TArray<uint8> Envelope;
 
 	explicit FSeinReplayCheckpointEncodeWork(USeinReplayWriter* Writer)
 		: WriterRoot(Writer)
@@ -721,9 +722,9 @@ bool USeinReplayWriter::ResolvePendingCheckpointEncode(
 #endif
 	PendingCheckpointEncodeGeneration = MAX_uint64;
 	PendingCheckpointEncodeOperationId = MAX_uint64;
-	// The worker borrows this object from the writer. Consume proves the callable
-	// has returned, so dropping the sole owner destroys the GC guard here.
-	PendingCheckpointEncodeWork.Reset();
+	TSharedPtr<FSeinReplayCheckpointEncodeWork, ESPMode::ThreadSafe>
+		CompletedEncodeWork = MoveTemp(PendingCheckpointEncodeWork);
+	check(CompletedEncodeWork.IsValid());
 	if (!Result.bSucceeded)
 	{
 		HandleCheckpointFailure(
@@ -741,16 +742,20 @@ bool USeinReplayWriter::ResolvePendingCheckpointEncode(
 		return bRecording;
 	}
 
-	const int32 EncodedCheckpointBytes = Result.Envelope.Num();
+	const int32 EncodedCheckpointBytes =
+		CompletedEncodeWork->Envelope.Num();
 	const bool bAppended = AppendJournalFrame(
 			static_cast<uint8>(
 				SeinReplayJournalFormat::EFrameType::Checkpoint),
 			INDEX_NONE,
 			INDEX_NONE,
 			Result.SnapshotTick,
-			Result.Envelope,
+			CompletedEncodeWork->Envelope,
 			/*bAsync=*/!bAppendSynchronously);
-	Result.Envelope.Empty();
+	CompletedEncodeWork->Envelope.Empty();
+	// Consume proves the worker has returned. The game thread releases the sole
+	// work owner only after its envelope has been copied into the journal frame.
+	CompletedEncodeWork.Reset();
 	if (!bAppended)
 	{
 		return false;
@@ -1733,7 +1738,7 @@ bool USeinReplayWriter::CaptureCheckpointInternal(
 						Result.bSucceeded = SeinSnapshotTransfer::
 							EncodeCheckpointEnvelopeWithMidpointForTests(
 								EncodeWork->Snapshot,
-								Result.Envelope,
+								EncodeWork->Envelope,
 								Metadata,
 								Result.Error,
 								[CheckpointEncodeTestGate](FString& GateError)
@@ -1765,7 +1770,7 @@ bool USeinReplayWriter::CaptureCheckpointInternal(
 						Result.bSucceeded =
 							SeinSnapshotTransfer::EncodeCheckpointEnvelope(
 								EncodeWork->Snapshot,
-								Result.Envelope,
+								EncodeWork->Envelope,
 								Metadata,
 								Result.Error);
 					}
@@ -1775,7 +1780,7 @@ bool USeinReplayWriter::CaptureCheckpointInternal(
 						Result.bSucceeded = false;
 						Result.Error = TEXT(
 							"checkpoint envelope tick disagrees with Core");
-						Result.Envelope.Empty();
+						EncodeWork->Envelope.Empty();
 					}
 				}
 				AsyncTask(ENamedThreads::GameThread,

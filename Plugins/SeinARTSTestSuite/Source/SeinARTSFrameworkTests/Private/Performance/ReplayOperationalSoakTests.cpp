@@ -420,13 +420,9 @@ namespace UE::SeinARTSTests
 		TArray<int32> SampleTicks;
 		TArray<FGuid> SampleRoots;
 		TArray<bool> SampleCapabilityStates;
+		TArray<uint8> ReplayAllocatorAttributionSentinel;
 
 		TRACE_BOOKMARK(TEXT("Sein.ReplayOperationalSoak.Begin"));
-		TArray<uint8> ReplayAllocatorAttributionSentinel;
-		{
-			LLM_SCOPE_BYNAME(TEXT("SeinARTS/Replay/Checkpoint/Encode"));
-			ReplayAllocatorAttributionSentinel.SetNumUninitialized(64);
-		}
 		ASSERT_THAT(IsTrue(Source->StartSimulation()));
 		for (int32 TurnOrdinal = 0; TurnOrdinal < TotalTurns; ++TurnOrdinal)
 		{
@@ -447,6 +443,11 @@ namespace UE::SeinARTSTests
 			const double StartedAt = FPlatformTime::Seconds();
 			ASSERT_THAT(IsTrue(AdvanceTurn(
 				*Source, *Writer, Turn, TicksPerTurn, bGrant)));
+			if (TurnOrdinal == 0)
+			{
+				LLM_SCOPE_BYNAME(TEXT("SeinARTS/Replay/Checkpoint/Encode"));
+				ReplayAllocatorAttributionSentinel.SetNumUninitialized(64);
+			}
 			if (!Writer->IsRecording())
 			{
 				break;
@@ -633,7 +634,6 @@ namespace UE::SeinARTSTests
 			EpochWorkingSets.Num()
 				== PeriodicCheckpointCount / GcIntervalCheckpoints));
 		TRACE_BOOKMARK(TEXT("Sein.ReplayOperationalSoak.End"));
-		ReplayAllocatorAttributionSentinel.Empty();
 
 		ASSERT_THAT(AreEqual(SampleTicks.Num(), SampleRoots.Num()));
 		ASSERT_THAT(AreEqual(
@@ -704,6 +704,7 @@ namespace UE::SeinARTSTests
 			FSeinPlayerID(2),
 			SeinARTSTags::Relationship_Capability_ShareVision)));
 		FullTarget->StopSimulation();
+		ReplayAllocatorAttributionSentinel.Empty();
 	}
 
 	TEST(ReplayCapacityExhaustionPreservesTheLastDurableFrontier,

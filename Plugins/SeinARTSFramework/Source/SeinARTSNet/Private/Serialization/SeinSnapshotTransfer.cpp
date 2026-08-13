@@ -120,12 +120,15 @@ namespace SeinSnapshotTransfer
 			Envelope.CompatibilityDigest =
 				Snapshot.BootstrapCheckpoint.Receipt.StateContractDigest;
 			Envelope.Sections.Add(MoveTemp(Section));
+			bool bEncoded = false;
 			{
 				TRACE_CPUPROFILER_EVENT_SCOPE(
 					Sein_SnapshotTransfer_FrameEnvelope);
-				return FSeinSnapshotEnvelopeCodec::Encode(
+				bEncoded = FSeinSnapshotEnvelopeCodec::Encode(
 					Envelope, OutBytes, OutMetadata, OutError);
 			}
+			Envelope.Sections.Empty();
+			return bEncoded;
 		}
 	}
 
