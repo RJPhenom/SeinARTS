@@ -1883,6 +1883,45 @@ public:
 	{
 		EndReplayExclusiveCommandIngress();
 	}
+
+	int64 GetComponentStorageSnapshotCacheHitCountForTests() const
+	{
+		return ComponentStorageSnapshotCacheHitCount;
+	}
+
+	int64 GetComponentStorageSnapshotCacheMissCountForTests() const
+	{
+		return ComponentStorageSnapshotCacheMissCount;
+	}
+
+	uint64 GetComponentStorageSnapshotCacheBytesForTests() const
+	{
+		return ComponentStorageSnapshotCacheBytes;
+	}
+
+	int32 GetComponentStorageSnapshotCacheEntryCountForTests() const
+	{
+		return ComponentStorageSnapshotCache.Num();
+	}
+
+	bool HasComponentStorageSnapshotCacheEntryForTests(
+		UScriptStruct* StructType) const
+	{
+		return ComponentStorageSnapshotCache.Contains(StructType);
+	}
+
+	void ResetComponentStorageSnapshotCacheForTests(uint64 ByteBudget)
+	{
+		ComponentStorageSnapshotCache.Reset();
+		ComponentStorageSnapshotCacheBytes = 0;
+		ComponentStorageSnapshotCacheBudgetForTests = FMath::Min(
+			ByteBudget, MaxComponentStorageSnapshotCacheBytes);
+	}
+
+	uint64 GetDefaultComponentStorageSnapshotCacheBudgetForTests() const
+	{
+		return MaxComponentStorageSnapshotCacheBytes;
+	}
 #endif
 
 	// ========== System Registration ==========
@@ -2087,6 +2126,27 @@ private:
 
 	// Component storage registry (slot-indexed, keyed by UScriptStruct*)
 	TMap<UScriptStruct*, ISeinComponentStorage*> ComponentStorages;
+	struct FComponentStorageSnapshotCacheEntry
+	{
+		uint64 TopologyRevision = 0;
+		uint64 LatestMutationRevision = 0;
+		int32 EntryCount = 0;
+		TArray<uint8> Bytes;
+	};
+	/** Process-local checkpoint acceleration only. Reuse requires matching
+	 *  revisions and a storage that has never exposed mutable payload memory;
+	 *  snapshots receive their own byte copy and never share live state. */
+	TMap<UScriptStruct*, FComponentStorageSnapshotCacheEntry>
+		ComponentStorageSnapshotCache;
+	static constexpr uint64 MaxComponentStorageSnapshotCacheBytes =
+		64ULL * 1024ULL * 1024ULL;
+	uint64 ComponentStorageSnapshotCacheBytes = 0;
+#if WITH_DEV_AUTOMATION_TESTS
+	int64 ComponentStorageSnapshotCacheHitCount = 0;
+	int64 ComponentStorageSnapshotCacheMissCount = 0;
+	uint64 ComponentStorageSnapshotCacheBudgetForTests =
+		MaxComponentStorageSnapshotCacheBytes;
+#endif
 
 	// Player states. Reflected so Blueprint effect/ability classes nested in
 	// active effect ledgers remain reachable through GC.

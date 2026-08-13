@@ -19,6 +19,28 @@ namespace UE::SeinARTSTests
 	{
 		constexpr int32 TimedSamples = 5;
 
+		bool HaveSameComponentStorageBlobs(
+			const FSeinWorldSnapshot& A,
+			const FSeinWorldSnapshot& B)
+		{
+			if (A.ComponentStorageBlobs.Num() != B.ComponentStorageBlobs.Num())
+			{
+				return false;
+			}
+			for (const auto& Pair : A.ComponentStorageBlobs)
+			{
+				const FSeinSnapshotComponentStorageBlob* Other =
+					B.ComponentStorageBlobs.Find(Pair.Key);
+				if (!Other
+					|| Other->EntryCount != Pair.Value.EntryCount
+					|| Other->Bytes != Pair.Value.Bytes)
+				{
+					return false;
+				}
+			}
+			return true;
+		}
+
 		bool MeasurePopulation(
 			int32 Population,
 			double& OutCaptureMedianMilliseconds,
@@ -39,6 +61,8 @@ namespace UE::SeinARTSTests
 			}
 
 			bool bAuthoringSucceeded = true;
+			TArray<FSeinEntityHandle> Handles;
+			Handles.Reserve(Population);
 			const auto AuthorState = [&]()
 			{
 				for (int32 Index = 0; Index < Population; ++Index)
@@ -54,6 +78,7 @@ namespace UE::SeinARTSTests
 						bAuthoringSucceeded = false;
 						return;
 					}
+					Handles.Add(Handle);
 
 					FSeinExtentsShape Shape;
 					Shape.Radius = FFixedPoint::FromInt(50);
@@ -95,12 +120,158 @@ namespace UE::SeinARTSTests
 				}
 				return false;
 			}
-			FGuid RootBefore;
-			if (!World->ComputeCanonicalStateRoot(RootBefore, OutError))
+			FSeinWorldSnapshot FirstSnapshot;
+			FSeinWorldSnapshot CachedSnapshot;
+			const int64 CacheHitsBefore =
+				World->GetComponentStorageSnapshotCacheHitCountForTests();
+			const int64 CacheMissesBefore =
+				World->GetComponentStorageSnapshotCacheMissCountForTests();
+			World->CaptureSnapshot(FirstSnapshot);
+			const int64 CacheHitsAfterFirst =
+				World->GetComponentStorageSnapshotCacheHitCountForTests();
+			const int64 CacheMissesAfterFirst =
+				World->GetComponentStorageSnapshotCacheMissCountForTests();
+			World->CaptureSnapshot(CachedSnapshot);
+			if (FirstSnapshot.SnapshotVersion != FSeinWorldSnapshot::CurrentVersion
+				|| !HaveSameComponentStorageBlobs(FirstSnapshot, CachedSnapshot)
+				|| CacheHitsAfterFirst != CacheHitsBefore
+				|| CacheMissesAfterFirst - CacheMissesBefore
+					!= FirstSnapshot.ComponentStorageBlobs.Num()
+				|| World->GetComponentStorageSnapshotCacheHitCountForTests()
+					- CacheHitsAfterFirst
+					!= CachedSnapshot.ComponentStorageBlobs.Num()
+				|| World->GetComponentStorageSnapshotCacheMissCountForTests()
+					!= CacheMissesAfterFirst
+				|| World->GetComponentStorageSnapshotCacheBytesForTests()
+					> World->GetDefaultComponentStorageSnapshotCacheBudgetForTests())
 			{
+				OutError = TEXT(
+					"An unchanged checkpoint did not reuse every exact component blob.");
 				World->StopSimulation();
 				return false;
 			}
+			const FString MovementStoragePath =
+				FSeinMovementComponent::StaticStruct()->GetPathName();
+			const FSeinSnapshotComponentStorageBlob* PreviousMovementBlob =
+				CachedSnapshot.ComponentStorageBlobs.Find(MovementStoragePath);
+			if (!PreviousMovementBlob)
+			{
+				OutError = TEXT("Checkpoint scale fixture has no movement storage blob.");
+				World->StopSimulation();
+				return false;
+			}
+			TArray<uint8> PreviousMovementBytes = PreviousMovementBlob->Bytes;
+			World->ResetComponentStorageSnapshotCacheForTests(0);
+			FSeinWorldSnapshot ZeroBudgetSnapshot;
+			World->CaptureSnapshot(ZeroBudgetSnapshot);
+			if (!HaveSameComponentStorageBlobs(
+					CachedSnapshot, ZeroBudgetSnapshot)
+				|| World->GetComponentStorageSnapshotCacheBytesForTests() != 0
+				|| World->GetComponentStorageSnapshotCacheEntryCountForTests() != 0)
+			{
+				OutError = TEXT(
+					"Zero cache budget admitted bytes or changed checkpoint output.");
+				World->StopSimulation();
+				return false;
+			}
+			World->ResetComponentStorageSnapshotCacheForTests(
+				World->GetDefaultComponentStorageSnapshotCacheBudgetForTests());
+			FSeinWorldSnapshot RefilledCacheSnapshot;
+			World->CaptureSnapshot(RefilledCacheSnapshot);
+			if (!HaveSameComponentStorageBlobs(
+					CachedSnapshot, RefilledCacheSnapshot)
+				|| World->GetComponentStorageSnapshotCacheEntryCountForTests()
+					!= RefilledCacheSnapshot.ComponentStorageBlobs.Num())
+			{
+				OutError = TEXT("Restored cache budget did not admit every storage.");
+				World->StopSimulation();
+				return false;
+			}
+			FGuid TopologyRootBefore;
+			const FSeinMovementComponent* MovementToRemove =
+				World->GetComponent<FSeinMovementComponent>(Handles.Last());
+			ISeinComponentStorage* MovementStorage =
+				World->GetComponentStorageMutable(
+					FSeinMovementComponent::StaticStruct());
+			if (!MovementToRemove || !MovementStorage
+				|| !World->ComputeCanonicalStateRoot(TopologyRootBefore, OutError))
+			{
+				OutError = OutError.IsEmpty()
+					? TEXT("Checkpoint topology invalidation fixture was unavailable.")
+					: OutError;
+				World->StopSimulation();
+				return false;
+			}
+			const FSeinMovementComponent RemovedMovement = *MovementToRemove;
+			MovementStorage->RemoveComponent(Handles.Last());
+			FSeinWorldSnapshot RemovedSnapshot;
+			World->CaptureSnapshot(RemovedSnapshot);
+			const FSeinSnapshotComponentStorageBlob* RemovedMovementBlob =
+				RemovedSnapshot.ComponentStorageBlobs.Find(MovementStoragePath);
+			if (!RemovedMovementBlob
+				|| RemovedMovementBlob->EntryCount != Population - 1
+				|| RemovedMovementBlob->Bytes == PreviousMovementBytes)
+			{
+				OutError = TEXT(
+					"A removed component did not invalidate its cached storage topology.");
+				World->StopSimulation();
+				return false;
+			}
+			MovementStorage->AddComponent(Handles.Last(), &RemovedMovement);
+			FSeinWorldSnapshot RestoredTopologySnapshot;
+			World->CaptureSnapshot(RestoredTopologySnapshot);
+			const FSeinSnapshotComponentStorageBlob* RestoredMovementBlob =
+				RestoredTopologySnapshot.ComponentStorageBlobs.Find(
+					MovementStoragePath);
+			FGuid TopologyRootAfter;
+			if (!RestoredMovementBlob
+				|| RestoredMovementBlob->EntryCount != Population
+				|| RestoredMovementBlob->Bytes != PreviousMovementBytes
+				|| !World->ComputeCanonicalStateRoot(TopologyRootAfter, OutError)
+				|| TopologyRootAfter != TopologyRootBefore)
+			{
+				OutError = OutError.IsEmpty()
+					? TEXT("Restoring component topology did not restore exact state.")
+					: OutError;
+				World->StopSimulation();
+				return false;
+			}
+			FSeinMovementComponent* RetainedMovementPointer =
+				World->GetComponentMutable<FSeinMovementComponent>(Handles[0]);
+			if (!RetainedMovementPointer)
+			{
+				OutError = TEXT("Retained-pointer invalidation fixture was unavailable.");
+				World->StopSimulation();
+				return false;
+			}
+			const uint64 CacheBytesBeforeRetainedPointer =
+				World->GetComponentStorageSnapshotCacheBytesForTests();
+			RetainedMovementPointer->Velocity.X = FFixedPoint::FromInt(1001);
+			FSeinWorldSnapshot FirstRetainedPointerSnapshot;
+			World->CaptureSnapshot(FirstRetainedPointerSnapshot);
+			RetainedMovementPointer->Velocity.X = FFixedPoint::FromInt(1002);
+			FSeinWorldSnapshot SecondRetainedPointerSnapshot;
+			World->CaptureSnapshot(SecondRetainedPointerSnapshot);
+			const FSeinSnapshotComponentStorageBlob* FirstRetainedBlob =
+				FirstRetainedPointerSnapshot.ComponentStorageBlobs.Find(
+					MovementStoragePath);
+			const FSeinSnapshotComponentStorageBlob* SecondRetainedBlob =
+				SecondRetainedPointerSnapshot.ComponentStorageBlobs.Find(
+					MovementStoragePath);
+			if (!FirstRetainedBlob || !SecondRetainedBlob
+				|| FirstRetainedBlob->Bytes == SecondRetainedBlob->Bytes
+				|| World->HasComponentStorageSnapshotCacheEntryForTests(
+					FSeinMovementComponent::StaticStruct())
+				|| World->GetComponentStorageSnapshotCacheBytesForTests()
+					!= CacheBytesBeforeRetainedPointer
+						- static_cast<uint64>(PreviousMovementBytes.Num()))
+			{
+				OutError = TEXT(
+					"A retained mutable pointer produced a stale cached checkpoint blob.");
+				World->StopSimulation();
+				return false;
+			}
+			PreviousMovementBytes = SecondRetainedBlob->Bytes;
 
 			TArray<double> CaptureSamples;
 			TArray<double> SerializeSamples;
@@ -110,6 +281,26 @@ namespace UE::SeinARTSTests
 			EncodeSamples.Reserve(TimedSamples);
 			for (int32 Sample = -1; Sample < TimedSamples; ++Sample)
 			{
+				for (int32 Index = 0; Index < Handles.Num(); ++Index)
+				{
+					FSeinMovementComponent* Movement =
+						World->GetComponentMutable<FSeinMovementComponent>(Handles[Index]);
+					if (!Movement)
+					{
+						OutError = TEXT("Checkpoint scale movement mutation failed.");
+						World->StopSimulation();
+						return false;
+					}
+					Movement->Velocity.X = FFixedPoint::FromInt(
+						((Index + Sample + 2) % 17) + 1);
+				}
+				FGuid RootBefore;
+				if (!World->ComputeCanonicalStateRoot(RootBefore, OutError))
+				{
+					World->StopSimulation();
+					return false;
+				}
+
 				FSeinWorldSnapshot Snapshot;
 				const double CaptureStartedAt = FPlatformTime::Seconds();
 				World->CaptureSnapshot(Snapshot);
@@ -164,6 +355,26 @@ namespace UE::SeinARTSTests
 					World->StopSimulation();
 					return false;
 				}
+				const FSeinSnapshotComponentStorageBlob* MovementBlob =
+					Snapshot.ComponentStorageBlobs.Find(MovementStoragePath);
+				if (!MovementBlob || MovementBlob->Bytes == PreviousMovementBytes)
+				{
+					OutError = TEXT(
+						"A mutated movement storage reused a stale checkpoint blob.");
+					World->StopSimulation();
+					return false;
+				}
+				PreviousMovementBytes = MovementBlob->Bytes;
+
+				FGuid RootAfter;
+				if (!World->ComputeCanonicalStateRoot(RootAfter, OutError)
+					|| RootAfter != RootBefore)
+				{
+					OutError = TEXT(
+						"Checkpoint capture or encoding changed canonical state.");
+					World->StopSimulation();
+					return false;
+				}
 
 				OutEnvelopeBytes = Envelope.Num();
 				OutPoolSlots = Snapshot.EntityPoolState.Slots.Num();
@@ -180,14 +391,6 @@ namespace UE::SeinARTSTests
 				}
 			}
 
-			FGuid RootAfter;
-			if (!World->ComputeCanonicalStateRoot(RootAfter, OutError)
-				|| RootAfter != RootBefore)
-			{
-				OutError = TEXT("Checkpoint capture or encoding changed canonical state.");
-				World->StopSimulation();
-				return false;
-			}
 			World->StopSimulation();
 
 			CaptureSamples.Sort();

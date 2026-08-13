@@ -52,19 +52,19 @@ formation/resolver state coverage, provider teardown, and downstream content own
 
 | Gate | Result |
 |---|---:|
-| `SeinARTS.Unit`, profile All | 428 passed, 0 failed |
-| `SeinARTS.Unit`, profile Framework | 410 passed, 0 failed |
-| `SeinARTS.Integration`, profile All | 22 passed, 0 failed |
-| `SeinARTS.Integration`, profile Framework | 16 passed, 0 failed |
+| `SeinARTS.Unit`, profile All | 432 passed, 0 failed |
+| `SeinARTS.Unit`, profile Framework | 414 passed, 0 failed |
+| `SeinARTS.Integration`, profile All | 23 passed, 0 failed |
+| `SeinARTS.Integration`, profile Framework | 17 passed, 0 failed |
 | `SeinARTS.Determinism`, profile All | 40 passed, 0 failed |
 | `SeinARTS.Determinism`, profile Framework | 30 passed, 0 failed |
 | `SeinARTS.Editor`, profile All | 38 passed, 0 failed |
 | `SeinARTS.Editor`, profile Framework | 36 passed, 0 failed |
 | `SeinARTS.Sim`, profile All | 30 passed, 0 failed |
 | `SeinARTS.Sim`, profile Framework | 27 passed, 0 failed |
-| `SeinARTS.Perf`, profile All | 3 passed, 0 failed; cover 128x128 averaged 11.998 ms; public 128-member preview measured 1.255/1.337 ms median/p95 coverless and 3.181/3.324 ms dense; collision full-tick medians 1.257/3.114/7.214 ms at 64/128/256 movers |
-| `SeinARTS.Perf`, profile Framework | 1 passed, 0 failed; collision full-tick medians 1.401/3.035/7.494 ms at 64/128/256 movers |
-| Fresh-process collision trace | 2026-08-12 serial and parallel roots/poses identical for all 120 ticks; final root `E8177AC3EB66C19E6C05B25A55A2099A`, pose `0x8B576390ECC600E1` |
+| `SeinARTS.Perf`, profile All | 4 passed, 0 failed; cover 128x128 averaged 11.998 ms; public 128-member preview measured 1.255/1.337 ms median/p95 coverless and 3.181/3.324 ms dense; collision full-tick medians 1.257/3.114/7.214 ms at 64/128/256 movers |
+| `SeinARTS.Perf`, profile Framework | 2 passed, 0 failed; checkpoint snapshot-capture medians 2.037/7.815/15.288 ms at 100/500/1,000 moving entities; collision full-tick medians 1.401/3.035/7.494 ms at 64/128/256 movers |
+| Fresh-process collision trace | 2026-08-12 serial and parallel roots/poses identical for all 120 ticks; final root `C7F80677E49318A724E8BD8A99C57022`, pose `0x8B576390ECC600E1` |
 | `SeinARTSEditor Win64 Development` | succeeded / target current |
 | `SeinARTS Win64 Shipping` | succeeded / target current |
 | Clean consumer: Framework | fresh 2026-08-12 Editor + Shipping build, exact map load, cook/package, real Shipping startup passed |
@@ -249,6 +249,21 @@ Latest local evidence is under ignored `Saved/Automation/`:
 - `SeinARTS.Integration-20260812-184042-76386474` (All, 23 passed)
 - `Scripts/Build.ps1 -Target SeinARTS -Config Shipping` (2026-08-12; Net rebuilt and
   `SeinARTS-Win64-Shipping.exe` linked with the slow-storage test gate compiled out)
+- `SeinARTS.Unit.Entity-20260812-194058-7dbdb9aa` (Framework, 13 passed; includes forced
+  component-storage mutation/topology revision-wrap coverage)
+- `SeinARTS.Determinism.Snapshot.Bootstrap-20260812-194924-deb10fd8` (Framework, 1 passed;
+  post-restore storage cache is cold once, then fully reusable)
+- `SeinARTS.Perf.Replay.Checkpoint-20260812-194951-a42b1703` (Framework, 1 passed;
+  snapshot-capture medians 2.037/7.815/15.288 ms at 100/500/1,000 moving entities)
+- `SeinARTS.Unit-20260812-195052-29dc4644` (All, 432 passed)
+- `SeinARTS.Unit-20260812-200210-1f225e9f` (Framework, 414 passed)
+- `SeinARTS.Integration-20260812-195154-136a8c4b` (All, 23 passed)
+- `SeinARTS.Determinism-20260812-195225-03dccd18` (All, 40 passed)
+- `SeinARTS.Determinism.Process.SerialCollisionTrace-20260812-195507-650042ae` and
+  `SeinARTS.Determinism.Process.ParallelCollisionTrace-20260812-195525-422a8b1a`
+  (fresh processes; canonical roots and raw poses matched for all 120 ticks)
+- `Scripts/Build.ps1 -Target SeinARTS -Config Shipping` (2026-08-12 after checkpoint-cache
+  hardening; all touched production modules rebuilt and `SeinARTS-Win64-Shipping.exe` linked)
 
 ## Integration-candidate progress
 
@@ -348,14 +363,21 @@ framework regression.
 
 Replay v9 automatic periodic checkpoints encode and durably append through the existing ordered
 background pipeline. Frame digest/sequence and checkpoint persistence diagnostics commit on the game
-thread only after worker success; periodic snapshot capture, mandatory initial/direct writes, final
-publication, and pressure-forced drains remain synchronous. File-backed integration now holds the
+thread only after worker success. Periodic snapshot capture remains synchronous, but unchanged
+component-storage blobs are reused from a process-local cache only when topology and mutation
+revisions match and no mutable payload pointer has ever escaped. Every snapshot owns its byte copy,
+retention is capped at 64 MiB per world, revision wrap disables reuse, and restore clears the prior
+timeline cache. The moving-storage capture curve improved from 4.033/14.245/27.831 ms to
+2.037/7.815/15.288 ms at 100/500/1,000 entities without changing snapshot or canonical schemas.
+Mandatory initial/direct writes, final publication, and pressure-forced drains remain synchronous.
+File-backed integration now holds the
 periodic checkpoint before file I/O, advances the real fixed-tick world while eligible turns accumulate
 to the exact resident bound, proves no false bytes/counters or frame overtaking, then forces the
 production wait and validates the published journal after release. The >64 MiB bounded-memory proof,
 asynchronous failure, and real write denial remain green. New Insights scopes separate checkpoint
-capture/encode, background/synchronous durable append, and game-thread append waits. Real slow-device
-latency, long-session hitch distribution, and exhausted storage still require measured soak evidence.
+capture cache hits/live serialization/encode, background/synchronous durable append, and game-thread
+append waits. Real slow-device latency, allocator high-water/RSS, GC interaction, long-session hitch
+distribution, and exhausted storage still require measured soak evidence.
 
 The supplied 2026-08-11 two-player PIE log contains two healthy sessions: lockstep configuration
 and participant roots agree throughout, with no gate stall, persistent incomplete turn, retransmit,

@@ -15,6 +15,8 @@
 #include "UObject/UnrealType.h"
 #include "UObject/UObjectGlobals.h"
 
+#include <atomic>
+
 /**
  * Abstract interface for entity-handle-keyed component storage.
  */
@@ -50,6 +52,10 @@ public:
 	virtual uint64 GetLatestMutationRevision() const = 0;
 	/** Changes whenever the occupied-handle set or storage capacity changes. */
 	virtual uint64 GetTopologyRevision() const = 0;
+	/** True only while revision equality is sufficient evidence that snapshot
+	 *  serialization is unchanged. Exposing a mutable payload pointer or
+	 *  wrapping either revision permanently disables reuse for this storage. */
+	virtual bool CanReuseSnapshotSerialization() const = 0;
 
 	/**
 	 * Sparse live-slot iteration: invoke Visitor for every alive slot exactly
@@ -272,6 +278,7 @@ public:
 		const int32 SlotIndex = static_cast<int32>(Handle.Index);
 		if (IsStoredHandle(Handle))
 		{
+			bMutablePointerEscaped.store(true, std::memory_order_relaxed);
 			TouchSlot(SlotIndex);
 			return GetSlotPtr(SlotIndex);
 		}
@@ -292,7 +299,12 @@ public:
 		FSeinEntityHandle Handle) override
 	{
 		const int32 SlotIndex = static_cast<int32>(Handle.Index);
-		return IsStoredHandle(Handle) ? GetSlotPtr(SlotIndex) : nullptr;
+		if (!IsStoredHandle(Handle))
+		{
+			return nullptr;
+		}
+		bMutablePointerEscaped.store(true, std::memory_order_relaxed);
+		return GetSlotPtr(SlotIndex);
 	}
 
 	virtual void CommitDeferredMutation(
@@ -518,6 +530,12 @@ public:
 		return MutationRevisionCounter;
 	}
 
+	virtual bool CanReuseSnapshotSerialization() const override
+	{
+		return !bMutablePointerEscaped.load(std::memory_order_relaxed)
+			&& !bRevisionWrapped;
+	}
+
 	virtual void Clear() override
 	{
 		for (TConstSetBitIterator<> It(HasComponentBits); It; ++It)
@@ -533,6 +551,10 @@ public:
 	virtual void ForEachLiveComponent(
 		TFunctionRef<void(FSeinEntityHandle /*Handle*/, void* /*RawComponent*/)> Visitor) override
 	{
+		if (ComponentCount > 0)
+		{
+			bMutablePointerEscaped.store(true, std::memory_order_relaxed);
+		}
 		// TConstSetBitIterator yields set-bit indices in ascending order, which
 		// matches FSeinEntityPool::ForEachEntity's slot order — see the
 		// interface docstring for why that determinism guarantee matters.
@@ -668,8 +690,12 @@ private:
 		{
 			return;
 		}
-		++MutationRevisionCounter;
-		if (MutationRevisionCounter == 0)
+		if (MutationRevisionCounter == MAX_uint64)
+		{
+			MutationRevisionCounter = 1;
+			bRevisionWrapped = true;
+		}
+		else
 		{
 			++MutationRevisionCounter;
 		}
@@ -678,8 +704,12 @@ private:
 
 	void BumpTopologyRevision()
 	{
-		++TopologyRevision;
-		if (TopologyRevision == 0)
+		if (TopologyRevision == MAX_uint64)
+		{
+			TopologyRevision = 1;
+			bRevisionWrapped = true;
+		}
+		else
 		{
 			++TopologyRevision;
 		}
@@ -718,6 +748,10 @@ private:
 	TArray<uint64> SlotMutationRevisions;
 	uint64 MutationRevisionCounter = 0;
 	uint64 TopologyRevision = 1;
+	std::atomic_bool bMutablePointerEscaped{false};
+	bool bRevisionWrapped = false;
 	int32 SlotCapacity = 0;
 	int32 ComponentCount;
+
+	friend struct FSeinComponentStorageTestAccess;
 };

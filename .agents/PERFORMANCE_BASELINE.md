@@ -18,6 +18,18 @@ canonical root. It excludes selection expansion, per-position quality queries, a
 updates, navigation-backed projection, and the rest of a game frame, so it is a core-layout
 regression sentinel rather than an end-to-end preview frame budget.
 
+**UE 5.8 replay-checkpoint capture qualification:** 2026-08-12, Framework-profile run
+`SeinARTS.Perf.Replay.Checkpoint-20260812-194951-a42b1703`. With every movement component mutated
+before every timed capture, snapshot-capture medians were 2.037/7.815/15.288 ms at
+100/500/1,000 entities, down from the same-machine pre-change baseline of
+4.033/14.245/27.831 ms.
+The process-local storage-blob cache reuses only revision-matched storage that has never exposed a
+mutable payload pointer, copies bytes into every snapshot, and retains at most 64 MiB per world.
+Automation directly covers cold and hot capture, value and topology mutation, retained-pointer
+mutation, restore, zero-budget admission, exact retained-byte accounting, and revision wrap. The
+snapshot schema and canonical state are unchanged. This is a local regression sentinel, not a
+target-device long-session hitch or allocator/RSS qualification.
+
 **UE 5.8 collision scale microbenchmark:** 2026-08-12, real canonical bootstrap and complete
 fixed ticks with reset packed contacts: 64 movers 1.257 ms median, 128 movers 3.114 ms, and
 256 movers 7.214 ms (`SeinARTS.Perf-20260812-081656-9a968ce2`). The enforced
@@ -89,8 +101,11 @@ The final GPU/resource capture did not reproduce the prior ray-tracing geometry 
 3. Active collision does not usually settle early. The automated packed-contact curve reaches 256
    movers; 300/500/1,000 moving-combat populations still require game-world Insights captures.
 4. Complex game AnimBPs, Control Rig, cloth, physics, and unique meshes can exceed the mannequin baseline.
-5. `Sein.Nav.Show 1` is a correctness visualization, not a performance-safe overlay. A measured 100-mover run rose from 18.62 ms to 64.62 ms before the latest debug caching work; always record the flag.
-6. Multi-client PIE intentionally hosts multiple complete simulations/presentations in one process. Record world count and do not present it as one shipped client's cost.
+5. Checkpoint snapshot capture remains synchronous. Cached storage blobs reduce the measured cost,
+   but real-device long-session hitch distribution, allocator high-water/RSS, GC interaction, slow
+   storage, and exhausted-storage behavior remain open soak gates.
+6. `Sein.Nav.Show 1` is a correctness visualization, not a performance-safe overlay. A measured 100-mover run rose from 18.62 ms to 64.62 ms before the latest debug caching work; always record the flag.
+7. Multi-client PIE intentionally hosts multiple complete simulations/presentations in one process. Record world count and do not present it as one shipped client's cost.
 
 ## Required profiling discipline
 
@@ -101,7 +116,9 @@ capture/materialization/revalidation, provider gathering, slot resolution/dedupl
 eligible-edge construction, cost-matrix construction, and Hungarian solve scopes. Replay checkpoint
 qualification should include `Sein_Replay_CaptureCheckpoint`,
 `Sein_Replay_Checkpoint_CaptureSnapshot`, `Sein_World_CaptureSnapshot`, and
-`Sein_Replay_Checkpoint_EncodeEnvelope`. Storage qualification should correlate
+`Sein_Replay_Checkpoint_EncodeEnvelope`. Storage-cache attribution should distinguish
+`Sein_World_CaptureSnapshot_ComponentStorageCacheHit` from
+`Sein_World_CaptureSnapshot_ComponentStorageSerialize`. Storage qualification should correlate
 `Sein_Replay_BackgroundDurableAppend`, `Sein_Replay_SynchronousDurableAppend`, and
 `Sein_Replay_WaitForBackgroundAppend`; the deterministic held-append regression proves ordering and
 bounded pressure behavior, not a target device's latency distribution. Keep looking after the first

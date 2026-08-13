@@ -1053,6 +1053,14 @@ void USeinWorldSubsystem::ReleaseAllModuleOwnedState()
 		delete Pair.Value;
 	}
 	ComponentStorages.Reset();
+	ComponentStorageSnapshotCache.Reset();
+	ComponentStorageSnapshotCacheBytes = 0;
+#if WITH_DEV_AUTOMATION_TESTS
+	ComponentStorageSnapshotCacheHitCount = 0;
+	ComponentStorageSnapshotCacheMissCount = 0;
+	ComponentStorageSnapshotCacheBudgetForTests =
+		MaxComponentStorageSnapshotCacheBytes;
+#endif
 
 	Systems.Reset();
 	for (ISeinSystem* System : BuiltInSystems)
@@ -6989,24 +6997,86 @@ void USeinWorldSubsystem::CaptureSnapshot(FSeinWorldSnapshot& OutSnapshot)
 		ISeinComponentStorage* Storage = Pair.Value;
 		if (!StructType || !Storage) continue;
 
-		// Wrap the FMemoryWriter in FObjectAndNameAsStringProxyArchive — the
-		// base FMemoryArchive asserts (check(0)) on any UObject* serialization.
-		// Component data may carry TSubclassOf<...> / FInstancedStruct / soft
-		// refs that hit that path through UScriptStruct::SerializeBin. The
-		// proxy archive stringifies UObject refs as paths (matches the replay
-		// writer pattern, see SeinReplayWriter.cpp).
 		FSeinSnapshotComponentStorageBlob Blob;
-		FMemoryWriter MemWriter(Blob.Bytes, /*bIsPersistent*/ true);
-		FObjectAndNameAsStringProxyArchive Writer(MemWriter, /*bInLoadIfFindFails*/ false);
-		Blob.EntryCount = Storage->SerializeFromArchive(Writer);
-		if (Writer.IsError())
+		const uint64 TopologyRevision = Storage->GetTopologyRevision();
+		const uint64 LatestMutationRevision =
+			Storage->GetLatestMutationRevision();
+		const bool bCanReuse = Storage->CanReuseSnapshotSerialization();
+		uint64 CacheByteBudget = MaxComponentStorageSnapshotCacheBytes;
+#if WITH_DEV_AUTOMATION_TESTS
+		CacheByteBudget = ComponentStorageSnapshotCacheBudgetForTests;
+#endif
+		const auto DropCachedStorage = [this, StructType]()
 		{
-			OutSnapshot = FSeinWorldSnapshot();
-			OutSnapshot.SnapshotVersion = 0;
-			UE_LOG(LogSeinSim, Error,
-				TEXT("CaptureSnapshot: component storage %s failed serialization."),
-				*StructType->GetPathName());
-			return;
+			if (const FComponentStorageSnapshotCacheEntry* Existing =
+				ComponentStorageSnapshotCache.Find(StructType))
+			{
+				check(static_cast<uint64>(Existing->Bytes.Num())
+					<= ComponentStorageSnapshotCacheBytes);
+				ComponentStorageSnapshotCacheBytes -=
+					static_cast<uint64>(Existing->Bytes.Num());
+				ComponentStorageSnapshotCache.Remove(StructType);
+			}
+		};
+		if (!bCanReuse)
+		{
+			DropCachedStorage();
+		}
+		const FComponentStorageSnapshotCacheEntry* Cached =
+			bCanReuse
+				? ComponentStorageSnapshotCache.Find(StructType)
+				: nullptr;
+		if (Cached
+			&& Cached->TopologyRevision == TopologyRevision
+			&& Cached->LatestMutationRevision == LatestMutationRevision)
+		{
+#if WITH_DEV_AUTOMATION_TESTS
+			++ComponentStorageSnapshotCacheHitCount;
+#endif
+			TRACE_CPUPROFILER_EVENT_SCOPE(
+				Sein_World_CaptureSnapshot_ComponentStorageCacheHit);
+			Blob.EntryCount = Cached->EntryCount;
+			Blob.Bytes = Cached->Bytes;
+		}
+		else
+		{
+#if WITH_DEV_AUTOMATION_TESTS
+			++ComponentStorageSnapshotCacheMissCount;
+#endif
+			TRACE_CPUPROFILER_EVENT_SCOPE(
+				Sein_World_CaptureSnapshot_ComponentStorageSerialize);
+			// The base FMemoryArchive asserts on UObject* serialization. The proxy
+			// stringifies reflected object references as stable paths.
+			FMemoryWriter MemWriter(Blob.Bytes, /*bIsPersistent*/ true);
+			FObjectAndNameAsStringProxyArchive Writer(
+				MemWriter, /*bInLoadIfFindFails*/ false);
+			Blob.EntryCount = Storage->SerializeFromArchive(Writer);
+			if (Writer.IsError())
+			{
+				OutSnapshot = FSeinWorldSnapshot();
+				OutSnapshot.SnapshotVersion = 0;
+				UE_LOG(LogSeinSim, Error,
+					TEXT("CaptureSnapshot: component storage %s failed serialization."),
+					*StructType->GetPathName());
+				return;
+			}
+
+			DropCachedStorage();
+			const uint64 BlobByteCount =
+				static_cast<uint64>(Blob.Bytes.Num());
+			if (bCanReuse
+				&& ComponentStorageSnapshotCacheBytes <= CacheByteBudget
+				&& BlobByteCount <= CacheByteBudget
+					- ComponentStorageSnapshotCacheBytes)
+			{
+				FComponentStorageSnapshotCacheEntry& NewCache =
+					ComponentStorageSnapshotCache.FindOrAdd(StructType);
+				NewCache.TopologyRevision = TopologyRevision;
+				NewCache.LatestMutationRevision = LatestMutationRevision;
+				NewCache.EntryCount = Blob.EntryCount;
+				NewCache.Bytes = Blob.Bytes;
+				ComponentStorageSnapshotCacheBytes += BlobByteCount;
+			}
 		}
 		OutSnapshot.ComponentStorageBlobs.Add(StructType->GetPathName(), MoveTemp(Blob));
 	}
@@ -9076,8 +9146,11 @@ bool USeinWorldSubsystem::RestoreSnapshot(
 					{
 						return Candidate.Type == ComponentType;
 					});
-			return Found && Found->Storage
-				? Found->Storage->GetComponentRaw(Handle)
+			const ISeinComponentStorage* Storage = Found && Found->Storage
+				? Found->Storage.Get()
+				: nullptr;
+			return Storage
+				? Storage->GetComponentRaw(Handle)
 				: nullptr;
 		}
 
@@ -9370,6 +9443,8 @@ bool USeinWorldSubsystem::RestoreSnapshot(
 			delete ExistingStorage.Value;
 		}
 		ComponentStorages.Reset();
+		ComponentStorageSnapshotCache.Reset();
+		ComponentStorageSnapshotCacheBytes = 0;
 		for (FStagedComponentStorage& Staged : StagedComponentStorages)
 		{
 			ComponentStorages.Add(Staged.Type, Staged.Storage.Release());
