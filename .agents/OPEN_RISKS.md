@@ -59,8 +59,11 @@ This is the actionable remainder after consolidating the historical audits. It i
    pressure-forced drains remain synchronous. Automated integration proves ordered bounded pressure,
    failure/write denial retain the partial journal, and a compressed 25-periodic-checkpoint session
    proves exact repeated encode/append, authoritative mutation replay, every-checkpoint seek/root,
-   stable cache payload/allocation, and cold/hot restore behavior. That fixture intentionally waits
-   between forced maintenance cycles; natural asynchronous overlap, real-device long-session hitch,
+   stable cache payload/allocation, and cold/hot restore behavior. A separate eight-cycle,
+   128-entity fixture advances fixed ticks and mutations while encode is paused after payload
+   serialization and append is paused with the real file open at its verified offset. It proves
+   exact resident bytes, no false durability/overtaking, and production-callback catch-up across
+   controlled operation overlap. Uncontrolled local-disk timing, real-device long-session hitch,
    allocator high-water/RSS, GC interaction, latency, and exhausted-storage behavior still need
    Insights and soak evidence.
 5. Debug navigation rendering is intentionally expensive and can invalidate profiling if left enabled.

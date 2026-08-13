@@ -1,3 +1,16 @@
+/**
+ * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
+ *
+ * @file         SeinReplayFileIO.cpp
+ * @author       RJ Macklem
+ * @created      29 Jul 2026
+ * @latest       12 Aug 2026
+ * @brief        Implements bounded, failure-atomic replay file operations.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
+ */
+
 #include "SeinReplayFileIO.h"
 
 #include "HAL/FileManager.h"
@@ -9,6 +22,72 @@ namespace
 {
 	constexpr int64 HardReplayJournalBytes =
 		64LL * 1024LL * 1024LL * 1024LL;
+
+	bool AppendAtExpectedOffsetInternal(
+		const FString& FilePath,
+		int64 ExpectedOffset,
+		TConstArrayView<uint8> Bytes,
+		FString& OutError,
+		TFunctionRef<bool(FString&)> AfterOpenAtExpectedOffset)
+	{
+		OutError.Reset();
+		if (FilePath.IsEmpty() || ExpectedOffset < 0
+			|| ExpectedOffset > MAX_int64 - static_cast<int64>(Bytes.Num())
+			|| ExpectedOffset > HardReplayJournalBytes
+			|| static_cast<int64>(Bytes.Num())
+				> HardReplayJournalBytes - ExpectedOffset)
+		{
+			OutError = TEXT("invalid replay append request");
+			return false;
+		}
+		IPlatformFile& PlatformFile =
+			FPlatformFileManager::Get().GetPlatformFile();
+		if (!PlatformFile.FileExists(*FilePath))
+		{
+			OutError = TEXT("replay append target does not exist");
+			return false;
+		}
+		TUniquePtr<IFileHandle> Writer(
+			PlatformFile.OpenWrite(
+				*FilePath, /*bAppend=*/true, /*bAllowRead=*/true));
+		if (!Writer)
+		{
+			OutError = TEXT("could not open the replay append target");
+			return false;
+		}
+		const int64 ActualSize = Writer->Size();
+		if (ActualSize != ExpectedOffset)
+		{
+			OutError = FString::Printf(
+				TEXT("replay append offset mismatch (expected %lld, found %lld)"),
+				static_cast<long long>(ExpectedOffset),
+				static_cast<long long>(ActualSize));
+			return false;
+		}
+		if (!Writer->SeekFromEnd(0) || Writer->Tell() != ExpectedOffset)
+		{
+			OutError = TEXT("could not seek to the verified replay append offset");
+			return false;
+		}
+		if (!AfterOpenAtExpectedOffset(OutError))
+		{
+			return false;
+		}
+		if (!Bytes.IsEmpty()
+			&& !Writer->Write(Bytes.GetData(), Bytes.Num()))
+		{
+			OutError = TEXT("could not append the complete replay journal bytes");
+			return false;
+		}
+		const int64 ExpectedEnd = ExpectedOffset + Bytes.Num();
+		if (Writer->Tell() != ExpectedEnd
+			|| !Writer->Flush(/*bFullFlush=*/true))
+		{
+			OutError = TEXT("could not durably flush the replay journal append");
+			return false;
+		}
+		return true;
+	}
 }
 
 bool SeinReplayFileIO::QueryBoundedSize(
@@ -182,59 +261,30 @@ bool SeinReplayFileIO::AppendAtExpectedOffset(
 	TConstArrayView<uint8> Bytes,
 	FString& OutError)
 {
-	OutError.Reset();
-	if (FilePath.IsEmpty() || ExpectedOffset < 0
-		|| ExpectedOffset > MAX_int64 - static_cast<int64>(Bytes.Num())
-		|| ExpectedOffset > HardReplayJournalBytes
-		|| static_cast<int64>(Bytes.Num())
-			> HardReplayJournalBytes - ExpectedOffset)
-	{
-		OutError = TEXT("invalid replay append request");
-		return false;
-	}
-	IPlatformFile& PlatformFile =
-		FPlatformFileManager::Get().GetPlatformFile();
-	if (!PlatformFile.FileExists(*FilePath))
-	{
-		OutError = TEXT("replay append target does not exist");
-		return false;
-	}
-	TUniquePtr<IFileHandle> Writer(
-		PlatformFile.OpenWrite(*FilePath, /*bAppend=*/true, /*bAllowRead=*/true));
-	if (!Writer)
-	{
-		OutError = TEXT("could not open the replay append target");
-		return false;
-	}
-	const int64 ActualSize = Writer->Size();
-	if (ActualSize != ExpectedOffset)
-	{
-		OutError = FString::Printf(
-			TEXT("replay append offset mismatch (expected %lld, found %lld)"),
-			static_cast<long long>(ExpectedOffset),
-			static_cast<long long>(ActualSize));
-		return false;
-	}
-	if (!Writer->SeekFromEnd(0) || Writer->Tell() != ExpectedOffset)
-	{
-		OutError = TEXT("could not seek to the verified replay append offset");
-		return false;
-	}
-	if (!Bytes.IsEmpty()
-		&& !Writer->Write(Bytes.GetData(), Bytes.Num()))
-	{
-		OutError = TEXT("could not append the complete replay journal bytes");
-		return false;
-	}
-	const int64 ExpectedEnd = ExpectedOffset + Bytes.Num();
-	if (Writer->Tell() != ExpectedEnd
-		|| !Writer->Flush(/*bFullFlush=*/true))
-	{
-		OutError = TEXT("could not durably flush the replay journal append");
-		return false;
-	}
-	return true;
+	return AppendAtExpectedOffsetInternal(
+		FilePath,
+		ExpectedOffset,
+		Bytes,
+		OutError,
+		[](FString&) { return true; });
 }
+
+#if WITH_DEV_AUTOMATION_TESTS
+bool SeinReplayFileIO::AppendAtExpectedOffsetWithMidpointForTests(
+	const FString& FilePath,
+	int64 ExpectedOffset,
+	TConstArrayView<uint8> Bytes,
+	FString& OutError,
+	TFunctionRef<bool(FString&)> AfterOpenAtExpectedOffset)
+{
+	return AppendAtExpectedOffsetInternal(
+		FilePath,
+		ExpectedOffset,
+		Bytes,
+		OutError,
+		AfterOpenAtExpectedOffset);
+}
+#endif
 
 bool SeinReplayFileIO::PublishExistingAtomically(
 	const FString& PartialPath,
@@ -329,4 +379,3 @@ bool SeinReplayFileIO::ReadBounded(
 	OutBytes = MoveTemp(Candidate);
 	return true;
 }
-

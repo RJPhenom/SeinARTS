@@ -1,6 +1,7 @@
 #include "CQTest.h"
 #include "Components/ActorTestSpawner.h"
 
+#include "Async/TaskGraphInterfaces.h"
 #include "Data/SeinRelationshipTypes.h"
 #include "Data/SeinWorldSnapshot.h"
 #include "Containers/Ticker.h"
@@ -8,8 +9,10 @@
 #include "Engine/World.h"
 #include "HAL/FileManager.h"
 #include "HAL/PlatformFileManager.h"
+#include "HAL/PlatformProcess.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "SeinNetCommandWireCodec.h"
 #include "SeinReplayFormat.h"
 #include "SeinReplayJournalFormat.h"
 #include "SeinReplayReader.h"
@@ -51,6 +54,19 @@ struct FSeinReplayReaderTestAccess
 	static bool IsFailureScheduled(const USeinReplayReader& Reader)
 	{
 		return Reader.bJournalFailureScheduled;
+	}
+
+	static TArray<int32> GetJournalCheckpointTicks(
+		const USeinReplayReader& Reader)
+	{
+		TArray<int32> Ticks;
+		Ticks.Reserve(Reader.LoadedJournalCheckpoints.Num());
+		for (const USeinReplayReader::FIndexedJournalFrame& Checkpoint :
+			Reader.LoadedJournalCheckpoints)
+		{
+			Ticks.Add(Checkpoint.TimelineTick);
+		}
+		return Ticks;
 	}
 
 	static void EndSyntheticPlayback(USeinReplayReader& Reader)
@@ -321,18 +337,43 @@ namespace UE::SeinARTSTests
 			int32 PreviousTurnBatchSize = 0;
 		};
 
-		struct FScopedReplayAppendGateRelease
+		struct FScopedReplayWorkerDrain
 		{
 			USeinReplayWriter* Writer = nullptr;
 
-			~FScopedReplayAppendGateRelease()
+			~FScopedReplayWorkerDrain()
 			{
 				if (Writer)
 				{
-					Writer->ReleaseHeldBackgroundAppendForTests();
+					Writer->AbortAndDrainBackgroundWorkForTests();
 				}
 			}
 		};
+
+		bool PumpGameThreadTasksUntil(
+			TFunctionRef<bool()> IsComplete,
+			double TimeoutSeconds = 10.0)
+		{
+			const double Deadline = FPlatformTime::Seconds() + TimeoutSeconds;
+			do
+			{
+				FTaskGraphInterface::Get().ProcessThreadUntilIdle(
+					ENamedThreads::GameThread);
+				if (IsComplete())
+				{
+					return true;
+				}
+				// Simulation advances only through explicit fixed ticks. This yield
+				// waits solely for replay encode/storage workers to signal the game
+				// thread through their production completion callbacks.
+				FPlatformProcess::SleepNoStats(0.001f);
+			}
+			while (FPlatformTime::Seconds() < Deadline);
+
+			FTaskGraphInterface::Get().ProcessThreadUntilIdle(
+				ENamedThreads::GameThread);
+			return IsComplete();
+		}
 
 		/** Freeze a legacy v8 executable fixture so reader compatibility tests do
 		 *  not depend on the current writer, which intentionally emits v9 only. */
@@ -1822,6 +1863,424 @@ namespace UE::SeinARTSTests
 		FullTarget->StopSimulation();
 	}
 
+	TEST(ReplayCheckpointWorkersOverlapTicksAndCatchUpWithoutManualDrains,
+		"SeinARTS.Integration.Network.Replay")
+	{
+		constexpr int32 Population = 128;
+		constexpr int32 ControlledOverlapCycles = 8;
+		constexpr int32 TurnsPerHeldEncode = 2;
+		constexpr int32 TurnsPerHeldAppend = 2;
+		constexpr int32 TurnsPerHeldCheckpoint =
+			TurnsPerHeldEncode + TurnsPerHeldAppend;
+		constexpr uint32 GateWaitMilliseconds = 10000;
+		FScopedFastReplayMaintenance MaintenanceSettings;
+		FActorTestSpawner SourceSpawner;
+		USeinWorldSubsystem* Source =
+			SourceSpawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(Source));
+		FString Error;
+		FString PartialPath;
+		USeinReplayWriter* Writer = StartPopulatedV9Recording(
+			*Source,
+			MakeTwoPlayerMatchSettings(),
+			Population,
+			PartialPath,
+			Error);
+		FScopedReplayFile ReplayFile{MoveTemp(PartialPath)};
+		if (!Writer)
+		{
+			UE_LOG(LogTemp, Error,
+				TEXT("Overlapped replay checkpoint session failed: %s"),
+				*Error);
+		}
+		ASSERT_THAT(IsNotNull(Writer));
+		if (!Writer)
+		{
+			return;
+		}
+		FScopedReplayWorkerDrain WorkerDrain{Writer};
+		ASSERT_THAT(AreEqual(1, Writer->GetPersistedCheckpointCount()));
+		ASSERT_THAT(IsTrue(
+			Writer->GetMaximumResidentTurnsForTests()
+				> TurnsPerHeldCheckpoint));
+
+		const USeinARTSCoreSettings* Settings =
+			GetDefault<USeinARTSCoreSettings>();
+		ASSERT_THAT(IsNotNull(Settings));
+		const int32 TicksPerTurn = FMath::Max(
+			1, Settings->SimulationTickRate / Settings->TurnRate);
+		int32 NextTurn = FMath::Max(1, Settings->InputDelayTurns);
+		int32 MutationOrdinal = 0;
+		uint64 ExpectedResidentBytes = 0;
+		uint64 PeakExpectedResidentBytes = 0;
+		TArray<int32> TurnTicks;
+		TArray<bool> TurnCapabilityStates;
+		TArray<int32> CheckpointTicks;
+		TArray<FGuid> CheckpointRoots;
+		TArray<bool> CheckpointCapabilityStates;
+		TurnTicks.Reserve(1 + ControlledOverlapCycles * TurnsPerHeldCheckpoint);
+		TurnCapabilityStates.Reserve(TurnTicks.Max());
+		CheckpointTicks.Reserve(ControlledOverlapCycles + 1);
+		CheckpointRoots.Reserve(ControlledOverlapCycles + 1);
+		CheckpointCapabilityStates.Reserve(ControlledOverlapCycles + 1);
+
+		const auto RecordAndAdvanceTurn = [&](bool bGrant)
+		{
+			const int32 Turn = NextTurn++;
+			const int32 TurnTick = Turn * TicksPerTurn;
+			const FSeinCommand Mutation =
+				MakeCheckpointSessionMutation(TurnTick, bGrant);
+			FSeinOpaqueCommandBatch Encoded;
+			FString EncodeError;
+			if (!FSeinNetCommandWireCodec::EncodeCommands(
+					MakeArrayView(&Mutation, 1),
+					SeinReplayFormat::MaxCommandsPerTurn,
+					[Source](
+						FGameplayTag Type,
+						int32 Version,
+						FSeinCommandSchemaDescriptor& Out)
+					{
+						return Source->FindCommandSchema(Type, Version, Out);
+					},
+					Encoded,
+					EncodeError))
+			{
+				return false;
+			}
+			Writer->RecordEncodedTurn(Turn, Encoded);
+			if (!Writer->IsRecording())
+			{
+				return false;
+			}
+			ExpectedResidentBytes += Encoded.Bytes.Num();
+			PeakExpectedResidentBytes = FMath::Max(
+				PeakExpectedResidentBytes, ExpectedResidentBytes);
+			while (Source->GetCurrentTick() < TurnTick)
+			{
+				const int32 ExpectedTick = Source->GetCurrentTick() + 1;
+				if (ExpectedTick == TurnTick)
+				{
+					Source->SubmitLocalCommandDraft(
+						Mutation, /*bRequestMatchAdministration=*/true);
+				}
+				FTSTicker::GetCoreTicker().Tick(
+					Source->GetFixedDeltaTimeSeconds());
+				if (Source->GetCurrentTick() != ExpectedTick)
+				{
+					return false;
+				}
+				Writer->ObserveCompletedTick(ExpectedTick);
+				FTaskGraphInterface::Get().ProcessThreadUntilIdle(
+					ENamedThreads::GameThread);
+				if (!Writer->IsRecording())
+				{
+					return false;
+				}
+			}
+			TurnTicks.Add(TurnTick);
+			TurnCapabilityStates.Add(bGrant);
+			return Source->HasPairCapability(
+				FSeinPlayerID(1),
+				FSeinPlayerID(2),
+				SeinARTSTags::Relationship_Capability_ShareVision) == bGrant;
+		};
+
+		ASSERT_THAT(IsTrue(Source->StartSimulation()));
+		Writer->HoldNextCheckpointEncodeForTests();
+		Writer->HoldNextCheckpointAppendForTests();
+		ASSERT_THAT(IsTrue(RecordAndAdvanceTurn(/*bGrant=*/true)));
+		++MutationOrdinal;
+		ASSERT_THAT(IsTrue(PumpGameThreadTasksUntil([&]()
+		{
+			return Writer->IsCheckpointEncodePending()
+				&& !Writer->IsCheckpointAppendPending()
+				&& Writer->GetPersistedTurnCount() == 1
+				&& Writer->GetResidentTurnCount() == 0
+				&& Writer->GetResidentBytes() == 0;
+		})));
+		ExpectedResidentBytes = 0;
+		ASSERT_THAT(IsTrue(Writer->WaitForHeldCheckpointEncodeForTests(
+			GateWaitMilliseconds)));
+
+		for (int32 Cycle = 0; Cycle < ControlledOverlapCycles; ++Cycle)
+		{
+			ASSERT_THAT(AreEqual(
+				1 + Cycle, Writer->GetPersistedCheckpointCount()));
+			ASSERT_THAT(IsTrue(Writer->IsCheckpointEncodePending()));
+			ASSERT_THAT(IsFalse(Writer->IsCheckpointAppendPending()));
+			ASSERT_THAT(AreEqual(0, Writer->GetResidentTurnCount()));
+			ASSERT_THAT(AreEqual(
+				static_cast<uint64>(0), Writer->GetResidentBytes()));
+			CheckpointTicks.Add(Source->GetCurrentTick());
+			CheckpointCapabilityStates.Add(
+				Source->HasPairCapability(
+					FSeinPlayerID(1),
+					FSeinPlayerID(2),
+					SeinARTSTags::Relationship_Capability_ShareVision));
+			FGuid Root;
+			ASSERT_THAT(IsTrue(
+				Source->ComputeCanonicalStateRoot(Root, Error)));
+			CheckpointRoots.Add(Root);
+
+			const uint64 DurableBytesBeforeOverlap =
+				Writer->GetPersistedBytes();
+			const int64 DurableFileBytesBeforeOverlap =
+				IFileManager::Get().FileSize(*ReplayFile.Path);
+			ASSERT_THAT(AreEqual(
+				static_cast<int64>(DurableBytesBeforeOverlap),
+				DurableFileBytesBeforeOverlap));
+			for (int32 TurnIndex = 0;
+				TurnIndex < TurnsPerHeldEncode;
+				++TurnIndex)
+			{
+				const bool bGrant = (MutationOrdinal % 2) == 0;
+				ASSERT_THAT(IsTrue(RecordAndAdvanceTurn(bGrant)));
+				++MutationOrdinal;
+			}
+			ASSERT_THAT(IsTrue(Writer->IsRecording()));
+			ASSERT_THAT(IsTrue(Writer->IsCheckpointEncodePending()));
+			ASSERT_THAT(IsFalse(Writer->IsCheckpointAppendPending()));
+			ASSERT_THAT(AreEqual(
+				TurnsPerHeldEncode,
+				Writer->GetResidentTurnCount()));
+			ASSERT_THAT(AreEqual(
+				ExpectedResidentBytes, Writer->GetResidentBytes()));
+			ASSERT_THAT(AreEqual(
+				DurableBytesBeforeOverlap,
+				Writer->GetPersistedBytes()));
+			ASSERT_THAT(AreEqual(
+				DurableFileBytesBeforeOverlap,
+				IFileManager::Get().FileSize(*ReplayFile.Path)));
+
+			Writer->ReleaseHeldCheckpointEncodeForTests();
+			ASSERT_THAT(IsTrue(PumpGameThreadTasksUntil([&]()
+			{
+				return Writer->IsRecording()
+					&& !Writer->IsCheckpointEncodePending()
+					&& Writer->IsCheckpointAppendPending()
+					&& Writer->GetResidentTurnCount()
+						== TurnsPerHeldEncode
+					&& Writer->GetResidentBytes()
+						== ExpectedResidentBytes;
+			})));
+			ASSERT_THAT(IsTrue(
+				Writer->WaitForHeldBackgroundAppendForTests(
+					GateWaitMilliseconds)));
+			for (int32 TurnIndex = 0;
+				TurnIndex < TurnsPerHeldAppend;
+				++TurnIndex)
+			{
+				const bool bGrant = (MutationOrdinal % 2) == 0;
+				ASSERT_THAT(IsTrue(RecordAndAdvanceTurn(bGrant)));
+				++MutationOrdinal;
+			}
+			ASSERT_THAT(IsTrue(Writer->IsRecording()));
+			ASSERT_THAT(IsTrue(Writer->IsCheckpointAppendPending()));
+			ASSERT_THAT(AreEqual(
+				TurnsPerHeldCheckpoint,
+				Writer->GetResidentTurnCount()));
+			ASSERT_THAT(AreEqual(
+				ExpectedResidentBytes, Writer->GetResidentBytes()));
+			ASSERT_THAT(AreEqual(
+				DurableBytesBeforeOverlap,
+				Writer->GetPersistedBytes()));
+			ASSERT_THAT(AreEqual(
+				DurableFileBytesBeforeOverlap,
+				IFileManager::Get().FileSize(*ReplayFile.Path)));
+
+			Writer->ReleaseHeldBackgroundAppendForTests();
+			const int32 ExpectedPersistedTurns =
+				1 + (Cycle + 1) * TurnsPerHeldCheckpoint;
+			if (Cycle < ControlledOverlapCycles - 1)
+			{
+				Writer->HoldNextCheckpointEncodeForTests();
+				Writer->HoldNextCheckpointAppendForTests();
+				ASSERT_THAT(IsTrue(PumpGameThreadTasksUntil([&]()
+				{
+					return Writer->IsRecording()
+						&& Writer->IsCheckpointEncodePending()
+						&& !Writer->IsCheckpointAppendPending()
+						&& Writer->GetPersistedCheckpointCount()
+							== Cycle + 2
+						&& Writer->GetPersistedTurnCount()
+							== ExpectedPersistedTurns
+						&& Writer->GetResidentTurnCount() == 0
+						&& Writer->GetResidentBytes() == 0;
+				})));
+				ExpectedResidentBytes = 0;
+				ASSERT_THAT(IsTrue(
+					Writer->WaitForHeldCheckpointEncodeForTests(
+						GateWaitMilliseconds)));
+			}
+			else
+			{
+				ASSERT_THAT(IsTrue(PumpGameThreadTasksUntil([&]()
+				{
+					return Writer->IsRecording()
+						&& !Writer->IsCheckpointEncodePending()
+						&& !Writer->IsCheckpointAppendPending()
+						&& Writer->GetPersistedCheckpointCount()
+							== ControlledOverlapCycles + 2
+						&& Writer->GetPersistedTurnCount()
+							== ExpectedPersistedTurns
+						&& Writer->GetResidentTurnCount() == 0
+						&& Writer->GetResidentBytes() == 0;
+				})));
+				ExpectedResidentBytes = 0;
+			}
+		}
+
+		CheckpointTicks.Add(Source->GetCurrentTick());
+		CheckpointCapabilityStates.Add(
+			Source->HasPairCapability(
+				FSeinPlayerID(1),
+				FSeinPlayerID(2),
+				SeinARTSTags::Relationship_Capability_ShareVision));
+		FGuid SourceFinalRoot;
+		ASSERT_THAT(IsTrue(
+			Source->ComputeCanonicalStateRoot(SourceFinalRoot, Error)));
+		CheckpointRoots.Add(SourceFinalRoot);
+		ASSERT_THAT(AreEqual(
+			ControlledOverlapCycles + 1, CheckpointTicks.Num()));
+		ASSERT_THAT(AreEqual(
+			CheckpointTicks.Num(), CheckpointRoots.Num()));
+		ASSERT_THAT(AreEqual(
+			CheckpointTicks.Num(), CheckpointCapabilityStates.Num()));
+		ASSERT_THAT(AreEqual(
+			TurnsPerHeldCheckpoint,
+			Writer->GetPeakResidentTurnCount()));
+		ASSERT_THAT(IsTrue(
+			Writer->GetPeakResidentTurnCount()
+				< Writer->GetMaximumResidentTurnsForTests()));
+		ASSERT_THAT(AreEqual(
+			PeakExpectedResidentBytes, Writer->GetPeakResidentBytes()));
+		const int32 FinalTick = Source->GetCurrentTick();
+		Source->StopSimulation();
+		const FString PublishedPath = Writer->FinishRecording();
+		ASSERT_THAT(IsFalse(PublishedPath.IsEmpty()));
+		if (!PublishedPath.IsEmpty())
+		{
+			ReplayFile.Path = PublishedPath;
+		}
+		ASSERT_THAT(AreEqual(
+			ControlledOverlapCycles + 2,
+			Writer->GetPersistedCheckpointCount()));
+
+		USeinReplayReader* IndexReader = NewObject<USeinReplayReader>(
+			&SourceSpawner.GetWorld());
+		ASSERT_THAT(IsTrue(IndexReader->LoadFromFile(ReplayFile.Path)));
+		ASSERT_THAT(AreEqual(TurnTicks.Num(), IndexReader->GetTurnCount()));
+		ASSERT_THAT(AreEqual(
+			TurnTicks.Num() + Writer->GetPersistedCheckpointCount(),
+			IndexReader->GetIndexedFrameCount()));
+		const TArray<int32> IndexedCheckpointTicks =
+			FSeinReplayReaderTestAccess::GetJournalCheckpointTicks(*IndexReader);
+		ASSERT_THAT(AreEqual(
+			Writer->GetPersistedCheckpointCount(),
+			IndexedCheckpointTicks.Num()));
+		ASSERT_THAT(AreEqual(0, IndexedCheckpointTicks[0]));
+		for (int32 CheckpointIndex = 0;
+			CheckpointIndex < CheckpointTicks.Num();
+			++CheckpointIndex)
+		{
+			ASSERT_THAT(AreEqual(
+				CheckpointTicks[CheckpointIndex],
+				IndexedCheckpointTicks[CheckpointIndex + 1]));
+		}
+
+		for (int32 CheckpointIndex = 0;
+			CheckpointIndex < CheckpointTicks.Num();
+			++CheckpointIndex)
+		{
+			FActorTestSpawner ProbeSpawner;
+			USeinWorldSubsystem* Probe =
+				ProbeSpawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+			ASSERT_THAT(IsNotNull(Probe));
+			USeinReplayReader* ProbeReader = NewObject<USeinReplayReader>(
+				&ProbeSpawner.GetWorld());
+			ASSERT_THAT(IsTrue(ProbeReader->LoadFromFile(ReplayFile.Path)));
+			ASSERT_THAT(IsTrue(
+				ProbeReader->PlayFromTick(CheckpointTicks[CheckpointIndex])));
+			const bool bTerminalCheckpoint =
+				CheckpointIndex == CheckpointTicks.Num() - 1;
+			ASSERT_THAT(AreEqual(
+				!bTerminalCheckpoint, ProbeReader->IsPlaying()));
+			ASSERT_THAT(AreEqual(
+				!bTerminalCheckpoint, Probe->IsSimulationRunning()));
+			if (!bTerminalCheckpoint)
+			{
+				ProbeReader->Stop();
+			}
+			else
+			{
+				ASSERT_THAT(IsTrue(Probe->StartSimulation()));
+			}
+			ASSERT_THAT(AreEqual(
+				CheckpointTicks[CheckpointIndex], Probe->GetCurrentTick()));
+			ASSERT_THAT(AreEqual(
+				CheckpointCapabilityStates[CheckpointIndex],
+				Probe->HasPairCapability(
+					FSeinPlayerID(1),
+					FSeinPlayerID(2),
+					SeinARTSTags::Relationship_Capability_ShareVision)));
+			FGuid ProbeRoot;
+			ASSERT_THAT(IsTrue(
+				Probe->ComputeCanonicalStateRoot(ProbeRoot, Error)));
+			ASSERT_THAT(AreEqual(
+				CheckpointRoots[CheckpointIndex].ToString(
+					EGuidFormats::Digits),
+				ProbeRoot.ToString(EGuidFormats::Digits)));
+			if (bTerminalCheckpoint)
+			{
+				Probe->StopSimulation();
+			}
+		}
+
+		FActorTestSpawner FullTargetSpawner;
+		USeinWorldSubsystem* FullTarget =
+			FullTargetSpawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(FullTarget));
+		USeinReplayReader* FullReader = NewObject<USeinReplayReader>(
+			&FullTargetSpawner.GetWorld());
+		ASSERT_THAT(IsTrue(FullReader->LoadFromFile(ReplayFile.Path)));
+		ASSERT_THAT(IsTrue(FullReader->Play()));
+		int32 TurnStateIndex = 0;
+		for (int32 Pump = 0;
+			Pump < FinalTick * 4 && FullReader->IsPlaying();
+			++Pump)
+		{
+			FTSTicker::GetCoreTicker().Tick(
+				FullTarget->GetFixedDeltaTimeSeconds());
+			if (TurnStateIndex < TurnTicks.Num()
+				&& FullTarget->GetCurrentTick() == TurnTicks[TurnStateIndex])
+			{
+				ASSERT_THAT(AreEqual(
+					TurnCapabilityStates[TurnStateIndex],
+					FullTarget->HasPairCapability(
+						FSeinPlayerID(1),
+						FSeinPlayerID(2),
+						SeinARTSTags::Relationship_Capability_ShareVision)));
+				++TurnStateIndex;
+			}
+		}
+		ASSERT_THAT(IsFalse(FullReader->IsPlaying()));
+		ASSERT_THAT(AreEqual(FinalTick, FullTarget->GetCurrentTick()));
+		ASSERT_THAT(AreEqual(TurnTicks.Num(), TurnStateIndex));
+		ASSERT_THAT(IsTrue(FullTarget->HasPairCapability(
+			FSeinPlayerID(1),
+			FSeinPlayerID(2),
+			SeinARTSTags::Relationship_Capability_ShareVision)));
+		ASSERT_THAT(IsFalse(FullTarget->IsSimulationRunning()));
+		ASSERT_THAT(IsTrue(FullTarget->StartSimulation()));
+		FGuid FullTargetRoot;
+		ASSERT_THAT(IsTrue(
+			FullTarget->ComputeCanonicalStateRoot(FullTargetRoot, Error)));
+		ASSERT_THAT(AreEqual(
+			SourceFinalRoot.ToString(EGuidFormats::Digits),
+			FullTargetRoot.ToString(EGuidFormats::Digits)));
+		FullTarget->StopSimulation();
+	}
+
 	TEST(ReplayScheduledCheckpointFinalizationDrainsBackgroundDurability,
 		"SeinARTS.Integration.Network.Replay")
 	{
@@ -2004,7 +2463,7 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(AreEqual(0, Writer->GetResidentTurnCount()));
 
 		Writer->HoldNextBackgroundAppendForTests();
-		FScopedReplayAppendGateRelease GateRelease{Writer};
+		FScopedReplayWorkerDrain WorkerDrain{Writer};
 		Writer->RunScheduledMaintenanceForTests();
 		ASSERT_THAT(IsTrue(Writer->IsCheckpointEncodePending()));
 		Writer->ResolveCheckpointEncodeForTests();

@@ -215,6 +215,13 @@ Latest local evidence is under ignored `Saved/Automation/`:
   16 passed after repeated-checkpoint lifecycle qualification)
 - `SeinARTS.Integration-20260812-205322-54064b7e` (Framework, 18 passed)
 - `SeinARTS.Integration-20260812-205410-9b12aff9` (All, 24 passed)
+- `SeinARTS.Integration.Network.Replay.ReplayCheckpointWorkersOverlapTicksAndCatchUpWithoutManualDrains-20260812-215135-b0b0321f`
+  (1 passed; eight controlled 128-entity cycles advanced fixed ticks across internal encode and
+  file-append midpoints with exact resident-byte accounting and callback-only catch-up)
+- `SeinARTS.Integration.Network.Replay-20260812-215224-211024c6` (Framework,
+  17 passed after controlled replay worker-overlap qualification)
+- `SeinARTS.Integration-20260812-215325-f290acdf` (Framework, 19 passed)
+- `SeinARTS.Integration-20260812-215415-793bd836` (All, 25 passed)
 - `SeinARTS.Determinism-20260812-032246-84a12b7c` (All, 40 passed)
 - `SeinARTS.Determinism-20260812-032321-853573ea` (Framework, 30 passed)
 - `SeinARTS.Integration-20260812-032358-75874dd5` (All, 21 passed)
@@ -271,6 +278,8 @@ Latest local evidence is under ignored `Saved/Automation/`:
   (fresh processes; canonical roots and raw poses matched for all 120 ticks)
 - `Scripts/Build.ps1 -Target SeinARTS -Config Shipping` (2026-08-12 after checkpoint-cache
   hardening; all touched production modules rebuilt and `SeinARTS-Win64-Shipping.exe` linked)
+- `Scripts/Build.ps1 -Target SeinARTS -Config Shipping` (2026-08-12 after controlled replay
+  worker-overlap qualification; Net rebuilt and linked with midpoint hooks compiled out)
 
 ## Integration-candidate progress
 
@@ -377,8 +386,8 @@ retention is capped at 64 MiB per world, revision wrap disables reuse, and resto
 timeline cache. The moving-storage capture curve improved from 4.033/14.245/27.831 ms to
 2.037/7.815/15.288 ms at 100/500/1,000 entities without changing snapshot or canonical schemas.
 Mandatory initial/direct writes, final publication, and pressure-forced drains remain synchronous.
-File-backed integration now holds the
-periodic checkpoint before file I/O, advances the real fixed-tick world while eligible turns accumulate
+File-backed integration now holds the periodic checkpoint after the append file is open and positioned
+but before byte writes, advances the real fixed-tick world while eligible turns accumulate
 to the exact resident bound, proves no false bytes/counters or frame overtaking, then forces the
 production wait and validates the published journal after release. The >64 MiB bounded-memory proof,
 asynchronous failure, and real write denial remain green. New Insights scopes separate checkpoint
@@ -392,8 +401,14 @@ authoritative pair-capability commands leave a non-empty terminal state; every c
 to its source capability state and canonical root, and full tick-zero playback observes every command
 transition before reaching the same terminal root. Cache payload bytes, `TArray` allocation, entry
 count, and cold-miss/hot-hit behavior remain exact across each cycle and fresh-world restore. The
-fixture intentionally forces and waits for maintenance each cycle, so it does not replace natural
-asynchronous-overlap, slow-device, RSS/allocator high-water, GC, or exhausted-storage soak.
+fixture intentionally forces and waits for maintenance each cycle. A separate eight-cycle,
+128-entity fixture pauses checkpoint encode after real snapshot payload serialization and pauses
+checkpoint append after the real file is open and positioned at its exact expected offset. Fixed
+ticks and alternating authoritative mutations continue for two turns in each held stage; exact
+resident bytes, file/durability non-advancement, production-callback catch-up, checkpoint index,
+seek/root/capability state, and full playback remain exact. These controlled internal-midpoint tests
+do not replace uncontrolled slow-device timing, long-session, RSS/allocator high-water, GC, or
+exhausted-storage soak.
 
 The supplied 2026-08-11 two-player PIE log contains two healthy sessions: lockstep configuration
 and participant roots agree throughout, with no gate stall, persistent incomplete turn, retransmit,

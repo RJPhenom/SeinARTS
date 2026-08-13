@@ -22,6 +22,7 @@
 #include "Data/SeinWorldSnapshot.h"
 #include "Input/SeinCommandSchemaRegistry.h"
 #include "Serialization/SeinSnapshotTransfer.h"
+#include "Serialization/SeinSnapshotTransferTestHooks.h"
 #include "Settings/PluginSettings.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Tags/SeinARTSGameplayTags.h"
@@ -42,6 +43,12 @@ struct FSeinReplayAsyncAppendTestGate
 {
 	FSharedEventRef WorkerEntered{EEventMode::ManualReset};
 	FSharedEventRef WriterWaitEntered{EEventMode::ManualReset};
+	FSharedEventRef ReleaseWorker{EEventMode::ManualReset};
+};
+
+struct FSeinReplayAsyncCheckpointEncodeTestGate
+{
+	FSharedEventRef WorkerEntered{EEventMode::ManualReset};
 	FSharedEventRef ReleaseWorker{EEventMode::ManualReset};
 };
 #endif
@@ -702,6 +709,9 @@ bool USeinReplayWriter::ResolvePendingCheckpointEncode(
 	FSeinReplayAsyncCheckpointEncodeResult Result =
 		PendingCheckpointEncodeFuture.Get();
 	PendingCheckpointEncodeFuture = {};
+#if WITH_DEV_AUTOMATION_TESTS
+	ActiveCheckpointEncodeTestGate.Reset();
+#endif
 	PendingCheckpointEncodeGeneration = MAX_uint64;
 	// The worker has released its shared reference before Get returns. Dropping
 	// the writer's final reference here destroys the GC guard on the game thread.
@@ -751,12 +761,18 @@ bool USeinReplayWriter::ResolvePendingCheckpointEncode(
 
 void USeinReplayWriter::WaitAndDiscardPendingCheckpointEncode()
 {
+#if WITH_DEV_AUTOMATION_TESTS
+	ReleaseHeldCheckpointEncodeForTests();
+#endif
 	if (PendingCheckpointEncodeFuture.IsValid())
 	{
 		PendingCheckpointEncodeFuture.Wait();
 		PendingCheckpointEncodeFuture.Get();
 		PendingCheckpointEncodeFuture = {};
 	}
+#if WITH_DEV_AUTOMATION_TESTS
+	ActiveCheckpointEncodeTestGate.Reset();
+#endif
 	PendingCheckpointEncodeGeneration = MAX_uint64;
 	PendingCheckpointEncodeWork.Reset();
 }
@@ -772,6 +788,9 @@ void USeinReplayWriter::DiscardCompletedCheckpointEncode(
 	}
 	PendingCheckpointEncodeFuture.Get();
 	PendingCheckpointEncodeFuture = {};
+#if WITH_DEV_AUTOMATION_TESTS
+	ActiveCheckpointEncodeTestGate.Reset();
+#endif
 	PendingCheckpointEncodeGeneration = MAX_uint64;
 	PendingCheckpointEncodeWork.Reset();
 }
@@ -930,6 +949,46 @@ void USeinReplayWriter::HoldNextBackgroundAppendForTests()
 		FSeinReplayAsyncAppendTestGate, ESPMode::ThreadSafe>();
 }
 
+void USeinReplayWriter::HoldNextCheckpointEncodeForTests()
+{
+	check(IsInGameThread());
+	check(!NextCheckpointEncodeTestGate);
+	NextCheckpointEncodeTestGate = MakeShared<
+		FSeinReplayAsyncCheckpointEncodeTestGate, ESPMode::ThreadSafe>();
+}
+
+bool USeinReplayWriter::WaitForHeldCheckpointEncodeForTests(
+	uint32 WaitTimeMilliseconds) const
+{
+	check(IsInGameThread());
+	const TSharedPtr<
+		FSeinReplayAsyncCheckpointEncodeTestGate,
+		ESPMode::ThreadSafe> Gate = ActiveCheckpointEncodeTestGate;
+	return Gate && Gate->WorkerEntered->Wait(WaitTimeMilliseconds);
+}
+
+void USeinReplayWriter::ReleaseHeldCheckpointEncodeForTests()
+{
+	check(IsInGameThread());
+	if (NextCheckpointEncodeTestGate)
+	{
+		NextCheckpointEncodeTestGate->ReleaseWorker->Trigger();
+		NextCheckpointEncodeTestGate.Reset();
+	}
+	if (ActiveCheckpointEncodeTestGate)
+	{
+		ActiveCheckpointEncodeTestGate->ReleaseWorker->Trigger();
+	}
+}
+
+void USeinReplayWriter::HoldNextCheckpointAppendForTests()
+{
+	check(IsInGameThread());
+	check(!NextCheckpointAppendTestGate);
+	NextCheckpointAppendTestGate = MakeShared<
+		FSeinReplayAsyncAppendTestGate, ESPMode::ThreadSafe>();
+}
+
 bool USeinReplayWriter::WaitForHeldBackgroundAppendForTests(
 	uint32 WaitTimeMilliseconds) const
 {
@@ -968,10 +1027,26 @@ void USeinReplayWriter::ReleaseHeldBackgroundAppendForTests()
 		NextBackgroundAppendTestGate->ReleaseWorker->Trigger();
 		NextBackgroundAppendTestGate.Reset();
 	}
+	if (NextCheckpointAppendTestGate)
+	{
+		NextCheckpointAppendTestGate->ReleaseWorker->Trigger();
+		NextCheckpointAppendTestGate.Reset();
+	}
 	if (ActiveBackgroundAppendTestGate)
 	{
 		ActiveBackgroundAppendTestGate->ReleaseWorker->Trigger();
 	}
+}
+
+void USeinReplayWriter::AbortAndDrainBackgroundWorkForTests()
+{
+	check(IsInGameThread());
+	bRecording = false;
+	bMaintenanceScheduled = false;
+	++RecordingGeneration;
+	WaitAndDiscardPendingCheckpointEncode();
+	WaitAndDiscardPendingAppend();
+	ReleaseResidentTurns();
 }
 #endif
 
@@ -1329,7 +1404,18 @@ bool USeinReplayWriter::AppendJournalFrame(
 			bFailNextBackgroundAppendForTests;
 		bFailNextBackgroundAppendForTests = false;
 		TSharedPtr<FSeinReplayAsyncAppendTestGate, ESPMode::ThreadSafe>
-			BackgroundAppendTestGate = MoveTemp(NextBackgroundAppendTestGate);
+			BackgroundAppendTestGate;
+		if (PendingAppendKind == ESeinReplayAsyncAppendKind::Checkpoint
+			&& NextCheckpointAppendTestGate)
+		{
+			BackgroundAppendTestGate = MoveTemp(
+				NextCheckpointAppendTestGate);
+		}
+		else
+		{
+			BackgroundAppendTestGate = MoveTemp(
+				NextBackgroundAppendTestGate);
+		}
 		ActiveBackgroundAppendTestGate = BackgroundAppendTestGate;
 #else
 		constexpr bool bForceBackgroundFailure = false;
@@ -1348,36 +1434,51 @@ bool USeinReplayWriter::AppendJournalFrame(
 			 bForceBackgroundFailure]() mutable
 			{
 				FSeinReplayAsyncAppendResult Result;
-				bool bAppendAllowed = true;
-#if WITH_DEV_AUTOMATION_TESTS
-				if (BackgroundAppendTestGate)
-				{
-					BackgroundAppendTestGate->WorkerEntered->Trigger();
-					constexpr uint32 TestGateTimeoutMilliseconds = 30000;
-					bAppendAllowed = BackgroundAppendTestGate->ReleaseWorker->Wait(
-						TestGateTimeoutMilliseconds);
-					if (!bAppendAllowed)
-					{
-						Result.Error = TEXT(
-							"background append test gate timed out");
-					}
-				}
-#endif
-				if (bAppendAllowed && bForceBackgroundFailure)
+				if (bForceBackgroundFailure)
 				{
 					Result.Error = TEXT(
 						"synthetic background append failure");
 				}
-				else if (bAppendAllowed)
+				else
 				{
 					TRACE_CPUPROFILER_EVENT_SCOPE(
 						Sein_Replay_BackgroundDurableAppend);
+#if WITH_DEV_AUTOMATION_TESTS
+					if (BackgroundAppendTestGate)
+					{
+						Result.bSucceeded = SeinReplayFileIO::
+							AppendAtExpectedOffsetWithMidpointForTests(
+								AppendPath,
+								ExpectedOffset,
+								FrameBytes,
+								Result.Error,
+								[BackgroundAppendTestGate](FString& GateError)
+								{
+									BackgroundAppendTestGate
+										->WorkerEntered->Trigger();
+									constexpr uint32
+										TestGateTimeoutMilliseconds = 30000;
+									if (!BackgroundAppendTestGate
+										->ReleaseWorker->Wait(
+											TestGateTimeoutMilliseconds))
+									{
+										GateError = TEXT(
+											"background append test gate timed out");
+										return false;
+									}
+									return true;
+								});
+					}
+					else
+#endif
+					{
 					Result.bSucceeded =
 						SeinReplayFileIO::AppendAtExpectedOffset(
 							AppendPath,
 							ExpectedOffset,
 							FrameBytes,
 							Result.Error);
+					}
 				}
 				AsyncTask(ENamedThreads::GameThread,
 					[WeakThis, ScheduledGeneration]()
@@ -1545,13 +1646,57 @@ bool USeinReplayWriter::CaptureCheckpointInternal(
 		const uint64 ScheduledGeneration = RecordingGeneration;
 		PendingCheckpointEncodeGeneration = ScheduledGeneration;
 		TWeakObjectPtr<USeinReplayWriter> WeakThis(this);
+#if WITH_DEV_AUTOMATION_TESTS
+		TSharedPtr<
+			FSeinReplayAsyncCheckpointEncodeTestGate,
+			ESPMode::ThreadSafe> CheckpointEncodeTestGate =
+				MoveTemp(NextCheckpointEncodeTestGate);
+		ActiveCheckpointEncodeTestGate = CheckpointEncodeTestGate;
+#endif
 		PendingCheckpointEncodeFuture = Async(
 			EAsyncExecution::ThreadPool,
-			[EncodeWork, WeakThis, ScheduledGeneration]() mutable
+			[EncodeWork,
+			 WeakThis,
+			 ScheduledGeneration
+#if WITH_DEV_AUTOMATION_TESTS
+			 , CheckpointEncodeTestGate
+#endif
+			]() mutable
 			{
 				FSeinReplayAsyncCheckpointEncodeResult Result;
 				Result.SnapshotTick = EncodeWork->Snapshot.CurrentTick;
 				FSeinSnapshotEnvelopeMetadata Metadata;
+#if WITH_DEV_AUTOMATION_TESTS
+				if (CheckpointEncodeTestGate)
+				{
+					TRACE_CPUPROFILER_EVENT_SCOPE(
+						Sein_Replay_Checkpoint_EncodeEnvelope);
+					FGCScopeGuard GCScopeGuard;
+					Result.bSucceeded = SeinSnapshotTransfer::
+						EncodeCheckpointEnvelopeWithMidpointForTests(
+							EncodeWork->Snapshot,
+							Result.Envelope,
+							Metadata,
+							Result.Error,
+							[CheckpointEncodeTestGate](FString& GateError)
+							{
+								CheckpointEncodeTestGate
+									->WorkerEntered->Trigger();
+								constexpr uint32
+									TestGateTimeoutMilliseconds = 30000;
+								if (!CheckpointEncodeTestGate
+									->ReleaseWorker->Wait(
+										TestGateTimeoutMilliseconds))
+								{
+									GateError = TEXT(
+										"checkpoint encode test gate timed out");
+									return false;
+								}
+								return true;
+							});
+				}
+				else
+#endif
 				{
 					TRACE_CPUPROFILER_EVENT_SCOPE(
 						Sein_Replay_Checkpoint_EncodeEnvelope);
@@ -1779,6 +1924,7 @@ void USeinReplayWriter::FailRecording(
 	bool bTickFailure)
 {
 #if WITH_DEV_AUTOMATION_TESTS
+	ReleaseHeldCheckpointEncodeForTests();
 	ReleaseHeldBackgroundAppendForTests();
 #endif
 	if (bTickFailure)

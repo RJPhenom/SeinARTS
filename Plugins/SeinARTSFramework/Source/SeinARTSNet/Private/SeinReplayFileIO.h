@@ -1,4 +1,16 @@
-/** Bounded, failure-atomic filesystem boundary for executable replay files. */
+/**
+ * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
+ *
+ * @file         SeinReplayFileIO.h
+ * @author       RJ Macklem
+ * @created      29 Jul 2026
+ * @latest       12 Aug 2026
+ * @brief        Bounded, failure-atomic replay filesystem operations.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
+ */
+
 #pragma once
 
 #include "CoreMinimal.h"
@@ -42,6 +54,17 @@ namespace SeinReplayFileIO
 		int64 ExpectedOffset,
 		TConstArrayView<uint8> Bytes,
 		FString& OutError);
+
+#if WITH_DEV_AUTOMATION_TESTS
+	/** Append through the production file-handle path, pausing after the file is
+	 *  open and positioned at the verified expected offset. */
+	bool AppendAtExpectedOffsetWithMidpointForTests(
+		const FString& FilePath,
+		int64 ExpectedOffset,
+		TConstArrayView<uint8> Bytes,
+		FString& OutError,
+		TFunctionRef<bool(FString&)> AfterOpenAtExpectedOffset);
+#endif
 
 	/** Atomically expose a closed partial file at an absent sibling final path.
 	 *  Appended contents are fully flushed first; platform rename metadata is
