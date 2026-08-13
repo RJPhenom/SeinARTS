@@ -52,8 +52,8 @@ formation/resolver state coverage, provider teardown, and downstream content own
 
 | Gate | Result |
 |---|---:|
-| `SeinARTS.Unit`, profile All | 446 passed, 0 failed |
-| `SeinARTS.Unit`, profile Framework | 428 passed, 0 failed |
+| `SeinARTS.Unit`, profile All | 452 passed, 0 failed |
+| `SeinARTS.Unit`, profile Framework | 434 passed, 0 failed |
 | `SeinARTS.Integration`, profile All | 26 passed, 0 failed |
 | `SeinARTS.Integration`, profile Framework | 20 passed, 0 failed |
 | `SeinARTS.Determinism`, profile All | 43 passed, 0 failed |
@@ -71,6 +71,7 @@ formation/resolver state coverage, provider teardown, and downstream content own
 | Focused Core boundary/epoch | 2026-08-13 exact epoch test passed with `SeinARTS.Replay.6`; prior `SeinARTS.Unit.Core` Framework profile passed 131 tests including opposite-endpoint saturated distance and maximum-diagonal normalization |
 | Focused Net protocol | 2026-08-13 `SeinARTS.Unit.Network.Protocol` Framework profile: 40 passed through production listen-authority commit and disconnect pipeline-backfill entry points |
 | Focused Movement+ | 2026-08-13 unit 5/5, determinism 9/9, movement snapshot 8/8, and continuation 1/1 passed |
+| Focused default avoidance | 2026-08-13 Unit 6/6 passed after private-kernel decomposition; covers crossing serial/parallel agreement, opt-out/idle release, idle dodge, gap resolution, and broker cohesion |
 | Focused containment integrity | 2026-08-13 Unit 4/4, Determinism 3/3, and Perf 1/1 passed; covers cycle/overflow admission, bootstrap/root/checkpoint refusal, failure-atomic malformed restore, rotated local deploy offsets, ability commands, pre/post checkpoint roots, per-tick replay roots, and 100/500/1,000-occupant invalidated/warm checkpoint curves |
 | Clean consumer: Framework | fresh 2026-08-12 Editor + Shipping build, exact map load, cook/package, real Shipping startup passed |
 | Clean consumer: Framework + Cover only | fresh 2026-08-12 Editor + Shipping build, exact map load, cook/package, real Shipping startup passed; Squad/bridge absent |
@@ -84,6 +85,15 @@ formation/resolver state coverage, provider teardown, and downstream content own
 
 Latest local evidence is under ignored `Saved/Automation/`:
 
+- `SeinARTS.Unit.Movement.Avoidance-20260813-145658-05842d87` (Framework, 6 passed)
+- `SeinARTS.Unit-20260813-145809-0315289c` (Framework, 434 passed) and
+  `SeinARTS.Unit-20260813-150458-6a24a13d` (All, 452 passed)
+- `SeinARTS.Sim-20260813-145922-506a1810` (Framework, 34 passed) and
+  `SeinARTS.Determinism-20260813-145947-f17a9a28` (Framework, 33 passed)
+- `SeinARTS.Determinism.Process.SerialCollisionTrace-20260813-150037-4a221f6d` and
+  `SeinARTS.Determinism.Process.ParallelCollisionTrace-20260813-150059-c5f1cb4b`
+  (fresh processes; all 120 canonical roots and raw poses matched exactly after the default
+  avoidance-kernel decomposition)
 - `SeinARTS.Unit.Navigation-20260813-140554-b71dccb6` and
   `SeinARTS.Unit.Navigation-20260813-141012-e758b08b` (Framework, 34 passed before and after
   extracting the non-shipping A* path reporters)
@@ -451,6 +461,17 @@ Latest local evidence is under ignored `Saved/Automation/`:
   real multi-client PIE remain explicit gates in `.agents/VEHICLE_GYM.md`.
 
 ## Current development state
+
+The default avoidance implementation now lives in a private kernel split into explicit gather,
+cohesion, idle-dodge, neighbor-response, gap-resolution, per-mover, output, and publication stages.
+The public policy UObject remains a one-call adapter, and the ordered neighbor gate pipeline stays
+intact rather than being fragmented into stateful abstractions. Independent adversarial comparison
+found the original and extracted bodies token-equivalent after the required policy qualification;
+fixed-point evaluation order, candidate and neighbor ordering, diagnostics, deferred writes, and
+canonical serial publication are unchanged. Focused avoidance passed 6/6, Unit passed 434/434
+Framework and 452/452 All, Sim passed 34/34, Determinism passed 33/33, fresh-process serial/parallel
+roots and poses agree for all 120 ticks, and Development plus Shipping builds succeeded. No public
+API, canonical state, tuning, schema, behavior revision, or movement behavior changed.
 
 A* partial-path, unreachable-segment, and clearance reporters now live in one adjacent private
 implementation include instead of interrupting the search and path-pipeline bodies. They remain in
