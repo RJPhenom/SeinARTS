@@ -445,7 +445,7 @@ namespace UE::SeinARTSTests
 				*Source, *Writer, Turn, TicksPerTurn, bGrant)));
 			if (TurnOrdinal == 0)
 			{
-				LLM_SCOPE_BYNAME(TEXT("SeinARTS/Replay/Checkpoint/Encode"));
+				LLM_SCOPE_BYNAME(TEXT("SeinARTS/Replay/Qualification/Sentinel"));
 				ReplayAllocatorAttributionSentinel.SetNumUninitialized(64);
 			}
 			if (!Writer->IsRecording())
