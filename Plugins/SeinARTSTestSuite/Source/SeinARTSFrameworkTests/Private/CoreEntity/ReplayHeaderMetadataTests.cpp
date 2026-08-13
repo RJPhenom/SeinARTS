@@ -5,6 +5,7 @@
 #include "HAL/FileManager.h"
 #include "Hash/Blake3.h"
 #include "Lib/SeinReplayBPFL.h"
+#include "Data/SeinReplayHeader.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Settings/PluginSettings.h"
@@ -14,6 +15,14 @@
 
 namespace UE::SeinARTSTests
 {
+	TEST(FrameworkBehaviorEpochMatchesCurrentDeterministicContract,
+		"SeinARTS.Unit.Core")
+	{
+		ASSERT_THAT(AreEqual(
+			FString(TEXT("SeinARTS.Replay.5")),
+			SeinReplayCompatibility::GetFrameworkVersion()));
+	}
+
 	namespace
 	{
 		void FinalizeMetadataHeader(FSeinReplayHeader& Header)

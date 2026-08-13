@@ -46,7 +46,7 @@ CI gate because this engine distribution rejects those target types before proje
   - UE 5.8 Editor and Shipping targets locally (originally proven on 5.7; re-proven on 5.8 by the 2026-08 packaging pipeline builds).
   - Clean cook/load of a minimal consumer map and consumer-owned simulation-content manifest.
 - Clean consumers have no hidden dependency on this host project's `/Game/SeinARTS` content.
-- The Framework consumer now drives real packaged Shipping processes through:
+- The Framework and Movement+ consumers now drive real packaged Shipping processes through:
   - listen-server creation and a two-player lobby-to-match travel;
   - membership/config-gated lockstep command flow;
   - forced checkpoint-plus-command-tail resync;
@@ -54,6 +54,9 @@ CI gate because this engine distribution rejects those target types before proje
     canonical-root-gated authorship activation;
   - streaming replay finalization and standalone checkpoint seek; and
   - exact end-tick and canonical-root agreement between replay and authoritative server.
+- Movement+ additionally executes a real long-range wheeled Move command and requires the exact
+  instantiated wheeled class, raw target, bounded nonzero typed telemetry, and exact movement state
+  across both peers, forced resync, physical reconnect, and checkpoint-seek replay.
 - Replay v9 automatic periodic checkpoints encode and durably append through one ordered background
   pipeline; persistence state advances only after worker success. Integration coverage holds that
   append after file open/positioning but before byte writes, accumulates eligible turns to the exact resident bound without false
@@ -94,14 +97,17 @@ cancel/reissue, recovery, and mixed infantry/vehicle congestion with different b
 speeds, and masses. Checkpoints taken during arcs, reverse legs, recovery, and close mixed traffic
 continue with exact canonical roots. See `.agents/VEHICLE_GYM.md` for the evidence and PIE matrix.
 
-Still required before Movement+ is production-qualified: the human PIE feel/performance and real
-multi-client network matrix. Typed render-only presentation telemetry for steering/yaw/throttle/
+Still required before Movement+ is production-qualified: the human PIE feel/performance matrix,
+true dedicated-server topology, adversarial network conditions, and scale evidence. A generated
+packaged Shipping listen server and client now qualify live Movement+ command flow, root gossip,
+resync, physical reconnect, exact movement continuation, and checkpoint-seek replay. Typed
+render-only presentation telemetry for steering/yaw/throttle/
 brake plus track/wheel animation is complete, including correction-resistant driver intent,
 wrapped long-run wheel phase, teardown/restore reset, hidden raw render state, and rejection from
 deterministic movement and Ability Blueprints.
-Movement+-specific automation now drives live wheeled
-movement through both replay-file checkpoint continuation and the bounded reconnect envelope into a
-fresh world, then proves exact terminal roots and canonical movement state.
+Movement+-specific in-process automation also drives live wheeled movement through replay-file
+checkpoint continuation and the bounded reconnect envelope into a fresh world, then proves exact
+terminal roots and canonical movement state.
 
 Use evidence to decide whether the curated start-maneuver head plus coarse-route pursuit tail is
 sufficient or whether downstream A* corners need a broader curvature-shaping stage. Qualify the

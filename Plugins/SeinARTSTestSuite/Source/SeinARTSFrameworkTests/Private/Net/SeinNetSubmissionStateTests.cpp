@@ -486,10 +486,14 @@ struct FSeinNetSubsystemTestAccess
 	{
 		return Net.AreNetworkStartPrerequisitesReady(bHooksReady);
 	}
-	static void BufferDedicatedAuthorityTurn(
+	static bool BufferLocalAuthorityTurn(
 		USeinNetSubsystem& Net, int32 Turn, const TArray<FSeinCommand>& Commands)
 	{
-		Net.BufferAssembledTurnForDedicatedAuthority(Turn, Commands);
+		return Net.BufferAssembledTurnForLocalAuthority(Turn, Commands);
+	}
+	static void SetLocalSlot(USeinNetSubsystem& Net, uint8 Slot)
+	{
+		Net.LocalPlayerID = FSeinPlayerID(Slot);
 	}
 	static bool HasReceivedTurn(const USeinNetSubsystem& Net, int32 Turn)
 	{
@@ -498,6 +502,10 @@ struct FSeinNetSubsystemTestAccess
 	static int32 ReceivedCommandTick(const USeinNetSubsystem& Net, int32 Turn)
 	{
 		return Net.ReceivedTurns.FindChecked(Turn)[0].Tick;
+	}
+	static int32 ReceivedCommandCount(const USeinNetSubsystem& Net, int32 Turn)
+	{
+		return Net.ReceivedTurns.FindChecked(Turn).Num();
 	}
 
 	static int32 BufferWorldRootFirstWins(
@@ -521,6 +529,42 @@ struct FSeinNetSubsystemTestAccess
 	static void SetLifecycle(USeinNetSubsystem& Net, FSeinPlayerID Slot, ESeinSlotLifecycle Lifecycle)
 	{
 		Net.SlotLifecycle.Add(Slot, Lifecycle);
+	}
+	static void SimulateDisconnect(USeinNetSubsystem& Net, uint8 Slot)
+	{
+		Net.SimulateSlotDisconnect(FSeinPlayerID(Slot));
+	}
+	static bool HasAuthorSubmission(
+		const USeinNetSubsystem& Net,
+		int32 Turn,
+		uint32 ParticipantSuffix,
+		uint8 Slot)
+	{
+		return Net.TurnAggregator.HasSubmission(
+			Turn,
+			FSeinTurnAuthor(Participant(ParticipantSuffix), FSeinPlayerID(Slot)));
+	}
+	static bool SubmitEmptyAuthor(
+		USeinNetSubsystem& Net,
+		int32 Turn,
+		uint32 ParticipantSuffix,
+		uint8 Slot)
+	{
+		return Net.TurnAggregator.Submit(
+			Net.ActiveProtocolContext,
+			Turn,
+			FSeinTurnAuthor(
+				Participant(ParticipantSuffix), FSeinPlayerID(Slot)),
+			{}) == ESeinTurnSubmitResult::Accepted;
+	}
+	static void CheckTurnComplete(USeinNetSubsystem& Net, int32 Turn)
+	{
+		Net.ServerCheckTurnComplete(Turn);
+	}
+	static bool IsTurnCommitted(
+		const USeinNetSubsystem& Net, int32 Turn)
+	{
+		return Net.TurnAggregator.IsTurnCommitted(Turn);
 	}
 	static bool CommandLifecycleAllowed(const USeinNetSubsystem& Net, FSeinPlayerID Slot)
 	{
@@ -1658,6 +1702,7 @@ namespace UE::SeinARTSTests
 	{
 		USeinNetSubsystem* Net = FSeinNetSubsystemTestAccess::NewSubsystem();
 		ASSERT_THAT(IsNotNull(Net));
+		FSeinNetSubsystemTestAccess::SetServer(*Net, true);
 		FSeinNetSubsystemTestAccess::SetDedicatedAuthority(*Net, true);
 
 		// A dedicated authority still requires an established seed and bound
@@ -1673,15 +1718,41 @@ namespace UE::SeinARTSTests
 		Command.Tick = 444;
 		TArray<FSeinCommand> CanonicalTurn;
 		CanonicalTurn.Add(Command);
-		FSeinNetSubsystemTestAccess::BufferDedicatedAuthorityTurn(*Net, 7, CanonicalTurn);
+		ASSERT_THAT(IsTrue(
+			FSeinNetSubsystemTestAccess::BufferLocalAuthorityTurn(
+				*Net, 7, CanonicalTurn)));
 		ASSERT_THAT(IsTrue(FSeinNetSubsystemTestAccess::HasReceivedTurn(*Net, 7)));
 		ASSERT_THAT(AreEqual(444, FSeinNetSubsystemTestAccess::ReceivedCommandTick(*Net, 7)));
 
 		// The same direct path must not duplicate listen/client relay delivery.
+		FSeinNetSubsystemTestAccess::SetServer(*Net, false);
 		FSeinNetSubsystemTestAccess::SetDedicatedAuthority(*Net, false);
 		ASSERT_THAT(IsFalse(FSeinNetSubsystemTestAccess::StartPrerequisitesReady(*Net, true)));
-		FSeinNetSubsystemTestAccess::BufferDedicatedAuthorityTurn(*Net, 8, CanonicalTurn);
+		ASSERT_THAT(IsFalse(
+			FSeinNetSubsystemTestAccess::BufferLocalAuthorityTurn(
+				*Net, 8, CanonicalTurn)));
 		ASSERT_THAT(IsFalse(FSeinNetSubsystemTestAccess::HasReceivedTurn(*Net, 8)));
+	}
+
+	TEST(ListenAuthorityCommitPathReceivesCanonicalTurnWithoutLocalRPC,
+		"SeinARTS.Unit.Network.Protocol")
+	{
+		USeinNetSubsystem* Net = FSeinNetSubsystemTestAccess::NewSubsystem();
+		ASSERT_THAT(IsNotNull(Net));
+		FSeinNetSubsystemTestAccess::SeedConfiguredProtocol(*Net);
+		FSeinNetSubsystemTestAccess::SetServer(*Net, true);
+		FSeinNetSubsystemTestAccess::SetDedicatedAuthority(*Net, false);
+		FSeinNetSubsystemTestAccess::SetLocalSlot(*Net, 1);
+		ASSERT_THAT(IsTrue(FSeinNetSubsystemTestAccess::SubmitEmptyAuthor(
+			*Net, 9, /*ParticipantSuffix=*/1, /*Slot=*/1)));
+		FSeinNetSubsystemTestAccess::CheckTurnComplete(*Net, 9);
+		ASSERT_THAT(IsTrue(
+			FSeinNetSubsystemTestAccess::IsTurnCommitted(*Net, 9)));
+		ASSERT_THAT(IsTrue(
+			FSeinNetSubsystemTestAccess::HasReceivedTurn(*Net, 9)));
+		ASSERT_THAT(AreEqual(
+			0,
+			FSeinNetSubsystemTestAccess::ReceivedCommandCount(*Net, 9)));
 	}
 
 	TEST(WorldRootDuplicatesCompareAll128BitsAndFirstAcceptedWins,
@@ -1729,6 +1800,33 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsFalse(FSeinNetSubsystemTestAccess::CommandLifecycleAllowed(*Net, Slot)));
 		FSeinNetSubsystemTestAccess::SetLifecycle(*Net, Slot, ESeinSlotLifecycle::Reconnecting);
 		ASSERT_THAT(IsFalse(FSeinNetSubsystemTestAccess::CommandLifecycleAllowed(*Net, Slot)));
+	}
+
+	TEST(SimulatedDisconnectBackfillsZeroAuthorPipelineTurns,
+		"SeinARTS.Unit.Network.Protocol")
+	{
+		USeinNetSubsystem* Net = FSeinNetSubsystemTestAccess::NewSubsystem();
+		ASSERT_THAT(IsNotNull(Net));
+		FSeinNetSubsystemTestAccess::SeedConfiguredProtocol(
+			*Net, /*AuthorCount=*/2);
+		FSeinNetSubsystemTestAccess::SetServer(*Net, true);
+		constexpr int32 CurrentTurn = 11;
+		FSeinNetSubsystemTestAccess::SetCurrentTurn(*Net, CurrentTurn);
+		FSeinNetSubsystemTestAccess::SimulateDisconnect(*Net, /*Slot=*/2);
+		const int32 Horizon = CurrentTurn
+			+ FSeinNetSubsystemTestAccess::InputDelay(*Net);
+		for (int32 Turn = CurrentTurn; Turn <= Horizon; ++Turn)
+		{
+			ASSERT_THAT(IsTrue(
+				FSeinNetSubsystemTestAccess::HasAuthorSubmission(
+					*Net, Turn, /*ParticipantSuffix=*/2, /*Slot=*/2)));
+		}
+
+		ASSERT_THAT(IsTrue(FSeinNetSubsystemTestAccess::SubmitEmptyAuthor(
+			*Net, CurrentTurn, /*ParticipantSuffix=*/1, /*Slot=*/1)));
+		FSeinNetSubsystemTestAccess::CheckTurnComplete(*Net, CurrentTurn);
+		ASSERT_THAT(IsTrue(
+			FSeinNetSubsystemTestAccess::IsTurnCommitted(*Net, CurrentTurn)));
 	}
 
 	TEST(ConfigParityStartBarrierRequiresEveryExactReport, "SeinARTS.Unit.Network")

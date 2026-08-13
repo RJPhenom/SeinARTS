@@ -28,7 +28,7 @@ struct FSeinMoveToActionContinuation
 	FFixedVector Destination = FFixedVector::ZeroVector;
 
 	UPROPERTY()
-	FFixedPoint AcceptanceRadiusSq = FFixedPoint::Zero;
+	FFixedPoint AcceptanceRadius = FFixedPoint::Zero;
 
 	UPROPERTY()
 	int32 CurrentWaypointIndex = 0;
@@ -49,7 +49,7 @@ struct FSeinMoveToActionContinuation
 	int32 ConsecutiveRepathFailures = 0;
 
 	UPROPERTY()
-	FFixedPoint BestDistToFinalSq = FFixedPoint::Zero;
+	FFixedPoint BestDistToFinal = FFixedPoint::Zero;
 
 	UPROPERTY()
 	FFixedPoint TimeStalledNearGoal = FFixedPoint::Zero;
@@ -73,7 +73,7 @@ struct FSeinMoveToActionContinuation
 	FFixedVector EscapeTarget = FFixedVector::ZeroVector;
 
 	UPROPERTY()
-	FFixedPoint EscapeAcceptSq = FFixedPoint::Zero;
+	FFixedPoint EscapeAcceptanceRadius = FFixedPoint::Zero;
 
 	UPROPERTY()
 	FFixedPoint EscapeHoldTime = FFixedPoint::Zero;
@@ -88,7 +88,7 @@ struct FSeinMoveToActionContinuation
 	FFixedPoint FootprintRadius = FFixedPoint::Zero;
 
 	UPROPERTY()
-	FFixedPoint StallBandSq = FFixedPoint::Zero;
+	FFixedPoint StallBand = FFixedPoint::Zero;
 
 	UPROPERTY()
 	FSeinPath Path;

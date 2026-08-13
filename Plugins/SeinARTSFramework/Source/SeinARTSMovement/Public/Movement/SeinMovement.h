@@ -54,6 +54,13 @@ struct FSeinMovementComponent;
 struct FSeinNavigationComponent;
 struct FSeinExtentsComponent;
 
+#if WITH_DEV_AUTOMATION_TESTS
+namespace UE::SeinARTSTests
+{
+	struct FSeinMovementLongRangeTestAccess;
+}
+#endif
+
 /**
  * Per-tick context bundle handed to a movement. One struct so we can add new
  * services (formation, threat field) without further signature churn —
@@ -74,6 +81,8 @@ struct FSeinMovementContext
 	const FSeinNavigationComponent* NavData; // pathfinding / nav-layer / repath
 	const FSeinPath& Path;
 	int32& CurrentWaypointIndex;
+	/** Legacy squared acceptance slot retained in-place so positional and named
+	 *  third-party aggregate initializers remain source-compatible. */
 	FFixedPoint AcceptanceRadiusSq;
 	FFixedPoint DeltaTime;
 	USeinNavigation* Nav;
@@ -92,6 +101,46 @@ struct FSeinMovementContext
 	 *  applied via USeinMovement::EffectiveTopSpeed so every mode scales uniformly.
 	 *  Independent of nav routing cost. Default 1 (no terrain effect / no data). */
 	FFixedPoint TerrainSpeedMultiplier = FFixedPoint::One;
+
+	/** Exact raw radius for framework-created contexts. Omitted by legacy
+	 *  aggregate initializers, which fall back to AcceptanceRadiusSq. */
+	FFixedPoint ExactAcceptanceRadius = FFixedPoint::MinValue;
+
+	FFixedPoint GetAcceptanceRadius() const
+	{
+		if (ExactAcceptanceRadius >= FFixedPoint::Zero)
+		{
+			return ExactAcceptanceRadius;
+		}
+		return AcceptanceRadiusSq > FFixedPoint::Zero
+			? SeinMath::Sqrt(AcceptanceRadiusSq)
+			: FFixedPoint::Zero;
+	}
+
+	bool HasExactAcceptanceRadius() const
+	{
+		return ExactAcceptanceRadius >= FFixedPoint::Zero;
+	}
+
+	FFixedPoint GetAcceptanceRadiusSquared() const
+	{
+		return HasExactAcceptanceRadius()
+			? FFixedVector::SquareSaturated(ExactAcceptanceRadius)
+			: AcceptanceRadiusSq;
+	}
+
+	bool IsWithinPlanarAcceptance(
+		const FFixedVector& A,
+		const FFixedVector& B) const
+	{
+		if (HasExactAcceptanceRadius())
+		{
+			return FFixedVector::IsPlanarDistanceWithin(
+				A, B, ExactAcceptanceRadius);
+		}
+		return FFixedVector::IsPlanarDistSquaredWithin(
+			A, B, AcceptanceRadiusSq);
+	}
 };
 
 /** Restricted write surface for presentation-only movement output. It cannot
@@ -223,6 +272,9 @@ class SEINARTSMOVEMENT_API USeinMovement : public UObject
 	// Canonical restore stages under the final subsystem outer, hydrates the
 	// candidate component baseline, then applies exact reflected state.
 	friend struct FSeinMovementCanonicalStateProvider;
+#if WITH_DEV_AUTOMATION_TESTS
+	friend struct UE::SeinARTSTests::FSeinMovementLongRangeTestAccess;
+#endif
 
 public:
 
@@ -996,22 +1048,32 @@ protected:
 	 *  holding stale Z. Returns false when the nav has no usable sample. */
 	virtual bool QueryReferenceZ(USeinNavigation* Nav, const FFixedVector& WorldPos, FFixedPoint& OutZ) const;
 
-	/** Graceful-stop trigger — returns true when the unit has effectively
-	 *  overshot the destination and can't physically circle back tightly
-	 *  enough to land inside AcceptanceRadius. Three gates that must ALL
-	 *  hold:
-	 *      1. Within `VicinityRadiusSq` of `FinalWp` (close to goal)
-	 *      2. |speed| <= `MaxSpeedForOvershoot` (winding down)
-	 *      3. forward · toFinal < 0 (heading away from goal)
-	 *  The vicinity + speed gates together prevent false fires during
-	 *  legitimate U-turn maneuvers, where the unit is still far from the
-	 *  goal AND at high speed during the arc. */
+	/** Legacy squared-radius graceful-stop trigger retained for third-party
+	 *  movement subclasses. New code should use Is Overshoot Arrival Radius. */
 	static bool IsOvershootArrival(
 		const FFixedVector& AgentPos,
 		const FFixedVector& FinalWp,
 		const FFixedQuaternion& Rotation,
 		FFixedPoint CurrentSpeed,
 		FFixedPoint VicinityRadiusSq,
+		FFixedPoint MaxSpeedForOvershoot);
+
+	/** Graceful-stop trigger — returns true when the unit has effectively
+	 *  overshot the destination and can't physically circle back tightly
+	 *  enough to land inside AcceptanceRadius. Three gates that must ALL
+	 *  hold:
+	 *      1. Within `VicinityRadius` of `FinalWp` (close to goal)
+	 *      2. |speed| <= `MaxSpeedForOvershoot` (winding down)
+	 *      3. forward · toFinal < 0 (heading away from goal)
+	 *  The vicinity + speed gates together prevent false fires during
+	 *  legitimate U-turn maneuvers, where the unit is still far from the
+	 *  goal AND at high speed during the arc. */
+	static bool IsOvershootArrivalRadius(
+		const FFixedVector& AgentPos,
+		const FFixedVector& FinalWp,
+		const FFixedQuaternion& Rotation,
+		FFixedPoint CurrentSpeed,
+		FFixedPoint VicinityRadius,
 		FFixedPoint MaxSpeedForOvershoot);
 
 	/** Auto-reverse decision — returns true if the unit should drive in

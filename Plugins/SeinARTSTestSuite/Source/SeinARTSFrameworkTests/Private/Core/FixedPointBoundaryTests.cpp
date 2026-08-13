@@ -6,6 +6,7 @@
 #include "Stamping/SeinStampUtils.h"
 #include "Types/FixedPoint.h"
 #include "Types/Quat.h"
+#include "Types/Vector.h"
 
 #include <limits>
 
@@ -88,6 +89,108 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(FFixedPoint::FromFloat(-Infinity) == FFixedPoint::MinValue));
 		ASSERT_THAT(IsTrue(FFixedPoint::FromFloat(2147483648.0f) == FFixedPoint::MaxValue));
 		ASSERT_THAT(IsTrue(FFixedPoint::FromFloat(-2147483648.0f) == FFixedPoint::MinValue));
+	}
+
+	TEST(FixedVectorSaturatedMagnitudeHandlesLongRange,
+		"SeinARTS.Unit.Core")
+	{
+		const FFixedVector InRange(
+			FFixedPoint::FromInt(30000),
+			FFixedPoint::FromInt(30000),
+			FFixedPoint::Zero);
+		ASSERT_THAT(IsTrue(
+			InRange.SizeSquaredSaturated()
+				== FFixedPoint::FromInt(1800000000)));
+		const FFixedVector FractionalBoundary(
+			FFixedPoint::FromInt(46340) + FFixedPoint::Half,
+			FFixedPoint::Zero,
+			FFixedPoint::Zero);
+		ASSERT_THAT(IsTrue(
+			FractionalBoundary.SizeSquaredSaturated()
+				== FractionalBoundary.SizeSquared()));
+
+		const FFixedVector LongAxis(
+			FFixedPoint::FromInt(50000),
+			FFixedPoint::Zero,
+			FFixedPoint::Zero);
+		ASSERT_THAT(IsTrue(
+			LongAxis.SizeSquared() < FFixedPoint::Zero));
+		ASSERT_THAT(IsTrue(
+			LongAxis.SizeSquaredSaturated() == FFixedPoint::MaxValue));
+		ASSERT_THAT(IsTrue(
+			LongAxis.Size() == FFixedPoint::FromInt(50000)));
+		ASSERT_THAT(IsTrue(
+			LongAxis.GetNormalized() == FFixedVector(
+				FFixedPoint::One,
+				FFixedPoint::Zero,
+				FFixedPoint::Zero)));
+
+		const FFixedVector LongDiagonal(
+			FFixedPoint::FromInt(50000),
+			FFixedPoint::FromInt(5000),
+			FFixedPoint::Zero);
+		const FFixedVector Normalized = LongDiagonal.GetNormalized();
+		ASSERT_THAT(IsTrue(SeinMath::Abs(
+			Normalized.SizeSquared() - FFixedPoint::One)
+			< FFixedPoint::KindaSmallNumber));
+
+		const FFixedVector MaximumDiagonal(
+			FFixedPoint::MaxValue,
+			FFixedPoint::MaxValue,
+			FFixedPoint::Zero);
+		const FFixedVector MaximumNormalized =
+			MaximumDiagonal.GetNormalized();
+		ASSERT_THAT(IsTrue(SeinMath::Abs(
+			MaximumNormalized.SizeSquared() - FFixedPoint::One)
+			< FFixedPoint::KindaSmallNumber));
+		ASSERT_THAT(IsTrue(MaximumNormalized.X < FFixedPoint::One));
+		ASSERT_THAT(IsTrue(MaximumNormalized.Y < FFixedPoint::One));
+
+		const FFixedVector MinimumEndpoint(
+			FFixedPoint::MinValue,
+			FFixedPoint::Zero,
+			FFixedPoint::Zero);
+		const FFixedVector MaximumEndpoint(
+			FFixedPoint::MaxValue,
+			FFixedPoint::Zero,
+			FFixedPoint::Zero);
+		ASSERT_THAT(IsTrue(FFixedVector::DistSquaredSaturated(
+			MinimumEndpoint, MaximumEndpoint) == FFixedPoint::MaxValue));
+		ASSERT_THAT(IsTrue(FFixedVector::DistanceSaturated(
+			MinimumEndpoint, MaximumEndpoint) == FFixedPoint::MaxValue));
+		ASSERT_THAT(IsTrue(FFixedVector::GetSafeNormalDifference(
+			MinimumEndpoint, MaximumEndpoint) == FFixedVector::ForwardVector));
+		ASSERT_THAT(IsTrue(FFixedVector::GetSafeNormalDifference(
+			MaximumEndpoint, MinimumEndpoint) == FFixedVector::BackwardVector));
+
+		const FFixedVector DeltaA(
+			FFixedPoint::FromInt(-20000),
+			FFixedPoint::FromInt(10000),
+			FFixedPoint::Zero);
+		const FFixedVector DeltaB(
+			FFixedPoint::FromInt(20000),
+			FFixedPoint::FromInt(20000),
+			FFixedPoint::Zero);
+		ASSERT_THAT(IsTrue(FFixedVector::DistSquaredSaturated(
+			DeltaA, DeltaB) == FFixedPoint::FromInt(1700000000)));
+		ASSERT_THAT(IsTrue(FFixedVector::SquareSaturated(
+			FFixedPoint::FromInt(50000)) == FFixedPoint::MaxValue));
+		ASSERT_THAT(IsTrue(FFixedVector::SquareSaturated(
+			FFixedPoint::FromInt(46340))
+			== FFixedPoint::FromInt(2147395600)));
+
+		const FFixedVector Origin = FFixedVector::ZeroVector;
+		const FFixedVector FortyThousand(
+			FFixedPoint::FromInt(40000), FFixedPoint::Zero, FFixedPoint::Zero);
+		const FFixedVector OneHundredThousand(
+			FFixedPoint::FromInt(100000), FFixedPoint::Zero, FFixedPoint::Zero);
+		const FFixedPoint FiftyThousand = FFixedPoint::FromInt(50000);
+		ASSERT_THAT(IsTrue(FFixedVector::IsDistanceWithin(
+			Origin, FortyThousand, FiftyThousand)));
+		ASSERT_THAT(IsFalse(FFixedVector::IsDistanceWithin(
+			Origin, OneHundredThousand, FiftyThousand)));
+		ASSERT_THAT(IsFalse(FFixedVector::IsDistanceWithin(
+			MinimumEndpoint, MaximumEndpoint, FFixedPoint::MaxValue)));
 	}
 
 	TEST(FixedPointNegativeRounding, "SeinARTS.Unit.Core")

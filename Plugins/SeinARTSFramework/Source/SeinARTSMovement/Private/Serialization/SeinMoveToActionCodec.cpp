@@ -775,16 +775,16 @@ namespace
 				TEXT("An active Move To continuation cannot already be movement-finalized.");
 			return false;
 		}
-		if (!IsNonNegative(State.AcceptanceRadiusSq)
+		if (!IsNonNegative(State.AcceptanceRadius)
 			|| !IsNonNegative(State.TimeSinceLastRepath)
-			|| !IsNonNegative(State.BestDistToFinalSq)
+			|| !IsNonNegative(State.BestDistToFinal)
 			|| !IsNonNegative(State.TimeStalledNearGoal)
 			|| !IsNonNegative(State.HoldTime)
 			|| !IsNonNegative(State.NextEscalationAt)
-			|| !IsNonNegative(State.EscapeAcceptSq)
+			|| !IsNonNegative(State.EscapeAcceptanceRadius)
 			|| !IsNonNegative(State.EscapeHoldTime)
 			|| !IsNonNegative(State.FootprintRadius)
-			|| !IsNonNegative(State.StallBandSq)
+			|| !IsNonNegative(State.StallBand)
 			|| !IsNonNegative(State.Path.TotalCost))
 		{
 			OutError =
@@ -871,7 +871,7 @@ struct FSeinMoveToActionCodec
 		FSeinMoveToActionContinuation& State)
 	{
 		State.Destination = Action.Destination;
-		State.AcceptanceRadiusSq = Action.AcceptanceRadiusSq;
+		State.AcceptanceRadius = Action.AcceptanceRadius;
 		State.CurrentWaypointIndex =
 			Action.CurrentWaypointIndex;
 		State.bPathResolved = Action.bPathResolved;
@@ -883,8 +883,7 @@ struct FSeinMoveToActionCodec
 			Action.TimeSinceLastRepath;
 		State.ConsecutiveRepathFailures =
 			Action.ConsecutiveRepathFailures;
-		State.BestDistToFinalSq =
-			Action.BestDistToFinalSq;
+		State.BestDistToFinal = Action.BestDistToFinal;
 		State.TimeStalledNearGoal =
 			Action.TimeStalledNearGoal;
 		State.HoldTime = Action.HoldTime;
@@ -895,13 +894,14 @@ struct FSeinMoveToActionCodec
 			Action.bForceRepathNow;
 		State.bEscapeMode = Action.bEscapeMode;
 		State.EscapeTarget = Action.EscapeTarget;
-		State.EscapeAcceptSq = Action.EscapeAcceptSq;
+		State.EscapeAcceptanceRadius =
+			Action.EscapeAcceptanceRadius;
 		State.EscapeHoldTime = Action.EscapeHoldTime;
 		State.EscapeAttempts = Action.EscapeAttempts;
 		State.TotalEscapeEntries =
 			Action.TotalEscapeEntries;
 		State.FootprintRadius = Action.FootprintRadius;
-		State.StallBandSq = Action.StallBandSq;
+		State.StallBand = Action.StallBand;
 		// Copy only canonical path fields. DebugCellPath may be very large and
 		// is diagnostic-only, so even a temporary payload-side allocation
 		// would be both misleading and wasteful.
@@ -921,8 +921,7 @@ struct FSeinMoveToActionCodec
 		USeinMoveToAction& Action)
 	{
 		Action.Destination = State.Destination;
-		Action.AcceptanceRadiusSq =
-			State.AcceptanceRadiusSq;
+		Action.AcceptanceRadius = State.AcceptanceRadius;
 		Action.CurrentWaypointIndex =
 			State.CurrentWaypointIndex;
 		Action.bPathResolved = State.bPathResolved;
@@ -934,8 +933,7 @@ struct FSeinMoveToActionCodec
 			State.TimeSinceLastRepath;
 		Action.ConsecutiveRepathFailures =
 			State.ConsecutiveRepathFailures;
-		Action.BestDistToFinalSq =
-			State.BestDistToFinalSq;
+		Action.BestDistToFinal = State.BestDistToFinal;
 		Action.TimeStalledNearGoal =
 			State.TimeStalledNearGoal;
 		Action.HoldTime = State.HoldTime;
@@ -946,13 +944,14 @@ struct FSeinMoveToActionCodec
 			State.bForceRepathNow;
 		Action.bEscapeMode = State.bEscapeMode;
 		Action.EscapeTarget = State.EscapeTarget;
-		Action.EscapeAcceptSq = State.EscapeAcceptSq;
+		Action.EscapeAcceptanceRadius =
+			State.EscapeAcceptanceRadius;
 		Action.EscapeHoldTime = State.EscapeHoldTime;
 		Action.EscapeAttempts = State.EscapeAttempts;
 		Action.TotalEscapeEntries =
 			State.TotalEscapeEntries;
 		Action.FootprintRadius = State.FootprintRadius;
-		Action.StallBandSq = State.StallBandSq;
+		Action.StallBand = State.StallBand;
 		Action.Path = State.Path;
 		Action.bMovementFinalized =
 			State.bMovementFinalized;
@@ -1232,9 +1231,9 @@ SeinRegisterMoveToActionCodec(FString& OutError)
 		USeinMoveToAction::StaticClass();
 	Descriptor.StableCodecId =
 		TEXT("seinarts.movement.move-to");
-	Descriptor.StateSchemaVersion = 3;
-	Descriptor.BehaviorRevision = 4;
-	Descriptor.CodecRevision = 4;
+	Descriptor.StateSchemaVersion = 4;
+	Descriptor.BehaviorRevision = 5;
+	Descriptor.CodecRevision = 5;
 	Descriptor.PayloadStruct =
 		FSeinMoveToActionContinuation::StaticStruct();
 	if (!FSeinCanonicalStateCodec::ComputeSchemaDigest(
@@ -1333,7 +1332,7 @@ void UE::SeinARTSTests::
 		FFixedPoint::FromInt(101),
 		FFixedPoint::FromInt(202),
 		FFixedPoint::FromInt(303));
-	Action.AcceptanceRadiusSq =
+	Action.AcceptanceRadius =
 		FFixedPoint::FromInt(404);
 	Action.CurrentWaypointIndex = 1;
 	Action.bPathResolved = true;
@@ -1345,7 +1344,7 @@ void UE::SeinARTSTests::
 	Action.TimeSinceLastRepath =
 		FFixedPoint::FromInt(14);
 	Action.ConsecutiveRepathFailures = 15;
-	Action.BestDistToFinalSq =
+	Action.BestDistToFinal =
 		FFixedPoint::FromInt(16);
 	Action.TimeStalledNearGoal =
 		FFixedPoint::FromInt(17);
@@ -1359,7 +1358,7 @@ void UE::SeinARTSTests::
 		FFixedPoint::FromInt(21),
 		FFixedPoint::FromInt(22),
 		FFixedPoint::FromInt(23));
-	Action.EscapeAcceptSq =
+	Action.EscapeAcceptanceRadius =
 		FFixedPoint::FromInt(24);
 	Action.EscapeHoldTime =
 		FFixedPoint::FromInt(25);
@@ -1367,7 +1366,7 @@ void UE::SeinARTSTests::
 	Action.TotalEscapeEntries = 27;
 	Action.FootprintRadius =
 		FFixedPoint::FromInt(28);
-	Action.StallBandSq =
+	Action.StallBand =
 		FFixedPoint::FromInt(29);
 	Action.Path = FSeinPath();
 	Action.Path.Waypoints = {

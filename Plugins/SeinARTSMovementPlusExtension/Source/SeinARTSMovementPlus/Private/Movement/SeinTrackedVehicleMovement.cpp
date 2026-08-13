@@ -83,6 +83,15 @@ namespace
 	FFixedPoint AbsFP2(FFixedPoint V) { return V < FFixedPoint::Zero ? -V : V; }
 	FFixedPoint MinFP2(FFixedPoint A, FFixedPoint B) { return A < B ? A : B; }
 	FFixedPoint MaxFP2(FFixedPoint A, FFixedPoint B) { return A > B ? A : B; }
+	FFixedPoint ScalePositiveRadius(FFixedPoint Radius, FFixedPoint Scale)
+	{
+		if (Radius > FFixedPoint::Zero && Scale > FFixedPoint::Zero
+			&& Radius > FFixedPoint::MaxValue / Scale)
+		{
+			return FFixedPoint::MaxValue;
+		}
+		return Radius * Scale;
+	}
 
 	/** Robust angular progress along an arc segment (wrap ambiguity resolved
 	 *  by splitting the leftover circle). Duplicate of the wheeled driver's. */
@@ -668,7 +677,7 @@ bool USeinTrackedVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 	const FSeinTrackedMovementData* TrackedPtr = MovementData.MovementClassData.GetPtr<FSeinTrackedMovementData>();
 	const FSeinTrackedMovementData& Tracked = TrackedPtr ? *TrackedPtr : DefaultsTracked;
 	int32& CurrentWaypointIndex = Ctx.CurrentWaypointIndex;
-	const FFixedPoint AcceptanceRadiusSq = Ctx.AcceptanceRadiusSq;
+	const FFixedPoint AcceptanceRadius = Ctx.GetAcceptanceRadius();
 	const FFixedPoint DeltaTime = Ctx.DeltaTime;
 	USeinNavigation* Nav = Ctx.Nav;
 
@@ -710,32 +719,38 @@ bool USeinTrackedVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 	else                       { bDriveReverse = bIsReversing; }
 
 	// -------------------------------------------------------------------
-	// 3. Arrival check — far-prechecked (fixed-point squares wrap past
-	//    ~463 m), reverse-aware overshoot (travel heading), overshoot
-	//    suppressed while a planned maneuver circles back, and routed
+	// 3. Arrival check — exact at the full fixed-point coordinate range,
+	//    reverse-aware (travel heading), suppressed while a planned maneuver
+	//    circles back, and routed
 	//    through DispatchArrivalMotion (the Tier-2 contract).
 	// -------------------------------------------------------------------
 	{
-		FFixedVector ToFinal = FinalWp - AgentPos;
-		ToFinal.Z = FFixedPoint::Zero;
-		if (!IsPlanarFar(ToFinal))
+		const bool bWithinAcceptance =
+			Ctx.IsWithinPlanarAcceptance(AgentPos, FinalWp);
+		const FFixedPoint VicinityRadius = ScalePositiveRadius(
+			AcceptanceRadius, FFixedPoint::Two);
+		const FFixedPoint OvershootSpeedCap =
+			MovementData.TopSpeed / FFixedPoint::FromInt(3);
+		const FFixedQuaternion TravelRot = bDriveReverse
+			? YawOnly(CurrentYaw + FFixedPoint::Pi) : EntryRot;
+		const bool bOvershoot = !bManeuverMode
+			&& (Ctx.HasExactAcceptanceRadius()
+				? IsOvershootArrivalRadius(
+					AgentPos, FinalWp, TravelRot,
+					CurrentSpeed, VicinityRadius, OvershootSpeedCap)
+				: IsOvershootArrival(
+					AgentPos, FinalWp, TravelRot,
+					CurrentSpeed,
+					ScalePositiveRadius(
+						Ctx.AcceptanceRadiusSq, FFixedPoint::FromInt(4)),
+					OvershootSpeedCap));
+		if (bWithinAcceptance || bOvershoot)
 		{
-			const bool bWithinAcceptance = ToFinal.SizeSquared() <= AcceptanceRadiusSq;
-			const FFixedPoint VicinityRadiusSq = AcceptanceRadiusSq * FFixedPoint::FromInt(4);
-			const FFixedPoint OvershootSpeedCap = MovementData.TopSpeed / FFixedPoint::FromInt(3);
-			const FFixedQuaternion TravelRot = bDriveReverse
-				? YawOnly(CurrentYaw + FFixedPoint::Pi) : EntryRot;
-			const bool bOvershoot = !bManeuverMode && IsOvershootArrival(
-				AgentPos, FinalWp, TravelRot,
-				CurrentSpeed, VicinityRadiusSq, OvershootSpeedCap);
-			if (bWithinAcceptance || bOvershoot)
-			{
-				UE_LOG(LogSeinTracked, Verbose,
-					TEXT("Tracked arrival: within=%d overshoot=%d speed=%.2f"),
-					bWithinAcceptance ? 1 : 0, bOvershoot ? 1 : 0, CurrentSpeed.ToFloat());
-				DispatchArrivalMotion(Ctx);
-				return true;
-			}
+			UE_LOG(LogSeinTracked, Verbose,
+				TEXT("Tracked arrival: within=%d overshoot=%d speed=%.2f"),
+				bWithinAcceptance ? 1 : 0, bOvershoot ? 1 : 0, CurrentSpeed.ToFloat());
+			DispatchArrivalMotion(Ctx);
+			return true;
 		}
 	}
 
@@ -763,20 +778,20 @@ bool USeinTrackedVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 	const bool bRecovering = RecoveryTime > FFixedPoint::Zero && RecoveryDir != 0;
 
 	// Final-approach kinematic cap toward the acceptance-ring EDGE (pairs
-	// with the roll-through arrival) — far-guarded like the arrival test.
+	// with the roll-through arrival). Distance saturates beyond the scalar
+	// range instead of wrapping.
 	FFixedPoint MaxArrivalSpeed = FFixedPoint::FromInt(1000000);
-	FFixedPoint DistFinal = FFixedPoint::FromInt(100000);
+	FFixedPoint DistFinal;
 	{
-		FFixedVector ToFinal = FinalWp - AgentPos;
-		ToFinal.Z = FFixedPoint::Zero;
-		if (!IsPlanarFar(ToFinal))
-		{
-			DistFinal = ToFinal.Size();
-			const FFixedPoint Acceptance = Ctx.NavData ? Ctx.NavData->AcceptanceRadius : FFixedPoint::Zero;
-			const FFixedPoint BrakeDist = (DistFinal > Acceptance)
-				? (DistFinal - Acceptance) : FFixedPoint::Zero;
-			MaxArrivalSpeed = KinematicArrivalSpeedCap(BrakeDist, Tracked.Deceleration);
-		}
+		FFixedVector PlanarFinal = FinalWp;
+		PlanarFinal.Z = AgentPos.Z;
+		DistFinal = FFixedVector::DistanceSaturated(
+			AgentPos, PlanarFinal);
+		const FFixedPoint Acceptance = Ctx.GetAcceptanceRadius();
+		const FFixedPoint BrakeDist = (DistFinal > Acceptance)
+			? (DistFinal - Acceptance) : FFixedPoint::Zero;
+		MaxArrivalSpeed = KinematicArrivalSpeedCap(
+			BrakeDist, Tracked.Deceleration);
 	}
 
 	// -------------------------------------------------------------------
@@ -1061,14 +1076,17 @@ bool USeinTrackedVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 			? Tracked.LookAheadDistance : FFixedPoint::FromInt(100);
 		const FFixedPoint LookAhead = ComputeAdaptiveLookAhead(
 			LookAheadFloor, Tracked.LookAheadTimeHorizon, AbsCurrentSpeed);
-		const FFixedVector LookAheadPoint = ResolveLookAheadPoint(
+		FFixedVector LookAheadPoint = ResolveLookAheadPoint(
 			AgentPos, Path, CurrentWaypointIndex, LookAhead);
-
-		FFixedVector ToTarget = LookAheadPoint - AgentPos;
-		ToTarget.Z = FFixedPoint::Zero;
-		if (ToTarget.SizeSquared() > FFixedPoint::Epsilon)
+		LookAheadPoint.Z = AgentPos.Z;
+		const bool bHasTarget = !FFixedVector::IsPlanarDistanceWithin(
+			AgentPos, LookAheadPoint, FFixedPoint::Epsilon);
+		FFixedVector ToTarget = bHasTarget
+			? FFixedVector::GetSafeNormalDifference(AgentPos, LookAheadPoint)
+			: FFixedVector::ZeroVector;
+		if (bHasTarget)
 		{
-			ToTarget = ApplyAvoidanceSteer(Ctx, FFixedVector::GetSafeNormal(ToTarget));
+			ToTarget = ApplyAvoidanceSteer(Ctx, ToTarget);
 		}
 #if UE_ENABLE_DEBUG_DRAWING
 		DebugSteerTarget = LookAheadPoint;

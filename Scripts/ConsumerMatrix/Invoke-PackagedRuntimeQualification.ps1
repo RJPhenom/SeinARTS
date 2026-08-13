@@ -7,12 +7,18 @@ param(
 	[Parameter(Mandatory = $true)]
 	[string] $ProjectRoot,
 
+	[ValidateSet('Framework', 'MovementPlus')]
+	[string] $Profile = 'Framework',
+
 	[int] $TimeoutSeconds = 240
 )
 
 $ErrorActionPreference = 'Stop'
 $GameExecutable = (Resolve-Path -LiteralPath $GameExecutable).Path
 $ProjectRoot = (Resolve-Path -LiteralPath $ProjectRoot).Path
+$ExecutableSha256 = (Get-FileHash -LiteralPath $GameExecutable -Algorithm SHA256).Hash
+$ExpectedMovementClass = '/Script/SeinARTSMovementPlus.SeinWheeledVehicleMovement'
+$ExpectedMovementDestination = '214748364800000:21474836480000:0'
 $MarkerDirectory = Join-Path $ProjectRoot 'Saved\RuntimeQualification'
 $ResolvedMarkerDirectory = [System.IO.Path]::GetFullPath($MarkerDirectory)
 if (-not $ResolvedMarkerDirectory.StartsWith(
@@ -109,6 +115,26 @@ function Read-KeyValueMarker([string] $Path)
 	return $Values
 }
 
+function Assert-MovementEvidence(
+	[hashtable] $Values,
+	[string] $Label)
+{
+	$Required = @(
+		'MovementState', 'MovementClass', 'MovementDestination',
+		'MovementTargetWitness', 'MovementTelemetry')
+	foreach ($Key in $Required) {
+		if (-not $Values.ContainsKey($Key) -or
+			[string]::IsNullOrWhiteSpace([string]$Values[$Key])) {
+			throw "$Label omitted Movement+ evidence '$Key'."
+		}
+	}
+	if ([string]$Values.MovementClass -cne $ExpectedMovementClass -or
+		[string]$Values.MovementDestination -cne $ExpectedMovementDestination -or
+		[string]$Values.MovementTargetWitness -cne 'Passed') {
+		throw "$Label did not prove the exact Movement+ class and destination."
+	}
+}
+
 $CommonArguments = @(
 	'-unattended',
 	'-nullrhi',
@@ -121,7 +147,7 @@ $CommonArguments = @(
 
 try {
 	Write-Host `
-		"[ConsumerMatrix] packaged listen-server qualification on $ServerAddress" `
+		"[ConsumerMatrix] $Profile packaged listen-server qualification on $ServerAddress" `
 		-ForegroundColor Cyan
 	$Server = Start-QualificationProcess 'server' (@(
 		"-port=$Port",
@@ -146,6 +172,18 @@ try {
 		'server-pair-grant-observed.marker' @($Server, $Client) | Out-Null
 	Wait-QualificationMarker `
 		'client-pair-grant-observed.marker' @($Server, $Client) | Out-Null
+	if ($Profile -eq 'MovementPlus') {
+		Wait-QualificationMarker `
+			'client-movement-command-submitted.marker' @($Server, $Client) | Out-Null
+		$ServerMovementPath = Wait-QualificationMarker `
+			'server-movement-observed.marker' @($Server, $Client)
+		$ServerMovementResult = Read-KeyValueMarker $ServerMovementPath
+		Assert-MovementEvidence $ServerMovementResult 'Server movement marker'
+		$ClientMovementPath = Wait-QualificationMarker `
+			'client-movement-observed.marker' @($Server, $Client)
+		$ClientMovementResult = Read-KeyValueMarker $ClientMovementPath
+		Assert-MovementEvidence $ClientMovementResult 'Client movement marker'
+	}
 	Wait-QualificationMarker `
 		'client-resync-complete.marker' @($Server, $Client) | Out-Null
 	Wait-QualificationMarker `
@@ -154,6 +192,13 @@ try {
 		'client-reconnect-complete.marker' @($Server, $Client) | Out-Null
 	Wait-QualificationMarker `
 		'client-reconnect-capability-preserved.marker' @($Server, $Client) | Out-Null
+	if ($Profile -eq 'MovementPlus') {
+		$ReconnectMovementPath = Wait-QualificationMarker `
+			'client-reconnect-movement-preserved.marker' @($Server, $Client)
+		$ReconnectMovementResult = Read-KeyValueMarker $ReconnectMovementPath
+		Assert-MovementEvidence `
+			$ReconnectMovementResult 'Reconnect movement marker'
+	}
 	Wait-QualificationMarker `
 		'server-reconnect-activated.marker' @($Server, $Client) | Out-Null
 	Wait-QualificationMarker `
@@ -163,7 +208,16 @@ try {
 	$ServerCompletePath = Wait-QualificationMarker `
 		'server-complete.marker' @($Server, $Client)
 	$ServerResult = Read-KeyValueMarker $ServerCompletePath
-	foreach ($RequiredKey in @('Path', 'EndTick', 'Root')) {
+	$RequiredServerKeys = @('Path', 'EndTick', 'Root')
+	if ($Profile -eq 'MovementPlus') {
+		$RequiredServerKeys += @(
+			'MovementState', 'MovementClass', 'MovementDestination',
+			'MovementTargetWitness', 'MovementTelemetry')
+	}
+	if ($Profile -eq 'MovementPlus') {
+		Assert-MovementEvidence $ServerResult 'Server completion marker'
+	}
+	foreach ($RequiredKey in $RequiredServerKeys) {
 		if (-not $ServerResult.ContainsKey($RequiredKey) -or
 			[string]::IsNullOrWhiteSpace($ServerResult[$RequiredKey])) {
 			throw "Server completion marker omitted '$RequiredKey'."
@@ -191,12 +245,18 @@ try {
 	Write-Host `
 		'[ConsumerMatrix] packaged replay checkpoint-seek qualification' `
 		-ForegroundColor Cyan
-	$Replay = Start-QualificationProcess 'replay' (@(
+	$ReplayArguments = @(
 		'-SeinConsumerQualificationRole=Replay',
 		(New-QuotedArgument 'SeinConsumerReplayPath' $ReplayArtifactPath),
 		(New-QuotedArgument 'SeinConsumerExpectedRoot' $ServerResult.Root),
 		"-SeinConsumerExpectedEndTick=$($ServerResult.EndTick)"
-	) + $CommonArguments)
+	)
+	if ($Profile -eq 'MovementPlus') {
+		$ReplayArguments += (New-QuotedArgument `
+			'SeinConsumerExpectedMovementState' $ServerResult.MovementState)
+	}
+	$Replay = Start-QualificationProcess 'replay' (
+		$ReplayArguments + $CommonArguments)
 	$ReplayCompletePath = Wait-QualificationMarker `
 		'replay-complete.marker' @($Replay)
 	$ReplayResult = Read-KeyValueMarker $ReplayCompletePath
@@ -205,6 +265,15 @@ try {
 		$ReplayResult.PairGrantWitness -ne 'Passed' -or
 		$ReplayResult.PairRevokeWitness -ne 'Passed') {
 		throw 'Replay completion marker disagreed with the authoritative server frontier.'
+	}
+	if ($Profile -eq 'MovementPlus' -and
+		($ReplayResult.MovementCommandWitness -ne 'Passed' -or
+		$ReplayResult.MovementStateWitness -ne 'Passed' -or
+		$ReplayResult.MovementFinalStateWitness -ne 'Passed')) {
+		throw 'Replay completion marker omitted the Movement+ command/state witnesses.'
+	}
+	if ($Profile -eq 'MovementPlus') {
+		Assert-MovementEvidence $ReplayResult 'Replay completion marker'
 	}
 	$Replay.Refresh()
 	if (-not $Replay.HasExited) {
@@ -217,7 +286,9 @@ try {
 	}
 
 	$Result = [ordered]@{
-		schemaVersion = 2
+		schemaVersion = 4
+		profile = $Profile
+		executableSha256 = $ExecutableSha256
 		listenServer = 'Passed'
 		twoPlayerLobbyTravel = 'Passed'
 		lockstepCommandFlow = 'Passed'
@@ -228,6 +299,45 @@ try {
 		pairCapabilityCommandFlow = 'Passed'
 		pairCapabilityReconnectPersistence = 'Passed'
 		pairCapabilityReplayWitness = 'Passed'
+		movementPlusCommandFlow = if ($Profile -eq 'MovementPlus') {
+			'Passed'
+		} else { 'NotApplicable' }
+		movementPlusReconnectPersistence = if ($Profile -eq 'MovementPlus') {
+			'Passed'
+		} else { 'NotApplicable' }
+		movementPlusReplayWitness = if ($Profile -eq 'MovementPlus') {
+			'Passed'
+		} else { 'NotApplicable' }
+		movementClass = if ($Profile -eq 'MovementPlus') {
+			$ServerResult.MovementClass
+		} else { 'NotApplicable' }
+		movementDestination = if ($Profile -eq 'MovementPlus') {
+			$ServerResult.MovementDestination
+		} else { 'NotApplicable' }
+		serverMovementState = if ($Profile -eq 'MovementPlus') {
+			$ServerResult.MovementState
+		} else { 'NotApplicable' }
+		clientMovementState = if ($Profile -eq 'MovementPlus') {
+			$ClientMovementResult.MovementState
+		} else { 'NotApplicable' }
+		reconnectMovementState = if ($Profile -eq 'MovementPlus') {
+			$ReconnectMovementResult.MovementState
+		} else { 'NotApplicable' }
+		replayMovementState = if ($Profile -eq 'MovementPlus') {
+			$ReplayResult.MovementState
+		} else { 'NotApplicable' }
+		serverMovementTelemetry = if ($Profile -eq 'MovementPlus') {
+			$ServerResult.MovementTelemetry
+		} else { 'NotApplicable' }
+		clientMovementTelemetry = if ($Profile -eq 'MovementPlus') {
+			$ClientMovementResult.MovementTelemetry
+		} else { 'NotApplicable' }
+		reconnectMovementTelemetry = if ($Profile -eq 'MovementPlus') {
+			$ReconnectMovementResult.MovementTelemetry
+		} else { 'NotApplicable' }
+		replayMovementTelemetry = if ($Profile -eq 'MovementPlus') {
+			$ReplayResult.MovementTelemetry
+		} else { 'NotApplicable' }
 		endTick = [int]$ServerResult.EndTick
 		canonicalRoot = $ServerResult.Root
 		rootGossipTurn = [int]$RootGossipResult.Turn
@@ -242,7 +352,7 @@ try {
 		($Result | ConvertTo-Json -Depth 4),
 		[System.Text.UTF8Encoding]::new($false))
 	Write-Host `
-		"[ConsumerMatrix] packaged multiplayer/replay qualification passed: $ResultPath" `
+		"[ConsumerMatrix] $Profile packaged multiplayer/replay qualification passed: $ResultPath" `
 		-ForegroundColor Green
 }
 finally {

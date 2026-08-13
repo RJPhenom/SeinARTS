@@ -128,12 +128,12 @@ FFixedPoint USeinMoverHandle::GetTerrainSpeedMultiplier() const
 
 FFixedPoint USeinMoverHandle::GetAcceptanceRadius() const
 {
-	return Ctx ? SeinMath::Sqrt(Ctx->AcceptanceRadiusSq) : FFixedPoint::Zero;
+	return Ctx ? Ctx->GetAcceptanceRadius() : FFixedPoint::Zero;
 }
 
 FFixedPoint USeinMoverHandle::GetAcceptanceRadiusSquared() const
 {
-	return Ctx ? Ctx->AcceptanceRadiusSq : FFixedPoint::Zero;
+	return Ctx ? Ctx->GetAcceptanceRadiusSquared() : FFixedPoint::Zero;
 }
 
 // ---- Path / waypoints ---------------------------------------------------------

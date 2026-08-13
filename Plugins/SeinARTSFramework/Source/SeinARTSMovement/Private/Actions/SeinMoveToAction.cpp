@@ -4,6 +4,7 @@
  */
 
 #include "Actions/SeinMoveToAction.h"
+#include "Testing/SeinMoveToActionContinuationTestAccess.h"
 #include "Abilities/SeinMoveToProxy.h"
 #include "SeinNavigation.h"
 #include "SeinNavigationSubsystem.h"
@@ -19,6 +20,7 @@
 #include "Types/Entity.h"
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
+#include "Math/BigInt.h"
 #include "Engine/World.h"
 #include "Simulation/SeinMovementTraceLog.h"  // [ARRIVE]/[THROTTLE] movement-trace events
 #include "ProfilingDebugging/CpuProfilerTrace.h"
@@ -35,35 +37,192 @@ namespace
 	 *  arc path — a curve-aware mode reads the exact segments instead. */
 	const FFixedPoint GArcFlattenChordError = FFixedPoint::FromInt(5);
 
-	/** Planar (XY) distance² from point `Q` to segment `S..E`. Z is ignored —
-	 *  the sim is XY-driven and Z drift on slopes shouldn't trigger spurious
-	 *  off-path repaths. Closest-point-on-segment is the projection of Q onto
-	 *  the segment line, clamped to the [0, 1] segment range. Degenerate
-	 *  zero-length segments degrade to a point-distance check. */
-	FFixedPoint OffPathSegDistSqXY(const FFixedVector& Q, const FFixedVector& S, const FFixedVector& E)
+	FFixedPoint SaturatingPositiveAdd(FFixedPoint A, FFixedPoint B)
 	{
-		const FFixedPoint EX = E.X - S.X;
-		const FFixedPoint EY = E.Y - S.Y;
-		const FFixedPoint LenSq = EX * EX + EY * EY;
-		const FFixedPoint QX = Q.X - S.X;
-		const FFixedPoint QY = Q.Y - S.Y;
-		if (LenSq <= FFixedPoint::Epsilon)
+		if (A > FFixedPoint::Zero && B > FFixedPoint::Zero
+			&& A > FFixedPoint::MaxValue - B)
 		{
-			return QX * QX + QY * QY; // segment collapsed to a point
+			return FFixedPoint::MaxValue;
 		}
-		FFixedPoint T = (QX * EX + QY * EY) / LenSq;
-		if (T < FFixedPoint::Zero) T = FFixedPoint::Zero;
-		else if (T > FFixedPoint::One) T = FFixedPoint::One;
-		const FFixedPoint PX = S.X + EX * T;
-		const FFixedPoint PY = S.Y + EY * T;
-		const FFixedPoint DX = Q.X - PX;
-		const FFixedPoint DY = Q.Y - PY;
-		return DX * DX + DY * DY;
+		return A + B;
 	}
 
-	/** Minimum planar (XY) distance² from `Point` to the polyline through
-	 *  `Waypoints`, treating `PathOrigin` as the implicit FIRST endpoint
-	 *  of the polyline.
+	FFixedPoint SaturatingPositiveScale(FFixedPoint Value, int32 Scale)
+	{
+		const FFixedPoint FixedScale = FFixedPoint::FromInt(Scale);
+		if (Value > FFixedPoint::Zero && Scale > 0
+			&& Value > FFixedPoint::MaxValue / FixedScale)
+		{
+			return FFixedPoint::MaxValue;
+		}
+		return Value * FixedScale;
+	}
+
+	int512 MakeSignedInt512(int64 Value)
+	{
+		int512 Result(Value);
+		if (Value < 0)
+		{
+			// TBigInt's int64 constructor initializes only its low two words.
+			uint32* Words = Result.GetBits();
+			for (int32 WordIndex = 2; WordIndex < 512 / 32; ++WordIndex)
+			{
+				Words[WordIndex] = MAX_uint32;
+			}
+		}
+		return Result;
+	}
+
+	bool IsPlanarCrossExactlyZero(
+		const FFixedVector& Q,
+		const FFixedVector& S,
+		const FFixedVector& E)
+	{
+		const int64 QX = (Q.X - S.X).Value;
+		const int64 QY = (Q.Y - S.Y).Value;
+		const int64 DX = (E.X - S.X).Value;
+		const int64 DY = (E.Y - S.Y).Value;
+#if defined(__GNUC__) || defined(__clang__)
+		return static_cast<__int128>(QX) * DY
+			== static_cast<__int128>(QY) * DX;
+#elif defined(_MSC_VER)
+		int64 LeftHigh = 0;
+		int64 RightHigh = 0;
+		const int64 LeftLow = _mul128(QX, DY, &LeftHigh);
+		const int64 RightLow = _mul128(QY, DX, &RightHigh);
+		return LeftHigh == RightHigh && LeftLow == RightLow;
+#else
+#error "Platform does not support 128-bit multiplication"
+#endif
+	}
+
+	/** Exact raw-value fallback for spans whose fixed-point normalization
+	 *  saturates or quantizes away a small perpendicular offset. */
+	bool IsPointWithinSegmentDistanceXYExact(
+		const FFixedVector& Q,
+		const FFixedVector& S,
+		const FFixedVector& E,
+		FFixedPoint Radius)
+	{
+		const int512 DX = MakeSignedInt512(E.X.Value)
+			- MakeSignedInt512(S.X.Value);
+		const int512 DY = MakeSignedInt512(E.Y.Value)
+			- MakeSignedInt512(S.Y.Value);
+		const int512 QX = MakeSignedInt512(Q.X.Value)
+			- MakeSignedInt512(S.X.Value);
+		const int512 QY = MakeSignedInt512(Q.Y.Value)
+			- MakeSignedInt512(S.Y.Value);
+		const int512 RadiusRaw = MakeSignedInt512(Radius.Value);
+		const int512 RadiusSquared = RadiusRaw * RadiusRaw;
+		const int512 SegmentLengthSquared = DX * DX + DY * DY;
+		const int512 QueryDistanceSquared = QX * QX + QY * QY;
+		const int512 Zero(int64(0));
+		if (SegmentLengthSquared == Zero)
+		{
+			return QueryDistanceSquared <= RadiusSquared;
+		}
+
+		const int512 Projection = QX * DX + QY * DY;
+		if (Projection <= Zero)
+		{
+			return QueryDistanceSquared <= RadiusSquared;
+		}
+		if (Projection >= SegmentLengthSquared)
+		{
+			const int512 EX = MakeSignedInt512(Q.X.Value)
+				- MakeSignedInt512(E.X.Value);
+			const int512 EY = MakeSignedInt512(Q.Y.Value)
+				- MakeSignedInt512(E.Y.Value);
+			return EX * EX + EY * EY <= RadiusSquared;
+		}
+
+		const int512 Cross = QX * DY - QY * DX;
+		return Cross * Cross
+			<= RadiusSquared * SegmentLengthSquared;
+	}
+
+	/** Overflow-safe planar segment-distance predicate. Ordinary world spans
+	 *  use normalized fixed-point math; saturation and quantization boundaries
+	 *  fall back to an exact raw-value integer comparison. */
+	bool IsPointWithinSegmentDistanceXY(
+		const FFixedVector& Q,
+		const FFixedVector& S,
+		const FFixedVector& E,
+		FFixedPoint Radius)
+	{
+		const FFixedVector PlanarS(S.X, S.Y, FFixedPoint::Zero);
+		const FFixedVector PlanarE(E.X, E.Y, FFixedPoint::Zero);
+		const FFixedVector PlanarQ(Q.X, Q.Y, FFixedPoint::Zero);
+		if (Radius < FFixedPoint::Zero)
+		{
+			return false;
+		}
+		const FFixedPoint SegmentDistance =
+			FFixedVector::DistanceSaturated(PlanarS, PlanarE);
+		if (SegmentDistance == FFixedPoint::MaxValue)
+		{
+			return IsPointWithinSegmentDistanceXYExact(Q, S, E, Radius);
+		}
+		if (SegmentDistance <= FFixedPoint::Epsilon)
+		{
+			return FFixedVector::IsPlanarDistanceWithin(PlanarQ, PlanarS, Radius);
+		}
+
+		const FFixedPoint QueryDistance =
+			FFixedVector::DistanceSaturated(PlanarS, PlanarQ);
+		const FFixedPoint EndQueryDistance =
+			FFixedVector::DistanceSaturated(PlanarE, PlanarQ);
+		if (QueryDistance == FFixedPoint::MaxValue
+			|| EndQueryDistance == FFixedPoint::MaxValue)
+		{
+			return IsPointWithinSegmentDistanceXYExact(Q, S, E, Radius);
+		}
+		const FFixedVector SegmentDirection =
+			FFixedVector::GetSafeNormalDifference(PlanarS, PlanarE);
+		if (QueryDistance <= FFixedPoint::Epsilon)
+		{
+			return true;
+		}
+		const FFixedVector QueryDirection =
+			FFixedVector::GetSafeNormalDifference(PlanarS, PlanarQ);
+		if (FFixedVector::DotProduct(
+			QueryDirection, SegmentDirection) <= FFixedPoint::Zero)
+		{
+			return FFixedVector::IsPlanarDistanceWithin(PlanarQ, PlanarS, Radius);
+		}
+		const FFixedVector EndToQueryDirection =
+			FFixedVector::GetSafeNormalDifference(PlanarE, PlanarQ);
+		if (FFixedVector::DotProduct(
+			EndToQueryDirection, SegmentDirection) >= FFixedPoint::Zero)
+		{
+			return FFixedVector::IsPlanarDistanceWithin(PlanarQ, PlanarE, Radius);
+		}
+
+		FFixedPoint Cross = QueryDirection.X * SegmentDirection.Y
+			- QueryDirection.Y * SegmentDirection.X;
+		if (Cross < FFixedPoint::Zero)
+		{
+			Cross = -Cross;
+		}
+		if (Cross <= FFixedPoint::Epsilon)
+		{
+			if (Cross == FFixedPoint::Zero
+				&& IsPlanarCrossExactlyZero(PlanarQ, PlanarS, PlanarE))
+			{
+				return true;
+			}
+			return IsPointWithinSegmentDistanceXYExact(Q, S, E, Radius);
+		}
+		if (QueryDistance > FFixedPoint::MaxValue / Cross)
+		{
+			return IsPointWithinSegmentDistanceXYExact(Q, S, E, Radius);
+		}
+		return QueryDistance * Cross <= Radius;
+	}
+
+	/** Whether `Point` is within the planar (XY) radius of the polyline
+	 *  through `Waypoints`, treating `PathOrigin` as the implicit FIRST
+	 *  endpoint of the polyline.
 	 *
 	 *  Why the implicit prefix: `USeinNavigationAStar::
 	 *  BuildSmoothedPath` deliberately skips `CellPath[0]` (to avoid a
@@ -84,43 +243,63 @@ namespace
 	 *
 	 *  Iterates EVERY segment of the polyline (including the implicit
 	 *  prefix), since "drift" measures against the entire planned route,
-	 *  not just the remaining portion. Empty waypoints returns Zero
+	 *  not just the remaining portion. Empty waypoints returns true
 	 *  (interpreted as "no path drift" — repath gate falls through). */
-	FFixedPoint OffPathMinDistSqToPolyline(
+	bool IsPointWithinPolylineDistance(
 		const FFixedVector& Point,
 		const FFixedVector& PathOrigin,
-		const TArray<FFixedVector>& Waypoints)
+		const TArray<FFixedVector>& Waypoints,
+		FFixedPoint Radius)
 	{
 		const int32 N = Waypoints.Num();
-		if (N == 0) return FFixedPoint::Zero;
+		if (N == 0) return true;
 
 		// Implicit prefix segment: [PathOrigin → Waypoints[0]]. Captures
 		// the "approach the first waypoint along its line" semantic that
 		// the smoother's CellPath[0] skip would otherwise lose.
-		FFixedPoint MinDistSq = OffPathSegDistSqXY(Point, PathOrigin, Waypoints[0]);
+		if (IsPointWithinSegmentDistanceXY(
+			Point, PathOrigin, Waypoints[0], Radius))
+		{
+			return true;
+		}
 
 		// Actual polyline segments. Iterates [Waypoints[i] → Waypoints[i+1]]
 		// for i in [0, N-2].
 		for (int32 i = 0; i + 1 < N; ++i)
 		{
-			const FFixedPoint Sq = OffPathSegDistSqXY(Point, Waypoints[i], Waypoints[i + 1]);
-			if (Sq < MinDistSq) MinDistSq = Sq;
+			if (IsPointWithinSegmentDistanceXY(
+				Point, Waypoints[i], Waypoints[i + 1], Radius))
+			{
+				return true;
+			}
 		}
-		return MinDistSq;
+		return false;
 	}
 }
+
+#if WITH_DEV_AUTOMATION_TESTS
+bool UE::SeinARTSTests::IsPointWithinMoveToSegmentForTest(
+	const FFixedVector& Point,
+	const FFixedVector& Start,
+	const FFixedVector& End,
+	FFixedPoint Radius)
+{
+	return IsPointWithinSegmentDistanceXY(
+		Point, Start, End, Radius);
+}
+#endif
 
 void USeinMoveToAction::Initialize(const FFixedVector& InDestination)
 {
 	Destination = InDestination;
-	// Squaring deferred — resolved on first TickAction once NavComp is available.
-	AcceptanceRadiusSq = FFixedPoint::Zero;
+	// Resolved on first TickAction once NavComp is available.
+	AcceptanceRadius = FFixedPoint::Zero;
 	CurrentWaypointIndex = 0;
 	bPathResolved = false;
 	bAuthoritativeDestination = false;
 	TimeSinceLastRepath = FFixedPoint::Zero;
 	ConsecutiveRepathFailures = 0;
-	BestDistToFinalSq = FFixedPoint::FromInt(1000000);
+	BestDistToFinal = FFixedPoint::FromInt(1000);
 	TimeStalledNearGoal = FFixedPoint::Zero;
 	HoldTime = FFixedPoint::Zero;
 	NextEscalationAt = FFixedPoint::FromInt(3) / FFixedPoint::FromInt(10); // first ladder boundary: 0.3s
@@ -128,12 +307,12 @@ void USeinMoveToAction::Initialize(const FFixedVector& InDestination)
 	bForceRepathNow = false;
 	bEscapeMode = false;
 	EscapeTarget = FFixedVector::ZeroVector;
-	EscapeAcceptSq = FFixedPoint::Zero;
+	EscapeAcceptanceRadius = FFixedPoint::Zero;
 	EscapeHoldTime = FFixedPoint::Zero;
 	EscapeAttempts = 0;
 	TotalEscapeEntries = 0;
 	FootprintRadius = FFixedPoint::Zero;
-	StallBandSq = FFixedPoint::Zero;
+	StallBand = FFixedPoint::Zero;
 	Path.Clear();
 	Movement = nullptr;
 	bMovementFinalized = false;
@@ -356,10 +535,9 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		// a per-call concern. Designers tune it on the nav component.
 		// Falls back to 50cm when NavComp absent so commands still complete
 		// instead of pinning at "almost arrived" forever.
-		const FFixedPoint Acceptance = NavComp
+		AcceptanceRadius = NavComp
 			? NavComp->AcceptanceRadius
 			: FSeinNavigationComponent::DefaultArrivalAcceptance();
-		AcceptanceRadiusSq = Acceptance * Acceptance;
 
 		// Body radius (once per order) + the shared near-goal settle band: the
 		// stall failsafe SETTLES inside it, the hold-escape ladder is EXCLUDED
@@ -369,10 +547,10 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		// stops ~footprint short of its final waypoint regardless of how small
 		// the authored acceptance is; +100cm absorbs C-space rounding.
 		FootprintRadius = USeinMovement::ResolveCollisionRadius(&World, OwnerEntity, NavComp);
-		FFixedPoint StallBand = Acceptance * FFixedPoint::FromInt(3);
-		const FFixedPoint BodyBand = FootprintRadius + FFixedPoint::FromInt(100);
+		StallBand = SaturatingPositiveScale(AcceptanceRadius, 3);
+		const FFixedPoint BodyBand = SaturatingPositiveAdd(
+			FootprintRadius, FFixedPoint::FromInt(100));
 		if (BodyBand > StallBand) { StallBand = BodyBand; }
-		StallBandSq = StallBand * StallBand;
 
 		// Authoritative destination: is this move's target a position that overrules
 		// the coarse nav bake (a cover slot)? Queried ONCE here (not per-tick) and
@@ -387,12 +565,13 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 			NavComp,
 			Path,
 			CurrentWaypointIndex,
-			AcceptanceRadiusSq,
+			FFixedVector::SquareSaturated(AcceptanceRadius),
 			DeltaTime,
 			Nav,
 			&World,
 			OwnerEntity
 		};
+		BeginCtx.ExactAcceptanceRadius = AcceptanceRadius;
 		// Resolve the entity's collision footprint cascade
 		// (Extents → NavComp->FallbackFootprintRadius → 0) BEFORE OnMoveBegin so
 		// the movement's footprint-aware ResolveNavCollision is fully wired
@@ -588,13 +767,14 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		if (!Nav) break;
 
 		const FFixedVector AgentPos = Entity->Transform.GetLocation();
-		const FFixedPoint DriftSq = OffPathMinDistSqToPolyline(AgentPos, PathOriginAgentPos, Path.Waypoints);
-
-		// OffPathThreshold already resolved to its 75cm zero-field default upstream
-		// (where RepathMode is read); here it's the live drift tolerance.
-		const FFixedPoint ThresholdSq = OffPathThreshold * OffPathThreshold;
-
-		if (DriftSq <= ThresholdSq && !bForceRepathNow) break;
+		// OffPathThreshold already resolved to its 75cm zero-field default upstream.
+		if (IsPointWithinPolylineDistance(
+				AgentPos, PathOriginAgentPos, Path.Waypoints, OffPathThreshold)
+			&& !bForceRepathNow)
+		{
+			TimeSinceLastRepath = FFixedPoint::Zero;
+			break;
+		}
 		if (!NavSub) break;
 
 		bForceRepathNow = false;
@@ -635,8 +815,7 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 			PathOriginAgentPos = AgentPos;
 			ConsecutiveRepathFailures = 0;
 			UE_LOG(LogSeinMove, Verbose,
-				TEXT("Repath (OffPathOnly): drift=%.1fcm > threshold=%.1fcm, %d new waypoints from (%.1f,%.1f)%s"),
-				SeinMath::Sqrt(DriftSq).ToFloat(),
+				TEXT("Repath (OffPathOnly): threshold=%.1fcm exceeded, %d new waypoints from (%.1f,%.1f)%s"),
 				OffPathThreshold.ToFloat(),
 				NewPath.Waypoints.Num(),
 				AgentPos.X.ToFloat(),
@@ -654,8 +833,7 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 			++ConsecutiveRepathFailures;
 			const int32 Limit = RepathFailureLimit;
 			UE_LOG(LogSeinMove, Verbose,
-				TEXT("Repath (OffPathOnly) failed: drift=%.1fcm, attempt %d/%d (entity %s)"),
-				SeinMath::Sqrt(DriftSq).ToFloat(),
+				TEXT("Repath (OffPathOnly) failed after threshold exceeded: attempt %d/%d (entity %s)"),
 				ConsecutiveRepathFailures, Limit, *OwnerEntity.ToString());
 			if (ConsecutiveRepathFailures >= Limit)
 			{
@@ -703,18 +881,24 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		NavComp,
 		Path,
 		CurrentWaypointIndex,
-		AcceptanceRadiusSq,
+		FFixedVector::SquareSaturated(AcceptanceRadius),
 		DeltaTime,
 		Nav,
 		&World,
 		OwnerEntity
 	};
+	TickCtx.ExactAcceptanceRadius = AcceptanceRadius;
 	// Escape-mode context overrides (ctx-local; the action members are preserved
 	// for resume): the escape leg is never an authoritative destination (the
 	// cover-slot exemption would re-target the nav floor at the escape cell),
 	// and its acceptance is the entry-gated escape ring, not the order's.
 	TickCtx.bAuthoritativeDestination = bEscapeMode ? false : bAuthoritativeDestination;
-	if (bEscapeMode) { TickCtx.AcceptanceRadiusSq = EscapeAcceptSq; }
+	if (bEscapeMode)
+	{
+		TickCtx.AcceptanceRadiusSq =
+			FFixedVector::SquareSaturated(EscapeAcceptanceRadius);
+		TickCtx.ExactAcceptanceRadius = EscapeAcceptanceRadius;
+	}
 	TickCtx.TerrainSpeedMultiplier = TerrainSpeedMult;
 	// Non-const: the near-goal stall-settle below can promote this to true to
 	// force arrival when the unit is pinned short of an unreachable goal.
@@ -752,9 +936,8 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 			// escape ENTRY state (persisted Velocity ~0 + facing the wall
 			// passes IsOvershootArrival) — a true return OUTSIDE the escape
 			// ring is that misfire, not an escape.
-			FFixedVector ToEsc = EscapeTarget - EscPos;
-			ToEsc.Z = FFixedPoint::Zero;
-			const bool bGenuine = ToEsc.SizeSquared() <= EscapeAcceptSq;
+			const bool bGenuine = FFixedVector::IsPlanarDistanceWithin(
+				EscapeTarget, EscPos, EscapeAcceptanceRadius);
 			bExitEscape = true;
 			bAttemptFailed = !bGenuine;
 			EscOutcome = bGenuine ? TEXT("done") : TEXT("overshoot");
@@ -802,7 +985,7 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 			TimeSinceLastRepath = FFixedPoint::Zero;
 			// The escape leg corrupted the near-goal progress high-water —
 			// a resumed approach must start a fresh window.
-			BestDistToFinalSq = FFixedPoint::FromInt(1000000);
+			BestDistToFinal = FFixedPoint::FromInt(1000);
 			TimeStalledNearGoal = FFixedPoint::Zero;
 #if !UE_BUILD_SHIPPING
 			UE_LOG(LogSeinMoveTrace, Verbose,
@@ -845,9 +1028,9 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 	{
 		const FFixedVector AgentPos = Entity->Transform.GetLocation();
 		const FFixedVector FinalWp = Path.Waypoints.Last();
-		FFixedVector ToFinal = FinalWp - AgentPos;
-		ToFinal.Z = FFixedPoint::Zero;
-		const FFixedPoint DistFinal = ToFinal.Size();
+		const FFixedPoint DistFinal = FFixedVector::DistanceSaturated(
+			FFixedVector(AgentPos.X, AgentPos.Y, FFixedPoint::Zero),
+			FFixedVector(FinalWp.X, FinalWp.Y, FFixedPoint::Zero));
 		// The braking rate is per-mode now (Movement+ UDS), so query it through the movement instead
 		// of the bare component. Ultra-basic modes return 0 → KinematicArrivalSpeedCap gives a huge
 		// cap → bArrivalImminent stays false (they don't brake), which is correct.
@@ -866,7 +1049,7 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 	// overshoot guard (which needs "heading away") won't fire either. Left alone it would push
 	// forever. So: once it stops closing for a short while THIS close, this is as near as its body
 	// fits — arrive. Final leg only, and the band is TIGHT — max(3× acceptance, footprint + 100cm,
-	// see StallBandSq) — so only a unit essentially AT its goal (as near as its BODY allows) settles,
+	// see StallBand) — so only a unit essentially AT its goal (as near as its BODY allows) settles,
 	// never one still approaching (that was the old crowd-aware band's "forgotten units" bug). The
 	// body-aware floor keeps goal-flush wall pins OURS rather than the hold-escape ladder's — the
 	// ladder escaping a unit that is simply as-close-as-it-fits would oscillate forever.
@@ -874,28 +1057,31 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		&& CurrentWaypointIndex >= Path.Waypoints.Num() - 1)
 	{
 		const FFixedVector AgentPos = Entity->Transform.GetLocation();
-		FFixedVector ToFinal = Path.Waypoints.Last() - AgentPos;
-		ToFinal.Z = FFixedPoint::Zero;
-		const FFixedPoint DistFinalSq = ToFinal.SizeSquared();
-		const FFixedPoint VicinitySq = StallBandSq;
+		const FFixedPoint DistFinal = FFixedVector::DistanceSaturated(
+			FFixedVector(AgentPos.X, AgentPos.Y, FFixedPoint::Zero),
+			FFixedVector(
+				Path.Waypoints.Last().X,
+				Path.Waypoints.Last().Y,
+				FFixedPoint::Zero));
+		const bool bWithinStallBand = FFixedVector::IsPlanarDistanceWithin(
+			AgentPos, Path.Waypoints.Last(), StallBand);
 
-		if (DistFinalSq > VicinitySq)
+		if (!bWithinStallBand)
 		{
 			// Outside the tight band — re-arm the progress high-water + clock for a fresh approach.
-			BestDistToFinalSq = DistFinalSq;
+			BestDistToFinal = DistFinal;
 			TimeStalledNearGoal = FFixedPoint::Zero;
 		}
 		else
 		{
 			// Clamp the high-water up on the first in-band tick (it inits to a large sentinel).
-			if (DistFinalSq > BestDistToFinalSq) BestDistToFinalSq = DistFinalSq;
+			if (DistFinal > BestDistToFinal) BestDistToFinal = DistFinal;
 			// Meaningful-closing test in ACTUAL distance (a squared additive epsilon vanishes at
 			// range). 10 cm: larger than collision jitter, far smaller than a genuine approach.
-			const FFixedPoint DistFinal = SeinMath::Sqrt(DistFinalSq);
-			const FFixedPoint BestDist  = SeinMath::Sqrt(BestDistToFinalSq);
-			if (DistFinal + FFixedPoint::FromInt(10) < BestDist)
+			if (SaturatingPositiveAdd(
+				DistFinal, FFixedPoint::FromInt(10)) < BestDistToFinal)
 			{
-				BestDistToFinalSq = DistFinalSq;
+				BestDistToFinal = DistFinal;
 				TimeStalledNearGoal = FFixedPoint::Zero;
 			}
 			else
@@ -912,7 +1098,7 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 					UE_LOG(LogSeinMoveTrace, Verbose,
 						TEXT("[ARRIVE] t=%d h=%d:%d cause=stall dist=%.0f accept=%.0f"),
 						World.GetCurrentTick(), OwnerEntity.Index, OwnerEntity.Generation,
-						DistFinal.ToFloat(), SeinMath::Sqrt(AcceptanceRadiusSq).ToFloat());
+						DistFinal.ToFloat(), AcceptanceRadius.ToFloat());
 #endif
 					Movement->DispatchArrivalMotion(TickCtx);
 					bReachedEnd = true;
@@ -936,15 +1122,16 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		const FFixedPoint HoldFloor = GetDefault<USeinARTSCoreSettings>()->AvoidanceMovingSpeedFloor;
 		FFixedVector HeldVel = MoveComp->Velocity;
 		HeldVel.Z = FFixedPoint::Zero;
-		bool bHeld = HeldVel.SizeSquared() <= HoldFloor * HoldFloor;
+		bool bHeld = FFixedVector::IsPlanarDistanceWithin(
+			FFixedVector::ZeroVector, HeldVel, HoldFloor);
 		// Exclude the stall failsafe's exact accrual domain — the CONJUNCTION of
 		// final-leg AND the shared body-aware settle band (final-leg alone would
 		// be wrong: LoS smoothing makes the final leg cover most of a route).
 		if (bHeld && CurrentWaypointIndex >= Path.Waypoints.Num() - 1)
 		{
-			FFixedVector HeldToFinal = Path.Waypoints.Last() - Entity->Transform.GetLocation();
-			HeldToFinal.Z = FFixedPoint::Zero;
-			if (HeldToFinal.SizeSquared() <= StallBandSq)
+			const FFixedVector HeldLocation = Entity->Transform.GetLocation();
+			if (FFixedVector::IsPlanarDistanceWithin(
+				HeldLocation, Path.Waypoints.Last(), StallBand))
 			{
 				bHeld = false; // the stall failsafe owns near-goal stops
 			}
@@ -977,16 +1164,21 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 				// boundary, escalate nothing.
 				const FFixedVector AgentPos = Entity->Transform.GetLocation();
 				const FFixedPoint FootR = FootprintRadius;
-				FFixedVector ToWp = Path.Waypoints[CurrentWaypointIndex] - AgentPos;
-				ToWp.Z = FFixedPoint::Zero;
-				const FFixedPoint ToWpLen = ToWp.Size();
+				FFixedVector PlanarWaypoint = Path.Waypoints[CurrentWaypointIndex];
+				PlanarWaypoint.Z = AgentPos.Z;
+				const FFixedPoint ToWpLen =
+					FFixedVector::DistanceSaturated(AgentPos, PlanarWaypoint);
 				bool bBlocked = false;
 				if (ToWpLen > FFixedPoint::Epsilon && Nav)
 				{
-					const FFixedPoint ProbeDist = FootR + FFixedPoint::FromInt(50);
+					const FFixedPoint ProbeDist = SaturatingPositiveAdd(
+						FootR, FFixedPoint::FromInt(50));
+					const FFixedVector ToWpDirection =
+						FFixedVector::GetSafeNormalDifference(
+							AgentPos, PlanarWaypoint);
 					const FFixedVector Probe(
-						AgentPos.X + (ToWp.X / ToWpLen) * ProbeDist,
-						AgentPos.Y + (ToWp.Y / ToWpLen) * ProbeDist,
+						AgentPos.X + ToWpDirection.X * ProbeDist,
+						AgentPos.Y + ToWpDirection.Y * ProbeDist,
 						AgentPos.Z);
 					bBlocked = !Movement->IsFootprintPassable(Probe, Nav);
 				}
@@ -1046,9 +1238,10 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 					}
 					if (bGotTarget)
 					{
-						FFixedVector ToTarget = Target - AgentPos;
-						ToTarget.Z = FFixedPoint::Zero;
-						const FFixedPoint EntryDist = ToTarget.Size();
+						FFixedVector PlanarTarget = Target;
+						PlanarTarget.Z = AgentPos.Z;
+						const FFixedPoint EntryDist =
+							FFixedVector::DistanceSaturated(AgentPos, PlanarTarget);
 						// Escape acceptance = max(50, min(footprint, EntryDist/3)),
 						// and the ENTRY GATE: the target must sit decisively beyond
 						// the overshoot guard's 2x-acceptance vicinity, or the leg
@@ -1058,8 +1251,9 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 						FFixedPoint AccEsc = EntryDist / FFixedPoint::FromInt(3);
 						if (FootR > FFixedPoint::Zero && AccEsc > FootR) { AccEsc = FootR; }
 						if (AccEsc < FFixedPoint::FromInt(50)) { AccEsc = FFixedPoint::FromInt(50); }
-						const FFixedPoint MinEntry =
-							AccEsc * FFixedPoint::FromInt(2) + MoveComp->TopSpeed * DeltaTime;
+						const FFixedPoint MinEntry = SaturatingPositiveAdd(
+							SaturatingPositiveScale(AccEsc, 2),
+							MoveComp->TopSpeed * DeltaTime);
 						if (EntryDist <= MinEntry)
 						{
 							bGotTarget = false;
@@ -1080,11 +1274,11 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 							bEscapeMode = true;
 							++TotalEscapeEntries;
 							EscapeTarget = Target;
-							EscapeAcceptSq = AccEsc * AccEsc;
+							EscapeAcceptanceRadius = AccEsc;
 							EscapeHoldTime = FFixedPoint::Zero;
 							// The escape leg corrupts the near-goal progress
 							// high-water; re-arm for the resumed approach.
-							BestDistToFinalSq = FFixedPoint::FromInt(1000000);
+							BestDistToFinal = FFixedPoint::FromInt(1000);
 							TimeStalledNearGoal = FFixedPoint::Zero;
 #if !UE_BUILD_SHIPPING
 							UE_LOG(LogSeinMoveTrace, Verbose,

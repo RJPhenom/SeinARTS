@@ -16,6 +16,8 @@ class USeinMovement;
 class USeinMoveToAction;
 class USeinMoveToProxy;
 struct FSeinSnapshotLatentActionRecord;
+struct FFixedVector;
+struct FFixedPoint;
 
 namespace UE::SeinARTSTests
 {
@@ -78,6 +80,14 @@ namespace UE::SeinARTSTests
 		FSeinSnapshotLatentActionRecord& Record,
 		const FString& ReplacementFunction,
 		FString& OutError);
+
+	/** Exercises the exact long-range predicate used by OffPathOnly repaths. */
+	SEINARTSMOVEMENT_API bool
+	IsPointWithinMoveToSegmentForTest(
+		const FFixedVector& Point,
+		const FFixedVector& Start,
+		const FFixedVector& End,
+		FFixedPoint Radius);
 }
 
 #endif

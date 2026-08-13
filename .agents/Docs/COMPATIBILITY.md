@@ -1,6 +1,6 @@
 # SeinARTS Compatibility Policy
 
-**Document version:** 0.4
+**Document version:** 0.5
 
 SeinARTS ships its five production plugins as one versioned cohort. Install Framework, Squad,
 Cover, Movement+, and Cover+Squad artifacts from the same release. Mixing release versions is
@@ -28,11 +28,19 @@ SemVer describes the studio-facing SDK. It does not permit mixed deterministic m
 Lockstep peers must pass the exact initial-state digest, configuration fingerprint, behavior
 revision, command schema, and state-coverage checks implemented by the runtime.
 
+The core configuration fingerprint includes the compiled framework behavior epoch. A deterministic
+behavior change must advance that epoch so mixed executables fail the existing live-session config
+parity barrier before simulation starts, even when reflected settings happen to match.
+
 ## Persisted and network state
 
 Snapshots, reconnect envelopes, and replay checkpoints are admitted by explicit schema and
 compatibility checks. A changed schema fails closed unless a documented migration exists. Do not
 bypass an incompatibility check or deserialize old deterministic state into a newer build.
+
+The current behavior epoch is `SeinARTS.Replay.5`. It is embedded in snapshots and replay headers
+and folded into live peer admission. Replay.4 snapshots, replays, and peers therefore fail closed;
+retain the producing executable cohort when those artifacts must be inspected.
 
 A release may legitimately change deterministic behavior in a patch. All peers and the authority
 must still run the exact qualified release cohort. Retain the producing build when old replay or

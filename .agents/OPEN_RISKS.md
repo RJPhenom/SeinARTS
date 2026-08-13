@@ -24,9 +24,10 @@ This is the actionable remainder after consolidating the historical audits. It i
    source-attributed pair-capability substrate now exists in the current development wave; the known
    blocker-height, authored-Z, and cone terrain-scaling defects are closed.
 4. Public targeting lacks the complete line/corridor/gesture policy surface needed by a modern tactical RTS.
-5. Movement+ needs the human behavior/performance and real multi-client network matrix. Typed
-   render-only vehicle telemetry plus replay-file and bounded reconnect continuation are automated.
-   Flight is not a production 3D avoidance/collision model.
+5. Movement+ needs the human behavior/performance, scale, dedicated-server, and adversarial-network
+   matrices. Typed render-only vehicle telemetry and a real packaged two-process listen-server flow
+   through resync, physical reconnect, and checkpoint-seek replay are automated. Flight is not a
+   production 3D avoidance/collision model.
 
 ## Online-product gaps
 

@@ -613,6 +613,13 @@ public:
 		return bDeterminismSessionFailureAuthoritative;
 	}
 
+	/** Local-only detail captured where this process first detected a terminal
+	 *  determinism failure. It is diagnostic telemetry, not protocol state. */
+	const FString& GetLocalDeterminismFailureDiagnostic() const
+	{
+		return LocalDeterminismFailureDiagnostic;
+	}
+
 	/** Installs the single outbound terminal-report adapter used by a custom
 	 *  transport. The built-in UE relay remains the fallback when unbound. */
 	void SetDeterminismSessionFailureSubmitter(
@@ -920,9 +927,11 @@ private:
 	/** Execute a standalone start/resume request. Network launch never enters. */
 	void TryStartLocalSession();
 
-	/** Put the canonical turn directly into a dedicated authority's gate
-	 *  buffer; it has no owning relay through which to receive a client RPC. */
-	void BufferAssembledTurnForDedicatedAuthority(int32 TurnId, const TArray<FSeinCommand>& Commands);
+	/** Put the canonical turn directly into a co-located server's gate buffer.
+	 *  This avoids depending on local Client RPC loopback for listen hosts and
+	 *  supplies dedicated authorities, which have no owning relay. */
+	bool BufferAssembledTurnForLocalAuthority(
+		int32 TurnId, const TArray<FSeinCommand>& Commands);
 	void BufferReceivedTurn(int32 TurnId, const TArray<FSeinCommand>& Commands);
 
 	/** Freeze every not-yet-queued turn through FinalTurn. Catch-up turns are
@@ -1247,6 +1256,10 @@ private:
 	/** Paced chunk delivery + serve timeouts, per server turn boundary. */
 	void ServerAdvanceResyncTransfers();
 
+	/** Immediately heartbeat-cover suppressed authors from the current gate
+	 *  through the input-delay horizon, including unopened zero-author turns. */
+	void BackfillSuppressedSlotHeartbeatsThroughPipelineWindow();
+
 	/** Debounced self-detection: a live turn far beyond this peer's window
 	 *  means it is on a stale timeline — auto-request a resync. */
 	void MaybeAutoRequestResync(int32 RejectedLiveTurn);
@@ -1355,6 +1368,7 @@ private:
 	 *  until the coordinator distributes one canonical failure value. */
 	FSeinDeterminismSessionFailure DeterminismSessionFailure;
 	bool bDeterminismSessionFailureAuthoritative = false;
+	FString LocalDeterminismFailureDiagnostic;
 	TOptional<FSeinDeterminismSessionFailure>
 		PendingDeterminismSessionFailureReport;
 	TMap<int32, TArray<FSeinDeterminismSessionFailure>>
