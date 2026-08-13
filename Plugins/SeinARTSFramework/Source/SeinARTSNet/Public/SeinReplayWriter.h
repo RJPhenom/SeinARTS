@@ -4,7 +4,7 @@
  * @file         SeinReplayWriter.h
  * @author       RJ Macklem
  * @created      02 Jun 2026
- * @latest       12 Aug 2026
+ * @latest       13 Aug 2026
  * @brief        Bounded, ordered, append-only v9 replay recording.
  *
  *               The recorder persists a digest-chained chunk journal while
@@ -143,6 +143,10 @@ public:
 	bool WaitForHeldCheckpointEncodeForTests(uint32 WaitTimeMilliseconds) const;
 	/** Release any armed or active checkpoint-encode gate. */
 	void ReleaseHeldCheckpointEncodeForTests();
+	/** Release the active checkpoint encoder after a wall-clock delay and
+	 *  return the release timestamp for GC-overlap qualification. */
+	TFuture<double> ReleaseHeldCheckpointEncodeAfterDelayForTests(
+		uint32 DelayMilliseconds) const;
 	/** Fail the next scheduled worker append before touching the file. */
 	void FailNextBackgroundAppendForTests()
 	{

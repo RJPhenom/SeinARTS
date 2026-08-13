@@ -73,8 +73,14 @@ CI gate because this engine distribution rejects those target types before proje
   fixture advances fixed ticks and authoritative mutations while checkpoint encode is paused after
   payload serialization and checkpoint append is paused with the real file open at the verified
   offset. Exact resident command bytes, no false durability/overtaking, callback-only catch-up,
-  checkpoint index/seek/root, and full playback remain exact. Uncontrolled device timing,
-  long-session, allocator/GC/RSS, slow-storage, and exhausted-storage qualification remain open.
+  checkpoint index/seek/root, and full playback remain exact. An accelerated real-file operational
+  soak now adds 449 turns (448 across the periodic cycles plus one journal catch-up turn), 64 natural
+  periodic checkpoints, eight full-GC boundaries, 128 entities,
+  sampled exact seek/root/capability checks, full playback, process-memory/late-growth sentinels,
+  and checkpoint latency tails. A configured 64 MiB file-policy exhaustion test also proves the
+  preserved partial replays to its exact last durable tick and root. Multi-hour real-device timing,
+  Insights allocator attribution, platform storage matrices, and true OS disk-full behavior remain
+  open.
 - The packaged run exposed and closed three release-only integration defects: lobby maps now
   materialize relays from their final authoritative slot bindings, Shipping builds no longer hide
   restore work inside compiled-out assertions, and dropped slots can reclaim their retained relay

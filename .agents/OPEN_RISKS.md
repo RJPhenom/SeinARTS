@@ -68,9 +68,13 @@ This is the actionable remainder after consolidating the historical audits. It i
    128-entity fixture advances fixed ticks and mutations while encode is paused after payload
    serialization and append is paused with the real file open at its verified offset. It proves
    exact resident bytes, no false durability/overtaking, and production-callback catch-up across
-   controlled operation overlap. Uncontrolled local-disk timing, real-device long-session hitch,
-   allocator high-water/RSS, GC interaction, latency, and exhausted-storage behavior still need
-   Insights and soak evidence.
+   controlled operation overlap. Accelerated real-file automation now runs 449 turns (448 across
+   natural checkpoint cycles plus one uncheckpointed command catch-up turn), 64 natural
+   periodic checkpoints, eight full GCs, exact sampled seeks/full playback, bounded process working
+   set/private commit/late growth, and measured latency tails. Configured 64 MiB policy exhaustion
+   preserves a partial that replays to the exact last durable root. Multi-hour real-device hitch
+   distributions, allocator attribution through Insights, platform storage matrices, and true OS
+   disk-full behavior remain open.
 5. Debug navigation rendering is intentionally expensive and can invalidate profiling if left enabled.
 
 ## Explicit product decisions still required
