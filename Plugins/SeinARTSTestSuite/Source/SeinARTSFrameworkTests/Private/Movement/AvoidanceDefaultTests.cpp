@@ -313,6 +313,136 @@ namespace UE::SeinARTSTests
 			SecondMove->AvoidanceOutput.SpeedScale == FFixedPoint::One));
 	}
 
+	TEST(IdleResolveDetoursAroundBlockerAndThreadsClearGap,
+		"SeinARTS.Unit.Movement.Avoidance")
+	{
+		FScopedIdleReseekSetting IdleReseek(false);
+		FAvoidanceFixture DetourFixture;
+		FSeinEntityHandle DetourMover;
+		ASSERT_THAT(IsTrue(DetourFixture.Initialize([&](
+			FAvoidanceFixture& Inner)
+		{
+			DetourMover = Inner.AddMover(
+				FFixedVector::ZeroVector,
+				FFixedVector(
+					FFixedPoint::FromInt(100), FFixedPoint::Zero,
+					FFixedPoint::Zero),
+				FFixedVector(
+					FFixedPoint::FromInt(1000), FFixedPoint::Zero,
+					FFixedPoint::Zero));
+			Inner.AddMover(
+				FFixedVector(
+					FFixedPoint::FromInt(100), FFixedPoint::Zero,
+					FFixedPoint::Zero),
+				FFixedVector::ZeroVector,
+				FFixedVector::ZeroVector,
+				false);
+		})));
+		ASSERT_THAT(IsTrue(DetourFixture.Compute()));
+		const FSeinMovementComponent* DetourMovement =
+			DetourFixture.World->GetComponent<FSeinMovementComponent>(
+				DetourMover);
+		ASSERT_THAT(IsNotNull(DetourMovement));
+		ASSERT_THAT(IsTrue(
+			DetourMovement->AvoidanceOutput.SteerDir.SizeSquared()
+				> FFixedPoint::Epsilon));
+
+		FAvoidanceFixture GapFixture;
+		FSeinEntityHandle GapMover;
+		ASSERT_THAT(IsTrue(GapFixture.Initialize([&](
+			FAvoidanceFixture& Inner)
+		{
+			GapMover = Inner.AddMover(
+				FFixedVector::ZeroVector,
+				FFixedVector(
+					FFixedPoint::FromInt(100), FFixedPoint::Zero,
+					FFixedPoint::Zero),
+				FFixedVector(
+					FFixedPoint::FromInt(1000), FFixedPoint::Zero,
+					FFixedPoint::Zero));
+			for (const int32 Side : {-1, 1})
+			{
+				Inner.AddMover(
+					FFixedVector(
+						FFixedPoint::FromInt(100),
+						FFixedPoint::FromInt(120 * Side),
+						FFixedPoint::Zero),
+					FFixedVector::ZeroVector,
+					FFixedVector::ZeroVector,
+					false);
+			}
+		})));
+		ASSERT_THAT(IsTrue(GapFixture.Compute()));
+		const FSeinMovementComponent* GapMovement =
+			GapFixture.World->GetComponent<FSeinMovementComponent>(GapMover);
+		ASSERT_THAT(IsNotNull(GapMovement));
+		ASSERT_THAT(IsTrue(
+			GapMovement->AvoidanceOutput.SteerDir
+				== FFixedVector::ZeroVector));
+		ASSERT_THAT(IsTrue(
+			GapMovement->AvoidanceOutput.SpeedScale == FFixedPoint::One));
+	}
+
+	TEST(BrokerCohesionBoostsLaggardAndHoldsLeader,
+		"SeinARTS.Unit.Movement.Avoidance")
+	{
+		FScopedIdleReseekSetting IdleReseek(false);
+		FAvoidanceFixture Fixture;
+		FSeinEntityHandle Laggard;
+		FSeinEntityHandle Leader;
+		ASSERT_THAT(IsTrue(Fixture.Initialize([&](
+			FAvoidanceFixture& Inner)
+		{
+			const FFixedVector SharedTarget(
+				FFixedPoint::FromInt(1000), FFixedPoint::Zero,
+				FFixedPoint::Zero);
+			const FFixedVector SharedVelocity(
+				FFixedPoint::FromInt(100), FFixedPoint::Zero,
+				FFixedPoint::Zero);
+			Laggard = Inner.AddMover(
+				FFixedVector::ZeroVector, SharedVelocity, SharedTarget);
+			Leader = Inner.AddMover(
+				FFixedVector(
+					FFixedPoint::FromInt(200), FFixedPoint::Zero,
+					FFixedPoint::Zero),
+				SharedVelocity,
+				SharedTarget);
+
+			const FSeinEntityHandle Broker = Inner.World->SpawnAbstractEntity(
+				FFixedTransform(), FSeinPlayerID(1));
+			FSeinCommandBrokerData BrokerData;
+			BrokerData.Members = {Laggard, Leader};
+			BrokerData.bSelfCullOnEmpty = false;
+			Inner.World->AddComponent(Broker, BrokerData);
+			for (const FSeinEntityHandle Member : {Laggard, Leader})
+			{
+				FSeinBrokerMembershipData Membership;
+				Membership.CurrentBrokerHandle = Broker;
+				Inner.World->AddComponent(Member, Membership);
+			}
+		})));
+
+		ASSERT_THAT(IsTrue(Fixture.Compute()));
+		const FSeinMovementComponent* LaggardMovement =
+			Fixture.World->GetComponent<FSeinMovementComponent>(Laggard);
+		const FSeinMovementComponent* LeaderMovement =
+			Fixture.World->GetComponent<FSeinMovementComponent>(Leader);
+		ASSERT_THAT(IsNotNull(LaggardMovement));
+		ASSERT_THAT(IsNotNull(LeaderMovement));
+		ASSERT_THAT(IsTrue(
+			LaggardMovement->AvoidanceOutput.SteerDir
+				== FFixedVector::ZeroVector));
+		ASSERT_THAT(IsTrue(
+			LeaderMovement->AvoidanceOutput.SteerDir
+				== FFixedVector::ZeroVector));
+		ASSERT_THAT(IsTrue(
+			LaggardMovement->AvoidanceOutput.SpeedScale
+				> FFixedPoint::One));
+		ASSERT_THAT(IsTrue(
+			LeaderMovement->AvoidanceOutput.SpeedScale
+				< FFixedPoint::One));
+	}
+
 	TEST(IdleDodgeActivatesForApproachAndReleasesExactly,
 		"SeinARTS.Unit.Movement.Avoidance")
 	{

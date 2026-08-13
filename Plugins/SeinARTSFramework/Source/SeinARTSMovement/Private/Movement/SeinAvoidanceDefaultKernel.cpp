@@ -43,6 +43,9 @@ DEFINE_LOG_CATEGORY_STATIC(LogSeinAvoidance, Log, All);
 
 namespace
 {
+	constexpr int32 GapCandidateCount = 9;
+	constexpr int32 MaxIdleBlockers = 24;
+
 	struct FCohesionAggregate
 	{
 		int32 Count = 0;
@@ -88,6 +91,76 @@ namespace
 		FFixedPoint CohesionHoldBack;
 		FFixedPoint CohesionBoost;
 		FFixedPoint CohesionRangeRadii;
+	};
+
+	struct FIdleBlockerSet
+	{
+		FFixedVector Directions[MaxIdleBlockers];
+		FFixedPoint CosHalfAngles[MaxIdleBlockers];
+		FFixedPoint Detours[MaxIdleBlockers];
+		int32 Count = 0;
+	};
+
+	struct FAvoidanceNeighborParameters
+	{
+		USeinWorldSubsystem& World;
+		const ISeinComponentStorage* MoveStorage = nullptr;
+		const ISeinComponentStorage* NavStorage = nullptr;
+		const ISeinComponentStorage* ExtentsStorage = nullptr;
+		const ISeinComponentStorage* BrokerStorage = nullptr;
+		const ISeinComponentStorage* BrokerDataStorage = nullptr;
+		bool bDoSiDoEnabled = false;
+		bool bResolveThroughIdlers = false;
+		FFixedPoint MovingSpeedFloor;
+		FFixedPoint FalloffRadii;
+		FFixedPoint HeadOnBase;
+		FFixedPoint DoSiDoStrength;
+		FFixedPoint CrossingGoalDivergenceSquared;
+	};
+
+	struct FMoverAvoidanceSnapshot
+	{
+		FSeinEntityHandle Handle;
+		FSeinEntityHandle BrokerHandle;
+		int64 CohesionId = 0;
+		FSeinMovementComponent& Movement;
+		const FSeinCommandBrokerData* BrokerData = nullptr;
+		bool bIsBlob = false;
+		FFixedVector BrokerCentroid;
+		FFixedVector Position;
+		FFixedVector ToGoal;
+		FFixedPoint GoalDistanceSquared;
+		FFixedVector Heading;
+		FFixedVector Right;
+		FFixedVector Velocity;
+		FFixedPoint Radius;
+	};
+
+	struct FAvoidanceWorkerParameters
+	{
+		USeinWorldSubsystem& World;
+		const FSeinCollisionSpatialHash& Hash;
+		const TArray<FSeinEntityHandle>& LiveHandles;
+		ISeinComponentStorage* MoveStorage = nullptr;
+		const ISeinComponentStorage* ReadOnlyMoveStorage = nullptr;
+		const ISeinComponentStorage* NavStorage = nullptr;
+		const ISeinComponentStorage* ExtentsStorage = nullptr;
+		const ISeinComponentStorage* BrokerStorage = nullptr;
+		const ISeinComponentStorage* BrokerDataStorage = nullptr;
+		const FAvoidanceNeighborParameters& NeighborParameters;
+		const FAvoidanceOutputParameters& OutputParameters;
+		const FFixedPoint* GapCos = nullptr;
+		const FFixedPoint* GapSin = nullptr;
+		bool bIdleDodgeEnabled = false;
+		FFixedPoint MovingSpeedFloor;
+		FFixedPoint FalloffRadii;
+		FFixedPoint SmoothKeep;
+		FFixedPoint ArrivalReleaseRadii;
+		FFixedPoint MaxSteerMagnitude;
+		FFixedPoint IdleResolveStrength;
+		FFixedPoint IdleDodgeStrength;
+		FFixedPoint BendCapCos;
+		FFixedPoint LookaheadSeconds;
 	};
 
 	/**
@@ -692,6 +765,426 @@ namespace
 		Movement.AvoidanceOutput.SpeedScale = SmoothedScale;
 	}
 
+	static void ResolveIdleGap(
+		const FIdleBlockerSet& Blockers,
+		const FFixedVector& Heading,
+		const FFixedVector& Right,
+		const FFixedVector& ToGoal,
+		FFixedPoint GoalDistanceSquared,
+		FFixedPoint BendCapCos,
+		const FFixedPoint* GapCos,
+		const FFixedPoint* GapSin,
+		FFixedPoint IdleResolveStrength,
+		FFixedVector& InOutAccum)
+	{
+		if (Blockers.Count <= 0) return;
+
+		const FFixedPoint InverseGoalDistance =
+			FFixedPoint::One / SeinMath::Sqrt(GoalDistanceSquared);
+		const FFixedVector GoalDirection(
+			ToGoal.X * InverseGoalDistance,
+			ToGoal.Y * InverseGoalDistance,
+			FFixedPoint::Zero);
+		const FFixedVector LeftPerpendicular(
+			-Heading.Y, Heading.X, FFixedPoint::Zero);
+		const bool bWedgeEnabled = BendCapCos > -FFixedPoint::One;
+
+		bool bGapFound = false;
+		FFixedVector GapDirection = Heading;
+		FFixedPoint BestGoalDot = FFixedPoint::MinValue;
+		for (int32 CandidateIndex = 0;
+			CandidateIndex < GapCandidateCount && !bGapFound;
+			++CandidateIndex)
+		{
+			if (bWedgeEnabled && GapCos[CandidateIndex] < BendCapCos)
+			{
+				break;
+			}
+			const int32 SideCount = CandidateIndex == 0 ? 1 : 2;
+			for (int32 SideIndex = 0; SideIndex < SideCount; ++SideIndex)
+			{
+				const FFixedPoint Sign = SideIndex == 0
+					? FFixedPoint::One
+					: -FFixedPoint::One;
+				const FFixedVector Candidate(
+					Heading.X * GapCos[CandidateIndex]
+						+ LeftPerpendicular.X
+							* (GapSin[CandidateIndex] * Sign),
+					Heading.Y * GapCos[CandidateIndex]
+						+ LeftPerpendicular.Y
+							* (GapSin[CandidateIndex] * Sign),
+					FFixedPoint::Zero);
+				bool bBlocked = false;
+				for (int32 BlockerIndex = 0;
+					BlockerIndex < Blockers.Count;
+					++BlockerIndex)
+				{
+					if (Candidate.X * Blockers.Directions[BlockerIndex].X
+							+ Candidate.Y * Blockers.Directions[BlockerIndex].Y
+						> Blockers.CosHalfAngles[BlockerIndex])
+					{
+						bBlocked = true;
+						break;
+					}
+				}
+				if (bBlocked) continue;
+
+				const FFixedPoint GoalDot =
+					Candidate.X * GoalDirection.X
+					+ Candidate.Y * GoalDirection.Y;
+				if (!bGapFound || GoalDot > BestGoalDot)
+				{
+					BestGoalDot = GoalDot;
+					GapDirection = Candidate;
+					bGapFound = true;
+				}
+			}
+		}
+
+		if (bGapFound)
+		{
+			const FFixedPoint LateralComponent =
+				GapDirection.X * Right.X + GapDirection.Y * Right.Y;
+			InOutAccum.X += Right.X
+				* (LateralComponent * IdleResolveStrength);
+			InOutAccum.Y += Right.Y
+				* (LateralComponent * IdleResolveStrength);
+			return;
+		}
+
+		FFixedPoint DetourSum = FFixedPoint::Zero;
+		for (int32 BlockerIndex = 0;
+			BlockerIndex < Blockers.Count;
+			++BlockerIndex)
+		{
+			DetourSum += Blockers.Detours[BlockerIndex];
+		}
+		InOutAccum.X += Right.X * (DetourSum * IdleResolveStrength);
+		InOutAccum.Y += Right.Y * (DetourSum * IdleResolveStrength);
+	}
+
+	static void AccumulateNeighborResponses(
+		const FAvoidanceNeighborParameters& Parameters,
+		const FMoverAvoidanceSnapshot& Self,
+		const TArray<FSeinEntityHandle>& Neighbors,
+		FIdleBlockerSet& OutIdleBlockers,
+		FFixedVector& OutAccum)
+	{
+		TSet<FSeinEntityHandle> VisitedBlobBrokers;
+		for (const FSeinEntityHandle& OtherHandle : Neighbors)
+		{
+			const FSeinEntity* OtherEntity =
+				Parameters.World.GetEntityPool().Get(OtherHandle);
+			if (!OtherEntity) continue;
+			const FSeinMovementComponent* OtherMove = Parameters.MoveStorage
+				? static_cast<const FSeinMovementComponent*>(
+					Parameters.MoveStorage->GetComponentRaw(OtherHandle))
+				: nullptr;
+			if (!OtherMove) continue;
+
+			const FSeinBrokerMembershipData* OtherBroker =
+				Parameters.BrokerStorage
+					? static_cast<const FSeinBrokerMembershipData*>(
+						Parameters.BrokerStorage->GetComponentRaw(OtherHandle))
+					: nullptr;
+			const FSeinEntityHandle OtherBrokerHandle = OtherBroker
+				? OtherBroker->CurrentBrokerHandle
+				: FSeinEntityHandle();
+			if (OtherBrokerHandle.IsValid()
+				&& VisitedBlobBrokers.Contains(OtherBrokerHandle))
+			{
+				continue;
+			}
+
+			const bool bOtherHasTarget = OtherMove->bHasTarget;
+			const FSeinCommandBrokerData* OtherBrokerData =
+				OtherBrokerHandle.IsValid()
+					&& Parameters.BrokerDataStorage
+					&& OtherBrokerHandle != Self.BrokerHandle
+				? static_cast<const FSeinCommandBrokerData*>(
+					Parameters.BrokerDataStorage->GetComponentRaw(
+						OtherBrokerHandle))
+				: nullptr;
+			const bool bOtherIsBlob = OtherBrokerData
+				&& OtherBrokerData->bAvoidAsCohesiveBody
+				&& OtherBrokerData->FormationRadius > FFixedPoint::Zero;
+
+			bool bGenuineCrossing = false;
+			if (Parameters.bDoSiDoEnabled && bOtherHasTarget)
+			{
+				FFixedVector OtherToGoal = OtherMove->TargetLocation
+					- OtherEntity->Transform.GetLocation();
+				OtherToGoal.Z = FFixedPoint::Zero;
+				FFixedVector ToOtherEarly =
+					OtherEntity->Transform.GetLocation() - Self.Position;
+				ToOtherEarly.Z = FFixedPoint::Zero;
+				const FFixedPoint BodySeparationSquared =
+					ToOtherEarly.SizeSquared();
+				const FFixedVector RelativeVelocityEarly(
+					Self.Velocity.X - OtherMove->Velocity.X,
+					Self.Velocity.Y - OtherMove->Velocity.Y,
+					FFixedPoint::Zero);
+				const FFixedPoint ClosingEarly =
+					ToOtherEarly.X * RelativeVelocityEarly.X
+					+ ToOtherEarly.Y * RelativeVelocityEarly.Y;
+				const FFixedPoint IntentDot =
+					Self.ToGoal.X * OtherToGoal.X
+					+ Self.ToGoal.Y * OtherToGoal.Y;
+				FFixedVector GoalSeparation =
+					OtherMove->TargetLocation - Self.Movement.TargetLocation;
+				GoalSeparation.Z = FFixedPoint::Zero;
+				const FFixedPoint GoalSeparationSquared =
+					GoalSeparation.SizeSquared();
+				bGenuineCrossing = ClosingEarly > FFixedPoint::Zero
+					&& IntentDot < FFixedPoint::Zero
+					&& GoalSeparationSquared
+						> Parameters.CrossingGoalDivergenceSquared
+							* BodySeparationSquared;
+			}
+
+			const bool bSameBroker = Self.BrokerHandle.IsValid()
+				&& OtherBrokerHandle == Self.BrokerHandle;
+			const int64 OtherCohesionId = OtherBroker
+				? OtherBroker->CohesionGroupId
+				: 0;
+			const bool bSameCohesion = Self.CohesionId != 0
+				&& Self.CohesionId == OtherCohesionId;
+			if (bSameBroker || bSameCohesion)
+			{
+				if (!bGenuineCrossing) continue;
+				if (OtherMove->Velocity.SizeSquared()
+					<= Parameters.MovingSpeedFloor
+						* Parameters.MovingSpeedFloor)
+				{
+					continue;
+				}
+				FFixedVector ToOther =
+					OtherEntity->Transform.GetLocation() - Self.Position;
+				ToOther.Z = FFixedPoint::Zero;
+				const FFixedPoint DistanceSquared = ToOther.SizeSquared();
+				if (DistanceSquared <= FFixedPoint::Epsilon) continue;
+				const FSeinNavigationComponent* Navigation =
+					Parameters.NavStorage
+						? static_cast<const FSeinNavigationComponent*>(
+							Parameters.NavStorage->GetComponentRaw(OtherHandle))
+						: nullptr;
+				const FSeinExtentsComponent* Extents = Parameters.ExtentsStorage
+					? static_cast<const FSeinExtentsComponent*>(
+						Parameters.ExtentsStorage->GetComponentRaw(OtherHandle))
+					: nullptr;
+				const FFixedPoint Radius =
+					USeinMovement::ResolveCollisionRadius(Extents, Navigation);
+				if (Radius <= FFixedPoint::Zero) continue;
+				const FFixedPoint Distance = SeinMath::Sqrt(DistanceSquared);
+				const FFixedPoint Range =
+					(Self.Radius + Radius) * Parameters.FalloffRadii;
+				if (Distance >= Range) continue;
+				const FFixedPoint Falloff =
+					FFixedPoint::One - (Distance / Range);
+				const FFixedVector Steer = ComputeDoSiDoSteer(
+					Self.Handle, OtherHandle, Self.Position,
+					OtherEntity->Transform.GetLocation());
+				const FFixedPoint Magnitude =
+					(FFixedPoint::One + Parameters.HeadOnBase)
+					* Falloff * Parameters.DoSiDoStrength;
+				OutAccum.X += Steer.X * Magnitude;
+				OutAccum.Y += Steer.Y * Magnitude;
+				continue;
+			}
+
+			if (bOtherIsBlob)
+			{
+				VisitedBlobBrokers.Add(OtherBrokerHandle);
+				const FFixedVector BlobCentroid = OtherBrokerData->Centroid;
+				const FFixedPoint BlobExtent = OtherBrokerData->FormationRadius;
+				FFixedVector ToBlob(
+					BlobCentroid.X - Self.Position.X,
+					BlobCentroid.Y - Self.Position.Y,
+					FFixedPoint::Zero);
+				const FFixedPoint BlobDistanceSquared = ToBlob.SizeSquared();
+				if (BlobDistanceSquared <= FFixedPoint::Epsilon) continue;
+				if (ToBlob.X * Self.Heading.X + ToBlob.Y * Self.Heading.Y
+					<= FFixedPoint::Zero)
+				{
+					continue;
+				}
+				if (Self.GoalDistanceSquared > FFixedPoint::Zero
+					&& BlobDistanceSquared >= Self.GoalDistanceSquared)
+				{
+					continue;
+				}
+				const FFixedPoint BlobDistance =
+					SeinMath::Sqrt(BlobDistanceSquared);
+				const FFixedPoint BlobRange =
+					(Self.Radius + BlobExtent) * Parameters.FalloffRadii;
+				if (BlobDistance >= BlobRange) continue;
+				const FFixedPoint BlobFalloff =
+					FFixedPoint::One - (BlobDistance / BlobRange);
+				const FFixedPoint BlobMagnitude =
+					(FFixedPoint::One + Parameters.HeadOnBase) * BlobFalloff;
+				if (Self.bIsBlob)
+				{
+					const FFixedVector Steer = ComputeDoSiDoSteer(
+						Self.BrokerHandle, OtherBrokerHandle,
+						Self.BrokerCentroid, BlobCentroid);
+					OutAccum.X += Steer.X * BlobMagnitude;
+					OutAccum.Y += Steer.Y * BlobMagnitude;
+				}
+				else
+				{
+					const FFixedPoint SideDot =
+						ToBlob.X * Self.Right.X + ToBlob.Y * Self.Right.Y;
+					const FFixedPoint Band =
+						Self.Radius / FFixedPoint::FromInt(4);
+					const FFixedPoint Turn = SideDot > Band
+						? -FFixedPoint::One
+						: SideDot < -Band
+							? FFixedPoint::One
+							: Self.Handle < OtherBrokerHandle
+								? FFixedPoint::One
+								: -FFixedPoint::One;
+					OutAccum.X += Self.Right.X * (BlobMagnitude * Turn);
+					OutAccum.Y += Self.Right.Y * (BlobMagnitude * Turn);
+				}
+				continue;
+			}
+
+			const bool bOtherIdle = !OtherMove->bHasTarget;
+			if (bOtherIdle && !Parameters.bResolveThroughIdlers) continue;
+			const bool bQualifies = Self.Movement.bAvoidSameWeights
+				? OtherMove->AvoidanceWeight >= Self.Movement.AvoidanceWeight
+				: OtherMove->AvoidanceWeight > Self.Movement.AvoidanceWeight;
+			if (!bQualifies) continue;
+
+			FFixedVector ToOther =
+				OtherEntity->Transform.GetLocation() - Self.Position;
+			ToOther.Z = FFixedPoint::Zero;
+			const FFixedPoint DistanceSquared = ToOther.SizeSquared();
+			if (DistanceSquared <= FFixedPoint::Epsilon) continue;
+			if (ToOther.X * Self.Heading.X + ToOther.Y * Self.Heading.Y
+				<= FFixedPoint::Zero)
+			{
+				continue;
+			}
+			const FFixedVector RelativeVelocity(
+				Self.Velocity.X - OtherMove->Velocity.X,
+				Self.Velocity.Y - OtherMove->Velocity.Y,
+				FFixedPoint::Zero);
+			if (ToOther.X * RelativeVelocity.X
+					+ ToOther.Y * RelativeVelocity.Y
+				<= FFixedPoint::Zero)
+			{
+				continue;
+			}
+			if (Self.GoalDistanceSquared > FFixedPoint::Zero
+				&& DistanceSquared >= Self.GoalDistanceSquared)
+			{
+				continue;
+			}
+
+			const FSeinNavigationComponent* OtherNavigation =
+				Parameters.NavStorage
+					? static_cast<const FSeinNavigationComponent*>(
+						Parameters.NavStorage->GetComponentRaw(OtherHandle))
+					: nullptr;
+			const FSeinExtentsComponent* OtherExtents =
+				Parameters.ExtentsStorage
+					? static_cast<const FSeinExtentsComponent*>(
+						Parameters.ExtentsStorage->GetComponentRaw(OtherHandle))
+					: nullptr;
+			const FFixedPoint OtherRadius =
+				USeinMovement::ResolveCollisionRadius(
+					OtherExtents, OtherNavigation);
+			if (OtherRadius <= FFixedPoint::Zero) continue;
+			const FFixedPoint Distance = SeinMath::Sqrt(DistanceSquared);
+			const FFixedPoint FalloffRange =
+				(Self.Radius + OtherRadius) * Parameters.FalloffRadii;
+			if (Distance >= FalloffRange) continue;
+			const FFixedPoint Falloff =
+				FFixedPoint::One - (Distance / FalloffRange);
+
+			FFixedPoint HeadOn = FFixedPoint::One + Parameters.HeadOnBase;
+			const FFixedVector OtherVelocity = OtherMove->Velocity;
+			const FFixedPoint OtherSpeed = OtherVelocity.Size();
+			if (OtherSpeed > Parameters.MovingSpeedFloor)
+			{
+				const FFixedPoint Cosine =
+					(Self.Heading.X * OtherVelocity.X
+						+ Self.Heading.Y * OtherVelocity.Y)
+					/ OtherSpeed;
+				HeadOn = (FFixedPoint::One - Cosine) + Parameters.HeadOnBase;
+			}
+
+			if (bGenuineCrossing)
+			{
+				const FFixedVector Steer = ComputeDoSiDoSteer(
+					Self.Handle, OtherHandle, Self.Position,
+					OtherEntity->Transform.GetLocation());
+				const FFixedPoint Weight =
+					HeadOn * Falloff * Parameters.DoSiDoStrength;
+				OutAccum.X += Steer.X * Weight;
+				OutAccum.Y += Steer.Y * Weight;
+				continue;
+			}
+
+			const FFixedPoint SideDot =
+				ToOther.X * Self.Right.X + ToOther.Y * Self.Right.Y;
+			const FFixedPoint LateralBand =
+				Self.Radius / FFixedPoint::FromInt(4);
+			FFixedPoint TurnSign;
+			if (SideDot > LateralBand)
+			{
+				TurnSign = -FFixedPoint::One;
+			}
+			else if (SideDot < -LateralBand)
+			{
+				TurnSign = FFixedPoint::One;
+			}
+			else
+			{
+				TurnSign = Self.Handle.Index < OtherHandle.Index
+					? FFixedPoint::One
+					: -FFixedPoint::One;
+			}
+
+			if (bOtherIdle)
+			{
+				if (OutIdleBlockers.Count < MaxIdleBlockers)
+				{
+					const FFixedPoint InverseDistance =
+						FFixedPoint::One / Distance;
+					OutIdleBlockers.Directions[OutIdleBlockers.Count] =
+						FFixedVector(
+							ToOther.X * InverseDistance,
+							ToOther.Y * InverseDistance,
+							FFixedPoint::Zero);
+					FFixedPoint SinHalfAngle =
+						(Self.Radius + OtherRadius) * InverseDistance;
+					if (SinHalfAngle > FFixedPoint::One)
+					{
+						SinHalfAngle = FFixedPoint::One;
+					}
+					FFixedPoint CosHalfAngleSquared =
+						FFixedPoint::One - SinHalfAngle * SinHalfAngle;
+					if (CosHalfAngleSquared < FFixedPoint::Zero)
+					{
+						CosHalfAngleSquared = FFixedPoint::Zero;
+					}
+					OutIdleBlockers.CosHalfAngles[OutIdleBlockers.Count] =
+						SeinMath::Sqrt(CosHalfAngleSquared);
+					OutIdleBlockers.Detours[OutIdleBlockers.Count] =
+						HeadOn * Falloff * TurnSign;
+					++OutIdleBlockers.Count;
+				}
+				continue;
+			}
+
+			const FFixedPoint Weight = HeadOn * Falloff * TurnSign;
+			OutAccum.X += Self.Right.X * Weight;
+			OutAccum.Y += Self.Right.Y * Weight;
+		}
+	}
+
 	static void GatherStartOfTickState(
 		USeinWorldSubsystem& World,
 		ISeinComponentStorage* MoveStorage,
@@ -845,146 +1338,39 @@ namespace
 			}
 		}
 	}
-}
-
-void FSeinAvoidanceDefaultKernel::Execute(
-	USeinWorldSubsystem& World) const
-{
-	const FSeinCollisionSpatialHash& Hash = World.GetCollisionSpatialHash();
-
-	// --- Tunables: the model-shape constants are authored on THIS class's CDO (edit via a Blueprint
-	//     subclass slotted in Project Settings > AvoidanceClass; captured for determinism by that
-	//     class-path + identical content, so they leave the settings fingerprint). The model-AGNOSTIC
-	//     harness knobs (Moving Speed Floor / Bend Cap) + the Idle Re-Seek switch still come from
-	//     plugin settings. Per-unit dials (strength/weight/same-weights) live on FSeinMovementComponent. ---
-	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
-	const FFixedPoint LookaheadSeconds    = Policy.AvoidanceLookaheadSeconds;
-	const FFixedPoint MovingSpeedFloor    = Settings->AvoidanceMovingSpeedFloor;
-	const FFixedPoint FalloffRadii        = Policy.AvoidanceFalloffRadii;
-	const FFixedPoint SmoothKeep          = Policy.AvoidanceSmoothKeep;
-	const FFixedPoint HeadOnBase          = Policy.AvoidanceHeadOnBase;
-	const FFixedPoint ArrivalReleaseRadii = Policy.AvoidanceArrivalReleaseRadii;
-	const FFixedPoint MaxSteerMagnitude   = Policy.AvoidanceMaxSteerMagnitude;
-	const FFixedPoint BrakeStrength       = Policy.AvoidanceBrakeStrength;
-	const FFixedPoint CohesionHoldBack    = Policy.AvoidanceCohesionHoldBack;
-	const FFixedPoint CohesionBoost       = Policy.AvoidanceCohesionCatchUpBoost;
-	const FFixedPoint CohesionRangeRadii  = Policy.AvoidanceCohesionRangeRadii;
-	// Do-si-do (crossing slide-past) dials. Strength 0 = the crossing steer is off entirely
-	// (pure group-skip + geometric sidewalk, the pre-do-si-do behaviour). CrossGoalDivergence is
-	// the goal-separation-vs-body-separation ratio that marks a GENUINE crossing (paired with
-	// opposed travel intent); larger = crossings recognised more rarely = more packing preserved.
-	const FFixedPoint DoSiDoStrength      = Policy.AvoidanceDoSiDoStrength;
-	const FFixedPoint DoSiDoCrossDiverge  = Policy.AvoidanceCrossingGoalDivergence;
-	const FFixedPoint KconvSq             = DoSiDoCrossDiverge * DoSiDoCrossDiverge;
-	const bool bDoSiDoEnabled             = DoSiDoStrength > FFixedPoint::Zero;
-	// RESOLVE-THROUGH (mover-resolves-around-idlers). Strength 0 = the bulldoze-idle rule stands
-	// bit-exact (a mover plows through parked units, collision shoves them). > 0 = a moving unit
-	// steers around an idle neighbour whose AvoidanceWeight qualifies (heavier-or-equal), scaled by
-	// this. Orbit-safe under the goal-relative bend cap (which guarantees forward progress).
-	const FFixedPoint IdleResolveStrength = Policy.AvoidanceIdleResolveStrength;
-	const bool bResolveThroughIdlers      = IdleResolveStrength > FFixedPoint::Zero;
-	// IDLER-DODGES-MOVER: an idle unit steps aside for an approaching qualifying mover. Gated ALSO
-	// on bIdleReseek — the shipped re-seek owns the walk back to slot (the dodge only suppresses its
-	// release while active), so a dodge is meaningless without a return path. Strength 0 OR re-seek
-	// off → the true-idle branch takes the exact ClearOutput (bit-exact today).
-	const FFixedPoint IdleDodgeStrength   = Policy.AvoidanceIdleDodgeStrength;
-	const bool bIdleDodgeEnabled          = Settings->bIdleReseek && IdleDodgeStrength > FFixedPoint::Zero;
-	// Bend cap, also read here (not only in ApplyAvoidanceSteer): the idle GAP-SEEK below bounds its
-	// candidate headings to the same goal-relative wedge, so it never proposes a thread the downstream
-	// cap would just clamp away. -1 (OFF sentinel) = no wedge limit (full candidate span).
-	const FFixedPoint BendCapCos          = Settings->AvoidanceBendCapCos;
-	// Cohesion off entirely when both sides are neutral — the aggregate pre-pass is skipped
-	// and every unit's CohesionScale is exactly One (bit-exact no-op).
-	const bool bCohesionEnabled = CohesionHoldBack > FFixedPoint::Zero || CohesionBoost > FFixedPoint::One;
-	// The moving-speed floor expressed as a PER-TICK displacement, for the honest-motion
-	// tests below (PrevTickLocation deltas are per-tick, not per-second).
-	const int32 TickRate = GetDefault<USeinARTSCoreSettings>()->SimulationTickRate > 0
-		? GetDefault<USeinARTSCoreSettings>()->SimulationTickRate : 30;
-	const FFixedPoint FloorPerTick   = MovingSpeedFloor / FFixedPoint::FromInt(TickRate);
-	const FFixedPoint FloorPerTickSq = FloorPerTick * FloorPerTick;
-
-	// IDLE GAP-SEEK candidate rotations (resolve-through, mover side). When Idle Resolve is on, a
-	// mover facing a field of loose idle units does NOT sum a repulsor away from them (two idlers
-	// flanking a passable lane cancel to a detour) — it samples headings rotated off its travel
-	// direction by these FIXED offsets and threads the nearest one no idler's footprint-cone covers.
-	// The (cos, sin) of each offset are the ONLY trig here and are built ONCE, serially, outside the
-	// parallel body; the per-unit scan is pure dot-products (no atan2/asin, no angular-interval bins),
-	// so it is bit-stable. Offsets 0,10,...,80 deg; the per-unit scan stops at the bend-cap wedge.
-	constexpr int32 GapCandidateCount = 9;
-	FFixedPoint GapCos[GapCandidateCount];
-	FFixedPoint GapSin[GapCandidateCount];
-	if (bResolveThroughIdlers)
+	static void ComputeMoverAvoidance(
+		const FAvoidanceWorkerParameters& Parameters,
+		int32 Index)
 	{
-		for (int32 k = 0; k < GapCandidateCount; ++k)
-		{
-			const FFixedPoint Ang = FFixedPoint::DegToRad * FFixedPoint::FromInt(k * 10);
-			GapCos[k] = SeinMath::Cos(Ang);
-			GapSin[k] = SeinMath::Sin(Ang);
-		}
-	}
+		USeinWorldSubsystem& World = Parameters.World;
+		const FSeinCollisionSpatialHash& Hash = Parameters.Hash;
+		const TArray<FSeinEntityHandle>& LiveHandles = Parameters.LiveHandles;
+		ISeinComponentStorage* MoveStorage = Parameters.MoveStorage;
+		const ISeinComponentStorage* ReadOnlyMoveStorage =
+			Parameters.ReadOnlyMoveStorage;
+		const ISeinComponentStorage* NavStorage = Parameters.NavStorage;
+		const ISeinComponentStorage* ExtentsStorage = Parameters.ExtentsStorage;
+		const ISeinComponentStorage* BrokerStorage = Parameters.BrokerStorage;
+		const ISeinComponentStorage* BrokerDataStorage =
+			Parameters.BrokerDataStorage;
+		const FAvoidanceNeighborParameters& NeighborParameters =
+			Parameters.NeighborParameters;
+		const FAvoidanceOutputParameters& OutputParameters =
+			Parameters.OutputParameters;
+		const FFixedPoint* GapCos = Parameters.GapCos;
+		const FFixedPoint* GapSin = Parameters.GapSin;
+		const bool bIdleDodgeEnabled = Parameters.bIdleDodgeEnabled;
+		const FFixedPoint MovingSpeedFloor = Parameters.MovingSpeedFloor;
+		const FFixedPoint FalloffRadii = Parameters.FalloffRadii;
+		const FFixedPoint SmoothKeep = Parameters.SmoothKeep;
+		const FFixedPoint ArrivalReleaseRadii =
+			Parameters.ArrivalReleaseRadii;
+		const FFixedPoint MaxSteerMagnitude = Parameters.MaxSteerMagnitude;
+		const FFixedPoint IdleResolveStrength = Parameters.IdleResolveStrength;
+		const FFixedPoint IdleDodgeStrength = Parameters.IdleDodgeStrength;
+		const FFixedPoint BendCapCos = Parameters.BendCapCos;
+		const FFixedPoint LookaheadSeconds = Parameters.LookaheadSeconds;
 
-	// Hoist component-storage lookups out of the per-entity / per-neighbour loop:
-	// GetComponent<T>() is a hashmap lookup by UScriptStruct* per call; resolving each
-	// storage once turns every access into an O(1) indexed get.
-	ISeinComponentStorage* MoveStorage =
-		World.GetComponentStorageMutable(
-			FSeinMovementComponent::StaticStruct());
-	const ISeinComponentStorage* ReadOnlyMoveStorage = MoveStorage;
-	const ISeinComponentStorage* NavStorage =
-		World.GetComponentStorageRaw(
-			FSeinNavigationComponent::StaticStruct());
-	const ISeinComponentStorage* ExtentsStorage =
-		World.GetComponentStorageRaw(
-			FSeinExtentsComponent::StaticStruct());
-	// Group identity — TWO-LAYER, matching the formation model: the immediate broker
-	// (squad / loose-order group) and the per-order cohesion id spanning brokers of one
-	// multi-element order. Same-group neighbours are never avoided (the group converges
-	// and packs; the collision floor keeps bodies apart).
-	const ISeinComponentStorage* BrokerStorage =
-		World.GetComponentStorageRaw(
-			FSeinBrokerMembershipData::StaticStruct());
-	// Broker-LEVEL data (Centroid / FormationRadius / bAvoidAsCohesiveBody) for the blob-obstacle
-	// scope: read per neighbour via its CurrentBrokerHandle. Prior-tick snapshot (broker maintenance
-	// is PostTick), read-only in the parallel body → contract-safe.
-	const ISeinComponentStorage* BrokerDataStorage =
-		World.GetComponentStorageRaw(
-			FSeinCommandBrokerData::StaticStruct());
-
-	// Serial pool-order gather. Every array remains index-aligned with the
-	// canonical live-handle sequence consumed by the parallel stage.
-	const FFixedPoint ProgressUnknown = FFixedPoint::FromInt(-1000000);
-	FAvoidanceTickState TickState;
-	GatherStartOfTickState(
-		World, MoveStorage, BrokerStorage, BrokerDataStorage,
-		bCohesionEnabled, MovingSpeedFloor, FloorPerTickSq,
-		ProgressUnknown, TickState);
-	BuildOuterCohesionAggregates(
-		bCohesionEnabled, TickState.GroupAggregates,
-		TickState.OuterAggregates);
-
-	const TArray<FSeinEntityHandle>& LiveHandles = TickState.LiveHandles;
-	const TArray<FFixedPoint>& ActualProgress = TickState.ActualProgress;
-	const TMap<FSeinEntityHandle, FCohesionAggregate>& GroupAggregates =
-		TickState.GroupAggregates;
-	const TMap<int64, FOuterCohesionAggregate>& OuterAggregates =
-		TickState.OuterAggregates;
-	const FAvoidanceOutputParameters OutputParameters{
-		GroupAggregates,
-		OuterAggregates,
-		ActualProgress,
-		bCohesionEnabled,
-		ProgressUnknown,
-		FloorPerTick,
-		MovingSpeedFloor,
-		MaxSteerMagnitude,
-		SmoothKeep,
-		BrakeStrength,
-		CohesionHoldBack,
-		CohesionBoost,
-		CohesionRangeRadii};
-
-	SeinParallelFor(LiveHandles.Num(), [&](int32 Index)
-	{
 		const FSeinEntityHandle SelfHandle = LiveHandles[Index];
 		const FSeinEntity* SelfEntityPtr =
 			World.GetEntityPool().Get(SelfHandle);
@@ -1088,378 +1474,202 @@ void FSeinAvoidanceDefaultKernel::Execute(
 
 		Neighbors.Reset();
 		Hash.QueryRadius(SelfPos, Perception, Neighbors, SelfHandle);
-
-		// Body-local dedup for the blob scope: a blob-flagged foreign squad contributes ONE steer
-		// (from its Centroid/FormationRadius), not one per member in range. Fresh per invocation.
-		TSet<FSeinEntityHandle> VisitedBlobBrokers;
-
-		// IDLE-BLOCKER buffer for the post-loop gap-seek (resolve-through, mover side). Idle
-		// neighbours are NOT accumulated into Accum below — they are collected here as blocked
-		// bearings and resolved as ONE steer (thread the gap, or detour if none admits). Fixed
-		// stack storage (no per-unit alloc in the hot body); a crowd denser than this cap is a wall
-		// → detour regardless, so the overflow is harmless. Each entry: the unit dir to the idler,
-		// the cos of its footprint-inflated subtended half-angle (the cone it blocks), and the
-		// pre-gap-seek geometric detour term (used only in the no-gap fallback).
-		constexpr int32 MaxIdleBlockers = 24;
-		FFixedVector IdleDir[MaxIdleBlockers];
-		FFixedPoint  IdleCosAlpha[MaxIdleBlockers];
-		FFixedPoint  IdleDetour[MaxIdleBlockers];
-		int32 NumIdleBlockers = 0;
-
+		FIdleBlockerSet IdleBlockers;
 		FFixedVector Accum = FFixedVector::ZeroVector;
-		for (const FSeinEntityHandle& OtherHandle : Neighbors)
-		{
-			const FSeinEntity* OtherEntity = World.GetEntityPool().Get(OtherHandle);
-			if (!OtherEntity) continue;
-
-			// UNIT-TO-UNIT ONLY. A neighbour with no movement component is static geometry
-			// — a wall, a building, a prop — and nav blocking already routes units clear of
-			// those. (The spatial hash holds ALL colliders, walls included, so the filter
-			// must live here.) Fetched once and reused for head-on below.
-			const FSeinMovementComponent* OtherMove = ReadOnlyMoveStorage
-				? static_cast<const FSeinMovementComponent*>(
-					ReadOnlyMoveStorage->GetComponentRaw(OtherHandle))
-				: nullptr;
-			if (!OtherMove) continue;
-
-			// Neighbour's group — drives BOTH the cohesion skip and group-vs-group passing.
-			const FSeinBrokerMembershipData* OtherBroker = BrokerStorage
-				? static_cast<const FSeinBrokerMembershipData*>(BrokerStorage->GetComponentRaw(OtherHandle)) : nullptr;
-			const FSeinEntityHandle OtherBrokerHandle = OtherBroker ? OtherBroker->CurrentBrokerHandle : FSeinEntityHandle();
-
-			// A blob already resolved this invocation: skip its remaining members entirely (one
-			// steer per blob, from its Centroid — see the blob branch below). Placed before the
-			// group-skip so it can't be reached for self's own broker (self is never in the set).
-			if (OtherBrokerHandle.IsValid() && VisitedBlobBrokers.Contains(OtherBrokerHandle)) continue;
-
-			// Neighbour goal snapshot (immutable PreTick) → the genuine-crossing predicate.
-			const bool bOtherHasTarget = OtherMove->bHasTarget;
-			// Blob-obstacle state of the neighbour's broker (never self's own broker).
-			const FSeinCommandBrokerData* OtherBrokerData = (OtherBrokerHandle.IsValid() && BrokerDataStorage
-				&& OtherBrokerHandle != SelfBrokerHandle)
-				? static_cast<const FSeinCommandBrokerData*>(BrokerDataStorage->GetComponentRaw(OtherBrokerHandle)) : nullptr;
-			const bool bOtherIsBlob = OtherBrokerData && OtherBrokerData->bAvoidAsCohesiveBody
-				&& OtherBrokerData->FormationRadius > FFixedPoint::Zero;
-
-			// GENUINE-CROSSING PREDICATE — distinguishes CONVERGING (goals collapsing to one region,
-			// keep group-skip/packing) from CROSSING (opposed travel intent + goals far apart, so a
-			// do-si-do is warranted). Reused by the intra-group carve-out (scope 1) AND the
-			// cross-group passing (scope 2). Self's bHasTarget is guaranteed by the !bHasTarget
-			// early-out at the top of this parallel body, so Move->TargetLocation is a live goal here.
-			bool bGenuineCrossing = false;
-			if (bDoSiDoEnabled && bOtherHasTarget)
-			{
-				FFixedVector OtherToGoal = OtherMove->TargetLocation - OtherEntity->Transform.GetLocation();
-				OtherToGoal.Z = FFixedPoint::Zero;
-				FFixedVector ToOtherEarly = OtherEntity->Transform.GetLocation() - SelfPos;
-				ToOtherEarly.Z = FFixedPoint::Zero;
-				const FFixedPoint BodySepSq = ToOtherEarly.SizeSquared();
-				const FFixedVector RelVelEarly(Vel.X - OtherMove->Velocity.X, Vel.Y - OtherMove->Velocity.Y, FFixedPoint::Zero);
-				const FFixedPoint ClosingEarly = ToOtherEarly.X * RelVelEarly.X + ToOtherEarly.Y * RelVelEarly.Y; // >0 closing
-				const FFixedPoint IntentDot    = ToGoal.X * OtherToGoal.X + ToGoal.Y * OtherToGoal.Y;             // <0 opposed
-				FFixedVector GoalSep = OtherMove->TargetLocation - Move->TargetLocation;
-				GoalSep.Z = FFixedPoint::Zero;
-				const FFixedPoint GoalSepSq = GoalSep.SizeSquared();
-				bGenuineCrossing =
-					   (ClosingEarly > FFixedPoint::Zero)          // closing
-					&& (IntentDot   < FFixedPoint::Zero)           // opposed travel intent (sign-stable primary)
-					&& (GoalSepSq   > KconvSq * BodySepSq);        // goals not collapsing to one region
-			}
-
-			// GROUP COHESION SKIP: a neighbour ordered together with us is never avoided —
-			// the group converges and packs instead of steering around itself; the collision
-			// floor keeps bodies apart. "Ordered together" = same immediate broker OR same
-			// per-order cohesion group (the cross-broker layer, so separate squads and
-			// squad-vs-loose in ONE order still cohere). This kills the in-group fan-out the
-			// closing-velocity gate alone can't (units converging on one point ARE closing).
-			const bool bSameBroker = SelfBrokerHandle.IsValid() && OtherBrokerHandle == SelfBrokerHandle;
-			const int64 OtherCohesionId = OtherBroker ? OtherBroker->CohesionGroupId : 0;
-			const bool bSameCohesion = SelfCohesionId != 0 && SelfCohesionId == OtherCohesionId;
-			if (bSameBroker || bSameCohesion)
-			{
-				// CONVERGING mate → keep packing (group-skip unchanged). Only a GENUINE CROSSING
-				// (two mates whose slots are on opposite sides — the re-seek-lockup case) unlocks a
-				// do-si-do-ONLY slide-past; general mate-vs-mate separation stays OFF so tight
-				// formations don't fan out. Anti-cross slot assignment (ReassignSlots) is the first
-				// line that makes crossings rare; this is the safety net for the residual.
-				if (!bGenuineCrossing) continue;
-				// An idle mate is not a crossing partner (nothing to pass).
-				if (OtherMove->Velocity.SizeSquared() <= MovingSpeedFloor * MovingSpeedFloor) continue;
-				FFixedVector CToOther = OtherEntity->Transform.GetLocation() - SelfPos;
-				CToOther.Z = FFixedPoint::Zero;
-				const FFixedPoint CDistSq = CToOther.SizeSquared();
-				if (CDistSq <= FFixedPoint::Epsilon) continue;
-				const FSeinNavigationComponent* CNav = NavStorage ? static_cast<const FSeinNavigationComponent*>(NavStorage->GetComponentRaw(OtherHandle)) : nullptr;
-				const FSeinExtentsComponent* CExt = ExtentsStorage ? static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(OtherHandle)) : nullptr;
-				const FFixedPoint CRadius = USeinMovement::ResolveCollisionRadius(CExt, CNav);
-				if (CRadius <= FFixedPoint::Zero) continue;
-				const FFixedPoint CDist = SeinMath::Sqrt(CDistSq);
-				const FFixedPoint CRange = (SelfRadius + CRadius) * FalloffRadii;
-				if (CDist >= CRange) continue;
-				const FFixedPoint CFall = FFixedPoint::One - (CDist / CRange);
-				const FFixedVector CSteer = ComputeDoSiDoSteer(
-					SelfHandle, OtherHandle, SelfPos, OtherEntity->Transform.GetLocation());
-				const FFixedPoint CMag = (FFixedPoint::One + HeadOnBase) * CFall * DoSiDoStrength;
-				Accum.X += CSteer.X * CMag;
-				Accum.Y += CSteer.Y * CMag;
-				continue; // handled this mate as a crossing — no general separation
-			}
-
-			// BLOB OBSTACLE (scope 3, opt-in per squad). When the neighbour's broker advertises
-			// "avoid me as one cohesive body", resolve ONCE against its Centroid + FormationRadius
-			// instead of chasing the moving inter-member gap (which is what makes a transiting unit
-			// orbit a squad). Deduped so a 50-member squad emits a single steer. Runs before the
-			// bulldoze gate so a PARKED blob squad is still routed around (it advertised as a wall).
-			if (bOtherIsBlob)
-			{
-				VisitedBlobBrokers.Add(OtherBrokerHandle);
-				const FFixedVector BlobCentroid = OtherBrokerData->Centroid;
-				const FFixedPoint BlobExtent    = OtherBrokerData->FormationRadius;
-				FFixedVector ToBlob(BlobCentroid.X - SelfPos.X, BlobCentroid.Y - SelfPos.Y, FFixedPoint::Zero);
-				const FFixedPoint BlobDistSq = ToBlob.SizeSquared();
-				if (BlobDistSq <= FFixedPoint::Epsilon) continue;
-				if (ToBlob.X * Heading.X + ToBlob.Y * Heading.Y <= FFixedPoint::Zero) continue;   // blob behind → ignore
-				if (GoalDistSq > FFixedPoint::Zero && BlobDistSq >= GoalDistSq) continue;          // blob past our goal
-				const FFixedPoint BlobDist  = SeinMath::Sqrt(BlobDistSq);
-				const FFixedPoint BlobRange = (SelfRadius + BlobExtent) * FalloffRadii;
-				if (BlobDist >= BlobRange) continue;
-				const FFixedPoint BlobFall = FFixedPoint::One - (BlobDist / BlobRange);
-				const FFixedPoint BlobMag  = (FFixedPoint::One + HeadOnBase) * BlobFall;
-				if (bSelfIsBlob)
-				{
-					// BLOB-vs-BLOB: two flagged squads sidestep coherently — the shared axis is keyed
-					// on the ordered BROKER pair via their centroids, so every member of squad X
-					// steers the same world way and squad Y the opposite. (Blob avoidance is its own
-					// opt-in; not gated on DoSiDoStrength — the helper is just the direction primitive.)
-					const FFixedVector BSteer = ComputeDoSiDoSteer(
-						SelfBrokerHandle, OtherBrokerHandle, SelfBrokerCentroid, BlobCentroid);
-					Accum.X += BSteer.X * BlobMag;
-					Accum.Y += BSteer.Y * BlobMag;
-				}
-				else
-				{
-					// UNIT-vs-BLOB: one-sided obstacle avoidance (the blob does not steer for me), so a
-					// plain geometric side pick suffices — steer to the side of the blob my heading
-					// favours, handle-tiebreak in the dead-ahead band (deterministic).
-					const FFixedPoint SideDotB = ToBlob.X * Right.X + ToBlob.Y * Right.Y;
-					const FFixedPoint BandB     = SelfRadius / FFixedPoint::FromInt(4);
-					// Dead-ahead tiebreak: the operands are intentionally cross-namespace (a unit
-					// handle vs a broker handle) — this is only a stable deterministic coin-flip for
-					// the (unit, blob) pair, not a spatial relation; a one-sided obstacle has no
-					// second observer to stay antisymmetric with.
-					const FFixedPoint BlobTurn  = (SideDotB > BandB)  ? -FFixedPoint::One
-						: (SideDotB < -BandB) ?  FFixedPoint::One
-						: ((SelfHandle < OtherBrokerHandle) ? FFixedPoint::One : -FFixedPoint::One);
-					Accum.X += Right.X * (BlobMag * BlobTurn);
-					Accum.Y += Right.Y * (BlobMag * BlobTurn);
-				}
-				continue; // neighbour handled at the blob level
-			}
-
-			// BULLDOZE IDLE NEIGHBOURS — WEIGHT-GATED by RESOLVE-THROUGH. Historically a mover got
-			// NO dodge around a STATIONARY neighbour: you can't orbit something that isn't moving,
-			// and steering around a static cluster curves a transiting unit into a "black hole"
-			// orbit — so idlers were left to the collision floor. That anti-orbit rationale is now
-			// covered more robustly by the goal-relative bend cap (provable forward progress), so
-			// when Idle Resolve is on a QUALIFYING idle neighbour falls through to the weight gate
-			// and the post-loop gap-seek — the mover threads/weaves around it. At strength 0 the
-			// short-circuit is byte-identical to the old unconditional continue.
-			//
-			// IDLE = "carries no move order" (bHasTarget false), NOT "not currently moving". This is
-			// the decouple linchpin: an idler stepping aside (idle-dodge) now writes a real velocity
-			// so the anim BP and re-seek see its motion, so a velocity test would flip a dodging idler
-			// to "mover" and break both this gate and the gap-seek. Keying on the order is also more
-			// honest — a body-blocked COMMANDED unit (a pinned presser) is a mover, and now takes the
-			// moving-neighbour path (do-si-do / geometric) rather than being bulldozed.
-			const bool bOtherIdle = !OtherMove->bHasTarget;
-			if (bOtherIdle && !bResolveThroughIdlers) continue;
-
-			// WEIGHT-PRIORITY GATE. This unit only yields to a neighbour whose
-			// AvoidanceWeight qualifies: equal-or-higher when bAvoidSameWeights, strictly
-			// higher otherwise (so a heavier class never dodges a lighter one, and with the
-			// bool off, equal peers fall through to the collision floor — killing
-			// same-class mutual-avoidance orbits). Integer compare → deterministic.
-			const bool bQualifies = Move->bAvoidSameWeights
-				? (OtherMove->AvoidanceWeight >= Move->AvoidanceWeight)
-				: (OtherMove->AvoidanceWeight >  Move->AvoidanceWeight);
-			if (!bQualifies) continue;
-
-			FFixedVector ToOther = OtherEntity->Transform.GetLocation() - SelfPos;
-			ToOther.Z = FFixedPoint::Zero;
-			const FFixedPoint DistSq = ToOther.SizeSquared();
-			if (DistSq <= FFixedPoint::Epsilon) continue;
-
-			// Forward gate: ignore neighbours behind the heading.
-			const FFixedPoint Ahead = ToOther.X * Heading.X + ToOther.Y * Heading.Y;
-			if (Ahead <= FFixedPoint::Zero) continue;
-
-			// CLOSING-VELOCITY GATE. Only avoid a neighbour we are actually CLOSING with.
-			// Parallel movers (a cohesive column, wall-following traffic) have ~zero closing
-			// rate and skip here — they stop shoving each other out of the lane. Crossing /
-			// head-on / overtake courses ARE closing and are avoided. Snapshot velocities →
-			// deterministic, one-sided.
-			const FFixedVector RelVel(
-				Vel.X - OtherMove->Velocity.X,
-				Vel.Y - OtherMove->Velocity.Y,
-				FFixedPoint::Zero);
-			const FFixedPoint ClosingDot = ToOther.X * RelVel.X + ToOther.Y * RelVel.Y;
-			if (ClosingDot <= FFixedPoint::Zero) continue;
-
-			// Past-goal gate: ignore neighbours farther than the goal — no dodging things
-			// beyond where we will stop. (Live for the first time; see the file docstring.)
-			if (GoalDistSq > FFixedPoint::Zero && DistSq >= GoalDistSq) continue;
-
-			// Other body radius from the SAME footprint cascade.
-			const FSeinNavigationComponent* OtherNav = NavStorage ? static_cast<const FSeinNavigationComponent*>(NavStorage->GetComponentRaw(OtherHandle)) : nullptr;
-			const FSeinExtentsComponent* OtherExt = ExtentsStorage ? static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(OtherHandle)) : nullptr;
-			const FFixedPoint OtherRadius = USeinMovement::ResolveCollisionRadius(OtherExt, OtherNav);
-			if (OtherRadius <= FFixedPoint::Zero) continue;
-
-			const FFixedPoint Dist = SeinMath::Sqrt(DistSq);
-			const FFixedPoint FalloffRange = (SelfRadius + OtherRadius) * FalloffRadii;
-			if (Dist >= FalloffRange) continue;
-			const FFixedPoint Falloff = FFixedPoint::One - (Dist / FalloffRange);
-
-			// Head-on weight: a neighbour moving AGAINST us weighs strong, one moving WITH
-			// us weak; a slow neighbour gets the moderate base.
-			FFixedPoint HeadOn = FFixedPoint::One + HeadOnBase;
-			const FFixedVector OtherVel = OtherMove->Velocity;
-			const FFixedPoint OtherSpeed = OtherVel.Size();
-			if (OtherSpeed > MovingSpeedFloor)
-			{
-				// cos(angle) = Heading · OtherVel / |OtherVel|. Same dir → 1 (weak),
-				// head-on → -1 (strong).
-				const FFixedPoint CosA = (Heading.X * OtherVel.X + Heading.Y * OtherVel.Y) / OtherSpeed;
-				HeadOn = (FFixedPoint::One - CosA) + HeadOnBase;
-			}
-
-			// STEER DIRECTION. A GENUINE CROSSING (opposed intent + goals apart) resolves via the
-			// antisymmetric world-frame do-si-do so the pair slides past on OPPOSITE sides — the
-			// primitive that breaks the mirror-dance orbit for opposed pairs and squad-vs-squad
-			// traffic. Everything else takes the geometric side-pick: idle neighbours are diverted
-			// out to the post-loop gap-seek, and moving groups keep their real sides to cleave apart.
-			// Steer weight is PURE STEERING — NO mass term (mass physics belong to the collision
-			// floor). AvoidanceStrength (below) is the magnitude knob; AvoidanceWeight is the priority.
-			if (bGenuineCrossing)
-			{
-				const FFixedVector Steer = ComputeDoSiDoSteer(
-					SelfHandle, OtherHandle, SelfPos, OtherEntity->Transform.GetLocation());
-				const FFixedPoint W = HeadOn * Falloff * DoSiDoStrength;
-				Accum.X += Steer.X * W;
-				Accum.Y += Steer.Y * W;
-			}
-			else
-			{
-				// GEOMETRIC SIDE PICK — the side of the heading the neighbour sits on. Shared by the
-				// moving-neighbour steer AND the idle-blocker detour term. Inside a "dead-ahead" band
-				// the side is undefined → break it deterministically by handle index.
-				const FFixedPoint SideDot = ToOther.X * Right.X + ToOther.Y * Right.Y;
-				const FFixedPoint LateralBand = SelfRadius / FFixedPoint::FromInt(4);
-				FFixedPoint TurnSign;
-				if (SideDot > LateralBand)        { TurnSign = -FFixedPoint::One; } // neighbour on right → steer left
-				else if (SideDot < -LateralBand)  { TurnSign =  FFixedPoint::One; } // neighbour on left  → steer right
-				else { TurnSign = (SelfHandle.Index < OtherHandle.Index) ? FFixedPoint::One : -FFixedPoint::One; }
-
-				// IDLE neighbour (no move order): do NOT sum a repulsor — record it as a blocked
-				// bearing for the post-loop GAP-SEEK (thread the goal-aligned gap; detour only if no
-				// gap admits). Only reachable with Idle Resolve on (idlers were else skipped above).
-				if (bOtherIdle)
-				{
-					if (NumIdleBlockers < MaxIdleBlockers)
-					{
-						const FFixedPoint InvDist = FFixedPoint::One / Dist;
-						IdleDir[NumIdleBlockers] = FFixedVector(ToOther.X * InvDist, ToOther.Y * InvDist, FFixedPoint::Zero);
-						// Footprint-inflated subtended half-angle: sin(a) = (SelfR+OtherR)/Dist, clamped
-						// to 1 (an overlapping idler blocks the whole forward hemisphere on its bearing).
-						// The cone it blocks is cos(a) = sqrt(1 - sin^2 a); a candidate heading is blocked
-						// when its dot with this bearing exceeds cos(a).
-						FFixedPoint SinA = (SelfRadius + OtherRadius) * InvDist;
-						if (SinA > FFixedPoint::One) SinA = FFixedPoint::One;
-						FFixedPoint CosASq = FFixedPoint::One - SinA * SinA;
-						if (CosASq < FFixedPoint::Zero) CosASq = FFixedPoint::Zero;
-						IdleCosAlpha[NumIdleBlockers] = SeinMath::Sqrt(CosASq);
-						IdleDetour[NumIdleBlockers]   = HeadOn * Falloff * TurnSign;
-						++NumIdleBlockers;
-					}
-					continue; // resolved post-loop by the gap-seek
-				}
-
-				// MOVING NEIGHBOUR — GROUP CLEAVE (was: sidewalk shift). Two co-directional groups
-				// keep their real geometric sides and split around each other along the contact line,
-				// instead of all shifting one way (which read as the whole crowd rotating past). Opposed
-				// crossings are owned by the do-si-do branch above, and genuine head-on mirror tension
-				// is likewise the do-si-do's job, so no forced side is needed here anymore.
-				const FFixedPoint W = HeadOn * Falloff * TurnSign;
-				Accum.X += Right.X * W;
-				Accum.Y += Right.Y * W;
-			}
-		}
-
-		// IDLE GAP-SEEK RESOLUTION (resolve-through, mover side). The idle blockers collected above
-		// become ONE steer: sample headings rotated off the travel direction by the fixed candidate
-		// offsets (bounded by the bend-cap wedge), and take the one NEAREST the travel direction that
-		// no idler's footprint-cone covers, leaning toward the goal on ties — a gap thread. If EVERY
-		// in-wedge heading is blocked (a solid idle wall), fall back to the summed geometric detour
-		// (route around), orbit-safe under the downstream bend cap. Empty list → no idle contribution.
-		if (NumIdleBlockers > 0)
-		{
-			const FFixedPoint InvGoal = FFixedPoint::One / SeinMath::Sqrt(GoalDistSq);
-			const FFixedVector GoalDir(ToGoal.X * InvGoal, ToGoal.Y * InvGoal, FFixedPoint::Zero);
-			const FFixedVector LeftPerp(-Heading.Y, Heading.X, FFixedPoint::Zero); // +offset side; Right = -LeftPerp
-			const bool bWedge = BendCapCos > -FFixedPoint::One;
-
-			bool bGapFound = false;
-			FFixedVector GapDir = Heading;
-			FFixedPoint BestGoalDot = FFixedPoint::MinValue;
-			for (int32 k = 0; k < GapCandidateCount && !bGapFound; ++k)
-			{
-				if (bWedge && GapCos[k] < BendCapCos) break; // past the cap wedge — no wider thread is reachable
-				const int32 SideCount = (k == 0) ? 1 : 2;    // 0 deg has a single candidate (dead ahead)
-				for (int32 si = 0; si < SideCount; ++si)
-				{
-					const FFixedPoint Sign = (si == 0) ? FFixedPoint::One : -FFixedPoint::One;
-					const FFixedVector Cand(
-						Heading.X * GapCos[k] + LeftPerp.X * (GapSin[k] * Sign),
-						Heading.Y * GapCos[k] + LeftPerp.Y * (GapSin[k] * Sign),
-						FFixedPoint::Zero);
-					bool bBlocked = false;
-					for (int32 b = 0; b < NumIdleBlockers; ++b)
-					{
-						if (Cand.X * IdleDir[b].X + Cand.Y * IdleDir[b].Y > IdleCosAlpha[b]) { bBlocked = true; break; }
-					}
-					if (bBlocked) continue;
-					// Clear: keep the more goal-aligned of this offset's two sides (deterministic — the
-					// +side, evaluated first, wins an exact tie). The outer !bGapFound then stops at the
-					// nearest-to-travel offset that cleared, so the thread deviates as little as it can.
-					const FFixedPoint GoalDot = Cand.X * GoalDir.X + Cand.Y * GoalDir.Y;
-					if (!bGapFound || GoalDot > BestGoalDot) { BestGoalDot = GoalDot; GapDir = Cand; bGapFound = true; }
-				}
-			}
-
-			if (bGapFound)
-			{
-				// Nudge toward the gap: the lateral (Right) component of the chosen heading, scaled by
-				// resolve strength. A straight-through gap (GapDir == Heading) yields zero nudge — the
-				// mover threads dead ahead instead of being shoved off a clear lane.
-				const FFixedPoint LatComp = GapDir.X * Right.X + GapDir.Y * Right.Y;
-				Accum.X += Right.X * (LatComp * IdleResolveStrength);
-				Accum.Y += Right.Y * (LatComp * IdleResolveStrength);
-			}
-			else
-			{
-				// No admitting gap → the pre-gap-seek behaviour: summed geometric repulsion away from
-				// the idle wall (each blocker's HeadOn*Falloff*side), scaled by resolve strength.
-				FFixedPoint DetourSum = FFixedPoint::Zero;
-				for (int32 b = 0; b < NumIdleBlockers; ++b) { DetourSum += IdleDetour[b]; }
-				Accum.X += Right.X * (DetourSum * IdleResolveStrength);
-				Accum.Y += Right.Y * (DetourSum * IdleResolveStrength);
-			}
-		}
+		const FMoverAvoidanceSnapshot SelfSnapshot{
+			SelfHandle, SelfBrokerHandle, SelfCohesionId, *Move,
+			SelfBrokerData, bSelfIsBlob, SelfBrokerCentroid, SelfPos,
+			ToGoal, GoalDistSq, Heading, Right, Vel, SelfRadius};
+		AccumulateNeighborResponses(
+			NeighborParameters, SelfSnapshot, Neighbors,
+			IdleBlockers, Accum);
+		ResolveIdleGap(
+			IdleBlockers, Heading, Right, ToGoal, GoalDistSq,
+			BendCapCos, GapCos, GapSin, IdleResolveStrength, Accum);
 
 		FinalizeMovingOutput(
 			OutputParameters, Index, *Move, Accum, SelfRadius,
 			GoalDistSq, SelfBrokerHandle, SelfCohesionId,
 			SelfBrokerData);
+	}
+}
+
+void FSeinAvoidanceDefaultKernel::Execute(
+	USeinWorldSubsystem& World) const
+{
+	const FSeinCollisionSpatialHash& Hash = World.GetCollisionSpatialHash();
+
+	// --- Tunables: the model-shape constants are authored on THIS class's CDO (edit via a Blueprint
+	//     subclass slotted in Project Settings > AvoidanceClass; captured for determinism by that
+	//     class-path + identical content, so they leave the settings fingerprint). The model-AGNOSTIC
+	//     harness knobs (Moving Speed Floor / Bend Cap) + the Idle Re-Seek switch still come from
+	//     plugin settings. Per-unit dials (strength/weight/same-weights) live on FSeinMovementComponent. ---
+	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
+	const FFixedPoint LookaheadSeconds    = Policy.AvoidanceLookaheadSeconds;
+	const FFixedPoint MovingSpeedFloor    = Settings->AvoidanceMovingSpeedFloor;
+	const FFixedPoint FalloffRadii        = Policy.AvoidanceFalloffRadii;
+	const FFixedPoint SmoothKeep          = Policy.AvoidanceSmoothKeep;
+	const FFixedPoint HeadOnBase          = Policy.AvoidanceHeadOnBase;
+	const FFixedPoint ArrivalReleaseRadii = Policy.AvoidanceArrivalReleaseRadii;
+	const FFixedPoint MaxSteerMagnitude   = Policy.AvoidanceMaxSteerMagnitude;
+	const FFixedPoint BrakeStrength       = Policy.AvoidanceBrakeStrength;
+	const FFixedPoint CohesionHoldBack    = Policy.AvoidanceCohesionHoldBack;
+	const FFixedPoint CohesionBoost       = Policy.AvoidanceCohesionCatchUpBoost;
+	const FFixedPoint CohesionRangeRadii  = Policy.AvoidanceCohesionRangeRadii;
+	// Do-si-do (crossing slide-past) dials. Strength 0 = the crossing steer is off entirely
+	// (pure group-skip + geometric sidewalk, the pre-do-si-do behaviour). CrossGoalDivergence is
+	// the goal-separation-vs-body-separation ratio that marks a GENUINE crossing (paired with
+	// opposed travel intent); larger = crossings recognised more rarely = more packing preserved.
+	const FFixedPoint DoSiDoStrength      = Policy.AvoidanceDoSiDoStrength;
+	const FFixedPoint DoSiDoCrossDiverge  = Policy.AvoidanceCrossingGoalDivergence;
+	const FFixedPoint KconvSq             = DoSiDoCrossDiverge * DoSiDoCrossDiverge;
+	const bool bDoSiDoEnabled             = DoSiDoStrength > FFixedPoint::Zero;
+	// RESOLVE-THROUGH (mover-resolves-around-idlers). Strength 0 = the bulldoze-idle rule stands
+	// bit-exact (a mover plows through parked units, collision shoves them). > 0 = a moving unit
+	// steers around an idle neighbour whose AvoidanceWeight qualifies (heavier-or-equal), scaled by
+	// this. Orbit-safe under the goal-relative bend cap (which guarantees forward progress).
+	const FFixedPoint IdleResolveStrength = Policy.AvoidanceIdleResolveStrength;
+	const bool bResolveThroughIdlers      = IdleResolveStrength > FFixedPoint::Zero;
+	// IDLER-DODGES-MOVER: an idle unit steps aside for an approaching qualifying mover. Gated ALSO
+	// on bIdleReseek — the shipped re-seek owns the walk back to slot (the dodge only suppresses its
+	// release while active), so a dodge is meaningless without a return path. Strength 0 OR re-seek
+	// off → the true-idle branch takes the exact ClearOutput (bit-exact today).
+	const FFixedPoint IdleDodgeStrength   = Policy.AvoidanceIdleDodgeStrength;
+	const bool bIdleDodgeEnabled          = Settings->bIdleReseek && IdleDodgeStrength > FFixedPoint::Zero;
+	// Bend cap, also read here (not only in ApplyAvoidanceSteer): the idle GAP-SEEK below bounds its
+	// candidate headings to the same goal-relative wedge, so it never proposes a thread the downstream
+	// cap would just clamp away. -1 (OFF sentinel) = no wedge limit (full candidate span).
+	const FFixedPoint BendCapCos          = Settings->AvoidanceBendCapCos;
+	// Cohesion off entirely when both sides are neutral — the aggregate pre-pass is skipped
+	// and every unit's CohesionScale is exactly One (bit-exact no-op).
+	const bool bCohesionEnabled = CohesionHoldBack > FFixedPoint::Zero || CohesionBoost > FFixedPoint::One;
+	// The moving-speed floor expressed as a PER-TICK displacement, for the honest-motion
+	// tests below (PrevTickLocation deltas are per-tick, not per-second).
+	const int32 TickRate = GetDefault<USeinARTSCoreSettings>()->SimulationTickRate > 0
+		? GetDefault<USeinARTSCoreSettings>()->SimulationTickRate : 30;
+	const FFixedPoint FloorPerTick   = MovingSpeedFloor / FFixedPoint::FromInt(TickRate);
+	const FFixedPoint FloorPerTickSq = FloorPerTick * FloorPerTick;
+
+	// IDLE GAP-SEEK candidate rotations (resolve-through, mover side). When Idle Resolve is on, a
+	// mover facing a field of loose idle units does NOT sum a repulsor away from them (two idlers
+	// flanking a passable lane cancel to a detour) — it samples headings rotated off its travel
+	// direction by these FIXED offsets and threads the nearest one no idler's footprint-cone covers.
+	// The (cos, sin) of each offset are the ONLY trig here and are built ONCE, serially, outside the
+	// parallel body; the per-unit scan is pure dot-products (no atan2/asin, no angular-interval bins),
+	// so it is bit-stable. Offsets 0,10,...,80 deg; the per-unit scan stops at the bend-cap wedge.
+	FFixedPoint GapCos[GapCandidateCount];
+	FFixedPoint GapSin[GapCandidateCount];
+	if (bResolveThroughIdlers)
+	{
+		for (int32 k = 0; k < GapCandidateCount; ++k)
+		{
+			const FFixedPoint Ang = FFixedPoint::DegToRad * FFixedPoint::FromInt(k * 10);
+			GapCos[k] = SeinMath::Cos(Ang);
+			GapSin[k] = SeinMath::Sin(Ang);
+		}
+	}
+
+	// Hoist component-storage lookups out of the per-entity / per-neighbour loop:
+	// GetComponent<T>() is a hashmap lookup by UScriptStruct* per call; resolving each
+	// storage once turns every access into an O(1) indexed get.
+	ISeinComponentStorage* MoveStorage =
+		World.GetComponentStorageMutable(
+			FSeinMovementComponent::StaticStruct());
+	const ISeinComponentStorage* ReadOnlyMoveStorage = MoveStorage;
+	const ISeinComponentStorage* NavStorage =
+		World.GetComponentStorageRaw(
+			FSeinNavigationComponent::StaticStruct());
+	const ISeinComponentStorage* ExtentsStorage =
+		World.GetComponentStorageRaw(
+			FSeinExtentsComponent::StaticStruct());
+	// Group identity — TWO-LAYER, matching the formation model: the immediate broker
+	// (squad / loose-order group) and the per-order cohesion id spanning brokers of one
+	// multi-element order. Same-group neighbours are never avoided (the group converges
+	// and packs; the collision floor keeps bodies apart).
+	const ISeinComponentStorage* BrokerStorage =
+		World.GetComponentStorageRaw(
+			FSeinBrokerMembershipData::StaticStruct());
+	// Broker-LEVEL data (Centroid / FormationRadius / bAvoidAsCohesiveBody) for the blob-obstacle
+	// scope: read per neighbour via its CurrentBrokerHandle. Prior-tick snapshot (broker maintenance
+	// is PostTick), read-only in the parallel body → contract-safe.
+	const ISeinComponentStorage* BrokerDataStorage =
+		World.GetComponentStorageRaw(
+			FSeinCommandBrokerData::StaticStruct());
+
+	// Serial pool-order gather. Every array remains index-aligned with the
+	// canonical live-handle sequence consumed by the parallel stage.
+	const FFixedPoint ProgressUnknown = FFixedPoint::FromInt(-1000000);
+	FAvoidanceTickState TickState;
+	GatherStartOfTickState(
+		World, MoveStorage, BrokerStorage, BrokerDataStorage,
+		bCohesionEnabled, MovingSpeedFloor, FloorPerTickSq,
+		ProgressUnknown, TickState);
+	BuildOuterCohesionAggregates(
+		bCohesionEnabled, TickState.GroupAggregates,
+		TickState.OuterAggregates);
+
+	const TArray<FSeinEntityHandle>& LiveHandles = TickState.LiveHandles;
+	const TArray<FFixedPoint>& ActualProgress = TickState.ActualProgress;
+	const TMap<FSeinEntityHandle, FCohesionAggregate>& GroupAggregates =
+		TickState.GroupAggregates;
+	const TMap<int64, FOuterCohesionAggregate>& OuterAggregates =
+		TickState.OuterAggregates;
+	const FAvoidanceOutputParameters OutputParameters{
+		GroupAggregates,
+		OuterAggregates,
+		ActualProgress,
+		bCohesionEnabled,
+		ProgressUnknown,
+		FloorPerTick,
+		MovingSpeedFloor,
+		MaxSteerMagnitude,
+		SmoothKeep,
+		BrakeStrength,
+		CohesionHoldBack,
+		CohesionBoost,
+		CohesionRangeRadii};
+	const FAvoidanceNeighborParameters NeighborParameters{
+		World,
+		ReadOnlyMoveStorage,
+		NavStorage,
+		ExtentsStorage,
+		BrokerStorage,
+		BrokerDataStorage,
+		bDoSiDoEnabled,
+		bResolveThroughIdlers,
+		MovingSpeedFloor,
+		FalloffRadii,
+		HeadOnBase,
+		DoSiDoStrength,
+		KconvSq};
+	const FAvoidanceWorkerParameters WorkerParameters{
+		World,
+		Hash,
+		LiveHandles,
+		MoveStorage,
+		ReadOnlyMoveStorage,
+		NavStorage,
+		ExtentsStorage,
+		BrokerStorage,
+		BrokerDataStorage,
+		NeighborParameters,
+		OutputParameters,
+		GapCos,
+		GapSin,
+		bIdleDodgeEnabled,
+		MovingSpeedFloor,
+		FalloffRadii,
+		SmoothKeep,
+		ArrivalReleaseRadii,
+		MaxSteerMagnitude,
+		IdleResolveStrength,
+		IdleDodgeStrength,
+		BendCapCos,
+		LookaheadSeconds};
+
+	SeinParallelFor(LiveHandles.Num(), [&](int32 Index)
+	{
+		ComputeMoverAvoidance(WorkerParameters, Index);
 	});
 
 	// Publish only real state changes, serially in canonical handle order.
