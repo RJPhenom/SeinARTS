@@ -20,6 +20,7 @@ public class SeinARTSUIToolkit : ModuleRules
 				"SeinARTSCore",
 				"SeinARTSCoreEntity",
 				"SeinARTSFramework",
+				"SeinARTSNet",        // FSeinLobbyState is exposed by the lobby view model
 				"GameplayTags",
 				"DeveloperSettings",  // minimap VM reads USeinARTSCoreSettings (a UDeveloperSettings)
 			}
@@ -30,7 +31,6 @@ public class SeinARTSUIToolkit : ModuleRules
 			{
 				"InputCore",
 				"RenderCore",
-				"SeinARTSNet",
 				"SeinARTSLevelData",  // minimap: play-area bounds + baked background texture
 				"SeinARTSFogOfWar",   // minimap: fog overlay + enemy-blip visibility culling
 			}

@@ -9,7 +9,15 @@ public class SeinARTSCoreEntity: ModuleRules
         // units and makes otherwise-valid anonymous namespaces collide.
         bUseUnity = false;
 
-        PrivateDependencyModuleNames.AddRange(new string[] {"Core", "CoreUObject", "Engine", "SeinARTSCore", "DeveloperSettings", "GameplayTags", "AssetRegistry"});
+        // Public headers expose UObject/Engine types, fixed-point types,
+        // developer settings, and gameplay tags. Their include paths must
+        // propagate to downstream modules that include CoreEntity headers.
+        PublicDependencyModuleNames.AddRange(new string[] {
+            "Core", "CoreUObject", "Engine", "SeinARTSCore",
+            "DeveloperSettings", "GameplayTags"
+        });
+
+        PrivateDependencyModuleNames.Add("AssetRegistry");
 
         if (Target.bBuildEditor)
         {

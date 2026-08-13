@@ -12,13 +12,13 @@ public class SeinARTSFogOfWar : ModuleRules
         // ISeinLevelLayerProvider — the include path must propagate to any
         // module that includes fog headers (same rationale as nav's dep).
         PublicDependencyModuleNames.AddRange(new string[] {
+            "Core", "CoreUObject", "Engine",
+            "SeinARTSCore",
             "SeinARTSLevelData",
             "SeinARTSCoreEntity"
         });
 
         PrivateDependencyModuleNames.AddRange(new string[] {
-            "Core", "CoreUObject", "Engine",
-            "SeinARTSCore",
             "GameplayTags",
             // Terrain-scaled vision: TickStamps samples the baked per-cell terrain type
             // under each vision source (USeinNavigation::GetTerrainTypeAt) and scales the

@@ -15,6 +15,8 @@
 #include "ThumbnailRendering/BlueprintThumbnailRenderer.h"
 #include "SeinBlueprintThumbnailRenderer.generated.h"
 
+class FTexture;
+
 /**
  * Extends the default Blueprint thumbnail renderer.
  * SeinARTS Blueprints get: dark bg + type icon + colored bar.

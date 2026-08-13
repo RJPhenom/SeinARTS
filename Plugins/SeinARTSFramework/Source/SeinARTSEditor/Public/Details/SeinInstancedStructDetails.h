@@ -24,6 +24,7 @@
 class IPropertyHandle;
 class IPropertyUtilities;
 class SComboButton;
+class SWidget;
 class UScriptStruct;
 
 class FSeinInstancedStructDetails : public IPropertyTypeCustomization

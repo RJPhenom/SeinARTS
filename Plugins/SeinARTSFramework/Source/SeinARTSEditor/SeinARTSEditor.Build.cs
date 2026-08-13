@@ -10,34 +10,41 @@ public class SeinARTSEditor : ModuleRules
 
         PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
 
-        PrivateDependencyModuleNames.AddRange(new string[]
+        // These modules own base classes and value types exposed by the
+        // editor module's public factories, validators, details panels,
+        // visualizers, thumbnails, and widget-asset definitions.
+        PublicDependencyModuleNames.AddRange(new string[]
         {
             "Core",
             "CoreUObject",
             "Engine",
-            "Slate",
             "SlateCore",
-            "InputCore",
             "UnrealEd",
-            "AssetRegistry",       // SeinAutoTagGenerator collision scan + rename hooks
             "AssetTools",
+            "BlueprintGraph",
+            "DataValidation",
+            "PropertyEditor",
+            "UMGEditor",
+            "GameplayTags"
+        });
+
+        PrivateDependencyModuleNames.AddRange(new string[]
+        {
+            "Slate",
+            "InputCore",
+            "AssetRegistry",       // SeinAutoTagGenerator collision scan + rename hooks
             "ClassViewer",
             "Kismet",
             "KismetCompiler",
             "GraphEditor",
-            "BlueprintGraph",
-            "DataValidation",      // movement-mode determinism validator (UEditorValidatorBase)
             "EditorStyle",
             "Projects",
-            "PropertyEditor",
             "StructUtilsEditor",
             "StructViewer",
             "RenderCore",
             "ImageCore",
             "UMG",
-            "UMGEditor",
             "AssetDefinition",
-            "GameplayTags",
             "GameplayTagsEditor",  // SeinAutoTagGenerator persists auto-tags to INI via IGameplayTagsEditorModule
             "SeinARTSCore",
             "SeinARTSCoreEntity",

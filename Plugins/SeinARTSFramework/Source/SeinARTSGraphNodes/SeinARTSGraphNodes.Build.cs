@@ -15,6 +15,7 @@ public class SeinARTSGraphNodes : ModuleRules
 			"Engine",
 			"UMG",
 			"UMGEditor",                   // USeinWidgetBlueprint source-asset class
+			"BlueprintGraph",              // UK2Node is public API
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[]
@@ -24,7 +25,6 @@ public class SeinARTSGraphNodes : ModuleRules
 			"UnrealEd",
 			"Kismet",                       // K2Node + FBlueprintEditorUtils
 			"KismetCompiler",               // FKismetCompilerContext
-			"BlueprintGraph",               // FBlueprintActionDatabaseRegistrar + K2Node_CallFunction
 			"GraphEditor",
 			"SeinARTSCore",
 			"SeinARTSCoreEntity",           // FSeinComponent base + USeinComponentBPFL the K2 nodes wrap

@@ -30,6 +30,8 @@ public class SeinARTSFramework : ModuleRules
 			new string[]
 			{
 				"Core",
+				"CoreUObject",
+				"Engine",
 				"SeinARTSCore",
 				"SeinARTSCoreEntity",
 				"GameplayTags",
@@ -40,8 +42,6 @@ public class SeinARTSFramework : ModuleRules
 		PrivateDependencyModuleNames.AddRange(
 			new string[]
 			{
-				"CoreUObject",
-				"Engine",
 				"Slate",
 				"SlateCore",
 				"InputCore",

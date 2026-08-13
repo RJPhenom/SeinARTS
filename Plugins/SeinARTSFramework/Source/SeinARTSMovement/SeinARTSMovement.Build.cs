@@ -9,14 +9,11 @@ public class SeinARTSMovement : ModuleRules
         bUseUnity = false;
 
         PublicDependencyModuleNames.AddRange(new string[] {
+            "Core", "CoreUObject", "Engine",
+            "SeinARTSCore",
             "GameplayTags",   // FGameplayTag is exposed on the public mover/planner handle headers
             "SeinARTSCoreEntity",
             "SeinARTSNavigation" // FSeinPath and navigation request/result types are public API
-        });
-
-        PrivateDependencyModuleNames.AddRange(new string[] {
-            "Core", "CoreUObject", "Engine",
-            "SeinARTSCore"
         });
 
         // Editor-only deps: the active-move debug ticker reaches into the
