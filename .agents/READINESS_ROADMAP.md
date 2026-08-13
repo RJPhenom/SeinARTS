@@ -63,8 +63,12 @@ CI gate because this engine distribution rejects those target types before proje
   reuses unchanged process-local component-storage blobs only while no mutable payload pointer has
   escaped; retained bytes are capped at 64 MiB per world. The measured 100/500/1,000-entity moving
   capture curve improved from 4.033/14.245/27.831 ms to 2.037/7.815/15.288 ms. Mandatory writes,
-  final publication, and pressure drains remain main-thread work pending real-device long-session,
-  allocator/GC, slow-storage, and exhausted-storage qualification.
+  final publication, and pressure drains remain main-thread work. A compressed 128-entity,
+  25-periodic-checkpoint integration session now proves every ordered encode/append cycle, alternating
+  authoritative mutation replay, exact seek/root at every checkpoint, terminal continuation, and
+  stable cache payload/allocation across restore. It waits between forced cycles, so real-device
+  long-session, natural worker overlap, allocator/GC, slow-storage, and exhausted-storage
+  qualification remain open.
 - The packaged run exposed and closed three release-only integration defects: lobby maps now
   materialize relays from their final authoritative slot bindings, Shipping builds no longer hide
   restore work inside compiled-out assertions, and dropped slots can reclaim their retained relay

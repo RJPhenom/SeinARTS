@@ -1899,6 +1899,26 @@ public:
 		return ComponentStorageSnapshotCacheBytes;
 	}
 
+	uint64 CalculateComponentStorageSnapshotCachePayloadBytesForTests() const
+	{
+		uint64 Total = 0;
+		for (const auto& Pair : ComponentStorageSnapshotCache)
+		{
+			Total += static_cast<uint64>(Pair.Value.Bytes.Num());
+		}
+		return Total;
+	}
+
+	uint64 CalculateComponentStorageSnapshotCacheAllocatedBytesForTests() const
+	{
+		uint64 Total = 0;
+		for (const auto& Pair : ComponentStorageSnapshotCache)
+		{
+			Total += static_cast<uint64>(Pair.Value.Bytes.GetAllocatedSize());
+		}
+		return Total;
+	}
+
 	int32 GetComponentStorageSnapshotCacheEntryCountForTests() const
 	{
 		return ComponentStorageSnapshotCache.Num();
