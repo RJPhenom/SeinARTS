@@ -25,6 +25,7 @@
 #include "HAL/PlatformMemory.h"
 #include "HAL/PlatformProcess.h"
 #include "Misc/Paths.h"
+#include "ProfilingDebugging/MiscTrace.h"
 #include "SeinReplayFormat.h"
 #include "SeinReplayReader.h"
 #include "SeinReplayWriter.h"
@@ -419,6 +420,7 @@ namespace UE::SeinARTSTests
 		TArray<FGuid> SampleRoots;
 		TArray<bool> SampleCapabilityStates;
 
+		TRACE_BOOKMARK(TEXT("Sein.ReplayOperationalSoak.Begin"));
 		ASSERT_THAT(IsTrue(Source->StartSimulation()));
 		for (int32 TurnOrdinal = 0; TurnOrdinal < TotalTurns; ++TurnOrdinal)
 		{
@@ -624,6 +626,7 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(
 			EpochWorkingSets.Num()
 				== PeriodicCheckpointCount / GcIntervalCheckpoints));
+		TRACE_BOOKMARK(TEXT("Sein.ReplayOperationalSoak.End"));
 
 		ASSERT_THAT(AreEqual(SampleTicks.Num(), SampleRoots.Num()));
 		ASSERT_THAT(AreEqual(

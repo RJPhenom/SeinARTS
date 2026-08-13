@@ -9,6 +9,11 @@
 
 .EXAMPLE
   .\RunTests.ps1 -Suite SeinARTS.Determinism -SkipBuild
+
+.EXAMPLE
+  .\RunTests.ps1 -Suite SeinARTS.Perf.Replay.OperationalSoak `
+    -TraceChannels default,memalloc,metadata `
+    -TraceFile Saved\Profiling\Insights\ReplayOperationalMemory.utrace
 #>
 [CmdletBinding()]
 param(
@@ -29,6 +34,10 @@ param(
 
 	[ValidateRange(30, 7200)]
 	[int] $TimeoutSeconds = 600,
+
+	[string] $TraceChannels,
+
+	[string] $TraceFile,
 
 	[string] $EngineRoot
 )
@@ -87,6 +96,37 @@ $AttemptBuildProvenancePath = Join-Path $ReportPath 'build-provenance.json'
 $ExpectedCountsPath = Join-Path $PluginRoot 'ExpectedTestCounts.json'
 $BuildProvenancePath = Join-Path $ProjectRoot `
 	"Saved\Automation\TestBuildProvenance-$Profile.json"
+
+$TraceEnabled = -not [string]::IsNullOrWhiteSpace($TraceChannels) -or
+	-not [string]::IsNullOrWhiteSpace($TraceFile)
+if ($TraceEnabled) {
+	if ([string]::IsNullOrWhiteSpace($TraceChannels) -or
+		[string]::IsNullOrWhiteSpace($TraceFile)) {
+		throw '-TraceChannels and -TraceFile must be provided together.'
+	}
+	$TraceChannelList = @($TraceChannels.Split(',') | ForEach-Object {
+		$_.Trim()
+	})
+	if ($TraceChannelList.Count -eq 0 -or
+		@($TraceChannelList | Where-Object {
+			$_ -notmatch '^[A-Za-z0-9_]+$'
+		}).Count -gt 0) {
+		throw '-TraceChannels must be a comma-separated list of channel names.'
+	}
+	$TraceChannels = $TraceChannelList -join ','
+	if (-not [System.IO.Path]::IsPathRooted($TraceFile)) {
+		$TraceFile = Join-Path $ProjectRoot $TraceFile
+	}
+	$TraceFile = [System.IO.Path]::GetFullPath($TraceFile)
+	if ([System.IO.Path]::GetExtension($TraceFile) -ine '.utrace') {
+		throw '-TraceFile must use the .utrace extension.'
+	}
+	$TraceDirectory = Split-Path -Parent $TraceFile
+	New-Item -ItemType Directory -Path $TraceDirectory -Force | Out-Null
+	if (Test-Path -LiteralPath $TraceFile) {
+		throw "Trace output already exists: '$TraceFile'."
+	}
+}
 New-Item -ItemType Directory -Path $ReportPath -Force | Out-Null
 
 function Get-SeinCompileSourceFingerprint
@@ -163,6 +203,10 @@ $Attempt = [pscustomobject][ordered]@{
 	skipBuild = [bool]$SkipBuild
 	keepRendering = [bool]$KeepRendering
 	allowKnownStartupErrors = [bool]$AllowKnownStartupErrors
+	traceChannels = if ($TraceEnabled) { $TraceChannels } else { $null }
+	traceFile = if ($TraceEnabled) { $TraceFile } else { $null }
+	traceFileBytes = $null
+	traceFileSha256 = $null
 	engineRoot = $ResolvedEngineRoot
 	engineBuildFingerprint = $EngineBuildFingerprint
 	compileSourceFingerprint = $CompileSourceFingerprint
@@ -520,6 +564,11 @@ if ($Profile -eq 'Framework') {
 	$EditorArgs += ('-DisablePlugins=' + (($ExtensionPlugins + 'SeinARTSExtensionTestSuite') -join ','))
 }
 
+if ($TraceEnabled) {
+	$EditorArgs += "-trace=$TraceChannels"
+	$EditorArgs += "-tracefile=$TraceFile"
+}
+
 if (-not $KeepRendering) {
 	$EditorArgs += '-NullRHI'
 }
@@ -569,6 +618,18 @@ if ($null -eq $EditorExitCode) {
 	Write-Verbose "Recovered editor exit code $EditorExitCode from Unreal's terminal marker."
 }
 $Attempt.editorExitCode = $EditorExitCode
+if ($TraceEnabled) {
+	if (-not (Test-Path -LiteralPath $TraceFile -PathType Leaf)) {
+		throw "Automation produced no trace file at '$TraceFile'."
+	}
+	$TraceItem = Get-Item -LiteralPath $TraceFile
+	if ($TraceItem.Length -le 0) {
+		throw "Automation produced an empty trace file at '$TraceFile'."
+	}
+	$Attempt.traceFileBytes = $TraceItem.Length
+	$Attempt.traceFileSha256 = (Get-FileHash -LiteralPath $TraceFile `
+		-Algorithm SHA256).Hash
+}
 Write-SeinAttemptManifest
 
 $IndexPath = Join-Path $ReportPath 'index.json'
