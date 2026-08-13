@@ -4,14 +4,14 @@
     {
       "profile": "All",
       "suite": "SeinARTS.Unit",
-      "minimumCount": 431,
-      "establishedAtCommit": "16ba0d43e2e3c9f888aecd56cf515068b5fd6169"
+      "minimumCount": 432,
+      "establishedAtCommit": "e02db4379ffbf7b89ec0e95c4ac4f56bf4465b2f"
     },
     {
       "profile": "Framework",
       "suite": "SeinARTS.Unit",
-      "minimumCount": 413,
-      "establishedAtCommit": "16ba0d43e2e3c9f888aecd56cf515068b5fd6169"
+      "minimumCount": 414,
+      "establishedAtCommit": "e02db4379ffbf7b89ec0e95c4ac4f56bf4465b2f"
     },
     {
       "profile": "All",
