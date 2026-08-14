@@ -49,7 +49,7 @@ bool USeinFogOfWarBPFL::SeinIsCellVisible(const UObject* WorldContextObject,
 	FSeinPlayerID Observer, const FVector& WorldPos, FName LayerName)
 {
 	USeinFogOfWar* Fog = USeinFogOfWarSubsystem::GetFogOfWarForWorld(WorldContextObject);
-	if (!Fog) return false;
+	if (!Fog) return true;
 	if (!Fog->HasRuntimeData()) return true; // no data = permit (matches LOS resolver)
 
 	const int32 Bit = ResolveLayerBit(LayerName);

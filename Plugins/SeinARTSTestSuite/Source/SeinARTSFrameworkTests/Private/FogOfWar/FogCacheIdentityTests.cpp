@@ -772,6 +772,12 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(
 			USeinFogOfWarBPFL::SeinIsEntityVisible(
 				&UnrealWorld, FSeinPlayerID(1), Target)));
+		ASSERT_THAT(IsTrue(
+			USeinFogOfWarBPFL::SeinIsCellVisible(
+				&UnrealWorld,
+				FSeinPlayerID(1),
+				FVector::ZeroVector,
+				TEXT("Normal"))));
 		ASSERT_THAT(IsFalse(
 			USeinFogOfWarBPFL::SeinIsEntityVisible(
 				&UnrealWorld,
