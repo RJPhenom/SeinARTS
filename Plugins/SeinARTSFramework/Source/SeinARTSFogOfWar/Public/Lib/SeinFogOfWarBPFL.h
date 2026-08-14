@@ -29,7 +29,8 @@ public:
 	 *  `USeinARTSCoreSettings::VisionLayers[i].LayerName` (enabled slots
 	 *  only). Unknown names return false while fog is active. Returns true
 	 *  when fog is disabled or its implementation has no runtime data,
-	 *  matching the Line of Sight Resolver's permissive fallback. */
+	 *  matching the Line of Sight Resolver's permissive fallback. Invalid
+	 *  world contexts return false. */
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "SeinARTS|Fog Of War",
 		meta = (WorldContext = "WorldContextObject",
 				DisplayName = "Is Cell Visible",

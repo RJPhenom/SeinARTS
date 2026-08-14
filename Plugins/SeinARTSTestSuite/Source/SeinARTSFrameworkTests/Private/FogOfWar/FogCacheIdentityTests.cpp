@@ -783,6 +783,18 @@ namespace UE::SeinARTSTests
 				&UnrealWorld,
 				FSeinPlayerID(1),
 				FSeinEntityHandle())));
+		ASSERT_THAT(IsFalse(
+			USeinFogOfWarBPFL::SeinIsCellVisible(
+				nullptr,
+				FSeinPlayerID(1),
+				FVector::ZeroVector,
+				TEXT("Normal"))));
+		ASSERT_THAT(IsFalse(
+			USeinFogOfWarBPFL::SeinIsCellVisible(
+				NewObject<USeinFogOfWarDefault>(),
+				FSeinPlayerID(1),
+				FVector::ZeroVector,
+				TEXT("Normal"))));
 	}
 
 	TEST(DynamicFogBlockerIdentityIncludesPose, "SeinARTS.Unit.FogOfWar")
