@@ -1,14 +1,17 @@
 /**
- * SeinARTS Framework
- * Copyright (c) 2026 Phenom Studios, Inc.
+ * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  *
- * @file:		SeinTagBPFL.h
- * @date:		3/27/2026
- * @author:		RJ Macklem
- * @brief:		Blueprint Function Library for gameplay tag queries and mutation
- *              on entities. All mutations route through USeinWorldSubsystem so
- *              refcounts and the global EntityTagIndex stay consistent.
- * @disclaimer: This code was generated in part by an AI language model.
+ * @file         SeinTagBPFL.h
+ * @author       RJ Macklem
+ * @created      27 Mar 2026
+ * @latest       14 Aug 2026
+ * @brief        Exposes deterministic entity-tag queries and mutations to Blueprint.
+ *
+ *               Mutations route through USeinWorldSubsystem so refcounts and
+ *               the global entity-tag index remain coherent.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
  */
 
 #pragma once
@@ -21,7 +24,7 @@
 
 class USeinWorldSubsystem;
 
-UCLASS(meta = (DisplayName = "SeinARTS Tag Library"))
+UCLASS(meta = (DisplayName = "SeinARTS Tag Library", SeinDeterministic))
 class SEINARTSCOREENTITY_API USeinTagBPFL : public UBlueprintFunctionLibrary
 {
 	GENERATED_BODY()

@@ -20,7 +20,7 @@
 
 class USeinWorldSubsystem;
 
-UCLASS(meta = (DisplayName = "SeinARTS Latent Action Library"))
+UCLASS(meta = (DisplayName = "SeinARTS Latent Action Library", SeinDeterministic))
 class SEINARTSCOREENTITY_API USeinLatentActionBPFL : public UBlueprintFunctionLibrary
 {
 	GENERATED_BODY()

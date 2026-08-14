@@ -1,7 +1,11 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
- * @file    SeinTargeterSubsystem.h
- * @brief   Per-local-player targeter state machine.
+ *
+ * @file         SeinTargeterSubsystem.h
+ * @author       RJ Macklem
+ * @created      02 Jun 2026
+ * @latest       14 Aug 2026
+ * @brief        Owns the per-local-player target capture state machine.
  *
  *          Survives map travel, scoped to one local player (split-screen safe).
  *          Owns the active targeter mode (spec + ability tag + capture progress)
@@ -10,15 +14,17 @@
  *          the subsystem instead of triggering the right-click smart command,
  *          and LMB (Select) cancels the targeter.
  *
- *          Phase 1 supports USeinPointTargeterSpec only — single RMB click per
- *          cycle, TargetCount cycles total before submission. Drag specs (Phase
- *          3 PointFacing, Phase 4 Line) extend the same state machine with drag
- *          tracking; the architecture is in place for them.
+ *          Point specs capture one click per cycle. Point-plus-facing specs use
+ *          the same state machine to capture a location and drag-facing. Line
+ *          and corridor specs are not currently shipped.
  *
  *          On Confirm the subsystem hands the captured points to
  *          ASeinPlayerController::IssueTargetedAbility, which packs them into
  *          a Command_Type_BrokerOrder with a PredeterminedAbilityTag and
  *          submits via the lockstep wire. The targeter then resets to Idle.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
  */
 
 #pragma once
@@ -44,7 +50,7 @@ enum class ESeinTargeterState : uint8
 	/** Targeter active, waiting for the next RMB to capture a target point.
 	 *  PC suppresses smart-command on RMB and routes it to OnConfirmInput. */
 	WaitingForCapture,
-	/** Reserved for Phase 3+ drag specs — RMB held, capturing drag endpoint. */
+	/** RMB is held while a point-plus-facing spec captures its drag endpoint. */
 	Dragging
 };
 
@@ -145,9 +151,7 @@ private:
 	 *  matching step index (0..StepCount-1). */
 	void ComputeDragRotation(float& OutSnappedYawDegrees, uint8& OutStepIndex) const;
 
-	/** True if the active spec is a USeinPointFacingTargeterSpec — the only
-	 *  spec subclass that uses the Dragging state in Phase 3. Phase 4's
-	 *  USeinLineTargeterSpec will also return true here. */
+	/** True when the active spec uses the shipped point-plus-facing drag flow. */
 	bool IsDragSpec() const;
 
 	/** Convert a world FVector to a deterministic FFixedVector for sim submission. */

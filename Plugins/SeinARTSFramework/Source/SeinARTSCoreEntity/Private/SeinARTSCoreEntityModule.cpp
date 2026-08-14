@@ -176,6 +176,7 @@ namespace
 			const UClass* Anchor;
 			ESeinPoolObjectKind Kind;
 			const TCHAR* StableProviderId;
+			uint32 StateSchemaVersion;
 			uint32 BehaviorRevision;
 		};
 		const FSpec Specs[] = {
@@ -183,18 +184,21 @@ namespace
 				USeinAbility::StaticClass(),
 				ESeinPoolObjectKind::Ability,
 				TEXT("seinarts.core.pool.ability.reflection"),
+				3,
 				2,
 			},
 			{
 				USeinCommandBrokerResolver::StaticClass(),
 				ESeinPoolObjectKind::CommandBrokerResolver,
 				TEXT("seinarts.core.pool.resolver.reflection"),
+				2,
 				1,
 			},
 			{
 				USeinDefaultCommandBrokerResolver::StaticClass(),
 				ESeinPoolObjectKind::CommandBrokerResolver,
 				TEXT("seinarts.core.pool.default-resolver.reflection"),
+				2,
 				1,
 			},
 		};
@@ -204,7 +208,7 @@ namespace
 			Descriptor.NativeAnchor = Spec.Anchor;
 			Descriptor.Kind = Spec.Kind;
 			Descriptor.StableProviderId = Spec.StableProviderId;
-			Descriptor.StateSchemaVersion = 2;
+			Descriptor.StateSchemaVersion = Spec.StateSchemaVersion;
 			Descriptor.BehaviorRevision = Spec.BehaviorRevision;
 			Descriptor.CodecRevision = 3;
 			Descriptor.MaxStateBytes =

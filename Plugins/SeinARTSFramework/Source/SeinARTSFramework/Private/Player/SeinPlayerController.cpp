@@ -1930,7 +1930,7 @@ void ASeinPlayerController::IssueTargetedAbility(FGameplayTag AbilityTag,
 	Payload.CommandContext = Context;
 	Payload.PredeterminedAbilityTag = AbilityTag;
 	Payload.TargeterPoints = Points;
-	// FormationEnd left zero — Phase 1 PointTargeterSpec doesn't drag.
+	// FormationEnd stays zero because PointTargeterSpec does not drag.
 
 	// Build the member list: focused unit if focused, else full selection. The
 	// targeter passed OwnerLeader as the activation target, but the broker is

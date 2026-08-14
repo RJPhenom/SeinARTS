@@ -1,13 +1,17 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
- * @file    SeinConstructionBPFL.h
- * @brief   Blueprint helpers for Pattern-B construction-over-time. Designers
- *          drop these into their BA_Construct ability's OnTick to advance
- *          progress on a target, and into their HUD to bind progress bars.
  *
- *          See SeinConstructionComponent.h for the full lifecycle (placement →
- *          builder ticks → completion-effect transition). This BPFL is the
- *          BP-facing surface; sim-side code is in SeinConstructionBPFL.cpp.
+ * @file         SeinConstructionBPFL.h
+ * @author       RJ Macklem
+ * @created      02 Jun 2026
+ * @latest       14 Aug 2026
+ * @brief        Exposes deterministic construction progress and completion operations to Blueprint.
+ *
+ *               See SeinConstructionComponent.h for the placement, builder-tick,
+ *               and completion-effect lifecycle.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
  */
 
 #pragma once
@@ -18,7 +22,7 @@
 #include "Types/FixedPoint.h"
 #include "SeinConstructionBPFL.generated.h"
 
-UCLASS()
+UCLASS(meta = (DisplayName = "SeinARTS Construction Library", SeinDeterministic))
 class SEINARTSCOREENTITY_API USeinConstructionBPFL : public UBlueprintFunctionLibrary
 {
 	GENERATED_BODY()

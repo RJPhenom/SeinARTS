@@ -590,6 +590,65 @@ namespace UE::SeinARTSTests
 		Fixture.World->StopSimulation();
 	}
 
+	TEST(SnapshotRestorePreservesAbilityRandomContinuation,
+		"SeinARTS.Unit.Snapshot")
+	{
+		FActorTestSpawner Spawner;
+		FSnapshotAbilityFixture Fixture(Spawner);
+		ASSERT_THAT(IsTrue(Fixture.bBootstrapConsumed));
+		USeinSnapshotTestAbility* Ability = Cast<USeinSnapshotTestAbility>(
+			Fixture.World->GetAbilityInstance(Fixture.OrdinaryAbilityID));
+		ASSERT_THAT(IsNotNull(Ability));
+		ASSERT_THAT(IsTrue(
+			SeinTestMatchBootstrap::Start(*Fixture.World)));
+
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*Fixture.World);
+			Ability->RandomState.SetSeed(0x123456789abcdef0ULL);
+			Ability->MarkDeterministicStateDirty();
+		}
+		uint64 CapturedState0 = 0;
+		uint64 CapturedState1 = 0;
+		Ability->RandomState.GetState(CapturedState0, CapturedState1);
+		FFixedRandom ExpectedContinuation = Ability->RandomState;
+		const uint64 ExpectedNext = ExpectedContinuation.Next64();
+
+		FSeinWorldSnapshot Snapshot;
+		Fixture.World->CaptureSnapshot(Snapshot);
+		FGuid CapturedRoot;
+		FString RootError;
+		ASSERT_THAT(IsTrue(Fixture.World->ComputeCanonicalStateRoot(
+			CapturedRoot, RootError)));
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*Fixture.World);
+			Ability->RandomState.Next64();
+			Ability->MarkDeterministicStateDirty();
+		}
+		FGuid MutatedRoot;
+		ASSERT_THAT(IsTrue(Fixture.World->ComputeCanonicalStateRoot(
+			MutatedRoot, RootError)));
+		ASSERT_THAT(IsTrue(CapturedRoot != MutatedRoot));
+
+		ASSERT_THAT(IsTrue(
+			SeinTestSnapshotRestore::RestoreTrusted(
+				*Fixture.World, Snapshot)));
+		Ability = Cast<USeinSnapshotTestAbility>(
+			Fixture.World->GetAbilityInstance(Fixture.OrdinaryAbilityID));
+		ASSERT_THAT(IsNotNull(Ability));
+		uint64 RestoredState0 = 0;
+		uint64 RestoredState1 = 0;
+		Ability->RandomState.GetState(RestoredState0, RestoredState1);
+		ASSERT_THAT(AreEqual(CapturedState0, RestoredState0));
+		ASSERT_THAT(AreEqual(CapturedState1, RestoredState1));
+		FGuid RestoredRoot;
+		ASSERT_THAT(IsTrue(Fixture.World->ComputeCanonicalStateRoot(
+			RestoredRoot, RootError)));
+		ASSERT_THAT(IsTrue(CapturedRoot == RestoredRoot));
+		FFixedRandom RestoredContinuation = Ability->RandomState;
+		ASSERT_THAT(AreEqual(ExpectedNext, RestoredContinuation.Next64()));
+		Fixture.World->StopSimulation();
+	}
+
 	TEST(SnapshotRestorePreservesExactPoolTopologyAndNextAllocation,
 		"SeinARTS.Unit.Snapshot")
 	{

@@ -49,6 +49,30 @@ The post-audit performance/remediation work is now committed and fast-forwarded 
 - Stateful PRNG spatial/rotator draws are explicitly ordered across compilers; `RandomRotator` converts its radian samples to the degree-based rotator contract.
 - Fixed ray/box queries no longer impose an arbitrary 10,000-unit hit ceiling.
 
+## Ability authoring SDK
+
+- Every `USeinAbility` Blueprint now receives the shared blocking deterministic member/call
+  validator in addition to checkpoint-continuation validation. Unsafe member state, unseeded engine
+  randomness, untrusted calls, and presentation-only conversions fail Data Validation. Calls are
+  trusted only through explicit function/class metadata or the narrow audited deterministic-signature
+  Kismet Math fallback; a safe-looking signature alone is not sufficient.
+- `SeinPresentationOnly` function/class metadata takes precedence over deterministic class trust.
+  All float and Unreal vector/rotator/quaternion/transform conversion nodes in `UMathBPFL` are
+  marked presentation-only, with focused Ability and movement regression coverage.
+- The audited Entity, Tag, Construction, Ability, Latent Action, and fixed-point Math Blueprint
+  libraries declare their sim-safe ownership explicitly. The host's 51 Blueprint assets pass the
+  Data Validation commandlet after three example Abilities had eight debug-only print/conversion
+  nodes removed and recompiled.
+- `FFixedRandom` now reflects its complete 128-bit state into the canonical Ability pool codec. The
+  Ability provider state schema is v3, and focused snapshot coverage proves exact root restoration
+  and next-draw continuation after restore.
+- `.agents/Docs/ABILITY_AUTHORING.md` documents creation/granting, targeters, command and lifecycle
+  semantics, deterministic member state, admitted async continuation, and the qualification matrix.
+- Final qualification rebuilt `SeinARTSEditor`, passed all 51 host Blueprint assets with zero Data
+  Validation errors or warnings, and passed the focused Ability determinism (9/9), Framework
+  Blueprint editor (36/36), Snapshot (27/27), Ability lifecycle (8/8), and Movement+ telemetry
+  (2/2) suites.
+
 ## Current verification
 
 The latest integration-candidate source was rebuilt and re-run after closing async navigation,

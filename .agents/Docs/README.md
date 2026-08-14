@@ -1,6 +1,6 @@
 # SeinARTS Documentation
 
-**Document version:** 0.7
+**Document version:** 0.8
 
 - `GETTING_STARTED.md`: installation, deterministic-content setup, diagnostics, and qualification.
 - `COMPATIBILITY.md`: supported engine, release cohort, SemVer, deterministic compatibility, and
@@ -14,6 +14,8 @@
   selection, safe Gather/Push usage, and resealing requirements.
 - `MOVEMENT_PLUS_ANIMATION.md`: typed vehicle telemetry setup, units, signs, lifecycle boundaries,
   animation mapping, and PIE qualification.
+- `ABILITY_AUTHORING.md`: Ability creation, command/lifecycle semantics, deterministic state,
+  checkpoint-safe continuation, and qualification.
 
 Internal engineering state and qualification receipts live under `.agents/`; they are not a
 substitute for these public adoption contracts.

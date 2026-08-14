@@ -1,6 +1,14 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
- * @file    SeinBlueprintDeterminismValidator.cpp
+ *
+ * @file         SeinBlueprintDeterminismValidator.cpp
+ * @author       RJ Macklem
+ * @created      24 Jun 2026
+ * @latest       14 Aug 2026
+ * @brief        Implements shared deterministic state and call validation for sim Blueprints.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
  */
 
 #include "Validators/SeinBlueprintDeterminismValidator.h"
@@ -9,6 +17,7 @@
 #include "K2Node_CallFunction.h"
 #include "K2Node_MacroInstance.h"
 #include "EdGraph/EdGraph.h"
+#include "Kismet/KismetMathLibrary.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Misc/DataValidation.h"
 #include "Util/SeinDeterminismRules.h"  // SeinDeterminism::IsPinTypeDeterministic (member-var check)
@@ -20,6 +29,7 @@
 namespace
 {
 	const FName SeinDeterministicMeta(TEXT("SeinDeterministic"));
+	const FName SeinPresentationOnlyMeta(TEXT("SeinPresentationOnly"));
 
 	/** True if an FProperty's type is deterministic-safe: bool, integer types, byte/enum, FName,
 	 *  or a SeinDeterministic-marked struct. Rejects float/double, object/soft/class refs,
@@ -43,10 +53,9 @@ namespace
 		return false;
 	}
 
-	/** True if EVERY parameter + return value of the function is a deterministic type. Such a call
-	 *  can't introduce float/non-det data, so it's safe regardless of which library it lives in —
-	 *  this auto-permits engine int/bool/name/enum pure ops (compares, boolean logic) while a
-	 *  function touching float/vector/object fails. */
+	/** True if every parameter and return value uses the deterministic value set. This is only a
+	 *  secondary gate for the explicitly audited Kismet math owner; a safe-looking signature alone
+	 *  never certifies behavior. */
 	bool IsFunctionSignatureDeterministic(const UFunction* Func)
 	{
 		for (TFieldIterator<FProperty> It(Func); It && (It->PropertyFlags & CPF_Parm); ++It)
@@ -56,10 +65,7 @@ namespace
 		return true;
 	}
 
-	/** Known calls whose SIGNATURE is deterministic (int/bool) but whose BEHAVIOUR is not — unseeded
-	 *  engine RNG. The signature gate would wrongly pass these, so flag them explicitly; use the Sein
-	 *  deterministic random instead. Matched by name (distinctive, and SeinDeterministic-tagged calls
-	 *  are cleared before this check, so a same-named Sein function is unaffected). */
+	/** Kismet math calls whose signatures look deterministic but whose behavior uses unseeded RNG. */
 	bool IsKnownNonDeterministicCall(const UFunction* Func)
 	{
 		if (!Func) return false;
@@ -73,20 +79,25 @@ namespace
 		return Denylist.Contains(Func->GetFName());
 	}
 
-	/** Verdict for one call. SeinDeterministic-tagged function/owner is trusted outright; known
-	 *  stateful RNG is flagged before the signature gate; otherwise a call is non-deterministic iff
-	 *  any parameter or return value is a non-deterministic type. Unresolved targets are left to the
-	 *  BP compiler (not flagged here). */
+	/** Verdict for one call. Presentation-only metadata always wins. Explicit
+	 *  deterministic function/class ownership certifies the call. The only
+	 *  engine fallback is the audited deterministic-signature subset of
+	 *  UKismetMathLibrary, excluding its unseeded random calls. Everything else
+	 *  fails closed. Unresolved targets are left to the Blueprint compiler. */
 	bool IsCallNonDeterministic(const UFunction* Func)
 	{
 		if (!Func) return false;
+		if (Func->HasMetaData(SeinPresentationOnlyMeta)) return true;
+		const UClass* Owner = Func->GetOwnerClass();
+		if (Owner && Owner->HasMetaData(SeinPresentationOnlyMeta)) return true;
 		if (Func->HasMetaData(SeinDeterministicMeta)) return false;
-		if (const UClass* Owner = Func->GetOwnerClass())
+		if (Owner && Owner->HasMetaData(SeinDeterministicMeta)) return false;
+		if (Owner == UKismetMathLibrary::StaticClass())
 		{
-			if (Owner->HasMetaData(SeinDeterministicMeta)) return false;
+			return IsKnownNonDeterministicCall(Func)
+				|| !IsFunctionSignatureDeterministic(Func);
 		}
-		if (IsKnownNonDeterministicCall(Func)) return true;
-		return !IsFunctionSignatureDeterministic(Func);
+		return true;
 	}
 
 	/** Recursively gather call nodes reachable through macro instances — a macro's graph lives in

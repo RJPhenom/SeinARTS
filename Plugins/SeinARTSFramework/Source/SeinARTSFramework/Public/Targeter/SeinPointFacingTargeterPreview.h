@@ -1,9 +1,11 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
- * @file    SeinPointFacingTargeterPreview.h
- * @brief   Phase 3 preview for USeinPointFacingTargeterSpec — hologram of
- *          a building actor, drag-rotated and cell-snapped, with validity
- *          tinting for placement feedback.
+ *
+ * @file         SeinPointFacingTargeterPreview.h
+ * @author       RJ Macklem
+ * @created      02 Jun 2026
+ * @latest       14 Aug 2026
+ * @brief        Point-plus-facing placement hologram with validity tinting.
  *
  *          Mesh resolution (multi-mesh per building, in priority order):
  *            1. Spec's PreviewMeshOverride (designer-set per-ability) —
@@ -26,6 +28,9 @@
  *          Dragging it locks position to the press-down anchor and rotates
  *          yaw to face from anchor toward cursor (snapped to spec's
  *          RotationStepDegrees).
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
  */
 
 #pragma once

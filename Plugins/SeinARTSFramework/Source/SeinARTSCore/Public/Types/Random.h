@@ -38,10 +38,12 @@ struct SEINARTSCORE_API FFixedRandom
 	static constexpr uint64 SPLITMIX64_MIX1_SEED = 0xBF58476D1CE4E5B9ULL;
 	static constexpr uint64 SPLITMIX64_MIX2_SEED = 0x94D049BB133111EBULL;
 
-	// RNG state (128 bits total)
-	// Note: uint64 is not Blueprint-compatible, so we don't expose these as UPROPERTY
-	// The struct is still BlueprintType and can be passed around in Blueprints
+	// RNG state (128 bits total). Reflected without Blueprint exposure so any
+	// authored FFixedRandom member participates in canonical hash/snapshot state.
+	UPROPERTY()
 	uint64 State0;
+
+	UPROPERTY()
 	uint64 State1;
 
 	// Constructors

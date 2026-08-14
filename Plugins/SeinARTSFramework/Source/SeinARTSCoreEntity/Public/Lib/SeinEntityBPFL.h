@@ -1,12 +1,14 @@
 /**
- * SeinARTS Framework 
- * Copyright (c) 2026 Phenom Studios, Inc.
+ * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  *
- * @file:		SeinEntityBPFL.h
- * @date:		3/27/2026
- * @author:		RJ Macklem
- * @brief:		Blueprint Function Library for entity lifecycle and queries.
- * @disclaimer: This code was generated in part by an AI language model.
+ * @file         SeinEntityBPFL.h
+ * @author       RJ Macklem
+ * @created      27 Mar 2026
+ * @latest       14 Aug 2026
+ * @brief        Exposes deterministic entity lifecycle and query operations to Blueprint.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
  */
 
 #pragma once
@@ -21,7 +23,7 @@
 class USeinWorldSubsystem;
 class ASeinActor;
 
-UCLASS(meta = (DisplayName = "SeinARTS Entity Library"))
+UCLASS(meta = (DisplayName = "SeinARTS Entity Library", SeinDeterministic))
 class SEINARTSCOREENTITY_API USeinEntityBPFL : public UBlueprintFunctionLibrary
 {
 	GENERATED_BODY()

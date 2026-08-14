@@ -148,7 +148,7 @@ bool USeinTargeterBPFL::TriggerAbilityFromActionSlot(ASeinPlayerController* PC, 
 	}
 
 	// Need targeter. Ability must declare a spec OR we'd need a default —
-	// Phase 1 requires designers to attach a USeinPointTargeterSpec explicitly.
+	// Designers may attach a USeinPointTargeterSpec explicitly.
 	// Future enhancement: synthesize a default Point spec from TargetType when
 	// TargeterSpec is null, so trivial Point/Area abilities don't need a spec
 	// asset. For now we log and skip if missing — clearer authoring error.
@@ -182,10 +182,8 @@ FFixedTransform USeinTargeterBPFL::GetTargeterPointTransform(const FSeinTargeter
 {
 	// Compose the captured point into a deterministic FFixedTransform. Yaw lives
 	// on Point.YawDegrees (already snapped or free per the spec's
-	// RotationStepDegrees); no math required by the caller. Stays in fixed-point
-	// throughout — designer converts to FTransform at the UE-API boundary
-	// (e.g. just before Spawn Actor From Class) via FFixedTransform's
-	// ToTransform method.
+	// RotationStepDegrees); no math is required by the caller and the result
+	// remains fixed-point for deterministic spawn/construction APIs.
 	const FFixedRotator Rot(FFixedPoint::Zero, Point.YawDegrees, FFixedPoint::Zero);
 	return FFixedTransform(Point.Location, Rot);
 }

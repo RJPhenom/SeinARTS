@@ -119,6 +119,15 @@ retains track-all behavior.
 The supported Preview, Gather, Check Sync, Push, save, and reseal workflow is documented in
 `.agents/Docs/BALANCE_DATA.md`.
 
+Ability authoring now has a maintained public workflow for creation/granting, smart commands,
+targeting, activation/lifecycle semantics, deterministic state, and checkpoint-safe Move To
+continuation in `.agents/Docs/ABILITY_AUTHORING.md`. A blocking editor validator now applies the
+shared deterministic member/call contract to every Ability Blueprint. Untrusted calls fail closed,
+presentation conversions override otherwise trusted fixed-point libraries, and unseeded randomness
+remains denied. `FFixedRandom`'s complete state participates in canonical Ability snapshots with
+exact next-draw restoration coverage, and the host example Ability assets pass an all-Blueprint
+Data Validation commandlet run.
+
 ### Movement+
 
 **Automated baseline complete.** The deterministic Vehicle Gym covers MBT, IFV/APC, wheeled
@@ -251,7 +260,9 @@ Exit: game UI and progression can target stable provider-neutral interfaces whil
   separates host examples from shipped plugin content and walks project-owned settings, unit, map,
   manifest, and two-player qualification. Movement+ vehicle animation now has a source-grounded
   typed-telemetry workflow, exact units/signs, lifecycle boundaries, and PIE matrix in
-  `.agents/Docs/MOVEMENT_PLUS_ANIMATION.md`. Tutorials for the remaining deep subsystems and broader
+  `.agents/Docs/MOVEMENT_PLUS_ANIMATION.md`. Ability authoring now has a source-grounded creation,
+  lifecycle, command, deterministic-state, and checkpoint-continuation workflow in
+  `.agents/Docs/ABILITY_AUTHORING.md`. Tutorials for the remaining deep subsystems and broader
   in-editor error UX remain.
 
 Exit: a studio can adopt the framework without relying on this repository's private history or an agent to explain hidden setup.
