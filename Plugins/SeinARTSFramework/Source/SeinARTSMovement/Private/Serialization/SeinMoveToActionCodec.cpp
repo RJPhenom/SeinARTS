@@ -25,6 +25,11 @@
 #include "UObject/StructOnScope.h"
 #include "UObject/UnrealType.h"
 
+#if WITH_DEV_AUTOMATION_TESTS
+#include "Components/SeinNavigationComponent.h"
+#include "SeinNavigationSubsystem.h"
+#endif
+
 namespace
 {
 	constexpr int32 MaxPathWaypoints = 131072;
@@ -1486,6 +1491,60 @@ bool UE::SeinARTSTests::
 		&& !Proxy.OnCancelled.IsBound()
 		&& !Proxy.OnPartialPath.IsBound()
 		&& !Proxy.OnPathRecomputed.IsBound();
+}
+
+void UE::SeinARTSTests::
+	FMoveToActionContinuationTestAccess::
+	SetForceRepathPending(
+		USeinMoveToAction& Action,
+		bool bPending)
+{
+	Action.bForceRepathNow = bPending;
+}
+
+bool UE::SeinARTSTests::
+	FMoveToActionContinuationTestAccess::
+	IsForceRepathPending(const USeinMoveToAction& Action)
+{
+	return Action.bForceRepathNow;
+}
+
+FFixedPoint UE::SeinARTSTests::
+	FMoveToActionContinuationTestAccess::
+	GetRepathElapsed(const USeinMoveToAction& Action)
+{
+	return Action.TimeSinceLastRepath;
+}
+
+bool UE::SeinARTSTests::
+	FMoveToActionContinuationTestAccess::
+	TickRepathWithoutNavigationSubsystem(
+		USeinMoveToAction& Action,
+		FFixedPoint DeltaTime,
+		USeinWorldSubsystem& World)
+{
+	FSeinEntity* Entity = World.GetEntityMutable(Action.OwnerEntity);
+	FSeinMovementComponent* MovementData =
+		World.GetComponentMutable<FSeinMovementComponent>(
+			Action.OwnerEntity);
+	const FSeinNavigationComponent* NavigationData =
+		World.GetComponent<FSeinNavigationComponent>(
+			Action.OwnerEntity);
+	USeinNavigation* Navigation =
+		USeinNavigationSubsystem::GetNavigationForWorld(&World);
+	if (!Entity || !MovementData || !NavigationData || !Navigation)
+	{
+		return false;
+	}
+	return Action.TickRepath(
+			DeltaTime,
+			World,
+			*Entity,
+			*MovementData,
+			NavigationData,
+			Navigation,
+			nullptr)
+		!= USeinMoveToAction::ERepathTickResult::Terminal;
 }
 
 bool UE::SeinARTSTests::

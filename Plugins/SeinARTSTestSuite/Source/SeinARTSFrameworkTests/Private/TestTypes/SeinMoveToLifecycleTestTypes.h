@@ -27,6 +27,14 @@ public:
 	static int32 BeginCount;
 	static int32 TickCount;
 	static int32 EndCount;
+	static int32 PlanPathCallCount;
+	static int32 LastTickPathWaypointCount;
+	static FFixedVector RepathWaypointMarker;
+	static FFixedVector LastTickMiddleWaypoint;
+	static TArray<ESeinPathResult> ScriptedPathResults;
+	static TArray<int32> EmptyFoundCallIndices;
+	static bool bRepathPathsPartial;
+	static bool bInitialPathSkipsStart;
 	static TFunction<void()> MoveEndCallback;
 
 	static void Reset();
@@ -107,6 +115,10 @@ public:
 	int32 CompletedCount = 0;
 	int32 FailedCount = 0;
 	int32 CancelledCount = 0;
+	int32 PathRecomputedCount = 0;
+	int32 PartialPathCount = 0;
+	TArray<int32> RepathEventOrder;
+	FFixedPoint RecomputedObservedRepathElapsed = FFixedPoint::MinValue;
 	bool bCompletedSawTerminalAction = false;
 	bool bFailedSawTerminalAction = false;
 	bool bReenterCancellationOnCancelled = false;
@@ -120,4 +132,10 @@ public:
 
 	UFUNCTION()
 	void HandleCancelled(FSeinMoveToResult Result);
+
+	UFUNCTION()
+	void HandlePathRecomputed(FSeinMoveToResult Result);
+
+	UFUNCTION()
+	void HandlePartialPath(FSeinMoveToResult Result);
 };

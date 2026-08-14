@@ -1,6 +1,6 @@
 # SeinARTS Project State
 
-**State date:** 2026-08-13
+**State date:** 2026-08-14
 **Baseline branch:** `main`
 **Stabilization commit:** `27cb490` (`Stabilize post-audit performance and determinism`)
 **Cleanup boundary:** `1bebf91` (`Clean and harden the post-audit baseline`)
@@ -52,25 +52,26 @@ formation/resolver state coverage, provider teardown, and downstream content own
 
 | Gate | Result |
 |---|---:|
-| `SeinARTS.Unit`, profile All | 452 passed, 0 failed |
+| `SeinARTS.Unit`, profile All | 458 passed, 0 failed |
 | `SeinARTS.Unit`, profile Framework | 434 passed, 0 failed |
 | `SeinARTS.Integration`, profile All | 26 passed, 0 failed |
 | `SeinARTS.Integration`, profile Framework | 20 passed, 0 failed |
-| `SeinARTS.Determinism`, profile All | 43 passed, 0 failed |
+| `SeinARTS.Determinism`, profile All | 48 passed, 0 failed |
 | `SeinARTS.Determinism`, profile Framework | 33 passed, 0 failed |
-| `SeinARTS.Editor`, profile All | 38 passed, 0 failed |
+| `SeinARTS.Editor`, profile All | 39 passed, 0 failed |
 | `SeinARTS.Editor`, profile Framework | 36 passed, 0 failed |
-| `SeinARTS.Sim`, profile All | 30 passed, 0 failed |
-| `SeinARTS.Sim`, profile Framework | 34 passed, 0 failed |
+| `SeinARTS.Sim`, profile All | 50 passed, 0 failed |
+| `SeinARTS.Sim`, profile Framework | 47 passed, 0 failed |
 | `SeinARTS.Perf`, profile All | 6 passed, 0 failed; cover 128x128 averaged 11.998 ms; public 128-member preview measured 1.255/1.337 ms median/p95 coverless and 3.181/3.324 ms dense; collision full-tick medians 1.257/3.114/7.214 ms at 64/128/256 movers |
 | `SeinARTS.Perf`, profile Framework | 4 passed, 0 failed; latest replay operational soak wrote 135,244,673 bytes over 449 turns with 135.552/203.523/211.276 ms checkpoint p50/p95/max; containment at 1,000 occupants measured 2.825 ms canonical root, 4.328 ms invalidated checkpoint, and 0.926 ms warm checkpoint; moving-entity checkpoint medians remain 2.037/7.815/15.288 ms at 100/500/1,000 entities; collision full-tick medians 1.401/3.035/7.494 ms at 64/128/256 movers |
 | Replay Memory Insights (qualified) | Clean commit `8178dec` has a same-attempt build and production `Qualified` receipt; the warmed 56-checkpoint interval retained zero production replay allocations/bytes against the fixed 4 KiB ceiling, with complete callstacks and separately validated allocator sentinels |
-| Fresh-process collision trace | 2026-08-13 serial and parallel roots/poses identical for all 120 ticks under `SeinARTS.Replay.6`; final root `58DA3B5A4281F117CB3F7471624DDCB4`, pose `0x8B576390ECC600E1` |
+| Fresh-process collision trace | 2026-08-14 serial and parallel roots/poses identical for all 120 ticks under `SeinARTS.Replay.6`; final root `389FF04BD23FD4D3F5C659C9384FD2EC`, pose `0xF9AA3969BB04EAD0` |
 | `SeinARTSEditor Win64 Development` | succeeded / target current |
 | `SeinARTS Win64 Shipping` | succeeded / target current |
 | Focused Core boundary/epoch | 2026-08-13 exact epoch test passed with `SeinARTS.Replay.6`; prior `SeinARTS.Unit.Core` Framework profile passed 131 tests including opposite-endpoint saturated distance and maximum-diagonal normalization |
 | Focused Net protocol | 2026-08-13 `SeinARTS.Unit.Network.Protocol` Framework profile: 40 passed through production listen-authority commit and disconnect pipeline-backfill entry points |
 | Focused Movement+ | 2026-08-13 unit 5/5, determinism 9/9, movement snapshot 8/8, and continuation 1/1 passed |
+| Focused Move To repath | 2026-08-14 interval/off-path behavior 13/13 and real-boundary fresh-world continuation 1/1 passed; covers same-tick commit, throttle cadence, forced attempts, unavailable navigation/subsystem gates, failure limits, partial callback order/state, implicit-origin drift, and canonical continuation |
 | Focused default avoidance | 2026-08-13 Unit 6/6 passed after private-kernel decomposition; covers crossing serial/parallel agreement, opt-out/idle release, idle dodge, gap resolution, and broker cohesion |
 | Focused containment integrity | 2026-08-13 Unit 4/4, Determinism 3/3, and Perf 1/1 passed; covers cycle/overflow admission, bootstrap/root/checkpoint refusal, failure-atomic malformed restore, rotated local deploy offsets, ability commands, pre/post checkpoint roots, per-tick replay roots, and 100/500/1,000-occupant invalidated/warm checkpoint curves |
 | Clean consumer: Framework | fresh 2026-08-12 Editor + Shipping build, exact map load, cook/package, real Shipping startup passed |
@@ -85,6 +86,20 @@ formation/resolver state coverage, provider teardown, and downstream content own
 
 Latest local evidence is under ignored `Saved/Automation/`:
 
+- `SeinARTS.Sim.Movement.Repath-20260814-002006-b4d103b6` (Framework, 13 passed)
+- `SeinARTS.Editor.Snapshot.Movement.MoveToContinuationCrossesRealRepathBoundaryExactly-20260814-000233-9fa959a7`
+  (Framework, 1 passed; fresh-world continuation crosses a real interval repath boundary)
+- `SeinARTS.Unit-20260814-000329-a73f1ba3` (All, 458 passed),
+  `SeinARTS.Sim-20260814-002107-fde045b2` (All, 50 passed),
+  `SeinARTS.Sim-20260814-002148-e5a7f301` (Framework, 47 passed),
+  `SeinARTS.Integration-20260814-000505-99e7fcb5` (All, 26 passed),
+  `SeinARTS.Editor-20260814-000556-84346e58` (All, 39 passed), and
+  `SeinARTS.Determinism-20260814-000618-8c0a8874` (All, 48 passed)
+- `SeinARTS.Determinism.Process.SerialCollisionTrace-20260814-000658-33a2826f` and
+  `SeinARTS.Determinism.Process.ParallelCollisionTrace-20260814-000715-14ec43e5`
+  (fresh processes; all 120 canonical roots and raw poses matched after Move To repath extraction)
+- `Scripts/Build.ps1` and `Scripts/Build.ps1 -Target SeinARTS -Config Shipping`
+  (2026-08-14; Development current and 176-action Shipping build linked successfully)
 - `SeinARTS.Unit.Movement.Avoidance-20260813-145658-05842d87` (Framework, 6 passed)
 - `SeinARTS.Unit-20260813-145809-0315289c` (Framework, 434 passed) and
   `SeinARTS.Unit-20260813-150458-6a24a13d` (All, 452 passed)
@@ -646,6 +661,16 @@ resolver scenario state before sealing tick zero, so the aggregate also proves b
 Explicit
 squad destruction refunds, queue replacement, wipe/recreation, and retreat remain product-policy
 work rather than implicit cleanup behavior.
+
+Move To's interval/off-path repath stage now lives in one private member instead of interrupting
+the main latent-action tick. Canonical action fields, planner classification, force consumption,
+timer/reset ordering, callback order, and pre-movement mutation timing are unchanged. Independent
+adversarial review found no production defect; its coverage findings were closed with 13 focused
+behavior tests plus a fresh-world snapshot continuation that crosses a real repath boundary. The
+all-extension Unit/Sim/Integration/Editor/Determinism profiles pass at 458/50/26/39/48, fresh-process
+serial/parallel roots and poses match for all 120 ticks, and Development plus Shipping builds
+succeeded. No public gameplay API, reflected state, codec schema, tuning, behavior revision, or
+movement behavior changed.
 
 ## Evidence limits
 

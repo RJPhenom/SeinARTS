@@ -15,6 +15,7 @@ class USeinAbility;
 class USeinMovement;
 class USeinMoveToAction;
 class USeinMoveToProxy;
+class USeinWorldSubsystem;
 struct FSeinSnapshotLatentActionRecord;
 struct FFixedVector;
 struct FFixedPoint;
@@ -52,6 +53,21 @@ namespace UE::SeinARTSTests
 
 		static bool IsSilentlyDetached(
 			const USeinMoveToProxy& Proxy);
+
+		static void SetForceRepathPending(
+			USeinMoveToAction& Action,
+			bool bPending);
+
+		static bool IsForceRepathPending(
+			const USeinMoveToAction& Action);
+
+		static FFixedPoint GetRepathElapsed(
+			const USeinMoveToAction& Action);
+
+		static bool TickRepathWithoutNavigationSubsystem(
+			USeinMoveToAction& Action,
+			FFixedPoint DeltaTime,
+			USeinWorldSubsystem& World);
 	};
 
 	enum class EMoveToContinuationMutation : uint8

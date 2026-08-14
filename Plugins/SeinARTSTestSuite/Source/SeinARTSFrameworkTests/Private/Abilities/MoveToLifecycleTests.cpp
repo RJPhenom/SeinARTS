@@ -4,10 +4,13 @@
 #include "Actions/SeinMoveToAction.h"
 #include "Components/SeinAbilityComponent.h"
 #include "Components/SeinMovementComponent.h"
+#include "Components/SeinNavigationComponent.h"
 #include "Lib/SeinAbilityBPFL.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
 #include "Simulation/SeinTestSimContext.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "Settings/PluginSettings.h"
+#include "Testing/SeinMoveToActionContinuationTestAccess.h"
 #include "TestTypes/SeinMoveToLifecycleTestTypes.h"
 #include "Types/Entity.h"
 
@@ -15,6 +18,17 @@ bool USeinMoveToLifecycleTestMovement::bFinishOnTick = false;
 int32 USeinMoveToLifecycleTestMovement::BeginCount = 0;
 int32 USeinMoveToLifecycleTestMovement::TickCount = 0;
 int32 USeinMoveToLifecycleTestMovement::EndCount = 0;
+int32 USeinMoveToLifecycleTestMovement::PlanPathCallCount = 0;
+int32 USeinMoveToLifecycleTestMovement::LastTickPathWaypointCount = 0;
+FFixedVector USeinMoveToLifecycleTestMovement::RepathWaypointMarker =
+	FFixedVector::ZeroVector;
+FFixedVector USeinMoveToLifecycleTestMovement::LastTickMiddleWaypoint =
+	FFixedVector::ZeroVector;
+TArray<ESeinPathResult>
+	USeinMoveToLifecycleTestMovement::ScriptedPathResults;
+TArray<int32> USeinMoveToLifecycleTestMovement::EmptyFoundCallIndices;
+bool USeinMoveToLifecycleTestMovement::bRepathPathsPartial = false;
+bool USeinMoveToLifecycleTestMovement::bInitialPathSkipsStart = false;
 TFunction<void()> USeinMoveToLifecycleTestMovement::MoveEndCallback;
 
 void USeinMoveToLifecycleTestMovement::Reset()
@@ -23,17 +37,52 @@ void USeinMoveToLifecycleTestMovement::Reset()
 	BeginCount = 0;
 	TickCount = 0;
 	EndCount = 0;
+	PlanPathCallCount = 0;
+	LastTickPathWaypointCount = 0;
+	RepathWaypointMarker = FFixedVector::ZeroVector;
+	LastTickMiddleWaypoint = FFixedVector::ZeroVector;
+	ScriptedPathResults.Reset();
+	EmptyFoundCallIndices.Reset();
+	bRepathPathsPartial = false;
+	bInitialPathSkipsStart = false;
 	MoveEndCallback = nullptr;
 }
 
 ESeinPathResult USeinMoveToLifecycleTestMovement::PlanPath(
 	const FSeinPlanPathContext& Ctx, FSeinPath& OutPath) const
 {
+	const int32 CallIndex = PlanPathCallCount++;
+	const ESeinPathResult Result = ScriptedPathResults.IsValidIndex(CallIndex)
+		? ScriptedPathResults[CallIndex]
+		: ESeinPathResult::Found;
 	OutPath.Clear();
-	OutPath.Waypoints.Add(Ctx.Entity.Transform.GetLocation());
+	if (Result != ESeinPathResult::Found)
+	{
+		return Result;
+	}
+	if (EmptyFoundCallIndices.Contains(CallIndex))
+	{
+		return ESeinPathResult::Found;
+	}
+	const FFixedVector Start = Ctx.Entity.Transform.GetLocation();
+	if (CallIndex == 0 && bInitialPathSkipsStart)
+	{
+		OutPath.Waypoints.Add(FFixedVector(
+			(Start.X + Ctx.Destination.X) / FFixedPoint::FromInt(2),
+			(Start.Y + Ctx.Destination.Y) / FFixedPoint::FromInt(2),
+			(Start.Z + Ctx.Destination.Z) / FFixedPoint::FromInt(2)));
+	}
+	else
+	{
+		OutPath.Waypoints.Add(Start);
+	}
+	if (CallIndex > 0 && RepathWaypointMarker != FFixedVector::ZeroVector)
+	{
+		OutPath.Waypoints.Add(RepathWaypointMarker);
+	}
 	OutPath.Waypoints.Add(Ctx.Destination);
 	OutPath.bIsValid = true;
-	OutPath.bIsPartial = false;
+	OutPath.bIsPartial = CallIndex > 0 && bRepathPathsPartial;
 	OutPath.DeriveSegmentsFromWaypoints();
 	return ESeinPathResult::Found;
 }
@@ -45,9 +94,13 @@ void USeinMoveToLifecycleTestMovement::OnMoveBegin(
 }
 
 bool USeinMoveToLifecycleTestMovement::Tick(
-	const FSeinMovementContext&)
+	const FSeinMovementContext& Ctx)
 {
 	++TickCount;
+	LastTickPathWaypointCount = Ctx.Path.Waypoints.Num();
+	LastTickMiddleWaypoint = Ctx.Path.Waypoints.Num() > 2
+		? Ctx.Path.Waypoints[1]
+		: FFixedVector::ZeroVector;
 	return bFinishOnTick;
 }
 
@@ -100,8 +153,47 @@ void USeinMoveToLifecycleTestObserver::HandleCancelled(
 	}
 }
 
+void USeinMoveToLifecycleTestObserver::HandlePathRecomputed(
+	FSeinMoveToResult)
+{
+	++PathRecomputedCount;
+	RepathEventOrder.Add(1);
+	RecomputedObservedRepathElapsed = Action
+		? UE::SeinARTSTests::FMoveToActionContinuationTestAccess::
+			GetRepathElapsed(*Action)
+		: FFixedPoint::MinValue;
+}
+
+void USeinMoveToLifecycleTestObserver::HandlePartialPath(
+	FSeinMoveToResult)
+{
+	++PartialPathCount;
+	RepathEventOrder.Add(2);
+}
+
 namespace
 {
+	struct FScopedDisabledNavigation
+	{
+		FScopedDisabledNavigation()
+			: Settings(GetMutableDefault<USeinARTSCoreSettings>())
+			, SavedNavigationClass(Settings
+				? Settings->NavigationClass
+				: FSoftClassPath())
+		{
+			check(Settings);
+			Settings->NavigationClass.Reset();
+		}
+
+		~FScopedDisabledNavigation()
+		{
+			Settings->NavigationClass = SavedNavigationClass;
+		}
+
+		USeinARTSCoreSettings* Settings = nullptr;
+		FSoftClassPath SavedNavigationClass;
+	};
+
 	struct FScopedMoveToTestState
 	{
 		FScopedMoveToTestState()
@@ -127,7 +219,9 @@ namespace
 		FSeinEntityHandle Entity;
 		int32 AbilityID = INDEX_NONE;
 
-		bool Initialize(bool bFinishOnFirstTick)
+		bool Initialize(
+			bool bFinishOnFirstTick,
+			const FSeinNavigationComponent* NavigationComponent = nullptr)
 		{
 			World = Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
 			if (!World)
@@ -144,6 +238,10 @@ namespace
 					MovementComponent.MovementClass = FSoftClassPath(
 						USeinMoveToLifecycleTestMovement::StaticClass()->GetPathName());
 					World->AddComponent(Entity, MovementComponent);
+					if (NavigationComponent)
+					{
+						World->AddComponent(Entity, *NavigationComponent);
+					}
 					World->AddComponent(Entity, FSeinAbilityComponent());
 					AbilityID = USeinAbilityBPFL::SeinGrantAbility(
 						World, Entity,
@@ -201,6 +299,10 @@ namespace
 				Observer, &USeinMoveToLifecycleTestObserver::HandleFailed);
 			Proxy->OnCancelled.AddDynamic(
 				Observer, &USeinMoveToLifecycleTestObserver::HandleCancelled);
+			Proxy->OnPathRecomputed.AddDynamic(
+				Observer, &USeinMoveToLifecycleTestObserver::HandlePathRecomputed);
+			Proxy->OnPartialPath.AddDynamic(
+				Observer, &USeinMoveToLifecycleTestObserver::HandlePartialPath);
 
 			USeinMoveToLifecycleTestMovement::bFinishOnTick =
 				bFinishOnFirstTick;
@@ -208,10 +310,19 @@ namespace
 			return true;
 		}
 
-		void Tick()
+		void Tick(FFixedPoint DeltaTime = FFixedPoint::One)
 		{
 			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
-			Manager->TickAll(FFixedPoint::FromInt(1), *World);
+			Manager->TickAll(DeltaTime, *World);
+		}
+
+		void SetLocation(const FFixedVector& Location)
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+			if (FSeinEntity* SimEntity = World->GetEntityMutable(Entity))
+			{
+				SimEntity->Transform.SetLocation(Location);
+			}
 		}
 	};
 }
@@ -316,5 +427,424 @@ namespace UE::SeinARTSTests
 			1, USeinMoveToLifecycleTestMovement::EndCount));
 		ASSERT_THAT(IsFalse(Fixture.Ability->bIsActive));
 		ASSERT_THAT(AreEqual(0, Fixture.Manager->GetActiveActionCount()));
+	}
+
+	TEST(MoveToIntervalRepathCommitsBeforeMovementTick,
+		"SeinARTS.Sim.Movement.Repath")
+	{
+		FScopedMoveToTestState Reset;
+		FSeinNavigationComponent Navigation;
+		Navigation.RepathMode = ESeinRepathMode::Interval;
+		Navigation.RepathInterval =
+			FFixedPoint::One / FFixedPoint::FromInt(20);
+		const FFixedVector Marker(
+			FFixedPoint::FromInt(40),
+			FFixedPoint::FromInt(20),
+			FFixedPoint::Zero);
+		USeinMoveToLifecycleTestMovement::RepathWaypointMarker = Marker;
+		USeinMoveToLifecycleTestMovement::ScriptedPathResults = {
+			ESeinPathResult::Found,
+			ESeinPathResult::Found
+		};
+
+		FMoveToLifecycleFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Navigation)));
+		Fixture.Tick(FFixedPoint::One / FFixedPoint::FromInt(20));
+
+		ASSERT_THAT(AreEqual(
+			2, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
+		ASSERT_THAT(AreEqual(1, Fixture.Observer->PathRecomputedCount));
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::TickCount));
+		ASSERT_THAT(AreEqual(
+			3, USeinMoveToLifecycleTestMovement::LastTickPathWaypointCount));
+		ASSERT_THAT(IsTrue(
+			USeinMoveToLifecycleTestMovement::LastTickMiddleWaypoint == Marker));
+	}
+
+	TEST(MoveToIntervalThrottleWaitsFullCadenceBeforeRetry,
+		"SeinARTS.Sim.Movement.Repath")
+	{
+		FScopedMoveToTestState Reset;
+		FSeinNavigationComponent Navigation;
+		Navigation.RepathMode = ESeinRepathMode::Interval;
+		Navigation.RepathInterval =
+			FFixedPoint::One / FFixedPoint::FromInt(8);
+		USeinMoveToLifecycleTestMovement::ScriptedPathResults = {
+			ESeinPathResult::Found,
+			ESeinPathResult::Throttled,
+			ESeinPathResult::Found
+		};
+
+		FMoveToLifecycleFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Navigation)));
+		const FFixedPoint HalfInterval =
+			FFixedPoint::One / FFixedPoint::FromInt(16);
+		Fixture.Tick(HalfInterval);
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
+		Fixture.Tick(HalfInterval);
+		ASSERT_THAT(AreEqual(
+			2, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
+		ASSERT_THAT(AreEqual(0, Fixture.Observer->PathRecomputedCount));
+		Fixture.Tick(HalfInterval);
+		ASSERT_THAT(AreEqual(
+			2, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
+		Fixture.Tick(HalfInterval);
+		ASSERT_THAT(AreEqual(
+			3, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
+		ASSERT_THAT(AreEqual(1, Fixture.Observer->PathRecomputedCount));
+	}
+
+	TEST(MoveToForcedIntervalRepathBypassesCadenceAndConsumesThrottle,
+		"SeinARTS.Sim.Movement.Repath")
+	{
+		FScopedMoveToTestState Reset;
+		FSeinNavigationComponent Navigation;
+		Navigation.RepathMode = ESeinRepathMode::Interval;
+		Navigation.RepathInterval = FFixedPoint::FromInt(10);
+		USeinMoveToLifecycleTestMovement::ScriptedPathResults = {
+			ESeinPathResult::Found,
+			ESeinPathResult::Throttled
+		};
+
+		FMoveToLifecycleFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Navigation)));
+		FMoveToActionContinuationTestAccess::SetForceRepathPending(
+			*Fixture.Action, true);
+		Fixture.Tick(FFixedPoint::Epsilon);
+
+		ASSERT_THAT(AreEqual(
+			2, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
+		ASSERT_THAT(IsFalse(
+			FMoveToActionContinuationTestAccess::IsForceRepathPending(
+				*Fixture.Action)));
+		ASSERT_THAT(IsTrue(
+			FMoveToActionContinuationTestAccess::GetRepathElapsed(
+				*Fixture.Action) == FFixedPoint::Zero));
+		ASSERT_THAT(AreEqual(0, Fixture.Observer->PathRecomputedCount));
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::TickCount));
+	}
+
+	TEST(MoveToForcedOffPathRepathBypassesCadenceAndDrift,
+		"SeinARTS.Sim.Movement.Repath")
+	{
+		FScopedMoveToTestState Reset;
+		FSeinNavigationComponent Navigation;
+		Navigation.RepathMode = ESeinRepathMode::OffPathOnly;
+		Navigation.OffPathThreshold = FFixedPoint::FromInt(10000);
+		USeinMoveToLifecycleTestMovement::ScriptedPathResults = {
+			ESeinPathResult::Found,
+			ESeinPathResult::Found
+		};
+
+		FMoveToLifecycleFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Navigation)));
+		FMoveToActionContinuationTestAccess::SetForceRepathPending(
+			*Fixture.Action, true);
+		Fixture.Tick(FFixedPoint::Epsilon);
+
+		ASSERT_THAT(AreEqual(
+			2, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
+		ASSERT_THAT(AreEqual(1, Fixture.Observer->PathRecomputedCount));
+		ASSERT_THAT(IsFalse(
+			FMoveToActionContinuationTestAccess::IsForceRepathPending(
+				*Fixture.Action)));
+	}
+
+	TEST(MoveToForcedRepathRemainsPendingWithoutNavigation,
+		"SeinARTS.Sim.Movement.Repath")
+	{
+		FScopedMoveToTestState Reset;
+		FScopedDisabledNavigation DisabledNavigation;
+		FSeinNavigationComponent Navigation;
+		Navigation.RepathMode = ESeinRepathMode::Interval;
+		Navigation.RepathInterval = FFixedPoint::Epsilon;
+
+		FMoveToLifecycleFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Navigation)));
+		FMoveToActionContinuationTestAccess::SetForceRepathPending(
+			*Fixture.Action, true);
+		Fixture.Tick(FFixedPoint::Epsilon);
+
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
+		ASSERT_THAT(IsTrue(
+			FMoveToActionContinuationTestAccess::IsForceRepathPending(
+				*Fixture.Action)));
+		ASSERT_THAT(IsTrue(
+			FMoveToActionContinuationTestAccess::GetRepathElapsed(
+				*Fixture.Action) == FFixedPoint::Epsilon));
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::TickCount));
+	}
+
+	TEST(MoveToForcedRepathRemainsPendingWithoutNavigationSubsystem,
+		"SeinARTS.Sim.Movement.Repath")
+	{
+		FScopedMoveToTestState Reset;
+		FSeinNavigationComponent Navigation;
+		Navigation.RepathMode = ESeinRepathMode::Interval;
+		Navigation.RepathInterval = FFixedPoint::FromInt(10);
+
+		FMoveToLifecycleFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Navigation)));
+		Fixture.Tick(FFixedPoint::Epsilon);
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
+		FMoveToActionContinuationTestAccess::SetForceRepathPending(
+			*Fixture.Action, true);
+
+		{
+			auto SimScope =
+				FSeinSimContextTestAccess::Enter(*Fixture.World);
+			ASSERT_THAT(IsTrue(
+				FMoveToActionContinuationTestAccess::
+					TickRepathWithoutNavigationSubsystem(
+						*Fixture.Action,
+						FFixedPoint::Epsilon,
+						*Fixture.World)));
+		}
+
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
+		ASSERT_THAT(IsTrue(
+			FMoveToActionContinuationTestAccess::IsForceRepathPending(
+				*Fixture.Action)));
+		ASSERT_THAT(IsTrue(
+			FMoveToActionContinuationTestAccess::GetRepathElapsed(
+				*Fixture.Action) == FFixedPoint::Epsilon + FFixedPoint::Epsilon));
+	}
+
+	TEST(MoveToIntervalRepathFailsAtConfiguredLimit,
+		"SeinARTS.Sim.Movement.Repath")
+	{
+		FScopedMoveToTestState Reset;
+		FSeinNavigationComponent Navigation;
+		Navigation.RepathMode = ESeinRepathMode::Interval;
+		Navigation.RepathInterval =
+			FFixedPoint::One / FFixedPoint::FromInt(20);
+		Navigation.RepathFailureLimit = 2;
+		USeinMoveToLifecycleTestMovement::ScriptedPathResults = {
+			ESeinPathResult::Found,
+			ESeinPathResult::NotFound,
+			ESeinPathResult::NotFound
+		};
+
+		FMoveToLifecycleFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Navigation)));
+		const FFixedPoint Interval =
+			FFixedPoint::One / FFixedPoint::FromInt(20);
+		Fixture.Tick(Interval);
+		ASSERT_THAT(IsFalse(Fixture.Action->bCompleted));
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::TickCount));
+		Fixture.Tick(Interval);
+
+		ASSERT_THAT(AreEqual(
+			3, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
+		ASSERT_THAT(AreEqual(1, Fixture.Observer->FailedCount));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(ESeinMoveFailureReason::PathNotFound),
+			static_cast<int32>(Fixture.Observer->LastFailure)));
+		ASSERT_THAT(IsTrue(Fixture.Action->bCompleted));
+		ASSERT_THAT(IsTrue(Fixture.Action->bFailed));
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::TickCount));
+	}
+
+	TEST(MoveToOffPathRepathRequiresDriftAndMinimumCadence,
+		"SeinARTS.Sim.Movement.Repath")
+	{
+		FScopedMoveToTestState Reset;
+		FSeinNavigationComponent Navigation;
+		Navigation.RepathMode = ESeinRepathMode::OffPathOnly;
+		Navigation.OffPathThreshold = FFixedPoint::FromInt(10);
+		USeinMoveToLifecycleTestMovement::ScriptedPathResults = {
+			ESeinPathResult::Found,
+			ESeinPathResult::Found
+		};
+
+		FMoveToLifecycleFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Navigation)));
+		const FFixedPoint MinimumAttempt =
+			FFixedPoint::One / FFixedPoint::FromInt(10);
+		Fixture.Tick(MinimumAttempt);
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
+		Fixture.SetLocation(FFixedVector(
+			FFixedPoint::Zero,
+			FFixedPoint::FromInt(50),
+			FFixedPoint::Zero));
+		Fixture.Tick(MinimumAttempt - FFixedPoint::Epsilon);
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
+		Fixture.Tick(FFixedPoint::Epsilon);
+		ASSERT_THAT(AreEqual(
+			2, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
+		ASSERT_THAT(AreEqual(1, Fixture.Observer->PathRecomputedCount));
+	}
+
+	TEST(MoveToOffPathImplicitOriginPrefixPreventsFalseDrift,
+		"SeinARTS.Sim.Movement.Repath")
+	{
+		FScopedMoveToTestState Reset;
+		FSeinNavigationComponent Navigation;
+		Navigation.RepathMode = ESeinRepathMode::OffPathOnly;
+		Navigation.OffPathThreshold = FFixedPoint::FromInt(10);
+		USeinMoveToLifecycleTestMovement::bInitialPathSkipsStart = true;
+
+		FMoveToLifecycleFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Navigation)));
+		Fixture.Tick(FFixedPoint::One / FFixedPoint::FromInt(10));
+
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
+		ASSERT_THAT(AreEqual(0, Fixture.Observer->PathRecomputedCount));
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::TickCount));
+	}
+
+	TEST(MoveToOffPathThrottleWaitsMinimumCadenceBeforeRetry,
+		"SeinARTS.Sim.Movement.Repath")
+	{
+		FScopedMoveToTestState Reset;
+		FSeinNavigationComponent Navigation;
+		Navigation.RepathMode = ESeinRepathMode::OffPathOnly;
+		Navigation.OffPathThreshold = FFixedPoint::FromInt(10);
+		USeinMoveToLifecycleTestMovement::ScriptedPathResults = {
+			ESeinPathResult::Found,
+			ESeinPathResult::Throttled,
+			ESeinPathResult::Found
+		};
+
+		FMoveToLifecycleFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Navigation)));
+		const FFixedPoint MinimumAttempt =
+			FFixedPoint::One / FFixedPoint::FromInt(10);
+		Fixture.Tick(MinimumAttempt);
+		Fixture.SetLocation(FFixedVector(
+			FFixedPoint::Zero,
+			FFixedPoint::FromInt(50),
+			FFixedPoint::Zero));
+		Fixture.Tick(MinimumAttempt);
+		ASSERT_THAT(AreEqual(
+			2, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
+		ASSERT_THAT(AreEqual(0, Fixture.Observer->PathRecomputedCount));
+		Fixture.Tick(MinimumAttempt - FFixedPoint::Epsilon);
+		ASSERT_THAT(AreEqual(
+			2, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
+		Fixture.Tick(FFixedPoint::Epsilon);
+		ASSERT_THAT(AreEqual(
+			3, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
+		ASSERT_THAT(AreEqual(1, Fixture.Observer->PathRecomputedCount));
+	}
+
+	TEST(MoveToEmptyFoundAndNoNavigationCountAsRepathFailures,
+		"SeinARTS.Sim.Movement.Repath")
+	{
+		FScopedMoveToTestState Reset;
+		FSeinNavigationComponent Navigation;
+		Navigation.RepathMode = ESeinRepathMode::Interval;
+		Navigation.RepathInterval =
+			FFixedPoint::One / FFixedPoint::FromInt(16);
+		Navigation.RepathFailureLimit = 2;
+		USeinMoveToLifecycleTestMovement::ScriptedPathResults = {
+			ESeinPathResult::Found,
+			ESeinPathResult::Found,
+			ESeinPathResult::NoNavigation
+		};
+		USeinMoveToLifecycleTestMovement::EmptyFoundCallIndices = {1};
+
+		FMoveToLifecycleFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Navigation)));
+		Fixture.Tick(Navigation.RepathInterval);
+		ASSERT_THAT(IsFalse(Fixture.Action->bCompleted));
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::TickCount));
+		ASSERT_THAT(AreEqual(
+			2, USeinMoveToLifecycleTestMovement::LastTickPathWaypointCount));
+		ASSERT_THAT(AreEqual(0, Fixture.Observer->PathRecomputedCount));
+
+		Fixture.Tick(Navigation.RepathInterval);
+		ASSERT_THAT(AreEqual(
+			3, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
+		ASSERT_THAT(AreEqual(1, Fixture.Observer->FailedCount));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(ESeinMoveFailureReason::PathNotFound),
+			static_cast<int32>(Fixture.Observer->LastFailure)));
+		ASSERT_THAT(IsTrue(Fixture.Action->bCompleted));
+		ASSERT_THAT(IsTrue(Fixture.Action->bFailed));
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::TickCount));
+	}
+
+	TEST(MoveToPartialRepathEmitsEventsInOrderWithoutRebegin,
+		"SeinARTS.Sim.Movement.Repath")
+	{
+		FScopedMoveToTestState Reset;
+		FSeinNavigationComponent Navigation;
+		Navigation.RepathMode = ESeinRepathMode::Interval;
+		Navigation.RepathInterval =
+			FFixedPoint::One / FFixedPoint::FromInt(16);
+		USeinMoveToLifecycleTestMovement::ScriptedPathResults = {
+			ESeinPathResult::Found,
+			ESeinPathResult::Found
+		};
+		USeinMoveToLifecycleTestMovement::bRepathPathsPartial = true;
+
+		FMoveToLifecycleFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Navigation)));
+		Fixture.Tick(Navigation.RepathInterval);
+
+		ASSERT_THAT(AreEqual(1, Fixture.Observer->PathRecomputedCount));
+		ASSERT_THAT(AreEqual(1, Fixture.Observer->PartialPathCount));
+		ASSERT_THAT(AreEqual(2, Fixture.Observer->RepathEventOrder.Num()));
+		ASSERT_THAT(AreEqual(1, Fixture.Observer->RepathEventOrder[0]));
+		ASSERT_THAT(AreEqual(2, Fixture.Observer->RepathEventOrder[1]));
+		ASSERT_THAT(IsTrue(
+			Fixture.Observer->RecomputedObservedRepathElapsed
+				== Navigation.RepathInterval));
+		ASSERT_THAT(IsTrue(
+			FMoveToActionContinuationTestAccess::GetRepathElapsed(
+				*Fixture.Action) == FFixedPoint::Zero));
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::BeginCount));
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::TickCount));
+	}
+
+	TEST(MoveToOffPathRepathFailsBeforeMovementAtLimit,
+		"SeinARTS.Sim.Movement.Repath")
+	{
+		FScopedMoveToTestState Reset;
+		FSeinNavigationComponent Navigation;
+		Navigation.RepathMode = ESeinRepathMode::OffPathOnly;
+		Navigation.OffPathThreshold = FFixedPoint::FromInt(10);
+		Navigation.RepathFailureLimit = 1;
+		USeinMoveToLifecycleTestMovement::ScriptedPathResults = {
+			ESeinPathResult::Found,
+			ESeinPathResult::NotFound
+		};
+
+		FMoveToLifecycleFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Navigation)));
+		const FFixedPoint MinimumAttempt =
+			FFixedPoint::One / FFixedPoint::FromInt(10);
+		Fixture.Tick(MinimumAttempt);
+		Fixture.SetLocation(FFixedVector(
+			FFixedPoint::Zero,
+			FFixedPoint::FromInt(50),
+			FFixedPoint::Zero));
+		Fixture.Tick(MinimumAttempt);
+
+		ASSERT_THAT(AreEqual(
+			2, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
+		ASSERT_THAT(AreEqual(1, Fixture.Observer->FailedCount));
+		ASSERT_THAT(IsTrue(Fixture.Action->bCompleted));
+		ASSERT_THAT(IsTrue(Fixture.Action->bFailed));
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::TickCount));
 	}
 }

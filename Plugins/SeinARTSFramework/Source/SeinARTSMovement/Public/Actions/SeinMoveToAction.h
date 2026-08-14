@@ -29,6 +29,12 @@
 
 class USeinMoveToProxy;
 class USeinMovement;
+class USeinNavigation;
+class USeinNavigationSubsystem;
+class USeinWorldSubsystem;
+struct FSeinEntity;
+struct FSeinMovementComponent;
+struct FSeinNavigationComponent;
 struct FSeinMoveToActionCodec;
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -97,6 +103,12 @@ public:
 	int32 GetCurrentWaypointIndex() const { return CurrentWaypointIndex; }
 
 private:
+	enum class ERepathTickResult : uint8
+	{
+		Skipped,
+		Continued,
+		Terminal
+	};
 
 	FFixedVector Destination;
 
@@ -232,6 +244,17 @@ private:
 	void NotifyWaypointReached(int32 Index, int32 Total);
 	void NotifyPartialPath();
 	void NotifyPathRecomputed();
+
+	/** Evaluate and, when due, commit one interval/off-path repath before the
+	 *  movement tick. Returns Terminal only when the failure limit ends the move. */
+	ERepathTickResult TickRepath(
+		FFixedPoint DeltaTime,
+		USeinWorldSubsystem& World,
+		FSeinEntity& Entity,
+		FSeinMovementComponent& MovementData,
+		const FSeinNavigationComponent* NavigationData,
+		USeinNavigation* Navigation,
+		USeinNavigationSubsystem* NavigationSubsystem);
 
 	/** Dispatch OnMoveEnd and clear order-local movement flags exactly once. */
 	void FinalizeMovementOnce();
