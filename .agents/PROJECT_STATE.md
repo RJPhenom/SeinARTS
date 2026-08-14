@@ -33,9 +33,10 @@ The post-audit performance/remediation work is now committed and fast-forwarded 
 
 ## Baseline cleanup
 
-- Historical audit/report artifacts were removed. Current release-documentation inputs are staged
-  under `.agents/Docs/`; `Docs/` is reserved for the future customer-facing documentation set.
-- Durable current state was consolidated under `.agents/`; generated PDF output now belongs outside the repository.
+- Historical audit/report artifacts and superseded customer-documentation drafts were removed.
+  Durable model-facing contracts are consolidated in the named `.agents/` records; `Docs/` remains
+  reserved for the future deliberate customer-facing documentation set.
+- Generated PDF output belongs outside the repository.
 - Empty scratch directories, duplicate/template config entries, stale comments, and dead source surfaces were removed.
 - Removed reflected/source surfaces had no source, config, or binary-asset consumers: `ESeinElevationMode`, `FFixedBounds`, `SeinTime`, `FSeinCapturePointData`, `FSeinFootprintData`, and `USeinLevelLoS`.
 - Designer-facing reflected APIs were not removed merely because native code does not include them. `UMathBPFL`, `FSeinBasicMatchSettings`, and `FSeinGarrisonSpec` remain intentional public authoring surfaces.
@@ -66,8 +67,9 @@ The post-audit performance/remediation work is now committed and fast-forwarded 
 - `FFixedRandom` now reflects its complete 128-bit state into the canonical Ability pool codec. The
   Ability provider state schema is v3, and focused snapshot coverage proves exact root restoration
   and next-draw continuation after restore.
-- `.agents/Docs/ABILITY_AUTHORING.md` documents creation/granting, targeters, command and lifecycle
-  semantics, deterministic member state, admitted async continuation, and the qualification matrix.
+- `.agents/FRAMEWORK_MAP.md` preserves the durable Ability command, deterministic-state, and
+  checkpoint-continuation boundaries needed for future implementation work; reflected tooltips and
+  the live validators remain the detailed source of truth.
 - Final qualification rebuilt `SeinARTSEditor`, passed all 51 host Blueprint assets with zero Data
   Validation errors or warnings, and passed the focused Ability determinism (9/9), Framework
   Blueprint editor (36/36), Snapshot (27/27), Ability lifecycle (8/8), and Movement+ telemetry
@@ -570,8 +572,8 @@ throttle/brake, so correction displacement cannot masquerade as input. Missing m
 class swaps, and snapshot restore clear stale telemetry. Raw render state is not Blueprint-visible,
 and validation blocks presentation-only getters from deterministic movement and Ability graphs.
 The reflected fields and getters now document exact units, signs, ranges, dimension fallbacks, and
-first-sample behavior. `.agents/Docs/MOVEMENT_PLUS_ANIMATION.md` provides the staged public AnimBP
-workflow and human PIE checklist without exposing raw render slots. On 2026-08-14 the Development
+first-sample behavior. The Movement+ plugin guide retains the implementation contract and
+`.agents/VEHICLE_GYM.md` owns the human PIE checklist. On 2026-08-14 the Development
 build and All-profile Movement+ Unit 5/5 plus Determinism 9/9 prefixes passed. Independent review
 caught and corrected the small-dimension fallback and wrapped-phase wording before integration;
 the human animation mapping remains a PIE qualification.

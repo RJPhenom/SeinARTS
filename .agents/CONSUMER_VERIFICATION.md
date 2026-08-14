@@ -32,7 +32,7 @@ The tool creates projects beneath ignored `Saved/ConsumerMatrix` for five profil
 Repository-source mode copies distributable source/content/config/resources/shaders only, never
 repository `Binaries` or `Intermediate` output. Artifact mode validates each required ZIP's root,
 descriptor, version, `Installed:true` stamp, bounded expansion, stripped scratch/debug symbols,
-required Framework setup/diagnostic files, and SHA-256 digest, snapshots each archive under a held
+the required Framework diagnostic, and SHA-256 digest, snapshots each archive under a held
 read lock, then installs only that immutable copy. Each consumer owns its map and generated
 simulation-content manifest.
 
@@ -80,6 +80,33 @@ artifact hashes, and evidence archive. Publication uses a draft GitHub release, 
 then publishes; an interrupted run resumes only an exact matching draft. The manual self-hosted
 Windows workflow at `.github/workflows/release-gate.yml` invokes this same entrypoint on a runner
 with UE 5.8 and Client/Server target support.
+
+## Consumer integration and upgrade contract
+
+UE 5.8 on Win64 is the qualified baseline. A consumer installs either one complete release-ZIP
+cohort or plugin source from one clean pinned commit. Optional production extensions may be omitted,
+but installed extensions must match Framework; test-suite plugins never belong in a shipping graph.
+Do not mix source and release installs or retain duplicate project/engine copies.
+
+The consuming project owns its maps, gameplay classes, settings, Simulation Content Manifest, and
+baked level data. Host assets under `/Game/SeinARTSExamples` are references, not distributable
+dependencies. A minimal playable integration uses project-owned `ASeinActor` subclasses and
+component templates, unique `ASeinPlayerStart` slots, an `ASeinLevelVolume` with baked data, and a
+project-owned manifest regenerated after simulation content or enabled-plugin changes.
+
+`Scripts/Diagnostics/Test-SeinARTSInstallation.ps1` is the read-only installation authority. Use
+`-Json` when evidence must be retained; its live implementation owns the stable finding codes and
+actions. Do not weaken manifest, schema, digest, fingerprint, or behavior-revision failures to admit
+an old peer, snapshot, replay, or reconnect payload.
+
+An upgrade replaces the complete plugin cohort, fully restarts the Editor after reflected changes,
+rebuilds Editor and Shipping, regenerates the manifest, re-bakes required level data, and repeats the
+relevant automated, consumer, multiplayer, replay/resync, and PIE gates. Retain the producing build
+when incompatible persisted evidence must remain inspectable.
+
+Package-only and consumer qualification remain available before the public documentation site is
+authored. Publication does not use agent records as a fallback: it requires a non-empty root `Docs/`
+tree, packages that tree with Framework, and binds every documentation file into release evidence.
 
 ## Current evidence and limits
 

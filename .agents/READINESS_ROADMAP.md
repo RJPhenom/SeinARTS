@@ -116,12 +116,13 @@ re-gathered when the matched class or schema changes. Output paths must resolve 
 content root. The explicit component picker accepts both native component structs and eligible
 designer-authored UDS types found on the matched entities, while an empty Tracked Components list
 retains track-all behavior.
-The supported Preview, Gather, Check Sync, Push, save, and reseal workflow is documented in
-`.agents/Docs/BALANCE_DATA.md`.
+The durable Preview, Gather, Check Sync, Push, save, and reseal contract is consolidated in
+`.agents/FRAMEWORK_MAP.md`. A customer-facing tutorial remains part of the future public
+documentation effort.
 
-Ability authoring now has a maintained public workflow for creation/granting, smart commands,
-targeting, activation/lifecycle semantics, deterministic state, and checkpoint-safe Move To
-continuation in `.agents/Docs/ABILITY_AUTHORING.md`. A blocking editor validator now applies the
+Ability authoring now has a consolidated model-facing contract for creation/granting, smart
+commands, targeting, activation/lifecycle semantics, deterministic state, and checkpoint-safe Move
+To continuation in `.agents/FRAMEWORK_MAP.md`. A blocking editor validator now applies the
 shared deterministic member/call contract to every Ability Blueprint. Untrusted calls fail closed,
 presentation conversions override otherwise trusted fixed-point libraries, and unseeded randomness
 remains denied. `FFixedRandom`'s complete state participates in canonical Ability snapshots with
@@ -231,9 +232,12 @@ Exit: game UI and progression can target stable provider-neutral interfaces whil
 
 ## 5. Public SDK and release automation
 
-- Semantic release tags, one-version production-plugin cohorts, deterministic compatibility
-  boundaries, and current-wave migration steps remain staged under `.agents/Docs/` until the
-  deliberate customer-facing `Docs/` tree replaces them.
+- Semantic release tags and one-version production-plugin cohorts are defined in
+  `.agents/WORKFLOW.md`; deterministic compatibility, installation, upgrade, and release-evidence
+  contracts are consolidated in `.agents/CONSUMER_VERIFICATION.md`. Customer-facing versions remain
+  future `Docs/` deliverables rather than staged internal copies. Package-only qualification remains
+  usable without them, while publication fails closed until a non-empty `Docs/` tree exists and
+  binds every public-documentation file into the immutable release evidence.
 - Release packaging now validates SemVer and refuses to publish dirty or mid-build-drifted source
   under a clean commit/tag identity. It emits SHA-256 artifact/dependency provenance and release
   publication is gated on fresh consumers built from the exact five ZIPs. Package-only diagnostics
@@ -250,19 +254,18 @@ Exit: game UI and progression can target stable provider-neutral interfaces whil
   requires a UE-capable runner with Client/Server support.
 - Test plugin stripping and downstream consumers from fresh checkouts.
 - Publish packaged plugin artifacts for releases, while daily game development uses commit-pinned source integration.
-- Compatibility, upgrade, and getting-started guidance now exist. A read-only installation
+- Compatibility, upgrade, and getting-started contracts are consolidated for model use in
+  `.agents/CONSUMER_VERIFICATION.md`. A read-only installation
   diagnostic validates engine identity, exact plugin closure/cohort, test stripping, recursive
   duplicate installs, source identity, and canonical project-owned manifest containment; it ships
   in the Framework ZIP, binds every consumer profile, and is retained in release evidence. Public
-  troubleshooting guidance covers stable diagnostic codes and common build, manifest,
-  compatibility, and lockstep-latency failures. A Windows PowerShell 5.1 self-test prevents the
-  shipped diagnostic's pass/adversarial contract from drifting. First-skirmish guidance now
-  separates host examples from shipped plugin content and walks project-owned settings, unit, map,
-  manifest, and two-player qualification. Movement+ vehicle animation now has a source-grounded
-  typed-telemetry workflow, exact units/signs, lifecycle boundaries, and PIE matrix in
-  `.agents/Docs/MOVEMENT_PLUS_ANIMATION.md`. Ability authoring now has a source-grounded creation,
-  lifecycle, command, deterministic-state, and checkpoint-continuation workflow in
-  `.agents/Docs/ABILITY_AUTHORING.md`. Tutorials for the remaining deep subsystems and broader
-  in-editor error UX remain.
+  stable diagnostic codes and common build, manifest, compatibility, and lockstep-latency failures.
+  A Windows PowerShell 5.1 self-test prevents the shipped diagnostic's pass/adversarial contract
+  from drifting. The consumer contract separates host examples from shipped plugin content and
+  records the project-owned settings, unit, map, manifest, and qualification boundaries. Movement+
+  telemetry is preserved in the plugin guide and `.agents/VEHICLE_GYM.md`; Ability and Balance Data
+  authoring boundaries are preserved in `.agents/FRAMEWORK_MAP.md`. Customer tutorials for these
+  surfaces, the remaining deep subsystems, and broader in-editor error UX still need to be authored
+  deliberately when the public `Docs/` effort begins.
 
 Exit: a studio can adopt the framework without relying on this repository's private history or an agent to explain hidden setup.

@@ -371,8 +371,6 @@ function Initialize-ArtifactPluginSource([string] $Directory)
 		}
 		if ($PluginName -ceq 'SeinARTSFramework') {
 			$RequiredPublicFiles = @(
-				'Documentation\README.md',
-				'Documentation\GETTING_STARTED.md',
 				'Tools\Diagnostics\Test-SeinARTSInstallation.ps1')
 			foreach ($RelativePath in $RequiredPublicFiles) {
 				$RequiredPath = Join-Path $ExtractedRoot $RelativePath

@@ -9,6 +9,10 @@ This is the actionable remainder after consolidating the historical audits. It i
    CI or another source/installed engine distribution that supports those target types. The real
    packaged listen-server/client/reconnect/replay harness is green, but a Game-target listen server
    does not prove a true headless dedicated-server binary.
+2. **The public documentation product is not yet authored.** The obsolete draft manuals were
+   removed instead of being treated as customer-ready material. Package-only and consumer gates stay
+   available, but publication now fails closed until a deliberate non-empty `Docs/` tree exists;
+   every file in that tree is then packaged and bound into immutable release evidence.
 
 ## Gameplay-backbone gaps
 

@@ -10,8 +10,8 @@
   path a FAB/Marketplace submission uses. Output per plugin: .uplugin (stamped
   with the release version + Installed:true), Source/, Content/, Resources/,
   Config/ (via FilterPlugin.ini), and prebuilt Win64 Binaries/ (PDBs stripped).
-  The Framework artifact also ships public documentation and the read-only
-  installation diagnostic.
+  The Framework artifact also ships the read-only installation diagnostic and,
+  when the deliberate public Docs/ tree exists, its customer documentation.
 
   BuildPlugin compiles each plugin in isolation, so the extensions can only see
   the framework if the engine can: each packaged plugin is staged into
@@ -209,20 +209,24 @@ try {
 
         if ($p -ceq 'SeinARTSFramework') {
             $PublicDocs = Join-Path $ProjectRoot 'Docs'
-            if (-not (Test-Path -LiteralPath $PublicDocs -PathType Container)) {
-                $PublicDocs = Join-Path $ProjectRoot '.agents\Docs'
-            }
             $PublicDiagnostics = Join-Path $ProjectRoot 'Scripts\Diagnostics'
-            if (-not (Test-Path -LiteralPath $PublicDocs -PathType Container) -or
-                -not (Test-Path -LiteralPath $PublicDiagnostics -PathType Container)) {
-                throw 'Framework public documentation or diagnostics are missing.'
+            if (-not (Test-Path -LiteralPath $PublicDiagnostics -PathType Container)) {
+                throw 'Framework public diagnostics are missing.'
             }
-            $PackagedDocs = Join-Path $out 'Documentation'
             $PackagedDiagnostics = Join-Path $out 'Tools\Diagnostics'
             New-Item -ItemType Directory -Force `
-                -Path $PackagedDocs, $PackagedDiagnostics | Out-Null
-            Copy-Item -Path (Join-Path $PublicDocs '*') `
-                -Destination $PackagedDocs -Recurse -Force
+                -Path $PackagedDiagnostics | Out-Null
+            if (Test-Path -LiteralPath $PublicDocs -PathType Container) {
+                $PublicDocItems = @(Get-ChildItem -LiteralPath $PublicDocs -Force)
+                if ($PublicDocItems.Count -gt 0) {
+                    $PackagedDocs = Join-Path $out 'Documentation'
+                    New-Item -ItemType Directory -Force -Path $PackagedDocs | Out-Null
+                    foreach ($PublicDocItem in $PublicDocItems) {
+                        Copy-Item -LiteralPath $PublicDocItem.FullName `
+                            -Destination $PackagedDocs -Recurse -Force
+                    }
+                }
+            }
             Copy-Item -LiteralPath (Join-Path $PublicDiagnostics `
                 'Test-SeinARTSInstallation.ps1') `
                 -Destination $PackagedDiagnostics -Force
