@@ -715,6 +715,15 @@ serial/parallel roots and poses match for all 120 ticks, and Development plus Sh
 succeeded. No public gameplay API, reflected state, codec schema, tuning, behavior revision, or
 movement behavior changed.
 
+Blueprint entity visibility now delegates to the active fog implementation's authoritative
+`IsEntityVisibleToObserver` policy instead of duplicating only live emission-bit checks. The node
+therefore agrees with actor presentation for owner visibility, authored layers and footprints,
+`AlwaysVisible`, `VisibleOnceSeen`, and `VisibleOnceExplored`, while preserving permissive behavior
+when fog is disabled or has no runtime data. Independent adversarial review found and closed the
+fog-disabled fallback gap. Commit `3abd044` passed a fresh Development/test-plugin build, 13 focused
+FoW unit tests, all 445 Framework unit tests, and the two FoW canonical-state tests. The change is a
+read-only presentation query and does not mutate canonical state, timing, replay, or networking.
+
 ## Evidence limits
 
 Automation proves the tested contracts, not full production readiness. The remaining human/runtime oracles include:
