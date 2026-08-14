@@ -90,11 +90,10 @@ public:
 	// =========================================================================
 
 	/** Component structs whose fields become tunable columns. Empty = track
-	 *  every eligible component found on the matched entities.
-	 *
-	 *  The explicit picker covers native FSeinComponent descendants. Empty
-	 *  track-all mode also discovers eligible designer-authored UDS components
-	 *  already present on matched entities. Per-class sub-data remains excluded. */
+	 *  every eligible component found on the matched entities. The details-panel
+	 *  picker accepts both native FSeinComponent descendants and eligible
+	 *  designer-authored UDS components found on those entities. Per-class
+	 *  sub-data remains excluded. */
 	UPROPERTY(EditAnywhere, Category = "Tracking",
 		meta = (DisplayName = "Tracked Components",
 			MetaStruct = "/Script/SeinARTSCoreEntity.SeinComponent",

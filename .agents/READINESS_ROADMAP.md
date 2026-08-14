@@ -108,8 +108,11 @@ changed-cell Push, exact Check Sync accounting, stale-schema repair, sparse unio
 duplicate Blueprint names, exact source-class rebinding, Blueprint reinstance, and saved-package
 reload. Generated tables bind every row and column to stable source identity and fail closed until
 re-gathered when the matched class or schema changes. Output paths must resolve beneath a mounted
-content root. The remaining authoring gaps are an explicit picker for designer-authored component
-UDS types (empty Tracked Components still discovers them) and customer-facing workflow guidance.
+content root. The explicit component picker accepts both native component structs and eligible
+designer-authored UDS types found on the matched entities, while an empty Tracked Components list
+retains track-all behavior.
+The supported Preview, Gather, Check Sync, Push, save, and reseal workflow is documented in
+`.agents/Docs/BALANCE_DATA.md`.
 
 ### Movement+
 

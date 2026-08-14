@@ -1,23 +1,248 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
- * @file    SeinBalanceProfileDetails.cpp
+ *
+ * @file         SeinBalanceProfileDetails.cpp
+ * @author       RJ Macklem
+ * @created      24 Jun 2026
+ * @latest       14 Aug 2026
+ * @brief        Implements Balance Data workflow controls and the filtered
+ *               native/designer component-type picker.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
  */
 
 #include "Details/SeinBalanceProfileDetails.h"
+#include "Actor/SeinActor.h"
+#include "Actor/SeinEntityComponent.h"
 #include "Balance/SeinBalanceProfile.h"
+#include "Components/SeinComponentEligibility.h"
 #include "Util/SeinBalanceTableExport.h"
 #include "Engine/DataTable.h"
 
 #include "DetailLayoutBuilder.h"
 #include "DetailCategoryBuilder.h"
 #include "DetailWidgetRow.h"
+#include "IPropertyUtilities.h"
+#include "PropertyHandle.h"
+#include "ScopedTransaction.h"
+#include "Styling/AppStyle.h"
+#include "StructUtils/UserDefinedStruct.h"
+#include "UObject/UObjectIterator.h"
+#include "Widgets/Images/SImage.h"
+#include "Widgets/Input/SComboButton.h"
+#include "Widgets/Input/SSearchBox.h"
+#include "Widgets/Layout/SBox.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Text/STextBlock.h"
+#include "Widgets/Views/SListView.h"
 #include "Widgets/Notifications/SNotificationList.h"
 #include "Framework/Notifications/NotificationManager.h"
 
 #define LOCTEXT_NAMESPACE "SeinBalanceProfileDetails"
+
+namespace
+{
+	DECLARE_DELEGATE_OneParam(
+		FOnSeinBalanceComponentPicked,
+		const UScriptStruct*);
+
+	struct FSeinBalanceComponentChoice
+	{
+		explicit FSeinBalanceComponentChoice(const UScriptStruct* InStruct)
+			: Struct(InStruct)
+			, DisplayName(InStruct ? InStruct->GetDisplayNameText() : FText::GetEmpty())
+			, SearchText(InStruct
+				? DisplayName.ToString() + TEXT(" ") + InStruct->GetPathName()
+				: FString())
+		{
+		}
+
+		const UScriptStruct* Struct = nullptr;
+		FText DisplayName;
+		FString SearchText;
+	};
+
+	class SSeinBalanceComponentPicker final : public SCompoundWidget
+	{
+	public:
+		SLATE_BEGIN_ARGS(SSeinBalanceComponentPicker) {}
+			SLATE_ARGUMENT(TArray<const UScriptStruct*>, Candidates)
+			SLATE_EVENT(FOnSeinBalanceComponentPicked, OnPicked)
+		SLATE_END_ARGS()
+
+		void Construct(const FArguments& InArgs)
+		{
+			OnPicked = InArgs._OnPicked;
+			for (const UScriptStruct* Struct : InArgs._Candidates)
+			{
+				AllChoices.Add(MakeShared<FSeinBalanceComponentChoice>(Struct));
+			}
+			FilteredChoices = AllChoices;
+
+			ChildSlot
+			[
+				SNew(SVerticalBox)
+				+ SVerticalBox::Slot()
+				.AutoHeight()
+				.Padding(4.f)
+				[
+					SNew(SSearchBox)
+					.HintText(LOCTEXT(
+						"TrackedComponentSearchHint",
+						"Search component types"))
+					.OnTextChanged(
+						this,
+						&SSeinBalanceComponentPicker::OnSearchChanged)
+				]
+				+ SVerticalBox::Slot()
+				.FillHeight(1.f)
+				[
+					SAssignNew(
+						ListView,
+						SListView<TSharedPtr<FSeinBalanceComponentChoice>>)
+					.ListItemsSource(&FilteredChoices)
+					.SelectionMode(ESelectionMode::Single)
+					.OnGenerateRow(
+						this,
+						&SSeinBalanceComponentPicker::GenerateRow)
+					.OnSelectionChanged(
+						this,
+						&SSeinBalanceComponentPicker::OnSelectionChanged)
+				]
+			];
+		}
+
+	private:
+		TSharedRef<ITableRow> GenerateRow(
+			TSharedPtr<FSeinBalanceComponentChoice> Choice,
+			const TSharedRef<STableViewBase>& OwnerTable) const
+		{
+			return SNew(
+				STableRow<TSharedPtr<FSeinBalanceComponentChoice>>,
+				OwnerTable)
+				.ToolTipText(Choice.IsValid() && Choice->Struct
+					? FText::FromString(Choice->Struct->GetPathName())
+					: FText::GetEmpty())
+				[
+					SNew(STextBlock)
+					.Text(Choice.IsValid()
+						? Choice->DisplayName
+						: FText::GetEmpty())
+				];
+		}
+
+		void OnSearchChanged(const FText& SearchText)
+		{
+			const FString Search = SearchText.ToString();
+			FilteredChoices.Reset();
+			for (const TSharedPtr<FSeinBalanceComponentChoice>& Choice : AllChoices)
+			{
+				if (Choice.IsValid()
+					&& (Search.IsEmpty()
+						|| Choice->SearchText.Contains(
+							Search,
+							ESearchCase::IgnoreCase)))
+				{
+					FilteredChoices.Add(Choice);
+				}
+			}
+			if (ListView.IsValid())
+			{
+				ListView->RequestListRefresh();
+			}
+		}
+
+		void OnSelectionChanged(
+			TSharedPtr<FSeinBalanceComponentChoice> Choice,
+			ESelectInfo::Type SelectionType)
+		{
+			if (Choice.IsValid()
+				&& Choice->Struct
+				&& SelectionType != ESelectInfo::Direct)
+			{
+				OnPicked.ExecuteIfBound(Choice->Struct);
+			}
+		}
+
+		FOnSeinBalanceComponentPicked OnPicked;
+		TArray<TSharedPtr<FSeinBalanceComponentChoice>> AllChoices;
+		TArray<TSharedPtr<FSeinBalanceComponentChoice>> FilteredChoices;
+		TSharedPtr<SListView<TSharedPtr<FSeinBalanceComponentChoice>>> ListView;
+	};
+}
+
+void SeinBalanceProfileDetails::CollectTrackedComponentCandidates(
+	const USeinBalanceProfile& Profile,
+	TArray<const UScriptStruct*>& OutCandidates)
+{
+	OutCandidates.Reset();
+	if (Profile.TargetKind != ESeinBalanceTargetKind::Entities)
+	{
+		return;
+	}
+
+	const auto TryAdd = [&Profile, &OutCandidates](const UScriptStruct* Struct)
+	{
+		if (!Struct
+			|| Struct->GetOutermost() == GetTransientPackage()
+			|| Struct->HasAnyFlags(RF_NewerVersionExists)
+			|| (Struct->StructFlags & STRUCT_NewerVersionExists) != 0
+			|| !SeinComponentEligibility::IsEntityComponentStruct(Struct)
+			|| Profile.TrackedComponents.ContainsByPredicate(
+				[Struct](const TObjectPtr<UScriptStruct>& Existing)
+				{
+					return Existing.Get() == Struct;
+				}))
+		{
+			return;
+		}
+		OutCandidates.AddUnique(Struct);
+	};
+
+	for (TObjectIterator<UScriptStruct> It; It; ++It)
+	{
+		if (It->IsNative())
+		{
+			TryAdd(*It);
+		}
+	}
+
+	TArray<UClass*> MatchedClasses;
+	Profile.ResolveTargetClasses(MatchedClasses);
+	for (const UClass* MatchedClass : MatchedClasses)
+	{
+		const ASeinActor* EntityCDO = MatchedClass
+			? Cast<ASeinActor>(MatchedClass->GetDefaultObject())
+			: nullptr;
+		const USeinEntityComponent* Bridge = EntityCDO
+			? EntityCDO->GetEntityBridge()
+			: nullptr;
+		if (!Bridge)
+		{
+			continue;
+		}
+
+		for (const FInstancedStruct& Component : Bridge->ComponentData)
+		{
+			const UScriptStruct* Struct = Component.GetScriptStruct();
+			if (Struct && Struct->IsA<UUserDefinedStruct>())
+			{
+				TryAdd(Struct);
+			}
+		}
+	}
+
+	OutCandidates.Sort([](const UScriptStruct& A, const UScriptStruct& B)
+	{
+		const int32 NameOrder = A.GetDisplayNameText().ToString().Compare(
+			B.GetDisplayNameText().ToString());
+		return NameOrder == 0
+			? A.GetPathName() < B.GetPathName()
+			: NameOrder < 0;
+	});
+}
 
 TSharedRef<IDetailCustomization> FSeinBalanceProfileDetails::MakeInstance()
 {
@@ -28,6 +253,10 @@ void FSeinBalanceProfileDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBu
 {
 	TArray<TWeakObjectPtr<UObject>> Objects;
 	DetailBuilder.GetObjectsBeingCustomized(Objects);
+	if (Objects.Num() != 1)
+	{
+		return;
+	}
 	for (const TWeakObjectPtr<UObject>& Obj : Objects)
 	{
 		if (USeinBalanceProfile* Profile = Cast<USeinBalanceProfile>(Obj.Get()))
@@ -39,6 +268,62 @@ void FSeinBalanceProfileDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBu
 	if (!WeakProfile.IsValid())
 	{
 		return;
+	}
+
+	TrackedComponentsHandle = DetailBuilder.GetProperty(
+		GET_MEMBER_NAME_CHECKED(USeinBalanceProfile, TrackedComponents));
+	PropertyUtilities = DetailBuilder.GetPropertyUtilities();
+	if (TrackedComponentsHandle.IsValid()
+		&& TrackedComponentsHandle->IsValidHandle())
+	{
+		IDetailCategoryBuilder& TrackingCategory = DetailBuilder.EditCategory(
+			TEXT("Tracking"),
+			LOCTEXT("TrackingCategory", "Tracking"));
+		TrackingCategory.AddProperty(TrackedComponentsHandle);
+		TrackingCategory.AddCustomRow(
+			LOCTEXT("AddTrackedComponentSearch", "Add Tracked Component Type"))
+		.Visibility(TAttribute<EVisibility>::CreateSP(
+			this,
+			&FSeinBalanceProfileDetails::GetTrackedComponentPickerVisibility))
+		.NameContent()
+		[
+			SNew(STextBlock)
+			.Font(IDetailLayoutBuilder::GetDetailFont())
+			.Text(LOCTEXT("AddTrackedComponentLabel", "Add Component Type"))
+			.ToolTipText(LOCTEXT(
+				"AddTrackedComponentLabelTip",
+				"Add a native or designer-authored entity component to this profile's explicit tracking list."))
+		]
+		.ValueContent()
+		.MinDesiredWidth(220.f)
+		.MaxDesiredWidth(420.f)
+		[
+			SAssignNew(TrackedComponentPickerButton, SComboButton)
+			.OnGetMenuContent(this, &FSeinBalanceProfileDetails::GenerateTrackedComponentPicker)
+			.ContentPadding(FMargin(6.f, 2.f))
+			.ToolTipText(LOCTEXT(
+				"AddTrackedComponentTip",
+				"Choose an eligible component type. Leave Tracked Components empty to track every eligible component found on matched entities."))
+			.ButtonContent()
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.VAlign(VAlign_Center)
+				.Padding(0.f, 0.f, 4.f, 0.f)
+				[
+					SNew(SImage)
+					.Image(FAppStyle::GetBrush(TEXT("Icons.Plus")))
+				]
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.VAlign(VAlign_Center)
+				[
+					SNew(STextBlock)
+					.Text(LOCTEXT("AddTrackedComponentButton", "Add Component Type"))
+				]
+			]
+		];
 	}
 
 	IDetailCategoryBuilder& Cat = DetailBuilder.EditCategory(
@@ -110,6 +395,94 @@ void FSeinBalanceProfileDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBu
 			.Text(this, &FSeinBalanceProfileDetails::GetPreviewText)
 		]
 	];
+}
+
+TSharedRef<SWidget> FSeinBalanceProfileDetails::GenerateTrackedComponentPicker()
+{
+	TArray<const UScriptStruct*> Candidates;
+	if (const USeinBalanceProfile* Profile = WeakProfile.Get())
+	{
+		SeinBalanceProfileDetails::CollectTrackedComponentCandidates(
+			*Profile,
+			Candidates);
+	}
+
+	return SNew(SBox)
+		.WidthOverride(360.f)
+		.MaxDesiredHeight(500.f)
+		[
+			SNew(SSeinBalanceComponentPicker)
+			.Candidates(MoveTemp(Candidates))
+			.OnPicked(FOnSeinBalanceComponentPicked::CreateSP(
+				this,
+				&FSeinBalanceProfileDetails::OnTrackedComponentPicked))
+		];
+}
+
+void FSeinBalanceProfileDetails::OnTrackedComponentPicked(
+	const UScriptStruct* InStruct)
+{
+	if (TrackedComponentPickerButton.IsValid())
+	{
+		TrackedComponentPickerButton->SetIsOpen(false);
+	}
+
+	USeinBalanceProfile* Profile = WeakProfile.Get();
+	const bool bAlreadyTracked = Profile
+		&& Profile->TrackedComponents.ContainsByPredicate(
+			[InStruct](const TObjectPtr<UScriptStruct>& Existing)
+			{
+				return Existing.Get() == InStruct;
+			});
+
+	if (Profile
+		&& Profile->TargetKind == ESeinBalanceTargetKind::Entities
+		&& !bAlreadyTracked
+		&& SeinComponentEligibility::IsEntityComponentStruct(InStruct)
+		&& TrackedComponentsHandle.IsValid()
+		&& TrackedComponentsHandle->IsValidHandle())
+	{
+		const TSharedPtr<IPropertyHandleArray> ArrayHandle =
+			TrackedComponentsHandle->AsArray();
+		if (ArrayHandle.IsValid())
+		{
+			FScopedTransaction Transaction(LOCTEXT(
+				"AddTrackedComponentTransaction",
+				"Add Balance Component Type"));
+			bool bChanged = false;
+			const FPropertyHandleItemAddResult AddResult = ArrayHandle->AddItem();
+			if (AddResult.GetAccessResult() == FPropertyAccess::Success)
+			{
+				const TSharedRef<IPropertyHandle> ElementHandle =
+					ArrayHandle->GetElement(AddResult.GetIndex());
+				if (ElementHandle->SetValue(InStruct) != FPropertyAccess::Success)
+				{
+					ArrayHandle->DeleteItem(AddResult.GetIndex());
+				}
+				else
+				{
+					bChanged = true;
+					if (PropertyUtilities.IsValid())
+					{
+						PropertyUtilities->ForceRefresh();
+					}
+				}
+			}
+			if (!bChanged)
+			{
+				Transaction.Cancel();
+			}
+		}
+	}
+}
+
+EVisibility FSeinBalanceProfileDetails::GetTrackedComponentPickerVisibility() const
+{
+	const USeinBalanceProfile* Profile = WeakProfile.Get();
+	return Profile
+		&& Profile->TargetKind == ESeinBalanceTargetKind::Entities
+		? EVisibility::Visible
+		: EVisibility::Collapsed;
 }
 
 FText FSeinBalanceProfileDetails::GetPreviewText() const

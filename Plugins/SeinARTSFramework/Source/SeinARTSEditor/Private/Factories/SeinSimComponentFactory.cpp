@@ -1,7 +1,15 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
- * @file    SeinSimComponentFactory.cpp
- * @brief   Implementation of the UDS-based component factory.
+ *
+ * @file         SeinSimComponentFactory.cpp
+ * @author       RJ Macklem
+ * @created      2 Jun 2026
+ * @latest       14 Aug 2026
+ * @brief        Implements Component-struct creation and compile-stable UDS
+ *               metadata stamping.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
  */
 
 #include "Factories/SeinSimComponentFactory.h"
@@ -11,12 +19,116 @@
 #include "Components/SeinComponentEligibility.h"
 #include "Kismet2/StructureEditorUtils.h"
 #include "StructUtils/UserDefinedStruct.h"
+#include "UserDefinedStructure/UserDefinedStructEditorData.h"
 
 #define LOCTEXT_NAMESPACE "SeinARTSEditor"
 
 const FName USeinSimComponentFactory::SeinDeterministicMetaKey(TEXT("SeinDeterministic"));
 const FName USeinSimComponentFactory::SeinEntityComponentMetaKey(TEXT("SeinEntityComponent"));
 const FName USeinSimComponentFactory::SeinSubDataMetaKey(TEXT("SeinSubData"));
+
+namespace
+{
+	bool MarkerMatches(
+		const UUserDefinedStruct& Struct,
+		const UUserDefinedStructEditorData* EditorData,
+		const FName Key,
+		const bool bEnabled)
+	{
+		if (!bEnabled)
+		{
+			return !Struct.HasMetaData(Key)
+				&& (!EditorData || !EditorData->MetaData.Contains(Key));
+		}
+
+		const FString* PersistentValue = EditorData
+			? EditorData->MetaData.Find(Key)
+			: nullptr;
+		return Struct.HasMetaData(Key)
+			&& Struct.GetMetaData(Key) == TEXT("true")
+			&& (!EditorData || (PersistentValue && *PersistentValue == TEXT("true")));
+	}
+
+	void ApplyMarker(
+		UUserDefinedStruct& Struct,
+		UUserDefinedStructEditorData* EditorData,
+		const FName Key,
+		const bool bEnabled)
+	{
+		if (bEnabled)
+		{
+			Struct.SetMetaData(Key, TEXT("true"));
+			if (EditorData)
+			{
+				EditorData->MetaData.FindOrAdd(Key) = TEXT("true");
+			}
+		}
+		else
+		{
+			Struct.RemoveMetaData(Key);
+			if (EditorData)
+			{
+				EditorData->MetaData.Remove(Key);
+			}
+		}
+	}
+
+	void MarkUserDefinedStruct(
+		UUserDefinedStruct* Struct,
+		const bool bEntityComponent)
+	{
+		if (!Struct)
+		{
+			return;
+		}
+
+		UUserDefinedStructEditorData* EditorData =
+			Cast<UUserDefinedStructEditorData>(Struct->EditorData);
+		const bool bNeedsUpdate =
+			!MarkerMatches(
+				*Struct,
+				EditorData,
+				USeinSimComponentFactory::SeinDeterministicMetaKey,
+				true)
+			|| !MarkerMatches(
+				*Struct,
+				EditorData,
+				USeinSimComponentFactory::SeinEntityComponentMetaKey,
+				bEntityComponent)
+			|| !MarkerMatches(
+				*Struct,
+				EditorData,
+				USeinSimComponentFactory::SeinSubDataMetaKey,
+				!bEntityComponent);
+		if (!bNeedsUpdate)
+		{
+			return;
+		}
+
+		Struct->Modify();
+		if (EditorData)
+		{
+			EditorData->Modify();
+		}
+
+		ApplyMarker(
+			*Struct,
+			EditorData,
+			USeinSimComponentFactory::SeinDeterministicMetaKey,
+			true);
+		ApplyMarker(
+			*Struct,
+			EditorData,
+			USeinSimComponentFactory::SeinEntityComponentMetaKey,
+			bEntityComponent);
+		ApplyMarker(
+			*Struct,
+			EditorData,
+			USeinSimComponentFactory::SeinSubDataMetaKey,
+			!bEntityComponent);
+		Struct->MarkPackageDirty();
+	}
+}
 
 USeinSimComponentFactory::USeinSimComponentFactory()
 {
@@ -31,19 +143,21 @@ UObject* USeinSimComponentFactory::FactoryCreateNew(UClass* Class, UObject* InPa
 	UUserDefinedStruct* NewUDS = FStructureEditorUtils::CreateUserDefinedStruct(InParent, Name, Flags);
 	if (!NewUDS) return nullptr;
 
-	// Tag the UDS at the struct level so both pin-type and struct-viewer filters
-	// can detect it via UStruct::HasMetaData — same path that native USTRUCTs
-	// marked `USTRUCT(meta = (SeinDeterministic))` use.
-	NewUDS->SetMetaData(SeinDeterministicMetaKey, TEXT("true"));
-
-	// Designer-authored UDSes created via this factory are intended to surface
-	// in the entity bridge's ComponentData picker — mark them as entity
-	// components. Native USTRUCTs reach the same picker via FSeinComponent
-	// inheritance; UDSes can't (UE's UDS compiler clears supersuper on every
-	// recompile) so the explicit meta tag is the substitute.
-	NewUDS->SetMetaData(SeinEntityComponentMetaKey, TEXT("true"));
+	MarkUserDefinedStructAsEntityComponent(NewUDS);
 
 	return NewUDS;
+}
+
+void USeinSimComponentFactory::MarkUserDefinedStructAsEntityComponent(
+	UUserDefinedStruct* Struct)
+{
+	MarkUserDefinedStruct(Struct, true);
+}
+
+void USeinSimComponentFactory::MarkUserDefinedStructAsSubData(
+	UUserDefinedStruct* Struct)
+{
+	MarkUserDefinedStruct(Struct, false);
 }
 
 bool USeinSimComponentFactory::IsSeinDeterministicStruct(const UStruct* Struct)

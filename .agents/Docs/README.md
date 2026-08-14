@@ -1,6 +1,6 @@
 # SeinARTS Documentation
 
-**Document version:** 0.5
+**Document version:** 0.6
 
 - `GETTING_STARTED.md`: installation, deterministic-content setup, diagnostics, and qualification.
 - `COMPATIBILITY.md`: supported engine, release cohort, SemVer, deterministic compatibility, and
@@ -10,6 +10,8 @@
   lockstep-latency diagnosis.
 - `FIRST_SKIRMISH.md`: project-owned settings, unit, map, manifest, and two-player prototype
   authoring sequence.
+- `BALANCE_DATA.md`: profile scoping, entity/ability table generation, explicit designer-component
+  selection, safe Gather/Push usage, and resealing requirements.
 
 Internal engineering state and qualification receipts live under `.agents/`; they are not a
 substitute for these public adoption contracts.
