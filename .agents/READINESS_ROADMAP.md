@@ -54,6 +54,11 @@ CI gate because this engine distribution rejects those target types before proje
     canonical-root-gated authorship activation;
   - streaming replay finalization and standalone checkpoint seek; and
   - exact end-tick and canonical-root agreement between replay and authoritative server.
+- The Movement+ packaged flow also passes a deterministic adverse UDP profile with latency, jitter,
+  loss, duplication, and reordering in both directions. The receipt records actual forwarded faults,
+  observed order inversions, bounded delay, per-direction seeded jitter, endpoint relearn, zero
+  unroutable traffic, and zero delayed datagrams discarded at shutdown. The runtime receipt binds
+  both the exact proxy evidence and packaged Shipping executable by SHA-256.
 - Movement+ additionally executes a real long-range wheeled Move command and requires the exact
   instantiated wheeled class, raw target, bounded nonzero typed telemetry, and exact movement state
   across both peers, forced resync, physical reconnect, and checkpoint-seek replay.
@@ -124,9 +129,10 @@ speeds, and masses. Checkpoints taken during arcs, reverse legs, recovery, and c
 continue with exact canonical roots. See `.agents/VEHICLE_GYM.md` for the evidence and PIE matrix.
 
 Still required before Movement+ is production-qualified: the human PIE feel/performance matrix,
-true dedicated-server topology, adversarial network conditions, and scale evidence. A generated
-packaged Shipping listen server and client now qualify live Movement+ command flow, root gossip,
-resync, physical reconnect, exact movement continuation, and checkpoint-seek replay. Typed
+true dedicated-server topology, WAN/backend behavior, and scale evidence. A generated packaged
+Shipping listen server and client now qualify live Movement+ command flow, root gossip, resync,
+physical reconnect, exact movement continuation, checkpoint-seek replay, and a deterministic local
+adverse profile with latency, jitter, loss, duplication, and reordering. Typed
 render-only presentation telemetry for steering/yaw/throttle/
 brake plus track/wheel animation is complete, including correction-resistant driver intent,
 wrapped long-run wheel phase, teardown/restore reset, hidden raw render state, and rejection from
@@ -227,6 +233,9 @@ Exit: game UI and progression can target stable provider-neutral interfaces whil
   Editor/Shipping builds, both test profiles, standalone packaging, and the exact-ZIP consumer
   matrix. Receipts bind exact attempt/run IDs, source and engine identity, indexes, binary and
   metadata hashes, public-header manifest, packaged-runtime result, artifacts, and evidence archive.
+  Publication requires the deterministic adverse runtime profile and binds its exact proxy receipt,
+  standalone proxy self-test detail, and packaged Shipping executable; baseline or skipped runtime
+  evidence cannot be published.
   Publication compiles each shipped `Public` header independently, verifies remote draft assets
   byte-for-byte, and resumes only an exact matching interrupted draft. Executing the workflow still
   requires a UE-capable runner with Client/Server support.

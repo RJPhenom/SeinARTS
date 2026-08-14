@@ -25,10 +25,11 @@ This is the actionable remainder after consolidating the historical audits. It i
    source-attributed pair-capability substrate now exists in the current development wave; the known
    blocker-height, authored-Z, and cone terrain-scaling defects are closed.
 4. Public targeting lacks the complete line/corridor/gesture policy surface needed by a modern tactical RTS.
-5. Movement+ needs the human behavior/performance, scale, dedicated-server, and adversarial-network
+5. Movement+ needs the human behavior/performance, scale, true dedicated-server, and WAN/backend
    matrices. Typed render-only vehicle telemetry and a real packaged two-process listen-server flow
-   through resync, physical reconnect, and checkpoint-seek replay are automated. Flight is not a
-   production 3D avoidance/collision model.
+   through deterministic adverse latency/jitter/loss/duplication/reordering, resync, physical
+   reconnect, and checkpoint-seek replay are automated. Flight is not a production 3D
+   avoidance/collision model.
 6. Containment now has fail-closed acyclic/reciprocal structural state, overflow-safe mutation,
    quiescent-root/checkpoint validation, fresh-world snapshot continuation, representative
    ability-command/checkpoint/replay mutation workflows, and measured 100/500/1,000-occupant
@@ -40,9 +41,9 @@ This is the actionable remainder after consolidating the historical audits. It i
 2. Canonical divergence detection is not anti-cheat; lockstep clients can possess hidden world state.
 3. Co-op campaign save ownership, schema migration, cloud conflict, account identity, and cross-map bootstrap are unbuilt.
 4. True listen-host migration is unbuilt. Dedicated-server co-op can defer peer host migration but cannot defer crash recovery.
-5. WAN/backend-adapter behavior, true dedicated-server reconnect, process-crash recovery, and
-   adversarial network conditions remain runtime/product validation gates. Local packaged
-   listen-server reconnect and replay checkpoint seek are qualified.
+5. WAN/backend-adapter behavior, true dedicated-server reconnect, and process-crash recovery remain
+   runtime/product validation gates. Local packaged listen-server reconnect, replay checkpoint seek,
+   and deterministic adverse UDP fault injection are qualified.
 
 ## Performance and scale risks
 
