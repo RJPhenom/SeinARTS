@@ -666,8 +666,10 @@ consolidated in this directory. The Cover/Squad topology decision is closed thro
 bridge plugin, and the supported local packaged multiplayer/replay consumer gate is green. Release
 tooling now binds skipped test runs to source fingerprints and exact test-DLL hashes, validates
 packaged ZIP structure and hashes, and can compile every shipped public header independently. The
-current dirty diagnostic cohort has also passed a complete exact-ZIP five-profile consumer matrix;
-it is qualification evidence, not a publishable release identity. The
+clean committed `0.0.178` cohort from source commit `9d7efc3708cc07dfbb76c3f6f8c528b1290ed264`
+passed the complete exact-ZIP five-profile consumer matrix on UE 5.8.1: fresh Editor and Shipping,
+325/340/333/337/362 independent public headers, release diagnostics, uncooked load, cook/package,
+real Shipping startup, and the Framework plus Movement+ packaged multiplayer/replay legs. The
 remaining Integration Candidate release evidence is the Development Client/Dedicated Server gate
 on a capable engine distribution plus the explicit PIE oracles. Local implementation can proceed
 to the Vehicle Gym and squad-tactical gameplay-backbone qualification without pretending those external

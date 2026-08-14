@@ -83,33 +83,26 @@ with UE 5.8 and Client/Server target support.
 
 ## Current evidence and limits
 
-On 2026-08-12 all five `0.0.120` exact-ZIP profiles passed fresh Editor and Shipping builds,
-release-mode installation diagnostics, exact uncooked map loading, cook/package, and real packaged
-Shipping startup. Cover-only and Squad-only contained no bridge plugin or module; Full mounted and
-started the bridge and shut it down cleanly. Framework also passed the complete packaged
-multiplayer/replay leg: two real Shipping processes completed a match start, a 2-of-2 equal
-world-root checkpoint at turn 5, two resyncs around a real reconnect, directional pair-capability
-grant/revoke with reconnect and replay persistence, and a standalone checkpoint-seek replay whose
-end tick (239) and canonical root (`1CC3EC718160314CD4433EB0DCCB1C10`) exactly matched the
-authoritative server. Matrix run `5136cb01289342429a61f491bc78e5d0` recorded runtime-result
-SHA-256 `4544E616CA406F8787B492ACFEF69AD0FBF4E4803DF8379441ACEECB063CAD89`.
-The exact Framework archive SHA-256 was
-`147E27F94662F29F160AC9BCFC7ED964DBFBFDC0CE8721E89A8E14A8F478AB49`; the release manifest binds
-the remaining four archive hashes and dependency closure. This dirty diagnostic cohort is not a
-publishable release identity. Generated replay files and exact packaged processes are cleaned by
-the harness.
+On 2026-08-14 the clean committed `0.0.178` cohort from source commit
+`9d7efc3708cc07dfbb76c3f6f8c528b1290ed264` passed all five exact-ZIP profiles. Every profile
+passed fresh Development Editor, Shipping, release-mode installation diagnostics, exact uncooked
+map loading, cook/package, and real packaged Shipping startup. The independent public-header
+audits passed Framework 325, Cover 340, Squad 333, Movement+ 337, and Full 362 headers. Framework,
+Cover, and Squad share matrix run `eb501f7de8394dccbf16527b89f86f6d`; Movement+ is run
+`9320b6e769d04ae781653eedb9b3bd2b`; Full is run `df0633f28f804c9ea8fd666e8bb69af5`.
+Cover-only and Squad-only contained no bridge plugin or module, while Full mounted the complete
+five-plugin cohort and shut it down cleanly.
 
-On 2026-08-13 the repository-source Movement+ profile passed its expanded packaged runtime leg.
-Two Shipping processes completed root gossip, a real 50,000-unit wheeled Move command, forced
-resync, physical reconnect, capability and movement continuation, exact grant/revoke, and standalone
-checkpoint-seek replay. The replay matched the authoritative terminal state at tick 251 and root
-`3B0BF5488C62CFE2F0F27B11017A2C78`. The schema-4 runtime receipt additionally binds the exact
-`USeinWheeledVehicleMovement` instance, raw 50,000/5,000/0 target, bounded nonzero typed telemetry
-on server/client/reconnect/replay, and packaged executable SHA-256
-`F8554A6F0D4D48CA725F4B4AED7EC3471683D1D54419D6DA0C40DEAE9C68D63A`. Matrix run
-`8cbee57da1734a75b8c223b9b886a1a6` recorded runtime-result SHA-256
-`D71015DE218559ADDDFF31DD5A613D2E6B27800A20C9F6323DCC9A302F562535`. This is source diagnostic
-evidence, not exact-ZIP release evidence.
+Framework and Movement+ also passed their complete packaged multiplayer/replay legs. Framework
+ended at tick 233 and canonical root `2CB5A25B8BA8AF43D930821BBBC20E3F`; its runtime receipt SHA-256
+is `5F637CE19076F7DB4D4C7EFD0C7B7B118C887BCBF6512E454B7C53E07D5AD2AC`. Movement+ completed the
+real wheeled Move, resync, physical reconnect, pair-capability persistence, telemetry witnesses,
+and checkpoint-seek replay at tick 251 and root `DE0526096296F01DF1AEB465F071FF7B`; its runtime receipt
+SHA-256 is `A90E69D39D9DEDB084859F98754E9D5695A49F6A52719BDBC491F5A7FD0F2DB0`. The release manifest
+records `sourceDirty:false`, the UE 5.8.1 fingerprint, dependency closure, and exact archive hashes;
+the Framework archive SHA-256 is
+`80D1CC88CFC63E55929B7C2536338A0F4585DB24A3A12BB6ECD2C4D788090A35`. Generated replay files and
+exact packaged processes are cleaned by the harness.
 
 The local Epic launcher engine cannot build Client targets; UnrealBuildTool reports that Client
 targets are unsupported by that engine distribution before it reaches project compilation. A
