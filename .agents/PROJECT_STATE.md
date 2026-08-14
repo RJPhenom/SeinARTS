@@ -95,8 +95,9 @@ Latest local evidence is under ignored `Saved/Automation/`:
 - `SeinARTS.Editor.BalanceData-20260814-021320-158f9cda` (Framework, 7 passed;
   factory-created designer Component struct, unsafe-field rejection, metadata repair and persisted
   reload, candidate/duplicate filtering, explicit Gather-Push-Check Sync round trip),
-  `SeinARTS.Editor-20260814-021401-6e7fa4cf` (Framework, 44 passed), and
-  `SeinARTS.Editor-20260814-021437-0cb43310` (All, 46 passed)
+  `SeinARTS.Editor-20260814-021641-685f1f69` (Framework, 44 passed), and
+  `SeinARTS.Editor-20260814-021727-e09d2ad2` (All, 46 passed; both broad runs
+  enforced the checked-in floors anchored to implementation commit `5d175ed`)
 - `SeinARTS.Editor.BalanceData-20260814-011402-9dac922b` (Framework, 6 passed;
   entity/ability Gather-Push-Check Sync, stale schema/source rejection, Blueprint reinstance and
   persisted reload)
