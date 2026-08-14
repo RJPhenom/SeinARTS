@@ -29,6 +29,7 @@
 #include "GameFramework/GameModeBase.h"
 #include "GameFramework/PlayerController.h"
 #include "Misc/DateTime.h"
+#include "Misc/Compression.h"
 #include "HAL/PlatformTime.h"
 #include "UObject/Class.h"
 
@@ -240,6 +241,15 @@ void USeinNetSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		NetworkFailureHandle = GEngine->OnNetworkFailure().AddUObject(
 			this, &USeinNetSubsystem::OnNetworkFailure);
 	}
+	ResyncMaintenanceHandle = FTSTicker::GetCoreTicker().AddTicker(
+		FTickerDelegate::CreateUObject(
+			this, &USeinNetSubsystem::TickResyncMaintenance),
+		0.1f);
+	if (!ResyncMaintenanceHandle.IsValid())
+	{
+		UE_LOG(LogSeinNet, Error,
+			TEXT("Failed to schedule resync transport maintenance."));
+	}
 
 	UE_LOG(LogSeinNet, Log, TEXT("USeinNetSubsystem initialized."));
 }
@@ -255,6 +265,11 @@ void USeinNetSubsystem::ReleaseModuleOwnedStateForModuleUnload()
 	check(IsInGameThread());
 	if (bModuleOwnedStateReleased) return;
 	bModuleOwnedStateReleased = true;
+	if (ResyncMaintenanceHandle.IsValid())
+	{
+		FTSTicker::GetCoreTicker().RemoveTicker(ResyncMaintenanceHandle);
+		ResyncMaintenanceHandle.Reset();
+	}
 
 	if (PostLoginHandle.IsValid())
 	{
@@ -633,6 +648,7 @@ void USeinNetSubsystem::ResetMatchState(UWorld* RetiringWorld)
 	RelayToParticipant.Reset();
 	CoordinatorParticipantID = FSeinNetworkParticipantID::Invalid();
 	ActiveProtocolContext = FSeinProtocolContext();
+	ClientLastResyncFailureReason.Reset();
 	ActiveMatchSettings = FSeinMatchSettings();
 	bHasActiveMatchSettings = false;
 	FrozenMaxCommandsPerSubmission = 0;
@@ -689,6 +705,30 @@ int32 USeinNetSubsystem::GetCurrentTurn() const
 	const UWorld* World = GetWorld();
 	const USeinWorldSubsystem* WorldSub = World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
 	return WorldSub ? FMath::Max(0, WorldSub->GetCurrentTick() / GetTicksPerTurn()) : 0;
+}
+
+FSeinLockstepProgress USeinNetSubsystem::GetLockstepProgress() const
+{
+	FSeinLockstepProgress Progress;
+	Progress.CurrentTurn = GetCurrentTurn();
+	Progress.LastQueuedTurn = LastQueuedTurn;
+	Progress.LastSubmittedTurn = LastSubmittedTurn;
+	Progress.PendingSubmissionCount = PendingTurnSubmissions.Num();
+	Progress.ReceivedTurnCount = ReceivedTurns.Num();
+	Progress.LastStalledTurn = LastStalledTurn;
+	Progress.bCurrentTurnReceived =
+		ReceivedTurns.Contains(Progress.CurrentTurn);
+	Progress.bServer = IsServer();
+	if (Progress.bServer && TurnAggregator.IsConfigured())
+	{
+		Progress.ExpectedAuthorCount =
+			TurnAggregator.GetExpectedAuthors().Num();
+		Progress.SubmittedAuthorCount =
+			TurnAggregator.GetSubmittedAuthorCount(Progress.CurrentTurn);
+		Progress.MissingAuthorCount =
+			TurnAggregator.GetMissingAuthors(Progress.CurrentTurn).Num();
+	}
+	return Progress;
 }
 
 bool USeinNetSubsystem::IsCommandTurnWithinProtocolWindow(int32 TurnId, const TCHAR* Context) const
@@ -867,12 +907,26 @@ void USeinNetSubsystem::PruneProtocolState(int32 ReferenceTurn)
 	{
 		if (It.Key() <= TurnAggregator.GetTurnRejectionFloor()) It.RemoveCurrent();
 	}
+	int32 RetainedTailCutoff = Cutoff;
+	if (IsServer())
+	{
+		for (const TPair<FSeinPlayerID, FServerResyncServe>& Pair :
+			ServerResyncServes)
+		{
+			if (!Pair.Value.bLiveTailEnabled)
+			{
+				RetainedTailCutoff = FMath::Min(
+					RetainedTailCutoff,
+					Pair.Value.CheckpointTurn);
+			}
+		}
+	}
 	for (auto It = RetainedAssembledTurns.CreateIterator(); It; ++It)
 	{
-		if (It.Key() <= Cutoff) It.RemoveCurrent();
+		if (It.Key() <= RetainedTailCutoff) It.RemoveCurrent();
 	}
 	RetainedAssembledTurnFloor =
-		FMath::Max(RetainedAssembledTurnFloor, Cutoff);
+		FMath::Max(RetainedAssembledTurnFloor, RetainedTailCutoff);
 
 	// A due proof obligation must become an explicit terminal health result
 	// before its evidence is aged out. This also catches the zero-report case,
@@ -6593,6 +6647,35 @@ void USeinNetSubsystem::ServerHandleResyncRequest(
 		ServerFailResync(*Slot, SourceRelay, EncodeError);
 		return;
 	}
+	const int32 UncompressedEnvelopeBytes = EnvelopeBytes.Num();
+	TArray<uint8> TransferBytes;
+	bool bTransferCompressed = false;
+	const int32 CompressionBound = FCompression::CompressMemoryBound(
+		NAME_Zlib, UncompressedEnvelopeBytes, COMPRESS_BiasSpeed);
+	if (CompressionBound > 0)
+	{
+		TArray<uint8> CompressedBytes;
+		CompressedBytes.SetNumUninitialized(CompressionBound);
+		int32 CompressedSize = CompressionBound;
+		if (FCompression::CompressMemory(
+			NAME_Zlib,
+			CompressedBytes.GetData(),
+			CompressedSize,
+			EnvelopeBytes.GetData(),
+			UncompressedEnvelopeBytes,
+			COMPRESS_BiasSpeed)
+			&& CompressedSize > 0
+			&& CompressedSize < UncompressedEnvelopeBytes)
+		{
+			CompressedBytes.SetNum(CompressedSize, EAllowShrinking::Yes);
+			TransferBytes = MoveTemp(CompressedBytes);
+			bTransferCompressed = true;
+		}
+	}
+	if (!bTransferCompressed)
+	{
+		TransferBytes = MoveTemp(EnvelopeBytes);
+	}
 
 	const int32 TicksPerTurn = GetTicksPerTurn();
 	const int32 CheckpointTurn = TicksPerTurn > 0
@@ -6601,39 +6684,142 @@ void USeinNetSubsystem::ServerHandleResyncRequest(
 	FServerResyncServe& Serve = ServerResyncServes.Add(*Slot);
 	Serve.TransferId = NextResyncTransferId++;
 	Serve.CheckpointTurn = CheckpointTurn;
-	Serve.PendingEnvelopeBytes = MoveTemp(EnvelopeBytes);
+	Serve.PendingEnvelopeBytes = MoveTemp(TransferBytes);
+	Serve.UncompressedEnvelopeBytes = UncompressedEnvelopeBytes;
+	Serve.bCompressed = bTransferCompressed;
 	Serve.TotalChunks = FMath::DivideAndRoundUp(
 		Serve.PendingEnvelopeBytes.Num(), ResyncCheckpointChunkBytes);
 	Serve.NextChunkIndex = 0;
 	Serve.StartedAtSeconds = FPlatformTime::Seconds();
+	Serve.LastProgressAtSeconds = Serve.StartedAtSeconds;
 
 	UE_LOG(LogSeinNet, Log,
-		TEXT("[Resync] serving slot=%u checkpoint tick=%d turn=%d bytes=%d chunks=%d (paced)."),
+		TEXT("[Resync] serving slot=%u checkpoint tick=%d turn=%d wireBytes=%d rawBytes=%d compressed=%d chunks=%d (ack-windowed)."),
 		Slot->Value, Checkpoint.CurrentTick, CheckpointTurn,
-		Serve.PendingEnvelopeBytes.Num(), Serve.TotalChunks);
+		Serve.PendingEnvelopeBytes.Num(), Serve.UncompressedEnvelopeBytes,
+		Serve.bCompressed ? 1 : 0, Serve.TotalChunks);
 
-	// Announce now; chunks are PACED across turn boundaries by
-	// ServerAdvanceResyncTransfers — a one-frame reliable-RPC burst would
-	// overflow the connection's reliable buffer and disconnect the peer.
+	// Announce now. The peer's reliable zero-frontier acknowledgement starts
+	// the unreliable bulk window only after Begin has been processed.
 	SourceRelay->Client_BeginCheckpointTransfer(
 		ActiveProtocolContext, Serve.TransferId, CheckpointTurn,
-		Serve.TotalChunks, Serve.PendingEnvelopeBytes.Num());
+		Serve.TotalChunks, Serve.PendingEnvelopeBytes.Num(),
+		Serve.UncompressedEnvelopeBytes, Serve.bCompressed);
+}
+
+void USeinNetSubsystem::ServerFillResyncChunkWindow(
+	ASeinNetRelay* Relay,
+	FServerResyncServe& Serve)
+{
+	if (!Relay || Serve.bTransferComplete)
+	{
+		return;
+	}
+	bool bSent = false;
+	int32 SentChunks = 0;
+	while (Serve.NextChunkIndex < Serve.TotalChunks
+		&& Serve.NextChunkIndex - Serve.AcknowledgedChunkIndex
+			< ResyncMaxInFlightChunks
+		&& SentChunks < ResyncChunksPerSendBurst)
+	{
+		const int32 Offset =
+			Serve.NextChunkIndex * ResyncCheckpointChunkBytes;
+		const int32 Count = FMath::Min(
+			ResyncCheckpointChunkBytes,
+			Serve.PendingEnvelopeBytes.Num() - Offset);
+		TArray<uint8> Chunk(
+			Serve.PendingEnvelopeBytes.GetData() + Offset, Count);
+		Relay->Client_ReceiveCheckpointChunk(
+			ActiveProtocolContext, Serve.TransferId,
+			Serve.NextChunkIndex, Chunk);
+		++Serve.NextChunkIndex;
+		Serve.HighestSentChunkIndex = FMath::Max(
+			Serve.HighestSentChunkIndex, Serve.NextChunkIndex);
+		++SentChunks;
+		bSent = true;
+	}
+	if (bSent)
+	{
+		Serve.LastWindowSentAtSeconds = FPlatformTime::Seconds();
+	}
 }
 
 void USeinNetSubsystem::ServerAdvanceResyncTransfers()
 {
 	if (ServerResyncServes.IsEmpty()) return;
 	const double NowSeconds = FPlatformTime::Seconds();
-	TArray<FSeinPlayerID> TimedOutSlots;
+	TMap<FSeinPlayerID, FString> FailedSlots;
 	for (TPair<FSeinPlayerID, FServerResyncServe>& Pair : ServerResyncServes)
 	{
 		FServerResyncServe& Serve = Pair.Value;
-		if (NowSeconds - Serve.StartedAtSeconds > ResyncServeTimeoutSeconds)
+		if (NowSeconds - Serve.LastProgressAtSeconds
+			> ResyncServeIdleTimeoutSeconds)
 		{
-			TimedOutSlots.Add(Pair.Key);
+			FailedSlots.Add(Pair.Key, FString::Printf(
+				TEXT("The resync serve made no progress for %.0f seconds and was abandoned."),
+				ResyncServeIdleTimeoutSeconds));
 			continue;
 		}
 		if (Serve.bTransferComplete)
+		{
+			if (!Serve.bTailStreaming
+				|| NowSeconds - Serve.LastTailSentAtSeconds
+					< ResyncTailSendBurstIntervalSeconds)
+			{
+				continue;
+			}
+			ASeinNetRelay* Relay = FindRelayForSlot(Pair.Key);
+			if (!Relay)
+			{
+				continue; // OnLogout abandons the serve when the relay dies.
+			}
+			int32 SentTurns = 0;
+			int32 SentBytes = 0;
+			while (SentTurns < ResyncTailTurnsPerSendBurst)
+			{
+				const FSeinOpaqueCommandBatch* Retained =
+					RetainedAssembledTurns.Find(Serve.NextTailTurn);
+				if (!Retained)
+				{
+					if (TurnAggregator.IsTurnCommitted(Serve.NextTailTurn))
+					{
+						FailedSlots.Add(Pair.Key, FString::Printf(
+							TEXT("Committed turn %d is missing from the retained tail."),
+							Serve.NextTailTurn));
+					}
+					else
+					{
+						Relay->Client_NotifyResyncTailComplete(
+							ActiveProtocolContext, Serve.NextTailTurn - 1);
+						Serve.bTailStreaming = false;
+						Serve.bLiveTailEnabled = true;
+						Serve.LastProgressAtSeconds = NowSeconds;
+						UE_LOG(LogSeinNet, Log,
+							TEXT("[Resync] slot=%u retained tail reached the live frontier at turn=%d."),
+							Pair.Key.Value, Serve.NextTailTurn);
+					}
+					break;
+				}
+				if (SentTurns > 0
+					&& SentBytes + Retained->Bytes.Num()
+						> ResyncTailBytesPerSendBurst)
+				{
+					break;
+				}
+				Relay->Client_ReceiveTurn(
+					ActiveProtocolContext, Serve.NextTailTurn, *Retained);
+				SentBytes += Retained->Bytes.Num();
+				++Serve.NextTailTurn;
+				++SentTurns;
+			}
+			if (SentTurns > 0)
+			{
+				Serve.LastTailSentAtSeconds = NowSeconds;
+				Serve.LastProgressAtSeconds = NowSeconds;
+			}
+			continue;
+		}
+		if (!Serve.bWindowStarted)
 		{
 			continue;
 		}
@@ -6642,37 +6828,106 @@ void USeinNetSubsystem::ServerAdvanceResyncTransfers()
 		{
 			continue; // OnLogout abandons the serve when the relay dies.
 		}
-		int32 SentThisBoundary = 0;
-		while (Serve.NextChunkIndex < Serve.TotalChunks
-			&& SentThisBoundary < ResyncChunksPerBoundary)
+		const int32 WindowEnd = FMath::Min(
+			Serve.TotalChunks,
+			Serve.AcknowledgedChunkIndex + ResyncMaxInFlightChunks);
+		if (Serve.NextChunkIndex < WindowEnd
+			&& NowSeconds - Serve.LastWindowSentAtSeconds
+				>= ResyncSendBurstIntervalSeconds)
 		{
-			const int32 Offset =
-				Serve.NextChunkIndex * ResyncCheckpointChunkBytes;
-			const int32 Count = FMath::Min(
-				ResyncCheckpointChunkBytes,
-				Serve.PendingEnvelopeBytes.Num() - Offset);
-			TArray<uint8> Chunk(
-				Serve.PendingEnvelopeBytes.GetData() + Offset, Count);
-			Relay->Client_ReceiveCheckpointChunk(
-				ActiveProtocolContext, Serve.TransferId,
-				Serve.NextChunkIndex, Chunk);
-			++Serve.NextChunkIndex;
-			++SentThisBoundary;
+			ServerFillResyncChunkWindow(Relay, Serve);
 		}
-		if (Serve.NextChunkIndex >= Serve.TotalChunks)
+		else if (Serve.NextChunkIndex >= WindowEnd
+			&& NowSeconds - Serve.LastWindowSentAtSeconds
+				>= ResyncWindowResendSeconds)
 		{
-			Serve.bTransferComplete = true;
-			Serve.PendingEnvelopeBytes.Empty();
-			Relay->Client_EndCheckpointTransfer(
-				ActiveProtocolContext, Serve.TransferId);
+			Serve.NextChunkIndex = Serve.AcknowledgedChunkIndex;
+			ServerFillResyncChunkWindow(Relay, Serve);
 		}
 	}
-	for (const FSeinPlayerID Slot : TimedOutSlots)
+	for (const TPair<FSeinPlayerID, FString>& Failed : FailedSlots)
 	{
-		ServerFailResync(Slot, FindRelayForSlot(Slot), FString::Printf(
-			TEXT("The resync serve exceeded %.0f seconds and was abandoned."),
-			ResyncServeTimeoutSeconds));
+		ServerFailResync(
+			Failed.Key, FindRelayForSlot(Failed.Key), Failed.Value);
 	}
+}
+
+bool USeinNetSubsystem::TickResyncMaintenance(float DeltaSeconds)
+{
+	(void)DeltaSeconds;
+	if (bModuleOwnedStateReleased)
+	{
+		ResyncMaintenanceHandle.Reset();
+		return false;
+	}
+	if (IsServer())
+	{
+		ServerAdvanceResyncTransfers();
+	}
+	else
+	{
+		ClientSendResyncAcknowledgement(/*bForce=*/false);
+	}
+	return true;
+}
+
+void USeinNetSubsystem::ServerHandleResyncChunkAcknowledgement(
+	ASeinNetRelay* SourceRelay,
+	const FSeinProtocolContext& Context,
+	int32 TransferId,
+	int32 NextChunkIndex)
+{
+	if (!IsServer() || !SourceRelay) return;
+	if (!IsCurrentProtocolContext(
+		Context, TEXT("ServerHandleResyncChunkAcknowledgement")))
+	{
+		return;
+	}
+	const FSeinPlayerID* Slot = RelayToSlot.Find(SourceRelay);
+	FServerResyncServe* Serve = Slot
+		? ServerResyncServes.Find(*Slot)
+		: nullptr;
+	if (!Slot || !Serve || Serve->TransferId != TransferId)
+	{
+		return;
+	}
+	if (Serve->bTransferComplete)
+	{
+		return;
+	}
+	if (NextChunkIndex < Serve->AcknowledgedChunkIndex
+		|| NextChunkIndex > Serve->HighestSentChunkIndex)
+	{
+		ServerFailResync(
+			*Slot,
+			SourceRelay,
+			TEXT("The peer acknowledged an unexpected checkpoint chunk."));
+		return;
+	}
+
+	if (NextChunkIndex == Serve->AcknowledgedChunkIndex)
+	{
+		if (!Serve->bWindowStarted)
+		{
+			Serve->bWindowStarted = true;
+			ServerFillResyncChunkWindow(SourceRelay, *Serve);
+		}
+		return;
+	}
+
+	Serve->bWindowStarted = true;
+	Serve->AcknowledgedChunkIndex = NextChunkIndex;
+	Serve->LastProgressAtSeconds = FPlatformTime::Seconds();
+	if (Serve->AcknowledgedChunkIndex >= Serve->TotalChunks)
+	{
+		Serve->bTransferComplete = true;
+		Serve->PendingEnvelopeBytes.Empty();
+		SourceRelay->Client_EndCheckpointTransfer(
+			ActiveProtocolContext, Serve->TransferId);
+		return;
+	}
+	Serve->NextChunkIndex = Serve->HighestSentChunkIndex;
+	ServerFillResyncChunkWindow(SourceRelay, *Serve);
 }
 
 void USeinNetSubsystem::ServerHandleResyncAbort(
@@ -6707,10 +6962,12 @@ void USeinNetSubsystem::ServerHandleResyncTailRequest(
 	const FSeinPlayerID* Slot = RelayToSlot.Find(SourceRelay);
 	FServerResyncServe* Serve =
 		Slot ? ServerResyncServes.Find(*Slot) : nullptr;
-	if (!Slot || !Serve || FromTurn != Serve->CheckpointTurn + 1)
+	if (!Slot || !Serve || !Serve->bTransferComplete
+		|| Serve->bTailStreaming || Serve->bLiveTailEnabled
+		|| FromTurn != Serve->CheckpointTurn + 1)
 	{
 		UE_LOG(LogSeinNet, Error,
-			TEXT("[Resync] tail request refused (no serve in flight or wrong FromTurn=%d)."),
+			TEXT("[Resync] tail request refused (serve phase invalid or wrong FromTurn=%d)."),
 			FromTurn);
 		return;
 	}
@@ -6722,33 +6979,16 @@ void USeinNetSubsystem::ServerHandleResyncTailRequest(
 		return;
 	}
 
-	// Serve every retained committed turn from the checkpoint frontier
-	// onward through the SAME delivery path as live fan-out. Gaps are
-	// terminal for this serve: a missing committed turn cannot be
-	// reconstructed. (Turns not yet committed simply arrive live.)
-	int32 Sent = 0;
-	for (int32 Turn = FromTurn;; ++Turn)
-	{
-		const FSeinOpaqueCommandBatch* Retained =
-			RetainedAssembledTurns.Find(Turn);
-		if (!Retained)
-		{
-			if (TurnAggregator.IsTurnCommitted(Turn))
-			{
-				ServerFailResync(*Slot, SourceRelay, FString::Printf(
-					TEXT("Committed turn %d is missing from the retained tail."),
-					Turn));
-				return;
-			}
-			break;
-		}
-		SourceRelay->Client_ReceiveTurn(
-			ActiveProtocolContext, Turn, *Retained);
-		++Sent;
-	}
+	// Pace the retained prefix through the same reliable delivery path as live
+	// fan-out. Maintenance owns the cursor; live delivery remains suppressed
+	// until the cursor reaches the first turn that has not yet committed.
+	Serve->bTailStreaming = true;
+	Serve->NextTailTurn = FromTurn;
+	Serve->LastTailSentAtSeconds = 0.0;
+	Serve->LastProgressAtSeconds = FPlatformTime::Seconds();
 	UE_LOG(LogSeinNet, Log,
-		TEXT("[Resync] slot=%u tail served: %d turn(s) from %d."),
-		Slot->Value, Sent, FromTurn);
+		TEXT("[Resync] slot=%u retained tail streaming started at turn=%d."),
+		Slot->Value, FromTurn);
 }
 
 void USeinNetSubsystem::ServerHandleResyncReady(
@@ -6763,20 +7003,23 @@ void USeinNetSubsystem::ServerHandleResyncReady(
 	const FSeinPlayerID* Slot = RelayToSlot.Find(SourceRelay);
 	FServerResyncServe* Serve =
 		Slot ? ServerResyncServes.Find(*Slot) : nullptr;
-	if (!Slot || !Serve)
+	if (!Slot || !Serve || !Serve->bTransferComplete
+		|| Serve->bTailStreaming || !Serve->bLiveTailEnabled)
 	{
 		UE_LOG(LogSeinNet, Error,
-			TEXT("[Resync] ready report refused: no serve in flight."));
+			TEXT("[Resync] ready report refused: serve phase is not activation-ready."));
 		return;
 	}
 	// A repeated ready report RESCHEDULES the handshake: the peer sends it
 	// again when a scheduled boundary already passed on its side (it may run
-	// up to InputDelay turns ahead of the coordinator's execution turn).
+	// up to the protocol's maximum accepted lead ahead of the coordinator).
 	// The boundary must clear the peer's maximum legal lead plus headroom.
 	Serve->ActivationCheckTurn =
-		GetCurrentTurn() + GetInputDelayTurns() + 2;
+		GetCurrentTurn() + GSeinMaxProtocolTurnLead
+		+ GetInputDelayTurns() + 2;
 	Serve->LocalActivationRoot.Reset();
 	Serve->PeerActivationRoot.Reset();
+	Serve->LastProgressAtSeconds = FPlatformTime::Seconds();
 	SourceRelay->Client_NotifyResyncActivationCheck(
 		ActiveProtocolContext, Serve->ActivationCheckTurn);
 	UE_LOG(LogSeinNet, Log,
@@ -6799,7 +7042,9 @@ void USeinNetSubsystem::ServerHandleResyncActivationRoot(
 	const FSeinPlayerID* Slot = RelayToSlot.Find(SourceRelay);
 	FServerResyncServe* Serve =
 		Slot ? ServerResyncServes.Find(*Slot) : nullptr;
-	if (!Slot || !Serve || CheckTurn != Serve->ActivationCheckTurn
+	if (!Slot || !Serve || !Serve->bTransferComplete
+		|| Serve->bTailStreaming || !Serve->bLiveTailEnabled
+		|| CheckTurn != Serve->ActivationCheckTurn
 		|| !WorldRoot.IsValid())
 	{
 		UE_LOG(LogSeinNet, Error,
@@ -6807,6 +7052,7 @@ void USeinNetSubsystem::ServerHandleResyncActivationRoot(
 		return;
 	}
 	Serve->PeerActivationRoot = WorldRoot;
+	Serve->LastProgressAtSeconds = FPlatformTime::Seconds();
 	ServerTryCompleteResyncActivation(*Slot);
 }
 
@@ -6850,6 +7096,11 @@ void USeinNetSubsystem::ServerTryCompleteResyncActivation(FSeinPlayerID Slot)
 	}
 	SlotLifecycle.Add(Slot, ESeinSlotLifecycle::Connected);
 	SlotReconnectingSinceTime.Remove(Slot);
+	// Activation can complete after this boundary's ordinary heartbeat pass.
+	// Backfill every already-open pipeline turn while the coverage window is
+	// authoritative, or the gate can freeze before the peer reaches its first
+	// authored boundary.
+	BackfillSuppressedSlotHeartbeatsThroughPipelineWindow();
 	UE_LOG(LogSeinNet, Log,
 		TEXT("[Resync] slot=%u ACTIVATED at turn=%d; authorship resumes at turn=%d."),
 		Slot.Value, Serve->ActivationCheckTurn, FirstAuthoredTurn);
@@ -6914,6 +7165,37 @@ void USeinNetSubsystem::ServerAdvanceResyncActivation(int32 JustFinishedTurn)
 	}
 }
 
+void USeinNetSubsystem::ClientSendResyncAcknowledgement(bool bForce)
+{
+	if (ClientResyncPhase != EClientResyncPhase::Transferring
+		|| ClientResyncTransferId < 0)
+	{
+		return;
+	}
+	const double NowSeconds = FPlatformTime::Seconds();
+	if (!bForce && NowSeconds - ClientResyncLastAcknowledgementAtSeconds
+		< ResyncAcknowledgementResendSeconds)
+	{
+		return;
+	}
+	ASeinNetRelay* Relay = LocalRelay.Get();
+	if (!Relay)
+	{
+		if (bForce)
+		{
+			ClientResetResyncState(
+				TEXT("checkpoint transfer could not be acknowledged"));
+		}
+		return;
+	}
+	Relay->Server_AcknowledgeCheckpointChunk(
+		ActiveProtocolContext,
+		ClientResyncTransferId,
+		ClientResyncReceivedChunks);
+	ClientResyncLastAcknowledgedChunkIndex = ClientResyncReceivedChunks;
+	ClientResyncLastAcknowledgementAtSeconds = NowSeconds;
+}
+
 bool USeinNetSubsystem::RequestResync(FString& OutError)
 {
 	OutError.Reset();
@@ -6939,10 +7221,21 @@ bool USeinNetSubsystem::RequestResync(FString& OutError)
 	ClientResyncCheckpointTurn = -1;
 	ClientResyncTotalChunks = 0;
 	ClientResyncTotalBytes = 0;
+	ClientResyncUncompressedBytes = 0;
+	bClientResyncCompressed = false;
+	bClientResyncSchedulerStoppedForAdoption = false;
+	bClientResyncCheckpointAdopted = false;
+	ClientResyncReceivedBytes = 0;
 	ClientResyncReceivedChunks = 0;
+	ClientResyncLastAcknowledgedChunkIndex = 0;
 	ClientResyncEnvelopeBytes.Reset();
+	ClientResyncReceivedChunkBits.Reset();
 	ClientResyncActivationCheckTurn = -1;
 	ClientResyncHighestReceivedTurn = -1;
+	ClientResyncTailFrontierTurn = -1;
+	ClientResyncTailReceivedBytes = 0;
+	ClientResyncTailReceivedTurnIds.Reset();
+	ClientResyncLastAcknowledgementAtSeconds = 0.0;
 	Relay->Server_RequestResync(ActiveProtocolContext);
 	UE_LOG(LogSeinNet, Log, TEXT("[Resync] requested from the coordinator."));
 	return true;
@@ -6951,39 +7244,24 @@ bool USeinNetSubsystem::RequestResync(FString& OutError)
 void USeinNetSubsystem::ClientResetResyncState(const TCHAR* Reason)
 {
 	if (ClientResyncPhase == EClientResyncPhase::None) return;
+	if (Reason && Reason[0] != TEXT('\0'))
+	{
+		ClientLastResyncFailureReason = FString(Reason).Left(512);
+	}
 	UE_LOG(LogSeinNet, Log, TEXT("[Resync] local state reset: %s"),
 		Reason ? Reason : TEXT("unspecified"));
-	const bool bAdopted =
-		ClientResyncPhase == EClientResyncPhase::CatchingUp
+	const bool bSchedulerStopped =
+		bClientResyncSchedulerStoppedForAdoption;
+	const bool bAdopted = bClientResyncCheckpointAdopted
+		|| ClientResyncPhase == EClientResyncPhase::CatchingUp
 		|| ClientResyncPhase == EClientResyncPhase::ActivationPending;
 	if (UWorld* World = GetWorld())
 	{
 		if (USeinWorldSubsystem* WorldSub =
 			World->GetSubsystem<USeinWorldSubsystem>())
 		{
-			WorldSub->EndResyncCatchUpWindow();
-			if (bAdopted)
-			{
-				// The world is on the adopted timeline: keep its scheduler
-				// alive (the gate paces it; authorship stays withheld
-				// server-side) and reconcile the authorship cursors to the
-				// adopted frontier so a later boundary cannot burst-submit
-				// thousands of stale-timeline turns.
-				const int32 TicksPerTurn = GetTicksPerTurn();
-				const int32 AdoptedTurn = TicksPerTurn > 0
-					? WorldSub->GetCurrentTick() / TicksPerTurn
-					: 0;
-				const int32 ReconciledCursor =
-					AdoptedTurn + GetInputDelayTurns();
-				LastQueuedTurn =
-					FMath::Max(LastQueuedTurn, ReconciledCursor);
-				LastSubmittedTurn =
-					FMath::Max(LastSubmittedTurn, ReconciledCursor);
-				if (!WorldSub->IsSimulationRunning())
-				{
-					WorldSub->StartSimulation();
-				}
-			}
+			RecoverClientWorldAfterResyncReset(
+				*WorldSub, bSchedulerStopped, bAdopted);
 		}
 	}
 	// Free the coordinator-side serve so a fresh request is not refused.
@@ -6993,7 +7271,46 @@ void USeinNetSubsystem::ClientResetResyncState(const TCHAR* Reason)
 	}
 	ClientResyncPhase = EClientResyncPhase::None;
 	ClientResyncTransferId = -1;
+	ClientResyncUncompressedBytes = 0;
+	bClientResyncCompressed = false;
+	bClientResyncSchedulerStoppedForAdoption = false;
+	bClientResyncCheckpointAdopted = false;
+	ClientResyncReceivedBytes = 0;
+	ClientResyncReceivedChunks = 0;
+	ClientResyncLastAcknowledgedChunkIndex = 0;
+	ClientResyncLastAcknowledgementAtSeconds = 0.0;
 	ClientResyncEnvelopeBytes.Reset();
+	ClientResyncReceivedChunkBits.Reset();
+	ClientResyncTailFrontierTurn = -1;
+	ClientResyncTailReceivedBytes = 0;
+	ClientResyncTailReceivedTurnIds.Reset();
+}
+
+void USeinNetSubsystem::RecoverClientWorldAfterResyncReset(
+	USeinWorldSubsystem& WorldSub,
+	bool bSchedulerStopped,
+	bool bAdopted)
+{
+	WorldSub.EndResyncCatchUpWindow();
+	if (bAdopted)
+	{
+		// The world is on the adopted timeline: reconcile the authorship
+		// cursors so a later boundary cannot burst-submit stale turns.
+		const int32 TicksPerTurn = GetTicksPerTurn();
+		const int32 AdoptedTurn = TicksPerTurn > 0
+			? WorldSub.GetCurrentTick() / TicksPerTurn
+			: 0;
+		const int32 ReconciledCursor =
+			AdoptedTurn + GetInputDelayTurns();
+		LastQueuedTurn = FMath::Max(LastQueuedTurn, ReconciledCursor);
+		LastSubmittedTurn =
+			FMath::Max(LastSubmittedTurn, ReconciledCursor);
+	}
+	if ((bSchedulerStopped || bAdopted)
+		&& !WorldSub.IsSimulationRunning())
+	{
+		WorldSub.StartSimulation();
+	}
 }
 
 void USeinNetSubsystem::ClientHandleBeginCheckpointTransfer(
@@ -7001,7 +7318,9 @@ void USeinNetSubsystem::ClientHandleBeginCheckpointTransfer(
 	int32 TransferId,
 	int32 CheckpointTurn,
 	int32 TotalChunks,
-	int64 TotalBytes)
+	int64 TotalBytes,
+	int64 UncompressedBytes,
+	bool bCompressed)
 {
 	if (!IsCurrentProtocolContext(
 		Context, TEXT("ClientHandleBeginCheckpointTransfer")))
@@ -7014,12 +7333,28 @@ void USeinNetSubsystem::ClientHandleBeginCheckpointTransfer(
 			TEXT("[Resync] unexpected checkpoint transfer begin ignored."));
 		return;
 	}
-	if (TotalBytes <= 0 || TotalChunks <= 0
-		|| TotalBytes > static_cast<int64>(
+	const int64 MaxEnvelopeBytes = static_cast<int64>(
 			FSeinSnapshotEnvelopeCodec::MaxBodyBytes)
 			+ FSeinSnapshotEnvelopeCodec::PrefixBytes
 			+ static_cast<int64>(
-				FSeinSnapshotEnvelopeCodec::MaxDirectoryBytes)
+				FSeinSnapshotEnvelopeCodec::MaxDirectoryBytes);
+	const int32 CompressionBound = UncompressedBytes > 0
+		&& UncompressedBytes <= MAX_int32
+		? FCompression::CompressMemoryBound(
+			NAME_Zlib,
+			static_cast<int32>(UncompressedBytes),
+			COMPRESS_BiasSpeed)
+		: 0;
+	const bool bCompressionFrameValid = bCompressed
+		? TotalBytes < UncompressedBytes
+			&& CompressionBound > 0
+			&& TotalBytes <= CompressionBound
+		: TotalBytes == UncompressedBytes;
+	if (TransferId < 0 || CheckpointTurn < 0
+		|| TotalBytes <= 0 || TotalChunks <= 0
+		|| UncompressedBytes <= 0
+		|| UncompressedBytes > MaxEnvelopeBytes
+		|| !bCompressionFrameValid
 		|| TotalChunks != FMath::DivideAndRoundUp(
 			static_cast<int32>(TotalBytes), ResyncCheckpointChunkBytes))
 	{
@@ -7031,9 +7366,16 @@ void USeinNetSubsystem::ClientHandleBeginCheckpointTransfer(
 	ClientResyncCheckpointTurn = CheckpointTurn;
 	ClientResyncTotalChunks = TotalChunks;
 	ClientResyncTotalBytes = TotalBytes;
+	ClientResyncUncompressedBytes = UncompressedBytes;
+	bClientResyncCompressed = bCompressed;
+	ClientResyncReceivedBytes = 0;
 	ClientResyncReceivedChunks = 0;
-	ClientResyncEnvelopeBytes.Reset();
-	ClientResyncEnvelopeBytes.Reserve(static_cast<int32>(TotalBytes));
+	ClientResyncLastAcknowledgedChunkIndex = 0;
+	ClientResyncEnvelopeBytes.SetNumUninitialized(
+		static_cast<int32>(TotalBytes));
+	ClientResyncReceivedChunkBits.Init(false, TotalChunks);
+	ClientResyncLastAcknowledgementAtSeconds = 0.0;
+	ClientSendResyncAcknowledgement(/*bForce=*/true);
 }
 
 void USeinNetSubsystem::ClientHandleCheckpointChunk(
@@ -7048,19 +7390,53 @@ void USeinNetSubsystem::ClientHandleCheckpointChunk(
 		return;
 	}
 	if (ClientResyncPhase != EClientResyncPhase::Transferring
-		|| TransferId != ClientResyncTransferId
-		|| ChunkIndex != ClientResyncReceivedChunks
-		|| Bytes.IsEmpty()
-		|| Bytes.Num() > ResyncCheckpointChunkBytes
-		|| ClientResyncEnvelopeBytes.Num() + Bytes.Num()
-			> ClientResyncTotalBytes)
+		|| TransferId != ClientResyncTransferId)
+	{
+		return; // Stale or pre-Begin unreliable bulk traffic.
+	}
+	if (ChunkIndex < 0 || ChunkIndex >= ClientResyncTotalChunks
+		|| !ClientResyncReceivedChunkBits.IsValidIndex(ChunkIndex))
 	{
 		ClientResetResyncState(
-			TEXT("checkpoint chunk arrived out of order or out of bounds"));
+			TEXT("checkpoint chunk arrived with invalid index"));
 		return;
 	}
-	ClientResyncEnvelopeBytes.Append(Bytes);
-	++ClientResyncReceivedChunks;
+	const int32 Offset = ChunkIndex * ResyncCheckpointChunkBytes;
+	const int32 ExpectedBytes = FMath::Min(
+		ResyncCheckpointChunkBytes,
+		static_cast<int32>(ClientResyncTotalBytes) - Offset);
+	if (ExpectedBytes <= 0 || Bytes.Num() != ExpectedBytes)
+	{
+		ClientResetResyncState(
+			TEXT("checkpoint chunk arrived with invalid bounds"));
+		return;
+	}
+	if (ClientResyncReceivedChunkBits[ChunkIndex])
+	{
+		ClientSendResyncAcknowledgement(/*bForce=*/false);
+		return;
+	}
+	FMemory::Memcpy(
+		ClientResyncEnvelopeBytes.GetData() + Offset,
+		Bytes.GetData(),
+		Bytes.Num());
+	ClientResyncReceivedChunkBits[ChunkIndex] = true;
+	ClientResyncReceivedBytes += Bytes.Num();
+	while (ClientResyncReceivedChunks < ClientResyncTotalChunks
+		&& ClientResyncReceivedChunkBits[ClientResyncReceivedChunks])
+	{
+		++ClientResyncReceivedChunks;
+	}
+	const bool bAcknowledgementDue =
+		ClientResyncReceivedChunks == ClientResyncTotalChunks
+		|| ClientResyncReceivedChunks
+			- ClientResyncLastAcknowledgedChunkIndex
+			>= ResyncChunksPerAcknowledgement;
+	if (!bAcknowledgementDue)
+	{
+		return;
+	}
+	ClientSendResyncAcknowledgement(/*bForce=*/true);
 }
 
 void USeinNetSubsystem::ClientHandleEndCheckpointTransfer(
@@ -7075,6 +7451,7 @@ void USeinNetSubsystem::ClientHandleEndCheckpointTransfer(
 	if (ClientResyncPhase != EClientResyncPhase::Transferring
 		|| TransferId != ClientResyncTransferId
 		|| ClientResyncReceivedChunks != ClientResyncTotalChunks
+		|| ClientResyncReceivedBytes != ClientResyncTotalBytes
 		|| ClientResyncEnvelopeBytes.Num() != ClientResyncTotalBytes)
 	{
 		ClientResetResyncState(
@@ -7083,18 +7460,51 @@ void USeinNetSubsystem::ClientHandleEndCheckpointTransfer(
 	}
 
 	ClientResyncPhase = EClientResyncPhase::Adopting;
+	TArray<uint8> DecodedEnvelopeBytes;
+	if (bClientResyncCompressed)
+	{
+		DecodedEnvelopeBytes.SetNumUninitialized(
+			static_cast<int32>(ClientResyncUncompressedBytes));
+		if (!FCompression::UncompressMemory(
+			NAME_Zlib,
+			DecodedEnvelopeBytes.GetData(),
+			DecodedEnvelopeBytes.Num(),
+			ClientResyncEnvelopeBytes.GetData(),
+			ClientResyncEnvelopeBytes.Num()))
+		{
+			ClientResetResyncState(
+				TEXT("checkpoint transport decompression failed"));
+			return;
+		}
+	}
+	else
+	{
+		DecodedEnvelopeBytes = MoveTemp(ClientResyncEnvelopeBytes);
+	}
 
 	FSeinWorldSnapshot Checkpoint;
 	FSeinWorldSnapshotReferenceGuard CheckpointGCGuard(Checkpoint);
 	FSeinSnapshotEnvelopeMetadata Metadata;
 	FString DecodeError;
 	if (!SeinSnapshotTransfer::DecodeCheckpointEnvelope(
-		ClientResyncEnvelopeBytes, Checkpoint, Metadata, DecodeError))
+		DecodedEnvelopeBytes, Checkpoint, Metadata, DecodeError))
 	{
 		ClientResetResyncState(*DecodeError);
 		return;
 	}
+	const int32 TicksPerTurn = GetTicksPerTurn();
+	if (TicksPerTurn <= 0 || Checkpoint.CurrentTick < 0
+		|| Checkpoint.CurrentTick / TicksPerTurn
+			!= ClientResyncCheckpointTurn)
+	{
+		ClientResetResyncState(
+			TEXT("checkpoint tick disagreed with announced transfer turn"));
+		return;
+	}
+	DecodedEnvelopeBytes.Reset();
 	ClientResyncEnvelopeBytes.Reset();
+	ClientResyncReceivedChunkBits.Reset();
+	ClientResyncReceivedBytes = 0;
 
 	UWorld* World = GetWorld();
 	USeinWorldSubsystem* WorldSub =
@@ -7109,6 +7519,7 @@ void USeinNetSubsystem::ClientHandleEndCheckpointTransfer(
 	// itself requires the scheduler idle. Stop explicitly (idempotent) so the
 	// adopted world resumes only when WE start it for catch-up.
 	WorldSub->StopSimulation();
+	bClientResyncSchedulerStoppedForAdoption = true;
 
 	FSeinSnapshotRestoreAuthorityHandle Authority;
 	FString ClaimError;
@@ -7129,6 +7540,7 @@ void USeinNetSubsystem::ClientHandleEndCheckpointTransfer(
 			TEXT("the transferred checkpoint failed exact adoption"));
 		return;
 	}
+	bClientResyncCheckpointAdopted = true;
 
 	FString WindowError;
 	if (!WorldSub->BeginResyncCatchUpWindow(WindowError))
@@ -7153,6 +7565,9 @@ void USeinNetSubsystem::ClientHandleEndCheckpointTransfer(
 	// is open, so the wall-clock deficit actually closes).
 	ClientResyncPhase = EClientResyncPhase::CatchingUp;
 	ClientResyncHighestReceivedTurn = -1;
+	ClientResyncTailFrontierTurn = -1;
+	ClientResyncTailReceivedBytes = 0;
+	ClientResyncTailReceivedTurnIds.Reset();
 	if (ASeinNetRelay* Relay = LocalRelay.Get())
 	{
 		Relay->Server_RequestResyncTail(
@@ -7164,9 +7579,31 @@ void USeinNetSubsystem::ClientHandleEndCheckpointTransfer(
 			TEXT("the adopted world's scheduler could not start for catch-up"));
 		return;
 	}
+	bClientResyncSchedulerStoppedForAdoption = false;
 	UE_LOG(LogSeinNet, Log,
 		TEXT("[Resync] checkpoint adopted at turn=%d; catching up."),
 		ClientResyncCheckpointTurn);
+}
+
+void USeinNetSubsystem::ClientHandleResyncTailComplete(
+	const FSeinProtocolContext& Context,
+	int32 LastTailTurn)
+{
+	if (!IsCurrentProtocolContext(
+		Context, TEXT("ClientHandleResyncTailComplete")))
+	{
+		return;
+	}
+	if (ClientResyncPhase != EClientResyncPhase::CatchingUp
+		|| LastTailTurn < ClientResyncCheckpointTurn
+		|| LastTailTurn - ClientResyncCheckpointTurn
+			> ResyncMaxPinnedTailTurns)
+	{
+		ClientResetResyncState(
+			TEXT("checkpoint tail completed with an invalid frontier"));
+		return;
+	}
+	ClientResyncTailFrontierTurn = LastTailTurn;
 }
 
 void USeinNetSubsystem::ClientHandleResyncActivationCheck(
@@ -7247,6 +7684,9 @@ void USeinNetSubsystem::ClientHandleResyncActivation(
 		}
 	}
 	ClientResyncPhase = EClientResyncPhase::None;
+	bClientResyncSchedulerStoppedForAdoption = false;
+	bClientResyncCheckpointAdopted = false;
+	ClientLastResyncFailureReason.Reset();
 	UE_LOG(LogSeinNet, Log,
 		TEXT("[Resync] ACTIVATED; authorship resumes at turn=%d."),
 		FirstAuthoredTurn);
@@ -7284,11 +7724,11 @@ void USeinNetSubsystem::ClientAdvanceResyncCatchUp(int32 JustFinishedTurn)
 {
 	if (ClientResyncPhase == EClientResyncPhase::CatchingUp)
 	{
-		// Caught up when every received turn is consumed and the sim reached
-		// the highest turn the wire has shown us.
-		if (ReceivedTurns.IsEmpty()
-			&& ClientResyncHighestReceivedTurn >= 0
-			&& JustFinishedTurn >= ClientResyncHighestReceivedTurn)
+		// The reliable tail-complete marker follows the entire paced retained
+		// prefix on the relay channel. Reaching its explicit frontier proves
+		// there is no temporary inter-burst gap to mistake for completion.
+		if (ClientResyncTailFrontierTurn >= ClientResyncCheckpointTurn
+			&& JustFinishedTurn >= ClientResyncTailFrontierTurn)
 		{
 			ClientResyncPhase = EClientResyncPhase::ActivationPending;
 			if (ASeinNetRelay* Relay = LocalRelay.Get())
@@ -7526,10 +7966,32 @@ void USeinNetSubsystem::ServerCheckTurnComplete(
 
 	// Retain the EXACT fan-out bytes so a resync tail is byte-identical to
 	// live delivery (same opaque batch through the same Client_ReceiveTurn).
-	// Bounded by the shared protocol history window; pruned alongside the
-	// other per-turn ledgers in PruneProtocolState. This remains FEAT-01's
-	// short-lived recovery-tail source; persistent replay storage is independent.
+	// Bounded by the shared protocol history window; an active resync may pin
+	// an older frontier only within the explicit per-serve turn/byte ceilings.
+	// Persistent replay storage is independent.
 	RetainedAssembledTurns.Add(TurnId, OpaqueAssembled);
+	TArray<TPair<FSeinPlayerID, FString>> TailLimitFailures;
+	for (TPair<FSeinPlayerID, FServerResyncServe>& Pair : ServerResyncServes)
+	{
+		FServerResyncServe& Serve = Pair.Value;
+		if (Serve.bLiveTailEnabled || TurnId <= Serve.CheckpointTurn)
+		{
+			continue;
+		}
+		Serve.PinnedTailBytes += OpaqueAssembled.Bytes.Num();
+		if (TurnId - Serve.CheckpointTurn > ResyncMaxPinnedTailTurns
+			|| Serve.PinnedTailBytes > ResyncMaxPinnedTailBytes)
+		{
+			TailLimitFailures.Emplace(Pair.Key, FString::Printf(
+				TEXT("The retained resync tail exceeded its bounded capacity (%d turns or %lld bytes)."),
+				ResyncMaxPinnedTailTurns, ResyncMaxPinnedTailBytes));
+		}
+	}
+	for (const TPair<FSeinPlayerID, FString>& Failure : TailLimitFailures)
+	{
+		ServerFailResync(
+			Failure.Key, FindRelayForSlot(Failure.Key), Failure.Value);
+	}
 
 	// Feed a co-located authority directly from the exact decoded fan-out bytes.
 	// Depending on a local Client RPC can strand a listen host when a turn is
@@ -7547,6 +8009,14 @@ void USeinNetSubsystem::ServerCheckTurnComplete(
 			if (bBufferedLocalAuthority
 				&& OwnerController
 				&& OwnerController->IsLocalController())
+			{
+				continue;
+			}
+			const FSeinPlayerID* TargetSlot = RelayToSlot.Find(Target);
+			const FServerResyncServe* ResyncServe = TargetSlot
+				? ServerResyncServes.Find(*TargetSlot)
+				: nullptr;
+			if (ResyncServe && !ResyncServe->bLiveTailEnabled)
 			{
 				continue;
 			}
@@ -7585,7 +8055,13 @@ void USeinNetSubsystem::ClientHandleTurn(
 {
 	if (!IsCurrentProtocolContext(Context, TEXT("ClientHandleTurn"))) return;
 	PruneProtocolState(GetCurrentTurn());
-	if (!IsCommandTurnWithinProtocolWindow(TurnId, TEXT("ClientHandleTurn")))
+	const bool bBoundedResyncTailTurn =
+		(ClientResyncPhase == EClientResyncPhase::CatchingUp
+			|| ClientResyncPhase == EClientResyncPhase::Adopting)
+		&& TurnId > ClientResyncCheckpointTurn
+		&& TurnId - ClientResyncCheckpointTurn <= ResyncMaxPinnedTailTurns;
+	if (!bBoundedResyncTailTurn
+		&& !IsCommandTurnWithinProtocolWindow(TurnId, TEXT("ClientHandleTurn")))
 	{
 		// A live turn far beyond this peer's window means we are on a stale
 		// timeline (rejoined a launched match, or fell hopelessly behind).
@@ -7630,6 +8106,11 @@ void USeinNetSubsystem::ClientHandleTurn(
 		UE_LOG(LogSeinNet, Warning,
 			TEXT("[Client] rejecting malformed opaque assembled turn=%d: %s."),
 			TurnId, *WireError);
+		if (bBoundedResyncTailTurn)
+		{
+			ClientResetResyncState(
+				TEXT("the retained resync tail contained a malformed turn"));
+		}
 		return;
 	}
 	for (const FSeinCommand& Command : Commands)
@@ -7647,6 +8128,11 @@ void USeinNetSubsystem::ClientHandleTurn(
 				TurnId, *Command.CommandType.ToString(),
 				static_cast<int32>(Command.IssuerKind),
 				Command.DerivedResourcePayer.Value);
+			if (bBoundedResyncTailTurn)
+			{
+				ClientResetResyncState(
+					TEXT("the retained resync tail contained a non-canonical command"));
+			}
 			return;
 		}
 	}
@@ -7665,6 +8151,20 @@ void USeinNetSubsystem::ClientHandleTurn(
 		UE_LOG(LogSeinNet, Verbose,
 			TEXT("[Client] duplicate assembled turn=%d ignored; first delivery is immutable."), TurnId);
 		return;
+	}
+	if (bBoundedResyncTailTurn
+		&& !ClientResyncTailReceivedTurnIds.Contains(TurnId))
+	{
+		const int64 NextTailBytes = ClientResyncTailReceivedBytes
+			+ OpaqueCommands.Bytes.Num();
+		if (NextTailBytes > ResyncMaxPinnedTailBytes)
+		{
+			ClientResetResyncState(
+				TEXT("the retained resync tail exceeded its byte ceiling"));
+			return;
+		}
+		ClientResyncTailReceivedBytes = NextTailBytes;
+		ClientResyncTailReceivedTurnIds.Add(TurnId);
 	}
 	BufferReceivedTurn(TurnId, Commands);
 }

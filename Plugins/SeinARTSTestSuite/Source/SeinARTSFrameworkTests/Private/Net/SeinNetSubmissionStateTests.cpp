@@ -1,4 +1,5 @@
 #include "CQTest.h"
+#include "Components/ActorTestSpawner.h"
 #include "SeinNetSubsystem.h"
 #include "SeinNetCommandWireCodec.h"
 #include "SeinReplayReader.h"
@@ -10,6 +11,7 @@
 #include "Serialization/MemoryReader.h"
 #include "Serialization/MemoryWriter.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "Simulation/SeinTestMatchBootstrap.h"
 #include "TestTypes/SeinCommandSchemaTestTypes.h"
 
 struct FSeinNetSubsystemTestAccess
@@ -543,6 +545,71 @@ struct FSeinNetSubsystemTestAccess
 		return Net.TurnAggregator.HasSubmission(
 			Turn,
 			FSeinTurnAuthor(Participant(ParticipantSuffix), FSeinPlayerID(Slot)));
+	}
+	static void CompleteSyntheticResyncActivation(
+		USeinNetSubsystem& Net,
+		FSeinPlayerID Slot,
+		int32 ActivationTurn)
+	{
+		const FGuid Root(1, 2, 3, 4);
+		USeinNetSubsystem::FServerResyncServe& Serve =
+			Net.ServerResyncServes.Add(Slot);
+		Serve.ActivationCheckTurn = ActivationTurn;
+		Serve.LocalActivationRoot = Root;
+		Serve.PeerActivationRoot = Root;
+		Net.ServerTryCompleteResyncActivation(Slot);
+	}
+	static void SeedClientCheckpointTransfer(USeinNetSubsystem& Net)
+	{
+		Net.ClientResyncPhase =
+			USeinNetSubsystem::EClientResyncPhase::Transferring;
+		Net.ClientLastResyncFailureReason.Reset();
+	}
+	static void BeginClientCheckpointTransfer(
+		USeinNetSubsystem& Net,
+		int32 TransferId,
+		int32 CheckpointTurn)
+	{
+		Net.ClientHandleBeginCheckpointTransfer(
+			Net.ActiveProtocolContext,
+			TransferId,
+			CheckpointTurn,
+			/*TotalChunks=*/1,
+			/*TotalBytes=*/16,
+			/*UncompressedBytes=*/16,
+			/*bCompressed=*/false);
+	}
+	static void SeedClientAdoptionReset(
+		USeinNetSubsystem& Net,
+		bool bCheckpointAdopted)
+	{
+		Net.ClientResyncPhase =
+			USeinNetSubsystem::EClientResyncPhase::Adopting;
+		Net.bClientResyncSchedulerStoppedForAdoption = true;
+		Net.bClientResyncCheckpointAdopted = bCheckpointAdopted;
+	}
+	static void ResetClientResync(USeinNetSubsystem& Net)
+	{
+		Net.ClientResetResyncState(TEXT("forced test adoption failure"));
+	}
+	static void RecoverClientWorldAfterResyncReset(
+		USeinNetSubsystem& Net,
+		USeinWorldSubsystem& WorldSub,
+		bool bCheckpointAdopted)
+	{
+		Net.RecoverClientWorldAfterResyncReset(
+			WorldSub,
+			/*bSchedulerStopped=*/true,
+			bCheckpointAdopted);
+	}
+	static bool AreClientAdoptionFlagsClear(const USeinNetSubsystem& Net)
+	{
+		return !Net.bClientResyncSchedulerStoppedForAdoption
+			&& !Net.bClientResyncCheckpointAdopted;
+	}
+	static int32 LastQueuedTurn(const USeinNetSubsystem& Net)
+	{
+		return Net.LastQueuedTurn;
 	}
 	static bool SubmitEmptyAuthor(
 		USeinNetSubsystem& Net,
@@ -1827,6 +1894,101 @@ namespace UE::SeinARTSTests
 		FSeinNetSubsystemTestAccess::CheckTurnComplete(*Net, CurrentTurn);
 		ASSERT_THAT(IsTrue(
 			FSeinNetSubsystemTestAccess::IsTurnCommitted(*Net, CurrentTurn)));
+	}
+
+	TEST(ResyncActivationBackfillsOpenHeartbeatPipeline,
+		"SeinARTS.Unit.Network.Protocol")
+	{
+		USeinNetSubsystem* Net = FSeinNetSubsystemTestAccess::NewSubsystem();
+		ASSERT_THAT(IsNotNull(Net));
+		FSeinNetSubsystemTestAccess::SeedConfiguredProtocol(
+			*Net, /*AuthorCount=*/2);
+		FSeinNetSubsystemTestAccess::SetServer(*Net, true);
+		constexpr int32 CurrentTurn = 11;
+		const FSeinPlayerID RejoiningSlot(2);
+		FSeinNetSubsystemTestAccess::SetCurrentTurn(*Net, CurrentTurn);
+		FSeinNetSubsystemTestAccess::SetLifecycle(
+			*Net, RejoiningSlot, ESeinSlotLifecycle::Reconnecting);
+
+		FSeinNetSubsystemTestAccess::CompleteSyntheticResyncActivation(
+			*Net, RejoiningSlot, CurrentTurn);
+
+		const int32 PipelineEnd = CurrentTurn
+			+ FSeinNetSubsystemTestAccess::InputDelay(*Net);
+		for (int32 Turn = CurrentTurn; Turn <= PipelineEnd; ++Turn)
+		{
+			ASSERT_THAT(IsTrue(
+				FSeinNetSubsystemTestAccess::HasAuthorSubmission(
+					*Net, Turn, /*ParticipantSuffix=*/2, /*Slot=*/2)));
+		}
+		ASSERT_THAT(IsTrue(
+			FSeinNetSubsystemTestAccess::CommandLifecycleAllowed(
+				*Net, RejoiningSlot)));
+	}
+
+	TEST(ResyncCheckpointBeginRejectsNegativeIdentityAndTurn,
+		"SeinARTS.Unit.Network.Protocol")
+	{
+		USeinNetSubsystem* Net = FSeinNetSubsystemTestAccess::NewSubsystem();
+		ASSERT_THAT(IsNotNull(Net));
+		FSeinNetSubsystemTestAccess::SeedConfiguredProtocol(*Net);
+		FSeinNetSubsystemTestAccess::SetServer(*Net, false);
+
+		FSeinNetSubsystemTestAccess::SeedClientCheckpointTransfer(*Net);
+		FSeinNetSubsystemTestAccess::BeginClientCheckpointTransfer(
+			*Net, /*TransferId=*/-1, /*CheckpointTurn=*/0);
+		ASSERT_THAT(IsTrue(
+			Net->GetClientResyncPhase()
+				== USeinNetSubsystem::EClientResyncPhase::None));
+		ASSERT_THAT(IsTrue(
+			Net->GetLastClientResyncFailureReason().Contains(
+				TEXT("out-of-bounds framing"))));
+
+		FSeinNetSubsystemTestAccess::SeedClientCheckpointTransfer(*Net);
+		FSeinNetSubsystemTestAccess::BeginClientCheckpointTransfer(
+			*Net, /*TransferId=*/1, /*CheckpointTurn=*/-1);
+		ASSERT_THAT(IsTrue(
+			Net->GetClientResyncPhase()
+				== USeinNetSubsystem::EClientResyncPhase::None));
+		ASSERT_THAT(IsTrue(
+			Net->GetLastClientResyncFailureReason().Contains(
+				TEXT("out-of-bounds framing"))));
+	}
+
+	TEST(ResyncAdoptionFailureRestartsSchedulerWithoutFalseCursorAdvance,
+		"SeinARTS.Unit.Network.Protocol")
+	{
+		FActorTestSpawner Spawner;
+		UWorld& World = Spawner.GetWorld();
+		USeinWorldSubsystem* WorldSub =
+			World.GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(WorldSub));
+		USeinNetSubsystem* Net = FSeinNetSubsystemTestAccess::NewSubsystem();
+		ASSERT_THAT(IsNotNull(Net));
+
+		FString Error;
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Materialize(
+			*WorldSub,
+			FSeinMatchSettings(),
+			0x52534641,
+			TEXT("Resync.AdoptionFailure"),
+			&Error)));
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*WorldSub, &Error)));
+		WorldSub->StopSimulation();
+		FSeinNetSubsystemTestAccess::RecoverClientWorldAfterResyncReset(
+			*Net, *WorldSub, /*bCheckpointAdopted=*/false);
+		ASSERT_THAT(IsTrue(WorldSub->IsSimulationRunning()));
+		ASSERT_THAT(AreEqual(
+			-1, FSeinNetSubsystemTestAccess::LastQueuedTurn(*Net)));
+		ASSERT_THAT(AreEqual(
+			-1, FSeinNetSubsystemTestAccess::LastSubmittedTurn(*Net)));
+
+		FSeinNetSubsystemTestAccess::SeedClientAdoptionReset(
+			*Net, /*bCheckpointAdopted=*/false);
+		FSeinNetSubsystemTestAccess::ResetClientResync(*Net);
+		ASSERT_THAT(IsTrue(
+			FSeinNetSubsystemTestAccess::AreClientAdoptionFlagsClear(*Net)));
+		WorldSub->StopSimulation();
 	}
 
 	TEST(ConfigParityStartBarrierRequiresEveryExactReport, "SeinARTS.Unit.Network")

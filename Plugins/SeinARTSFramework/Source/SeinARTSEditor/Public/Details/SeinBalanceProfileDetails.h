@@ -17,6 +17,7 @@
 #include "CoreMinimal.h"
 #include "IDetailCustomization.h"
 #include "Input/Reply.h"
+#include "Layout/Visibility.h"
 #include "UObject/WeakObjectPtr.h"
 
 class IDetailLayoutBuilder;

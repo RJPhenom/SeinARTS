@@ -22,7 +22,10 @@ param(
 
 	[switch] $SkipCook,
 
-	[switch] $SkipRuntimeQualification
+	[switch] $SkipRuntimeQualification,
+
+	[ValidateSet('Baseline', 'Adverse')]
+	[string] $RuntimeNetworkProfile = 'Adverse'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -89,6 +92,10 @@ $DiagnosticScript = Join-Path $RepoRoot `
 	'Scripts\Diagnostics\Test-SeinARTSInstallation.ps1'
 $DiagnosticSelfTestScript = Join-Path $RepoRoot `
 	'Scripts\Diagnostics\Invoke-InstallationDiagnosticSelfTest.ps1'
+$UdpFaultProxyScript = Join-Path $RepoRoot `
+	'Scripts\ConsumerMatrix\Invoke-UdpFaultProxy.ps1'
+$UdpFaultProxySelfTestScript = Join-Path $RepoRoot `
+	'Scripts\ConsumerMatrix\Invoke-UdpFaultProxySelfTest.ps1'
 $DocumentationRoot = Join-Path $RepoRoot 'Docs'
 if (-not (Test-Path -LiteralPath $DocumentationRoot -PathType Container)) {
 	$DocumentationRoot = Join-Path $RepoRoot '.agents\Docs'
@@ -113,15 +120,22 @@ $ExpectedMatrixProfiles = @(
 	'Framework', 'Cover', 'Squad', 'MovementPlus', 'Full')
 $ReceiptPath = Join-Path $ReceiptRoot (
 	'release-gate-{0}.json' -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+$UdpFaultProxySelfTestRoot = Join-Path $ReceiptRoot (
+	'udp-fault-proxy-self-test-{0}' -f
+		[System.IO.Path]::GetFileNameWithoutExtension($ReceiptPath))
 
 if (-not $PackageOnly -and
 	($SkipClientServer -or $SkipCook -or $SkipRuntimeQualification)) {
 	throw 'Publication mode accepts no skip switches. Use -PackageOnly for diagnostic partial gates.'
 }
+if (-not $PackageOnly -and $RuntimeNetworkProfile -cne 'Adverse') {
+	throw 'Publication mode requires the Adverse packaged-runtime network profile.'
+}
 
 foreach ($RequiredScript in @(
 	$BuildScript, $TestScript, $PackageScript, $ConsumerScript,
-	$DiagnosticScript, $DiagnosticSelfTestScript)) {
+	$DiagnosticScript, $DiagnosticSelfTestScript, $UdpFaultProxyScript,
+	$UdpFaultProxySelfTestScript)) {
 	if (-not (Test-Path -LiteralPath $RequiredScript -PathType Leaf)) {
 		throw "Release-gate dependency is missing: '$RequiredScript'."
 	}
@@ -156,13 +170,14 @@ if (-not $PackageOnly) {
 
 $Steps = [System.Collections.Generic.List[object]]::new()
 $Receipt = [ordered]@{
-	schemaVersion = 2
+	schemaVersion = 3
 	version = $Version
 	commit = $Commit
 	dirtyWorkingTree = $InitialStatus.Count -ne 0
 	engineRoot = $EngineRoot
 	engineBuildFingerprint = $EngineBuildFingerprint
 	mode = if ($PackageOnly) { 'PackageOnly' } else { 'Publish' }
+	runtimeNetworkProfile = $RuntimeNetworkProfile
 	startedAtUtc = [DateTime]::UtcNow.ToString('o')
 	completedAtUtc = $null
 	status = 'Running'
@@ -171,6 +186,8 @@ $Receipt = [ordered]@{
 	testAttempts = @()
 	matrixReceipts = @()
 	matrixRunId = $null
+	udpFaultProxySelfTestSha256 = $null
+	udpFaultProxySelfTestProxySha256 = $null
 	evidenceArchive = $null
 	publicationAssets = @()
 	postPublicationWarnings = @()
@@ -260,10 +277,15 @@ function Get-VerifiedReleaseAssets([switch] $RequireQualification)
 		}
 		$StableReceiptJson = Get-Content -Raw -LiteralPath $StableReceipt |
 			ConvertFrom-Json
-		if ($StableReceiptJson.schemaVersion -ne 2 -or
+		if ($StableReceiptJson.schemaVersion -ne 3 -or
 			[string]$StableReceiptJson.status -cne 'Qualified' -or
 			[string]$StableReceiptJson.version -cne $Version -or
 			[string]$StableReceiptJson.commit -cne $Commit -or
+			[string]$StableReceiptJson.runtimeNetworkProfile -cne 'Adverse' -or
+			[string]::IsNullOrWhiteSpace(
+				[string]$StableReceiptJson.udpFaultProxySelfTestSha256) -or
+			[string]::IsNullOrWhiteSpace(
+				[string]$StableReceiptJson.udpFaultProxySelfTestProxySha256) -or
 			$StableReceiptJson.dirtyWorkingTree -ne $false) {
 			throw 'Stable release-gate receipt is not the qualified clean source receipt.'
 		}
@@ -390,7 +412,7 @@ function Get-QualifiedMatrixReceiptPath(
 	$InstallationDiagnosticReceipt = [string]$Matrix.installationDiagnosticReceipt
 	$ExpectedInstallationDiagnosticReceipt = Join-Path $RepoRoot `
 		"Saved\ConsumerMatrix\$Profile\Saved\Qualification\installation-diagnostic.json"
-	if ($Matrix.schemaVersion -ne 6 -or
+	if ($Matrix.schemaVersion -ne 7 -or
 		[string]$Matrix.profile -cne $Profile -or
 		[string]$Matrix.qualificationRunId -cne $MatrixRunId -or
 		[string]$Matrix.pluginSource -cne 'PackagedArtifacts' -or
@@ -411,6 +433,9 @@ function Get-QualifiedMatrixReceiptPath(
 		[string]$Matrix.editorBuild -cne 'Passed' -or
 		[string]$Matrix.shippingGameBuild -cne 'Passed' -or
 		[string]$Matrix.uncookedLoad -cne 'Passed' -or
+		($Profile -in @('Framework', 'MovementPlus') -and
+			[string]$Matrix.runtimeNetworkProfile -cne
+				$RuntimeNetworkProfile) -or
 		$ActualPlugins.Count -ne $ExpectedPlugins.Count -or
 		(@(Compare-Object $ActualPlugins @($ExpectedPlugins | Sort-Object))).Count -ne 0) {
 		throw "Consumer matrix receipt '$Path' is incomplete or does not bind this release invocation."
@@ -483,6 +508,22 @@ function Get-QualifiedMatrixReceiptPath(
 			("Saved\ConsumerMatrix\{0}\Saved\RuntimeQualification\runtime-result.json" -f
 				$Profile)
 		$Runtime = Get-Content -Raw -LiteralPath $RuntimePath | ConvertFrom-Json
+		$ProxyPath = Join-Path $RepoRoot `
+			("Saved\ConsumerMatrix\{0}\Saved\RuntimeQualification\proxy-result.json" -f
+				$Profile)
+		if (-not (Test-Path -LiteralPath $ProxyPath -PathType Leaf)) {
+			throw "$Profile adverse-network proxy evidence is missing."
+		}
+		$Proxy = Get-Content -Raw -LiteralPath $ProxyPath | ConvertFrom-Json
+		$PackagedGameExecutable = Join-Path $RepoRoot (
+			'Saved\ConsumerMatrix\{0}\Saved\Packaged\Windows\SeinConsumer\Binaries\Win64\SeinConsumer-Win64-Shipping.exe' -f
+				$Profile)
+		if (-not (Test-Path -LiteralPath $PackagedGameExecutable -PathType Leaf)) {
+			throw "$Profile qualified Shipping executable is missing."
+		}
+		$PackagedGameExecutableSha256 =
+			(Get-FileHash -LiteralPath $PackagedGameExecutable `
+				-Algorithm SHA256).Hash
 		$RequiredRuntimeFields = @(
 			'listenServer', 'twoPlayerLobbyTravel', 'lockstepCommandFlow',
 			'determinismWorldRootGossip', 'checkpointTailResync',
@@ -510,9 +551,39 @@ function Get-QualifiedMatrixReceiptPath(
 			'reconnectMovementState', 'replayMovementState',
 			'serverMovementTelemetry', 'clientMovementTelemetry',
 			'reconnectMovementTelemetry', 'replayMovementTelemetry')
-		if ($Runtime.schemaVersion -ne 4 -or
+		if ($Runtime.schemaVersion -ne 5 -or
 			[string]$Runtime.profile -cne $Profile -or
-			[string]::IsNullOrWhiteSpace([string]$Runtime.executableSha256) -or
+			[string]$Runtime.networkProfile -cne 'Adverse' -or
+			[string]$Runtime.networkFaultInjection -cne 'Passed' -or
+			[string]$Runtime.networkFaultProxyResultSha256 -cne
+				(Get-FileHash -LiteralPath $ProxyPath -Algorithm SHA256).Hash -or
+			[int]$Proxy.schemaVersion -ne 2 -or
+			[string]$Proxy.status -cne 'Passed' -or
+			[string]$Proxy.jitterSequence -cne 'PerDirection' -or
+			[int]$Proxy.latencyMs -ne 60 -or
+			[int]$Proxy.jitterMs -ne 20 -or
+			[int]$Proxy.dropEvery -ne 43 -or
+			[int]$Proxy.duplicateEvery -ne 59 -or
+			[int]$Proxy.reorderEvery -ne 31 -or
+			[int]$Proxy.reorderDelayMs -ne 90 -or
+			[uint64]$Proxy.seed -ne 5368391 -or
+			[int64]$Proxy.clientEndpointChanges -lt 1 -or
+			[int]$Proxy.discardedAtShutdown -ne 0 -or
+			@(@('clientToServer', 'serverToClient') | Where-Object {
+				$Stats = $Proxy.$_
+				[int64]$Stats.receivedDatagrams -lt 100 -or
+				[int64]$Stats.forwardedDatagrams -lt 100 -or
+				[int64]$Stats.droppedDatagrams -lt 1 -or
+				[int64]$Stats.duplicatedDatagrams -lt 1 -or
+				[int64]$Stats.reorderedDatagrams -lt 1 -or
+				[int64]$Stats.forwardedDuplicateDatagrams -lt 1 -or
+				[int64]$Stats.observedOrderInversions -lt 1 -or
+				[double]$Stats.minimumForwardDelayMs -lt 35 -or
+				[double]$Stats.maximumForwardDelayMs -lt 120 -or
+				[int64]$Stats.unroutableDatagrams -ne 0
+			}).Count -ne 0 -or
+			[string]$Runtime.executableSha256 -cne
+				$PackagedGameExecutableSha256 -or
 			@($RequiredRuntimeFields | Where-Object {
 				[string]$Runtime.$_ -cne 'Passed' }).Count -ne 0 -or
 			[string]$Runtime.movementPlusCommandFlow -cne
@@ -637,13 +708,39 @@ function New-ReleaseEvidenceArchive
 			'Saved\ConsumerMatrix\{0}\Saved\Qualification\installation-diagnostic.json' -f $ProfileName)))
 	}
 	$RuntimeSources = [ordered]@{}
+	$RuntimeProxySources = [ordered]@{}
 	foreach ($RuntimeProfile in @('Framework', 'MovementPlus')) {
 		$RuntimeSource = Join-Path $RepoRoot (
 			'Saved\ConsumerMatrix\{0}\Saved\RuntimeQualification\runtime-result.json' -f
 				$RuntimeProfile)
+		$RuntimeProxySource = Join-Path $RepoRoot (
+			'Saved\ConsumerMatrix\{0}\Saved\RuntimeQualification\proxy-result.json' -f
+				$RuntimeProfile)
 		$RuntimeSources[$RuntimeProfile] = $RuntimeSource
+		$RuntimeProxySources[$RuntimeProfile] = $RuntimeProxySource
 		$EvidenceSourcePaths.Add($RuntimeSource)
+		$EvidenceSourcePaths.Add($RuntimeProxySource)
 	}
+	$UdpFaultProxySelfTestResult = Join-Path $UdpFaultProxySelfTestRoot `
+		'self-test-result.json'
+	$UdpFaultProxySelfTestProxyResult = Join-Path $UdpFaultProxySelfTestRoot `
+		'proxy-result.json'
+	$UdpFaultProxySelfTest = Get-Content -Raw `
+		-LiteralPath $UdpFaultProxySelfTestResult | ConvertFrom-Json
+	$UdpFaultProxySelfTestProxySha256 =
+		(Get-FileHash -LiteralPath $UdpFaultProxySelfTestProxyResult `
+			-Algorithm SHA256).Hash
+	if ([string]$Receipt.udpFaultProxySelfTestSha256 -cne
+		(Get-FileHash -LiteralPath $UdpFaultProxySelfTestResult `
+			-Algorithm SHA256).Hash -or
+		[string]$Receipt.udpFaultProxySelfTestProxySha256 -cne
+			$UdpFaultProxySelfTestProxySha256 -or
+		[string]$UdpFaultProxySelfTest.proxyResultSha256 -cne
+			$UdpFaultProxySelfTestProxySha256) {
+		throw 'UDP fault proxy self-test evidence no longer matches the release receipt.'
+	}
+	$EvidenceSourcePaths.Add($UdpFaultProxySelfTestResult)
+	$EvidenceSourcePaths.Add($UdpFaultProxySelfTestProxyResult)
 	foreach ($Document in @('COMPATIBILITY.md', 'UPGRADING.md')) {
 		$EvidenceSourcePaths.Add((Join-Path $DocumentationRoot $Document))
 	}
@@ -743,9 +840,20 @@ function New-ReleaseEvidenceArchive
 	foreach ($RuntimeProfile in $RuntimeSources.Keys) {
 		$RuntimeDestination = Join-Path $EvidenceRoot (
 			'{0}-runtime-result.json' -f $RuntimeProfile.ToLowerInvariant())
+		$RuntimeProxyDestination = Join-Path $EvidenceRoot (
+			'{0}-network-proxy-result.json' -f
+				$RuntimeProfile.ToLowerInvariant())
 		Copy-Item -LiteralPath $RuntimeSources[$RuntimeProfile] `
 			-Destination $RuntimeDestination -Force
+		Copy-Item -LiteralPath $RuntimeProxySources[$RuntimeProfile] `
+			-Destination $RuntimeProxyDestination -Force
 	}
+	Copy-Item -LiteralPath $UdpFaultProxySelfTestResult `
+		-Destination (Join-Path $EvidenceRoot 'udp-fault-proxy-self-test.json') `
+		-Force
+	Copy-Item -LiteralPath $UdpFaultProxySelfTestProxyResult `
+		-Destination (Join-Path $EvidenceRoot 'udp-fault-proxy-self-test-proxy.json') `
+		-Force
 	foreach ($Document in @('COMPATIBILITY.md', 'UPGRADING.md')) {
 		Copy-Item -LiteralPath (Join-Path $DocumentationRoot $Document) `
 			-Destination (Join-Path $EvidenceRoot $Document) -Force
@@ -826,6 +934,28 @@ Write-ReleaseGateReceipt
 Invoke-ReleaseGateStep 'Installation diagnostic self-test' {
 	& $DiagnosticSelfTestScript
 }
+Invoke-ReleaseGateStep 'UDP fault proxy self-test' {
+	& $UdpFaultProxySelfTestScript `
+		-ResultDirectory $UdpFaultProxySelfTestRoot
+	$SelfTestResultPath = Join-Path $UdpFaultProxySelfTestRoot `
+		'self-test-result.json'
+	$SelfTestProxyPath = Join-Path $UdpFaultProxySelfTestRoot `
+		'proxy-result.json'
+	$SelfTestResult = Get-Content -Raw -LiteralPath $SelfTestResultPath |
+		ConvertFrom-Json
+	$SelfTestProxySha256 =
+		(Get-FileHash -LiteralPath $SelfTestProxyPath -Algorithm SHA256).Hash
+	if ([int]$SelfTestResult.schemaVersion -ne 2 -or
+		[string]$SelfTestResult.status -cne 'Passed' -or
+		[string]$SelfTestResult.proxyResult -cne 'proxy-result.json' -or
+		[string]$SelfTestResult.proxyResultSha256 -cne
+			$SelfTestProxySha256) {
+		throw 'UDP fault proxy self-test result is invalid.'
+	}
+	$Receipt.udpFaultProxySelfTestSha256 =
+		(Get-FileHash -LiteralPath $SelfTestResultPath -Algorithm SHA256).Hash
+	$Receipt.udpFaultProxySelfTestProxySha256 = $SelfTestProxySha256
+}
 Invoke-ReleaseGateStep 'Host installation diagnostic' {
 	& $DiagnosticScript `
 		-Project (Join-Path $RepoRoot 'SeinARTS.uproject') `
@@ -879,6 +1009,7 @@ Invoke-ReleaseGateStep 'Exact artifact consumer matrix' {
 		ArtifactDirectory = $Dist
 		AuditPublicHeaders = $true
 		QualificationRunId = $MatrixRunId
+		RuntimeNetworkProfile = $RuntimeNetworkProfile
 	}
 	if ($PackageOnly) {
 		if ($SkipClientServer) { $Arguments.SkipClientServer = $true }
