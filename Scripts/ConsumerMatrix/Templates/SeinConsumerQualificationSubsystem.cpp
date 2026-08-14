@@ -35,7 +35,7 @@
 
 namespace
 {
-	constexpr double QualificationTimeoutSeconds = 180.0;
+	constexpr double QualificationTimeoutSeconds = 540.0;
 	constexpr double ReconnectDelaySeconds = 2.0;
 	constexpr int32 InitialResyncStartTick = 30;
 	constexpr int32 ReplayTailAfterReconnectTicks = 60;
@@ -107,6 +107,27 @@ namespace
 	FString GuidDigits(const FGuid& Guid)
 	{
 		return Guid.ToString(EGuidFormats::Digits);
+	}
+
+	FString EncodeLockstepProgress(const USeinNetSubsystem& Net)
+	{
+		const FSeinLockstepProgress Progress = Net.GetLockstepProgress();
+		return FString::Printf(
+			TEXT("currentTurn=%d\nlastQueuedTurn=%d\nlastSubmittedTurn=%d\n")
+			TEXT("pendingSubmissions=%d\nreceivedTurns=%d\ncurrentTurnReceived=%d\n")
+			TEXT("lastStalledTurn=%d\nserver=%d\nexpectedAuthors=%d\n")
+			TEXT("submittedAuthors=%d\nmissingAuthors=%d\n"),
+			Progress.CurrentTurn,
+			Progress.LastQueuedTurn,
+			Progress.LastSubmittedTurn,
+			Progress.PendingSubmissionCount,
+			Progress.ReceivedTurnCount,
+			Progress.bCurrentTurnReceived ? 1 : 0,
+			Progress.LastStalledTurn,
+			Progress.bServer ? 1 : 0,
+			Progress.ExpectedAuthorCount,
+			Progress.SubmittedAuthorCount,
+			Progress.MissingAuthorCount);
 	}
 
 #if defined(SEIN_CONSUMER_QUALIFY_MOVEMENT_PLUS)
@@ -328,6 +349,12 @@ void USeinConsumerQualificationSubsystem::Initialize(
 			TEXT("role=%s\ncommandLine=%s\n"),
 			*Role,
 			FCommandLine::Get()));
+	if (GEngine)
+	{
+		NetworkFailureHandle = GEngine->OnNetworkFailure().AddUObject(
+			this,
+			&USeinConsumerQualificationSubsystem::HandleNetworkFailure);
+	}
 
 	StartedAtSeconds = FPlatformTime::Seconds();
 	TickHandle = FTSTicker::GetCoreTicker().AddTicker(
@@ -342,6 +369,11 @@ void USeinConsumerQualificationSubsystem::Deinitialize()
 		FTSTicker::GetCoreTicker().RemoveTicker(TickHandle);
 		TickHandle.Reset();
 	}
+	if (GEngine && NetworkFailureHandle.IsValid())
+	{
+		GEngine->OnNetworkFailure().Remove(NetworkFailureHandle);
+		NetworkFailureHandle.Reset();
+	}
 	ActiveReplayReader.Reset();
 	if (USeinWorldSubsystem* ReplayWorld = ReplayObserverWorld.Get())
 	{
@@ -350,8 +382,34 @@ void USeinConsumerQualificationSubsystem::Deinitialize()
 	}
 	ReplayCommandObserverHandle.Reset();
 	ReplayObserverWorld.Reset();
-	InitialClientMatchWorld.Reset();
 	Super::Deinitialize();
+}
+
+void USeinConsumerQualificationSubsystem::HandleNetworkFailure(
+	UWorld* World,
+	UNetDriver* NetDriver,
+	ENetworkFailure::Type FailureType,
+	const FString& ErrorString)
+{
+	(void)NetDriver;
+	if (World && World->GetGameInstance() != GetGameInstance())
+	{
+		return;
+	}
+	const FString Failure = FString::Printf(
+		TEXT("type=%s\nerror=%s\nworld=%s\n"),
+		ENetworkFailure::ToString(FailureType),
+		*ErrorString,
+		World ? *World->GetPathName() : TEXT("<none>"));
+	WriteMarker(
+		*FString::Printf(TEXT("%s-network-failure.marker"), *Role.ToLower()),
+		Failure);
+	if (Role.Equals(TEXT("Client"), ESearchCase::IgnoreCase)
+		&& !bDisconnectIssued)
+	{
+		Fail(TEXT("unexpected network failure before qualification disconnect: ")
+			+ Failure.Replace(TEXT("\n"), TEXT(" ")));
+	}
 }
 
 bool USeinConsumerQualificationSubsystem::Tick(float DeltaSeconds)
@@ -523,6 +581,17 @@ void USeinConsumerQualificationSubsystem::TickServer(UWorld& World)
 	{
 		return;
 	}
+	const double Now = FPlatformTime::Seconds();
+	if (Now - LastServerLockstepProgressAtSeconds >= 1.0)
+	{
+		LastServerLockstepProgressAtSeconds = Now;
+		WriteMarker(
+			TEXT("server-lockstep-progress.marker"),
+			FString::Printf(
+				TEXT("tick=%d\n%s"),
+				Sim->GetCurrentTick(),
+				*EncodeLockstepProgress(*Net)));
+	}
 
 	if (!bServerMatchStarted)
 	{
@@ -631,6 +700,12 @@ void USeinConsumerQualificationSubsystem::TickServer(UWorld& World)
 			TEXT("server-drop-observed.marker"),
 			FString::Printf(TEXT("tick=%d\n"), Sim->GetCurrentTick()));
 	}
+	if (bServerSawDrop && !bServerSawReconnecting && bHasReconnecting)
+	{
+		bServerSawReconnecting = WriteMarker(
+			TEXT("server-reconnect-awaiting-resync.marker"),
+			FString::Printf(TEXT("tick=%d\n"), Sim->GetCurrentTick()));
+	}
 	if (bServerSawDrop && !bServerSawReconnect
 		&& !bHasDropped && !bHasReconnecting && Connected >= 2)
 	{
@@ -693,8 +768,12 @@ void USeinConsumerQualificationSubsystem::TickServer(UWorld& World)
 	}
 
 	USeinReplayWriter* Writer = Net->GetReplayWriter();
-	if (!Writer || !Writer->IsRecording()
-		|| Writer->GetObservedEndTick() != Sim->GetCurrentTick())
+	if (!Writer || !Writer->IsRecording())
+	{
+		Fail(TEXT("server replay recording stopped before qualification publication"));
+		return;
+	}
+	if (Writer->GetObservedEndTick() != Sim->GetCurrentTick())
 	{
 		return;
 	}
@@ -799,12 +878,30 @@ void USeinConsumerQualificationSubsystem::TickClient(UWorld& World)
 	{
 		return;
 	}
+	if (Now - LastClientResyncProgressAtSeconds >= 1.0)
+	{
+		int32 ReceivedChunks = 0;
+		int32 TotalChunks = 0;
+		int32 ReceivedBytes = 0;
+		int32 TotalBytes = 0;
+		const bool bHasTransferProgress =
+			Net->GetClientResyncTransferProgress(
+				ReceivedChunks, TotalChunks, ReceivedBytes, TotalBytes);
+		LastClientResyncProgressAtSeconds = Now;
+		WriteMarker(
+			TEXT("client-resync-progress.marker"),
+			FString::Printf(
+				TEXT("reconnect=%d\nphase=%d\ntransfer=%d\nchunks=%d/%d\nbytes=%d/%d\ntick=%d\n%s"),
+				bReconnectTravelIssued ? 1 : 0,
+				static_cast<int32>(Net->GetClientResyncPhase()),
+				bHasTransferProgress ? 1 : 0,
+				ReceivedChunks, TotalChunks,
+				ReceivedBytes, TotalBytes,
+				Sim->GetCurrentTick(),
+				*EncodeLockstepProgress(*Net)));
+	}
 	if (!bReconnectTravelIssued)
 	{
-		if (!InitialClientMatchWorld.IsValid())
-		{
-			InitialClientMatchWorld = &World;
-		}
 		if (!Sim->IsSimulationRunning())
 		{
 			return;
@@ -922,6 +1019,13 @@ void USeinConsumerQualificationSubsystem::TickClient(UWorld& World)
 			&& Sim->IsSimulationRunning()
 			&& Sim->GetCurrentTick() > InitialResyncRequestTick)
 		{
+			if (!Net->GetLastClientResyncFailureReason().IsEmpty())
+			{
+				Fail(FString::Printf(
+					TEXT("initial production resync failed: %s"),
+					*Net->GetLastClientResyncFailureReason()));
+				return;
+			}
 			bInitialResyncCompleted = true;
 			WriteMarker(
 				TEXT("client-resync-complete.marker"),
@@ -945,19 +1049,44 @@ void USeinConsumerQualificationSubsystem::TickClient(UWorld& World)
 		return;
 	}
 
-	if (&World == InitialClientMatchWorld.Get())
-	{
-		return;
-	}
 	if (!bReconnectResyncRequested)
 	{
-		FString Error;
-		if (!Net->RequestResync(Error))
+		const bool bAlreadyInFlight = Net->GetClientResyncPhase()
+			!= USeinNetSubsystem::EClientResyncPhase::None;
+		if (!bAlreadyInFlight)
 		{
-			return;
+			FString Error;
+			if (!Net->RequestResync(Error))
+			{
+				return;
+			}
 		}
 		bReconnectResyncRequested = true;
 		ReconnectResyncRequestTick = Sim->GetCurrentTick();
+		WriteMarker(
+			TEXT("client-reconnect-resync-requested.marker"),
+			FString::Printf(
+				TEXT("tick=%d\nSource=%s\nContext=%s\n"),
+				ReconnectResyncRequestTick,
+				bAlreadyInFlight ? TEXT("Automatic") : TEXT("Explicit"),
+				*Net->GetActiveProtocolContext()
+					.ToCanonicalDebugString()));
+	}
+	const int32 ReconnectPhase = static_cast<int32>(
+		Net->GetClientResyncPhase());
+	if (bReconnectResyncRequested
+		&& ReconnectPhase != LastReconnectResyncPhase)
+	{
+		LastReconnectResyncPhase = ReconnectPhase;
+		WriteMarker(
+			*FString::Printf(
+				TEXT("client-reconnect-phase-%d.marker"),
+				ReconnectPhase),
+			FString::Printf(
+				TEXT("tick=%d\nBootstrapState=%d\nLastFailure=%s\n"),
+				Sim->GetCurrentTick(),
+				static_cast<int32>(Sim->GetMatchBootstrapState()),
+				*Net->GetLastClientResyncFailureReason()));
 	}
 	if (bReconnectResyncRequested
 		&& Net->GetClientResyncPhase()
@@ -971,6 +1100,13 @@ void USeinConsumerQualificationSubsystem::TickClient(UWorld& World)
 		&& Sim->IsSimulationRunning()
 		&& Sim->GetCurrentTick() > ReconnectResyncRequestTick)
 	{
+		if (!Net->GetLastClientResyncFailureReason().IsEmpty())
+		{
+			Fail(FString::Printf(
+				TEXT("reconnect production resync failed: %s"),
+				*Net->GetLastClientResyncFailureReason()));
+			return;
+		}
 		if (!HasQualificationPairCapability(*Sim))
 		{
 			Fail(TEXT("pair capability was absent after production reconnect resync"));
@@ -981,6 +1117,22 @@ void USeinConsumerQualificationSubsystem::TickClient(UWorld& World)
 		if (!ObserveQualificationMovement(*Sim, MovementObservation)
 			|| !IsQualifiedMovementObservation(MovementObservation))
 		{
+			if (Now - LastReconnectMovementDiagnosticAtSeconds >= 1.0)
+			{
+				LastReconnectMovementDiagnosticAtSeconds = Now;
+				WriteMarker(
+					TEXT("client-reconnect-movement-progress.marker"),
+					FString::Printf(
+						TEXT("tick=%d\nExpectedClass=%d\nExpectedTarget=%d\nTelemetryValid=%d\nTelemetryActive=%d\nAdvanced=%d\n%s"),
+						Sim->GetCurrentTick(),
+						MovementObservation.bExpectedClass ? 1 : 0,
+						MovementObservation.bExpectedTarget ? 1 : 0,
+						MovementObservation.bTelemetryValid ? 1 : 0,
+						MovementObservation.bTelemetryActive ? 1 : 0,
+						MovementObservation.bAdvanced ? 1 : 0,
+						*EncodeQualificationMovementEvidence(
+							MovementObservation)));
+			}
 			return;
 		}
 		bReconnectMovementPreserved = WriteMarker(

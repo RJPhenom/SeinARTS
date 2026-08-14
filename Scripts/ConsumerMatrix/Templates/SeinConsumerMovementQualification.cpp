@@ -115,7 +115,9 @@ ASeinConsumerMovementUnit::ASeinConsumerMovementUnit()
 	FSeinMovementComponent Movement;
 	Movement.MovementClass = FSoftClassPath(
 		USeinWheeledVehicleMovement::StaticClass());
-	Movement.TopSpeed = FFixedPoint::FromInt(900);
+	// Keep the qualification order active across the bounded adverse-network
+	// reconnect window so snapshot adoption must restore live movement state.
+	Movement.TopSpeed = FFixedPoint::FromInt(50);
 	Movement.TurnRate = FFixedPoint::FromInt(3)
 		/ FFixedPoint::FromInt(2);
 	Movement.ReverseTopSpeed = Movement.TopSpeed * FFixedPoint::Half;

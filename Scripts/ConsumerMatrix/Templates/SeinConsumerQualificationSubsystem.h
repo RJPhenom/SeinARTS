@@ -7,7 +7,12 @@
 
 class USeinReplayReader;
 class USeinWorldSubsystem;
+class UNetDriver;
 struct FSeinCommand;
+namespace ENetworkFailure
+{
+	enum Type : int;
+}
 
 /**
  * Generated-consumer-only packaged runtime driver.
@@ -34,12 +39,18 @@ private:
 	void ObserveReplayCommands(
 		int32 Tick,
 		const TArray<FSeinCommand>& Commands);
+	void HandleNetworkFailure(
+		UWorld* World,
+		UNetDriver* NetDriver,
+		ENetworkFailure::Type FailureType,
+		const FString& ErrorString);
 
 	bool IsMap(const UWorld& World, const TCHAR* PackageName) const;
 	bool WriteMarker(const TCHAR* FileName, const FString& Body) const;
 	void Fail(const FString& Reason);
 
 	FTSTicker::FDelegateHandle TickHandle;
+	FDelegateHandle NetworkFailureHandle;
 	FString Role;
 	FString MarkerDirectory;
 	FString ServerAddress;
@@ -48,8 +59,12 @@ private:
 	FString ExpectedMovementState;
 	double StartedAtSeconds = 0.0;
 	double DisconnectIssuedAtSeconds = 0.0;
+	double LastServerLockstepProgressAtSeconds = 0.0;
+	double LastClientResyncProgressAtSeconds = 0.0;
+	double LastReconnectMovementDiagnosticAtSeconds = 0.0;
 	int32 InitialResyncRequestTick = INDEX_NONE;
 	int32 ReconnectResyncRequestTick = INDEX_NONE;
+	int32 LastReconnectResyncPhase = INDEX_NONE;
 	int32 ServerReconnectTick = INDEX_NONE;
 	int32 ExpectedReplayEndTick = INDEX_NONE;
 	bool bFailed = false;
@@ -64,6 +79,7 @@ private:
 	bool bServerPairGrantObserved = false;
 	bool bServerMovementObserved = false;
 	bool bServerSawDrop = false;
+	bool bServerSawReconnecting = false;
 	bool bServerSawReconnect = false;
 	bool bServerPairRevokeSubmitted = false;
 	bool bServerPairRevokeObserved = false;
@@ -94,7 +110,6 @@ private:
 	bool bReplayObservedMovementActive = false;
 	bool bReplayObservedMovementAdvanced = false;
 	FDelegateHandle ReplayCommandObserverHandle;
-	TWeakObjectPtr<UWorld> InitialClientMatchWorld;
 	TWeakObjectPtr<USeinReplayReader> ActiveReplayReader;
 	TWeakObjectPtr<USeinWorldSubsystem> ReplayObserverWorld;
 };

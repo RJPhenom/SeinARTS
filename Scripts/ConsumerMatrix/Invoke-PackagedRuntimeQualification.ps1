@@ -10,7 +10,10 @@ param(
 	[ValidateSet('Framework', 'MovementPlus')]
 	[string] $Profile = 'Framework',
 
-	[int] $TimeoutSeconds = 240
+	[ValidateSet('Baseline', 'Adverse')]
+	[string] $NetworkProfile = 'Baseline',
+
+	[int] $TimeoutSeconds = 600
 )
 
 $ErrorActionPreference = 'Stop'
@@ -19,6 +22,7 @@ $ProjectRoot = (Resolve-Path -LiteralPath $ProjectRoot).Path
 $ExecutableSha256 = (Get-FileHash -LiteralPath $GameExecutable -Algorithm SHA256).Hash
 $ExpectedMovementClass = '/Script/SeinARTSMovementPlus.SeinWheeledVehicleMovement'
 $ExpectedMovementDestination = '214748364800000:21474836480000:0'
+$FaultProxyScript = Join-Path $PSScriptRoot 'Invoke-UdpFaultProxy.ps1'
 $MarkerDirectory = Join-Path $ProjectRoot 'Saved\RuntimeQualification'
 $ResolvedMarkerDirectory = [System.IO.Path]::GetFullPath($MarkerDirectory)
 if (-not $ResolvedMarkerDirectory.StartsWith(
@@ -31,13 +35,35 @@ if (Test-Path -LiteralPath $MarkerDirectory) {
 }
 New-Item -ItemType Directory -Path $MarkerDirectory -Force | Out-Null
 
-$Listener = [System.Net.Sockets.TcpListener]::new(
-	[System.Net.IPAddress]::Loopback, 0)
-$Listener.Start()
-$Port = ([System.Net.IPEndPoint]$Listener.LocalEndpoint).Port
-$Listener.Stop()
-$ServerAddress = "127.0.0.1:$Port"
+function Get-FreeUdpPort
+{
+	$Probe = [System.Net.Sockets.UdpClient]::new(0)
+	try {
+		return ([System.Net.IPEndPoint]$Probe.Client.LocalEndPoint).Port
+	}
+	finally {
+		$Probe.Dispose()
+	}
+}
+
+$ServerPort = Get-FreeUdpPort
+$ProxyPort = $null
+if ($NetworkProfile -eq 'Adverse') {
+	if (-not (Test-Path -LiteralPath $FaultProxyScript -PathType Leaf)) {
+		throw "UDP fault proxy is missing: '$FaultProxyScript'."
+	}
+	do {
+		$ProxyPort = Get-FreeUdpPort
+	} while ($ProxyPort -eq $ServerPort)
+}
+$ServerAddress = if ($NetworkProfile -eq 'Adverse') {
+	"127.0.0.1:$ProxyPort"
+} else {
+	"127.0.0.1:$ServerPort"
+}
 $Processes = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
+$ProxyProcess = $null
+$ProxyResult = $null
 $ReplayArtifactPath = $null
 $ReplayArtifactRoot = [System.IO.Path]::GetFullPath(
 	(Join-Path $env:LOCALAPPDATA 'SeinConsumer\Saved\Replays'))
@@ -64,6 +90,36 @@ function Start-QualificationProcess(
 		-PassThru
 	$Processes.Add($Process)
 	return $Process
+}
+
+function Start-UdpFaultProxy
+{
+	$PowerShell = (Get-Command powershell.exe -ErrorAction Stop).Source
+	$Stdout = Join-Path $MarkerDirectory 'proxy.stdout.log'
+	$Stderr = Join-Path $MarkerDirectory 'proxy.stderr.log'
+	$Arguments = @(
+		'-NoProfile',
+		'-ExecutionPolicy', 'Bypass',
+		'-File', ('"{0}"' -f $FaultProxyScript),
+		'-ListenPort', $ProxyPort,
+		'-UpstreamHost', '127.0.0.1',
+		'-UpstreamPort', $ServerPort,
+		'-ControlDirectory', ('"{0}"' -f $MarkerDirectory),
+		'-LatencyMs', 60,
+		'-JitterMs', 20,
+		'-DropEvery', 43,
+		'-DuplicateEvery', 59,
+		'-ReorderEvery', 31,
+		'-ReorderDelayMs', 90,
+		'-Seed', 5368391)
+	return Start-Process `
+		-FilePath $PowerShell `
+		-ArgumentList $Arguments `
+		-WorkingDirectory $ProjectRoot `
+		-RedirectStandardOutput $Stdout `
+		-RedirectStandardError $Stderr `
+		-WindowStyle Hidden `
+		-PassThru
 }
 
 function Get-QualificationFailure
@@ -135,6 +191,64 @@ function Assert-MovementEvidence(
 	}
 }
 
+function Stop-AndValidateUdpFaultProxy
+{
+	if (-not $ProxyProcess) {
+		throw 'Adverse qualification has no UDP fault proxy process.'
+	}
+	Start-Sleep -Milliseconds 500
+	New-Item -ItemType File `
+		-Path (Join-Path $MarkerDirectory 'proxy-stop.marker') `
+		-Force | Out-Null
+	$ProxyResultPath = Wait-QualificationMarker `
+		'proxy-result.json' @($ProxyProcess)
+	if (-not $ProxyProcess.WaitForExit(10000)) {
+		throw 'UDP fault proxy did not exit after its stop marker.'
+	}
+	$ProxyProcess.Refresh()
+	if ($ProxyProcess.ExitCode -ne 0) {
+		throw "UDP fault proxy exited with code $($ProxyProcess.ExitCode)."
+	}
+
+	$Result = Get-Content -Raw -LiteralPath $ProxyResultPath |
+		ConvertFrom-Json
+	if ([int]$Result.schemaVersion -ne 2 -or
+		[string]$Result.status -cne 'Passed' -or
+		[string]$Result.jitterSequence -cne 'PerDirection' -or
+		[int]$Result.listenPort -ne $ProxyPort -or
+		[string]$Result.upstream -cne "127.0.0.1:$ServerPort" -or
+		[string]::IsNullOrWhiteSpace([string]$Result.clientEndpoint) -or
+		[int]$Result.latencyMs -ne 60 -or
+		[int]$Result.jitterMs -ne 20 -or
+		[int]$Result.dropEvery -ne 43 -or
+		[int]$Result.duplicateEvery -ne 59 -or
+		[int]$Result.reorderEvery -ne 31 -or
+		[int]$Result.reorderDelayMs -ne 90 -or
+		[uint64]$Result.seed -ne 5368391 -or
+		[int64]$Result.clientEndpointChanges -lt 1) {
+		throw 'UDP fault proxy result disagreed with the adverse profile contract.'
+	}
+	foreach ($Direction in @('clientToServer', 'serverToClient')) {
+		$Stats = $Result.$Direction
+		if ([int64]$Stats.receivedDatagrams -lt 100 -or
+			[int64]$Stats.forwardedDatagrams -lt 100 -or
+			[int64]$Stats.droppedDatagrams -lt 1 -or
+			[int64]$Stats.duplicatedDatagrams -lt 1 -or
+			[int64]$Stats.reorderedDatagrams -lt 1 -or
+			[int64]$Stats.forwardedDuplicateDatagrams -lt 1 -or
+			[int64]$Stats.observedOrderInversions -lt 1 -or
+			[double]$Stats.minimumForwardDelayMs -lt 35 -or
+			[double]$Stats.maximumForwardDelayMs -lt 120 -or
+			[int64]$Stats.unroutableDatagrams -ne 0) {
+			throw "$Direction did not prove every adverse-network fault: $($Stats | ConvertTo-Json -Compress)."
+		}
+	}
+	if ([int]$Result.discardedAtShutdown -ne 0) {
+		throw "UDP fault proxy discarded $($Result.discardedAtShutdown) delayed datagram(s) at shutdown."
+	}
+	return $Result
+}
+
 $CommonArguments = @(
 	'-unattended',
 	'-nullrhi',
@@ -150,10 +264,15 @@ try {
 		"[ConsumerMatrix] $Profile packaged listen-server qualification on $ServerAddress" `
 		-ForegroundColor Cyan
 	$Server = Start-QualificationProcess 'server' (@(
-		"-port=$Port",
+		"-port=$ServerPort",
 		'-SeinConsumerQualificationRole=Server'
 	) + $CommonArguments)
 	Wait-QualificationMarker 'server-ready.marker' @($Server) | Out-Null
+	if ($NetworkProfile -eq 'Adverse') {
+		$ProxyProcess = Start-UdpFaultProxy
+		Wait-QualificationMarker `
+			'proxy-ready.marker' @($Server, $ProxyProcess) | Out-Null
+	}
 
 	$Client = Start-QualificationProcess 'client' (@(
 		'-SeinConsumerQualificationRole=Client',
@@ -241,6 +360,9 @@ try {
 			$LiveProcess.WaitForExit()
 		}
 	}
+	if ($NetworkProfile -eq 'Adverse') {
+		$ProxyResult = Stop-AndValidateUdpFaultProxy
+	}
 
 	Write-Host `
 		'[ConsumerMatrix] packaged replay checkpoint-seek qualification' `
@@ -286,8 +408,26 @@ try {
 	}
 
 	$Result = [ordered]@{
-		schemaVersion = 4
+		schemaVersion = 5
 		profile = $Profile
+		networkProfile = $NetworkProfile
+		networkFaultInjection = if ($NetworkProfile -eq 'Adverse') {
+			'Passed'
+		} else { 'NotApplicable' }
+		networkFaultProxyResultSha256 = if ($NetworkProfile -eq 'Adverse') {
+			(Get-FileHash -LiteralPath (
+				Join-Path $MarkerDirectory 'proxy-result.json') `
+				-Algorithm SHA256).Hash
+		} else { $null }
+		networkFaultStatistics = if ($NetworkProfile -eq 'Adverse') {
+			[ordered]@{
+				clientToServer = $ProxyResult.clientToServer
+				serverToClient = $ProxyResult.serverToClient
+				queuePeak = [int]$ProxyResult.queuePeak
+				clientEndpointChanges =
+					[int64]$ProxyResult.clientEndpointChanges
+			}
+		} else { $null }
 		executableSha256 = $ExecutableSha256
 		listenServer = 'Passed'
 		twoPlayerLobbyTravel = 'Passed'
@@ -344,7 +484,10 @@ try {
 		rootGossipReporters = [int]$RootGossipResult.Reporters
 		replayFile = [System.IO.Path]::GetFileName($ReplayArtifactPath)
 		replayArtifact = 'RemovedAfterVerification'
-		port = $Port
+		serverPort = $ServerPort
+		proxyPort = if ($NetworkProfile -eq 'Adverse') {
+			$ProxyPort
+		} else { $null }
 	}
 	$ResultPath = Join-Path $MarkerDirectory 'runtime-result.json'
 	[System.IO.File]::WriteAllText(
@@ -356,6 +499,19 @@ try {
 		-ForegroundColor Green
 }
 finally {
+	if ($ProxyProcess) {
+		$ProxyProcess.Refresh()
+		if (-not $ProxyProcess.HasExited) {
+			New-Item -ItemType File `
+				-Path (Join-Path $MarkerDirectory 'proxy-stop.marker') `
+				-Force | Out-Null
+			if (-not $ProxyProcess.WaitForExit(3000)) {
+				Stop-Process -Id $ProxyProcess.Id -Force `
+					-ErrorAction SilentlyContinue
+				$ProxyProcess.WaitForExit()
+			}
+		}
+	}
 	foreach ($Process in $Processes) {
 		$Process.Refresh()
 		if (-not $Process.HasExited) {

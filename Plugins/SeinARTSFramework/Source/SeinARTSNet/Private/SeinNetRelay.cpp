@@ -396,12 +396,15 @@ void ASeinNetRelay::Client_BeginCheckpointTransfer_Implementation(
 	int32 TransferId,
 	int32 CheckpointTurn,
 	int32 TotalChunks,
-	int64 TotalBytes)
+	int64 TotalBytes,
+	int64 UncompressedBytes,
+	bool bCompressed)
 {
 	if (USeinNetSubsystem* Net = GetNetSubsystem())
 	{
 		Net->ClientHandleBeginCheckpointTransfer(
-			Context, TransferId, CheckpointTurn, TotalChunks, TotalBytes);
+			Context, TransferId, CheckpointTurn, TotalChunks, TotalBytes,
+			UncompressedBytes, bCompressed);
 	}
 }
 
@@ -415,6 +418,18 @@ void ASeinNetRelay::Client_ReceiveCheckpointChunk_Implementation(
 	{
 		Net->ClientHandleCheckpointChunk(
 			Context, TransferId, ChunkIndex, Bytes);
+	}
+}
+
+void ASeinNetRelay::Server_AcknowledgeCheckpointChunk_Implementation(
+	const FSeinProtocolContext& Context,
+	int32 TransferId,
+	int32 NextChunkIndex)
+{
+	if (USeinNetSubsystem* Net = GetNetSubsystem())
+	{
+		Net->ServerHandleResyncChunkAcknowledgement(
+			this, Context, TransferId, NextChunkIndex);
 	}
 }
 
@@ -435,6 +450,16 @@ void ASeinNetRelay::Server_RequestResyncTail_Implementation(
 	if (USeinNetSubsystem* Net = GetNetSubsystem())
 	{
 		Net->ServerHandleResyncTailRequest(this, Context, FromTurn);
+	}
+}
+
+void ASeinNetRelay::Client_NotifyResyncTailComplete_Implementation(
+	const FSeinProtocolContext& Context,
+	int32 LastTailTurn)
+{
+	if (USeinNetSubsystem* Net = GetNetSubsystem())
+	{
+		Net->ClientHandleResyncTailComplete(Context, LastTailTurn);
 	}
 }
 

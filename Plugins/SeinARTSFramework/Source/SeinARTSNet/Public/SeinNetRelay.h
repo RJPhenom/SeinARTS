@@ -315,15 +315,27 @@ public:
 		int32 TransferId,
 		int32 CheckpointTurn,
 		int32 TotalChunks,
-		int64 TotalBytes);
+		int64 TotalBytes,
+		int64 UncompressedBytes,
+		bool bCompressed);
 
-	/** Coordinator -> owning peer. One bounded envelope chunk, in order. */
-	UFUNCTION(Client, Reliable)
+	/** Coordinator -> owning peer. One bounded envelope chunk. Application
+	 *  acknowledgements and retransmission own reliability for this bulk path. */
+	UFUNCTION(Client, Unreliable)
 	void Client_ReceiveCheckpointChunk(
 		const FSeinProtocolContext& Context,
 		int32 TransferId,
 		int32 ChunkIndex,
 		const TArray<uint8>& Bytes);
+
+	/** Owning peer -> coordinator. Confirms that every checkpoint chunk below
+	 *  NextChunkIndex was reassembled and accepted. The coordinator uses this
+	 *  cumulative frontier to bound chunk RPCs in flight. */
+	UFUNCTION(Server, Reliable)
+	void Server_AcknowledgeCheckpointChunk(
+		const FSeinProtocolContext& Context,
+		int32 TransferId,
+		int32 NextChunkIndex);
 
 	/** Coordinator -> owning peer. All chunks sent; the peer validates the
 	 *  reassembled envelope, adopts it stopped, then requests the tail. */
@@ -338,6 +350,14 @@ public:
 	void Server_RequestResyncTail(
 		const FSeinProtocolContext& Context,
 		int32 FromTurn);
+
+	/** Coordinator -> owning peer. Every retained turn through LastTailTurn was
+	 *  queued before this marker. Later live turns follow on the same reliable
+	 *  actor channel. */
+	UFUNCTION(Client, Reliable)
+	void Client_NotifyResyncTailComplete(
+		const FSeinProtocolContext& Context,
+		int32 LastTailTurn);
 
 	/** Owning peer -> coordinator. The peer abandoned its resync locally;
 	 *  free the serve so a fresh request is not refused as a duplicate. */

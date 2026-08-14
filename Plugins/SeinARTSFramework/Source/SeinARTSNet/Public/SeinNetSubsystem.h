@@ -130,6 +130,23 @@ struct FSeinIncompleteTurnDiagnostic
 	bool bReachedExecutionGate = false;
 };
 
+/** Read-only, non-canonical lockstep transport progress for support tooling.
+ *  These counters must never influence simulation or protocol decisions. */
+struct SEINARTSNET_API FSeinLockstepProgress
+{
+	int32 CurrentTurn = 0;
+	int32 LastQueuedTurn = -1;
+	int32 LastSubmittedTurn = -1;
+	int32 PendingSubmissionCount = 0;
+	int32 ReceivedTurnCount = 0;
+	int32 LastStalledTurn = -1;
+	int32 ExpectedAuthorCount = 0;
+	int32 SubmittedAuthorCount = 0;
+	int32 MissingAuthorCount = 0;
+	bool bCurrentTurnReceived = false;
+	bool bServer = false;
+};
+
 /**
  * Slot lifecycle states for drop-in/drop-out (Phase 4).
  * Stored per-slot in `USeinNetSubsystem::SlotLifecycle`.
@@ -140,11 +157,11 @@ struct FSeinIncompleteTurnDiagnostic
  *                a timeout (per match settings' ESeinHostDropAction) the
  *                slot transitions to AITakeover.
  *   AITakeover — slot is now driven by an AI controller (designer-authored).
- *                Sim continues; the original player is gone for good unless
- *                they reconnect (future phase).
+ *                Sim continues until the stable-identity player reclaims the
+ *                slot after exact checkpoint-and-tail catch-up.
  *   Reconnecting — a new connection matching this slot's stable ID has
- *                arrived; server is sending the catch-up snapshot+tail.
- *                (Reserved — full reconnect catch-up is a follow-up phase.)
+ *                arrived; server is sending the catch-up snapshot+tail and
+ *                withholding authorship until canonical-root activation.
  */
 UENUM(BlueprintType)
 enum class ESeinSlotLifecycle : uint8
@@ -448,6 +465,14 @@ public:
 		ASeinNetRelay* SourceRelay,
 		const FSeinProtocolContext& Context);
 
+	/** The peer advanced its cumulative accepted-chunk frontier. Refill the
+	 *  bounded application flow-control window or finish the transfer. */
+	void ServerHandleResyncChunkAcknowledgement(
+		ASeinNetRelay* SourceRelay,
+		const FSeinProtocolContext& Context,
+		int32 TransferId,
+		int32 NextChunkIndex);
+
 	/** The peer adopted the checkpoint; serve the retained assembled turns
 	 *  from FromTurn through the live frontier (fails the resync if the
 	 *  retained window no longer covers FromTurn). */
@@ -485,9 +510,11 @@ public:
 		int32 TransferId,
 		int32 CheckpointTurn,
 		int32 TotalChunks,
-		int64 TotalBytes);
+		int64 TotalBytes,
+		int64 UncompressedBytes,
+		bool bCompressed);
 
-	/** Accumulate one in-order chunk of the current transfer. */
+	/** Validate and retain one bounded chunk of the current transfer. */
 	void ClientHandleCheckpointChunk(
 		const FSeinProtocolContext& Context,
 		int32 TransferId,
@@ -500,6 +527,12 @@ public:
 	void ClientHandleEndCheckpointTransfer(
 		const FSeinProtocolContext& Context,
 		int32 TransferId);
+
+	/** Record the exact retained-tail frontier queued by the coordinator. The
+	 *  client reports ready only after its sim consumes through this turn. */
+	void ClientHandleResyncTailComplete(
+		const FSeinProtocolContext& Context,
+		int32 LastTailTurn);
 
 	/** The coordinator scheduled the activation handshake at CheckTurn:
 	 *  report the local canonical root when the sim completes that boundary. */
@@ -533,6 +566,31 @@ public:
 	{
 		return ClientResyncPhase;
 	}
+
+	/** Most recent local resync failure, retained across an automatic retry and
+	 *  cleared only by successful activation or a new match identity. */
+	const FString& GetLastClientResyncFailureReason() const
+	{
+		return ClientLastResyncFailureReason;
+	}
+
+	/** Read-only local transfer telemetry for operational diagnostics and
+	 *  qualification harnesses. Returns false outside the transfer phase. */
+	bool GetClientResyncTransferProgress(
+		int32& OutReceivedChunks,
+		int32& OutTotalChunks,
+		int32& OutReceivedBytes,
+		int32& OutTotalBytes) const
+	{
+		OutReceivedChunks = ClientResyncReceivedChunks;
+		OutTotalChunks = ClientResyncTotalChunks;
+		OutReceivedBytes = ClientResyncReceivedBytes;
+		OutTotalBytes = ClientResyncTotalBytes;
+		return ClientResyncPhase == EClientResyncPhase::Transferring;
+	}
+
+	/** Snapshot local gate/cursor state for logs and qualification harnesses. */
+	FSeinLockstepProgress GetLockstepProgress() const;
 
 	/** Shipped relay-adapter ingress. The relay supplies authenticated
 	 *  participant provenance; the payload never chooses its identity. */
@@ -1017,6 +1075,7 @@ private:
 	FSeinPendingAuthorityProtocolState PendingAuthorityProtocolState;
 	FSeinPendingLocalProtocolAssignment PendingLocalProtocolAssignment;
 	FTSTicker::FDelegateHandle PendingProtocolPromotionHandle;
+	FTSTicker::FDelegateHandle ResyncMaintenanceHandle;
 	/** CDO value captured once for a match. Epoch continuation preserves it;
 	 *  only ResetMatchState clears it. */
 	int32 FrozenMaxCommandsPerSubmission = 0;
@@ -1112,8 +1171,8 @@ private:
 	 *  a tail re-sends these bytes through the same Client_ReceiveTurn as live
 	 *  delivery, so a catching-up peer decodes byte-identical turns. The
 	 *  replay writer is deliberately NOT the tail source (its cap discards the
-	 *  whole buffer). Bounded: <= GSeinRetainedHistoryTurns entries of
-	 *  already-bounded opaque batches. */
+	 *  whole buffer). Normally bounded by GSeinRetainedHistoryTurns; an active
+	 *  checkpoint serve pins its required tail until request or timeout. */
 	TMap<int32, FSeinOpaqueCommandBatch> RetainedAssembledTurns;
 
 	/** Turns at or below this floor were pruned from the retained tail; a
@@ -1169,13 +1228,30 @@ private:
 	{
 		int32 TransferId = 0;
 		int32 CheckpointTurn = -1;
-		/** Encoded envelope pending transfer; chunks are PACED across turn
-		 *  boundaries (a one-frame burst of reliable RPCs overflows the
-		 *  connection's reliable buffer and disconnects the peer). */
+		/** Encoded transport payload pending transfer. Explicit peer
+		 *  acknowledgement drives a paced bounded unreliable window. */
 		TArray<uint8> PendingEnvelopeBytes;
 		int32 TotalChunks = 0;
+		int32 UncompressedEnvelopeBytes = 0;
+		bool bCompressed = false;
 		int32 NextChunkIndex = 0;
+		int32 HighestSentChunkIndex = 0;
+		int32 AcknowledgedChunkIndex = 0;
+		bool bWindowStarted = false;
 		bool bTransferComplete = false;
+		double LastWindowSentAtSeconds = 0.0;
+		/** Live fan-out stays suppressed until the peer adopts the checkpoint
+		 *  and requests the retained tail. Otherwise far-future turns can arrive
+		 *  during transfer and be rejected against the stale local window. */
+		bool bLiveTailEnabled = false;
+		/** Retained-turn prefix is paced through the ordinary reliable delivery
+		 *  path before live fan-out resumes. */
+		bool bTailStreaming = false;
+		int32 NextTailTurn = -1;
+		double LastTailSentAtSeconds = 0.0;
+		/** Bytes retained specifically because this serve pins its checkpoint
+		 *  frontier. Bounded independently of ordinary history retention. */
+		int64 PinnedTailBytes = 0;
 		/** Activation handshake boundary; -1 until the peer reports ready. */
 		int32 ActivationCheckTurn = -1;
 		/** Coordinator's own root at the handshake boundary, once computed. */
@@ -1185,6 +1261,10 @@ private:
 		/** Wall-clock start; a serve that outlives the timeout is abandoned
 		 *  so a vanished peer cannot pin state forever. */
 		double StartedAtSeconds = 0.0;
+		/** Last acknowledged transport or phase transition. The idle timeout is
+		 *  progress-based so a completed bulk transfer is not abandoned while the
+		 *  peer is legitimately adopting and catching up. */
+		double LastProgressAtSeconds = 0.0;
 	};
 	TMap<FSeinPlayerID, FServerResyncServe> ServerResyncServes;
 
@@ -1194,11 +1274,27 @@ private:
 	 *  re-requested later). */
 	TMap<FSeinPlayerID, double> SlotReconnectingSinceTime;
 
-	/** Chunks pushed per server turn boundary while a transfer is pending. */
-	static constexpr int32 ResyncChunksPerBoundary = 4;
+	/** Maximum unreliable chunk RPCs awaiting application acknowledgement.
+	 *  Thirty-two 1 KiB chunks bound application-level in-flight payload to
+	 *  32 KiB and keep retransmission bursts shallow. */
+	static constexpr int32 ResyncMaxInFlightChunks = 32;
+	static constexpr int32 ResyncChunksPerSendBurst = 4;
+	/** Client acknowledgement cadence. Batching the cumulative frontier avoids
+	 *  one reliable reverse-direction RPC per small checkpoint chunk. */
+	static constexpr int32 ResyncChunksPerAcknowledgement = 8;
+	static constexpr double ResyncSendBurstIntervalSeconds = 0.1;
+	static constexpr double ResyncWindowResendSeconds = 0.5;
+	static constexpr double ResyncAcknowledgementResendSeconds = 0.5;
+	static constexpr int32 ResyncTailTurnsPerSendBurst = 4;
+	static constexpr int32 ResyncTailBytesPerSendBurst = 64 * 1024;
+	static constexpr double ResyncTailSendBurstIntervalSeconds = 0.1;
+	static constexpr int32 ResyncMaxPinnedTailTurns = 4096;
+	static constexpr int64 ResyncMaxPinnedTailBytes = 64ll * 1024ll * 1024ll;
 
-	/** Wall-clock ceiling for one serve before it is abandoned. */
-	static constexpr double ResyncServeTimeoutSeconds = 120.0;
+	/** Wall-clock ceiling without transport or phase progress before one serve
+	 *  is abandoned. This bounds retained-tail pinning without imposing an
+	 *  absolute deadline on a recovery that is still advancing. */
+	static constexpr double ResyncServeIdleTimeoutSeconds = 300.0;
 
 	/** Coordinator-side: slots whose heartbeat coverage is guaranteed
 	 *  through the given turn regardless of lifecycle, so a freshly
@@ -1223,19 +1319,40 @@ private:
 	int32 ClientResyncCheckpointTurn = -1;
 	int32 ClientResyncTotalChunks = 0;
 	int64 ClientResyncTotalBytes = 0;
+	int64 ClientResyncUncompressedBytes = 0;
+	bool bClientResyncCompressed = false;
+	/** True only while adoption has explicitly stopped the local scheduler. */
+	bool bClientResyncSchedulerStoppedForAdoption = false;
+	/** True only after the transferred checkpoint restored successfully. */
+	bool bClientResyncCheckpointAdopted = false;
+	int32 ClientResyncReceivedBytes = 0;
 	int32 ClientResyncReceivedChunks = 0;
+	int32 ClientResyncLastAcknowledgedChunkIndex = 0;
 	TArray<uint8> ClientResyncEnvelopeBytes;
+	TBitArray<> ClientResyncReceivedChunkBits;
 	/** Activation boundary assigned by the coordinator; -1 until notified. */
 	int32 ClientResyncActivationCheckTurn = -1;
 	/** Highest live turn observed while catching up (frontier estimate). */
 	int32 ClientResyncHighestReceivedTurn = -1;
+	/** Exact final retained turn announced after the paced tail prefix. */
+	int32 ClientResyncTailFrontierTurn = -1;
+	int64 ClientResyncTailReceivedBytes = 0;
+	TSet<int32> ClientResyncTailReceivedTurnIds;
+	double ClientResyncLastAcknowledgementAtSeconds = 0.0;
+	FString ClientLastResyncFailureReason;
 
-	/** Bounded per-RPC chunk size for checkpoint transfer. Comfortably under
-	 *  the reliable-bunch ceiling while keeping chunk counts small. */
-	static constexpr int32 ResyncCheckpointChunkBytes = 48 * 1024;
+	/** Bounded per-RPC checkpoint payload. Single-datagram-scale chunks avoid
+	 *  fragment loss while pacing keeps the net-driver send queue below its
+	 *  per-update budget. */
+	static constexpr int32 ResyncCheckpointChunkBytes = 1024;
 
 	/** Reset the local peer's resync state (on failure or completion). */
 	void ClientResetResyncState(const TCHAR* Reason);
+	/** Restore scheduler/cursor invariants after any resync failure point. */
+	void RecoverClientWorldAfterResyncReset(
+		USeinWorldSubsystem& WorldSub,
+		bool bSchedulerStopped,
+		bool bAdopted);
 
 	/** Coordinator-side terminal failure for one slot's resync serve. */
 	void ServerFailResync(
@@ -1253,8 +1370,16 @@ private:
 	void ServerAdvanceResyncActivation(int32 JustFinishedTurn);
 	void ClientAdvanceResyncCatchUp(int32 JustFinishedTurn);
 
-	/** Paced chunk delivery + serve timeouts, per server turn boundary. */
+	/** Fill the bounded unreliable chunk window. Peer acknowledgements and
+	 *  wall-clock maintenance drive this path independently of sim progress. */
+	void ServerFillResyncChunkWindow(
+		ASeinNetRelay* Relay,
+		FServerResyncServe& Serve);
+
+	/** Wall-clock transfer retry and serve timeout maintenance. */
 	void ServerAdvanceResyncTransfers();
+	bool TickResyncMaintenance(float DeltaSeconds);
+	void ClientSendResyncAcknowledgement(bool bForce);
 
 	/** Immediately heartbeat-cover suppressed authors from the current gate
 	 *  through the input-delay horizon, including unopened zero-author turns. */

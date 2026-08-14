@@ -48,6 +48,11 @@ param(
 	# listen-server/client/resync/reconnect/replay flow.
 	[switch] $SkipRuntimeQualification,
 
+	# Baseline uses a direct loopback connection. Adverse routes the real
+	# Shipping client/server traffic through the deterministic UDP fault proxy.
+	[ValidateSet('Baseline', 'Adverse')]
+	[string] $RuntimeNetworkProfile = 'Baseline',
+
 	# Useful only for local diagnosis on launcher-engine installations that do
 	# not contain Epic's Client/Server target support. Release CI must omit it.
 	[switch] $SkipClientServer
@@ -1006,9 +1011,9 @@ RelayActorClass=/Script/SeinARTSNet.SeinNetRelay
 bDeterminismChecksEnabled=True
 bConfigParityCheckEnabled=True
 DeterminismCheckIntervalTurns=5
-ReplayCheckpointIntervalTurns=5
+ReplayCheckpointIntervalTurns=30
 ReplayTurnBatchSize=4
-ReplayMaxFileSizeMiB=64
+ReplayMaxFileSizeMiB=512
 DroppedToAITakeoverSeconds=30.0
 DebugFixedSessionSeed=12345
 LobbyReconnectGraceSeconds=60.0
@@ -1176,6 +1181,7 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 {
 	$StartedAt = [DateTime]::UtcNow
 	$RuntimeResult = $null
+	$RuntimeReport = $null
 	$InstallationDiagnosticReceipt = $null
 	$ExistingRoot = Join-Path $GeneratedRoot $ProfileName
 	$ExistingUproject = Join-Path $ExistingRoot 'SeinConsumer.uproject'
@@ -1396,7 +1402,8 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 			& $RuntimeScript `
 				-GameExecutable $GameExe.FullName `
 				-ProjectRoot $Project.Root `
-				-Profile $ProfileName
+				-Profile $ProfileName `
+				-NetworkProfile $RuntimeNetworkProfile
 			if ($LASTEXITCODE -ne 0) {
 				throw "$ProfileName packaged runtime qualification failed with exit code $LASTEXITCODE."
 			}
@@ -1405,11 +1412,72 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 			if (-not (Test-Path -LiteralPath $RuntimeResult)) {
 				throw "$ProfileName runtime qualification produced no formal result."
 			}
+			$RuntimeReport = Get-Content -Raw -LiteralPath $RuntimeResult |
+				ConvertFrom-Json
+			if ([int]$RuntimeReport.schemaVersion -ne 5 -or
+				[string]$RuntimeReport.profile -cne $ProfileName -or
+				[string]$RuntimeReport.networkProfile -cne
+					$RuntimeNetworkProfile -or
+				[string]$RuntimeReport.executableSha256 -cne
+					(Get-FileHash -LiteralPath $GameExe.FullName `
+						-Algorithm SHA256).Hash) {
+				throw "$ProfileName runtime result disagreed with the requested network profile."
+			}
+			if ($RuntimeNetworkProfile -eq 'Adverse' -and
+				([string]$RuntimeReport.networkFaultInjection -cne 'Passed' -or
+				[string]::IsNullOrWhiteSpace(
+					[string]$RuntimeReport.networkFaultProxyResultSha256))) {
+				throw "$ProfileName adverse runtime result did not prove injected faults."
+			}
+			if ($RuntimeNetworkProfile -eq 'Adverse') {
+				$ProxyResultPath = Join-Path $Project.Root `
+					'Saved\RuntimeQualification\proxy-result.json'
+				if (-not (Test-Path -LiteralPath $ProxyResultPath -PathType Leaf) -or
+					[string]$RuntimeReport.networkFaultProxyResultSha256 -cne
+						(Get-FileHash -LiteralPath $ProxyResultPath -Algorithm SHA256).Hash) {
+					throw "$ProfileName adverse runtime result did not bind its proxy receipt."
+				}
+				$ProxyReport = Get-Content -Raw -LiteralPath $ProxyResultPath |
+					ConvertFrom-Json
+				if ([int]$ProxyReport.schemaVersion -ne 2 -or
+					[string]$ProxyReport.status -cne 'Passed' -or
+					[string]$ProxyReport.jitterSequence -cne 'PerDirection' -or
+					[int]$ProxyReport.latencyMs -ne 60 -or
+					[int]$ProxyReport.jitterMs -ne 20 -or
+					[int]$ProxyReport.dropEvery -ne 43 -or
+					[int]$ProxyReport.duplicateEvery -ne 59 -or
+					[int]$ProxyReport.reorderEvery -ne 31 -or
+					[int]$ProxyReport.reorderDelayMs -ne 90 -or
+					[uint64]$ProxyReport.seed -ne 5368391 -or
+					[int64]$ProxyReport.clientEndpointChanges -lt 1 -or
+					[int]$ProxyReport.discardedAtShutdown -ne 0 -or
+					@(@('clientToServer', 'serverToClient') | Where-Object {
+						$Stats = $ProxyReport.$_
+						[int64]$Stats.receivedDatagrams -lt 100 -or
+						[int64]$Stats.forwardedDatagrams -lt 100 -or
+						[int64]$Stats.droppedDatagrams -lt 1 -or
+						[int64]$Stats.duplicatedDatagrams -lt 1 -or
+						[int64]$Stats.reorderedDatagrams -lt 1 -or
+						[int64]$Stats.forwardedDuplicateDatagrams -lt 1 -or
+						[int64]$Stats.observedOrderInversions -lt 1 -or
+						[double]$Stats.minimumForwardDelayMs -lt 35 -or
+						[double]$Stats.maximumForwardDelayMs -lt 120 -or
+						[int64]$Stats.unroutableDatagrams -ne 0
+					}).Count -ne 0) {
+					throw "$ProfileName adverse proxy receipt did not satisfy its fault contract."
+				}
+			}
+			elseif ([string]$RuntimeReport.networkFaultInjection -cne
+					'NotApplicable' -or
+				-not [string]::IsNullOrWhiteSpace(
+					[string]$RuntimeReport.networkFaultProxyResultSha256)) {
+				throw "$ProfileName baseline runtime result contains adverse fault evidence."
+			}
 		}
 	}
 
 	$Result = [ordered]@{
-		schemaVersion = 6
+		schemaVersion = 7
 		qualificationRunId = $QualificationRunId
 		profile = $ProfileName
 		plugins = $Project.Plugins
@@ -1472,6 +1540,14 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 		} else {
 			'Passed'
 		}
+		runtimeNetworkProfile = if (
+			$ProfileName -notin @('Framework', 'MovementPlus') -or
+			$SkipCook -or $SkipRuntimeQualification) {
+			'NotApplicable'
+		} else { $RuntimeNetworkProfile }
+		runtimeNetworkFaultInjection = if ($RuntimeReport) {
+			[string]$RuntimeReport.networkFaultInjection
+		} else { $null }
 		runtimeResultSha256 = if ($RuntimeResult) {
 			(Get-FileHash -LiteralPath $RuntimeResult -Algorithm SHA256).Hash
 		} else { $null }
