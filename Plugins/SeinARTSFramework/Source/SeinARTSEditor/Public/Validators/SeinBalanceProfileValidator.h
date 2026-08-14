@@ -2,7 +2,7 @@
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinBalanceProfileValidator.h
  * @brief   Editor validator for USeinBalanceProfile (Balance Data). Flags configuration that would
- *          make Gather a silent no-op or surprise the designer: no Included Roots, a scope that
+ *          make Gather a silent no-op or surprise the designer: no roots, a scope that
  *          matches no classes, an empty Tracked Components slot, or a malformed Output Directory.
  *          Warnings only — never blocks save. Auto-gathered by the Data Validation system (a concrete
  *          UEditorValidatorBase); runs on save and on "Validate Assets". No module registration.

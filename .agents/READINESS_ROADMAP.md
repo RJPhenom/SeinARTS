@@ -101,6 +101,16 @@ Client/Dedicated Server CI gate remains explicitly red rather than inferred from
 
 ## 3. Qualify the squad-tactical gameplay backbone
 
+### Designer authoring workflows
+
+The Balance Data entity/ability round trip is automation-qualified for destructive Gather,
+changed-cell Push, exact Check Sync accounting, stale-schema repair, sparse union columns,
+duplicate Blueprint names, exact source-class rebinding, Blueprint reinstance, and saved-package
+reload. Generated tables bind every row and column to stable source identity and fail closed until
+re-gathered when the matched class or schema changes. Output paths must resolve beneath a mounted
+content root. The remaining authoring gaps are an explicit picker for designer-authored component
+UDS types (empty Tracked Components still discovers them) and customer-facing workflow guidance.
+
 ### Movement+
 
 **Automated baseline complete.** The deterministic Vehicle Gym covers MBT, IFV/APC, wheeled

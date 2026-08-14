@@ -55,15 +55,15 @@ void FSeinBalanceProfileDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBu
 			SNew(STextBlock)
 			.AutoWrapText(true)
 			.Text(LOCTEXT("BalanceHelp",
-				"Preview lists the entity classes this profile currently matches (Included Roots and "
-				"their subclasses, minus Excluded). Gather builds the tuning table from their components; "
-				"Push writes edited values back into the Blueprints. (Gather/Push arrive in later phases.)"))
+				"Preview lists the classes this profile currently matches. Gather rebuilds the tuning "
+				"table from those source classes; Push writes edited values back into them. Re-gathering "
+				"an existing table discards table edits after confirmation."))
 		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f)
 		[
 			SNew(SButton)
 			.HAlign(HAlign_Center)
-			.ToolTipText(LOCTEXT("PreviewTip", "List the ASeinActor classes this profile currently matches."))
+			.ToolTipText(LOCTEXT("PreviewTip", "List the entity or ability classes this profile currently matches."))
 			.OnClicked(this, &FSeinBalanceProfileDetails::OnPreviewClicked)
 			.Content()
 			[
@@ -130,8 +130,11 @@ FReply FSeinBalanceProfileDetails::OnPreviewClicked()
 
 	if (Classes.Num() == 0)
 	{
-		PreviewText = LOCTEXT("PreviewNone",
-			"No matching classes. Add an Included Root (a parent unit class) — its subclasses appear here.");
+		PreviewText = Profile->TargetKind == ESeinBalanceTargetKind::Abilities
+			? LOCTEXT("PreviewNoAbilities",
+				"No matching classes. Add an Ability Root and check its exclusions.")
+			: LOCTEXT("PreviewNoEntities",
+				"No matching classes. Add an Included Root and check its exclusions.");
 	}
 	else
 	{
@@ -174,7 +177,7 @@ FReply FSeinBalanceProfileDetails::OnGatherClicked()
 	else
 	{
 		Info.Text = LOCTEXT("GatherFail",
-			"Gather produced no table — check Included Roots and Tracked Components (see the Output Log).");
+			"Gather produced no table — check the selected roots and tracked fields (see the Output Log).");
 		if (TSharedPtr<SNotificationItem> Item = FSlateNotificationManager::Get().AddNotification(Info))
 		{
 			Item->SetCompletionState(SNotificationItem::CS_Fail);
@@ -199,7 +202,7 @@ FReply FSeinBalanceProfileDetails::OnPushClicked()
 	Info.bUseSuccessFailIcons = true;
 	if (NumWritten < 0)
 	{
-		Info.Text = LOCTEXT("PushAbort", "Push cancelled, or no generated table to push (Gather first).");
+		Info.Text = LOCTEXT("PushAbort", "Push cancelled, or the generated table is missing or structurally stale (Gather first).");
 		if (TSharedPtr<SNotificationItem> Item = FSlateNotificationManager::Get().AddNotification(Info))
 		{
 			Item->SetCompletionState(SNotificationItem::CS_Fail);
@@ -208,10 +211,10 @@ FReply FSeinBalanceProfileDetails::OnPushClicked()
 	else
 	{
 		const FText Base = FText::Format(
-			LOCTEXT("PushOk", "Pushed {0} changed value(s) into the unit Blueprints. Save them (Ctrl+S) to persist."),
+			LOCTEXT("PushOk", "Pushed {0} changed value(s) into the source Blueprints. Save them (Ctrl+S) to persist."),
 			FText::AsNumber(NumWritten));
 		Info.Text = (SkippedCells > 0)
-			? FText::Format(LOCTEXT("PushOkSkip", "{0}\n({1} cell(s) skipped — that component isn't on the unit.)"),
+			? FText::Format(LOCTEXT("PushOkSkip", "{0}\n({1} write error(s); see Output Log.)"),
 				Base, FText::AsNumber(SkippedCells))
 			: Base;
 		if (TSharedPtr<SNotificationItem> Item = FSlateNotificationManager::Get().AddNotification(Info))
@@ -256,9 +259,12 @@ FReply FSeinBalanceProfileDetails::OnCheckSyncClicked()
 	}
 	else
 	{
-		Info.Text = FText::Format(
-			LOCTEXT("SyncDrift", "{0} of {1} cell(s) differ from the source. Gather to pull source in, or Push to write your edits out."),
-			FText::AsNumber(Diffs), FText::AsNumber(CellsChecked));
+		Info.Text = CellsChecked == 0
+			? LOCTEXT("SyncStructureDrift",
+				"The table rows or columns no longer match this profile. Gather to rebuild it before Push.")
+			: FText::Format(
+				LOCTEXT("SyncDrift", "{0} of {1} tuning cell(s) differ from the source. Gather to pull source in, or Push to write table edits out."),
+				FText::AsNumber(Diffs), FText::AsNumber(CellsChecked));
 		if (TSharedPtr<SNotificationItem> Item = FSlateNotificationManager::Get().AddNotification(Info))
 		{
 			Item->SetCompletionState(SNotificationItem::CS_None);

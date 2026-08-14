@@ -1,13 +1,13 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinBalanceColumn.h
- * @brief   The Phase-B column-provider spine for the balance-table generator.
+ * @brief   Column-provider spine for the balance-table generator.
  *
  *          A column source provider describes a set of table columns (one per tunable
  *          field) and reads each cell off a target entity's authored ComponentData.
- *          The `ESeinBalanceColumnKind` discriminator is the seam that lets later phases
- *          (Nested sub-data, Ability-derived cost) add providers without reshaping the
- *          Gather/Push engine. Editor-only.
+ *          The `ESeinBalanceColumnKind` discriminator keeps component, nested sub-data,
+ *          identity, ability-field, and ability-cost sources behind one Gather/Push
+ *          contract. Editor-only.
  */
 
 #pragma once
@@ -18,7 +18,7 @@
 
 class USeinBalanceProfile;
 
-/** Where a balance column reads its value from. Phase B ships Component + Identity. */
+/** Where a balance column reads its value from. */
 enum class ESeinBalanceColumnKind : uint8
 {
 	Component,         // a deterministic field on a tracked entity component
@@ -69,15 +69,24 @@ struct FSeinBalanceColumn
 	bool bConvertFixedToFloat = false;
 };
 
+/** Result of reading one source into a generated-table cell. */
+enum class ESeinBalanceReadResult : uint8
+{
+	Read,
+	NotApplicable,
+	Error,
+};
+
 /** Result of one Push write-back cell. */
 enum class ESeinBalanceWriteResult : uint8
 {
-	Wrote,      // a changed value was written back
-	Unchanged,  // cell already equals the authored value — skipped, no perturbation
-	Skipped,    // couldn't write: component not on this unit, type mismatch, or display-only column
+	Wrote,
+	Unchanged,
+	NotApplicable,
+	Error,
 };
 
-/** A source of balance columns. Phase B ships Component + Identity; Phase E adds more. */
+/** A source of balance columns for Gather, Push, and Check Sync. */
 class ISeinBalanceColumnProvider
 {
 public:
@@ -88,14 +97,14 @@ public:
 		TArray<FSeinBalanceColumn>& OutColumns) const = 0;
 
 	/** Copy the cell value for (Target, Column) into DestPtr (a row-UDS field of Column.PinType).
-	 *  Returns false if the target lacks the source — the caller leaves the cell at default. */
-	virtual bool ReadInto(const UClass* Target, const FSeinBalanceColumn& Column,
+	 *  A target that does not own this union column is NotApplicable; malformed source or destination
+	 *  metadata is Error. */
+	virtual ESeinBalanceReadResult ReadInto(const UClass* Target, const FSeinBalanceColumn& Column,
 		const FProperty* DestProp, void* DestPtr) const = 0;
 
 	/** Write a row cell (CellProp/CellPtr, a row-UDS field) BACK into the target's authored
-	 *  ComponentData on the BP CDO. Returns true iff a CHANGED value was written (unchanged cells
-	 *  are skipped so untouched fixed-point values aren't perturbed by the float round-trip).
-	 *  Display-only providers (Identity) return false. Editor-only; Phase C write-back. */
+	 *  ComponentData on the BP CDO. Unchanged cells are not perturbed by the fixed-point float
+	 *  round-trip; union columns absent from this target are NotApplicable. Editor-only. */
 	virtual ESeinBalanceWriteResult WriteFrom(const UClass* Target, const FSeinBalanceColumn& Column,
 		const FProperty* CellProp, const void* CellPtr) const = 0;
 };
