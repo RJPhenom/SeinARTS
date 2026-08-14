@@ -48,6 +48,11 @@ namespace
 bool USeinFogOfWarBPFL::SeinIsCellVisible(const UObject* WorldContextObject,
 	FSeinPlayerID Observer, const FVector& WorldPos, FName LayerName)
 {
+	if (!WorldContextObject) return false;
+	UWorld* World = GEngine->GetWorldFromContextObject(
+		WorldContextObject, EGetWorldErrorMode::ReturnNull);
+	if (!World) return false;
+
 	USeinFogOfWar* Fog = USeinFogOfWarSubsystem::GetFogOfWarForWorld(WorldContextObject);
 	if (!Fog) return true;
 	if (!Fog->HasRuntimeData()) return true; // no data = permit (matches LOS resolver)
