@@ -56,10 +56,13 @@ public:
 	static uint8 SeinGetCellBitfield(const UObject* WorldContextObject,
 		FSeinPlayerID Observer, const FVector& WorldPos);
 
-	/** Is `Target` entity currently visible to `Observer`? Convenience
-	 *  wrapper — resolves `Target`'s sim position and tests the Normal
-	 *  (V) bit at that cell. For custom-layer checks, use
-	 *  `SeinIsCellVisible` with the entity's position directly. */
+	/** Is `Target` currently visible to `Observer` under the active fog's
+	 *  entity-visibility policy? Honors owner visibility, authored emission
+	 *  layers, volumetric footprints, and the Always Visible, Visible Once
+	 *  Seen, and Visible Once Explored policies. A neutral observer disables
+	 *  filtering. A disabled fog implementation or missing runtime fog data
+	 *  permits visibility. Use Is Cell Visible for a raw layer check at a
+	 *  specific position. */
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "SeinARTS|Fog Of War",
 		meta = (WorldContext = "WorldContextObject",
 				DisplayName = "Is Entity Visible"))
