@@ -27,7 +27,9 @@
 #include "Subsystems/AssetEditorSubsystem.h"
 #include "UObject/UnrealType.h"
 #include "UObject/Package.h"
+#include "UObject/MetaData.h"
 #include "Misc/PackageName.h"
+#include "Misc/SecureHash.h"
 #include "Misc/MessageDialog.h"
 #include "Engine/Blueprint.h"
 #include "Kismet2/BlueprintEditorUtils.h"
@@ -48,6 +50,24 @@ namespace
 		Name.RemoveFromStart(TEXT("Sein"));
 		Name.RemoveFromEnd(TEXT("Component"));
 		return Name.IsEmpty() ? Struct->GetName() : Name;
+	}
+
+	FString MakeIdentifierSuffix(const FString& Value)
+	{
+		FString Sanitized = Value;
+		for (TCHAR& Character : Sanitized)
+		{
+			if (!FChar::IsAlnum(Character))
+			{
+				Character = TEXT('_');
+			}
+		}
+
+		FTCHARToUTF8 Utf8(*Value);
+		uint8 Digest[FSHA1::DigestSize];
+		FSHA1::HashBuffer(Utf8.Get(), Utf8.Length(), Digest);
+		return Sanitized + TEXT("_")
+			+ BytesToHex(Digest, UE_ARRAY_COUNT(Digest));
 	}
 
 	/** The CDO's entity-bridge (a native default subobject on every ASeinActor). */
@@ -82,12 +102,15 @@ namespace
 
 	/** Shared read path for Component + Identity columns: locate the ComponentData entry of
 	 *  `CompStruct` on the target CDO and copy `SrcProp` → `DestProp`. False if absent. */
-	bool ReadComponentFieldInto(const UClass* Target, const UScriptStruct* CompStruct,
+	ESeinBalanceReadResult ReadComponentFieldInto(const UClass* Target, const UScriptStruct* CompStruct,
 		const FProperty* SrcProp, bool bFixedToFloat, const FProperty* DestProp, void* DestPtr)
 	{
-		if (!CompStruct || !SrcProp || !DestProp || !DestPtr) return false;
+		if (!CompStruct || !SrcProp || !DestProp || !DestPtr)
+		{
+			return ESeinBalanceReadResult::Error;
+		}
 		const USeinEntityComponent* Bridge = FindBridge(Target);
-		if (!Bridge) return false;
+		if (!Bridge) return ESeinBalanceReadResult::Error;
 
 		for (const FInstancedStruct& Entry : Bridge->ComponentData)
 		{
@@ -101,21 +124,24 @@ namespace
 				if (const FFloatProperty* FloatDest = CastField<FFloatProperty>(DestProp))
 				{
 					FloatDest->SetPropertyValue(DestPtr, AsFloat);
-					return true;
+					return ESeinBalanceReadResult::Read;
 				}
 				if (const FDoubleProperty* DoubleDest = CastField<FDoubleProperty>(DestProp))
 				{
 					DoubleDest->SetPropertyValue(DestPtr, static_cast<double>(AsFloat));
-					return true;
+					return ESeinBalanceReadResult::Read;
 				}
-				return false;
+				return ESeinBalanceReadResult::Error;
 			}
 
-			if (!PropsCompatible(SrcProp, DestProp)) return false;
+			if (!PropsCompatible(SrcProp, DestProp))
+			{
+				return ESeinBalanceReadResult::Error;
+			}
 			DestProp->CopyCompleteValue(DestPtr, SrcPtr);
-			return true;
+			return ESeinBalanceReadResult::Read;
 		}
-		return false;  // component not authored on this entity → leave default (sparse cell)
+		return ESeinBalanceReadResult::NotApplicable;
 	}
 
 	/** Read a row cell that is a float/double display column as a double. */
@@ -245,7 +271,7 @@ namespace
 			}
 		}
 
-		virtual bool ReadInto(const UClass* Target, const FSeinBalanceColumn& Column,
+		virtual ESeinBalanceReadResult ReadInto(const UClass* Target, const FSeinBalanceColumn& Column,
 			const FProperty* DestProp, void* DestPtr) const override
 		{
 			return ReadComponentFieldInto(Target, Column.ComponentStruct.Get(), Column.SourceProp, Column.bConvertFixedToFloat, DestProp, DestPtr);
@@ -257,7 +283,10 @@ namespace
 			USeinEntityComponent* Bridge = FindBridge(Target);
 			UScriptStruct* CompStruct = Column.ComponentStruct.Get();
 			const FProperty* DestField = Column.SourceProp;
-			if (!Bridge || !CompStruct || !DestField || !CellProp || !CellPtr) return ESeinBalanceWriteResult::Skipped;
+			if (!Bridge || !CompStruct || !DestField || !CellProp || !CellPtr)
+			{
+				return ESeinBalanceWriteResult::Error;
+			}
 
 			for (FInstancedStruct& Entry : Bridge->ComponentData)
 			{
@@ -273,12 +302,12 @@ namespace
 					return ESeinBalanceWriteResult::Wrote;
 				}
 
-				if (!PropsCompatible(CellProp, DestField)) return ESeinBalanceWriteResult::Skipped;
+				if (!PropsCompatible(CellProp, DestField)) return ESeinBalanceWriteResult::Error;
 				if (DestField->Identical(DestPtr, CellPtr)) return ESeinBalanceWriteResult::Unchanged;
 				DestField->CopyCompleteValue(DestPtr, CellPtr);
 				return ESeinBalanceWriteResult::Wrote;
 			}
-			return ESeinBalanceWriteResult::Skipped;  // component not authored on this unit
+			return ESeinBalanceWriteResult::NotApplicable;
 		}
 	};
 
@@ -316,7 +345,7 @@ namespace
 			AddIdColumn(TEXT("IdentityTag"), TEXT("Identity_IdentityTag"));
 		}
 
-		virtual bool ReadInto(const UClass* Target, const FSeinBalanceColumn& Column,
+		virtual ESeinBalanceReadResult ReadInto(const UClass* Target, const FSeinBalanceColumn& Column,
 			const FProperty* DestProp, void* DestPtr) const override
 		{
 			return ReadComponentFieldInto(Target, Column.ComponentStruct.Get(), Column.SourceProp, Column.bConvertFixedToFloat, DestProp, DestPtr);
@@ -325,7 +354,7 @@ namespace
 		virtual ESeinBalanceWriteResult WriteFrom(const UClass* /*Target*/, const FSeinBalanceColumn& /*Column*/,
 			const FProperty* /*CellProp*/, const void* /*CellPtr*/) const override
 		{
-			return ESeinBalanceWriteResult::Skipped;  // Identity columns are display-only — never pushed
+			return ESeinBalanceWriteResult::NotApplicable;
 		}
 	};
 
@@ -436,30 +465,48 @@ namespace
 			}
 		}
 
-		virtual bool ReadInto(const UClass* Target, const FSeinBalanceColumn& Column,
+		virtual ESeinBalanceReadResult ReadInto(const UClass* Target, const FSeinBalanceColumn& Column,
 			const FProperty* DestProp, void* DestPtr) const override
 		{
+			if (!Column.ComponentStruct.IsValid()
+				|| !Column.NestedContainerProp
+				|| !Column.InnerStruct.IsValid()
+				|| !Column.SourceProp
+				|| !DestProp
+				|| !DestPtr)
+			{
+				return ESeinBalanceReadResult::Error;
+			}
 			const void* InnerMem = FindNestedInner(Target, Column);
-			if (!InnerMem || !Column.SourceProp) return false;
+			if (!InnerMem) return ESeinBalanceReadResult::NotApplicable;
 			const void* SrcPtr = Column.SourceProp->ContainerPtrToValuePtr<void>(InnerMem);
 
 			if (Column.bConvertFixedToFloat)
 			{
 				const float AsFloat = static_cast<const FFixedPoint*>(SrcPtr)->ToFloat();
-				if (const FFloatProperty* FD = CastField<FFloatProperty>(DestProp)) { FD->SetPropertyValue(DestPtr, AsFloat); return true; }
-				if (const FDoubleProperty* DD = CastField<FDoubleProperty>(DestProp)) { DD->SetPropertyValue(DestPtr, static_cast<double>(AsFloat)); return true; }
-				return false;
+				if (const FFloatProperty* FD = CastField<FFloatProperty>(DestProp)) { FD->SetPropertyValue(DestPtr, AsFloat); return ESeinBalanceReadResult::Read; }
+				if (const FDoubleProperty* DD = CastField<FDoubleProperty>(DestProp)) { DD->SetPropertyValue(DestPtr, static_cast<double>(AsFloat)); return ESeinBalanceReadResult::Read; }
+				return ESeinBalanceReadResult::Error;
 			}
-			if (!PropsCompatible(Column.SourceProp, DestProp)) return false;
+			if (!PropsCompatible(Column.SourceProp, DestProp)) return ESeinBalanceReadResult::Error;
 			DestProp->CopyCompleteValue(DestPtr, SrcPtr);
-			return true;
+			return ESeinBalanceReadResult::Read;
 		}
 
 		virtual ESeinBalanceWriteResult WriteFrom(const UClass* Target, const FSeinBalanceColumn& Column,
 			const FProperty* CellProp, const void* CellPtr) const override
 		{
+			if (!Column.ComponentStruct.IsValid()
+				|| !Column.NestedContainerProp
+				|| !Column.InnerStruct.IsValid()
+				|| !Column.SourceProp
+				|| !CellProp
+				|| !CellPtr)
+			{
+				return ESeinBalanceWriteResult::Error;
+			}
 			void* InnerMem = FindNestedInnerMutable(Target, Column);
-			if (!InnerMem || !Column.SourceProp || !CellProp || !CellPtr) return ESeinBalanceWriteResult::Skipped;
+			if (!InnerMem) return ESeinBalanceWriteResult::NotApplicable;
 			void* DestPtr = Column.SourceProp->ContainerPtrToValuePtr<void>(InnerMem);
 
 			if (Column.bConvertFixedToFloat)
@@ -470,7 +517,7 @@ namespace
 				Fixed = FFixedPoint::FromFloat(NewVal);
 				return ESeinBalanceWriteResult::Wrote;
 			}
-			if (!PropsCompatible(CellProp, Column.SourceProp)) return ESeinBalanceWriteResult::Skipped;
+			if (!PropsCompatible(CellProp, Column.SourceProp)) return ESeinBalanceWriteResult::Error;
 			if (Column.SourceProp->Identical(DestPtr, CellPtr)) return ESeinBalanceWriteResult::Unchanged;
 			Column.SourceProp->CopyCompleteValue(DestPtr, CellPtr);
 			return ESeinBalanceWriteResult::Wrote;
@@ -509,7 +556,9 @@ namespace
 
 					FSeinBalanceColumn Col;
 					Col.DisplayName = T->GetAuthoredNameForField(Prop);
-					Col.SourceKey   = FString(TEXT("A|")) + Prop->GetName();
+					Col.SourceKey   = FString(TEXT("A|"))
+						+ Prop->GetOwnerStruct()->GetPathName()
+						+ TEXT("|") + Prop->GetName();
 					Col.Kind        = ESeinBalanceColumnKind::AbilityField;
 					Col.SourceProp  = Prop;
 
@@ -529,32 +578,38 @@ namespace
 			}
 		}
 
-		virtual bool ReadInto(const UClass* Target, const FSeinBalanceColumn& Column,
+		virtual ESeinBalanceReadResult ReadInto(const UClass* Target, const FSeinBalanceColumn& Column,
 			const FProperty* DestProp, void* DestPtr) const override
 		{
 			const UObject* CDO = Target ? Target->GetDefaultObject() : nullptr;
-			if (!CDO || !Column.SourceProp) return false;
-			if (!Target->IsChildOf(Column.SourceProp->GetOwnerClass())) return false;  // field not on this ability
+			if (!CDO || !Column.SourceProp || !DestProp || !DestPtr)
+			{
+				return ESeinBalanceReadResult::Error;
+			}
+			if (!Target->IsChildOf(Column.SourceProp->GetOwnerClass()))
+			{
+				return ESeinBalanceReadResult::NotApplicable;
+			}
 			const void* SrcPtr = Column.SourceProp->ContainerPtrToValuePtr<void>(CDO);
 
 			if (Column.bConvertFixedToFloat)
 			{
 				const float AsFloat = static_cast<const FFixedPoint*>(SrcPtr)->ToFloat();
-				if (const FFloatProperty* FD = CastField<FFloatProperty>(DestProp)) { FD->SetPropertyValue(DestPtr, AsFloat); return true; }
-				if (const FDoubleProperty* DD = CastField<FDoubleProperty>(DestProp)) { DD->SetPropertyValue(DestPtr, static_cast<double>(AsFloat)); return true; }
-				return false;
+				if (const FFloatProperty* FD = CastField<FFloatProperty>(DestProp)) { FD->SetPropertyValue(DestPtr, AsFloat); return ESeinBalanceReadResult::Read; }
+				if (const FDoubleProperty* DD = CastField<FDoubleProperty>(DestProp)) { DD->SetPropertyValue(DestPtr, static_cast<double>(AsFloat)); return ESeinBalanceReadResult::Read; }
+				return ESeinBalanceReadResult::Error;
 			}
-			if (!PropsCompatible(Column.SourceProp, DestProp)) return false;
+			if (!PropsCompatible(Column.SourceProp, DestProp)) return ESeinBalanceReadResult::Error;
 			DestProp->CopyCompleteValue(DestPtr, SrcPtr);
-			return true;
+			return ESeinBalanceReadResult::Read;
 		}
 
 		virtual ESeinBalanceWriteResult WriteFrom(const UClass* Target, const FSeinBalanceColumn& Column,
 			const FProperty* CellProp, const void* CellPtr) const override
 		{
 			UObject* CDO = Target ? Target->GetDefaultObject() : nullptr;
-			if (!CDO || !Column.SourceProp || !CellProp || !CellPtr) return ESeinBalanceWriteResult::Skipped;
-			if (!Target->IsChildOf(Column.SourceProp->GetOwnerClass())) return ESeinBalanceWriteResult::Skipped;
+			if (!CDO || !Column.SourceProp || !CellProp || !CellPtr) return ESeinBalanceWriteResult::Error;
+			if (!Target->IsChildOf(Column.SourceProp->GetOwnerClass())) return ESeinBalanceWriteResult::NotApplicable;
 			void* DestPtr = Column.SourceProp->ContainerPtrToValuePtr<void>(CDO);
 
 			if (Column.bConvertFixedToFloat)
@@ -565,7 +620,7 @@ namespace
 				Fixed = FFixedPoint::FromFloat(NewVal);
 				return ESeinBalanceWriteResult::Wrote;
 			}
-			if (!PropsCompatible(CellProp, Column.SourceProp)) return ESeinBalanceWriteResult::Skipped;
+			if (!PropsCompatible(CellProp, Column.SourceProp)) return ESeinBalanceWriteResult::Error;
 			if (Column.SourceProp->Identical(DestPtr, CellPtr)) return ESeinBalanceWriteResult::Unchanged;
 			Column.SourceProp->CopyCompleteValue(DestPtr, CellPtr);
 			return ESeinBalanceWriteResult::Wrote;
@@ -603,22 +658,22 @@ namespace
 			}
 		}
 
-		virtual bool ReadInto(const UClass* Target, const FSeinBalanceColumn& Column,
+		virtual ESeinBalanceReadResult ReadInto(const UClass* Target, const FSeinBalanceColumn& Column,
 			const FProperty* DestProp, void* DestPtr) const override
 		{
 			const USeinAbility* Ability = Target ? Cast<USeinAbility>(Target->GetDefaultObject()) : nullptr;
-			if (!Ability) return false;
+			if (!Ability || !DestProp || !DestPtr) return ESeinBalanceReadResult::Error;
 			const float AsFloat = Ability->ResourceCost.Amounts.FindRef(Column.ResourceTag).ToFloat();
-			if (const FFloatProperty* FD = CastField<FFloatProperty>(DestProp)) { FD->SetPropertyValue(DestPtr, AsFloat); return true; }
-			if (const FDoubleProperty* DD = CastField<FDoubleProperty>(DestProp)) { DD->SetPropertyValue(DestPtr, static_cast<double>(AsFloat)); return true; }
-			return false;
+			if (const FFloatProperty* FD = CastField<FFloatProperty>(DestProp)) { FD->SetPropertyValue(DestPtr, AsFloat); return ESeinBalanceReadResult::Read; }
+			if (const FDoubleProperty* DD = CastField<FDoubleProperty>(DestProp)) { DD->SetPropertyValue(DestPtr, static_cast<double>(AsFloat)); return ESeinBalanceReadResult::Read; }
+			return ESeinBalanceReadResult::Error;
 		}
 
 		virtual ESeinBalanceWriteResult WriteFrom(const UClass* Target, const FSeinBalanceColumn& Column,
 			const FProperty* CellProp, const void* CellPtr) const override
 		{
 			USeinAbility* Ability = Target ? Cast<USeinAbility>(Target->GetDefaultObject()) : nullptr;
-			if (!Ability || !CellProp || !CellPtr) return ESeinBalanceWriteResult::Skipped;
+			if (!Ability || !CellProp || !CellPtr) return ESeinBalanceWriteResult::Error;
 			const float NewVal = static_cast<float>(ReadFloatCell(CellProp, CellPtr));
 			const float CurVal = Ability->ResourceCost.Amounts.FindRef(Column.ResourceTag).ToFloat();
 			if (NewVal == CurVal) return ESeinBalanceWriteResult::Unchanged;
@@ -645,74 +700,291 @@ namespace
 		}
 	}
 
+	/** Build the profile's exact column set once. Gather, Push, and Check Sync
+	 *  must share this dedupe step or inherited ability fields are counted once
+	 *  per matched class during drift checks. */
+	bool DescribeProfileColumns(
+		const TArray<UClass*>& Targets,
+		const USeinBalanceProfile& Profile,
+		const FComponentColumnProvider& ComponentProvider,
+		const FIdentityColumnProvider& IdentityProvider,
+		const FNestedComponentColumnProvider& NestedProvider,
+		const FAbilityFieldColumnProvider& AbilityFieldProvider,
+		const FAbilityCostColumnProvider& AbilityCostProvider,
+		TArray<FSeinBalanceColumn>& OutColumns,
+		FString& OutError)
+	{
+		OutColumns.Reset();
+		OutError.Reset();
+		if (Profile.TargetKind == ESeinBalanceTargetKind::Abilities)
+		{
+			AbilityFieldProvider.DescribeColumns(Targets, Profile, OutColumns);
+			AbilityCostProvider.DescribeColumns(Targets, Profile, OutColumns);
+		}
+		else
+		{
+			ComponentProvider.DescribeColumns(Targets, Profile, OutColumns);
+			NestedProvider.DescribeColumns(Targets, Profile, OutColumns);
+			IdentityProvider.DescribeColumns(Targets, Profile, OutColumns);
+		}
+
+		TSet<FString> SeenKeys;
+		OutColumns.RemoveAll([&SeenKeys](const FSeinBalanceColumn& Column)
+		{
+			bool bAlreadySeen = false;
+			SeenKeys.Add(Column.SourceKey, &bAlreadySeen);
+			return bAlreadySeen;
+		});
+
+		TMap<FString, int32> DisplayNameCounts;
+		for (const FSeinBalanceColumn& Column : OutColumns)
+		{
+			DisplayNameCounts.FindOrAdd(Column.DisplayName)++;
+		}
+		for (FSeinBalanceColumn& Column : OutColumns)
+		{
+			if (DisplayNameCounts.FindRef(Column.DisplayName) > 1)
+			{
+				Column.DisplayName += TEXT("__")
+					+ MakeIdentifierSuffix(Column.SourceKey);
+			}
+		}
+
+		TSet<FString> FinalDisplayNames;
+		for (const FSeinBalanceColumn& Column : OutColumns)
+		{
+			bool bAlreadySeen = false;
+			FinalDisplayNames.Add(Column.DisplayName, &bAlreadySeen);
+			if (bAlreadySeen)
+			{
+				OutError = FString::Printf(
+					TEXT("column identities still collide at display name '%s'"),
+					*Column.DisplayName);
+				return false;
+			}
+		}
+		return true;
+	}
+
 	// ---- UDS schema sync ---------------------------------------------------------------------
 
-	/** Reconcile the row UDS's fields to `Desired`. Keep any existing field that already matches a
-	 *  desired column EXACTLY (same source key + friendly name + pin type); for anything missing or
-	 *  stale (wrong type/name) add it FRESH and remove the old one. We never `ChangeVariableType` in
-	 *  place: an in-place retype (e.g. FFixedPoint→float) does NOT reliably reflect into the same-pass
-	 *  populate — the field still reads as the old type, the float conversion no-ops, and cells come
-	 *  out 0 (the reported bug). A freshly `AddVariable`'d field reflects immediately (the working
-	 *  fresh-Gather path). Destructive-regen keeps no table data, so rebuilding a field loses nothing.
-	 *  Add-before-remove keeps the UDS non-empty (RemoveVariable refuses the last member); RenameVariable
-	 *  uniqueness is GUID-based, so transient duplicate friendly names during the swap are fine. */
-	void SyncRowStructFields(UUserDefinedStruct* UDS, const TArray<FSeinBalanceColumn>& Desired)
+	bool ValidateRowStructFields(
+		const UUserDefinedStruct& RowStruct,
+		const TArray<FSeinBalanceColumn>& Desired,
+		FString& OutError)
 	{
-		if (!UDS || Desired.Num() == 0) return;
-
-		auto FindByKey = [UDS](const FString& Key) -> FGuid
+		OutError.Reset();
+		const TArray<FStructVariableDescription>& Variables =
+			FStructureEditorUtils::GetVarDesc(&RowStruct);
+		if (Variables.Num() != Desired.Num())
 		{
-			for (const FStructVariableDescription& V : FStructureEditorUtils::GetVarDesc(UDS))
+			OutError = FString::Printf(
+				TEXT("row schema has %d field(s), expected %d"),
+				Variables.Num(),
+				Desired.Num());
+			return false;
+		}
+
+		TMap<FString, const FSeinBalanceColumn*> DesiredByKey;
+		for (const FSeinBalanceColumn& Column : Desired)
+		{
+			DesiredByKey.Add(Column.SourceKey, &Column);
+		}
+		for (const FStructVariableDescription& Variable : Variables)
+		{
+			const FString* SourceKey = FStructureEditorUtils::GetMetaData(
+				&RowStruct,
+				Variable.VarGuid,
+				SeinBalanceSourceKey);
+			const FSeinBalanceColumn* const* DesiredColumn = SourceKey
+				? DesiredByKey.Find(*SourceKey)
+				: nullptr;
+			if (!DesiredColumn || !*DesiredColumn)
 			{
-				const FString* Stored = FStructureEditorUtils::GetMetaData(UDS, V.VarGuid, SeinBalanceSourceKey);
-				if (Stored && *Stored == Key) { return V.VarGuid; }
+				OutError = FString::Printf(
+					TEXT("row field '%s' has stale or missing source identity"),
+					*Variable.FriendlyName);
+				return false;
 			}
-			return FGuid();
-		};
+			if (Variable.FriendlyName != (*DesiredColumn)->DisplayName
+				|| Variable.ToPinType() != (*DesiredColumn)->PinType)
+			{
+				OutError = FString::Printf(
+					TEXT("row field '%s' no longer matches source name or type"),
+					*Variable.FriendlyName);
+				return false;
+			}
+		}
+		return true;
+	}
+
+	FGuid FindAddedVariable(
+		const UUserDefinedStruct& RowStruct,
+		const TSet<FGuid>& Before)
+	{
+		for (const FStructVariableDescription& Variable :
+			FStructureEditorUtils::GetVarDesc(&RowStruct))
+		{
+			if (!Before.Contains(Variable.VarGuid))
+			{
+				return Variable.VarGuid;
+			}
+		}
+		return {};
+	}
+
+	bool AddRowStructField(
+		UUserDefinedStruct& RowStruct,
+		const FEdGraphPinType& PinType,
+		const FString& DisplayName,
+		const FString* SourceKey,
+		FGuid& OutGuid,
+		FString& OutError)
+	{
+		TSet<FGuid> Before;
+		for (const FStructVariableDescription& Variable :
+			FStructureEditorUtils::GetVarDesc(&RowStruct))
+		{
+			Before.Add(Variable.VarGuid);
+		}
+		if (!FStructureEditorUtils::AddVariable(&RowStruct, PinType))
+		{
+			OutError = FString::Printf(
+				TEXT("could not add row field '%s'"), *DisplayName);
+			return false;
+		}
+		OutGuid = FindAddedVariable(RowStruct, Before);
+		if (!OutGuid.IsValid()
+			|| !FStructureEditorUtils::RenameVariable(
+				&RowStruct, OutGuid, DisplayName))
+		{
+			OutError = FString::Printf(
+				TEXT("could not name fresh row field '%s'"), *DisplayName);
+			return false;
+		}
+		if (SourceKey && !FStructureEditorUtils::SetMetaData(
+			&RowStruct,
+			OutGuid,
+			SeinBalanceSourceKey,
+			*SourceKey))
+		{
+			OutError = FString::Printf(
+				TEXT("could not stamp source identity for row field '%s'"),
+				*DisplayName);
+			return false;
+		}
+		return true;
+	}
+
+	/** Reconcile a row UDS without relying on duplicate friendly names. Exact
+	 *  fields remain untouched; stale fields are removed before replacements are
+	 *  named. A temporary guard keeps the UDS non-empty when every field is stale. */
+	bool SyncRowStructFields(
+		UUserDefinedStruct* UDS,
+		const TArray<FSeinBalanceColumn>& Desired,
+		FString& OutError)
+	{
+		OutError.Reset();
+		if (!UDS || Desired.Num() == 0)
+		{
+			OutError = TEXT("row struct or desired column set is empty");
+			return false;
+		}
+
+		TMap<FString, const FSeinBalanceColumn*> DesiredByKey;
+		for (const FSeinBalanceColumn& Column : Desired)
+		{
+			DesiredByKey.Add(Column.SourceKey, &Column);
+		}
 
 		TSet<FGuid> Keep;
-		for (const FSeinBalanceColumn& D : Desired)
+		TArray<FGuid> Remove;
+		for (const FStructVariableDescription& Variable :
+			FStructureEditorUtils::GetVarDesc(UDS))
 		{
-			const FGuid ExistingGuid = FindByKey(D.SourceKey);
-			if (ExistingGuid.IsValid())
+			const FString* SourceKey = FStructureEditorUtils::GetMetaData(
+				UDS,
+				Variable.VarGuid,
+				SeinBalanceSourceKey);
+			const FSeinBalanceColumn* const* DesiredColumn = SourceKey
+				? DesiredByKey.Find(*SourceKey)
+				: nullptr;
+			if (DesiredColumn && *DesiredColumn
+				&& Variable.FriendlyName == (*DesiredColumn)->DisplayName
+				&& Variable.ToPinType() == (*DesiredColumn)->PinType)
 			{
-				if (const FStructVariableDescription* VD = FStructureEditorUtils::GetVarDescByGuid(UDS, ExistingGuid))
-				{
-					if (VD->FriendlyName == D.DisplayName && VD->ToPinType() == D.PinType)
-					{
-						Keep.Add(ExistingGuid);  // already correct — leave untouched (no churn)
-						continue;
-					}
-				}
+				Keep.Add(Variable.VarGuid);
 			}
+			else
+			{
+				Remove.Add(Variable.VarGuid);
+			}
+		}
 
-			// Missing, or stale type/name: add it fresh with the correct pin type (auto-named, then
-			// renamed + stamped). The old/stale field, if any, is removed below.
-			TSet<FGuid> Before;
-			for (const FStructVariableDescription& V : FStructureEditorUtils::GetVarDesc(UDS)) { Before.Add(V.VarGuid); }
-			if (!FStructureEditorUtils::AddVariable(UDS, D.PinType)) { continue; }
+		FGuid GuardGuid;
+		if (Keep.Num() == 0)
+		{
+			const FString GuardName = FString::Printf(
+				TEXT("__SeinBalanceSchemaGuard_%s"),
+				*FGuid::NewGuid().ToString(EGuidFormats::Digits));
+			if (!AddRowStructField(
+				*UDS,
+				Desired[0].PinType,
+				GuardName,
+				nullptr,
+				GuardGuid,
+				OutError))
+			{
+				return false;
+			}
+		}
 
+		for (const FGuid& Guid : Remove)
+		{
+			if (!FStructureEditorUtils::RemoveVariable(UDS, Guid))
+			{
+				OutError = FString::Printf(
+					TEXT("could not remove stale row field '%s'"),
+					*Guid.ToString());
+				return false;
+			}
+		}
+
+		TSet<FString> KeptKeys;
+		for (const FGuid& Guid : Keep)
+		{
+			if (const FString* SourceKey = FStructureEditorUtils::GetMetaData(
+				UDS, Guid, SeinBalanceSourceKey))
+			{
+				KeptKeys.Add(*SourceKey);
+			}
+		}
+		for (const FSeinBalanceColumn& Column : Desired)
+		{
+			if (KeptKeys.Contains(Column.SourceKey))
+			{
+				continue;
+			}
 			FGuid NewGuid;
-			for (const FStructVariableDescription& V : FStructureEditorUtils::GetVarDesc(UDS))
+			if (!AddRowStructField(
+				*UDS,
+				Column.PinType,
+				Column.DisplayName,
+				&Column.SourceKey,
+				NewGuid,
+				OutError))
 			{
-				if (!Before.Contains(V.VarGuid)) { NewGuid = V.VarGuid; break; }
-			}
-			if (NewGuid.IsValid())
-			{
-				FStructureEditorUtils::RenameVariable(UDS, NewGuid, D.DisplayName);
-				FStructureEditorUtils::SetMetaData(UDS, NewGuid, SeinBalanceSourceKey, D.SourceKey);
-				Keep.Add(NewGuid);
+				return false;
 			}
 		}
 
-		// Remove everything not kept or freshly added — stale-typed originals, strays, and the default
-		// member from CreateUserDefinedStruct. The kept/added fields keep the UDS non-empty.
-		TArray<FGuid> ToRemove;
-		for (const FStructVariableDescription& V : FStructureEditorUtils::GetVarDesc(UDS))
+		if (GuardGuid.IsValid()
+			&& !FStructureEditorUtils::RemoveVariable(UDS, GuardGuid))
 		{
-			if (!Keep.Contains(V.VarGuid)) { ToRemove.Add(V.VarGuid); }
+			OutError = TEXT("could not remove temporary row-schema guard");
+			return false;
 		}
-		for (const FGuid& G : ToRemove) { FStructureEditorUtils::RemoveVariable(UDS, G); }
+		return ValidateRowStructFields(*UDS, Desired, OutError);
 	}
 
 	/** A row-UDS field, located by its authored (friendly) name. */
@@ -726,6 +998,36 @@ namespace
 	}
 
 	// ---- Asset get-or-create -----------------------------------------------------------------
+	bool ResolveOutputDirectory(
+		const USeinBalanceProfile& Profile,
+		FString& OutDirectory,
+		FString& OutError)
+	{
+		OutDirectory = Profile.OutputDir.Path.IsEmpty()
+			? FPackageName::GetLongPackagePath(
+				Profile.GetOutermost()->GetName())
+			: Profile.OutputDir.Path;
+		OutError.Reset();
+
+		FText ValidationReason;
+		if (!FPackageName::IsValidLongPackageName(
+			OutDirectory,
+			false,
+			&ValidationReason))
+		{
+			OutError = ValidationReason.ToString();
+			return false;
+		}
+		FString ResolvedFilename;
+		if (!FPackageName::TryConvertLongPackageNameToFilename(
+			OutDirectory,
+			ResolvedFilename))
+		{
+			OutError = TEXT("the content root is not mounted");
+			return false;
+		}
+		return true;
+	}
 
 	UUserDefinedStruct* GetOrCreateRowUDS(const FString& Dir, const FString& Name)
 	{
@@ -770,9 +1072,118 @@ namespace
 		N.RemoveFromEnd(TEXT("_C"));
 		return FName(*N);
 	}
+
+	FName RowSourceClassMetadataKey(FName RowName)
+	{
+		return FName(*(FString(TEXT("SeinBalanceSourceClass."))
+			+ RowName.ToString()));
+	}
+
+	struct FTargetRowMap
+	{
+		TMap<const UClass*, FName> ByClass;
+		TMap<FName, UClass*> ByRow;
+	};
+
+	/** Preserve concise row names when they are unique. Duplicate Blueprint asset
+	 *  names are legal across folders, so only colliding names receive a stable
+	 *  path-derived suffix instead of silently overwriting each other. */
+	bool BuildTargetRowMap(
+		const TArray<UClass*>& Targets,
+		FTargetRowMap& OutRows,
+		FString& OutError)
+	{
+		OutRows = {};
+		OutError.Reset();
+
+		TMap<FName, int32> BaseNameCounts;
+		for (const UClass* Target : Targets)
+		{
+			if (Target)
+			{
+				BaseNameCounts.FindOrAdd(RowNameForClass(Target))++;
+			}
+		}
+
+		for (UClass* Target : Targets)
+		{
+			if (!Target)
+			{
+				continue;
+			}
+
+			const FName BaseName = RowNameForClass(Target);
+			FName RowName = BaseName;
+			if (BaseNameCounts.FindRef(BaseName) > 1)
+			{
+				const FString PathSuffix = MakeIdentifierSuffix(
+					Target->GetPathName());
+				RowName = FName(*(BaseName.ToString() + TEXT("__") + PathSuffix));
+			}
+
+			if (UClass* const* Existing = OutRows.ByRow.Find(RowName))
+			{
+				OutError = FString::Printf(
+					TEXT("classes '%s' and '%s' resolve to the same generated row '%s'"),
+					*(*Existing)->GetPathName(),
+					*Target->GetPathName(),
+					*RowName.ToString());
+				return false;
+			}
+
+			OutRows.ByClass.Add(Target, RowName);
+			OutRows.ByRow.Add(RowName, Target);
+		}
+		return true;
+	}
+
+	bool ValidateGeneratedTableShape(
+		const UDataTable& Table,
+		const UUserDefinedStruct& RowStruct,
+		const TArray<FSeinBalanceColumn>& Columns,
+		const FTargetRowMap& TargetRows,
+		FString& OutError)
+	{
+		OutError.Reset();
+		if (Table.GetRowMap().Num() != TargetRows.ByRow.Num())
+		{
+			OutError = FString::Printf(
+				TEXT("table has %d row(s), but the profile currently resolves %d"),
+				Table.GetRowMap().Num(),
+				TargetRows.ByRow.Num());
+			return false;
+		}
+		for (const TPair<FName, UClass*>& Expected : TargetRows.ByRow)
+		{
+			if (!Table.GetRowMap().Contains(Expected.Key))
+			{
+				OutError = FString::Printf(
+					TEXT("table is missing current target row '%s'"),
+					*Expected.Key.ToString());
+				return false;
+			}
+			const FString* StoredClassPath = Table.GetPackage()
+				->GetMetaData().FindValue(
+					&Table,
+					RowSourceClassMetadataKey(Expected.Key));
+			if (!StoredClassPath
+				|| *StoredClassPath != Expected.Value->GetPathName())
+			{
+				OutError = FString::Printf(
+					TEXT("row '%s' is not bound to current source class '%s'"),
+					*Expected.Key.ToString(),
+					*Expected.Value->GetPathName());
+				return false;
+			}
+		}
+		return ValidateRowStructFields(RowStruct, Columns, OutError);
+	}
 }  // anonymous namespace
 
-UDataTable* GatherToTable(USeinBalanceProfile* Profile)
+static UDataTable* GatherToTableInternal(
+	USeinBalanceProfile* Profile,
+	bool bConfirmRegather,
+	bool bOpenGeneratedTable)
 {
 	if (!Profile) return nullptr;
 
@@ -784,6 +1195,16 @@ UDataTable* GatherToTable(USeinBalanceProfile* Profile)
 		UE_LOG(LogSeinBalanceTable, Warning, TEXT("Gather: profile '%s' matched no classes."), *Profile->GetName());
 		return nullptr;
 	}
+	FTargetRowMap TargetRows;
+	FString TargetRowError;
+	if (!BuildTargetRowMap(Targets, TargetRows, TargetRowError))
+	{
+		UE_LOG(LogSeinBalanceTable, Error,
+			TEXT("Gather: profile '%s' cannot build unique rows: %s."),
+			*Profile->GetName(),
+			*TargetRowError);
+		return nullptr;
+	}
 
 	// 2. Providers → desired columns (deduped by source key).
 	FComponentColumnProvider ComponentProvider;
@@ -793,23 +1214,23 @@ UDataTable* GatherToTable(USeinBalanceProfile* Profile)
 	FAbilityCostColumnProvider  AbilityCostProvider;
 
 	TArray<FSeinBalanceColumn> Columns;
-	if (Profile->TargetKind == ESeinBalanceTargetKind::Abilities)
+	FString ColumnError;
+	if (!DescribeProfileColumns(
+		Targets,
+		*Profile,
+		ComponentProvider,
+		IdentityProvider,
+		NestedProvider,
+		AbilityFieldProvider,
+		AbilityCostProvider,
+		Columns,
+		ColumnError))
 	{
-		AbilityFieldProvider.DescribeColumns(Targets, *Profile, Columns);
-		AbilityCostProvider.DescribeColumns(Targets, *Profile, Columns);
-	}
-	else
-	{
-		ComponentProvider.DescribeColumns(Targets, *Profile, Columns);
-		NestedProvider.DescribeColumns(Targets, *Profile, Columns);
-		IdentityProvider.DescribeColumns(Targets, *Profile, Columns);
-	}
-	{
-		TSet<FString> SeenKeys;
-		Columns.RemoveAll([&SeenKeys](const FSeinBalanceColumn& C)
-		{
-			bool bAlready = false; SeenKeys.Add(C.SourceKey, &bAlready); return bAlready;
-		});
+		UE_LOG(LogSeinBalanceTable, Error,
+			TEXT("Gather: profile '%s' has ambiguous columns: %s."),
+			*Profile->GetName(),
+			*ColumnError);
+		return nullptr;
 	}
 	if (Columns.Num() == 0)
 	{
@@ -820,9 +1241,17 @@ UDataTable* GatherToTable(USeinBalanceProfile* Profile)
 	// 3. Resolve paths + any EXISTING assets up front — BEFORE mutating anything. Loading a table
 	//    AFTER its row struct has changed deserializes its saved rows against the new layout, which
 	//    reads a garbage container count and crashes. So we resolve (load) first, mutate later.
-	const FString OutDir = Profile->OutputDir.Path.IsEmpty()
-		? FPackageName::GetLongPackagePath(Profile->GetOutermost()->GetName())
-		: Profile->OutputDir.Path;
+	FString OutDir;
+	FString OutputDirectoryError;
+	if (!ResolveOutputDirectory(*Profile, OutDir, OutputDirectoryError))
+	{
+		UE_LOG(LogSeinBalanceTable, Warning,
+			TEXT("Gather: profile '%s' has invalid Output Directory '%s': %s."),
+			*Profile->GetName(),
+			*Profile->OutputDir.Path,
+			*OutputDirectoryError);
+		return nullptr;
+	}
 	const FString BaseName  = Profile->GetName();
 	const FString TableName = FString(TEXT("DT_")) + BaseName;
 	const FString RowName   = BaseName + TEXT("_Row");
@@ -840,7 +1269,7 @@ UDataTable* GatherToTable(USeinBalanceProfile* Profile)
 
 	// 4. Destructive regenerate: if a table already exists, warn first — Gather REBUILDS it from the
 	//    source Blueprints and discards any manual in-table edits (write-back is the path back to BPs).
-	if (Table)
+	if (Table && bConfirmRegather)
 	{
 		const EAppReturnType::Type Choice = FMessageDialog::Open(EAppMsgType::YesNo, FText::Format(
 			NSLOCTEXT("SeinBalanceTable", "RegenWarn",
@@ -872,7 +1301,15 @@ UDataTable* GatherToTable(USeinBalanceProfile* Profile)
 		UE_LOG(LogSeinBalanceTable, Warning, TEXT("Gather: failed to create row struct for '%s'."), *Profile->GetName());
 		return nullptr;
 	}
-	SyncRowStructFields(RowUDS, Columns);
+	FString SchemaError;
+	if (!SyncRowStructFields(RowUDS, Columns, SchemaError))
+	{
+		UE_LOG(LogSeinBalanceTable, Error,
+			TEXT("Gather: failed to reconcile row schema for '%s': %s."),
+			*Profile->GetName(),
+			*SchemaError);
+		return nullptr;
+	}
 	FStructureEditorUtils::OnStructureChanged(RowUDS, FStructureEditorUtils::Unknown);
 
 	if (!Table) { Table = GetOrCreateDataTable(OutDir, TableName, RowUDS); }
@@ -885,11 +1322,12 @@ UDataTable* GatherToTable(USeinBalanceProfile* Profile)
 
 	// 8. Populate every row fresh from the source ComponentData (the table is empty after step 6).
 	auto FillCell = [&](const FSeinBalanceColumn& Col, const UClass* Target, uint8* RowData)
+		-> ESeinBalanceReadResult
 	{
 		FProperty* DestProp = FindFieldByAuthoredName(RowUDS, Col.DisplayName);
-		if (!DestProp) return;
+		if (!DestProp) return ESeinBalanceReadResult::Error;
 		void* DestPtr = DestProp->ContainerPtrToValuePtr<void>(RowData);
-		ProviderForKind(Col.Kind, ComponentProvider, IdentityProvider, NestedProvider, AbilityFieldProvider, AbilityCostProvider)
+		return ProviderForKind(Col.Kind, ComponentProvider, IdentityProvider, NestedProvider, AbilityFieldProvider, AbilityCostProvider)
 			.ReadInto(Target, Col, DestProp, DestPtr);
 	};
 
@@ -898,8 +1336,31 @@ UDataTable* GatherToTable(USeinBalanceProfile* Profile)
 	{
 		uint8* Buf = static_cast<uint8*>(FMemory::Malloc(RowUDS->GetStructureSize()));
 		RowUDS->InitializeStruct(Buf);
-		for (const FSeinBalanceColumn& Col : Columns) { FillCell(Col, T, Buf); }
-		Table->AddRow(RowNameForClass(T), Buf, RowUDS);
+		bool bReadError = false;
+		for (const FSeinBalanceColumn& Col : Columns)
+		{
+			if (FillCell(Col, T, Buf) == ESeinBalanceReadResult::Error)
+			{
+				UE_LOG(LogSeinBalanceTable, Error,
+					TEXT("Gather: could not read column '%s' from source '%s'."),
+					*Col.DisplayName,
+					*T->GetPathName());
+				bReadError = true;
+				break;
+			}
+		}
+		if (bReadError)
+		{
+			RowUDS->DestroyStruct(Buf);
+			FMemory::Free(Buf);
+			return nullptr;
+		}
+		const FName TargetRowName = TargetRows.ByClass.FindChecked(T);
+		Table->AddRow(TargetRowName, Buf, RowUDS);
+		Table->GetPackage()->GetMetaData().SetValue(
+			Table,
+			RowSourceClassMetadataKey(TargetRowName),
+			*T->GetPathName());
 		RowUDS->DestroyStruct(Buf);
 		FMemory::Free(Buf);
 		++NumRows;
@@ -916,7 +1377,7 @@ UDataTable* GatherToTable(USeinBalanceProfile* Profile)
 	UE_LOG(LogSeinBalanceTable, Log, TEXT("Gather: '%s' → '%s' (%d row(s), %d column(s))."),
 		*Profile->GetName(), *Table->GetName(), NumRows, Columns.Num());
 
-	if (GEditor)
+	if (bOpenGeneratedTable && GEditor)
 	{
 		if (UAssetEditorSubsystem* AES = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>())
 		{
@@ -926,7 +1387,10 @@ UDataTable* GatherToTable(USeinBalanceProfile* Profile)
 	return Table;
 }
 
-int32 PushToEntities(USeinBalanceProfile* Profile, int32& OutSkipped)
+static int32 PushToEntitiesInternal(
+	USeinBalanceProfile* Profile,
+	int32& OutSkipped,
+	bool bConfirmPush)
 {
 	OutSkipped = 0;
 	if (!Profile) return -1;
@@ -938,7 +1402,6 @@ int32 PushToEntities(USeinBalanceProfile* Profile, int32& OutSkipped)
 		UE_LOG(LogSeinBalanceTable, Warning, TEXT("Push: '%s' has no generated table — Gather first."), *Profile->GetName());
 		return -1;
 	}
-
 	// Rebuild the same column set Gather produced (deterministic for unchanged profile/targets).
 	TArray<UClass*> Targets;
 	Profile->ResolveTargetClasses(Targets);
@@ -949,38 +1412,106 @@ int32 PushToEntities(USeinBalanceProfile* Profile, int32& OutSkipped)
 	FAbilityFieldColumnProvider AbilityFieldProvider;
 	FAbilityCostColumnProvider  AbilityCostProvider;
 	TArray<FSeinBalanceColumn> Columns;
-	if (Profile->TargetKind == ESeinBalanceTargetKind::Abilities)
+	FString ColumnError;
+	if (!DescribeProfileColumns(
+		Targets,
+		*Profile,
+		ComponentProvider,
+		IdentityProvider,
+		NestedProvider,
+		AbilityFieldProvider,
+		AbilityCostProvider,
+		Columns,
+		ColumnError))
 	{
-		AbilityFieldProvider.DescribeColumns(Targets, *Profile, Columns);
-		AbilityCostProvider.DescribeColumns(Targets, *Profile, Columns);
-	}
-	else
-	{
-		ComponentProvider.DescribeColumns(Targets, *Profile, Columns);
-		NestedProvider.DescribeColumns(Targets, *Profile, Columns);
-		IdentityProvider.DescribeColumns(Targets, *Profile, Columns);
-	}
-	{
-		TSet<FString> SeenKeys;
-		Columns.RemoveAll([&SeenKeys](const FSeinBalanceColumn& C) { bool b = false; SeenKeys.Add(C.SourceKey, &b); return b; });
+		UE_LOG(LogSeinBalanceTable, Error,
+			TEXT("Push: profile '%s' has ambiguous columns: %s."),
+			*Profile->GetName(),
+			*ColumnError);
+		return -1;
 	}
 
-	TMap<FName, UClass*> ByRow;
-	for (UClass* T : Targets) { if (T) { ByRow.Add(RowNameForClass(T), T); } }
+	FTargetRowMap TargetRows;
+	FString TargetRowError;
+	if (!BuildTargetRowMap(Targets, TargetRows, TargetRowError))
+	{
+		UE_LOG(LogSeinBalanceTable, Error,
+			TEXT("Push: profile '%s' cannot build unique rows: %s."),
+			*Profile->GetName(),
+			*TargetRowError);
+		return -1;
+	}
+	FString TableShapeError;
+	if (!ValidateGeneratedTableShape(
+		*Table,
+		*RowUDS,
+		Columns,
+		TargetRows,
+		TableShapeError))
+	{
+		UE_LOG(LogSeinBalanceTable, Warning,
+			TEXT("Push: '%s' is structurally stale (%s). Gather before Push."),
+			*Table->GetName(),
+			*TableShapeError);
+		return -1;
+	}
+
+	for (const TPair<FName, UClass*>& TargetRow : TargetRows.ByRow)
+	{
+		uint8* Probe = static_cast<uint8*>(FMemory::Malloc(RowUDS->GetStructureSize()));
+		RowUDS->InitializeStruct(Probe);
+		bool bReadError = false;
+		for (const FSeinBalanceColumn& Column : Columns)
+		{
+			if (Column.Kind == ESeinBalanceColumnKind::Identity)
+			{
+				continue;
+			}
+			FProperty* Field = FindFieldByAuthoredName(RowUDS, Column.DisplayName);
+			if (!Field || ProviderForKind(
+				Column.Kind,
+				ComponentProvider,
+				IdentityProvider,
+				NestedProvider,
+				AbilityFieldProvider,
+				AbilityCostProvider).ReadInto(
+					TargetRow.Value,
+					Column,
+					Field,
+					Field ? Field->ContainerPtrToValuePtr<void>(Probe) : nullptr)
+				== ESeinBalanceReadResult::Error)
+			{
+				bReadError = true;
+				break;
+			}
+		}
+		RowUDS->DestroyStruct(Probe);
+		FMemory::Free(Probe);
+		if (bReadError)
+		{
+			UE_LOG(LogSeinBalanceTable, Warning,
+				TEXT("Push: source '%s' cannot be read through the generated schema. Gather before Push."),
+				*TargetRow.Value->GetPathName());
+			return -1;
+		}
+	}
 
 	// Writing into the Blueprints is destructive to their authored values — confirm.
-	const EAppReturnType::Type Choice = FMessageDialog::Open(EAppMsgType::YesNo, FText::Format(
-		NSLOCTEXT("SeinBalanceTable", "PushWarn",
-			"Push writes the values from '{0}' back into the source unit Blueprints, OVERWRITING their "
-			"authored component values (only changed cells are written).\n\nContinue?"),
-		FText::FromString(Table->GetName())));
-	if (Choice != EAppReturnType::Yes) { return -1; }
+	if (bConfirmPush)
+	{
+		const EAppReturnType::Type Choice = FMessageDialog::Open(EAppMsgType::YesNo, FText::Format(
+			NSLOCTEXT("SeinBalanceTable", "PushWarn",
+				"Push writes the values from '{0}' back into the matched source Blueprints, OVERWRITING "
+				"their authored values (only changed cells are written).\n\nContinue?"),
+			FText::FromString(Table->GetName())));
+		if (Choice != EAppReturnType::Yes) { return -1; }
+	}
 
 	int32 NumValues = 0;
 	TSet<UClass*> WrittenClasses;
 	for (const FName& RowName : Table->GetRowNames())
 	{
-		UClass* const* Found = ByRow.Find(RowName);
+		UClass* const* Found = TargetRows.ByRow.Find(RowName);
 		if (!Found || !*Found) { continue; }  // row's class no longer matched by the profile
 		UClass* T = *Found;
 
@@ -997,9 +1528,19 @@ int32 PushToEntities(USeinBalanceProfile* Profile, int32& OutSkipped)
 			switch (ProviderForKind(Col.Kind, ComponentProvider, IdentityProvider, NestedProvider, AbilityFieldProvider, AbilityCostProvider)
 				.WriteFrom(T, Col, CellProp, CellPtr))
 			{
-			case ESeinBalanceWriteResult::Wrote:   ++NumValues; bAny = true; break;
-			case ESeinBalanceWriteResult::Skipped: ++OutSkipped; break;
-			default: break;  // Unchanged — silent (no perturbation)
+			case ESeinBalanceWriteResult::Wrote:
+				++NumValues;
+				bAny = true;
+				break;
+			case ESeinBalanceWriteResult::Error:
+				++OutSkipped;
+				UE_LOG(LogSeinBalanceTable, Error,
+					TEXT("Push: write preflight succeeded, but column '%s' failed for source '%s'; Push stopped."),
+					*Col.DisplayName,
+					*T->GetPathName());
+				return -1;
+			default:
+				break;
 			}
 		}
 
@@ -1022,10 +1563,37 @@ int32 PushToEntities(USeinBalanceProfile* Profile, int32& OutSkipped)
 		}
 	}
 
-	UE_LOG(LogSeinBalanceTable, Log, TEXT("Push: '%s' → %d changed, %d skipped, across %d unit(s)."),
+	UE_LOG(LogSeinBalanceTable, Log, TEXT("Push: '%s' → %d changed, %d write error(s), across %d unit(s)."),
 		*Profile->GetName(), NumValues, OutSkipped, WrittenClasses.Num());
 	return NumValues;
 }
+
+UDataTable* GatherToTable(USeinBalanceProfile* Profile)
+{
+	return GatherToTableInternal(Profile, true, true);
+}
+
+int32 PushToEntities(USeinBalanceProfile* Profile, int32& OutSkippedCells)
+{
+	return PushToEntitiesInternal(Profile, OutSkippedCells, true);
+}
+
+#if WITH_DEV_AUTOMATION_TESTS
+namespace Testing
+{
+	UDataTable* GatherToTableWithoutUI(USeinBalanceProfile* Profile)
+	{
+		return GatherToTableInternal(Profile, false, false);
+	}
+
+	int32 PushToEntitiesWithoutUI(
+		USeinBalanceProfile* Profile,
+		int32& OutSkippedCells)
+	{
+		return PushToEntitiesInternal(Profile, OutSkippedCells, false);
+	}
+}
+#endif
 
 int32 CheckSync(USeinBalanceProfile* Profile, int32& OutCellsChecked)
 {
@@ -1045,25 +1613,54 @@ int32 CheckSync(USeinBalanceProfile* Profile, int32& OutCellsChecked)
 	FAbilityFieldColumnProvider AbilityFieldProvider;
 	FAbilityCostColumnProvider  AbilityCostProvider;
 	TArray<FSeinBalanceColumn> Columns;
-	if (Profile->TargetKind == ESeinBalanceTargetKind::Abilities)
+	FString ColumnError;
+	if (!DescribeProfileColumns(
+		Targets,
+		*Profile,
+		ComponentProvider,
+		IdentityProvider,
+		NestedProvider,
+		AbilityFieldProvider,
+		AbilityCostProvider,
+		Columns,
+		ColumnError))
 	{
-		AbilityFieldProvider.DescribeColumns(Targets, *Profile, Columns);
-		AbilityCostProvider.DescribeColumns(Targets, *Profile, Columns);
-	}
-	else
-	{
-		ComponentProvider.DescribeColumns(Targets, *Profile, Columns);
-		NestedProvider.DescribeColumns(Targets, *Profile, Columns);
-		IdentityProvider.DescribeColumns(Targets, *Profile, Columns);
+		UE_LOG(LogSeinBalanceTable, Error,
+			TEXT("CheckSync: profile '%s' has ambiguous columns: %s."),
+			*Profile->GetName(),
+			*ColumnError);
+		return -1;
 	}
 
-	TMap<FName, UClass*> ByRow;
-	for (UClass* T : Targets) { if (T) { ByRow.Add(RowNameForClass(T), T); } }
+	FTargetRowMap TargetRows;
+	FString TargetRowError;
+	if (!BuildTargetRowMap(Targets, TargetRows, TargetRowError))
+	{
+		UE_LOG(LogSeinBalanceTable, Error,
+			TEXT("CheckSync: profile '%s' cannot build unique rows: %s."),
+			*Profile->GetName(),
+			*TargetRowError);
+		return -1;
+	}
+	FString TableShapeError;
+	if (!ValidateGeneratedTableShape(
+		*Table,
+		*RowUDS,
+		Columns,
+		TargetRows,
+		TableShapeError))
+	{
+		UE_LOG(LogSeinBalanceTable, Log,
+			TEXT("CheckSync: '%s' is structurally stale (%s)."),
+			*Table->GetName(),
+			*TableShapeError);
+		return 1;
+	}
 
 	int32 Diffs = 0;
 	for (const FName& RowName : Table->GetRowNames())
 	{
-		UClass* const* Found = ByRow.Find(RowName);
+		UClass* const* Found = TargetRows.ByRow.Find(RowName);
 		if (!Found || !*Found) { continue; }
 		UClass* T = *Found;
 		uint8* Row = Table->FindRowUnchecked(RowName);
@@ -1079,21 +1676,30 @@ int32 CheckSync(USeinBalanceProfile* Profile, int32& OutCellsChecked)
 			FProperty* Field = FindFieldByAuthoredName(RowUDS, Col.DisplayName);
 			if (!Field) { continue; }
 
-			// Honest-drift guard: a fixed→float column whose field isn't actually float/double means the
-			// row struct is stale (e.g. not re-Gathered after a type change). Don't silently compare —
-			// that previously read 0 == 0 as "in sync"; report it as out-of-sync so a re-Gather is prompted.
-			if (Col.bConvertFixedToFloat && !CastField<FFloatProperty>(Field) && !CastField<FDoubleProperty>(Field))
-			{
-				++OutCellsChecked;
-				++Diffs;
-				continue;
-			}
-
 			void* TempPtr = Field->ContainerPtrToValuePtr<void>(Temp);
-			ProviderForKind(Col.Kind, ComponentProvider, IdentityProvider, NestedProvider, AbilityFieldProvider, AbilityCostProvider)
-				.ReadInto(T, Col, Field, TempPtr);
-			++OutCellsChecked;
-			if (!Field->Identical(TempPtr, Field->ContainerPtrToValuePtr<void>(Row))) { ++Diffs; }
+			switch (ProviderForKind(Col.Kind, ComponentProvider, IdentityProvider, NestedProvider, AbilityFieldProvider, AbilityCostProvider)
+				.ReadInto(T, Col, Field, TempPtr))
+			{
+			case ESeinBalanceReadResult::Read:
+				++OutCellsChecked;
+				if (!Field->Identical(
+					TempPtr,
+					Field->ContainerPtrToValuePtr<void>(Row)))
+				{
+					++Diffs;
+				}
+				break;
+			case ESeinBalanceReadResult::Error:
+				RowUDS->DestroyStruct(Temp);
+				FMemory::Free(Temp);
+				UE_LOG(LogSeinBalanceTable, Log,
+					TEXT("CheckSync: source '%s' cannot be read through column '%s'."),
+					*T->GetPathName(),
+					*Col.DisplayName);
+				return 1;
+			default:
+				break;
+			}
 		}
 		RowUDS->DestroyStruct(Temp);
 		FMemory::Free(Temp);

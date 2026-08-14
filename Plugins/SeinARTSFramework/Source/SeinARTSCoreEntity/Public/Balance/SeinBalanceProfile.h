@@ -13,9 +13,8 @@
  *           generated table is a bulk EDITING VIEW that gathers their authored
  *           ComponentData and pushes edits back.
  *
- *           Phase A (this file): targeting + target resolution only. Column
- *           synthesis (Gather) and write-back (Push) are wired as no-op
- *           buttons here and implemented in later phases.
+ *           The editor module owns target preview, destructive Gather,
+ *           write-back Push, and source-drift checking.
  */
 
 #pragma once
@@ -93,12 +92,9 @@ public:
 	/** Component structs whose fields become tunable columns. Empty = track
 	 *  every eligible component found on the matched entities.
 	 *
-	 *  NOTE (Phase A): the picker is restricted to FSeinComponent descendants
-	 *  via MetaStruct, which covers the native components. Designer-authored UDS
-	 *  components (which don't reliably report IsChildOf — UE clears UDS
-	 *  super-struct on every compile) and the SeinSubData exclusion are handled
-	 *  by the eligibility-filtered struct viewer that lands with column
-	 *  synthesis (Phase B) — see SeinComponentEligibility::IsEntityComponentStruct. */
+	 *  The explicit picker covers native FSeinComponent descendants. Empty
+	 *  track-all mode also discovers eligible designer-authored UDS components
+	 *  already present on matched entities. Per-class sub-data remains excluded. */
 	UPROPERTY(EditAnywhere, Category = "Tracking",
 		meta = (DisplayName = "Tracked Components",
 			MetaStruct = "/Script/SeinARTSCoreEntity.SeinComponent",

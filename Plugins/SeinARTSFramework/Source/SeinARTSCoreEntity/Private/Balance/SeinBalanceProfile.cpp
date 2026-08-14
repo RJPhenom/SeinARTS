@@ -102,7 +102,10 @@ void USeinBalanceProfile::ResolveTargetClasses(TArray<UClass*>& OutClasses) cons
 
 	OutClasses.Sort([](const UClass& A, const UClass& B)
 	{
-		return A.GetName() < B.GetName();
+		const int32 NameOrder = A.GetName().Compare(B.GetName());
+		return NameOrder == 0
+			? A.GetPathName() < B.GetPathName()
+			: NameOrder < 0;
 	});
 }
 #endif // WITH_EDITOR

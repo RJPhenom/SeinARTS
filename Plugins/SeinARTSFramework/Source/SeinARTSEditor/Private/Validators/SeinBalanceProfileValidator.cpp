@@ -6,6 +6,7 @@
 #include "Validators/SeinBalanceProfileValidator.h"
 #include "Balance/SeinBalanceProfile.h"
 #include "Misc/DataValidation.h"
+#include "Misc/PackageName.h"
 
 #define LOCTEXT_NAMESPACE "SeinBalanceProfileValidator"
 
@@ -58,11 +59,25 @@ EDataValidationResult USeinBalanceProfileValidator::ValidateLoadedAsset_Implemen
 	}
 
 	const FString OutDir = Profile->OutputDir.Path;
-	if (!OutDir.IsEmpty() && !OutDir.StartsWith(TEXT("/")))
+	if (!OutDir.IsEmpty())
 	{
-		AssetWarning(InAsset, FText::Format(
-			LOCTEXT("BadOutDir", "Output Directory '{0}' is not a content path (expected e.g. /Game/Balance) — it will be ignored."),
-			FText::FromString(OutDir)));
+		FText ValidationReason;
+		FString ResolvedFilename;
+		if (!FPackageName::IsValidLongPackageName(
+			OutDir,
+			false,
+			&ValidationReason)
+			|| !FPackageName::TryConvertLongPackageNameToFilename(
+				OutDir,
+				ResolvedFilename))
+		{
+			AssetWarning(InAsset, FText::Format(
+				LOCTEXT("BadOutDir", "Output Directory '{0}' is not a valid path under a mounted content root (expected e.g. /Game/Balance) — Gather cannot create assets there. {1}"),
+				FText::FromString(OutDir),
+				ValidationReason.IsEmpty()
+					? LOCTEXT("UnmountedOutDir", "The content root is not mounted.")
+					: ValidationReason));
+		}
 	}
 
 	// Config warnings never block — mark checked and pass.

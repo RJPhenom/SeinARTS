@@ -25,6 +25,10 @@ The post-audit performance/remediation work is now committed and fast-forwarded 
 - The Widget Blueprint source-asset class moved to the UncookedOnly authoring module, fixing uncooked standalone loading.
 - Streaming replay v9 journals and authenticated checkpoint-plus-command-tail resync from the prior remediation commits.
 - Strict PIE manifest freshness made opt-in; runtime, cook, replay, snapshot, and peer compatibility protections remain.
+- Balance Data now has a qualified entity/ability Gather, Push, and Check Sync round trip with
+  fail-closed row/source/schema binding, collision-resistant duplicate names, sparse-column
+  accounting, stale UDS repair, canonical output-path validation, and saved/reinstanced Blueprint
+  ability persistence.
 
 ## Baseline cleanup
 
@@ -58,8 +62,8 @@ formation/resolver state coverage, provider teardown, and downstream content own
 | `SeinARTS.Integration`, profile Framework | 20 passed, 0 failed |
 | `SeinARTS.Determinism`, profile All | 48 passed, 0 failed |
 | `SeinARTS.Determinism`, profile Framework | 33 passed, 0 failed |
-| `SeinARTS.Editor`, profile All | 39 passed, 0 failed |
-| `SeinARTS.Editor`, profile Framework | 36 passed, 0 failed |
+| `SeinARTS.Editor`, profile All | 45 passed, 0 failed |
+| `SeinARTS.Editor`, profile Framework | 43 passed, 0 failed |
 | `SeinARTS.Sim`, profile All | 50 passed, 0 failed |
 | `SeinARTS.Sim`, profile Framework | 47 passed, 0 failed |
 | `SeinARTS.Perf`, profile All | 6 passed, 0 failed; cover 128x128 averaged 11.998 ms; public 128-member preview measured 1.255/1.337 ms median/p95 coverless and 3.181/3.324 ms dense; collision full-tick medians 1.257/3.114/7.214 ms at 64/128/256 movers |
@@ -74,6 +78,7 @@ formation/resolver state coverage, provider teardown, and downstream content own
 | Focused Move To repath | 2026-08-14 interval/off-path behavior 13/13 and real-boundary fresh-world continuation 1/1 passed; covers same-tick commit, throttle cadence, forced attempts, unavailable navigation/subsystem gates, failure limits, partial callback order/state, implicit-origin drift, and canonical continuation |
 | Focused default avoidance | 2026-08-13 Unit 6/6 passed after private-kernel decomposition; covers crossing serial/parallel agreement, opt-out/idle release, idle dodge, gap resolution, and broker cohesion |
 | Focused containment integrity | 2026-08-13 Unit 4/4, Determinism 3/3, and Perf 1/1 passed; covers cycle/overflow admission, bootstrap/root/checkpoint refusal, failure-atomic malformed restore, rotated local deploy offsets, ability commands, pre/post checkpoint roots, per-tick replay roots, and 100/500/1,000-occupant invalidated/warm checkpoint curves |
+| Focused Balance Data | 2026-08-14 Editor 6/6 passed; covers entity and ability round trips, exact sparse accounting, stale same-name UDS replacement, exact source-class rebinding, colliding Blueprint paths, invalid output rejection, Blueprint reinstance, package save/unload/reload, and persisted value recovery |
 | Clean consumer: Framework | fresh 2026-08-12 Editor + Shipping build, exact map load, cook/package, real Shipping startup passed |
 | Clean consumer: Framework + Cover only | fresh 2026-08-12 Editor + Shipping build, exact map load, cook/package, real Shipping startup passed; Squad/bridge absent |
 | Clean consumer: Framework + Squad only | fresh 2026-08-12 Editor + Shipping build, exact map load, cook/package, real Shipping startup passed; Cover/bridge absent |
@@ -86,6 +91,12 @@ formation/resolver state coverage, provider teardown, and downstream content own
 
 Latest local evidence is under ignored `Saved/Automation/`:
 
+- `SeinARTS.Editor.BalanceData-20260814-011402-9dac922b` (Framework, 6 passed;
+  entity/ability Gather-Push-Check Sync, stale schema/source rejection, Blueprint reinstance and
+  persisted reload)
+- `SeinARTS.Editor.BalanceData-20260814-012021-b329bd83` (Framework, 6 passed after
+  Blueprint-lifetime hardening), `SeinARTS.Editor-20260814-012051-1a297fec` (Framework, 43 passed),
+  and `SeinARTS.Editor-20260814-012122-7965fb63` (All, 45 passed)
 - `SeinARTS.Sim.Movement.Repath-20260814-002006-b4d103b6` (Framework, 13 passed)
 - `SeinARTS.Editor.Snapshot.Movement.MoveToContinuationCrossesRealRepathBoundaryExactly-20260814-000233-9fa959a7`
   (Framework, 1 passed; fresh-world continuation crosses a real interval repath boundary)

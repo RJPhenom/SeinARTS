@@ -5,7 +5,7 @@
  *          category with the Preview / Gather / Push action buttons. Mirrors the
  *          movement-mode "Sync Tuning" button pattern (FSeinMovementModeDetails):
  *          the action logic that needs editor-only synthesis lives here in the
- *          editor module. Phase A: Preview is live; Gather/Push are no-op stubs.
+ *          editor module.
  */
 
 #pragma once
