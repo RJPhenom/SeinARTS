@@ -7,6 +7,7 @@
 #include "Actions/SeinMoveToAction.h"
 #include "Components/SeinAbilityComponent.h"
 #include "Components/SeinMovementComponent.h"
+#include "Components/SeinNavigationComponent.h"
 #include "Data/SeinWorldSnapshot.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphPin.h"
@@ -476,7 +477,8 @@ namespace UE::SeinARTSTests
 
 			bool Initialize(
 				const FCompiledBlueprint& Blueprint,
-				bool bInvokeMoveTo = true)
+				bool bInvokeMoveTo = true,
+				bool bEnableRepath = false)
 			{
 				USeinMoveToContinuationEditorTestMovement::
 					Reset();
@@ -504,6 +506,17 @@ namespace UE::SeinARTSTests
 										->GetPathName());
 						World->AddComponent(
 							Entity, Movement);
+						if (bEnableRepath)
+						{
+							FSeinNavigationComponent Navigation;
+							Navigation.RepathMode =
+								ESeinRepathMode::Interval;
+							Navigation.RepathInterval =
+								FFixedPoint::One
+								/ FFixedPoint::FromInt(4);
+							World->AddComponent(
+								Entity, Navigation);
+						}
 						World->AddComponent(
 							Entity,
 							FSeinAbilityComponent());
@@ -1492,6 +1505,68 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(AreEqual(
 			Source.Ability->CompletedCount,
 			Destination.Ability->CompletedCount));
+	}
+
+	TEST(MoveToContinuationCrossesRealRepathBoundaryExactly,
+		"SeinARTS.Editor.Snapshot.Movement")
+	{
+		using namespace MoveToContinuationEditor;
+		FCompiledBlueprint Blueprint;
+		FString Error;
+		ASSERT_THAT(IsTrue(
+			CompileBlueprint(Blueprint, Error), Error));
+
+		FFixture Source;
+		ASSERT_THAT(IsTrue(
+			Source.Initialize(Blueprint, true, true)));
+		Source.Tick();
+		Source.Tick();
+		ASSERT_THAT(AreEqual(
+			1,
+			USeinMoveToContinuationEditorTestMovement::PlanCount));
+		ASSERT_THAT(AreEqual(
+			0, Source.Ability->PathRecomputedCount));
+		const FFixedPoint SourceElapsed =
+			FMoveToActionContinuationTestAccess::GetRepathElapsed(
+				*Source.Action);
+		ASSERT_THAT(IsTrue(SourceElapsed > FFixedPoint::Zero));
+		ASSERT_THAT(IsTrue(
+			SourceElapsed
+				< FFixedPoint::One / FFixedPoint::FromInt(4)));
+
+		FSeinWorldSnapshot Snapshot;
+		Source.World->CaptureSnapshot(Snapshot);
+		FRestoredFixture Destination;
+		ASSERT_THAT(IsTrue(Destination.Restore(
+			Snapshot, Source.AbilityID)));
+		ASSERT_THAT(IsTrue(
+			FMoveToActionContinuationTestAccess::GetRepathElapsed(
+				*Destination.Action) == SourceElapsed));
+		ASSERT_THAT(IsTrue(CanonicalRootsMatch(
+			*Source.World, *Destination.World, Error), Error));
+
+		USeinMoveToContinuationEditorTestMovement::PlanCount = 0;
+		Source.Tick();
+		Destination.Tick();
+
+		ASSERT_THAT(AreEqual(
+			2,
+			USeinMoveToContinuationEditorTestMovement::PlanCount));
+		ASSERT_THAT(AreEqual(
+			1, Source.Ability->PathRecomputedCount));
+		ASSERT_THAT(AreEqual(
+			1, Destination.Ability->PathRecomputedCount));
+		ASSERT_THAT(AreEqual(
+			2, Source.Ability->PartialPathCount));
+		ASSERT_THAT(AreEqual(
+			2, Destination.Ability->PartialPathCount));
+		ASSERT_THAT(IsTrue(
+			FMoveToActionContinuationTestAccess::MappedFieldsEqual(
+				*Source.Action,
+				*Destination.Action,
+				Error), Error));
+		ASSERT_THAT(IsTrue(CanonicalRootsMatch(
+			*Source.World, *Destination.World, Error), Error));
 	}
 
 	TEST(MoveToContinuationSurvivesSequentialBlueprintNodes,

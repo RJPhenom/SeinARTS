@@ -318,6 +318,205 @@ void USeinMoveToAction::Initialize(const FFixedVector& InDestination)
 	bMovementFinalized = false;
 }
 
+USeinMoveToAction::ERepathTickResult USeinMoveToAction::TickRepath(
+	FFixedPoint DeltaTime,
+	USeinWorldSubsystem& World,
+	FSeinEntity& Entity,
+	FSeinMovementComponent& MovementData,
+	const FSeinNavigationComponent* NavigationData,
+	USeinNavigation* Navigation,
+	USeinNavigationSubsystem* NavigationSubsystem)
+{
+	// Escape mode owns its temporary path and freezes the repath clock. Flying
+	// movements continually seek the destination directly, so they clear it.
+	if (bEscapeMode)
+	{
+		return ERepathTickResult::Skipped;
+	}
+	if (Movement->BypassPathfinding())
+	{
+		TimeSinceLastRepath = FFixedPoint::Zero;
+		return ERepathTickResult::Skipped;
+	}
+
+	TimeSinceLastRepath = TimeSinceLastRepath + DeltaTime;
+	if (!NavigationData)
+	{
+		return ERepathTickResult::Skipped;
+	}
+
+	const ESeinRepathMode RepathMode = NavigationData->RepathMode;
+	const FFixedPoint RepathInterval =
+		NavigationData->RepathInterval > FFixedPoint::Zero
+			? NavigationData->RepathInterval
+			: FFixedPoint::One / FFixedPoint::FromInt(4);
+	const int32 RepathFailureLimit = NavigationData->RepathFailureLimit > 0
+		? NavigationData->RepathFailureLimit
+		: 3;
+	const FFixedPoint OffPathThreshold =
+		NavigationData->OffPathThreshold > FFixedPoint::Zero
+			? NavigationData->OffPathThreshold
+			: FFixedPoint::FromInt(75);
+
+	FFixedVector AttemptOrigin = FFixedVector::ZeroVector;
+	bool bAttemptRepath = false;
+	switch (RepathMode)
+	{
+	case ESeinRepathMode::Interval:
+		bAttemptRepath =
+			(TimeSinceLastRepath >= RepathInterval || bForceRepathNow)
+			&& Navigation
+			&& NavigationSubsystem;
+		break;
+
+	case ESeinRepathMode::OffPathOnly:
+	{
+		const FFixedPoint MinAttemptInterval =
+			FFixedPoint::One / FFixedPoint::FromInt(10);
+		if (TimeSinceLastRepath < MinAttemptInterval && !bForceRepathNow)
+		{
+			return ERepathTickResult::Skipped;
+		}
+		if (!Navigation)
+		{
+			return ERepathTickResult::Skipped;
+		}
+
+		AttemptOrigin = Entity.Transform.GetLocation();
+		if (IsPointWithinPolylineDistance(
+				AttemptOrigin,
+				PathOriginAgentPos,
+				Path.Waypoints,
+				OffPathThreshold)
+			&& !bForceRepathNow)
+		{
+			TimeSinceLastRepath = FFixedPoint::Zero;
+			return ERepathTickResult::Skipped;
+		}
+		bAttemptRepath = NavigationSubsystem != nullptr;
+		break;
+	}
+	}
+
+	if (!bAttemptRepath)
+	{
+		return ERepathTickResult::Skipped;
+	}
+
+	// A force request is one-shot once an actual planner attempt starts,
+	// including when that attempt is throttled.
+	bForceRepathNow = false;
+	FSeinPlanPathContext PlanContext{
+		Entity,
+		&MovementData,
+		NavigationData,
+		Destination,
+		Navigation,
+		NavigationSubsystem,
+		OwnerEntity,
+		&World
+	};
+	FSeinPath NewPath;
+	const ESeinPathResult RepathResult =
+		Movement->PlanPath(PlanContext, NewPath);
+	if (RepathResult == ESeinPathResult::Throttled)
+	{
+		// Throttling is not a path failure. Resetting the mode-specific clock
+		// prevents an active unit from retrying every tick and starving starts.
+		TimeSinceLastRepath = FFixedPoint::Zero;
+		return ERepathTickResult::Continued;
+	}
+
+	const FFixedVector AgentPosition =
+		RepathMode == ESeinRepathMode::OffPathOnly
+			? AttemptOrigin
+			: Entity.Transform.GetLocation();
+	if (RepathResult == ESeinPathResult::Found
+		&& NewPath.Waypoints.Num() > 0)
+	{
+		Path = NewPath;
+		Path.FlattenToWaypoints(GArcFlattenChordError);
+		CurrentWaypointIndex = 0;
+		PathOriginAgentPos = AgentPosition;
+		ConsecutiveRepathFailures = 0;
+
+		if (RepathMode == ESeinRepathMode::Interval)
+		{
+			UE_LOG(LogSeinMove, Verbose,
+				TEXT("Repath (Interval): %d new waypoints from (%.1f,%.1f)%s"),
+				NewPath.Waypoints.Num(),
+				AgentPosition.X.ToFloat(),
+				AgentPosition.Y.ToFloat(),
+				Path.bIsPartial ? TEXT(" [PARTIAL]") : TEXT(""));
+		}
+		else
+		{
+			UE_LOG(LogSeinMove, Verbose,
+				TEXT("Repath (OffPathOnly): threshold=%.1fcm exceeded, %d new waypoints from (%.1f,%.1f)%s"),
+				OffPathThreshold.ToFloat(),
+				NewPath.Waypoints.Num(),
+				AgentPosition.X.ToFloat(),
+				AgentPosition.Y.ToFloat(),
+				Path.bIsPartial ? TEXT(" [PARTIAL]") : TEXT(""));
+		}
+
+		NotifyPathRecomputed();
+		if (Path.bIsPartial)
+		{
+			NotifyPartialPath();
+		}
+	}
+	else
+	{
+		++ConsecutiveRepathFailures;
+		if (RepathMode == ESeinRepathMode::Interval)
+		{
+			UE_LOG(LogSeinMove, Verbose,
+				TEXT("Repath (Interval) failed: attempt %d/%d (entity %s)"),
+				ConsecutiveRepathFailures,
+				RepathFailureLimit,
+				*OwnerEntity.ToString());
+		}
+		else
+		{
+			UE_LOG(LogSeinMove, Verbose,
+				TEXT("Repath (OffPathOnly) failed after threshold exceeded: attempt %d/%d (entity %s)"),
+				ConsecutiveRepathFailures,
+				RepathFailureLimit,
+				*OwnerEntity.ToString());
+		}
+
+		if (ConsecutiveRepathFailures >= RepathFailureLimit)
+		{
+			if (RepathMode == ESeinRepathMode::Interval)
+			{
+				UE_LOG(LogSeinMove, Warning,
+					TEXT("Repath (Interval): %d consecutive failures — failing move (entity %s, dest=(%.1f,%.1f))"),
+					ConsecutiveRepathFailures,
+					*OwnerEntity.ToString(),
+					Destination.X.ToFloat(),
+					Destination.Y.ToFloat());
+			}
+			else
+			{
+				UE_LOG(LogSeinMove, Warning,
+					TEXT("Repath (OffPathOnly): %d consecutive failures — failing move (entity %s, dest=(%.1f,%.1f))"),
+					ConsecutiveRepathFailures,
+					*OwnerEntity.ToString(),
+					Destination.X.ToFloat(),
+					Destination.Y.ToFloat());
+			}
+			Fail(static_cast<uint8>(ESeinMoveFailureReason::PathNotFound));
+			return ERepathTickResult::Terminal;
+		}
+	}
+
+	// Success and sub-limit failure both consumed planner budget. Delegate
+	// callbacks above intentionally observe the pre-reset clock, as before.
+	TimeSinceLastRepath = FFixedPoint::Zero;
+	return ERepathTickResult::Continued;
+}
+
 bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& World)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(Sein_MoveTo_TickAction);
@@ -595,264 +794,14 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		return true;
 	}
 
-	// Repath check — runs BEFORE the movement tick so a fresh path takes
-	// effect this same frame. See ESeinRepathMode.
-	//
-	// Flying movements (BypassPathfinding=true) skip repath entirely —
-	// their straight-line path doesn't drift in any meaningful sense
-	// (avoidance steers the unit off-line, but the *line itself* is still
-	// the correct goal vector). Recomputing it every interval would just
-	// truncate to "from where I am now to End," which is what the unit
-	// would compute next tick anyway.
-	//
-	// Escape mode also skips repath entirely — while the hold-escape ladder
-	// (below the movement tick) walks its short internal leg, `Path` holds
-	// [AgentPos → EscapeTarget] and a successful interval repath would clobber
-	// it mid-escape (repaths keep SUCCEEDING in the pinned state — that is the
-	// pathology). Escape exit restores pathing via bPathResolved = false.
-	if (bEscapeMode)
+	// Repathing remains pre-movement so a committed route is consumed on this
+	// tick and a terminal failure prevents any movement on the stale path.
+	if (TickRepath(
+			DeltaTime, World, *Entity, *MoveComp, NavComp, Nav, NavSub)
+		== ERepathTickResult::Terminal)
 	{
-		// fall through to the movement tick below — the ladder owns Path.
+		return true;
 	}
-	else if (Movement->BypassPathfinding())
-	{
-		TimeSinceLastRepath = FFixedPoint::Zero;
-		// fall through to the movement tick below — no repath block to run.
-	}
-	else
-	{
-	TimeSinceLastRepath = TimeSinceLastRepath + DeltaTime;
-	// Repath cadence + mode live on the navigation component; absent NavComp
-	// disables repathing (mode treated as no-op, falls through to the
-	// movement tick). The legacy struct co-mingled these with kinematics; the
-	// split puts pathfinding concerns where they belong.
-	if (!NavComp)
-	{
-		// No nav component — skip the repath block entirely. The initial
-		// path remains in force; if the agent drifts, no recovery happens.
-		// Same fall-through path as the bypass-pathfinding branch.
-	}
-	else
-	{
-	// NavComp is non-null in this branch, so the repath knobs need no null-guard —
-	// only the zero-field default remains (a designer leaving a field at 0 gets the
-	// built-in default: ¼s interval / 3 failures / 75cm off-path threshold).
-	const ESeinRepathMode RepathMode = NavComp->RepathMode;
-	const FFixedPoint RepathInterval = NavComp->RepathInterval > FFixedPoint::Zero
-		? NavComp->RepathInterval : FFixedPoint::FromInt(1) / FFixedPoint::FromInt(4);
-	const int32 RepathFailureLimit = NavComp->RepathFailureLimit > 0
-		? NavComp->RepathFailureLimit : 3;
-	const FFixedPoint OffPathThreshold = NavComp->OffPathThreshold > FFixedPoint::Zero
-		? NavComp->OffPathThreshold : FFixedPoint::FromInt(75);
-	switch (RepathMode)
-	{
-	case ESeinRepathMode::Interval:
-	{
-		// bForceRepathNow: the hold-escape ladder's stage 1 — bypasses the
-		// interval timer for one attempt. Cleared after ANY attempt below
-		// (including Throttled — never sticky through a starved budget; the
-		// ladder's stage 2 backstops a swallowed stage 1).
-		if ((TimeSinceLastRepath >= RepathInterval || bForceRepathNow) && Nav && NavSub)
-		{
-			bForceRepathNow = false;
-			FSeinPlanPathContext PlanCtx{
-				*Entity,
-				MoveComp,
-				NavComp,
-				Destination,
-				Nav,
-				NavSub,
-				OwnerEntity,
-				&World
-			};
-			FSeinPath NewPath;
-			const ESeinPathResult RepathResult = Movement->PlanPath(PlanCtx, NewPath);
-			if (RepathResult == ESeinPathResult::Throttled)
-			{
-				// No budget this tick. Reset TimeSinceLastRepath so we wait
-				// another full Interval before trying again, instead of
-				// retrying every tick — a previous version of this code
-				// claimed retry-every-tick was a feature ("don't lose the
-				// repath opportunity"), but it caused catastrophic budget
-				// starvation: once an active unit's repath got throttled,
-				// every subsequent tick would re-attempt and consume budget
-				// that should have gone to first-time path requests from
-				// other units waiting to start moving. With this reset,
-				// throttled repath is a graceful skip — the unit walks the
-				// existing (slightly stale) path while new starts get
-				// priority access to the budget.
-				//
-				// Don't bump ConsecutiveRepathFailures here — throttling
-				// is not a path-finding failure.
-				TimeSinceLastRepath = FFixedPoint::Zero;
-				break;
-			}
-			if (RepathResult == ESeinPathResult::Found && NewPath.Waypoints.Num() > 0)
-			{
-				// Swap in the fresh path and reset the waypoint cursor —
-				// NewPath.Waypoints[0] is offset from current position so
-				// starting at 0 means "head to the next intended carrot."
-				// Movement's Velocity (on FSeinMovementComponent) is preserved
-				// so the unit doesn't lose momentum at the swap.
-				Path = NewPath;
-				// Expand typed segments into the drivable backbone (self-guarded no-op for the
-				// shipped all-Straight case). See the initial-commit flatten for rationale.
-				Path.FlattenToWaypoints(GArcFlattenChordError);
-				CurrentWaypointIndex = 0;
-				// Re-anchor the OffPathOnly drift origin to the agent's
-				// current position. This is the Path.Start fed to FindPath
-				// above, so the implicit [PathOrigin → Waypoints[0]] prefix
-				// in the drift calc matches the path's actual starting line.
-				PathOriginAgentPos = Entity->Transform.GetLocation();
-				ConsecutiveRepathFailures = 0;
-				UE_LOG(LogSeinMove, Verbose,
-					TEXT("Repath (Interval): %d new waypoints from (%.1f,%.1f)%s"),
-					NewPath.Waypoints.Num(),
-					Entity->Transform.GetLocation().X.ToFloat(),
-					Entity->Transform.GetLocation().Y.ToFloat(),
-					Path.bIsPartial ? TEXT(" [PARTIAL]") : TEXT(""));
-				NotifyPathRecomputed(); if (Path.bIsPartial) NotifyPartialPath();
-			}
-			else
-			{
-				// Repath failure. Bump the consecutive-failure counter and
-				// keep the stale path for now — single-tick blockages
-				// (a unit briefly crossing the corridor) are routine and
-				// shouldn't fail the move. Once we cross RepathFailureLimit
-				// in a row, the world has demonstrably changed and the
-				// stale path is no longer trustworthy: fail with
-				// PathNotFound rather than march toward a dead end.
-				++ConsecutiveRepathFailures;
-				UE_LOG(LogSeinMove, Verbose,
-					TEXT("Repath (Interval) failed: attempt %d/%d (entity %s)"),
-					ConsecutiveRepathFailures, RepathFailureLimit, *OwnerEntity.ToString());
-				if (ConsecutiveRepathFailures >= RepathFailureLimit)
-				{
-					UE_LOG(LogSeinMove, Warning,
-						TEXT("Repath (Interval): %d consecutive failures — failing move (entity %s, dest=(%.1f,%.1f))"),
-						ConsecutiveRepathFailures,
-						*OwnerEntity.ToString(),
-						Destination.X.ToFloat(), Destination.Y.ToFloat());
-					Fail(static_cast<uint8>(ESeinMoveFailureReason::PathNotFound));
-					return true;
-				}
-			}
-			TimeSinceLastRepath = FFixedPoint::Zero;
-		}
-		break;
-	}
-
-	case ESeinRepathMode::OffPathOnly:
-	{
-		// Off-path detection: minimum perpendicular XY distance from the
-		// agent to the planned polyline. When that drift exceeds the
-		// per-unit threshold (avoidance pushed us off course, a building
-		// dropped onto our line, etc.), recompute. Cheap O(N) scan over
-		// path segments — typical RTS paths have ≤ 50 waypoints, so the
-		// per-tick cost is trivial. The expensive `Nav->FindPath` only
-		// fires when threshold is actually exceeded.
-		//
-		// `TimeSinceLastRepath` doubles as a min-time-between-attempts gate
-		// here. Without it, drift > threshold + budget-throttled = retry
-		// every tick = budget starvation for first-time path requests
-		// from other units. Floor of 100ms (~3 ticks at 30Hz) before the
-		// next drift check actually fires the request.
-		const FFixedPoint MinAttemptInterval = FFixedPoint::FromInt(1) / FFixedPoint::FromInt(10); // 100ms
-		// bForceRepathNow (hold-escape stage 1) bypasses BOTH the min-attempt
-		// gate AND the drift gate: a nav-floor-pinned unit sits ON its polyline
-		// (drift ~0), which is exactly why OffPathOnly never rescues it.
-		if (TimeSinceLastRepath < MinAttemptInterval && !bForceRepathNow) break;
-		if (!Nav) break;
-
-		const FFixedVector AgentPos = Entity->Transform.GetLocation();
-		// OffPathThreshold already resolved to its 75cm zero-field default upstream.
-		if (IsPointWithinPolylineDistance(
-				AgentPos, PathOriginAgentPos, Path.Waypoints, OffPathThreshold)
-			&& !bForceRepathNow)
-		{
-			TimeSinceLastRepath = FFixedPoint::Zero;
-			break;
-		}
-		if (!NavSub) break;
-
-		bForceRepathNow = false;
-		FSeinPlanPathContext PlanCtx{
-			*Entity,
-			MoveComp,
-			NavComp,
-			Destination,
-			Nav,
-			NavSub,
-			OwnerEntity,
-			&World
-		};
-		FSeinPath NewPath;
-		const ESeinPathResult RepathResult = Movement->PlanPath(PlanCtx, NewPath);
-		if (RepathResult == ESeinPathResult::Throttled)
-		{
-			// No budget this tick. Reset TimeSinceLastRepath so we wait
-			// MinAttemptInterval before trying again — without this reset,
-			// a drifted-and-throttled unit would retry every tick and
-			// saturate the path budget. Same starvation fix as the
-			// Interval branch above. Don't bump ConsecutiveRepathFailures:
-			// throttling isn't a path-finding failure.
-			TimeSinceLastRepath = FFixedPoint::Zero;
-			break;
-		}
-		if (RepathResult == ESeinPathResult::Found && NewPath.Waypoints.Num() > 0)
-		{
-			Path = NewPath;
-			// Expand typed segments into the drivable backbone (self-guarded no-op for the shipped
-			// all-Straight case). See the initial-commit flatten for rationale.
-			Path.FlattenToWaypoints(GArcFlattenChordError);
-			CurrentWaypointIndex = 0;
-			// Re-anchor the OffPathOnly drift origin to AgentPos (same as
-			// Req.Start fed to RequestPath above) so the implicit
-			// [PathOrigin → Waypoints[0]] prefix in the drift calc matches
-			// the new path's actual starting line.
-			PathOriginAgentPos = AgentPos;
-			ConsecutiveRepathFailures = 0;
-			UE_LOG(LogSeinMove, Verbose,
-				TEXT("Repath (OffPathOnly): threshold=%.1fcm exceeded, %d new waypoints from (%.1f,%.1f)%s"),
-				OffPathThreshold.ToFloat(),
-				NewPath.Waypoints.Num(),
-				AgentPos.X.ToFloat(),
-				AgentPos.Y.ToFloat(),
-				Path.bIsPartial ? TEXT(" [PARTIAL]") : TEXT(""));
-			NotifyPathRecomputed(); if (Path.bIsPartial) NotifyPartialPath();
-		}
-		else
-		{
-			// Same fail-after-N policy as Interval mode. OffPathOnly only
-			// fires when drift > threshold, so each failure here means
-			// "drifted off course AND can't find a fresh path" — exactly
-			// the silent-stale-path failure mode. RepathFailureLimit is
-			// shared so designers tune one knob.
-			++ConsecutiveRepathFailures;
-			const int32 Limit = RepathFailureLimit;
-			UE_LOG(LogSeinMove, Verbose,
-				TEXT("Repath (OffPathOnly) failed after threshold exceeded: attempt %d/%d (entity %s)"),
-				ConsecutiveRepathFailures, Limit, *OwnerEntity.ToString());
-			if (ConsecutiveRepathFailures >= Limit)
-			{
-				UE_LOG(LogSeinMove, Warning,
-					TEXT("Repath (OffPathOnly): %d consecutive failures — failing move (entity %s, dest=(%.1f,%.1f))"),
-					ConsecutiveRepathFailures,
-					*OwnerEntity.ToString(),
-					Destination.X.ToFloat(), Destination.Y.ToFloat());
-				Fail(static_cast<uint8>(ESeinMoveFailureReason::PathNotFound));
-				return true;
-			}
-		}
-		// Reset min-attempt-interval gate after a non-throttled attempt
-		// (success or failure both consumed budget). Next drift check
-		// won't fire until MinAttemptInterval has elapsed.
-		TimeSinceLastRepath = FFixedPoint::Zero;
-		break;
-	}
-	}
-	} // end else (NavComp present — repath knobs scoped here)
-	} // end else (non-bypass repath block)
 
 	// Delegate the per-tick advance. Movement mutates Entity.Transform and
 	// CurrentWaypointIndex; returns true when the final waypoint is reached.

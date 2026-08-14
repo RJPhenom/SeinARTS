@@ -16,9 +16,10 @@ It owns the cross-cutting rules that apply to **all five production plugins** an
 
 > **Active initiative — movement & navigation depth.** The movement/avoidance/nav seams are clean and
 > pluggable (`USeinAvoidance` / `USeinCollisionResolver` / `USeinNavigation` abstract-base + settings
-> picker; the `FSeinPath` typed-segment seam). Command-broker idle re-seek, the A* non-shipping path
-> reporters, and the default avoidance kernel are now isolated behind private implementation
-> boundaries with focused coverage. The remaining active work is qualification of Movement+'s
+> picker; the `FSeinPath` typed-segment seam). Command-broker idle re-seek, Move To's pre-movement
+> repath stage, the A* non-shipping path reporters, and the default avoidance kernel are now
+> isolated behind private implementation boundaries with focused coverage. The remaining active
+> work is qualification of Movement+'s
 > shipped steering-first, curated
 > Reeds-Shepp-style start-maneuver planner. It is not a general Reeds-Shepp/Dubins route solver. The
 > nav↔movement seam is still evolving — re-ground against live code before asserting.
