@@ -1,12 +1,14 @@
 /**
- * SeinARTS Framework 
- * Copyright (c) 2026 Phenom Studios, Inc.
+ * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  *
- * @file:		SeinAbilityBPFL.h
- * @date:		3/27/2026
- * @author:		RJ Macklem
- * @brief:		Blueprint Function Library for the ability system.
- * @disclaimer: This code was generated in part by an AI language model.
+ * @file         SeinAbilityBPFL.h
+ * @author       RJ Macklem
+ * @created      27 Mar 2026
+ * @latest       14 Aug 2026
+ * @brief        Exposes ability commands, availability, cooldown, and grant APIs to Blueprint.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
  */
 
 #pragma once
@@ -24,7 +26,7 @@
 
 class USeinWorldSubsystem;
 
-UCLASS(meta = (DisplayName = "SeinARTS Ability Library"))
+UCLASS(meta = (DisplayName = "SeinARTS Ability Library", SeinDeterministic))
 class SEINARTSCOREENTITY_API USeinAbilityBPFL : public UBlueprintFunctionLibrary
 {
 	GENERATED_BODY()
@@ -47,10 +49,11 @@ public:
 	// Command
 	// ====================================================================================================
 
-	/** Activate an ability DIRECTLY, bypassing the command queue. Skips ALL
-	 *  activation gates — no range check, no AutoMoveThen, no cost validation,
-	 *  no BlockedTags / RequiredEntityTags / RequiredPlayerTags, no rejection
-	 *  logging. It still obeys exact lifecycle ownership: activity indexes are
+	/** Activates an ability immediately without entering the command queue. This
+	 *  bypasses command authority, tag/target/path/Can Activate checks,
+	 *  Auto Move Then, cost deduction, cancellation arbitration, footprint
+	 *  placement, and command-rejection reporting. It still obeys cooldown,
+	 *  active-slot, owned-tag acquisition, and exact lifecycle ownership: indexes are
 	 *  coherent during callbacks, and a live primary must be ended through the
 	 *  normal cancellation-tag/broker policy before another primary can start.
 	 *  Returns silently on failure (ability missing, on cooldown, already
@@ -64,12 +67,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Ability", meta = (WorldContext = "WorldContextObject", DisplayName = "Activate Ability (Direct)"))
 	static void SeinActivateAbility(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, FGameplayTag AbilityTag, FSeinEntityHandle TargetEntity, FFixedVector TargetLocation);
 
-	/** Issue an ability-activation command through the lockstep queue. The
-	 *  command goes through `ProcessCommands` next sim tick, running the FULL
-	 *  activation gate: range check (with AutoMoveThen handling), cost gate,
-	 *  BlockedTags / RequiredEntityTags / RequiredPlayerTags, CanActivate hook,
-	 *  CancelAbilitiesWithTag arbitration. Rejections log to the Output Log
-	 *  with the gate that failed and a reason tag.
+	/** Issues an ability command through the lockstep queue for the next
+	 *  simulation tick. Command authority, cooldown, required/blocked tags,
+	 *  target/range/visibility/pathability, Can Activate, owned-tag capacity,
+	 *  cost, and cancellation arbitration run before activation. A targeter-
+	 *  originated broker order also runs its footprint placement gate before
+	 *  member dispatch. Rejections carry the failed gate's reason tag.
 	 *
 	 *  This is the right node for one ability chaining into another (e.g. a
 	 *  PlaceBarracks ability automatically issuing a Build order on the placer
@@ -116,7 +119,7 @@ public:
 		FFixedVector TargetLocation,
 		bool bQueueCommand = false);
 
-	/** Cancel the currently active ability on an entity */
+	/** Cancels the currently active primary ability on an entity. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Ability", meta = (WorldContext = "WorldContextObject", DisplayName = "Cancel Ability"))
 	static void SeinCancelAbility(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle);
 
@@ -276,11 +279,13 @@ public:
 	// Availability
 	// ====================================================================================================
 
-	/** Aggregate availability snapshot for one ability on one entity. Matches the
+	/** Returns an advisory availability snapshot for one ability on one entity. Matches the
 	 *  shape of USeinProductionBPFL::SeinGetProductionAvailability for uniform UI
-	 *  handling. Walks the same gates as ProcessCommands::ActivateAbility (cooldown
-	 *  → blocked-tags → range / valid-target / LOS → CanActivate → affordability)
-	 *  and reports the first failing gate in the Reason field.
+	 *  handling. It checks cooldown, required/blocked tags, optional target/range/
+	 *  visibility, Can Activate, and affordability, then reports the first failure.
+	 *  The queued command remains authoritative and may additionally reject for
+	 *  authority, pathability, footprint placement, owned-tag capacity, or changed
+	 *  state before its simulation tick executes.
 	 *
 	 *  Target context:
 	 *    - Pass invalid `OptionalTargetEntity` AND zero `OptionalTargetLocation` to

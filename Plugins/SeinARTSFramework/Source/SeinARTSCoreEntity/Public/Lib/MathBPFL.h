@@ -1,13 +1,17 @@
 /**
- * SeinARTS Framework 
- * Copyright (c) 2026 Phenom Studios, Inc.
- * 
- * @file:		MathBPFL.h
- * @date:		1/16/2026
- * @author:		RJ Macklem
- * @brief:		Blueprint Function Library for deterministic fixed-point math operations.
- * 				Provides Blueprint-accessible wrappers for all SeinMath functions.
- * @disclaimer: This code was generated in part by an AI language model.
+ * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
+ *
+ * @file         MathBPFL.h
+ * @author       RJ Macklem
+ * @created      16 Jan 2026
+ * @latest       14 Aug 2026
+ * @brief        Exposes deterministic fixed-point math operations to Blueprint.
+ *
+ *               Float and Unreal transform conversions are presentation-only
+ *               boundaries and cannot be called from deterministic sim graphs.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
  */
 
 #pragma once
@@ -28,8 +32,9 @@
 /**
  * Blueprint Function Library for deterministic fixed-point math operations
  */
-// `SeinDeterministic` (class meta) marks every function here as safe for a movement-mode
-// graph — the movement determinism validator whitelists calls to SeinDeterministic classes.
+// `SeinDeterministic` marks fixed-point operations as safe for simulation
+// graphs. Float/vector conversion nodes carry `SeinPresentationOnly`, which
+// overrides class trust and blocks them from deterministic graphs.
 UCLASS(meta = (DisplayName = "SeinARTS Fixed-point Math Library", SeinDeterministic))
 class SEINARTSCOREENTITY_API UMathBPFL : public UBlueprintFunctionLibrary
 {
@@ -226,7 +231,7 @@ public:
 	}
 	
 	/** Makes a FixedPoint rational number from a given float. Note: conversion may lose precision. */
-	UFUNCTION(BlueprintPure, Category = "SeinARTS|Math|FixedPoint", meta = (DisplayName = "Make FixedPoint from Float", CompactNodeTitle = "->"))
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|Math|FixedPoint", meta = (DisplayName = "Make FixedPoint from Float", CompactNodeTitle = "->", SeinPresentationOnly))
 	static FFixedPoint MakeFixedPointFromFloat(float FloatValue) { return FFixedPoint::FromFloat(FloatValue); }
 	
 	/** Converts a FixedPoint to an integer (truncates fractional part). */
@@ -234,7 +239,7 @@ public:
 	static int32 FixedPointToInt(FFixedPoint Value) { return Value.ToInt(); }
 	
 	/** Converts a FixedPoint to a float for visualization purposes. */
-	UFUNCTION(BlueprintPure, Category = "SeinARTS|Math|FixedPoint", meta = (DisplayName = "To Float", CompactNodeTitle = "->"))
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|Math|FixedPoint", meta = (DisplayName = "To Float", CompactNodeTitle = "->", SeinPresentationOnly))
 	static float FixedPointToFloat(FFixedPoint Value) { return Value.ToFloat(); }
 	
 	/** Adds two FixedPoint values together. */
@@ -400,11 +405,11 @@ public:
 	static FFixedVector2D MakeFixedVector2D(FFixedPoint X, FFixedPoint Y) { return FFixedVector2D(X, Y); }
 	
 	/** Converts a float Vector2D to a FixedVector2D. */
-	UFUNCTION(BlueprintPure, Category = "SeinARTS|Math|FixedVector2D", meta = (DisplayName = "From Vector2D", CompactNodeTitle = "->"))
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|Math|FixedVector2D", meta = (DisplayName = "From Vector2D", CompactNodeTitle = "->", SeinPresentationOnly))
 	static FFixedVector2D MakeFixedVector2DFromVector2D(FVector2D V) { return FFixedVector2D::FromFloat(V.X, V.Y); }
 	
 	/** Converts a FixedVector2D to a float Vector2D for visualization. */
-	UFUNCTION(BlueprintPure, Category = "SeinARTS|Math|FixedVector2D", meta = (DisplayName = "To Vector2D", CompactNodeTitle = "->"))
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|Math|FixedVector2D", meta = (DisplayName = "To Vector2D", CompactNodeTitle = "->", SeinPresentationOnly))
 	static FVector2D FixedVector2DToVector2D(const FFixedVector2D& V) { return V.ToFloat(); }
 	
 	/** Adds two FixedVector2D vectors together. */
@@ -503,11 +508,11 @@ public:
 	static FFixedVector MakeFixedVector(FFixedPoint X, FFixedPoint Y, FFixedPoint Z) { return FFixedVector(X, Y, Z); }
 	
 	/** Converts a float Vector to a FixedVector. */
-	UFUNCTION(BlueprintPure, Category = "SeinARTS|Math|FixedVector", meta = (DisplayName = "From Vector", CompactNodeTitle = "->"))
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|Math|FixedVector", meta = (DisplayName = "From Vector", CompactNodeTitle = "->", SeinPresentationOnly))
 	static FFixedVector MakeFixedVectorFromVector(FVector V) { return FFixedVector::FromVector(V); }
 	
 	/** Converts a FixedVector to a float Vector for visualization. */
-	UFUNCTION(BlueprintPure, Category = "SeinARTS|Math|FixedVector", meta = (DisplayName = "To Vector", CompactNodeTitle = "->"))
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|Math|FixedVector", meta = (DisplayName = "To Vector", CompactNodeTitle = "->", SeinPresentationOnly))
 	static FVector FixedVectorToVector(const FFixedVector& V) { return V.ToVector(); }
 	
 	/** Adds two FixedVector vectors together. */
@@ -614,11 +619,11 @@ public:
 	static FFixedRotator MakeFixedRotator(FFixedPoint Pitch, FFixedPoint Yaw, FFixedPoint Roll) { return FFixedRotator(Pitch, Yaw, Roll); }
 	
 	/** Converts a float Rotator to a FixedRotator. */
-	UFUNCTION(BlueprintPure, Category = "SeinARTS|Math|FixedRotator", meta = (DisplayName = "From Rotator", CompactNodeTitle = "->"))
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|Math|FixedRotator", meta = (DisplayName = "From Rotator", CompactNodeTitle = "->", SeinPresentationOnly))
 	static FFixedRotator MakeFixedRotatorFromRotator(FRotator R) { return FFixedRotator::FromRotator(R); }
 	
 	/** Converts a FixedRotator to a float Rotator for visualization. */
-	UFUNCTION(BlueprintPure, Category = "SeinARTS|Math|FixedRotator", meta = (DisplayName = "To Rotator", CompactNodeTitle = "->"))
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|Math|FixedRotator", meta = (DisplayName = "To Rotator", CompactNodeTitle = "->", SeinPresentationOnly))
 	static FRotator FixedRotatorToRotator(const FFixedRotator& R) { return R.ToRotator(); }
 	
 	/** Adds two FixedRotator rotations together. */
@@ -673,11 +678,11 @@ public:
 	static FFixedQuaternion MakeFixedQuaternion(FFixedPoint X, FFixedPoint Y, FFixedPoint Z, FFixedPoint W) { return FFixedQuaternion(X, Y, Z, W); }
 	
 	/** Converts a float Quat to a FixedQuaternion. */
-	UFUNCTION(BlueprintPure, Category = "SeinARTS|Math|FixedQuaternion", meta = (DisplayName = "From Quat", CompactNodeTitle = "->"))
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|Math|FixedQuaternion", meta = (DisplayName = "From Quat", CompactNodeTitle = "->", SeinPresentationOnly))
 	static FFixedQuaternion MakeFixedQuaternionFromQuat(FQuat Q) { return FFixedQuaternion::FromQuat(Q); }
 	
 	/** Converts a FixedQuaternion to a float Quat for visualization. */
-	UFUNCTION(BlueprintPure, Category = "SeinARTS|Math|FixedQuaternion", meta = (DisplayName = "To Quat", CompactNodeTitle = "->"))
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|Math|FixedQuaternion", meta = (DisplayName = "To Quat", CompactNodeTitle = "->", SeinPresentationOnly))
 	static FQuat FixedQuaternionToQuat(const FFixedQuaternion& Q) { return Q.ToQuat(); }
 	
 	/** Returns an identity quaternion (no rotation). */
@@ -752,11 +757,11 @@ public:
 	static FFixedTransform MakeFixedTransformFromTR(FFixedVector Location, FFixedQuaternion Rotation) { return FFixedTransform(Location, Rotation); }
 	
 	/** Converts a float Transform to a FixedTransform. */
-	UFUNCTION(BlueprintPure, Category = "SeinARTS|Math|FixedTransform", meta = (DisplayName = "From Transform", CompactNodeTitle = "->"))
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|Math|FixedTransform", meta = (DisplayName = "From Transform", CompactNodeTitle = "->", SeinPresentationOnly))
 	static FFixedTransform MakeFixedTransformFromTransform(FTransform T) { return FFixedTransform::FromTransform(T); }
 	
 	/** Converts a FixedTransform to a float Transform for visualization. */
-	UFUNCTION(BlueprintPure, Category = "SeinARTS|Math|FixedTransform", meta = (DisplayName = "To Transform", CompactNodeTitle = "->"))
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|Math|FixedTransform", meta = (DisplayName = "To Transform", CompactNodeTitle = "->", SeinPresentationOnly))
 	static FTransform FixedTransformToTransform(const FFixedTransform& T) { return T.ToTransform(); }
 	
 	/** Returns an identity fixed-point transform (no location, no rotation, scale of 1). */

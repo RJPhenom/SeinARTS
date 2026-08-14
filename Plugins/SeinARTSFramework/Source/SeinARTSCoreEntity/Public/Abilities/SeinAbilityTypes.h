@@ -1,3 +1,16 @@
+/**
+ * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
+ *
+ * @file         SeinAbilityTypes.h
+ * @author       RJ Macklem
+ * @created      02 Jun 2026
+ * @latest       14 Aug 2026
+ * @brief        Defines Blueprint-facing ability targeting, cooldown, and availability types.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
+ */
+
 #pragma once
 
 #include "CoreMinimal.h"
@@ -9,19 +22,24 @@
  * Determines what kind of target an ability requires.
  */
 UENUM(BlueprintType)
-enum class ESeinAbilityTargetType : uint8
+	enum class ESeinAbilityTargetType : uint8
 {
-	None,		// No target needed
-	Self,		// Auto-targets self
-	Entity,		// Targets another entity
-	Point,		// Targets a world location
-	Area,		// Location + radius
-	Passive		// Always active
+	/** Activates without capturing a target. */
+	None,
+	/** Uses the ability owner as its target. */
+	Self,
+	/** Captures another simulation entity. */
+	Entity,
+	/** Captures one fixed-point world location. */
+	Point,
+	/** Captures a fixed-point world location and uses the ability's Area Radius. */
+	Area,
+	/** Describes a passive target shape. bIsPassive controls auto-activation. */
+	Passive
 };
 
 /**
  * When the ability's cooldown begins ticking.
- * DESIGN §7 Q4c.
  */
 UENUM(BlueprintType)
 enum class ESeinCooldownStartTiming : uint8
@@ -55,17 +73,16 @@ enum class ESeinCooldownScope : uint8
 };
 
 /**
- * What happens when an ability is activated with a target that's outside its MaxRange.
- * DESIGN §7 Q7.
+ * What happens when an ability command targets something outside its Max Range.
  */
 UENUM(BlueprintType)
 enum class ESeinOutOfRangeBehavior : uint8
 {
 	/** Ability fails if out of range (grenade, snipe). */
 	Reject,
-	/** Framework auto-queues a move-to-range prefix; ability re-attempts on arrival
-	 *  (attack, harvest). Integrates with §5 CommandBrokers in Phase 4 — pre-Phase 4
-	 *  this behaves identically to Reject. */
+	/** Queues the entity's ability marked Is Move Ability before retrying this
+	 *  command. The click-time preflight checks affordability without deducting;
+	 *  the follow-up reruns the ordinary gate and pays once if it can activate. */
 	AutoMoveThen
 };
 
@@ -80,8 +97,7 @@ enum class ESeinOutOfRangeBehavior : uint8
  * A single mapping from a command context (set of gameplay tags describing the
  * click/input context) to the ability that should be activated.
  *
- * Lives on FSeinAbilityComponent::DefaultCommands (per DESIGN §7 Q9 — moved off the
- * entity bridge's `FSeinAbilityComponent::DefaultCommands` array). When the player right-clicks,
+	 * Lives on FSeinAbilityComponent::DefaultCommands. When the player right-clicks,
  * the controller builds a context tag set and finds the highest-priority mapping
  * whose RequiredContext is a subset of the actual context.
  *
@@ -115,20 +131,32 @@ struct SEINARTSCOREENTITY_API FSeinCommandMapping
  * blocker to the player.
  */
 UENUM(BlueprintType)
-enum class ESeinAbilityUnavailableReason : uint8
+	enum class ESeinAbilityUnavailableReason : uint8
 {
-	None,					// Ability is fully available
-	UnknownAbility,			// Entity has no ability matching this tag
+	/** The queried gates passed. */
+	None,
+	/** The entity has no ability matching the requested tag. */
+	UnknownAbility,
+	/** The ability's cooldown is still running. */
 	OnCooldown,
-	BlockedByTag,			// Entity carries one of BlockedTags (or missing RequiredEntityTags / RequiredPlayerTags)
+	/** The entity has a blocked tag or lacks required entity/player tags. */
+	BlockedByTag,
+	/** The supplied target is outside Max Range and cannot auto-move. */
 	OutOfRange,
-	InvalidTarget,			// Target fails ValidTargetTags query
+	/** The supplied entity fails the Valid Target Tags query. */
+	InvalidTarget,
+	/** The authoritative visibility resolver cannot see the supplied target. */
 	NoLineOfSight,
-	CanActivateFailed,		// USeinAbility::CanActivate returned false
-	Unaffordable,			// FSeinResourceCost not covered by player balances
-	PathUnreachable,		// Nav abstract graph has no path from source to goal
-	GoalUnwalkable,			// Target cell is blocked / off-map for the agent
-	FootprintBlocked		// Building footprint overlaps blocked cells (placement gate)
+	/** The ability's Can Activate override returned false. */
+	CanActivateFailed,
+	/** The resolved resource payer cannot cover the activation cost. */
+	Unaffordable,
+	/** The navigation resolver found no route from source to goal. */
+	PathUnreachable,
+	/** The target cell is blocked or outside the navigable map for this agent. */
+	GoalUnwalkable,
+	/** The authoritative placement footprint overlaps blocked cells. */
+	FootprintBlocked
 };
 
 /**

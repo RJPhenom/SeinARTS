@@ -63,27 +63,25 @@ public:
 	 * Compose a captured TargeterPoint into a ready-to-use FFixedTransform:
 	 * Location → Translation, YawDegrees → Yaw rotation, Scale 1.
 	 *
-	 * Returns the deterministic fixed-point type by design — the framework
-	 * never converts up to float-based FTransform unless absolutely necessary,
-	 * because the float→fixed direction is lossy and propagates determinism
-	 * holes. Fall through to FTransform only at the UE-API boundary (Spawn
-	 * Actor From Class, etc.) using FFixedTransform's ToTransform conversion.
+	 * Returns the deterministic fixed-point type used by sim-side spawn and
+	 * construction APIs. Float conversion belongs only in presentation code.
 	 *
-	 * Designer's typical OnActivate spawn graph:
-	 *   Get Targeter Point Transform → ToTransform → Spawn Actor From Class
+	 * Designer's typical OnActivate graph passes this transform directly to a
+	 * deterministic SeinARTS spawn/construction node.
 	 */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Targeter",
-		meta = (DisplayName = "Get Targeter Point Transform"))
+		meta = (DisplayName = "Get Targeter Point Transform",
+			SeinDeterministic))
 	static FFixedTransform GetTargeterPointTransform(const FSeinTargeterPoint& Point);
 
 	/**
 	 * Just the yaw rotation as an FFixedRotator (Pitch=0, Roll=0). For sim-side
-	 * composition with other rotations, or designer convenience when they only
-	 * need rotation (orient a one-shot effect, etc.). Convert to FRotator with
-	 * ToRotator at the UE-API boundary if needed.
+	 * composition with other deterministic rotations or when only orientation
+	 * is required.
 	 */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Targeter",
-		meta = (DisplayName = "Get Targeter Point Rotation"))
+		meta = (DisplayName = "Get Targeter Point Rotation",
+			SeinDeterministic))
 	static FFixedRotator GetTargeterPointRotation(const FSeinTargeterPoint& Point);
 
 	/**
@@ -92,6 +90,7 @@ public:
 	 * "break struct" to get at it for cases where they only need the location.
 	 */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Targeter",
-		meta = (DisplayName = "Get Targeter Point Location"))
+		meta = (DisplayName = "Get Targeter Point Location",
+			SeinDeterministic))
 	static FFixedVector GetTargeterPointLocation(const FSeinTargeterPoint& Point);
 };

@@ -3,6 +3,7 @@
 #include "Abilities/SeinAbility.h"
 #include "Abilities/SeinLatentAction.h"
 #include "Brokers/SeinCommandBrokerResolver.h"
+#include "Types/Random.h"
 #include "SeinSnapshotValidationTestTypes.generated.h"
 
 class USeinWorldSubsystem;
@@ -12,6 +13,10 @@ UCLASS()
 class USeinSnapshotTestAbility : public USeinAbility
 {
 	GENERATED_BODY()
+
+public:
+	UPROPERTY()
+	FFixedRandom RandomState;
 };
 
 /** Passive used to validate the component index's passive role across restore. */

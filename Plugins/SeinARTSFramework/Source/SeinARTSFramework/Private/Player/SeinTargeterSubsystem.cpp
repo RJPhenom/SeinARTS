@@ -1,9 +1,8 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinTargeterSubsystem.cpp
- * @brief   Targeter state machine implementation. Phase 1 supports
- *          USeinPointTargeterSpec — single-click point capture, optional
- *          multi-target loop (TargetCount > 1).
+ * @brief   Targeter state machine for point and point-plus-facing capture,
+ *          including optional multi-target loops (TargetCount > 1).
  */
 
 #include "Player/SeinTargeterSubsystem.h"
@@ -279,7 +278,7 @@ void USeinTargeterSubsystem::CapturePoint()
 
 	FSeinTargeterPoint Point;
 	Point.Location = ToFixed(LastCursorWorld);
-	// Phase 1 PointTargeterSpec leaves AuxLocation + RotationStep at defaults.
+	// PointTargeterSpec leaves AuxLocation + RotationStep at defaults.
 	CapturedPoints.Add(Point);
 
 	UE_LOG(LogSeinTargeter, Verbose,
@@ -376,8 +375,8 @@ void USeinTargeterSubsystem::ComputeDragRotation(float& OutSnappedYawDegrees, ui
 
 bool USeinTargeterSubsystem::IsDragSpec() const
 {
-	// Phase 3: only USeinPointFacingTargeterSpec is a drag spec. Phase 4's
-	// USeinLineTargeterSpec will be added here when it lands.
+	// Point-plus-facing is the only shipped drag spec. Future drag shapes must
+	// opt in here when their capture contract is implemented.
 	return Spec && Spec->IsA<USeinPointFacingTargeterSpec>();
 }
 

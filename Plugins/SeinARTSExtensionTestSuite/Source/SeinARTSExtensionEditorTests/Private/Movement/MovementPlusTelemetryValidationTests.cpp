@@ -13,7 +13,7 @@
 #include "Misc/DataValidation.h"
 #include "Movement/SeinWheeledVehicleMovement.h"
 #include "UObject/Package.h"
-#include "Validators/SeinAbilityContinuationValidator.h"
+#include "Validators/SeinAbilityDeterminismValidator.h"
 #include "Validators/SeinMovementDeterminismValidator.h"
 
 namespace UE::SeinARTSTests
@@ -94,8 +94,8 @@ namespace UE::SeinARTSTests
 		Call->PostPlacedNewNode();
 		Call->AllocateDefaultPins();
 
-		USeinAbilityContinuationValidator* Validator =
-			GetMutableDefault<USeinAbilityContinuationValidator>();
+		USeinAbilityDeterminismValidator* Validator =
+			GetMutableDefault<USeinAbilityDeterminismValidator>();
 		ASSERT_THAT(IsNotNull(Validator));
 		FDataValidationContext Context;
 		const EDataValidationResult Result =

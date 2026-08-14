@@ -1,19 +1,25 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
- * @file    SeinPointTargeterPreview.h
- * @brief   Phase 1 default preview for USeinPointTargeterSpec — a decal at
- *          the cursor with an optional AoE radius ring.
  *
- *          Visualization is intentionally minimal for Phase 1: a single
- *          decal component sized to the AoE radius (or a default cursor-
+ * @file         SeinPointTargeterPreview.h
+ * @author       RJ Macklem
+ * @created      02 Jun 2026
+ * @latest       14 Aug 2026
+ * @brief        Default point-target preview with an optional AoE radius decal.
+ *
+ *          Visualization uses a single decal component sized to the AoE
+ *          radius (or a default cursor-
  *          marker size when AreaRadius is zero). Designers swap to a richer
  *          BP subclass via the spec's PreviewClass field for per-ability
  *          visuals.
  *
  *          The decal material name + tint behavior in response to validity
  *          is exposed as configurable defaults — game teams override the
- *          material globally via project plugin settings (Phase 1.5+) or
+ *          material globally via project plugin settings or
  *          per-ability via the spec.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
  */
 
 #pragma once

@@ -1,3 +1,20 @@
+/**
+ * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
+ *
+ * @file         SeinAbility.h
+ * @author       RJ Macklem
+ * @created      02 Jun 2026
+ * @latest       14 Aug 2026
+ * @brief        Defines deterministic gameplay abilities and their authoring contract.
+ *
+ *               Ability instances are canonical simulation state. Player and
+ *               scripted activation normally enters through the command queue;
+ *               admitted latent actions provide checkpoint-safe continuation.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
+ */
+
 #pragma once
 
 #include "CoreMinimal.h"
@@ -114,7 +131,7 @@ enum class ESeinAbilityCostTiming : uint8
  * Abilities are deterministic and tick on the simulation side.
  * They support cooperative suspension via latent actions (no threads).
  */
-UCLASS(Blueprintable, Abstract)
+UCLASS(Blueprintable, Abstract, meta = (SeinDeterministic))
 class SEINARTSCOREENTITY_API USeinAbility : public UObject
 {
 	GENERATED_BODY()
@@ -122,9 +139,13 @@ class SEINARTSCOREENTITY_API USeinAbility : public UObject
 public:
 	// ─── Identity ───
 
+	/** Player-facing name used by action buttons and other UI. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS|Ability")
 	FText AbilityName;
 
+	/** Stable gameplay tag used to grant, resolve, dispatch, and activate this
+	 *  ability. The SeinARTS Ability factory generates a unique tag from the
+	 *  asset name; keep it valid and unique if you take manual ownership. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS|Ability")
 	FGameplayTag AbilityTag;
 
@@ -149,10 +170,14 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS|Ability")
 	TObjectPtr<UTexture2D> Icon = nullptr;
 
+	/** Target input this ability expects. This drives action-slot target capture;
+	 *  bIsPassive, not the Passive enum value alone, controls auto-activation. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS|Ability")
 	ESeinAbilityTargetType TargetType = ESeinAbilityTargetType::None;
 
-	/** Passive abilities tick continuously without explicit activation. */
+	/** Runs this ability automatically when its first grant is committed. Passive
+	 *  abilities occupy the passive set instead of the single primary slot and
+	 *  remain active until revoked or explicitly ended. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS|Ability")
 	bool bIsPassive = false;
 
@@ -173,7 +198,8 @@ public:
 
 	// ─── Cost + cooldown ───
 
-	/** Resource cost to activate (unified cost struct per DESIGN §6). */
+	/** Resources committed when activation succeeds. Cost Timing decides whether
+	 *  production-catalog completion amounts are deferred to the queue item. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly,
 		Category = "SeinARTS|Ability|Cost",
 		meta = (SeinPoolStateIgnore))
@@ -185,9 +211,9 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS|Ability|Cost")
 	ESeinAbilityCostTiming CostTiming = ESeinAbilityCostTiming::Immediate;
 
-	/** Refund the deducted cost when the ability is cancelled. Default true — matches
-	 *  typical RTS economy where cancelling "didn't happen" from the ledger's view.
-	 *  Set false for punitive-cancel abilities. DESIGN §7 Q2a. */
+	/** Refunds the exact activation-cost snapshot when the ability is cancelled.
+	 *  Leave enabled when cancellation should undo the committed spend; disable
+	 *  it when cancellation intentionally consumes the cost. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS|Ability|Cost")
 	bool bRefundCostOnCancel = true;
 
@@ -195,7 +221,7 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS|Ability|Cost")
 	FFixedPoint Cooldown;
 
-	/** When the cooldown begins. DESIGN §7 Q4c. */
+	/** Chooses whether the cooldown begins on successful activation or natural end. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS|Ability|Cost")
 	ESeinCooldownStartTiming CooldownStartTiming = ESeinCooldownStartTiming::OnActivate;
 
@@ -206,10 +232,9 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS|Ability|Cost")
 	ESeinCooldownScope CooldownScope = ESeinCooldownScope::Squad;
 
-	/** Reset the cooldown when the ability is cancelled. Default false — "you used it
-	 *  recently" still applies to mid-use cancels. Designers opt in to true for
-	 *  abilities where pre-commit cancel should be free (usually paired with
-	 *  CooldownStartTiming == OnEnd). DESIGN §7 Q3c. */
+	/** Clears a cooldown started by this activation when the ability is cancelled.
+	 *  Leave disabled when a mid-use cancel should retain its cooldown; enable it
+	 *  for a free pre-commit cancel, commonly with cooldown start set to On End. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS|Ability|Cost")
 	bool bRefundCooldownOnCancel = false;
 
@@ -242,7 +267,7 @@ public:
 		meta = (EditCondition = "DispatchMode == ESeinAbilityDispatchMode::Single", EditConditionHides))
 	ESeinAbilityDispatchFallback DispatchFallback = ESeinAbilityDispatchFallback::LeaderFirst;
 
-	// ─── Target validation (declarative — DESIGN §7 Q5c/Q6) ───
+	// ─── Target validation ───
 
 	/** Maximum activation distance from owner to target (location or entity). Zero = unlimited. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS|Ability|Targeting")
@@ -281,7 +306,8 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS|Ability|Targeting")
 	bool bRequiresFreeFootprint = false;
 
-	/** What to do when activation is attempted with a target outside MaxRange. */
+	/** Chooses whether an out-of-range command is rejected or deterministically
+	 *  queues the entity's move ability before retrying this ability. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS|Ability|Targeting")
 	ESeinOutOfRangeBehavior OutOfRangeBehavior = ESeinOutOfRangeBehavior::Reject;
 
@@ -299,19 +325,16 @@ public:
 	 *  TriggerAbilityFromActionSlot); right-click smart commands ignore it (they
 	 *  already have the click point).
 	 *
-	 *  Null = ability is not action-slot-targetable, or designer prefers the
-	 *  default spec inferred from TargetType (Point → simple click, Area →
-	 *  click + AreaRadius preview). Set explicitly to a USeinPointTargeterSpec /
-	 *  USeinPointFacingTargeterSpec / USeinLineTargeterSpec subclass to capture
-	 *  drag data, footprint placement, line corridor, etc.
-	 *
-	 *  Phase 1: only USeinPointTargeterSpec is implemented. */
+	 *  Null = ability is not action-slot-targetable. Point and Area abilities
+	 *  triggered from an action slot require an explicit Point Targeter Spec or
+	 *  Point + Facing Targeter Spec. Line and corridor targeters are not
+	 *  currently shipped. */
 	UPROPERTY(EditDefaultsOnly, Instanced, BlueprintReadOnly,
 		Category = "SeinARTS|Ability|Targeting",
 		meta = (SeinPoolStateIgnore))
 	TObjectPtr<USeinTargeterSpec> TargeterSpec;
 
-	// ─── Arbitration (DESIGN §3 + §7) ───
+	// ─── Arbitration ───
 
 	/** Tags this ability grants to the entity while active. Granted on activate,
 	 *  ungranted on deactivate. Tag presence is refcounted —
@@ -336,8 +359,7 @@ public:
 	 *  the owning player hasn't unlocked it.
 	 *
 	 *  Distinct from RequiredEntityTags which gates on entity-level tags. Player
-	 *  tags are refcounted via USeinWorldSubsystem::GrantPlayerTag (DESIGN §10
-	 *  unified tech). */
+	 *  tags are source-aware, refcounted canonical player state. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS|Ability|Arbitration")
 	FGameplayTagContainer RequiredPlayerTags;
 
@@ -356,12 +378,16 @@ public:
 
 	// ─── Runtime State (set by system) ───
 
+	/** Entity that owns and executes this runtime ability instance. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Ability|Runtime")
 	FSeinEntityHandle OwnerEntity;
 
+	/** Entity supplied by the current activation. Invalid for location-only casts. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Ability|Runtime")
 	FSeinEntityHandle TargetEntity;
 
+	/** Fixed-point world location supplied by the current activation. For an
+	 *  entity target this is the command's captured location, not a live pointer. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Ability|Runtime")
 	FFixedVector TargetLocation;
 
@@ -380,9 +406,11 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Ability|Runtime")
 	TArray<FSeinTargeterPoint> TargeterPoints;
 
+	/** Remaining cooldown in simulation seconds. Zero means ready. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Ability|Runtime")
 	FFixedPoint CooldownRemaining;
 
+	/** True while this instance owns an active primary or passive lifecycle. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Ability|Runtime")
 	bool bIsActive = false;
 
@@ -452,35 +480,46 @@ public:
 
 	// ─── Lifecycle (Blueprint implementable) ───
 
-	/** Override to add custom activation checks beyond the declarative target
-	 *  validation (range / ValidTargetTags / LOS). Run after declarative checks. */
+	/** Adds a final deterministic activation rule. Return false to reject the
+	 *  command; the default returns true.
+	 *
+	 *  Runs after cooldown, tag, target, line-of-sight, and pathability checks,
+	 *  but before resource deduction, cancellation arbitration, and On Activate. */
 	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Ability")
 	bool CanActivate();
 	virtual bool CanActivate_Implementation() { return true; }
 
-	/** Called when the ability activates. Set up initial state here. */
+	/** Starts the committed ability. Initialize deterministic state and launch
+	 *  admitted actions here; the default does nothing.
+	 *
+	 *  This event does not complete the ability. Call End Ability on natural
+	 *  completion or Cancel Ability for forced termination. */
 	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Ability")
 	void OnActivate();
 	virtual void OnActivate_Implementation() {}
 
-	/** Called every sim tick while the ability is active */
+	/** Advances the ability once per fixed simulation tick. Delta Time is in
+	 *  simulation seconds; the default does nothing. */
 	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Ability")
 	void OnTick(FFixedPoint DeltaTime);
 	virtual void OnTick_Implementation(FFixedPoint DeltaTime) {}
 
-	/** Called when the ability ends, either naturally or via cancellation */
+	/** Performs final cleanup after the active index, owned tags, funding policy,
+	 *  and latent actions have been finalized. The default does nothing.
+	 *
+	 *  bWasCancelled is true for forced termination and false after End Ability. */
 	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Ability")
 	void OnEnd(bool bWasCancelled);
 	virtual void OnEnd_Implementation(bool bWasCancelled) {}
 
 	// ─── Control (callable from BP ability scripts) ───
 
-	/** End this ability normally */
+	/** Ends this ability normally and calls On End with bWasCancelled false. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Ability",
 		meta = (SeinContinuationSafe))
 	void EndAbility();
 
-	/** Cancel this ability (forced termination) */
+	/** Forces this ability to terminate and calls On End with bWasCancelled true. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Ability",
 		meta = (SeinContinuationSafe))
 	void CancelAbility();

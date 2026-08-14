@@ -1,6 +1,6 @@
 # Upgrading SeinARTS
 
-**Document version:** 0.7
+**Document version:** 0.8
 
 ## Release upgrade
 
@@ -23,7 +23,8 @@ boundary. Never weaken those checks to make an old snapshot, replay, or peer joi
 The current development wave uses world snapshots and canonical envelopes at schema v15, advances
 compiled deterministic behavior to `SeinARTS.Replay.6`, and advances the live network wire contract
 to protocol v12. Older live peers, Replay.5 artifacts, and v14 snapshot payloads are intentionally
-incompatible.
+incompatible. The reflected Ability pool provider also advances to state schema v3 so persisted
+deterministic RNG state is part of the compatibility contract.
 
 It also adds:
 
@@ -31,6 +32,8 @@ It also adds:
 - a compatible UI disposition projection over the authoritative capability query;
 - render-only Movement+ vehicle telemetry for AnimBlueprints, including settled wheel/track motion,
   driver-output throttle/brake, wrapped wheel phase, and movement/ability graph validation;
+- fail-closed deterministic member/call validation for Ability Blueprints, including untrusted,
+  unseeded-random, and presentation-only call rejection, plus canonical Ability RNG continuation;
 - bounded zlib reconnect-checkpoint transfer, paced acknowledged chunks, explicit retained-tail
   completion, and root-gated authorship activation;
 - exact Cover assignment within one resolver invocation;
@@ -44,3 +47,13 @@ Keep the older executable/plugin cohort for any v14 snapshots or Replay.5 artifa
 inspected; there is no automatic migration to v15/Replay.6. Protocol v11 peers cannot join a v12
 session and must be upgraded as one cohort. Use `MOVEMENT_PLUS_ANIMATION.md` to wire and qualify the
 new typed vehicle telemetry without reading raw render-state slots.
+
+Ability Blueprints that previously stored floats, Unreal vectors/transforms, strings/text, or
+object/class references as runtime member state must move that state to deterministic fixed-point
+types, handles, names, enums, or `SeinDeterministic` structs. Replace unseeded engine randomness
+with the SeinARTS deterministic random API and remove debug/presentation calls from sim graphs.
+Safe-looking parameter and return types do not make an untrusted function deterministic; use only
+explicitly certified APIs documented for Ability simulation.
+Float and Unreal-transform conversions may still be used at presentation boundaries, but their
+outputs cannot feed Ability or movement simulation. See `ABILITY_AUTHORING.md` for the complete
+authoring and checkpoint-continuation contract.

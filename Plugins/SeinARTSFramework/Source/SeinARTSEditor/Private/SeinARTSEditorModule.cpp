@@ -21,6 +21,7 @@
 #include "Thumbnails/SeinStructThumbnailRenderer.h"
 #include "Validators/SeinAbilityContinuationAnalysis.h"
 #include "Validators/SeinAbilityContinuationValidator.h"
+#include "Validators/SeinAbilityDeterminismValidator.h"
 #include "Validators/SeinBalanceProfileValidator.h"
 #include "Validators/SeinCanonicalStateRecipeDeterminismValidator.h"
 #include "Validators/SeinCommandDeterminismValidator.h"
@@ -504,6 +505,9 @@ void FSeinARTSEditorModule::ReleaseModuleOwnedState()
 			if (UEditorValidatorSubsystem* ValidatorSubsystem =
 					GEditor->GetEditorSubsystem<UEditorValidatorSubsystem>())
 			{
+				ValidatorSubsystem->RemoveValidator(
+					GetMutableDefault<
+						USeinAbilityDeterminismValidator>());
 				ValidatorSubsystem->RemoveValidator(
 					GetMutableDefault<
 						USeinAbilityContinuationValidator>());

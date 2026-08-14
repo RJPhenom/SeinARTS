@@ -65,7 +65,8 @@ public:
 				TEXT("seinarts.tests.pool.%s.%s.reflection"),
 				*KindId,
 				*Class->GetName().ToLower());
-			PoolDescriptor.StateSchemaVersion = 2;
+			PoolDescriptor.StateSchemaVersion =
+				Kind == ESeinPoolObjectKind::Ability ? 3 : 2;
 			PoolDescriptor.BehaviorRevision = 1;
 			PoolDescriptor.CodecRevision = 3;
 			PoolDescriptor.MaxStateBytes =

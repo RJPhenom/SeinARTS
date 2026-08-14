@@ -1,8 +1,11 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
- * @file    SeinTargeterSpec.h
- * @brief   Per-ability targeter specification — declarative data describing how
- *          the targeter UI should capture target points for an ability.
+ *
+ * @file         SeinTargeterSpec.h
+ * @author       RJ Macklem
+ * @created      02 Jun 2026
+ * @latest       14 Aug 2026
+ * @brief        Defines declarative per-ability target capture specifications.
  *
  *          Authored as an instanced UObject on USeinAbility::TargeterSpec. The
  *          USeinTargeterSubsystem reads it on activation to:
@@ -10,11 +13,14 @@
  *            - pick which preview class to spawn
  *            - run client-side validation per cycle
  *
- *          Subclasses cover the three input shapes (Phase 1 ships PointTargeterSpec;
- *          PointFacing + Line land in Phase 3 + 4 respectively). The hierarchy is
- *          composition-not-inheritance over USeinAbility — the spec lives on the
+ *          The shipped subclasses cover point and point-plus-facing input. Line
+ *          and corridor capture remain future extensions. The hierarchy is
+ *          composition-not-inheritance over USeinAbility - the spec lives on the
  *          ability CDO as an EditDefaultsOnly Instanced UObject so designers can
  *          author per-ability without subclassing the spec.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
  */
 
 #pragma once
@@ -44,8 +50,8 @@ enum class ESeinTargeterValidity : uint8
 	 *  By default the click is still accepted (server will reject) — flip
 	 *  bRejectClickWhenBlocked on the spec for strict behavior (e.g. building placement). */
 	Blocked,
-	/** Allowed but suboptimal — yellow tint, click accepted. Reserved for future
-	 *  uses (out of LOS, foggy area, etc.) — Phase 1 specs only emit Valid/Blocked. */
+	/** Allowed but suboptimal - yellow tint, click accepted. Shipped specs
+	 *  currently emit Valid or Blocked; custom specs may return Warning. */
 	Warning
 };
 
@@ -160,7 +166,7 @@ protected:
 /**
  * Drag-rotate point-and-facing targeter — the building-placement spec.
  *
- * Capture flow (Phase 3):
+ * Capture flow:
  *   1. Player presses RMB on the world point where the building should land.
  *      The location is locked at this moment; subsequent mouse motion only
  *      affects rotation, not position.
