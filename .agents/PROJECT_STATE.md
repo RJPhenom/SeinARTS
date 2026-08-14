@@ -719,10 +719,12 @@ Blueprint entity visibility now delegates to the active fog implementation's aut
 `IsEntityVisibleToObserver` policy instead of duplicating only live emission-bit checks. The node
 therefore agrees with actor presentation for owner visibility, authored layers and footprints,
 `AlwaysVisible`, `VisibleOnceSeen`, and `VisibleOnceExplored`, while preserving permissive behavior
-when fog is disabled or has no runtime data. Independent adversarial review found and closed the
-fog-disabled fallback gap. Commit `3abd044` passed a fresh Development/test-plugin build, 13 focused
-FoW unit tests, all 445 Framework unit tests, and the two FoW canonical-state tests. The change is a
-read-only presentation query and does not mutate canonical state, timing, replay, or networking.
+when fog is disabled or has no runtime data. The Blueprint cell-visibility query now follows the
+same fog-disabled fallback instead of reporting the map hidden. Independent adversarial review found
+and closed the original fog-disabled entity fallback gap. Commit `3abd044` and its cell-query
+follow-up passed fresh Development/test-plugin builds, 13 focused FoW unit tests, all 445 Framework
+unit tests, and the two FoW canonical-state tests. These are read-only presentation queries and do
+not mutate canonical state, timing, replay, or networking.
 
 ## Evidence limits
 

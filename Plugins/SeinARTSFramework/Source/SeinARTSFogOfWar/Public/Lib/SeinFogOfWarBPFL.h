@@ -27,9 +27,9 @@ public:
 	 *  given vision layer? `LayerName` resolves to a bit: "Normal" → V bit,
 	 *  "Explored" → E bit (sticky history), any other name matches
 	 *  `USeinARTSCoreSettings::VisionLayers[i].LayerName` (enabled slots
-	 *  only). Unknown names return false. Returns true when the fog impl
-	 *  has no runtime data (tests / fog-less games — matches the
-	 *  `LineOfSightResolver` permissive fallback). */
+	 *  only). Unknown names return false while fog is active. Returns true
+	 *  when fog is disabled or its implementation has no runtime data,
+	 *  matching the Line of Sight Resolver's permissive fallback. */
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "SeinARTS|Fog Of War",
 		meta = (WorldContext = "WorldContextObject",
 				DisplayName = "Is Cell Visible",
