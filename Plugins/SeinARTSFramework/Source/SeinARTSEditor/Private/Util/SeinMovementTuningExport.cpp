@@ -108,8 +108,7 @@ namespace
 			Package, FName(*AssetNm), RF_Public | RF_Standalone | RF_Transactional);
 		if (!UDS) return nullptr;
 
-		UDS->SetMetaData(USeinSimComponentFactory::SeinDeterministicMetaKey, TEXT("true"));
-		UDS->SetMetaData(USeinSimComponentFactory::SeinSubDataMetaKey, TEXT("true"));
+		USeinSimComponentFactory::MarkUserDefinedStructAsSubData(UDS);
 
 		FAssetRegistryModule::AssetCreated(UDS);
 		Package->MarkPackageDirty();
@@ -317,6 +316,9 @@ UUserDefinedStruct* SyncTuningStructForBlueprint(UBlueprint* Blueprint)
 		return nullptr;
 	}
 
+	// Reapply the durable marker on every sync so assets created before the
+	// editor-data fix migrate the next time their tuning struct is reconciled.
+	USeinSimComponentFactory::MarkUserDefinedStructAsSubData(UDS);
 	SyncFields(UDS, Desired);
 	FStructureEditorUtils::OnStructureChanged(UDS, FStructureEditorUtils::Unknown);
 	StampTuningStruct(Blueprint, UDS);

@@ -4,11 +4,14 @@
 #include "Actor/SeinEntityComponent.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Balance/SeinBalanceProfile.h"
+#include "Components/SeinComponentEligibility.h"
 #include "Data/SeinResourceTypes.h"
+#include "Details/SeinBalanceProfileDetails.h"
 #include "EdGraphSchema_K2.h"
 #include "Engine/Blueprint.h"
 #include "Engine/BlueprintGeneratedClass.h"
 #include "Engine/DataTable.h"
+#include "Factories/SeinSimComponentFactory.h"
 #include "HAL/FileManager.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
@@ -499,6 +502,198 @@ namespace UE::SeinARTSTests::BalanceData
 		ASSERT_THAT(IsTrue(
 			SeinBalanceTable::CheckSync(Profile, CellsChecked) == 0));
 		ASSERT_THAT(IsTrue(CellsChecked == FieldCount * 2));
+	}
+
+	TEST(ExplicitDesignerComponentGatherPushRoundTrip, "SeinARTS.Editor.BalanceData")
+	{
+		FScopedContentMount Mount;
+		const FString UniqueRoot = FString::Printf(
+			TEXT("/Temp/SeinARTSTests/BalanceData/Designer_%s"),
+			*FGuid::NewGuid().ToString(EGuidFormats::Digits));
+		const FString StructPackageName = Mount.MakePackageName(
+			TEXT("SeinDesignerBalanceComponent"));
+		UPackage* StructPackage = CreatePackage(*StructPackageName);
+		ASSERT_THAT(IsNotNull(StructPackage));
+
+		USeinSimComponentFactory* Factory =
+			NewObject<USeinSimComponentFactory>();
+		ASSERT_THAT(IsNotNull(Factory));
+		UUserDefinedStruct* DesignerStruct = Cast<UUserDefinedStruct>(
+			Factory->FactoryCreateNew(
+				UUserDefinedStruct::StaticClass(),
+				StructPackage,
+				TEXT("SeinDesignerBalanceComponent"),
+				RF_Public | RF_Standalone | RF_Transactional,
+				nullptr,
+				GWarn));
+		ASSERT_THAT(IsNotNull(DesignerStruct));
+		const TArray<FStructVariableDescription>& Variables =
+			FStructureEditorUtils::GetVarDesc(DesignerStruct);
+		ASSERT_THAT(IsTrue(Variables.Num() == 1));
+		ASSERT_THAT(IsTrue(FStructureEditorUtils::ChangeVariableType(
+			DesignerStruct,
+			Variables[0].VarGuid,
+			FixedPointPinType())));
+		ASSERT_THAT(IsTrue(FStructureEditorUtils::RenameVariable(
+			DesignerStruct,
+			Variables[0].VarGuid,
+			TEXT("DesignerSpeed"))));
+		FEdGraphPinType UnsafeFloatType;
+		UnsafeFloatType.PinCategory = UEdGraphSchema_K2::PC_Real;
+		UnsafeFloatType.PinSubCategory = UEdGraphSchema_K2::PC_Float;
+		ASSERT_THAT(IsTrue(FStructureEditorUtils::AddVariable(
+			DesignerStruct,
+			UnsafeFloatType)));
+		ASSERT_THAT(IsTrue(
+			FStructureEditorUtils::GetVarDesc(DesignerStruct).Num() == 1));
+		ASSERT_THAT(IsTrue(
+			SeinComponentEligibility::IsEntityComponentStruct(
+				DesignerStruct)));
+		FAssetRegistryModule::AssetCreated(DesignerStruct);
+		ASSERT_THAT(IsTrue(SaveAssetPackage(
+			*StructPackage,
+			*DesignerStruct)));
+
+		const FString DesignerStructPath = DesignerStruct->GetPathName();
+		DesignerStruct = nullptr;
+		FText UnloadError;
+		ASSERT_THAT(IsTrue(UPackageTools::UnloadPackages(
+			{ StructPackage },
+			UnloadError,
+			true)));
+		StructPackage = nullptr;
+		DesignerStruct = LoadObject<UUserDefinedStruct>(
+			nullptr,
+			*DesignerStructPath);
+		ASSERT_THAT(IsNotNull(DesignerStruct));
+		ASSERT_THAT(IsTrue(
+			SeinComponentEligibility::IsEntityComponentStruct(
+				DesignerStruct)));
+
+		UUserDefinedStructEditorData* DesignerEditorData =
+			Cast<UUserDefinedStructEditorData>(DesignerStruct->EditorData);
+		ASSERT_THAT(IsNotNull(DesignerEditorData));
+		DesignerStruct->RemoveMetaData(
+			USeinSimComponentFactory::SeinEntityComponentMetaKey);
+		DesignerEditorData->MetaData.Remove(
+			USeinSimComponentFactory::SeinEntityComponentMetaKey);
+		DesignerStruct->GetOutermost()->SetDirtyFlag(false);
+		ASSERT_THAT(IsFalse(
+			SeinComponentEligibility::IsEntityComponentStruct(
+				DesignerStruct)));
+		USeinSimComponentFactory::MarkUserDefinedStructAsEntityComponent(
+			DesignerStruct);
+		ASSERT_THAT(IsTrue(DesignerStruct->GetOutermost()->IsDirty()));
+		ASSERT_THAT(IsTrue(
+			SeinComponentEligibility::IsEntityComponentStruct(
+				DesignerStruct)));
+		ASSERT_THAT(IsTrue(SaveAssetPackage(
+			*DesignerStruct->GetOutermost(),
+			*DesignerStruct)));
+		UPackage* RepairedPackage = DesignerStruct->GetOutermost();
+		DesignerStruct = nullptr;
+		UnloadError = FText::GetEmpty();
+		ASSERT_THAT(IsTrue(UPackageTools::UnloadPackages(
+			{ RepairedPackage },
+			UnloadError,
+			true)));
+		DesignerStruct = LoadObject<UUserDefinedStruct>(
+			nullptr,
+			*DesignerStructPath);
+		ASSERT_THAT(IsNotNull(DesignerStruct));
+		ASSERT_THAT(IsTrue(
+			SeinComponentEligibility::IsEntityComponentStruct(
+				DesignerStruct)));
+
+		FStructProperty* DesignerSpeedProperty =
+			CastField<FStructProperty>(FindAuthoredField(
+				*DesignerStruct,
+				TEXT("DesignerSpeed")));
+		ASSERT_THAT(IsNotNull(DesignerSpeedProperty));
+		ASSERT_THAT(IsTrue(
+			DesignerSpeedProperty->Struct == FFixedPoint::StaticStruct()));
+
+		UBlueprint* Blueprint = CreateEntityBlueprint(
+			UniqueRoot / TEXT("BP_DesignerBalance"),
+			FFixedPoint::FromInt(1));
+		ASSERT_THAT(IsNotNull(Blueprint));
+		ASeinActor* CDO = Cast<ASeinActor>(
+			Blueprint->GeneratedClass->GetDefaultObject());
+		USeinEntityComponent* Bridge = CDO ? CDO->GetEntityBridge() : nullptr;
+		ASSERT_THAT(IsNotNull(Bridge));
+
+		FInstancedStruct DesignerComponent;
+		DesignerComponent.InitializeAs(DesignerStruct);
+		const FFixedPoint InitialValue = FFixedPoint::FromFloat(12.5f);
+		*DesignerSpeedProperty->ContainerPtrToValuePtr<FFixedPoint>(
+			DesignerComponent.GetMutableMemory()) = InitialValue;
+		Bridge->ComponentData.Add(MoveTemp(DesignerComponent));
+		Blueprint->Status = BS_UpToDate;
+
+		USeinBalanceProfile* Profile = MakeProfile(TEXT("DesignerBalance"));
+		ASSERT_THAT(IsNotNull(Profile));
+		Profile->IncludedRoots.Add(TSoftClassPtr<ASeinActor>(
+			Blueprint->GeneratedClass.Get()));
+		TArray<const UScriptStruct*> PickerCandidates;
+		SeinBalanceProfileDetails::CollectTrackedComponentCandidates(
+			*Profile,
+			PickerCandidates);
+		ASSERT_THAT(IsTrue(PickerCandidates.Contains(DesignerStruct)));
+		Profile->TrackedComponents.Add(DesignerStruct);
+		SeinBalanceProfileDetails::CollectTrackedComponentCandidates(
+			*Profile,
+			PickerCandidates);
+		ASSERT_THAT(IsFalse(PickerCandidates.Contains(DesignerStruct)));
+
+		UDataTable* Table =
+			SeinBalanceTable::Testing::GatherToTableWithoutUI(Profile);
+		ASSERT_THAT(IsNotNull(Table));
+		ASSERT_THAT(IsTrue(Table->GetRowMap().Num() == 1));
+		UUserDefinedStruct* RowStruct =
+			Cast<UUserDefinedStruct>(Table->RowStruct);
+		ASSERT_THAT(IsNotNull(RowStruct));
+		FFloatProperty* DesignerSpeedColumn = FindFloatField(
+			*RowStruct,
+			TEXT("DesignerBalance_DesignerSpeed"));
+		ASSERT_THAT(IsNotNull(DesignerSpeedColumn));
+
+		uint8* Row = Table->FindRowUnchecked(TEXT("BP_DesignerBalance"));
+		ASSERT_THAT(IsNotNull(Row));
+		ASSERT_THAT(IsTrue(
+			DesignerSpeedColumn->GetPropertyValue_InContainer(Row) == 12.5f));
+
+		DesignerSpeedColumn->SetPropertyValue_InContainer(Row, -4.75f);
+		Table->HandleDataTableChanged();
+		int32 CellsChecked = 0;
+		ASSERT_THAT(IsTrue(
+			SeinBalanceTable::CheckSync(Profile, CellsChecked) == 1));
+		ASSERT_THAT(IsTrue(CellsChecked == 1));
+
+		int32 SkippedCells = 0;
+		ASSERT_THAT(IsTrue(
+			SeinBalanceTable::Testing::PushToEntitiesWithoutUI(
+				Profile,
+				SkippedCells) == 1));
+		ASSERT_THAT(IsTrue(SkippedCells == 0));
+
+		const FInstancedStruct* PushedComponent =
+			Bridge->ComponentData.FindByPredicate(
+				[DesignerStruct](const FInstancedStruct& Entry)
+				{
+					return Entry.GetScriptStruct() == DesignerStruct;
+				});
+		ASSERT_THAT(IsNotNull(PushedComponent));
+		const FFixedPoint* PushedValue =
+			DesignerSpeedProperty->ContainerPtrToValuePtr<FFixedPoint>(
+				PushedComponent->GetMemory());
+		ASSERT_THAT(IsNotNull(PushedValue));
+		ASSERT_THAT(IsTrue(
+			*PushedValue == FFixedPoint::FromFloat(-4.75f)));
+		ASSERT_THAT(IsTrue(Blueprint->Status != BS_UpToDate));
+		ASSERT_THAT(IsTrue(
+			SeinBalanceTable::CheckSync(Profile, CellsChecked) == 0));
+		ASSERT_THAT(IsTrue(CellsChecked == 1));
+		FAssetRegistryModule::AssetDeleted(DesignerStruct);
 	}
 
 	TEST(AbilityGatherPushAndExactSyncAccounting, "SeinARTS.Editor.BalanceData")

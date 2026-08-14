@@ -1,15 +1,16 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
- * @file    SeinSimComponentFactory.h
- * @brief   Right-click → Component factory. Creates a UUserDefinedStruct
- *          tagged with the `SeinDeterministic` package metadata key so
- *          the framework's pin-type / struct-viewer filters know to apply
- *          the deterministic-types whitelist when designers edit it.
  *
- *          The resulting UDS is accepted directly as an entry in an entity
- *          bridge's `ComponentData` array (the picker filters on the
- *          `SeinDeterministic` + `SeinEntityComponent` metadata); spawn injects
- *          the struct payload directly — there is no wrapper actor-component.
+ * @file         SeinSimComponentFactory.h
+ * @author       RJ Macklem
+ * @created      2 Jun 2026
+ * @latest       14 Aug 2026
+ * @brief        Declares the designer Component-struct factory and durable UDS
+ *               metadata helpers used by entity components and generated
+ *               deterministic sub-data.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
  */
 
 #pragma once
@@ -22,7 +23,7 @@ class UStruct;
 class UUserDefinedStruct;
 
 UCLASS()
-class USeinSimComponentFactory : public UFactory
+class SEINARTSEDITOR_API USeinSimComponentFactory : public UFactory
 {
 	GENERATED_BODY()
 
@@ -38,7 +39,9 @@ public:
 
 	/** Struct-level UField metadata key written on UDSes created by this factory,
 	 *  and present on every native USTRUCT marked `USTRUCT(meta = (SeinDeterministic))`.
-	 *  Pin-type + struct-viewer filters key off this via UStruct::HasMetaData. */
+	 *  Pin-type + struct-viewer filters key off this via UStruct::HasMetaData. The
+	 *  UDS marker is also stored in its editor-data metadata map so UE restores it
+	 *  after every structure compile. */
 	static const FName SeinDeterministicMetaKey;
 
 	/** Struct-level UField metadata key signalling "this struct is composable as
@@ -61,6 +64,15 @@ public:
 	 *  are filtered OUT of the entity bridge's top-level ComponentData
 	 *  picker but remain visible in the sub-data picker that owns them. */
 	static const FName SeinSubDataMetaKey;
+
+	/** Durably mark a designer-authored UDS as a top-level entity component.
+	 *  Updates both the live struct metadata and UE's persistent editor-data map. */
+	static void MarkUserDefinedStructAsEntityComponent(
+		UUserDefinedStruct* Struct);
+
+	/** Durably mark a generated UDS as deterministic per-component sub-data.
+	 *  Updates both the live struct metadata and UE's persistent editor-data map. */
+	static void MarkUserDefinedStructAsSubData(UUserDefinedStruct* Struct);
 
 	/** Returns true iff the struct carries the `SeinDeterministic` UField metadata.
 	 *  Works for both native USTRUCTs (meta populated by UHT from the USTRUCT macro)
