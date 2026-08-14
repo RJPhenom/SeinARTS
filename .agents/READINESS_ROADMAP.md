@@ -249,7 +249,9 @@ Exit: game UI and progression can target stable provider-neutral interfaces whil
   compatibility, and lockstep-latency failures. A Windows PowerShell 5.1 self-test prevents the
   shipped diagnostic's pass/adversarial contract from drifting. First-skirmish guidance now
   separates host examples from shipped plugin content and walks project-owned settings, unit, map,
-  manifest, and two-player qualification. Deeper subsystem tutorials and broader in-editor error UX
-  remain.
+  manifest, and two-player qualification. Movement+ vehicle animation now has a source-grounded
+  typed-telemetry workflow, exact units/signs, lifecycle boundaries, and PIE matrix in
+  `.agents/Docs/MOVEMENT_PLUS_ANIMATION.md`. Tutorials for the remaining deep subsystems and broader
+  in-editor error UX remain.
 
 Exit: a studio can adopt the framework without relying on this repository's private history or an agent to explain hidden setup.

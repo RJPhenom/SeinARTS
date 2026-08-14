@@ -1,6 +1,6 @@
 # Upgrading SeinARTS
 
-**Document version:** 0.6
+**Document version:** 0.7
 
 ## Release upgrade
 
@@ -42,4 +42,5 @@ It also adds:
 After adopting this wave, regenerate the simulation-content manifest and run a full editor restart.
 Keep the older executable/plugin cohort for any v14 snapshots or Replay.5 artifacts that must be
 inspected; there is no automatic migration to v15/Replay.6. Protocol v11 peers cannot join a v12
-session and must be upgraded as one cohort.
+session and must be upgraded as one cohort. Use `MOVEMENT_PLUS_ANIMATION.md` to wire and qualify the
+new typed vehicle telemetry without reading raw render-state slots.
