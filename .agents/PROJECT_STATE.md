@@ -95,8 +95,9 @@ Latest local evidence is under ignored `Saved/Automation/`:
   entity/ability Gather-Push-Check Sync, stale schema/source rejection, Blueprint reinstance and
   persisted reload)
 - `SeinARTS.Editor.BalanceData-20260814-012021-b329bd83` (Framework, 6 passed after
-  Blueprint-lifetime hardening), `SeinARTS.Editor-20260814-012051-1a297fec` (Framework, 43 passed),
-  and `SeinARTS.Editor-20260814-012122-7965fb63` (All, 45 passed)
+  Blueprint-lifetime hardening), `SeinARTS.Editor-20260814-012418-1225e017` (Framework, 43 passed),
+  and `SeinARTS.Editor-20260814-012504-bf491e5a` (All, 45 passed; both full suites enforced the
+  floors established against implementation commit `3abf652`)
 - `SeinARTS.Sim.Movement.Repath-20260814-002006-b4d103b6` (Framework, 13 passed)
 - `SeinARTS.Editor.Snapshot.Movement.MoveToContinuationCrossesRealRepathBoundaryExactly-20260814-000233-9fa959a7`
   (Framework, 1 passed; fresh-world continuation crosses a real interval repath boundary)
