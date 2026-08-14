@@ -1,6 +1,6 @@
 # SeinARTS Compatibility Policy
 
-**Document version:** 0.6
+**Document version:** 0.7
 
 SeinARTS ships its five production plugins as one versioned cohort. Install Framework, Squad,
 Cover, Movement+, and Cover+Squad artifacts from the same release. Mixing release versions is
@@ -43,6 +43,11 @@ and folded into live peer admission. Replay.5 snapshots, replays, and peers ther
 retain the producing executable cohort when those artifacts must be inspected. Replay.6 corrects
 transport deployment so container-local offsets rotate with the authoritative container transform.
 
+The live network wire contract is protocol v12. It adds bounded, compressed reconnect-checkpoint
+transfer and explicit tail/activation sequencing without changing the canonical checkpoint envelope.
+Protocol v11 and v12 peers fail compatibility before match simulation; upgrade the complete peer
+cohort together.
+
 A release may legitimately change deterministic behavior in a patch. All peers and the authority
 must still run the exact qualified release cohort. Retain the producing build when old replay or
 diagnostic evidence must remain inspectable.
@@ -57,4 +62,6 @@ qualified receipt also binds exact test attempts/indexes/build provenance, consu
 engine and source fingerprints, exact-profile installation diagnostics, public-header and
 packaged-runtime result hashes, and the immutable evidence archive. Publication verifies the remote
 draft-release assets byte-for-byte before making the release public; interrupted publication may
-resume only that exact matching draft.
+resume only that exact matching draft. Publish mode requires the deterministic adverse packaged
+runtime profile and binds its exact Shipping executable, UDP fault-proxy receipt, and standalone
+proxy self-test detail by SHA-256; baseline or skipped runtime evidence is diagnostic only.

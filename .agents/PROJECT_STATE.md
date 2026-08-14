@@ -551,6 +551,31 @@ Movement+ consumer now also executes a real long-range wheeled command through t
 physical reconnect, exact terminal movement state, and checkpoint-seek replay. That qualification
 exposed and closed fixed-point squared-distance wrap beyond the 32.32 squared range, an unopened
 zero-author reconnect gate, and listen-authority dependence on local Client RPC loopback.
+
+Reconnect transport now uses protocol v12. Canonical checkpoint envelopes remain unchanged for
+snapshot/replay compatibility, while the network-only payload is bounded, zlib-compressed, and sent
+through a paced 1 KiB unreliable chunk window with cumulative acknowledgement and retry. Retained
+turn tails are size/turn bounded and paced through the existing reliable assembled-turn path; an
+explicit tail frontier and canonical-root activation handshake prevent premature live fanout or
+authorship. Activation immediately heartbeat-covers every already-open input-delay turn, and serve
+timeouts measure lack of progress rather than total recovery duration. Release publication now
+requires a deterministic adverse UDP profile and binds the exact fault-proxy receipt.
+
+Fresh Movement+ consumer run `f161848babb44a83a741c6950c4638bf` passed the 337-header independent
+public-header audit, Editor and Shipping builds, cook/package/startup, two-player root gossip,
+initial resync, physical reconnect, exact capability and active wheeled-movement preservation,
+replay checkpoint seek, and terminal tick/root equality at tick 7115/root
+`E4DDEEBC51876332BAB6665E8F3DDC44`. Its schema-7 matrix receipt hash is
+`85FA9D37B2A6868AB60F4F56F445F88DA88A977C7DB3E84C8328291E7F712BA3`; the schema-5 runtime receipt
+hash is `9C0539832BF1CEDB77400DD834B504E7A2437F26C0B40F6664AE7B08DDA43957`, and its recorded Shipping
+executable hash exactly matches the packaged binary at
+`F2C19A93037B7F197E4CEBF4A8B5C60B43D40BA1C4824844832270A58CBEC111`. The bound schema-2 proxy
+receipt `94A4DE7D9C5C713C9B9CF6326285F3ECC8FD83DBABB77D39D5D5B2F0E3144BD7` uses independent
+per-direction seeded jitter and records 648 dropped, 463 forwarded duplicate, and 7,392 observed
+out-of-order datagrams across both directions, with zero unroutable or shutdown-discarded traffic.
+The standalone proxy self-test summary also binds its detailed receipt by SHA-256. Focused
+protocol/resync/replay/Movement+ determinism automation passed 43/2/18/9 tests respectively, and the
+broader neighboring Network prefix passed 83/83.
 The human PIE animation/performance matrix remains open; the supplied two-player PIE run found no
 framework regression.
 
@@ -620,14 +645,13 @@ seek/root/capability state, and full playback remain exact. These controlled int
 are complemented by the accelerated operational soak above; they still do not replace multi-hour
 real-device timing and allocator-high-water, platform storage matrices, or true OS disk-full evidence.
 
-The supplied 2026-08-11 two-player PIE log contains two healthy sessions: lockstep configuration
+The supplied 2026-08-14 two-player PIE log contains two healthy sessions: lockstep configuration
 and participant roots agree throughout, with no gate stall, persistent incomplete turn, retransmit,
 resync, desync, ensure, crash, or runtime error. The observed command latency matches the configured
 30 Hz simulation, 10 turns/second, and `InputDelayTurns=2` (roughly 200-300 ms including turn-boundary
-alignment), not a hidden PIE-only stall. Straggler telemetry now records a participant only when an
-incomplete turn actually reaches the execution gate; ordinary local RPC ordering no longer produces
-the misleading 100% "last to submit" warning. The checked-in debug fixed session seed is also reset
-to zero so packaged matches do not reuse seed 12345.
+alignment), not a hidden PIE-only stall. The local remote slot was repeatedly last to submit and
+triggered adaptive-delay advisory warnings, but every observed turn completed with matching roots;
+the log does not show packet loss or a broken simulation gate.
 
 Public adoption now has a read-only installation diagnostic with stable result codes and JSON
 output. It validates UE 5.8 identity, exact production-plugin dependency closure, recursively
@@ -707,7 +731,8 @@ Automation proves the tested contracts, not full production readiness. The remai
 
 The old audit/remediation campaign is closed as a source of truth. Its durable results are
 consolidated in this directory. The Cover/Squad topology decision is closed through the opt-in
-bridge plugin, and the supported local packaged multiplayer/replay consumer gate is green. Release
+bridge plugin, and the supported local packaged multiplayer/replay consumer gate is green under the
+required deterministic adverse network profile. Release
 tooling now binds skipped test runs to source fingerprints and exact test-DLL hashes, validates
 packaged ZIP structure and hashes, and can compile every shipped public header independently. The
 clean committed `0.0.178` cohort from source commit `9d7efc3708cc07dfbb76c3f6f8c528b1290ed264`
