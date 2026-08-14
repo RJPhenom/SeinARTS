@@ -75,7 +75,7 @@ formation/resolver state coverage, provider teardown, and downstream content own
 | `SeinARTS Win64 Shipping` | succeeded / target current |
 | Focused Core boundary/epoch | 2026-08-13 exact epoch test passed with `SeinARTS.Replay.6`; prior `SeinARTS.Unit.Core` Framework profile passed 131 tests including opposite-endpoint saturated distance and maximum-diagonal normalization |
 | Focused Net protocol | 2026-08-13 `SeinARTS.Unit.Network.Protocol` Framework profile: 40 passed through production listen-authority commit and disconnect pipeline-backfill entry points |
-| Focused Movement+ | 2026-08-13 unit 5/5, determinism 9/9, movement snapshot 8/8, and continuation 1/1 passed |
+| Focused Movement+ | 2026-08-14 public telemetry Unit 5/5 and Determinism 9/9 passed; 2026-08-13 movement snapshot 8/8 and continuation 1/1 passed |
 | Focused Move To repath | 2026-08-14 interval/off-path behavior 13/13 and real-boundary fresh-world continuation 1/1 passed; covers same-tick commit, throttle cadence, forced attempts, unavailable navigation/subsystem gates, failure limits, partial callback order/state, implicit-origin drift, and canonical continuation |
 | Focused default avoidance | 2026-08-13 Unit 6/6 passed after private-kernel decomposition; covers crossing serial/parallel agreement, opt-out/idle release, idle dodge, gap resolution, and broker cohesion |
 | Focused containment integrity | 2026-08-13 Unit 4/4, Determinism 3/3, and Perf 1/1 passed; covers cycle/overflow admission, bootstrap/root/checkpoint refusal, failure-atomic malformed restore, rotated local deploy offsets, ability commands, pre/post checkpoint roots, per-tick replay roots, and 100/500/1,000-occupant invalidated/warm checkpoint curves |
@@ -545,6 +545,12 @@ post-collision transforms drive wheel/track motion while movement-driver velocit
 throttle/brake, so correction displacement cannot masquerade as input. Missing movement instances,
 class swaps, and snapshot restore clear stale telemetry. Raw render state is not Blueprint-visible,
 and validation blocks presentation-only getters from deterministic movement and Ability graphs.
+The reflected fields and getters now document exact units, signs, ranges, dimension fallbacks, and
+first-sample behavior. `.agents/Docs/MOVEMENT_PLUS_ANIMATION.md` provides the staged public AnimBP
+workflow and human PIE checklist without exposing raw render slots. On 2026-08-14 the Development
+build and All-profile Movement+ Unit 5/5 plus Determinism 9/9 prefixes passed. Independent review
+caught and corrected the small-dimension fallback and wrapped-phase wording before integration;
+the human animation mapping remains a PIE qualification.
 Focused relationship Unit/Determinism tests, telemetry tests, replay-file continuation, bounded
 reconnect transfer, and both broad test profiles are green. A generated downstream Shipping
 Movement+ consumer now also executes a real long-range wheeled command through two peers, resync,
