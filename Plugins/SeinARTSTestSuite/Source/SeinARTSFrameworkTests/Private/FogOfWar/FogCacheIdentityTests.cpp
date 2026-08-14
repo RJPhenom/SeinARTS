@@ -1,9 +1,11 @@
 #include "CQTest.h"
 #include "Components/ActorTestSpawner.h"
 #include "Components/SeinExtentsComponent.h"
+#include "Components/SeinFogVisibilityComponent.h"
 #include "Components/SeinVisionComponent.h"
 #include "Data/SeinWorldSnapshot.h"
 #include "Default/SeinFogOfWarDefault.h"
+#include "Lib/SeinFogOfWarBPFL.h"
 #include "SeinFogOfWarSubsystem.h"
 #include "Settings/PluginSettings.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
@@ -157,6 +159,29 @@ namespace UE::SeinARTSTests
 			Fog.DynamicBlockerHeightExceptions.Reset();
 			Fog.DynamicBlockerSnapshots.Reset();
 			Fog.LastDynamicBlockerCells.Reset();
+		}
+
+		static void SeedOneCellObserverState(
+			USeinFogOfWarDefault& Fog,
+			FSeinPlayerID Observer,
+			uint8 CellBits,
+			FSeinEntityHandle SeenEntity = FSeinEntityHandle())
+		{
+			check(Fog.Width == 1 && Fog.Height == 1);
+			FSeinFogVisionGroup& Group = Fog.GetOrCreateGroup(Observer);
+			Group.CellBitfield[0] = CellBits;
+			Group.SeenEntities.Reset();
+			if (SeenEntity.IsValid())
+			{
+				Group.SeenEntities.Add(SeenEntity);
+			}
+		}
+
+		static void ClearRuntimeGridDimensions(
+			USeinFogOfWarDefault& Fog)
+		{
+			Fog.Width = 0;
+			Fog.Height = 0;
 		}
 
 		static void StampOneCellDynamicBlocker(
@@ -561,6 +586,25 @@ namespace UE::SeinARTSTests
 			FSoftClassPath SavedFogOfWarClass;
 			EClassFlags SavedClassFlags = CLASS_None;
 		};
+
+		struct FScopedFogDisabled
+		{
+			FScopedFogDisabled()
+				: Settings(
+					GetMutableDefault<USeinARTSCoreSettings>())
+				, SavedFogOfWarClass(Settings->FogOfWarClass)
+			{
+				Settings->FogOfWarClass = FSoftClassPath();
+			}
+
+			~FScopedFogDisabled()
+			{
+				Settings->FogOfWarClass = SavedFogOfWarClass;
+			}
+
+			USeinARTSCoreSettings* Settings = nullptr;
+			FSoftClassPath SavedFogOfWarClass;
+		};
 	}
 
 	TEST(VisionStampIdentityIsExact, "SeinARTS.Unit.FogOfWar")
@@ -583,6 +627,156 @@ namespace UE::SeinARTSTests
 		// The former XOR key cannot see which geometry owns each layer.
 		ASSERT_THAT(AreEqual(LegacyVisionHash(Before), LegacyVisionHash(After)));
 		ASSERT_THAT(IsFalse(Before == After));
+	}
+
+	TEST(BlueprintEntityVisibilityUsesAuthoritativePolicy,
+		"SeinARTS.Unit.FogOfWar")
+	{
+		FActorTestSpawner Spawner;
+		UWorld& UnrealWorld = Spawner.GetWorld();
+		USeinWorldSubsystem* World =
+			UnrealWorld.GetSubsystem<USeinWorldSubsystem>();
+		USeinFogOfWarSubsystem* FogSubsystem =
+			UnrealWorld.GetSubsystem<USeinFogOfWarSubsystem>();
+		USeinFogOfWarDefault* Fog = FogSubsystem
+			? Cast<USeinFogOfWarDefault>(
+				FogSubsystem->GetFogOfWar())
+			: nullptr;
+		ASSERT_THAT(IsNotNull(World));
+		ASSERT_THAT(IsNotNull(Fog));
+		FFogOfWarDefaultTestAccess::SeedOneCellDynamicGrid(*Fog);
+
+		const FSeinPlayerID Observer(1);
+		const FSeinPlayerID OtherOwner(2);
+		const FFixedTransform TargetTransform(FFixedVector(
+			FFixedPoint::FromInt(50),
+			FFixedPoint::FromInt(50),
+			FFixedPoint::Zero));
+		FSeinEntityHandle AlwaysVisible;
+		FSeinEntityHandle VisibleOnceExplored;
+		FSeinEntityHandle VisibleOnceSeen;
+		FSeinEntityHandle VisionLayersOnly;
+		FSeinEntityHandle Owned;
+		FString Error;
+		ASSERT_THAT(IsTrue(
+			SeinTestMatchBootstrap::Materialize(
+				*World,
+				[&]()
+				{
+					auto SpawnWithPolicy = [&](FSeinPlayerID Owner,
+						ESeinFogVisibilityPolicy Policy)
+					{
+						const FSeinEntityHandle Entity =
+							World->SpawnAbstractEntity(
+								TargetTransform, Owner);
+						FSeinFogVisibilityComponent Visibility;
+						Visibility.FogVisibilityPolicy = Policy;
+						World->AddComponent(Entity, Visibility);
+						return Entity;
+					};
+
+					AlwaysVisible = SpawnWithPolicy(
+						OtherOwner,
+						ESeinFogVisibilityPolicy::AlwaysVisible);
+					VisibleOnceExplored = SpawnWithPolicy(
+						OtherOwner,
+						ESeinFogVisibilityPolicy::VisibleOnceExplored);
+					VisibleOnceSeen = SpawnWithPolicy(
+						OtherOwner,
+						ESeinFogVisibilityPolicy::VisibleOnceSeen);
+					VisionLayersOnly = SpawnWithPolicy(
+						OtherOwner,
+						ESeinFogVisibilityPolicy::VisionLayersOnly);
+					Owned = SpawnWithPolicy(
+						Observer,
+						ESeinFogVisibilityPolicy::VisionLayersOnly);
+				},
+				FSeinMatchSettings(),
+				0x464F5751,
+				TEXT("Fog.BlueprintVisibility.Policy"),
+				&Error)));
+
+		ASSERT_THAT(IsTrue(
+			USeinFogOfWarBPFL::SeinIsEntityVisible(
+				&UnrealWorld, Observer, AlwaysVisible)));
+		ASSERT_THAT(IsFalse(
+			USeinFogOfWarBPFL::SeinIsEntityVisible(
+				&UnrealWorld, Observer, VisibleOnceExplored)));
+		ASSERT_THAT(IsFalse(
+			USeinFogOfWarBPFL::SeinIsEntityVisible(
+				&UnrealWorld, Observer, VisibleOnceSeen)));
+		ASSERT_THAT(IsFalse(
+			USeinFogOfWarBPFL::SeinIsEntityVisible(
+				&UnrealWorld, Observer, VisionLayersOnly)));
+
+		FFogOfWarDefaultTestAccess::SeedOneCellObserverState(
+			*Fog,
+			Observer,
+			SEIN_FOW_BIT_EXPLORED,
+			VisibleOnceSeen);
+
+		ASSERT_THAT(IsTrue(
+			USeinFogOfWarBPFL::SeinIsEntityVisible(
+				&UnrealWorld, Observer, VisibleOnceExplored)));
+		ASSERT_THAT(IsTrue(
+			USeinFogOfWarBPFL::SeinIsEntityVisible(
+				&UnrealWorld, Observer, VisibleOnceSeen)));
+		ASSERT_THAT(IsFalse(
+			USeinFogOfWarBPFL::SeinIsEntityVisible(
+				&UnrealWorld, Observer, VisionLayersOnly)));
+		ASSERT_THAT(IsTrue(
+			USeinFogOfWarBPFL::SeinIsEntityVisible(
+				&UnrealWorld, Observer, Owned)));
+		ASSERT_THAT(IsTrue(
+			USeinFogOfWarBPFL::SeinIsEntityVisible(
+				&UnrealWorld,
+				FSeinPlayerID::Neutral(),
+				VisionLayersOnly)));
+
+		FFogOfWarDefaultTestAccess::ClearRuntimeGridDimensions(*Fog);
+		ASSERT_THAT(IsTrue(
+			USeinFogOfWarBPFL::SeinIsEntityVisible(
+				&UnrealWorld, Observer, VisionLayersOnly)));
+	}
+
+	TEST(BlueprintEntityVisibilityPermitsFogDisabledProjects,
+		"SeinARTS.Unit.FogOfWar")
+	{
+		FScopedFogDisabled ScopedFogDisabled;
+		FActorTestSpawner Spawner;
+		UWorld& UnrealWorld = Spawner.GetWorld();
+		USeinWorldSubsystem* World =
+			UnrealWorld.GetSubsystem<USeinWorldSubsystem>();
+		USeinFogOfWarSubsystem* FogSubsystem =
+			UnrealWorld.GetSubsystem<USeinFogOfWarSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+		ASSERT_THAT(IsNotNull(FogSubsystem));
+		ASSERT_THAT(IsNull(FogSubsystem->GetFogOfWar()));
+
+		FSeinEntityHandle Target;
+		FString Error;
+		ASSERT_THAT(IsTrue(
+			SeinTestMatchBootstrap::Materialize(
+				*World,
+				[&]()
+				{
+					Target = World->SpawnAbstractEntity(
+						FFixedTransform(),
+						FSeinPlayerID(2));
+				},
+				FSeinMatchSettings(),
+				0x464F5744,
+				TEXT("Fog.BlueprintVisibility.Disabled"),
+				&Error)));
+
+		ASSERT_THAT(IsTrue(
+			USeinFogOfWarBPFL::SeinIsEntityVisible(
+				&UnrealWorld, FSeinPlayerID(1), Target)));
+		ASSERT_THAT(IsFalse(
+			USeinFogOfWarBPFL::SeinIsEntityVisible(
+				&UnrealWorld,
+				FSeinPlayerID(1),
+				FSeinEntityHandle())));
 	}
 
 	TEST(DynamicFogBlockerIdentityIncludesPose, "SeinARTS.Unit.FogOfWar")

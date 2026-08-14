@@ -13,10 +13,7 @@
 #include "Data/SeinVisionLayerDefinition.h"
 
 #include "Simulation/SeinWorldSubsystem.h"
-#include "Simulation/ComponentStorage.h"
-#include "Components/SeinVisionComponent.h"
 #include "Components/SeinFogVisibilityComponent.h"
-#include "Components/SeinExtentsComponent.h"
 #include "Types/Entity.h"
 
 #include "Engine/Engine.h"
@@ -92,33 +89,10 @@ bool USeinFogOfWarBPFL::SeinIsEntityVisible(const UObject* WorldContextObject,
 	if (!Sim->GetEntity(Target)) return false;
 
 	USeinFogOfWar* Fog = USeinFogOfWarSubsystem::GetFogOfWarForWorld(WorldContextObject);
-	if (!Fog) return false;
+	if (!Fog) return true;
 	if (!Fog->HasRuntimeData()) return true;
 
-	// Emission-aware visibility: observer needs ANY stamped bit that matches
-	// the target's FogVisibilityLayerMask (on FSeinFogVisibilityComponent —
-	// moved off extents in Phase-5+ so entities without a body can still
-	// author emission). Handles camo cleanly — a unit whose mask is
-	// Stealth-only is invisible to Normal-only observers even if the cell
-	// has V bit set, and visible to observers perceiving Stealth even if
-	// V isn't stamped there.
-	uint8 EmissionMask = SEIN_FOW_BIT_NORMAL;
-	if (const ISeinComponentStorage* FogVisStorage = Sim->GetComponentStorageRaw(FSeinFogVisibilityComponent::StaticStruct()))
-	{
-		if (const void* Raw = FogVisStorage->GetComponentRaw(Target))
-		{
-			EmissionMask = static_cast<const FSeinFogVisibilityComponent*>(Raw)->FogVisibilityLayerMask;
-		}
-	}
-	if (EmissionMask == 0) return false; // entity authored as never-visible
-
-	// Volumetric query — ORs cell bits across the target's extents. Falls
-	// back to single-point at center when the target has no extents
-	// component. Matters for big-footprint targets (tanks, buildings)
-	// whose center may sit one cell away from the nearest visible cell
-	// even when the entity is plainly in view.
-	const uint8 ObserverBits = Fog->GetEntityVisibleBits(Observer, *Sim, Target);
-	return (ObserverBits & EmissionMask) != 0;
+	return Fog->IsEntityVisibleToObserver(Observer, *Sim, Target);
 }
 
 FSeinPlayerID USeinFogOfWarBPFL::SeinGetLocalObserver(const UObject* WorldContextObject)
