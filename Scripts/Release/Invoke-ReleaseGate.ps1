@@ -97,9 +97,6 @@ $UdpFaultProxyScript = Join-Path $RepoRoot `
 $UdpFaultProxySelfTestScript = Join-Path $RepoRoot `
 	'Scripts\ConsumerMatrix\Invoke-UdpFaultProxySelfTest.ps1'
 $DocumentationRoot = Join-Path $RepoRoot 'Docs'
-if (-not (Test-Path -LiteralPath $DocumentationRoot -PathType Container)) {
-	$DocumentationRoot = Join-Path $RepoRoot '.agents\Docs'
-}
 $Dist = Join-Path $RepoRoot '.dist'
 $ReceiptRoot = Join-Path $RepoRoot 'Saved\ReleaseGate'
 $ProductionPlugins = @(
@@ -130,6 +127,17 @@ if (-not $PackageOnly -and
 }
 if (-not $PackageOnly -and $RuntimeNetworkProfile -cne 'Adverse') {
 	throw 'Publication mode requires the Adverse packaged-runtime network profile.'
+}
+$PublicDocumentationFiles = @()
+if (-not $PackageOnly) {
+	if (-not (Test-Path -LiteralPath $DocumentationRoot -PathType Container)) {
+		throw "Publication requires deliberate customer documentation under '$DocumentationRoot'."
+	}
+	$PublicDocumentationFiles = @(
+		Get-ChildItem -LiteralPath $DocumentationRoot -File -Recurse)
+	if ($PublicDocumentationFiles.Count -eq 0) {
+		throw "Publication requires at least one customer-documentation file under '$DocumentationRoot'."
+	}
 }
 
 foreach ($RequiredScript in @(
@@ -741,8 +749,8 @@ function New-ReleaseEvidenceArchive
 	}
 	$EvidenceSourcePaths.Add($UdpFaultProxySelfTestResult)
 	$EvidenceSourcePaths.Add($UdpFaultProxySelfTestProxyResult)
-	foreach ($Document in @('COMPATIBILITY.md', 'UPGRADING.md')) {
-		$EvidenceSourcePaths.Add((Join-Path $DocumentationRoot $Document))
+	foreach ($Document in $PublicDocumentationFiles) {
+		$EvidenceSourcePaths.Add($Document.FullName)
 	}
 	$EvidenceSourceLocks =
 		[System.Collections.Generic.List[System.IO.FileStream]]::new()
@@ -854,9 +862,16 @@ function New-ReleaseEvidenceArchive
 	Copy-Item -LiteralPath $UdpFaultProxySelfTestProxyResult `
 		-Destination (Join-Path $EvidenceRoot 'udp-fault-proxy-self-test-proxy.json') `
 		-Force
-	foreach ($Document in @('COMPATIBILITY.md', 'UPGRADING.md')) {
-		Copy-Item -LiteralPath (Join-Path $DocumentationRoot $Document) `
-			-Destination (Join-Path $EvidenceRoot $Document) -Force
+	$EvidenceDocumentationRoot = Join-Path $EvidenceRoot 'Documentation'
+	foreach ($Document in $PublicDocumentationFiles) {
+		$RelativeDocumentPath = [System.IO.Path]::GetRelativePath(
+			$DocumentationRoot, $Document.FullName)
+		$DocumentDestination = Join-Path $EvidenceDocumentationRoot `
+			$RelativeDocumentPath
+		New-Item -ItemType Directory -Force `
+			-Path (Split-Path -Parent $DocumentDestination) | Out-Null
+		Copy-Item -LiteralPath $Document.FullName `
+			-Destination $DocumentDestination -Force
 	}
 	}
 	finally {
@@ -866,15 +881,17 @@ function New-ReleaseEvidenceArchive
 	}
 
 	$EvidenceFiles = [ordered]@{}
-	foreach ($File in Get-ChildItem -LiteralPath $EvidenceRoot -File |
-			Sort-Object Name) {
-		$EvidenceFiles[$File.Name] = [ordered]@{
+	foreach ($File in Get-ChildItem -LiteralPath $EvidenceRoot -File -Recurse |
+			Sort-Object FullName) {
+		$RelativeEvidencePath = [System.IO.Path]::GetRelativePath(
+			$EvidenceRoot, $File.FullName).Replace('\', '/')
+		$EvidenceFiles[$RelativeEvidencePath] = [ordered]@{
 			bytes = $File.Length
 			sha256 = (Get-FileHash -LiteralPath $File.FullName -Algorithm SHA256).Hash
 		}
 	}
 	[ordered]@{
-		schemaVersion = 1
+		schemaVersion = 2
 		version = $Version
 		commit = $Commit
 		generatedAtUtc = [DateTime]::UtcNow.ToString('o')

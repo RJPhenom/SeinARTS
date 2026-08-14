@@ -64,6 +64,31 @@ until broker or cancellation-tag arbitration ends the current one. Passives rema
 Snapshot admission requires both directions of the invariant: active objects are indexed in the
 correct role, and indexed objects are active. The base ability pool provider behavior revision is 2.
 
+### Designer authoring boundaries
+
+Ordinary gameplay activates an Ability through **Issue Ability Command**, which enters the
+lockstep queue and re-runs command authority, targeting, pathability, cooldown, tag, capacity,
+cost, and cancellation gates. **Activate Ability (Direct)** intentionally bypasses those gates and
+is limited to debug, cheat, or reconstruction work. **Get Ability Availability** is an advisory UI
+query; the queued command remains authoritative.
+
+Ability Blueprint member state is canonical. Multi-tick work may cross simulation time only through
+registered Sein latent actions with checkpoint codecs. Values needed after an async boundary must
+be persisted in deterministic Ability or component state rather than compiler-frame temporaries.
+Self-state writes during lifecycle callbacks are tracked; external mutation must call **Mark
+Deterministic State Dirty**. The determinism and continuation validators fail closed on unsafe member
+types, untrusted or presentation-only calls, unseeded randomness, and unsupported latent work. Start
+code investigation at `SeinAbility.h`, `SeinAbilityBPFL.h`,
+`SeinAbilityDeterminismValidator.cpp`, and `SeinAbilityContinuationValidator.cpp`.
+
+Balance Data is an editor-only bulk editing view over authoritative entity Blueprint components and
+Ability defaults; the generated DataTable is never runtime simulation state. Gather is destructive,
+Check Sync detects authored drift, and Push writes only validated changes back to bound source
+properties. Stable source identity, schema checks, mounted content roots, and the filtered native or
+designer-component picker fail closed. After a successful Push, save the source assets and regenerate
+the Simulation Content Manifest. Start at `SeinBalanceProfile.h`, `SeinBalanceTableExport.cpp`, and
+`SeinBalanceProfileDetails.cpp`.
+
 ### Collision
 
 - `USeinCollisionResolverDefault` performs deterministic in-place Gauss-Seidel relaxation. It is the current project default because it wins at the measured 100-148 mover scale.
@@ -119,6 +144,14 @@ descriptors even though the serialized payload schema itself did not grow.
 ### Presentation performance policy
 
 Ordinary RTS visual meshes use Unreal update-rate optimization and skip animation-to-physics bone/overlap work; crowd skinned meshes are excluded from hardware ray-tracing geometry. Designers can opt actors back into UE component defaults or the physics-mesh policy. These choices are render-only and never enter lockstep state.
+
+Movement+ exposes render-only steering angle and yaw rate in radians, normalized throttle/brake in
+`0..1`, wrapped wheel phase in radians, and signed left/right track velocity in cm/s. Settled
+post-collision transforms drive motion telemetry while movement-driver velocity drives
+throttle/brake, so collision correction cannot masquerade as input. Telemetry clears across
+spawn/restore/class-loss boundaries and may never feed simulation. The exact implementation contract
+lives in `Plugins/SeinARTSMovementPlusExtension/AGENTS.md`; `.agents/VEHICLE_GYM.md` owns its
+qualification and PIE matrix.
 
 ## Extension responsibilities
 

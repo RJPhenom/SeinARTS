@@ -14,11 +14,11 @@ Use `WORKFLOW.md` for operational rules. Use the repository and plugin-level gui
 - `CONSUMER_VERIFICATION.md` — clean downstream project/build/cook/package verification contract.
 - `READINESS_ROADMAP.md` — ordered path from the stabilized framework to a game-ready, online-capable SDK.
 - `OPEN_RISKS.md` — unresolved correctness, state, extensibility, gameplay, and release risks.
-- `.agents/Docs/` — current release-documentation source retained for packaging and evidence until the deliberate public `Docs/` tree replaces it.
 
 ## Artifact policy
 
 - `Docs/` is reserved for deliberate user/developer documentation built for the product. Do not put audit scratch, agent handoffs, or generated reports there.
+- Do not recreate a customer-documentation hierarchy under `.agents/`. Consolidate durable model context into the records above; author future customer material directly in `Docs/` when that documentation effort begins.
 - Agent-authored Markdown belongs here when it is durable. Short-lived exploration should stay out of Git.
 - Generated PDFs do not belong in the repository. Put requested PDFs in the requesting user's Downloads directory.
 - Raw Automation, profiling, logs, replays, and Unreal build products remain under ignored `Saved/`, `Binaries/`, `Intermediate/`, or external temporary capture directories.
