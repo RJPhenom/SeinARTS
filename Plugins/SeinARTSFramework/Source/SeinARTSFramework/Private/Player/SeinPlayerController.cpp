@@ -13,8 +13,12 @@
 #include "Actor/SeinActor.h"
 #include "Actor/SeinEntityComponent.h"
 #include "Components/SeinAbilityComponent.h"
+#include "Components/SeinCommandBrokerData.h"
 #include "Components/SeinMovementComponent.h"
+#include "Components/SeinNavigationComponent.h"
+#include "Components/SeinSquadComponent.h"
 #include "Components/SeinSquadMemberComponent.h"
+#include "Preview/SeinFormationPreviewSubsystem.h"
 #include "Abilities/SeinTargeterTypes.h"
 #include "Brokers/SeinBrokerTypes.h"
 #include "Simulation/SeinActorBridgeSubsystem.h"
@@ -24,6 +28,7 @@
 #include "Types/Vector.h"
 #include "Input/SeinCommand.h"
 #include "Lib/SeinResourceBPFL.h"
+#include "Lib/SeinCommandBrokerBPFL.h"
 #include "Tags/SeinARTSGameplayTags.h"
 #include "SeinNetSubsystem.h"
 #include "Engine/LocalPlayer.h"
@@ -1389,7 +1394,7 @@ void ASeinPlayerController::IssueSmartCommandEx(
 		return;
 	}
 
-	const FGameplayTagContainer Context = BuildCommandContext(TargetActor, WorldLocation);
+	FGameplayTagContainer Context = BuildCommandContext(TargetActor, WorldLocation);
 
 	// Determine which entities receive commands
 	TArray<ASeinActor*> CommandTargets;
@@ -1413,7 +1418,7 @@ void ASeinPlayerController::IssueSmartCommandEx(
 		return;
 	}
 
-	const FSeinEntityHandle TargetEntityHandle =
+	FSeinEntityHandle TargetEntityHandle =
 		(TargetActor && TargetActor->HasValidEntity())
 			? TargetActor->GetEntityHandle()
 			: FSeinEntityHandle::Invalid();
@@ -1449,13 +1454,135 @@ void ASeinPlayerController::IssueSmartCommandEx(
 	}
 
 	FSeinBrokerOrderPayload Payload;
-	Payload.CommandContext = Context;
 	Payload.GuidePoints = FixedGuidePoints;
 	Payload.FormationTag = FormationTag;
+
+	// Preview is an admitted value artifact. Build it even over an entity hit so
+	// clicking a destination provider can resolve to its displayed slots. An
+	// unrelated entity remains an entity-targeted smart command and discards the
+	// ground artifact below.
+	TArray<FSeinEntityHandle> ArtifactMembers;
+	TSet<FSeinEntityHandle> SeenArtifactMembers;
+	bool bArtifactEligible = true;
+	for (const FSeinEntityHandle& Handle : MemberHandles)
+	{
+		if (const FSeinCommandBrokerData* Broker =
+			Subsystem->GetComponent<FSeinCommandBrokerData>(Handle))
+		{
+			if (const FSeinSquadComponent* Squad =
+				Subsystem->GetComponent<FSeinSquadComponent>(Handle);
+				Squad && !Squad->bShowFormationPreview)
+			{
+				bArtifactEligible = false;
+				break;
+			}
+			for (const FSeinEntityHandle& Member : Broker->Members)
+			{
+				if (!Subsystem->IsEntityAlive(Member)) continue;
+				const FSeinNavigationComponent* Navigation =
+					Subsystem->GetComponent<FSeinNavigationComponent>(Member);
+				if (!Navigation || !Navigation->bShowNavigationPreview)
+				{
+					bArtifactEligible = false;
+					break;
+				}
+				if (!SeenArtifactMembers.Contains(Member))
+				{
+					SeenArtifactMembers.Add(Member);
+					ArtifactMembers.Add(Member);
+				}
+			}
+			if (!bArtifactEligible) break;
+		}
+		else
+		{
+			const FSeinNavigationComponent* Navigation =
+				Subsystem->GetComponent<FSeinNavigationComponent>(Handle);
+			if (!Navigation || !Navigation->bShowNavigationPreview)
+			{
+				bArtifactEligible = false;
+				break;
+			}
+			if (!SeenArtifactMembers.Contains(Handle))
+			{
+				SeenArtifactMembers.Add(Handle);
+				ArtifactMembers.Add(Handle);
+			}
+		}
+	}
+
+	if (bArtifactEligible && !ArtifactMembers.IsEmpty())
+	{
+		bool bUsedDisplayedArtifact = false;
+		if (ULocalPlayer* LocalPlayer = GetLocalPlayer())
+		{
+			if (const USeinFormationPreviewSubsystem* Preview =
+				LocalPlayer->GetSubsystem<USeinFormationPreviewSubsystem>())
+			{
+				bUsedDisplayedArtifact =
+					Preview->TryGetDisplayedDestinationArtifact(
+						ArtifactMembers,
+						FixedLocation,
+						FixedGuidePoints,
+						FormationTag,
+						bQueue,
+						Payload.DestinationArtifact);
+			}
+		}
+		if (!bUsedDisplayedArtifact)
+		{
+			bool bPlanSucceeded = false;
+			USeinCommandBrokerBPFL::ComputeFormationDestinationArtifact(
+				this,
+				ArtifactMembers,
+				FixedLocation,
+				FixedGuidePoints,
+				FormationTag,
+				SeinPlayerID,
+				bQueue,
+				Payload.DestinationArtifact,
+				&bPlanSucceeded);
+			if (!bPlanSucceeded)
+			{
+				// A provider failed the plan, so no exact artifact was (or
+				// could have been) displayed for this click. Degrade to a
+				// legacy artifact-less order — the sim resolver computes the
+				// destinations — rather than silently eating the player's
+				// command. This is not the reserved conflict-policy question:
+				// that governs rejection of a VALID displayed artifact at
+				// admission, not provider failure before submission.
+				UE_LOG(LogTemp, Warning,
+					TEXT("IssueSmartCommandEx: destination plan failed; submitting without an artifact."));
+				Payload.DestinationArtifact.Reset();
+			}
+		}
+	}
+
+	if (TargetEntityHandle.IsValid())
+	{
+		const bool bTargetOwnsDisplayedDestination =
+			Payload.DestinationArtifact.ContainsByPredicate(
+				[TargetEntityHandle](const FSeinFrozenDestination& Destination)
+				{
+					return Destination.bReserveFootprint
+						&& Destination.SourceEntity == TargetEntityHandle;
+				});
+		if (bTargetOwnsDisplayedDestination)
+		{
+			TargetEntityHandle = FSeinEntityHandle::Invalid();
+			Context = BuildCommandContext(nullptr, WorldLocation);
+		}
+		else
+		{
+			Payload.DestinationArtifact.Reset();
+		}
+	}
+	Payload.CommandContext = Context;
 
 	FSeinCommand BrokerCmd;
 	BrokerCmd.PlayerID = SeinPlayerID;
 	BrokerCmd.CommandType = SeinARTSTags::Command_Type_BrokerOrder;
+	BrokerCmd.SchemaVersion = SeinBrokerOrderProtocol::SchemaVersion;
 	BrokerCmd.TargetEntity = TargetEntityHandle;
 	BrokerCmd.TargetLocation = FixedLocation;
 	BrokerCmd.EntityList = MemberHandles;
@@ -1979,6 +2106,7 @@ void ASeinPlayerController::IssueTargetedAbility(FGameplayTag AbilityTag,
 	FSeinCommand BrokerCmd;
 	BrokerCmd.PlayerID = SeinPlayerID;
 	BrokerCmd.CommandType = SeinARTSTags::Command_Type_BrokerOrder;
+	BrokerCmd.SchemaVersion = SeinBrokerOrderProtocol::SchemaVersion;
 	BrokerCmd.TargetEntity = FSeinEntityHandle::Invalid();
 	BrokerCmd.TargetLocation = PrimaryLocation;
 	BrokerCmd.EntityList = MemberHandles;

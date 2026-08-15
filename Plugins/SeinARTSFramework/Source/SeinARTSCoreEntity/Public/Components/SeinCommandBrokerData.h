@@ -162,6 +162,13 @@ struct SEINARTSCOREENTITY_API FSeinCommandBrokerData : public FSeinComponent
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker")
 	TArray<FFixedQuaternion> SettledSlotFacings;
 
+	/** Reserved exact destinations retained after successful movement arrival. An
+	 *  entry remains authoritative until that member starts another move, leaves
+	 *  the broker, or dies. Provider identity remains provenance; provider motion
+	 *  or destruction does not relocate the settled point. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker")
+	TArray<FSeinFrozenDestination> SettledDestinationArtifact;
+
 	/** The earliest sim tick this formation may next consider an idle re-seek.
 	 *
 	 *  Advanced by the broker tick on every re-seek scan (the re-check cadence) and pushed

@@ -496,7 +496,10 @@ ESeinPathResult USeinTrackedVehicleMovement::PlanPath(const FSeinPlanPathContext
 		ToJ.Z = FFixedPoint::Zero;
 		FFixedPoint AbsErr = FFixedPoint::Zero;
 		FFixedPoint TurnSign = FFixedPoint::One;
-		if (ToJ.SizeSquared() > FFixedPoint::Epsilon && !IsPlanarFar(ToJ))
+		// Guard order is load-bearing: IsPlanarFar must run FIRST so the
+		// wrap-prone raw SizeSquared() is never evaluated on a long-range
+		// join vector (32.32 squares wrap past ~463 m).
+		if (!IsPlanarFar(ToJ) && ToJ.SizeSquared() > FFixedPoint::Epsilon)
 		{
 			const FFixedPoint Err = SeinWheeledManeuver::WrapSigned(
 				SeinMath::Atan2(ToJ.Y, ToJ.X) - In.Yaw);

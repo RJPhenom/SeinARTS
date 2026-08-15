@@ -783,6 +783,9 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 				MovementSub->MarkMovementStateDirty(OwnerEntity);
 			}
 		}
+		// The first path is committed and the unit is genuinely departing.
+		// Failures before this point leave any still-occupied frozen claim live.
+		World.NotifyFrozenDestinationDeparture(OwnerEntity);
 		Movement->OnMoveBegin(BeginCtx);
 	}
 
@@ -1262,6 +1265,13 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 
 	if (bReachedEnd)
 	{
+		// A partial path completes at a best-effort endpoint, not the frozen
+		// destination. Only an exact-route arrival earns settled authority.
+		if (!Path.bIsPartial)
+		{
+			World.ConfirmFrozenDestinationArrival(
+				OwnerEntity, Destination);
+		}
 		// Terminalize before either OnMoveEnd or the proxy delegate: both may
 		// synchronously call EndAbility, whose latent-action cancellation must
 		// observe this action as already complete.

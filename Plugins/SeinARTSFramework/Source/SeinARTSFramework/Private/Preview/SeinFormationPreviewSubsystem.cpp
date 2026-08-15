@@ -239,10 +239,18 @@ void USeinFormationPreviewSubsystem::RefreshPreview()
 	for (const FVector& G : OrderGuide) { GuideFixed.Add(FFixedVector::FromVector(G)); }
 
 	FSeinFormationLayout Layout;
+	TArray<FSeinFrozenDestination> DestinationArtifact;
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_FormationPreview_ComputeLayout);
-		Layout = USeinCommandBrokerBPFL::SeinComputeFormationPreview(
-			PC, Members, AnchorFixed, GuideFixed, OrderFormationTag);
+		Layout = USeinCommandBrokerBPFL::ComputeFormationDestinationArtifact(
+			PC,
+			Members,
+			AnchorFixed,
+			GuideFixed,
+			OrderFormationTag,
+			PC->SeinPlayerID,
+			PC->IsQueueModifierHeld(),
+			DestinationArtifact);
 	}
 
 	if (Layout.Positions.Num() == 0)
@@ -298,6 +306,12 @@ void USeinFormationPreviewSubsystem::RefreshPreview()
 	}
 	PreviewActor->SetActorHiddenInGame(false);
 	bIsVisible = true;
+	DisplayedDestinationArtifact = MoveTemp(DestinationArtifact);
+	DisplayedArtifactMembers = Members;
+	DisplayedArtifactTarget = AnchorFixed;
+	DisplayedArtifactGuidePoints = GuideFixed;
+	DisplayedArtifactFormationTag = OrderFormationTag;
+	bDisplayedArtifactQueueCommand = PC->IsQueueModifierHeld();
 	bLayoutDirty = false;
 	LastLayoutCursor = LastCursorWorld;
 	if (USeinWorldSubsystem* WorldSub = PC->GetWorld()
@@ -321,9 +335,37 @@ void USeinFormationPreviewSubsystem::HidePreview()
 		PreviewActor->SetActorHiddenInGame(true);
 	}
 	bIsVisible = false;
+	DisplayedDestinationArtifact.Reset();
+	DisplayedArtifactMembers.Reset();
+	DisplayedArtifactGuidePoints.Reset();
+	DisplayedArtifactFormationTag = FGameplayTag();
+	bDisplayedArtifactQueueCommand = false;
 	// A later valid cursor/targeter exit must rebuild even if it happens in the
 	// same sim tick at the same world location as the last visible layout.
 	bLayoutDirty = true;
+}
+
+bool USeinFormationPreviewSubsystem::TryGetDisplayedDestinationArtifact(
+	const TArray<FSeinEntityHandle>& Members,
+	const FFixedVector& TargetLocation,
+	const TArray<FFixedVector>& GuidePoints,
+	FGameplayTag FormationTag,
+	bool bQueueCommand,
+	TArray<FSeinFrozenDestination>& OutArtifact) const
+{
+	OutArtifact.Reset();
+	if (!bIsVisible
+		|| DisplayedDestinationArtifact.Num() != Members.Num()
+		|| DisplayedArtifactMembers != Members
+		|| DisplayedArtifactTarget != TargetLocation
+		|| DisplayedArtifactGuidePoints != GuidePoints
+		|| DisplayedArtifactFormationTag != FormationTag
+		|| bDisplayedArtifactQueueCommand != bQueueCommand)
+	{
+		return false;
+	}
+	OutArtifact = DisplayedDestinationArtifact;
+	return true;
 }
 
 void USeinFormationPreviewSubsystem::EnsurePreviewActorSpawned()
@@ -393,8 +435,21 @@ TArray<FSeinEntityHandle> USeinFormationPreviewSubsystem::ResolveSelectionToMemb
 	// have a nav component and opt in); lone units return their own handle if they
 	// have a nav component and opt in. No nav component = no destination opinion =
 	// opted out.
-	for (const TWeakObjectPtr<ASeinActor>& Weak : PC->SelectedActors)
+	const bool bFocusedSelection =
+		PC->ActiveFocusIndex >= 0
+		&& PC->SelectedActors.IsValidIndex(PC->ActiveFocusIndex);
+	const int32 FirstSelectionIndex = bFocusedSelection
+		? PC->ActiveFocusIndex
+		: 0;
+	const int32 LastSelectionIndex = bFocusedSelection
+		? PC->ActiveFocusIndex + 1
+		: PC->SelectedActors.Num();
+	for (int32 SelectionIndex = FirstSelectionIndex;
+		SelectionIndex < LastSelectionIndex;
+		++SelectionIndex)
 	{
+		const TWeakObjectPtr<ASeinActor>& Weak =
+			PC->SelectedActors[SelectionIndex];
 		ASeinActor* Actor = Weak.Get();
 		if (!Actor) continue;
 		const FSeinEntityHandle Handle = Actor->GetEntityHandle();

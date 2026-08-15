@@ -342,7 +342,7 @@ namespace
 
 	const FName BuiltInCommandSchemaOwner(TEXT("SeinARTSCoreEntity.Commands"));
 	// Bump whenever built-in command semantics change without a wire-shape change.
-	constexpr int32 BuiltInCommandImplementationRevision = 2;
+	constexpr int32 BuiltInCommandImplementationRevision = 3;
 
 	constexpr int32 AllCommandExecutionAllowances =
 		static_cast<int32>(ESeinCommandExecutionAllowance::Spectator)
@@ -366,6 +366,7 @@ namespace
 		int32 MaxPayloadBytes;
 		int32 MaxPayloadAggregateElements;
 		int32 AllowedExecutionContexts;
+		int32 SchemaVersion = 1;
 	};
 
 	FSeinCommandSchemaDescriptor MakeBuiltInDescriptor(const FBuiltInCommandSchemaSpec& Spec)
@@ -373,7 +374,7 @@ namespace
 		FSeinCommandSchemaDescriptor Descriptor;
 		Descriptor.StableSchemaId = FName(Spec.StableSchemaId);
 		Descriptor.CommandType = Spec.CommandType;
-		Descriptor.SchemaVersion = 1;
+		Descriptor.SchemaVersion = Spec.SchemaVersion;
 		Descriptor.ImplementationRevision = BuiltInCommandImplementationRevision;
 		Descriptor.PayloadStruct = Spec.PayloadStruct;
 		Descriptor.AuthorityScope = Spec.AuthorityScope;
@@ -587,9 +588,12 @@ void FSeinARTSCoreEntity::StartupModule()
 			nullptr, ESeinCommandAuthorityScope::Entity, 0, 0, 0, 0, 0 },
 		{ TEXT("SeinARTS.Core.Command.Ping.V1"), SeinARTSTags::Command_Type_Ping,
 			nullptr, ESeinCommandAuthorityScope::Self, 0, 0, 0, 0, AllCommandExecutionAllowances },
-		{ TEXT("SeinARTS.Core.Command.BrokerOrder.V1"), SeinARTSTags::Command_Type_BrokerOrder,
+		{ TEXT("SeinARTS.Core.Command.BrokerOrder.V2"), SeinARTSTags::Command_Type_BrokerOrder,
 			FSeinBrokerOrderPayload::StaticStruct(), ESeinCommandAuthorityScope::EntitySet,
-			4096, 0, 128 * 1024, 4096, 0 },
+			SeinBrokerOrderProtocol::MaxMembers, 0,
+			SeinBrokerOrderProtocol::MaxPayloadBytes,
+			SeinBrokerOrderProtocol::MaxAggregateContainerEntries, 0,
+			SeinBrokerOrderProtocol::SchemaVersion },
 		{ TEXT("SeinARTS.Core.Command.SetPairCapability.V1"), SeinARTSTags::Command_Type_SetPairCapability,
 			FSeinSetPairCapabilityCommandPayload::StaticStruct(), ESeinCommandAuthorityScope::MatchControl,
 			0, 0, 256, 0, AllCommandExecutionAllowances },

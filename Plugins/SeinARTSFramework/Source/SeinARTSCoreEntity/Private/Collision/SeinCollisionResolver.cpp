@@ -187,7 +187,8 @@ bool USeinCollisionResolver::CanOccupy(
 	USeinWorldSubsystem& World,
 	FSeinEntityHandle Agent,
 	const FFixedVector& P,
-	FFixedPoint Radius)
+	FFixedPoint Radius,
+	bool bMayUseAuthoritativeDestination)
 {
 	// Hard-barrier gate: the push must never move a unit's FOOTPRINT onto a
 	// non-walkable cell — a baked nav wall, a runtime DYNAMIC nav blocker
@@ -223,7 +224,7 @@ bool USeinCollisionResolver::CanOccupy(
 	// the game-thread-only provider query.
 	if (!IsPassable(P))
 	{
-		if (!World.HasAuthoritativeDestinationProviders())
+		if (!bMayUseAuthoritativeDestination)
 		{
 			return false;
 		}

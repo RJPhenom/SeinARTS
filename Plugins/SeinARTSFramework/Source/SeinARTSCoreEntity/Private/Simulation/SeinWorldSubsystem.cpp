@@ -61,6 +61,8 @@
 #include "Lib/SeinAbilityBPFL.h"   // for runtime Grant/Revoke during effect fan-out
 #include "Lib/SeinResourceBPFL.h"
 #include "Lib/SeinCommandBrokerBPFL.h"   // ComputeMultiBrokerAnchors (shared with the preview)
+#include "Formations/SeinFormation.h"
+#include "Math/MathLib.h"
 #include "Tags/SeinARTSGameplayTags.h"
 #include "Containers/Ticker.h"
 #include "StructUtils/InstancedStruct.h"
@@ -87,9 +89,111 @@
 #include "SeinARTSCoreEntityLog.h"  // LogSeinSim (module-shared)
 #include "SeinARTSCoreEntityModule.h"
 
+#if !UE_BUILD_SHIPPING
+static TAutoConsoleVariable<int32> CVarSeinStateRootVerifyIncrementalInterval(
+	TEXT("Sein.Sim.StateRoot.VerifyIncrementalInterval"),
+	0,
+	TEXT("0 (default) = off. N>0 = every N completed sim ticks, compare the ")
+	TEXT("incrementally maintained canonical root against a forced full ")
+	TEXT("rebuild and surface any disagreement on screen and in the log. ")
+	TEXT("Diagnostic only; the rebuild is expensive. Toggle on for PIE ")
+	TEXT("determinism testing."),
+	ECVF_Default);
+#endif
+
 namespace
 {
 	constexpr int32 MaxAuthoritativeDestinationProviders = 128;
+	constexpr int32 MaxSelectionDestinationPlanProviders = 128;
+
+	struct FSeinUInt128
+	{
+		uint64 High = 0;
+		uint64 Low = 0;
+	};
+
+	FSeinUInt128 MultiplyUnsigned64(uint64 Left, uint64 Right)
+	{
+#if defined(_MSC_VER)
+		FSeinUInt128 Product;
+		Product.Low = _umul128(Left, Right, &Product.High);
+		return Product;
+#elif defined(__GNUC__) || defined(__clang__)
+		const unsigned __int128 Product =
+			static_cast<unsigned __int128>(Left)
+			* static_cast<unsigned __int128>(Right);
+		return {
+			static_cast<uint64>(Product >> 64),
+			static_cast<uint64>(Product)};
+#else
+#error "Platform does not support unsigned 128-bit multiplication"
+#endif
+	}
+
+	bool TryAddUnsigned128(
+		const FSeinUInt128& Left,
+		const FSeinUInt128& Right,
+		FSeinUInt128& Out)
+	{
+		Out.Low = Left.Low + Right.Low;
+		const uint64 Carry = Out.Low < Left.Low ? 1 : 0;
+		const uint64 HighWithoutCarry = Left.High + Right.High;
+		if (HighWithoutCarry < Left.High) return false;
+		Out.High = HighWithoutCarry + Carry;
+		return Out.High >= HighWithoutCarry;
+	}
+
+	bool IsLessThanOrEqual(
+		const FSeinUInt128& Left,
+		const FSeinUInt128& Right)
+	{
+		return Left.High < Right.High
+			|| (Left.High == Right.High && Left.Low <= Right.Low);
+	}
+
+	uint64 AbsoluteRawDifference(int64 Left, int64 Right)
+	{
+		const uint64 LeftBits = static_cast<uint64>(Left);
+		const uint64 RightBits = static_cast<uint64>(Right);
+		return Left >= Right
+			? LeftBits - RightBits
+			: RightBits - LeftBits;
+	}
+
+	bool DoPlanarDestinationFootprintsOverlap(
+		const FFixedVector& LeftPosition,
+		FFixedPoint LeftRadius,
+		const FFixedVector& RightPosition,
+		FFixedPoint RightRadius)
+	{
+		if (LeftRadius <= FFixedPoint::Zero
+			|| RightRadius <= FFixedPoint::Zero)
+		{
+			return false;
+		}
+		const uint64 CombinedRadius =
+			static_cast<uint64>(LeftRadius.Value)
+			+ static_cast<uint64>(RightRadius.Value);
+		const uint64 DeltaX = AbsoluteRawDifference(
+			LeftPosition.X.Value, RightPosition.X.Value);
+		const uint64 DeltaY = AbsoluteRawDifference(
+			LeftPosition.Y.Value, RightPosition.Y.Value);
+		if (DeltaX > CombinedRadius || DeltaY > CombinedRadius)
+		{
+			return false;
+		}
+		FSeinUInt128 DistanceSquared;
+		if (!TryAddUnsigned128(
+				MultiplyUnsigned64(DeltaX, DeltaX),
+				MultiplyUnsigned64(DeltaY, DeltaY),
+				DistanceSquared))
+		{
+			return false;
+		}
+		return IsLessThanOrEqual(
+			DistanceSquared,
+			MultiplyUnsigned64(CombinedRadius, CombinedRadius));
+	}
 
 	void AppendUtf8Framed(FString& Out, const FString& Value)
 	{
@@ -437,7 +541,7 @@ bool USeinWorldSubsystem::BuildAuthoritativeDestinationProviderBindingFrame(
 
 	FString PreviousStableID;
 	OutFrame = TEXT("SeinARTS.AuthoritativeDestinationProviders\n");
-	AppendUtf8Framed(OutFrame, TEXT("1"));
+	AppendUtf8Framed(OutFrame, TEXT("2"));
 	AppendUtf8Framed(
 		OutFrame,
 		FString::FromInt(AuthoritativeDestinationProviders.Num()));
@@ -470,6 +574,44 @@ bool USeinWorldSubsystem::BuildAuthoritativeDestinationProviderBindingFrame(
 	}
 
 	AppendUtf8Framed(OutFrame, TEXT("legacy-unbound"));
+	if (SelectionDestinationPlanProviders.Num()
+		> MaxSelectionDestinationPlanProviders)
+	{
+		OutError =
+			TEXT("The selection-destination provider count exceeds the deterministic contract limit.");
+		return false;
+	}
+	AppendUtf8Framed(
+		OutFrame,
+		FString::FromInt(SelectionDestinationPlanProviders.Num()));
+	PreviousStableID.Reset();
+	for (const FRegisteredSelectionDestinationPlanProvider& Provider :
+		SelectionDestinationPlanProviders)
+	{
+		FString CanonicalStableID;
+		FString StableIDError;
+		if (Provider.RegistrationToken == 0
+			|| Provider.BehaviorRevision == 0
+			|| !Provider.Resolver.IsBound()
+			|| !FSeinSimulationContentManifestCodec::CanonicalizeStableId(
+				Provider.CanonicalStableID,
+				CanonicalStableID,
+				StableIDError)
+			|| CanonicalStableID != Provider.CanonicalStableID
+			|| (!PreviousStableID.IsEmpty()
+				&& PreviousStableID.Compare(CanonicalStableID) >= 0))
+		{
+			OutError = FString::Printf(
+				TEXT("Selection-destination provider '%s' has an invalid, unbound, duplicated, or non-canonical registration."),
+				*Provider.CanonicalStableID);
+			return false;
+		}
+		AppendUtf8Framed(OutFrame, CanonicalStableID);
+		AppendUtf8Framed(
+			OutFrame,
+			LexToString(Provider.BehaviorRevision));
+		PreviousStableID = MoveTemp(CanonicalStableID);
+	}
 	return true;
 }
 
@@ -715,6 +857,10 @@ void USeinWorldSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	AuthoritativeDestinationProviders.Reset();
 	NextAuthoritativeDestinationProviderToken = 1;
 	bAuthoritativeDestinationQueryInProgress = false;
+	SelectionDestinationPlanProviders.Reset();
+	NextSelectionDestinationPlanProviderToken = 1;
+	bSelectionDestinationPlanQueryInProgress = false;
+	bSelectionDestinationBaseLayoutInProgress = false;
 	ExecutionTopologyManifest.Reset();
 	ExecutionTopologyFailureReason.Reset();
 	ExecutionTopologyDigest.Invalidate();
@@ -1037,6 +1183,10 @@ void USeinWorldSubsystem::ReleaseAllModuleOwnedState()
 	AuthoritativeDestinationProviders.Reset();
 	NextAuthoritativeDestinationProviderToken = 1;
 	bAuthoritativeDestinationQueryInProgress = false;
+	SelectionDestinationPlanProviders.Reset();
+	NextSelectionDestinationPlanProviderToken = 1;
+	bSelectionDestinationPlanQueryInProgress = false;
+	bSelectionDestinationBaseLayoutInProgress = false;
 	AuthoritativeDestinationResolver.Unbind();
 	AgentAuthoritativeDestinationSafetyResolver.Unbind();
 	PreviewQualityProvider.Unbind();
@@ -2633,6 +2783,51 @@ bool USeinWorldSubsystem::TickSimulation(float DeltaTime)
 			LastCompletedTickThisFrame, TicksProcessed);
 	}
 
+#if !UE_BUILD_SHIPPING
+	// Periodic incremental-root cross-check (default OFF). When enabled via
+	// Sein.Sim.StateRoot.VerifyIncrementalInterval, prove at a quiescent
+	// between-ticks boundary that the incrementally maintained canonical root
+	// still equals a from-scratch rebuild. Runs at most once per frame so
+	// catch-up bursts never pay for multiple rebuilds; transient
+	// unavailability (e.g. a resync window) logs quietly, a real mismatch is
+	// surfaced loudly. Purely observational: no sim state, timing, or
+	// networking is affected.
+	if (LastCompletedTickThisFrame != INDEX_NONE)
+	{
+		const int32 VerifyInterval =
+			CVarSeinStateRootVerifyIncrementalInterval.GetValueOnGameThread();
+		if (VerifyInterval > 0
+			&& LastCompletedTickThisFrame - LastIncrementalRootVerifyTick
+				>= VerifyInterval)
+		{
+			TRACE_CPUPROFILER_EVENT_SCOPE(Sein_World_VerifyIncrementalRoot);
+			LastIncrementalRootVerifyTick = LastCompletedTickThisFrame;
+			FGuid VerifiedRoot;
+			FString VerifyError;
+			bool bRootMismatch = false;
+			if (!VerifyIncrementalCanonicalStateRootDetailed(
+					VerifiedRoot, VerifyError, bRootMismatch))
+			{
+				if (bRootMismatch)
+				{
+					UE_LOG(LogSeinSim, Error,
+						TEXT("Incremental canonical-root verification FAILED: %s"),
+						*VerifyError);
+					ShowSimulationErrorOnScreen(FString::Printf(
+						TEXT("Incremental state-root mismatch: %s"),
+						*VerifyError));
+				}
+				else
+				{
+					UE_LOG(LogSeinSim, Verbose,
+						TEXT("Incremental canonical-root verification unavailable this boundary: %s"),
+						*VerifyError);
+				}
+			}
+		}
+	}
+#endif
+
 	if (TicksProcessed >= MaxTicks && TimeAccumulator > FixedDeltaTimeSeconds)
 	{
 		// Persistence-escalated log: most clamps are single-frame hitches
@@ -3490,8 +3685,12 @@ bool USeinWorldSubsystem::ValidateBuiltInCommandSemantics(
 			&& Command.ActiveFocusIndex == INDEX_NONE
 			&& !Command.EntityList.IsEmpty()
 			&& bHasIntent
-			&& Payload->GuidePoints.Num() <= 4096
-			&& Payload->TargeterPoints.Num() <= 256
+			&& Payload->GuidePoints.Num()
+				<= SeinBrokerOrderProtocol::MaxGuidePoints
+			&& Payload->TargeterPoints.Num()
+				<= SeinBrokerOrderProtocol::MaxTargeterPoints
+			&& Payload->DestinationArtifact.Num()
+				<= SeinBrokerOrderProtocol::MaxDestinationArtifactEntries
 			&& (Payload->TargeterPoints.IsEmpty()
 				|| Payload->PredeterminedAbilityTag.IsValid())
 			? true : FailMalformed();
@@ -3779,6 +3978,108 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleBrokerOr
 		RejectCommand(Cmd, SeinARTSTags::Command_Reject_InvalidTarget);
 		return ECommandHandleResult::Handled;
 	}
+	TArray<FSeinFrozenDestination> CanonicalDestinationArtifact =
+		Payload->DestinationArtifact;
+
+	// A displayed ground-order plan is all-or-nothing. Its exact flattened
+	// membership must still match the authorized top-level recipient set; no
+	// partial acceptance or preview-changing recomputation is allowed.
+	if (!CanonicalDestinationArtifact.IsEmpty())
+	{
+		if (Cmd.TargetEntity.IsValid())
+		{
+			RejectCommand(Cmd, SeinARTSTags::Command_Reject_InvalidTarget);
+			return ECommandHandleResult::Handled;
+		}
+		TArray<FSeinEntityHandle> ExpectedMembers;
+		TSet<FSeinEntityHandle> SeenExpectedMembers;
+		for (const FSeinEntityHandle& Recipient : Filtered)
+		{
+			if (const FSeinCommandBrokerData* Broker =
+				GetComponent<FSeinCommandBrokerData>(Recipient))
+			{
+				for (const FSeinEntityHandle& Member : Broker->Members)
+				{
+					if (IsEntityAlive(Member)
+						&& !SeenExpectedMembers.Contains(Member))
+					{
+						SeenExpectedMembers.Add(Member);
+						ExpectedMembers.Add(Member);
+					}
+				}
+			}
+			else if (IsEntityAlive(Recipient)
+				&& !SeenExpectedMembers.Contains(Recipient))
+			{
+				SeenExpectedMembers.Add(Recipient);
+				ExpectedMembers.Add(Recipient);
+			}
+		}
+		bool bArtifactValid =
+			ExpectedMembers.Num() == CanonicalDestinationArtifact.Num();
+		for (int32 Index = 0;
+			bArtifactValid && Index < ExpectedMembers.Num(); ++Index)
+		{
+			const FSeinFrozenDestination& Entry =
+				CanonicalDestinationArtifact[Index];
+			const FFixedPoint CanonicalRadius =
+				USeinFormation::GetFootprintRadius(this, Entry.Member);
+			bArtifactValid = Entry.Member == ExpectedMembers[Index]
+				&& Entry.FootprintRadius == CanonicalRadius
+				&& (!Entry.bReserveFootprint
+					|| (Entry.FootprintRadius > FFixedPoint::Zero
+						&& Entry.SourceEntity.IsValid()
+						&& Entry.SourceIndex >= 0));
+		}
+		if (!bArtifactValid)
+		{
+			RejectCommand(Cmd, SeinARTSTags::Command_Reject_InvalidTarget);
+			return ECommandHandleResult::Handled;
+		}
+
+		// Existing queue ownership is the reservation ledger. A replacement may
+		// ignore only the selected members' entries because this admission removes
+		// those exact orders; queued commands must contend with all prior entries.
+		const TConstArrayView<FSeinEntityHandle> IgnoredMembers =
+			Cmd.bQueueCommand
+				? TConstArrayView<FSeinEntityHandle>()
+				: TConstArrayView<FSeinEntityHandle>(ExpectedMembers);
+		for (int32 Left = 0;
+			Left < CanonicalDestinationArtifact.Num(); ++Left)
+		{
+			const FSeinFrozenDestination& Candidate =
+				CanonicalDestinationArtifact[Left];
+			if (!Candidate.bReserveFootprint) continue;
+			if (IsDestinationFootprintReserved(
+					Candidate.WorldPosition,
+					Candidate.FootprintRadius,
+					IgnoredMembers))
+			{
+				RejectCommand(
+					Cmd,
+					SeinARTSTags::Command_Reject_DestinationReserved);
+				return ECommandHandleResult::Handled;
+			}
+			for (int32 Right = Left + 1;
+				Right < CanonicalDestinationArtifact.Num(); ++Right)
+			{
+				const FSeinFrozenDestination& Other =
+					CanonicalDestinationArtifact[Right];
+				if (!Other.bReserveFootprint) continue;
+				if (DoPlanarDestinationFootprintsOverlap(
+						Candidate.WorldPosition,
+						Candidate.FootprintRadius,
+						Other.WorldPosition,
+						Other.FootprintRadius))
+				{
+					RejectCommand(
+						Cmd,
+						SeinARTSTags::Command_Reject_DestinationReserved);
+					return ECommandHandleResult::Handled;
+				}
+			}
+		}
+	}
 
 	// Resolve the predetermined ability ONCE — both cost + footprint
 	// gates need the same lookup (first capable member's instance of
@@ -3882,6 +4183,7 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleBrokerOr
 	Order.FormationTag = Payload->FormationTag;
 	Order.TargeterPoints = Payload->TargeterPoints;
 	Order.PredeterminedAbilityTag = Payload->PredeterminedAbilityTag;
+	Order.DestinationArtifact = MoveTemp(CanonicalDestinationArtifact);
 
 	// Snap pure location-targets (no entity click) to the nearest
 	// nav-passable cell. Without this, a click that lands on a non-
@@ -4031,6 +4333,18 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleBrokerOr
 
 			FSeinBrokerQueuedOrder MyOrder = Order;
 			MyOrder.TargetLocation = BrokerAnchor;
+			if (!Order.DestinationArtifact.IsEmpty())
+			{
+				MyOrder.DestinationArtifact.Reset();
+				for (const FSeinFrozenDestination& Destination :
+					Order.DestinationArtifact)
+				{
+					if (BrokerMembers.Contains(Destination.Member))
+					{
+						MyOrder.DestinationArtifact.Add(Destination);
+					}
+				}
+			}
 			PersistentBroker->OrderQueue.Add(MyOrder);
 		}
 	}
@@ -4039,20 +4353,37 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleBrokerOr
 	// persistent brokers, this is empty and the block no-ops.
 	if (EphemeralEntities.Num() > 0)
 	{
+		if (!Order.DestinationArtifact.IsEmpty())
+		{
+			TArray<FSeinFrozenDestination> EphemeralArtifact;
+			EphemeralArtifact.Reserve(EphemeralEntities.Num());
+			for (const FSeinFrozenDestination& Destination :
+				Order.DestinationArtifact)
+			{
+				if (EphemeralEntities.Contains(Destination.Member))
+				{
+					EphemeralArtifact.Add(Destination);
+				}
+			}
+			Order.DestinationArtifact = MoveTemp(EphemeralArtifact);
+		}
 		// A2: feed the loose units' element positions (from the unified formation above) as
 		// pre-placed goals so the default resolver dispatches each to its slot in the SINGLE
 		// shape rather than solving a second, overlapping formation. Set on Order here (after
 		// the squad loop) so the squad copies stayed pre-placed-free.
-		Order.PreplacedMembers.Reset();
-		Order.PreplacedPositions.Reset();
-		Order.PreplacedMembers.Reserve(EphemeralEntities.Num());
-		Order.PreplacedPositions.Reserve(EphemeralEntities.Num());
-		for (const FSeinEntityHandle& E : EphemeralEntities)
+		if (Order.DestinationArtifact.IsEmpty())
 		{
-			const int32* EidxPtr = ElementIndex.Find(E);
-			const int32 Eidx = EidxPtr ? *EidxPtr : INDEX_NONE;
-			Order.PreplacedMembers.Add(E);
-			Order.PreplacedPositions.Add(ElementPositions.IsValidIndex(Eidx) ? ElementPositions[Eidx] : Order.TargetLocation);
+			Order.PreplacedMembers.Reset();
+			Order.PreplacedPositions.Reset();
+			Order.PreplacedMembers.Reserve(EphemeralEntities.Num());
+			Order.PreplacedPositions.Reserve(EphemeralEntities.Num());
+			for (const FSeinEntityHandle& E : EphemeralEntities)
+			{
+				const int32* EidxPtr = ElementIndex.Find(E);
+				const int32 Eidx = EidxPtr ? *EidxPtr : INDEX_NONE;
+				Order.PreplacedMembers.Add(E);
+				Order.PreplacedPositions.Add(ElementPositions.IsValidIndex(Eidx) ? ElementPositions[Eidx] : Order.TargetLocation);
+			}
 		}
 		FSeinEntityHandle ExistingBroker;
 		if (Cmd.bQueueCommand)
@@ -4421,6 +4752,36 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleActivate
 					GetComponentMutable<FSeinCommandBrokerData>(
 						ExistingBroker))
 				{
+					// Preserve exact frozen-destination authority across the
+					// derived Move prefix. The originating broker order may be
+					// retired before this prefix plans its path; provenance is
+					// copied as a value and never becomes a live provider binding.
+					for (const FSeinBrokerQueuedOrder& SourceOrder :
+						Broker->OrderQueue)
+					{
+						if (!SourceOrder.bIsExecuting
+							|| (SourceOrder.TargetMembers.Num() > 0
+								&& !SourceOrder.TargetMembers.Contains(
+									Cmd.EntityHandle)))
+						{
+							continue;
+						}
+						const FSeinFrozenDestination* SourceDestination =
+							SourceOrder.DestinationArtifact.FindByPredicate(
+								[&Cmd, &MoveDest](
+									const FSeinFrozenDestination& Entry)
+								{
+									return Entry.Member == Cmd.EntityHandle
+										&& Entry.WorldPosition == MoveDest;
+								});
+						if (SourceDestination)
+						{
+							MovePrefix.DestinationArtifact.Add(
+								*SourceDestination);
+							break;
+						}
+					}
+
 					// Insert position: right after the LAST currently-executing
 					// order. Under per-order parallelism multiple orders may be
 					// executing concurrently; we want the AutoMoveThen pair to
@@ -7809,6 +8170,129 @@ namespace
 			|| !DecodeComponents(BrokerMemberships))
 		{
 			return false;
+		}
+
+		for (const auto& BrokerPair : Brokers)
+		{
+			const FSeinCommandBrokerData& Broker = BrokerPair.Value;
+			if (Broker.Members.Num() > SeinBrokerOrderProtocol::MaxMembers
+				|| Broker.OrderQueue.Num()
+					> SeinBrokerOrderProtocol::MaxQueuedOrdersPerBroker)
+			{
+				return false;
+			}
+
+			TSet<FSeinEntityHandle> BrokerMembers;
+			for (const FSeinEntityHandle Member : Broker.Members)
+			{
+				if (!AliveEntityHandles.Contains(Member)
+					|| BrokerMembers.Contains(Member))
+				{
+					return false;
+				}
+				BrokerMembers.Add(Member);
+			}
+			if (Broker.SettledDestinationArtifact.Num()
+				> SeinBrokerOrderProtocol::MaxDestinationArtifactEntries)
+			{
+				return false;
+			}
+			int32 PreviousSettledMemberIndex = INDEX_NONE;
+			for (const FSeinFrozenDestination& Destination :
+				Broker.SettledDestinationArtifact)
+			{
+				const int32 MemberIndex =
+					Broker.Members.IndexOfByKey(Destination.Member);
+				if (MemberIndex <= PreviousSettledMemberIndex
+					|| !Destination.bReserveFootprint
+					|| Destination.FootprintRadius <= FFixedPoint::Zero
+					|| !Destination.SourceEntity.IsValid()
+					|| Destination.SourceIndex < 0)
+				{
+					return false;
+				}
+				PreviousSettledMemberIndex = MemberIndex;
+			}
+
+			for (const FSeinBrokerQueuedOrder& Order : Broker.OrderQueue)
+			{
+				if (Order.GuidePoints.Num()
+						> SeinBrokerOrderProtocol::MaxGuidePoints
+					|| Order.TargeterPoints.Num()
+						> SeinBrokerOrderProtocol::MaxTargeterPoints
+					|| Order.TargetMembers.Num()
+						> SeinBrokerOrderProtocol::MaxMembers
+					|| Order.PreplacedMembers.Num()
+						> SeinBrokerOrderProtocol::MaxMembers
+					|| Order.PreplacedMembers.Num()
+						!= Order.PreplacedPositions.Num()
+					|| Order.DestinationArtifact.Num()
+						> SeinBrokerOrderProtocol::MaxDestinationArtifactEntries
+					|| Order.LastDispatchTick < INDEX_NONE
+					|| Order.LastDispatchTick > Snapshot.CurrentTick
+					|| (Order.bIsExecuting
+						&& Order.LastDispatchTick == INDEX_NONE))
+				{
+					return false;
+				}
+
+				TArray<FSeinEntityHandle> EffectiveMembers;
+				TSet<FSeinEntityHandle> SeenTargets;
+				if (Order.TargetMembers.IsEmpty())
+				{
+					EffectiveMembers = Broker.Members;
+				}
+				else
+				{
+					EffectiveMembers.Reserve(Order.TargetMembers.Num());
+					for (const FSeinEntityHandle Member : Order.TargetMembers)
+					{
+						if (!BrokerMembers.Contains(Member)
+							|| SeenTargets.Contains(Member))
+						{
+							return false;
+						}
+						SeenTargets.Add(Member);
+						EffectiveMembers.Add(Member);
+					}
+				}
+
+				TSet<FSeinEntityHandle> SeenPreplaced;
+				for (const FSeinEntityHandle Member : Order.PreplacedMembers)
+				{
+					if (!EffectiveMembers.Contains(Member)
+						|| SeenPreplaced.Contains(Member))
+					{
+						return false;
+					}
+					SeenPreplaced.Add(Member);
+				}
+
+				if (!Order.DestinationArtifact.IsEmpty())
+				{
+					if (Order.DestinationArtifact.Num()
+						!= EffectiveMembers.Num())
+					{
+						return false;
+					}
+					for (int32 Index = 0;
+						Index < EffectiveMembers.Num(); ++Index)
+					{
+						const FSeinFrozenDestination& Destination =
+							Order.DestinationArtifact[Index];
+						if (Destination.Member != EffectiveMembers[Index]
+							|| Destination.FootprintRadius < FFixedPoint::Zero
+							|| (Destination.bReserveFootprint
+								&& (Destination.FootprintRadius
+										<= FFixedPoint::Zero
+									|| !Destination.SourceEntity.IsValid()
+									|| Destination.SourceIndex < 0)))
+						{
+							return false;
+						}
+					}
+				}
+			}
 		}
 
 		TMap<FSeinEntityHandle, FSeinEntityHandle> OccupantSquad;
@@ -11966,10 +12450,570 @@ bool USeinWorldSubsystem::UnregisterAuthoritativeDestinationProvider(
 	return true;
 }
 
+bool USeinWorldSubsystem::RegisterSelectionDestinationPlanProvider(
+	const FString& StableProviderId,
+	uint32 BehaviorRevision,
+	FSeinSelectionDestinationPlanProviderResolver Resolver,
+	uint64& OutRegistrationToken,
+	FString* OutError)
+{
+	OutRegistrationToken = 0;
+	if (OutError) OutError->Reset();
+	const auto Reject = [&](const FString& Error, bool bPoison)
+	{
+		if (OutError) *OutError = Error;
+		if (bPoison)
+		{
+			if (bExecutionTopologyFrozen)
+			{
+				InvalidateFrozenExecutionTopology(Error);
+			}
+			else
+			{
+				RecordExecutionTopologyFailure(Error);
+			}
+		}
+		return false;
+	};
+
+	if (!IsInGameThread())
+	{
+		return Reject(
+			TEXT("Selection-destination providers must register on the game thread."),
+			false);
+	}
+	if (bExecutionTopologyTeardown || bModuleUnloadStateReleased)
+	{
+		return Reject(
+			TEXT("Selection-destination providers cannot register after world teardown or terminal module unload."),
+			false);
+	}
+	if (bReadOnlyCallbackInProgress
+		|| bObserverCallbackInProgress
+		|| bSimulationTickDispatchInProgress
+		|| bSnapshotCaptureInProgress
+		|| bSnapshotRestoreInProgress
+		|| bMatchBootstrapMaterializerInvocationActive)
+	{
+		return Reject(
+			TEXT("Selection-destination provider registration cannot mutate topology during a callback or state transaction."),
+			true);
+	}
+	if (bExecutionTopologyFrozen)
+	{
+		return Reject(
+			TEXT("Selection-destination providers must register before deterministic topology freeze."),
+			true);
+	}
+	if (!bExecutionTopologyValid)
+	{
+		return Reject(
+			ExecutionTopologyFailureReason.IsEmpty()
+				? TEXT("The deterministic execution topology is already invalid.")
+				: ExecutionTopologyFailureReason,
+			false);
+	}
+
+	FString CanonicalStableID;
+	FString StableIDError;
+	if (!FSeinSimulationContentManifestCodec::CanonicalizeStableId(
+			StableProviderId,
+			CanonicalStableID,
+			StableIDError))
+	{
+		return Reject(
+			FString::Printf(
+				TEXT("Invalid selection-destination provider ID '%s': %s"),
+				*StableProviderId,
+				*StableIDError),
+			true);
+	}
+	if (BehaviorRevision == 0 || !Resolver.IsBound())
+	{
+		return Reject(
+			TEXT("Selection-destination providers require a positive behavior revision and a bound resolver."),
+			true);
+	}
+	if (SelectionDestinationPlanProviders.Num()
+		>= MaxSelectionDestinationPlanProviders)
+	{
+		return Reject(
+			TEXT("The selection-destination provider registry reached its deterministic capacity."),
+			true);
+	}
+	if (SelectionDestinationPlanProviders.ContainsByPredicate(
+			[&CanonicalStableID](
+				const FRegisteredSelectionDestinationPlanProvider& Existing)
+			{
+				return Existing.CanonicalStableID == CanonicalStableID;
+			}))
+	{
+		return Reject(
+			FString::Printf(
+				TEXT("Duplicate selection-destination provider ID '%s'."),
+				*CanonicalStableID),
+			true);
+	}
+	if (NextSelectionDestinationPlanProviderToken == 0
+		|| NextSelectionDestinationPlanProviderToken == MAX_uint64)
+	{
+		return Reject(
+			TEXT("The selection-destination provider token space is exhausted."),
+			true);
+	}
+
+	FRegisteredSelectionDestinationPlanProvider Registered;
+	Registered.CanonicalStableID = MoveTemp(CanonicalStableID);
+	Registered.BehaviorRevision = BehaviorRevision;
+	Registered.RegistrationToken =
+		NextSelectionDestinationPlanProviderToken++;
+	Registered.Resolver = MoveTemp(Resolver);
+	OutRegistrationToken = Registered.RegistrationToken;
+	SelectionDestinationPlanProviders.Add(MoveTemp(Registered));
+	SelectionDestinationPlanProviders.Sort(
+		[](const FRegisteredSelectionDestinationPlanProvider& Left,
+			const FRegisteredSelectionDestinationPlanProvider& Right)
+		{
+			return Left.CanonicalStableID < Right.CanonicalStableID;
+		});
+	return true;
+}
+
+bool USeinWorldSubsystem::UnregisterSelectionDestinationPlanProvider(
+	uint64 RegistrationToken,
+	FString* OutError)
+{
+	if (OutError) OutError->Reset();
+	if (!IsInGameThread())
+	{
+		if (OutError)
+		{
+			*OutError =
+				TEXT("Selection-destination providers must unregister on the game thread.");
+		}
+		return false;
+	}
+	if (RegistrationToken == 0)
+	{
+		if (OutError)
+		{
+			*OutError =
+				TEXT("Selection-destination provider unregistration requires a valid token.");
+		}
+		return false;
+	}
+	if (bReadOnlyCallbackInProgress
+		|| bObserverCallbackInProgress
+		|| bSimulationTickDispatchInProgress
+		|| bSnapshotCaptureInProgress
+		|| bSnapshotRestoreInProgress
+		|| bMatchBootstrapMaterializerInvocationActive)
+	{
+		const FString Error =
+			TEXT("Selection-destination provider unregistration cannot mutate topology during a callback or state transaction.");
+		if (OutError) *OutError = Error;
+		if (bExecutionTopologyFrozen)
+		{
+			InvalidateFrozenExecutionTopology(Error);
+		}
+		else
+		{
+			RecordExecutionTopologyFailure(Error);
+		}
+		return false;
+	}
+
+	const int32 ProviderIndex =
+		SelectionDestinationPlanProviders.IndexOfByPredicate(
+			[RegistrationToken](
+				const FRegisteredSelectionDestinationPlanProvider& Existing)
+			{
+				return Existing.RegistrationToken == RegistrationToken;
+			});
+	if (ProviderIndex == INDEX_NONE)
+	{
+		if (OutError)
+		{
+			*OutError =
+				TEXT("The selection-destination provider token is no longer registered.");
+		}
+		return false;
+	}
+
+	const FString RemovedStableID =
+		SelectionDestinationPlanProviders[ProviderIndex].CanonicalStableID;
+	SelectionDestinationPlanProviders.RemoveAt(ProviderIndex);
+	if (bExecutionTopologyFrozen
+		&& !bExecutionTopologyTeardown
+		&& !bModuleUnloadStateReleased)
+	{
+		InvalidateFrozenExecutionTopology(FString::Printf(
+			TEXT("Selection-destination provider '%s' unregistered after deterministic topology freeze."),
+			*RemovedStableID));
+	}
+	return true;
+}
+
+bool USeinWorldSubsystem::HasSelectionDestinationPlanProviders() const
+{
+	return !SelectionDestinationPlanProviders.IsEmpty();
+}
+
+bool USeinWorldSubsystem::ApplySelectionDestinationPlanProviders(
+	const FSeinSelectionDestinationPlanQuery& Query,
+	TArray<FSeinFrozenDestination>& InOutDestinations,
+	FString* OutError)
+{
+	if (OutError) OutError->Reset();
+	checkf(IsInGameThread(),
+		TEXT("Selection-destination providers may only execute on the game thread."));
+	if (bSelectionDestinationPlanQueryInProgress)
+	{
+		const FString Error =
+			TEXT("Selection-destination provider queries may not re-enter the registry.");
+		if (OutError) *OutError = Error;
+		if (bExecutionTopologyFrozen)
+		{
+			InvalidateFrozenExecutionTopology(Error);
+		}
+		else
+		{
+			RecordExecutionTopologyFailure(Error);
+		}
+		return false;
+	}
+	if (Query.Members.Num() == 0
+		|| Query.Members.Num() != InOutDestinations.Num())
+	{
+		if (OutError)
+		{
+			*OutError =
+				TEXT("Selection-destination plans require one destination per member.");
+		}
+		return false;
+	}
+
+	TArray<FSeinEntityHandle> ExpectedMembers;
+	ExpectedMembers.Append(Query.Members.GetData(), Query.Members.Num());
+	TArray<FFixedPoint> ExpectedRadii;
+	ExpectedRadii.Reserve(InOutDestinations.Num());
+	TSet<FSeinEntityHandle> SeenMembers;
+	for (int32 Index = 0; Index < InOutDestinations.Num(); ++Index)
+	{
+		const FSeinFrozenDestination& Entry = InOutDestinations[Index];
+		if (Entry.Member != ExpectedMembers[Index]
+			|| !Entry.Member.IsValid()
+			|| SeenMembers.Contains(Entry.Member)
+			|| Entry.FootprintRadius < FFixedPoint::Zero
+			|| (Entry.bReserveFootprint
+				&& Entry.FootprintRadius <= FFixedPoint::Zero))
+		{
+			if (OutError)
+			{
+				*OutError =
+					TEXT("Selection-destination input contains invalid member or footprint metadata.");
+			}
+			return false;
+		}
+		SeenMembers.Add(Entry.Member);
+		ExpectedRadii.Add(Entry.FootprintRadius);
+	}
+
+	TGuardValue<bool> QueryGuard(
+		bSelectionDestinationPlanQueryInProgress, true);
+	TGuardValue<bool> ReadOnlyGuard(bReadOnlyCallbackInProgress, true);
+	TGuardValue<bool> ObserverGuard(bObserverCallbackInProgress, true);
+	for (const FRegisteredSelectionDestinationPlanProvider& Provider :
+		SelectionDestinationPlanProviders)
+	{
+		if (!Provider.Resolver.IsBound()
+			|| !Provider.Resolver.Execute(Query, InOutDestinations))
+		{
+			if (OutError)
+			{
+				*OutError = FString::Printf(
+					TEXT("Selection-destination provider '%s' failed the plan."),
+					*Provider.CanonicalStableID);
+			}
+			return false;
+		}
+		if (InOutDestinations.Num() != ExpectedMembers.Num())
+		{
+			if (OutError)
+			{
+				*OutError = FString::Printf(
+					TEXT("Selection-destination provider '%s' changed plan cardinality."),
+					*Provider.CanonicalStableID);
+			}
+			return false;
+		}
+		for (int32 Index = 0; Index < InOutDestinations.Num(); ++Index)
+		{
+			const FSeinFrozenDestination& Entry = InOutDestinations[Index];
+			if (Entry.Member != ExpectedMembers[Index]
+				|| Entry.FootprintRadius != ExpectedRadii[Index]
+				|| (Entry.bReserveFootprint
+					&& (Entry.FootprintRadius <= FFixedPoint::Zero
+						|| !Entry.SourceEntity.IsValid()
+						|| Entry.SourceIndex < 0)))
+			{
+				if (OutError)
+				{
+					*OutError = FString::Printf(
+						TEXT("Selection-destination provider '%s' changed member identity or emitted invalid footprint metadata."),
+						*Provider.CanonicalStableID);
+				}
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
+bool USeinWorldSubsystem::IsDestinationFootprintReserved(
+	const FFixedVector& Position,
+	FFixedPoint Radius,
+	TConstArrayView<FSeinEntityHandle> IgnoredMembers) const
+{
+	if (Radius <= FFixedPoint::Zero) return false;
+	bool bReserved = false;
+	const ISeinComponentStorage* BrokerStorage =
+		GetComponentStorageRaw(FSeinCommandBrokerData::StaticStruct());
+	if (!BrokerStorage) return false;
+
+	BrokerStorage->ForEachLiveComponent([&](
+		FSeinEntityHandle BrokerHandle, const void* /*RawComponent*/)
+	{
+		if (bReserved || !EntityPool.IsValid(BrokerHandle)) return;
+		const FSeinCommandBrokerData* Broker =
+			GetComponent<FSeinCommandBrokerData>(BrokerHandle);
+		if (!Broker) return;
+		for (const FSeinBrokerQueuedOrder& Order : Broker->OrderQueue)
+		{
+			for (const FSeinFrozenDestination& Entry : Order.DestinationArtifact)
+			{
+				if (!Entry.bReserveFootprint
+					|| Entry.FootprintRadius <= FFixedPoint::Zero
+					|| !EntityPool.IsValid(Entry.Member)
+					|| !Broker->Members.Contains(Entry.Member)
+					|| (Order.TargetMembers.Num() > 0
+						&& !Order.TargetMembers.Contains(Entry.Member))
+					|| IgnoredMembers.Contains(Entry.Member))
+				{
+					continue;
+				}
+				if (DoPlanarDestinationFootprintsOverlap(
+						Position,
+						Radius,
+						Entry.WorldPosition,
+						Entry.FootprintRadius))
+				{
+					bReserved = true;
+					return;
+				}
+			}
+		}
+		for (const FSeinFrozenDestination& Entry :
+			Broker->SettledDestinationArtifact)
+		{
+			if (!Entry.bReserveFootprint
+				|| Entry.FootprintRadius <= FFixedPoint::Zero
+				|| !EntityPool.IsValid(Entry.Member)
+				|| !Broker->Members.Contains(Entry.Member)
+				|| IgnoredMembers.Contains(Entry.Member))
+			{
+				continue;
+			}
+			if (DoPlanarDestinationFootprintsOverlap(
+					Position,
+					Radius,
+					Entry.WorldPosition,
+					Entry.FootprintRadius))
+			{
+				bReserved = true;
+				return;
+			}
+		}
+	});
+	return bReserved;
+}
+
+void USeinWorldSubsystem::NotifyFrozenDestinationDeparture(
+	FSeinEntityHandle Member)
+{
+	if (!RequireStateMutationAuthorization(
+			TEXT("NotifyFrozenDestinationDeparture")))
+	{
+		return;
+	}
+	const FSeinBrokerMembershipData* Membership =
+		GetComponent<FSeinBrokerMembershipData>(Member);
+	if (!Membership || !EntityPool.IsValid(Membership->CurrentBrokerHandle))
+	{
+		return;
+	}
+	if (FSeinCommandBrokerData* Broker =
+		GetComponentMutable<FSeinCommandBrokerData>(
+			Membership->CurrentBrokerHandle))
+	{
+		Broker->SettledDestinationArtifact.RemoveAll(
+			[Member](const FSeinFrozenDestination& Entry)
+			{
+				return Entry.Member == Member;
+			});
+	}
+}
+
+bool USeinWorldSubsystem::ConfirmFrozenDestinationArrival(
+	FSeinEntityHandle Member,
+	const FFixedVector& WorldPosition)
+{
+	if (!RequireStateMutationAuthorization(
+			TEXT("ConfirmFrozenDestinationArrival")))
+	{
+		return false;
+	}
+	const FSeinBrokerMembershipData* Membership =
+		GetComponent<FSeinBrokerMembershipData>(Member);
+	if (!Membership || !EntityPool.IsValid(Membership->CurrentBrokerHandle))
+	{
+		return false;
+	}
+	FSeinCommandBrokerData* Broker =
+		GetComponentMutable<FSeinCommandBrokerData>(
+			Membership->CurrentBrokerHandle);
+	if (!Broker || !Broker->Members.Contains(Member)) return false;
+
+	const FSeinFrozenDestination* Arrived = nullptr;
+	for (const FSeinBrokerQueuedOrder& Order : Broker->OrderQueue)
+	{
+		if (!Order.bIsExecuting
+			|| (Order.TargetMembers.Num() > 0
+				&& !Order.TargetMembers.Contains(Member)))
+		{
+			continue;
+		}
+		Arrived = Order.DestinationArtifact.FindByPredicate(
+			[Member, &WorldPosition](const FSeinFrozenDestination& Entry)
+			{
+				return Entry.Member == Member
+					&& Entry.bReserveFootprint
+					&& Entry.WorldPosition == WorldPosition;
+			});
+		if (Arrived) break;
+	}
+	if (!Arrived) return false;
+
+	TArray<FSeinFrozenDestination> Updated;
+	Updated.Reserve(Broker->Members.Num());
+	for (const FSeinEntityHandle BrokerMember : Broker->Members)
+	{
+		if (BrokerMember == Member)
+		{
+			Updated.Add(*Arrived);
+			continue;
+		}
+		if (const FSeinFrozenDestination* Existing =
+			Broker->SettledDestinationArtifact.FindByPredicate(
+				[BrokerMember](const FSeinFrozenDestination& Entry)
+				{
+					return Entry.Member == BrokerMember;
+				}))
+		{
+			Updated.Add(*Existing);
+		}
+	}
+	Broker->SettledDestinationArtifact = MoveTemp(Updated);
+	return true;
+}
+
+bool USeinWorldSubsystem::IsBrokerOwnedFrozenDestination(
+	const FSeinAuthoritativeDestinationQuery& Query) const
+{
+	if (!Query.Requester.IsValid()) return false;
+	bool bFound = false;
+	const ISeinComponentStorage* BrokerStorage =
+		GetComponentStorageRaw(FSeinCommandBrokerData::StaticStruct());
+	if (!BrokerStorage) return false;
+	BrokerStorage->ForEachLiveComponent([&](
+		FSeinEntityHandle BrokerHandle, const void* /*RawComponent*/)
+	{
+		if (bFound || !EntityPool.IsValid(BrokerHandle)) return;
+		const FSeinCommandBrokerData* Broker =
+			GetComponent<FSeinCommandBrokerData>(BrokerHandle);
+		if (!Broker || !Broker->Members.Contains(Query.Requester)) return;
+		for (const FSeinBrokerQueuedOrder& Order : Broker->OrderQueue)
+		{
+			if (Order.TargetMembers.Num() > 0
+				&& !Order.TargetMembers.Contains(Query.Requester))
+			{
+				continue;
+			}
+			const FSeinFrozenDestination* Entry =
+				Order.DestinationArtifact.FindByPredicate(
+					[&Query](const FSeinFrozenDestination& Candidate)
+					{
+						return Candidate.Member == Query.Requester
+							&& Candidate.bReserveFootprint
+							&& Candidate.WorldPosition == Query.WorldPosition;
+					});
+			if (Entry)
+			{
+				bFound = true;
+				return;
+			}
+		}
+		if (Broker->SettledDestinationArtifact.ContainsByPredicate(
+				[&Query](const FSeinFrozenDestination& Candidate)
+				{
+					return Candidate.Member == Query.Requester
+						&& Candidate.bReserveFootprint
+						&& Candidate.WorldPosition == Query.WorldPosition;
+				}))
+		{
+			bFound = true;
+		}
+	});
+	return bFound;
+}
+
 bool USeinWorldSubsystem::HasAuthoritativeDestinationProviders() const
 {
-	return !AuthoritativeDestinationProviders.IsEmpty()
-		|| AuthoritativeDestinationResolver.IsBound();
+	checkf(IsInGameThread(),
+		TEXT("Authoritative-destination availability may only be queried on the game thread."));
+	if (!AuthoritativeDestinationProviders.IsEmpty()
+		|| AuthoritativeDestinationResolver.IsBound())
+	{
+		return true;
+	}
+
+	const ISeinComponentStorage* BrokerStorage =
+		GetComponentStorageRaw(FSeinCommandBrokerData::StaticStruct());
+	if (!BrokerStorage) return false;
+	bool bFound = false;
+	BrokerStorage->ForEachLiveComponent([&](
+		FSeinEntityHandle BrokerHandle, const void* RawComponent)
+	{
+		if (bFound || !EntityPool.IsValid(BrokerHandle)) return;
+		const FSeinCommandBrokerData* Broker =
+			static_cast<const FSeinCommandBrokerData*>(RawComponent);
+		if (!Broker) return;
+		bFound = Broker->SettledDestinationArtifact.ContainsByPredicate(
+			[](const FSeinFrozenDestination& Entry)
+			{
+				return Entry.bReserveFootprint;
+			});
+		for (const FSeinBrokerQueuedOrder& Order : Broker->OrderQueue)
+		{
+			if (bFound) return;
+			bFound = Order.DestinationArtifact.ContainsByPredicate(
+				[](const FSeinFrozenDestination& Entry)
+				{
+					return Entry.bReserveFootprint;
+				});
+		}
+	});
+	return bFound;
 }
 
 bool USeinWorldSubsystem::IsAuthoritativeDestination(
@@ -11977,6 +13021,10 @@ bool USeinWorldSubsystem::IsAuthoritativeDestination(
 {
 	checkf(IsInGameThread(),
 		TEXT("Authoritative-destination providers may only execute on the game thread."));
+	if (IsBrokerOwnedFrozenDestination(Query))
+	{
+		return true;
+	}
 	if (bAuthoritativeDestinationQueryInProgress)
 	{
 		const FString Error =
@@ -13388,6 +14436,38 @@ FSeinEntityHandle USeinWorldSubsystem::CreateBrokerForMembers(
 		if (!OldBroker) continue;
 		OldBroker->Members.Remove(M);
 		OldBroker->bCapabilityMapDirty = true;
+		for (int32 OrderIndex = OldBroker->OrderQueue.Num() - 1;
+			OrderIndex >= 0; --OrderIndex)
+		{
+			FSeinBrokerQueuedOrder& QueuedOrder =
+				OldBroker->OrderQueue[OrderIndex];
+			const bool bExplicitSubset = !QueuedOrder.TargetMembers.IsEmpty();
+			QueuedOrder.TargetMembers.Remove(M);
+			for (int32 PreplacedIndex =
+				QueuedOrder.PreplacedMembers.Num() - 1;
+				PreplacedIndex >= 0; --PreplacedIndex)
+			{
+				if (QueuedOrder.PreplacedMembers[PreplacedIndex] == M)
+				{
+					QueuedOrder.PreplacedMembers.RemoveAt(PreplacedIndex);
+					QueuedOrder.PreplacedPositions.RemoveAt(PreplacedIndex);
+				}
+			}
+			QueuedOrder.DestinationArtifact.RemoveAll(
+				[M](const FSeinFrozenDestination& Entry)
+				{
+					return Entry.Member == M;
+				});
+			if (bExplicitSubset && QueuedOrder.TargetMembers.IsEmpty())
+			{
+				OldBroker->OrderQueue.RemoveAt(OrderIndex);
+			}
+		}
+		OldBroker->SettledDestinationArtifact.RemoveAll(
+			[M](const FSeinFrozenDestination& Entry)
+			{
+				return Entry.Member == M;
+			});
 
 		// Cull the old broker if it now has no members. A member-less broker
 		// can't dispatch its remaining queue anyway — keeping it alive just

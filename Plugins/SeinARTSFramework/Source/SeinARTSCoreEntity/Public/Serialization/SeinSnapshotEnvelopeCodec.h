@@ -1,7 +1,7 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinSnapshotEnvelopeCodec.h
- * @brief   Bounded canonical framing for snapshot-v15 section payloads.
+ * @brief   Bounded canonical framing for snapshot-v16 section payloads.
  */
 
 #pragma once
@@ -31,7 +31,7 @@ enum class ESeinSnapshotSectionRole : uint8
 	Local = 4,
 };
 
-/** Payload byte contract. Snapshot v15 supports no compression. */
+/** Payload byte contract. Snapshot v16 supports no compression. */
 enum class ESeinSnapshotSectionCodec : uint8
 {
 	CanonicalBytes = 1,
@@ -64,7 +64,7 @@ struct SEINARTSCOREENTITY_API FSeinSnapshotEnvelopeSection
 	TArray<uint8> Payload;
 };
 
-/** Semantic input/output represented by the snapshot-v15 envelope. */
+/** Semantic input/output represented by the snapshot-v16 envelope. */
 struct SEINARTSCOREENTITY_API FSeinSnapshotEnvelope
 {
 	int64 SnapshotTick = 0;
@@ -89,7 +89,7 @@ struct SEINARTSCOREENTITY_API FSeinSnapshotEnvelopeMetadata
 };
 
 /**
- * Pure canonical snapshot-v15 envelope codec.
+ * Pure canonical snapshot-v16 envelope codec.
  *
  * The fixed prefix and directory use big-endian integers and raw ASCII IDs.
  * Decode is transactional: caller outputs are unchanged on failure. It verifies
@@ -108,7 +108,7 @@ class SEINARTSCOREENTITY_API FSeinSnapshotEnvelopeCodec
 {
 public:
 	static constexpr uint32 WireFormatVersion = 1;
-	static constexpr uint32 SnapshotSemanticsVersion = 15;
+	static constexpr uint32 SnapshotSemanticsVersion = 16;
 	static constexpr int32 PrefixBytes = 120;
 	static constexpr uint32 MaxSections = 8192;
 	static constexpr uint32 MaxSectionIdBytes = 128;

@@ -255,7 +255,11 @@ bool USeinCollisionResolverParallel::JacobiPass(USeinWorldSubsystem& World, cons
 			FFixedVector Candidate = Running + Push;
 			Candidate.Z = SelfPos0.Z;
 			if (CanOccupy(
-				World, Self.Handle, Candidate, Self.Radius))
+				World,
+				Self.Handle,
+				Candidate,
+				Self.Radius,
+				bForceSerial))
 			{
 				Running = Candidate;
 			}

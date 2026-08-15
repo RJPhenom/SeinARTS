@@ -113,10 +113,65 @@ void USeinCommandBrokerBPFL::SeinIssueBrokerOrder(
 	FSeinBrokerOrderPayload Payload;
 	Payload.CommandContext = CommandContext;
 	Payload.FormationEnd = FormationEnd;
+	if (!TargetEntity.IsValid()
+		&& CommandContext.HasTagExact(
+			SeinARTSTags::Command_Context_RightClick)
+		&& CommandContext.HasTagExact(
+			SeinARTSTags::Command_Context_Target_Ground))
+	{
+		TArray<FSeinEntityHandle> ArtifactMembers;
+		TSet<FSeinEntityHandle> SeenMembers;
+		for (const FSeinEntityHandle& Recipient : Members)
+		{
+			if (const FSeinCommandBrokerData* Broker =
+				Sub->GetComponent<FSeinCommandBrokerData>(Recipient))
+			{
+				for (const FSeinEntityHandle& Member : Broker->Members)
+				{
+					if (Sub->IsEntityAlive(Member)
+						&& !SeenMembers.Contains(Member))
+					{
+						SeenMembers.Add(Member);
+						ArtifactMembers.Add(Member);
+					}
+				}
+			}
+			else if (Sub->IsEntityAlive(Recipient)
+				&& !SeenMembers.Contains(Recipient))
+			{
+				SeenMembers.Add(Recipient);
+				ArtifactMembers.Add(Recipient);
+			}
+		}
+		if (!ArtifactMembers.IsEmpty())
+		{
+			bool bPlanSucceeded = false;
+			ComputeFormationDestinationArtifact(
+				WorldContextObject,
+				ArtifactMembers,
+				TargetLocation,
+				{},
+				FGameplayTag(),
+				PlayerID,
+				bQueueCommand,
+				Payload.DestinationArtifact,
+				&bPlanSucceeded);
+			if (!bPlanSucceeded)
+			{
+				// Degrade to a legacy artifact-less order instead of eating
+				// the caller's command — no exact artifact was displayable
+				// for this request, so no preview contract is broken.
+				UE_LOG(LogSeinBroker, Warning,
+					TEXT("IssueBrokerOrder: destination plan failed; submitting without an artifact."));
+				Payload.DestinationArtifact.Reset();
+			}
+		}
+	}
 
 	FSeinCommand Cmd;
 	Cmd.PlayerID = PlayerID;
 	Cmd.CommandType = SeinARTSTags::Command_Type_BrokerOrder;
+	Cmd.SchemaVersion = SeinBrokerOrderProtocol::SchemaVersion;
 	Cmd.TargetEntity = TargetEntity;
 	Cmd.TargetLocation = TargetLocation;
 	Cmd.EntityList = Members;
@@ -411,8 +466,38 @@ FSeinFormationLayout USeinCommandBrokerBPFL::SeinComputeFormationPreview(
 	const TArray<FFixedVector>& GuidePoints,
 	FGameplayTag FormationTag)
 {
+	TArray<FSeinFrozenDestination> IgnoredArtifact;
+	USeinWorldSubsystem* World = GetWorldSubsystem(WorldContextObject);
+	const FSeinPlayerID OrderingPlayer =
+		World && !Members.IsEmpty()
+			? World->GetEntityOwner(Members[0])
+			: FSeinPlayerID::Neutral();
+	return ComputeFormationDestinationArtifact(
+		WorldContextObject,
+		Members,
+		TargetLocation,
+		GuidePoints,
+		FormationTag,
+		OrderingPlayer,
+		false,
+		IgnoredArtifact);
+}
+
+FSeinFormationLayout USeinCommandBrokerBPFL::ComputeFormationDestinationArtifact(
+	const UObject* WorldContextObject,
+	const TArray<FSeinEntityHandle>& Members,
+	FFixedVector TargetLocation,
+	const TArray<FFixedVector>& GuidePoints,
+	FGameplayTag FormationTag,
+	FSeinPlayerID OrderingPlayer,
+	bool bQueueCommand,
+	TArray<FSeinFrozenDestination>& OutDestinationArtifact,
+	bool* OutSucceeded)
+{
 	TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Formation_ComputePreview);
 	FSeinFormationLayout Empty;
+	OutDestinationArtifact.Reset();
+	if (OutSucceeded) *OutSucceeded = false;
 	USeinWorldSubsystem* World = GetWorldSubsystem(WorldContextObject);
 	if (!World
 		|| !World->IsExecutionTopologyValid()
@@ -434,6 +519,14 @@ FSeinFormationLayout USeinCommandBrokerBPFL::SeinComputeFormationPreview(
 			TargetLocation = ProjectedTarget;
 		}
 	}
+
+	// Cover and other selection-wide destination providers must see the neutral
+	// layout for the complete selection. Resolver-local post-processors still
+	// serve legacy/direct layout callers, but are suppressed while this builder
+	// computes the base artifact so they cannot consume slots per sub-broker
+	// before the global deterministic assignment pass.
+	TGuardValue<bool> BaseLayoutGuard(
+		World->bSelectionDestinationBaseLayoutInProgress, true);
 
 	// Project the gesture guide points too — the commit projects them in
 	// ProcessCommands, so a drag-line preview must lay out on the same reachable
@@ -481,7 +574,7 @@ FSeinFormationLayout USeinCommandBrokerBPFL::SeinComputeFormationPreview(
 
 	FSeinFormationLayout Out;
 	Out.Positions.SetNum(Members.Num());
-	Out.Radii.SetNum(Members.Num()); // carry per-member footprint radii for preview dot sizing
+	USeinFormation::GatherFootprintRadii(World, Members, Out.Radii);
 
 	// Per-squad anchors via the SAME helper the commit uses, so squads take the gesture formation
 	// (Ring/Wedge/Box/...) in the preview exactly as when ordered. Each squad then lays its own
@@ -563,7 +656,7 @@ FSeinFormationLayout USeinCommandBrokerBPFL::SeinComputeFormationPreview(
 			Out.Positions[Indices[k]] = SquadLayout.Positions.IsValidIndex(k)
 				? SquadLayout.Positions[k] : SquadAnchor;
 			Out.Radii[Indices[k]] = SquadLayout.Radii.IsValidIndex(k)
-				? SquadLayout.Radii[k] : FFixedPoint::Zero;
+				? SquadLayout.Radii[k] : Out.Radii[Indices[k]];
 		}
 		// Representative facing for any consumer that draws a facing arrow (the
 		// preview renders per-cell decals from Positions; Facing is advisory).
@@ -584,5 +677,41 @@ FSeinFormationLayout USeinCommandBrokerBPFL::SeinComputeFormationPreview(
 	{
 		Out.Facing = ElementFacings[FirstLooseElement];
 	}
+
+	OutDestinationArtifact.Reserve(Members.Num());
+	for (int32 Index = 0; Index < Members.Num(); ++Index)
+	{
+		FSeinFrozenDestination& Destination =
+			OutDestinationArtifact.Emplace_GetRef();
+		Destination.Member = Members[Index];
+		Destination.WorldPosition = Out.Positions.IsValidIndex(Index)
+			? Out.Positions[Index]
+			: TargetLocation;
+		Destination.FootprintRadius = Out.Radii.IsValidIndex(Index)
+			? Out.Radii[Index]
+			: FFixedPoint::Zero;
+	}
+	World->bSelectionDestinationBaseLayoutInProgress = false;
+	FSeinSelectionDestinationPlanQuery Query;
+	Query.OrderingPlayer = OrderingPlayer;
+	Query.TargetLocation = TargetLocation;
+	Query.bQueueCommand = bQueueCommand;
+	Query.Members = Members;
+	FString PlanError;
+	if (!World->ApplySelectionDestinationPlanProviders(
+			Query, OutDestinationArtifact, &PlanError))
+	{
+		UE_LOG(LogSeinBroker, Error,
+			TEXT("Selection destination plan failed: %s"),
+			*PlanError);
+		OutDestinationArtifact.Reset();
+		return Empty;
+	}
+	for (int32 Index = 0; Index < OutDestinationArtifact.Num(); ++Index)
+	{
+		Out.Positions[Index] = OutDestinationArtifact[Index].WorldPosition;
+		Out.Radii[Index] = OutDestinationArtifact[Index].FootprintRadius;
+	}
+	if (OutSucceeded) *OutSucceeded = true;
 	return Out;
 }

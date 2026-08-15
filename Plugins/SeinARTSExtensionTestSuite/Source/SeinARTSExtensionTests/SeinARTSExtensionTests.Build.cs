@@ -17,6 +17,7 @@ public class SeinARTSExtensionTests : ModuleRules
 			"SeinARTSTestSupport",
 			"SeinARTSCore",
 			"SeinARTSCoreEntity",
+			"SeinARTSFramework",
 			"SeinARTSNet",
 			"SeinARTSNavigation",
 			"SeinARTSMovement",

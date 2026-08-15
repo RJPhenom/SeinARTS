@@ -7,6 +7,7 @@
 
 #include "SeinCoverAwareSquadDispatchResolver.h"
 
+#include "Formations/SeinFormation.h"
 #include "Lib/SeinCoverAssignmentPlanner.h"
 #include "System/SeinCoverSubsystem.h"
 #include "System/SeinCoverSystem.h"
@@ -37,6 +38,11 @@ void USeinCoverAwareSquadDispatchResolver::PostProcessPositions_Implementation(
 	TArray<FFixedVector>& InOutPositions,
 	FFixedVector TargetLocation)
 {
+	if (WorldSub && WorldSub->IsSelectionDestinationBaseLayoutInProgress())
+	{
+		return;
+	}
+
 	// Tuning comes from the single Cover settings surface shared with the
 	// default broker resolver. Cursor-side preference is deterministic policy;
 	// CoverSnapRadius is the only distance gate.
@@ -74,6 +80,38 @@ void USeinCoverAwareSquadDispatchResolver::PostProcessPositions_Implementation(
 		TEXT("[SquadCoverAware::PostProcessPositions] %d nearby slots within radius"), NearbySlots.Num());
 
 	if (NearbySlots.Num() == 0) return;
+
+	// Reservation policy: authored slots already claimed by a live frozen
+	// destination (queued or settled, any broker) are not offered to this
+	// artifact-less re-solve, mirroring the selection-plan provider's filter.
+	// The order's own members are ignored so a squad may re-order off its own
+	// settled claims. Artifact-carrying orders never reach this path — their
+	// contention was validated at command admission and their exact positions
+	// apply without re-solving, so an admitted artifact can never be re-snapped
+	// here.
+	FFixedPoint MaxMemberRadius = FFixedPoint::Zero;
+	for (const FSeinEntityHandle& Member : Members)
+	{
+		const FFixedPoint MemberRadius =
+			USeinFormation::GetFootprintRadius(WorldSub, Member);
+		if (MemberRadius > MaxMemberRadius)
+		{
+			MaxMemberRadius = MemberRadius;
+		}
+	}
+	if (MaxMemberRadius > FFixedPoint::Zero)
+	{
+		NearbySlots.RemoveAll(
+			[WorldSub, MaxMemberRadius, &Members](
+				const FSeinCoverSlotCandidate& Slot)
+			{
+				return WorldSub->IsDestinationFootprintReserved(
+					Slot.WorldPosition,
+					MaxMemberRadius,
+					Members);
+			});
+		if (NearbySlots.Num() == 0) return;
+	}
 
 	// NOTE: cover slots are deliberately NOT nav-projected. They are authoritative
 	// destinations that OVERRULE the coarse nav bake — a "red"/blocked cell under a

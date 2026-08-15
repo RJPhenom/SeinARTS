@@ -105,5 +105,9 @@ private:
 	 *  whether any transform actually changed. Reads each
 	 *  self's mid-pass transform (Gauss-Seidel) and writes pushes immediately,
 	 *  so it must run serially. */
-	static bool ResolvePass(USeinWorldSubsystem& World, const TMap<FName, ESeinCollisionResponse>& ChannelDefaults, const FFixedPoint MassRatioCutoff);
+	static bool ResolvePass(
+		USeinWorldSubsystem& World,
+		const TMap<FName, ESeinCollisionResponse>& ChannelDefaults,
+		FFixedPoint MassRatioCutoff,
+		bool bMayUseAuthoritativeDestination);
 };

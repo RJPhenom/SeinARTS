@@ -3114,13 +3114,31 @@ namespace UE::SeinARTSTests
 			? Settings->InputDelayTurns
 			: 3;
 		const int32 EndTick = FirstTurn * TicksPerTurn;
+		FSeinFrozenDestination Destination;
+		Destination.Member = FSeinEntityHandle(11, 3);
+		Destination.WorldPosition = FFixedVector(
+			FFixedPoint::FromInt(900),
+			FFixedPoint::FromInt(-200),
+			FFixedPoint::Zero);
+		Destination.FootprintRadius = FFixedPoint::FromInt(45);
+		Destination.bReserveFootprint = true;
+		Destination.SourceEntity = FSeinEntityHandle(22, 4);
+		Destination.SourceIndex = 2;
+		FSeinBrokerOrderPayload BrokerPayload;
+		BrokerPayload.CommandContext.AddTag(
+			SeinARTSTags::Command_Context_RightClick);
+		BrokerPayload.CommandContext.AddTag(
+			SeinARTSTags::Command_Context_Target_Ground);
+		BrokerPayload.DestinationArtifact.Add(Destination);
 
 		FSeinCommand BrokerCommand;
 		BrokerCommand.PlayerID = FSeinPlayerID(1);
 		BrokerCommand.IssuerKind = ESeinCommandIssuerKind::Player;
 		BrokerCommand.CommandType = SeinARTSTags::Command_Type_BrokerOrder;
+		BrokerCommand.SchemaVersion = SeinBrokerOrderProtocol::SchemaVersion;
 		BrokerCommand.Tick = EndTick;
-		BrokerCommand.Payload = FInstancedStruct::Make(FSeinBrokerOrderPayload());
+		BrokerCommand.EntityList.Add(Destination.Member);
+		BrokerCommand.Payload = FInstancedStruct::Make(BrokerPayload);
 
 		FSeinReplayTurnRecord BrokerTurn;
 		BrokerTurn.TurnId = FirstTurn;

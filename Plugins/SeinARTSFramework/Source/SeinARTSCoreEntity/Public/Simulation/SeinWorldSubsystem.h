@@ -44,6 +44,7 @@ class ASeinActor;
 class USeinFaction;
 class USeinAbility;
 class USeinCommandBrokerResolver;
+struct FSeinFrozenDestination;
 class USeinFormation;
 class USeinCollisionResolver;
 class USeinAIController;
@@ -422,6 +423,27 @@ DECLARE_DELEGATE_RetVal_OneParam(
 	FSeinAuthoritativeDestinationProviderResolver,
 	const FSeinAuthoritativeDestinationQuery& /*Query*/);
 
+/** Immutable context for one selection-wide destination-plan pass. */
+struct SEINARTSCOREENTITY_API FSeinSelectionDestinationPlanQuery
+{
+	FSeinPlayerID OrderingPlayer;
+	FFixedVector TargetLocation;
+	bool bQueueCommand = false;
+	TConstArrayView<FSeinEntityHandle> Members;
+};
+
+/**
+ * Pure extension postprocessor for a complete per-member destination artifact.
+ * Providers may change world positions, reservation intent, and provenance, but
+ * may not change member identity or the canonical member footprint radius. They
+ * also may not add, remove, or reorder members. False fails the plan closed.
+ */
+DECLARE_DELEGATE_RetVal_TwoParams(
+	bool,
+	FSeinSelectionDestinationPlanProviderResolver,
+	const FSeinSelectionDestinationPlanQuery& /*Query*/,
+	TArray<FSeinFrozenDestination>& /*InOutDestinations*/);
+
 /**
  * Legacy single-provider compatibility hook. New integrations must use
  * RegisterAuthoritativeDestinationProvider so provider identity and behavior
@@ -575,6 +597,7 @@ UCLASS()
 class SEINARTSCOREENTITY_API USeinWorldSubsystem : public UWorldSubsystem
 {
 	GENERATED_BODY()
+	friend class USeinCommandBrokerBPFL;
 
 public:
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
@@ -1005,7 +1028,53 @@ public:
 		uint64 RegistrationToken,
 		FString* OutError = nullptr);
 
-	/** True when at least one keyed provider or the legacy fallback is live. */
+	/** Register one deterministic whole-selection destination postprocessor. */
+	bool RegisterSelectionDestinationPlanProvider(
+		const FString& StableProviderId,
+		uint32 BehaviorRevision,
+		FSeinSelectionDestinationPlanProviderResolver Resolver,
+		uint64& OutRegistrationToken,
+		FString* OutError = nullptr);
+
+	/** Remove exactly one whole-selection provider generation. */
+	bool UnregisterSelectionDestinationPlanProvider(
+		uint64 RegistrationToken,
+		FString* OutError = nullptr);
+
+	bool HasSelectionDestinationPlanProviders() const;
+	bool IsSelectionDestinationBaseLayoutInProgress() const
+	{
+		return bSelectionDestinationBaseLayoutInProgress;
+	}
+
+	/** Execute stable-ID ordered providers under Core's read-only guard. */
+	bool ApplySelectionDestinationPlanProviders(
+		const FSeinSelectionDestinationPlanQuery& Query,
+		TArray<FSeinFrozenDestination>& InOutDestinations,
+		FString* OutError = nullptr);
+
+	/** True when Position/Radius overlaps a live queue-owned frozen footprint.
+	 *  IgnoredMembers supports non-queued replacement previews/admission. */
+	bool IsDestinationFootprintReserved(
+		const FFixedVector& Position,
+		FFixedPoint Radius,
+		TConstArrayView<FSeinEntityHandle> IgnoredMembers = {}) const;
+
+	/** Release a member's prior settled frozen destination after a later
+	 *  deterministic movement action successfully commits its first path. A
+	 *  failure before path commit deliberately leaves the occupied claim live. */
+	void NotifyFrozenDestinationDeparture(FSeinEntityHandle Member);
+
+	/** Promote the member's matching executing frozen destination after a
+	 *  deterministic movement action reaches the exact non-partial goal. Returns
+	 *  false when no reserved queued artifact owns that member/position. */
+	bool ConfirmFrozenDestinationArrival(
+		FSeinEntityHandle Member,
+		const FFixedVector& WorldPosition);
+
+	/** True when at least one broker-owned frozen destination, keyed provider,
+	 *  or the legacy fallback can authorize a destination. Call on the game
+	 *  thread before entering any parallel kernel that may query authority. */
 	bool HasAuthoritativeDestinationProviders() const;
 
 	/** Compose keyed providers in canonical order, then consult the legacy
@@ -1033,6 +1102,7 @@ public:
 	void ClearAuthoritativeDestinationProvidersForTests()
 	{
 		AuthoritativeDestinationProviders.Reset();
+		SelectionDestinationPlanProviders.Reset();
 		AuthoritativeDestinationResolver.Unbind();
 	}
 #endif
@@ -2091,6 +2161,16 @@ public:
 		FGuid& OutRoot,
 		FString& OutError) const;
 
+	/** Non-reflected variant that also reports whether the failure was a real
+	 *  incremental-versus-rebuild mismatch (as opposed to the root simply
+	 *  being unavailable at this boundary). Used by the periodic
+	 *  Sein.Sim.StateRoot.VerifyIncrementalInterval diagnostic so transient
+	 *  unavailability never logs at mismatch severity. */
+	bool VerifyIncrementalCanonicalStateRootDetailed(
+		FGuid& OutRoot,
+		FString& OutError,
+		bool& bOutMismatch) const;
+
 	/** Legacy in-process transactional fingerprint only. This intentionally
 	 *  cannot fail closed and is neither complete nor cross-process canonical.
 	 *  Do not use for peer compatibility, checkpoints, replay validation, or
@@ -2132,6 +2212,8 @@ private:
 	bool BuildAuthoritativeDestinationProviderBindingFrame(
 		FString& OutFrame,
 		FString& OutError) const;
+	bool IsBrokerOwnedFrozenDestination(
+		const FSeinAuthoritativeDestinationQuery& Query) const;
 	/** Maintain the multiplayer root at a completed-tick boundary. Ordinary
 	 *  calls are O(changes); ForceFullRebuild independently reprojects live
 	 *  state and is reserved for verification. */
@@ -2145,6 +2227,11 @@ private:
 		FGuid& OutRoot,
 		FString& OutError) const;
 	void MarkCanonicalAuxiliaryStateDirty();
+	/** Last completed tick at which the periodic incremental-root verification
+	 *  diagnostic ran (Sein.Sim.StateRoot.VerifyIncrementalInterval). Plain
+	 *  transient diagnostic bookkeeping — never reflected, hashed, or
+	 *  restored. */
+	int32 LastIncrementalRootVerifyTick = 0;
 	bool ExitContainerInternal(FSeinEntityHandle Entity,
 		FFixedVector ExitLocation, bool bAllowDeferredTeardownContainer);
 	friend class USeinNetSubsystem;
@@ -2259,12 +2346,25 @@ private:
 		FSeinAuthoritativeDestinationProviderResolver Resolver;
 	};
 
+	struct FRegisteredSelectionDestinationPlanProvider
+	{
+		FString CanonicalStableID;
+		uint32 BehaviorRevision = 0;
+		uint64 RegistrationToken = 0;
+		FSeinSelectionDestinationPlanProviderResolver Resolver;
+	};
+
 	/** Stable-ID ordered, world-local provider set. It is immutable after topology
 	 *  freeze and therefore safe to inspect before serializing callback execution. */
 	TArray<FRegisteredAuthoritativeDestinationProvider>
 		AuthoritativeDestinationProviders;
 	uint64 NextAuthoritativeDestinationProviderToken = 1;
 	bool bAuthoritativeDestinationQueryInProgress = false;
+	TArray<FRegisteredSelectionDestinationPlanProvider>
+		SelectionDestinationPlanProviders;
+	uint64 NextSelectionDestinationPlanProviderToken = 1;
+	bool bSelectionDestinationPlanQueryInProgress = false;
+	bool bSelectionDestinationBaseLayoutInProgress = false;
 
 	struct FExecutionTopologyCandidate
 	{

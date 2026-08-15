@@ -48,7 +48,7 @@ struct SEINARTSCOREENTITY_API FSeinCanonicalStateRootIdentity
  * but deliberately excluded. Input order is irrelevant: stable lowercase-ASCII
  * section IDs define the canonical bytewise order.
  *
- * This format has a distinct domain/version from snapshot-v15. A future
+ * This format has a distinct domain/version from snapshot-v16. A future
  * snapshot equivalence refactor must explicitly migrate both producers rather
  * than assuming the two current roots are byte-identical.
  */
