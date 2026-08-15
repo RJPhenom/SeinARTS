@@ -20,6 +20,56 @@
 
 class USeinFormation;
 
+namespace SeinBrokerOrderProtocol
+{
+	constexpr int32 SchemaVersion = 2;
+	constexpr int32 MaxMembers = 4096;
+	constexpr int32 MaxGuidePoints = 4096;
+	constexpr int32 MaxTargeterPoints = 256;
+	constexpr int32 MaxDestinationArtifactEntries = 4096;
+	constexpr int32 MaxQueuedOrdersPerBroker = 8192;
+	constexpr int32 MaxPayloadBytes = 256 * 1024;
+	constexpr int32 MaxAggregateContainerEntries = 8192;
+}
+
+/**
+ * One member's exact destination captured from the displayed selection plan.
+ * WorldPosition is a value, never a live follow binding. SourceEntity and
+ * SourceIndex are provenance only: provider movement or destruction after
+ * capture does not relocate or invalidate the destination.
+ */
+USTRUCT(BlueprintType, meta = (SeinDeterministic))
+struct SEINARTSCOREENTITY_API FSeinFrozenDestination
+{
+	GENERATED_BODY()
+
+	/** Unit that owns this destination. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker|Destination")
+	FSeinEntityHandle Member;
+
+	/** Exact world-space point shown by preview and consumed by dispatch. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker|Destination")
+	FFixedVector WorldPosition;
+
+	/** Standing footprint used by preview and, when reserved, contention tests. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker|Destination")
+	FFixedPoint FootprintRadius = FFixedPoint::Zero;
+
+	/** True for provider-backed exact points that reserve their world footprint
+	 *  while queued/executing and, after successful arrival, while the member
+	 *  remains settled there. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker|Destination")
+	bool bReserveFootprint = false;
+
+	/** Optional source provider at capture time. Provenance, not a live binding. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker|Destination")
+	FSeinEntityHandle SourceEntity;
+
+	/** Optional stable item index inside SourceEntity at capture time. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker|Destination")
+	int32 SourceIndex = INDEX_NONE;
+};
+
 /**
  * One queued order on a broker. Queue order is preserved for orders whose
  * effective member sets overlap; disjoint subset orders may run concurrently.
@@ -106,6 +156,13 @@ struct SEINARTSCOREENTITY_API FSeinBrokerQueuedOrder
 
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker")
 	TArray<FFixedVector> PreplacedPositions;
+
+	/** Exact admitted preview artifact. When non-empty this is authoritative over
+	 *  the legacy Preplaced* arrays and survives queueing/snapshot continuation.
+	 *  Reserved entries protect their frozen world footprint; source provenance
+	 *  never turns them into moving targets. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker")
+	TArray<FSeinFrozenDestination> DestinationArtifact;
 
 	// ─── Per-order execution state (Option C parallelism) ───
 	//
@@ -198,6 +255,10 @@ struct SEINARTSCOREENTITY_API FSeinBrokerOrderInput
 
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker")
 	TArray<FFixedVector> PreplacedPositions;
+
+	/** Exact admitted destinations (mirrors the queued order). */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker")
+	TArray<FSeinFrozenDestination> DestinationArtifact;
 };
 
 /**
@@ -245,6 +306,12 @@ struct SEINARTSCOREENTITY_API FSeinBrokerOrderPayload
 	 *  Invalid for right-click smart commands. */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Command")
 	FGameplayTag PredeterminedAbilityTag;
+
+	/** Optional exact selection plan captured from the visible preview. The sim
+	 *  validates complete member coverage and either admits the whole artifact or
+	 *  rejects it; it never silently recomputes a preview-changing fallback. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Command")
+	TArray<FSeinFrozenDestination> DestinationArtifact;
 };
 
 /**

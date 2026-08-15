@@ -165,6 +165,19 @@ ESeinPathResult USeinPlannerHandle::RequestNavPath()
 		Req.AgentWallPaddingCells = Ctx->NavData->WallPadding;
 		Req.AgentMaxSearchNodes   = Ctx->NavData->MaxSearchNodes;   // 0 = project default
 	}
+	else
+	{
+		// No navigation component: mirror FSeinNavAgentProfile's defaults so a
+		// component-less agent PLANS against the same layer mask runtime
+		// containment and command validation use (they build the agent profile,
+		// whose default mask is the ground bit). FSeinPathRequest's own
+		// match-all default stays reserved for context-free BP queries with no
+		// requester.
+		const FSeinNavAgentProfile Defaults;
+		Req.BlockedTerrainTags    = Defaults.BlockedTerrainTags;
+		Req.AgentNavLayerMask     = Defaults.AgentNavLayerMask;
+		Req.AgentWallPaddingCells = Defaults.AgentWallPaddingCells;
+	}
 	// Footprint via the shared cascade (Extents -> NavComp -> 0), so the planner clears what the
 	// body actually occupies — the same radius runtime collision uses.
 	Req.AgentFootprintRadius = USeinMovement::ResolveCollisionRadius(Ctx->World, Ctx->SelfHandle, Ctx->NavData);

@@ -119,6 +119,7 @@ namespace UE::SeinARTSTests
 		FSeinCommand Command;
 		Command.PlayerID = Player;
 		Command.CommandType = SeinARTSTags::Command_Type_BrokerOrder;
+		Command.SchemaVersion = SeinBrokerOrderProtocol::SchemaVersion;
 		Command.EntityList.Add(Entity);
 		Command.Payload = FInstancedStruct::Make(Payload);
 		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World)));

@@ -2,10 +2,14 @@
 #include "Components/ActorTestSpawner.h"
 #include "Containers/Ticker.h"
 
+#include "Brokers/SeinBrokerTypes.h"
+#include "Components/SeinBrokerMembershipData.h"
+#include "Components/SeinCommandBrokerData.h"
 #include "Data/SeinWorldSnapshot.h"
 #include "Serialization/SeinSnapshotTransfer.h"
 #include "Settings/PluginSettings.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
+#include "Simulation/SeinTestSimContext.h"
 #include "Simulation/SeinTestSnapshotRestore.h"
 #include "Simulation/SeinSnapshotRestoreAuthority.h"
 #include "Simulation/SeinWorldSubsystem.h"
@@ -109,6 +113,34 @@ namespace UE::SeinARTSTests
 		FString Error;
 		ASSERT_THAT(IsTrue(StartResyncSourceWorld(
 			*Source, TEXT("Resync.CatchUp"), Error)));
+		FSeinEntityHandle FrozenMember;
+		FSeinEntityHandle FrozenBroker;
+		FSeinFrozenDestination FrozenDestination;
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*Source);
+			FrozenMember = Source->SpawnAbstractEntity(
+				FFixedTransform(), FSeinPlayerID::Neutral());
+			FrozenBroker = Source->SpawnAbstractEntity(
+				FFixedTransform(), FSeinPlayerID::Neutral());
+			FrozenDestination.Member = FrozenMember;
+			FrozenDestination.WorldPosition = FFixedVector(
+				FFixedPoint::FromInt(500),
+				FFixedPoint::FromInt(200),
+				FFixedPoint::Zero);
+			FrozenDestination.FootprintRadius =
+				FFixedPoint::FromInt(40);
+			FrozenDestination.bReserveFootprint = true;
+			FrozenDestination.SourceEntity = FrozenBroker;
+			FrozenDestination.SourceIndex = 0;
+
+			FSeinCommandBrokerData BrokerData;
+			BrokerData.Members.Add(FrozenMember);
+			BrokerData.SettledDestinationArtifact.Add(FrozenDestination);
+			Source->AddComponent(FrozenBroker, BrokerData);
+			FSeinBrokerMembershipData Membership;
+			Membership.CurrentBrokerHandle = FrozenBroker;
+			Source->AddComponent(FrozenMember, Membership);
+		}
 		for (int32 Tick = 0; Tick < 4; ++Tick)
 		{
 			TickWorldOnce(*Source);
@@ -158,6 +190,14 @@ namespace UE::SeinARTSTests
 				ESeinSnapshotResumePolicy::RemainStopped))));
 		ASSERT_THAT(AreEqual(FrontierTick, Target->GetCurrentTick()));
 		ASSERT_THAT(IsFalse(Target->IsSimulationRunning()));
+		ASSERT_THAT(IsTrue(Target->IsDestinationFootprintReserved(
+			FrozenDestination.WorldPosition,
+			FrozenDestination.FootprintRadius)));
+		FSeinAuthoritativeDestinationQuery AuthorityQuery;
+		AuthorityQuery.Requester = FrozenMember;
+		AuthorityQuery.WorldPosition = FrozenDestination.WorldPosition;
+		ASSERT_THAT(IsTrue(
+			Target->IsAuthoritativeDestination(AuthorityQuery)));
 		ASSERT_THAT(IsTrue(Target->BeginResyncCatchUpWindow(Error)));
 
 		// A catching-up peer must not emit checkpoints.

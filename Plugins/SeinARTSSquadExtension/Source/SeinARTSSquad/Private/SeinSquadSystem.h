@@ -638,11 +638,35 @@ public:
 								if (!Squad
 									|| Squad->ReinforceQueue.IsEmpty()
 									|| Squad->ReinforceQueue[0].RequestID
-										!= Completed.RequestID
-									|| !Squad->Slots.IsValidIndex(SlotIdx)
+										!= Completed.RequestID)
+								{
+									// The request itself is gone (cancelled or
+									// replaced reentrantly during the spawn).
+									// Whoever removed it owned the refund; a
+									// second reversal here would double-refund.
+									World.DestroyEntity(NewMember);
+									return;
+								}
+								if (!Squad->Slots.IsValidIndex(SlotIdx)
 									|| Squad->Slots[SlotIdx].CurrentOccupant.IsValid())
 								{
+									// The slot was refilled or removed DURING
+									// the spawn itself (reentrant content).
+									// Retrying every tick can never succeed
+									// while the occupant remains, so refund the
+									// snapshotted charge and retire the request
+									// instead of spawn/destroy churning forever.
+									// A failed reversal (payer gone, overflow)
+									// keeps the entry so the paid cost is never
+									// silently lost.
 									World.DestroyEntity(NewMember);
+									if (USeinResourceBPFL::SeinTryReverseDeduction(
+											&World,
+											Completed.ResourcePayer,
+											Completed.DeductedCost))
+									{
+										Squad->ReinforceQueue.RemoveAt(0);
+									}
 									return;
 								}
 

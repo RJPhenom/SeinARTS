@@ -1,4 +1,6 @@
 #include "CQTest.h"
+#include "Brokers/SeinBrokerTypes.h"
+#include "Input/SeinCommandSchemaRegistry.h"
 #include "SeinNetCommandWireCodec.h"
 #include "Tags/SeinARTSGameplayTags.h"
 #include "TestTypes/SeinCommandSchemaTestTypes.h"
@@ -70,6 +72,67 @@ namespace UE::SeinARTSTests
 			ASSERT_THAT(AreEqual(
 				CommandEncodeCost.CanonicalCostBytes,
 				DecodeCost.CanonicalCostBytes));
+	}
+
+	TEST(BrokerOrderV2WireRoundTripPreservesFrozenDestinations,
+		"SeinARTS.Unit.Network.Protocol")
+	{
+		FSeinCommandSchemaDescriptor Schema;
+		ASSERT_THAT(IsTrue(FSeinCommandSchemaRegistry::FindSchema(
+			SeinARTSTags::Command_Type_BrokerOrder,
+			SeinBrokerOrderProtocol::SchemaVersion,
+			Schema)));
+		auto FindSchema = [](FGameplayTag Type, int32 Version,
+			FSeinCommandSchemaDescriptor& Out)
+		{
+			return FSeinCommandSchemaRegistry::FindSchema(
+				Type, Version, Out);
+		};
+
+		FSeinFrozenDestination Destination;
+		Destination.Member = FSeinEntityHandle(17, 3);
+		Destination.WorldPosition = FFixedVector(
+			FFixedPoint::FromInt(123),
+			FFixedPoint::FromInt(-456),
+			FFixedPoint::FromInt(7));
+		Destination.FootprintRadius = FFixedPoint::FromInt(40);
+		Destination.bReserveFootprint = true;
+		Destination.SourceEntity = FSeinEntityHandle(22, 4);
+		Destination.SourceIndex = 9;
+
+		FSeinBrokerOrderPayload Payload;
+		Payload.DestinationArtifact.Add(Destination);
+		FSeinCommand Command;
+		Command.PlayerID = FSeinPlayerID(1);
+		Command.CommandType = SeinARTSTags::Command_Type_BrokerOrder;
+		Command.SchemaVersion = SeinBrokerOrderProtocol::SchemaVersion;
+		Command.EntityList.Add(Destination.Member);
+		Command.Payload = FInstancedStruct::Make(Payload);
+
+		FSeinOpaqueCommandBatch Batch;
+		FString Error;
+		ASSERT_THAT(IsTrue(FSeinNetCommandWireCodec::EncodeCommands(
+			MakeArrayView(&Command, 1), 1, FindSchema, Batch, Error)));
+		TArray<FSeinCommand> Decoded;
+		ASSERT_THAT(IsTrue(FSeinNetCommandWireCodec::DecodeCommands(
+			Batch, 1, FindSchema, Decoded, Error)));
+		ASSERT_THAT(AreEqual(1, Decoded.Num()));
+		const FSeinBrokerOrderPayload* DecodedPayload =
+			Decoded[0].Payload.GetPtr<FSeinBrokerOrderPayload>();
+		ASSERT_THAT(IsNotNull(DecodedPayload));
+		ASSERT_THAT(AreEqual(1, DecodedPayload->DestinationArtifact.Num()));
+		const FSeinFrozenDestination& DecodedDestination =
+			DecodedPayload->DestinationArtifact[0];
+		ASSERT_THAT(IsTrue(DecodedDestination.Member == Destination.Member));
+		ASSERT_THAT(IsTrue(
+			DecodedDestination.WorldPosition == Destination.WorldPosition));
+		ASSERT_THAT(IsTrue(
+			DecodedDestination.FootprintRadius == Destination.FootprintRadius));
+		ASSERT_THAT(IsTrue(DecodedDestination.bReserveFootprint));
+		ASSERT_THAT(IsTrue(
+			DecodedDestination.SourceEntity == Destination.SourceEntity));
+		ASSERT_THAT(AreEqual(
+			Destination.SourceIndex, DecodedDestination.SourceIndex));
 	}
 
 	TEST(NativeCeilingRejectsBeforeOutputMutation,

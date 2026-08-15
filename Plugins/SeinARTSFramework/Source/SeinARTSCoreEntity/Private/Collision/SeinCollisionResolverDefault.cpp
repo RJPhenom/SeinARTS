@@ -36,6 +36,8 @@ void USeinCollisionResolverDefault::Resolve(USeinWorldSubsystem& World)
 	const USeinARTSCoreSettings* MassSettings = GetDefault<USeinARTSCoreSettings>();
 	const int32 RawCutoff = MassSettings ? MassSettings->CollisionMassRatioCutoff : 8;
 	const FFixedPoint MassRatioCutoff = FFixedPoint::FromInt(RawCutoff > 1 ? RawCutoff : 1);
+	const bool bMayUseAuthoritativeDestination =
+		World.HasAuthoritativeDestinationProviders();
 
 	constexpr int32 NumPasses = 4;
 	for (int32 Pass = 0; Pass < NumPasses; ++Pass)
@@ -44,7 +46,14 @@ void USeinCollisionResolverDefault::Resolve(USeinWorldSubsystem& World)
 		// contacts against identical transforms cannot produce a later push.
 		// Dense moving clusters retain all four bounded relaxation passes; idle
 		// or already-settled worlds stop paying for redundant scans.
-		if (!ResolvePass(World, ChannelDefaults, MassRatioCutoff)) break;
+		if (!ResolvePass(
+			World,
+			ChannelDefaults,
+			MassRatioCutoff,
+			bMayUseAuthoritativeDestination))
+		{
+			break;
+		}
 	}
 
 	// Overlap events run on the SETTLED positions (after Block separation),
@@ -55,7 +64,11 @@ void USeinCollisionResolverDefault::Resolve(USeinWorldSubsystem& World)
 	}
 }
 
-bool USeinCollisionResolverDefault::ResolvePass(USeinWorldSubsystem& World, const TMap<FName, ESeinCollisionResponse>& ChannelDefaults, const FFixedPoint MassRatioCutoff)
+bool USeinCollisionResolverDefault::ResolvePass(
+	USeinWorldSubsystem& World,
+	const TMap<FName, ESeinCollisionResponse>& ChannelDefaults,
+	FFixedPoint MassRatioCutoff,
+	bool bMayUseAuthoritativeDestination)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(Sein_Collision_GaussSeidelPass);
 	const FSeinCollisionSpatialHash& Hash = World.GetCollisionSpatialHash();
@@ -181,7 +194,11 @@ bool USeinCollisionResolverDefault::ResolvePass(USeinWorldSubsystem& World, cons
 			FFixedVector SelfNew = SelfPosNow - Normal * (Depth * SelfShare);
 			SelfNew.Z = SelfPosNow.Z;
 			if (CanOccupy(
-				World, SelfHandle, SelfNew, SelfRadius))
+				World,
+				SelfHandle,
+				SelfNew,
+				SelfRadius,
+				bMayUseAuthoritativeDestination))
 			{
 				if (SelfNew != SelfPosNow)
 				{
@@ -204,7 +221,8 @@ bool USeinCollisionResolverDefault::ResolvePass(USeinWorldSubsystem& World, cons
 						World,
 						OtherHandle,
 						OtherNew,
-						OtherRadius))
+						OtherRadius,
+						bMayUseAuthoritativeDestination))
 				{
 					OtherEntity->Transform.SetLocation(OtherNew);
 					bAnyTransformChanged = true;

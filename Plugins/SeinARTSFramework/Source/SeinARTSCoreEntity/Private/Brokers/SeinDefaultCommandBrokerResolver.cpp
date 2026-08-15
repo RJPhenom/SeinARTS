@@ -461,7 +461,21 @@ FSeinBrokerDispatchPlan USeinDefaultCommandBrokerResolver::ResolveDispatch_Imple
 	const TArray<FSeinEntityHandle> BrokerMembers = Broker->Members;
 	const FFixedVector BrokerCentroid = Broker->Centroid;
 	const FFixedQuaternion BrokerAnchorFacing = Broker->AnchorFacing;
-	if (Order.PreplacedPositions.Num() > 0)
+	if (Order.DestinationArtifact.Num() > 0)
+	{
+		Positions.Reserve(Effective.Num());
+		for (const FSeinEntityHandle& Member : Effective)
+		{
+			const FSeinFrozenDestination* Frozen =
+				Order.DestinationArtifact.FindByPredicate(
+					[Member](const FSeinFrozenDestination& Entry)
+					{
+						return Entry.Member == Member;
+					});
+			Positions.Add(Frozen ? Frozen->WorldPosition : Order.TargetLocation);
+		}
+	}
+	else if (Order.PreplacedPositions.Num() > 0)
 	{
 		Positions.Reserve(Effective.Num());
 		for (const FSeinEntityHandle& Member : Effective)

@@ -163,7 +163,29 @@ FSeinBrokerDispatchPlan USeinSquadDispatchResolver::ResolveDispatch_Implementati
 	// returns to the layout AS GIVEN: no re-solve, no facing recompute, no state writes.
 	TArray<FFixedVector> Positions;
 	FFixedQuaternion FormationFacing = CurrentFacing;
-	if (Order.PreplacedPositions.Num() > 0)
+	if (Order.DestinationArtifact.Num() > 0)
+	{
+		Positions.Reserve(Effective.Num());
+		for (const FSeinEntityHandle& Member : Effective)
+		{
+			const FSeinFrozenDestination* Frozen =
+				Order.DestinationArtifact.FindByPredicate(
+					[Member](const FSeinFrozenDestination& Entry)
+					{
+						return Entry.Member == Member;
+					});
+			Positions.Add(Frozen ? Frozen->WorldPosition : Order.TargetLocation);
+		}
+		if (BrokerData && !bEntityTargeted && Positions.Num() > 0
+			&& Effective.Num() == BrokerMembers.Num())
+		{
+			Plan.bApplySettledSlots = true;
+			Plan.SettledSlotPositions = Positions;
+			Plan.SettledSlotFacings.Init(CurrentFacing, Positions.Num());
+			Plan.bSettledSlotsMemberAligned = true;
+		}
+	}
+	else if (Order.PreplacedPositions.Num() > 0)
 	{
 		Positions.Reserve(Effective.Num());
 		for (const FSeinEntityHandle& Member : Effective)

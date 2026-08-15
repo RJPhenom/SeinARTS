@@ -9,6 +9,8 @@
 #include "System/SeinCoverDefault.h"
 
 #include "Components/SeinCoverComponent.h"
+#include "Brokers/SeinBrokerTypes.h"
+#include "Lib/SeinCoverAssignmentPlanner.h"
 #include "Serialization/SeinCanonicalStateRegistry.h"
 #include "Settings/SeinARTSCoverSettings.h"
 #include "Simulation/SeinWorldSubsystem.h"
@@ -23,8 +25,11 @@ namespace
 {
 	constexpr int32 MaxCoverStateContributors = 64;
 	constexpr uint32 AuthoritativeDestinationBehaviorRevision = 1;
+	constexpr uint32 SelectionDestinationPlanBehaviorRevision = 1;
 	const TCHAR* AuthoritativeDestinationProviderId =
 		TEXT("seinarts.cover.authoritative-destination");
+	const TCHAR* SelectionDestinationPlanProviderId =
+		TEXT("seinarts.cover.selection-destination-plan");
 
 	void AppendFramed(FString& Out, const FString& Value)
 	{
@@ -43,6 +48,7 @@ void USeinCoverSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	StateBindingFailureReason.Reset();
 	FrozenStateBindingFrame.Reset();
 	AuthoritativeDestinationProviderToken = 0;
+	SelectionDestinationPlanProviderToken = 0;
 
 	// Resolve the configured class. FSoftClassPath drives the picker — same
 	// pattern as NavigationClass / FogOfWarClass / RelayActorClass — so this
@@ -134,6 +140,7 @@ void USeinCoverSubsystem::ReleaseModuleOwnedStateForModuleUnload()
 		// Core's terminal release already severed every registered callback. The
 		// token is world-local and must not survive into a replacement world.
 		AuthoritativeDestinationProviderToken = 0;
+		SelectionDestinationPlanProviderToken = 0;
 		if (CachedSimWorld->PreviewQualityProvider.IsBoundToObject(this))
 		{
 			CachedSimWorld->PreviewQualityProvider.Unbind();
@@ -398,7 +405,8 @@ void USeinCoverSubsystem::HookSimWorldEvents()
 		&& SpawnedHandle.IsValid()
 		&& DestroyedHandle.IsValid()
 		&& RestoredHandle.IsValid()
-		&& AuthoritativeDestinationProviderToken != 0)
+		&& AuthoritativeDestinationProviderToken != 0
+		&& SelectionDestinationPlanProviderToken != 0)
 	{
 		return;
 	}
@@ -447,6 +455,130 @@ void USeinCoverSubsystem::HookSimWorldEvents()
 			UE_LOG(LogSeinCoverSubsystem, Error,
 				TEXT("HookSimWorldEvents: authoritative-destination provider registration failed: %s"),
 				*DestinationProviderError);
+			return;
+		}
+	}
+
+	// Build one cover assignment across the complete flattened selection. The
+	// artifact stores slot provenance for diagnostics, but its world position is
+	// the command value: provider motion/destruction never turns it into follow.
+	if (SelectionDestinationPlanProviderToken == 0)
+	{
+		FSeinSelectionDestinationPlanProviderResolver PlanResolver;
+		PlanResolver.BindWeakLambda(this,
+			[this, WorldSub](
+				const FSeinSelectionDestinationPlanQuery& Query,
+				TArray<FSeinFrozenDestination>& Destinations) -> bool
+			{
+				if (!CoverSystem) return true;
+				const USeinARTSCoverSettings* Settings =
+					GetDefault<USeinARTSCoverSettings>();
+				const FFixedPoint SnapRadius = Settings
+					? Settings->CoverSnapRadius
+					: FFixedPoint::FromInt(500);
+				if (SnapRadius <= FFixedPoint::Zero) return true;
+
+				TArray<FSeinCoverSlotCandidate> Slots =
+					CoverSystem->FindNearbySlots(
+						Query.TargetLocation,
+						SnapRadius,
+						Query.OrderingPlayer);
+				FFixedPoint MaxMemberRadius = FFixedPoint::Zero;
+				for (const FSeinFrozenDestination& Destination : Destinations)
+				{
+					if (Destination.FootprintRadius > MaxMemberRadius)
+					{
+						MaxMemberRadius = Destination.FootprintRadius;
+					}
+				}
+				if (MaxMemberRadius <= FFixedPoint::Zero) return true;
+				const TConstArrayView<FSeinEntityHandle> IgnoredMembers =
+					Query.bQueueCommand
+						? TConstArrayView<FSeinEntityHandle>()
+						: Query.Members;
+				Slots.RemoveAll([WorldSub, IgnoredMembers, MaxMemberRadius](
+					const FSeinCoverSlotCandidate& Slot)
+				{
+					return WorldSub->IsDestinationFootprintReserved(
+						Slot.WorldPosition,
+						MaxMemberRadius,
+						IgnoredMembers);
+				});
+				if (MaxMemberRadius
+					> FFixedPoint::MaxValue - MaxMemberRadius)
+				{
+					if (Slots.Num() > 1) Slots.SetNum(1);
+				}
+				else
+				{
+					const FFixedPoint MinimumSeparation =
+						MaxMemberRadius + MaxMemberRadius;
+					TArray<FSeinCoverSlotCandidate> NonOverlappingSlots;
+					NonOverlappingSlots.Reserve(Slots.Num());
+					for (const FSeinCoverSlotCandidate& Slot : Slots)
+					{
+						if (!NonOverlappingSlots.ContainsByPredicate(
+								[&Slot, MinimumSeparation](
+									const FSeinCoverSlotCandidate& Existing)
+								{
+									return FFixedVector::IsPlanarDistanceWithin(
+										Slot.WorldPosition,
+										Existing.WorldPosition,
+										MinimumSeparation);
+								}))
+						{
+							NonOverlappingSlots.Add(Slot);
+						}
+					}
+					Slots = MoveTemp(NonOverlappingSlots);
+				}
+				if (Slots.IsEmpty()) return true;
+
+				TArray<FFixedVector> DesiredPositions;
+				DesiredPositions.Reserve(Destinations.Num());
+				for (const FSeinFrozenDestination& Destination : Destinations)
+				{
+					DesiredPositions.Add(Destination.WorldPosition);
+				}
+				TArray<FSeinEntityHandle> Members;
+				Members.Append(Query.Members.GetData(), Query.Members.Num());
+				const FSeinCoverAssignmentPlan Plan =
+					FSeinCoverAssignmentPlanner::PlanForMembers(
+						WorldSub,
+						Members,
+						DesiredPositions,
+						Slots,
+						Query.TargetLocation,
+						SnapRadius);
+				for (const FSeinCoverSlotAssignment& Assignment : Plan.Assignments)
+				{
+					if (!Destinations.IsValidIndex(Assignment.MemberIndex)
+						|| !Slots.IsValidIndex(Assignment.SlotCandidateIndex))
+					{
+						return false;
+					}
+					FSeinFrozenDestination& Destination =
+						Destinations[Assignment.MemberIndex];
+					const FSeinCoverSlotCandidate& Slot =
+						Slots[Assignment.SlotCandidateIndex];
+					Destination.WorldPosition = Slot.WorldPosition;
+					Destination.bReserveFootprint = true;
+					Destination.SourceEntity = Slot.ProviderHandle;
+					Destination.SourceIndex = Slot.SlotIndex;
+				}
+				return true;
+			});
+		FString PlanProviderError;
+		if (!WorldSub->RegisterSelectionDestinationPlanProvider(
+				SelectionDestinationPlanProviderId,
+				SelectionDestinationPlanBehaviorRevision,
+				MoveTemp(PlanResolver),
+				SelectionDestinationPlanProviderToken,
+				&PlanProviderError))
+		{
+			UE_LOG(LogSeinCoverSubsystem, Error,
+				TEXT("HookSimWorldEvents: selection-destination provider registration failed: %s"),
+				*PlanProviderError);
 			return;
 		}
 	}

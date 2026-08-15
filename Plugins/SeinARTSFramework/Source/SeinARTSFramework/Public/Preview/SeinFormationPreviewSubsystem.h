@@ -23,6 +23,7 @@
 
 #include "CoreMinimal.h"
 #include "GameplayTagContainer.h"
+#include "Brokers/SeinBrokerTypes.h"
 #include "Subsystems/LocalPlayerSubsystem.h"
 #include "Tickable.h"
 #include "SeinFormationPreviewSubsystem.generated.h"
@@ -67,6 +68,16 @@ public:
 	/** True iff a preview actor exists and the current state would show decals. */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Preview")
 	bool IsPreviewVisible() const { return bIsVisible; }
+
+	/** Return the exact artifact currently rendered when its complete command key
+	 *  matches. False prevents stale preview state from entering a command. */
+	bool TryGetDisplayedDestinationArtifact(
+		const TArray<FSeinEntityHandle>& Members,
+		const FFixedVector& TargetLocation,
+		const TArray<FFixedVector>& GuidePoints,
+		FGameplayTag FormationTag,
+		bool bQueueCommand,
+		TArray<FSeinFrozenDestination>& OutArtifact) const;
 
 private:
 	// PC delegate handlers
@@ -139,6 +150,13 @@ private:
 	int32 LastLayoutDragPointCount = INDEX_NONE;
 	bool bLastLayoutWasCommandDrag = false;
 	bool bLayoutDirty = true;
+
+	TArray<FSeinFrozenDestination> DisplayedDestinationArtifact;
+	TArray<FSeinEntityHandle> DisplayedArtifactMembers;
+	FFixedVector DisplayedArtifactTarget;
+	TArray<FFixedVector> DisplayedArtifactGuidePoints;
+	FGameplayTag DisplayedArtifactFormationTag;
+	bool bDisplayedArtifactQueueCommand = false;
 
 	/** Prevents FTickableGameObject from invoking withdrawn module code. */
 	bool bModuleUnloadStateReleased = false;

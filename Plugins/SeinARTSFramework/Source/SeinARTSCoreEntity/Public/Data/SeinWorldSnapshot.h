@@ -374,7 +374,7 @@ struct SEINARTSCOREENTITY_API FSeinWorldSnapshot
 {
 	GENERATED_BODY()
 
-	static constexpr int32 CurrentVersion = 15;
+	static constexpr int32 CurrentVersion = 16;
 	/** Defensive reconstruction bound for an imported checkpoint. The runtime
 	 *  pool remains independently extensible; snapshots above this generous
 	 *  simultaneous-entity ceiling fail before allocating slot-indexed state. */

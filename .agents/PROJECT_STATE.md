@@ -1,5 +1,69 @@
 # SeinARTS Project State
 
+## 2026-08-15 audit-fix wave (Claude session, uncommitted alongside FEAT-03 WIP)
+
+Six approved fixes from the independent post-handoff audit, layered on the working tree
+without touching the in-flight FEAT-03 frozen-destination changes:
+
+1. `Sein.Sim.StateRoot.VerifyIncrementalInterval` (new cvar, default 0/off, non-shipping):
+   every N completed ticks, cross-check the incremental canonical root against a forced
+   full rebuild at a quiescent boundary; mismatch logs Error + on-screen banner, transient
+   unavailability logs Verbose. Closes the "forced-rebuild verification never runs in a
+   live match" gap as an opt-in PIE diagnostic. New `VerifyIncrementalCanonicalStateRootDetailed`
+   distinguishes mismatch from unavailability; the BP node is unchanged.
+2. `USeinPlannerHandle::RequestNavPath` now mirrors `FSeinNavAgentProfile` defaults when an
+   entity has no navigation component (was silently inheriting `FSeinPathRequest`'s 0xFF),
+   aligning planning with containment/validation for component-less agents.
+3. `USeinMovement::CacheFootprintFromContext` delegates to the canonical
+   `BuildNavAgentProfile` (was a hand-duplicated derivation); the deliberate AgentTags
+   omission is now documented at both sites (caching tags would add reflected movement state).
+4. Tracked momentum-arc join check evaluates `IsPlanarFar` before the wrap-prone raw
+   `SizeSquared()` (order marked load-bearing in a comment).
+5. Reinforcement completion: a slot refilled/removed during the spawn itself now refunds the
+   snapshotted charge and retires the request (was an indefinite spawn/destroy retry with the
+   cost held); request-identity loss during spawn still defers to whoever owns the refund.
+6. Entity-pool mutable `ForEachEntity` uses compare-on-write dirtiness (snapshot
+   ID/Transform/Flags, touch only on real value change) — callers cannot under-dirty, idle
+   entities stop re-digesting every checkpoint. Pool slot revisions confirmed
+   cache-invalidation-only (restore rebuilds them locally), so the change is
+   canonical-state-neutral. New `EntityPoolMutableVisitTouchesOnlyValueChanges` regression
+   covers no-write, write-and-revert, transform-change, and flag-change cases.
+
+Validation: Development build green (all touched modules relinked); focused suites green —
+Unit.Entity 14/14, Unit.CoreEntity.CanonicalState 35/35, Sim.Squad.Reinforcement 2/2,
+Sim.Movement 19/19 (All profile). Fresh-process serial/parallel A/B trace: all 120 canonical
+roots and raw poses matched. Remaining gates: RJ PIE (recommend a soak with
+`Sein.Sim.StateRoot.VerifyIncrementalInterval 1` to prove compare-on-write against full
+rebuilds live).
+Also: `.agents/WORKFLOW.md` gained section numbering matching the corrected master scheme;
+the Google Doc master still needs its duplicate-§2 / unnumbered-GIT / stale-cross-ref fixes.
+
+### FEAT-03 landing pass (same session, later on 2026-08-15)
+
+Closed the two remaining open items from the frozen-destination reviews; verified the other two
+reviewer P1s (premature settled copy; entity-click-on-provider) were already fixed by the final
+Codex push:
+
+7. Both cover resolvers' artifact-less `PostProcessPositions` re-solves now filter candidate
+   slots through `IsDestinationFootprintReserved` (max member radius, own members ignored),
+   mirroring the selection-plan provider. Artifact-carrying orders never reach this path, so an
+   admitted artifact can never be re-snapped.
+8. Client-side plan-provider failure now degrades to a legacy artifact-less order (PC +
+   `SeinIssueBrokerOrder`) with a Warning, instead of silently eating the command. This is
+   distinct from the reserved conflict-policy decision, which is written up with options and a
+   recommendation in `.agents/DECISION_FROZEN_CONFLICT_POLICY.md` (awaiting RJ: A/B/C).
+9. Fixed a latent profile gap in the new `FrozenDestinationTests`: the admission test asserted
+   an empty authoritative-provider registry but had only ever run under the Framework profile;
+   under All, Cover legitimately registers providers into every world. The test now detaches
+   extension providers BEFORE bootstrap freezes the provider binding frame (clearing after the
+   freeze would trip per-tick binding validation).
+
+Validation: broad All-profile gates green above all prior floors — Unit 471/471, Sim 57/57,
+Determinism 48/48, Integration 26/26, zero failures; focused FrozenDestination 5/5 and
+Unit.Cover 10/10. Framework-profile Unit/Determinism/Sim cross-check result in
+`Saved/Automation/`. Not yet done: expected-count floor refresh for the new totals, and the
+branch commit (deliberately left to pair with RJ's review of the conflict-policy memo).
+
 **State date:** 2026-08-14
 **Baseline branch:** `main`
 **Stabilization commit:** `27cb490` (`Stabilize post-audit performance and determinism`)
@@ -724,7 +788,7 @@ group exclusion; Framework Unit 413/413, Integration 16/16, Determinism 30/30, a
 Squad reinforcement now treats the slot declaration index as exact runtime identity and tags as
 canonical query metadata. Requests carry monotonic IDs plus snapshotted payer/cost, enqueue is
 atomic, cancellation exactly reverses the committed deduction, and completion maintains slot,
-member, broker, leader, cache, and cooldown invariants. Snapshot v15 preflight rejects allocator,
+member, broker, leader, cache, and cooldown invariants. Snapshot v16 preflight rejects allocator,
 queue, slot, member, or broker drift before commit. Canonical tag selection uses exact lexical tag
 names in runtime and restore validation, existing squad brokers cannot self-cull ahead of paid
 queues, and charge/refund arithmetic rejects malformed or overflowing fixed-point operations
