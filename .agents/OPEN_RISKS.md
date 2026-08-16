@@ -9,10 +9,11 @@ This is the actionable remainder after consolidating the historical audits. It i
    CI or another source/installed engine distribution that supports those target types. The real
    packaged listen-server/client/reconnect/replay harness is green, but a Game-target listen server
    does not prove a true headless dedicated-server binary.
-2. **The public documentation product is not yet authored.** The obsolete draft manuals were
-   removed instead of being treated as customer-ready material. Package-only and consumer gates stay
-   available, but publication now fails closed until a deliberate non-empty `Docs/` tree exists;
-   every file in that tree is then packaged and bound into immutable release evidence.
+2. **The public documentation product now has its spine but is not complete.** `Docs/` carries a
+   deliberate customer tree (README, Installation, First Skirmish, Determinism Rules, Authoring
+   Units), so publication's fail-closed docs gate is satisfiable. Still to author: multiplayer/
+   lobby setup, replays, formations/gestures, extension deep-dives, and a project-settings
+   reference; docs accuracy review belongs in each release's gate.
 
 ## Gameplay-backbone gaps
 
