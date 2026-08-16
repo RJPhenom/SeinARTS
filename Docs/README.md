@@ -22,9 +22,10 @@ when both parents are installed.
 4. [Determinism Rules](Reference/Determinism.md) — the rules your Blueprints and C++ must follow
    in a lockstep simulation, and the tooling that enforces them.
 
-Guides: [Formations and the Order Preview](Guides/Formations.md) ·
-[Multiplayer](Guides/Multiplayer.md) · [Replays](Guides/Replays.md) ·
-[Project Settings Reference](Reference/ProjectSettings.md)
+Guides: [Authoring Abilities](Guides/Abilities.md) ·
+[Formations and the Order Preview](Guides/Formations.md) ·
+[Balance Data](Guides/BalanceData.md) · [Multiplayer](Guides/Multiplayer.md) ·
+[Replays](Guides/Replays.md) · [Project Settings Reference](Reference/ProjectSettings.md)
 
 Extension deep-dives: [Squads](Extensions/Squads.md) · [Cover](Extensions/Cover.md) ·
 [Movement+](Extensions/MovementPlus.md)
