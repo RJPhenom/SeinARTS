@@ -43,6 +43,25 @@ enum class ESeinSquadContainmentMode : uint8
 	AsN,
 };
 
+/**
+ * What happens to still-queued reinforcement charges when the squad entity is
+ * destroyed or disbanded. A wiped-but-rebuilding squad (all members dead,
+ * queue still ticking) keeps its queue and is unaffected; explicit
+ * cancellation always refunds exactly, independent of this policy.
+ */
+UENUM(BlueprintType)
+enum class ESeinSquadReinforceRefundPolicy : uint8
+{
+	/** Every queued entry reverses its snapshotted deduction. */
+	Refund,
+
+	/** Queued charges are lost with the squad — committed resources are spent. */
+	Forfeit,
+
+	/** Each queued entry refunds PartialRefundPercent of its snapshotted cost. */
+	PartialRefund,
+};
+
 
 // NOTE: per-squad ability dispatch policy was relocated to USeinAbility
 // (its own DispatchMode / DispatchSelector / DispatchPreferredTag /
@@ -250,6 +269,21 @@ struct SEINARTSCOREENTITY_API FSeinSquadComponent : public FSeinComponent
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Squad")
 	bool bCanReinforce = true;
 
+	/** Destruction/disband settlement for still-queued reinforcement charges
+	 *  (see ESeinSquadReinforceRefundPolicy). Applied by the deterministic
+	 *  entity-teardown sweep; cancellation refunds exactly regardless. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Squad",
+		meta = (DisplayName = "Reinforce Refund On Destruction"))
+	ESeinSquadReinforceRefundPolicy ReinforceRefundPolicy =
+		ESeinSquadReinforceRefundPolicy::Refund;
+
+	/** PartialRefund only: fraction (0..1) of each queued entry's snapshotted
+	 *  cost returned on destruction. Clamped at settlement time. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Squad",
+		meta = (EditCondition =
+			"ReinforceRefundPolicy == ESeinSquadReinforceRefundPolicy::PartialRefund"))
+	FFixedPoint PartialRefundPercent = FFixedPoint::Half;
+
 	/** Generic squad-level opt-in for ANY preview/visualization system that
 	 *  wants to render "where would members land if I clicked here" decals
 	 *  while the squad is selected (the SeinARTSCover module's destination
@@ -382,6 +416,9 @@ FORCEINLINE uint32 GetTypeHash(const FSeinSquadComponent& Component)
 {
 	uint32 Hash = GetTypeHash(Component.Leader);
 	Hash = HashCombine(Hash, GetTypeHash(Component.bCanReinforce));
+	Hash = HashCombine(Hash,
+		GetTypeHash(static_cast<uint8>(Component.ReinforceRefundPolicy)));
+	Hash = HashCombine(Hash, GetTypeHash(Component.PartialRefundPercent));
 	Hash = HashCombine(Hash, GetTypeHash(Component.bShowFormationPreview));
 	Hash = HashCombine(Hash, GetTypeHash(static_cast<uint8>(Component.ContainmentMode)));
 	Hash = HashCombine(Hash, GetTypeHash(Component.CoherencyRadius));

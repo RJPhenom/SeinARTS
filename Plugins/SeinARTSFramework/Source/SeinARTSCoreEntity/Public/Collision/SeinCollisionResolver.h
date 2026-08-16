@@ -296,7 +296,8 @@ protected:
 		USeinWorldSubsystem& World,
 		FSeinEntityHandle Agent,
 		const FFixedVector& P,
-		FFixedPoint Radius);
+		FFixedPoint Radius,
+		bool bMayUseAuthoritativeDestination);
 
 	/** Build a canonical pair key ordered by full generational handle. */
 	static FORCEINLINE FOverlapPairKey MakePairKey(FSeinEntityHandle A, FSeinEntityHandle B)

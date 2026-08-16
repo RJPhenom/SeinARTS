@@ -13,8 +13,8 @@
  *            - pick which preview class to spawn
  *            - run client-side validation per cycle
  *
- *          The shipped subclasses cover point and point-plus-facing input. Line
- *          and corridor capture remain future extensions. The hierarchy is
+ *          The shipped subclasses cover point, point-plus-facing, and
+ *          line/corridor input (drag or chained multi-click). The hierarchy is
  *          composition-not-inheritance over USeinAbility - the spec lives on the
  *          ability CDO as an EditDefaultsOnly Instanced UObject so designers can
  *          author per-ability without subclassing the spec.
@@ -233,6 +233,95 @@ public:
 	 *  or a procedural mesh that costs too much to instance for preview. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Targeter")
 	TSoftObjectPtr<UStaticMesh> PreviewMeshOverride;
+
+protected:
+	virtual FSoftClassPath GetDefaultPreviewClass() const override;
+};
+
+/**
+ * How a line targeter captures its segments. Both modes are first-class — they
+ * serve different ability UX and are selected per-ability on the spec.
+ */
+UENUM(BlueprintType)
+enum class ESeinLineTargeterCapture : uint8
+{
+	/** Press anchors the segment start, drag draws it, release captures
+	 *  {Start, End}. One gesture per segment. The strafing-run / barrage-line /
+	 *  smoke-wall interaction. With TargetCount > 1 each segment is an
+	 *  independent gesture (segments need not connect). */
+	Drag,
+	/** Each click plants a vertex; every click after the first captures a
+	 *  segment chained from the previous vertex ({Prev, Clicked}). The
+	 *  trench-network / multi-segment-wall interaction. Capture ends when
+	 *  TargetCount segments exist, or early when the player clicks on the last
+	 *  vertex (within FinishClickTolerance) with at least one segment down. */
+	MultiClick
+};
+
+/**
+ * Line / corridor targeter. Captures world-space segments; each captured
+ * FSeinTargeterPoint is one segment: Location = start, AuxLocation = end —
+ * identical encoding for both capture modes, so ability OnActivate logic never
+ * cares which interaction produced the segments.
+ *
+ * Used for: barrage lines, strafing runs, smoke walls (Drag); trench networks,
+ * multi-segment walls, breach lanes (MultiClick). Width > 0 turns the line
+ * into a corridor for preview + gameplay; the ability reads Width off this
+ * spec (CDO-authored, identical on every client — deterministic without
+ * riding the wire).
+ *
+ * TargetCount (inherited) is the SEGMENT count: Drag mode loops N independent
+ * drag gestures; MultiClick chains N segments from N+1 clicks.
+ */
+UCLASS(BlueprintType, EditInlineNew, meta = (DisplayName = "Line Targeter Spec"))
+class SEINARTSCOREENTITY_API USeinLineTargeterSpec : public USeinTargeterSpec
+{
+	GENERATED_BODY()
+
+public:
+	USeinLineTargeterSpec();
+
+	/** Segment capture interaction — drag gesture or chained multi-click. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Targeter")
+	ESeinLineTargeterCapture CaptureMode = ESeinLineTargeterCapture::Drag;
+
+	/** Corridor width in world units. Zero (default) = pure line. Drives the
+	 *  preview rectangle and is the gameplay corridor width the ability reads
+	 *  at execution (e.g. lane fit, area damage bounds). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Targeter")
+	FFixedPoint Width = FFixedPoint::Zero;
+
+	/** Maximum length of a single captured segment in world units. Zero
+	 *  (default) = unlimited. When exceeded, ValidateClient reports Blocked —
+	 *  combine with bRejectClickWhenBlocked for strict enforcement, or leave
+	 *  permissive for warn-tint-then-server-reject feedback. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Targeter")
+	FFixedPoint MaxSegmentLength = FFixedPoint::Zero;
+
+	/** MultiClick only: clicking within this distance (world units) of the
+	 *  previous vertex finishes capture early and submits the segments placed
+	 *  so far (needs at least one). Render-side UX tolerance — never rides the
+	 *  wire. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Targeter",
+		meta = (ClampMin = "1.0", UIMin = "5.0", UIMax = "200.0"))
+	float FinishClickTolerance = 50.0f;
+
+	/** Sample the authored segment against dynamic nav passability while
+	 *  targeting: a blocked centerline reports Blocked, a corridor edge
+	 *  (Width > 0) clipping impassable cells reports Warning ("the lane
+	 *  pinches"). Advisory client UX evaluated by the targeter subsystem —
+	 *  worlds with no bound passability resolver skip the check entirely.
+	 *  Disable for abilities that legitimately cross impassable ground
+	 *  (artillery barrages over walls). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Targeter")
+	bool bValidateCorridorFit = true;
+
+	/** Blocks segments longer than MaxSegmentLength. Length math runs in float
+	 *  — this hook is advisory client UX (the server re-validates), documented
+	 *  non-sim on the base class. */
+	virtual ESeinTargeterValidity ValidateClient_Implementation(
+		const FFixedVector& CursorWorld,
+		const FFixedVector& AuxWorld) const override;
 
 protected:
 	virtual FSoftClassPath GetDefaultPreviewClass() const override;

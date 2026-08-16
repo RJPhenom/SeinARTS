@@ -46,3 +46,9 @@ void ASeinTargeterPreview::UpdatePreview(const FVector& CursorWorld, const FVect
 	SetActorLocation(CursorWorld);
 	OnPreviewUpdated();
 }
+
+void ASeinTargeterPreview::NotifyPointCaptured(
+	const FVector& StartWorld, const FVector& EndWorld)
+{
+	OnPointCaptured(StartWorld, EndWorld);
+}

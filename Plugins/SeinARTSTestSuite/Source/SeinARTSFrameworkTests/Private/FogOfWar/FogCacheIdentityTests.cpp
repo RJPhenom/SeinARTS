@@ -9,8 +9,10 @@
 #include "SeinFogOfWarSubsystem.h"
 #include "Settings/PluginSettings.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
+#include "Simulation/SeinTestSimContext.h"
 #include "Simulation/SeinTestSnapshotRestore.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "Tags/SeinARTSGameplayTags.h"
 #include "TestTypes/SeinFogOfWarStateCodecTestTypes.h"
 #include "TestTypes/SeinLevelDataTestTypes.h"
 
@@ -1439,5 +1441,102 @@ namespace UE::SeinARTSTests
 
 		// Ordinary teardown may repeat after ModuleManager's pre-unload pass.
 		Fog->ReleaseModuleOwnedStateForModuleUnload();
+	}
+
+	TEST(ShareVisionCapabilityUnionsAllyVisionDirectionally,
+		"SeinARTS.Unit.FogOfWar")
+	{
+		FActorTestSpawner Spawner;
+		UWorld& UnrealWorld = Spawner.GetWorld();
+		USeinWorldSubsystem* World =
+			UnrealWorld.GetSubsystem<USeinWorldSubsystem>();
+		USeinFogOfWarSubsystem* FogSubsystem =
+			UnrealWorld.GetSubsystem<USeinFogOfWarSubsystem>();
+		USeinFogOfWarDefault* Fog = FogSubsystem
+			? Cast<USeinFogOfWarDefault>(FogSubsystem->GetFogOfWar())
+			: nullptr;
+		ASSERT_THAT(IsNotNull(World));
+		ASSERT_THAT(IsNotNull(Fog));
+
+		const FSeinPlayerID Sharer(1);
+		const FSeinPlayerID Consumer(2);
+		FSeinEntityHandle Target;
+		const auto AuthorState = [&]()
+		{
+			World->RegisterPlayer(Sharer, FSeinFactionID(1));
+			World->RegisterPlayer(Consumer, FSeinFactionID(1));
+			Target = World->SpawnAbstractEntity(
+				FFixedTransform(), Sharer);
+		};
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Materialize(
+			*World,
+			AuthorState,
+			FSeinMatchSettings(),
+			0x53485256,
+			TEXT("SeinARTS.FogOfWar.ShareVision"))));
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World)));
+
+		// Seed live Sharer vision covering the target's cell. The test never
+		// advances a fixed tick, so the direct queries below run against this
+		// exact state.
+		FFogOfWarDefaultTestAccess::SeedOneCellSource(*Fog, Target, Sharer);
+
+		const FFixedVector CellPos;
+		ASSERT_THAT(IsTrue(
+			Fog->IsEntityVisibleToObserver(Sharer, *World, Target)));
+		ASSERT_THAT(IsFalse(
+			Fog->IsEntityVisibleToObserver(Consumer, *World, Target)));
+		ASSERT_THAT(AreEqual(
+			static_cast<uint8>(0),
+			Fog->GetEffectiveCellBitfield(*World, Consumer, CellPos)));
+
+		// Sharer -> Consumer means the Consumer may consume the Sharer's
+		// vision: entity spotting AND cell bits union in.
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+			ASSERT_THAT(IsTrue(World->GrantPairCapability(
+				Sharer,
+				Consumer,
+				SeinARTSTags::Relationship_Capability_ShareVision,
+				SeinARTSTags::Relationship_Source_MatchAdministration,
+				1)));
+		}
+		ASSERT_THAT(IsTrue(
+			Fog->IsEntityVisibleToObserver(Consumer, *World, Target)));
+		ASSERT_THAT(AreEqual(
+			static_cast<uint8>(SEIN_FOW_BIT_EXPLORED | SEIN_FOW_BIT_NORMAL),
+			Fog->GetEffectiveCellBitfield(*World, Consumer, CellPos)));
+
+		// Exact revocation restores the original blindness.
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+			ASSERT_THAT(IsTrue(World->RevokePairCapability(
+				Sharer,
+				Consumer,
+				SeinARTSTags::Relationship_Capability_ShareVision,
+				SeinARTSTags::Relationship_Source_MatchAdministration,
+				1)));
+		}
+		ASSERT_THAT(IsFalse(
+			Fog->IsEntityVisibleToObserver(Consumer, *World, Target)));
+
+		// Direction matters: a reversed Consumer -> Sharer grant must not
+		// leak the Sharer's vision to the Consumer.
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+			ASSERT_THAT(IsTrue(World->GrantPairCapability(
+				Consumer,
+				Sharer,
+				SeinARTSTags::Relationship_Capability_ShareVision,
+				SeinARTSTags::Relationship_Source_MatchAdministration,
+				2)));
+		}
+		ASSERT_THAT(IsFalse(
+			Fog->IsEntityVisibleToObserver(Consumer, *World, Target)));
+		ASSERT_THAT(AreEqual(
+			static_cast<uint8>(0),
+			Fog->GetEffectiveCellBitfield(*World, Consumer, CellPos)));
+
+		World->StopSimulation();
 	}
 }

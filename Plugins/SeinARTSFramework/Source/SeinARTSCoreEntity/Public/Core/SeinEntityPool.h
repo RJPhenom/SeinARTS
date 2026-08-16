@@ -198,8 +198,27 @@ public:
 			if (Entities[i].IsAlive())
 			{
 				FSeinEntityHandle Handle(i, Generations[i]);
-				TouchSlot(i);
+				// Compare-on-write dirtiness: snapshot the slot's exact value,
+				// run the visitor, and touch the slot only when the visitor
+				// actually changed it. Callers cannot under-dirty — any raw
+				// fixed-point value change is detected by the comparison
+				// itself, so the incremental canonical root never goes blind —
+				// while a visit that writes nothing (or reverts to the
+				// identical value) no longer marks every live entity dirty
+				// every tick and forces a full entity-slot re-digest at each
+				// checkpoint boundary. Values are re-indexed after the visitor
+				// because a structural mutation inside the callback (spawn →
+				// pool growth) may relocate the Entities allocation.
+				const FSeinID PriorID = Entities[i].ID;
+				const FFixedTransform PriorTransform = Entities[i].Transform;
+				const int32 PriorFlags = Entities[i].Flags;
 				Callback(Handle, Entities[i]);
+				if (Entities[i].ID != PriorID
+					|| Entities[i].Flags != PriorFlags
+					|| !(Entities[i].Transform == PriorTransform))
+				{
+					TouchSlot(i);
+				}
 			}
 		}
 	}

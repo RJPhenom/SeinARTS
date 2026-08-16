@@ -53,6 +53,14 @@ public:
 	void UpdatePreview(const FVector& CursorWorld, const FVector& DragAnchorWorld,
 		ESeinTargeterValidity Validity, float DragYawDegrees);
 
+	/** Called by the subsystem after each captured input cycle so multi-cycle
+	 *  previews can accumulate committed visuals (placed trench segments,
+	 *  earlier grenade markers). Start/End are the cycle's primary and aux
+	 *  points; End equals Start for point captures. Base implementation is a
+	 *  no-op. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Targeter")
+	void NotifyPointCaptured(const FVector& StartWorld, const FVector& EndWorld);
+
 protected:
 	/** Spec that spawned this preview. Subclasses cast to their concrete type. */
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "SeinARTS|Targeter")
@@ -86,4 +94,11 @@ protected:
 	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Targeter")
 	void OnPreviewUpdated();
 	virtual void OnPreviewUpdated_Implementation() {}
+
+	/** Subclass hook — called from NotifyPointCaptured after a cycle commits.
+	 *  BlueprintNativeEvent so BP previews can accumulate visuals too. */
+	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Targeter")
+	void OnPointCaptured(const FVector& StartWorld, const FVector& EndWorld);
+	virtual void OnPointCaptured_Implementation(
+		const FVector& StartWorld, const FVector& EndWorld) {}
 };

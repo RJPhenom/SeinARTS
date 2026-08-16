@@ -110,6 +110,36 @@ bool USeinSimMutationBPFL::SeinSetRallyPoint(const UObject* WCO, FSeinEntityHand
 	return true;
 }
 
+bool USeinSimMutationBPFL::SeinGrantPairCapability(const UObject* WCO,
+	FSeinPlayerID SourcePlayer, FSeinPlayerID TargetPlayer,
+	FGameplayTag CapabilityTag, FGameplayTag SourceKindTag,
+	int64 SourceInstanceID)
+{
+	USeinWorldSubsystem* S = GetWorldSubsystem(WCO);
+	if (!S) return false;
+	if (!S->RequireStateMutationAuthorization(TEXT("GrantPairCapability")))
+	{
+		return false;
+	}
+	return S->GrantPairCapability(SourcePlayer, TargetPlayer,
+		CapabilityTag, SourceKindTag, SourceInstanceID);
+}
+
+bool USeinSimMutationBPFL::SeinRevokePairCapability(const UObject* WCO,
+	FSeinPlayerID SourcePlayer, FSeinPlayerID TargetPlayer,
+	FGameplayTag CapabilityTag, FGameplayTag SourceKindTag,
+	int64 SourceInstanceID)
+{
+	USeinWorldSubsystem* S = GetWorldSubsystem(WCO);
+	if (!S) return false;
+	if (!S->RequireStateMutationAuthorization(TEXT("RevokePairCapability")))
+	{
+		return false;
+	}
+	return S->RevokePairCapability(SourcePlayer, TargetPlayer,
+		CapabilityTag, SourceKindTag, SourceInstanceID);
+}
+
 bool USeinSimMutationBPFL::SeinSetCurrentBuildProgress(const UObject* WCO, FSeinEntityHandle H, FFixedPoint V)
 {
 	USeinWorldSubsystem* S = GetWorldSubsystem(WCO);

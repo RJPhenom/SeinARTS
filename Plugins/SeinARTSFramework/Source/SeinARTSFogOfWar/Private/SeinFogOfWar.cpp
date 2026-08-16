@@ -11,7 +11,103 @@
 #include "Engine/World.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "SeinARTSFogOfWarLog.h"
+#include "Tags/SeinARTSGameplayTags.h"
 #include "Types/Entity.h"
+
+void USeinFogOfWar::GetEffectiveVisionSources(
+	const USeinWorldSubsystem& Sim,
+	FSeinPlayerID Observer,
+	TArray<FSeinPlayerID>& OutSources) const
+{
+	OutSources.Reset();
+	OutSources.Add(Observer);
+	if (!Observer.IsValid() || !Sim.HasAnyPairCapabilityGrants())
+	{
+		return;
+	}
+	for (const FSeinPlayerID& Source : Sim.GetRegisteredPlayerIDs())
+	{
+		if (Source == Observer || !Source.IsValid())
+		{
+			continue;
+		}
+		if (Sim.HasPairCapability(
+				Source,
+				Observer,
+				SeinARTSTags::Relationship_Capability_ShareVision))
+		{
+			OutSources.Add(Source);
+		}
+	}
+}
+
+uint8 USeinFogOfWar::GetEffectiveCellBitfield(
+	const USeinWorldSubsystem& Sim,
+	FSeinPlayerID Observer,
+	const FFixedVector& WorldPos) const
+{
+	if (!Sim.HasAnyPairCapabilityGrants())
+	{
+		return GetCellBitfield(Observer, WorldPos);
+	}
+	TArray<FSeinPlayerID> Sources;
+	GetEffectiveVisionSources(Sim, Observer, Sources);
+	uint8 Bits = 0;
+	for (const FSeinPlayerID& Source : Sources)
+	{
+		Bits |= GetCellBitfield(Source, WorldPos);
+		if (Bits == 0xFF)
+		{
+			break;
+		}
+	}
+	return Bits;
+}
+
+bool USeinFogOfWar::GetEffectiveObserverGrid(
+	const USeinWorldSubsystem& Sim,
+	FSeinPlayerID Observer,
+	TArray<uint8>& OutCells,
+	FFixedVector& OutOrigin,
+	FFixedPoint& OutCellSize,
+	int32& OutWidth,
+	int32& OutHeight) const
+{
+	if (!Sim.HasAnyPairCapabilityGrants())
+	{
+		return GetObserverGrid(
+			Observer, OutCells, OutOrigin, OutCellSize, OutWidth, OutHeight);
+	}
+	TArray<FSeinPlayerID> Sources;
+	GetEffectiveVisionSources(Sim, Observer, Sources);
+	if (!GetObserverGrid(
+			Sources[0], OutCells, OutOrigin, OutCellSize, OutWidth, OutHeight))
+	{
+		return false;
+	}
+	TArray<uint8> SourceCells;
+	for (int32 Index = 1; Index < Sources.Num(); ++Index)
+	{
+		FFixedVector SourceOrigin = FFixedVector::ZeroVector;
+		FFixedPoint SourceCellSize = FFixedPoint::Zero;
+		int32 SourceWidth = 0;
+		int32 SourceHeight = 0;
+		if (!GetObserverGrid(
+				Sources[Index], SourceCells, SourceOrigin, SourceCellSize,
+				SourceWidth, SourceHeight)
+			|| SourceWidth != OutWidth
+			|| SourceHeight != OutHeight
+			|| SourceCells.Num() != OutCells.Num())
+		{
+			continue;
+		}
+		for (int32 Cell = 0; Cell < OutCells.Num(); ++Cell)
+		{
+			OutCells[Cell] |= SourceCells[Cell];
+		}
+	}
+	return true;
+}
 
 uint8 USeinFogOfWar::GetEntityVisibleBits(
 	FSeinPlayerID Observer,
@@ -68,14 +164,36 @@ bool USeinFogOfWar::IsEntityVisibleToObserver(
 		return false;
 	}
 
-	const uint8 ObserverBits =
-		GetEntityVisibleBits(Observer, Sim, Target);
+	// ShareVision consumer: the observer's effective vision is the union of
+	// its own VisionGroup and every group a directional A -> Observer
+	// ShareVision grant exposes. B consumes A's VISION (stamped bits and
+	// seen latches), not A's owner omniscience — an A-owned entity with a
+	// zero emission mask stays hidden to B even though A's owner shortcut
+	// shows it to A. Zero grants = single-source, identical to the legacy
+	// behavior and cost.
+	TArray<FSeinPlayerID> Sources;
+	GetEffectiveVisionSources(Sim, Observer, Sources);
+	uint8 ObserverBits = 0;
+	for (const FSeinPlayerID& Source : Sources)
+	{
+		ObserverBits |= GetEntityVisibleBits(Source, Sim, Target);
+	}
 	if ((ObserverBits & EmissionMask) != 0)
 	{
 		return true;
 	}
-	return Policy == ESeinFogVisibilityPolicy::VisibleOnceSeen
-		&& HasObserverSeenEntity(Observer, Target);
+	if (Policy != ESeinFogVisibilityPolicy::VisibleOnceSeen)
+	{
+		return false;
+	}
+	for (const FSeinPlayerID& Source : Sources)
+	{
+		if (HasObserverSeenEntity(Source, Target))
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 void USeinFogOfWar::InitializeForWorld(UWorld* World)

@@ -1659,15 +1659,34 @@ void USeinMovement::CacheFootprintFromContext(const FSeinMovementContext& Ctx)
 	const FFixedPoint Radius = ResolveCollisionRadius(Ctx.World, Ctx.SelfHandle, Ctx.NavData);
 
 	CachedCollisionRadius = Radius;
-	// Agent nav layer (default ground 0x01) — the nav floor passes this to
-	// IsWorldPositionClear so a dynamic blocker only stops layers it's authored to.
-	CachedNavLayerMask = Ctx.NavData ? Ctx.NavData->NavLayerMask : uint8(0x01);
-	CachedNavWallPaddingCells = Ctx.NavData
-		? Ctx.NavData->WallPadding
-		: 0;
-	CachedBlockedTerrainTags = Ctx.NavData
-		? Ctx.NavData->BlockedTerrainTags
-		: FGameplayTagContainer();
+	if (Ctx.World)
+	{
+		// Delegate to the canonical profile builder so this per-order snapshot
+		// can never drift from the policy that path planning, containment, and
+		// command validation resolve for the same entity. AgentTags are
+		// deliberately NOT cached: no shipped navigation consumes them, and
+		// caching them would add reflected state to the movement schema. A
+		// future tags consumer must revisit BuildCachedNavAgentProfile.
+		const FSeinNavAgentProfile Profile =
+			Ctx.World->BuildNavAgentProfile(Ctx.SelfHandle, Radius);
+		CachedNavLayerMask = Profile.AgentNavLayerMask;
+		CachedNavWallPaddingCells = Profile.AgentWallPaddingCells;
+		CachedBlockedTerrainTags = Profile.BlockedTerrainTags;
+	}
+	else
+	{
+		// No sim subsystem (isolated test worlds): mirror the profile defaults
+		// exactly so both branches stay field-for-field aligned.
+		CachedNavLayerMask = Ctx.NavData
+			? Ctx.NavData->NavLayerMask
+			: FSeinNavAgentProfile().AgentNavLayerMask;
+		CachedNavWallPaddingCells = Ctx.NavData
+			? Ctx.NavData->WallPadding
+			: 0;
+		CachedBlockedTerrainTags = Ctx.NavData
+			? Ctx.NavData->BlockedTerrainTags
+			: FGameplayTagContainer();
+	}
 	CachedNavRequester = Ctx.SelfHandle;
 
 	if (Radius > FFixedPoint::Zero)
@@ -1695,6 +1714,7 @@ void USeinMovement::CacheFootprintFromContext(const FSeinMovementContext& Ctx)
 
 FSeinNavAgentProfile USeinMovement::BuildCachedNavAgentProfile() const
 {
+	// AgentTags deliberately absent — see CacheFootprintFromContext.
 	FSeinNavAgentProfile Agent;
 	Agent.Requester = CachedNavRequester;
 	Agent.BlockedTerrainTags = CachedBlockedTerrainTags;

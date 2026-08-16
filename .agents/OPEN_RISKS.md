@@ -9,10 +9,12 @@ This is the actionable remainder after consolidating the historical audits. It i
    CI or another source/installed engine distribution that supports those target types. The real
    packaged listen-server/client/reconnect/replay harness is green, but a Game-target listen server
    does not prove a true headless dedicated-server binary.
-2. **The public documentation product is not yet authored.** The obsolete draft manuals were
-   removed instead of being treated as customer-ready material. Package-only and consumer gates stay
-   available, but publication now fails closed until a deliberate non-empty `Docs/` tree exists;
-   every file in that tree is then packaged and bound into immutable release evidence.
+2. **The public documentation product is now content-complete for the planned tree.** `Docs/`
+   carries README, Installation, First Skirmish, Determinism Rules, Authoring Units, Authoring
+   Abilities, Balance Data, Multiplayer, Replays, Formations/Preview, the Project Settings
+   reference, and extension deep-dives (Squads, Cover, Movement+). Remaining: a human accuracy
+   review in each release's gate (the guides were authored from live code but not from an
+   interactive editor session — click-path labels deserve one PIE-side proofread).
 
 ## Gameplay-backbone gaps
 
@@ -23,17 +25,34 @@ This is the actionable remainder after consolidating the historical audits. It i
    resolver calls can claim the same authored slot.
 2. Squad reinforcement requests now have exact slot and monotonic request identity, atomic
    payer/cost snapshots, exact cancel/refund, deterministic completion, reciprocal membership, and
-   snapshot continuation. Explicit squad destruction still needs product policy for queued refunds,
-   wipe/recreation, retreat, and queue replacement UX.
-3. FoW still needs an explicit team/shared vision policy and consumer. The directional,
-   source-attributed pair-capability substrate now exists in the current development wave; the known
-   blocker-height, authored-Z, and cone terrain-scaling defects are closed.
-4. Public targeting lacks the complete line/corridor/gesture policy surface needed by a modern tactical RTS.
-5. Movement+ needs the human behavior/performance, scale, true dedicated-server, and WAN/backend
+   snapshot continuation. Destruction settlement DECIDED by RJ 2026-08-16 and shipped: a per-squad
+   authored toggle (`Reinforce Refund On Destruction` = Refund default / Forfeit / PartialRefund
+   with tunable fraction) settled by the deterministic teardown sweep; snapshot v17. Still open:
+   wipe/recreation, retreat, and queue-replacement UX policy.
+3. FoW now consumes the directional ShareVision pair capability: entity visibility, seen
+   latches, cell queries, the fog overlay, and the minimap union every granting ally's vision
+   (zero-grant worlds take a fast path with legacy cost). Focused directional/revocation
+   regression coverage exists. Team-vision policy DECIDED by RJ 2026-08-16: team seeding is the
+   match-start default, runtime updates are first-class and asymmetric, nothing prescriptive —
+   shipped as Grant/Revoke Pair Capability nodes on the ability/effect-restricted Sim Mutation
+   Library (player-driven changes route through abilities; the MatchControl wire command stays
+   for admin/scenario tooling). Remaining: PIE verification of the shared overlay/minimap
+   presentation.
+4. Line/corridor targeting shipped 2026-08-15 (RJ's ruling: drag-line and multi-click polyline are
+   both first-class, selectable per ability on `USeinLineTargeterSpec`; segments ride the existing
+   `TargeterPoints` wire field). Corridor-fit validation shipped same day: the targeter samples the
+   segment centerline and corridor edges against the dynamic passability resolver (blocked line →
+   Blocked, pinched lane → Warning; opt-out per spec for over-wall abilities). Remaining: PIE
+   feel/visual verification of the line preview and corridor tinting.
+5. Movement+ needs the human behavior/performance, true dedicated-server, and WAN/backend
    matrices. Typed render-only vehicle telemetry and a real packaged two-process listen-server flow
    through deterministic adverse latency/jitter/loss/duplication/reordering, resync, physical
-   reconnect, and checkpoint-seek replay are automated. Flight is not a production 3D
-   avoidance/collision model.
+   reconnect, and checkpoint-seek replay are automated. A first fixed-tick vehicle scale curve now
+   exists (`SeinARTS.Perf.MovementPlus.Scale`, 2026-08-15): two mixed wheeled/tracked columns
+   crossing an open field through real A*, maneuver planning, steering, avoidance, and collision
+   measure 3.254/7.214/14.225 ms medians at 100/200/400 vehicles — near-linear, 400 inside the
+   30 Hz budget on the current machine. PIE-with-presentation scale remains open. Flight is not a
+   production 3D avoidance/collision model.
 6. Containment now has fail-closed acyclic/reciprocal structural state, overflow-safe mutation,
    quiescent-root/checkpoint validation, fresh-world snapshot continuation, representative
    ability-command/checkpoint/replay mutation workflows, and measured 100/500/1,000-occupant
@@ -56,9 +75,13 @@ This is the actionable remainder after consolidating the historical audits. It i
    observed a 1.60-2.86 ms complete-frame delta. The independent 128-member public-layout sentinel
    remains 1.337 ms p95 coverless and 3.324 ms p95 with dense Cover. Larger selections, multi-world
    PIE, configured game renderers, and 300/500/1,000-unit moving combat remain open scale gates.
-2. The isolated real fixed-tick dense-collision curve is now measured at 64/128/256 packed movers
-   (1.257/3.114/7.214 ms median in the All profile on the current machine). It does not replace a large moving-combat
-   PIE/Insights curve with movement, avoidance, navigation, abilities, animation, and presentation.
+2. The isolated real fixed-tick dense-collision curve is measured at 64/128/256 packed movers
+   (1.257/3.114/7.214 ms median in the All profile on the current machine). A moving-combat
+   fixed-tick curve now exists too (`SeinARTS.Perf.Combat.Scale`): two armies crossing an open
+   field with real Move To actions, pathing, avoidance, collision, and containment measure
+   6.129/10.512/19.813 ms medians at 300/500/1,000 units — near-linear, within the 30 Hz budget
+   at 1,000. Still open: the same populations in PIE with abilities, animation, fog, and
+   presentation on top, and an Insights capture of a real large battle.
 3. Game-specific animation complexity can exceed the default mannequin baseline.
 4. Replay automatic periodic checkpoint envelope encoding and full-flush use one ordered background
    pipeline. Periodic snapshot capture remains synchronous, but unchanged cache-safe component
@@ -87,6 +110,20 @@ This is the actionable remainder after consolidating the historical audits. It i
    multi-hour real-device hitch and allocator-high-water distributions, platform storage matrices,
    and true OS disk-full behavior remain open.
 5. Debug navigation rendering is intentionally expensive and can invalidate profiling if left enabled.
+6. The dense-cover 128-member public preview tripled with the FEAT-03 selection-plan provider:
+   9.905 ms median / 10.130 ms p95 measured 2026-08-15 versus the pre-FEAT-03 3.181/3.324 ms
+   baseline (coverless 128 unchanged at ~1.3 ms; the solver-only 128x128 stress is unchanged at
+   ~12.2 ms). Suspects: the exact whole-selection allocator running per preview refresh and the
+   per-slot reservation scans. A CPU trace with the named preview scopes is at
+   `Saved/Profiling/ShareVisionPerf-20260815-203853.utrace`. Attribution: the exact Hungarian
+   allocator (`Sein_Cover_Assignment_Hungarian` scope) dominates — the preview now runs the
+   ~10 ms-class solve the 128x128 stress measures. Mitigated 2026-08-15: an unchanged-input
+   re-solve skip (gesture + displayed-member pose fingerprint, capped at 5 ticks) cuts a
+   stationary preview from 30 solves/second to at most 6 and typically zero once units settle;
+   per-solve cost is unchanged and drag-time refreshes still pay it. Remaining options if PIE
+   feels it: an async preview solve (click path already recomputes exactly), or eligible-edge
+   reduction. Per-solve reduction is a product/feel decision — do not silently change the
+   preview's exactness.
 
 ## Explicit product decisions still required
 

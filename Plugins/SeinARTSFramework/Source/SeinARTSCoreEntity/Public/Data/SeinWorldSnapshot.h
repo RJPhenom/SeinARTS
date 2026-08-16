@@ -374,7 +374,10 @@ struct SEINARTSCOREENTITY_API FSeinWorldSnapshot
 {
 	GENERATED_BODY()
 
-	static constexpr int32 CurrentVersion = 15;
+	// v17: FSeinSquadComponent gained ReinforceRefundPolicy +
+	// PartialRefundPercent (destruction settlement ruling) — component blob
+	// layout change; older snapshots fail closed.
+	static constexpr int32 CurrentVersion = 17;
 	/** Defensive reconstruction bound for an imported checkpoint. The runtime
 	 *  pool remains independently extensible; snapshots above this generous
 	 *  simultaneous-entity ceiling fail before allocating slot-indexed state. */
