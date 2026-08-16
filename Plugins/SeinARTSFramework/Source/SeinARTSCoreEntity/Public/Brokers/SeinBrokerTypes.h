@@ -22,7 +22,7 @@ class USeinFormation;
 
 namespace SeinBrokerOrderProtocol
 {
-	constexpr int32 SchemaVersion = 2;
+	constexpr int32 SchemaVersion = 3;
 	constexpr int32 MaxMembers = 4096;
 	constexpr int32 MaxGuidePoints = 4096;
 	constexpr int32 MaxTargeterPoints = 256;

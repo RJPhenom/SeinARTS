@@ -100,7 +100,7 @@ namespace UE::SeinARTSTests
 		}
 	}
 
-	TEST(FrozenDestinationAdmissionOwnsContentionAndRelease,
+	TEST(FrozenDestinationAdmissionKeepsShownDestinationsAndReleases,
 		"SeinARTS.Unit.CoreEntity.FrozenDestination")
 	{
 		using namespace FrozenDestinationTestLocal;
@@ -167,6 +167,10 @@ namespace UE::SeinARTSTests
 			World->IsAuthoritativeDestination(AuthorityQuery)));
 		World->FlushVisualEvents();
 
+		// POLICY: a contending order targeting an already-reserved spot ADMITS
+		// with the destination the player was shown. The ledger keeps both
+		// claims; the conflict resolves physically at arrival, never by
+		// rejecting or silently re-planning the order.
 		FSeinFrozenDestination ContendingDestination =
 			MakeDestination(*World, SecondMember, 1000);
 		const FSeinCommand ContendingOrder = MakeOrder(
@@ -177,14 +181,28 @@ namespace UE::SeinARTSTests
 				FSeinWorldSubsystemTestAccess::HandleBrokerOrder(
 					*World, ContendingOrder)));
 		}
-		ASSERT_THAT(IsNull(
-			World->GetComponent<FSeinBrokerMembershipData>(SecondMember)));
-		TArray<FSeinVisualEvent> Rejections = World->FlushVisualEvents();
-		ASSERT_THAT(AreEqual(1, Rejections.Num()));
+		const FSeinBrokerMembershipData* SecondMembership =
+			World->GetComponent<FSeinBrokerMembershipData>(SecondMember);
+		ASSERT_THAT(IsNotNull(SecondMembership));
+		const FSeinEntityHandle SecondBroker =
+			SecondMembership->CurrentBrokerHandle;
+		const FSeinCommandBrokerData* SecondBrokerData =
+			World->GetComponent<FSeinCommandBrokerData>(SecondBroker);
+		ASSERT_THAT(IsNotNull(SecondBrokerData));
+		ASSERT_THAT(AreEqual(1, SecondBrokerData->OrderQueue.Num()));
 		ASSERT_THAT(IsTrue(
-			Rejections[0].ReasonTag
-				== SeinARTSTags::Command_Reject_DestinationReserved));
+			SecondBrokerData->OrderQueue[0].DestinationArtifact[0]
+				.WorldPosition == ContendingDestination.WorldPosition));
+		TArray<FSeinVisualEvent> Rejections = World->FlushVisualEvents();
+		ASSERT_THAT(IsFalse(Rejections.ContainsByPredicate(
+			[](const FSeinVisualEvent& Event)
+			{
+				return Event.ReasonTag
+					== SeinARTSTags::Command_Reject_DestinationReserved;
+			})));
 
+		// A queued order that conflicts with the issuer's own prior entry also
+		// admits: the player saw both destinations and gets both.
 		const FSeinCommand QueuedSelfConflict = MakeOrder(
 			Player, FirstMember, FirstDestination, true);
 		{
@@ -200,12 +218,14 @@ namespace UE::SeinARTSTests
 		FirstBrokerData =
 			World->GetComponent<FSeinCommandBrokerData>(FirstBroker);
 		ASSERT_THAT(IsNotNull(FirstBrokerData));
-		ASSERT_THAT(AreEqual(1, FirstBrokerData->OrderQueue.Num()));
+		ASSERT_THAT(AreEqual(2, FirstBrokerData->OrderQueue.Num()));
 		Rejections = World->FlushVisualEvents();
-		ASSERT_THAT(AreEqual(1, Rejections.Num()));
-		ASSERT_THAT(IsTrue(
-			Rejections[0].ReasonTag
-				== SeinARTSTags::Command_Reject_DestinationReserved));
+		ASSERT_THAT(IsFalse(Rejections.ContainsByPredicate(
+			[](const FSeinVisualEvent& Event)
+			{
+				return Event.ReasonTag
+					== SeinARTSTags::Command_Reject_DestinationReserved;
+			})));
 
 		FSeinFrozenDestination ReplacementDestination =
 			MakeDestination(*World, FirstMember, 1400);
@@ -235,7 +255,9 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(
 			FirstBrokerData->OrderQueue[0].DestinationArtifact[0]
 				.WorldPosition == ReplacementDestination.WorldPosition));
-		ASSERT_THAT(IsFalse(World->IsDestinationFootprintReserved(
+		// The second member's admitted claim on the original spot survives the
+		// first member's replacement — release is per-order, never global.
+		ASSERT_THAT(IsTrue(World->IsDestinationFootprintReserved(
 			FirstDestination.WorldPosition,
 			FirstDestination.FootprintRadius)));
 		AuthorityQuery.WorldPosition = ReplacementDestination.WorldPosition;
@@ -254,6 +276,20 @@ namespace UE::SeinARTSTests
 			ReplacementDestination.FootprintRadius)));
 		ASSERT_THAT(IsFalse(
 			World->IsAuthoritativeDestination(AuthorityQuery)));
+		ASSERT_THAT(IsTrue(World->IsDestinationFootprintReserved(
+			ContendingDestination.WorldPosition,
+			ContendingDestination.FootprintRadius)));
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+			FSeinCommandBrokerData* MutableBroker =
+				World->GetComponentMutable<FSeinCommandBrokerData>(
+					SecondBroker);
+			ASSERT_THAT(IsNotNull(MutableBroker));
+			MutableBroker->OrderQueue.Reset();
+		}
+		ASSERT_THAT(IsFalse(World->IsDestinationFootprintReserved(
+			ContendingDestination.WorldPosition,
+			ContendingDestination.FootprintRadius)));
 		ASSERT_THAT(IsFalse(
 			World->HasAuthoritativeDestinationProviders()));
 		World->StopSimulation();
@@ -410,6 +446,112 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(AreEqual(1, BrokerData->Members.Num()));
 		ASSERT_THAT(IsTrue(BrokerData->Members[0] == SecondMember));
 		ASSERT_THAT(IsTrue(BrokerData->OrderQueue.IsEmpty()));
+		World->StopSimulation();
+	}
+
+	TEST(DeadMemberDropsOnlyItsSlotFromAdmittedArtifact,
+		"SeinARTS.Unit.CoreEntity.FrozenDestination")
+	{
+		using namespace FrozenDestinationTestLocal;
+		FScopedBrokerPolicy Policy;
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+
+		const FSeinPlayerID Player(1);
+		FSeinEntityHandle FirstMember;
+		FSeinEntityHandle SecondMember;
+		FSeinEntityHandle ThirdMember;
+		const auto AuthorState = [&]()
+		{
+			World->RegisterPlayer(Player, FSeinFactionID(1));
+			FirstMember = World->SpawnAbstractEntity(
+				FFixedTransform(), Player);
+			SecondMember = World->SpawnAbstractEntity(
+				FFixedTransform(), Player);
+			ThirdMember = World->SpawnAbstractEntity(
+				FFixedTransform(), Player);
+		};
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Materialize(
+			*World,
+			AuthorState,
+			FSeinMatchSettings(),
+			0x46524F5F,
+			TEXT("SeinARTS.FrozenDestination.DeadSlot"))));
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World)));
+
+		// The player was shown three slots; one member dies before the order
+		// admits. POLICY: drop only the dead member's slot — the survivors
+		// keep exactly the destinations the preview showed.
+		const FSeinFrozenDestination FirstSlot =
+			MakeDestination(*World, FirstMember, 1000);
+		const FSeinFrozenDestination SecondSlot =
+			MakeDestination(*World, SecondMember, 1200);
+		const FSeinFrozenDestination ThirdSlot =
+			MakeDestination(*World, ThirdMember, 1400);
+
+		FSeinBrokerOrderPayload Payload;
+		Payload.CommandContext.AddTag(
+			SeinARTSTags::Command_Context_RightClick);
+		Payload.CommandContext.AddTag(
+			SeinARTSTags::Command_Context_Target_Ground);
+		Payload.DestinationArtifact.Add(FirstSlot);
+		Payload.DestinationArtifact.Add(SecondSlot);
+		Payload.DestinationArtifact.Add(ThirdSlot);
+		FSeinCommand Command;
+		Command.PlayerID = Player;
+		Command.IssuerKind = ESeinCommandIssuerKind::Player;
+		Command.CommandType = SeinARTSTags::Command_Type_BrokerOrder;
+		Command.SchemaVersion = SeinBrokerOrderProtocol::SchemaVersion;
+		Command.TargetLocation = FirstSlot.WorldPosition;
+		Command.EntityList.Add(FirstMember);
+		Command.EntityList.Add(SecondMember);
+		Command.EntityList.Add(ThirdMember);
+		Command.bQueueCommand = false;
+		Command.Payload = FInstancedStruct::Make(Payload);
+
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+			World->DestroyEntity(SecondMember);
+			ASSERT_THAT(IsTrue(
+				FSeinWorldSubsystemTestAccess::HandleBrokerOrder(
+					*World, Command)));
+		}
+
+		const TArray<FSeinVisualEvent> Rejections =
+			World->FlushVisualEvents();
+		ASSERT_THAT(IsFalse(Rejections.ContainsByPredicate(
+			[](const FSeinVisualEvent& Event)
+			{
+				return Event.ReasonTag
+						== SeinARTSTags::Command_Reject_DestinationReserved
+					|| Event.ReasonTag
+						== SeinARTSTags::Command_Reject_InvalidTarget;
+			})));
+		const FSeinBrokerMembershipData* Membership =
+			World->GetComponent<FSeinBrokerMembershipData>(FirstMember);
+		ASSERT_THAT(IsNotNull(Membership));
+		const FSeinCommandBrokerData* BrokerData =
+			World->GetComponent<FSeinCommandBrokerData>(
+				Membership->CurrentBrokerHandle);
+		ASSERT_THAT(IsNotNull(BrokerData));
+		ASSERT_THAT(AreEqual(1, BrokerData->OrderQueue.Num()));
+		const TArray<FSeinFrozenDestination>& Admitted =
+			BrokerData->OrderQueue[0].DestinationArtifact;
+		ASSERT_THAT(AreEqual(2, Admitted.Num()));
+		ASSERT_THAT(IsTrue(Admitted[0].Member == FirstMember));
+		ASSERT_THAT(IsTrue(
+			Admitted[0].WorldPosition == FirstSlot.WorldPosition));
+		ASSERT_THAT(IsTrue(Admitted[1].Member == ThirdMember));
+		ASSERT_THAT(IsTrue(
+			Admitted[1].WorldPosition == ThirdSlot.WorldPosition));
+		ASSERT_THAT(IsTrue(World->IsDestinationFootprintReserved(
+			FirstSlot.WorldPosition, FirstSlot.FootprintRadius)));
+		ASSERT_THAT(IsTrue(World->IsDestinationFootprintReserved(
+			ThirdSlot.WorldPosition, ThirdSlot.FootprintRadius)));
+		ASSERT_THAT(IsFalse(World->IsDestinationFootprintReserved(
+			SecondSlot.WorldPosition, SecondSlot.FootprintRadius)));
 		World->StopSimulation();
 	}
 

@@ -75,7 +75,7 @@ namespace SeinARTSTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Reject_PathUnreachable,    "SeinARTS.Command.Reject.PathUnreachable",    "Nav graph has no abstract path from source to goal");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Reject_GoalUnwalkable,     "SeinARTS.Command.Reject.GoalUnwalkable",     "Target cell is blocked / off-map for this agent");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Reject_FootprintBlocked,   "SeinARTS.Command.Reject.FootprintBlocked",   "Building footprint overlaps blocked cells (placement gate)");
-	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Reject_DestinationReserved,"SeinARTS.Command.Reject.DestinationReserved","Frozen destination footprint is already owned by a queued order");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Reject_DestinationReserved,"SeinARTS.Command.Reject.DestinationReserved","Frozen destination artifact overlaps its own reserving footprints (malformed input); world contention never rejects an order");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Reject_MissingComponent,   "SeinARTS.Command.Reject.MissingComponent",   "Entity lacks the component the command needs");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Reject_QueueFull,          "SeinARTS.Command.Reject.QueueFull",          "Production queue is at capacity");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Reject_CanActivateFailed,  "SeinARTS.Command.Reject.CanActivateFailed",  "USeinAbility::CanActivate BP escape returned false");
