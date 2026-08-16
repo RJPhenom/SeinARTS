@@ -588,7 +588,7 @@ void FSeinARTSCoreEntity::StartupModule()
 			nullptr, ESeinCommandAuthorityScope::Entity, 0, 0, 0, 0, 0 },
 		{ TEXT("SeinARTS.Core.Command.Ping.V1"), SeinARTSTags::Command_Type_Ping,
 			nullptr, ESeinCommandAuthorityScope::Self, 0, 0, 0, 0, AllCommandExecutionAllowances },
-		{ TEXT("SeinARTS.Core.Command.BrokerOrder.V2"), SeinARTSTags::Command_Type_BrokerOrder,
+		{ TEXT("SeinARTS.Core.Command.BrokerOrder.V3"), SeinARTSTags::Command_Type_BrokerOrder,
 			FSeinBrokerOrderPayload::StaticStruct(), ESeinCommandAuthorityScope::EntitySet,
 			SeinBrokerOrderProtocol::MaxMembers, 0,
 			SeinBrokerOrderProtocol::MaxPayloadBytes,

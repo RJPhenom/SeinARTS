@@ -3981,9 +3981,17 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleBrokerOr
 	TArray<FSeinFrozenDestination> CanonicalDestinationArtifact =
 		Payload->DestinationArtifact;
 
-	// A displayed ground-order plan is all-or-nothing. Its exact flattened
-	// membership must still match the authorized top-level recipient set; no
-	// partial acceptance or preview-changing recomputation is allowed.
+	// POLICY: units always do what the player was shown. A member that died
+	// between preview and admission simply drops out of the plan; every
+	// surviving member keeps its exact displayed destination. Contention (a
+	// reservation that appeared in the race window, a moved provider) is
+	// NEVER a reason to reject or re-plan — survivors are delivered to the
+	// shown points and the collision layer resolves physical reality.
+	// Reservations filter the PREVIEW (what the player saw already avoided
+	// claimed slots) and keep settled bookkeeping; they are not an admission
+	// veto. Hostile-input validation stays strict: a client cannot inflate a
+	// footprint, forge reserving provenance, overlap its own reserving
+	// entries, or smuggle entries for members the recipients do not own.
 	if (!CanonicalDestinationArtifact.IsEmpty())
 	{
 		if (Cmd.TargetEntity.IsValid())
@@ -4015,21 +4023,64 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleBrokerOr
 				ExpectedMembers.Add(Recipient);
 			}
 		}
-		bool bArtifactValid =
-			ExpectedMembers.Num() == CanonicalDestinationArtifact.Num();
-		for (int32 Index = 0;
-			bArtifactValid && Index < ExpectedMembers.Num(); ++Index)
+		bool bArtifactValid = true;
+		TArray<FSeinFrozenDestination> AdmittedArtifact;
+		AdmittedArtifact.Reserve(CanonicalDestinationArtifact.Num());
+		TSet<FSeinEntityHandle> SeenArtifactMembers;
+		int32 ExpectedCursor = 0;
+		for (const FSeinFrozenDestination& Entry :
+			CanonicalDestinationArtifact)
 		{
-			const FSeinFrozenDestination& Entry =
-				CanonicalDestinationArtifact[Index];
+			if (SeenArtifactMembers.Contains(Entry.Member))
+			{
+				bArtifactValid = false;
+				break;
+			}
+			SeenArtifactMembers.Add(Entry.Member);
+			if (!SeenExpectedMembers.Contains(Entry.Member))
+			{
+				if (IsEntityAlive(Entry.Member))
+				{
+					// A live member the recipients do not own: hostile input.
+					bArtifactValid = false;
+					break;
+				}
+				// Died in the input-delay window — the entry drops, the
+				// survivors keep their exact displayed destinations.
+				continue;
+			}
+			// Surviving entries must keep the member list's relative order —
+			// the same ordered-subset contract the snapshot preflight
+			// enforces, so an admitted order can never fail a later capture.
+			while (ExpectedCursor < ExpectedMembers.Num()
+				&& ExpectedMembers[ExpectedCursor] != Entry.Member)
+			{
+				++ExpectedCursor;
+			}
+			if (ExpectedCursor >= ExpectedMembers.Num())
+			{
+				bArtifactValid = false;
+				break;
+			}
+			++ExpectedCursor;
 			const FFixedPoint CanonicalRadius =
 				USeinFormation::GetFootprintRadius(this, Entry.Member);
-			bArtifactValid = Entry.Member == ExpectedMembers[Index]
-				&& Entry.FootprintRadius == CanonicalRadius
-				&& (!Entry.bReserveFootprint
-					|| (Entry.FootprintRadius > FFixedPoint::Zero
-						&& Entry.SourceEntity.IsValid()
-						&& Entry.SourceIndex >= 0));
+			if (Entry.FootprintRadius != CanonicalRadius
+				|| (Entry.bReserveFootprint
+					&& (Entry.FootprintRadius <= FFixedPoint::Zero
+						|| !Entry.SourceEntity.IsValid()
+						|| Entry.SourceIndex < 0)))
+			{
+				bArtifactValid = false;
+				break;
+			}
+			AdmittedArtifact.Add(Entry);
+		}
+		// A plan whose every member is gone has nothing left to execute; the
+		// player's next click plans from the survivors.
+		if (bArtifactValid && AdmittedArtifact.IsEmpty())
+		{
+			bArtifactValid = false;
 		}
 		if (!bArtifactValid)
 		{
@@ -4037,34 +4088,21 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleBrokerOr
 			return ECommandHandleResult::Handled;
 		}
 
-		// Existing queue ownership is the reservation ledger. A replacement may
-		// ignore only the selected members' entries because this admission removes
-		// those exact orders; queued commands must contend with all prior entries.
-		const TConstArrayView<FSeinEntityHandle> IgnoredMembers =
-			Cmd.bQueueCommand
-				? TConstArrayView<FSeinEntityHandle>()
-				: TConstArrayView<FSeinEntityHandle>(ExpectedMembers);
+		// Hostile-input guard only: one artifact's own reserving entries may
+		// never overlap each other (the shipped planner separates them by
+		// construction, so overlap means a tampered client). World contention
+		// against OTHER orders' reservations is deliberately NOT checked here
+		// — see the policy comment above. Race-window double-claims coexist
+		// in the ledger and resolve physically at arrival.
 		for (int32 Left = 0;
-			Left < CanonicalDestinationArtifact.Num(); ++Left)
+			Left < AdmittedArtifact.Num(); ++Left)
 		{
-			const FSeinFrozenDestination& Candidate =
-				CanonicalDestinationArtifact[Left];
+			const FSeinFrozenDestination& Candidate = AdmittedArtifact[Left];
 			if (!Candidate.bReserveFootprint) continue;
-			if (IsDestinationFootprintReserved(
-					Candidate.WorldPosition,
-					Candidate.FootprintRadius,
-					IgnoredMembers))
-			{
-				RejectCommand(
-					Cmd,
-					SeinARTSTags::Command_Reject_DestinationReserved);
-				return ECommandHandleResult::Handled;
-			}
 			for (int32 Right = Left + 1;
-				Right < CanonicalDestinationArtifact.Num(); ++Right)
+				Right < AdmittedArtifact.Num(); ++Right)
 			{
-				const FSeinFrozenDestination& Other =
-					CanonicalDestinationArtifact[Right];
+				const FSeinFrozenDestination& Other = AdmittedArtifact[Right];
 				if (!Other.bReserveFootprint) continue;
 				if (DoPlanarDestinationFootprintsOverlap(
 						Candidate.WorldPosition,
@@ -4079,6 +4117,7 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleBrokerOr
 				}
 			}
 		}
+		CanonicalDestinationArtifact = MoveTemp(AdmittedArtifact);
 	}
 
 	// Resolve the predetermined ability ONCE — both cost + footprint
@@ -8270,17 +8309,28 @@ namespace
 
 				if (!Order.DestinationArtifact.IsEmpty())
 				{
+					// The artifact is an ORDERED SUBSET of the effective
+					// members: dead members drop their entries at admission
+					// and in the broker sweep, and members that joined after
+					// admission (reinforcement) legitimately have none — they
+					// follow the order anchor at dispatch. Relative order must
+					// match the member list and no member may appear twice.
 					if (Order.DestinationArtifact.Num()
-						!= EffectiveMembers.Num())
+						> EffectiveMembers.Num())
 					{
 						return false;
 					}
-					for (int32 Index = 0;
-						Index < EffectiveMembers.Num(); ++Index)
+					int32 MemberCursor = 0;
+					for (const FSeinFrozenDestination& Destination :
+						Order.DestinationArtifact)
 					{
-						const FSeinFrozenDestination& Destination =
-							Order.DestinationArtifact[Index];
-						if (Destination.Member != EffectiveMembers[Index]
+						while (MemberCursor < EffectiveMembers.Num()
+							&& EffectiveMembers[MemberCursor]
+								!= Destination.Member)
+						{
+							++MemberCursor;
+						}
+						if (MemberCursor >= EffectiveMembers.Num()
 							|| Destination.FootprintRadius < FFixedPoint::Zero
 							|| (Destination.bReserveFootprint
 								&& (Destination.FootprintRadius
@@ -8290,6 +8340,7 @@ namespace
 						{
 							return false;
 						}
+						++MemberCursor;
 					}
 				}
 			}

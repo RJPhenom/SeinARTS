@@ -1,61 +1,40 @@
-# DECISION REQUIRED — Frozen-Destination Conflict Policy
+# DECIDED — Frozen-Destination Conflict Policy
 
-**Status:** open product decision, reserved for RJ (roadmap: "Freeze the conflict policy:
-exact artifact rejection versus an explicitly approved preview-changing fallback").
-**Owner of implementation once decided:** any agent session; the change is localized to
-`TryHandleBrokerOrder` admission in `SeinWorldSubsystem.cpp`.
+**Status:** DECIDED by RJ 2026-08-15, implemented same day (branch
+`codex/feat03-frozen-destinations`). PIE feel check batched with the rest of the frozen-destination
+wave.
 
-## The question
+## The ruling (RJ, verbatim policy)
 
-When a displayed selection plan (the frozen destination artifact) no longer matches reality at
-command admission — because a member died during the input-delay window, or a reserving entry now
-collides with a reservation that appeared after the click — what does the sim do with the order?
+> "Units should ALWAYS do what user SAW they 'should' do."
 
-## What is implemented today (the fail-closed interim)
+Options A (strict all-or-nothing rejection) and B (subset for non-reserving, strict for reserving)
+were both rejected. The decided policy — call it **D** — is:
 
-Admission is all-or-nothing: the artifact must exactly match the alive flattened member set, and
-every reserving entry must be contention-free. Any mismatch rejects the ENTIRE order with
-`Command_Reject_DestinationReserved` / `Command_Reject_InvalidTarget` (a `CommandRejected` visual
-event fires; no automatic retry or fallback). Note two softenings already landed outside the
-reserved question: client-side plan-provider *failure* now degrades to a legacy artifact-less
-order instead of eating the command, and the artifact-less legacy path now respects reservations.
+- A member that died between preview and admission simply **drops its own slot**; every surviving
+  member keeps its **exact displayed destination** (cover slots included — if squad A was shown
+  slots 1,3,4,7,8 and one member dies, the survivors still take their shown slots).
+- **Contention is never a reason to reject or re-plan an order.** If a reservation appeared in the
+  race window or a provider moved, the survivors are still delivered to the shown points; physical
+  reality (collision layer, arrival settling) resolves any double-claim. Both claims coexist in
+  the reservation ledger until one is released.
+- Hostile-input validation stays strict: forged radii, forged reserving provenance, entries for
+  members the recipients do not own, duplicate members, out-of-order artifacts, and an artifact
+  whose own reserving entries overlap each other all still reject (`InvalidTarget` /
+  `DestinationReserved`).
 
-## Exposure
+Historical note: the B recommendation in the previous revision of this memo was authored by the
+Claude session, not Codex — Codex recorded no recommendation; strict rejection was its fail-closed
+interim only.
 
-Every ground move order carries an artifact by default (`bShowNavigationPreview` defaults true).
-A member dying in the ~200-300 ms submission-to-admission window rejects the whole order — most
-likely during combat retreats, exactly when large move orders matter. Self-heals on re-click
-(the new preview computes from survivors), but reads as "my order did nothing."
+## Implementation (landed)
 
-## Options
-
-**A. Keep strict rejection everywhere (today's behavior).**
-Purest invariant: what was shown is exactly what executes, or nothing does. Cost: combat-window
-rejections on plain moves; feel risk. UI can mitigate (rejection feedback + auto-reissue client
-side), but the framework default stays harsh.
-
-**B. Tolerant subset for NON-reserving artifacts; strict for reserving entries (recommended).**
-Plain formation moves (no reservations — the vast majority) admit by filtering dead members from
-the artifact and proceeding with the surviving exact positions; positions never move, only
-vanished members drop out. Cover/provider-backed orders (any `bReserveFootprint` entry) stay
-all-or-nothing, because the exact plan IS the point and partial admission could strand mixed
-squads half-in-cover. Rationale: a dead member's own destination disappearing is not a
-"preview-changing recomputation" — every surviving member still goes exactly where shown.
-
-**C. Full fallback: on any mismatch, strip the artifact and re-resolve as a legacy order.**
-Most forgiving, but genuinely preview-changing (survivors may be re-laid-out elsewhere), and it
-reintroduces the silent-recompute behavior FEAT-03 exists to eliminate. Not recommended.
-
-## Recommendation
-
-**B**, with one refinement: if a *reserving* order loses only members whose entries were
-non-reserving (mixed artifact), admit the surviving set as long as every reserving entry's member
-is alive and contention-free; reject only when a reserving entry itself is invalidated.
-Deterministic, minimal-surprise, keeps cover semantics exact. Requires: admission filter pass +
-matched artifact/member alignment (the broker sweep already maintains it post-admission), a
-behavior-revision bump on the command schema, and 3-4 focused admission tests (dead-subset cases
-exist in `FrozenDestinationTests.cpp` asserting today's rejection — they would flip to assert
-subset admission).
-
-**Decide A/B/C (or amend B).** Nothing blocks on this: current behavior is safe/strict, and the
-implementation is a bounded follow-up either way.
+- `SeinWorldSubsystem.cpp` `TryHandleBrokerOrderCommand`: subset admission filter (dead members
+  drop, survivors keep exact entries, ordered-subset + canonical-radius + provenance validation),
+  world-contention veto removed, pairwise self-overlap kept as malformed-input rejection.
+- Snapshot preflight relaxed from index-exact artifact↔member alignment to ordered-subset.
+- `SeinBrokerOrderProtocol::SchemaVersion` bumped 2→3 (`BrokerOrder.V3`) — behavior revision;
+  replay/join compatibility fails closed against v2 peers.
+- Tests: `FrozenDestinationAdmissionKeepsShownDestinationsAndReleases` (contention admits, per-order
+  release), `DeadMemberDropsOnlyItsSlotFromAdmittedArtifact` (RJ's slots example), existing
+  dead-subset/settled/snapshot tests retained.

@@ -87,10 +87,9 @@ void USeinCoverAwareDefaultBrokerResolver::PostProcessPositions_Implementation(
 	// destination (queued or settled, any broker) are not offered to this
 	// artifact-less re-solve, mirroring the selection-plan provider's filter.
 	// The order's own members are ignored so a unit may re-order off its own
-	// settled claim. Artifact-carrying orders never reach this path — their
-	// contention was validated at command admission and their exact positions
-	// apply without re-solving, so an admitted artifact can never be re-snapped
-	// here.
+	// settled claim. Artifact-carrying orders never reach this path — an
+	// admitted artifact's exact positions apply without re-solving (admission
+	// never re-plans a shown destination), so it can never be re-snapped here.
 	FFixedPoint MaxMemberRadius = FFixedPoint::Zero;
 	for (const FSeinEntityHandle& Member : Members)
 	{
