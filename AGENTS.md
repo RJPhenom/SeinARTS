@@ -126,13 +126,9 @@ three opt-in extension plugins. The simulation layer runs entirely on fixed-poin
 (`FFixedPoint`, 32.32) for cross-platform bit-determinism. Unreal is the renderer — the sim never
 touches `float`, `AActor*`, or any non-deterministic UE system. Data flows one way: **sim → render**.
 
-The goal is a production-grade framework supporting RTS games of ANY design — from squad-tactical
-(squads, cover, veterancy, capture points, retreat) through classic worker-economy base-builders,
-fast arcade base-building, and massive-scale streaming-economy warfare with thousands of units.
-Squad-tactical was the first vertical built out (hence the opt-in Squad/Cover extensions), but it
-is an archetype, not the target: mechanisms must be engineered for the largest scale, policies
-must be authorable for every feel. The framework itself stays genre-neutral; specifics are
-designer-authored in Blueprint.
+The genre target is the squad-tactical RTS subgenre (squad + individual units, cover, terrain
+types, veterancy, tech upgrades, capture points, retreat). The framework itself stays
+genre-neutral; specifics are designer-authored in Blueprint.
 
 ---
 
