@@ -38,11 +38,15 @@ This is the actionable remainder after consolidating the historical audits. It i
    segment centerline and corridor edges against the dynamic passability resolver (blocked line →
    Blocked, pinched lane → Warning; opt-out per spec for over-wall abilities). Remaining: PIE
    feel/visual verification of the line preview and corridor tinting.
-5. Movement+ needs the human behavior/performance, scale, true dedicated-server, and WAN/backend
+5. Movement+ needs the human behavior/performance, true dedicated-server, and WAN/backend
    matrices. Typed render-only vehicle telemetry and a real packaged two-process listen-server flow
    through deterministic adverse latency/jitter/loss/duplication/reordering, resync, physical
-   reconnect, and checkpoint-seek replay are automated. Flight is not a production 3D
-   avoidance/collision model.
+   reconnect, and checkpoint-seek replay are automated. A first fixed-tick vehicle scale curve now
+   exists (`SeinARTS.Perf.MovementPlus.Scale`, 2026-08-15): two mixed wheeled/tracked columns
+   crossing an open field through real A*, maneuver planning, steering, avoidance, and collision
+   measure 3.254/7.214/14.225 ms medians at 100/200/400 vehicles — near-linear, 400 inside the
+   30 Hz budget on the current machine. PIE-with-presentation scale remains open. Flight is not a
+   production 3D avoidance/collision model.
 6. Containment now has fail-closed acyclic/reciprocal structural state, overflow-safe mutation,
    quiescent-root/checkpoint validation, fresh-world snapshot continuation, representative
    ability-command/checkpoint/replay mutation workflows, and measured 100/500/1,000-occupant
