@@ -9,12 +9,12 @@ This is the actionable remainder after consolidating the historical audits. It i
    CI or another source/installed engine distribution that supports those target types. The real
    packaged listen-server/client/reconnect/replay harness is green, but a Game-target listen server
    does not prove a true headless dedicated-server binary.
-2. **The public documentation product now has its spine but is not complete.** `Docs/` carries a
-   deliberate customer tree (README, Installation, First Skirmish, Determinism Rules, Authoring
-   Units, Multiplayer, Replays, Formations/Preview, Project Settings reference), so publication's
-   fail-closed docs gate is satisfiable. Still to author: extension deep-dives and subsystem
-   tutorials (Balance Data, ability authoring); docs accuracy review belongs in each release's
-   gate.
+2. **The public documentation product is now content-complete for the planned tree.** `Docs/`
+   carries README, Installation, First Skirmish, Determinism Rules, Authoring Units, Authoring
+   Abilities, Balance Data, Multiplayer, Replays, Formations/Preview, the Project Settings
+   reference, and extension deep-dives (Squads, Cover, Movement+). Remaining: a human accuracy
+   review in each release's gate (the guides were authored from live code but not from an
+   interactive editor session — click-path labels deserve one PIE-side proofread).
 
 ## Gameplay-backbone gaps
 

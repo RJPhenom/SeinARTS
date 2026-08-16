@@ -119,6 +119,39 @@ Both open product decisions were ruled on and implemented on
 PIE batch for RJ now additionally includes: frozen-destination policy-D feel (contended orders,
 mid-order member death), line targeter drag + multi-click UX and preview visuals.
 
+### Overnight autonomous wave (2026-08-15 → 16, RJ asleep, latest)
+
+All work below is committed on `codex/feat03-frozen-destinations`; no product decisions were made.
+
+- **Policy-D red-team fix** (`5a89b9c`): the adversarial pass found one real PRE-EXISTING hole —
+  a queued order onto a shared ephemeral broker with reordered re-selection stored its artifact in
+  click order while the restore preflight validates broker order; snapshots would fail restore.
+  Fixed by re-keying the artifact to broker member order at the queue site; regression
+  `ReorderedReselectionQueuedArtifactSurvivesRestore`. Customer docs aligned to policy D in the
+  same commit.
+- **Corridor-fit validation** (`ffed7a4`): the line targeter now samples the segment centerline +
+  corridor edges against the sim's `DynamicPassableResolver` (blocked line → Blocked, pinched
+  lane → Warning; per-spec `bValidateCorridorFit` opt-out for over-wall abilities). Closes the
+  targeter row's last non-PIE remainder.
+- **Movement+ vehicle scale curve** (`cf0f633`): new `SeinARTS.Perf.MovementPlus.Scale` — mixed
+  wheeled/tracked columns crossing an open field through real A* + maneuver planning + steering +
+  avoidance + collision: 3.254/7.214/14.225 ms medians at 100/200/400 vehicles, near-linear,
+  within the 30 Hz budget. First automated vehicle scale evidence.
+- **Docs product content-complete** (`6f72b92` + tutorials commit): extension deep-dives
+  (Squads, Cover, Movement+) plus Authoring Abilities and Balance Data guides authored from live
+  code and cross-verified (settings paths, display names, tint-map behavior corrected during
+  review). OPEN_RISKS docs row now lists only the per-release human accuracy proofread.
+- **Stage-4 fork drafted for RJ**: `.agents/DECISION_ONLINE_SERVICES_SCOPE.md` — A (declare out
+  of 1.0 scope) / B (freeze backend-neutral contracts + loopback adapter only; recommended) /
+  C (reference vendor stack; not recommended). Awaiting ruling.
+- **Gates re-run on the branch tip**: All profile Unit 476 / Sim 57 / Determinism 48; Framework
+  profile Unit 458 / Sim 50 / Determinism 38 (floors raised to 476/458 at `887630d`); Shipping
+  config build green; fresh-process serial/parallel A/B 120/120; replay operational soak green.
+
+Still RJ's: the PIE batch, the three open decision memos (online scope; plus the standing
+squad-destruction and team-vision policy items), pushes/merge, and the external dedicated-server
+CI gate.
+
 **State date:** 2026-08-14
 **Baseline branch:** `main`
 **Stabilization commit:** `27cb490` (`Stabilize post-audit performance and determinism`)
