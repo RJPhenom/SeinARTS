@@ -166,6 +166,17 @@ private:
 	 *  spec's FinishClickTolerance of the previous vertex. */
 	void HandleMultiClickPress();
 
+	/** Line specs only: sample the segment (and its corridor edges when the
+	 *  spec has Width) against the sim's dynamic passability resolver.
+	 *  Blocked centerline → Blocked; pinched edge → Warning; unbound resolver
+	 *  or non-line spec → Valid. Advisory client UX. */
+	ESeinTargeterValidity EvaluateCorridorFit(
+		const FVector& StartWorld, const FVector& EndWorld) const;
+
+	/** Worst-of combine for validity tri-states (Blocked > Warning > Valid). */
+	static ESeinTargeterValidity CombineValidity(
+		ESeinTargeterValidity A, ESeinTargeterValidity B);
+
 	/** Convert a world FVector to a deterministic FFixedVector for sim submission. */
 	static FFixedVector ToFixed(const FVector& World);
 

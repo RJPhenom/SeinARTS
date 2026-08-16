@@ -34,8 +34,10 @@ This is the actionable remainder after consolidating the historical audits. It i
    gameplay), and PIE verification of the shared overlay/minimap presentation.
 4. Line/corridor targeting shipped 2026-08-15 (RJ's ruling: drag-line and multi-click polyline are
    both first-class, selectable per ability on `USeinLineTargeterSpec`; segments ride the existing
-   `TargeterPoints` wire field). Remaining: footprint-aware corridor validation ("does the lane
-   fit") and PIE feel/visual verification of the line preview.
+   `TargeterPoints` wire field). Corridor-fit validation shipped same day: the targeter samples the
+   segment centerline and corridor edges against the dynamic passability resolver (blocked line →
+   Blocked, pinched lane → Warning; opt-out per spec for over-wall abilities). Remaining: PIE
+   feel/visual verification of the line preview and corridor tinting.
 5. Movement+ needs the human behavior/performance, scale, true dedicated-server, and WAN/backend
    matrices. Typed render-only vehicle telemetry and a real packaged two-process listen-server flow
    through deterministic adverse latency/jitter/loss/duplication/reordering, resync, physical
