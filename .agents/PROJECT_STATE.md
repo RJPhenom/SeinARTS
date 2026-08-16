@@ -64,6 +64,18 @@ Unit.Cover 10/10; Framework-profile Unit 453 / Sim 50 / Determinism 38, zero fai
 Committed as `9b8d434` (landing) + `92d0c7a` (floors: Unit 471/453, Sim 57/50,
 Determinism 48/38).
 
+### Scale gate, preview cadence, and documentation (same session, latest)
+
+- `SeinARTS.Perf.Combat.Scale` measures the first moving-combat full-tick curve: 300/500/1,000
+  units in two crossing armies with real Move To actions, budgeted pathing, avoidance, collision,
+  and containment — 6.129/10.512/19.813 ms medians, near-linear, 1,000 units inside the 30 Hz
+  budget. Vacuity-guarded (at least half the population must genuinely be moving mid-measure).
+- The dense-cover preview's stationary-cursor cadence was fixed (unchanged-input re-solve skip,
+  5-tick cap); per-solve Hungarian cost and its options are recorded in OPEN_RISKS #6.
+- `Docs/` now carries the customer documentation product: README, Installation, First Skirmish,
+  Determinism Rules, Authoring Units, Multiplayer, Replays, Formations/Preview, and the Project
+  Settings reference — the release gate's fail-closed docs check is satisfiable.
+
 ### ShareVision consumer (same session, after the landing commits)
 
 FoW now consumes the directional ShareVision pair capability. `USeinFogOfWar` gained
