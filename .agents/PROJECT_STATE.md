@@ -172,7 +172,35 @@ Gates after both rulings: Unit 477 / Sim 57 / Determinism 48 / Integration 26 (A
 envelope suite 5/5 with regenerated frozen bytes, fresh-process serial/parallel A/B 120/120.
 NOTE for PIE: pre-v17 saved snapshots/replays fail closed against this branch (intended).
 
-Still RJ's: the PIE batch, the remaining decision memos (online scope parked; squad
+### Combat substrate module (2026-08-16, latest)
+
+RJ ruled combat belongs in its own framework-root module (not an extension) and ruled the three
+mechanism forks in chat (instant default delivery; acquisition = query service + stance ability,
+no always-on loop; projectiles = real pooled entities). Shipped as `SeinARTSCombat`, the 13th
+framework module (`fbc6d4e` + hardening `6df189e`):
+
+- **Mechanisms** (framework, genre-free): vitals (seed-once, armor tags, regen, zero-always-dies
+  guard), deterministic damage resolution + canonical-order splash, weapon slots with
+  cooldown/magazine/reload cycling, the fire gate (range/arc/fog-LoS), instant + projectile
+  delivery (projectiles are real entities — snapshot/replay/interception free), on-demand target
+  query service (range/arc/tag/LoS gates, stable-sorted scoring).
+- **Policy seams** (Blueprint): `USeinDamageFormula` and `USeinTargetScorer` stateless CDO
+  classes resolved by soft path (empty = neutral built-ins); starter `USeinAbility_Attack` +
+  restricted Fire Weapon At / Apply Damage / Apply Heal mutation nodes.
+- **Red-team pass** (4 findings, all fixed): CanActivate ran before target assignment (starter
+  gate now arms-only); scripted zero-health could silently re-seed to full (seed-once flag +
+  zero-always-dies); projectile hash omitted the mutable aim point; per-tick mutable-fetch churn
+  (gathers now filter to handles that actually change).
+- **Gates**: All profile Unit 477 / Sim 63 / Determinism 48 / Integration 26; Framework profile
+  Sim 56 / Determinism 38; Shipping build; fresh-process serial/parallel A/B 120/120. Customer
+  guide at `Docs/Guides/Combat.md`. New tick systems: WeaponCycle (PreTick 11), ProjectileFlight
+  (AbilityExecution 20).
+- **Deferred, recorded**: armed-population scale curve (upgrade the combat-scale workload),
+  spatial indexing for acquisition if that curve demands it, burst/wind-up cycling fields,
+  sim-side on-kill hooks for veterancy (kill events are presentation-side today).
+
+Still RJ's: the PIE batch (now including combat feel: starter attack, projectiles, splash,
+armor/formula authoring), the remaining decision memos (online scope parked; squad
 wipe/recreation/retreat UX; flight/vehicle feel defaults; host-migration topology; co-op
 persistence; adaptive input delay), pushes/merge, and the external dedicated-server CI gate.
 
