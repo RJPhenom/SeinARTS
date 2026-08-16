@@ -322,9 +322,14 @@ function Get-QualifiedTestAttemptPath(
 						[string]$Attempt.startedAtUtc,
 						[System.Globalization.CultureInfo]::InvariantCulture,
 						[System.Globalization.DateTimeStyles]::RoundtripKind)
+					# The 120s slack absorbs backward clock corrections landing
+					# between the invocation-start capture and the attempt's own
+					# timestamp (observed on this host, whose clock is not
+					# NTP-managed); suite runs take minutes, so it cannot
+					# resurrect a previous invocation's attempt.
 					if ([string]$Attempt.suite -ceq $Suite -and
 						[string]$Attempt.profile -ceq $Profile -and
-						$Started -ge $InvocationStarted) {
+						$Started -ge $InvocationStarted.AddSeconds(-120)) {
 						[pscustomobject]@{ Path = $_.FullName; Attempt = $Attempt }
 					}
 				}
@@ -430,7 +435,8 @@ function Get-QualifiedMatrixReceiptPath(
 		[string]$Matrix.artifactVersion -cne $Version -or
 		[string]$Matrix.engine -cne $EngineRoot -or
 		[string]$Matrix.engineBuildFingerprint -cne $EngineBuildFingerprint -or
-		$Started -lt $InvocationStarted -or $Completed -lt $Started -or
+		$Started -lt $InvocationStarted.AddSeconds(-120) -or
+		$Completed -lt $Started -or
 		[string]$Matrix.publicHeaderAudit -cne 'Passed' -or
 		[int]$Matrix.publicHeaderCount -le 0 -or
 		[string]$Matrix.installationDiagnostic -cne 'Passed' -or
