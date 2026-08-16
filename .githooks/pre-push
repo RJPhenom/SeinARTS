@@ -17,7 +17,7 @@ while read local_ref local_sha remote_ref remote_sha; do
 			New-Item -ItemType Directory -Force -Path \$logDir | Out-Null;
 			\$stamp = Get-Date -Format 'yyyyMMdd-HHmmss';
 			Start-Process pwsh -WindowStyle Hidden \
-				-ArgumentList '-NoProfile','-File',\$sync \
+				-ArgumentList '-NoProfile','-File',('\"{0}\"' -f \$sync) \
 				-RedirectStandardOutput (Join-Path \$logDir \"sync-\$stamp.log\") \
 				-RedirectStandardError  (Join-Path \$logDir \"sync-\$stamp.err.log\")
 		" >/dev/null 2>&1
