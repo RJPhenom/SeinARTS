@@ -25,13 +25,19 @@ This is the actionable remainder after consolidating the historical audits. It i
    resolver calls can claim the same authored slot.
 2. Squad reinforcement requests now have exact slot and monotonic request identity, atomic
    payer/cost snapshots, exact cancel/refund, deterministic completion, reciprocal membership, and
-   snapshot continuation. Explicit squad destruction still needs product policy for queued refunds,
-   wipe/recreation, retreat, and queue replacement UX.
+   snapshot continuation. Destruction settlement DECIDED by RJ 2026-08-16 and shipped: a per-squad
+   authored toggle (`Reinforce Refund On Destruction` = Refund default / Forfeit / PartialRefund
+   with tunable fraction) settled by the deterministic teardown sweep; snapshot v17. Still open:
+   wipe/recreation, retreat, and queue-replacement UX policy.
 3. FoW now consumes the directional ShareVision pair capability: entity visibility, seen
    latches, cell queries, the fog overlay, and the minimap union every granting ally's vision
    (zero-grant worlds take a fast path with legacy cost). Focused directional/revocation
-   regression coverage exists. Remaining: team-vision UX policy (who may grant/revoke in
-   gameplay), and PIE verification of the shared overlay/minimap presentation.
+   regression coverage exists. Team-vision policy DECIDED by RJ 2026-08-16: team seeding is the
+   match-start default, runtime updates are first-class and asymmetric, nothing prescriptive —
+   shipped as Grant/Revoke Pair Capability nodes on the ability/effect-restricted Sim Mutation
+   Library (player-driven changes route through abilities; the MatchControl wire command stays
+   for admin/scenario tooling). Remaining: PIE verification of the shared overlay/minimap
+   presentation.
 4. Line/corridor targeting shipped 2026-08-15 (RJ's ruling: drag-line and multi-click polyline are
    both first-class, selectable per ability on `USeinLineTargeterSpec`; segments ride the existing
    `TargeterPoints` wire field). Corridor-fit validation shipped same day: the targeter samples the

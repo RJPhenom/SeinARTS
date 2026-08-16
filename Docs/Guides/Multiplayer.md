@@ -28,6 +28,17 @@ unproven.
    state-contract, and (optionally enforced) the sim-settings config fingerprint. Any mismatch
    kicks with a targeted message instead of desyncing later.
 
+## Teams and shared vision
+
+Lobby team assignment seeds shared vision at match start: teammates consume each other's vision
+(fog, seen areas, minimap) automatically. Under the hood this is a directional per-player-pair
+grant — "A shares to B" and "B shares to A" are independent — so asymmetric arrangements are
+first-class. To change relationships mid-match (alliances, treaties, scripted reveals), author an
+ability or effect that calls **Grant Pair Capability** / **Revoke Pair Capability** from the Sim
+Mutation Library; like every gameplay mutation, it executes deterministically on all peers
+through the ordinary command flow. Grants are refcounted per source, so overlapping agreements
+compose and revoking one never tears down another's.
+
 ## Drop, reconnect, and late join
 
 - A disconnected player's units keep obeying their last orders; the host injects heartbeats so
