@@ -89,6 +89,12 @@ removes it, with no re-pricing at cancel time. A slot that becomes permanently u
 Entity class was cleared, or the slot was removed) is refunded automatically instead of retried
 forever; a merely transient spawn failure keeps the entry queued for next tick.
 
+If the squad entity is destroyed or disbanded with requests still queued, the squad's
+**Reinforce Refund On Destruction** setting decides the settlement: **Refund** (default — every
+queued entry returns its snapshotted cost), **Forfeit** (committed charges are lost with the
+squad), or **Partial Refund** (each entry returns a tunable fraction). A wiped squad whose queue
+is still ticking is unaffected — it keeps rebuilding.
+
 Reinforcement is starter content, not a mandatory core rule — projects can replace the ability
 outright. The Squad Mutation Library (restricted to Ability/Effect Blueprint graphs) exposes the
 same enqueue/cancel calls (**Queue Squad Reinforcement**, **Cancel Squad Reinforcement**) plus
