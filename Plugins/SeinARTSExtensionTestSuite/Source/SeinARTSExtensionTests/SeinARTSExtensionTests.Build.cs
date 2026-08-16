@@ -20,6 +20,7 @@ public class SeinARTSExtensionTests : ModuleRules
 			"SeinARTSFramework",
 			"SeinARTSNet",
 			"SeinARTSNavigation",
+			"SeinARTSLevelData",
 			"SeinARTSMovement",
 			"SeinARTSSquad",
 			"SeinARTSCover",
