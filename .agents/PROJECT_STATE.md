@@ -148,9 +148,33 @@ All work below is committed on `codex/feat03-frozen-destinations`; no product de
   profile Unit 458 / Sim 50 / Determinism 38 (floors raised to 476/458 at `887630d`); Shipping
   config build green; fresh-process serial/parallel A/B 120/120; replay operational soak green.
 
-Still RJ's: the PIE batch, the three open decision memos (online scope; plus the standing
-squad-destruction and team-vision policy items), pushes/merge, and the external dedicated-server
-CI gate.
+### RJ's chat rulings implemented (2026-08-16 morning, latest)
+
+RJ ruled on the three presented decisions in chat (his standing preference: decisions are
+presented in chat with options, never only filed in `.agents/`):
+
+- **Squad destruction refunds — designer toggle** (`a97a0a2`): per-squad authored
+  `Reinforce Refund On Destruction` (Refund default / Forfeit / PartialRefund with tunable
+  fraction), settled by the deterministic teardown sweep reading the core-owned squad component.
+  Snapshot v16→17 (component layout change; envelope `SnapshotSemanticsVersion` bumped in
+  lockstep, frozen-framing test constants regenerated deliberately, tests renamed V17).
+  Regression: `SquadDestructionSettlesQueuedChargesPerAuthoredPolicy` (all three policies).
+- **Team vision — team seeding default + runtime asymmetric updates via BP** (`51524b4`):
+  Grant/Revoke Pair Capability nodes added to the ability/effect-restricted Sim Mutation Library
+  (player-driven diplomacy routes through abilities; MatchControl wire command remains for
+  admin/scenario tooling). Multiplayer guide gained a Teams and Shared Vision section.
+- **Online services scope — PARKED with context**: RJ hasn't dived in; targets are Steam + Epic
+  (Steamworks/EOS), and he envisions a first-party "SeinARTS Online Services (SOS)" extension for
+  replay/match/stats. Reopen with Steamworks/EOS-shaped options when he's ready
+  (`.agents/DECISION_ONLINE_SERVICES_SCOPE.md`).
+
+Gates after both rulings: Unit 477 / Sim 57 / Determinism 48 / Integration 26 (All profile),
+envelope suite 5/5 with regenerated frozen bytes, fresh-process serial/parallel A/B 120/120.
+NOTE for PIE: pre-v17 saved snapshots/replays fail closed against this branch (intended).
+
+Still RJ's: the PIE batch, the remaining decision memos (online scope parked; squad
+wipe/recreation/retreat UX; flight/vehicle feel defaults; host-migration topology; co-op
+persistence; adaptive input delay), pushes/merge, and the external dedicated-server CI gate.
 
 **State date:** 2026-08-14
 **Baseline branch:** `main`
