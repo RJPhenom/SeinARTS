@@ -4,11 +4,14 @@ The north star is a native Unreal AAA RTS development experience: designer-first
 
 The framework never decides which type of RTS a game is — that is the consuming game's call
 (the host WARSEIN project's own game is squad-tactical-inspired; the framework must equally
-support massive-scale designs, so mechanisms are sized for the largest scale). Known gap under
-that standard: a combat substrate (acquisition, weapon cycling, delivery, damage resolution,
-attrition) is a missing framework pillar — removed 2026-06-02 for rebuild and never re-planned.
-Economy loops (harvest/dropoff, worker construction) are primitives-complete but unproven as
-authored loops.
+support massive-scale designs, so mechanisms are sized for the largest scale). The combat
+substrate SHIPPED 2026-08-16 as the 13th framework module (`SeinARTSCombat`): vitals + damage
+resolution with a Blueprint formula policy seam, weapon cycling, an on-demand target query
+service with a Blueprint scorer seam, instant + projectile-entity delivery, and starter
+attack content — mechanisms only; feel stays designer-authored (see `Docs/Guides/Combat.md`).
+Remaining under the any-design standard: combat-at-scale evidence (armed population curves),
+spatial indexing for acquisition if that curve demands it, and proving the economy loops
+(harvest/dropoff, worker construction) as authored loops.
 
 This order minimizes rework. Do not start a later stage by weakening an earlier contract.
 
