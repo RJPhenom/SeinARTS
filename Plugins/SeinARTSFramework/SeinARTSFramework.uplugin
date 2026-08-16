@@ -39,6 +39,11 @@
 			"LoadingPhase": "Default"
 		},
 		{
+			"Name": "SeinARTSCombat",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		},
+		{
 			"Name": "SeinARTSNet",
 			"Type": "Runtime",
 			"LoadingPhase": "Default"
