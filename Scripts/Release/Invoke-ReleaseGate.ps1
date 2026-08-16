@@ -130,13 +130,16 @@ if (-not $PackageOnly -and $RuntimeNetworkProfile -cne 'Adverse') {
 }
 $PublicDocumentationFiles = @()
 if (-not $PackageOnly) {
-	if (-not (Test-Path -LiteralPath $DocumentationRoot -PathType Container)) {
-		throw "Publication requires deliberate customer documentation under '$DocumentationRoot'."
+	if (Test-Path -LiteralPath $DocumentationRoot -PathType Container) {
+		$PublicDocumentationFiles = @(
+			Get-ChildItem -LiteralPath $DocumentationRoot -File -Recurse)
 	}
-	$PublicDocumentationFiles = @(
-		Get-ChildItem -LiteralPath $DocumentationRoot -File -Recurse)
 	if ($PublicDocumentationFiles.Count -eq 0) {
-		throw "Publication requires at least one customer-documentation file under '$DocumentationRoot'."
+		# Owner ruling 2026-08-08: a missing/empty customer Docs/ tree warns
+		# instead of blocking publication until the docs land on main. The
+		# packaged artifacts simply omit their Documentation folder; restore
+		# the hard requirement once Docs/ exists on the release branch.
+		Write-Warning ("Publishing WITHOUT customer documentation: '{0}' is missing or empty." -f $DocumentationRoot)
 	}
 }
 
