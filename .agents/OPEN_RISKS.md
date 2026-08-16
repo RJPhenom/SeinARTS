@@ -94,8 +94,15 @@ This is the actionable remainder after consolidating the historical audits. It i
    baseline (coverless 128 unchanged at ~1.3 ms; the solver-only 128x128 stress is unchanged at
    ~12.2 ms). Suspects: the exact whole-selection allocator running per preview refresh and the
    per-slot reservation scans. A CPU trace with the named preview scopes is at
-   `Saved/Profiling/ShareVisionPerf-20260815-203853.utrace`. Needs scope-level attribution and
-   either caching or a cheaper preview-path policy before large-selection cover previews ship.
+   `Saved/Profiling/ShareVisionPerf-20260815-203853.utrace`. Attribution: the exact Hungarian
+   allocator (`Sein_Cover_Assignment_Hungarian` scope) dominates — the preview now runs the
+   ~10 ms-class solve the 128x128 stress measures. Mitigated 2026-08-15: an unchanged-input
+   re-solve skip (gesture + displayed-member pose fingerprint, capped at 5 ticks) cuts a
+   stationary preview from 30 solves/second to at most 6 and typically zero once units settle;
+   per-solve cost is unchanged and drag-time refreshes still pay it. Remaining options if PIE
+   feels it: an async preview solve (click path already recomputes exactly), or eligible-edge
+   reduction. Per-solve reduction is a product/feel decision — do not silently change the
+   preview's exactness.
 
 ## Explicit product decisions still required
 

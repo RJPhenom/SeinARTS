@@ -150,6 +150,9 @@ private:
 	int32 LastLayoutDragPointCount = INDEX_NONE;
 	bool bLastLayoutWasCommandDrag = false;
 	bool bLayoutDirty = true;
+	/** Pose fingerprint of the displayed members at the last real solve —
+	 *  render-only bookkeeping for the unchanged-input re-solve skip. */
+	uint32 LastLayoutMemberPoseHash = 0;
 
 	TArray<FSeinFrozenDestination> DisplayedDestinationArtifact;
 	TArray<FSeinEntityHandle> DisplayedArtifactMembers;
