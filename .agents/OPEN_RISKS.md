@@ -11,9 +11,10 @@ This is the actionable remainder after consolidating the historical audits. It i
    does not prove a true headless dedicated-server binary.
 2. **The public documentation product now has its spine but is not complete.** `Docs/` carries a
    deliberate customer tree (README, Installation, First Skirmish, Determinism Rules, Authoring
-   Units), so publication's fail-closed docs gate is satisfiable. Still to author: multiplayer/
-   lobby setup, replays, formations/gestures, extension deep-dives, and a project-settings
-   reference; docs accuracy review belongs in each release's gate.
+   Units, Multiplayer, Replays, Formations/Preview, Project Settings reference), so publication's
+   fail-closed docs gate is satisfiable. Still to author: extension deep-dives and subsystem
+   tutorials (Balance Data, ability authoring); docs accuracy review belongs in each release's
+   gate.
 
 ## Gameplay-backbone gaps
 
