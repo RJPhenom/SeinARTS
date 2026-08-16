@@ -20,6 +20,7 @@
 #include "CoreMinimal.h"
 #include "Kismet/BlueprintFunctionLibrary.h"
 #include "Core/SeinEntityHandle.h"
+#include "Core/SeinPlayerID.h"
 #include "StructUtils/InstancedStruct.h"
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
@@ -107,6 +108,34 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|ChildTransforms", meta = (WorldContext = "WorldContextObject", DisplayName = "Set Child Local Transform"))
 	static bool SeinSetChildLocalTransform(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, FGameplayTag Tag, FFixedTransform NewTransform);
+
+	// ─── Player-pair capabilities ───
+	//
+	// Directional runtime relationship mutation (ShareVision and any custom
+	// capability tag) from ability/effect graphs — the designer-authored path
+	// for diplomacy mechanics, treaty effects, and scripted vision sharing.
+	// Direction matters: Source -> Target means Target may consume Source's
+	// capability (for ShareVision, Target sees what Source sees). Grants are
+	// refcounted per exact (kind, instance) source; revoke removes only the
+	// matching ref. The lobby's team seeding provides the match-start default;
+	// these nodes update it at runtime, asymmetrically if desired. The wire
+	// SetPairCapability command stays MatchControl-scoped for admin/scenario
+	// tooling — player-driven changes route through an ability like all other
+	// gameplay.
+
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Relationship", meta = (WorldContext = "WorldContextObject", DisplayName = "Grant Pair Capability"))
+	static bool SeinGrantPairCapability(const UObject* WorldContextObject,
+		FSeinPlayerID SourcePlayer, FSeinPlayerID TargetPlayer,
+		UPARAM(meta = (Categories = "SeinARTS.Relationship.Capability")) FGameplayTag CapabilityTag,
+		UPARAM(meta = (Categories = "SeinARTS.Relationship.Source")) FGameplayTag SourceKindTag,
+		int64 SourceInstanceID);
+
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Relationship", meta = (WorldContext = "WorldContextObject", DisplayName = "Revoke Pair Capability"))
+	static bool SeinRevokePairCapability(const UObject* WorldContextObject,
+		FSeinPlayerID SourcePlayer, FSeinPlayerID TargetPlayer,
+		UPARAM(meta = (Categories = "SeinARTS.Relationship.Capability")) FGameplayTag CapabilityTag,
+		UPARAM(meta = (Categories = "SeinARTS.Relationship.Source")) FGameplayTag SourceKindTag,
+		int64 SourceInstanceID);
 
 	/** Workhorse turret-aim helper. Composes the named child's current
 	 *  WORLD rotation, derives the desired yaw to face `WorldTarget`,
