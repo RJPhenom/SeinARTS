@@ -5,8 +5,9 @@
 The destinations shown by the order preview are exactly the destinations the committed order
 executes. This is structural, not best-effort: the preview and the commit run the same
 computation, and since the frozen-destination system landed, the previewed plan itself travels
-with the command and is admitted or rejected as a whole — the simulation never silently
-recomputes a destination you were shown.
+with the command — the simulation never silently recomputes a destination you were shown. If a
+member dies in the brief window between preview and admission, only that member's destination
+drops from the plan; every survivor still goes exactly where the preview showed.
 
 ## Gestures
 
@@ -44,9 +45,12 @@ A previewed destination is an input to movement, not an opinion navigation may r
   is delivered to the exact slot, and the preview shows the exact slot with its cover quality
   tinted (fog-gated to what you have scouted).
 - Provider-backed destinations reserve their footprint from admission through arrival and while
-  the unit stays settled there; contending orders are rejected with a reason rather than
-  silently re-planned. Once a unit is moving, interval repaths may legitimately re-route around
-  a changed world — the invariant binds the initial submission.
+  the unit stays settled there. Reservations shape the *preview* — the plan you are shown
+  already avoids spots other orders have claimed — but they never veto an order: if two orders
+  race to the same spot inside the input-delay window, both are delivered to their shown points
+  and the collision layer settles physical reality. An order is never rejected or re-planned
+  because of contention. Once a unit is moving, interval repaths may legitimately re-route
+  around a changed world — the invariant binds the initial submission.
 
 ## Preview rendering
 

@@ -38,9 +38,13 @@ Create one with right-click → SeinARTS → Ability.
   would fail).
 - Production is an ability that enqueues a producible; the producible's class defaults carry
   build time and refund policy.
-- Targeted abilities declare a targeter spec (point, or point-with-facing for building
-  placement); the player controller runs the targeting UI and submits the captured points with
-  the command.
+- Targeted abilities declare a targeter spec (point; point-with-facing for building placement;
+  line/corridor for barrage lines, strafing runs, and trench networks); the player controller
+  runs the targeting UI and submits the captured points with the command.
+- The line spec captures segments either as a click-drag gesture or as chained multi-clicks
+  (pick per ability via its Capture Mode), with an optional corridor Width and per-segment
+  maximum length. Every captured point encodes one segment (start + end) regardless of the
+  capture mode, so ability graphs read them uniformly.
 
 ## Custom simulation data
 
@@ -63,5 +67,6 @@ Give a Blueprint a `Cover Component` to make it a cover provider: a protection a
 tag (Heavy/Light/Negative or your own), directionality, and authored slots (with an editor
 generate-and-scatter tool). Units opt into cover-seeking with the `SeinARTS.Cover.UsesCover`
 tag. Cover destinations are exact: the slot shown in the order preview is the slot the unit is
-delivered to, reservations prevent double-claims, and terrain tags can grant area cover (for
+delivered to, reserved slots are filtered out of later previews so plans avoid double-claims
+up front, and terrain tags can grant area cover (for
 example, roads as negative cover) with no placed providers.
