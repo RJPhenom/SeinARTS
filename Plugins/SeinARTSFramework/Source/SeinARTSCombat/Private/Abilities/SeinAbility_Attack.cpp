@@ -19,13 +19,16 @@ USeinAbility_Attack::USeinAbility_Attack()
 
 bool USeinAbility_Attack::CanActivate_Implementation()
 {
+	// CanActivate runs BEFORE the pipeline assigns this activation's target
+	// onto the instance — TargetEntity here is stale state from a previous
+	// activation, never the pending command's target. Gate only on what is
+	// knowable now (an armed owner); the command pipeline's declarative
+	// target validation owns the target, and the first OnTick ends cleanly
+	// if it is gone or undamageable by then.
 	if (!WorldSubsystem) return false;
 	const FSeinWeaponComponent* Weapons =
 		WorldSubsystem->GetComponent<FSeinWeaponComponent>(OwnerEntity);
-	return Weapons && Weapons->Weapons.Num() > 0
-		&& WorldSubsystem->IsEntityAlive(TargetEntity)
-		&& WorldSubsystem->GetComponent<FSeinVitalsComponent>(TargetEntity)
-			!= nullptr;
+	return Weapons && Weapons->Weapons.Num() > 0;
 }
 
 void USeinAbility_Attack::OnTick_Implementation(FFixedPoint DeltaTime)

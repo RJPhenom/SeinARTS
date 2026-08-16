@@ -5,6 +5,7 @@
  */
 
 #include "Combat/SeinTargetQueryService.h"
+#include "Combat/SeinCombatMath.h"
 #include "Combat/SeinTargetScorer.h"
 #include "Components/SeinVitalsComponent.h"
 #include "Math/MathLib.h"
@@ -13,16 +14,6 @@
 
 namespace
 {
-	FFixedPoint PlanarDistanceSaturated(
-		const FFixedVector& A, const FFixedVector& B)
-	{
-		FFixedVector PlanarA = A;
-		FFixedVector PlanarB = B;
-		PlanarA.Z = FFixedPoint::Zero;
-		PlanarB.Z = FFixedPoint::Zero;
-		return FFixedVector::DistanceSaturated(PlanarA, PlanarB);
-	}
-
 	const USeinTargetScorer* ResolveScorer(const FSeinTargetQuery& Query)
 	{
 		if (Query.ScorerClass.IsValid())
@@ -102,7 +93,8 @@ void FSeinTargetQueryService::FindTargets(
 				return;
 			}
 			const FFixedPoint Distance =
-				PlanarDistanceSaturated(Location, Origin);
+				SeinCombatInternal::PlanarDistanceSaturated(
+					Location, Origin);
 			if (bArcGated)
 			{
 				FFixedVector PlanarDelta = Location - Origin;

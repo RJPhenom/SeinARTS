@@ -7,6 +7,7 @@
  */
 
 #include "Combat/SeinCombatDamage.h"
+#include "Combat/SeinCombatMath.h"
 #include "Combat/SeinDamageFormula.h"
 #include "Components/SeinVitalsComponent.h"
 #include "Events/SeinVisualEvent.h"
@@ -18,17 +19,6 @@ DEFINE_LOG_CATEGORY_STATIC(LogSeinCombat, Log, All);
 
 namespace
 {
-	/** Overflow-safe planar distance (the raw Size() wraps beyond ~463 m). */
-	FFixedPoint PlanarDistanceSaturated(
-		const FFixedVector& A, const FFixedVector& B)
-	{
-		FFixedVector PlanarA = A;
-		FFixedVector PlanarB = B;
-		PlanarA.Z = FFixedPoint::Zero;
-		PlanarB.Z = FFixedPoint::Zero;
-		return FFixedVector::DistanceSaturated(PlanarA, PlanarB);
-	}
-
 	/** Resolve the payload's formula policy CDO; null path = flat built-in. */
 	const USeinDamageFormula* ResolveFormula(const FSeinDamagePayload& Payload)
 	{
@@ -170,7 +160,8 @@ int32 FSeinCombatDamage::ResolveImpact(
 				return;
 			}
 			SplashVictims.Add({Handle,
-				PlanarDistanceSaturated(Location, ImpactPoint)});
+				SeinCombatInternal::PlanarDistanceSaturated(
+					Location, ImpactPoint)});
 		});
 
 	if (World.IsEntityAlive(DirectTarget)

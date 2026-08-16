@@ -13,6 +13,7 @@
 #include "Components/SeinWeaponComponent.h"
 #include "Core/SeinSystemPriority.h"
 #include "Core/SeinTickPhase.h"
+#include "Events/SeinVisualEvent.h"
 #include "Simulation/ComponentStorage.h"
 #include "Simulation/SeinWorldSubsystem.h"
 
@@ -25,16 +26,32 @@ class FSeinWeaponCycleSystem final : public ISeinSystem
 public:
 	virtual void Tick(FFixedPoint DeltaTime, USeinWorldSubsystem& World) override
 	{
-		// Gather-then-mutate: mutable component access must not run inside
-		// the raw storage sweep (revision bookkeeping + reallocation rules).
+		// Gather-then-mutate, and gather ONLY handles that will actually
+		// change: a mutable fetch touches the slot's mutation revision, so an
+		// unconditional per-entity fetch would mark every armed/vitals entity
+		// dirty every tick and defeat the incremental canonical root's
+		// compare-on-write savings.
 		TArray<FSeinEntityHandle> ArmedHandles;
 		if (const ISeinComponentStorage* WeaponStorage =
 			World.GetComponentStorageRaw(FSeinWeaponComponent::StaticStruct()))
 		{
 			WeaponStorage->ForEachLiveComponent(
-				[&](FSeinEntityHandle Handle, const void* /*Raw*/)
+				[&](FSeinEntityHandle Handle, const void* Raw)
 				{
-					if (World.GetEntityPool().IsValid(Handle))
+					const FSeinWeaponComponent* Weapons =
+						static_cast<const FSeinWeaponComponent*>(Raw);
+					if (!Weapons || !World.GetEntityPool().IsValid(Handle))
+					{
+						return;
+					}
+					bool bNeedsMutation = !Weapons->bRuntimeSeeded;
+					for (const FSeinWeaponSlot& Slot : Weapons->Weapons)
+					{
+						bNeedsMutation = bNeedsMutation
+							|| Slot.CooldownRemaining > FFixedPoint::Zero
+							|| Slot.ReloadRemaining > FFixedPoint::Zero;
+					}
+					if (bNeedsMutation)
 					{
 						ArmedHandles.Add(Handle);
 					}
@@ -76,7 +93,7 @@ public:
 			}
 		}
 
-		TArray<FSeinEntityHandle> RegenHandles;
+		TArray<FSeinEntityHandle> VitalsHandles;
 		if (const ISeinComponentStorage* VitalsStorage =
 			World.GetComponentStorageRaw(FSeinVitalsComponent::StaticStruct()))
 		{
@@ -85,25 +102,47 @@ public:
 				{
 					const FSeinVitalsComponent* Vitals =
 						static_cast<const FSeinVitalsComponent*>(Raw);
-					if (World.GetEntityPool().IsValid(Handle)
-						&& Vitals
-						&& (Vitals->RegenPerSecond > FFixedPoint::Zero
-							|| Vitals->Health <= FFixedPoint::Zero))
+					if (!Vitals || !World.GetEntityPool().IsValid(Handle))
 					{
-						RegenHandles.Add(Handle);
+						return;
+					}
+					const bool bNeedsSeed = !Vitals->bHealthSeeded;
+					const bool bZeroed =
+						Vitals->Health <= FFixedPoint::Zero;
+					const bool bRegens =
+						Vitals->RegenPerSecond > FFixedPoint::Zero
+						&& Vitals->Health < Vitals->MaxHealth;
+					if (bNeedsSeed || bZeroed || bRegens)
+					{
+						VitalsHandles.Add(Handle);
 					}
 				});
 		}
-		for (const FSeinEntityHandle& Handle : RegenHandles)
+		for (const FSeinEntityHandle& Handle : VitalsHandles)
 		{
 			FSeinVitalsComponent* Vitals =
 				World.GetComponentMutable<FSeinVitalsComponent>(Handle);
 			if (!Vitals) continue;
-			// Authored-zero health seeds to MaxHealth on its first tick so
-			// designers never have to mirror the two fields.
+			// One-time seed: authored-zero health fills to MaxHealth so
+			// designers never mirror the two fields.
+			if (!Vitals->bHealthSeeded)
+			{
+				if (Vitals->Health <= FFixedPoint::Zero)
+				{
+					Vitals->Health = Vitals->MaxHealth;
+				}
+				Vitals->bHealthSeeded = true;
+			}
+			// After the seed, zero ALWAYS means death — a scripted
+			// whole-struct write that zeroed health (bypassing the damage
+			// path) still gets a real death, never a silent re-seed revive.
+			// This also retires misauthored MaxHealth <= 0 entities instead
+			// of re-gathering them forever.
 			if (Vitals->Health <= FFixedPoint::Zero)
 			{
-				Vitals->Health = Vitals->MaxHealth;
+				World.EnqueueVisualEvent(FSeinVisualEvent::MakeDeathEvent(
+					Handle, FSeinEntityHandle()));
+				World.DestroyEntity(Handle);
 				continue;
 			}
 			if (Vitals->RegenPerSecond > FFixedPoint::Zero

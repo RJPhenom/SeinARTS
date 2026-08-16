@@ -7,6 +7,7 @@
 
 #include "Combat/SeinWeaponFire.h"
 #include "Combat/SeinCombatDamage.h"
+#include "Combat/SeinCombatMath.h"
 #include "Components/SeinProjectileComponent.h"
 #include "Components/SeinVitalsComponent.h"
 #include "Components/SeinWeaponComponent.h"
@@ -16,16 +17,6 @@
 
 namespace
 {
-	FFixedPoint PlanarDistanceSaturated(
-		const FFixedVector& A, const FFixedVector& B)
-	{
-		FFixedVector PlanarA = A;
-		FFixedVector PlanarB = B;
-		PlanarA.Z = FFixedPoint::Zero;
-		PlanarB.Z = FFixedPoint::Zero;
-		return FFixedVector::DistanceSaturated(PlanarA, PlanarB);
-	}
-
 	bool IsSlotReady(const FSeinWeaponSlot& Slot)
 	{
 		return Slot.CooldownRemaining <= FFixedPoint::Zero
@@ -98,7 +89,8 @@ ESeinWeaponFireResult FSeinWeaponFire::TryFireWeaponAt(
 		FFixedVector PlanarDelta = TargetLocation - ShooterLocation;
 		PlanarDelta.Z = FFixedPoint::Zero;
 		const FFixedPoint Distance =
-			PlanarDistanceSaturated(TargetLocation, ShooterLocation);
+			SeinCombatInternal::PlanarDistanceSaturated(
+				TargetLocation, ShooterLocation);
 		const FFixedPoint CosHalfAngle = SeinMath::Cos(
 			Slot.ArcHalfAngleDegrees
 			* FFixedPoint::Pi / FFixedPoint::FromInt(180));

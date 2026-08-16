@@ -53,6 +53,13 @@ struct SEINARTSCOMBAT_API FSeinVitalsComponent : public FSeinComponent
 	 *  invulnerability effects flip it). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Combat")
 	bool bInvulnerable = false;
+
+	/** Set by the cycle system after the one-time authored-health seed. Once
+	 *  seeded, zero-or-below health ALWAYS means death — even when a scripted
+	 *  whole-struct write zeroed it instead of the damage path — so an entity
+	 *  can never silently re-seed back to full. Never author. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Combat")
+	bool bHealthSeeded = false;
 };
 
 FORCEINLINE uint32 GetTypeHash(const FSeinVitalsComponent& Component)
@@ -62,5 +69,6 @@ FORCEINLINE uint32 GetTypeHash(const FSeinVitalsComponent& Component)
 	Hash = HashCombine(Hash, GetTypeHash(Component.ArmorTag));
 	Hash = HashCombine(Hash, GetTypeHash(Component.RegenPerSecond));
 	Hash = HashCombine(Hash, GetTypeHash(Component.bInvulnerable));
+	Hash = HashCombine(Hash, GetTypeHash(Component.bHealthSeeded));
 	return Hash;
 }
