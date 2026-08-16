@@ -5920,6 +5920,49 @@ void USeinWorldSubsystem::ProcessDeferredDestroys()
 			PropagateContainerDeath(Handle);
 		}
 
+		// Squad-side: settle still-queued reinforcement charges per the squad's
+		// authored destruction refund policy. Runs before storages clear so the
+		// entries' snapshotted payers/costs are still readable. Cancellation
+		// refunds exactly through its own path; a wiped-but-rebuilding squad
+		// never reaches teardown with a live queue, so this only fires on
+		// explicit destruction/disband.
+		if (const FSeinSquadComponent* DyingSquad =
+			GetDeferredTeardownComponent<FSeinSquadComponent>(Handle))
+		{
+			if (!DyingSquad->ReinforceQueue.IsEmpty()
+				&& DyingSquad->ReinforceRefundPolicy
+					!= ESeinSquadReinforceRefundPolicy::Forfeit)
+			{
+				const bool bPartial = DyingSquad->ReinforceRefundPolicy
+					== ESeinSquadReinforceRefundPolicy::PartialRefund;
+				FFixedPoint Percent = DyingSquad->PartialRefundPercent;
+				if (Percent < FFixedPoint::Zero) Percent = FFixedPoint::Zero;
+				if (Percent > FFixedPoint::One) Percent = FFixedPoint::One;
+				for (const FSeinSquadReinforceEntry& Entry :
+					DyingSquad->ReinforceQueue)
+				{
+					FSeinResourceCost Settlement = Entry.DeductedCost;
+					if (bPartial)
+					{
+						for (TPair<FGameplayTag, FFixedPoint>& Amount :
+							Settlement.Amounts)
+						{
+							Amount.Value = Amount.Value * Percent;
+						}
+					}
+					if (!Settlement.IsEmpty()
+						&& !USeinResourceBPFL::SeinTryReverseDeduction(
+							this, Entry.ResourcePayer, Settlement))
+					{
+						UE_LOG(LogSeinSim, Warning,
+							TEXT("Squad teardown could not settle reinforcement request %lld for player %s."),
+							Entry.RequestID,
+							*Entry.ResourcePayer.ToString());
+					}
+				}
+			}
+		}
+
 		// Member-side: if the dying entity is contained, evict it from its
 		// container's Occupants + CurrentLoad / VisualSlotAssignments / attachment
 		// slot. Mirrors the CommandBroker eviction below.

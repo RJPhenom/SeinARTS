@@ -108,7 +108,9 @@ class SEINARTSCOREENTITY_API FSeinSnapshotEnvelopeCodec
 {
 public:
 	static constexpr uint32 WireFormatVersion = 1;
-	static constexpr uint32 SnapshotSemanticsVersion = 16;
+	// Must track FSeinWorldSnapshot::CurrentVersion (the frozen-framing test
+	// asserts the pair). v17: squad destruction-settlement fields.
+	static constexpr uint32 SnapshotSemanticsVersion = 17;
 	static constexpr int32 PrefixBytes = 120;
 	static constexpr uint32 MaxSections = 8192;
 	static constexpr uint32 MaxSectionIdBytes = 128;
