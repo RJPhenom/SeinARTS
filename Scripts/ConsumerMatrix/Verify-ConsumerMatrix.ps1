@@ -553,15 +553,23 @@ function Refresh-ConsumerPlugins(
 
 function Assert-NoHostGameDependency([string] $ProjectRoot)
 {
-	if (-not (Get-Command rg -ErrorAction SilentlyContinue)) {
-		throw 'Consumer dependency scanning requires ripgrep (rg).'
-	}
-	$Forbidden = @(& rg -a -l -F '/Game/SeinARTS' $ProjectRoot `
-		-g '!**/Binaries/**' -g '!**/Intermediate/**' -g '!**/Saved/**')
-	$SearchExit = $LASTEXITCODE
-	if ($SearchExit -gt 1) {
-		throw "Consumer dependency scan failed with ripgrep exit code $SearchExit."
-	}
+	# Byte-level scan for the literal host-content path across every consumer
+	# file, binary assets included — a self-contained equivalent of the
+	# previous `rg -a -l -F '/Game/SeinARTS'` call, so the gate needs no
+	# external tool. Latin1 maps bytes 1:1 onto chars, making the ordinal
+	# Contains() a raw byte search identical to ripgrep's binary mode.
+	$Needle = '/Game/SeinARTS'
+	$ExcludedSegments = @('\Binaries\', '\Intermediate\', '\Saved\')
+	$Forbidden = @(Get-ChildItem -LiteralPath $ProjectRoot -Recurse -File |
+		Where-Object {
+			$Relative = $_.FullName.Substring($ProjectRoot.Length)
+			-not ($ExcludedSegments | Where-Object { $Relative.Contains($_) })
+		} |
+		Where-Object {
+			[System.IO.File]::ReadAllText(
+				$_.FullName, [System.Text.Encoding]::Latin1).Contains($Needle)
+		} |
+		ForEach-Object { $_.FullName })
 	if ($Forbidden) {
 		throw "Generated consumer contains forbidden host /Game/SeinARTS references:`n$($Forbidden -join "`n")"
 	}
