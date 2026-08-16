@@ -255,6 +255,9 @@ public:
 	void BuildPreviewOrder(FVector CursorWorld, FVector& OutAnchor,
 		TArray<FVector>& OutGuidePoints, FGameplayTag& OutFormationTag) const;
 
+	/** Current right-click queue modifier, shared with destination preview. */
+	bool IsQueueModifierHeld() const { return bShiftHeld; }
+
 	/**
 	 * Issue a targeter-originated ability command. Called by USeinTargeterSubsystem
 	 * after capturing the required number of points; packs them into a

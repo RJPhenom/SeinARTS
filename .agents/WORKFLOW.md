@@ -2,17 +2,17 @@
 
 This is the local operational mirror of the human [Workflow Policy](https://docs.google.com/document/d/1pb3Z0DdQKAIJ610cMOy1yOP9_RQj1jtzMupfhkyrlfw), source policy version 2.2. The human policy owns contributor workflow. Update both in the same task when workflow changes.
 
-## About
+## 1. About
 
 This policy defines the workflows and restrictions for developing, testing, and using the SeinARTS Framework.
 
-## Agents
+## 2. Agents
 
-### Markdown files
+### 2.1 Markdown files
 
 Agent-authored Markdown belongs in `.agents/`. Keep the repository root clear. Toolchain-loaded `AGENTS.md` and `CLAUDE.md` files at repository and plugin scopes are the exceptions.
 
-### PowerShell
+### 2.2 PowerShell
 
 SeinARTS uses PowerShell (`.ps1`) for agent development because Windows is the primary development environment and target platform.
 
@@ -23,15 +23,15 @@ Persistent scripts belong in `Scripts/` under the repository root.
 - Delete one-time scripts after use.
 - Reuse persistent utilities such as `Build.ps1` instead of creating duplicates.
 
-## Development
+## 3. Development
 
-### Starting work
+### 3.1 Starting work
 
 Before changing code, understand the requested result, inspect the live implementation, and check the current Git state. Notes and comments provide context; live code and current evidence take priority when they disagree.
 
-Before continuing inherited work, complete the handoff review below.
+Before continuing inherited work, complete the handoff review in 5.2.
 
-### Decisions
+### 3.2 Decisions
 
 Proceed autonomously when the result and constraints are clear. Ask for input when work changes:
 
@@ -42,7 +42,7 @@ Proceed autonomously when the result and constraints are clear. Ask for input wh
 
 Routine implementation choices should not create unnecessary pauses.
 
-### Validation
+### 3.3 Validation
 
 Validation must match the risk of the change. A successful build proves only that the project compiles.
 
@@ -57,9 +57,9 @@ Changes affecting determinism, simulation timing, networking, replay, persistenc
 - Profiling against the accepted baseline.
 - PIE validation.
 
-## Documentation
+## 4. Documentation
 
-### Document types
+### 4.1 Document types
 
 Documentation has three audiences:
 
@@ -69,7 +69,7 @@ Documentation has three audiences:
 
 Agent reports and temporary working notes do not belong in the public documentation tree.
 
-### Keeping documentation current
+### 4.2 Keeping documentation current
 
 Every completed code task declares its documentation impact: `none`, `internal`, `public`, or `both`.
 
@@ -77,15 +77,15 @@ Public APIs, Blueprint workflows, setup requirements, compatibility changes, and
 
 Project documents such as the design document, Workflow Policy, and Style Guide use a `major.minor` version on their cover. Increment the minor version whenever the document changes. Only the authoritative decision-maker increments the major version.
 
-## Git
+## 5. Git
 
-### Commits
+### 5.1 Commits
 
 Commits are not limited to completed features or functions. They mark clear points in history and serve as restore points during lengthy WIP refactors and feature work.
 
 Files must be committed or deliberately ignored. Do not leave unexplained pending changes at a commit boundary.
 
-### Handoffs
+### 5.2 Handoffs
 
 WIP does not need to be cleaned up before another author takes over. It may be committed or uncommitted; what matters is that the work is preserved and its current state can be understood.
 
@@ -97,7 +97,7 @@ Picking up another author's work does not mean assuming it is correct. Before co
 
 Correct unsafe work or request authoritative input when a real product or architectural decision is required.
 
-### Branches
+### 5.3 Branches
 
 Branches belong to tasks, not authors. Authors may continue an existing branch after completing the handoff review.
 
@@ -111,7 +111,7 @@ Use branches for:
 - Release preparation.
 - Work that must remain isolated from `main` or another active task.
 
-### Worktrees
+### 5.4 Worktrees
 
 Git worktrees are banned across all environments for this project.
 
@@ -120,9 +120,9 @@ Git worktrees are banned across all environments for this project.
 - If a session starts elsewhere, stop and return to the primary checkout before changing files.
 - Only one author writes to the checkout at a time.
 
-## Versioning and releases
+## 6. Versioning and releases
 
-### Versioning
+### 6.1 Versioning
 
 SeinARTS uses Semantic Versioning:
 
@@ -134,7 +134,7 @@ The production plugin suite normally ships as one coordinated version. Extension
 
 Semantic versions do not guarantee multiplayer compatibility. Released builds also identify their network, simulation, replay, snapshot, persistent-data, simulation-content, engine, and plugin-build compatibility.
 
-### Releases
+### 6.2 Releases
 
 `main` is the shared integration branch. Immutable Git tags identify released versions, never a moving branch. Use a release branch only when stabilization must continue separately from new work.
 

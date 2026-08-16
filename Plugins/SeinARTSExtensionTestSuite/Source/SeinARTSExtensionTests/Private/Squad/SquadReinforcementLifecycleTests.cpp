@@ -603,3 +603,63 @@ TEST(SquadReinforcementSnapshotRestoresAndContinuesCanonically,
 	Source.World->StopSimulation();
 	Destination->StopSimulation();
 }
+
+TEST(SquadDestructionSettlesQueuedChargesPerAuthoredPolicy,
+	"SeinARTS.Unit.Squad.Reinforcement.DestructionSettlement")
+{
+	// RJ's policy ruling (2026-08-16): destruction settlement is a per-squad
+	// authored toggle — full refund, forfeit, or partial refund with a
+	// tunable fraction. Two queued entries cost 10 + 20 → balance 70 of 100
+	// before the squad dies.
+	struct FPolicyCase
+	{
+		ESeinSquadReinforceRefundPolicy Policy;
+		int32 PartialPercentHundredths;
+		int32 ExpectedBalance;
+	};
+	const FPolicyCase Cases[] = {
+		{ESeinSquadReinforceRefundPolicy::Refund, 0, 100},
+		{ESeinSquadReinforceRefundPolicy::Forfeit, 0, 70},
+		{ESeinSquadReinforceRefundPolicy::PartialRefund, 50, 85},
+	};
+
+	for (const FPolicyCase& Case : Cases)
+	{
+		FSquadReinforcementFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize()));
+
+		int64 FirstRequest = 0;
+		int64 SecondRequest = 0;
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*Fixture.World);
+			ASSERT_THAT(IsTrue(USeinSquadMutationBPFL::
+				SeinQueueSquadReinforcement(
+					Fixture.World, Fixture.Squad, 0, FirstRequest)));
+			ASSERT_THAT(IsTrue(USeinSquadMutationBPFL::
+				SeinQueueSquadReinforcement(
+					Fixture.World, Fixture.Squad, 1, SecondRequest)));
+			FSeinSquadComponent* Mutable =
+				Fixture.World->GetComponentMutable<FSeinSquadComponent>(
+					Fixture.Squad);
+			ASSERT_THAT(IsNotNull(Mutable));
+			Mutable->ReinforceRefundPolicy = Case.Policy;
+			Mutable->PartialRefundPercent =
+				FFixedPoint::FromInt(Case.PartialPercentHundredths)
+					/ FFixedPoint::FromInt(100);
+		}
+		ASSERT_THAT(IsTrue(
+			Fixture.Balance(Fixture.Player) == FFixedPoint::FromInt(70)));
+
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*Fixture.World);
+			Fixture.World->DestroyEntity(Fixture.Squad);
+		}
+		FTSTicker::GetCoreTicker().Tick(
+			Fixture.World->GetFixedDeltaTimeSeconds());
+
+		ASSERT_THAT(IsTrue(
+			Fixture.Balance(Fixture.Player)
+				== FFixedPoint::FromInt(Case.ExpectedBalance)));
+		Fixture.World->StopSimulation();
+	}
+}

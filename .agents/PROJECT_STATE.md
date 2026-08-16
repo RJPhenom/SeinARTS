@@ -1,5 +1,209 @@
 # SeinARTS Project State
 
+## 2026-08-15 audit-fix wave (Claude session, uncommitted alongside FEAT-03 WIP)
+
+Six approved fixes from the independent post-handoff audit, layered on the working tree
+without touching the in-flight FEAT-03 frozen-destination changes:
+
+1. `Sein.Sim.StateRoot.VerifyIncrementalInterval` (new cvar, default 0/off, non-shipping):
+   every N completed ticks, cross-check the incremental canonical root against a forced
+   full rebuild at a quiescent boundary; mismatch logs Error + on-screen banner, transient
+   unavailability logs Verbose. Closes the "forced-rebuild verification never runs in a
+   live match" gap as an opt-in PIE diagnostic. New `VerifyIncrementalCanonicalStateRootDetailed`
+   distinguishes mismatch from unavailability; the BP node is unchanged.
+2. `USeinPlannerHandle::RequestNavPath` now mirrors `FSeinNavAgentProfile` defaults when an
+   entity has no navigation component (was silently inheriting `FSeinPathRequest`'s 0xFF),
+   aligning planning with containment/validation for component-less agents.
+3. `USeinMovement::CacheFootprintFromContext` delegates to the canonical
+   `BuildNavAgentProfile` (was a hand-duplicated derivation); the deliberate AgentTags
+   omission is now documented at both sites (caching tags would add reflected movement state).
+4. Tracked momentum-arc join check evaluates `IsPlanarFar` before the wrap-prone raw
+   `SizeSquared()` (order marked load-bearing in a comment).
+5. Reinforcement completion: a slot refilled/removed during the spawn itself now refunds the
+   snapshotted charge and retires the request (was an indefinite spawn/destroy retry with the
+   cost held); request-identity loss during spawn still defers to whoever owns the refund.
+6. Entity-pool mutable `ForEachEntity` uses compare-on-write dirtiness (snapshot
+   ID/Transform/Flags, touch only on real value change) — callers cannot under-dirty, idle
+   entities stop re-digesting every checkpoint. Pool slot revisions confirmed
+   cache-invalidation-only (restore rebuilds them locally), so the change is
+   canonical-state-neutral. New `EntityPoolMutableVisitTouchesOnlyValueChanges` regression
+   covers no-write, write-and-revert, transform-change, and flag-change cases.
+
+Validation: Development build green (all touched modules relinked); focused suites green —
+Unit.Entity 14/14, Unit.CoreEntity.CanonicalState 35/35, Sim.Squad.Reinforcement 2/2,
+Sim.Movement 19/19 (All profile). Fresh-process serial/parallel A/B trace: all 120 canonical
+roots and raw poses matched. Remaining gates: RJ PIE (recommend a soak with
+`Sein.Sim.StateRoot.VerifyIncrementalInterval 1` to prove compare-on-write against full
+rebuilds live).
+Also: `.agents/WORKFLOW.md` gained section numbering matching the corrected master scheme;
+the Google Doc master still needs its duplicate-§2 / unnumbered-GIT / stale-cross-ref fixes.
+
+### FEAT-03 landing pass (same session, later on 2026-08-15)
+
+Closed the two remaining open items from the frozen-destination reviews; verified the other two
+reviewer P1s (premature settled copy; entity-click-on-provider) were already fixed by the final
+Codex push:
+
+7. Both cover resolvers' artifact-less `PostProcessPositions` re-solves now filter candidate
+   slots through `IsDestinationFootprintReserved` (max member radius, own members ignored),
+   mirroring the selection-plan provider. Artifact-carrying orders never reach this path, so an
+   admitted artifact can never be re-snapped.
+8. Client-side plan-provider failure now degrades to a legacy artifact-less order (PC +
+   `SeinIssueBrokerOrder`) with a Warning, instead of silently eating the command. This is
+   distinct from the reserved conflict-policy decision, which is written up with options and a
+   recommendation in `.agents/DECISION_FROZEN_CONFLICT_POLICY.md` (awaiting RJ: A/B/C).
+9. Fixed a latent profile gap in the new `FrozenDestinationTests`: the admission test asserted
+   an empty authoritative-provider registry but had only ever run under the Framework profile;
+   under All, Cover legitimately registers providers into every world. The test now detaches
+   extension providers BEFORE bootstrap freezes the provider binding frame (clearing after the
+   freeze would trip per-tick binding validation).
+
+Validation: broad All-profile gates green above all prior floors — Unit 471/471, Sim 57/57,
+Determinism 48/48, Integration 26/26, zero failures; focused FrozenDestination 5/5 and
+Unit.Cover 10/10; Framework-profile Unit 453 / Sim 50 / Determinism 38, zero failures.
+Committed as `9b8d434` (landing) + `92d0c7a` (floors: Unit 471/453, Sim 57/50,
+Determinism 48/38).
+
+### Scale gate, preview cadence, and documentation (same session, latest)
+
+- `SeinARTS.Perf.Combat.Scale` measures the first moving-combat full-tick curve: 300/500/1,000
+  units in two crossing armies with real Move To actions, budgeted pathing, avoidance, collision,
+  and containment — 6.129/10.512/19.813 ms medians, near-linear, 1,000 units inside the 30 Hz
+  budget. Vacuity-guarded (at least half the population must genuinely be moving mid-measure).
+- The dense-cover preview's stationary-cursor cadence was fixed (unchanged-input re-solve skip,
+  5-tick cap); per-solve Hungarian cost and its options are recorded in OPEN_RISKS #6.
+- `Docs/` now carries the customer documentation product: README, Installation, First Skirmish,
+  Determinism Rules, Authoring Units, Multiplayer, Replays, Formations/Preview, and the Project
+  Settings reference — the release gate's fail-closed docs check is satisfiable.
+
+### ShareVision consumer (same session, after the landing commits)
+
+FoW now consumes the directional ShareVision pair capability. `USeinFogOfWar` gained
+`GetEffectiveVisionSources` / `GetEffectiveCellBitfield` / `GetEffectiveObserverGrid`
+(observer + every granting ally, commutative union), and the base
+`IsEntityVisibleToObserver` policy unions visible bits and seen latches across effective
+sources — B consumes A's VISION, never A's owner omniscience. Consumers wired: fog overlay,
+minimap fog, and the cell-query BPFL; every `IsEntityVisibleToObserver` caller (actor hiding,
+cover gating, minimap blips) inherits automatically. Zero-grant worlds short-circuit through
+the new `HasAnyPairCapabilityGrants` fast path at legacy cost. New directional regression
+`ShareVisionCapabilityUnionsAllyVisionDirectionally` covers grant/revoke/reversed-grant.
+Suites: Unit.FogOfWar and Unit.CoreEntity.Relationship green; Perf 6/6 green with collision
+and cover-assignment medians at baseline. Measured perf finding recorded in OPEN_RISKS #6:
+the dense-cover 128-member preview tripled to 9.9 ms median — a FEAT-03 provider cost, not a
+ShareVision cost — with a CPU trace captured for attribution.
+
+### RJ decisions implemented (same session, 2026-08-15, latest)
+
+Both open product decisions were ruled on and implemented on
+`codex/feat03-frozen-destinations`:
+
+- **Frozen-destination conflict policy — RJ policy D** ("units always do what the player was
+  shown"): admission drops only dead members' artifact entries; survivors keep exact displayed
+  destinations; world contention NEVER rejects or re-plans an order (double-claims coexist in the
+  ledger and resolve physically). Hostile-input validation stays strict (radius/provenance/
+  ownership/order/self-overlap). `BrokerOrder` schema bumped V2→V3 (behavior revision,
+  fail-closed vs old peers/replays); snapshot preflight relaxed to ordered-subset artifact↔member
+  alignment, with the same ordering enforced at admission. Tests flipped/added
+  (`FrozenDestinationAdmissionKeepsShownDestinationsAndReleases`,
+  `DeadMemberDropsOnlyItsSlotFromAdmittedArtifact`). Committed `e8408d1`. Gates: Unit 473 /
+  Sim 57 / Determinism 48, zero failures (All profile). Full ruling in
+  `.agents/DECISION_FROZEN_CONFLICT_POLICY.md`.
+- **Line/corridor targeter — both capture modes first-class** (RJ: drag-line and multi-click
+  polyline are different use cases needing equal support): `USeinLineTargeterSpec`
+  (CaptureMode Drag/MultiClick, Width, MaxSegmentLength, FinishClickTolerance; TargetCount =
+  segments), uniform segment encoding on the existing `TargeterPoints` wire field (no protocol
+  change), `ASeinLineTargeterPreview` rectangle-decal preview with committed-segment
+  accumulation via the new `NotifyPointCaptured` preview hook, subsystem drag + chained
+  multi-click capture paths. Details in `.agents/DECISION_TARGETER_LINE_CORRIDOR.md`.
+
+PIE batch for RJ now additionally includes: frozen-destination policy-D feel (contended orders,
+mid-order member death), line targeter drag + multi-click UX and preview visuals.
+
+### Overnight autonomous wave (2026-08-15 → 16, RJ asleep, latest)
+
+All work below is committed on `codex/feat03-frozen-destinations`; no product decisions were made.
+
+- **Policy-D red-team fix** (`5a89b9c`): the adversarial pass found one real PRE-EXISTING hole —
+  a queued order onto a shared ephemeral broker with reordered re-selection stored its artifact in
+  click order while the restore preflight validates broker order; snapshots would fail restore.
+  Fixed by re-keying the artifact to broker member order at the queue site; regression
+  `ReorderedReselectionQueuedArtifactSurvivesRestore`. Customer docs aligned to policy D in the
+  same commit.
+- **Corridor-fit validation** (`ffed7a4`): the line targeter now samples the segment centerline +
+  corridor edges against the sim's `DynamicPassableResolver` (blocked line → Blocked, pinched
+  lane → Warning; per-spec `bValidateCorridorFit` opt-out for over-wall abilities). Closes the
+  targeter row's last non-PIE remainder.
+- **Movement+ vehicle scale curve** (`cf0f633`): new `SeinARTS.Perf.MovementPlus.Scale` — mixed
+  wheeled/tracked columns crossing an open field through real A* + maneuver planning + steering +
+  avoidance + collision: 3.254/7.214/14.225 ms medians at 100/200/400 vehicles, near-linear,
+  within the 30 Hz budget. First automated vehicle scale evidence.
+- **Docs product content-complete** (`6f72b92` + tutorials commit): extension deep-dives
+  (Squads, Cover, Movement+) plus Authoring Abilities and Balance Data guides authored from live
+  code and cross-verified (settings paths, display names, tint-map behavior corrected during
+  review). OPEN_RISKS docs row now lists only the per-release human accuracy proofread.
+- **Stage-4 fork drafted for RJ**: `.agents/DECISION_ONLINE_SERVICES_SCOPE.md` — A (declare out
+  of 1.0 scope) / B (freeze backend-neutral contracts + loopback adapter only; recommended) /
+  C (reference vendor stack; not recommended). Awaiting ruling.
+- **Gates re-run on the branch tip**: All profile Unit 476 / Sim 57 / Determinism 48; Framework
+  profile Unit 458 / Sim 50 / Determinism 38 (floors raised to 476/458 at `887630d`); Shipping
+  config build green; fresh-process serial/parallel A/B 120/120; replay operational soak green.
+
+### RJ's chat rulings implemented (2026-08-16 morning, latest)
+
+RJ ruled on the three presented decisions in chat (his standing preference: decisions are
+presented in chat with options, never only filed in `.agents/`):
+
+- **Squad destruction refunds — designer toggle** (`a97a0a2`): per-squad authored
+  `Reinforce Refund On Destruction` (Refund default / Forfeit / PartialRefund with tunable
+  fraction), settled by the deterministic teardown sweep reading the core-owned squad component.
+  Snapshot v16→17 (component layout change; envelope `SnapshotSemanticsVersion` bumped in
+  lockstep, frozen-framing test constants regenerated deliberately, tests renamed V17).
+  Regression: `SquadDestructionSettlesQueuedChargesPerAuthoredPolicy` (all three policies).
+- **Team vision — team seeding default + runtime asymmetric updates via BP** (`51524b4`):
+  Grant/Revoke Pair Capability nodes added to the ability/effect-restricted Sim Mutation Library
+  (player-driven diplomacy routes through abilities; MatchControl wire command remains for
+  admin/scenario tooling). Multiplayer guide gained a Teams and Shared Vision section.
+- **Online services scope — PARKED with context**: RJ hasn't dived in; targets are Steam + Epic
+  (Steamworks/EOS), and he envisions a first-party "SeinARTS Online Services (SOS)" extension for
+  replay/match/stats. Reopen with Steamworks/EOS-shaped options when he's ready
+  (`.agents/DECISION_ONLINE_SERVICES_SCOPE.md`).
+
+Gates after both rulings: Unit 477 / Sim 57 / Determinism 48 / Integration 26 (All profile),
+envelope suite 5/5 with regenerated frozen bytes, fresh-process serial/parallel A/B 120/120.
+NOTE for PIE: pre-v17 saved snapshots/replays fail closed against this branch (intended).
+
+### Combat substrate module (2026-08-16, latest)
+
+RJ ruled combat belongs in its own framework-root module (not an extension) and ruled the three
+mechanism forks in chat (instant default delivery; acquisition = query service + stance ability,
+no always-on loop; projectiles = real pooled entities). Shipped as `SeinARTSCombat`, the 13th
+framework module (`fbc6d4e` + hardening `6df189e`):
+
+- **Mechanisms** (framework, genre-free): vitals (seed-once, armor tags, regen, zero-always-dies
+  guard), deterministic damage resolution + canonical-order splash, weapon slots with
+  cooldown/magazine/reload cycling, the fire gate (range/arc/fog-LoS), instant + projectile
+  delivery (projectiles are real entities — snapshot/replay/interception free), on-demand target
+  query service (range/arc/tag/LoS gates, stable-sorted scoring).
+- **Policy seams** (Blueprint): `USeinDamageFormula` and `USeinTargetScorer` stateless CDO
+  classes resolved by soft path (empty = neutral built-ins); starter `USeinAbility_Attack` +
+  restricted Fire Weapon At / Apply Damage / Apply Heal mutation nodes.
+- **Red-team pass** (4 findings, all fixed): CanActivate ran before target assignment (starter
+  gate now arms-only); scripted zero-health could silently re-seed to full (seed-once flag +
+  zero-always-dies); projectile hash omitted the mutable aim point; per-tick mutable-fetch churn
+  (gathers now filter to handles that actually change).
+- **Gates**: All profile Unit 477 / Sim 63 / Determinism 48 / Integration 26; Framework profile
+  Sim 56 / Determinism 38; Shipping build; fresh-process serial/parallel A/B 120/120. Customer
+  guide at `Docs/Guides/Combat.md`. New tick systems: WeaponCycle (PreTick 11), ProjectileFlight
+  (AbilityExecution 20).
+- **Deferred, recorded**: armed-population scale curve (upgrade the combat-scale workload),
+  spatial indexing for acquisition if that curve demands it, burst/wind-up cycling fields,
+  sim-side on-kill hooks for veterancy (kill events are presentation-side today).
+
+Still RJ's: the PIE batch (now including combat feel: starter attack, projectiles, splash,
+armor/formula authoring), the remaining decision memos (online scope parked; squad
+wipe/recreation/retreat UX; flight/vehicle feel defaults; host-migration topology; co-op
+persistence; adaptive input delay), pushes/merge, and the external dedicated-server CI gate.
+
 **State date:** 2026-08-14
 **Baseline branch:** `main`
 **Stabilization commit:** `27cb490` (`Stabilize post-audit performance and determinism`)
@@ -724,7 +928,7 @@ group exclusion; Framework Unit 413/413, Integration 16/16, Determinism 30/30, a
 Squad reinforcement now treats the slot declaration index as exact runtime identity and tags as
 canonical query metadata. Requests carry monotonic IDs plus snapshotted payer/cost, enqueue is
 atomic, cancellation exactly reverses the committed deduction, and completion maintains slot,
-member, broker, leader, cache, and cooldown invariants. Snapshot v15 preflight rejects allocator,
+member, broker, leader, cache, and cooldown invariants. Snapshot v16 preflight rejects allocator,
 queue, slot, member, or broker drift before commit. Canonical tag selection uses exact lexical tag
 names in runtime and restore validation, existing squad brokers cannot self-cull ahead of paid
 queues, and charge/refund arithmetic rejects malformed or overflowing fixed-point operations

@@ -2171,8 +2171,19 @@ bool USeinWorldSubsystem::VerifyIncrementalCanonicalStateRoot(
 	FGuid& OutRoot,
 	FString& OutError) const
 {
+	bool bMismatch = false;
+	return VerifyIncrementalCanonicalStateRootDetailed(
+		OutRoot, OutError, bMismatch);
+}
+
+bool USeinWorldSubsystem::VerifyIncrementalCanonicalStateRootDetailed(
+	FGuid& OutRoot,
+	FString& OutError,
+	bool& bOutMismatch) const
+{
 	OutRoot.Invalidate();
 	OutError.Reset();
+	bOutMismatch = false;
 	FGuid IncrementalRoot;
 	if (!SealRoutineCanonicalStateRoot(
 			CurrentTick,
@@ -2193,6 +2204,7 @@ bool USeinWorldSubsystem::VerifyIncrementalCanonicalStateRoot(
 	}
 	if (IncrementalRoot != RebuiltRoot)
 	{
+		bOutMismatch = true;
 		OutError = FString::Printf(
 			TEXT("Incremental canonical root %s disagrees with forced rebuild %s at tick %d."),
 			*IncrementalRoot.ToString(EGuidFormats::Digits),

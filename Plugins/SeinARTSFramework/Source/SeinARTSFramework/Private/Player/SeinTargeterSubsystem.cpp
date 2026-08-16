@@ -7,9 +7,11 @@
 
 #include "Player/SeinTargeterSubsystem.h"
 #include "Player/SeinPlayerController.h"
+#include "Simulation/SeinWorldSubsystem.h"
 #include "Targeter/SeinTargeterPreview.h"
 #include "Targeter/SeinPointTargeterPreview.h"
 #include "Targeter/SeinPointFacingTargeterPreview.h"
+#include "Targeter/SeinLineTargeterPreview.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
@@ -108,6 +110,11 @@ void USeinTargeterSubsystem::Activate(USeinTargeterSpec* InSpec, FGameplayTag In
 		{
 			PreviewClass = ASeinPointFacingTargeterPreview::StaticClass();
 		}
+		if (PreviewClass == ASeinPointTargeterPreview::StaticClass()
+			&& Spec->IsA<USeinLineTargeterSpec>())
+		{
+			PreviewClass = ASeinLineTargeterPreview::StaticClass();
+		}
 
 		// SpawnActorDeferred (NOT SpawnActor) so we can call InitializePreview
 		// to wire up Spec + AreaRadius BEFORE BeginPlay fires. With normal
@@ -189,6 +196,14 @@ void USeinTargeterSubsystem::OnConfirmPressed()
 		return;
 	}
 
+	// Chained-polyline line spec: clicks plant vertices; every click after the
+	// first commits one segment.
+	if (IsMultiClickLineSpec())
+	{
+		HandleMultiClickPress();
+		return;
+	}
+
 	// Non-drag spec — same behavior as before: optional strict-click block,
 	// then immediate capture.
 	if (Spec->bRejectClickWhenBlocked)
@@ -221,7 +236,9 @@ void USeinTargeterSubsystem::OnConfirmReleased()
 	{
 		const FFixedVector AnchorFixed = ToFixed(DragAnchorWorld);
 		const FFixedVector CursorFixed = ToFixed(LastCursorWorld);
-		const ESeinTargeterValidity Validity = Spec->ValidateClient(AnchorFixed, CursorFixed);
+		const ESeinTargeterValidity Validity = CombineValidity(
+			Spec->ValidateClient(AnchorFixed, CursorFixed),
+			EvaluateCorridorFit(DragAnchorWorld, LastCursorWorld));
 		if (Validity == ESeinTargeterValidity::Blocked)
 		{
 			// Rejected — return to WaitingForCapture so the player can retry.
@@ -261,15 +278,106 @@ void USeinTargeterSubsystem::UpdateCursor(const FVector& CursorWorld)
 	// Validation context differs by state:
 	//   - WaitingForCapture: validate at the cursor position (anchor candidate)
 	//   - Dragging: validate at the locked anchor with cursor as drag end
-	const FFixedVector PrimaryFixed = (State == ESeinTargeterState::Dragging)
-		? ToFixed(DragAnchorWorld) : ToFixed(CursorWorld);
-	const FFixedVector AuxFixed = (State == ESeinTargeterState::Dragging)
+	//   - MultiClick with a planted vertex: validate the in-progress segment
+	//     (previous vertex → cursor), same shape as Dragging
+	const bool bSegmentInProgress = State == ESeinTargeterState::Dragging
+		|| bHasPolylineAnchor;
+	const FVector SegmentStart = State == ESeinTargeterState::Dragging
+		? DragAnchorWorld : PolylineAnchorWorld;
+	const FFixedVector PrimaryFixed = bSegmentInProgress
+		? ToFixed(SegmentStart) : ToFixed(CursorWorld);
+	const FFixedVector AuxFixed = bSegmentInProgress
 		? ToFixed(CursorWorld) : FFixedVector();
-	const ESeinTargeterValidity Validity = Spec->ValidateClient(PrimaryFixed, AuxFixed);
+	ESeinTargeterValidity Validity = Spec->ValidateClient(PrimaryFixed, AuxFixed);
+	if (bSegmentInProgress)
+	{
+		Validity = CombineValidity(
+			Validity, EvaluateCorridorFit(SegmentStart, CursorWorld));
+	}
 
-	const FVector AnchorForPreview = State == ESeinTargeterState::Dragging
-		? DragAnchorWorld : FVector::ZeroVector;
+	const FVector AnchorForPreview = bSegmentInProgress
+		? SegmentStart : FVector::ZeroVector;
 	Preview->UpdatePreview(CursorWorld, AnchorForPreview, Validity, SnappedYawDegrees);
+}
+
+void USeinTargeterSubsystem::HandleMultiClickPress()
+{
+	const USeinLineTargeterSpec* LineSpec = Cast<USeinLineTargeterSpec>(Spec);
+	if (!LineSpec) { ResetToIdle(); return; }
+
+	// First click plants the start vertex — no segment exists yet. Strict
+	// specs still gate the vertex itself.
+	if (!bHasPolylineAnchor)
+	{
+		if (LineSpec->bRejectClickWhenBlocked)
+		{
+			const ESeinTargeterValidity Validity = LineSpec->ValidateClient(
+				ToFixed(LastCursorWorld), FFixedVector());
+			if (Validity == ESeinTargeterValidity::Blocked)
+			{
+				UE_LOG(LogSeinTargeter, Verbose,
+					TEXT("Polyline first-vertex rejected (Blocked) for %s."),
+					*PendingAbilityTag.ToString());
+				return;
+			}
+		}
+		PolylineAnchorWorld = LastCursorWorld;
+		bHasPolylineAnchor = true;
+		UE_LOG(LogSeinTargeter, Verbose,
+			TEXT("Polyline started for %s at (%.1f, %.1f, %.1f)"),
+			*PendingAbilityTag.ToString(), PolylineAnchorWorld.X,
+			PolylineAnchorWorld.Y, PolylineAnchorWorld.Z);
+		return;
+	}
+
+	// Clicking on (near) the previous vertex finishes early with the segments
+	// placed so far — the variable-length trench UX.
+	if (CapturedPoints.Num() > 0
+		&& FVector::Dist2D(LastCursorWorld, PolylineAnchorWorld)
+			<= LineSpec->FinishClickTolerance)
+	{
+		UE_LOG(LogSeinTargeter, Verbose,
+			TEXT("Polyline finished early for %s with %d segment(s)."),
+			*PendingAbilityTag.ToString(), CapturedPoints.Num());
+		Submit();
+		return;
+	}
+
+	if (LineSpec->bRejectClickWhenBlocked)
+	{
+		const ESeinTargeterValidity Validity = CombineValidity(
+			LineSpec->ValidateClient(
+				ToFixed(PolylineAnchorWorld), ToFixed(LastCursorWorld)),
+			EvaluateCorridorFit(PolylineAnchorWorld, LastCursorWorld));
+		if (Validity == ESeinTargeterValidity::Blocked)
+		{
+			UE_LOG(LogSeinTargeter, Verbose,
+				TEXT("Polyline segment rejected (Blocked) for %s; vertex not planted."),
+				*PendingAbilityTag.ToString());
+			return;
+		}
+	}
+
+	// Commit the chained segment {previous vertex, clicked vertex} and roll
+	// the anchor forward. Same {Location, AuxLocation} encoding as drag mode,
+	// so ability code never cares which interaction produced the segment.
+	FSeinTargeterPoint Point;
+	Point.Location = ToFixed(PolylineAnchorWorld);
+	Point.AuxLocation = ToFixed(LastCursorWorld);
+	CapturedPoints.Add(Point);
+	if (Preview)
+	{
+		Preview->NotifyPointCaptured(PolylineAnchorWorld, LastCursorWorld);
+	}
+	UE_LOG(LogSeinTargeter, Verbose,
+		TEXT("Captured polyline segment %d/%d for %s"),
+		CapturedPoints.Num(), Spec->TargetCount, *PendingAbilityTag.ToString());
+	PolylineAnchorWorld = LastCursorWorld;
+
+	if (CapturedPoints.Num() >= Spec->TargetCount)
+	{
+		Submit();
+	}
 }
 
 void USeinTargeterSubsystem::CapturePoint()
@@ -280,6 +388,10 @@ void USeinTargeterSubsystem::CapturePoint()
 	Point.Location = ToFixed(LastCursorWorld);
 	// PointTargeterSpec leaves AuxLocation + RotationStep at defaults.
 	CapturedPoints.Add(Point);
+	if (Preview)
+	{
+		Preview->NotifyPointCaptured(LastCursorWorld, LastCursorWorld);
+	}
 
 	UE_LOG(LogSeinTargeter, Verbose,
 		TEXT("Captured point %d/%d for %s at (%.1f, %.1f, %.1f)"),
@@ -307,6 +419,10 @@ void USeinTargeterSubsystem::CaptureDragPoint()
 	Point.RotationStep = SnappedStepIndex;
 	Point.YawDegrees = FFixedPoint::FromFloat(SnappedYawDegrees);
 	CapturedPoints.Add(Point);
+	if (Preview)
+	{
+		Preview->NotifyPointCaptured(DragAnchorWorld, LastCursorWorld);
+	}
 
 	UE_LOG(LogSeinTargeter, Verbose,
 		TEXT("Captured drag point %d/%d for %s at anchor (%.1f, %.1f, %.1f) yaw=%.1f° step=%d"),
@@ -375,9 +491,91 @@ void USeinTargeterSubsystem::ComputeDragRotation(float& OutSnappedYawDegrees, ui
 
 bool USeinTargeterSubsystem::IsDragSpec() const
 {
-	// Point-plus-facing is the only shipped drag spec. Future drag shapes must
-	// opt in here when their capture contract is implemented.
-	return Spec && Spec->IsA<USeinPointFacingTargeterSpec>();
+	if (!Spec) return false;
+	if (Spec->IsA<USeinPointFacingTargeterSpec>()) return true;
+	const USeinLineTargeterSpec* LineSpec = Cast<USeinLineTargeterSpec>(Spec);
+	return LineSpec
+		&& LineSpec->CaptureMode == ESeinLineTargeterCapture::Drag;
+}
+
+bool USeinTargeterSubsystem::IsMultiClickLineSpec() const
+{
+	const USeinLineTargeterSpec* LineSpec = Cast<USeinLineTargeterSpec>(Spec);
+	return LineSpec
+		&& LineSpec->CaptureMode == ESeinLineTargeterCapture::MultiClick;
+}
+
+ESeinTargeterValidity USeinTargeterSubsystem::CombineValidity(
+	ESeinTargeterValidity A, ESeinTargeterValidity B)
+{
+	if (A == ESeinTargeterValidity::Blocked
+		|| B == ESeinTargeterValidity::Blocked)
+	{
+		return ESeinTargeterValidity::Blocked;
+	}
+	if (A == ESeinTargeterValidity::Warning
+		|| B == ESeinTargeterValidity::Warning)
+	{
+		return ESeinTargeterValidity::Warning;
+	}
+	return ESeinTargeterValidity::Valid;
+}
+
+ESeinTargeterValidity USeinTargeterSubsystem::EvaluateCorridorFit(
+	const FVector& StartWorld, const FVector& EndWorld) const
+{
+	const USeinLineTargeterSpec* LineSpec = Cast<USeinLineTargeterSpec>(Spec);
+	if (!LineSpec || !LineSpec->bValidateCorridorFit)
+	{
+		return ESeinTargeterValidity::Valid;
+	}
+	const UWorld* World = GetWorld();
+	USeinWorldSubsystem* Sim =
+		World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
+	// Unbound resolver = nav-less world (or tests): no opinion, stay Valid —
+	// mirrors the sim's own "permit if no resolver" default.
+	if (!Sim || !Sim->DynamicPassableResolver.IsBound())
+	{
+		return ESeinTargeterValidity::Valid;
+	}
+
+	const FVector Delta = EndWorld - StartWorld;
+	const float Length = Delta.Size2D();
+	if (Length < KINDA_SMALL_NUMBER)
+	{
+		return ESeinTargeterValidity::Valid;
+	}
+	const FVector Dir = Delta.GetSafeNormal2D();
+	const FVector Perp(-Dir.Y, Dir.X, 0.0f);
+	const float HalfWidth = LineSpec->Width.ToFloat() * 0.5f;
+
+	// ~1 m sampling, hard-capped so a cross-map drag stays cheap per tick.
+	constexpr float SampleSpacing = 100.0f;
+	constexpr int32 MaxSteps = 64;
+	const int32 Steps = FMath::Clamp(
+		FMath::CeilToInt(Length / SampleSpacing), 1, MaxSteps);
+
+	ESeinTargeterValidity Result = ESeinTargeterValidity::Valid;
+	for (int32 Index = 0; Index <= Steps; ++Index)
+	{
+		const FVector Center =
+			StartWorld + Dir * (Length * Index / Steps);
+		if (!Sim->DynamicPassableResolver.Execute(ToFixed(Center)))
+		{
+			// The line itself crosses impassable ground.
+			return ESeinTargeterValidity::Blocked;
+		}
+		if (HalfWidth > 0.0f
+			&& (!Sim->DynamicPassableResolver.Execute(
+					ToFixed(Center + Perp * HalfWidth))
+				|| !Sim->DynamicPassableResolver.Execute(
+					ToFixed(Center - Perp * HalfWidth))))
+		{
+			// Corridor edge clips impassable cells — the lane pinches.
+			Result = ESeinTargeterValidity::Warning;
+		}
+	}
+	return Result;
 }
 
 void USeinTargeterSubsystem::Submit()
@@ -439,6 +637,8 @@ void USeinTargeterSubsystem::ResetToIdle()
 	DragAnchorWorld = FVector::ZeroVector;
 	SnappedYawDegrees = 0.0f;
 	SnappedStepIndex = 0;
+	PolylineAnchorWorld = FVector::ZeroVector;
+	bHasPolylineAnchor = false;
 	SetState(ESeinTargeterState::Idle);
 }
 

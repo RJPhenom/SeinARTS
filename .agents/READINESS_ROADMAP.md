@@ -2,6 +2,17 @@
 
 The north star is a native Unreal AAA RTS development experience: designer-first Blueprint authoring over a deterministic, modular, multiplayer-ready C++ foundation. Flexibility, extension stripping, exact state, and good development ergonomics are requirements, not later polish.
 
+The framework never decides which type of RTS a game is — that is the consuming game's call
+(the host WARSEIN project's own game is squad-tactical-inspired; the framework must equally
+support massive-scale designs, so mechanisms are sized for the largest scale). The combat
+substrate SHIPPED 2026-08-16 as the 13th framework module (`SeinARTSCombat`): vitals + damage
+resolution with a Blueprint formula policy seam, weapon cycling, an on-demand target query
+service with a Blueprint scorer seam, instant + projectile-entity delivery, and starter
+attack content — mechanisms only; feel stays designer-authored (see `Docs/Guides/Combat.md`).
+Remaining under the any-design standard: combat-at-scale evidence (armed population curves),
+spatial indexing for acquisition if that curve demands it, and proving the economy loops
+(harvest/dropoff, worker construction) as authored loops.
+
 This order minimizes rework. Do not start a later stage by weakening an earlier contract.
 
 ## 1. Stabilize and clean the shared baseline
@@ -183,13 +194,14 @@ StateContract. Cover uses the keyed registry, and all shipped movement/collision
 composed authority result. The legacy position-only hook remains compatibility-only and is not a
 shipping integration surface; deterministic bootstrap rejects it while bound.
 
-Remaining FEAT-03 work:
-
-- Aggregate ordinary and persistent-Squad destinations through one context-rich selection plan.
-- Carry the exact preview artifact into deterministic command admission.
-- Add explicit reservations and lifecycle for cancel, failure, death, provider movement/destruction,
-  snapshot, replay, reconnect, and queued orders.
-- Freeze the conflict policy: exact artifact rejection versus an explicitly approved preview-changing fallback.
+FEAT-03 is landed and closed (2026-08-15): selection-wide destination plans aggregate ordinary
+and persistent-Squad members through the selection-plan provider seam; the exact preview artifact
+rides command admission; reservations have a full queued→settled lifecycle across cancel,
+failure, death, provider movement/destruction, snapshot, replay, and reconnect; and RJ froze the
+conflict policy as policy D — survivors always receive their exact shown destinations, dead
+members drop only their own slot, contention never rejects or re-plans
+(`.agents/DECISION_FROZEN_CONFLICT_POLICY.md`, BrokerOrder schema V3). PIE feel remains in RJ's
+batch.
 
 Squad reinforcement request identity, exact slot selection, atomic charge, exact cancel/refund,
 completion membership, structural restore admission, and snapshot continuation are complete.
@@ -206,7 +218,9 @@ tactics coverage.
   team/shared vision is complete through command timing, cache validation, canonical lifecycle,
   packaged reconnect, and replay. The FoW sharing consumer and its designer policy remain the next
   explicit layer.
-- Line/corridor targeters needed by tactical weapons and formations.
+- Line/corridor targeters shipped 2026-08-15 (`USeinLineTargeterSpec`: drag and multi-click both
+  first-class per RJ's ruling; see `.agents/DECISION_TARGETER_LINE_CORRIDOR.md`). Remaining:
+  footprint-aware corridor-fit validation and PIE feel.
 - Containment structural integrity is complete: admission prevents cycles and overflow, reciprocal
   load/slot/attachment state fails closed at bootstrap and canonical/checkpoint boundaries, malformed
   restores are failure-atomic, and fresh-world mutation continuation is exact. Test-only

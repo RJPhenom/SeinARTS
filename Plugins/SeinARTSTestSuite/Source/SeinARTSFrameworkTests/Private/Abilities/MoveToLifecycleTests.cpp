@@ -3,8 +3,11 @@
 
 #include "Actions/SeinMoveToAction.h"
 #include "Components/SeinAbilityComponent.h"
+#include "Components/SeinBrokerMembershipData.h"
+#include "Components/SeinCommandBrokerData.h"
 #include "Components/SeinMovementComponent.h"
 #include "Components/SeinNavigationComponent.h"
+#include "Formations/SeinFormation.h"
 #include "Lib/SeinAbilityBPFL.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
 #include "Simulation/SeinTestSimContext.h"
@@ -217,6 +220,10 @@ namespace
 		USeinMoveToProxy* Proxy = nullptr;
 		USeinMoveToLifecycleTestObserver* Observer = nullptr;
 		FSeinEntityHandle Entity;
+		FFixedVector Destination = FFixedVector(
+			FFixedPoint::FromInt(100),
+			FFixedPoint::Zero,
+			FFixedPoint::Zero);
 		int32 AbilityID = INDEX_NONE;
 
 		bool Initialize(
@@ -285,10 +292,7 @@ namespace
 			Action->OwningAbility = Ability;
 			Action->OwnerEntity = Entity;
 			Action->Observer = Proxy;
-			Action->Initialize(FFixedVector(
-				FFixedPoint::FromInt(100),
-				FFixedPoint::Zero,
-				FFixedPoint::Zero));
+			Action->Initialize(Destination);
 
 			Observer->Ability = Ability;
 			Observer->Action = Action;
@@ -323,6 +327,43 @@ namespace
 			{
 				SimEntity->Transform.SetLocation(Location);
 			}
+		}
+
+		FSeinEntityHandle SeedFrozenDestinationLifecycle()
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+			const FSeinEntityHandle Broker = World->SpawnAbstractEntity(
+				FFixedTransform(), FSeinPlayerID::Neutral());
+			if (!Broker.IsValid()) return Broker;
+
+			const FFixedPoint Radius =
+				USeinFormation::GetFootprintRadius(World, Entity);
+			FSeinFrozenDestination Previous;
+			Previous.Member = Entity;
+			Previous.WorldPosition = FFixedVector::ZeroVector;
+			Previous.FootprintRadius = Radius;
+			Previous.bReserveFootprint = true;
+			Previous.SourceEntity = Broker;
+			Previous.SourceIndex = 0;
+
+			FSeinFrozenDestination Next = Previous;
+			Next.WorldPosition = Destination;
+			Next.SourceIndex = 1;
+
+			FSeinBrokerQueuedOrder Order;
+			Order.DestinationArtifact.Add(Next);
+			Order.bIsExecuting = true;
+			Order.LastDispatchTick = World->GetCurrentTick();
+			FSeinCommandBrokerData BrokerData;
+			BrokerData.Members.Add(Entity);
+			BrokerData.OrderQueue.Add(Order);
+			BrokerData.SettledDestinationArtifact.Add(Previous);
+			World->AddComponent(Broker, BrokerData);
+
+			FSeinBrokerMembershipData Membership;
+			Membership.CurrentBrokerHandle = Broker;
+			World->AddComponent(Entity, Membership);
+			return Broker;
 		}
 	};
 }
@@ -846,5 +887,88 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(Fixture.Action->bFailed));
 		ASSERT_THAT(AreEqual(
 			1, USeinMoveToLifecycleTestMovement::TickCount));
+	}
+
+	TEST(MoveToExactArrivalTransitionsFrozenDestinationClaim,
+		"SeinARTS.Sim.Movement.FrozenDestination")
+	{
+		FScopedMoveToTestState Reset;
+		FSeinNavigationComponent Navigation;
+		Navigation.FallbackFootprintRadius = FFixedPoint::FromInt(25);
+		FMoveToLifecycleFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(true, &Navigation)));
+		const FSeinEntityHandle Broker =
+			Fixture.SeedFrozenDestinationLifecycle();
+		ASSERT_THAT(IsTrue(Broker.IsValid()));
+
+		Fixture.Tick();
+
+		const FSeinCommandBrokerData* BrokerData =
+			Fixture.World->GetComponent<FSeinCommandBrokerData>(Broker);
+		ASSERT_THAT(IsNotNull(BrokerData));
+		ASSERT_THAT(AreEqual(
+			1, BrokerData->SettledDestinationArtifact.Num()));
+		ASSERT_THAT(IsTrue(
+			BrokerData->SettledDestinationArtifact[0].WorldPosition
+				== Fixture.Destination));
+	}
+
+	TEST(MoveToInitialPathFailureKeepsSettledFrozenDestination,
+		"SeinARTS.Sim.Movement.FrozenDestination")
+	{
+		FScopedMoveToTestState Reset;
+		FSeinNavigationComponent Navigation;
+		Navigation.FallbackFootprintRadius = FFixedPoint::FromInt(25);
+		USeinMoveToLifecycleTestMovement::ScriptedPathResults = {
+			ESeinPathResult::NotFound
+		};
+		FMoveToLifecycleFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Navigation)));
+		const FSeinEntityHandle Broker =
+			Fixture.SeedFrozenDestinationLifecycle();
+		ASSERT_THAT(IsTrue(Broker.IsValid()));
+
+		Fixture.Tick();
+
+		ASSERT_THAT(IsTrue(Fixture.Action->bFailed));
+		const FSeinCommandBrokerData* BrokerData =
+			Fixture.World->GetComponent<FSeinCommandBrokerData>(Broker);
+		ASSERT_THAT(IsNotNull(BrokerData));
+		ASSERT_THAT(AreEqual(
+			1, BrokerData->SettledDestinationArtifact.Num()));
+		ASSERT_THAT(IsTrue(
+			BrokerData->SettledDestinationArtifact[0].WorldPosition
+				== FFixedVector::ZeroVector));
+	}
+
+	TEST(MoveToPartialCompletionDoesNotSettleFrozenDestination,
+		"SeinARTS.Sim.Movement.FrozenDestination")
+	{
+		FScopedMoveToTestState Reset;
+		FSeinNavigationComponent Navigation;
+		Navigation.FallbackFootprintRadius = FFixedPoint::FromInt(25);
+		Navigation.RepathMode = ESeinRepathMode::Interval;
+		Navigation.RepathInterval =
+			FFixedPoint::One / FFixedPoint::FromInt(16);
+		USeinMoveToLifecycleTestMovement::ScriptedPathResults = {
+			ESeinPathResult::Found,
+			ESeinPathResult::Found
+		};
+		USeinMoveToLifecycleTestMovement::bRepathPathsPartial = true;
+		FMoveToLifecycleFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(true, &Navigation)));
+		const FSeinEntityHandle Broker =
+			Fixture.SeedFrozenDestinationLifecycle();
+		ASSERT_THAT(IsTrue(Broker.IsValid()));
+
+		Fixture.Tick(Navigation.RepathInterval);
+
+		ASSERT_THAT(IsTrue(Fixture.Action->bCompleted));
+		ASSERT_THAT(IsFalse(Fixture.Action->bFailed));
+		const FSeinCommandBrokerData* BrokerData =
+			Fixture.World->GetComponent<FSeinCommandBrokerData>(Broker);
+		ASSERT_THAT(IsNotNull(BrokerData));
+		ASSERT_THAT(IsTrue(
+			BrokerData->SettledDestinationArtifact.IsEmpty()));
 	}
 }

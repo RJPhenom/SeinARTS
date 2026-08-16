@@ -62,6 +62,14 @@ bool USeinFogOfWarBPFL::SeinIsCellVisible(const UObject* WorldContextObject,
 
 	const uint8 Mask = static_cast<uint8>(1u << Bit);
 	const FFixedVector FixedPos = FFixedVector::FromVector(WorldPos);
+	// Shared-vision aware when a sim is available; plain per-observer read
+	// otherwise (no sim = no ledger to consume).
+	if (const USeinWorldSubsystem* Sim =
+			World->GetSubsystem<USeinWorldSubsystem>())
+	{
+		return (Fog->GetEffectiveCellBitfield(*Sim, Observer, FixedPos)
+			& Mask) != 0;
+	}
 	return Fog->IsCellVisible(Observer, FixedPos, Mask);
 }
 
@@ -70,7 +78,16 @@ bool USeinFogOfWarBPFL::SeinIsCellExplored(const UObject* WorldContextObject,
 {
 	USeinFogOfWar* Fog = USeinFogOfWarSubsystem::GetFogOfWarForWorld(WorldContextObject);
 	if (!Fog) return false;
-	return Fog->IsCellExplored(Observer, FFixedVector::FromVector(WorldPos));
+	const FFixedVector FixedPos = FFixedVector::FromVector(WorldPos);
+	UWorld* World = GEngine->GetWorldFromContextObject(
+		WorldContextObject, EGetWorldErrorMode::ReturnNull);
+	if (const USeinWorldSubsystem* Sim =
+			World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr)
+	{
+		return (Fog->GetEffectiveCellBitfield(*Sim, Observer, FixedPos)
+			& SEIN_FOW_BIT_EXPLORED) != 0;
+	}
+	return Fog->IsCellExplored(Observer, FixedPos);
 }
 
 uint8 USeinFogOfWarBPFL::SeinGetCellBitfield(const UObject* WorldContextObject,
@@ -78,7 +95,15 @@ uint8 USeinFogOfWarBPFL::SeinGetCellBitfield(const UObject* WorldContextObject,
 {
 	USeinFogOfWar* Fog = USeinFogOfWarSubsystem::GetFogOfWarForWorld(WorldContextObject);
 	if (!Fog) return 0;
-	return Fog->GetCellBitfield(Observer, FFixedVector::FromVector(WorldPos));
+	const FFixedVector FixedPos = FFixedVector::FromVector(WorldPos);
+	UWorld* World = GEngine->GetWorldFromContextObject(
+		WorldContextObject, EGetWorldErrorMode::ReturnNull);
+	if (const USeinWorldSubsystem* Sim =
+			World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr)
+	{
+		return Fog->GetEffectiveCellBitfield(*Sim, Observer, FixedPos);
+	}
+	return Fog->GetCellBitfield(Observer, FixedPos);
 }
 
 bool USeinFogOfWarBPFL::SeinIsEntityVisible(const UObject* WorldContextObject,

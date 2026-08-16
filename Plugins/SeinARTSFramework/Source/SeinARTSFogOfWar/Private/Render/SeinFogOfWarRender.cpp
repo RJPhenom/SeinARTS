@@ -5,6 +5,8 @@
 
 #include "Render/SeinFogOfWarRender.h"
 
+#include "Simulation/SeinWorldSubsystem.h"
+
 #include "Components/PostProcessComponent.h"
 #include "Engine/BlendableInterface.h"
 #include "Engine/Texture2D.h"
@@ -268,7 +270,18 @@ bool ASeinFogOfWarRender::RebuildTexture()
 	FFixedVector Origin = FFixedVector::ZeroVector;
 	FFixedPoint CellSize = FFixedPoint::Zero;
 	int32 W = 0, H = 0;
-	if (!Fog->GetObserverGrid(CachedObserver, Cells, Origin, CellSize, W, H)) return false;
+	// Shared-vision aware: the local observer's overlay reveals every cell any
+	// ShareVision-granting ally reveals. Identical to the plain grid when no
+	// grants target the observer.
+	const USeinWorldSubsystem* Sim = GetWorld()
+		? GetWorld()->GetSubsystem<USeinWorldSubsystem>()
+		: nullptr;
+	const bool bHaveGrid = Sim
+		? Fog->GetEffectiveObserverGrid(
+			*Sim, CachedObserver, Cells, Origin, CellSize, W, H)
+		: Fog->GetObserverGrid(
+			CachedObserver, Cells, Origin, CellSize, W, H);
+	if (!bHaveGrid) return false;
 	if (W <= 0 || H <= 0 || Cells.Num() != W * H) return false;
 
 	EnsureTexture(W, H);

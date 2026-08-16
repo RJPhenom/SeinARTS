@@ -130,6 +130,20 @@ public:
 		const TArray<FFixedVector>& GuidePoints,
 		FGameplayTag FormationTag);
 
+	/** Native preview/commit seam. Returns the same layout as the Blueprint
+	 *  preview API and also exposes the exact per-member artifact after all
+	 *  stable-ID selection providers have run. */
+	static FSeinFormationLayout ComputeFormationDestinationArtifact(
+		const UObject* WorldContextObject,
+		const TArray<FSeinEntityHandle>& Members,
+		FFixedVector TargetLocation,
+		const TArray<FFixedVector>& GuidePoints,
+		FGameplayTag FormationTag,
+		FSeinPlayerID OrderingPlayer,
+		bool bQueueCommand,
+		TArray<FSeinFrozenDestination>& OutDestinationArtifact,
+		bool* OutSucceeded = nullptr);
+
 	/** Per-broker formation anchors (internal C++ helper, NOT BP-exposed). Lays the persistent-broker
 	 *  (squad) entities out as ELEMENTS of the gesture `FormationTag` formation — each squad is one
 	 *  element, sized by its FSeinCommandBrokerData::FormationRadius (its whole footprint) via the same

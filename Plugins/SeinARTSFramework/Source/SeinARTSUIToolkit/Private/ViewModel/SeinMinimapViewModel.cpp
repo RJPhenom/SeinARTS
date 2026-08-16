@@ -235,9 +235,16 @@ void USeinMinimapViewModel::UpdateFogTexture()
 	FFixedPoint FogCellSize;
 	int32 FogWidth = 0;
 	int32 FogHeight = 0;
-	if (!Fog->GetObserverGrid(
-		Observer, FogCellScratch, FogOrigin, FogCellSize,
-		FogWidth, FogHeight)
+	// Shared-vision aware: minimap fog reveals what ShareVision allies reveal.
+	const USeinWorldSubsystem* Sim = W->GetSubsystem<USeinWorldSubsystem>();
+	const bool bHaveFogGrid = Sim
+		? Fog->GetEffectiveObserverGrid(
+			*Sim, Observer, FogCellScratch, FogOrigin, FogCellSize,
+			FogWidth, FogHeight)
+		: Fog->GetObserverGrid(
+			Observer, FogCellScratch, FogOrigin, FogCellSize,
+			FogWidth, FogHeight);
+	if (!bHaveFogGrid
 		|| FogWidth <= 0 || FogHeight <= 0
 		|| FogCellSize <= FFixedPoint::Zero)
 	{

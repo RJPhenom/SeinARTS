@@ -450,6 +450,7 @@ namespace SeinCommandBrokerDispatch
 		Input.PredeterminedAbilityTag = Order.PredeterminedAbilityTag;
 		Input.PreplacedMembers = Order.PreplacedMembers;
 		Input.PreplacedPositions = Order.PreplacedPositions;
+		Input.DestinationArtifact = Order.DestinationArtifact;
 
 		FDispatchPrecondition Precondition;
 		if (!CapturePrecondition(
@@ -586,14 +587,54 @@ public:
 			{
 				Broker->bCapabilityMapDirty = true;
 			}
-			for (FSeinBrokerQueuedOrder& Order : Broker->OrderQueue)
+			for (int32 OrderIndex = Broker->OrderQueue.Num() - 1;
+				OrderIndex >= 0; --OrderIndex)
 			{
-				if (Order.TargetMembers.Num() == 0) continue;
-				Order.TargetMembers.RemoveAll([&](const FSeinEntityHandle& M)
+				FSeinBrokerQueuedOrder& Order =
+					Broker->OrderQueue[OrderIndex];
+				if (Order.TargetMembers.Num() > 0)
 				{
-					return !World.GetEntityPool().IsValid(M);
-				});
+					Order.TargetMembers.RemoveAll([&](const FSeinEntityHandle& M)
+					{
+						return !World.GetEntityPool().IsValid(M)
+							|| !Broker->Members.Contains(M);
+					});
+					if (Order.TargetMembers.IsEmpty())
+					{
+						Broker->OrderQueue.RemoveAt(OrderIndex);
+						continue;
+					}
+				}
+				for (int32 PreplacedIndex =
+					Order.PreplacedMembers.Num() - 1;
+					PreplacedIndex >= 0; --PreplacedIndex)
+				{
+					const FSeinEntityHandle PreplacedMember =
+						Order.PreplacedMembers[PreplacedIndex];
+					if (!World.GetEntityPool().IsValid(PreplacedMember)
+						|| !Broker->Members.Contains(PreplacedMember)
+						|| (Order.TargetMembers.Num() > 0
+							&& !Order.TargetMembers.Contains(PreplacedMember)))
+					{
+						Order.PreplacedMembers.RemoveAt(PreplacedIndex);
+						Order.PreplacedPositions.RemoveAt(PreplacedIndex);
+					}
+				}
+				Order.DestinationArtifact.RemoveAll(
+					[&](const FSeinFrozenDestination& Entry)
+					{
+						return !World.GetEntityPool().IsValid(Entry.Member)
+							|| !Broker->Members.Contains(Entry.Member)
+							|| (Order.TargetMembers.Num() > 0
+								&& !Order.TargetMembers.Contains(Entry.Member));
+					});
 			}
+			Broker->SettledDestinationArtifact.RemoveAll(
+				[&](const FSeinFrozenDestination& Entry)
+				{
+					return !World.GetEntityPool().IsValid(Entry.Member)
+						|| !Broker->Members.Contains(Entry.Member);
+				});
 
 			// 2. Update centroid from live members.
 			if (Broker->Members.Num() > 0)

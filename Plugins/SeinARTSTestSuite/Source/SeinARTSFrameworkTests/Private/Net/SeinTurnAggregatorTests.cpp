@@ -81,12 +81,12 @@ namespace UE::SeinARTSTests
 	TEST(ProtocolContextHasCanonicalIdentityAndStrictValidity, "SeinARTS.Unit.Network.Protocol")
 	{
 		ASSERT_THAT(AreEqual(
-			12, FSeinProtocolContext::CurrentProtocolVersion));
+			13, FSeinProtocolContext::CurrentProtocolVersion));
 		const FSeinProtocolContext Context = MakeContext(7, 3);
 		ASSERT_THAT(IsTrue(Context.IsValid()));
 		ASSERT_THAT(AreEqual(
 			FString(TEXT(
-				"protocol=12 match=11111111-2222-2222-3333-333344444444 "
+				"protocol=13 match=11111111-2222-2222-3333-333344444444 "
 				"epoch=7 coordinator=aaaaaaaa-bbbb-bbbb-cccc-cccc00000001/3 "
 				"membership=1/55555555-6666-6666-7777-777788888888 "
 				"destination=09090909-1818-1818-2727-272736363636 "

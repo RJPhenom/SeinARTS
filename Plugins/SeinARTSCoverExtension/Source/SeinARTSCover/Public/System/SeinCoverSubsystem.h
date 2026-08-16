@@ -109,4 +109,5 @@ private:
 	FDelegateHandle DestroyedHandle;
 	FDelegateHandle RestoredHandle;
 	uint64 AuthoritativeDestinationProviderToken = 0;
+	uint64 SelectionDestinationPlanProviderToken = 0;
 };

@@ -183,6 +183,43 @@ public:
 		return (GetCellBitfield(Observer, WorldPos) & SEIN_FOW_BIT_EXPLORED) != 0;
 	}
 
+	// ----------------------------------------------------------------------
+	// Shared vision (pair-capability ShareVision consumer)
+	// ----------------------------------------------------------------------
+
+	/** Everyone whose VisionGroup `Observer` may consume: `Observer` first,
+	 *  then — only when any grant exists — every registered player A whose
+	 *  directional `A -> Observer` ShareVision pair capability is granted.
+	 *  Order beyond the leading self entry carries no meaning; every consumer
+	 *  composes commutatively (bitwise OR / any-of). Deterministic: the ledger
+	 *  is canonical sim state. An invalid Observer yields just itself (the
+	 *  permissive no-filtering convention is the caller's branch, as before). */
+	void GetEffectiveVisionSources(
+		const USeinWorldSubsystem& Sim,
+		FSeinPlayerID Observer,
+		TArray<FSeinPlayerID>& OutSources) const;
+
+	/** `GetCellBitfield` composed across `GetEffectiveVisionSources` — the
+	 *  shared-vision-aware point query render/UI consumers should prefer.
+	 *  Identical to the plain query when no ShareVision grant targets
+	 *  `Observer`. */
+	uint8 GetEffectiveCellBitfield(
+		const USeinWorldSubsystem& Sim,
+		FSeinPlayerID Observer,
+		const FFixedVector& WorldPos) const;
+
+	/** `GetObserverGrid` composed across `GetEffectiveVisionSources` (cell-wise
+	 *  OR). Same contract and layout as `GetObserverGrid`; identical output
+	 *  when no ShareVision grant targets `Observer`. */
+	bool GetEffectiveObserverGrid(
+		const USeinWorldSubsystem& Sim,
+		FSeinPlayerID Observer,
+		TArray<uint8>& OutCells,
+		FFixedVector& OutOrigin,
+		FFixedPoint& OutCellSize,
+		int32& OutWidth,
+		int32& OutHeight) const;
+
 	/** Whether the entity `Target` is currently visible to `Observer`. Single
 	 *  source of truth for the fog visibility decision — same check the
 	 *  `USeinFogOfWarVisibilitySubsystem` uses to toggle actor visibility,
