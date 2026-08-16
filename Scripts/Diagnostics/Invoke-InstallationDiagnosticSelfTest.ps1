@@ -172,3 +172,8 @@ finally {
 		Remove-Item -LiteralPath $ResolvedFixtureRoot -Recurse -Force
 	}
 }
+
+# The adversarial fixture above intentionally leaves $LASTEXITCODE = 1 from the
+# expected-failure diagnostic run; without an explicit success exit the caller
+# (Invoke-ReleaseGateStep) reads that stale code as this script's own failure.
+exit 0
