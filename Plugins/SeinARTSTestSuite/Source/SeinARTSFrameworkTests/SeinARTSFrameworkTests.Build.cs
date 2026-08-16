@@ -24,6 +24,7 @@ public class SeinARTSFrameworkTests : ModuleRules
 			"SeinARTSLevelData",
 			"SeinARTSNavigation",
 			"SeinARTSMovement",
+			"SeinARTSCombat",
 			"SeinARTSFogOfWar",
 			"SeinARTSNet",
 			"SeinARTSFramework",
