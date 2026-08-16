@@ -31,7 +31,10 @@ This is the actionable remainder after consolidating the historical audits. It i
    (zero-grant worlds take a fast path with legacy cost). Focused directional/revocation
    regression coverage exists. Remaining: team-vision UX policy (who may grant/revoke in
    gameplay), and PIE verification of the shared overlay/minimap presentation.
-4. Public targeting lacks the complete line/corridor/gesture policy surface needed by a modern tactical RTS.
+4. Line/corridor targeting shipped 2026-08-15 (RJ's ruling: drag-line and multi-click polyline are
+   both first-class, selectable per ability on `USeinLineTargeterSpec`; segments ride the existing
+   `TargeterPoints` wire field). Remaining: footprint-aware corridor validation ("does the lane
+   fit") and PIE feel/visual verification of the line preview.
 5. Movement+ needs the human behavior/performance, scale, true dedicated-server, and WAN/backend
    matrices. Typed render-only vehicle telemetry and a real packaged two-process listen-server flow
    through deterministic adverse latency/jitter/loss/duplication/reordering, resync, physical

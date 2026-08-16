@@ -1,49 +1,40 @@
-# DECISION REQUIRED — Line/Corridor Targeter Shape
+# DECIDED — Line/Corridor Targeter Shape
 
-**Status:** open product decision, reserved for RJ (OPEN_RISKS: "Public targeting lacks the
-complete line/corridor/gesture policy surface"; the targeter API shape is on the explicit
-product-decision list).
-**Implementation cost once decided:** small-to-medium — the targeter subsystem's drag machinery,
-validation flow, and preview-actor seam all exist; this adds one spec class + one preview actor.
+**Status:** DECIDED by RJ 2026-08-15, implemented same day (branch
+`codex/feat03-frozen-destinations`). PIE feel check batched.
 
-## The question
+## The ruling
 
-Point specs (click) and point-with-facing specs (building-placement holograms with yaw snapping)
-ship today. What is the authoring shape for LINE and CORRIDOR abilities — barrage lines, smoke
-walls, trench/wall construction, breach lanes?
+RJ rejected the framing that A (drag line), B (multi-click polyline), and C (drag with opt-in
+segments) are alternatives: they describe **different use cases that need equal support**. A
+click-click-click trench UX and a click-drag strafing-run UX are both first-class; the choice is
+per-ability.
 
-## Options
+## What shipped
 
-**A. One `LineTargeterSpec`: anchor-drag-end, authored width (0 = pure line).**
-Capture = press anchors, drag draws the line, release captures `{Start, End}`; the ability reads
-width from the spec. Corridors are just wide lines. Simplest API, one preview actor (rectangle
-decal), covers barrage/smoke/wall. Multi-segment shapes need repeated activations.
+One spec, both interactions:
 
-**B. Multi-point polyline spec: N clicks then confirm.**
-Covers trench networks and multi-segment walls in one activation; heavier capture UX (click …
-click, confirm/cancel), heavier validation (per-segment), and most RTS line abilities are single
-segments — the flexibility mostly taxes the common case.
+- **`USeinLineTargeterSpec`** (CoreEntity, `SeinTargeterSpec.h`) with:
+  - `CaptureMode` — `ESeinLineTargeterCapture::Drag` (press-anchor → drag → release captures the
+    segment; TargetCount independent gestures) or `MultiClick` (each click after the first commits
+    a segment chained from the previous vertex; early-finish by clicking within
+    `FinishClickTolerance` of the last vertex).
+  - `Width` (`FFixedPoint`, 0 = pure line) — corridor width for preview and gameplay; the ability
+    reads it off the spec CDO (identical on every client, so it never rides the wire).
+  - `MaxSegmentLength` (0 = unlimited) — `ValidateClient` reports Blocked beyond it; combine with
+    `bRejectClickWhenBlocked` for strict enforcement.
+  - `TargetCount` (inherited) is the segment count in both modes.
+- **Uniform wire encoding:** every captured `FSeinTargeterPoint` is one segment
+  (`Location` = start, `AuxLocation` = end) regardless of capture mode — ability `OnActivate`
+  logic never cares which interaction produced the segments. Rides the existing bounded
+  `TargeterPoints` field; **no protocol change**.
+- **`ASeinLineTargeterPreview`** (framework) — ground-projected rectangle decal stretched
+  anchor→cursor, width from the spec, validity tinting via the same `TintColor` MID contract as
+  the point preview. Committed segments stay visible as frozen decals during multi-segment
+  sessions via the new `ASeinTargeterPreview::NotifyPointCaptured`/`OnPointCaptured` hook
+  (BP-overridable). Per-ability visual swap via the spec's `PreviewClass`, as before.
+- **Subsystem:** line-Drag reuses the existing Dragging state; MultiClick chains vertices inside
+  `WaitingForCapture` with in-progress-segment validation and preview anchoring.
 
-**C. A with an optional per-spec `MaxSegments`: single-segment default, opt-in polyline.**
-The spec carries `Width` and `MaxSegments` (default 1). Segment capture loops exactly like the
-existing multi-target point loop already shipped. Slightly larger surface than A; B's capability
-without a second class.
-
-## Interactions either way
-
-- Captured points ride the existing `TargeterPoints` command field (fixed-point, already
-  wire-validated and bounded), so no protocol change.
-- Validation reuses the tri-state client validity flow (valid/warning/blocked) per segment;
-  footprint-aware corridor validation (does the lane fit) can come later without API change.
-- The preview actor seam is already pluggable; a rectangle/segments decal actor is the only new
-  render piece.
-
-## Recommendation
-
-**C** — it is A for every ability that wants A (the default), and the segment loop reuses shipped
-capture machinery rather than inventing a new interaction. Name the spec `LineTargeterSpec`,
-expose `Width` (0 = line) and `MaxSegments` (1 = classic drag-line), and ship the rectangle
-preview actor as the default with the usual Blueprint override path.
-
-**Decide A/B/C (or amend).** Nothing else blocks on this; it is the last unstarted item on the
-autonomous continuation queue.
+Deferred (recorded, non-blocking): footprint-aware corridor validation ("does the lane fit") can
+land later inside `ValidateClient`/server validation without any API change.

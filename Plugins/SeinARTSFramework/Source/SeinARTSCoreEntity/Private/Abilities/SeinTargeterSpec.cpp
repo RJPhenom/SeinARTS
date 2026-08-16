@@ -5,6 +5,7 @@
  */
 
 #include "Abilities/SeinTargeterSpec.h"
+#include "Types/Vector.h"
 
 // Note: ASeinTargeterPreview lives in the SeinARTSFramework module; CoreEntity
 // only knows the abstract base class via forward declaration in the header.
@@ -57,5 +58,39 @@ FSoftClassPath USeinPointFacingTargeterSpec::GetDefaultPreviewClass() const
 	// Same pattern as PointTargeterSpec — null path here, framework subsystem
 	// falls back to ASeinPointFacingTargeterPreview when neither the spec
 	// instance nor this default returns a class.
+	return FSoftClassPath();
+}
+
+USeinLineTargeterSpec::USeinLineTargeterSpec()
+{
+	// Combat-line defaults: one segment, permissive click-through (server
+	// rejects with reason feedback rather than eating the click). Trench-style
+	// abilities flip CaptureMode to MultiClick and raise TargetCount.
+	TargetCount = 1;
+	bRejectClickWhenBlocked = false;
+}
+
+ESeinTargeterValidity USeinLineTargeterSpec::ValidateClient_Implementation(
+	const FFixedVector& CursorWorld,
+	const FFixedVector& AuxWorld) const
+{
+	// Advisory client UX only (float math is fine here — the base-class
+	// contract documents ValidateClient as non-sim; the server re-validates).
+	// Before a segment exists (no aux point yet) there is nothing to check.
+	if (MaxSegmentLength <= FFixedPoint::Zero || AuxWorld.IsZero())
+	{
+		return ESeinTargeterValidity::Valid;
+	}
+	const float SegmentLength = static_cast<float>(
+		FVector::Dist2D(CursorWorld.ToVector(), AuxWorld.ToVector()));
+	return SegmentLength > MaxSegmentLength.ToFloat()
+		? ESeinTargeterValidity::Blocked
+		: ESeinTargeterValidity::Valid;
+}
+
+FSoftClassPath USeinLineTargeterSpec::GetDefaultPreviewClass() const
+{
+	// Null path — the framework subsystem falls back to
+	// ASeinLineTargeterPreview, keeping CoreEntity render-agnostic.
 	return FSoftClassPath();
 }

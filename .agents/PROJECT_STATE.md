@@ -92,6 +92,33 @@ and cover-assignment medians at baseline. Measured perf finding recorded in OPEN
 the dense-cover 128-member preview tripled to 9.9 ms median — a FEAT-03 provider cost, not a
 ShareVision cost — with a CPU trace captured for attribution.
 
+### RJ decisions implemented (same session, 2026-08-15, latest)
+
+Both open product decisions were ruled on and implemented on
+`codex/feat03-frozen-destinations`:
+
+- **Frozen-destination conflict policy — RJ policy D** ("units always do what the player was
+  shown"): admission drops only dead members' artifact entries; survivors keep exact displayed
+  destinations; world contention NEVER rejects or re-plans an order (double-claims coexist in the
+  ledger and resolve physically). Hostile-input validation stays strict (radius/provenance/
+  ownership/order/self-overlap). `BrokerOrder` schema bumped V2→V3 (behavior revision,
+  fail-closed vs old peers/replays); snapshot preflight relaxed to ordered-subset artifact↔member
+  alignment, with the same ordering enforced at admission. Tests flipped/added
+  (`FrozenDestinationAdmissionKeepsShownDestinationsAndReleases`,
+  `DeadMemberDropsOnlyItsSlotFromAdmittedArtifact`). Committed `e8408d1`. Gates: Unit 473 /
+  Sim 57 / Determinism 48, zero failures (All profile). Full ruling in
+  `.agents/DECISION_FROZEN_CONFLICT_POLICY.md`.
+- **Line/corridor targeter — both capture modes first-class** (RJ: drag-line and multi-click
+  polyline are different use cases needing equal support): `USeinLineTargeterSpec`
+  (CaptureMode Drag/MultiClick, Width, MaxSegmentLength, FinishClickTolerance; TargetCount =
+  segments), uniform segment encoding on the existing `TargeterPoints` wire field (no protocol
+  change), `ASeinLineTargeterPreview` rectangle-decal preview with committed-segment
+  accumulation via the new `NotifyPointCaptured` preview hook, subsystem drag + chained
+  multi-click capture paths. Details in `.agents/DECISION_TARGETER_LINE_CORRIDOR.md`.
+
+PIE batch for RJ now additionally includes: frozen-destination policy-D feel (contended orders,
+mid-order member death), line targeter drag + multi-click UX and preview visuals.
+
 **State date:** 2026-08-14
 **Baseline branch:** `main`
 **Stabilization commit:** `27cb490` (`Stabilize post-audit performance and determinism`)
