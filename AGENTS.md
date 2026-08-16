@@ -16,11 +16,9 @@ It owns the cross-cutting rules that apply to **all five production plugins** an
 
 > **Active initiative — movement & navigation depth.** The movement/avoidance/nav seams are clean and
 > pluggable (`USeinAvoidance` / `USeinCollisionResolver` / `USeinNavigation` abstract-base + settings
-> picker; the `FSeinPath` typed-segment seam). Command-broker idle re-seek, Move To's pre-movement
-> repath stage, the A* non-shipping path reporters, and the default avoidance kernel are now
-> isolated behind private implementation boundaries with focused coverage. The remaining active
-> work is qualification of Movement+'s
-> shipped steering-first, curated
+> picker; the `FSeinPath` typed-segment seam); current work is deflating localized bloat in a few
+> function bodies (A* diagnostics, the `TickAction` re-seek tangle, the avoidance kernel) without
+> redesigning the seams, plus qualification of Movement+'s shipped steering-first, curated
 > Reeds-Shepp-style start-maneuver planner. It is not a general Reeds-Shepp/Dubins route solver. The
 > nav↔movement seam is still evolving — re-ground against live code before asserting.
 
@@ -128,9 +126,13 @@ three opt-in extension plugins. The simulation layer runs entirely on fixed-poin
 (`FFixedPoint`, 32.32) for cross-platform bit-determinism. Unreal is the renderer — the sim never
 touches `float`, `AActor*`, or any non-deterministic UE system. Data flows one way: **sim → render**.
 
-The genre target is the squad-tactical RTS subgenre (squad + individual units, cover, terrain
-types, veterancy, tech upgrades, capture points, retreat). The framework itself stays
-genre-neutral; specifics are designer-authored in Blueprint.
+The goal is a production-grade framework supporting RTS games of ANY design — from squad-tactical
+(squads, cover, veterancy, capture points, retreat) through classic worker-economy base-builders,
+fast arcade base-building, and massive-scale streaming-economy warfare with thousands of units.
+Squad-tactical was the first vertical built out (hence the opt-in Squad/Cover extensions), but it
+is an archetype, not the target: mechanisms must be engineered for the largest scale, policies
+must be authorable for every feel. The framework itself stays genre-neutral; specifics are
+designer-authored in Blueprint.
 
 ---
 

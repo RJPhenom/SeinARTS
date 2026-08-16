@@ -2,6 +2,15 @@
 
 The north star is a native Unreal AAA RTS development experience: designer-first Blueprint authoring over a deterministic, modular, multiplayer-ready C++ foundation. Flexibility, extension stripping, exact state, and good development ergonomics are requirements, not later polish.
 
+The genre span is the WHOLE RTS design space — squad-tactical, worker-economy, arcade
+base-building, and massive-scale streaming-economy warfare are all first-class targets
+(RJ's standing direction; stage 3 built the squad-tactical vertical first, which is an archetype,
+not the boundary). Known consequence: a combat substrate (acquisition, weapon cycling, delivery,
+damage resolution, attrition) is a missing framework pillar — removed 2026-06-02 for rebuild and
+never re-planned; it must be engineered mechanism-first at massive scale with policy seams for
+every feel. Economy loops (harvest/dropoff, worker construction) are primitives-complete but
+unproven as authored loops.
+
 This order minimizes rework. Do not start a later stage by weakening an earlier contract.
 
 ## 1. Stabilize and clean the shared baseline
