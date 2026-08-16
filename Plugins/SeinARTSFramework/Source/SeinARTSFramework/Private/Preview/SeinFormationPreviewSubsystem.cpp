@@ -160,12 +160,45 @@ void USeinFormationPreviewSubsystem::HandleCursorUpdated(FVector CursorWorld, bo
 		const int32 SimTick = WorldSub ? WorldSub->GetCurrentTick() : MIN_int32;
 		const int32 DragPointCount = PC ? PC->CommandDragPath.Num() : INDEX_NONE;
 		const bool bCommandDrag = PC && PC->bIsCommandDragging;
-		if (SimTick == LastLayoutSimTick
-			&& DragPointCount == LastLayoutDragPointCount
+		const bool bGestureUnchanged =
+			DragPointCount == LastLayoutDragPointCount
 			&& bCommandDrag == bLastLayoutWasCommandDrag
-			&& CursorWorld.Equals(LastLayoutCursor, 0.01f))
+			&& CursorWorld.Equals(LastLayoutCursor, 0.01f);
+		if (SimTick == LastLayoutSimTick && bGestureUnchanged)
 		{
 			return;
+		}
+		// A sim tick advanced but the gesture is unchanged. If every displayed
+		// member's pose is also value-identical, the layout inputs the preview
+		// can observe are the same and the (dense-cover Hungarian) re-solve is
+		// wasted — a stationary cursor over settled units otherwise pays the
+		// full solve 30x/second. Sim state the pose hash cannot see (a foreign
+		// reservation admitted this tick, a provider spawned) still surfaces:
+		// the skip is capped at a few ticks past the last real solve, and the
+		// click path always recomputes the exact artifact regardless.
+		if (bGestureUnchanged
+			&& WorldSub
+			&& !DisplayedArtifactMembers.IsEmpty()
+			&& LastLayoutSimTick != MIN_int32
+			&& SimTick - LastLayoutSimTick < 5)
+		{
+			uint32 PoseHash = 0;
+			bool bAllAlive = true;
+			for (const FSeinEntityHandle& Member : DisplayedArtifactMembers)
+			{
+				const FSeinEntity* Entity = WorldSub->GetEntity(Member);
+				if (!Entity)
+				{
+					bAllAlive = false;
+					break;
+				}
+				PoseHash = HashCombine(
+					PoseHash, GetTypeHash(Entity->Transform));
+			}
+			if (bAllAlive && PoseHash == LastLayoutMemberPoseHash)
+			{
+				return;
+			}
 		}
 	}
 	RefreshPreview();
@@ -308,6 +341,22 @@ void USeinFormationPreviewSubsystem::RefreshPreview()
 	bIsVisible = true;
 	DisplayedDestinationArtifact = MoveTemp(DestinationArtifact);
 	DisplayedArtifactMembers = Members;
+	// Pose fingerprint of the exact displayed members, for the unchanged-input
+	// re-solve skip in HandleCursorUpdated.
+	LastLayoutMemberPoseHash = 0;
+	if (USeinWorldSubsystem* WorldSub = PC->GetWorld()
+		? PC->GetWorld()->GetSubsystem<USeinWorldSubsystem>()
+		: nullptr)
+	{
+		for (const FSeinEntityHandle& Member : DisplayedArtifactMembers)
+		{
+			if (const FSeinEntity* Entity = WorldSub->GetEntity(Member))
+			{
+				LastLayoutMemberPoseHash = HashCombine(
+					LastLayoutMemberPoseHash, GetTypeHash(Entity->Transform));
+			}
+		}
+	}
 	DisplayedArtifactTarget = AnchorFixed;
 	DisplayedArtifactGuidePoints = GuideFixed;
 	DisplayedArtifactFormationTag = OrderFormationTag;
