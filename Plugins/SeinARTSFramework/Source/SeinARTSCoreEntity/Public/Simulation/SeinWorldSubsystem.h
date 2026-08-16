@@ -1798,6 +1798,14 @@ public:
 
 	TArray<FSeinPairCapabilityGrantRecord> GetPairCapabilityGrantRecords() const;
 
+	/** Cheap consumer fast path: true when ANY directional pair-capability
+	 *  grant exists. Lets per-frame consumers (fog shared-vision union) skip
+	 *  sharer enumeration entirely in worlds with no diplomacy state. */
+	bool HasAnyPairCapabilityGrants() const
+	{
+		return PairCapabilitySourceRefCounts.Num() > 0;
+	}
+
 	/**
 	 * Move `Entity` into `Container` as a plain occupant.
 	 *

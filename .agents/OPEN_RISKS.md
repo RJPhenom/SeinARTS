@@ -25,9 +25,11 @@ This is the actionable remainder after consolidating the historical audits. It i
    payer/cost snapshots, exact cancel/refund, deterministic completion, reciprocal membership, and
    snapshot continuation. Explicit squad destruction still needs product policy for queued refunds,
    wipe/recreation, retreat, and queue replacement UX.
-3. FoW still needs an explicit team/shared vision policy and consumer. The directional,
-   source-attributed pair-capability substrate now exists in the current development wave; the known
-   blocker-height, authored-Z, and cone terrain-scaling defects are closed.
+3. FoW now consumes the directional ShareVision pair capability: entity visibility, seen
+   latches, cell queries, the fog overlay, and the minimap union every granting ally's vision
+   (zero-grant worlds take a fast path with legacy cost). Focused directional/revocation
+   regression coverage exists. Remaining: team-vision UX policy (who may grant/revoke in
+   gameplay), and PIE verification of the shared overlay/minimap presentation.
 4. Public targeting lacks the complete line/corridor/gesture policy surface needed by a modern tactical RTS.
 5. Movement+ needs the human behavior/performance, scale, true dedicated-server, and WAN/backend
    matrices. Typed render-only vehicle telemetry and a real packaged two-process listen-server flow
@@ -87,6 +89,13 @@ This is the actionable remainder after consolidating the historical audits. It i
    multi-hour real-device hitch and allocator-high-water distributions, platform storage matrices,
    and true OS disk-full behavior remain open.
 5. Debug navigation rendering is intentionally expensive and can invalidate profiling if left enabled.
+6. The dense-cover 128-member public preview tripled with the FEAT-03 selection-plan provider:
+   9.905 ms median / 10.130 ms p95 measured 2026-08-15 versus the pre-FEAT-03 3.181/3.324 ms
+   baseline (coverless 128 unchanged at ~1.3 ms; the solver-only 128x128 stress is unchanged at
+   ~12.2 ms). Suspects: the exact whole-selection allocator running per preview refresh and the
+   per-slot reservation scans. A CPU trace with the named preview scopes is at
+   `Saved/Profiling/ShareVisionPerf-20260815-203853.utrace`. Needs scope-level attribution and
+   either caching or a cheaper preview-path policy before large-selection cover previews ship.
 
 ## Explicit product decisions still required
 

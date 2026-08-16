@@ -60,9 +60,25 @@ Codex push:
 
 Validation: broad All-profile gates green above all prior floors — Unit 471/471, Sim 57/57,
 Determinism 48/48, Integration 26/26, zero failures; focused FrozenDestination 5/5 and
-Unit.Cover 10/10. Framework-profile Unit/Determinism/Sim cross-check result in
-`Saved/Automation/`. Not yet done: expected-count floor refresh for the new totals, and the
-branch commit (deliberately left to pair with RJ's review of the conflict-policy memo).
+Unit.Cover 10/10; Framework-profile Unit 453 / Sim 50 / Determinism 38, zero failures.
+Committed as `9b8d434` (landing) + `92d0c7a` (floors: Unit 471/453, Sim 57/50,
+Determinism 48/38).
+
+### ShareVision consumer (same session, after the landing commits)
+
+FoW now consumes the directional ShareVision pair capability. `USeinFogOfWar` gained
+`GetEffectiveVisionSources` / `GetEffectiveCellBitfield` / `GetEffectiveObserverGrid`
+(observer + every granting ally, commutative union), and the base
+`IsEntityVisibleToObserver` policy unions visible bits and seen latches across effective
+sources — B consumes A's VISION, never A's owner omniscience. Consumers wired: fog overlay,
+minimap fog, and the cell-query BPFL; every `IsEntityVisibleToObserver` caller (actor hiding,
+cover gating, minimap blips) inherits automatically. Zero-grant worlds short-circuit through
+the new `HasAnyPairCapabilityGrants` fast path at legacy cost. New directional regression
+`ShareVisionCapabilityUnionsAllyVisionDirectionally` covers grant/revoke/reversed-grant.
+Suites: Unit.FogOfWar and Unit.CoreEntity.Relationship green; Perf 6/6 green with collision
+and cover-assignment medians at baseline. Measured perf finding recorded in OPEN_RISKS #6:
+the dense-cover 128-member preview tripled to 9.9 ms median — a FEAT-03 provider cost, not a
+ShareVision cost — with a CPU trace captured for attribution.
 
 **State date:** 2026-08-14
 **Baseline branch:** `main`
