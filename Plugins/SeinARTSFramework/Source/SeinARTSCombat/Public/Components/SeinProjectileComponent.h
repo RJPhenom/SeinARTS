@@ -65,6 +65,10 @@ FORCEINLINE uint32 GetTypeHash(const FSeinProjectileComponent& Component)
 {
 	uint32 Hash = GetTypeHash(Component.Instigator);
 	Hash = HashCombine(Hash, GetTypeHash(Component.Target));
+	// The per-tick-refreshed aim point is mutable flight state — omitting it
+	// would blind the component's own hash to a homing divergence until it
+	// leaked into the transform a tick later.
+	Hash = HashCombine(Hash, GetTypeHash(Component.LastKnownTargetPoint));
 	Hash = HashCombine(Hash, GetTypeHash(Component.Speed));
 	Hash = HashCombine(Hash, GetTypeHash(Component.LifetimeRemaining));
 	return Hash;

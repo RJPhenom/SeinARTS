@@ -431,12 +431,50 @@ namespace UE::SeinARTSTests
 			USeinAbility* Ability =
 				Fixture.World->GetAbilityInstance(AbilityID);
 			ASSERT_THAT(IsNotNull(Ability));
+			// The pipeline's CanActivate escape hatch runs BEFORE the
+			// activation target is assigned — the starter must pass it on
+			// arming alone (red-team finding: gating on the stale
+			// TargetEntity rejected every pipeline activation).
+			ASSERT_THAT(IsTrue(Ability->CanActivate()));
 			ASSERT_THAT(IsTrue(Ability->ActivateAbility(
 				Victim, FFixedVector::ZeroVector)));
 		}
 		// Two seconds of ticks is ample for eleven 0.1 s cycles.
 		Fixture.Tick(60);
 		ASSERT_THAT(IsFalse(Fixture.World->IsEntityAlive(Victim)));
+		Fixture.World->StopSimulation();
+	}
+
+	TEST(ZeroedVitalsDieInsteadOfReseedingToFull,
+		"SeinARTS.Sim.Combat.Vitals")
+	{
+		using namespace CombatSubstrateTestLocal;
+		FCombatFixture Fixture;
+		FSeinEntityHandle Unit;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(
+			[&]()
+			{
+				Unit = Fixture.World->SpawnAbstractEntity(
+					FFixedTransform(At(0)), Fixture.Attacker);
+				Fixture.World->AddComponent(Unit, MakeVitals(100));
+			},
+			0x434D4236, TEXT("SeinARTS.Combat.Revive"))));
+
+		// First tick seeds. A scripted whole-struct write then zeroes health
+		// WITHOUT the damage path — the next tick must deliver a real death,
+		// never a silent re-seed back to full (red-team finding).
+		Fixture.Tick();
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*Fixture.World);
+			FSeinVitalsComponent* Vitals =
+				Fixture.World->GetComponentMutable<FSeinVitalsComponent>(
+					Unit);
+			ASSERT_THAT(IsNotNull(Vitals));
+			ASSERT_THAT(IsTrue(Vitals->bHealthSeeded));
+			Vitals->Health = FFixedPoint::Zero;
+		}
+		Fixture.Tick();
+		ASSERT_THAT(IsFalse(Fixture.World->IsEntityAlive(Unit)));
 		Fixture.World->StopSimulation();
 	}
 }
