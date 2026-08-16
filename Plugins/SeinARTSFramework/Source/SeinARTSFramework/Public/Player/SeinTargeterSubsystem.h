@@ -16,7 +16,9 @@
  *
  *          Point specs capture one click per cycle. Point-plus-facing specs use
  *          the same state machine to capture a location and drag-facing. Line
- *          and corridor specs are not currently shipped.
+ *          specs capture segments either by drag gesture (press-drag-release)
+ *          or by chained multi-click (each click after the first commits a
+ *          segment from the previous vertex), per the spec's CaptureMode.
  *
  *          On Confirm the subsystem hands the captured points to
  *          ASeinPlayerController::IssueTargetedAbility, which packs them into
@@ -151,8 +153,18 @@ private:
 	 *  matching step index (0..StepCount-1). */
 	void ComputeDragRotation(float& OutSnappedYawDegrees, uint8& OutStepIndex) const;
 
-	/** True when the active spec uses the shipped point-plus-facing drag flow. */
+	/** True when the active spec captures on press-drag-release (point-plus-
+	 *  facing, or a line spec in Drag capture mode). */
 	bool IsDragSpec() const;
+
+	/** True when the active spec is a line spec in MultiClick capture mode
+	 *  (chained polyline vertices). */
+	bool IsMultiClickLineSpec() const;
+
+	/** MultiClick press handler — plants the first vertex, commits chained
+	 *  segments on subsequent clicks, and finishes early on a click within the
+	 *  spec's FinishClickTolerance of the previous vertex. */
+	void HandleMultiClickPress();
 
 	/** Convert a world FVector to a deterministic FFixedVector for sim submission. */
 	static FFixedVector ToFixed(const FVector& World);
@@ -210,4 +222,15 @@ private:
 	 *  the FSeinTargeterPoint when the drag ends. */
 	UPROPERTY(Transient)
 	uint8 SnappedStepIndex = 0;
+
+	/** MultiClick line capture: the previous planted vertex — the start of the
+	 *  segment currently being authored. Meaningless unless
+	 *  bHasPolylineAnchor. */
+	UPROPERTY(Transient)
+	FVector PolylineAnchorWorld = FVector::ZeroVector;
+
+	/** True once the first MultiClick vertex is planted. Distinct flag rather
+	 *  than a zero-vector sentinel so a vertex at the world origin works. */
+	UPROPERTY(Transient)
+	bool bHasPolylineAnchor = false;
 };
