@@ -555,6 +555,130 @@ namespace UE::SeinARTSTests
 		World->StopSimulation();
 	}
 
+	TEST(ReorderedReselectionQueuedArtifactSurvivesRestore,
+		"SeinARTS.Unit.CoreEntity.FrozenDestination")
+	{
+		using namespace FrozenDestinationTestLocal;
+		FScopedBrokerPolicy Policy;
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+
+		const FSeinPlayerID Player(1);
+		FSeinEntityHandle FirstMember;
+		FSeinEntityHandle SecondMember;
+		const auto AuthorState = [&]()
+		{
+			World->RegisterPlayer(Player, FSeinFactionID(1));
+			FirstMember = World->SpawnAbstractEntity(
+				FFixedTransform(), Player);
+			SecondMember = World->SpawnAbstractEntity(
+				FFixedTransform(), Player);
+		};
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Materialize(
+			*World,
+			AuthorState,
+			FSeinMatchSettings(),
+			0x46524F60,
+			TEXT("SeinARTS.FrozenDestination.Reorder"))));
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World)));
+
+		const auto MakeMultiOrder = [&](
+			std::initializer_list<FSeinEntityHandle> Members,
+			std::initializer_list<FSeinFrozenDestination> Artifact,
+			bool bQueue)
+		{
+			FSeinBrokerOrderPayload Payload;
+			Payload.CommandContext.AddTag(
+				SeinARTSTags::Command_Context_RightClick);
+			Payload.CommandContext.AddTag(
+				SeinARTSTags::Command_Context_Target_Ground);
+			for (const FSeinFrozenDestination& Destination : Artifact)
+			{
+				Payload.DestinationArtifact.Add(Destination);
+			}
+			FSeinCommand Command;
+			Command.PlayerID = Player;
+			Command.IssuerKind = ESeinCommandIssuerKind::Player;
+			Command.CommandType = SeinARTSTags::Command_Type_BrokerOrder;
+			Command.SchemaVersion = SeinBrokerOrderProtocol::SchemaVersion;
+			Command.TargetLocation =
+				Payload.DestinationArtifact[0].WorldPosition;
+			for (const FSeinEntityHandle& Member : Members)
+			{
+				Command.EntityList.Add(Member);
+			}
+			Command.bQueueCommand = bQueue;
+			Command.Payload = FInstancedStruct::Make(Payload);
+			return Command;
+		};
+
+		// First order selects [First, Second] — the shared ephemeral broker's
+		// stored member order. The queued follow-up re-selects the SAME units
+		// in the opposite order; its artifact rides in that click order and
+		// must be re-keyed to broker order at queue time, or the restore
+		// preflight's ordered-subset walk rejects the whole snapshot.
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+			ASSERT_THAT(IsTrue(
+				FSeinWorldSubsystemTestAccess::HandleBrokerOrder(
+					*World,
+					MakeMultiOrder(
+						{FirstMember, SecondMember},
+						{MakeDestination(*World, FirstMember, 1000),
+							MakeDestination(*World, SecondMember, 1200)},
+						false))));
+			ASSERT_THAT(IsTrue(
+				FSeinWorldSubsystemTestAccess::HandleBrokerOrder(
+					*World,
+					MakeMultiOrder(
+						{SecondMember, FirstMember},
+						{MakeDestination(*World, SecondMember, 1400),
+							MakeDestination(*World, FirstMember, 1600)},
+						true))));
+		}
+
+		const FSeinBrokerMembershipData* Membership =
+			World->GetComponent<FSeinBrokerMembershipData>(FirstMember);
+		ASSERT_THAT(IsNotNull(Membership));
+		const FSeinCommandBrokerData* BrokerData =
+			World->GetComponent<FSeinCommandBrokerData>(
+				Membership->CurrentBrokerHandle);
+		ASSERT_THAT(IsNotNull(BrokerData));
+		ASSERT_THAT(AreEqual(2, BrokerData->OrderQueue.Num()));
+		const FSeinBrokerQueuedOrder& Queued = BrokerData->OrderQueue[1];
+		ASSERT_THAT(IsTrue(Queued.TargetMembers.IsEmpty()));
+		ASSERT_THAT(AreEqual(2, Queued.DestinationArtifact.Num()));
+		ASSERT_THAT(IsTrue(
+			Queued.DestinationArtifact[0].Member == BrokerData->Members[0]));
+		ASSERT_THAT(IsTrue(
+			Queued.DestinationArtifact[1].Member == BrokerData->Members[1]));
+
+		FSeinWorldSnapshot Snapshot;
+		FSeinWorldSnapshotReferenceGuard SnapshotGuard(Snapshot);
+		World->CaptureSnapshot(Snapshot);
+
+		FActorTestSpawner RestoredSpawner;
+		USeinWorldSubsystem* Restored =
+			RestoredSpawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(Restored));
+		FString Error;
+		ASSERT_THAT(IsTrue(SeinTestSnapshotRestore::RestoreTrusted(
+			*Restored, Snapshot, &Error)));
+
+		FGuid SourceRoot;
+		FGuid RestoredRoot;
+		ASSERT_THAT(IsTrue(
+			World->ComputeCanonicalStateRoot(SourceRoot, Error)));
+		ASSERT_THAT(IsTrue(
+			Restored->ComputeCanonicalStateRoot(RestoredRoot, Error)));
+		ASSERT_THAT(IsTrue(SourceRoot == RestoredRoot));
+
+		World->StopSimulation();
+		Restored->StopSimulation();
+	}
+
 	TEST(SettledFrozenDestinationSurvivesCompletionUntilReplacement,
 		"SeinARTS.Unit.CoreEntity.FrozenDestination")
 	{

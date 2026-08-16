@@ -38,3 +38,20 @@ interim only.
 - Tests: `FrozenDestinationAdmissionKeepsShownDestinationsAndReleases` (contention admits, per-order
   release), `DeadMemberDropsOnlyItsSlotFromAdmittedArtifact` (RJ's slots example), existing
   dead-subset/settled/snapshot tests retained.
+
+## Red-team follow-up (same day)
+
+An adversarial pass on the landed commit confirmed one real, PRE-EXISTING hole (not introduced by
+the policy change): a queued order routed onto an existing shared ephemeral broker stores its
+artifact in the click's selection order, while the restore preflight validates against the
+broker's stored member order — re-selecting the same loose units in a different order then
+shift-queueing produced a snapshot that failed restore preflight. Fixed by re-keying the artifact
+to broker member order at the shared-broker full-match queue site (pure canonicalization;
+dispatch resolves entries per member). Regression:
+`ReorderedReselectionQueuedArtifactSurvivesRestore`.
+
+Speculative residual (recorded, not fixed): the empty-survivors rejection scans only artifact
+entries, so a live expected member with NO artifact entry (only plausible if reinforcement
+completes inside the input-delay window) would have its order dropped with the rest. Not
+reachable in practice today; revisit if reinforcement timing ever shrinks into the admission
+window.

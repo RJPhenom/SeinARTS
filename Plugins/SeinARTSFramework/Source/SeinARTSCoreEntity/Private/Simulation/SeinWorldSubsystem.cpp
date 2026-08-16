@@ -4440,6 +4440,33 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleBrokerOr
 				{
 					Order.TargetMembers = EphemeralEntities;
 				}
+				else if (!Order.DestinationArtifact.IsEmpty())
+				{
+					// All-members order (empty TargetMembers): the snapshot
+					// preflight validates the artifact as an ordered subset of
+					// the BROKER's stored member order, but this click's
+					// artifact rides in selection order — and re-selecting the
+					// same units can order them differently. Re-key the
+					// artifact to broker order so an admitted order can never
+					// fail a later restore preflight. Pure canonicalization:
+					// dispatch resolves entries per member, never by index.
+					TArray<FSeinFrozenDestination> Reordered;
+					Reordered.Reserve(Order.DestinationArtifact.Num());
+					for (const FSeinEntityHandle& Member : Broker->Members)
+					{
+						const FSeinFrozenDestination* Entry =
+							Order.DestinationArtifact.FindByPredicate(
+								[&Member](const FSeinFrozenDestination& D)
+								{
+									return D.Member == Member;
+								});
+						if (Entry)
+						{
+							Reordered.Add(*Entry);
+						}
+					}
+					Order.DestinationArtifact = MoveTemp(Reordered);
+				}
 				Broker->OrderQueue.Add(Order);
 			}
 		}
