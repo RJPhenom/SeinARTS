@@ -306,6 +306,16 @@ public:
 		meta = (ClampMin = "1.0", UIMin = "5.0", UIMax = "200.0"))
 	float FinishClickTolerance = 50.0f;
 
+	/** Sample the authored segment against dynamic nav passability while
+	 *  targeting: a blocked centerline reports Blocked, a corridor edge
+	 *  (Width > 0) clipping impassable cells reports Warning ("the lane
+	 *  pinches"). Advisory client UX evaluated by the targeter subsystem —
+	 *  worlds with no bound passability resolver skip the check entirely.
+	 *  Disable for abilities that legitimately cross impassable ground
+	 *  (artillery barrages over walls). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Targeter")
+	bool bValidateCorridorFit = true;
+
 	/** Blocks segments longer than MaxSegmentLength. Length math runs in float
 	 *  — this hook is advisory client UX (the server re-validates), documented
 	 *  non-sim on the base class. */

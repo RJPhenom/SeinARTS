@@ -7,6 +7,7 @@
 
 #include "Player/SeinTargeterSubsystem.h"
 #include "Player/SeinPlayerController.h"
+#include "Simulation/SeinWorldSubsystem.h"
 #include "Targeter/SeinTargeterPreview.h"
 #include "Targeter/SeinPointTargeterPreview.h"
 #include "Targeter/SeinPointFacingTargeterPreview.h"
@@ -235,7 +236,9 @@ void USeinTargeterSubsystem::OnConfirmReleased()
 	{
 		const FFixedVector AnchorFixed = ToFixed(DragAnchorWorld);
 		const FFixedVector CursorFixed = ToFixed(LastCursorWorld);
-		const ESeinTargeterValidity Validity = Spec->ValidateClient(AnchorFixed, CursorFixed);
+		const ESeinTargeterValidity Validity = CombineValidity(
+			Spec->ValidateClient(AnchorFixed, CursorFixed),
+			EvaluateCorridorFit(DragAnchorWorld, LastCursorWorld));
 		if (Validity == ESeinTargeterValidity::Blocked)
 		{
 			// Rejected — return to WaitingForCapture so the player can retry.
@@ -285,7 +288,12 @@ void USeinTargeterSubsystem::UpdateCursor(const FVector& CursorWorld)
 		? ToFixed(SegmentStart) : ToFixed(CursorWorld);
 	const FFixedVector AuxFixed = bSegmentInProgress
 		? ToFixed(CursorWorld) : FFixedVector();
-	const ESeinTargeterValidity Validity = Spec->ValidateClient(PrimaryFixed, AuxFixed);
+	ESeinTargeterValidity Validity = Spec->ValidateClient(PrimaryFixed, AuxFixed);
+	if (bSegmentInProgress)
+	{
+		Validity = CombineValidity(
+			Validity, EvaluateCorridorFit(SegmentStart, CursorWorld));
+	}
 
 	const FVector AnchorForPreview = bSegmentInProgress
 		? SegmentStart : FVector::ZeroVector;
@@ -337,8 +345,10 @@ void USeinTargeterSubsystem::HandleMultiClickPress()
 
 	if (LineSpec->bRejectClickWhenBlocked)
 	{
-		const ESeinTargeterValidity Validity = LineSpec->ValidateClient(
-			ToFixed(PolylineAnchorWorld), ToFixed(LastCursorWorld));
+		const ESeinTargeterValidity Validity = CombineValidity(
+			LineSpec->ValidateClient(
+				ToFixed(PolylineAnchorWorld), ToFixed(LastCursorWorld)),
+			EvaluateCorridorFit(PolylineAnchorWorld, LastCursorWorld));
 		if (Validity == ESeinTargeterValidity::Blocked)
 		{
 			UE_LOG(LogSeinTargeter, Verbose,
@@ -493,6 +503,79 @@ bool USeinTargeterSubsystem::IsMultiClickLineSpec() const
 	const USeinLineTargeterSpec* LineSpec = Cast<USeinLineTargeterSpec>(Spec);
 	return LineSpec
 		&& LineSpec->CaptureMode == ESeinLineTargeterCapture::MultiClick;
+}
+
+ESeinTargeterValidity USeinTargeterSubsystem::CombineValidity(
+	ESeinTargeterValidity A, ESeinTargeterValidity B)
+{
+	if (A == ESeinTargeterValidity::Blocked
+		|| B == ESeinTargeterValidity::Blocked)
+	{
+		return ESeinTargeterValidity::Blocked;
+	}
+	if (A == ESeinTargeterValidity::Warning
+		|| B == ESeinTargeterValidity::Warning)
+	{
+		return ESeinTargeterValidity::Warning;
+	}
+	return ESeinTargeterValidity::Valid;
+}
+
+ESeinTargeterValidity USeinTargeterSubsystem::EvaluateCorridorFit(
+	const FVector& StartWorld, const FVector& EndWorld) const
+{
+	const USeinLineTargeterSpec* LineSpec = Cast<USeinLineTargeterSpec>(Spec);
+	if (!LineSpec || !LineSpec->bValidateCorridorFit)
+	{
+		return ESeinTargeterValidity::Valid;
+	}
+	const UWorld* World = GetWorld();
+	USeinWorldSubsystem* Sim =
+		World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
+	// Unbound resolver = nav-less world (or tests): no opinion, stay Valid —
+	// mirrors the sim's own "permit if no resolver" default.
+	if (!Sim || !Sim->DynamicPassableResolver.IsBound())
+	{
+		return ESeinTargeterValidity::Valid;
+	}
+
+	const FVector Delta = EndWorld - StartWorld;
+	const float Length = Delta.Size2D();
+	if (Length < KINDA_SMALL_NUMBER)
+	{
+		return ESeinTargeterValidity::Valid;
+	}
+	const FVector Dir = Delta.GetSafeNormal2D();
+	const FVector Perp(-Dir.Y, Dir.X, 0.0f);
+	const float HalfWidth = LineSpec->Width.ToFloat() * 0.5f;
+
+	// ~1 m sampling, hard-capped so a cross-map drag stays cheap per tick.
+	constexpr float SampleSpacing = 100.0f;
+	constexpr int32 MaxSteps = 64;
+	const int32 Steps = FMath::Clamp(
+		FMath::CeilToInt(Length / SampleSpacing), 1, MaxSteps);
+
+	ESeinTargeterValidity Result = ESeinTargeterValidity::Valid;
+	for (int32 Index = 0; Index <= Steps; ++Index)
+	{
+		const FVector Center =
+			StartWorld + Dir * (Length * Index / Steps);
+		if (!Sim->DynamicPassableResolver.Execute(ToFixed(Center)))
+		{
+			// The line itself crosses impassable ground.
+			return ESeinTargeterValidity::Blocked;
+		}
+		if (HalfWidth > 0.0f
+			&& (!Sim->DynamicPassableResolver.Execute(
+					ToFixed(Center + Perp * HalfWidth))
+				|| !Sim->DynamicPassableResolver.Execute(
+					ToFixed(Center - Perp * HalfWidth))))
+		{
+			// Corridor edge clips impassable cells — the lane pinches.
+			Result = ESeinTargeterValidity::Warning;
+		}
+	}
+	return Result;
 }
 
 void USeinTargeterSubsystem::Submit()
