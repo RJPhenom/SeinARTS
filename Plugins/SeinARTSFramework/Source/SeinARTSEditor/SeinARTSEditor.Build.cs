@@ -48,6 +48,7 @@ public class SeinARTSEditor : ModuleRules
             "GameplayTagsEditor",  // SeinAutoTagGenerator persists auto-tags to INI via IGameplayTagsEditorModule
             "SeinARTSCore",
             "SeinARTSCoreEntity",
+            "SeinARTSCombat",
 			"SeinARTSGraphNodes",     // USeinWidgetBlueprint lives in the UncookedOnly asset module
             "SeinARTSUIToolkit"
             // Optional system editor modules (SeinARTSFogOfWar's #if
