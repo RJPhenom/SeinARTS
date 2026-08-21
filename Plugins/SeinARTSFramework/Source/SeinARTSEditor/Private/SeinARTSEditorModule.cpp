@@ -25,6 +25,7 @@
 #include "Validators/SeinBalanceProfileValidator.h"
 #include "Validators/SeinCanonicalStateRecipeDeterminismValidator.h"
 #include "Validators/SeinCommandDeterminismValidator.h"
+#include "Validators/SeinCombatPolicyDeterminismValidator.h"
 #include "Validators/SeinDeterministicStructValidator.h"
 #include "Validators/SeinFormationDeterminismValidator.h"
 #include "Validators/SeinMovementClassValidator.h"
@@ -518,6 +519,9 @@ void FSeinARTSEditorModule::ReleaseModuleOwnedState()
 						USeinCanonicalStateRecipeDeterminismValidator>());
 				ValidatorSubsystem->RemoveValidator(
 					GetMutableDefault<USeinCommandDeterminismValidator>());
+				ValidatorSubsystem->RemoveValidator(
+					GetMutableDefault<
+						USeinCombatPolicyDeterminismValidator>());
 				ValidatorSubsystem->RemoveValidator(
 					GetMutableDefault<USeinFormationDeterminismValidator>());
 				ValidatorSubsystem->RemoveValidator(

@@ -24,6 +24,7 @@ public class SeinARTSEditorTests : ModuleRules
 			"SeinARTSTestSupport",
 			"SeinARTSCore",
 			"SeinARTSCoreEntity",
+			"SeinARTSCombat",
 			"SeinARTSNavigation",
 			"SeinARTSMovement",
 			"SeinARTSLevelData",
