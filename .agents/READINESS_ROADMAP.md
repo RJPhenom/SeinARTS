@@ -131,8 +131,7 @@ content root. The explicit component picker accepts both native component struct
 designer-authored UDS types found on the matched entities, while an empty Tracked Components list
 retains track-all behavior.
 The durable Preview, Gather, Check Sync, Push, save, and reseal contract is consolidated in
-`.agents/FRAMEWORK_MAP.md`. A customer-facing tutorial remains part of the future public
-documentation effort.
+`.agents/FRAMEWORK_MAP.md`; the shipped Balance Data guide documents the customer workflow.
 
 Ability authoring now has a consolidated model-facing contract for creation/granting, smart
 commands, targeting, activation/lifecycle semantics, deterministic state, and checkpoint-safe Move
@@ -173,16 +172,14 @@ Flight remains a separate scope: current behavior is not a production 3D aircraf
 
 ### Tactical cover and squads
 
-FEAT-03 progress: ordinary and Squad adapters now delegate to one pure Cover-owned allocator. It
-maximizes assignment cardinality, minimizes wrong-side use, then minimizes exact fixed-point
-squared distance; invalid/duplicate inputs and unrepresentable distance ranges fail closed. The
-duplicate greedy bodies are gone, resolver behavior revisions were advanced, exhaustive small
-matrices match brute force, and the latest dense 128x128 solver-only stress case averages 11.998 ms
-on the current machine. A separate real-world public-layout fixture now covers 64/128-member
-coverless and dense-Cover paths, exact repeated output, all-member snapping, and unchanged canonical
-roots; the 128-member dense case measures 3.181 ms median / 3.324 ms p95. This excludes selection,
-quality, rendering, and the rest of the frame, and allocation remains exact only within one resolver
-invocation, not yet across the whole mixed selection.
+Ordinary and Squad adapters delegate to one pure Cover-owned allocator. It maximizes assignment
+cardinality, minimizes wrong-side use, then minimizes exact fixed-point squared distance;
+invalid/duplicate inputs and unrepresentable distance ranges fail closed. The selection-plan
+provider aggregates ordinary and persistent-Squad members before that solve, so allocation is exact
+across the whole mixed selection. The dense 128x128 solver-only stress averages 11.998 ms; the
+selection-wide 128-member public preview measures 9.905 ms median / 10.130 ms p95 after FEAT-03.
+An unchanged-input skip capped at five ticks avoids repeating that solve under a stationary cursor.
+Drag-time per-solve cost and configured-game presentation remain PIE/performance gates.
 
 Fresh UE 5.8 full-game profiling now qualifies continuous preview for the current 100-owned-mover
 Sandbox workload. Exact selected-member blocker exclusions preserve group placement semantics, and
@@ -207,10 +204,10 @@ members drop only their own slot, contention never rejects or re-plans
 batch.
 
 Squad reinforcement request identity, exact slot selection, atomic charge, exact cancel/refund,
-completion membership, structural restore admission, and snapshot continuation are complete.
-Remaining Squad work requires product policy for explicit squad destruction refunds, queue
-replacement UX, wipe/recreation, and retreat; then add the corresponding command/replay and PIE
-tactics coverage.
+completion membership, structural restore admission, snapshot continuation, and designer-authored
+destruction settlement (Refund / Forfeit / PartialRefund) are complete. Remaining Squad work
+requires product policy for queue replacement, wipe/recreation, and retreat; then add the
+corresponding command/replay and PIE tactics coverage.
 
 ### Terrain, vision, targeting, and containment
 
@@ -237,6 +234,10 @@ Exit: designers can build representative infantry, squad, cover, vehicle, garris
 
 ## 4. Freeze the online service contracts
 
+**Status: parked by RJ on 2026-08-16.** Do not implement this stage until it is reopened through
+concrete Steamworks/EOS-shaped options that account for the planned SeinARTS Online Services
+extension.
+
 The existing Net module is deterministic match transport, not a complete online platform. Add an optional backend-neutral online extension rather than coupling Core/Net to EOS, Steam, or one vendor.
 
 Freeze contracts for account/auth, party/invite, matchmaking tickets, queue attributes, server allocation, match/roster identity, ranked classification, reconnect credentials, results, idempotent stats/MMR, leaderboards, replay evidence, campaign-save ownership/storage, and telemetry.
@@ -251,10 +252,9 @@ Exit: game UI and progression can target stable provider-neutral interfaces whil
 
 - Semantic release tags and one-version production-plugin cohorts are defined in
   `.agents/WORKFLOW.md`; deterministic compatibility, installation, upgrade, and release-evidence
-  contracts are consolidated in `.agents/CONSUMER_VERIFICATION.md`. Customer-facing versions remain
-  future `Docs/` deliverables rather than staged internal copies. Package-only qualification remains
-  usable without them, while publication fails closed until a non-empty `Docs/` tree exists and
-  binds every public-documentation file into the immutable release evidence.
+  contracts are consolidated in `.agents/CONSUMER_VERIFICATION.md`. The planned customer-facing
+  `Docs/` tree is content-complete and publication binds every documentation file into immutable
+  release evidence. A human editor-path accuracy proofread remains part of each release gate.
 - Release packaging now validates SemVer and refuses to publish dirty or mid-build-drifted source
   under a clean commit/tag identity. It emits SHA-256 artifact/dependency provenance and release
   publication is gated on fresh consumers built from the exact five ZIPs. Package-only diagnostics
@@ -269,7 +269,8 @@ Exit: game UI and progression can target stable provider-neutral interfaces whil
   Publication compiles each shipped `Public` header independently, verifies remote draft assets
   byte-for-byte, and resumes only an exact matching interrupted draft. Executing the workflow still
   requires a UE-capable runner with Client/Server support.
-- Test plugin stripping and downstream consumers from fresh checkouts.
+- Test-plugin stripping and downstream consumers from fresh checkouts are automated in the exact-ZIP
+  consumer matrix.
 - Publish packaged plugin artifacts for releases, while daily game development uses commit-pinned source integration.
 - Compatibility, upgrade, and getting-started contracts are consolidated for model use in
   `.agents/CONSUMER_VERIFICATION.md`. A read-only installation
@@ -280,9 +281,9 @@ Exit: game UI and progression can target stable provider-neutral interfaces whil
   A Windows PowerShell 5.1 self-test prevents the shipped diagnostic's pass/adversarial contract
   from drifting. The consumer contract separates host examples from shipped plugin content and
   records the project-owned settings, unit, map, manifest, and qualification boundaries. Movement+
-  telemetry is preserved in the plugin guide and `.agents/VEHICLE_GYM.md`; Ability and Balance Data
-  authoring boundaries are preserved in `.agents/FRAMEWORK_MAP.md`. Customer tutorials for these
-  surfaces, the remaining deep subsystems, and broader in-editor error UX still need to be authored
-  deliberately when the public `Docs/` effort begins.
+  telemetry is preserved in the plugin guide and `.agents/VEHICLE_GYM.md`; public Ability and
+  Balance Data guides are shipped and their model-facing boundaries remain in
+  `.agents/FRAMEWORK_MAP.md`. Broader in-editor error UX and per-release human documentation
+  proofreads remain.
 
 Exit: a studio can adopt the framework without relying on this repository's private history or an agent to explain hidden setup.

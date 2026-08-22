@@ -156,7 +156,9 @@ qualification and PIE matrix.
 ## Extension responsibilities
 
 - **Squad:** persistent heterogeneous slots, member lifecycle, centroid, broker synchronization, formation dispatch, reinforcement state.
-- **Cover:** provider geometry/slots, visibility-gated queries, loose-unit cover-aware destination post-processing, editor generation. Stable reservation/allocation is still missing.
+- **Cover:** provider geometry/slots, visibility-gated queries, exact selection-wide assignment,
+  frozen destination artifacts, stable reservations, loose-unit cover-aware destination
+  post-processing, and editor generation.
 - **Cover+Squad bridge:** the cover-aware Squad dispatch resolver and its stable codec/content contributor registrations; no parent-plugin behavior is duplicated here.
 - **Movement+:** Infantry, Wheeled, Tracked, Hover, and Flight policies plus class-specific deterministic tuning/state.
 

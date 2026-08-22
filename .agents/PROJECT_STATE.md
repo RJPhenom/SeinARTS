@@ -51,7 +51,8 @@ Codex push:
 8. Client-side plan-provider failure now degrades to a legacy artifact-less order (PC +
    `SeinIssueBrokerOrder`) with a Warning, instead of silently eating the command. This is
    distinct from the reserved conflict-policy decision, which is written up with options and a
-   recommendation in `.agents/DECISION_FROZEN_CONFLICT_POLICY.md` (awaiting RJ: A/B/C).
+   recommendation in `.agents/DECISION_FROZEN_CONFLICT_POLICY.md` (subsequently resolved as RJ's
+   policy D below).
 9. Fixed a latent profile gap in the new `FrozenDestinationTests`: the admission test asserted
    an empty authoritative-provider registry but had only ever run under the Framework profile;
    under All, Cover legitimately registers providers into every world. The test now detaches
@@ -933,11 +934,12 @@ preserving the fixed-point objective exactly; behavior revisions were advanced s
 old snapshots cannot accept the changed destination behavior. Focused Cover Unit tests pass 10/10,
 the all-extension Unit suite passes 428/428, and the latest dense 128x128 solver-only stress test
 passes at 11.998 ms average. The real public layout path is now a separate 64/128-member performance
-sentinel with exact repeated output and unchanged canonical roots; its dense 128-member workload
-snaps every member at 3.181 ms median / 3.324 ms p95. Selection, quality, renderer, navigation, and
-complete-frame costs remain an Insights gate. Cross-broker slot contention, canonical reservations,
-and exact preview-artifact command admission remain open and require the explicit conflict policy
-recorded in the roadmap.
+sentinel with exact repeated output and unchanged canonical roots; its original dense 128-member
+workload measured 3.181 ms median / 3.324 ms p95 before the selection-wide provider landed.
+FEAT-03 subsequently closed cross-broker aggregation, canonical reservations, moving-provider
+behavior, and exact preview-artifact admission under RJ's policy D; the resulting exact 128-member
+preview solve measures 9.905/10.130 ms median/p95 and is cadence-mitigated. Configured-game
+presentation and drag-time feel remain PIE/Insights gates.
 
 The UE 5.8 full-game formation-preview gate is now closed for the current one-world Sandbox workload
 at 100 owned movers. Formation projection ignores only the ordered group's exact generational dynamic
@@ -960,9 +962,8 @@ system completion/failure-retry passes 2/2, fresh-world snapshot continuation pa
 broad All and Framework profiles are green at Unit 428/410, Determinism 40/30, Integration 21/15,
 plus the cross-system All simulation aggregate at 30/30. Broker callback fixtures now author their
 resolver scenario state before sealing tick zero, so the aggregate also proves bootstrap isolation.
-Explicit
-squad destruction refunds, queue replacement, wipe/recreation, and retreat remain product-policy
-work rather than implicit cleanup behavior.
+Destruction settlement is now designer-authored; queue replacement, wipe/recreation, and retreat
+remain product-policy work rather than implicit cleanup behavior.
 
 Move To's interval/off-path repath stage now lives in one private member instead of interrupting
 the main latent-action tick. Canonical action fields, planner classification, force consumption,
