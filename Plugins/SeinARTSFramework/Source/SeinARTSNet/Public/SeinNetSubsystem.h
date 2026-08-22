@@ -33,6 +33,7 @@
 #include "Data/SeinMatchSettings.h"
 #include "Simulation/SeinMatchBootstrapBarrier.h"
 #include "SeinNetProtocolTypes.h"
+#include "SeinConnectionAdmission.h"
 #include "SeinBootstrapConsensus.h"
 #include "SeinTurnAggregator.h"
 #include "SeinNetSubsystem.generated.h"
@@ -765,6 +766,48 @@ public:
 	 *  before constructing a payload. */
 	bool IsNetworkingActive() const;
 
+	/**
+	 * Installs one optional server-only connection authority.
+	 *
+	 * The callback must synchronously validate a pre-issued credential and
+	 * return the exact gameplay slot. It may not mutate simulation state.
+	 */
+	bool RegisterConnectionAdmissionAuthorizer(
+		FName OwnerName,
+		FSeinConnectionAdmissionAuthorizer Authorizer);
+
+	/** Removes an authorizer only when OwnerName still owns the registration. */
+	void UnregisterConnectionAdmissionAuthorizer(FName OwnerName);
+
+	/** True when connections must pass the optional external authority. */
+	bool HasConnectionAdmissionAuthorizer() const
+	{
+		return ConnectionAdmissionAuthorizer.IsBound();
+	}
+
+	/** Validates and briefly retains an exact-seat decision during PreLogin. */
+	bool AuthorizeIncomingConnection(
+		const FString& Options,
+		const FString& Address,
+		const FUniqueNetIdRepl& UniqueId,
+		FString& OutErrorMessage);
+
+	/** Consumes the matching PreLogin decision before player-start selection. */
+	bool ConsumeAuthorizedConnection(
+		APlayerController* Controller,
+		const FString& Options,
+		const FUniqueNetIdRepl& UniqueId,
+		FSeinPlayerID& OutSlot,
+		FString& OutErrorMessage);
+
+#if WITH_DEV_AUTOMATION_TESTS
+	/** Installs one exact active match binding for admission seam tests. */
+	void SetConnectionAdmissionBindingForTests(
+		FSeinMatchInstanceID MatchID,
+		FSeinNetworkParticipantID ParticipantID,
+		FSeinPlayerID Slot);
+#endif
+
 	/** Server-side accessor: every relay currently registered. Client-side:
 	 *  contains only the local relay (or empty if not replicated yet). */
 	const TArray<TWeakObjectPtr<ASeinNetRelay>>& GetRelays() const { return Relays; }
@@ -1149,6 +1192,23 @@ private:
 	FDelegateHandle TickCompletedHandle;
 	FDelegateHandle ExecutionTopologyInvalidatedHandle;
 	bool bModuleOwnedStateReleased = false;
+
+	struct FPendingConnectionAdmission
+	{
+		FGuid RequestDigest;
+		FGuid ClaimsDigest;
+		FSeinMatchInstanceID MatchID;
+		FSeinNetworkParticipantID ParticipantID;
+		FSeinPlayerID AssignedSlot;
+		double ExpiresAtSeconds = 0.0;
+	};
+
+	FName ConnectionAdmissionOwner;
+	FSeinConnectionAdmissionAuthorizer ConnectionAdmissionAuthorizer;
+	TMap<FString, FPendingConnectionAdmission> PendingConnectionAdmissions;
+	TMap<TWeakObjectPtr<APlayerController>, FSeinPlayerID>
+		AuthorizedControllerSlots;
+	FGuid ConnectionAdmissionDigestSalt;
 
 	/** Tracks WHICH WorldSubsystem the world-scoped handles are bound to.
 	 *  Crucial for seamless travel: the GI-scoped NetSubsystem survives the

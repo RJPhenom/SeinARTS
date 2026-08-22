@@ -1,7 +1,7 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-  Package the five production plugins FAB-style and deliver them into the
+  Package the six production plugins FAB-style and deliver them into the
   local WARSEIN project: install, commit, push, and build WARSEINEditor.
 
 .DESCRIPTION
@@ -39,6 +39,7 @@ $Plugins = @(
     'SeinARTSSquadExtension',
     'SeinARTSCoverExtension',
     'SeinARTSMovementPlusExtension',
+    'SeinARTSOnlineServicesExtension',
     'SeinARTSCoverSquadExtension'
 )
 

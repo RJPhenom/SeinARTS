@@ -18,7 +18,7 @@
 #>
 [CmdletBinding()]
 param(
-	[ValidateSet('Framework', 'Cover', 'Squad', 'MovementPlus', 'Full', 'All')]
+	[ValidateSet('Framework', 'Cover', 'Squad', 'MovementPlus', 'OnlineServices', 'Full', 'All')]
 	[string] $Profile = 'All',
 
 	[string] $EngineRoot = 'C:\Program Files\Epic Games\UE_5.8',
@@ -78,7 +78,7 @@ $EditorCmd = Join-Path $EngineRoot 'Engine\Binaries\Win64\UnrealEditor-Cmd.exe'
 $RunUat = Join-Path $EngineRoot 'Engine\Build\BatchFiles\RunUAT.bat'
 $GeneratedRoot = Join-Path $RepoRoot 'Saved\ConsumerMatrix'
 $PluginSourceRoot = Join-Path $RepoRoot 'Plugins'
-$ConsumerGenerationSchemaVersion = 5
+$ConsumerGenerationSchemaVersion = 6
 $ArtifactHashes = @{}
 $ArtifactVersion = $null
 $QualificationRunId = if ($QualificationRunId) {
@@ -122,7 +122,7 @@ foreach ($Required in @($BuildBat, $EditorCmd, $RunUat)) {
 }
 
 $Profiles = if ($Profile -eq 'All') {
-	@('Framework', 'Cover', 'Squad', 'MovementPlus', 'Full')
+	@('Framework', 'Cover', 'Squad', 'MovementPlus', 'OnlineServices', 'Full')
 } else {
 	@($Profile)
 }
@@ -218,6 +218,9 @@ function Get-RequiredArtifactPlugins
 		}
 		if ($ProfileName -eq 'Full') {
 			[void]$Required.Add('SeinARTSCoverSquadExtension')
+		}
+		if ($ProfileName -in @('OnlineServices', 'Full')) {
+			[void]$Required.Add('SeinARTSOnlineServicesExtension')
 		}
 	}
 	return @($Required | Sort-Object)
@@ -766,6 +769,13 @@ function New-ConsumerProject([string] $ProfileName)
 		$ExtraIncludes += '#include "SeinCoverAwareSquadDispatchResolver.h"'
 		$HeaderProof += '(void)USeinCoverAwareSquadDispatchResolver::StaticClass();'
 	}
+	if ($ProfileName -in @('OnlineServices', 'Full')) {
+		$Plugins += 'SeinARTSOnlineServicesExtension'
+		$ModuleDependencies += 'SeinARTSOnlineServices'
+		$Definitions += 'SEIN_CONSUMER_WITH_ONLINE_SERVICES=1'
+		$ExtraIncludes += '#include "Subsystem/SeinOnlineServicesSubsystem.h"'
+		$HeaderProof += '(void)USeinOnlineServicesSubsystem::StaticClass();'
+	}
 
 	foreach ($PluginName in $Plugins) {
 		Copy-CleanPlugin $PluginName $ProjectRoot
@@ -1210,6 +1220,9 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 		}
 		if ($ProfileName -eq 'Full') {
 			$ExistingPlugins += 'SeinARTSCoverSquadExtension'
+		}
+		if ($ProfileName -in @('OnlineServices', 'Full')) {
+			$ExistingPlugins += 'SeinARTSOnlineServicesExtension'
 		}
 		$Project = [pscustomobject]@{
 			Name = $ProfileName

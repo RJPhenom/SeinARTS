@@ -1,8 +1,8 @@
 # SeinARTS Extension Test Suite — Local Guide
 
 Read the root guide and `Plugins/SeinARTSTestSuite/AGENTS.md` first. This disabled non-shipping
-companion owns tests that intentionally link the Squad, Cover, Cover+Squad bridge, and Movement+
-modules.
+companion owns tests that intentionally link the Squad, Cover, Cover+Squad bridge, Movement+, and
+Online Services modules.
 Keeping it separate lets the base test suite compile and run with every extension stripped.
 
 `SeinARTSExtensionTests` owns runtime/cross-extension CQTests.

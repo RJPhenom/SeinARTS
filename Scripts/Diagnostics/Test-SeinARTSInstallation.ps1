@@ -222,6 +222,7 @@ if ($ProjectJson -and $ProjectRoot) {
 		SeinARTSSquadExtension = @('SeinARTSFramework')
 		SeinARTSCoverExtension = @('SeinARTSFramework')
 		SeinARTSMovementPlusExtension = @('SeinARTSFramework')
+		SeinARTSOnlineServicesExtension = @('SeinARTSFramework')
 		SeinARTSCoverSquadExtension = @(
 			'SeinARTSFramework',
 			'SeinARTSCoverExtension',

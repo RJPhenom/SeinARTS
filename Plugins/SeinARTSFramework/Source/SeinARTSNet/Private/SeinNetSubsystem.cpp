@@ -28,6 +28,8 @@
 #include "Engine/GameInstance.h"
 #include "GameFramework/GameModeBase.h"
 #include "GameFramework/PlayerController.h"
+#include "Hash/Blake3.h"
+#include "Kismet/GameplayStatics.h"
 #include "Misc/DateTime.h"
 #include "Misc/Compression.h"
 #include "HAL/PlatformTime.h"
@@ -51,6 +53,59 @@ namespace
 	constexpr double GSeinBootstrapCoordinatorTimeoutSeconds = 30.0;
 	const FName GSeinNetworkBootstrapAuthorityID(
 		TEXT("SeinARTS.Net.LockstepBootstrap"));
+
+	FString CanonicalTransportIdentity(const FUniqueNetIdRepl& Identity)
+	{
+		if (!Identity.IsValid())
+		{
+			return FString();
+		}
+		FString Type;
+		if (Identity.IsV1())
+		{
+			Type = Identity.GetType().ToString();
+		}
+		else if (Identity.IsV2())
+		{
+			Type = LexToString(
+				Identity.GetV2Unsafe().GetOnlineServicesType());
+		}
+		const FString Value = Identity.ToString();
+		return FString::Printf(
+			TEXT("%d:%s|%d:%s"),
+			Type.Len(), *Type, Value.Len(), *Value);
+	}
+
+	FGuid ComputeConnectionAdmissionDigest(
+		const FGuid& Salt,
+		const FString& Options,
+		const FString& Address,
+		const FString& PlatformIdentity)
+	{
+		FString Material;
+		Material.Reserve(
+			64 + Options.Len() + Address.Len() + PlatformIdentity.Len());
+		auto AppendField = [&Material](const FString& Field)
+		{
+			Material.Appendf(TEXT("%d:"), Field.Len());
+			Material.Append(Field);
+			Material.AppendChar(TEXT('|'));
+		};
+		AppendField(Salt.ToString(EGuidFormats::Digits));
+		AppendField(Options);
+		AppendField(Address);
+		AppendField(PlatformIdentity);
+		const FTCHARToUTF8 Utf8(*Material);
+		const FBlake3Hash Hash = FBlake3::HashBuffer(
+			Utf8.Get(), Utf8.Length());
+		FGuid Digest;
+		FMemory::Memcpy(&Digest, Hash.GetBytes(), sizeof(Digest));
+		if (!Digest.IsValid())
+		{
+			Digest.D = 1;
+		}
+		return Digest;
+	}
 
 	struct FSeinAuthorSubmissionBudget
 	{
@@ -299,6 +354,11 @@ void USeinNetSubsystem::ReleaseModuleOwnedStateForModuleUnload()
 	}
 	TravelFailureHandle.Reset();
 	NetworkFailureHandle.Reset();
+	ConnectionAdmissionAuthorizer.Unbind();
+	ConnectionAdmissionOwner = NAME_None;
+	PendingConnectionAdmissions.Reset();
+	AuthorizedControllerSlots.Reset();
+	ConnectionAdmissionDigestSalt.Invalidate();
 
 	// Flush the replay log to disk on session teardown. PIE Stop = end of
 	// match for our purposes, so we always write a file. If the writer isn't
@@ -1169,6 +1229,241 @@ bool USeinNetSubsystem::IsNetworkingActive() const
 	return Settings && Settings->bNetworkingEnabled;
 }
 
+bool USeinNetSubsystem::RegisterConnectionAdmissionAuthorizer(
+	FName OwnerName,
+	FSeinConnectionAdmissionAuthorizer Authorizer)
+{
+	check(IsInGameThread());
+	if (OwnerName.IsNone() || !Authorizer.IsBound()
+		|| (ConnectionAdmissionAuthorizer.IsBound()
+			&& ConnectionAdmissionOwner != OwnerName))
+	{
+		return false;
+	}
+	ConnectionAdmissionOwner = OwnerName;
+	ConnectionAdmissionAuthorizer = MoveTemp(Authorizer);
+	PendingConnectionAdmissions.Reset();
+	AuthorizedControllerSlots.Reset();
+	ConnectionAdmissionDigestSalt = FGuid::NewGuid();
+	return true;
+}
+
+void USeinNetSubsystem::UnregisterConnectionAdmissionAuthorizer(FName OwnerName)
+{
+	check(IsInGameThread());
+	if (ConnectionAdmissionOwner != OwnerName)
+	{
+		return;
+	}
+	ConnectionAdmissionAuthorizer.Unbind();
+	ConnectionAdmissionOwner = NAME_None;
+	PendingConnectionAdmissions.Reset();
+	AuthorizedControllerSlots.Reset();
+	ConnectionAdmissionDigestSalt.Invalidate();
+}
+
+bool USeinNetSubsystem::AuthorizeIncomingConnection(
+	const FString& Options,
+	const FString& Address,
+	const FUniqueNetIdRepl& UniqueId,
+	FString& OutErrorMessage)
+{
+	check(IsInGameThread());
+	OutErrorMessage.Reset();
+	if (!ConnectionAdmissionAuthorizer.IsBound())
+	{
+		return true;
+	}
+
+	const double Now = FPlatformTime::Seconds();
+	for (auto It = PendingConnectionAdmissions.CreateIterator(); It; ++It)
+	{
+		if (It.Value().ExpiresAtSeconds <= Now)
+		{
+			It.RemoveCurrent();
+		}
+	}
+	for (auto It = AuthorizedControllerSlots.CreateIterator(); It; ++It)
+	{
+		if (!It.Key().IsValid())
+		{
+			It.RemoveCurrent();
+		}
+	}
+
+	const FString AdmissionID =
+		UGameplayStatics::ParseOption(Options, TEXT("SeinAdmission"));
+	if (Options.Len() > 8192
+		|| Address.Len() > 1024
+		|| AdmissionID.IsEmpty() || AdmissionID.Len() > 128
+		|| !ConnectionAdmissionDigestSalt.IsValid())
+	{
+		OutErrorMessage = TEXT("Online admission credential is missing");
+		return false;
+	}
+	const FString PlatformIdentity = CanonicalTransportIdentity(UniqueId);
+	if (PlatformIdentity.Len() > 512)
+	{
+		OutErrorMessage = TEXT("Online admission transport identity is invalid");
+		return false;
+	}
+	const FGuid RequestDigest = ComputeConnectionAdmissionDigest(
+		ConnectionAdmissionDigestSalt,
+		Options,
+		Address,
+		PlatformIdentity);
+	const FGuid ClaimsDigest = ComputeConnectionAdmissionDigest(
+		ConnectionAdmissionDigestSalt,
+		Options,
+		FString(),
+		PlatformIdentity);
+	if (const FPendingConnectionAdmission* Existing =
+		PendingConnectionAdmissions.Find(AdmissionID))
+	{
+		if (Existing->RequestDigest == RequestDigest)
+		{
+			return true;
+		}
+		OutErrorMessage = TEXT("Online admission identity changed");
+		return false;
+	}
+	if (PendingConnectionAdmissions.Num() >= 256)
+	{
+		OutErrorMessage = TEXT("Online admission is temporarily full");
+		return false;
+	}
+
+	FSeinConnectionAdmissionRequest Request;
+	Request.AdmissionID = AdmissionID;
+	Request.Options = Options;
+	Request.Address = Address;
+	Request.PlatformIdentity = UniqueId;
+	const FSeinConnectionAdmissionDecision Decision =
+		ConnectionAdmissionAuthorizer.Execute(Request);
+	if (!Decision.bAccepted || !Decision.AssignedSlot.IsValid()
+		|| !Decision.MatchID.IsValid() || !Decision.ParticipantID.IsValid()
+		|| !ActiveProtocolContext.IsValid()
+		|| Decision.MatchID != ActiveProtocolContext.MatchInstanceID
+		|| SlotToParticipant.FindRef(Decision.AssignedSlot)
+			!= Decision.ParticipantID)
+	{
+		OutErrorMessage = Decision.ErrorMessage.IsEmpty()
+			? TEXT("Online admission rejected")
+			: Decision.ErrorMessage.Left(256);
+		return false;
+	}
+	for (const TPair<FString, FPendingConnectionAdmission>& Pair :
+		PendingConnectionAdmissions)
+	{
+		if (Pair.Value.AssignedSlot == Decision.AssignedSlot)
+		{
+			OutErrorMessage = TEXT("Online admission seat is already pending");
+			return false;
+		}
+	}
+	for (const TPair<TWeakObjectPtr<APlayerController>, FSeinPlayerID>& Pair :
+		AuthorizedControllerSlots)
+	{
+		if (Pair.Key.IsValid() && Pair.Value == Decision.AssignedSlot)
+		{
+			OutErrorMessage = TEXT("Online admission seat is already connected");
+			return false;
+		}
+	}
+
+	FPendingConnectionAdmission Pending;
+	Pending.RequestDigest = RequestDigest;
+	Pending.ClaimsDigest = ClaimsDigest;
+	Pending.MatchID = Decision.MatchID;
+	Pending.ParticipantID = Decision.ParticipantID;
+	Pending.AssignedSlot = Decision.AssignedSlot;
+	Pending.ExpiresAtSeconds = Now + 60.0;
+	PendingConnectionAdmissions.Add(AdmissionID, MoveTemp(Pending));
+	return true;
+}
+
+bool USeinNetSubsystem::ConsumeAuthorizedConnection(
+	APlayerController* Controller,
+	const FString& Options,
+	const FUniqueNetIdRepl& UniqueId,
+	FSeinPlayerID& OutSlot,
+	FString& OutErrorMessage)
+{
+	check(IsInGameThread());
+	OutSlot = FSeinPlayerID::Neutral();
+	OutErrorMessage.Reset();
+	if (!ConnectionAdmissionAuthorizer.IsBound())
+	{
+		return true;
+	}
+	if (!Controller)
+	{
+		OutErrorMessage = TEXT("Online admission controller is unavailable");
+		return false;
+	}
+
+	const FString AdmissionID =
+		UGameplayStatics::ParseOption(Options, TEXT("SeinAdmission"));
+	FPendingConnectionAdmission* Pending =
+		PendingConnectionAdmissions.Find(AdmissionID);
+	const FString PlatformIdentity = CanonicalTransportIdentity(UniqueId);
+	const FGuid ClaimsDigest = ComputeConnectionAdmissionDigest(
+		ConnectionAdmissionDigestSalt,
+		Options,
+		FString(),
+		PlatformIdentity);
+	if (!Pending || Pending->ExpiresAtSeconds <= FPlatformTime::Seconds()
+		|| Pending->ClaimsDigest != ClaimsDigest
+		|| !ActiveProtocolContext.IsValid()
+		|| Pending->MatchID != ActiveProtocolContext.MatchInstanceID
+		|| SlotToParticipant.FindRef(Pending->AssignedSlot)
+			!= Pending->ParticipantID)
+	{
+		PendingConnectionAdmissions.Remove(AdmissionID);
+		OutErrorMessage = TEXT("Online admission expired or changed");
+		return false;
+	}
+	for (const TPair<TWeakObjectPtr<APlayerController>, FSeinPlayerID>& Pair :
+		AuthorizedControllerSlots)
+	{
+		if (Pair.Key.IsValid() && Pair.Key.Get() != Controller
+			&& Pair.Value == Pending->AssignedSlot)
+		{
+			PendingConnectionAdmissions.Remove(AdmissionID);
+			OutErrorMessage = TEXT("Online admission seat is already connected");
+			return false;
+		}
+	}
+
+	OutSlot = Pending->AssignedSlot;
+	PendingConnectionAdmissions.Remove(AdmissionID);
+	AuthorizedControllerSlots.Add(Controller, OutSlot);
+	return true;
+}
+
+#if WITH_DEV_AUTOMATION_TESTS
+void USeinNetSubsystem::SetConnectionAdmissionBindingForTests(
+	FSeinMatchInstanceID MatchID,
+	FSeinNetworkParticipantID ParticipantID,
+	FSeinPlayerID Slot)
+{
+	check(IsInGameThread());
+	ActiveProtocolContext = FSeinProtocolContext(
+		MatchID,
+		1,
+		ParticipantID,
+		1,
+		1,
+		FGuid(1, 1, 1, 1),
+		FGuid(2, 2, 2, 2),
+		FGuid(3, 3, 3, 3),
+		FGuid(4, 4, 4, 4),
+		FGuid(5, 5, 5, 5));
+	SlotToParticipant.Reset();
+	SlotToParticipant.Add(Slot, ParticipantID);
+}
+#endif
+
 void USeinNetSubsystem::OnPostLogin(AGameModeBase* GameMode, APlayerController* NewPlayer)
 {
 	if (!GameMode || !NewPlayer) return;
@@ -1211,6 +1506,16 @@ void USeinNetSubsystem::ServerSpawnRelayForController(APlayerController* PC, FSe
 		UE_LOG(LogSeinNet, Warning, TEXT("ServerSpawnRelayForController: invalid slot for PC %s — no relay spawned (legacy auto-assign path?)."),
 			*GetNameSafe(PC));
 		return;
+	}
+	if (ConnectionAdmissionAuthorizer.IsBound())
+	{
+		const FSeinPlayerID* AuthorizedSlot = AuthorizedControllerSlots.Find(PC);
+		if (!AuthorizedSlot || *AuthorizedSlot != Slot)
+		{
+			UE_LOG(LogSeinNet, Error,
+				TEXT("ServerSpawnRelayForController: external admission did not authorize this controller and slot."));
+			return;
+		}
 	}
 
 	UWorld* World = PC->GetWorld();
@@ -2794,6 +3099,10 @@ void USeinNetSubsystem::TryRearmPreparedDestinationStart()
 void USeinNetSubsystem::OnLogout(AGameModeBase* GameMode, AController* Exiting)
 {
 	if (!Exiting || !IsServer()) return;
+	if (APlayerController* ExitingPC = Cast<APlayerController>(Exiting))
+	{
+		AuthorizedControllerSlots.Remove(ExitingPC);
+	}
 
 	// Drop-in/drop-out (Phase 4): instead of destroying the relay on logout,
 	// mark the owning slot as Dropped + retain the relay actor. The server

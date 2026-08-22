@@ -234,9 +234,20 @@ Exit: designers can build representative infantry, squad, cover, vehicle, garris
 
 ## 4. Freeze the online service contracts
 
-**Status: parked by RJ on 2026-08-16.** Do not implement this stage until it is reopened through
-concrete Steamworks/EOS-shaped options that account for the planned SeinARTS Online Services
-extension.
+**Status: provider-neutral contract and Loopback reference implementation complete on 2026-08-21.**
+The optional Online Services extension now covers the frozen account, party, matchmaking,
+allocation, roster, reconnect, result, stat, leaderboard, replay-evidence, campaign-save, and
+telemetry schemas. Durable mutations have principal-scoped retry safety plus semantic uniqueness;
+connection admission uses a non-secret correlation ID, type-qualified transport identity,
+provider-owned exact-seat resolution, and one-use consumption. Provider callbacks are bounded,
+game-thread deferred, cancellation/reset guarded, and synchronously quiesced before module unload.
+Loopback is refused for Shipping, dedicated-server, and authenticated-admission configurations.
+
+Focused contract/security/lifecycle tests, the broad All Unit/Integration/Determinism suites,
+Development builds, and a fresh source consumer with public-header, Shipping, package, and startup
+checks qualify the implementation. The exact-artifact consumer gate is the remaining evidence in
+this wave. Vendor adapters and real dedicated/WAN `PreLogin` -> `InitNewPlayer` qualification remain
+deferred until their concrete integration wave.
 
 The existing Net module is deterministic match transport, not a complete online platform. Add an optional backend-neutral online extension rather than coupling Core/Net to EOS, Steam, or one vendor.
 
@@ -257,7 +268,7 @@ Exit: game UI and progression can target stable provider-neutral interfaces whil
   empty; once present, every website file is bound into immutable release evidence.
 - Release packaging now validates SemVer and refuses to publish dirty or mid-build-drifted source
   under a clean commit/tag identity. It emits SHA-256 artifact/dependency provenance and release
-  publication is gated on fresh consumers built from the exact five ZIPs. Package-only diagnostics
+  publication is gated on fresh consumers built from the exact six ZIPs. Package-only diagnostics
   may still exercise local changes.
 - A machine-readable release-gate entrypoint and manual self-hosted Windows workflow now compose
   Editor/Shipping builds, both test profiles, standalone packaging, and the exact-ZIP consumer
