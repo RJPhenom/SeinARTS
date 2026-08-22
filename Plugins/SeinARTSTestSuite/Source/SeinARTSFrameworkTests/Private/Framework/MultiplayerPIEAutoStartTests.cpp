@@ -19,6 +19,7 @@ namespace UE::SeinARTSTests
 			const TSet<int32>& BoundSlots,
 			bool bEnabled = true,
 			EWorldType::Type WorldType = EWorldType::PIE,
+			bool bPIEViaConsole = false,
 			ENetMode NetMode = NM_ListenServer,
 			bool bExternal = false,
 			bool bPublished = false)
@@ -27,6 +28,7 @@ namespace UE::SeinARTSTests
 				bEnabled,
 				/*bNetworkingEnabled=*/true,
 				WorldType,
+				bPIEViaConsole,
 				NetMode,
 				bExternal,
 				bPublished,
@@ -57,13 +59,20 @@ namespace UE::SeinARTSTests
 		const TSet<int32> BoundSlots = {1};
 
 		ASSERT_THAT(IsTrue(ShouldAutoStart(
-			Settings, BoundSlots, true, EWorldType::PIE, NM_ListenServer)));
+			Settings, BoundSlots, true, EWorldType::PIE, false,
+			NM_ListenServer)));
 		ASSERT_THAT(IsTrue(ShouldAutoStart(
-			Settings, BoundSlots, true, EWorldType::PIE, NM_DedicatedServer)));
+			Settings, BoundSlots, true, EWorldType::PIE, false,
+			NM_DedicatedServer)));
 		ASSERT_THAT(IsFalse(ShouldAutoStart(
-			Settings, BoundSlots, true, EWorldType::PIE, NM_Client)));
+			Settings, BoundSlots, true, EWorldType::PIE, false,
+			NM_Client)));
 		ASSERT_THAT(IsFalse(ShouldAutoStart(
-			Settings, BoundSlots, true, EWorldType::PIE, NM_Standalone)));
+			Settings, BoundSlots, true, EWorldType::PIE, false,
+			NM_Standalone)));
+		ASSERT_THAT(IsTrue(ShouldAutoStart(
+			Settings, BoundSlots, true, EWorldType::Game,
+			/*bPIEViaConsole=*/true, NM_DedicatedServer)));
 	}
 
 	TEST(MultiplayerPIEAutoStartLeavesNonDirectFlowsExplicit,
@@ -76,13 +85,14 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsFalse(ShouldAutoStart(
 			Settings, BoundSlots, /*bEnabled=*/false)));
 		ASSERT_THAT(IsFalse(ShouldAutoStart(
-			Settings, BoundSlots, true, EWorldType::Game)));
+			Settings, BoundSlots, true, EWorldType::Game,
+			/*bPIEViaConsole=*/false)));
 		ASSERT_THAT(IsFalse(ShouldAutoStart(
 			Settings, BoundSlots, true, EWorldType::PIE,
-			NM_ListenServer, /*bExternal=*/true)));
+			false, NM_ListenServer, /*bExternal=*/true)));
 		ASSERT_THAT(IsFalse(ShouldAutoStart(
 			Settings, BoundSlots, true, EWorldType::PIE,
-			NM_ListenServer, false, /*bPublished=*/true)));
+			false, NM_ListenServer, false, /*bPublished=*/true)));
 	}
 
 	TEST(MultiplayerPIEAutoStartRequiresNetworkingAndAHumanSlot,
@@ -98,6 +108,7 @@ namespace UE::SeinARTSTests
 				/*bSettingEnabled=*/true,
 				/*bNetworkingEnabled=*/false,
 				EWorldType::PIE,
+				/*bPIEViaConsole=*/false,
 				NM_ListenServer,
 				/*bHasExternalBootstrap=*/false,
 				/*bHasPublishedSnapshot=*/false,

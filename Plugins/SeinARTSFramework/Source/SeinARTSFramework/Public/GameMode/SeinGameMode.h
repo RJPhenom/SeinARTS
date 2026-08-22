@@ -62,6 +62,7 @@ public:
 		bool bSettingEnabled,
 		bool bNetworkingEnabled,
 		EWorldType::Type WorldType,
+		bool bPIEViaConsole,
 		ENetMode NetMode,
 		bool bHasExternalBootstrap,
 		bool bHasPublishedSnapshot,
