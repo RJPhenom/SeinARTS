@@ -20,6 +20,8 @@
 #include "GameMode/SeinPlayerStart.h"
 #include "GameMode/SeinWorldSettings.h"
 #include "HUD/SeinHUD.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "Player/SeinCameraPawn.h"
 #include "Player/SeinPlayerController.h"
 #include "SeinLobbySubsystem.h"
@@ -54,14 +56,16 @@ namespace
 		bool bSettingEnabled,
 		bool bNetworkingEnabled,
 		EWorldType::Type WorldType,
+		bool bPIEViaConsole,
 		ENetMode NetMode,
 		bool bHasExternalBootstrap,
 		bool bHasPublishedSnapshot,
 		const FSeinMatchSettings& MatchSettings,
 		TFunctionRef<bool(int32)> IsHumanSlotBound)
 	{
-		if (!bSettingEnabled || !bNetworkingEnabled
-			|| WorldType != EWorldType::PIE
+		const bool bEditorLaunchedPIE = WorldType == EWorldType::PIE
+			|| (WorldType == EWorldType::Game && bPIEViaConsole);
+		if (!bSettingEnabled || !bNetworkingEnabled || !bEditorLaunchedPIE
 			|| (NetMode != NM_ListenServer && NetMode != NM_DedicatedServer)
 			|| bHasExternalBootstrap || bHasPublishedSnapshot)
 		{
@@ -229,6 +233,7 @@ bool ASeinGameMode::ShouldAutoStartMultiplayerPIEForTests(
 	bool bSettingEnabled,
 	bool bNetworkingEnabled,
 	EWorldType::Type WorldType,
+	bool bPIEViaConsole,
 	ENetMode NetMode,
 	bool bHasExternalBootstrap,
 	bool bHasPublishedSnapshot,
@@ -239,6 +244,7 @@ bool ASeinGameMode::ShouldAutoStartMultiplayerPIEForTests(
 		bSettingEnabled,
 		bNetworkingEnabled,
 		WorldType,
+		bPIEViaConsole,
 		NetMode,
 		bHasExternalBootstrap,
 		bHasPublishedSnapshot,
@@ -564,6 +570,7 @@ void ASeinGameMode::TryAutoStartMultiplayerPIE()
 		Settings->bAutoStartMultiplayerPIE,
 		Settings->bNetworkingEnabled,
 		World->WorldType,
+		FParse::Param(FCommandLine::Get(), TEXT("PIEVIACONSOLE")),
 		World->GetNetMode(),
 		HasExternalBootstrapIntent(*World),
 		Lobby->HasPublishedSnapshot(),
