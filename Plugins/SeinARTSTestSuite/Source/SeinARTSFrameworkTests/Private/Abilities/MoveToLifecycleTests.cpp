@@ -31,6 +31,7 @@ TArray<ESeinPathResult>
 	USeinMoveToLifecycleTestMovement::ScriptedPathResults;
 TArray<int32> USeinMoveToLifecycleTestMovement::EmptyFoundCallIndices;
 bool USeinMoveToLifecycleTestMovement::bRepathPathsPartial = false;
+bool USeinMoveToLifecycleTestMovement::bInitialPathPartial = false;
 bool USeinMoveToLifecycleTestMovement::bInitialPathSkipsStart = false;
 TFunction<void()> USeinMoveToLifecycleTestMovement::MoveEndCallback;
 
@@ -47,6 +48,7 @@ void USeinMoveToLifecycleTestMovement::Reset()
 	ScriptedPathResults.Reset();
 	EmptyFoundCallIndices.Reset();
 	bRepathPathsPartial = false;
+	bInitialPathPartial = false;
 	bInitialPathSkipsStart = false;
 	MoveEndCallback = nullptr;
 }
@@ -85,7 +87,8 @@ ESeinPathResult USeinMoveToLifecycleTestMovement::PlanPath(
 	}
 	OutPath.Waypoints.Add(Ctx.Destination);
 	OutPath.bIsValid = true;
-	OutPath.bIsPartial = CallIndex > 0 && bRepathPathsPartial;
+	OutPath.bIsPartial = (CallIndex == 0 && bInitialPathPartial)
+		|| (CallIndex > 0 && bRepathPathsPartial);
 	OutPath.DeriveSegmentsFromWaypoints();
 	return ESeinPathResult::Found;
 }
@@ -171,6 +174,8 @@ void USeinMoveToLifecycleTestObserver::HandlePartialPath(
 	FSeinMoveToResult)
 {
 	++PartialPathCount;
+	PartialPathObservedBeginCount =
+		USeinMoveToLifecycleTestMovement::BeginCount;
 	RepathEventOrder.Add(2);
 }
 
@@ -370,6 +375,123 @@ namespace
 
 namespace UE::SeinARTSTests
 {
+	TEST(MoveToInitialThrottleRetriesBeforeMoveBegin,
+		"SeinARTS.Sim.Movement.InitialPath")
+	{
+		FScopedMoveToTestState Reset;
+		USeinMoveToLifecycleTestMovement::ScriptedPathResults = {
+			ESeinPathResult::Throttled,
+			ESeinPathResult::Found
+		};
+		FMoveToLifecycleFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false)));
+
+		Fixture.Tick();
+
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
+		ASSERT_THAT(AreEqual(
+			0, USeinMoveToLifecycleTestMovement::BeginCount));
+		ASSERT_THAT(AreEqual(
+			0, USeinMoveToLifecycleTestMovement::TickCount));
+		ASSERT_THAT(AreEqual(
+			0, USeinMoveToLifecycleTestMovement::EndCount));
+		ASSERT_THAT(IsFalse(Fixture.Action->bCompleted));
+		const FSeinMovementComponent* Movement =
+			Fixture.World->GetComponent<FSeinMovementComponent>(
+				Fixture.Entity);
+		ASSERT_THAT(IsNotNull(Movement));
+		ASSERT_THAT(IsTrue(Movement->bHasTarget));
+		ASSERT_THAT(IsTrue(
+			Movement->TargetLocation == Fixture.Destination));
+
+		Fixture.Tick();
+
+		ASSERT_THAT(AreEqual(
+			2, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::BeginCount));
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::TickCount));
+		ASSERT_THAT(AreEqual(0, Fixture.Observer->FailedCount));
+		ASSERT_THAT(IsFalse(Fixture.Action->bCompleted));
+	}
+
+	TEST(MoveToInitialNoNavigationFailsBeforeMoveBegin,
+		"SeinARTS.Sim.Movement.InitialPath")
+	{
+		FScopedMoveToTestState Reset;
+		USeinMoveToLifecycleTestMovement::ScriptedPathResults = {
+			ESeinPathResult::NoNavigation
+		};
+		FMoveToLifecycleFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false)));
+
+		Fixture.Tick();
+
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
+		ASSERT_THAT(AreEqual(
+			0, USeinMoveToLifecycleTestMovement::BeginCount));
+		ASSERT_THAT(AreEqual(
+			0, USeinMoveToLifecycleTestMovement::TickCount));
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::EndCount));
+		ASSERT_THAT(AreEqual(1, Fixture.Observer->FailedCount));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(ESeinMoveFailureReason::NoNavigation),
+			static_cast<int32>(Fixture.Observer->LastFailure)));
+		ASSERT_THAT(IsTrue(Fixture.Action->bCompleted));
+		ASSERT_THAT(IsTrue(Fixture.Action->bFailed));
+	}
+
+	TEST(MoveToInitialEmptyFoundFailsAsPathNotFound,
+		"SeinARTS.Sim.Movement.InitialPath")
+	{
+		FScopedMoveToTestState Reset;
+		USeinMoveToLifecycleTestMovement::EmptyFoundCallIndices = {0};
+		FMoveToLifecycleFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false)));
+
+		Fixture.Tick();
+
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
+		ASSERT_THAT(AreEqual(
+			0, USeinMoveToLifecycleTestMovement::BeginCount));
+		ASSERT_THAT(AreEqual(
+			0, USeinMoveToLifecycleTestMovement::TickCount));
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::EndCount));
+		ASSERT_THAT(AreEqual(1, Fixture.Observer->FailedCount));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(ESeinMoveFailureReason::PathNotFound),
+			static_cast<int32>(Fixture.Observer->LastFailure)));
+		ASSERT_THAT(IsTrue(Fixture.Action->bCompleted));
+		ASSERT_THAT(IsTrue(Fixture.Action->bFailed));
+	}
+
+	TEST(MoveToInitialPartialNotifiesBeforeMoveBegin,
+		"SeinARTS.Sim.Movement.InitialPath")
+	{
+		FScopedMoveToTestState Reset;
+		USeinMoveToLifecycleTestMovement::bInitialPathPartial = true;
+		FMoveToLifecycleFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false)));
+
+		Fixture.Tick();
+
+		ASSERT_THAT(AreEqual(1, Fixture.Observer->PartialPathCount));
+		ASSERT_THAT(AreEqual(
+			0, Fixture.Observer->PartialPathObservedBeginCount));
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::BeginCount));
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::TickCount));
+		ASSERT_THAT(IsTrue(Fixture.Action->Path.bIsPartial));
+		ASSERT_THAT(IsFalse(Fixture.Action->bCompleted));
+	}
+
 	TEST(MoveToCompletedCallbackCanEndAbilityWithoutCancellation,
 		"SeinARTS.Sim.Movement.Lifecycle")
 	{

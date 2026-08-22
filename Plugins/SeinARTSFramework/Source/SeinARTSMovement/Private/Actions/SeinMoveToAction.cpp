@@ -318,6 +318,239 @@ void USeinMoveToAction::Initialize(const FFixedVector& InDestination)
 	bMovementFinalized = false;
 }
 
+USeinMoveToAction::EInitialPathTickResult
+USeinMoveToAction::ResolveInitialPath(
+	FFixedPoint DeltaTime,
+	USeinWorldSubsystem& World,
+	FSeinEntity& Entity,
+	FSeinMovementComponent& MovementData,
+	const FSeinNavigationComponent* NavigationData,
+	USeinNavigation* Navigation,
+	USeinNavigationSubsystem* NavigationSubsystem)
+{
+	// Acquire the entity's PERSISTENT movement instance (CP2.1, D-R2) from
+	// the movement subsystem's registry — one instance per UNIT, not per
+	// order, so subclass kinematic state (steer, ramps) survives across
+	// orders by construction and the driver can tick the same instance
+	// idle between orders. OnMoveBegin below remains the per-order reset
+	// point (every shipped subclass resets its per-order state there).
+	// The registry owns lifetime/GC-rooting; this action only borrows.
+	USeinMovementSubsystem* MoveSub = World.GetWorld()
+		? World.GetWorld()->GetSubsystem<USeinMovementSubsystem>()
+		: nullptr;
+	Movement = MoveSub
+		? MoveSub->GetOrCreateMovementInstance(
+			OwnerEntity, MovementData)
+		: nullptr;
+	if (!Movement)
+	{
+		Fail(static_cast<uint8>(ESeinMoveFailureReason::NoMovementComponent));
+		return EInitialPathTickResult::Terminal;
+	}
+
+	// Path resolution — delegate to the movement. The movement owns the
+	// planning pipeline: default impl matches today's behavior (cell A*
+	// for ground, straight-line for flying), but subclasses can compose
+	// nav primitives differently (e.g. wheeled fits a kinematic curve
+	// over the cell A* output, emitting arc-tagged segments suited to
+	// its turn dynamics). Result codes map 1:1 to the prior NavSub
+	// dispatch:
+	//   Throttled    → wait, retry next tick (no failure)
+	//   NoNavigation → fail with NoNavigation
+	//   NotFound     → fail with PathNotFound
+	//   Found        → check bIsPartial + commit
+	FSeinPlanPathContext PlanCtx{
+		Entity,
+		&MovementData,
+		NavigationData,
+		Destination,
+		Navigation,
+		NavigationSubsystem,
+		OwnerEntity,
+		&World    // World subsystem for the Extents-cascade footprint lookup.
+	};
+	ESeinPathResult Result;
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_MoveTo_InitialPlanPath);
+		Result = Movement->PlanPath(PlanCtx, Path);
+	}
+
+	// Initial-resolve diagnostic: log PlanPath outcome with start/end pose
+	// + path shape summary so corridor no-op cases (chassis sits still,
+	// "Moving → Completed/Cancelled" sequence) can be traced. Pairs with
+	// LogSeinNavigationAStar's cellA* logs for the full
+	// "what did the planner do for this move order" picture.
+	{
+		const TCHAR* ResultStr =
+			(Result == ESeinPathResult::Found)        ? TEXT("Found")        :
+			(Result == ESeinPathResult::Throttled)    ? TEXT("Throttled")    :
+			(Result == ESeinPathResult::NoNavigation) ? TEXT("NoNavigation") :
+			(Result == ESeinPathResult::NotFound)     ? TEXT("NotFound")     :
+			TEXT("?");
+		const FFixedVector StartPos = Entity.Transform.GetLocation();
+		UE_LOG(LogSeinMove, Verbose,
+			TEXT("MoveToAction initial PlanPath: result=%s start=(%.1f,%.1f) "
+			     "end=(%.1f,%.1f) → waypoints=%d segments=%d bIsValid=%d "
+			     "bIsPartial=%d (entity %s)"),
+			ResultStr,
+			StartPos.X.ToFloat(), StartPos.Y.ToFloat(),
+			Destination.X.ToFloat(), Destination.Y.ToFloat(),
+			Path.Waypoints.Num(), Path.Segments.Num(),
+			Path.bIsValid ? 1 : 0, Path.bIsPartial ? 1 : 0,
+			*OwnerEntity.ToString());
+	}
+
+	// Throttled means "no budget this tick; wait, retry next tick" —
+	// preserve bPathResolved=false. Dropping Movement just clears this action's
+	// BORROWED ref (the persistent instance stays in the registry).
+	if (Result == ESeinPathResult::Throttled)
+	{
+#if !UE_BUILD_SHIPPING
+		// Movement-trace event: how long this unit has stood as a commanded statue
+		// waiting on the path budget (log at 5, then every 30 ticks — a streak past
+		// ~5 means the budget is being starved by earlier-inserted requesters).
+		++InitialThrottleStreak;
+		if (InitialThrottleStreak == 5 || (InitialThrottleStreak % 30) == 0)
+		{
+			UE_LOG(LogSeinMoveTrace, Verbose, TEXT("[THROTTLE] t=%d h=%d:%d streak=%d"),
+				World.GetCurrentTick(), OwnerEntity.Index, OwnerEntity.Generation,
+				InitialThrottleStreak);
+		}
+#endif
+		Movement = nullptr;
+		return EInitialPathTickResult::Waiting;
+	}
+#if !UE_BUILD_SHIPPING
+	InitialThrottleStreak = 0;
+#endif
+	if (Result == ESeinPathResult::NoNavigation)
+	{
+		Fail(static_cast<uint8>(ESeinMoveFailureReason::NoNavigation));
+		return EInitialPathTickResult::Terminal;
+	}
+	if (Result != ESeinPathResult::Found || Path.Waypoints.Num() == 0)
+	{
+		UE_LOG(LogSeinMove, Verbose,
+			TEXT("MoveToAction initial PlanPath: failing with PathNotFound — "
+			     "result=%d waypoints=%d (entity %s)"),
+			static_cast<int32>(Result), Path.Waypoints.Num(),
+			*OwnerEntity.ToString());
+		Fail(static_cast<uint8>(ESeinMoveFailureReason::PathNotFound));
+		return EInitialPathTickResult::Terminal;
+	}
+
+	// Diagnostic-only: spot the "bIsValid=true with 0 drivable segments"
+	// case that produces the visible "Moving → Completed → Cancelled"
+	// no-op sequence — wheeled path-replay sees 0 segments and instantly
+	// classifies as "end of path." Logged here so the no-op is identified
+	// in the log stream without changing behavior; the structural fix
+	// (e.g., invalidate the path in FindPath) is a separate change once
+	// we've confirmed the diagnosis from the logs.
+	if (Movement->GetMinTurnRadius(&MovementData) > FFixedPoint::Zero
+		&& Path.Segments.Num() == 0)
+	{
+		UE_LOG(LogSeinMove, Verbose,
+			TEXT("MoveToAction initial PlanPath: vehicle path has 0 drivable "
+			     "segments but is being committed (entity %s, dest=(%.1f,%.1f), "
+			     "waypoints=%d, bIsValid=%d, bIsPartial=%d) — expect the "
+			     "chassis to no-op and the action to NotifyCompleted instantly. "
+			     "Diagnostic only — no behavior change here."),
+			*OwnerEntity.ToString(),
+			Destination.X.ToFloat(), Destination.Y.ToFloat(),
+			Path.Waypoints.Num(),
+			Path.bIsValid ? 1 : 0,
+			Path.bIsPartial ? 1 : 0);
+	}
+
+	// Surface partial-path commits to the proxy so BPs can react
+	// (UI toast, alternate cursor, cancel-and-retry). The action
+	// continues to the partial endpoint regardless — OnCompleted
+	// will still fire on arrival.
+	if (Path.bIsPartial)
+	{
+		UE_LOG(LogSeinMove, Verbose,
+			TEXT("Initial path is PARTIAL — destination unreachable, routing to closest cell (entity %s)"),
+			*OwnerEntity.ToString());
+		NotifyPartialPath();
+	}
+
+	// Expand any typed (Arc / Jump / Field / AbstractEdge) segments into the drivable waypoint
+	// backbone so the built-in follower can drive them with no follower-loop changes. Self-
+	// guarded + inert for the shipped all-Straight case (leaves Waypoints untouched); a
+	// curve-aware Tier-2 mode ignores the flattened backbone and reads the exact segments.
+	Path.FlattenToWaypoints(GArcFlattenChordError);
+	bPathResolved = true;
+	CurrentWaypointIndex = 0;
+	// Capture the agent's position at the moment this path was
+	// committed. Bypass paths (flying) use AgentPos as their first
+	// waypoint, so origin = waypoint[0] there; for A* paths the
+	// smoother skipped CellPath[0], so origin gives the OffPathOnly
+	// drift detector the implicit start of the polyline. Either way,
+	// PathOrigin = current agent pos at commit time.
+	PathOriginAgentPos = Entity.Transform.GetLocation();
+
+	// Resolve acceptance radius from the unit's navigation component —
+	// properly a per-unit characteristic (footprint / turn radius), not
+	// a per-call concern. Designers tune it on the nav component.
+	// Falls back to 50cm when NavigationData absent so commands still complete
+	// instead of pinning at "almost arrived" forever.
+	AcceptanceRadius = NavigationData
+		? NavigationData->AcceptanceRadius
+		: FSeinNavigationComponent::DefaultArrivalAcceptance();
+
+	// Body radius (once per order) + the shared near-goal settle band: the
+	// stall failsafe SETTLES inside it, the hold-escape ladder is EXCLUDED
+	// from it — one body-aware expression so there is never a gap (a pin
+	// neither owns → the old silent stand) nor an overlap (both fire).
+	// max() with the footprint because a unit ordered flush against a wall
+	// stops ~footprint short of its final waypoint regardless of how small
+	// the authored acceptance is; +100cm absorbs C-space rounding.
+	FootprintRadius = USeinMovement::ResolveCollisionRadius(
+		&World, OwnerEntity, NavigationData);
+	StallBand = SaturatingPositiveScale(AcceptanceRadius, 3);
+	const FFixedPoint BodyBand = SaturatingPositiveAdd(
+		FootprintRadius, FFixedPoint::FromInt(100));
+	if (BodyBand > StallBand) { StallBand = BodyBand; }
+
+	// Query the composed provider registry once, then carry the result on the
+	// movement context so ResolveNavCollision can honor the exact destination.
+	bAuthoritativeDestination = World.IsAuthoritativeDestination(
+		Destination, OwnerEntity);
+
+	FSeinMovementContext BeginCtx{
+		Entity,
+		&MovementData,
+		NavigationData,
+		Path,
+		CurrentWaypointIndex,
+		FFixedVector::SquareSaturated(AcceptanceRadius),
+		DeltaTime,
+		Navigation,
+		&World,
+		OwnerEntity
+	};
+	BeginCtx.ExactAcceptanceRadius = AcceptanceRadius;
+	// Resolve the entity's collision footprint cascade
+	// (Extents → NavigationData->FallbackFootprintRadius → 0) BEFORE OnMoveBegin
+	// so the movement's footprint-aware ResolveNavCollision is fully wired
+	// from the very first tick. Single-shot lookup; the cache is entity-stable
+	// across the move action.
+	Movement->CacheFootprintFromContext(BeginCtx);
+	if (UWorld* UnrealWorld = World.GetWorld())
+	{
+		if (USeinMovementSubsystem* MovementSub =
+			UnrealWorld->GetSubsystem<USeinMovementSubsystem>())
+		{
+			MovementSub->MarkMovementStateDirty(OwnerEntity);
+		}
+	}
+	// The first path is committed and the unit is genuinely departing.
+	// Failures before this point leave any still-occupied frozen claim live.
+	World.NotifyFrozenDestinationDeparture(OwnerEntity);
+	Movement->OnMoveBegin(BeginCtx);
+	return EInitialPathTickResult::Ready;
+}
+
 USeinMoveToAction::ERepathTickResult USeinMoveToAction::TickRepath(
 	FFixedPoint DeltaTime,
 	USeinWorldSubsystem& World,
@@ -563,230 +796,18 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		? World.GetWorld()->GetSubsystem<USeinNavigationSubsystem>()
 		: nullptr;
 
-	// First-tick setup: acquire the movement, then either FindPath or
-	// synthesize a straight-line path depending on the movement's
-	// `BypassPathfinding()` answer. Movement comes first so we can ask it.
 	if (!bPathResolved)
 	{
-		// Acquire the entity's PERSISTENT movement instance (CP2.1, D-R2) from
-		// the movement subsystem's registry — one instance per UNIT, not per
-		// order, so subclass kinematic state (steer, ramps) survives across
-		// orders by construction and the driver can tick the same instance
-		// idle between orders. OnMoveBegin below remains the per-order reset
-		// point (every shipped subclass resets its per-order state there).
-		// The registry owns lifetime/GC-rooting; this action only borrows.
-		USeinMovementSubsystem* MoveSub = World.GetWorld()
-			? World.GetWorld()->GetSubsystem<USeinMovementSubsystem>()
-			: nullptr;
-		Movement = MoveSub
-			? MoveSub->GetOrCreateMovementInstance(OwnerEntity, *MoveComp)
-			: nullptr;
-		if (!Movement)
+		switch (ResolveInitialPath(
+			DeltaTime, World, *Entity, *MoveComp, NavComp, Nav, NavSub))
 		{
-			Fail(static_cast<uint8>(ESeinMoveFailureReason::NoMovementComponent));
-			return true;
-		}
-
-		// Path resolution — delegate to the movement. The movement owns the
-		// planning pipeline: default impl matches today's behavior (cell A*
-		// for ground, straight-line for flying), but subclasses can compose
-		// nav primitives differently (e.g. wheeled fits a kinematic curve
-		// over the cell A* output, emitting arc-tagged segments suited to
-		// its turn dynamics). Result codes map 1:1 to the prior NavSub
-		// dispatch:
-		//   Throttled    → wait, retry next tick (no failure)
-		//   NoNavigation → fail with NoNavigation
-		//   NotFound     → fail with PathNotFound
-		//   Found        → check bIsPartial + commit
-		FSeinPlanPathContext PlanCtx{
-			*Entity,
-			MoveComp,
-			NavComp,
-			Destination,
-			Nav,
-			NavSub,
-			OwnerEntity,
-			&World    // World subsystem for the Extents-cascade footprint lookup.
-		};
-		ESeinPathResult Result;
-		{
-			TRACE_CPUPROFILER_EVENT_SCOPE(Sein_MoveTo_InitialPlanPath);
-			Result = Movement->PlanPath(PlanCtx, Path);
-		}
-
-		// Initial-resolve diagnostic: log PlanPath outcome with start/end pose
-		// + path shape summary so corridor no-op cases (chassis sits still,
-		// "Moving → Completed/Cancelled" sequence) can be traced. Pairs with
-		// LogSeinNavigationAStar's cellA* logs for the full
-		// "what did the planner do for this move order" picture.
-		{
-			const TCHAR* ResultStr =
-				(Result == ESeinPathResult::Found)        ? TEXT("Found")        :
-				(Result == ESeinPathResult::Throttled)    ? TEXT("Throttled")    :
-				(Result == ESeinPathResult::NoNavigation) ? TEXT("NoNavigation") :
-				(Result == ESeinPathResult::NotFound)     ? TEXT("NotFound")     :
-				TEXT("?");
-			const FFixedVector StartPos = Entity->Transform.GetLocation();
-			UE_LOG(LogSeinMove, Verbose,
-				TEXT("MoveToAction initial PlanPath: result=%s start=(%.1f,%.1f) "
-				     "end=(%.1f,%.1f) → waypoints=%d segments=%d bIsValid=%d "
-				     "bIsPartial=%d (entity %s)"),
-				ResultStr,
-				StartPos.X.ToFloat(), StartPos.Y.ToFloat(),
-				Destination.X.ToFloat(), Destination.Y.ToFloat(),
-				Path.Waypoints.Num(), Path.Segments.Num(),
-				Path.bIsValid ? 1 : 0, Path.bIsPartial ? 1 : 0,
-				*OwnerEntity.ToString());
-		}
-
-		// Throttled means "no budget this tick; wait, retry next tick" —
-		// return false WITHOUT setting bPathResolved. Dropping Movement just
-		// clears this action's BORROWED ref (the persistent instance stays in
-		// the registry; next tick re-acquires it).
-		if (Result == ESeinPathResult::Throttled)
-		{
-#if !UE_BUILD_SHIPPING
-			// Movement-trace event: how long this unit has stood as a commanded statue
-			// waiting on the path budget (log at 5, then every 30 ticks — a streak past
-			// ~5 means the budget is being starved by earlier-inserted requesters).
-			++InitialThrottleStreak;
-			if (InitialThrottleStreak == 5 || (InitialThrottleStreak % 30) == 0)
-			{
-				UE_LOG(LogSeinMoveTrace, Verbose, TEXT("[THROTTLE] t=%d h=%d:%d streak=%d"),
-					World.GetCurrentTick(), OwnerEntity.Index, OwnerEntity.Generation,
-					InitialThrottleStreak);
-			}
-#endif
-			Movement = nullptr;
+		case EInitialPathTickResult::Ready:
+			break;
+		case EInitialPathTickResult::Waiting:
 			return false;
-		}
-#if !UE_BUILD_SHIPPING
-		InitialThrottleStreak = 0;
-#endif
-		if (Result == ESeinPathResult::NoNavigation)
-		{
-			Fail(static_cast<uint8>(ESeinMoveFailureReason::NoNavigation));
+		case EInitialPathTickResult::Terminal:
 			return true;
 		}
-		if (Result != ESeinPathResult::Found || Path.Waypoints.Num() == 0)
-		{
-			UE_LOG(LogSeinMove, Verbose,
-				TEXT("MoveToAction initial PlanPath: failing with PathNotFound — "
-				     "result=%d waypoints=%d (entity %s)"),
-				static_cast<int32>(Result), Path.Waypoints.Num(),
-				*OwnerEntity.ToString());
-			Fail(static_cast<uint8>(ESeinMoveFailureReason::PathNotFound));
-			return true;
-		}
-
-		// Diagnostic-only: spot the "bIsValid=true with 0 drivable segments"
-		// case that produces the visible "Moving → Completed → Cancelled"
-		// no-op sequence — wheeled path-replay sees 0 segments and instantly
-		// classifies as "end of path." Logged here so the no-op is identified
-		// in the log stream without changing behavior; the structural fix
-		// (e.g., invalidate the path in FindPath) is a separate change once
-		// we've confirmed the diagnosis from the logs.
-		if (Movement->GetMinTurnRadius(MoveComp) > FFixedPoint::Zero && Path.Segments.Num() == 0)
-		{
-			UE_LOG(LogSeinMove, Verbose,
-				TEXT("MoveToAction initial PlanPath: vehicle path has 0 drivable "
-				     "segments but is being committed (entity %s, dest=(%.1f,%.1f), "
-				     "waypoints=%d, bIsValid=%d, bIsPartial=%d) — expect the "
-				     "chassis to no-op and the action to NotifyCompleted instantly. "
-				     "Diagnostic only — no behavior change here."),
-				*OwnerEntity.ToString(),
-				Destination.X.ToFloat(), Destination.Y.ToFloat(),
-				Path.Waypoints.Num(),
-				Path.bIsValid ? 1 : 0,
-				Path.bIsPartial ? 1 : 0);
-		}
-
-		// Surface partial-path commits to the proxy so BPs can react
-		// (UI toast, alternate cursor, cancel-and-retry). The action
-		// continues to the partial endpoint regardless — OnCompleted
-		// will still fire on arrival.
-		if (Path.bIsPartial)
-		{
-			UE_LOG(LogSeinMove, Verbose,
-				TEXT("Initial path is PARTIAL — destination unreachable, routing to closest cell (entity %s)"),
-				*OwnerEntity.ToString());
-			NotifyPartialPath();
-		}
-
-		// Expand any typed (Arc / Jump / Field / AbstractEdge) segments into the drivable waypoint
-		// backbone so the built-in follower can drive them with no follower-loop changes. Self-
-		// guarded + inert for the shipped all-Straight case (leaves Waypoints untouched); a
-		// curve-aware Tier-2 mode ignores the flattened backbone and reads the exact segments.
-		Path.FlattenToWaypoints(GArcFlattenChordError);
-
-		bPathResolved = true;
-		CurrentWaypointIndex = 0;
-		// Capture the agent's position at the moment this path was
-		// committed. Bypass paths (flying) use AgentPos as their first
-		// waypoint, so origin = waypoint[0] there; for A* paths the
-		// smoother skipped CellPath[0], so origin gives the OffPathOnly
-		// drift detector the implicit start of the polyline. Either way,
-		// PathOrigin = current agent pos at commit time.
-		PathOriginAgentPos = Entity->Transform.GetLocation();
-
-		// Resolve acceptance radius from the unit's navigation component —
-		// properly a per-unit characteristic (footprint / turn radius), not
-		// a per-call concern. Designers tune it on the nav component.
-		// Falls back to 50cm when NavComp absent so commands still complete
-		// instead of pinning at "almost arrived" forever.
-		AcceptanceRadius = NavComp
-			? NavComp->AcceptanceRadius
-			: FSeinNavigationComponent::DefaultArrivalAcceptance();
-
-		// Body radius (once per order) + the shared near-goal settle band: the
-		// stall failsafe SETTLES inside it, the hold-escape ladder is EXCLUDED
-		// from it — one body-aware expression so there is never a gap (a pin
-		// neither owns → the old silent stand) nor an overlap (both fire).
-		// max() with the footprint because a unit ordered flush against a wall
-		// stops ~footprint short of its final waypoint regardless of how small
-		// the authored acceptance is; +100cm absorbs C-space rounding.
-		FootprintRadius = USeinMovement::ResolveCollisionRadius(&World, OwnerEntity, NavComp);
-		StallBand = SaturatingPositiveScale(AcceptanceRadius, 3);
-		const FFixedPoint BodyBand = SaturatingPositiveAdd(
-			FootprintRadius, FFixedPoint::FromInt(100));
-		if (BodyBand > StallBand) { StallBand = BodyBand; }
-
-		// Query the composed provider registry once, then carry the result on the
-		// movement context so ResolveNavCollision can honor the exact destination.
-		bAuthoritativeDestination = World.IsAuthoritativeDestination(
-			Destination, OwnerEntity);
-
-		FSeinMovementContext BeginCtx{
-			*Entity,
-			MoveComp,
-			NavComp,
-			Path,
-			CurrentWaypointIndex,
-			FFixedVector::SquareSaturated(AcceptanceRadius),
-			DeltaTime,
-			Nav,
-			&World,
-			OwnerEntity
-		};
-		BeginCtx.ExactAcceptanceRadius = AcceptanceRadius;
-		// Resolve the entity's collision footprint cascade
-		// (Extents → NavComp->FallbackFootprintRadius → 0) BEFORE OnMoveBegin so
-		// the movement's footprint-aware ResolveNavCollision is fully wired
-		// from the very first tick. Single-shot lookup; the cache is
-		// entity-stable across the move action.
-		Movement->CacheFootprintFromContext(BeginCtx);
-		if (UWorld* UnrealWorld = World.GetWorld())
-		{
-			if (USeinMovementSubsystem* MovementSub =
-				UnrealWorld->GetSubsystem<USeinMovementSubsystem>())
-			{
-				MovementSub->MarkMovementStateDirty(OwnerEntity);
-			}
-		}
-		// The first path is committed and the unit is genuinely departing.
-		// Failures before this point leave any still-occupied frozen claim live.
-		World.NotifyFrozenDestinationDeparture(OwnerEntity);
-		Movement->OnMoveBegin(BeginCtx);
 	}
 
 	if (!Movement)

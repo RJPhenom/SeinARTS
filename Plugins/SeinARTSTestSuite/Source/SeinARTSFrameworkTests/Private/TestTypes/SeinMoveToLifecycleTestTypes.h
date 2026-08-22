@@ -34,6 +34,7 @@ public:
 	static TArray<ESeinPathResult> ScriptedPathResults;
 	static TArray<int32> EmptyFoundCallIndices;
 	static bool bRepathPathsPartial;
+	static bool bInitialPathPartial;
 	static bool bInitialPathSkipsStart;
 	static TFunction<void()> MoveEndCallback;
 
@@ -117,6 +118,7 @@ public:
 	int32 CancelledCount = 0;
 	int32 PathRecomputedCount = 0;
 	int32 PartialPathCount = 0;
+	int32 PartialPathObservedBeginCount = INDEX_NONE;
 	TArray<int32> RepathEventOrder;
 	FFixedPoint RecomputedObservedRepathElapsed = FFixedPoint::MinValue;
 	bool bCompletedSawTerminalAction = false;
