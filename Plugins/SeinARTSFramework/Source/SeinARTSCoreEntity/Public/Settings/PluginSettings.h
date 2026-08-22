@@ -954,9 +954,10 @@ public:
 	bool bNetworkingEnabled;
 
 #if WITH_EDITORONLY_DATA
-	/** Starts a direct multiplayer PIE match automatically once every Human slot authored in the
-	 *  level has connected. Disable this to keep the simulation waiting until the server runs
-	 *  Sein.Net.StartMatch. Lobby-driven starts and packaged games are unaffected. */
+	/** Starts a direct multiplayer PIE match automatically once Unreal's requested Number of Players
+	 *  has connected. Authored Human slots beyond that count remain empty. Disable this to keep the
+	 *  simulation waiting until the server runs Sein.Net.StartMatch. Lobby-driven starts and packaged
+	 *  games are unaffected. */
 	UPROPERTY(Config, EditAnywhere, Category = "Network|PIE",
 		meta = (DisplayName = "Auto Start Multiplayer PIE"))
 	bool bAutoStartMultiplayerPIE;

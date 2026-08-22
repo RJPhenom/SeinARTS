@@ -1,6 +1,14 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
- * @file    SeinMatchBootstrapTransaction.cpp
+ *
+ * @file         SeinMatchBootstrapTransaction.cpp
+ * @author       RJ Macklem
+ * @created      17 Aug 2026
+ * @latest       22 Aug 2026
+ * @brief        Builds and applies deterministic tick-zero materialization plans.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
  */
 
 #include "GameMode/SeinMatchBootstrapTransaction.h"
@@ -8,7 +16,9 @@
 
 #include "Actor/SeinActor.h"
 #include "Actor/SeinEntityComponent.h"
+#include "Components/ActorComponent.h"
 #include "Core/SeinPlayerState.h"
+#include "Engine/LatentActionManager.h"
 #include "Engine/Level.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -184,6 +194,7 @@ bool FSeinMatchBootstrapTransaction::Preflight(FString& OutError)
 	Plan = FSeinBootstrapPlanDigestData();
 	PlayerStarts.Reset();
 	PlacedActors.Reset();
+	InactivePlacedActors.Reset();
 
 	TMap<int32, TArray<TWeakObjectPtr<ASeinPlayerStart>>> StartsBySlot;
 	for (TActorIterator<ASeinPlayerStart> It(CurrentWorld); It; ++It)
@@ -275,20 +286,19 @@ bool FSeinMatchBootstrapTransaction::Preflight(FString& OutError)
 		FSeinBootstrapPlacedActorPlanEntry Entry;
 		TWeakObjectPtr<ASeinActor> Actor;
 	};
+	struct FPendingInactivePlacedActor
+	{
+		FSeinBootstrapInactivePlacedActorPlanEntry Entry;
+		TWeakObjectPtr<ASeinActor> Actor;
+	};
 	TArray<FPendingPlacedActor> PendingPlacedActors;
+	TArray<FPendingInactivePlacedActor> PendingInactivePlacedActors;
 	for (TActorIterator<ASeinActor> It(CurrentWorld); It; ++It)
 	{
 		ASeinActor* Actor = *It;
 		if (!Actor || Actor->HasValidEntity())
 		{
 			continue;
-		}
-		if (!Actor->bSimLocationBaked || !Actor->bSimRotationBaked)
-		{
-			OutError = FString::Printf(
-				TEXT("Placed actor %s has no complete baked fixed transform; re-save the level."),
-				*Actor->GetPathName());
-			return false;
 		}
 		if (Actor->PlayerSlot < 0 || Actor->PlayerSlot > MAX_uint8)
 		{
@@ -303,9 +313,19 @@ bool FSeinMatchBootstrapTransaction::Preflight(FString& OutError)
 			: FSeinPlayerID::Neutral();
 		if (Owner.IsValid() && !ActivePlayerIDs.Contains(Owner))
 		{
+			FPendingInactivePlacedActor& Pending =
+				PendingInactivePlacedActors.AddDefaulted_GetRef();
+			Pending.Entry.StableKey = BuildPlacedActorStableKey(*Actor);
+			Pending.Entry.ActorClassPath = Actor->GetClass()->GetPathName();
+			Pending.Entry.OwnerPlayerID = Owner;
+			Pending.Actor = Actor;
+			continue;
+		}
+		if (!Actor->bSimLocationBaked || !Actor->bSimRotationBaked)
+		{
 			OutError = FString::Printf(
-				TEXT("Placed actor %s is owned by inactive slot %u."),
-				*Actor->GetPathName(), Owner.Value);
+				TEXT("Placed actor %s has no complete baked fixed transform; re-save the level."),
+				*Actor->GetPathName());
 			return false;
 		}
 
@@ -351,13 +371,35 @@ bool FSeinMatchBootstrapTransaction::Preflight(FString& OutError)
 		PlacedActors.Add(PendingPlacedActors[Index].Actor);
 	}
 
+	PendingInactivePlacedActors.Sort(
+		[](const FPendingInactivePlacedActor& A,
+			const FPendingInactivePlacedActor& B)
+		{
+			return A.Entry.StableKey < B.Entry.StableKey;
+		});
+	for (int32 Index = 0; Index < PendingInactivePlacedActors.Num(); ++Index)
+	{
+		if (Index > 0
+			&& PendingInactivePlacedActors[Index - 1].Entry.StableKey
+				== PendingInactivePlacedActors[Index].Entry.StableKey)
+		{
+			OutError = FString::Printf(
+				TEXT("Inactive placed actor bootstrap key is duplicated: %s."),
+				*PendingInactivePlacedActors[Index].Entry.StableKey);
+			return false;
+		}
+		Plan.InactivePlacedActors.Add(PendingInactivePlacedActors[Index].Entry);
+		InactivePlacedActors.Add(PendingInactivePlacedActors[Index].Actor);
+	}
+
 	return true;
 }
 
 bool FSeinMatchBootstrapTransaction::VerifyFrozenPlan(FString& OutError) const
 {
 	if (Plan.Players.Num() != PlayerStarts.Num()
-		|| Plan.PlacedActors.Num() != PlacedActors.Num())
+		|| Plan.PlacedActors.Num() != PlacedActors.Num()
+		|| Plan.InactivePlacedActors.Num() != InactivePlacedActors.Num())
 	{
 		OutError = TEXT("Framework bootstrap plan/reference cardinality changed before apply.");
 		return false;
@@ -400,6 +442,34 @@ bool FSeinMatchBootstrapTransaction::VerifyFrozenPlan(FString& OutError) const
 		{
 			OutError = FString::Printf(
 				TEXT("Placed actor plan entry %d changed between preflight and apply."), Index);
+			return false;
+		}
+	}
+	for (int32 Index = 0; Index < Plan.InactivePlacedActors.Num(); ++Index)
+	{
+		const ASeinActor* Actor = InactivePlacedActors[Index].Get();
+		const FSeinBootstrapInactivePlacedActorPlanEntry& Entry =
+			Plan.InactivePlacedActors[Index];
+		if (!Actor || Actor->HasValidEntity() || Actor->PlayerSlot <= 0
+			|| Actor->PlayerSlot > MAX_uint8
+			|| BuildPlacedActorStableKey(*Actor) != Entry.StableKey
+			|| Actor->GetClass()->GetPathName() != Entry.ActorClassPath
+			|| FSeinPlayerID(static_cast<uint8>(Actor->PlayerSlot))
+				!= Entry.OwnerPlayerID)
+		{
+			OutError = FString::Printf(
+				TEXT("Inactive placed actor plan entry %d changed between preflight and apply."),
+				Index);
+			return false;
+		}
+		if (Plan.Players.ContainsByPredicate(
+			[Owner = Entry.OwnerPlayerID](
+				const FSeinBootstrapPlayerPlanEntry& Player)
+			{
+				return Player.PlayerID == Owner;
+			}))
+		{
+			OutError = TEXT("Inactive placed actor became active between preflight and apply.");
 			return false;
 		}
 	}
@@ -463,6 +533,39 @@ bool FSeinMatchBootstrapTransaction::Apply(FString& OutError)
 				TEXT("Framework bootstrap failed to register placed actor %s."),
 				*Plan.PlacedActors[Index].StableKey);
 			return false;
+		}
+	}
+	for (int32 Index = 0; Index < Plan.InactivePlacedActors.Num(); ++Index)
+	{
+		ASeinActor* Actor = InactivePlacedActors[Index].Get();
+		if (!Actor)
+		{
+			OutError = FString::Printf(
+				TEXT("Framework bootstrap lost inactive placed actor %s."),
+				*Plan.InactivePlacedActors[Index].StableKey);
+			return false;
+		}
+
+		// Inactive authored seats are absent from canonical simulation. Keep the
+		// replicated actor shell locally inert instead of calling authority-only
+		// Destroy(), which cannot produce the same result on client peers.
+		Actor->SetActorHiddenInGame(true);
+		Actor->SetActorEnableCollision(false);
+		Actor->SetActorTickEnabled(false);
+		CurrentWorld->GetTimerManager().ClearAllTimersForObject(Actor);
+		CurrentWorld->GetLatentActionManager().RemoveActionsForObject(Actor);
+
+		TInlineComponentArray<UActorComponent*> Components(Actor);
+		for (UActorComponent* Component : Components)
+		{
+			if (!Component)
+			{
+				continue;
+			}
+			Component->Deactivate();
+			Component->SetComponentTickEnabled(false);
+			CurrentWorld->GetTimerManager().ClearAllTimersForObject(Component);
+			CurrentWorld->GetLatentActionManager().RemoveActionsForObject(Component);
 		}
 	}
 

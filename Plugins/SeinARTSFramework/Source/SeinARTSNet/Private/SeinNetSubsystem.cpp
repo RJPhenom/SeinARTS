@@ -5266,6 +5266,14 @@ void USeinNetSubsystem::StartLockstepSession()
 	bDestinationStartPending = false;
 	bServerStartRequested = true;
 	bBootstrapLaunchBarrierActive = true;
+	if (UGameInstance* GI = GetGameInstance())
+	{
+		if (USeinLobbySubsystem* Lobby =
+			GI->GetSubsystem<USeinLobbySubsystem>())
+		{
+			Lobby->ConfirmPublishedMatchSettingsLaunch();
+		}
+	}
 	StartBootstrapCoordinatorTimeout();
 	if (!BootstrapSessionFailureReason.IsEmpty()) return;
 	TryDispatchLockstepSessionStart();

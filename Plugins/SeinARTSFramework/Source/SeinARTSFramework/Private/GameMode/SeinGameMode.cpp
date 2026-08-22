@@ -21,6 +21,7 @@
 #include "GameMode/SeinWorldSettings.h"
 #include "HUD/SeinHUD.h"
 #include "Misc/CommandLine.h"
+#include "Misc/ConfigCacheIni.h"
 #include "Misc/Parse.h"
 #include "Player/SeinCameraPawn.h"
 #include "Player/SeinPlayerController.h"
@@ -52,7 +53,7 @@ namespace
 	}
 
 #if WITH_EDITOR || WITH_DEV_AUTOMATION_TESTS
-	bool ShouldRequestMultiplayerPIEAutoStart(
+	bool BuildMultiplayerPIEAutoStartSettings(
 		bool bSettingEnabled,
 		bool bNetworkingEnabled,
 		EWorldType::Type WorldType,
@@ -60,32 +61,60 @@ namespace
 		ENetMode NetMode,
 		bool bHasExternalBootstrap,
 		bool bHasPublishedSnapshot,
+		int32 ExpectedPIEPlayers,
 		const FSeinMatchSettings& MatchSettings,
-		TFunctionRef<bool(int32)> IsHumanSlotBound)
+		TFunctionRef<bool(int32)> IsHumanSlotBound,
+		FSeinMatchSettings& FinalizedSettingsOut)
 	{
+		FinalizedSettingsOut = FSeinMatchSettings();
 		const bool bEditorLaunchedPIE = WorldType == EWorldType::PIE
 			|| (WorldType == EWorldType::Game && bPIEViaConsole);
 		if (!bSettingEnabled || !bNetworkingEnabled || !bEditorLaunchedPIE
 			|| (NetMode != NM_ListenServer && NetMode != NM_DedicatedServer)
-			|| bHasExternalBootstrap || bHasPublishedSnapshot)
+			|| bHasExternalBootstrap || bHasPublishedSnapshot
+			|| ExpectedPIEPlayers <= 0)
 		{
 			return false;
 		}
 
-		bool bHasHumanSlot = false;
-		for (const FSeinMatchSlot& Slot : MatchSettings.Slots)
+		FinalizedSettingsOut = MatchSettings;
+		int32 BoundHumanSlots = 0;
+		for (FSeinMatchSlot& Slot : FinalizedSettingsOut.Slots)
 		{
 			if (Slot.State != ESeinSlotState::Human)
 			{
 				continue;
 			}
-			bHasHumanSlot = true;
-			if (!IsHumanSlotBound(Slot.SlotIndex))
+			if (IsHumanSlotBound(Slot.SlotIndex))
 			{
-				return false;
+				++BoundHumanSlots;
+			}
+			else
+			{
+				// Player starts describe available seats. Direct PIE fills only
+				// the number of Human seats requested by Unreal's play settings.
+				Slot.State = ESeinSlotState::Open;
 			}
 		}
-		return bHasHumanSlot;
+		return BoundHumanSlots == ExpectedPIEPlayers;
+	}
+#endif
+
+#if WITH_EDITOR
+	int32 ResolveExpectedPIEPlayerCount()
+	{
+		static const TCHAR* PlaySettingsSection =
+			TEXT("/Script/UnrealEd.LevelEditorPlaySettings");
+		int32 ExpectedPlayers = 1;
+		if (GConfig)
+		{
+			GConfig->GetInt(
+				PlaySettingsSection,
+				TEXT("PlayNumberOfClients"),
+				ExpectedPlayers,
+				GEditorPerProjectIni);
+		}
+		return FMath::Max(1, ExpectedPlayers);
 	}
 #endif
 }
@@ -229,7 +258,7 @@ void ASeinGameMode::CompletePostLoginForTests(APlayerController* NewPlayer)
 	HandleStartingNewPlayer(NewPlayer);
 }
 
-bool ASeinGameMode::ShouldAutoStartMultiplayerPIEForTests(
+bool ASeinGameMode::BuildMultiplayerPIEAutoStartSettingsForTests(
 	bool bSettingEnabled,
 	bool bNetworkingEnabled,
 	EWorldType::Type WorldType,
@@ -237,10 +266,12 @@ bool ASeinGameMode::ShouldAutoStartMultiplayerPIEForTests(
 	ENetMode NetMode,
 	bool bHasExternalBootstrap,
 	bool bHasPublishedSnapshot,
+	int32 ExpectedPIEPlayers,
 	const FSeinMatchSettings& MatchSettings,
-	const TSet<int32>& BoundHumanSlots)
+	const TSet<int32>& BoundHumanSlots,
+	FSeinMatchSettings& FinalizedSettingsOut)
 {
-	return ShouldRequestMultiplayerPIEAutoStart(
+	return BuildMultiplayerPIEAutoStartSettings(
 		bSettingEnabled,
 		bNetworkingEnabled,
 		WorldType,
@@ -248,13 +279,35 @@ bool ASeinGameMode::ShouldAutoStartMultiplayerPIEForTests(
 		NetMode,
 		bHasExternalBootstrap,
 		bHasPublishedSnapshot,
+		ExpectedPIEPlayers,
 		MatchSettings,
 		[&BoundHumanSlots](int32 SlotIndex)
 		{
 			return BoundHumanSlots.Contains(SlotIndex);
-		});
+		},
+		FinalizedSettingsOut);
 }
 #endif
+
+void ASeinGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (USeinLobbySubsystem* Lobby =
+			GameInstance->GetSubsystem<USeinLobbySubsystem>())
+		{
+			Lobby->OnMatchSettingsLaunchCommitted().RemoveAll(this);
+		}
+	}
+#if WITH_EDITOR
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(
+			MultiplayerPIEAutoStartRetryHandle);
+	}
+#endif
+	Super::EndPlay(EndPlayReason);
+}
 
 void ASeinGameMode::InitGame(
 	const FString& MapName,
@@ -292,14 +345,25 @@ void ASeinGameMode::InitGame(
 	bMatchSettingsResolved = true;
 
 	// Admission capacity is GameInstance-scoped and may be queried before the
-	// destination lobby actor exists. Stage only the immutable slot count here;
-	// no deterministic player/entity state is touched by GameMode.
+	// destination lobby actor exists. Direct maps stage their canonical slot
+	// defaults so manual and automatic starts preserve identical metadata.
 	if (UGameInstance* GameInstance = GetGameInstance())
 	{
 		if (USeinLobbySubsystem* Lobby =
 			GameInstance->GetSubsystem<USeinLobbySubsystem>())
 		{
-			Lobby->SetSlotCountOverride(ResolvedMatchSettings.Slots.Num());
+			Lobby->OnMatchSettingsLaunchCommitted().RemoveAll(this);
+			Lobby->OnMatchSettingsLaunchCommitted().AddUObject(
+				this,
+				&ASeinGameMode::HandleMatchSettingsLaunchCommitted);
+			if (Lobby->HasPublishedSnapshot())
+			{
+				Lobby->SetSlotCountOverride(ResolvedMatchSettings.Slots.Num());
+			}
+			else
+			{
+				Lobby->SetDirectMatchSettingsDefaults(ResolvedMatchSettings);
+			}
 		}
 	}
 
@@ -566,7 +630,9 @@ void ASeinGameMode::TryAutoStartMultiplayerPIE()
 		return;
 	}
 
-	const bool bShouldStart = ShouldRequestMultiplayerPIEAutoStart(
+	const int32 ExpectedPIEPlayers = ResolveExpectedPIEPlayerCount();
+	FSeinMatchSettings GatedSettings;
+	const bool bShouldStart = BuildMultiplayerPIEAutoStartSettings(
 		Settings->bAutoStartMultiplayerPIE,
 		Settings->bNetworkingEnabled,
 		World->WorldType,
@@ -574,21 +640,30 @@ void ASeinGameMode::TryAutoStartMultiplayerPIE()
 		World->GetNetMode(),
 		HasExternalBootstrapIntent(*World),
 		Lobby->HasPublishedSnapshot(),
+		ExpectedPIEPlayers,
 		ResolvedMatchSettings,
 		[this](int32 HumanSlot)
 		{
 			const TWeakObjectPtr<ASeinPlayerController>* Controller =
 				ClaimedSlots.Find(HumanSlot);
 			return Controller && Controller->IsValid();
-		});
+		},
+		GatedSettings);
 	if (!bShouldStart)
 	{
 		return;
 	}
 
-	// Direct PIE has no authored lobby phase. Preserve the already canonical,
-	// level-derived manifest exactly, including AI slots, factions, and teams.
-	if (!Lobby->InstallPreparedMatchSettingsSnapshot(ResolvedMatchSettings)
+	// Use the same live lobby projection as the manual command so both paths
+	// preserve resolved player metadata and publish an identical roster.
+	FSeinMatchSettings FinalizedSettings;
+	if (!Lobby->BuildMatchSettingsSnapshot(FinalizedSettings))
+	{
+		UE_LOG(LogTemp, Error,
+			TEXT("SeinGameMode: multiplayer PIE auto-start could not build the direct-map manifest."));
+		return;
+	}
+	if (!Lobby->InstallPreparedMatchSettingsSnapshot(FinalizedSettings)
 		|| !Lobby->HasPublishedSnapshot())
 	{
 		UE_LOG(LogTemp, Error,
@@ -597,10 +672,75 @@ void ASeinGameMode::TryAutoStartMultiplayerPIE()
 	}
 
 	UE_LOG(LogTemp, Log,
-		TEXT("SeinGameMode: all direct multiplayer PIE Human slots are connected; requesting lockstep start."));
+		TEXT("SeinGameMode: %d requested PIE player(s) connected; requesting lockstep start."),
+		ExpectedPIEPlayers);
 	Net->StartLockstepSession();
+	if (!Net->HasServerStartBeenRequested())
+	{
+		Lobby->DiscardUncommittedPreparedMatchSettingsSnapshot();
+		constexpr int32 MaxAutoStartRetryAttempts = 3;
+		if (MultiplayerPIEAutoStartRetryAttempts
+			< MaxAutoStartRetryAttempts
+			&& !MultiplayerPIEAutoStartRetryHandle.IsValid())
+		{
+			++MultiplayerPIEAutoStartRetryAttempts;
+			FTimerDelegate RetryDelegate;
+			RetryDelegate.BindUObject(
+				this, &ASeinGameMode::RetryAutoStartMultiplayerPIE);
+			MultiplayerPIEAutoStartRetryHandle =
+				World->GetTimerManager().SetTimerForNextTick(RetryDelegate);
+			UE_LOG(LogTemp, Warning,
+				TEXT("SeinGameMode: multiplayer PIE auto-start preparation was not accepted; retry %d/%d is scheduled."),
+				MultiplayerPIEAutoStartRetryAttempts,
+				MaxAutoStartRetryAttempts);
+		}
+		else if (MultiplayerPIEAutoStartRetryHandle.IsValid())
+		{
+			UE_LOG(LogTemp, Verbose,
+				TEXT("SeinGameMode: multiplayer PIE auto-start retry is already scheduled."));
+		}
+		else
+		{
+			UE_LOG(LogTemp, Error,
+				TEXT("SeinGameMode: multiplayer PIE auto-start exhausted its bounded retries; run Sein.Net.StartMatch after resolving the logged preparation failure."));
+		}
+	}
+	else
+	{
+		World->GetTimerManager().ClearTimer(
+			MultiplayerPIEAutoStartRetryHandle);
+		MultiplayerPIEAutoStartRetryAttempts = 0;
+	}
+}
+
+void ASeinGameMode::RetryAutoStartMultiplayerPIE()
+{
+	MultiplayerPIEAutoStartRetryHandle.Invalidate();
+	TryAutoStartMultiplayerPIE();
 }
 #endif
+
+void ASeinGameMode::HandleMatchSettingsLaunchCommitted(
+	const FSeinMatchSettings& PublishedSettings)
+{
+	if (!bMatchSettingsResolved || PublishedSettings.Slots.IsEmpty())
+	{
+		return;
+	}
+
+	FSeinMatchSettings CanonicalSettings = PublishedSettings;
+	FGuid SettingsDigest;
+	FSeinDeterministicValueDigestError DigestError;
+	if (!SeinCanonicalizeAndDigestMatchSettings(
+		CanonicalSettings, SettingsDigest, &DigestError))
+	{
+		UE_LOG(LogTemp, Error,
+			TEXT("SeinGameMode: rejected published match snapshot (%s: %s)."),
+			*DigestError.FieldPath, *DigestError.Message);
+		return;
+	}
+	ResolvedMatchSettings = MoveTemp(CanonicalSettings);
+}
 
 const FSeinMatchSlot* ASeinGameMode::FindManifestSlot(int32 SlotIndex) const
 {

@@ -1,6 +1,8 @@
 #include "CQTest.h"
 #include "Components/ActorTestSpawner.h"
 
+#include "Actor/SeinActor.h"
+#include "Components/ActorComponent.h"
 #include "GameMode/SeinMatchBootstrapSubsystem.h"
 #include "GameMode/SeinPlayerStart.h"
 #include "Simulation/SeinWorldSubsystem.h"
@@ -56,6 +58,25 @@ namespace UE::SeinARTSTests
 			Start->bSimTransformBaked = true;
 			Start->SpawnEntity = nullptr;
 			return Start;
+		}
+
+		ASeinActor* SpawnInactivePlacedActor(
+			UWorld& World,
+			FName ActorName,
+			int32 PlayerSlot)
+		{
+			FActorSpawnParameters Params;
+			Params.Name = ActorName;
+			ASeinActor* Actor = World.SpawnActor<ASeinActor>(
+				ASeinActor::StaticClass(), FTransform::Identity, Params);
+			if (!Actor)
+			{
+				return nullptr;
+			}
+			Actor->PlayerSlot = PlayerSlot;
+			Actor->bSimLocationBaked = true;
+			Actor->bSimRotationBaked = true;
+			return Actor;
 		}
 
 		bool Materialize(
@@ -174,6 +195,40 @@ namespace UE::SeinARTSTests
 		Sim->StopSimulation();
 	}
 
+	TEST(FrameworkBootstrapOmitsPlacedActorsForInactiveSlots,
+		"SeinARTS.Unit.Framework.MatchBootstrap")
+	{
+		FActorTestSpawner Spawner;
+		UWorld& World = Spawner.GetWorld();
+		const FSeinMatchSlot Human = MakeActiveSlot(
+			1, ESeinSlotState::Human, 4, 2);
+		const FSeinMatchSlot Open = MakeActiveSlot(
+			2, ESeinSlotState::Open, 7, 3);
+		ASSERT_THAT(IsNotNull(SpawnBakedPlayerStart(World, Human)));
+		ASSERT_THAT(IsNotNull(SpawnBakedPlayerStart(World, Open)));
+
+		ASeinActor* InactiveActor = SpawnInactivePlacedActor(
+			World, TEXT("InactiveSlotTwo"), 2);
+		ASSERT_THAT(IsNotNull(InactiveActor));
+
+		FSeinMatchSettings Settings;
+		Settings.Slots = {Human, Open};
+		FSeinMatchBootstrapReceipt Receipt;
+		FString Error;
+		ASSERT_THAT(IsTrue(Materialize(
+			Spawner, Settings, 4567, Receipt, Error)));
+		ASSERT_THAT(IsTrue(Receipt.IsValid()));
+		ASSERT_THAT(IsTrue(InactiveActor->IsHidden()));
+		ASSERT_THAT(IsFalse(InactiveActor->GetActorEnableCollision()));
+		ASSERT_THAT(IsFalse(InactiveActor->IsActorTickEnabled()));
+		ASSERT_THAT(IsFalse(InactiveActor->HasValidEntity()));
+		TInlineComponentArray<UActorComponent*> Components(InactiveActor);
+		for (const UActorComponent* Component : Components)
+		{
+			ASSERT_THAT(IsFalse(Component->IsComponentTickEnabled()));
+		}
+	}
+
 	TEST(FrameworkBootstrapRejectsAMissingActiveSlotAnchorBeforePlayerMutation,
 		"SeinARTS.Unit.Framework.MatchBootstrap")
 	{
@@ -235,14 +290,22 @@ namespace UE::SeinARTSTests
 			1, ESeinSlotState::Human, 4, 2);
 		const FSeinMatchSlot AI = MakeActiveSlot(
 			2, ESeinSlotState::AI, 7, 3);
+		const FSeinMatchSlot OpenTwo = MakeActiveSlot(
+			3, ESeinSlotState::Open, 8, 4);
+		const FSeinMatchSlot OpenThree = MakeActiveSlot(
+			4, ESeinSlotState::Open, 9, 5);
 
 		FActorTestSpawner FirstSpawner;
 		ASSERT_THAT(IsNotNull(SpawnBakedPlayerStart(
 			FirstSpawner.GetWorld(), Human)));
 		ASSERT_THAT(IsNotNull(SpawnBakedPlayerStart(
 			FirstSpawner.GetWorld(), AI)));
+		ASSERT_THAT(IsNotNull(SpawnInactivePlacedActor(
+			FirstSpawner.GetWorld(), TEXT("InactiveAlpha"), 3)));
+		ASSERT_THAT(IsNotNull(SpawnInactivePlacedActor(
+			FirstSpawner.GetWorld(), TEXT("InactiveBravo"), 4)));
 		FSeinMatchSettings FirstSettings;
-		FirstSettings.Slots = {Human, AI};
+		FirstSettings.Slots = {Human, AI, OpenTwo, OpenThree};
 		FSeinMatchBootstrapReceipt FirstReceipt;
 		FString Error;
 		ASSERT_THAT(IsTrue(Materialize(
@@ -253,12 +316,32 @@ namespace UE::SeinARTSTests
 			SecondSpawner.GetWorld(), AI)));
 		ASSERT_THAT(IsNotNull(SpawnBakedPlayerStart(
 			SecondSpawner.GetWorld(), Human)));
+		ASSERT_THAT(IsNotNull(SpawnInactivePlacedActor(
+			SecondSpawner.GetWorld(), TEXT("InactiveBravo"), 4)));
+		ASSERT_THAT(IsNotNull(SpawnInactivePlacedActor(
+			SecondSpawner.GetWorld(), TEXT("InactiveAlpha"), 3)));
 		FSeinMatchSettings SecondSettings;
-		SecondSettings.Slots = {AI, Human};
+		SecondSettings.Slots = {OpenThree, AI, OpenTwo, Human};
 		FSeinMatchBootstrapReceipt SecondReceipt;
 		ASSERT_THAT(IsTrue(Materialize(
 			SecondSpawner, SecondSettings, 777, SecondReceipt, Error)));
 
 		ASSERT_THAT(IsTrue(FirstReceipt == SecondReceipt));
+
+		FActorTestSpawner MissingInactiveSpawner;
+		ASSERT_THAT(IsNotNull(SpawnBakedPlayerStart(
+			MissingInactiveSpawner.GetWorld(), Human)));
+		ASSERT_THAT(IsNotNull(SpawnBakedPlayerStart(
+			MissingInactiveSpawner.GetWorld(), AI)));
+		ASSERT_THAT(IsNotNull(SpawnInactivePlacedActor(
+			MissingInactiveSpawner.GetWorld(), TEXT("InactiveAlpha"), 3)));
+		FSeinMatchBootstrapReceipt MissingInactiveReceipt;
+		ASSERT_THAT(IsTrue(Materialize(
+			MissingInactiveSpawner,
+			FirstSettings,
+			777,
+			MissingInactiveReceipt,
+			Error)));
+		ASSERT_THAT(IsFalse(FirstReceipt == MissingInactiveReceipt));
 	}
 }
