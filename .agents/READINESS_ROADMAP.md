@@ -202,7 +202,11 @@ froze the conflict policy as policy D — survivors always receive their exact s
 dead members drop only their own slot, contention never rejects or re-plans
 (`.agents/DECISION_FROZEN_CONFLICT_POLICY.md`, BrokerOrder schema V3). A real BrokerOrder test now
 moves the provider between preview and issue, proves exact authoritative arrival and settlement, and
-reconstructs every replay tick in a fresh world. The public Blueprint preview/issue pair cannot carry
+reconstructs every replay tick in a fresh world. A genuine in-flight snapshot restores the active
+broker, reservation, latent movement, and every subsequent canonical root through settlement. A
+separate shipped-A* case plans before an unrelated endpoint blocker appears, then proves the exact
+authoritative final step refuses the live blocker without moving the entity and succeeds after it
+clears. The public Blueprint preview/issue pair cannot carry
 the full preview key or displayed artifact through issue; its API shape requires RJ's decision. PIE
 feel remains in RJ's batch.
 

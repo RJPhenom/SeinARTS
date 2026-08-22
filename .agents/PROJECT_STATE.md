@@ -2,7 +2,7 @@
 
 ## 2026-08-22 local readiness checkpoint
 
-The design-neutral remediation wave is integrated on local `main` through `b5048d0`:
+The design-neutral remediation wave is qualified through implementation commit `a91efae`:
 
 - A* path diagnostics were isolated from the search implementation without changing search or path
   semantics (`dfcd10e`, recorded by `3b088ef`).
@@ -28,8 +28,19 @@ Final pre-commit qualification on 2026-08-22: Framework/All Sim 81/81 and 88/88,
 Framework/All Unit 466/466 and 488/488, Framework/All Determinism 38/38 and 53/53, focused Cover
 replay 1/1, and fresh-process serial/parallel traces matched all 120 roots and pose digests (final
 root `8C9348BD49BEA3109EE71E9A32C568E6`). Independent follow-up review found no unresolved P0-P2
-issues. PIE remains RJ's runtime/presentation oracle; live-A* final-step blocker, native UI handoff,
-and mid-movement checkpoint-specific tests remain evidence-strengthening opportunities.
+issues. PIE remains RJ's runtime/presentation oracle; the public Blueprint UI handoff remains the
+unresolved product/API decision.
+
+Implementation commit `a91efae` closes the two design-neutral Cover arrival evidence gaps. A path
+planned by the shipped A* now receives an unrelated live blocker at its exact authoritative endpoint;
+the production final-step resolver refuses arrival without moving the entity, then succeeds exactly
+after the blocker clears. The real BrokerOrder fixture now captures an executing, unsettled,
+reserved move after departure, restores it into a fresh world, validates the reconstructed broker and
+reservation, and matches every canonical root through exact settlement. Focused Navigation passed
+35/35, focused Cover replay passed 1/1, All Unit passed 489/489, All Determinism passed 53/53, and
+Framework-only Unit passed 467/467. Extension-enabled and ordinary Development builds succeeded.
+Independent review found no P0-P3 issue. The native UI path is already qualified; the public
+Blueprint preview/issue handoff remains the explicit product/API fork.
 
 Editor-only implementation commit `1a86a3a` replaces ambiguous auto-tag regeneration booleans with
 specific updated/no-op/failure outcomes while preserving the compatibility wrapper. Rename and
@@ -41,7 +52,7 @@ closed the one-pass bulk defect, stale public side-effect contract, project-cont
 silent unmapped rename, and exported-symbol regression, then reported no unresolved P0-P2 findings.
 The protected generated-tag source remained byte-identical throughout qualification.
 
-No production behavior or public API changed in the Squad qualification wave. Design-neutral
+No production behavior or public API changed in this qualification wave. Design-neutral
 correctness, deterministic lifecycle evidence, API-coherence analysis, and editor/error UX remain
 locally actionable. Product-policy choices and external/runtime gates stay explicit in
 `.agents/OPEN_RISKS.md`; root `Docs/` remains exclusively owner-authored.

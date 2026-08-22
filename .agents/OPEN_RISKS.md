@@ -21,10 +21,13 @@ This is the actionable remainder after consolidating the historical audits. It i
    admission, queueing, settlement, cancellation, death, provider movement/destruction, snapshot,
    replay, and reconnect under RJ's policy D. Real-command automation moves the provider after
    preview, observes the executing reservation, reaches and settles the exact shown world slot, then
-   reproduces every replay tick in a fresh world. The public Blueprint preview/issue pair cannot
-   carry guide points, formation tag, or the displayed artifact through issue and therefore
-   recomputes defaults. Remaining: decide that public API shape; PIE feel/visual checks for moving and
-   contended cover; and the larger-selection performance risk recorded below.
+   reproduces every replay tick in a fresh world. An in-flight snapshot now restores the executing
+   broker, reservation, latent movement, and every subsequent canonical root through exact
+   settlement. A shipped-A* path with an unrelated blocker added at its endpoint also proves the
+   authoritative final step refuses that blocker until it clears. The public Blueprint preview/issue
+   pair cannot carry guide points, formation tag, or the displayed artifact through issue and
+   therefore recomputes defaults. Remaining: decide that public API shape; PIE feel/visual checks for
+   moving and contended cover; and the larger-selection performance risk recorded below.
 2. Squad reinforcement requests now have exact slot and monotonic request identity, atomic
    payer/cost snapshots, exact cancel/refund, deterministic completion, reciprocal membership, and
    snapshot continuation. Real player-command continuation and per-tick replay-root coverage exercise
