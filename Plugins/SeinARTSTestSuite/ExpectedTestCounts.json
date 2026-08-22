@@ -40,26 +40,26 @@
     {
       "profile": "All",
       "suite": "SeinARTS.Editor",
-      "minimumCount": 46,
-      "establishedAtCommit": "5d175ed4aa859b9305259085d9a532fa1a23c1c2"
+      "minimumCount": 47,
+      "establishedAtCommit": "5eaa97e885a977c3fdeea577aff1edc8730bd053"
     },
     {
       "profile": "Framework",
       "suite": "SeinARTS.Editor",
-      "minimumCount": 44,
-      "establishedAtCommit": "5d175ed4aa859b9305259085d9a532fa1a23c1c2"
+      "minimumCount": 45,
+      "establishedAtCommit": "5eaa97e885a977c3fdeea577aff1edc8730bd053"
     },
     {
       "profile": "All",
       "suite": "SeinARTS.Sim",
-      "minimumCount": 82,
-      "establishedAtCommit": "58af8478337a71e4639933cc5e220ceed2075d28"
+      "minimumCount": 87,
+      "establishedAtCommit": "5eaa97e885a977c3fdeea577aff1edc8730bd053"
     },
     {
       "profile": "Framework",
       "suite": "SeinARTS.Sim",
-      "minimumCount": 75,
-      "establishedAtCommit": "58af8478337a71e4639933cc5e220ceed2075d28"
+      "minimumCount": 80,
+      "establishedAtCommit": "5eaa97e885a977c3fdeea577aff1edc8730bd053"
     },
     {
       "profile": "All",
