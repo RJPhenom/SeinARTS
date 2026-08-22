@@ -172,7 +172,7 @@ Gates after both rulings: Unit 477 / Sim 57 / Determinism 48 / Integration 26 (A
 envelope suite 5/5 with regenerated frozen bytes, fresh-process serial/parallel A/B 120/120.
 NOTE for PIE: pre-v17 saved snapshots/replays fail closed against this branch (intended).
 
-### Combat substrate module (2026-08-16, latest)
+### Combat substrate module and scale qualification (2026-08-21, latest)
 
 RJ ruled combat belongs in its own framework-root module (not an extension) and ruled the three
 mechanism forks in chat (instant default delivery; acquisition = query service + stance ability,
@@ -191,13 +191,19 @@ framework module (`fbc6d4e` + hardening `6df189e`):
   gate now arms-only); scripted zero-health could silently re-seed to full (seed-once flag +
   zero-always-dies); projectile hash omitted the mutable aim point; per-tick mutable-fetch churn
   (gathers now filter to handles that actually change).
-- **Gates**: All profile Unit 477 / Sim 63 / Determinism 48 / Integration 26; Framework profile
-  Sim 56 / Determinism 38; Shipping build; fresh-process serial/parallel A/B 120/120. Customer
+- **Gates**: All profile Unit 477 / Sim 64 / Determinism 48 / Integration 26; Framework profile
+  Sim 57 / Determinism 38; Shipping build; fresh-process serial/parallel A/B 120/120. Customer
   guide at `Docs/Guides/Combat.md`. New tick systems: WeaponCycle (PreTick 11), ProjectileFlight
   (AbilityExecution 20).
-- **Deferred, recorded**: armed-population scale curve (upgrade the combat-scale workload),
-  spatial indexing for acquisition if that curve demands it, burst/wind-up cycling fields,
-  sim-side on-kill hooks for veterancy (kill events are presentation-side today).
+- **Scale qualification**: `SeinARTS.Perf.Combat.ArmedScale` now exercises 300/500/1,000 units with
+  real vitals, weapons, acquisition, attack abilities, and damage. The old full sweep measured
+  7.690/14.198/33.383 ms; the derived, non-canonical Combat target index measures warm acquisition
+  at 3.207/5.607/11.293 ms and position-invalidated rebuilds at 3.336/5.416/11.096 ms. Active firing
+  ticks measure 0.540/0.819/1.569 ms, with every unit acquiring and damaging a target. Exact scorer,
+  canonical ordering, mutation/restore invalidation, broad-query fallback, and fixed-point-boundary
+  fallback are covered.
+- **Deferred, recorded**: game-world battle Insights with fog/presentation, burst/wind-up cycling
+  fields, and sim-side on-kill hooks for veterancy (kill events are presentation-side today).
 
 Still RJ's: the PIE batch (now including combat feel: starter attack, projectiles, splash,
 armor/formula authoring), the remaining decision memos (online scope parked; squad
@@ -292,15 +298,15 @@ formation/resolver state coverage, provider teardown, and downstream content own
 | `SeinARTS.Integration`, profile All | 26 passed, 0 failed |
 | `SeinARTS.Integration`, profile Framework | 20 passed, 0 failed |
 | `SeinARTS.Determinism`, profile All | 48 passed, 0 failed |
-| `SeinARTS.Determinism`, profile Framework | 33 passed, 0 failed |
+| `SeinARTS.Determinism`, profile Framework | 38 passed, 0 failed |
 | `SeinARTS.Editor`, profile All | 46 passed, 0 failed |
 | `SeinARTS.Editor`, profile Framework | 44 passed, 0 failed |
-| `SeinARTS.Sim`, profile All | 50 passed, 0 failed |
-| `SeinARTS.Sim`, profile Framework | 47 passed, 0 failed |
-| `SeinARTS.Perf`, profile All | 6 passed, 0 failed; cover 128x128 averaged 11.998 ms; public 128-member preview measured 1.255/1.337 ms median/p95 coverless and 3.181/3.324 ms dense; collision full-tick medians 1.257/3.114/7.214 ms at 64/128/256 movers |
-| `SeinARTS.Perf`, profile Framework | 4 passed, 0 failed; latest replay operational soak wrote 135,244,673 bytes over 449 turns with 135.552/203.523/211.276 ms checkpoint p50/p95/max; containment at 1,000 occupants measured 2.825 ms canonical root, 4.328 ms invalidated checkpoint, and 0.926 ms warm checkpoint; moving-entity checkpoint medians remain 2.037/7.815/15.288 ms at 100/500/1,000 entities; collision full-tick medians 1.401/3.035/7.494 ms at 64/128/256 movers |
+| `SeinARTS.Sim`, profile All | 64 passed, 0 failed |
+| `SeinARTS.Sim`, profile Framework | 57 passed, 0 failed |
+| `SeinARTS.Perf`, profile All | 9 passed, 0 failed; cover 128x128 averaged 11.998 ms; public 128-member preview measured 1.255/1.337 ms median/p95 coverless and 3.181/3.324 ms dense; collision full-tick medians 1.257/3.114/7.214 ms at 64/128/256 movers |
+| `SeinARTS.Perf`, profile Framework | 6 passed, 0 failed; armed-combat warm/rebuilt acquisition measured 3.207/3.336 ms at 300, 5.607/5.416 ms at 500, and 11.293/11.096 ms at 1,000 units; active firing ticks measured 0.540/0.819/1.569 ms; moving-combat medians remain 6.129/10.512/19.813 ms at 300/500/1,000 units |
 | Replay Memory Insights (qualified) | Clean commit `8178dec` has a same-attempt build and production `Qualified` receipt; the warmed 56-checkpoint interval retained zero production replay allocations/bytes against the fixed 4 KiB ceiling, with complete callstacks and separately validated allocator sentinels |
-| Fresh-process collision trace | 2026-08-14 serial and parallel roots/poses identical for all 120 ticks under `SeinARTS.Replay.6`; final root `389FF04BD23FD4D3F5C659C9384FD2EC`, pose `0xF9AA3969BB04EAD0` |
+| Fresh-process collision trace | 2026-08-21 serial and parallel roots/poses identical for all 120 ticks under `SeinARTS.Replay.6`; final root `941F0FDE8A8A1400DF734C908C8936B8`, pose `0xF9AA3969BB04EAD0` |
 | `SeinARTSEditor Win64 Development` | succeeded / target current |
 | `SeinARTS Win64 Shipping` | succeeded / target current |
 | Focused Core boundary/epoch | 2026-08-13 exact epoch test passed with `SeinARTS.Replay.6`; prior `SeinARTS.Unit.Core` Framework profile passed 131 tests including opposite-endpoint saturated distance and maximum-diagonal normalization |

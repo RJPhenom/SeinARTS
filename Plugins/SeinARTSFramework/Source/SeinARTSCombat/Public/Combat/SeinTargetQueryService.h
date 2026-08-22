@@ -4,14 +4,15 @@
  * @file         SeinTargetQueryService.h
  * @author       RJ Macklem
  * @created      16 Aug 2026
+ * @latest       21 Aug 2026
  * @brief        Deterministic on-demand target acquisition.
  *
- *          A pure query: sweep alive vitals-bearing entities in canonical
- *          order, gate mechanically (range, arc, tags, fog LoS through the
- *          bound resolver), ask the scorer policy for validity + score, and
- *          return the best candidates. No retained state, no always-on
- *          engagement loop — abilities and effects call this when THEY decide
- *          to look for trouble.
+ *          A pure query over canonical state: a derived Combat-owned spatial
+ *          index prefilters vitals-bearing entities, then the service gates
+ *          mechanically (alive, range, arc, tags, fog LoS through the bound
+ *          resolver), asks the scorer policy for validity + score, and returns
+ *          the best candidates. No always-on engagement loop — abilities and
+ *          effects call this when THEY decide to look for trouble.
  *
  * @disclaimer   This code was generated in whole or in part with the assistance
  *               of an AI language model.

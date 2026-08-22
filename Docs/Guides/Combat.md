@@ -61,6 +61,18 @@ fire) is a game-defining behavior you author by subclassing it or replacing it, 
 movement feel. Scripted damage and healing (traps, area effects, medics) use **Apply Damage** /
 **Apply Heal** from the same restricted library.
 
+## Target acquisition at scale
+
+Target queries transparently prefilter vitals-bearing entities through a Combat-owned spatial
+index. The index is derived from canonical entity position and component membership, is rebuilt
+after relevant mutation or restore, and is never serialized or hashed. Exact range, arc, tag,
+line-of-sight, health, scorer, and canonical tie-order rules still run on the resulting candidates;
+queries that are too broad or touch fixed-point numeric limits fall back to the exact full sweep.
+
+The index makes an on-demand query cheaper; it does not turn acquisition into an always-on system.
+Games still own engagement cadence in their abilities and should avoid querying every unit every
+simulation tick unless that behavior is intentional and measured.
+
 ## Determinism notes
 
 - Everything combat touches is fixed-point component data — weapon timers, projectile flight,

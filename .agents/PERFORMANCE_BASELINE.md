@@ -80,6 +80,16 @@ fixed ticks with reset packed contacts: 64 movers 1.257 ms median, 128 movers 3.
 isolates one world's exact production pump and proves every mover is present in the rebuilt
 broadphase; it is not a replacement for a moving-combat Insights capture with presentation.
 
+**UE 5.8 armed-combat acquisition qualification:** 2026-08-21, Framework-profile run
+`SeinARTS.Perf.Combat.ArmedScale-20260821-202608-62f72649`. Two opposing one-to-one lanes of
+300/500/1,000 real vitals-bearing, weapon-bearing entities produced warm acquisition medians of
+3.207/5.607/11.293 ms, position-invalidated rebuild medians of 3.336/5.416/11.096 ms, and active
+firing-tick medians of 0.540/0.819/1.569 ms. Every entity acquired and damaged a target. Before
+the derived Combat target index, the same-machine acquisition curve was 7.690/14.198/33.383 ms
+(`SeinARTS.Perf.Combat.ArmedScale-20260821-200406-d9e473ab`), putting the 1,000-unit batch over
+one 30 Hz turn. The sentinel enforces 25 ms warm, 30 ms rebuilt, and 10 ms active-tick ceilings at
+1,000 units. This is a simulation-only adversarial workload, not a game-world battle frame.
+
 **UE 5.8 full-game continuous-preview qualification:** 2026-08-12, one standalone Sandbox world,
 100 owned movers, 1280x720, debug overlays off, settled 15-30 second windows. A repeated matched
 preview-on/off capture measured 8.982 / 7.378 ms average `FEngineLoop::Tick`, a 1.604 ms frame delta.
@@ -140,7 +150,9 @@ The final GPU/resource capture did not reproduce the prior ray-tracing geometry 
 1. The fresh UE 5.8 full-game A/B bounds continuous 100-unit preview at a measured 1.60-2.86 ms
    frame delta after sparse dynamic-blocker indexing. This closes the comparable one-world Sandbox
    capture, but does not prove larger selections, multi-world PIE, or game-content render costs.
-2. The current map does not prove 300/500/1,000-unit dense moving-combat budgets.
+2. Automated simulation now bounds 300/500/1,000-unit moving and armed-combat workloads, but the
+   current map does not prove those populations with game abilities, fog, animation, UI, and
+   presentation active together.
 3. Active collision does not usually settle early. The automated packed-contact curve reaches 256
    movers; 300/500/1,000 moving-combat populations still require game-world Insights captures.
 4. Complex game AnimBPs, Control Rig, cloth, physics, and unique meshes can exceed the mannequin baseline.
