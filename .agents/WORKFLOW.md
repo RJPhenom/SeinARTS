@@ -1,6 +1,6 @@
 # SeinARTS Agent Workflow
 
-This is the local operational mirror of the human [Workflow Policy](https://docs.google.com/document/d/1pb3Z0DdQKAIJ610cMOy1yOP9_RQj1jtzMupfhkyrlfw), source policy version 2.2. The human policy owns contributor workflow. Update both in the same task when workflow changes.
+This is the local operational mirror of the human [Workflow Policy](https://docs.google.com/document/d/1pb3Z0DdQKAIJ610cMOy1yOP9_RQj1jtzMupfhkyrlfw), source policy version 2.3. The human policy owns contributor workflow. Update both in the same task when workflow changes.
 
 ## 1. About
 
@@ -59,23 +59,27 @@ Changes affecting determinism, simulation timing, networking, replay, persistenc
 
 ## 4. Documentation
 
+The public documentation website is live and under construction at `docs.seinarts.gg`. It is served from `Docs/` through GitHub Pages. Changes must keep public-facing documentation current.
+
 ### 4.1 Document types
 
 Documentation has three audiences:
 
-- Public documentation: customer and developer documentation published through the documentation website.
-- Private human documentation: design, strategy, planning, and progress documents in Google Drive.
-- Operational documentation: agent instructions, handoffs, and engineering records under `.agents/`, issues, or pull requests.
+- Public documentation: customer and developer documentation published at `docs.seinarts.gg` from `Docs/`.
+- Private-human documentation: design, strategy, planning, and progress documents in Google Drive.
+- Private-agent documentation: agent instructions, handoffs, and engineering records under `.agents/`, issues, or pull requests.
 
 Agent reports and temporary working notes do not belong in the public documentation tree.
 
 ### 4.2 Keeping documentation current
 
-Every completed code task declares its documentation impact: `none`, `internal`, `public`, or `both`.
+Every completed code task and commit declares its documentation impact: `none`, `private-human`, `private-agent`, `public`, or any applicable combination.
 
-Public APIs, Blueprint workflows, setup requirements, compatibility changes, and migration steps are documented as part of the associated release. Link documentation changes in another repository to the code change so they can be reviewed together.
+After every commit or code change, check the impact on public documentation. Alert the authoritative decision-maker when public documentation is affected, and make updates commensurate with the change so the website does not fall behind.
 
 Project documents such as the design document, Workflow Policy, and Style Guide use a `major.minor` version on their cover. Increment the minor version whenever the document changes. Only the authoritative decision-maker increments the major version.
+
+During release, review public APIs, Blueprint workflows, setup requirements, compatibility changes, and migration steps, and confirm their documentation is current.
 
 ## 5. Git
 
