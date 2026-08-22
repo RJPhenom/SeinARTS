@@ -12,8 +12,9 @@ attack content — mechanisms only; feel stays designer-authored (see `Docs/Guid
 The 2026-08-21 armed-population curve proved the prior acquisition sweep exceeded one 30 Hz turn
 at 1,000 units; a transparent derived Combat spatial index now brings both warm and rebuild-inclusive
 acquisition to about 11 ms without changing canonical state or scorer semantics. Remaining under the
-any-design standard: a representative game-world battle capture with fog/presentation and proving
-the economy loops (harvest/dropoff, worker construction) as authored loops.
+any-design standard: a representative game-world battle capture with fog/presentation. Designer-
+style harvest/dropoff and worker-construction loops are now qualified through real commands,
+snapshot restore, and exact active-ability continuation.
 
 This order minimizes rework. Do not start a later stage by weakening an earlier contract.
 
@@ -218,11 +219,11 @@ tactics coverage.
   metadata; forbidden terrain is expressed explicitly through the navigation component.
 - Height-correct FoW is complete. The deterministic directional pair-capability ledger required by
   team/shared vision is complete through command timing, cache validation, canonical lifecycle,
-  packaged reconnect, and replay. The FoW sharing consumer and its designer policy remain the next
-  explicit layer.
+  packaged reconnect, and replay. FoW consumes ShareVision directionally across entity visibility,
+  seen latches, cell queries, overlay, and minimap; shared-vision presentation still needs PIE.
 - Line/corridor targeters shipped 2026-08-15 (`USeinLineTargeterSpec`: drag and multi-click both
-  first-class per RJ's ruling; see `.agents/DECISION_TARGETER_LINE_CORRIDOR.md`). Remaining:
-  footprint-aware corridor-fit validation and PIE feel.
+  first-class per RJ's ruling; see `.agents/DECISION_TARGETER_LINE_CORRIDOR.md`). Footprint-aware
+  corridor-fit validation is shipped; only PIE feel and tint verification remain.
 - Containment structural integrity is complete: admission prevents cycles and overflow, reciprocal
   load/slot/attachment state fails closed at bootstrap and canonical/checkpoint boundaries, malformed
   restores are failure-atomic, and fresh-world mutation continuation is exact. Test-only

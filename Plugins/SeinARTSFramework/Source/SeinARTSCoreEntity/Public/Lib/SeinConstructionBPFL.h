@@ -4,7 +4,7 @@
  * @file         SeinConstructionBPFL.h
  * @author       RJ Macklem
  * @created      02 Jun 2026
- * @latest       14 Aug 2026
+ * @latest       21 Aug 2026
  * @brief        Exposes deterministic construction progress and completion operations to Blueprint.
  *
  *               See SeinConstructionComponent.h for the placement, builder-tick,
@@ -47,12 +47,14 @@ public:
 	 *  threshold is crossed. Returns true if construction completed THIS call
 	 *  (so the caller's BA_Construct can EndAbility cleanly without needing
 	 *  to poll IsUnderConstruction). Returns false if the entity has no
-	 *  construction component, the increment didn't cross the threshold, or
-	 *  the entity is already finished.
+	 *  construction component, Amount is non-positive or would overflow, the
+	 *  increment didn't cross the threshold, or the entity is already finished.
+	 *  A non-positive authored completion time finishes on the first valid call.
 	 *
 	 *  On auto-finish: applies CompletionEffect (if set on the data) to the
-	 *  entity, removes the FSeinConstructionComponent component, ungrants the
-	 *  SeinARTS.State.UnderConstruction tag.
+	 *  entity, removes the FSeinConstructionComponent component, and releases
+	 *  the framework-owned SeinARTS.State.UnderConstruction tag grant. An
+	 *  independent designer-authored BaseTags grant is preserved.
 	 *
 	 *  Multiple builders ticking the same target stack additively — each
 	 *  call adds Amount to Progress regardless of who's calling. Designer
@@ -64,9 +66,9 @@ public:
 		FFixedPoint Amount);
 
 	/** Force-complete the construction immediately. Applies CompletionEffect
-	 *  (if set), removes the FSeinConstructionComponent component, ungrants the
-	 *  SeinARTS.State.UnderConstruction tag. Use for cheats / debug, or for
-	 *  ability designs that want a "snap-finish" path independent of the
+	 *  (if set), removes the FSeinConstructionComponent component, and releases
+	 *  the framework-owned SeinARTS.State.UnderConstruction tag grant. Use for
+	 *  cheats / debug, or for ability designs that want a "snap-finish" path independent of the
 	 *  per-tick progression (e.g. instant-build cheat ability). No-op if the
 	 *  entity has no active construction component. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Construction",

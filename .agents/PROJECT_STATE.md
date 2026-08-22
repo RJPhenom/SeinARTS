@@ -205,6 +205,23 @@ framework module (`fbc6d4e` + hardening `6df189e`):
 - **Deferred, recorded**: game-world battle Insights with fog/presentation, burst/wind-up cycling
   fields, and sim-side on-kill hooks for veterancy (kill events are presentation-side today).
 
+### Economy-loop qualification (2026-08-21, latest)
+
+The framework's existing resource, component-mutation, construction, and ability seams now have
+representative designer-style workflows rather than only primitive coverage:
+
+- Native test abilities compose harvest, cargo, dropoff, and worker construction through the same
+  public APIs available to Blueprint abilities and execute through authorized ability commands.
+- Construction spawn now owns `State.UnderConstruction` as an independent refcounted grant instead
+  of folding it into designer `BaseTags`. Completion releases only the framework grant, including
+  for placed actors, while an explicitly authored base grant persists and restores cleanly.
+- Construction progress rejects non-positive increments and fixed-point overflow without mutation;
+  non-positive authored completion time finishes on the first positive increment. Income maps reject
+  invalid tags and negative entries atomically, and saturate at the fixed-point numeric maximum.
+- Focused economy 6/6, Framework Sim 63/63, All Sim 70/70, Framework Determinism 38/38, fresh-
+  process serial/parallel roots and poses 120/120, Development editor and Shipping builds green.
+  Active worker construction continues from a partial snapshot to the exact same canonical root.
+
 Still RJ's: the PIE batch (now including combat feel: starter attack, projectiles, splash,
 armor/formula authoring), the remaining decision memos (online scope parked; squad
 wipe/recreation/retreat UX; flight/vehicle feel defaults; host-migration topology; co-op
