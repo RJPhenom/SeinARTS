@@ -188,6 +188,17 @@ Repeated matched captures measured a 1.60-2.86 ms complete-frame preview delta; 
 Determinism, and independent fresh-process serial/parallel roots remain exact. Larger-selection,
 multi-world, and 300/500/1,000-unit moving-combat captures remain scale gates rather than inferred.
 
+Create checked-in presentation-scale qualification levels before claiming large-battle readiness.
+They must provide repeatable population tiers that continue beyond 1,000 until the target platform
+misses its frame budget, with two separately measurable workloads: render-only Actors using animated
+skeletal meshes to isolate Unreal presentation cost, and full `ASeinActor` populations exercising
+movement, combat, fog, UI, and presentation together. Use the shipped simple mannequin as the common
+baseline, then repeat with representative consuming-game infantry and vehicle assets. Capture normal,
+frozen, and budgeted/shared animation modes under Unreal Insights; add VAT, instancing, or impostor
+representations only when those measurements demonstrate the need. Record actor/mesh count, visible
+population, animation mode, world count, scalability settings, frame-time distribution, CPU/GPU
+breakdown, memory, draw calls, and the first population tier that exceeds budget.
+
 Core's authoritative-destination seam now composes deterministic providers by canonical stable ID,
 passes requester context, and binds provider identity plus behavior revision into the match
 StateContract. Cover uses the keyed registry, and all shipped movement/collision consumers query the
