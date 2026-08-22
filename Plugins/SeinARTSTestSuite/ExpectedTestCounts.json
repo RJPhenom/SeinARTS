@@ -28,8 +28,8 @@
     {
       "profile": "All",
       "suite": "SeinARTS.Determinism",
-      "minimumCount": 49,
-      "establishedAtCommit": "4073770ab8b7fa06614fafb1893704f7e0bd876e"
+      "minimumCount": 52,
+      "establishedAtCommit": "3ccfaf1cbd7b763b414ca0b90a7e5c0d9e2be54a"
     },
     {
       "profile": "Framework",
