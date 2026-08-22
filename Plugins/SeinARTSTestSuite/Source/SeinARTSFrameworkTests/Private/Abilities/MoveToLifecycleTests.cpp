@@ -127,6 +127,9 @@ bool USeinMoveToLifecycleTestMovement::bAdvanceInitialWaypointOnTick = false;
 bool USeinMoveToLifecycleTestMovement::bRepathPathsPartial = false;
 bool USeinMoveToLifecycleTestMovement::bInitialPathPartial = false;
 bool USeinMoveToLifecycleTestMovement::bInitialPathSkipsStart = false;
+FFixedPoint USeinMoveToLifecycleTestMovement::Deceleration =
+	FFixedPoint::Zero;
+int32 USeinMoveToLifecycleTestMovement::ArrivalMotionCount = 0;
 TFunction<void()> USeinMoveToLifecycleTestMovement::MoveEndCallback;
 
 void USeinMoveToLifecycleTestMovement::Reset()
@@ -146,6 +149,8 @@ void USeinMoveToLifecycleTestMovement::Reset()
 	bRepathPathsPartial = false;
 	bInitialPathPartial = false;
 	bInitialPathSkipsStart = false;
+	Deceleration = FFixedPoint::Zero;
+	ArrivalMotionCount = 0;
 	MoveEndCallback = nullptr;
 }
 
@@ -210,6 +215,13 @@ bool USeinMoveToLifecycleTestMovement::Tick(
 		Ctx.CurrentWaypointIndex = 1;
 	}
 	return bFinishOnTick || FinishTickCallIndices.Contains(CallIndex);
+}
+
+FSeinMotion USeinMoveToLifecycleTestMovement::
+ComputeArrivalMotion_Implementation(USeinMoverHandle* Mover)
+{
+	++ArrivalMotionCount;
+	return Super::ComputeArrivalMotion_Implementation(Mover);
 }
 
 void USeinMoveToLifecycleTestMovement::OnMoveEnd(FSeinEntity&)
@@ -639,6 +651,169 @@ namespace UE::SeinARTSTests
 			1, USeinMoveToLifecycleTestMovement::TickCount));
 		ASSERT_THAT(IsTrue(Fixture.Action->Path.bIsPartial));
 		ASSERT_THAT(IsFalse(Fixture.Action->bCompleted));
+	}
+
+	TEST(MoveToArrivalImminentTracksBrakeZoneAndClearsOnCompletion,
+		"SeinARTS.Sim.Movement.ArrivalProgress")
+	{
+		FScopedMoveToTestState Reset;
+		USeinMoveToLifecycleTestMovement::bAdvanceInitialWaypointOnTick = true;
+		USeinMoveToLifecycleTestMovement::Deceleration =
+			FFixedPoint::FromInt(100);
+		FSeinNavigationComponent Navigation;
+		Navigation.AcceptanceRadius = FFixedPoint::FromInt(10);
+		Navigation.FallbackFootprintRadius = FFixedPoint::FromInt(25);
+		FMoveToLifecycleFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Navigation)));
+
+		Fixture.Tick(FFixedPoint::One / FFixedPoint::FromInt(4));
+
+		const FSeinMovementComponent* Movement =
+			Fixture.World->GetComponent<FSeinMovementComponent>(Fixture.Entity);
+		ASSERT_THAT(IsNotNull(Movement));
+		ASSERT_THAT(IsTrue(Movement->bArrivalImminent));
+		ASSERT_THAT(IsFalse(Fixture.Action->bCompleted));
+
+		USeinMoveToLifecycleTestMovement::bFinishOnTick = true;
+		Fixture.Tick(FFixedPoint::One / FFixedPoint::FromInt(4));
+
+		ASSERT_THAT(IsTrue(Fixture.Action->bCompleted));
+		ASSERT_THAT(IsFalse(Movement->bArrivalImminent));
+		ASSERT_THAT(AreEqual(1, Fixture.Observer->CompletedCount));
+	}
+
+	TEST(MoveToArrivalImminentClearsOutsideBrakeZoneAndForZeroDeceleration,
+		"SeinARTS.Sim.Movement.ArrivalProgress")
+	{
+		FScopedMoveToTestState Reset;
+		USeinMoveToLifecycleTestMovement::bAdvanceInitialWaypointOnTick = true;
+		USeinMoveToLifecycleTestMovement::Deceleration =
+			FFixedPoint::FromInt(100);
+		FSeinNavigationComponent Navigation;
+		Navigation.AcceptanceRadius = FFixedPoint::FromInt(10);
+		Navigation.FallbackFootprintRadius = FFixedPoint::FromInt(25);
+		FMoveToLifecycleFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Navigation)));
+		const FFixedPoint TenthSecond =
+			FFixedPoint::One / FFixedPoint::FromInt(10);
+
+		Fixture.Tick(TenthSecond);
+		const FSeinMovementComponent* Movement =
+			Fixture.World->GetComponent<FSeinMovementComponent>(Fixture.Entity);
+		ASSERT_THAT(IsNotNull(Movement));
+		ASSERT_THAT(IsTrue(Movement->bArrivalImminent));
+
+		Fixture.SetLocation(FFixedVector(
+			FFixedPoint::FromInt(-2000),
+			FFixedPoint::Zero,
+			FFixedPoint::Zero));
+		Fixture.Tick(TenthSecond);
+		ASSERT_THAT(IsFalse(Movement->bArrivalImminent));
+
+		USeinMoveToLifecycleTestMovement::Deceleration = FFixedPoint::Zero;
+		Fixture.SetLocation(FFixedVector::ZeroVector);
+		Fixture.Tick(TenthSecond);
+		ASSERT_THAT(IsFalse(Movement->bArrivalImminent));
+		ASSERT_THAT(IsFalse(Fixture.Action->bCompleted));
+	}
+
+	TEST(MoveToNearGoalStallSettlesAtExactThresholdThroughArrivalPolicy,
+		"SeinARTS.Sim.Movement.ArrivalProgress")
+	{
+		FScopedMoveToTestState Reset;
+		FScopedEscapeNavigation ScopedNavigation;
+		USeinMoveToLifecycleTestMovement::bAdvanceInitialWaypointOnTick = true;
+		USeinMoveToEscapeTestNavigation::bPassable = false;
+		FSeinNavigationComponent Navigation = MakeEscapeNavigationComponent();
+		Navigation.AcceptanceRadius = FFixedPoint::FromInt(10);
+		FMoveToLifecycleFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Navigation)));
+		const FFixedPoint QuarterSecond =
+			FFixedPoint::One / FFixedPoint::FromInt(4);
+
+		Fixture.Tick(QuarterSecond);
+		Fixture.Tick(QuarterSecond);
+		Fixture.Tick(QuarterSecond);
+
+		ASSERT_THAT(IsFalse(Fixture.Action->bCompleted));
+		ASSERT_THAT(AreEqual(
+			0, USeinMoveToLifecycleTestMovement::ArrivalMotionCount));
+
+		Fixture.Tick(QuarterSecond);
+
+		ASSERT_THAT(IsTrue(Fixture.Action->bCompleted));
+		ASSERT_THAT(IsFalse(Fixture.Action->bFailed));
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::ArrivalMotionCount));
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::EndCount));
+		ASSERT_THAT(AreEqual(1, Fixture.Observer->CompletedCount));
+		ASSERT_THAT(AreEqual(
+			0, USeinMoveToEscapeTestNavigation::EscapeQueryCount));
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
+	}
+
+	TEST(MoveToMeaningfulNearGoalProgressRearmsStallClock,
+		"SeinARTS.Sim.Movement.ArrivalProgress")
+	{
+		FScopedMoveToTestState Reset;
+		USeinMoveToLifecycleTestMovement::bAdvanceInitialWaypointOnTick = true;
+		FSeinNavigationComponent Navigation;
+		Navigation.AcceptanceRadius = FFixedPoint::FromInt(10);
+		Navigation.FallbackFootprintRadius = FFixedPoint::FromInt(25);
+		FMoveToLifecycleFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Navigation)));
+		const FFixedPoint QuarterSecond =
+			FFixedPoint::One / FFixedPoint::FromInt(4);
+
+		Fixture.Tick(QuarterSecond);
+		Fixture.SetLocation(FFixedVector(
+			FFixedPoint::FromInt(20),
+			FFixedPoint::Zero,
+			FFixedPoint::Zero));
+		Fixture.Tick(QuarterSecond);
+		Fixture.Tick(QuarterSecond);
+		Fixture.Tick(QuarterSecond);
+
+		ASSERT_THAT(IsFalse(Fixture.Action->bCompleted));
+		ASSERT_THAT(AreEqual(
+			0, USeinMoveToLifecycleTestMovement::ArrivalMotionCount));
+
+		Fixture.Tick(QuarterSecond);
+
+		ASSERT_THAT(IsTrue(Fixture.Action->bCompleted));
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::ArrivalMotionCount));
+	}
+
+	TEST(MoveToSubTenCentimeterClosingDoesNotRearmStallClock,
+		"SeinARTS.Sim.Movement.ArrivalProgress")
+	{
+		FScopedMoveToTestState Reset;
+		USeinMoveToLifecycleTestMovement::bAdvanceInitialWaypointOnTick = true;
+		FSeinNavigationComponent Navigation;
+		Navigation.AcceptanceRadius = FFixedPoint::FromInt(10);
+		Navigation.FallbackFootprintRadius = FFixedPoint::FromInt(25);
+		FMoveToLifecycleFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Navigation)));
+		const FFixedPoint QuarterSecond =
+			FFixedPoint::One / FFixedPoint::FromInt(4);
+
+		Fixture.Tick(QuarterSecond);
+		Fixture.SetLocation(FFixedVector(
+			FFixedPoint::FromInt(9),
+			FFixedPoint::Zero,
+			FFixedPoint::Zero));
+		Fixture.Tick(QuarterSecond);
+		Fixture.Tick(QuarterSecond);
+
+		ASSERT_THAT(IsFalse(Fixture.Action->bCompleted));
+		Fixture.Tick(QuarterSecond);
+
+		ASSERT_THAT(IsTrue(Fixture.Action->bCompleted));
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::ArrivalMotionCount));
 	}
 
 	TEST(MoveToHeldButPassableDoesNotEscalate,

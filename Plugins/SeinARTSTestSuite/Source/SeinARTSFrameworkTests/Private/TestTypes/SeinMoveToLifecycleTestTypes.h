@@ -70,6 +70,8 @@ public:
 	static bool bRepathPathsPartial;
 	static bool bInitialPathPartial;
 	static bool bInitialPathSkipsStart;
+	static FFixedPoint Deceleration;
+	static int32 ArrivalMotionCount;
 	static TFunction<void()> MoveEndCallback;
 
 	static void Reset();
@@ -128,6 +130,13 @@ public:
 		const FSeinPlanPathContext& Ctx, FSeinPath& OutPath) const override;
 	virtual void OnMoveBegin(const FSeinMovementContext& Ctx) override;
 	virtual bool Tick(const FSeinMovementContext& Ctx) override;
+	virtual FFixedPoint GetDeceleration(
+		const FSeinMovementComponent*) const override
+	{
+		return Deceleration;
+	}
+	virtual FSeinMotion ComputeArrivalMotion_Implementation(
+		USeinMoverHandle* Mover) override;
 	virtual void OnMoveEnd(FSeinEntity& Entity) override;
 };
 

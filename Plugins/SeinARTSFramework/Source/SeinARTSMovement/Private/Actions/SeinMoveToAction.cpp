@@ -1065,6 +1065,119 @@ bool USeinMoveToAction::TickHoldEscapeLadder(
 	return false;
 }
 
+void USeinMoveToAction::UpdateArrivalImminent(
+	const FSeinEntity& Entity,
+	FSeinMovementComponent& MovementData,
+	bool bReachedEnd) const
+{
+	// True while in the kinematic brake zone of the final waypoint
+	// (MaxArrivalSpeed cap < cruise TopSpeed). AnimBPs consume this without
+	// re-deriving it from speed deltas. Ultra-basic modes return zero
+	// deceleration, so their unbounded cap correctly leaves the flag false.
+	if (!bReachedEnd && Path.Waypoints.Num() > 0)
+	{
+		const FFixedVector AgentPos = Entity.Transform.GetLocation();
+		const FFixedVector FinalWp = Path.Waypoints.Last();
+		const FFixedPoint DistFinal = FFixedVector::DistanceSaturated(
+			FFixedVector(AgentPos.X, AgentPos.Y, FFixedPoint::Zero),
+			FFixedVector(FinalWp.X, FinalWp.Y, FFixedPoint::Zero));
+		const FFixedPoint MaxArrivalSpeed = USeinMovement::KinematicArrivalSpeedCap(
+			DistFinal, Movement->GetDeceleration(&MovementData));
+		MovementData.bArrivalImminent =
+			MaxArrivalSpeed < MovementData.TopSpeed;
+	}
+	else
+	{
+		MovementData.bArrivalImminent = false;
+	}
+}
+
+void USeinMoveToAction::TickNearGoalStall(
+	FFixedPoint DeltaTime,
+	USeinWorldSubsystem& World,
+	const FSeinEntity& Entity,
+	const FSeinMovementContext& MovementContext,
+	bool& bReachedEnd)
+{
+	// A unit pinned within a tight body-aware band of a final waypoint it
+	// cannot occupy never satisfies the harness ring or overshoot guard. Once
+	// it stops closing for 0.75s this close, settle through the mode's ordinary
+	// arrival policy. The final-leg and tight-band gates prevent early arrival.
+	if (bReachedEnd || Path.Waypoints.Num() == 0
+		|| CurrentWaypointIndex < Path.Waypoints.Num() - 1)
+	{
+		return;
+	}
+
+	const FFixedVector AgentPos = Entity.Transform.GetLocation();
+	const FFixedPoint DistFinal = FFixedVector::DistanceSaturated(
+		FFixedVector(AgentPos.X, AgentPos.Y, FFixedPoint::Zero),
+		FFixedVector(
+			Path.Waypoints.Last().X,
+			Path.Waypoints.Last().Y,
+			FFixedPoint::Zero));
+	const bool bWithinStallBand = FFixedVector::IsPlanarDistanceWithin(
+		AgentPos, Path.Waypoints.Last(), StallBand);
+
+	if (!bWithinStallBand)
+	{
+		BestDistToFinal = DistFinal;
+		TimeStalledNearGoal = FFixedPoint::Zero;
+		return;
+	}
+
+	// Clamp the high-water up on the first in-band tick (it initializes to a
+	// large sentinel). Ten centimeters is above collision jitter and well
+	// below a meaningful approach step.
+	if (DistFinal > BestDistToFinal) BestDistToFinal = DistFinal;
+	if (SaturatingPositiveAdd(
+		DistFinal, FFixedPoint::FromInt(10)) < BestDistToFinal)
+	{
+		BestDistToFinal = DistFinal;
+		TimeStalledNearGoal = FFixedPoint::Zero;
+		return;
+	}
+
+	TimeStalledNearGoal = TimeStalledNearGoal + DeltaTime;
+	if (TimeStalledNearGoal < FFixedPoint::FromInt(3) / FFixedPoint::FromInt(4))
+	{
+		return;
+	}
+
+#if !UE_BUILD_SHIPPING
+	UE_LOG(LogSeinMoveTrace, Verbose,
+		TEXT("[ARRIVE] t=%d h=%d:%d cause=stall dist=%.0f accept=%.0f"),
+		World.GetCurrentTick(), OwnerEntity.Index, OwnerEntity.Generation,
+		DistFinal.ToFloat(), AcceptanceRadius.ToFloat());
+#endif
+	Movement->DispatchArrivalMotion(MovementContext);
+	bReachedEnd = true;
+}
+
+bool USeinMoveToAction::CompleteReachedOrder(
+	USeinWorldSubsystem& World,
+	bool bReachedEnd)
+{
+	if (!bReachedEnd)
+	{
+		return false;
+	}
+
+	// A partial path completes at a best-effort endpoint, not the frozen
+	// destination. Only an exact-route arrival earns settled authority.
+	if (!Path.bIsPartial)
+	{
+		World.ConfirmFrozenDestinationArrival(OwnerEntity, Destination);
+	}
+	// Terminalize before either OnMoveEnd or the proxy delegate: both may
+	// synchronously call EndAbility, whose cancellation must observe this
+	// action as already complete.
+	Complete();
+	FinalizeMovementOnce();
+	NotifyCompleted();
+	return true;
+}
+
 bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& World)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(Sein_MoveTo_TickAction);
@@ -1223,93 +1336,9 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		NotifyWaypointReached(CurrentWaypointIndex - 1, Path.Waypoints.Num());
 	}
 
-	// Update bArrivalImminent — true while in the kinematic brake zone of
-	// the final waypoint (MaxArrivalSpeed cap < cruise TopSpeed). AnimBPs
-	// read this via FSeinMovementComponent::bArrivalImminent to blend into
-	// arrival/braking animations without re-deriving from speed deltas.
-	// Reset to false on arrival; OnCancel/OnFail also clear it.
-	if (!bReachedEnd && Path.Waypoints.Num() > 0)
-	{
-		const FFixedVector AgentPos = Entity->Transform.GetLocation();
-		const FFixedVector FinalWp = Path.Waypoints.Last();
-		const FFixedPoint DistFinal = FFixedVector::DistanceSaturated(
-			FFixedVector(AgentPos.X, AgentPos.Y, FFixedPoint::Zero),
-			FFixedVector(FinalWp.X, FinalWp.Y, FFixedPoint::Zero));
-		// The braking rate is per-mode now (Movement+ UDS), so query it through the movement instead
-		// of the bare component. Ultra-basic modes return 0 → KinematicArrivalSpeedCap gives a huge
-		// cap → bArrivalImminent stays false (they don't brake), which is correct.
-		const FFixedPoint MaxArrivalSpeed = USeinMovement::KinematicArrivalSpeedCap(
-			DistFinal, Movement->GetDeceleration(MoveComp));
-		MoveComp->bArrivalImminent = MaxArrivalSpeed < MoveComp->TopSpeed;
-	}
-	else
-	{
-		MoveComp->bArrivalImminent = false;
-	}
-
-	// Near-goal failsafe. A unit pinned within a tight band of a final waypoint it can't physically
-	// occupy (a nav-reachable cell whose body footprint is wall/crowd-blocked) never satisfies the
-	// harness arrival — it is never within AcceptanceRadius, and it heads INTO the obstacle so the
-	// overshoot guard (which needs "heading away") won't fire either. Left alone it would push
-	// forever. So: once it stops closing for a short while THIS close, this is as near as its body
-	// fits — arrive. Final leg only, and the band is TIGHT — max(3× acceptance, footprint + 100cm,
-	// see StallBand) — so only a unit essentially AT its goal (as near as its BODY allows) settles,
-	// never one still approaching (that was the old crowd-aware band's "forgotten units" bug). The
-	// body-aware floor keeps goal-flush wall pins OURS rather than the hold-escape ladder's — the
-	// ladder escaping a unit that is simply as-close-as-it-fits would oscillate forever.
-	if (!bReachedEnd && Path.Waypoints.Num() > 0
-		&& CurrentWaypointIndex >= Path.Waypoints.Num() - 1)
-	{
-		const FFixedVector AgentPos = Entity->Transform.GetLocation();
-		const FFixedPoint DistFinal = FFixedVector::DistanceSaturated(
-			FFixedVector(AgentPos.X, AgentPos.Y, FFixedPoint::Zero),
-			FFixedVector(
-				Path.Waypoints.Last().X,
-				Path.Waypoints.Last().Y,
-				FFixedPoint::Zero));
-		const bool bWithinStallBand = FFixedVector::IsPlanarDistanceWithin(
-			AgentPos, Path.Waypoints.Last(), StallBand);
-
-		if (!bWithinStallBand)
-		{
-			// Outside the tight band — re-arm the progress high-water + clock for a fresh approach.
-			BestDistToFinal = DistFinal;
-			TimeStalledNearGoal = FFixedPoint::Zero;
-		}
-		else
-		{
-			// Clamp the high-water up on the first in-band tick (it inits to a large sentinel).
-			if (DistFinal > BestDistToFinal) BestDistToFinal = DistFinal;
-			// Meaningful-closing test in ACTUAL distance (a squared additive epsilon vanishes at
-			// range). 10 cm: larger than collision jitter, far smaller than a genuine approach.
-			if (SaturatingPositiveAdd(
-				DistFinal, FFixedPoint::FromInt(10)) < BestDistToFinal)
-			{
-				BestDistToFinal = DistFinal;
-				TimeStalledNearGoal = FFixedPoint::Zero;
-			}
-			else
-			{
-				TimeStalledNearGoal = TimeStalledNearGoal + DeltaTime;
-				// 0.75 s pinned this close → this is as far in as the body gets; settle.
-				// Routed through the mode's arrival policy (not a raw Velocity=0) so a
-				// crowd-stall arrival leaves the unit in the same per-class state as a
-				// clean ring arrival — both arrival owners share one stop semantics.
-				if (TimeStalledNearGoal >= FFixedPoint::FromInt(3) / FFixedPoint::FromInt(4))
-				{
-#if !UE_BUILD_SHIPPING
-					// Movement-trace event: the third arrival owner (crowd-stall settle).
-					UE_LOG(LogSeinMoveTrace, Verbose,
-						TEXT("[ARRIVE] t=%d h=%d:%d cause=stall dist=%.0f accept=%.0f"),
-						World.GetCurrentTick(), OwnerEntity.Index, OwnerEntity.Generation,
-						DistFinal.ToFloat(), AcceptanceRadius.ToFloat());
-#endif
-					Movement->DispatchArrivalMotion(TickCtx);
-					bReachedEnd = true;
-				}
-			}
-		}
-	}
+	UpdateArrivalImminent(*Entity, *MoveComp, bReachedEnd);
+	TickNearGoalStall(
+		DeltaTime, World, *Entity, TickCtx, bReachedEnd);
 
 	// HOLD-ESCAPE LADDER — the far-from-goal counterpart of the stall failsafe
 	// above (see the state block in the header). Detects a commanded unit whose
@@ -1327,24 +1356,7 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		return true;
 	}
 
-	if (bReachedEnd)
-	{
-		// A partial path completes at a best-effort endpoint, not the frozen
-		// destination. Only an exact-route arrival earns settled authority.
-		if (!Path.bIsPartial)
-		{
-			World.ConfirmFrozenDestinationArrival(
-				OwnerEntity, Destination);
-		}
-		// Terminalize before either OnMoveEnd or the proxy delegate: both may
-		// synchronously call EndAbility, whose latent-action cancellation must
-		// observe this action as already complete.
-		Complete();
-		FinalizeMovementOnce();
-		NotifyCompleted();
-		return true;
-	}
-	return false;
+	return CompleteReachedOrder(World, bReachedEnd);
 }
 
 void USeinMoveToAction::OnCancel()

@@ -34,6 +34,7 @@ class USeinNavigationSubsystem;
 class USeinWorldSubsystem;
 struct FSeinEntity;
 struct FSeinMovementComponent;
+struct FSeinMovementContext;
 struct FSeinNavigationComponent;
 struct FSeinMoveToActionCodec;
 
@@ -226,7 +227,7 @@ private:
 	 *  cascade): the body radius the ladder probes with and the escape query
 	 *  carries. */
 	FFixedPoint FootprintRadius = FFixedPoint::Zero;
-	/** Near-goal settle band² shared by the stall failsafe AND the ladder's
+	/** Near-goal settle band shared by the stall failsafe AND the ladder's
 	 *  exclusion: max(3 × acceptance, footprint + 100cm). Body-aware on
 	 *  purpose — a unit ordered flush against a wall stops ~footprint short of
 	 *  its final waypoint no matter how small the authored acceptance is; that
@@ -293,6 +294,27 @@ private:
 		FSeinMovementComponent& MovementData,
 		const FSeinNavigationComponent* NavigationData,
 		USeinNavigation* Navigation,
+		bool bReachedEnd);
+
+	/** Publish the final-waypoint brake-zone state consumed by presentation. */
+	void UpdateArrivalImminent(
+		const FSeinEntity& Entity,
+		FSeinMovementComponent& MovementData,
+		bool bReachedEnd) const;
+
+	/** Settle a final-leg unit that has stopped closing inside its body-aware
+	 *  arrival band. May promote bReachedEnd at the exact stall threshold. */
+	void TickNearGoalStall(
+		FFixedPoint DeltaTime,
+		USeinWorldSubsystem& World,
+		const FSeinEntity& Entity,
+		const FSeinMovementContext& MovementContext,
+		bool& bReachedEnd);
+
+	/** Apply settled-destination authority and terminal callbacks for a reached
+	 *  order. Returns false when the order is still active. */
+	bool CompleteReachedOrder(
+		USeinWorldSubsystem& World,
 		bool bReachedEnd);
 
 	/** Dispatch OnMoveEnd and clear order-local movement flags exactly once. */
