@@ -1,5 +1,27 @@
 # SeinARTS Project State
 
+## 2026-08-22 exact Blueprint formation-order checkpoint
+
+The approved public exact-order API is implemented. `Plan Formation Order` returns an opaque,
+transient, one-use token containing the authenticated player, complete formation/guide/queue key,
+exact displayed destinations, and per-recipient broker boundaries. `Issue Formation Order` rejects
+wrong worlds, restored sessions, principal or authority changes, overlapping recipient expansion,
+and surviving-roster drift; a bounded submission rejection remains retryable. Provider movement or
+destruction never retargets the frozen world positions.
+
+BrokerOrder protocol schema V4 carries compact recipient segments beside the frozen artifact so the
+same roster contract is rechecked at deterministic admission after network input delay. Broker plus
+member overlap is rejected for replace and queue modes, persistent brokers cannot smuggle foreign
+members, and an explicit-turn standalone submission now reports canonical enqueue rejection instead
+of false success. The built-in command behavior revision is 4.
+
+Final-tree evidence: Development and Shipping builds succeeded; all-plugin Unit 499/499,
+Integration 32/32, Editor 61/61, Sim 89/89, and Determinism 53/53 passed. Fresh serial and parallel
+editor processes matched canonical roots and raw fixed-point poses for all 120 ticks. Focused token,
+BrokerOrder authority/overlap/transfer, V4 wire, moving-cover, retry, snapshot-restore, and
+standalone-ingress cases are included in those totals. PIE remains the oracle for Blueprint graph
+ergonomics, forced-GC token retention, moving/contended-cover presentation, and two-player feel.
+
 ## 2026-08-22 local readiness checkpoint
 
 The design-neutral remediation wave is qualified through implementation commit `a91efae`:

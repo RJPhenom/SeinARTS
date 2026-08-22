@@ -342,7 +342,7 @@ namespace
 
 	const FName BuiltInCommandSchemaOwner(TEXT("SeinARTSCoreEntity.Commands"));
 	// Bump whenever built-in command semantics change without a wire-shape change.
-	constexpr int32 BuiltInCommandImplementationRevision = 3;
+	constexpr int32 BuiltInCommandImplementationRevision = 4;
 
 	constexpr int32 AllCommandExecutionAllowances =
 		static_cast<int32>(ESeinCommandExecutionAllowance::Spectator)
@@ -588,7 +588,7 @@ void FSeinARTSCoreEntity::StartupModule()
 			nullptr, ESeinCommandAuthorityScope::Entity, 0, 0, 0, 0, 0 },
 		{ TEXT("SeinARTS.Core.Command.Ping.V1"), SeinARTSTags::Command_Type_Ping,
 			nullptr, ESeinCommandAuthorityScope::Self, 0, 0, 0, 0, AllCommandExecutionAllowances },
-		{ TEXT("SeinARTS.Core.Command.BrokerOrder.V3"), SeinARTSTags::Command_Type_BrokerOrder,
+		{ TEXT("SeinARTS.Core.Command.BrokerOrder.V4"), SeinARTSTags::Command_Type_BrokerOrder,
 			FSeinBrokerOrderPayload::StaticStruct(), ESeinCommandAuthorityScope::EntitySet,
 			SeinBrokerOrderProtocol::MaxMembers, 0,
 			SeinBrokerOrderProtocol::MaxPayloadBytes,

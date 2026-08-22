@@ -633,6 +633,7 @@ void USeinNetSubsystem::ResetLockstepEpochState(UWorld* RetiringWorld)
 		BoundWorldSub->TurnConsumeNotifier.Unbind();
 		BoundWorldSub->ClearAIEmitInterceptor();
 		BoundWorldSub->ClearLocalCommandSubmitter();
+		BoundWorldSub->ClearLocalCommandPrincipalResolver();
 		if (TickCompletedHandle.IsValid())
 		{
 			BoundWorldSub->OnSimTickCompleted.Remove(TickCompletedHandle);
@@ -3369,6 +3370,7 @@ USeinWorldSubsystem* USeinNetSubsystem::BindLockstepHooksForCurrentWorld()
 			Previous->TurnConsumeNotifier.Unbind();
 			Previous->ClearAIEmitInterceptor();
 			Previous->ClearLocalCommandSubmitter();
+			Previous->ClearLocalCommandPrincipalResolver();
 			if (TickCompletedHandle.IsValid())
 			{
 				Previous->OnSimTickCompleted.Remove(TickCompletedHandle);
@@ -3406,14 +3408,31 @@ USeinWorldSubsystem* USeinNetSubsystem::BindLockstepHooksForCurrentWorld()
 	WorldSub->SetAIEmitInterceptor(MoveTemp(AIInterceptor));
 	FSeinLocalCommandSubmitter LocalSubmitter;
 	LocalSubmitter.BindLambda(
-		[WeakSelf](const FSeinCommand& Draft, bool bRequestMatchAdministration)
+		[WeakSelf](const FSeinCommand& Draft,
+			bool bRequestMatchAdministration) -> bool
 		{
 			if (USeinNetSubsystem* Self = WeakSelf.Get())
 			{
-				Self->SubmitLocalCommandDraft(Draft, bRequestMatchAdministration);
+				return Self->SubmitLocalCommandDraft(
+					Draft, bRequestMatchAdministration);
 			}
+			return false;
 		});
 	WorldSub->SetLocalCommandSubmitter(MoveTemp(LocalSubmitter));
+	FSeinLocalCommandPrincipalResolver PrincipalResolver;
+	PrincipalResolver.BindLambda(
+		[WeakSelf](FSeinPlayerID ClaimedPlayer) -> FSeinPlayerID
+		{
+			const USeinNetSubsystem* Self = WeakSelf.Get();
+			if (!Self)
+			{
+				return FSeinPlayerID::Neutral();
+			}
+			return Self->IsNetworkingActive()
+				? Self->LocalPlayerID
+				: ClaimedPlayer;
+		});
+	WorldSub->SetLocalCommandPrincipalResolver(MoveTemp(PrincipalResolver));
 
 	if (!TickCompletedHandle.IsValid())
 	{
@@ -5614,7 +5633,7 @@ void USeinNetSubsystem::SubmitLocalCommand(const FSeinCommand& Command)
 	SubmitLocalCommandDraft(Command, /*bRequestMatchAdministration=*/false);
 }
 
-void USeinNetSubsystem::SubmitLocalCommandDraft(
+bool USeinNetSubsystem::SubmitLocalCommandDraft(
 	const FSeinCommand& Draft,
 	bool bRequestMatchAdministration)
 {
@@ -5633,7 +5652,7 @@ void USeinNetSubsystem::SubmitLocalCommandDraft(
 			UE_LOG(LogSeinNet, Error,
 				TEXT("SubmitLocalCommandDraft: rejected unsupported network pause-control '%s'; the canonical coordinator/digest lane is not installed, so this command must not enter the ordinary turn queue."),
 				*Draft.CommandType.ToString());
-			return;
+			return false;
 		}
 	}
 
@@ -5645,7 +5664,7 @@ void USeinNetSubsystem::SubmitLocalCommandDraft(
 		UE_LOG(LogSeinNet, Error,
 			TEXT("SubmitLocalCommandDraft: rejected '%s' because ordinary ingress requires a launched, running match."),
 			*Draft.CommandType.ToString());
-		return;
+		return false;
 	}
 
 	if (bNetworkingActive)
@@ -5658,17 +5677,15 @@ void USeinNetSubsystem::SubmitLocalCommandDraft(
 		if (!TryBufferOutgoingDraft(FSeinCommandSubmissionDraft(
 				Untrusted, bRequestMatchAdministration)))
 		{
-			return;
+			return false;
 		}
+
+		OnLocalCommandIssued.Broadcast(Draft);
+		OnLocalCommandIssuedBP.Broadcast(Draft);
+		return true;
 	}
-
-	OnLocalCommandIssued.Broadcast(Draft);
-	OnLocalCommandIssuedBP.Broadcast(Draft);
-
-	if (!bNetworkingActive)
+	else
 	{
-		if (!WorldSub) return;
-
 		FSeinCommand Canonical = Draft;
 		TArray<FSeinCommand> Single{Canonical};
 		StampAuthoritativeCommandBatch(
@@ -5677,8 +5694,15 @@ void USeinNetSubsystem::SubmitLocalCommandDraft(
 			bRequestMatchAdministration,
 			/*TurnId=*/0);
 		Single[0].Tick = WorldSub->GetCurrentTick();
-		WorldSub->EnqueueAuthenticatedCommand(
-			Single[0], Single[0].PlayerID, Single[0].IssuerKind);
+		if (!WorldSub->EnqueueAuthenticatedCommand(
+				Single[0], Single[0].PlayerID, Single[0].IssuerKind))
+		{
+			return false;
+		}
+
+		OnLocalCommandIssued.Broadcast(Draft);
+		OnLocalCommandIssuedBP.Broadcast(Draft);
+		return true;
 	}
 }
 
@@ -5755,8 +5779,11 @@ bool USeinNetSubsystem::SubmitLocalDraftsAtTurn(
 				Stamped, Draft.Command.PlayerID,
 				Draft.bRequestMatchAdministration,
 				TurnId);
-			WorldSub->EnqueueAuthenticatedCommand(
-				Stamped[0], Stamped[0].PlayerID, Stamped[0].IssuerKind);
+			if (!WorldSub->EnqueueAuthenticatedCommand(
+					Stamped[0], Stamped[0].PlayerID, Stamped[0].IssuerKind))
+			{
+				return false;
+			}
 		}
 		return true;
 	}

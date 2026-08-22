@@ -74,7 +74,7 @@ namespace UE::SeinARTSTests
 				DecodeCost.CanonicalCostBytes));
 	}
 
-	TEST(BrokerOrderV2WireRoundTripPreservesFrozenDestinations,
+	TEST(BrokerOrderV4WireRoundTripPreservesFrozenDestinationsAndSegments,
 		"SeinARTS.Unit.Network.Protocol")
 	{
 		FSeinCommandSchemaDescriptor Schema;
@@ -101,6 +101,10 @@ namespace UE::SeinARTSTests
 		Destination.SourceIndex = 9;
 
 		FSeinBrokerOrderPayload Payload;
+		FSeinBrokerRecipientPlanSegment& Segment =
+			Payload.RecipientPlan.AddDefaulted_GetRef();
+		Segment.Recipient = Destination.Member;
+		Segment.MemberCount = 1;
 		Payload.DestinationArtifact.Add(Destination);
 		FSeinCommand Command;
 		Command.PlayerID = FSeinPlayerID(1);
@@ -120,6 +124,11 @@ namespace UE::SeinARTSTests
 		const FSeinBrokerOrderPayload* DecodedPayload =
 			Decoded[0].Payload.GetPtr<FSeinBrokerOrderPayload>();
 		ASSERT_THAT(IsNotNull(DecodedPayload));
+		ASSERT_THAT(AreEqual(1, DecodedPayload->RecipientPlan.Num()));
+		ASSERT_THAT(IsTrue(
+			DecodedPayload->RecipientPlan[0].Recipient == Destination.Member));
+		ASSERT_THAT(AreEqual(
+			1, DecodedPayload->RecipientPlan[0].MemberCount));
 		ASSERT_THAT(AreEqual(1, DecodedPayload->DestinationArtifact.Num()));
 		const FSeinFrozenDestination& DecodedDestination =
 			DecodedPayload->DestinationArtifact[0];

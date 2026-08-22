@@ -3129,6 +3129,10 @@ namespace UE::SeinARTSTests
 			SeinARTSTags::Command_Context_RightClick);
 		BrokerPayload.CommandContext.AddTag(
 			SeinARTSTags::Command_Context_Target_Ground);
+		FSeinBrokerRecipientPlanSegment& BrokerSegment =
+			BrokerPayload.RecipientPlan.AddDefaulted_GetRef();
+		BrokerSegment.Recipient = Destination.Member;
+		BrokerSegment.MemberCount = 1;
 		BrokerPayload.DestinationArtifact.Add(Destination);
 
 		FSeinCommand BrokerCommand;

@@ -36,6 +36,16 @@ struct FSeinCommandIngressTestAccess
 	{
 		World.EndReplayExclusiveCommandIngress();
 	}
+
+	static bool RouteAsActiveAI(
+		USeinWorldSubsystem& World,
+		USeinAIController* Controller,
+		const FSeinCommand& Command)
+	{
+		TGuardValue<USeinAIController*> ActiveEmitterGuard(
+			World.ActiveAICommandEmitter, Controller);
+		return World.RouteAICommandFromController(Controller, Command);
+	}
 };
 
 namespace UE::SeinARTSTests
@@ -122,6 +132,7 @@ namespace UE::SeinARTSTests
 			[&](const FSeinCommand&, bool)
 			{
 				bLocalSubmitterCalled = true;
+				return true;
 			});
 		World->SetLocalCommandSubmitter(MoveTemp(LocalSubmitter));
 		FTSTicker::GetCoreTicker().Tick(World->GetFixedDeltaTimeSeconds());
@@ -129,6 +140,17 @@ namespace UE::SeinARTSTests
 
 		// Unbound topology hooks are the explicit standalone path.
 		World->ClearLocalCommandSubmitter();
+		TestRunner->AddExpectedError(
+			TEXT("while replay owns external ingress"),
+			EAutomationExpectedErrorFlags::Contains, 1, false);
+		ASSERT_THAT(IsTrue(
+			FSeinCommandIngressTestAccess::BeginReplay(*World)));
+		ASSERT_THAT(IsFalse(
+			FSeinCommandIngressTestAccess::RouteAsActiveAI(
+				*World, First, First->Command)));
+		FSeinCommandIngressTestAccess::EndReplay(*World);
+		ASSERT_THAT(AreEqual(0, World->GetPendingCommands().Num()));
+
 		int32 ObservedStandaloneCommands = 0;
 		FSeinPlayerID ObservedStandalonePlayer;
 		World->OnCommandsProcessing.AddLambda(

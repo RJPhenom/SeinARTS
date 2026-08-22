@@ -868,6 +868,7 @@ void USeinWorldSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	bExecutionTopologyValid = true;
 	bExecutionTopologyTeardown = false;
 	bModuleUnloadStateReleased = false;
+	FormationOrderTokenEpoch = 1;
 	MatchBootstrapState = ESeinMatchBootstrapState::Awaiting;
 	MatchBootstrapReceipt = FSeinMatchBootstrapReceipt();
 	MatchBootstrapAuthorizationContextDigest.Invalidate();
@@ -1162,6 +1163,7 @@ void USeinWorldSubsystem::ReleaseAllModuleOwnedState()
 	ReplayCommandBoundaryNotifier.Clear();
 	ClearAIEmitInterceptor();
 	ClearLocalCommandSubmitter();
+	ClearLocalCommandPrincipalResolver();
 
 	OnSimTickCompleted.Clear();
 	OnSimFrameCompleted.Clear();
@@ -3145,10 +3147,19 @@ void USeinWorldSubsystem::DispatchValidatedCommand(
 		return;
 	}
 
-	// EntitySet commands are normalized once at the common dispatcher seam.
-	// A custom handler must never receive foreign or duplicate recipients just
-	// because its authority policy accepted one valid member of a mixed list.
-	if (Schema.AuthorityScope == ESeinCommandAuthorityScope::EntitySet)
+	const FSeinBrokerOrderPayload* BrokerPayload =
+		GetCanonicalCommand().CommandType
+			== SeinARTSTags::Command_Type_BrokerOrder
+		? GetCanonicalCommand().Payload.GetPtr<FSeinBrokerOrderPayload>()
+		: nullptr;
+	const bool bPreserveExactBrokerRecipients = BrokerPayload
+		&& !BrokerPayload->RecipientPlan.IsEmpty();
+	// Ordinary EntitySet commands are normalized once at the common dispatcher
+	// seam. Exact BrokerOrder V4 commands retain their original recipient list:
+	// their handler owns atomic outer+nested authority and roster validation
+	// against the recipient-segment evidence carried on the wire.
+	if (Schema.AuthorityScope == ESeinCommandAuthorityScope::EntitySet
+		&& !bPreserveExactBrokerRecipients)
 	{
 		if (!CanonicalStorage.IsSet())
 		{
@@ -3675,6 +3686,35 @@ bool USeinWorldSubsystem::ValidateBuiltInCommandSemantics(
 		const bool bHasIntent = Payload
 			&& (!Payload->CommandContext.IsEmpty()
 				|| Payload->PredeterminedAbilityTag.IsValid());
+		bool bRecipientPlanValid = Payload != nullptr;
+		if (Payload)
+		{
+			const bool bHasArtifact = !Payload->DestinationArtifact.IsEmpty();
+			const bool bHasRecipientPlan = !Payload->RecipientPlan.IsEmpty();
+			bRecipientPlanValid = bHasArtifact == bHasRecipientPlan;
+			int64 PlannedMemberTotal = 0;
+			if (bRecipientPlanValid && bHasRecipientPlan)
+			{
+				bRecipientPlanValid = !Command.TargetEntity.IsValid()
+					&& Payload->RecipientPlan.Num() == Command.EntityList.Num()
+					&& Payload->RecipientPlan.Num()
+						<= SeinBrokerOrderProtocol::MaxRecipientPlanEntries;
+				for (int32 Index = 0;
+					bRecipientPlanValid
+						&& Index < Payload->RecipientPlan.Num(); ++Index)
+				{
+					const FSeinBrokerRecipientPlanSegment& Segment =
+						Payload->RecipientPlan[Index];
+					bRecipientPlanValid = Segment.Recipient
+							== Command.EntityList[Index]
+						&& Segment.MemberCount > 0;
+					PlannedMemberTotal += Segment.MemberCount;
+				}
+				bRecipientPlanValid = bRecipientPlanValid
+					&& PlannedMemberTotal
+						== Payload->DestinationArtifact.Num();
+			}
+		}
 		return !Command.EntityHandle.IsValid()
 			&& !Command.AbilityTag.IsValid()
 			&& Command.QueueIndex == INDEX_NONE
@@ -3684,7 +3724,9 @@ bool USeinWorldSubsystem::ValidateBuiltInCommandSemantics(
 			&& Command.AuxB == FFixedPoint::Zero
 			&& Command.ActiveFocusIndex == INDEX_NONE
 			&& !Command.EntityList.IsEmpty()
+			&& HasUniqueEntities(Command.EntityList)
 			&& bHasIntent
+			&& bRecipientPlanValid
 			&& Payload->GuidePoints.Num()
 				<= SeinBrokerOrderProtocol::MaxGuidePoints
 			&& Payload->TargeterPoints.Num()
@@ -3946,38 +3988,156 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleBrokerOr
 		return ECommandHandleResult::Handled;
 	}
 
-	// Stable-filter the mixed recipient set through the selected policy. The
-	// common EntitySet gate proves that at least one member is controllable;
-	// this per-member pass prevents a valid grant from smuggling foreign members
-	// through the same envelope. Preserve input order and collapse duplicates.
-	TArray<FSeinEntityHandle> Filtered;
-	Filtered.Reserve(Cmd.EntityList.Num());
-	TSet<FSeinEntityHandle> Seen;
-	for (const FSeinEntityHandle& M : Cmd.EntityList)
-	{
-		if (!EntityPool.IsValid(M) || Seen.Contains(M)) continue;
-		Seen.Add(M);
-		if (CommandAuthorityPolicy
-			&& CommandAuthorityPolicy->CanControlEntity(
-				CommandAuthorityView, Cmd, M))
-		{
-			Filtered.Add(M);
-		}
-	}
-	if (Filtered.Num() == 0)
-	{
-		RejectCommand(Cmd, SeinARTSTags::Command_Reject_InvalidTarget);
-		return ECommandHandleResult::Handled;
-	}
-
-	// Extract the typed BrokerOrder payload — smart-resolution context +
-	// drag-order endpoint. Missing payload is a malformed command.
-	const FSeinBrokerOrderPayload* Payload = Cmd.Payload.GetPtr<FSeinBrokerOrderPayload>();
+	// Extract the typed BrokerOrder payload before recipient filtering. Exact V4
+	// artifacts carry segment evidence keyed to the original EntityList and own
+	// atomic authority/roster admission here.
+	const FSeinBrokerOrderPayload* Payload =
+		Cmd.Payload.GetPtr<FSeinBrokerOrderPayload>();
 	if (!Payload)
 	{
 		RejectCommand(Cmd, SeinARTSTags::Command_Reject_InvalidTarget);
 		return ECommandHandleResult::Handled;
 	}
+	const bool bHasExactArtifact = !Payload->DestinationArtifact.IsEmpty();
+	if (bHasExactArtifact != !Payload->RecipientPlan.IsEmpty())
+	{
+		RejectCommand(Cmd, SeinARTSTags::Command_Reject_InvalidTarget);
+		return ECommandHandleResult::Handled;
+	}
+
+	// Expand every original recipient once. A member may occur in exactly one
+	// recipient segment; selecting both a persistent broker and one of its units
+	// is ambiguous and must never detach or double-queue that unit. Exact orders
+	// reject any authority loss atomically. Artifactless compatibility orders
+	// retain stable partial-authority filtering at the outer recipient boundary.
+	TArray<FSeinEntityHandle> Filtered;
+	Filtered.Reserve(Cmd.EntityList.Num());
+	TArray<FSeinEntityHandle> CurrentExpandedMembers;
+	CurrentExpandedMembers.Reserve(Payload->DestinationArtifact.Num());
+	TArray<int32> CurrentMemberCountsByRecipient;
+	CurrentMemberCountsByRecipient.Reserve(Cmd.EntityList.Num());
+	TSet<FSeinEntityHandle> SeenRecipients;
+	TSet<FSeinEntityHandle> SeenExpandedMembers;
+	for (const FSeinEntityHandle& Recipient : Cmd.EntityList)
+	{
+		if (!Recipient.IsValid() || SeenRecipients.Contains(Recipient))
+		{
+			RejectCommand(Cmd, SeinARTSTags::Command_Reject_InvalidTarget);
+			return ECommandHandleResult::Handled;
+		}
+		SeenRecipients.Add(Recipient);
+		if (!IsEntityAlive(Recipient))
+		{
+			CurrentMemberCountsByRecipient.Add(0);
+			continue;
+		}
+
+		const int32 MemberStart = CurrentExpandedMembers.Num();
+		bool bRecipientAuthorized = CanCommandControlEntity(Cmd, Recipient);
+		if (const FSeinCommandBrokerData* Broker =
+			GetComponent<FSeinCommandBrokerData>(Recipient))
+		{
+			for (const FSeinEntityHandle Member : Broker->Members)
+			{
+				if (!IsEntityAlive(Member))
+				{
+					continue;
+				}
+				if (SeenExpandedMembers.Contains(Member))
+				{
+					RejectCommand(Cmd,
+						SeinARTSTags::Command_Reject_InvalidTarget);
+					return ECommandHandleResult::Handled;
+				}
+				SeenExpandedMembers.Add(Member);
+				CurrentExpandedMembers.Add(Member);
+				bRecipientAuthorized = bRecipientAuthorized
+					&& CanCommandControlEntity(Cmd, Member);
+			}
+		}
+		else
+		{
+			if (SeenExpandedMembers.Contains(Recipient))
+			{
+				RejectCommand(Cmd, SeinARTSTags::Command_Reject_InvalidTarget);
+				return ECommandHandleResult::Handled;
+			}
+			SeenExpandedMembers.Add(Recipient);
+			CurrentExpandedMembers.Add(Recipient);
+		}
+		const int32 MemberCount =
+			CurrentExpandedMembers.Num() - MemberStart;
+		CurrentMemberCountsByRecipient.Add(MemberCount);
+		if (bHasExactArtifact && !bRecipientAuthorized)
+		{
+			RejectCommand(Cmd, SeinARTSTags::Command_Reject_Unauthorized);
+			return ECommandHandleResult::Handled;
+		}
+		if (bRecipientAuthorized && (!bHasExactArtifact || MemberCount > 0))
+		{
+			Filtered.Add(Recipient);
+		}
+	}
+
+	if (bHasExactArtifact)
+	{
+		bool bSegmentsValid = Payload->RecipientPlan.Num()
+			== Cmd.EntityList.Num();
+		int32 PlannedCursor = 0;
+		int32 CurrentCursor = 0;
+		for (int32 RecipientIndex = 0;
+			bSegmentsValid && RecipientIndex < Cmd.EntityList.Num();
+			++RecipientIndex)
+		{
+			const FSeinBrokerRecipientPlanSegment& Segment =
+				Payload->RecipientPlan[RecipientIndex];
+			const int32 CurrentCount =
+				CurrentMemberCountsByRecipient[RecipientIndex];
+			bSegmentsValid = Segment.Recipient
+					== Cmd.EntityList[RecipientIndex]
+				&& Segment.MemberCount > 0
+				&& PlannedCursor + Segment.MemberCount
+					<= Payload->DestinationArtifact.Num()
+				&& CurrentCursor + CurrentCount
+					<= CurrentExpandedMembers.Num();
+			int32 SegmentCurrentCursor = CurrentCursor;
+			for (int32 Offset = 0;
+				bSegmentsValid && Offset < Segment.MemberCount; ++Offset)
+			{
+				const FSeinEntityHandle PlannedMember =
+					Payload->DestinationArtifact[PlannedCursor + Offset].Member;
+				if (!IsEntityAlive(PlannedMember))
+				{
+					continue;
+				}
+				bSegmentsValid = SegmentCurrentCursor
+						< CurrentCursor + CurrentCount
+					&& CurrentExpandedMembers[SegmentCurrentCursor]
+						== PlannedMember;
+				++SegmentCurrentCursor;
+			}
+			bSegmentsValid = bSegmentsValid
+				&& SegmentCurrentCursor == CurrentCursor + CurrentCount;
+			PlannedCursor += Segment.MemberCount;
+			CurrentCursor += CurrentCount;
+		}
+		bSegmentsValid = bSegmentsValid
+			&& PlannedCursor == Payload->DestinationArtifact.Num()
+			&& CurrentCursor == CurrentExpandedMembers.Num();
+		if (!bSegmentsValid)
+		{
+			RejectCommand(Cmd, SeinARTSTags::Command_Reject_InvalidTarget);
+			return ECommandHandleResult::Handled;
+		}
+	}
+	if (Filtered.Num() == 0)
+	{
+		RejectCommand(Cmd, bHasExactArtifact
+			? SeinARTSTags::Command_Reject_InvalidTarget
+			: SeinARTSTags::Command_Reject_Unauthorized);
+		return ECommandHandleResult::Handled;
+	}
+
 	TArray<FSeinFrozenDestination> CanonicalDestinationArtifact =
 		Payload->DestinationArtifact;
 
@@ -3999,30 +4159,10 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleBrokerOr
 			RejectCommand(Cmd, SeinARTSTags::Command_Reject_InvalidTarget);
 			return ECommandHandleResult::Handled;
 		}
-		TArray<FSeinEntityHandle> ExpectedMembers;
-		TSet<FSeinEntityHandle> SeenExpectedMembers;
-		for (const FSeinEntityHandle& Recipient : Filtered)
-		{
-			if (const FSeinCommandBrokerData* Broker =
-				GetComponent<FSeinCommandBrokerData>(Recipient))
-			{
-				for (const FSeinEntityHandle& Member : Broker->Members)
-				{
-					if (IsEntityAlive(Member)
-						&& !SeenExpectedMembers.Contains(Member))
-					{
-						SeenExpectedMembers.Add(Member);
-						ExpectedMembers.Add(Member);
-					}
-				}
-			}
-			else if (IsEntityAlive(Recipient)
-				&& !SeenExpectedMembers.Contains(Recipient))
-			{
-				SeenExpectedMembers.Add(Recipient);
-				ExpectedMembers.Add(Recipient);
-			}
-		}
+		const TArray<FSeinEntityHandle>& ExpectedMembers =
+			CurrentExpandedMembers;
+		const TSet<FSeinEntityHandle>& SeenExpectedMembers =
+			SeenExpandedMembers;
 		bool bArtifactValid = true;
 		TArray<FSeinFrozenDestination> AdmittedArtifact;
 		AdmittedArtifact.Reserve(CanonicalDestinationArtifact.Num());
@@ -5253,6 +5393,33 @@ bool USeinWorldSubsystem::HasLocalCommandSubmitter() const
 	return LocalCommandSubmitter.IsBound();
 }
 
+void USeinWorldSubsystem::SetLocalCommandPrincipalResolver(
+	FSeinLocalCommandPrincipalResolver&& Resolver)
+{
+	LocalCommandPrincipalResolver = MoveTemp(Resolver);
+}
+
+void USeinWorldSubsystem::ClearLocalCommandPrincipalResolver()
+{
+	LocalCommandPrincipalResolver.Unbind();
+}
+
+bool USeinWorldSubsystem::ResolveLocalCommandPrincipal(
+	FSeinPlayerID ClaimedPlayer,
+	FSeinPlayerID& OutAuthenticatedPlayer) const
+{
+	if (LocalCommandSubmitter.IsBound()
+		&& !LocalCommandPrincipalResolver.IsBound())
+	{
+		OutAuthenticatedPlayer = FSeinPlayerID::Neutral();
+		return false;
+	}
+	OutAuthenticatedPlayer = LocalCommandPrincipalResolver.IsBound()
+		? LocalCommandPrincipalResolver.Execute(ClaimedPlayer)
+		: ClaimedPlayer;
+	return OutAuthenticatedPlayer.IsValid();
+}
+
 void USeinWorldSubsystem::EnqueueCommand(const FSeinCommand& Command)
 {
 	SEIN_CHECK_NOT_PARALLEL();
@@ -5297,7 +5464,7 @@ void USeinWorldSubsystem::EnqueueCommand(const FSeinCommand& Command)
 	PendingReplayCommands.AddCommand(Command);
 }
 
-void USeinWorldSubsystem::EnqueueAuthenticatedCommand(
+bool USeinWorldSubsystem::EnqueueAuthenticatedCommand(
 	const FSeinCommand& Command,
 	FSeinPlayerID AuthenticatedPlayer,
 	ESeinCommandIssuerKind AuthenticatedIssuerKind)
@@ -5308,7 +5475,7 @@ void USeinWorldSubsystem::EnqueueAuthenticatedCommand(
 		UE_LOG(LogSeinSim, Error,
 			TEXT("Rejected transport-authenticated command '%s' from a read-only observer."),
 			*Command.CommandType.ToString());
-		return;
+		return false;
 	}
 	if (MatchBootstrapState != ESeinMatchBootstrapState::Consumed
 		|| !bIsRunning)
@@ -5318,14 +5485,14 @@ void USeinWorldSubsystem::EnqueueAuthenticatedCommand(
 			*Command.CommandType.ToString(),
 			MatchBootstrapStateName(MatchBootstrapState),
 			bIsRunning ? 1 : 0);
-		return;
+		return false;
 	}
 	if (bReplayOwnsExternalCommandIngress)
 	{
 		UE_LOG(LogSeinSim, Warning,
 			TEXT("Rejected transport-authenticated command '%s' while replay owns external ingress."),
 			*Command.CommandType.ToString());
-		return;
+		return false;
 	}
 	if (AuthenticatedIssuerKind != ESeinCommandIssuerKind::Player
 		&& AuthenticatedIssuerKind != ESeinCommandIssuerKind::MatchAdministrator)
@@ -5333,7 +5500,7 @@ void USeinWorldSubsystem::EnqueueAuthenticatedCommand(
 		UE_LOG(LogSeinSim, Error,
 			TEXT("Rejected trusted command ingress with invalid external issuer kind %d."),
 			static_cast<int32>(AuthenticatedIssuerKind));
-		return;
+		return false;
 	}
 
 	FSeinCommand Canonical = Command;
@@ -5346,9 +5513,10 @@ void USeinWorldSubsystem::EnqueueAuthenticatedCommand(
 	if (bSimPausedHard)
 	{
 		RejectCommand(Canonical, SeinARTSTags::Command_Reject_SimPaused);
-		return;
+		return false;
 	}
 	PendingCommands.AddCommand(Canonical);
+	return true;
 }
 
 void USeinWorldSubsystem::EnqueueDerivedCommand(const FSeinCommand& Command)
@@ -5386,7 +5554,7 @@ void USeinWorldSubsystem::EnqueueDerivedCommand(const FSeinCommand& Command)
 	PendingCommands.AddCommand(Canonical);
 }
 
-void USeinWorldSubsystem::SubmitLocalCommandDraft(
+bool USeinWorldSubsystem::SubmitLocalCommandDraft(
 	const FSeinCommand& Draft,
 	bool bRequestMatchAdministration)
 {
@@ -5396,7 +5564,7 @@ void USeinWorldSubsystem::SubmitLocalCommandDraft(
 		UE_LOG(LogSeinSim, Error,
 			TEXT("Rejected local command draft '%s' from a read-only observer."),
 			*Draft.CommandType.ToString());
-		return;
+		return false;
 	}
 	if (MatchBootstrapState != ESeinMatchBootstrapState::Consumed
 		|| !bIsRunning)
@@ -5406,14 +5574,14 @@ void USeinWorldSubsystem::SubmitLocalCommandDraft(
 			*Draft.CommandType.ToString(),
 			MatchBootstrapStateName(MatchBootstrapState),
 			bIsRunning ? 1 : 0);
-		return;
+		return false;
 	}
 	if (bReplayOwnsExternalCommandIngress)
 	{
 		UE_LOG(LogSeinSim, Warning,
 			TEXT("Rejected local command draft '%s' while replay owns external ingress."),
 			*Draft.CommandType.ToString());
-		return;
+		return false;
 	}
 	if (bSimPausedHard)
 	{
@@ -5426,15 +5594,15 @@ void USeinWorldSubsystem::SubmitLocalCommandDraft(
 		if (!bFrozenPauseControl)
 		{
 			RejectCommand(Draft, SeinARTSTags::Command_Reject_SimPaused);
-			return;
+			return false;
 		}
 	}
 	if (LocalCommandSubmitter.IsBound())
 	{
 		FSeinCommand ScrubbedDraft = Draft;
 		ScrubbedDraft.DerivedResourcePayer = FSeinPlayerID::Neutral();
-		LocalCommandSubmitter.Execute(ScrubbedDraft, bRequestMatchAdministration);
-		return;
+		return LocalCommandSubmitter.Execute(
+			ScrubbedDraft, bRequestMatchAdministration);
 	}
 
 	if (!bRequestMatchAdministration && !Draft.PlayerID.IsValid())
@@ -5442,7 +5610,7 @@ void USeinWorldSubsystem::SubmitLocalCommandDraft(
 		UE_LOG(LogSeinSim, Error,
 			TEXT("Rejected standalone command draft '%s' without a valid player."),
 			*Draft.CommandType.ToString());
-		return;
+		return false;
 	}
 
 	const FSeinPlayerID AuthenticatedPlayer = bRequestMatchAdministration
@@ -5471,19 +5639,19 @@ void USeinWorldSubsystem::SubmitLocalCommandDraft(
 				>= MaxPauseControlCommandsPerFrame)
 			{
 				RejectCommand(Canonical, SeinARTSTags::Command_Reject_PayloadTooLarge);
-				return;
+				return false;
 			}
 			PendingStandalonePauseControlCommands.Add(MoveTemp(Canonical));
-			return;
+			return true;
 		}
 		if (bSimPausedHard)
 		{
 			RejectCommand(Canonical, SeinARTSTags::Command_Reject_SimPaused);
-			return;
+			return false;
 		}
 	}
 
-	EnqueueAuthenticatedCommand(
+	return EnqueueAuthenticatedCommand(
 		Draft,
 		AuthenticatedPlayer,
 		AuthenticatedIssuer);
@@ -5535,6 +5703,17 @@ ESeinCommandStructureResult USeinWorldSubsystem::ValidateCommandStructure(
 	FSeinCommandSchemaDescriptor* OutSchema) const
 {
 	return CommandSchemaSnapshot.ValidateStructure(Command, OutSchema);
+}
+
+bool USeinWorldSubsystem::CanCommandControlEntity(
+	const FSeinCommand& Command,
+	FSeinEntityHandle Entity) const
+{
+	return EntityPool.IsValid(Entity)
+		&& CommandAuthorityPolicy
+		&& CommandAuthorityView
+		&& CommandAuthorityPolicy->CanControlEntity(
+			CommandAuthorityView, Command, Entity);
 }
 
 // ==================== Entity Management ====================
@@ -10336,6 +10515,11 @@ bool USeinWorldSubsystem::RestoreSnapshot(
 	TimeAccumulator = 0.0f;
 	bIsRunning =
 		Options.ResumePolicy == ESeinSnapshotResumePolicy::ResumeImmediately;
+	++FormationOrderTokenEpoch;
+	if (FormationOrderTokenEpoch == 0)
+	{
+		FormationOrderTokenEpoch = 1;
+	}
 
 	// Let upstream modules consume their own slots (camera, UI). Fired
 	// after the sim is fully live + bridge reconciled, so the restore
@@ -15074,8 +15258,7 @@ bool USeinWorldSubsystem::RouteAICommandFromController(
 
 	FSeinCommand Draft = Command;
 	Draft.PlayerID = Controller->OwnedPlayerID;
-	SubmitLocalCommandDraft(Draft);
-	return true;
+	return SubmitLocalCommandDraft(Draft);
 }
 
 void USeinWorldSubsystem::RegisterAIController(USeinAIController* Controller, FSeinPlayerID OwnedPlayer)
