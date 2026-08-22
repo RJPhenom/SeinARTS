@@ -28,6 +28,7 @@
 #include "Containers/Ticker.h"
 #include "Data/SeinMatchSettings.h"
 #include "Data/SeinReplayHeader.h"
+#include "Data/SeinWorldSnapshot.h"
 #include "HAL/FileManager.h"
 #include "Input/SeinCommand.h"
 #include "Lib/SeinAbilityBPFL.h"
@@ -39,6 +40,7 @@
 #include "Settings/PluginSettings.h"
 #include "Settings/SeinARTSCoverSettings.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
+#include "Simulation/SeinTestSnapshotRestore.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "System/SeinCoverDefault.h"
 #include "System/SeinCoverSubsystem.h"
@@ -364,7 +366,11 @@ TEST(CoverFrozenBrokerOrderReplaysEveryReservationLifecycleTick,
 
 	TArray<FGuid> SourceRoots;
 	SourceRoots.SetNum(MaxEndTick + 1);
+	FSeinWorldSnapshot MidMovementSnapshot;
+	FSeinWorldSnapshotReferenceGuard MidMovementSnapshotGuard(
+		MidMovementSnapshot);
 	bool bSawReservedInFlight = false;
+	int32 MidMovementTick = INDEX_NONE;
 	int32 EndTick = INDEX_NONE;
 	for (int32 ExpectedTick = 1; ExpectedTick <= MaxEndTick; ++ExpectedTick)
 	{
@@ -404,8 +410,7 @@ TEST(CoverFrozenBrokerOrderReplaysEveryReservationLifecycleTick,
 					!= DisplayedCoverSlot)
 			{
 				const FSeinBrokerQueuedOrder& Active = Broker->OrderQueue[0];
-				bSawReservedInFlight = bSawReservedInFlight ||
-					(Active.bIsExecuting
+				const bool bReservedInFlight = Active.bIsExecuting
 					&& Active.DestinationArtifact.Num() == 1
 					&& Active.DestinationArtifact[0].bReserveFootprint
 					&& Active.DestinationArtifact[0].WorldPosition
@@ -413,7 +418,17 @@ TEST(CoverFrozenBrokerOrderReplaysEveryReservationLifecycleTick,
 					&& Broker->SettledDestinationArtifact.IsEmpty()
 					&& Source->IsDestinationFootprintReserved(
 						DisplayedCoverSlot,
-						Active.DestinationArtifact[0].FootprintRadius));
+						Active.DestinationArtifact[0].FootprintRadius);
+				bSawReservedInFlight = bSawReservedInFlight
+					|| bReservedInFlight;
+				if (bReservedInFlight && MidMovementTick == INDEX_NONE)
+				{
+					Source->CaptureSnapshot(MidMovementSnapshot);
+					ASSERT_THAT(AreEqual(
+						FSeinWorldSnapshot::CurrentVersion,
+						MidMovementSnapshot.SnapshotVersion));
+					MidMovementTick = ExpectedTick;
+				}
 			}
 			bSettledAtDisplayedSlot = Broker
 				&& Broker->OrderQueue.IsEmpty()
@@ -431,6 +446,7 @@ TEST(CoverFrozenBrokerOrderReplaysEveryReservationLifecycleTick,
 		}
 	}
 	ASSERT_THAT(IsTrue(bSawReservedInFlight));
+	ASSERT_THAT(IsTrue(MidMovementTick != INDEX_NONE));
 	if (EndTick == INDEX_NONE)
 	{
 		const FSeinEntity* TimedOutMember = Source->GetEntity(Member);
@@ -473,6 +489,66 @@ TEST(CoverFrozenBrokerOrderReplaysEveryReservationLifecycleTick,
 	FScopedCoverReplayFile ReplayFile{Writer->FinishRecording()};
 	ASSERT_THAT(IsFalse(ReplayFile.Path.IsEmpty()));
 	ASSERT_THAT(IsTrue(IFileManager::Get().FileExists(*ReplayFile.Path)));
+
+	FActorTestSpawner CheckpointSpawner;
+	USeinWorldSubsystem* CheckpointTarget =
+		CheckpointSpawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+	ASSERT_THAT(IsNotNull(CheckpointTarget));
+	ASSERT_THAT(IsTrue(SeinTestSnapshotRestore::RestoreTrusted(
+		*CheckpointTarget, MidMovementSnapshot, &Error)));
+	ASSERT_THAT(AreEqual(
+		MidMovementTick, CheckpointTarget->GetCurrentTick()));
+	FGuid CheckpointRoot;
+	ASSERT_THAT(IsTrue(ComputeCoverReplayRoot(
+		*CheckpointTarget, CheckpointRoot)));
+	ASSERT_THAT(IsTrue(SourceRoots[MidMovementTick] == CheckpointRoot));
+	const FSeinBrokerMembershipData* RestoredMembership =
+		CheckpointTarget->GetComponent<FSeinBrokerMembershipData>(Member);
+	ASSERT_THAT(IsNotNull(RestoredMembership));
+	const FSeinCommandBrokerData* RestoredBroker =
+		CheckpointTarget->GetComponent<FSeinCommandBrokerData>(
+			RestoredMembership->CurrentBrokerHandle);
+	ASSERT_THAT(IsNotNull(RestoredBroker));
+	ASSERT_THAT(AreEqual(1, RestoredBroker->OrderQueue.Num()));
+	ASSERT_THAT(IsTrue(RestoredBroker->OrderQueue[0].bIsExecuting));
+	ASSERT_THAT(AreEqual(
+		1, RestoredBroker->OrderQueue[0].DestinationArtifact.Num()));
+	ASSERT_THAT(IsTrue(
+		RestoredBroker->SettledDestinationArtifact.IsEmpty()));
+	ASSERT_THAT(IsTrue(CheckpointTarget->IsDestinationFootprintReserved(
+		DisplayedCoverSlot,
+		RestoredBroker->OrderQueue[0]
+			.DestinationArtifact[0].FootprintRadius)));
+	for (int32 ExpectedTick = MidMovementTick + 1;
+		ExpectedTick <= EndTick;
+		++ExpectedTick)
+	{
+		FTSTicker::GetCoreTicker().Tick(
+			CheckpointTarget->GetFixedDeltaTimeSeconds());
+		ASSERT_THAT(AreEqual(
+			ExpectedTick, CheckpointTarget->GetCurrentTick()));
+		ASSERT_THAT(IsTrue(ComputeCoverReplayRoot(
+			*CheckpointTarget, CheckpointRoot)));
+		ASSERT_THAT(IsTrue(SourceRoots[ExpectedTick] == CheckpointRoot));
+	}
+	const FSeinEntity* CheckpointMember =
+		CheckpointTarget->GetEntity(Member);
+	RestoredMembership =
+		CheckpointTarget->GetComponent<FSeinBrokerMembershipData>(Member);
+	ASSERT_THAT(IsNotNull(CheckpointMember));
+	ASSERT_THAT(IsNotNull(RestoredMembership));
+	RestoredBroker = CheckpointTarget->GetComponent<FSeinCommandBrokerData>(
+		RestoredMembership->CurrentBrokerHandle);
+	ASSERT_THAT(IsNotNull(RestoredBroker));
+	ASSERT_THAT(IsTrue(
+		CheckpointMember->Transform.GetLocation() == DisplayedCoverSlot));
+	ASSERT_THAT(IsTrue(RestoredBroker->OrderQueue.IsEmpty()));
+	ASSERT_THAT(AreEqual(
+		1, RestoredBroker->SettledDestinationArtifact.Num()));
+	ASSERT_THAT(IsTrue(
+		RestoredBroker->SettledDestinationArtifact[0].WorldPosition
+			== DisplayedCoverSlot));
+	CheckpointTarget->StopSimulation();
 
 	for (int32 ExpectedTick = 1; ExpectedTick <= EndTick; ++ExpectedTick)
 	{

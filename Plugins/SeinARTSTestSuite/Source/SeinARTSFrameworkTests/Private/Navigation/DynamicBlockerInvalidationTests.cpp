@@ -1,8 +1,13 @@
 #include "CQTest.h"
+#include "Components/SeinMovementComponent.h"
+#include "Components/SeinNavigationComponent.h"
+#include "Movement/SeinBasicUnitMovement.h"
+#include "Movement/SeinMovement.h"
 #include "SeinNavigationAStar.h"
 #include "Settings/PluginSettings.h"
 #include "Stamping/SeinStampUtils.h"
 #include "TestTypes/SeinLevelDataTestTypes.h"
+#include "Types/Entity.h"
 
 namespace UE::SeinARTSTests
 {
@@ -735,5 +740,87 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(Path.bIsPartial));
 		ASSERT_THAT(IsTrue(Path.Waypoints.Last()
 			!= Request.End));
+	}
+
+	TEST(AuthoritativeFinalStepRejectsBlockerAddedAfterPlanning,
+		"SeinARTS.Unit.Navigation")
+	{
+		USeinNavigationAStar* Nav =
+			NewObject<USeinNavigationAStar>();
+		USeinLevelDataTestDouble* LevelData =
+			NewObject<USeinLevelDataTestDouble>();
+		USeinBasicUnitMovement* Movement =
+			NewObject<USeinBasicUnitMovement>();
+		ASSERT_THAT(IsNotNull(Nav));
+		ASSERT_THAT(IsNotNull(LevelData));
+		ASSERT_THAT(IsNotNull(Movement));
+		ConfigureOpenConnectedNavGrid(
+			*LevelData, FIntPoint(5, 3));
+		ASSERT_THAT(IsTrue(
+			Nav->LoadFromSubstrate(*LevelData).IsAdopted()));
+
+		const FFixedVector Start = CellCenter(0, 1);
+		const FFixedVector NearDestination = CellCenter(2, 1);
+		const FFixedVector Destination = CellCenter(3, 1);
+		const FSeinEntityHandle Requester(1, 1);
+		const FFixedPoint FootprintRadius = FFixedPoint::FromInt(20);
+		const FFixedPoint AcceptanceRadius = FFixedPoint::FromInt(60);
+
+		FSeinPathRequest Request;
+		Request.Start = Start;
+		Request.End = Destination;
+		Request.Requester = Requester;
+		Request.AgentNavLayerMask = 0x01;
+		Request.AgentFootprintRadius = FootprintRadius;
+		Request.bAuthoritativeDestination = true;
+		FSeinPath Path;
+		ASSERT_THAT(IsTrue(Nav->FindPath(Request, Path)));
+		ASSERT_THAT(IsFalse(Path.bIsPartial));
+		ASSERT_THAT(IsTrue(Path.Waypoints.Last() == Destination));
+
+		FSeinEntity Entity;
+		Entity.Transform.SetLocation(NearDestination);
+		FSeinMovementComponent MovementData;
+		FSeinNavigationComponent NavigationData;
+		NavigationData.NavLayerMask = 0x01;
+		NavigationData.FallbackFootprintRadius = FootprintRadius;
+		int32 CurrentWaypointIndex = Path.Waypoints.Num() - 1;
+		FSeinMovementContext Context{
+			Entity,
+			&MovementData,
+			&NavigationData,
+			Path,
+			CurrentWaypointIndex,
+			FFixedVector::SquareSaturated(AcceptanceRadius),
+			FFixedPoint::FromInt(1) / FFixedPoint::FromInt(30),
+			Nav,
+			nullptr,
+			Requester
+		};
+		Context.bAuthoritativeDestination = true;
+		Context.ExactAcceptanceRadius = AcceptanceRadius;
+		Movement->CacheFootprintFromContext(Context);
+
+		FSeinDynamicBlocker Blocker;
+		Blocker.Owner = FSeinEntityHandle(9, 1);
+		Blocker.EntityCenter = Destination;
+		Blocker.EntityRotation = FFixedQuaternion::Identity;
+		Blocker.Shape.Shape = ESeinStampShape::Rect;
+		Blocker.Shape.HalfExtentX = FFixedPoint::FromInt(49);
+		Blocker.Shape.HalfExtentY = FFixedPoint::FromInt(49);
+		Blocker.BlockedNavLayerMask = 0x01;
+		FNavigationAStarTestAccess::InstallDynamicBlockers(
+			*Nav, { Blocker });
+
+		ASSERT_THAT(IsFalse(
+			Movement->TryFinalizeAuthoritativeArrival(Context)));
+		ASSERT_THAT(IsTrue(
+			Entity.Transform.GetLocation() == NearDestination));
+
+		FNavigationAStarTestAccess::InstallDynamicBlockers(*Nav, {});
+		ASSERT_THAT(IsTrue(
+			Movement->TryFinalizeAuthoritativeArrival(Context)));
+		ASSERT_THAT(IsTrue(
+			Entity.Transform.GetLocation() == Destination));
 	}
 }
