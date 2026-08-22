@@ -1,6 +1,14 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
- * @file    SeinGameMode.cpp
+ *
+ * @file         SeinGameMode.cpp
+ * @author       RJ Macklem
+ * @created      17 Jan 2026
+ * @latest       22 Aug 2026
+ * @brief        Implements authority-side player routing and PIE match startup.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
  */
 
 #include "GameMode/SeinGameMode.h"
@@ -40,6 +48,42 @@ namespace
 			&& FCString::Stricmp(
 				IntentOption, TEXT("ExternalOrchestrator")) == 0;
 	}
+
+#if WITH_EDITOR || WITH_DEV_AUTOMATION_TESTS
+	bool ShouldRequestMultiplayerPIEAutoStart(
+		bool bSettingEnabled,
+		bool bNetworkingEnabled,
+		EWorldType::Type WorldType,
+		ENetMode NetMode,
+		bool bHasExternalBootstrap,
+		bool bHasPublishedSnapshot,
+		const FSeinMatchSettings& MatchSettings,
+		TFunctionRef<bool(int32)> IsHumanSlotBound)
+	{
+		if (!bSettingEnabled || !bNetworkingEnabled
+			|| WorldType != EWorldType::PIE
+			|| (NetMode != NM_ListenServer && NetMode != NM_DedicatedServer)
+			|| bHasExternalBootstrap || bHasPublishedSnapshot)
+		{
+			return false;
+		}
+
+		bool bHasHumanSlot = false;
+		for (const FSeinMatchSlot& Slot : MatchSettings.Slots)
+		{
+			if (Slot.State != ESeinSlotState::Human)
+			{
+				continue;
+			}
+			bHasHumanSlot = true;
+			if (!IsHumanSlotBound(Slot.SlotIndex))
+			{
+				return false;
+			}
+		}
+		return bHasHumanSlot;
+	}
+#endif
 }
 
 ASeinGameMode::ASeinGameMode()
@@ -52,6 +96,17 @@ ASeinGameMode::ASeinGameMode()
 	// gameplay travel. ASeinPlayerController::SeamlessTravelFrom carries the
 	// already established gameplay slot into this world's frozen manifest.
 	bUseSeamlessTravel = true;
+}
+
+void ASeinGameMode::StartPlay()
+{
+	Super::StartPlay();
+
+#if WITH_EDITOR
+	// Direct PIE controllers may bind before BeginPlay. Retry here after the
+	// world's protocol/content initialization has completed.
+	TryAutoStartMultiplayerPIE();
+#endif
 }
 
 void ASeinGameMode::PreLogin(
@@ -168,6 +223,30 @@ void ASeinGameMode::CompletePostLoginForTests(APlayerController* NewPlayer)
 {
 	OnPostLogin(NewPlayer);
 	HandleStartingNewPlayer(NewPlayer);
+}
+
+bool ASeinGameMode::ShouldAutoStartMultiplayerPIEForTests(
+	bool bSettingEnabled,
+	bool bNetworkingEnabled,
+	EWorldType::Type WorldType,
+	ENetMode NetMode,
+	bool bHasExternalBootstrap,
+	bool bHasPublishedSnapshot,
+	const FSeinMatchSettings& MatchSettings,
+	const TSet<int32>& BoundHumanSlots)
+{
+	return ShouldRequestMultiplayerPIEAutoStart(
+		bSettingEnabled,
+		bNetworkingEnabled,
+		WorldType,
+		NetMode,
+		bHasExternalBootstrap,
+		bHasPublishedSnapshot,
+		MatchSettings,
+		[&BoundHumanSlots](int32 SlotIndex)
+		{
+			return BoundHumanSlots.Contains(SlotIndex);
+		});
 }
 #endif
 
@@ -451,7 +530,70 @@ void ASeinGameMode::HandleStartingNewPlayer_Implementation(
 		WorldSubsystem->GetPlayerState(PlayerID)
 			? TEXT("")
 			: TEXT(" before deterministic materialization"));
+
+#if WITH_EDITOR
+	TryAutoStartMultiplayerPIE();
+#endif
 }
+
+#if WITH_EDITOR
+void ASeinGameMode::TryAutoStartMultiplayerPIE()
+{
+	UWorld* World = GetWorld();
+	UGameInstance* GameInstance = GetGameInstance();
+	const USeinARTSCoreSettings* Settings =
+		GetDefault<USeinARTSCoreSettings>();
+	USeinLobbySubsystem* Lobby = GameInstance
+		? GameInstance->GetSubsystem<USeinLobbySubsystem>()
+		: nullptr;
+	USeinNetSubsystem* Net = GameInstance
+		? GameInstance->GetSubsystem<USeinNetSubsystem>()
+		: nullptr;
+	USeinWorldSubsystem* WorldSubsystem = World
+		? World->GetSubsystem<USeinWorldSubsystem>()
+		: nullptr;
+	if (!World || !Settings || !Lobby || !Net || !WorldSubsystem
+		|| !bMatchSettingsResolved
+		|| !WorldSubsystem->GetCommandProtocolDigest().IsValid()
+		|| !WorldSubsystem->IsSimulationContentReady())
+	{
+		return;
+	}
+
+	const bool bShouldStart = ShouldRequestMultiplayerPIEAutoStart(
+		Settings->bAutoStartMultiplayerPIE,
+		Settings->bNetworkingEnabled,
+		World->WorldType,
+		World->GetNetMode(),
+		HasExternalBootstrapIntent(*World),
+		Lobby->HasPublishedSnapshot(),
+		ResolvedMatchSettings,
+		[this](int32 HumanSlot)
+		{
+			const TWeakObjectPtr<ASeinPlayerController>* Controller =
+				ClaimedSlots.Find(HumanSlot);
+			return Controller && Controller->IsValid();
+		});
+	if (!bShouldStart)
+	{
+		return;
+	}
+
+	// Direct PIE has no authored lobby phase. Preserve the already canonical,
+	// level-derived manifest exactly, including AI slots, factions, and teams.
+	if (!Lobby->InstallPreparedMatchSettingsSnapshot(ResolvedMatchSettings)
+		|| !Lobby->HasPublishedSnapshot())
+	{
+		UE_LOG(LogTemp, Error,
+			TEXT("SeinGameMode: multiplayer PIE auto-start could not install the direct-map manifest."));
+		return;
+	}
+
+	UE_LOG(LogTemp, Log,
+		TEXT("SeinGameMode: all direct multiplayer PIE Human slots are connected; requesting lockstep start."));
+	Net->StartLockstepSession();
+}
+#endif
 
 const FSeinMatchSlot* ASeinGameMode::FindManifestSlot(int32 SlotIndex) const
 {
