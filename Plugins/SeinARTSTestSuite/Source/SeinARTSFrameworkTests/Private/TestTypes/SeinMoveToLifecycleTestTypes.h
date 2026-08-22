@@ -4,12 +4,44 @@
 #include "Abilities/SeinLatentActionManager.h"
 #include "Abilities/SeinMoveToProxy.h"
 #include "Movement/SeinMovement.h"
+#include "SeinNavigation.h"
 #include "SeinMoveToLifecycleTestTypes.generated.h"
 
 UCLASS()
 class USeinMoveToLifecycleTestAbility : public USeinAbility
 {
 	GENERATED_BODY()
+};
+
+/** Deterministic passability and escape-target double for recovery tests. */
+UCLASS()
+class USeinMoveToEscapeTestNavigation : public USeinNavigation
+{
+	GENERATED_BODY()
+
+public:
+	static bool bPassable;
+	static bool bReturnEscapeTarget;
+	static int32 EscapeQueryCount;
+	static FFixedVector EscapeTarget;
+	static FSeinEscapeQuery LastEscapeQuery;
+
+	static void Reset();
+
+	virtual bool HasRuntimeData() const override { return true; }
+	virtual bool ComputeStaticEnvironmentDigest(
+		FGuid& OutDigest,
+		FString& OutError) const override;
+	virtual bool ComputeStateCoverageClaim(
+		FSeinNavigationStateCoverageClaim& OutClaim,
+		FString& OutError) const override;
+	virtual bool IsPassable(const FFixedVector&) const override
+	{
+		return bPassable;
+	}
+	virtual bool QueryEscapeTarget(
+		const FSeinEscapeQuery& Query,
+		FFixedVector& OutTarget) const override;
 };
 
 /** Immediate, navigation-independent movement double for action lifecycle tests. */
@@ -33,6 +65,8 @@ public:
 	static FFixedVector LastTickMiddleWaypoint;
 	static TArray<ESeinPathResult> ScriptedPathResults;
 	static TArray<int32> EmptyFoundCallIndices;
+	static TArray<int32> FinishTickCallIndices;
+	static bool bAdvanceInitialWaypointOnTick;
 	static bool bRepathPathsPartial;
 	static bool bInitialPathPartial;
 	static bool bInitialPathSkipsStart;

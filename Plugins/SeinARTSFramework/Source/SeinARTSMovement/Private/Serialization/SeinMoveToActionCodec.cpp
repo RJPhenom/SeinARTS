@@ -1516,6 +1516,50 @@ FFixedPoint UE::SeinARTSTests::
 	return Action.TimeSinceLastRepath;
 }
 
+FFixedPoint UE::SeinARTSTests::
+	FMoveToActionContinuationTestAccess::
+	GetHoldTime(const USeinMoveToAction& Action)
+{
+	return Action.HoldTime;
+}
+
+FFixedPoint UE::SeinARTSTests::
+	FMoveToActionContinuationTestAccess::
+	GetNextEscalationAt(const USeinMoveToAction& Action)
+{
+	return Action.NextEscalationAt;
+}
+
+bool UE::SeinARTSTests::
+	FMoveToActionContinuationTestAccess::
+	HasStageOneFired(const USeinMoveToAction& Action)
+{
+	return Action.bStage1Fired;
+}
+
+bool UE::SeinARTSTests::
+	FMoveToActionContinuationTestAccess::
+	IsEscapeMode(const USeinMoveToAction& Action)
+{
+	return Action.bEscapeMode;
+}
+
+int32 UE::SeinARTSTests::
+	FMoveToActionContinuationTestAccess::
+	GetEscapeAttempts(const USeinMoveToAction& Action)
+{
+	return Action.EscapeAttempts;
+}
+
+void UE::SeinARTSTests::
+	FMoveToActionContinuationTestAccess::
+	SetTotalEscapeEntries(
+		USeinMoveToAction& Action,
+		int32 Entries)
+{
+	Action.TotalEscapeEntries = Entries;
+}
+
 bool UE::SeinARTSTests::
 	FMoveToActionContinuationTestAccess::
 	TickRepathWithoutNavigationSubsystem(

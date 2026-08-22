@@ -64,6 +64,25 @@ namespace UE::SeinARTSTests
 		static FFixedPoint GetRepathElapsed(
 			const USeinMoveToAction& Action);
 
+		static FFixedPoint GetHoldTime(
+			const USeinMoveToAction& Action);
+
+		static FFixedPoint GetNextEscalationAt(
+			const USeinMoveToAction& Action);
+
+		static bool HasStageOneFired(
+			const USeinMoveToAction& Action);
+
+		static bool IsEscapeMode(
+			const USeinMoveToAction& Action);
+
+		static int32 GetEscapeAttempts(
+			const USeinMoveToAction& Action);
+
+		static void SetTotalEscapeEntries(
+			USeinMoveToAction& Action,
+			int32 Entries);
+
 		static bool TickRepathWithoutNavigationSubsystem(
 			USeinMoveToAction& Action,
 			FFixedPoint DeltaTime,

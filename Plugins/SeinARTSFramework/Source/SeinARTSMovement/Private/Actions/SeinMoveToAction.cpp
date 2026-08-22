@@ -750,6 +750,321 @@ USeinMoveToAction::ERepathTickResult USeinMoveToAction::TickRepath(
 	return ERepathTickResult::Continued;
 }
 
+bool USeinMoveToAction::TickEscapeLeg(
+	FFixedPoint DeltaTime,
+	USeinWorldSubsystem& World,
+	FSeinEntity& Entity,
+	FSeinMovementComponent& MovementData,
+	bool bReachedEnd)
+{
+	const FFixedVector EscPos = Entity.Transform.GetLocation();
+	bool bExitEscape = false;
+	bool bAttemptFailed = false;
+	const TCHAR* EscOutcome = TEXT("");
+
+	if (bReachedEnd)
+	{
+		// Validate the arrival: the overshoot guard can misfire on the
+		// escape ENTRY state (persisted Velocity ~0 + facing the wall
+		// passes IsOvershootArrival) — a true return OUTSIDE the escape
+		// ring is that misfire, not an escape.
+		const bool bGenuine = FFixedVector::IsPlanarDistanceWithin(
+			EscapeTarget, EscPos, EscapeAcceptanceRadius);
+		bExitEscape = true;
+		bAttemptFailed = !bGenuine;
+		EscOutcome = bGenuine ? TEXT("done") : TEXT("overshoot");
+	}
+	else
+	{
+		// Per-attempt exhaustion: the escape leg itself is held (the floor
+		// refuses even the escape direction) — abandon after 0.6s.
+		FFixedVector EscVel = MovementData.Velocity;
+		EscVel.Z = FFixedPoint::Zero;
+		const FFixedPoint EscFloor =
+			GetDefault<USeinARTSCoreSettings>()->AvoidanceMovingSpeedFloor;
+		if (EscVel.SizeSquared() <= EscFloor * EscFloor)
+		{
+			EscapeHoldTime = EscapeHoldTime + DeltaTime;
+		}
+		else
+		{
+			EscapeHoldTime = FFixedPoint::Zero;
+		}
+		if (EscapeHoldTime
+			>= FFixedPoint::FromInt(3) / FFixedPoint::FromInt(5)) // 0.6s
+		{
+			bExitEscape = true;
+			bAttemptFailed = true;
+			EscOutcome = TEXT("held");
+		}
+	}
+
+	if (bExitEscape)
+	{
+		if (bAttemptFailed) { ++EscapeAttempts; }
+		else { EscapeAttempts = 0; HoldTime = FFixedPoint::Zero; bStage1Fired = false; }
+		// Restore identically on success and failure: drop the escape path
+		// and resume through the EXISTING first-resolve machinery (correct
+		// Throttled wait-and-retry for free; OnMoveBegin re-fires — accepted
+		// as the per-order reset running after a detour).
+		bEscapeMode = false;
+		EscapeHoldTime = FFixedPoint::Zero;
+		NextEscalationAt =
+			FFixedPoint::FromInt(3) / FFixedPoint::FromInt(10);
+		Path.Clear();
+		CurrentWaypointIndex = 0;
+		bPathResolved = false;
+		// The resume's first-resolve commits a fresh path — reset the repath
+		// clock like every other path commit, or a frozen near-due timer
+		// fires a second, identical request right behind it (budget waste).
+		TimeSinceLastRepath = FFixedPoint::Zero;
+		// The escape leg corrupted the near-goal progress high-water —
+		// a resumed approach must start a fresh window.
+		BestDistToFinal = FFixedPoint::FromInt(1000);
+		TimeStalledNearGoal = FFixedPoint::Zero;
+#if !UE_BUILD_SHIPPING
+		UE_LOG(LogSeinMoveTrace, Verbose,
+			TEXT("[ESC] t=%d h=%d:%d escape-%s attempts=%d"),
+			World.GetCurrentTick(), OwnerEntity.Index, OwnerEntity.Generation,
+			EscOutcome, EscapeAttempts);
+#endif
+		if (EscapeAttempts >= 3)
+		{
+#if !UE_BUILD_SHIPPING
+			UE_LOG(LogSeinMoveTrace, Verbose,
+				TEXT("[ESC] t=%d h=%d:%d STRANDED"),
+				World.GetCurrentTick(), OwnerEntity.Index, OwnerEntity.Generation);
+#endif
+			Fail(static_cast<uint8>(ESeinMoveFailureReason::Stranded));
+			return true;
+		}
+	}
+	else
+	{
+		// AnimBPs must not blend braking anims against a wall mid-escape.
+		MovementData.bArrivalImminent = false;
+	}
+	return false;
+}
+
+bool USeinMoveToAction::TickHoldEscapeLadder(
+	FFixedPoint DeltaTime,
+	USeinWorldSubsystem& World,
+	FSeinEntity& Entity,
+	FSeinMovementComponent& MovementData,
+	const FSeinNavigationComponent* NavigationData,
+	USeinNavigation* Navigation,
+	bool bReachedEnd)
+{
+	if (bReachedEnd || Path.Waypoints.Num() == 0)
+	{
+		return false;
+	}
+
+	const FFixedPoint HoldFloor =
+		GetDefault<USeinARTSCoreSettings>()->AvoidanceMovingSpeedFloor;
+	FFixedVector HeldVel = MovementData.Velocity;
+	HeldVel.Z = FFixedPoint::Zero;
+	bool bHeld = FFixedVector::IsPlanarDistanceWithin(
+		FFixedVector::ZeroVector, HeldVel, HoldFloor);
+	// Exclude the stall failsafe's exact accrual domain — the CONJUNCTION of
+	// final-leg AND the shared body-aware settle band (final-leg alone would
+	// be wrong: LoS smoothing makes the final leg cover most of a route).
+	if (bHeld && CurrentWaypointIndex >= Path.Waypoints.Num() - 1)
+	{
+		const FFixedVector HeldLocation = Entity.Transform.GetLocation();
+		if (FFixedVector::IsPlanarDistanceWithin(
+			HeldLocation, Path.Waypoints.Last(), StallBand))
+		{
+			bHeld = false; // the stall failsafe owns near-goal stops
+		}
+	}
+
+	if (!bHeld)
+	{
+		HoldTime = FFixedPoint::Zero;
+		NextEscalationAt =
+			FFixedPoint::FromInt(3) / FFixedPoint::FromInt(10);
+		bStage1Fired = false;
+		// Genuine applied motion ends the stuck EPISODE — the consecutive
+		// exhaustion counter starts fresh at the next one. (TotalEscapeEntries
+		// deliberately does NOT reset — it is the per-order oscillation cap.)
+		EscapeAttempts = 0;
+		return false;
+	}
+
+	// NOTE: a successful repath / Path swap deliberately does NOT reset
+	// this clock — repaths SUCCEED every interval in the pinned state
+	// (that is the pathology); only genuine applied motion clears it.
+	HoldTime = HoldTime + DeltaTime;
+	if (HoldTime < NextEscalationAt)
+	{
+		return false;
+	}
+
+	NextEscalationAt = NextEscalationAt
+		+ FFixedPoint::FromInt(3) / FFixedPoint::FromInt(10);
+
+	// MECHANICAL-BLOCK PROBE (boundaries only, never per-tick): is
+	// the direction the unit is trying to go footprint-refused? A
+	// PASSABLE probe means the zero command is the mode's own policy
+	// (pivot-in-place, yield) — keep accruing, re-check at the next
+	// boundary, escalate nothing.
+	const FFixedVector AgentPos = Entity.Transform.GetLocation();
+	const FFixedPoint FootR = FootprintRadius;
+	FFixedVector PlanarWaypoint = Path.Waypoints[CurrentWaypointIndex];
+	PlanarWaypoint.Z = AgentPos.Z;
+	const FFixedPoint ToWpLen =
+		FFixedVector::DistanceSaturated(AgentPos, PlanarWaypoint);
+	bool bBlocked = false;
+	if (ToWpLen > FFixedPoint::Epsilon && Navigation)
+	{
+		const FFixedPoint ProbeDist = SaturatingPositiveAdd(
+			FootR, FFixedPoint::FromInt(50));
+		const FFixedVector ToWpDirection =
+			FFixedVector::GetSafeNormalDifference(
+				AgentPos, PlanarWaypoint);
+		const FFixedVector Probe(
+			AgentPos.X + ToWpDirection.X * ProbeDist,
+			AgentPos.Y + ToWpDirection.Y * ProbeDist,
+			AgentPos.Z);
+		bBlocked = !Movement->IsFootprintPassable(Probe, Navigation);
+	}
+
+	if (bBlocked && !bStage1Fired)
+	{
+		// STAGE 1: force a repath through the existing machinery
+		// (fires next tick's repath block, before the movement tick).
+		// Cheap; cures stale-carrot variants. Its real value is
+		// OffPathOnly mode, whose drift gate never rescues an
+		// on-polyline pinned unit.
+		bStage1Fired = true;
+		bForceRepathNow = true;
+#if !UE_BUILD_SHIPPING
+		UE_LOG(LogSeinMoveTrace, Verbose,
+			TEXT("[ESC] t=%d h=%d:%d stage1 forced-repath held=%.2fs"),
+			World.GetCurrentTick(), OwnerEntity.Index, OwnerEntity.Generation,
+			HoldTime.ToFloat());
+#endif
+		return false;
+	}
+	if (!bBlocked)
+	{
+		return false;
+	}
+
+	// PER-ORDER OSCILLATION CAP: a reproducible pin whose escapes
+	// SUCCEED never accumulates the consecutive counter — the
+	// resume re-plans into the same pin and the cycle would run
+	// forever (walk → pin → escape → walk back). Five installed
+	// escape legs in one order is that cycle, not recovery.
+	if (TotalEscapeEntries >= 5)
+	{
+#if !UE_BUILD_SHIPPING
+		UE_LOG(LogSeinMoveTrace, Verbose,
+			TEXT("[ESC] t=%d h=%d:%d STRANDED (escape budget spent: %d entries)"),
+			World.GetCurrentTick(), OwnerEntity.Index, OwnerEntity.Generation,
+			TotalEscapeEntries);
+#endif
+		Fail(static_cast<uint8>(ESeinMoveFailureReason::Stranded));
+		return true;
+	}
+	// STAGE 2: ask the nav for an escape target and walk there
+	// as a short internal leg. Every no-answer consumes an
+	// exhaustion slot so the ladder terminates on ANY nav.
+	FFixedVector Target = FFixedVector::ZeroVector;
+	bool bGotTarget = false;
+	if (Navigation)
+	{
+		FSeinEscapeQuery EscQ;
+		EscQ.From = AgentPos;
+		EscQ.Requester = OwnerEntity;
+		EscQ.AgentNavLayerMask = NavigationData
+			? NavigationData->NavLayerMask
+			: 0x01;
+		EscQ.AgentFootprintRadius = FootR;
+		if (NavigationData)
+		{
+			EscQ.BlockedTerrainTags = NavigationData->BlockedTerrainTags;
+		}
+		bGotTarget = Navigation->QueryEscapeTarget(EscQ, Target);
+	}
+	if (bGotTarget)
+	{
+		FFixedVector PlanarTarget = Target;
+		PlanarTarget.Z = AgentPos.Z;
+		const FFixedPoint EntryDist =
+			FFixedVector::DistanceSaturated(AgentPos, PlanarTarget);
+		// Escape acceptance = max(50, min(footprint, EntryDist/3)),
+		// and the ENTRY GATE: the target must sit decisively beyond
+		// the overshoot guard's 2x-acceptance vicinity, or the leg
+		// instant-arrives with zero motion (the guard passes on the
+		// entry state: velocity ~0, facing the wall) and the ladder
+		// would cycle forever without exhausting.
+		FFixedPoint AccEsc = EntryDist / FFixedPoint::FromInt(3);
+		if (FootR > FFixedPoint::Zero && AccEsc > FootR) { AccEsc = FootR; }
+		if (AccEsc < FFixedPoint::FromInt(50)) { AccEsc = FFixedPoint::FromInt(50); }
+		const FFixedPoint MinEntry = SaturatingPositiveAdd(
+			SaturatingPositiveScale(AccEsc, 2),
+			MovementData.TopSpeed * DeltaTime);
+		if (EntryDist <= MinEntry)
+		{
+			bGotTarget = false;
+		}
+		else
+		{
+			// Install the escape leg: [AgentPos → Target] — the
+			// straight-line-path template. Never a single waypoint
+			// (zero segments; the harness indexes
+			// Waypoints[CurrentWaypointIndex] unguarded).
+			Path.Clear();
+			Path.Waypoints.Add(AgentPos);
+			Path.Waypoints.Add(Target);
+			Path.bIsValid = true;
+			Path.bIsPartial = false;
+			Path.DeriveSegmentsFromWaypoints();
+			CurrentWaypointIndex = 0;
+			bEscapeMode = true;
+			++TotalEscapeEntries;
+			EscapeTarget = Target;
+			EscapeAcceptanceRadius = AccEsc;
+			EscapeHoldTime = FFixedPoint::Zero;
+			// The escape leg corrupts the near-goal progress
+			// high-water; re-arm for the resumed approach.
+			BestDistToFinal = FFixedPoint::FromInt(1000);
+			TimeStalledNearGoal = FFixedPoint::Zero;
+#if !UE_BUILD_SHIPPING
+			UE_LOG(LogSeinMoveTrace, Verbose,
+				TEXT("[ESC] t=%d h=%d:%d stage2 target=(%.0f,%.0f) dist=%.0f acc=%.0f attempts=%d"),
+				World.GetCurrentTick(), OwnerEntity.Index, OwnerEntity.Generation,
+				Target.X.ToFloat(), Target.Y.ToFloat(),
+				EntryDist.ToFloat(), AccEsc.ToFloat(), EscapeAttempts);
+#endif
+		}
+	}
+	if (!bGotTarget && !bEscapeMode)
+	{
+		++EscapeAttempts;
+#if !UE_BUILD_SHIPPING
+		UE_LOG(LogSeinMoveTrace, Verbose,
+			TEXT("[ESC] t=%d h=%d:%d stage2 no-answer attempts=%d"),
+			World.GetCurrentTick(), OwnerEntity.Index, OwnerEntity.Generation,
+			EscapeAttempts);
+#endif
+		if (EscapeAttempts >= 3)
+		{
+#if !UE_BUILD_SHIPPING
+			UE_LOG(LogSeinMoveTrace, Verbose,
+				TEXT("[ESC] t=%d h=%d:%d STRANDED"),
+				World.GetCurrentTick(), OwnerEntity.Index, OwnerEntity.Generation);
+#endif
+			Fail(static_cast<uint8>(ESeinMoveFailureReason::Stranded));
+			return true;
+		}
+	}
+	return false;
+}
+
 bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& World)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(Sein_MoveTo_TickAction);
@@ -896,90 +1211,8 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 	// "reached the order destination".
 	if (bEscapeMode)
 	{
-		const FFixedVector EscPos = Entity->Transform.GetLocation();
-		bool bExitEscape = false;
-		bool bAttemptFailed = false;
-		const TCHAR* EscOutcome = TEXT("");
-
-		if (bReachedEnd)
-		{
-			// Validate the arrival: the overshoot guard can misfire on the
-			// escape ENTRY state (persisted Velocity ~0 + facing the wall
-			// passes IsOvershootArrival) — a true return OUTSIDE the escape
-			// ring is that misfire, not an escape.
-			const bool bGenuine = FFixedVector::IsPlanarDistanceWithin(
-				EscapeTarget, EscPos, EscapeAcceptanceRadius);
-			bExitEscape = true;
-			bAttemptFailed = !bGenuine;
-			EscOutcome = bGenuine ? TEXT("done") : TEXT("overshoot");
-		}
-		else
-		{
-			// Per-attempt exhaustion: the escape leg itself is held (the floor
-			// refuses even the escape direction) — abandon after 0.6s.
-			FFixedVector EscVel = MoveComp->Velocity;
-			EscVel.Z = FFixedPoint::Zero;
-			const FFixedPoint EscFloor = GetDefault<USeinARTSCoreSettings>()->AvoidanceMovingSpeedFloor;
-			if (EscVel.SizeSquared() <= EscFloor * EscFloor)
-			{
-				EscapeHoldTime = EscapeHoldTime + DeltaTime;
-			}
-			else
-			{
-				EscapeHoldTime = FFixedPoint::Zero;
-			}
-			if (EscapeHoldTime >= FFixedPoint::FromInt(3) / FFixedPoint::FromInt(5)) // 0.6s
-			{
-				bExitEscape = true;
-				bAttemptFailed = true;
-				EscOutcome = TEXT("held");
-			}
-		}
-
-		if (bExitEscape)
-		{
-			if (bAttemptFailed) { ++EscapeAttempts; }
-			else { EscapeAttempts = 0; HoldTime = FFixedPoint::Zero; bStage1Fired = false; }
-			// Restore identically on success and failure: drop the escape path
-			// and resume through the EXISTING first-resolve machinery (correct
-			// Throttled wait-and-retry for free; OnMoveBegin re-fires — accepted
-			// as the per-order reset running after a detour).
-			bEscapeMode = false;
-			EscapeHoldTime = FFixedPoint::Zero;
-			NextEscalationAt = FFixedPoint::FromInt(3) / FFixedPoint::FromInt(10);
-			Path.Clear();
-			CurrentWaypointIndex = 0;
-			bPathResolved = false;
-			// The resume's first-resolve commits a fresh path — reset the repath
-			// clock like every other path commit, or a frozen near-due timer
-			// fires a second, identical request right behind it (budget waste).
-			TimeSinceLastRepath = FFixedPoint::Zero;
-			// The escape leg corrupted the near-goal progress high-water —
-			// a resumed approach must start a fresh window.
-			BestDistToFinal = FFixedPoint::FromInt(1000);
-			TimeStalledNearGoal = FFixedPoint::Zero;
-#if !UE_BUILD_SHIPPING
-			UE_LOG(LogSeinMoveTrace, Verbose,
-				TEXT("[ESC] t=%d h=%d:%d escape-%s attempts=%d"),
-				World.GetCurrentTick(), OwnerEntity.Index, OwnerEntity.Generation,
-				EscOutcome, EscapeAttempts);
-#endif
-			if (EscapeAttempts >= 3)
-			{
-#if !UE_BUILD_SHIPPING
-				UE_LOG(LogSeinMoveTrace, Verbose, TEXT("[ESC] t=%d h=%d:%d STRANDED"),
-					World.GetCurrentTick(), OwnerEntity.Index, OwnerEntity.Generation);
-#endif
-				Fail(static_cast<uint8>(ESeinMoveFailureReason::Stranded));
-				return true;
-			}
-		}
-		else
-		{
-			// AnimBPs must not blend braking anims against a wall mid-escape.
-			MoveComp->bArrivalImminent = false;
-		}
-		return false;
+		return TickEscapeLeg(
+			DeltaTime, World, *Entity, *MoveComp, bReachedEnd);
 	}
 
 	// Under-reports if the movement consumed multiple waypoints in one tick
@@ -1088,200 +1321,10 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 	// this by construction. Tier-1 harness modes only: Tier-2 vehicle Ticks
 	// persist COMMANDED velocity, so they never read held here (they carry
 	// their own reverse-unstick machinery).
-	if (!bReachedEnd && Path.Waypoints.Num() > 0)
+	if (TickHoldEscapeLadder(
+		DeltaTime, World, *Entity, *MoveComp, NavComp, Nav, bReachedEnd))
 	{
-		const FFixedPoint HoldFloor = GetDefault<USeinARTSCoreSettings>()->AvoidanceMovingSpeedFloor;
-		FFixedVector HeldVel = MoveComp->Velocity;
-		HeldVel.Z = FFixedPoint::Zero;
-		bool bHeld = FFixedVector::IsPlanarDistanceWithin(
-			FFixedVector::ZeroVector, HeldVel, HoldFloor);
-		// Exclude the stall failsafe's exact accrual domain — the CONJUNCTION of
-		// final-leg AND the shared body-aware settle band (final-leg alone would
-		// be wrong: LoS smoothing makes the final leg cover most of a route).
-		if (bHeld && CurrentWaypointIndex >= Path.Waypoints.Num() - 1)
-		{
-			const FFixedVector HeldLocation = Entity->Transform.GetLocation();
-			if (FFixedVector::IsPlanarDistanceWithin(
-				HeldLocation, Path.Waypoints.Last(), StallBand))
-			{
-				bHeld = false; // the stall failsafe owns near-goal stops
-			}
-		}
-
-		if (!bHeld)
-		{
-			HoldTime = FFixedPoint::Zero;
-			NextEscalationAt = FFixedPoint::FromInt(3) / FFixedPoint::FromInt(10);
-			bStage1Fired = false;
-			// Genuine applied motion ends the stuck EPISODE — the consecutive
-			// exhaustion counter starts fresh at the next one. (TotalEscapeEntries
-			// deliberately does NOT reset — it is the per-order oscillation cap.)
-			EscapeAttempts = 0;
-		}
-		else
-		{
-			// NOTE: a successful repath / Path swap deliberately does NOT reset
-			// this clock — repaths SUCCEED every interval in the pinned state
-			// (that is the pathology); only genuine applied motion clears it.
-			HoldTime = HoldTime + DeltaTime;
-			if (HoldTime >= NextEscalationAt)
-			{
-				NextEscalationAt = NextEscalationAt + FFixedPoint::FromInt(3) / FFixedPoint::FromInt(10);
-
-				// MECHANICAL-BLOCK PROBE (boundaries only, never per-tick): is
-				// the direction the unit is trying to go footprint-refused? A
-				// PASSABLE probe means the zero command is the mode's own policy
-				// (pivot-in-place, yield) — keep accruing, re-check at the next
-				// boundary, escalate nothing.
-				const FFixedVector AgentPos = Entity->Transform.GetLocation();
-				const FFixedPoint FootR = FootprintRadius;
-				FFixedVector PlanarWaypoint = Path.Waypoints[CurrentWaypointIndex];
-				PlanarWaypoint.Z = AgentPos.Z;
-				const FFixedPoint ToWpLen =
-					FFixedVector::DistanceSaturated(AgentPos, PlanarWaypoint);
-				bool bBlocked = false;
-				if (ToWpLen > FFixedPoint::Epsilon && Nav)
-				{
-					const FFixedPoint ProbeDist = SaturatingPositiveAdd(
-						FootR, FFixedPoint::FromInt(50));
-					const FFixedVector ToWpDirection =
-						FFixedVector::GetSafeNormalDifference(
-							AgentPos, PlanarWaypoint);
-					const FFixedVector Probe(
-						AgentPos.X + ToWpDirection.X * ProbeDist,
-						AgentPos.Y + ToWpDirection.Y * ProbeDist,
-						AgentPos.Z);
-					bBlocked = !Movement->IsFootprintPassable(Probe, Nav);
-				}
-
-				if (bBlocked && !bStage1Fired)
-				{
-					// STAGE 1: force a repath through the existing machinery
-					// (fires next tick's repath block, before the movement tick).
-					// Cheap; cures stale-carrot variants. Its real value is
-					// OffPathOnly mode, whose drift gate never rescues an
-					// on-polyline pinned unit.
-					bStage1Fired = true;
-					bForceRepathNow = true;
-#if !UE_BUILD_SHIPPING
-					UE_LOG(LogSeinMoveTrace, Verbose,
-						TEXT("[ESC] t=%d h=%d:%d stage1 forced-repath held=%.2fs"),
-						World.GetCurrentTick(), OwnerEntity.Index, OwnerEntity.Generation,
-						HoldTime.ToFloat());
-#endif
-				}
-				else if (bBlocked)
-				{
-					// PER-ORDER OSCILLATION CAP: a reproducible pin whose escapes
-					// SUCCEED never accumulates the consecutive counter — the
-					// resume re-plans into the same pin and the cycle would run
-					// forever (walk → pin → escape → walk back). Five installed
-					// escape legs in one order is that cycle, not recovery.
-					if (TotalEscapeEntries >= 5)
-					{
-#if !UE_BUILD_SHIPPING
-						UE_LOG(LogSeinMoveTrace, Verbose,
-							TEXT("[ESC] t=%d h=%d:%d STRANDED (escape budget spent: %d entries)"),
-							World.GetCurrentTick(), OwnerEntity.Index, OwnerEntity.Generation,
-							TotalEscapeEntries);
-#endif
-						Fail(static_cast<uint8>(ESeinMoveFailureReason::Stranded));
-						return true;
-					}
-					// STAGE 2: ask the nav for an escape target and walk there
-					// as a short internal leg. Every no-answer consumes an
-					// exhaustion slot so the ladder terminates on ANY nav.
-					FFixedVector Target = FFixedVector::ZeroVector;
-					bool bGotTarget = false;
-					if (Nav)
-					{
-						FSeinEscapeQuery EscQ;
-						EscQ.From = AgentPos;
-						EscQ.Requester = OwnerEntity;
-						EscQ.AgentNavLayerMask = NavComp ? NavComp->NavLayerMask : 0x01;
-						EscQ.AgentFootprintRadius = FootR;
-						if (NavComp)
-						{
-							EscQ.BlockedTerrainTags =
-								NavComp->BlockedTerrainTags;
-						}
-						bGotTarget = Nav->QueryEscapeTarget(EscQ, Target);
-					}
-					if (bGotTarget)
-					{
-						FFixedVector PlanarTarget = Target;
-						PlanarTarget.Z = AgentPos.Z;
-						const FFixedPoint EntryDist =
-							FFixedVector::DistanceSaturated(AgentPos, PlanarTarget);
-						// Escape acceptance = max(50, min(footprint, EntryDist/3)),
-						// and the ENTRY GATE: the target must sit decisively beyond
-						// the overshoot guard's 2x-acceptance vicinity, or the leg
-						// instant-arrives with zero motion (the guard passes on the
-						// entry state: velocity ~0, facing the wall) and the ladder
-						// would cycle forever without exhausting.
-						FFixedPoint AccEsc = EntryDist / FFixedPoint::FromInt(3);
-						if (FootR > FFixedPoint::Zero && AccEsc > FootR) { AccEsc = FootR; }
-						if (AccEsc < FFixedPoint::FromInt(50)) { AccEsc = FFixedPoint::FromInt(50); }
-						const FFixedPoint MinEntry = SaturatingPositiveAdd(
-							SaturatingPositiveScale(AccEsc, 2),
-							MoveComp->TopSpeed * DeltaTime);
-						if (EntryDist <= MinEntry)
-						{
-							bGotTarget = false;
-						}
-						else
-						{
-							// Install the escape leg: [AgentPos → Target] — the
-							// straight-line-path template. Never a single waypoint
-							// (zero segments; the harness indexes
-							// Waypoints[CurrentWaypointIndex] unguarded).
-							Path.Clear();
-							Path.Waypoints.Add(AgentPos);
-							Path.Waypoints.Add(Target);
-							Path.bIsValid = true;
-							Path.bIsPartial = false;
-							Path.DeriveSegmentsFromWaypoints();
-							CurrentWaypointIndex = 0;
-							bEscapeMode = true;
-							++TotalEscapeEntries;
-							EscapeTarget = Target;
-							EscapeAcceptanceRadius = AccEsc;
-							EscapeHoldTime = FFixedPoint::Zero;
-							// The escape leg corrupts the near-goal progress
-							// high-water; re-arm for the resumed approach.
-							BestDistToFinal = FFixedPoint::FromInt(1000);
-							TimeStalledNearGoal = FFixedPoint::Zero;
-#if !UE_BUILD_SHIPPING
-							UE_LOG(LogSeinMoveTrace, Verbose,
-								TEXT("[ESC] t=%d h=%d:%d stage2 target=(%.0f,%.0f) dist=%.0f acc=%.0f attempts=%d"),
-								World.GetCurrentTick(), OwnerEntity.Index, OwnerEntity.Generation,
-								Target.X.ToFloat(), Target.Y.ToFloat(),
-								EntryDist.ToFloat(), AccEsc.ToFloat(), EscapeAttempts);
-#endif
-						}
-					}
-					if (!bGotTarget && !bEscapeMode)
-					{
-						++EscapeAttempts;
-#if !UE_BUILD_SHIPPING
-						UE_LOG(LogSeinMoveTrace, Verbose,
-							TEXT("[ESC] t=%d h=%d:%d stage2 no-answer attempts=%d"),
-							World.GetCurrentTick(), OwnerEntity.Index, OwnerEntity.Generation,
-							EscapeAttempts);
-#endif
-						if (EscapeAttempts >= 3)
-						{
-#if !UE_BUILD_SHIPPING
-							UE_LOG(LogSeinMoveTrace, Verbose, TEXT("[ESC] t=%d h=%d:%d STRANDED"),
-								World.GetCurrentTick(), OwnerEntity.Index, OwnerEntity.Generation);
-#endif
-							Fail(static_cast<uint8>(ESeinMoveFailureReason::Stranded));
-							return true;
-						}
-					}
-				}
-			}
-		}
+		return true;
 	}
 
 	if (bReachedEnd)
