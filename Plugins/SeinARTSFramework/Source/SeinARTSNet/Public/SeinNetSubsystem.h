@@ -351,6 +351,7 @@ public:
 	 *  materialization receipt before authorization is fanned out. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Network")
 	void StartLockstepSession();
+	bool HasServerStartBeenRequested() const { return bServerStartRequested; }
 
 	/** Standalone-only start/resume request. Network launch is coordinator-only. */
 	void StartLocalSession();

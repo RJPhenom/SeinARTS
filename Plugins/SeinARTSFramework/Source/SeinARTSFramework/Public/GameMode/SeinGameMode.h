@@ -38,6 +38,7 @@ public:
 		const FString& MapName,
 		const FString& Options,
 		FString& ErrorMessage) override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void StartPlay() override;
 	virtual void PreLogin(
 		const FString& Options,
@@ -57,8 +58,8 @@ public:
 	/** Drives the engine post-login/start sequence for synthetic controllers. */
 	void CompletePostLoginForTests(APlayerController* NewPlayer);
 
-	/** Evaluates the editor-only multiplayer auto-start policy without creating PIE processes. */
-	static bool ShouldAutoStartMultiplayerPIEForTests(
+	/** Builds the direct-PIE roster without creating PIE processes. */
+	static bool BuildMultiplayerPIEAutoStartSettingsForTests(
 		bool bSettingEnabled,
 		bool bNetworkingEnabled,
 		EWorldType::Type WorldType,
@@ -66,8 +67,10 @@ public:
 		ENetMode NetMode,
 		bool bHasExternalBootstrap,
 		bool bHasPublishedSnapshot,
+		int32 ExpectedPIEPlayers,
 		const FSeinMatchSettings& MatchSettings,
-		const TSet<int32>& BoundHumanSlots);
+		const TSet<int32>& BoundHumanSlots,
+		FSeinMatchSettings& FinalizedSettingsOut);
 #endif
 
 	/** Frozen slot count when this world has a manifest, otherwise the project ceiling. */
@@ -78,7 +81,8 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|GameMode")
 	ASeinPlayerStart* FindPlayerStartForSlot(int32 SlotIndex) const;
 
-	/** Canonical immutable controller-routing manifest staged during InitGame. */
+	/** Canonical controller-routing manifest. Direct starts replace the authored
+	 *  availability defaults with the final published roster before launch. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|GameMode")
 	FSeinMatchSettings ResolvedMatchSettings;
 
@@ -94,6 +98,8 @@ protected:
 	mutable FSeinMatchSettings SynthesizedMatchSettings;
 
 private:
+	void HandleMatchSettingsLaunchCommitted(
+		const FSeinMatchSettings& PublishedSettings);
 	const FSeinMatchSlot* FindManifestSlot(int32 SlotIndex) const;
 	bool IsSlotClaimedByAnother(
 		int32 SlotIndex,
@@ -101,6 +107,9 @@ private:
 
 #if WITH_EDITOR
 	void TryAutoStartMultiplayerPIE();
+	void RetryAutoStartMultiplayerPIE();
+	FTimerHandle MultiplayerPIEAutoStartRetryHandle;
+	int32 MultiplayerPIEAutoStartRetryAttempts = 0;
 #endif
 
 	/** Authority-only routing claims. They never create or mutate sim state. */

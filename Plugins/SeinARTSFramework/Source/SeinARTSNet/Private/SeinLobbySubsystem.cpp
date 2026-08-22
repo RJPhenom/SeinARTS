@@ -99,8 +99,11 @@ void USeinLobbySubsystem::ReleaseModuleOwnedStateForModuleUnload()
 	ControllerToSlot.Reset();
 	PublishedSnapshot = FSeinMatchSettings();
 	bSnapshotPublished = false;
+	bPublishedSnapshotLaunchCommitted = false;
+	MatchSettingsLaunchCommitted.Clear();
 	bTravelScheduled = false;
 	SlotCountOverride = 0;
+	DirectMatchSettingsDefaults = FSeinMatchSettings();
 }
 
 bool USeinLobbySubsystem::IsServer() const
@@ -133,14 +136,26 @@ USeinFactionService* USeinLobbySubsystem::GetFactionService() const
 
 FSeinMatchSettings USeinLobbySubsystem::ResolveBaseSettings() const
 {
-	// Plugin settings owns the default Extensions array. Slots come from
-	// the runtime lobby actor and are overlaid in BuildMatchSettingsSnapshot.
+	// Direct gameplay maps stage their canonical level extensions alongside
+	// slot defaults. Menu lobbies continue to use project defaults.
 	FSeinMatchSettings Out;
+	if (!DirectMatchSettingsDefaults.Slots.IsEmpty())
+	{
+		Out.Extensions = DirectMatchSettingsDefaults.Extensions;
+		return Out;
+	}
 	if (const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>())
 	{
 		Out.Extensions = Settings->DefaultMatchExtensions;
 	}
 	return Out;
+}
+
+void USeinLobbySubsystem::SetDirectMatchSettingsDefaults(
+	const FSeinMatchSettings& Settings)
+{
+	DirectMatchSettingsDefaults = Settings;
+	SlotCountOverride = Settings.Slots.Num();
 }
 
 TSoftObjectPtr<UWorld> USeinLobbySubsystem::ResolveGameplayMap() const
@@ -173,6 +188,95 @@ FSeinMatchSlot USeinLobbySubsystem::ProjectLobbySlotToMatchSlot(const FSeinLobby
 	Out.AIProfile   = In.AIProfile;
 	return Out;
 }
+
+FSeinLobbySlotState USeinLobbySubsystem::BuildDirectMatchSlot(
+	const FSeinMatchSlot& In)
+{
+	FSeinLobbySlotState Out;
+	Out.SlotIndex = In.SlotIndex;
+	Out.FactionID = In.FactionID;
+	Out.TeamID = In.TeamID;
+
+	switch (In.State)
+	{
+		case ESeinSlotState::AI:
+			Out.State = ESeinSlotState::AI;
+			Out.bClaimed = true;
+			Out.bReady = true;
+			Out.ClaimedBy = FSeinPlayerID(static_cast<uint8>(In.SlotIndex));
+			Out.AIProfile = In.AIProfile;
+			Out.DisplayName = In.AIProfile.IsValid()
+				? FText::FromString(FString::Printf(
+					TEXT("AI - %s"), *In.AIProfile.ToString()))
+				: FText::FromString(TEXT("AI"));
+			break;
+
+		case ESeinSlotState::Closed:
+			Out.State = ESeinSlotState::Closed;
+			Out.DisplayName = FText::FromString(TEXT("Closed"));
+			break;
+
+		case ESeinSlotState::Human:
+		case ESeinSlotState::Open:
+		default:
+			// A PlayerStart describes an available seat. A real controller claim
+			// promotes that seat to Human during PostLogin.
+			Out.State = ESeinSlotState::Open;
+			Out.DisplayName = FText::FromString(TEXT("Open"));
+			break;
+	}
+
+	return Out;
+}
+
+FSeinLobbySlotState USeinLobbySubsystem::BuildCommittedMatchSlot(
+	const FSeinMatchSlot& In)
+{
+	FSeinLobbySlotState Out = BuildDirectMatchSlot(In);
+	if (In.State == ESeinSlotState::Human)
+	{
+		// A destination world may initialize before its retained controller is
+		// rebound. Reserve committed Human seats for exact-slot reconnection.
+		Out.State = ESeinSlotState::Human;
+		Out.bClaimed = true;
+		Out.bDisconnected = true;
+		Out.bReady = true;
+		Out.ClaimedBy = FSeinPlayerID(static_cast<uint8>(In.SlotIndex));
+		Out.DisplayName = FText::FromString(TEXT("Reconnecting"));
+	}
+	return Out;
+}
+
+bool USeinLobbySubsystem::IsOpenSlotAvailable(
+	const FSeinLobbySlotState& Slot,
+	bool bLaunchCommitted)
+{
+	return !bLaunchCommitted
+		&& Slot.State == ESeinSlotState::Open
+		&& !Slot.bClaimed
+		&& !Slot.bDisconnected;
+}
+
+#if WITH_DEV_AUTOMATION_TESTS
+FSeinLobbySlotState USeinLobbySubsystem::BuildDirectMatchSlotForTests(
+	const FSeinMatchSlot& Slot)
+{
+	return BuildDirectMatchSlot(Slot);
+}
+
+FSeinLobbySlotState USeinLobbySubsystem::BuildCommittedMatchSlotForTests(
+	const FSeinMatchSlot& Slot)
+{
+	return BuildCommittedMatchSlot(Slot);
+}
+
+bool USeinLobbySubsystem::IsOpenSlotAvailableForTests(
+	const FSeinLobbySlotState& Slot,
+	bool bLaunchCommitted)
+{
+	return IsOpenSlotAvailable(Slot, bLaunchCommitted);
+}
+#endif
 
 void USeinLobbySubsystem::OnPostLogin(AGameModeBase* GameMode, APlayerController* NewPlayer)
 {
@@ -232,9 +336,19 @@ void USeinLobbySubsystem::OnPostLogin(AGameModeBase* GameMode, APlayerController
 
 	if (!bHasExternallyAuthorizedSlot)
 	{
-		// Legacy lobby reconnects retain their slot by transport identity.
-		TargetSlot = FindDisconnectedSlotForPC(NewPlayer);
-		bReconnect = TargetSlot > 0;
+		// Seamless travel can retain the same controller while the destination
+		// rebuilds its lobby actor. Prefer that exact GI-scoped binding.
+		if (const int32* RetainedSlot = ControllerToSlot.Find(NewPlayer))
+		{
+			TargetSlot = *RetainedSlot;
+			bReconnect = TargetSlot > 0;
+		}
+		if (!bReconnect)
+		{
+			// Legacy lobby reconnects retain their slot by transport identity.
+			TargetSlot = FindDisconnectedSlotForPC(NewPlayer);
+			bReconnect = TargetSlot > 0;
+		}
 		if (!bReconnect)
 		{
 			TargetSlot = PickNextFreeSlot();
@@ -1092,6 +1206,7 @@ void USeinLobbySubsystem::PublishMatchSettingsSnapshot()
 
 	PublishedSnapshot = MoveTemp(Snap);
 	bSnapshotPublished = true;
+	bPublishedSnapshotLaunchCommitted = false;
 
 	UE_LOG(LogSeinNet, Log,
 		TEXT("[Lobby] PublishMatchSettingsSnapshot: %d slot(s) captured → published as GI override."),
@@ -1102,8 +1217,35 @@ bool USeinLobbySubsystem::InstallPreparedMatchSettingsSnapshot(
 	const FSeinMatchSettings& Snapshot)
 {
 	if (Snapshot.Slots.IsEmpty()) return false;
+	const bool bHadPublishedSnapshot = bSnapshotPublished;
 	PublishedSnapshot = Snapshot;
 	bSnapshotPublished = true;
+	if (!bHadPublishedSnapshot)
+	{
+		bPublishedSnapshotLaunchCommitted = false;
+	}
+	return true;
+}
+
+void USeinLobbySubsystem::ConfirmPublishedMatchSettingsLaunch()
+{
+	if (bSnapshotPublished && !bPublishedSnapshotLaunchCommitted
+		&& !PublishedSnapshot.Slots.IsEmpty())
+	{
+		bPublishedSnapshotLaunchCommitted = true;
+		MatchSettingsLaunchCommitted.Broadcast(PublishedSnapshot);
+		DirectMatchSettingsDefaults = FSeinMatchSettings();
+	}
+}
+
+bool USeinLobbySubsystem::DiscardUncommittedPreparedMatchSettingsSnapshot()
+{
+	if (!bSnapshotPublished || bPublishedSnapshotLaunchCommitted)
+	{
+		return false;
+	}
+	PublishedSnapshot = FSeinMatchSettings();
+	bSnapshotPublished = false;
 	return true;
 }
 
@@ -1253,6 +1395,7 @@ bool USeinLobbySubsystem::ServerStartMatch(bool bTravelToGameplayMap)
 					World->GetTimerManager().SetTimerForNextTick(
 						TravelDelegate);
 			}
+			ConfirmPublishedMatchSettingsLaunch();
 			return true;
 		}
 
@@ -1268,6 +1411,7 @@ bool USeinLobbySubsystem::ServerStartMatch(bool bTravelToGameplayMap)
 		}
 		UE_LOG(LogSeinNet, Log,
 			TEXT("[Lobby] ServerStartMatch: standalone bootstrap launched in-place."));
+		ConfirmPublishedMatchSettingsLaunch();
 		return true;
 	}
 
@@ -1287,6 +1431,7 @@ bool USeinLobbySubsystem::ServerStartMatch(bool bTravelToGameplayMap)
 			TEXT("[Lobby] ServerStartMatch: canonical participant/protocol preparation failed; refusing travel/start."));
 		return false;
 	}
+	ConfirmPublishedMatchSettingsLaunch();
 
 	if (bTravelToGameplayMap)
 	{
@@ -1358,23 +1503,46 @@ void USeinLobbySubsystem::EnsureLobbyActor()
 
 	LobbyStateActor = Actor;
 
-	// Seed lobby on first creation. Priority for slot count + initial map:
-	//   1. GameMode-pushed override (`SlotCountOverride`). Set by
-	//      `ASeinGameMode::InitGame` to `ResolvedMatchSettings.Slots.Num()`
-	//      when the level has a slot manifest (PIE-direct from
-	//      SeinPlayerStarts, or post-travel from a published lobby snapshot).
-	//      This is the gameplay-map case — lobby reflects the actual level.
-	//   2. First entry of `PluginSettings::AvailableMaps` — its SlotCount
+	// Seed lobby on first creation. Priority for slot state + initial map:
+	//   1. Direct gameplay-map defaults staged by GameMode before PostLogin.
+	//   2. A published snapshot retained across travel. Human seats are rebuilt
+	//      as reconnect reservations; Open seats stay unavailable after commit.
+	//   3. GameMode-pushed slot-count override for legacy manifests.
+	//   4. First entry of `PluginSettings::AvailableMaps` — its SlotCount
 	//      drives the seed, and SelectedMap defaults to its Map. This is
 	//      the common case for the lobby/menu map: designer ships a list of
 	//      playable maps and the lobby boots into the first one.
-	//   3. Fallback: `MaxPlayers` Open slots, no SelectedMap (designer
+	//   5. Fallback: `MaxPlayers` Open slots, no SelectedMap (designer
 	//      hasn't configured AvailableMaps yet).
 	if (Actor->Slots.IsEmpty())
 	{
 		const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
 		int32 SlotCount = 0;
-		if (SlotCountOverride > 0)
+		if (!DirectMatchSettingsDefaults.Slots.IsEmpty())
+		{
+			Actor->Slots.Reserve(DirectMatchSettingsDefaults.Slots.Num());
+			for (const FSeinMatchSlot& Slot : DirectMatchSettingsDefaults.Slots)
+			{
+				Actor->Slots.Add(BuildDirectMatchSlot(Slot));
+			}
+			SlotCount = Actor->Slots.Num();
+			UE_LOG(LogSeinNet, Log,
+				TEXT("[Lobby] EnsureLobbyActor: seeded %d slot(s) from direct-map defaults."),
+				SlotCount);
+		}
+		else if (bSnapshotPublished && !PublishedSnapshot.Slots.IsEmpty())
+		{
+			Actor->Slots.Reserve(PublishedSnapshot.Slots.Num());
+			for (const FSeinMatchSlot& Slot : PublishedSnapshot.Slots)
+			{
+				Actor->Slots.Add(BuildCommittedMatchSlot(Slot));
+			}
+			SlotCount = Actor->Slots.Num();
+			UE_LOG(LogSeinNet, Log,
+				TEXT("[Lobby] EnsureLobbyActor: rebuilt %d slot(s) from the published match snapshot."),
+				SlotCount);
+		}
+		else if (SlotCountOverride > 0)
 		{
 			SlotCount = SlotCountOverride;
 			UE_LOG(LogSeinNet, Log,
@@ -1394,26 +1562,32 @@ void USeinLobbySubsystem::EnsureLobbyActor()
 		{
 			SlotCount = (Settings && Settings->MaxPlayers > 0) ? Settings->MaxPlayers : 4;
 		}
-		Actor->Slots.Reserve(SlotCount);
-		for (int32 i = 1; i <= SlotCount; ++i)
+		if (Actor->Slots.IsEmpty())
 		{
-			FSeinLobbySlotState S;
-			S.SlotIndex = i;
-			S.State = ESeinSlotState::Open;
-			S.DisplayName = FText::FromString(TEXT("Open"));
-			Actor->Slots.Add(S);
+			Actor->Slots.Reserve(SlotCount);
+			for (int32 i = 1; i <= SlotCount; ++i)
+			{
+				FSeinLobbySlotState S;
+				S.SlotIndex = i;
+				S.State = ESeinSlotState::Open;
+				S.DisplayName = FText::FromString(TEXT("Open"));
+				Actor->Slots.Add(S);
+			}
 		}
 		Actor->ForceNetUpdate();
-		UE_LOG(LogSeinNet, Log, TEXT("[Lobby] EnsureLobbyActor: spawned actor + seeded %d Open slot(s)."), SlotCount);
+		UE_LOG(LogSeinNet, Log,
+			TEXT("[Lobby] EnsureLobbyActor: spawned actor + seeded %d slot(s)."),
+			SlotCount);
 	}
 }
 
 bool USeinLobbySubsystem::CanAcceptConnection(const FUniqueNetIdRepl& UniqueId) const
 {
 	// First connection — no lobby actor yet. Allow; OnPostLogin will lazy-spawn
-	// the lobby and seat this PC.
+	// the lobby and seat this PC. A committed roster instead fails closed here;
+	// exact external admission uses CanAcceptConnectionAtSlot below.
 	const ASeinLobbyState* Actor = LobbyStateActor.Get();
-	if (!Actor) return true;
+	if (!Actor) return !bPublishedSnapshotLaunchCommitted;
 
 	// Walk slots once: look for either a free Open slot OR a disconnected
 	// slot whose LastClaimantNetID matches the connecting PC's UniqueId
@@ -1421,7 +1595,8 @@ bool USeinLobbySubsystem::CanAcceptConnection(const FUniqueNetIdRepl& UniqueId) 
 	for (const FSeinLobbySlotState& Slot : Actor->Slots)
 	{
 		// Free Open slot — accept any connecting PC.
-		if (Slot.State == ESeinSlotState::Open && !Slot.bClaimed && !Slot.bDisconnected)
+		if (IsOpenSlotAvailable(
+			Slot, bPublishedSnapshotLaunchCommitted))
 		{
 			return true;
 		}
@@ -1448,7 +1623,19 @@ bool USeinLobbySubsystem::CanAcceptConnectionAtSlot(
 	const ASeinLobbyState* Actor = LobbyStateActor.Get();
 	if (!Actor)
 	{
-		return true;
+		if (!bPublishedSnapshotLaunchCommitted)
+		{
+			return true;
+		}
+		const FSeinMatchSlot* PublishedSlot =
+			PublishedSnapshot.Slots.FindByPredicate(
+			[TargetSlot = static_cast<int32>(Slot.Value)](
+				const FSeinMatchSlot& Candidate)
+			{
+				return Candidate.SlotIndex == TargetSlot;
+			});
+		return PublishedSlot
+			&& PublishedSlot->State == ESeinSlotState::Human;
 	}
 	const int32 TargetSlot = Slot.Value;
 	const FSeinLobbySlotState* State = Actor->FindSlot(TargetSlot);
@@ -1483,8 +1670,26 @@ bool USeinLobbySubsystem::CanAcceptConnectionAtSlot(
 	{
 		return true;
 	}
-	return (State->State == ESeinSlotState::Open
-			&& !State->bClaimed && !State->bDisconnected)
+	if (bPublishedSnapshotLaunchCommitted)
+	{
+		const FSeinMatchSlot* PublishedSlot =
+			PublishedSnapshot.Slots.FindByPredicate(
+			[TargetSlot](const FSeinMatchSlot& Candidate)
+			{
+				return Candidate.SlotIndex == TargetSlot;
+			});
+		if (!PublishedSlot
+			|| PublishedSlot->State != ESeinSlotState::Human)
+		{
+			return false;
+		}
+		return (State->State == ESeinSlotState::Human
+				&& State->bDisconnected)
+			|| (State->State == ESeinSlotState::Open
+				&& !State->bClaimed && !State->bDisconnected);
+	}
+	return IsOpenSlotAvailable(
+			*State, bPublishedSnapshotLaunchCommitted)
 		|| (State->State == ESeinSlotState::Human
 			&& State->bDisconnected);
 }
@@ -1495,10 +1700,11 @@ int32 USeinLobbySubsystem::PickNextFreeSlot() const
 	if (!Actor) return 0;
 	for (const FSeinLobbySlotState& Slot : Actor->Slots)
 	{
-		if (Slot.State != ESeinSlotState::Open) continue;
-		if (Slot.bClaimed) continue;          // human or AI bound
-		if (Slot.bDisconnected) continue;      // reserved for reconnecting player
-		return Slot.SlotIndex;
+		if (IsOpenSlotAvailable(
+			Slot, bPublishedSnapshotLaunchCommitted))
+		{
+			return Slot.SlotIndex;
+		}
 	}
 	return 0;
 }

@@ -22,14 +22,12 @@
  *  - Publish the snapshot so ASeinGameMode::ResolveMatchSettingsForWorld can
  *    read it as the highest-priority match-settings source.
  *
- * Coexistence with single-map PIE flow (current state, pre-3c):
+ * Direct gameplay-map PIE flow:
  *  - ASeinGameMode::InitGame runs BEFORE any controller has connected, so the
- *    lobby snapshot is empty here; GameMode falls back to ASeinWorldSettings
- *    (existing behavior preserved).
- *  - Players connect → lobby state populated → snapshot becomes meaningful.
- *  - Sein.Net.StartMatch builds the snapshot but the in-flight match is
- *    already running off WorldSettings — Phase 3c map-travel will surface
- *    the snapshot in the new map's GameMode::InitGame chain.
+ *    subsystem seeds claimable lobby seats from the level-authored manifest.
+ *  - Players connect and claim only the seats Unreal requested for PIE.
+ *  - Match start publishes the final Human/AI/Open/Closed roster and commits
+ *    it into the current game mode before lockstep bootstrap dispatch.
  */
 
 #pragma once
@@ -51,6 +49,10 @@ class AController;
 class AGameModeBase;
 class ASeinNetRelay;
 class USeinFactionService;
+
+DECLARE_MULTICAST_DELEGATE_OneParam(
+	FSeinMatchSettingsLaunchCommitted,
+	const FSeinMatchSettings&);
 
 UCLASS(Config = Game)
 class SEINARTSNET_API USeinLobbySubsystem : public UGameInstanceSubsystem
@@ -95,6 +97,29 @@ public:
 	 *  Zero (default) means "no override — use AvailableMaps[0] / MaxPlayers
 	 *  fallbacks." Once set, persists until cleared or overwritten. */
 	void SetSlotCountOverride(int32 N) { SlotCountOverride = FMath::Max(0, N); }
+
+	/** Server-only: seed a direct gameplay-map lobby from the canonical level
+	 *  manifest. Authored Human slots become claimable Open seats while their
+	 *  faction/team defaults, AI seats, Closed seats, and extensions remain
+	 *  intact. This makes manual and automatic direct-PIE starts publish the
+	 *  same contract; published lobby-travel snapshots do not use this path. */
+	void SetDirectMatchSettingsDefaults(const FSeinMatchSettings& Settings);
+
+#if WITH_DEV_AUTOMATION_TESTS
+	/** Projects one direct-map manifest slot without requiring a PIE world. */
+	static FSeinLobbySlotState BuildDirectMatchSlotForTests(
+		const FSeinMatchSlot& Slot);
+	/** Rebuilds one committed slot for a destination world without a lobby actor. */
+	static FSeinLobbySlotState BuildCommittedMatchSlotForTests(
+		const FSeinMatchSlot& Slot);
+	static bool IsOpenSlotAvailableForTests(
+		const FSeinLobbySlotState& Slot,
+		bool bLaunchCommitted);
+	const FSeinMatchSettings& GetDirectMatchSettingsDefaultsForTests() const
+	{
+		return DirectMatchSettingsDefaults;
+	}
+#endif
 
 	/** Server-only: route a client's claim request from the relay. Validates
 	 *  slot existence + occupancy + faction validity (via FactionService),
@@ -155,12 +180,13 @@ public:
 	/** Server-only fallback capacity check used when no external connection
 	 *  admission authorizer owns exact-seat assignment.
 	 *  Returns true (accept) if either:
-	 *   - The lobby actor doesn't exist yet (first connection — auto-creates), OR
+	 *   - The lobby actor doesn't exist yet and no roster has committed, OR
 	 *   - There's at least one free Open slot, OR
 	 *   - There's a disconnected-reserved slot whose `LastClaimantNetID`
 	 *     matches `UniqueId` (reconnecting player).
-	 *  Returns false (reject) when every slot is Human/AI/Closed-claimed AND no
-	 *  reconnect slot matches. PreLogin's `ErrorMessage` should be set to a
+	 *  Once the roster commits, anonymous Open-slot admission is closed;
+	 *  exact external admission may still rebind a published Human seat.
+	 *  PreLogin's `ErrorMessage` should be set to a
 	 *  human-readable refusal string when this returns false — the connecting
 	 *  client gets a clean "server is full" error rather than connecting and
 	 *  becoming a phantom PC with no slot binding. */
@@ -207,6 +233,21 @@ public:
 	/** Snapshot accessor. Empty (default-constructed) until
 	 *  PublishMatchSettingsSnapshot fires. */
 	const FSeinMatchSettings& GetPublishedSnapshot() const { return PublishedSnapshot; }
+
+	/** Native notification emitted once a published snapshot has passed the
+	 *  launch preparation gate and becomes the live routing contract. */
+	FSeinMatchSettingsLaunchCommitted& OnMatchSettingsLaunchCommitted()
+	{
+		return MatchSettingsLaunchCommitted;
+	}
+
+	/** Net/session launchers call this only after preparation succeeds. */
+	void ConfirmPublishedMatchSettingsLaunch();
+
+	/** Removes a prepared direct-start snapshot only when launch has not been
+	 *  committed. Used by editor auto-start so a transient preparation failure
+	 *  can retry instead of permanently suppressing itself. */
+	bool DiscardUncommittedPreparedMatchSettingsSnapshot();
 
 	/** Install the server-authored, final snapshot into this GameInstance.
 	 *  Used by the pre-travel lockstep bootstrap on clients so destination
@@ -279,6 +320,11 @@ private:
 	/** Project an FSeinLobbySlotState into the runtime FSeinMatchSlot used
 	 *  by the snapshot. Drops lobby-only fields (bReady, bDisconnected, etc). */
 	static FSeinMatchSlot ProjectLobbySlotToMatchSlot(const FSeinLobbySlotState& In);
+	static FSeinLobbySlotState BuildDirectMatchSlot(const FSeinMatchSlot& In);
+	static FSeinLobbySlotState BuildCommittedMatchSlot(const FSeinMatchSlot& In);
+	static bool IsOpenSlotAvailable(
+		const FSeinLobbySlotState& Slot,
+		bool bLaunchCommitted);
 
 	UPROPERTY()
 	TWeakObjectPtr<ASeinLobbyState> LobbyStateActor;
@@ -293,6 +339,8 @@ private:
 	/** Cached published snapshot. Updated on PublishMatchSettingsSnapshot. */
 	FSeinMatchSettings PublishedSnapshot;
 	bool bSnapshotPublished = false;
+	bool bPublishedSnapshotLaunchCommitted = false;
+	FSeinMatchSettingsLaunchCommitted MatchSettingsLaunchCommitted;
 	bool bTravelScheduled = false;
 	FTimerHandle PendingTravelTimerHandle;
 	TWeakObjectPtr<UWorld> PendingTravelTimerWorld;
@@ -302,6 +350,9 @@ private:
 	 *  no override — fall back to AvailableMaps[0]/MaxPlayers (lobby-map
 	 *  default). Non-zero means use this exact count (gameplay-map case). */
 	int32 SlotCountOverride = 0;
+
+	/** Canonical direct-map defaults staged before the first PostLogin. */
+	FSeinMatchSettings DirectMatchSettingsDefaults;
 
 	FDelegateHandle PostLoginHandle;
 	FDelegateHandle LogoutHandle;

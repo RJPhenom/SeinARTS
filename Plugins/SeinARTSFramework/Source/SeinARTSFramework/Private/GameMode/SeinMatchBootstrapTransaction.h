@@ -1,7 +1,14 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
- * @file    SeinMatchBootstrapTransaction.h
- * @brief   Transient deterministic tick-zero materialization plan.
+ *
+ * @file         SeinMatchBootstrapTransaction.h
+ * @author       RJ Macklem
+ * @created      17 Aug 2026
+ * @latest       22 Aug 2026
+ * @brief        Declares the transient deterministic tick-zero materialization plan.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
  */
 
 #pragma once
@@ -65,6 +72,21 @@ struct FSeinBootstrapPlacedActorPlanEntry
 };
 
 USTRUCT(meta = (SeinDeterministic))
+struct FSeinBootstrapInactivePlacedActorPlanEntry
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FString StableKey;
+
+	UPROPERTY()
+	FString ActorClassPath;
+
+	UPROPERTY()
+	FSeinPlayerID OwnerPlayerID;
+};
+
+USTRUCT(meta = (SeinDeterministic))
 struct FSeinBootstrapPlanDigestData
 {
 	GENERATED_BODY()
@@ -74,6 +96,9 @@ struct FSeinBootstrapPlanDigestData
 
 	UPROPERTY()
 	TArray<FSeinBootstrapPlacedActorPlanEntry> PlacedActors;
+
+	UPROPERTY()
+	TArray<FSeinBootstrapInactivePlacedActorPlanEntry> InactivePlacedActors;
 };
 
 USTRUCT(meta = (SeinDeterministic))
@@ -153,4 +178,5 @@ private:
 	FSeinBootstrapPlanDigestData Plan;
 	TArray<TWeakObjectPtr<ASeinPlayerStart>> PlayerStarts;
 	TArray<TWeakObjectPtr<ASeinActor>> PlacedActors;
+	TArray<TWeakObjectPtr<ASeinActor>> InactivePlacedActors;
 };
