@@ -234,7 +234,7 @@ Exit: designers can build representative infantry, squad, cover, vehicle, garris
 
 ## 4. Freeze the online service contracts
 
-**Status: provider-neutral contract and Loopback reference implementation complete on 2026-08-21.**
+**Status: provider-neutral contract and Loopback reference implementation complete on 2026-08-22.**
 The optional Online Services extension now covers the frozen account, party, matchmaking,
 allocation, roster, reconnect, result, stat, leaderboard, replay-evidence, campaign-save, and
 telemetry schemas. Durable mutations have principal-scoped retry safety plus semantic uniqueness;
@@ -244,10 +244,10 @@ game-thread deferred, cancellation/reset guarded, and synchronously quiesced bef
 Loopback is refused for Shipping, dedicated-server, and authenticated-admission configurations.
 
 Focused contract/security/lifecycle tests, the broad All Unit/Integration/Determinism suites,
-Development builds, and a fresh source consumer with public-header, Shipping, package, and startup
-checks qualify the implementation. The exact-artifact consumer gate is the remaining evidence in
-this wave. Vendor adapters and real dedicated/WAN `PreLogin` -> `InitNewPlayer` qualification remain
-deferred until their concrete integration wave.
+Development and Shipping builds, standalone plugin packaging, and fresh source and exact-artifact
+consumers with public-header, Shipping, package, and startup checks qualify the implementation.
+Vendor adapters and real dedicated/WAN `PreLogin` -> `InitNewPlayer` qualification remain deferred
+until their concrete integration wave.
 
 The existing Net module is deterministic match transport, not a complete online platform. Add an optional backend-neutral online extension rather than coupling Core/Net to EOS, Steam, or one vendor.
 

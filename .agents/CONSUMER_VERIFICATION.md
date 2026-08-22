@@ -133,6 +133,16 @@ the Framework archive SHA-256 is
 `80D1CC88CFC63E55929B7C2536338A0F4585DB24A3A12BB6ECD2C4D788090A35`. Generated replay files and
 exact packaged processes are cleaned by the harness.
 
+On 2026-08-22 the new Online Services profile passed an exact-ZIP package-only qualification from
+source commit `4463e0e3979f7fe5cf48085282812f7dae23f15f` (version `0.0.236`, matrix run
+`9b15bf74ff1d4cb0ba584ff210ff622f`). Its fresh consumer passed 350 independent public-header
+translation units, Development Editor and Shipping builds, release-mode installation diagnostics,
+exact uncooked map loading, clean cook/package, and real packaged Shipping startup. The Framework
+archive SHA-256 was `9E1FC527AF1D28C08DCDC6ED10C0513BDD959BB8FC9D18A042B4A17EFF016075`;
+Online Services was `9826C25239FB6B1BC814A5EA04C0191316E30B8147C9095312C1763E2A864EF0`.
+This diagnostic run deliberately preserved unrelated host-project WIP, so its release manifest
+records `sourceDirty:true`; it qualifies the exact plugin artifacts but is not publication evidence.
+
 The local Epic launcher engine cannot build Client targets; UnrealBuildTool reports that Client
 targets are unsupported by that engine distribution before it reaches project compilation. A
 source/installed UE build and CI runner must therefore prove Development Client and Dedicated
