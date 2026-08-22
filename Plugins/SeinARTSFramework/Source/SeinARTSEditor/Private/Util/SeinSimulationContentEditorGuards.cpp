@@ -33,7 +33,7 @@ namespace
 	/** Canonical default asset path assigned when a project never configured
 	 *  a manifest — project-owned by construction (/Game). */
 	const TCHAR* DefaultManifestObjectPath =
-		TEXT("/Game/SeinARTS/SimulationContentManifest.SimulationContentManifest");
+		TEXT("/Game/Generated/SeinSimulationContentManifest.SeinSimulationContentManifest");
 
 	/** Best-effort freshness maintenance ahead of the strict gate. Failures
 	 *  only log — the runtime bootstrap gate stays the fail-closed authority,

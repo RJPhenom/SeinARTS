@@ -21,13 +21,14 @@ Run from the repository root:
 & "D:/Projects/Unreal Engine/SeinARTS/Scripts/Release/Invoke-ReleaseGate.ps1" -Version 1.2.0 -EngineRoot "D:/Engines/UE_5.8"
 ```
 
-The tool creates projects beneath ignored `Saved/ConsumerMatrix` for five profiles:
+The tool creates projects beneath ignored `Saved/ConsumerMatrix` for six profiles:
 
 - `Framework`: the base Framework plugin only.
 - `Cover`: Framework plus Cover, with Squad and the bridge physically absent.
 - `Squad`: Framework plus Squad, with Cover and the bridge physically absent.
 - `MovementPlus`: Framework plus Movement+.
-- `Full`: Framework, Squad, Cover, the Cover+Squad bridge, and Movement+.
+- `OnlineServices`: Framework plus the backend-neutral Online Services extension.
+- `Full`: Framework, Squad, Cover, the Cover+Squad bridge, Movement+, and Online Services.
 
 Repository-source mode copies distributable source/content/config/resources/shaders only, never
 repository `Binaries` or `Intermediate` output. Artifact mode validates each required ZIP's root,
@@ -72,7 +73,7 @@ escapes, not complete release evidence.
 
 `Scripts/Release/Invoke-ReleaseGate.ps1` is the one release entrypoint. It runs Development Editor
 and Shipping builds, both test profiles across Unit/Integration/Determinism/Editor/Sim/Perf, all
-five standalone packages, and the exact-artifact consumer matrix. It writes a JSON receipt under
+six standalone packages, and the exact-artifact consumer matrix. It writes a JSON receipt under
 `Saved/ReleaseGate`. Publication mode permits no skipped gate; `-PackageOnly` is the diagnostic mode.
 The receipt binds exact test attempt IDs/index hashes/build provenance, consumer qualification run
 IDs, engine fingerprint, installation receipt, public-header manifest, runtime-result hash,

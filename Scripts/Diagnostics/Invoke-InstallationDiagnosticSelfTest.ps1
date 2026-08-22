@@ -67,10 +67,9 @@ try {
 	Write-Json (Join-Path $PassProject 'Game.uproject') ([ordered]@{
 		FileVersion = 3
 		EngineAssociation = '5.8'
-		Plugins = @([ordered]@{
-			Name = 'SeinARTSFramework'
-			Enabled = $true
-		})
+		Plugins = @(
+			[ordered]@{ Name = 'SeinARTSFramework'; Enabled = $true },
+			[ordered]@{ Name = 'SeinARTSOnlineServicesExtension'; Enabled = $true })
 	})
 	Write-Json (Join-Path $PassProject `
 		'Plugins\Vendor\SeinARTSFramework\SeinARTSFramework.uplugin') ([ordered]@{
@@ -80,6 +79,18 @@ try {
 		Installed = $true
 		Modules = @()
 		Plugins = @()
+	})
+	Write-Json (Join-Path $PassProject `
+		'Plugins\Vendor\SeinARTSOnlineServicesExtension\SeinARTSOnlineServicesExtension.uplugin') ([ordered]@{
+		FileVersion = 3
+		Version = 1
+		VersionName = '1.2.3-alpha.1+build.5'
+		Installed = $true
+		Modules = @()
+		Plugins = @([ordered]@{
+			Name = 'SeinARTSFramework'
+			Enabled = $true
+		})
 	})
 	Write-Utf8NoBom (Join-Path $PassProject 'Config\DefaultGame.ini') @'
 [/Script/SeinARTSCoreEntity.SeinARTSCoreSettings]

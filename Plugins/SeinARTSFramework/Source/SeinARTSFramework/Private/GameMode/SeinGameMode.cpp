@@ -79,7 +79,54 @@ void ASeinGameMode::PreLogin(
 					*Address);
 			}
 		}
+		if (ErrorMessage.IsEmpty())
+		{
+			if (USeinNetSubsystem* Net =
+				GameInstance->GetSubsystem<USeinNetSubsystem>())
+			{
+				Net->AuthorizeIncomingConnection(
+					Options, Address, UniqueId, ErrorMessage);
+			}
+		}
 	}
+}
+
+FString ASeinGameMode::InitNewPlayer(
+	APlayerController* NewPlayerController,
+	const FUniqueNetIdRepl& UniqueId,
+	const FString& Options,
+	const FString& Portal)
+{
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (USeinNetSubsystem* Net =
+			GameInstance->GetSubsystem<USeinNetSubsystem>())
+		{
+			if (Net->HasConnectionAdmissionAuthorizer())
+			{
+				ASeinPlayerController* SeinController =
+					Cast<ASeinPlayerController>(NewPlayerController);
+				if (!SeinController)
+				{
+					return TEXT("Online admission requires a Sein player controller");
+				}
+				FSeinPlayerID AssignedSlot;
+				FString AdmissionError;
+				if (!Net->ConsumeAuthorizedConnection(
+						NewPlayerController,
+						Options,
+						UniqueId,
+						AssignedSlot,
+						AdmissionError))
+				{
+					return AdmissionError;
+				}
+				SeinController->SeinPlayerID = AssignedSlot;
+			}
+		}
+	}
+	return Super::InitNewPlayer(
+		NewPlayerController, UniqueId, Options, Portal);
 }
 
 void ASeinGameMode::InitGame(

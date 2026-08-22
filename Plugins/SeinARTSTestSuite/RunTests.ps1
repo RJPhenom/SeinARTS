@@ -247,7 +247,8 @@ $ExtensionPlugins = @(
 	'SeinARTSSquadExtension',
 	'SeinARTSCoverExtension',
 	'SeinARTSCoverSquadExtension',
-	'SeinARTSMovementPlusExtension'
+	'SeinARTSMovementPlusExtension',
+	'SeinARTSOnlineServicesExtension'
 )
 $EnabledTestPlugins = @('SeinARTSTestSuite')
 $BuildArgs = @('-EnablePlugin=SeinARTSTestSuite')
@@ -332,7 +333,8 @@ $ProductionPluginNames = if ($Profile -eq 'All') {
 		'SeinARTSCoverExtension',
 		'SeinARTSSquadExtension',
 		'SeinARTSMovementPlusExtension',
-		'SeinARTSCoverSquadExtension')
+		'SeinARTSCoverSquadExtension',
+		'SeinARTSOnlineServicesExtension')
 } else {
 	@('SeinARTSFramework')
 }

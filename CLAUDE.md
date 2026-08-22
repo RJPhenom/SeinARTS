@@ -1,12 +1,12 @@
 # SeinARTS — Project Root Guide
 
 This is the **project-level** guide, loaded by every session rooted at `D:/Projects/Unreal Engine/SeinARTS`.
-It owns the cross-cutting rules that apply to **all five production plugins** and the two test suites. Each plugin has its own
+It owns the cross-cutting rules that apply to **all six production plugins** and the two test suites. Each plugin has its own
 `AGENTS.md` with the deep, plugin-specific detail — read the relevant one when you scope into it
 (pointers below).
 
 > Sessions used to be scoped to the `SeinARTSFramework` plugin directory only. They now run from
-> this project root so a single session has native visibility across the five production plugins
+> this project root so a single session has native visibility across the six production plugins
 > and both disabled test plugins. When you start work, read this file first, then the plugin-specific
 > `AGENTS.md` for whatever you're touching.
 
@@ -35,7 +35,7 @@ It owns the cross-cutting rules that apply to **all five production plugins** an
   taking over.
 
 > Note: as of 2026-06-02 the project root **is** a git repository — a single project-wide monorepo
-> (`main`, initial commit `ecf6068`) tracking the host, five production plugins, and two disabled
+> (`main`, initial commit `ecf6068`) tracking the host, six production plugins, and two disabled
 > test plugins, with **Git LFS**
 > for binary assets (`*.uasset`/`*.umap` + common media). Baked level data (`**/Content/LevelData/` + legacy patterns)
 > is gitignored as a regenerable build artifact — **re-bake after a fresh clone** via the one
@@ -125,7 +125,7 @@ learned from the sessions that *worked*:
 ## What this is
 
 A deterministic **lockstep RTS framework** for Unreal Engine 5, delivered as one core plugin plus
-three opt-in extension plugins. The simulation layer runs entirely on fixed-point math
+five opt-in extension plugins. The simulation layer runs entirely on fixed-point math
 (`FFixedPoint`, 32.32) for cross-platform bit-determinism. Unreal is the renderer — the sim never
 touches `float`, `AActor*`, or any non-deterministic UE system. Data flows one way: **sim → render**.
 
@@ -148,6 +148,7 @@ D:/Projects/Unreal Engine/SeinARTS/
     ├── SeinARTSCoverExtension/        Opt-in cover.   2 modules. → .../SeinARTSCoverExtension/AGENTS.md
     ├── SeinARTSCoverSquadExtension/   Opt-in Cover+Squad bridge. 1 module. → .../SeinARTSCoverSquadExtension/AGENTS.md
     ├── SeinARTSMovementPlusExtension/ Opt-in movement modes. 1 module ("SeinARTS Movement+"). → .../SeinARTSMovementPlusExtension/AGENTS.md
+    ├── SeinARTSOnlineServicesExtension/ Backend-neutral online product services. 1 module. → .../SeinARTSOnlineServicesExtension/AGENTS.md
     ├── SeinARTSTestSuite/              Disabled framework/editor tests. 3 modules. → .../SeinARTSTestSuite/AGENTS.md
     └── SeinARTSExtensionTestSuite/     Disabled all-extension tests. 2 modules. → .../SeinARTSExtensionTestSuite/AGENTS.md
 ```
@@ -160,6 +161,8 @@ SeinARTSFramework ................... base; depends on no other Sein plugin
    ├── SeinARTSCoverExtension ............. REQUIRES SeinARTSFramework
    ├── SeinARTSMovementPlusExtension ...... REQUIRES SeinARTSFramework
    │                                        (concrete movement modes; framework keeps Basic / Basic Unit)
+   ├── SeinARTSOnlineServicesExtension .... REQUIRES SeinARTSFramework
+   │                                        (provider-neutral contracts + local loopback provider)
    └── SeinARTSCoverSquadExtension ........ REQUIRES Framework + Cover + Squad
                                             (optional integration bridge only)
 
@@ -182,6 +185,7 @@ are physically independent plugins. Their only cross-extension integration lives
 | Cover providers/geometry, cover-aware dispatch, formation preview | `Plugins/SeinARTSCoverExtension/AGENTS.md` |
 | Cover-aware Squad dispatch integration | `Plugins/SeinARTSCoverSquadExtension/AGENTS.md` |
 | Infantry/Wheeled/Tracked/Hover/Flight movement modes + per-class tuning | `Plugins/SeinARTSMovementPlusExtension/AGENTS.md` |
+| Account, party, matchmaking, results, saves, replay evidence, telemetry, and provider adapters | `Plugins/SeinARTSOnlineServicesExtension/AGENTS.md` |
 | Automated tests, fixtures, scripted maps, and test runners | `Plugins/SeinARTSTestSuite/AGENTS.md` |
 | Tests intentionally linking every opt-in extension | `Plugins/SeinARTSExtensionTestSuite/AGENTS.md` |
 

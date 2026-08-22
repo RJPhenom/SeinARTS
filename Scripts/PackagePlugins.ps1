@@ -1,7 +1,7 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-  Package the five production SeinARTS plugins FAB-style for qualification or
+  Package the six production SeinARTS plugins FAB-style for qualification or
   publication by the release orchestrator.
 
 .DESCRIPTION
@@ -24,7 +24,7 @@
 
 .EXAMPLE
   .\Scripts\PackagePlugins.ps1 -Version 1.2.0 -PackageOnly
-  # package all five for release-gate qualification
+  # package all six for release-gate qualification
 
 .EXAMPLE
   .\Scripts\PackagePlugins.ps1 -Only SeinARTSFramework -PackageOnly
@@ -94,6 +94,7 @@ $AllPlugins = @(
     'SeinARTSSquadExtension',
     'SeinARTSCoverExtension',
     'SeinARTSMovementPlusExtension',
+    'SeinARTSOnlineServicesExtension',
     'SeinARTSCoverSquadExtension'
 )
 $UnknownPlugins = @($Only | Where-Object { $_ -notin $AllPlugins } |
@@ -329,6 +330,7 @@ $ArtifactValidationProfile = switch ($PackagedSet) {
     'SeinARTSFramework,SeinARTSSquadExtension' { 'Squad' }
     'SeinARTSFramework,SeinARTSCoverExtension' { 'Cover' }
     'SeinARTSFramework,SeinARTSMovementPlusExtension' { 'MovementPlus' }
+    'SeinARTSFramework,SeinARTSOnlineServicesExtension' { 'OnlineServices' }
     ($AllPlugins -join ',') { 'All' }
     default { $null }
 }

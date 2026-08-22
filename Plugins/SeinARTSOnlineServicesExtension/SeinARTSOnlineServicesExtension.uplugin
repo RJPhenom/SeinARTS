@@ -1,0 +1,27 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "SeinARTS Online Services (SOS)",
+	"Description": "Backend-neutral account, party, matchmaking, match record, progression, replay evidence, save, and telemetry contracts for SeinARTS, with a local loopback provider.",
+	"Category": "Online",
+	"CreatedBy": "Phenom Studios",
+	"CanContainContent": false,
+	"EnabledByDefault": false,
+	"Installed": false,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Modules": [
+		{
+			"Name": "SeinARTSOnlineServices",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "SeinARTSFramework",
+			"Enabled": true
+		}
+	]
+}

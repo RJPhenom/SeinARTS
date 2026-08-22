@@ -11,7 +11,7 @@ public class SeinARTSNet : ModuleRules
         PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
 
         PublicDependencyModuleNames.AddRange(new string[] {
-            "Core", "CoreUObject", "Engine",
+            "Core", "CoreUObject", "CoreOnline", "Engine",
             "SeinARTSCore", "SeinARTSCoreEntity",
             "GameplayTags"
         });

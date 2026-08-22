@@ -45,6 +45,10 @@
 		{
 			"Name": "SeinARTSMovementPlusExtension",
 			"Enabled": true
+		},
+		{
+			"Name": "SeinARTSOnlineServicesExtension",
+			"Enabled": true
 		}
 	]
 }

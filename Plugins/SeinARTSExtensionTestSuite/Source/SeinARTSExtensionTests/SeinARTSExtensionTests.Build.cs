@@ -25,7 +25,8 @@ public class SeinARTSExtensionTests : ModuleRules
 			"SeinARTSSquad",
 			"SeinARTSCover",
 			"SeinARTSCoverSquad",
-			"SeinARTSMovementPlus"
+			"SeinARTSMovementPlus",
+			"SeinARTSOnlineServices"
 		});
 	}
 }

@@ -104,6 +104,7 @@ $ProductionPlugins = @(
 	'SeinARTSSquadExtension',
 	'SeinARTSCoverExtension',
 	'SeinARTSMovementPlusExtension',
+	'SeinARTSOnlineServicesExtension',
 	'SeinARTSCoverSquadExtension')
 $ExpectedTestSuites = @(
 	'SeinARTS.Unit',
@@ -114,7 +115,7 @@ $ExpectedTestSuites = @(
 	'SeinARTS.Perf')
 $ExpectedTestProfiles = @('All', 'Framework')
 $ExpectedMatrixProfiles = @(
-	'Framework', 'Cover', 'Squad', 'MovementPlus', 'Full')
+	'Framework', 'Cover', 'Squad', 'MovementPlus', 'OnlineServices', 'Full')
 $ReceiptPath = Join-Path $ReceiptRoot (
 	'release-gate-{0}.json' -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
 $UdpFaultProxySelfTestRoot = Join-Path $ReceiptRoot (
@@ -421,6 +422,7 @@ function Get-QualifiedMatrixReceiptPath(
 		'Cover' { @('SeinARTSFramework', 'SeinARTSCoverExtension') }
 		'Squad' { @('SeinARTSFramework', 'SeinARTSSquadExtension') }
 		'MovementPlus' { @('SeinARTSFramework', 'SeinARTSMovementPlusExtension') }
+		'OnlineServices' { @('SeinARTSFramework', 'SeinARTSOnlineServicesExtension') }
 		'Full' { $ProductionPlugins }
 		default { throw "Unknown matrix profile '$Profile'." }
 	}
