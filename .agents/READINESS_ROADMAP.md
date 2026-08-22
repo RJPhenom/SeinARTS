@@ -8,7 +8,7 @@ support massive-scale designs, so mechanisms are sized for the largest scale). T
 substrate SHIPPED 2026-08-16 as the 13th framework module (`SeinARTSCombat`): vitals + damage
 resolution with a Blueprint formula policy seam, weapon cycling, an on-demand target query
 service with a Blueprint scorer seam, instant + projectile-entity delivery, and starter
-attack content — mechanisms only; feel stays designer-authored (see `Docs/Guides/Combat.md`).
+attack content — mechanisms only; feel stays designer-authored (see `.agents/FRAMEWORK_MAP.md`).
 The 2026-08-21 armed-population curve proved the prior acquisition sweep exceeded one 30 Hz turn
 at 1,000 units; a transparent derived Combat spatial index now brings both warm and rebuild-inclusive
 acquisition to about 11 ms without changing canonical state or scorer semantics. Remaining under the
@@ -131,7 +131,7 @@ content root. The explicit component picker accepts both native component struct
 designer-authored UDS types found on the matched entities, while an empty Tracked Components list
 retains track-all behavior.
 The durable Preview, Gather, Check Sync, Push, save, and reseal contract is consolidated in
-`.agents/FRAMEWORK_MAP.md`; the shipped Balance Data guide documents the customer workflow.
+`.agents/FRAMEWORK_MAP.md` pending the owner-authored public website.
 
 Ability authoring now has a consolidated model-facing contract for creation/granting, smart
 commands, targeting, activation/lifecycle semantics, deterministic state, and checkpoint-safe Move
@@ -252,9 +252,9 @@ Exit: game UI and progression can target stable provider-neutral interfaces whil
 
 - Semantic release tags and one-version production-plugin cohorts are defined in
   `.agents/WORKFLOW.md`; deterministic compatibility, installation, upgrade, and release-evidence
-  contracts are consolidated in `.agents/CONSUMER_VERIFICATION.md`. The planned customer-facing
-  `Docs/` tree is content-complete and publication binds every documentation file into immutable
-  release evidence. A human editor-path accuracy proofread remains part of each release gate.
+  contracts are consolidated in `.agents/CONSUMER_VERIFICATION.md`. Root `Docs/` is intentionally
+  empty until RJ authors the GitHub Pages website. Publication warns and omits documentation while
+  empty; once present, every website file is bound into immutable release evidence.
 - Release packaging now validates SemVer and refuses to publish dirty or mid-build-drifted source
   under a clean commit/tag identity. It emits SHA-256 artifact/dependency provenance and release
   publication is gated on fresh consumers built from the exact five ZIPs. Package-only diagnostics
@@ -281,9 +281,8 @@ Exit: game UI and progression can target stable provider-neutral interfaces whil
   A Windows PowerShell 5.1 self-test prevents the shipped diagnostic's pass/adversarial contract
   from drifting. The consumer contract separates host examples from shipped plugin content and
   records the project-owned settings, unit, map, manifest, and qualification boundaries. Movement+
-  telemetry is preserved in the plugin guide and `.agents/VEHICLE_GYM.md`; public Ability and
-  Balance Data guides are shipped and their model-facing boundaries remain in
-  `.agents/FRAMEWORK_MAP.md`. Broader in-editor error UX and per-release human documentation
-  proofreads remain.
+  telemetry is preserved in the plugin guide and `.agents/VEHICLE_GYM.md`; Ability, economy,
+  combat, and Balance Data engineering boundaries remain in `.agents/FRAMEWORK_MAP.md` pending the
+  owner-authored website. Broader in-editor error UX and public documentation remain.
 
 Exit: a studio can adopt the framework without relying on this repository's private history or an agent to explain hidden setup.

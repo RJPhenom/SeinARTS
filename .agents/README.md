@@ -17,8 +17,10 @@ Use `WORKFLOW.md` for operational rules. Use the repository and plugin-level gui
 
 ## Artifact policy
 
-- `Docs/` is reserved for deliberate user/developer documentation built for the product. Do not put audit scratch, agent handoffs, or generated reports there.
-- Do not recreate a customer-documentation hierarchy under `.agents/`. Consolidate durable model context into the records above; author future customer material directly in `Docs/` when that documentation effort begins.
+- Root `Docs/` is reserved for RJ's GitHub Pages documentation website. Keep it empty unless RJ
+  explicitly opens a website task; agents must not independently author or restore content there.
+- Do not recreate the website hierarchy under `.agents/`. Consolidate only durable engineering
+  contracts into the existing records above.
 - Agent-authored Markdown belongs here when it is durable. Short-lived exploration should stay out of Git.
 - Generated PDFs do not belong in the repository. Put requested PDFs in the requesting user's Downloads directory.
 - Raw Automation, profiling, logs, replays, and Unreal build products remain under ignored `Saved/`, `Binaries/`, `Intermediate/`, or external temporary capture directories.

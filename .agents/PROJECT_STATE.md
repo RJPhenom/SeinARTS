@@ -73,9 +73,8 @@ Determinism 48/38).
   budget. Vacuity-guarded (at least half the population must genuinely be moving mid-measure).
 - The dense-cover preview's stationary-cursor cadence was fixed (unchanged-input re-solve skip,
   5-tick cap); per-solve Hungarian cost and its options are recorded in OPEN_RISKS #6.
-- `Docs/` now carries the customer documentation product: README, Installation, First Skirmish,
-  Determinism Rules, Authoring Units, Multiplayer, Replays, Formations/Preview, and the Project
-  Settings reference — the release gate's fail-closed docs check is satisfiable.
+- A customer documentation tree was authored during this wave. It was removed on 2026-08-21 after
+  RJ reaffirmed that root `Docs/` is reserved for his GitHub Pages website.
 
 ### ShareVision consumer (same session, after the landing commits)
 
@@ -138,7 +137,7 @@ All work below is committed on `codex/feat03-frozen-destinations`; no product de
   wheeled/tracked columns crossing an open field through real A* + maneuver planning + steering +
   avoidance + collision: 3.254/7.214/14.225 ms medians at 100/200/400 vehicles, near-linear,
   within the 30 Hz budget. First automated vehicle scale evidence.
-- **Docs product content-complete** (`6f72b92` + tutorials commit): extension deep-dives
+- **Docs product authored at that point** (`6f72b92` + tutorials commit; withdrawn 2026-08-21): extension deep-dives
   (Squads, Cover, Movement+) plus Authoring Abilities and Balance Data guides authored from live
   code and cross-verified (settings paths, display names, tint-map behavior corrected during
   review). OPEN_RISKS docs row now lists only the per-release human accuracy proofread.
@@ -193,9 +192,9 @@ framework module (`fbc6d4e` + hardening `6df189e`):
   zero-always-dies); projectile hash omitted the mutable aim point; per-tick mutable-fetch churn
   (gathers now filter to handles that actually change).
 - **Gates**: All profile Unit 477 / Sim 64 / Determinism 48 / Integration 26; Framework profile
-  Sim 57 / Determinism 38; Shipping build; fresh-process serial/parallel A/B 120/120. Customer
-  guide at `Docs/Guides/Combat.md`. New tick systems: WeaponCycle (PreTick 11), ProjectileFlight
-  (AbilityExecution 20).
+  Sim 57 / Determinism 38; Shipping build; fresh-process serial/parallel A/B 120/120. Internal
+  authoring contract is retained in `.agents/FRAMEWORK_MAP.md`. New tick systems: WeaponCycle
+  (PreTick 11), ProjectileFlight (AbilityExecution 20).
 - **Scale qualification**: `SeinARTS.Perf.Combat.ArmedScale` now exercises 300/500/1,000 units with
   real vitals, weapons, acquisition, attack abilities, and damage. The old full sweep measured
   7.690/14.198/33.383 ms; the derived, non-canonical Combat target index measures warm acquisition
@@ -222,6 +221,15 @@ representative designer-style workflows rather than only primitive coverage:
 - Focused economy 6/6, Framework Sim 63/63, All Sim 70/70, Framework Determinism 38/38, fresh-
   process serial/parallel roots and poses 120/120, Development editor and Shipping builds green.
   Active worker construction continues from a partial snapshot to the exact same canonical root.
+
+### Public documentation ownership correction (2026-08-21, latest)
+
+RJ reaffirmed that root `Docs/` belongs exclusively to the GitHub Pages documentation website he
+will author. All agent-authored customer guides were removed. Unique current engineering contracts
+for Combat and economy composition were synthesized into `.agents/FRAMEWORK_MAP.md`; existing
+consumer, framework, and plugin guides retain the remaining implementation knowledge without
+mirroring the deleted website hierarchy. Release tooling already treats an empty/missing `Docs/`
+tree as a warning and omits the Documentation payload.
 
 Still RJ's: the PIE batch (now including combat feel: starter attack, projectiles, splash,
 armor/formula authoring), the remaining decision memos (online scope parked; squad
@@ -262,8 +270,8 @@ The post-audit performance/remediation work is now committed and fast-forwarded 
 ## Baseline cleanup
 
 - Historical audit/report artifacts and superseded customer-documentation drafts were removed.
-  Durable model-facing contracts are consolidated in the named `.agents/` records; `Docs/` remains
-  reserved for the future deliberate customer-facing documentation set.
+  Durable model-facing contracts are consolidated in the named `.agents/` records; root `Docs/`
+  remains reserved for RJ's owner-authored GitHub Pages website.
 - Generated PDF output belongs outside the repository.
 - Empty scratch directories, duplicate/template config entries, stale comments, and dead source surfaces were removed.
 - Removed reflected/source surfaces had no source, config, or binary-asset consumers: `ESeinElevationMode`, `FFixedBounds`, `SeinTime`, `FSeinCapturePointData`, `FSeinFootprintData`, and `USeinLevelLoS`.

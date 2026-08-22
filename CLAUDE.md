@@ -113,7 +113,10 @@ learned from the sessions that *worked*:
 
 ### Engineering-document artifacts
 
-- `Docs/` is reserved for deliberate product/developer documentation, not audit scratch or agent handoffs.
+- Root `Docs/` is reserved for RJ's GitHub Pages documentation website. Agents must leave it
+  empty and must not author or restore content there unless RJ explicitly opens a website task.
+  Consolidate durable engineering contracts into the existing `.agents/` records instead of
+  creating a mirrored documentation tree.
 - Durable agent engineering context belongs in `.agents/`; short-lived exploration stays untracked.
 - Do not create a repository `Output/` tree. Put requested PDF exports in the user's Downloads directory.
 
@@ -140,7 +143,7 @@ D:/Projects/Unreal Engine/SeinARTS/
 ├── Source/SeinARTS/         Thin host game module — nothing of substance lives here
 ├── Config/ Content/         Host project config + content
 └── Plugins/
-    ├── SeinARTSFramework/             The core. 12 modules. → Plugins/SeinARTSFramework/AGENTS.md
+    ├── SeinARTSFramework/             The core. 13 modules. → Plugins/SeinARTSFramework/AGENTS.md
     ├── SeinARTSSquadExtension/        Opt-in squads.  1 module. → .../SeinARTSSquadExtension/AGENTS.md
     ├── SeinARTSCoverExtension/        Opt-in cover.   2 modules. → .../SeinARTSCoverExtension/AGENTS.md
     ├── SeinARTSCoverSquadExtension/   Opt-in Cover+Squad bridge. 1 module. → .../SeinARTSCoverSquadExtension/AGENTS.md

@@ -69,22 +69,23 @@ Cover post-processing runs after base formation layout and is shared by preview 
 Ordinary and Squad movement delegate to `FSeinCoverAssignmentPlanner`; do not fork allocation logic
 back into either resolver adapter.
 
-The shipped planner currently solves one resolver invocation exactly. It does not yet coordinate
-claims across separate ordinary and persistent-Squad broker invocations, so do not describe the
-current result as globally selection-wide until the reservation/artifact layer below lands.
-
-The intended tactical allocator is selection-wide and deterministic:
+The selection-plan provider aggregates ordinary and persistent-Squad broker members before one
+exact deterministic solve. The tactical allocator provides:
 
 - Stable member and slot ordering.
 - Maximum-cardinality/minimum-cost matching with fixed-point policy inputs.
-- Pure preview planning followed by explicit commit-time reservation.
+- Pure preview planning followed by explicit commit-time reservation and frozen artifacts.
 - No duplicate member or slot claims.
 - Replaceable native allocator/system plus BlueprintNativeEvent eligibility/scoring policy.
 - Reservation lifecycle included in canonical state, snapshot, replay, reset, and reconnect.
 
-Do not silently replan an initial destination after preview. If reservation state changed before
-execution, commit accepts the exact resolved artifact or rejects according to the approved policy;
-later movement repaths may re-resolve.
+Reservations filter future previews; they never veto or reshape an already displayed order. Under
+RJ's policy D, admitted survivors retain the exact world destinations in their frozen artifact,
+dead members drop only their own entries, and physical collision resolves any racing double-claim.
+Moving providers expose current slot transforms to new previews while issued destinations remain
+fixed in world space. Artifact/reservation state is canonical across cancellation, settlement,
+provider loss, snapshot, replay, reset, and reconnect. Later movement repaths may still re-resolve a
+destination that the changing world made unreachable.
 
 ## Editor and preview
 

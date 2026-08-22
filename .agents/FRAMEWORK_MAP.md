@@ -36,6 +36,7 @@ on this repository's host `/Game` packages or on opt-in extensions.
 |---|---|
 | `SeinARTSCore` | Fixed-point scalar/vector/transform/quaternion geometry, deterministic trigonometry and PRNG. Leaf dependency. |
 | `SeinARTSCoreEntity` | Generational entity pool; reflection-backed sparse component storage; ordered fixed-tick systems; ability/latent/effect/production/containment state; command brokers; snapshots; canonical roots; visual-event emission. |
+| `SeinARTSCombat` | Genre-neutral vitals, deterministic damage/healing, weapon cycling, on-demand target acquisition, and instant/projectile delivery. |
 | `SeinARTSLevelData` | Shared baked substrate, coordinate system, layer-provider registry, and regenerable channel data. |
 | `SeinARTSNavigation` | Deterministic grid A*, connectivity/reachability, footprint-aware placement, height sampling, dynamic blockers, async request/result plumbing, and typed paths. |
 | `SeinARTSMovement` | Persistent per-entity movement policies, planner/mover handles, MoveTo continuation, shared steering/avoidance, navigation containment, movement driver, and typed-segment flattening. |
@@ -88,6 +89,22 @@ properties. Stable source identity, schema checks, mounted content roots, and th
 designer-component picker fail closed. After a successful Push, save the source assets and regenerate
 the Simulation Content Manifest. Start at `SeinBalanceProfile.h`, `SeinBalanceTableExport.cpp`, and
 `SeinBalanceProfileDetails.cpp`.
+
+Economy is ability composition over generic deterministic data, not a hardcoded worker subsystem.
+Resource-node stock and worker cargo belong in components accessed through typed get/set nodes;
+dropoff uses **Grant Income** inside an authorized simulation callback. The whole income map
+validates atomically and valid uncapped overflow saturates. Construction workers call **Add
+Construction Progress** on `FSeinConstructionComponent`; only positive non-overflowing progress
+mutates. Completion removes the component and releases only the framework-owned
+`State.UnderConstruction` grant, preserving an identical designer-authored base grant.
+
+Combat participation is opt-in through `FSeinVitalsComponent` and `FSeinWeaponComponent`.
+`USeinDamageFormula` and `USeinTargetScorer` are stateless Blueprint policy CDOs with neutral
+built-ins when no class is selected. Target acquisition is an on-demand service; abilities own
+engagement cadence and call the restricted fire/damage/heal mutations. Instant delivery resolves in
+the fire tick. Projectile delivery creates ordinary pooled entities, so projectile state follows the
+normal canonical snapshot, replay, and reconnect lifecycle. Start at `SeinWeaponFire.h`,
+`SeinTargetQueryService.h`, `SeinDamageFormula.h`, and `SeinTargetScorer.h`.
 
 ### Collision
 

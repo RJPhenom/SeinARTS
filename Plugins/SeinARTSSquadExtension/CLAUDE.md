@@ -97,6 +97,11 @@ slot occupancy, stale metadata, missing payers, and non-reciprocal membership be
 Advance snapshot/envelope semantics and the Squad behavior/content revisions when these contracts
 change.
 
+Squad destruction settles queued reinforcement charges through the per-squad authored policy:
+Refund, Forfeit, or PartialRefund with a fixed-point fraction. The deterministic teardown sweep
+reads the core-owned squad component and applies the selected policy; do not add a second extension-
+local settlement path.
+
 ## Verification
 
 Squad changes need focused coverage for:
