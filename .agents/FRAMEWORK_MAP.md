@@ -130,8 +130,15 @@ path searches still route around those blockers. Cache eviction can cause a late
 rebuild but cannot change a result. Forbidden terrain participates in full-footprint clearance and
 cannot be bypassed by authoritative-destination handling. `AgentTags` remain available to custom
 navigation implementations but the shipped A* does not reinterpret them as terrain exclusions.
-Cover's final post-processing can still replace a generic formation destination without the full
-requester context; closing that seam belongs to the shared tactical allocation work.
+The authoritative-destination registry composes providers by canonical stable ID, includes requester
+context, and binds provider identity plus behavior revision into the match StateContract. Cover's
+selection-wide destination-plan provider produces the frozen artifact used by command admission,
+initial path requests, reservation settlement, replay, and reconnect. The shipped native
+`USeinFormationPreviewSubsystem` -> `ASeinPlayerController` path carries the exact displayed artifact
+into the command. The public Blueprint `Compute Formation Preview` / `Issue Broker Order` pair does
+not: preview accepts guide points and a formation tag but returns only a layout, while issue cannot
+accept those inputs or the displayed artifact and recomputes with defaults. Exact parity for custom
+Blueprint input paths is an open public-API decision in `.agents/OPEN_RISKS.md`.
 
 Movement+ is not a full arbitrary Reeds-Shepp/Dubins route solver. Its wheeled and tracked modes can run a deterministic curated Reeds-Shepp-style **start-maneuver** planner at plan/repath time. That planner considers bounded closed-form candidates such as a departure arc, straight reverse, and K-turn, probes clearance, emits typed `Arc`/`Straight` legs, then hands the remaining coarse route to the normal runtime follower. Wheeled driving uses bicycle kinematics and arc/pursuit tracking; tracked driving selects pivot/arc/reverse behavior. This live behavior supersedes older notes claiming that no shipped vehicle mode emits arcs.
 

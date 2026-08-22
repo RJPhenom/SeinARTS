@@ -1694,16 +1694,57 @@ namespace UE::SeinARTSTests
 			Fixture.SeedFrozenDestinationLifecycle();
 		ASSERT_THAT(IsTrue(Broker.IsValid()));
 
+		Fixture.SetLocation(FFixedVector(
+			Fixture.Destination.X - FFixedPoint(1),
+			Fixture.Destination.Y,
+			Fixture.Destination.Z));
 		Fixture.Tick();
 
 		const FSeinCommandBrokerData* BrokerData =
 			Fixture.World->GetComponent<FSeinCommandBrokerData>(Broker);
 		ASSERT_THAT(IsNotNull(BrokerData));
+		const FSeinEntity* Member = Fixture.World->GetEntity(Fixture.Entity);
+		ASSERT_THAT(IsNotNull(Member));
+		ASSERT_THAT(IsTrue(
+			Member->Transform.GetLocation() == Fixture.Destination));
 		ASSERT_THAT(AreEqual(
 			1, BrokerData->SettledDestinationArtifact.Num()));
 		ASSERT_THAT(IsTrue(
 			BrokerData->SettledDestinationArtifact[0].WorldPosition
 				== Fixture.Destination));
+	}
+
+	TEST(MoveToOffDestinationCompletionDoesNotSettleFrozenDestination,
+		"SeinARTS.Sim.Movement.FrozenDestination")
+	{
+		FScopedMoveToTestState Reset;
+		USeinMoveToLifecycleTestMovement::bAdvanceInitialWaypointOnTick = true;
+		FSeinNavigationComponent Navigation;
+		Navigation.FallbackFootprintRadius = FFixedPoint::FromInt(25);
+		Navigation.AcceptanceRadius = FFixedPoint::FromInt(10);
+		FMoveToLifecycleFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(true, &Navigation)));
+		const FSeinEntityHandle Broker =
+			Fixture.SeedFrozenDestinationLifecycle();
+		ASSERT_THAT(IsTrue(Broker.IsValid()));
+
+		for (int32 Tick = 0;
+			Tick < 4 && !Fixture.Action->bCompleted;
+			++Tick)
+		{
+			Fixture.Tick();
+		}
+
+		ASSERT_THAT(IsTrue(Fixture.Action->bCompleted));
+		const FSeinEntity* Member = Fixture.World->GetEntity(Fixture.Entity);
+		ASSERT_THAT(IsNotNull(Member));
+		ASSERT_THAT(IsTrue(
+			Member->Transform.GetLocation() == FFixedVector::ZeroVector));
+		const FSeinCommandBrokerData* BrokerData =
+			Fixture.World->GetComponent<FSeinCommandBrokerData>(Broker);
+		ASSERT_THAT(IsNotNull(BrokerData));
+		ASSERT_THAT(IsTrue(
+			BrokerData->SettledDestinationArtifact.IsEmpty()));
 	}
 
 	TEST(MoveToInitialPathFailureKeepsSettledFrozenDestination,

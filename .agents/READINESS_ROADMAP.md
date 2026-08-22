@@ -194,20 +194,25 @@ StateContract. Cover uses the keyed registry, and all shipped movement/collision
 composed authority result. The legacy position-only hook remains compatibility-only and is not a
 shipping integration surface; deterministic bootstrap rejects it while bound.
 
-FEAT-03 is landed and closed (2026-08-15): selection-wide destination plans aggregate ordinary
-and persistent-Squad members through the selection-plan provider seam; the exact preview artifact
-rides command admission; reservations have a full queued→settled lifecycle across cancel,
-failure, death, provider movement/destruction, snapshot, replay, and reconnect; and RJ froze the
-conflict policy as policy D — survivors always receive their exact shown destinations, dead
-members drop only their own slot, contention never rejects or re-plans
-(`.agents/DECISION_FROZEN_CONFLICT_POLICY.md`, BrokerOrder schema V3). PIE feel remains in RJ's
-batch.
+FEAT-03's native-controller mechanism is landed (2026-08-15): selection-wide destination plans
+aggregate ordinary and persistent-Squad members through the selection-plan provider seam; the exact
+displayed artifact rides native command admission; reservations have a full queued→settled lifecycle
+across cancel, failure, death, provider movement/destruction, snapshot, replay, and reconnect; and RJ
+froze the conflict policy as policy D — survivors always receive their exact shown destinations,
+dead members drop only their own slot, contention never rejects or re-plans
+(`.agents/DECISION_FROZEN_CONFLICT_POLICY.md`, BrokerOrder schema V3). A real BrokerOrder test now
+moves the provider between preview and issue, proves exact authoritative arrival and settlement, and
+reconstructs every replay tick in a fresh world. The public Blueprint preview/issue pair cannot carry
+the full preview key or displayed artifact through issue; its API shape requires RJ's decision. PIE
+feel remains in RJ's batch.
 
 Squad reinforcement request identity, exact slot selection, atomic charge, exact cancel/refund,
 completion membership, structural restore admission, snapshot continuation, and designer-authored
-destruction settlement (Refund / Forfeit / PartialRefund) are complete. Remaining Squad work
-requires product policy for queue replacement, wipe/recreation, and retreat; then add the
-corresponding command/replay and PIE tactics coverage.
+destruction settlement (Refund / Forfeit / PartialRefund) are complete. Real player commands now
+qualify pending-checkpoint continuation, per-tick replay roots, the authored test subclass, and a
+separate exact checkpoint transfer through the shipped native reinforcement provider. Remaining
+Squad work requires product policy for queue replacement, wipe/recreation, and retreat; after those
+decisions, qualify the new policy paths through commands, replay, and PIE tactics coverage.
 
 ### Terrain, vision, targeting, and containment
 

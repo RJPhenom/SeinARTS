@@ -311,6 +311,15 @@ public:
 	 *  overrides Tick(Ctx) directly and bypasses the harness + ComputeMotion entirely. */
 	virtual bool Tick(const FSeinMovementContext& Ctx);
 
+	/** Enforce exact, nav-safe completion for an authoritative final
+	 *  destination after a movement mode reports arrival. Non-authoritative
+	 *  moves pass through unchanged. The exact step is accepted only from the
+	 *  normal ring/overshoot vicinity, so an invalid Tick override cannot
+	 *  teleport a distant unit. Move To calls this for every movement class;
+	 *  the base harness also calls it before dispatching arrival policy. */
+	bool TryFinalizeAuthoritativeArrival(
+		const FSeinMovementContext& Ctx);
+
 	/** Presentation-only FinalObservation hook. Called after collision and nav
 	 * containment with the body's final transform delta plus the movement
 	 * driver's velocity output. Implementations may update only

@@ -1,5 +1,6 @@
 #include "Modules/ModuleManager.h"
 
+#include "Cover/CoverFrozenDestinationReplayTestTypes.h"
 #include "Movement/SeinVehicleGymTestTypes.h"
 #include "Serialization/SeinMovementStateCoverage.h"
 #include "Serialization/SeinPoolObjectCodecRegistry.h"
@@ -18,6 +19,7 @@ public:
 		PoolObjectCodecHandles.Reset();
 		CoverageHandles.Reset();
 		RegisterVehicleGymAbilityCodec();
+		RegisterCoverReplayAbilityCodec();
 		RegisterSquadReinforcementAbilityCodec();
 		RegisterVehicleGymCoverage(
 			USeinVehicleGymWheeledPlanner::StaticClass());
@@ -125,6 +127,38 @@ private:
 		{
 			UE_LOG(LogSeinARTSExtensionTests, Error,
 				TEXT("Squad reinforcement ability codec registration failed: %s"),
+				*Error);
+			return;
+		}
+		PoolObjectCodecHandles.Add(MoveTemp(Handle));
+	}
+
+	void RegisterCoverReplayAbilityCodec()
+	{
+		FSeinPoolObjectCodecDescriptor Descriptor;
+		Descriptor.NativeAnchor =
+			USeinCoverFrozenDestinationReplayMoveAbility::StaticClass();
+		Descriptor.Kind = ESeinPoolObjectKind::Ability;
+		Descriptor.StableProviderId =
+			TEXT("seinarts.extensiontests.pool.ability.cover-replay.reflection");
+		Descriptor.StateSchemaVersion = 1;
+		Descriptor.BehaviorRevision = 1;
+		Descriptor.CodecRevision = 1;
+		Descriptor.MaxStateBytes =
+			FSeinPoolObjectCodecRegistry::MaxStateBytes;
+		Descriptor.bAllowBlueprintChildren = false;
+
+		FString Error;
+		FSeinPoolObjectCodecRegistrationHandle Handle =
+			FSeinPoolObjectCodecRegistry::Register(
+				TEXT("SeinARTSExtensionTests.CoverReplay"),
+				Descriptor,
+				FSeinPoolObjectCodecRegistry::MakeReflectedOps(),
+				&Error);
+		if (!Handle.IsValid())
+		{
+			UE_LOG(LogSeinARTSExtensionTests, Error,
+				TEXT("Cover replay ability codec registration failed: %s"),
 				*Error);
 			return;
 		}

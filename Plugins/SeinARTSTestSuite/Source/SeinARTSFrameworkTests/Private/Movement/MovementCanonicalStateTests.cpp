@@ -4,6 +4,7 @@
 #include "Components/SeinMovementComponent.h"
 #include "Data/SeinWorldSnapshot.h"
 #include "Serialization/SeinMovementStateCoverage.h"
+#include "Movement/SeinBasicUnitMovement.h"
 #include "Movement/SeinMovement.h"
 #include "SeinPathTypes.h"
 #include "SeinMovementSubsystem.h"
@@ -250,6 +251,50 @@ TEST(MovementLegacySquaredRadiusContextRemainsCompatible,
 					FFixedPoint::Zero),
 				FFixedVector::ZeroVector,
 				FFixedPoint::FromInt(2))));
+}
+
+TEST(MovementAuthoritativeArrivalConsumesExactFinalStep,
+	"SeinARTS.Unit.Movement.DestinationAuthority")
+{
+	const FFixedVector Destination(
+		FFixedPoint::FromInt(120),
+		FFixedPoint::Zero,
+		FFixedPoint::Zero);
+	const FFixedVector WithinAcceptance(
+		Destination.X - FFixedPoint(1),
+		Destination.Y,
+		Destination.Z);
+	FSeinEntity Entity;
+	Entity.Transform.SetLocation(WithinAcceptance);
+	FSeinMovementComponent MovementData;
+	FSeinPath Path;
+	Path.Waypoints = {Destination};
+	int32 WaypointIndex = 0;
+	FSeinMovementContext Context{
+		Entity,
+		&MovementData,
+		nullptr,
+		Path,
+		WaypointIndex,
+		FFixedPoint::One,
+		FFixedPoint::One / FFixedPoint::FromInt(30),
+		nullptr,
+		nullptr,
+		FSeinEntityHandle(),
+	};
+	Context.ExactAcceptanceRadius = FFixedPoint::One;
+
+	USeinBasicUnitMovement* Movement =
+		NewObject<USeinBasicUnitMovement>();
+	ASSERT_THAT(IsNotNull(Movement));
+	ASSERT_THAT(IsTrue(Movement->Tick(Context)));
+	ASSERT_THAT(IsTrue(
+		Entity.Transform.GetLocation() == WithinAcceptance));
+
+	Context.bAuthoritativeDestination = true;
+	ASSERT_THAT(IsTrue(Movement->Tick(Context)));
+	ASSERT_THAT(IsTrue(
+		Entity.Transform.GetLocation() == Destination));
 }
 
 TEST(MovementLongRangeWaypointAdvanceUsesExactDistance,
