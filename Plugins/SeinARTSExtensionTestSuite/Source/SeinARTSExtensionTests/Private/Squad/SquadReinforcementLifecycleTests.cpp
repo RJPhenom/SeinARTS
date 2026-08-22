@@ -1,13 +1,20 @@
 #include "CQTest.h"
 #include "Components/ActorTestSpawner.h"
 #include "Actor/SeinActor.h"
+#include "Components/SeinAbilityComponent.h"
 #include "Components/SeinBrokerMembershipData.h"
 #include "Components/SeinCommandBrokerData.h"
 #include "Components/SeinSquadComponent.h"
 #include "Components/SeinSquadMemberComponent.h"
 #include "Core/SeinPlayerState.h"
+#include "Data/SeinReplayHeader.h"
 #include "Data/SeinWorldSnapshot.h"
+#include "Input/SeinCommand.h"
+#include "HAL/FileManager.h"
+#include "Lib/SeinAbilityBPFL.h"
 #include "Reinforcement/SeinSquadReinforcementService.h"
+#include "SeinReplayReader.h"
+#include "SeinReplayWriter.h"
 #include "SeinSquadMutationBPFL.h"
 #include "Serialization/SeinSnapshotTransfer.h"
 #include "Settings/PluginSettings.h"
@@ -15,7 +22,14 @@
 #include "Simulation/SeinTestSimContext.h"
 #include "Simulation/SeinTestSnapshotRestore.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "Squad/SquadReinforcementTestTypes.h"
 #include "Tags/SeinARTSGameplayTags.h"
+
+USeinSquadReinforcementCommandTestAbility::
+	USeinSquadReinforcementCommandTestAbility()
+{
+	AbilityTag = SeinARTSTags::Command_Context_Target_Friendly;
+}
 
 namespace
 {
@@ -26,6 +40,21 @@ namespace
 			SeinARTSTags::Resource,
 			FFixedPoint::FromInt(Amount));
 		return Result;
+	}
+
+	FGameplayTag ReinforceAbilityTag()
+	{
+		return SeinARTSTags::Command_Context_Target_Friendly;
+	}
+
+	FSeinMatchSettings MakeReinforcementCommandMatchSettings()
+	{
+		FSeinMatchSettings Settings;
+		FSeinMatchSlot& Slot = Settings.Slots.AddDefaulted_GetRef();
+		Slot.SlotIndex = 1;
+		Slot.State = ESeinSlotState::Human;
+		Slot.FactionID = FSeinFactionID(1);
+		return Settings;
 	}
 
 	struct FScopedAddTowardCapCatalog
@@ -60,16 +89,26 @@ namespace
 		FSeinPlayerID Player = FSeinPlayerID(1);
 		FSeinPlayerID OtherPlayer = FSeinPlayerID(2);
 		FSeinEntityHandle Squad;
+		FSeinEntityHandle ExistingMember;
+		int32 ReinforceAbilityID = INDEX_NONE;
 
-		bool Initialize(FFixedPoint BuildTime = FFixedPoint::FromInt(1))
+		bool Initialize(
+			FFixedPoint BuildTime = FFixedPoint::FromInt(1),
+			bool bGrantStarterAbility = false,
+			bool bStartSimulation = true,
+			bool bSeedLiveMember = false,
+			bool bUseShippedAbilityClass = false)
 		{
 			World = Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
 			if (!World) return false;
 
+			bool bSetupSucceeded = true;
 			FString Error;
-			return SeinTestMatchBootstrap::Materialize(
+			if (!SeinTestMatchBootstrap::Materialize(
 					*World,
-					[this, BuildTime]()
+					[this, BuildTime, bGrantStarterAbility,
+						bSeedLiveMember, bUseShippedAbilityClass,
+						&bSetupSucceeded]()
 					{
 						World->RegisterPlayer(Player, FSeinFactionID(1));
 						World->RegisterPlayer(OtherPlayer, FSeinFactionID(2));
@@ -102,12 +141,43 @@ namespace
 						FSeinCommandBrokerData Broker;
 						Broker.bSelfCullOnEmpty = false;
 						World->AddComponent(Squad, Broker);
+						if (bSeedLiveMember)
+						{
+							ExistingMember = World->SpawnAbstractEntity(
+								FFixedTransform(), Player);
+							bSetupSucceeded = USeinSquadMutationBPFL::
+								SeinFillSquadSlotByIndex(
+									World, Squad, 1, ExistingMember);
+						}
+
+						if (bGrantStarterAbility)
+						{
+							World->AddComponent(
+								Squad, FSeinAbilityComponent());
+							ReinforceAbilityID =
+								USeinAbilityBPFL::SeinGrantAbility(
+									World,
+									Squad,
+									bUseShippedAbilityClass
+										? USeinAbility_SquadReinforce::
+											StaticClass()
+										: USeinSquadReinforcementCommandTestAbility::
+											StaticClass());
+						}
 					},
-					FSeinMatchSettings(),
+					bGrantStarterAbility
+						? MakeReinforcementCommandMatchSettings()
+						: FSeinMatchSettings(),
 					0x53515541,
 					TEXT("Squad.Reinforcement"),
-					&Error)
-				&& SeinTestMatchBootstrap::Start(*World, &Error);
+					&Error))
+			{
+				return false;
+			}
+			if (!bSetupSucceeded) return false;
+			return bStartSimulation
+				? SeinTestMatchBootstrap::Start(*World, &Error)
+				: SeinTestMatchBootstrap::Authorize(*World, &Error);
 		}
 
 		FFixedPoint Balance(FSeinPlayerID ForPlayer) const
@@ -132,6 +202,59 @@ namespace
 			Broker.bSelfCullOnEmpty = false;
 			World->AddComponent(Handle, Broker);
 			return Handle;
+		}
+	};
+
+	FSeinCommand MakeReinforceAbilityCommand(
+		const FSquadReinforcementFixture& Fixture)
+	{
+		return FSeinCommand::MakeAbilityCommand(
+			Fixture.Player,
+			Fixture.Squad,
+			ReinforceAbilityTag());
+	}
+
+	FSeinReplayHeader MakeReinforcementReplayHeader(
+		USeinWorldSubsystem& World)
+	{
+		FSeinReplayHeader Header;
+		SeinReplayCompatibility::StampCurrent(Header, World.GetWorld());
+		Header.CommandProtocolDigest = World.GetCommandProtocolDigest();
+		Header.MatchSettingsDigest = World.GetMatchSettingsDigest();
+		Header.BootstrapReceipt = World.GetMatchBootstrapReceipt();
+		Header.ConfigFingerprint = World.GetConfigFingerprint();
+		Header.RandomSeed = World.GetSessionSeed();
+		Header.SettingsSnapshot = World.GetMatchSettings();
+		Header.StartTick = World.GetCurrentTick();
+		Header.RecordedAt = FDateTime::UtcNow();
+		for (const FSeinMatchSlot& Slot : Header.SettingsSnapshot.Slots)
+		{
+			if (Slot.State != ESeinSlotState::Human
+				&& Slot.State != ESeinSlotState::AI)
+			{
+				continue;
+			}
+			FSeinPlayerRegistration& Player =
+				Header.Players.AddDefaulted_GetRef();
+			Player.PlayerID = FSeinPlayerID(
+				static_cast<uint8>(Slot.SlotIndex));
+			Player.FactionID = Slot.FactionID;
+			Player.TeamID = Slot.TeamID;
+			Player.bIsAI = Slot.State == ESeinSlotState::AI;
+		}
+		return Header;
+	}
+
+	struct FScopedSquadReplayFile
+	{
+		FString Path;
+
+		~FScopedSquadReplayFile()
+		{
+			if (!Path.IsEmpty())
+			{
+				IFileManager::Get().Delete(*Path, false, true);
+			}
 		}
 	};
 
@@ -602,6 +725,284 @@ TEST(SquadReinforcementSnapshotRestoresAndContinuesCanonically,
 
 	Source.World->StopSimulation();
 	Destination->StopSimulation();
+}
+
+TEST(SquadReinforcementAbilityCommandContinuesAcrossCheckpointTransfer,
+	"SeinARTS.Determinism.Squad.Reinforcement.CommandCheckpoint")
+{
+	FSquadReinforcementFixture Source;
+	ASSERT_THAT(IsTrue(Source.Initialize(
+		FFixedPoint::FromInt(5), true, true, true)));
+	ASSERT_THAT(IsTrue(Source.ReinforceAbilityID != INDEX_NONE));
+
+	Source.World->SubmitLocalCommandDraft(
+		MakeReinforceAbilityCommand(Source));
+	ASSERT_THAT(AreEqual(1, Source.World->GetPendingCommands().Num()));
+	FGuid CheckpointRoot;
+	ASSERT_THAT(IsTrue(ComputeReinforcementRoot(
+		*Source.World, CheckpointRoot)));
+	FSeinWorldSnapshot Checkpoint;
+	FSeinWorldSnapshotReferenceGuard CheckpointGuard(Checkpoint);
+	Source.World->CaptureSnapshot(Checkpoint);
+	ASSERT_THAT(AreEqual(1, Checkpoint.PendingCommands.Num()));
+
+	TArray<uint8> EnvelopeBytes;
+	FSeinSnapshotEnvelopeMetadata Metadata;
+	FString Error;
+	ASSERT_THAT(IsTrue(SeinSnapshotTransfer::EncodeCheckpointEnvelope(
+		Checkpoint, EnvelopeBytes, Metadata, Error)));
+	FSeinWorldSnapshot Transferred;
+	FSeinWorldSnapshotReferenceGuard TransferredGuard(Transferred);
+	FSeinSnapshotEnvelopeMetadata TransferredMetadata;
+	ASSERT_THAT(IsTrue(SeinSnapshotTransfer::DecodeCheckpointEnvelope(
+		EnvelopeBytes, Transferred, TransferredMetadata, Error)));
+
+	FTSTicker::GetCoreTicker().Tick(
+		Source.World->GetFixedDeltaTimeSeconds());
+	const FSeinSquadComponent* SourceSquad =
+		Source.World->GetComponent<FSeinSquadComponent>(Source.Squad);
+	ASSERT_THAT(IsNotNull(SourceSquad));
+	ASSERT_THAT(AreEqual(1, SourceSquad->ReinforceQueue.Num()));
+	ASSERT_THAT(AreEqual(
+		static_cast<int64>(1),
+		SourceSquad->ReinforceQueue[0].RequestID));
+	ASSERT_THAT(AreEqual(0,
+		SourceSquad->ReinforceQueue[0].RequestedSlotIndex));
+	ASSERT_THAT(IsTrue(
+		SourceSquad->Slots[1].CurrentOccupant == Source.ExistingMember));
+	ASSERT_THAT(IsTrue(
+		Source.Balance(Source.Player) == FFixedPoint::FromInt(90)));
+	const int64 ExpectedRequestID =
+		SourceSquad->ReinforceQueue[0].RequestID;
+	FGuid SourceRoot;
+	ASSERT_THAT(IsTrue(ComputeReinforcementRoot(
+		*Source.World, SourceRoot)));
+	const int32 ContinuedTick = Source.World->GetCurrentTick();
+	Source.World->StopSimulation();
+
+	FActorTestSpawner DestinationSpawner;
+	USeinWorldSubsystem* Destination = DestinationSpawner.GetWorld()
+		.GetSubsystem<USeinWorldSubsystem>();
+	ASSERT_THAT(IsNotNull(Destination));
+	ASSERT_THAT(IsTrue(SeinTestSnapshotRestore::RestoreTrusted(
+		*Destination, Transferred, &Error)));
+	ASSERT_THAT(AreEqual(1, Destination->GetPendingCommands().Num()));
+	FGuid RestoredCheckpointRoot;
+	ASSERT_THAT(IsTrue(ComputeReinforcementRoot(
+		*Destination, RestoredCheckpointRoot)));
+	ASSERT_THAT(IsTrue(CheckpointRoot == RestoredCheckpointRoot));
+
+	FTSTicker::GetCoreTicker().Tick(
+		Destination->GetFixedDeltaTimeSeconds());
+	ASSERT_THAT(AreEqual(ContinuedTick, Destination->GetCurrentTick()));
+	const FSeinSquadComponent* DestinationSquad =
+		Destination->GetComponent<FSeinSquadComponent>(Source.Squad);
+	ASSERT_THAT(IsNotNull(DestinationSquad));
+	ASSERT_THAT(AreEqual(1, DestinationSquad->ReinforceQueue.Num()));
+	ASSERT_THAT(AreEqual(
+		ExpectedRequestID,
+		DestinationSquad->ReinforceQueue[0].RequestID));
+	const FSeinPlayerState* DestinationPlayer =
+		Destination->GetPlayerState(Source.Player);
+	ASSERT_THAT(IsNotNull(DestinationPlayer));
+	ASSERT_THAT(IsTrue(
+		DestinationPlayer->GetResource(
+			SeinARTSTags::Resource) == FFixedPoint::FromInt(90)));
+	FGuid DestinationRoot;
+	ASSERT_THAT(IsTrue(ComputeReinforcementRoot(
+		*Destination, DestinationRoot)));
+	ASSERT_THAT(IsTrue(SourceRoot == DestinationRoot));
+	Destination->StopSimulation();
+}
+
+TEST(ShippedSquadReinforcementAbilityCodecSurvivesCheckpointTransfer,
+	"SeinARTS.Determinism.Squad.Reinforcement.ShippedCodec")
+{
+	FSquadReinforcementFixture Source;
+	ASSERT_THAT(IsTrue(Source.Initialize(
+		FFixedPoint::FromInt(1), true, true, true, true)));
+	ASSERT_THAT(IsTrue(Source.ReinforceAbilityID != INDEX_NONE));
+	const USeinAbility* SourceAbility =
+		Source.World->GetAbilityInstance(Source.ReinforceAbilityID);
+	ASSERT_THAT(IsNotNull(SourceAbility));
+	ASSERT_THAT(IsTrue(
+		SourceAbility->GetClass() == USeinAbility_SquadReinforce::StaticClass()));
+
+	FGuid SourceRoot;
+	ASSERT_THAT(IsTrue(ComputeReinforcementRoot(*Source.World, SourceRoot)));
+	FSeinWorldSnapshot Checkpoint;
+	FSeinWorldSnapshotReferenceGuard CheckpointGuard(Checkpoint);
+	Source.World->CaptureSnapshot(Checkpoint);
+	TArray<uint8> EnvelopeBytes;
+	FSeinSnapshotEnvelopeMetadata Metadata;
+	FString Error;
+	ASSERT_THAT(IsTrue(SeinSnapshotTransfer::EncodeCheckpointEnvelope(
+		Checkpoint, EnvelopeBytes, Metadata, Error)));
+	FSeinWorldSnapshot Transferred;
+	FSeinWorldSnapshotReferenceGuard TransferredGuard(Transferred);
+	FSeinSnapshotEnvelopeMetadata TransferredMetadata;
+	ASSERT_THAT(IsTrue(SeinSnapshotTransfer::DecodeCheckpointEnvelope(
+		EnvelopeBytes, Transferred, TransferredMetadata, Error)));
+	Source.World->StopSimulation();
+
+	FActorTestSpawner DestinationSpawner;
+	USeinWorldSubsystem* Destination = DestinationSpawner.GetWorld()
+		.GetSubsystem<USeinWorldSubsystem>();
+	ASSERT_THAT(IsNotNull(Destination));
+	ASSERT_THAT(IsTrue(SeinTestSnapshotRestore::RestoreTrusted(
+		*Destination, Transferred, &Error)));
+	const USeinAbility* DestinationAbility =
+		Destination->GetAbilityInstance(Source.ReinforceAbilityID);
+	ASSERT_THAT(IsNotNull(DestinationAbility));
+	ASSERT_THAT(IsTrue(
+		DestinationAbility->GetClass()
+			== USeinAbility_SquadReinforce::StaticClass()));
+	FGuid DestinationRoot;
+	ASSERT_THAT(IsTrue(ComputeReinforcementRoot(
+		*Destination, DestinationRoot)));
+	ASSERT_THAT(IsTrue(SourceRoot == DestinationRoot));
+	Destination->StopSimulation();
+}
+
+TEST(SquadReinforcementAbilityCommandReplaysToExactCompletedState,
+	"SeinARTS.Determinism.Squad.Reinforcement.CommandReplay")
+{
+	FSquadReinforcementFixture Source;
+	ASSERT_THAT(IsTrue(Source.Initialize(
+		FFixedPoint::FromInt(1), true, false, true)));
+	ASSERT_THAT(IsTrue(Source.ReinforceAbilityID != INDEX_NONE));
+	FString Error;
+
+	USeinReplayWriter* Writer = NewObject<USeinReplayWriter>(Source.World);
+	ASSERT_THAT(IsNotNull(Writer));
+	Writer->StartRecording(MakeReinforcementReplayHeader(*Source.World));
+	ASSERT_THAT(IsTrue(Writer->IsRecording()));
+	ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(
+		*Source.World, &Error)));
+	ASSERT_THAT(IsTrue(Writer->CaptureCheckpoint(/*bRequired=*/true)));
+
+	const USeinARTSCoreSettings* Settings =
+		GetDefault<USeinARTSCoreSettings>();
+	ASSERT_THAT(IsNotNull(Settings));
+	const int32 TicksPerTurn = Settings->TurnRate > 0
+		? FMath::Max(
+			1, Settings->SimulationTickRate / Settings->TurnRate)
+		: 1;
+	const int32 FirstTurn = Settings->InputDelayTurns > 0
+		? Settings->InputDelayTurns
+		: 3;
+	const int32 CommandTick = FirstTurn * TicksPerTurn;
+	const int32 BuildTicks = FMath::Max(1, Settings->SimulationTickRate);
+	const int32 DesiredEndTick =
+		CommandTick + BuildTicks + TicksPerTurn;
+	const int32 EndTurn =
+		(DesiredEndTick + TicksPerTurn - 1) / TicksPerTurn;
+	const int32 EndTick = EndTurn * TicksPerTurn;
+
+	FSeinCommand Reinforce = MakeReinforceAbilityCommand(Source);
+	Reinforce.Tick = CommandTick;
+	Reinforce.IssuerKind = ESeinCommandIssuerKind::Player;
+	for (int32 Turn = FirstTurn; Turn <= EndTurn; ++Turn)
+	{
+		Writer->RecordTurn(
+			Turn,
+			Turn == FirstTurn
+				? TArray<FSeinCommand>{Reinforce}
+				: TArray<FSeinCommand>{});
+	}
+
+	TArray<FGuid> SourceRoots;
+	SourceRoots.SetNum(EndTick + 1);
+	for (int32 ExpectedTick = 1;
+		ExpectedTick <= EndTick; ++ExpectedTick)
+	{
+		if (ExpectedTick == CommandTick)
+		{
+			Source.World->SubmitLocalCommandDraft(Reinforce);
+		}
+		FTSTicker::GetCoreTicker().Tick(
+			Source.World->GetFixedDeltaTimeSeconds());
+		ASSERT_THAT(AreEqual(
+			ExpectedTick, Source.World->GetCurrentTick()));
+		ASSERT_THAT(IsTrue(ComputeReinforcementRoot(
+			*Source.World, SourceRoots[ExpectedTick])));
+		Writer->ObserveCompletedTick(ExpectedTick);
+	}
+
+	const FSeinSquadComponent* SourceSquad =
+		Source.World->GetComponent<FSeinSquadComponent>(Source.Squad);
+	ASSERT_THAT(IsNotNull(SourceSquad));
+	ASSERT_THAT(AreEqual(0, SourceSquad->ReinforceQueue.Num()));
+	ASSERT_THAT(IsTrue(SourceSquad->Slots[0].CurrentOccupant.IsValid()));
+	ASSERT_THAT(IsTrue(
+		SourceSquad->Slots[1].CurrentOccupant == Source.ExistingMember));
+	ASSERT_THAT(IsTrue(
+		Source.Balance(Source.Player) == FFixedPoint::FromInt(90)));
+	const int32 SourceHash = Source.World->ComputeStateHash();
+	const FSeinEntityHandle ExpectedReinforcedMember =
+		SourceSquad->Slots[0].CurrentOccupant;
+	Source.World->StopSimulation();
+
+	FScopedSquadReplayFile ReplayFile{Writer->FinishRecording()};
+	ASSERT_THAT(IsFalse(ReplayFile.Path.IsEmpty()));
+	ASSERT_THAT(IsTrue(IFileManager::Get().FileExists(*ReplayFile.Path)));
+
+	for (int32 ExpectedTick = 1;
+		ExpectedTick <= EndTick; ++ExpectedTick)
+	{
+		FActorTestSpawner TargetSpawner;
+		USeinWorldSubsystem* Target = TargetSpawner.GetWorld()
+			.GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(Target));
+		USeinReplayReader* Reader = NewObject<USeinReplayReader>(
+			&TargetSpawner.GetWorld());
+		ASSERT_THAT(IsNotNull(Reader));
+		ASSERT_THAT(IsTrue(Reader->LoadFromFile(ReplayFile.Path)));
+		ASSERT_THAT(IsTrue(Reader->Play()));
+		for (int32 Pump = 0;
+			Pump < ExpectedTick * 4
+				&& Target->GetCurrentTick() < ExpectedTick
+				&& Reader->IsPlaying();
+			++Pump)
+		{
+			FTSTicker::GetCoreTicker().Tick(
+				Target->GetFixedDeltaTimeSeconds());
+		}
+		ASSERT_THAT(AreEqual(ExpectedTick, Target->GetCurrentTick()));
+		if (Reader->IsPlaying())
+		{
+			Reader->Stop();
+		}
+		ASSERT_THAT(IsFalse(Reader->IsPlaying()));
+		if (!Target->IsSimulationRunning())
+		{
+			ASSERT_THAT(IsTrue(Target->StartSimulation()));
+		}
+
+		FGuid TargetRoot;
+		ASSERT_THAT(IsTrue(ComputeReinforcementRoot(*Target, TargetRoot)));
+		ASSERT_THAT(IsTrue(SourceRoots[ExpectedTick] == TargetRoot));
+		if (ExpectedTick == EndTick)
+		{
+			const FSeinSquadComponent* TargetSquad =
+				Target->GetComponent<FSeinSquadComponent>(Source.Squad);
+			ASSERT_THAT(IsNotNull(TargetSquad));
+			ASSERT_THAT(AreEqual(0, TargetSquad->ReinforceQueue.Num()));
+			ASSERT_THAT(IsTrue(
+				TargetSquad->Slots[0].CurrentOccupant
+					== ExpectedReinforcedMember));
+			ASSERT_THAT(IsTrue(
+				TargetSquad->Slots[1].CurrentOccupant
+					== Source.ExistingMember));
+			const FSeinPlayerState* TargetPlayer =
+				Target->GetPlayerState(Source.Player);
+			ASSERT_THAT(IsNotNull(TargetPlayer));
+			ASSERT_THAT(IsTrue(TargetPlayer->GetResource(
+				SeinARTSTags::Resource) == FFixedPoint::FromInt(90)));
+			ASSERT_THAT(AreEqual(SourceHash, Target->ComputeStateHash()));
+		}
+		Target->StopSimulation();
+	}
 }
 
 TEST(SquadDestructionSettlesQueuedChargesPerAuthoredPolicy,

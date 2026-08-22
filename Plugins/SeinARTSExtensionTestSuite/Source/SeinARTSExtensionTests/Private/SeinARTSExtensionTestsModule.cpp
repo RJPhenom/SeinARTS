@@ -4,6 +4,8 @@
 #include "Serialization/SeinMovementStateCoverage.h"
 #include "Serialization/SeinPoolObjectCodecRegistry.h"
 #include "SeinMovementSubsystem.h"
+#include "Simulation/SeinWorldSubsystem.h"
+#include "Squad/SquadReinforcementTestTypes.h"
 #include "UObject/UObjectIterator.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinARTSExtensionTests, Log, All);
@@ -16,6 +18,7 @@ public:
 		PoolObjectCodecHandles.Reset();
 		CoverageHandles.Reset();
 		RegisterVehicleGymAbilityCodec();
+		RegisterSquadReinforcementAbilityCodec();
 		RegisterVehicleGymCoverage(
 			USeinVehicleGymWheeledPlanner::StaticClass());
 		RegisterVehicleGymCoverage(
@@ -30,6 +33,16 @@ public:
 
 	virtual void PreUnloadCallback() override
 	{
+		check(IsInGameThread());
+		for (TObjectIterator<USeinWorldSubsystem> It; It; ++It)
+		{
+			if (!It->HasAnyFlags(RF_ClassDefaultObject))
+			{
+				It->TerminateAndReleaseForModuleUnload(
+					TEXT("SeinARTSExtensionTests"),
+					TEXT("extension test abilities are unloading"));
+			}
+		}
 		PoolObjectCodecHandles.Reset();
 		for (TObjectIterator<USeinMovementSubsystem> It; It; ++It)
 		{
@@ -80,6 +93,38 @@ private:
 		{
 			UE_LOG(LogSeinARTSExtensionTests, Error,
 				TEXT("Vehicle Gym ability codec registration failed: %s"),
+				*Error);
+			return;
+		}
+		PoolObjectCodecHandles.Add(MoveTemp(Handle));
+	}
+
+	void RegisterSquadReinforcementAbilityCodec()
+	{
+		FSeinPoolObjectCodecDescriptor Descriptor;
+		Descriptor.NativeAnchor =
+			USeinSquadReinforcementCommandTestAbility::StaticClass();
+		Descriptor.Kind = ESeinPoolObjectKind::Ability;
+		Descriptor.StableProviderId =
+			TEXT("seinarts.extensiontests.pool.ability.squad-reinforcement.reflection");
+		Descriptor.StateSchemaVersion = 1;
+		Descriptor.BehaviorRevision = 1;
+		Descriptor.CodecRevision = 1;
+		Descriptor.MaxStateBytes =
+			FSeinPoolObjectCodecRegistry::MaxStateBytes;
+		Descriptor.bAllowBlueprintChildren = false;
+
+		FString Error;
+		FSeinPoolObjectCodecRegistrationHandle Handle =
+			FSeinPoolObjectCodecRegistry::Register(
+				TEXT("SeinARTSExtensionTests.SquadReinforcement"),
+				Descriptor,
+				FSeinPoolObjectCodecRegistry::MakeReflectedOps(),
+				&Error);
+		if (!Handle.IsValid())
+		{
+			UE_LOG(LogSeinARTSExtensionTests, Error,
+				TEXT("Squad reinforcement ability codec registration failed: %s"),
 				*Error);
 			return;
 		}
