@@ -4,7 +4,7 @@
  * @file         OnlineServicesTestTypes.cpp
  * @author       RJ Macklem
  * @created      21 Aug 2026
- * @latest       21 Aug 2026
+ * @latest       22 Aug 2026
  * @brief        Implements hostile timing doubles for Online Services lifecycle tests.
  *
  * @disclaimer   This code was generated in whole or in part with the assistance
@@ -14,7 +14,6 @@
 #include "Online/OnlineServicesTestTypes.h"
 
 #include "Async/Async.h"
-#include "HAL/PlatformProcess.h"
 
 namespace
 {
@@ -65,6 +64,7 @@ void USeinOnlineDeferredTestProvider::ShutdownProvider()
 
 void USeinOnlineDeferredTestProvider::WaitForWorkerTasks()
 {
+	WorkerCompletionGate->Trigger();
 	for (TFuture<void>& Worker : WorkerTasks)
 	{
 		Worker.Wait();
@@ -107,14 +107,19 @@ void USeinOnlineDeferredTestProvider::CompleteAllSuccessfullyTwice()
 	}
 }
 
-void USeinOnlineDeferredTestProvider::CompleteAllSuccessfullyOnWorkerThread()
+bool USeinOnlineDeferredTestProvider::CompleteAllSuccessfullyOnWorkerThread()
 {
 	TArray<FPendingRequest> Local = MoveTemp(PendingRequests);
 	PendingRequests.Reset();
+	WorkerStartedEvent->Reset();
+	WorkerCompletionGate->Reset();
+	const FSharedEventRef StartedEvent = WorkerStartedEvent;
+	const FSharedEventRef CompletionGate = WorkerCompletionGate;
 	WorkerTasks.Add(Async(EAsyncExecution::ThreadPool,
-		[Local = MoveTemp(Local)]() mutable
+		[Local = MoveTemp(Local), StartedEvent, CompletionGate]() mutable
 		{
-			FPlatformProcess::SleepNoStats(0.02f);
+			StartedEvent->Trigger();
+			CompletionGate->Wait();
 			for (FPendingRequest& Pending : Local)
 			{
 				Pending.Completion(MakeAuthenticationSuccess(
@@ -122,5 +127,12 @@ void USeinOnlineDeferredTestProvider::CompleteAllSuccessfullyOnWorkerThread()
 					TEXT("threaded-account"),
 					TEXT("Threaded Account")));
 			}
+			Local.Reset();
 		}));
+	const bool bWorkerStarted = WorkerStartedEvent->Wait(5000);
+	if (!bWorkerStarted)
+	{
+		WorkerCompletionGate->Trigger();
+	}
+	return bWorkerStarted;
 }

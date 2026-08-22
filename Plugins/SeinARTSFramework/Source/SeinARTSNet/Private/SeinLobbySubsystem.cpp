@@ -205,16 +205,40 @@ void USeinLobbySubsystem::OnPostLogin(AGameModeBase* GameMode, APlayerController
 	ASeinLobbyState* Actor = LobbyStateActor.Get();
 	if (!Actor) return;
 
-	// Reconnection path: if this PC's UniqueNetId matches a disconnected
-	// slot's LastClaimantNetID, re-bind that slot. Skips the
-	// PickNextFreeSlot path so reconnecting players get their original
-	// slot/faction back.
-	int32 TargetSlot = FindDisconnectedSlotForPC(NewPlayer);
-	const bool bReconnect = (TargetSlot > 0);
-
-	if (!bReconnect)
+	int32 TargetSlot = 0;
+	bool bReconnect = false;
+	bool bHasExternallyAuthorizedSlot = false;
+	if (UGameInstance* GameInstance = GetGameInstance())
 	{
-		TargetSlot = PickNextFreeSlot();
+		if (const USeinNetSubsystem* Net =
+			GameInstance->GetSubsystem<USeinNetSubsystem>())
+		{
+			if (Net->HasConnectionAdmissionAuthorizer())
+			{
+				FSeinPlayerID AuthorizedSlot;
+				if (!Net->GetAuthorizedConnectionSlot(
+						NewPlayer, AuthorizedSlot))
+				{
+					UE_LOG(LogSeinNet, Error,
+						TEXT("[Lobby] OnPostLogin: external admission did not retain an exact slot for %s."),
+						*GetNameSafe(NewPlayer));
+					return;
+				}
+				TargetSlot = AuthorizedSlot.Value;
+				bHasExternallyAuthorizedSlot = true;
+			}
+		}
+	}
+
+	if (!bHasExternallyAuthorizedSlot)
+	{
+		// Legacy lobby reconnects retain their slot by transport identity.
+		TargetSlot = FindDisconnectedSlotForPC(NewPlayer);
+		bReconnect = TargetSlot > 0;
+		if (!bReconnect)
+		{
+			TargetSlot = PickNextFreeSlot();
+		}
 	}
 	if (TargetSlot <= 0)
 	{
@@ -226,6 +250,28 @@ void USeinLobbySubsystem::OnPostLogin(AGameModeBase* GameMode, APlayerController
 
 	FSeinLobbySlotState* Slot = Actor->FindSlotMutable(TargetSlot);
 	if (!Slot) return;
+	if (bHasExternallyAuthorizedSlot)
+	{
+		if (!CanAcceptConnectionAtSlot(
+				FSeinPlayerID(static_cast<uint8>(TargetSlot)), NewPlayer))
+		{
+			UE_LOG(LogSeinNet, Error,
+				TEXT("[Lobby] OnPostLogin: externally authorized slot %d is unavailable in lobby state."),
+				TargetSlot);
+			return;
+		}
+		for (auto It = ControllerToSlot.CreateIterator(); It; ++It)
+		{
+			if (!It.Key().IsValid())
+			{
+				It.RemoveCurrent();
+			}
+		}
+		const int32* ExistingControllerSlot = ControllerToSlot.Find(NewPlayer);
+		const bool bSameController =
+			ExistingControllerSlot && *ExistingControllerSlot == TargetSlot;
+		bReconnect = Slot->bDisconnected || bSameController;
+	}
 
 	if (bReconnect)
 	{
@@ -264,8 +310,11 @@ void USeinLobbySubsystem::OnPostLogin(AGameModeBase* GameMode, APlayerController
 		Slot->DisplayName = FText::FromString(PlayerName);
 
 		UE_LOG(LogSeinNet, Log,
-			TEXT("[Lobby] OnPostLogin: claimed slot %d for %s (auto-assigned)."),
-			TargetSlot, *GetNameSafe(NewPlayer));
+			TEXT("[Lobby] OnPostLogin: claimed slot %d for %s (%s)."),
+			TargetSlot, *GetNameSafe(NewPlayer),
+			bHasExternallyAuthorizedSlot
+				? TEXT("externally authorized")
+				: TEXT("auto-assigned"));
 	}
 
 	// Stamp the most recent claimant's NetID so a future disconnect can be
@@ -1386,6 +1435,58 @@ bool USeinLobbySubsystem::CanAcceptConnection(const FUniqueNetIdRepl& UniqueId) 
 
 	// Every slot is Human/AI/Closed-claimed and no reconnect candidate. Reject.
 	return false;
+}
+
+bool USeinLobbySubsystem::CanAcceptConnectionAtSlot(
+	FSeinPlayerID Slot,
+	const APlayerController* Controller) const
+{
+	if (!Slot.IsValid())
+	{
+		return false;
+	}
+	const ASeinLobbyState* Actor = LobbyStateActor.Get();
+	if (!Actor)
+	{
+		return true;
+	}
+	const int32 TargetSlot = Slot.Value;
+	const FSeinLobbySlotState* State = Actor->FindSlot(TargetSlot);
+	if (!State)
+	{
+		return false;
+	}
+
+	bool bSameController = false;
+	for (const TPair<TWeakObjectPtr<APlayerController>, int32>& Pair :
+		ControllerToSlot)
+	{
+		const APlayerController* Existing = Pair.Key.Get();
+		if (!Existing)
+		{
+			continue;
+		}
+		if (Existing == Controller)
+		{
+			if (Pair.Value != TargetSlot)
+			{
+				return false;
+			}
+			bSameController = true;
+		}
+		else if (Pair.Value == TargetSlot)
+		{
+			return false;
+		}
+	}
+	if (bSameController)
+	{
+		return true;
+	}
+	return (State->State == ESeinSlotState::Open
+			&& !State->bClaimed && !State->bDisconnected)
+		|| (State->State == ESeinSlotState::Human
+			&& State->bDisconnected);
 }
 
 int32 USeinLobbySubsystem::PickNextFreeSlot() const

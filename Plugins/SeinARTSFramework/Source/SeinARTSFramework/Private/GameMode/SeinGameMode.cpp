@@ -68,6 +68,15 @@ void ASeinGameMode::PreLogin(
 
 	if (UGameInstance* GameInstance = GetGameInstance())
 	{
+		USeinNetSubsystem* Net =
+			GameInstance->GetSubsystem<USeinNetSubsystem>();
+		if (Net && Net->HasConnectionAdmissionAuthorizer())
+		{
+			Net->AuthorizeIncomingConnection(
+				Options, Address, UniqueId, ErrorMessage);
+			return;
+		}
+
 		if (const USeinLobbySubsystem* Lobby =
 			GameInstance->GetSubsystem<USeinLobbySubsystem>())
 		{
@@ -79,15 +88,6 @@ void ASeinGameMode::PreLogin(
 					*Address);
 			}
 		}
-		if (ErrorMessage.IsEmpty())
-		{
-			if (USeinNetSubsystem* Net =
-				GameInstance->GetSubsystem<USeinNetSubsystem>())
-			{
-				Net->AuthorizeIncomingConnection(
-					Options, Address, UniqueId, ErrorMessage);
-			}
-		}
 	}
 }
 
@@ -97,6 +97,8 @@ FString ASeinGameMode::InitNewPlayer(
 	const FString& Options,
 	const FString& Portal)
 {
+	USeinNetSubsystem* ConsumedAdmission = nullptr;
+	ASeinPlayerController* AdmittedController = nullptr;
 	if (UGameInstance* GameInstance = GetGameInstance())
 	{
 		if (USeinNetSubsystem* Net =
@@ -121,13 +123,53 @@ FString ASeinGameMode::InitNewPlayer(
 				{
 					return AdmissionError;
 				}
+				if (const USeinLobbySubsystem* Lobby =
+					GameInstance->GetSubsystem<USeinLobbySubsystem>())
+				{
+					if (!Lobby->CanAcceptConnectionAtSlot(
+							AssignedSlot, SeinController))
+					{
+						Net->ReleaseAuthorizedConnection(SeinController);
+						return TEXT("Online admission seat is unavailable");
+					}
+				}
 				SeinController->SeinPlayerID = AssignedSlot;
+				ConsumedAdmission = Net;
+				AdmittedController = SeinController;
 			}
 		}
 	}
-	return Super::InitNewPlayer(
+	const FString InitError = Super::InitNewPlayer(
 		NewPlayerController, UniqueId, Options, Portal);
+	if (!InitError.IsEmpty() && ConsumedAdmission && AdmittedController)
+	{
+		ConsumedAdmission->ReleaseAuthorizedConnection(AdmittedController);
+		AdmittedController->SeinPlayerID = FSeinPlayerID::Neutral();
+	}
+	return InitError;
 }
+
+void ASeinGameMode::Logout(AController* Exiting)
+{
+	ASeinPlayerController* SeinController =
+		Cast<ASeinPlayerController>(Exiting);
+	for (auto It = ClaimedSlots.CreateIterator(); It; ++It)
+	{
+		if (!It.Value().IsValid() || It.Value().Get() == SeinController)
+		{
+			It.RemoveCurrent();
+		}
+	}
+	Super::Logout(Exiting);
+}
+
+#if WITH_DEV_AUTOMATION_TESTS
+void ASeinGameMode::CompletePostLoginForTests(APlayerController* NewPlayer)
+{
+	OnPostLogin(NewPlayer);
+	HandleStartingNewPlayer(NewPlayer);
+}
+#endif
 
 void ASeinGameMode::InitGame(
 	const FString& MapName,

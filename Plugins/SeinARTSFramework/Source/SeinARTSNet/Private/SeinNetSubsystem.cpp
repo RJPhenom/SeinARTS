@@ -46,6 +46,10 @@ namespace
 	// A burst may drain over several genuine turn boundaries, but it must not
 	// become an unbounded process-local memory sink while transport is stalled.
 	constexpr int32 GSeinMaxBufferedAuthorTurns = 4;
+	// PreLogin retries reuse a short-lived record, while unique unconsumed
+	// credentials remain bounded if clients abandon the connection handshake.
+	constexpr int32 GSeinMaxPendingConnectionAdmissions = 256;
+	constexpr double GSeinConnectionAdmissionLifetimeSeconds = 60.0;
 	// Destination actors bind the materializer during normal world startup.
 	// Bound this non-simulation scheduler bridge so a missing integration fails
 	// closed instead of retaining the game-instance subsystem forever.
@@ -413,6 +417,8 @@ void USeinNetSubsystem::ReleaseModuleOwnedStateForModuleUnload()
 	TestDeterminismGossipEnabledOverride.Reset();
 	TestDeterminismCheckIntervalOverride.Reset();
 	TestCurrentTurnOverride.Reset();
+	TestConnectionAdmissionNowSecondsOverride.Reset();
+	TestMaxPendingConnectionAdmissionsOverride.Reset();
 	TestFindCommandSchemaOverride = nullptr;
 #endif
 }
@@ -1275,7 +1281,7 @@ bool USeinNetSubsystem::AuthorizeIncomingConnection(
 		return true;
 	}
 
-	const double Now = FPlatformTime::Seconds();
+	const double Now = GetConnectionAdmissionNowSeconds();
 	for (auto It = PendingConnectionAdmissions.CreateIterator(); It; ++It)
 	{
 		if (It.Value().ExpiresAtSeconds <= Now)
@@ -1327,7 +1333,8 @@ bool USeinNetSubsystem::AuthorizeIncomingConnection(
 		OutErrorMessage = TEXT("Online admission identity changed");
 		return false;
 	}
-	if (PendingConnectionAdmissions.Num() >= 256)
+	if (PendingConnectionAdmissions.Num()
+		>= GetMaxPendingConnectionAdmissions())
 	{
 		OutErrorMessage = TEXT("Online admission is temporarily full");
 		return false;
@@ -1377,7 +1384,8 @@ bool USeinNetSubsystem::AuthorizeIncomingConnection(
 	Pending.MatchID = Decision.MatchID;
 	Pending.ParticipantID = Decision.ParticipantID;
 	Pending.AssignedSlot = Decision.AssignedSlot;
-	Pending.ExpiresAtSeconds = Now + 60.0;
+	Pending.ExpiresAtSeconds =
+		Now + GSeinConnectionAdmissionLifetimeSeconds;
 	PendingConnectionAdmissions.Add(AdmissionID, MoveTemp(Pending));
 	return true;
 }
@@ -1412,7 +1420,8 @@ bool USeinNetSubsystem::ConsumeAuthorizedConnection(
 		Options,
 		FString(),
 		PlatformIdentity);
-	if (!Pending || Pending->ExpiresAtSeconds <= FPlatformTime::Seconds()
+	if (!Pending
+		|| Pending->ExpiresAtSeconds <= GetConnectionAdmissionNowSeconds()
 		|| Pending->ClaimsDigest != ClaimsDigest
 		|| !ActiveProtocolContext.IsValid()
 		|| Pending->MatchID != ActiveProtocolContext.MatchInstanceID
@@ -1441,6 +1450,34 @@ bool USeinNetSubsystem::ConsumeAuthorizedConnection(
 	return true;
 }
 
+bool USeinNetSubsystem::GetAuthorizedConnectionSlot(
+	APlayerController* Controller,
+	FSeinPlayerID& OutSlot) const
+{
+	OutSlot = FSeinPlayerID::Neutral();
+	if (!Controller)
+	{
+		return false;
+	}
+	const FSeinPlayerID* Slot = AuthorizedControllerSlots.Find(Controller);
+	if (!Slot || !Slot->IsValid())
+	{
+		return false;
+	}
+	OutSlot = *Slot;
+	return true;
+}
+
+void USeinNetSubsystem::ReleaseAuthorizedConnection(
+	APlayerController* Controller)
+{
+	check(IsInGameThread());
+	if (Controller)
+	{
+		AuthorizedControllerSlots.Remove(Controller);
+	}
+}
+
 #if WITH_DEV_AUTOMATION_TESTS
 void USeinNetSubsystem::SetConnectionAdmissionBindingForTests(
 	FSeinMatchInstanceID MatchID,
@@ -1448,6 +1485,7 @@ void USeinNetSubsystem::SetConnectionAdmissionBindingForTests(
 	FSeinPlayerID Slot)
 {
 	check(IsInGameThread());
+	TestServerOverride = true;
 	ActiveProtocolContext = FSeinProtocolContext(
 		MatchID,
 		1,
@@ -1462,7 +1500,40 @@ void USeinNetSubsystem::SetConnectionAdmissionBindingForTests(
 	SlotToParticipant.Reset();
 	SlotToParticipant.Add(Slot, ParticipantID);
 }
+
+void USeinNetSubsystem::SetConnectionAdmissionClockAndCapacityForTests(
+	double NowSeconds,
+	int32 MaxPendingAdmissions)
+{
+	check(IsInGameThread());
+	TestConnectionAdmissionNowSecondsOverride =
+		FMath::Max(0.0, NowSeconds);
+	TestMaxPendingConnectionAdmissionsOverride =
+		FMath::Max(1, MaxPendingAdmissions);
+}
 #endif
+
+double USeinNetSubsystem::GetConnectionAdmissionNowSeconds() const
+{
+#if WITH_DEV_AUTOMATION_TESTS
+	if (TestConnectionAdmissionNowSecondsOverride.IsSet())
+	{
+		return TestConnectionAdmissionNowSecondsOverride.GetValue();
+	}
+#endif
+	return FPlatformTime::Seconds();
+}
+
+int32 USeinNetSubsystem::GetMaxPendingConnectionAdmissions() const
+{
+#if WITH_DEV_AUTOMATION_TESTS
+	if (TestMaxPendingConnectionAdmissionsOverride.IsSet())
+	{
+		return TestMaxPendingConnectionAdmissionsOverride.GetValue();
+	}
+#endif
+	return GSeinMaxPendingConnectionAdmissions;
+}
 
 void USeinNetSubsystem::OnPostLogin(AGameModeBase* GameMode, APlayerController* NewPlayer)
 {
@@ -1761,6 +1832,7 @@ void USeinNetSubsystem::ServerSpawnRelayForController(APlayerController* PC, FSe
 	{
 		AcceptedConfigFingerprints.Remove(ParticipantID);
 	}
+	Relays.AddUnique(Relay);
 	RelayToSlot.Add(Relay, Slot);
 	if (ParticipantID.IsValid()) RelayToParticipant.Add(Relay, ParticipantID);
 
@@ -3101,7 +3173,7 @@ void USeinNetSubsystem::OnLogout(AGameModeBase* GameMode, AController* Exiting)
 	if (!Exiting || !IsServer()) return;
 	if (APlayerController* ExitingPC = Cast<APlayerController>(Exiting))
 	{
-		AuthorizedControllerSlots.Remove(ExitingPC);
+		ReleaseAuthorizedConnection(ExitingPC);
 	}
 
 	// Drop-in/drop-out (Phase 4): instead of destroying the relay on logout,

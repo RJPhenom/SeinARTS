@@ -4,7 +4,7 @@
  * @file         OnlineServicesTestTypes.h
  * @author       RJ Macklem
  * @created      21 Aug 2026
- * @latest       21 Aug 2026
+ * @latest       22 Aug 2026
  * @brief        Declares hostile timing doubles for Online Services lifecycle tests.
  *
  * @disclaimer   This code was generated in whole or in part with the assistance
@@ -14,6 +14,7 @@
 #pragma once
 
 #include "Async/Future.h"
+#include "HAL/Event.h"
 #include "Provider/SeinOnlineServicesProvider.h"
 #include "OnlineServicesTestTypes.generated.h"
 
@@ -35,8 +36,8 @@ public:
 	/** Hostile provider behavior: invokes every callback twice. */
 	void CompleteAllSuccessfullyTwice();
 
-	/** Completes retained callbacks from a worker thread after a short delay. */
-	void CompleteAllSuccessfullyOnWorkerThread();
+	/** Blocks a worker with retained callbacks until shutdown or an explicit join. */
+	bool CompleteAllSuccessfullyOnWorkerThread();
 
 	/** Joins and clears all worker tasks started by this test provider. */
 	void WaitForWorkerTasks();
@@ -58,4 +59,6 @@ private:
 
 	TArray<FPendingRequest> PendingRequests;
 	TArray<TFuture<void>> WorkerTasks;
+	FSharedEventRef WorkerStartedEvent { EEventMode::ManualReset };
+	FSharedEventRef WorkerCompletionGate { EEventMode::ManualReset };
 };

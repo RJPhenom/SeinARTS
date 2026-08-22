@@ -41,8 +41,14 @@ public:
 		const FUniqueNetIdRepl& UniqueId,
 		const FString& Options,
 		const FString& Portal = TEXT("")) override;
+	virtual void Logout(AController* Exiting) override;
 	virtual void HandleStartingNewPlayer_Implementation(
 		APlayerController* NewPlayer) override;
+
+#if WITH_DEV_AUTOMATION_TESTS
+	/** Drives the engine post-login/start sequence for synthetic controllers. */
+	void CompletePostLoginForTests(APlayerController* NewPlayer);
+#endif
 
 	/** Frozen slot count when this world has a manifest, otherwise the project ceiling. */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|GameMode")

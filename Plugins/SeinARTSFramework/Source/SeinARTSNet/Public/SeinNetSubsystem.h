@@ -800,12 +800,25 @@ public:
 		FSeinPlayerID& OutSlot,
 		FString& OutErrorMessage);
 
+	/** Returns the consumed exact-seat authority retained until controller logout. */
+	bool GetAuthorizedConnectionSlot(
+		APlayerController* Controller,
+		FSeinPlayerID& OutSlot) const;
+
+	/** Releases a consumed controller authority after logout or failed login. */
+	void ReleaseAuthorizedConnection(APlayerController* Controller);
+
 #if WITH_DEV_AUTOMATION_TESTS
 	/** Installs one exact active match binding for admission seam tests. */
 	void SetConnectionAdmissionBindingForTests(
 		FSeinMatchInstanceID MatchID,
 		FSeinNetworkParticipantID ParticipantID,
 		FSeinPlayerID Slot);
+
+	/** Overrides the monotonic clock and pending-entry cap for admission-cache tests. */
+	void SetConnectionAdmissionClockAndCapacityForTests(
+		double NowSeconds,
+		int32 MaxPendingAdmissions);
 #endif
 
 	/** Server-side accessor: every relay currently registered. Client-side:
@@ -1209,6 +1222,8 @@ private:
 	TMap<TWeakObjectPtr<APlayerController>, FSeinPlayerID>
 		AuthorizedControllerSlots;
 	FGuid ConnectionAdmissionDigestSalt;
+	double GetConnectionAdmissionNowSeconds() const;
+	int32 GetMaxPendingConnectionAdmissions() const;
 
 	/** Tracks WHICH WorldSubsystem the world-scoped handles are bound to.
 	 *  Crucial for seamless travel: the GI-scoped NetSubsystem survives the
@@ -1577,6 +1592,8 @@ private:
 	TOptional<bool> TestDeterminismGossipEnabledOverride;
 	TOptional<int32> TestDeterminismCheckIntervalOverride;
 	TOptional<int32> TestCurrentTurnOverride;
+	TOptional<double> TestConnectionAdmissionNowSecondsOverride;
+	TOptional<int32> TestMaxPendingConnectionAdmissionsOverride;
 	TFunction<bool(FGameplayTag, int32, FSeinCommandSchemaDescriptor&)>
 		TestFindCommandSchemaOverride;
 #endif

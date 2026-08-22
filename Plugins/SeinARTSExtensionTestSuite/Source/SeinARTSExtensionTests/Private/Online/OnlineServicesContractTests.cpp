@@ -26,6 +26,9 @@
 #include "Online/OnlineServicesTestTypes.h"
 #include "Player/SeinPlayerController.h"
 #include "Provider/SeinOnlineLoopbackProvider.h"
+#include "SeinLobbyState.h"
+#include "SeinLobbySubsystem.h"
+#include "SeinNetRelay.h"
 #include "SeinNetSubsystem.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
 #include "Simulation/SeinWorldSubsystem.h"
@@ -1050,7 +1053,7 @@ namespace UE::SeinARTSExtensionTests
 			TEXT("127.0.0.1"), FUniqueNetIdRepl(), Error)));
 	}
 
-	TEST(OnlineServicesGameModeAdmissionBindsTypedIdentityAndOneTimeSeat,
+	TEST(OnlineServicesGameModeAdmissionConsumesAndReleasesExactSeat,
 		"SeinARTS.Integration.OnlineServices.Admission.GameMode")
 	{
 		FActorTestSpawner Spawner;
@@ -1077,7 +1080,7 @@ namespace UE::SeinARTSExtensionTests
 		ASSERT_THAT(IsTrue(BuildRegisteredMatch(
 			Fixture, ESeinOnlineMatchClassification::Unranked, Match)));
 		Net->SetConnectionAdmissionBindingForTests(
-			Match.MatchID, Match.ParticipantOne, FSeinPlayerID(1));
+			Match.MatchID, Match.ParticipantTwo, FSeinPlayerID(2));
 
 		const FName TransportType =
 			UOnlineEngineInterface::Get()->GetDefaultOnlineSubsystemName();
@@ -1091,7 +1094,7 @@ namespace UE::SeinARTSExtensionTests
 
 		FSeinOnlineIssueReconnectCredentialRequest Issue;
 		Issue.MatchID = Match.MatchID;
-		Issue.ParticipantID = Match.ParticipantOne;
+		Issue.ParticipantID = Match.ParticipantTwo;
 		Issue.PlatformIdentityType = TEXT("DifferentProvider");
 		Issue.PlatformIdentityValue = TransportValue;
 		Issue.IdempotencyKey = UniqueKey(TEXT("game-mode-mismatched-type"));
@@ -1165,11 +1168,45 @@ namespace UE::SeinARTSExtensionTests
 		{
 			Controller.SetPlayerState(&Spawner.SpawnActor<APlayerState>());
 		}
+		Controller.PlayerState->SetUniqueId(TransportIdentity);
 		const FString InitError = GameMode->InitNewPlayer(
 			&Controller, TransportIdentity, Options);
 		ASSERT_THAT(IsTrue(InitError.IsEmpty()));
-		ASSERT_THAT(IsTrue(Controller.SeinPlayerID == FSeinPlayerID(1)));
-		ASSERT_THAT(IsTrue(Controller.StartSpot.Get() == &PlayerStart));
+		ASSERT_THAT(IsTrue(Controller.SeinPlayerID == FSeinPlayerID(2)));
+		ASSERT_THAT(IsTrue(Controller.StartSpot.Get() == &SparePlayerStart));
+		GameMode->CompletePostLoginForTests(&Controller);
+
+		USeinLobbySubsystem* Lobby =
+			GameInstance->GetSubsystem<USeinLobbySubsystem>();
+		ASSERT_THAT(IsNotNull(Lobby));
+		ASeinLobbyState* LobbyState = Lobby->GetLobbyState();
+		ASSERT_THAT(IsNotNull(LobbyState));
+		const FSeinLobbySlotState* FirstLobbySlot =
+			LobbyState->FindSlot(1);
+		const FSeinLobbySlotState* ExactLobbySlot =
+			LobbyState->FindSlot(2);
+		ASSERT_THAT(IsNotNull(FirstLobbySlot));
+		ASSERT_THAT(IsNotNull(ExactLobbySlot));
+		ASSERT_THAT(IsTrue(
+			FirstLobbySlot->State == ESeinSlotState::Open
+			&& !FirstLobbySlot->bClaimed));
+		ASSERT_THAT(IsTrue(
+			ExactLobbySlot->State == ESeinSlotState::Human
+			&& ExactLobbySlot->bClaimed
+			&& ExactLobbySlot->ClaimedBy == FSeinPlayerID(2)));
+
+		ASeinNetRelay* ExactRelay = nullptr;
+		for (const TWeakObjectPtr<ASeinNetRelay>& Relay : Net->GetRelays())
+		{
+			if (Relay.IsValid()
+				&& Relay->AssignedPlayerID == FSeinPlayerID(2))
+			{
+				ExactRelay = Relay.Get();
+				break;
+			}
+		}
+		ASSERT_THAT(IsNotNull(ExactRelay));
+		ASSERT_THAT(IsTrue(ExactRelay->GetOwner() == &Controller));
 
 		Error.Reset();
 		GameMode->PreLogin(Options, Address, TransportIdentity, Error);
@@ -1191,6 +1228,119 @@ namespace UE::SeinARTSExtensionTests
 		GameMode->PreLogin(
 			ConnectedSeatOptions, Address, TransportIdentity, Error);
 		ASSERT_THAT(IsTrue(Error.Contains(TEXT("already connected"))));
+
+		ASSERT_THAT(IsTrue(Lobby->ServerHandleSetSlotState(
+			nullptr, 1, ESeinSlotState::Closed, FGameplayTag())));
+		ASSERT_THAT(IsTrue(Lobby->ServerHandleLeave(&Controller)));
+		GameMode->Logout(&Controller);
+		ExactLobbySlot = LobbyState->FindSlot(2);
+		ASSERT_THAT(IsNotNull(ExactLobbySlot));
+		ASSERT_THAT(IsTrue(ExactLobbySlot->State == ESeinSlotState::Open));
+		ASSERT_THAT(IsTrue(Lobby->ServerHandleSetSlotState(
+			nullptr, 2, ESeinSlotState::Closed, FGameplayTag())));
+
+		const FString ReconnectTransportValue(
+			TEXT("replacement-transport-user"));
+		const FUniqueNetIdRepl ReconnectTransportIdentity =
+			MakeTransportIdentity(TransportType, ReconnectTransportValue);
+		ASSERT_THAT(IsTrue(ReconnectTransportIdentity.IsValid()));
+		ASSERT_THAT(IsFalse(
+			Lobby->CanAcceptConnection(ReconnectTransportIdentity)));
+		Issue.PlatformIdentityValue = ReconnectTransportValue;
+		Issue.IdempotencyKey = UniqueKey(TEXT("game-mode-unavailable-seat"));
+		const FExecutedRequest UnavailableIssue = Fixture.Execute(
+			ESeinOnlineOperation::IssueReconnectCredential,
+			Issue,
+			ESeinOnlineCallerAuthority::TrustedServer);
+		const FSeinOnlineReconnectCredentialResult* UnavailableCredential =
+			UnavailableIssue.Response.Payload.GetPtr<
+				FSeinOnlineReconnectCredentialResult>();
+		ASSERT_THAT(IsNotNull(UnavailableCredential));
+		const FString UnavailableOptions = FString::Printf(
+			TEXT("?SeinAdmission=%s"),
+			*UnavailableCredential->AdmissionID);
+		Error.Reset();
+		GameMode->PreLogin(
+			UnavailableOptions, Address, ReconnectTransportIdentity, Error);
+		ASSERT_THAT(IsTrue(Error.IsEmpty()));
+
+		ASeinPlayerController& RejectedController =
+			Spawner.SpawnActor<ASeinPlayerController>();
+		if (!RejectedController.PlayerState)
+		{
+			RejectedController.SetPlayerState(
+				&Spawner.SpawnActor<APlayerState>());
+		}
+		RejectedController.PlayerState->SetUniqueId(
+			ReconnectTransportIdentity);
+		const FString RejectedError = GameMode->InitNewPlayer(
+			&RejectedController,
+			ReconnectTransportIdentity,
+			UnavailableOptions);
+		ASSERT_THAT(IsTrue(
+			RejectedError.Contains(TEXT("seat is unavailable"))));
+		ASSERT_THAT(IsTrue(
+			RejectedController.SeinPlayerID == FSeinPlayerID::Neutral()));
+		FSeinPlayerID RejectedSlot;
+		ASSERT_THAT(IsFalse(Net->GetAuthorizedConnectionSlot(
+			&RejectedController, RejectedSlot)));
+
+		ASSERT_THAT(IsTrue(Lobby->ServerHandleSetSlotState(
+			nullptr, 2, ESeinSlotState::Open, FGameplayTag())));
+		Issue.IdempotencyKey = UniqueKey(TEXT("game-mode-logout-release"));
+		const FExecutedRequest ReconnectIssue = Fixture.Execute(
+			ESeinOnlineOperation::IssueReconnectCredential,
+			Issue,
+			ESeinOnlineCallerAuthority::TrustedServer);
+		const FSeinOnlineReconnectCredentialResult* ReconnectCredential =
+			ReconnectIssue.Response.Payload.GetPtr<
+				FSeinOnlineReconnectCredentialResult>();
+		ASSERT_THAT(IsNotNull(ReconnectCredential));
+		const FString ReconnectOptions = FString::Printf(
+			TEXT("?SeinAdmission=%s"), *ReconnectCredential->AdmissionID);
+		Error.Reset();
+		GameMode->PreLogin(
+			ReconnectOptions, Address, ReconnectTransportIdentity, Error);
+		ASSERT_THAT(IsTrue(Error.IsEmpty()));
+
+		ASeinPlayerController& ReconnectedController =
+			Spawner.SpawnActor<ASeinPlayerController>();
+		if (!ReconnectedController.PlayerState)
+		{
+			ReconnectedController.SetPlayerState(
+				&Spawner.SpawnActor<APlayerState>());
+		}
+		ReconnectedController.PlayerState->SetUniqueId(
+			ReconnectTransportIdentity);
+		const FString ReconnectError = GameMode->InitNewPlayer(
+			&ReconnectedController,
+			ReconnectTransportIdentity,
+			ReconnectOptions);
+		ASSERT_THAT(IsTrue(ReconnectError.IsEmpty()));
+		ASSERT_THAT(IsTrue(
+			ReconnectedController.SeinPlayerID == FSeinPlayerID(2)));
+		ASSERT_THAT(IsTrue(
+			ReconnectedController.StartSpot.Get() == &SparePlayerStart));
+		GameMode->CompletePostLoginForTests(&ReconnectedController);
+
+		ExactLobbySlot = LobbyState->FindSlot(2);
+		ASSERT_THAT(IsNotNull(ExactLobbySlot));
+		ASSERT_THAT(IsTrue(
+			ExactLobbySlot->State == ESeinSlotState::Human
+			&& ExactLobbySlot->bClaimed
+			&& !ExactLobbySlot->bDisconnected
+			&& ExactLobbySlot->ClaimedBy == FSeinPlayerID(2)));
+		ASSERT_THAT(IsTrue(ExactRelay->GetOwner() == &ReconnectedController));
+		int32 ExactRelayCount = 0;
+		for (const TWeakObjectPtr<ASeinNetRelay>& Relay : Net->GetRelays())
+		{
+			if (Relay.IsValid()
+				&& Relay->AssignedPlayerID == FSeinPlayerID(2))
+			{
+				++ExactRelayCount;
+			}
+		}
+		ASSERT_THAT(AreEqual(1, ExactRelayCount));
 	}
 
 	TEST(OnlineServicesFacadeDefersCancelsAndIgnoresStaleProviders,
@@ -1316,7 +1466,8 @@ namespace UE::SeinARTSExtensionTests
 
 		const FSeinOnlineRequestHandle ThreadedCallback =
 			Online->Authenticate(DuplicateAuthentication);
-		RawDeferredProvider->CompleteAllSuccessfullyOnWorkerThread();
+		ASSERT_THAT(IsTrue(
+			RawDeferredProvider->CompleteAllSuccessfullyOnWorkerThread()));
 		RawDeferredProvider->WaitForWorkerTasks();
 		Online->DrainCompletionsForTests();
 		ASSERT_THAT(IsTrue(Online->ConsumeRequestResult(
@@ -1353,7 +1504,8 @@ namespace UE::SeinARTSExtensionTests
 		FSeinOnlineAuthenticateRequest Request;
 		Request.LocalUserIndex = 1441;
 		ASSERT_THAT(IsTrue(Online->Authenticate(Request).IsValid()));
-		DeferredProvider->CompleteAllSuccessfullyOnWorkerThread();
+		ASSERT_THAT(IsTrue(
+			DeferredProvider->CompleteAllSuccessfullyOnWorkerThread()));
 		Online->ReleaseModuleOwnedStateForModuleUnload();
 		ASSERT_THAT(AreEqual(0, RetainedProvider->GetPendingRequestCount()));
 		ASSERT_THAT(IsFalse(Online->IsReady()));
