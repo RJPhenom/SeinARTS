@@ -52,14 +52,14 @@
     {
       "profile": "All",
       "suite": "SeinARTS.Sim",
-      "minimumCount": 74,
-      "establishedAtCommit": "75c56c21a857f8c04f181ebc0220ed5a7a7896ed"
+      "minimumCount": 82,
+      "establishedAtCommit": "58af8478337a71e4639933cc5e220ceed2075d28"
     },
     {
       "profile": "Framework",
       "suite": "SeinARTS.Sim",
-      "minimumCount": 67,
-      "establishedAtCommit": "75c56c21a857f8c04f181ebc0220ed5a7a7896ed"
+      "minimumCount": 75,
+      "establishedAtCommit": "58af8478337a71e4639933cc5e220ceed2075d28"
     },
     {
       "profile": "All",
