@@ -16,6 +16,7 @@ public class SeinARTSTestSupport : ModuleRules
 			"GameplayTags",
 			"SeinARTSCore",
 			"SeinARTSCoreEntity",
+			"SeinARTSCombat",
 			"SeinARTSLevelData"
 		});
 	}

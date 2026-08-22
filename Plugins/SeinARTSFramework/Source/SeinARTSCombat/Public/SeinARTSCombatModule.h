@@ -4,6 +4,7 @@
  * @file         SeinARTSCombatModule.h
  * @author       RJ Macklem
  * @created      16 Aug 2026
+ * @latest       21 Aug 2026
  * @brief        Module interface for the SeinARTS combat substrate.
  *
  *          The combat module owns the genre-free combat MECHANISMS: vitals and
@@ -27,5 +28,6 @@ class SEINARTSCOMBAT_API FSeinARTSCombatModule : public IModuleInterface
 {
 public:
 	virtual void StartupModule() override;
+	virtual void PreUnloadCallback() override;
 	virtual void ShutdownModule() override;
 };

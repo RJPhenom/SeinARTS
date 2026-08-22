@@ -9,9 +9,11 @@ substrate SHIPPED 2026-08-16 as the 13th framework module (`SeinARTSCombat`): vi
 resolution with a Blueprint formula policy seam, weapon cycling, an on-demand target query
 service with a Blueprint scorer seam, instant + projectile-entity delivery, and starter
 attack content — mechanisms only; feel stays designer-authored (see `Docs/Guides/Combat.md`).
-Remaining under the any-design standard: combat-at-scale evidence (armed population curves),
-spatial indexing for acquisition if that curve demands it, and proving the economy loops
-(harvest/dropoff, worker construction) as authored loops.
+The 2026-08-21 armed-population curve proved the prior acquisition sweep exceeded one 30 Hz turn
+at 1,000 units; a transparent derived Combat spatial index now brings both warm and rebuild-inclusive
+acquisition to about 11 ms without changing canonical state or scorer semantics. Remaining under the
+any-design standard: a representative game-world battle capture with fog/presentation and proving
+the economy loops (harvest/dropoff, worker construction) as authored loops.
 
 This order minimizes rework. Do not start a later stage by weakening an earlier contract.
 

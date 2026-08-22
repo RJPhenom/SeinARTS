@@ -23,6 +23,7 @@
 #include "Simulation/SeinTestSimContext.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Tags/SeinARTSGameplayTags.h"
+#include "TestTypes/SeinCombatTestTypes.h"
 
 struct FSeinWorldSubsystemTestAccess
 {
@@ -285,6 +286,28 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(AreEqual(1, Candidates.Num()));
 		ASSERT_THAT(IsTrue(Candidates[0].Target == NearEnemy));
 
+		// A custom scorer still receives every mechanically valid candidate and
+		// the bounded result set honors its score rather than the built-in fast path.
+		Query.ScorerClass = FSoftClassPath(
+			USeinFarthestTargetScorerTestDouble::StaticClass()->GetPathName());
+		FSeinTargetQueryService::FindTargets(
+			*Fixture.World, Query, Candidates);
+		ASSERT_THAT(AreEqual(1, Candidates.Num()));
+		ASSERT_THAT(IsTrue(Candidates[0].Target == FarEnemy));
+		Query.ScorerClass.Reset();
+
+		// A range spanning more index cells than entities deliberately falls
+		// back to the canonical full sweep without changing result semantics.
+		Query.Range = FFixedPoint::FromInt(10000);
+		Query.MaxResults = 8;
+		FSeinTargetQueryService::FindTargets(
+			*Fixture.World, Query, Candidates);
+		ASSERT_THAT(AreEqual(3, Candidates.Num()));
+		ASSERT_THAT(IsTrue(Candidates[0].Target == NearEnemy));
+		ASSERT_THAT(IsTrue(Candidates[1].Target == FarEnemy));
+		ASSERT_THAT(IsTrue(Candidates[2].Target == OutOfRangeEnemy));
+		Query.Range = FFixedPoint::FromInt(1500);
+
 		// Arc gate: a 45° half-angle facing +X keeps +X targets and drops a
 		// flanker at +Y.
 		FSeinEntityHandle Flanker;
@@ -304,6 +327,78 @@ namespace UE::SeinARTSTests
 			{
 				return Candidate.Target == Flanker;
 			})));
+
+		// A warmed spatial prefilter must follow canonical position mutation.
+		// Moving the formerly-far target nearest changes the first result.
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*Fixture.World);
+			FSeinEntity* FarEntity =
+				Fixture.World->GetEntityMutable(FarEnemy);
+			ASSERT_THAT(IsNotNull(FarEntity));
+			FarEntity->Transform.SetLocation(At(100));
+		}
+		Query.ArcHalfAngleDegrees = FFixedPoint::FromInt(180);
+		FSeinTargetQueryService::FindTargets(
+			*Fixture.World, Query, Candidates);
+		ASSERT_THAT(IsTrue(Candidates[0].Target == FarEnemy));
+
+		// Health does not affect index membership, so zero-health exclusion must
+		// remain a live narrow-phase gate even while the position cache is warm.
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*Fixture.World);
+			FSeinVitalsComponent* Vitals =
+				Fixture.World->GetComponentMutable<FSeinVitalsComponent>(FarEnemy);
+			ASSERT_THAT(IsNotNull(Vitals));
+			Vitals->Health = FFixedPoint::Zero;
+		}
+		FSeinTargetQueryService::FindTargets(
+			*Fixture.World, Query, Candidates);
+		ASSERT_THAT(IsTrue(Candidates[0].Target == NearEnemy));
+		ASSERT_THAT(IsFalse(Candidates.ContainsByPredicate(
+			[&](const FSeinTargetCandidate& Candidate)
+			{
+				return Candidate.Target == FarEnemy;
+			})));
+		Fixture.World->StopSimulation();
+	}
+
+	TEST(TargetQueriesFallbackExactlyAtFixedPointBounds,
+		"SeinARTS.Sim.Combat.Acquisition.FixedPointBounds")
+	{
+		using namespace CombatSubstrateTestLocal;
+		FCombatFixture Fixture;
+		FSeinEntityHandle Instigator;
+		FSeinEntityHandle Enemy;
+		const FFixedPoint OriginX =
+			FFixedPoint::MaxValue - FFixedPoint::FromInt(1000);
+		const FFixedPoint EnemyX =
+			FFixedPoint::MaxValue - FFixedPoint::FromInt(500);
+		ASSERT_THAT(IsTrue(Fixture.Initialize(
+			[&]()
+			{
+				Instigator = Fixture.World->SpawnAbstractEntity(
+					FFixedTransform(FFixedVector(
+						OriginX, FFixedPoint::Zero, FFixedPoint::Zero)),
+					Fixture.Attacker);
+				Fixture.World->AddComponent(
+					Instigator, MakeVitals(100));
+				Enemy = Fixture.World->SpawnAbstractEntity(
+					FFixedTransform(FFixedVector(
+						EnemyX, FFixedPoint::Zero, FFixedPoint::Zero)),
+					Fixture.Defender);
+				Fixture.World->AddComponent(Enemy, MakeVitals(100));
+			},
+			0x434D4237, TEXT("SeinARTS.Combat.Acquisition.Bounds"))));
+
+		FSeinTargetQuery Query;
+		Query.Instigator = Instigator;
+		Query.Range = FFixedPoint::FromInt(1500);
+		Query.MaxResults = 1;
+		TArray<FSeinTargetCandidate> Candidates;
+		FSeinTargetQueryService::FindTargets(
+			*Fixture.World, Query, Candidates);
+		ASSERT_THAT(AreEqual(1, Candidates.Num()));
+		ASSERT_THAT(IsTrue(Candidates[0].Target == Enemy));
 		Fixture.World->StopSimulation();
 	}
 

@@ -74,14 +74,18 @@ This is the actionable remainder after consolidating the historical audits. It i
    Sparse dynamic-blocker indexing reduced refresh from 11.490 to 4.518 ms; repeated matched captures
    observed a 1.60-2.86 ms complete-frame delta. The independent 128-member public-layout sentinel
    remains 1.337 ms p95 coverless and 3.324 ms p95 with dense Cover. Larger selections, multi-world
-   PIE, configured game renderers, and 300/500/1,000-unit moving combat remain open scale gates.
+   PIE, and configured game renderers remain open scale gates.
 2. The isolated real fixed-tick dense-collision curve is measured at 64/128/256 packed movers
    (1.257/3.114/7.214 ms median in the All profile on the current machine). A moving-combat
    fixed-tick curve now exists too (`SeinARTS.Perf.Combat.Scale`): two armies crossing an open
    field with real Move To actions, pathing, avoidance, collision, and containment measure
    6.129/10.512/19.813 ms medians at 300/500/1,000 units — near-linear, within the 30 Hz budget
-   at 1,000. Still open: the same populations in PIE with abilities, animation, fog, and
-   presentation on top, and an Insights capture of a real large battle.
+   at 1,000. The new armed workload (`SeinARTS.Perf.Combat.ArmedScale`) adds real target queries,
+   attack abilities, weapons, vitals, and damage: indexed warm acquisition measures
+   3.207/5.607/11.293 ms, forced-rebuild acquisition 3.336/5.416/11.096 ms, and active firing ticks
+   0.540/0.819/1.569 ms at 300/500/1,000 units. Every unit acquires and damages a target. Still open:
+   the same populations in PIE with animation, fog, UI, and presentation on top, plus an Insights
+   capture of a representative large battle and authored Blueprint scorer costs.
 3. Game-specific animation complexity can exceed the default mannequin baseline.
 4. Replay automatic periodic checkpoint envelope encoding and full-flush use one ordered background
    pipeline. Periodic snapshot capture remains synchronous, but unchanged cache-safe component
