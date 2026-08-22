@@ -15,7 +15,10 @@
 #include "DetailWidgetRow.h"
 #include "IDetailChildrenBuilder.h"
 #include "PropertyHandle.h"
+#include "Framework/Application/SlateApplication.h"
+#include "Framework/Notifications/NotificationManager.h"
 #include "Widgets/Input/SButton.h"
+#include "Widgets/Notifications/SNotificationList.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/SBoxPanel.h"
 #include "Engine/Blueprint.h"
@@ -24,6 +27,28 @@
 
 namespace SeinAutoTagDetailsLocal
 {
+	static void ShowRegenerationResult(
+		const UBlueprint& Blueprint,
+		const FSeinAutoTagRegenerationResult& Result)
+	{
+		if (!FSlateApplication::IsInitialized())
+		{
+			return;
+		}
+
+		FNotificationInfo Info(Result.ToUserMessage(&Blueprint));
+		Info.ExpireDuration = Result.IsFailure() ? 8.0f : 4.0f;
+		Info.bUseSuccessFailIcons = true;
+		if (TSharedPtr<SNotificationItem> Item =
+			FSlateNotificationManager::Get().AddNotification(Info))
+		{
+			Item->SetCompletionState(
+				Result.IsFailure()
+					? SNotificationItem::CS_Fail
+					: SNotificationItem::CS_Success);
+		}
+	}
+
 	/** Walk objects-being-customized back to the owning UBlueprint. CDOs are
 	 *  typically what's customized; their outer is the UClass, whose
 	 *  ClassGeneratedBy is the BP. */
@@ -61,7 +86,11 @@ namespace SeinAutoTagDetailsLocal
 				{
 					if (UBlueprint* BP = WeakBP.Get())
 					{
-						SeinAutoTag::RegenerateAssetTag(BP, /*bForceOverManual*/ true);
+						const FSeinAutoTagRegenerationResult Result =
+							SeinAutoTag::RegenerateAssetTagDetailed(
+								BP,
+								/*bForceOverManual=*/true);
+						ShowRegenerationResult(*BP, Result);
 					}
 					return FReply::Handled();
 				})

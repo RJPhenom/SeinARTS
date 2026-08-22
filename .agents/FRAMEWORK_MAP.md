@@ -90,6 +90,14 @@ designer-component picker fail closed. After a successful Push, save the source 
 the Simulation Content Manifest. Start at `SeinBalanceProfile.h`, `SeinBalanceTableExport.cpp`, and
 `SeinBalanceProfileDetails.cpp`.
 
+Auto-tag derivation persists missing tags into the dedicated generated Gameplay Tags source and
+enforces project-wide uniqueness across Ability, Effect, and entity identity tags. Auto-owned asset
+renames report an actionable notification when a collision or unmapped prefix leaves the old tag in
+place; **Reset to Auto** reports updated, already-current, or exact failure state. Bulk regeneration
+uses one suspended write pass, resumes the tag tree once, then applies newly available tags in the
+same command rather than requiring a second click. Start at `SeinAutoTagGenerator.h`,
+`SeinAutoTagGenerator.cpp`, and `SeinAutoTagDetails.cpp`.
+
 Economy is ability composition over generic deterministic data, not a hardcoded worker subsystem.
 Resource-node stock and worker cargo belong in components accessed through typed get/set nodes;
 dropoff uses **Grant Income** inside an authorized simulation callback. The whole income map
