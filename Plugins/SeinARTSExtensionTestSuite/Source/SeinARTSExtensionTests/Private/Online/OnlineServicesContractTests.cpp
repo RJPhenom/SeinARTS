@@ -4,7 +4,7 @@
  * @file         OnlineServicesContractTests.cpp
  * @author       RJ Macklem
  * @created      21 Aug 2026
- * @latest       21 Aug 2026
+ * @latest       22 Aug 2026
  * @brief        Qualifies the SOS contract, loopback state, and facade lifecycle.
  *
  * @disclaimer   This code was generated in whole or in part with the assistance
@@ -17,8 +17,14 @@
 
 #include "Contract/SeinOnlineServicesContract.h"
 #include "Engine/GameInstance.h"
+#include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
+#include "GameFramework/PlayerState.h"
+#include "GameMode/SeinGameMode.h"
+#include "GameMode/SeinPlayerStart.h"
+#include "Net/OnlineEngineInterface.h"
 #include "Online/OnlineServicesTestTypes.h"
+#include "Player/SeinPlayerController.h"
 #include "Provider/SeinOnlineLoopbackProvider.h"
 #include "SeinNetSubsystem.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
@@ -30,6 +36,60 @@ namespace UE::SeinARTSExtensionTests
 {
 	namespace
 	{
+		class FSeinAdmissionTestNetId final : public FUniqueNetId
+		{
+		public:
+			FSeinAdmissionTestNetId(FName InType, FString InValue)
+				: Type(InType)
+				, Value(MoveTemp(InValue))
+			{
+			}
+
+			virtual FName GetType() const override
+			{
+				return Type;
+			}
+
+			virtual const uint8* GetBytes() const override
+			{
+				return reinterpret_cast<const uint8*>(
+					Value.GetCharArray().GetData());
+			}
+
+			virtual int32 GetSize() const override
+			{
+				return Value.GetCharArray().Num() * sizeof(TCHAR);
+			}
+
+			virtual bool IsValid() const override
+			{
+				return !Value.IsEmpty();
+			}
+
+			virtual FString ToString() const override
+			{
+				return Value;
+			}
+
+			virtual FString ToDebugString() const override
+			{
+				return Value;
+			}
+
+		private:
+			FName Type;
+			FString Value;
+		};
+
+		FUniqueNetIdRepl MakeTransportIdentity(
+			FName Type,
+			const FString& Value)
+		{
+			const FUniqueNetIdRef Identity =
+				MakeShared<FSeinAdmissionTestNetId>(Type, Value);
+			return FUniqueNetIdRepl(Identity);
+		}
+
 		int32 AsInt(ESeinOnlineErrorCode Value)
 		{
 			return static_cast<int32>(Value);
@@ -988,6 +1048,149 @@ namespace UE::SeinARTSExtensionTests
 		ASSERT_THAT(IsFalse(Net->AuthorizeIncomingConnection(
 			Options,
 			TEXT("127.0.0.1"), FUniqueNetIdRepl(), Error)));
+	}
+
+	TEST(OnlineServicesGameModeAdmissionBindsTypedIdentityAndOneTimeSeat,
+		"SeinARTS.Integration.OnlineServices.Admission.GameMode")
+	{
+		FActorTestSpawner Spawner;
+		Spawner.InitializeGameSubsystems();
+		UGameInstance* GameInstance = Spawner.GetGameInstance();
+		USeinOnlineServicesSubsystem* Online = GameInstance
+			? GameInstance->GetSubsystem<USeinOnlineServicesSubsystem>()
+			: nullptr;
+		USeinNetSubsystem* Net = GameInstance
+			? GameInstance->GetSubsystem<USeinNetSubsystem>()
+			: nullptr;
+		ASSERT_THAT(IsNotNull(Online));
+		ASSERT_THAT(IsNotNull(Net));
+		FSeinOnlineError ProviderError;
+		ASSERT_THAT(IsTrue(Online->SetProviderClassForTests(
+			USeinOnlineLoopbackProvider::StaticClass(), ProviderError)));
+		ASSERT_THAT(IsTrue(ProviderError.IsSuccess()));
+		ASSERT_THAT(IsTrue(
+			Online->RegisterConnectionAdmissionForTests()));
+
+		FLoopbackFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(*Online)));
+		FRegisteredMatch Match;
+		ASSERT_THAT(IsTrue(BuildRegisteredMatch(
+			Fixture, ESeinOnlineMatchClassification::Unranked, Match)));
+		Net->SetConnectionAdmissionBindingForTests(
+			Match.MatchID, Match.ParticipantOne, FSeinPlayerID(1));
+
+		const FName TransportType =
+			UOnlineEngineInterface::Get()->GetDefaultOnlineSubsystemName();
+		const FString TransportValue(TEXT("shared-transport-user"));
+		const FUniqueNetIdRepl TransportIdentity =
+			MakeTransportIdentity(TransportType, TransportValue);
+		ASSERT_THAT(IsTrue(TransportIdentity.IsValid()));
+		ASSERT_THAT(IsTrue(
+			UOnlineEngineInterface::Get()->IsCompatibleUniqueNetId(
+				TransportIdentity)));
+
+		FSeinOnlineIssueReconnectCredentialRequest Issue;
+		Issue.MatchID = Match.MatchID;
+		Issue.ParticipantID = Match.ParticipantOne;
+		Issue.PlatformIdentityType = TEXT("DifferentProvider");
+		Issue.PlatformIdentityValue = TransportValue;
+		Issue.IdempotencyKey = UniqueKey(TEXT("game-mode-mismatched-type"));
+		const FExecutedRequest MismatchedIssue = Fixture.Execute(
+			ESeinOnlineOperation::IssueReconnectCredential,
+			Issue,
+			ESeinOnlineCallerAuthority::TrustedServer);
+		const FSeinOnlineReconnectCredentialResult* MismatchedCredential =
+			MismatchedIssue.Response.Payload.GetPtr<
+				FSeinOnlineReconnectCredentialResult>();
+		ASSERT_THAT(IsNotNull(MismatchedCredential));
+
+		ASeinPlayerStart& PlayerStart =
+			Spawner.SpawnActor<ASeinPlayerStart>();
+		PlayerStart.PlayerSlot = 1;
+		PlayerStart.FactionID = FSeinFactionID(1);
+		PlayerStart.TeamID = 1;
+		ASeinPlayerStart& SparePlayerStart =
+			Spawner.SpawnActor<ASeinPlayerStart>();
+		SparePlayerStart.PlayerSlot = 2;
+		SparePlayerStart.FactionID = FSeinFactionID(2);
+		SparePlayerStart.TeamID = 2;
+
+		FURL GameURL;
+		GameURL.AddOption(
+			TEXT("game=/Script/SeinARTSFramework.SeinGameMode"));
+		ASSERT_THAT(IsTrue(Spawner.GetWorld().SetGameMode(GameURL)));
+		ASeinGameMode* GameMode = Cast<ASeinGameMode>(
+			Spawner.GetWorld().GetAuthGameMode());
+		ASSERT_THAT(IsNotNull(GameMode));
+		FString GameModeInitError;
+		GameMode->InitGame(
+			TEXT("OnlineServicesAdmissionTest"),
+			TEXT(""),
+			GameModeInitError);
+		ASSERT_THAT(IsTrue(GameModeInitError.IsEmpty()));
+		ASSERT_THAT(IsNotNull(GameMode->GameSession));
+		ASSERT_THAT(IsTrue(GameMode->bMatchSettingsResolved));
+		ASSERT_THAT(AreEqual(2, GameMode->ResolvedMatchSettings.Slots.Num()));
+		const FString Address(TEXT("127.0.0.1"));
+		const FString MismatchedOptions = FString::Printf(
+			TEXT("?SeinAdmission=%s"),
+			*MismatchedCredential->AdmissionID);
+		FString Error;
+		GameMode->PreLogin(
+			MismatchedOptions,
+			Address,
+			TransportIdentity,
+			Error);
+		ASSERT_THAT(IsFalse(Error.IsEmpty()));
+
+		Issue.PlatformIdentityType = TransportType.ToString();
+		Issue.IdempotencyKey = UniqueKey(TEXT("game-mode-correct-type"));
+		const FExecutedRequest CorrectIssue = Fixture.Execute(
+			ESeinOnlineOperation::IssueReconnectCredential,
+			Issue,
+			ESeinOnlineCallerAuthority::TrustedServer);
+		const FSeinOnlineReconnectCredentialResult* CorrectCredential =
+			CorrectIssue.Response.Payload.GetPtr<
+				FSeinOnlineReconnectCredentialResult>();
+		ASSERT_THAT(IsNotNull(CorrectCredential));
+		const FString Options = FString::Printf(
+			TEXT("?SeinAdmission=%s"), *CorrectCredential->AdmissionID);
+		Error.Reset();
+		GameMode->PreLogin(Options, Address, TransportIdentity, Error);
+		ASSERT_THAT(IsTrue(Error.IsEmpty()));
+
+		ASeinPlayerController& Controller =
+			Spawner.SpawnActor<ASeinPlayerController>();
+		if (!Controller.PlayerState)
+		{
+			Controller.SetPlayerState(&Spawner.SpawnActor<APlayerState>());
+		}
+		const FString InitError = GameMode->InitNewPlayer(
+			&Controller, TransportIdentity, Options);
+		ASSERT_THAT(IsTrue(InitError.IsEmpty()));
+		ASSERT_THAT(IsTrue(Controller.SeinPlayerID == FSeinPlayerID(1)));
+		ASSERT_THAT(IsTrue(Controller.StartSpot.Get() == &PlayerStart));
+
+		Error.Reset();
+		GameMode->PreLogin(Options, Address, TransportIdentity, Error);
+		ASSERT_THAT(IsFalse(Error.IsEmpty()));
+
+		Issue.IdempotencyKey = UniqueKey(TEXT("game-mode-connected-seat"));
+		const FExecutedRequest ConnectedSeatIssue = Fixture.Execute(
+			ESeinOnlineOperation::IssueReconnectCredential,
+			Issue,
+			ESeinOnlineCallerAuthority::TrustedServer);
+		const FSeinOnlineReconnectCredentialResult* ConnectedSeatCredential =
+			ConnectedSeatIssue.Response.Payload.GetPtr<
+				FSeinOnlineReconnectCredentialResult>();
+		ASSERT_THAT(IsNotNull(ConnectedSeatCredential));
+		const FString ConnectedSeatOptions = FString::Printf(
+			TEXT("?SeinAdmission=%s"),
+			*ConnectedSeatCredential->AdmissionID);
+		Error.Reset();
+		GameMode->PreLogin(
+			ConnectedSeatOptions, Address, TransportIdentity, Error);
+		ASSERT_THAT(IsTrue(Error.Contains(TEXT("already connected"))));
 	}
 
 	TEST(OnlineServicesFacadeDefersCancelsAndIgnoresStaleProviders,
