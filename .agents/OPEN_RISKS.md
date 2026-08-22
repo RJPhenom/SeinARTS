@@ -24,10 +24,13 @@ This is the actionable remainder after consolidating the historical audits. It i
    reproduces every replay tick in a fresh world. An in-flight snapshot now restores the executing
    broker, reservation, latent movement, and every subsequent canonical root through exact
    settlement. A shipped-A* path with an unrelated blocker added at its endpoint also proves the
-   authoritative final step refuses that blocker until it clears. The public Blueprint preview/issue
-   pair cannot carry guide points, formation tag, or the displayed artifact through issue and
-   therefore recomputes defaults. Remaining: decide that public API shape; PIE feel/visual checks for
-   moving and contended cover; and the larger-selection performance risk recorded below.
+   authoritative final step refuses that blocker until it clears. Public Blueprint input paths now
+   have an opaque one-use `Plan Formation Order` / `Issue Formation Order` token that carries the
+   complete preview key, exact artifact, and recipient boundaries through authenticated issue and
+   deterministic admission. Moving/destroyed providers do not invalidate frozen destinations;
+   session, principal, authority, overlap, and live roster drift do. Remaining: PIE feel/visual and
+   Blueprint-graph ergonomics checks for moving and contended cover, plus the larger-selection
+   performance risk recorded below.
 2. Squad reinforcement requests now have exact slot and monotonic request identity, atomic
    payer/cost snapshots, exact cancel/refund, deterministic completion, reciprocal membership, and
    snapshot continuation. Real player-command continuation and per-tick replay-root coverage exercise

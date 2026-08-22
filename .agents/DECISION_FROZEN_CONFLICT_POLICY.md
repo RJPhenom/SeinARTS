@@ -39,6 +39,11 @@ interim only.
   release), `DeadMemberDropsOnlyItsSlotFromAdmittedArtifact` (RJ's slots example), existing
   dead-subset/settled/snapshot tests retained.
 
+Later exact-order API hardening bumped BrokerOrder to V4 to carry per-recipient roster boundaries
+through network input delay. That schema change does not alter policy D: dead members may drop their
+own slots, surviving members keep the exact displayed destinations, and provider motion does not
+retarget them.
+
 ## Red-team follow-up (same day)
 
 An adversarial pass on the landed commit confirmed one real, PRE-EXISTING hole (not introduced by

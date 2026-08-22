@@ -1,10 +1,19 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
- * @file    SeinCommandBrokerBPFL.h
- * @brief   BP surface for CommandBroker introspection + dispatch (DESIGN §5).
- *          Reads are BlueprintPure; writes (IssueOrder) go through the command
- *          buffer so the txn log keeps one entry per player click regardless
- *          of selection size.
+ *
+ * @file         SeinCommandBrokerBPFL.h
+ * @author       RJ Macklem
+ * @created      02 Jun 2026
+ * @latest       22 Aug 2026
+ * @brief        Blueprint surface for command-broker queries, planning, and dispatch.
+ *
+ *               Reads are BlueprintPure. Writes enter through the command
+ *               buffer so one player order remains one transaction regardless
+ *               of selection size. Exact formation workflows carry their
+ *               displayed destination artifact in an opaque transient token.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
  */
 
 #pragma once
@@ -17,6 +26,7 @@
 #include "Types/Vector.h"
 #include "Components/SeinCommandBrokerData.h"
 #include "Brokers/SeinBrokerTypes.h"
+#include "Brokers/SeinFormationOrderToken.h"
 #include "SeinCommandBrokerBPFL.generated.h"
 
 class USeinWorldSubsystem;
@@ -95,6 +105,59 @@ public:
 		bool bQueueCommand = false,
 		FFixedVector FormationEnd = FFixedVector());
 
+	/**
+	 * Build an exact formation preview and a one-use token for issuing it.
+	 *
+	 * Render OutLayout, retain OutToken, then pass that same token to Issue
+	 * Formation Order. Planning is read-only with respect to simulation state.
+	 * The token captures the player, ordered recipients, command context, target
+	 * anchor, guide points, formation, queue mode, and exact per-member world
+	 * destinations after every selection-plan provider has run. It deliberately
+	 * has no target-entity input: this is the precise location/formation workflow;
+	 * use Issue Broker Order for entity-targeted smart commands.
+	 * PlayerID is the standalone identity. An active topology adapter replaces it
+	 * with its authenticated local player before authority and visibility queries.
+	 *
+	 * A successful token remains valid while units and destination providers move.
+	 * Provider movement or destruction never relocates its displayed points. A
+	 * restored/replaced match, changed live broker membership or authority, changed
+	 * authenticated local player, wrong world, or prior issue makes it stale.
+	 * Members that die after planning are handled by the command's normal policy-D
+	 * admission and do not stale surviving entries.
+	 *
+	 * Success means a complete token was created. OutLayout and OutToken are reset
+	 * on failure.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Broker|Formation",
+		meta = (WorldContext = "WorldContextObject", DisplayName = "Plan Formation Order"))
+	static ESeinFormationOrderTokenResult SeinPlanFormationOrder(
+		const UObject* WorldContextObject,
+		FSeinPlayerID PlayerID,
+		const TArray<FSeinEntityHandle>& Members,
+		const FGameplayTagContainer& CommandContext,
+		FFixedVector TargetLocation,
+		const TArray<FFixedVector>& GuidePoints,
+		FGameplayTag FormationTag,
+		bool bQueueCommand,
+		FSeinFormationLayout& OutLayout,
+		USeinFormationOrderToken*& OutToken);
+
+	/**
+	 * Submit the exact command captured by Plan Formation Order.
+	 *
+	 * The token is validated against this world, match session, authenticated local
+	 * player, authority, and live recipient membership, then consumed after one
+	 * accepted submission. SubmissionRejected is retryable because the token was
+	 * not consumed. Success means standalone ingress queued the draft or the active
+	 * topology adapter buffered it; deterministic admission still owns the final
+	 * gameplay decision.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Broker|Formation",
+		meta = (WorldContext = "WorldContextObject", DisplayName = "Issue Formation Order"))
+	static ESeinFormationOrderTokenResult SeinIssueFormationOrder(
+		const UObject* WorldContextObject,
+		USeinFormationOrderToken* Token);
+
 	// Preview
 	// ====================================================================================================
 
@@ -104,9 +167,9 @@ public:
 	 * Pure-compute preview through the same resolver and selection-plan providers used by
 	 * command construction, without spawning a broker or mutating sim state. The shipped
 	 * native preview subsystem/player controller carries the exact displayed artifact into
-	 * its command. The public Blueprint `Issue Broker Order` node cannot accept this node's
-	 * guide points, formation tag, or frozen artifact and recomputes with defaults; custom
-	 * Blueprint input paths must not assume preview/commit parity until that API is resolved.
+	 * its command. Blueprint input paths that require the same guarantee should use Plan
+	 * Formation Order and Issue Formation Order. The compatibility Issue Broker Order node
+	 * still recomputes a default artifact and does not consume this node's output.
 	 *
 	 * Resolver dispatch:
 	 *   - Single-squad selection (every member shares the same FSeinSquadMemberComponent::SquadEntity):

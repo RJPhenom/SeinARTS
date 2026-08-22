@@ -178,6 +178,7 @@ namespace UE::SeinARTSTests
 			[&bDelegatedDuringHardPause](const FSeinCommand&, bool)
 			{
 				bDelegatedDuringHardPause = true;
+				return true;
 			});
 		Fixture.World->SetLocalCommandSubmitter(MoveTemp(LocalSubmitter));
 		Fixture.World->SubmitLocalCommandDraft(

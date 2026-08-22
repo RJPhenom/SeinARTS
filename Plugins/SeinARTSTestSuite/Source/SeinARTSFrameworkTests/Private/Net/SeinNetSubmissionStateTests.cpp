@@ -1,5 +1,6 @@
 #include "CQTest.h"
 #include "Components/ActorTestSpawner.h"
+#include "TestGameInstance.h"
 #include "SeinNetSubsystem.h"
 #include "SeinNetCommandWireCodec.h"
 #include "SeinReplayReader.h"
@@ -12,6 +13,7 @@
 #include "Serialization/MemoryWriter.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
+#include "Simulation/SeinTestSimContext.h"
 #include "TestTypes/SeinCommandSchemaTestTypes.h"
 
 struct FSeinNetSubsystemTestAccess
@@ -838,6 +840,48 @@ struct FSeinNetSubsystemTestAccess
 
 namespace UE::SeinARTSTests
 {
+	TEST(StandaloneExplicitTurnPropagatesCanonicalIngressRejection,
+		"SeinARTS.Unit.Network")
+	{
+		FActorTestSpawner Spawner;
+		Spawner.InitializeGameSubsystems();
+		UWorld& World = Spawner.GetWorld();
+		USeinWorldSubsystem* WorldSub =
+			World.GetSubsystem<USeinWorldSubsystem>();
+		USeinNetSubsystem* Net = Spawner.GetGameInstance()
+			->GetSubsystem<USeinNetSubsystem>();
+		ASSERT_THAT(IsNotNull(WorldSub));
+		ASSERT_THAT(IsNotNull(Net));
+
+		const FSeinPlayerID Player(1);
+		FString Error;
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Materialize(
+			*WorldSub,
+			[WorldSub, Player]()
+			{
+				WorldSub->RegisterPlayer(Player, FSeinFactionID(1));
+			},
+			FSeinMatchSettings(),
+			/*SessionSeed=*/0,
+			FName(TEXT("Net.StandaloneExplicitTurn")),
+			&Error)));
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*WorldSub, &Error)));
+		FSeinNetSubsystemTestAccess::SetNetworkingActive(*Net, false);
+
+		FSeinCommand Ping = FSeinNetSubsystemTestAccess::Ping();
+		Ping.PlayerID = Player;
+		ASSERT_THAT(IsTrue(Net->SubmitLocalCommandAtTurn(3, Ping)));
+		ASSERT_THAT(AreEqual(1, WorldSub->GetPendingCommands().Num()));
+
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*WorldSub);
+			WorldSub->SetSimPaused(true, /*bRejectCommandsWhilePaused=*/true);
+		}
+		ASSERT_THAT(IsFalse(Net->SubmitLocalCommandAtTurn(4, Ping)));
+		ASSERT_THAT(AreEqual(1, WorldSub->GetPendingCommands().Num()));
+		WorldSub->StopSimulation();
+	}
+
 	TEST(FrozenTurnSubmissionRetriesExactBatch, "SeinARTS.Unit.Network")
 	{
 		TestRunner->AddExpectedError(

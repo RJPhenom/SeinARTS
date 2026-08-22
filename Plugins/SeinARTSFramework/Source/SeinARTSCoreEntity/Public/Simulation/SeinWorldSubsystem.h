@@ -534,10 +534,19 @@ DECLARE_DELEGATE_RetVal_TwoParams(bool, FSeinAIEmitInterceptor,
  * Topology adapter for locally authored command drafts. When bound, the active
  * transport authenticates its local participant and ignores all draft provenance.
  * The boolean requests the participant's independently granted match-admin
- * capability; it never derives from coordinator/relay ownership.
+ * capability; it never derives from coordinator/relay ownership. Returns true
+ * only when the adapter accepted the draft into its bounded outgoing path.
  */
-DECLARE_DELEGATE_TwoParams(FSeinLocalCommandSubmitter,
+DECLARE_DELEGATE_RetVal_TwoParams(bool, FSeinLocalCommandSubmitter,
 	const FSeinCommand& /*Draft*/, bool /*bRequestMatchAdministration*/);
+
+/**
+ * Resolve the authenticated local player before presentation code performs a
+ * player-relative query. An invalid return fails closed. Standalone leaves this
+ * unbound and uses the claimed player directly.
+ */
+DECLARE_DELEGATE_RetVal_OneParam(FSeinPlayerID,
+	FSeinLocalCommandPrincipalResolver, FSeinPlayerID /*ClaimedPlayer*/);
 
 /** Resolve the exact next canonical command frame while ordinary sim time is frozen. */
 DECLARE_DELEGATE_RetVal_OneParam(bool, FSeinPauseControlFrameResolver,
@@ -842,6 +851,14 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Simulation")
 	bool IsSimulationRunning() const { return bIsRunning; }
+
+	/** Process-local generation for transient formation-order tokens. It advances
+	 *  after an exact snapshot restore so presentation drafts created against the
+	 *  replaced state cannot be submitted afterward. This is not canonical state. */
+	uint64 GetFormationOrderTokenEpoch() const
+	{
+		return FormationOrderTokenEpoch;
+	}
 
 	/** True iff ordinary sim time is frozen. Systems, ticks, votes, latent work,
 	 *  and ordinary commands stop; only canonical FrozenPauseControl frames may
@@ -1149,6 +1166,14 @@ public:
 	void SetLocalCommandSubmitter(FSeinLocalCommandSubmitter&& Submitter);
 	void ClearLocalCommandSubmitter();
 	bool HasLocalCommandSubmitter() const;
+
+	/** Install the active topology adapter's local-player authentication seam. */
+	void SetLocalCommandPrincipalResolver(
+		FSeinLocalCommandPrincipalResolver&& Resolver);
+	void ClearLocalCommandPrincipalResolver();
+	bool ResolveLocalCommandPrincipal(
+		FSeinPlayerID ClaimedPlayer,
+		FSeinPlayerID& OutAuthenticatedPlayer) const;
 
 	/**
 	 * Topology-neutral frozen-time frame seam. Network adapters resolve an exact
@@ -1925,8 +1950,10 @@ public:
 	 * it from their local participant binding. Match administration remains a
 	 * separate requested capability that the adapter must prove. Ordinary drafts
 	 * are accepted only after bootstrap has been consumed and the sim is running.
+	 * Returns true only when standalone ingress queued the draft or the active
+	 * topology adapter accepted it.
 	 */
-	void SubmitLocalCommandDraft(
+	bool SubmitLocalCommandDraft(
 		const FSeinCommand& Draft,
 		bool bRequestMatchAdministration = false);
 
@@ -1951,6 +1978,11 @@ public:
 	ESeinCommandStructureResult ValidateCommandStructure(
 		const FSeinCommand& Command,
 		FSeinCommandSchemaDescriptor* OutSchema = nullptr) const;
+
+	/** Query the selected deterministic authority policy for one entity. */
+	bool CanCommandControlEntity(
+		const FSeinCommand& Command,
+		FSeinEntityHandle Entity) const;
 
 	/** Exact cursor the next pause-control frame must carry. */
 	FSeinPauseControlCursor GetExpectedPauseControlCursor() const;
@@ -2276,8 +2308,9 @@ private:
 
 	/** Transport-only ingress. Caller-authored provenance and derived funding
 	 *  are discarded before the authenticated principal is buffered. Keeping
-	 *  this friend-scoped prevents ordinary extensions from asserting identity. */
-	void EnqueueAuthenticatedCommand(
+	 *  this friend-scoped prevents ordinary extensions from asserting identity.
+	 *  Returns true only when the command entered the canonical pending buffer. */
+	bool EnqueueAuthenticatedCommand(
 		const FSeinCommand& Command,
 		FSeinPlayerID AuthenticatedPlayer,
 		ESeinCommandIssuerKind AuthenticatedIssuerKind);
@@ -2436,6 +2469,7 @@ private:
 	 *  invocation remains private so every command crosses Core's gates. */
 	FSeinAIEmitInterceptor AIEmitInterceptor;
 	FSeinLocalCommandSubmitter LocalCommandSubmitter;
+	FSeinLocalCommandPrincipalResolver LocalCommandPrincipalResolver;
 
 	/** Selected stateless policy CDO. Topology authentication occurs before this seam. */
 	UPROPERTY(Transient)
@@ -2586,6 +2620,8 @@ private:
 		TSubclassOf<USeinAbility> AbilityClass);
 
 	// Simulation state
+	/** Non-canonical invalidation generation for presentation command tokens. */
+	uint64 FormationOrderTokenEpoch = 1;
 	ESeinMatchBootstrapState MatchBootstrapState =
 		ESeinMatchBootstrapState::Awaiting;
 	FSeinMatchBootstrapReceipt MatchBootstrapReceipt;

@@ -246,8 +246,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Network")
 	void SubmitLocalCommand(const FSeinCommand& Command);
 	/** Topology-adapter entry used by USeinWorldSubsystem. Draft provenance is
-	 *  ignored; match administration is only a request proved at ingress. */
-	void SubmitLocalCommandDraft(
+	 *  ignored; match administration is only a request proved at ingress. Returns
+	 *  true only after direct enqueue or bounded outgoing buffering succeeds. */
+	bool SubmitLocalCommandDraft(
 		const FSeinCommand& Draft,
 		bool bRequestMatchAdministration);
 

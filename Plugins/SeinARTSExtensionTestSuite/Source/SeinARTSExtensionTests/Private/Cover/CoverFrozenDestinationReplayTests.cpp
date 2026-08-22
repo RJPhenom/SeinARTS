@@ -210,6 +210,10 @@ namespace
 			SeinARTSTags::Command_Context_RightClick);
 		Payload.CommandContext.AddTag(
 			SeinARTSTags::Command_Context_Target_Ground);
+		FSeinBrokerRecipientPlanSegment& Segment =
+			Payload.RecipientPlan.AddDefaulted_GetRef();
+		Segment.Recipient = Member;
+		Segment.MemberCount = Artifact.Num();
 		Payload.DestinationArtifact = Artifact;
 
 		FSeinCommand Command;

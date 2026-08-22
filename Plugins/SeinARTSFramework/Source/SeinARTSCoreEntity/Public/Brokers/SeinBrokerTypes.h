@@ -22,14 +22,17 @@ class USeinFormation;
 
 namespace SeinBrokerOrderProtocol
 {
-	constexpr int32 SchemaVersion = 3;
+	constexpr int32 SchemaVersion = 4;
 	constexpr int32 MaxMembers = 4096;
 	constexpr int32 MaxGuidePoints = 4096;
 	constexpr int32 MaxTargeterPoints = 256;
 	constexpr int32 MaxDestinationArtifactEntries = 4096;
+	constexpr int32 MaxRecipientPlanEntries = 4096;
 	constexpr int32 MaxQueuedOrdersPerBroker = 8192;
-	constexpr int32 MaxPayloadBytes = 256 * 1024;
-	constexpr int32 MaxAggregateContainerEntries = 8192;
+	constexpr int32 MaxPayloadBytes = 384 * 1024;
+	constexpr int32 MaxAggregateContainerEntries =
+		MaxGuidePoints + MaxTargeterPoints
+		+ MaxDestinationArtifactEntries + MaxRecipientPlanEntries;
 }
 
 /**
@@ -68,6 +71,24 @@ struct SEINARTSCOREENTITY_API FSeinFrozenDestination
 	/** Optional stable item index inside SourceEntity at capture time. */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker|Destination")
 	int32 SourceIndex = INDEX_NONE;
+};
+
+/**
+ * Canonical boundary for one original BrokerOrder recipient. The matching
+ * members occupy the next MemberCount entries in DestinationArtifact. This
+ * preserves broker boundaries across network input delay without storing a
+ * live provider or membership binding.
+ */
+USTRUCT(BlueprintType, meta = (SeinDeterministic))
+struct SEINARTSCOREENTITY_API FSeinBrokerRecipientPlanSegment
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Command")
+	FSeinEntityHandle Recipient;
+
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Command")
+	int32 MemberCount = 0;
 };
 
 /**
@@ -306,6 +327,12 @@ struct SEINARTSCOREENTITY_API FSeinBrokerOrderPayload
 	 *  Invalid for right-click smart commands. */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Command")
 	FGameplayTag PredeterminedAbilityTag;
+
+	/** Original recipient boundaries for an exact DestinationArtifact. Empty is
+	 *  valid only when DestinationArtifact is also empty. At deterministic
+	 *  admission, each segment must still contain the same surviving members. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Command")
+	TArray<FSeinBrokerRecipientPlanSegment> RecipientPlan;
 
 	/** Optional exact selection plan captured from the visible preview. The sim
 	 *  validates complete member coverage and either admits the whole artifact or

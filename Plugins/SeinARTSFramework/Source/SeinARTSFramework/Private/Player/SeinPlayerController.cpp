@@ -1462,10 +1462,13 @@ void ASeinPlayerController::IssueSmartCommandEx(
 	// unrelated entity remains an entity-targeted smart command and discards the
 	// ground artifact below.
 	TArray<FSeinEntityHandle> ArtifactMembers;
+	TArray<FSeinBrokerRecipientPlanSegment> RecipientPlan;
+	RecipientPlan.Reserve(MemberHandles.Num());
 	TSet<FSeinEntityHandle> SeenArtifactMembers;
 	bool bArtifactEligible = true;
 	for (const FSeinEntityHandle& Handle : MemberHandles)
 	{
+		const int32 MemberStart = ArtifactMembers.Num();
 		if (const FSeinCommandBrokerData* Broker =
 			Subsystem->GetComponent<FSeinCommandBrokerData>(Handle))
 		{
@@ -1486,11 +1489,13 @@ void ASeinPlayerController::IssueSmartCommandEx(
 					bArtifactEligible = false;
 					break;
 				}
-				if (!SeenArtifactMembers.Contains(Member))
+				if (SeenArtifactMembers.Contains(Member))
 				{
-					SeenArtifactMembers.Add(Member);
-					ArtifactMembers.Add(Member);
+					bArtifactEligible = false;
+					break;
 				}
+				SeenArtifactMembers.Add(Member);
+				ArtifactMembers.Add(Member);
 			}
 			if (!bArtifactEligible) break;
 		}
@@ -1503,12 +1508,24 @@ void ASeinPlayerController::IssueSmartCommandEx(
 				bArtifactEligible = false;
 				break;
 			}
-			if (!SeenArtifactMembers.Contains(Handle))
+			if (SeenArtifactMembers.Contains(Handle))
 			{
-				SeenArtifactMembers.Add(Handle);
-				ArtifactMembers.Add(Handle);
+				bArtifactEligible = false;
+				break;
 			}
+			SeenArtifactMembers.Add(Handle);
+			ArtifactMembers.Add(Handle);
 		}
+		const int32 MemberCount = ArtifactMembers.Num() - MemberStart;
+		if (MemberCount <= 0)
+		{
+			bArtifactEligible = false;
+			break;
+		}
+		FSeinBrokerRecipientPlanSegment& Segment =
+			RecipientPlan.AddDefaulted_GetRef();
+		Segment.Recipient = Handle;
+		Segment.MemberCount = MemberCount;
 	}
 
 	if (bArtifactEligible && !ArtifactMembers.IsEmpty())
@@ -1556,6 +1573,10 @@ void ASeinPlayerController::IssueSmartCommandEx(
 				Payload.DestinationArtifact.Reset();
 			}
 		}
+		if (!Payload.DestinationArtifact.IsEmpty())
+		{
+			Payload.RecipientPlan = RecipientPlan;
+		}
 	}
 
 	if (TargetEntityHandle.IsValid())
@@ -1575,6 +1596,7 @@ void ASeinPlayerController::IssueSmartCommandEx(
 		else
 		{
 			Payload.DestinationArtifact.Reset();
+			Payload.RecipientPlan.Reset();
 		}
 	}
 	Payload.CommandContext = Context;

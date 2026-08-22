@@ -206,9 +206,12 @@ reconstructs every replay tick in a fresh world. A genuine in-flight snapshot re
 broker, reservation, latent movement, and every subsequent canonical root through settlement. A
 separate shipped-A* case plans before an unrelated endpoint blocker appears, then proves the exact
 authoritative final step refuses the live blocker without moving the entity and succeeds after it
-clears. The public Blueprint preview/issue pair cannot carry
-the full preview key or displayed artifact through issue; its API shape requires RJ's decision. PIE
-feel remains in RJ's batch.
+clears. The approved public Blueprint API is now shipped as opaque one-use `Plan Formation Order` /
+`Issue Formation Order` tokens. They preserve the full key, authenticated principal, exact artifact,
+and BrokerOrder V4 recipient segments; issue and deterministic admission fail closed on session,
+authority, overlap, or surviving-roster drift while provider movement/destruction leaves frozen
+world points intact. Compatibility preview/issue nodes remain. PIE feel and Blueprint-graph UX remain
+in RJ's batch.
 
 Squad reinforcement request identity, exact slot selection, atomic charge, exact cancel/refund,
 completion membership, structural restore admission, snapshot continuation, and designer-authored

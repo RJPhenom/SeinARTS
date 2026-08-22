@@ -83,6 +83,10 @@ namespace UE::SeinARTSTests
 				SeinARTSTags::Command_Context_RightClick);
 			Payload.CommandContext.AddTag(
 				SeinARTSTags::Command_Context_Target_Ground);
+			FSeinBrokerRecipientPlanSegment& Segment =
+				Payload.RecipientPlan.AddDefaulted_GetRef();
+			Segment.Recipient = Member;
+			Segment.MemberCount = 1;
 			Payload.DestinationArtifact.Add(Destination);
 
 			FSeinCommand Command;
@@ -295,6 +299,204 @@ namespace UE::SeinARTSTests
 		World->StopSimulation();
 	}
 
+	TEST(BrokerOrderRejectsOwnedBrokerWithForeignLiveMember,
+		"SeinARTS.Unit.Authority.BrokerOrder")
+	{
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+		const FSeinPlayerID OrderingPlayer(1);
+		const FSeinPlayerID ForeignPlayer(2);
+		FSeinEntityHandle Broker;
+		FSeinEntityHandle ForeignMember;
+		const auto AuthorState = [&]()
+		{
+			World->RegisterPlayer(OrderingPlayer, FSeinFactionID(1));
+			World->RegisterPlayer(ForeignPlayer, FSeinFactionID(2));
+			Broker = World->SpawnAbstractEntity(
+				FFixedTransform(), OrderingPlayer);
+			ForeignMember = World->SpawnAbstractEntity(
+				FFixedTransform(), ForeignPlayer);
+			FSeinCommandBrokerData BrokerData;
+			BrokerData.Members = {ForeignMember};
+			World->AddComponent(Broker, BrokerData);
+		};
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Materialize(
+			*World, AuthorState, FSeinMatchSettings(), 0x42524155,
+			TEXT("SeinARTS.BrokerOrder.ForeignMember"))));
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World)));
+
+		FSeinBrokerOrderPayload Payload;
+		Payload.CommandContext.AddTag(
+			SeinARTSTags::Command_Context_RightClick);
+		Payload.CommandContext.AddTag(
+			SeinARTSTags::Command_Context_Target_Ground);
+		FSeinCommand Command;
+		Command.PlayerID = OrderingPlayer;
+		Command.IssuerKind = ESeinCommandIssuerKind::Player;
+		Command.CommandType = SeinARTSTags::Command_Type_BrokerOrder;
+		Command.SchemaVersion = SeinBrokerOrderProtocol::SchemaVersion;
+		Command.EntityList = {Broker};
+		Command.Payload = FInstancedStruct::Make(Payload);
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+			ASSERT_THAT(IsTrue(FSeinWorldSubsystemTestAccess::HandleBrokerOrder(
+				*World, Command)));
+		}
+		const FSeinCommandBrokerData* BrokerData =
+			World->GetComponent<FSeinCommandBrokerData>(Broker);
+		ASSERT_THAT(IsNotNull(BrokerData));
+		ASSERT_THAT(AreEqual(0, BrokerData->OrderQueue.Num()));
+		World->StopSimulation();
+	}
+
+	TEST(BrokerOrderRejectsBrokerMemberOverlapForReplaceAndQueue,
+		"SeinARTS.Unit.Authority.BrokerOrder")
+	{
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+		const FSeinPlayerID Player(1);
+		FSeinEntityHandle Broker;
+		FSeinEntityHandle Member;
+		const auto AuthorState = [&]()
+		{
+			World->RegisterPlayer(Player, FSeinFactionID(1));
+			Broker = World->SpawnAbstractEntity(FFixedTransform(), Player);
+			Member = World->SpawnAbstractEntity(FFixedTransform(), Player);
+			FSeinCommandBrokerData BrokerData;
+			BrokerData.Members = {Member};
+			World->AddComponent(Broker, BrokerData);
+		};
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Materialize(
+			*World, AuthorState, FSeinMatchSettings(), 0x42524F56,
+			TEXT("SeinARTS.BrokerOrder.RecipientOverlap"))));
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World)));
+
+		FSeinBrokerOrderPayload Payload;
+		Payload.CommandContext.AddTag(
+			SeinARTSTags::Command_Context_RightClick);
+		Payload.CommandContext.AddTag(
+			SeinARTSTags::Command_Context_Target_Ground);
+		FSeinCommand Command;
+		Command.PlayerID = Player;
+		Command.CommandType = SeinARTSTags::Command_Type_BrokerOrder;
+		Command.SchemaVersion = SeinBrokerOrderProtocol::SchemaVersion;
+		Command.EntityList = {Broker, Member};
+		Command.Payload = FInstancedStruct::Make(Payload);
+		for (const bool bQueue : {false, true})
+		{
+			Command.bQueueCommand = bQueue;
+			ASSERT_THAT(IsTrue(World->SubmitLocalCommandDraft(Command)));
+			FTSTicker::GetCoreTicker().Tick(
+				World->GetFixedDeltaTimeSeconds());
+			const FSeinCommandBrokerData* BrokerData =
+				World->GetComponent<FSeinCommandBrokerData>(Broker);
+			ASSERT_THAT(IsNotNull(BrokerData));
+			ASSERT_THAT(AreEqual(0, BrokerData->OrderQueue.Num()));
+			ASSERT_THAT(IsNull(
+				World->GetComponent<FSeinBrokerMembershipData>(Member)));
+			const TArray<FSeinVisualEvent> Events = World->FlushVisualEvents();
+			ASSERT_THAT(IsTrue(Events.ContainsByPredicate(
+				[](const FSeinVisualEvent& Event)
+				{
+					return Event.ReasonTag
+						== SeinARTSTags::Command_Reject_InvalidTarget;
+				})));
+		}
+		World->StopSimulation();
+	}
+
+	TEST(ExactBrokerOrderRejectsRecipientTransferAfterBuffering,
+		"SeinARTS.Unit.Authority.BrokerOrder")
+	{
+		using namespace FrozenDestinationTestLocal;
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+		const FSeinPlayerID Player(1);
+		FSeinEntityHandle FirstBroker;
+		FSeinEntityHandle SecondBroker;
+		TArray<FSeinEntityHandle> Members;
+		const auto AuthorState = [&]()
+		{
+			World->RegisterPlayer(Player, FSeinFactionID(1));
+			for (int32 Index = 0; Index < 3; ++Index)
+			{
+				Members.Add(World->SpawnAbstractEntity(
+					FFixedTransform(), Player));
+			}
+			FirstBroker = World->SpawnAbstractEntity(
+				FFixedTransform(), Player);
+			SecondBroker = World->SpawnAbstractEntity(
+				FFixedTransform(), Player);
+			FSeinCommandBrokerData FirstData;
+			FirstData.Members = {Members[0], Members[1]};
+			World->AddComponent(FirstBroker, FirstData);
+			FSeinCommandBrokerData SecondData;
+			SecondData.Members = {Members[2]};
+			World->AddComponent(SecondBroker, SecondData);
+		};
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Materialize(
+			*World, AuthorState, FSeinMatchSettings(), 0x42525254,
+			TEXT("SeinARTS.BrokerOrder.DelayedRosterTransfer"))));
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World)));
+
+		FSeinBrokerOrderPayload Payload;
+		Payload.CommandContext.AddTag(
+			SeinARTSTags::Command_Context_RightClick);
+		Payload.CommandContext.AddTag(
+			SeinARTSTags::Command_Context_Target_Ground);
+		for (const TPair<FSeinEntityHandle, int32>& Pair : {
+			TPair<FSeinEntityHandle, int32>(FirstBroker, 2),
+			TPair<FSeinEntityHandle, int32>(SecondBroker, 1)})
+		{
+			FSeinBrokerRecipientPlanSegment& Segment =
+				Payload.RecipientPlan.AddDefaulted_GetRef();
+			Segment.Recipient = Pair.Key;
+			Segment.MemberCount = Pair.Value;
+		}
+		for (int32 Index = 0; Index < Members.Num(); ++Index)
+		{
+			Payload.DestinationArtifact.Add(
+				MakeDestination(*World, Members[Index], 1000 + Index * 200));
+		}
+		FSeinCommand Command;
+		Command.PlayerID = Player;
+		Command.CommandType = SeinARTSTags::Command_Type_BrokerOrder;
+		Command.SchemaVersion = SeinBrokerOrderProtocol::SchemaVersion;
+		Command.TargetLocation = Payload.DestinationArtifact[0].WorldPosition;
+		Command.EntityList = {FirstBroker, SecondBroker};
+		Command.Payload = FInstancedStruct::Make(Payload);
+		ASSERT_THAT(IsTrue(World->SubmitLocalCommandDraft(Command)));
+
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+			World->GetComponentMutable<FSeinCommandBrokerData>(FirstBroker)
+				->Members = {Members[0]};
+			World->GetComponentMutable<FSeinCommandBrokerData>(SecondBroker)
+				->Members = {Members[1], Members[2]};
+		}
+		FTSTicker::GetCoreTicker().Tick(World->GetFixedDeltaTimeSeconds());
+		ASSERT_THAT(AreEqual(0,
+			World->GetComponent<FSeinCommandBrokerData>(FirstBroker)
+				->OrderQueue.Num()));
+		ASSERT_THAT(AreEqual(0,
+			World->GetComponent<FSeinCommandBrokerData>(SecondBroker)
+				->OrderQueue.Num()));
+		const TArray<FSeinVisualEvent> Events = World->FlushVisualEvents();
+		ASSERT_THAT(IsTrue(Events.ContainsByPredicate(
+			[](const FSeinVisualEvent& Event)
+			{
+				return Event.ReasonTag
+					== SeinARTSTags::Command_Reject_InvalidTarget;
+			})));
+		World->StopSimulation();
+	}
+
 	TEST(FrozenDestinationSnapshotRestorePreservesAuthorityAndContinuation,
 		"SeinARTS.Unit.CoreEntity.FrozenDestination")
 	{
@@ -496,6 +698,14 @@ namespace UE::SeinARTSTests
 			SeinARTSTags::Command_Context_RightClick);
 		Payload.CommandContext.AddTag(
 			SeinARTSTags::Command_Context_Target_Ground);
+		for (const FSeinEntityHandle Member : {
+			FirstMember, SecondMember, ThirdMember})
+		{
+			FSeinBrokerRecipientPlanSegment& Segment =
+				Payload.RecipientPlan.AddDefaulted_GetRef();
+			Segment.Recipient = Member;
+			Segment.MemberCount = 1;
+		}
 		Payload.DestinationArtifact.Add(FirstSlot);
 		Payload.DestinationArtifact.Add(SecondSlot);
 		Payload.DestinationArtifact.Add(ThirdSlot);
@@ -608,6 +818,10 @@ namespace UE::SeinARTSTests
 			for (const FSeinEntityHandle& Member : Members)
 			{
 				Command.EntityList.Add(Member);
+				FSeinBrokerRecipientPlanSegment& Segment =
+					Payload.RecipientPlan.AddDefaulted_GetRef();
+				Segment.Recipient = Member;
+				Segment.MemberCount = 1;
 			}
 			Command.bQueueCommand = bQueue;
 			Command.Payload = FInstancedStruct::Make(Payload);

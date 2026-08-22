@@ -1,6 +1,14 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
- * @file    SeinCommandBrokerBPFL.cpp
+ *
+ * @file         SeinCommandBrokerBPFL.cpp
+ * @author       RJ Macklem
+ * @created      02 Jun 2026
+ * @latest       22 Aug 2026
+ * @brief        Implements command-broker Blueprint queries, planning, and dispatch.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
  */
 
 #include "Lib/SeinCommandBrokerBPFL.h"
@@ -25,6 +33,141 @@
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinBroker, Log, All);
+
+namespace SeinFormationOrderTokenLocal
+{
+	/** Mirror BrokerOrder admission's recipient expansion. Planning requires every
+	 *  recipient to be alive; issue-time comparison skips dead recipients so
+	 *  policy-D survivor admission remains authoritative. */
+	static bool GatherLiveMembers(
+		USeinWorldSubsystem& World,
+		const TArray<FSeinEntityHandle>& Recipients,
+		bool bRequireEveryRecipientAlive,
+		TArray<FSeinEntityHandle>& OutMembers,
+		TArray<int32>& OutMemberCountsByRecipient)
+	{
+		OutMembers.Reset();
+		OutMemberCountsByRecipient.Reset();
+		TSet<FSeinEntityHandle> SeenRecipients;
+		TSet<FSeinEntityHandle> SeenMembers;
+		for (const FSeinEntityHandle& Recipient : Recipients)
+		{
+			if (!Recipient.IsValid()
+				|| SeenRecipients.Contains(Recipient))
+			{
+				return false;
+			}
+			SeenRecipients.Add(Recipient);
+			if (!World.IsEntityAlive(Recipient))
+			{
+				if (bRequireEveryRecipientAlive)
+				{
+					return false;
+				}
+				OutMemberCountsByRecipient.Add(0);
+				continue;
+			}
+
+			const int32 MemberStart = OutMembers.Num();
+			if (const FSeinCommandBrokerData* Broker =
+				World.GetComponent<FSeinCommandBrokerData>(Recipient))
+			{
+				for (const FSeinEntityHandle& Member : Broker->Members)
+				{
+					if (!World.IsEntityAlive(Member))
+					{
+						continue;
+					}
+					if (SeenMembers.Contains(Member))
+					{
+						return false;
+					}
+					SeenMembers.Add(Member);
+					OutMembers.Add(Member);
+				}
+			}
+			else
+			{
+				if (SeenMembers.Contains(Recipient))
+				{
+					return false;
+				}
+				SeenMembers.Add(Recipient);
+				OutMembers.Add(Recipient);
+			}
+			const int32 MemberCount = OutMembers.Num() - MemberStart;
+			if (bRequireEveryRecipientAlive && MemberCount == 0)
+			{
+				return false;
+			}
+			OutMemberCountsByRecipient.Add(MemberCount);
+		}
+
+		return OutMemberCountsByRecipient.Num() == Recipients.Num()
+			&& !OutMembers.IsEmpty()
+			&& OutMembers.Num() <= SeinBrokerOrderProtocol::MaxMembers;
+	}
+
+	static bool MatchesSurvivingPlannedMembers(
+		USeinWorldSubsystem& World,
+		const TArray<FSeinEntityHandle>& PlannedMembers,
+		const TArray<int32>& PlannedMemberCountsByRecipient,
+		const TArray<FSeinEntityHandle>& CurrentMembers,
+		const TArray<int32>& CurrentMemberCountsByRecipient)
+	{
+		if (PlannedMemberCountsByRecipient.Num()
+			!= CurrentMemberCountsByRecipient.Num())
+		{
+			return false;
+		}
+
+		int32 PlannedCursor = 0;
+		int32 CurrentCursor = 0;
+		int32 SurvivingMemberCount = 0;
+		for (int32 RecipientIndex = 0;
+			RecipientIndex < PlannedMemberCountsByRecipient.Num();
+			++RecipientIndex)
+		{
+			const int32 PlannedCount =
+				PlannedMemberCountsByRecipient[RecipientIndex];
+			const int32 CurrentCount =
+				CurrentMemberCountsByRecipient[RecipientIndex];
+			if (PlannedCount < 0 || CurrentCount < 0
+				|| PlannedCursor + PlannedCount > PlannedMembers.Num()
+				|| CurrentCursor + CurrentCount > CurrentMembers.Num())
+			{
+				return false;
+			}
+
+			int32 SegmentCurrentCursor = CurrentCursor;
+			for (int32 Offset = 0; Offset < PlannedCount; ++Offset)
+			{
+				const FSeinEntityHandle PlannedMember =
+					PlannedMembers[PlannedCursor + Offset];
+				if (!World.IsEntityAlive(PlannedMember))
+				{
+					continue;
+				}
+				if (SegmentCurrentCursor >= CurrentCursor + CurrentCount
+					|| CurrentMembers[SegmentCurrentCursor] != PlannedMember)
+				{
+					return false;
+				}
+				++SegmentCurrentCursor;
+				++SurvivingMemberCount;
+			}
+			if (SegmentCurrentCursor != CurrentCursor + CurrentCount)
+			{
+				return false;
+			}
+			PlannedCursor += PlannedCount;
+			CurrentCursor += CurrentCount;
+		}
+		return SurvivingMemberCount > 0
+			&& PlannedCursor == PlannedMembers.Num()
+			&& CurrentCursor == CurrentMembers.Num();
+	}
+}
 
 USeinWorldSubsystem* USeinCommandBrokerBPFL::GetWorldSubsystem(const UObject* WorldContextObject)
 {
@@ -120,28 +263,14 @@ void USeinCommandBrokerBPFL::SeinIssueBrokerOrder(
 			SeinARTSTags::Command_Context_Target_Ground))
 	{
 		TArray<FSeinEntityHandle> ArtifactMembers;
-		TSet<FSeinEntityHandle> SeenMembers;
-		for (const FSeinEntityHandle& Recipient : Members)
+		TArray<int32> MemberCountsByRecipient;
+		if (!SeinFormationOrderTokenLocal::GatherLiveMembers(
+				*Sub, Members, true, ArtifactMembers,
+				MemberCountsByRecipient))
 		{
-			if (const FSeinCommandBrokerData* Broker =
-				Sub->GetComponent<FSeinCommandBrokerData>(Recipient))
-			{
-				for (const FSeinEntityHandle& Member : Broker->Members)
-				{
-					if (Sub->IsEntityAlive(Member)
-						&& !SeenMembers.Contains(Member))
-					{
-						SeenMembers.Add(Member);
-						ArtifactMembers.Add(Member);
-					}
-				}
-			}
-			else if (Sub->IsEntityAlive(Recipient)
-				&& !SeenMembers.Contains(Recipient))
-			{
-				SeenMembers.Add(Recipient);
-				ArtifactMembers.Add(Recipient);
-			}
+			UE_LOG(LogSeinBroker, Warning,
+				TEXT("IssueBrokerOrder: invalid or overlapping recipient expansion."));
+			return;
 		}
 		if (!ArtifactMembers.IsEmpty())
 		{
@@ -165,6 +294,17 @@ void USeinCommandBrokerBPFL::SeinIssueBrokerOrder(
 					TEXT("IssueBrokerOrder: destination plan failed; submitting without an artifact."));
 				Payload.DestinationArtifact.Reset();
 			}
+			else
+			{
+				Payload.RecipientPlan.Reserve(Members.Num());
+				for (int32 Index = 0; Index < Members.Num(); ++Index)
+				{
+					FSeinBrokerRecipientPlanSegment& Segment =
+						Payload.RecipientPlan.AddDefaulted_GetRef();
+					Segment.Recipient = Members[Index];
+					Segment.MemberCount = MemberCountsByRecipient[Index];
+				}
+			}
 		}
 	}
 
@@ -179,6 +319,247 @@ void USeinCommandBrokerBPFL::SeinIssueBrokerOrder(
 	Cmd.Payload = FInstancedStruct::Make(Payload);
 
 	Sub->SubmitLocalCommandDraft(Cmd);
+}
+
+ESeinFormationOrderTokenResult
+USeinCommandBrokerBPFL::SeinPlanFormationOrder(
+	const UObject* WorldContextObject,
+	FSeinPlayerID PlayerID,
+	const TArray<FSeinEntityHandle>& Members,
+	const FGameplayTagContainer& CommandContext,
+	FFixedVector TargetLocation,
+	const TArray<FFixedVector>& GuidePoints,
+	FGameplayTag FormationTag,
+	bool bQueueCommand,
+	FSeinFormationLayout& OutLayout,
+	USeinFormationOrderToken*& OutToken)
+{
+	OutLayout = FSeinFormationLayout();
+	OutToken = nullptr;
+	USeinWorldSubsystem* World = GetWorldSubsystem(WorldContextObject);
+	if (!World || Members.IsEmpty() || CommandContext.IsEmpty()
+		|| Members.Num() > SeinBrokerOrderProtocol::MaxMembers
+		|| GuidePoints.Num() > SeinBrokerOrderProtocol::MaxGuidePoints)
+	{
+		return ESeinFormationOrderTokenResult::InvalidInput;
+	}
+	if (World->GetMatchBootstrapState()
+			!= ESeinMatchBootstrapState::Consumed
+		|| !World->IsSimulationRunning()
+		|| !World->IsExecutionTopologyValid()
+		|| !World->GetMatchBootstrapReceipt().IsValid())
+	{
+		return ESeinFormationOrderTokenResult::MatchNotReady;
+	}
+	FSeinPlayerID AuthenticatedPlayer;
+	if (!World->ResolveLocalCommandPrincipal(
+			PlayerID, AuthenticatedPlayer))
+	{
+		return ESeinFormationOrderTokenResult::Unauthorized;
+	}
+
+	TArray<FSeinEntityHandle> PlannedMembers;
+	TArray<int32> PlannedMemberCountsByRecipient;
+	if (!SeinFormationOrderTokenLocal::GatherLiveMembers(
+			*World, Members, true, PlannedMembers,
+			PlannedMemberCountsByRecipient))
+	{
+		return ESeinFormationOrderTokenResult::InvalidInput;
+	}
+	FSeinCommand AuthorityDraft;
+	AuthorityDraft.PlayerID = AuthenticatedPlayer;
+	AuthorityDraft.IssuerKind = ESeinCommandIssuerKind::Player;
+	AuthorityDraft.CommandType = SeinARTSTags::Command_Type_BrokerOrder;
+	AuthorityDraft.SchemaVersion = SeinBrokerOrderProtocol::SchemaVersion;
+	AuthorityDraft.TargetEntity = FSeinEntityHandle::Invalid();
+	AuthorityDraft.TargetLocation = TargetLocation;
+	AuthorityDraft.EntityList = Members;
+	AuthorityDraft.bQueueCommand = bQueueCommand;
+	FSeinBrokerOrderPayload AuthorityPayload;
+	AuthorityPayload.CommandContext = CommandContext;
+	AuthorityPayload.GuidePoints = GuidePoints;
+	AuthorityPayload.FormationTag = FormationTag;
+	AuthorityDraft.Payload = FInstancedStruct::Make(AuthorityPayload);
+	for (const FSeinEntityHandle Recipient : Members)
+	{
+		if (!World->CanCommandControlEntity(AuthorityDraft, Recipient))
+		{
+			return ESeinFormationOrderTokenResult::Unauthorized;
+		}
+	}
+	for (const FSeinEntityHandle Member : PlannedMembers)
+	{
+		if (!World->CanCommandControlEntity(AuthorityDraft, Member))
+		{
+			return ESeinFormationOrderTokenResult::Unauthorized;
+		}
+	}
+
+	TArray<FSeinFrozenDestination> DestinationArtifact;
+	bool bPlanSucceeded = false;
+	FSeinFormationLayout Layout = ComputeFormationDestinationArtifact(
+		WorldContextObject,
+		PlannedMembers,
+		TargetLocation,
+		GuidePoints,
+		FormationTag,
+		AuthenticatedPlayer,
+		bQueueCommand,
+		DestinationArtifact,
+		&bPlanSucceeded);
+	if (!bPlanSucceeded
+		|| DestinationArtifact.Num() != PlannedMembers.Num()
+		|| DestinationArtifact.Num()
+			> SeinBrokerOrderProtocol::MaxDestinationArtifactEntries)
+	{
+		return ESeinFormationOrderTokenResult::PlanningFailed;
+	}
+	for (int32 Index = 0; Index < PlannedMembers.Num(); ++Index)
+	{
+		if (DestinationArtifact[Index].Member != PlannedMembers[Index])
+		{
+			return ESeinFormationOrderTokenResult::PlanningFailed;
+		}
+	}
+	FSeinBrokerOrderPayload Payload;
+	Payload.CommandContext = CommandContext;
+	Payload.GuidePoints = GuidePoints;
+	Payload.FormationTag = FormationTag;
+	Payload.RecipientPlan.Reserve(Members.Num());
+	for (int32 Index = 0; Index < Members.Num(); ++Index)
+	{
+		FSeinBrokerRecipientPlanSegment& Segment =
+			Payload.RecipientPlan.AddDefaulted_GetRef();
+		Segment.Recipient = Members[Index];
+		Segment.MemberCount = PlannedMemberCountsByRecipient[Index];
+	}
+	Payload.DestinationArtifact = MoveTemp(DestinationArtifact);
+	FSeinCommand StructuralDraft;
+	StructuralDraft.PlayerID = AuthenticatedPlayer;
+	StructuralDraft.IssuerKind = ESeinCommandIssuerKind::Player;
+	StructuralDraft.CommandType = SeinARTSTags::Command_Type_BrokerOrder;
+	StructuralDraft.SchemaVersion = SeinBrokerOrderProtocol::SchemaVersion;
+	StructuralDraft.TargetEntity = FSeinEntityHandle::Invalid();
+	StructuralDraft.TargetLocation = TargetLocation;
+	StructuralDraft.EntityList = Members;
+	StructuralDraft.bQueueCommand = bQueueCommand;
+	StructuralDraft.Payload = FInstancedStruct::Make(Payload);
+	if (World->ValidateCommandStructure(StructuralDraft)
+		!= ESeinCommandStructureResult::Valid)
+	{
+		return ESeinFormationOrderTokenResult::InvalidInput;
+	}
+
+	USeinFormationOrderToken* Token =
+		NewObject<USeinFormationOrderToken>(GetTransientPackage());
+	if (!Token)
+	{
+		return ESeinFormationOrderTokenResult::InvalidInput;
+	}
+	Token->World = World;
+	Token->MatchReceipt = World->GetMatchBootstrapReceipt();
+	Token->SessionEpoch = World->GetFormationOrderTokenEpoch();
+	Token->PlayerID = AuthenticatedPlayer;
+	Token->Recipients = Members;
+	Token->PlannedMembers = MoveTemp(PlannedMembers);
+	Token->PlannedMemberCountsByRecipient =
+		MoveTemp(PlannedMemberCountsByRecipient);
+	Token->TargetLocation = TargetLocation;
+	Token->bQueueCommand = bQueueCommand;
+	Token->Payload = MoveTemp(Payload);
+	Token->bInitialized = true;
+
+	OutLayout = MoveTemp(Layout);
+	OutToken = Token;
+	return ESeinFormationOrderTokenResult::Success;
+}
+
+ESeinFormationOrderTokenResult
+USeinCommandBrokerBPFL::SeinIssueFormationOrder(
+	const UObject* WorldContextObject,
+	USeinFormationOrderToken* Token)
+{
+	if (!Token || !Token->bInitialized)
+	{
+		return ESeinFormationOrderTokenResult::InvalidInput;
+	}
+	USeinWorldSubsystem* World = GetWorldSubsystem(WorldContextObject);
+	if (!World || Token->World.Get() != World)
+	{
+		return ESeinFormationOrderTokenResult::WrongWorld;
+	}
+	if (Token->bIssued)
+	{
+		return ESeinFormationOrderTokenResult::AlreadyIssued;
+	}
+	if (World->GetMatchBootstrapState()
+			!= ESeinMatchBootstrapState::Consumed
+		|| !World->IsSimulationRunning()
+		|| !World->IsExecutionTopologyValid()
+		|| Token->SessionEpoch != World->GetFormationOrderTokenEpoch()
+		|| Token->MatchReceipt != World->GetMatchBootstrapReceipt())
+	{
+		return ESeinFormationOrderTokenResult::StaleSession;
+	}
+
+	TArray<FSeinEntityHandle> CurrentMembers;
+	TArray<int32> CurrentMemberCountsByRecipient;
+	if (!SeinFormationOrderTokenLocal::GatherLiveMembers(
+			*World, Token->Recipients, false, CurrentMembers,
+			CurrentMemberCountsByRecipient)
+		|| !SeinFormationOrderTokenLocal::MatchesSurvivingPlannedMembers(
+			*World, Token->PlannedMembers,
+			Token->PlannedMemberCountsByRecipient,
+			CurrentMembers, CurrentMemberCountsByRecipient))
+	{
+		return ESeinFormationOrderTokenResult::StaleRecipients;
+	}
+
+	FSeinCommand Command;
+	Command.PlayerID = Token->PlayerID;
+	Command.IssuerKind = ESeinCommandIssuerKind::Player;
+	Command.CommandType = SeinARTSTags::Command_Type_BrokerOrder;
+	Command.SchemaVersion = SeinBrokerOrderProtocol::SchemaVersion;
+	Command.TargetEntity = FSeinEntityHandle::Invalid();
+	Command.TargetLocation = Token->TargetLocation;
+	Command.EntityList = Token->Recipients;
+	Command.bQueueCommand = Token->bQueueCommand;
+	Command.Payload = FInstancedStruct::Make(Token->Payload);
+	FSeinPlayerID CurrentAuthenticatedPlayer;
+	if (!World->ResolveLocalCommandPrincipal(
+			Token->PlayerID, CurrentAuthenticatedPlayer)
+		|| CurrentAuthenticatedPlayer != Token->PlayerID)
+	{
+		return ESeinFormationOrderTokenResult::Unauthorized;
+	}
+	for (const FSeinEntityHandle Recipient : Token->Recipients)
+	{
+		if (World->IsEntityAlive(Recipient)
+			&& !World->CanCommandControlEntity(Command, Recipient))
+		{
+			return ESeinFormationOrderTokenResult::Unauthorized;
+		}
+	}
+	for (const FSeinEntityHandle Member : CurrentMembers)
+	{
+		if (!World->CanCommandControlEntity(Command, Member))
+		{
+			return ESeinFormationOrderTokenResult::Unauthorized;
+		}
+	}
+	if (World->ValidateCommandStructure(Command)
+		!= ESeinCommandStructureResult::Valid)
+	{
+		return ESeinFormationOrderTokenResult::StaleSession;
+	}
+
+	Token->bIssued = true;
+	if (!World->SubmitLocalCommandDraft(Command))
+	{
+		Token->bIssued = false;
+		return ESeinFormationOrderTokenResult::SubmissionRejected;
+	}
+	return ESeinFormationOrderTokenResult::Success;
 }
 
 namespace SeinFormationPreviewLocal

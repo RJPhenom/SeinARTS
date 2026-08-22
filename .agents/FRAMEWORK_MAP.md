@@ -143,10 +143,13 @@ context, and binds provider identity plus behavior revision into the match State
 selection-wide destination-plan provider produces the frozen artifact used by command admission,
 initial path requests, reservation settlement, replay, and reconnect. The shipped native
 `USeinFormationPreviewSubsystem` -> `ASeinPlayerController` path carries the exact displayed artifact
-into the command. The public Blueprint `Compute Formation Preview` / `Issue Broker Order` pair does
-not: preview accepts guide points and a formation tag but returns only a layout, while issue cannot
-accept those inputs or the displayed artifact and recomputes with defaults. Exact parity for custom
-Blueprint input paths is an open public-API decision in `.agents/OPEN_RISKS.md`.
+into the command. Public Blueprint input code can use `Plan Formation Order` -> `Issue Formation
+Order`: planning returns an opaque transient one-use token that freezes the complete preview key,
+authenticated player, exact displayed artifact, and BrokerOrder V4 recipient boundaries. Issue
+revalidates world/session, principal, authority, and each surviving recipient segment; moving or
+destroyed destination providers do not retarget the frozen points. The older `Compute Formation
+Preview` and `Issue Broker Order` nodes remain compatibility surfaces and still recompute defaults
+when used as a pair.
 
 Movement+ is not a full arbitrary Reeds-Shepp/Dubins route solver. Its wheeled and tracked modes can run a deterministic curated Reeds-Shepp-style **start-maneuver** planner at plan/repath time. That planner considers bounded closed-form candidates such as a departure arc, straight reverse, and K-turn, probes clearance, emits typed `Arc`/`Straight` legs, then hands the remaining coarse route to the normal runtime follower. Wheeled driving uses bicycle kinematics and arc/pursuit tracking; tracked driving selects pivot/arc/reverse behavior. This live behavior supersedes older notes claiming that no shipped vehicle mode emits arcs.
 

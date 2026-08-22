@@ -422,6 +422,133 @@ namespace UE::SeinARTSExtensionTests
 		World->StopSimulation();
 	}
 
+	TEST(BlueprintFormationOrderTokenFreezesDisplayedMovingCoverSlot,
+		"SeinARTS.Sim.Cover.FrozenDestination")
+	{
+		using namespace MovingCoverFrozenDestinationTestLocal;
+		FScopedCoverPolicy Policy;
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		USeinCoverSubsystem* CoverSubsystem =
+			Spawner.GetWorld().GetSubsystem<USeinCoverSubsystem>();
+		USeinCoverSystem* Cover = CoverSubsystem
+			? CoverSubsystem->GetCoverSystem()
+			: nullptr;
+		ASSERT_THAT(IsNotNull(World));
+		ASSERT_THAT(IsNotNull(Cover));
+		World->NavProjectResolver.Unbind();
+		World->DynamicPassableResolver.Unbind();
+
+		const FSeinPlayerID Player(1);
+		FSeinEntityHandle Member;
+		FSeinEntityHandle Provider;
+		bool bAuthored = true;
+		const auto AuthorState = [&]()
+		{
+			World->RegisterPlayer(Player, FSeinFactionID(1));
+			Member = World->SpawnAbstractEntity(
+				FFixedTransform(Position(0)), Player);
+			FSeinExtentsShape Shape;
+			Shape.Shape = ESeinExtentsShape::Capsule;
+			Shape.Radius = FFixedPoint::FromInt(60);
+			FSeinExtentsComponent Extents;
+			Extents.Shapes.Add(Shape);
+			World->AddComponent(Member, Extents);
+			bAuthored = World->GrantTag(
+				Member, SeinCoverTags::Cover_UsesCover);
+
+			Provider = World->SpawnAbstractEntity(
+				FFixedTransform(Position(0)), Player);
+			FSeinCoverComponent CoverData;
+			CoverData.QualityTag = SeinCoverTags::Cover_Light;
+			CoverData.SlotRadius = FFixedPoint::FromInt(20);
+			CoverData.Slots.Add(Position(0));
+			World->AddComponent(Provider, CoverData);
+			Cover->RegisterAuthoritativeProvider(Provider);
+		};
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Materialize(
+			*World,
+			AuthorState,
+			FSeinMatchSettings(),
+			0x4D4F5646,
+			TEXT("SeinARTS.Cover.MovingFrozenDestination.Token"))));
+		ASSERT_THAT(IsTrue(bAuthored));
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World)));
+
+		FGameplayTagContainer Context;
+		Context.AddTag(SeinARTSTags::Command_Context_RightClick);
+		Context.AddTag(SeinARTSTags::Command_Context_Target_Ground);
+		FSeinFormationLayout FirstLayout;
+		USeinFormationOrderToken* FirstToken = nullptr;
+		ASSERT_THAT(IsTrue(
+			USeinCommandBrokerBPFL::SeinPlanFormationOrder(
+				World,
+				Player,
+				{Member},
+				Context,
+				Position(0),
+				{},
+				FGameplayTag(),
+				false,
+				FirstLayout,
+				FirstToken)
+			== ESeinFormationOrderTokenResult::Success));
+		ASSERT_THAT(IsNotNull(FirstToken));
+		ASSERT_THAT(AreEqual(1, FirstLayout.Positions.Num()));
+		ASSERT_THAT(IsTrue(FirstLayout.Positions[0] == Position(0)));
+
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+			FSeinEntity* MutableProvider = World->GetEntityMutable(Provider);
+			ASSERT_THAT(IsNotNull(MutableProvider));
+			MutableProvider->Transform.SetLocation(Position(1000));
+		}
+
+		FSeinFormationLayout CurrentLayout;
+		USeinFormationOrderToken* CurrentToken = nullptr;
+		ASSERT_THAT(IsTrue(
+			USeinCommandBrokerBPFL::SeinPlanFormationOrder(
+				World,
+				Player,
+				{Member},
+				Context,
+				Position(1000),
+				{},
+				FGameplayTag(),
+				false,
+				CurrentLayout,
+				CurrentToken)
+			== ESeinFormationOrderTokenResult::Success));
+		ASSERT_THAT(IsNotNull(CurrentToken));
+		ASSERT_THAT(AreEqual(1, CurrentLayout.Positions.Num()));
+		ASSERT_THAT(IsTrue(CurrentLayout.Positions[0] == Position(1000)));
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+			World->DestroyEntity(Provider);
+		}
+		ASSERT_THAT(IsFalse(World->IsEntityAlive(Provider)));
+
+		ASSERT_THAT(IsTrue(
+			USeinCommandBrokerBPFL::SeinIssueFormationOrder(
+				World, FirstToken)
+			== ESeinFormationOrderTokenResult::Success));
+		ASSERT_THAT(AreEqual(1, World->GetPendingCommands().Num()));
+		const FSeinCommand& Command =
+			World->GetPendingCommands().GetCommands()[0];
+		const FSeinBrokerOrderPayload* Payload =
+			Command.Payload.GetPtr<FSeinBrokerOrderPayload>();
+		ASSERT_THAT(IsNotNull(Payload));
+		ASSERT_THAT(AreEqual(1, Payload->DestinationArtifact.Num()));
+		const FSeinFrozenDestination& Destination =
+			Payload->DestinationArtifact[0];
+		ASSERT_THAT(IsTrue(Destination.WorldPosition == Position(0)));
+		ASSERT_THAT(IsTrue(Destination.bReserveFootprint));
+		ASSERT_THAT(IsTrue(Destination.SourceEntity == Provider));
+		ASSERT_THAT(AreEqual(0, Destination.SourceIndex));
+		World->StopSimulation();
+	}
+
 	TEST(MixedMemberRadiiDoNotPreviewAnUnadmittableSlotPair,
 		"SeinARTS.Sim.Cover.FrozenDestination")
 	{
@@ -502,6 +629,13 @@ namespace UE::SeinARTSExtensionTests
 			SeinARTSTags::Command_Context_RightClick);
 		Payload.CommandContext.AddTag(
 			SeinARTSTags::Command_Context_Target_Ground);
+		for (const FSeinEntityHandle Member : Members)
+		{
+			FSeinBrokerRecipientPlanSegment& Segment =
+				Payload.RecipientPlan.AddDefaulted_GetRef();
+			Segment.Recipient = Member;
+			Segment.MemberCount = 1;
+		}
 		Payload.DestinationArtifact = Plan;
 		FSeinCommand Command;
 		Command.PlayerID = Player;
