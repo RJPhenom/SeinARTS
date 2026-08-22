@@ -43,5 +43,6 @@ Changes require all of:
 - PIE confirmation that a squad explicitly configured with the bridge resolver previews and submits
   the same cover-adjusted first destinations.
 
-Allocation quality and reservations remain Cover gameplay work. Do not solve them by coupling
-Cover or Squad back to this bridge.
+Allocation quality, selection-wide planning, frozen artifacts, and reservations are Cover-owned.
+The bridge adapts Squad dispatch into that policy; do not duplicate it or couple either parent
+plugin back to this bridge.

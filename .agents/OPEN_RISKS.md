@@ -9,12 +9,10 @@ This is the actionable remainder after consolidating the historical audits. It i
    CI or another source/installed engine distribution that supports those target types. The real
    packaged listen-server/client/reconnect/replay harness is green, but a Game-target listen server
    does not prove a true headless dedicated-server binary.
-2. **The public documentation product is now content-complete for the planned tree.** `Docs/`
-   carries README, Installation, First Skirmish, Determinism Rules, Authoring Units, Authoring
-   Abilities, Balance Data, Multiplayer, Replays, Formations/Preview, the Project Settings
-   reference, and extension deep-dives (Squads, Cover, Movement+). Remaining: a human accuracy
-   review in each release's gate (the guides were authored from live code but not from an
-   interactive editor session — click-path labels deserve one PIE-side proofread).
+2. **The public documentation website is owner-authored and not yet present.** Root `Docs/` is
+   intentionally empty until RJ builds the GitHub Pages site. Release publication warns and omits
+   documentation while it is empty. Agents must preserve internal contracts in `.agents/` and must
+   not independently populate the website tree.
 
 ## Gameplay-backbone gaps
 

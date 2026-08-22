@@ -104,9 +104,10 @@ rebuilds Editor and Shipping, regenerates the manifest, re-bakes required level 
 relevant automated, consumer, multiplayer, replay/resync, and PIE gates. Retain the producing build
 when incompatible persisted evidence must remain inspectable.
 
-Package-only and consumer qualification remain available before the public documentation site is
-authored. Publication does not use agent records as a fallback: it requires a non-empty root `Docs/`
-tree, packages that tree with Framework, and binds every documentation file into release evidence.
+Root `Docs/` is intentionally empty until RJ authors the GitHub Pages documentation website.
+Package-only, consumer qualification, and publication remain available; publication warns and omits
+the Documentation payload while the tree is empty. Once website content is deliberately present,
+packaging includes it with Framework and release evidence binds every documentation file.
 
 ## Current evidence and limits
 

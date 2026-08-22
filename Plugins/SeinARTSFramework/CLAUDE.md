@@ -18,6 +18,7 @@ contracts used by them, but it must never depend on an extension module.
 |---|---|
 | `SeinARTSCore` | Fixed-point math, deterministic geometry, time, and PRNG. Leaf dependency. |
 | `SeinARTSCoreEntity` | Entity pool/storage, actor bridge, sim tick, commands/brokers, abilities/latent actions, effects/attributes, production, containment, resources, match state, snapshots, and visual events. |
+| `SeinARTSCombat` | Genre-neutral vitals, damage/healing, weapon cycling, on-demand target acquisition, and instant/projectile delivery. |
 | `SeinARTSLevelData` | Unified baked substrate, canonical grid, shared traces, layer-provider registry, level volume, and baked channels. |
 | `SeinARTSNavigation` | Abstract navigation contract, shipped A* implementation, path requests, reachability, direction queries, and typed path data. |
 | `SeinARTSMovement` | Abstract movement/avoidance contracts, Basic defaults, persistent movement instances, Move To action/proxy, planner/mover handles, shared steering, and movement driver. |
@@ -82,6 +83,21 @@ Sim-affecting settings owned by this plugin or an extension participate in
   and provider composition require stable identities and ordering.
 - Effects support instance, class-per-player, and player scopes. Identity and future state must
   remain unambiguous across every storage scope.
+
+Economy behavior is composed through abilities rather than a hardcoded worker type. Node stock and
+worker cargo live in deterministic components accessed through typed component nodes; dropoff calls
+**Grant Income** from an authorized simulation callback. Income validates the whole resource map
+atomically and saturates valid uncapped overflow. Worker construction calls **Add Construction
+Progress** against `FSeinConstructionComponent`; only positive, non-overflowing increments mutate,
+completion removes the component and releases only the framework-owned
+`State.UnderConstruction` grant. Designer-authored ownership of that tag remains intact.
+
+Combat participation is opt-in through `FSeinVitalsComponent` and `FSeinWeaponComponent`.
+`USeinDamageFormula` and `USeinTargetScorer` are stateless Blueprint policy CDOs; empty classes use
+neutral built-ins. Target acquisition is an on-demand query, not an always-on engagement loop.
+Abilities own engagement cadence and use the restricted fire/damage/heal mutations. Projectile
+delivery spawns ordinary pooled entities, so projectile state follows the normal canonical
+snapshot/replay/reconnect lifecycle.
 
 ## Player-pair capabilities
 
