@@ -16,12 +16,12 @@ The design-neutral remediation wave is integrated on local `main` through `c2d6c
 - An independent adversarial pass found and closed a shipped-provider bypass, final-root-only replay
   coverage, and unsafe test codec teardown before integration.
 
-The current Cover continuation wave adds a real BrokerOrder -> movement -> settled-reservation
-workflow after moving the provider away from the displayed slot, then reconstructs every tick in a
-fresh replay world. Authoritative Move To completion now consumes an exact nav-safe final step for
-base, Movement+, and third-party Tick overrides; partial or near-goal-stall completion cannot promote
-an off-slot frozen reservation. The public Blueprint preview/issue pair remains an explicit API fork:
-it cannot carry guide points, formation tag, or the displayed artifact through issue, unlike the
+Implementation commit `56edb42` adds a real BrokerOrder -> movement -> settled-reservation workflow
+after moving the provider away from the displayed slot, then reconstructs every tick in a fresh
+replay world. Authoritative Move To completion now consumes an exact nav-safe final step for base,
+Movement+, and third-party Tick overrides; partial or near-goal-stall completion cannot promote an
+off-slot frozen reservation. The public Blueprint preview/issue pair remains an explicit API fork: it
+cannot carry guide points, formation tag, or the displayed artifact through issue, unlike the
 qualified native preview-subsystem/player-controller path.
 
 Final pre-commit qualification on 2026-08-22: Framework/All Sim 81/81 and 88/88,
