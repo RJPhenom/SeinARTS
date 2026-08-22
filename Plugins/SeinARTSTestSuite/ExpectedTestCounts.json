@@ -4,20 +4,20 @@
     {
       "profile": "All",
       "suite": "SeinARTS.Unit",
-      "minimumCount": 476,
-      "establishedAtCommit": "6f72b920c17242136548dae83a1fdb58bcc5e658"
+      "minimumCount": 483,
+      "establishedAtCommit": "4073770ab8b7fa06614fafb1893704f7e0bd876e"
     },
     {
       "profile": "Framework",
       "suite": "SeinARTS.Unit",
-      "minimumCount": 458,
-      "establishedAtCommit": "6f72b920c17242136548dae83a1fdb58bcc5e658"
+      "minimumCount": 461,
+      "establishedAtCommit": "4073770ab8b7fa06614fafb1893704f7e0bd876e"
     },
     {
       "profile": "All",
       "suite": "SeinARTS.Integration",
-      "minimumCount": 26,
-      "establishedAtCommit": "4ad62a92b994db942896a99852902ee0b60edbba"
+      "minimumCount": 32,
+      "establishedAtCommit": "4073770ab8b7fa06614fafb1893704f7e0bd876e"
     },
     {
       "profile": "Framework",
@@ -28,8 +28,8 @@
     {
       "profile": "All",
       "suite": "SeinARTS.Determinism",
-      "minimumCount": 48,
-      "establishedAtCommit": "9b8d434f7d7897503f96e4687565bca07fe207ca"
+      "minimumCount": 49,
+      "establishedAtCommit": "4073770ab8b7fa06614fafb1893704f7e0bd876e"
     },
     {
       "profile": "Framework",
