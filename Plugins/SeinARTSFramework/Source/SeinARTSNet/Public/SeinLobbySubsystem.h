@@ -152,7 +152,8 @@ public:
 	 *  Used by the host-only ServerHandle* validators. */
 	bool IsHostController(APlayerController* PC) const;
 
-	/** Server-only: capacity admission check, called from `ASeinGameMode::PreLogin`.
+	/** Server-only fallback capacity check used when no external connection
+	 *  admission authorizer owns exact-seat assignment.
 	 *  Returns true (accept) if either:
 	 *   - The lobby actor doesn't exist yet (first connection — auto-creates), OR
 	 *   - There's at least one free Open slot, OR
@@ -164,6 +165,11 @@ public:
 	 *  client gets a clean "server is full" error rather than connecting and
 	 *  becoming a phantom PC with no slot binding. */
 	bool CanAcceptConnection(const FUniqueNetIdRepl& UniqueId) const;
+
+	/** Fail-closed availability check for an externally authorized exact slot. */
+	bool CanAcceptConnectionAtSlot(
+		FSeinPlayerID Slot,
+		const APlayerController* Controller = nullptr) const;
 
 	/** Server-only: build a fully-populated FSeinMatchSettings from the current
 	 *  lobby state. Called by Sein.Net.StartMatch and (in Phase 3c) the

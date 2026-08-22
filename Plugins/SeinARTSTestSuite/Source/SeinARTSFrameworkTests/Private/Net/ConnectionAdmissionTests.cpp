@@ -4,7 +4,7 @@
  * @file         ConnectionAdmissionTests.cpp
  * @author       RJ Macklem
  * @created      21 Aug 2026
- * @latest       21 Aug 2026
+ * @latest       22 Aug 2026
  * @brief        Qualifies the optional pre-relay connection admission seam.
  *
  * @disclaimer   This code was generated in whole or in part with the assistance
@@ -150,6 +150,96 @@ namespace UE::SeinARTSTests
 			Options, TEXT("127.0.0.1"), FUniqueNetIdRepl(), Error)));
 		ASSERT_THAT(AreEqual(2, AuthorizerCalls));
 
+		Net->UnregisterConnectionAdmissionAuthorizer(Owner);
+	}
+
+	TEST(ConnectionAdmissionExpiresAndRecoversBoundedCaches,
+		"SeinARTS.Unit.Network.ConnectionAdmission")
+	{
+		FActorTestSpawner Spawner;
+		Spawner.InitializeGameSubsystems();
+		USeinNetSubsystem* Net = Spawner.GetGameInstance()
+			->GetSubsystem<USeinNetSubsystem>();
+		ASSERT_THAT(IsNotNull(Net));
+		const FSeinMatchInstanceID MatchID(FGuid(21, 22, 23, 24));
+		const FSeinNetworkParticipantID ParticipantID(
+			FGuid(25, 26, 27, 28));
+		const FSeinPlayerID Slot(3);
+		Net->SetConnectionAdmissionBindingForTests(
+			MatchID, ParticipantID, Slot);
+		Net->SetConnectionAdmissionClockAndCapacityForTests(100.0, 1);
+
+		int32 AuthorizerCalls = 0;
+		const FName Owner(TEXT("SeinARTS.Tests.Admission.Cache"));
+		ASSERT_THAT(IsTrue(Net->RegisterConnectionAdmissionAuthorizer(
+			Owner,
+			FSeinConnectionAdmissionAuthorizer::CreateLambda(
+				[&](const FSeinConnectionAdmissionRequest&)
+				{
+					++AuthorizerCalls;
+					FSeinConnectionAdmissionDecision Decision;
+					Decision.bAccepted = true;
+					Decision.MatchID = MatchID;
+					Decision.ParticipantID = ParticipantID;
+					Decision.AssignedSlot = Slot;
+					return Decision;
+				}))));
+
+		const FString FirstOptions = TEXT("?SeinAdmission=cache-first");
+		const FString SecondOptions = TEXT("?SeinAdmission=cache-second");
+		const FString ThirdOptions = TEXT("?SeinAdmission=cache-third");
+		FString Error;
+		ASSERT_THAT(IsTrue(Net->AuthorizeIncomingConnection(
+			FirstOptions, TEXT("127.0.0.1"), FUniqueNetIdRepl(), Error)));
+		ASSERT_THAT(AreEqual(1, AuthorizerCalls));
+
+		ASSERT_THAT(IsFalse(Net->AuthorizeIncomingConnection(
+			SecondOptions, TEXT("127.0.0.2"), FUniqueNetIdRepl(), Error)));
+		ASSERT_THAT(IsTrue(Error.Contains(TEXT("temporarily full"))));
+		ASSERT_THAT(AreEqual(1, AuthorizerCalls));
+
+		Net->SetConnectionAdmissionClockAndCapacityForTests(159.0, 1);
+		ASSERT_THAT(IsFalse(Net->AuthorizeIncomingConnection(
+			SecondOptions, TEXT("127.0.0.2"), FUniqueNetIdRepl(), Error)));
+		ASSERT_THAT(IsTrue(Error.Contains(TEXT("temporarily full"))));
+		ASSERT_THAT(AreEqual(1, AuthorizerCalls));
+
+		Net->SetConnectionAdmissionClockAndCapacityForTests(160.0, 1);
+		ASSERT_THAT(IsTrue(Net->AuthorizeIncomingConnection(
+			SecondOptions, TEXT("127.0.0.2"), FUniqueNetIdRepl(), Error)));
+		ASSERT_THAT(AreEqual(2, AuthorizerCalls));
+
+		APlayerController& Controller =
+			Spawner.SpawnActor<APlayerController>();
+		FSeinPlayerID AssignedSlot;
+		ASSERT_THAT(IsTrue(Net->ConsumeAuthorizedConnection(
+			&Controller,
+			SecondOptions,
+			FUniqueNetIdRepl(),
+			AssignedSlot,
+			Error)));
+		ASSERT_THAT(IsTrue(AssignedSlot == Slot));
+		ASSERT_THAT(IsFalse(Net->AuthorizeIncomingConnection(
+			ThirdOptions, TEXT("127.0.0.3"), FUniqueNetIdRepl(), Error)));
+		ASSERT_THAT(IsTrue(Error.Contains(TEXT("already connected"))));
+		ASSERT_THAT(AreEqual(3, AuthorizerCalls));
+
+		ASSERT_THAT(IsTrue(Controller.Destroy()));
+		ASSERT_THAT(IsTrue(Net->AuthorizeIncomingConnection(
+			ThirdOptions, TEXT("127.0.0.3"), FUniqueNetIdRepl(), Error)));
+		ASSERT_THAT(AreEqual(4, AuthorizerCalls));
+
+		Net->SetConnectionAdmissionClockAndCapacityForTests(220.0, 1);
+		APlayerController& ExpiredController =
+			Spawner.SpawnActor<APlayerController>();
+		ASSERT_THAT(IsFalse(Net->ConsumeAuthorizedConnection(
+			&ExpiredController,
+			ThirdOptions,
+			FUniqueNetIdRepl(),
+			AssignedSlot,
+			Error)));
+		ASSERT_THAT(IsTrue(Error.Contains(TEXT("expired or changed"))));
+		ASSERT_THAT(IsTrue(AssignedSlot == FSeinPlayerID::Neutral()));
 		Net->UnregisterConnectionAdmissionAuthorizer(Owner);
 	}
 }
