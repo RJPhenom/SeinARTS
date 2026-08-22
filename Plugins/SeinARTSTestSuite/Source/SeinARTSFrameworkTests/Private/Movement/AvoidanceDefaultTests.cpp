@@ -185,6 +185,33 @@ namespace
 				FFixedPoint::FromInt(-1000), FFixedPoint::Zero,
 				FFixedPoint::Zero));
 	}
+
+	FSeinEntityHandle AddBroker(
+		FAvoidanceFixture& Fixture,
+		const TArray<FSeinEntityHandle>& Members,
+		const FFixedVector& Centroid,
+		FFixedPoint FormationRadius,
+		bool bAvoidAsCohesiveBody,
+		int64 CohesionGroupId = 0)
+	{
+		const FSeinEntityHandle Broker = Fixture.World->SpawnAbstractEntity(
+			FFixedTransform(Centroid), FSeinPlayerID(1));
+		FSeinCommandBrokerData BrokerData;
+		BrokerData.Members = Members;
+		BrokerData.Centroid = Centroid;
+		BrokerData.FormationRadius = FormationRadius;
+		BrokerData.bAvoidAsCohesiveBody = bAvoidAsCohesiveBody;
+		BrokerData.bSelfCullOnEmpty = false;
+		Fixture.World->AddComponent(Broker, BrokerData);
+		for (const FSeinEntityHandle Member : Members)
+		{
+			FSeinBrokerMembershipData Membership;
+			Membership.CurrentBrokerHandle = Broker;
+			Membership.CohesionGroupId = CohesionGroupId;
+			Fixture.World->AddComponent(Member, Membership);
+		}
+		return Broker;
+	}
 }
 
 namespace UE::SeinARTSTests
@@ -311,6 +338,234 @@ namespace UE::SeinARTSTests
 			FirstMove->AvoidanceOutput.SpeedScale == FFixedPoint::One));
 		ASSERT_THAT(IsTrue(
 			SecondMove->AvoidanceOutput.SpeedScale == FFixedPoint::One));
+	}
+
+	TEST(LooseMoverTreatsCohesiveBrokerAsOneObstacle,
+		"SeinARTS.Unit.Movement.Avoidance")
+	{
+		FScopedIdleReseekSetting IdleReseek(false);
+		FAvoidanceFixture SingleMemberFixture;
+		FAvoidanceFixture DuplicateMemberFixture;
+		FSeinEntityHandle SingleMover;
+		FSeinEntityHandle DuplicateMover;
+		auto Author = [](
+			FAvoidanceFixture& Fixture,
+			bool bDuplicateMember,
+			FSeinEntityHandle& OutMover)
+		{
+			const FFixedVector Velocity(
+				FFixedPoint::FromInt(100), FFixedPoint::Zero,
+				FFixedPoint::Zero);
+			const FFixedVector Target(
+				FFixedPoint::FromInt(1000), FFixedPoint::Zero,
+				FFixedPoint::Zero);
+			OutMover = Fixture.AddMover(
+				FFixedVector::ZeroVector, Velocity, Target);
+			TArray<FSeinEntityHandle> Members;
+			Members.Add(Fixture.AddMover(
+				FFixedVector(
+					FFixedPoint::FromInt(100), FFixedPoint::FromInt(60),
+					FFixedPoint::Zero),
+				Velocity, Target));
+			if (bDuplicateMember)
+			{
+				Members.Add(Fixture.AddMover(
+					FFixedVector(
+						FFixedPoint::FromInt(110), FFixedPoint::FromInt(80),
+						FFixedPoint::Zero),
+					Velocity, Target));
+			}
+			AddBroker(
+				Fixture,
+				Members,
+				FFixedVector(
+					FFixedPoint::FromInt(100), FFixedPoint::FromInt(60),
+					FFixedPoint::Zero),
+				FFixedPoint::FromInt(100),
+				true);
+		};
+		ASSERT_THAT(IsTrue(SingleMemberFixture.Initialize([&](
+			FAvoidanceFixture& Fixture)
+		{
+			Author(Fixture, false, SingleMover);
+		})));
+		ASSERT_THAT(IsTrue(DuplicateMemberFixture.Initialize([&](
+			FAvoidanceFixture& Fixture)
+		{
+			Author(Fixture, true, DuplicateMover);
+		})));
+
+		ASSERT_THAT(IsTrue(SingleMemberFixture.Compute()));
+		ASSERT_THAT(IsTrue(DuplicateMemberFixture.Compute()));
+		const FSeinMovementComponent* SingleMovement =
+			SingleMemberFixture.World->GetComponent<FSeinMovementComponent>(
+				SingleMover);
+		const FSeinMovementComponent* DuplicateMovement =
+			DuplicateMemberFixture.World->GetComponent<FSeinMovementComponent>(
+				DuplicateMover);
+		ASSERT_THAT(IsNotNull(SingleMovement));
+		ASSERT_THAT(IsNotNull(DuplicateMovement));
+		ASSERT_THAT(IsTrue(
+			SingleMovement->AvoidanceOutput.SteerDir.Y < FFixedPoint::Zero));
+		ASSERT_THAT(IsTrue(
+			SingleMovement->AvoidanceOutput.SteerDir
+				== DuplicateMovement->AvoidanceOutput.SteerDir));
+		ASSERT_THAT(IsTrue(
+			SingleMovement->AvoidanceOutput.SpeedScale
+				== DuplicateMovement->AvoidanceOutput.SpeedScale));
+		ASSERT_THAT(IsTrue(
+			SingleMovement->AvoidanceOutput.SteerDir.X.Value == 0LL));
+		ASSERT_THAT(IsTrue(
+			SingleMovement->AvoidanceOutput.SteerDir.Y.Value
+				== -1196954227LL));
+		ASSERT_THAT(IsTrue(
+			SingleMovement->AvoidanceOutput.SpeedScale.Value
+				== 4145348016LL));
+	}
+
+	TEST(CohesiveBrokersChooseAntisymmetricSides,
+		"SeinARTS.Unit.Movement.Avoidance")
+	{
+		FScopedIdleReseekSetting IdleReseek(false);
+		FAvoidanceFixture Fixture;
+		FSeinEntityHandle First;
+		FSeinEntityHandle Second;
+		ASSERT_THAT(IsTrue(Fixture.Initialize([&](
+			FAvoidanceFixture& Inner)
+		{
+			AuthorCrossingPair(Inner, First, Second);
+			AddBroker(
+				Inner, {First},
+				FFixedVector(
+					FFixedPoint::FromInt(-60), FFixedPoint::Zero,
+					FFixedPoint::Zero),
+				FFixedPoint::FromInt(100), true);
+			AddBroker(
+				Inner, {Second},
+				FFixedVector(
+					FFixedPoint::FromInt(60), FFixedPoint::Zero,
+					FFixedPoint::Zero),
+				FFixedPoint::FromInt(100), true);
+		})));
+
+		ASSERT_THAT(IsTrue(Fixture.Compute()));
+		const FSeinMovementComponent* FirstMove =
+			Fixture.World->GetComponent<FSeinMovementComponent>(First);
+		const FSeinMovementComponent* SecondMove =
+			Fixture.World->GetComponent<FSeinMovementComponent>(Second);
+		ASSERT_THAT(IsNotNull(FirstMove));
+		ASSERT_THAT(IsNotNull(SecondMove));
+		ASSERT_THAT(IsTrue(
+			FirstMove->AvoidanceOutput.SteerDir.Y > FFixedPoint::Zero));
+		ASSERT_THAT(IsTrue(
+			SecondMove->AvoidanceOutput.SteerDir.Y < FFixedPoint::Zero));
+		ASSERT_THAT(IsTrue(
+			FirstMove->AvoidanceOutput.SteerDir.Y.IsNearlyEqual(
+				-SecondMove->AvoidanceOutput.SteerDir.Y)));
+		ASSERT_THAT(IsTrue(
+			FirstMove->AvoidanceOutput.SteerDir.X.Value == 0LL));
+		ASSERT_THAT(IsTrue(
+			FirstMove->AvoidanceOutput.SteerDir.Y.Value == 1190564918LL));
+		ASSERT_THAT(IsTrue(
+			FirstMove->AvoidanceOutput.SpeedScale.Value == 4146146680LL));
+		ASSERT_THAT(IsTrue(
+			SecondMove->AvoidanceOutput.SteerDir.X.Value == 0LL));
+		ASSERT_THAT(IsTrue(
+			SecondMove->AvoidanceOutput.SteerDir.Y.Value == -1190564920LL));
+		ASSERT_THAT(IsTrue(
+			SecondMove->AvoidanceOutput.SpeedScale.Value == 4146146680LL));
+	}
+
+	TEST(DistinctBrokersInSameCohesionGroupStillAvoidWhenCrossing,
+		"SeinARTS.Unit.Movement.Avoidance")
+	{
+		FScopedIdleReseekSetting IdleReseek(false);
+		FAvoidanceFixture Fixture;
+		FSeinEntityHandle First;
+		FSeinEntityHandle Second;
+		ASSERT_THAT(IsTrue(Fixture.Initialize([&](
+			FAvoidanceFixture& Inner)
+		{
+			AuthorCrossingPair(Inner, First, Second);
+			constexpr int64 CohesionGroupId = 9001;
+			AddBroker(
+				Inner, {First}, FFixedVector::ZeroVector,
+				FFixedPoint::Zero, false, CohesionGroupId);
+			AddBroker(
+				Inner, {Second}, FFixedVector::ZeroVector,
+				FFixedPoint::Zero, false, CohesionGroupId);
+		})));
+
+		ASSERT_THAT(IsTrue(Fixture.Compute()));
+		const FSeinMovementComponent* FirstMove =
+			Fixture.World->GetComponent<FSeinMovementComponent>(First);
+		const FSeinMovementComponent* SecondMove =
+			Fixture.World->GetComponent<FSeinMovementComponent>(Second);
+		ASSERT_THAT(IsNotNull(FirstMove));
+		ASSERT_THAT(IsNotNull(SecondMove));
+		ASSERT_THAT(IsTrue(
+			FirstMove->AvoidanceOutput.SteerDir.Y > FFixedPoint::Zero));
+		ASSERT_THAT(IsTrue(
+			SecondMove->AvoidanceOutput.SteerDir.Y < FFixedPoint::Zero));
+		ASSERT_THAT(IsTrue(
+			FirstMove->AvoidanceOutput.SteerDir.X.Value == 0LL));
+		ASSERT_THAT(IsTrue(
+			FirstMove->AvoidanceOutput.SteerDir.Y.Value == 1077177781LL));
+		ASSERT_THAT(IsTrue(
+			FirstMove->AvoidanceOutput.SpeedScale.Value == 4160320073LL));
+		ASSERT_THAT(IsTrue(
+			SecondMove->AvoidanceOutput.SteerDir.X.Value == 0LL));
+		ASSERT_THAT(IsTrue(
+			SecondMove->AvoidanceOutput.SteerDir.Y.Value == -1077177783LL));
+		ASSERT_THAT(IsTrue(
+			SecondMove->AvoidanceOutput.SpeedScale.Value == 4160320073LL));
+	}
+
+	TEST(SameDirectionNeighborUsesGeometricSide,
+		"SeinARTS.Unit.Movement.Avoidance")
+	{
+		FScopedIdleReseekSetting IdleReseek(false);
+		FAvoidanceFixture Fixture;
+		FSeinEntityHandle Mover;
+		ASSERT_THAT(IsTrue(Fixture.Initialize([&](
+			FAvoidanceFixture& Inner)
+		{
+			Mover = Inner.AddMover(
+				FFixedVector::ZeroVector,
+				FFixedVector(
+					FFixedPoint::FromInt(100), FFixedPoint::Zero,
+					FFixedPoint::Zero),
+				FFixedVector(
+					FFixedPoint::FromInt(1000), FFixedPoint::Zero,
+					FFixedPoint::Zero));
+			Inner.AddMover(
+				FFixedVector(
+					FFixedPoint::FromInt(100), FFixedPoint::FromInt(60),
+					FFixedPoint::Zero),
+				FFixedVector(
+					FFixedPoint::FromInt(50), FFixedPoint::Zero,
+					FFixedPoint::Zero),
+				FFixedVector(
+					FFixedPoint::FromInt(1000), FFixedPoint::Zero,
+					FFixedPoint::Zero));
+		})));
+
+		ASSERT_THAT(IsTrue(Fixture.Compute()));
+		const FSeinMovementComponent* Movement =
+			Fixture.World->GetComponent<FSeinMovementComponent>(Mover);
+		ASSERT_THAT(IsNotNull(Movement));
+		ASSERT_THAT(IsTrue(
+			Movement->AvoidanceOutput.SteerDir.Y < FFixedPoint::Zero));
+		ASSERT_THAT(IsTrue(
+			Movement->AvoidanceOutput.SpeedScale < FFixedPoint::One));
+		ASSERT_THAT(IsTrue(
+			Movement->AvoidanceOutput.SpeedScale > FFixedPoint::Zero));
+		ASSERT_THAT(IsTrue(
+			Movement->AvoidanceOutput.SteerDir.X.Value == 0LL));
+		ASSERT_THAT(IsTrue(
+			Movement->AvoidanceOutput.SteerDir.Y.Value == -98796522LL));
+		ASSERT_THAT(IsTrue(
+			Movement->AvoidanceOutput.SpeedScale.Value == 4282617730LL));
 	}
 
 	TEST(IdleResolveDetoursAroundBlockerAndThreadsClearGap,
