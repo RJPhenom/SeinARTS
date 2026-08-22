@@ -52,26 +52,26 @@
     {
       "profile": "All",
       "suite": "SeinARTS.Sim",
-      "minimumCount": 57,
-      "establishedAtCommit": "9b8d434f7d7897503f96e4687565bca07fe207ca"
+      "minimumCount": 64,
+      "establishedAtCommit": "9f120c0145a943fbbb5aa77c12eaefdb5ef8a6f7"
     },
     {
       "profile": "Framework",
       "suite": "SeinARTS.Sim",
-      "minimumCount": 50,
-      "establishedAtCommit": "9b8d434f7d7897503f96e4687565bca07fe207ca"
+      "minimumCount": 57,
+      "establishedAtCommit": "9f120c0145a943fbbb5aa77c12eaefdb5ef8a6f7"
     },
     {
       "profile": "All",
       "suite": "SeinARTS.Perf",
-      "minimumCount": 6,
-      "establishedAtCommit": "4ad62a92b994db942896a99852902ee0b60edbba"
+      "minimumCount": 9,
+      "establishedAtCommit": "9f120c0145a943fbbb5aa77c12eaefdb5ef8a6f7"
     },
     {
       "profile": "Framework",
       "suite": "SeinARTS.Perf",
-      "minimumCount": 4,
-      "establishedAtCommit": "4ad62a92b994db942896a99852902ee0b60edbba"
+      "minimumCount": 6,
+      "establishedAtCommit": "9f120c0145a943fbbb5aa77c12eaefdb5ef8a6f7"
     },
     {
       "profile": "Framework",
