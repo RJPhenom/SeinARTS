@@ -103,6 +103,13 @@ public:
 	int32 GetCurrentWaypointIndex() const { return CurrentWaypointIndex; }
 
 private:
+	enum class EInitialPathTickResult : uint8
+	{
+		Ready,
+		Waiting,
+		Terminal
+	};
+
 	enum class ERepathTickResult : uint8
 	{
 		Skipped,
@@ -244,6 +251,18 @@ private:
 	void NotifyWaypointReached(int32 Index, int32 Total);
 	void NotifyPartialPath();
 	void NotifyPathRecomputed();
+
+	/** Acquire the persistent movement instance and commit the first path.
+	 *  Waiting preserves a throttled action for retry; Terminal means the
+	 *  planner outcome already failed the action. */
+	EInitialPathTickResult ResolveInitialPath(
+		FFixedPoint DeltaTime,
+		USeinWorldSubsystem& World,
+		FSeinEntity& Entity,
+		FSeinMovementComponent& MovementData,
+		const FSeinNavigationComponent* NavigationData,
+		USeinNavigation* Navigation,
+		USeinNavigationSubsystem* NavigationSubsystem);
 
 	/** Evaluate and, when due, commit one interval/off-path repath before the
 	 *  movement tick. Returns Terminal only when the failure limit ends the move. */
