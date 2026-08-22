@@ -246,6 +246,9 @@ Loopback is refused for Shipping, dedicated-server, and authenticated-admission 
 Focused contract/security/lifecycle tests, the broad All Unit/Integration/Determinism suites,
 Development and Shipping builds, standalone plugin packaging, and fresh source and exact-artifact
 consumers with public-header, Shipping, package, and startup checks qualify the implementation.
+In-process integration now drives the production `ASeinGameMode::PreLogin` -> `InitNewPlayer`
+over a manifest-backed exact seat, including typed-identity rejection, one-use admission, and
+connected-seat exclusion.
 Vendor adapters and real dedicated/WAN `PreLogin` -> `InitNewPlayer` qualification remain deferred
 until their concrete integration wave.
 

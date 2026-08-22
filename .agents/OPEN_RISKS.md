@@ -59,7 +59,8 @@ This is the actionable remainder after consolidating the historical audits. It i
 
 ## Online-product gaps
 
-1. No backend-neutral auth/party/matchmaking/ranked/stats/leaderboard service layer exists.
+1. The backend-neutral Online Services contract and Loopback reference provider are complete;
+   production vendor adapters, authenticated backend credentials, and service operations remain.
 2. Canonical divergence detection is not anti-cheat; lockstep clients can possess hidden world state.
 3. Co-op campaign save ownership, schema migration, cloud conflict, account identity, and cross-map bootstrap are unbuilt.
 4. True listen-host migration is unbuilt. Dedicated-server co-op can defer peer host migration but cannot defer crash recovery.
