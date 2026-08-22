@@ -1,7 +1,14 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
- * @file    SeinGameMode.h
- * @brief   Authority-side Unreal match shell and manifest controller routing.
+ *
+ * @file         SeinGameMode.h
+ * @author       RJ Macklem
+ * @created      17 Jan 2026
+ * @latest       22 Aug 2026
+ * @brief        Authority-side Unreal match shell and manifest controller routing.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
  */
 
 #pragma once
@@ -31,6 +38,7 @@ public:
 		const FString& MapName,
 		const FString& Options,
 		FString& ErrorMessage) override;
+	virtual void StartPlay() override;
 	virtual void PreLogin(
 		const FString& Options,
 		const FString& Address,
@@ -48,6 +56,17 @@ public:
 #if WITH_DEV_AUTOMATION_TESTS
 	/** Drives the engine post-login/start sequence for synthetic controllers. */
 	void CompletePostLoginForTests(APlayerController* NewPlayer);
+
+	/** Evaluates the editor-only multiplayer auto-start policy without creating PIE processes. */
+	static bool ShouldAutoStartMultiplayerPIEForTests(
+		bool bSettingEnabled,
+		bool bNetworkingEnabled,
+		EWorldType::Type WorldType,
+		ENetMode NetMode,
+		bool bHasExternalBootstrap,
+		bool bHasPublishedSnapshot,
+		const FSeinMatchSettings& MatchSettings,
+		const TSet<int32>& BoundHumanSlots);
 #endif
 
 	/** Frozen slot count when this world has a manifest, otherwise the project ceiling. */
@@ -78,6 +97,10 @@ private:
 	bool IsSlotClaimedByAnother(
 		int32 SlotIndex,
 		const ASeinPlayerController* Controller) const;
+
+#if WITH_EDITOR
+	void TryAutoStartMultiplayerPIE();
+#endif
 
 	/** Authority-only routing claims. They never create or mutate sim state. */
 	TMap<int32, TWeakObjectPtr<ASeinPlayerController>> ClaimedSlots;

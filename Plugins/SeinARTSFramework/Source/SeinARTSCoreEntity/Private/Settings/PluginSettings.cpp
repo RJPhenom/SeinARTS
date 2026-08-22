@@ -95,6 +95,9 @@ USeinARTSCoreSettings::USeinARTSCoreSettings()
 	// for the relay class follows the established nav/fog decoupling: this module
 	// deliberately does NOT depend on SeinARTSNet.
 	, bNetworkingEnabled(true)
+#if WITH_EDITORONLY_DATA
+	, bAutoStartMultiplayerPIE(true)
+#endif
 	, TurnRate(10)
 	, InputDelayTurns(3)
 	, MaxPlayers(8)

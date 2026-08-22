@@ -953,6 +953,15 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Network")
 	bool bNetworkingEnabled;
 
+#if WITH_EDITORONLY_DATA
+	/** Starts a direct multiplayer PIE match automatically once every Human slot authored in the
+	 *  level has connected. Disable this to keep the simulation waiting until the server runs
+	 *  Sein.Net.StartMatch. Lobby-driven starts and packaged games are unaffected. */
+	UPROPERTY(Config, EditAnywhere, Category = "Network|PIE",
+		meta = (DisplayName = "Auto Start Multiplayer PIE"))
+	bool bAutoStartMultiplayerPIE;
+#endif
+
 	/**
 	 * How many lockstep turns happen per second. The network layer batches players' commands into turns
 	 * at this cadence; the sim itself keeps ticking at its own rate. One turn lasts the tick rate
