@@ -2,7 +2,7 @@
 
 ## 2026-08-22 local readiness checkpoint
 
-The design-neutral remediation wave is integrated on local `main` through `c2d6c61`:
+The design-neutral remediation wave is integrated on local `main` through `b5048d0`:
 
 - A* path diagnostics were isolated from the search implementation without changing search or path
   semantics (`dfcd10e`, recorded by `3b088ef`).
@@ -30,6 +30,16 @@ replay 1/1, and fresh-process serial/parallel traces matched all 120 roots and p
 root `8C9348BD49BEA3109EE71E9A32C568E6`). Independent follow-up review found no unresolved P0-P2
 issues. PIE remains RJ's runtime/presentation oracle; live-A* final-step blocker, native UI handoff,
 and mid-movement checkpoint-specific tests remain evidence-strengthening opportunities.
+
+Editor-only implementation commit `1a86a3a` replaces ambiguous auto-tag regeneration booleans with
+specific updated/no-op/failure outcomes while preserving the compatibility wrapper. Rename and
+**Reset to Auto** failures now identify collisions or unmapped prefixes and give the repair action.
+Bulk generation now applies tags written under a suspended tree refresh in the same command after
+one resume, rather than requiring a second click. The focused real-Blueprint/asset-registry test
+passed 1/1; final Framework/All Editor suites passed 59/59 and 61/61. Independent review found and
+closed the one-pass bulk defect, stale public side-effect contract, project-content-sensitive test,
+silent unmapped rename, and exported-symbol regression, then reported no unresolved P0-P2 findings.
+The protected generated-tag source remained byte-identical throughout qualification.
 
 No production behavior or public API changed in the Squad qualification wave. Design-neutral
 correctness, deterministic lifecycle evidence, API-coherence analysis, and editor/error UX remain

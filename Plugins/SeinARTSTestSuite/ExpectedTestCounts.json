@@ -40,14 +40,14 @@
     {
       "profile": "All",
       "suite": "SeinARTS.Editor",
-      "minimumCount": 47,
-      "establishedAtCommit": "5eaa97e885a977c3fdeea577aff1edc8730bd053"
+      "minimumCount": 61,
+      "establishedAtCommit": "1a86a3a3424582be72e0ec028d4e3174723b33b5"
     },
     {
       "profile": "Framework",
       "suite": "SeinARTS.Editor",
-      "minimumCount": 45,
-      "establishedAtCommit": "5eaa97e885a977c3fdeea577aff1edc8730bd053"
+      "minimumCount": 59,
+      "establishedAtCommit": "1a86a3a3424582be72e0ec028d4e3174723b33b5"
     },
     {
       "profile": "All",
