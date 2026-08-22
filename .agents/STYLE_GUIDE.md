@@ -1,6 +1,6 @@
 # SeinARTS Style Guide
 
-This is the local operational mirror of the human [Style Guide](https://docs.google.com/document/d/1-IT4RRpU2jR3yT5RI_bOM4Iq3s54Y9Fgy9gtBAJjshs), source guide version 1.3. The human guide owns writing and presentation style. Architecture, module ownership, and system invariants remain in the repository and plugin guides.
+This is the local operational mirror of the human [Style Guide](https://docs.google.com/document/d/1-IT4RRpU2jR3yT5RI_bOM4Iq3s54Y9Fgy9gtBAJjshs), source guide version 1.4. The human guide owns writing and presentation style. Architecture, module ownership, and system invariants remain in the repository and plugin guides.
 
 ## About
 
@@ -72,6 +72,24 @@ Comments explain current behavior and useful intent. They do not compete with co
 - Do not reference retired documents. Cite live code or current documentation.
 - Do not leave dead Blueprint outputs or always-on log spam. Make outputs real or remove them, and gate diagnostics behind verbosity or show flags.
 
+## Design
+
+### Colours
+
+Documentation uses white (`#FFFFFF`) on black (`#000000`). Highlight colours are Phenom Studios Light Blue (`#0095FF`) and Red (`#FF0000`).
+
+### Font
+
+SeinARTS Framework documentation uses Google Urbanist with Light weighting.
+
+### GUI / UX
+
+SeinARTS uses a clean, sharp, angular aesthetic.
+
+- Use sharp angles rather than rounded corners for canonical UI and UX elements.
+- Prefer strict alignment over loose positioning, margins, or padding.
+- Minimize whitespace where practical.
+
 ## Editor
 
 ### Designer-facing comments
@@ -141,16 +159,6 @@ Expose APIs to Blueprint when they simplify a real workflow or provide an intuit
 Keep the settings tree lean and easy to scan. Avoid redundant nesting and repeated qualifiers. Put a qualifier in the category path or `DisplayName`, not both.
 
 Base-module settings belong on the shared SeinARTS settings page. Opt-in extensions use their own settings pages.
-
-## Font
-
-### Font
-
-SeinARTS Framework documentation uses Google Urbanist with Light weighting.
-
-### Colours
-
-Documentation uses white (`#FFFFFF`) on black (`#000000`). Highlight colours are Phenom Studios Light Blue (`#0095FF`) and Red (`#FF0000`).
 
 ## Git
 
