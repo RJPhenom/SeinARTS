@@ -14,13 +14,17 @@ It owns the cross-cutting rules that apply to **all six production plugins** and
 > `.agents/` is dot-prefixed but mandatory agent context; this guide owns technical boundaries and
 > implementation rules.
 
-> **Active initiative — movement & navigation depth.** The movement/avoidance/nav seams are clean and
-> pluggable (`USeinAvoidance` / `USeinCollisionResolver` / `USeinNavigation` abstract-base + settings
-> picker; the `FSeinPath` typed-segment seam); current work is deflating localized bloat in a few
-> function bodies (A* diagnostics, the `TickAction` re-seek tangle, the avoidance kernel) without
-> redesigning the seams, plus qualification of Movement+'s shipped steering-first, curated
-> Reeds-Shepp-style start-maneuver planner. It is not a general Reeds-Shepp/Dubins route solver. The
-> nav↔movement seam is still evolving — re-ground against live code before asserting.
+> **Active initiative — production-readiness remediation.** The movement/avoidance/nav seams are
+> clean and pluggable
+> (`USeinAvoidance` / `USeinCollisionResolver` / `USeinNavigation` abstract-base + settings picker;
+> the `FSeinPath` typed-segment seam). A* diagnostics, Move To path setup/recovery/arrival, and the
+> default avoidance response kernel have been decomposed and regression-qualified without changing
+> those seams. Movement+'s shipped planner remains a steering-first, curated Reeds-Shepp-style
+> start-maneuver planner, not a general Reeds-Shepp/Dubins route solver. Design-neutral correctness,
+> lifecycle evidence, public-API coherence, and editor/error UX remain active work. Human/runtime
+> gates and RJ-owned product forks are recorded in `.agents/READINESS_ROADMAP.md` and
+> `.agents/OPEN_RISKS.md`; do not silently choose those forks during remediation. Re-ground against
+> live code before asserting that boundary has not changed.
 
 ---
 

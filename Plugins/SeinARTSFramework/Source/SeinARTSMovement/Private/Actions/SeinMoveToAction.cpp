@@ -1163,9 +1163,12 @@ bool USeinMoveToAction::CompleteReachedOrder(
 		return false;
 	}
 
-	// A partial path completes at a best-effort endpoint, not the frozen
-	// destination. Only an exact-route arrival earns settled authority.
-	if (!Path.bIsPartial)
+	// A partial path and the near-goal stall fallback can both complete away
+	// from the frozen destination. Only an exact canonical arrival earns
+	// settled authority.
+	const FSeinEntity* Entity = World.GetEntity(OwnerEntity);
+	if (!Path.bIsPartial && Entity
+		&& Entity->Transform.GetLocation() == Destination)
 	{
 		World.ConfirmFrozenDestinationArrival(OwnerEntity, Destination);
 	}
@@ -1313,6 +1316,15 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_MoveTo_MovementTick);
 		bReachedEnd = Movement->Tick(TickCtx);
+	}
+	// Tier-2 and third-party Tick overrides own their arrival trigger, but
+	// authoritative destinations still share the framework's exact nav-safe
+	// finalization contract. The base harness already applies this before its
+	// arrival policy; the second call is idempotent.
+	if (bReachedEnd
+		&& !Movement->TryFinalizeAuthoritativeArrival(TickCtx))
+	{
+		bReachedEnd = false;
 	}
 
 	// ESCAPE-LEG TICK EPILOGUE — while the hold-escape ladder's internal leg is

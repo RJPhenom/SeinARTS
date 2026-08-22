@@ -1,5 +1,41 @@
 # SeinARTS Project State
 
+## 2026-08-22 local readiness checkpoint
+
+The design-neutral remediation wave is integrated on local `main` through `c2d6c61`:
+
+- A* path diagnostics were isolated from the search implementation without changing search or path
+  semantics (`dfcd10e`, recorded by `3b088ef`).
+- The default avoidance response kernel and Move To's initial path setup, escape recovery, and
+  arrival progression were decomposed behind private helpers with focused lifecycle/determinism
+  regressions (`6142b22`, `75c56c2`, `58af847`, `5eaa97e` plus qualification-floor commits).
+- Squad reinforcement now has real command -> checkpoint -> fresh-world continuation and per-tick
+  replay-root qualification, plus a separate checkpoint transfer through the exact shipped native
+  provider (`3ccfaf1`, floor `c2d6c61`). Focused command 2/2, reinforcement 4/4, All Unit 487/487,
+  and All Determinism 52/52 passed on the integrated tree.
+- An independent adversarial pass found and closed a shipped-provider bypass, final-root-only replay
+  coverage, and unsafe test codec teardown before integration.
+
+The current Cover continuation wave adds a real BrokerOrder -> movement -> settled-reservation
+workflow after moving the provider away from the displayed slot, then reconstructs every tick in a
+fresh replay world. Authoritative Move To completion now consumes an exact nav-safe final step for
+base, Movement+, and third-party Tick overrides; partial or near-goal-stall completion cannot promote
+an off-slot frozen reservation. The public Blueprint preview/issue pair remains an explicit API fork:
+it cannot carry guide points, formation tag, or the displayed artifact through issue, unlike the
+qualified native preview-subsystem/player-controller path.
+
+Final pre-commit qualification on 2026-08-22: Framework/All Sim 81/81 and 88/88,
+Framework/All Unit 466/466 and 488/488, Framework/All Determinism 38/38 and 53/53, focused Cover
+replay 1/1, and fresh-process serial/parallel traces matched all 120 roots and pose digests (final
+root `8C9348BD49BEA3109EE71E9A32C568E6`). Independent follow-up review found no unresolved P0-P2
+issues. PIE remains RJ's runtime/presentation oracle; live-A* final-step blocker, native UI handoff,
+and mid-movement checkpoint-specific tests remain evidence-strengthening opportunities.
+
+No production behavior or public API changed in the Squad qualification wave. Design-neutral
+correctness, deterministic lifecycle evidence, API-coherence analysis, and editor/error UX remain
+locally actionable. Product-policy choices and external/runtime gates stay explicit in
+`.agents/OPEN_RISKS.md`; root `Docs/` remains exclusively owner-authored.
+
 ## 2026-08-15 audit-fix wave (Claude session, uncommitted alongside FEAT-03 WIP)
 
 Six approved fixes from the independent post-handoff audit, layered on the working tree
@@ -1008,17 +1044,12 @@ Automation proves the tested contracts, not full production readiness. The remai
 
 ## Immediate working boundary
 
-The old audit/remediation campaign is closed as a source of truth. Its durable results are
-consolidated in this directory. The Cover/Squad topology decision is closed through the opt-in
-bridge plugin, and the supported local packaged multiplayer/replay consumer gate is green under the
-required deterministic adverse network profile. Release
-tooling now binds skipped test runs to source fingerprints and exact test-DLL hashes, validates
-packaged ZIP structure and hashes, and can compile every shipped public header independently. The
-clean committed `0.0.178` cohort from source commit `9d7efc3708cc07dfbb76c3f6f8c528b1290ed264`
-passed the complete exact-ZIP five-profile consumer matrix on UE 5.8.1: fresh Editor and Shipping,
-325/340/333/337/362 independent public headers, release diagnostics, uncooked load, cook/package,
-real Shipping startup, and the Framework plus Movement+ packaged multiplayer/replay legs. The
-remaining Integration Candidate release evidence is the Development Client/Dedicated Server gate
-on a capable engine distribution plus the explicit PIE oracles. Local implementation can proceed
-to the Vehicle Gym and squad-tactical gameplay-backbone qualification without pretending those external
-gates are green.
+The historical audit/remediation campaign is closed as a source of truth; this directory contains
+its durable results. Do not reopen a qualified mechanism without new evidence. Continue the
+maintained readiness roadmap through design-neutral correctness fixes, deterministic lifecycle and
+failure-path evidence, public-API coherence analysis, and editor/error UX remediation.
+
+Stop and ask RJ only when implementation reaches an explicit product/API fork in
+`.agents/OPEN_RISKS.md`. Keep human PIE/presentation/performance evidence, true Client/Dedicated
+Server compilation, vendor-backed online integration, and the owner-authored documentation website
+honestly open rather than representing them as locally green.

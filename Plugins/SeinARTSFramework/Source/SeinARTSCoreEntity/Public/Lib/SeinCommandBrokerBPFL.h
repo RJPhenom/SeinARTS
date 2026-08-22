@@ -101,12 +101,12 @@ public:
 	/**
 	 * Compute the would-be formation positions for a hypothetical move/attack target.
 	 *
-	 * Pure-compute counterpart to `SeinIssueBrokerOrder` — returns the same per-member
-	 * positions the broker resolver would dispatch members to, without spawning a broker
-	 * or mutating any state. Primary consumer is the cover module's destination preview
-	 * decals (hover preview shows where each squad member will end up before the player
-	 * commits a right-click). Future consumers: targeter spec previews that want to
-	 * visualize formation positions while the cursor sweeps over candidate targets.
+	 * Pure-compute preview through the same resolver and selection-plan providers used by
+	 * command construction, without spawning a broker or mutating sim state. The shipped
+	 * native preview subsystem/player controller carries the exact displayed artifact into
+	 * its command. The public Blueprint `Issue Broker Order` node cannot accept this node's
+	 * guide points, formation tag, or frozen artifact and recomputes with defaults; custom
+	 * Blueprint input paths must not assume preview/commit parity until that API is resolved.
 	 *
 	 * Resolver dispatch:
 	 *   - Single-squad selection (every member shares the same FSeinSquadMemberComponent::SquadEntity):
@@ -118,8 +118,8 @@ public:
 	 *     unset) via its CDO. Centroid = average of member transforms; facing = identity; the
 	 *     formation-level re-match flags (default both on, i.e. 2-D) come off that resolver.
 	 *
-	 * No side effects. Cheap enough to call every cursor tick (one virtual dispatch +
-	 * one pass over Members for centroid + one pass for grid/slot positions).
+	 * No side effects. Cost is provider-dependent; Cover may run its exact selection-wide
+	 * allocator, so presentation callers should use the shipped preview cadence/cache path.
 	 */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Broker|Formation",
 		meta = (WorldContext = "WorldContextObject", DisplayName = "Compute Formation Preview"))

@@ -184,6 +184,43 @@ namespace
 // full control and never reach the harness or ComputeMotion.
 // ======================================================================================
 
+bool USeinMovement::TryFinalizeAuthoritativeArrival(
+	const FSeinMovementContext& Ctx)
+{
+	if (!Ctx.bAuthoritativeDestination)
+	{
+		return true;
+	}
+
+	const FSeinPath& Path = Ctx.Path;
+	if (Path.Waypoints.IsEmpty())
+	{
+		return false;
+	}
+
+	const FFixedVector CurrentPos = Ctx.Entity.Transform.GetLocation();
+	const FFixedVector& FinalWp = Path.Waypoints.Last();
+	const FFixedPoint VicinityRadius = SaturatingPositiveScale(
+		Ctx.GetAcceptanceRadius(), 2);
+	if (!FFixedVector::IsPlanarDistanceWithin(
+			CurrentPos, FinalWp, VicinityRadius))
+	{
+		return false;
+	}
+
+	FFixedVector ExactPos = ResolveNavCollision(
+		CurrentPos, FinalWp, Ctx.Nav, &FinalWp);
+	ApplyGroundSnapAndAltitude(
+		ExactPos, Ctx.MovementData, Ctx.Nav, Ctx.DeltaTime);
+	if (ExactPos != FinalWp)
+	{
+		return false;
+	}
+
+	Ctx.Entity.Transform.SetLocation(ExactPos);
+	return true;
+}
+
 bool USeinMovement::Tick(const FSeinMovementContext& Ctx)
 {
 	if (!Ctx.MovementData) return true;
@@ -209,9 +246,11 @@ bool USeinMovement::Tick(const FSeinMovementContext& Ctx)
 
 	// MECHANISM: arrival TRIGGER. Within the acceptance ring, OR an overshoot (close + slow +
 	// heading away) — the graceful-stop guard that stops a unit orbiting a slot it can't quite
-	// land on. The trigger cannot be vetoed; WHAT the unit is left doing is the mode's arrival
-	// POLICY (ComputeArrivalMotion — default hard stop), applied via DispatchArrivalMotion so
-	// the action's crowd-stall failsafe leaves the unit in the same per-class state.
+	// land on. An authoritative destination must first consume the exact final step through the
+	// same nav/dynamic-safety resolver; ordinary destinations retain radius-based arrival. WHAT
+	// the unit is left doing is the mode's arrival POLICY (ComputeArrivalMotion — default hard
+	// stop), applied via DispatchArrivalMotion so the action's crowd-stall failsafe leaves the
+	// unit in the same per-class state.
 	{
 		const bool bWithinAcceptance =
 			Ctx.IsWithinPlanarAcceptance(PrePos, FinalWp);
@@ -230,22 +269,27 @@ bool USeinMovement::Tick(const FSeinMovementContext& Ctx)
 				OvershootSpeedCap);
 		if (bWithinAcceptance || bOvershoot)
 		{
+			if (TryFinalizeAuthoritativeArrival(Ctx))
+			{
 #if !UE_BUILD_SHIPPING
-			// Movement-trace event: WHICH trigger arrived the unit. An "overshoot" burst
-			// right after a mass order — with dist well outside acceptance and entry≈0 —
-			// is the spurious-order-start-arrival signature (stale zero Velocity passes
-			// the winding-down gate on tick one).
-			UE_LOG(LogSeinMoveTrace, Verbose,
-				TEXT("[ARRIVE] t=%d h=%d:%d cause=%s dist=%.0f accept=%.0f entry=%.0f"),
-				Ctx.World ? Ctx.World->GetCurrentTick() : -1,
-				Ctx.SelfHandle.Index, Ctx.SelfHandle.Generation,
-				bWithinAcceptance ? TEXT("ring") : TEXT("overshoot"),
-				FFixedVector::DistanceSaturated(PrePos, FinalWp).ToFloat(),
-				AcceptanceRadius.ToFloat(),
-				EntrySpeed.ToFloat());
+				// Movement-trace event: WHICH trigger arrived the unit. An "overshoot" burst
+				// right after a mass order — with dist well outside acceptance and entry≈0 —
+				// is the spurious-order-start-arrival signature (stale zero Velocity passes
+				// the winding-down gate on tick one).
+				UE_LOG(LogSeinMoveTrace, Verbose,
+					TEXT("[ARRIVE] t=%d h=%d:%d cause=%s dist=%.0f accept=%.0f entry=%.0f"),
+					Ctx.World ? Ctx.World->GetCurrentTick() : -1,
+					Ctx.SelfHandle.Index, Ctx.SelfHandle.Generation,
+					bWithinAcceptance ? TEXT("ring") : TEXT("overshoot"),
+					FFixedVector::DistanceSaturated(PrePos, FinalWp).ToFloat(),
+					AcceptanceRadius.ToFloat(),
+					EntrySpeed.ToFloat());
 #endif
-			DispatchArrivalMotion(Ctx);
-			return true;
+				DispatchArrivalMotion(Ctx);
+				return true;
+			}
+			// A live blocker can still reject the final step. Continue the normal
+			// movement/stall path rather than settling a reservation off-slot.
 		}
 	}
 

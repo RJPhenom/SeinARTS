@@ -17,17 +17,22 @@ This is the actionable remainder after consolidating the historical audits. It i
 ## Gameplay-backbone gaps
 
 1. Cover's selection-wide plan provider aggregates ordinary and persistent-Squad members through
-   one exact allocator. Stable reservations and the exact preview artifact survive admission,
-   queueing, settlement, cancellation, death, provider movement/destruction, snapshot, replay, and
-   reconnect under RJ's policy D. Moving providers expose their current slots to new previews while
-   issued units retain the world destinations they were shown. Remaining: PIE feel/visual checks for
-   moving and contended cover plus the larger-selection performance risk recorded below.
+   one exact allocator. Stable reservations and the exact native-controller preview artifact survive
+   admission, queueing, settlement, cancellation, death, provider movement/destruction, snapshot,
+   replay, and reconnect under RJ's policy D. Real-command automation moves the provider after
+   preview, observes the executing reservation, reaches and settles the exact shown world slot, then
+   reproduces every replay tick in a fresh world. The public Blueprint preview/issue pair cannot
+   carry guide points, formation tag, or the displayed artifact through issue and therefore
+   recomputes defaults. Remaining: decide that public API shape; PIE feel/visual checks for moving and
+   contended cover; and the larger-selection performance risk recorded below.
 2. Squad reinforcement requests now have exact slot and monotonic request identity, atomic
    payer/cost snapshots, exact cancel/refund, deterministic completion, reciprocal membership, and
-   snapshot continuation. Destruction settlement DECIDED by RJ 2026-08-16 and shipped: a per-squad
-   authored toggle (`Reinforce Refund On Destruction` = Refund default / Forfeit / PartialRefund
-   with tunable fraction) settled by the deterministic teardown sweep; snapshot v17. Still open:
-   wipe/recreation, retreat, and queue-replacement UX policy.
+   snapshot continuation. Real player-command continuation and per-tick replay-root coverage exercise
+   the authored test subclass; an independent checkpoint-transfer test exercises the exact shipped
+   native reinforcement provider. Destruction settlement DECIDED by RJ 2026-08-16 and shipped: a
+   per-squad authored toggle (`Reinforce Refund On Destruction` = Refund default / Forfeit /
+   PartialRefund with tunable fraction) settled by the deterministic teardown sweep; snapshot v17.
+   Still open: wipe/recreation, retreat, and queue-replacement UX policy.
 3. FoW now consumes the directional ShareVision pair capability: entity visibility, seen
    latches, cell queries, the fog overlay, and the minimap union every granting ally's vision
    (zero-grant worlds take a fast path with legacy cost). Focused directional/revocation
@@ -133,6 +138,8 @@ This is the actionable remainder after consolidating the historical audits. It i
 ## Explicit product decisions still required
 
 - Any cover allocator approximation or async preview tradeoff after PIE performance evidence.
+- Public Blueprint formation preview/issue shape: carry the full gesture plus frozen artifact in one
+  command value/API, or expose a lower-level artifact handoff with explicit stale-input rejection.
 - Squad wipe/recreation, retreat, and reinforcement queue-replacement policy.
 - Public modifier, terrain, and production API shapes.
 - Flight and advanced vehicle-feel defaults after Vehicle Gym evidence.
