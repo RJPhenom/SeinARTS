@@ -302,6 +302,8 @@ Exit: game UI and progression can target stable provider-neutral interfaces whil
   records the project-owned settings, unit, map, manifest, and qualification boundaries. Movement+
   telemetry is preserved in the plugin guide and `.agents/VEHICLE_GYM.md`; Ability, economy,
   combat, and Balance Data engineering boundaries remain in `.agents/FRAMEWORK_MAP.md` pending the
-  owner-authored website. Broader in-editor error UX and public documentation remain.
+  owner-authored website. Auto-tag rename/reset failures now surface actionable outcomes, and
+  newly generated tags complete in one bulk-regeneration command. Broader in-editor error UX and
+  public documentation remain.
 
 Exit: a studio can adopt the framework without relying on this repository's private history or an agent to explain hidden setup.
