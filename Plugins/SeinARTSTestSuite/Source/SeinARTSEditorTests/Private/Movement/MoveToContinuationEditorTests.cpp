@@ -1702,6 +1702,72 @@ namespace UE::SeinARTSTests
 			Error));
 	}
 
+	TEST(MoveToContinuationCrossesNearGoalStallBoundaryExactly,
+		"SeinARTS.Editor.Snapshot.Movement")
+	{
+		using namespace MoveToContinuationEditor;
+		FCompiledBlueprint Blueprint;
+		FString Error;
+		ASSERT_THAT(IsTrue(
+			CompileBlueprint(Blueprint, Error), Error));
+
+		FFixture Source;
+		ASSERT_THAT(IsTrue(Source.Initialize(Blueprint)));
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*Source.World);
+			FSeinEntity* Entity = Source.World->GetEntityMutable(Source.Entity);
+			ASSERT_THAT(IsNotNull(Entity));
+			Entity->Transform.SetLocation(FFixedVector(
+				FFixedPoint::FromInt(250),
+				FFixedPoint::FromInt(100),
+				FFixedPoint::Zero));
+		}
+		USeinMoveToContinuationEditorTestMovement::
+			bAdvanceInitialWaypointOnTick = true;
+		Source.Tick();
+		USeinMoveToContinuationEditorTestMovement::bAdvanceWaypoint = true;
+		Source.Tick();
+		for (int32 TickIndex = 0; TickIndex < 3; ++TickIndex)
+		{
+			Source.Tick();
+		}
+		ASSERT_THAT(AreEqual(1, Source.Manager->GetActiveActionCount()));
+
+		FSeinWorldSnapshot Snapshot;
+		Source.World->CaptureSnapshot(Snapshot);
+		FRestoredFixture Destination;
+		ASSERT_THAT(IsTrue(Destination.Restore(
+			Snapshot, Source.AbilityID)));
+		ASSERT_THAT(IsTrue(
+			FMoveToActionContinuationTestAccess::MappedFieldsEqual(
+				*Source.Action, *Destination.Action, Error),
+			Error));
+		ASSERT_THAT(IsTrue(CanonicalRootsMatch(
+			*Source.World, *Destination.World, Error), Error));
+
+		for (int32 TickIndex = 0; TickIndex < 4; ++TickIndex)
+		{
+			Source.Tick();
+			Destination.Tick();
+			ASSERT_THAT(IsTrue(CanonicalRootsMatch(
+				*Source.World, *Destination.World, Error), Error));
+			ASSERT_THAT(AreEqual(
+				1, Source.Manager->GetActiveActionCount()));
+			ASSERT_THAT(AreEqual(
+				1, Destination.Manager->GetActiveActionCount()));
+		}
+
+		Source.Tick();
+		Destination.Tick();
+		ASSERT_THAT(IsTrue(CanonicalRootsMatch(
+			*Source.World, *Destination.World, Error), Error));
+		ASSERT_THAT(AreEqual(0, Source.Manager->GetActiveActionCount()));
+		ASSERT_THAT(AreEqual(
+			0, Destination.Manager->GetActiveActionCount()));
+		ASSERT_THAT(AreEqual(1, Source.Ability->CompletedCount));
+		ASSERT_THAT(AreEqual(1, Destination.Ability->CompletedCount));
+	}
+
 	TEST(MoveToContinuationSurvivesSequentialBlueprintNodes,
 		"SeinARTS.Editor.Snapshot.Movement")
 	{
