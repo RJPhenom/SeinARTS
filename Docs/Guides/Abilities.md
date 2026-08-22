@@ -104,6 +104,19 @@ latent boundary.
 Read and write designer structs (right-click → SeinARTS → Component) from ability graphs with the
 typed Get/Set Component nodes; the struct editor strips non-deterministic field types on save.
 
+## Economy and construction
+
+Harvesting is composed from abilities rather than a hardcoded worker type. Store node stock and
+worker cargo in deterministic components, transfer those values with the typed component nodes,
+then call **Grant Income** when a worker reaches a valid dropoff. Resource writes are accepted only
+inside bootstrap or simulation callbacks; malformed income maps fail atomically.
+
+For construction, add a `Construction Component` to the building and have the worker ability call
+**Add Construction Progress** from `On Tick`. The building receives the refcounted
+`State.UnderConstruction` tag at spawn. Crossing `Time To Completion` removes the component,
+releases that framework-owned tag grant, and applies the optional completion effect. Multiple
+workers stack naturally; apply any diminishing-return policy in the worker ability.
+
 ## Determinism notes
 
 - Ability Blueprints compile against a dedicated determinism validator: unsafe member types,

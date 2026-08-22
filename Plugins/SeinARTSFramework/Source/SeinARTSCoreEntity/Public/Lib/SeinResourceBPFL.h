@@ -4,13 +4,11 @@
  * @brief   Unified Blueprint Function Library for the resource layer. Per
  *          the resource catalog model. Read + mutate surfaces for player balances,
  *          cost validation (CanAfford), cost application (Deduct), refunds,
- *          income grants, and cross-player transfers (gated by match settings
- *          once §18 lands — permissive pre-§18).
+ *          income grants, and cross-player transfers.
  *
- *          Writes are callable from any graph here (rather than routed through
- *          USeinSimMutationBPFL) because economy mutation is first-class
- *          gameplay driven by commands and abilities; the DESIGN calls for a
- *          single unified surface. SEIN_CHECK_SIM() backstops dev-build misuse.
+ *          Economy writes are accepted only during bootstrap Applying or an
+ *          active simulation context. Player-driven writes therefore route
+ *          through commands and abilities; unauthorized graphs fail closed.
  */
 
 #pragma once
@@ -91,8 +89,10 @@ public:
 	 *  atomically on invalid cost data, a missing player, or fixed-point overflow. */
 	static bool SeinTryReverseDeduction(const UObject* WorldContextObject, FSeinPlayerID PlayerID, const FSeinResourceCost& Cost);
 
-	/** One-shot income grant (ability drop, scavenge loot, tech completion bonus). Equivalent to Refund
-	 *  semantically — applies regardless of cap-overflow policy with clamp-at-cap. */
+	/** One-shot income grant (ability drop, scavenge loot, tech completion bonus).
+	 *  Applies cap-overflow policy and saturates uncapped numeric overflow at
+	 *  FFixedPoint::MaxValue. Invalid tags or negative amounts reject the entire
+	 *  grant without changing balances. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Economy",
 		meta = (WorldContext = "WorldContextObject", DisplayName = "Grant Income"))
 	static void SeinGrantIncome(const UObject* WorldContextObject, FSeinPlayerID PlayerID, const FSeinResourceCost& Amount);

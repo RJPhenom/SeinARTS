@@ -5630,15 +5630,13 @@ FSeinEntityHandle USeinWorldSubsystem::SpawnEntity(
 	InitializeEntityAbilities(Handle);
 
 	// Initialize the entity's tag state. Seed BaseTags from the entity bridge's
-	// authored BaseTags UPROPERTY, then merge in the identity tag (from
-	// FSeinIdentityComponent) and the
-	// UnderConstruction tag if the entity carries a construction component.
-	// Finally seed refcounts + the global EntityTagIndex from the full set.
+	// authored BaseTags UPROPERTY, merge the FSeinIdentityComponent identity
+	// tag, then seed refcounts + the global EntityTagIndex. An active
+	// construction component receives a separate framework-owned grant so
+	// completion can release it without mutating designer-authored BaseTags.
 	//
-	// The matching ungrant for UnderConstruction lives in SeinFinishConstruction
-	// (drops the refcount we add here via the BaseTags seed). Designers can
-	// also list UnderConstruction explicitly in BaseTags — harmless, just gives
-	// a +1 refcount that the system holds onto.
+	// The matching ungrant lives in SeinFinishConstruction. If a designer also
+	// authors UnderConstruction in BaseTags, that independent grant persists.
 	const bool bHasConstructionComponent = GetComponent<FSeinConstructionComponent>(Handle) != nullptr;
 	{
 		FSeinEntityTagState& TagState = EntityTagStates.FindOrAdd(Handle);
@@ -5667,11 +5665,11 @@ FSeinEntityHandle USeinWorldSubsystem::SpawnEntity(
 				TagState.BaseTags.AddTag(Identity->IdentityTag);
 			}
 		}
+		SeedEntityTagsFromBase(Handle);
 		if (bHasConstructionComponent)
 		{
-			TagState.BaseTags.AddTag(SeinARTSTags::State_UnderConstruction);
+			GrantTag(Handle, SeinARTSTags::State_UnderConstruction);
 		}
-		SeedEntityTagsFromBase(Handle);
 
 		// AFTER tag seeding — replay any active player-scope effects that
 		// grant abilities to entities matching this entity's tag state.
@@ -5797,11 +5795,11 @@ FSeinEntityHandle USeinWorldSubsystem::SpawnEntityFromPlacedActor(
 				TagState.BaseTags.AddTag(Identity->IdentityTag);
 			}
 		}
+		SeedEntityTagsFromBase(Handle);
 		if (bHasConstructionComponent)
 		{
-			TagState.BaseTags.AddTag(SeinARTSTags::State_UnderConstruction);
+			GrantTag(Handle, SeinARTSTags::State_UnderConstruction);
 		}
-		SeedEntityTagsFromBase(Handle);
 
 		// AFTER tag seeding — replay any active player-scope effects that
 		// grant abilities to entities matching this entity's tag state.

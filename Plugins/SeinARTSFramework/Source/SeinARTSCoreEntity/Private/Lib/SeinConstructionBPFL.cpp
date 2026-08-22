@@ -73,10 +73,23 @@ bool USeinConstructionBPFL::SeinAddConstructionProgress(const UObject* WorldCont
 		// in CanActivate, but the BPFL is defensive — return false silently.
 		return false;
 	}
+	if (Amount <= FFixedPoint::Zero)
+	{
+		return false;
+	}
+	if (Data->TimeToCompletion <= FFixedPoint::Zero)
+	{
+		SeinFinishConstruction(WorldContextObject, Entity);
+		return true;
+	}
 
 	// If already past threshold (e.g. another worker's tick same frame raced
 	// us), AddProgress is a no-op. We don't double-fire CompletionEffect.
 	if (Data->Progress >= Data->TimeToCompletion)
+	{
+		return false;
+	}
+	if (Data->Progress.Value > MAX_int64 - Amount.Value)
 	{
 		return false;
 	}
@@ -128,8 +141,8 @@ void USeinConstructionBPFL::SeinFinishConstruction(const UObject* WorldContextOb
 		*Entity.ToString(), *GetNameSafe(CompletionEffect));
 
 	// 1. Ungrant the UnderConstruction state tag (refcounted — only fully
-	//    drops if no other source granted it). Designer-authored buildings
-	//    granted this in BaseTags or via the placement ability flow.
+	//    drops if no other source granted it). The spawn path owns this grant;
+	//    an independent designer-authored BaseTags grant is preserved.
 	Sub->UngrantTag(Entity, SeinARTSTags::State_UnderConstruction);
 
 	// 2. Remove the construction component itself. The entity stops being

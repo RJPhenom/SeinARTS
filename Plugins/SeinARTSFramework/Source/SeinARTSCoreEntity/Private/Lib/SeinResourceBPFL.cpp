@@ -63,6 +63,63 @@ namespace SeinResourceInternal
 			Current = Candidate > Cap ? Cap : Candidate;
 		}
 	}
+
+	/** Project one non-negative income entry without mutating state. */
+	static bool TryProjectIncome(
+		const FSeinPlayerState& State,
+		FGameplayTag ResourceTag,
+		FFixedPoint Amount,
+		FFixedPoint& OutBalance)
+	{
+		if (!ResourceTag.IsValid() || Amount < FFixedPoint::Zero)
+		{
+			return false;
+		}
+
+		const FFixedPoint Current = State.GetResource(ResourceTag);
+		if (Amount == FFixedPoint::Zero)
+		{
+			OutBalance = Current;
+			return true;
+		}
+
+		const FFixedPoint Cap = ResolveCap(State, ResourceTag);
+		const FSeinResourceDefinition* Def = FindCatalogEntry(ResourceTag);
+		const ESeinResourceOverflowBehavior Policy = Def
+			? Def->OverflowBehavior
+			: ESeinResourceOverflowBehavior::ClampAtCap;
+
+		if (Cap != FFixedPoint::Zero
+			&& Policy != ESeinResourceOverflowBehavior::AllowUnbounded)
+		{
+			if (Current >= Cap)
+			{
+				OutBalance = Cap;
+				return true;
+			}
+
+			// Current < Cap, so this unsigned difference is the exact positive
+			// headroom even when the signed subtraction would overflow.
+			const uint64 Headroom = static_cast<uint64>(Cap.Value)
+				- static_cast<uint64>(Current.Value);
+			if (static_cast<uint64>(Amount.Value) >= Headroom)
+			{
+				OutBalance = Cap;
+				return true;
+			}
+
+			OutBalance = FFixedPoint(Current.Value + Amount.Value);
+			return true;
+		}
+
+		if (Current.Value > MAX_int64 - Amount.Value)
+		{
+			OutBalance = FFixedPoint::MaxValue;
+			return true;
+		}
+		OutBalance = FFixedPoint(Current.Value + Amount.Value);
+		return true;
+	}
 }
 
 USeinWorldSubsystem* USeinResourceBPFL::GetWorldSubsystem(const UObject* WorldContextObject)
@@ -315,13 +372,28 @@ void USeinResourceBPFL::SeinGrantIncome(const UObject* WorldContextObject, FSein
 		return;
 	}
 
-	FSeinPlayerState* State =
-		Subsystem->GetPlayerStateMutable(PlayerID);
+	FSeinPlayerState* State = Subsystem->GetPlayerStateMutable(PlayerID);
 	if (!State) { return; }
 
+	// Validate and project the full map before applying any entry. A malformed
+	// designer payload must not produce a partial economy transaction whose
+	// result depends on TMap iteration order.
+	TMap<FGameplayTag, FFixedPoint> ProjectedBalances;
+	ProjectedBalances.Reserve(Amount.Amounts.Num());
 	for (const auto& Entry : Amount.Amounts)
 	{
-		SeinResourceInternal::AddWithCap(*State, Entry.Key, Entry.Value);
+		FFixedPoint Projected;
+		if (!SeinResourceInternal::TryProjectIncome(
+			*State, Entry.Key, Entry.Value, Projected))
+		{
+			return;
+		}
+		ProjectedBalances.Add(Entry.Key, Projected);
+	}
+
+	for (const auto& Entry : ProjectedBalances)
+	{
+		State->Resources.FindOrAdd(Entry.Key) = Entry.Value;
 	}
 }
 
