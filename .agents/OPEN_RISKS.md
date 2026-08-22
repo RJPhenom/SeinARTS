@@ -18,11 +18,12 @@ This is the actionable remainder after consolidating the historical audits. It i
 
 ## Gameplay-backbone gaps
 
-1. Cover now has one exact deterministic max-cardinality/min-wrong-side/min-distance allocator
-   shared by the ordinary and Squad resolver adapters, plus a stable-keyed authoritative-destination
-   provider registered in Core's StateContract. It still lacks cross-broker aggregation, stable
-   reservations, and the exact preview-artifact commit/reject lifecycle, so separate squad/loose
-   resolver calls can claim the same authored slot.
+1. Cover's selection-wide plan provider aggregates ordinary and persistent-Squad members through
+   one exact allocator. Stable reservations and the exact preview artifact survive admission,
+   queueing, settlement, cancellation, death, provider movement/destruction, snapshot, replay, and
+   reconnect under RJ's policy D. Moving providers expose their current slots to new previews while
+   issued units retain the world destinations they were shown. Remaining: PIE feel/visual checks for
+   moving and contended cover plus the larger-selection performance risk recorded below.
 2. Squad reinforcement requests now have exact slot and monotonic request identity, atomic
    payer/cost snapshots, exact cancel/refund, deterministic completion, reciprocal membership, and
    snapshot continuation. Destruction settlement DECIDED by RJ 2026-08-16 and shipped: a per-squad
@@ -73,8 +74,9 @@ This is the actionable remainder after consolidating the historical audits. It i
 1. Continuous 100-unit formation preview is now qualified in a fresh UE 5.8 one-world Sandbox A/B.
    Sparse dynamic-blocker indexing reduced refresh from 11.490 to 4.518 ms; repeated matched captures
    observed a 1.60-2.86 ms complete-frame delta. The independent 128-member public-layout sentinel
-   remains 1.337 ms p95 coverless and 3.324 ms p95 with dense Cover. Larger selections, multi-world
-   PIE, and configured game renderers remain open scale gates.
+   remains about 1.3 ms coverless; exact selection-wide dense Cover now measures 9.905 ms median /
+   10.130 ms p95 and is cadence-mitigated as detailed in risk 6. Larger selections, multi-world PIE,
+   drag-time dense-cover refreshes, and configured game renderers remain open scale gates.
 2. The isolated real fixed-tick dense-collision curve is measured at 64/128/256 packed movers
    (1.257/3.114/7.214 ms median in the All profile on the current machine). A moving-combat
    fixed-tick curve now exists too (`SeinARTS.Perf.Combat.Scale`): two armies crossing an open
@@ -131,9 +133,9 @@ This is the actionable remainder after consolidating the historical audits. It i
 
 ## Explicit product decisions still required
 
-- Full cover scoring/contention/reservation policy, requester-aware post-processing, and moving-provider behavior.
-- Squad destruction, wipe/recreation, retreat, and reinforcement queue-replacement policy.
-- Public targeter/modifier/terrain/production/team-vision API shapes.
+- Any cover allocator approximation or async preview tradeoff after PIE performance evidence.
+- Squad wipe/recreation, retreat, and reinforcement queue-replacement policy.
+- Public modifier, terrain, and production API shapes.
 - Flight and advanced vehicle-feel defaults after Vehicle Gym evidence.
 - Listen-host migration versus dedicated-only supported topology for each game mode.
 - Co-op campaign persistence/migration/ownership policy.
