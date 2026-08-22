@@ -275,6 +275,26 @@ private:
 		USeinNavigation* Navigation,
 		USeinNavigationSubsystem* NavigationSubsystem);
 
+	/** Advance the temporary escape leg and restore the order path state when
+	 *  that leg succeeds or exhausts. Returns true only for terminal failure. */
+	bool TickEscapeLeg(
+		FFixedPoint DeltaTime,
+		USeinWorldSubsystem& World,
+		FSeinEntity& Entity,
+		FSeinMovementComponent& MovementData,
+		bool bReachedEnd);
+
+	/** Advance the held-unit escalation ladder after ordinary movement.
+	 *  Returns true only when the ladder has terminally stranded the move. */
+	bool TickHoldEscapeLadder(
+		FFixedPoint DeltaTime,
+		USeinWorldSubsystem& World,
+		FSeinEntity& Entity,
+		FSeinMovementComponent& MovementData,
+		const FSeinNavigationComponent* NavigationData,
+		USeinNavigation* Navigation,
+		bool bReachedEnd);
+
 	/** Dispatch OnMoveEnd and clear order-local movement flags exactly once. */
 	void FinalizeMovementOnce();
 };

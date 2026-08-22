@@ -25,6 +25,7 @@
 #include "Logging/TokenizedMessage.h"
 #include "Serialization/SeinLatentActionCodecRegistry.h"
 #include "SeinMovementSubsystem.h"
+#include "Settings/PluginSettings.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
 #include "Simulation/SeinTestSnapshotRestore.h"
 #include "Simulation/SeinTestSimContext.h"
@@ -107,6 +108,31 @@ namespace UE::SeinARTSTests
 		}
 
 		constexpr int32 RouteCount = 6;
+
+		struct FScopedEscapeNavigation
+		{
+			FScopedEscapeNavigation()
+				: Settings(GetMutableDefault<USeinARTSCoreSettings>())
+				, SavedNavigationClass(Settings
+					? Settings->NavigationClass
+					: FSoftClassPath())
+			{
+				check(Settings);
+				USeinMoveToContinuationEditorTestNavigation::Reset();
+				Settings->NavigationClass = FSoftClassPath(
+					USeinMoveToContinuationEditorTestNavigation::
+						StaticClass()->GetPathName());
+			}
+
+			~FScopedEscapeNavigation()
+			{
+				Settings->NavigationClass = SavedNavigationClass;
+				USeinMoveToContinuationEditorTestNavigation::Reset();
+			}
+
+			USeinARTSCoreSettings* Settings = nullptr;
+			FSoftClassPath SavedNavigationClass;
+		};
 
 		void AddNode(UEdGraph& Graph, UEdGraphNode& Node)
 		{
@@ -478,10 +504,14 @@ namespace UE::SeinARTSTests
 			bool Initialize(
 				const FCompiledBlueprint& Blueprint,
 				bool bInvokeMoveTo = true,
-				bool bEnableRepath = false)
+				bool bEnableRepath = false,
+				bool bEnableEscapeRecovery = false)
 			{
 				USeinMoveToContinuationEditorTestMovement::
 					Reset();
+				USeinMoveToContinuationEditorTestMovement::
+					bAdvanceInitialWaypointOnTick =
+						bEnableEscapeRecovery;
 				World = Spawner.GetWorld().GetSubsystem<
 					USeinWorldSubsystem>();
 				if (!World || !Blueprint.Class)
@@ -506,14 +536,28 @@ namespace UE::SeinARTSTests
 										->GetPathName());
 						World->AddComponent(
 							Entity, Movement);
-						if (bEnableRepath)
+						if (bEnableRepath
+							|| bEnableEscapeRecovery)
 						{
 							FSeinNavigationComponent Navigation;
-							Navigation.RepathMode =
-								ESeinRepathMode::Interval;
-							Navigation.RepathInterval =
-								FFixedPoint::One
-								/ FFixedPoint::FromInt(4);
+							if (bEnableEscapeRecovery)
+							{
+								Navigation.FallbackFootprintRadius =
+									FFixedPoint::FromInt(25);
+								Navigation.NavLayerMask = 0x04;
+								Navigation.RepathMode =
+									ESeinRepathMode::Interval;
+								Navigation.RepathInterval =
+									FFixedPoint::FromInt(100);
+							}
+							else
+							{
+								Navigation.RepathMode =
+									ESeinRepathMode::Interval;
+								Navigation.RepathInterval =
+									FFixedPoint::One
+									/ FFixedPoint::FromInt(4);
+							}
 							World->AddComponent(
 								Entity, Navigation);
 						}
@@ -1567,6 +1611,95 @@ namespace UE::SeinARTSTests
 				Error), Error));
 		ASSERT_THAT(IsTrue(CanonicalRootsMatch(
 			*Source.World, *Destination.World, Error), Error));
+	}
+
+	TEST(MoveToContinuationRestoresEscapeRecoveryBoundariesExactly,
+		"SeinARTS.Editor.Snapshot.Movement")
+	{
+		using namespace MoveToContinuationEditor;
+		FScopedEscapeNavigation ScopedNavigation;
+		FCompiledBlueprint Blueprint;
+		FString Error;
+		ASSERT_THAT(IsTrue(
+			CompileBlueprint(Blueprint, Error), Error));
+
+		FFixture Source;
+		ASSERT_THAT(IsTrue(
+			Source.Initialize(Blueprint, true, false, true)));
+		Source.Tick();
+		Source.Tick();
+		Source.Tick();
+		Source.Tick();
+		ASSERT_THAT(IsTrue(
+			FMoveToActionContinuationTestAccess::
+				HasStageOneFired(*Source.Action)));
+		ASSERT_THAT(IsTrue(
+			FMoveToActionContinuationTestAccess::
+				IsForceRepathPending(*Source.Action)));
+		ASSERT_THAT(IsFalse(
+			FMoveToActionContinuationTestAccess::
+				IsEscapeMode(*Source.Action)));
+
+		FSeinWorldSnapshot StageOneSnapshot;
+		Source.World->CaptureSnapshot(StageOneSnapshot);
+		FRestoredFixture StageOneRestore;
+		ASSERT_THAT(IsTrue(StageOneRestore.Restore(
+			StageOneSnapshot, Source.AbilityID)));
+		ASSERT_THAT(IsTrue(
+			FMoveToActionContinuationTestAccess::MappedFieldsEqual(
+				*Source.Action, *StageOneRestore.Action, Error),
+			Error));
+		ASSERT_THAT(IsTrue(CanonicalRootsMatch(
+			*Source.World, *StageOneRestore.World, Error), Error));
+
+		for (int32 TickIndex = 0; TickIndex < 3; ++TickIndex)
+		{
+			Source.Tick();
+			StageOneRestore.Tick();
+			ASSERT_THAT(IsTrue(CanonicalRootsMatch(
+				*Source.World, *StageOneRestore.World, Error), Error));
+		}
+		ASSERT_THAT(IsTrue(
+			FMoveToActionContinuationTestAccess::
+				IsEscapeMode(*Source.Action)));
+		ASSERT_THAT(IsTrue(
+			FMoveToActionContinuationTestAccess::
+				IsEscapeMode(*StageOneRestore.Action)));
+		ASSERT_THAT(IsTrue(
+			FMoveToActionContinuationTestAccess::MappedFieldsEqual(
+				*Source.Action, *StageOneRestore.Action, Error),
+			Error));
+
+		FSeinWorldSnapshot EscapeSnapshot;
+		Source.World->CaptureSnapshot(EscapeSnapshot);
+		FRestoredFixture EscapeRestore;
+		ASSERT_THAT(IsTrue(EscapeRestore.Restore(
+			EscapeSnapshot, Source.AbilityID)));
+		ASSERT_THAT(IsTrue(
+			FMoveToActionContinuationTestAccess::MappedFieldsEqual(
+				*Source.Action, *EscapeRestore.Action, Error),
+			Error));
+		ASSERT_THAT(IsTrue(CanonicalRootsMatch(
+			*Source.World, *EscapeRestore.World, Error), Error));
+
+		for (int32 TickIndex = 0; TickIndex < 7; ++TickIndex)
+		{
+			Source.Tick();
+			EscapeRestore.Tick();
+			ASSERT_THAT(IsTrue(CanonicalRootsMatch(
+				*Source.World, *EscapeRestore.World, Error), Error));
+		}
+		ASSERT_THAT(IsFalse(
+			FMoveToActionContinuationTestAccess::
+				IsEscapeMode(*Source.Action)));
+		ASSERT_THAT(AreEqual(
+			1,
+			FMoveToActionContinuationTestAccess::
+				GetEscapeAttempts(*Source.Action)));
+		ASSERT_THAT(IsTrue(
+			FMoveToActionContinuationTestAccess::MappedFieldsEqual(
+				*Source.Action, *EscapeRestore.Action, Error),
+			Error));
 	}
 
 	TEST(MoveToContinuationSurvivesSequentialBlueprintNodes,

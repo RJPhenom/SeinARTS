@@ -16,6 +16,98 @@
 #include "Testing/SeinMoveToActionContinuationTestAccess.h"
 #include "TestTypes/SeinMoveToLifecycleTestTypes.h"
 #include "Types/Entity.h"
+#include "Misc/SecureHash.h"
+
+bool USeinMoveToEscapeTestNavigation::bPassable = true;
+bool USeinMoveToEscapeTestNavigation::bReturnEscapeTarget = false;
+int32 USeinMoveToEscapeTestNavigation::EscapeQueryCount = 0;
+FFixedVector USeinMoveToEscapeTestNavigation::EscapeTarget =
+	FFixedVector::ZeroVector;
+FSeinEscapeQuery USeinMoveToEscapeTestNavigation::LastEscapeQuery;
+
+void USeinMoveToEscapeTestNavigation::Reset()
+{
+	bPassable = true;
+	bReturnEscapeTarget = false;
+	EscapeQueryCount = 0;
+	EscapeTarget = FFixedVector::ZeroVector;
+	LastEscapeQuery = FSeinEscapeQuery();
+}
+
+bool USeinMoveToEscapeTestNavigation::ComputeStaticEnvironmentDigest(
+	FGuid& OutDigest,
+	FString& OutError) const
+{
+	OutError.Reset();
+	FMD5 Hash;
+	static constexpr ANSICHAR StableId[] =
+		"seinarts.tests.navigation.move_to_escape/v1";
+	Hash.Update(
+		reinterpret_cast<const uint8*>(StableId),
+		static_cast<uint32>(UE_ARRAY_COUNT(StableId) - 1));
+	const uint8 Flags[] = {
+		bPassable ? uint8{1} : uint8{0},
+		bReturnEscapeTarget ? uint8{1} : uint8{0}
+	};
+	Hash.Update(Flags, UE_ARRAY_COUNT(Flags));
+	auto AppendInt64 = [&Hash](int64 Value)
+	{
+		uint8 Bytes[8];
+		const uint64 Bits = static_cast<uint64>(Value);
+		for (int32 Index = 0; Index < 8; ++Index)
+		{
+			Bytes[Index] = static_cast<uint8>(Bits >> (Index * 8));
+		}
+		Hash.Update(Bytes, UE_ARRAY_COUNT(Bytes));
+	};
+	AppendInt64(EscapeTarget.X.Value);
+	AppendInt64(EscapeTarget.Y.Value);
+	AppendInt64(EscapeTarget.Z.Value);
+
+	uint8 Digest[16];
+	Hash.Final(Digest);
+	auto ReadUInt32 = [&Digest](int32 Offset)
+	{
+		return static_cast<uint32>(Digest[Offset])
+			| (static_cast<uint32>(Digest[Offset + 1]) << 8)
+			| (static_cast<uint32>(Digest[Offset + 2]) << 16)
+			| (static_cast<uint32>(Digest[Offset + 3]) << 24);
+	};
+	OutDigest = FGuid(
+		ReadUInt32(0),
+		ReadUInt32(4),
+		ReadUInt32(8),
+		ReadUInt32(12));
+	return true;
+}
+
+bool USeinMoveToEscapeTestNavigation::ComputeStateCoverageClaim(
+	FSeinNavigationStateCoverageClaim& OutClaim,
+	FString& OutError) const
+{
+	OutClaim = {};
+	OutError.Reset();
+	OutClaim.StableImplementationId =
+		TEXT("seinarts.tests.navigation.move_to_escape");
+	OutClaim.BehaviorRevision = 1;
+	OutClaim.CoverageRevision = 1;
+	OutClaim.StateCoverage = ESeinNavigationStateCoverage::Stateless;
+	return true;
+}
+
+bool USeinMoveToEscapeTestNavigation::QueryEscapeTarget(
+	const FSeinEscapeQuery& Query,
+	FFixedVector& OutTarget) const
+{
+	++EscapeQueryCount;
+	LastEscapeQuery = Query;
+	if (!bReturnEscapeTarget)
+	{
+		return false;
+	}
+	OutTarget = EscapeTarget;
+	return true;
+}
 
 bool USeinMoveToLifecycleTestMovement::bFinishOnTick = false;
 int32 USeinMoveToLifecycleTestMovement::BeginCount = 0;
@@ -30,6 +122,8 @@ FFixedVector USeinMoveToLifecycleTestMovement::LastTickMiddleWaypoint =
 TArray<ESeinPathResult>
 	USeinMoveToLifecycleTestMovement::ScriptedPathResults;
 TArray<int32> USeinMoveToLifecycleTestMovement::EmptyFoundCallIndices;
+TArray<int32> USeinMoveToLifecycleTestMovement::FinishTickCallIndices;
+bool USeinMoveToLifecycleTestMovement::bAdvanceInitialWaypointOnTick = false;
 bool USeinMoveToLifecycleTestMovement::bRepathPathsPartial = false;
 bool USeinMoveToLifecycleTestMovement::bInitialPathPartial = false;
 bool USeinMoveToLifecycleTestMovement::bInitialPathSkipsStart = false;
@@ -47,6 +141,8 @@ void USeinMoveToLifecycleTestMovement::Reset()
 	LastTickMiddleWaypoint = FFixedVector::ZeroVector;
 	ScriptedPathResults.Reset();
 	EmptyFoundCallIndices.Reset();
+	FinishTickCallIndices.Reset();
+	bAdvanceInitialWaypointOnTick = false;
 	bRepathPathsPartial = false;
 	bInitialPathPartial = false;
 	bInitialPathSkipsStart = false;
@@ -102,12 +198,18 @@ void USeinMoveToLifecycleTestMovement::OnMoveBegin(
 bool USeinMoveToLifecycleTestMovement::Tick(
 	const FSeinMovementContext& Ctx)
 {
-	++TickCount;
+	const int32 CallIndex = TickCount++;
 	LastTickPathWaypointCount = Ctx.Path.Waypoints.Num();
 	LastTickMiddleWaypoint = Ctx.Path.Waypoints.Num() > 2
 		? Ctx.Path.Waypoints[1]
 		: FFixedVector::ZeroVector;
-	return bFinishOnTick;
+	if (bAdvanceInitialWaypointOnTick
+		&& Ctx.CurrentWaypointIndex == 0
+		&& Ctx.Path.Waypoints.Num() > 1)
+	{
+		Ctx.CurrentWaypointIndex = 1;
+	}
+	return bFinishOnTick || FinishTickCallIndices.Contains(CallIndex);
 }
 
 void USeinMoveToLifecycleTestMovement::OnMoveEnd(FSeinEntity&)
@@ -196,6 +298,30 @@ namespace
 		~FScopedDisabledNavigation()
 		{
 			Settings->NavigationClass = SavedNavigationClass;
+		}
+
+		USeinARTSCoreSettings* Settings = nullptr;
+		FSoftClassPath SavedNavigationClass;
+	};
+
+	struct FScopedEscapeNavigation
+	{
+		FScopedEscapeNavigation()
+			: Settings(GetMutableDefault<USeinARTSCoreSettings>())
+			, SavedNavigationClass(Settings
+				? Settings->NavigationClass
+				: FSoftClassPath())
+		{
+			check(Settings);
+			USeinMoveToEscapeTestNavigation::Reset();
+			Settings->NavigationClass = FSoftClassPath(
+				USeinMoveToEscapeTestNavigation::StaticClass()->GetPathName());
+		}
+
+		~FScopedEscapeNavigation()
+		{
+			Settings->NavigationClass = SavedNavigationClass;
+			USeinMoveToEscapeTestNavigation::Reset();
 		}
 
 		USeinARTSCoreSettings* Settings = nullptr;
@@ -371,6 +497,29 @@ namespace
 			return Broker;
 		}
 	};
+
+	FSeinNavigationComponent MakeEscapeNavigationComponent()
+	{
+		FSeinNavigationComponent Navigation;
+		Navigation.FallbackFootprintRadius = FFixedPoint::FromInt(25);
+		Navigation.NavLayerMask = 0x04;
+		Navigation.RepathMode = ESeinRepathMode::Interval;
+		Navigation.RepathInterval = FFixedPoint::FromInt(100);
+		return Navigation;
+	}
+
+	FFixedPoint EscapeRecoveryStep()
+	{
+		return FFixedPoint::FromInt(3) / FFixedPoint::FromInt(10);
+	}
+
+	FFixedVector EscapeRecoveryTarget()
+	{
+		return FFixedVector(
+			FFixedPoint::Zero,
+			FFixedPoint::FromInt(1200),
+			FFixedPoint::Zero);
+	}
 }
 
 namespace UE::SeinARTSTests
@@ -490,6 +639,353 @@ namespace UE::SeinARTSTests
 			1, USeinMoveToLifecycleTestMovement::TickCount));
 		ASSERT_THAT(IsTrue(Fixture.Action->Path.bIsPartial));
 		ASSERT_THAT(IsFalse(Fixture.Action->bCompleted));
+	}
+
+	TEST(MoveToHeldButPassableDoesNotEscalate,
+		"SeinARTS.Sim.Movement.EscapeRecovery")
+	{
+		FScopedMoveToTestState Reset;
+		FScopedEscapeNavigation ScopedNavigation;
+		USeinMoveToLifecycleTestMovement::bAdvanceInitialWaypointOnTick = true;
+		USeinMoveToEscapeTestNavigation::bPassable = true;
+		const FSeinNavigationComponent Navigation =
+			MakeEscapeNavigationComponent();
+		FMoveToLifecycleFixture Fixture;
+		Fixture.Destination = FFixedVector(
+			FFixedPoint::FromInt(2000),
+			FFixedPoint::Zero,
+			FFixedPoint::Zero);
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Navigation)));
+
+		Fixture.Tick(EscapeRecoveryStep());
+		Fixture.Tick(EscapeRecoveryStep());
+		Fixture.Tick(EscapeRecoveryStep());
+
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
+		ASSERT_THAT(AreEqual(
+			3, USeinMoveToLifecycleTestMovement::TickCount));
+		ASSERT_THAT(AreEqual(
+			0, USeinMoveToEscapeTestNavigation::EscapeQueryCount));
+		ASSERT_THAT(IsFalse(
+			FMoveToActionContinuationTestAccess::IsForceRepathPending(
+				*Fixture.Action)));
+		ASSERT_THAT(IsFalse(Fixture.Action->bCompleted));
+	}
+
+	TEST(MoveToBlockedHoldExhaustsNoTargetAndStrands,
+		"SeinARTS.Sim.Movement.EscapeRecovery")
+	{
+		FScopedMoveToTestState Reset;
+		FScopedEscapeNavigation ScopedNavigation;
+		USeinMoveToLifecycleTestMovement::bAdvanceInitialWaypointOnTick = true;
+		USeinMoveToEscapeTestNavigation::bPassable = false;
+		const FSeinNavigationComponent Navigation =
+			MakeEscapeNavigationComponent();
+		FMoveToLifecycleFixture Fixture;
+		Fixture.Destination = FFixedVector(
+			FFixedPoint::FromInt(2000),
+			FFixedPoint::Zero,
+			FFixedPoint::Zero);
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Navigation)));
+
+		Fixture.Tick(EscapeRecoveryStep());
+		ASSERT_THAT(AreEqual(
+			EscapeRecoveryStep().Value,
+			FMoveToActionContinuationTestAccess::GetHoldTime(
+				*Fixture.Action).Value));
+		ASSERT_THAT(IsTrue(
+			FMoveToActionContinuationTestAccess::HasStageOneFired(
+				*Fixture.Action)));
+		ASSERT_THAT(IsTrue(
+			FMoveToActionContinuationTestAccess::IsForceRepathPending(
+				*Fixture.Action)));
+		ASSERT_THAT(AreEqual(
+			EscapeRecoveryStep().Value * 2,
+			FMoveToActionContinuationTestAccess::GetNextEscalationAt(
+				*Fixture.Action).Value));
+		Fixture.Tick(EscapeRecoveryStep());
+		ASSERT_THAT(IsFalse(
+			FMoveToActionContinuationTestAccess::IsForceRepathPending(
+				*Fixture.Action)));
+		Fixture.Tick(EscapeRecoveryStep());
+		Fixture.Tick(EscapeRecoveryStep());
+
+		ASSERT_THAT(AreEqual(
+			2, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
+		ASSERT_THAT(AreEqual(
+			3, USeinMoveToEscapeTestNavigation::EscapeQueryCount));
+		ASSERT_THAT(AreEqual(
+			3,
+			FMoveToActionContinuationTestAccess::GetEscapeAttempts(
+				*Fixture.Action)));
+		ASSERT_THAT(AreEqual(1, Fixture.Observer->FailedCount));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(ESeinMoveFailureReason::Stranded),
+			static_cast<int32>(Fixture.Observer->LastFailure)));
+		ASSERT_THAT(IsTrue(Fixture.Action->bCompleted));
+		ASSERT_THAT(IsTrue(Fixture.Action->bFailed));
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::EndCount));
+	}
+
+	TEST(MoveToEscapeQueryCarriesAgentProfileAndInstallsLeg,
+		"SeinARTS.Sim.Movement.EscapeRecovery")
+	{
+		FScopedMoveToTestState Reset;
+		FScopedEscapeNavigation ScopedNavigation;
+		USeinMoveToLifecycleTestMovement::bAdvanceInitialWaypointOnTick = true;
+		USeinMoveToEscapeTestNavigation::bPassable = false;
+		USeinMoveToEscapeTestNavigation::bReturnEscapeTarget = true;
+		USeinMoveToEscapeTestNavigation::EscapeTarget =
+			EscapeRecoveryTarget();
+		FSeinNavigationComponent Navigation =
+			MakeEscapeNavigationComponent();
+		const FGameplayTag BlockedTerrainTag =
+			FGameplayTag::RequestGameplayTag(TEXT("Test"), false);
+		ASSERT_THAT(IsTrue(BlockedTerrainTag.IsValid()));
+		Navigation.BlockedTerrainTags.AddTag(BlockedTerrainTag);
+		FMoveToLifecycleFixture Fixture;
+		Fixture.Destination = FFixedVector(
+			FFixedPoint::FromInt(2000),
+			FFixedPoint::Zero,
+			FFixedPoint::Zero);
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Navigation)));
+
+		Fixture.Tick(EscapeRecoveryStep());
+		Fixture.Tick(EscapeRecoveryStep());
+
+		ASSERT_THAT(AreEqual(
+			2, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToEscapeTestNavigation::EscapeQueryCount));
+		ASSERT_THAT(AreEqual(2, Fixture.Action->Path.Waypoints.Num()));
+		ASSERT_THAT(IsTrue(
+			Fixture.Action->Path.Waypoints.Last()
+				== EscapeRecoveryTarget()));
+		ASSERT_THAT(IsTrue(
+			USeinMoveToEscapeTestNavigation::LastEscapeQuery.From
+				== FFixedVector::ZeroVector));
+		ASSERT_THAT(IsTrue(
+			USeinMoveToEscapeTestNavigation::LastEscapeQuery.Requester
+				== Fixture.Entity));
+		ASSERT_THAT(AreEqual(
+			4,
+			static_cast<int32>(
+				USeinMoveToEscapeTestNavigation::LastEscapeQuery.
+					AgentNavLayerMask)));
+		ASSERT_THAT(IsTrue(
+			USeinMoveToEscapeTestNavigation::LastEscapeQuery.
+				AgentFootprintRadius == FFixedPoint::FromInt(25)));
+		ASSERT_THAT(IsTrue(
+			USeinMoveToEscapeTestNavigation::LastEscapeQuery.
+				BlockedTerrainTags.HasTagExact(BlockedTerrainTag)));
+		ASSERT_THAT(IsTrue(
+			FMoveToActionContinuationTestAccess::IsEscapeMode(
+				*Fixture.Action)));
+		ASSERT_THAT(AreEqual(
+			0,
+			FMoveToActionContinuationTestAccess::GetEscapeAttempts(
+				*Fixture.Action)));
+		ASSERT_THAT(IsFalse(Fixture.Action->bCompleted));
+	}
+
+	TEST(MoveToRejectsEscapeTargetInsideEntryGate,
+		"SeinARTS.Sim.Movement.EscapeRecovery")
+	{
+		FScopedMoveToTestState Reset;
+		FScopedEscapeNavigation ScopedNavigation;
+		USeinMoveToLifecycleTestMovement::bAdvanceInitialWaypointOnTick = true;
+		USeinMoveToEscapeTestNavigation::bPassable = false;
+		USeinMoveToEscapeTestNavigation::bReturnEscapeTarget = true;
+		USeinMoveToEscapeTestNavigation::EscapeTarget = FFixedVector(
+			FFixedPoint::Zero,
+			FFixedPoint::FromInt(50),
+			FFixedPoint::Zero);
+		const FSeinNavigationComponent Navigation =
+			MakeEscapeNavigationComponent();
+		FMoveToLifecycleFixture Fixture;
+		Fixture.Destination = FFixedVector(
+			FFixedPoint::FromInt(2000),
+			FFixedPoint::Zero,
+			FFixedPoint::Zero);
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Navigation)));
+
+		Fixture.Tick(EscapeRecoveryStep());
+		Fixture.Tick(EscapeRecoveryStep());
+
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToEscapeTestNavigation::EscapeQueryCount));
+		ASSERT_THAT(IsFalse(
+			FMoveToActionContinuationTestAccess::IsEscapeMode(
+				*Fixture.Action)));
+		ASSERT_THAT(AreEqual(
+			1,
+			FMoveToActionContinuationTestAccess::GetEscapeAttempts(
+				*Fixture.Action)));
+		ASSERT_THAT(IsTrue(
+			Fixture.Action->Path.Waypoints.Last()
+				== Fixture.Destination));
+		ASSERT_THAT(IsFalse(Fixture.Action->bCompleted));
+	}
+
+	TEST(MoveToGenuineEscapeArrivalResolvesFreshOrderPath,
+		"SeinARTS.Sim.Movement.EscapeRecovery")
+	{
+		FScopedMoveToTestState Reset;
+		FScopedEscapeNavigation ScopedNavigation;
+		USeinMoveToLifecycleTestMovement::bAdvanceInitialWaypointOnTick = true;
+		USeinMoveToEscapeTestNavigation::bPassable = false;
+		USeinMoveToEscapeTestNavigation::bReturnEscapeTarget = true;
+		USeinMoveToEscapeTestNavigation::EscapeTarget =
+			EscapeRecoveryTarget();
+		USeinMoveToLifecycleTestMovement::FinishTickCallIndices = {2};
+		const FSeinNavigationComponent Navigation =
+			MakeEscapeNavigationComponent();
+		FMoveToLifecycleFixture Fixture;
+		Fixture.Destination = FFixedVector(
+			FFixedPoint::FromInt(2000),
+			FFixedPoint::Zero,
+			FFixedPoint::Zero);
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Navigation)));
+
+		Fixture.Tick(EscapeRecoveryStep());
+		Fixture.Tick(EscapeRecoveryStep());
+		Fixture.SetLocation(EscapeRecoveryTarget());
+		Fixture.Tick(EscapeRecoveryStep());
+
+		ASSERT_THAT(IsTrue(Fixture.Action->Path.Waypoints.IsEmpty()));
+		ASSERT_THAT(IsFalse(Fixture.Action->bCompleted));
+		ASSERT_THAT(AreEqual(0, Fixture.Observer->FailedCount));
+
+		Fixture.Tick(EscapeRecoveryStep());
+
+		ASSERT_THAT(AreEqual(
+			3, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
+		ASSERT_THAT(AreEqual(
+			2, USeinMoveToLifecycleTestMovement::BeginCount));
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToEscapeTestNavigation::EscapeQueryCount));
+		ASSERT_THAT(IsTrue(
+			Fixture.Action->Path.Waypoints.Last()
+				== Fixture.Destination));
+		ASSERT_THAT(IsFalse(Fixture.Action->bCompleted));
+	}
+
+	TEST(MoveToEscapeOvershootOutsideAcceptanceCountsAsFailedAttempt,
+		"SeinARTS.Sim.Movement.EscapeRecovery")
+	{
+		FScopedMoveToTestState Reset;
+		FScopedEscapeNavigation ScopedNavigation;
+		USeinMoveToLifecycleTestMovement::bAdvanceInitialWaypointOnTick = true;
+		USeinMoveToEscapeTestNavigation::bPassable = false;
+		USeinMoveToEscapeTestNavigation::bReturnEscapeTarget = true;
+		USeinMoveToEscapeTestNavigation::EscapeTarget =
+			EscapeRecoveryTarget();
+		USeinMoveToLifecycleTestMovement::FinishTickCallIndices = {2};
+		const FSeinNavigationComponent Navigation =
+			MakeEscapeNavigationComponent();
+		FMoveToLifecycleFixture Fixture;
+		Fixture.Destination = FFixedVector(
+			FFixedPoint::FromInt(2000),
+			FFixedPoint::Zero,
+			FFixedPoint::Zero);
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Navigation)));
+
+		Fixture.Tick(EscapeRecoveryStep());
+		Fixture.Tick(EscapeRecoveryStep());
+		Fixture.Tick(EscapeRecoveryStep());
+
+		ASSERT_THAT(IsTrue(Fixture.Action->Path.Waypoints.IsEmpty()));
+		ASSERT_THAT(IsFalse(
+			FMoveToActionContinuationTestAccess::IsEscapeMode(
+				*Fixture.Action)));
+		ASSERT_THAT(AreEqual(
+			1,
+			FMoveToActionContinuationTestAccess::GetEscapeAttempts(
+				*Fixture.Action)));
+		ASSERT_THAT(AreEqual(0, Fixture.Observer->FailedCount));
+		ASSERT_THAT(IsFalse(Fixture.Action->bCompleted));
+	}
+
+	TEST(MoveToHeldEscapeLegExhaustsAndStrands,
+		"SeinARTS.Sim.Movement.EscapeRecovery")
+	{
+		FScopedMoveToTestState Reset;
+		FScopedEscapeNavigation ScopedNavigation;
+		USeinMoveToLifecycleTestMovement::bAdvanceInitialWaypointOnTick = true;
+		USeinMoveToEscapeTestNavigation::bPassable = false;
+		USeinMoveToEscapeTestNavigation::bReturnEscapeTarget = true;
+		USeinMoveToEscapeTestNavigation::EscapeTarget =
+			EscapeRecoveryTarget();
+		const FSeinNavigationComponent Navigation =
+			MakeEscapeNavigationComponent();
+		FMoveToLifecycleFixture Fixture;
+		Fixture.Destination = FFixedVector(
+			FFixedPoint::FromInt(2000),
+			FFixedPoint::Zero,
+			FFixedPoint::Zero);
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Navigation)));
+
+		Fixture.Tick(EscapeRecoveryStep());
+		Fixture.Tick(EscapeRecoveryStep());
+		const FFixedPoint EscapeHoldLimit =
+			FFixedPoint::FromInt(3) / FFixedPoint::FromInt(5);
+		Fixture.Tick(EscapeHoldLimit);
+		Fixture.Tick(EscapeRecoveryStep());
+		Fixture.Tick(EscapeHoldLimit);
+		Fixture.Tick(EscapeRecoveryStep());
+		Fixture.Tick(EscapeHoldLimit);
+
+		ASSERT_THAT(AreEqual(
+			4, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
+		ASSERT_THAT(AreEqual(
+			3, USeinMoveToEscapeTestNavigation::EscapeQueryCount));
+		ASSERT_THAT(AreEqual(1, Fixture.Observer->FailedCount));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(ESeinMoveFailureReason::Stranded),
+			static_cast<int32>(Fixture.Observer->LastFailure)));
+		ASSERT_THAT(IsTrue(Fixture.Action->bCompleted));
+		ASSERT_THAT(IsTrue(Fixture.Action->bFailed));
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::EndCount));
+	}
+
+	TEST(MoveToEscapeEntryBudgetCapsOscillation,
+		"SeinARTS.Sim.Movement.EscapeRecovery")
+	{
+		FScopedMoveToTestState Reset;
+		FScopedEscapeNavigation ScopedNavigation;
+		USeinMoveToLifecycleTestMovement::bAdvanceInitialWaypointOnTick = true;
+		USeinMoveToEscapeTestNavigation::bPassable = false;
+		USeinMoveToEscapeTestNavigation::bReturnEscapeTarget = true;
+		USeinMoveToEscapeTestNavigation::EscapeTarget =
+			EscapeRecoveryTarget();
+		const FSeinNavigationComponent Navigation =
+			MakeEscapeNavigationComponent();
+		FMoveToLifecycleFixture Fixture;
+		Fixture.Destination = FFixedVector(
+			FFixedPoint::FromInt(2000),
+			FFixedPoint::Zero,
+			FFixedPoint::Zero);
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Navigation)));
+
+		Fixture.Tick(EscapeRecoveryStep());
+		ASSERT_THAT(IsTrue(
+			FMoveToActionContinuationTestAccess::HasStageOneFired(
+				*Fixture.Action)));
+		FMoveToActionContinuationTestAccess::SetTotalEscapeEntries(
+			*Fixture.Action, 5);
+		Fixture.Tick(EscapeRecoveryStep());
+
+		ASSERT_THAT(AreEqual(
+			0, USeinMoveToEscapeTestNavigation::EscapeQueryCount));
+		ASSERT_THAT(AreEqual(1, Fixture.Observer->FailedCount));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(ESeinMoveFailureReason::Stranded),
+			static_cast<int32>(Fixture.Observer->LastFailure)));
+		ASSERT_THAT(IsTrue(Fixture.Action->bCompleted));
+		ASSERT_THAT(IsTrue(Fixture.Action->bFailed));
 	}
 
 	TEST(MoveToCompletedCallbackCanEndAbilityWithoutCancellation,
