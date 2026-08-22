@@ -4,7 +4,7 @@
  * @file         SeinAvoidanceDefaultKernel.cpp
  * @author       RJ Macklem
  * @created      13 Aug 2026
- * @latest       13 Aug 2026
+ * @latest       22 Aug 2026
  * @brief        Implements the shipped deterministic local-avoidance kernel.
  *
  *               The kernel reads the immutable start-of-tick broadphase and
@@ -863,6 +863,297 @@ namespace
 		InOutAccum.Y += Right.Y * (DetourSum * IdleResolveStrength);
 	}
 
+	static bool IsGenuineCrossing(
+		const FAvoidanceNeighborParameters& Parameters,
+		const FMoverAvoidanceSnapshot& Self,
+		const FSeinEntity& OtherEntity,
+		const FSeinMovementComponent& OtherMovement)
+	{
+		if (!Parameters.bDoSiDoEnabled || !OtherMovement.bHasTarget)
+		{
+			return false;
+		}
+
+		FFixedVector OtherToGoal = OtherMovement.TargetLocation
+			- OtherEntity.Transform.GetLocation();
+		OtherToGoal.Z = FFixedPoint::Zero;
+		FFixedVector ToOtherEarly =
+			OtherEntity.Transform.GetLocation() - Self.Position;
+		ToOtherEarly.Z = FFixedPoint::Zero;
+		const FFixedPoint BodySeparationSquared =
+			ToOtherEarly.SizeSquared();
+		const FFixedVector RelativeVelocityEarly(
+			Self.Velocity.X - OtherMovement.Velocity.X,
+			Self.Velocity.Y - OtherMovement.Velocity.Y,
+			FFixedPoint::Zero);
+		const FFixedPoint ClosingEarly =
+			ToOtherEarly.X * RelativeVelocityEarly.X
+			+ ToOtherEarly.Y * RelativeVelocityEarly.Y;
+		const FFixedPoint IntentDot =
+			Self.ToGoal.X * OtherToGoal.X
+			+ Self.ToGoal.Y * OtherToGoal.Y;
+		FFixedVector GoalSeparation =
+			OtherMovement.TargetLocation - Self.Movement.TargetLocation;
+		GoalSeparation.Z = FFixedPoint::Zero;
+		const FFixedPoint GoalSeparationSquared =
+			GoalSeparation.SizeSquared();
+		return ClosingEarly > FFixedPoint::Zero
+			&& IntentDot < FFixedPoint::Zero
+			&& GoalSeparationSquared
+				> Parameters.CrossingGoalDivergenceSquared
+					* BodySeparationSquared;
+	}
+
+	static void AccumulateSameGroupCrossing(
+		const FAvoidanceNeighborParameters& Parameters,
+		const FMoverAvoidanceSnapshot& Self,
+		FSeinEntityHandle OtherHandle,
+		const FSeinEntity& OtherEntity,
+		const FSeinMovementComponent& OtherMovement,
+		bool bGenuineCrossing,
+		FFixedVector& OutAccum)
+	{
+		if (!bGenuineCrossing
+			|| OtherMovement.Velocity.SizeSquared()
+				<= Parameters.MovingSpeedFloor
+					* Parameters.MovingSpeedFloor)
+		{
+			return;
+		}
+		FFixedVector ToOther =
+			OtherEntity.Transform.GetLocation() - Self.Position;
+		ToOther.Z = FFixedPoint::Zero;
+		const FFixedPoint DistanceSquared = ToOther.SizeSquared();
+		if (DistanceSquared <= FFixedPoint::Epsilon) return;
+		const FSeinNavigationComponent* Navigation = Parameters.NavStorage
+			? static_cast<const FSeinNavigationComponent*>(
+				Parameters.NavStorage->GetComponentRaw(OtherHandle))
+			: nullptr;
+		const FSeinExtentsComponent* Extents = Parameters.ExtentsStorage
+			? static_cast<const FSeinExtentsComponent*>(
+				Parameters.ExtentsStorage->GetComponentRaw(OtherHandle))
+			: nullptr;
+		const FFixedPoint Radius =
+			USeinMovement::ResolveCollisionRadius(Extents, Navigation);
+		if (Radius <= FFixedPoint::Zero) return;
+		const FFixedPoint Distance = SeinMath::Sqrt(DistanceSquared);
+		const FFixedPoint Range =
+			(Self.Radius + Radius) * Parameters.FalloffRadii;
+		if (Distance >= Range) return;
+		const FFixedPoint Falloff =
+			FFixedPoint::One - (Distance / Range);
+		const FFixedVector Steer = ComputeDoSiDoSteer(
+			Self.Handle, OtherHandle, Self.Position,
+			OtherEntity.Transform.GetLocation());
+		const FFixedPoint Magnitude =
+			(FFixedPoint::One + Parameters.HeadOnBase)
+			* Falloff * Parameters.DoSiDoStrength;
+		OutAccum.X += Steer.X * Magnitude;
+		OutAccum.Y += Steer.Y * Magnitude;
+	}
+
+	static void AccumulateBlobResponse(
+		const FAvoidanceNeighborParameters& Parameters,
+		const FMoverAvoidanceSnapshot& Self,
+		FSeinEntityHandle OtherBrokerHandle,
+		const FSeinCommandBrokerData& OtherBrokerData,
+		FFixedVector& OutAccum)
+	{
+		const FFixedVector BlobCentroid = OtherBrokerData.Centroid;
+		const FFixedPoint BlobExtent = OtherBrokerData.FormationRadius;
+		FFixedVector ToBlob(
+			BlobCentroid.X - Self.Position.X,
+			BlobCentroid.Y - Self.Position.Y,
+			FFixedPoint::Zero);
+		const FFixedPoint BlobDistanceSquared = ToBlob.SizeSquared();
+		if (BlobDistanceSquared <= FFixedPoint::Epsilon) return;
+		if (ToBlob.X * Self.Heading.X + ToBlob.Y * Self.Heading.Y
+			<= FFixedPoint::Zero)
+		{
+			return;
+		}
+		if (Self.GoalDistanceSquared > FFixedPoint::Zero
+			&& BlobDistanceSquared >= Self.GoalDistanceSquared)
+		{
+			return;
+		}
+		const FFixedPoint BlobDistance = SeinMath::Sqrt(BlobDistanceSquared);
+		const FFixedPoint BlobRange =
+			(Self.Radius + BlobExtent) * Parameters.FalloffRadii;
+		if (BlobDistance >= BlobRange) return;
+		const FFixedPoint BlobFalloff =
+			FFixedPoint::One - (BlobDistance / BlobRange);
+		const FFixedPoint BlobMagnitude =
+			(FFixedPoint::One + Parameters.HeadOnBase) * BlobFalloff;
+		if (Self.bIsBlob)
+		{
+			const FFixedVector Steer = ComputeDoSiDoSteer(
+				Self.BrokerHandle, OtherBrokerHandle,
+				Self.BrokerCentroid, BlobCentroid);
+			OutAccum.X += Steer.X * BlobMagnitude;
+			OutAccum.Y += Steer.Y * BlobMagnitude;
+			return;
+		}
+
+		const FFixedPoint SideDot =
+			ToBlob.X * Self.Right.X + ToBlob.Y * Self.Right.Y;
+		const FFixedPoint Band = Self.Radius / FFixedPoint::FromInt(4);
+		const FFixedPoint Turn = SideDot > Band
+			? -FFixedPoint::One
+			: SideDot < -Band
+				? FFixedPoint::One
+				: Self.Handle < OtherBrokerHandle
+					? FFixedPoint::One
+					: -FFixedPoint::One;
+		OutAccum.X += Self.Right.X * (BlobMagnitude * Turn);
+		OutAccum.Y += Self.Right.Y * (BlobMagnitude * Turn);
+	}
+
+	static void AccumulateIndividualResponse(
+		const FAvoidanceNeighborParameters& Parameters,
+		const FMoverAvoidanceSnapshot& Self,
+		FSeinEntityHandle OtherHandle,
+		const FSeinEntity& OtherEntity,
+		const FSeinMovementComponent& OtherMovement,
+		bool bGenuineCrossing,
+		FIdleBlockerSet& OutIdleBlockers,
+		FFixedVector& OutAccum)
+	{
+		const bool bOtherIdle = !OtherMovement.bHasTarget;
+		if (bOtherIdle && !Parameters.bResolveThroughIdlers) return;
+		const bool bQualifies = Self.Movement.bAvoidSameWeights
+			? OtherMovement.AvoidanceWeight
+				>= Self.Movement.AvoidanceWeight
+			: OtherMovement.AvoidanceWeight
+				> Self.Movement.AvoidanceWeight;
+		if (!bQualifies) return;
+
+		FFixedVector ToOther =
+			OtherEntity.Transform.GetLocation() - Self.Position;
+		ToOther.Z = FFixedPoint::Zero;
+		const FFixedPoint DistanceSquared = ToOther.SizeSquared();
+		if (DistanceSquared <= FFixedPoint::Epsilon) return;
+		if (ToOther.X * Self.Heading.X + ToOther.Y * Self.Heading.Y
+			<= FFixedPoint::Zero)
+		{
+			return;
+		}
+		const FFixedVector RelativeVelocity(
+			Self.Velocity.X - OtherMovement.Velocity.X,
+			Self.Velocity.Y - OtherMovement.Velocity.Y,
+			FFixedPoint::Zero);
+		if (ToOther.X * RelativeVelocity.X
+				+ ToOther.Y * RelativeVelocity.Y
+			<= FFixedPoint::Zero)
+		{
+			return;
+		}
+		if (Self.GoalDistanceSquared > FFixedPoint::Zero
+			&& DistanceSquared >= Self.GoalDistanceSquared)
+		{
+			return;
+		}
+
+		const FSeinNavigationComponent* OtherNavigation = Parameters.NavStorage
+			? static_cast<const FSeinNavigationComponent*>(
+				Parameters.NavStorage->GetComponentRaw(OtherHandle))
+			: nullptr;
+		const FSeinExtentsComponent* OtherExtents = Parameters.ExtentsStorage
+			? static_cast<const FSeinExtentsComponent*>(
+				Parameters.ExtentsStorage->GetComponentRaw(OtherHandle))
+			: nullptr;
+		const FFixedPoint OtherRadius =
+			USeinMovement::ResolveCollisionRadius(
+				OtherExtents, OtherNavigation);
+		if (OtherRadius <= FFixedPoint::Zero) return;
+		const FFixedPoint Distance = SeinMath::Sqrt(DistanceSquared);
+		const FFixedPoint FalloffRange =
+			(Self.Radius + OtherRadius) * Parameters.FalloffRadii;
+		if (Distance >= FalloffRange) return;
+		const FFixedPoint Falloff =
+			FFixedPoint::One - (Distance / FalloffRange);
+
+		FFixedPoint HeadOn = FFixedPoint::One + Parameters.HeadOnBase;
+		const FFixedVector OtherVelocity = OtherMovement.Velocity;
+		const FFixedPoint OtherSpeed = OtherVelocity.Size();
+		if (OtherSpeed > Parameters.MovingSpeedFloor)
+		{
+			const FFixedPoint Cosine =
+				(Self.Heading.X * OtherVelocity.X
+					+ Self.Heading.Y * OtherVelocity.Y)
+				/ OtherSpeed;
+			HeadOn = (FFixedPoint::One - Cosine) + Parameters.HeadOnBase;
+		}
+
+		if (bGenuineCrossing)
+		{
+			const FFixedVector Steer = ComputeDoSiDoSteer(
+				Self.Handle, OtherHandle, Self.Position,
+				OtherEntity.Transform.GetLocation());
+			const FFixedPoint Weight =
+				HeadOn * Falloff * Parameters.DoSiDoStrength;
+			OutAccum.X += Steer.X * Weight;
+			OutAccum.Y += Steer.Y * Weight;
+			return;
+		}
+
+		const FFixedPoint SideDot =
+			ToOther.X * Self.Right.X + ToOther.Y * Self.Right.Y;
+		const FFixedPoint LateralBand =
+			Self.Radius / FFixedPoint::FromInt(4);
+		FFixedPoint TurnSign;
+		if (SideDot > LateralBand)
+		{
+			TurnSign = -FFixedPoint::One;
+		}
+		else if (SideDot < -LateralBand)
+		{
+			TurnSign = FFixedPoint::One;
+		}
+		else
+		{
+			TurnSign = Self.Handle.Index < OtherHandle.Index
+				? FFixedPoint::One
+				: -FFixedPoint::One;
+		}
+
+		if (bOtherIdle)
+		{
+			if (OutIdleBlockers.Count < MaxIdleBlockers)
+			{
+				const FFixedPoint InverseDistance =
+					FFixedPoint::One / Distance;
+				OutIdleBlockers.Directions[OutIdleBlockers.Count] =
+					FFixedVector(
+						ToOther.X * InverseDistance,
+						ToOther.Y * InverseDistance,
+						FFixedPoint::Zero);
+				FFixedPoint SinHalfAngle =
+					(Self.Radius + OtherRadius) * InverseDistance;
+				if (SinHalfAngle > FFixedPoint::One)
+				{
+					SinHalfAngle = FFixedPoint::One;
+				}
+				FFixedPoint CosHalfAngleSquared =
+					FFixedPoint::One - SinHalfAngle * SinHalfAngle;
+				if (CosHalfAngleSquared < FFixedPoint::Zero)
+				{
+					CosHalfAngleSquared = FFixedPoint::Zero;
+				}
+				OutIdleBlockers.CosHalfAngles[OutIdleBlockers.Count] =
+					SeinMath::Sqrt(CosHalfAngleSquared);
+				OutIdleBlockers.Detours[OutIdleBlockers.Count] =
+					HeadOn * Falloff * TurnSign;
+				++OutIdleBlockers.Count;
+			}
+			return;
+		}
+
+		const FFixedPoint Weight = HeadOn * Falloff * TurnSign;
+		OutAccum.X += Self.Right.X * Weight;
+		OutAccum.Y += Self.Right.Y * Weight;
+	}
+
 	static void AccumulateNeighborResponses(
 		const FAvoidanceNeighborParameters& Parameters,
 		const FMoverAvoidanceSnapshot& Self,
@@ -876,11 +1167,12 @@ namespace
 			const FSeinEntity* OtherEntity =
 				Parameters.World.GetEntityPool().Get(OtherHandle);
 			if (!OtherEntity) continue;
-			const FSeinMovementComponent* OtherMove = Parameters.MoveStorage
-				? static_cast<const FSeinMovementComponent*>(
-					Parameters.MoveStorage->GetComponentRaw(OtherHandle))
-				: nullptr;
-			if (!OtherMove) continue;
+			const FSeinMovementComponent* OtherMovement =
+				Parameters.MoveStorage
+					? static_cast<const FSeinMovementComponent*>(
+						Parameters.MoveStorage->GetComponentRaw(OtherHandle))
+					: nullptr;
+			if (!OtherMovement) continue;
 
 			const FSeinBrokerMembershipData* OtherBroker =
 				Parameters.BrokerStorage
@@ -896,7 +1188,6 @@ namespace
 				continue;
 			}
 
-			const bool bOtherHasTarget = OtherMove->bHasTarget;
 			const FSeinCommandBrokerData* OtherBrokerData =
 				OtherBrokerHandle.IsValid()
 					&& Parameters.BrokerDataStorage
@@ -908,39 +1199,8 @@ namespace
 			const bool bOtherIsBlob = OtherBrokerData
 				&& OtherBrokerData->bAvoidAsCohesiveBody
 				&& OtherBrokerData->FormationRadius > FFixedPoint::Zero;
-
-			bool bGenuineCrossing = false;
-			if (Parameters.bDoSiDoEnabled && bOtherHasTarget)
-			{
-				FFixedVector OtherToGoal = OtherMove->TargetLocation
-					- OtherEntity->Transform.GetLocation();
-				OtherToGoal.Z = FFixedPoint::Zero;
-				FFixedVector ToOtherEarly =
-					OtherEntity->Transform.GetLocation() - Self.Position;
-				ToOtherEarly.Z = FFixedPoint::Zero;
-				const FFixedPoint BodySeparationSquared =
-					ToOtherEarly.SizeSquared();
-				const FFixedVector RelativeVelocityEarly(
-					Self.Velocity.X - OtherMove->Velocity.X,
-					Self.Velocity.Y - OtherMove->Velocity.Y,
-					FFixedPoint::Zero);
-				const FFixedPoint ClosingEarly =
-					ToOtherEarly.X * RelativeVelocityEarly.X
-					+ ToOtherEarly.Y * RelativeVelocityEarly.Y;
-				const FFixedPoint IntentDot =
-					Self.ToGoal.X * OtherToGoal.X
-					+ Self.ToGoal.Y * OtherToGoal.Y;
-				FFixedVector GoalSeparation =
-					OtherMove->TargetLocation - Self.Movement.TargetLocation;
-				GoalSeparation.Z = FFixedPoint::Zero;
-				const FFixedPoint GoalSeparationSquared =
-					GoalSeparation.SizeSquared();
-				bGenuineCrossing = ClosingEarly > FFixedPoint::Zero
-					&& IntentDot < FFixedPoint::Zero
-					&& GoalSeparationSquared
-						> Parameters.CrossingGoalDivergenceSquared
-							* BodySeparationSquared;
-			}
+			const bool bGenuineCrossing = IsGenuineCrossing(
+				Parameters, Self, *OtherEntity, *OtherMovement);
 
 			const bool bSameBroker = Self.BrokerHandle.IsValid()
 				&& OtherBrokerHandle == Self.BrokerHandle;
@@ -951,237 +1211,25 @@ namespace
 				&& Self.CohesionId == OtherCohesionId;
 			if (bSameBroker || bSameCohesion)
 			{
-				if (!bGenuineCrossing) continue;
-				if (OtherMove->Velocity.SizeSquared()
-					<= Parameters.MovingSpeedFloor
-						* Parameters.MovingSpeedFloor)
-				{
-					continue;
-				}
-				FFixedVector ToOther =
-					OtherEntity->Transform.GetLocation() - Self.Position;
-				ToOther.Z = FFixedPoint::Zero;
-				const FFixedPoint DistanceSquared = ToOther.SizeSquared();
-				if (DistanceSquared <= FFixedPoint::Epsilon) continue;
-				const FSeinNavigationComponent* Navigation =
-					Parameters.NavStorage
-						? static_cast<const FSeinNavigationComponent*>(
-							Parameters.NavStorage->GetComponentRaw(OtherHandle))
-						: nullptr;
-				const FSeinExtentsComponent* Extents = Parameters.ExtentsStorage
-					? static_cast<const FSeinExtentsComponent*>(
-						Parameters.ExtentsStorage->GetComponentRaw(OtherHandle))
-					: nullptr;
-				const FFixedPoint Radius =
-					USeinMovement::ResolveCollisionRadius(Extents, Navigation);
-				if (Radius <= FFixedPoint::Zero) continue;
-				const FFixedPoint Distance = SeinMath::Sqrt(DistanceSquared);
-				const FFixedPoint Range =
-					(Self.Radius + Radius) * Parameters.FalloffRadii;
-				if (Distance >= Range) continue;
-				const FFixedPoint Falloff =
-					FFixedPoint::One - (Distance / Range);
-				const FFixedVector Steer = ComputeDoSiDoSteer(
-					Self.Handle, OtherHandle, Self.Position,
-					OtherEntity->Transform.GetLocation());
-				const FFixedPoint Magnitude =
-					(FFixedPoint::One + Parameters.HeadOnBase)
-					* Falloff * Parameters.DoSiDoStrength;
-				OutAccum.X += Steer.X * Magnitude;
-				OutAccum.Y += Steer.Y * Magnitude;
+				AccumulateSameGroupCrossing(
+					Parameters, Self, OtherHandle, *OtherEntity,
+					*OtherMovement, bGenuineCrossing, OutAccum);
 				continue;
 			}
 
 			if (bOtherIsBlob)
 			{
 				VisitedBlobBrokers.Add(OtherBrokerHandle);
-				const FFixedVector BlobCentroid = OtherBrokerData->Centroid;
-				const FFixedPoint BlobExtent = OtherBrokerData->FormationRadius;
-				FFixedVector ToBlob(
-					BlobCentroid.X - Self.Position.X,
-					BlobCentroid.Y - Self.Position.Y,
-					FFixedPoint::Zero);
-				const FFixedPoint BlobDistanceSquared = ToBlob.SizeSquared();
-				if (BlobDistanceSquared <= FFixedPoint::Epsilon) continue;
-				if (ToBlob.X * Self.Heading.X + ToBlob.Y * Self.Heading.Y
-					<= FFixedPoint::Zero)
-				{
-					continue;
-				}
-				if (Self.GoalDistanceSquared > FFixedPoint::Zero
-					&& BlobDistanceSquared >= Self.GoalDistanceSquared)
-				{
-					continue;
-				}
-				const FFixedPoint BlobDistance =
-					SeinMath::Sqrt(BlobDistanceSquared);
-				const FFixedPoint BlobRange =
-					(Self.Radius + BlobExtent) * Parameters.FalloffRadii;
-				if (BlobDistance >= BlobRange) continue;
-				const FFixedPoint BlobFalloff =
-					FFixedPoint::One - (BlobDistance / BlobRange);
-				const FFixedPoint BlobMagnitude =
-					(FFixedPoint::One + Parameters.HeadOnBase) * BlobFalloff;
-				if (Self.bIsBlob)
-				{
-					const FFixedVector Steer = ComputeDoSiDoSteer(
-						Self.BrokerHandle, OtherBrokerHandle,
-						Self.BrokerCentroid, BlobCentroid);
-					OutAccum.X += Steer.X * BlobMagnitude;
-					OutAccum.Y += Steer.Y * BlobMagnitude;
-				}
-				else
-				{
-					const FFixedPoint SideDot =
-						ToBlob.X * Self.Right.X + ToBlob.Y * Self.Right.Y;
-					const FFixedPoint Band =
-						Self.Radius / FFixedPoint::FromInt(4);
-					const FFixedPoint Turn = SideDot > Band
-						? -FFixedPoint::One
-						: SideDot < -Band
-							? FFixedPoint::One
-							: Self.Handle < OtherBrokerHandle
-								? FFixedPoint::One
-								: -FFixedPoint::One;
-					OutAccum.X += Self.Right.X * (BlobMagnitude * Turn);
-					OutAccum.Y += Self.Right.Y * (BlobMagnitude * Turn);
-				}
+				AccumulateBlobResponse(
+					Parameters, Self, OtherBrokerHandle,
+					*OtherBrokerData, OutAccum);
 				continue;
 			}
 
-			const bool bOtherIdle = !OtherMove->bHasTarget;
-			if (bOtherIdle && !Parameters.bResolveThroughIdlers) continue;
-			const bool bQualifies = Self.Movement.bAvoidSameWeights
-				? OtherMove->AvoidanceWeight >= Self.Movement.AvoidanceWeight
-				: OtherMove->AvoidanceWeight > Self.Movement.AvoidanceWeight;
-			if (!bQualifies) continue;
-
-			FFixedVector ToOther =
-				OtherEntity->Transform.GetLocation() - Self.Position;
-			ToOther.Z = FFixedPoint::Zero;
-			const FFixedPoint DistanceSquared = ToOther.SizeSquared();
-			if (DistanceSquared <= FFixedPoint::Epsilon) continue;
-			if (ToOther.X * Self.Heading.X + ToOther.Y * Self.Heading.Y
-				<= FFixedPoint::Zero)
-			{
-				continue;
-			}
-			const FFixedVector RelativeVelocity(
-				Self.Velocity.X - OtherMove->Velocity.X,
-				Self.Velocity.Y - OtherMove->Velocity.Y,
-				FFixedPoint::Zero);
-			if (ToOther.X * RelativeVelocity.X
-					+ ToOther.Y * RelativeVelocity.Y
-				<= FFixedPoint::Zero)
-			{
-				continue;
-			}
-			if (Self.GoalDistanceSquared > FFixedPoint::Zero
-				&& DistanceSquared >= Self.GoalDistanceSquared)
-			{
-				continue;
-			}
-
-			const FSeinNavigationComponent* OtherNavigation =
-				Parameters.NavStorage
-					? static_cast<const FSeinNavigationComponent*>(
-						Parameters.NavStorage->GetComponentRaw(OtherHandle))
-					: nullptr;
-			const FSeinExtentsComponent* OtherExtents =
-				Parameters.ExtentsStorage
-					? static_cast<const FSeinExtentsComponent*>(
-						Parameters.ExtentsStorage->GetComponentRaw(OtherHandle))
-					: nullptr;
-			const FFixedPoint OtherRadius =
-				USeinMovement::ResolveCollisionRadius(
-					OtherExtents, OtherNavigation);
-			if (OtherRadius <= FFixedPoint::Zero) continue;
-			const FFixedPoint Distance = SeinMath::Sqrt(DistanceSquared);
-			const FFixedPoint FalloffRange =
-				(Self.Radius + OtherRadius) * Parameters.FalloffRadii;
-			if (Distance >= FalloffRange) continue;
-			const FFixedPoint Falloff =
-				FFixedPoint::One - (Distance / FalloffRange);
-
-			FFixedPoint HeadOn = FFixedPoint::One + Parameters.HeadOnBase;
-			const FFixedVector OtherVelocity = OtherMove->Velocity;
-			const FFixedPoint OtherSpeed = OtherVelocity.Size();
-			if (OtherSpeed > Parameters.MovingSpeedFloor)
-			{
-				const FFixedPoint Cosine =
-					(Self.Heading.X * OtherVelocity.X
-						+ Self.Heading.Y * OtherVelocity.Y)
-					/ OtherSpeed;
-				HeadOn = (FFixedPoint::One - Cosine) + Parameters.HeadOnBase;
-			}
-
-			if (bGenuineCrossing)
-			{
-				const FFixedVector Steer = ComputeDoSiDoSteer(
-					Self.Handle, OtherHandle, Self.Position,
-					OtherEntity->Transform.GetLocation());
-				const FFixedPoint Weight =
-					HeadOn * Falloff * Parameters.DoSiDoStrength;
-				OutAccum.X += Steer.X * Weight;
-				OutAccum.Y += Steer.Y * Weight;
-				continue;
-			}
-
-			const FFixedPoint SideDot =
-				ToOther.X * Self.Right.X + ToOther.Y * Self.Right.Y;
-			const FFixedPoint LateralBand =
-				Self.Radius / FFixedPoint::FromInt(4);
-			FFixedPoint TurnSign;
-			if (SideDot > LateralBand)
-			{
-				TurnSign = -FFixedPoint::One;
-			}
-			else if (SideDot < -LateralBand)
-			{
-				TurnSign = FFixedPoint::One;
-			}
-			else
-			{
-				TurnSign = Self.Handle.Index < OtherHandle.Index
-					? FFixedPoint::One
-					: -FFixedPoint::One;
-			}
-
-			if (bOtherIdle)
-			{
-				if (OutIdleBlockers.Count < MaxIdleBlockers)
-				{
-					const FFixedPoint InverseDistance =
-						FFixedPoint::One / Distance;
-					OutIdleBlockers.Directions[OutIdleBlockers.Count] =
-						FFixedVector(
-							ToOther.X * InverseDistance,
-							ToOther.Y * InverseDistance,
-							FFixedPoint::Zero);
-					FFixedPoint SinHalfAngle =
-						(Self.Radius + OtherRadius) * InverseDistance;
-					if (SinHalfAngle > FFixedPoint::One)
-					{
-						SinHalfAngle = FFixedPoint::One;
-					}
-					FFixedPoint CosHalfAngleSquared =
-						FFixedPoint::One - SinHalfAngle * SinHalfAngle;
-					if (CosHalfAngleSquared < FFixedPoint::Zero)
-					{
-						CosHalfAngleSquared = FFixedPoint::Zero;
-					}
-					OutIdleBlockers.CosHalfAngles[OutIdleBlockers.Count] =
-						SeinMath::Sqrt(CosHalfAngleSquared);
-					OutIdleBlockers.Detours[OutIdleBlockers.Count] =
-						HeadOn * Falloff * TurnSign;
-					++OutIdleBlockers.Count;
-				}
-				continue;
-			}
-
-			const FFixedPoint Weight = HeadOn * Falloff * TurnSign;
-			OutAccum.X += Self.Right.X * Weight;
-			OutAccum.Y += Self.Right.Y * Weight;
+			AccumulateIndividualResponse(
+				Parameters, Self, OtherHandle, *OtherEntity,
+				*OtherMovement, bGenuineCrossing,
+				OutIdleBlockers, OutAccum);
 		}
 	}
 
