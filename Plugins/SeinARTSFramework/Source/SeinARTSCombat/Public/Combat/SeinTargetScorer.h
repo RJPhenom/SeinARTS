@@ -4,6 +4,7 @@
  * @file         SeinTargetScorer.h
  * @author       RJ Macklem
  * @created      16 Aug 2026
+ * @latest       23 Aug 2026
  * @brief        Target validity + scoring policy seam for acquisition.
  *
  *          The query service owns the deterministic sweep (range, arc, LoS,
@@ -13,6 +14,13 @@
  *          entities and scores by proximity; games layer threat, alliances
  *          (pair-capability checks), veterancy focus, or intercept priority
  *          by overriding two functions.
+ *
+ *          Both functions must be PURE: the query may evaluate a scorer a
+ *          different number of times depending on query radius (spatial
+ *          prefilter vs. full sweep) with identical results, so a scorer that
+ *          counts calls or writes state would observe non-canonical facts. The
+ *          editor validator blocks member writes; side effects through other
+ *          channels are the author's responsibility.
  *
  * @disclaimer   This code was generated in whole or in part with the assistance
  *               of an AI language model.
@@ -36,7 +44,7 @@ class SEINARTSCOMBAT_API USeinTargetScorer : public UObject
 
 public:
 	/** May this candidate be targeted at all? Runs after the mechanical
-	 *  gates (alive, vitals present, range, arc, tags, LoS). The default
+	 *  gates (alive, required component, range, arc, tags, LoS). The default
 	 *  excludes the instigator's own entities — hostility is policy, so
 	 *  alliance-aware games override this (e.g. consult pair capabilities). */
 	UFUNCTION(BlueprintNativeEvent, BlueprintPure, Category = "SeinARTS|Combat")

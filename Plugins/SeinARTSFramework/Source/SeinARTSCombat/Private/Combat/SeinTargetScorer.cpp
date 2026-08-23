@@ -15,7 +15,9 @@ bool USeinTargetScorer::IsValidTarget_Implementation(
 	// Hostility is policy, and the neutral default is deliberately minimal:
 	// anything not owned by the instigator's player is fair game. Alliance-
 	// aware games override this (typically consulting a pair-capability tag).
-	if (!World || !Query.Instigator.IsValid())
+	// A stale (dead) instigator handle disables the owner gate rather than
+	// resolving to Neutral and excluding every neutral-owned candidate.
+	if (!World || !World->IsEntityAlive(Query.Instigator))
 	{
 		return true;
 	}

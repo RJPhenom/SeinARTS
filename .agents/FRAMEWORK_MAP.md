@@ -36,7 +36,7 @@ on this repository's host `/Game` packages or on opt-in extensions.
 |---|---|
 | `SeinARTSCore` | Fixed-point scalar/vector/transform/quaternion geometry, deterministic trigonometry and PRNG. Leaf dependency. |
 | `SeinARTSCoreEntity` | Generational entity pool; reflection-backed sparse component storage; ordered fixed-tick systems; ability/latent/effect/production/containment state; command brokers; snapshots; canonical roots; visual-event emission. |
-| `SeinARTSCombat` | Genre-neutral vitals, deterministic damage/healing, weapon cycling, on-demand target acquisition, and instant/projectile delivery. |
+| `SeinARTSCombat` | Genre-neutral target acquisition toolkit: deterministic Find Targets / Check Target over a derived spatial index, Blueprint scorer seam, and combat presentation notifications. No vitals/weapon/damage/projectile schema. |
 | `SeinARTSLevelData` | Shared baked substrate, coordinate system, layer-provider registry, and regenerable channel data. |
 | `SeinARTSNavigation` | Deterministic grid A*, connectivity/reachability, footprint-aware placement, height sampling, dynamic blockers, async request/result plumbing, and typed paths. |
 | `SeinARTSMovement` | Persistent per-entity movement policies, planner/mover handles, MoveTo continuation, shared steering/avoidance, navigation containment, movement driver, and typed-segment flattening. |
@@ -106,13 +106,23 @@ Construction Progress** on `FSeinConstructionComponent`; only positive non-overf
 mutates. Completion removes the component and releases only the framework-owned
 `State.UnderConstruction` grant, preserving an identical designer-authored base grant.
 
-Combat participation is opt-in through `FSeinVitalsComponent` and `FSeinWeaponComponent`.
-`USeinDamageFormula` and `USeinTargetScorer` are stateless Blueprint policy CDOs with neutral
-built-ins when no class is selected. Target acquisition is an on-demand service; abilities own
-engagement cadence and call the restricted fire/damage/heal mutations. Instant delivery resolves in
-the fire tick. Projectile delivery creates ordinary pooled entities, so projectile state follows the
-normal canonical snapshot, replay, and reconnect lifecycle. Start at `SeinWeaponFire.h`,
-`SeinTargetQueryService.h`, `SeinDamageFormula.h`, and `SeinTargetScorer.h`.
+Combat is designer-owned (re-cut 2026-08-23 from the prescriptive 2026-08-16 substrate). The
+framework ships no vitals, weapon, damage, or projectile schema and no combat tick systems; a
+game authors its own vitals/weapon structs (native or UDS) and drives them from abilities and
+effects. `SeinARTSCombat` owns the acquisition mechanism only: **Find Targets** and **Check
+Target** share one gate chain (alive → `RequiredComponent` → range → arc → `RequiredTargetTags`
+→ fog LoS → scorer validity) over a derived, non-canonical position index that covers every
+live entity; `USeinTargetScorer` is the stateless Blueprint policy CDO (neutral built-in: same
+owner excluded, nearest wins). Stat mutation is the generic **Apply Field Delta** in
+`USeinSimMutationBPFL` (saturating add with opt-in `bClampMin`/`MinValue` and
+`bClampMax`/`MaxValue` — flags default off so an unwired node is never a silent zeroing; a no-op
+never dirties the mutation revision; reports `bChanged`/`bAtMin`/`bAtMax`; UDS fields resolve by
+authored name identically in editor and cooked builds). Status is
+**Apply Effect**; death is the designer's rule followed by **Destroy Entity**; presentation is
+**Notify Damage Applied / Heal Applied / Death** (restricted to Ability/Effect), enqueueing the
+existing DamageApplied / HealApplied / Death / Kill visual events. Start at
+`SeinTargetQueryService.h`, `SeinCombatTypes.h`, `SeinTargetScorer.h`,
+`SeinCombatMutationBPFL.h`, and `SeinSimMutationBPFL.h` (Apply Field Delta).
 
 ### Collision
 

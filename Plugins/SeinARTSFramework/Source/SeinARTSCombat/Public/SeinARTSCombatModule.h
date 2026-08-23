@@ -4,16 +4,21 @@
  * @file         SeinARTSCombatModule.h
  * @author       RJ Macklem
  * @created      16 Aug 2026
- * @latest       21 Aug 2026
- * @brief        Module interface for the SeinARTS combat substrate.
+ * @latest       23 Aug 2026
+ * @brief        Module interface for the SeinARTS combat toolkit.
  *
- *          The combat module owns the genre-free combat MECHANISMS: vitals and
- *          deterministic damage resolution, weapon cycling timers, the target
- *          query service, and instant/projectile delivery. Everything that
- *          defines a game's combat FEEL — damage formulas, target scoring,
- *          engagement stances, suppression, morale, shields — is a pluggable
- *          policy class, an ability, or an effect authored by the consuming
- *          game. The module never decides which kind of RTS is being made.
+ *          The combat module owns ONLY the genre-free acquisition mechanism:
+ *          the deterministic target query (range / arc / tag / fog-LoS /
+ *          component gates over a derived spatial index), the per-target
+ *          Check Target verdict, the Blueprint scorer policy seam, and the
+ *          presentation notifications (damage / heal / death visual events).
+ *          It ships NO vitals, weapon, damage, or projectile schema and no
+ *          tick systems: what a unit's stats are, how a hit is computed, how
+ *          fast a weapon cycles, what a projectile is, and when something dies
+ *          are the consuming game's components (native or UDS), abilities, and
+ *          effects — mutated through the generic Apply Field Delta / Apply
+ *          Effect / Destroy Entity verbs. The module never decides which kind
+ *          of RTS is being made.
  *
  * @disclaimer   This code was generated in whole or in part with the assistance
  *               of an AI language model.

@@ -18,7 +18,7 @@ contracts used by them, but it must never depend on an extension module.
 |---|---|
 | `SeinARTSCore` | Fixed-point math, deterministic geometry, time, and PRNG. Leaf dependency. |
 | `SeinARTSCoreEntity` | Entity pool/storage, actor bridge, sim tick, commands/brokers, abilities/latent actions, effects/attributes, production, containment, resources, match state, snapshots, and visual events. |
-| `SeinARTSCombat` | Genre-neutral vitals, damage/healing, weapon cycling, on-demand target acquisition, and instant/projectile delivery. |
+| `SeinARTSCombat` | Genre-neutral target acquisition toolkit: deterministic target query + per-target check over a derived spatial index, Blueprint scorer seam, and combat presentation notifications. Ships no vitals/weapon/damage/projectile schema. |
 | `SeinARTSLevelData` | Unified baked substrate, canonical grid, shared traces, layer-provider registry, level volume, and baked channels. |
 | `SeinARTSNavigation` | Abstract navigation contract, shipped A* implementation, path requests, reachability, direction queries, and typed path data. |
 | `SeinARTSMovement` | Abstract movement/avoidance contracts, Basic defaults, persistent movement instances, Move To action/proxy, planner/mover handles, shared steering, and movement driver. |
@@ -92,12 +92,19 @@ Progress** against `FSeinConstructionComponent`; only positive, non-overflowing 
 completion removes the component and releases only the framework-owned
 `State.UnderConstruction` grant. Designer-authored ownership of that tag remains intact.
 
-Combat participation is opt-in through `FSeinVitalsComponent` and `FSeinWeaponComponent`.
-`USeinDamageFormula` and `USeinTargetScorer` are stateless Blueprint policy CDOs; empty classes use
-neutral built-ins. Target acquisition is an on-demand query, not an always-on engagement loop.
-Abilities own engagement cadence and use the restricted fire/damage/heal mutations. Projectile
-delivery spawns ordinary pooled entities, so projectile state follows the normal canonical
-snapshot/replay/reconnect lifecycle.
+Combat is designer-owned. The framework ships NO vitals, weapon, damage, or projectile schema
+and no combat tick systems: what a unit's stats are, how a hit is computed, how fast a weapon
+cycles, and when something dies are the game's own components (native or UDS), abilities, and
+effects. `SeinARTSCombat` owns only the acquisition mechanism — **Find Targets** (range / arc /
+tag / fog-LoS / `RequiredComponent` gates over a derived, non-canonical spatial index; canonical
+ordering) and **Check Target** (the same gate chain against one entity, reporting the first
+failing gate), with `USeinTargetScorer` as the stateless Blueprint policy CDO (empty = neutral
+built-in: exclude same owner, nearest wins). Target acquisition is on demand, never an always-on
+loop. Stat changes go through the generic **Apply Field Delta** (saturating add + clamp on any
+fixed-point field of any component, reports `bAtMin`/`bAtMax`); status effects through
+**Apply Effect**; death through **Destroy Entity**; and presentation through the restricted
+**Notify Damage Applied / Notify Heal Applied / Notify Death** nodes, which enqueue the existing
+`FSeinVisualEvent` DamageApplied / HealApplied / Death / Kill events `ASeinActor` already routes.
 
 ## Player-pair capabilities
 

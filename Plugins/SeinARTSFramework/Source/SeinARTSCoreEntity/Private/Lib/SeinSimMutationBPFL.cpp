@@ -14,6 +14,7 @@
 #include "Math/MathLib.h"
 #include "Components/SeinCommandBrokerData.h"
 #include "Events/SeinVisualEvent.h"
+#include "Attributes/SeinAttributeResolver.h"
 
 #include "SeinARTSCoreEntityLog.h"  // LogSeinBPFL (module-shared)
 
@@ -49,8 +50,6 @@ namespace
 	}
 }
 
-// The starter combat substrate (FSeinCombatComponent + USeinCombatBPFL) was
-// removed 2026-06-02; combat will be rebuilt from scratch later.
 bool USeinSimMutationBPFL::SeinSetAbilityData(const UObject* WCO, FSeinEntityHandle H, const FSeinAbilityComponent& D)       { return WriteWholeStruct(WCO, H, D, TEXT("SetAbilityData")); }
 bool USeinSimMutationBPFL::SeinSetProductionData(const UObject* WCO, FSeinEntityHandle H, const FSeinProductionComponent& D) { return WriteWholeStruct(WCO, H, D, TEXT("SetProductionData")); }
 
@@ -84,6 +83,97 @@ bool USeinSimMutationBPFL::SeinSetComponent(const UObject* WorldContextObject, F
 		return false;
 	}
 	StructType->CopyScriptStruct(Dst, NewData.GetMemory());
+	return true;
+}
+
+bool USeinSimMutationBPFL::SeinApplyFieldDelta(
+	const UObject* WorldContextObject, FSeinEntityHandle EntityHandle,
+	UScriptStruct* StructType, FName FieldName, FFixedPoint Delta,
+	bool bClampMin, FFixedPoint MinValue, bool bClampMax, FFixedPoint MaxValue,
+	FFixedPoint& NewValue, bool& bChanged, bool& bAtMin, bool& bAtMax)
+{
+	NewValue = FFixedPoint::Zero;
+	bChanged = false;
+	bAtMin = false;
+	bAtMax = false;
+
+	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
+	if (!Subsystem || !StructType)
+	{
+		UE_LOG(LogSeinBPFL, Warning, TEXT("ApplyFieldDelta: no subsystem or null struct type"));
+		return false;
+	}
+	if (!Subsystem->RequireStateMutationAuthorization(TEXT("ApplyFieldDelta"))) return false;
+	if (bClampMin && bClampMax && MinValue > MaxValue)
+	{
+		UE_LOG(LogSeinBPFL, Warning, TEXT("ApplyFieldDelta: MinValue exceeds MaxValue for %s.%s"),
+			*StructType->GetName(), *FieldName.ToString());
+		return false;
+	}
+	if (!Subsystem->IsEntityAlive(EntityHandle))
+	{
+		return false;
+	}
+	// Resolve the field once. Internal name first, then the authored UDS name
+	// (FindFieldProperty handles both); only FFixedPoint fields are eligible.
+	FProperty* Property = FSeinAttributeResolver::FindFieldProperty(StructType, FieldName);
+	if (!FSeinAttributeResolver::IsFixedPointField(Property))
+	{
+		UE_LOG(LogSeinBPFL, Warning, TEXT("ApplyFieldDelta: %s has no fixed-point field named %s"),
+			*StructType->GetName(), *FieldName.ToString());
+		return false;
+	}
+
+	// Take the mutable storage FIRST so every gate (including the read-only-
+	// callback gate behind GetComponentStorageMutable) fails before any output
+	// is published. The read itself goes through the const accessor so a no-op
+	// never advances the component's mutation revision; only the actual write
+	// below uses the publishing mutable GetComponentRaw.
+	ISeinComponentStorage* Storage = Subsystem->GetComponentStorageMutable(StructType);
+	const void* ConstData = Storage
+		? static_cast<const ISeinComponentStorage*>(Storage)->GetComponentRaw(EntityHandle)
+		: nullptr;
+	if (!ConstData)
+	{
+		UE_LOG(LogSeinBPFL, Warning, TEXT("ApplyFieldDelta: entity %s has no %s"),
+			*EntityHandle.ToString(), *StructType->GetName());
+		return false;
+	}
+	const FFixedPoint Current = *Property->ContainerPtrToValuePtr<FFixedPoint>(ConstData);
+
+	// Saturating add on the raw 64-bit representation — FFixedPoint's own
+	// operator+ wraps by contract, which is exactly wrong for a stat delta.
+	const int64 A = Current.Value;
+	const int64 B = Delta.Value;
+	int64 Sum;
+	if (B > 0 && A > MAX_int64 - B)
+	{
+		Sum = MAX_int64;
+	}
+	else if (B < 0 && A < MIN_int64 - B)
+	{
+		Sum = MIN_int64;
+	}
+	else
+	{
+		Sum = A + B;
+	}
+	FFixedPoint Result(Sum);
+	if (bClampMin && Result < MinValue) Result = MinValue;
+	if (bClampMax && Result > MaxValue) Result = MaxValue;
+
+	NewValue = Result;
+	bAtMin = bClampMin && Result == MinValue;
+	bAtMax = bClampMax && Result == MaxValue;
+	if (Result == Current)
+	{
+		return true;
+	}
+
+	void* Data = Storage->GetComponentRaw(EntityHandle);
+	check(Data); // same storage, same handle, same tick — the const read just succeeded
+	*Property->ContainerPtrToValuePtr<FFixedPoint>(Data) = Result;
+	bChanged = true;
 	return true;
 }
 

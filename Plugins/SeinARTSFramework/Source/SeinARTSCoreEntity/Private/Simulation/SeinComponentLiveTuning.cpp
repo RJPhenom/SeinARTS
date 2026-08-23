@@ -285,8 +285,9 @@ namespace
 					}
 					else
 					{
-						// With stable element topology, descend into struct elements so a
-						// weapon Range edit cannot overwrite its live cooldown/magazine.
+						// With stable element topology, descend into struct elements so an
+						// authored field edit (a designer's weapon-slot range, say) cannot
+						// overwrite the runtime state living beside it (its live cooldown).
 						for (int32 ArrayIndex = 0;
 							bSucceeded && ArrayIndex < AfterArray.Num(); ++ArrayIndex)
 						{

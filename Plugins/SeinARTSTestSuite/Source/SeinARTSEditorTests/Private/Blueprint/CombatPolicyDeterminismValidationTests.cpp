@@ -1,7 +1,6 @@
 #include "CQTest.h"
 
 #include "AssetRegistry/AssetData.h"
-#include "Combat/SeinDamageFormula.h"
 #include "Combat/SeinTargetScorer.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraphSchema_K2.h"
@@ -46,37 +45,6 @@ namespace UE::SeinARTSTests
 			Node.PostPlacedNewNode();
 			Node.AllocateDefaultPins();
 		}
-	}
-
-	TEST(CombatPolicyMemberWriteIsBlockingValidationError,
-		"SeinARTS.Editor.Blueprint.CombatPolicyDeterminism")
-	{
-		using namespace CombatPolicyDeterminismValidation;
-		UBlueprint* Blueprint = MakePolicyBlueprint(
-			USeinDamageFormula::StaticClass(),
-			TEXT("BP_CombatPolicyWriteValidation"));
-		ASSERT_THAT(IsNotNull(Blueprint));
-		UEdGraph* Graph = FBlueprintEditorUtils::FindEventGraph(Blueprint);
-		ASSERT_THAT(IsNotNull(Graph));
-		const FName CounterName(TEXT("Counter"));
-		ASSERT_THAT(IsTrue(FBlueprintEditorUtils::AddMemberVariable(
-			Blueprint, CounterName, IntPinType())));
-
-		UK2Node_CustomEvent* Entry = NewObject<UK2Node_CustomEvent>(Graph);
-		Entry->CustomFunctionName = TEXT("MutateCombatPolicy");
-		AddNode(*Graph, *Entry);
-		UK2Node_VariableSet* Setter = NewObject<UK2Node_VariableSet>(Graph);
-		Setter->VariableReference.SetSelfMember(CounterName);
-		AddNode(*Graph, *Setter);
-
-		USeinCombatPolicyDeterminismValidator* Validator =
-			GetMutableDefault<USeinCombatPolicyDeterminismValidator>();
-		ASSERT_THAT(IsNotNull(Validator));
-		FDataValidationContext Context;
-		const EDataValidationResult Result = Validator->ValidateLoadedAsset(
-			FAssetData(Blueprint), Blueprint, Context);
-		ASSERT_THAT(IsTrue(Result == EDataValidationResult::Invalid));
-		ASSERT_THAT(IsTrue(Context.GetNumErrors() > 0));
 	}
 
 	TEST(StatelessTargetScorerConfigPassesValidation,

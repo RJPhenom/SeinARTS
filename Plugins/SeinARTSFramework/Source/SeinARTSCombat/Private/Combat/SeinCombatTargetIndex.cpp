@@ -4,7 +4,7 @@
  * @file         SeinCombatTargetIndex.cpp
  * @author       RJ Macklem
  * @created      21 Aug 2026
- * @latest       21 Aug 2026
+ * @latest       23 Aug 2026
  * @brief        Implements the derived spatial index used to prefilter target
  *               acquisition candidates without changing query semantics.
  *
@@ -16,10 +16,10 @@
 
 #include "Algo/BinarySearch.h"
 #include "Algo/Sort.h"
-#include "Components/SeinVitalsComponent.h"
 #include "Core/SeinEntityPool.h"
-#include "Simulation/ComponentStorage.h"
+#include "Core/SeinParallel.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "Types/Entity.h"
 
 int64 FSeinCombatTargetIndex::MakeCellKey(int32 CellX, int32 CellY)
 {
@@ -47,49 +47,40 @@ void FSeinCombatTargetIndex::Invalidate()
 	Entries.Reset();
 	EntityTopologyRevision = 0;
 	EntityMutationRevision = 0;
-	VitalsTopologyRevision = 0;
 	bValid = false;
 }
 
 void FSeinCombatTargetIndex::RebuildIfStale(
 	const USeinWorldSubsystem& World) const
 {
+	// Derived-cache rebuild writes mutable members; any Blueprint may reach it
+	// through Find Targets, so make the game-thread-serial assumption explicit.
+	SEIN_CHECK_NOT_PARALLEL();
 	const FSeinEntityPool& EntityPool = World.GetEntityPool();
-	const ISeinComponentStorage* VitalsStorage =
-		World.GetComponentStorageRaw(FSeinVitalsComponent::StaticStruct());
 	const uint64 CurrentEntityTopology = EntityPool.GetTopologyRevision();
 	const uint64 CurrentEntityMutation =
 		EntityPool.GetLatestMutationRevision();
-	const uint64 CurrentVitalsTopology = VitalsStorage
-		? VitalsStorage->GetTopologyRevision()
-		: 0;
 	if (bValid
 		&& EntityTopologyRevision == CurrentEntityTopology
-		&& EntityMutationRevision == CurrentEntityMutation
-		&& VitalsTopologyRevision == CurrentVitalsTopology)
+		&& EntityMutationRevision == CurrentEntityMutation)
 	{
 		return;
 	}
 
+	// Every live entity is a member: spawn/destroy moves the topology
+	// revision, any transform write moves the mutation revision, so the two
+	// sentinels above are sufficient evidence the cells are current.
 	Entries.Reset();
-	if (VitalsStorage)
-	{
-		Entries.Reserve(VitalsStorage->GetComponentCount());
-		VitalsStorage->ForEachLiveComponent(
-			[&](FSeinEntityHandle Handle, const void*)
-			{
-				const FSeinEntity* Entity = World.GetEntity(Handle);
-				if (!Entity)
-				{
-					return;
-				}
-				FCellEntry& Entry = Entries.AddDefaulted_GetRef();
-				Entry.CellKey = MakeCellKey(
-					ToCell(Entity->Transform.GetLocation().X),
-					ToCell(Entity->Transform.GetLocation().Y));
-				Entry.Handle = Handle;
-			});
-	}
+	Entries.Reserve(EntityPool.GetActiveCount());
+	EntityPool.ForEachEntity(
+		[&](FSeinEntityHandle Handle, const FSeinEntity& Entity)
+		{
+			FCellEntry& Entry = Entries.AddDefaulted_GetRef();
+			Entry.CellKey = MakeCellKey(
+				ToCell(Entity.Transform.GetLocation().X),
+				ToCell(Entity.Transform.GetLocation().Y));
+			Entry.Handle = Handle;
+		});
 
 	Algo::Sort(Entries, [](const FCellEntry& A, const FCellEntry& B)
 	{
@@ -106,7 +97,6 @@ void FSeinCombatTargetIndex::RebuildIfStale(
 
 	EntityTopologyRevision = CurrentEntityTopology;
 	EntityMutationRevision = CurrentEntityMutation;
-	VitalsTopologyRevision = CurrentVitalsTopology;
 	bValid = true;
 }
 
