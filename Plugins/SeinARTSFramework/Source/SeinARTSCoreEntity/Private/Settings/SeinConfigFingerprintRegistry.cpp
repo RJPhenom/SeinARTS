@@ -5,6 +5,7 @@
 
 #include "Settings/SeinConfigFingerprintRegistry.h"
 #include "UObject/PropertyOptional.h"
+#include "UObject/TextProperty.h"
 #include "UObject/UnrealType.h"
 #include "UObject/Object.h"
 #include "UObject/WeakObjectPtr.h"

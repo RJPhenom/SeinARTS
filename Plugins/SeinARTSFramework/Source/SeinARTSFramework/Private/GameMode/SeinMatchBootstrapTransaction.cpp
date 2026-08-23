@@ -21,6 +21,7 @@
 #include "Engine/LatentActionManager.h"
 #include "Engine/Level.h"
 #include "Engine/World.h"
+#include "TimerManager.h"
 #include "EngineUtils.h"
 #include "GameMode/SeinPlayerStart.h"
 #include "Serialization/SeinDeterministicValueDigest.h"
