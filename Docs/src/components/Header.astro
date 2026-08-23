@@ -1,0 +1,131 @@
+---
+import config from 'virtual:starlight/user-config';
+
+import Search from '@astrojs/starlight/components/Search.astro';
+import SiteTitle from '@astrojs/starlight/components/SiteTitle.astro';
+import SocialIcons from '@astrojs/starlight/components/SocialIcons.astro';
+import brandIconUrl from '../../../Plugins/SeinARTSFramework/Resources/BrandKit/SeinARTSLogo256.svg?url';
+
+const shouldRenderSearch =
+	config.pagefind || config.components.Search !== '@astrojs/starlight/components/Search.astro';
+---
+
+<div class="header">
+	<div class="mobile-title">
+		<SiteTitle />
+	</div>
+
+	<div class="desktop-tools">
+		<a class="brand-icon" href="/" aria-label="SeinARTS Documentation home">
+			<img src={brandIconUrl} alt="" width="105" height="256" />
+		</a>
+		{shouldRenderSearch && (
+			<div class="desktop-search">
+				<Search />
+			</div>
+		)}
+	</div>
+
+	<div class="mobile-search">
+		{shouldRenderSearch && <Search />}
+	</div>
+
+	<div class="right-group print:hidden">
+		<div class="desktop-wordmark">
+			<SiteTitle />
+		</div>
+		<div class="social-icons">
+			<SocialIcons />
+		</div>
+	</div>
+</div>
+
+<style>
+	@layer starlight.core {
+		.header {
+			display: flex;
+			gap: var(--sl-nav-gap);
+			align-items: center;
+			justify-content: space-between;
+			height: 100%;
+		}
+
+		.mobile-title,
+		.mobile-search {
+			display: none;
+		}
+
+		.desktop-tools {
+			display: flex;
+			align-items: center;
+			gap: 0.75rem;
+			flex: 1;
+			min-width: 0;
+		}
+
+		.brand-icon {
+			display: grid;
+			place-items: center;
+			flex: none;
+			width: 0.625rem;
+			height: 1.5rem;
+			margin-inline-start: clamp(0.125rem, 0.1vw, 0.25rem);
+		}
+
+		.brand-icon img {
+			display: block;
+			width: 90%;
+			height: 90%;
+			object-fit: contain;
+		}
+
+		.desktop-search {
+			flex: 1;
+			min-width: 0;
+		}
+
+		.desktop-search :global(button[data-open-modal]) {
+			height: 2rem;
+			max-width: none;
+		}
+
+		.right-group {
+			display: flex;
+			align-items: center;
+			gap: 0.5rem;
+		}
+
+		.desktop-wordmark {
+			display: none;
+		}
+
+		.social-icons {
+			display: flex;
+			align-items: center;
+			padding-inline: 0;
+		}
+
+		@media (min-width: 50rem) {
+			.social-icons {
+				padding-inline: 0.5rem;
+			}
+			.desktop-tools {
+				width: calc(var(--sl-sidebar-width) - var(--sl-nav-pad-x));
+				box-sizing: border-box;
+				padding-inline-end: var(--sl-sidebar-pad-x);
+				overflow-x: clip;
+				overflow-y: auto;
+				scrollbar-gutter: stable;
+				flex: none;
+			}
+
+			.right-group {
+				margin-inline-start: auto;
+			}
+
+			.desktop-wordmark {
+				display: block;
+			}
+		}
+	}
+</style>
