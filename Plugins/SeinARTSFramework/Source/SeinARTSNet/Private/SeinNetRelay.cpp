@@ -607,6 +607,17 @@ void ASeinNetRelay::Client_NotifyKicked_Implementation(const FString& Reason)
 	// level — that's how kicked players end up alone in the gameplay map.
 	// Going through the same path as the explicit Leave button guarantees
 	// consistent end-up-at-menu behavior.
+	if (UGameInstance* GameInstance = World->GetGameInstance())
+	{
+		if (USeinLobbySubsystem* Lobby =
+			GameInstance->GetSubsystem<USeinLobbySubsystem>())
+		{
+			// The session is over for this process: drop the lobby contract
+			// and slot bindings before the menu world initializes, so it
+			// neither shows a dead roster nor bootstraps from stale settings.
+			Lobby->ResetForLocalSessionExit();
+		}
+	}
 	PC->ConsoleCommand(TEXT("disconnect"));
 
 	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();

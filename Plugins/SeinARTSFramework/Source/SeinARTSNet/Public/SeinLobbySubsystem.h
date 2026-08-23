@@ -254,6 +254,14 @@ public:
 	 *  world initialization sees the same slot/extension manifest as authority. */
 	bool InstallPreparedMatchSettingsSnapshot(const FSeinMatchSettings& Snapshot);
 
+	/** Forget the current session's lobby contract and slot bindings. Called
+	 *  when the local process leaves a session (explicit leave, kick) BEFORE it
+	 *  travels to the menu: the GameInstance-scoped subsystem outlives the
+	 *  world, and a stale published snapshot would otherwise present a dead
+	 *  roster in the menu and could drive the menu world's standalone
+	 *  bootstrap. Does not touch module-lifetime delegate bindings. */
+	void ResetForLocalSessionExit();
+
 	/** Current replicated lobby actor; null on the client until first
 	 *  replication arrives, null on the server until InitializeLobby spawns it. */
 	ASeinLobbyState* GetLobbyState() const { return LobbyStateActor.Get(); }

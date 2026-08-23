@@ -1454,6 +1454,10 @@ public:
 	 */
 	int32 ComputeConfigFingerprint() const;
 
+	/** The exact text the config fingerprint hashes — for diagnosing a
+	 *  host/client fingerprint mismatch (Sein.Config.DumpFingerprint). */
+	FString BuildConfigFingerprintSource() const;
+
 	// UDeveloperSettings Interface
 	// ====================================================================================================
 

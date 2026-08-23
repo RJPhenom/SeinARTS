@@ -124,6 +124,18 @@ namespace
 				: TEXT("Unset");
 		}
 
+		// FText is presentation data, never simulation input — and its exported
+		// form is NOT stable across process modes: an editor process stamps the
+		// package-localization namespace ("[/Script/Module]") onto texts loaded
+		// from config while a -game process exports an empty namespace. Hashing it
+		// made every editor-hosted vs game-process pairing fail config parity
+		// (the separate-process PIE kick). Emit a fixed marker so struct framing
+		// stays positional without the text ever contributing.
+		if (CastField<FTextProperty>(&Property))
+		{
+			return TEXT("Text[omitted]");
+		}
+
 		if (const FStructProperty* StructProperty = CastField<FStructProperty>(&Property))
 		{
 			FString Result = TEXT("Struct[");
@@ -156,6 +168,12 @@ namespace
 		}
 		return Result;
 	}
+}
+
+FString FSeinConfigFingerprintRegistry::ExportFieldCanonical(
+	const FProperty& Property, const void* Container)
+{
+	return ExportFingerprintField(Property, Container);
 }
 
 FSeinConfigFingerprintRegistrationHandle::

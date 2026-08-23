@@ -66,7 +66,6 @@ static TAutoConsoleVariable<int32> CVarSeinLogStateHash(
 	TEXT("If nonzero, log the legacy local state fingerprint each tick. Not valid for cross-process determinism evidence; use Sein.Sim.StateRoot at a stable boundary."),
 	ECVF_Default);
 
-// One-shot compatibility command for the incomplete local fingerprint.
 /** Dump the exact config-fingerprint source text, one token per line, so a
  *  host/client mismatch can be diffed instead of guessed at. */
 static FAutoConsoleCommand CmdSeinDumpConfigFingerprint(
@@ -87,6 +86,7 @@ static FAutoConsoleCommand CmdSeinDumpConfigFingerprint(
 		}
 	}));
 
+// One-shot compatibility command for the incomplete local fingerprint.
 static FAutoConsoleCommandWithWorldAndArgs CmdSeinDumpStateHash(
 	TEXT("Sein.Sim.StateHash"),
 	TEXT("Log the legacy local state fingerprint once. Not valid for peer or fresh-process comparison."),

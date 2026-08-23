@@ -19,9 +19,12 @@ namespace
 	const FName StandaloneBootstrapAuthorityID(
 		TEXT("SeinARTS.Framework.StandaloneBootstrap"));
 
-	bool ResolveDirectMatchSettings(UWorld& World, FSeinMatchSettings& OutSettings)
+	bool ResolveDirectMatchSettings(
+		UWorld& World, FSeinMatchSettings& OutSettings, bool bAllowLobbyContract)
 	{
-		if (UGameInstance* GameInstance = World.GetGameInstance())
+		if (UGameInstance* GameInstance = bAllowLobbyContract
+			? World.GetGameInstance()
+			: nullptr)
 		{
 			if (USeinLobbySubsystem* Lobby =
 				GameInstance->GetSubsystem<USeinLobbySubsystem>())
@@ -58,13 +61,18 @@ namespace
 				IntentOption, TEXT("ExternalOrchestrator")) == 0;
 	}
 
-	bool ShouldAutoStart(const UWorld& World)
+	bool IsExplicitStandaloneLaunch(const UWorld& World)
 	{
 		const TCHAR* IntentOption = World.URL.GetOption(
 			TEXT("SeinBootstrap="), nullptr);
-		if (IntentOption
+		return IntentOption
 			&& FCString::Stricmp(
-				IntentOption, TEXT("StandaloneLaunch")) == 0)
+				IntentOption, TEXT("StandaloneLaunch")) == 0;
+	}
+
+	bool ShouldAutoStart(const UWorld& World)
+	{
+		if (IsExplicitStandaloneLaunch(World))
 		{
 			// An explicit lobby start remains explicit across standalone travel,
 			// even when the destination level disables ambient auto-start.
@@ -189,14 +197,20 @@ void USeinMatchBootstrapSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 
 	if (ShouldAutoStart(InWorld))
 	{
-		if (EnsureStandaloneBootstrapAuthorized())
+		// Only a lobby-launched world may consume the lobby's published
+		// contract here; an ambient auto-start anywhere else (the menu map a
+		// kicked client returns to, a directly opened level) synthesizes its
+		// contract from the level alone.
+		if (EnsureStandaloneBootstrapAuthorized(
+				/*bAllowLobbyContract=*/IsExplicitStandaloneLaunch(InWorld)))
 		{
 			LaunchStandaloneSimulation();
 		}
 	}
 }
 
-bool USeinMatchBootstrapSubsystem::EnsureStandaloneBootstrapAuthorized()
+bool USeinMatchBootstrapSubsystem::EnsureStandaloneBootstrapAuthorized(
+	bool bAllowLobbyContract)
 {
 	USeinWorldSubsystem* WorldSubsystem = BoundWorldSubsystem.Get();
 	UWorld* World = GetWorld();
@@ -222,7 +236,7 @@ bool USeinMatchBootstrapSubsystem::EnsureStandaloneBootstrapAuthorized()
 	}
 
 	FSeinMatchSettings Settings;
-	if (!ResolveDirectMatchSettings(*World, Settings))
+	if (!ResolveDirectMatchSettings(*World, Settings, bAllowLobbyContract))
 	{
 		UE_LOG(LogTemp, Log,
 			TEXT("SeinMatchBootstrap: no standalone match contract was found; world remains Awaiting."));
