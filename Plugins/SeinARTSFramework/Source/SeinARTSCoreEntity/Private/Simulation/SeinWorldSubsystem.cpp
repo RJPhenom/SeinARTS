@@ -1,4 +1,4 @@
-/**
+﻿/**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinWorldSubsystem.cpp
  * @brief   Implementation of the core simulation subsystem.
@@ -1201,6 +1201,7 @@ void USeinWorldSubsystem::ReleaseAllModuleOwnedState()
 	PauseControlAppliedNotifier.Unbind();
 	OnCaptureSnapshotPostSim.Clear();
 	OnRestoreSnapshotPostSim.Clear();
+	OnComponentPropertyLiveTuned.Clear();
 	OnAuthoritativeStateRestored.Clear();
 
 	if (LatentActionManager)
@@ -1244,6 +1245,7 @@ void USeinWorldSubsystem::ReleaseAllModuleOwnedState()
 	PendingCommands.Clear();
 	PendingReplayCommands.Clear();
 	PendingStandalonePauseControlCommands.Reset();
+	PendingComponentLiveTuningCommands.Reset();
 	bReplayOwnsExternalCommandIngress = false;
 	PendingDestroy.Reset();
 	PendingEffectApplies.Reset();
@@ -1284,6 +1286,9 @@ void USeinWorldSubsystem::ReleaseAllModuleOwnedState()
 	PairCapabilityEffectiveRefCounts.Reset();
 	Factions.Reset();
 	EntityActorClassMap.Reset();
+	ComponentLiveTuningClassDefaults.Reset();
+	ComponentLiveTuningEntityOverrides.Reset();
+	ComponentLiveTuningAuthoredAbilityGrants.Reset();
 
 	for (auto& Pair : ComponentStorages)
 	{
@@ -3048,6 +3053,11 @@ void USeinWorldSubsystem::TickSystems(FFixedPoint DeltaTime)
 				if (!bExecutionTopologyValid) return;
 			}
 		}
+
+		// Editor-authored property commands are accepted with ordinary commands,
+		// but commit only after every system observed the old state. Tick N is
+		// therefore entirely old; tick N+1 is entirely new.
+		ApplyPendingComponentLiveTuningCommands();
 	}
 }
 
@@ -3455,6 +3465,8 @@ bool USeinWorldSubsystem::ExecuteBuiltInCommand(
 	if (TryHandleMatchFlowOrVoteCommand(Command) == ECommandHandleResult::Handled
 		|| TryHandlePingCommand(Command) == ECommandHandleResult::Handled
 		|| TryHandleSetPairCapabilityCommand(Command) == ECommandHandleResult::Handled
+		|| TryHandleComponentLiveTuningCommand(
+			Command, OutRejectionReason) == ECommandHandleResult::Handled
 		|| TryHandleBrokerOrderCommand(
 			Command, CommandCohesionOrderSequence) == ECommandHandleResult::Handled)
 	{
@@ -3752,6 +3764,104 @@ bool USeinWorldSubsystem::ValidateBuiltInCommandSemantics(
 			&& HasNoActionEnvelope()
 			? true : FailMalformed();
 	}
+	if (Command.CommandType
+		== SeinARTSTags::Command_Type_Editor_ComponentPropertyPatch)
+	{
+		const FSeinComponentLiveTuningCommandPayload* Payload =
+			Command.Payload.GetPtr<FSeinComponentLiveTuningCommandPayload>();
+		FSeinComponentLiveTuningRequest Request;
+		FString DecodeError;
+		if (!Payload
+			|| !StaticEnum<ESeinComponentLiveTuningScope>()->IsValidEnumValue(
+				static_cast<int64>(Payload->Scope))
+			|| !SeinDecodeComponentLiveTuningRequest(
+				*Payload, Request, DecodeError)
+			|| Request.ActorClassPath.IsEmpty()
+			|| Request.ActorClassPath.Len() > 2048
+			|| Request.Patches.Num() > 256
+			|| Request.DerivedClassEntries.Num() > 256)
+		{
+			return FailMalformed();
+		}
+		const auto ValidatePatchList = [&FailMalformed](
+			const TArray<FSeinComponentPropertyPatch>& Patches)
+		{
+			if (Patches.IsEmpty() || Patches.Num() > 256)
+			{
+				return FailMalformed();
+			}
+			TSet<FString> PatchKeys;
+			for (const FSeinComponentPropertyPatch& Patch : Patches)
+			{
+				if (Patch.ComponentTypePath.IsEmpty()
+					|| Patch.ComponentTypePath.Len() > 2048
+					|| Patch.PropertyPath.IsEmpty()
+					|| Patch.PropertyPath.Num() > 64
+					|| Patch.ExportedValue.Len() > 64 * 1024
+					|| !StaticEnum<ESeinComponentInstanceOverrideOperation>()
+						->IsValidEnumValue(static_cast<int64>(
+							Patch.InstanceOverrideOperation)))
+				{
+					return FailMalformed();
+				}
+				for (const FSeinComponentPropertyPathSegment& Segment :
+					Patch.PropertyPath)
+				{
+					if (Segment.PropertyName.IsEmpty()
+						|| Segment.PropertyName.Len() > NAME_SIZE
+						|| Segment.ArrayIndex < INDEX_NONE)
+					{
+						return FailMalformed();
+					}
+				}
+				const FString Key = SeinMakeComponentPropertyPatchKey(
+					Patch.ComponentTypePath, Patch.PropertyPath);
+				if (PatchKeys.Contains(Key))
+				{
+					return FailMalformed();
+				}
+				PatchKeys.Add(Key);
+			}
+			return true;
+		};
+		if (!ValidatePatchList(Request.Patches))
+		{
+			return false;
+		}
+		{
+			// Canonical: strictly increasing by path, never the edited class
+			// itself, each with its own well-formed explicit patch list.
+			const FString* PreviousDerived = nullptr;
+			for (const FSeinComponentLiveTuningClassEntry& Entry :
+				Request.DerivedClassEntries)
+			{
+				if (Entry.ActorClassPath.IsEmpty()
+					|| Entry.ActorClassPath.Len() > 2048
+					|| Entry.ActorClassPath == Request.ActorClassPath
+					|| (PreviousDerived && Entry.ActorClassPath <= *PreviousDerived)
+					|| !ValidatePatchList(Entry.Patches))
+				{
+					return FailMalformed();
+				}
+				PreviousDerived = &Entry.ActorClassPath;
+			}
+		}
+
+		const bool bEntityScope = Request.Scope
+			== ESeinComponentLiveTuningScope::Entity;
+		return bEntityScope
+			? (Request.TargetEntity.IsValid()
+				&& Request.DerivedClassEntries.IsEmpty()
+				&& Request.TargetEntity == Command.EntityHandle
+				&& !Command.AbilityTag.IsValid()
+				&& !Command.TargetEntity.IsValid()
+				&& IsZeroVector(Command.TargetLocation)
+				&& Command.QueueIndex == INDEX_NONE
+				&& HasDefaultAuxiliaryFields()
+					? true : FailMalformed())
+			: (Request.TargetEntity.IsValid() || !HasNoActionEnvelope()
+					? FailMalformed() : true);
+	}
 
 	if (Command.CommandType == SeinARTSTags::Command_Type_EndMatch
 		|| Command.CommandType == SeinARTSTags::Command_Type_PauseMatchRequest
@@ -3972,6 +4082,698 @@ USeinWorldSubsystem::TryHandleSetPairCapabilityCommand(
 		RejectCommand(Cmd, SeinARTSTags::Command_Reject_Malformed);
 	}
 	return ECommandHandleResult::Handled;
+}
+
+USeinWorldSubsystem::ECommandHandleResult
+USeinWorldSubsystem::TryHandleComponentLiveTuningCommand(
+	const FSeinCommand& Cmd,
+	FGameplayTag& OutRejectionReason)
+{
+	if (Cmd.CommandType
+		!= SeinARTSTags::Command_Type_Editor_ComponentPropertyPatch)
+	{
+		return ECommandHandleResult::Unhandled;
+	}
+	const FSeinComponentLiveTuningCommandPayload* Payload =
+		Cmd.Payload.GetPtr<FSeinComponentLiveTuningCommandPayload>();
+	FSeinComponentLiveTuningRequest Request;
+	FString DecodeError;
+	if (!Payload || !SeinDecodeComponentLiveTuningRequest(
+		*Payload, Request, DecodeError))
+	{
+		OutRejectionReason = SeinARTSTags::Command_Reject_Malformed;
+		RejectCommand(Cmd, OutRejectionReason);
+		return ECommandHandleResult::Handled;
+	}
+	if (Request.Scope == ESeinComponentLiveTuningScope::Entity
+		&& (!EntityPool.IsValid(Request.TargetEntity)
+			|| GetEntityActorClass(Request.TargetEntity).Get() == nullptr))
+	{
+		OutRejectionReason = SeinARTSTags::Command_Reject_InvalidTarget;
+		RejectCommand(Cmd, OutRejectionReason);
+		return ECommandHandleResult::Handled;
+	}
+
+	PendingComponentLiveTuningCommands.Add(MoveTemp(Request));
+	return ECommandHandleResult::Handled;
+}
+
+int32 USeinWorldSubsystem::FindComponentPropertyInstanceOverrideSlot(
+	FSeinEntityHandle Entity,
+	const FString& Key,
+	bool& bOutExists) const
+{
+	// The array is held in the canonical (Entity, PatchKey) order that snapshot
+	// restore re-validates, so one binary search answers membership and yields
+	// the insertion slot while building only O(log N) probe keys. A linear scan
+	// rebuilt every record's key per insert, which made recording placed-actor
+	// overrides quadratic in string work at level load.
+	int32 Low = 0;
+	int32 High = ComponentLiveTuningEntityOverrides.Num();
+	while (Low < High)
+	{
+		const int32 Mid = Low + (High - Low) / 2;
+		const FSeinComponentEntityOverrideRecord& Probe =
+			ComponentLiveTuningEntityOverrides[Mid];
+		const bool bProbeIsLess = Probe.Entity != Entity
+			? Probe.Entity < Entity
+			: SeinMakeComponentPropertyPatchKey(
+				Probe.ComponentTypePath, Probe.PropertyPath) < Key;
+		if (bProbeIsLess) Low = Mid + 1;
+		else High = Mid;
+	}
+	bOutExists = ComponentLiveTuningEntityOverrides.IsValidIndex(Low)
+		&& ComponentLiveTuningEntityOverrides[Low].Entity == Entity
+		&& SeinMakeComponentPropertyPatchKey(
+			ComponentLiveTuningEntityOverrides[Low].ComponentTypePath,
+			ComponentLiveTuningEntityOverrides[Low].PropertyPath) == Key;
+	return Low;
+}
+
+bool USeinWorldSubsystem::HasComponentPropertyInstanceOverride(
+	FSeinEntityHandle Entity,
+	const FSeinComponentPropertyPatch& Patch) const
+{
+	bool bExists = false;
+	FindComponentPropertyInstanceOverrideSlot(
+		Entity,
+		SeinMakeComponentPropertyPatchKey(
+			Patch.ComponentTypePath, Patch.PropertyPath),
+		bExists);
+	return bExists;
+}
+
+void USeinWorldSubsystem::SetComponentPropertyInstanceOverride(
+	FSeinEntityHandle Entity,
+	const FSeinComponentPropertyPatch& Patch,
+	bool bOverridden)
+{
+	const FString Key = SeinMakeComponentPropertyPatchKey(
+		Patch.ComponentTypePath, Patch.PropertyPath);
+	bool bExists = false;
+	const int32 Slot = FindComponentPropertyInstanceOverrideSlot(
+		Entity, Key, bExists);
+	if (bOverridden && !bExists)
+	{
+		FSeinComponentEntityOverrideRecord Record;
+		Record.Entity = Entity;
+		Record.ComponentTypePath = Patch.ComponentTypePath;
+		Record.PropertyPath = Patch.PropertyPath;
+		ComponentLiveTuningEntityOverrides.Insert(MoveTemp(Record), Slot);
+		MarkCanonicalAuxiliaryStateDirty();
+	}
+	else if (!bOverridden && bExists)
+	{
+		ComponentLiveTuningEntityOverrides.RemoveAt(Slot);
+		MarkCanonicalAuxiliaryStateDirty();
+	}
+}
+
+bool USeinWorldSubsystem::ApplyComponentPropertyPatchToEntity(
+	FSeinEntityHandle Entity,
+	const FSeinComponentPropertyPatch& Patch,
+	FString& OutError,
+	bool bRefreshSecondaryState)
+{
+	OutError.Reset();
+	if (!EntityPool.IsValid(Entity))
+	{
+		OutError = TEXT("Target entity is not alive.");
+		return false;
+	}
+	UScriptStruct* ComponentType = nullptr;
+	ISeinComponentStorage* Storage = nullptr;
+	for (const auto& Pair : ComponentStorages)
+	{
+		if (Pair.Key && Pair.Key->GetPathName() == Patch.ComponentTypePath)
+		{
+			ComponentType = Pair.Key;
+			Storage = Pair.Value;
+			break;
+		}
+	}
+	if (!ComponentType || !Storage || !Storage->HasComponent(Entity))
+	{
+		OutError = FString::Printf(
+			TEXT("Entity %s has no '%s' component storage value."),
+			*Entity.ToString(), *Patch.ComponentTypePath);
+		return false;
+	}
+
+	void* Existing = Storage->GetComponentRawForDeferredMutation(Entity);
+	if (!Existing)
+	{
+		OutError = TEXT("Component storage returned no mutable payload.");
+		return false;
+	}
+	FStructOnScope Candidate(ComponentType);
+	ComponentType->CopyScriptStruct(Candidate.GetStructMemory(), Existing);
+
+	FProperty* CandidateProperty = nullptr;
+	void* CandidateValue = nullptr;
+	if (!SeinResolveComponentPropertyPath(
+		ComponentType, Candidate.GetStructMemory(), Patch.PropertyPath,
+		CandidateProperty, CandidateValue, OutError))
+	{
+		return false;
+	}
+	const TCHAR* End = CandidateProperty->ImportText_Direct(
+		*Patch.ExportedValue, CandidateValue, nullptr, PPF_None);
+	if (!End)
+	{
+		OutError = FString::Printf(
+			TEXT("Could not import value for '%s'."),
+			*CandidateProperty->GetName());
+		return false;
+	}
+	while (*End && FChar::IsWhitespace(*End)) ++End;
+	if (*End)
+	{
+		OutError = FString::Printf(
+			TEXT("Value for '%s' has trailing input."),
+			*CandidateProperty->GetName());
+		return false;
+	}
+
+	FProperty* ExistingProperty = nullptr;
+	void* ExistingValue = nullptr;
+	if (!SeinResolveComponentPropertyPath(
+		ComponentType, Existing, Patch.PropertyPath,
+		ExistingProperty, ExistingValue, OutError)
+		|| !ExistingProperty->SameType(CandidateProperty))
+	{
+		return false;
+	}
+	const bool bAbilityGrantListChanged = bRefreshSecondaryState
+		&& ComponentType == FSeinAbilityComponent::StaticStruct()
+		&& Patch.PropertyPath.Num() == 1
+		&& Patch.PropertyPath[0].PropertyName
+			== GET_MEMBER_NAME_STRING_CHECKED(
+				FSeinAbilityComponent, GrantedAbilities);
+	if (!bAbilityGrantListChanged
+		&& ExistingProperty->Identical(
+			ExistingValue, CandidateValue, PPF_None))
+	{
+		return true;
+	}
+
+	// Capture the authored before/after values needed by Core-owned secondary
+	// state before the reflected leaf is committed. Optional modules rebuild
+	// their own caches through OnComponentPropertyLiveTuned below.
+	TArray<TSubclassOf<USeinAbility>> NewGrantedAbilities;
+	if (bAbilityGrantListChanged)
+	{
+		NewGrantedAbilities =
+			reinterpret_cast<const FSeinAbilityComponent*>(
+				Candidate.GetStructMemory())->GrantedAbilities;
+	}
+
+	const bool bIdentityTagChanged = bRefreshSecondaryState
+		&& ComponentType == FSeinIdentityComponent::StaticStruct()
+		&& Patch.PropertyPath.Num() == 1
+		&& Patch.PropertyPath[0].PropertyName
+			== GET_MEMBER_NAME_STRING_CHECKED(
+				FSeinIdentityComponent, IdentityTag);
+	FGameplayTag OldIdentityTag;
+	FGameplayTag NewIdentityTag;
+	if (bIdentityTagChanged)
+	{
+		OldIdentityTag =
+			static_cast<const FSeinIdentityComponent*>(Existing)->IdentityTag;
+		NewIdentityTag =
+			reinterpret_cast<const FSeinIdentityComponent*>(
+				Candidate.GetStructMemory())->IdentityTag;
+	}
+
+	if (bAbilityGrantListChanged)
+	{
+		// GrantedAbilities is both an authored list and the runtime instance
+		// registry's class projection. Never copy the editor array over it: that
+		// would erase effect/runtime-granted classes. Reconcile only the separately
+		// tracked authored multiset through the ability lifecycle instead.
+		if (!ApplyAuthoredAbilityGrantPatch(
+				Entity, NewGrantedAbilities, OutError))
+		{
+			return false;
+		}
+	}
+	else
+	{
+		ExistingProperty->CopyCompleteValue(ExistingValue, CandidateValue);
+		Storage->CommitDeferredMutation(Entity);
+	}
+
+	if (bIdentityTagChanged && OldIdentityTag != NewIdentityTag)
+	{
+		if (OldIdentityTag.IsValid()) RemoveBaseTag(Entity, OldIdentityTag);
+		if (NewIdentityTag.IsValid()) AddBaseTag(Entity, NewIdentityTag);
+	}
+
+	if (bRefreshSecondaryState
+		&& ComponentType == FSeinExtentsComponent::StaticStruct())
+	{
+		CollisionSpatialHash.MarkStaticDirty();
+	}
+	if (bRefreshSecondaryState)
+	{
+		OnComponentPropertyLiveTuned.Broadcast(
+			Entity, *ComponentType, Patch);
+	}
+	return true;
+}
+
+void USeinWorldSubsystem::RecordAuthoredAbilityGrants(
+	FSeinEntityHandle Entity)
+{
+	const FSeinAbilityComponent* Component =
+		GetComponent<FSeinAbilityComponent>(Entity);
+	if (!Component) return;
+	FSeinComponentAuthoredAbilityGrantRecord* Existing =
+		ComponentLiveTuningAuthoredAbilityGrants.FindByPredicate(
+			[Entity](const FSeinComponentAuthoredAbilityGrantRecord& Record)
+			{
+				return Record.Entity == Entity;
+			});
+	if (Existing) return;
+
+	FSeinComponentAuthoredAbilityGrantRecord& Record =
+		ComponentLiveTuningAuthoredAbilityGrants.AddDefaulted_GetRef();
+	Record.Entity = Entity;
+	Record.AuthoredAbilities = Component->GrantedAbilities;
+	ComponentLiveTuningAuthoredAbilityGrants.Sort([](
+		const FSeinComponentAuthoredAbilityGrantRecord& Left,
+		const FSeinComponentAuthoredAbilityGrantRecord& Right)
+	{
+		return Left.Entity < Right.Entity;
+	});
+	MarkCanonicalAuxiliaryStateDirty();
+}
+
+bool USeinWorldSubsystem::ApplyAuthoredAbilityGrantPatch(
+	FSeinEntityHandle Entity,
+	const TArray<TSubclassOf<USeinAbility>>& NewAuthoredAbilities,
+	FString& OutError)
+{
+	FSeinAbilityComponent* Component =
+		GetComponentMutable<FSeinAbilityComponent>(Entity);
+	if (!Component)
+	{
+		OutError = TEXT("Target entity has no ability component.");
+		return false;
+	}
+	FSeinComponentAuthoredAbilityGrantRecord* Record =
+		ComponentLiveTuningAuthoredAbilityGrants.FindByPredicate(
+			[Entity](const FSeinComponentAuthoredAbilityGrantRecord& Candidate)
+			{
+				return Candidate.Entity == Entity;
+			});
+	if (!Record)
+	{
+		// Supports deterministic tests and explicit post-spawn AddComponent use:
+		// before any runtime instances exist, the live list is still purely authored.
+		if (!Component->AbilityInstanceIDs.IsEmpty())
+		{
+			OutError = TEXT("Authored ability baseline is missing after runtime grants began.");
+			return false;
+		}
+		RecordAuthoredAbilityGrants(Entity);
+		Record = ComponentLiveTuningAuthoredAbilityGrants.FindByPredicate(
+			[Entity](const FSeinComponentAuthoredAbilityGrantRecord& Candidate)
+			{
+				return Candidate.Entity == Entity;
+			});
+		if (!Record)
+		{
+			OutError = TEXT("Could not establish authored ability baseline.");
+			return false;
+		}
+	}
+
+	const TArray<TSubclassOf<USeinAbility>> OldAuthoredAbilities =
+		Record->AuthoredAbilities;
+	TArray<TSubclassOf<USeinAbility>> AbilityClasses = OldAuthoredAbilities;
+	for (const TSubclassOf<USeinAbility> AbilityClass : NewAuthoredAbilities)
+	{
+		AbilityClasses.AddUnique(AbilityClass);
+	}
+	AbilityClasses.RemoveAll([](const TSubclassOf<USeinAbility>& AbilityClass)
+	{
+		return !AbilityClass;
+	});
+	AbilityClasses.Sort([](
+		const TSubclassOf<USeinAbility>& Left,
+		const TSubclassOf<USeinAbility>& Right)
+	{
+		return Left->GetPathName() < Right->GetPathName();
+	});
+	const auto CountAbility = [](
+		const TArray<TSubclassOf<USeinAbility>>& Classes,
+		TSubclassOf<USeinAbility> Wanted)
+	{
+		int32 Count = 0;
+		for (const TSubclassOf<USeinAbility> CandidateClass : Classes)
+		{
+			if (CandidateClass == Wanted) ++Count;
+		}
+		return Count;
+	};
+
+	// Preflight removals against anonymous ownership so editor authoring can
+	// never consume an effect-owned source merely because both share a class.
+	for (const TSubclassOf<USeinAbility> AbilityClass : AbilityClasses)
+	{
+		const int32 RemoveCount = CountAbility(
+			OldAuthoredAbilities, AbilityClass)
+			- CountAbility(NewAuthoredAbilities, AbilityClass);
+		if (RemoveCount <= 0) continue;
+		int32 AnonymousCount = 0;
+		for (int32 Index = 0; Index < Component->AbilityInstanceIDs.Num(); ++Index)
+		{
+			const USeinAbility* Instance =
+				GetAbilityInstance(Component->AbilityInstanceIDs[Index]);
+			if (Instance && Instance->GetClass() == AbilityClass.Get()
+				&& Component->AbilityGrantOwnership.IsValidIndex(Index))
+			{
+				AnonymousCount = Component->AbilityGrantOwnership[Index]
+					.AnonymousGrantCount;
+				break;
+			}
+		}
+		if (AnonymousCount < RemoveCount)
+		{
+			OutError = FString::Printf(
+				TEXT("Ability '%s' has only %d anonymous grants; refusing to consume effect-owned state for %d authored removals."),
+				*AbilityClass->GetPathName(), AnonymousCount, RemoveCount);
+			return false;
+		}
+	}
+
+	for (const TSubclassOf<USeinAbility> AbilityClass : AbilityClasses)
+	{
+		const int32 OldCount = CountAbility(
+			OldAuthoredAbilities, AbilityClass);
+		const int32 NewCount = CountAbility(
+			NewAuthoredAbilities, AbilityClass);
+		for (int32 Index = NewCount; Index < OldCount; ++Index)
+		{
+			const int32 BeforeCount = Component->GetAbilityGrantCount(
+				*this, AbilityClass.Get());
+			USeinAbilityBPFL::SeinRevokeAbilityByClass(
+				this, Entity, AbilityClass);
+			Component = GetComponentMutable<FSeinAbilityComponent>(Entity);
+			const int32 AfterCount = Component
+				? Component->GetAbilityGrantCount(*this, AbilityClass.Get())
+				: 0;
+			if (!Component || AfterCount != BeforeCount - 1)
+			{
+				OutError = FString::Printf(
+					TEXT("Authored revoke for ability '%s' did not consume exactly one grant."),
+					*AbilityClass->GetPathName());
+				return false;
+			}
+		}
+	}
+	for (const TSubclassOf<USeinAbility> AbilityClass : AbilityClasses)
+	{
+		const int32 OldCount = CountAbility(
+			OldAuthoredAbilities, AbilityClass);
+		const int32 NewCount = CountAbility(
+			NewAuthoredAbilities, AbilityClass);
+		for (int32 Index = OldCount; Index < NewCount; ++Index)
+		{
+			if (USeinAbilityBPFL::SeinGrantAbility(
+					this, Entity, AbilityClass) == INDEX_NONE)
+			{
+				OutError = FString::Printf(
+					TEXT("Authored grant for ability '%s' failed."),
+					*AbilityClass->GetPathName());
+				return false;
+			}
+		}
+	}
+	Record = ComponentLiveTuningAuthoredAbilityGrants.FindByPredicate(
+		[Entity](const FSeinComponentAuthoredAbilityGrantRecord& Candidate)
+		{
+			return Candidate.Entity == Entity;
+		});
+	if (!Record)
+	{
+		OutError = TEXT("Authored ability baseline disappeared during callbacks.");
+		return false;
+	}
+	Record->AuthoredAbilities = NewAuthoredAbilities;
+	MarkCanonicalAuxiliaryStateDirty();
+	return true;
+}
+
+void USeinWorldSubsystem::ApplyPendingComponentLiveTuningCommands()
+{
+	if (PendingComponentLiveTuningCommands.IsEmpty())
+	{
+		return;
+	}
+	TArray<FSeinComponentLiveTuningRequest> Commands =
+		MoveTemp(PendingComponentLiveTuningCommands);
+	PendingComponentLiveTuningCommands.Reset();
+
+	for (const FSeinComponentLiveTuningRequest& Payload : Commands)
+	{
+		if (Payload.Scope == ESeinComponentLiveTuningScope::ActorClass)
+		{
+			// Upsert one exact-class record per (class, key): the edited class
+			// with the new values, then every derived class default the editor
+			// could observe with its own explicit values (inherited new value or
+			// an override pin). Entities are then re-resolved nearest-derived-
+			// first along their static class chain, so a derived class the
+			// editor could not observe falls through to the closest ancestor.
+			TSet<FString> TouchedKeys;
+			const auto UpsertClassRecords = [this, &TouchedKeys](
+				const FString& ClassPath,
+				const TArray<FSeinComponentPropertyPatch>& Patches)
+			{
+				for (const FSeinComponentPropertyPatch& IncomingPatch : Patches)
+				{
+					FSeinComponentPropertyPatch Patch = IncomingPatch;
+					Patch.InstanceOverrideOperation =
+						ESeinComponentInstanceOverrideOperation::None;
+					const FString Key = SeinMakeComponentPropertyPatchKey(
+						Patch.ComponentTypePath, Patch.PropertyPath);
+					TouchedKeys.Add(Key);
+					FSeinComponentClassDefaultPatchRecord* ExistingRecord =
+						ComponentLiveTuningClassDefaults.FindByPredicate(
+							[&ClassPath, &Key](
+								FSeinComponentClassDefaultPatchRecord& Record)
+							{
+								return Record.ActorClassPath == ClassPath
+									&& SeinMakeComponentPropertyPatchKey(
+										Record.Patch.ComponentTypePath,
+										Record.Patch.PropertyPath) == Key;
+							});
+					if (ExistingRecord)
+					{
+						ExistingRecord->Patch = Patch;
+					}
+					else
+					{
+						FSeinComponentClassDefaultPatchRecord& Record =
+							ComponentLiveTuningClassDefaults.AddDefaulted_GetRef();
+						Record.ActorClassPath = ClassPath;
+						Record.Patch = Patch;
+					}
+				}
+			};
+			UpsertClassRecords(Payload.ActorClassPath, Payload.Patches);
+			for (const FSeinComponentLiveTuningClassEntry& Entry :
+				Payload.DerivedClassEntries)
+			{
+				UpsertClassRecords(Entry.ActorClassPath, Entry.Patches);
+			}
+			MarkCanonicalAuxiliaryStateDirty();
+			ComponentLiveTuningClassDefaults.Sort([](
+				const FSeinComponentClassDefaultPatchRecord& Left,
+				const FSeinComponentClassDefaultPatchRecord& Right)
+			{
+				if (Left.ActorClassPath != Right.ActorClassPath)
+				{
+					return Left.ActorClassPath < Right.ActorClassPath;
+				}
+				return SeinMakeComponentPropertyPatchKey(
+					Left.Patch.ComponentTypePath, Left.Patch.PropertyPath)
+					< SeinMakeComponentPropertyPatchKey(
+						Right.Patch.ComponentTypePath, Right.Patch.PropertyPath);
+			});
+
+			TArray<FString> SortedTouchedKeys = TouchedKeys.Array();
+			SortedTouchedKeys.Sort();
+			TArray<FSeinEntityHandle> LiveEntities;
+			EntityActorClassMap.GetKeys(LiveEntities);
+			LiveEntities.Sort();
+			for (const FSeinEntityHandle Entity : LiveEntities)
+			{
+				if (!EntityPool.IsValid(Entity)) continue;
+				const UClass* EntityClass = EntityActorClassMap[Entity].Get();
+				if (!EntityClass) continue;
+				for (const FString& Key : SortedTouchedKeys)
+				{
+					const FSeinComponentClassDefaultPatchRecord* Effective =
+						ResolveEffectiveClassOverlay(EntityClass, Key);
+					// A class record resolved through an ancestor may name a
+					// component this class does not carry; that is not an error.
+					if (!Effective
+						|| !HasComponentForPatch(Entity, Effective->Patch)
+						|| HasComponentPropertyInstanceOverride(
+							Entity, Effective->Patch))
+					{
+						continue;
+					}
+					FString ApplyError;
+					if (!ApplyComponentPropertyPatchToEntity(
+						Entity, Effective->Patch, ApplyError))
+					{
+						InvalidateDeterministicExecutionContract(FString::Printf(
+							TEXT("Class ComponentData live-tuning patch could not apply to entity %s: %s"),
+							*Entity.ToString(), *ApplyError));
+						return;
+					}
+				}
+			}
+		}
+		else
+		{
+			for (const FSeinComponentPropertyPatch& Patch : Payload.Patches)
+			{
+				if (Patch.InstanceOverrideOperation
+					!= ESeinComponentInstanceOverrideOperation::None)
+				{
+					SetComponentPropertyInstanceOverride(
+						Payload.TargetEntity, Patch,
+						Patch.InstanceOverrideOperation
+							== ESeinComponentInstanceOverrideOperation::Set);
+				}
+				FString ApplyError;
+				if (!ApplyComponentPropertyPatchToEntity(
+					Payload.TargetEntity, Patch, ApplyError))
+				{
+					InvalidateDeterministicExecutionContract(FString::Printf(
+						TEXT("Entity ComponentData live-tuning patch could not apply to %s: %s"),
+						*Payload.TargetEntity.ToString(), *ApplyError));
+					return;
+				}
+			}
+		}
+	}
+}
+
+void USeinWorldSubsystem::RecordPlacedActorComponentOverrides(
+	FSeinEntityHandle Entity,
+	const USeinEntityComponent& InstanceBridge,
+	const USeinEntityComponent& ClassDefaultBridge)
+{
+	TArray<FSeinComponentPropertyPatch> Differences;
+	FString Error;
+	if (!SeinBuildComponentPropertyPatches(
+		ClassDefaultBridge.ComponentData,
+		InstanceBridge.ComponentData,
+		Differences,
+		Error))
+	{
+		UE_LOG(LogSeinSim, Verbose,
+			TEXT("Placed actor %s has structural ComponentData overrides; property inheritance records were not inferred (%s)."),
+			*GetNameSafe(InstanceBridge.GetOwner()), *Error);
+		return;
+	}
+	for (const FSeinComponentPropertyPatch& Difference : Differences)
+	{
+		SetComponentPropertyInstanceOverride(Entity, Difference, true);
+	}
+}
+
+bool USeinWorldSubsystem::HasComponentForPatch(
+	FSeinEntityHandle Entity,
+	const FSeinComponentPropertyPatch& Patch) const
+{
+	for (const auto& Pair : ComponentStorages)
+	{
+		if (Pair.Key && Pair.Value
+			&& Pair.Key->GetPathName() == Patch.ComponentTypePath)
+		{
+			return Pair.Value->HasComponent(Entity);
+		}
+	}
+	return false;
+}
+
+const FSeinComponentClassDefaultPatchRecord*
+USeinWorldSubsystem::ResolveEffectiveClassOverlay(
+	const UClass* EntityClass,
+	const FString& PatchKey) const
+{
+	// Nearest-derived-first along the static class chain. The chain is content
+	// (identical on every peer); only the records are live state. No class
+	// default value is ever consulted here.
+	for (const UClass* Class = EntityClass; Class; Class = Class->GetSuperClass())
+	{
+		const FString ClassPath = Class->GetPathName();
+		for (const FSeinComponentClassDefaultPatchRecord& Record :
+			ComponentLiveTuningClassDefaults)
+		{
+			if (Record.ActorClassPath == ClassPath
+				&& SeinMakeComponentPropertyPatchKey(
+					Record.Patch.ComponentTypePath,
+					Record.Patch.PropertyPath) == PatchKey)
+			{
+				return &Record;
+			}
+		}
+	}
+	return nullptr;
+}
+
+void USeinWorldSubsystem::ApplyComponentClassDefaultOverlaysToEntity(
+	FSeinEntityHandle Entity,
+	const UClass* ActorClass)
+{
+	if (!ActorClass || ComponentLiveTuningClassDefaults.IsEmpty()) return;
+
+	// Every key that has a record anywhere on this entity's class chain, each
+	// resolved to its nearest record. Keys are visited in canonical order.
+	TSet<FString> ChainClassPaths;
+	for (const UClass* Class = ActorClass; Class; Class = Class->GetSuperClass())
+	{
+		ChainClassPaths.Add(Class->GetPathName());
+	}
+	TArray<FString> Keys;
+	for (const FSeinComponentClassDefaultPatchRecord& Record :
+		ComponentLiveTuningClassDefaults)
+	{
+		if (ChainClassPaths.Contains(Record.ActorClassPath))
+		{
+			Keys.AddUnique(SeinMakeComponentPropertyPatchKey(
+				Record.Patch.ComponentTypePath, Record.Patch.PropertyPath));
+		}
+	}
+	Keys.Sort();
+	for (const FString& Key : Keys)
+	{
+		const FSeinComponentClassDefaultPatchRecord* Effective =
+			ResolveEffectiveClassOverlay(ActorClass, Key);
+		if (!Effective
+			|| !HasComponentForPatch(Entity, Effective->Patch)
+			|| HasComponentPropertyInstanceOverride(Entity, Effective->Patch))
+		{
+			continue;
+		}
+		FString ApplyError;
+		if (!ApplyComponentPropertyPatchToEntity(
+			Entity, Effective->Patch, ApplyError,
+			/*bRefreshSecondaryState=*/false))
+		{
+			InvalidateDeterministicExecutionContract(FString::Printf(
+				TEXT("Future-spawn ComponentData overlay could not apply to %s: %s"),
+				*Entity.ToString(), *ApplyError));
+			return;
+		}
+	}
 }
 
 USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleBrokerOrderCommand(
@@ -5804,6 +6606,7 @@ FSeinEntityHandle USeinWorldSubsystem::SpawnEntity(
 			BridgeCDO->InjectAuthoredComponents(*this, Handle);
 		}
 	}
+	ApplyComponentClassDefaultOverlaysToEntity(Handle, ActorClass);
 
 	// Instantiate ability UObjects if the entity was granted any
 	InitializeEntityAbilities(Handle);
@@ -5946,10 +6749,21 @@ FSeinEntityHandle USeinWorldSubsystem::SpawnEntityFromPlacedActor(
 	// per-instance edits beyond CDO defaults. Designers can drop a placed
 	// actor and tune fields on the level instance; this path picks them up
 	// correctly.
-	if (USeinEntityComponent* EntityComp = PlacedActor->FindComponentByClass<USeinEntityComponent>())
+	if (USeinEntityComponent* EntityComp =
+		PlacedActor->FindComponentByClass<USeinEntityComponent>())
 	{
+		TArray<const USeinEntityComponent*> ClassDefaultComponents;
+		AActor::GetActorClassDefaultComponents<USeinEntityComponent>(
+			PlacedActor->GetClass(), ClassDefaultComponents);
+		if (!ClassDefaultComponents.IsEmpty() && ClassDefaultComponents[0])
+		{
+			RecordPlacedActorComponentOverrides(
+				Handle, *EntityComp, *ClassDefaultComponents[0]);
+		}
 		EntityComp->InjectAuthoredComponents(*this, Handle);
 	}
+	ApplyComponentClassDefaultOverlaysToEntity(
+		Handle, PlacedActor->GetClass());
 
 	InitializeEntityAbilities(Handle);
 
@@ -6277,6 +7091,23 @@ void USeinWorldSubsystem::ProcessDeferredDestroys()
 
 		EnqueueVisualEvent(FSeinVisualEvent::MakeDestroyEvent(Handle));
 		EntityActorClassMap.Remove(Handle);
+		const int32 RemovedOverrideCount =
+			ComponentLiveTuningEntityOverrides.RemoveAll(
+				[Handle](const FSeinComponentEntityOverrideRecord& Record)
+				{
+					return Record.Entity == Handle;
+				});
+		const int32 RemovedAuthoredAbilityCount =
+			ComponentLiveTuningAuthoredAbilityGrants.RemoveAll(
+				[Handle](
+					const FSeinComponentAuthoredAbilityGrantRecord& Record)
+				{
+					return Record.Entity == Handle;
+				});
+		if (RemovedOverrideCount > 0 || RemovedAuthoredAbilityCount > 0)
+		{
+			MarkCanonicalAuxiliaryStateDirty();
+		}
 		OwnerTransitionRevisions.Remove(Handle);
 		EntityPool.ReleaseDeferredDestroy(Handle);
 
@@ -7756,6 +8587,12 @@ void USeinWorldSubsystem::CaptureSnapshot(FSeinWorldSnapshot& OutSnapshot)
 		}
 		OutSnapshot.Entities.Add(Rec);
 	});
+	OutSnapshot.ComponentLiveTuningClassDefaults =
+		ComponentLiveTuningClassDefaults;
+	OutSnapshot.ComponentLiveTuningEntityOverrides =
+		ComponentLiveTuningEntityOverrides;
+	OutSnapshot.ComponentLiveTuningAuthoredAbilityGrants =
+		ComponentLiveTuningAuthoredAbilityGrants;
 
 	OutSnapshot.ComponentStorageBlobs.Reset();
 	for (auto& Pair : ComponentStorages)
@@ -9878,6 +10715,80 @@ bool USeinWorldSubsystem::RestoreSnapshot(
 		return false;
 	}
 
+	if (InSnapshot.ComponentLiveTuningClassDefaults.Num() > 4096
+		|| InSnapshot.ComponentLiveTuningEntityOverrides.Num()
+			> FSeinWorldSnapshot::MaxSupportedEntitySlotIndex * 64
+		|| InSnapshot.ComponentLiveTuningAuthoredAbilityGrants.Num()
+			> FSeinWorldSnapshot::MaxSupportedEntitySlotIndex)
+	{
+		UE_LOG(LogSeinSim, Error,
+			TEXT("RestoreSnapshot: ComponentData live-tuning state exceeds its reconstruction bound."));
+		return false;
+	}
+	TArray<FSeinComponentClassDefaultPatchRecord>
+		StagedComponentLiveTuningClassDefaults =
+			InSnapshot.ComponentLiveTuningClassDefaults;
+	TArray<FSeinComponentEntityOverrideRecord>
+		StagedComponentLiveTuningEntityOverrides =
+			InSnapshot.ComponentLiveTuningEntityOverrides;
+	TArray<FSeinComponentAuthoredAbilityGrantRecord>
+		StagedComponentLiveTuningAuthoredAbilityGrants =
+			InSnapshot.ComponentLiveTuningAuthoredAbilityGrants;
+	FString PreviousClassPatchKey;
+	for (const FSeinComponentClassDefaultPatchRecord& Record :
+		StagedComponentLiveTuningClassDefaults)
+	{
+		const FString Key = Record.ActorClassPath + TEXT("|")
+			+ SeinMakeComponentPropertyPatchKey(
+				Record.Patch.ComponentTypePath, Record.Patch.PropertyPath);
+		if (Record.ActorClassPath.IsEmpty()
+			|| Record.Patch.PropertyPath.IsEmpty()
+			|| (!PreviousClassPatchKey.IsEmpty()
+				&& Key <= PreviousClassPatchKey))
+		{
+			UE_LOG(LogSeinSim, Error,
+				TEXT("RestoreSnapshot: invalid or non-canonical ComponentData class-default patch state."));
+			return false;
+		}
+		PreviousClassPatchKey = Key;
+	}
+	FSeinEntityHandle PreviousOverrideEntity;
+	FString PreviousOverrideKey;
+	for (const FSeinComponentEntityOverrideRecord& Record :
+		StagedComponentLiveTuningEntityOverrides)
+	{
+		const FString Key = SeinMakeComponentPropertyPatchKey(
+			Record.ComponentTypePath, Record.PropertyPath);
+		if (!StagedEntityPool.IsValid(Record.Entity)
+			|| Record.PropertyPath.IsEmpty()
+			|| (Record.Entity == PreviousOverrideEntity
+				&& Key <= PreviousOverrideKey)
+			|| (PreviousOverrideEntity.IsValid()
+				&& Record.Entity < PreviousOverrideEntity))
+		{
+			UE_LOG(LogSeinSim, Error,
+				TEXT("RestoreSnapshot: invalid or non-canonical ComponentData entity-override state."));
+			return false;
+		}
+		PreviousOverrideEntity = Record.Entity;
+		PreviousOverrideKey = Key;
+	}
+	FSeinEntityHandle PreviousAuthoredAbilityEntity;
+	for (const FSeinComponentAuthoredAbilityGrantRecord& Record :
+		StagedComponentLiveTuningAuthoredAbilityGrants)
+	{
+		if (!StagedEntityPool.IsValid(Record.Entity)
+			|| (PreviousAuthoredAbilityEntity.IsValid()
+				&& (Record.Entity == PreviousAuthoredAbilityEntity
+					|| Record.Entity < PreviousAuthoredAbilityEntity)))
+		{
+			UE_LOG(LogSeinSim, Error,
+				TEXT("RestoreSnapshot: invalid or non-canonical authored ability baseline state."));
+			return false;
+		}
+		PreviousAuthoredAbilityEntity = Record.Entity;
+	}
+
 	struct FStagedComponentStorage
 	{
 		UScriptStruct* Type = nullptr;
@@ -10369,6 +11280,13 @@ bool USeinWorldSubsystem::RestoreSnapshot(
 		// Staged class resolution makes bridge reconciliation non-fallible after
 		// the authoritative commit begins.
 		EntityActorClassMap = MoveTemp(StagedEntityActorClasses);
+		ComponentLiveTuningClassDefaults =
+			MoveTemp(StagedComponentLiveTuningClassDefaults);
+		ComponentLiveTuningEntityOverrides =
+			MoveTemp(StagedComponentLiveTuningEntityOverrides);
+		ComponentLiveTuningAuthoredAbilityGrants =
+			MoveTemp(StagedComponentLiveTuningAuthoredAbilityGrants);
+		PendingComponentLiveTuningCommands.Reset();
 		EntityPool = MoveTemp(StagedEntityPool);
 		EntityTagStates = MoveTemp(StagedEntityTagStates);
 		EntityTagIndex = MoveTemp(StagedEntityTagIndex);
@@ -14391,6 +15309,54 @@ int32 USeinWorldSubsystem::ComputeStateHash() const
 	// reflected values in queue order; pointer-backed FInstancedStruct storage must
 	// never be hashed directly. Standalone pause entries are already authenticated,
 	// structurally accepted commands—the later frame cursor assignment is mechanical.
+	Hash = HashCombine(Hash, GetTypeHash(ComponentLiveTuningClassDefaults.Num()));
+	for (const FSeinComponentClassDefaultPatchRecord& Record :
+		ComponentLiveTuningClassDefaults)
+	{
+		Hash = HashCombine(Hash, HashCanonicalNameString(Record.ActorClassPath));
+		Hash = HashCombine(Hash,
+			HashCanonicalNameString(Record.Patch.ComponentTypePath));
+		Hash = HashCombine(Hash,
+			HashCanonicalNameString(Record.Patch.ExportedValue));
+		for (const FSeinComponentPropertyPathSegment& Segment :
+			Record.Patch.PropertyPath)
+		{
+			Hash = HashCombine(Hash,
+				HashCanonicalNameString(Segment.PropertyName));
+			Hash = HashCombine(Hash, GetTypeHash(Segment.ArrayIndex));
+		}
+	}
+	Hash = HashCombine(Hash, GetTypeHash(ComponentLiveTuningEntityOverrides.Num()));
+	for (const FSeinComponentEntityOverrideRecord& Record :
+		ComponentLiveTuningEntityOverrides)
+	{
+		Hash = HashCombine(Hash, GetTypeHash(Record.Entity));
+		Hash = HashCombine(Hash,
+			HashCanonicalNameString(Record.ComponentTypePath));
+		for (const FSeinComponentPropertyPathSegment& Segment :
+			Record.PropertyPath)
+		{
+			Hash = HashCombine(Hash,
+				HashCanonicalNameString(Segment.PropertyName));
+			Hash = HashCombine(Hash, GetTypeHash(Segment.ArrayIndex));
+		}
+	}
+	Hash = HashCombine(Hash,
+		GetTypeHash(ComponentLiveTuningAuthoredAbilityGrants.Num()));
+	for (const FSeinComponentAuthoredAbilityGrantRecord& Record :
+		ComponentLiveTuningAuthoredAbilityGrants)
+	{
+		Hash = HashCombine(Hash, GetTypeHash(Record.Entity));
+		Hash = HashCombine(Hash,
+			GetTypeHash(Record.AuthoredAbilities.Num()));
+		for (const TSubclassOf<USeinAbility> AbilityClass :
+			Record.AuthoredAbilities)
+		{
+			Hash = HashCombine(Hash, HashCanonicalNameString(
+				AbilityClass ? AbilityClass->GetPathName() : FString()));
+		}
+	}
+
 	const auto HashCommandQueue = [&Hash](uint32 LaneMarker,
 		const TArray<FSeinCommand>& Commands)
 	{
@@ -14475,6 +15441,7 @@ void USeinWorldSubsystem::InitializeEntityAbilities(FSeinEntityHandle Handle)
 		// this is expected, not an error.
 		return;
 	}
+	RecordAuthoredAbilityGrants(Handle);
 
 	// Snapshot the authored list — `SeinGrantAbility` mutates
 	// `GrantedAbilities` (via `AddUnique`), and iterating the live list

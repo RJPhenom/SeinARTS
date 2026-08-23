@@ -46,9 +46,11 @@ class USeinReplayWriter;
 class USeinReplayReader;
 class USeinAIController;
 class USeinWorldSubsystem;
+class USeinEntityComponent;
 class UNetDriver;
 struct FSeinParticipantWorldRootEntry;
 struct FSeinCommandSchemaDescriptor;
+struct FSeinComponentLiveTuningRequest;
 struct FSeinNetSubsystemTestAccess;
 namespace ETravelFailure { enum Type : int; }
 namespace ENetworkFailure { enum Type : int; }
@@ -852,6 +854,11 @@ private:
 		UNetDriver* NetDriver,
 		ENetworkFailure::Type FailureType,
 		const FString& ErrorString);
+#if WITH_EDITOR
+	void OnComponentLiveTuningEditorRequest(
+		const USeinEntityComponent& Source,
+		const FSeinComponentLiveTuningRequest& Payload);
+#endif
 	bool OwnsFailureWorld(const UWorld* World) const;
 	void CancelPendingLocalTravelFailure(const FString& Reason);
 
@@ -1201,6 +1208,9 @@ private:
 	FDelegateHandle WorldCleanupHandle;
 	FDelegateHandle TravelFailureHandle;
 	FDelegateHandle NetworkFailureHandle;
+#if WITH_EDITOR
+	FDelegateHandle ComponentLiveTuningEditorRequestHandle;
+#endif
 
 	/** Subscription to USeinWorldSubsystem::OnSimTickCompleted, installed by
 	 *  BindLockstepHooksForCurrentWorld and cleared with the turn epoch. */

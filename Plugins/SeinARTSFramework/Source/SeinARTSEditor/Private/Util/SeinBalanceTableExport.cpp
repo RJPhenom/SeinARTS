@@ -1,4 +1,4 @@
-/**
+﻿/**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinBalanceTableExport.cpp
  */
@@ -1518,6 +1518,13 @@ static int32 PushToEntitiesInternal(
 		uint8* Row = Table->FindRowUnchecked(RowName);
 		if (!Row) { continue; }
 
+		// Snapshot the authored payload so the bridge can derive exact property
+		// patches from the raw writes below (there is no property-editor chain).
+		if (USeinEntityComponent* Bridge = FindBridge(T))
+		{
+			Bridge->BeginComponentDataEdit();
+		}
+
 		bool bAny = false;
 		for (const FSeinBalanceColumn& Col : Columns)
 		{
@@ -1544,18 +1551,18 @@ static int32 PushToEntitiesInternal(
 			}
 		}
 
+		// Close the out-of-band ComponentData edit opened above. With real writes it
+		// records class-default history, mirrors into instances / derived class
+		// defaults with Unreal's inherit-vs-override semantics, and broadcasts the
+		// live-tuning request; with none it simply releases the captured snapshot.
+		if (USeinEntityComponent* Bridge = FindBridge(T))
+		{
+			Bridge->EndComponentDataEdit();
+		}
 		if (bAny)
 		{
 			WrittenClasses.Add(T);
-			// Mirror the CDO edit to placed instances (the entity bridge exposes this for writes that
-			// bypass a ComponentData-bearing property chain), then mark the BP modified so it persists.
-			if (USeinEntityComponent* Bridge = FindBridge(T))
-			{
-				for (int32 i = 0; i < Bridge->ComponentData.Num(); ++i)
-				{
-					Bridge->PropagateComponentDataEntryToInstances(i);
-				}
-			}
+			// Mark the BP modified so the pushed values persist.
 			if (UBlueprint* BP = Cast<UBlueprint>(T->ClassGeneratedBy))
 			{
 				FBlueprintEditorUtils::MarkBlueprintAsModified(BP);

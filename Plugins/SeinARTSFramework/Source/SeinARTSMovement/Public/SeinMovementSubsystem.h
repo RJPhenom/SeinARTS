@@ -37,6 +37,7 @@ class USeinMovement;
 class USeinWorldSubsystem;
 struct FSeinMovementCanonicalStateProvider;
 struct FSeinMovementComponent;
+struct FSeinComponentPropertyPatch;
 struct FSeinMovementRoutineRootCache;
 
 UCLASS()
@@ -114,6 +115,10 @@ private:
 	friend struct FSeinMovementCanonicalStateProvider;
 	friend struct FSeinMovementSubsystemTestAccess;
 	void HandleAuthoritativeStateRestored();
+	void HandleComponentPropertyLiveTuned(
+		FSeinEntityHandle Entity,
+		const UScriptStruct& ComponentType,
+		const FSeinComponentPropertyPatch& Patch);
 
 	/** Local unit-unit avoidance steering system (PreTick). A thin delegator owned
 	 *  here; registered with the sim loop during initialization, unregistered + deleted

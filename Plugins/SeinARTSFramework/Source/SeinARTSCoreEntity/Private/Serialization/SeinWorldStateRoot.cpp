@@ -97,11 +97,11 @@ struct FSeinWorldStateRootCache
 
 namespace
 {
-	constexpr uint32 CoreAuthoritativeSchemaVersion = 8;
+	constexpr uint32 CoreAuthoritativeSchemaVersion = 10;
 	constexpr uint32 CoreContinuationSchemaVersion = 2;
 	constexpr uint32 RoutineCoreAuthoritativeSchemaVersion = 3;
 	constexpr uint32 RoutineCoreContinuationSchemaVersion = 1;
-	constexpr uint32 RoutineAuxiliarySchemaVersion = 2;
+	constexpr uint32 RoutineAuxiliarySchemaVersion = 4;
 
 	TAutoConsoleVariable<int32> CVarSeinStateRootProfile(
 		TEXT("Sein.Sim.StateRoot.Profile"),
@@ -121,6 +121,87 @@ namespace
 	{
 		return Writer.WriteInt32(Handle.Index)
 			&& Writer.WriteInt32(Handle.Generation);
+	}
+
+	bool WriteComponentPropertyPath(
+		FSeinCanonicalDigestWriter& Writer,
+		TConstArrayView<FSeinComponentPropertyPathSegment> Path)
+	{
+		if (!Writer.WriteUInt32(static_cast<uint32>(Path.Num())))
+		{
+			return false;
+		}
+		for (const FSeinComponentPropertyPathSegment& Segment : Path)
+		{
+			if (!Writer.WriteString(Segment.PropertyName)
+				|| !Writer.WriteInt32(Segment.ArrayIndex))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	bool WriteComponentLiveTuningState(
+		FSeinCanonicalDigestWriter& Writer,
+		TConstArrayView<FSeinComponentClassDefaultPatchRecord> ClassDefaults,
+		TConstArrayView<FSeinComponentEntityOverrideRecord> EntityOverrides,
+		TConstArrayView<FSeinComponentAuthoredAbilityGrantRecord>
+			AuthoredAbilityGrants)
+	{
+		if (!Writer.WriteUInt32(static_cast<uint32>(ClassDefaults.Num())))
+		{
+			return false;
+		}
+		for (const FSeinComponentClassDefaultPatchRecord& Record : ClassDefaults)
+		{
+			if (!Writer.WriteString(Record.ActorClassPath)
+				|| !Writer.WriteString(Record.Patch.ComponentTypePath)
+				|| !WriteComponentPropertyPath(
+					Writer, Record.Patch.PropertyPath)
+				|| !Writer.WriteString(Record.Patch.ExportedValue))
+			{
+				return false;
+			}
+		}
+		if (!Writer.WriteUInt32(static_cast<uint32>(EntityOverrides.Num())))
+		{
+			return false;
+		}
+		for (const FSeinComponentEntityOverrideRecord& Record : EntityOverrides)
+		{
+			if (!WriteHandle(Writer, Record.Entity)
+				|| !Writer.WriteString(Record.ComponentTypePath)
+				|| !WriteComponentPropertyPath(Writer, Record.PropertyPath))
+			{
+				return false;
+			}
+		}
+		if (!Writer.WriteUInt32(
+			static_cast<uint32>(AuthoredAbilityGrants.Num())))
+		{
+			return false;
+		}
+		for (const FSeinComponentAuthoredAbilityGrantRecord& Record :
+			AuthoredAbilityGrants)
+		{
+			if (!WriteHandle(Writer, Record.Entity)
+				|| !Writer.WriteUInt32(static_cast<uint32>(
+					Record.AuthoredAbilities.Num())))
+			{
+				return false;
+			}
+			for (const TSubclassOf<USeinAbility> AbilityClass :
+				Record.AuthoredAbilities)
+			{
+				if (!Writer.WriteString(
+					AbilityClass ? AbilityClass->GetPathName() : FString()))
+				{
+					return false;
+				}
+			}
+		}
+		return true;
 	}
 
 	bool WriteFixedVector(
@@ -1638,6 +1719,16 @@ bool USeinWorldSubsystem::SealRoutineCanonicalStateRoot(
 				? TEXT("Routine pair-capability encoding failed.")
 				: AuxiliaryWriter.GetError());
 		}
+		if (!WriteComponentLiveTuningState(
+				AuxiliaryWriter,
+				ComponentLiveTuningClassDefaults,
+				ComponentLiveTuningEntityOverrides,
+				ComponentLiveTuningAuthoredAbilityGrants))
+		{
+			return Fail(OutError, AuxiliaryWriter.GetError().IsEmpty()
+				? TEXT("Routine ComponentData live-tuning encoding failed.")
+				: AuxiliaryWriter.GetError());
+		}
 
 		TArray<FSeinEntityHandle> TagStateHandles;
 		EntityTagStates.GetKeys(TagStateHandles);
@@ -2421,6 +2512,16 @@ bool USeinWorldSubsystem::ComputeCanonicalStateRoot(
 	{
 		return Fail(OutError, CoreWriter.GetError().IsEmpty()
 			? TEXT("Core pair-capability encoding failed.")
+			: CoreWriter.GetError());
+	}
+	if (!WriteComponentLiveTuningState(
+			CoreWriter,
+			ComponentLiveTuningClassDefaults,
+			ComponentLiveTuningEntityOverrides,
+			ComponentLiveTuningAuthoredAbilityGrants))
+	{
+		return Fail(OutError, CoreWriter.GetError().IsEmpty()
+			? TEXT("Core ComponentData live-tuning encoding failed.")
 			: CoreWriter.GetError());
 	}
 	ProfileMark(ProfileCorePreludeMs);

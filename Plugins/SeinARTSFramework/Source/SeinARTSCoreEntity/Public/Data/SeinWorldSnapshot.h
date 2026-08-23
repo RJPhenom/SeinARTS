@@ -37,6 +37,7 @@
 #include "Input/SeinCommand.h"
 #include "Serialization/SeinCanonicalStateRegistry.h"
 #include "Simulation/SeinMatchBootstrapBarrier.h"
+#include "Simulation/SeinComponentLiveTuning.h"
 #include "Types/Transform.h"
 #include "UObject/GCObject.h"
 #include "SeinWorldSnapshot.generated.h"
@@ -374,10 +375,9 @@ struct SEINARTSCOREENTITY_API FSeinWorldSnapshot
 {
 	GENERATED_BODY()
 
-	// v17: FSeinSquadComponent gained ReinforceRefundPolicy +
-	// PartialRefundPercent (destruction settlement ruling) — component blob
-	// layout change; older snapshots fail closed.
-	static constexpr int32 CurrentVersion = 17;
+	// v18: editor-driven ComponentData class overlays and per-entity override
+	// evidence became canonical future-affecting state.
+	static constexpr int32 CurrentVersion = 18;
 	/** Defensive reconstruction bound for an imported checkpoint. The runtime
 	 *  pool remains independently extensible; snapshots above this generous
 	 *  simultaneous-entity ceiling fail before allocating slot-indexed state. */
@@ -543,6 +543,21 @@ struct SEINARTSCOREENTITY_API FSeinWorldSnapshot
 	/** Alive roster plus render-actor class identity. Core slot data above is authoritative. */
 	UPROPERTY()
 	TArray<FSeinSnapshotEntityRecord> Entities;
+
+	/** Latest networked Blueprint class-default property overlays. */
+	UPROPERTY()
+	TArray<FSeinComponentClassDefaultPatchRecord>
+		ComponentLiveTuningClassDefaults;
+
+	/** Persisted authoring and transient PIE instance override evidence. */
+	UPROPERTY()
+	TArray<FSeinComponentEntityOverrideRecord>
+		ComponentLiveTuningEntityOverrides;
+
+	/** Per-entity authored ability grant baselines, distinct from runtime grants. */
+	UPROPERTY()
+	TArray<FSeinComponentAuthoredAbilityGrantRecord>
+		ComponentLiveTuningAuthoredAbilityGrants;
 
 	// ========== Ability + resolver pools ==========
 

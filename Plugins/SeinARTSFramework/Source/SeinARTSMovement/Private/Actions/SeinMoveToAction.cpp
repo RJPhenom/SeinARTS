@@ -1460,6 +1460,83 @@ void USeinMoveToAction::FinalizeMovementOnce()
 	MoveComp->bHasTarget = false;
 }
 
+void USeinMoveToAction::RefreshAuthoredComponentTuning(
+	USeinWorldSubsystem& World,
+	bool bRefreshMovementClass,
+	bool bForcePathRefresh)
+{
+	if (!bPathResolved || bMovementFinalized) return;
+	FSeinEntity* Entity = World.GetEntityMutable(OwnerEntity);
+	FSeinMovementComponent* MoveComp =
+		World.GetComponentMutable<FSeinMovementComponent>(OwnerEntity);
+	const FSeinNavigationComponent* NavComp =
+		World.GetComponent<FSeinNavigationComponent>(OwnerEntity);
+	UWorld* UnrealWorld = World.GetWorld();
+	USeinMovementSubsystem* MovementSub = UnrealWorld
+		? UnrealWorld->GetSubsystem<USeinMovementSubsystem>()
+		: nullptr;
+	if (!Entity || !MoveComp || !MovementSub) return;
+
+	USeinMovement* PreviousMovement = Movement;
+	if (bRefreshMovementClass)
+	{
+		Movement = MovementSub->GetOrCreateMovementInstance(
+			OwnerEntity, *MoveComp);
+		if (!Movement)
+		{
+			Movement = PreviousMovement;
+			return;
+		}
+	}
+	if (!Movement) return;
+
+	AcceptanceRadius = NavComp
+		? NavComp->AcceptanceRadius
+		: FSeinNavigationComponent::DefaultArrivalAcceptance();
+	FootprintRadius = USeinMovement::ResolveCollisionRadius(
+		&World, OwnerEntity, NavComp);
+	StallBand = SaturatingPositiveScale(AcceptanceRadius, 3);
+	const FFixedPoint BodyBand = SaturatingPositiveAdd(
+		FootprintRadius, FFixedPoint::FromInt(100));
+	if (BodyBand > StallBand) StallBand = BodyBand;
+
+	if (PreviousMovement && PreviousMovement != Movement)
+	{
+		PreviousMovement->OnMoveEnd(*Entity);
+		// Blueprint-capable teardown may have changed the action/component.
+		if (bCompleted || bCancelled || bMovementFinalized) return;
+		MoveComp = World.GetComponentMutable<FSeinMovementComponent>(OwnerEntity);
+		Entity = World.GetEntityMutable(OwnerEntity);
+		NavComp = World.GetComponent<FSeinNavigationComponent>(OwnerEntity);
+		if (!MoveComp || !Entity) return;
+	}
+	USeinNavigation* Nav = USeinNavigationSubsystem::GetNavigationForWorld(&World);
+	FSeinMovementContext Context{
+		*Entity,
+		MoveComp,
+		NavComp,
+		Path,
+		CurrentWaypointIndex,
+		FFixedVector::SquareSaturated(AcceptanceRadius),
+		FFixedPoint::Zero,
+		Nav,
+		&World,
+		OwnerEntity
+	};
+	Context.ExactAcceptanceRadius = AcceptanceRadius;
+	Context.bAuthoritativeDestination = bAuthoritativeDestination;
+	Movement->CacheFootprintFromContext(Context);
+	if (PreviousMovement != Movement)
+	{
+		Movement->OnMoveBegin(Context);
+	}
+	if (bForcePathRefresh)
+	{
+		bForceRepathNow = true;
+	}
+	MovementSub->MarkMovementStateDirty(OwnerEntity);
+}
+
 void USeinMoveToAction::NotifyCompleted()
 {
 	if (USeinMoveToProxy* Proxy = Observer.Get())
