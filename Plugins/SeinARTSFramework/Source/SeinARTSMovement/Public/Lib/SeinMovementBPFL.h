@@ -26,6 +26,7 @@
 #include "Types/FixedPoint.h"
 #include "SeinMovementBPFL.generated.h"
 
+class ASeinActor;
 class USeinWorldSubsystem;
 
 /**
@@ -108,6 +109,14 @@ class SEINARTSMOVEMENT_API USeinMovementBPFL : public UBlueprintFunctionLibrary
 	GENERATED_BODY()
 
 public:
+	/** One-node AnimBP entry point: takes the owning actor, resolves the
+	 *  entity handle internally, and returns the full movement state
+	 *  snapshot. Returns false (OutState zeroed) when the actor is not an
+	 *  ASeinActor or has no movement component. */
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|Movement|Animation",
+		meta = (WorldContext = "WorldContextObject", DisplayName = "Get Animation Movement State"))
+	static bool SeinGetAnimationMovementState(const UObject* WorldContextObject, AActor* Actor, FSeinMovementStateData& OutState);
+
 	/** Composite read of derived movement state for an entity. Composes
 	 *  entity transform + FSeinMovementComponent (+ optional sub-data
 	 *  Altitude) into AnimBP-shaped derived values (Velocity, Speed,
