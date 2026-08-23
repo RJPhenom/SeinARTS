@@ -92,6 +92,14 @@ public:
 	 *  rather than silently omitted from lockstep parity. */
 	static void AppendContributors(FString& OutFp);
 
+	/** Canonical, process-mode-stable export of one reflected field for
+	 *  fingerprinting: containers length-framed, maps/sets sorted, structs
+	 *  walked field-by-field, FText omitted (presentation data whose exported
+	 *  namespace differs between editor and game processes). The core settings
+	 *  fingerprint and every contributor use this same exporter. */
+	static FString ExportFieldCanonical(
+		const FProperty& Property, const void* Container);
+
 private:
 	static void UnregisterContributor(uint64 Token);
 	friend class FSeinConfigFingerprintRegistrationHandle;

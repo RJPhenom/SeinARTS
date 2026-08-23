@@ -322,6 +322,11 @@ void USeinARTSCoreSettings::ReportDisabledSystem(const TCHAR* SystemName, const 
 
 int32 USeinARTSCoreSettings::ComputeConfigFingerprint() const
 {
+	return static_cast<int32>(FCrc::StrCrc32(*BuildConfigFingerprintSource()));
+}
+
+FString USeinARTSCoreSettings::BuildConfigFingerprintSource() const
+{
 	// SIM-AFFECTING settings that MUST be byte-identical across every client in a lockstep session.
 	// EXCLUDES render / transport / lobby / editor / debug fields (they may legitimately differ per
 	// machine — e.g. FormationPreviewActorClass, RelayActorClass, the minimap/debug-viz knobs). The
@@ -364,9 +369,12 @@ int32 USeinARTSCoreSettings::ComputeConfigFingerprint() const
 		Fp += TEXT("=");
 		if (const FProperty* Prop = FindFProperty<FProperty>(Cls, FieldName))
 		{
-			FString Value;
-			Prop->ExportText_InContainer(0, Value, this, nullptr, nullptr, PPF_None);
-			Fp += Value;
+			// Canonical exporter shared with extension contributors: framed
+			// containers, sorted maps, and NO FText — a raw ExportText here once
+			// hashed ResourceCatalog display names, whose localization namespace
+			// differs between editor and game processes (separate-process PIE
+			// config-parity kicks).
+			Fp += FSeinConfigFingerprintRegistry::ExportFieldCanonical(*Prop, this);
 		}
 		Fp += TEXT(";");
 	}
@@ -394,7 +402,7 @@ int32 USeinARTSCoreSettings::ComputeConfigFingerprint() const
 	// section. AppendContributors sorts by stable id internally, so the value is
 	// independent of module load / registration order (see the registry docstring).
 	FSeinConfigFingerprintRegistry::AppendContributors(Fp);
-	return static_cast<int32>(FCrc::StrCrc32(*Fp));
+	return Fp;
 }
 
 TArray<FSeinCollisionChannelDefinition> USeinARTSCoreSettings::GetAllCollisionChannels() const

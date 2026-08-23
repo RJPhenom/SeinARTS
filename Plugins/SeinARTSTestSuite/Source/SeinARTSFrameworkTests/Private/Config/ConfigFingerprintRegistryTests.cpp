@@ -193,3 +193,45 @@ namespace UE::SeinARTSTests
 			StableId.ToString() + TEXT("|ScalarValue="))));
 	}
 }
+
+#include "Settings/PluginSettings.h"
+
+namespace UE::SeinARTSTests
+{
+	TEST(ConfigFingerprintIgnoresPresentationText, "SeinARTS.Unit.ConfigFingerprint")
+	{
+		// Regression for the separate-process PIE config-parity kick: an editor
+		// process exports config FText with the package-localization namespace
+		// ("[/Script/Module]") while a -game process exports an empty one. The
+		// fingerprint must be blind to FText entirely — namespace, key, AND
+		// source string — because display names are presentation, not sim.
+		USeinARTSCoreSettings* Settings = GetMutableDefault<USeinARTSCoreSettings>();
+		ASSERT_THAT(IsNotNull(Settings));
+		const TArray<FSeinResourceDefinition> SavedCatalog = Settings->ResourceCatalog;
+
+		FSeinResourceDefinition Definition;
+		Definition.ResourceTag = FGameplayTag::RequestGameplayTag(
+			FName(TEXT("SeinARTS.Resource")), /*ErrorIfNotFound=*/false);
+		Definition.DisplayName = FText::AsCultureInvariant(TEXT("Money"));
+		Settings->ResourceCatalog = {Definition};
+		const FString GameLike = Settings->BuildConfigFingerprintSource();
+		const int32 GameLikeFingerprint = Settings->ComputeConfigFingerprint();
+
+		// Same entry, text re-keyed into an editor-style namespace + different
+		// display string — must not move the fingerprint by a single bit.
+		Settings->ResourceCatalog[0].DisplayName = FText::ChangeKey(
+			TEXT("[/Script/SeinARTSCoreEntity]"),
+			TEXT("8DB6BEF544D7B093406E2C81E9FCC1DC"),
+			FText::AsCultureInvariant(TEXT("Credits")));
+		const FString EditorLike = Settings->BuildConfigFingerprintSource();
+		const int32 EditorLikeFingerprint = Settings->ComputeConfigFingerprint();
+
+		Settings->ResourceCatalog = SavedCatalog;
+
+		ASSERT_THAT(AreEqual(GameLike, EditorLike));
+		ASSERT_THAT(AreEqual(GameLikeFingerprint, EditorLikeFingerprint));
+		ASSERT_THAT(IsFalse(GameLike.Contains(TEXT("NSLOCTEXT"))));
+		ASSERT_THAT(IsFalse(GameLike.Contains(TEXT("INVTEXT"))));
+		ASSERT_THAT(IsTrue(GameLike.Contains(TEXT("Text[omitted]"))));
+	}
+}

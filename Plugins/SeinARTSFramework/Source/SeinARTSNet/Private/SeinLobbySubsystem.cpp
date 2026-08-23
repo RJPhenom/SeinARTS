@@ -1238,6 +1238,29 @@ void USeinLobbySubsystem::ConfirmPublishedMatchSettingsLaunch()
 	}
 }
 
+void USeinLobbySubsystem::ResetForLocalSessionExit()
+{
+	if (PendingTravelTimerHandle.IsValid())
+	{
+		if (UWorld* TimerWorld = PendingTravelTimerWorld.Get())
+		{
+			TimerWorld->GetTimerManager().ClearTimer(PendingTravelTimerHandle);
+		}
+		PendingTravelTimerHandle.Invalidate();
+	}
+	PendingTravelTimerWorld.Reset();
+	LobbyStateActor.Reset();
+	ControllerToSlot.Reset();
+	PublishedSnapshot = FSeinMatchSettings();
+	bSnapshotPublished = false;
+	bPublishedSnapshotLaunchCommitted = false;
+	bTravelScheduled = false;
+	SlotCountOverride = 0;
+	DirectMatchSettingsDefaults = FSeinMatchSettings();
+	UE_LOG(LogSeinNet, Log,
+		TEXT("[Lobby] ResetForLocalSessionExit: session contract and slot bindings cleared."));
+}
+
 bool USeinLobbySubsystem::DiscardUncommittedPreparedMatchSettingsSnapshot()
 {
 	if (!bSnapshotPublished || bPublishedSnapshotLaunchCommitted)

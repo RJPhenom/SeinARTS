@@ -42,8 +42,13 @@ public:
 
 private:
 	/** Resolve and seal the standalone tick-zero contract when it has not
-	 * already been prepared. Identical retries are accepted. */
-	bool EnsureStandaloneBootstrapAuthorized();
+	 * already been prepared. Identical retries are accepted.
+	 * bAllowLobbyContract: whether a lobby-published match snapshot may supply
+	 * the contract. Explicit launches (lobby in-place start, lobby travel with
+	 * the StandaloneLaunch URL intent) allow it; an AMBIENT BeginPlay auto-start
+	 * in any other world must not, or a stale snapshot left over from an
+	 * aborted/kicked session drives a bootstrap in the menu map. */
+	bool EnsureStandaloneBootstrapAuthorized(bool bAllowLobbyContract = true);
 	bool MaterializeMatchBootstrap(
 		const FSeinMatchSettings& Settings,
 		const FGuid& AuthorizationContextDigest,

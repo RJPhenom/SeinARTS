@@ -4,11 +4,21 @@ This is the actionable remainder after consolidating the historical audits. It i
 
 ## Release-blocking foundation risks
 
-1. **Launcher UE cannot prove Client/Server targets.** Epic's installed 5.8 distribution rejects
-   Client targets before project compilation. Development Client and Dedicated Server must run in
-   CI or another source/installed engine distribution that supports those target types. The real
-   packaged listen-server/client/reconnect/replay harness is green, but a Game-target listen server
-   does not prove a true headless dedicated-server binary.
+1. **Launcher UE cannot prove Client/Server targets or the Test configuration.** Epic's installed
+   5.8 distribution rejects Client targets before project compilation and refuses the `Test`
+   configuration outright ("Targets cannot be built in the Test configuration with this engine
+   distribution", verified 2026-08-23). Development Client, Dedicated Server, and packaged Test
+   builds must run in CI or another source/installed engine distribution that supports them. The
+   real packaged listen-server/client/reconnect/replay harness is green (Shipping), but a
+   Game-target `-server` process does not prove a true headless dedicated-server binary. Separate-
+   process PIE (editor host or editor client + `-game` server/clients) is qualified as of
+   2026-08-23: the config fingerprint now uses the canonical FText-blind exporter (an editor
+   process exported config display-name FText with the package-localization namespace, a `-game`
+   process with an empty one, so every editor↔game pairing failed parity and kicked — a latent
+   bug surfaced by the first editor-vs-game pairing); a kicked/leaving client resets its lobby
+   session contract before traveling to the menu; ambient world auto-start never consumes a stale
+   lobby contract. `Sein.Config.DumpFingerprint` prints the exact hashed text for future parity
+   triage.
 2. **The public documentation website is owner-authored and not yet present.** Root `Docs/` is
    intentionally empty until RJ builds the GitHub Pages site. Release publication warns and omits
    documentation while it is empty. Agents must preserve internal contracts in `.agents/` and must

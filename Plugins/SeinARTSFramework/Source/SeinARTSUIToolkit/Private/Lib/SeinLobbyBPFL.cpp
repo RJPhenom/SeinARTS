@@ -271,6 +271,17 @@ void USeinLobbyBPFL::SeinRequestLeaveLobby(const UObject* WorldContextObject)
 	// prevent the analogous pre-existing-pending bug.
 	CancelPendingNetGame(World);
 
+	// Leaving ends this process's session: clear the lobby contract + slot
+	// bindings before the menu world initializes (see
+	// USeinLobbySubsystem::ResetForLocalSessionExit).
+	if (UGameInstance* GI = World->GetGameInstance())
+	{
+		if (USeinLobbySubsystem* Lobby = GI->GetSubsystem<USeinLobbySubsystem>())
+		{
+			Lobby->ResetForLocalSessionExit();
+		}
+	}
+
 	// ConsoleCommand("disconnect") is the cleanest cross-mode disconnect:
 	// host kicks the listen-server, client drops its connection. Project
 	// hooks main-menu return via UE's standard NetworkFailure / MapTravel
