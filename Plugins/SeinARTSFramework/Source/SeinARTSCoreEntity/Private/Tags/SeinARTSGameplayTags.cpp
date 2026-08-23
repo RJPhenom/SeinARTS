@@ -34,6 +34,7 @@ namespace SeinARTSTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Type_Ping,              "SeinARTS.Command.Type.Ping",              "Ping a location (visible to all players)");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Type_BrokerOrder,       "SeinARTS.Command.Type.BrokerOrder",       "Multi-unit dispatch routed through a CommandBroker (DESIGN §5)");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Type_SetPairCapability, "SeinARTS.Command.Type.SetPairCapability", "Match-control mutation of one directional player-pair capability grant");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Type_Editor_ComponentPropertyPatch, "SeinARTS.Command.Type.Editor.ComponentPropertyPatch", "Editor-authored match-control property patch for live PIE tuning");
 
 	// Match flow (DESIGN §18).
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Type_PauseMatchRequest,   "SeinARTS.Command.Type.PauseMatchRequest",   "Request a sim pause (may be a vote trigger)");

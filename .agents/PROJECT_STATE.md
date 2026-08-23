@@ -1,5 +1,61 @@
 # SeinARTS Project State
 
+## 2026-08-23 ComponentData live tuning (editor UX parity, hierarchy-complete)
+
+Designer-facing contract: exactly Unreal's two authoring layers for `USeinEntityComponent::ComponentData`
+— Blueprint class defaults and actor-instance overrides — including parent→child Blueprint inheritance,
+live in PIE. Editing a class default updates every loaded inheriting class default, placed/preview/PIE
+instance, and live sim entity that has not overridden the property, plus future spawns; overrides at any
+layer survive; PIE instance edits affect only that entity and are transient; a reset-to-default clears the
+transient override. Changes travel through the ordinary networked command lane
+(`SeinARTS.Command.Type.Editor.ComponentPropertyPatch`, MatchControl authority) and commit after
+FinalObservation, so tick N is entirely old state and N+1 entirely new. A property patch commits only the
+addressed reflected leaf (copied candidate → `CopyCompleteValue`); unrelated runtime state in the same sim
+component is untouched. Component add/remove is rejected as structural; resizing an array whose element
+struct carries runtime-only state is rejected.
+
+Mechanism (Codex built the spine; this session hardened and completed it):
+
+- Editor (`SeinEntityComponent.cpp`, `WITH_EDITOR`): one hierarchy walk, `FindInheritedDefaultBridge`
+  (instance → its class default; class default → its archetype, the parent class default), drives every
+  inherit/override decision. Class-default edits are recorded as editor-only revisioned history on the
+  CDO bridge; propagation uses the engine's `GetArchetypeInstances` on the owner CDO filtered by archetype
+  chain (`IsBasedOnArchetype`), writing a leaf only where it still equals the old default (stock UE
+  value-delta rule). Unopened levels and unopened derived Blueprints catch up on `PostLoad` by walking
+  the inherited history past their cursor; derived class defaults re-record adopted transitions into their
+  own history so their unopened instances catch up too. Instance override keys live in
+  `ComponentDataPropertyOverrides` (instances only; templates never populate it, by design — archetype
+  copy would poison fresh instances). `PostInitProperties` strips the history copy off non-templates so it
+  is never serialized into placed actors. Templates hold source revision ≥ parent cursor so a freshly
+  placed instance can never skip a later record. Out-of-band writers bracket with
+  `BeginComponentDataEdit()` / `EndComponentDataEdit()` (balance-table Push uses it).
+- Sim (`SeinWorldSubsystem.cpp`): canonical, snapshotted, hashed, restored state = exact-class overlay
+  records `(ActorClassPath, PatchKey → value)`, per-entity override evidence (kept in canonical
+  `(Entity, PatchKey)` order; binary-searched), and per-entity authored-ability baselines. Entities
+  resolve their effective class overlay **nearest-derived-first along the static class chain**
+  (`ResolveEffectiveClassOverlay`); the sim never reads a class default to decide inheritance. The editor
+  — the only process that can observe live class defaults — sends an explicit entry for every loaded
+  derived class (inheriting → new value, overriding → pin of its own value); a derived class the editor
+  could not observe (unloaded at edit time) falls through to the nearest ancestor record, which every peer
+  computes identically. A class default that loads mid-PIE publishes its own pins. Ancestor records naming
+  a component the derived class does not carry are skipped, not faulted. Optional modules refresh their
+  own derived state through `OnComponentPropertyLiveTuned` (Movement refreshes movement class / nested
+  class data / nav / extents / active path state).
+- Wire: the command schema is registered in **every** build (it feeds the command-protocol digest stamped
+  into world-root identity, snapshot envelopes, and replay headers; an editor-only entry would split
+  editor and packaged digests). Authoring remains editor-only via the `WITH_EDITOR` delegate. Body is
+  canonical UTF-8 frames: class path, patch list, then ≤256 derived entries each with its own patch list;
+  64 KiB body, 72 KiB schema payload cap, 64 Ki aggregate cap. Built-in command implementation revision 5;
+  snapshot v18; core authoritative root schema 10, routine auxiliary 4.
+
+Evidence (final tree): Editor build green; focused LiveTuning 6/6; Framework Unit 490 / Determinism 38;
+All Unit 512 / Determinism 53 / Editor 61 — all at or above the checked-in floors. Not exercised by
+automation and therefore RJ's PIE oracle: Blueprint hierarchy edits with real BP assets (parent edit →
+child instance; child override survives parent edit; unopened child BP reopened after a parent change),
+reset-to-default, movement feel and weapon cycling under live edits. Known limit: in multi-process PIE only
+the editor host can author (the editor delegate is process-local), and any unsaved editor edit made before
+PIE start is invisible to remote processes — a pre-existing property of that mode, not of this feature.
+
 ## 2026-08-22 exact Blueprint formation-order checkpoint
 
 The approved public exact-order API is implemented. `Plan Formation Order` returns an opaque,

@@ -15,7 +15,9 @@
 #include "Settings/PluginSettings.h"
 #include "Data/SeinWorldSnapshot.h"
 #include "Simulation/SeinSnapshotRestoreAuthority.h"
+#include "Simulation/SeinComponentLiveTuning.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "Actor/SeinEntityComponent.h"
 #include "Input/SeinCommandSchemaRegistry.h"
 #include "Serialization/SeinDeterministicValueDigest.h"
 #include "Tags/SeinARTSGameplayTags.h"
@@ -293,6 +295,11 @@ void USeinNetSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	// pipeline). Relay tracking (`Relays`, `RelayToSlot`, `LocalRelay`) is
 	// peer-identity, not lockstep state, and is preserved.
 	WorldCleanupHandle = FWorldDelegates::OnWorldCleanup.AddUObject(this, &USeinNetSubsystem::OnWorldCleanup);
+#if WITH_EDITOR
+	ComponentLiveTuningEditorRequestHandle =
+		SeinOnComponentLiveTuningEditorRequest().AddUObject(
+			this, &USeinNetSubsystem::OnComponentLiveTuningEditorRequest);
+#endif
 	if (GEngine)
 	{
 		TravelFailureHandle = GEngine->OnTravelFailure().AddUObject(
@@ -345,6 +352,14 @@ void USeinNetSubsystem::ReleaseModuleOwnedStateForModuleUnload()
 		FWorldDelegates::OnWorldCleanup.Remove(WorldCleanupHandle);
 		WorldCleanupHandle.Reset();
 	}
+#if WITH_EDITOR
+	if (ComponentLiveTuningEditorRequestHandle.IsValid())
+	{
+		SeinOnComponentLiveTuningEditorRequest().Remove(
+			ComponentLiveTuningEditorRequestHandle);
+		ComponentLiveTuningEditorRequestHandle.Reset();
+	}
+#endif
 	if (GEngine)
 	{
 		if (TravelFailureHandle.IsValid())
@@ -5278,6 +5293,86 @@ void USeinNetSubsystem::StartLockstepSession()
 	if (!BootstrapSessionFailureReason.IsEmpty()) return;
 	TryDispatchLockstepSessionStart();
 }
+
+#if WITH_EDITOR
+void USeinNetSubsystem::OnComponentLiveTuningEditorRequest(
+	const USeinEntityComponent& Source,
+	const FSeinComponentLiveTuningRequest& Payload)
+{
+	UWorld* World = GetWorld();
+	if (!World || World->WorldType != EWorldType::PIE)
+	{
+		return;
+	}
+	USeinWorldSubsystem* WorldSub =
+		World->GetSubsystem<USeinWorldSubsystem>();
+	if (!WorldSub
+		|| WorldSub->GetMatchBootstrapState()
+			!= ESeinMatchBootstrapState::Consumed
+		|| !WorldSub->IsSimulationRunning())
+	{
+		return;
+	}
+	if (ReplayReader && ReplayReader->IsPlaying())
+	{
+		UE_LOG(LogSeinNet, Warning,
+			TEXT("Ignored a PIE component edit while replay playback owns command ingress."));
+		return;
+	}
+
+	if (Payload.Scope == ESeinComponentLiveTuningScope::Entity)
+	{
+		if (IsNetworkingActive())
+		{
+			// The editor delegate is process-local. In single-process multiplayer
+			// PIE every world observes it, so the authority world submits the one
+			// canonical admin command even when the Details panel belongs to a
+			// client-world actor. Entity handles are lockstep identities.
+			if (!IsServer()) return;
+		}
+		else
+		{
+			const AActor* Owner = Source.GetOwner();
+			if (!Owner || Owner->GetWorld() != World)
+			{
+				return;
+			}
+		}
+	}
+	else if (IsNetworkingActive() && !IsServer())
+	{
+		// A Blueprint CDO has no world and broadcasts once per editor process.
+		// The authority submits the one canonical admin draft for this match;
+		// clients receive it through ordinary lockstep aggregation.
+		return;
+	}
+
+	FSeinCommand Command;
+	Command.PlayerID = LocalPlayerID;
+	Command.EntityHandle = Payload.TargetEntity;
+	Command.CommandType =
+		SeinARTSTags::Command_Type_Editor_ComponentPropertyPatch;
+	Command.SchemaVersion = 1;
+	FSeinComponentLiveTuningCommandPayload WirePayload;
+	FString EncodeError;
+	if (!SeinEncodeComponentLiveTuningRequest(
+		Payload, WirePayload, EncodeError))
+	{
+		UE_LOG(LogSeinNet, Warning,
+			TEXT("Could not encode editor ComponentData property patch: %s"),
+			*EncodeError);
+		return;
+	}
+	Command.Payload.InitializeAs<FSeinComponentLiveTuningCommandPayload>(
+		WirePayload);
+	if (!SubmitLocalCommandDraft(
+		Command, /*bRequestMatchAdministration=*/true))
+	{
+		UE_LOG(LogSeinNet, Warning,
+			TEXT("Could not queue editor ComponentData property patch for PIE."));
+	}
+}
+#endif
 
 void USeinNetSubsystem::TryDispatchLockstepSessionStart()
 {

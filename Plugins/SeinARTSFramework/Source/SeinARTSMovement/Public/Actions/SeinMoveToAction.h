@@ -319,4 +319,11 @@ private:
 
 	/** Dispatch OnMoveEnd and clear order-local movement flags exactly once. */
 	void FinalizeMovementOnce();
+
+	/** Component-owned terminal-tick refresh for authored navigation/extents or
+	 *  movement-class changes. Ordinary kinematic tuning remains live-read. */
+	void RefreshAuthoredComponentTuning(
+		USeinWorldSubsystem& World,
+		bool bRefreshMovementClass,
+		bool bForcePathRefresh);
 };

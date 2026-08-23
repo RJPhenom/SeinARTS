@@ -19,6 +19,11 @@
 #include "Movement/SeinAvoidanceDefault.h"
 #include "Settings/PluginSettings.h"
 #include "Components/SeinMovementComponent.h"
+#include "Components/SeinNavigationComponent.h"
+#include "Components/SeinExtentsComponent.h"
+#include "Abilities/SeinLatentActionManager.h"
+#include "Abilities/SeinLatentAction.h"
+#include "Simulation/SeinComponentLiveTuning.h"
 #include "SeinARTSCoreEntityLog.h"
 #include "UObject/UObjectIterator.h"
 
@@ -77,6 +82,9 @@ void USeinMovementSubsystem::Initialize(
 	Sim->OnAuthoritativeStateRestored.AddUObject(
 		this,
 		&USeinMovementSubsystem::HandleAuthoritativeStateRestored);
+	Sim->OnComponentPropertyLiveTuned.AddUObject(
+		this,
+		&USeinMovementSubsystem::HandleComponentPropertyLiveTuned);
 
 	// Observation-only crowd-jam trace (PostTick 90). Registered unconditionally on
 	// every client — it no-ops unless `log LogSeinMoveTrace Verbose` and never writes
@@ -115,6 +123,7 @@ void USeinMovementSubsystem::ReleaseModuleOwnedStateForModuleUnload()
 	if (Sim)
 	{
 		Sim->OnAuthoritativeStateRestored.RemoveAll(this);
+		Sim->OnComponentPropertyLiveTuned.RemoveAll(this);
 		// Core ignores ordinary world teardown. During DLL unload this stops a
 		// consumed match before any registered system or UObject vtable leaves.
 		Sim->TerminateAndReleaseForModuleUnload(
@@ -181,6 +190,72 @@ void USeinMovementSubsystem::HandleAuthoritativeStateRestored()
 	if (PresentationSystem)
 	{
 		PresentationSystem->ResetSamples();
+	}
+}
+
+void USeinMovementSubsystem::HandleComponentPropertyLiveTuned(
+	FSeinEntityHandle Entity,
+	const UScriptStruct& ComponentType,
+	const FSeinComponentPropertyPatch& Patch)
+{
+	const bool bMovementClassChanged =
+		&ComponentType == FSeinMovementComponent::StaticStruct()
+		&& !Patch.PropertyPath.IsEmpty()
+		&& Patch.PropertyPath[0].PropertyName
+			== GET_MEMBER_NAME_STRING_CHECKED(
+				FSeinMovementComponent, MovementClass);
+	const bool bMovementClassDataChanged =
+		&ComponentType == FSeinMovementComponent::StaticStruct()
+		&& !Patch.PropertyPath.IsEmpty()
+		&& Patch.PropertyPath[0].PropertyName
+			== GET_MEMBER_NAME_STRING_CHECKED(
+				FSeinMovementComponent, MovementClassData);
+	const bool bNavigationChanged =
+		&ComponentType == FSeinNavigationComponent::StaticStruct();
+	const bool bExtentsChanged =
+		&ComponentType == FSeinExtentsComponent::StaticStruct();
+	if (!bMovementClassChanged && !bMovementClassDataChanged
+		&& !bNavigationChanged && !bExtentsChanged)
+	{
+		return;
+	}
+
+	USeinWorldSubsystem* Sim = GetWorld()
+		? GetWorld()->GetSubsystem<USeinWorldSubsystem>()
+		: nullptr;
+	const USeinLatentActionManager* Manager =
+		Sim ? Sim->GetLatentActionManager() : nullptr;
+	if (!Sim || !Manager) return;
+
+	// A persistent movement policy also ticks while idle. Keep its reflected
+	// per-class tuning cache in sync before any active action refreshes cached
+	// footprint/path state from it.
+	if (bMovementClassDataChanged)
+	{
+		if (USeinMovement* Movement = FindMovementInstance(Entity))
+		{
+			if (const FSeinMovementComponent* MovementComponent =
+				Sim->GetComponent<FSeinMovementComponent>(Entity))
+			{
+				Movement->HydrateTuningFromData(
+					MovementComponent->MovementClassData);
+				MarkMovementStateDirty(Entity);
+			}
+		}
+	}
+
+	// Manager order is the canonical action order used by tick/snapshot/hash.
+	for (USeinLatentAction* Action : Manager->GetActiveActions())
+	{
+		USeinMoveToAction* MoveAction = Cast<USeinMoveToAction>(Action);
+		if (MoveAction && MoveAction->OwnerEntity == Entity
+			&& !MoveAction->bCompleted && !MoveAction->bCancelled)
+		{
+			MoveAction->RefreshAuthoredComponentTuning(
+				*Sim, bMovementClassChanged,
+				bMovementClassChanged || bMovementClassDataChanged
+					|| bNavigationChanged || bExtentsChanged);
+		}
 	}
 }
 

@@ -88,6 +88,8 @@ namespace SeinARTSTags
 	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Command_Type_Ping);
 	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Command_Type_BrokerOrder);
 	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Command_Type_SetPairCapability);
+	/** Editor-authored, match-admin property patch used for live PIE tuning. */
+	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Command_Type_Editor_ComponentPropertyPatch);
 
 	// In-match flow commands. State-machine transitions that don't
 	// target a specific entity — `FSeinCommand::EntityHandle` is unused.

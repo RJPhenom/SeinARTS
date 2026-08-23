@@ -1,4 +1,4 @@
-/**
+﻿/**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinWorldSubsystem.h
  * @brief   World subsystem managing the deterministic simulation.
@@ -21,6 +21,7 @@
 #include "Core/SeinTickPhase.h"
 #include "Navigation/SeinNavAgentProfile.h"
 #include "Simulation/ComponentStorage.h"
+#include "Simulation/SeinComponentLiveTuning.h"
 #include "Simulation/SeinMatchBootstrapBarrier.h"
 #include "Simulation/SeinSnapshotRestoreAuthority.h"
 #include "Serialization/SeinCanonicalInitialStateDigest.h"
@@ -41,6 +42,7 @@
 #include "SeinWorldSubsystem.generated.h"
 
 class ASeinActor;
+class USeinEntityComponent;
 class USeinFaction;
 class USeinAbility;
 class USeinCommandBrokerResolver;
@@ -60,6 +62,14 @@ class FSeinProductionSystem;
 struct FSeinActiveEffect;
 struct FSeinModifier;
 struct FSeinWorldStateRootCache;
+
+/** Opt-in secondary-state refresh seam for component-owning modules. Runs on
+ * the serial simulation spine immediately after an exact property patch. */
+DECLARE_MULTICAST_DELEGATE_ThreeParams(
+	FOnSeinComponentPropertyLiveTuned,
+	FSeinEntityHandle,
+	const UScriptStruct&,
+	const FSeinComponentPropertyPatch&);
 
 /**
  * Scratch record for an effect apply queued during a tick hook. Drained at the
@@ -1554,6 +1564,13 @@ public:
 
 	/** Reverse lookup used by exact continuation capture; INDEX_NONE if absent. */
 	int32 FindAbilityInstanceID(const USeinAbility* Ability) const;
+
+	/** Read-only access to the canonical active-action ordering for optional
+	 *  component-owned live-tuning refresh handlers. */
+	const USeinLatentActionManager* GetLatentActionManager() const
+	{
+		return LatentActionManager;
+	}
 	/** Notify the incremental canonical-root cache that reflected runtime state
 	 *  on this pooled ability may have changed. Ordinary ability callbacks call
 	 *  this automatically; custom cross-object Blueprint writes must call the
@@ -2034,6 +2051,28 @@ public:
 		const FSeinCommand& Command,
 		FGameplayTag& OutRejectionReason);
 
+	/** Canonical class-default overlay and instance-override evidence. */
+	const TArray<FSeinComponentClassDefaultPatchRecord>&
+		GetComponentLiveTuningClassDefaults() const
+	{
+		return ComponentLiveTuningClassDefaults;
+	}
+	const TArray<FSeinComponentEntityOverrideRecord>&
+		GetComponentLiveTuningEntityOverrides() const
+	{
+		return ComponentLiveTuningEntityOverrides;
+	}
+	const TArray<FSeinComponentAuthoredAbilityGrantRecord>&
+		GetComponentLiveTuningAuthoredAbilityGrants() const
+	{
+		return ComponentLiveTuningAuthoredAbilityGrants;
+	}
+
+	/** Optional modules bind here to rebuild component-owned indexes or caches.
+	 * Bindings are execution behavior and must be installed before topology
+	 * freeze on every deterministic participant. */
+	FOnSeinComponentPropertyLiveTuned OnComponentPropertyLiveTuned;
+
 	/** Get current tick's pending commands (for networking). */
 	const FSeinCommandBuffer& GetPendingCommands() const { return PendingCommands; }
 
@@ -2461,6 +2500,10 @@ private:
 	FSeinCommandBuffer PendingReplayCommands;
 	UPROPERTY(Transient)
 	TArray<FSeinCommand> PendingStandalonePauseControlCommands;
+	/** Validated commands staged by ProcessCommands and applied after every tick
+	 *  system has observed the old state. Always empty at a quiescent boundary. */
+	TArray<FSeinComponentLiveTuningRequest>
+		PendingComponentLiveTuningCommands;
 	/** Replay-only turn-boundary callback. Kept separate from the public
 	 *  read-only completion notification because it primes canonical ingress. */
 	FOnSimTickCompleted ReplayCommandBoundaryNotifier;
@@ -2512,6 +2555,22 @@ private:
 	// Entity → Blueprint class map (for actor bridge spawning)
 	UPROPERTY(Transient)
 	TMap<FSeinEntityHandle, TSubclassOf<ASeinActor>> EntityActorClassMap;
+	/** Runtime representation of the single Blueprint class-default layer. It
+	 *  exists so remote peers, replay, reconnect, and future spawns observe the
+	 *  editor's latest default without mutating a process-local UObject CDO. */
+	UPROPERTY(Transient)
+	TArray<FSeinComponentClassDefaultPatchRecord>
+		ComponentLiveTuningClassDefaults;
+	/** Persisted level overrides discovered at spawn plus transient PIE instance
+	 *  overrides. Canonical because later class-default commands consult it. */
+	UPROPERTY(Transient)
+	TArray<FSeinComponentEntityOverrideRecord>
+		ComponentLiveTuningEntityOverrides;
+	/** Authored ability grants cannot be inferred from the live component after
+	 * effects/runtime grants mutate it. Canonical and sorted by entity. */
+	UPROPERTY(Transient)
+	TArray<FSeinComponentAuthoredAbilityGrantRecord>
+		ComponentLiveTuningAuthoredAbilityGrants;
 
 	// Transient call-stack transaction metadata. Each real ownership change
 	// increments its handle revision so an outer transfer can detect recursive
@@ -2812,6 +2871,48 @@ private:
 	ECommandHandleResult TryHandleCancelAbilityCommand(const FSeinCommand& Command);
 	ECommandHandleResult TryHandleCancelProductionCommand(const FSeinCommand& Command);
 	ECommandHandleResult TryHandleSetPairCapabilityCommand(const FSeinCommand& Command);
+	ECommandHandleResult TryHandleComponentLiveTuningCommand(
+		const FSeinCommand& Command,
+		FGameplayTag& OutRejectionReason);
+	void ApplyPendingComponentLiveTuningCommands();
+	bool ApplyComponentPropertyPatchToEntity(
+		FSeinEntityHandle Entity,
+		const FSeinComponentPropertyPatch& Patch,
+		FString& OutError,
+		bool bRefreshSecondaryState = true);
+	void RecordPlacedActorComponentOverrides(
+		FSeinEntityHandle Entity,
+		const USeinEntityComponent& InstanceBridge,
+		const USeinEntityComponent& ClassDefaultBridge);
+	/** Nearest-derived-first record for PatchKey along EntityClass's static
+	 *  class chain, or null when no class on the chain has one. */
+	bool HasComponentForPatch(
+		FSeinEntityHandle Entity,
+		const FSeinComponentPropertyPatch& Patch) const;
+	const FSeinComponentClassDefaultPatchRecord* ResolveEffectiveClassOverlay(
+		const UClass* EntityClass,
+		const FString& PatchKey) const;
+	void ApplyComponentClassDefaultOverlaysToEntity(
+		FSeinEntityHandle Entity,
+		const UClass* ActorClass);
+	void RecordAuthoredAbilityGrants(FSeinEntityHandle Entity);
+	bool ApplyAuthoredAbilityGrantPatch(
+		FSeinEntityHandle Entity,
+		const TArray<TSubclassOf<USeinAbility>>& NewAuthoredAbilities,
+		FString& OutError);
+	/** Canonical-order binary search over ComponentLiveTuningEntityOverrides.
+	 *  Returns the insertion slot and reports whether the key already exists. */
+	int32 FindComponentPropertyInstanceOverrideSlot(
+		FSeinEntityHandle Entity,
+		const FString& Key,
+		bool& bOutExists) const;
+	bool HasComponentPropertyInstanceOverride(
+		FSeinEntityHandle Entity,
+		const FSeinComponentPropertyPatch& Patch) const;
+	void SetComponentPropertyInstanceOverride(
+		FSeinEntityHandle Entity,
+		const FSeinComponentPropertyPatch& Patch,
+		bool bOverridden);
 	void ProcessDeferredDestroys();
 	void SeedTeamPairCapabilitiesForPlayer(FSeinPlayerID PlayerID);
 	void RebuildPairCapabilityEffectiveCache();

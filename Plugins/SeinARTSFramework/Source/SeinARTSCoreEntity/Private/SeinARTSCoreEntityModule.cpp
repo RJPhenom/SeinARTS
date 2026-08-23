@@ -1,4 +1,4 @@
-/**
+﻿/**
  * SeinARTS Framework 
  * Copyright (c) 2026 Phenom Studios, Inc.
  *
@@ -30,6 +30,7 @@
 #include "Effects/SeinEffect.h"
 #include "Formations/SeinFormation.h"
 #include "Input/SeinBuiltInCommandHandler.h"
+#include "Simulation/SeinComponentLiveTuning.h"
 #include "Input/SeinCommandAuthorityPolicy.h"
 #include "Settings/PluginSettings.h"
 #include "Simulation/SeinCanonicalStateRecipe.h"
@@ -66,6 +67,26 @@ static TAutoConsoleVariable<int32> CVarSeinLogStateHash(
 	ECVF_Default);
 
 // One-shot compatibility command for the incomplete local fingerprint.
+/** Dump the exact config-fingerprint source text, one token per line, so a
+ *  host/client mismatch can be diffed instead of guessed at. */
+static FAutoConsoleCommand CmdSeinDumpConfigFingerprint(
+	TEXT("Sein.Config.DumpFingerprint"),
+	TEXT("Log the lockstep config fingerprint and the exact text it hashes."),
+	FConsoleCommandDelegate::CreateLambda([]()
+	{
+		const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
+		if (!Settings) return;
+		const FString Source = Settings->BuildConfigFingerprintSource();
+		UE_LOG(LogTemp, Display, TEXT("[ConfigFingerprint] 0x%08x (%d chars)"),
+			static_cast<uint32>(FCrc::StrCrc32(*Source)), Source.Len());
+		TArray<FString> Tokens;
+		Source.ParseIntoArray(Tokens, TEXT(";"), /*CullEmpty=*/true);
+		for (const FString& Token : Tokens)
+		{
+			UE_LOG(LogTemp, Display, TEXT("[ConfigFingerprint]   %s"), *Token);
+		}
+	}));
+
 static FAutoConsoleCommandWithWorldAndArgs CmdSeinDumpStateHash(
 	TEXT("Sein.Sim.StateHash"),
 	TEXT("Log the legacy local state fingerprint once. Not valid for peer or fresh-process comparison."),
@@ -342,7 +363,7 @@ namespace
 
 	const FName BuiltInCommandSchemaOwner(TEXT("SeinARTSCoreEntity.Commands"));
 	// Bump whenever built-in command semantics change without a wire-shape change.
-	constexpr int32 BuiltInCommandImplementationRevision = 4;
+	constexpr int32 BuiltInCommandImplementationRevision = 5;
 
 	constexpr int32 AllCommandExecutionAllowances =
 		static_cast<int32>(ESeinCommandExecutionAllowance::Spectator)
@@ -597,6 +618,15 @@ void FSeinARTSCoreEntity::StartupModule()
 		{ TEXT("SeinARTS.Core.Command.SetPairCapability.V1"), SeinARTSTags::Command_Type_SetPairCapability,
 			FSeinSetPairCapabilityCommandPayload::StaticStruct(), ESeinCommandAuthorityScope::MatchControl,
 			0, 0, 256, 0, AllCommandExecutionAllowances },
+		// Registered in every build on purpose. The schema set feeds the canonical
+		// command-protocol digest, which is stamped into world-state root identity,
+		// snapshot envelopes, and replay headers; an editor-only entry would give
+		// editor and packaged builds different digests and break editor-host /
+		// packaged-client sessions plus cross-build artifact loading. Authoring is
+		// gated instead: only WITH_EDITOR compiles the delegate that can produce one.
+		{ TEXT("SeinARTS.Core.Command.Editor.ComponentPropertyPatch.V1"), SeinARTSTags::Command_Type_Editor_ComponentPropertyPatch,
+			FSeinComponentLiveTuningCommandPayload::StaticStruct(), ESeinCommandAuthorityScope::MatchControl,
+			0, 0, 72 * 1024, 64 * 1024, 0 },
 
 		{ TEXT("SeinARTS.Core.Command.PauseMatchRequest.V1"), SeinARTSTags::Command_Type_PauseMatchRequest,
 			nullptr, ESeinCommandAuthorityScope::Self, 0, 0, 0, 0, ActiveParticipantControlAllowances },
