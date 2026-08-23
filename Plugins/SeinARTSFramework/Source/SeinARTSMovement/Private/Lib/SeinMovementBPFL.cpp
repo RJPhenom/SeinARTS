@@ -4,6 +4,7 @@
  */
 
 #include "Lib/SeinMovementBPFL.h"
+#include "Actor/SeinActor.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Simulation/SeinWorldSubsystem.h"
@@ -93,6 +94,22 @@ USeinWorldSubsystem* USeinMovementBPFL::GetWorldSubsystem(const UObject* WorldCo
 	if (!WorldContextObject) return nullptr;
 	UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::ReturnNull);
 	return World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
+}
+
+bool USeinMovementBPFL::SeinGetAnimationMovementState(const UObject* WorldContextObject, AActor* Actor, FSeinMovementStateData& OutState)
+{
+	OutState = FSeinMovementStateData{};
+
+	ASeinActor* SeinActor = Cast<ASeinActor>(Actor);
+	if (!SeinActor)
+	{
+		UE_LOG(LogSeinMovementBPFL, Error,
+			TEXT("GetAnimationMovementState: Actor '%s' is not an ASeinActor."),
+			Actor ? *Actor->GetName() : TEXT("null"));
+		return false;
+	}
+
+	return SeinGetMovementState(WorldContextObject, SeinActor->GetEntityHandle(), OutState);
 }
 
 bool USeinMovementBPFL::SeinGetMovementState(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, FSeinMovementStateData& OutState)
