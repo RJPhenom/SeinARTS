@@ -4,9 +4,11 @@
  * @file         SeinCombatTargetIndex.h
  * @author       RJ Macklem
  * @created      21 Aug 2026
- * @latest       21 Aug 2026
+ * @latest       23 Aug 2026
  * @brief        Declares the derived spatial index used to prefilter target
  *               acquisition candidates without changing query semantics.
+ *               Membership is every live entity; which of them are targets is
+ *               the query's (and the scorer's) business.
  *
  * @disclaimer   This code was generated in whole or in part with the assistance
  *               of an AI language model.
@@ -53,6 +55,5 @@ private:
 	mutable TArray<FCellEntry> Entries;
 	mutable uint64 EntityTopologyRevision = 0;
 	mutable uint64 EntityMutationRevision = 0;
-	mutable uint64 VitalsTopologyRevision = 0;
 	mutable bool bValid = false;
 };

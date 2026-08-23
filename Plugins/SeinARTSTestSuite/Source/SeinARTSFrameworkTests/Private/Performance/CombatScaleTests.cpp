@@ -1,23 +1,22 @@
 #include "CQTest.h"
 #include "Components/ActorTestSpawner.h"
 
-#include "Abilities/SeinAbility_Attack.h"
 #include "Actions/SeinMoveToAction.h"
 #include "Combat/SeinTargetQueryService.h"
 #include "Components/SeinAbilityComponent.h"
 #include "Components/SeinExtentsComponent.h"
 #include "Components/SeinMovementComponent.h"
 #include "Components/SeinNavigationComponent.h"
-#include "Components/SeinVitalsComponent.h"
-#include "Components/SeinWeaponComponent.h"
 #include "HAL/PlatformTime.h"
 #include "Lib/SeinAbilityBPFL.h"
+#include "Lib/SeinSimMutationBPFL.h"
 #include "Movement/SeinBasicUnitMovement.h"
 #include "SeinNavigation.h"
 #include "SeinNavigationSubsystem.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
 #include "Simulation/SeinTestSimContext.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "TestTypes/SeinCombatTestTypes.h"
 #include "TestTypes/SeinLevelDataTestTypes.h"
 #include "TestTypes/SeinMoveToLifecycleTestTypes.h"
 
@@ -282,16 +281,17 @@ namespace UE::SeinARTSTests
 			return true;
 		}
 
-		struct FArmedPopulationMeasurement
+		struct FAcquisitionPopulationMeasurement
 		{
 			double WarmAcquisitionMedianMilliseconds = 0.0;
 			double RebuiltAcquisitionMedianMilliseconds = 0.0;
+			double EngagementBatchMedianMilliseconds = 0.0;
 			double ActiveTickMedianMilliseconds = 0.0;
 			int32 AcquiredTargets = 0;
 			int32 DamagedUnits = 0;
 		};
 
-		FFixedVector ArmedBlockPosition(
+		FFixedVector AcquisitionBlockPosition(
 			int32 IndexInBlock, bool bEastBlock)
 		{
 			return FFixedVector(
@@ -300,9 +300,15 @@ namespace UE::SeinARTSTests
 				FFixedPoint::Zero);
 		}
 
-		bool MeasureArmedPopulation(
+		// Designer-style engagement at scale: every unit carries a game-authored
+		// vitals struct, acquires through the framework query, then each "shot"
+		// is the verb toolkit the framework actually ships — Check Target on the
+		// held target followed by Apply Field Delta on the designer's health
+		// field. No framework weapon, damage, or projectile system exists to
+		// measure; this IS the per-hit cost a game pays.
+		bool MeasureAcquisitionPopulation(
 			int32 Population,
-			FArmedPopulationMeasurement& OutMeasurement,
+			FAcquisitionPopulationMeasurement& OutMeasurement,
 			FString& OutError)
 		{
 			FActorTestSpawner Spawner;
@@ -311,7 +317,7 @@ namespace UE::SeinARTSTests
 				UnrealWorld.GetSubsystem<USeinWorldSubsystem>();
 			if (!World)
 			{
-				OutError = TEXT("Armed scale world lacked a simulation.");
+				OutError = TEXT("Acquisition scale world lacked a simulation.");
 				return false;
 			}
 
@@ -320,9 +326,7 @@ namespace UE::SeinARTSTests
 			const int32 BlockCount = Population / 2;
 			const FFixedPoint StartingHealth = FFixedPoint::FromInt(1000000);
 			TArray<FSeinEntityHandle> Handles;
-			TArray<int32> AttackAbilityIDs;
 			Handles.Reserve(Population);
-			AttackAbilityIDs.Reserve(Population);
 			bool bAuthoringSucceeded = true;
 			const auto AuthorState = [&]()
 			{
@@ -333,7 +337,7 @@ namespace UE::SeinARTSTests
 					const bool bEast = Index >= BlockCount;
 					const int32 InBlock = bEast ? Index - BlockCount : Index;
 					const FSeinEntityHandle Handle = World->SpawnAbstractEntity(
-						FFixedTransform(ArmedBlockPosition(InBlock, bEast)),
+						FFixedTransform(AcquisitionBlockPosition(InBlock, bEast)),
 						bEast ? EastPlayer : WestPlayer);
 					if (!Handle.IsValid())
 					{
@@ -353,23 +357,10 @@ namespace UE::SeinARTSTests
 					Extents.ObjectType.Channel = FName(TEXT("Default"));
 					World->AddComponent(Handle, Extents);
 
-					FSeinVitalsComponent Vitals;
+					FSeinTestVitalsComponent Vitals;
 					Vitals.MaxHealth = StartingHealth;
 					Vitals.Health = StartingHealth;
 					World->AddComponent(Handle, Vitals);
-
-					FSeinWeaponSlot Slot;
-					Slot.Range = FFixedPoint::FromInt(1500);
-					Slot.CooldownSeconds = FFixedPoint::Zero;
-					Slot.bRequireLineOfSight = false;
-					Slot.Payload.BaseDamage = FFixedPoint::One;
-					FSeinWeaponComponent Weapons;
-					Weapons.Weapons.Add(Slot);
-					World->AddComponent(Handle, Weapons);
-
-					World->AddComponent(Handle, FSeinAbilityComponent());
-					AttackAbilityIDs.Add(USeinAbilityBPFL::SeinGrantAbility(
-						World, Handle, USeinAbility_Attack::StaticClass()));
 					Handles.Add(Handle);
 				}
 			};
@@ -379,16 +370,15 @@ namespace UE::SeinARTSTests
 					AuthorState,
 					FSeinMatchSettings(),
 					0x41524D44,
-					TEXT("SeinARTS.CombatScale.Armed"),
+					TEXT("SeinARTS.CombatScale.Acquisition"),
 					&OutError)
 				|| !bAuthoringSucceeded
 				|| Handles.Num() != Population
-				|| AttackAbilityIDs.Num() != Population
 				|| !SeinTestMatchBootstrap::Start(*World, &OutError))
 			{
 				if (OutError.IsEmpty())
 				{
-					OutError = TEXT("Could not materialize the armed scale workload.");
+					OutError = TEXT("Could not materialize the acquisition scale workload.");
 				}
 				return false;
 			}
@@ -396,10 +386,22 @@ namespace UE::SeinARTSTests
 			if (!FSeinWorldSubsystemTestAccess::TickSimulation(
 					*World, World->GetFixedDeltaTimeSeconds()))
 			{
-				OutError = TEXT("Armed scale seed tick lost the scheduler.");
+				OutError = TEXT("Acquisition scale seed tick lost the scheduler.");
 				World->StopSimulation();
 				return false;
 			}
+
+			const auto MakeQuery = [&](FSeinEntityHandle Instigator)
+			{
+				FSeinTargetQuery Query;
+				Query.Instigator = Instigator;
+				Query.Range = FFixedPoint::FromInt(1500);
+				Query.bRequireLineOfSight = false;
+				Query.MaxResults = 1;
+				Query.RequiredComponent =
+					FSeinTestVitalsComponent::StaticStruct();
+				return Query;
+			};
 
 			TArray<FSeinEntityHandle> Targets;
 			Targets.SetNum(Population);
@@ -409,13 +411,8 @@ namespace UE::SeinARTSTests
 				int32 AcquiredTargets = 0;
 				for (int32 Index = 0; Index < Population; ++Index)
 				{
-					FSeinTargetQuery Query;
-					Query.Instigator = Handles[Index];
-					Query.Range = FFixedPoint::FromInt(1500);
-					Query.bRequireLineOfSight = false;
-					Query.MaxResults = 1;
 					FSeinTargetQueryService::FindTargets(
-						*World, Query, Candidates);
+						*World, MakeQuery(Handles[Index]), Candidates);
 					if (Candidates.Num() == 1)
 					{
 						Targets[Index] = Candidates[0].Target;
@@ -452,7 +449,7 @@ namespace UE::SeinARTSTests
 						FSeinEntity* Entity = World->GetEntityMutable(Handle);
 						if (!Entity)
 						{
-							OutError = TEXT("Armed scale position invalidation lost an entity.");
+							OutError = TEXT("Acquisition scale position invalidation lost an entity.");
 							World->StopSimulation();
 							return false;
 						}
@@ -470,33 +467,57 @@ namespace UE::SeinARTSTests
 			if (OutMeasurement.AcquiredTargets != Population)
 			{
 				OutError = FString::Printf(
-					TEXT("Armed scale acquisition found %d/%d targets."),
+					TEXT("Acquisition scale found %d/%d targets."),
 					OutMeasurement.AcquiredTargets, Population);
 				World->StopSimulation();
 				return false;
 			}
 
-			{
-				auto SimScope = FSeinSimContextTestAccess::Enter(*World);
-				for (int32 Index = 0; Index < Population; ++Index)
-				{
-					USeinAbility* Ability =
-						World->GetAbilityInstance(AttackAbilityIDs[Index]);
-					if (!Ability
-						|| !Ability->ActivateAbility(
-							Targets[Index], FFixedVector::ZeroVector))
-					{
-						OutError = TEXT("Armed scale attack activation failed.");
-						World->StopSimulation();
-						return false;
-					}
-				}
-			}
-
+			// Engagement batches: every unit checks its held target and lands
+			// one unit of damage through the generic stat verb, then the sim
+			// advances one tick so the cost of a populated world with live
+			// component mutation is measured too.
+			TArray<double> EngagementBatchTimings;
 			TArray<double> ActiveTickTimings;
+			EngagementBatchTimings.Reserve(TimedSamples);
 			ActiveTickTimings.Reserve(TimedSamples);
+			const FName HealthField(TEXT("Health"));
 			for (int32 Sample = 0; Sample < TimedSamples; ++Sample)
 			{
+				{
+					auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+					const double BatchStartedAt = FPlatformTime::Seconds();
+					for (int32 Index = 0; Index < Population; ++Index)
+					{
+						FSeinTargetCandidate Candidate;
+						if (FSeinTargetQueryService::CheckTarget(
+								*World, MakeQuery(Handles[Index]),
+								Targets[Index], Candidate)
+							!= ESeinTargetCheckResult::Eligible)
+						{
+							OutError = TEXT("Acquisition scale held target became ineligible.");
+							World->StopSimulation();
+							return false;
+						}
+						FFixedPoint NewValue;
+						bool bChanged = false, bAtMin = false, bAtMax = false;
+						if (!USeinSimMutationBPFL::SeinApplyFieldDelta(
+								World, Targets[Index],
+								FSeinTestVitalsComponent::StaticStruct(),
+								HealthField, -FFixedPoint::One,
+								/*bClampMin=*/true, FFixedPoint::Zero,
+								/*bClampMax=*/true, StartingHealth,
+								NewValue, bChanged, bAtMin, bAtMax)
+							|| !bChanged)
+						{
+							OutError = TEXT("Acquisition scale field delta did not apply.");
+							World->StopSimulation();
+							return false;
+						}
+					}
+					EngagementBatchTimings.Add(
+						(FPlatformTime::Seconds() - BatchStartedAt) * 1000.0);
+				}
 				const int32 TickBefore = World->GetCurrentTick();
 				const double StartedAt = FPlatformTime::Seconds();
 				const bool bSchedulerRetained =
@@ -507,7 +528,7 @@ namespace UE::SeinARTSTests
 				if (!bSchedulerRetained
 					|| World->GetCurrentTick() != TickBefore + 1)
 				{
-					OutError = TEXT("Armed scale sample did not advance one tick.");
+					OutError = TEXT("Acquisition scale sample did not advance one tick.");
 					World->StopSimulation();
 					return false;
 				}
@@ -515,8 +536,8 @@ namespace UE::SeinARTSTests
 
 			for (const FSeinEntityHandle Handle : Handles)
 			{
-				const FSeinVitalsComponent* Vitals =
-					World->GetComponent<FSeinVitalsComponent>(Handle);
+				const FSeinTestVitalsComponent* Vitals =
+					World->GetComponent<FSeinTestVitalsComponent>(Handle);
 				if (Vitals && Vitals->Health < StartingHealth)
 				{
 					++OutMeasurement.DamagedUnits;
@@ -526,12 +547,15 @@ namespace UE::SeinARTSTests
 
 			WarmAcquisitionTimings.Sort();
 			RebuiltAcquisitionTimings.Sort();
+			EngagementBatchTimings.Sort();
 			ActiveTickTimings.Sort();
 			OutMeasurement.WarmAcquisitionMedianMilliseconds =
 				WarmAcquisitionTimings[WarmAcquisitionTimings.Num() / 2];
 			OutMeasurement.RebuiltAcquisitionMedianMilliseconds =
 				RebuiltAcquisitionTimings[
 					RebuiltAcquisitionTimings.Num() / 2];
+			OutMeasurement.EngagementBatchMedianMilliseconds =
+				EngagementBatchTimings[EngagementBatchTimings.Num() / 2];
 			OutMeasurement.ActiveTickMedianMilliseconds =
 				ActiveTickTimings[ActiveTickTimings.Num() / 2];
 			return true;
@@ -559,23 +583,24 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(Medians[2] < 150.0));
 	}
 
-	TEST(ArmedCombatHasMeasuredPopulationCurve,
-		"SeinARTS.Perf.Combat.ArmedScale")
+	TEST(AcquisitionAndEngagementHaveMeasuredPopulationCurve,
+		"SeinARTS.Perf.Combat.AcquisitionScale")
 	{
 		using namespace CombatScaleTestLocal;
 		const int32 Populations[] = {300, 500, 1000};
-		FArmedPopulationMeasurement Measurements[
+		FAcquisitionPopulationMeasurement Measurements[
 			UE_ARRAY_COUNT(Populations)];
 		for (int32 Index = 0; Index < UE_ARRAY_COUNT(Populations); ++Index)
 		{
 			FString Error;
-			ASSERT_THAT(IsTrue(MeasureArmedPopulation(
+			ASSERT_THAT(IsTrue(MeasureAcquisitionPopulation(
 				Populations[Index], Measurements[Index], Error)));
 			UE_LOG(LogTemp, Display,
-				TEXT("Armed combat at %d units: warm acquisition %.3f ms, rebuilt acquisition %.3f ms, active tick %.3f ms, acquired %d, damaged %d"),
+				TEXT("Combat toolkit at %d units: warm acquisition %.3f ms, rebuilt acquisition %.3f ms, engagement batch %.3f ms, active tick %.3f ms, acquired %d, damaged %d"),
 				Populations[Index],
 				Measurements[Index].WarmAcquisitionMedianMilliseconds,
 				Measurements[Index].RebuiltAcquisitionMedianMilliseconds,
+				Measurements[Index].EngagementBatchMedianMilliseconds,
 				Measurements[Index].ActiveTickMedianMilliseconds,
 				Measurements[Index].AcquiredTargets,
 				Measurements[Index].DamagedUnits);
@@ -586,11 +611,14 @@ namespace UE::SeinARTSTests
 		}
 
 		// The full 1,000-unit acquisition batch, including a derived-index
-		// rebuild after canonical movement, must leave headroom in a 30 Hz turn.
+		// rebuild after canonical movement, must leave headroom in a 30 Hz
+		// turn; so must 1,000 check-then-damage verb pairs.
 		ASSERT_THAT(IsTrue(
 			Measurements[2].WarmAcquisitionMedianMilliseconds < 25.0));
 		ASSERT_THAT(IsTrue(
 			Measurements[2].RebuiltAcquisitionMedianMilliseconds < 30.0));
+		ASSERT_THAT(IsTrue(
+			Measurements[2].EngagementBatchMedianMilliseconds < 15.0));
 		ASSERT_THAT(IsTrue(
 			Measurements[2].ActiveTickMedianMilliseconds < 10.0));
 	}

@@ -27,12 +27,10 @@ namespace SeinSystemPriority
 	inline constexpr int32 Avoidance           = 6;
 	inline constexpr int32 NavBlockerStamp     = 7;
 	inline constexpr int32 CooldownTick        = 10;
-	inline constexpr int32 WeaponCycle         = 11;
 
 	// ── AbilityExecution ──
 	inline constexpr int32 AbilityTick      = 0;
 	inline constexpr int32 MovementDriver   = 10;
-	inline constexpr int32 ProjectileFlight = 20;
 	inline constexpr int32 Production       = 50;
 
 	// PostTick

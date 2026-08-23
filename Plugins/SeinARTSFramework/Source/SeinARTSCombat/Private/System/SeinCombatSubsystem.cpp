@@ -4,8 +4,8 @@
  * @file         SeinCombatSubsystem.cpp
  * @author       RJ Macklem
  * @created      16 Aug 2026
- * @latest       21 Aug 2026
- * @brief        Implements Combat system hosting and target-index lifecycle.
+ * @latest       23 Aug 2026
+ * @brief        Implements the Combat target-index lifecycle.
  *
  * @disclaimer   This code was generated in whole or in part with the assistance
  *               of an AI language model.
@@ -15,8 +15,6 @@
 
 #include "Engine/World.h"
 #include "Simulation/SeinWorldSubsystem.h"
-#include "System/SeinProjectileSystem.h"
-#include "System/SeinWeaponCycleSystem.h"
 
 void USeinCombatSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
@@ -69,12 +67,4 @@ void USeinCombatSubsystem::ReleaseModuleOwnedStateForModuleUnload()
 	check(IsInGameThread());
 	ReleaseModuleOwnedState();
 	ReleaseHostedSystemsForModuleUnload();
-}
-
-void USeinCombatSubsystem::CreateSystems(
-	USeinWorldSubsystem& /*Sim*/,
-	TArray<TUniquePtr<ISeinSystem>>& OutSystems)
-{
-	OutSystems.Add(MakeUnique<FSeinWeaponCycleSystem>());
-	OutSystems.Add(MakeUnique<FSeinProjectileSystem>());
 }

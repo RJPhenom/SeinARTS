@@ -1,22 +1,38 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinCombatMutationBPFL.cpp
- * @brief   Restricted combat mutation front doors — every call passes the
- *          sim-authorization gate before touching state.
+ * @brief   Restricted combat notification front doors — every call passes
+ *          the sim-authorization gate so presentation events stay ordered
+ *          with the tick that produced them.
  */
 
 #include "Lib/SeinCombatMutationBPFL.h"
-#include "Combat/SeinCombatDamage.h"
-#include "Combat/SeinWeaponFire.h"
-#include "Components/SeinVitalsComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Events/SeinVisualEvent.h"
 #include "Simulation/SeinWorldSubsystem.h"
-#include "Tags/SeinCombatGameplayTags.h"
 
 namespace
 {
+	/** Notifications follow the pool's live-only contract (tombstones of
+	 *  entities destroyed earlier this tick are deliberately not readable by
+	 *  ordinary lookups). A refused handle is therefore an ORDERING mistake
+	 *  in the calling graph — Notify Death must precede Destroy Entity — so say
+	 *  so instead of failing silently. */
+	bool RequireLiveForNotification(
+		const USeinWorldSubsystem& Sim, FSeinEntityHandle Handle,
+		const TCHAR* Operation)
+	{
+		if (Sim.IsEntityAlive(Handle))
+		{
+			return true;
+		}
+		UE_LOG(LogTemp, Warning,
+			TEXT("%s: entity %s is not alive; call combat notifications BEFORE Destroy Entity."),
+			Operation, *Handle.ToString());
+		return false;
+	}
+
 	USeinWorldSubsystem* GetAuthorizedSim(
 		const UObject* WorldContextObject, const TCHAR* Operation)
 	{
@@ -34,63 +50,62 @@ namespace
 	}
 }
 
-bool USeinCombatMutationBPFL::SeinFireWeaponAt(
-	const UObject* WorldContextObject,
-	FSeinEntityHandle Shooter,
-	int32 WeaponIndex,
-	FSeinEntityHandle Target)
-{
-	USeinWorldSubsystem* Sim =
-		GetAuthorizedSim(WorldContextObject, TEXT("FireWeaponAt"));
-	return Sim
-		&& FSeinWeaponFire::TryFireWeaponAt(
-			*Sim, Shooter, WeaponIndex, Target)
-			== ESeinWeaponFireResult::Fired;
-}
-
-FFixedPoint USeinCombatMutationBPFL::SeinApplyDamage(
+bool USeinCombatMutationBPFL::SeinNotifyDamageApplied(
 	const UObject* WorldContextObject,
 	FSeinEntityHandle Target,
-	FSeinEntityHandle Instigator,
-	const FSeinDamagePayload& Payload)
+	FSeinEntityHandle Source,
+	FFixedPoint Amount,
+	FGameplayTag DamageType)
 {
 	USeinWorldSubsystem* Sim =
-		GetAuthorizedSim(WorldContextObject, TEXT("ApplyDamage"));
-	if (!Sim)
+		GetAuthorizedSim(WorldContextObject, TEXT("NotifyDamageApplied"));
+	if (!Sim || !RequireLiveForNotification(
+			*Sim, Target, TEXT("NotifyDamageApplied")))
 	{
-		return FFixedPoint::Zero;
+		return false;
 	}
-	return FSeinCombatDamage::ApplyDamage(
-		*Sim, Target, Instigator, Payload);
+	Sim->EnqueueVisualEvent(FSeinVisualEvent::MakeDamageAppliedEvent(
+		Target, Source, Amount, DamageType));
+	return true;
 }
 
-FFixedPoint USeinCombatMutationBPFL::SeinApplyHeal(
+bool USeinCombatMutationBPFL::SeinNotifyHealApplied(
 	const UObject* WorldContextObject,
 	FSeinEntityHandle Target,
-	FSeinEntityHandle Instigator,
-	FFixedPoint Amount)
+	FSeinEntityHandle Source,
+	FFixedPoint Amount,
+	FGameplayTag HealType)
 {
 	USeinWorldSubsystem* Sim =
-		GetAuthorizedSim(WorldContextObject, TEXT("ApplyHeal"));
-	if (!Sim || Amount <= FFixedPoint::Zero
-		|| !Sim->IsEntityAlive(Target))
+		GetAuthorizedSim(WorldContextObject, TEXT("NotifyHealApplied"));
+	if (!Sim || !RequireLiveForNotification(
+			*Sim, Target, TEXT("NotifyHealApplied")))
 	{
-		return FFixedPoint::Zero;
+		return false;
 	}
-	FSeinVitalsComponent* Vitals =
-		Sim->GetComponentMutable<FSeinVitalsComponent>(Target);
-	if (!Vitals || Vitals->Health <= FFixedPoint::Zero)
+	Sim->EnqueueVisualEvent(FSeinVisualEvent::MakeHealAppliedEvent(
+		Target, Source, Amount, HealType));
+	return true;
+}
+
+bool USeinCombatMutationBPFL::SeinNotifyDeath(
+	const UObject* WorldContextObject,
+	FSeinEntityHandle Dying,
+	FSeinEntityHandle Killer)
+{
+	USeinWorldSubsystem* Sim =
+		GetAuthorizedSim(WorldContextObject, TEXT("NotifyDeath"));
+	if (!Sim || !RequireLiveForNotification(*Sim, Dying, TEXT("NotifyDeath")))
 	{
-		return FFixedPoint::Zero;
+		return false;
 	}
-	const FFixedPoint Headroom = Vitals->MaxHealth - Vitals->Health;
-	const FFixedPoint Restored = Amount < Headroom ? Amount : Headroom;
-	if (Restored > FFixedPoint::Zero)
+	Sim->EnqueueVisualEvent(FSeinVisualEvent::MakeDeathEvent(Dying, Killer));
+	// Kill attribution needs a live killer (owner lookups are live-only);
+	// an invalid or already-destroyed killer simply yields no kill-feed entry.
+	if (Sim->IsEntityAlive(Killer))
 	{
-		Vitals->Health = Vitals->Health + Restored;
-		Sim->EnqueueVisualEvent(FSeinVisualEvent::MakeHealAppliedEvent(
-			Target, Instigator, Restored,
-			SeinCombatTags::Combat_Damage_Default));
+		Sim->EnqueueVisualEvent(FSeinVisualEvent::MakeKillEvent(
+			Killer, Dying, Sim->GetEntityOwner(Killer)));
 	}
-	return Restored;
+	return true;
 }

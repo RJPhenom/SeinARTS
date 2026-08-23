@@ -81,7 +81,10 @@ isolates one world's exact production pump and proves every mover is present in 
 broadphase; it is not a replacement for a moving-combat Insights capture with presentation.
 
 **UE 5.8 armed-combat acquisition qualification:** 2026-08-21, Framework-profile run
-`SeinARTS.Perf.Combat.ArmedScale-20260821-202608-62f72649`. Two opposing one-to-one lanes of
+`SeinARTS.Perf.Combat.ArmedScale-20260821-202608-62f72649` (suite since renamed
+`SeinARTS.Perf.Combat.AcquisitionScale` by the 2026-08-23 verb-only combat re-cut; re-run under
+that name — 2026-08-23 All-profile: warm 3.198/5.242/10.705 ms, rebuilt 3.217/5.284/10.581 ms,
+1,000-unit Check Target + Apply Field Delta batch 1.446 ms). Two opposing one-to-one lanes of
 300/500/1,000 real vitals-bearing, weapon-bearing entities produced warm acquisition medians of
 3.207/5.607/11.293 ms, position-invalidated rebuild medians of 3.336/5.416/11.096 ms, and active
 firing-tick medians of 0.540/0.819/1.569 ms. Every entity acquired and damaged a target. Before

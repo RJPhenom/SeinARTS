@@ -307,7 +307,65 @@ Gates after both rulings: Unit 477 / Sim 57 / Determinism 48 / Integration 26 (A
 envelope suite 5/5 with regenerated frozen bytes, fresh-process serial/parallel A/B 120/120.
 NOTE for PIE: pre-v17 saved snapshots/replays fail closed against this branch (intended).
 
-### Combat substrate module and scale qualification (2026-08-21, latest)
+### Combat verb-only re-cut (2026-08-23, latest)
+
+RJ reassessed the 2026-08-16 combat substrate and ruled it **overbaked**: it shipped a schema
+(Health/MaxHealth/Armor/Regen, weapon slots with range/arc/cooldown/magazine/reload, a fire gate,
+a homing projectile system, a damage-formula seam, zero-health-always-dies) where the framework
+everywhere else ships mechanisms and leaves the nouns to designers. He agreed to (1) delete the
+schema and (2) keep only verbs, was uncertain on (3) a generic projectile-flight mechanism and
+(4) folding the module — both taken least-regret: no new flight mechanism (deferred), module kept
+(RJ had already ruled combat is a framework-root module). Re-cut, branch `claude/combat-verb-recut`:
+
+- **Deleted**: `FSeinVitalsComponent`, `FSeinWeaponComponent`/`FSeinWeaponSlot`,
+  `FSeinProjectileComponent`, `FSeinWeaponCycleSystem` (PreTick 11), `FSeinProjectileSystem`
+  (AbilityExecution 20), `FSeinWeaponFire`, `FSeinCombatDamage`, `USeinDamageFormula`,
+  `USeinAbility_Attack`, `FSeinDamagePayload`, `ESeinWeaponDelivery`, the `SeinARTS.Combat.Damage.*`
+  / `.Armor.*` native tags, and the two `SeinSystemPriority` slots. Combat hosts no tick systems.
+- **Kept**: `FSeinTargetQueryService` + the derived `FSeinCombatTargetIndex` (now indexes every
+  live entity; vitals sentinel dropped), `USeinTargetScorer`, the read/restricted-mutation BPFL
+  split, the stateless-CDO validator (scorer-only), `FSeinTargetQuery`/`FSeinTargetCandidate`.
+- **Added verbs**: `FSeinTargetQuery.RequiredComponent` (designer's "things with MY vitals struct"
+  gate; None = every live entity); **Check Target** (`ESeinTargetCheckResult`: one gate chain
+  shared with Find Targets — alive → component → range → arc → tags → fog LoS → scorer —
+  reporting the first failing gate, with a test-enforced agreement contract); **Apply Field Delta**
+  in `USeinSimMutationBPFL` (saturating add on any `FFixedPoint` field of any component, with
+  opt-in `bClampMin`/`MinValue` + `bClampMax`/`MaxValue` — red-team caught that bare Min/Max
+  pins default to 0/0 in Blueprint and would silently zero the field; no-op never dirties the
+  mutation revision; outputs `NewValue`/`bChanged`/`bAtMin`/`bAtMax`;
+  `FSeinAttributeResolver::FindFieldProperty` now also resolves UDS fields by authored name,
+  normalized through the struct editor's own stem sanitizer so editor and cooked builds agree);
+  **Notify Damage Applied / Notify Heal Applied / Notify Death** (restricted to Ability/Effect;
+  enqueue the existing DamageApplied/HealApplied/Death/Kill visual events so designer-resolved
+  outcomes still reach `On Damage Applied`/`On Death`; Notify Death never destroys).
+- **Tests**: `CombatSubstrateTests.cpp` → `CombatToolkitTests.cpp` (acquisition over a test-local
+  `FSeinTestVitalsComponent`, fixed-point-bounds fallback, Check Target gate order + agreement,
+  Apply Field Delta saturation/clamp/no-op/rejections/unauthorized, notifications);
+  `SeinARTS.Perf.Combat.ArmedScale` → `SeinARTS.Perf.Combat.AcquisitionScale` (warm/rebuilt
+  acquisition + a 1,000-unit Check Target + Apply Field Delta engagement batch);
+  live-tuning array fixture moved to a test-local struct; validator test drops the formula case.
+- **Deferred, recorded**: a generic "advance entity toward target, fire OnArrive" flight mechanism
+  (projectiles are designer BPs today: latent move + Find Targets(impact, radius) + Apply Field
+  Delta); a K2 node with a field dropdown for Apply Field Delta; example vitals/weapon UDS +
+  attack BP as `SeinARTSExamples` content (RJ's call on what the example should look like).
+- **Red-team (2 reviewers)**: 2 blockers fixed (Blueprint-default 0/0 clamp pins → opt-in clamp
+  flags; UDS authored-name resolution differing between editor and cooked builds → shared
+  sanitizer), 3 should-fix fixed (mutable storage fetched before any output is published; a
+  ScorerClass that fails to load now logs an Error before the neutral fallback; Notify* keep the
+  pool's live-only contract — tombstone accessors are deliberately private — but a wrong-order
+  "Destroy Entity then Notify" call now warns instead of failing silently, and the docstrings
+  state the order),
+  nits fixed (header "never disagree" scoped to the gates, `SEIN_CHECK_NOT_PARALLEL` on the index
+  rebuild, scorer purity note, stale instigator handle disables the owner gate instead of
+  resolving to Neutral, unsatisfiable-component early-out before scorer resolution). Perf: the
+  first cut computed the fixed-point sqrt before the owner gate and doubled 1,000-unit
+  acquisition (22.9 ms); distance is now lazy and back at parity (10.7 ms).
+- **Concurrency note**: a Codex session was live in the same checkout during this work (its
+  in-flight net/lobby/bootstrap/settings edits are untouched and unstaged); its own
+  `RunTests.ps1` pass compiled the re-cut and ran the new Sim tests (4/5 first try; the fifth was
+  an over-strict exact fixed-point-sqrt assertion, relaxed).
+
+### Combat substrate module and scale qualification (2026-08-21, superseded by the re-cut above)
 
 RJ ruled combat belongs in its own framework-root module (not an extension) and ruled the three
 mechanism forks in chat (instant default delivery; acquisition = query service + stance ability,
@@ -366,8 +424,8 @@ consumer, framework, and plugin guides retain the remaining implementation knowl
 mirroring the deleted website hierarchy. Release tooling already treats an empty/missing `Docs/`
 tree as a warning and omits the Documentation payload.
 
-Still RJ's: the PIE batch (now including combat feel: starter attack, projectiles, splash,
-armor/formula authoring), the remaining decision memos (online scope parked; squad
+Still RJ's: the PIE batch (combat is now designer-owned — author a vitals UDS + attack
+ability over Find Targets / Check Target / Apply Field Delta / Notify Death), the remaining decision memos (online scope parked; squad
 wipe/recreation/retreat UX; flight/vehicle feel defaults; host-migration topology; co-op
 persistence; adaptive input delay), pushes/merge, and the external dedicated-server CI gate.
 
@@ -465,7 +523,8 @@ formation/resolver state coverage, provider teardown, and downstream content own
 | `SeinARTS.Sim`, profile All | 64 passed, 0 failed |
 | `SeinARTS.Sim`, profile Framework | 57 passed, 0 failed |
 | `SeinARTS.Perf`, profile All | 9 passed, 0 failed; cover 128x128 averaged 11.998 ms; public 128-member preview measured 1.255/1.337 ms median/p95 coverless and 3.181/3.324 ms dense; collision full-tick medians 1.257/3.114/7.214 ms at 64/128/256 movers |
-| `SeinARTS.Perf`, profile Framework | 6 passed, 0 failed; armed-combat warm/rebuilt acquisition measured 3.207/3.336 ms at 300, 5.607/5.416 ms at 500, and 11.293/11.096 ms at 1,000 units; active firing ticks measured 0.540/0.819/1.569 ms; moving-combat medians remain 6.129/10.512/19.813 ms at 300/500/1,000 units |
+| `SeinARTS.Perf`, profile Framework | 6 passed, 0 failed (2026-08-21, pre-re-cut); armed-combat warm/rebuilt acquisition measured 3.207/3.336 ms at 300, 5.607/5.416 ms at 500, and 11.293/11.096 ms at 1,000 units; active firing ticks measured 0.540/0.819/1.569 ms; moving-combat medians remain 6.129/10.512/19.813 ms at 300/500/1,000 units |
+| `SeinARTS.Perf.Combat`, profile All (2026-08-23 re-cut) | 2 passed, 0 failed; `AcquisitionScale` warm/rebuilt acquisition 3.198/3.217 ms at 300, 5.242/5.284 ms at 500, 10.705/10.581 ms at 1,000 units (parity with the pre-re-cut index; the first cut paid a fixed-point sqrt before the owner gate and measured 22.9 ms at 1,000 — fixed by taking the distance lazily); 1,000-unit Check Target + Apply Field Delta engagement batch 1.446 ms; active tick 1.350 ms; moving-combat medians 5.881/9.981/20.247 ms |
 | Replay Memory Insights (qualified) | Clean commit `8178dec` has a same-attempt build and production `Qualified` receipt; the warmed 56-checkpoint interval retained zero production replay allocations/bytes against the fixed 4 KiB ceiling, with complete callstacks and separately validated allocator sentinels |
 | Fresh-process collision trace | 2026-08-21 serial and parallel roots/poses identical for all 120 ticks under `SeinARTS.Replay.6`; final root `941F0FDE8A8A1400DF734C908C8936B8`, pose `0xF9AA3969BB04EAD0` |
 | `SeinARTSEditor Win64 Development` | succeeded / target current |

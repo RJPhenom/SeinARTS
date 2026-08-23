@@ -92,10 +92,12 @@ This is the actionable remainder after consolidating the historical audits. It i
    fixed-tick curve now exists too (`SeinARTS.Perf.Combat.Scale`): two armies crossing an open
    field with real Move To actions, pathing, avoidance, collision, and containment measure
    6.129/10.512/19.813 ms medians at 300/500/1,000 units — near-linear, within the 30 Hz budget
-   at 1,000. The new armed workload (`SeinARTS.Perf.Combat.ArmedScale`) adds real target queries,
-   attack abilities, weapons, vitals, and damage: indexed warm acquisition measures
-   3.207/5.607/11.293 ms, forced-rebuild acquisition 3.336/5.416/11.096 ms, and active firing ticks
-   0.540/0.819/1.569 ms at 300/500/1,000 units. Every unit acquires and damages a target. Still open:
+   at 1,000. The acquisition workload (`SeinARTS.Perf.Combat.AcquisitionScale`, the 2026-08-23 verb-only
+   successor of `ArmedScale`) adds real target queries over a designer-style vitals struct plus a
+   Check Target + Apply Field Delta engagement batch: indexed warm acquisition measures
+   3.198/5.242/10.705 ms, forced-rebuild acquisition 3.217/5.284/10.581 ms, the 1,000-unit
+   engagement batch 1.446 ms, and active ticks 0.457/0.734/1.350 ms at 300/500/1,000 units. Every
+   unit acquires and damages a target. Still open:
    the same populations in PIE with animation, fog, UI, and presentation on top, plus an Insights
    capture of a representative large battle and authored Blueprint scorer costs.
 3. Game-specific animation complexity can exceed the default mannequin baseline.
@@ -129,7 +131,7 @@ This is the actionable remainder after consolidating the historical audits. It i
 6. The dense-cover 128-member public preview tripled with the FEAT-03 selection-plan provider:
    9.905 ms median / 10.130 ms p95 measured 2026-08-15 versus the pre-FEAT-03 3.181/3.324 ms
    baseline (coverless 128 unchanged at ~1.3 ms; the solver-only 128x128 stress is unchanged at
-   ~12.2 ms). Suspects: the exact whole-selection allocator running per preview refresh and the
+   ~10.7 ms). Suspects: the exact whole-selection allocator running per preview refresh and the
    per-slot reservation scans. A CPU trace with the named preview scopes is at
    `Saved/Profiling/ShareVisionPerf-20260815-203853.utrace`. Attribution: the exact Hungarian
    allocator (`Sein_Cover_Assignment_Hungarian` scope) dominates — the preview now runs the

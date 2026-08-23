@@ -10,6 +10,8 @@
  */
 
 #include "Attributes/SeinAttributeResolver.h"
+#include "UObject/NameTypes.h"
+#include "UObject/UObjectGlobals.h"
 #include "UObject/UnrealType.h"
 
 // ---------------------------------------------------------------------------
@@ -30,6 +32,29 @@ namespace SeinAttributeResolverPrivate
 
 	/** Critical section for thread-safe cache access. */
 	static FCriticalSection CacheLock;
+
+	/** Mirror of the struct editor's member-variable stem generation
+	 *  (FMemberVariableNameHelper::Generate): a display label that is already a
+	 *  valid object name is kept verbatim, anything else is slugged through
+	 *  MakeObjectNameFromDisplayLabel, and an empty result becomes "MemberVar".
+	 *  Applying it to both the requested name and the authored name yields the
+	 *  same comparison key whether the authored name is the editor's friendly
+	 *  string or the cooked build's internal stem. */
+	static FString SanitizeAuthoredName(const FString& Name)
+	{
+		FString Result;
+		if (!Name.IsEmpty())
+		{
+			Result = FName::IsValidXName(Name, INVALID_OBJECTNAME_CHARACTERS)
+				? Name
+				: MakeObjectNameFromDisplayLabel(Name, NAME_None).GetPlainNameString();
+		}
+		if (Result.IsEmpty())
+		{
+			Result = TEXT("MemberVar");
+		}
+		return Result;
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -58,8 +83,32 @@ FProperty* FSeinAttributeResolver::FindFieldProperty(UScriptStruct* StructType, 
 		}
 	}
 
-	// Look up via UE reflection
+	// Look up via UE reflection. Exact internal names first; then the
+	// authored (display) name so designer-authored UUserDefinedStruct fields
+	// — whose internal names carry a generated `_<index>_<guid>` suffix — can
+	// be addressed by the name the designer typed.
+	//
+	// UUserDefinedStruct::GetAuthoredNameForField returns the raw friendly
+	// name in the editor but only the sanitized internal stem in cooked builds
+	// (e.g. "Current Health" vs "CurrentHealth"). Comparing both sides through
+	// the SAME sanitizer the struct editor used to generate that stem makes the
+	// resolution identical in editor and cooked builds — a PIE host and a
+	// packaged client must resolve the same property or lockstep diverges.
 	FProperty* Property = StructType->FindPropertyByName(FieldName);
+	if (!Property)
+	{
+		const FString Wanted =
+			SeinAttributeResolverPrivate::SanitizeAuthoredName(FieldName.ToString());
+		for (TFieldIterator<FProperty> It(StructType); It; ++It)
+		{
+			if (SeinAttributeResolverPrivate::SanitizeAuthoredName(
+					StructType->GetAuthoredNameForField(*It)) == Wanted)
+			{
+				Property = *It;
+				break;
+			}
+		}
+	}
 
 	// Cache the result (including nullptr for negative lookups)
 	{

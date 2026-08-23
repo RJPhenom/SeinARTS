@@ -4,7 +4,7 @@
 #include "Actor/SeinActor.h"
 #include "Components/SeinAbilityComponent.h"
 #include "Components/SeinMovementComponent.h"
-#include "Components/SeinWeaponComponent.h"
+#include "TestTypes/SeinLiveTuningTestTypes.h"
 #include "Algo/Reverse.h"
 #include "Containers/Ticker.h"
 #include "Data/SeinWorldSnapshot.h"
@@ -203,18 +203,18 @@ namespace UE::SeinARTSTests
 	TEST(ComponentLiveTuningPreservesRuntimeStateInsideAuthoredArrays,
 		"SeinARTS.Unit.Entity.LiveTuning")
 	{
-		FSeinWeaponComponent Before;
-		FSeinWeaponSlot& BeforeSlot = Before.Weapons.AddDefaulted_GetRef();
+		FSeinLiveTuningTestComponent Before;
+		FSeinLiveTuningTestSlot& BeforeSlot = Before.Slots.AddDefaulted_GetRef();
 		BeforeSlot.Range = FFixedPoint::FromInt(1000);
-		FSeinWeaponComponent After = Before;
-		After.Weapons[0].Range = FFixedPoint::FromInt(1400);
+		FSeinLiveTuningTestComponent After = Before;
+		After.Slots[0].Range = FFixedPoint::FromInt(1400);
 
 		TArray<FInstancedStruct> BeforeEntries;
 		BeforeEntries.AddDefaulted_GetRef()
-			.InitializeAs<FSeinWeaponComponent>(Before);
+			.InitializeAs<FSeinLiveTuningTestComponent>(Before);
 		TArray<FInstancedStruct> AfterEntries;
 		AfterEntries.AddDefaulted_GetRef()
-			.InitializeAs<FSeinWeaponComponent>(After);
+			.InitializeAs<FSeinLiveTuningTestComponent>(After);
 		TArray<FSeinComponentPropertyPatch> Patches;
 		FString Error;
 		ASSERT_THAT(IsTrue(SeinBuildComponentPropertyPatches(
@@ -223,31 +223,31 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(Patches[0].PropertyPath.Num() >= 2));
 		ASSERT_THAT(AreEqual(0, Patches[0].PropertyPath[0].ArrayIndex));
 
-		FSeinWeaponComponent RuntimeValue = Before;
+		FSeinLiveTuningTestComponent RuntimeValue = Before;
 		RuntimeValue.bRuntimeSeeded = true;
-		RuntimeValue.Weapons[0].CooldownRemaining = FFixedPoint::FromInt(3);
-		RuntimeValue.Weapons[0].ReloadRemaining = FFixedPoint::FromInt(7);
-		RuntimeValue.Weapons[0].MagazineRemaining = 11;
+		RuntimeValue.Slots[0].CooldownRemaining = FFixedPoint::FromInt(3);
+		RuntimeValue.Slots[0].ReloadRemaining = FFixedPoint::FromInt(7);
+		RuntimeValue.Slots[0].MagazineRemaining = 11;
 		FProperty* Property = nullptr;
 		void* Value = nullptr;
 		ASSERT_THAT(IsTrue(SeinResolveComponentPropertyPath(
-			FSeinWeaponComponent::StaticStruct(), &RuntimeValue,
+			FSeinLiveTuningTestComponent::StaticStruct(), &RuntimeValue,
 			Patches[0].PropertyPath, Property, Value, Error)));
 		const TCHAR* End = Property->ImportText_Direct(
 			*Patches[0].ExportedValue, Value, nullptr, PPF_None);
 		ASSERT_THAT(IsNotNull(End));
 		ASSERT_THAT(IsTrue(*End == TEXT('\0')));
 		ASSERT_THAT(IsTrue(
-			RuntimeValue.Weapons[0].Range == FFixedPoint::FromInt(1400)));
+			RuntimeValue.Slots[0].Range == FFixedPoint::FromInt(1400)));
 		ASSERT_THAT(IsTrue(RuntimeValue.bRuntimeSeeded));
-		ASSERT_THAT(IsTrue(RuntimeValue.Weapons[0].CooldownRemaining
+		ASSERT_THAT(IsTrue(RuntimeValue.Slots[0].CooldownRemaining
 			== FFixedPoint::FromInt(3)));
-		ASSERT_THAT(IsTrue(RuntimeValue.Weapons[0].ReloadRemaining
+		ASSERT_THAT(IsTrue(RuntimeValue.Slots[0].ReloadRemaining
 			== FFixedPoint::FromInt(7)));
-		ASSERT_THAT(AreEqual(11, RuntimeValue.Weapons[0].MagazineRemaining));
+		ASSERT_THAT(AreEqual(11, RuntimeValue.Slots[0].MagazineRemaining));
 
-		After.Weapons.AddDefaulted();
-		AfterEntries[0].InitializeAs<FSeinWeaponComponent>(After);
+		After.Slots.AddDefaulted();
+		AfterEntries[0].InitializeAs<FSeinLiveTuningTestComponent>(After);
 		Patches.Reset();
 		Error.Reset();
 		ASSERT_THAT(IsFalse(SeinBuildComponentPropertyPatches(

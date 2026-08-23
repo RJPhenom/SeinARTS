@@ -44,8 +44,9 @@ public:
 	// Whole-struct setters (escape hatches — clobber every field; prefer field-level where available)
 	// ====================================================================================================
 
-	// (The starter combat substrate — FSeinCombatComponent + a combat BPFL —
-	//  was removed 2026-06-02; combat will be rebuilt from scratch later.)
+	// (Combat is designer-owned: there is no framework vitals/weapon schema.
+	//  Damage, healing, suppression, and any other stat drain are `Apply Field
+	//  Delta` calls against the designer's own component struct — see below.)
 
 	// Movement whole-struct setter intentionally removed — designers use the
 	// generic `K2Node_SeinSetComponent` against `FSeinMovementComponent` /
@@ -68,14 +69,46 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Component", meta = (WorldContext = "WorldContextObject", DisplayName = "Set Component"))
 	static bool SeinSetComponent(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, UScriptStruct* StructType, const FInstancedStruct& NewData);
 
+	/** Saturating add-then-clamp on ONE fixed-point field of any sim component
+	 *  — the schema-agnostic "change a stat" verb. Damage, healing, suppression
+	 *  build-up, morale drain, ammo spend, and shield recharge are all this
+	 *  node against the designer's own struct (native or UDS), so the framework
+	 *  never has to know what "health" is.
+	 *
+	 *  Semantics (deterministic, fixed-point only):
+	 *   - `Delta` is added with saturation (no wraparound). Each clamp bound
+	 *     applies only while its flag is on: `bClampMin` floors the result at
+	 *     `MinValue`, `bClampMax` ceils it at `MaxValue`. Both flags default OFF,
+	 *     so an unwired node is a plain saturating add — never a silent zeroing.
+	 *     Typical damage: `bClampMin` on with `MinValue` 0; typical heal:
+	 *     `bClampMax` on with `MaxValue` = the entity's own max field. With both
+	 *     on, `MinValue > MaxValue` rejects the call.
+	 *   - The field is written only when the result differs from the current
+	 *     value, so a no-op never dirties the component's mutation revision.
+	 *   - `FieldName` accepts the internal property name or, for UDS
+	 *     components, the authored (display) name the designer typed (resolved
+	 *     identically in editor and cooked builds).
+	 *
+	 *  Outputs: `NewValue` is the field after the call; `bChanged` is whether a
+	 *  write happened; `bAtMin` / `bAtMax` report the field now sitting on an
+	 *  ENABLED clamp bound (e.g. `bAtMin` with MinValue 0 = "health hit zero",
+	 *  the designer's cue to Notify Death / Destroy Entity / apply a downed
+	 *  effect — death is their call, not the framework's). All outputs are
+	 *  zero/false whenever the call returns false.
+	 *  @return false when the entity, component, or fixed-point field cannot be
+	 *  resolved, or the caller lacks mutation authorization. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Component", meta = (WorldContext = "WorldContextObject", DisplayName = "Apply Field Delta"))
+	static bool SeinApplyFieldDelta(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, UScriptStruct* StructType, FName FieldName, FFixedPoint Delta, bool bClampMin, FFixedPoint MinValue, bool bClampMax, FFixedPoint MaxValue, FFixedPoint& NewValue, bool& bChanged, bool& bAtMin, bool& bAtMax);
+
 	// Field-level setters
 	// ====================================================================================================
 	//
 	// NOTE: Ability field-level setters are intentionally omitted —
 	//   mutating another ability's runtime state is a footgun. Abilities control
 	//   their own lifecycle via OnTick/OnEnd and the activate/cancel command path.
-	//   (Combat field-level setters previously lived in the opt-in SeinARTSCombat
-	//    module, removed 2026-06-02; combat is TBD.)
+	//   (There are deliberately no combat field-level setters: the framework
+	//    ships no vitals/weapon schema. Use `Apply Field Delta` above against
+	//    your own component struct.)
 
 	// ─── Movement field-level (removed) ───
 	//

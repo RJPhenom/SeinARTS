@@ -4,12 +4,16 @@
  * @file         SeinCombatTypes.h
  * @author       RJ Macklem
  * @created      16 Aug 2026
- * @brief        Shared combat value types: delivery kinds, damage payloads,
- *               and target query/candidate shapes.
+ * @latest       23 Aug 2026
+ * @brief        Shared combat toolkit value types: the target query, its
+ *               scored candidate, and the per-target check verdict.
  *
  *          These are mechanism types — nothing here encodes a genre opinion.
- *          The payload's formula class and the query's scorer class are the
- *          policy seams; empty class paths fall back to neutral built-ins.
+ *          The framework ships NO vitals, weapon, damage, or projectile schema:
+ *          what a unit's stats are, how damage is computed, and when something
+ *          dies are the consuming game's components, abilities, and effects.
+ *          The query's scorer class is the one policy seam; an empty class
+ *          path falls back to the neutral built-in.
  *
  * @disclaimer   This code was generated in whole or in part with the assistance
  *               of an AI language model.
@@ -25,59 +29,12 @@
 #include "UObject/SoftObjectPath.h"
 #include "SeinCombatTypes.generated.h"
 
-/** How a weapon's fire reaches its target. Per-weapon authored data — both
- *  primitives ship in the framework; games choose per weapon. */
-UENUM(BlueprintType)
-enum class ESeinWeaponDelivery : uint8
-{
-	/** Fire resolves the same tick it is released (deterministic hit
-	 *  resolution at the muzzle; tracers are presentation). The starter
-	 *  weapon's default. */
-	Instant,
-
-	/** Fire spawns a pooled projectile ENTITY that flies deterministically
-	 *  and resolves on impact. Projectiles are ordinary entities, so they
-	 *  snapshot/replay for free and can themselves be targeted
-	 *  (interception). */
-	Projectile,
-};
-
 /**
- * The damage a weapon (or scripted source) delivers on a successful hit.
- * BaseDamage is an input to the formula policy, never the final number.
- */
-USTRUCT(BlueprintType, meta = (SeinDeterministic))
-struct SEINARTSCOMBAT_API FSeinDamagePayload
-{
-	GENERATED_BODY()
-
-	/** Formula input — the authored "listed" damage before policy. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Combat")
-	FFixedPoint BaseDamage = FFixedPoint::FromInt(10);
-
-	/** Damage-type tag handed to the formula (SeinARTS.Combat.Damage.*). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Combat",
-		meta = (Categories = "SeinARTS.Combat.Damage"))
-	FGameplayTag DamageTypeTag;
-
-	/** Splash radius around the impact point. Zero = single target. Every
-	 *  vitals-bearing entity inside the radius receives a formula evaluation
-	 *  with its own impact distance (falloff is the formula's business). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Combat")
-	FFixedPoint AreaRadius = FFixedPoint::Zero;
-
-	/** Damage formula policy class (a USeinDamageFormula subclass, resolved
-	 *  by soft path so authored data never hard-loads Blueprints). EMPTY =
-	 *  the built-in neutral formula: final damage equals BaseDamage. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Combat",
-		meta = (MetaClass = "/Script/SeinARTSCombat.SeinDamageFormula"))
-	FSoftClassPath FormulaClass;
-};
-
-/**
- * One deterministic target query. Issued on demand by abilities/effects (and
- * the starter stance content) through the combat library — the framework
- * never runs an always-on engagement loop.
+ * One deterministic target query. Issued on demand by abilities/effects
+ * through the combat library — the framework never runs an always-on
+ * engagement loop. The same struct doubles as the "can I engage THIS target
+ * from here" profile for Check Target, so a designer's weapon data only needs
+ * to fill one of these.
  */
 USTRUCT(BlueprintType)
 struct SEINARTSCOMBAT_API FSeinTargetQuery
@@ -101,6 +58,12 @@ struct SEINARTSCOMBAT_API FSeinTargetQuery
 	 *  180 (default) = full circle, no arc gating. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Combat")
 	FFixedPoint ArcHalfAngleDegrees = FFixedPoint::FromInt(180);
+
+	/** Candidates must carry this sim component (native or designer UDS) —
+	 *  the designer's way of saying "things with MY vitals struct count as
+	 *  targets". None = no component gate. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Combat")
+	TObjectPtr<UScriptStruct> RequiredComponent = nullptr;
 
 	/** Candidates must hold every tag listed (empty = no tag gate). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Combat")
@@ -141,4 +104,27 @@ struct SEINARTSCOMBAT_API FSeinTargetCandidate
 	 *  entity handle's canonical order. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Combat")
 	FFixedPoint Score = FFixedPoint::Zero;
+};
+
+/** Why one specific entity does or does not pass a query's gates. The gates
+ *  run in this order and the first failure is reported. */
+UENUM(BlueprintType)
+enum class ESeinTargetCheckResult : uint8
+{
+	/** Passes every mechanical gate and the scorer's validity policy. */
+	Eligible,
+	/** Handle invalid, entity not alive, or the target is the instigator. */
+	InvalidTarget,
+	/** Query.RequiredComponent is set and the target does not carry it. */
+	MissingComponent,
+	/** Beyond Query.Range (planar). */
+	OutOfRange,
+	/** Outside the instigator's firing arc. */
+	OutsideArc,
+	/** Missing one or more Query.RequiredTargetTags. */
+	MissingTags,
+	/** The bound fog line-of-sight resolver denied the target's position. */
+	NoLineOfSight,
+	/** The scorer policy's IsValidTarget declined (built-in: same owner). */
+	RejectedByScorer,
 };

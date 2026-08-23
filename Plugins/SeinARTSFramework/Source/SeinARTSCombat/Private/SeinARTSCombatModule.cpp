@@ -4,7 +4,7 @@
  * @file         SeinARTSCombatModule.cpp
  * @author       RJ Macklem
  * @created      16 Aug 2026
- * @latest       21 Aug 2026
+ * @latest       23 Aug 2026
  * @brief        Implements Combat module startup and live-world teardown.
  *
  * @disclaimer   This code was generated in whole or in part with the assistance
@@ -30,7 +30,7 @@ void FSeinARTSCombatModule::PreUnloadCallback()
 		{
 			It->TerminateAndReleaseForModuleUnload(
 				TEXT("SeinARTSCombat"),
-				TEXT("combat systems and derived query state are unloading"));
+				TEXT("combat derived query state is unloading"));
 		}
 	}
 	for (TObjectIterator<USeinCombatSubsystem> It; It; ++It)

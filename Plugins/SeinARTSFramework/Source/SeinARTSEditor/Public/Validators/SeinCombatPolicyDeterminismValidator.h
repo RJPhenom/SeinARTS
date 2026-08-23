@@ -4,10 +4,10 @@
  * @file         SeinCombatPolicyDeterminismValidator.h
  * @author       RJ Macklem
  * @created      21 Aug 2026
- * @latest       21 Aug 2026
+ * @latest       23 Aug 2026
  * @brief        Declares blocking deterministic and statelessness validation
- *               for Combat policy Blueprints evaluated on shared class
- *               default objects.
+ *               for Combat policy Blueprints (target scorers) evaluated on
+ *               shared class default objects.
  *
  * @disclaimer   This code was generated in whole or in part with the assistance
  *               of an AI language model.

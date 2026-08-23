@@ -4,9 +4,11 @@
  * @file         SeinCombatSubsystem.h
  * @author       RJ Macklem
  * @created      16 Aug 2026
- * @latest       21 Aug 2026
- * @brief        Declares the world subsystem hosting Combat systems and the
- *               derived target-acquisition index.
+ * @latest       23 Aug 2026
+ * @brief        Declares the world subsystem that owns the derived
+ *               target-acquisition index. Combat hosts no tick systems: the
+ *               framework ships no always-on engagement, weapon-cycling, or
+ *               projectile loop — cadence lives in designer abilities.
  *
  * @disclaimer   This code was generated in whole or in part with the assistance
  *               of an AI language model.
@@ -19,7 +21,6 @@
 #include "Simulation/SeinSystemHostSubsystem.h"
 #include "SeinCombatSubsystem.generated.h"
 
-class ISeinSystem;
 class USeinWorldSubsystem;
 
 UCLASS()
@@ -40,13 +41,8 @@ public:
 		FSeinEntityHandle Exclude,
 		TArray<FSeinEntityHandle>& OutHandles) const;
 
-	/** Remove delegates, cache state, and hosted systems before module unload. */
+	/** Remove delegates and cache state before module unload. */
 	void ReleaseModuleOwnedStateForModuleUnload();
-
-protected:
-	virtual void CreateSystems(
-		USeinWorldSubsystem& Sim,
-		TArray<TUniquePtr<ISeinSystem>>& OutSystems) override;
 
 private:
 	void InvalidateTargetIndex();

@@ -1,12 +1,11 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinCombatBPFL.cpp
- * @brief   Read-side combat query implementations.
+ * @brief   Read-side combat toolkit query implementations.
  */
 
 #include "Lib/SeinCombatBPFL.h"
 #include "Combat/SeinTargetQueryService.h"
-#include "Combat/SeinWeaponFire.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Simulation/SeinWorldSubsystem.h"
@@ -34,30 +33,18 @@ TArray<FSeinTargetCandidate> USeinCombatBPFL::SeinFindTargets(
 	return Candidates;
 }
 
-FSeinVitalsComponent USeinCombatBPFL::SeinGetVitals(
+ESeinTargetCheckResult USeinCombatBPFL::SeinCheckTarget(
 	const UObject* WorldContextObject,
-	FSeinEntityHandle EntityHandle,
-	bool& bFound)
+	const FSeinTargetQuery& Query,
+	FSeinEntityHandle Target,
+	FSeinTargetCandidate& Candidate)
 {
-	bFound = false;
-	if (const USeinWorldSubsystem* Sim = GetSim(WorldContextObject))
-	{
-		if (const FSeinVitalsComponent* Vitals =
-			Sim->GetComponent<FSeinVitalsComponent>(EntityHandle))
-		{
-			bFound = true;
-			return *Vitals;
-		}
-	}
-	return FSeinVitalsComponent();
-}
-
-bool USeinCombatBPFL::SeinIsWeaponReady(
-	const UObject* WorldContextObject,
-	FSeinEntityHandle EntityHandle,
-	int32 WeaponIndex)
-{
+	Candidate = FSeinTargetCandidate();
 	const USeinWorldSubsystem* Sim = GetSim(WorldContextObject);
-	return Sim
-		&& FSeinWeaponFire::IsWeaponReady(*Sim, EntityHandle, WeaponIndex);
+	if (!Sim)
+	{
+		return ESeinTargetCheckResult::InvalidTarget;
+	}
+	return FSeinTargetQueryService::CheckTarget(
+		*Sim, Query, Target, Candidate);
 }

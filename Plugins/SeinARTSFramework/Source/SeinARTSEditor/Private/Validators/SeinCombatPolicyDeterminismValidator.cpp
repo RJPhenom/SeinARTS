@@ -4,10 +4,10 @@
  * @file         SeinCombatPolicyDeterminismValidator.cpp
  * @author       RJ Macklem
  * @created      21 Aug 2026
- * @latest       21 Aug 2026
+ * @latest       23 Aug 2026
  * @brief        Implements blocking deterministic and statelessness validation
- *               for Combat policy Blueprints evaluated on shared class
- *               default objects.
+ *               for Combat policy Blueprints (target scorers) evaluated on
+ *               shared class default objects.
  *
  * @disclaimer   This code was generated in whole or in part with the assistance
  *               of an AI language model.
@@ -15,7 +15,6 @@
 
 #include "Validators/SeinCombatPolicyDeterminismValidator.h"
 
-#include "Combat/SeinDamageFormula.h"
 #include "Combat/SeinTargetScorer.h"
 #include "EdGraph/EdGraph.h"
 #include "Engine/Blueprint.h"
@@ -60,8 +59,7 @@ bool USeinCombatPolicyDeterminismValidator::IsTargetBlueprint(
 	{
 		return false;
 	}
-	return Blueprint->ParentClass->IsChildOf(USeinDamageFormula::StaticClass())
-		|| Blueprint->ParentClass->IsChildOf(USeinTargetScorer::StaticClass());
+	return Blueprint->ParentClass->IsChildOf(USeinTargetScorer::StaticClass());
 }
 
 FText USeinCombatPolicyDeterminismValidator::GetAssetKindLabel() const
@@ -118,7 +116,7 @@ EDataValidationResult USeinCombatPolicyDeterminismValidator::
 			InAsset,
 			FText::Format(
 				LOCTEXT("CombatPolicyMemberWrite",
-					"Combat policy writes member variable '{0}'. Damage formulas and target scorers execute on shared class default objects; keep evaluations side-effect free and working state function-local."),
+					"Combat policy writes member variable '{0}'. Target scorers execute on shared class default objects; keep evaluations side-effect free and working state function-local."),
 				FText::FromName(Set->GetVarName())));
 	}
 
