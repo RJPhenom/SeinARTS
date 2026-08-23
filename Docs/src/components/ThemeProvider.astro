@@ -1,0 +1,11 @@
+---
+// SeinARTS documentation uses one fixed dark theme across all browsers and system preferences.
+---
+
+{/* Inline this in <head> so the dark palette is applied before the page paints. */}
+<script is:inline>
+	document.documentElement.dataset.theme = 'dark';
+	window.StarlightThemeProvider = {
+		updatePickers() {},
+	};
+</script>

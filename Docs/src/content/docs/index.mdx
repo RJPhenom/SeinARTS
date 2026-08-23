@@ -1,0 +1,115 @@
+---
+title: SeinARTS Framework
+description: Build deterministic, designer-authored real-time strategy games in Unreal Engine 5.
+template: splash
+pagefind: false
+---
+
+import { Card, CardGrid, LinkButton } from '@astrojs/starlight/components';
+import wordmarkUrl from '../../../../Plugins/SeinARTSFramework/Resources/BrandKit/SeinARTSWordmarkVectorized.svg?url';
+import phenomWordmarkUrl from '../../assets/phenom-wordmark.svg?url';
+
+<main class="sein-home">
+	<section class="sein-home-hero" aria-labelledby="sein-home-title">
+		<div class="sein-home-hero__inner">
+			<div class="sein-home-hero__brand">
+				<img class="sein-home-hero__wordmark" src={wordmarkUrl} alt="SeinARTS Framework" />
+				<h1 id="sein-home-title" class="sr-only">SeinARTS Framework</h1>
+				<p class="sein-home-hero__credit">
+					<span>By</span>
+					<img src={phenomWordmarkUrl} alt="Phenom Studios" width="912" height="201" />
+				</p>
+			</div>
+		</div>
+	</section>
+
+	<section class="sein-home-intro" aria-label="SeinARTS Framework overview">
+		<p class="sein-home-tagline">A modular, deterministic lockstep RTS framework for Unreal Engine 5.</p>
+		<div class="sein-home-actions">
+			<LinkButton href="/getting-started/" icon="right-arrow">Get started</LinkButton>
+			<LinkButton href="/ecosystem/" icon="open-book" variant="minimal">Explore the ecosystem</LinkButton>
+		</div>
+	</section>
+
+	<section class="sein-home-topics" aria-labelledby="sein-home-topics-title">
+		<div class="sein-home-section-inner">
+			<h2 id="sein-home-topics-title">Documentation</h2>
+			<p>From first entity to multiplayer match — everything you need to ship on a deterministic foundation.</p>
+			<div class="topic-grid">
+				<div class="topic-card topic-card--wide">
+					<a href="/guides/creating-an-entity-blueprint/" class="topic-card__title">Guides <span class="topic-card__arrow">→</span></a>
+					<p class="topic-card__desc">Step-by-step tutorials from your first entity Blueprint to a playable multiplayer level.</p>
+					<div class="topic-card__foot">
+						<span class="topic-card__label">Explore topics</span>
+						<div class="topic-card__links">
+							<a href="/guides/creating-an-entity-blueprint/">Creating an Entity Blueprint</a>
+							<a href="/guides/making-an-infantry-unit/">Making an Infantry Unit</a>
+							<a href="/guides/making-a-movement-ability/">Making a Movement Ability</a>
+							<a href="/guides/making-combat-abilities/">Making Combat Abilities</a>
+							<a href="/guides/setting-up-a-playable-level/">Setting Up a Playable Level</a>
+						</div>
+					</div>
+				</div>
+
+				<div class="topic-card">
+					<a href="/core-concepts/deterministic-simulation/" class="topic-card__title">Core Concepts <span class="topic-card__arrow">→</span></a>
+					<p class="topic-card__desc">Understand the architecture and design principles behind the framework.</p>
+					<div class="topic-card__foot">
+						<span class="topic-card__label">Explore topics</span>
+						<div class="topic-card__links">
+							<a href="/core-concepts/deterministic-simulation/">Deterministic Simulation</a>
+							<a href="/core-concepts/units-components-abilities/">Units, Components & Abilities</a>
+						</div>
+					</div>
+				</div>
+
+				<div class="topic-card">
+					<a href="/ecosystem/" class="topic-card__title">Plugin Ecosystem <span class="topic-card__arrow">→</span></a>
+					<p class="topic-card__desc">Choose only what your game needs from five opt-in production extensions.</p>
+					<div class="topic-card__foot">
+						<span class="topic-card__label">Explore topics</span>
+						<div class="topic-card__links">
+							<a href="/ecosystem/">Squads</a>
+							<a href="/ecosystem/">Cover</a>
+							<a href="/ecosystem/">Cover–Squad Bridge</a>
+							<a href="/ecosystem/">Movement+</a>
+							<a href="/ecosystem/">SeinARTS Online Services</a>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+	</section>
+
+	<section class="sein-home-core" aria-labelledby="sein-home-core-title">
+		<div class="sein-home-section-inner">
+			<h2 id="sein-home-core-title">Build on a deterministic core</h2>
+			<p>SeinARTS separates authoritative simulation from presentation so the game state can remain reproducible across peers while Unreal Engine handles rendering, input, and authoring.</p>
+
+			<CardGrid stagger>
+				<Card title="Deterministic by design" icon="setting">
+					Fixed-point simulation, canonical state, and lockstep configuration are foundational contracts rather than optional modes.
+				</Card>
+				<Card title="Designer authored" icon="pencil">
+					Units are Blueprint classes, components are data, and commands such as move or attack are composed as abilities.
+				</Card>
+				<Card title="Modular extensions" icon="add-document">
+					Add squads, cover, movement modes, or online services without making the core framework depend on them.
+				</Card>
+				<Card title="One-way presentation" icon="document">
+					Simulation state flows into rendering. Presentation can react to the simulation, but it never feeds authoritative state back into it.
+				</Card>
+			</CardGrid>
+		</div>
+	</section>
+
+	<section class="sein-home-ecosystem" aria-labelledby="sein-home-ecosystem-title">
+		<div class="sein-home-section-inner">
+			<h2 id="sein-home-ecosystem-title">Choose only what your game needs</h2>
+			<p>The ecosystem contains one required framework plugin and five opt-in production extensions. Cover and squads stay independent; their integration lives in a separate bridge plugin so projects can keep a precise dependency footprint.</p>
+			<div class="sein-home-actions">
+				<LinkButton href="/ecosystem/" icon="right-arrow">See the plugin map</LinkButton>
+			</div>
+		</div>
+	</section>
+</main>
