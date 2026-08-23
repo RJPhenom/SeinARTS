@@ -1,5 +1,34 @@
 # SeinARTS Project State
 
+## 2026-08-23 Separate-process PIE regression closed; branches consolidated onto main
+
+- **Cause** of the networked-PIE kicks (listen server + `-game` client, or `-game` server +
+  editor client): the lockstep config fingerprint hashed `ResourceCatalog[].DisplayName` via raw
+  `ExportText`; editor processes export config FText with the `[/Script/Module]` localization
+  namespace, `-game` processes with an empty one, so every editor↔game pairing failed parity.
+  Latent since that field entered the fingerprint; separate-process PIE was the first editor-vs-game
+  pairing. Fixed at `f5e5db0`: core fields go through the canonical FText-blind exporter shared
+  with extension contributors (`FSeinConfigFingerprintRegistry::ExportFieldCanonical`); regression
+  `ConfigFingerprintIgnoresPresentationText`; `Sein.Config.DumpFingerprint` dumps the hashed text.
+  Also: kicked/leaving clients reset the lobby session contract before traveling to the menu
+  (`USeinLobbySubsystem::ResetForLocalSessionExit`), and an ambient world auto-start never consumes
+  a stale lobby contract (only lobby-launched worlds may), which removes the Menu "absent from
+  manifest" bootstrap error and dead "reconnecting" rosters.
+- **Proof:** editor-mode and game-mode fingerprints identical (`0xa7c499ca`); headless `-game
+  -server` + two `-game` clients (the exact PIE-spawned command lines) pass parity, commit lockstep
+  tick zero with unanimous readiness, zero client errors. Battery at tip: All Unit 513 / Sim 87 /
+  Determinism 53 / Integration 32; Framework Unit 491 / Sim 79 / Determinism 38; Shipping build
+  green. `Test` configuration is refused by the launcher engine distribution (recorded with the
+  Client/Server gate in OPEN_RISKS #1).
+- **Tree:** `codex/pie-empty-slot-start` (live tuning, PIE auto-start) and
+  `claude/combat-verb-recut` (combat verb-only re-cut) fast-forwarded into `main` at `faddddf`
+  and deleted locally; Sim floors realigned to the re-cut (87/79). Untracked and deliberately
+  left for RJ: root `Docs/` (future docs site) and `.github/workflows/deploy-docs.yml`. Push is RJ's.
+- **Remaining for the net-mode matrix:** RJ's PIE pass across standalone / listen / play-as-client /
+  separate server now that parity holds; Online Services loopback provider logs an init error in
+  `-server` runtimes (benign, SOS extension); true dedicated-server/Test builds need a CI engine.
+
+
 ## 2026-08-23 ComponentData live tuning (editor UX parity, hierarchy-complete)
 
 Designer-facing contract: exactly Unreal's two authoring layers for `USeinEntityComponent::ComponentData`
