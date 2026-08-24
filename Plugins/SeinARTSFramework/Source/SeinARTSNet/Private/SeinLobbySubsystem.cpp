@@ -1083,13 +1083,16 @@ bool USeinLobbySubsystem::ServerHandleSelectMap(APlayerController* HostPC, TSoft
 		return false;
 	}
 
-	// Validate: map must exist in PluginSettings AvailableMaps. Designer
-	// adds maps there (with declared SlotCount); arbitrary out-of-band
-	// map paths are rejected so a misclick or bad client request can't
-	// resize the lobby to garbage.
+	// Validate: when the designer curates AvailableMaps, selection is restricted
+	// to it (each entry declares its SlotCount) so a misclick or bad client
+	// request can't resize the lobby to garbage. An EMPTY list means the setting
+	// is unused — it is a lobby-UI convenience, never a gate — so any non-null
+	// map reference the host supplies is accepted and the current slot layout is
+	// kept (the host resizes via SetSlotState when needed).
 	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
+	const bool bHasCuratedList = Settings && Settings->AvailableMaps.Num() > 0;
 	const FSeinLobbyMapEntry* Entry = nullptr;
-	if (Settings)
+	if (bHasCuratedList)
 	{
 		const FSoftObjectPath TargetPath = Map.ToSoftObjectPath();
 		for (const FSeinLobbyMapEntry& E : Settings->AvailableMaps)
@@ -1100,16 +1103,22 @@ bool USeinLobbySubsystem::ServerHandleSelectMap(APlayerController* HostPC, TSoft
 				break;
 			}
 		}
+		if (!Entry)
+		{
+			UE_LOG(LogSeinNet, Warning,
+				TEXT("[Lobby] ServerHandleSelectMap: map '%s' not in PluginSettings AvailableMaps — rejected."),
+				*Map.ToSoftObjectPath().ToString());
+			return false;
+		}
 	}
-	if (!Entry)
+	else if (Map.ToSoftObjectPath().IsNull())
 	{
 		UE_LOG(LogSeinNet, Warning,
-			TEXT("[Lobby] ServerHandleSelectMap: map '%s' not in PluginSettings AvailableMaps — rejected."),
-			*Map.ToSoftObjectPath().ToString());
+			TEXT("[Lobby] ServerHandleSelectMap: rejected — null map reference."));
 		return false;
 	}
 
-	const int32 NewSlotCount = Entry->SlotCount;
+	const int32 NewSlotCount = Entry ? Entry->SlotCount : Actor->Slots.Num();
 
 	// Reject if shrink would lose claimed slots. Host opens those slots
 	// first via SetSlotState, then re-tries the map switch. UI should
@@ -1152,7 +1161,9 @@ bool USeinLobbySubsystem::ServerHandleSelectMap(APlayerController* HostPC, TSoft
 
 	UE_LOG(LogSeinNet, Log,
 		TEXT("[Lobby] ServerHandleSelectMap: '%s' applied (slot count → %d)."),
-		*Entry->DisplayName.ToString(), NewSlotCount);
+		Entry ? *Entry->DisplayName.ToString()
+			  : *Map.ToSoftObjectPath().ToString(),
+		NewSlotCount);
 
 	Actor->ForceNetUpdate();
 	Actor->OnLobbyStateChanged.Broadcast();

@@ -190,6 +190,38 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(Context.GetNumErrors() > 0));
 	}
 
+	/** Development-only void debug sinks (Print String / Print Text / Draw Debug …) write nothing
+	 *  the sim can read back and compile out of Shipping/Test, so they must pass validation. The
+	 *  adjacent GetFrameCount test proves value-PRODUCING UKismetSystemLibrary calls still fail. */
+	TEST(AbilityDebugPrintAndDrawSinksPassValidation,
+		"SeinARTS.Editor.Blueprint.AbilityDeterminism")
+	{
+		using namespace AbilityDeterminismValidation;
+		UBlueprint* Blueprint = MakeAbilityBlueprint();
+		ASSERT_THAT(IsNotNull(Blueprint));
+		UEdGraph* Graph = FBlueprintEditorUtils::FindEventGraph(Blueprint);
+		ASSERT_THAT(IsNotNull(Graph));
+
+		for (const FName SinkName : {
+			GET_FUNCTION_NAME_CHECKED(UKismetSystemLibrary, PrintString),
+			GET_FUNCTION_NAME_CHECKED(UKismetSystemLibrary, PrintText),
+			GET_FUNCTION_NAME_CHECKED(UKismetSystemLibrary, DrawDebugLine),
+			GET_FUNCTION_NAME_CHECKED(UKismetSystemLibrary, DrawDebugSphere),
+			GET_FUNCTION_NAME_CHECKED(UKismetSystemLibrary, DrawDebugString)})
+		{
+			const UFunction* Sink =
+				UKismetSystemLibrary::StaticClass()->FindFunctionByName(SinkName);
+			ASSERT_THAT(IsNotNull(Sink));
+			AddCall(*Graph, *Sink);
+		}
+
+		FDataValidationContext Context;
+		ASSERT_THAT(IsTrue(
+			Validate(*Blueprint, Context) == EDataValidationResult::Valid));
+		ASSERT_THAT(AreEqual(0, Context.GetNumErrors()));
+		ASSERT_THAT(AreEqual(0, Context.GetNumWarnings()));
+	}
+
 	TEST(AbilityDeterministicRandomMemberAndCallPassValidation,
 		"SeinARTS.Editor.Blueprint.AbilityDeterminism")
 	{

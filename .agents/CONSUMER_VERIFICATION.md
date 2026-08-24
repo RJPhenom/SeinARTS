@@ -60,9 +60,11 @@ For every selected profile the tool:
    agreement. Movement+ additionally issues a real wheeled Move command and requires exact movement
    state on both peers, after reconnect, and after replay checkpoint seek.
 
-An initially empty consumer necessarily emits the two manifest-bootstrap simulation-content errors
-before the manifest exists. The harness accepts only those exact bootstrap messages, and only when
-manifest generation then succeeds. Later passes must use the generated manifest normally.
+An initially empty consumer MAY emit the tolerated manifest-bootstrap simulation-content messages
+before the manifest exists (since the manifest became optional, an unconfigured consumer instead
+synthesizes a records-free code-contract profile and plays without them; the harness filters are
+subtractive, so their absence is also accepted). Manifest generation must still succeed, and later
+passes must use the generated manifest normally.
 
 `-ReuseGenerated` preserves expensive generated maps and build products while synchronizing the
 current checkout's distributable plugin files and qualification templates. It therefore cannot

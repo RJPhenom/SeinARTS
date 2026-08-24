@@ -4,7 +4,7 @@
  * @file         SeinBlueprintDeterminismValidator.cpp
  * @author       RJ Macklem
  * @created      24 Jun 2026
- * @latest       14 Aug 2026
+ * @latest       23 Aug 2026
  * @brief        Implements shared deterministic state and call validation for sim Blueprints.
  *
  * @disclaimer   This code was generated in whole or in part with the assistance
@@ -18,6 +18,7 @@
 #include "K2Node_MacroInstance.h"
 #include "EdGraph/EdGraph.h"
 #include "Kismet/KismetMathLibrary.h"
+#include "Kismet/KismetSystemLibrary.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Misc/DataValidation.h"
 #include "Util/SeinDeterminismRules.h"  // SeinDeterminism::IsPinTypeDeterministic (member-var check)
@@ -79,11 +80,38 @@ namespace
 		return Denylist.Contains(Func->GetFName());
 	}
 
+	/** Audited engine debug sinks: void UKismetSystemLibrary calls (Print String / Print Text /
+	 *  Draw Debug …) whose bodies are development-only (compiled out of Shipping and Test) and
+	 *  which write nothing the simulation can read back. They cannot feed future sim state by
+	 *  construction, so flagging them only punishes routine debugging. Any non-deterministic
+	 *  call COMPUTING their pin inputs is still flagged on its own — this walk visits every call
+	 *  node regardless of wiring. Value-producing debug calls (e.g. DrawDebugFloatHistory*) stay
+	 *  out: anything that returns data keeps failing closed. */
+	bool IsAuditedDebugSinkCall(const UFunction* Func)
+	{
+		if (!Func || Func->GetOwnerClass() != UKismetSystemLibrary::StaticClass()) return false;
+		static const TSet<FName> DebugSinks = {
+			FName(TEXT("PrintString")),           FName(TEXT("PrintText")),
+			FName(TEXT("PrintWarning")),
+			FName(TEXT("DrawDebugArrow")),        FName(TEXT("DrawDebugBox")),
+			FName(TEXT("DrawDebugCamera")),       FName(TEXT("DrawDebugCapsule")),
+			FName(TEXT("DrawDebugCircle")),       FName(TEXT("DrawDebugCone")),
+			FName(TEXT("DrawDebugConeInDegrees")),FName(TEXT("DrawDebugCoordinateSystem")),
+			FName(TEXT("DrawDebugCylinder")),     FName(TEXT("DrawDebugFrustum")),
+			FName(TEXT("DrawDebugLine")),         FName(TEXT("DrawDebugPlane")),
+			FName(TEXT("DrawDebugPoint")),        FName(TEXT("DrawDebugSphere")),
+			FName(TEXT("DrawDebugString")),
+			FName(TEXT("FlushDebugStrings")),     FName(TEXT("FlushPersistentDebugLines"))
+		};
+		return DebugSinks.Contains(Func->GetFName());
+	}
+
 	/** Verdict for one call. Presentation-only metadata always wins. Explicit
-	 *  deterministic function/class ownership certifies the call. The only
-	 *  engine fallback is the audited deterministic-signature subset of
-	 *  UKismetMathLibrary, excluding its unseeded random calls. Everything else
-	 *  fails closed. Unresolved targets are left to the Blueprint compiler. */
+	 *  deterministic function/class ownership certifies the call. The engine
+	 *  fallbacks are the audited deterministic-signature subset of
+	 *  UKismetMathLibrary (excluding its unseeded random calls) and the audited
+	 *  UKismetSystemLibrary debug-sink set above. Everything else fails closed.
+	 *  Unresolved targets are left to the Blueprint compiler. */
 	bool IsCallNonDeterministic(const UFunction* Func)
 	{
 		if (!Func) return false;
@@ -92,6 +120,7 @@ namespace
 		if (Owner && Owner->HasMetaData(SeinPresentationOnlyMeta)) return true;
 		if (Func->HasMetaData(SeinDeterministicMeta)) return false;
 		if (Owner && Owner->HasMetaData(SeinDeterministicMeta)) return false;
+		if (IsAuditedDebugSinkCall(Func)) return false;
 		if (Owner == UKismetMathLibrary::StaticClass())
 		{
 			return IsKnownNonDeterministicCall(Func)

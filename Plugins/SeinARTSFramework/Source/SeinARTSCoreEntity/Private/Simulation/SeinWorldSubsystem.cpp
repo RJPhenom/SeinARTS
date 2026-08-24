@@ -407,15 +407,64 @@ bool USeinWorldSubsystem::InitializeSimulationContent(
 	const USeinARTSCoreSettings* Settings)
 {
 	ShutdownSimulationContent();
-	if (!Settings || Settings->SimulationContentManifest.IsNull())
+
+	// Contributor records come from the live in-memory registry in BOTH modes: the
+	// baked path must select the profile whose contributor set matches them exactly,
+	// and the synthesized path seals them directly. Nothing here opens or hashes an
+	// asset — saved-package hashing exists only in the editor manifest bake.
+	FString Error;
+	FSeinSimulationContentRegistrySnapshot RegistrySnapshot;
+	TArray<FSeinSimulationContentContributorRecord> ActiveContributors;
+	if (!FSeinSimulationContentRegistry::CaptureSnapshot(
+			RegistrySnapshot, Error)
+		|| !FSeinSimulationContentRegistry::BuildManifestContributorRecords(
+			RegistrySnapshot, ActiveContributors, Error))
 	{
-		SimulationContentFailureReason =
-			TEXT("No project-owned Simulation Content Manifest is configured. Generate one from Project Settings before starting a deterministic match.");
+		SimulationContentFailureReason = Error.IsEmpty()
+			? TEXT("The simulation-content registry snapshot is invalid.")
+			: MoveTemp(Error);
 		UE_LOG(LogSeinSim, Error, TEXT("Simulation protocol disabled: %s"),
 			*SimulationContentFailureReason);
 		return false;
 	}
 
+	// No manifest configured is a supported mode, not an error (None = OFF): seal a
+	// records-free profile over the live contributor records so every way of playing
+	// works with zero setup. Peers exchange and compare this digest exactly like a
+	// baked one, so mismatched code contracts still fail loudly at join; a baked
+	// manifest adds asset-parity records and per-world coverage evidence on top.
+	if (!Settings || Settings->SimulationContentManifest.IsNull())
+	{
+		FSeinSimulationContentManifestProfile Synthesized;
+		Synthesized.BuilderRevision = static_cast<int32>(
+			FSeinSimulationContentManifestCodec::CurrentBuilderRevision);
+		Synthesized.Contributors = MoveTemp(ActiveContributors);
+		if (!FSeinSimulationContentManifestCodec::SealProfile(
+			FSeinSimulationContentManifestCodec::CurrentFormatVersion,
+			Synthesized,
+			Error))
+		{
+			SimulationContentFailureReason = Error.IsEmpty()
+				? TEXT("The synthesized simulation-content profile could not be sealed.")
+				: MoveTemp(Error);
+			UE_LOG(LogSeinSim, Error, TEXT("Simulation protocol disabled: %s"),
+				*SimulationContentFailureReason);
+			return false;
+		}
+		SimulationContentProfile = MoveTemp(Synthesized);
+		SimulationContentDigest = SimulationContentProfile.RootDigest;
+		bSimulationContentSynthesized = true;
+		bSimulationContentReady = true;
+		UE_LOG(LogSeinSim, Log,
+			TEXT("Simulation content synthesized from the live registry (no manifest configured; %d contributors, digest=%s)."),
+			SimulationContentProfile.Contributors.Num(),
+			*SimulationContentDigest.ToString(EGuidFormats::Digits));
+		return true;
+	}
+
+	// Baked mode. A configured-but-broken manifest stays a hard error: the project
+	// explicitly opted into manifest evidence, so silently falling back to a
+	// synthesized profile would mask an authoring failure.
 	USeinSimulationContentManifest* Manifest =
 		Settings->SimulationContentManifest.LoadSynchronous();
 	if (!Manifest)
@@ -428,15 +477,8 @@ bool USeinWorldSubsystem::InitializeSimulationContent(
 		return false;
 	}
 
-	FString Error;
-	FSeinSimulationContentRegistrySnapshot RegistrySnapshot;
-	TArray<FSeinSimulationContentContributorRecord> ActiveContributors;
 	FSeinSimulationContentManifestProfile SelectedProfile;
-	if (!FSeinSimulationContentRegistry::CaptureSnapshot(
-			RegistrySnapshot, Error)
-		|| !FSeinSimulationContentRegistry::BuildManifestContributorRecords(
-			RegistrySnapshot, ActiveContributors, Error)
-		|| !FSeinSimulationContentManifestCodec::SelectExactProfile(
+	if (!FSeinSimulationContentManifestCodec::SelectExactProfile(
 			*Manifest,
 			FSeinSimulationContentManifestCodec::CurrentBuilderRevision,
 			ActiveContributors,
@@ -475,6 +517,7 @@ bool USeinWorldSubsystem::InitializeSimulationContent(
 void USeinWorldSubsystem::ShutdownSimulationContent()
 {
 	bSimulationContentReady = false;
+	bSimulationContentSynthesized = false;
 	SimulationContentDigest.Invalidate();
 	SimulationContentProfile = {};
 	SimulationContentManifestAsset = nullptr;
@@ -491,6 +534,12 @@ bool USeinWorldSubsystem::IsCurrentWorldCoveredBySimulationContent(
 			? TEXT("Simulation content is unavailable.")
 			: SimulationContentFailureReason;
 		return false;
+	}
+	// A synthesized profile makes no per-package claims, so there is no baked
+	// coverage to verify — every world is admissible by construction.
+	if (bSimulationContentSynthesized)
+	{
+		return true;
 	}
 	const UWorld* World = GetWorld();
 	const UPackage* WorldPackage = World ? World->GetOutermost() : nullptr;
@@ -1706,10 +1755,25 @@ bool USeinWorldSubsystem::BeginMatchBootstrap(
 		FailMatchBootstrapInternal(OutError);
 		return false;
 	}
-	if (!IsCurrentWorldCoveredBySimulationContent(OutError))
+	FString CoverageError;
+	if (!IsCurrentWorldCoveredBySimulationContent(CoverageError))
 	{
-		FailMatchBootstrapInternal(OutError);
-		return false;
+		// Baked coverage is evidence, not permission: by default an uncovered
+		// world plays anyway (the content-digest handshake still gates peer
+		// compatibility), and ship/competitive teams opt into refusal through
+		// Require Simulation Content Coverage.
+		const USeinARTSCoreSettings* CoverageSettings =
+			GetDefault<USeinARTSCoreSettings>();
+		if (CoverageSettings
+			&& CoverageSettings->bRequireSimulationContentCoverage)
+		{
+			OutError = MoveTemp(CoverageError);
+			FailMatchBootstrapInternal(OutError);
+			return false;
+		}
+		UE_LOG(LogSeinSim, Warning,
+			TEXT("Starting the match outside baked Simulation Content coverage (advisory; enable Require Simulation Content Coverage to refuse instead): %s"),
+			*CoverageError);
 	}
 	if (!NativeCanonicalStateSchema.IsValid()
 		|| !NativeCanonicalStateSchema.GetContractDigest().IsValid())
