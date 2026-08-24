@@ -156,6 +156,7 @@ namespace
 		FFixedPoint FalloffRadii;
 		FFixedPoint SmoothKeep;
 		FFixedPoint ArrivalReleaseRadii;
+		FFixedPoint ArrivalFadeInnerRadii;
 		FFixedPoint MaxSteerMagnitude;
 		FFixedPoint IdleResolveStrength;
 		FFixedPoint IdleDodgeStrength;
@@ -1413,6 +1414,8 @@ namespace
 		const FFixedPoint SmoothKeep = Parameters.SmoothKeep;
 		const FFixedPoint ArrivalReleaseRadii =
 			Parameters.ArrivalReleaseRadii;
+		const FFixedPoint ArrivalFadeInnerRadii =
+			Parameters.ArrivalFadeInnerRadii;
 		const FFixedPoint MaxSteerMagnitude = Parameters.MaxSteerMagnitude;
 		const FFixedPoint IdleResolveStrength = Parameters.IdleResolveStrength;
 		const FFixedPoint IdleDodgeStrength = Parameters.IdleDodgeStrength;
@@ -1505,15 +1508,25 @@ namespace
 		ToGoal.Z = FFixedPoint::Zero;
 		const FFixedPoint GoalDistSq = ToGoal.SizeSquared();
 
-		// ARRIVAL-RELEASE FADE: stop steering (and braking) as the unit closes on its goal
-		// so path-attraction + the collision floor own the endgame. Without this, a
-		// destination inside/behind a standing cluster makes the unit orbit the perimeter
-		// forever. (This is the mechanism that was dead in the original model.)
-		const FFixedPoint ReleaseRadius = SelfRadius * ArrivalReleaseRadii;
-		if (GoalDistSq <= ReleaseRadius * ReleaseRadius)
+		// ARRIVAL-RELEASE FADE: ramp avoidance down as the unit closes on its goal so
+		// path-attraction + the collision floor own the endgame. Without this, a destination
+		// inside/behind a standing cluster makes the unit orbit the perimeter forever.
+		// Outer radius = full release begins (avoidance starts fading).
+		// Inner radius = avoidance fully off (hard cut, collision floor takes over).
+		// Between them the output scales linearly. If inner >= outer, legacy hard cut.
+		const FFixedPoint OuterRadius = SelfRadius * ArrivalReleaseRadii;
+		const FFixedPoint InnerRadius = SelfRadius * ArrivalFadeInnerRadii;
+		const FFixedPoint OuterRadiusSq = OuterRadius * OuterRadius;
+		FFixedPoint ArrivalFade = FFixedPoint::One;
+		if (GoalDistSq <= OuterRadiusSq)
 		{
-			ClearAvoidanceOutput(*Move);
-			return;
+			if (InnerRadius >= OuterRadius || GoalDistSq <= InnerRadius * InnerRadius)
+			{
+				ClearAvoidanceOutput(*Move);
+				return;
+			}
+			const FFixedPoint GoalDist = SeinMath::Sqrt(GoalDistSq);
+			ArrivalFade = (GoalDist - InnerRadius) / (OuterRadius - InnerRadius);
 		}
 
 		// Speed-scaled perception radius (footprint-based; "personal space" needs no
@@ -1534,6 +1547,12 @@ namespace
 		ResolveIdleGap(
 			IdleBlockers, Heading, Right, ToGoal, GoalDistSq,
 			BendCapCos, GapCos, GapSin, IdleResolveStrength, Accum);
+
+		if (ArrivalFade < FFixedPoint::One)
+		{
+			Accum.X = Accum.X * ArrivalFade;
+			Accum.Y = Accum.Y * ArrivalFade;
+		}
 
 		FinalizeMovingOutput(
 			OutputParameters, Index, *Move, Accum, SelfRadius,
@@ -1559,6 +1578,7 @@ void FSeinAvoidanceDefaultKernel::Execute(
 	const FFixedPoint SmoothKeep          = Policy.AvoidanceSmoothKeep;
 	const FFixedPoint HeadOnBase          = Policy.AvoidanceHeadOnBase;
 	const FFixedPoint ArrivalReleaseRadii = Policy.AvoidanceArrivalReleaseRadii;
+	const FFixedPoint ArrivalFadeInnerRadii = Policy.AvoidanceArrivalFadeInnerRadii;
 	const FFixedPoint MaxSteerMagnitude   = Policy.AvoidanceMaxSteerMagnitude;
 	const FFixedPoint BrakeStrength       = Policy.AvoidanceBrakeStrength;
 	const FFixedPoint CohesionHoldBack    = Policy.AvoidanceCohesionHoldBack;
@@ -1709,6 +1729,7 @@ void FSeinAvoidanceDefaultKernel::Execute(
 		FalloffRadii,
 		SmoothKeep,
 		ArrivalReleaseRadii,
+		ArrivalFadeInnerRadii,
 		MaxSteerMagnitude,
 		IdleResolveStrength,
 		IdleDodgeStrength,

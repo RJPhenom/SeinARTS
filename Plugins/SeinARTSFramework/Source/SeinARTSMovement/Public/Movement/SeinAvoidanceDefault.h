@@ -13,8 +13,8 @@
  *          THREADS around them toward a goal-aligned gap (and an idle unit may itself step aside,
  *          writing an honest velocity so the anim layer and re-seek react); weight-priority (lighter
  *          yields to heavier), ahead-of-heading + genuinely-closing courses only, and nothing past
- *          the unit's own goal. Inside a few footprints of the goal the output releases outright
- *          (binary arrival release, not a fade) so path attraction and the collision floor own the
+ *          the unit's own goal. Inside a few footprints of the goal the output fades linearly
+ *          (outer → inner arrival radii) so path attraction and the collision floor own the
  *          endgame. Formation cohesion (the SpeedScale hold-back / catch-up pacing against the
  *          group's mean remaining distance) is keyed to honest motion, never to commanded
  *          velocity: the group mean averages members with real per-tick DISPLACEMENT, and the
@@ -47,9 +47,8 @@ class USeinWorldSubsystem;
  * The out-of-the-box local-avoidance model: moving units bend around crossing/oncoming traffic
  * (lateral steer), brake as the weave gets dense (speed yield), pack with their own formation
  * group instead of dodging it, thread around idle stragglers via a goal-aligned gap-seek when Idle
- * Resolve is on (else the collision floor shoves them aside), and release entirely on final approach
- * so arrivals settle instead of
- * orbiting. Ship different behavior by subclassing Sein Avoidance and selecting it in settings.
+ * Resolve is on (else the collision floor shoves them aside), and fade out on final approach so
+ * arrivals settle instead of orbiting. Ship different behavior by subclassing Sein Avoidance and selecting it in settings.
  */
 UCLASS(Blueprintable, meta = (DisplayName = "Sein Avoidance Default"))
 class SEINARTSMOVEMENT_API USeinAvoidanceDefault : public USeinAvoidance
@@ -102,12 +101,22 @@ public:
 		meta = (DisplayName = "Head-On Base", ClampMin = "0.0"))
 	FFixedPoint AvoidanceHeadOnBase = FFixedPoint::One / FFixedPoint::FromInt(10);
 
-	/** How close to its goal a unit stops avoidance-steering, measured in footprints. Inside this
-	 *  radius the collision resolver and path attraction take over the final approach, so units settle
-	 *  onto their destination instead of shuffling. Default 3. */
+	/** How close to its goal a unit begins fading avoidance-steering, measured in footprints. At
+	 *  this distance avoidance starts ramping down; by the inner radius (Arrival Fade Inner Radii)
+	 *  it is fully off and the collision resolver and path attraction own the final approach. The
+	 *  fade prevents units from abruptly dropping all avoidance on arrival and slamming into
+	 *  neighbours already at the destination. Default 3. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS",
 		meta = (DisplayName = "Arrival Release Radii", ClampMin = "0.0"))
 	FFixedPoint AvoidanceArrivalReleaseRadii = FFixedPoint::FromInt(3);
+
+	/** How close to its goal a unit fully stops avoidance-steering, measured in footprints. Inside
+	 *  this radius avoidance is completely off. Between this and Arrival Release Radii the output
+	 *  fades linearly. Must be less than Arrival Release Radii to produce a fade; if equal or
+	 *  greater, the release is a hard cut (legacy behaviour). Default 1. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS",
+		meta = (DisplayName = "Arrival Fade Inner Radii", ClampMin = "0.0"))
+	FFixedPoint AvoidanceArrivalFadeInnerRadii = FFixedPoint::One;
 
 	/** The cap on how strong the accumulated sideways nudge can get before per-unit strength scaling
 	 *  and smoothing are applied. Keeps a crowded unit from being shoved sideways too hard in one tick.
