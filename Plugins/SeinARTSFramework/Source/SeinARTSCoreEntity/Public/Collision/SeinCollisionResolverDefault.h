@@ -87,11 +87,18 @@ public:
 		FSeinCollisionResolverStateCoverageClaim& OutClaim,
 		FString& OutError) const override;
 
-	/** Exact shipped digest: class identity only (the Gauss-Seidel resolver
-	 *  carries no runtime tuning). Native subclasses must override. */
+	/** Exact shipped digest: class identity + NumPasses, so a post-freeze
+	 *  tuning edit fail-stops instead of desyncing peers. Native subclasses
+	 *  must override. */
 	virtual bool ComputeResolutionConfigDigest(
 		FGuid& OutDigest,
 		FString& OutError) const override;
+
+	/** Gauss-Seidel relaxation passes per tick. Dense moving clusters retain
+	 *  all passes; idle or already-settled worlds early-out when a pass
+	 *  produces no writes. Default 4. */
+	UPROPERTY(EditDefaultsOnly, Category = "Collision", meta = (ClampMin = "1"))
+	int32 NumPasses = 4;
 
 protected:
 	/** Reusable exact-state claim for a native subclass that explicitly adds
