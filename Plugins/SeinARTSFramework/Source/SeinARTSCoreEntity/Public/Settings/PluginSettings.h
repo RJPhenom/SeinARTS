@@ -135,13 +135,20 @@ public:
 	int32 EffectCountWarningThreshold;
 
 	/**
-	 * Generated source-content proof used by bootstrap, snapshots, replays, and
-	 * network compatibility. Designers continue authoring ordinary Blueprint
-	 * gameplay assets; the editor generator updates this read-only manifest.
+	 * OPTIONAL generated source-content evidence used by bootstrap, snapshots,
+	 * replays, and network compatibility. None is a supported mode, not an
+	 * error: the runtime seals a synthesized profile from the live code
+	 * registry at world init (content-blind, nothing is scanned), so every way
+	 * of playing works with zero setup and peers still fail loudly at join on
+	 * mismatched code contracts. Configuring a generated manifest adds what
+	 * only a bake can prove: saved-package asset-parity records and per-world
+	 * coverage evidence for shipped or competitive builds.
 	 *
-	 * The asset may contain several exact contributor-set profiles so one
-	 * project can support Framework-only and opt-in extension combinations
-	 * without weakening the fail-closed compatibility check.
+	 * Designers continue authoring ordinary Blueprint gameplay assets; the
+	 * editor generator updates this read-only manifest (and by default keeps it
+	 * fresh for PIE — see Sein.SimulationContent.AutoGenerateForPIE). The asset
+	 * may contain several exact contributor-set profiles so one project can
+	 * support Framework-only and opt-in extension combinations.
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Simulation|Content",
 		meta = (DisplayName = "Simulation Content Manifest"))
@@ -156,6 +163,21 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Simulation|Content",
 		meta = (DisplayName = "Additional Simulation Content Roots"))
 	TArray<FSoftObjectPath> AdditionalSimulationContentRoots;
+
+	/**
+	 * OFF (default): baked coverage is advisory — starting a match on a world
+	 * the configured manifest does not cover logs a warning and plays anyway;
+	 * peer compatibility is still enforced through the content-digest
+	 * handshake. ON: bootstrap refuses to start on an uncovered world, making
+	 * the generated manifest the authoritative allow-list for deterministic
+	 * play (for shipped or competitive builds). Ignored while no manifest is
+	 * configured, because a synthesized profile has no coverage claims to
+	 * enforce. Local admission policy only — deliberately outside the config
+	 * fingerprint.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Simulation|Content",
+		meta = (DisplayName = "Require Simulation Content Coverage"))
+	bool bRequireSimulationContentCoverage = false;
 
 	/**
 	 * Blueprint or native recipes that declare passive project-owned
@@ -1149,7 +1171,9 @@ public:
 	 * want them shown.
 	 *
 	 * An empty list means no map dropdown — the lobby just seeds Max Players open slots, and Start Match
-	 * uses the runtime override or the Default Gameplay Map below.
+	 * uses the runtime override or the Default Gameplay Map below. This list is a lobby-UI convenience,
+	 * never a gate: with an empty list a custom lobby widget may select any map directly, and nothing
+	 * about PIE, direct play, or sim testing ever requires a map to be listed here.
 	 *
 	 * The slot count is declared per entry by hand (to avoid loading the level just to count starts at
 	 * lobby boot); set it to the number of Sein Player Starts placed in that level with a player slot

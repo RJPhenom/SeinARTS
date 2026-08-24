@@ -228,4 +228,66 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(
 			Error.Contains(TEXT("header or profile count"))));
 	}
+
+	/** A records-free profile is how the runtime plays when no manifest is
+	 *  configured (synthesized mode): sealing must accept it, reproduce the same
+	 *  digest for the same contributor set, and keep that digest distinct from a
+	 *  baked profile carrying package records. */
+	TEST(SimulationContentSealsRecordFreeSynthesizedProfile,
+		"SeinARTS.Unit.CoreEntity.SimulationContent")
+	{
+		const FGuid DiscoveryDigest(1u, 2u, 3u, 4u);
+		FString Error;
+
+		FSeinSimulationContentManifestProfile Synthesized;
+		Synthesized.BuilderRevision =
+			static_cast<int32>(
+				FSeinSimulationContentManifestCodec::
+					CurrentBuilderRevision);
+		Synthesized.Contributors.Add(MakeContributor(
+			TEXT("seinframeworktest.synth.a"), 1, DiscoveryDigest));
+		ASSERT_THAT(IsTrue(
+			FSeinSimulationContentManifestCodec::SealProfile(
+				FSeinSimulationContentManifestCodec::
+					CurrentFormatVersion,
+				Synthesized,
+				Error)));
+		ASSERT_THAT(IsTrue(Synthesized.RootDigest.IsValid()));
+		ASSERT_THAT(IsTrue(
+			FSeinSimulationContentManifestCodec::ValidateProfile(
+				FSeinSimulationContentManifestCodec::
+					CurrentFormatVersion,
+				Synthesized,
+				Error)));
+
+		FSeinSimulationContentManifestProfile Again;
+		Again.BuilderRevision = Synthesized.BuilderRevision;
+		Again.Contributors.Add(MakeContributor(
+			TEXT("seinframeworktest.synth.a"), 1, DiscoveryDigest));
+		ASSERT_THAT(IsTrue(
+			FSeinSimulationContentManifestCodec::SealProfile(
+				FSeinSimulationContentManifestCodec::
+					CurrentFormatVersion,
+				Again,
+				Error)));
+		ASSERT_THAT(IsTrue(Again.RootDigest == Synthesized.RootDigest));
+
+		FSeinSimulationContentRecord Record;
+		ASSERT_THAT(IsTrue(MakeRecord(
+			TEXT("/Game/SeinFrameworkTest/SynthDelta"),
+			7,
+			Record,
+			Error)));
+		FSeinSimulationContentManifestProfile Baked = MakeProfile(
+			MakeContributor(
+				TEXT("seinframeworktest.synth.a"), 1, DiscoveryDigest),
+			MoveTemp(Record));
+		ASSERT_THAT(IsTrue(
+			FSeinSimulationContentManifestCodec::SealProfile(
+				FSeinSimulationContentManifestCodec::
+					CurrentFormatVersion,
+				Baked,
+				Error)));
+		ASSERT_THAT(IsFalse(Baked.RootDigest == Synthesized.RootDigest));
+	}
 }

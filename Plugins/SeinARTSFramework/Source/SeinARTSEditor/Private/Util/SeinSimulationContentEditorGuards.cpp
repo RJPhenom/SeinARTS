@@ -53,18 +53,19 @@ namespace
 		{
 			return;
 		}
-		if (Settings->SimulationContentManifest.IsNull())
+		const bool bFirstTimeAssignment =
+			Settings->SimulationContentManifest.IsNull();
+		if (bFirstTimeAssignment)
 		{
 			// First-time setup: assign the canonical project-owned default so
-			// generation has an identity, and persist it to the project config
-			// so every peer/build agrees on the path.
+			// generation has an identity. The assignment is persisted to the
+			// project config only AFTER generation succeeds — a fresh project
+			// whose first bake fails must stay unconfigured, where the runtime
+			// plays on a synthesized code-contract profile, instead of becoming
+			// configured-but-broken (which is a hard authoring error).
 			Settings->SimulationContentManifest =
 				TSoftObjectPtr<USeinSimulationContentManifest>(
 					FSoftObjectPath(DefaultManifestObjectPath));
-			Settings->TryUpdateDefaultConfigFile();
-			UE_LOG(LogSeinSimulationContentEditor, Display,
-				TEXT("No Simulation Content Manifest was configured; assigned the project default '%s'."),
-				DefaultManifestObjectPath);
 		}
 		else
 		{
@@ -82,12 +83,31 @@ namespace
 		if (!FSeinSimulationContentManifestBuilder::
 			GenerateConfiguredManifest(Result, Error))
 		{
+			if (bFirstTimeAssignment)
+			{
+				Settings->SimulationContentManifest.Reset();
+				UE_LOG(LogSeinSimulationContentEditor, Display,
+					TEXT("Automatic Simulation Content Manifest generation failed on first-time setup; staying in synthesized (manifest-less) mode: %s"),
+					Error.IsEmpty()
+						? TEXT("unknown generation error")
+						: *Error);
+				return;
+			}
 			UE_LOG(LogSeinSimulationContentEditor, Warning,
-				TEXT("Automatic Simulation Content Manifest generation failed (deterministic matches will refuse to start until it succeeds): %s"),
+				TEXT("Automatic Simulation Content Manifest regeneration failed; the previously generated manifest stays active (coverage gaps are advisory unless Require Simulation Content Coverage is on): %s"),
 				Error.IsEmpty()
 					? TEXT("unknown generation error")
 					: *Error);
 			return;
+		}
+		if (bFirstTimeAssignment)
+		{
+			// Persist the successful assignment so every peer/build agrees on
+			// the path.
+			Settings->TryUpdateDefaultConfigFile();
+			UE_LOG(LogSeinSimulationContentEditor, Display,
+				TEXT("No Simulation Content Manifest was configured; assigned the project default '%s'."),
+				DefaultManifestObjectPath);
 		}
 		UE_LOG(LogSeinSimulationContentEditor, Display,
 			TEXT("Simulation Content Manifest regenerated for PIE: %s (%d contributors, %d records, digest=%s)."),

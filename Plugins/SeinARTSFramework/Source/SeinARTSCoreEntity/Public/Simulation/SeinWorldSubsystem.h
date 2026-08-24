@@ -2038,6 +2038,16 @@ public:
 			&& SimulationContentDigest.IsValid();
 	}
 
+	/**
+	 * True when no manifest was configured and the active profile was sealed at
+	 * world init from the live contributor registry instead (records-free, so it
+	 * carries the code contract but no baked asset-parity or coverage claims).
+	 */
+	bool IsSimulationContentSynthesized() const
+	{
+		return bSimulationContentSynthesized;
+	}
+
 	const FString& GetSimulationContentFailureReason() const
 	{
 		return SimulationContentFailureReason;
@@ -2536,6 +2546,7 @@ private:
 	FGuid SimulationContentDigest;
 	FString SimulationContentFailureReason;
 	bool bSimulationContentReady = false;
+	bool bSimulationContentSynthesized = false;
 	bool bCommandProtocolReady = false;
 	bool bReplayOwnsExternalCommandIngress = false;
 	int32 CommandCohesionOrderSequence = 0;
