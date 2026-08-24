@@ -748,7 +748,7 @@ public:
 	 *  default broker resolver; squad-authored dispatches are unaffected. */
 	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Re-Seek",
 		meta = (DisplayName = "Idle Re-Seek"))
-	bool bIdleReseek = false;
+	bool bIdleReseek = true;
 
 	/** How far a settled unit must be pushed off its formation before the formation re-forms.
 	 *
@@ -756,12 +756,12 @@ public:
 	 *  Must comfortably exceed the arrival acceptance radius plus ordinary collision-settle
 	 *  jitter, or formations re-form forever. A structural floor enforces this at runtime: the
 	 *  effective trigger is never less than twice a unit's arrival acceptance, so a too-low value
-	 *  here is quietly raised rather than causing an endless shuffle. Default 150. Only read while
+	 *  here is quietly raised rather than causing an endless shuffle. Default 50. Only read while
 	 *  Idle Re-Seek is on. */
 	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Re-Seek",
 		meta = (DisplayName = "Re-Seek Displacement Threshold", ClampMin = "0.0",
 				EditCondition = "bIdleReseek"))
-	FFixedPoint ReseekDisplacementThreshold = FFixedPoint::FromInt(150);
+	FFixedPoint ReseekDisplacementThreshold = FFixedPoint::FromInt(50);
 
 	/** How often an idle formation checks whether it has been shoved apart, in seconds.
 	 *
