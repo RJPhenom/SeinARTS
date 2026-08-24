@@ -135,6 +135,19 @@ public:
 	int32 EffectCountWarningThreshold;
 
 	/**
+	 * Where generated manifest assets are written. When you press Generate / Regenerate Manifest, the
+	 * result is saved here as SeinSimulationContentManifest and the Simulation Content Manifest
+	 * reference below is updated to point at it.
+	 *
+	 * Default /Game/SeinARTS/. Use the content-browser picker to choose any folder under any content
+	 * mount; it is created if missing. Existing manifests do not move themselves — regenerate after
+	 * changing this.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Simulation|Content",
+		meta = (DisplayName = "Manifest Save Folder", ContentDir))
+	FDirectoryPath ManifestSaveFolder;
+
+	/**
 	 * OPTIONAL generated source-content evidence used by bootstrap, snapshots,
 	 * replays, and network compatibility. None is a supported mode, not an
 	 * error: the runtime seals a synthesized profile from the live code
@@ -277,10 +290,10 @@ public:
 	 * so on) — is saved here as LevelData_<LevelName> and auto-assigned to every level volume on the
 	 * level.
 	 *
-	 * Default /Game/LevelData/. Use the content-browser picker to choose any folder under any content
-	 * mount (/Game/ for project content, /<PluginName>/ for plugin content); it is created if missing.
-	 * Baked level data is a regenerable, gitignored build artifact, so re-bake after changing this —
-	 * existing bakes do not move themselves.
+	 * Default /Game/SeinARTS/LevelData/. Use the content-browser picker to choose any folder under any
+	 * content mount (/Game/ for project content, /<PluginName>/ for plugin content); it is created if
+	 * missing. Baked level data is a regenerable, gitignored build artifact, so re-bake after changing
+	 * this — existing bakes do not move themselves.
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Level Data",
 		meta = (DisplayName = "Level Data Save Folder", ContentDir))

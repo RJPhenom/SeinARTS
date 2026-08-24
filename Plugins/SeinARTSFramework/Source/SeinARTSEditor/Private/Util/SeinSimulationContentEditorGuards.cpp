@@ -30,10 +30,23 @@ namespace
 		TEXT("When 1 (default), starting PIE keeps the Simulation Content Manifest maintenance-free: an unconfigured project gets a default project-owned manifest path assigned and generated, and a stale manifest is regenerated in place. Set 0 to manage the manifest manually (CI uses Sein.SimulationContent.GenerateManifest)."),
 		ECVF_Default);
 
-	/** Canonical default asset path assigned when a project never configured
-	 *  a manifest — project-owned by construction (/Game). */
-	const TCHAR* DefaultManifestObjectPath =
-		TEXT("/Game/Generated/SeinSimulationContentManifest.SeinSimulationContentManifest");
+	/** Fixed asset name for the auto-generated manifest. */
+	const TCHAR* ManifestAssetName = TEXT("SeinSimulationContentManifest");
+
+	/** Build the default manifest object path from the configured
+	 *  ManifestSaveFolder (or the constructor default if empty). */
+	FString GetDefaultManifestObjectPath()
+	{
+		FString Folder = TEXT("/Game/SeinARTS");
+		if (const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>())
+		{
+			if (!Settings->ManifestSaveFolder.Path.IsEmpty())
+			{
+				Folder = Settings->ManifestSaveFolder.Path;
+			}
+		}
+		return FString::Printf(TEXT("%s/%s.%s"), *Folder, ManifestAssetName, ManifestAssetName);
+	}
 
 	/** Best-effort freshness maintenance ahead of the strict gate. Failures
 	 *  only log — the runtime bootstrap gate stays the fail-closed authority,
@@ -57,15 +70,17 @@ namespace
 			Settings->SimulationContentManifest.IsNull();
 		if (bFirstTimeAssignment)
 		{
-			// First-time setup: assign the canonical project-owned default so
-			// generation has an identity. The assignment is persisted to the
-			// project config only AFTER generation succeeds — a fresh project
-			// whose first bake fails must stay unconfigured, where the runtime
-			// plays on a synthesized code-contract profile, instead of becoming
+			// First-time setup: assign the manifest path derived from the
+			// configured ManifestSaveFolder so generation has an identity.
+			// The assignment is persisted to the project config only AFTER
+			// generation succeeds — a fresh project whose first bake fails
+			// must stay unconfigured, where the runtime plays on a
+			// synthesized code-contract profile, instead of becoming
 			// configured-but-broken (which is a hard authoring error).
+			const FString DefaultPath = GetDefaultManifestObjectPath();
 			Settings->SimulationContentManifest =
 				TSoftObjectPtr<USeinSimulationContentManifest>(
-					FSoftObjectPath(DefaultManifestObjectPath));
+					FSoftObjectPath(*DefaultPath));
 		}
 		else
 		{
@@ -107,7 +122,7 @@ namespace
 			Settings->TryUpdateDefaultConfigFile();
 			UE_LOG(LogSeinSimulationContentEditor, Display,
 				TEXT("No Simulation Content Manifest was configured; assigned the project default '%s'."),
-				DefaultManifestObjectPath);
+				*Result.ManifestObjectPath);
 		}
 		UE_LOG(LogSeinSimulationContentEditor, Display,
 			TEXT("Simulation Content Manifest regenerated for PIE: %s (%d contributors, %d records, digest=%s)."),
