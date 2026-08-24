@@ -37,12 +37,16 @@ USeinARTSCoreSettings::USeinARTSCoreSettings()
 	: SimulationTickRate(30)
 	, MaxTicksPerFrame(5)
 	, EffectCountWarningThreshold(256)
+	// Manifest save folder: /Game/SeinARTS by convention. The auto-assignment
+	// logic derives the manifest asset path from this folder + a fixed name.
+	, ManifestSaveFolder({TEXT("/Game/SeinARTS")})
 	// Level Data. Substrate class defaults EXPLICITLY to the shipped grid; the save folder is
-	// /Game/LevelData by convention (regenerable, gitignored). Both are soft paths so this module
-	// does not depend on SeinARTSLevelData. Empty LevelDataClass now means the substrate is OFF
-	// (WYSIWYG), so the ctor must name the default or a fresh project would boot with no level bake.
+	// /Game/SeinARTS/LevelData by convention (regenerable, gitignored). Both are soft paths so
+	// this module does not depend on SeinARTSLevelData. Empty LevelDataClass now means the
+	// substrate is OFF (WYSIWYG), so the ctor must name the default or a fresh project would
+	// boot with no level bake.
 	, LevelDataClass(FSoftClassPath(TEXT("/Script/SeinARTSLevelData.SeinLevelDataDefault")))
-	, LevelDataSaveFolder({TEXT("/Game/LevelData")})
+	, LevelDataSaveFolder({TEXT("/Game/SeinARTS/LevelData")})
 	// Collision resolver defaults to the shipped Gauss-Seidel resolver. Like
 	// NavigationClass / FogOfWarClass it's a soft-class-path string rather than a
 	// StaticClass() call — the target lives in THIS module (SeinARTSCoreEntity),

@@ -94,9 +94,9 @@ try {
 	})
 	Write-Utf8NoBom (Join-Path $PassProject 'Config\DefaultGame.ini') @'
 [/Script/SeinARTSCoreEntity.SeinARTSCoreSettings]
-SimulationContentManifest=/Game/Generated/Manifest.Manifest
+SimulationContentManifest=/Game/SeinARTS/Manifest.Manifest
 '@
-	$PassManifest = Join-Path $PassProject 'Content\Generated\Manifest.uasset'
+	$PassManifest = Join-Path $PassProject 'Content\SeinARTS\Manifest.uasset'
 	New-Item -ItemType Directory -Path (Split-Path -Parent $PassManifest) `
 		-Force | Out-Null
 	[System.IO.File]::WriteAllBytes($PassManifest, [byte[]]@(0))

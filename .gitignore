@@ -16,13 +16,14 @@ Saved/
 # ── Baked SeinARTS data (regenerable build artifacts — re-bake after clone) ──
 # Level-data bakes are derived from level geometry + plugin code. After clone,
 # open each level once and click "Bake Level Data" on the ASeinLevelVolume
-# (unified pipeline, CP1.1 — saves to LevelDataSaveFolder, default /Game/LevelData).
-# The NavData/FogOfWarData/Levels patterns are legacy (pre-CP1.1), kept for old clones.
+# (unified pipeline, CP1.1 — saves to LevelDataSaveFolder, default /Game/SeinARTS/LevelData).
+# The NavData/FogOfWarData/Levels/LevelData patterns are legacy, kept for old clones.
 # The **/ prefix is required so these match inside Plugins/.../Content, not just root.
 **/Content/Levels/Data/
 **/Content/NavData/
 **/Content/FogOfWarData/
 **/Content/LevelData/
+**/Content/SeinARTS/LevelData/
 
 # ── IDE / build tooling ──
 .vs/

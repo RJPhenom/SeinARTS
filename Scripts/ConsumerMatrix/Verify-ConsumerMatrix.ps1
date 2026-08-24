@@ -1010,7 +1010,7 @@ bAutoLoginAtStartup=True
 ProjectID=E42D638747C4108CCF59B1A7AB1A57D4
 
 [/Script/SeinARTSCoreEntity.SeinARTSCoreSettings]
-SimulationContentManifest=/Game/Generated/SeinSimulationContentManifest.SeinSimulationContentManifest
+SimulationContentManifest=/Game/SeinARTS/SeinSimulationContentManifest.SeinSimulationContentManifest
 DefaultBrokerResolverClass=/Script/SeinARTSCoreEntity.SeinDefaultCommandBrokerResolver
 NavigationClass=__SEIN_CONSUMER_NAVIGATION_CLASS__
 LevelDataClass=/Script/SeinARTSLevelData.SeinLevelDataDefault
@@ -1102,7 +1102,7 @@ if not unreal.EditorAssetLibrary.save_asset(match_path, only_if_is_dirty=False):
 	$GenerateManifestPy = @'
 import unreal
 
-manifest_path = "/Game/Generated/SeinSimulationContentManifest"
+manifest_path = "/Game/SeinARTS/SeinSimulationContentManifest"
 unreal.SystemLibrary.execute_console_command(
     None, "Sein.SimulationContent.GenerateManifest"
 )
@@ -1325,7 +1325,7 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 	$DiagnosticReport = ($DiagnosticJson -join "`r`n") | ConvertFrom-Json
 	$ExpectedDiagnosticMode = if ($ArtifactDirectory) { 'Release' } else { 'Source' }
 	$ExpectedManifestObject =
-		'/Game/Generated/SeinSimulationContentManifest.SeinSimulationContentManifest'
+		'/Game/SeinARTS/SeinSimulationContentManifest.SeinSimulationContentManifest'
 	$DiagnosticPlugins = @($DiagnosticReport.enabledProductionPlugins | Sort-Object)
 	if ([int]$DiagnosticReport.schemaVersion -ne 1 -or
 		[string]$DiagnosticReport.result -cne 'Passed' -or
@@ -1535,7 +1535,7 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 		consumerMaps = @(
 			'/Game/Maps/ConsumerLobbyMap',
 			'/Game/Maps/ConsumerMap')
-		consumerManifest = '/Game/Generated/SeinSimulationContentManifest'
+		consumerManifest = '/Game/SeinARTS/SeinSimulationContentManifest'
 		installationDiagnostic = 'Passed'
 		installationDiagnosticReceipt = $InstallationDiagnosticReceipt
 		installationDiagnosticReceiptSha256 =
