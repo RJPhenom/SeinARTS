@@ -39,7 +39,6 @@ void USeinCollisionResolverDefault::Resolve(USeinWorldSubsystem& World)
 	const bool bMayUseAuthoritativeDestination =
 		World.HasAuthoritativeDestinationProviders();
 
-	constexpr int32 NumPasses = 4;
 	for (int32 Pass = 0; Pass < NumPasses; ++Pass)
 	{
 		// A no-write pass is a fixed point: rerunning the same deterministic
@@ -293,8 +292,13 @@ bool USeinCollisionResolverDefault::ComputeResolutionConfigDigest(
 		return false;
 	}
 	FSeinCanonicalDigestWriter Writer(
-		TEXT("SeinARTS.Collision.Default.ResolutionConfig"), 1);
+		TEXT("SeinARTS.Collision.Default.ResolutionConfig"), 2);
 	if (!Writer.WriteString(GetClass()->GetPathName()))
+	{
+		OutError = Writer.GetError();
+		return false;
+	}
+	if (!Writer.WriteInt32(NumPasses))
 	{
 		OutError = Writer.GetError();
 		return false;
