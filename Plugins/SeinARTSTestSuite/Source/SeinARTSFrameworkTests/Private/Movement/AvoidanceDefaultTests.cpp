@@ -802,4 +802,117 @@ namespace UE::SeinARTSTests
 				FFixedPoint::FromInt(200), FFixedPoint::FromInt(50),
 				FFixedPoint::Zero)));
 	}
+
+	TEST(ArrivalFadeScalesSaturatedResponseAfterTheCap,
+		"SeinARTS.Unit.Movement.Avoidance")
+	{
+		FScopedIdleReseekSetting IdleReseek(false);
+		auto AuthorArrival = [](
+			FAvoidanceFixture& Fixture,
+			FSeinEntityHandle& OutMover,
+			int32 GoalDistance,
+			bool bLegacyCut = false)
+		{
+			Fixture.Avoidance->AvoidanceSmoothKeep = FFixedPoint::Zero;
+			Fixture.Avoidance->AvoidanceMaxSteerMagnitude =
+				FFixedPoint::One / FFixedPoint::FromInt(10);
+			Fixture.Avoidance->AvoidanceBrakeStrength = FFixedPoint::One;
+			if (bLegacyCut)
+			{
+				Fixture.Avoidance->AvoidanceArrivalFadeInnerRadii =
+					Fixture.Avoidance->AvoidanceArrivalReleaseRadii;
+			}
+			OutMover = Fixture.AddMover(
+				FFixedVector::ZeroVector,
+				FFixedVector(
+					FFixedPoint::FromInt(100), FFixedPoint::Zero,
+					FFixedPoint::Zero),
+				FFixedVector(
+					FFixedPoint::FromInt(GoalDistance), FFixedPoint::Zero,
+					FFixedPoint::Zero));
+			Fixture.AddMover(
+				FFixedVector(
+					FFixedPoint::FromInt(40), FFixedPoint::Zero,
+					FFixedPoint::Zero),
+				FFixedVector::ZeroVector,
+				FFixedVector::ZeroVector,
+				false);
+		};
+
+		FAvoidanceFixture Full;
+		FAvoidanceFixture OuterBoundary;
+		FAvoidanceFixture MidBand;
+		FAvoidanceFixture InnerBoundary;
+		FAvoidanceFixture LegacyCut;
+		FSeinEntityHandle FullMover;
+		FSeinEntityHandle OuterMover;
+		FSeinEntityHandle MidMover;
+		FSeinEntityHandle InnerMover;
+		FSeinEntityHandle LegacyMover;
+		ASSERT_THAT(IsTrue(Full.Initialize([&](FAvoidanceFixture& Fixture)
+		{
+			AuthorArrival(Fixture, FullMover, 200);
+		})));
+		ASSERT_THAT(IsTrue(OuterBoundary.Initialize([&](FAvoidanceFixture& Fixture)
+		{
+			AuthorArrival(Fixture, OuterMover, 150);
+		})));
+		ASSERT_THAT(IsTrue(MidBand.Initialize([&](FAvoidanceFixture& Fixture)
+		{
+			AuthorArrival(Fixture, MidMover, 100);
+		})));
+		ASSERT_THAT(IsTrue(InnerBoundary.Initialize([&](FAvoidanceFixture& Fixture)
+		{
+			AuthorArrival(Fixture, InnerMover, 50);
+		})));
+		ASSERT_THAT(IsTrue(LegacyCut.Initialize([&](FAvoidanceFixture& Fixture)
+		{
+			AuthorArrival(Fixture, LegacyMover, 100, true);
+		})));
+		ASSERT_THAT(IsTrue(Full.Compute()));
+		ASSERT_THAT(IsTrue(OuterBoundary.Compute()));
+		ASSERT_THAT(IsTrue(MidBand.Compute()));
+		ASSERT_THAT(IsTrue(InnerBoundary.Compute()));
+		ASSERT_THAT(IsTrue(LegacyCut.Compute()));
+
+		const FSeinMovementComponent* FullMove =
+			Full.World->GetComponent<FSeinMovementComponent>(FullMover);
+		const FSeinMovementComponent* OuterMove =
+			OuterBoundary.World->GetComponent<FSeinMovementComponent>(OuterMover);
+		const FSeinMovementComponent* MidMove =
+			MidBand.World->GetComponent<FSeinMovementComponent>(MidMover);
+		const FSeinMovementComponent* InnerMove =
+			InnerBoundary.World->GetComponent<FSeinMovementComponent>(InnerMover);
+		const FSeinMovementComponent* LegacyMove =
+			LegacyCut.World->GetComponent<FSeinMovementComponent>(LegacyMover);
+		ASSERT_THAT(IsNotNull(FullMove));
+		ASSERT_THAT(IsNotNull(OuterMove));
+		ASSERT_THAT(IsNotNull(MidMove));
+		ASSERT_THAT(IsNotNull(InnerMove));
+		ASSERT_THAT(IsNotNull(LegacyMove));
+		ASSERT_THAT(IsTrue(
+			FullMove->AvoidanceOutput.SteerDir.SizeSquared()
+				> FFixedPoint::Epsilon));
+		ASSERT_THAT(IsTrue(
+			OuterMove->AvoidanceOutput.SteerDir
+				== FullMove->AvoidanceOutput.SteerDir));
+		ASSERT_THAT(IsTrue(
+			MidMove->AvoidanceOutput.SteerDir
+				== FullMove->AvoidanceOutput.SteerDir / FFixedPoint::Two));
+		ASSERT_THAT(IsTrue(
+			MidMove->AvoidanceOutput.SpeedScale
+				> FullMove->AvoidanceOutput.SpeedScale));
+		ASSERT_THAT(IsTrue(
+			MidMove->AvoidanceOutput.SpeedScale < FFixedPoint::One));
+		ASSERT_THAT(IsTrue(
+			InnerMove->AvoidanceOutput.SteerDir
+				== FFixedVector::ZeroVector));
+		ASSERT_THAT(IsTrue(
+			InnerMove->AvoidanceOutput.SpeedScale == FFixedPoint::One));
+		ASSERT_THAT(IsTrue(
+			LegacyMove->AvoidanceOutput.SteerDir
+				== FFixedVector::ZeroVector));
+		ASSERT_THAT(IsTrue(
+			LegacyMove->AvoidanceOutput.SpeedScale == FFixedPoint::One));
+	}
 }

@@ -750,7 +750,7 @@ public:
 		meta = (DisplayName = "Settle To Formation Facing"))
 	bool bSettleToFormationFacing = true;
 
-	/** Whether idle formations automatically re-form after being shoved apart. Off by default.
+	/** Whether idle formations automatically re-form after being shoved apart. On by default.
 	 *
 	 *  When on, a formation whose order queue is empty and whose members are all idle and settled
 	 *  checks about twice a second whether anyone has been displaced more than the Re-Seek

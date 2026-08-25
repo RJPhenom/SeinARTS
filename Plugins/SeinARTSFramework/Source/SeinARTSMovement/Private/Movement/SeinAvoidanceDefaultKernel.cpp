@@ -4,7 +4,7 @@
  * @file         SeinAvoidanceDefaultKernel.cpp
  * @author       RJ Macklem
  * @created      13 Aug 2026
- * @latest       22 Aug 2026
+ * @latest       25 Aug 2026
  * @brief        Implements the shipped deterministic local-avoidance kernel.
  *
  *               The kernel reads the immutable start-of-tick broadphase and
@@ -541,6 +541,7 @@ namespace
 		int32 Index,
 		FSeinMovementComponent& Movement,
 		FFixedVector Accum,
+		FFixedPoint ArrivalFade,
 		FFixedPoint SelfRadius,
 		FFixedPoint GoalDistanceSquared,
 		FSeinEntityHandle SelfBrokerHandle,
@@ -556,6 +557,15 @@ namespace
 			Accum.X = Accum.X * Scale;
 			Accum.Y = Accum.Y * Scale;
 			AccumLength = Parameters.MaxSteerMagnitude;
+		}
+		// Fade the capped response, not the uncapped neighbour sum. Dense crowds
+		// commonly saturate MaxSteerMagnitude; scaling before the cap would leave
+		// them pinned at full steering through most of the arrival band.
+		if (ArrivalFade < FFixedPoint::One)
+		{
+			Accum.X = Accum.X * ArrivalFade;
+			Accum.Y = Accum.Y * ArrivalFade;
+			AccumLength = AccumLength * ArrivalFade;
 		}
 
 		const FFixedVector Scaled(
@@ -1548,14 +1558,8 @@ namespace
 			IdleBlockers, Heading, Right, ToGoal, GoalDistSq,
 			BendCapCos, GapCos, GapSin, IdleResolveStrength, Accum);
 
-		if (ArrivalFade < FFixedPoint::One)
-		{
-			Accum.X = Accum.X * ArrivalFade;
-			Accum.Y = Accum.Y * ArrivalFade;
-		}
-
 		FinalizeMovingOutput(
-			OutputParameters, Index, *Move, Accum, SelfRadius,
+			OutputParameters, Index, *Move, Accum, ArrivalFade, SelfRadius,
 			GoalDistSq, SelfBrokerHandle, SelfCohesionId,
 			SelfBrokerData);
 	}

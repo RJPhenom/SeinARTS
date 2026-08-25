@@ -19,7 +19,7 @@ namespace UE::SeinARTSTests
 		"SeinARTS.Unit.Core")
 	{
 		ASSERT_THAT(AreEqual(
-			FString(TEXT("SeinARTS.Replay.6")),
+			FString(TEXT("SeinARTS.Replay.7")),
 			SeinReplayCompatibility::GetFrameworkVersion()));
 	}
 

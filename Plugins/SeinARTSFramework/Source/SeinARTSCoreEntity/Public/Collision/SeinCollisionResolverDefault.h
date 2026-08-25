@@ -69,7 +69,7 @@ class USeinWorldSubsystem;
  * separations are part of the deterministic snapshot. For the multithreaded
  * variant see Sein Collision Resolver (Parallel).
  */
-UCLASS(meta = (DisplayName = "Sein Collision Resolver (Default)"))
+UCLASS(Blueprintable, meta = (DisplayName = "Sein Collision Resolver (Default)"))
 class SEINARTSCOREENTITY_API USeinCollisionResolverDefault : public USeinCollisionResolver
 {
 	GENERATED_BODY()
@@ -97,7 +97,8 @@ public:
 	/** Gauss-Seidel relaxation passes per tick. Dense moving clusters retain
 	 *  all passes; idle or already-settled worlds early-out when a pass
 	 *  produces no writes. Default 4. */
-	UPROPERTY(EditDefaultsOnly, Category = "Collision", meta = (ClampMin = "1"))
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS|Collision",
+		meta = (ClampMin = "1"))
 	int32 NumPasses = 4;
 
 protected:
