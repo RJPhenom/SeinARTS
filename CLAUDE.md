@@ -37,7 +37,7 @@ It owns the cross-cutting rules that apply to **all six production plugins** and
 > Note: as of 2026-06-02 the project root **is** a git repository — a single project-wide monorepo
 > (`main`, initial commit `ecf6068`) tracking the host, six production plugins, and two disabled
 > test plugins, with **Git LFS**
-> for binary assets (`*.uasset`/`*.umap` + common media). Baked level data (`**/Content/LevelData/` + legacy patterns)
+> for binary assets (`*.uasset`/`*.umap` + common media). Baked level data (`**/Content/SeinARTS/LevelData/` + legacy patterns)
 > is gitignored as a regenerable build artifact — **re-bake after a fresh clone** via the one
 > "Bake Level Data" button on `ASeinLevelVolume` (unified pipeline, CP1.1). History
 > starts fresh from the plugin split; the framework's pre-split history is archived at

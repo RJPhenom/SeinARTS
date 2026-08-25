@@ -7,6 +7,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Engine/EngineTypes.h"
 
 /** Result shared by the settings UI and editor/cook admission gates. */
 struct SEINARTSEDITOR_API FSeinSimulationContentManifestBuildResult
@@ -30,6 +31,21 @@ struct SEINARTSEDITOR_API FSeinSimulationContentManifestBuildResult
 class SEINARTSEDITOR_API FSeinSimulationContentManifestBuilder
 {
 public:
+	/** Resolve a canonical project-owned manifest object path from a save folder. */
+	static bool BuildProjectManifestObjectPath(
+		const FDirectoryPath& SaveFolder,
+		FString& OutObjectPath,
+		FString& OutError);
+
+	/**
+	 * Generate at ManifestSaveFolder and persist SimulationContentManifest only
+	 * after the asset saves successfully. The previous reference survives any
+	 * validation or generation failure.
+	 */
+	static bool GenerateManifestInConfiguredSaveFolder(
+		FSeinSimulationContentManifestBuildResult& OutResult,
+		FString& OutError);
+
 	/**
 	 * Regenerate the exact active contributor-set profile and save the
 	 * configured USeinSimulationContentManifest asset. Other valid profiles

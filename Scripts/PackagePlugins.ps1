@@ -257,7 +257,7 @@ try {
         if (Test-Path (Join-Path $out 'Binaries')) {
             Get-ChildItem (Join-Path $out 'Binaries') -Recurse -Filter '*.pdb' | Remove-Item -Force
         }
-        foreach ($baked in @('Content\LevelData', 'Content\NavData', 'Content\FogOfWarData', 'Content\Levels\Data')) {
+        foreach ($baked in @('Content\SeinARTS\LevelData', 'Content\LevelData', 'Content\NavData', 'Content\FogOfWarData', 'Content\Levels\Data')) {
             Remove-Item (Join-Path $out $baked) -Recurse -Force -ErrorAction SilentlyContinue
         }
 

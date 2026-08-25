@@ -466,7 +466,7 @@ function Get-QualifiedMatrixReceiptPath(
 	$ExpectedDiagnosticProject = Join-Path $RepoRoot `
 		"Saved\ConsumerMatrix\$Profile\SeinConsumer.uproject"
 	$ExpectedManifestObject =
-		'/Game/Generated/SeinSimulationContentManifest.SeinSimulationContentManifest'
+		'/Game/SeinARTS/SeinSimulationContentManifest.SeinSimulationContentManifest'
 	if ([int]$InstallationDiagnostic.schemaVersion -ne 1 -or
 		[string]$InstallationDiagnostic.result -cne 'Passed' -or
 		[int]$InstallationDiagnostic.errorCount -ne 0 -or

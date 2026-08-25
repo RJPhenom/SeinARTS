@@ -1405,6 +1405,85 @@ namespace
 }
 
 bool FSeinSimulationContentManifestBuilder::
+	BuildProjectManifestObjectPath(
+		const FDirectoryPath& SaveFolder,
+		FString& OutObjectPath,
+		FString& OutError)
+{
+	OutObjectPath.Reset();
+	OutError.Reset();
+	FString Folder = SaveFolder.Path;
+	Folder.TrimStartAndEndInline();
+	while (Folder.Len() > 1 && Folder.EndsWith(TEXT("/")))
+	{
+		Folder.LeftChopInline(1, EAllowShrinking::No);
+	}
+
+	if (Folder.Contains(TEXT("\\"))
+		|| (Folder != TEXT("/Game")
+			&& !Folder.StartsWith(TEXT("/Game/"))))
+	{
+		OutError = FString::Printf(
+			TEXT("Manifest Save Folder '%s' must be a canonical project-owned /Game directory."),
+			*SaveFolder.Path);
+		return false;
+	}
+
+	const FString AssetName = TEXT("SeinSimulationContentManifest");
+	const FString PackageName = Folder + TEXT("/") + AssetName;
+	if (!FPackageName::IsValidLongPackageName(PackageName))
+	{
+		OutError = FString::Printf(
+			TEXT("Manifest Save Folder '%s' does not form a valid Unreal package path."),
+			*SaveFolder.Path);
+		return false;
+	}
+
+	OutObjectPath = FString::Printf(
+		TEXT("%s.%s"), *PackageName, *AssetName);
+	return true;
+}
+
+bool FSeinSimulationContentManifestBuilder::
+	GenerateManifestInConfiguredSaveFolder(
+		FSeinSimulationContentManifestBuildResult& OutResult,
+		FString& OutError)
+{
+	OutResult = {};
+	OutError.Reset();
+	USeinARTSCoreSettings* Settings =
+		GetMutableDefault<USeinARTSCoreSettings>();
+	if (!Settings)
+	{
+		OutError = TEXT("SeinARTS Core settings are unavailable.");
+		return false;
+	}
+
+	FString TargetObjectPath;
+	if (!BuildProjectManifestObjectPath(
+		Settings->ManifestSaveFolder,
+		TargetObjectPath,
+		OutError))
+	{
+		return false;
+	}
+
+	const TSoftObjectPtr<USeinSimulationContentManifest> PreviousManifest =
+		Settings->SimulationContentManifest;
+	Settings->SimulationContentManifest =
+		TSoftObjectPtr<USeinSimulationContentManifest>(
+			FSoftObjectPath(TargetObjectPath));
+	if (!GenerateConfiguredManifest(OutResult, OutError))
+	{
+		Settings->SimulationContentManifest = PreviousManifest;
+		return false;
+	}
+
+	Settings->TryUpdateDefaultConfigFile();
+	return true;
+}
+
+bool FSeinSimulationContentManifestBuilder::
 	GenerateConfiguredManifest(
 		FSeinSimulationContentManifestBuildResult& OutResult,
 		FString& OutError)
