@@ -6,6 +6,7 @@
 #include "Components/SeinMovementComponent.h"
 #include "Components/SeinNavigationComponent.h"
 #include "HAL/IConsoleManager.h"
+#include "Math/MathLib.h"
 #include "Movement/SeinAvoidanceDefault.h"
 #include "Settings/PluginSettings.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
@@ -896,9 +897,13 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(
 			OuterMove->AvoidanceOutput.SteerDir
 				== FullMove->AvoidanceOutput.SteerDir));
+		const FFixedPoint MidGoal = FFixedPoint::FromInt(100);
+		const FFixedPoint MidFade =
+			(SeinMath::Sqrt(MidGoal * MidGoal) - FFixedPoint::FromInt(50))
+			/ FFixedPoint::FromInt(100);
 		ASSERT_THAT(IsTrue(
 			MidMove->AvoidanceOutput.SteerDir
-				== FullMove->AvoidanceOutput.SteerDir / FFixedPoint::Two));
+				== FullMove->AvoidanceOutput.SteerDir * MidFade));
 		ASSERT_THAT(IsTrue(
 			MidMove->AvoidanceOutput.SpeedScale
 				> FullMove->AvoidanceOutput.SpeedScale));
