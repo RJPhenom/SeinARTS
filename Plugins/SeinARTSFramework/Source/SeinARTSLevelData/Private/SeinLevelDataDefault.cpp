@@ -1031,7 +1031,7 @@ void USeinLevelDataDefault::BuildOrUpdateMinimapTexture(USeinLevelDataDefaultAss
 USeinLevelDataDefaultAsset* USeinLevelDataDefault::CreateOrLoadAsset(UWorld* World, const FString& AssetName) const
 {
 	// Save folder from plugin settings (regenerable, gitignored by default).
-	FString SaveFolder = TEXT("/Game/LevelData");
+	FString SaveFolder = TEXT("/Game/SeinARTS/LevelData");
 	if (const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>())
 	{
 		if (!Settings->LevelDataSaveFolder.Path.IsEmpty())

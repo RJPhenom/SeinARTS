@@ -94,6 +94,10 @@ void FSeinARTSCoreSettingsDetails::CustomizeDetails(IDetailLayoutBuilder& Detail
 			DetailBuilder.GetProperty(
 				GET_MEMBER_NAME_CHECKED(
 					USeinARTSCoreSettings,
+					ManifestSaveFolder)),
+			DetailBuilder.GetProperty(
+				GET_MEMBER_NAME_CHECKED(
+					USeinARTSCoreSettings,
 					SimulationContentManifest)),
 			DetailBuilder.GetProperty(
 				GET_MEMBER_NAME_CHECKED(
@@ -136,7 +140,7 @@ void FSeinARTSCoreSettingsDetails::CustomizeDetails(IDetailLayoutBuilder& Detail
 					Result;
 				FString Error;
 				if (!FSeinSimulationContentManifestBuilder::
-					GenerateConfiguredManifest(
+					GenerateManifestInConfiguredSaveFolder(
 						Result,
 						Error))
 				{

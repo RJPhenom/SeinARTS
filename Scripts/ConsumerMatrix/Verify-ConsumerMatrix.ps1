@@ -78,7 +78,7 @@ $EditorCmd = Join-Path $EngineRoot 'Engine\Binaries\Win64\UnrealEditor-Cmd.exe'
 $RunUat = Join-Path $EngineRoot 'Engine\Build\BatchFiles\RunUAT.bat'
 $GeneratedRoot = Join-Path $RepoRoot 'Saved\ConsumerMatrix'
 $PluginSourceRoot = Join-Path $RepoRoot 'Plugins'
-$ConsumerGenerationSchemaVersion = 6
+$ConsumerGenerationSchemaVersion = 7
 $ArtifactHashes = @{}
 $ArtifactVersion = $null
 $QualificationRunId = if ($QualificationRunId) {
@@ -556,12 +556,12 @@ function Refresh-ConsumerPlugins(
 
 function Assert-NoHostGameDependency([string] $ProjectRoot)
 {
-	# Byte-level scan for the literal host-content path across every consumer
+	# Byte-level scan for host example-content paths across every consumer
 	# file, binary assets included — a self-contained equivalent of the
-	# previous `rg -a -l -F '/Game/SeinARTS'` call, so the gate needs no
+	# previous binary ripgrep check, so the gate needs no
 	# external tool. Latin1 maps bytes 1:1 onto chars, making the ordinal
 	# Contains() a raw byte search identical to ripgrep's binary mode.
-	$Needle = '/Game/SeinARTS'
+	$Needle = '/Game/SeinARTSExamples'
 	$ExcludedSegments = @('\Binaries\', '\Intermediate\', '\Saved\')
 	$Forbidden = @(Get-ChildItem -LiteralPath $ProjectRoot -Recurse -File |
 		Where-Object {
@@ -574,7 +574,7 @@ function Assert-NoHostGameDependency([string] $ProjectRoot)
 		} |
 		ForEach-Object { $_.FullName })
 	if ($Forbidden) {
-		throw "Generated consumer contains forbidden host /Game/SeinARTS references:`n$($Forbidden -join "`n")"
+		throw "Generated consumer contains forbidden host example-content references:`n$($Forbidden -join "`n")"
 	}
 }
 
@@ -1010,7 +1010,7 @@ bAutoLoginAtStartup=True
 ProjectID=E42D638747C4108CCF59B1A7AB1A57D4
 
 [/Script/SeinARTSCoreEntity.SeinARTSCoreSettings]
-SimulationContentManifest=/Game/Generated/SeinSimulationContentManifest.SeinSimulationContentManifest
+SimulationContentManifest=/Game/SeinARTS/SeinSimulationContentManifest.SeinSimulationContentManifest
 DefaultBrokerResolverClass=/Script/SeinARTSCoreEntity.SeinDefaultCommandBrokerResolver
 NavigationClass=__SEIN_CONSUMER_NAVIGATION_CLASS__
 LevelDataClass=/Script/SeinARTSLevelData.SeinLevelDataDefault
@@ -1102,7 +1102,7 @@ if not unreal.EditorAssetLibrary.save_asset(match_path, only_if_is_dirty=False):
 	$GenerateManifestPy = @'
 import unreal
 
-manifest_path = "/Game/Generated/SeinSimulationContentManifest"
+manifest_path = "/Game/SeinARTS/SeinSimulationContentManifest"
 unreal.SystemLibrary.execute_console_command(
     None, "Sein.SimulationContent.GenerateManifest"
 )
@@ -1264,7 +1264,7 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 	$ManifestScript = Join-Path `
 		$Project.Root 'GenerateSimulationContentManifest.py'
 	$ManifestPath = Join-Path `
-		$Project.Root 'Content\Generated\SeinSimulationContentManifest.uasset'
+		$Project.Root 'Content\SeinARTS\SeinSimulationContentManifest.uasset'
 	Invoke-ManifestBootstrap `
 		$ProfileName `
 		$Project.Uproject `
@@ -1325,7 +1325,7 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 	$DiagnosticReport = ($DiagnosticJson -join "`r`n") | ConvertFrom-Json
 	$ExpectedDiagnosticMode = if ($ArtifactDirectory) { 'Release' } else { 'Source' }
 	$ExpectedManifestObject =
-		'/Game/Generated/SeinSimulationContentManifest.SeinSimulationContentManifest'
+		'/Game/SeinARTS/SeinSimulationContentManifest.SeinSimulationContentManifest'
 	$DiagnosticPlugins = @($DiagnosticReport.enabledProductionPlugins | Sort-Object)
 	if ([int]$DiagnosticReport.schemaVersion -ne 1 -or
 		[string]$DiagnosticReport.result -cne 'Passed' -or
@@ -1535,7 +1535,7 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 		consumerMaps = @(
 			'/Game/Maps/ConsumerLobbyMap',
 			'/Game/Maps/ConsumerMap')
-		consumerManifest = '/Game/Generated/SeinSimulationContentManifest'
+		consumerManifest = '/Game/SeinARTS/SeinSimulationContentManifest'
 		installationDiagnostic = 'Passed'
 		installationDiagnosticReceipt = $InstallationDiagnosticReceipt
 		installationDiagnosticReceiptSha256 =
