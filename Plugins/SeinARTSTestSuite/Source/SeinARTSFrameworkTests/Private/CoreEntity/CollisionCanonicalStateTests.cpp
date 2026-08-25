@@ -156,4 +156,38 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsFalse(World->IsSimulationRunning()));
 		ASSERT_THAT(IsFalse(World->IsExecutionTopologyValid()));
 	}
+
+	TEST(PostFreezeDefaultResolverTuningMutationFailStops,
+		"SeinARTS.Unit.CoreEntity.CollisionCanonicalState")
+	{
+		FScopedCollisionResolverClassOverride ResolverClass(
+			USeinCollisionResolverDefault::StaticClass());
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+		USeinCollisionResolverDefault* Resolver = Cast<
+			USeinCollisionResolverDefault>(World->GetCollisionResolver());
+		ASSERT_THAT(IsNotNull(Resolver));
+
+		FString Error;
+		ASSERT_THAT(IsTrue(StartCollisionStateWorld(
+			*World,
+			TEXT("CollisionState.DefaultTuningFailStop"),
+			Error)));
+		++Resolver->NumPasses;
+
+		TestRunner->AddExpectedError(
+			TEXT("Canonical StateContract world bindings changed"),
+			EAutomationExpectedErrorFlags::Contains,
+			1,
+			false);
+		const int32 TickBefore = World->GetCurrentTick();
+		FTSTicker::GetCoreTicker().Tick(
+			World->GetFixedDeltaTimeSeconds());
+
+		ASSERT_THAT(AreEqual(TickBefore, World->GetCurrentTick()));
+		ASSERT_THAT(IsFalse(World->IsSimulationRunning()));
+		ASSERT_THAT(IsFalse(World->IsExecutionTopologyValid()));
+	}
 }

@@ -4,7 +4,7 @@
  * @file         SeinCommandBrokerReseek.h
  * @author       RJ Macklem
  * @created      13 Aug 2026
- * @latest       13 Aug 2026
+ * @latest       25 Aug 2026
  * @brief        Implements deterministic idle return for brokered formations
  *               and displaced loose units.
  *
@@ -100,8 +100,10 @@ public:
 			FFixedVector Delta =
 				Entity->Transform.GetLocation() - Movement->HomePos;
 			Delta.Z = FFixedPoint::Zero;
-			const FFixedPoint Threshold =
-				Settings->ReseekDisplacementThreshold;
+			const FFixedPoint Threshold = GetEffectiveThreshold(
+				World,
+				Handle,
+				Settings->ReseekDisplacementThreshold);
 			if (Delta.SizeSquared() > Threshold * Threshold)
 			{
 				OutCandidates.Add(Handle);
@@ -263,6 +265,29 @@ private:
 			Ticks = 1;
 		}
 		return Ticks;
+	}
+
+	static FFixedPoint GetEffectiveThreshold(
+		USeinWorldSubsystem& World,
+		FSeinEntityHandle Member,
+		FFixedPoint ConfiguredThreshold)
+	{
+		FFixedPoint Acceptance = FFixedPoint::Zero;
+		if (const FSeinNavigationComponent* Navigation =
+			World.GetComponent<FSeinNavigationComponent>(Member))
+		{
+			Acceptance = Navigation->AcceptanceRadius;
+		}
+		if (Acceptance <= FFixedPoint::Zero)
+		{
+			Acceptance =
+				FSeinNavigationComponent::DefaultArrivalAcceptance();
+		}
+
+		const FFixedPoint HysteresisFloor = Acceptance + Acceptance;
+		return ConfiguredThreshold < HysteresisFloor
+			? HysteresisFloor
+			: ConfiguredThreshold;
 	}
 
 	static bool HasForeignOrder(const FSeinCommandBrokerData& Broker)
@@ -429,23 +454,8 @@ private:
 			if (!Movement || !Entity) continue;
 
 			const FFixedVector Position = Entity->Transform.GetLocation();
-			FFixedPoint Acceptance = FFixedPoint::Zero;
-			if (const FSeinNavigationComponent* Navigation =
-				World.GetComponent<FSeinNavigationComponent>(Member))
-			{
-				Acceptance = Navigation->AcceptanceRadius;
-			}
-			if (Acceptance <= FFixedPoint::Zero)
-			{
-				Acceptance =
-					FSeinNavigationComponent::DefaultArrivalAcceptance();
-			}
-			FFixedPoint EffectiveThreshold = ConfiguredThreshold;
-			const FFixedPoint HysteresisFloor = Acceptance + Acceptance;
-			if (EffectiveThreshold < HysteresisFloor)
-			{
-				EffectiveThreshold = HysteresisFloor;
-			}
+			const FFixedPoint EffectiveThreshold = GetEffectiveThreshold(
+				World, Member, ConfiguredThreshold);
 			const FFixedPoint DeltaX = Position.X - PairedSlots[Index].X;
 			const FFixedPoint DeltaY = Position.Y - PairedSlots[Index].Y;
 			if (DeltaX * DeltaX + DeltaY * DeltaY

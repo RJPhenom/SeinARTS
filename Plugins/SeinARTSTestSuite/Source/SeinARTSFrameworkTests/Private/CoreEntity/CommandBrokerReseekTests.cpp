@@ -581,4 +581,50 @@ namespace UE::SeinARTSTests
 		}
 		ASSERT_THAT(AreEqual(Members.Num(), BrokerHandles.Num()));
 	}
+
+	TEST(LooseIdleReseekUsesArrivalHysteresisFloor,
+		"SeinARTS.Sim.Broker.IdleReseek")
+	{
+		FScopedIdleReseekSettings Settings;
+		Settings.Settings->ReseekDisplacementThreshold =
+			FFixedPoint::FromInt(50);
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+
+		FSeinEntityHandle InsideFloor;
+		FSeinEntityHandle OutsideFloor;
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Materialize(*World, [&]()
+		{
+			const FSeinPlayerID Player(1);
+			World->RegisterPlayer(Player, FSeinFactionID(1));
+			auto AddLooseMember = [&](int32 Displacement)
+			{
+				const FSeinEntityHandle Member = World->SpawnAbstractEntity(
+					FFixedTransform(FFixedVector(
+						FFixedPoint::FromInt(Displacement),
+						FFixedPoint::Zero,
+						FFixedPoint::Zero)),
+					Player);
+				FSeinMovementComponent Movement;
+				Movement.bHomeSeeded = true;
+				Movement.HomePos = FFixedVector::ZeroVector;
+				World->AddComponent(Member, Movement);
+				World->AddComponent(Member, FSeinNavigationComponent());
+				return Member;
+			};
+			InsideFloor = AddLooseMember(51);
+			OutsideFloor = AddLooseMember(101);
+		})));
+
+		ASSERT_THAT(IsTrue(TickOnce(*World)));
+		ASSERT_THAT(IsNull(
+			World->GetComponent<FSeinBrokerMembershipData>(InsideFloor)));
+		const FSeinBrokerMembershipData* OutsideMembership =
+			World->GetComponent<FSeinBrokerMembershipData>(OutsideFloor);
+		ASSERT_THAT(IsNotNull(OutsideMembership));
+		ASSERT_THAT(IsTrue(
+			OutsideMembership->CurrentBrokerHandle.IsValid()));
+	}
 }
