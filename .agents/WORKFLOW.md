@@ -1,6 +1,6 @@
 # SeinARTS Agent Workflow
 
-This is the local operational mirror of the human [Workflow Policy](https://docs.google.com/document/d/1pb3Z0DdQKAIJ610cMOy1yOP9_RQj1jtzMupfhkyrlfw), source policy version 2.4. The human policy owns contributor workflow. Update both in the same task when workflow changes.
+This is the local operational mirror of the human [Workflow Policy](https://docs.google.com/document/d/1pb3Z0DdQKAIJ610cMOy1yOP9_RQj1jtzMupfhkyrlfw), source policy version 2.5. The human policy owns contributor workflow. Update both in the same task when workflow changes.
 
 ## 1. About
 
@@ -128,11 +128,21 @@ Git worktrees are banned across all environments for this project.
 
 Cloud agent sessions (Claude Code on the web, Codex cloud) always create their own auto-generated working branch. This is a platform behavior, not a choice; session branches follow the same rules as 5.3 and belong to the task.
 
+Sync-on-start. Before making any changes, a cloud session must:
+
+1. Run `git fetch origin --prune` to refresh remote state and discard stale tracking refs.
+2. Fast-forward local `main` to `origin/main`.
+3. If the session has a working branch, verify it still exists on the remote. If another session already merged and deleted it, acknowledge that — do not re-push or re-merge already-landed work.
+
+A resumed or continued session (including after context compaction) must not trust inherited claims about branch existence or merge state without re-verifying against the remote.
+
 Completion protocol. When a session's work is complete and validated per 3.3, the session must, in order:
 
 1. Merge its branch into `main` using a regular merge commit — no squash, no rebase, no history rewrite. The merge commit message names the task; the branch's individual commits are preserved on `main` as restore points per 5.1.
 2. Push `main`.
 3. Delete its remote branch.
+
+The completion protocol is the last action before ending the session. A session must not exit with a pushed-but-unmerged branch unless it explicitly declares WIP per the exception below. Deferring the merge to "next time" risks orphaning the work if the session is archived or never resumed.
 
 Every commit remains reachable on `main` through the merge commit. Cloud session commits carry a session-link trailer, so work remains traceable to its originating session and conversation after the branch is gone.
 
