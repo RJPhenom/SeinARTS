@@ -124,31 +124,19 @@ Git worktrees are banned across all environments for this project.
 - If a session starts elsewhere, stop and return to the primary checkout before changing files.
 - Only one author writes to the checkout at a time.
 
+Worktrees were tried more than once in the past and consistently produced bad merge experiences. The ban is a considered, re-instated decision as of v2.0, not an untested default.
+
 ### 5.5 Cloud agent sessions
+
+The policy on keeping cloud agent work from being orphaned or merged into `main` without enough thought is still being refined. If you are an agent reading this mirror, act with care and keep the user informed of git status in your cloud environment.
 
 Cloud agent sessions (Claude Code on the web, Codex cloud) always create their own auto-generated working branch. This is a platform behavior, not a choice; session branches follow the same rules as 5.3 and belong to the task.
 
-Sync-on-start. Before making any changes, a cloud session must:
+The goal is for testers to have up-to-date local repositories with the latest cloud session work, safe to merge. Guiding principles:
 
-1. Run `git fetch origin --prune` to refresh remote state and discard stale tracking refs.
-2. Fast-forward local `main` to `origin/main`.
-3. If the session has a working branch, verify it still exists on the remote. If another session already merged and deleted it, acknowledge that — do not re-push or re-merge already-landed work.
-
-A resumed or continued session (including after context compaction) must not trust inherited claims about branch existence or merge state without re-verifying against the remote.
-
-Completion protocol. When a session's work is complete and validated per 3.3, the session must, in order:
-
-1. Merge its branch into `main` using a regular merge commit — no squash, no rebase, no history rewrite. The merge commit message names the task; the branch's individual commits are preserved on `main` as restore points per 5.1.
-2. Push `main`.
-3. Delete its remote branch.
-
-The completion protocol is the last action before ending the session. A session must not exit with a pushed-but-unmerged branch unless it explicitly declares WIP per the exception below. Deferring the merge to "next time" risks orphaning the work if the session is archived or never resumed.
-
-Every commit remains reachable on `main` through the merge commit. Cloud session commits carry a session-link trailer, so work remains traceable to its originating session and conversation after the branch is gone.
-
-Cross-agent rule: no agent builds on another agent's live session branch. A live `claude/*` (or equivalent) branch is by definition in-flight or awaiting handoff.
-
-WIP exception: a session that ends with incomplete or unvalidated work must not merge. It leaves its branch on origin and states this explicitly for handoff review per 5.2.
+- Make every effort to regularly merge into `main` at safe completion points — not necessarily at the end of the session.
+- Merge conflicts can occur when multiple agents are working, committing, and merging. Do not attempt to resolve them automatically. Report back to the user and await instructions.
+- Keep a clear, current understanding of which branches exist on the remote versus locally. If a branch does not yet exist on the remote (other than in the moment right after creation), keep the user aware. Branches are ideally published on creation; `https://github.com/RJPhenom/SeinARTS/branches` gives a complete view of active branches across every desktop and cloud environment together.
 
 ## 6. Versioning and releases
 
