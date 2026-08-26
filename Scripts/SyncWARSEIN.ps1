@@ -5,9 +5,9 @@
   local WARSEIN project: install, commit, push, and build WARSEINEditor.
 
 .DESCRIPTION
-  The push-to-main automation. A pre-push git hook (see .githooks/README or
-  Scripts/Install-GitHooks.ps1) launches this detached whenever main is pushed,
-  so WARSEIN receives every framework update automatically:
+  The fully-local manual delivery (RJ ruling 2026-08-26: the pre-push hook
+  automation is retired; Scripts/ReleaseWARSEIN.ps1 is the primary on-demand
+  path via GitHub, and this script is the offline/all-local alternative):
 
     1. Scripts/PackagePlugins.ps1 -PackageOnly  (FAB-standard artifacts, .dist)
     2. install the zips into <WARSEIN>/Plugins (replace SeinARTS*)
