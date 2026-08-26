@@ -27,6 +27,23 @@
   --sl-mobile-toc-height: 0rem;
 }
 
+@media (min-width: 72rem) {
+  :root,
+  :root[data-theme="dark"] {
+    --sl-content-pad-x: 8rem;
+  }
+  /* Symmetric layout: the TOC column is fixed at sidebar width (mirroring the
+     left sidebar) instead of absorbing half the leftover space, and the content
+     container centers in the full remaining pane. */
+  [data-has-toc] .right-sidebar-container {
+    width: var(--sl-sidebar-width);
+  }
+  [data-has-sidebar][data-has-toc] .main-pane {
+    --sl-content-margin-inline: auto;
+    width: calc(100% - var(--sl-sidebar-width));
+  }
+}
+
 html,
 body {
   background: #000000;
@@ -97,6 +114,11 @@ h4,
 
 .content-panel > .sl-container:has(.sein-home) > .sl-markdown-content {
   margin: 0;
+}
+
+.content-panel:has(.sein-home) footer {
+  width: min(70rem, calc(100vw - 2rem));
+  margin-inline: auto;
 }
 
 .sein-home {
