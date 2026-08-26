@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git push origin --delete claude/*)",
+      "Bash(git push origin :claude/*)"
+    ]
+  }
+}
