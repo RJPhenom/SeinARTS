@@ -124,6 +124,22 @@ Git worktrees are banned across all environments for this project.
 - If a session starts elsewhere, stop and return to the primary checkout before changing files.
 - Only one author writes to the checkout at a time.
 
+### 5.5 Cloud agent sessions
+
+Cloud agent sessions (Claude Code on the web, Codex cloud) always create their own auto-generated working branch. This is a platform behavior, not a choice; session branches follow the same rules as 5.3 and belong to the task.
+
+Completion protocol. When a session's work is complete and validated per 3.3, the session must, in order:
+
+1. Merge its branch into `main` using a regular merge commit — no squash, no rebase, no history rewrite. The merge commit message names the task; the branch's individual commits are preserved on `main` as restore points per 5.1.
+2. Push `main`.
+3. Delete its remote branch.
+
+Every commit remains reachable on `main` through the merge commit. Cloud session commits carry a session-link trailer, so work remains traceable to its originating session and conversation after the branch is gone.
+
+Cross-agent rule: no agent builds on another agent's live session branch. A live `claude/*` (or equivalent) branch is by definition in-flight or awaiting handoff.
+
+WIP exception: a session that ends with incomplete or unvalidated work must not merge. It leaves its branch on origin and states this explicitly for handoff review per 5.2.
+
 ## 6. Versioning and releases
 
 ### 6.1 Versioning
