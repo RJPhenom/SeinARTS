@@ -8,6 +8,7 @@
 
 #include "Preview/SeinFormationPreviewSubsystem.h"
 #include "Preview/SeinFormationPreviewActor.h"
+#include "Preview/SeinFormationPreviewStyleComponent.h"
 
 #include "Player/SeinPlayerController.h"
 #include "Player/SeinTargeterSubsystem.h"
@@ -19,6 +20,7 @@
 #include "Brokers/SeinBrokerTypes.h"
 #include "Core/SeinEntityHandle.h"
 #include "Settings/PluginSettings.h"
+#include "Simulation/SeinActorBridgeSubsystem.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Types/Vector.h"
 
@@ -57,6 +59,7 @@ void USeinFormationPreviewSubsystem::Initialize(FSubsystemCollectionBase& Collec
 			bQualityDirty = true;
 			bLayoutDirty = true;
 			CachedQualities.Reset();
+			CachedMemberStyles.Reset();
 		});
 
 	UE_LOG(LogSeinFormationPreviewSubsystem, Log,
@@ -85,6 +88,7 @@ void USeinFormationPreviewSubsystem::ReleaseModuleOwnedStateForModuleUnload()
 	bIsVisible = false;
 	BoundPC = nullptr;
 	CachedQualities.Reset();
+	CachedMemberStyles.Reset();
 	bLastCursorValid = false;
 	bQualityDirty = true;
 	bLayoutDirty = true;
@@ -128,9 +132,10 @@ void USeinFormationPreviewSubsystem::UnhookPlayerControllerDelegates()
 
 void USeinFormationPreviewSubsystem::HandleSelectionChanged()
 {
-	// New selection → different member count / footprint → cached qualities stale.
+	// New selection → different member count / footprint → cached qualities + styles stale.
 	bQualityDirty = true;
 	bLayoutDirty = true;
+	CachedMemberStyles.Reset();
 
 	if (BoundPC.IsValid() && BoundPC->GetSelectionCount() == 0)
 	{
@@ -333,9 +338,20 @@ void USeinFormationPreviewSubsystem::RefreshPreview()
 		bQualityDirty = false;
 	}
 
+	// Per-member marker styles (from each unit's Formation Preview Style Component),
+	// index-aligned with Members and therefore with Layout.Positions. Cache-backed:
+	// the bridge/component lookup runs once per member per selection.
+	TArray<FSeinFormationPreviewElementStyle> Styles;
+	BuildMemberStyles(Members, Styles);
+	if (Styles.Num() != WorldPositions.Num())
+	{
+		// Defensive: a layout that isn't member-aligned must not style the wrong markers.
+		Styles.Reset();
+	}
+
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_FormationPreview_PushActor);
-		PreviewActor->SetPositions(WorldPositions, CachedQualities, RadiiUU);
+		PreviewActor->SetPositions(WorldPositions, CachedQualities, RadiiUU, Styles);
 	}
 	PreviewActor->SetActorHiddenInGame(false);
 	bIsVisible = true;
@@ -526,6 +542,43 @@ TArray<FSeinEntityHandle> USeinFormationPreviewSubsystem::ResolveSelectionToMemb
 	}
 
 	return Out;
+}
+
+void USeinFormationPreviewSubsystem::BuildMemberStyles(const TArray<FSeinEntityHandle>& Members,
+	TArray<FSeinFormationPreviewElementStyle>& OutStyles)
+{
+	OutStyles.Reset();
+	OutStyles.Reserve(Members.Num());
+
+	UWorld* World = GetWorld();
+	USeinActorBridgeSubsystem* Bridge = World ? World->GetSubsystem<USeinActorBridgeSubsystem>() : nullptr;
+
+	for (const FSeinEntityHandle& Member : Members)
+	{
+		if (const FSeinFormationPreviewElementStyle* Cached = CachedMemberStyles.Find(Member))
+		{
+			OutStyles.Add(*Cached);
+			continue;
+		}
+
+		// Default style (member handle only) unless the member's actor carries a style
+		// component. Actor-less members (abstract entities) keep the default look.
+		FSeinFormationPreviewElementStyle Style;
+		Style.MemberHandle = Member;
+		if (Bridge)
+		{
+			if (ASeinActor* Actor = Bridge->GetActorForEntity(Member))
+			{
+				if (const USeinFormationPreviewStyleComponent* StyleComp =
+					Actor->FindComponentByClass<USeinFormationPreviewStyleComponent>())
+				{
+					Style = StyleComp->BuildElementStyle(Member);
+				}
+			}
+		}
+		CachedMemberStyles.Add(Member, Style);
+		OutStyles.Add(Style);
+	}
 }
 
 TArray<FVector> USeinFormationPreviewSubsystem::ConvertPositions(const TArray<FFixedVector>& In)

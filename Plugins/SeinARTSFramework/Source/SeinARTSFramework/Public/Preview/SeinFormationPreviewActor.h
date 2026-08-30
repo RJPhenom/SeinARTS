@@ -36,6 +36,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "GameplayTagContainer.h"
+#include "Preview/SeinFormationPreviewTypes.h"
 #include "SeinFormationPreviewActor.generated.h"
 
 class UStaticMesh;
@@ -65,6 +66,11 @@ class UMaterialInstanceDynamic;
  * quality-tint map is a generic gameplay-tag-to-color table; the framework ships it empty (a neutral
  * preview) and a project — or the Cover extension's preview Blueprint — populates it. The tint
  * property names retain the historic "Cover" spelling so existing authored preview values survive.
+ *
+ * Per-unit marker looks: each element carries an optional style (mesh, material, tint, size, tag)
+ * the preview subsystem resolves from the unit's Formation Preview Style Component. The properties
+ * on this actor are the project-wide defaults; a member's style overrides them for its own marker
+ * only. Units without a style component always render the defaults.
  */
 UCLASS(Blueprintable, NotPlaceable, meta = (DisplayName = "Formation Preview Actor (Mesh)"))
 class SEINARTSFRAMEWORK_API ASeinFormationPreviewActor : public AActor
@@ -132,9 +138,15 @@ public:
 	 *
 	 *  `Radii` is an optional parallel array of per-position footprint radii (world cm):
 	 *  each element's quad/decal scales to that footprint (so the material's ring, drawn in
-	 *  UV space, sizes with it). Empty / mismatched entries fall back to GroundSizeUU. */
+	 *  UV space, sizes with it). Empty / mismatched entries fall back to GroundSizeUU.
+	 *
+	 *  `Styles` is an optional parallel array of per-member marker styles (resolved by the
+	 *  preview subsystem from each unit's Formation Preview Style Component). Empty /
+	 *  mismatched entries render the backend's default look. A style's tint multiplies the
+	 *  quality tint, and its size override (when > 0) replaces the member's footprint radius
+	 *  before the element hooks run. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Preview")
-	void SetPositions(const TArray<FVector>& WorldPositions, const TArray<FGameplayTag>& CoverQualities, const TArray<float>& Radii);
+	void SetPositions(const TArray<FVector>& WorldPositions, const TArray<FGameplayTag>& CoverQualities, const TArray<float>& Radii, const TArray<FSeinFormationPreviewElementStyle>& Styles);
 
 	/** Hide every element in place without destroying it. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Preview")
@@ -152,10 +164,13 @@ protected:
 	virtual void EnsureElementCount_Implementation(int32 Count);
 
 	/** Place + style element Index. Called only when its inputs changed. RadiusUU > 0 sizes
-	 *  the element to that footprint DIAMETER; <= 0 → uniform GroundSizeUU. */
+	 *  the element to that footprint DIAMETER; <= 0 → uniform GroundSizeUU. `Style` is the
+	 *  member's per-unit marker style (default-constructed when the member has none): Tint
+	 *  already includes its tint multiplier and RadiusUU its size override, so backends only
+	 *  need it for the mesh/material overrides, the style tag, or the member handle. */
 	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Preview|Backend")
-	void UpdateElement(int32 Index, const FVector& WorldPos, const FLinearColor& Tint, float RadiusUU);
-	virtual void UpdateElement_Implementation(int32 Index, const FVector& WorldPos, const FLinearColor& Tint, float RadiusUU);
+	void UpdateElement(int32 Index, const FVector& WorldPos, const FLinearColor& Tint, float RadiusUU, const FSeinFormationPreviewElementStyle& Style);
+	virtual void UpdateElement_Implementation(int32 Index, const FVector& WorldPos, const FLinearColor& Tint, float RadiusUU, const FSeinFormationPreviewElementStyle& Style);
 
 	/** Show / hide element Index. */
 	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Preview|Backend")
@@ -191,6 +206,15 @@ protected:
 	/** Resolve the quad mesh (PreviewMesh, else the engine unit Plane). */
 	UStaticMesh* ResolvePreviewMesh() const;
 
+	/** Resolve one element's mesh: the style's marker mesh when set, else the backend
+	 *  default (ResolvePreviewMesh). Shared by the mesh-style backends. */
+	UStaticMesh* ResolveElementMesh(const FSeinFormationPreviewElementStyle& Style) const;
+
+	/** Resolve one element's look material: the style's marker material when set, else the
+	 *  backend default (ResolvePreviewMaterial — virtual, so the Decal backend's decal
+	 *  fallback flows through). */
+	UMaterialInterface* ResolveElementMaterial(const FSeinFormationPreviewElementStyle& Style) const;
+
 	// ── Base MESH backend state (flat quad pool) ──────────────────────────────────────
 
 	/** Mesh-quad pool — grows up to the largest formation seen this session, reused across
@@ -203,6 +227,12 @@ protected:
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UMaterialInstanceDynamic>> MeshMIDs;
 
+	/** Source material each element's MID was created from, parallel to MeshMIDs — lets
+	 *  UpdateElement detect a per-element material change (style override appearing or
+	 *  going away) and rebuild only that element's MID. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UMaterialInterface>> MeshMIDSources;
+
 private:
 	// Per-element change guards (backend-agnostic) — skip UpdateElement when nothing about
 	// an element changed, avoiding per-frame render-thread churn on an idle cursor. Hiding an
@@ -210,4 +240,5 @@ private:
 	TArray<FVector>      LastWorldPositions;
 	TArray<FLinearColor> LastTints;
 	TArray<float>        LastRadii;
+	TArray<FSeinFormationPreviewElementStyle> LastStyles;
 };

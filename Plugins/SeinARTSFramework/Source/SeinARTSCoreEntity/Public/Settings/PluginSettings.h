@@ -835,11 +835,13 @@ public:
 	/** Which actor the preview subsystem spawns to draw the per-unit destination markers. The framework
 	 *  default uses flat mesh quads that stay crisp under temporal anti-aliasing. Two alternatives ship:
 	 *  a decal version that conforms to terrain but smears under TAA while you drag, and an
-	 *  instanced-mesh version that draws a whole formation in one call and scales to huge selections.
-	 *  Subclass any of them in Blueprint to restyle the look (preview mesh, material, quality tints), or
-	 *  override the element hooks for a fully custom backend. Set it to None to turn the destination
-	 *  preview render OFF: no on-ground markers are drawn (a one-time on-screen note appears while off,
-	 *  suppress it in Editor Preferences). */
+	 *  instanced-mesh version that batches markers into one draw call per look and scales to huge
+	 *  selections. Subclass any of them in Blueprint to restyle the project-wide look (preview mesh,
+	 *  material, quality tints), or override the element hooks for a fully custom backend. For a
+	 *  per-unit look, add a Formation Preview Style Component to that unit's Blueprint instead — its
+	 *  overrides win over this class's defaults for that unit's marker only. Set it to None to turn
+	 *  the destination preview render OFF: no on-ground markers are drawn (a one-time on-screen note
+	 *  appears while off, suppress it in Editor Preferences). */
 	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Formation",
 		meta = (DisplayName = "Formation Preview Actor Class",
 				MetaClass = "/Script/SeinARTSFramework.SeinFormationPreviewActor"))

@@ -55,7 +55,7 @@ public:
 
 protected:
 	virtual void EnsureElementCount_Implementation(int32 Count) override;
-	virtual void UpdateElement_Implementation(int32 Index, const FVector& WorldPos, const FLinearColor& Tint, float RadiusUU) override;
+	virtual void UpdateElement_Implementation(int32 Index, const FVector& WorldPos, const FLinearColor& Tint, float RadiusUU, const FSeinFormationPreviewElementStyle& Style) override;
 	virtual void SetElementVisible_Implementation(int32 Index, bool bVisible) override;
 	virtual int32 NumElements_Implementation() const override;
 
@@ -69,4 +69,10 @@ protected:
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UMaterialInstanceDynamic>> DecalMIDs;
+
+	/** Source material each decal's MID was created from, parallel to DecalMIDs — lets a
+	 *  per-member style override (which must be a Deferred Decal material) swap just that
+	 *  element's decal material. A style's marker MESH is ignored by this backend. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UMaterialInterface>> DecalMIDSources;
 };
