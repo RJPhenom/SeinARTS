@@ -62,7 +62,7 @@ ASeinFormationPreviewActor::ASeinFormationPreviewActor()
 // Backend-agnostic orchestrator
 // ====================================================================================================
 
-void ASeinFormationPreviewActor::SetPositions(const TArray<FVector>& WorldPositions, const TArray<FGameplayTag>& CoverQualities, const TArray<float>& Radii)
+void ASeinFormationPreviewActor::SetPositions(const TArray<FVector>& WorldPositions, const TArray<FGameplayTag>& CoverQualities, const TArray<float>& Radii, const TArray<FSeinFormationPreviewElementStyle>& Styles)
 {
 	const int32 Count = WorldPositions.Num();
 	EnsureElementCount(Count);
@@ -71,40 +71,54 @@ void ASeinFormationPreviewActor::SetPositions(const TArray<FVector>& WorldPositi
 
 	// Keep change-guard arrays sized to the pool. Explicitly sentinel new POSITION slots
 	// (SetNum leaves FVector uninitialized) so the first update after growth always fires:
-	// the position guard alone forces UpdateElement, and tint/radius sync on that same call.
+	// the position guard alone forces UpdateElement, and tint/radius/style sync on that call.
 	if (LastWorldPositions.Num() < Pool)
 	{
 		const int32 OldNum = LastWorldPositions.Num();
 		LastWorldPositions.SetNum(Pool);
 		LastTints.SetNum(Pool);
 		LastRadii.SetNum(Pool);
+		LastStyles.SetNum(Pool);
 		for (int32 i = OldNum; i < Pool; ++i)
 		{
 			LastWorldPositions[i] = FVector(TNumericLimits<float>::Max());
 		}
 	}
 
+	const FSeinFormationPreviewElementStyle DefaultStyle;
 	for (int32 i = 0; i < Pool; ++i)
 	{
 		if (i < Count)
 		{
-			const float RadiusUU = Radii.IsValidIndex(i) ? Radii[i] : -1.f;
+			const FSeinFormationPreviewElementStyle& Style =
+				Styles.IsValidIndex(i) ? Styles[i] : DefaultStyle;
+
+			// Style size override (full diameter) replaces the member's footprint radius so
+			// ResolveFootprintSize lands exactly on MarkerSizeUU in every backend.
+			float RadiusUU = Radii.IsValidIndex(i) ? Radii[i] : -1.f;
+			if (Style.MarkerSizeUU > 0.f)
+			{
+				RadiusUU = Style.MarkerSizeUU * 0.5f;
+			}
+
 			const FGameplayTag Quality = CoverQualities.IsValidIndex(i) ? CoverQualities[i] : FGameplayTag();
-			const FLinearColor Tint = ResolveTintForQuality(Quality);
+			const FLinearColor Tint = ResolveTintForQuality(Quality) * Style.StyleTint;
 			const FVector WorldPos = WorldPositions[i] + FVector(0.f, 0.f, ZOffsetUU);
 
 			// Guard: only touch the render proxy when something about this element changed.
 			const bool bChanged =
 				   !WorldPos.Equals(LastWorldPositions[i], 0.01f)
 				|| Tint != LastTints[i]
-				|| !FMath::IsNearlyEqual(RadiusUU, LastRadii[i]);
+				|| !FMath::IsNearlyEqual(RadiusUU, LastRadii[i])
+				|| Style != LastStyles[i];
 
 			if (bChanged)
 			{
-				UpdateElement(i, WorldPos, Tint, RadiusUU);
+				UpdateElement(i, WorldPos, Tint, RadiusUU, Style);
 				LastWorldPositions[i] = WorldPos;
 				LastTints[i]          = Tint;
 				LastRadii[i]          = RadiusUU;
+				LastStyles[i]         = Style;
 			}
 
 			SetElementVisible(i, true);
@@ -113,7 +127,7 @@ void ASeinFormationPreviewActor::SetPositions(const TArray<FVector>& WorldPositi
 		{
 			SetElementVisible(i, false);
 			// Invalidate the guard so a future reuse of this slot always re-places (covers
-			// backends that drop transform state when hidden, e.g. zero-scaled ISM instances).
+			// backends that drop transform state when hidden, e.g. rebuilt ISM instances).
 			LastWorldPositions[i] = FVector(TNumericLimits<float>::Max());
 		}
 	}
@@ -168,6 +182,16 @@ UStaticMesh* ASeinFormationPreviewActor::ResolvePreviewMesh() const
 	return PreviewMesh ? ToRawPtr(PreviewMesh) : SeinFormationPreviewLocal::GetFallbackPlaneMesh();
 }
 
+UStaticMesh* ASeinFormationPreviewActor::ResolveElementMesh(const FSeinFormationPreviewElementStyle& Style) const
+{
+	return Style.MarkerMesh ? ToRawPtr(Style.MarkerMesh) : ResolvePreviewMesh();
+}
+
+UMaterialInterface* ASeinFormationPreviewActor::ResolveElementMaterial(const FSeinFormationPreviewElementStyle& Style) const
+{
+	return Style.MarkerMaterial ? ToRawPtr(Style.MarkerMaterial) : ResolvePreviewMaterial();
+}
+
 // ====================================================================================================
 // Default MESH backend — a pool of flat quads. A moving quad reprojects under TAA (masked
 // materials write velocity; translucent ones can use Responsive AA), so it does not ghost the
@@ -209,10 +233,12 @@ void ASeinFormationPreviewActor::EnsureElementCount_Implementation(int32 Count)
 		MeshPool.Add(Comp);
 		MeshMIDs.SetNum(MeshPool.Num());
 		MeshMIDs[NewIndex] = MID;
+		MeshMIDSources.SetNum(MeshPool.Num());
+		MeshMIDSources[NewIndex] = SourceMat;
 	}
 }
 
-void ASeinFormationPreviewActor::UpdateElement_Implementation(int32 Index, const FVector& WorldPos, const FLinearColor& Tint, float RadiusUU)
+void ASeinFormationPreviewActor::UpdateElement_Implementation(int32 Index, const FVector& WorldPos, const FLinearColor& Tint, float RadiusUU, const FSeinFormationPreviewElementStyle& Style)
 {
 	if (!MeshPool.IsValidIndex(Index)) return;
 	UStaticMeshComponent* Comp = MeshPool[Index];
@@ -220,13 +246,36 @@ void ASeinFormationPreviewActor::UpdateElement_Implementation(int32 Index, const
 
 	Comp->SetWorldLocation(WorldPos);
 
+	// Per-element mesh: the style's marker mesh, else the backend default. Cheap no-op
+	// compare — mesh changes only when the pool slot's member styling changes.
+	if (UStaticMesh* WantMesh = ResolveElementMesh(Style))
+	{
+		if (Comp->GetStaticMesh() != WantMesh)
+		{
+			Comp->SetStaticMesh(WantMesh);
+		}
+	}
+
+	// Per-element material: rebuild this element's MID only when its source material
+	// changed (a style override appearing/going away, or a different override).
+	UMaterialInterface* WantSource = ResolveElementMaterial(Style);
+	if (MeshMIDSources.IsValidIndex(Index) && MeshMIDSources[Index] != WantSource)
+	{
+		UMaterialInstanceDynamic* NewMID = WantSource ? UMaterialInstanceDynamic::Create(WantSource, this) : nullptr;
+		if (NewMID) { Comp->SetMaterial(0, NewMID); }
+		MeshMIDs[Index] = NewMID;
+		MeshMIDSources[Index] = WantSource;
+	}
+
 	// Engine Plane is 100uu square; scale so the quad spans the footprint diameter.
+	// (Style marker meshes are authored to the same 100uu base footprint.)
 	const float Side  = ResolveFootprintSize(RadiusUU);
 	const float Scale = Side / 100.f;
 	Comp->SetWorldScale3D(FVector(Scale, Scale, 1.f));
 
-	// Only the quality tint is driven from C++; the ring's shape (inner/outer radius) is
-	// owned entirely by the material. Per-member radius is reflected by the quad scale above.
+	// Only the tint is driven from C++ (quality tint × style tint, composed by the
+	// orchestrator); the ring's shape (inner/outer radius) is owned entirely by the
+	// material. Per-member radius is reflected by the quad scale above.
 	if (UMaterialInstanceDynamic* MID = MeshMIDs.IsValidIndex(Index) ? MeshMIDs[Index] : nullptr)
 	{
 		MID->SetVectorParameterValue(TintParameterName, Tint);

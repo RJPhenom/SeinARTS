@@ -24,13 +24,13 @@
 #include "CoreMinimal.h"
 #include "GameplayTagContainer.h"
 #include "Brokers/SeinBrokerTypes.h"
+#include "Preview/SeinFormationPreviewTypes.h"
 #include "Subsystems/LocalPlayerSubsystem.h"
 #include "Tickable.h"
 #include "SeinFormationPreviewSubsystem.generated.h"
 
 class ASeinFormationPreviewActor;
 class ASeinPlayerController;
-struct FSeinEntityHandle;
 struct FFixedVector;
 
 /**
@@ -103,6 +103,13 @@ private:
 	 *  opt-in: any opted-out member suppresses the whole preview. */
 	TArray<FSeinEntityHandle> ResolveSelectionToMembers(ASeinPlayerController* PC) const;
 
+	/** Resolve each member's per-unit marker style (from its actor's Formation Preview
+	 *  Style Component; default style when absent or actor-less), index-aligned with
+	 *  `Members`. Lazily fills CachedMemberStyles so the bridge/component lookup runs
+	 *  once per member per selection, not per cursor tick. */
+	void BuildMemberStyles(const TArray<FSeinEntityHandle>& Members,
+		TArray<FSeinFormationPreviewElementStyle>& OutStyles);
+
 	/** Tear down the preview — hides actor, clears visibility. */
 	void HidePreview();
 
@@ -134,6 +141,11 @@ private:
 	/** Cached per-position quality tags from the last provider query. */
 	UPROPERTY(Transient)
 	TArray<FGameplayTag> CachedQualities;
+
+	/** Per-member style cache (see BuildMemberStyles). Cleared on selection change and
+	 *  travel; members added mid-selection (e.g. squad reinforcement) fill in lazily. */
+	UPROPERTY(Transient)
+	TMap<FSeinEntityHandle, FSeinFormationPreviewElementStyle> CachedMemberStyles;
 
 	/** Cursor position when CachedQualities was computed. */
 	FVector LastQualityQueryCursor = FVector::ZeroVector;

@@ -67,16 +67,29 @@ void ASeinDecalFormationPreviewActor::EnsureElementCount_Implementation(int32 Co
 		Decals.Add(Decal);
 		DecalMIDs.SetNum(Decals.Num());
 		DecalMIDs[NewIndex] = MID;
+		DecalMIDSources.SetNum(Decals.Num());
+		DecalMIDSources[NewIndex] = SourceMat;
 	}
 }
 
-void ASeinDecalFormationPreviewActor::UpdateElement_Implementation(int32 Index, const FVector& WorldPos, const FLinearColor& Tint, float RadiusUU)
+void ASeinDecalFormationPreviewActor::UpdateElement_Implementation(int32 Index, const FVector& WorldPos, const FLinearColor& Tint, float RadiusUU, const FSeinFormationPreviewElementStyle& Style)
 {
 	if (!Decals.IsValidIndex(Index)) return;
 	UDecalComponent* Decal = Decals[Index];
 	if (!Decal) return;
 
 	Decal->SetWorldLocation(WorldPos);
+
+	// Per-element material: a style override (a Deferred Decal material) swaps this decal's
+	// MID; the style's marker MESH is meaningless for a projected decal and is ignored.
+	UMaterialInterface* WantSource = ResolveElementMaterial(Style);
+	if (DecalMIDSources.IsValidIndex(Index) && DecalMIDSources[Index] != WantSource)
+	{
+		UMaterialInstanceDynamic* NewMID = WantSource ? UMaterialInstanceDynamic::Create(WantSource, this) : nullptr;
+		if (NewMID) { Decal->SetDecalMaterial(NewMID); }
+		DecalMIDs[Index] = NewMID;
+		DecalMIDSources[Index] = WantSource;
+	}
 
 	// DecalSize is a component-local half-extent (X = projection depth, Y/Z = the projected
 	// plane). The -90° pitch maps X→world Z. Y/Z half-extent = footprint radius → equal Y/Z
@@ -92,8 +105,9 @@ void ASeinDecalFormationPreviewActor::UpdateElement_Implementation(int32 Index, 
 		if (Decal->IsRegistered()) { Decal->MarkRenderStateDirty(); }
 	}
 
-	// Only the quality tint is driven from C++; the ring's shape is owned by the material.
-	// Per-member radius is reflected by the decal's projected size (DecalSize above).
+	// Only the tint is driven from C++ (quality tint × style tint, composed by the
+	// orchestrator); the ring's shape is owned by the material. Per-member radius is
+	// reflected by the decal's projected size (DecalSize above).
 	if (UMaterialInstanceDynamic* MID = DecalMIDs.IsValidIndex(Index) ? DecalMIDs[Index] : nullptr)
 	{
 		MID->SetVectorParameterValue(TintParameterName, Tint);
