@@ -2,8 +2,9 @@
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinFormationPreviewActor.h
  * @brief   Destination-preview renderer ("where will my selection land if I order
- *          here"). One instance per local player, lifecycle owned by
- *          USeinFormationPreviewSubsystem.
+ *          here"). One pooled instance per (local player, renderer class),
+ *          lifecycle owned by USeinFormationPreviewSubsystem; each instance draws
+ *          the subset of the selection that resolved to its class.
  *
  *          RENDER-BACKEND SEAM. This base class owns everything backend-agnostic —
  *          the SetPositions/HideAll API, the per-element change guards, and the
@@ -22,7 +23,10 @@
  *              custom-data tint; one draw call, scales to huge formations.
  *          A project can author a fully custom backend in C++ (or Blueprint, by
  *          overriding the BlueprintNativeEvent hooks) — e.g. a Niagara-driven look.
- *          USeinARTSCoreSettings::FormationPreviewActorClass picks the class.
+ *          The class is picked per unit by its USeinFormationPreviewComponent
+ *          (whose presence is also the render opt-in), falling back to
+ *          USeinARTSCoreSettings::FormationPreviewActorClass as the project
+ *          default.
  *
  *          Pure presentation — never mutates sim state. The quality-tint map is a
  *          generic FGameplayTag→color table; the framework ships it EMPTY (neutral
@@ -45,8 +49,9 @@ class UMaterialInstanceDynamic;
 
 /**
  * Draws the destination preview for a move order — the ghost markers showing where your selected
- * units will stand if you order them here. One lives per local player, and this is the renderer
- * picked out of the box.
+ * units will stand if you order them here. One pooled instance lives per renderer class per local
+ * player (a mixed selection can feed several at once, each drawing its own subset), and this is
+ * the renderer picked out of the box.
  *
  * This is the base of the render-backend seam: it owns everything drawing-style-agnostic (the
  * SetPositions / HideAll API, the per-element change guards that skip redraws when nothing moved,
@@ -60,8 +65,9 @@ class UMaterialInstanceDynamic;
  * decals that conform to terrain (but ghost under TAA — pair with TSR); the ISM backend uses one
  * Instanced Static Mesh with per-instance custom-data tint, a single draw call that scales to huge
  * formations. A project can author a fully custom backend in C++ or Blueprint (the element hooks are
- * BlueprintNativeEvents) — e.g. a Niagara-driven look. The Formation Preview Actor Class setting
- * picks which class is used. This is pure presentation and never mutates sim state. The
+ * BlueprintNativeEvents) — e.g. a Niagara-driven look. A unit's Formation Preview Component picks
+ * the class per unit (its presence is also the render opt-in), with the Formation Preview Actor
+ * Class setting as the project default. This is pure presentation and never mutates sim state. The
  * quality-tint map is a generic gameplay-tag-to-color table; the framework ships it empty (a neutral
  * preview) and a project — or the Cover extension's preview Blueprint — populates it. The tint
  * property names retain the historic "Cover" spelling so existing authored preview values survive.

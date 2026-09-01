@@ -7,16 +7,23 @@
  *          ASeinPlayerController's OnSelectionChanged + OnCursorUpdated. Each tick
  *          (driven by the cursor delegate) it:
  *            1. Bails if the targeter is active (its preview takes precedence)
- *            2. Resolves the local selection to a member-handle list
+ *            2. Resolves the local selection to a member-handle list plus each
+ *               member's render opt-in (USeinFormationPreviewComponent on the
+ *               unit/squad actor — presence opts in, its class picks the renderer)
  *            3. Calls USeinCommandBrokerBPFL::SeinComputeFormationPreview for the
  *               per-member projected positions (the SAME dry-run the commit uses)
  *            4. Optionally fetches per-cell quality tags from
  *               USeinWorldSubsystem::PreviewQualityProvider (an extension hook —
  *               e.g. the Cover extension supplies cover quality; unbound = neutral)
- *            5. Pushes positions (+ qualities) into the spawned preview actor
+ *            5. Fans positions (+ qualities) out to one pooled preview actor per
+ *               distinct renderer class, drawing only the opted-in members
  *
- *          The framework owns this; Cover/Squad are consumers. Quality tinting is
- *          entirely optional and supplied by whoever binds the provider delegate.
+ *          Render opt-in never gates the computation: the full layout and frozen
+ *          destination artifact cover every member so the commit can reuse them
+ *          regardless of which markers were drawn (`Sein.Preview.Disable 1` is the
+ *          dev kill switch for the drawing). The framework owns this; Cover/Squad
+ *          are consumers. Quality tinting is entirely optional and supplied by
+ *          whoever binds the provider delegate.
  */
 
 #pragma once
@@ -28,6 +35,7 @@
 #include "Tickable.h"
 #include "SeinFormationPreviewSubsystem.generated.h"
 
+class AActor;
 class ASeinFormationPreviewActor;
 class ASeinPlayerController;
 struct FSeinEntityHandle;
@@ -87,10 +95,16 @@ private:
 	UFUNCTION()
 	void HandleCursorUpdated(FVector CursorWorld, bool bValidTrace);
 
-	/** Lazily spawn the preview actor on first use. Class from
-	 *  USeinARTSCoreSettings::FormationPreviewActorClass (falls back to
-	 *  ASeinFormationPreviewActor::StaticClass()). */
-	void EnsurePreviewActorSpawned();
+	/** Lazily spawn (and pool) the preview actor for one resolved renderer class.
+	 *  Returns null only if the spawn itself fails. */
+	ASeinFormationPreviewActor* EnsurePreviewActorForClass(UClass* ActorClass);
+
+	/** Resolve one selected/member actor's render opt-in: its
+	 *  USeinFormationPreviewComponent's class if the component is present (None on
+	 *  the component → USeinARTSCoreSettings::FormationPreviewActorClass →
+	 *  ASeinFormationPreviewActor::StaticClass()), null when the actor is absent
+	 *  or carries no component (= not drawn). */
+	static UClass* ResolveRenderClassForActor(const AActor* Actor);
 
 	/** Subscribe to the local PC's delegates (re-callable on travel). */
 	void HookPlayerControllerDelegates();
@@ -99,19 +113,28 @@ private:
 	void UnhookPlayerControllerDelegates();
 
 	/** Resolve the local PC's selection to a member-handle list (squads expand to
-	 *  live members; lone units return their own handle). All-or-nothing preview
-	 *  opt-in: any opted-out member suppresses the whole preview. */
-	TArray<FSeinEntityHandle> ResolveSelectionToMembers(ASeinPlayerController* PC) const;
+	 *  live members; lone units return their own handle), plus a parallel array of
+	 *  per-member renderer classes (null = that member draws no marker). A member
+	 *  without a navigation component has no destination opinion and still
+	 *  suppresses the whole preview (the commit would resolve that selection
+	 *  through the artifact-less path). Render opt-in is per member: the
+	 *  USeinFormationPreviewComponent on a squad's actor covers all its members;
+	 *  otherwise each member's own actor decides. */
+	TArray<FSeinEntityHandle> ResolveSelectionToMembers(
+		ASeinPlayerController* PC, TArray<UClass*>& OutRenderClasses) const;
 
-	/** Tear down the preview — hides actor, clears visibility. */
+	/** Tear down the preview — hides every pooled actor, clears visibility. */
 	void HidePreview();
 
 	/** Convert FFixedVector array (sim-side) to FVector array (render-side). */
 	static TArray<FVector> ConvertPositions(const TArray<FFixedVector>& In);
 
 private:
+	/** One pooled preview actor per distinct renderer class this session has drawn
+	 *  with — a mixed selection (infantry decals + vehicle meshes) feeds several at
+	 *  once, each batching its own subset. Reused across selection changes. */
 	UPROPERTY(Transient)
-	TObjectPtr<ASeinFormationPreviewActor> PreviewActor = nullptr;
+	TMap<TObjectPtr<UClass>, TObjectPtr<ASeinFormationPreviewActor>> PreviewActors;
 
 	/** Last PC we bound to. Weak so a PC destroy doesn't keep stale memory. */
 	TWeakObjectPtr<ASeinPlayerController> BoundPC;
