@@ -20,7 +20,7 @@
  *               (SeinDataComponentSync, editor module).
  *             - RUNTIME carrier: the entity bridge's ComponentData array,
  *               baked from these components (see
- *               USeinEntityComponent::BakeAuthoredDataComponents). Spawn
+ *               USeinEntityBridgeComponent::BakeAuthoredDataComponents). Spawn
  *               injection is unchanged.
  *
  *           Data-only is a hard contract: no tick (sealed in the ctor), no
@@ -28,7 +28,7 @@
  *           any graph content in Blueprint subclasses. Logic belongs in
  *           abilities, effects, and systems.
  *
- *           NAMING NOTE: this base takes the name `USeinEntityComponent`
+ *           NAMING NOTE: this base takes the name `USeinEntityBridgeComponent`
  *           after the bridge is renamed to `USeinEntityBridgeComponent`
  *           (agreed migration Phase 1). The scratch name keeps the prototype
  *           diff independent of that rename.

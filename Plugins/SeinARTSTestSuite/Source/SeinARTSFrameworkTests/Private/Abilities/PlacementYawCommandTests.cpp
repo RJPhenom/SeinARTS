@@ -2,7 +2,7 @@
 #include "Components/ActorTestSpawner.h"
 
 #include "Abilities/SeinTargeterSpec.h"
-#include "Actor/SeinEntityComponent.h"
+#include "Actor/SeinEntityBridgeComponent.h"
 #include "Brokers/SeinBrokerTypes.h"
 #include "Components/SeinAbilityComponent.h"
 #include "Components/SeinExtentsComponent.h"
@@ -20,11 +20,11 @@ namespace
 	{
 		FScopedPlacementBuildingExtents()
 		{
-			TArray<const USeinEntityComponent*> Bridges;
-			AActor::GetActorClassDefaultComponents<USeinEntityComponent>(
+			TArray<const USeinEntityBridgeComponent*> Bridges;
+			AActor::GetActorClassDefaultComponents<USeinEntityBridgeComponent>(
 				ASeinPlacementYawTestBuilding::StaticClass(), Bridges);
 			check(!Bridges.IsEmpty());
-			Bridge = const_cast<USeinEntityComponent*>(Bridges[0]);
+			Bridge = const_cast<USeinEntityBridgeComponent*>(Bridges[0]);
 			PreviousComponentData = Bridge->ComponentData;
 
 			FSeinExtentsComponent Extents;
@@ -37,7 +37,7 @@ namespace
 			Bridge->ComponentData = MoveTemp(PreviousComponentData);
 		}
 
-		USeinEntityComponent* Bridge = nullptr;
+		USeinEntityBridgeComponent* Bridge = nullptr;
 		TArray<FInstancedStruct> PreviousComponentData;
 	};
 }

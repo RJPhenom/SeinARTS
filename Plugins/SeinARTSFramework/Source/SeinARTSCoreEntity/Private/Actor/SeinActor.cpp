@@ -8,7 +8,7 @@
  */
 
 #include "Actor/SeinActor.h"
-#include "Actor/SeinEntityComponent.h"
+#include "Actor/SeinEntityBridgeComponent.h"
 #include "Components/SeinIdentityComponent.h"      // IdentityTag surfaced as an asset tag
 #include "Core/SeinAssetTagKeys.h"
 #include "UObject/AssetRegistryTagsContext.h"
@@ -24,7 +24,7 @@
 ASeinActor::ASeinActor()
 {
 	// ASeinActor has no Tick implementation. Per-frame render interpolation is
-	// owned by USeinEntityComponent, so registering an actor tick for every RTS
+	// owned by USeinEntityBridgeComponent, so registering an actor tick for every RTS
 	// entity is pure scheduler overhead.
 	PrimaryActorTick.bCanEverTick = false;
 
@@ -33,7 +33,7 @@ ASeinActor::ASeinActor()
 	// array (bIsAbstract + ComponentData). Variable + subobject names align
 	// as `EntityBridge` so the components panel shows
 	// "SeinARTS Entity Bridge (EntityBridge)".
-	EntityBridge = CreateDefaultSubobject<USeinEntityComponent>(TEXT("EntityBridge"));
+	EntityBridge = CreateDefaultSubobject<USeinEntityBridgeComponent>(TEXT("EntityBridge"));
 
 	// All other legacy default subobjects (the pre-Phase-5 ArchetypeDefinition, TagsComponent,
 	// typed-wrapper sim ACs) have been excised. Sim data + tags live on
@@ -100,7 +100,7 @@ void ASeinActor::CheckForErrors()
 {
 	Super::CheckForErrors();
 
-	const USeinEntityComponent* Bridge = EntityBridge;
+	const USeinEntityBridgeComponent* Bridge = EntityBridge;
 	if (!Bridge)
 	{
 		return;
@@ -110,7 +110,7 @@ void ASeinActor::CheckForErrors()
 	// instance's authored array, which the Blueprint pre-compile gate (class
 	// defaults only) can never see.
 	TArray<FSeinComponentDataIssue> Issues;
-	USeinEntityComponent::ValidateComponentData(Bridge->ComponentData, Issues);
+	USeinEntityBridgeComponent::ValidateComponentData(Bridge->ComponentData, Issues);
 	for (const FSeinComponentDataIssue& Issue : Issues)
 	{
 		// Error, not Warning: these entries abort match bootstrap outright.
@@ -145,7 +145,7 @@ void ASeinActor::GetAssetRegistryTags(FAssetRegistryTagsContext Context) const
 	// array. One identity per entity is the runtime contract (ComponentData is
 	// keyed by struct type at spawn), so the first valid entry wins. Bare
 	// ToString() form, matching the USeinAbility / USeinEffect tags.
-	if (const USeinEntityComponent* Bridge = EntityBridge)
+	if (const USeinEntityBridgeComponent* Bridge = EntityBridge)
 	{
 		for (const FInstancedStruct& Entry : Bridge->ComponentData)
 		{

@@ -9,9 +9,8 @@
 #include "Player/SeinCameraPawn.h"
 #include "Player/SeinTargeterSubsystem.h"
 #include "Player/SeinOrderGesture.h"
-#include "Input/SeinInputConfig.h"
 #include "Actor/SeinActor.h"
-#include "Actor/SeinEntityComponent.h"
+#include "Actor/SeinEntityBridgeComponent.h"
 #include "Components/SeinAbilityComponent.h"
 #include "Components/SeinCommandBrokerData.h"
 #include "Components/SeinMovementComponent.h"
@@ -34,8 +33,6 @@
 #include "Engine/LocalPlayer.h"
 #include "Net/UnrealNetwork.h"
 #include "StructUtils/InstancedStruct.h"
-#include "EnhancedInputComponent.h"
-#include "EnhancedInputSubsystems.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -251,14 +248,6 @@ ASeinPlayerController::ASeinPlayerController()
 	bEnableClickEvents = true;
 	bEnableMouseOverEvents = true;
 	DefaultMouseCursor = EMouseCursor::Default;
-
-	// Load default input config from plugin content if not already set
-	static ConstructorHelpers::FObjectFinder<USeinInputConfig> DefaultConfig(
-		TEXT("/SeinARTSFramework/Input/DA_SeinDefaultInputConfig"));
-	if (DefaultConfig.Succeeded())
-	{
-		InputConfig = DefaultConfig.Object;
-	}
 }
 
 void ASeinPlayerController::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -304,14 +293,9 @@ void ASeinPlayerController::BeginPlay()
 		bShowMouseCursor = true; // re-assert (constructor set it but can drift)
 	}
 
-	// Add input mapping context
-	if (InputConfig && InputConfig->DefaultMappingContext)
-	{
-		if (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(GetLocalPlayer()))
-		{
-			Subsystem->AddMappingContext(InputConfig->DefaultMappingContext, InputConfig->DefaultMappingPriority);
-		}
-	}
+	// Input mapping contexts are added by the Blueprint subclass (Add Mapping
+	// Context on BeginPlay) — the standard Enhanced Input pattern. The base
+	// class deliberately binds nothing.
 }
 
 void ASeinPlayerController::Tick(float DeltaSeconds)
@@ -358,156 +342,11 @@ void ASeinPlayerController::Tick(float DeltaSeconds)
 	}
 }
 
-// ==================== Input Setup ====================
+// ==================== Input Entry Points ====================
+// Bound by the Blueprint subclass's Enhanced Input action events — the base
+// class deliberately performs no BindAction calls.
 
-void ASeinPlayerController::SetupInputComponent()
-{
-	Super::SetupInputComponent();
-
-	if (!InputConfig)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("SeinPlayerController: No InputConfig assigned. Input will not function."));
-		return;
-	}
-
-	UEnhancedInputComponent* EIC = Cast<UEnhancedInputComponent>(InputComponent);
-	if (!EIC)
-	{
-		UE_LOG(LogTemp, Error, TEXT("SeinPlayerController: InputComponent is not UEnhancedInputComponent. Check project input settings."));
-		return;
-	}
-
-	// Selection
-	if (InputConfig->IA_Select)
-	{
-		EIC->BindAction(InputConfig->IA_Select, ETriggerEvent::Started, this, &ASeinPlayerController::OnSelectPressed);
-		EIC->BindAction(InputConfig->IA_Select, ETriggerEvent::Completed, this, &ASeinPlayerController::OnSelectReleased);
-	}
-
-	// Command (fire on release for drag order support)
-	if (InputConfig->IA_Command)
-	{
-		EIC->BindAction(InputConfig->IA_Command, ETriggerEvent::Started, this, &ASeinPlayerController::OnCommandStarted);
-		EIC->BindAction(InputConfig->IA_Command, ETriggerEvent::Completed, this, &ASeinPlayerController::OnCommandReleased);
-	}
-
-	// Camera — keyboard pan (WASD / arrows)
-	if (InputConfig->IA_KeyPan)
-	{
-		EIC->BindAction(InputConfig->IA_KeyPan, ETriggerEvent::Triggered, this, &ASeinPlayerController::OnCameraPan);
-	}
-	// Camera — keyboard rotate (Q/E)
-	if (InputConfig->IA_KeyRotate)
-	{
-		EIC->BindAction(InputConfig->IA_KeyRotate, ETriggerEvent::Triggered, this, &ASeinPlayerController::OnCameraRotate);
-	}
-	// Camera — mouse zoom (scroll wheel)
-	if (InputConfig->IA_MouseZoom)
-	{
-		EIC->BindAction(InputConfig->IA_MouseZoom, ETriggerEvent::Triggered, this, &ASeinPlayerController::OnCameraZoom);
-	}
-	// Camera — keyboard zoom (Z/X)
-	if (InputConfig->IA_KeyZoom)
-	{
-		EIC->BindAction(InputConfig->IA_KeyZoom, ETriggerEvent::Triggered, this, &ASeinPlayerController::OnCameraZoomKeyboard);
-	}
-	// Camera — follow (F)
-	if (InputConfig->IA_FollowCamera)
-	{
-		EIC->BindAction(InputConfig->IA_FollowCamera, ETriggerEvent::Started, this, &ASeinPlayerController::OnCameraFollowPressed);
-	}
-	// Camera — reset rotation (Backspace)
-	if (InputConfig->IA_ResetCamera)
-	{
-		EIC->BindAction(InputConfig->IA_ResetCamera, ETriggerEvent::Started, this, &ASeinPlayerController::OnCameraResetPressed);
-	}
-	// Camera — MMB pan (chorded in mapping context)
-	if (InputConfig->IA_MousePan)
-	{
-		EIC->BindAction(InputConfig->IA_MousePan, ETriggerEvent::Triggered, this, &ASeinPlayerController::OnCameraMMBPan);
-	}
-	// Camera — Alt+MMB rotate (chorded in mapping context)
-	if (InputConfig->IA_MouseRotate)
-	{
-		EIC->BindAction(InputConfig->IA_MouseRotate, ETriggerEvent::Triggered, this, &ASeinPlayerController::OnCameraAltRotate);
-	}
-
-	// Ping (Ctrl+MMB)
-	if (InputConfig->IA_Ping)
-	{
-		EIC->BindAction(InputConfig->IA_Ping, ETriggerEvent::Started, this, &ASeinPlayerController::OnPingPressed);
-	}
-
-	// Focus cycling
-	if (InputConfig->IA_CycleFocus)
-	{
-		EIC->BindAction(InputConfig->IA_CycleFocus, ETriggerEvent::Started, this, &ASeinPlayerController::OnCycleFocusPressed);
-	}
-
-	// Modifiers
-	if (InputConfig->IA_ModifierShift)
-	{
-		EIC->BindAction(InputConfig->IA_ModifierShift, ETriggerEvent::Started, this, &ASeinPlayerController::OnModifierShift);
-		EIC->BindAction(InputConfig->IA_ModifierShift, ETriggerEvent::Completed, this, &ASeinPlayerController::OnModifierShift);
-	}
-	if (InputConfig->IA_ModifierCtrl)
-	{
-		EIC->BindAction(InputConfig->IA_ModifierCtrl, ETriggerEvent::Started, this, &ASeinPlayerController::OnModifierCtrl);
-		EIC->BindAction(InputConfig->IA_ModifierCtrl, ETriggerEvent::Completed, this, &ASeinPlayerController::OnModifierCtrl);
-	}
-	if (InputConfig->IA_ModifierAlt)
-	{
-		EIC->BindAction(InputConfig->IA_ModifierAlt, ETriggerEvent::Started, this, &ASeinPlayerController::OnModifierAlt);
-		EIC->BindAction(InputConfig->IA_ModifierAlt, ETriggerEvent::Completed, this, &ASeinPlayerController::OnModifierAlt);
-	}
-
-	// Control groups (0-9) — bind to individual handler methods since BindAction requires member function pointers
-	using HandlerFn = void (ASeinPlayerController::*)(const FInputActionValue&);
-	static const HandlerFn ControlGroupHandlers[10] = {
-		&ASeinPlayerController::OnControlGroup0, &ASeinPlayerController::OnControlGroup1,
-		&ASeinPlayerController::OnControlGroup2, &ASeinPlayerController::OnControlGroup3,
-		&ASeinPlayerController::OnControlGroup4, &ASeinPlayerController::OnControlGroup5,
-		&ASeinPlayerController::OnControlGroup6, &ASeinPlayerController::OnControlGroup7,
-		&ASeinPlayerController::OnControlGroup8, &ASeinPlayerController::OnControlGroup9,
-	};
-
-	for (int32 i = 0; i < InputConfig->IA_ControlGroups.Num() && i < 10; ++i)
-	{
-		if (InputConfig->IA_ControlGroups[i])
-		{
-			EIC->BindAction(InputConfig->IA_ControlGroups[i], ETriggerEvent::Started, this, ControlGroupHandlers[i]);
-		}
-	}
-
-	// Action slot hotkeys (12 slots for ability/action panel)
-	using ActionSlotFn = void (ASeinPlayerController::*)(const FInputActionValue&);
-	static const ActionSlotFn ActionSlotHandlers[12] = {
-		&ASeinPlayerController::OnActionSlot0,  &ASeinPlayerController::OnActionSlot1,
-		&ASeinPlayerController::OnActionSlot2,  &ASeinPlayerController::OnActionSlot3,
-		&ASeinPlayerController::OnActionSlot4,  &ASeinPlayerController::OnActionSlot5,
-		&ASeinPlayerController::OnActionSlot6,  &ASeinPlayerController::OnActionSlot7,
-		&ASeinPlayerController::OnActionSlot8,  &ASeinPlayerController::OnActionSlot9,
-		&ASeinPlayerController::OnActionSlot10, &ASeinPlayerController::OnActionSlot11,
-	};
-
-	for (int32 i = 0; i < InputConfig->IA_ActionSlots.Num() && i < 12; ++i)
-	{
-		if (InputConfig->IA_ActionSlots[i])
-		{
-			EIC->BindAction(InputConfig->IA_ActionSlots[i], ETriggerEvent::Started, this, ActionSlotHandlers[i]);
-		}
-	}
-
-	// Menu / Escape
-	if (InputConfig->IA_Menu)
-	{
-		EIC->BindAction(InputConfig->IA_Menu, ETriggerEvent::Started, this, &ASeinPlayerController::OnMenuKeyPressed);
-	}
-}
-
-// ==================== Input Handlers ====================
-
-void ASeinPlayerController::OnSelectPressed(const FInputActionValue& Value)
+void ASeinPlayerController::HandleSelectPressed()
 {
 	// LMB confirms an active targeter session (left-click places
 	// the target). We intercept on press, route to the subsystem, and set a
@@ -536,8 +375,15 @@ void ASeinPlayerController::OnSelectPressed(const FInputActionValue& Value)
 	}
 }
 
-void ASeinPlayerController::OnSelectReleased(const FInputActionValue& Value)
+void ASeinPlayerController::HandleSelectReleased()
 {
+	// Release without a matching press (double-wired pins, an input flush, or a
+	// Canceled that already unlatched) — a no-op, never a click-selection.
+	if (!bSelectPressConsumedByTargeter && !bSelectHeld)
+	{
+		return;
+	}
+
 	// If the press was consumed by a targeter-confirm, route the release
 	// to the subsystem too (drag specs use it to capture the drag endpoint;
 	// point specs are no-ops on release). Crucially, we then bail BEFORE
@@ -613,7 +459,7 @@ void ASeinPlayerController::OnSelectReleased(const FInputActionValue& Value)
 	}
 }
 
-void ASeinPlayerController::OnCommandStarted(const FInputActionValue& Value)
+void ASeinPlayerController::HandleCommandPressed()
 {
 	// When the targeter is active, RMB is the cancel input — back out of
 	// the targeter session. We mark the press as consumed so the matching
@@ -660,8 +506,15 @@ void ASeinPlayerController::OnCommandStarted(const FInputActionValue& Value)
 	}
 }
 
-void ASeinPlayerController::OnCommandReleased(const FInputActionValue& Value)
+void ASeinPlayerController::HandleCommandReleased()
 {
+	// Release without a matching press (double-wired pins, an input flush, or a
+	// Canceled that already unlatched) — a no-op, never a phantom order.
+	if (!bCommandPressConsumedByTargeter && !bRMBHeld)
+	{
+		return;
+	}
+
 	// If RMB-press was consumed as a targeter cancel, swallow the release
 	// too — otherwise the default move-to-on-release fires on the same
 	// click and the unit walks where the user just cancelled.
@@ -733,43 +586,78 @@ void ASeinPlayerController::OnCommandReleased(const FInputActionValue& Value)
 	bIsCommandDragging = false;
 }
 
-void ASeinPlayerController::OnCameraPan(const FInputActionValue& Value)
+void ASeinPlayerController::HandleSelectCanceled()
+{
+	// Unlatch, never commit: no selection change, no marquee resolve. A press consumed
+	// as a targeter confirm cancels the targeter session instead of confirming it.
+	if (bSelectPressConsumedByTargeter)
+	{
+		if (USeinTargeterSubsystem* Targeter = GetTargeterSubsystem())
+		{
+			Targeter->OnCancelInput();
+		}
+		bSelectPressConsumedByTargeter = false;
+	}
+	bSelectHeld = false;
+	bIsMarqueeDragging = false;
+}
+
+void ASeinPlayerController::HandleCommandCanceled()
+{
+	// Unlatch, never commit: the sampled drag is discarded and no order is issued.
+	// (A consumed press already ran the targeter cancel — just clear the flag.)
+	bCommandPressConsumedByTargeter = false;
+	bRMBHeld = false;
+	bIsCommandDragging = false;
+	CommandDragPath.Reset();
+	CommandTargetActor = nullptr;
+}
+
+void ASeinPlayerController::ResetInputState()
+{
+	HandleSelectCanceled();
+	HandleCommandCanceled();
+	bShiftHeld = false;
+	bCtrlHeld = false;
+	bAltHeld = false;
+}
+
+void ASeinPlayerController::HandleKeyPan(FVector2D AxisValue)
 {
 	if (ASeinCameraPawn* CamPawn = Cast<ASeinCameraPawn>(GetPawn()))
 	{
-		const float Speed = InputConfig ? InputConfig->KeyPanSpeed : 1.0f;
-		CamPawn->HandlePanInput(Value.Get<FVector2D>() * Speed);
+		CamPawn->HandlePanInput(AxisValue * KeyPanSpeed);
 	}
 }
 
-void ASeinPlayerController::OnCameraRotate(const FInputActionValue& Value)
+void ASeinPlayerController::HandleKeyRotate(FVector2D RotateValue)
 {
 	if (ASeinCameraPawn* CamPawn = Cast<ASeinCameraPawn>(GetPawn()))
 	{
-		const float Speed = InputConfig ? InputConfig->KeyRotateSpeed : 1.0f;
-		CamPawn->HandleRotateInput(Value.Get<float>() * Speed);
+		// X = yaw around the pivot; Y = pitch tilt. Rates: Key Rotate Speed here, the
+		// pawn's RotationSpeed / TiltSpeed (degrees per second) inside the pawn.
+		CamPawn->HandleRotateInput(RotateValue.X * KeyRotateSpeed);
+		CamPawn->HandleTiltInput(RotateValue.Y * KeyRotateSpeed);
 	}
 }
 
-void ASeinPlayerController::OnCameraZoom(const FInputActionValue& Value)
+void ASeinPlayerController::HandleMouseZoom(float ZoomDelta)
 {
 	if (ASeinCameraPawn* CamPawn = Cast<ASeinCameraPawn>(GetPawn()))
 	{
-		const float Speed = InputConfig ? InputConfig->MouseZoomSpeed : 1.0f;
-		CamPawn->HandleZoomInput(Value.Get<float>() * Speed);
+		CamPawn->HandleZoomInput(ZoomDelta * MouseZoomSpeed);
 	}
 }
 
-void ASeinPlayerController::OnCameraZoomKeyboard(const FInputActionValue& Value)
+void ASeinPlayerController::HandleKeyZoom(float ZoomDelta)
 {
 	if (ASeinCameraPawn* CamPawn = Cast<ASeinCameraPawn>(GetPawn()))
 	{
-		const float Speed = InputConfig ? InputConfig->KeyZoomSpeed : 1.0f;
-		CamPawn->HandleZoomInput(Value.Get<float>() * Speed);
+		CamPawn->HandleKeyZoomInput(ZoomDelta * KeyZoomSpeed);
 	}
 }
 
-void ASeinPlayerController::OnCameraFollowPressed(const FInputActionValue& Value)
+void ASeinPlayerController::HandleCameraFollow()
 {
 	ASeinCameraPawn* CamPawn = Cast<ASeinCameraPawn>(GetPawn());
 	if (!CamPawn)
@@ -797,7 +685,7 @@ void ASeinPlayerController::OnCameraFollowPressed(const FInputActionValue& Value
 	}
 }
 
-void ASeinPlayerController::OnCameraResetPressed(const FInputActionValue& Value)
+void ASeinPlayerController::HandleCameraReset()
 {
 	if (ASeinCameraPawn* CamPawn = Cast<ASeinCameraPawn>(GetPawn()))
 	{
@@ -805,7 +693,7 @@ void ASeinPlayerController::OnCameraResetPressed(const FInputActionValue& Value)
 	}
 }
 
-void ASeinPlayerController::OnCameraMMBPan(const FInputActionValue& Value)
+void ASeinPlayerController::HandleMousePan(FVector2D MouseDelta)
 {
 	// Block MMB pan while LMB (select) or RMB (command) are held —
 	// those use mouse delta for marquee/formation drag, not camera control.
@@ -816,12 +704,11 @@ void ASeinPlayerController::OnCameraMMBPan(const FInputActionValue& Value)
 
 	if (ASeinCameraPawn* CamPawn = Cast<ASeinCameraPawn>(GetPawn()))
 	{
-		const float Speed = InputConfig ? InputConfig->MousePanSpeed : 1.0f;
-		CamPawn->HandleMMBPanInput(Value.Get<FVector2D>() * Speed);
+		CamPawn->HandleMMBPanInput(MouseDelta * MousePanSpeed);
 	}
 }
 
-void ASeinPlayerController::OnCameraAltRotate(const FInputActionValue& Value)
+void ASeinPlayerController::HandleMouseRotate(FVector2D MouseDelta)
 {
 	// Block orbit while LMB (select) or RMB (command) are held.
 	if (bSelectHeld || bRMBHeld)
@@ -831,13 +718,12 @@ void ASeinPlayerController::OnCameraAltRotate(const FInputActionValue& Value)
 
 	if (ASeinCameraPawn* CamPawn = Cast<ASeinCameraPawn>(GetPawn()))
 	{
-		const float Speed = InputConfig ? InputConfig->MouseRotateSpeed : 1.0f;
-		// IA_MouseRotate is Axis2D: X = yaw, Y = pitch tilt
-		CamPawn->HandleOrbitInput(Value.Get<FVector2D>() * Speed);
+		// Axis2D: X = yaw orbit, Y = pitch tilt — both per pixel in the pawn.
+		CamPawn->HandleOrbitInput(MouseDelta * MouseRotateSpeed);
 	}
 }
 
-void ASeinPlayerController::OnPingPressed(const FInputActionValue& Value)
+void ASeinPlayerController::HandlePing()
 {
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem();
 	if (!Subsystem)
@@ -905,24 +791,24 @@ void ASeinPlayerController::OnPingPressed(const FInputActionValue& Value)
 	DrawDebugString(World, TextLocation, PingLabel, nullptr, PingColor, PingDisplayTime, true, 1.5f);
 }
 
-void ASeinPlayerController::OnCycleFocusPressed(const FInputActionValue& Value)
+void ASeinPlayerController::HandleCycleFocus()
 {
 	CycleFocus();
 }
 
-void ASeinPlayerController::OnModifierShift(const FInputActionValue& Value)
+void ASeinPlayerController::SetShiftHeld(bool bHeld)
 {
-	bShiftHeld = Value.Get<bool>();
+	bShiftHeld = bHeld;
 }
 
-void ASeinPlayerController::OnModifierCtrl(const FInputActionValue& Value)
+void ASeinPlayerController::SetCtrlHeld(bool bHeld)
 {
-	bCtrlHeld = Value.Get<bool>();
+	bCtrlHeld = bHeld;
 }
 
-void ASeinPlayerController::OnModifierAlt(const FInputActionValue& Value)
+void ASeinPlayerController::SetAltHeld(bool bHeld)
 {
-	bAltHeld = Value.Get<bool>();
+	bAltHeld = bHeld;
 }
 
 void ASeinPlayerController::HandleControlGroup(int32 GroupIndex)
@@ -937,6 +823,132 @@ void ASeinPlayerController::HandleControlGroup(int32 GroupIndex)
 	}
 }
 
+void ASeinPlayerController::HandleSelectAll(bool bViewportOnly)
+{
+	TArray<ASeinActor*> Gathered = GatherOwnedSelectableActors(/*MatchClass=*/nullptr, bViewportOnly);
+	if (Gathered.IsEmpty())
+	{
+		// Nothing to select — keep the current selection instead of emptying it.
+		return;
+	}
+	Gathered = ResolveSelectionToSquads(Gathered);
+	if (bShiftHeld)
+	{
+		AddToSelection(Gathered);
+	}
+	else
+	{
+		SetSelection(Gathered);
+	}
+}
+
+void ASeinPlayerController::HandleSelectAllOfType(bool bViewportOnly)
+{
+	ASeinActor* Reference = ResolveTypeReferenceActor();
+	if (!Reference)
+	{
+		return;
+	}
+	TArray<ASeinActor*> Gathered = GatherOwnedSelectableActors(Reference->GetClass(), bViewportOnly);
+	if (Gathered.IsEmpty())
+	{
+		return;
+	}
+	Gathered = ResolveSelectionToSquads(Gathered);
+	if (bShiftHeld)
+	{
+		AddToSelection(Gathered);
+	}
+	else
+	{
+		SetSelection(Gathered);
+	}
+}
+
+ASeinActor* ASeinPlayerController::ResolveTypeReferenceActor() const
+{
+	USeinWorldSubsystem* Subsystem = GetWorldSubsystem();
+
+	// Hovered first (the double-click-a-unit convention) — but only an OWN unit
+	// anchors the type; hovering an enemy falls through to the focus/selection.
+	if (ASeinActor* Hovered = HoveredActor.Get())
+	{
+		if (Hovered->HasValidEntity() && Subsystem
+			&& Subsystem->GetEntityOwner(Hovered->GetEntityHandle()) == SeinPlayerID)
+		{
+			return Hovered;
+		}
+	}
+
+	if (ASeinActor* Focused = GetFocusedActor())
+	{
+		return Focused;
+	}
+
+	for (const TWeakObjectPtr<ASeinActor>& Weak : SelectedActors)
+	{
+		ASeinActor* Actor = Weak.Get();
+		if (Actor && Actor->HasValidEntity())
+		{
+			return Actor;
+		}
+	}
+	return nullptr;
+}
+
+TArray<ASeinActor*> ASeinPlayerController::GatherOwnedSelectableActors(UClass* MatchClass, bool bViewportOnly)
+{
+	TArray<ASeinActor*> Out;
+
+	UWorld* World = GetWorld();
+	USeinWorldSubsystem* Subsystem = GetWorldSubsystem();
+	USeinActorBridgeSubsystem* Bridge = World ? World->GetSubsystem<USeinActorBridgeSubsystem>() : nullptr;
+	if (!Subsystem || !Bridge)
+	{
+		return Out;
+	}
+
+	// Same eligibility rules as marquee/click selection (live own entity), plus the
+	// entity's selectable flag — a sweep must not grab what a click could not.
+	Bridge->ForEachRegisteredActor(
+		[&](FSeinEntityHandle Handle, ASeinActor& Actor)
+		{
+			if (MatchClass && Actor.GetClass() != MatchClass)
+			{
+				return;
+			}
+			if (Subsystem->GetEntityOwner(Handle) != SeinPlayerID)
+			{
+				return;
+			}
+			const FSeinEntity* Entity = Subsystem->GetEntity(Handle);
+			if (!Entity || !Entity->IsSelectable())
+			{
+				return;
+			}
+			if (bViewportOnly && !IsWorldLocationOnScreen(Actor.GetActorLocation()))
+			{
+				return;
+			}
+			Out.Add(&Actor);
+		});
+	return Out;
+}
+
+bool ASeinPlayerController::IsWorldLocationOnScreen(const FVector& WorldLocation)
+{
+	FVector2D Screen;
+	if (!ProjectWorldLocationToScreen(WorldLocation, Screen, /*bPlayerViewportRelative=*/true))
+	{
+		return false;
+	}
+	int32 SizeX = 0, SizeY = 0;
+	GetViewportSize(SizeX, SizeY);
+	return SizeX > 0 && SizeY > 0
+		&& Screen.X >= 0.f && Screen.X <= static_cast<float>(SizeX)
+		&& Screen.Y >= 0.f && Screen.Y <= static_cast<float>(SizeY);
+}
+
 // ==================== Action Slots & Menu ====================
 
 void ASeinPlayerController::HandleActionSlot(int32 SlotIndex)
@@ -944,7 +956,7 @@ void ASeinPlayerController::HandleActionSlot(int32 SlotIndex)
 	OnActionSlotPressed.Broadcast(SlotIndex);
 }
 
-void ASeinPlayerController::OnMenuKeyPressed(const FInputActionValue& Value)
+void ASeinPlayerController::HandleMenu()
 {
 	OnMenuPressed.Broadcast();
 }
@@ -1008,7 +1020,7 @@ void ASeinPlayerController::SetSelection(const TArray<ASeinActor*>& NewSelection
 	{
 		if (ASeinActor* Actor = Weak.Get())
 		{
-			// Selection-visual hooks: subscribe to USeinEntityComponent::OnVisualEvent
+			// Selection-visual hooks: subscribe to USeinEntityBridgeComponent::OnVisualEvent
 			// from a designer-authored render AC if you need per-actor selection
 			// state on the unit BP. Framework no longer ships a per-actor
 			// selection component.
@@ -1031,7 +1043,7 @@ void ASeinPlayerController::SetSelection(const TArray<ASeinActor*>& NewSelection
 		if (ASeinActor* Actor = Weak.Get())
 		{
 			// Per-actor selection visuals: drop a designer render AC subscribed
-			// to USeinEntityComponent::OnVisualEvent if needed.
+			// to USeinEntityBridgeComponent::OnVisualEvent if needed.
 		}
 	}
 
@@ -1067,7 +1079,7 @@ void ASeinPlayerController::AddToSelection(const TArray<ASeinActor*>& ActorsToAd
 		{
 			SelectedActors.Add(Actor);
 			// Per-actor selection visuals: drop a designer render AC subscribed
-			// to USeinEntityComponent::OnVisualEvent if needed.
+			// to USeinEntityBridgeComponent::OnVisualEvent if needed.
 		}
 	}
 
@@ -1120,7 +1132,7 @@ void ASeinPlayerController::ClearSelection()
 	{
 		if (ASeinActor* Actor = Weak.Get())
 		{
-			// Selection-visual hooks: subscribe to USeinEntityComponent::OnVisualEvent
+			// Selection-visual hooks: subscribe to USeinEntityBridgeComponent::OnVisualEvent
 			// from a designer-authored render AC if you need per-actor selection
 			// state on the unit BP. Framework no longer ships a per-actor
 			// selection component.

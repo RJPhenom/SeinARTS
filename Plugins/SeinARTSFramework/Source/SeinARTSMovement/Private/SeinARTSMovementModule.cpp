@@ -42,7 +42,7 @@
 #include "Components/SeinNavigationComponent.h"
 #include "Components/SeinExtentsComponent.h"
 #include "Components/SeinExtentsHelpers.h"  // editor-world cascade: BoundingRadius
-#include "Actor/SeinEntityComponent.h"  // editor-world Extents viz: walks Bridge->ComponentData
+#include "Actor/SeinEntityBridgeComponent.h"  // editor-world Extents viz: walks Bridge->ComponentData
 #include "SeinARTSNavigationModule.h"
 #include "SeinNavigation.h"
 #include "SeinNavigationSubsystem.h"
@@ -100,18 +100,23 @@ namespace
 //     in both contexts. Sim-side concept (Extents lives in SeinARTSCoreEntity)
 //     but hosted here for ticker-infrastructure reuse — SeinARTSCoreEntity has
 //     no debug-draw pipeline of its own.
+//
+// SFG_Custom keeps these runtime flags in the level/PIE viewport's Show menu
+// while respecting the SCS Blueprint viewport's built-in custom-group filter.
+// Blueprint authoring visualization is separately always-on while the entity
+// bridge is selected and must not expose runtime toggles.
 namespace UE::SeinARTSMovement
 {
 	static TCustomShowFlag<> ShowSteering(
 		TEXT("SeinSteering"),
 		/*DefaultEnabled*/ false,
-		SFG_Normal,
+		SFG_Custom,
 		NSLOCTEXT("SeinARTSMovement", "ShowSteering", "Steering"));
 
 	static TCustomShowFlag<> ShowExtents(
 		TEXT("SeinExtents"),
 		/*DefaultEnabled*/ false,
-		SFG_Normal,
+		SFG_Custom,
 		NSLOCTEXT("SeinARTSMovement", "ShowExtents", "Extents"));
 }
 
@@ -525,7 +530,7 @@ namespace
 		}
 		else
 		{
-			// Editor world: walk actors with USeinEntityComponent and read
+			// Editor world: walk actors with USeinEntityBridgeComponent and read
 			// authored ComponentData. No sim → no live velocity, so draw the
 			// footprint ring only (velocity arrow skips when |velocity|=0
 			// in DrawSteeringDebugViz). NO cull / budget — editor users want
@@ -534,7 +539,7 @@ namespace
 			{
 				AActor* Actor = *It;
 				if (!IsValid(Actor)) continue;
-				USeinEntityComponent* Bridge = Actor->FindComponentByClass<USeinEntityComponent>();
+				USeinEntityBridgeComponent* Bridge = Actor->FindComponentByClass<USeinEntityBridgeComponent>();
 				if (!Bridge) continue;
 
 				// Run the same Extents → NavComp cascade against AUTHORED
@@ -716,7 +721,7 @@ namespace
 	 *    - **PIE / game world** — walks the sim entity pool, reads runtime
 	 *      `FSeinExtentsComponent` data, draws at the entity's sim transform.
 	 *    - **Editor world** — walks `TActorIterator<AActor>`, finds actors
-	 *      with `USeinEntityComponent`, reads AUTHORED `ComponentData`
+	 *      with `USeinEntityBridgeComponent`, reads AUTHORED `ComponentData`
 	 *      (FInstancedStruct entries), draws at the actor's editor transform.
 	 *      This is what lets designers see extents in the level editor
 	 *      without entering PIE.
@@ -757,7 +762,7 @@ namespace
 		}
 		else
 		{
-			// Editor world: walk actors with USeinEntityComponent and read
+			// Editor world: walk actors with USeinEntityBridgeComponent and read
 			// AUTHORED ComponentData. The sim entity pool is empty pre-PIE,
 			// so this path is the only way to see extents in the level
 			// editor.
@@ -771,7 +776,7 @@ namespace
 			{
 				AActor* Actor = *It;
 				if (!IsValid(Actor)) continue;
-				USeinEntityComponent* Bridge = Actor->FindComponentByClass<USeinEntityComponent>();
+				USeinEntityBridgeComponent* Bridge = Actor->FindComponentByClass<USeinEntityBridgeComponent>();
 				if (!Bridge) continue;
 
 				const FTransform Xform = Actor->GetActorTransform();

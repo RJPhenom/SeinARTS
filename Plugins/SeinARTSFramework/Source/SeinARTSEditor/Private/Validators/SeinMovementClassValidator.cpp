@@ -6,7 +6,7 @@
 #include "Validators/SeinMovementClassValidator.h"
 
 #include "Actor/SeinActor.h"
-#include "Actor/SeinEntityComponent.h"
+#include "Actor/SeinEntityBridgeComponent.h"
 #include "Components/SeinMovementComponent.h"
 #include "Engine/Blueprint.h"
 #include "Misc/DataValidation.h"
@@ -56,9 +56,9 @@ EDataValidationResult USeinMovementClassValidator::ValidateLoadedAsset_Implement
 
 	// Walk the entity bridge's authored ComponentData for FSeinMovementComponent entries and check
 	// each MovementClass. (The bridge is a native subobject, so GetComponents finds it on the CDO.)
-	TArray<USeinEntityComponent*> Bridges;
-	CDO->GetComponents<USeinEntityComponent>(Bridges);
-	for (USeinEntityComponent* Bridge : Bridges)
+	TArray<USeinEntityBridgeComponent*> Bridges;
+	CDO->GetComponents<USeinEntityBridgeComponent>(Bridges);
+	for (USeinEntityBridgeComponent* Bridge : Bridges)
 	{
 		if (!Bridge) continue;
 		for (const FInstancedStruct& Entry : Bridge->ComponentData)

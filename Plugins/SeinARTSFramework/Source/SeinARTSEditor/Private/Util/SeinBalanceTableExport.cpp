@@ -8,7 +8,7 @@
 #include "Util/SeinDeterminismRules.h"
 #include "Balance/SeinBalanceProfile.h"
 #include "Actor/SeinActor.h"
-#include "Actor/SeinEntityComponent.h"
+#include "Actor/SeinEntityBridgeComponent.h"
 #include "Components/SeinIdentityComponent.h"
 #include "Components/SeinComponentEligibility.h"
 #include "Types/FixedPoint.h"
@@ -71,11 +71,11 @@ namespace
 	}
 
 	/** The CDO's entity-bridge (a native default subobject on every ASeinActor). */
-	USeinEntityComponent* FindBridge(const UClass* Target)
+	USeinEntityBridgeComponent* FindBridge(const UClass* Target)
 	{
 		if (!Target) return nullptr;
 		ASeinActor* CDO = Cast<ASeinActor>(Target->GetDefaultObject());
-		return CDO ? CDO->FindComponentByClass<USeinEntityComponent>() : nullptr;
+		return CDO ? CDO->FindComponentByClass<USeinEntityBridgeComponent>() : nullptr;
 	}
 
 	/** Two FProperties safe to CopyCompleteValue between (same class; same Struct/Enum where it matters). */
@@ -109,7 +109,7 @@ namespace
 		{
 			return ESeinBalanceReadResult::Error;
 		}
-		const USeinEntityComponent* Bridge = FindBridge(Target);
+		const USeinEntityBridgeComponent* Bridge = FindBridge(Target);
 		if (!Bridge) return ESeinBalanceReadResult::Error;
 
 		for (const FInstancedStruct& Entry : Bridge->ComponentData)
@@ -157,7 +157,7 @@ namespace
 	 *  column's. Null if the component/field/inner-type doesn't match (a sparse cell). */
 	const void* FindNestedInner(const UClass* Target, const FSeinBalanceColumn& Col)
 	{
-		const USeinEntityComponent* Bridge = FindBridge(Target);
+		const USeinEntityBridgeComponent* Bridge = FindBridge(Target);
 		const FStructProperty* ContainerSP = CastField<FStructProperty>(Col.NestedContainerProp);
 		if (!Bridge || !Col.ComponentStruct.Get() || !ContainerSP || !Col.InnerStruct.Get()) return nullptr;
 		for (const FInstancedStruct& Entry : Bridge->ComponentData)
@@ -173,7 +173,7 @@ namespace
 	/** Mutable counterpart of FindNestedInner — for Push write-back into the inner sub-data. */
 	void* FindNestedInnerMutable(const UClass* Target, const FSeinBalanceColumn& Col)
 	{
-		USeinEntityComponent* Bridge = FindBridge(Target);
+		USeinEntityBridgeComponent* Bridge = FindBridge(Target);
 		const FStructProperty* ContainerSP = CastField<FStructProperty>(Col.NestedContainerProp);
 		if (!Bridge || !Col.ComponentStruct.Get() || !ContainerSP || !Col.InnerStruct.Get()) return nullptr;
 		for (FInstancedStruct& Entry : Bridge->ComponentData)
@@ -213,7 +213,7 @@ namespace
 				TSet<UScriptStruct*> Found;
 				for (const UClass* T : Targets)
 				{
-					const USeinEntityComponent* Bridge = FindBridge(T);
+					const USeinEntityBridgeComponent* Bridge = FindBridge(T);
 					if (!Bridge) continue;
 					for (const FInstancedStruct& E : Bridge->ComponentData)
 					{
@@ -280,7 +280,7 @@ namespace
 		virtual ESeinBalanceWriteResult WriteFrom(const UClass* Target, const FSeinBalanceColumn& Column,
 			const FProperty* CellProp, const void* CellPtr) const override
 		{
-			USeinEntityComponent* Bridge = FindBridge(Target);
+			USeinEntityBridgeComponent* Bridge = FindBridge(Target);
 			UScriptStruct* CompStruct = Column.ComponentStruct.Get();
 			const FProperty* DestField = Column.SourceProp;
 			if (!Bridge || !CompStruct || !DestField || !CellProp || !CellPtr)
@@ -386,7 +386,7 @@ namespace
 				TSet<UScriptStruct*> Found;
 				for (const UClass* T : Targets)
 				{
-					const USeinEntityComponent* Bridge = FindBridge(T);
+					const USeinEntityBridgeComponent* Bridge = FindBridge(T);
 					if (!Bridge) continue;
 					for (const FInstancedStruct& E : Bridge->ComponentData)
 					{
@@ -412,7 +412,7 @@ namespace
 					TSet<UScriptStruct*> InnerTypes;
 					for (const UClass* T : Targets)
 					{
-						const USeinEntityComponent* Bridge = FindBridge(T);
+						const USeinEntityBridgeComponent* Bridge = FindBridge(T);
 						if (!Bridge) continue;
 						for (const FInstancedStruct& E : Bridge->ComponentData)
 						{
@@ -1520,7 +1520,7 @@ static int32 PushToEntitiesInternal(
 
 		// Snapshot the authored payload so the bridge can derive exact property
 		// patches from the raw writes below (there is no property-editor chain).
-		if (USeinEntityComponent* Bridge = FindBridge(T))
+		if (USeinEntityBridgeComponent* Bridge = FindBridge(T))
 		{
 			Bridge->BeginComponentDataEdit();
 		}
@@ -1555,7 +1555,7 @@ static int32 PushToEntitiesInternal(
 		// records class-default history, mirrors into instances / derived class
 		// defaults with Unreal's inherit-vs-override semantics, and broadcasts the
 		// live-tuning request; with none it simply releases the captured snapshot.
-		if (USeinEntityComponent* Bridge = FindBridge(T))
+		if (USeinEntityBridgeComponent* Bridge = FindBridge(T))
 		{
 			Bridge->EndComponentDataEdit();
 		}

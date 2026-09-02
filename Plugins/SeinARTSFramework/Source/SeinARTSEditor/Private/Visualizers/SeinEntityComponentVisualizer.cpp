@@ -16,12 +16,13 @@
 
 #include "Visualizers/SeinEntityComponentVisualizer.h"
 
-#include "Actor/SeinEntityComponent.h"
+#include "Actor/SeinEntityBridgeComponent.h"
 #include "Components/SeinExtentsComponent.h"
 #include "Components/SeinNavigationComponent.h"
 #include "Components/SeinProductionComponent.h"
 #include "SeinARTSEditorModule.h"  // FSeinARTSEditorModule + per-component draw registry
 
+#include "Engine/World.h"
 #include "GameFramework/Actor.h"
 #include "Modules/ModuleManager.h"
 #include "SceneManagement.h"
@@ -29,6 +30,30 @@
 
 namespace SeinEntityVisualizerLocal
 {
+	/** The SCS viewport visualizes a preview-actor duplicate, but Blueprint
+	 *  Details edits are applied to that duplicate's component archetype. UE
+	 *  normally reconstructs the preview after component-template changes;
+	 *  structural edits inside FInstancedStruct arrays do not take that path,
+	 *  so the duplicate can retain the pre-edit ComponentData until the editor
+	 *  is reopened. Read the live authoring template in EditorPreview worlds
+	 *  instead. Level-editor and PIE instances continue to visualize their own
+	 *  data, including instance overrides and runtime state. */
+	static const TArray<FInstancedStruct>& ResolveComponentData(
+		const USeinEntityBridgeComponent& Bridge)
+	{
+		const UWorld* World = Bridge.GetWorld();
+		if (World && World->WorldType == EWorldType::EditorPreview)
+		{
+			if (const USeinEntityBridgeComponent* AuthoringTemplate =
+				Cast<USeinEntityBridgeComponent>(Bridge.GetArchetype()))
+			{
+				return AuthoringTemplate->ComponentData;
+			}
+		}
+
+		return Bridge.ComponentData;
+	}
+
 	// ----------------------------------------------------------------------
 	// Extents drawing (Box / Capsule) — built-in. The extents struct lives in
 	// SeinARTSCoreEntity, which SeinARTSEditor already depends on, so this
@@ -230,25 +255,27 @@ void FSeinEntityComponentVisualizer::DrawVisualization(
 	const FSceneView* /*View*/,
 	FPrimitiveDrawInterface* PDI)
 {
-	const USeinEntityComponent* Bridge = Cast<USeinEntityComponent>(Component);
+	const USeinEntityBridgeComponent* Bridge = Cast<USeinEntityBridgeComponent>(Component);
 	if (!Bridge || !PDI) return;
 
 	const AActor* Owner = Bridge->GetOwner();
 	const FTransform ActorXform = Owner ? Owner->GetActorTransform() : FTransform::Identity;
 	const FQuat ActorQuat = ActorXform.GetRotation();
 	const FVector ActorPos = ActorXform.GetLocation();
+	const TArray<FInstancedStruct>& ComponentData =
+		SeinEntityVisualizerLocal::ResolveComponentData(*Bridge);
 
 	// Built-in extents layer — always drawn (struct lives in CoreEntity, no
 	// optional dep).
-	SeinEntityVisualizerLocal::DrawExtentsEntries(Bridge->ComponentData, ActorQuat, ActorPos, PDI);
+	SeinEntityVisualizerLocal::DrawExtentsEntries(ComponentData, ActorQuat, ActorPos, PDI);
 
 	// Built-in production spawn-point layer — same module dep story as
 	// extents. Drawn for every FSeinProductionComponent in ComponentData.
-	SeinEntityVisualizerLocal::DrawProductionSpawnPoints(Bridge->ComponentData, ActorXform, PDI);
+	SeinEntityVisualizerLocal::DrawProductionSpawnPoints(ComponentData, ActorXform, PDI);
 
 	// Built-in nav footprint layer — orange circle at FallbackFootprintRadius.
 	// Always-on; entities with FallbackFootprintRadius=0 (intangible) self-skip.
-	SeinEntityVisualizerLocal::DrawNavigationFootprints(Bridge->ComponentData, ActorPos, PDI);
+	SeinEntityVisualizerLocal::DrawNavigationFootprints(ComponentData, ActorPos, PDI);
 
 	// Per-component draw fan-out. Each optional system editor module
 	// registers a callback at StartupModule and unregisters at Shutdown.
@@ -277,7 +304,7 @@ void FSeinEntityComponentVisualizer::DrawVisualization(
 
 		for (const TPair<FName, FSeinComponentDataDrawDelegate>& Pair : EditorModule->GetComponentDataDraws())
 		{
-			Pair.Value.ExecuteIfBound(Bridge->ComponentData, ActorQuat, ActorPos, PDI);
+			Pair.Value.ExecuteIfBound(ComponentData, ActorQuat, ActorPos, PDI);
 		}
 	}
 }

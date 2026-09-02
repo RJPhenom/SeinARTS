@@ -16,11 +16,9 @@
 
 class ASeinActor;
 class ASeinCameraPawn;
-class USeinInputConfig;
 class USeinWorldSubsystem;
 class USeinTargeterSubsystem;
 class USeinOrderGesture;
-struct FInputActionValue;
 struct FSeinTargeterPoint;
 
 // ==================== Delegates ====================
@@ -57,6 +55,12 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FSeinOnCursorUpdated, FVector, Curs
  * All interaction is render-side. Command drafts cross either the active
  * lockstep transport or the world's authenticated standalone ingress; the
  * controller never mutates simulation state directly.
+ *
+ * Input wiring is Blueprint-owned (the standard Enhanced Input pattern): a
+ * Blueprint subclass adds its Input Mapping Context on BeginPlay and wires
+ * Enhanced Input action events to the Handle* / Set*Held functions below.
+ * C++ owns the behavior behind each function; the Blueprint graph owns which
+ * action triggers it.
  */
 UCLASS(Blueprintable)
 class SEINARTSFRAMEWORK_API ASeinPlayerController : public APlayerController
@@ -68,14 +72,33 @@ public:
 
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
-	virtual void SetupInputComponent() override;
 	virtual void SeamlessTravelFrom(APlayerController* OldPC) override;
 
 	// ========== Configuration ==========
 
-	/** Input configuration data asset. Must be assigned (e.g., on the CDO or GameMode). */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS|Input")
-	TObjectPtr<USeinInputConfig> InputConfig;
+	/** Keyboard pan speed multiplier (applied by Handle Camera Pan). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Camera", meta = (ClampMin = "0.0"))
+	float KeyPanSpeed = 1.0f;
+
+	/** Keyboard rotate speed multiplier (applied by Handle Camera Rotate). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Camera", meta = (ClampMin = "0.0"))
+	float KeyRotateSpeed = 1.0f;
+
+	/** Keyboard zoom speed multiplier (applied by Handle Camera Zoom Keyboard). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Camera", meta = (ClampMin = "0.0"))
+	float KeyZoomSpeed = 1.0f;
+
+	/** Mouse (middle-button drag) pan speed multiplier (applied by Handle Camera Mouse Pan). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Camera", meta = (ClampMin = "0.0"))
+	float MousePanSpeed = 1.0f;
+
+	/** Mouse orbit speed multiplier (applied by Handle Camera Orbit). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Camera", meta = (ClampMin = "0.0"))
+	float MouseRotateSpeed = 1.0f;
+
+	/** Mouse wheel zoom speed multiplier (applied by Handle Camera Zoom). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Camera", meta = (ClampMin = "0.0"))
+	float MouseZoomSpeed = 1.0f;
 
 	/** Trace channel for selection and command line traces. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Selection")
@@ -324,61 +347,167 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Command")
 	TSoftClassPtr<USeinOrderGesture> OrderGestureClass;
 
-protected:
-	// ========== Input Handlers ==========
+	/** Abort every in-progress input gesture and clear the modifier latches, committing
+	 *  nothing: no selection change, no order issued, and any active targeter session is
+	 *  cancelled. Call from project code whenever gameplay input is interrupted mid-gesture
+	 *  — opening a pause or UMG menu, losing window focus, switching input mode — so no
+	 *  click, drag, or modifier stays stuck held when input returns. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
+	void ResetInputState();
 
-	void OnSelectPressed(const FInputActionValue& Value);
-	void OnSelectReleased(const FInputActionValue& Value);
-	void OnCommandStarted(const FInputActionValue& Value);
-	void OnCommandReleased(const FInputActionValue& Value);
-	void OnCameraPan(const FInputActionValue& Value);
+protected:
+	// ========== Input Entry Points ==========
+	// Wired in the Blueprint subclass: each Enhanced Input action event calls the
+	// matching function below (press/release pairs use the event's Started /
+	// Completed pins; add the Canceled pin to the matching cancel handler when a
+	// cancelable trigger is used). C++ owns the behavior; the Blueprint owns the wiring.
+
+	/** Primary-select press (LMB down): targeter confirm, else arm click/marquee tracking. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
+	void HandleSelectPressed();
+
+	/** Primary-select release (LMB up): finish marquee, else resolve the single-click selection. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
+	void HandleSelectReleased();
+
+	/** Command press (RMB down): targeter cancel, else arm the command-drag tracking. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
+	void HandleCommandPressed();
+
+	/** Command release (RMB up): interpret the click/drag gesture and issue the smart command. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
+	void HandleCommandReleased();
+
+	/** Select cancel — wire the select action's Canceled pin here. Unlatches the click and
+	 *  marquee state WITHOUT committing anything: no selection change, no marquee resolve.
+	 *  Canceled fires instead of Completed when a cancelable trigger (Tap, Hold, Chorded
+	 *  Action) ends without triggering; plain Down-trigger bindings never fire it, so this
+	 *  wiring is only needed once such a trigger is in play. If the press had been consumed
+	 *  as a targeter confirm, the targeter session is cancelled rather than confirmed. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
+	void HandleSelectCanceled();
+
+	/** Command cancel — wire the command action's Canceled pin here. Unlatches the
+	 *  command-drag state WITHOUT issuing an order; the sampled drag path is discarded.
+	 *  Canceled fires instead of Completed when a cancelable trigger (Tap, Hold, Chorded
+	 *  Action) ends without triggering; plain Down-trigger bindings never fire it. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
+	void HandleCommandCanceled();
+
+	/** Keyboard camera pan (WASD / arrows). AxisValue scaled by Key Pan Speed. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
+	void HandleKeyPan(FVector2D AxisValue);
+
+	/** Keyboard camera rotate and tilt. X rotates around the pivot (Q/E) and Y tilts the
+	 *  camera pitch between top-down and flat; both are scaled by Key Rotate Speed and
+	 *  applied at the camera pawn's per-second rates (Rotation Speed / Tilt Speed). Bind
+	 *  an Axis2D action; a yaw-only control scheme simply maps no keys onto the Y axis. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
+	void HandleKeyRotate(FVector2D RotateValue);
+
+	/** Mouse-wheel camera zoom. ZoomDelta scaled by Mouse Zoom Speed; the camera pawn
+	 *  steps its Zoom Step per wheel tick. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
+	void HandleMouseZoom(float ZoomDelta);
+
+	/** Keyboard camera zoom (Z/X). ZoomDelta scaled by Key Zoom Speed; frame-rate
+	 *  independent — the camera pawn zooms at its Zoom Rate in units per second. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
+	void HandleKeyZoom(float ZoomDelta);
+
+	/** Toggle follow-camera on the focused (or first selected) entity. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
+	void HandleCameraFollow();
+
+	/** Reset camera rotation to north-facing. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
+	void HandleCameraReset();
+
+	/** Middle-mouse camera pan. MouseDelta scaled by Mouse Pan Speed; ignored while
+	 *  LMB/RMB are held (those own the mouse delta for marquee / formation drags). */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
+	void HandleMousePan(FVector2D MouseDelta);
+
+	/** Mouse camera rotate (X = yaw orbit, Y = pitch tilt), per pixel of mouse movement:
+	 *  MouseDelta scaled by Mouse Rotate Speed and the camera pawn's Orbit Sensitivity.
+	 *  Ignored while LMB/RMB are held. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
+	void HandleMouseRotate(FVector2D MouseDelta);
+
+	/** Cycle active focus through the selection. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
+	void HandleCycleFocus();
+
+	/** Ping the location under the cursor (crosses the lockstep wire to all clients). */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
+	void HandlePing();
+
+	/** Menu / cancel key: broadcasts On Menu Pressed for the UI layer. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
+	void HandleMenu();
+
+	/** Track the Shift modifier (wire Started → true, Completed → false). */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
+	void SetShiftHeld(bool bHeld);
+
+	/** Track the Ctrl modifier (wire Started → true, Completed → false). */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
+	void SetCtrlHeld(bool bHeld);
+
+	/** Track the Alt modifier (wire Started → true, Completed → false). */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
+	void SetAltHeld(bool bHeld);
+
+	/** Action-slot hotkey (0-11): broadcasts On Action Slot Pressed for the UI action panel. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
+	void HandleActionSlot(int32 SlotIndex);
+
+	/** Control-group hotkey (0-9): assigns with Ctrl held, otherwise recalls. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
+	void HandleControlGroup(int32 GroupIndex);
+
+	/** Select all of your units at once — the classic select-army hotkey. Replaces the
+	 *  current selection (adds to it while Shift is held), and does nothing when you own
+	 *  nothing selectable, so the hotkey never empties an existing selection.
+	 *
+	 *  Viewport Only limits the sweep to units currently on screen; the default (false)
+	 *  selects your whole army map-wide. Gathers with the same rules as marquee/click
+	 *  selection (your own, selectable, live entities; squad members resolve to their
+	 *  squad), so wire it straight to an Input Action's Started pin. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
+	void HandleSelectAll(bool bViewportOnly = false);
+
+	/** Select every one of your units of the same type as a reference unit — the classic
+	 *  double-click / select-all-of-type gesture. The reference is the unit under the
+	 *  cursor when it is yours (double-click wiring), else the focused unit, else the
+	 *  first selected; with no reference it does nothing. "Type" is the unit's exact
+	 *  Blueprint class, and squad members resolve to their squads, so hovering one rifle
+	 *  soldier grabs every squad fielding that soldier type. Replaces the current
+	 *  selection (adds while Shift is held).
+	 *
+	 *  Viewport Only (default true) limits the sweep to units currently on screen, the
+	 *  usual double-click convention; pass false for a map-wide type sweep. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
+	void HandleSelectAllOfType(bool bViewportOnly = true);
 
 	/** Resolve the active order-gesture instance (OrderGestureClass CDO, or the base
 	 *  USeinOrderGesture CDO when unset). Never null. */
 	USeinOrderGesture* ResolveOrderGesture() const;
-	void OnCameraRotate(const FInputActionValue& Value);
-	void OnCameraZoom(const FInputActionValue& Value);
-	void OnCameraZoomKeyboard(const FInputActionValue& Value);
-	void OnCameraFollowPressed(const FInputActionValue& Value);
-	void OnCameraResetPressed(const FInputActionValue& Value);
-	void OnCameraMMBPan(const FInputActionValue& Value);
-	void OnCameraAltRotate(const FInputActionValue& Value);
-	void OnCycleFocusPressed(const FInputActionValue& Value);
-	void OnPingPressed(const FInputActionValue& Value);
-	void OnModifierShift(const FInputActionValue& Value);
-	void OnModifierCtrl(const FInputActionValue& Value);
-	void OnModifierAlt(const FInputActionValue& Value);
-	void OnMenuKeyPressed(const FInputActionValue& Value);
-
-	// Action slot handlers (12 slots for ability/action panel hotkeys)
-	void HandleActionSlot(int32 SlotIndex);
-	void OnActionSlot0(const FInputActionValue& Value)  { HandleActionSlot(0); }
-	void OnActionSlot1(const FInputActionValue& Value)  { HandleActionSlot(1); }
-	void OnActionSlot2(const FInputActionValue& Value)  { HandleActionSlot(2); }
-	void OnActionSlot3(const FInputActionValue& Value)  { HandleActionSlot(3); }
-	void OnActionSlot4(const FInputActionValue& Value)  { HandleActionSlot(4); }
-	void OnActionSlot5(const FInputActionValue& Value)  { HandleActionSlot(5); }
-	void OnActionSlot6(const FInputActionValue& Value)  { HandleActionSlot(6); }
-	void OnActionSlot7(const FInputActionValue& Value)  { HandleActionSlot(7); }
-	void OnActionSlot8(const FInputActionValue& Value)  { HandleActionSlot(8); }
-	void OnActionSlot9(const FInputActionValue& Value)  { HandleActionSlot(9); }
-	void OnActionSlot10(const FInputActionValue& Value) { HandleActionSlot(10); }
-	void OnActionSlot11(const FInputActionValue& Value) { HandleActionSlot(11); }
-
-	// Control group handlers (one per group since BindAction requires member function pointers)
-	void HandleControlGroup(int32 GroupIndex);
-	void OnControlGroup0(const FInputActionValue& Value) { HandleControlGroup(0); }
-	void OnControlGroup1(const FInputActionValue& Value) { HandleControlGroup(1); }
-	void OnControlGroup2(const FInputActionValue& Value) { HandleControlGroup(2); }
-	void OnControlGroup3(const FInputActionValue& Value) { HandleControlGroup(3); }
-	void OnControlGroup4(const FInputActionValue& Value) { HandleControlGroup(4); }
-	void OnControlGroup5(const FInputActionValue& Value) { HandleControlGroup(5); }
-	void OnControlGroup6(const FInputActionValue& Value) { HandleControlGroup(6); }
-	void OnControlGroup7(const FInputActionValue& Value) { HandleControlGroup(7); }
-	void OnControlGroup8(const FInputActionValue& Value) { HandleControlGroup(8); }
-	void OnControlGroup9(const FInputActionValue& Value) { HandleControlGroup(9); }
 
 	// ========== Internal Helpers ==========
+
+	/** Reference unit anchoring HandleSelectAllOfType: the hovered actor when it is an
+	 *  own entity, else the focused actor, else the first live selected actor. Null when
+	 *  none of those exist. */
+	ASeinActor* ResolveTypeReferenceActor() const;
+
+	/** Gather this player's live, selectable, entity-backed actors via the actor bridge.
+	 *  MatchClass (optional) keeps only that exact actor class; bViewportOnly keeps only
+	 *  actors whose location projects inside the local viewport. */
+	TArray<ASeinActor*> GatherOwnedSelectableActors(UClass* MatchClass, bool bViewportOnly);
+
+	/** True when the world location projects inside the local viewport bounds. */
+	bool IsWorldLocationOnScreen(const FVector& WorldLocation);
 
 	/** Perform a line trace under the mouse cursor. */
 	bool TraceUnderCursor(FHitResult& OutHit) const;

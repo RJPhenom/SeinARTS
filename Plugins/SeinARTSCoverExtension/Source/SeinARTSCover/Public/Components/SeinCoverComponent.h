@@ -192,7 +192,7 @@ struct SEINARTSCOVER_API FSeinCoverComponent : public FSeinComponent
 	 *
 	 *  Pure — no actor lookup, no sim-state touch. Safe to call off the sim
 	 *  tick. The caller (cover details panel) resolves the sibling Extents
-	 *  shape from the owning USeinEntityComponent's ComponentData array. */
+	 *  shape from the owning USeinEntityBridgeComponent's ComponentData array. */
 	void GenerateSlots(const FSeinExtentsShape* OptionalEdgeShape = nullptr);
 #endif
 };

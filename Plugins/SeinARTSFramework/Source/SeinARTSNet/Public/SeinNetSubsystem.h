@@ -46,7 +46,7 @@ class USeinReplayWriter;
 class USeinReplayReader;
 class USeinAIController;
 class USeinWorldSubsystem;
-class USeinEntityComponent;
+class USeinEntityBridgeComponent;
 class UNetDriver;
 struct FSeinParticipantWorldRootEntry;
 struct FSeinCommandSchemaDescriptor;
@@ -856,7 +856,7 @@ private:
 		const FString& ErrorString);
 #if WITH_EDITOR
 	void OnComponentLiveTuningEditorRequest(
-		const USeinEntityComponent& Source,
+		const USeinEntityBridgeComponent& Source,
 		const FSeinComponentLiveTuningRequest& Payload);
 #endif
 	bool OwnsFailureWorld(const UWorld* World) const;

@@ -13,7 +13,7 @@
 
 class FProperty;
 class USeinAbility;
-class USeinEntityComponent;
+class USeinEntityBridgeComponent;
 
 /** Which Unreal authoring layer produced a live-tuning command. */
 UENUM()
@@ -220,7 +220,7 @@ SEINARTSCOREENTITY_API bool SeinDecodeComponentLiveTuningRequest(
 /** Editor-only bridge. CoreEntity publishes edits; Net owns authenticated ingress. */
 DECLARE_MULTICAST_DELEGATE_TwoParams(
 	FSeinComponentLiveTuningEditorRequest,
-	const USeinEntityComponent&,
+	const USeinEntityBridgeComponent&,
 	const FSeinComponentLiveTuningRequest&);
 
 SEINARTSCOREENTITY_API FSeinComponentLiveTuningEditorRequest&

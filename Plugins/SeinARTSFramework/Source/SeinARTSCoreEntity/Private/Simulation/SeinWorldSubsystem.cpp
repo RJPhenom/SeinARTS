@@ -52,7 +52,7 @@
 #include "Components/SeinSquadComponent.h"
 #include "Components/SeinSquadMemberComponent.h"
 #include "Components/SeinTransportSpec.h"
-#include "Actor/SeinEntityComponent.h"
+#include "Actor/SeinEntityBridgeComponent.h"
 #include "Brokers/SeinCommandBrokerResolver.h"
 #include "Brokers/SeinDefaultCommandBrokerResolver.h"
 #include "Attributes/SeinModifier.h"
@@ -4730,8 +4730,8 @@ void USeinWorldSubsystem::ApplyPendingComponentLiveTuningCommands()
 
 void USeinWorldSubsystem::RecordPlacedActorComponentOverrides(
 	FSeinEntityHandle Entity,
-	const USeinEntityComponent& InstanceBridge,
-	const USeinEntityComponent& ClassDefaultBridge)
+	const USeinEntityBridgeComponent& InstanceBridge,
+	const USeinEntityBridgeComponent& ClassDefaultBridge)
 {
 	TArray<FSeinComponentPropertyPatch> Differences;
 	FString Error;
@@ -6601,7 +6601,7 @@ FSeinEntityHandle USeinWorldSubsystem::SpawnEntity(
 
 	// CDO required for the SCS-aware walk below. Legacy ArchetypeDefinition has
 	// been excised — identity/producible/extents/etc. live as
-	// FSein*Component entries in USeinEntityComponent::ComponentData.
+	// FSein*Component entries in USeinEntityBridgeComponent::ComponentData.
 	const ASeinActor* CDO = GetDefault<ASeinActor>(ActorClass);
 	if (!CDO)
 	{
@@ -6642,7 +6642,7 @@ FSeinEntityHandle USeinWorldSubsystem::SpawnEntity(
 	// Store actor class for bridge spawning
 	EntityActorClassMap.Add(Handle, ActorClass);
 
-	// Walk the Blueprint CDO's USeinEntityComponent subobjects and inject
+	// Walk the Blueprint CDO's USeinEntityBridgeComponent subobjects and inject
 	// every authored ComponentData entry into deterministic sim storage. This
 	// is the sole sim-authoring path post-Phase-5 — typed-wrapper ACs are
 	// gone; designers compose entities by adding entries to the entity
@@ -6651,13 +6651,13 @@ FSeinEntityHandle USeinWorldSubsystem::SpawnEntity(
 	// NB: AActor::GetComponents() on a CDO only sees native CreateDefaultSubobject
 	// components — BP-editor-added components live on the SCS. The helper below
 	// walks native components + SCS nodes up the BP hierarchy in a stable order.
-	// Walk the BP CDO's USeinEntityComponent ONCE here; the resolved bridge
+	// Walk the BP CDO's USeinEntityBridgeComponent ONCE here; the resolved bridge
 	// (BridgeCDO) is reused for BaseTags seeding below instead of walking twice.
-	const USeinEntityComponent* BridgeCDO = nullptr;
+	const USeinEntityBridgeComponent* BridgeCDO = nullptr;
 	if (CDO)
 	{
-		TArray<const USeinEntityComponent*> EntityComps;
-		AActor::GetActorClassDefaultComponents<USeinEntityComponent>(ActorClass, EntityComps);
+		TArray<const USeinEntityBridgeComponent*> EntityComps;
+		AActor::GetActorClassDefaultComponents<USeinEntityBridgeComponent>(ActorClass, EntityComps);
 		if (EntityComps.Num() > 1)
 		{
 			UE_LOG(LogSeinSim, Warning,
@@ -6690,11 +6690,11 @@ FSeinEntityHandle USeinWorldSubsystem::SpawnEntity(
 		// Seed from the entity bridge's authored BaseTags, reusing the single CDO
 		// walk above (BridgeCDO). Falls back to a fresh walk only if injection
 		// didn't run (CDO was null); preserves the original unconditional seed.
-		const USeinEntityComponent* TagBridge = BridgeCDO;
+		const USeinEntityBridgeComponent* TagBridge = BridgeCDO;
 		if (!TagBridge)
 		{
-			TArray<const USeinEntityComponent*> EntityComps;
-			AActor::GetActorClassDefaultComponents<USeinEntityComponent>(ActorClass, EntityComps);
+			TArray<const USeinEntityBridgeComponent*> EntityComps;
+			AActor::GetActorClassDefaultComponents<USeinEntityBridgeComponent>(ActorClass, EntityComps);
 			if (EntityComps.Num() > 0) TagBridge = EntityComps[0];
 		}
 		if (TagBridge)
@@ -6813,11 +6813,11 @@ FSeinEntityHandle USeinWorldSubsystem::SpawnEntityFromPlacedActor(
 	// per-instance edits beyond CDO defaults. Designers can drop a placed
 	// actor and tune fields on the level instance; this path picks them up
 	// correctly.
-	if (USeinEntityComponent* EntityComp =
-		PlacedActor->FindComponentByClass<USeinEntityComponent>())
+	if (USeinEntityBridgeComponent* EntityComp =
+		PlacedActor->FindComponentByClass<USeinEntityBridgeComponent>())
 	{
-		TArray<const USeinEntityComponent*> ClassDefaultComponents;
-		AActor::GetActorClassDefaultComponents<USeinEntityComponent>(
+		TArray<const USeinEntityBridgeComponent*> ClassDefaultComponents;
+		AActor::GetActorClassDefaultComponents<USeinEntityBridgeComponent>(
 			PlacedActor->GetClass(), ClassDefaultComponents);
 		if (!ClassDefaultComponents.IsEmpty() && ClassDefaultComponents[0])
 		{
@@ -6839,7 +6839,7 @@ FSeinEntityHandle USeinWorldSubsystem::SpawnEntityFromPlacedActor(
 		// instance authoring on placed actors).
 		FSeinEntityTagState& TagState = EntityTagStates.FindOrAdd(Handle);
 
-		if (const USeinEntityComponent* LiveBridge = PlacedActor->FindComponentByClass<USeinEntityComponent>())
+		if (const USeinEntityBridgeComponent* LiveBridge = PlacedActor->FindComponentByClass<USeinEntityBridgeComponent>())
 		{
 			TagState.BaseTags.AppendTags(LiveBridge->BaseTags);
 		}
@@ -9019,7 +9019,7 @@ namespace
 		const TArray<TStrongObjectPtr<USeinCommandBrokerResolver>>&
 			StagedResolverPool,
 		int64& OutMaxEffectID,
-		TMap<FSeinEntityHandle, FSeinEntityTagState>& OutEntityTagStates,
+		FSeinEntityTagStateTable& OutEntityTagStates,
 		TMap<FGameplayTag, TArray<FSeinEntityHandle>>& OutEntityTagIndex,
 		TMap<FName, FSeinEntityHandle>& OutNamedEntityRegistry,
 		TMap<FGameplayTag, FSeinVoteState>& OutActiveVotes)
@@ -10710,7 +10710,7 @@ bool USeinWorldSubsystem::RestoreSnapshot(
 	}
 
 	int64 MaxActiveEffectID = 0;
-	TMap<FSeinEntityHandle, FSeinEntityTagState> StagedEntityTagStates;
+	FSeinEntityTagStateTable StagedEntityTagStates;
 	TMap<FGameplayTag, TArray<FSeinEntityHandle>> StagedEntityTagIndex;
 	TMap<FName, FSeinEntityHandle> StagedNamedEntityRegistry;
 	TMap<FGameplayTag, FSeinVoteState> StagedActiveVotes;
@@ -11710,6 +11710,21 @@ bool USeinWorldSubsystem::GrantTag(FSeinEntityHandle Handle, FGameplayTag Tag)
 {
 	if (!RequireStateMutationAuthorization(TEXT("GrantTag"))) return false;
 	if (!Tag.IsValid()) return false;
+	// The slot-indexed table holds one entry per slot, so a handle may only
+	// address the slot's CURRENT occupant. Accept a live entity (safe to mint
+	// an entry) or a handle whose entry already exists (generation-current by
+	// construction — this covers the sanctioned same-tick destroy-then-tag
+	// window, where DestroyEntity has cleared FLAG_ALIVE but teardown is
+	// deferred to PostTick and the transient grant self-heals at
+	// UnindexEntityTags). Refuse everything else instead of poisoning
+	// canonical state with an entry capture would later reject.
+	if (!EntityPool.IsValid(Handle) && !EntityTagStates.Find(Handle))
+	{
+		UE_LOG(LogSeinSim, Error,
+			TEXT("GrantTag: refusing %s for stale/invalid entity handle %s"),
+			*Tag.ToString(), *Handle.ToString());
+		return false;
+	}
 	// FindOrAdd — auto-create the entity's tag state if it doesn't exist yet
 	// (e.g., transient grants from abilities/effects on entities that didn't
 	// author any BaseTags). Refcount handles the rest.
@@ -11798,6 +11813,14 @@ bool USeinWorldSubsystem::AddBaseTag(FSeinEntityHandle Handle, FGameplayTag Tag)
 {
 	if (!RequireStateMutationAuthorization(TEXT("AddBaseTag"))) return false;
 	if (!Tag.IsValid()) return false;
+	// Same slot-current guard as GrantTag (see its comment).
+	if (!EntityPool.IsValid(Handle) && !EntityTagStates.Find(Handle))
+	{
+		UE_LOG(LogSeinSim, Error,
+			TEXT("AddBaseTag: refusing %s for stale/invalid entity handle %s"),
+			*Tag.ToString(), *Handle.ToString());
+		return false;
+	}
 	FSeinEntityTagState& TagState = EntityTagStates.FindOrAdd(Handle);
 	if (TagState.BaseTags.HasTagExact(Tag)) return false;
 
@@ -11822,6 +11845,14 @@ bool USeinWorldSubsystem::RemoveBaseTag(FSeinEntityHandle Handle, FGameplayTag T
 void USeinWorldSubsystem::ReplaceBaseTags(FSeinEntityHandle Handle, const FGameplayTagContainer& NewBaseTags)
 {
 	if (!RequireStateMutationAuthorization(TEXT("ReplaceBaseTags"))) return;
+	// Same slot-current guard as GrantTag (see its comment).
+	if (!EntityPool.IsValid(Handle) && !EntityTagStates.Find(Handle))
+	{
+		UE_LOG(LogSeinSim, Error,
+			TEXT("ReplaceBaseTags: refusing for stale/invalid entity handle %s"),
+			*Handle.ToString());
+		return;
+	}
 	FSeinEntityTagState& TagState = EntityTagStates.FindOrAdd(Handle);
 
 	// Diff old vs new. Touch refcounts only for tags that actually changed

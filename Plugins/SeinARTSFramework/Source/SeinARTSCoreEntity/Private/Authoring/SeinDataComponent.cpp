@@ -9,7 +9,7 @@
 
 #include "Authoring/SeinDataComponent.h"
 
-#include "Actor/SeinEntityComponent.h"
+#include "Actor/SeinEntityBridgeComponent.h"
 #include "GameFramework/Actor.h"
 #include "StructUtils/UserDefinedStruct.h"
 #include "UObject/UnrealType.h"
@@ -84,8 +84,8 @@ void USeinDataComponent::PostEditChangeProperty(FPropertyChangedEvent& PropertyC
 		const AActor* ClassDefault = OwningClass
 			? Cast<AActor>(OwningClass->GetDefaultObject(/*bCreateIfNeeded*/ false))
 			: nullptr;
-		USeinEntityComponent* Bridge = ClassDefault
-			? ClassDefault->FindComponentByClass<USeinEntityComponent>()
+		USeinEntityBridgeComponent* Bridge = ClassDefault
+			? ClassDefault->FindComponentByClass<USeinEntityBridgeComponent>()
 			: nullptr;
 		if (Bridge)
 		{
@@ -94,8 +94,8 @@ void USeinDataComponent::PostEditChangeProperty(FPropertyChangedEvent& PropertyC
 		return;
 	}
 	const AActor* Owner = GetOwner();
-	USeinEntityComponent* Bridge =
-		Owner ? Owner->FindComponentByClass<USeinEntityComponent>() : nullptr;
+	USeinEntityBridgeComponent* Bridge =
+		Owner ? Owner->FindComponentByClass<USeinEntityBridgeComponent>() : nullptr;
 	if (Bridge)
 	{
 		// The bridge routes this through its ordinary ComponentData edit

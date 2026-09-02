@@ -11,7 +11,7 @@
 #include "Settings/PluginSettings.h"
 #include "PhysicalMaterials/PhysicalMaterial.h"
 #include "Actor/SeinActor.h"
-#include "Actor/SeinEntityComponent.h"
+#include "Actor/SeinEntityBridgeComponent.h"
 #include "Components/SeinMovementComponent.h"
 #include "Components/SeinExtentsComponent.h"
 
@@ -662,7 +662,7 @@ bool USeinLevelDataDefault::DoSyncBake(UWorld* World, USeinLevelDataDefaultAsset
 		if (!SeinActor) continue;
 
 		bool bSkip = false;
-		if (const USeinEntityComponent* Bridge = SeinActor->FindComponentByClass<USeinEntityComponent>())
+		if (const USeinEntityBridgeComponent* Bridge = SeinActor->FindComponentByClass<USeinEntityBridgeComponent>())
 		{
 			if (const FSeinExtentsComponent* Extents = Bridge->FindAuthoredData<FSeinExtentsComponent>())
 			{

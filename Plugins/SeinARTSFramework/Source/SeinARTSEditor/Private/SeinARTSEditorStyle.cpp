@@ -146,7 +146,7 @@ void FSeinARTSEditorStyle::Initialize()
 	// registration. SeinEntityComponent is the actor-bridge default subobject
 	// on every ASeinActor. The render-side ACs (SeinConstructionRenderComponent)
 	// are designer-droppable plain UActorComponents. Squad-slot preview meshes
-	// now spawn directly from USeinEntityComponent under WITH_EDITOR — no
+	// now spawn directly from USeinEntityBridgeComponent under WITH_EDITOR — no
 	// separate AC needed.
 	RegisterComponentIcon(TEXT("ClassIcon.SeinEntityComponent"));
 	RegisterComponentIcon(TEXT("ClassIcon.SeinConstructionRenderComponent"));

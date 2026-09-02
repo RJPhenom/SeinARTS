@@ -68,7 +68,7 @@
 #include "Details/SeinCollisionResponseDetails.h"
 #include "Details/SeinCollisionObjectTypeDetails.h"
 #include "Visualizers/SeinEntityComponentVisualizer.h"
-#include "Actor/SeinEntityComponent.h"
+#include "Actor/SeinEntityBridgeComponent.h"
 #include "Authoring/SeinDataComponent.h"
 #include "Components/SeinComponentEligibility.h"
 #include "Containers/Ticker.h"
@@ -183,7 +183,7 @@ namespace SeinComponentDataCompilerGate
 	 * SeinAbilityContinuationCompilerGate above (see its comment for why:
 	 * no compiler-extension unregister API, this delegate is symmetric and
 	 * safe across module reload). Surfaces per-entry compiler WARNINGS for
-	 * any Blueprint whose USeinEntityComponent CDO carries an invalid
+	 * any Blueprint whose USeinEntityBridgeComponent CDO carries an invalid
 	 * authored ComponentData entry — an empty picker row, a duplicate
 	 * authored struct type, or (editor-only screen below) a struct type the
 	 * ComponentData picker would never have offered.
@@ -191,7 +191,7 @@ namespace SeinComponentDataCompilerGate
 	 * Warnings, not errors, by explicit product ruling: a half-authored row
 	 * must not block Save/PIE on unrelated edits, but the defect and its
 	 * exact array index must be visible at compile time.
-	 * USeinEntityComponent::ValidateComponentData is the SAME routine match
+	 * USeinEntityBridgeComponent::ValidateComponentData is the SAME routine match
 	 * bootstrap (FSeinMatchBootstrapTransaction::ValidateEntityComponentData)
 	 * calls at match start, where the empty/duplicate defects ARE fatal —
 	 * one shared definition and one shared per-index message text, so the
@@ -224,15 +224,15 @@ namespace SeinComponentDataCompilerGate
 
 		for (const UActorComponent* Component : ActorCDO->GetComponents())
 		{
-			const USeinEntityComponent* EntityComponent =
-				Cast<USeinEntityComponent>(Component);
+			const USeinEntityBridgeComponent* EntityComponent =
+				Cast<USeinEntityBridgeComponent>(Component);
 			if (!IsValid(EntityComponent))
 			{
 				continue;
 			}
 
 			TArray<FSeinComponentDataIssue> Issues;
-			USeinEntityComponent::ValidateComponentData(
+			USeinEntityBridgeComponent::ValidateComponentData(
 				EntityComponent->ComponentData, Issues);
 
 			// Editor-only eligibility screen on top of the shared validator:
@@ -325,12 +325,12 @@ namespace SeinDataComponentAuthoringHooks
 			{
 				continue;
 			}
-			TArray<const USeinEntityComponent*> Bridges;
-			AActor::GetActorClassDefaultComponents<USeinEntityComponent>(
+			TArray<const USeinEntityBridgeComponent*> Bridges;
+			AActor::GetActorClassDefaultComponents<USeinEntityBridgeComponent>(
 				GeneratedClass, Bridges);
 			if (Bridges.Num() > 0 && Bridges[0])
 			{
-				const_cast<USeinEntityComponent*>(Bridges[0])
+				const_cast<USeinEntityBridgeComponent*>(Bridges[0])
 					->BakeAuthoredDataComponents(/*bInteractive=*/true);
 			}
 		}
@@ -702,7 +702,7 @@ void FSeinARTSEditorModule::StartupModule()
 		// ComponentData and draws every recognized FSein*Component entry's
 		// debug geometry (extents wireframes + vision-stamp shapes).
 		TSharedPtr<FComponentVisualizer> EntityViz = MakeShared<FSeinEntityComponentVisualizer>();
-		GUnrealEd->RegisterComponentVisualizer(USeinEntityComponent::StaticClass()->GetFName(), EntityViz);
+		GUnrealEd->RegisterComponentVisualizer(USeinEntityBridgeComponent::StaticClass()->GetFName(), EntityViz);
 		EntityViz->OnRegister();
 	}
 
@@ -879,7 +879,7 @@ void FSeinARTSEditorModule::ReleaseModuleOwnedState()
 
 	if (GUnrealEd != nullptr)
 	{
-		GUnrealEd->UnregisterComponentVisualizer(USeinEntityComponent::StaticClass()->GetFName());
+		GUnrealEd->UnregisterComponentVisualizer(USeinEntityBridgeComponent::StaticClass()->GetFName());
 	}
 
 	// Unhook the auto-tag rename handler. GetModulePtr (not Checked) to survive

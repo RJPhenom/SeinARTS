@@ -42,7 +42,7 @@
 #include "SeinWorldSubsystem.generated.h"
 
 class ASeinActor;
-class USeinEntityComponent;
+class USeinEntityBridgeComponent;
 class USeinFaction;
 class USeinAbility;
 class USeinCommandBrokerResolver;
@@ -142,7 +142,7 @@ FORCEINLINE uint32 GetTypeHash(const FSeinPairCapabilitySourceKey& Key)
  * removes the "designer might forget to add a TagsComponent" footgun —
  * every entity automatically has a tag state slot at spawn.
  *
- * Authoring surface: `USeinEntityComponent::BaseTags` UPROPERTY on the
+ * Authoring surface: `USeinEntityBridgeComponent::BaseTags` UPROPERTY on the
  * actor's entity bridge. Spawn flow seeds the entity's BaseTags from that
  * field; runtime mutation goes through `GrantTag`/`UngrantTag`/`AddBaseTag`/
  * `RemoveBaseTag`/`ReplaceBaseTags` on the subsystem.
@@ -159,7 +159,7 @@ FORCEINLINE uint32 GetTypeHash(const FSeinPairCapabilitySourceKey& Key)
 struct SEINARTSCOREENTITY_API FSeinEntityTagState
 {
 	/** Designer-authored tags seeded into refcounts at spawn from
-	 *  `USeinEntityComponent::BaseTags`. Runtime-mutable via the subsystem's
+	 *  `USeinEntityBridgeComponent::BaseTags`. Runtime-mutable via the subsystem's
 	 *  AddBaseTag/RemoveBaseTag/ReplaceBaseTags methods. */
 	FGameplayTagContainer BaseTags;
 
@@ -186,6 +186,168 @@ struct SEINARTSCOREENTITY_API FSeinEntityTagState
 	 *  can remove the entity from the global EntityTagIndex bucket. No-op
 	 *  (returns false) on tags that were never granted or have refcount 0. */
 	bool UngrantTagInternal(const FGameplayTag& Tag);
+};
+
+/**
+ * Slot-indexed per-entity tag-state table — the container behind
+ * `USeinWorldSubsystem::EntityTagStates`. Replaces the previous
+ * `TMap<FSeinEntityHandle, FSeinEntityTagState>` with flat arrays parallel to
+ * the entity pool (the same layout as FSeinGenericComponentStorage), so the
+ * hottest queries in the sim — HasTag / HasAnyTag / HasAllTags on the critical
+ * path of ability activation, target acquisition, and broker dispatch — cost
+ * one array index + generation compare instead of a hash-map probe. The API
+ * mirrors the TMap surface the call sites already use; canonical hash/capture
+ * output is unchanged (those paths GetKeys + Sort before iterating, and
+ * ascending-slot keys sort identically).
+ *
+ * Invariants (unchanged from the map version, enforced at capture): an entry
+ * exists only for a live entity; destroy paths remove it (UnindexEntityTags).
+ * One entry per slot: FindOrAdd/Add for a different generation of an occupied
+ * slot replaces the stale entry (ensure-flagged — the destroy path should
+ * have removed it; the map version instead accumulated a stale entry that
+ * capture later refused).
+ *
+ * References returned by Find/FindOrAdd/Add are invalidated by a later
+ * FindOrAdd/Add whose slot grows the arrays. Same-handle re-entry (the
+ * AddBaseTag → GrantTag nesting) never grows and stays valid. All mutation is
+ * serial-spine only, like the rest of authoritative sim state.
+ */
+struct SEINARTSCOREENTITY_API FSeinEntityTagStateTable
+{
+	FSeinEntityTagState* Find(FSeinEntityHandle Handle)
+	{
+		const int32 Slot = static_cast<int32>(Handle.Index);
+		return IsStored(Handle, Slot) ? &States[Slot] : nullptr;
+	}
+
+	const FSeinEntityTagState* Find(FSeinEntityHandle Handle) const
+	{
+		const int32 Slot = static_cast<int32>(Handle.Index);
+		return IsStored(Handle, Slot) ? &States[Slot] : nullptr;
+	}
+
+	FSeinEntityTagState& FindChecked(FSeinEntityHandle Handle)
+	{
+		FSeinEntityTagState* State = Find(Handle);
+		checkf(State, TEXT("FSeinEntityTagStateTable::FindChecked: no entry for %s"),
+			*Handle.ToString());
+		return *State;
+	}
+
+	const FSeinEntityTagState& FindChecked(FSeinEntityHandle Handle) const
+	{
+		const FSeinEntityTagState* State = Find(Handle);
+		checkf(State, TEXT("FSeinEntityTagStateTable::FindChecked: no entry for %s"),
+			*Handle.ToString());
+		return *State;
+	}
+
+	/** Get-or-create, mirroring TMap::FindOrAdd. Callers pass pool-valid
+	 *  handles (the subsystem's tag mutators guard this); an occupied slot
+	 *  under a DIFFERENT generation is a leaked stale entry — replaced with a
+	 *  fresh state and ensure-flagged. */
+	FSeinEntityTagState& FindOrAdd(FSeinEntityHandle Handle)
+	{
+		checkf(Handle.IsValid(),
+			TEXT("FSeinEntityTagStateTable::FindOrAdd: invalid handle"));
+		const int32 Slot = static_cast<int32>(Handle.Index);
+		EnsureSlotCapacity(Slot);
+		if (Generations[Slot] == Handle.Generation)
+		{
+			return States[Slot];
+		}
+		if (Generations[Slot] != 0)
+		{
+			ensureMsgf(false,
+				TEXT("FSeinEntityTagStateTable::FindOrAdd: stale tag state at slot %d ")
+				TEXT("(stored generation %d, incoming %d) — a destroy path leaked it. Replacing."),
+				Slot, Generations[Slot], Handle.Generation);
+			States[Slot] = FSeinEntityTagState();
+		}
+		else
+		{
+			++EntryCount;
+		}
+		Generations[Slot] = Handle.Generation;
+		return States[Slot];
+	}
+
+	/** Insert for the snapshot-restore staging path. Restore validation
+	 *  guarantees strictly-ascending unique alive handles, so the target slot
+	 *  is always free. */
+	FSeinEntityTagState& Add(FSeinEntityHandle Handle, FSeinEntityTagState&& State)
+	{
+		checkf(Handle.IsValid(),
+			TEXT("FSeinEntityTagStateTable::Add: invalid handle"));
+		const int32 Slot = static_cast<int32>(Handle.Index);
+		EnsureSlotCapacity(Slot);
+		checkf(Generations[Slot] == 0,
+			TEXT("FSeinEntityTagStateTable::Add: slot %d already occupied"), Slot);
+		States[Slot] = MoveTemp(State);
+		Generations[Slot] = Handle.Generation;
+		++EntryCount;
+		return States[Slot];
+	}
+
+	/** Remove the exact entry, mirroring TMap::Remove's removed-count return. */
+	int32 Remove(FSeinEntityHandle Handle)
+	{
+		const int32 Slot = static_cast<int32>(Handle.Index);
+		if (!IsStored(Handle, Slot))
+		{
+			return 0;
+		}
+		States[Slot] = FSeinEntityTagState();
+		Generations[Slot] = 0;
+		--EntryCount;
+		return 1;
+	}
+
+	void Reset()
+	{
+		States.Reset();
+		Generations.Reset();
+		EntryCount = 0;
+	}
+
+	/** Stored handles in ascending slot order (already canonical-sortable;
+	 *  callers that Sort() afterwards get an identical result). */
+	void GetKeys(TArray<FSeinEntityHandle>& OutKeys) const
+	{
+		OutKeys.Reset(EntryCount);
+		for (int32 Slot = 0; Slot < Generations.Num(); ++Slot)
+		{
+			if (Generations[Slot] != 0)
+			{
+				OutKeys.Add(FSeinEntityHandle(Slot, Generations[Slot]));
+			}
+		}
+	}
+
+	int32 Num() const { return EntryCount; }
+	bool IsEmpty() const { return EntryCount == 0; }
+
+private:
+	bool IsStored(FSeinEntityHandle Handle, int32 Slot) const
+	{
+		return Handle.IsValid()
+			&& Generations.IsValidIndex(Slot)
+			&& Generations[Slot] == Handle.Generation;
+	}
+
+	void EnsureSlotCapacity(int32 Slot)
+	{
+		if (Slot >= States.Num())
+		{
+			States.SetNum(Slot + 1);
+			Generations.SetNumZeroed(Slot + 1);
+		}
+	}
+
+	/** Slot-indexed; a slot participates iff Generations[Slot] != 0. */
+	TArray<FSeinEntityTagState> States;
+	TArray<int32> Generations;
+	int32 EntryCount = 0;
 };
 
 /** Broadcast after each sim tick completes (for actor bridge, replay, etc.). */
@@ -1197,7 +1359,7 @@ public:
 
 	/**
 	 * Spawn a new entity from a Blueprint class.
-	 * Walks the Blueprint CDO's entity bridge (USeinEntityComponent) ComponentData
+	 * Walks the Blueprint CDO's entity bridge (USeinEntityBridgeComponent) ComponentData
 	 * array and copies each FInstancedStruct payload into deterministic storage,
 	 * then initializes abilities and seeds tags (identity/cost come from the
 	 * injected FSeinIdentityComponent / FSeinProducibleComponent payloads).
@@ -1211,7 +1373,7 @@ public:
 
 	/**
 	 * Spawn a sim entity for an already-existing (level-placed) ASeinActor.
-	 * Walks the LIVE actor's entity-bridge ComponentData (USeinEntityComponent,
+	 * Walks the LIVE actor's entity-bridge ComponentData (USeinEntityBridgeComponent,
 	 * not the CDO) so per-instance edits in the level are captured into sim
 	 * component storage.
 	 * Uses the actor's world transform as the sim transform.
@@ -1303,7 +1465,7 @@ public:
 	// ========== Component Management (slot-indexed) ==========
 	//
 	// Component types are resolved at spawn time by walking the Blueprint CDO's
-	// entity bridge (USeinEntityComponent) ComponentData; each FInstancedStruct
+	// entity bridge (USeinEntityBridgeComponent) ComponentData; each FInstancedStruct
 	// payload is injected into a reflection-backed FSeinGenericComponentStorage
 	// keyed by UScriptStruct. Templated accessors are thin typed wrappers over
 	// the raw-bytes path.
@@ -1361,7 +1523,7 @@ public:
 
 	/** Get or lazily-create the component storage for a struct type. The
 	 *  templated `AddComponent<T>` path goes through this; promoted to
-	 *  public so non-templated callers (USeinEntityComponent's array-inject
+	 *  public so non-templated callers (USeinEntityBridgeComponent's array-inject
 	 *  flow, K2 thunks) can add components keyed on a runtime UScriptStruct*
 	 *  without compile-time type info. */
 	ISeinComponentStorage* GetOrCreateStorageForType(UScriptStruct* StructType);
@@ -1598,7 +1760,7 @@ public:
 	// EntityTagIndex stays in sync with per-entity refcounts. Per-entity tag
 	// state lives in `EntityTagStates` (a TMap keyed by handle) — there is no
 	// FSeinTagData sim component anymore. Designer authoring surface is
-	// `USeinEntityComponent::BaseTags`.
+	// `USeinEntityBridgeComponent::BaseTags`.
 
 	/** True iff the entity currently has the given tag (refcount > 0). */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Tags")
@@ -2597,8 +2759,9 @@ private:
 	// entity bridge's BaseTags + any explicit additions; mutated at runtime
 	// via the public GrantTag/UngrantTag/AddBaseTag/RemoveBaseTag methods.
 	// Destroy paths clear the entity's entry along with the EntityTagIndex
-	// buckets.
-	TMap<FSeinEntityHandle, FSeinEntityTagState> EntityTagStates;
+	// buckets. Slot-indexed (FSeinEntityTagStateTable) so hot HasTag queries
+	// skip the hash probe; canonical hash/capture output is unchanged.
+	FSeinEntityTagStateTable EntityTagStates;
 
 	// Global tag → entity index. Maintained by Grant/UngrantTag on 0↔1 refcount
 	// transitions. Destroy paths call UnindexEntityTags to clear a handle's
@@ -2893,8 +3056,8 @@ private:
 		bool bRefreshSecondaryState = true);
 	void RecordPlacedActorComponentOverrides(
 		FSeinEntityHandle Entity,
-		const USeinEntityComponent& InstanceBridge,
-		const USeinEntityComponent& ClassDefaultBridge);
+		const USeinEntityBridgeComponent& InstanceBridge,
+		const USeinEntityBridgeComponent& ClassDefaultBridge);
 	/** Nearest-derived-first record for PatchKey along EntityClass's static
 	 *  class chain, or null when no class on the chain has one. */
 	bool HasComponentForPatch(
