@@ -6,7 +6,7 @@
 #include "Factories/SeinDataComponentBlueprintFactory.h"
 #include "SeinARTSEditorModule.h"
 
-#include "Authoring/SeinDataComponent.h"
+#include "Authoring/SeinEntityComponent.h"
 #include "Authoring/SeinEntityComponentBlueprint.h"
 #include "Settings/PluginSettings.h"
 #include "Engine/Blueprint.h"
@@ -27,7 +27,7 @@ UObject* USeinDataComponentBlueprintFactory::FactoryCreateNew(
 	UObject* /*Context*/, FFeedbackContext* /*Warn*/)
 {
 	return FKismetEditorUtilities::CreateBlueprint(
-		USeinDataComponent::StaticClass(), InParent, Name,
+		USeinEntityComponent::StaticClass(), InParent, Name,
 		BPTYPE_Normal, USeinEntityComponentBlueprint::StaticClass(),
 		UBlueprintGeneratedClass::StaticClass(),
 		TEXT("SeinDataComponentBlueprintFactory"));

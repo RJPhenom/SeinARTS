@@ -69,7 +69,7 @@
 #include "Details/SeinCollisionObjectTypeDetails.h"
 #include "Visualizers/SeinEntityComponentVisualizer.h"
 #include "Actor/SeinEntityBridgeComponent.h"
-#include "Authoring/SeinDataComponent.h"
+#include "Authoring/SeinEntityComponent.h"
 #include "Authoring/SeinEntityComponentBlueprint.h"
 #include "Components/SeinComponentEligibility.h"
 #include "Containers/Ticker.h"
@@ -367,7 +367,7 @@ namespace SeinDataComponentAuthoringHooks
 			return;
 		}
 
-		if (GeneratedClass->IsChildOf(USeinDataComponent::StaticClass()))
+		if (GeneratedClass->IsChildOf(USeinEntityComponent::StaticClass()))
 		{
 			// Prototype scope: a BP subclass of a BP data component inherits
 			// its parent CDO's PayloadStruct pointer, which the sync would
@@ -542,14 +542,14 @@ void FSeinARTSEditorModule::StartupModule()
 	// and -game populations can be compared directly.
 	AuthoringStatsCommand = MakeUnique<FAutoConsoleCommand>(
 		TEXT("Sein.Authoring.DumpDataComponentStats"),
-		TEXT("Count USeinDataComponent authoring objects by world context."),
+		TEXT("Count USeinEntityComponent authoring objects by world context."),
 		FConsoleCommandDelegate::CreateLambda([]()
 		{
 			int32 Templates = 0, EditorCount = 0, PIECount = 0,
 				GameCount = 0, Other = 0;
-			for (TObjectIterator<USeinDataComponent> It; It; ++It)
+			for (TObjectIterator<USeinEntityComponent> It; It; ++It)
 			{
-				const USeinDataComponent* Component = *It;
+				const USeinEntityComponent* Component = *It;
 				if (!Component) continue;
 				if (Component->IsTemplate()) { ++Templates; continue; }
 				const UWorld* World = Component->GetWorld();

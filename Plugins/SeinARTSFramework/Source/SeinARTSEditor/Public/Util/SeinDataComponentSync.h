@@ -29,7 +29,7 @@ class UUserDefinedStruct;
 
 namespace SeinDataComponentSync
 {
-	/** True if `Blueprint` generates a USeinDataComponent subclass. */
+	/** True if `Blueprint` generates a USeinEntityComponent subclass. */
 	bool IsDataComponentBlueprint(const UBlueprint* Blueprint);
 
 	/** Sync the Blueprint's deterministic variables into its paired payload

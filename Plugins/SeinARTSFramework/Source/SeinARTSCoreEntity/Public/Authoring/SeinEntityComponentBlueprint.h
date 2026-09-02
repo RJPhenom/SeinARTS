@@ -5,7 +5,7 @@
  * @date:    9/1/2026
  * @author:  RJ Macklem
  * @brief:   Blueprint asset subclass for designer-authored Sein entity
- *           components (USeinDataComponent subclasses). Exists so the editor
+ *           components (USeinEntityComponent subclasses). Exists so the editor
  *           can assign the asset its own type color (#FF8000), the
  *           SeinComponentIcon thumbnail, and the data-only editing surface —
  *           same pattern as USeinActorBlueprint / USeinAbilityBlueprint.

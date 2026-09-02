@@ -5,7 +5,7 @@
 
 #include "Editors/SeinEntityComponentBlueprintEditor.h"
 
-#include "Authoring/SeinDataComponent.h"
+#include "Authoring/SeinEntityComponent.h"
 #include "Util/SeinDeterminismRules.h"
 
 #include "EdGraphSchema_K2.h"
@@ -194,7 +194,7 @@ TSharedRef<SDockTab> FSeinEntityComponentBlueprintEditor::SpawnDefaultsTab(
 			: &PropertyAndParent.Property;
 		const UClass* OwnerClass = Outermost->GetOwnerClass();
 		return OwnerClass
-			&& OwnerClass->IsChildOf(USeinDataComponent::StaticClass());
+			&& OwnerClass->IsChildOf(USeinEntityComponent::StaticClass());
 	}));
 	RefreshDefaultsView();
 

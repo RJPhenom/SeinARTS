@@ -1,7 +1,7 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  *
- * @file:    SeinDataComponent.h
+ * @file:    SeinEntityComponent.h
  * @date:    9/1/2026
  * @author:  RJ Macklem
  * @brief:   PROTOTYPE (AC-authoring gate): abstract data-only ActorComponent
@@ -53,7 +53,7 @@
 #include "Components/SeinSquadMemberPayload.h"
 #include "Components/SeinSquadPayload.h"
 #include "StructUtils/InstancedStruct.h"
-#include "SeinDataComponent.generated.h"
+#include "SeinEntityComponent.generated.h"
 
 class UUserDefinedStruct;
 
@@ -65,12 +65,12 @@ class UUserDefinedStruct;
  * ComponentData array, which remains the injected runtime carrier.
  */
 UCLASS(Abstract, Blueprintable, ClassGroup = (SeinARTS))
-class SEINARTSCOREENTITY_API USeinDataComponent : public UActorComponent
+class SEINARTSCOREENTITY_API USeinEntityComponent : public UActorComponent
 {
 	GENERATED_BODY()
 
 public:
-	USeinDataComponent();
+	USeinEntityComponent();
 
 	/** Include this component's payload at spawn injection. Uncheck on a
 	 *  placed instance for the native "this unit doesn't carry X" gesture —
@@ -146,7 +146,7 @@ public:
 
 /** Physical extents (footprint / bounds) of the entity. */
 UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComponent))
-class SEINARTSCOREENTITY_API USeinExtentsComponent : public USeinDataComponent
+class SEINARTSCOREENTITY_API USeinExtentsComponent : public USeinEntityComponent
 {
 	GENERATED_BODY()
 
@@ -162,7 +162,7 @@ public:
 
 /** Abilities this entity can activate. */
 UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComponent))
-class SEINARTSCOREENTITY_API USeinAbilitiesComponent : public USeinDataComponent
+class SEINARTSCOREENTITY_API USeinAbilitiesComponent : public USeinEntityComponent
 {
 	GENERATED_BODY()
 public:
@@ -182,7 +182,7 @@ public:
 
 /** Identity: display name, description, icons, identity tag. */
 UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComponent))
-class SEINARTSCOREENTITY_API USeinIdentityComponent : public USeinDataComponent
+class SEINARTSCOREENTITY_API USeinIdentityComponent : public USeinEntityComponent
 {
 	GENERATED_BODY()
 public:
@@ -202,7 +202,7 @@ public:
 
 /** Movement configuration (mode class + tuning sub-data). */
 UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComponent))
-class SEINARTSCOREENTITY_API USeinMovementComponent : public USeinDataComponent
+class SEINARTSCOREENTITY_API USeinMovementComponent : public USeinEntityComponent
 {
 	GENERATED_BODY()
 public:
@@ -222,7 +222,7 @@ public:
 
 /** Navigation configuration (layer mask, footprint routing). */
 UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComponent))
-class SEINARTSCOREENTITY_API USeinNavigationComponent : public USeinDataComponent
+class SEINARTSCOREENTITY_API USeinNavigationComponent : public USeinEntityComponent
 {
 	GENERATED_BODY()
 public:
@@ -242,7 +242,7 @@ public:
 
 /** Production queue capability (this entity can produce). */
 UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComponent))
-class SEINARTSCOREENTITY_API USeinProductionComponent : public USeinDataComponent
+class SEINARTSCOREENTITY_API USeinProductionComponent : public USeinEntityComponent
 {
 	GENERATED_BODY()
 public:
@@ -262,7 +262,7 @@ public:
 
 /** Producible capability (this entity can be produced; costs/time). */
 UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComponent))
-class SEINARTSCOREENTITY_API USeinProducibleComponent : public USeinDataComponent
+class SEINARTSCOREENTITY_API USeinProducibleComponent : public USeinEntityComponent
 {
 	GENERATED_BODY()
 public:
@@ -282,7 +282,7 @@ public:
 
 /** Construction-site state (built by workers over time). */
 UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComponent))
-class SEINARTSCOREENTITY_API USeinConstructionComponent : public USeinDataComponent
+class SEINARTSCOREENTITY_API USeinConstructionComponent : public USeinEntityComponent
 {
 	GENERATED_BODY()
 public:
@@ -302,7 +302,7 @@ public:
 
 /** Entity control routing (selectability, command brokering). */
 UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComponent))
-class SEINARTSCOREENTITY_API USeinEntityControlComponent : public USeinDataComponent
+class SEINARTSCOREENTITY_API USeinEntityControlComponent : public USeinEntityComponent
 {
 	GENERATED_BODY()
 public:
@@ -322,7 +322,7 @@ public:
 
 /** Active-effects storage seed. */
 UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComponent))
-class SEINARTSCOREENTITY_API USeinActiveEffectsComponent : public USeinDataComponent
+class SEINARTSCOREENTITY_API USeinActiveEffectsComponent : public USeinEntityComponent
 {
 	GENERATED_BODY()
 public:
@@ -342,7 +342,7 @@ public:
 
 /** Child transform sockets (turrets, hardpoints, attachments). */
 UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComponent))
-class SEINARTSCOREENTITY_API USeinChildTransformsComponent : public USeinDataComponent
+class SEINARTSCOREENTITY_API USeinChildTransformsComponent : public USeinEntityComponent
 {
 	GENERATED_BODY()
 public:
@@ -362,7 +362,7 @@ public:
 
 /** Squad definition (slots, formation, reinforcement). */
 UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComponent))
-class SEINARTSCOREENTITY_API USeinSquadComponent : public USeinDataComponent
+class SEINARTSCOREENTITY_API USeinSquadComponent : public USeinEntityComponent
 {
 	GENERATED_BODY()
 public:
@@ -382,7 +382,7 @@ public:
 
 /** Squad-member linkage for entities that join squads. */
 UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComponent))
-class SEINARTSCOREENTITY_API USeinSquadMemberComponent : public USeinDataComponent
+class SEINARTSCOREENTITY_API USeinSquadMemberComponent : public USeinEntityComponent
 {
 	GENERATED_BODY()
 public:
