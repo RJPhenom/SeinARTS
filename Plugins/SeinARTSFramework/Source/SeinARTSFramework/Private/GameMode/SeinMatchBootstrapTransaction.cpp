@@ -622,25 +622,49 @@ bool FSeinMatchBootstrapTransaction::ValidateEntityComponentData(
 		return false;
 	}
 
-	TSet<const UScriptStruct*> SeenTypes;
-	for (const FInstancedStruct& Entry : Components[0]->ComponentData)
+	// USeinEntityComponent::ValidateComponentData is the single shared
+	// definition of "valid ComponentData" — the same routine backs the
+	// Blueprint pre-compile gate (SeinARTSEditorModule), which surfaces
+	// these exact issues as per-index compiler warnings at edit time
+	// (non-blocking by design, so a half-authored row can't hold Save/PIE
+	// hostage). This bootstrap check is the fail-closed enforcement point;
+	// sharing the validator keeps the warning a designer saw at compile
+	// time and the failure a match reports verbatim-identical.
+	TArray<FSeinComponentDataIssue> Issues;
+	if (!USeinEntityComponent::ValidateComponentData(Components[0]->ComponentData, Issues))
 	{
-		const UScriptStruct* Type = Entry.GetScriptStruct();
-		if (!Entry.IsValid() || !Type || !Entry.GetMemory())
+		TArray<FString> Descriptions;
+		Descriptions.Reserve(Issues.Num());
+		for (const FSeinComponentDataIssue& Issue : Issues)
 		{
-			OutError = FString::Printf(
-				TEXT("Bootstrap entity %s contains an invalid authored component entry."),
-				*OwnerLabel);
-			return false;
+			Descriptions.Add(Issue.Description);
 		}
-		if (SeenTypes.Contains(Type))
+		OutError = FString::Printf(
+			TEXT("Bootstrap entity %s has an invalid authored ComponentData array (%d of %d entries): %s."),
+			*OwnerLabel, Issues.Num(), Components[0]->ComponentData.Num(),
+			*FString::Join(Descriptions, TEXT("; ")));
+
+		// A placed instance failing while its class default is clean means a
+		// stale per-instance ComponentData override, not a broken Blueprint —
+		// say so, or the designer hunts the wrong object (the Blueprint
+		// compiles clean and this error looks unexplainable).
+		if (!Components[0]->IsTemplate())
 		{
-			OutError = FString::Printf(
-				TEXT("Bootstrap entity %s contains duplicate authored component type %s."),
-				*OwnerLabel, *Type->GetPathName());
-			return false;
+			if (const AActor* Owner = Components[0]->GetOwner())
+			{
+				TArray<const USeinEntityComponent*> ClassComponents;
+				AActor::GetActorClassDefaultComponents<USeinEntityComponent>(
+					Owner->GetClass(), ClassComponents);
+				TArray<FSeinComponentDataIssue> ClassIssues;
+				if (ClassComponents.Num() == 1 && ClassComponents[0]
+					&& USeinEntityComponent::ValidateComponentData(
+						ClassComponents[0]->ComponentData, ClassIssues))
+				{
+					OutError += TEXT(" The class default is valid — this placed instance carries a stale ComponentData override; revert the Component Data property on the placed actor to re-sync.");
+				}
+			}
 		}
-		SeenTypes.Add(Type);
+		return false;
 	}
 	return true;
 }

@@ -13,6 +13,8 @@
 #include "Actor/SeinEntityComponent.h"
 
 #include "Actor/SeinActor.h"
+#include "Authoring/SeinDataComponent.h"
+#include "UObject/ObjectSaveContext.h"
 #include "Components/SeinFogVisibilityComponent.h"   // auto-injected from bridge top-level fields
 #include "Components/SeinIdentityComponent.h"        // ComponentData entry edit-watching
 #include "Simulation/ComponentStorage.h"
@@ -28,6 +30,7 @@
 #include "Editor.h"                       // GEditor for viewport redraw
 #include "Engine/World.h"                 // UWorld / EWorldType (per-instance world filter)
 #include "GameFramework/Actor.h"          // AActor / GetComponents
+#include "UObject/UObjectGlobals.h"       // LoadObject (structural snapshot materialization)
 #endif
 
 // NOTE: editor-preview code (in-editor squad-slot mesh previews) was removed
@@ -52,25 +55,67 @@ USeinEntityComponent::USeinEntityComponent()
 // Authoring â€” ComponentData array injection
 // =============================================================================
 
-void USeinEntityComponent::InjectAuthoredComponents(USeinWorldSubsystem& World, FSeinEntityHandle Handle) const
+bool USeinEntityComponent::ValidateComponentData(
+	const TArray<FInstancedStruct>& ComponentData,
+	TArray<FSeinComponentDataIssue>& OutIssues)
 {
-	// One pass through the authored array. Each entry should be a
-	// `FSeinComponent` substruct (the editor's `BaseStruct` filter enforces
-	// this on the picker); we guard against an empty array entry (a designer
-	// might add a row and not pick a type yet).
-	//
-	// One simulation storage exists per struct type. A duplicate authored entry
-	// would otherwise silently overwrite the earlier value, so retain the
-	// deterministic last-entry-wins behavior but surface the authoring error.
-	for (const FInstancedStruct& Entry : ComponentData)
+	OutIssues.Reset();
+
+	TMap<const UScriptStruct*, int32> FirstIndexByType;
+	FirstIndexByType.Reserve(ComponentData.Num());
+
+	for (int32 Index = 0; Index < ComponentData.Num(); ++Index)
 	{
+		const FInstancedStruct& Entry = ComponentData[Index];
 		if (!Entry.IsValid())
 		{
-			UE_LOG(LogSeinEntityComp, Verbose,
-				TEXT("Skipping invalid ComponentData entry on %s â€” empty struct picker?"),
-				*GetNameSafe(GetOwner()));
+			OutIssues.Add(FSeinComponentDataIssue{Index, FString::Printf(
+				TEXT("ComponentData[%d] has no resolvable struct type (never assigned in the picker, or its struct asset was deleted/renamed)"),
+				Index)});
 			continue;
 		}
+
+		const UScriptStruct* Type = Entry.GetScriptStruct();
+		if (const int32* FirstIndex = FirstIndexByType.Find(Type))
+		{
+			OutIssues.Add(FSeinComponentDataIssue{Index, FString::Printf(
+				TEXT("ComponentData[%d] duplicates struct type %s already authored at ComponentData[%d]"),
+				Index, *Type->GetPathName(), *FirstIndex)});
+			continue;
+		}
+		FirstIndexByType.Add(Type, Index);
+	}
+
+	return OutIssues.Num() == 0;
+}
+
+void USeinEntityComponent::InjectAuthoredComponents(USeinWorldSubsystem& World, FSeinEntityHandle Handle) const
+{
+	// ValidateComponentData is the single shared definition of "valid
+	// ComponentData" (also used by the Blueprint pre-compile gate and match
+	// bootstrap — see its declaration). This runtime spawn path stays
+	// tolerant of a bad entry (skip / last-entry-wins) rather than failing
+	// the spawn outright: match bootstrap is where the same defect is
+	// fatal; the compile gate surfaces it early as compiler warnings.
+	TArray<FSeinComponentDataIssue> Issues;
+	if (!ValidateComponentData(ComponentData, Issues))
+	{
+		for (const FSeinComponentDataIssue& Issue : Issues)
+		{
+			UE_LOG(LogSeinEntityComp, Warning, TEXT("%s on %s."),
+				*Issue.Description, *GetNameSafe(GetOwner()));
+		}
+	}
+
+	// One simulation storage exists per struct type. A within-array duplicate
+	// (already warned about above) overwrites deterministically — last entry
+	// in ComponentData wins. Storage occupancy is also checked here directly
+	// (not just via the array-only pre-scan above) because it catches any
+	// collision with a type this handle already carries from a source OTHER
+	// than this ComponentData array — the pre-scan can't see that.
+	for (const FInstancedStruct& Entry : ComponentData)
+	{
+		if (!Entry.IsValid()) continue;
 
 		UScriptStruct* StructType = const_cast<UScriptStruct*>(Entry.GetScriptStruct());
 		if (!StructType) continue;
@@ -78,15 +123,12 @@ void USeinEntityComponent::InjectAuthoredComponents(USeinWorldSubsystem& World, 
 		ISeinComponentStorage* Storage = World.GetOrCreateStorageForType(StructType);
 		if (!Storage) continue;
 
-		const bool bAlreadyInjected = (Storage->GetComponentRaw(Handle) != nullptr);
-		if (bAlreadyInjected)
+		if (Storage->GetComponentRaw(Handle) != nullptr)
 		{
 			UE_LOG(LogSeinEntityComp, Warning,
-				TEXT("Entity %s has duplicate authored component type %s; "
-					 "the later USeinEntityComponent entry will overwrite the earlier value. "
-					 "Remove the duplicate entry from %s."),
+				TEXT("Entity %s already has a component of type %s from another source; "
+					 "this ComponentData entry on %s will overwrite it."),
 				*Handle.ToString(), *StructType->GetName(), *GetNameSafe(GetOwner()));
-			// Storage->AddComponent overwrites; intentional.
 		}
 
 		Storage->AddComponent(Handle, Entry.GetMemory());
@@ -362,6 +404,139 @@ namespace
 			Package->MarkPackageDirty();
 		}
 	}
+
+	// ------------------------------------------------------------------
+	// Structural-lane helpers (see FSeinComponentDataStructuralChangeRecord)
+	// ------------------------------------------------------------------
+
+	constexpr int32 MaxComponentDataSnapshotValueLen = 64 * 1024;
+
+	/** Export every VALID entry as (type path, full exported value). Invalid
+	 *  rows carry nothing adoptable and are skipped — rebuilding from a
+	 *  snapshot therefore also heals stale empty rows. False when an entry's
+	 *  export exceeds the snapshot bound. */
+	bool SnapshotComponentDataEntries(
+		const TArray<FInstancedStruct>& Entries,
+		TArray<FSeinComponentDataEntrySnapshot>& OutSnapshots)
+	{
+		OutSnapshots.Reset();
+		for (const FInstancedStruct& Entry : Entries)
+		{
+			if (!Entry.IsValid())
+			{
+				continue;
+			}
+			FSeinComponentDataEntrySnapshot& Snapshot =
+				OutSnapshots.AddDefaulted_GetRef();
+			Snapshot.ComponentTypePath = Entry.GetScriptStruct()->GetPathName();
+			Entry.GetScriptStruct()->ExportText(
+				Snapshot.ExportedValue, Entry.GetMemory(),
+				nullptr, nullptr, PPF_None, nullptr);
+			if (Snapshot.ExportedValue.Len() > MaxComponentDataSnapshotValueLen)
+			{
+				OutSnapshots.Reset();
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/** Materialize a snapshot list back into ComponentData entries. All-or-
+	 *  nothing: a type that no longer resolves (deleted/renamed struct asset)
+	 *  fails the whole build so adoption never half-applies. */
+	bool BuildComponentDataFromSnapshots(
+		const TArray<FSeinComponentDataEntrySnapshot>& Snapshots,
+		TArray<FInstancedStruct>& OutEntries,
+		FString& OutError)
+	{
+		OutEntries.Reset();
+		for (const FSeinComponentDataEntrySnapshot& Snapshot : Snapshots)
+		{
+			UScriptStruct* Type = LoadObject<UScriptStruct>(
+				nullptr, *Snapshot.ComponentTypePath);
+			if (!Type)
+			{
+				OutError = FString::Printf(
+					TEXT("Component struct '%s' could not be resolved."),
+					*Snapshot.ComponentTypePath);
+				OutEntries.Reset();
+				return false;
+			}
+			FInstancedStruct& Entry = OutEntries.AddDefaulted_GetRef();
+			Entry.InitializeAs(Type);
+			const TCHAR* End = Type->ImportText(
+				*Snapshot.ExportedValue, Entry.GetMutableMemory(),
+				nullptr, PPF_None, GWarn, Type->GetName());
+			if (!End)
+			{
+				OutError = FString::Printf(
+					TEXT("Snapshot value for '%s' could not be imported."),
+					*Snapshot.ComponentTypePath);
+				OutEntries.Reset();
+				return false;
+			}
+			// Roundtrip fidelity: a snapshot recorded against an older struct
+			// layout (e.g. a UDS field renamed since) imports its unknown
+			// fields as silent skips, leaving defaults behind. Fail the build
+			// instead — a loud Skipped beats a silent half-default adoption.
+			FString Reexported;
+			Type->ExportText(Reexported, Entry.GetMemory(),
+				nullptr, nullptr, PPF_None, nullptr);
+			if (Reexported != Snapshot.ExportedValue)
+			{
+				OutError = FString::Printf(
+					TEXT("Snapshot for '%s' does not survive an import/export roundtrip (struct layout changed since it was recorded)."),
+					*Snapshot.ComponentTypePath);
+				OutEntries.Reset();
+				return false;
+			}
+		}
+		return true;
+	}
+
+	TArray<FString> SortedComponentTypePaths(
+		const TArray<FInstancedStruct>& Entries)
+	{
+		TArray<FString> Paths;
+		for (const FInstancedStruct& Entry : Entries)
+		{
+			if (Entry.IsValid())
+			{
+				Paths.Add(Entry.GetScriptStruct()->GetPathName());
+			}
+		}
+		Paths.Sort();
+		return Paths;
+	}
+
+	TArray<FString> SortedComponentTypePaths(
+		const TArray<FSeinComponentDataEntrySnapshot>& Snapshots)
+	{
+		TArray<FString> Paths;
+		for (const FSeinComponentDataEntrySnapshot& Snapshot : Snapshots)
+		{
+			Paths.Add(Snapshot.ComponentTypePath);
+		}
+		Paths.Sort();
+		return Paths;
+	}
+
+	/** Entry-type multiset equality over the VALID entries of each side. */
+	bool DoTypeMultisetsMatch(
+		const TArray<FInstancedStruct>& Entries,
+		const TArray<FSeinComponentDataEntrySnapshot>& Snapshots)
+	{
+		return SortedComponentTypePaths(Entries)
+			== SortedComponentTypePaths(Snapshots);
+	}
+
+	bool DoTypeMultisetsMatch(
+		const TArray<FInstancedStruct>& Left,
+		const TArray<FInstancedStruct>& Right)
+	{
+		return SortedComponentTypePaths(Left)
+			== SortedComponentTypePaths(Right);
+	}
 }
 
 void USeinEntityComponent::PostInitProperties()
@@ -375,6 +550,7 @@ void USeinEntityComponent::PostInitProperties()
 	{
 		ComponentDataDefaultRevision = 0;
 		ComponentDataDefaultChangeHistory.Reset();
+		ComponentDataStructuralChangeHistory.Reset();
 	}
 }
 
@@ -400,9 +576,31 @@ void USeinEntityComponent::EnsureComponentDataOverrideMetadataInitialized()
 	if (!SeinBuildComponentPropertyPatches(
 		ClassDefault->ComponentData, ComponentData, Differences, Error))
 	{
-		UE_LOG(LogSeinEntityComp, Warning,
-			TEXT("Could not initialize ComponentData override metadata for %s: %s"),
-			*GetPathName(), *Error);
+		// Only a genuine SHAPE mismatch (no recorded structural transition
+		// explained it — content predating the structural lane, or a deleted
+		// struct asset) earns the structural-override flag. A same-shape
+		// patch-build failure (depth/size pathologies) keeps the old
+		// warn-and-return behavior. Data is never destroyed either way;
+		// Map Check surfaces the flag per actor.
+		if (!DoTypeMultisetsMatch(ComponentData, ClassDefault->ComponentData))
+		{
+			if (!bComponentDataStructuralOverride)
+			{
+				bComponentDataStructuralOverride = true;
+				UE_LOG(LogSeinEntityComp, Warning,
+					TEXT("%s: ComponentData differs in SHAPE from class default %s and no recorded transition explains it (%s). ")
+					TEXT("This instance will not receive Blueprint ComponentData updates until re-synced — ")
+					TEXT("revert the Component Data property on the placed actor to re-join inheritance."),
+					*GetPathName(), *ClassDefault->GetPathName(), *Error);
+				MarkAuthoringPackageDirty(*this);
+			}
+		}
+		else
+		{
+			UE_LOG(LogSeinEntityComp, Warning,
+				TEXT("Could not initialize ComponentData override metadata for %s: %s"),
+				*GetPathName(), *Error);
+		}
 		return;
 	}
 	for (const FSeinComponentPropertyPatch& Difference : Differences)
@@ -516,13 +714,137 @@ void USeinEntityComponent::CatchUpComponentDataClassDefaultHistory()
 	{
 		BeforeCatchUp = ComponentData;
 	}
+
+	// Merge both history lanes into one revision-ordered replay. One edit is
+	// one kind (a structural edit's value changes ride inside its snapshots),
+	// so revisions never collide across lanes; sort structural-first on a tie
+	// anyway for determinism.
+	struct FReplayItem
+	{
+		int32 Revision = 0;
+		const FSeinComponentDataDefaultChangeRecord* Property = nullptr;
+		const FSeinComponentDataStructuralChangeRecord* Structural = nullptr;
+	};
+	TArray<FReplayItem> Replay;
 	for (const FSeinComponentDataDefaultChangeRecord& Record :
 		Ancestor->ComponentDataDefaultChangeHistory)
 	{
-		if (Record.Revision <= ComponentDataInheritedDefaultRevision)
+		if (Record.Revision > ComponentDataInheritedDefaultRevision)
 		{
+			Replay.Add(FReplayItem{Record.Revision, &Record, nullptr});
+		}
+	}
+	for (const FSeinComponentDataStructuralChangeRecord& Record :
+		Ancestor->ComponentDataStructuralChangeHistory)
+	{
+		if (Record.Revision > ComponentDataInheritedDefaultRevision)
+		{
+			Replay.Add(FReplayItem{Record.Revision, nullptr, &Record});
+		}
+	}
+	Replay.StableSort([](const FReplayItem& Left, const FReplayItem& Right)
+	{
+		if (Left.Revision != Right.Revision)
+		{
+			return Left.Revision < Right.Revision;
+		}
+		return Left.Structural != nullptr && Right.Structural == nullptr;
+	});
+
+	// A derived class default batches adopted PROPERTY transitions into one
+	// record of its own. That batch must flush before any structural adoption:
+	// its Previous values are derived from the current array, which a
+	// structural adoption reshapes.
+	auto FlushAdoptedPatches = [this, &BeforeCatchUp, &AdoptedPatches,
+		bIsDerivedClassDefault]()
+	{
+		if (!bIsDerivedClassDefault)
+		{
+			return;
+		}
+		if (!AdoptedPatches.IsEmpty())
+		{
+			RecordComponentDataClassDefaultChange(BeforeCatchUp, AdoptedPatches);
+			AdoptedPatches.Reset();
+		}
+		BeforeCatchUp = ComponentData;
+	};
+
+	for (const FReplayItem& Item : Replay)
+	{
+		if (Item.Structural)
+		{
+			if (!bIsDerivedClassDefault && bComponentDataStructuralOverride)
+			{
+				continue; // stays deliberately diverged
+			}
+			if (!bIsDerivedClassDefault)
+			{
+				// Live-match bridges keep the topology their sim entities were
+				// injected with — never reshape them mid-session (the edit-time
+				// push path skips PIE too); they reconcile on next editor load.
+				const AActor* OwnerActor = GetOwner();
+				const UWorld* OwnerWorld = OwnerActor ? OwnerActor->GetWorld() : nullptr;
+				if (OwnerWorld
+					&& (OwnerWorld->WorldType == EWorldType::PIE
+						|| OwnerWorld->WorldType == EWorldType::Game))
+				{
+					continue;
+				}
+			}
+			FlushAdoptedPatches();
+			TArray<FInstancedStruct> StructuralBefore;
+			if (bIsDerivedClassDefault)
+			{
+				StructuralBefore = ComponentData;
+			}
+			switch (TryAdoptStructuralRecord(*Item.Structural))
+			{
+			case EStructuralAdoptOutcome::Adopted:
+				bChanged = true;
+				if (bIsDerivedClassDefault)
+				{
+					// Re-record in THIS class's history so its own unopened
+					// instances catch up through their direct class default.
+					if (!RecordStructuralChangeToOwnHistory(StructuralBefore))
+					{
+						UE_LOG(LogSeinEntityComp, Warning,
+							TEXT("%s adopted a structural ComponentData default but could not re-record it; its unopened instances will flag divergence on load."),
+							*GetPathName());
+					}
+					BeforeCatchUp = ComponentData;
+				}
+				break;
+			case EStructuralAdoptOutcome::Flagged:
+				// A derived class default's structural divergence IS its
+				// override — quiet, same value-delta rule as everywhere else.
+				//
+				// Instance idempotency guard: a freshly placed instance replays
+				// the FULL history (its cursor is archetype-copied from the
+				// template's cursor into ITS parent, not the template's own
+				// revision), so an in-sync instance can match neither side of
+				// an OLD record. Shape equal to the ancestor's CURRENT array
+				// means in sync with the end of history — skip, never flag.
+				if (!bIsDerivedClassDefault
+					&& !DoTypeMultisetsMatch(ComponentData, Ancestor->ComponentData))
+				{
+					bComponentDataStructuralOverride = true;
+					bChanged = true;
+					UE_LOG(LogSeinEntityComp, Warning,
+						TEXT("%s: ComponentData matches neither side of a recorded structural default change of %s. ")
+						TEXT("This instance will not receive Blueprint ComponentData updates until re-synced — ")
+						TEXT("revert the Component Data property on the placed actor to re-join inheritance."),
+						*GetPathName(), *Ancestor->GetPathName());
+				}
+				break;
+			case EStructuralAdoptOutcome::AlreadyCurrent:
+			case EStructuralAdoptOutcome::Skipped:
+				break;
+			}
 			continue;
 		}
+
+		const FSeinComponentDataDefaultChangeRecord& Record = *Item.Property;
 		const FString Key = SeinMakeComponentPropertyPatchKey(
 			Record.NewValue.ComponentTypePath,
 			Record.NewValue.PropertyPath);
@@ -567,10 +889,7 @@ void USeinEntityComponent::CatchUpComponentDataClassDefaultHistory()
 		Ancestor->ComponentDataDefaultRevision;
 	if (bIsDerivedClassDefault)
 	{
-		if (!AdoptedPatches.IsEmpty())
-		{
-			RecordComponentDataClassDefaultChange(BeforeCatchUp, AdoptedPatches);
-		}
+		FlushAdoptedPatches();
 		// Even without adopted records, hold the source revision at or above
 		// the parent cursor (see RecordComponentDataClassDefaultChange).
 		ComponentDataDefaultRevision = FMath::Max(
@@ -625,7 +944,28 @@ void USeinEntityComponent::RefreshInheritedComponentDataFromClassDefaults()
 	if (!SeinBuildComponentPropertyPatches(
 		ComponentData, ClassDefault->ComponentData, Defaults, Error))
 	{
+		// Structural divergence: flagged (loudly) by Ensure/CatchUp when it is
+		// first discovered; here we keep quiet on an already-known flag and
+		// catch any path that reached refresh without one. Same-shape
+		// patch-build failures (depth/size pathologies) are not shape
+		// divergence and never earn the flag.
+		if (!bComponentDataStructuralOverride
+			&& !DoTypeMultisetsMatch(ComponentData, ClassDefault->ComponentData))
+		{
+			bComponentDataStructuralOverride = true;
+			UE_LOG(LogSeinEntityComp, Warning,
+				TEXT("%s: ComponentData differs in SHAPE from class default %s (%s). ")
+				TEXT("Revert the Component Data property on the placed actor to re-join inheritance."),
+				*GetPathName(), *ClassDefault->GetPathName(), *Error);
+			MarkAuthoringPackageDirty(*this);
+		}
 		return;
+	}
+	if (bComponentDataStructuralOverride)
+	{
+		// Shapes reconcile again — a hand revert, or structural adoption above.
+		bComponentDataStructuralOverride = false;
+		MarkAuthoringPackageDirty(*this);
 	}
 	bool bChanged = false;
 	for (const FSeinComponentPropertyPatch& DefaultPatch : Defaults)
@@ -744,10 +1084,45 @@ void USeinEntityComponent::HandleComponentDataEdited()
 
 	if (bHasCapturedEdit && !bBuiltPatches)
 	{
-		// Adding/removing a component changes storage topology and intentionally
-		// does not use the property-patch lane.
-		UE_LOG(LogSeinEntityComp, Warning,
-			TEXT("ComponentData structural edit on %s was not live tuned: %s"),
+		// Patch-build failure is USUALLY a structural edit (entries added/
+		// removed/retyped) but not always — pathological value edits fail too
+		// (recursion depth, oversize exports). Only a changed entry-type
+		// multiset takes the structural lane; storage topology is intentionally
+		// never live tuned (a running match keeps the component set its
+		// entities were injected with), but the authoring-inheritance lanes
+		// handle it: class defaults record + propagate the transition,
+		// instances reconcile their structural-override flag.
+		const bool bMultisetChanged = !DoTypeMultisetsMatch(
+			ComponentDataBeforeEditorChange, ComponentData);
+		if (!bMultisetChanged)
+		{
+			// Same-shape edit whose values cannot be patch-encoded: neither
+			// lane can represent it. Keep the old loud behavior — the change
+			// stays local to this object and never propagates.
+			UE_LOG(LogSeinEntityComp, Warning,
+				TEXT("ComponentData edit on %s could not be patch-encoded and will not propagate or live tune: %s"),
+				*GetPathName(), *PatchError);
+			bCapturedComponentDataBeforeEditorChange = false;
+			return;
+		}
+		if (IsClassDefaultBridge(*this))
+		{
+			HandleStructuralClassDefaultEdit();
+		}
+		else if (!IsTemplate())
+		{
+			// Instance structural edit. Reverting to the class default is the
+			// one structural edit that re-joins inheritance; anything else is
+			// a deliberate structural override (no warning — the designer is
+			// looking right at it; Map Check reports it thereafter).
+			EnsureComponentDataOverrideMetadataInitialized();
+			if (ReconcileStructuralOverrideFlag())
+			{
+				MarkAuthoringPackageDirty(*this);
+			}
+		}
+		UE_LOG(LogSeinEntityComp, Verbose,
+			TEXT("ComponentData structural edit on %s (not live tuned): %s"),
 			*GetPathName(), *PatchError);
 		bCapturedComponentDataBeforeEditorChange = false;
 		return;
@@ -1034,6 +1409,595 @@ void USeinEntityComponent::PropagateComponentDataChangesToInstances(
 		// without clicking off + back on the actor.
 		GEditor->RedrawAllViewports(/*bInvalidateHitProxies*/ true);
 	}
+}
+
+bool USeinEntityComponent::RecordStructuralChangeToOwnHistory(
+	const TArray<FInstancedStruct>& BeforeEntries)
+{
+	if (!IsTemplate())
+	{
+		return false;
+	}
+	FSeinComponentDataStructuralChangeRecord Record;
+	if (!SnapshotComponentDataEntries(BeforeEntries, Record.Before)
+		|| !SnapshotComponentDataEntries(ComponentData, Record.After))
+	{
+		UE_LOG(LogSeinEntityComp, Warning,
+			TEXT("%s: structural ComponentData change exceeds the snapshot bound and was not recorded; unopened instances will flag divergence on load."),
+			*GetPathName());
+		return false;
+	}
+	// Same cursor rule as RecordComponentDataClassDefaultChange: the source
+	// revision never trails the parent cursor, so a freshly placed instance
+	// cannot skip a later record.
+	ComponentDataDefaultRevision = FMath::Max(
+		ComponentDataDefaultRevision, ComponentDataInheritedDefaultRevision) + 1;
+	Record.Revision = ComponentDataDefaultRevision;
+	ComponentDataStructuralChangeHistory.Add(MoveTemp(Record));
+	return true;
+}
+
+USeinEntityComponent::EStructuralAdoptOutcome
+USeinEntityComponent::TryAdoptStructuralRecord(
+	const FSeinComponentDataStructuralChangeRecord& Record)
+{
+	// Legacy content can carry duplicate entry types (already a validator
+	// error and match-fatal at bootstrap). Adoption matches entries BY TYPE,
+	// so duplicates would reshuffle values between the first and last dup and
+	// flip the injected last-entry-wins value — refuse to touch such content.
+	auto HasDuplicateTypes = [](const TArray<FString>& SortedPaths)
+	{
+		for (int32 Index = 1; Index < SortedPaths.Num(); ++Index)
+		{
+			if (SortedPaths[Index] == SortedPaths[Index - 1])
+			{
+				return true;
+			}
+		}
+		return false;
+	};
+	if (HasDuplicateTypes(SortedComponentTypePaths(ComponentData))
+		|| HasDuplicateTypes(SortedComponentTypePaths(Record.Before))
+		|| HasDuplicateTypes(SortedComponentTypePaths(Record.After)))
+	{
+		UE_LOG(LogSeinEntityComp, Warning,
+			TEXT("%s: structural ComponentData adoption skipped — duplicate entry types present. Fix the duplicates first; they abort match bootstrap regardless."),
+			*GetPathName());
+		return EStructuralAdoptOutcome::Skipped;
+	}
+
+	// A structural change always alters the entry-type multiset (a same-shape
+	// edit is value-lane by construction — the edit path gates on multiset
+	// inequality), so at most one side can match.
+	if (DoTypeMultisetsMatch(ComponentData, Record.After))
+	{
+		return EStructuralAdoptOutcome::AlreadyCurrent;
+	}
+	if (!DoTypeMultisetsMatch(ComponentData, Record.Before))
+	{
+		return EStructuralAdoptOutcome::Flagged;
+	}
+
+	FString Error;
+	TArray<FInstancedStruct> BeforeEntries;
+	if (!BuildComponentDataFromSnapshots(Record.Before, BeforeEntries, Error))
+	{
+		UE_LOG(LogSeinEntityComp, Warning,
+			TEXT("%s: structural ComponentData default (revision %d) could not be replayed: %s"),
+			*GetPathName(), Record.Revision, *Error);
+		return EStructuralAdoptOutcome::Skipped;
+	}
+
+	// Every value difference from the OLD default is an override to carry
+	// across — recorded keys and legacy-unrecorded ones alike, the same
+	// philosophy as the property lane's else-override rule.
+	TArray<FSeinComponentPropertyPatch> OverrideDiffs;
+	if (!SeinBuildComponentPropertyPatches(
+		BeforeEntries, ComponentData, OverrideDiffs, Error))
+	{
+		UE_LOG(LogSeinEntityComp, Warning,
+			TEXT("%s: could not compute value overrides against the old structural default: %s"),
+			*GetPathName(), *Error);
+		return EStructuralAdoptOutcome::Skipped;
+	}
+
+	TArray<FInstancedStruct> AfterEntries;
+	if (!BuildComponentDataFromSnapshots(Record.After, AfterEntries, Error))
+	{
+		UE_LOG(LogSeinEntityComp, Warning,
+			TEXT("%s: structural ComponentData default (revision %d) could not be replayed: %s"),
+			*GetPathName(), Record.Revision, *Error);
+		return EStructuralAdoptOutcome::Skipped;
+	}
+
+	ComponentData = MoveTemp(AfterEntries);
+
+	// Re-apply carried values whose component type survives; an override on a
+	// removed type dies with its entry.
+	TArray<FString> ReappliedKeys;
+	for (const FSeinComponentPropertyPatch& Diff : OverrideDiffs)
+	{
+		if (!FindComponentDataEntryByPath(ComponentData, Diff.ComponentTypePath))
+		{
+			UE_LOG(LogSeinEntityComp, Log,
+				TEXT("%s: value override on removed component type %s was dropped with its entry."),
+				*GetPathName(), *Diff.ComponentTypePath);
+			continue;
+		}
+		FString ImportError;
+		if (ImportPatchValue(*this, Diff, ImportError))
+		{
+			ReappliedKeys.Add(SeinMakeComponentPropertyPatchKey(
+				Diff.ComponentTypePath, Diff.PropertyPath));
+		}
+		else
+		{
+			UE_LOG(LogSeinEntityComp, Warning,
+				TEXT("%s: could not re-apply a value override after structural adoption: %s"),
+				*GetPathName(), *ImportError);
+		}
+	}
+	if (!IsTemplate())
+	{
+		// The ledger now describes exactly the surviving overrides. A key whose
+		// value equaled the old default adopts the new default and drops off —
+		// the same equal-means-inherited rule the edit path applies. (Known
+		// mirror-image over-pin: a re-applied value that happens to EQUAL the
+		// new default stays keyed where the edit path would dissolve it; it
+		// resolves on that property's next edit and is preferable to guessing.)
+		ComponentDataPropertyOverrides = MoveTemp(ReappliedKeys);
+		ComponentDataPropertyOverrides.Sort();
+	}
+	return EStructuralAdoptOutcome::Adopted;
+}
+
+bool USeinEntityComponent::ReconcileStructuralOverrideFlag()
+{
+	if (IsTemplate())
+	{
+		return false;
+	}
+	const USeinEntityComponent* ClassDefault = FindInheritedDefaultBridge(*this);
+	if (!ClassDefault)
+	{
+		return false;
+	}
+	const bool bDesired =
+		!DoTypeMultisetsMatch(ComponentData, ClassDefault->ComponentData);
+	if (bDesired == bComponentDataStructuralOverride)
+	{
+		return false;
+	}
+	bComponentDataStructuralOverride = bDesired;
+	return true;
+}
+
+void USeinEntityComponent::HandleStructuralClassDefaultEdit()
+{
+	if (!RecordStructuralChangeToOwnHistory(ComponentDataBeforeEditorChange))
+	{
+		return; // warned inside; without a record there is nothing to adopt from
+	}
+	const FSeinComponentDataStructuralChangeRecord Record =
+		ComponentDataStructuralChangeHistory.Last();
+
+	// Same enumeration as the property lane (see
+	// PropagateComponentDataChangesToInstances). PIE actor instances are
+	// skipped: a live match's bridge must keep the topology its sim entities
+	// were injected with; they reconcile on their next editor load.
+	AActor* OwnerActorCDO = GetOwner();
+	TArray<UObject*> ArchetypeInstances;
+	OwnerActorCDO->GetArchetypeInstances(ArchetypeInstances);
+
+	// Derived class defaults FIRST, then actor instances. An instance of a
+	// derived class must find its own class default already caught up and
+	// re-recorded, so its Ensure adopts the DERIVED record; adopting the
+	// parent record directly would pin the derived class's value deltas into
+	// the INSTANCE override ledger (enumeration order is otherwise
+	// unspecified — notably scrambled after Blueprint reinstancing).
+	TArray<UObject*> OrderedInstances;
+	OrderedInstances.Reserve(ArchetypeInstances.Num());
+	for (UObject* Obj : ArchetypeInstances)
+	{
+		if (Obj && Obj->HasAnyFlags(RF_ClassDefaultObject))
+		{
+			OrderedInstances.Add(Obj);
+		}
+	}
+	for (UObject* Obj : ArchetypeInstances)
+	{
+		if (Obj && !Obj->HasAnyFlags(RF_ClassDefaultObject))
+		{
+			OrderedInstances.Add(Obj);
+		}
+	}
+
+	int32 InstancesScanned = 0;
+	int32 InstancesAdopted = 0;
+	int32 InstancesFlagged = 0;
+	int32 DerivedDefaultsAdopted = 0;
+
+	for (UObject* InstanceObj : OrderedInstances)
+	{
+		AActor* Instance = Cast<AActor>(InstanceObj);
+		if (!Instance) continue;
+
+		const bool bIsDerivedClassDefault =
+			Instance->HasAnyFlags(RF_ClassDefaultObject);
+		if (bIsDerivedClassDefault)
+		{
+			if (!IsLiveAuthoringClass(Instance->GetClass())) continue;
+		}
+		else
+		{
+			const UWorld* InstanceWorld = Instance->GetWorld();
+			if (!InstanceWorld) continue;
+			const EWorldType::Type WT = InstanceWorld->WorldType;
+			if (WT != EWorldType::Editor && WT != EWorldType::EditorPreview)
+			{
+				continue;
+			}
+		}
+
+		TArray<USeinEntityComponent*> InstBridges;
+		Instance->GetComponents<USeinEntityComponent>(InstBridges);
+		for (USeinEntityComponent* InstBridge : InstBridges)
+		{
+			if (!InstBridge || InstBridge == this
+				|| !InstBridge->IsBasedOnArchetype(this)) continue;
+			++InstancesScanned;
+			if (!bIsDerivedClassDefault)
+			{
+				if (InstBridge->bComponentDataStructuralOverride) continue;
+				// Modify BEFORE Ensure: Ensure's catch-up may itself replay the
+				// record just added above (the explicit adopt below then lands
+				// on AlreadyCurrent; counters undercount in that path). With
+				// the snapshot taken first, Ctrl+Z of this structural edit
+				// restores the instance's array, ledger, and cursor together
+				// with the CDO — instances cannot be stranded on an undone
+				// shape with cursors past a reused revision number.
+				InstBridge->Modify();
+				InstBridge->EnsureComponentDataOverrideMetadataInitialized();
+				if (InstBridge->bComponentDataStructuralOverride) continue;
+			}
+			else
+			{
+				// Derived class default: only the Adopted path mutates, and it
+				// requires shape == Before — pre-check so a non-adopting
+				// derived Blueprint is never Modify()-dirtied by a base edit.
+				if (!DoTypeMultisetsMatch(
+					InstBridge->ComponentData, Record.Before))
+				{
+					continue;
+				}
+				InstBridge->Modify();
+			}
+
+			TArray<FInstancedStruct> InstanceBefore = InstBridge->ComponentData;
+			switch (InstBridge->TryAdoptStructuralRecord(Record))
+			{
+			case EStructuralAdoptOutcome::Adopted:
+				if (bIsDerivedClassDefault)
+				{
+					if (!InstBridge->RecordStructuralChangeToOwnHistory(
+						InstanceBefore))
+					{
+						UE_LOG(LogSeinEntityComp, Warning,
+							TEXT("%s adopted a structural ComponentData default but could not re-record it; its unopened instances will flag divergence on load."),
+							*InstBridge->GetPathName());
+					}
+					++DerivedDefaultsAdopted;
+				}
+				else
+				{
+					++InstancesAdopted;
+				}
+				MarkAuthoringPackageDirty(*InstBridge);
+				if (AActor* OwnerActor = InstBridge->GetOwner())
+				{
+					MarkAuthoringPackageDirty(*OwnerActor);
+				}
+				break;
+			case EStructuralAdoptOutcome::Flagged:
+				// A derived class default's structural divergence IS its
+				// override — quiet, same value-delta rule as everywhere else.
+				if (!bIsDerivedClassDefault)
+				{
+					InstBridge->bComponentDataStructuralOverride = true;
+					++InstancesFlagged;
+					UE_LOG(LogSeinEntityComp, Warning,
+						TEXT("%s: ComponentData did not match the pre-edit class default and was left as a structural override — revert the Component Data property on the placed actor to re-join inheritance."),
+						*InstBridge->GetPathName());
+					MarkAuthoringPackageDirty(*InstBridge);
+				}
+				break;
+			case EStructuralAdoptOutcome::AlreadyCurrent:
+			case EStructuralAdoptOutcome::Skipped:
+				break;
+			}
+		}
+	}
+
+	// NOTE: unlike the property lane's summary (where updated INCLUDES derived
+	// class defaults), these two counters are mutually exclusive.
+	UE_LOG(LogSeinEntityComp, Log,
+		TEXT("[StructuralComponentData] CDO=%s, Class=%s: scanned=%d, adopted instances=%d, adopted derived class defaults=%d, flagged=%d."),
+		*GetName(), *GetNameSafe(OwnerActorCDO->GetClass()), InstancesScanned,
+		InstancesAdopted, DerivedDefaultsAdopted, InstancesFlagged);
+
+	if (InstancesAdopted > 0 && GEditor)
+	{
+		GEditor->RedrawAllViewports(/*bInvalidateHitProxies*/ true);
+	}
+}
+
+// =============================================================================
+// AC-authoring prototype — bake USeinDataComponent payloads into ComponentData
+// =============================================================================
+
+void USeinEntityComponent::NotifyAuthoringComponentEdited(
+	const USeinDataComponent& Component)
+{
+	const UScriptStruct* PayloadType = Component.GetPayloadStruct();
+	if (!PayloadType)
+	{
+		return; // BP component whose payload has not synced yet
+	}
+	const FString TypePath = PayloadType->GetPathName();
+
+	// Transacted: the details-panel edit that got us here Modify()'d only the
+	// authoring component; without this, Ctrl+Z restores the component but
+	// leaves the baked array (what PIE injects) at the post-edit value.
+	Modify();
+	BeginComponentDataEdit();
+
+	if (!BakedComponentDataTypes.Contains(TypePath)
+		&& FindComponentDataEntryByPath(ComponentData, TypePath))
+	{
+		UE_LOG(LogSeinEntityComp, Warning,
+			TEXT("%s: authoring component %s now manages ComponentData type %s; the existing hand-authored entry was replaced by the component's values."),
+			*GetPathName(), *Component.GetPathName(), *TypePath);
+	}
+
+	if (!Component.bInjectionEnabled)
+	{
+		ComponentData.RemoveAll([&TypePath](const FInstancedStruct& Entry)
+		{
+			return Entry.IsValid()
+				&& Entry.GetScriptStruct()->GetPathName() == TypePath;
+		});
+	}
+	else
+	{
+		FInstancedStruct Payload;
+		if (Component.WritePayload(Payload) && Payload.IsValid())
+		{
+			if (FInstancedStruct* Existing =
+				FindMutableComponentDataEntryByPath(ComponentData, TypePath))
+			{
+				*Existing = MoveTemp(Payload);
+			}
+			else
+			{
+				ComponentData.Add(MoveTemp(Payload));
+			}
+		}
+	}
+	BakedComponentDataTypes.AddUnique(TypePath);
+	BakedComponentDataTypes.Sort();
+
+	EndComponentDataEdit();
+}
+
+bool USeinEntityComponent::IsComponentDataShapeExplainedByAuthoring() const
+{
+	if (IsTemplate())
+	{
+		return false;
+	}
+	const AActor* Owner = GetOwner();
+	if (!Owner)
+	{
+		return false;
+	}
+
+	TArray<USeinDataComponent*> AuthoringComponents;
+	Owner->GetComponents<USeinDataComponent>(AuthoringComponents);
+	if (AuthoringComponents.IsEmpty() && BakedComponentDataTypes.IsEmpty())
+	{
+		return false;
+	}
+
+	// Predicted shape = unmanaged entries as they are, plus one entry per
+	// enabled authoring component. Matching the live shape means the
+	// divergence from the class default is authored intent, not staleness.
+	TArray<FString> Predicted;
+	for (const FInstancedStruct& Entry : ComponentData)
+	{
+		if (Entry.IsValid()
+			&& !BakedComponentDataTypes.Contains(
+				Entry.GetScriptStruct()->GetPathName()))
+		{
+			Predicted.Add(Entry.GetScriptStruct()->GetPathName());
+		}
+	}
+	for (const USeinDataComponent* Component : AuthoringComponents)
+	{
+		const UScriptStruct* PayloadType =
+			Component ? Component->GetPayloadStruct() : nullptr;
+		if (PayloadType && Component->bInjectionEnabled)
+		{
+			Predicted.Add(PayloadType->GetPathName());
+		}
+	}
+	Predicted.Sort();
+	return Predicted == SortedComponentTypePaths(ComponentData);
+}
+
+void USeinEntityComponent::BakeAuthoredDataComponents(bool bInteractive)
+{
+	AActor* Owner = GetOwner();
+	if (!Owner)
+	{
+		return;
+	}
+
+	TArray<const USeinDataComponent*> AuthoringComponents;
+	if (IsTemplate())
+	{
+		AActor::GetActorClassDefaultComponents<USeinDataComponent>(
+			Owner->GetClass(), AuthoringComponents);
+	}
+	else
+	{
+		TArray<USeinDataComponent*> OwnedComponents;
+		Owner->GetComponents<USeinDataComponent>(OwnedComponents);
+		AuthoringComponents.Append(OwnedComponents);
+	}
+
+	// Fully inert when nothing is authored and nothing was ever baked — the
+	// pre-migration authoring model must not pay for the prototype.
+	if (AuthoringComponents.IsEmpty() && BakedComponentDataTypes.IsEmpty())
+	{
+		return;
+	}
+
+	// Deterministic bake order (entry order in ComponentData is semantically
+	// irrelevant, but stable output keeps diffs and digests quiet).
+	AuthoringComponents.Sort(
+		[](const USeinDataComponent& Left, const USeinDataComponent& Right)
+	{
+		const UScriptStruct* LeftStruct = Left.GetPayloadStruct();
+		const UScriptStruct* RightStruct = Right.GetPayloadStruct();
+		return (LeftStruct ? LeftStruct->GetPathName() : FString())
+			< (RightStruct ? RightStruct->GetPathName() : FString());
+	});
+
+	if (bInteractive)
+	{
+		// Same undo-coherence rule as NotifyAuthoringComponentEdited.
+		Modify();
+		BeginComponentDataEdit();
+	}
+
+	auto RemoveEntryOfType = [this](const FString& TypePath)
+	{
+		ComponentData.RemoveAll([&TypePath](const FInstancedStruct& Entry)
+		{
+			return Entry.IsValid()
+				&& Entry.GetScriptStruct()->GetPathName() == TypePath;
+		});
+	};
+
+	bool bAllPayloadsResolved = true;
+	TArray<FString> NewLedger;
+	for (const USeinDataComponent* Component : AuthoringComponents)
+	{
+		const UScriptStruct* PayloadType =
+			Component ? Component->GetPayloadStruct() : nullptr;
+		if (!PayloadType)
+		{
+			// A Blueprint component whose payload struct has not synced yet
+			// (first compile pending, or its variables are transiently gone).
+			// Its previously managed entry must NOT be treated as an orphan
+			// below — deleting authored data on a transient authoring state
+			// is the failure mode, so management is deferred instead.
+			bAllPayloadsResolved = false;
+			continue;
+		}
+		const FString TypePath = PayloadType->GetPathName();
+		if (NewLedger.Contains(TypePath))
+		{
+			UE_LOG(LogSeinEntityComp, Warning,
+				TEXT("%s: multiple authoring components produce payload type %s — the last one in bake order wins; remove the duplicate."),
+				*GetPathName(), *TypePath);
+		}
+		NewLedger.AddUnique(TypePath);
+
+		if (!BakedComponentDataTypes.Contains(TypePath)
+			&& FindComponentDataEntryByPath(ComponentData, TypePath))
+		{
+			UE_LOG(LogSeinEntityComp, Warning,
+				TEXT("%s: authoring component %s now manages ComponentData type %s; the existing hand-authored entry was replaced by the component's values."),
+				*GetPathName(), *Component->GetPathName(), *TypePath);
+		}
+
+		if (!Component->bInjectionEnabled)
+		{
+			RemoveEntryOfType(TypePath);
+			continue;
+		}
+
+		FInstancedStruct Payload;
+		if (!Component->WritePayload(Payload) || !Payload.IsValid())
+		{
+			UE_LOG(LogSeinEntityComp, Warning,
+				TEXT("%s: authoring component %s failed to write its payload; its baked entry was left untouched."),
+				*GetPathName(), *Component->GetPathName());
+			continue;
+		}
+
+		if (FInstancedStruct* Existing =
+			FindMutableComponentDataEntryByPath(ComponentData, TypePath))
+		{
+			*Existing = MoveTemp(Payload);
+		}
+		else
+		{
+			ComponentData.Add(MoveTemp(Payload));
+		}
+	}
+
+	// Types the bake managed before whose authoring component is GONE leave
+	// with their component — loudly. Deferred entirely while any component's
+	// payload is unresolved: a half-synced authoring set cannot be told apart
+	// from a deleted one, and destroying authored data on that ambiguity is
+	// exactly the transient-state failure this module's gates warn about.
+	if (bAllPayloadsResolved)
+	{
+		for (const FString& PreviousType : BakedComponentDataTypes)
+		{
+			if (!NewLedger.Contains(PreviousType))
+			{
+				UE_LOG(LogSeinEntityComp, Warning,
+					TEXT("%s: authoring component for managed type %s is gone; its baked ComponentData entry was removed."),
+					*GetPathName(), *PreviousType);
+				RemoveEntryOfType(PreviousType);
+			}
+		}
+		NewLedger.Sort();
+		BakedComponentDataTypes = MoveTemp(NewLedger);
+	}
+	else
+	{
+		for (const FString& PreviousType : BakedComponentDataTypes)
+		{
+			NewLedger.AddUnique(PreviousType);
+		}
+		NewLedger.Sort();
+		BakedComponentDataTypes = MoveTemp(NewLedger);
+	}
+
+	if (bInteractive)
+	{
+		EndComponentDataEdit();
+	}
+}
+
+void USeinEntityComponent::PreSave(FObjectPreSaveContext SaveContext)
+{
+	Super::PreSave(SaveContext);
+	// Cook loads already-saved packages whose arrays were baked at editor
+	// save time; mutating during cook saves only trips the cooker's
+	// modified-during-PreSave determinism diagnostics.
+	if (SaveContext.IsCooking())
+	{
+		return;
+	}
+	// Silent refresh: interactive edits already flowed through the bracketed
+	// pipeline; this guarantees saved packages carry the authoring
+	// components' current values even when an edit path was missed.
+	BakeAuthoredDataComponents(/*bInteractive=*/false);
 }
 #endif
 
