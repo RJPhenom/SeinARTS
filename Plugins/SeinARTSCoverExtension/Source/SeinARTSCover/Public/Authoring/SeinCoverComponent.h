@@ -8,20 +8,20 @@
  *           the Cover extension with its payload struct — enabling the
  *           extension adds the component to the Add menu, disabling it removes
  *           it, and the base framework never references it. See
- *           Authoring/SeinDataComponent.h for the naming contract and the
+ *           Authoring/SeinEntityComponent.h for the naming contract and the
  *           data-only rules.
  */
 
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Authoring/SeinDataComponent.h"
+#include "Authoring/SeinEntityComponent.h"
 #include "Components/SeinCoverPayload.h"
 #include "SeinCoverComponent.generated.h"
 
 /** Cover-provider configuration (slots, quality, geometry binding). */
 UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComponent))
-class SEINARTSCOVER_API USeinCoverComponent : public USeinDataComponent
+class SEINARTSCOVER_API USeinCoverComponent : public USeinEntityComponent
 {
 	GENERATED_BODY()
 public:

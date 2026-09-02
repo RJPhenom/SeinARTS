@@ -35,7 +35,7 @@ public:
 	virtual uint32 GetMenuCategories() const override;
 	/** Retired from the New-asset menu (2026-09-01): raw UDS components were
 	 *  authored into the bridge's ComponentData picker, which is now hidden —
-	 *  designer components are Blueprint subclasses of USeinDataComponent
+	 *  designer components are Blueprint subclasses of USeinEntityComponent
 	 *  (see USeinDataComponentBlueprintFactory). The factory class remains
 	 *  for its Mark/eligibility helpers, used by the payload sync and the
 	 *  movement tuning export. */

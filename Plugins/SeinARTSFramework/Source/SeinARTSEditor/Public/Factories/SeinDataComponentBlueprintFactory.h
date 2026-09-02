@@ -2,7 +2,7 @@
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinDataComponentBlueprintFactory.h
  * @brief   AC-authoring prototype: Content Browser factory for designer data
- *          components — a Blueprint subclass of USeinDataComponent whose
+ *          components — a Blueprint subclass of USeinEntityComponent whose
  *          variables become the injected payload (auto-synced to a paired
  *          UserDefinedStruct on compile; see SeinDataComponentSync). The
  *          class is data-only by contract: the compile gate errors on any

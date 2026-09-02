@@ -19,14 +19,14 @@
  *               injects every authored sim-data struct into deterministic
  *               component storage at spawn.
  *
- *           Note on filename history: kept as `SeinActorBridge.h/.cpp` for
- *           several months under the "Bridge" name to distinguish it from
- *           FSeinPayload (the sim USTRUCT base class). The component grew
- *           to encompass authoring as part of the Phase-1 unified-component
- *           refactor; the rename to `SeinEntityComponent` reflects that
- *           expanded role. Class display name in the editor is "Entity
- *           Component"; subobject name on ASeinActor is preserved as
- *           "ActorBridge" to keep existing BP saves stable.
+ *           Naming history: SeinActorBridge (Feb 2026) → SeinEntityComponent
+ *           (May 2026, when it absorbed the authoring array) →
+ *           SeinEntityBridgeComponent (Sep 2026 AC-authoring migration, which
+ *           moved authoring OUT to USeinEntityComponent — the data-only
+ *           ActorComponent base that now owns the freed name — and demoted
+ *           ComponentData to the baked runtime carrier). Display name stays
+ *           "SeinARTS Entity Bridge"; the subobject name on ASeinActor stays
+ *           `EntityBridge` to keep existing BP and level saves stable.
  *
  *           Editor-preview history: an in-editor squad-slot preview that
  *           cloned member meshes onto the squad actor was attempted and
@@ -56,7 +56,7 @@
 #include "SeinEntityBridgeComponent.generated.h"
 
 class FObjectPreSaveContext;
-class USeinDataComponent;
+class USeinEntityComponent;
 class USeinWorldSubsystem;
 struct FSeinVisualEvent;
 
@@ -283,7 +283,7 @@ public:
 	 *  (order irrelevant; storage is keyed by `UScriptStruct*`).
 	 *
 	 *  HIDDEN BY DESIGN (2026-09-01): the single authoring surface is the
-	 *  data-only Sein components (`USeinDataComponent` subclasses) on the
+	 *  data-only Sein components (`USeinEntityComponent` subclasses) on the
 	 *  actor; `BakeAuthoredDataComponents` writes this array from them on
 	 *  compile, edit, and save, and cooked builds (where the authoring
 	 *  components are stripped) inject from it. Designers never touch it —
@@ -406,7 +406,7 @@ public:
 	void EndComponentDataEdit();
 
 	// =========================================================================
-	// AC-authoring prototype: bake USeinDataComponent payloads into
+	// AC-authoring prototype: bake USeinEntityComponent payloads into
 	// ComponentData (the array stays the injected runtime carrier).
 	// =========================================================================
 
@@ -417,7 +417,7 @@ public:
 	 *  on class defaults). Single-component on purpose: a full re-bake here
 	 *  can pin OTHER components' mid-transition values as instance overrides
 	 *  the designer never authored. */
-	void NotifyAuthoringComponentEdited(USeinDataComponent& Component);
+	void NotifyAuthoringComponentEdited(USeinEntityComponent& Component);
 
 	/** True when this instance's entry-type shape differs from its class
 	 *  default only in ways its own authoring components explain (e.g. a
@@ -425,7 +425,7 @@ public:
 	 *  stale-override nag for explained shapes — the divergence is intent. */
 	bool IsComponentDataShapeExplainedByAuthoring() const;
 
-	/** Bake every enabled USeinDataComponent on the owner into ComponentData.
+	/** Bake every enabled USeinEntityComponent on the owner into ComponentData.
 	 *  Entries are managed per payload type: upserted while a component for
 	 *  the type is present and enabled, removed when it is disabled or the
 	 *  component is gone (tracked via the baked-types ledger). bInteractive

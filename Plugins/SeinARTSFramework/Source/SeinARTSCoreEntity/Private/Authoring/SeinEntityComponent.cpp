@@ -1,13 +1,13 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  *
- * @file:    SeinDataComponent.cpp
+ * @file:    SeinEntityComponent.cpp
  * @brief:   Implementation of the data-only authoring component base and the
  *           native Extents concrete. See the header for the two-layer
  *           authoring/runtime contract.
  */
 
-#include "Authoring/SeinDataComponent.h"
+#include "Authoring/SeinEntityComponent.h"
 
 #include "Actor/SeinEntityBridgeComponent.h"
 #include "GameFramework/Actor.h"
@@ -17,7 +17,7 @@
 #include "SeinARTSCoreEntityLog.h"
 DEFINE_LOG_CATEGORY_STATIC(LogSeinDataComponent, Log, All);
 
-USeinDataComponent::USeinDataComponent()
+USeinEntityComponent::USeinEntityComponent()
 {
 	// Data-only: never ticks, never registers render/physics state, and is
 	// excluded from cooked builds outright (the bridge's baked ComponentData
@@ -27,12 +27,12 @@ USeinDataComponent::USeinDataComponent()
 	bAutoActivate = false;
 }
 
-const UScriptStruct* USeinDataComponent::GetPayloadStruct() const
+const UScriptStruct* USeinEntityComponent::GetPayloadStruct() const
 {
 	return PayloadStruct;
 }
 
-bool USeinDataComponent::WritePayload(FInstancedStruct& Out) const
+bool USeinEntityComponent::WritePayload(FInstancedStruct& Out) const
 {
 	const UScriptStruct* Struct = GetPayloadStruct();
 	if (!Struct)
@@ -66,7 +66,7 @@ bool USeinDataComponent::WritePayload(FInstancedStruct& Out) const
 }
 
 #if WITH_EDITOR
-void USeinDataComponent::SeedFromPayload(const FInstancedStruct& Entry)
+void USeinEntityComponent::SeedFromPayload(const FInstancedStruct& Entry)
 {
 	const UScriptStruct* PayloadType = GetPayloadStruct();
 	if (!Entry.IsValid() || !PayloadType
@@ -74,8 +74,8 @@ void USeinDataComponent::SeedFromPayload(const FInstancedStruct& Entry)
 	{
 		return;
 	}
-	const USeinDataComponent* Archetype =
-		Cast<USeinDataComponent>(GetArchetype());
+	const USeinEntityComponent* Archetype =
+		Cast<USeinEntityComponent>(GetArchetype());
 
 	Modify();
 
@@ -128,7 +128,7 @@ void USeinDataComponent::SeedFromPayload(const FInstancedStruct& Entry)
 	}
 }
 
-void USeinDataComponent::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
+void USeinEntityComponent::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
 	Super::PostEditChangeProperty(PropertyChangedEvent);
 

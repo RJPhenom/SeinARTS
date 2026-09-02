@@ -13,7 +13,7 @@
 #include "Actor/SeinEntityBridgeComponent.h"
 
 #include "Actor/SeinActor.h"
-#include "Authoring/SeinDataComponent.h"
+#include "Authoring/SeinEntityComponent.h"
 #include "UObject/ObjectSaveContext.h"
 #include "Components/SeinFogVisibilityPayload.h"   // auto-injected from bridge top-level fields
 #include "Components/SeinIdentityPayload.h"        // ComponentData entry edit-watching
@@ -1732,11 +1732,11 @@ void USeinEntityBridgeComponent::HandleStructuralClassDefaultEdit()
 }
 
 // =============================================================================
-// AC-authoring prototype — bake USeinDataComponent payloads into ComponentData
+// AC-authoring prototype — bake USeinEntityComponent payloads into ComponentData
 // =============================================================================
 
 void USeinEntityBridgeComponent::NotifyAuthoringComponentEdited(
-	USeinDataComponent& Component)
+	USeinEntityComponent& Component)
 {
 	const UScriptStruct* PayloadType = Component.GetPayloadStruct();
 	if (!PayloadType)
@@ -1808,8 +1808,8 @@ bool USeinEntityBridgeComponent::IsComponentDataShapeExplainedByAuthoring() cons
 		return false;
 	}
 
-	TArray<USeinDataComponent*> AuthoringComponents;
-	Owner->GetComponents<USeinDataComponent>(AuthoringComponents);
+	TArray<USeinEntityComponent*> AuthoringComponents;
+	Owner->GetComponents<USeinEntityComponent>(AuthoringComponents);
 	if (AuthoringComponents.IsEmpty() && BakedComponentDataTypes.IsEmpty())
 	{
 		return false;
@@ -1828,7 +1828,7 @@ bool USeinEntityBridgeComponent::IsComponentDataShapeExplainedByAuthoring() cons
 			Predicted.Add(Entry.GetScriptStruct()->GetPathName());
 		}
 	}
-	for (const USeinDataComponent* Component : AuthoringComponents)
+	for (const USeinEntityComponent* Component : AuthoringComponents)
 	{
 		const UScriptStruct* PayloadType =
 			Component ? Component->GetPayloadStruct() : nullptr;
@@ -1849,22 +1849,22 @@ void USeinEntityBridgeComponent::BakeAuthoredDataComponents(bool bInteractive)
 		return;
 	}
 
-	TArray<USeinDataComponent*> AuthoringComponents;
+	TArray<USeinEntityComponent*> AuthoringComponents;
 	if (IsTemplate())
 	{
-		TArray<const USeinDataComponent*> ClassDefaults;
-		AActor::GetActorClassDefaultComponents<USeinDataComponent>(
+		TArray<const USeinEntityComponent*> ClassDefaults;
+		AActor::GetActorClassDefaultComponents<USeinEntityComponent>(
 			Owner->GetClass(), ClassDefaults);
-		for (const USeinDataComponent* Component : ClassDefaults)
+		for (const USeinEntityComponent* Component : ClassDefaults)
 		{
 			// Templates are mutated here only by first-capture seeding, an
 			// editor-authoring write the engine sanctions on templates.
-			AuthoringComponents.Add(const_cast<USeinDataComponent*>(Component));
+			AuthoringComponents.Add(const_cast<USeinEntityComponent*>(Component));
 		}
 	}
 	else
 	{
-		Owner->GetComponents<USeinDataComponent>(AuthoringComponents);
+		Owner->GetComponents<USeinEntityComponent>(AuthoringComponents);
 	}
 
 	// Fully inert when nothing is authored and nothing was ever baked — the
@@ -1877,7 +1877,7 @@ void USeinEntityBridgeComponent::BakeAuthoredDataComponents(bool bInteractive)
 	// Deterministic bake order (entry order in ComponentData is semantically
 	// irrelevant, but stable output keeps diffs and digests quiet).
 	AuthoringComponents.Sort(
-		[](const USeinDataComponent& Left, const USeinDataComponent& Right)
+		[](const USeinEntityComponent& Left, const USeinEntityComponent& Right)
 	{
 		const UScriptStruct* LeftStruct = Left.GetPayloadStruct();
 		const UScriptStruct* RightStruct = Right.GetPayloadStruct();
@@ -1903,7 +1903,7 @@ void USeinEntityBridgeComponent::BakeAuthoredDataComponents(bool bInteractive)
 
 	bool bAllPayloadsResolved = true;
 	TArray<FString> NewLedger;
-	for (USeinDataComponent* Component : AuthoringComponents)
+	for (USeinEntityComponent* Component : AuthoringComponents)
 	{
 		const UScriptStruct* PayloadType =
 			Component ? Component->GetPayloadStruct() : nullptr;

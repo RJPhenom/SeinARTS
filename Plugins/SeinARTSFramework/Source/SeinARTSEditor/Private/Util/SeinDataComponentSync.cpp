@@ -7,7 +7,7 @@
 #include "Util/SeinDeterminismRules.h"
 #include "Factories/SeinSimComponentFactory.h"
 
-#include "Authoring/SeinDataComponent.h"
+#include "Authoring/SeinEntityComponent.h"
 #include "Authoring/SeinPayloadStruct.h"
 #include "EdGraphSchema_K2.h"
 #include "Engine/Blueprint.h"
@@ -79,7 +79,7 @@ namespace
 	{
 		if (UClass* GenClass = Blueprint->GeneratedClass)
 		{
-			if (const USeinDataComponent* CDO = Cast<USeinDataComponent>(
+			if (const USeinEntityComponent* CDO = Cast<USeinEntityComponent>(
 				GenClass->GetDefaultObject(/*bCreateIfNeeded*/ false)))
 			{
 				if (CDO->PayloadStruct
@@ -274,7 +274,7 @@ namespace
 	{
 		UClass* GenClass = Blueprint->GeneratedClass;
 		if (!GenClass) return;
-		USeinDataComponent* CDO = Cast<USeinDataComponent>(
+		USeinEntityComponent* CDO = Cast<USeinEntityComponent>(
 			GenClass->GetDefaultObject(/*bCreateIfNeeded*/ false));
 		if (!CDO) return;
 
@@ -286,9 +286,9 @@ namespace
 			FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
 		}
 
-		for (TObjectIterator<USeinDataComponent> It; It; ++It)
+		for (TObjectIterator<USeinEntityComponent> It; It; ++It)
 		{
-			USeinDataComponent* Object = *It;
+			USeinEntityComponent* Object = *It;
 			if (!Object || Object == CDO || !Object->IsA(GenClass))
 			{
 				continue;
@@ -318,7 +318,7 @@ namespace
 bool IsDataComponentBlueprint(const UBlueprint* Blueprint)
 {
 	return Blueprint && Blueprint->GeneratedClass
-		&& Blueprint->GeneratedClass->IsChildOf(USeinDataComponent::StaticClass());
+		&& Blueprint->GeneratedClass->IsChildOf(USeinEntityComponent::StaticClass());
 }
 
 UUserDefinedStruct* SyncPayloadStructForBlueprint(UBlueprint* Blueprint)
