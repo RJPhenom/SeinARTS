@@ -17,7 +17,7 @@
 #include "Simulation/SeinSnapshotRestoreAuthority.h"
 #include "Simulation/SeinComponentLiveTuning.h"
 #include "Simulation/SeinWorldSubsystem.h"
-#include "Actor/SeinEntityComponent.h"
+#include "Actor/SeinEntityBridgeComponent.h"
 #include "Input/SeinCommandSchemaRegistry.h"
 #include "Serialization/SeinDeterministicValueDigest.h"
 #include "Tags/SeinARTSGameplayTags.h"
@@ -5296,7 +5296,7 @@ void USeinNetSubsystem::StartLockstepSession()
 
 #if WITH_EDITOR
 void USeinNetSubsystem::OnComponentLiveTuningEditorRequest(
-	const USeinEntityComponent& Source,
+	const USeinEntityBridgeComponent& Source,
 	const FSeinComponentLiveTuningRequest& Payload)
 {
 	UWorld* World = GetWorld();

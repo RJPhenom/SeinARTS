@@ -7,7 +7,7 @@
 
 #include "Components/SeinCoverComponent.h"
 #include "Components/SeinExtentsComponent.h"   // FSeinExtentsShape resolution for Edge mode
-#include "Actor/SeinEntityComponent.h"         // walk owning bridge's ComponentData
+#include "Actor/SeinEntityBridgeComponent.h"         // walk owning bridge's ComponentData
 
 #include "DetailLayoutBuilder.h"           // IDetailLayoutBuilder::GetDetailFont
 #include "DetailWidgetRow.h"
@@ -123,7 +123,7 @@ namespace
 	 *  Walks Shapes in order and returns the first Box — designers who want
 	 *  a specific shape's body for cover should put that Box first (or
 	 *  use a separate Extents entry per body). */
-	static const FSeinExtentsShape* ResolveFirstBoxShape(const USeinEntityComponent* Bridge)
+	static const FSeinExtentsShape* ResolveFirstBoxShape(const USeinEntityBridgeComponent* Bridge)
 	{
 		if (!Bridge) return nullptr;
 		for (const FInstancedStruct& Entry : Bridge->ComponentData)
@@ -221,7 +221,7 @@ FReply FSeinCoverComponentDetails::OnGenerateButtonClicked()
 	TSet<UBlueprint*> ModifiedBlueprints;
 	for (UObject* Outer : OuterObjects)
 	{
-		const USeinEntityComponent* Bridge = Cast<USeinEntityComponent>(Outer);
+		const USeinEntityBridgeComponent* Bridge = Cast<USeinEntityBridgeComponent>(Outer);
 		BodyShapesByOuter.Add(ResolveFirstBoxShape(Bridge));
 
 		if (UClass* OwnerClass = Outer ? Outer->GetTypedOuter<UClass>() : nullptr)

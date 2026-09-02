@@ -19,7 +19,7 @@
 #include "Components/SeinProductionComponent.h"
 #include "Components/SeinIdentityComponent.h"
 #include "Components/SeinAbilityComponent.h"
-#include "Actor/SeinEntityComponent.h"
+#include "Actor/SeinEntityBridgeComponent.h"
 #include "Brokers/SeinBrokerTypes.h"
 #include "Effects/SeinEffect.h"
 #include "Events/SeinVisualEvent.h"
@@ -46,9 +46,9 @@ namespace SeinProductionLocal
 	static FGameplayTag GetIdentityTagFromClass(TSubclassOf<class ASeinActor> ActorClass)
 	{
 		if (!ActorClass) return FGameplayTag();
-		TArray<const USeinEntityComponent*> Bridges;
-		AActor::GetActorClassDefaultComponents<USeinEntityComponent>(ActorClass, Bridges);
-		for (const USeinEntityComponent* Bridge : Bridges)
+		TArray<const USeinEntityBridgeComponent*> Bridges;
+		AActor::GetActorClassDefaultComponents<USeinEntityBridgeComponent>(ActorClass, Bridges);
+		for (const USeinEntityBridgeComponent* Bridge : Bridges)
 		{
 			if (!Bridge) continue;
 			if (const FSeinIdentityComponent* Identity = Bridge->FindAuthoredData<FSeinIdentityComponent>())

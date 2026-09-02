@@ -5,7 +5,7 @@
 
 #include "Components/ActorComponents/SeinConstructionRenderComponent.h"
 
-#include "Actor/SeinEntityComponent.h"
+#include "Actor/SeinEntityBridgeComponent.h"
 #include "Events/SeinVisualEvent.h"
 
 #include "Components/StaticMeshComponent.h"
@@ -37,11 +37,11 @@ void USeinConstructionRenderComponent::BeginPlay()
 	AActor* Owner = GetOwner();
 	if (!Owner) return;
 
-	USeinEntityComponent* Bridge = Owner->FindComponentByClass<USeinEntityComponent>();
+	USeinEntityBridgeComponent* Bridge = Owner->FindComponentByClass<USeinEntityBridgeComponent>();
 	if (!Bridge)
 	{
 		UE_LOG(LogSeinConstructionRender, Warning,
-			TEXT("[%s] BeginPlay: no USeinEntityComponent on the owning actor — "
+			TEXT("[%s] BeginPlay: no USeinEntityBridgeComponent on the owning actor — "
 				 "visual events won't reach this component. Add the Entity Bridge."),
 			*GetNameSafe(Owner));
 		return;
@@ -56,7 +56,7 @@ void USeinConstructionRenderComponent::EndPlay(const EEndPlayReason::Type EndPla
 	// Clean unsubscribe — the delegate uses weak owner refs but explicit
 	// removal keeps the multicast list tight if the bridge outlives us
 	// (it shouldn't on actor teardown, but be defensive).
-	if (USeinEntityComponent* Bridge = CachedBridge.Get())
+	if (USeinEntityBridgeComponent* Bridge = CachedBridge.Get())
 	{
 		Bridge->OnVisualEvent.RemoveDynamic(this, &USeinConstructionRenderComponent::HandleVisualEvent);
 	}

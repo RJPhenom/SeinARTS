@@ -15,7 +15,7 @@
 #include "CQTest.h"
 #include "Components/ActorTestSpawner.h"
 
-#include "Actor/SeinEntityComponent.h"
+#include "Actor/SeinEntityBridgeComponent.h"
 #include "Components/SeinAbilityComponent.h"
 #include "Components/SeinConstructionComponent.h"
 #include "Core/SeinPlayerState.h"
@@ -75,11 +75,11 @@ namespace UE::SeinARTSTests
 		{
 			explicit FScopedConstructionActor(bool bAuthorPersistentTag)
 			{
-				TArray<const USeinEntityComponent*> Bridges;
-				AActor::GetActorClassDefaultComponents<USeinEntityComponent>(
+				TArray<const USeinEntityBridgeComponent*> Bridges;
+				AActor::GetActorClassDefaultComponents<USeinEntityBridgeComponent>(
 					ASeinEconomyConstructionTestActor::StaticClass(), Bridges);
 				check(!Bridges.IsEmpty());
-				Bridge = const_cast<USeinEntityComponent*>(Bridges[0]);
+				Bridge = const_cast<USeinEntityBridgeComponent*>(Bridges[0]);
 				PreviousComponentData = Bridge->ComponentData;
 				PreviousBaseTags = Bridge->BaseTags;
 
@@ -102,7 +102,7 @@ namespace UE::SeinARTSTests
 				Bridge->BaseTags = MoveTemp(PreviousBaseTags);
 			}
 
-			USeinEntityComponent* Bridge = nullptr;
+			USeinEntityBridgeComponent* Bridge = nullptr;
 			TArray<FInstancedStruct> PreviousComponentData;
 			FGameplayTagContainer PreviousBaseTags;
 		};
@@ -394,8 +394,8 @@ namespace UE::SeinARTSTests
 		PlacedActor.PlacedSimRotation = FFixedQuaternion::Identity;
 		PlacedActor.bSimLocationBaked = true;
 		PlacedActor.bSimRotationBaked = true;
-		USeinEntityComponent* LiveBridge =
-			PlacedActor.FindComponentByClass<USeinEntityComponent>();
+		USeinEntityBridgeComponent* LiveBridge =
+			PlacedActor.FindComponentByClass<USeinEntityBridgeComponent>();
 		ASSERT_THAT(IsNotNull(LiveBridge));
 		LiveBridge->ComponentData.Reset();
 		FSeinConstructionComponent PlacedConstruction;

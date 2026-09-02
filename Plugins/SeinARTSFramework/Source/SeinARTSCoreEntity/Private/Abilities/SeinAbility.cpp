@@ -23,7 +23,7 @@
 #include "Components/SeinAbilityComponent.h"
 #include "Components/SeinIdentityComponent.h"
 #include "Components/SeinProducibleComponent.h"
-#include "Actor/SeinEntityComponent.h"
+#include "Actor/SeinEntityBridgeComponent.h"
 #include "Events/SeinVisualEvent.h"
 #include "Effects/SeinEffect.h"
 #include "Actor/SeinActor.h"
@@ -149,13 +149,13 @@ void USeinAbility::EnqueueProduction(TSubclassOf<ASeinActor> ProducibleClass)
 	// FSeinProducibleComponent (BuildTime / RefundPolicy / research metadata)
 	// and FSeinIdentityComponent (IdentityTag for the production visual
 	// event). Both are FInstancedStruct entries in
-	// `USeinEntityComponent::ComponentData` on the BP CDO.
+	// `USeinEntityBridgeComponent::ComponentData` on the BP CDO.
 	const FSeinProducibleComponent* Producible = nullptr;
 	const FSeinIdentityComponent* Identity = nullptr;
 	{
-		TArray<const USeinEntityComponent*> Bridges;
-		AActor::GetActorClassDefaultComponents<USeinEntityComponent>(ProducibleClass, Bridges);
-		for (const USeinEntityComponent* Bridge : Bridges)
+		TArray<const USeinEntityBridgeComponent*> Bridges;
+		AActor::GetActorClassDefaultComponents<USeinEntityBridgeComponent>(ProducibleClass, Bridges);
+		for (const USeinEntityBridgeComponent* Bridge : Bridges)
 		{
 			if (!Bridge) continue;
 			if (!Producible) Producible = Bridge->FindAuthoredData<FSeinProducibleComponent>();

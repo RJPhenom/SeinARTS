@@ -100,22 +100,21 @@ namespace
 // FEngineShowFlags::RegisterCustomShowFlag on static init (module-load time,
 // which is game-thread for Runtime modules). The show-flag menu queries
 // registered custom flags when opened; this is all that's needed for "Fog Of
-// War" to appear under the Developer group with the registered icon.
+// War" to appear under the Custom group with the registered icon.
 //
 // Named namespace so the debug viz component (added in the next pass) can
 // query the same flag via FEngineShowFlags::FindIndexByName(TEXT("FogOfWar"))
 // without needing a link-time reference to this translation unit.
 namespace UE::SeinARTSFogOfWar
 {
-	// SFG_Normal puts the entry in the top-level "Common Show Flags" section
-	// alongside Navigation, Collision, etc. — matches nav's UX and where
-	// RTS devs will look. SFG_Developer buries it two submenus deep under
-	// All Show Flags → Developer, which is where ZoneGraph-style plugins
-	// put theirs but isn't the right fit for a framework feature.
+	// SFG_Custom keeps the runtime flag in the level/PIE viewport's Show menu
+	// while respecting the SCS Blueprint viewport's built-in custom-group
+	// filter. Blueprint authoring visualization is separately always-on while
+	// the entity bridge is selected and must not expose runtime toggles.
 	static TCustomShowFlag<> ShowFogOfWar(
 		TEXT("FogOfWar"),
 		/*DefaultEnabled*/ false,
-		SFG_Normal,
+		SFG_Custom,
 		NSLOCTEXT("SeinARTSFogOfWar", "ShowFogOfWar", "Fog Of War"));
 }
 

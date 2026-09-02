@@ -19,7 +19,7 @@
 #include "GameplayTagContainer.h"
 #include "SeinActor.generated.h"
 
-class USeinEntityComponent;
+class USeinEntityBridgeComponent;
 
 /**
  * Base actor class for entities backed by the deterministic simulation.
@@ -88,7 +88,7 @@ public:
 
 	/** Direct native access to this actor's single sim/render bridge component.
 	 *  Avoids repeated component discovery in framework presentation systems. */
-	USeinEntityComponent* GetEntityBridge() const { return EntityBridge.Get(); }
+	USeinEntityBridgeComponent* GetEntityBridge() const { return EntityBridge.Get(); }
 
 	/** Owner slot for level-placed instances (1-based; 0 = neutral). Read by
 	 *  `USeinActorBridgeSubsystem::OnWorldBeginPlay` and stamped onto the
@@ -143,11 +143,11 @@ protected:
 	/** The single actor component linking this actor to its sim entity AND
 	 *  carrying the authored sim-data array. Replaces the prior
 	 *  legacy ActorBridge / ArchetypeDefinition / TagsComponent split. Class is
-	 *  `USeinEntityComponent`, displayed as "SeinARTS Entity Bridge" in the
+	 *  `USeinEntityBridgeComponent`, displayed as "SeinARTS Entity Bridge" in the
 	 *  components panel. Variable + subobject names: `EntityBridge`. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "SeinARTS",
 		meta = (DisplayName = "SeinARTS Entity Bridge"))
-	TObjectPtr<USeinEntityComponent> EntityBridge;
+	TObjectPtr<USeinEntityBridgeComponent> EntityBridge;
 
 public:
 	// -- Lifecycle events --
@@ -161,7 +161,7 @@ public:
 	void ReceiveEntityDestroyed();
 
 	// -- Visual events from simulation --
-	// These are fired by USeinEntityComponent::HandleVisualEvent and are
+	// These are fired by USeinEntityBridgeComponent::HandleVisualEvent and are
 	// BlueprintImplementableEvent so designers can react in BP subclasses.
 
 	/** Called when this entity takes damage (DESIGN §11 DamageApplied event). */

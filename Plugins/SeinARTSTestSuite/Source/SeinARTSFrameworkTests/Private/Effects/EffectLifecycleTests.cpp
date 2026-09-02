@@ -1,7 +1,7 @@
 #include "CQTest.h"
 #include "Components/ActorTestSpawner.h"
 
-#include "Actor/SeinEntityComponent.h"
+#include "Actor/SeinEntityBridgeComponent.h"
 #include "Components/SeinAbilityComponent.h"
 #include "Components/SeinActiveEffectsComponent.h"
 #include "Containers/Ticker.h"
@@ -301,17 +301,17 @@ namespace
 
 	struct FScopedReplayActorConfig
 	{
-		USeinEntityComponent* Bridge = nullptr;
+		USeinEntityBridgeComponent* Bridge = nullptr;
 		TArray<FInstancedStruct> PreviousComponentData;
 		FGameplayTagContainer PreviousBaseTags;
 
 		explicit FScopedReplayActorConfig(FGameplayTag ClassTag)
 		{
-			TArray<const USeinEntityComponent*> Bridges;
-			AActor::GetActorClassDefaultComponents<USeinEntityComponent>(
+			TArray<const USeinEntityBridgeComponent*> Bridges;
+			AActor::GetActorClassDefaultComponents<USeinEntityBridgeComponent>(
 				ASeinEffectReplayTestActor::StaticClass(), Bridges);
 			check(!Bridges.IsEmpty());
-			Bridge = const_cast<USeinEntityComponent*>(Bridges[0]);
+			Bridge = const_cast<USeinEntityBridgeComponent*>(Bridges[0]);
 			PreviousComponentData = Bridge->ComponentData;
 			PreviousBaseTags = Bridge->BaseTags;
 			Bridge->ComponentData.Add(FInstancedStruct::Make(FSeinAbilityComponent()));

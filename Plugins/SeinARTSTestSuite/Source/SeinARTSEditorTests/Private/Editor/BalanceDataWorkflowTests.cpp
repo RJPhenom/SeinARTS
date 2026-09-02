@@ -1,7 +1,7 @@
 #include "CQTest.h"
 
 #include "Abilities/SeinAbilityBlueprint.h"
-#include "Actor/SeinEntityComponent.h"
+#include "Actor/SeinEntityBridgeComponent.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Balance/SeinBalanceProfile.h"
 #include "Components/SeinComponentEligibility.h"
@@ -111,7 +111,7 @@ namespace UE::SeinARTSTests::BalanceData
 	FSeinBalanceEditorTestComponent* FindMutableTestComponent(UClass& Class)
 	{
 		ASeinActor* CDO = Cast<ASeinActor>(Class.GetDefaultObject());
-		USeinEntityComponent* Bridge = CDO ? CDO->GetEntityBridge() : nullptr;
+		USeinEntityBridgeComponent* Bridge = CDO ? CDO->GetEntityBridge() : nullptr;
 		if (!Bridge)
 		{
 			return nullptr;
@@ -154,7 +154,7 @@ namespace UE::SeinARTSTests::BalanceData
 
 		ASeinActor* CDO = Cast<ASeinActor>(
 			Blueprint->GeneratedClass->GetDefaultObject());
-		USeinEntityComponent* Bridge = CDO ? CDO->GetEntityBridge() : nullptr;
+		USeinEntityBridgeComponent* Bridge = CDO ? CDO->GetEntityBridge() : nullptr;
 		if (!Bridge)
 		{
 			return nullptr;
@@ -619,7 +619,7 @@ namespace UE::SeinARTSTests::BalanceData
 		ASSERT_THAT(IsNotNull(Blueprint));
 		ASeinActor* CDO = Cast<ASeinActor>(
 			Blueprint->GeneratedClass->GetDefaultObject());
-		USeinEntityComponent* Bridge = CDO ? CDO->GetEntityBridge() : nullptr;
+		USeinEntityBridgeComponent* Bridge = CDO ? CDO->GetEntityBridge() : nullptr;
 		ASSERT_THAT(IsNotNull(Bridge));
 
 		FInstancedStruct DesignerComponent;

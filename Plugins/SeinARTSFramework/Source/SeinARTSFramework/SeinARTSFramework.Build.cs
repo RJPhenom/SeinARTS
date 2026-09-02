@@ -45,7 +45,6 @@ public class SeinARTSFramework : ModuleRules
 				"Slate",
 				"SlateCore",
 				"InputCore",
-				"EnhancedInput",
 				"UMG",
 				"SeinARTSNet",
 				"SeinARTSLevelData",

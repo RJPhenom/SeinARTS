@@ -10,7 +10,7 @@
  *
  *          Purpose: let editor struct pickers filter to "sim components only"
  *          instead of showing every USTRUCT in the engine. The `ComponentData`
- *          array on the entity bridge (`USeinEntityComponent`) uses this via BaseStruct metadata.
+ *          array on the entity bridge (`USeinEntityBridgeComponent`) uses this via BaseStruct metadata.
  */
 
 #pragma once

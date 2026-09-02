@@ -1,7 +1,7 @@
 #include "CQTest.h"
 #include "Components/ActorTestSpawner.h"
 
-#include "Actor/SeinEntityComponent.h"
+#include "Actor/SeinEntityBridgeComponent.h"
 #include "Brokers/SeinDefaultCommandBrokerResolver.h"
 #include "Components/SeinAbilityComponent.h"
 #include "Components/SeinActiveEffectsComponent.h"
@@ -78,11 +78,11 @@ namespace
 			bool bIsResearch = false,
 			bool bIncludeProductionComponent = false)
 		{
-			TArray<const USeinEntityComponent*> Bridges;
-			AActor::GetActorClassDefaultComponents<USeinEntityComponent>(
+			TArray<const USeinEntityBridgeComponent*> Bridges;
+			AActor::GetActorClassDefaultComponents<USeinEntityBridgeComponent>(
 				ASeinProductionCostTestActor::StaticClass(), Bridges);
 			check(!Bridges.IsEmpty());
-			Bridge = const_cast<USeinEntityComponent*>(Bridges[0]);
+			Bridge = const_cast<USeinEntityBridgeComponent*>(Bridges[0]);
 			PreviousComponentData = Bridge->ComponentData;
 
 			Bridge->ComponentData.Reset();
@@ -102,7 +102,7 @@ namespace
 			Bridge->ComponentData = MoveTemp(PreviousComponentData);
 		}
 
-		USeinEntityComponent* Bridge = nullptr;
+		USeinEntityBridgeComponent* Bridge = nullptr;
 		TArray<FInstancedStruct> PreviousComponentData;
 	};
 

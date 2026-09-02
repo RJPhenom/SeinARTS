@@ -9,7 +9,7 @@
 #include "Camera/CameraComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "Actor/SeinActor.h"
-#include "Actor/SeinEntityComponent.h"
+#include "Actor/SeinEntityBridgeComponent.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Data/SeinCameraSnapshotData.h"
 #include "Engine/World.h"
@@ -125,11 +125,49 @@ void ASeinCameraPawn::HandleRotateInput(float YawDelta)
 	}
 }
 
+void ASeinCameraPawn::HandleTiltInput(float TiltDelta)
+{
+	if (FMath::IsNearlyZero(TiltDelta) || !SpringArm)
+	{
+		return;
+	}
+
+	if (FollowTarget.IsValid())
+	{
+		StopFollowing();
+	}
+
+	// Same clamp + arm update as the orbit input's Y axis, at a frame-rate-independent
+	// keyboard rate instead of a per-pixel mouse sensitivity.
+	CurrentPitch = FMath::Clamp(
+		CurrentPitch + TiltDelta * TiltSpeed * GetWorld()->GetDeltaSeconds(),
+		PitchMin,
+		PitchMax);
+
+	FRotator ArmRotation = SpringArm->GetRelativeRotation();
+	ArmRotation.Pitch = CurrentPitch;
+	SpringArm->SetRelativeRotation(ArmRotation);
+}
+
 void ASeinCameraPawn::HandleZoomInput(float ZoomDelta)
 {
 	if (!FMath::IsNearlyZero(ZoomDelta))
 	{
 		TargetZoomDistance = FMath::Clamp(TargetZoomDistance - ZoomDelta * ZoomStep, ZoomMin, ZoomMax);
+	}
+}
+
+void ASeinCameraPawn::HandleKeyZoomInput(float ZoomDelta)
+{
+	if (!FMath::IsNearlyZero(ZoomDelta))
+	{
+		// Rate-based: a held key is a per-frame ±1, so without DeltaSeconds the zoom
+		// speed would scale with frame rate (the wheel's per-tick ZoomStep is immune —
+		// detents are discrete events).
+		TargetZoomDistance = FMath::Clamp(
+			TargetZoomDistance - ZoomDelta * ZoomRate * GetWorld()->GetDeltaSeconds(),
+			ZoomMin,
+			ZoomMax);
 	}
 }
 
@@ -183,18 +221,19 @@ void ASeinCameraPawn::HandleOrbitInput(const FVector2D& MouseDelta)
 		StopFollowing();
 	}
 
-	// Mouse X → yaw rotation (same as keyboard rotate)
+	// Mouse X → yaw orbit, per pixel like the pitch axis. No DeltaSeconds: a mouse
+	// delta already encodes its magnitude, and time-scaling it made the same drag
+	// rotate differently at different frame rates.
 	if (!FMath::IsNearlyZero(MouseDelta.X))
 	{
-		const float YawDelta = MouseDelta.X * RotationSpeed * GetWorld()->GetDeltaSeconds();
-		CameraPivot->AddWorldRotation(FRotator(0.0f, YawDelta, 0.0f));
+		CameraPivot->AddWorldRotation(FRotator(0.0f, MouseDelta.X * OrbitSensitivity, 0.0f));
 	}
 
 	// Mouse Y → pitch tilt (drag up = more flat/parallel to ground = increase pitch toward 0)
 	if (!FMath::IsNearlyZero(MouseDelta.Y) && SpringArm)
 	{
 		CurrentPitch = FMath::Clamp(
-			CurrentPitch + MouseDelta.Y * OrbitPitchSensitivity,
+			CurrentPitch + MouseDelta.Y * OrbitSensitivity,
 			PitchMin,
 			PitchMax
 		);

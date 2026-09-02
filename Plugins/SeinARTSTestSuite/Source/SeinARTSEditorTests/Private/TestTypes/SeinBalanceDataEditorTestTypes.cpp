@@ -1,6 +1,6 @@
 #include "TestTypes/SeinBalanceDataEditorTestTypes.h"
 
-#include "Actor/SeinEntityComponent.h"
+#include "Actor/SeinEntityBridgeComponent.h"
 
 namespace
 {

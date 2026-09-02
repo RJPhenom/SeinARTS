@@ -19,7 +19,7 @@
 #include "Settings/PluginSettings.h"
 #include "Data/SeinNavLayerDefinition.h"
 #include "Actor/SeinActor.h"
-#include "Actor/SeinEntityComponent.h"
+#include "Actor/SeinEntityBridgeComponent.h"
 #include "Components/SeinMovementComponent.h"
 #include "Components/SeinExtentsComponent.h"
 #include "Stamping/SeinStampUtils.h"
@@ -259,7 +259,7 @@ void USeinNavigationAStar::BakeLayer(const USeinLevelData& Substrate, UWorld* Wo
 		ASeinActor* A = *It;
 		if (!A) continue;
 		bool bSkip = false;
-		if (const USeinEntityComponent* Bridge = A->FindComponentByClass<USeinEntityComponent>())
+		if (const USeinEntityBridgeComponent* Bridge = A->FindComponentByClass<USeinEntityBridgeComponent>())
 		{
 			if (const FSeinExtentsComponent* Ext = Bridge->FindAuthoredData<FSeinExtentsComponent>())
 			{

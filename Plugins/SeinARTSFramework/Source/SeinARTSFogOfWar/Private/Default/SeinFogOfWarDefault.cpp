@@ -26,7 +26,7 @@
 #include "Settings/PluginSettings.h"   // terrain-type → vision multiplier
 
 #include "Actor/SeinActor.h"
-#include "Actor/SeinEntityComponent.h"
+#include "Actor/SeinEntityBridgeComponent.h"
 #include "Components/SeinMovementComponent.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Simulation/ComponentStorage.h"
@@ -127,7 +127,7 @@ void USeinFogOfWarDefault::BakeLayer(const USeinLevelData& Substrate, UWorld* Wo
 		if (!SeinActor) continue;
 
 		bool bSkip = false;
-		if (const USeinEntityComponent* Bridge = SeinActor->FindComponentByClass<USeinEntityComponent>())
+		if (const USeinEntityBridgeComponent* Bridge = SeinActor->FindComponentByClass<USeinEntityBridgeComponent>())
 		{
 			if (const FSeinExtentsComponent* Extents = Bridge->FindAuthoredData<FSeinExtentsComponent>())
 			{

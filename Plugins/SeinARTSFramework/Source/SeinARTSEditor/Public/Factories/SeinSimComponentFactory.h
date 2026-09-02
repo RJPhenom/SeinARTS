@@ -46,7 +46,7 @@ public:
 
 	/** Struct-level UField metadata key signalling "this struct is composable as
 	 *  a top-level entity component" — i.e. it can be picked as an entry of
-	 *  `USeinEntityComponent::ComponentData`. Written on UDSes created by this
+	 *  `USeinEntityBridgeComponent::ComponentData`. Written on UDSes created by this
 	 *  factory; native USTRUCTs that subclass `FSeinComponent` are
 	 *  automatically eligible via inheritance (the filter checks IsChildOf
 	 *  for natives, the meta tag for UDSes — UE clears UDS supersuper to
@@ -80,7 +80,7 @@ public:
 	static bool IsSeinDeterministicStruct(const UStruct* Struct);
 
 	/** Returns true iff the struct is eligible as a top-level entity component
-	 *  — i.e. acceptable as a `USeinEntityComponent::ComponentData` entry.
+	 *  — i.e. acceptable as a `USeinEntityBridgeComponent::ComponentData` entry.
 	 *  Rules:
 	 *    - Native USTRUCT: must inherit `FSeinComponent` AND must carry
 	 *      `SeinDeterministic` AND must NOT carry `SeinSubData`.

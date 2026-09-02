@@ -22,7 +22,7 @@
 class ASeinActor;
 class ASeinPlayerStart;
 class USeinActorBridgeSubsystem;
-class USeinEntityComponent;
+class USeinEntityBridgeComponent;
 class USeinWorldSubsystem;
 class UWorld;
 
@@ -163,7 +163,7 @@ private:
 
 	static FString BuildPlacedActorStableKey(const ASeinActor& Actor);
 	static bool ValidateEntityComponentData(
-		TConstArrayView<const USeinEntityComponent*> Components,
+		TConstArrayView<const USeinEntityBridgeComponent*> Components,
 		const FString& OwnerLabel,
 		FString& OutError);
 

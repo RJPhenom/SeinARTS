@@ -13,7 +13,7 @@
  *           array — sim and render are two co-equal authoring surfaces.
  *
  *           At BeginPlay, subscribes to the owning actor's
- *           USeinEntityComponent::OnVisualEvent delegate. When a
+ *           USeinEntityBridgeComponent::OnVisualEvent delegate. When a
  *           ConstructionStateChanged event arrives, enters/exits the
  *           construction visual state — hides main meshes + spawns the
  *           configured placement visual (+ optional ground decal); restores
@@ -30,7 +30,7 @@
 #include "Engine/EngineTypes.h"
 #include "SeinConstructionRenderComponent.generated.h"
 
-class USeinEntityComponent;
+class USeinEntityBridgeComponent;
 class UStaticMesh;
 class USkeletalMesh;
 class UMaterialInterface;
@@ -155,7 +155,7 @@ private:
 
 	/** Cached bridge ref so we can unsubscribe cleanly in EndPlay. */
 	UPROPERTY(Transient)
-	TWeakObjectPtr<USeinEntityComponent> CachedBridge;
+	TWeakObjectPtr<USeinEntityBridgeComponent> CachedBridge;
 
 	bool bInConstructionState = false;
 };

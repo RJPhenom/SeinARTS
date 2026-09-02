@@ -1,7 +1,7 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinEntityComponentVisualizer.h
- * @brief   Component visualizer that walks USeinEntityComponent::ComponentData
+ * @brief   Component visualizer that walks USeinEntityBridgeComponent::ComponentData
  *          and draws every recognized FSein*Component entry's debug geometry
  *          in the BP editor + level editor viewports. Read-only — all
  *          editing happens through the Details panel.

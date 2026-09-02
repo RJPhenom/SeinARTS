@@ -3,7 +3,7 @@
  *
  * @file:    SeinFogVisibilityComponent.h
  * @brief:   Sim-side storage struct for fog-of-war visibility (policy +
- *           emission mask). The authoring surface is `USeinEntityComponent`'s
+ *           emission mask). The authoring surface is `USeinEntityBridgeComponent`'s
  *           top-level `FogVisibilityPolicy` + `FogVisibilityLayerMask`
  *           fields — those are universal attrs every entity has, not an
  *           opt-in. The bridge's `InjectAuthoredComponents` auto-populates
@@ -16,7 +16,7 @@
  *           Why a separate struct at all? Sim/render separation rule —
  *           the simulation never touches `AActor*`, so the FoW system
  *           reads visibility off a sim-side component, not off the
- *           render-side `USeinEntityComponent`. This struct is that
+ *           render-side `USeinEntityBridgeComponent`. This struct is that
  *           sim-side mirror.
  */
 

@@ -88,15 +88,17 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Targeter")
 	void Cancel();
 
-	/** PC input forwarding: confirm-input bound to the player's Command action
-	 *  (RMB by default; remappable via input config). When a targeter is active,
-	 *  the PC routes its RMB events here instead of issuing smart commands. */
+	/** PC input forwarding: confirm-input driven by the player's Select action
+	 *  (LMB by default; the Blueprint wiring owns the binding). When a targeter is
+	 *  active, the PC routes its Select events here instead of running selection. */
 	void OnConfirmPressed();
 	void OnConfirmReleased();
 
-	/** PC input forwarding: cancel-input bound to the player's Select action
-	 *  (LMB by default). Cancels the active targeter. PC routes Select clicks
-	 *  here only while the targeter is active; otherwise selection works normally. */
+	/** PC input forwarding: cancel-input driven by the player's Command action
+	 *  (RMB by default). Cancels the active targeter. The PC routes Command presses
+	 *  here only while the targeter is active; otherwise commands issue normally.
+	 *  Also invoked by the PC's select-cancel path when a confirm press's input
+	 *  evaluation is canceled — a canceled confirm must never place a target. */
 	void OnCancelInput();
 
 	/** Per-frame cursor update. Called by ASeinPlayerController::Tick when the

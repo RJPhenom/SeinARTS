@@ -15,7 +15,7 @@
 #include "Util/SeinAutoTagGenerator.h"
 #include "Actor/SeinActor.h"
 #include "Actor/SeinActorBlueprint.h"
-#include "Actor/SeinEntityComponent.h"
+#include "Actor/SeinEntityBridgeComponent.h"
 #include "Components/SeinIdentityComponent.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Kismet2/BlueprintEditorUtils.h"
@@ -73,8 +73,8 @@ UObject* USeinEntityFactory::FactoryCreateNew(UClass* Class, UObject* InParent, 
 		ASeinActor* CDO = Cast<ASeinActor>(NewBP->GeneratedClass->GetDefaultObject());
 		if (CDO)
 		{
-			TArray<USeinEntityComponent*> Bridges;
-			CDO->GetComponents<USeinEntityComponent>(Bridges);
+			TArray<USeinEntityBridgeComponent*> Bridges;
+			CDO->GetComponents<USeinEntityBridgeComponent>(Bridges);
 			if (Bridges.Num() > 0 && Bridges[0])
 			{
 				FSeinIdentityComponent Identity;

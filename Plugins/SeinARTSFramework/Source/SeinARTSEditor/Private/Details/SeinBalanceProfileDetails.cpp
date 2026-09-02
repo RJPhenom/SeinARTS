@@ -14,7 +14,7 @@
 
 #include "Details/SeinBalanceProfileDetails.h"
 #include "Actor/SeinActor.h"
-#include "Actor/SeinEntityComponent.h"
+#include "Actor/SeinEntityBridgeComponent.h"
 #include "Balance/SeinBalanceProfile.h"
 #include "Components/SeinComponentEligibility.h"
 #include "Util/SeinBalanceTableExport.h"
@@ -216,7 +216,7 @@ void SeinBalanceProfileDetails::CollectTrackedComponentCandidates(
 		const ASeinActor* EntityCDO = MatchedClass
 			? Cast<ASeinActor>(MatchedClass->GetDefaultObject())
 			: nullptr;
-		const USeinEntityComponent* Bridge = EntityCDO
+		const USeinEntityBridgeComponent* Bridge = EntityCDO
 			? EntityCDO->GetEntityBridge()
 			: nullptr;
 		if (!Bridge)

@@ -18,11 +18,11 @@
 
 #include "CoreMinimal.h"
 
-/** Sim / render-bridge general logging (ASeinActor, USeinEntityComponent,
+/** Sim / render-bridge general logging (ASeinActor, USeinEntityBridgeComponent,
  *  USeinWorldSubsystem). */
 SEINARTSCOREENTITY_API DECLARE_LOG_CATEGORY_EXTERN(LogSeinSim, Log, All);
 
-/** Actor-bridge spawn/teardown logging (USeinEntityComponent,
+/** Actor-bridge spawn/teardown logging (USeinEntityBridgeComponent,
  *  USeinActorBridgeSubsystem). */
 SEINARTSCOREENTITY_API DECLARE_LOG_CATEGORY_EXTERN(LogSeinBridge, Log, All);
 

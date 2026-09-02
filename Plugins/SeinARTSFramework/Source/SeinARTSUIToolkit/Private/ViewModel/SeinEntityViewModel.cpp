@@ -10,7 +10,7 @@
 DEFINE_LOG_CATEGORY_STATIC(LogSeinViewModel, Log, All);
 #include "Simulation/SeinActorBridgeSubsystem.h"
 #include "Actor/SeinActor.h"
-#include "Actor/SeinEntityComponent.h"
+#include "Actor/SeinEntityBridgeComponent.h"
 #include "Abilities/SeinAbility.h"
 #include "Components/SeinAbilityComponent.h"
 #include "Components/SeinIdentityComponent.h"
@@ -533,9 +533,9 @@ TArray<FSeinProductionQueueItemInfo> USeinEntityViewModel::GetProductionQueue() 
 		else if (Entry.ActorClass)
 		{
 			// Identity now lives on the producible's entity bridge ComponentData.
-			TArray<const USeinEntityComponent*> Bridges;
-			AActor::GetActorClassDefaultComponents<USeinEntityComponent>(Entry.ActorClass, Bridges);
-			for (const USeinEntityComponent* Bridge : Bridges)
+			TArray<const USeinEntityBridgeComponent*> Bridges;
+			AActor::GetActorClassDefaultComponents<USeinEntityBridgeComponent>(Entry.ActorClass, Bridges);
+			for (const USeinEntityBridgeComponent* Bridge : Bridges)
 			{
 				if (!Bridge) continue;
 				if (const FSeinIdentityComponent* Identity = Bridge->FindAuthoredData<FSeinIdentityComponent>())

@@ -7,7 +7,7 @@
  *          The targeter (Phase 3+) needs the extents of a building before
  *          spawning it — to size the placement preview, run client-side
  *          footprint validation, and feed the server-side placement resolver.
- *          The canonical source is the actor BP's USeinEntityComponent
+ *          The canonical source is the actor BP's USeinEntityBridgeComponent
  *          ComponentData array; these helpers walk that path with no runtime
  *          spawn.
  *
@@ -20,7 +20,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
-#include "Actor/SeinEntityComponent.h"
+#include "Actor/SeinEntityBridgeComponent.h"
 #include "Components/SeinExtentsComponent.h"
 #include "Types/Transform.h"
 #include "Types/Vector.h"
@@ -40,9 +40,9 @@ namespace SeinExtentsHelpers
 		// stable order — required for "what would this BP look like at spawn"
 		// CDO inspection. FindComponentByClass on a CDO misses SCS-added
 		// components.
-		TArray<const USeinEntityComponent*> Bridges;
-		AActor::GetActorClassDefaultComponents<USeinEntityComponent>(ActorClass, Bridges);
-		for (const USeinEntityComponent* Bridge : Bridges)
+		TArray<const USeinEntityBridgeComponent*> Bridges;
+		AActor::GetActorClassDefaultComponents<USeinEntityBridgeComponent>(ActorClass, Bridges);
+		for (const USeinEntityBridgeComponent* Bridge : Bridges)
 		{
 			if (!Bridge) continue;
 			if (const FSeinExtentsComponent* Found = Bridge->FindAuthoredData<FSeinExtentsComponent>())

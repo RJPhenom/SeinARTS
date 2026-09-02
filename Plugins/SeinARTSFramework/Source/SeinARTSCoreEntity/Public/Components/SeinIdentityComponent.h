@@ -5,13 +5,13 @@
  * @brief:   UI/identity metadata for an entity — display name, description,
  *           icon, portrait, identity tag. Decomposed out of
  *           `USeinArchetypeDefinition` as part of the Phase-1 entity-component
- *           refactor (single `USeinEntityComponent` with an array of authored
+ *           refactor (single `USeinEntityBridgeComponent` with an array of authored
  *           data structs).
  *
  *           Optional component — entities without UI presence (abstract sim
  *           entities, scenario owners) don't need it. The `bIsAbstract` flag
  *           that previously lived on the archetype is NOT in this struct; it
- *           moves to the top-level `USeinEntityComponent` UPROPERTY because
+ *           moves to the top-level `USeinEntityBridgeComponent` UPROPERTY because
  *           "has a render actor" is a framework-level entity classification,
  *           not authoring metadata.
  */

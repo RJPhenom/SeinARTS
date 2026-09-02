@@ -16,7 +16,6 @@
 class USpringArmComponent;
 class UCameraComponent;
 class UFloatingPawnMovement;
-struct FInputActionValue;
 
 /**
  * Default RTS camera pawn.
@@ -75,7 +74,7 @@ public:
 
 	// ========== Rotation Settings ==========
 
-	/** Rotation speed in degrees per second (middle-mouse drag). */
+	/** Keyboard rotation speed in degrees per second at full axis deflection (Q/E). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Camera|Rotation")
 	float RotationSpeed = 90.0f;
 
@@ -92,6 +91,11 @@ public:
 	/** Zoom step per scroll wheel tick. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Camera|Zoom")
 	float ZoomStep = 200.0f;
+
+	/** Keyboard zoom speed in world units per second at full axis deflection (Z/X).
+	 *  Frame-rate independent, unlike the per-tick wheel ZoomStep. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Camera|Zoom")
+	float ZoomRate = 2500.0f;
 
 	/** Zoom interpolation speed (higher = snappier). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Camera|Zoom", meta = (ClampMin = "1.0"))
@@ -115,9 +119,15 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Camera|Pitch", meta = (ClampMin = "-89.0", ClampMax = "-5.0"))
 	float PitchMax = -5.0f;
 
-	/** Pitch sensitivity for orbit input (degrees per pixel of mouse movement). */
+	/** Mouse rotate sensitivity in degrees per pixel of mouse movement, applied to both
+	 *  axes (X yaw orbit and Y pitch tilt). Scaled by the player controller's Mouse
+	 *  Rotate Speed. (Formerly "OrbitPitchSensitivity", which covered pitch only.) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Camera|Pitch")
-	float OrbitPitchSensitivity = 0.3f;
+	float OrbitSensitivity = 0.3f;
+
+	/** Keyboard tilt speed in degrees per second at full axis deflection. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Camera|Pitch")
+	float TiltSpeed = 45.0f;
 
 	// ========== Bounds ==========
 
@@ -180,7 +190,9 @@ public:
 	/** Handle MMB pan input (direct mouse delta, moves pivot). Grab-the-ground style (inverted). */
 	void HandleMMBPanInput(const FVector2D& MouseDelta);
 
-	/** Handle Alt+MMB orbit input. X = yaw rotation, Y = pitch tilt (clamped). */
+	/** Handle mouse rotate input. X = yaw orbit, Y = pitch tilt (clamped); both axes
+	 *  per-pixel at OrbitSensitivity — no time scaling, a mouse delta already encodes
+	 *  its own magnitude. */
 	void HandleOrbitInput(const FVector2D& MouseDelta);
 
 	// ========== Input Handlers ==========
@@ -191,8 +203,19 @@ public:
 	/** Called by the player controller when camera rotate input is received (keyboard Q/E). */
 	void HandleRotateInput(float YawDelta);
 
-	/** Called by the player controller when camera zoom input is received. */
+	/** Called by the player controller when keyboard camera tilt input is received.
+	 *  Adjusts the spring-arm pitch at TiltSpeed degrees/second, clamped to
+	 *  [PitchMin, PitchMax] — the keyboard twin of the orbit input's Y axis. */
+	void HandleTiltInput(float TiltDelta);
+
+	/** Called by the player controller when mouse-wheel zoom input is received.
+	 *  Steps the target distance by ZoomStep per wheel tick (event-scaled). */
 	void HandleZoomInput(float ZoomDelta);
+
+	/** Called by the player controller when keyboard zoom input is received.
+	 *  Moves the target distance at ZoomRate units/second — the frame-rate-
+	 *  independent twin of the wheel's per-tick HandleZoomInput. */
+	void HandleKeyZoomInput(float ZoomDelta);
 
 	// ========== Accessors ==========
 

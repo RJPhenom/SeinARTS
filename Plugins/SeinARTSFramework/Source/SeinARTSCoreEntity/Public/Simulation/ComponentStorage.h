@@ -88,6 +88,38 @@ public:
 			FSeinEntityHandle /*Handle*/,
 			const void* /*RawComponent*/)> Visitor) const = 0;
 
+	// ---- Slot-addressed access (SeinComponentQuery.h fast path) ----
+	//
+	// The storages for every component type share ONE index space: the entity
+	// pool's slot index. These accessors let a query iterate one storage's live
+	// bits and join the others by direct slot arithmetic — no per-entity
+	// hash-map lookup, no handle revalidation beyond a generation compare.
+	// Bookkeeping semantics mirror the handle-keyed accessors exactly:
+	// GetMutableRawAtSlot == GetComponentRaw (touch + escape),
+	// GetDeferredMutationRawAtSlot == GetComponentRawForDeferredMutation
+	// (escape only; pair with CommitDeferredMutation), GetRawAtSlot == const
+	// GetComponentRaw (no bookkeeping).
+
+	/** Live-slot occupancy bits, indexed by entity slot. Iterating set bits
+	 *  ascending matches ForEachLiveComponent's deterministic order. The
+	 *  reference is invalidated by any structural change (add/remove/Grow). */
+	virtual const TBitArray<>& GetLiveSlotBits() const = 0;
+
+	/** Stored generation for a slot; 0 when the slot holds no component. */
+	virtual int32 GetGenerationAtSlot(int32 SlotIndex) const = 0;
+
+	/** Read-only payload at a live slot; nullptr when the slot is not live. */
+	virtual const void* GetRawAtSlot(int32 SlotIndex) const = 0;
+
+	/** Mutable payload at a live slot with the conservative revision touch
+	 *  (same contract as handle-keyed GetComponentRaw). */
+	virtual void* GetMutableRawAtSlot(int32 SlotIndex) = 0;
+
+	/** Mutable payload at a live slot WITHOUT the revision touch — the caller
+	 *  must call CommitDeferredMutation on the serial spine iff deterministic
+	 *  state actually changed (same contract as the handle-keyed variant). */
+	virtual void* GetDeferredMutationRawAtSlot(int32 SlotIndex) = 0;
+
 	/** Alias for RemoveComponent — clearer intent when cleaning up a destroyed entity. */
 	virtual void RemoveAllForEntity(FSeinEntityHandle Handle) = 0;
 
@@ -126,7 +158,7 @@ public:
  * Component storage for reflection-based access, used by the runtime.
  *
  * Component types are discovered at entity spawn by walking the Blueprint CDO's
- * entity bridge (USeinEntityComponent) ComponentData and injecting each
+ * entity bridge (USeinEntityBridgeComponent) ComponentData and injecting each
  * FInstancedStruct payload struct directly.
  * Payloads are stored as raw bytes, with construction/copy/destroy dispatched
  * through UScriptStruct so TArrays, UPROPERTY references, etc. are handled
@@ -314,6 +346,44 @@ public:
 		{
 			TouchSlot(static_cast<int32>(Handle.Index));
 		}
+	}
+
+	virtual const TBitArray<>& GetLiveSlotBits() const override
+	{
+		return HasComponentBits;
+	}
+
+	virtual int32 GetGenerationAtSlot(int32 SlotIndex) const override
+	{
+		return StoredGenerations.IsValidIndex(SlotIndex)
+			? StoredGenerations[SlotIndex]
+			: 0;
+	}
+
+	virtual const void* GetRawAtSlot(int32 SlotIndex) const override
+	{
+		return IsLiveSlot(SlotIndex) ? GetSlotPtr(SlotIndex) : nullptr;
+	}
+
+	virtual void* GetMutableRawAtSlot(int32 SlotIndex) override
+	{
+		if (!IsLiveSlot(SlotIndex))
+		{
+			return nullptr;
+		}
+		bMutablePointerEscaped.store(true, std::memory_order_relaxed);
+		TouchSlot(SlotIndex);
+		return GetSlotPtr(SlotIndex);
+	}
+
+	virtual void* GetDeferredMutationRawAtSlot(int32 SlotIndex) override
+	{
+		if (!IsLiveSlot(SlotIndex))
+		{
+			return nullptr;
+		}
+		bMutablePointerEscaped.store(true, std::memory_order_relaxed);
+		return GetSlotPtr(SlotIndex);
 	}
 
 	virtual uint32 ComputeHash() const override
@@ -675,6 +745,12 @@ private:
 			&& HasComponentBits.IsValidIndex(Handle.Index)
 			&& HasComponentBits[Handle.Index]
 			&& StoredGenerations[Handle.Index] == Handle.Generation;
+	}
+
+	bool IsLiveSlot(int32 SlotIndex) const
+	{
+		return HasComponentBits.IsValidIndex(SlotIndex)
+			&& HasComponentBits[SlotIndex];
 	}
 
 	void ResetSlot(int32 SlotIndex)

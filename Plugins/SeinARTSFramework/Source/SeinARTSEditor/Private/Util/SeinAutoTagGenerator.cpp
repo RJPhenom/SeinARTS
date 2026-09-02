@@ -11,7 +11,7 @@
 #include "Effects/SeinEffect.h"
 #include "Components/SeinIdentityComponent.h"
 #include "Actor/SeinActor.h"
-#include "Actor/SeinEntityComponent.h"
+#include "Actor/SeinEntityBridgeComponent.h"
 #include "Core/SeinAssetTagKeys.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -88,9 +88,9 @@ namespace SeinAutoTagLocal
 		}
 		if (const ASeinActor* SeinActor = Cast<ASeinActor>(CDO))
 		{
-			TArray<USeinEntityComponent*> Bridges;
-			SeinActor->GetComponents<USeinEntityComponent>(Bridges);
-			for (const USeinEntityComponent* Bridge : Bridges)
+			TArray<USeinEntityBridgeComponent*> Bridges;
+			SeinActor->GetComponents<USeinEntityBridgeComponent>(Bridges);
+			for (const USeinEntityBridgeComponent* Bridge : Bridges)
 			{
 				if (!Bridge) continue;
 				for (const FInstancedStruct& Entry : Bridge->ComponentData)
@@ -471,9 +471,9 @@ static FSeinAutoTagRegenerationResult
 		// without an identity component just doesn't participate in the
 		// tagging system (it's still a valid Sein entity, e.g. a generic
 		// projectile or environment prop).
-		TArray<USeinEntityComponent*> Bridges;
-		SeinActor->GetComponents<USeinEntityComponent>(Bridges);
-		for (USeinEntityComponent* Bridge : Bridges)
+		TArray<USeinEntityBridgeComponent*> Bridges;
+		SeinActor->GetComponents<USeinEntityBridgeComponent>(Bridges);
+		for (USeinEntityBridgeComponent* Bridge : Bridges)
 		{
 			if (!Bridge) continue;
 			for (FInstancedStruct& Entry : Bridge->ComponentData)

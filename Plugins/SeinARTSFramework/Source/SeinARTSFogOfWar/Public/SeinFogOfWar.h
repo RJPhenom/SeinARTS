@@ -249,7 +249,7 @@ public:
 	 *  want different per-player policy. Base impl reads
 	 *  `FSeinFogVisibilityComponent` from sim storage for both the emission
 	 *  mask AND the persistence policy (single component, two fields —
-	 *  authored on `USeinEntityComponent`'s top-level visibility fields and
+	 *  authored on `USeinEntityBridgeComponent`'s top-level visibility fields and
 	 *  auto-injected at spawn by `InjectAuthoredComponents`). */
 	virtual bool IsEntityVisibleToObserver(FSeinPlayerID Observer,
 		USeinWorldSubsystem& Sim, FSeinEntityHandle Target) const;

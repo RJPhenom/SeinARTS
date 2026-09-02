@@ -24,8 +24,10 @@
  *          Contained entities (garrison / transport / attachment) are posed by
  *          their container — the driver never ground-snaps or coasts them.
  *
- *          DETERMINISM: iteration is entity-pool order (index order — stable
- *          across peers); TickIdle is pure self-mutation (no neighbour reads,
+ *          DETERMINISM: iteration drives off the movement storage's live bits
+ *          in ascending slot order (SeinQuery::ForEachAlive — identical order
+ *          and visited set as the old entity-pool iteration, stable across
+ *          peers); TickIdle is pure self-mutation (no neighbour reads,
  *          no spatial-hash queries — see its docstring), so pool order is not
  *          load-bearing. All fixed-point. The registry sweep removes dead
  *          entries only (no sim-state mutation), so its timing is inert.
@@ -49,6 +51,7 @@
 #include "Core/SeinSystemPriority.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Simulation/ComponentStorage.h"
+#include "Simulation/SeinComponentQuery.h"
 #include "Core/SeinParallel.h"
 #include "SeinMovementSubsystem.h"
 #include "Movement/SeinMovement.h"
@@ -125,15 +128,23 @@ public:
 		TArray<FIdleUnit> ScriptIdle;   // Blueprint movement class — serial only
 
 		FSeinEntityPool* Pool = World.GetEntityPoolMutable();
-		ISeinComponentStorage* MoveStorage =
-			World.GetComponentStorageMutable(
-				FSeinMovementComponent::StaticStruct());
-		if (!Pool || !MoveStorage) return;
-		World.GetEntityPool().ForEachEntity([&](
-			FSeinEntityHandle Handle, const FSeinEntity& ReadEntity)
+		if (!Pool) return;
+		// Hoisted typed views (SeinComponentQuery.h): one storage resolve per
+		// type per tick; per-entity joins below are direct slot arithmetic
+		// instead of a hash-map probe per component per entity. Iteration
+		// order (ascending slot) and the visited set are identical to the old
+		// pool-order + GetComponent-null-check pattern.
+		TSeinComponentView<FSeinMovementComponent> MoveView(World);
+		// Read-only joins use the ungated read view — exact match for the old
+		// const GetComponent<T> semantics (no mutable-state-access gate).
+		TSeinComponentReadView<FSeinContainmentMemberData> ContainView(World);
+		TSeinComponentReadView<FSeinNavigationComponent> NavView(World);
+		if (!MoveView.IsBound()) return;
+		const FSeinEntityPool& ConstPool = World.GetEntityPool();
+		SeinQuery::ForEachAlive(ConstPool, MoveView,
+			[&](FSeinEntityHandle Handle, int32 Slot)
 		{
-			const FSeinMovementComponent* ReadMove =
-				World.GetComponent<FSeinMovementComponent>(Handle);
+			const FSeinMovementComponent* ReadMove = MoveView.GetConstAt(Slot);
 			if (!ReadMove) return;
 
 			// An active move order steered this entity this tick — the order
@@ -143,10 +154,14 @@ public:
 
 			// Contained entities are posed by their container.
 			if (const FSeinContainmentMemberData* Containment =
-					World.GetComponent<FSeinContainmentMemberData>(Handle))
+					ContainView.GetConstAt(Slot, Handle))
 			{
 				if (Containment->CurrentContainer.IsValid()) return;
 			}
+
+			const FSeinEntity* ReadEntityPtr = ConstPool.Get(Handle);
+			if (!ReadEntityPtr) return;
+			const FSeinEntity& ReadEntity = *ReadEntityPtr;
 
 			USeinMovement* Movement =
 				Sub->GetOrCreateMovementInstance(Handle, *ReadMove);
@@ -165,9 +180,8 @@ public:
 				? Pool->GetForDeferredMutation(Handle)
 				: World.GetEntityMutable(Handle);
 			FSeinMovementComponent* Move = bDeferredStateTracking
-				? static_cast<FSeinMovementComponent*>(
-					MoveStorage->GetComponentRawForDeferredMutation(Handle))
-				: World.GetComponentMutable<FSeinMovementComponent>(Handle);
+				? MoveView.GetDeferredAt(Slot)
+				: MoveView.GetMutableAt(Slot);
 			if (!Entity || !Move) return;
 			if (!bDeferredStateTracking)
 			{
@@ -175,7 +189,7 @@ public:
 			}
 
 			const FIdleUnit Unit{ Entity, Handle, Move,
-				World.GetComponent<FSeinNavigationComponent>(Handle),
+				NavView.GetConstAt(Slot, Handle),
 				Movement,
 				ReadEntity,
 				Move->Velocity,
@@ -231,7 +245,7 @@ public:
 				|| Unit.Move->bHomeSeeded != Unit.bHomeSeededBefore;
 			if (bMovementChanged)
 			{
-				MoveStorage->CommitDeferredMutation(Unit.Handle);
+				MoveView.CommitDeferred(Unit.Handle);
 			}
 		}
 		for (const FIdleUnit& Unit : ScriptIdle) { TickOneIdle(Unit); }

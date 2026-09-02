@@ -8,7 +8,7 @@
 #include "Simulation/SeinActorBridgeSubsystem.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Actor/SeinActor.h"
-#include "Actor/SeinEntityComponent.h"
+#include "Actor/SeinEntityBridgeComponent.h"
 #include "Events/SeinVisualEvent.h"
 #include "Types/FixedPoint.h"
 #include "Engine/World.h"
@@ -27,9 +27,9 @@ namespace SeinBridgeLocal
 	{
 		if (!ActorClass) return false;
 
-		TArray<const USeinEntityComponent*> EntityComps;
-		AActor::GetActorClassDefaultComponents<USeinEntityComponent>(ActorClass, EntityComps);
-		for (const USeinEntityComponent* EC : EntityComps)
+		TArray<const USeinEntityBridgeComponent*> EntityComps;
+		AActor::GetActorClassDefaultComponents<USeinEntityBridgeComponent>(ActorClass, EntityComps);
+		for (const USeinEntityBridgeComponent* EC : EntityComps)
 		{
 			if (EC && EC->bIsAbstract) return true;
 		}
@@ -171,7 +171,7 @@ void USeinActorBridgeSubsystem::Tick(float DeltaTime)
 	}
 
 	// Child-transform poses are now applied by a render-side AC subscribing
-	// to USeinEntityComponent::OnVisualEvent and ticking against sim state
+	// to USeinEntityBridgeComponent::OnVisualEvent and ticking against sim state
 	// directly. The bridge no longer fans poses out — keeps it lean.
 }
 
@@ -206,7 +206,7 @@ void USeinActorBridgeSubsystem::HandleSimFrame(
 		// component IS the bridge surface — render-side ACs that need sim
 		// state subscribe to its OnVisualEvent multicast or query sim
 		// storage directly.
-		if (USeinEntityComponent* Comp = Actor->GetEntityBridge())
+		if (USeinEntityBridgeComponent* Comp = Actor->GetEntityBridge())
 		{
 			Comp->OnSimFrame(TicksProcessed);
 		}
@@ -248,7 +248,7 @@ void USeinActorBridgeSubsystem::DispatchVisualEvent(const FSeinVisualEvent& Even
 		if (ActorPtr && ActorPtr->IsValid())
 		{
 			ASeinActor* Actor = ActorPtr->Get();
-			if (USeinEntityComponent* Comp = Actor->FindComponentByClass<USeinEntityComponent>())
+			if (USeinEntityBridgeComponent* Comp = Actor->FindComponentByClass<USeinEntityBridgeComponent>())
 			{
 				Comp->HandleVisualEvent(Event);
 			}
@@ -328,7 +328,7 @@ void USeinActorBridgeSubsystem::HandleEntityDestroyed(FSeinEntityHandle Handle, 
 	// Route the destroy event through the entity component's multicast — render
 	// ACs subscribed to OnVisualEvent see the EntityDestroyed type and can
 	// clean up (e.g. construction render AC's EndPlay cleanup of placeholders).
-	if (USeinEntityComponent* Comp = Actor->FindComponentByClass<USeinEntityComponent>())
+	if (USeinEntityBridgeComponent* Comp = Actor->FindComponentByClass<USeinEntityBridgeComponent>())
 	{
 		Comp->HandleVisualEvent(DestroyEvent);
 	}
@@ -364,7 +364,7 @@ void USeinActorBridgeSubsystem::ReconcileBridgeAfterRestore()
 			// component so subscribed render ACs can clean up — same path
 			// HandleEntityDestroyed uses, minus the visual-event payload from
 			// the sim.
-			if (USeinEntityComponent* Comp = Actor->FindComponentByClass<USeinEntityComponent>())
+			if (USeinEntityBridgeComponent* Comp = Actor->FindComponentByClass<USeinEntityBridgeComponent>())
 			{
 				FSeinVisualEvent DestroyEvent;
 				DestroyEvent.Type = ESeinVisualEventType::EntityDestroyed;

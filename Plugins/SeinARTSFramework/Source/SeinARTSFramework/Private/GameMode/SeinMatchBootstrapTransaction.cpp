@@ -15,7 +15,7 @@
 #include "UObject/Package.h"
 
 #include "Actor/SeinActor.h"
-#include "Actor/SeinEntityComponent.h"
+#include "Actor/SeinEntityBridgeComponent.h"
 #include "Components/ActorComponent.h"
 #include "Core/SeinPlayerState.h"
 #include "Engine/LatentActionManager.h"
@@ -258,8 +258,8 @@ bool FSeinMatchBootstrapTransaction::Preflight(FString& OutError)
 
 		if (Start->SpawnEntity)
 		{
-			TArray<const USeinEntityComponent*> EntityComponents;
-			AActor::GetActorClassDefaultComponents<USeinEntityComponent>(
+			TArray<const USeinEntityBridgeComponent*> EntityComponents;
+			AActor::GetActorClassDefaultComponents<USeinEntityBridgeComponent>(
 				Start->SpawnEntity, EntityComponents);
 			if (!ValidateEntityComponentData(
 				EntityComponents, Start->SpawnEntity->GetPathName(), OutError))
@@ -330,11 +330,11 @@ bool FSeinMatchBootstrapTransaction::Preflight(FString& OutError)
 			return false;
 		}
 
-		TArray<USeinEntityComponent*> MutableComponents;
-		Actor->GetComponents<USeinEntityComponent>(MutableComponents);
-		TArray<const USeinEntityComponent*> EntityComponents;
+		TArray<USeinEntityBridgeComponent*> MutableComponents;
+		Actor->GetComponents<USeinEntityBridgeComponent>(MutableComponents);
+		TArray<const USeinEntityBridgeComponent*> EntityComponents;
 		EntityComponents.Reserve(MutableComponents.Num());
-		for (const USeinEntityComponent* Component : MutableComponents)
+		for (const USeinEntityBridgeComponent* Component : MutableComponents)
 		{
 			EntityComponents.Add(Component);
 		}
@@ -610,7 +610,7 @@ FString FSeinMatchBootstrapTransaction::BuildPlacedActorStableKey(
 }
 
 bool FSeinMatchBootstrapTransaction::ValidateEntityComponentData(
-	TConstArrayView<const USeinEntityComponent*> Components,
+	TConstArrayView<const USeinEntityBridgeComponent*> Components,
 	const FString& OwnerLabel,
 	FString& OutError)
 {
@@ -622,7 +622,7 @@ bool FSeinMatchBootstrapTransaction::ValidateEntityComponentData(
 		return false;
 	}
 
-	// USeinEntityComponent::ValidateComponentData is the single shared
+	// USeinEntityBridgeComponent::ValidateComponentData is the single shared
 	// definition of "valid ComponentData" — the same routine backs the
 	// Blueprint pre-compile gate (SeinARTSEditorModule), which surfaces
 	// these exact issues as per-index compiler warnings at edit time
@@ -631,7 +631,7 @@ bool FSeinMatchBootstrapTransaction::ValidateEntityComponentData(
 	// sharing the validator keeps the warning a designer saw at compile
 	// time and the failure a match reports verbatim-identical.
 	TArray<FSeinComponentDataIssue> Issues;
-	if (!USeinEntityComponent::ValidateComponentData(Components[0]->ComponentData, Issues))
+	if (!USeinEntityBridgeComponent::ValidateComponentData(Components[0]->ComponentData, Issues))
 	{
 		TArray<FString> Descriptions;
 		Descriptions.Reserve(Issues.Num());
@@ -652,12 +652,12 @@ bool FSeinMatchBootstrapTransaction::ValidateEntityComponentData(
 		{
 			if (const AActor* Owner = Components[0]->GetOwner())
 			{
-				TArray<const USeinEntityComponent*> ClassComponents;
-				AActor::GetActorClassDefaultComponents<USeinEntityComponent>(
+				TArray<const USeinEntityBridgeComponent*> ClassComponents;
+				AActor::GetActorClassDefaultComponents<USeinEntityBridgeComponent>(
 					Owner->GetClass(), ClassComponents);
 				TArray<FSeinComponentDataIssue> ClassIssues;
 				if (ClassComponents.Num() == 1 && ClassComponents[0]
-					&& USeinEntityComponent::ValidateComponentData(
+					&& USeinEntityBridgeComponent::ValidateComponentData(
 						ClassComponents[0]->ComponentData, ClassIssues))
 				{
 					OutError += TEXT(" The class default is valid — this placed instance carries a stale ComponentData override; revert the Component Data property on the placed actor to re-sync.");
