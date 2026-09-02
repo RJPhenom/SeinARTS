@@ -45,6 +45,14 @@ public:
 	 *  serialized to the .umap so all clients later load the same bytes,
 	 *  no per-platform FromFloat conversion at runtime. */
 	virtual void PostEditMove(bool bFinished) override;
+
+	/** Map Check (Build → Map Check): surface invalid authored ComponentData
+	 *  on THIS PLACED INSTANCE (empty/duplicate entries via the same shared
+	 *  validator match bootstrap runs) plus stale structural overrides —
+	 *  instance arrays that no longer track the Blueprint default. The
+	 *  instance-level analogue of the Blueprint pre-compile gate, which can
+	 *  only see the class default. */
+	virtual void CheckForErrors() override;
 #endif
 
 	/** Surfaces this entity's IdentityTag — which lives nested in an

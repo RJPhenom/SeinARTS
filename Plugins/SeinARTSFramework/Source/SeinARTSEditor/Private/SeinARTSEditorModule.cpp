@@ -69,6 +69,14 @@
 #include "Details/SeinCollisionObjectTypeDetails.h"
 #include "Visualizers/SeinEntityComponentVisualizer.h"
 #include "Actor/SeinEntityComponent.h"
+#include "Authoring/SeinDataComponent.h"
+#include "Components/SeinComponentEligibility.h"
+#include "Containers/Ticker.h"
+#include "Engine/BlueprintGeneratedClass.h"
+#include "EdGraph/EdGraph.h"
+#include "UObject/UObjectIterator.h"
+#include "Util/SeinDataComponentSync.h"
+#include "Util/SeinDeterminismRules.h"
 #include "Editor.h"
 #include "EditorValidatorSubsystem.h"
 #include "UnrealEdGlobals.h"
@@ -168,6 +176,275 @@ namespace SeinAbilityContinuationCompilerGate
 	}
 }
 
+namespace SeinComponentDataCompilerGate
+{
+	/**
+	 * Same OnBlueprintPreCompile mechanism as
+	 * SeinAbilityContinuationCompilerGate above (see its comment for why:
+	 * no compiler-extension unregister API, this delegate is symmetric and
+	 * safe across module reload). Surfaces per-entry compiler WARNINGS for
+	 * any Blueprint whose USeinEntityComponent CDO carries an invalid
+	 * authored ComponentData entry — an empty picker row, a duplicate
+	 * authored struct type, or (editor-only screen below) a struct type the
+	 * ComponentData picker would never have offered.
+	 *
+	 * Warnings, not errors, by explicit product ruling: a half-authored row
+	 * must not block Save/PIE on unrelated edits, but the defect and its
+	 * exact array index must be visible at compile time.
+	 * USeinEntityComponent::ValidateComponentData is the SAME routine match
+	 * bootstrap (FSeinMatchBootstrapTransaction::ValidateEntityComponentData)
+	 * calls at match start, where the empty/duplicate defects ARE fatal —
+	 * one shared definition and one shared per-index message text, so the
+	 * warning a designer sees here matches the bootstrap failure verbatim.
+	 * (See the CDO-timing note on ValidateComponentData's declaration for
+	 * the one narrow, self-healing gap; match bootstrap is the fail-closed
+	 * backstop regardless.)
+	 */
+	void Validate(UBlueprint* Blueprint)
+	{
+		UClass* GeneratedClass = Blueprint ? Blueprint->GeneratedClass : nullptr;
+		if (!GeneratedClass || !GeneratedClass->IsChildOf(AActor::StaticClass()))
+		{
+			return;
+		}
+
+		// OnBlueprintPreCompile can fire while a newly loaded/generated class has
+		// no usable ClassConstructor yet. GetActorClassDefaultComponents calls
+		// GetDefaultObject() and may also materialize SCS override templates,
+		// either of which is illegal in that window. This gate is diagnostic, so
+		// inspect only an already-constructed CDO and its existing native bridge;
+		// never create UObject state from a pre-compile callback. A missing CDO is
+		// the documented narrow timing gap that match bootstrap validates later.
+		const AActor* ActorCDO = Cast<AActor>(
+			GeneratedClass->GetDefaultObject(/*bCreateIfNeeded=*/false));
+		if (!IsValid(ActorCDO))
+		{
+			return;
+		}
+
+		for (const UActorComponent* Component : ActorCDO->GetComponents())
+		{
+			const USeinEntityComponent* EntityComponent =
+				Cast<USeinEntityComponent>(Component);
+			if (!IsValid(EntityComponent))
+			{
+				continue;
+			}
+
+			TArray<FSeinComponentDataIssue> Issues;
+			USeinEntityComponent::ValidateComponentData(
+				EntityComponent->ComponentData, Issues);
+
+			// Editor-only eligibility screen on top of the shared validator:
+			// flag entries whose struct type the ComponentData picker would
+			// never have offered (SeinComponentEligibility is the picker
+			// filter's own rule, so gate and picker cannot drift). Reachable
+			// only by bypassing the picker — reflection/construction-script
+			// writes, or a UDS whose Sein metas were lost after placement.
+			// This screen cannot live inside the shared validator: the metas
+			// are editor-only, and the validator must behave identically in
+			// cooked builds where match bootstrap also runs it.
+			for (int32 Index = 0; Index < EntityComponent->ComponentData.Num(); ++Index)
+			{
+				const FInstancedStruct& Entry = EntityComponent->ComponentData[Index];
+				if (!Entry.IsValid())
+				{
+					continue; // already reported by the shared validator
+				}
+				const UScriptStruct* Type = Entry.GetScriptStruct();
+				if (!SeinComponentEligibility::IsEntityComponentStruct(Type))
+				{
+					Issues.Add(FSeinComponentDataIssue{Index, FString::Printf(
+						TEXT("ComponentData[%d] holds %s, which is not a valid entity component struct (native structs must inherit FSeinComponent and carry SeinDeterministic; UDS must be a SeinARTS Component created via Right-click -> Component; SeinSubData structs never go here)"),
+						Index, *Type->GetPathName())});
+				}
+			}
+
+			for (const FSeinComponentDataIssue& Issue : Issues)
+			{
+				Blueprint->Message_Warn(FString::Printf(
+					TEXT("SeinARTS Entity Bridge: %s."), *Issue.Description));
+			}
+		}
+	}
+}
+
+namespace SeinDataComponentAuthoringHooks
+{
+	/**
+	 * AC-authoring prototype hooks, all riding OnBlueprintPreCompile like the
+	 * two gates above (same unregister rationale):
+	 *   1. GATE — data-component Blueprints are data-only by contract. Their
+	 *      objects are editor-only (never registered, ticked, or present at
+	 *      runtime), so an event graph can never execute and a function is
+	 *      callable-but-null at runtime: graph content is a category ERROR,
+	 *      not a style warning (the warn-at-compile ruling covers transient
+	 *      authoring states; a graph node here never becomes valid).
+	 *      Non-deterministic variables are warned about and excluded from the
+	 *      payload (the match-boundary manifest stays the fail-closed gate).
+	 *   2. SYNC + BAKE — after the compile completes (deferred one tick; the
+	 *      sync must never run inside the compiler), data-component BPs sync
+	 *      their payload UDS, then queued SeinActor BPs re-bake their class
+	 *      defaults' ComponentData from authoring components. The next-tick
+	 *      deferral also means we act on the POST-compile class and CDO,
+	 *      sidestepping the OnBlueprintPreCompile staleness this file's other
+	 *      gates document.
+	 */
+	static TArray<TWeakObjectPtr<UBlueprint>> PendingComponentSync;
+	static TArray<TWeakObjectPtr<UBlueprint>> PendingActorBake;
+	static FTSTicker::FDelegateHandle TickerHandle;
+	static bool bProcessing = false;
+
+	void ProcessPending()
+	{
+		if (bProcessing)
+		{
+			return;
+		}
+		TGuardValue<bool> ProcessingGuard(bProcessing, true);
+		TickerHandle.Reset();
+
+		TArray<TWeakObjectPtr<UBlueprint>> Components =
+			MoveTemp(PendingComponentSync);
+		TArray<TWeakObjectPtr<UBlueprint>> Actors = MoveTemp(PendingActorBake);
+		PendingComponentSync.Reset();
+		PendingActorBake.Reset();
+
+		for (const TWeakObjectPtr<UBlueprint>& Weak : Components)
+		{
+			if (UBlueprint* Blueprint = Weak.Get())
+			{
+				SeinDataComponentSync::SyncPayloadStructForBlueprint(Blueprint);
+			}
+		}
+		for (const TWeakObjectPtr<UBlueprint>& Weak : Actors)
+		{
+			UBlueprint* Blueprint = Weak.Get();
+			UClass* GeneratedClass = Blueprint ? Blueprint->GeneratedClass : nullptr;
+			if (!GeneratedClass)
+			{
+				continue;
+			}
+			TArray<const USeinEntityComponent*> Bridges;
+			AActor::GetActorClassDefaultComponents<USeinEntityComponent>(
+				GeneratedClass, Bridges);
+			if (Bridges.Num() > 0 && Bridges[0])
+			{
+				const_cast<USeinEntityComponent*>(Bridges[0])
+					->BakeAuthoredDataComponents(/*bInteractive=*/true);
+			}
+		}
+	}
+
+	void QueueProcess()
+	{
+		if (TickerHandle.IsValid())
+		{
+			return;
+		}
+		TickerHandle = FTSTicker::GetCoreTicker().AddTicker(
+			FTickerDelegate::CreateLambda([](float)
+		{
+			ProcessPending();
+			return false;
+		}));
+	}
+
+	void Validate(UBlueprint* Blueprint)
+	{
+		UClass* GeneratedClass = Blueprint ? Blueprint->GeneratedClass : nullptr;
+		if (!GeneratedClass)
+		{
+			return;
+		}
+		// Load-time regeneration compiles fire this hook too — syncing (and
+		// its MarkBlueprintAsModified side effects) on mere load dirtied every
+		// data-component package each session, and a cook commandlet must
+		// never reach asset creation/rename machinery from here.
+		if (Blueprint->bIsRegeneratingOnLoad || IsRunningCommandlet())
+		{
+			return;
+		}
+
+		if (GeneratedClass->IsChildOf(USeinDataComponent::StaticClass()))
+		{
+			// Prototype scope: a BP subclass of a BP data component inherits
+			// its parent CDO's PayloadStruct pointer, which the sync would
+			// otherwise hijack (rename + reshape the PARENT's asset).
+			// Component inheritance is deliberate productization design work.
+			if (Cast<UBlueprintGeneratedClass>(GeneratedClass->GetSuperClass()))
+			{
+				Blueprint->Message_Error(TEXT(
+					"Subclassing a Blueprint data component is not supported yet — create a new component from the base class instead."));
+				return;
+			}
+			for (const UEdGraph* Graph : Blueprint->FunctionGraphs)
+			{
+				Blueprint->Message_Error(FString::Printf(
+					TEXT("Sein data components are data-only: function '%s' can never run (the component does not exist at runtime). Logic belongs in abilities and effects."),
+					Graph ? *Graph->GetName() : TEXT("<null>")));
+			}
+			for (const UEdGraph* Graph : Blueprint->MacroGraphs)
+			{
+				Blueprint->Message_Error(FString::Printf(
+					TEXT("Sein data components are data-only: macro '%s' is not allowed."),
+					Graph ? *Graph->GetName() : TEXT("<null>")));
+			}
+			for (const UEdGraph* Graph : Blueprint->DelegateSignatureGraphs)
+			{
+				Blueprint->Message_Error(FString::Printf(
+					TEXT("Sein data components are data-only: event dispatcher '%s' is not allowed."),
+					Graph ? *Graph->GetName() : TEXT("<null>")));
+			}
+			for (const UEdGraph* Page : Blueprint->UbergraphPages)
+			{
+				if (!Page)
+				{
+					continue;
+				}
+				for (UEdGraphNode* Node : Page->Nodes)
+				{
+					if (Node && !Node->IsAutomaticallyPlacedGhostNode())
+					{
+						Blueprint->Message_Error(
+							TEXT("Sein data components are data-only: this graph can never execute (the component does not exist at runtime). Remove @@ — logic belongs in abilities and effects."),
+							Node);
+					}
+				}
+			}
+			for (const FBPVariableDescription& Var : Blueprint->NewVariables)
+			{
+				if (!SeinDeterminism::IsPinTypeDeterministic(Var.VarType))
+				{
+					Blueprint->Message_Warn(FString::Printf(
+						TEXT("Variable '%s' has a non-deterministic type and is EXCLUDED from the injected payload. Use FFixedPoint or other SeinDeterministic types."),
+						*Var.VarName.ToString()));
+				}
+			}
+			PendingComponentSync.AddUnique(Blueprint);
+			QueueProcess();
+			return;
+		}
+
+		if (GeneratedClass->IsChildOf(ASeinActor::StaticClass()))
+		{
+			PendingActorBake.AddUnique(Blueprint);
+			QueueProcess();
+		}
+	}
+
+	void Reset()
+	{
+		if (TickerHandle.IsValid())
+		{
+			FTSTicker::GetCoreTicker().RemoveTicker(TickerHandle);
+			TickerHandle.Reset();
+		}
+		PendingComponentSync.Reset();
+		PendingActorBake.Reset();
+	}
+}
+
 EAssetTypeCategories::Type FSeinARTSEditorModule::SeinARTSCategoryBit = EAssetTypeCategories::Misc;
 
 // Out-of-line ctor/dtor — keeps the forward-declared TUniquePtr<UDSValidator>
@@ -251,7 +528,45 @@ void FSeinARTSEditorModule::StartupModule()
 		AbilityContinuationPreCompileHandle =
 			GEditor->OnBlueprintPreCompile().AddStatic(
 				&SeinAbilityContinuationCompilerGate::Validate);
+		ComponentDataPreCompileHandle =
+			GEditor->OnBlueprintPreCompile().AddStatic(
+				&SeinComponentDataCompilerGate::Validate);
+		DataComponentPreCompileHandle =
+			GEditor->OnBlueprintPreCompile().AddStatic(
+				&SeinDataComponentAuthoringHooks::Validate);
 	}
+
+	// AC-authoring prototype: object-population measurement for the GC
+	// concern — counts authoring components by world context so editor, PIE,
+	// and -game populations can be compared directly.
+	AuthoringStatsCommand = MakeUnique<FAutoConsoleCommand>(
+		TEXT("Sein.Authoring.DumpDataComponentStats"),
+		TEXT("Count USeinDataComponent authoring objects by world context."),
+		FConsoleCommandDelegate::CreateLambda([]()
+		{
+			int32 Templates = 0, EditorCount = 0, PIECount = 0,
+				GameCount = 0, Other = 0;
+			for (TObjectIterator<USeinDataComponent> It; It; ++It)
+			{
+				const USeinDataComponent* Component = *It;
+				if (!Component) continue;
+				if (Component->IsTemplate()) { ++Templates; continue; }
+				const UWorld* World = Component->GetWorld();
+				if (!World) { ++Other; continue; }
+				switch (World->WorldType)
+				{
+				case EWorldType::Editor:
+				case EWorldType::EditorPreview: ++EditorCount; break;
+				case EWorldType::PIE:           ++PIECount; break;
+				case EWorldType::Game:
+				case EWorldType::GamePreview:   ++GameCount; break;
+				default:                        ++Other; break;
+				}
+			}
+			UE_LOG(LogSeinARTSEditor, Display,
+				TEXT("[SeinAuthoring] data components — templates=%d, editor=%d, PIE=%d, game=%d, other=%d."),
+				Templates, EditorCount, PIECount, GameCount, Other);
+		}));
 
 	// Register custom thumbnail renderers for our Blueprint subclasses.
 	UThumbnailManager& ThumbnailMgr = UThumbnailManager::Get();
@@ -430,6 +745,26 @@ void FSeinARTSEditorModule::ReleaseModuleOwnedState()
 		}
 		AbilityContinuationPreCompileHandle.Reset();
 	}
+	if (ComponentDataPreCompileHandle.IsValid())
+	{
+		if (GEditor != nullptr)
+		{
+			GEditor->OnBlueprintPreCompile().Remove(
+				ComponentDataPreCompileHandle);
+		}
+		ComponentDataPreCompileHandle.Reset();
+	}
+	if (DataComponentPreCompileHandle.IsValid())
+	{
+		if (GEditor != nullptr)
+		{
+			GEditor->OnBlueprintPreCompile().Remove(
+				DataComponentPreCompileHandle);
+		}
+		DataComponentPreCompileHandle.Reset();
+	}
+	SeinDataComponentAuthoringHooks::Reset();
+	AuthoringStatsCommand.Reset();
 
 	SimulationContentGenerateCommand.Reset();
 	if (SimulationContentPIEAuthorizer)

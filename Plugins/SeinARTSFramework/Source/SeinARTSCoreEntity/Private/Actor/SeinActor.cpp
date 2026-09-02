@@ -13,6 +13,12 @@
 #include "Core/SeinAssetTagKeys.h"
 #include "UObject/AssetRegistryTagsContext.h"
 
+#if WITH_EDITOR
+#include "Logging/MessageLog.h"                    // CheckForErrors → Map Check log
+#include "Logging/TokenizedMessage.h"
+#include "Misc/UObjectToken.h"
+#endif
+
 #include "SeinARTSCoreEntityLog.h"  // LogSeinSim (module-shared)
 
 ASeinActor::ASeinActor()
@@ -87,6 +93,44 @@ void ASeinActor::PostEditMove(bool bFinished)
 	if (bFinished)
 	{
 		MarkPackageDirty();
+	}
+}
+
+void ASeinActor::CheckForErrors()
+{
+	Super::CheckForErrors();
+
+	const USeinEntityComponent* Bridge = EntityBridge;
+	if (!Bridge)
+	{
+		return;
+	}
+
+	// The same shared validator match bootstrap runs — but against THIS placed
+	// instance's authored array, which the Blueprint pre-compile gate (class
+	// defaults only) can never see.
+	TArray<FSeinComponentDataIssue> Issues;
+	USeinEntityComponent::ValidateComponentData(Bridge->ComponentData, Issues);
+	for (const FSeinComponentDataIssue& Issue : Issues)
+	{
+		// Error, not Warning: these entries abort match bootstrap outright.
+		FMessageLog("MapCheck").Error()
+			->AddToken(FUObjectToken::Create(this))
+			->AddToken(FTextToken::Create(FText::FromString(
+				Issue.Description + TEXT(". A match bootstrapping this level will fail on this entry."))));
+	}
+
+	if (Bridge->HasStructuralComponentDataOverride()
+		&& !Bridge->IsComponentDataShapeExplainedByAuthoring())
+	{
+		// Shape divergence fully explained by this instance's authoring data
+		// components (e.g. a per-instance Injection Enabled toggle) is intent,
+		// not staleness — nagging it would advise a revert the next bake
+		// undoes.
+		FMessageLog("MapCheck").Warning()
+			->AddToken(FUObjectToken::Create(this))
+			->AddToken(FTextToken::Create(FText::FromString(TEXT(
+				"ComponentData differs in shape from the class default (stale or deliberate structural override) and no longer tracks Blueprint ComponentData updates. If unintended, revert the Component Data property on this actor to re-sync."))));
 	}
 }
 #endif

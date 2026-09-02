@@ -55,6 +55,8 @@
 #include "Types/Transform.h"
 #include "SeinEntityComponent.generated.h"
 
+class FObjectPreSaveContext;
+class USeinDataComponent;
 class USeinWorldSubsystem;
 struct FSeinVisualEvent;
 
@@ -74,6 +76,58 @@ struct FSeinComponentDataDefaultChangeRecord
 
 	UPROPERTY()
 	FSeinComponentPropertyPatch NewValue;
+};
+
+/** Editor-only snapshot of one authored ComponentData entry: struct type path
+ *  plus the entry's full exported value text. */
+USTRUCT()
+struct FSeinComponentDataEntrySnapshot
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FString ComponentTypePath;
+
+	UPROPERTY()
+	FString ExportedValue;
+};
+
+/** Editor-only history record for one STRUCTURAL ComponentData change on a
+ *  class default — entries added, removed, or retyped. Value-only edits use
+ *  FSeinComponentDataDefaultChangeRecord (the property-patch lane); the two
+ *  lanes share one revision counter and replay together in revision order.
+ *  Full before/after snapshots are stored because structural adoption is
+ *  wholesale: an instance still equal to Before (modulo its recorded property
+ *  overrides) is rebuilt as After with those overrides re-applied. */
+USTRUCT()
+struct FSeinComponentDataStructuralChangeRecord
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	int32 Revision = 0;
+
+	UPROPERTY()
+	TArray<FSeinComponentDataEntrySnapshot> Before;
+
+	UPROPERTY()
+	TArray<FSeinComponentDataEntrySnapshot> After;
+};
+
+/** One problem found while validating an authored ComponentData array — see
+ *  `USeinEntityComponent::ValidateComponentData`. Never serialized; a plain
+ *  C++ struct is sufficient since it only carries editor/validation-time
+ *  diagnostics between call sites in the same process. */
+struct FSeinComponentDataIssue
+{
+	/** Index into the ComponentData array this issue applies to. */
+	int32 EntryIndex = INDEX_NONE;
+
+	/** Human-readable reason, e.g. "ComponentData[3] has no resolvable
+	 *  struct type ...". Written so it reads naturally whether appended to
+	 *  a runtime warning, a Blueprint compiler error, or a bootstrap
+	 *  failure string. */
+	FString Description;
 };
 
 /** Render-only ray-tracing geometry policy for one simulation-backed actor.
@@ -173,7 +227,8 @@ public:
 	 *
 	 *  Tags are universal to every entity — there's no per-entity sim
 	 *  component for tag state. The world subsystem maintains a centralized
-	 *  EntityTagStates map; this UPROPERTY is the seed it reads at spawn. */
+	 *  EntityTagStates table (slot-indexed FSeinEntityTagStateTable); this
+	 *  UPROPERTY is the seed it reads at spawn. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	FGameplayTagContainer BaseTags;
 
@@ -264,6 +319,46 @@ public:
 		return nullptr;
 	}
 
+	/** Validate a ComponentData array for authoring correctness: every entry
+	 *  must resolve to a real struct type (an empty picker row, or a struct
+	 *  asset later deleted/renamed, does not), and no two entries may author
+	 *  the same struct type. Returns true iff OutIssues is left empty.
+	 *
+	 *  This is the SINGLE shared definition of "valid ComponentData" — used
+	 *  by the Blueprint pre-compile gate (SeinARTSEditorModule's
+	 *  OnBlueprintPreCompile hook), match bootstrap
+	 *  (FSeinMatchBootstrapTransaction::ValidateEntityComponentData), and
+	 *  this component's own runtime InjectAuthoredComponents. All three call
+	 *  through here so they can never silently disagree about what is
+	 *  broken; only what happens on failure (warn at compile, abort the
+	 *  match, or skip-and-warn a live spawn) differs per call site.
+	 *
+	 *  The compile gate reads the CDO of Blueprint->GeneratedClass, which at
+	 *  OnBlueprintPreCompile time is still the class from the LAST compile —
+	 *  edits made through the property editor land on that same live CDO
+	 *  directly (independent of compilation), so ordinary ComponentData
+	 *  value edits are always caught on the very next compile. The one gap:
+	 *  a USeinEntityComponent added for the first time via the SCS in this
+	 *  same edit session isn't on that old CDO yet, so a bad entry on it
+	 *  slips through THIS compile and is caught on the next one instead —
+	 *  moot for ASeinActor units, where the entity bridge is already a
+	 *  native default subobject before any authoring happens. Match
+	 *  bootstrap remains the authoritative backstop regardless. */
+	static bool ValidateComponentData(
+		const TArray<FInstancedStruct>& ComponentData,
+		TArray<FSeinComponentDataIssue>& OutIssues);
+
+#if WITH_EDITORONLY_DATA
+	/** True when this placed instance's ComponentData deliberately (or, for
+	 *  pre-history content, irrecoverably) differs in SHAPE from its class
+	 *  default. Structural adoption skips such instances; Map Check
+	 *  (ASeinActor::CheckForErrors) surfaces them with the repair action. */
+	bool HasStructuralComponentDataOverride() const
+	{
+		return bComponentDataStructuralOverride;
+	}
+#endif
+
 	/** Iterate ComponentData and inject every entry into the world subsystem's
 	 *  component storage for `Handle`. Duplicate authored struct types are an
 	 *  authoring error; the deterministic later-entry value wins with a warning. */
@@ -318,6 +413,39 @@ public:
 	 *  two-layer inherit/override semantics, and the live-tuning broadcast. */
 	void BeginComponentDataEdit();
 	void EndComponentDataEdit();
+
+	// =========================================================================
+	// AC-authoring prototype: bake USeinDataComponent payloads into
+	// ComponentData (the array stays the injected runtime carrier).
+	// =========================================================================
+
+	/** One authoring data component was edited. Bakes ONLY that component's
+	 *  payload into ComponentData through the bracketed edit pipeline (which
+	 *  supplies instance-override bookkeeping in editor worlds, the
+	 *  entity-scoped live-tuning command in PIE, and class history/propagation
+	 *  on class defaults). Single-component on purpose: a full re-bake here
+	 *  can pin OTHER components' mid-transition values as instance overrides
+	 *  the designer never authored. */
+	void NotifyAuthoringComponentEdited(const USeinDataComponent& Component);
+
+	/** True when this instance's entry-type shape differs from its class
+	 *  default only in ways its own authoring components explain (e.g. a
+	 *  per-instance Injection Enabled toggle). Map Check suppresses the
+	 *  stale-override nag for explained shapes — the divergence is intent. */
+	bool IsComponentDataShapeExplainedByAuthoring() const;
+
+	/** Bake every enabled USeinDataComponent on the owner into ComponentData.
+	 *  Entries are managed per payload type: upserted while a component for
+	 *  the type is present and enabled, removed when it is disabled or the
+	 *  component is gone (tracked via the baked-types ledger). bInteractive
+	 *  runs the bake through the Begin/End edit bracket so history,
+	 *  propagation, and live tuning fire (compile hooks, instance edits);
+	 *  non-interactive is a silent value refresh for PreSave/cook. */
+	void BakeAuthoredDataComponents(bool bInteractive);
+
+	/** PreSave belt: refresh the baked entries (silently) so saved and cooked
+	 *  packages always carry the authoring components' current values. */
+	virtual void PreSave(FObjectPreSaveContext SaveContext) override;
 #endif
 
 	/** Set the entity handle this component represents.
@@ -445,6 +573,30 @@ private:
 	UPROPERTY()
 	TArray<FSeinComponentDataDefaultChangeRecord>
 		ComponentDataDefaultChangeHistory;
+
+	/** CDO-owned structural history (entries added/removed/retyped), replayed
+	 * together with the property history in shared-revision order. Retained for
+	 * the same unopened-level reason. Snapshots are bounded per entry; an edit
+	 * whose snapshot cannot be captured is warned about and not recorded. */
+	UPROPERTY()
+	TArray<FSeinComponentDataStructuralChangeRecord>
+		ComponentDataStructuralChangeHistory;
+
+	/** Instance-owned: this placed actor's ComponentData deliberately (or, for
+	 * pre-history content, irrecoverably) differs in SHAPE from its class
+	 * default — entry set mismatch that no recorded transition explains. While
+	 * set, structural adoption skips this instance and reconciliation stays
+	 * quiet; reverting the Component Data property to the class default clears
+	 * it. Surfaced by ASeinActor::CheckForErrors in Map Check. */
+	UPROPERTY()
+	bool bComponentDataStructuralOverride = false;
+
+	/** AC-authoring prototype: payload type paths currently managed by the
+	 * authoring-component bake. Lets the bake remove an entry whose authoring
+	 * component was deleted or disabled without touching hand-authored
+	 * entries of other types. */
+	UPROPERTY()
+	TArray<FString> BakedComponentDataTypes;
 #endif
 
 #if WITH_EDITOR
@@ -453,6 +605,39 @@ private:
 	bool bCapturedComponentDataBeforeEditorChange = false;
 
 	void EnsureComponentDataOverrideMetadataInitialized();
+	/** Class-default structural edit (entries added/removed/retyped): record a
+	 *  structural history transition and adopt it into every loaded instance and
+	 *  derived class default still equal to the old default (modulo recorded
+	 *  property overrides). PIE actor instances are skipped — a live match's
+	 *  bridge topology must stay in step with its injected sim storage — and
+	 *  reconcile on their next editor load. */
+	void HandleStructuralClassDefaultEdit();
+	/** Outcome of replaying one structural record against this bridge. */
+	enum class EStructuralAdoptOutcome : uint8
+	{
+		Adopted,        // shape matched Before — rebuilt as After, value overrides preserved
+		AlreadyCurrent, // shape already matches After — nothing to do
+		Flagged,        // shape matches neither — structural divergence
+		Skipped         // snapshot unusable (deleted struct, bound) — left untouched
+	};
+	/** Replay one structural record. Shape (entry-type multiset) equal to
+	 *  Before → rebuild as After, preserving EVERY value difference from Before
+	 *  (a value diff from the old default IS an override, whether recorded or
+	 *  legacy — same philosophy as the property lane's else-override rule); on
+	 *  instances the override ledger is rebuilt to exactly the re-applied keys.
+	 *  Shape equal to After → nothing to do. Anything else → Flagged; the
+	 *  caller decides layer semantics (instances set the structural-override
+	 *  flag; a derived class default's divergence IS its override, quietly). */
+	EStructuralAdoptOutcome TryAdoptStructuralRecord(
+		const FSeinComponentDataStructuralChangeRecord& Record);
+	/** Snapshot BeforeEntries -> current ComponentData into this class
+	 *  default's own structural history under a fresh revision. False (with a
+	 *  warning) when a snapshot exceeds its bound or cannot be captured. */
+	bool RecordStructuralChangeToOwnHistory(
+		const TArray<FInstancedStruct>& BeforeEntries);
+	/** Clear/set bComponentDataStructuralOverride against the current class
+	 *  default after an instance edit or refresh; returns true when it changed. */
+	bool ReconcileStructuralOverrideFlag();
 	/** Append one revision of (old -> new) records to this class default's
 	 *  history. Before is the authored payload prior to the change. */
 	void RecordComponentDataClassDefaultChange(
