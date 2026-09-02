@@ -20,7 +20,7 @@ absent. Cover-aware Squad dispatch lives in the separate, explicitly enabled
 
 ## Provider and query model
 
-- `FSeinCoverComponent` is deterministic provider data authored in `ComponentData`: quality,
+- `FSeinCoverPayload` is deterministic provider data authored in `ComponentData`: quality,
   directionality, slots, area, and editor generation settings.
 - `USeinCoverSystem` is currently the replaceable provider-lifecycle and query surface.
   `USeinCoverDefault` is the shipped query policy. `FSeinCoverAssignmentPlanner` owns the shared

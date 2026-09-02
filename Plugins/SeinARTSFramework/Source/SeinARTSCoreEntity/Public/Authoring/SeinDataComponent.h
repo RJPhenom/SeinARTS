@@ -28,10 +28,11 @@
  *           any graph content in Blueprint subclasses. Logic belongs in
  *           abilities, effects, and systems.
  *
- *           NAMING NOTE: this base takes the name `USeinEntityBridgeComponent`
- *           after the bridge is renamed to `USeinEntityBridgeComponent`
- *           (agreed migration Phase 1). The scratch name keeps the prototype
- *           diff independent of that rename.
+ *           NAMING NOTE: this base takes the name `USeinEntityComponent` once
+ *           the content resave retires the bridge's ClassRedirect (the bridge
+ *           is already `USeinEntityBridgeComponent`). Until then the scratch
+ *           name stands — redirects apply to imports unconditionally, so the
+ *           freed name cannot be reused while its redirect lives.
  */
 
 #pragma once
@@ -123,22 +124,12 @@ public:
 //
 // Each concrete embeds its payload struct directly: per-field Blueprint
 // inheritance and per-field instance overrides are native engine behavior,
-// with zero mirror drift. FSeinFogVisibilityPayload has no authoring
+// with zero mirror drift. (No shared macro for these bodies: UHT does not
+// expand user macros, so a UPROPERTY inside one is INVISIBLE to reflection —
+// caught 2026-09-01 when the fleet shipped unreflected. Longhand or bust.)
+// FSeinFogVisibilityPayload has no authoring
 // component — it is auto-injected from the bridge's top-level fields.
 
-#define SEIN_DECLARE_AUTHORED_PAYLOAD(MemberName, PayloadType) \
-public: \
-	UPROPERTY(EditAnywhere, Category = "SeinARTS", meta = (ShowOnlyInnerProperties)) \
-	PayloadType MemberName; \
-	virtual const UScriptStruct* GetPayloadStruct() const override \
-	{ \
-		return PayloadType::StaticStruct(); \
-	} \
-	virtual bool WritePayload(FInstancedStruct& Out) const override \
-	{ \
-		Out.InitializeAs<PayloadType>(MemberName); \
-		return true; \
-	}
 
 /** Physical extents (footprint / bounds) of the entity. */
 UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComponent))
@@ -161,7 +152,19 @@ UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComp
 class SEINARTSCOREENTITY_API USeinAbilitiesComponent : public USeinDataComponent
 {
 	GENERATED_BODY()
-	SEIN_DECLARE_AUTHORED_PAYLOAD(Abilities, FSeinAbilityPayload)
+public:
+	UPROPERTY(EditAnywhere, Category = "SeinARTS", meta = (ShowOnlyInnerProperties))
+	FSeinAbilityPayload Abilities;
+
+	virtual const UScriptStruct* GetPayloadStruct() const override
+	{
+		return FSeinAbilityPayload::StaticStruct();
+	}
+	virtual bool WritePayload(FInstancedStruct& Out) const override
+	{
+		Out.InitializeAs<FSeinAbilityPayload>(Abilities);
+		return true;
+	}
 };
 
 /** Identity: display name, description, icons, identity tag. */
@@ -169,7 +172,19 @@ UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComp
 class SEINARTSCOREENTITY_API USeinIdentityComponent : public USeinDataComponent
 {
 	GENERATED_BODY()
-	SEIN_DECLARE_AUTHORED_PAYLOAD(Identity, FSeinIdentityPayload)
+public:
+	UPROPERTY(EditAnywhere, Category = "SeinARTS", meta = (ShowOnlyInnerProperties))
+	FSeinIdentityPayload Identity;
+
+	virtual const UScriptStruct* GetPayloadStruct() const override
+	{
+		return FSeinIdentityPayload::StaticStruct();
+	}
+	virtual bool WritePayload(FInstancedStruct& Out) const override
+	{
+		Out.InitializeAs<FSeinIdentityPayload>(Identity);
+		return true;
+	}
 };
 
 /** Movement configuration (mode class + tuning sub-data). */
@@ -177,7 +192,19 @@ UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComp
 class SEINARTSCOREENTITY_API USeinMovementComponent : public USeinDataComponent
 {
 	GENERATED_BODY()
-	SEIN_DECLARE_AUTHORED_PAYLOAD(Movement, FSeinMovementPayload)
+public:
+	UPROPERTY(EditAnywhere, Category = "SeinARTS", meta = (ShowOnlyInnerProperties))
+	FSeinMovementPayload Movement;
+
+	virtual const UScriptStruct* GetPayloadStruct() const override
+	{
+		return FSeinMovementPayload::StaticStruct();
+	}
+	virtual bool WritePayload(FInstancedStruct& Out) const override
+	{
+		Out.InitializeAs<FSeinMovementPayload>(Movement);
+		return true;
+	}
 };
 
 /** Navigation configuration (layer mask, footprint routing). */
@@ -185,7 +212,19 @@ UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComp
 class SEINARTSCOREENTITY_API USeinNavigationComponent : public USeinDataComponent
 {
 	GENERATED_BODY()
-	SEIN_DECLARE_AUTHORED_PAYLOAD(Navigation, FSeinNavigationPayload)
+public:
+	UPROPERTY(EditAnywhere, Category = "SeinARTS", meta = (ShowOnlyInnerProperties))
+	FSeinNavigationPayload Navigation;
+
+	virtual const UScriptStruct* GetPayloadStruct() const override
+	{
+		return FSeinNavigationPayload::StaticStruct();
+	}
+	virtual bool WritePayload(FInstancedStruct& Out) const override
+	{
+		Out.InitializeAs<FSeinNavigationPayload>(Navigation);
+		return true;
+	}
 };
 
 /** Production queue capability (this entity can produce). */
@@ -193,7 +232,19 @@ UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComp
 class SEINARTSCOREENTITY_API USeinProductionComponent : public USeinDataComponent
 {
 	GENERATED_BODY()
-	SEIN_DECLARE_AUTHORED_PAYLOAD(Production, FSeinProductionPayload)
+public:
+	UPROPERTY(EditAnywhere, Category = "SeinARTS", meta = (ShowOnlyInnerProperties))
+	FSeinProductionPayload Production;
+
+	virtual const UScriptStruct* GetPayloadStruct() const override
+	{
+		return FSeinProductionPayload::StaticStruct();
+	}
+	virtual bool WritePayload(FInstancedStruct& Out) const override
+	{
+		Out.InitializeAs<FSeinProductionPayload>(Production);
+		return true;
+	}
 };
 
 /** Producible capability (this entity can be produced; costs/time). */
@@ -201,7 +252,19 @@ UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComp
 class SEINARTSCOREENTITY_API USeinProducibleComponent : public USeinDataComponent
 {
 	GENERATED_BODY()
-	SEIN_DECLARE_AUTHORED_PAYLOAD(Producible, FSeinProduciblePayload)
+public:
+	UPROPERTY(EditAnywhere, Category = "SeinARTS", meta = (ShowOnlyInnerProperties))
+	FSeinProduciblePayload Producible;
+
+	virtual const UScriptStruct* GetPayloadStruct() const override
+	{
+		return FSeinProduciblePayload::StaticStruct();
+	}
+	virtual bool WritePayload(FInstancedStruct& Out) const override
+	{
+		Out.InitializeAs<FSeinProduciblePayload>(Producible);
+		return true;
+	}
 };
 
 /** Construction-site state (built by workers over time). */
@@ -209,7 +272,19 @@ UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComp
 class SEINARTSCOREENTITY_API USeinConstructionComponent : public USeinDataComponent
 {
 	GENERATED_BODY()
-	SEIN_DECLARE_AUTHORED_PAYLOAD(Construction, FSeinConstructionPayload)
+public:
+	UPROPERTY(EditAnywhere, Category = "SeinARTS", meta = (ShowOnlyInnerProperties))
+	FSeinConstructionPayload Construction;
+
+	virtual const UScriptStruct* GetPayloadStruct() const override
+	{
+		return FSeinConstructionPayload::StaticStruct();
+	}
+	virtual bool WritePayload(FInstancedStruct& Out) const override
+	{
+		Out.InitializeAs<FSeinConstructionPayload>(Construction);
+		return true;
+	}
 };
 
 /** Entity control routing (selectability, command brokering). */
@@ -217,7 +292,19 @@ UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComp
 class SEINARTSCOREENTITY_API USeinEntityControlComponent : public USeinDataComponent
 {
 	GENERATED_BODY()
-	SEIN_DECLARE_AUTHORED_PAYLOAD(EntityControl, FSeinEntityControlPayload)
+public:
+	UPROPERTY(EditAnywhere, Category = "SeinARTS", meta = (ShowOnlyInnerProperties))
+	FSeinEntityControlPayload EntityControl;
+
+	virtual const UScriptStruct* GetPayloadStruct() const override
+	{
+		return FSeinEntityControlPayload::StaticStruct();
+	}
+	virtual bool WritePayload(FInstancedStruct& Out) const override
+	{
+		Out.InitializeAs<FSeinEntityControlPayload>(EntityControl);
+		return true;
+	}
 };
 
 /** Active-effects storage seed. */
@@ -225,7 +312,19 @@ UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComp
 class SEINARTSCOREENTITY_API USeinActiveEffectsComponent : public USeinDataComponent
 {
 	GENERATED_BODY()
-	SEIN_DECLARE_AUTHORED_PAYLOAD(ActiveEffects, FSeinActiveEffectsPayload)
+public:
+	UPROPERTY(EditAnywhere, Category = "SeinARTS", meta = (ShowOnlyInnerProperties))
+	FSeinActiveEffectsPayload ActiveEffects;
+
+	virtual const UScriptStruct* GetPayloadStruct() const override
+	{
+		return FSeinActiveEffectsPayload::StaticStruct();
+	}
+	virtual bool WritePayload(FInstancedStruct& Out) const override
+	{
+		Out.InitializeAs<FSeinActiveEffectsPayload>(ActiveEffects);
+		return true;
+	}
 };
 
 /** Child transform sockets (turrets, hardpoints, attachments). */
@@ -233,7 +332,19 @@ UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComp
 class SEINARTSCOREENTITY_API USeinChildTransformsComponent : public USeinDataComponent
 {
 	GENERATED_BODY()
-	SEIN_DECLARE_AUTHORED_PAYLOAD(ChildTransforms, FSeinChildTransformsPayload)
+public:
+	UPROPERTY(EditAnywhere, Category = "SeinARTS", meta = (ShowOnlyInnerProperties))
+	FSeinChildTransformsPayload ChildTransforms;
+
+	virtual const UScriptStruct* GetPayloadStruct() const override
+	{
+		return FSeinChildTransformsPayload::StaticStruct();
+	}
+	virtual bool WritePayload(FInstancedStruct& Out) const override
+	{
+		Out.InitializeAs<FSeinChildTransformsPayload>(ChildTransforms);
+		return true;
+	}
 };
 
 /** Squad definition (slots, formation, reinforcement). */
@@ -241,7 +352,19 @@ UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComp
 class SEINARTSCOREENTITY_API USeinSquadComponent : public USeinDataComponent
 {
 	GENERATED_BODY()
-	SEIN_DECLARE_AUTHORED_PAYLOAD(Squad, FSeinSquadPayload)
+public:
+	UPROPERTY(EditAnywhere, Category = "SeinARTS", meta = (ShowOnlyInnerProperties))
+	FSeinSquadPayload Squad;
+
+	virtual const UScriptStruct* GetPayloadStruct() const override
+	{
+		return FSeinSquadPayload::StaticStruct();
+	}
+	virtual bool WritePayload(FInstancedStruct& Out) const override
+	{
+		Out.InitializeAs<FSeinSquadPayload>(Squad);
+		return true;
+	}
 };
 
 /** Squad-member linkage for entities that join squads. */
@@ -249,5 +372,17 @@ UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComp
 class SEINARTSCOREENTITY_API USeinSquadMemberComponent : public USeinDataComponent
 {
 	GENERATED_BODY()
-	SEIN_DECLARE_AUTHORED_PAYLOAD(SquadMember, FSeinSquadMemberPayload)
+public:
+	UPROPERTY(EditAnywhere, Category = "SeinARTS", meta = (ShowOnlyInnerProperties))
+	FSeinSquadMemberPayload SquadMember;
+
+	virtual const UScriptStruct* GetPayloadStruct() const override
+	{
+		return FSeinSquadMemberPayload::StaticStruct();
+	}
+	virtual bool WritePayload(FInstancedStruct& Out) const override
+	{
+		Out.InitializeAs<FSeinSquadMemberPayload>(SquadMember);
+		return true;
+	}
 };

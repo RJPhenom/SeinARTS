@@ -23,5 +23,17 @@ UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComp
 class SEINARTSFOGOFWAR_API USeinVisionComponent : public USeinDataComponent
 {
 	GENERATED_BODY()
-	SEIN_DECLARE_AUTHORED_PAYLOAD(Vision, FSeinVisionPayload)
+public:
+	UPROPERTY(EditAnywhere, Category = "SeinARTS", meta = (ShowOnlyInnerProperties))
+	FSeinVisionPayload Vision;
+
+	virtual const UScriptStruct* GetPayloadStruct() const override
+	{
+		return FSeinVisionPayload::StaticStruct();
+	}
+	virtual bool WritePayload(FInstancedStruct& Out) const override
+	{
+		Out.InitializeAs<FSeinVisionPayload>(Vision);
+		return true;
+	}
 };
