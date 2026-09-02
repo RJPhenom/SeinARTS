@@ -13,7 +13,7 @@ without Movement+.
 
 - Runtime module: `SeinARTSMovementPlus`.
 - Dependency direction is extension to framework only.
-- `FSeinMovementComponent::MovementClass` is a soft class path resolved when
+- `FSeinMovementPayload::MovementClass` is a soft class path resolved when
   `USeinMovementSubsystem` creates the persistent per-entity movement instance.
 - Invalid or missing extension classes fall back to the framework Basic implementation.
 - `MovementClassData` is an `FInstancedStruct`; per-mode data does not create a core dependency.
@@ -85,7 +85,7 @@ direction before changing the shipped default behavior.
 - Telemetry is sampled in FinalObservation. Wheel/track motion and yaw use settled post-collision
   transforms; throttle/brake use the movement driver's velocity output so collision correction or
   containment cannot masquerade as input.
-- `FSeinMovementComponent::RenderState` and sampler history are Transient, non-canonical, reset on
+- `FSeinMovementPayload::RenderState` and sampler history are Transient, non-canonical, reset on
   spawn/restore/class loss, and may never feed simulation. The raw field is not Blueprint-visible;
   movement and Ability Blueprint validators block presentation-only getters from simulation graphs.
 - Wheel phase is returned in `[0, 2*pi)` after a double-precision render-boundary conversion. The

@@ -12,7 +12,7 @@ behavior and this concise guide win when they conflict.
 - The framework owns neutral squad data; this extension owns all squad behavior.
 - The framework must continue to build and run when this extension is absent.
 
-Core-defined data includes `FSeinSquadComponent`, `FSeinSquadMemberComponent`, slots,
+Core-defined data includes `FSeinSquadPayload`, `FSeinSquadMemberPayload`, slots,
 reinforcement entries, containment mode, and squad visual-event factories. This plugin adds the
 system, subsystem, formation, dispatch resolver, Blueprint libraries, settings, and starter
 reinforcement ability. Do not duplicate the payload structs in the extension.

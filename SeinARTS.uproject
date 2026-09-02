@@ -12,6 +12,10 @@
   ],
   "Plugins": [
     {
+      "Name": "PythonScriptPlugin",
+      "Enabled": false
+    },
+    {
       "Name": "ModelingToolsEditorMode",
       "Enabled": true
     },

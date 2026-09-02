@@ -24,5 +24,17 @@ UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComp
 class SEINARTSCOVER_API USeinCoverComponent : public USeinDataComponent
 {
 	GENERATED_BODY()
-	SEIN_DECLARE_AUTHORED_PAYLOAD(Cover, FSeinCoverPayload)
+public:
+	UPROPERTY(EditAnywhere, Category = "SeinARTS", meta = (ShowOnlyInnerProperties))
+	FSeinCoverPayload Cover;
+
+	virtual const UScriptStruct* GetPayloadStruct() const override
+	{
+		return FSeinCoverPayload::StaticStruct();
+	}
+	virtual bool WritePayload(FInstancedStruct& Out) const override
+	{
+		Out.InitializeAs<FSeinCoverPayload>(Cover);
+		return true;
+	}
 };

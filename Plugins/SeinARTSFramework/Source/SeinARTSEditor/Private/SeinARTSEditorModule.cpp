@@ -654,7 +654,7 @@ void FSeinARTSEditorModule::StartupModule()
 			USeinEffect::StaticClass()->GetFName(),
 			FOnGetDetailCustomizationInstance::CreateStatic(&FSeinEffectAutoTagDetails::MakeInstance));
 		PropertyModule.RegisterCustomPropertyTypeLayout(
-			TEXT("SeinIdentityComponent"),
+			TEXT("SeinIdentityPayload"),
 			FOnGetPropertyTypeCustomizationInstance::CreateStatic(&FSeinIdentityComponentAutoTagDetails::MakeInstance));
 		PropertyModule.RegisterCustomClassLayout(
 			USeinARTSCoreSettings::StaticClass()->GetFName(),
@@ -842,7 +842,7 @@ void FSeinARTSEditorModule::ReleaseModuleOwnedState()
 		PropertyModule.UnregisterCustomPropertyTypeLayout(TEXT("SeinVisionStamp"));
 		PropertyModule.UnregisterCustomPropertyTypeLayout(TEXT("SeinCollisionResponseContainer"));
 		PropertyModule.UnregisterCustomPropertyTypeLayout(TEXT("SeinCollisionObjectType"));
-		PropertyModule.UnregisterCustomPropertyTypeLayout(TEXT("SeinIdentityComponent"));
+		PropertyModule.UnregisterCustomPropertyTypeLayout(TEXT("SeinIdentityPayload"));
 		PropertyModule.UnregisterCustomPropertyTypeLayout(TEXT("SeinSquadSlot"));
 		PropertyModule.UnregisterCustomClassLayout(USeinAbility::StaticClass()->GetFName());
 		PropertyModule.UnregisterCustomClassLayout(USeinEffect::StaticClass()->GetFName());
