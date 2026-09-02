@@ -8,8 +8,8 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Simulation/SeinWorldSubsystem.h"
-#include "Components/SeinSquadComponent.h"
-#include "Components/SeinSquadMemberComponent.h"
+#include "Components/SeinSquadPayload.h"
+#include "Components/SeinSquadMemberPayload.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinBPFL, Log, All);
 
@@ -20,49 +20,49 @@ USeinWorldSubsystem* USeinSquadBPFL::GetWorldSubsystem(const UObject* WorldConte
 	return World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
 }
 
-bool USeinSquadBPFL::SeinGetSquadData(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, FSeinSquadComponent& OutData)
+bool USeinSquadBPFL::SeinGetSquadData(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, FSeinSquadPayload& OutData)
 {
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
 	if (!Subsystem) { UE_LOG(LogSeinBPFL, Warning, TEXT("GetSquadData: no SeinWorldSubsystem")); return false; }
-	const FSeinSquadComponent* Data = Subsystem->GetComponent<FSeinSquadComponent>(EntityHandle);
-	if (!Data) { UE_LOG(LogSeinBPFL, Warning, TEXT("GetSquadData: entity %s invalid or has no FSeinSquadComponent"), *EntityHandle.ToString()); return false; }
+	const FSeinSquadPayload* Data = Subsystem->GetComponent<FSeinSquadPayload>(EntityHandle);
+	if (!Data) { UE_LOG(LogSeinBPFL, Warning, TEXT("GetSquadData: entity %s invalid or has no FSeinSquadPayload"), *EntityHandle.ToString()); return false; }
 	OutData = *Data;
 	return true;
 }
 
-TArray<FSeinSquadComponent> USeinSquadBPFL::SeinGetSquadDataMany(const UObject* WorldContextObject, const TArray<FSeinEntityHandle>& EntityHandles)
+TArray<FSeinSquadPayload> USeinSquadBPFL::SeinGetSquadDataMany(const UObject* WorldContextObject, const TArray<FSeinEntityHandle>& EntityHandles)
 {
-	TArray<FSeinSquadComponent> Result;
+	TArray<FSeinSquadPayload> Result;
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
 	if (!Subsystem) return Result;
 	Result.Reserve(EntityHandles.Num());
 	for (const FSeinEntityHandle& Handle : EntityHandles)
 	{
-		if (const FSeinSquadComponent* Data = Subsystem->GetComponent<FSeinSquadComponent>(Handle)) { Result.Add(*Data); }
+		if (const FSeinSquadPayload* Data = Subsystem->GetComponent<FSeinSquadPayload>(Handle)) { Result.Add(*Data); }
 		else { UE_LOG(LogSeinBPFL, Warning, TEXT("GetSquadData (batch): skipping %s"), *Handle.ToString()); }
 	}
 	return Result;
 }
 
-bool USeinSquadBPFL::SeinGetSquadMemberData(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, FSeinSquadMemberComponent& OutData)
+bool USeinSquadBPFL::SeinGetSquadMemberData(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, FSeinSquadMemberPayload& OutData)
 {
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
 	if (!Subsystem) { UE_LOG(LogSeinBPFL, Warning, TEXT("GetSquadMemberData: no SeinWorldSubsystem")); return false; }
-	const FSeinSquadMemberComponent* Data = Subsystem->GetComponent<FSeinSquadMemberComponent>(EntityHandle);
-	if (!Data) { UE_LOG(LogSeinBPFL, Warning, TEXT("GetSquadMemberData: entity %s invalid or has no FSeinSquadMemberComponent"), *EntityHandle.ToString()); return false; }
+	const FSeinSquadMemberPayload* Data = Subsystem->GetComponent<FSeinSquadMemberPayload>(EntityHandle);
+	if (!Data) { UE_LOG(LogSeinBPFL, Warning, TEXT("GetSquadMemberData: entity %s invalid or has no FSeinSquadMemberPayload"), *EntityHandle.ToString()); return false; }
 	OutData = *Data;
 	return true;
 }
 
-TArray<FSeinSquadMemberComponent> USeinSquadBPFL::SeinGetSquadMemberDataMany(const UObject* WorldContextObject, const TArray<FSeinEntityHandle>& EntityHandles)
+TArray<FSeinSquadMemberPayload> USeinSquadBPFL::SeinGetSquadMemberDataMany(const UObject* WorldContextObject, const TArray<FSeinEntityHandle>& EntityHandles)
 {
-	TArray<FSeinSquadMemberComponent> Result;
+	TArray<FSeinSquadMemberPayload> Result;
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
 	if (!Subsystem) return Result;
 	Result.Reserve(EntityHandles.Num());
 	for (const FSeinEntityHandle& Handle : EntityHandles)
 	{
-		if (const FSeinSquadMemberComponent* Data = Subsystem->GetComponent<FSeinSquadMemberComponent>(Handle)) { Result.Add(*Data); }
+		if (const FSeinSquadMemberPayload* Data = Subsystem->GetComponent<FSeinSquadMemberPayload>(Handle)) { Result.Add(*Data); }
 		else { UE_LOG(LogSeinBPFL, Warning, TEXT("GetSquadMemberData (batch): skipping %s"), *Handle.ToString()); }
 	}
 	return Result;
@@ -73,7 +73,7 @@ TArray<FSeinEntityHandle> USeinSquadBPFL::SeinGetSquadMembers(const UObject* Wor
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
 	if (!Subsystem) return TArray<FSeinEntityHandle>();
 
-	const FSeinSquadComponent* SquadComp = Subsystem->GetComponent<FSeinSquadComponent>(SquadHandle);
+	const FSeinSquadPayload* SquadComp = Subsystem->GetComponent<FSeinSquadPayload>(SquadHandle);
 	if (!SquadComp) return TArray<FSeinEntityHandle>();
 
 	return SquadComp->GetLiveMembers();
@@ -84,7 +84,7 @@ FSeinEntityHandle USeinSquadBPFL::SeinGetSquadLeader(const UObject* WorldContext
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
 	if (!Subsystem) return FSeinEntityHandle::Invalid();
 
-	const FSeinSquadComponent* SquadComp = Subsystem->GetComponent<FSeinSquadComponent>(SquadHandle);
+	const FSeinSquadPayload* SquadComp = Subsystem->GetComponent<FSeinSquadPayload>(SquadHandle);
 	if (!SquadComp) return FSeinEntityHandle::Invalid();
 
 	return SquadComp->Leader;
@@ -95,7 +95,7 @@ FSeinEntityHandle USeinSquadBPFL::SeinGetEntitySquad(const UObject* WorldContext
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
 	if (!Subsystem) return FSeinEntityHandle::Invalid();
 
-	const FSeinSquadMemberComponent* MemberComp = Subsystem->GetComponent<FSeinSquadMemberComponent>(MemberHandle);
+	const FSeinSquadMemberPayload* MemberComp = Subsystem->GetComponent<FSeinSquadMemberPayload>(MemberHandle);
 	if (!MemberComp) return FSeinEntityHandle::Invalid();
 
 	return MemberComp->SquadEntity;
@@ -106,7 +106,7 @@ bool USeinSquadBPFL::SeinIsSquadMember(const UObject* WorldContextObject, FSeinE
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
 	if (!Subsystem) return false;
 
-	return Subsystem->HasComponent<FSeinSquadMemberComponent>(EntityHandle);
+	return Subsystem->HasComponent<FSeinSquadMemberPayload>(EntityHandle);
 }
 
 int32 USeinSquadBPFL::SeinGetSquadSize(const UObject* WorldContextObject, FSeinEntityHandle SquadHandle)
@@ -114,7 +114,7 @@ int32 USeinSquadBPFL::SeinGetSquadSize(const UObject* WorldContextObject, FSeinE
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
 	if (!Subsystem) return 0;
 
-	const FSeinSquadComponent* SquadComp = Subsystem->GetComponent<FSeinSquadComponent>(SquadHandle);
+	const FSeinSquadPayload* SquadComp = Subsystem->GetComponent<FSeinSquadPayload>(SquadHandle);
 	if (!SquadComp) return 0;
 
 	return SquadComp->GetLiveMemberCount();

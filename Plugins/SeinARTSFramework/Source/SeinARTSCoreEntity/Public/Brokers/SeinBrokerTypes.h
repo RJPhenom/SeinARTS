@@ -163,7 +163,7 @@ struct SEINARTSCOREENTITY_API FSeinBrokerQueuedOrder
 	 *  this order — it dispatches the predetermined ability via the ability's
 	 *  DispatchMode policy (All/Single/ByTag). Invalid for right-click smart
 	 *  commands (those use Context-driven resolution via
-	 *  FSeinAbilityComponent::DefaultCommands). */
+	 *  FSeinAbilityPayload::DefaultCommands). */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker")
 	FGameplayTag PredeterminedAbilityTag;
 
@@ -498,7 +498,7 @@ struct SEINARTSCOREENTITY_API FSeinOrderTarget
 
 	/** Optional explicit formation CLASS override. When set, the resolver uses THIS formation directly
 	 *  (bypassing FormationTag / FormationsByTag) — e.g. a squad lays its members out with its authored
-	 *  FSeinSquadComponent::FormationClass. Empty → resolve via FormationTag as usual. */
+	 *  FSeinSquadPayload::FormationClass. Empty → resolve via FormationTag as usual. */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Formation")
 	TSoftClassPtr<USeinFormation> FormationClass;
 

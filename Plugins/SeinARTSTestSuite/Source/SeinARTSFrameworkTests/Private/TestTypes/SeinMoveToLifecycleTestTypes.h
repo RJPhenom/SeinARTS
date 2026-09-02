@@ -131,7 +131,7 @@ public:
 	virtual void OnMoveBegin(const FSeinMovementContext& Ctx) override;
 	virtual bool Tick(const FSeinMovementContext& Ctx) override;
 	virtual FFixedPoint GetDeceleration(
-		const FSeinMovementComponent*) const override
+		const FSeinMovementPayload*) const override
 	{
 		return Deceleration;
 	}

@@ -7,7 +7,7 @@
 
 #include "Actor/SeinActor.h"
 #include "Actor/SeinEntityBridgeComponent.h"
-#include "Components/SeinMovementComponent.h"
+#include "Components/SeinMovementPayload.h"
 #include "Engine/Blueprint.h"
 #include "Misc/DataValidation.h"
 #include "StructUtils/InstancedStruct.h"
@@ -54,7 +54,7 @@ EDataValidationResult USeinMovementClassValidator::ValidateLoadedAsset_Implement
 
 	UClass* const MovementBase = GetSeinMovementBaseClass();
 
-	// Walk the entity bridge's authored ComponentData for FSeinMovementComponent entries and check
+	// Walk the entity bridge's authored ComponentData for FSeinMovementPayload entries and check
 	// each MovementClass. (The bridge is a native subobject, so GetComponents finds it on the CDO.)
 	TArray<USeinEntityBridgeComponent*> Bridges;
 	CDO->GetComponents<USeinEntityBridgeComponent>(Bridges);
@@ -63,8 +63,8 @@ EDataValidationResult USeinMovementClassValidator::ValidateLoadedAsset_Implement
 		if (!Bridge) continue;
 		for (const FInstancedStruct& Entry : Bridge->ComponentData)
 		{
-			if (!Entry.IsValid() || Entry.GetScriptStruct() != FSeinMovementComponent::StaticStruct()) continue;
-			const FSeinMovementComponent& MoveComp = Entry.Get<FSeinMovementComponent>();
+			if (!Entry.IsValid() || Entry.GetScriptStruct() != FSeinMovementPayload::StaticStruct()) continue;
+			const FSeinMovementPayload& MoveComp = Entry.Get<FSeinMovementPayload>();
 
 			// Empty = intentional fallback to the Basic mover; nothing to flag.
 			if (MoveComp.MovementClass.IsNull()) continue;

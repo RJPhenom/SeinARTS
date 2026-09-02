@@ -82,7 +82,7 @@ bool USeinCollisionResolverParallel::JacobiPass(USeinWorldSubsystem& World, cons
 	// it once makes every per-self / per-neighbour fetch an O(1) indexed get.
 	const ISeinComponentStorage* ExtentsStorage =
 		World.GetComponentStorageRaw(
-			FSeinExtentsComponent::StaticStruct());
+			FSeinExtentsPayload::StaticStruct());
 	if (!ExtentsStorage) return false;
 
 	// ------------------------------------------------------------------
@@ -96,7 +96,7 @@ bool USeinCollisionResolverParallel::JacobiPass(USeinWorldSubsystem& World, cons
 	struct FMover
 	{
 		FSeinEntityHandle            Handle;
-		const FSeinExtentsComponent* Ext;
+		const FSeinExtentsPayload* Ext;
 		FFixedPoint                  Radius;
 		FFixedPoint                  Mass;
 	};
@@ -108,8 +108,8 @@ bool USeinCollisionResolverParallel::JacobiPass(USeinWorldSubsystem& World, cons
 			FSeinEntityHandle SelfHandle,
 			const FSeinEntity& /*SelfEntity*/)
 		{
-			const FSeinExtentsComponent* SelfExt =
-				static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(SelfHandle));
+			const FSeinExtentsPayload* SelfExt =
+				static_cast<const FSeinExtentsPayload*>(ExtentsStorage->GetComponentRaw(SelfHandle));
 			if (!IsCollider(SelfExt)) return;
 			// Non-movable colliders (Static + Stationary) never initiate a push — they
 			// are only ever the queried neighbour of a movable, so skip them as "self".
@@ -196,8 +196,8 @@ bool USeinCollisionResolverParallel::JacobiPass(USeinWorldSubsystem& World, cons
 		// their own compute.
 		for (const FSeinEntityHandle& OtherHandle : Neighbors)
 		{
-			const FSeinExtentsComponent* OtherExt =
-				static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(OtherHandle));
+			const FSeinExtentsPayload* OtherExt =
+				static_cast<const FSeinExtentsPayload*>(ExtentsStorage->GetComponentRaw(OtherHandle));
 			if (!IsCollider(OtherExt)) continue;
 
 			const bool bOtherImmovable = (OtherExt->Mobility != ESeinCollisionMobility::Movable);

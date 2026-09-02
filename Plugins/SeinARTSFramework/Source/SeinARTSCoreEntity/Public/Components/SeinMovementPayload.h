@@ -5,10 +5,10 @@
  * @brief:   Per-entity movement authoring + runtime state. Replaces the
  *           legacy `FSeinMovementData` (which co-mingled movement, navigation,
  *           and per-class tuning); the split is:
- *             - FSeinMovementComponent (this file) — top-line speed/turn
+ *             - FSeinMovementPayload (this file) — top-line speed/turn
  *               knobs, movement-class picker, polymorphic per-class data,
  *               reverse settings, runtime velocity + arrival state.
- *             - FSeinNavigationComponent (SeinARTSNavigation module) —
+ *             - FSeinNavigationPayload (SeinARTSNavigation module) —
  *               pathfinding + nav-layer + repath authoring.
  *             - FSeinInfantryMovementData / FSeinWheeledMovementData /
  *               FSeinTrackedMovementData / FSeinHoverMovementData /
@@ -18,7 +18,7 @@
  *               MovementClass's GetMovementDataStruct() virtual).
  *
  *           Designer authoring lives on the entity bridge's ComponentData
- *           array — designer picks `FSeinMovementComponent` as an entry and
+ *           array — designer picks `FSeinMovementPayload` as an entry and
  *           the component details panel surfaces the fields below + the
  *           per-class sub-data UDS that auto-populates from MovementClass.
  */
@@ -26,13 +26,13 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Components/SeinComponent.h"
+#include "Components/SeinPayload.h"
 #include "StructUtils/InstancedStruct.h"
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
 #include "Types/Quat.h"
 #include "UObject/SoftObjectPath.h"
-#include "SeinMovementComponent.generated.h"
+#include "SeinMovementPayload.generated.h"
 
 /** The per-tick OUTPUT of the local-avoidance layer (USeinAvoidance), produced at
  *  PreTick and consumed by the movement Tick. Two channels:
@@ -80,7 +80,7 @@ FORCEINLINE uint32 GetTypeHash(const FSeinAvoidanceOutput& O)
 }
 
 USTRUCT(BlueprintType, meta = (SeinDeterministic))
-struct SEINARTSCOREENTITY_API FSeinMovementComponent : public FSeinComponent
+struct SEINARTSCOREENTITY_API FSeinMovementPayload : public FSeinPayload
 {
 	GENERATED_BODY()
 
@@ -325,7 +325,7 @@ struct SEINARTSCOREENTITY_API FSeinMovementComponent : public FSeinComponent
 	TArray<FFixedPoint> RenderState;
 };
 
-FORCEINLINE uint32 GetTypeHash(const FSeinMovementComponent& C)
+FORCEINLINE uint32 GetTypeHash(const FSeinMovementPayload& C)
 {
 	uint32 Hash = GetTypeHash(C.TopSpeed);
 	Hash = HashCombine(Hash, GetTypeHash(C.TurnRate));

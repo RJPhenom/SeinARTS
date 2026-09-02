@@ -3,7 +3,7 @@
  *
  * @file:    K2Node_SeinGetComponent.h
  * @brief:   Blueprint editor node for typed component access. Designer picks
- *           a sim-component struct type (FSeinMovementComponent,
+ *           a sim-component struct type (FSeinMovementPayload,
  *           or a designer-authored UDS marked SeinDeterministic) from the
  *           BP action menu, gets back a "Get <StructName> Data" node with a
  *           pre-typed output pin that's directly Break-Struct compatible.
@@ -14,7 +14,7 @@
  *           typed struct output and standard tooling (Break Struct, member
  *           lookup, etc.) works without any FInstancedStruct unwrap step.
  *
- *           One menu action per registered FSeinComponent substruct keeps
+ *           One menu action per registered FSeinPayload substruct keeps
  *           discoverability high: the user types "Get Combat Data" in the
  *           action menu and the right node lands.
  */

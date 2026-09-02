@@ -12,8 +12,8 @@
 #include "PhysicalMaterials/PhysicalMaterial.h"
 #include "Actor/SeinActor.h"
 #include "Actor/SeinEntityBridgeComponent.h"
-#include "Components/SeinMovementComponent.h"
-#include "Components/SeinExtentsComponent.h"
+#include "Components/SeinMovementPayload.h"
+#include "Components/SeinExtentsPayload.h"
 
 #include "StructUtils/InstancedStruct.h"
 #include "Engine/World.h"
@@ -649,8 +649,8 @@ bool USeinLevelDataDefault::DoSyncBake(UWorld* World, USeinLevelDataDefaultAsset
 
 	// Trace query + skip list — nav-faithful so the shared height feeds nav identically
 	// (trace-reconciliation note in MicroPlan_CP1.1.md): ignore the volumes; ignore any
-	// ASeinActor whose bridge has FSeinExtentsComponent::bBakesIntoNav=false OR an
-	// FSeinMovementComponent (mobile units don't carve the static bake).
+	// ASeinActor whose bridge has FSeinExtentsPayload::bBakesIntoNav=false OR an
+	// FSeinMovementPayload (mobile units don't carve the static bake).
 	FCollisionQueryParams QP(SCENE_QUERY_STAT(SeinLevelDataBake), true /*bTraceComplex*/);
 	QP.bReturnPhysicalMaterial = true; // terrain-type classification reads the hit's phys material
 	for (ASeinLevelVolume* Vol : Volumes) { if (Vol) QP.AddIgnoredActor(Vol); }
@@ -664,7 +664,7 @@ bool USeinLevelDataDefault::DoSyncBake(UWorld* World, USeinLevelDataDefaultAsset
 		bool bSkip = false;
 		if (const USeinEntityBridgeComponent* Bridge = SeinActor->FindComponentByClass<USeinEntityBridgeComponent>())
 		{
-			if (const FSeinExtentsComponent* Extents = Bridge->FindAuthoredData<FSeinExtentsComponent>())
+			if (const FSeinExtentsPayload* Extents = Bridge->FindAuthoredData<FSeinExtentsPayload>())
 			{
 				if (!Extents->bBakesIntoNav) bSkip = true;
 			}
@@ -672,7 +672,7 @@ bool USeinLevelDataDefault::DoSyncBake(UWorld* World, USeinLevelDataDefaultAsset
 			{
 				for (const FInstancedStruct& Entry : Bridge->ComponentData)
 				{
-					if (Entry.GetScriptStruct() == FSeinMovementComponent::StaticStruct())
+					if (Entry.GetScriptStruct() == FSeinMovementPayload::StaticStruct())
 					{
 						bSkip = true;
 						break;

@@ -1,18 +1,18 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinProductionComponent.cpp
- * @brief   FSeinProductionComponent sim-payload implementation — queue state
+ * @brief   FSeinProductionPayload sim-payload implementation — queue state
  *          queries and build-progress accessors.
  */
 
-#include "Components/SeinProductionComponent.h"
+#include "Components/SeinProductionPayload.h"
 
-bool FSeinProductionComponent::IsProducing() const
+bool FSeinProductionPayload::IsProducing() const
 {
 	return Queue.Num() > 0;
 }
 
-FFixedPoint FSeinProductionComponent::GetProgressPercent() const
+FFixedPoint FSeinProductionPayload::GetProgressPercent() const
 {
 	if (!IsProducing())
 	{
@@ -28,7 +28,7 @@ FFixedPoint FSeinProductionComponent::GetProgressPercent() const
 	return CurrentBuildProgress / Current.TotalBuildTime;
 }
 
-bool FSeinProductionComponent::CanQueueMore() const
+bool FSeinProductionPayload::CanQueueMore() const
 {
 	return Queue.Num() < MaxQueueSize;
 }

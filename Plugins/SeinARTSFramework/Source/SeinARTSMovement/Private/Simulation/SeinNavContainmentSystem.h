@@ -44,8 +44,8 @@
 #include "Core/SeinSystemPriority.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Core/SeinParallel.h"
-#include "Components/SeinExtentsComponent.h"
-#include "Components/SeinNavigationComponent.h"
+#include "Components/SeinExtentsPayload.h"
+#include "Components/SeinNavigationPayload.h"
 #include "Movement/SeinMovement.h"
 #include "SeinNavigation.h"
 #include "SeinNavigationSubsystem.h"
@@ -64,11 +64,11 @@ public:
 		if (!Nav || !Nav->HasRuntimeData()) return;
 
 		const ISeinComponentStorage* ExtentsStorage =
-			World.GetComponentStorageRaw(FSeinExtentsComponent::StaticStruct());
+			World.GetComponentStorageRaw(FSeinExtentsPayload::StaticStruct());
 		if (!ExtentsStorage) return;
 		const ISeinComponentStorage* NavigationStorage =
 			World.GetComponentStorageRaw(
-				FSeinNavigationComponent::StaticStruct());
+				FSeinNavigationPayload::StaticStruct());
 
 		const bool bHasAuthoritative =
 			World.HasAuthoritativeDestinationProviders();
@@ -89,8 +89,8 @@ public:
 				FSeinEntityHandle Handle,
 				const void* RawComponent)
 			{
-				const FSeinExtentsComponent* Ext =
-					static_cast<const FSeinExtentsComponent*>(RawComponent);
+				const FSeinExtentsPayload* Ext =
+					static_cast<const FSeinExtentsPayload*>(RawComponent);
 				if (World.GetEntityPool().IsValid(Handle) && Ext
 					&& Ext->bCollisionEnabled && !Ext->Shapes.IsEmpty()
 					&& Ext->Mobility == ESeinCollisionMobility::Movable)
@@ -112,16 +112,16 @@ public:
 			if (!EntityPtr) return;
 			const FSeinEntity& Entity = *EntityPtr;
 
-			const FSeinExtentsComponent* Ext =
-				static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(Handle));
+			const FSeinExtentsPayload* Ext =
+				static_cast<const FSeinExtentsPayload*>(ExtentsStorage->GetComponentRaw(Handle));
 			// Only MOVABLE colliders can be displaced off-nav by the floor.
 			if (!Ext || !Ext->bCollisionEnabled || Ext->Shapes.Num() == 0) return;
 			if (Ext->Mobility != ESeinCollisionMobility::Movable) return;
 
 			const FFixedVector Pos = Entity.Transform.GetLocation();
-			const FSeinNavigationComponent* NavData =
+			const FSeinNavigationPayload* NavData =
 				NavigationStorage
-				? static_cast<const FSeinNavigationComponent*>(
+				? static_cast<const FSeinNavigationPayload*>(
 					NavigationStorage->GetComponentRaw(Handle))
 				: nullptr;
 			FSeinNavAgentProfile Agent;

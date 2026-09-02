@@ -7,9 +7,9 @@
 
 #include "Brokers/SeinCommandBrokerResolver.h"
 #include "Abilities/SeinAbility.h"
-#include "Components/SeinAbilityComponent.h"
-#include "Components/SeinSquadComponent.h"
-#include "Components/SeinSquadMemberComponent.h"
+#include "Components/SeinAbilityPayload.h"
+#include "Components/SeinSquadPayload.h"
+#include "Components/SeinSquadMemberPayload.h"
 #include "Simulation/SeinWorldSubsystem.h"
 
 namespace SeinDispatchPolicyLocal
@@ -27,7 +27,7 @@ namespace SeinDispatchPolicyLocal
 		const TArray<FSeinEntityHandle>& Candidates)
 	{
 		if (!World) return Candidates;
-		const FSeinSquadComponent* Squad = World->GetComponent<FSeinSquadComponent>(BrokerHandle);
+		const FSeinSquadPayload* Squad = World->GetComponent<FSeinSquadPayload>(BrokerHandle);
 		if (!Squad) return Candidates;
 
 		TArray<FSeinEntityHandle> Out;
@@ -73,7 +73,7 @@ namespace SeinDispatchPolicyLocal
 	static FSeinEntityHandle GetLeaderForBroker(USeinWorldSubsystem* World, FSeinEntityHandle BrokerHandle)
 	{
 		if (!World) return FSeinEntityHandle();
-		if (const FSeinSquadComponent* Squad = World->GetComponent<FSeinSquadComponent>(BrokerHandle))
+		if (const FSeinSquadPayload* Squad = World->GetComponent<FSeinSquadPayload>(BrokerHandle))
 		{
 			return Squad->Leader;
 		}
@@ -217,7 +217,7 @@ FGameplayTag USeinCommandBrokerResolver::ResolveMemberAbility_Implementation(
 	const FGameplayTagContainer& Context)
 {
 	if (!World) return FGameplayTag();
-	const FSeinAbilityComponent* AC = World->GetComponent<FSeinAbilityComponent>(Member);
+	const FSeinAbilityPayload* AC = World->GetComponent<FSeinAbilityPayload>(Member);
 	if (!AC) return FGameplayTag();
 	return AC->ResolveCommandContext(Context);
 }

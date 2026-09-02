@@ -17,12 +17,12 @@
 #include "CoreMinimal.h"
 #include "Abilities/SeinAbility.h"
 #include "Actor/SeinActor.h"
-#include "Components/SeinComponent.h"
+#include "Components/SeinPayload.h"
 #include "Types/FixedPoint.h"
 #include "SeinEconomyLoopTestTypes.generated.h"
 
 USTRUCT(meta = (SeinDeterministic))
-struct FSeinEconomyResourceNodeTestComponent : public FSeinComponent
+struct FSeinEconomyResourceNodeTestComponent : public FSeinPayload
 {
 	GENERATED_BODY()
 
@@ -31,7 +31,7 @@ struct FSeinEconomyResourceNodeTestComponent : public FSeinComponent
 };
 
 USTRUCT(meta = (SeinDeterministic))
-struct FSeinEconomyCargoTestComponent : public FSeinComponent
+struct FSeinEconomyCargoTestComponent : public FSeinPayload
 {
 	GENERATED_BODY()
 
@@ -43,7 +43,7 @@ struct FSeinEconomyCargoTestComponent : public FSeinComponent
 };
 
 USTRUCT(meta = (SeinDeterministic))
-struct FSeinEconomyDropoffTestComponent : public FSeinComponent
+struct FSeinEconomyDropoffTestComponent : public FSeinPayload
 {
 	GENERATED_BODY()
 };

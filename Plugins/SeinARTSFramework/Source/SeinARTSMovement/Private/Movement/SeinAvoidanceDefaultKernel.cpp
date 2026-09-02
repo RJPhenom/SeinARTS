@@ -26,9 +26,9 @@
 #include "Settings/PluginSettings.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Collision/SeinCollisionSpatialHash.h"
-#include "Components/SeinMovementComponent.h"
-#include "Components/SeinNavigationComponent.h"
-#include "Components/SeinExtentsComponent.h"
+#include "Components/SeinMovementPayload.h"
+#include "Components/SeinNavigationPayload.h"
+#include "Components/SeinExtentsPayload.h"
 #include "Components/SeinBrokerMembershipData.h"
 #include "Components/SeinCommandBrokerData.h"   // blob-obstacle: neighbour broker Centroid/FormationRadius/flag
 #include "Movement/SeinMovement.h"
@@ -123,7 +123,7 @@ namespace
 		FSeinEntityHandle Handle;
 		FSeinEntityHandle BrokerHandle;
 		int64 CohesionId = 0;
-		FSeinMovementComponent& Movement;
+		FSeinMovementPayload& Movement;
 		const FSeinCommandBrokerData* BrokerData = nullptr;
 		bool bIsBlob = false;
 		FFixedVector BrokerCentroid;
@@ -201,7 +201,7 @@ namespace
 		return bSelfIsLo ? Perp : FFixedVector(-Perp.X, -Perp.Y, FFixedPoint::Zero);
 	}
 
-	static void ClearAvoidanceOutput(FSeinMovementComponent& Movement)
+	static void ClearAvoidanceOutput(FSeinMovementPayload& Movement)
 	{
 		Movement.AvoidanceOutput.SteerDir = FFixedVector::ZeroVector;
 		Movement.AvoidanceOutput.SpeedScale = FFixedPoint::One;
@@ -215,7 +215,7 @@ namespace
 		const ISeinComponentStorage* ExtentsStorage,
 		FSeinEntityHandle SelfHandle,
 		const FSeinEntity& SelfEntity,
-		FSeinMovementComponent& Move,
+		FSeinMovementPayload& Move,
 		bool bIdleDodgeEnabled,
 		FFixedPoint MovingSpeedFloor,
 		FFixedPoint FalloffRadii,
@@ -229,12 +229,12 @@ namespace
 			return;
 		}
 
-		const FSeinNavigationComponent* SelfNavigation = NavStorage
-			? static_cast<const FSeinNavigationComponent*>(
+		const FSeinNavigationPayload* SelfNavigation = NavStorage
+			? static_cast<const FSeinNavigationPayload*>(
 				NavStorage->GetComponentRaw(SelfHandle))
 			: nullptr;
-		const FSeinExtentsComponent* SelfExtents = ExtentsStorage
-			? static_cast<const FSeinExtentsComponent*>(
+		const FSeinExtentsPayload* SelfExtents = ExtentsStorage
+			? static_cast<const FSeinExtentsPayload*>(
 				ExtentsStorage->GetComponentRaw(SelfHandle))
 			: nullptr;
 		const FFixedPoint SelfRadius = USeinMovement::ResolveCollisionRadius(
@@ -257,8 +257,8 @@ namespace
 			const FSeinEntity* OtherEntity =
 				World.GetEntityPool().Get(OtherHandle);
 			if (!OtherEntity) continue;
-			const FSeinMovementComponent* OtherMove = MoveStorage
-				? static_cast<const FSeinMovementComponent*>(
+			const FSeinMovementPayload* OtherMove = MoveStorage
+				? static_cast<const FSeinMovementPayload*>(
 					MoveStorage->GetComponentRaw(OtherHandle))
 				: nullptr;
 			if (!OtherMove || !OtherMove->bHasTarget) continue;
@@ -281,12 +281,12 @@ namespace
 			{
 				continue;
 			}
-			const FSeinNavigationComponent* OtherNavigation = NavStorage
-				? static_cast<const FSeinNavigationComponent*>(
+			const FSeinNavigationPayload* OtherNavigation = NavStorage
+				? static_cast<const FSeinNavigationPayload*>(
 					NavStorage->GetComponentRaw(OtherHandle))
 				: nullptr;
-			const FSeinExtentsComponent* OtherExtents = ExtentsStorage
-				? static_cast<const FSeinExtentsComponent*>(
+			const FSeinExtentsPayload* OtherExtents = ExtentsStorage
+				? static_cast<const FSeinExtentsPayload*>(
 					ExtentsStorage->GetComponentRaw(OtherHandle))
 				: nullptr;
 			const FFixedPoint OtherRadius =
@@ -364,7 +364,7 @@ namespace
 		const ISeinComponentStorage* BrokerStorage,
 		FSeinEntityHandle SelfHandle,
 		const FSeinEntity& SelfEntity,
-		const FSeinMovementComponent& Move,
+		const FSeinMovementPayload& Move,
 		const FFixedVector& Velocity,
 		FFixedPoint MovingSpeedFloor,
 		FFixedPoint FalloffRadii)
@@ -388,12 +388,12 @@ namespace
 				ToGoal.Y / GoalDistance,
 				FFixedPoint::Zero);
 		}
-		const FSeinNavigationComponent* Navigation = NavStorage
-			? static_cast<const FSeinNavigationComponent*>(
+		const FSeinNavigationPayload* Navigation = NavStorage
+			? static_cast<const FSeinNavigationPayload*>(
 				NavStorage->GetComponentRaw(SelfHandle))
 			: nullptr;
-		const FSeinExtentsComponent* Extents = ExtentsStorage
-			? static_cast<const FSeinExtentsComponent*>(
+		const FSeinExtentsPayload* Extents = ExtentsStorage
+			? static_cast<const FSeinExtentsPayload*>(
 				ExtentsStorage->GetComponentRaw(SelfHandle))
 			: nullptr;
 		FFixedPoint Radius =
@@ -431,8 +431,8 @@ namespace
 			const FSeinEntity* OtherEntity =
 				World.GetEntityPool().Get(OtherHandle);
 			if (!OtherEntity) continue;
-			const FSeinMovementComponent* OtherMove = MoveStorage
-				? static_cast<const FSeinMovementComponent*>(
+			const FSeinMovementPayload* OtherMove = MoveStorage
+				? static_cast<const FSeinMovementPayload*>(
 					MoveStorage->GetComponentRaw(OtherHandle))
 				: nullptr;
 			if (!OtherMove)
@@ -500,12 +500,12 @@ namespace
 				++PastGoal;
 				continue;
 			}
-			const FSeinNavigationComponent* OtherNavigation = NavStorage
-				? static_cast<const FSeinNavigationComponent*>(
+			const FSeinNavigationPayload* OtherNavigation = NavStorage
+				? static_cast<const FSeinNavigationPayload*>(
 					NavStorage->GetComponentRaw(OtherHandle))
 				: nullptr;
-			const FSeinExtentsComponent* OtherExtents = ExtentsStorage
-				? static_cast<const FSeinExtentsComponent*>(
+			const FSeinExtentsPayload* OtherExtents = ExtentsStorage
+				? static_cast<const FSeinExtentsPayload*>(
 					ExtentsStorage->GetComponentRaw(OtherHandle))
 				: nullptr;
 			const FFixedPoint OtherRadius =
@@ -539,7 +539,7 @@ namespace
 	static void FinalizeMovingOutput(
 		const FAvoidanceOutputParameters& Parameters,
 		int32 Index,
-		FSeinMovementComponent& Movement,
+		FSeinMovementPayload& Movement,
 		FFixedVector Accum,
 		FFixedPoint ArrivalFade,
 		FFixedPoint SelfRadius,
@@ -878,7 +878,7 @@ namespace
 		const FAvoidanceNeighborParameters& Parameters,
 		const FMoverAvoidanceSnapshot& Self,
 		const FSeinEntity& OtherEntity,
-		const FSeinMovementComponent& OtherMovement)
+		const FSeinMovementPayload& OtherMovement)
 	{
 		if (!Parameters.bDoSiDoEnabled || !OtherMovement.bHasTarget)
 		{
@@ -920,7 +920,7 @@ namespace
 		const FMoverAvoidanceSnapshot& Self,
 		FSeinEntityHandle OtherHandle,
 		const FSeinEntity& OtherEntity,
-		const FSeinMovementComponent& OtherMovement,
+		const FSeinMovementPayload& OtherMovement,
 		bool bGenuineCrossing,
 		FFixedVector& OutAccum)
 	{
@@ -936,12 +936,12 @@ namespace
 		ToOther.Z = FFixedPoint::Zero;
 		const FFixedPoint DistanceSquared = ToOther.SizeSquared();
 		if (DistanceSquared <= FFixedPoint::Epsilon) return;
-		const FSeinNavigationComponent* Navigation = Parameters.NavStorage
-			? static_cast<const FSeinNavigationComponent*>(
+		const FSeinNavigationPayload* Navigation = Parameters.NavStorage
+			? static_cast<const FSeinNavigationPayload*>(
 				Parameters.NavStorage->GetComponentRaw(OtherHandle))
 			: nullptr;
-		const FSeinExtentsComponent* Extents = Parameters.ExtentsStorage
-			? static_cast<const FSeinExtentsComponent*>(
+		const FSeinExtentsPayload* Extents = Parameters.ExtentsStorage
+			? static_cast<const FSeinExtentsPayload*>(
 				Parameters.ExtentsStorage->GetComponentRaw(OtherHandle))
 			: nullptr;
 		const FFixedPoint Radius =
@@ -1025,7 +1025,7 @@ namespace
 		const FMoverAvoidanceSnapshot& Self,
 		FSeinEntityHandle OtherHandle,
 		const FSeinEntity& OtherEntity,
-		const FSeinMovementComponent& OtherMovement,
+		const FSeinMovementPayload& OtherMovement,
 		bool bGenuineCrossing,
 		FIdleBlockerSet& OutIdleBlockers,
 		FFixedVector& OutAccum)
@@ -1065,12 +1065,12 @@ namespace
 			return;
 		}
 
-		const FSeinNavigationComponent* OtherNavigation = Parameters.NavStorage
-			? static_cast<const FSeinNavigationComponent*>(
+		const FSeinNavigationPayload* OtherNavigation = Parameters.NavStorage
+			? static_cast<const FSeinNavigationPayload*>(
 				Parameters.NavStorage->GetComponentRaw(OtherHandle))
 			: nullptr;
-		const FSeinExtentsComponent* OtherExtents = Parameters.ExtentsStorage
-			? static_cast<const FSeinExtentsComponent*>(
+		const FSeinExtentsPayload* OtherExtents = Parameters.ExtentsStorage
+			? static_cast<const FSeinExtentsPayload*>(
 				Parameters.ExtentsStorage->GetComponentRaw(OtherHandle))
 			: nullptr;
 		const FFixedPoint OtherRadius =
@@ -1178,9 +1178,9 @@ namespace
 			const FSeinEntity* OtherEntity =
 				Parameters.World.GetEntityPool().Get(OtherHandle);
 			if (!OtherEntity) continue;
-			const FSeinMovementComponent* OtherMovement =
+			const FSeinMovementPayload* OtherMovement =
 				Parameters.MoveStorage
-					? static_cast<const FSeinMovementComponent*>(
+					? static_cast<const FSeinMovementPayload*>(
 						Parameters.MoveStorage->GetComponentRaw(OtherHandle))
 					: nullptr;
 			if (!OtherMovement) continue;
@@ -1270,8 +1270,8 @@ namespace
 			ActualDispSq.Add(FFixedPoint::FromInt(-1));
 			OutState.ActualProgress.Add(ProgressUnknown);
 			OutState.PreviousMovementState.AddDefaulted();
-			FSeinMovementComponent* Move = MoveStorage
-				? static_cast<FSeinMovementComponent*>(
+			FSeinMovementPayload* Move = MoveStorage
+				? static_cast<FSeinMovementPayload*>(
 					MoveStorage->GetComponentRawForDeferredMutation(Handle))
 				: nullptr;
 			if (!Move) return;
@@ -1379,8 +1379,8 @@ namespace
 	{
 		for (int32 Index = 0; Index < State.LiveHandles.Num(); ++Index)
 		{
-			FSeinMovementComponent* Move = MoveStorage
-				? static_cast<FSeinMovementComponent*>(
+			FSeinMovementPayload* Move = MoveStorage
+				? static_cast<FSeinMovementPayload*>(
 					MoveStorage->GetComponentRawForDeferredMutation(
 						State.LiveHandles[Index]))
 				: nullptr;
@@ -1442,8 +1442,8 @@ namespace
 		// so concurrent QueryRadius calls never share it.
 		TArray<FSeinEntityHandle> Neighbors;
 
-		FSeinMovementComponent* Move = MoveStorage
-			? static_cast<FSeinMovementComponent*>(
+		FSeinMovementPayload* Move = MoveStorage
+			? static_cast<FSeinMovementPayload*>(
 				MoveStorage->GetComponentRawForDeferredMutation(SelfHandle))
 			: nullptr;
 		if (!Move) return;
@@ -1484,8 +1484,8 @@ namespace
 
 		// Body radius from the movement/nav FOOTPRINT cascade — NOT collision extents.
 		// Hoisted-storage pointers feed the no-lookup ResolveCollisionRadius overload.
-		const FSeinNavigationComponent* SelfNav = NavStorage ? static_cast<const FSeinNavigationComponent*>(NavStorage->GetComponentRaw(SelfHandle)) : nullptr;
-		const FSeinExtentsComponent* SelfExt = ExtentsStorage ? static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(SelfHandle)) : nullptr;
+		const FSeinNavigationPayload* SelfNav = NavStorage ? static_cast<const FSeinNavigationPayload*>(NavStorage->GetComponentRaw(SelfHandle)) : nullptr;
+		const FSeinExtentsPayload* SelfExt = ExtentsStorage ? static_cast<const FSeinExtentsPayload*>(ExtentsStorage->GetComponentRaw(SelfHandle)) : nullptr;
 		const FFixedPoint SelfRadius = USeinMovement::ResolveCollisionRadius(SelfExt, SelfNav);
 		if (SelfRadius <= FFixedPoint::Zero)
 		{
@@ -1574,7 +1574,7 @@ void FSeinAvoidanceDefaultKernel::Execute(
 	//     subclass slotted in Project Settings > AvoidanceClass; captured for determinism by that
 	//     class-path + identical content, so they leave the settings fingerprint). The model-AGNOSTIC
 	//     harness knobs (Moving Speed Floor / Bend Cap) + the Idle Re-Seek switch still come from
-	//     plugin settings. Per-unit dials (strength/weight/same-weights) live on FSeinMovementComponent. ---
+	//     plugin settings. Per-unit dials (strength/weight/same-weights) live on FSeinMovementPayload. ---
 	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
 	const FFixedPoint LookaheadSeconds    = Policy.AvoidanceLookaheadSeconds;
 	const FFixedPoint MovingSpeedFloor    = Settings->AvoidanceMovingSpeedFloor;
@@ -1646,14 +1646,14 @@ void FSeinAvoidanceDefaultKernel::Execute(
 	// storage once turns every access into an O(1) indexed get.
 	ISeinComponentStorage* MoveStorage =
 		World.GetComponentStorageMutable(
-			FSeinMovementComponent::StaticStruct());
+			FSeinMovementPayload::StaticStruct());
 	const ISeinComponentStorage* ReadOnlyMoveStorage = MoveStorage;
 	const ISeinComponentStorage* NavStorage =
 		World.GetComponentStorageRaw(
-			FSeinNavigationComponent::StaticStruct());
+			FSeinNavigationPayload::StaticStruct());
 	const ISeinComponentStorage* ExtentsStorage =
 		World.GetComponentStorageRaw(
-			FSeinExtentsComponent::StaticStruct());
+			FSeinExtentsPayload::StaticStruct());
 	// Group identity — TWO-LAYER, matching the formation model: the immediate broker
 	// (squad / loose-order group) and the per-order cohesion id spanning brokers of one
 	// multi-element order. Same-group neighbours are never avoided (the group converges

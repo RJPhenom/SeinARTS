@@ -7,13 +7,13 @@
  *          editing happens through the Details panel.
  *
  *          Built-in layers (drawn unconditionally):
- *            - `FSeinExtentsComponent` shapes (Box → yellow wire, Capsule →
+ *            - `FSeinExtentsPayload` shapes (Box → yellow wire, Capsule →
  *              cyan wire) at LocalOffset + YawOffset, extending upward by
  *              Height.
- *            - `FSeinProductionComponent` spawn points — green wire sphere
+ *            - `FSeinProductionPayload` spawn points — green wire sphere
  *              + forward arrow + faint tether at the resolved
  *              `ActorTransform * SpawnPointOffset` location.
- *            - `FSeinNavigationComponent` footprint — orange wire circle
+ *            - `FSeinNavigationPayload` footprint — orange wire circle
  *              at the actor position with radius `FootprintRadius`. Zero-
  *              radius (intangible) entries self-skip.
  *

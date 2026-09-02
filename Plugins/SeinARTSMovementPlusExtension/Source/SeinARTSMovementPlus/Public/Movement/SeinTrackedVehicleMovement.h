@@ -47,9 +47,9 @@
  *          pivots to the next leg's direction under the existing mode split.
  *
  *          Top-line tuning (TopSpeed / TurnRate / Accel / Decel / reverse)
- *          lives on FSeinMovementComponent. Tracked-specific tuning lives on
+ *          lives on FSeinMovementPayload. Tracked-specific tuning lives on
  *          FSeinTrackedMovementData, accessed via
- *          `FSeinMovementComponent::MovementClassData`. This class holds only
+ *          `FSeinMovementPayload::MovementClassData`. This class holds only
  *          per-instance runtime state (drive latch, segment cursor, stuck
  *          accumulators). Those non-editable fields are reflected so the
  *          framework's canonical movement provider can restore them exactly.
@@ -63,7 +63,7 @@
 #include "Types/Vector.h"
 #include "SeinTrackedVehicleMovement.generated.h"
 
-struct FSeinMovementComponent;
+struct FSeinMovementPayload;
 
 UCLASS(meta = (DisplayName = "Tracked Vehicle"))
 class SEINARTSMOVEMENTPLUS_API USeinTrackedVehicleMovement : public USeinMovement
@@ -76,7 +76,7 @@ public:
 	virtual bool Tick(const FSeinMovementContext& Ctx) override;
 	virtual void UpdateSettledRenderState(
 		const FSeinSettledMovementRenderContext& Context,
-		const FSeinMovementComponent& MovementData,
+		const FSeinMovementPayload& MovementData,
 		FSeinMovementRenderStateWriter& Writer) const override;
 	virtual bool SupportsExactIdleMutationTracking() const override
 	{
@@ -98,16 +98,16 @@ public:
 	 *  stop through GetDeceleration. */
 	virtual FSeinMotion ComputeArrivalMotion_Implementation(USeinMoverHandle* Mover) override;
 
-	virtual FFixedPoint GetMinTurnRadius(const FSeinMovementComponent* MovementData) const override;
+	virtual FFixedPoint GetMinTurnRadius(const FSeinMovementPayload* MovementData) const override;
 
 	/** Per-class sub-data this movement consumes — the picker on
-	 *  `FSeinMovementComponent::MovementClassData` swaps to this struct when
+	 *  `FSeinMovementPayload::MovementClassData` swaps to this struct when
 	 *  USeinTrackedVehicleMovement is selected. */
 	virtual UScriptStruct* GetMovementDataStruct() const override;
 
 	/** Braking rate for the impl-agnostic idle coast + arrival-imminent estimate — reads
 	 *  Deceleration out of the unwrapped FSeinTrackedMovementData sub-data. */
-	virtual FFixedPoint GetDeceleration(const FSeinMovementComponent* MovementData) const override;
+	virtual FFixedPoint GetDeceleration(const FSeinMovementPayload* MovementData) const override;
 
 protected:
 

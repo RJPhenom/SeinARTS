@@ -7,7 +7,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Components/SeinVisionComponent.h"
+#include "Components/SeinVisionPayload.h"
 #include "Core/SeinEntityHandle.h"
 #include "Core/SeinPlayerID.h"
 #include "SeinFogOfWarDefaultCanonicalState.generated.h"

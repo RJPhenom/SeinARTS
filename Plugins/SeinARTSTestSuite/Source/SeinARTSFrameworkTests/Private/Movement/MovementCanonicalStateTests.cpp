@@ -1,7 +1,7 @@
 #include "CQTest.h"
 #include "Components/ActorTestSpawner.h"
 
-#include "Components/SeinMovementComponent.h"
+#include "Components/SeinMovementPayload.h"
 #include "Data/SeinWorldSnapshot.h"
 #include "Serialization/SeinMovementStateCoverage.h"
 #include "Movement/SeinBasicUnitMovement.h"
@@ -66,7 +66,7 @@ namespace
 							World->SpawnAbstractEntity(
 								FFixedTransform(),
 								FSeinPlayerID::Neutral());
-						FSeinMovementComponent Component;
+						FSeinMovementPayload Component;
 						Component.MovementClass = FSoftClassPath(
 							USeinMoveToLifecycleTestMovement::
 								StaticClass()->GetPathName());
@@ -90,8 +90,8 @@ namespace
 				{
 					return false;
 				}
-				const FSeinMovementComponent* Component =
-					World->GetComponent<FSeinMovementComponent>(
+				const FSeinMovementPayload* Component =
+					World->GetComponent<FSeinMovementPayload>(
 						Entities[Index]);
 				if (!Component
 					|| !Movement->GetOrCreateMovementInstance(
@@ -266,7 +266,7 @@ TEST(MovementAuthoritativeArrivalConsumesExactFinalStep,
 		Destination.Z);
 	FSeinEntity Entity;
 	Entity.Transform.SetLocation(WithinAcceptance);
-	FSeinMovementComponent MovementData;
+	FSeinMovementPayload MovementData;
 	FSeinPath Path;
 	Path.Waypoints = {Destination};
 	int32 WaypointIndex = 0;
@@ -488,7 +488,7 @@ TEST(MovementReflectedStateChangesCanonicalRoot,
 TEST(MovementFootprintIncludesCompoundShapeOffset,
 	"SeinARTS.Unit.Movement.NavigationPolicy")
 {
-	FSeinExtentsComponent Extents;
+	FSeinExtentsPayload Extents;
 	FSeinExtentsShape Shape;
 	Shape.Shape = ESeinExtentsShape::Capsule;
 	Shape.Radius = FFixedPoint::FromInt(50);

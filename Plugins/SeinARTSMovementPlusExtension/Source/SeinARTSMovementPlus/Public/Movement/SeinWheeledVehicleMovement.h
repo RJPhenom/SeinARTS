@@ -26,7 +26,7 @@
  *            recovery.
  *
  *          Tuning lives entirely on `FSeinWheeledMovementData` — the per-class
- *          sub-data slot on `FSeinMovementComponent::MovementClassData`. This
+ *          sub-data slot on `FSeinMovementPayload::MovementClassData`. This
  *          class holds no editable authoring properties; its per-instance
  *          runtime state (steer, drive latch, segment cursor, stuck
  *          accumulators) is reflected for exact canonical snapshot restore.
@@ -40,7 +40,7 @@
 #include "Types/Vector.h"
 #include "SeinWheeledVehicleMovement.generated.h"
 
-struct FSeinMovementComponent;
+struct FSeinMovementPayload;
 struct FSeinWheeledMovementData;
 
 UCLASS(meta = (DisplayName = "Wheeled Vehicle"))
@@ -56,7 +56,7 @@ public:
 	virtual bool Tick(const FSeinMovementContext& Ctx) override;
 	virtual void UpdateSettledRenderState(
 		const FSeinSettledMovementRenderContext& Context,
-		const FSeinMovementComponent& MovementData,
+		const FSeinMovementPayload& MovementData,
 		FSeinMovementRenderStateWriter& Writer) const override;
 	virtual bool SupportsExactIdleMutationTracking() const override
 	{
@@ -89,16 +89,16 @@ public:
 	 *  clamp side). Returns 0 when MaxSteerAngle is degenerate (avoids
 	 *  div-by-zero). Reads kinematic values from the unwrapped
 	 *  FSeinWheeledMovementData sub-data. */
-	virtual FFixedPoint GetMinTurnRadius(const FSeinMovementComponent* MovementData) const override;
+	virtual FFixedPoint GetMinTurnRadius(const FSeinMovementPayload* MovementData) const override;
 
 	/** Per-class sub-data this movement consumes — the picker on
-	 *  `FSeinMovementComponent::MovementClassData` resolves to this struct
+	 *  `FSeinMovementPayload::MovementClassData` resolves to this struct
 	 *  when USeinWheeledVehicleMovement is selected. */
 	virtual UScriptStruct* GetMovementDataStruct() const override;
 
 	/** Braking rate for the impl-agnostic idle coast + arrival-imminent estimate — reads
 	 *  Deceleration out of the unwrapped FSeinWheeledMovementData sub-data. */
-	virtual FFixedPoint GetDeceleration(const FSeinMovementComponent* MovementData) const override;
+	virtual FFixedPoint GetDeceleration(const FSeinMovementPayload* MovementData) const override;
 
 protected:
 

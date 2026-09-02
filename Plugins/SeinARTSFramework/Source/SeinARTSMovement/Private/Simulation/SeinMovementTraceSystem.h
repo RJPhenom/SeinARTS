@@ -8,7 +8,7 @@
  *          collision resolution and nav containment) so it sees the tick's FINAL
  *          transforms, and attributes each commanded unit's motion three ways:
  *
- *            commanded  = FSeinMovementComponent::Velocity — the unit's OWN
+ *            commanded  = FSeinMovementPayload::Velocity — the unit's OWN
  *                         movement step this tick (post nav-floor, pre body
  *                         collision; the movement harness writes it and the
  *                         collision resolver never does),
@@ -43,8 +43,8 @@
 #include "Core/SeinSystemPriority.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Abilities/SeinLatentActionManager.h"
-#include "Components/SeinMovementComponent.h"
-#include "Components/SeinNavigationComponent.h"
+#include "Components/SeinMovementPayload.h"
+#include "Components/SeinNavigationPayload.h"
 #include "Components/SeinBrokerMembershipData.h"
 #include "Settings/PluginSettings.h"
 #include "Types/Entity.h"
@@ -72,10 +72,10 @@ public:
 
 		const ISeinComponentStorage* MoveStorage =
 			World.GetComponentStorageRaw(
-				FSeinMovementComponent::StaticStruct());
+				FSeinMovementPayload::StaticStruct());
 		const ISeinComponentStorage* NavStorage =
 			World.GetComponentStorageRaw(
-				FSeinNavigationComponent::StaticStruct());
+				FSeinNavigationPayload::StaticStruct());
 		const ISeinComponentStorage* BrokerStorage =
 			World.GetComponentStorageRaw(
 				FSeinBrokerMembershipData::StaticStruct());
@@ -93,8 +93,8 @@ public:
 			FSeinEntityHandle Handle,
 			const FSeinEntity& Entity)
 		{
-			const FSeinMovementComponent* Move = MoveStorage
-				? static_cast<const FSeinMovementComponent*>(MoveStorage->GetComponentRaw(Handle)) : nullptr;
+			const FSeinMovementPayload* Move = MoveStorage
+				? static_cast<const FSeinMovementPayload*>(MoveStorage->GetComponentRaw(Handle)) : nullptr;
 			if (!Move) return;
 
 			FTraceState& S = States.FindOrAdd(Handle);
@@ -141,10 +141,10 @@ public:
 				AlignDot = (Fwd.X * ToGoal.X + Fwd.Y * ToGoal.Y) / GoalDist;
 			}
 
-			const FSeinNavigationComponent* NavComp = NavStorage
-				? static_cast<const FSeinNavigationComponent*>(NavStorage->GetComponentRaw(Handle)) : nullptr;
+			const FSeinNavigationPayload* NavComp = NavStorage
+				? static_cast<const FSeinNavigationPayload*>(NavStorage->GetComponentRaw(Handle)) : nullptr;
 			const FFixedPoint Accept = (NavComp && NavComp->AcceptanceRadius > FFixedPoint::Zero)
-				? NavComp->AcceptanceRadius : FSeinNavigationComponent::DefaultArrivalAcceptance();
+				? NavComp->AcceptanceRadius : FSeinNavigationPayload::DefaultArrivalAcceptance();
 
 			// Classify. PINNED = the movement side commanded ~nothing (the avoidance
 			// kernel's own pinned classifier); PRESSER = commanded plenty, body went

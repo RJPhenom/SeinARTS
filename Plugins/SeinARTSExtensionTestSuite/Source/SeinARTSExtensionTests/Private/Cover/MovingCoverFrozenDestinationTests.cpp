@@ -5,9 +5,9 @@
 #include "Brokers/SeinBrokerTypes.h"
 #include "Components/SeinBrokerMembershipData.h"
 #include "Components/SeinCommandBrokerData.h"
-#include "Components/SeinCoverComponent.h"
-#include "Components/SeinExtentsComponent.h"
-#include "Components/SeinNavigationComponent.h"
+#include "Components/SeinCoverPayload.h"
+#include "Components/SeinExtentsPayload.h"
+#include "Components/SeinNavigationPayload.h"
 #include "Containers/Ticker.h"
 #include "Events/SeinVisualEvent.h"
 #include "Formations/SeinFormation.h"
@@ -114,7 +114,7 @@ namespace UE::SeinARTSExtensionTests
 				FSeinExtentsShape Shape;
 				Shape.Shape = ESeinExtentsShape::Capsule;
 				Shape.Radius = FFixedPoint::FromInt(40);
-				FSeinExtentsComponent Extents;
+				FSeinExtentsPayload Extents;
 				Extents.Shapes.Add(Shape);
 				World->AddComponent(Member, Extents);
 				bAuthored = World->GrantTag(
@@ -124,7 +124,7 @@ namespace UE::SeinARTSExtensionTests
 
 			Provider = World->SpawnAbstractEntity(
 				FFixedTransform(Position(0)), FSeinPlayerID::Neutral());
-			FSeinCoverComponent CoverData;
+			FSeinCoverPayload CoverData;
 			CoverData.QualityTag = SeinCoverTags::Cover_Light;
 			CoverData.SlotRadius = FFixedPoint::FromInt(20);
 			CoverData.Slots.Add(Position(-100));
@@ -245,16 +245,16 @@ namespace UE::SeinARTSExtensionTests
 			FSeinExtentsShape Shape;
 			Shape.Shape = ESeinExtentsShape::Capsule;
 			Shape.Radius = FFixedPoint::FromInt(60);
-			FSeinExtentsComponent Extents;
+			FSeinExtentsPayload Extents;
 			Extents.Shapes.Add(Shape);
 			World->AddComponent(Member, Extents);
-			World->AddComponent(Member, FSeinNavigationComponent());
+			World->AddComponent(Member, FSeinNavigationPayload());
 			bAuthored = World->GrantTag(
 				Member, SeinCoverTags::Cover_UsesCover);
 
 			Provider = World->SpawnAbstractEntity(
 				FFixedTransform(Position(0)), Player);
-			FSeinCoverComponent CoverData;
+			FSeinCoverPayload CoverData;
 			CoverData.QualityTag = SeinCoverTags::Cover_Light;
 			CoverData.SlotRadius = FFixedPoint::FromInt(20);
 			CoverData.Slots.Add(Position(0));
@@ -362,16 +362,16 @@ namespace UE::SeinARTSExtensionTests
 			FSeinExtentsShape Shape;
 			Shape.Shape = ESeinExtentsShape::Capsule;
 			Shape.Radius = FFixedPoint::FromInt(60);
-			FSeinExtentsComponent Extents;
+			FSeinExtentsPayload Extents;
 			Extents.Shapes.Add(Shape);
 			World->AddComponent(Member, Extents);
-			World->AddComponent(Member, FSeinNavigationComponent());
+			World->AddComponent(Member, FSeinNavigationPayload());
 			bAuthored = World->GrantTag(
 				Member, SeinCoverTags::Cover_UsesCover);
 
 			Provider = World->SpawnAbstractEntity(
 				FFixedTransform(Position(0)), Player);
-			FSeinCoverComponent CoverData;
+			FSeinCoverPayload CoverData;
 			CoverData.QualityTag = SeinCoverTags::Cover_Light;
 			CoverData.SlotRadius = FFixedPoint::FromInt(20);
 			CoverData.Slots.Add(Position(0));
@@ -452,7 +452,7 @@ namespace UE::SeinARTSExtensionTests
 			FSeinExtentsShape Shape;
 			Shape.Shape = ESeinExtentsShape::Capsule;
 			Shape.Radius = FFixedPoint::FromInt(60);
-			FSeinExtentsComponent Extents;
+			FSeinExtentsPayload Extents;
 			Extents.Shapes.Add(Shape);
 			World->AddComponent(Member, Extents);
 			bAuthored = World->GrantTag(
@@ -460,7 +460,7 @@ namespace UE::SeinARTSExtensionTests
 
 			Provider = World->SpawnAbstractEntity(
 				FFixedTransform(Position(0)), Player);
-			FSeinCoverComponent CoverData;
+			FSeinCoverPayload CoverData;
 			CoverData.QualityTag = SeinCoverTags::Cover_Light;
 			CoverData.SlotRadius = FFixedPoint::FromInt(20);
 			CoverData.Slots.Add(Position(0));
@@ -580,7 +580,7 @@ namespace UE::SeinARTSExtensionTests
 				FSeinExtentsShape Shape;
 				Shape.Shape = ESeinExtentsShape::Capsule;
 				Shape.Radius = FFixedPoint::FromInt(Radius);
-				FSeinExtentsComponent Extents;
+				FSeinExtentsPayload Extents;
 				Extents.Shapes.Add(Shape);
 				World->AddComponent(Member, Extents);
 				bAuthored = World->GrantTag(
@@ -590,7 +590,7 @@ namespace UE::SeinARTSExtensionTests
 
 			Provider = World->SpawnAbstractEntity(
 				FFixedTransform(), Player);
-			FSeinCoverComponent CoverData;
+			FSeinCoverPayload CoverData;
 			CoverData.QualityTag = SeinCoverTags::Cover_Light;
 			CoverData.SlotRadius = FFixedPoint::FromInt(20);
 			CoverData.Slots.Add(Position(-60));

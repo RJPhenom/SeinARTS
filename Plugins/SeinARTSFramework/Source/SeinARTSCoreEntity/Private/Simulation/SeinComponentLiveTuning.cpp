@@ -5,7 +5,7 @@
 
 #include "Simulation/SeinComponentLiveTuning.h"
 
-#include "Components/SeinAbilityComponent.h"
+#include "Components/SeinAbilityPayload.h"
 #include "UObject/UnrealType.h"
 
 namespace
@@ -250,10 +250,10 @@ namespace
 					FScriptArrayHelper BeforeArray(ArrayProperty, BeforeValue);
 					FScriptArrayHelper AfterArray(ArrayProperty, AfterValue);
 					const bool bIsAbilityGrantList =
-						&ComponentType == FSeinAbilityComponent::StaticStruct()
+						&ComponentType == FSeinAbilityPayload::StaticStruct()
 						&& Property->GetFName()
 							== GET_MEMBER_NAME_CHECKED(
-								FSeinAbilityComponent, GrantedAbilities);
+								FSeinAbilityPayload, GrantedAbilities);
 					if (bIsAbilityGrantList)
 					{
 						// The ability lifecycle owns this authored multiset and reconciles

@@ -11,7 +11,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Components/SeinComponent.h"
+#include "Components/SeinPayload.h"
 #if WITH_EDITORONLY_DATA
 #include "StructUtils/UserDefinedStruct.h"
 #endif
@@ -20,7 +20,7 @@ namespace SeinComponentEligibility
 {
 	/** True iff `Struct` is eligible as a top-level entity ComponentData entry:
 	 *  carries the `SeinDeterministic` meta, is NOT `SeinSubData`, and is either a
-	 *  native USTRUCT inheriting FSeinComponent OR a UserDefinedStruct carrying the
+	 *  native USTRUCT inheriting FSeinPayload OR a UserDefinedStruct carrying the
 	 *  `SeinEntityComponent` meta. (UDS IsChildOf is unreliable — UE's UDS compiler
 	 *  clears SuperStruct — so the meta tag stamped by USeinSimComponentFactory is
 	 *  the substitute.) Metadata is editor-only, so this returns false in cooked /
@@ -40,7 +40,7 @@ namespace SeinComponentEligibility
 		}
 		if (const UScriptStruct* SS = Cast<UScriptStruct>(Struct))
 		{
-			return SS->IsChildOf(FSeinComponent::StaticStruct());
+			return SS->IsChildOf(FSeinPayload::StaticStruct());
 		}
 		return false;
 #else

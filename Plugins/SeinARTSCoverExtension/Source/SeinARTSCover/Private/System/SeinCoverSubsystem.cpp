@@ -8,7 +8,7 @@
 #include "System/SeinCoverSystem.h"
 #include "System/SeinCoverDefault.h"
 
-#include "Components/SeinCoverComponent.h"
+#include "Components/SeinCoverPayload.h"
 #include "Brokers/SeinBrokerTypes.h"
 #include "Lib/SeinCoverAssignmentPlanner.h"
 #include "Serialization/SeinCanonicalStateRegistry.h"
@@ -92,7 +92,7 @@ void USeinCoverSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	CoverSystem->OnCoverSystemInitialized(WorldSub);
 
 	// Hook entity spawn/destroy events — auto-registers entities with
-	// FSeinCoverComponent in storage as cover providers. Replaces the
+	// FSeinCoverPayload in storage as cover providers. Replaces the
 	// pre-Phase-5 USeinCoverProviderComponent AC's OnEntitySpawnedNative
 	// hook (the AC is gone; events are how render-side systems learn about
 	// sim-side component changes now).
@@ -616,8 +616,8 @@ void USeinCoverSubsystem::HandleEntitySpawned(FSeinEntityHandle Handle)
 	if (!CoverSystem || !CachedSimWorld) return;
 	// Only register entities that actually have a cover component in storage —
 	// the bridge's InjectAuthoredComponents puts it there if the designer
-	// authored an FSeinCoverComponent entry on the ComponentData array.
-	if (CachedSimWorld->GetComponent<FSeinCoverComponent>(Handle) != nullptr)
+	// authored an FSeinCoverPayload entry on the ComponentData array.
+	if (CachedSimWorld->GetComponent<FSeinCoverPayload>(Handle) != nullptr)
 	{
 		CoverSystem->RegisterAuthoritativeProvider(Handle);
 		UE_LOG(LogSeinCoverSubsystem, Verbose,
@@ -652,7 +652,7 @@ void USeinCoverSubsystem::ReconcileProviderRegistry()
 			FSeinEntityHandle Handle,
 			const FSeinEntity& /*Entity*/)
 		{
-			if (CachedSimWorld->GetComponent<FSeinCoverComponent>(Handle))
+			if (CachedSimWorld->GetComponent<FSeinCoverPayload>(Handle))
 			{
 				ProviderHandles.Add(Handle);
 			}

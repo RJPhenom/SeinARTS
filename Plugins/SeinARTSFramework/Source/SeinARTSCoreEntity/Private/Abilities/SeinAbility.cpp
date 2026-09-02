@@ -17,12 +17,12 @@
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Abilities/SeinLatentActionManager.h"
 #include "Lib/SeinResourceBPFL.h"
-#include "Components/SeinProductionComponent.h"
-#include "Components/SeinSquadComponent.h"
-#include "Components/SeinSquadMemberComponent.h"
-#include "Components/SeinAbilityComponent.h"
-#include "Components/SeinIdentityComponent.h"
-#include "Components/SeinProducibleComponent.h"
+#include "Components/SeinProductionPayload.h"
+#include "Components/SeinSquadPayload.h"
+#include "Components/SeinSquadMemberPayload.h"
+#include "Components/SeinAbilityPayload.h"
+#include "Components/SeinIdentityPayload.h"
+#include "Components/SeinProduciblePayload.h"
 #include "Actor/SeinEntityBridgeComponent.h"
 #include "Events/SeinVisualEvent.h"
 #include "Effects/SeinEffect.h"
@@ -125,13 +125,13 @@ void USeinAbility::EnqueueProduction(TSubclassOf<ASeinActor> ProducibleClass)
 		return;
 	}
 
-	FSeinProductionComponent* ProdComp =
+	FSeinProductionPayload* ProdComp =
 		WorldSubsystem->GetComponentMutable<
-			FSeinProductionComponent>(OwnerEntity);
+			FSeinProductionPayload>(OwnerEntity);
 	if (!ProdComp)
 	{
 		UE_LOG(LogSeinAbilityImpl, Warning,
-			TEXT("EnqueueProduction[%s]: owner %s has no FSeinProductionComponent"),
+			TEXT("EnqueueProduction[%s]: owner %s has no FSeinProductionPayload"),
 			*GetName(), *OwnerEntity.ToString());
 		RollBackFailedEnqueue();
 		return;
@@ -146,26 +146,26 @@ void USeinAbility::EnqueueProduction(TSubclassOf<ASeinActor> ProducibleClass)
 	}
 
 	// Producible's authoring lives on the producible class's entity bridge —
-	// FSeinProducibleComponent (BuildTime / RefundPolicy / research metadata)
-	// and FSeinIdentityComponent (IdentityTag for the production visual
+	// FSeinProduciblePayload (BuildTime / RefundPolicy / research metadata)
+	// and FSeinIdentityPayload (IdentityTag for the production visual
 	// event). Both are FInstancedStruct entries in
 	// `USeinEntityBridgeComponent::ComponentData` on the BP CDO.
-	const FSeinProducibleComponent* Producible = nullptr;
-	const FSeinIdentityComponent* Identity = nullptr;
+	const FSeinProduciblePayload* Producible = nullptr;
+	const FSeinIdentityPayload* Identity = nullptr;
 	{
 		TArray<const USeinEntityBridgeComponent*> Bridges;
 		AActor::GetActorClassDefaultComponents<USeinEntityBridgeComponent>(ProducibleClass, Bridges);
 		for (const USeinEntityBridgeComponent* Bridge : Bridges)
 		{
 			if (!Bridge) continue;
-			if (!Producible) Producible = Bridge->FindAuthoredData<FSeinProducibleComponent>();
-			if (!Identity)   Identity   = Bridge->FindAuthoredData<FSeinIdentityComponent>();
+			if (!Producible) Producible = Bridge->FindAuthoredData<FSeinProduciblePayload>();
+			if (!Identity)   Identity   = Bridge->FindAuthoredData<FSeinIdentityPayload>();
 		}
 	}
 	if (!Producible)
 	{
 		UE_LOG(LogSeinAbilityImpl, Warning,
-			TEXT("EnqueueProduction[%s]: producible %s has no FSeinProducibleComponent on its entity bridge; skipping"),
+			TEXT("EnqueueProduction[%s]: producible %s has no FSeinProduciblePayload on its entity bridge; skipping"),
 			*GetName(), *ProducibleClass->GetName());
 		RollBackFailedEnqueue();
 		return;
@@ -227,13 +227,13 @@ void USeinAbility::SetRallyPoint(const FFixedTransform& Transform)
 	{
 		return;
 	}
-	FSeinProductionComponent* ProdComp =
+	FSeinProductionPayload* ProdComp =
 		WorldSubsystem->GetComponentMutable<
-			FSeinProductionComponent>(OwnerEntity);
+			FSeinProductionPayload>(OwnerEntity);
 	if (!ProdComp)
 	{
 		UE_LOG(LogSeinAbilityImpl, Warning,
-			TEXT("SetRallyPoint[%s]: owner %s has no FSeinProductionComponent"),
+			TEXT("SetRallyPoint[%s]: owner %s has no FSeinProductionPayload"),
 			*GetName(), *OwnerEntity.ToString());
 		return;
 	}
@@ -249,13 +249,13 @@ void USeinAbility::SetRallyEntity(FSeinEntityHandle RallyEntity)
 	{
 		return;
 	}
-	FSeinProductionComponent* ProdComp =
+	FSeinProductionPayload* ProdComp =
 		WorldSubsystem->GetComponentMutable<
-			FSeinProductionComponent>(OwnerEntity);
+			FSeinProductionPayload>(OwnerEntity);
 	if (!ProdComp)
 	{
 		UE_LOG(LogSeinAbilityImpl, Warning,
-			TEXT("SetRallyEntity[%s]: owner %s has no FSeinProductionComponent"),
+			TEXT("SetRallyEntity[%s]: owner %s has no FSeinProductionPayload"),
 			*GetName(), *OwnerEntity.ToString());
 		return;
 	}
@@ -271,9 +271,9 @@ void USeinAbility::ClearRallyPoint()
 	{
 		return;
 	}
-	FSeinProductionComponent* ProdComp =
+	FSeinProductionPayload* ProdComp =
 		WorldSubsystem->GetComponentMutable<
-			FSeinProductionComponent>(OwnerEntity);
+			FSeinProductionPayload>(OwnerEntity);
 	if (!ProdComp) return;
 	ProdComp->bRallyToEntity = false;
 	ProdComp->RallyTransform = FFixedTransform();
@@ -571,10 +571,10 @@ void USeinAbility::StartCooldownInternal()
 	if (Cooldown <= FFixedPoint::Zero) return;
 	if (!WorldSubsystem) return;
 
-	const FSeinSquadMemberComponent* MemberData = WorldSubsystem->GetComponent<FSeinSquadMemberComponent>(OwnerEntity);
+	const FSeinSquadMemberPayload* MemberData = WorldSubsystem->GetComponent<FSeinSquadMemberPayload>(OwnerEntity);
 	if (!MemberData || !MemberData->SquadEntity.IsValid()) return;
 
-	const FSeinSquadComponent* Squad = WorldSubsystem->GetComponent<FSeinSquadComponent>(MemberData->SquadEntity);
+	const FSeinSquadPayload* Squad = WorldSubsystem->GetComponent<FSeinSquadPayload>(MemberData->SquadEntity);
 	if (!Squad) return;
 
 	for (const FSeinSquadSlot& Slot : Squad->Slots)
@@ -582,7 +582,7 @@ void USeinAbility::StartCooldownInternal()
 		const FSeinEntityHandle Mate = Slot.CurrentOccupant;
 		if (!Mate.IsValid() || Mate == OwnerEntity) continue;
 
-		const FSeinAbilityComponent* MateAC = WorldSubsystem->GetComponent<FSeinAbilityComponent>(Mate);
+		const FSeinAbilityPayload* MateAC = WorldSubsystem->GetComponent<FSeinAbilityPayload>(Mate);
 		if (!MateAC) continue;
 
 		if (USeinAbility* MateInstance = MateAC->FindAbilityByTag(*WorldSubsystem, AbilityTag))

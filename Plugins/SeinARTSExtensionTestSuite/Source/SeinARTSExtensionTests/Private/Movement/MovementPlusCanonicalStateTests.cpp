@@ -1,7 +1,7 @@
 #include "CQTest.h"
 #include "Components/ActorTestSpawner.h"
 
-#include "Components/SeinMovementComponent.h"
+#include "Components/SeinMovementPayload.h"
 #include "Core/SeinSystemPriority.h"
 #include "Data/SeinFlyingMovementData.h"
 #include "Data/SeinTrackedMovementData.h"
@@ -154,7 +154,7 @@ namespace
 								World->SpawnAbstractEntity(
 									FFixedTransform(),
 									FSeinPlayerID::Neutral());
-							FSeinMovementComponent Component;
+							FSeinMovementPayload Component;
 							Component.MovementClass =
 								FSoftClassPath(
 									MovementClass->GetPathName());
@@ -189,8 +189,8 @@ namespace
 
 			for (const FSeinEntityHandle Entity : Entities)
 			{
-				const FSeinMovementComponent* Component =
-					World->GetComponent<FSeinMovementComponent>(
+				const FSeinMovementPayload* Component =
+					World->GetComponent<FSeinMovementPayload>(
 						Entity);
 				if (!Component
 					|| !Movement->GetOrCreateMovementInstance(
@@ -398,8 +398,8 @@ TEST(MovementPlusPresentationTelemetryIsTypedAndRenderOnly,
 	ASSERT_THAT(IsTrue(Clamp01(FFixedPoint::FromInt(2)) == FFixedPoint::One));
 	{
 		auto SimScope = FSeinSimContextTestAccess::Enter(*Fixture.World);
-		FSeinMovementComponent* Movement =
-			Fixture.World->GetComponentMutable<FSeinMovementComponent>(
+		FSeinMovementPayload* Movement =
+			Fixture.World->GetComponentMutable<FSeinMovementPayload>(
 				WheeledEntity);
 		ASSERT_THAT(IsNotNull(Movement));
 		SetRenderValue(
@@ -458,8 +458,8 @@ TEST(MovementPlusPresentationTelemetryIsTypedAndRenderOnly,
 
 	{
 		auto SimScope = FSeinSimContextTestAccess::Enter(*Fixture.World);
-		FSeinMovementComponent* Movement =
-			Fixture.World->GetComponentMutable<FSeinMovementComponent>(
+		FSeinMovementPayload* Movement =
+			Fixture.World->GetComponentMutable<FSeinMovementPayload>(
 				WheeledEntity);
 		ASSERT_THAT(IsNotNull(Movement));
 		SetRenderValue(
@@ -530,8 +530,8 @@ TEST(MovementPlusPresentationTelemetryIsTypedAndRenderOnly,
 
 	{
 		auto SimScope = FSeinSimContextTestAccess::Enter(*Fixture.World);
-		FSeinMovementComponent* Movement =
-			Fixture.World->GetComponentMutable<FSeinMovementComponent>(
+		FSeinMovementPayload* Movement =
+			Fixture.World->GetComponentMutable<FSeinMovementPayload>(
 				WheeledEntity);
 		ASSERT_THAT(IsNotNull(Movement));
 		UE::SeinARTSMovementPlus::Telemetry::
@@ -614,11 +614,11 @@ TEST(MovementPlusSettledTelemetryUsesFinalTransforms,
 	using namespace UE::SeinARTSMovementPlus::Telemetry;
 	{
 		auto SimScope = FSeinSimContextTestAccess::Enter(*Fixture.World);
-		FSeinMovementComponent* WheeledData =
-			Fixture.World->GetComponentMutable<FSeinMovementComponent>(
+		FSeinMovementPayload* WheeledData =
+			Fixture.World->GetComponentMutable<FSeinMovementPayload>(
 				Fixture.Entities[0]);
-		FSeinMovementComponent* TrackedData =
-			Fixture.World->GetComponentMutable<FSeinMovementComponent>(
+		FSeinMovementPayload* TrackedData =
+			Fixture.World->GetComponentMutable<FSeinMovementPayload>(
 				Fixture.Entities[1]);
 		USeinWheeledVehicleMovement* Wheeled =
 			Cast<USeinWheeledVehicleMovement>(Fixture.Instance(0));
@@ -788,8 +788,8 @@ TEST(MovementPlusProductionSamplerResetsAfterRestore,
 		Fixture.World->GetFixedDeltaTimeSeconds());
 	FTSTicker::GetCoreTicker().Tick(
 		Fixture.World->GetFixedDeltaTimeSeconds());
-	const FSeinMovementComponent* Movement =
-		Fixture.World->GetComponent<FSeinMovementComponent>(
+	const FSeinMovementPayload* Movement =
+		Fixture.World->GetComponent<FSeinMovementPayload>(
 			Fixture.Entities[0]);
 	ASSERT_THAT(IsNotNull(Movement));
 	using namespace UE::SeinARTSMovementPlus::Telemetry;
@@ -807,7 +807,7 @@ TEST(MovementPlusProductionSamplerResetsAfterRestore,
 	FString Error;
 	ASSERT_THAT(IsTrue(SeinTestSnapshotRestore::RestoreTrusted(
 		*Fixture.World, Snapshot, &Error)));
-	Movement = Fixture.World->GetComponent<FSeinMovementComponent>(
+	Movement = Fixture.World->GetComponent<FSeinMovementPayload>(
 		Fixture.Entities[0]);
 	ASSERT_THAT(IsNotNull(Movement));
 	FSeinMovementPlusPresentationDimensions Dimensions;
@@ -828,7 +828,7 @@ TEST(MovementPlusProductionSamplerResetsAfterRestore,
 		ImmediateAfterRestore.WheelRotationRadians)));
 	FTSTicker::GetCoreTicker().Tick(
 		Fixture.World->GetFixedDeltaTimeSeconds());
-	Movement = Fixture.World->GetComponent<FSeinMovementComponent>(
+	Movement = Fixture.World->GetComponent<FSeinMovementPayload>(
 		Fixture.Entities[0]);
 	ASSERT_THAT(IsNotNull(Movement));
 	ASSERT_THAT(IsTrue(
@@ -844,8 +844,8 @@ TEST(MovementPlusProductionSamplerResetsAfterRestore,
 
 	{
 		auto SimScope = FSeinSimContextTestAccess::Enter(*Fixture.World);
-		FSeinMovementComponent* MutableMovement =
-			Fixture.World->GetComponentMutable<FSeinMovementComponent>(
+		FSeinMovementPayload* MutableMovement =
+			Fixture.World->GetComponentMutable<FSeinMovementPayload>(
 				Fixture.Entities[0]);
 		ASSERT_THAT(IsNotNull(MutableMovement));
 		FSeinMovementRenderStateWriter Writer(
@@ -859,7 +859,7 @@ TEST(MovementPlusProductionSamplerResetsAfterRestore,
 	}
 	FTSTicker::GetCoreTicker().Tick(
 		Fixture.World->GetFixedDeltaTimeSeconds());
-	Movement = Fixture.World->GetComponent<FSeinMovementComponent>(
+	Movement = Fixture.World->GetComponent<FSeinMovementPayload>(
 		Fixture.Entities[0]);
 	ASSERT_THAT(IsNotNull(Movement));
 	ASSERT_THAT(IsTrue(Movement->RenderState.IsEmpty()));
@@ -879,8 +879,8 @@ TEST(MovementPlusPresentationClearsWhenMovementInstanceDisappears,
 	using namespace UE::SeinARTSMovementPlus::Telemetry;
 	{
 		auto SimScope = FSeinSimContextTestAccess::Enter(*Fixture.World);
-		FSeinMovementComponent* Movement =
-			Fixture.World->GetComponentMutable<FSeinMovementComponent>(
+		FSeinMovementPayload* Movement =
+			Fixture.World->GetComponentMutable<FSeinMovementPayload>(
 				Fixture.Entities[0]);
 		ASSERT_THAT(IsNotNull(Movement));
 		FSeinMovementRenderStateWriter Writer(Movement->RenderState);
@@ -890,8 +890,8 @@ TEST(MovementPlusPresentationClearsWhenMovementInstanceDisappears,
 
 	FTSTicker::GetCoreTicker().Tick(
 		Fixture.World->GetFixedDeltaTimeSeconds());
-	const FSeinMovementComponent* Movement =
-		Fixture.World->GetComponent<FSeinMovementComponent>(
+	const FSeinMovementPayload* Movement =
+		Fixture.World->GetComponent<FSeinMovementPayload>(
 			Fixture.Entities[0]);
 	ASSERT_THAT(IsNotNull(Movement));
 	ASSERT_THAT(IsTrue(Movement->RenderState.IsEmpty()));
@@ -923,7 +923,7 @@ TEST(MovementPlusUnloadClosesCoreAndSeversExtensionState,
 				BasicEntity = World->SpawnAbstractEntity(
 					FFixedTransform(),
 					FSeinPlayerID::Neutral());
-				FSeinMovementComponent Basic;
+				FSeinMovementPayload Basic;
 				Basic.MovementClass = FSoftClassPath(
 					USeinBasicMovement::StaticClass()
 						->GetPathName());
@@ -932,7 +932,7 @@ TEST(MovementPlusUnloadClosesCoreAndSeversExtensionState,
 				WheeledEntity = World->SpawnAbstractEntity(
 					FFixedTransform(),
 					FSeinPlayerID::Neutral());
-				FSeinMovementComponent WheeledComponent;
+				FSeinMovementPayload WheeledComponent;
 				WheeledComponent.MovementClass = FSoftClassPath(
 					USeinWheeledVehicleMovement::StaticClass()
 						->GetPathName());
@@ -949,11 +949,11 @@ TEST(MovementPlusUnloadClosesCoreAndSeversExtensionState,
 	ASSERT_THAT(IsTrue(
 		SeinTestMatchBootstrap::Start(*World, &Error)));
 
-	const FSeinMovementComponent* BasicComponent =
-		World->GetComponent<FSeinMovementComponent>(
+	const FSeinMovementPayload* BasicComponent =
+		World->GetComponent<FSeinMovementPayload>(
 			BasicEntity);
-	const FSeinMovementComponent* WheeledComponent =
-		World->GetComponent<FSeinMovementComponent>(
+	const FSeinMovementPayload* WheeledComponent =
+		World->GetComponent<FSeinMovementPayload>(
 			WheeledEntity);
 	ASSERT_THAT(IsNotNull(BasicComponent));
 	ASSERT_THAT(IsNotNull(WheeledComponent));
@@ -979,10 +979,10 @@ TEST(MovementPlusUnloadClosesCoreAndSeversExtensionState,
 	ASSERT_THAT(IsNull(
 		Movement->FindMovementInstance(WheeledEntity)));
 	BasicComponent =
-		World->GetComponent<FSeinMovementComponent>(
+		World->GetComponent<FSeinMovementPayload>(
 			BasicEntity);
 	WheeledComponent =
-		World->GetComponent<FSeinMovementComponent>(
+		World->GetComponent<FSeinMovementPayload>(
 			WheeledEntity);
 	ASSERT_THAT(IsNull(BasicComponent));
 	ASSERT_THAT(IsNull(WheeledComponent));

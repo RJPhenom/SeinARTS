@@ -25,7 +25,7 @@
 #include "Simulation/ComponentStorage.h"
 #include "Components/SeinCommandBrokerData.h"
 #include "Components/SeinBrokerMembershipData.h"
-#include "Components/SeinAbilityComponent.h"
+#include "Components/SeinAbilityPayload.h"
 #include "Brokers/SeinCommandBrokerResolver.h"
 #include "Abilities/SeinAbility.h"
 #include "Input/SeinCommand.h"
@@ -94,7 +94,7 @@ namespace SeinCommandBrokerDispatch
 	 *
 	 *  Non-squad brokers (selection-spawned ephemeral brokers, etc.) pass
 	 *  through the squad-owner walk as a no-op: abstract broker entities
-	 *  don't carry FSeinAbilityComponent, so the GetComponent lookup
+	 *  don't carry FSeinAbilityPayload, so the GetComponent lookup
 	 *  returns null and we drop straight into the member walk — same
 	 *  behavior as the pre-squad implementation. */
 	static void RebuildCapabilityMap(USeinWorldSubsystem& World, FSeinEntityHandle BrokerHandle, FSeinCommandBrokerData& Broker)
@@ -107,7 +107,7 @@ namespace SeinCommandBrokerDispatch
 		// adding themselves to the same bucket in pass 2 — squad-owned wins
 		// the dedup.
 		TSet<FGameplayTag> SquadOwnedTags;
-		if (const FSeinAbilityComponent* OwnerAC = World.GetComponent<FSeinAbilityComponent>(BrokerHandle))
+		if (const FSeinAbilityPayload* OwnerAC = World.GetComponent<FSeinAbilityPayload>(BrokerHandle))
 		{
 			for (int32 ID : OwnerAC->AbilityInstanceIDs)
 			{
@@ -124,7 +124,7 @@ namespace SeinCommandBrokerDispatch
 		// (those buckets stay sole-entry = the squad handle).
 		for (const FSeinEntityHandle& M : Broker.Members)
 		{
-			const FSeinAbilityComponent* AC = World.GetComponent<FSeinAbilityComponent>(M);
+			const FSeinAbilityPayload* AC = World.GetComponent<FSeinAbilityPayload>(M);
 			if (!AC) continue;
 			for (int32 ID : AC->AbilityInstanceIDs)
 			{
@@ -369,8 +369,8 @@ namespace SeinCommandBrokerDispatch
 				return false;
 			}
 
-			const FSeinAbilityComponent* AbilityComponent =
-				World.GetComponent<FSeinAbilityComponent>(Dispatch.Member);
+			const FSeinAbilityPayload* AbilityComponent =
+				World.GetComponent<FSeinAbilityPayload>(Dispatch.Member);
 			if (!AbilityComponent
 				|| !AbilityComponent->HasAbilityWithTag(
 					World, Dispatch.AbilityTag))
@@ -682,7 +682,7 @@ public:
 				bool bAllDone = true;
 				for (const FSeinEntityHandle& M : Effective)
 				{
-					const FSeinAbilityComponent* AC = World.GetComponent<FSeinAbilityComponent>(M);
+					const FSeinAbilityPayload* AC = World.GetComponent<FSeinAbilityPayload>(M);
 					const USeinAbility* Active = AC ? AC->GetActiveAbility(World) : nullptr;
 					if (Active && Active->bIsActive)
 					{

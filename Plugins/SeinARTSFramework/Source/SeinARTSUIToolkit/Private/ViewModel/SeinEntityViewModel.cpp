@@ -12,10 +12,10 @@ DEFINE_LOG_CATEGORY_STATIC(LogSeinViewModel, Log, All);
 #include "Actor/SeinActor.h"
 #include "Actor/SeinEntityBridgeComponent.h"
 #include "Abilities/SeinAbility.h"
-#include "Components/SeinAbilityComponent.h"
-#include "Components/SeinIdentityComponent.h"
-#include "Components/SeinProductionComponent.h"
-#include "Components/SeinSquadComponent.h"
+#include "Components/SeinAbilityPayload.h"
+#include "Components/SeinIdentityPayload.h"
+#include "Components/SeinProductionPayload.h"
+#include "Components/SeinSquadPayload.h"
 #include "Core/SeinPlayerState.h"
 #include "Effects/SeinEffect.h"
 #include "Lib/SeinAbilityBPFL.h"
@@ -50,12 +50,12 @@ namespace SeinEntityViewModelLocal
 	 *  first; member-only abilities follow in slot order). */
 	static TArray<FSquadAbilityEntry> GatherSquadAbilities(const USeinWorldSubsystem& World,
 		FSeinEntityHandle SquadHandle,
-		const FSeinSquadComponent& SquadData)
+		const FSeinSquadPayload& SquadData)
 	{
 		TArray<FSquadAbilityEntry> Out;
 
 		// Pass 1: squad-owned instances.
-		if (const FSeinAbilityComponent* SquadAC = World.GetComponent<FSeinAbilityComponent>(SquadHandle))
+		if (const FSeinAbilityPayload* SquadAC = World.GetComponent<FSeinAbilityPayload>(SquadHandle))
 		{
 			for (USeinAbility* Ab : SquadAC->GetAbilityInstances(World))
 			{
@@ -70,7 +70,7 @@ namespace SeinEntityViewModelLocal
 		for (const FSeinSquadSlot& Slot : SquadData.Slots)
 		{
 			if (!Slot.CurrentOccupant.IsValid()) continue;
-			const FSeinAbilityComponent* MemberAC = World.GetComponent<FSeinAbilityComponent>(Slot.CurrentOccupant);
+			const FSeinAbilityPayload* MemberAC = World.GetComponent<FSeinAbilityPayload>(Slot.CurrentOccupant);
 			if (!MemberAC) continue;
 			for (USeinAbility* Ab : MemberAC->GetAbilityInstances(World))
 			{
@@ -95,12 +95,12 @@ namespace SeinEntityViewModelLocal
 	static TArray<FSquadAbilityEntry> FindSquadAbilityInstancesByTag(
 		const USeinWorldSubsystem& World,
 		FSeinEntityHandle SquadHandle,
-		const FSeinSquadComponent& SquadData,
+		const FSeinSquadPayload& SquadData,
 		FGameplayTag Tag)
 	{
 		TArray<FSquadAbilityEntry> Out;
 		if (!Tag.IsValid()) return Out;
-		if (const FSeinAbilityComponent* SquadAC = World.GetComponent<FSeinAbilityComponent>(SquadHandle))
+		if (const FSeinAbilityPayload* SquadAC = World.GetComponent<FSeinAbilityPayload>(SquadHandle))
 		{
 			if (USeinAbility* Ab = SquadAC->FindAbilityByTag(World, Tag))
 			{
@@ -110,7 +110,7 @@ namespace SeinEntityViewModelLocal
 		for (const FSeinSquadSlot& Slot : SquadData.Slots)
 		{
 			if (!Slot.CurrentOccupant.IsValid()) continue;
-			const FSeinAbilityComponent* MemberAC = World.GetComponent<FSeinAbilityComponent>(Slot.CurrentOccupant);
+			const FSeinAbilityPayload* MemberAC = World.GetComponent<FSeinAbilityPayload>(Slot.CurrentOccupant);
 			if (!MemberAC) continue;
 			if (USeinAbility* Ab = MemberAC->FindAbilityByTag(World, Tag))
 			{
@@ -135,10 +135,10 @@ void USeinEntityViewModel::Initialize(FSeinEntityHandle InHandle, USeinWorldSubs
 	bIsAlive = InWorldSubsystem->IsEntityAlive(InHandle);
 	OwnerPlayerID = InWorldSubsystem->GetEntityOwner(InHandle);
 
-	// Cache identity data straight from sim storage. FSeinIdentityComponent
+	// Cache identity data straight from sim storage. FSeinIdentityPayload
 	// is injected into entity storage at spawn from the entity bridge's
 	// authored ComponentData array — no actor lookup needed.
-	if (const FSeinIdentityComponent* Identity = InWorldSubsystem->GetComponent<FSeinIdentityComponent>(InHandle))
+	if (const FSeinIdentityPayload* Identity = InWorldSubsystem->GetComponent<FSeinIdentityPayload>(InHandle))
 	{
 		DisplayName = Identity->DisplayName;
 		Description = Identity->Description;
@@ -371,7 +371,7 @@ TArray<FSeinAbilityInfo> USeinEntityViewModel::GetAbilities() const
 	// GatherSquadAbilities), then members in slot-declaration order. The
 	// first instance for each tag carries the class-level fields that
 	// MergeAbilityInfos copies through (Name, Icon, Cost, Cooldown, etc.).
-	if (const FSeinSquadComponent* SquadData = WorldSubsystem->GetComponent<FSeinSquadComponent>(Entity))
+	if (const FSeinSquadPayload* SquadData = WorldSubsystem->GetComponent<FSeinSquadPayload>(Entity))
 	{
 		const TArray<SeinEntityViewModelLocal::FSquadAbilityEntry> AllInstances =
 			SeinEntityViewModelLocal::GatherSquadAbilities(*WorldSubsystem, Entity, *SquadData);
@@ -404,7 +404,7 @@ TArray<FSeinAbilityInfo> USeinEntityViewModel::GetAbilities() const
 		return Result;
 	}
 
-	const FSeinAbilityComponent* AbilityComp = WorldSubsystem->GetComponent<FSeinAbilityComponent>(Entity);
+	const FSeinAbilityPayload* AbilityComp = WorldSubsystem->GetComponent<FSeinAbilityPayload>(Entity);
 	if (!AbilityComp)
 	{
 		return Result;
@@ -438,7 +438,7 @@ FSeinAbilityInfo USeinEntityViewModel::GetAbilityByTag(FGameplayTag Tag) const
 	// Squad-aware lookup — walk every squad/member instance of the tag and
 	// merge. Same OR-availability / MIN-cooldown rule as GetAbilities so a
 	// per-tag query is consistent with what the deduped ability bar shows.
-	if (const FSeinSquadComponent* SquadData = WorldSubsystem->GetComponent<FSeinSquadComponent>(Entity))
+	if (const FSeinSquadPayload* SquadData = WorldSubsystem->GetComponent<FSeinSquadPayload>(Entity))
 	{
 		const TArray<SeinEntityViewModelLocal::FSquadAbilityEntry> Instances =
 			SeinEntityViewModelLocal::FindSquadAbilityInstancesByTag(*WorldSubsystem, Entity, *SquadData, Tag);
@@ -453,7 +453,7 @@ FSeinAbilityInfo USeinEntityViewModel::GetAbilityByTag(FGameplayTag Tag) const
 		return MergeAbilityInfos(Infos);
 	}
 
-	const FSeinAbilityComponent* AbilityComp = WorldSubsystem->GetComponent<FSeinAbilityComponent>(Entity);
+	const FSeinAbilityPayload* AbilityComp = WorldSubsystem->GetComponent<FSeinAbilityPayload>(Entity);
 	if (!AbilityComp)
 	{
 		return FSeinAbilityInfo();
@@ -477,12 +477,12 @@ bool USeinEntityViewModel::HasAbilityWithTag(FGameplayTag Tag) const
 
 	// Squad-aware: ANY entity in the squad (squad itself OR any live member)
 	// holding the tag → true. Matches GetAbilities visibility rules.
-	if (const FSeinSquadComponent* SquadData = WorldSubsystem->GetComponent<FSeinSquadComponent>(Entity))
+	if (const FSeinSquadPayload* SquadData = WorldSubsystem->GetComponent<FSeinSquadPayload>(Entity))
 	{
 		return SeinEntityViewModelLocal::FindSquadAbilityInstancesByTag(*WorldSubsystem, Entity, *SquadData, Tag).Num() > 0;
 	}
 
-	const FSeinAbilityComponent* AbilityComp = WorldSubsystem->GetComponent<FSeinAbilityComponent>(Entity);
+	const FSeinAbilityPayload* AbilityComp = WorldSubsystem->GetComponent<FSeinAbilityPayload>(Entity);
 	return AbilityComp && AbilityComp->HasAbilityWithTag(*WorldSubsystem.Get(), Tag);
 }
 
@@ -491,7 +491,7 @@ TArray<FSeinProductionQueueItemInfo> USeinEntityViewModel::GetProductionQueue() 
 	TArray<FSeinProductionQueueItemInfo> Result;
 	if (!WorldSubsystem.IsValid() || !Entity.IsValid()) return Result;
 
-	const FSeinProductionComponent* ProdComp = WorldSubsystem->GetComponent<FSeinProductionComponent>(Entity);
+	const FSeinProductionPayload* ProdComp = WorldSubsystem->GetComponent<FSeinProductionPayload>(Entity);
 	if (!ProdComp || ProdComp->Queue.Num() == 0) return Result;
 
 	Result.Reserve(ProdComp->Queue.Num());
@@ -538,7 +538,7 @@ TArray<FSeinProductionQueueItemInfo> USeinEntityViewModel::GetProductionQueue() 
 			for (const USeinEntityBridgeComponent* Bridge : Bridges)
 			{
 				if (!Bridge) continue;
-				if (const FSeinIdentityComponent* Identity = Bridge->FindAuthoredData<FSeinIdentityComponent>())
+				if (const FSeinIdentityPayload* Identity = Bridge->FindAuthoredData<FSeinIdentityPayload>())
 				{
 					Info.DisplayName = Identity->DisplayName;
 					Info.Icon = Identity->Icon;

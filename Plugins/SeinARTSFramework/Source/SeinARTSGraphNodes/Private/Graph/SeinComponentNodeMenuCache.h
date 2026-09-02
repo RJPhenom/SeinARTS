@@ -5,7 +5,7 @@
  *          (UK2Node_SeinGetComponent / UK2Node_SeinSetComponent).
  *
  *          Both nodes build their action-menu entries from the same set: every
- *          loaded native `FSeinComponent` substruct plus every UDS carrying the
+ *          loaded native `FSeinPayload` substruct plus every UDS carrying the
  *          `SeinDeterministic` meta. Each node's `GetMenuActions` is invoked once
  *          per Blueprint action-database rebuild, and the two nodes are visited
  *          back-to-back within the SAME rebuild — so an unshared scan walks every
@@ -35,8 +35,8 @@ class UScriptStruct;
 
 namespace SeinComponentNodeMenu
 {
-	/** Fill `Out` with the FSeinComponent-eligible candidate structs for the BP
-	 *  action menu (native FSeinComponent children + SeinDeterministic UDS),
+	/** Fill `Out` with the FSeinPayload-eligible candidate structs for the BP
+	 *  action menu (native FSeinPayload children + SeinDeterministic UDS),
 	 *  sorted by name. Memoized per action-DB rebuild (see file header). */
 	void GetCandidateStructs(TArray<UScriptStruct*>& Out);
 

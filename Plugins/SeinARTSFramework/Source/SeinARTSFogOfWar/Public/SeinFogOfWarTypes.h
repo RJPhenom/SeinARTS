@@ -18,7 +18,7 @@
 /**
  * EVNNNNNN bit identity for use in UPROPERTY bitmask pickers. Values are
  * the bit masks themselves (with `UseEnumValuesAsMaskValuesInEditor`), so
- * ANDing / ORing against `FSeinVisionComponent::EmissionLayerMask` and friends
+ * ANDing / ORing against `FSeinVisionPayload::EmissionLayerMask` and friends
  * works without any translation. Names are static (baked at compile time);
  * if designers want their project-specific layer names (e.g. "Thermal"
  * instead of "N0") in the picker, that's a custom details panel — the

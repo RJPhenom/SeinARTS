@@ -6,8 +6,8 @@
  */
 
 #include "SeinSlotFormation.h"
-#include "Components/SeinSquadComponent.h"
-#include "Components/SeinSquadMemberComponent.h"
+#include "Components/SeinSquadPayload.h"
+#include "Components/SeinSquadMemberPayload.h"
 #include "Simulation/SeinWorldSubsystem.h"
 
 FSeinFormationLayout USeinSlotFormation::BuildFormation_Implementation(
@@ -44,7 +44,7 @@ FSeinFormationLayout USeinSlotFormation::BuildFormation_Implementation(
 	const FFixedQuaternion Facing = Layout.Facing;
 	Layout.Positions.Reserve(N);
 
-	// Per member: resolve its slot via SquadEntity -> FSeinSquadComponent, take the
+	// Per member: resolve its slot via SquadEntity -> FSeinSquadPayload, take the
 	// authored OffsetTransform (preferring the canonical SlotIndex; SlotTag fallback
 	// for legacy data — a SHARED tag would collapse members onto slot 0), rotate by
 	// facing, translate by the anchor, nav-project. Members whose slot can't be
@@ -54,7 +54,7 @@ FSeinFormationLayout USeinSlotFormation::BuildFormation_Implementation(
 	for (int32 i = 0; i < N; ++i)
 	{
 		const FSeinEntityHandle Member = Members[i];
-		const FSeinSquadMemberComponent* MemberData = World->GetComponent<FSeinSquadMemberComponent>(Member);
+		const FSeinSquadMemberPayload* MemberData = World->GetComponent<FSeinSquadMemberPayload>(Member);
 		if (!MemberData || !MemberData->SquadEntity.IsValid())
 		{
 			Layout.Positions.Add(Anchor);
@@ -62,7 +62,7 @@ FSeinFormationLayout USeinSlotFormation::BuildFormation_Implementation(
 			continue;
 		}
 
-		const FSeinSquadComponent* Squad = World->GetComponent<FSeinSquadComponent>(MemberData->SquadEntity);
+		const FSeinSquadPayload* Squad = World->GetComponent<FSeinSquadPayload>(MemberData->SquadEntity);
 		if (!Squad)
 		{
 			Layout.Positions.Add(Anchor);
@@ -93,7 +93,7 @@ FSeinFormationLayout USeinSlotFormation::BuildFormation_Implementation(
 
 	// Unauthored squad: every member resolved a slot but every offset is identity.
 	// Blob at the anchor (matches pre-refactor: the squad fell back to the base
-	// resolver's blob). Author per-slot OffsetTransforms on FSeinSquadComponent::Slots
+	// resolver's blob). Author per-slot OffsetTransforms on FSeinSquadPayload::Slots
 	// for a real layout.
 	if (!bAnyAuthoredOffset && SlotLookupFailures == 0 && N > 1)
 	{

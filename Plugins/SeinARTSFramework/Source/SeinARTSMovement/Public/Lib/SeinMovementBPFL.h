@@ -2,18 +2,18 @@
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinMovementBPFL.h
  * @brief   Blueprint Function Library for derived movement state. Composes
- *          an entity's transform + FSeinMovementComponent (+ optional
+ *          an entity's transform + FSeinMovementPayload (+ optional
  *          polymorphic per-class sub-data for altitude) into a
  *          CharacterMovement-style snapshot for AnimBPs / UI / gameplay.
  *
  *          Raw component reads are intentionally NOT exposed here — designers
  *          use the generic typed `Get Component` K2 node
- *          (`K2Node_SeinGetComponent`) for `FSeinMovementComponent` +
- *          `FSeinNavigationComponent`. This BPFL only exists to centralize
+ *          (`K2Node_SeinGetComponent`) for `FSeinMovementPayload` +
+ *          `FSeinNavigationPayload`. This BPFL only exists to centralize
  *          the field composition (Velocity → Speed/Direction/etc) that would
  *          otherwise be duplicated across consumers.
  *
- *          Writes to `FSeinMovementComponent` (during simulation only) go
+ *          Writes to `FSeinMovementPayload` (during simulation only) go
  *          through generic `K2Node_SeinSetComponent` or the entity bridge's
  *          ComponentData authoring at design time.
  */
@@ -31,7 +31,7 @@ class USeinWorldSubsystem;
 
 /**
  * Derived movement state — read-only runtime snapshot composed from an
- * entity's transform and FSeinMovementComponent (+ optional polymorphic
+ * entity's transform and FSeinMovementPayload (+ optional polymorphic
  * sub-data for altitude). Mirrors the field shape of
  * UCharacterMovementComponent so AnimBPs / UI / gameplay code authored
  * against the mannequin template port over with minimal rewiring.
@@ -80,7 +80,7 @@ struct SEINARTSMOVEMENT_API FSeinMovementStateData
 	bool bIsReversing = false;
 
 	/** True when the entity is off the ground (Altitude > 1cm). Sourced
-	 *  from the polymorphic sub-data on `FSeinMovementComponent::
+	 *  from the polymorphic sub-data on `FSeinMovementPayload::
 	 *  MovementClassData` (hover / flight sub-data carries Altitude); false
 	 *  for ground movements that have no sub-data Altitude field. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Movement|State")
@@ -88,13 +88,13 @@ struct SEINARTSMOVEMENT_API FSeinMovementStateData
 
 	/** True while an active move action has entered the kinematic brake
 	 *  zone — the unit is decelerating toward its final waypoint. Direct
-	 *  mirror of `FSeinMovementComponent::bArrivalImminent`. AnimBPs use
+	 *  mirror of `FSeinMovementPayload::bArrivalImminent`. AnimBPs use
 	 *  this to blend into "approaching destination" anims. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Movement|State")
 	bool bArrivalImminent = false;
 
 	/** True while a move action is actively driving the entity toward a
-	 *  destination. Direct mirror of `FSeinMovementComponent::bHasTarget`.
+	 *  destination. Direct mirror of `FSeinMovementPayload::bHasTarget`.
 	 *  Goes false the moment the action ends, even while Velocity coasts
 	 *  toward zero through the deceleration curve — combine with
 	 *  `bIsMoving` for AnimBP "Should Move" gating that releases at input
@@ -118,7 +118,7 @@ public:
 	static bool SeinGetAnimationMovementState(const UObject* WorldContextObject, AActor* Actor, FSeinMovementStateData& OutState);
 
 	/** Composite read of derived movement state for an entity. Composes
-	 *  entity transform + FSeinMovementComponent (+ optional sub-data
+	 *  entity transform + FSeinMovementPayload (+ optional sub-data
 	 *  Altitude) into AnimBP-shaped derived values (Velocity, Speed,
 	 *  Direction, etc.). Returns false on invalid handle / missing movement
 	 *  component (OutState reset to defaults). */

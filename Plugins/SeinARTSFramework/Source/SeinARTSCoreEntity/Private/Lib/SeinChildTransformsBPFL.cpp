@@ -72,7 +72,7 @@ bool USeinChildTransformsBPFL::SeinHasChild(const UObject* WorldContextObject, F
 {
 	USeinWorldSubsystem* Sub = GetWorldSubsystem(WorldContextObject);
 	if (!Sub) return false;
-	const FSeinChildTransformsComponent* Data = Sub->GetComponent<FSeinChildTransformsComponent>(EntityHandle);
+	const FSeinChildTransformsPayload* Data = Sub->GetComponent<FSeinChildTransformsPayload>(EntityHandle);
 	if (!Data) return false;
 	return FindByTag(Data->Children, Tag) != nullptr;
 }
@@ -82,7 +82,7 @@ bool USeinChildTransformsBPFL::SeinGetChild(const UObject* WorldContextObject, F
 	OutNode = FSeinChildTransform{};
 	USeinWorldSubsystem* Sub = GetWorldSubsystem(WorldContextObject);
 	if (!Sub) return false;
-	const FSeinChildTransformsComponent* Data = Sub->GetComponent<FSeinChildTransformsComponent>(EntityHandle);
+	const FSeinChildTransformsPayload* Data = Sub->GetComponent<FSeinChildTransformsPayload>(EntityHandle);
 	if (!Data) return false;
 	if (const FSeinChildTransform* Found = FindByTag(Data->Children, Tag))
 	{
@@ -96,7 +96,7 @@ FFixedTransform USeinChildTransformsBPFL::SeinGetChildLocalTransform(const UObje
 {
 	USeinWorldSubsystem* Sub = GetWorldSubsystem(WorldContextObject);
 	if (!Sub) return FFixedTransform::Identity();
-	const FSeinChildTransformsComponent* Data = Sub->GetComponent<FSeinChildTransformsComponent>(EntityHandle);
+	const FSeinChildTransformsPayload* Data = Sub->GetComponent<FSeinChildTransformsPayload>(EntityHandle);
 	if (!Data) return FFixedTransform::Identity();
 	if (const FSeinChildTransform* Found = FindByTag(Data->Children, Tag))
 	{
@@ -114,7 +114,7 @@ FFixedTransform USeinChildTransformsBPFL::SeinGetChildWorldTransform(const UObje
 	// Fallback to entity's own transform if no children component or tag
 	// missing — keeps "spawn projectile at child world position" callers
 	// safe (they get the unit's transform, not a zero transform).
-	const FSeinChildTransformsComponent* Data = Sub->GetComponent<FSeinChildTransformsComponent>(EntityHandle);
+	const FSeinChildTransformsPayload* Data = Sub->GetComponent<FSeinChildTransformsPayload>(EntityHandle);
 	if (!Data) return Entity->Transform;
 	const FSeinChildTransform* Found = FindByTag(Data->Children, Tag);
 	if (!Found) return Entity->Transform;
@@ -125,7 +125,7 @@ FGameplayTag USeinChildTransformsBPFL::SeinGetChildParentTag(const UObject* Worl
 {
 	USeinWorldSubsystem* Sub = GetWorldSubsystem(WorldContextObject);
 	if (!Sub) return FGameplayTag();
-	const FSeinChildTransformsComponent* Data = Sub->GetComponent<FSeinChildTransformsComponent>(EntityHandle);
+	const FSeinChildTransformsPayload* Data = Sub->GetComponent<FSeinChildTransformsPayload>(EntityHandle);
 	if (!Data) return FGameplayTag();
 	if (const FSeinChildTransform* Found = FindByTag(Data->Children, Tag))
 	{
@@ -139,7 +139,7 @@ TArray<FSeinChildTransform> USeinChildTransformsBPFL::SeinGetDirectChildrenOf(co
 	TArray<FSeinChildTransform> Result;
 	USeinWorldSubsystem* Sub = GetWorldSubsystem(WorldContextObject);
 	if (!Sub) return Result;
-	const FSeinChildTransformsComponent* Data = Sub->GetComponent<FSeinChildTransformsComponent>(EntityHandle);
+	const FSeinChildTransformsPayload* Data = Sub->GetComponent<FSeinChildTransformsPayload>(EntityHandle);
 	if (!Data) return Result;
 	// Filter by ParentTag. Invalid tag = root-level children of the entity.
 	for (const FSeinChildTransform& N : Data->Children)
@@ -149,12 +149,12 @@ TArray<FSeinChildTransform> USeinChildTransformsBPFL::SeinGetDirectChildrenOf(co
 	return Result;
 }
 
-bool USeinChildTransformsBPFL::SeinGetChildTransformsData(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, FSeinChildTransformsComponent& OutData)
+bool USeinChildTransformsBPFL::SeinGetChildTransformsData(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, FSeinChildTransformsPayload& OutData)
 {
-	OutData = FSeinChildTransformsComponent{};
+	OutData = FSeinChildTransformsPayload{};
 	USeinWorldSubsystem* Sub = GetWorldSubsystem(WorldContextObject);
 	if (!Sub) return false;
-	const FSeinChildTransformsComponent* Data = Sub->GetComponent<FSeinChildTransformsComponent>(EntityHandle);
+	const FSeinChildTransformsPayload* Data = Sub->GetComponent<FSeinChildTransformsPayload>(EntityHandle);
 	if (!Data) return false;
 	OutData = *Data;
 	return true;

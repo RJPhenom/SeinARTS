@@ -10,7 +10,7 @@
 
 #include "CoreMinimal.h"
 #include "Core/SeinEntityHandle.h"
-#include "Components/SeinComponent.h"
+#include "Components/SeinPayload.h"
 #include "SeinBrokerMembershipData.generated.h"
 
 /**
@@ -19,7 +19,7 @@
  * pool. Value is invalid when the entity has no current broker.
  */
 USTRUCT(BlueprintType, meta = (SeinDeterministic, SeinSubData))
-struct SEINARTSCOREENTITY_API FSeinBrokerMembershipData : public FSeinComponent
+struct SEINARTSCOREENTITY_API FSeinBrokerMembershipData : public FSeinPayload
 {
 	GENERATED_BODY()
 

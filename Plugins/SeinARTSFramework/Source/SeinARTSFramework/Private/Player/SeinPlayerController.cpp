@@ -11,12 +11,12 @@
 #include "Player/SeinOrderGesture.h"
 #include "Actor/SeinActor.h"
 #include "Actor/SeinEntityBridgeComponent.h"
-#include "Components/SeinAbilityComponent.h"
+#include "Components/SeinAbilityPayload.h"
 #include "Components/SeinCommandBrokerData.h"
-#include "Components/SeinMovementComponent.h"
-#include "Components/SeinNavigationComponent.h"
-#include "Components/SeinSquadComponent.h"
-#include "Components/SeinSquadMemberComponent.h"
+#include "Components/SeinMovementPayload.h"
+#include "Components/SeinNavigationPayload.h"
+#include "Components/SeinSquadPayload.h"
+#include "Components/SeinSquadMemberPayload.h"
 #include "Preview/SeinFormationPreviewSubsystem.h"
 #include "Abilities/SeinTargeterTypes.h"
 #include "Brokers/SeinBrokerTypes.h"
@@ -92,7 +92,7 @@ namespace
 			}
 			const FSeinEntityHandle Handle = Actor->GetEntityHandle();
 			if (Sim->GetEntityOwner(Handle) != Controller->SeinPlayerID
-				|| !Sim->GetComponent<FSeinMovementComponent>(Handle))
+				|| !Sim->GetComponent<FSeinMovementPayload>(Handle))
 			{
 				continue;
 			}
@@ -982,7 +982,7 @@ TArray<ASeinActor*> ASeinPlayerController::ResolveSelectionToSquads(const TArray
 		if (Sim)
 		{
 			const FSeinEntityHandle Handle = Actor->GetEntityHandle();
-			if (const FSeinSquadMemberComponent* MemberData = Sim->GetComponent<FSeinSquadMemberComponent>(Handle))
+			if (const FSeinSquadMemberPayload* MemberData = Sim->GetComponent<FSeinSquadMemberPayload>(Handle))
 			{
 				if (MemberData->SquadEntity.IsValid())
 				{
@@ -1484,8 +1484,8 @@ void ASeinPlayerController::IssueSmartCommandEx(
 		if (const FSeinCommandBrokerData* Broker =
 			Subsystem->GetComponent<FSeinCommandBrokerData>(Handle))
 		{
-			if (const FSeinSquadComponent* Squad =
-				Subsystem->GetComponent<FSeinSquadComponent>(Handle);
+			if (const FSeinSquadPayload* Squad =
+				Subsystem->GetComponent<FSeinSquadPayload>(Handle);
 				Squad && !Squad->bShowFormationPreview)
 			{
 				bArtifactEligible = false;
@@ -1494,8 +1494,8 @@ void ASeinPlayerController::IssueSmartCommandEx(
 			for (const FSeinEntityHandle& Member : Broker->Members)
 			{
 				if (!Subsystem->IsEntityAlive(Member)) continue;
-				const FSeinNavigationComponent* Navigation =
-					Subsystem->GetComponent<FSeinNavigationComponent>(Member);
+				const FSeinNavigationPayload* Navigation =
+					Subsystem->GetComponent<FSeinNavigationPayload>(Member);
 				if (!Navigation || !Navigation->bShowNavigationPreview)
 				{
 					bArtifactEligible = false;
@@ -1513,8 +1513,8 @@ void ASeinPlayerController::IssueSmartCommandEx(
 		}
 		else
 		{
-			const FSeinNavigationComponent* Navigation =
-				Subsystem->GetComponent<FSeinNavigationComponent>(Handle);
+			const FSeinNavigationPayload* Navigation =
+				Subsystem->GetComponent<FSeinNavigationPayload>(Handle);
 			if (!Navigation || !Navigation->bShowNavigationPreview)
 			{
 				bArtifactEligible = false;
@@ -1642,8 +1642,8 @@ void ASeinPlayerController::IssueSmartCommandEx(
 	// something immediate. Use the leader's resolved tag as a preview hint.
 	// Non-critical; drives a render-side ping effect only.
 	FGameplayTag PreviewTag;
-	if (const FSeinAbilityComponent* LeaderAbilities =
-		Subsystem->GetComponent<FSeinAbilityComponent>(MemberHandles[0]))
+	if (const FSeinAbilityPayload* LeaderAbilities =
+		Subsystem->GetComponent<FSeinAbilityPayload>(MemberHandles[0]))
 	{
 		PreviewTag = LeaderAbilities->ResolveCommandContext(Context);
 	}

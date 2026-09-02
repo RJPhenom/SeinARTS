@@ -118,7 +118,7 @@ SeinCollision::FSeinContact2D USeinCollisionResolver::NarrowphasePair(const FCol
 		B.Center, B.AxisX, B.AxisY, B.HalfX, B.HalfY);
 }
 
-void USeinCollisionResolver::BuildShapes2D(const FSeinExtentsComponent& Ext, const FFixedTransform& Xf, TArray<FCollisionShape2D>& Out)
+void USeinCollisionResolver::BuildShapes2D(const FSeinExtentsPayload& Ext, const FFixedTransform& Xf, TArray<FCollisionShape2D>& Out)
 {
 	Out.Reset(Ext.Shapes.Num());
 	for (const FSeinExtentsShape& Shape : Ext.Shapes)
@@ -129,7 +129,7 @@ void USeinCollisionResolver::BuildShapes2D(const FSeinExtentsComponent& Ext, con
 
 bool USeinCollisionResolver::ComputeDeepestContact(
 	const TArray<FCollisionShape2D>& SelfShapes,
-	const FSeinExtentsComponent& OtherExt, const FFixedTransform& OtherXf,
+	const FSeinExtentsPayload& OtherExt, const FFixedTransform& OtherXf,
 	FFixedVector& OutNormal, FFixedPoint& OutDepth)
 {
 	bool bAny = false;
@@ -173,12 +173,12 @@ void USeinCollisionResolver::BuildChannelDefaults(TMap<FName, ESeinCollisionResp
 	}
 }
 
-bool USeinCollisionResolver::IsCollider(const FSeinExtentsComponent* Ext)
+bool USeinCollisionResolver::IsCollider(const FSeinExtentsPayload* Ext)
 {
 	return Ext && Ext->bCollisionEnabled && Ext->Shapes.Num() > 0 && !Ext->ObjectType.Channel.IsNone();
 }
 
-FFixedPoint USeinCollisionResolver::ResolveColliderMass(const FSeinExtentsComponent& Ext)
+FFixedPoint USeinCollisionResolver::ResolveColliderMass(const FSeinExtentsPayload& Ext)
 {
 	return (Ext.Mass > FFixedPoint::Epsilon) ? Ext.Mass : FFixedPoint::Epsilon;
 }
@@ -275,15 +275,15 @@ void USeinCollisionResolver::DetectOverlapsAndEmit(USeinWorldSubsystem& World, c
 	// Hoist the Extents storage once (see ResolvePass) + reusable self-shape scratch.
 	const ISeinComponentStorage* ExtentsStorage =
 		World.GetComponentStorageRaw(
-			FSeinExtentsComponent::StaticStruct());
+			FSeinExtentsPayload::StaticStruct());
 	TArray<FCollisionShape2D> SelfShapes;
 
 	World.GetEntityPool().ForEachEntity([&](
 		FSeinEntityHandle SelfHandle,
 		const FSeinEntity& SelfEntity)
 	{
-		const FSeinExtentsComponent* SelfExt = ExtentsStorage
-			? static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(SelfHandle))
+		const FSeinExtentsPayload* SelfExt = ExtentsStorage
+			? static_cast<const FSeinExtentsPayload*>(ExtentsStorage->GetComponentRaw(SelfHandle))
 			: nullptr;
 		if (!IsCollider(SelfExt)) return;
 		if (SelfExt->Mobility != ESeinCollisionMobility::Movable) return;
@@ -302,8 +302,8 @@ void USeinCollisionResolver::DetectOverlapsAndEmit(USeinWorldSubsystem& World, c
 
 		for (const FSeinEntityHandle& OtherHandle : Neighbors)
 		{
-			const FSeinExtentsComponent* OtherExt = ExtentsStorage
-				? static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(OtherHandle))
+			const FSeinExtentsPayload* OtherExt = ExtentsStorage
+				? static_cast<const FSeinExtentsPayload*>(ExtentsStorage->GetComponentRaw(OtherHandle))
 				: nullptr;
 			if (!IsCollider(OtherExt)) continue;
 

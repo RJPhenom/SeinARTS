@@ -1,8 +1,8 @@
 #include "CQTest.h"
 #include "Components/ActorTestSpawner.h"
 
-#include "Components/SeinCoverComponent.h"
-#include "Components/SeinExtentsComponent.h"
+#include "Components/SeinCoverPayload.h"
+#include "Components/SeinExtentsPayload.h"
 #include "Data/SeinMatchSettings.h"
 #include "HAL/PlatformTime.h"
 #include "Lib/SeinCommandBrokerBPFL.h"
@@ -148,7 +148,7 @@ namespace UE::SeinARTSExtensionTests
 						FSeinExtentsShape Shape;
 						Shape.Shape = ESeinExtentsShape::Capsule;
 						Shape.Radius = FFixedPoint::FromInt(40);
-						FSeinExtentsComponent Extents;
+						FSeinExtentsPayload Extents;
 						Extents.Shapes.Add(Shape);
 						World->AddComponent(Member, Extents);
 						bAuthored = World->GrantTag(
@@ -182,7 +182,7 @@ namespace UE::SeinARTSExtensionTests
 							return;
 						}
 
-						FSeinCoverComponent CoverData;
+						FSeinCoverPayload CoverData;
 						CoverData.QualityTag = SeinCoverTags::Cover_Light;
 						CoverData.SlotRadius = FFixedPoint::FromInt(20);
 						CoverData.Slots.Append(SlotOffsets, SlotsPerProvider);

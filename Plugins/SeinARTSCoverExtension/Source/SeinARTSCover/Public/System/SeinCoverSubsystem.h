@@ -86,7 +86,7 @@ private:
 	void HookSimWorldEvents();
 
 	/** Called by the sim world subsystem when an entity finishes spawning.
-	 *  If the entity has FSeinCoverComponent in component storage, register
+	 *  If the entity has FSeinCoverPayload in component storage, register
 	 *  it with the active cover system. */
 	void HandleEntitySpawned(FSeinEntityHandle Handle);
 

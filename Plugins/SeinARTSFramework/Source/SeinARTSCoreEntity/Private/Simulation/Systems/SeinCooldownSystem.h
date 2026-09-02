@@ -11,14 +11,14 @@
 #include "Core/SeinSystemPriority.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Simulation/ComponentStorage.h"
-#include "Components/SeinAbilityComponent.h"
+#include "Components/SeinAbilityPayload.h"
 #include "Abilities/SeinAbility.h"
 
 /**
  * System: Cooldown Tick
  * Phase: PreTick | Priority: 10
  *
- * Iterates all entities with FSeinAbilityComponent and calls
+ * Iterates all entities with FSeinAbilityPayload and calls
  * TickCooldown(DeltaTime) on every ability instance, decrementing
  * cooldown timers towards zero.
  */
@@ -28,15 +28,15 @@ public:
 	virtual void Tick(FFixedPoint DeltaTime, USeinWorldSubsystem& World) override
 	{
 		const ISeinComponentStorage* Storage =
-			World.GetComponentStorageRaw(FSeinAbilityComponent::StaticStruct());
+			World.GetComponentStorageRaw(FSeinAbilityPayload::StaticStruct());
 		if (!Storage) return;
 
 		Storage->ForEachLiveComponent([&](
 			FSeinEntityHandle Handle, const void* RawComponent)
 		{
 			if (!World.GetEntityPool().IsValid(Handle)) return;
-			const FSeinAbilityComponent* AbilityComp =
-				static_cast<const FSeinAbilityComponent*>(RawComponent);
+			const FSeinAbilityPayload* AbilityComp =
+				static_cast<const FSeinAbilityPayload*>(RawComponent);
 			if (!AbilityComp)
 			{
 				return;

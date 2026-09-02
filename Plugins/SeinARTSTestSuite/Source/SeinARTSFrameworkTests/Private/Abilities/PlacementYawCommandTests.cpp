@@ -4,8 +4,8 @@
 #include "Abilities/SeinTargeterSpec.h"
 #include "Actor/SeinEntityBridgeComponent.h"
 #include "Brokers/SeinBrokerTypes.h"
-#include "Components/SeinAbilityComponent.h"
-#include "Components/SeinExtentsComponent.h"
+#include "Components/SeinAbilityPayload.h"
+#include "Components/SeinExtentsPayload.h"
 #include "Components/SeinExtentsHelpers.h"
 #include "Containers/Ticker.h"
 #include "Lib/SeinAbilityBPFL.h"
@@ -27,7 +27,7 @@ namespace
 			Bridge = const_cast<USeinEntityBridgeComponent*>(Bridges[0]);
 			PreviousComponentData = Bridge->ComponentData;
 
-			FSeinExtentsComponent Extents;
+			FSeinExtentsPayload Extents;
 			Extents.Shapes.AddDefaulted();
 			Bridge->ComponentData.Add(FInstancedStruct::Make(Extents));
 		}
@@ -63,7 +63,7 @@ namespace UE::SeinARTSTests
 		{
 			World->RegisterPlayer(Player, FSeinFactionID(1));
 			Entity = World->SpawnAbstractEntity(FFixedTransform(), Player);
-			World->AddComponent(Entity, FSeinAbilityComponent());
+			World->AddComponent(Entity, FSeinAbilityPayload());
 			const int32 AbilityID = USeinAbilityBPFL::SeinGrantAbility(
 				World, Entity, USeinPlacementYawTestAbility::StaticClass());
 			ASSERT_THAT(IsTrue(AbilityID != INDEX_NONE));
@@ -79,8 +79,8 @@ namespace UE::SeinARTSTests
 			Targeter->RotationStepDegrees = 0;
 			GrantedAbility->TargeterSpec = Targeter;
 
-			const FSeinAbilityComponent* AbilityComponent =
-				World->GetComponent<FSeinAbilityComponent>(Entity);
+			const FSeinAbilityPayload* AbilityComponent =
+				World->GetComponent<FSeinAbilityPayload>(Entity);
 			ASSERT_THAT(IsNotNull(AbilityComponent));
 			const USeinAbility* Ability = AbilityComponent->FindAbilityByTag(
 				*World, SeinARTSTags::Command_Context_AbilityTriggered);

@@ -187,7 +187,7 @@ public:
 
 protected:
 	/** Resolve squad-membership: any input actor whose entity carries
-	 *  FSeinSquadMemberComponent is replaced with its squad's actor. Members are
+	 *  FSeinSquadMemberPayload is replaced with its squad's actor. Members are
 	 *  never selectable directly — selecting a member always selects the
 	 *  whole squad (select-the-squad semantics). Returns deduplicated list with nulls
 	 *  stripped. Static so both PC selection methods + external callers can

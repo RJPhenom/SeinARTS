@@ -18,13 +18,13 @@
 #include "Abilities/SeinMoveToProxy.h"
 #include "Brokers/SeinBrokerTypes.h"
 #include "Brokers/SeinDefaultCommandBrokerResolver.h"
-#include "Components/SeinAbilityComponent.h"
+#include "Components/SeinAbilityPayload.h"
 #include "Components/SeinBrokerMembershipData.h"
 #include "Components/SeinCommandBrokerData.h"
-#include "Components/SeinCoverComponent.h"
-#include "Components/SeinExtentsComponent.h"
-#include "Components/SeinMovementComponent.h"
-#include "Components/SeinNavigationComponent.h"
+#include "Components/SeinCoverPayload.h"
+#include "Components/SeinExtentsPayload.h"
+#include "Components/SeinMovementPayload.h"
+#include "Components/SeinNavigationPayload.h"
 #include "Containers/Ticker.h"
 #include "Data/SeinMatchSettings.h"
 #include "Data/SeinReplayHeader.h"
@@ -275,22 +275,22 @@ TEST(CoverFrozenBrokerOrderReplaysEveryReservationLifecycleTick,
 			FSeinExtentsShape Shape;
 			Shape.Shape = ESeinExtentsShape::Capsule;
 			Shape.Radius = FFixedPoint::FromInt(20);
-			FSeinExtentsComponent Extents;
+			FSeinExtentsPayload Extents;
 			Extents.Shapes.Add(Shape);
 			Source->AddComponent(Member, Extents);
-			FSeinMovementComponent Movement;
+			FSeinMovementPayload Movement;
 			Movement.MovementClass = FSoftClassPath(
 				USeinBasicUnitMovement::StaticClass());
 			Movement.TopSpeed = FFixedPoint::FromInt(300);
 			Movement.TurnRate = FFixedPoint::FromInt(10);
 			Source->AddComponent(Member, Movement);
-			FSeinNavigationComponent Navigation;
+			FSeinNavigationPayload Navigation;
 			Navigation.FallbackFootprintRadius = FFixedPoint::FromInt(20);
 			Navigation.AcceptanceRadius = FFixedPoint::FromInt(1);
 			Navigation.RepathMode = ESeinRepathMode::OffPathOnly;
 			Navigation.OffPathThreshold = FFixedPoint::FromInt(10000);
 			Source->AddComponent(Member, Navigation);
-			FSeinAbilityComponent Abilities;
+			FSeinAbilityPayload Abilities;
 			Abilities.FallbackAbilityTag =
 				SeinARTSTags::Command_Context_Target_Ground;
 			Source->AddComponent(Member, Abilities);
@@ -303,7 +303,7 @@ TEST(CoverFrozenBrokerOrderReplaysEveryReservationLifecycleTick,
 			Provider = Source->SpawnAbstractEntity(
 				FFixedTransform(DisplayedCoverSlot),
 				CoverReplayPlayer);
-			FSeinCoverComponent Cover;
+			FSeinCoverPayload Cover;
 			Cover.QualityTag = SeinCoverTags::Cover_Light;
 			Cover.SlotRadius = FFixedPoint::FromInt(10);
 			Cover.Slots.Add(FFixedVector::ZeroVector);

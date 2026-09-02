@@ -6,7 +6,7 @@
  * system:
  *
  *   1. Property-type customization (`FSeinCoverComponentDetails`) for
- *      FSeinCoverComponent, injecting the "Generate Slots" button into the
+ *      FSeinCoverPayload, injecting the "Generate Slots" button into the
  *      details panel for any cover component authored on the entity
  *      bridge's ComponentData array.
  *
@@ -38,7 +38,7 @@ void FSeinARTSCoverEditorModule::StartupModule()
 {
 	UE_LOG(LogSeinARTSCoverEditor, Log, TEXT("SeinARTSCoverEditor module started."));
 
-	// Property-type customization for FSeinCoverComponent. Registers by struct
+	// Property-type customization for FSeinCoverPayload. Registers by struct
 	// short-name (without the F prefix) — UE's property-editor module matches
 	// against `UScriptStruct::GetFName()`, which is the bare struct name.
 	FPropertyEditorModule& PropertyModule =

@@ -4,11 +4,11 @@
  * @file:    SeinTrackedMovementData.h
  * @brief:   Per-class movement data for `USeinTrackedVehicleMovement`.
  *           Surfaces in the entity bridge via
- *           `FSeinMovementComponent::MovementClassData` when the designer
+ *           `FSeinMovementPayload::MovementClassData` when the designer
  *           picks USeinTrackedVehicleMovement as the movement class.
  *
  *           Marked with `SeinSubData` so it appears in the polymorphic
- *           sub-data picker on FSeinMovementComponent::MovementClassData
+ *           sub-data picker on FSeinMovementPayload::MovementClassData
  *           but is filtered out of the entity bridge's top-level
  *           ComponentData picker.
  *
@@ -33,17 +33,17 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Components/SeinComponent.h"
+#include "Components/SeinPayload.h"
 #include "Types/FixedPoint.h"
 #include "SeinTrackedMovementData.generated.h"
 
 USTRUCT(BlueprintType, meta = (SeinDeterministic, SeinSubData))
-struct SEINARTSMOVEMENTPLUS_API FSeinTrackedMovementData : public FSeinComponent
+struct SEINARTSMOVEMENTPLUS_API FSeinTrackedMovementData : public FSeinPayload
 {
 	GENERATED_BODY()
 
 	/** Acceleration rate (world units per second²) — current speed ramps UP toward the target
-	 *  (feeds StepSpeedToward). Moved off the bare FSeinMovementComponent 2026-07-02. */
+	 *  (feeds StepSpeedToward). Moved off the bare FSeinMovementPayload 2026-07-02. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
 		meta = (ClampMin = "0.0"))
 	FFixedPoint Acceleration = FFixedPoint::FromInt(750);
@@ -164,7 +164,7 @@ struct SEINARTSMOVEMENTPLUS_API FSeinTrackedMovementData : public FSeinComponent
 	// ---------------------------------------------------------------------
 	// Maneuver planning
 	//
-	// COUPLING NOTE — the unit-level `FSeinMovementComponent::TurnRate` is
+	// COUPLING NOTE — the unit-level `FSeinMovementPayload::TurnRate` is
 	// the tracked turn ENGINE (pivot rate AND arc yaw rate), and it also
 	// sizes the momentum U-turn arc: an at-speed turnaround sweeps radius
 	// R = speed / TurnRate, clamped to [100, 10000] world units, and the

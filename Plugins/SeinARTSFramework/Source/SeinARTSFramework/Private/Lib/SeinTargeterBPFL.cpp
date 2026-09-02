@@ -8,8 +8,8 @@
 #include "Player/SeinPlayerController.h"
 #include "Player/SeinTargeterSubsystem.h"
 #include "Actor/SeinActor.h"
-#include "Components/SeinAbilityComponent.h"
-#include "Components/SeinSquadComponent.h"
+#include "Components/SeinAbilityPayload.h"
+#include "Components/SeinSquadPayload.h"
 #include "Abilities/SeinAbility.h"
 #include "Abilities/SeinTargeterSpec.h"
 #include "Abilities/SeinTargeterTypes.h"
@@ -56,8 +56,8 @@ bool USeinTargeterBPFL::TriggerAbilityFromActionSlot(ASeinPlayerController* PC, 
 
 		// First: the actor's own AC. Original single-entity behavior — works
 		// for individual units and squad-owned abilities (the squad's own
-		// FSeinAbilityComponent).
-		if (const FSeinAbilityComponent* AC = World->GetComponent<FSeinAbilityComponent>(CandidateHandle))
+		// FSeinAbilityPayload).
+		if (const FSeinAbilityPayload* AC = World->GetComponent<FSeinAbilityPayload>(CandidateHandle))
 		{
 			if (USeinAbility* Found = AC->FindAbilityByTag(*World, AbilityTag))
 			{
@@ -84,12 +84,12 @@ bool USeinTargeterBPFL::TriggerAbilityFromActionSlot(ASeinPlayerController* PC, 
 		// reference (used downstream for TargetType / TargeterSpec) comes
 		// from the member's instance, which is fine — all member instances
 		// of the same ability class have identical class-level metadata.
-		if (const FSeinSquadComponent* SquadData = World->GetComponent<FSeinSquadComponent>(CandidateHandle))
+		if (const FSeinSquadPayload* SquadData = World->GetComponent<FSeinSquadPayload>(CandidateHandle))
 		{
 			for (const FSeinSquadSlot& Slot : SquadData->Slots)
 			{
 				if (!Slot.CurrentOccupant.IsValid()) continue;
-				const FSeinAbilityComponent* MemberAC = World->GetComponent<FSeinAbilityComponent>(Slot.CurrentOccupant);
+				const FSeinAbilityPayload* MemberAC = World->GetComponent<FSeinAbilityPayload>(Slot.CurrentOccupant);
 				if (!MemberAC) continue;
 				if (USeinAbility* Found = MemberAC->FindAbilityByTag(*World, AbilityTag))
 				{

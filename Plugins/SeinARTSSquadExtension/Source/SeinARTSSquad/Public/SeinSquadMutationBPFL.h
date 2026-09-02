@@ -16,8 +16,8 @@
 #include "Types/FixedPoint.h"
 #include "Types/Transform.h"
 #include "GameplayTagContainer.h"
-#include "Components/SeinSquadComponent.h"
-#include "Components/SeinSquadMemberComponent.h"
+#include "Components/SeinSquadPayload.h"
+#include "Components/SeinSquadMemberPayload.h"
 #include "SeinSquadMutationBPFL.generated.h"
 
 class USeinWorldSubsystem;
@@ -32,10 +32,10 @@ public:
 	// Legacy whole-struct setters. These are restricted to uninitialized,
 	// unassigned tick-zero data; live topology routes through exact APIs below.
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Squad", meta = (WorldContext = "WorldContextObject", DisplayName = "Set Squad Data"))
-	static bool SeinSetSquadData(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, const FSeinSquadComponent& NewData);
+	static bool SeinSetSquadData(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, const FSeinSquadPayload& NewData);
 
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Squad", meta = (WorldContext = "WorldContextObject", DisplayName = "Set Squad Member Data"))
-	static bool SeinSetSquadMemberData(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, const FSeinSquadMemberComponent& NewData);
+	static bool SeinSetSquadMemberData(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, const FSeinSquadMemberPayload& NewData);
 
 	// Field-level setters
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Squad", meta = (WorldContext = "WorldContextObject", DisplayName = "Set Squad Leader"))

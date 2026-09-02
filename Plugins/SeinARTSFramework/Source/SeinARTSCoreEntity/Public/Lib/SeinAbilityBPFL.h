@@ -21,7 +21,7 @@
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
 #include "Abilities/SeinAbilityTypes.h"
-#include "Components/SeinAbilityComponent.h"
+#include "Components/SeinAbilityPayload.h"
 #include "SeinAbilityBPFL.generated.h"
 
 class USeinWorldSubsystem;
@@ -36,15 +36,15 @@ public:
 	// Read Component Data
 	// ====================================================================================================
 
-	/** Read FSeinAbilityComponent for an entity. Returns false and logs a warning if the handle
+	/** Read FSeinAbilityPayload for an entity. Returns false and logs a warning if the handle
 	 *  is invalid or the entity lacks the component; OutData is untouched on failure. */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Ability", meta = (WorldContext = "WorldContextObject", DisplayName = "Get Ability Data"))
-	static bool SeinGetAbilityData(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, FSeinAbilityComponent& OutData);
+	static bool SeinGetAbilityData(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, FSeinAbilityPayload& OutData);
 
-	/** Batch read FSeinAbilityComponent. Invalid/missing entities are skipped (warning logged); the
+	/** Batch read FSeinAbilityPayload. Invalid/missing entities are skipped (warning logged); the
 	 *  returned array may be shorter than the input. */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Ability", meta = (WorldContext = "WorldContextObject", DisplayName = "Get Ability Data"))
-	static TArray<FSeinAbilityComponent> SeinGetAbilityDataMany(const UObject* WorldContextObject, const TArray<FSeinEntityHandle>& EntityHandles);
+	static TArray<FSeinAbilityPayload> SeinGetAbilityDataMany(const UObject* WorldContextObject, const TArray<FSeinEntityHandle>& EntityHandles);
 
 	// Command
 	// ====================================================================================================

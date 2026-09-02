@@ -11,8 +11,8 @@
 #include "Engine/DataTable.h"
 #include "GameplayTagContainer.h"
 #include "Core/SeinEntityHandle.h"
-#include "Components/SeinComponent.h"
-#include "SeinSquadMemberComponent.generated.h"
+#include "Components/SeinPayload.h"
+#include "SeinSquadMemberPayload.generated.h"
 
 /**
  * Placed on each individual entity that belongs to a squad. Identifies the
@@ -28,7 +28,7 @@
  * without per-member writes.
  *
  * Index vs Tag: SlotIndex is the canonical identity (array position in
- * `FSeinSquadComponent::Slots`), unique by construction. SlotTag is metadata —
+ * `FSeinSquadPayload::Slots`), unique by construction. SlotTag is metadata —
  * often shared across slots (e.g. five rifleman slots all carry
  * `Squad.Slot.Rifleman`) — and is for role queries like "find the leader
  * slot," NOT formation position lookup. Resolvers must use SlotIndex for
@@ -36,7 +36,7 @@
  * slot's offset.
  */
 USTRUCT(BlueprintType, meta = (SeinDeterministic))
-struct SEINARTSCOREENTITY_API FSeinSquadMemberComponent : public FSeinComponent
+struct SEINARTSCOREENTITY_API FSeinSquadMemberPayload : public FSeinPayload
 {
 	GENERATED_BODY()
 
@@ -44,7 +44,7 @@ struct SEINARTSCOREENTITY_API FSeinSquadMemberComponent : public FSeinComponent
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
 	FSeinEntityHandle SquadEntity;
 
-	/** Canonical slot identity — array index in `FSeinSquadComponent::Slots`.
+	/** Canonical slot identity — array index in `FSeinSquadPayload::Slots`.
 	 *  Always unique (by construction). Used by resolvers for formation
 	 *  position lookup. INDEX_NONE = "not assigned to a slot" (legacy
 	 *  data / pre-spawn / mid-tear-down state). */
@@ -60,7 +60,7 @@ struct SEINARTSCOREENTITY_API FSeinSquadMemberComponent : public FSeinComponent
 	FGameplayTag SlotTag;
 };
 
-FORCEINLINE uint32 GetTypeHash(const FSeinSquadMemberComponent& Component)
+FORCEINLINE uint32 GetTypeHash(const FSeinSquadMemberPayload& Component)
 {
 	uint32 Hash = GetTypeHash(Component.SquadEntity);
 	Hash = HashCombine(Hash, GetTypeHash(Component.SlotIndex));

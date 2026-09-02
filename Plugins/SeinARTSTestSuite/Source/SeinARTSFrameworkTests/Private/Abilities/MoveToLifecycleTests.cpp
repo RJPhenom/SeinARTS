@@ -2,11 +2,11 @@
 #include "Components/ActorTestSpawner.h"
 
 #include "Actions/SeinMoveToAction.h"
-#include "Components/SeinAbilityComponent.h"
+#include "Components/SeinAbilityPayload.h"
 #include "Components/SeinBrokerMembershipData.h"
 #include "Components/SeinCommandBrokerData.h"
-#include "Components/SeinMovementComponent.h"
-#include "Components/SeinNavigationComponent.h"
+#include "Components/SeinMovementPayload.h"
+#include "Components/SeinNavigationPayload.h"
 #include "Formations/SeinFormation.h"
 #include "Lib/SeinAbilityBPFL.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
@@ -371,7 +371,7 @@ namespace
 
 		bool Initialize(
 			bool bFinishOnFirstTick,
-			const FSeinNavigationComponent* NavigationComponent = nullptr)
+			const FSeinNavigationPayload* NavigationComponent = nullptr)
 		{
 			World = Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
 			if (!World)
@@ -384,7 +384,7 @@ namespace
 				{
 					Entity = World->SpawnAbstractEntity(
 						FFixedTransform(), FSeinPlayerID::Neutral());
-					FSeinMovementComponent MovementComponent;
+					FSeinMovementPayload MovementComponent;
 					MovementComponent.MovementClass = FSoftClassPath(
 						USeinMoveToLifecycleTestMovement::StaticClass()->GetPathName());
 					World->AddComponent(Entity, MovementComponent);
@@ -392,7 +392,7 @@ namespace
 					{
 						World->AddComponent(Entity, *NavigationComponent);
 					}
-					World->AddComponent(Entity, FSeinAbilityComponent());
+					World->AddComponent(Entity, FSeinAbilityPayload());
 					AbilityID = USeinAbilityBPFL::SeinGrantAbility(
 						World, Entity,
 						USeinMoveToLifecycleTestAbility::StaticClass());
@@ -510,9 +510,9 @@ namespace
 		}
 	};
 
-	FSeinNavigationComponent MakeEscapeNavigationComponent()
+	FSeinNavigationPayload MakeEscapeNavigationComponent()
 	{
-		FSeinNavigationComponent Navigation;
+		FSeinNavigationPayload Navigation;
 		Navigation.FallbackFootprintRadius = FFixedPoint::FromInt(25);
 		Navigation.NavLayerMask = 0x04;
 		Navigation.RepathMode = ESeinRepathMode::Interval;
@@ -558,8 +558,8 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(AreEqual(
 			0, USeinMoveToLifecycleTestMovement::EndCount));
 		ASSERT_THAT(IsFalse(Fixture.Action->bCompleted));
-		const FSeinMovementComponent* Movement =
-			Fixture.World->GetComponent<FSeinMovementComponent>(
+		const FSeinMovementPayload* Movement =
+			Fixture.World->GetComponent<FSeinMovementPayload>(
 				Fixture.Entity);
 		ASSERT_THAT(IsNotNull(Movement));
 		ASSERT_THAT(IsTrue(Movement->bHasTarget));
@@ -660,7 +660,7 @@ namespace UE::SeinARTSTests
 		USeinMoveToLifecycleTestMovement::bAdvanceInitialWaypointOnTick = true;
 		USeinMoveToLifecycleTestMovement::Deceleration =
 			FFixedPoint::FromInt(100);
-		FSeinNavigationComponent Navigation;
+		FSeinNavigationPayload Navigation;
 		Navigation.AcceptanceRadius = FFixedPoint::FromInt(10);
 		Navigation.FallbackFootprintRadius = FFixedPoint::FromInt(25);
 		FMoveToLifecycleFixture Fixture;
@@ -668,8 +668,8 @@ namespace UE::SeinARTSTests
 
 		Fixture.Tick(FFixedPoint::One / FFixedPoint::FromInt(4));
 
-		const FSeinMovementComponent* Movement =
-			Fixture.World->GetComponent<FSeinMovementComponent>(Fixture.Entity);
+		const FSeinMovementPayload* Movement =
+			Fixture.World->GetComponent<FSeinMovementPayload>(Fixture.Entity);
 		ASSERT_THAT(IsNotNull(Movement));
 		ASSERT_THAT(IsTrue(Movement->bArrivalImminent));
 		ASSERT_THAT(IsFalse(Fixture.Action->bCompleted));
@@ -689,7 +689,7 @@ namespace UE::SeinARTSTests
 		USeinMoveToLifecycleTestMovement::bAdvanceInitialWaypointOnTick = true;
 		USeinMoveToLifecycleTestMovement::Deceleration =
 			FFixedPoint::FromInt(100);
-		FSeinNavigationComponent Navigation;
+		FSeinNavigationPayload Navigation;
 		Navigation.AcceptanceRadius = FFixedPoint::FromInt(10);
 		Navigation.FallbackFootprintRadius = FFixedPoint::FromInt(25);
 		FMoveToLifecycleFixture Fixture;
@@ -698,8 +698,8 @@ namespace UE::SeinARTSTests
 			FFixedPoint::One / FFixedPoint::FromInt(10);
 
 		Fixture.Tick(TenthSecond);
-		const FSeinMovementComponent* Movement =
-			Fixture.World->GetComponent<FSeinMovementComponent>(Fixture.Entity);
+		const FSeinMovementPayload* Movement =
+			Fixture.World->GetComponent<FSeinMovementPayload>(Fixture.Entity);
 		ASSERT_THAT(IsNotNull(Movement));
 		ASSERT_THAT(IsTrue(Movement->bArrivalImminent));
 
@@ -724,7 +724,7 @@ namespace UE::SeinARTSTests
 		FScopedEscapeNavigation ScopedNavigation;
 		USeinMoveToLifecycleTestMovement::bAdvanceInitialWaypointOnTick = true;
 		USeinMoveToEscapeTestNavigation::bPassable = false;
-		FSeinNavigationComponent Navigation = MakeEscapeNavigationComponent();
+		FSeinNavigationPayload Navigation = MakeEscapeNavigationComponent();
 		Navigation.AcceptanceRadius = FFixedPoint::FromInt(10);
 		FMoveToLifecycleFixture Fixture;
 		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Navigation)));
@@ -759,7 +759,7 @@ namespace UE::SeinARTSTests
 	{
 		FScopedMoveToTestState Reset;
 		USeinMoveToLifecycleTestMovement::bAdvanceInitialWaypointOnTick = true;
-		FSeinNavigationComponent Navigation;
+		FSeinNavigationPayload Navigation;
 		Navigation.AcceptanceRadius = FFixedPoint::FromInt(10);
 		Navigation.FallbackFootprintRadius = FFixedPoint::FromInt(25);
 		FMoveToLifecycleFixture Fixture;
@@ -792,7 +792,7 @@ namespace UE::SeinARTSTests
 	{
 		FScopedMoveToTestState Reset;
 		USeinMoveToLifecycleTestMovement::bAdvanceInitialWaypointOnTick = true;
-		FSeinNavigationComponent Navigation;
+		FSeinNavigationPayload Navigation;
 		Navigation.AcceptanceRadius = FFixedPoint::FromInt(10);
 		Navigation.FallbackFootprintRadius = FFixedPoint::FromInt(25);
 		FMoveToLifecycleFixture Fixture;
@@ -823,7 +823,7 @@ namespace UE::SeinARTSTests
 		FScopedEscapeNavigation ScopedNavigation;
 		USeinMoveToLifecycleTestMovement::bAdvanceInitialWaypointOnTick = true;
 		USeinMoveToEscapeTestNavigation::bPassable = true;
-		const FSeinNavigationComponent Navigation =
+		const FSeinNavigationPayload Navigation =
 			MakeEscapeNavigationComponent();
 		FMoveToLifecycleFixture Fixture;
 		Fixture.Destination = FFixedVector(
@@ -855,7 +855,7 @@ namespace UE::SeinARTSTests
 		FScopedEscapeNavigation ScopedNavigation;
 		USeinMoveToLifecycleTestMovement::bAdvanceInitialWaypointOnTick = true;
 		USeinMoveToEscapeTestNavigation::bPassable = false;
-		const FSeinNavigationComponent Navigation =
+		const FSeinNavigationPayload Navigation =
 			MakeEscapeNavigationComponent();
 		FMoveToLifecycleFixture Fixture;
 		Fixture.Destination = FFixedVector(
@@ -914,7 +914,7 @@ namespace UE::SeinARTSTests
 		USeinMoveToEscapeTestNavigation::bReturnEscapeTarget = true;
 		USeinMoveToEscapeTestNavigation::EscapeTarget =
 			EscapeRecoveryTarget();
-		FSeinNavigationComponent Navigation =
+		FSeinNavigationPayload Navigation =
 			MakeEscapeNavigationComponent();
 		const FGameplayTag BlockedTerrainTag =
 			FGameplayTag::RequestGameplayTag(TEXT("Test"), false);
@@ -977,7 +977,7 @@ namespace UE::SeinARTSTests
 			FFixedPoint::Zero,
 			FFixedPoint::FromInt(50),
 			FFixedPoint::Zero);
-		const FSeinNavigationComponent Navigation =
+		const FSeinNavigationPayload Navigation =
 			MakeEscapeNavigationComponent();
 		FMoveToLifecycleFixture Fixture;
 		Fixture.Destination = FFixedVector(
@@ -1015,7 +1015,7 @@ namespace UE::SeinARTSTests
 		USeinMoveToEscapeTestNavigation::EscapeTarget =
 			EscapeRecoveryTarget();
 		USeinMoveToLifecycleTestMovement::FinishTickCallIndices = {2};
-		const FSeinNavigationComponent Navigation =
+		const FSeinNavigationPayload Navigation =
 			MakeEscapeNavigationComponent();
 		FMoveToLifecycleFixture Fixture;
 		Fixture.Destination = FFixedVector(
@@ -1058,7 +1058,7 @@ namespace UE::SeinARTSTests
 		USeinMoveToEscapeTestNavigation::EscapeTarget =
 			EscapeRecoveryTarget();
 		USeinMoveToLifecycleTestMovement::FinishTickCallIndices = {2};
-		const FSeinNavigationComponent Navigation =
+		const FSeinNavigationPayload Navigation =
 			MakeEscapeNavigationComponent();
 		FMoveToLifecycleFixture Fixture;
 		Fixture.Destination = FFixedVector(
@@ -1093,7 +1093,7 @@ namespace UE::SeinARTSTests
 		USeinMoveToEscapeTestNavigation::bReturnEscapeTarget = true;
 		USeinMoveToEscapeTestNavigation::EscapeTarget =
 			EscapeRecoveryTarget();
-		const FSeinNavigationComponent Navigation =
+		const FSeinNavigationPayload Navigation =
 			MakeEscapeNavigationComponent();
 		FMoveToLifecycleFixture Fixture;
 		Fixture.Destination = FFixedVector(
@@ -1136,7 +1136,7 @@ namespace UE::SeinARTSTests
 		USeinMoveToEscapeTestNavigation::bReturnEscapeTarget = true;
 		USeinMoveToEscapeTestNavigation::EscapeTarget =
 			EscapeRecoveryTarget();
-		const FSeinNavigationComponent Navigation =
+		const FSeinNavigationPayload Navigation =
 			MakeEscapeNavigationComponent();
 		FMoveToLifecycleFixture Fixture;
 		Fixture.Destination = FFixedVector(
@@ -1184,8 +1184,8 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsFalse(Fixture.Ability->bIsActive));
 		ASSERT_THAT(AreEqual(0, Fixture.Manager->GetActiveActionCount()));
 
-		const FSeinMovementComponent* Movement =
-			Fixture.World->GetComponent<FSeinMovementComponent>(Fixture.Entity);
+		const FSeinMovementPayload* Movement =
+			Fixture.World->GetComponent<FSeinMovementPayload>(Fixture.Entity);
 		ASSERT_THAT(IsNotNull(Movement));
 		ASSERT_THAT(IsFalse(Movement->bHasTarget));
 		ASSERT_THAT(IsFalse(Movement->bArrivalImminent));
@@ -1242,7 +1242,7 @@ namespace UE::SeinARTSTests
 		};
 		{
 			auto SimScope = FSeinSimContextTestAccess::Enter(*Fixture.World);
-			Fixture.World->RemoveComponent<FSeinMovementComponent>(
+			Fixture.World->RemoveComponent<FSeinMovementPayload>(
 				Fixture.Entity);
 			Fixture.Manager->TickAll(FFixedPoint::FromInt(1), *Fixture.World);
 		}
@@ -1267,7 +1267,7 @@ namespace UE::SeinARTSTests
 		"SeinARTS.Sim.Movement.Repath")
 	{
 		FScopedMoveToTestState Reset;
-		FSeinNavigationComponent Navigation;
+		FSeinNavigationPayload Navigation;
 		Navigation.RepathMode = ESeinRepathMode::Interval;
 		Navigation.RepathInterval =
 			FFixedPoint::One / FFixedPoint::FromInt(20);
@@ -1300,7 +1300,7 @@ namespace UE::SeinARTSTests
 		"SeinARTS.Sim.Movement.Repath")
 	{
 		FScopedMoveToTestState Reset;
-		FSeinNavigationComponent Navigation;
+		FSeinNavigationPayload Navigation;
 		Navigation.RepathMode = ESeinRepathMode::Interval;
 		Navigation.RepathInterval =
 			FFixedPoint::One / FFixedPoint::FromInt(8);
@@ -1334,7 +1334,7 @@ namespace UE::SeinARTSTests
 		"SeinARTS.Sim.Movement.Repath")
 	{
 		FScopedMoveToTestState Reset;
-		FSeinNavigationComponent Navigation;
+		FSeinNavigationPayload Navigation;
 		Navigation.RepathMode = ESeinRepathMode::Interval;
 		Navigation.RepathInterval = FFixedPoint::FromInt(10);
 		USeinMoveToLifecycleTestMovement::ScriptedPathResults = {
@@ -1365,7 +1365,7 @@ namespace UE::SeinARTSTests
 		"SeinARTS.Sim.Movement.Repath")
 	{
 		FScopedMoveToTestState Reset;
-		FSeinNavigationComponent Navigation;
+		FSeinNavigationPayload Navigation;
 		Navigation.RepathMode = ESeinRepathMode::OffPathOnly;
 		Navigation.OffPathThreshold = FFixedPoint::FromInt(10000);
 		USeinMoveToLifecycleTestMovement::ScriptedPathResults = {
@@ -1392,7 +1392,7 @@ namespace UE::SeinARTSTests
 	{
 		FScopedMoveToTestState Reset;
 		FScopedDisabledNavigation DisabledNavigation;
-		FSeinNavigationComponent Navigation;
+		FSeinNavigationPayload Navigation;
 		Navigation.RepathMode = ESeinRepathMode::Interval;
 		Navigation.RepathInterval = FFixedPoint::Epsilon;
 
@@ -1418,7 +1418,7 @@ namespace UE::SeinARTSTests
 		"SeinARTS.Sim.Movement.Repath")
 	{
 		FScopedMoveToTestState Reset;
-		FSeinNavigationComponent Navigation;
+		FSeinNavigationPayload Navigation;
 		Navigation.RepathMode = ESeinRepathMode::Interval;
 		Navigation.RepathInterval = FFixedPoint::FromInt(10);
 
@@ -1455,7 +1455,7 @@ namespace UE::SeinARTSTests
 		"SeinARTS.Sim.Movement.Repath")
 	{
 		FScopedMoveToTestState Reset;
-		FSeinNavigationComponent Navigation;
+		FSeinNavigationPayload Navigation;
 		Navigation.RepathMode = ESeinRepathMode::Interval;
 		Navigation.RepathInterval =
 			FFixedPoint::One / FFixedPoint::FromInt(20);
@@ -1492,7 +1492,7 @@ namespace UE::SeinARTSTests
 		"SeinARTS.Sim.Movement.Repath")
 	{
 		FScopedMoveToTestState Reset;
-		FSeinNavigationComponent Navigation;
+		FSeinNavigationPayload Navigation;
 		Navigation.RepathMode = ESeinRepathMode::OffPathOnly;
 		Navigation.OffPathThreshold = FFixedPoint::FromInt(10);
 		USeinMoveToLifecycleTestMovement::ScriptedPathResults = {
@@ -1524,7 +1524,7 @@ namespace UE::SeinARTSTests
 		"SeinARTS.Sim.Movement.Repath")
 	{
 		FScopedMoveToTestState Reset;
-		FSeinNavigationComponent Navigation;
+		FSeinNavigationPayload Navigation;
 		Navigation.RepathMode = ESeinRepathMode::OffPathOnly;
 		Navigation.OffPathThreshold = FFixedPoint::FromInt(10);
 		USeinMoveToLifecycleTestMovement::bInitialPathSkipsStart = true;
@@ -1544,7 +1544,7 @@ namespace UE::SeinARTSTests
 		"SeinARTS.Sim.Movement.Repath")
 	{
 		FScopedMoveToTestState Reset;
-		FSeinNavigationComponent Navigation;
+		FSeinNavigationPayload Navigation;
 		Navigation.RepathMode = ESeinRepathMode::OffPathOnly;
 		Navigation.OffPathThreshold = FFixedPoint::FromInt(10);
 		USeinMoveToLifecycleTestMovement::ScriptedPathResults = {
@@ -1579,7 +1579,7 @@ namespace UE::SeinARTSTests
 		"SeinARTS.Sim.Movement.Repath")
 	{
 		FScopedMoveToTestState Reset;
-		FSeinNavigationComponent Navigation;
+		FSeinNavigationPayload Navigation;
 		Navigation.RepathMode = ESeinRepathMode::Interval;
 		Navigation.RepathInterval =
 			FFixedPoint::One / FFixedPoint::FromInt(16);
@@ -1618,7 +1618,7 @@ namespace UE::SeinARTSTests
 		"SeinARTS.Sim.Movement.Repath")
 	{
 		FScopedMoveToTestState Reset;
-		FSeinNavigationComponent Navigation;
+		FSeinNavigationPayload Navigation;
 		Navigation.RepathMode = ESeinRepathMode::Interval;
 		Navigation.RepathInterval =
 			FFixedPoint::One / FFixedPoint::FromInt(16);
@@ -1653,7 +1653,7 @@ namespace UE::SeinARTSTests
 		"SeinARTS.Sim.Movement.Repath")
 	{
 		FScopedMoveToTestState Reset;
-		FSeinNavigationComponent Navigation;
+		FSeinNavigationPayload Navigation;
 		Navigation.RepathMode = ESeinRepathMode::OffPathOnly;
 		Navigation.OffPathThreshold = FFixedPoint::FromInt(10);
 		Navigation.RepathFailureLimit = 1;
@@ -1686,7 +1686,7 @@ namespace UE::SeinARTSTests
 		"SeinARTS.Sim.Movement.FrozenDestination")
 	{
 		FScopedMoveToTestState Reset;
-		FSeinNavigationComponent Navigation;
+		FSeinNavigationPayload Navigation;
 		Navigation.FallbackFootprintRadius = FFixedPoint::FromInt(25);
 		FMoveToLifecycleFixture Fixture;
 		ASSERT_THAT(IsTrue(Fixture.Initialize(true, &Navigation)));
@@ -1719,7 +1719,7 @@ namespace UE::SeinARTSTests
 	{
 		FScopedMoveToTestState Reset;
 		USeinMoveToLifecycleTestMovement::bAdvanceInitialWaypointOnTick = true;
-		FSeinNavigationComponent Navigation;
+		FSeinNavigationPayload Navigation;
 		Navigation.FallbackFootprintRadius = FFixedPoint::FromInt(25);
 		Navigation.AcceptanceRadius = FFixedPoint::FromInt(10);
 		FMoveToLifecycleFixture Fixture;
@@ -1751,7 +1751,7 @@ namespace UE::SeinARTSTests
 		"SeinARTS.Sim.Movement.FrozenDestination")
 	{
 		FScopedMoveToTestState Reset;
-		FSeinNavigationComponent Navigation;
+		FSeinNavigationPayload Navigation;
 		Navigation.FallbackFootprintRadius = FFixedPoint::FromInt(25);
 		USeinMoveToLifecycleTestMovement::ScriptedPathResults = {
 			ESeinPathResult::NotFound
@@ -1779,7 +1779,7 @@ namespace UE::SeinARTSTests
 		"SeinARTS.Sim.Movement.FrozenDestination")
 	{
 		FScopedMoveToTestState Reset;
-		FSeinNavigationComponent Navigation;
+		FSeinNavigationPayload Navigation;
 		Navigation.FallbackFootprintRadius = FFixedPoint::FromInt(25);
 		Navigation.RepathMode = ESeinRepathMode::Interval;
 		Navigation.RepathInterval =

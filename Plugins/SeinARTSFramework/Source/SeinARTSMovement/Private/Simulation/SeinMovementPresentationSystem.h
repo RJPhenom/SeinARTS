@@ -7,7 +7,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Components/SeinMovementComponent.h"
+#include "Components/SeinMovementPayload.h"
 #include "Core/SeinSystemPriority.h"
 #include "Core/SeinTickPhase.h"
 #include "Movement/SeinMovement.h"
@@ -42,7 +42,7 @@ public:
 
 		ISeinComponentStorage* MovementStorage =
 			World.GetComponentStorageMutable(
-				FSeinMovementComponent::StaticStruct());
+				FSeinMovementPayload::StaticStruct());
 		if (!MovementStorage)
 		{
 			return;
@@ -53,8 +53,8 @@ public:
 			FSeinEntityHandle Handle,
 			const FSeinEntity& Entity)
 		{
-			const FSeinMovementComponent* ReadMovement =
-				World.GetComponent<FSeinMovementComponent>(Handle);
+			const FSeinMovementPayload* ReadMovement =
+				World.GetComponent<FSeinMovementPayload>(Handle);
 			USeinMovement* Movement =
 				Subsystem->FindMovementInstance(Handle);
 			if (!ReadMovement)
@@ -62,8 +62,8 @@ public:
 				return;
 			}
 
-			FSeinMovementComponent* MutableMovement =
-				static_cast<FSeinMovementComponent*>(
+			FSeinMovementPayload* MutableMovement =
+				static_cast<FSeinMovementPayload*>(
 					MovementStorage->GetComponentRawForDeferredMutation(
 						Handle));
 			if (!MutableMovement)

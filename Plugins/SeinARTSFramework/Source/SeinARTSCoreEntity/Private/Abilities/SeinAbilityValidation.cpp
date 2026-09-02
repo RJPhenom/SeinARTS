@@ -6,7 +6,7 @@
 
 #include "Abilities/SeinAbilityValidation.h"
 #include "Abilities/SeinAbility.h"
-#include "Components/SeinExtentsComponent.h"
+#include "Components/SeinExtentsPayload.h"
 #include "Components/SeinExtentsHelpers.h"
 #include "Core/SeinEntityPool.h"
 #include "Simulation/SeinWorldSubsystem.h"
@@ -21,7 +21,7 @@ ESeinAbilityTargetValidationResult FSeinAbilityValidation::ValidateTarget(
 	// Range check — owner → nearest point on target's footprint surface
 	// (NOT center). Matches the classic RTS "distance to the building, not
 	// distance to the building's pivot" semantics. Build / repair / attack
-	// abilities with a target that has FSeinExtentsComponent get face-aware
+	// abilities with a target that has FSeinExtentsPayload get face-aware
 	// range; abilities targeting un-extents-ed entities (or world locations)
 	// fall back to the classic owner-to-target-center check.
 	//
@@ -44,7 +44,7 @@ ESeinAbilityTargetValidationResult FSeinAbilityValidation::ValidateTarget(
 					// measures to the nearest point on the surface. Buffer=0
 					// because we want true edge distance for the gate; a
 					// non-zero buffer would just shrink effective range.
-					if (const FSeinExtentsComponent* Extents = World.GetComponent<FSeinExtentsComponent>(Target))
+					if (const FSeinExtentsPayload* Extents = World.GetComponent<FSeinExtentsPayload>(Target))
 					{
 						if (Extents->Shapes.Num() > 0)
 						{

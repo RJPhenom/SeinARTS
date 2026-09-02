@@ -11,7 +11,7 @@
 #include "Types/FixedPoint.h"
 #include "Types/Quat.h"
 #include "Types/Vector.h"
-#include "Components/SeinMovementComponent.h"
+#include "Components/SeinMovementPayload.h"
 #include "Data/SeinHoverMovementData.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinHover, Log, All);
@@ -34,13 +34,13 @@ UScriptStruct* USeinHoverMovement::GetMovementDataStruct() const
 	return FSeinHoverMovementData::StaticStruct();
 }
 
-FFixedPoint USeinHoverMovement::GetDeceleration(const FSeinMovementComponent* MovementData) const
+FFixedPoint USeinHoverMovement::GetDeceleration(const FSeinMovementPayload* MovementData) const
 {
 	const FSeinHoverMovementData* Data = MovementData ? MovementData->MovementClassData.GetPtr<FSeinHoverMovementData>() : nullptr;
 	return Data ? Data->Deceleration : FSeinHoverMovementData().Deceleration;
 }
 
-FFixedPoint USeinHoverMovement::GetAltitude(const FSeinMovementComponent* MovementData) const
+FFixedPoint USeinHoverMovement::GetAltitude(const FSeinMovementPayload* MovementData) const
 {
 	if (!MovementData) return FFixedPoint::Zero;
 	if (const FSeinHoverMovementData* HoverData = MovementData->MovementClassData.GetPtr<FSeinHoverMovementData>())
@@ -70,7 +70,7 @@ bool USeinHoverMovement::Tick(const FSeinMovementContext& Ctx)
 	if (!Ctx.MovementData) return true;
 
 	FSeinEntity& Entity = Ctx.Entity;
-	FSeinMovementComponent& MovementData = *Ctx.MovementData;
+	FSeinMovementPayload& MovementData = *Ctx.MovementData;
 	// Per-class tuning (accel/decel live here now, off the bare component). Defaults when unauthored.
 	const FSeinHoverMovementData DefaultsHover;
 	const FSeinHoverMovementData* HoverPtr = MovementData.MovementClassData.GetPtr<FSeinHoverMovementData>();

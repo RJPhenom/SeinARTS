@@ -14,7 +14,7 @@
 #include "Core/SeinPlayerState.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Simulation/ComponentStorage.h"
-#include "Components/SeinActiveEffectsComponent.h"
+#include "Components/SeinActiveEffectsPayload.h"
 #include "Effects/SeinActiveEffect.h"
 #include "Effects/SeinEffect.h"
 
@@ -44,14 +44,14 @@ public:
 
 		TArray<FSeinEntityHandle> EffectEntities;
 		if (const ISeinComponentStorage* Storage =
-			World.GetComponentStorageRaw(FSeinActiveEffectsComponent::StaticStruct()))
+			World.GetComponentStorageRaw(FSeinActiveEffectsPayload::StaticStruct()))
 		{
 			const FSeinEntityPool& Pool = World.GetEntityPool();
 			Storage->ForEachLiveComponent([&](
 				FSeinEntityHandle Handle,
 				const void* RawComponent)
 			{
-				const FSeinActiveEffectsComponent* EffectsComp = static_cast<const FSeinActiveEffectsComponent*>(RawComponent);
+				const FSeinActiveEffectsPayload* EffectsComp = static_cast<const FSeinActiveEffectsPayload*>(RawComponent);
 				if (EffectsComp && EffectsComp->ActiveEffects.Num() > 0
 					&& Pool.IsValid(Handle))
 				{
@@ -94,9 +94,9 @@ private:
 	{
 		if (Scope == ESeinModifierScope::Instance)
 		{
-			FSeinActiveEffectsComponent* Component =
+			FSeinActiveEffectsPayload* Component =
 				World.GetComponentMutable<
-					FSeinActiveEffectsComponent>(Entity);
+					FSeinActiveEffectsPayload>(Entity);
 			return Component ? &Component->ActiveEffects : nullptr;
 		}
 		FSeinPlayerState* State =

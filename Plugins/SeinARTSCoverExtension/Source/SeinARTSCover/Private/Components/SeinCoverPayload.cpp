@@ -2,14 +2,14 @@
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinCoverComponent.cpp
  *
- * Slot generator for FSeinCoverComponent. Lives in the sim module (not
+ * Slot generator for FSeinCoverPayload. Lives in the sim module (not
  * SeinARTSCoverEditor) because the math is deterministic (FFixedPoint) and
  * the struct is sim-side — the editor module only owns the button + details
  * customization that drives this method.
  *
  * Two modes:
  *   - Edge: walks the perimeter of the caller-supplied wall-body Box shape
- *     (sibling FSeinExtentsComponent's first Box). Slots sit OUTSIDE the
+ *     (sibling FSeinExtentsPayload's first Box). Slots sit OUTSIDE the
  *     body by `GenerateSlotInsetUU` — inside the cover Area, outside the
  *     wall. Transforms the body's LocalOffset + YawOffsetDegrees so a
  *     rotated wall produces correctly-rotated slot positions.
@@ -23,8 +23,8 @@
  * shape pointer; this keeps the sim struct ignorant of the entity bridge.
  */
 
-#include "Components/SeinCoverComponent.h"
-#include "Components/SeinExtentsComponent.h"   // FSeinExtentsShape for Edge mode
+#include "Components/SeinCoverPayload.h"
+#include "Components/SeinExtentsPayload.h"   // FSeinExtentsShape for Edge mode
 #include "Math/MathLib.h"
 #include "Types/FixedPoint.h"
 
@@ -265,7 +265,7 @@ namespace SeinCoverGenLocal
 }
 
 #if WITH_EDITORONLY_DATA
-void FSeinCoverComponent::GenerateSlots(const FSeinExtentsShape* OptionalEdgeShape)
+void FSeinCoverPayload::GenerateSlots(const FSeinExtentsShape* OptionalEdgeShape)
 {
 	UE_LOG(LogSeinCoverGen, Log,
 		TEXT("[GenerateSlots] Mode=%s, Scatter=%s, Count=%d, Inset=%.1f, Area.Shape=%s, Area.LocalExtents=(%.1f,%.1f,%.1f), EdgeShape=%s"),
@@ -293,14 +293,14 @@ void FSeinCoverComponent::GenerateSlots(const FSeinExtentsShape* OptionalEdgeSha
 	if (GenerateMode == ESeinCoverGenerateMode::Edge)
 	{
 		// Edge mode wraps the sibling Extents body. Caller resolves the
-		// FSeinExtentsComponent's first Box shape and passes it in — this
+		// FSeinExtentsPayload's first Box shape and passes it in — this
 		// struct stays ignorant of the entity bridge. Bail with a warning
 		// when no shape was passed or the passed shape isn't a Box (Edge
 		// cover assumes a rectangular wall body).
 		if (!OptionalEdgeShape)
 		{
 			UE_LOG(LogSeinCoverGen, Warning,
-				TEXT("[GenerateSlots] Edge mode requires a sibling FSeinExtentsComponent "
+				TEXT("[GenerateSlots] Edge mode requires a sibling FSeinExtentsPayload "
 				     "with a Box shape on the same entity. Add an Extents component (Box) "
 				     "and retry. (The cover details panel resolves and passes it.)"));
 			return;

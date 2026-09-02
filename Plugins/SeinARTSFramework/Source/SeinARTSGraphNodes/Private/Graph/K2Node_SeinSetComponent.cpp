@@ -12,7 +12,7 @@
 #include "KismetCompiler.h"
 #include "Styling/SlateIconFinder.h"
 
-#include "Components/SeinComponent.h"
+#include "Components/SeinPayload.h"
 #include "Core/SeinEntityHandle.h"
 #include "Graph/SeinComponentNodeMenuCache.h"   // shared candidate-struct enumeration
 #include "Lib/SeinComponentBPFL.h"

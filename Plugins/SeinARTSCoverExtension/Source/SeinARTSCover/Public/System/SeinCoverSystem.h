@@ -18,7 +18,7 @@
  *          - The preview subsystem, BPFL, and cover-aware dispatch resolvers
  *            call into this class's virtual surface only.
  *          - Concrete subclasses own their own provider index storage.
- *          - Provider data lives on entities (FSeinCoverComponent); the
+ *          - Provider data lives on entities (FSeinCoverPayload); the
  *            cover system just keeps a list of provider entity handles.
  */
 

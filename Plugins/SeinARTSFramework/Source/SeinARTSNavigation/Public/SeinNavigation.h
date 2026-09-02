@@ -43,7 +43,7 @@
 #include "Types/Entity.h"
 #include "Types/Random.h"
 #include "Stamping/SeinStampShape.h"
-#include "Components/SeinExtentsComponent.h"
+#include "Components/SeinExtentsPayload.h"
 #include "GameplayTagContainer.h"
 #include "Serialization/SeinCanonicalStateRegistry.h"
 #include "SeinPathTypes.h"

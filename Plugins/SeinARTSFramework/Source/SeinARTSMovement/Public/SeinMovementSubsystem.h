@@ -12,7 +12,7 @@
  *              ground snap subsumed the retired FSeinInitialSnapSystem.
  *
  *          The registry owns ONE persistent USeinMovement instance per unit,
- *          resolved from FSeinMovementComponent::MovementClass and created
+ *          resolved from FSeinMovementPayload::MovementClass and created
  *          lazily — move orders BORROW the instance (OnMoveBegin is the
  *          per-order reset point), the driver ticks it idle between orders.
  *          (The old per-order instance lifecycle, and the separately removed
@@ -36,7 +36,7 @@ class USeinAvoidance;
 class USeinMovement;
 class USeinWorldSubsystem;
 struct FSeinMovementCanonicalStateProvider;
-struct FSeinMovementComponent;
+struct FSeinMovementPayload;
 struct FSeinComponentPropertyPatch;
 struct FSeinMovementRoutineRootCache;
 
@@ -51,19 +51,19 @@ public:
 	virtual void Deinitialize() override;
 
 	/** The entity's PERSISTENT movement instance (CP2.1, D-R2). Resolves
-	 *  `FSeinMovementComponent::MovementClass` (null / unresolved / abstract →
+	 *  `FSeinMovementPayload::MovementClass` (null / unresolved / abstract →
 	 *  USeinBasicMovement), creates the instance lazily on first request, and
 	 *  re-creates it if the authored class changes at runtime (effect-driven
 	 *  movement-class swaps start fresh — by design, a different mode's
 	 *  kinematic state is meaningless to carry). Returns null only on
 	 *  NewObject failure. Callers never own the result — the registry roots it
 	 *  for the entity's lifetime. */
-	USeinMovement* GetOrCreateMovementInstance(FSeinEntityHandle Handle, const FSeinMovementComponent& Move);
+	USeinMovement* GetOrCreateMovementInstance(FSeinEntityHandle Handle, const FSeinMovementPayload& Move);
 
 	/** The shared movement-class resolution cascade: soft path → TryLoadClass →
 	 *  (null / abstract) → USeinBasicMovement. Single source of truth for the
 	 *  registry and any CDO-level queries. */
-	static UClass* ResolveMovementClass(const FSeinMovementComponent& Move);
+	static UClass* ResolveMovementClass(const FSeinMovementPayload& Move);
 
 	/** The avoidance-class resolution cascade: `USeinARTSCoreSettings::AvoidanceClass`
 	 *  soft path → TryLoadClass → (empty / invalid / abstract) → USeinAvoidanceDefault.

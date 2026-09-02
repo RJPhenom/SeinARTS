@@ -2,7 +2,7 @@
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinCollisionResponseDetails.h
  * @brief   Property-type customization for FSeinCollisionResponseContainer (the
- *          collision response matrix on FSeinExtentsComponent). Renders the
+ *          collision response matrix on FSeinExtentsPayload). Renders the
  *          Unreal-style per-channel Ignore / Overlap / Block selector — one row
  *          per channel in USeinARTSCoreSettings::CollisionChannels —
  *          instead of the raw "array of {Channel, Response}" UI.

@@ -8,7 +8,7 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Simulation/SeinWorldSubsystem.h"
-#include "Components/SeinAbilityComponent.h"
+#include "Components/SeinAbilityPayload.h"
 #include "Components/SeinBrokerMembershipData.h"
 #include "Components/SeinCommandBrokerData.h"
 #include "Core/SeinPlayerState.h"
@@ -28,7 +28,7 @@ USeinWorldSubsystem* USeinAbilityBPFL::GetWorldSubsystem(const UObject* WorldCon
 	return World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
 }
 
-bool USeinAbilityBPFL::SeinGetAbilityData(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, FSeinAbilityComponent& OutData)
+bool USeinAbilityBPFL::SeinGetAbilityData(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, FSeinAbilityPayload& OutData)
 {
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
 	if (!Subsystem)
@@ -36,32 +36,32 @@ bool USeinAbilityBPFL::SeinGetAbilityData(const UObject* WorldContextObject, FSe
 		UE_LOG(LogSeinBPFL, Warning, TEXT("GetAbilityData: no SeinWorldSubsystem in this world context"));
 		return false;
 	}
-	const FSeinAbilityComponent* Data = Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
+	const FSeinAbilityPayload* Data = Subsystem->GetComponent<FSeinAbilityPayload>(EntityHandle);
 	if (!Data)
 	{
-		UE_LOG(LogSeinBPFL, Warning, TEXT("GetAbilityData: entity %s invalid or has no FSeinAbilityComponent"), *EntityHandle.ToString());
+		UE_LOG(LogSeinBPFL, Warning, TEXT("GetAbilityData: entity %s invalid or has no FSeinAbilityPayload"), *EntityHandle.ToString());
 		return false;
 	}
 	OutData = *Data;
 	return true;
 }
 
-TArray<FSeinAbilityComponent> USeinAbilityBPFL::SeinGetAbilityDataMany(const UObject* WorldContextObject, const TArray<FSeinEntityHandle>& EntityHandles)
+TArray<FSeinAbilityPayload> USeinAbilityBPFL::SeinGetAbilityDataMany(const UObject* WorldContextObject, const TArray<FSeinEntityHandle>& EntityHandles)
 {
-	TArray<FSeinAbilityComponent> Result;
+	TArray<FSeinAbilityPayload> Result;
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
 	if (!Subsystem) return Result;
 
 	Result.Reserve(EntityHandles.Num());
 	for (const FSeinEntityHandle& Handle : EntityHandles)
 	{
-		if (const FSeinAbilityComponent* Data = Subsystem->GetComponent<FSeinAbilityComponent>(Handle))
+		if (const FSeinAbilityPayload* Data = Subsystem->GetComponent<FSeinAbilityPayload>(Handle))
 		{
 			Result.Add(*Data);
 		}
 		else
 		{
-			UE_LOG(LogSeinBPFL, Warning, TEXT("GetAbilityData (batch): skipping entity %s (invalid or no FSeinAbilityComponent)"), *Handle.ToString());
+			UE_LOG(LogSeinBPFL, Warning, TEXT("GetAbilityData (batch): skipping entity %s (invalid or no FSeinAbilityPayload)"), *Handle.ToString());
 		}
 	}
 	return Result;
@@ -76,8 +76,8 @@ void USeinAbilityBPFL::SeinActivateAbility(const UObject* WorldContextObject, FS
 		return;
 	}
 
-	FSeinAbilityComponent* AbilityComp =
-		Subsystem->GetComponentMutable<FSeinAbilityComponent>(
+	FSeinAbilityPayload* AbilityComp =
+		Subsystem->GetComponentMutable<FSeinAbilityPayload>(
 			EntityHandle);
 	if (!AbilityComp) return;
 
@@ -208,8 +208,8 @@ void USeinAbilityBPFL::SeinCancelAbility(const UObject* WorldContextObject, FSei
 		return;
 	}
 
-	FSeinAbilityComponent* AbilityComp =
-		Subsystem->GetComponentMutable<FSeinAbilityComponent>(
+	FSeinAbilityPayload* AbilityComp =
+		Subsystem->GetComponentMutable<FSeinAbilityPayload>(
 			EntityHandle);
 	if (!AbilityComp) return;
 
@@ -255,7 +255,7 @@ namespace SeinAbilityGrantLocal
 	 *  INDEX_NONE if not found. Linear walk — ability lists are short. */
 	template <typename PredT>
 	static int32 FindInstanceIndex(const USeinWorldSubsystem& World,
-		const FSeinAbilityComponent& AC, PredT Pred)
+		const FSeinAbilityPayload& AC, PredT Pred)
 	{
 		for (int32 i = 0; i < AC.AbilityInstanceIDs.Num(); ++i)
 		{
@@ -266,7 +266,7 @@ namespace SeinAbilityGrantLocal
 	}
 
 	static FSeinAbilityGrantOwnership& EnsureOwnershipRow(
-		FSeinAbilityComponent& AC, int32 ParallelIndex)
+		FSeinAbilityPayload& AC, int32 ParallelIndex)
 	{
 		while (AC.AbilityGrantOwnership.Num() <= ParallelIndex)
 		{
@@ -293,7 +293,7 @@ namespace SeinAbilityGrantLocal
 	 *  CancelAbility so reentrant grant/revoke cannot invalidate the index. The
 	 *  old pool slot stays occupied until Cancel returns, preventing ID reuse. */
 	static void DestroyInstanceAt(USeinWorldSubsystem& World,
-		FSeinAbilityComponent& AC, int32 ParallelIndex)
+		FSeinAbilityPayload& AC, int32 ParallelIndex)
 	{
 		if (!AC.AbilityInstanceIDs.IsValidIndex(ParallelIndex)) return;
 
@@ -364,13 +364,13 @@ namespace SeinAbilityGrantLocal
 				*EntityHandle.ToString());
 			return INDEX_NONE;
 		}
-		FSeinAbilityComponent* AbilityComp =
-			Subsystem->GetComponentMutable<FSeinAbilityComponent>(
+		FSeinAbilityPayload* AbilityComp =
+			Subsystem->GetComponentMutable<FSeinAbilityPayload>(
 				EntityHandle);
 		if (!AbilityComp)
 		{
 			UE_LOG(LogSeinBPFL, Warning,
-				TEXT("GrantAbility: entity %s has no FSeinAbilityComponent"),
+				TEXT("GrantAbility: entity %s has no FSeinAbilityPayload"),
 				*EntityHandle.ToString());
 			return INDEX_NONE;
 		}
@@ -430,7 +430,7 @@ namespace SeinAbilityGrantLocal
 			if (!Instance->ActivateAbility(EntityHandle, FFixedVector::ZeroVector))
 			{
 				AbilityComp =
-					Subsystem->GetComponentMutable<FSeinAbilityComponent>(
+					Subsystem->GetComponentMutable<FSeinAbilityPayload>(
 						EntityHandle);
 				const int32 FailedIndex = AbilityComp
 					? AbilityComp->AbilityInstanceIDs.IndexOfByKey(AbilityID)
@@ -442,7 +442,7 @@ namespace SeinAbilityGrantLocal
 				return INDEX_NONE;
 			}
 			AbilityComp =
-				Subsystem->GetComponentMutable<FSeinAbilityComponent>(
+				Subsystem->GetComponentMutable<FSeinAbilityPayload>(
 					EntityHandle);
 			const int32 CurrentIndex = AbilityComp
 				? AbilityComp->AbilityInstanceIDs.IndexOfByKey(AbilityID)
@@ -503,7 +503,7 @@ namespace SeinAbilityGrantLocal
 	 *  consume the oldest effect source and prune its live ledger before any
 	 *  callback-capable destruction. Returns 1 only when the instance dies. */
 	static int32 ConsumeGrantAndMaybeDestroy(USeinWorldSubsystem& World,
-		FSeinEntityHandle Entity, FSeinAbilityComponent& AC, int32 ParallelIndex,
+		FSeinEntityHandle Entity, FSeinAbilityPayload& AC, int32 ParallelIndex,
 		int64 RequiredEffectInstanceID = 0)
 	{
 		if (!AC.AbilityInstanceIDs.IsValidIndex(ParallelIndex)) return 0;
@@ -562,8 +562,8 @@ int32 USeinAbilityBPFL::SeinRevokeAbilityByTag(const UObject* WorldContextObject
 	{
 		return 0;
 	}
-	FSeinAbilityComponent* AbilityComp =
-		Subsystem->GetComponentMutable<FSeinAbilityComponent>(
+	FSeinAbilityPayload* AbilityComp =
+		Subsystem->GetComponentMutable<FSeinAbilityPayload>(
 			EntityHandle);
 	if (!AbilityComp) return 0;
 
@@ -593,7 +593,7 @@ int32 USeinAbilityBPFL::SeinRevokeAbilityByTag(const UObject* WorldContextObject
 	for (int32 ID : MatchingIDs)
 	{
 		AbilityComp =
-			Subsystem->GetComponentMutable<FSeinAbilityComponent>(
+			Subsystem->GetComponentMutable<FSeinAbilityPayload>(
 				EntityHandle);
 		if (!AbilityComp) break;
 		const int32 Idx = AbilityComp->AbilityInstanceIDs.IndexOfByKey(ID);
@@ -626,8 +626,8 @@ int32 USeinAbilityBPFL::SeinRevokeAbilityByClass(const UObject* WorldContextObje
 	{
 		return 0;
 	}
-	FSeinAbilityComponent* AbilityComp =
-		Subsystem->GetComponentMutable<FSeinAbilityComponent>(
+	FSeinAbilityPayload* AbilityComp =
+		Subsystem->GetComponentMutable<FSeinAbilityPayload>(
 			EntityHandle);
 	if (!AbilityComp) return 0;
 
@@ -670,8 +670,8 @@ int32 USeinAbilityBPFL::SeinRevokeAbilityFromEffect(const UObject* WorldContextO
 	{
 		return 0;
 	}
-	FSeinAbilityComponent* AbilityComp =
-		Subsystem->GetComponentMutable<FSeinAbilityComponent>(
+	FSeinAbilityPayload* AbilityComp =
+		Subsystem->GetComponentMutable<FSeinAbilityPayload>(
 			EntityHandle);
 	if (!AbilityComp) return 0;
 	const UClass* TargetClass = AbilityClass.Get();
@@ -702,8 +702,8 @@ int32 USeinAbilityBPFL::SeinForceRevokeAbilityByTag(const UObject* WorldContextO
 	{
 		return 0;
 	}
-	FSeinAbilityComponent* AbilityComp =
-		Subsystem->GetComponentMutable<FSeinAbilityComponent>(
+	FSeinAbilityPayload* AbilityComp =
+		Subsystem->GetComponentMutable<FSeinAbilityPayload>(
 			EntityHandle);
 	if (!AbilityComp) return 0;
 
@@ -723,7 +723,7 @@ int32 USeinAbilityBPFL::SeinForceRevokeAbilityByTag(const UObject* WorldContextO
 	for (int32 ID : MatchingIDs)
 	{
 		AbilityComp =
-			Subsystem->GetComponentMutable<FSeinAbilityComponent>(
+			Subsystem->GetComponentMutable<FSeinAbilityPayload>(
 				EntityHandle);
 		if (!AbilityComp) break;
 		const int32 Idx = AbilityComp->AbilityInstanceIDs.IndexOfByKey(ID);
@@ -760,8 +760,8 @@ int32 USeinAbilityBPFL::SeinForceRevokeAbilityByClass(const UObject* WorldContex
 	{
 		return 0;
 	}
-	FSeinAbilityComponent* AbilityComp =
-		Subsystem->GetComponentMutable<FSeinAbilityComponent>(
+	FSeinAbilityPayload* AbilityComp =
+		Subsystem->GetComponentMutable<FSeinAbilityPayload>(
 			EntityHandle);
 	if (!AbilityComp) return 0;
 
@@ -787,7 +787,7 @@ bool USeinAbilityBPFL::SeinHasAbilityOfClass(const UObject* WorldContextObject,
 {
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
 	if (!Subsystem || !AbilityClass) return false;
-	const FSeinAbilityComponent* AbilityComp = Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
+	const FSeinAbilityPayload* AbilityComp = Subsystem->GetComponent<FSeinAbilityPayload>(EntityHandle);
 	if (!AbilityComp) return false;
 	return AbilityComp->HasAbilityOfClass(*Subsystem, AbilityClass.Get());
 }
@@ -798,7 +798,7 @@ int32 USeinAbilityBPFL::SeinGetAbilityGrantCount(const UObject* WorldContextObje
 {
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
 	if (!Subsystem || !AbilityClass) return 0;
-	const FSeinAbilityComponent* AbilityComp = Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
+	const FSeinAbilityPayload* AbilityComp = Subsystem->GetComponent<FSeinAbilityPayload>(EntityHandle);
 	if (!AbilityComp) return 0;
 	return AbilityComp->GetAbilityGrantCount(*Subsystem, AbilityClass.Get());
 }
@@ -808,7 +808,7 @@ bool USeinAbilityBPFL::SeinIsAbilityOnCooldown(const UObject* WorldContextObject
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
 	if (!Subsystem) return false;
 
-	const FSeinAbilityComponent* AbilityComp = Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
+	const FSeinAbilityPayload* AbilityComp = Subsystem->GetComponent<FSeinAbilityPayload>(EntityHandle);
 	if (!AbilityComp) return false;
 
 	if (const USeinAbility* Ability = AbilityComp->FindAbilityByTag(*Subsystem, AbilityTag))
@@ -823,7 +823,7 @@ FFixedPoint USeinAbilityBPFL::SeinGetCooldownRemaining(const UObject* WorldConte
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
 	if (!Subsystem) return FFixedPoint::Zero;
 
-	const FSeinAbilityComponent* AbilityComp = Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
+	const FSeinAbilityPayload* AbilityComp = Subsystem->GetComponent<FSeinAbilityPayload>(EntityHandle);
 	if (!AbilityComp) return FFixedPoint::Zero;
 
 	if (const USeinAbility* Ability = AbilityComp->FindAbilityByTag(*Subsystem, AbilityTag))
@@ -838,7 +838,7 @@ bool USeinAbilityBPFL::SeinHasAbility(const UObject* WorldContextObject, FSeinEn
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
 	if (!Subsystem) return false;
 
-	const FSeinAbilityComponent* AbilityComp = Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
+	const FSeinAbilityPayload* AbilityComp = Subsystem->GetComponent<FSeinAbilityPayload>(EntityHandle);
 	if (!AbilityComp) return false;
 
 	return AbilityComp->HasAbilityWithTag(*Subsystem, AbilityTag);
@@ -857,7 +857,7 @@ FSeinAbilityAvailability USeinAbilityBPFL::SeinGetAbilityAvailability(
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
 	if (!Subsystem) { Out.Reason = ESeinAbilityUnavailableReason::UnknownAbility; return Out; }
 
-	const FSeinAbilityComponent* AbilityComp = Subsystem->GetComponent<FSeinAbilityComponent>(EntityHandle);
+	const FSeinAbilityPayload* AbilityComp = Subsystem->GetComponent<FSeinAbilityPayload>(EntityHandle);
 	if (!AbilityComp) { Out.Reason = ESeinAbilityUnavailableReason::UnknownAbility; return Out; }
 
 	USeinAbility* Ability = AbilityComp->FindAbilityByTag(*Subsystem, AbilityTag);

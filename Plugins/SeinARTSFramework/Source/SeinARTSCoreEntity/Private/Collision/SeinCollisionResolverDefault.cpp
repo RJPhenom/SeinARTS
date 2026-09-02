@@ -79,7 +79,7 @@ bool USeinCollisionResolverDefault::ResolvePass(
 	// makes every per-self / per-neighbour fetch an O(1) indexed get.
 	const ISeinComponentStorage* ExtentsStorage =
 		World.GetComponentStorageRaw(
-			FSeinExtentsComponent::StaticStruct());
+			FSeinExtentsPayload::StaticStruct());
 	// Reused scratch for the self collider's pre-built shapes (see below).
 	TArray<FCollisionShape2D> SelfShapes;
 
@@ -91,8 +91,8 @@ bool USeinCollisionResolverDefault::ResolvePass(
 		FSeinEntityHandle SelfHandle,
 		FSeinEntity& SelfEntity)
 	{
-		const FSeinExtentsComponent* SelfExt = ExtentsStorage
-			? static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(SelfHandle))
+		const FSeinExtentsPayload* SelfExt = ExtentsStorage
+			? static_cast<const FSeinExtentsPayload*>(ExtentsStorage->GetComponentRaw(SelfHandle))
 			: nullptr;
 		if (!IsCollider(SelfExt)) return;
 		// Non-movable colliders (Static + Stationary) never initiate a push —
@@ -116,8 +116,8 @@ bool USeinCollisionResolverDefault::ResolvePass(
 
 		for (const FSeinEntityHandle& OtherHandle : Neighbors)
 		{
-			const FSeinExtentsComponent* OtherExt = ExtentsStorage
-				? static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(OtherHandle))
+			const FSeinExtentsPayload* OtherExt = ExtentsStorage
+				? static_cast<const FSeinExtentsPayload*>(ExtentsStorage->GetComponentRaw(OtherHandle))
 				: nullptr;
 			if (!IsCollider(OtherExt)) continue;
 

@@ -7,9 +7,9 @@
  */
 
 #include "SeinSquadDispatchResolver.h"
-#include "Components/SeinSquadComponent.h"
-#include "Components/SeinSquadMemberComponent.h"
-#include "Components/SeinAbilityComponent.h"
+#include "Components/SeinSquadPayload.h"
+#include "Components/SeinSquadMemberPayload.h"
+#include "Components/SeinAbilityPayload.h"
 #include "Components/SeinCommandBrokerData.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Types/Entity.h"
@@ -84,7 +84,7 @@ FSeinBrokerDispatchPlan USeinSquadDispatchResolver::ResolveDispatch_Implementati
 		const USeinAbility* Ability = nullptr;
 		for (const FSeinEntityHandle& C : Candidates)
 		{
-			if (const FSeinAbilityComponent* AC = World->GetComponent<FSeinAbilityComponent>(C))
+			if (const FSeinAbilityPayload* AC = World->GetComponent<FSeinAbilityPayload>(C))
 			{
 				if (USeinAbility* Found = AC->FindAbilityByTag(*World, Order.PredeterminedAbilityTag))
 				{
@@ -132,11 +132,11 @@ FSeinBrokerDispatchPlan USeinSquadDispatchResolver::ResolveDispatch_Implementati
 	//
 	// Formation orientation: the formation always rotates so its forward axis aligns with the
 	// direction from current centroid -> target (ComputeFormationFacing). The per-squad slot RE-MATCH
-	// toggles (Reassign Slots Lateral / Depth) live on FSeinSquadComponent and are passed into
+	// toggles (Reassign Slots Lateral / Depth) live on FSeinSquadPayload and are passed into
 	// ResolveFormationLayout below -- the SAME entry point preview consumers call, so commit + preview
 	// never drift. Both default OFF: authored slot roles stay pinned unless the designer opts in.
 	FSeinCommandBrokerData* BrokerData = World->GetComponentMutable<FSeinCommandBrokerData>(BrokerHandle);
-	const FSeinSquadComponent* SquadData = World->GetComponent<FSeinSquadComponent>(BrokerHandle);
+	const FSeinSquadPayload* SquadData = World->GetComponent<FSeinSquadPayload>(BrokerHandle);
 	const FSeinEntity* SquadEntity = World->GetEntity(BrokerHandle);
 	const bool bHadBrokerData = BrokerData != nullptr;
 	const FSeinPlayerID BrokerOwner = bHadBrokerData
@@ -267,13 +267,13 @@ FSeinBrokerDispatchPlan USeinSquadDispatchResolver::ResolveDispatch_Implementati
 	{
 		const FSeinEntityHandle Member = Effective[i];
 		const FFixedVector SlotGoal = Positions.IsValidIndex(i) ? Positions[i] : Order.TargetLocation;
-		if (!World->GetComponent<FSeinAbilityComponent>(Member)) continue;
+		if (!World->GetComponent<FSeinAbilityPayload>(Member)) continue;
 
 		const FGameplayTag ResolvedTag = ResolveMemberAbility(World, Member, Order.Context);
 
 		// ResolveMemberAbility is Blueprint-pluggable and may reallocate or
 		// replace component storage. Reacquire only after the callback returns.
-		const FSeinAbilityComponent* AC = World->GetComponent<FSeinAbilityComponent>(Member);
+		const FSeinAbilityPayload* AC = World->GetComponent<FSeinAbilityPayload>(Member);
 		if (!AC) continue;
 
 		UE_LOG(LogSeinSquadDispatch, Verbose,

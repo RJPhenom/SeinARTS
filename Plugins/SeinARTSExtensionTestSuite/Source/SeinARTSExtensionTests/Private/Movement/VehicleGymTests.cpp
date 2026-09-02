@@ -6,12 +6,12 @@
 #include "Abilities/SeinLatentActionManager.h"
 #include "Abilities/SeinMoveToProxy.h"
 #include "Actions/SeinMoveToAction.h"
-#include "Components/SeinAbilityComponent.h"
+#include "Components/SeinAbilityPayload.h"
 #include "Components/SeinBrokerMembershipData.h"
 #include "Components/SeinCommandBrokerData.h"
-#include "Components/SeinExtentsComponent.h"
-#include "Components/SeinMovementComponent.h"
-#include "Components/SeinNavigationComponent.h"
+#include "Components/SeinExtentsPayload.h"
+#include "Components/SeinMovementPayload.h"
+#include "Components/SeinNavigationPayload.h"
 #include "Data/SeinTrackedMovementData.h"
 #include "Data/SeinWheeledMovementData.h"
 #include "Data/SeinWorldSnapshot.h"
@@ -218,15 +218,15 @@ namespace
 		return true;
 	}
 
-	FSeinMovementComponent MakeWheeledComponent(
+	FSeinMovementPayload MakeWheeledComponent(
 		int32 TopSpeed,
 		int32 TurnRateNumerator,
 		int32 TurnRateDenominator,
 		int32 Wheelbase,
 		int32 FootprintRadius,
-		FSeinNavigationComponent& OutNavigation)
+		FSeinNavigationPayload& OutNavigation)
 	{
-		FSeinMovementComponent Movement;
+		FSeinMovementPayload Movement;
 		Movement.MovementClass = FSoftClassPath(
 			USeinWheeledVehicleMovement::StaticClass());
 		Movement.TopSpeed = FFixedPoint::FromInt(TopSpeed);
@@ -245,15 +245,15 @@ namespace
 		return Movement;
 	}
 
-	FSeinMovementComponent MakeTrackedComponent(
+	FSeinMovementPayload MakeTrackedComponent(
 		int32 TopSpeed,
 		int32 TurnRateNumerator,
 		int32 TurnRateDenominator,
 		int32 MinTurnRadius,
 		int32 FootprintRadius,
-		FSeinNavigationComponent& OutNavigation)
+		FSeinNavigationPayload& OutNavigation)
 	{
-		FSeinMovementComponent Movement;
+		FSeinMovementPayload Movement;
 		Movement.MovementClass = FSoftClassPath(
 			USeinTrackedVehicleMovement::StaticClass());
 		Movement.TopSpeed = FFixedPoint::FromInt(TopSpeed);
@@ -277,8 +277,8 @@ namespace
 		TPlanner& Planner,
 		const TArray<FFixedVector>& Route,
 		FSeinEntity& Entity,
-		const FSeinMovementComponent& Movement,
-		const FSeinNavigationComponent& Navigation,
+		const FSeinMovementPayload& Movement,
+		const FSeinNavigationPayload& Navigation,
 		USeinNavigation* NavigationPolicy,
 		FSeinPath& OutPath)
 	{
@@ -331,8 +331,8 @@ namespace
 	template <typename TPlanner>
 	FDriverRun RunDirectDriver(
 		const TArray<FFixedVector>& Route,
-		FSeinMovementComponent Movement,
-		FSeinNavigationComponent Navigation,
+		FSeinMovementPayload Movement,
+		FSeinNavigationPayload Navigation,
 		const FFixedTransform& InitialPose,
 		USeinNavigation* NavigationPolicy = nullptr)
 	{
@@ -573,8 +573,8 @@ namespace
 
 		bool Initialize(
 			FActorTestSpawner& Spawner,
-			const FSeinMovementComponent& Movement,
-			const FSeinNavigationComponent& Navigation,
+			const FSeinMovementPayload& Movement,
+			const FSeinNavigationPayload& Navigation,
 			const FFixedTransform& InitialPose,
 			const FFixedVector& Destination,
 			FName FixtureId,
@@ -600,7 +600,7 @@ namespace
 						World->AddComponent(Entity, Movement);
 						World->AddComponent(Entity, Navigation);
 						World->AddComponent(
-							Entity, FSeinAbilityComponent());
+							Entity, FSeinAbilityPayload());
 						if (AddFixtureState)
 						{
 							AddFixtureState(*World, Entity);
@@ -663,8 +663,8 @@ namespace
 
 	FVehicleRootTrace RunVehicleRootTrace(
 		bool bParallel,
-		const FSeinMovementComponent& Movement,
-		const FSeinNavigationComponent& Navigation,
+		const FSeinMovementPayload& Movement,
+		const FSeinNavigationPayload& Navigation,
 		const FFixedVector& Destination,
 		int32 TickCount)
 	{
@@ -713,8 +713,8 @@ namespace
 		FSeinEntityHandle EntityHandle)
 	{
 		const FSeinEntity* Entity = World.GetEntity(EntityHandle);
-		const FSeinMovementComponent* Movement =
-			World.GetComponent<FSeinMovementComponent>(EntityHandle);
+		const FSeinMovementPayload* Movement =
+			World.GetComponent<FSeinMovementPayload>(EntityHandle);
 		if (!Entity || !Movement)
 		{
 			return false;
@@ -729,8 +729,8 @@ namespace
 
 	bool RunSnapshotContinuation(
 		const FSeinVehicleGymNavigationRecipe& Recipe,
-		const FSeinMovementComponent& Movement,
-		const FSeinNavigationComponent& Navigation,
+		const FSeinMovementPayload& Movement,
+		const FSeinNavigationPayload& Navigation,
 		const FFixedVector& Destination,
 		int32 PreCaptureTicks,
 		bool bRequireArc,
@@ -893,8 +893,8 @@ TEST(VehicleGymPlannerCoversProductionArchetypeContracts,
 
 	// Wheeled scout: an open behind-goal must become a forward arc, while a
 	// short behind-goal must become an exact reverse word.
-	FSeinNavigationComponent ScoutNavigation;
-	FSeinMovementComponent Scout = MakeWheeledComponent(
+	FSeinNavigationPayload ScoutNavigation;
+	FSeinMovementPayload Scout = MakeWheeledComponent(
 		900, 3, 2, 240, 85, ScoutNavigation);
 	USeinVehicleGymWheeledPlanner* ScoutPlanner =
 		NewObject<USeinVehicleGymWheeledPlanner>();
@@ -947,8 +947,8 @@ TEST(VehicleGymPlannerCoversProductionArchetypeContracts,
 
 	// Logistics truck: its larger wheelbase still produces a valid bounded
 	// open-ground maneuver without relocating the command destination.
-	FSeinNavigationComponent TruckNavigation;
-	FSeinMovementComponent Truck = MakeWheeledComponent(
+	FSeinNavigationPayload TruckNavigation;
+	FSeinMovementPayload Truck = MakeWheeledComponent(
 		500, 13, 20, 450, 140, TruckNavigation);
 	USeinVehicleGymWheeledPlanner* TruckPlanner =
 		NewObject<USeinVehicleGymWheeledPlanner>();
@@ -970,8 +970,8 @@ TEST(VehicleGymPlannerCoversProductionArchetypeContracts,
 	// Pivot-capable MBT: stationary turnaround remains a straight coarse path
 	// for its runtime pivot policy; the same order at speed becomes a momentum
 	// arc. This is an intentional mode distinction, not missing planning.
-	FSeinNavigationComponent MbtNavigation;
-	FSeinMovementComponent Mbt = MakeTrackedComponent(
+	FSeinNavigationPayload MbtNavigation;
+	FSeinMovementPayload Mbt = MakeTrackedComponent(
 		550, 1, 1, 0, 160, MbtNavigation);
 	USeinVehicleGymTrackedPlanner* MbtPlanner =
 		NewObject<USeinVehicleGymTrackedPlanner>();
@@ -1007,8 +1007,8 @@ TEST(VehicleGymPlannerCoversProductionArchetypeContracts,
 
 	// Non-neutral-steer IFV/APC: authored turn radius opts into the full
 	// shared maneuver ladder even from rest.
-	FSeinNavigationComponent IfvNavigation;
-	FSeinMovementComponent Ifv = MakeTrackedComponent(
+	FSeinNavigationPayload IfvNavigation;
+	FSeinMovementPayload Ifv = MakeTrackedComponent(
 		650, 6, 5, 450, 130, IfvNavigation);
 	USeinVehicleGymTrackedPlanner* IfvPlanner =
 		NewObject<USeinVehicleGymTrackedPlanner>();
@@ -1040,8 +1040,8 @@ TEST(VehicleGymCorridorProducesBoundedCuspedEscape,
 		NewObject<USeinVehicleGymNavigation>();
 	ASSERT_THAT(IsNotNull(NavigationPolicy));
 
-	FSeinNavigationComponent Navigation;
-	FSeinMovementComponent Movement = MakeWheeledComponent(
+	FSeinNavigationPayload Navigation;
+	FSeinMovementPayload Movement = MakeWheeledComponent(
 		500, 1, 1, 350, 50, Navigation);
 	FSeinWheeledMovementData* Wheeled =
 		Movement.MovementClassData.GetMutablePtr<FSeinWheeledMovementData>();
@@ -1101,8 +1101,8 @@ TEST(VehicleGymConfinedTurnUsesExplicitKTurn,
 		NewObject<USeinVehicleGymNavigation>();
 	ASSERT_THAT(IsNotNull(NavigationPolicy));
 
-	FSeinNavigationComponent Navigation;
-	FSeinMovementComponent Movement = MakeWheeledComponent(
+	FSeinNavigationPayload Navigation;
+	FSeinMovementPayload Movement = MakeWheeledComponent(
 		500, 1, 1, 300, 50, Navigation);
 	FSeinWheeledMovementData* Wheeled =
 		Movement.MovementClassData.GetMutablePtr<FSeinWheeledMovementData>();
@@ -1154,8 +1154,8 @@ TEST(VehicleGymIntervalRepathAndStopReissueComplete,
 	Recipe.bTrimRepathRouteByStartX = true;
 	FScopedVehicleGymSettings Settings(Recipe);
 
-	FSeinNavigationComponent Navigation;
-	FSeinMovementComponent Movement = MakeWheeledComponent(
+	FSeinNavigationPayload Navigation;
+	FSeinMovementPayload Movement = MakeWheeledComponent(
 		700, 1, 1, 300, 90, Navigation);
 	Navigation.RepathMode = ESeinRepathMode::Interval;
 	Navigation.RepathInterval = FFixedPoint::One
@@ -1229,8 +1229,8 @@ TEST(VehicleGymSettlesToFormationSlotFacing,
 	Recipe.Route = { Destination };
 	FScopedVehicleGymSettings Settings(Recipe);
 
-	FSeinNavigationComponent Navigation;
-	FSeinMovementComponent Movement = MakeWheeledComponent(
+	FSeinNavigationPayload Navigation;
+	FSeinMovementPayload Movement = MakeWheeledComponent(
 		500, 1, 1, 300, 70, Navigation);
 	FSeinEntityHandle Broker;
 	FActorTestSpawner Spawner;
@@ -1297,8 +1297,8 @@ TEST(VehicleGymDriversCompleteAndRepeatExactly,
 {
 	FScopedVehicleGymRecipe ScopedRecipe{
 		FSeinVehicleGymNavigationRecipe()};
-	FSeinNavigationComponent ScoutNavigation;
-	FSeinMovementComponent Scout = MakeWheeledComponent(
+	FSeinNavigationPayload ScoutNavigation;
+	FSeinMovementPayload Scout = MakeWheeledComponent(
 		900, 3, 2, 240, 85, ScoutNavigation);
 	const TArray<FFixedVector> UTurn = {
 		Point(-1200), Point(-4000) };
@@ -1341,8 +1341,8 @@ TEST(VehicleGymDriversCompleteAndRepeatExactly,
 	ASSERT_THAT(IsTrue(SBendA.bStepBounded));
 	ASSERT_THAT(IsTrue(DriverRunsEqual(SBendA, SBendB)));
 
-	FSeinNavigationComponent MbtNavigation;
-	FSeinMovementComponent Mbt = MakeTrackedComponent(
+	FSeinNavigationPayload MbtNavigation;
+	FSeinMovementPayload Mbt = MakeTrackedComponent(
 		550, 1, 1, 0, 160, MbtNavigation);
 	const FDriverRun MbtA =
 		RunDirectDriver<USeinVehicleGymTrackedPlanner>(
@@ -1372,8 +1372,8 @@ TEST(VehicleGymRecoveryIsDeterministicAndBounded,
 		NewObject<USeinVehicleGymNavigation>();
 	ASSERT_THAT(IsNotNull(NavigationPolicy));
 
-	FSeinNavigationComponent Navigation;
-	FSeinMovementComponent Movement = MakeWheeledComponent(
+	FSeinNavigationPayload Navigation;
+	FSeinMovementPayload Movement = MakeWheeledComponent(
 		500, 1, 1, 300, 50, Navigation);
 	const FDriverRun RecoveryA =
 		RunDirectDriver<USeinVehicleGymWheeledPlanner>(
@@ -1409,8 +1409,8 @@ TEST(VehicleGymRecoveryMatchesSerialAndParallelRoots,
 	Wall.MaxY = FFixedPoint::FromInt(1000);
 	FScopedVehicleGymSettings Settings(Recipe);
 
-	FSeinNavigationComponent Navigation;
-	const FSeinMovementComponent Movement = MakeWheeledComponent(
+	FSeinNavigationPayload Navigation;
+	const FSeinMovementPayload Movement = MakeWheeledComponent(
 		500, 1, 1, 300, 50, Navigation);
 	constexpr int32 TraceTicks = DriverTickRate * 6;
 	const FVehicleRootTrace Serial = RunVehicleRootTrace(
@@ -1433,8 +1433,8 @@ TEST(VehicleGymActiveArcAndReverseSnapshotsContinueExactly,
 {
 	FString Error;
 
-	FSeinNavigationComponent ScoutNavigation;
-	FSeinMovementComponent Scout = MakeWheeledComponent(
+	FSeinNavigationPayload ScoutNavigation;
+	FSeinMovementPayload Scout = MakeWheeledComponent(
 		900, 3, 2, 240, 85, ScoutNavigation);
 	FSeinVehicleGymNavigationRecipe ArcRecipe;
 	ArcRecipe.ScenarioId = TEXT("ArcSnapshot");
@@ -1471,8 +1471,8 @@ TEST(VehicleGymActiveArcAndReverseSnapshotsContinueExactly,
 	RecoveryWall.MaxX = FFixedPoint::FromInt(700);
 	RecoveryWall.MinY = FFixedPoint::FromInt(-1000);
 	RecoveryWall.MaxY = FFixedPoint::FromInt(1000);
-	FSeinNavigationComponent RecoveryNavigation;
-	FSeinMovementComponent RecoveryMovement = MakeWheeledComponent(
+	FSeinNavigationPayload RecoveryNavigation;
+	FSeinMovementPayload RecoveryMovement = MakeWheeledComponent(
 		500, 1, 1, 300, 50, RecoveryNavigation);
 	ASSERT_THAT(IsTrue(RunSnapshotContinuation(
 		RecoveryRecipe,
@@ -1499,8 +1499,8 @@ TEST(VehicleGymActiveArcAndReverseSnapshotsContinueExactly,
 				? MovementSubsystem->FindMovementInstance(Entity)
 				: nullptr;
 			auto Scope = FSeinSimContextTestAccess::Enter(World);
-			FSeinMovementComponent* Movement =
-				World.GetComponentMutable<FSeinMovementComponent>(Entity);
+			FSeinMovementPayload* Movement =
+				World.GetComponentMutable<FSeinMovementPayload>(Entity);
 			if (!Instance || !Movement
 				|| !SetFixedProperty(
 					*Instance,
@@ -1551,8 +1551,8 @@ TEST(VehicleGymMixedTrafficCheckpointContinuesExactly,
 			for (int32 Index = 0; Index < 4; ++Index)
 			{
 				const bool bVehicle = Index < 2;
-				FSeinNavigationComponent Navigation;
-				FSeinMovementComponent Movement;
+				FSeinNavigationPayload Navigation;
+				FSeinMovementPayload Movement;
 				if (bVehicle)
 				{
 					Movement = MakeWheeledComponent(
@@ -1571,7 +1571,7 @@ TEST(VehicleGymMixedTrafficCheckpointContinuesExactly,
 					Navigation.RepathMode = ESeinRepathMode::OffPathOnly;
 				}
 
-				FSeinExtentsComponent Extents;
+				FSeinExtentsPayload Extents;
 				Extents.bCollisionEnabled = true;
 				Extents.Mobility = ESeinCollisionMobility::Movable;
 				Extents.Mass = FFixedPoint::FromInt(
@@ -1601,7 +1601,7 @@ TEST(VehicleGymMixedTrafficCheckpointContinuesExactly,
 				Source->AddComponent(Entity, Movement);
 				Source->AddComponent(Entity, Navigation);
 				Source->AddComponent(Entity, Extents);
-				Source->AddComponent(Entity, FSeinAbilityComponent());
+				Source->AddComponent(Entity, FSeinAbilityPayload());
 				Entities.Add(Entity);
 				AbilityIds.Add(USeinAbilityBPFL::SeinGrantAbility(
 					Source,

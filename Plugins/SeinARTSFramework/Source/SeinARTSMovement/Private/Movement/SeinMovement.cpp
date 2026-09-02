@@ -12,9 +12,9 @@
 #include "Types/Entity.h"
 #include "Types/Quat.h"
 #include "Types/Vector.h"
-#include "Components/SeinMovementComponent.h"
-#include "Components/SeinNavigationComponent.h"
-#include "Components/SeinExtentsComponent.h"
+#include "Components/SeinMovementPayload.h"
+#include "Components/SeinNavigationPayload.h"
+#include "Components/SeinExtentsPayload.h"
 #include "Components/SeinExtentsHelpers.h"  // SeinExtentsHelpers::BoundingRadius
 #include "Components/SeinBrokerMembershipData.h"  // settle-facing: my broker
 #include "Components/SeinCommandBrokerData.h"     // settle-facing: broker's persisted slots
@@ -226,7 +226,7 @@ bool USeinMovement::Tick(const FSeinMovementContext& Ctx)
 	if (!Ctx.MovementData) return true;
 
 	FSeinEntity& Entity = Ctx.Entity;
-	FSeinMovementComponent& MovementData = *Ctx.MovementData;
+	FSeinMovementPayload& MovementData = *Ctx.MovementData;
 	const FSeinPath& Path = Ctx.Path;
 	int32& CurrentWaypointIndex = Ctx.CurrentWaypointIndex;
 	const FFixedPoint DeltaTime = Ctx.DeltaTime;
@@ -1016,7 +1016,7 @@ bool USeinMovement::QueryReferenceZ(USeinNavigation* Nav, const FFixedVector& Wo
 
 void USeinMovement::ApplyGroundSnapAndAltitude(
 	FFixedVector& NewPos,
-	const FSeinMovementComponent* MovementData,
+	const FSeinMovementPayload* MovementData,
 	USeinNavigation* Nav,
 	FFixedPoint DeltaTime) const
 {
@@ -1029,7 +1029,7 @@ void USeinMovement::ApplyGroundSnapAndAltitude(
 		// virtual `GetAltitude(MovementData)` — default returns 0 (ground
 		// movements snap directly to RefZ); hover / flight subclasses override
 		// to read their altitude out of `MovementClassData` (the polymorphic
-		// per-class sub-data). Decoupling Altitude from FSeinMovementComponent
+		// per-class sub-data). Decoupling Altitude from FSeinMovementPayload
 		// keeps the top-level component free of class-specific fields.
 		const FFixedPoint TargetZ = RefZ + GetAltitude(MovementData);
 
@@ -1068,7 +1068,7 @@ void USeinMovement::ApplyGroundSnapAndAltitude(
 
 void USeinMovement::SnapToGroundImmediate(
 	FSeinEntity& Entity,
-	FSeinMovementComponent& MovementData,
+	FSeinMovementPayload& MovementData,
 	USeinNavigation* Nav) const
 {
 	if (!Nav) return;
@@ -1101,7 +1101,7 @@ void USeinMovement::BP_TickIdle_Implementation(USeinMoverHandle* Mover)
 	if (!Ctx.MovementData) return;
 
 	FSeinEntity& Entity = Ctx.Entity;
-	FSeinMovementComponent& MovementData = *Ctx.MovementData;
+	FSeinMovementPayload& MovementData = *Ctx.MovementData;
 	USeinNavigation* Nav = Ctx.Nav;
 	const FFixedPoint DeltaTime = Ctx.DeltaTime;
 
@@ -1546,7 +1546,7 @@ FFixedPoint USeinMovement::GetAvoidanceSpeedScale(const FSeinMovementContext& Ct
 FFixedQuaternion USeinMovement::ApplySlopeTilt(
 	const FFixedVector& Pos,
 	FFixedPoint Yaw,
-	FSeinMovementComponent* MovementData,
+	FSeinMovementPayload* MovementData,
 	USeinNavigation* Nav,
 	FFixedPoint DeltaTime) const
 {
@@ -1650,10 +1650,10 @@ void USeinMovement::DrawSteeringDebugViz(
 FFixedPoint USeinMovement::ResolveCollisionRadius(
 	USeinWorldSubsystem* World,
 	FSeinEntityHandle SelfHandle,
-	const FSeinNavigationComponent* NavData)
+	const FSeinNavigationPayload* NavData)
 {
 	// Cascade for the effective collision radius:
-	//   Tier 1: FSeinExtentsComponent on the entity (if present).
+	//   Tier 1: FSeinExtentsPayload on the entity (if present).
 	//           Whole-collider radius via GetColliderBoundingRadius:
 	//             - Capsule → Shape.Radius
 	//             - Box     → sqrt(HalfExtentX² + HalfExtentY²) (DIAGONAL)
@@ -1661,7 +1661,7 @@ FFixedPoint USeinMovement::ResolveCollisionRadius(
 	//           that fully contains the box (center-to-corner reach).
 	//           Compound entities include each shape's planar LocalOffset, then
 	//           take the maximum total reach from the entity origin.
-	//   Tier 2: FSeinNavigationComponent.FallbackFootprintRadius.
+	//   Tier 2: FSeinNavigationPayload.FallbackFootprintRadius.
 	//   Tier 3: 0 — point-only fallback.
 	//
 	// Designer ergonomics: configuring an Extents component on a unit BP
@@ -1672,15 +1672,15 @@ FFixedPoint USeinMovement::ResolveCollisionRadius(
 	// Fetch Extents from storage, then run the shared cascade (the pointer
 	// overload below). Hot loops that have hoisted their Extents storage call
 	// that overload directly, skipping this per-call GetComponent lookup.
-	const FSeinExtentsComponent* Extents = World
-		? World->GetComponent<FSeinExtentsComponent>(SelfHandle)
+	const FSeinExtentsPayload* Extents = World
+		? World->GetComponent<FSeinExtentsPayload>(SelfHandle)
 		: nullptr;
 	return ResolveCollisionRadius(Extents, NavData);
 }
 
 FFixedPoint USeinMovement::ResolveCollisionRadius(
-	const FSeinExtentsComponent* Extents,
-	const FSeinNavigationComponent* NavData)
+	const FSeinExtentsPayload* Extents,
+	const FSeinNavigationPayload* NavData)
 {
 	FFixedPoint Radius = FFixedPoint::Zero;
 	if (Extents && Extents->Shapes.Num() > 0)
@@ -1834,7 +1834,7 @@ bool USeinMovement::ShouldAutoReverse(
 	const FFixedVector& AgentPos,
 	const FFixedQuaternion& Rotation,
 	const FFixedVector& FinalGoal,
-	const FSeinMovementComponent& MovementData)
+	const FSeinMovementPayload& MovementData)
 {
 	if (!MovementData.bCanReverse) return false;
 

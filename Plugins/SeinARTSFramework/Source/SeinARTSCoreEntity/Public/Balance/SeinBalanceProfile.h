@@ -91,7 +91,7 @@ public:
 
 	/** Component structs whose fields become tunable columns. Empty = track
 	 *  every eligible component found on the matched entities. The details-panel
-	 *  picker accepts both native FSeinComponent descendants and eligible
+	 *  picker accepts both native FSeinPayload descendants and eligible
 	 *  designer-authored UDS components found on those entities. Per-class
 	 *  sub-data remains excluded. */
 	UPROPERTY(EditAnywhere, Category = "Tracking",

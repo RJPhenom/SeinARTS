@@ -11,7 +11,7 @@
  *                       |- Cancelled       -> cleanup
  *
  * Acceptance radius is sourced from the unit's
- * `FSeinNavigationComponent::AcceptanceRadius` — a footprint/turn-radius
+ * `FSeinNavigationPayload::AcceptanceRadius` — a footprint/turn-radius
  * property of the unit, not the call site. Tune it on the nav component,
  * not here.
  *
@@ -105,7 +105,7 @@ public:
 
 	/** Move the ability's owning entity to Destination using its movement
 	 *  profile. Acceptance radius is read from the unit's
-	 *  `FSeinNavigationComponent::AcceptanceRadius`. */
+	 *  `FSeinNavigationPayload::AcceptanceRadius`. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Ability|Movement",
 	          meta = (BlueprintInternalUseOnly = "true", DefaultToSelf = "Ability",
 	                  DisplayName = "Move To",

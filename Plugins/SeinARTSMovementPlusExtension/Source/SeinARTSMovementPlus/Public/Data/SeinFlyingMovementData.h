@@ -3,12 +3,12 @@
  *
  * @file:    SeinFlyingMovementData.h
  * @brief:   Per-class movement data for `USeinFlightMovement`. Surfaces in
- *           the entity bridge via `FSeinMovementComponent::MovementClassData`
+ *           the entity bridge via `FSeinMovementPayload::MovementClassData`
  *           when the designer picks USeinFlightMovement as the movement
  *           class.
  *
  *           Marked with `SeinSubData` so it appears in the polymorphic
- *           sub-data picker on FSeinMovementComponent::MovementClassData
+ *           sub-data picker on FSeinMovementPayload::MovementClassData
  *           but is filtered out of the entity bridge's top-level
  *           ComponentData picker.
  */
@@ -16,17 +16,17 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Components/SeinComponent.h"
+#include "Components/SeinPayload.h"
 #include "Types/FixedPoint.h"
 #include "SeinFlyingMovementData.generated.h"
 
 USTRUCT(BlueprintType, meta = (SeinDeterministic, SeinSubData))
-struct SEINARTSMOVEMENTPLUS_API FSeinFlyingMovementData : public FSeinComponent
+struct SEINARTSMOVEMENTPLUS_API FSeinFlyingMovementData : public FSeinPayload
 {
 	GENERATED_BODY()
 
 	/** Acceleration rate (world units per second²) — current speed ramps UP toward the target
-	 *  (feeds StepSpeedToward). Moved off the bare FSeinMovementComponent 2026-07-02. */
+	 *  (feeds StepSpeedToward). Moved off the bare FSeinMovementPayload 2026-07-02. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
 		meta = (ClampMin = "0.0"))
 	FFixedPoint Acceleration = FFixedPoint::FromInt(750);

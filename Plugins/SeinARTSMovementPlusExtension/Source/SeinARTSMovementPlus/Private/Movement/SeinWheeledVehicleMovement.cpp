@@ -20,8 +20,8 @@
 #include "Types/FixedPoint.h"
 #include "Types/Quat.h"
 #include "Types/Vector.h"
-#include "Components/SeinMovementComponent.h"
-#include "Components/SeinNavigationComponent.h"
+#include "Components/SeinMovementPayload.h"
+#include "Components/SeinNavigationPayload.h"
 #include "Data/SeinWheeledMovementData.h"
 
 #if UE_ENABLE_DEBUG_DRAWING
@@ -141,13 +141,13 @@ UScriptStruct* USeinWheeledVehicleMovement::GetMovementDataStruct() const
 	return FSeinWheeledMovementData::StaticStruct();
 }
 
-FFixedPoint USeinWheeledVehicleMovement::GetDeceleration(const FSeinMovementComponent* MovementData) const
+FFixedPoint USeinWheeledVehicleMovement::GetDeceleration(const FSeinMovementPayload* MovementData) const
 {
 	const FSeinWheeledMovementData* Data = MovementData ? MovementData->MovementClassData.GetPtr<FSeinWheeledMovementData>() : nullptr;
 	return Data ? Data->Deceleration : FSeinWheeledMovementData().Deceleration;
 }
 
-FFixedPoint USeinWheeledVehicleMovement::GetMinTurnRadius(const FSeinMovementComponent* MovementData) const
+FFixedPoint USeinWheeledVehicleMovement::GetMinTurnRadius(const FSeinMovementPayload* MovementData) const
 {
 	// Bicycle identity: R_min = wheelbase / tan(max steer). Guards against
 	// degenerate MaxSteerAngle (<= 0) and tan() blowing up near pi/2.
@@ -202,7 +202,7 @@ void USeinWheeledVehicleMovement::OnMoveEnd(FSeinEntity& Entity)
 
 void USeinWheeledVehicleMovement::UpdateSettledRenderState(
 	const FSeinSettledMovementRenderContext& Context,
-	const FSeinMovementComponent& MovementData,
+	const FSeinMovementPayload& MovementData,
 	FSeinMovementRenderStateWriter& Writer) const
 {
 	using namespace UE::SeinARTSMovementPlus::Telemetry;
@@ -274,7 +274,7 @@ void USeinWheeledVehicleMovement::OnMoveBegin(const FSeinMovementContext& Ctx)
 
 	if (!Ctx.MovementData) return;
 	FSeinEntity& Entity = Ctx.Entity;
-	FSeinMovementComponent& MovementData = *Ctx.MovementData;
+	FSeinMovementPayload& MovementData = *Ctx.MovementData;
 	const FSeinPath& Path = Ctx.Path;
 
 	// Wheels self-center per move action. Velocity intentionally preserved
@@ -337,7 +337,7 @@ ESeinPathResult USeinWheeledVehicleMovement::PlanPath(const FSeinPlanPathContext
 	const FFixedPoint RMin = GetMinTurnRadius(Ctx.MovementData);
 	if (RMin <= FFixedPoint::Zero) return Result; // pivot-capable — no maneuver constraint
 
-	const FSeinMovementComponent& MovementData = *Ctx.MovementData;
+	const FSeinMovementPayload& MovementData = *Ctx.MovementData;
 	const FFixedPoint RevTop = (MovementData.ReverseTopSpeed > FFixedPoint::Zero)
 		? MovementData.ReverseTopSpeed : MovementData.TopSpeed * FFixedPoint::Half;
 
@@ -480,7 +480,7 @@ bool USeinWheeledVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 	if (!Ctx.MovementData) return true;
 
 	FSeinEntity& Entity = Ctx.Entity;
-	FSeinMovementComponent& MovementData = *Ctx.MovementData;
+	FSeinMovementPayload& MovementData = *Ctx.MovementData;
 	const FSeinPath& Path = Ctx.Path;
 	int32& CurrentWaypointIndex = Ctx.CurrentWaypointIndex;
 	const FFixedPoint AcceptanceRadius = Ctx.GetAcceptanceRadius();

@@ -2,7 +2,7 @@
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinVisionStampDetails.h
  * @brief   Property-type customization for FSeinVisionStamp (each entry of
- *          FSeinVisionComponent::Stamps). Replaces the default bitmask UI on
+ *          FSeinVisionPayload::Stamps). Replaces the default bitmask UI on
  *          LayerMask with a combo dropdown whose labels resolve to the FoW
  *          layer names in plugin settings (USeinARTSCoreSettings::VisionLayers).
  */

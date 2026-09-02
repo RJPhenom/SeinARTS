@@ -8,7 +8,7 @@
 #include "CoreGlobals.h"                       // GFrameCounter
 #include "UObject/UObjectIterator.h"
 #include "StructUtils/UserDefinedStruct.h"
-#include "Components/SeinComponent.h"
+#include "Components/SeinPayload.h"
 #include "Components/SeinComponentEligibility.h"
 
 namespace
@@ -28,9 +28,9 @@ namespace
 		GCachedCandidates.Reset();
 
 		// Eligibility is the shared CoreEntity rule (matches the bridge picker):
-		// native FSeinComponent children + UDS carrying the SeinEntityComponent
+		// native FSeinPayload children + UDS carrying the SeinEntityComponent
 		// meta, minus SeinSubData. TObjectIterator sees only LOADED structs.
-		const UScriptStruct* Base = FSeinComponent::StaticStruct();
+		const UScriptStruct* Base = FSeinPayload::StaticStruct();
 		for (TObjectIterator<UScriptStruct> It; It; ++It)
 		{
 			UScriptStruct* S = *It;

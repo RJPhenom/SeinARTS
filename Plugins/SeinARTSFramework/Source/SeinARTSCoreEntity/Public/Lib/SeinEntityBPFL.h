@@ -70,7 +70,7 @@ public:
 
 	// Archetype-definition access was removed in the Phase-5 refactor. Read identity /
 	// producibility metadata via the typed `Get Component` K2 node against
-	// `FSeinIdentityComponent` / `FSeinProducibleComponent` on the entity.
+	// `FSeinIdentityPayload` / `FSeinProduciblePayload` on the entity.
 
 private:
 	static USeinWorldSubsystem* GetWorldSubsystem(const UObject* WorldContextObject);

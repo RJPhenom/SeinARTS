@@ -4,7 +4,7 @@
 #include "Containers/Ticker.h"
 #include "Components/SeinContainmentData.h"
 #include "Components/SeinContainmentMemberData.h"
-#include "Components/SeinExtentsComponent.h"
+#include "Components/SeinExtentsPayload.h"
 #include "Simulation/SeinTestSimContext.h"
 #include "Lib/SeinRandomBPFL.h"
 #include "Lib/SeinResourceBPFL.h"
@@ -47,7 +47,7 @@ namespace UE::SeinARTSTests
 			Member = World->SpawnAbstractEntity(FFixedTransform(), Player);
 			Container = World->SpawnAbstractEntity(FFixedTransform(), Player);
 
-			World->AddComponent(ApplyingEntity, FSeinExtentsComponent());
+			World->AddComponent(ApplyingEntity, FSeinExtentsPayload());
 			World->AddComponent(Member, FSeinContainmentMemberData());
 			World->AddComponent(Container, FSeinContainmentData());
 
@@ -74,7 +74,7 @@ namespace UE::SeinARTSTests
 			TEXT("SeinARTS.MutationAuthorization"))));
 
 		ASSERT_THAT(IsNotNull(
-			World->GetComponent<FSeinExtentsComponent>(ApplyingEntity)));
+			World->GetComponent<FSeinExtentsPayload>(ApplyingEntity)));
 		ASSERT_THAT(IsTrue(ApplyingBalanceAfter > ApplyingBalanceBefore));
 		ASSERT_THAT(IsTrue(
 			ApplyingRandomBefore0 != ApplyingRandomAfter0
@@ -100,7 +100,7 @@ namespace UE::SeinARTSTests
 		TestRunner->AddExpectedError(
 			TEXT("EnterContainer rejected outside bootstrap Applying"),
 			EAutomationExpectedErrorFlags::Contains, 1, false);
-		World->AddComponent(Member, FSeinExtentsComponent());
+		World->AddComponent(Member, FSeinExtentsPayload());
 		USeinResourceBPFL::SeinGrantIncome(&TestWorld, Player, Income);
 		USeinRandomBPFL::SeinRandomIntRange(&TestWorld, 17, 91);
 		ASSERT_THAT(IsFalse(World->EnterContainer(Member, Container)));
@@ -108,7 +108,7 @@ namespace UE::SeinARTSTests
 		uint64 SealedRandomAfter0 = 0;
 		uint64 SealedRandomAfter1 = 0;
 		World->SimRandom.GetState(SealedRandomAfter0, SealedRandomAfter1);
-		ASSERT_THAT(IsNull(World->GetComponent<FSeinExtentsComponent>(Member)));
+		ASSERT_THAT(IsNull(World->GetComponent<FSeinExtentsPayload>(Member)));
 		ASSERT_THAT(AreEqual(
 			SealedBalance,
 			USeinResourceBPFL::SeinGetResource(
@@ -126,7 +126,7 @@ namespace UE::SeinARTSTests
 		bool bEnteredDuringSim = false;
 		{
 			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
-			World->AddComponent(Member, FSeinExtentsComponent());
+			World->AddComponent(Member, FSeinExtentsPayload());
 			USeinResourceBPFL::SeinGrantIncome(&TestWorld, Player, Income);
 			USeinRandomBPFL::SeinRandomIntRange(&TestWorld, 17, 91);
 			bEnteredDuringSim = World->EnterContainer(Member, Container);
@@ -135,7 +135,7 @@ namespace UE::SeinARTSTests
 		uint64 SimRandomAfter1 = 0;
 		World->SimRandom.GetState(SimRandomAfter0, SimRandomAfter1);
 		ASSERT_THAT(IsNotNull(
-			World->GetComponent<FSeinExtentsComponent>(Member)));
+			World->GetComponent<FSeinExtentsPayload>(Member)));
 		ASSERT_THAT(IsTrue(
 			USeinResourceBPFL::SeinGetResource(
 				&TestWorld, Player, SeinARTSTags::Resource).Value

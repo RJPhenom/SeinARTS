@@ -1,7 +1,7 @@
 #include "CQTest.h"
 #include "Components/ActorTestSpawner.h"
 
-#include "Components/SeinEntityControlComponent.h"
+#include "Components/SeinEntityControlPayload.h"
 #include "Simulation/SeinTestSimContext.h"
 #include "Data/SeinWorldSnapshot.h"
 #include "Lib/SeinEntityControlBPFL.h"

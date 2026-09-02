@@ -3,7 +3,7 @@
  * @file    SeinMovementTuningExport.h
  * @brief   Mirrors a movement-mode Blueprint's tuning variables into a paired
  *          UserDefinedStruct ("<BPName>TuningData") and stamps that UDS onto the BP's
- *          CDO `TuningStruct` so it auto-fills `FSeinMovementComponent::MovementClassData`.
+ *          CDO `TuningStruct` so it auto-fills `FSeinMovementPayload::MovementClassData`.
  *
  *          This is the "export BP variables -> UDS" automation. It is user-triggered
  *          (the Class-Defaults "Sync Tuning Struct" button) — NOT run during compile —

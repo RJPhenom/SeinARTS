@@ -47,16 +47,16 @@ public:
 	/** Struct-level UField metadata key signalling "this struct is composable as
 	 *  a top-level entity component" — i.e. it can be picked as an entry of
 	 *  `USeinEntityBridgeComponent::ComponentData`. Written on UDSes created by this
-	 *  factory; native USTRUCTs that subclass `FSeinComponent` are
+	 *  factory; native USTRUCTs that subclass `FSeinPayload` are
 	 *  automatically eligible via inheritance (the filter checks IsChildOf
 	 *  for natives, the meta tag for UDSes — UE clears UDS supersuper to
 	 *  nullptr on every compile, so inheritance isn't observable there).
 	 *
 	 *  Native structs that should be hidden from the entity bridge picker
-	 *  even though they inherit FSeinComponent can opt out via
+	 *  even though they inherit FSeinPayload can opt out via
 	 *  `USTRUCT(meta = (SeinSubData))` — e.g. per-class movement sub-data
 	 *  (`FSeinWheeledMovementData`) which surfaces only inside
-	 *  `FSeinMovementComponent::MovementClassData`, never directly. */
+	 *  `FSeinMovementPayload::MovementClassData`, never directly. */
 	static const FName SeinEntityComponentMetaKey;
 
 	/** Struct-level UField metadata key marking a struct as sub-data for
@@ -82,7 +82,7 @@ public:
 	/** Returns true iff the struct is eligible as a top-level entity component
 	 *  — i.e. acceptable as a `USeinEntityBridgeComponent::ComponentData` entry.
 	 *  Rules:
-	 *    - Native USTRUCT: must inherit `FSeinComponent` AND must carry
+	 *    - Native USTRUCT: must inherit `FSeinPayload` AND must carry
 	 *      `SeinDeterministic` AND must NOT carry `SeinSubData`.
 	 *    - UDS: must carry `SeinDeterministic` AND `SeinEntityComponent`.
 	 *

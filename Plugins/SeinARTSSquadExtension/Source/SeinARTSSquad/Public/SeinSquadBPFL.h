@@ -14,8 +14,8 @@
 #include "CoreMinimal.h"
 #include "Kismet/BlueprintFunctionLibrary.h"
 #include "Core/SeinEntityHandle.h"
-#include "Components/SeinSquadComponent.h"
-#include "Components/SeinSquadMemberComponent.h"
+#include "Components/SeinSquadPayload.h"
+#include "Components/SeinSquadMemberPayload.h"
 #include "SeinSquadBPFL.generated.h"
 
 class USeinWorldSubsystem;
@@ -30,21 +30,21 @@ public:
 	// Read Component Data
 	// ====================================================================================================
 
-	/** Read FSeinSquadComponent for an entity. Returns false on invalid handle / missing component. */
+	/** Read FSeinSquadPayload for an entity. Returns false on invalid handle / missing component. */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Squad", meta = (WorldContext = "WorldContextObject", DisplayName = "Get Squad Data"))
-	static bool SeinGetSquadData(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, FSeinSquadComponent& OutData);
+	static bool SeinGetSquadData(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, FSeinSquadPayload& OutData);
 
-	/** Batch read FSeinSquadComponent. Invalid/missing entities are skipped. */
+	/** Batch read FSeinSquadPayload. Invalid/missing entities are skipped. */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Squad", meta = (WorldContext = "WorldContextObject", DisplayName = "Get Squad Data"))
-	static TArray<FSeinSquadComponent> SeinGetSquadDataMany(const UObject* WorldContextObject, const TArray<FSeinEntityHandle>& EntityHandles);
+	static TArray<FSeinSquadPayload> SeinGetSquadDataMany(const UObject* WorldContextObject, const TArray<FSeinEntityHandle>& EntityHandles);
 
-	/** Read FSeinSquadMemberComponent for an entity (member-side, not squad-side). */
+	/** Read FSeinSquadMemberPayload for an entity (member-side, not squad-side). */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Squad", meta = (WorldContext = "WorldContextObject", DisplayName = "Get Squad Member Data"))
-	static bool SeinGetSquadMemberData(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, FSeinSquadMemberComponent& OutData);
+	static bool SeinGetSquadMemberData(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, FSeinSquadMemberPayload& OutData);
 
-	/** Batch read FSeinSquadMemberComponent. Invalid/missing entities are skipped. */
+	/** Batch read FSeinSquadMemberPayload. Invalid/missing entities are skipped. */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Squad", meta = (WorldContext = "WorldContextObject", DisplayName = "Get Squad Member Data"))
-	static TArray<FSeinSquadMemberComponent> SeinGetSquadMemberDataMany(const UObject* WorldContextObject, const TArray<FSeinEntityHandle>& EntityHandles);
+	static TArray<FSeinSquadMemberPayload> SeinGetSquadMemberDataMany(const UObject* WorldContextObject, const TArray<FSeinEntityHandle>& EntityHandles);
 
 	// Squad Queries
 	// ====================================================================================================

@@ -22,15 +22,15 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Components/SeinComponent.h"
+#include "Components/SeinPayload.h"
 // SeinFogVisibilityPolicy.h was included for the historic FogVisibilityPolicy
 // field that lived on this struct pre-Phase-5+. Field moved to
-// FSeinFogVisibilityComponent in SeinARTSFogOfWar; include dropped.
+// FSeinFogVisibilityPayload in SeinARTSFogOfWar; include dropped.
 #include "Stamping/SeinStampShape.h"
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
 #include "Collision/SeinCollisionTypes.h"
-#include "SeinExtentsComponent.generated.h"
+#include "SeinExtentsPayload.generated.h"
 
 UENUM(BlueprintType, meta = (ScriptName = "SeinExtentsShapeEnum"))
 enum class ESeinExtentsShape : uint8
@@ -208,7 +208,7 @@ FORCEINLINE uint32 GetTypeHash(const FSeinExtentsShape& Shape)
  * vision blocking semantics.
  */
 USTRUCT(BlueprintType, meta = (SeinDeterministic))
-struct SEINARTSCOREENTITY_API FSeinExtentsComponent : public FSeinComponent
+struct SEINARTSCOREENTITY_API FSeinExtentsPayload : public FSeinPayload
 {
 	GENERATED_BODY()
 
@@ -377,16 +377,16 @@ struct SEINARTSCOREENTITY_API FSeinExtentsComponent : public FSeinComponent
 
 	// =========================================================================
 	// Fog-of-war post-reveal visibility was moved off this struct in Phase-5+
-	// (2026-05-19). It now lives on `FSeinFogVisibilityComponent` in
+	// (2026-05-19). It now lives on `FSeinFogVisibilityPayload` in
 	// SeinARTSFogOfWar — top-level so entities WITHOUT a physical body
 	// (sim-side VFX anchors, audio emitters, scenario triggers) can still
 	// author a visibility policy + emission mask. Authoring rule: if you
 	// want non-default fog visibility behavior, add the
-	// `FSeinFogVisibilityComponent` entry to ComponentData. Default behavior
+	// `FSeinFogVisibilityPayload` entry to ComponentData. Default behavior
 	// (no entry) is VisionLayersOnly with Normal-bit emission.
 };
 
-FORCEINLINE uint32 GetTypeHash(const FSeinExtentsComponent& Component)
+FORCEINLINE uint32 GetTypeHash(const FSeinExtentsPayload& Component)
 {
 	uint32 Hash = GetTypeHash(Component.Shapes.Num());
 	for (const FSeinExtentsShape& S : Component.Shapes)

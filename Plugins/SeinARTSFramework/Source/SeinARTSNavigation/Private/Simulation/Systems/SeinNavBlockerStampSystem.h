@@ -1,7 +1,7 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinNavBlockerStampSystem.h
- * @brief   PreTick system that walks entities carrying FSeinExtentsComponent with
+ * @brief   PreTick system that walks entities carrying FSeinExtentsPayload with
  *          bBlocksNav = true, expands each entity's Shapes into
  *          FSeinDynamicBlocker entries, and pushes the flat list to the
  *          active USeinNavigation. Pathfinding inside this same tick sees
@@ -14,8 +14,8 @@
 #include "Core/SeinTickPhase.h"
 #include "Core/SeinSystemPriority.h"
 #include "Simulation/SeinWorldSubsystem.h"
-#include "Components/SeinExtentsComponent.h"
-#include "Components/SeinNavigationComponent.h"
+#include "Components/SeinExtentsPayload.h"
+#include "Components/SeinNavigationPayload.h"
 #include "Stamping/SeinStampShape.h"
 #include "Types/Entity.h"
 #include "Types/FixedPoint.h"
@@ -37,7 +37,7 @@
  * Runs after SpatialHash (priority 5) and before pathfinding (which happens
  * in AbilityExecution phase via MoveToAction's TickAction). Walks the entity
  * pool in handle-index order (deterministic — same as the spatial hash
- * rebuild), filters to entities whose FSeinExtentsComponent has `bBlocksNav` set,
+ * rebuild), filters to entities whose FSeinExtentsPayload has `bBlocksNav` set,
  * expands each entity's Shapes into FSeinDynamicBlocker entries, and pushes
  * the flat list to the nav.
  *
@@ -81,14 +81,14 @@ public:
 		// a single indexed access. Cheap on its own, compounding with the
 		// dirty-bit work below.
 		const ISeinComponentStorage* ExtentsStorage =
-			World.GetComponentStorageRaw(FSeinExtentsComponent::StaticStruct());
+			World.GetComponentStorageRaw(FSeinExtentsPayload::StaticStruct());
 		// Synthetic-radial fallback (no Extents authored) reads
 		// FallbackFootprintRadius from the navigation component. The nav
 		// component is the authoritative source for footprint info when
 		// Extents is absent — matches the runtime cascade used by
 		// USeinMovement::ResolveCollisionRadius (Extents → NavComp → 0).
 		const ISeinComponentStorage* NavStorage =
-			World.GetComponentStorageRaw(FSeinNavigationComponent::StaticStruct());
+			World.GetComponentStorageRaw(FSeinNavigationPayload::StaticStruct());
 
 		World.GetEntityPool().ForEachEntity([&](
 			FSeinEntityHandle Handle,
@@ -97,8 +97,8 @@ public:
 			const FFixedVector EntityPos = Entity.Transform.GetLocation();
 			const FFixedQuaternion EntityRot = Entity.Transform.Rotation;
 
-			const FSeinExtentsComponent* Extents = ExtentsStorage
-				? static_cast<const FSeinExtentsComponent*>(ExtentsStorage->GetComponentRaw(Handle))
+			const FSeinExtentsPayload* Extents = ExtentsStorage
+				? static_cast<const FSeinExtentsPayload*>(ExtentsStorage->GetComponentRaw(Handle))
 				: nullptr;
 
 			// Determine eligibility first; build blockers only after, so
@@ -115,11 +115,11 @@ public:
 				LayerMask = Extents->BlockedNavLayerMask;
 			}
 
-			const FSeinNavigationComponent* NavData = nullptr;
+			const FSeinNavigationPayload* NavData = nullptr;
 			if (!bEligibleExtents)
 			{
 				NavData = NavStorage
-					? static_cast<const FSeinNavigationComponent*>(NavStorage->GetComponentRaw(Handle))
+					? static_cast<const FSeinNavigationPayload*>(NavStorage->GetComponentRaw(Handle))
 					: nullptr;
 				if (!NavData || NavData->FallbackFootprintRadius <= FFixedPoint::Zero) return;
 				LayerMask = 0x01;      // Default layer

@@ -17,7 +17,7 @@ FGameplayTag FSeinSquadReinforcementService::ResolveCanonicalSlotTag(
 }
 
 bool FSeinSquadReinforcementService::IsSlotEnqueueable(
-	const FSeinSquadComponent& Squad,
+	const FSeinSquadPayload& Squad,
 	int32 SlotIndex)
 {
 	if (!Squad.Slots.IsValidIndex(SlotIndex)) return false;
@@ -40,7 +40,7 @@ bool FSeinSquadReinforcementService::IsSlotEnqueueable(
 }
 
 int32 FSeinSquadReinforcementService::FindFirstEnqueueableSlot(
-	const FSeinSquadComponent& Squad)
+	const FSeinSquadPayload& Squad)
 {
 	for (int32 SlotIndex = 0; SlotIndex < Squad.Slots.Num(); ++SlotIndex)
 	{
@@ -65,8 +65,8 @@ bool FSeinSquadReinforcementService::TryEnqueue(
 		return false;
 	}
 
-	FSeinSquadComponent* Squad =
-		World.GetComponentMutable<FSeinSquadComponent>(SquadHandle);
+	FSeinSquadPayload* Squad =
+		World.GetComponentMutable<FSeinSquadPayload>(SquadHandle);
 	if (!Squad || !Squad->bCanReinforce
 		|| !IsSlotEnqueueable(*Squad, SlotIndex)
 		|| Squad->NextReinforceRequestID <= 0
@@ -135,8 +135,8 @@ bool FSeinSquadReinforcementService::CancelByRequestID(
 	{
 		return false;
 	}
-	FSeinSquadComponent* Squad =
-		World.GetComponentMutable<FSeinSquadComponent>(SquadHandle);
+	FSeinSquadPayload* Squad =
+		World.GetComponentMutable<FSeinSquadPayload>(SquadHandle);
 	if (!Squad) return false;
 
 	const int32 EntryIndex = Squad->ReinforceQueue.IndexOfByPredicate(
@@ -168,8 +168,8 @@ int32 FSeinSquadReinforcementService::CancelForSlot(
 	{
 		return 0;
 	}
-	FSeinSquadComponent* Squad =
-		World.GetComponentMutable<FSeinSquadComponent>(SquadHandle);
+	FSeinSquadPayload* Squad =
+		World.GetComponentMutable<FSeinSquadPayload>(SquadHandle);
 	if (!Squad) return 0;
 
 	int32 Cancelled = 0;

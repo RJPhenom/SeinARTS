@@ -70,7 +70,7 @@ struct SEINARTSNAVIGATION_API FSeinPathRequest
 	 *  whose `BlockedNavLayerMask & AgentNavLayerMask == 0`. Default 0xFF
 	 *  (matches all blockers — preserves single-layer behavior when the
 	 *  caller doesn't fill this in). MoveToAction populates from
-	 *  FSeinNavigationComponent::NavLayerMask at request time. */
+	 *  FSeinNavigationPayload::NavLayerMask at request time. */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Navigation|Path")
 	uint8 AgentNavLayerMask = 0xFF;
 

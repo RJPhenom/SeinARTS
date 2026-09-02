@@ -3,10 +3,10 @@
 
 #include "Actions/SeinMoveToAction.h"
 #include "Combat/SeinTargetQueryService.h"
-#include "Components/SeinAbilityComponent.h"
-#include "Components/SeinExtentsComponent.h"
-#include "Components/SeinMovementComponent.h"
-#include "Components/SeinNavigationComponent.h"
+#include "Components/SeinAbilityPayload.h"
+#include "Components/SeinExtentsPayload.h"
+#include "Components/SeinMovementPayload.h"
+#include "Components/SeinNavigationPayload.h"
 #include "HAL/PlatformTime.h"
 #include "Lib/SeinAbilityBPFL.h"
 #include "Lib/SeinSimMutationBPFL.h"
@@ -133,7 +133,7 @@ namespace UE::SeinARTSTests
 					Shape.Shape = ESeinExtentsShape::Capsule;
 					Shape.Radius = FFixedPoint::FromInt(UnitRadius);
 					Shape.Height = FFixedPoint::FromInt(180);
-					FSeinExtentsComponent Extents;
+					FSeinExtentsPayload Extents;
 					Extents.Shapes.Add(Shape);
 					Extents.bCollisionEnabled = true;
 					Extents.Mobility = ESeinCollisionMobility::Movable;
@@ -141,12 +141,12 @@ namespace UE::SeinARTSTests
 					Extents.ObjectType.Channel = FName(TEXT("Default"));
 					World->AddComponent(Handle, Extents);
 
-					FSeinMovementComponent Movement;
+					FSeinMovementPayload Movement;
 					Movement.MovementClass = FSoftClassPath(
 						USeinBasicUnitMovement::StaticClass()->GetPathName());
 					World->AddComponent(Handle, Movement);
-					World->AddComponent(Handle, FSeinNavigationComponent());
-					World->AddComponent(Handle, FSeinAbilityComponent());
+					World->AddComponent(Handle, FSeinNavigationPayload());
+					World->AddComponent(Handle, FSeinAbilityPayload());
 					AbilityIDs.Add(USeinAbilityBPFL::SeinGrantAbility(
 						World, Handle,
 						USeinMoveToLifecycleTestAbility::StaticClass()));
@@ -349,7 +349,7 @@ namespace UE::SeinARTSTests
 					Shape.Shape = ESeinExtentsShape::Capsule;
 					Shape.Radius = FFixedPoint::FromInt(UnitRadius);
 					Shape.Height = FFixedPoint::FromInt(180);
-					FSeinExtentsComponent Extents;
+					FSeinExtentsPayload Extents;
 					Extents.Shapes.Add(Shape);
 					Extents.bCollisionEnabled = true;
 					Extents.Mobility = ESeinCollisionMobility::Movable;

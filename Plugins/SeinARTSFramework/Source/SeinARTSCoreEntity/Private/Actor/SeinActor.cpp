@@ -9,7 +9,7 @@
 
 #include "Actor/SeinActor.h"
 #include "Actor/SeinEntityBridgeComponent.h"
-#include "Components/SeinIdentityComponent.h"      // IdentityTag surfaced as an asset tag
+#include "Components/SeinIdentityPayload.h"      // IdentityTag surfaced as an asset tag
 #include "Core/SeinAssetTagKeys.h"
 #include "UObject/AssetRegistryTagsContext.h"
 
@@ -141,7 +141,7 @@ void ASeinActor::GetAssetRegistryTags(FAssetRegistryTagsContext Context) const
 
 	// Surface the entity's IdentityTag onto the asset's FAssetData so the editor
 	// auto-tag collision check reads it without loading this CDO. The tag lives
-	// nested in an FSeinIdentityComponent inside the bridge's ComponentData
+	// nested in an FSeinIdentityPayload inside the bridge's ComponentData
 	// array. One identity per entity is the runtime contract (ComponentData is
 	// keyed by struct type at spawn), so the first valid entry wins. Bare
 	// ToString() form, matching the USeinAbility / USeinEffect tags.
@@ -150,8 +150,8 @@ void ASeinActor::GetAssetRegistryTags(FAssetRegistryTagsContext Context) const
 		for (const FInstancedStruct& Entry : Bridge->ComponentData)
 		{
 			if (!Entry.IsValid()) continue;
-			if (Entry.GetScriptStruct() != FSeinIdentityComponent::StaticStruct()) continue;
-			const FSeinIdentityComponent& Identity = Entry.Get<FSeinIdentityComponent>();
+			if (Entry.GetScriptStruct() != FSeinIdentityPayload::StaticStruct()) continue;
+			const FSeinIdentityPayload& Identity = Entry.Get<FSeinIdentityPayload>();
 			if (Identity.IdentityTag.IsValid())
 			{
 				Context.AddTag(FAssetRegistryTag(

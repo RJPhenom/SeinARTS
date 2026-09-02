@@ -16,7 +16,7 @@
 
 #include "CoreMinimal.h"
 #include "Combat/SeinTargetScorer.h"
-#include "Components/SeinComponent.h"
+#include "Components/SeinPayload.h"
 #include "Types/FixedPoint.h"
 #include "SeinCombatTestTypes.generated.h"
 
@@ -24,7 +24,7 @@
  *  vitals schema; this is exactly the kind of struct a game authors (natively
  *  or as a UDS) and then drives with Apply Field Delta. */
 USTRUCT(BlueprintType, meta = (SeinDeterministic))
-struct SEINARTSTESTSUPPORT_API FSeinTestVitalsComponent : public FSeinComponent
+struct SEINARTSTESTSUPPORT_API FSeinTestVitalsComponent : public FSeinPayload
 {
 	GENERATED_BODY()
 

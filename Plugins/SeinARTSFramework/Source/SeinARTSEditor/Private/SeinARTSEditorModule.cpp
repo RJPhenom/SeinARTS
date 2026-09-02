@@ -37,7 +37,7 @@
 #include "Abilities/SeinAbility.h"
 #include "Effects/SeinEffect.h"
 #include "Actor/SeinActor.h"
-#include "Components/SeinIdentityComponent.h"
+#include "Components/SeinIdentityPayload.h"
 #include "StructUtils/UserDefinedStruct.h"
 #include "StructUtils/InstancedStruct.h"
 #include "Engine/Blueprint.h"
@@ -255,7 +255,7 @@ namespace SeinComponentDataCompilerGate
 				if (!SeinComponentEligibility::IsEntityComponentStruct(Type))
 				{
 					Issues.Add(FSeinComponentDataIssue{Index, FString::Printf(
-						TEXT("ComponentData[%d] holds %s, which is not a valid entity component struct (native structs must inherit FSeinComponent and carry SeinDeterministic; UDS must be a SeinARTS Component created via Right-click -> Component; SeinSubData structs never go here)"),
+						TEXT("ComponentData[%d] holds %s, which is not a valid entity component struct (native structs must inherit FSeinPayload and carry SeinDeterministic; UDS must be a SeinARTS Component created via Right-click -> Component; SeinSubData structs never go here)"),
 						Index, *Type->GetPathName())});
 				}
 			}
@@ -675,10 +675,10 @@ void FSeinARTSEditorModule::StartupModule()
 			USeinBalanceProfile::StaticClass()->GetFName(),
 			FOnGetDetailCustomizationInstance::CreateStatic(&FSeinBalanceProfileDetails::MakeInstance));
 
-		// Legacy `FSeinVisionComponent` / `FSeinExtentsComponent` / `FSeinMovementData`
+		// Legacy `FSeinVisionPayload` / `FSeinExtentsPayload` / `FSeinMovementData`
 		// details customizations (nav-layer-mask combo, etc.) were excised in
-		// the Phase-5 refactor. The new `FSeinVisionComponent` /
-		// `FSeinExtentsComponent` / `FSeinNavigationComponent` structs use the
+		// the Phase-5 refactor. The new `FSeinVisionPayload` /
+		// `FSeinExtentsPayload` / `FSeinNavigationPayload` structs use the
 		// standard bitmask combo. Re-add a customization keyed on the new
 		// struct name if a custom combo is desired again.
 
@@ -694,7 +694,7 @@ void FSeinARTSEditorModule::StartupModule()
 	// Component visualizers — drawn in the BP/level editor viewport when the
 	// owning component is selected. Lets designers eyeball Extents shapes
 	// without opening PIE. Registered against the entity bridge component;
-	// the visualizer walks its ComponentData array for FSeinExtentsComponent
+	// the visualizer walks its ComponentData array for FSeinExtentsPayload
 	// entries and draws each shape — no separate "extents preview" AC.
 	if (GUnrealEd != nullptr)
 	{

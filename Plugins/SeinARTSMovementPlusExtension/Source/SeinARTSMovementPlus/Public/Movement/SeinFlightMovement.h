@@ -23,7 +23,7 @@
 #include "Types/FixedPoint.h"
 #include "SeinFlightMovement.generated.h"
 
-struct FSeinMovementComponent;
+struct FSeinMovementPayload;
 
 UCLASS(meta = (DisplayName = "Flight (Fixed-Wing)"))
 class SEINARTSMOVEMENTPLUS_API USeinFlightMovement : public USeinMovement
@@ -53,11 +53,11 @@ public:
 	/** Altitude hook for ApplyGroundSnapAndAltitude. Reads
 	 *  `FSeinFlyingMovementData::Altitude` (the lerped runtime altitude
 	 *  written by Tick) out of the polymorphic sub-data. */
-	virtual FFixedPoint GetAltitude(const FSeinMovementComponent* MovementData) const override;
+	virtual FFixedPoint GetAltitude(const FSeinMovementPayload* MovementData) const override;
 
 	/** Braking rate for the impl-agnostic idle coast + arrival-imminent estimate — reads
 	 *  Deceleration out of the unwrapped FSeinFlyingMovementData sub-data. */
-	virtual FFixedPoint GetDeceleration(const FSeinMovementComponent* MovementData) const override;
+	virtual FFixedPoint GetDeceleration(const FSeinMovementPayload* MovementData) const override;
 
 protected:
 

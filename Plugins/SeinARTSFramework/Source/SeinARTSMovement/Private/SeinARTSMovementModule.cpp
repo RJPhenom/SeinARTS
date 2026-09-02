@@ -38,9 +38,9 @@
 #if UE_ENABLE_DEBUG_DRAWING
 #include "Actions/SeinMoveToAction.h"
 #include "Debug/SeinDebugDrawCull.h"
-#include "Components/SeinMovementComponent.h"
-#include "Components/SeinNavigationComponent.h"
-#include "Components/SeinExtentsComponent.h"
+#include "Components/SeinMovementPayload.h"
+#include "Components/SeinNavigationPayload.h"
+#include "Components/SeinExtentsPayload.h"
 #include "Components/SeinExtentsHelpers.h"  // editor-world cascade: BoundingRadius
 #include "Actor/SeinEntityBridgeComponent.h"  // editor-world Extents viz: walks Bridge->ComponentData
 #include "SeinARTSNavigationModule.h"
@@ -94,7 +94,7 @@ namespace
 //   - SeinSteering: footprint ring, velocity arrow, avoidance arrow,
 //     perception circle, look-ahead cone. Module-public so per-controller
 //     draw sites can share the gate (via IsSteeringShowFlagOnForWorld).
-//   - SeinExtents: each entity's FSeinExtentsComponent shapes in PIE and the
+//   - SeinExtents: each entity's FSeinExtentsPayload shapes in PIE and the
 //     level editor — every shape draws as a red wire box / capsule, matching
 //     the BP-viewport extents visualizer so the same shape reads identically
 //     in both contexts. Sim-side concept (Extents lives in SeinARTSCoreEntity)
@@ -457,8 +457,8 @@ namespace
 	}
 
 	/** Per-frame steering-vector viz pass for every entity in `World` that has
-	 *  both an `FSeinMovementComponent` (velocity source) AND an
-	 *  `FSeinNavigationComponent` (footprint radius source). Decoupled from
+	 *  both an `FSeinMovementPayload` (velocity source) AND an
+	 *  `FSeinNavigationPayload` (footprint radius source). Decoupled from
 	 *  the per-Tick carrot viz inside Movement subclasses so units that are
 	 *  NOT currently inside an active `USeinMoveToAction` (idle between
 	 *  orders, parked at destination, etc.) still draw the footprint ring +
@@ -477,7 +477,7 @@ namespace
 	 *  closest-first sort; here we rely on entity-pool iteration order +
 	 *  per-call cull, which is good enough for the always-on viz).
 	 *
-	 *  Cost: O(entities-with-FSeinMovementComponent) × cheap component
+	 *  Cost: O(entities-with-FSeinMovementPayload) × cheap component
 	 *  lookups + few DrawDebug calls. Gated on UE_ENABLE_DEBUG_DRAWING —
 	 *  shipping build compiles to nothing. */
 	static void DrawSteeringVectorsViz(USeinWorldSubsystem* Sim, UWorld* World)
@@ -491,9 +491,9 @@ namespace
 			const FSeinEntityPool& Pool = Sim->GetEntityPool();
 			Pool.ForEachEntity([&](FSeinEntityHandle Handle, const FSeinEntity& Entity)
 			{
-				const FSeinMovementComponent* MovementData = Sim->GetComponent<FSeinMovementComponent>(Handle);
+				const FSeinMovementPayload* MovementData = Sim->GetComponent<FSeinMovementPayload>(Handle);
 				if (!MovementData) return;
-				const FSeinNavigationComponent* NavData = Sim->GetComponent<FSeinNavigationComponent>(Handle);
+				const FSeinNavigationPayload* NavData = Sim->GetComponent<FSeinNavigationPayload>(Handle);
 
 				// Footprint cascade matches USeinMovement::ResolveCollisionRadius
 				// (single source of truth — same helper used by collision +
@@ -545,23 +545,23 @@ namespace
 				// Run the same Extents → NavComp cascade against AUTHORED
 				// ComponentData (no Sim available to look up runtime components).
 				FFixedPoint AuthoredRadius = FFixedPoint::Zero;
-				const FSeinNavigationComponent* AuthoredNav = nullptr;
+				const FSeinNavigationPayload* AuthoredNav = nullptr;
 				for (const FInstancedStruct& Entry : Bridge->ComponentData)
 				{
 					if (!Entry.IsValid()) continue;
 					const UScriptStruct* ScriptStruct = Entry.GetScriptStruct();
-					if (ScriptStruct == FSeinExtentsComponent::StaticStruct())
+					if (ScriptStruct == FSeinExtentsPayload::StaticStruct())
 					{
-						const FSeinExtentsComponent& Extents = Entry.Get<FSeinExtentsComponent>();
+						const FSeinExtentsPayload& Extents = Entry.Get<FSeinExtentsPayload>();
 						for (const FSeinExtentsShape& Shape : Extents.Shapes)
 						{
 							const FFixedPoint R = SeinExtentsHelpers::BoundingRadius(Shape);
 							if (R > AuthoredRadius) AuthoredRadius = R;
 						}
 					}
-					else if (ScriptStruct == FSeinNavigationComponent::StaticStruct())
+					else if (ScriptStruct == FSeinNavigationPayload::StaticStruct())
 					{
-						AuthoredNav = &Entry.Get<FSeinNavigationComponent>();
+						AuthoredNav = &Entry.Get<FSeinNavigationPayload>();
 					}
 				}
 				if (AuthoredRadius <= FFixedPoint::Zero && AuthoredNav)
@@ -662,7 +662,7 @@ namespace
 		UWorld* World,
 		const FVector& Origin,
 		const FQuat& Rotation,
-		const FSeinExtentsComponent& Extents)
+		const FSeinExtentsPayload& Extents)
 	{
 		const FColor WireColor = FColor::Red;     // all extents draw red
 		const float Thickness = 3.0f;
@@ -719,7 +719,7 @@ namespace
 	/** Per-frame Extents-shape viz. Dispatches to the right source based on
 	 *  world type:
 	 *    - **PIE / game world** — walks the sim entity pool, reads runtime
-	 *      `FSeinExtentsComponent` data, draws at the entity's sim transform.
+	 *      `FSeinExtentsPayload` data, draws at the entity's sim transform.
 	 *    - **Editor world** — walks `TActorIterator<AActor>`, finds actors
 	 *      with `USeinEntityBridgeComponent`, reads AUTHORED `ComponentData`
 	 *      (FInstancedStruct entries), draws at the actor's editor transform.
@@ -740,7 +740,7 @@ namespace
 			const FSeinEntityPool& Pool = Sim->GetEntityPool();
 			Pool.ForEachEntity([&](FSeinEntityHandle Handle, const FSeinEntity& Entity)
 			{
-				const FSeinExtentsComponent* Extents = Sim->GetComponent<FSeinExtentsComponent>(Handle);
+				const FSeinExtentsPayload* Extents = Sim->GetComponent<FSeinExtentsPayload>(Handle);
 				if (!Extents || Extents->Shapes.Num() == 0) return;
 
 				// Camera cull + budget reserve at entity granularity.
@@ -786,8 +786,8 @@ namespace
 				for (const FInstancedStruct& Entry : Bridge->ComponentData)
 				{
 					if (!Entry.IsValid()) continue;
-					if (Entry.GetScriptStruct() != FSeinExtentsComponent::StaticStruct()) continue;
-					const FSeinExtentsComponent& Extents = Entry.Get<FSeinExtentsComponent>();
+					if (Entry.GetScriptStruct() != FSeinExtentsPayload::StaticStruct()) continue;
+					const FSeinExtentsPayload& Extents = Entry.Get<FSeinExtentsPayload>();
 					if (Extents.Shapes.Num() == 0) continue;
 					DrawExtentsShapesAt(World, ActorPos, ActorQuat, Extents);
 				}
@@ -1037,7 +1037,7 @@ void FSeinARTSMovementModule::StartupModule()
 	{
 		GShowExtentsCmd = IConsoleManager::Get().RegisterConsoleCommand(
 			TEXT("Sein.Show.Extents"),
-			TEXT("Toggle ShowFlags.SeinExtents across all viewports. When on, each entity's FSeinExtentsComponent shapes draw at runtime — every shape draws as a red wire box / capsule (matching the BP viewport). Usage: Sein.Show.Extents [0|1|on|off]."),
+			TEXT("Toggle ShowFlags.SeinExtents across all viewports. When on, each entity's FSeinExtentsPayload shapes draw at runtime — every shape draws as a red wire box / capsule (matching the BP viewport). Usage: Sein.Show.Extents [0|1|on|off]."),
 			FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&OnShowExtentsCommand),
 			ECVF_Default);
 	}

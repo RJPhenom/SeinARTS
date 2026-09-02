@@ -15,7 +15,7 @@
 #include "Factories/SeinSimComponentFactory.h"
 #include "SeinARTSEditorModule.h"
 #include "Settings/PluginSettings.h"
-#include "Components/SeinComponent.h"
+#include "Components/SeinPayload.h"
 #include "Components/SeinComponentEligibility.h"
 #include "Kismet2/StructureEditorUtils.h"
 #include "StructUtils/UserDefinedStruct.h"

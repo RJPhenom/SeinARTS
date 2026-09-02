@@ -2,10 +2,10 @@
 
 #include "Collision/SeinCollisionResolverParallel.h"
 #include "Components/ActorTestSpawner.h"
-#include "Components/SeinExtentsComponent.h"
-#include "Components/SeinFogVisibilityComponent.h"
+#include "Components/SeinExtentsPayload.h"
+#include "Components/SeinFogVisibilityPayload.h"
 #include "Components/SeinLifespanData.h"
-#include "Components/SeinNavigationComponent.h"
+#include "Components/SeinNavigationPayload.h"
 #include "Containers/Ticker.h"
 #include "Core/SeinParallel.h"
 #include "HAL/IConsoleManager.h"
@@ -121,7 +121,7 @@ namespace
 			Shape.Radius = FFixedPoint::FromInt(60);
 		}
 
-		FSeinExtentsComponent Extents;
+		FSeinExtentsPayload Extents;
 		Extents.Shapes.Add(Shape);
 		Extents.bCollisionEnabled = true;
 		Extents.Mobility = Mobility;
@@ -129,8 +129,8 @@ namespace
 		Extents.ObjectType.Channel = FName(TEXT("Default"));
 		World.AddComponent(Handle, Extents);
 
-		World.AddComponent(Handle, FSeinNavigationComponent());
-		World.AddComponent(Handle, FSeinFogVisibilityComponent());
+		World.AddComponent(Handle, FSeinNavigationPayload());
+		World.AddComponent(Handle, FSeinFogVisibilityPayload());
 
 		FSeinLifespanData Lifespan;
 		Lifespan.ExpiresAtTick = TickCount + 1000;

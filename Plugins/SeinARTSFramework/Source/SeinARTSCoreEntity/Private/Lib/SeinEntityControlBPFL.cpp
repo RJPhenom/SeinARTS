@@ -94,13 +94,13 @@ FSeinEntityControlGrantID USeinEntityControlBPFL::SeinGrantEntityControl(
 		return {};
 	}
 
-	FSeinEntityControlComponent* State =
-		World->GetComponentMutable<FSeinEntityControlComponent>(
+	FSeinEntityControlPayload* State =
+		World->GetComponentMutable<FSeinEntityControlPayload>(
 			TargetEntity);
 	if (!State)
 	{
-		World->AddComponent(TargetEntity, FSeinEntityControlComponent());
-		State = World->GetComponentMutable<FSeinEntityControlComponent>(
+		World->AddComponent(TargetEntity, FSeinEntityControlPayload());
+		State = World->GetComponentMutable<FSeinEntityControlPayload>(
 			TargetEntity);
 	}
 	if (!State || State->NextGrantSerial <= 0)
@@ -169,8 +169,8 @@ bool USeinEntityControlBPFL::SeinRevokeEntityControl(
 		return false;
 	}
 
-	FSeinEntityControlComponent* State =
-		World->GetComponentMutable<FSeinEntityControlComponent>(
+	FSeinEntityControlPayload* State =
+		World->GetComponentMutable<FSeinEntityControlPayload>(
 			GrantID.TargetEntity);
 	if (!State) return false;
 	const int32 Removed = State->Grants.RemoveAll(
@@ -193,8 +193,8 @@ int32 USeinEntityControlBPFL::SeinPruneExpiredEntityControlGrants(
 		return 0;
 	}
 
-	FSeinEntityControlComponent* State =
-		World->GetComponentMutable<FSeinEntityControlComponent>(
+	FSeinEntityControlPayload* State =
+		World->GetComponentMutable<FSeinEntityControlPayload>(
 			TargetEntity);
 	if (!State) return 0;
 	const int32 CurrentTick = World->GetCurrentTick();
@@ -230,8 +230,8 @@ TArray<FSeinEntityControlGrant> USeinEntityControlBPFL::SeinGetEntityControlGran
 {
 	const USeinWorldSubsystem* World = GetWorldSubsystem(WorldContextObject);
 	if (!World || !World->GetEntityPool().IsValid(TargetEntity)) return {};
-	const FSeinEntityControlComponent* State =
-		World->GetComponent<FSeinEntityControlComponent>(TargetEntity);
+	const FSeinEntityControlPayload* State =
+		World->GetComponent<FSeinEntityControlPayload>(TargetEntity);
 	return State ? State->Grants : TArray<FSeinEntityControlGrant>();
 }
 
@@ -253,8 +253,8 @@ bool USeinEntityControlBPFL::CanPlayerControlEntityAtTick(
 		return true;
 	}
 
-	const FSeinEntityControlComponent* State =
-		World.GetComponent<FSeinEntityControlComponent>(TargetEntity);
+	const FSeinEntityControlPayload* State =
+		World.GetComponent<FSeinEntityControlPayload>(TargetEntity);
 	if (!State) return false;
 	for (const FSeinEntityControlGrant& Grant : State->Grants)
 	{
@@ -279,8 +279,8 @@ bool USeinEntityControlBPFL::IsEntityControlGrantActiveAtTick(
 	{
 		return false;
 	}
-	const FSeinEntityControlComponent* State =
-		World.GetComponent<FSeinEntityControlComponent>(GrantID.TargetEntity);
+	const FSeinEntityControlPayload* State =
+		World.GetComponent<FSeinEntityControlPayload>(GrantID.TargetEntity);
 	if (!State) return false;
 	for (const FSeinEntityControlGrant& Grant : State->Grants)
 	{

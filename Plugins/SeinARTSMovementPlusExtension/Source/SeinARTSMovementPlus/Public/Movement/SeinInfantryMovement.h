@@ -6,7 +6,7 @@
  *          Inherits from USeinBasicMovement for class-hierarchy continuity but is a Tier-1
  *          ComputeMotion policy (the base USeinMovement::Tick harness drives it). Reasons:
  *          - Infantry needs velocity momentum (read/written through
- *            FSeinMovementComponent::Velocity) so reorders preserve direction
+ *            FSeinMovementPayload::Velocity) so reorders preserve direction
  *            and magnitude.
  *            Set Acceleration / Deceleration high (e.g. 50–100× TopSpeed) on
  *            FSeinInfantryMovementData (the MovementClassData sub-data) and the
@@ -43,5 +43,5 @@ public:
 	 *  MovementClassData when Infantry is selected (carries Acceleration /
 	 *  Deceleration — see SeinInfantryMovementData.h). */
 	virtual UScriptStruct* GetMovementDataStruct() const override;
-	virtual FFixedPoint GetDeceleration(const FSeinMovementComponent* MovementData) const override;
+	virtual FFixedPoint GetDeceleration(const FSeinMovementPayload* MovementData) const override;
 };

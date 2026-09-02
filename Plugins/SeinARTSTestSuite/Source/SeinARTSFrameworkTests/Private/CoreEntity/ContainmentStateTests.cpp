@@ -3,7 +3,7 @@
 #include "Containers/Ticker.h"
 
 #include "Components/SeinAttachmentSpec.h"
-#include "Components/SeinAbilityComponent.h"
+#include "Components/SeinAbilityPayload.h"
 #include "Components/SeinContainmentData.h"
 #include "Components/SeinContainmentMemberData.h"
 #include "Components/SeinTransportSpec.h"
@@ -139,7 +139,7 @@ namespace UE::SeinARTSTests
 						OutFixture.Member,
 						FSeinContainmentMemberData());
 					World.AddComponent(
-						OutFixture.Member, FSeinAbilityComponent());
+						OutFixture.Member, FSeinAbilityPayload());
 
 					const int32 EnterAbilityID =
 						USeinAbilityBPFL::SeinGrantAbility(

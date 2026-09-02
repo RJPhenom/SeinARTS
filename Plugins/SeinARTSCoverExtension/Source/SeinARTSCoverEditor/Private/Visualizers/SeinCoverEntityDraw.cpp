@@ -13,7 +13,7 @@
  * 50cm when settings can't be reached (defensive only — the CDO is loaded
  * for the editor process lifetime).
  *
- * Slot color: derived from `FSeinCoverComponent::QualityTag`:
+ * Slot color: derived from `FSeinCoverPayload::QualityTag`:
  *   - SeinARTS.Cover.Heavy    → green
  *   - SeinARTS.Cover.Light    → yellow
  *   - SeinARTS.Cover.Negative → red
@@ -26,7 +26,7 @@
 
 #include "Visualizers/SeinCoverEntityDraw.h"
 
-#include "Components/SeinCoverComponent.h"
+#include "Components/SeinCoverPayload.h"
 #include "Tags/SeinCoverGameplayTags.h"
 #include "Types/SeinCoverTypes.h"
 
@@ -107,9 +107,9 @@ void SeinCoverEntityDraw::DrawCoverEntries(
 	for (const FInstancedStruct& Entry : ComponentData)
 	{
 		if (!Entry.IsValid()) continue;
-		if (Entry.GetScriptStruct() != FSeinCoverComponent::StaticStruct()) continue;
+		if (Entry.GetScriptStruct() != FSeinCoverPayload::StaticStruct()) continue;
 
-		const FSeinCoverComponent& Data = Entry.Get<FSeinCoverComponent>();
+		const FSeinCoverPayload& Data = Entry.Get<FSeinCoverPayload>();
 
 		const FVector AxisX = ActorQuat.GetForwardVector();
 		const FVector AxisY = ActorQuat.GetRightVector();

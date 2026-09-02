@@ -22,7 +22,7 @@ namespace SeinARTSTags
 
 	// --- State ---
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State,                   "SeinARTS.State",                   "Root for transient entity-state tags (UnderConstruction, etc.)");
-	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_UnderConstruction, "SeinARTS.State.UnderConstruction", "Entity has active FSeinConstructionComponent; gates production / combat abilities mid-build");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_UnderConstruction, "SeinARTS.State.UnderConstruction", "Entity has active FSeinConstructionPayload; gates production / combat abilities mid-build");
 
 	// --- Command.Type ---
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Command_Type,                   "SeinARTS.Command.Type",                   "Root tag for FSeinCommand command types");

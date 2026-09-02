@@ -23,7 +23,7 @@
 #include "Serialization/SeinSimulationContentRegistry.h"
 #include "Simulation/SeinCanonicalStateRecipeRegistry.h"
 #include "Simulation/SeinContainmentStateValidation.h"
-#include "Components/SeinIdentityComponent.h"
+#include "Components/SeinIdentityPayload.h"
 #include "Data/SeinFaction.h"
 #include "Data/SeinMatchBootstrapRules.h"
 #include "Data/SeinReplayHeader.h"
@@ -39,18 +39,18 @@
 #include "Abilities/SeinLatentActionManager.h"
 #include "Abilities/SeinTargeterSpec.h"
 #include "Components/SeinExtentsHelpers.h"
-#include "Components/SeinAbilityComponent.h"
-#include "Components/SeinActiveEffectsComponent.h"
+#include "Components/SeinAbilityPayload.h"
+#include "Components/SeinActiveEffectsPayload.h"
 #include "Components/SeinAttachmentSpec.h"
 #include "Components/SeinBrokerMembershipData.h"
 #include "Components/SeinCommandBrokerData.h"
-#include "Components/SeinConstructionComponent.h"
+#include "Components/SeinConstructionPayload.h"
 #include "Components/SeinContainmentData.h"
 #include "Components/SeinContainmentMemberData.h"
-#include "Components/SeinNavigationComponent.h"
-#include "Components/SeinProductionComponent.h"
-#include "Components/SeinSquadComponent.h"
-#include "Components/SeinSquadMemberComponent.h"
+#include "Components/SeinNavigationPayload.h"
+#include "Components/SeinProductionPayload.h"
+#include "Components/SeinSquadPayload.h"
+#include "Components/SeinSquadMemberPayload.h"
 #include "Components/SeinTransportSpec.h"
 #include "Actor/SeinEntityBridgeComponent.h"
 #include "Brokers/SeinCommandBrokerResolver.h"
@@ -4329,11 +4329,11 @@ bool USeinWorldSubsystem::ApplyComponentPropertyPatchToEntity(
 		return false;
 	}
 	const bool bAbilityGrantListChanged = bRefreshSecondaryState
-		&& ComponentType == FSeinAbilityComponent::StaticStruct()
+		&& ComponentType == FSeinAbilityPayload::StaticStruct()
 		&& Patch.PropertyPath.Num() == 1
 		&& Patch.PropertyPath[0].PropertyName
 			== GET_MEMBER_NAME_STRING_CHECKED(
-				FSeinAbilityComponent, GrantedAbilities);
+				FSeinAbilityPayload, GrantedAbilities);
 	if (!bAbilityGrantListChanged
 		&& ExistingProperty->Identical(
 			ExistingValue, CandidateValue, PPF_None))
@@ -4348,24 +4348,24 @@ bool USeinWorldSubsystem::ApplyComponentPropertyPatchToEntity(
 	if (bAbilityGrantListChanged)
 	{
 		NewGrantedAbilities =
-			reinterpret_cast<const FSeinAbilityComponent*>(
+			reinterpret_cast<const FSeinAbilityPayload*>(
 				Candidate.GetStructMemory())->GrantedAbilities;
 	}
 
 	const bool bIdentityTagChanged = bRefreshSecondaryState
-		&& ComponentType == FSeinIdentityComponent::StaticStruct()
+		&& ComponentType == FSeinIdentityPayload::StaticStruct()
 		&& Patch.PropertyPath.Num() == 1
 		&& Patch.PropertyPath[0].PropertyName
 			== GET_MEMBER_NAME_STRING_CHECKED(
-				FSeinIdentityComponent, IdentityTag);
+				FSeinIdentityPayload, IdentityTag);
 	FGameplayTag OldIdentityTag;
 	FGameplayTag NewIdentityTag;
 	if (bIdentityTagChanged)
 	{
 		OldIdentityTag =
-			static_cast<const FSeinIdentityComponent*>(Existing)->IdentityTag;
+			static_cast<const FSeinIdentityPayload*>(Existing)->IdentityTag;
 		NewIdentityTag =
-			reinterpret_cast<const FSeinIdentityComponent*>(
+			reinterpret_cast<const FSeinIdentityPayload*>(
 				Candidate.GetStructMemory())->IdentityTag;
 	}
 
@@ -4394,7 +4394,7 @@ bool USeinWorldSubsystem::ApplyComponentPropertyPatchToEntity(
 	}
 
 	if (bRefreshSecondaryState
-		&& ComponentType == FSeinExtentsComponent::StaticStruct())
+		&& ComponentType == FSeinExtentsPayload::StaticStruct())
 	{
 		CollisionSpatialHash.MarkStaticDirty();
 	}
@@ -4409,8 +4409,8 @@ bool USeinWorldSubsystem::ApplyComponentPropertyPatchToEntity(
 void USeinWorldSubsystem::RecordAuthoredAbilityGrants(
 	FSeinEntityHandle Entity)
 {
-	const FSeinAbilityComponent* Component =
-		GetComponent<FSeinAbilityComponent>(Entity);
+	const FSeinAbilityPayload* Component =
+		GetComponent<FSeinAbilityPayload>(Entity);
 	if (!Component) return;
 	FSeinComponentAuthoredAbilityGrantRecord* Existing =
 		ComponentLiveTuningAuthoredAbilityGrants.FindByPredicate(
@@ -4438,8 +4438,8 @@ bool USeinWorldSubsystem::ApplyAuthoredAbilityGrantPatch(
 	const TArray<TSubclassOf<USeinAbility>>& NewAuthoredAbilities,
 	FString& OutError)
 {
-	FSeinAbilityComponent* Component =
-		GetComponentMutable<FSeinAbilityComponent>(Entity);
+	FSeinAbilityPayload* Component =
+		GetComponentMutable<FSeinAbilityPayload>(Entity);
 	if (!Component)
 	{
 		OutError = TEXT("Target entity has no ability component.");
@@ -4544,7 +4544,7 @@ bool USeinWorldSubsystem::ApplyAuthoredAbilityGrantPatch(
 				*this, AbilityClass.Get());
 			USeinAbilityBPFL::SeinRevokeAbilityByClass(
 				this, Entity, AbilityClass);
-			Component = GetComponentMutable<FSeinAbilityComponent>(Entity);
+			Component = GetComponentMutable<FSeinAbilityPayload>(Entity);
 			const int32 AfterCount = Component
 				? Component->GetAbilityGrantCount(*this, AbilityClass.Get())
 				: 0;
@@ -5136,7 +5136,7 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleBrokerOr
 	{
 		for (const FSeinEntityHandle& M : Filtered)
 		{
-			const FSeinAbilityComponent* MemberAC = GetComponent<FSeinAbilityComponent>(M);
+			const FSeinAbilityPayload* MemberAC = GetComponent<FSeinAbilityPayload>(M);
 			if (!MemberAC) continue;
 			if (USeinAbility* Found = MemberAC->FindAbilityByTag(*this, Payload->PredeterminedAbilityTag))
 			{
@@ -5341,8 +5341,8 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleBrokerOr
 				for (const FSeinEntityHandle& Member : BrokerMembers)
 				{
 					if (!IsEntityAlive(Member)) continue;
-					FSeinAbilityComponent* MemberAC =
-						GetComponentMutable<FSeinAbilityComponent>(
+					FSeinAbilityPayload* MemberAC =
+						GetComponentMutable<FSeinAbilityPayload>(
 							Member);
 					if (!MemberAC) continue;
 					const int32 ActiveID = MemberAC->ActiveAbilityID;
@@ -5536,12 +5536,12 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleActivate
 		return ECommandHandleResult::Unhandled;
 	}
 
-	FSeinAbilityComponent* AbilityComp =
-		GetComponentMutable<FSeinAbilityComponent>(
+	FSeinAbilityPayload* AbilityComp =
+		GetComponentMutable<FSeinAbilityPayload>(
 			Cmd.EntityHandle);
 	if (!AbilityComp)
 	{
-		UE_LOG(LogSeinSim, Verbose, TEXT("ActivateAbility[%s]: entity %s has no FSeinAbilityComponent"),
+		UE_LOG(LogSeinSim, Verbose, TEXT("ActivateAbility[%s]: entity %s has no FSeinAbilityPayload"),
 			*Cmd.AbilityTag.ToString(), *Cmd.EntityHandle.ToString());
 		RejectCommand(Cmd, SeinARTSTags::Command_Reject_MissingComponent);
 		return ECommandHandleResult::Handled;
@@ -5585,8 +5585,8 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleActivate
 		{
 			return false;
 		}
-		FSeinAbilityComponent* CurrentComp =
-			GetComponentMutable<FSeinAbilityComponent>(Cmd.EntityHandle);
+		FSeinAbilityPayload* CurrentComp =
+			GetComponentMutable<FSeinAbilityPayload>(Cmd.EntityHandle);
 		if (!CurrentComp || !CurrentComp->AbilityInstanceIDs.Contains(AbilityID))
 		{
 			return false;
@@ -5763,7 +5763,7 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleActivate
 					// only — compound bodies (turret + chassis) take the chassis
 					// shape's bounding radius, which is usually the larger one
 					// anyway. Falls back to TargetCenter if no extents.
-					const FSeinExtentsComponent* TargetExtents = GetComponent<FSeinExtentsComponent>(Cmd.TargetEntity);
+					const FSeinExtentsPayload* TargetExtents = GetComponent<FSeinExtentsPayload>(Cmd.TargetEntity);
 					const FSeinExtentsShape* TargetShape = (TargetExtents && TargetExtents->Shapes.Num() > 0)
 						? &TargetExtents->Shapes[0]
 						: nullptr;
@@ -6039,8 +6039,8 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleActivate
 		{
 			const int32 OtherID = AbilityIDsToCancel[Index];
 			USeinAbility* const ExpectedAbility = AbilitiesToCancel[Index].Get();
-			const FSeinAbilityComponent* CurrentComp =
-				GetComponent<FSeinAbilityComponent>(Cmd.EntityHandle);
+			const FSeinAbilityPayload* CurrentComp =
+				GetComponent<FSeinAbilityPayload>(Cmd.EntityHandle);
 			USeinAbility* Other = GetAbilityInstance(OtherID);
 			if (!CurrentComp
 				|| !CurrentComp->AbilityInstanceIDs.Contains(OtherID)
@@ -6141,8 +6141,8 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleCancelAb
 		return ECommandHandleResult::Unhandled;
 	}
 
-	FSeinAbilityComponent* AbilityComp =
-		GetComponentMutable<FSeinAbilityComponent>(
+	FSeinAbilityPayload* AbilityComp =
+		GetComponentMutable<FSeinAbilityPayload>(
 			Cmd.EntityHandle);
 	const int32 ActiveAbilityID = AbilityComp
 		? AbilityComp->ActiveAbilityID
@@ -6172,8 +6172,8 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleCancelPr
 		return ECommandHandleResult::Unhandled;
 	}
 
-	FSeinProductionComponent* ProdComp =
-		GetComponentMutable<FSeinProductionComponent>(
+	FSeinProductionPayload* ProdComp =
+		GetComponentMutable<FSeinProductionPayload>(
 			Cmd.EntityHandle);
 	if (!ProdComp) { RejectCommand(Cmd, SeinARTSTags::Command_Reject_MissingComponent); return ECommandHandleResult::Handled; }
 
@@ -6676,14 +6676,14 @@ FSeinEntityHandle USeinWorldSubsystem::SpawnEntity(
 	InitializeEntityAbilities(Handle);
 
 	// Initialize the entity's tag state. Seed BaseTags from the entity bridge's
-	// authored BaseTags UPROPERTY, merge the FSeinIdentityComponent identity
+	// authored BaseTags UPROPERTY, merge the FSeinIdentityPayload identity
 	// tag, then seed refcounts + the global EntityTagIndex. An active
 	// construction component receives a separate framework-owned grant so
 	// completion can release it without mutating designer-authored BaseTags.
 	//
 	// The matching ungrant lives in SeinFinishConstruction. If a designer also
 	// authors UnderConstruction in BaseTags, that independent grant persists.
-	const bool bHasConstructionComponent = GetComponent<FSeinConstructionComponent>(Handle) != nullptr;
+	const bool bHasConstructionComponent = GetComponent<FSeinConstructionPayload>(Handle) != nullptr;
 	{
 		FSeinEntityTagState& TagState = EntityTagStates.FindOrAdd(Handle);
 
@@ -6702,9 +6702,9 @@ FSeinEntityHandle USeinWorldSubsystem::SpawnEntity(
 			TagState.BaseTags.AppendTags(TagBridge->BaseTags);
 		}
 
-		// Resolve the identity tag from the entity's FSeinIdentityComponent
+		// Resolve the identity tag from the entity's FSeinIdentityPayload
 		// (injected from the bridge's ComponentData array above).
-		if (const FSeinIdentityComponent* Identity = GetComponent<FSeinIdentityComponent>(Handle))
+		if (const FSeinIdentityPayload* Identity = GetComponent<FSeinIdentityPayload>(Handle))
 		{
 			if (Identity->IdentityTag.IsValid())
 			{
@@ -6831,7 +6831,7 @@ FSeinEntityHandle USeinWorldSubsystem::SpawnEntityFromPlacedActor(
 
 	InitializeEntityAbilities(Handle);
 
-	const bool bHasConstructionComponent = GetComponent<FSeinConstructionComponent>(Handle) != nullptr;
+	const bool bHasConstructionComponent = GetComponent<FSeinConstructionPayload>(Handle) != nullptr;
 	{
 		// Initialize tag state — mirror of SpawnEntity's path. Seeds BaseTags
 		// from the LIVE placed actor's entity bridge (per-instance edits to
@@ -6845,7 +6845,7 @@ FSeinEntityHandle USeinWorldSubsystem::SpawnEntityFromPlacedActor(
 		}
 
 		// Identity-data first — matches SpawnEntity. Legacy archetype-def fallback is gone.
-		if (const FSeinIdentityComponent* Identity = GetComponent<FSeinIdentityComponent>(Handle))
+		if (const FSeinIdentityPayload* Identity = GetComponent<FSeinIdentityPayload>(Handle))
 		{
 			if (Identity->IdentityTag.IsValid())
 			{
@@ -6981,8 +6981,8 @@ void USeinWorldSubsystem::ProcessDeferredDestroys()
 		// refunds exactly through its own path; a wiped-but-rebuilding squad
 		// never reaches teardown with a live queue, so this only fires on
 		// explicit destruction/disband.
-		if (const FSeinSquadComponent* DyingSquad =
-			GetDeferredTeardownComponent<FSeinSquadComponent>(Handle))
+		if (const FSeinSquadPayload* DyingSquad =
+			GetDeferredTeardownComponent<FSeinSquadPayload>(Handle))
 		{
 			if (!DyingSquad->ReinforceQueue.IsEmpty()
 				&& DyingSquad->ReinforceRefundPolicy
@@ -7122,8 +7122,8 @@ void USeinWorldSubsystem::ProcessDeferredDestroys()
 		// slots BEFORE component storage clears. The pool slots own the
 		// UObject lifetime via UPROPERTY; freeing the slot lets the GC reap
 		// the ability/resolver instance the next pass.
-		if (const FSeinAbilityComponent* AbilityComp =
-			GetDeferredTeardownComponent<FSeinAbilityComponent>(Handle))
+		if (const FSeinAbilityPayload* AbilityComp =
+			GetDeferredTeardownComponent<FSeinAbilityPayload>(Handle))
 		{
 			for (int32 ID : AbilityComp->AbilityInstanceIDs)
 			{
@@ -8062,8 +8062,8 @@ bool USeinWorldSubsystem::RegisterAbilityActivity(USeinAbility* Ability)
 		return false;
 	}
 	const int32 AbilityID = FindAbilityInstanceID(Ability);
-	FSeinAbilityComponent* Component =
-		GetComponentMutable<FSeinAbilityComponent>(Ability->OwnerEntity);
+	FSeinAbilityPayload* Component =
+		GetComponentMutable<FSeinAbilityPayload>(Ability->OwnerEntity);
 	if (AbilityID == INDEX_NONE || !Component
 		|| !Component->AbilityInstanceIDs.Contains(AbilityID))
 	{
@@ -8127,8 +8127,8 @@ void USeinWorldSubsystem::UnregisterAbilityActivity(
 		return;
 	}
 	const int32 AbilityID = FindAbilityInstanceID(Ability);
-	FSeinAbilityComponent* Component =
-		GetComponentMutable<FSeinAbilityComponent>(Ability->OwnerEntity);
+	FSeinAbilityPayload* Component =
+		GetComponentMutable<FSeinAbilityPayload>(Ability->OwnerEntity);
 	if (AbilityID == INDEX_NONE || !Component
 		|| !Component->AbilityInstanceIDs.Contains(AbilityID))
 	{
@@ -9332,8 +9332,8 @@ namespace
 			}
 		}
 
-		TMap<FSeinEntityHandle, FSeinSquadComponent> Squads;
-		TMap<FSeinEntityHandle, FSeinSquadMemberComponent> SquadMembers;
+		TMap<FSeinEntityHandle, FSeinSquadPayload> Squads;
+		TMap<FSeinEntityHandle, FSeinSquadMemberPayload> SquadMembers;
 		TMap<FSeinEntityHandle, FSeinCommandBrokerData> Brokers;
 		TMap<FSeinEntityHandle, FSeinBrokerMembershipData> BrokerMemberships;
 		auto DecodeComponents = [&]<typename ComponentType>(
@@ -9498,7 +9498,7 @@ namespace
 		for (const auto& SquadPair : Squads)
 		{
 			const FSeinEntityHandle SquadHandle = SquadPair.Key;
-			const FSeinSquadComponent& Squad = SquadPair.Value;
+			const FSeinSquadPayload& Squad = SquadPair.Value;
 			if (Squad.NextReinforceRequestID <= 0)
 			{
 				return false;
@@ -9523,7 +9523,7 @@ namespace
 				Occupants.Add(Slot.CurrentOccupant);
 				OccupantSquad.Add(Slot.CurrentOccupant, SquadHandle);
 
-				const FSeinSquadMemberComponent* Member =
+				const FSeinSquadMemberPayload* Member =
 					SquadMembers.Find(Slot.CurrentOccupant);
 				const FSeinBrokerMembershipData* Membership =
 					BrokerMemberships.Find(Slot.CurrentOccupant);
@@ -9606,7 +9606,7 @@ namespace
 		}
 		for (const auto& MemberPair : SquadMembers)
 		{
-			const FSeinSquadMemberComponent& Member = MemberPair.Value;
+			const FSeinSquadMemberPayload& Member = MemberPair.Value;
 			if (!Member.SquadEntity.IsValid())
 			{
 				if (Member.SlotIndex != INDEX_NONE
@@ -9926,9 +9926,9 @@ namespace
 			}
 		}
 
-		if (!DecodeSnapshotComponentBlob<FSeinActiveEffectsComponent>(
+		if (!DecodeSnapshotComponentBlob<FSeinActiveEffectsPayload>(
 			Snapshot, AliveHandleBySlot,
-			[&](int32 Slot, const FSeinActiveEffectsComponent& Component)
+			[&](int32 Slot, const FSeinActiveEffectsPayload& Component)
 		{
 			const FSeinEntityHandle* Target = AliveHandleBySlot.Find(Slot);
 			return Target && Accumulate(Component.ActiveEffects,
@@ -9936,9 +9936,9 @@ namespace
 		})) return false;
 
 		TSet<int32> ReferencedAbilityPoolIDs;
-		if (!DecodeSnapshotComponentBlob<FSeinAbilityComponent>(
+		if (!DecodeSnapshotComponentBlob<FSeinAbilityPayload>(
 			Snapshot, AliveHandleBySlot,
-			[&](int32 Slot, const FSeinAbilityComponent& Component)
+			[&](int32 Slot, const FSeinAbilityPayload& Component)
 		{
 			const FSeinEntityHandle* Recipient = AliveHandleBySlot.Find(Slot);
 			if (!Recipient) return false;
@@ -11657,10 +11657,10 @@ const FGameplayTagContainer& USeinWorldSubsystem::GetEntityTags(FSeinEntityHandl
 FSeinNavAgentProfile USeinWorldSubsystem::BuildNavAgentProfile(
 	FSeinEntityHandle Handle) const
 {
-	const FSeinExtentsComponent* Extents =
-		GetComponent<FSeinExtentsComponent>(Handle);
-	const FSeinNavigationComponent* Navigation =
-		GetComponent<FSeinNavigationComponent>(Handle);
+	const FSeinExtentsPayload* Extents =
+		GetComponent<FSeinExtentsPayload>(Handle);
+	const FSeinNavigationPayload* Navigation =
+		GetComponent<FSeinNavigationPayload>(Handle);
 	FFixedPoint Radius = Extents
 		? SeinExtentsHelpers::GetColliderBoundingRadius(*Extents)
 		: FFixedPoint::Zero;
@@ -11679,8 +11679,8 @@ FSeinNavAgentProfile USeinWorldSubsystem::BuildNavAgentProfile(
 	Profile.Requester = Handle;
 	Profile.AgentTags = GetEntityTags(Handle);
 	Profile.AgentFootprintRadius = ResolvedFootprintRadius;
-	if (const FSeinNavigationComponent* Navigation =
-		GetComponent<FSeinNavigationComponent>(Handle))
+	if (const FSeinNavigationPayload* Navigation =
+		GetComponent<FSeinNavigationPayload>(Handle))
 	{
 		Profile.BlockedTerrainTags =
 			Navigation->BlockedTerrainTags;
@@ -11949,7 +11949,7 @@ FFixedPoint USeinWorldSubsystem::ResolveAttribute(FSeinEntityHandle Handle, UScr
 	TArray<FSeinModifier> AllModifiers;
 
 	// Instance-scope: walk the entity's active effects; CDO supplies the modifier list.
-	if (const FSeinActiveEffectsComponent* EffectsComp = GetComponent<FSeinActiveEffectsComponent>(Handle))
+	if (const FSeinActiveEffectsPayload* EffectsComp = GetComponent<FSeinActiveEffectsPayload>(Handle))
 	{
 		for (const FSeinActiveEffect& Effect : EffectsComp->ActiveEffects)
 		{
@@ -12140,8 +12140,8 @@ FSeinActiveEffect* USeinWorldSubsystem::FindActiveEffectByID(int64 EffectInstanc
 	EntityPool.ForEachEntity([&](FSeinEntityHandle Handle, const FSeinEntity& /*Entity*/)
 	{
 		if (Found) return;
-		if (FSeinActiveEffectsComponent* Effects =
-			GetComponentMutable<FSeinActiveEffectsComponent>(
+		if (FSeinActiveEffectsPayload* Effects =
+			GetComponentMutable<FSeinActiveEffectsPayload>(
 				Handle))
 		{
 			Found = Effects->ActiveEffects.FindByPredicate([EffectInstanceID](const FSeinActiveEffect& Effect)
@@ -12220,8 +12220,8 @@ void USeinWorldSubsystem::PruneAllEffectAbilityGrantClaims(
 	};
 	EntityPool.ForEachEntity([&](FSeinEntityHandle Handle, const FSeinEntity& /*Entity*/)
 	{
-		if (FSeinActiveEffectsComponent* Effects =
-			GetComponentMutable<FSeinActiveEffectsComponent>(
+		if (FSeinActiveEffectsPayload* Effects =
+			GetComponentMutable<FSeinActiveEffectsPayload>(
 				Handle))
 		{
 			Prune(Effects->ActiveEffects);
@@ -12242,8 +12242,8 @@ FSeinActiveEffect* USeinWorldSubsystem::ResolveEffect(const FEffectLocator& Loca
 	TArray<FSeinActiveEffect>* Storage = nullptr;
 	if (Locator.Scope == ESeinModifierScope::Instance)
 	{
-		FSeinActiveEffectsComponent* Effects =
-			GetComponentMutable<FSeinActiveEffectsComponent>(
+		FSeinActiveEffectsPayload* Effects =
+			GetComponentMutable<FSeinActiveEffectsPayload>(
 				Locator.InstanceTarget);
 		const bool bKnownPendingTombstone =
 			EntityPool.IsDeferredDestroyTombstone(Locator.InstanceTarget)
@@ -12253,9 +12253,9 @@ FSeinActiveEffect* USeinWorldSubsystem::ResolveEffect(const FEffectLocator& Loca
 		{
 			if (ISeinComponentStorage* RawStorage =
 				GetComponentStorageMutable(
-					FSeinActiveEffectsComponent::StaticStruct()))
+					FSeinActiveEffectsPayload::StaticStruct()))
 			{
-				Effects = static_cast<FSeinActiveEffectsComponent*>(
+				Effects = static_cast<FSeinActiveEffectsPayload*>(
 					RawStorage->GetComponentRaw(Locator.InstanceTarget));
 			}
 		}
@@ -12282,7 +12282,7 @@ bool USeinWorldSubsystem::IsEffectGrantRecipientEligible(
 	const FSeinEntity* Entity = EntityPool.Get(Recipient);
 	FSeinActiveEffect* Active = ResolveEffect(Locator);
 	if (!Active || !Entity || !Entity->IsAlive()
-		|| !GetComponent<FSeinAbilityComponent>(Recipient))
+		|| !GetComponent<FSeinAbilityPayload>(Recipient))
 	{
 		return false;
 	}
@@ -12342,8 +12342,8 @@ bool USeinWorldSubsystem::GrantAbilityTrackedByEffect(const FEffectLocator& Loca
 			}
 
 			int32 SourceClaims = 0;
-			if (const FSeinAbilityComponent* AbilityComp =
-				GetComponent<FSeinAbilityComponent>(Recipient))
+			if (const FSeinAbilityPayload* AbilityComp =
+				GetComponent<FSeinAbilityPayload>(Recipient))
 			{
 				for (int32 Index = 0; Index < AbilityComp->AbilityInstanceIDs.Num(); ++Index)
 				{
@@ -12476,8 +12476,8 @@ USeinWorldSubsystem::FEffectApplyResult USeinWorldSubsystem::ApplyEffectTransact
 	}
 
 	const FSeinPlayerID OwnerID = GetEntityOwner(Target);
-	FSeinActiveEffectsComponent* InstanceComp =
-		GetComponentMutable<FSeinActiveEffectsComponent>(Target);
+	FSeinActiveEffectsPayload* InstanceComp =
+		GetComponentMutable<FSeinActiveEffectsPayload>(Target);
 	FSeinPlayerState* OwnerState = GetPlayerStateMutable(OwnerID);
 	auto ResolveApplyStorage = [&]() -> TArray<FSeinActiveEffect>*
 	{
@@ -12728,8 +12728,8 @@ USeinWorldSubsystem::FEffectApplyResult USeinWorldSubsystem::ApplyEffectTransact
 		}
 		for (const FSeinEntityHandle Recipient : Recipients)
 		{
-			const FSeinAbilityComponent* AbilityComp =
-				GetComponent<FSeinAbilityComponent>(Recipient);
+			const FSeinAbilityPayload* AbilityComp =
+				GetComponent<FSeinAbilityPayload>(Recipient);
 			if (!AbilityComp) continue;
 
 			TSet<const UClass*> CheckedClasses;
@@ -12854,7 +12854,7 @@ USeinWorldSubsystem::FEffectApplyResult USeinWorldSubsystem::ApplyEffectTransact
 	{
 		return bCommittedReplacementRemoval ? Invalidated() : Reject();
 	}
-	InstanceComp = GetComponentMutable<FSeinActiveEffectsComponent>(Target);
+	InstanceComp = GetComponentMutable<FSeinActiveEffectsPayload>(Target);
 	OwnerState = GetPlayerStateMutable(OwnerID);
 	Storage = ResolveApplyStorage();
 	if (!Storage || !ValidateProjection(*Storage, OwnerState,
@@ -13133,15 +13133,15 @@ bool USeinWorldSubsystem::RemoveEffect(FSeinEntityHandle Target, int64 EffectIns
 	const FSeinPlayerID OwnerID = bLiveTarget
 		? GetEntityOwner(Target)
 		: EntityPool.GetDeferredDestroyOwner(Target);
-	FSeinActiveEffectsComponent* InstanceComp =
-		GetComponentMutable<FSeinActiveEffectsComponent>(Target);
+	FSeinActiveEffectsPayload* InstanceComp =
+		GetComponentMutable<FSeinActiveEffectsPayload>(Target);
 	if (!InstanceComp && bKnownPendingTombstone)
 	{
 			if (ISeinComponentStorage* RawStorage =
 				GetComponentStorageMutable(
-					FSeinActiveEffectsComponent::StaticStruct()))
+					FSeinActiveEffectsPayload::StaticStruct()))
 		{
-			InstanceComp = static_cast<FSeinActiveEffectsComponent*>(
+			InstanceComp = static_cast<FSeinActiveEffectsPayload*>(
 				RawStorage->GetComponentRaw(Target));
 		}
 	}
@@ -13172,7 +13172,7 @@ bool USeinWorldSubsystem::RemoveEffectByID(int64 EffectInstanceID, bool bByExpir
 	EntityPool.ForEachEntity([&](FSeinEntityHandle Handle, const FSeinEntity& /*Entity*/)
 	{
 		if (InstanceTarget.IsValid()) return;
-		const FSeinActiveEffectsComponent* Effects = GetComponent<FSeinActiveEffectsComponent>(Handle);
+		const FSeinActiveEffectsPayload* Effects = GetComponent<FSeinActiveEffectsPayload>(Handle);
 		if (Effects && Effects->ActiveEffects.ContainsByPredicate([EffectInstanceID](const FSeinActiveEffect& Effect)
 		{
 			return Effect.EffectInstanceID == EffectInstanceID;
@@ -13220,13 +13220,13 @@ bool USeinWorldSubsystem::RemovePlayerEffect(FSeinPlayerID PlayerID, int64 Effec
 
 bool USeinWorldSubsystem::HasInstanceEffectWithTag(FSeinEntityHandle Target, FGameplayTag Tag) const
 {
-	const FSeinActiveEffectsComponent* Effects = GetComponent<FSeinActiveEffectsComponent>(Target);
+	const FSeinActiveEffectsPayload* Effects = GetComponent<FSeinActiveEffectsPayload>(Target);
 	return Effects && Effects->HasEffectWithTag(Tag);
 }
 
 int32 USeinWorldSubsystem::GetInstanceEffectStacks(FSeinEntityHandle Target, FGameplayTag Tag) const
 {
-	const FSeinActiveEffectsComponent* Effects = GetComponent<FSeinActiveEffectsComponent>(Target);
+	const FSeinActiveEffectsPayload* Effects = GetComponent<FSeinActiveEffectsPayload>(Target);
 	return Effects ? Effects->GetStackCountForTag(Tag) : 0;
 }
 
@@ -13279,7 +13279,7 @@ void USeinWorldSubsystem::RemoveInstanceEffectsWithTag(FSeinEntityHandle Target,
 	const FSeinPlayerID OwnerID = GetEntityOwner(Target);
 	TArray<int64> InstanceEffectIDs;
 	TArray<int64> PlayerEffectIDs;
-	if (const FSeinActiveEffectsComponent* InstanceComp = GetComponent<FSeinActiveEffectsComponent>(Target))
+	if (const FSeinActiveEffectsPayload* InstanceComp = GetComponent<FSeinActiveEffectsPayload>(Target))
 	{
 		CollectMatching(InstanceComp->ActiveEffects, InstanceEffectIDs);
 	}
@@ -13322,10 +13322,10 @@ void USeinWorldSubsystem::RemoveEffectsFromDeadSource(FSeinEntityHandle DeadHand
 	};
 	TArray<FPendingEffectRemoval> ToRemove;
 
-	// Instance scope: every entity's FSeinActiveEffectsComponent.
+	// Instance scope: every entity's FSeinActiveEffectsPayload.
 	EntityPool.ForEachEntity([&](FSeinEntityHandle Handle, FSeinEntity& /*Entity*/)
 	{
-		const FSeinActiveEffectsComponent* EffectsComp = GetComponent<FSeinActiveEffectsComponent>(Handle);
+		const FSeinActiveEffectsPayload* EffectsComp = GetComponent<FSeinActiveEffectsPayload>(Handle);
 		if (!EffectsComp) return;
 		for (const FSeinActiveEffect& E : EffectsComp->ActiveEffects)
 		{
@@ -15528,8 +15528,8 @@ int32 USeinWorldSubsystem::ComputeStateHash() const
 
 void USeinWorldSubsystem::InitializeEntityAbilities(FSeinEntityHandle Handle)
 {
-	FSeinAbilityComponent* AbilityComp =
-		GetComponentMutable<FSeinAbilityComponent>(Handle);
+	FSeinAbilityPayload* AbilityComp =
+		GetComponentMutable<FSeinAbilityPayload>(Handle);
 	if (!AbilityComp)
 	{
 		// Not every entity has abilities (projectiles, static props, resource piles);
@@ -15583,7 +15583,7 @@ void USeinWorldSubsystem::ReplayEffectAbilityGrants(FSeinEntityHandle Handle)
 
 	// AbilityComponent is the gate — entities without one can't hold
 	// abilities, so there's nothing to grant.
-	if (!GetComponent<FSeinAbilityComponent>(Handle)) return;
+	if (!GetComponent<FSeinAbilityPayload>(Handle)) return;
 
 	const FSeinPlayerID Owner = GetEntityOwner(Handle);
 	const FSeinPlayerState* OwnerState = GetPlayerState(Owner);
@@ -15620,7 +15620,7 @@ void USeinWorldSubsystem::ReplayEffectAbilityGrants(FSeinEntityHandle Handle)
 		if (!RecipientEntity || !RecipientEntity->IsAlive()
 			|| GetEntityOwner(Handle) != Owner
 			|| OwnerTransitionRevisions.FindRef(Handle) != InitialOwnerRevision
-			|| !GetComponent<FSeinAbilityComponent>(Handle))
+			|| !GetComponent<FSeinAbilityPayload>(Handle))
 		{
 			break;
 		}
@@ -15773,12 +15773,12 @@ FSeinEntityHandle USeinWorldSubsystem::CreateBrokerForMembers(
 		if (!OldBroker) continue;
 
 		// Cancel the member's active primary ability before evicting. The active
-		// ability tracked on FSeinAbilityComponent was dispatched by this broker —
+		// ability tracked on FSeinAbilityPayload was dispatched by this broker —
 		// once we evict, the broker no longer owns it. Cancellation runs the
 		// ability's OnEnd cleanup (latent-action teardown, refunds, tag ungrant).
 		// Safe no-op if the member has no active ability.
-		if (FSeinAbilityComponent* AC =
-			GetComponentMutable<FSeinAbilityComponent>(M))
+		if (FSeinAbilityPayload* AC =
+			GetComponentMutable<FSeinAbilityPayload>(M))
 		{
 			const int32 ActiveID = AC->ActiveAbilityID;
 			USeinAbility* Active = GetAbilityInstance(ActiveID);

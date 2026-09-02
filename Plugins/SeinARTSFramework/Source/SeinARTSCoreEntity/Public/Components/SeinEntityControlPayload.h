@@ -7,11 +7,11 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Components/SeinComponent.h"
+#include "Components/SeinPayload.h"
 #include "Core/SeinEntityHandle.h"
 #include "Core/SeinPlayerID.h"
 #include "GameplayTagContainer.h"
-#include "SeinEntityControlComponent.generated.h"
+#include "SeinEntityControlPayload.generated.h"
 
 /**
  * Stable identity for one entity-control grant.
@@ -128,7 +128,7 @@ struct TStructOpsTypeTraits<FSeinEntityControlGrant>
  * grant is revoked so NextGrantSerial can never rewind or reuse an ID.
  */
 USTRUCT(BlueprintType, meta = (SeinDeterministic, SeinSubData))
-struct SEINARTSCOREENTITY_API FSeinEntityControlComponent : public FSeinComponent
+struct SEINARTSCOREENTITY_API FSeinEntityControlPayload : public FSeinPayload
 {
 	GENERATED_BODY()
 

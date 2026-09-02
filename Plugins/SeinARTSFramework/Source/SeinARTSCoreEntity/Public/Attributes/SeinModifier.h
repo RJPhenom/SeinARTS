@@ -26,7 +26,7 @@ enum class ESeinModifierOp : uint8
 UENUM(BlueprintType)
 enum class ESeinModifierScope : uint8
 {
-	/** Affects a single entity — modifier lives on the entity's FSeinActiveEffectsComponent. */
+	/** Affects a single entity — modifier lives on the entity's FSeinActiveEffectsPayload. */
 	Instance,
 	/** Affects every entity owned by a player whose tags include TargetClassTag —
 	 *  modifier lives on the player state's ClassEffects list. */

@@ -8,7 +8,7 @@
 
 #include "CoreMinimal.h"
 #include "Core/SeinEntityHandle.h"
-#include "Components/SeinSquadComponent.h"
+#include "Components/SeinSquadPayload.h"
 
 class USeinWorldSubsystem;
 
@@ -22,12 +22,12 @@ public:
 
 	/** Pure structural eligibility. Affordability is checked atomically by enqueue. */
 	static bool IsSlotEnqueueable(
-		const FSeinSquadComponent& Squad,
+		const FSeinSquadPayload& Squad,
 		int32 SlotIndex);
 
 	/** First structurally eligible slot in declaration order. */
 	static int32 FindFirstEnqueueableSlot(
-		const FSeinSquadComponent& Squad);
+		const FSeinSquadPayload& Squad);
 
 	/** Validate, deduct, allocate one monotonic ID, and append atomically. */
 	static bool TryEnqueue(

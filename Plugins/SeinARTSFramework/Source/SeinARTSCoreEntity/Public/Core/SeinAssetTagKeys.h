@@ -31,7 +31,7 @@ namespace SeinAssetTagKeys
 	/** `USeinEffect::EffectTag` (direct CDO property). */
 	inline FName EffectTag()   { static const FName Key(TEXT("SeinEffectTag"));   return Key; }
 
-	/** `FSeinIdentityComponent::IdentityTag`, nested in the entity bridge's
+	/** `FSeinIdentityPayload::IdentityTag`, nested in the entity bridge's
 	 *  `ComponentData` array on an `ASeinActor` CDO. */
 	inline FName IdentityTag() { static const FName Key(TEXT("SeinIdentityTag")); return Key; }
 }

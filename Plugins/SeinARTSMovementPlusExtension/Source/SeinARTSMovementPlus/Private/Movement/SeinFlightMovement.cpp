@@ -11,7 +11,7 @@
 #include "Types/FixedPoint.h"
 #include "Types/Quat.h"
 #include "Types/Vector.h"
-#include "Components/SeinMovementComponent.h"
+#include "Components/SeinMovementPayload.h"
 #include "Data/SeinFlyingMovementData.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinFlight, Log, All);
@@ -34,13 +34,13 @@ UScriptStruct* USeinFlightMovement::GetMovementDataStruct() const
 	return FSeinFlyingMovementData::StaticStruct();
 }
 
-FFixedPoint USeinFlightMovement::GetDeceleration(const FSeinMovementComponent* MovementData) const
+FFixedPoint USeinFlightMovement::GetDeceleration(const FSeinMovementPayload* MovementData) const
 {
 	const FSeinFlyingMovementData* Data = MovementData ? MovementData->MovementClassData.GetPtr<FSeinFlyingMovementData>() : nullptr;
 	return Data ? Data->Deceleration : FSeinFlyingMovementData().Deceleration;
 }
 
-FFixedPoint USeinFlightMovement::GetAltitude(const FSeinMovementComponent* MovementData) const
+FFixedPoint USeinFlightMovement::GetAltitude(const FSeinMovementPayload* MovementData) const
 {
 	if (!MovementData) return FFixedPoint::Zero;
 	if (const FSeinFlyingMovementData* FlightData = MovementData->MovementClassData.GetPtr<FSeinFlyingMovementData>())
@@ -84,7 +84,7 @@ bool USeinFlightMovement::Tick(const FSeinMovementContext& Ctx)
 	if (!Ctx.MovementData) return true;
 
 	FSeinEntity& Entity = Ctx.Entity;
-	FSeinMovementComponent& MovementData = *Ctx.MovementData;
+	FSeinMovementPayload& MovementData = *Ctx.MovementData;
 	// Per-class tuning (accel/decel live here now, off the bare component). Defaults when unauthored.
 	const FSeinFlyingMovementData DefaultsFlying;
 	const FSeinFlyingMovementData* FlyingPtr = MovementData.MovementClassData.GetPtr<FSeinFlyingMovementData>();

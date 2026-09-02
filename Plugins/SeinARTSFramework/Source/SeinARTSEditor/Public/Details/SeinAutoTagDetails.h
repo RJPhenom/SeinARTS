@@ -6,7 +6,7 @@
  *           system. Adds a "Reset to Auto" button next to the tag field on:
  *             - USeinAbility::AbilityTag (FSeinAbilityAutoTagDetails)
  *             - USeinEffect::EffectTag (FSeinEffectAutoTagDetails)
- *             - FSeinIdentityComponent::IdentityTag (the property-type
+ *             - FSeinIdentityPayload::IdentityTag (the property-type
  *               customization replaces the existing FSeinInstancedStructDetails
  *               handling for that specific struct type)
  *

@@ -1,11 +1,11 @@
 #include "CQTest.h"
 #include "Components/ActorTestSpawner.h"
 #include "Actor/SeinActor.h"
-#include "Components/SeinAbilityComponent.h"
+#include "Components/SeinAbilityPayload.h"
 #include "Components/SeinBrokerMembershipData.h"
 #include "Components/SeinCommandBrokerData.h"
-#include "Components/SeinSquadComponent.h"
-#include "Components/SeinSquadMemberComponent.h"
+#include "Components/SeinSquadPayload.h"
+#include "Components/SeinSquadMemberPayload.h"
 #include "Core/SeinPlayerState.h"
 #include "Data/SeinReplayHeader.h"
 #include "Data/SeinWorldSnapshot.h"
@@ -121,7 +121,7 @@ namespace
 
 						Squad = World->SpawnAbstractEntity(
 							FFixedTransform(), Player);
-						FSeinSquadComponent SquadData;
+						FSeinSquadPayload SquadData;
 						for (int32 Index = 0; Index < 2; ++Index)
 						{
 							FSeinSquadSlot Slot;
@@ -153,7 +153,7 @@ namespace
 						if (bGrantStarterAbility)
 						{
 							World->AddComponent(
-								Squad, FSeinAbilityComponent());
+								Squad, FSeinAbilityPayload());
 							ReinforceAbilityID =
 								USeinAbilityBPFL::SeinGrantAbility(
 									World,
@@ -192,7 +192,7 @@ namespace
 		{
 			const FSeinEntityHandle Handle = World->SpawnAbstractEntity(
 				FFixedTransform(), Player);
-			FSeinSquadComponent Data;
+			FSeinSquadPayload Data;
 			FSeinSquadSlot Slot;
 			Slot.SlotTags.AddTag(SeinARTSTags::State);
 			Slot.Entity = ASeinActor::StaticClass();
@@ -286,8 +286,8 @@ TEST(SquadReinforcementRejectsInvalidOrOverflowingCharges,
 	ASSERT_THAT(AreEqual(static_cast<int64>(0), RequestID));
 	ASSERT_THAT(IsTrue(
 		Fixture.Balance(Fixture.Player) == FFixedPoint::MaxValue));
-	const FSeinSquadComponent* Squad =
-		Fixture.World->GetComponent<FSeinSquadComponent>(Fixture.Squad);
+	const FSeinSquadPayload* Squad =
+		Fixture.World->GetComponent<FSeinSquadPayload>(Fixture.Squad);
 	ASSERT_THAT(IsNotNull(Squad));
 	ASSERT_THAT(AreEqual(0, Squad->ReinforceQueue.Num()));
 	ASSERT_THAT(AreEqual(static_cast<int64>(1),
@@ -295,8 +295,8 @@ TEST(SquadReinforcementRejectsInvalidOrOverflowingCharges,
 
 	{
 		auto SimScope = FSeinSimContextTestAccess::Enter(*Fixture.World);
-		FSeinSquadComponent* Mutable =
-			Fixture.World->GetComponentMutable<FSeinSquadComponent>(
+		FSeinSquadPayload* Mutable =
+			Fixture.World->GetComponentMutable<FSeinSquadPayload>(
 				Fixture.Squad);
 		Mutable->Slots[0].ReinforceCost.Amounts[
 			SeinARTSTags::Resource] = -FFixedPoint::One;
@@ -339,8 +339,8 @@ TEST(SquadReinforcementRequestsAreExactAndRefundTheirFundingPlayer,
 	ASSERT_THAT(IsTrue(
 		Fixture.Balance(Fixture.Player) == FFixedPoint::FromInt(70)));
 
-	const FSeinSquadComponent* Squad =
-		Fixture.World->GetComponent<FSeinSquadComponent>(Fixture.Squad);
+	const FSeinSquadPayload* Squad =
+		Fixture.World->GetComponent<FSeinSquadPayload>(Fixture.Squad);
 	ASSERT_THAT(IsNotNull(Squad));
 	ASSERT_THAT(AreEqual(2, Squad->ReinforceQueue.Num()));
 	ASSERT_THAT(AreEqual(0, Squad->ReinforceQueue[0].RequestedSlotIndex));
@@ -361,7 +361,7 @@ TEST(SquadReinforcementRequestsAreExactAndRefundTheirFundingPlayer,
 			SeinCancelSquadReinforcement(
 				Fixture.World, Fixture.Squad, FirstRequest)));
 		ASSERT_THAT(AreEqual(2,
-			Fixture.World->GetComponent<FSeinSquadComponent>(
+			Fixture.World->GetComponent<FSeinSquadPayload>(
 				Fixture.Squad)->ReinforceQueue.Num()));
 		Fixture.World->GetPlayerStateMutable(Fixture.Player)->SetResource(
 			SeinARTSTags::Resource, FFixedPoint::FromInt(100));
@@ -378,7 +378,7 @@ TEST(SquadReinforcementRequestsAreExactAndRefundTheirFundingPlayer,
 	ASSERT_THAT(IsTrue(
 		Fixture.Balance(Fixture.OtherPlayer) == FFixedPoint::FromInt(50)));
 
-	Squad = Fixture.World->GetComponent<FSeinSquadComponent>(Fixture.Squad);
+	Squad = Fixture.World->GetComponent<FSeinSquadPayload>(Fixture.Squad);
 	ASSERT_THAT(AreEqual(1, Squad->ReinforceQueue.Num()));
 	ASSERT_THAT(AreEqual(SecondRequest,
 		Squad->ReinforceQueue[0].RequestID));
@@ -415,14 +415,14 @@ TEST(SquadExactSlotMutationMaintainsMembershipAndInvalidatesSettledLayout,
 
 	ASSERT_THAT(IsTrue(
 		Fixture.Balance(Fixture.Player) == FFixedPoint::FromInt(100)));
-	const FSeinSquadComponent* Squad =
-		Fixture.World->GetComponent<FSeinSquadComponent>(Fixture.Squad);
+	const FSeinSquadPayload* Squad =
+		Fixture.World->GetComponent<FSeinSquadPayload>(Fixture.Squad);
 	ASSERT_THAT(IsNotNull(Squad));
 	ASSERT_THAT(AreEqual(0, Squad->ReinforceQueue.Num()));
 	ASSERT_THAT(IsTrue(Squad->Slots[1].CurrentOccupant == Member));
 
-	const FSeinSquadMemberComponent* MemberData =
-		Fixture.World->GetComponent<FSeinSquadMemberComponent>(Member);
+	const FSeinSquadMemberPayload* MemberData =
+		Fixture.World->GetComponent<FSeinSquadMemberPayload>(Member);
 	ASSERT_THAT(IsNotNull(MemberData));
 	ASSERT_THAT(IsTrue(MemberData->SquadEntity == Fixture.Squad));
 	ASSERT_THAT(AreEqual(1, MemberData->SlotIndex));
@@ -450,10 +450,10 @@ TEST(SquadExactSlotMutationMaintainsMembershipAndInvalidatesSettledLayout,
 				Fixture.World, OtherSquad, 0, Member)));
 	}
 
-	Squad = Fixture.World->GetComponent<FSeinSquadComponent>(Fixture.Squad);
+	Squad = Fixture.World->GetComponent<FSeinSquadPayload>(Fixture.Squad);
 	ASSERT_THAT(IsTrue(Squad->Slots[0].CurrentOccupant == Member));
 	ASSERT_THAT(IsFalse(Squad->Slots[1].CurrentOccupant.IsValid()));
-	MemberData = Fixture.World->GetComponent<FSeinSquadMemberComponent>(Member);
+	MemberData = Fixture.World->GetComponent<FSeinSquadMemberPayload>(Member);
 	ASSERT_THAT(AreEqual(0, MemberData->SlotIndex));
 	Membership = Fixture.World->GetComponent<FSeinBrokerMembershipData>(Member);
 	ASSERT_THAT(IsTrue(
@@ -461,15 +461,15 @@ TEST(SquadExactSlotMutationMaintainsMembershipAndInvalidatesSettledLayout,
 
 	{
 		auto SimScope = FSeinSimContextTestAccess::Enter(*Fixture.World);
-		FSeinSquadComponent UnsafeReplacement = *Squad;
+		FSeinSquadPayload UnsafeReplacement = *Squad;
 		ASSERT_THAT(IsFalse(USeinSquadMutationBPFL::SeinSetSquadData(
 			Fixture.World, Fixture.Squad, UnsafeReplacement)));
 		ASSERT_THAT(IsTrue(USeinSquadMutationBPFL::SeinEmptySquadSlotByIndex(
 			Fixture.World, Fixture.Squad, 0)));
 	}
-	Squad = Fixture.World->GetComponent<FSeinSquadComponent>(Fixture.Squad);
+	Squad = Fixture.World->GetComponent<FSeinSquadPayload>(Fixture.Squad);
 	ASSERT_THAT(IsFalse(Squad->Slots[0].CurrentOccupant.IsValid()));
-	MemberData = Fixture.World->GetComponent<FSeinSquadMemberComponent>(Member);
+	MemberData = Fixture.World->GetComponent<FSeinSquadMemberPayload>(Member);
 	ASSERT_THAT(IsFalse(MemberData->SquadEntity.IsValid()));
 	ASSERT_THAT(AreEqual(INDEX_NONE, MemberData->SlotIndex));
 	Membership = Fixture.World->GetComponent<FSeinBrokerMembershipData>(Member);
@@ -501,7 +501,7 @@ TEST(SquadReinforcementCompletesIntoExactSharedTagSlot,
 	ASSERT_THAT(IsNotNull(InitialBroker));
 	ASSERT_THAT(IsFalse(InitialBroker->bSelfCullOnEmpty));
 	ASSERT_THAT(AreEqual(1,
-		Fixture.World->GetComponent<FSeinSquadComponent>(
+		Fixture.World->GetComponent<FSeinSquadPayload>(
 			Fixture.Squad)->ReinforceQueue.Num()));
 
 	for (int32 Tick = 0; Tick < 35; ++Tick)
@@ -510,8 +510,8 @@ TEST(SquadReinforcementCompletesIntoExactSharedTagSlot,
 			Fixture.World->GetFixedDeltaTimeSeconds());
 	}
 
-	const FSeinSquadComponent* Squad =
-		Fixture.World->GetComponent<FSeinSquadComponent>(Fixture.Squad);
+	const FSeinSquadPayload* Squad =
+		Fixture.World->GetComponent<FSeinSquadPayload>(Fixture.Squad);
 	ASSERT_THAT(IsNotNull(Squad));
 	ASSERT_THAT(AreEqual(0, Squad->ReinforceQueue.Num()));
 	ASSERT_THAT(IsFalse(Squad->Slots[0].CurrentOccupant.IsValid()));
@@ -519,8 +519,8 @@ TEST(SquadReinforcementCompletesIntoExactSharedTagSlot,
 	ASSERT_THAT(IsTrue(Squad->Slots[1].CurrentCooldown > FFixedPoint::Zero));
 
 	const FSeinEntityHandle Member = Squad->Slots[1].CurrentOccupant;
-	const FSeinSquadMemberComponent* MemberData =
-		Fixture.World->GetComponent<FSeinSquadMemberComponent>(Member);
+	const FSeinSquadMemberPayload* MemberData =
+		Fixture.World->GetComponent<FSeinSquadMemberPayload>(Member);
 	ASSERT_THAT(IsNotNull(MemberData));
 	ASSERT_THAT(IsTrue(MemberData->SquadEntity == Fixture.Squad));
 	ASSERT_THAT(AreEqual(1, MemberData->SlotIndex));
@@ -543,8 +543,8 @@ TEST(SquadInvalidCompletionClampsAndRetriesExactRefund,
 		ASSERT_THAT(IsTrue(USeinSquadMutationBPFL::
 			SeinQueueSquadReinforcement(
 				Fixture.World, Fixture.Squad, 1, RequestID)));
-		FSeinSquadComponent* Squad =
-			Fixture.World->GetComponentMutable<FSeinSquadComponent>(
+		FSeinSquadPayload* Squad =
+			Fixture.World->GetComponentMutable<FSeinSquadPayload>(
 				Fixture.Squad);
 		Squad->ReinforceQueue[0].BuildProgress =
 			Squad->ReinforceQueue[0].TotalBuildTime
@@ -556,8 +556,8 @@ TEST(SquadInvalidCompletionClampsAndRetriesExactRefund,
 
 	FTSTicker::GetCoreTicker().Tick(
 		Fixture.World->GetFixedDeltaTimeSeconds());
-	const FSeinSquadComponent* Squad =
-		Fixture.World->GetComponent<FSeinSquadComponent>(Fixture.Squad);
+	const FSeinSquadPayload* Squad =
+		Fixture.World->GetComponent<FSeinSquadPayload>(Fixture.Squad);
 	ASSERT_THAT(IsNotNull(Squad));
 	ASSERT_THAT(AreEqual(1, Squad->ReinforceQueue.Num()));
 	ASSERT_THAT(IsTrue(
@@ -593,8 +593,8 @@ TEST(SquadReinforcementSnapshotRestoresAndContinuesCanonically,
 	int64 SecondRequest = 0;
 	{
 		auto SimScope = FSeinSimContextTestAccess::Enter(*Source.World);
-		FSeinSquadComponent* MutableSquad =
-			Source.World->GetComponentMutable<FSeinSquadComponent>(
+		FSeinSquadPayload* MutableSquad =
+			Source.World->GetComponentMutable<FSeinSquadPayload>(
 				Source.Squad);
 		MutableSquad->Slots[0].SlotTags.Reset();
 		MutableSquad->Slots[0].SlotTags.AddTag(TestSquadSlotRoleWedge);
@@ -636,8 +636,8 @@ TEST(SquadReinforcementSnapshotRestoresAndContinuesCanonically,
 	ASSERT_THAT(IsTrue(SeinTestSnapshotRestore::RestoreTrusted(
 		*Destination, Transferred, &Error)));
 
-	const FSeinSquadComponent* Restored =
-		Destination->GetComponent<FSeinSquadComponent>(Source.Squad);
+	const FSeinSquadPayload* Restored =
+		Destination->GetComponent<FSeinSquadPayload>(Source.Squad);
 	ASSERT_THAT(IsNotNull(Restored));
 	ASSERT_THAT(AreEqual(2, Restored->ReinforceQueue.Num()));
 	ASSERT_THAT(AreEqual(FirstRequest,
@@ -669,10 +669,10 @@ TEST(SquadReinforcementSnapshotRestoresAndContinuesCanonically,
 		ASSERT_THAT(IsTrue(SourceRoot == DestinationRoot));
 	}
 
-	const FSeinSquadComponent* SourceSquad =
-		Source.World->GetComponent<FSeinSquadComponent>(Source.Squad);
-	const FSeinSquadComponent* DestinationSquad =
-		Destination->GetComponent<FSeinSquadComponent>(Source.Squad);
+	const FSeinSquadPayload* SourceSquad =
+		Source.World->GetComponent<FSeinSquadPayload>(Source.Squad);
+	const FSeinSquadPayload* DestinationSquad =
+		Destination->GetComponent<FSeinSquadPayload>(Source.Squad);
 	ASSERT_THAT(IsNotNull(SourceSquad));
 	ASSERT_THAT(IsNotNull(DestinationSquad));
 	ASSERT_THAT(AreEqual(0, SourceSquad->ReinforceQueue.Num()));
@@ -688,7 +688,7 @@ TEST(SquadReinforcementSnapshotRestoresAndContinuesCanonically,
 	FSeinWorldSnapshotReferenceGuard InvalidSnapshotGuard(InvalidSnapshot);
 	{
 		auto SimScope = FSeinSimContextTestAccess::Enter(*Source.World);
-		Source.World->GetComponentMutable<FSeinSquadComponent>(
+		Source.World->GetComponentMutable<FSeinSquadPayload>(
 			Source.Squad)->NextReinforceRequestID = 0;
 	}
 	Source.World->CaptureSnapshot(InvalidSnapshot);
@@ -707,7 +707,7 @@ TEST(SquadReinforcementSnapshotRestoresAndContinuesCanonically,
 		InvalidBrokerSnapshot);
 	{
 		auto SimScope = FSeinSimContextTestAccess::Enter(*Source.World);
-		Source.World->GetComponentMutable<FSeinSquadComponent>(
+		Source.World->GetComponentMutable<FSeinSquadPayload>(
 			Source.Squad)->NextReinforceRequestID = 3;
 		Source.World->GetComponentMutable<FSeinCommandBrokerData>(
 			Source.Squad)->bSelfCullOnEmpty = true;
@@ -759,8 +759,8 @@ TEST(SquadReinforcementAbilityCommandContinuesAcrossCheckpointTransfer,
 
 	FTSTicker::GetCoreTicker().Tick(
 		Source.World->GetFixedDeltaTimeSeconds());
-	const FSeinSquadComponent* SourceSquad =
-		Source.World->GetComponent<FSeinSquadComponent>(Source.Squad);
+	const FSeinSquadPayload* SourceSquad =
+		Source.World->GetComponent<FSeinSquadPayload>(Source.Squad);
 	ASSERT_THAT(IsNotNull(SourceSquad));
 	ASSERT_THAT(AreEqual(1, SourceSquad->ReinforceQueue.Num()));
 	ASSERT_THAT(AreEqual(
@@ -795,8 +795,8 @@ TEST(SquadReinforcementAbilityCommandContinuesAcrossCheckpointTransfer,
 	FTSTicker::GetCoreTicker().Tick(
 		Destination->GetFixedDeltaTimeSeconds());
 	ASSERT_THAT(AreEqual(ContinuedTick, Destination->GetCurrentTick()));
-	const FSeinSquadComponent* DestinationSquad =
-		Destination->GetComponent<FSeinSquadComponent>(Source.Squad);
+	const FSeinSquadPayload* DestinationSquad =
+		Destination->GetComponent<FSeinSquadPayload>(Source.Squad);
 	ASSERT_THAT(IsNotNull(DestinationSquad));
 	ASSERT_THAT(AreEqual(1, DestinationSquad->ReinforceQueue.Num()));
 	ASSERT_THAT(AreEqual(
@@ -929,8 +929,8 @@ TEST(SquadReinforcementAbilityCommandReplaysToExactCompletedState,
 		Writer->ObserveCompletedTick(ExpectedTick);
 	}
 
-	const FSeinSquadComponent* SourceSquad =
-		Source.World->GetComponent<FSeinSquadComponent>(Source.Squad);
+	const FSeinSquadPayload* SourceSquad =
+		Source.World->GetComponent<FSeinSquadPayload>(Source.Squad);
 	ASSERT_THAT(IsNotNull(SourceSquad));
 	ASSERT_THAT(AreEqual(0, SourceSquad->ReinforceQueue.Num()));
 	ASSERT_THAT(IsTrue(SourceSquad->Slots[0].CurrentOccupant.IsValid()));
@@ -984,8 +984,8 @@ TEST(SquadReinforcementAbilityCommandReplaysToExactCompletedState,
 		ASSERT_THAT(IsTrue(SourceRoots[ExpectedTick] == TargetRoot));
 		if (ExpectedTick == EndTick)
 		{
-			const FSeinSquadComponent* TargetSquad =
-				Target->GetComponent<FSeinSquadComponent>(Source.Squad);
+			const FSeinSquadPayload* TargetSquad =
+				Target->GetComponent<FSeinSquadPayload>(Source.Squad);
 			ASSERT_THAT(IsNotNull(TargetSquad));
 			ASSERT_THAT(AreEqual(0, TargetSquad->ReinforceQueue.Num()));
 			ASSERT_THAT(IsTrue(
@@ -1039,8 +1039,8 @@ TEST(SquadDestructionSettlesQueuedChargesPerAuthoredPolicy,
 			ASSERT_THAT(IsTrue(USeinSquadMutationBPFL::
 				SeinQueueSquadReinforcement(
 					Fixture.World, Fixture.Squad, 1, SecondRequest)));
-			FSeinSquadComponent* Mutable =
-				Fixture.World->GetComponentMutable<FSeinSquadComponent>(
+			FSeinSquadPayload* Mutable =
+				Fixture.World->GetComponentMutable<FSeinSquadPayload>(
 					Fixture.Squad);
 			ASSERT_THAT(IsNotNull(Mutable));
 			Mutable->ReinforceRefundPolicy = Case.Policy;

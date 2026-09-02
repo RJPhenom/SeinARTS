@@ -64,7 +64,7 @@ struct FSeinMinimapBlip
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|UI|Minimap")
 	FSeinEntityHandle Entity;
 
-	/** Per-type minimap sprite, copied from the entity's FSeinIdentityComponent::MinimapIcon.
+	/** Per-type minimap sprite, copied from the entity's FSeinIdentityPayload::MinimapIcon.
 	 *  Null → the widget should draw its default dot. Typically tinted by Relation. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|UI|Minimap")
 	TObjectPtr<UTexture2D> Icon = nullptr;

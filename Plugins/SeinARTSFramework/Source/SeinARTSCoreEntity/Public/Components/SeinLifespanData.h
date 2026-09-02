@@ -10,11 +10,11 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Components/SeinComponent.h"
+#include "Components/SeinPayload.h"
 #include "SeinLifespanData.generated.h"
 
 USTRUCT(BlueprintType, meta = (SeinDeterministic, SeinSubData))
-struct SEINARTSCOREENTITY_API FSeinLifespanData : public FSeinComponent
+struct SEINARTSCOREENTITY_API FSeinLifespanData : public FSeinPayload
 {
 	GENERATED_BODY()
 

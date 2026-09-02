@@ -18,9 +18,9 @@
 #include "Core/SeinEntityHandle.h"
 #include "Core/SeinPlayerID.h"
 #include "Actor/SeinActor.h"
-#include "Components/SeinComponent.h"
+#include "Components/SeinPayload.h"
 #include "Data/SeinResourceTypes.h"
-#include "SeinSquadComponent.generated.h"
+#include "SeinSquadPayload.generated.h"
 
 class USeinCommandBrokerResolver;
 class USeinFormation;
@@ -85,7 +85,7 @@ struct SEINARTSCOREENTITY_API FSeinSquadSlot
 	GENERATED_BODY()
 
 	/** Descriptive role/query tags. They may be shared by multiple slots;
-	 *  `FSeinSquadMemberComponent::SlotIndex` and reinforcement
+	 *  `FSeinSquadMemberPayload::SlotIndex` and reinforcement
 	 *  `RequestedSlotIndex` are the exact runtime identities. Tag-based helper
 	 *  APIs retain first-match compatibility and should be used only when that
 	 *  behavior is intended. */
@@ -236,7 +236,7 @@ FORCEINLINE uint32 GetTypeHash(const FSeinSquadReinforceEntry& Entry)
  * last slot empties AND no reinforces are pending).
  */
 USTRUCT(BlueprintType, meta = (SeinDeterministic))
-struct SEINARTSCOREENTITY_API FSeinSquadComponent : public FSeinComponent
+struct SEINARTSCOREENTITY_API FSeinSquadPayload : public FSeinPayload
 {
 	GENERATED_BODY()
 
@@ -291,14 +291,14 @@ struct SEINARTSCOREENTITY_API FSeinSquadComponent : public FSeinComponent
 	 *  to read this flag too).
 	 *
 	 *  Lives here on the squad component â€” not on each member's
-	 *  FSeinNavigationComponent â€” because squad selection is at the SQUAD
+	 *  FSeinNavigationPayload â€” because squad selection is at the SQUAD
 	 *  level (per the framework rule: clicking a squad member selects the
 	 *  squad, not the member). A squad opting out via this flag suppresses
 	 *  previews for ALL of its members in one place; designers don't have to
 	 *  flip every member's per-unit nav-preview opt-out. Members selected
 	 *  outside a squad context (lone units / mixed selections that include
 	 *  non-squad units) still respect their own
-	 *  FSeinNavigationComponent::bShowNavigationPreview.
+	 *  FSeinNavigationPayload::bShowNavigationPreview.
 	 *
 	 *  Default true â€” most squads benefit from the hover preview. Set false
 	 *  for ambient/scripted squads where the visualization noise hurts more
@@ -412,7 +412,7 @@ struct SEINARTSCOREENTITY_API FSeinSquadComponent : public FSeinComponent
 
 };
 
-FORCEINLINE uint32 GetTypeHash(const FSeinSquadComponent& Component)
+FORCEINLINE uint32 GetTypeHash(const FSeinSquadPayload& Component)
 {
 	uint32 Hash = GetTypeHash(Component.Leader);
 	Hash = HashCombine(Hash, GetTypeHash(Component.bCanReinforce));

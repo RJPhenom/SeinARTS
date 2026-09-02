@@ -3,7 +3,7 @@
 
 #include "Abilities/SeinTargeterSpec.h"
 #include "Actor/SeinActor.h"
-#include "Components/SeinAbilityComponent.h"
+#include "Components/SeinAbilityPayload.h"
 #include "Containers/Ticker.h"
 #include "Data/SeinFaction.h"
 #include "Data/SeinMatchSettings.h"

@@ -486,7 +486,7 @@ public:
 	// subcategory (both nested at the bottom of the Navigation section in Project Settings). The
 	// movement-mode determinism toggle and the command-broker resolver live here as direct nav
 	// properties. (Squad dispatch resolver selection is owned by the SeinARTSSquad extension, per
-	// FSeinSquadComponent::DispatchResolverClass — not a base setting.)
+	// FSeinSquadPayload::DispatchResolverClass — not a base setting.)
 
 	/**
 	 * Which navigation system drives pathfinding for the whole game. Movement orders, the level bake,
@@ -684,7 +684,7 @@ public:
 	// disabled) when the picker is None rather than vanishing — no editor customization needed. The model's
 	// SHAPE tuning lives on the shipped USeinAvoidanceDefault class's CDO (subclass it as a Blueprint, tune
 	// the class-defaults, slot it in the picker). Per-UNIT dials — AvoidanceStrength / AvoidanceWeight /
-	// bAvoidSameWeights — live on FSeinMovementComponent.
+	// bAvoidSameWeights — live on FSeinMovementPayload.
 
 	/**
 	 * Which local-avoidance model runs the soft per-tick steering that keeps moving units from crowding

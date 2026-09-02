@@ -32,19 +32,19 @@ class SEINARTSUITOOLKIT_API USeinUIBPFL : public UBlueprintFunctionLibrary
 public:
 	// ==================== Entity Display Helpers ====================
 
-	/** Get an entity's display name from its FSeinIdentityComponent. */
+	/** Get an entity's display name from its FSeinIdentityPayload. */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|UI|Entity", meta = (WorldContext = "WorldContextObject", DisplayName = "Get Entity Display Name"))
 	static FText SeinGetEntityDisplayName(const UObject* WorldContextObject, FSeinEntityHandle Handle);
 
-	/** Get an entity's icon texture from its FSeinIdentityComponent. */
+	/** Get an entity's icon texture from its FSeinIdentityPayload. */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|UI|Entity", meta = (WorldContext = "WorldContextObject", DisplayName = "Get Entity Icon"))
 	static UTexture2D* SeinGetEntityIcon(const UObject* WorldContextObject, FSeinEntityHandle Handle);
 
-	/** Get an entity's portrait texture from its FSeinIdentityComponent. */
+	/** Get an entity's portrait texture from its FSeinIdentityPayload. */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|UI|Entity", meta = (WorldContext = "WorldContextObject", DisplayName = "Get Entity Portrait"))
 	static UTexture2D* SeinGetEntityPortrait(const UObject* WorldContextObject, FSeinEntityHandle Handle);
 
-	/** Get an entity's identity tag (from its FSeinIdentityComponent). */
+	/** Get an entity's identity tag (from its FSeinIdentityPayload). */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|UI|Entity", meta = (WorldContext = "WorldContextObject", DisplayName = "Get Entity Identity Tag"))
 	static FGameplayTag SeinGetEntityIdentityTag(const UObject* WorldContextObject, FSeinEntityHandle Handle);
 

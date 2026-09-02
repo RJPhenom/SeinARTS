@@ -3,7 +3,7 @@
  * @file    SeinCoverEntityDraw.h
  * @brief   Static draw helper bound to FSeinARTSEditorModule's per-component
  *          draw registry. Walks the entity bridge's ComponentData for
- *          `FSeinCoverComponent` entries and draws each provider's Area
+ *          `FSeinCoverPayload` entries and draws each provider's Area
  *          volume + Slots in the BP / level editor viewport.
  *
  *          Lives in SeinARTSCoverEditor so SeinARTSEditor itself stays

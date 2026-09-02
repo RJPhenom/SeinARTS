@@ -35,7 +35,7 @@ public:
 	/**
 	 * Project-wide default resolver class instantiated on every squad's
 	 * CommandBroker at lazy-init time. Consulted by `FSeinSquadSystem` when a
-	 * squad's per-squad `FSeinSquadComponent::DispatchResolverClass` is empty;
+	 * squad's per-squad `FSeinSquadPayload::DispatchResolverClass` is empty;
 	 * the per-squad override always wins when set.
 	 *
 	 * Empty path = use the framework-default `USeinSquadDispatchResolver`

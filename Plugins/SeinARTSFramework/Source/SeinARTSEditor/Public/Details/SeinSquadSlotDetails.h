@@ -41,7 +41,7 @@ public:
 		IPropertyTypeCustomizationUtils& CustomizationUtils) override;
 
 private:
-	/** Walk slot -> Slots array -> FSeinSquadComponent -> FormationClass and report whether the chosen
+	/** Walk slot -> Slots array -> FSeinSquadPayload -> FormationClass and report whether the chosen
 	 *  formation lays members out at authored slot offsets. EMPTY FormationClass, or any case the chain
 	 *  can't be resolved, returns true (show the offset) so the customization only ever HIDES on a
 	 *  confident non-slot answer. */

@@ -6,10 +6,10 @@
  *           Extracted from the legacy `FSeinMovementData` as part of the
  *           Phase-5 module decomposition — nav-relevant authoring lives in
  *           the navigation module, movement-relevant authoring lives in the
- *           movement module (`FSeinMovementComponent`).
+ *           movement module (`FSeinMovementPayload`).
  *
  *           Designer authoring lives on the entity bridge's ComponentData
- *           array — pick `FSeinNavigationComponent` as an entry to author
+ *           array — pick `FSeinNavigationPayload` as an entry to author
  *           footprint / wall padding / acceptance radius / repath behaviour
  *           / nav-layer mask / preview toggle.
  *
@@ -22,11 +22,11 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Components/SeinComponent.h"
-#include "Components/SeinExtentsComponent.h"  // ESeinNavLayerBit
+#include "Components/SeinPayload.h"
+#include "Components/SeinExtentsPayload.h"  // ESeinNavLayerBit
 #include "Types/FixedPoint.h"
 #include "GameplayTagContainer.h"
-#include "SeinNavigationComponent.generated.h"
+#include "SeinNavigationPayload.generated.h"
 
 /** When the move-to action recomputes its path during execution. The original
  *  path is computed once at move-start; long moves can drift off-path due to
@@ -47,7 +47,7 @@ enum class ESeinRepathMode : uint8
 };
 
 USTRUCT(BlueprintType, meta = (SeinDeterministic))
-struct SEINARTSCOREENTITY_API FSeinNavigationComponent : public FSeinComponent
+struct SEINARTSCOREENTITY_API FSeinNavigationPayload : public FSeinPayload
 {
 	GENERATED_BODY()
 
@@ -103,7 +103,7 @@ struct SEINARTSCOREENTITY_API FSeinNavigationComponent : public FSeinComponent
 	FFixedPoint AcceptanceRadius = DefaultArrivalAcceptance();
 
 	/** Which runtime blocker classes affect this unit. The unit is blocked by an
-	 *  `FSeinExtentsComponent` dynamic-nav stamp only when at least one bit is
+	 *  `FSeinExtentsPayload` dynamic-nav stamp only when at least one bit is
 	 *  shared with that stamp's `BlockedNavLayerMask`. Static baked terrain is
 	 *  deliberately separate; use Blocked Terrain Tags below for per-unit
 	 *  ground restrictions. Default 0x01 (bit 0 = normal ground units).
@@ -182,7 +182,7 @@ struct SEINARTSCOREENTITY_API FSeinNavigationComponent : public FSeinComponent
 	bool bShowNavigationPreview = true;
 };
 
-FORCEINLINE uint32 GetTypeHash(const FSeinNavigationComponent& C)
+FORCEINLINE uint32 GetTypeHash(const FSeinNavigationPayload& C)
 {
 	uint32 H = GetTypeHash(C.FallbackFootprintRadius);
 	H = HashCombine(H, GetTypeHash(C.WallPadding));

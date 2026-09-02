@@ -15,7 +15,7 @@
 #include "Core/SeinEntityHandle.h"
 #include "Core/SeinPlayerID.h"
 #include "GameplayTagContainer.h"
-#include "Components/SeinProductionComponent.h"
+#include "Components/SeinProductionPayload.h"
 #include "SeinProductionBPFL.generated.h"
 
 class USeinWorldSubsystem;
@@ -29,17 +29,17 @@ public:
 
 	// ==================== Read ====================
 
-	/** Read FSeinProductionComponent for an entity. Returns false and logs a warning on invalid
+	/** Read FSeinProductionPayload for an entity. Returns false and logs a warning on invalid
 	 *  handle or missing component; OutData is untouched on failure. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Production",
 		meta = (WorldContext = "WorldContextObject", DisplayName = "Get Production Data"))
 	static bool SeinGetProductionData(const UObject* WorldContextObject,
-		FSeinEntityHandle EntityHandle, FSeinProductionComponent& OutData);
+		FSeinEntityHandle EntityHandle, FSeinProductionPayload& OutData);
 
-	/** Batch read FSeinProductionComponent. Invalid/missing entities are skipped (warning logged). */
+	/** Batch read FSeinProductionPayload. Invalid/missing entities are skipped (warning logged). */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Production",
 		meta = (WorldContext = "WorldContextObject", DisplayName = "Get Production Data"))
-	static TArray<FSeinProductionComponent> SeinGetProductionDataMany(const UObject* WorldContextObject,
+	static TArray<FSeinProductionPayload> SeinGetProductionDataMany(const UObject* WorldContextObject,
 		const TArray<FSeinEntityHandle>& EntityHandles);
 
 	/** Check if a player has a specific tech tag. Convenience wrapper around

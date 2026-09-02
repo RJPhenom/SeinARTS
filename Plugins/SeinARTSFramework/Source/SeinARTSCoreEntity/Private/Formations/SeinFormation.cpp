@@ -8,11 +8,11 @@
 #include "Formations/SeinFormation.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Collision/SeinCollisionSpatialHash.h"
-#include "Components/SeinExtentsComponent.h"
+#include "Components/SeinExtentsPayload.h"
 #include "Components/SeinExtentsHelpers.h"
 #include "Components/SeinCommandBrokerData.h"
-#include "Components/SeinMovementComponent.h"
-#include "Components/SeinNavigationComponent.h"
+#include "Components/SeinMovementPayload.h"
+#include "Components/SeinNavigationPayload.h"
 #include "Math/MathLib.h"
 #include "Types/FixedPoint.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
@@ -389,7 +389,7 @@ FFixedPoint USeinFormation::GetFootprintRadius(USeinWorldSubsystem* World, FSein
 		if (Broker->FormationRadius > FFixedPoint::Zero) { return Broker->FormationRadius; }
 	}
 
-	const FSeinExtentsComponent* Extents = World->GetComponent<FSeinExtentsComponent>(Handle);
+	const FSeinExtentsPayload* Extents = World->GetComponent<FSeinExtentsPayload>(Handle);
 	if (!Extents || Extents->Shapes.Num() == 0) return DefaultRadius;
 
 	FFixedPoint Best = FFixedPoint::Zero;
@@ -779,18 +779,18 @@ void USeinFormation::ProjectPositionsToNavigable(
 		for (const FSeinEntityHandle& H : Nearby)
 		{
 			if (Excluded.Contains(H)) continue;
-			const FSeinMovementComponent* Move = World->GetComponent<FSeinMovementComponent>(H);
+			const FSeinMovementPayload* Move = World->GetComponent<FSeinMovementPayload>(H);
 			if (!Move || Move->bHasTarget) continue; // not a unit, or in motion → not occupancy
 			const FSeinEntity* Entity = World->GetEntityPool().Get(H);
 			if (!Entity) continue;
 			FFixedPoint BodyRadius = FFixedPoint::Zero;
-			if (const FSeinExtentsComponent* Ext = World->GetComponent<FSeinExtentsComponent>(H))
+			if (const FSeinExtentsPayload* Ext = World->GetComponent<FSeinExtentsPayload>(H))
 			{
 				BodyRadius = SeinExtentsHelpers::GetColliderBoundingRadius(*Ext);
 			}
 			if (BodyRadius <= FFixedPoint::Zero)
 			{
-				if (const FSeinNavigationComponent* Nav = World->GetComponent<FSeinNavigationComponent>(H))
+				if (const FSeinNavigationPayload* Nav = World->GetComponent<FSeinNavigationPayload>(H))
 				{
 					BodyRadius = Nav->FallbackFootprintRadius;
 				}

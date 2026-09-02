@@ -12,7 +12,7 @@
  *          shutdown register this extension's stable simulation-content and
  *          exact movement-state coverage descriptors; the concrete classes
  *          are discovered through the framework-owned USeinMovement root and
- *          selected through FSeinMovementComponent::MovementClass.
+ *          selected through FSeinMovementPayload::MovementClass.
  */
 
 #pragma once

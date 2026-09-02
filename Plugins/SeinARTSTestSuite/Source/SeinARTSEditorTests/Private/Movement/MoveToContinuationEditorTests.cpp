@@ -5,9 +5,9 @@
 #include "Abilities/SeinLatentActionManager.h"
 #include "Abilities/SeinMoveToProxy.h"
 #include "Actions/SeinMoveToAction.h"
-#include "Components/SeinAbilityComponent.h"
-#include "Components/SeinMovementComponent.h"
-#include "Components/SeinNavigationComponent.h"
+#include "Components/SeinAbilityPayload.h"
+#include "Components/SeinMovementPayload.h"
+#include "Components/SeinNavigationPayload.h"
 #include "Data/SeinWorldSnapshot.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphPin.h"
@@ -528,7 +528,7 @@ namespace UE::SeinARTSTests
 							World->SpawnAbstractEntity(
 								FFixedTransform(),
 								FSeinPlayerID::Neutral());
-						FSeinMovementComponent Movement;
+						FSeinMovementPayload Movement;
 						Movement.MovementClass =
 							FSoftClassPath(
 								USeinMoveToContinuationEditorTestMovement::
@@ -539,7 +539,7 @@ namespace UE::SeinARTSTests
 						if (bEnableRepath
 							|| bEnableEscapeRecovery)
 						{
-							FSeinNavigationComponent Navigation;
+							FSeinNavigationPayload Navigation;
 							if (bEnableEscapeRecovery)
 							{
 								Navigation.FallbackFootprintRadius =
@@ -563,7 +563,7 @@ namespace UE::SeinARTSTests
 						}
 						World->AddComponent(
 							Entity,
-							FSeinAbilityComponent());
+							FSeinAbilityPayload());
 						AbilityID =
 							USeinAbilityBPFL::
 								SeinGrantAbility(

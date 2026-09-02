@@ -159,7 +159,7 @@ struct SEINARTSCOREENTITY_API FSeinComponentEntityOverrideRecord
 	TArray<FSeinComponentPropertyPathSegment> PropertyPath;
 };
 
-/** Authored portion of FSeinAbilityComponent::GrantedAbilities for one entity.
+/** Authored portion of FSeinAbilityPayload::GrantedAbilities for one entity.
  * The live component also contains effect/runtime-granted classes, so this
  * separate canonical baseline is required for property-safe reconciliation. */
 USTRUCT(meta = (SeinDeterministic))

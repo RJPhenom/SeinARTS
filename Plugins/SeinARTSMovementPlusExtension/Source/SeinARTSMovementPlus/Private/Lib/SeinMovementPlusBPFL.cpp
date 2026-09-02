@@ -6,7 +6,7 @@
 
 #include "Lib/SeinMovementPlusBPFL.h"
 
-#include "Components/SeinMovementComponent.h"
+#include "Components/SeinMovementPayload.h"
 #include "Lib/SeinMovementBPFL.h"
 
 namespace UE::SeinARTSMovementPlus::Telemetry
@@ -26,7 +26,7 @@ namespace UE::SeinARTSMovementPlus::Telemetry
 		}
 	}
 
-	void SetRenderValue(FSeinMovementComponent& MovementData, int32 Slot, FFixedPoint Value)
+	void SetRenderValue(FSeinMovementPayload& MovementData, int32 Slot, FFixedPoint Value)
 	{
 		if (Slot < 0 || Slot >= 64)
 		{
@@ -39,7 +39,7 @@ namespace UE::SeinARTSMovementPlus::Telemetry
 		MovementData.RenderState[Slot] = Value;
 	}
 
-	void ResetMovementPlusRenderValues(FSeinMovementComponent& MovementData)
+	void ResetMovementPlusRenderValues(FSeinMovementPayload& MovementData)
 	{
 		SetRenderValue(MovementData, SteeringAngleSlot, FFixedPoint::Zero);
 		SetRenderValue(MovementData, YawRateSlot, FFixedPoint::Zero);

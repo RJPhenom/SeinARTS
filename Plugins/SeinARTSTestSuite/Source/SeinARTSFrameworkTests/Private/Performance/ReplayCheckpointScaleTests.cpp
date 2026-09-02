@@ -1,10 +1,10 @@
 #include "CQTest.h"
 #include "Components/ActorTestSpawner.h"
 
-#include "Components/SeinAbilityComponent.h"
-#include "Components/SeinExtentsComponent.h"
-#include "Components/SeinMovementComponent.h"
-#include "Components/SeinNavigationComponent.h"
+#include "Components/SeinAbilityPayload.h"
+#include "Components/SeinExtentsPayload.h"
+#include "Components/SeinMovementPayload.h"
+#include "Components/SeinNavigationPayload.h"
 #include "Data/SeinWorldSnapshot.h"
 #include "HAL/PlatformTime.h"
 #include "Serialization/MemoryWriter.h"
@@ -83,7 +83,7 @@ namespace UE::SeinARTSTests
 					FSeinExtentsShape Shape;
 					Shape.Radius = FFixedPoint::FromInt(50);
 					Shape.Height = FFixedPoint::FromInt(180);
-					FSeinExtentsComponent Extents;
+					FSeinExtentsPayload Extents;
 					Extents.Shapes.Add(Shape);
 					Extents.bCollisionEnabled = true;
 					Extents.Mobility = ESeinCollisionMobility::Movable;
@@ -91,7 +91,7 @@ namespace UE::SeinARTSTests
 					Extents.ObjectType.Channel = FName(TEXT("Default"));
 					World->AddComponent(Handle, Extents);
 
-					FSeinMovementComponent Movement;
+					FSeinMovementPayload Movement;
 					Movement.Velocity = FFixedVector(
 						FFixedPoint::FromInt(Index % 7),
 						FFixedPoint::FromInt(-(Index % 5)),
@@ -99,8 +99,8 @@ namespace UE::SeinARTSTests
 					Movement.HomePos = Position;
 					Movement.bHomeSeeded = true;
 					World->AddComponent(Handle, Movement);
-					World->AddComponent(Handle, FSeinNavigationComponent());
-					World->AddComponent(Handle, FSeinAbilityComponent());
+					World->AddComponent(Handle, FSeinNavigationPayload());
+					World->AddComponent(Handle, FSeinAbilityPayload());
 				}
 			};
 
@@ -151,7 +151,7 @@ namespace UE::SeinARTSTests
 				return false;
 			}
 			const FString MovementStoragePath =
-				FSeinMovementComponent::StaticStruct()->GetPathName();
+				FSeinMovementPayload::StaticStruct()->GetPathName();
 			const FSeinSnapshotComponentStorageBlob* PreviousMovementBlob =
 				CachedSnapshot.ComponentStorageBlobs.Find(MovementStoragePath);
 			if (!PreviousMovementBlob)
@@ -188,11 +188,11 @@ namespace UE::SeinARTSTests
 				return false;
 			}
 			FGuid TopologyRootBefore;
-			const FSeinMovementComponent* MovementToRemove =
-				World->GetComponent<FSeinMovementComponent>(Handles.Last());
+			const FSeinMovementPayload* MovementToRemove =
+				World->GetComponent<FSeinMovementPayload>(Handles.Last());
 			ISeinComponentStorage* MovementStorage =
 				World->GetComponentStorageMutable(
-					FSeinMovementComponent::StaticStruct());
+					FSeinMovementPayload::StaticStruct());
 			if (!MovementToRemove || !MovementStorage
 				|| !World->ComputeCanonicalStateRoot(TopologyRootBefore, OutError))
 			{
@@ -202,7 +202,7 @@ namespace UE::SeinARTSTests
 				World->StopSimulation();
 				return false;
 			}
-			const FSeinMovementComponent RemovedMovement = *MovementToRemove;
+			const FSeinMovementPayload RemovedMovement = *MovementToRemove;
 			MovementStorage->RemoveComponent(Handles.Last());
 			FSeinWorldSnapshot RemovedSnapshot;
 			World->CaptureSnapshot(RemovedSnapshot);
@@ -236,8 +236,8 @@ namespace UE::SeinARTSTests
 				World->StopSimulation();
 				return false;
 			}
-			FSeinMovementComponent* RetainedMovementPointer =
-				World->GetComponentMutable<FSeinMovementComponent>(Handles[0]);
+			FSeinMovementPayload* RetainedMovementPointer =
+				World->GetComponentMutable<FSeinMovementPayload>(Handles[0]);
 			if (!RetainedMovementPointer)
 			{
 				OutError = TEXT("Retained-pointer invalidation fixture was unavailable.");
@@ -261,7 +261,7 @@ namespace UE::SeinARTSTests
 			if (!FirstRetainedBlob || !SecondRetainedBlob
 				|| FirstRetainedBlob->Bytes == SecondRetainedBlob->Bytes
 				|| World->HasComponentStorageSnapshotCacheEntryForTests(
-					FSeinMovementComponent::StaticStruct())
+					FSeinMovementPayload::StaticStruct())
 				|| World->GetComponentStorageSnapshotCacheBytesForTests()
 					!= CacheBytesBeforeRetainedPointer
 						- static_cast<uint64>(PreviousMovementBytes.Num()))
@@ -283,8 +283,8 @@ namespace UE::SeinARTSTests
 			{
 				for (int32 Index = 0; Index < Handles.Num(); ++Index)
 				{
-					FSeinMovementComponent* Movement =
-						World->GetComponentMutable<FSeinMovementComponent>(Handles[Index]);
+					FSeinMovementPayload* Movement =
+						World->GetComponentMutable<FSeinMovementPayload>(Handles[Index]);
 					if (!Movement)
 					{
 						OutError = TEXT("Checkpoint scale movement mutation failed.");

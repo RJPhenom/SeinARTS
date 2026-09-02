@@ -21,14 +21,14 @@
 #include "CoreMinimal.h"
 #include "Abilities/SeinAbility.h"
 #include "Brokers/SeinDefaultCommandBrokerResolver.h"
-#include "Components/SeinAbilityComponent.h"
+#include "Components/SeinAbilityPayload.h"
 #include "Components/SeinBrokerMembershipData.h"
 #include "Components/SeinCommandBrokerData.h"
 #include "Components/SeinContainmentMemberData.h"
-#include "Components/SeinExtentsComponent.h"
+#include "Components/SeinExtentsPayload.h"
 #include "Components/SeinExtentsHelpers.h"
-#include "Components/SeinMovementComponent.h"
-#include "Components/SeinNavigationComponent.h"
+#include "Components/SeinMovementPayload.h"
+#include "Components/SeinNavigationPayload.h"
 #include "Settings/PluginSettings.h"
 #include "Simulation/ComponentStorage.h"
 #include "Simulation/SeinWorldSubsystem.h"
@@ -53,7 +53,7 @@ public:
 		}
 
 		const ISeinComponentStorage* MovementStorage =
-			World.GetComponentStorageRaw(FSeinMovementComponent::StaticStruct());
+			World.GetComponentStorageRaw(FSeinMovementPayload::StaticStruct());
 		if (!MovementStorage)
 		{
 			return;
@@ -66,8 +66,8 @@ public:
 			// Preserve broker-first semantics: a broker carrier is never loose.
 			if (World.GetComponent<FSeinCommandBrokerData>(Handle)) return;
 
-			const FSeinMovementComponent* Movement =
-				static_cast<const FSeinMovementComponent*>(RawComponent);
+			const FSeinMovementPayload* Movement =
+				static_cast<const FSeinMovementPayload*>(RawComponent);
 			const FSeinEntity* Entity = World.GetEntity(Handle);
 			if (!Movement || !Entity || !Movement->bHomeSeeded
 				|| Movement->bHasTarget
@@ -86,8 +86,8 @@ public:
 				World.GetComponent<FSeinContainmentMemberData>(Handle);
 			const bool bContained = Containment
 				&& Containment->CurrentContainer.IsValid();
-			const FSeinAbilityComponent* AbilityComponent =
-				World.GetComponent<FSeinAbilityComponent>(Handle);
+			const FSeinAbilityPayload* AbilityComponent =
+				World.GetComponent<FSeinAbilityPayload>(Handle);
 			const USeinAbility* ActiveAbility = AbilityComponent
 				? AbilityComponent->GetActiveAbility(World)
 				: nullptr;
@@ -199,8 +199,8 @@ public:
 	{
 		for (const FSeinEntityHandle& Handle : Candidates)
 		{
-			const FSeinMovementComponent* Movement =
-				World.GetComponent<FSeinMovementComponent>(Handle);
+			const FSeinMovementPayload* Movement =
+				World.GetComponent<FSeinMovementPayload>(Handle);
 			if (!Movement || !Movement->bHomeSeeded) continue;
 
 			// An earlier candidate may have synchronously created this membership.
@@ -273,15 +273,15 @@ private:
 		FFixedPoint ConfiguredThreshold)
 	{
 		FFixedPoint Acceptance = FFixedPoint::Zero;
-		if (const FSeinNavigationComponent* Navigation =
-			World.GetComponent<FSeinNavigationComponent>(Member))
+		if (const FSeinNavigationPayload* Navigation =
+			World.GetComponent<FSeinNavigationPayload>(Member))
 		{
 			Acceptance = Navigation->AcceptanceRadius;
 		}
 		if (Acceptance <= FFixedPoint::Zero)
 		{
 			Acceptance =
-				FSeinNavigationComponent::DefaultArrivalAcceptance();
+				FSeinNavigationPayload::DefaultArrivalAcceptance();
 		}
 
 		const FFixedPoint HysteresisFloor = Acceptance + Acceptance;
@@ -415,8 +415,8 @@ private:
 		for (const FSeinEntityHandle& Neighbor : NeighborScratch)
 		{
 			if (Broker.Members.Contains(Neighbor)) continue;
-			const FSeinMovementComponent* Movement =
-				World.GetComponent<FSeinMovementComponent>(Neighbor);
+			const FSeinMovementPayload* Movement =
+				World.GetComponent<FSeinMovementPayload>(Neighbor);
 			if (!Movement) continue;
 			if (!Movement->bHasTarget
 				&& Movement->Velocity.SizeSquared() <= FFixedPoint::Epsilon)
@@ -448,8 +448,8 @@ private:
 		for (int32 Index = 0; Index < UnreleasedMembers.Num(); ++Index)
 		{
 			const FSeinEntityHandle Member = UnreleasedMembers[Index];
-			const FSeinMovementComponent* Movement =
-				World.GetComponent<FSeinMovementComponent>(Member);
+			const FSeinMovementPayload* Movement =
+				World.GetComponent<FSeinMovementPayload>(Member);
 			const FSeinEntity* Entity = World.GetEntity(Member);
 			if (!Movement || !Entity) continue;
 
@@ -465,8 +465,8 @@ private:
 			}
 
 			Result.bAnyDisplaced = true;
-			const FSeinAbilityComponent* AbilityComponent =
-				World.GetComponent<FSeinAbilityComponent>(Member);
+			const FSeinAbilityPayload* AbilityComponent =
+				World.GetComponent<FSeinAbilityPayload>(Member);
 			const USeinAbility* ActiveAbility = AbilityComponent
 				? AbilityComponent->GetActiveAbility(World)
 				: nullptr;
@@ -539,15 +539,15 @@ private:
 		FSeinEntityHandle Entity)
 	{
 		FFixedPoint Radius = FFixedPoint::Zero;
-		if (const FSeinExtentsComponent* Extents =
-			World.GetComponent<FSeinExtentsComponent>(Entity))
+		if (const FSeinExtentsPayload* Extents =
+			World.GetComponent<FSeinExtentsPayload>(Entity))
 		{
 			Radius = SeinExtentsHelpers::GetColliderBoundingRadius(*Extents);
 		}
 		if (Radius <= FFixedPoint::Zero)
 		{
-			if (const FSeinNavigationComponent* Navigation =
-				World.GetComponent<FSeinNavigationComponent>(Entity))
+			if (const FSeinNavigationPayload* Navigation =
+				World.GetComponent<FSeinNavigationPayload>(Entity))
 			{
 				Radius = Navigation->FallbackFootprintRadius;
 			}

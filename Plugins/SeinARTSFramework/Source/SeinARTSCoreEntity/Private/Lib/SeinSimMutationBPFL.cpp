@@ -50,8 +50,8 @@ namespace
 	}
 }
 
-bool USeinSimMutationBPFL::SeinSetAbilityData(const UObject* WCO, FSeinEntityHandle H, const FSeinAbilityComponent& D)       { return WriteWholeStruct(WCO, H, D, TEXT("SetAbilityData")); }
-bool USeinSimMutationBPFL::SeinSetProductionData(const UObject* WCO, FSeinEntityHandle H, const FSeinProductionComponent& D) { return WriteWholeStruct(WCO, H, D, TEXT("SetProductionData")); }
+bool USeinSimMutationBPFL::SeinSetAbilityData(const UObject* WCO, FSeinEntityHandle H, const FSeinAbilityPayload& D)       { return WriteWholeStruct(WCO, H, D, TEXT("SetAbilityData")); }
+bool USeinSimMutationBPFL::SeinSetProductionData(const UObject* WCO, FSeinEntityHandle H, const FSeinProductionPayload& D) { return WriteWholeStruct(WCO, H, D, TEXT("SetProductionData")); }
 
 bool USeinSimMutationBPFL::SeinSetComponent(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, UScriptStruct* StructType, const FInstancedStruct& NewData)
 {
@@ -179,7 +179,7 @@ bool USeinSimMutationBPFL::SeinApplyFieldDelta(
 
 // ─── Movement field-level (removed) ───
 // See SeinSimMutationBPFL.h for the rationale. Designers use the generic
-// K2Node_SeinSetComponent for FSeinMovementComponent / FSeinNavigationComponent
+// K2Node_SeinSetComponent for FSeinMovementPayload / FSeinNavigationPayload
 // field mutation.
 
 // ─── Production field-level ───
@@ -189,9 +189,9 @@ bool USeinSimMutationBPFL::SeinSetRallyPoint(const UObject* WCO, FSeinEntityHand
 	USeinWorldSubsystem* S = GetWorldSubsystem(WCO);
 	if (!S) return false;
 	if (!S->RequireStateMutationAuthorization(TEXT("SetRallyPoint"))) return false;
-	FSeinProductionComponent* D =
-		S->GetComponentMutable<FSeinProductionComponent>(H);
-	if (!D) { UE_LOG(LogSeinBPFL, Warning, TEXT("SetRallyPoint: entity %s has no FSeinProductionComponent"), *H.ToString()); return false; }
+	FSeinProductionPayload* D =
+		S->GetComponentMutable<FSeinProductionPayload>(H);
+	if (!D) { UE_LOG(LogSeinBPFL, Warning, TEXT("SetRallyPoint: entity %s has no FSeinProductionPayload"), *H.ToString()); return false; }
 	D->bRallyToEntity = false;
 	// Identity rotation — this legacy mutation BPFL takes a location only.
 	// Designers wanting facing should call USeinProductionBPFL::SeinSetRallyPoint(Transform).
@@ -235,9 +235,9 @@ bool USeinSimMutationBPFL::SeinSetCurrentBuildProgress(const UObject* WCO, FSein
 	USeinWorldSubsystem* S = GetWorldSubsystem(WCO);
 	if (!S) return false;
 	if (!S->RequireStateMutationAuthorization(TEXT("SetCurrentBuildProgress"))) return false;
-	FSeinProductionComponent* D =
-		S->GetComponentMutable<FSeinProductionComponent>(H);
-	if (!D) { UE_LOG(LogSeinBPFL, Warning, TEXT("SetCurrentBuildProgress: entity %s has no FSeinProductionComponent"), *H.ToString()); return false; }
+	FSeinProductionPayload* D =
+		S->GetComponentMutable<FSeinProductionPayload>(H);
+	if (!D) { UE_LOG(LogSeinBPFL, Warning, TEXT("SetCurrentBuildProgress: entity %s has no FSeinProductionPayload"), *H.ToString()); return false; }
 	D->CurrentBuildProgress = V;
 	return true;
 }
@@ -316,10 +316,10 @@ bool USeinSimMutationBPFL::SeinSetChildLocalRotation(const UObject* WCO, FSeinEn
 	USeinWorldSubsystem* S = GetWorldSubsystem(WCO);
 	if (!S) return false;
 	if (!S->RequireStateMutationAuthorization(TEXT("SetChildLocalRotation"))) return false;
-	FSeinChildTransformsComponent* Data =
-		S->GetComponentMutable<FSeinChildTransformsComponent>(
+	FSeinChildTransformsPayload* Data =
+		S->GetComponentMutable<FSeinChildTransformsPayload>(
 			Handle);
-	if (!Data) { UE_LOG(LogSeinBPFL, Warning, TEXT("SetChildLocalRotation: entity %s has no FSeinChildTransformsComponent"), *Handle.ToString()); return false; }
+	if (!Data) { UE_LOG(LogSeinBPFL, Warning, TEXT("SetChildLocalRotation: entity %s has no FSeinChildTransformsPayload"), *Handle.ToString()); return false; }
 	FSeinChildTransform* Found = FindByTagMutable(Data->Children, Tag);
 	if (!Found) { UE_LOG(LogSeinBPFL, Warning, TEXT("SetChildLocalRotation: entity %s has no child with tag %s"), *Handle.ToString(), *Tag.ToString()); return false; }
 	Found->LocalTransform.Rotation = NewRotation;
@@ -331,10 +331,10 @@ bool USeinSimMutationBPFL::SeinSetChildLocalTransform(const UObject* WCO, FSeinE
 	USeinWorldSubsystem* S = GetWorldSubsystem(WCO);
 	if (!S) return false;
 	if (!S->RequireStateMutationAuthorization(TEXT("SetChildLocalTransform"))) return false;
-	FSeinChildTransformsComponent* Data =
-		S->GetComponentMutable<FSeinChildTransformsComponent>(
+	FSeinChildTransformsPayload* Data =
+		S->GetComponentMutable<FSeinChildTransformsPayload>(
 			Handle);
-	if (!Data) { UE_LOG(LogSeinBPFL, Warning, TEXT("SetChildLocalTransform: entity %s has no FSeinChildTransformsComponent"), *Handle.ToString()); return false; }
+	if (!Data) { UE_LOG(LogSeinBPFL, Warning, TEXT("SetChildLocalTransform: entity %s has no FSeinChildTransformsPayload"), *Handle.ToString()); return false; }
 	FSeinChildTransform* Found = FindByTagMutable(Data->Children, Tag);
 	if (!Found) { UE_LOG(LogSeinBPFL, Warning, TEXT("SetChildLocalTransform: entity %s has no child with tag %s"), *Handle.ToString(), *Tag.ToString()); return false; }
 	Found->LocalTransform = NewTransform;
@@ -351,10 +351,10 @@ bool USeinSimMutationBPFL::SeinTurnChildToward(const UObject* WCO, FSeinEntityHa
 	const FSeinEntity* Entity = S->GetEntity(Handle);
 	if (!Entity) return false;
 
-	FSeinChildTransformsComponent* Data =
-		S->GetComponentMutable<FSeinChildTransformsComponent>(
+	FSeinChildTransformsPayload* Data =
+		S->GetComponentMutable<FSeinChildTransformsPayload>(
 			Handle);
-	if (!Data) { UE_LOG(LogSeinBPFL, Warning, TEXT("TurnChildToward: entity %s has no FSeinChildTransformsComponent"), *Handle.ToString()); return false; }
+	if (!Data) { UE_LOG(LogSeinBPFL, Warning, TEXT("TurnChildToward: entity %s has no FSeinChildTransformsPayload"), *Handle.ToString()); return false; }
 
 	FSeinChildTransform* Found = FindByTagMutable(Data->Children, Tag);
 	if (!Found) { UE_LOG(LogSeinBPFL, Warning, TEXT("TurnChildToward: entity %s has no child with tag %s"), *Handle.ToString(), *Tag.ToString()); return false; }

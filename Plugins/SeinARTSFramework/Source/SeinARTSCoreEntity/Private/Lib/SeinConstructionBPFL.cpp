@@ -8,7 +8,7 @@
 
 #include "Lib/SeinConstructionBPFL.h"
 #include "Simulation/SeinWorldSubsystem.h"
-#include "Components/SeinConstructionComponent.h"
+#include "Components/SeinConstructionPayload.h"
 #include "Events/SeinVisualEvent.h"
 #include "Lib/SeinEffectBPFL.h"
 #include "Tags/SeinARTSGameplayTags.h"
@@ -30,7 +30,7 @@ bool USeinConstructionBPFL::SeinIsUnderConstruction(const UObject* WorldContextO
 {
 	USeinWorldSubsystem* Sub = GetSubsystem(WorldContextObject);
 	if (!Sub) return false;
-	const FSeinConstructionComponent* Data = Sub->GetComponent<FSeinConstructionComponent>(Entity);
+	const FSeinConstructionPayload* Data = Sub->GetComponent<FSeinConstructionPayload>(Entity);
 	if (!Data) return false;
 	// Component present + threshold not yet crossed = active construction.
 	// Once Progress >= TimeToCompletion, AddProgress's auto-finish removes
@@ -42,7 +42,7 @@ FFixedPoint USeinConstructionBPFL::SeinGetConstructionPercent(const UObject* Wor
 {
 	USeinWorldSubsystem* Sub = GetSubsystem(WorldContextObject);
 	if (!Sub) return FFixedPoint::Zero;
-	const FSeinConstructionComponent* Data = Sub->GetComponent<FSeinConstructionComponent>(Entity);
+	const FSeinConstructionPayload* Data = Sub->GetComponent<FSeinConstructionPayload>(Entity);
 	if (!Data) return FFixedPoint::Zero;
 	if (Data->TimeToCompletion <= FFixedPoint::Zero) return FFixedPoint::One;
 	const FFixedPoint Ratio = Data->Progress / Data->TimeToCompletion;
@@ -64,8 +64,8 @@ bool USeinConstructionBPFL::SeinAddConstructionProgress(const UObject* WorldCont
 		return false;
 	}
 
-	FSeinConstructionComponent* Data =
-		Sub->GetComponentMutable<FSeinConstructionComponent>(
+	FSeinConstructionPayload* Data =
+		Sub->GetComponentMutable<FSeinConstructionPayload>(
 			Entity);
 	if (!Data)
 	{
@@ -125,8 +125,8 @@ void USeinConstructionBPFL::SeinFinishConstruction(const UObject* WorldContextOb
 	// effect inspect the entity in its just-finished state (no longer "under
 	// construction" — abilities are unblocked, mesh-swap can fire, etc.).
 	TSubclassOf<USeinEffect> CompletionEffect = nullptr;
-	if (FSeinConstructionComponent* Data =
-		Sub->GetComponentMutable<FSeinConstructionComponent>(
+	if (FSeinConstructionPayload* Data =
+		Sub->GetComponentMutable<FSeinConstructionPayload>(
 			Entity))
 	{
 		CompletionEffect = Data->CompletionEffect;
@@ -147,7 +147,7 @@ void USeinConstructionBPFL::SeinFinishConstruction(const UObject* WorldContextOb
 
 	// 2. Remove the construction component itself. The entity stops being
 	//    "under construction" — IsUnderConstruction now returns false.
-	Sub->RemoveComponent<FSeinConstructionComponent>(Entity);
+	Sub->RemoveComponent<FSeinConstructionPayload>(Entity);
 
 	// 3. Notify the render layer — the entity's USeinConstructionRenderComponent
 	//    consumes this and reverses the placement-visual swap (destroys the

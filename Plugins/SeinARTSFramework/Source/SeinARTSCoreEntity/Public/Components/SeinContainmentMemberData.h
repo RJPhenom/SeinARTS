@@ -11,7 +11,7 @@
 #include "CoreMinimal.h"
 #include "GameplayTagContainer.h"
 #include "Core/SeinEntityHandle.h"
-#include "Components/SeinComponent.h"
+#include "Components/SeinPayload.h"
 #include "SeinContainmentMemberData.generated.h"
 
 /**
@@ -20,7 +20,7 @@
  * framework populates the runtime fields on enter/exit.
  */
 USTRUCT(BlueprintType, meta = (SeinDeterministic, SeinSubData))
-struct SEINARTSCOREENTITY_API FSeinContainmentMemberData : public FSeinComponent
+struct SEINARTSCOREENTITY_API FSeinContainmentMemberData : public FSeinPayload
 {
 	GENERATED_BODY()
 

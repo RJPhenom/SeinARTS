@@ -2,8 +2,8 @@
 #include "Components/ActorTestSpawner.h"
 
 #include "Actor/SeinEntityBridgeComponent.h"
-#include "Components/SeinAbilityComponent.h"
-#include "Components/SeinActiveEffectsComponent.h"
+#include "Components/SeinAbilityPayload.h"
+#include "Components/SeinActiveEffectsPayload.h"
 #include "Containers/Ticker.h"
 #include "Collision/SeinCollisionSpatialHash.h"
 #include "Simulation/SeinTestSimContext.h"
@@ -107,7 +107,7 @@ namespace
 	{
 		check(World.GetMatchBootstrapState() == ESeinMatchBootstrapState::Applying);
 		const FSeinEntityHandle Handle = World.SpawnAbstractEntity(FFixedTransform(), Owner);
-		World.AddComponent(Handle, FSeinActiveEffectsComponent());
+		World.AddComponent(Handle, FSeinActiveEffectsPayload());
 		return Handle;
 	}
 
@@ -314,7 +314,7 @@ namespace
 			Bridge = const_cast<USeinEntityBridgeComponent*>(Bridges[0]);
 			PreviousComponentData = Bridge->ComponentData;
 			PreviousBaseTags = Bridge->BaseTags;
-			Bridge->ComponentData.Add(FInstancedStruct::Make(FSeinAbilityComponent()));
+			Bridge->ComponentData.Add(FInstancedStruct::Make(FSeinAbilityPayload()));
 			Bridge->BaseTags.AddTag(ClassTag);
 		}
 
@@ -568,14 +568,14 @@ namespace UE::SeinARTSTests
 				Target, USeinEffectIdentityInstanceTestEffect::StaticClass(), Target)));
 		}
 		ASSERT_THAT(AreEqual(0,
-			World->GetComponent<FSeinActiveEffectsComponent>(Target)->ActiveEffects.Num()));
+			World->GetComponent<FSeinActiveEffectsPayload>(Target)->ActiveEffects.Num()));
 
 		ASSERT_THAT(IsTrue(
 			SeinTestSnapshotRestore::RestoreTrusted(*World, Snapshot)));
 		FTSTicker::GetCoreTicker().Tick(World->GetFixedDeltaTimeSeconds());
 		World->StopSimulation();
 		ASSERT_THAT(AreEqual(0,
-			World->GetComponent<FSeinActiveEffectsComponent>(Target)->ActiveEffects.Num()));
+			World->GetComponent<FSeinActiveEffectsPayload>(Target)->ActiveEffects.Num()));
 	}
 
 	TEST(EffectAllocatorProgressIsPartOfTheStateHash, "SeinARTS.Unit.Effects")
@@ -658,7 +658,7 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(TickForOneSimSecond(*World)));
 		ASSERT_THAT(AreEqual(1, FirstTicks));
 		ASSERT_THAT(AreEqual(0, SecondTicks));
-		const FSeinActiveEffectsComponent* Effects = World->GetComponent<FSeinActiveEffectsComponent>(Target);
+		const FSeinActiveEffectsPayload* Effects = World->GetComponent<FSeinActiveEffectsPayload>(Target);
 		ASSERT_THAT(IsNotNull(Effects));
 		ASSERT_THAT(AreEqual(1, Effects->ActiveEffects.Num()));
 	}
@@ -699,7 +699,7 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(bInitialRemovalSucceeded));
 		ASSERT_THAT(IsFalse(bRecursiveSelfRemovalResult));
 		ASSERT_THAT(AreEqual(2, RemovalCallbacks));
-		const FSeinActiveEffectsComponent* Effects = World->GetComponent<FSeinActiveEffectsComponent>(Target);
+		const FSeinActiveEffectsPayload* Effects = World->GetComponent<FSeinActiveEffectsPayload>(Target);
 		ASSERT_THAT(IsNotNull(Effects));
 		ASSERT_THAT(AreEqual(0, Effects->ActiveEffects.Num()));
 	}
@@ -722,8 +722,8 @@ namespace UE::SeinARTSTests
 			{
 				return;
 			}
-			const FSeinActiveEffectsComponent* Active =
-				World->GetComponent<FSeinActiveEffectsComponent>(CallbackTarget);
+			const FSeinActiveEffectsPayload* Active =
+				World->GetComponent<FSeinActiveEffectsPayload>(CallbackTarget);
 			if (!Active || Active->ActiveEffects.Num() != 1) return;
 			bSawActiveInstance = true;
 			RemovedID = Active->ActiveEffects[0].EffectInstanceID;
@@ -800,8 +800,8 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(AreEqual(1, ApplyCalls));
 		ASSERT_THAT(AreEqual(1, RemovedCalls));
 		ASSERT_THAT(IsFalse(World->IsEntityAlive(Target)));
-		const FSeinActiveEffectsComponent* Effects =
-			World->GetComponent<FSeinActiveEffectsComponent>(Target);
+		const FSeinActiveEffectsPayload* Effects =
+			World->GetComponent<FSeinActiveEffectsPayload>(Target);
 		ASSERT_THAT(IsNull(Effects));
 
 		const TArray<FSeinVisualEvent> Events = World->FlushVisualEvents();
@@ -899,8 +899,8 @@ namespace UE::SeinARTSTests
 			[&](FSeinEntityHandle Owner)
 		{
 			++PassiveActivations;
-			const FSeinActiveEffectsComponent* Active =
-				World->GetComponent<FSeinActiveEffectsComponent>(Owner);
+			const FSeinActiveEffectsPayload* Active =
+				World->GetComponent<FSeinActiveEffectsPayload>(Owner);
 			if (!Active || Active->ActiveEffects.Num() != 1) return;
 			bPassiveRemovalSucceeded = World->RemoveEffectByID(
 				Active->ActiveEffects[0].EffectInstanceID, /*bByExpiration=*/false);
@@ -917,7 +917,7 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
 		{
 			Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
-			World->AddComponent(Target, FSeinAbilityComponent());
+			World->AddComponent(Target, FSeinAbilityPayload());
 			World->FlushVisualEvents();
 			AssignedID = World->ApplyEffect(
 				Target, USeinEffectPassiveGrantTestEffect::StaticClass(), Target);
@@ -928,9 +928,9 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(AreEqual(0, EffectApplyCallbacks));
 		ASSERT_THAT(AreEqual(1, EffectRemovalCallbacks));
 
-		const FSeinActiveEffectsComponent* Effects =
-			World->GetComponent<FSeinActiveEffectsComponent>(Target);
-		const FSeinAbilityComponent* Abilities = World->GetComponent<FSeinAbilityComponent>(Target);
+		const FSeinActiveEffectsPayload* Effects =
+			World->GetComponent<FSeinActiveEffectsPayload>(Target);
+		const FSeinAbilityPayload* Abilities = World->GetComponent<FSeinAbilityPayload>(Target);
 		ASSERT_THAT(IsNotNull(Effects));
 		ASSERT_THAT(IsNotNull(Abilities));
 		ASSERT_THAT(AreEqual(0, Effects->ActiveEffects.Num()));
@@ -967,8 +967,8 @@ namespace UE::SeinARTSTests
 		USeinEffectRemovingPassiveTestAbility::ActivationCallback =
 			[&](FSeinEntityHandle Owner)
 		{
-			const FSeinActiveEffectsComponent* Active =
-				World->GetComponent<FSeinActiveEffectsComponent>(Owner);
+			const FSeinActiveEffectsPayload* Active =
+				World->GetComponent<FSeinActiveEffectsPayload>(Owner);
 			if (Active && Active->ActiveEffects.Num() == 1)
 			{
 				bRemovedDuringFirstGrant = World->RemoveEffectByID(
@@ -980,7 +980,7 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
 		{
 			Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
-			World->AddComponent(Target, FSeinAbilityComponent());
+			World->AddComponent(Target, FSeinAbilityPayload());
 			PreexistingAbilityID = USeinAbilityBPFL::SeinGrantAbility(
 				World, Target, USeinEffectLedgerTestAbility::StaticClass());
 			AppliedEffectID = World->ApplyEffect(Target,
@@ -1010,7 +1010,7 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
 		{
 			Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
-			World->AddComponent(Target, FSeinAbilityComponent());
+			World->AddComponent(Target, FSeinAbilityPayload());
 			EffectID = World->ApplyEffect(Target,
 				USeinEffectIdentityInstanceTestEffect::StaticClass(), Target);
 		})));
@@ -1040,8 +1040,8 @@ namespace UE::SeinARTSTests
 		}
 		ASSERT_THAT(IsTrue(
 			SeinTestSnapshotRestore::RestoreTrusted(*World, Loaded)));
-		const FSeinActiveEffectsComponent* RestoredEffects =
-			World->GetComponent<FSeinActiveEffectsComponent>(Target);
+		const FSeinActiveEffectsPayload* RestoredEffects =
+			World->GetComponent<FSeinActiveEffectsPayload>(Target);
 		ASSERT_THAT(IsNotNull(RestoredEffects));
 		ASSERT_THAT(AreEqual(1, RestoredEffects->ActiveEffects.Num()));
 		ASSERT_THAT(AreEqual(1,
@@ -1135,15 +1135,15 @@ namespace UE::SeinARTSTests
 			Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
 			EffectID = World->ApplyEffect(Target,
 				USeinEffectIdentityInstanceTestEffect::StaticClass(), Target);
-			FSeinActiveEffectsComponent* Effects =
-				World->GetComponentMutable<FSeinActiveEffectsComponent>(Target);
+			FSeinActiveEffectsPayload* Effects =
+				World->GetComponentMutable<FSeinActiveEffectsPayload>(Target);
 			check(Effects && Effects->ActiveEffects.Num() == 1);
 			Effects->ActiveEffects[0].CurrentStacks = MAX_int32;
 			ReappliedID = World->ApplyEffect(Target,
 				USeinEffectIdentityInstanceTestEffect::StaticClass(), Target);
 		})));
-		const FSeinActiveEffectsComponent* Effects =
-			World->GetComponent<FSeinActiveEffectsComponent>(Target);
+		const FSeinActiveEffectsPayload* Effects =
+			World->GetComponent<FSeinActiveEffectsPayload>(Target);
 		ASSERT_THAT(IsNotNull(Effects));
 		ASSERT_THAT(AreEqual(EffectID, ReappliedID));
 		ASSERT_THAT(AreEqual(MAX_int32, Effects->ActiveEffects[0].CurrentStacks));
@@ -1167,11 +1167,11 @@ namespace UE::SeinARTSTests
 				SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
 			const FSeinEntityHandle Alternate =
 				SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
-			World->AddComponent(Target, FSeinAbilityComponent());
+			World->AddComponent(Target, FSeinAbilityPayload());
 			World->ApplyEffect(Target,
 				USeinEffectIdentityInstanceTestEffect::StaticClass(), Target);
-			FSeinActiveEffectsComponent* Effects =
-				World->GetComponentMutable<FSeinActiveEffectsComponent>(Target);
+			FSeinActiveEffectsPayload* Effects =
+				World->GetComponentMutable<FSeinActiveEffectsPayload>(Target);
 			check(Effects);
 			GrantCount = Effects->ActiveEffects[0].CommittedAbilityGrants.Num();
 			Before = World->ComputeStateHash();
@@ -1203,7 +1203,7 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
 		{
 			Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
-			World->AddComponent(Target, FSeinAbilityComponent());
+			World->AddComponent(Target, FSeinAbilityPayload());
 			EffectID = World->ApplyEffect(Target,
 				USeinEffectIdentityInstanceTestEffect::StaticClass(), Target);
 			RevokedCount = USeinAbilityBPFL::SeinForceRevokeAbilityByClass(
@@ -1548,7 +1548,7 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(MaterializeEffectFixture(*World, [&]()
 		{
 			Target = SpawnEffectEntity(*World, FSeinPlayerID::Neutral());
-			World->AddComponent(Target, FSeinAbilityComponent());
+			World->AddComponent(Target, FSeinAbilityPayload());
 		})));
 		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World)));
 		{
@@ -1589,7 +1589,7 @@ namespace UE::SeinARTSTests
 			{
 				if (Destroyed != First) return;
 				bSawDestroyingComponent =
-					World->GetDestroyingComponent<FSeinActiveEffectsComponent>(
+					World->GetDestroyingComponent<FSeinActiveEffectsPayload>(
 						Destroyed) != nullptr;
 				bSawDestroyingEntity =
 					World->GetDestroyingEntity(Destroyed) != nullptr;
@@ -1610,7 +1610,7 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsNotNull(World->GetEntityPool().Get(Second)));
 		ASSERT_THAT(IsTrue(World->GetEntityPool().Get(Second)->IsAlive()));
 		ASSERT_THAT(IsNull(
-			World->GetDestroyingComponent<FSeinActiveEffectsComponent>(First)));
+			World->GetDestroyingComponent<FSeinActiveEffectsPayload>(First)));
 		ASSERT_THAT(IsNull(World->GetDestroyingEntity(First)));
 		{
 			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
@@ -1764,8 +1764,8 @@ namespace UE::SeinARTSTests
 				*World, Target, USeinEffectPeriodicBTestEffect::StaticClass(), Target);
 			HashAfter = World->ComputeStateHash();
 			NewEventCount = World->FlushVisualEvents().Num();
-			const FSeinActiveEffectsComponent* Effects =
-				World->GetComponent<FSeinActiveEffectsComponent>(Target);
+			const FSeinActiveEffectsPayload* Effects =
+				World->GetComponent<FSeinActiveEffectsPayload>(Target);
 			bVictimSurvived = Effects && Effects->ActiveEffects.ContainsByPredicate(
 				[VictimID](const FSeinActiveEffect& Effect)
 				{
@@ -2068,7 +2068,7 @@ namespace UE::SeinARTSTests
 		{
 			Entity = World->SpawnAbstractEntity(
 				FFixedTransform(), FSeinPlayerID::Neutral());
-			World->AddComponent(Entity, FSeinAbilityComponent());
+			World->AddComponent(Entity, FSeinAbilityPayload());
 			FSeinEntityTagState& TagState =
 				FSeinWorldSubsystemTestAccess::EntityTags(*World, Entity);
 			TagState.TagRefCounts.Add(Tag, MAX_int32);
@@ -2154,8 +2154,8 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(AreEqual(1, RemovalCallbacks));
 		const FSeinEntity* TargetEntity = World->GetEntityPool().Get(Target);
 		ASSERT_THAT(IsNull(TargetEntity));
-		const FSeinActiveEffectsComponent* Effects =
-			World->GetComponent<FSeinActiveEffectsComponent>(Target);
+		const FSeinActiveEffectsPayload* Effects =
+			World->GetComponent<FSeinActiveEffectsPayload>(Target);
 		ASSERT_THAT(IsNull(Effects));
 
 		ASSERT_THAT(AreEqual(1, Events.Num()));
@@ -2219,8 +2219,8 @@ namespace UE::SeinARTSTests
 			EObservedApplyStatus::InvalidatedAfterReplacementRemoval));
 		ASSERT_THAT(AreEqual(int64{0}, Result.EffectInstanceID));
 		ASSERT_THAT(IsTrue(World->IsEntityAlive(Target)));
-		const FSeinActiveEffectsComponent* Active =
-			World->GetComponent<FSeinActiveEffectsComponent>(Target);
+		const FSeinActiveEffectsPayload* Active =
+			World->GetComponent<FSeinActiveEffectsPayload>(Target);
 		ASSERT_THAT(IsNotNull(Active));
 		ASSERT_THAT(AreEqual(0, Active->ActiveEffects.Num()));
 		ASSERT_THAT(AreEqual(1, Events.Num()));
@@ -2293,8 +2293,8 @@ namespace UE::SeinARTSTests
 			EObservedApplyStatus::InvalidatedAfterReplacementRemoval));
 		ASSERT_THAT(AreEqual(int64{0}, Result.EffectInstanceID));
 		ASSERT_THAT(IsTrue(World->IsEntityAlive(Target)));
-		const FSeinActiveEffectsComponent* Active =
-			World->GetComponent<FSeinActiveEffectsComponent>(Target);
+		const FSeinActiveEffectsPayload* Active =
+			World->GetComponent<FSeinActiveEffectsPayload>(Target);
 		ASSERT_THAT(IsNotNull(Active));
 		ASSERT_THAT(AreEqual(0, Active->ActiveEffects.Num()));
 		ASSERT_THAT(AreEqual(1, Events.Num()));

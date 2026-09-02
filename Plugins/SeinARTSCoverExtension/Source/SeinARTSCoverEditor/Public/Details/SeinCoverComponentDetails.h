@@ -1,7 +1,7 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinCoverComponentDetails.h
- * @brief   Property-type customization for `FSeinCoverComponent`. Injects a
+ * @brief   Property-type customization for `FSeinCoverPayload`. Injects a
  *          "Generate Slots" button into the details panel so designers can
  *          regenerate `Slots` procedurally from `Area` + the Generate
  *          parameters without dropping into C++.
@@ -16,7 +16,7 @@
  *          Replaces the pre-Phase-5 IDetailCustomization that hung off the
  *          deleted `USeinCoverProviderComponent` AC. The button's effect now
  *          mutates the struct directly via the property handle, and the
- *          generator math lives on `FSeinCoverComponent::GenerateSlots` in
+ *          generator math lives on `FSeinCoverPayload::GenerateSlots` in
  *          the sim module — editor module just wraps the UI.
  */
 
@@ -44,7 +44,7 @@ public:
 		IPropertyTypeCustomizationUtils& CustomizationUtils) override;
 
 private:
-	/** Generate-button click handler. Resolves the `FSeinCoverComponent`
+	/** Generate-button click handler. Resolves the `FSeinCoverPayload`
 	 *  instance from the cached struct handle, calls `GenerateSlots()`,
 	 *  fires PropertyChanged on the Slots / bIsDirectional sub-properties
 	 *  so listeners (component visualizer, viewport) refresh, and forces
@@ -52,7 +52,7 @@ private:
 	FReply OnGenerateButtonClicked();
 
 	/** Struct handle captured at customization time so the click handler can
-	 *  reach the underlying `FSeinCoverComponent` instances. Weak ownership
+	 *  reach the underlying `FSeinCoverPayload` instances. Weak ownership
 	 *  via TSharedPtr — UE manages the handle lifetime. */
 	TSharedPtr<IPropertyHandle> StructHandle;
 

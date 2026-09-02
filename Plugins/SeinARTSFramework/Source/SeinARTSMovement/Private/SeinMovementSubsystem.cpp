@@ -18,9 +18,9 @@
 #include "Movement/SeinAvoidance.h"
 #include "Movement/SeinAvoidanceDefault.h"
 #include "Settings/PluginSettings.h"
-#include "Components/SeinMovementComponent.h"
-#include "Components/SeinNavigationComponent.h"
-#include "Components/SeinExtentsComponent.h"
+#include "Components/SeinMovementPayload.h"
+#include "Components/SeinNavigationPayload.h"
+#include "Components/SeinExtentsPayload.h"
 #include "Abilities/SeinLatentActionManager.h"
 #include "Abilities/SeinLatentAction.h"
 #include "Simulation/SeinComponentLiveTuning.h"
@@ -199,21 +199,21 @@ void USeinMovementSubsystem::HandleComponentPropertyLiveTuned(
 	const FSeinComponentPropertyPatch& Patch)
 {
 	const bool bMovementClassChanged =
-		&ComponentType == FSeinMovementComponent::StaticStruct()
+		&ComponentType == FSeinMovementPayload::StaticStruct()
 		&& !Patch.PropertyPath.IsEmpty()
 		&& Patch.PropertyPath[0].PropertyName
 			== GET_MEMBER_NAME_STRING_CHECKED(
-				FSeinMovementComponent, MovementClass);
+				FSeinMovementPayload, MovementClass);
 	const bool bMovementClassDataChanged =
-		&ComponentType == FSeinMovementComponent::StaticStruct()
+		&ComponentType == FSeinMovementPayload::StaticStruct()
 		&& !Patch.PropertyPath.IsEmpty()
 		&& Patch.PropertyPath[0].PropertyName
 			== GET_MEMBER_NAME_STRING_CHECKED(
-				FSeinMovementComponent, MovementClassData);
+				FSeinMovementPayload, MovementClassData);
 	const bool bNavigationChanged =
-		&ComponentType == FSeinNavigationComponent::StaticStruct();
+		&ComponentType == FSeinNavigationPayload::StaticStruct();
 	const bool bExtentsChanged =
-		&ComponentType == FSeinExtentsComponent::StaticStruct();
+		&ComponentType == FSeinExtentsPayload::StaticStruct();
 	if (!bMovementClassChanged && !bMovementClassDataChanged
 		&& !bNavigationChanged && !bExtentsChanged)
 	{
@@ -234,8 +234,8 @@ void USeinMovementSubsystem::HandleComponentPropertyLiveTuned(
 	{
 		if (USeinMovement* Movement = FindMovementInstance(Entity))
 		{
-			if (const FSeinMovementComponent* MovementComponent =
-				Sim->GetComponent<FSeinMovementComponent>(Entity))
+			if (const FSeinMovementPayload* MovementComponent =
+				Sim->GetComponent<FSeinMovementPayload>(Entity))
 			{
 				Movement->HydrateTuningFromData(
 					MovementComponent->MovementClassData);
@@ -362,7 +362,7 @@ void USeinMovementSubsystem::ReleaseNativeClassStateForModuleUnload(
 	}
 }
 
-UClass* USeinMovementSubsystem::ResolveMovementClass(const FSeinMovementComponent& Move)
+UClass* USeinMovementSubsystem::ResolveMovementClass(const FSeinMovementPayload& Move)
 {
 	UClass* MoveClass = Move.MovementClass.IsValid()
 		? Move.MovementClass.TryLoadClass<USeinMovement>()
@@ -396,7 +396,7 @@ UClass* USeinMovementSubsystem::ResolveAvoidanceClass()
 }
 
 USeinMovement* USeinMovementSubsystem::GetOrCreateMovementInstance(
-	FSeinEntityHandle Handle, const FSeinMovementComponent& Move)
+	FSeinEntityHandle Handle, const FSeinMovementPayload& Move)
 {
 	UClass* DesiredClass = nullptr;
 	if (USeinMovement** Existing = MovementInstanceMap.Find(Handle))
