@@ -66,6 +66,68 @@ bool USeinDataComponent::WritePayload(FInstancedStruct& Out) const
 }
 
 #if WITH_EDITOR
+void USeinDataComponent::SeedFromPayload(const FInstancedStruct& Entry)
+{
+	const UScriptStruct* PayloadType = GetPayloadStruct();
+	if (!Entry.IsValid() || !PayloadType
+		|| Entry.GetScriptStruct() != PayloadType)
+	{
+		return;
+	}
+	const USeinDataComponent* Archetype =
+		Cast<USeinDataComponent>(GetArchetype());
+
+	Modify();
+
+	// Native shape: one embedded struct member of the payload type. Seed its
+	// fields individually — archetype-identical fields adopt the entry value,
+	// a designer's pre-bake edits survive.
+	for (TFieldIterator<FStructProperty> MemberIt(GetClass()); MemberIt; ++MemberIt)
+	{
+		FStructProperty* Member = *MemberIt;
+		if (Member->Struct != PayloadType)
+		{
+			continue;
+		}
+		void* MemberValue = Member->ContainerPtrToValuePtr<void>(this);
+		const void* ArchetypeValue = Archetype
+			? Member->ContainerPtrToValuePtr<const void>(Archetype)
+			: nullptr;
+		for (TFieldIterator<FProperty> FieldIt(PayloadType); FieldIt; ++FieldIt)
+		{
+			const FProperty* Field = *FieldIt;
+			if (ArchetypeValue
+				&& !Field->Identical_InContainer(MemberValue, ArchetypeValue))
+			{
+				continue;
+			}
+			Field->CopyCompleteValue(
+				Field->ContainerPtrToValuePtr<void>(MemberValue),
+				Field->ContainerPtrToValuePtr<const void>(Entry.GetMemory()));
+		}
+		return;
+	}
+
+	// Blueprint shape: payload fields mirror top-level class properties.
+	for (TFieldIterator<FProperty> FieldIt(PayloadType); FieldIt; ++FieldIt)
+	{
+		const FProperty* Field = *FieldIt;
+		const FString AuthoredName = PayloadType->GetAuthoredNameForField(Field);
+		FProperty* Target = GetClass()->FindPropertyByName(FName(*AuthoredName));
+		if (!Target || !Target->SameType(Field))
+		{
+			continue;
+		}
+		if (Archetype && !Target->Identical_InContainer(this, Archetype))
+		{
+			continue;
+		}
+		Target->CopyCompleteValue(
+			Target->ContainerPtrToValuePtr<void>(this),
+			Field->ContainerPtrToValuePtr<const void>(Entry.GetMemory()));
+	}
+}
+
 void USeinDataComponent::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
 	Super::PostEditChangeProperty(PropertyChangedEvent);

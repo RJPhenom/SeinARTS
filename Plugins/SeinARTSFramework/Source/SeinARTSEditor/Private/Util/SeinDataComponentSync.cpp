@@ -8,14 +8,13 @@
 #include "Factories/SeinSimComponentFactory.h"
 
 #include "Authoring/SeinDataComponent.h"
+#include "Authoring/SeinPayloadStruct.h"
+#include "EdGraphSchema_K2.h"
 #include "Engine/Blueprint.h"
 #include "Kismet2/StructureEditorUtils.h"
 #include "UserDefinedStructure/UserDefinedStructEditorData.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "StructUtils/UserDefinedStruct.h"
-#include "AssetRegistry/AssetRegistryModule.h"
-#include "AssetToolsModule.h"
-#include "IAssetTools.h"
 #include "UObject/UObjectIterator.h"
 #include "UObject/Package.h"
 #include "Misc/PackageName.h"
@@ -90,6 +89,13 @@ namespace
 				}
 			}
 		}
+		// Embedded shape: the struct lives INSIDE the Blueprint's own package.
+		if (UUserDefinedStruct* Embedded = FindObject<UUserDefinedStruct>(
+			Blueprint->GetOutermost(), *PayloadAssetName(Blueprint)))
+		{
+			return Embedded;
+		}
+		// Legacy shape: a standalone sibling asset from before embedding.
 		const FString PkgDir  = FPackageName::GetLongPackagePath(Blueprint->GetOutermost()->GetName());
 		const FString AssetNm = PayloadAssetName(Blueprint);
 		const FString ObjPath = PkgDir / (AssetNm + TEXT(".") + AssetNm);
@@ -101,36 +107,42 @@ namespace
 
 	UUserDefinedStruct* CreatePayloadUDS(UBlueprint* Blueprint)
 	{
-		const FString PkgDir  = FPackageName::GetLongPackagePath(Blueprint->GetOutermost()->GetName());
-		const FString AssetNm = PayloadAssetName(Blueprint);
-
-		UPackage* Package = CreatePackage(*(PkgDir / AssetNm));
-		if (!Package) return nullptr;
-
-		UUserDefinedStruct* UDS = FStructureEditorUtils::CreateUserDefinedStruct(
-			Package, FName(*AssetNm), RF_Public | RF_Standalone | RF_Transactional);
+		if (!FStructureEditorUtils::UserDefinedStructEnabled())
+		{
+			return nullptr;
+		}
+		// The payload type is durable plumbing, not a designer-facing asset:
+		// it is created INSIDE the Blueprint's own package (public + standalone
+		// so cross-package baked entries and cooking reference it) as a
+		// USeinPayloadStruct, whose IsAsset() == false keeps it out of the
+		// asset registry and Content Browser permanently — packageness alone
+		// would make a plain UDS an asset again on the next registry scan. It
+		// saves, moves, and deletes atomically with the component asset.
+		// (Construction mirrors FStructureEditorUtils::CreateUserDefinedStruct,
+		// which hardcodes the base class.)
+		USeinPayloadStruct* UDS = NewObject<USeinPayloadStruct>(
+			Blueprint->GetOutermost(), FName(*PayloadAssetName(Blueprint)),
+			RF_Public | RF_Standalone | RF_Transactional);
 		if (!UDS) return nullptr;
+		UUserDefinedStructEditorData* EditorData =
+			NewObject<UUserDefinedStructEditorData>(UDS, NAME_None, RF_Transactional);
+		UDS->EditorData = EditorData;
+		EditorData->MetaData.Add(FBlueprintTags::BlueprintType, TEXT("true"));
+		UDS->Guid = FGuid::NewGuid();
+		UDS->Bind();
+		UDS->StaticLink(true);
+		UDS->Status = UDSS_Error;
+		FStructureEditorUtils::AddVariable(UDS,
+			FEdGraphPinType(UEdGraphSchema_K2::PC_Boolean, NAME_None, nullptr,
+				EPinContainerType::None, false, FEdGraphTerminalType()));
 
 		// Top-level entity component: deterministic + entity-component metas,
-		// so the baked entries pass the picker filter, eligibility screens,
-		// and determinism validator exactly like a hand-authored UDS component.
+		// so the baked entries pass the eligibility screens and determinism
+		// validator exactly like a hand-authored UDS component.
 		USeinSimComponentFactory::MarkUserDefinedStructAsEntityComponent(UDS);
 
-		FAssetRegistryModule::AssetCreated(UDS);
-		Package->MarkPackageDirty();
+		Blueprint->GetOutermost()->MarkPackageDirty();
 		return UDS;
-	}
-
-	void RenamePayloadUDS(UUserDefinedStruct* UDS, const FString& NewPackagePath, const FString& NewName)
-	{
-		if (!UDS) return;
-		const FString CurPath = FPackageName::GetLongPackagePath(UDS->GetOutermost()->GetName());
-		if (UDS->GetName() == NewName && CurPath == NewPackagePath) return;
-
-		FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
-		TArray<FAssetRenameData> Renames;
-		Renames.Add(FAssetRenameData(UDS, NewPackagePath, NewName));
-		AssetToolsModule.Get().RenameAssets(Renames);
 	}
 
 	/** Returns true when anything about the field actually changed. */
@@ -366,14 +378,16 @@ UUserDefinedStruct* SyncPayloadStructForBlueprint(UBlueprint* Blueprint)
 		return nullptr;
 	}
 
+	// NOTE on Blueprint renames: the asset-rename flow moves the Blueprint
+	// into a fresh package and leaves the embedded struct behind in the old
+	// one (alongside the redirector). Everything keeps working — the CDO link
+	// and serialized baked entries resolve the struct where it lives, and
+	// redirector fix-up never deletes the package because it is not
+	// redirector-only — the struct's location is merely untidy. Never rename
+	// the struct object in place to "fix" this: external baked entries
+	// reference it by path, and a redirector-less rename severs them.
 	UUserDefinedStruct* UDS = ResolveExistingPayloadUDS(Blueprint);
-	if (UDS)
-	{
-		RenamePayloadUDS(UDS,
-			FPackageName::GetLongPackagePath(Blueprint->GetOutermost()->GetName()),
-			PayloadAssetName(Blueprint));
-	}
-	else
+	if (!UDS)
 	{
 		UDS = CreatePayloadUDS(Blueprint);
 	}

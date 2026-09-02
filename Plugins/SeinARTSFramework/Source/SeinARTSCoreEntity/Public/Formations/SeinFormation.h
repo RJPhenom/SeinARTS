@@ -112,7 +112,7 @@ class SEINARTSCOREENTITY_API USeinFormation : public UObject
 public:
 	/** Per-member facing policy (see ESeinFormationFacing). Default Uniform; Ring / Square default to
 	 *  RadialOutward via their constructors. Designer-overridable per formation. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Formation",
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (DisplayName = "Facing Mode"))
 	ESeinFormationFacing FacingMode = ESeinFormationFacing::Uniform;
 

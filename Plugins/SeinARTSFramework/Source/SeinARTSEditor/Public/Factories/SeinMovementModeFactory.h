@@ -1,7 +1,7 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinMovementModeFactory.h
- * @brief   Content-Browser factory for a "SeinARTS Movement Mode" — a Blueprint
+ * @brief   Content-Browser factory for a "Movement Mode" — a Blueprint
  *          pre-parented to USeinMovement, so the designer gets the base ComputeMotion
  *          policy to build on — override Compute Motion (Tier 1) to return a custom
  *          desired velocity + facing, or override the whole Tick (Tier 2) to drive the
@@ -9,8 +9,9 @@
  *          the Class-Defaults "Sync Tuning Struct" button to generate the matching UDS.
  *
  *          Auto-discovered (a bCreateNew UFactory needs no explicit registration). The
- *          parent class is resolved by path so the editor module keeps no link
- *          dependency on the Movement module.
+ *          parent class (USeinMovement) and asset class (USeinMovementBlueprint) are
+ *          resolved by path so the editor module keeps no link dependency on the
+ *          Movement module.
  */
 
 #pragma once

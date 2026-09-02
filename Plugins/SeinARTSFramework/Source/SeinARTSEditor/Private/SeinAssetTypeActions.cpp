@@ -10,6 +10,8 @@
 #include "SeinAssetTypeActions.h"
 #include "SeinARTSEditorModule.h"
 #include "Actor/SeinActorBlueprint.h"
+#include "Authoring/SeinEntityComponentBlueprint.h"
+#include "Editors/SeinEntityComponentBlueprintEditor.h"
 #include "Abilities/SeinAbilityBlueprint.h"
 #include "Effects/SeinEffectBlueprint.h"
 #include "Formations/SeinFormationBlueprint.h"
@@ -32,6 +34,40 @@ UClass* FAssetTypeActions_SeinActorBlueprint::GetSupportedClass() const
 uint32 FAssetTypeActions_SeinActorBlueprint::GetCategories()
 {
 	return EAssetTypeCategories::Basic | FSeinARTSEditorModule::GetAssetCategoryBit();
+}
+
+// ==================== Entity component (SeinEntityComponentBlueprint) ====================
+
+FText FAssetTypeActions_SeinEntityComponentBlueprint::GetName() const
+{
+	return LOCTEXT("SeinEntityComponentBlueprintName", "SeinARTS Entity Component");
+}
+
+UClass* FAssetTypeActions_SeinEntityComponentBlueprint::GetSupportedClass() const
+{
+	return USeinEntityComponentBlueprint::StaticClass();
+}
+
+uint32 FAssetTypeActions_SeinEntityComponentBlueprint::GetCategories()
+{
+	return EAssetTypeCategories::Basic | FSeinARTSEditorModule::GetAssetCategoryBit();
+}
+
+void FAssetTypeActions_SeinEntityComponentBlueprint::OpenAssetEditor(
+	const TArray<UObject*>& InObjects,
+	TSharedPtr<IToolkitHost> EditWithinLevelEditor)
+{
+	const EToolkitMode::Type Mode = EditWithinLevelEditor.IsValid()
+		? EToolkitMode::WorldCentric : EToolkitMode::Standalone;
+	for (UObject* Object : InObjects)
+	{
+		if (UBlueprint* Blueprint = Cast<UBlueprint>(Object))
+		{
+			TSharedRef<FSeinEntityComponentBlueprintEditor> Editor =
+				MakeShared<FSeinEntityComponentBlueprintEditor>();
+			Editor->InitEditor(Mode, EditWithinLevelEditor, Blueprint);
+		}
+	}
 }
 
 // ==================== Ability (SeinAbilityBlueprint) ====================
@@ -81,6 +117,27 @@ UClass* FAssetTypeActions_SeinFormationBlueprint::GetSupportedClass() const
 }
 
 uint32 FAssetTypeActions_SeinFormationBlueprint::GetCategories()
+{
+	return EAssetTypeCategories::Basic | FSeinARTSEditorModule::GetAssetCategoryBit();
+}
+
+// ==================== Movement Mode (USeinMovementBlueprint) ====================
+
+FText FAssetTypeActions_SeinMovementBlueprint::GetName() const
+{
+	return LOCTEXT("SeinMovementBlueprintName", "Movement Mode");
+}
+
+UClass* FAssetTypeActions_SeinMovementBlueprint::GetSupportedClass() const
+{
+	// Path-resolved — no link dependency on the Movement module. Registration in
+	// SeinARTSEditorModule is gated on this class existing, so a registered
+	// instance never resolves null here.
+	static const TCHAR* Path = TEXT("/Script/SeinARTSMovement.SeinMovementBlueprint");
+	return FindObject<UClass>(nullptr, Path);
+}
+
+uint32 FAssetTypeActions_SeinMovementBlueprint::GetCategories()
 {
 	return EAssetTypeCategories::Basic | FSeinARTSEditorModule::GetAssetCategoryBit();
 }

@@ -46,13 +46,13 @@ public:
 	/** EXTRA gap added to the footprint DIAMETER when spacing units along the chevron arms (UE world
 	 *  units, cm). 0 (the default) = footprints touch — the densest non-overlapping spacing; raise to
 	 *  open the arms up. Also added to the perpendicular gap between nested chevron layers. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Formation",
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (DisplayName = "Inter Unit Spacing"))
 	FFixedPoint InterUnitSpacing = FFixedPoint::Zero;
 
 	/** Half-angle of each arm from the wedge's back axis, in degrees. 45 = a right-angle chevron;
 	 *  smaller = a sharper/narrower wedge, larger = a flatter/wider one. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Formation",
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (DisplayName = "Half Angle Degrees", ClampMin = "10.0", ClampMax = "80.0", UIMin = "20.0", UIMax = "70.0"))
 	FFixedPoint HalfAngleDegrees = FFixedPoint::FromInt(45);
 

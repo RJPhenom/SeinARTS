@@ -33,7 +33,13 @@ public:
 	virtual UObject* FactoryCreateNew(UClass* Class, UObject* InParent, FName Name, EObjectFlags Flags, UObject* Context, FFeedbackContext* Warn) override;
 	virtual FText GetDisplayName() const override;
 	virtual uint32 GetMenuCategories() const override;
-	virtual bool ShouldShowInNewMenu() const override { return true; }
+	/** Retired from the New-asset menu (2026-09-01): raw UDS components were
+	 *  authored into the bridge's ComponentData picker, which is now hidden —
+	 *  designer components are Blueprint subclasses of USeinDataComponent
+	 *  (see USeinDataComponentBlueprintFactory). The factory class remains
+	 *  for its Mark/eligibility helpers, used by the payload sync and the
+	 *  movement tuning export. */
+	virtual bool ShouldShowInNewMenu() const override { return false; }
 	virtual FName GetNewAssetThumbnailOverride() const override { return TEXT("ClassThumbnail.SeinSimComponent"); }
 	virtual FName GetNewAssetIconOverride() const override { return TEXT("ClassIcon.SeinSimComponent"); }
 

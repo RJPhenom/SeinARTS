@@ -47,12 +47,12 @@ void FSeinARTSEditorStyle::Initialize()
 
 	StyleSet->Set(
 		"ClassIcon.SeinActor",
-		new FSlateImageBrush(StyleSet->RootToContentDir(TEXT("SeinEntityIcon16"), TEXT(".png")), FVector2D(16.0f, 16.0f))
+		new FSlateImageBrush(StyleSet->RootToContentDir(TEXT("SeinBlueprintIcon16"), TEXT(".png")), FVector2D(16.0f, 16.0f))
 	);
 
 	StyleSet->Set(
 		"ClassThumbnail.SeinActor",
-		new FSlateImageBrush(StyleSet->RootToContentDir(TEXT("SeinEntityIcon92"), TEXT(".png")), FVector2D(92.0f, 92.0f))
+		new FSlateImageBrush(StyleSet->RootToContentDir(TEXT("SeinBlueprintIcon92"), TEXT(".png")), FVector2D(92.0f, 92.0f))
 	);
 
 	// ==================== Ability (SeinAbility) ====================
@@ -83,27 +83,28 @@ void FSeinARTSEditorStyle::Initialize()
 
 	StyleSet->Set(
 		"ClassIcon.SeinFormation",
-		new FSlateImageBrush(StyleSet->RootToContentDir(TEXT("SeinFormationIcon16"), TEXT(".png")), FVector2D(16.0f, 16.0f))
+		new FSlateImageBrush(StyleSet->RootToContentDir(TEXT("SeinBlueprintIcon16"), TEXT(".png")), FVector2D(16.0f, 16.0f))
 	);
 
 	StyleSet->Set(
 		"ClassThumbnail.SeinFormation",
-		new FSlateImageBrush(StyleSet->RootToContentDir(TEXT("SeinFormationIcon92"), TEXT(".png")), FVector2D(92.0f, 92.0f))
+		new FSlateImageBrush(StyleSet->RootToContentDir(TEXT("SeinBlueprintIcon92"), TEXT(".png")), FVector2D(92.0f, 92.0f))
 	);
 
 	// ==================== Movement Mode (SeinMovement) ====================
-	// Movement modes are plain UBlueprints parented to USeinMovement; the corner
-	// badge resolves via the parent-class chain, so registering under the parent
-	// class name catches every authored mode BP.
+	// Movement modes parent to USeinMovement (asset class USeinMovementBlueprint;
+	// legacy modes are plain UBlueprints); the corner badge resolves via the
+	// parent-class chain, so registering under the parent class name catches
+	// every authored mode BP either way.
 
 	StyleSet->Set(
 		"ClassIcon.SeinMovement",
-		new FSlateImageBrush(StyleSet->RootToContentDir(TEXT("SeinMovementIcon16"), TEXT(".png")), FVector2D(16.0f, 16.0f))
+		new FSlateImageBrush(StyleSet->RootToContentDir(TEXT("SeinBlueprintIcon16"), TEXT(".png")), FVector2D(16.0f, 16.0f))
 	);
 
 	StyleSet->Set(
 		"ClassThumbnail.SeinMovement",
-		new FSlateImageBrush(StyleSet->RootToContentDir(TEXT("SeinMovementIcon92"), TEXT(".png")), FVector2D(92.0f, 92.0f))
+		new FSlateImageBrush(StyleSet->RootToContentDir(TEXT("SeinBlueprintIcon92"), TEXT(".png")), FVector2D(92.0f, 92.0f))
 	);
 
 	// ==================== Balance Data Asset (SeinBalanceProfile) ====================
@@ -143,16 +144,24 @@ void FSeinARTSEditorStyle::Initialize()
 	RegisterComponentIcon(TEXT("ClassIcon.SeinSimComponent"));
 	// Direct UActorComponent subclasses in the SeinARTS ClassGroup. UE looks
 	// up component icons by exact class name; each entry needs its own
-	// registration. SeinEntityComponent is the actor-bridge default subobject
-	// on every ASeinActor. The render-side ACs (SeinConstructionRenderComponent)
-	// are designer-droppable plain UActorComponents. Squad-slot preview meshes
-	// now spawn directly from USeinEntityBridgeComponent under WITH_EDITOR — no
-	// separate AC needed.
+	// registration, and the components-panel corner badge also resolves via
+	// the parent class chain — registering the authoring BASE
+	// (SeinDataComponent now, SeinEntityComponent after the post-resave name
+	// flip; both keys kept) covers every native and Blueprint data component.
+	// SeinEntityBridgeComponent is the actor-bridge default subobject on
+	// every ASeinActor; SeinEntityComponentBlueprint is the data-component
+	// Blueprint ASSET class (Content Browser icon + thumbnail).
 	RegisterComponentIcon(TEXT("ClassIcon.SeinEntityComponent"));
+	RegisterComponentIcon(TEXT("ClassIcon.SeinEntityBridgeComponent"));
+	RegisterComponentIcon(TEXT("ClassIcon.SeinDataComponent"));
+	RegisterComponentIcon(TEXT("ClassIcon.SeinEntityComponentBlueprint"));
 	RegisterComponentIcon(TEXT("ClassIcon.SeinConstructionRenderComponent"));
 
 	RegisterComponentThumb(TEXT("ClassThumbnail.SeinSimComponent"));
 	RegisterComponentThumb(TEXT("ClassThumbnail.SeinEntityComponent"));
+	RegisterComponentThumb(TEXT("ClassThumbnail.SeinEntityBridgeComponent"));
+	RegisterComponentThumb(TEXT("ClassThumbnail.SeinDataComponent"));
+	RegisterComponentThumb(TEXT("ClassThumbnail.SeinEntityComponentBlueprint"));
 	RegisterComponentThumb(TEXT("ClassThumbnail.SeinConstructionRenderComponent"));
 
 	// ==================== Widget ====================
@@ -222,13 +231,12 @@ void FSeinARTSEditorStyle::Initialize()
 		RegisterShowFlagIcon(TEXT("ShowFlagsMenu.SeinExtents"), TEXT("SeinExtentsViewFlag.svg"));
 	}
 
-	// Load PNG files as UTexture2D for thumbnail renderers (FCanvas can't use Slate file brushes)
-	LoadAndCacheIcon(FName(TEXT("SeinEntityIcon92")),     TEXT("SeinEntityIcon92.png"));
+	// Load PNG files as UTexture2D for thumbnail renderers (FCanvas can't use Slate file brushes).
+	// Unit/Formation/Movement thumbnails all share SeinBlueprintIcon92.
 	LoadAndCacheIcon(FName(TEXT("SeinAbilityIcon92")),    TEXT("SeinAbilityIcon92.png"));
+	LoadAndCacheIcon(FName(TEXT("SeinBlueprintIcon92")),  TEXT("SeinBlueprintIcon92.png"));
 	LoadAndCacheIcon(FName(TEXT("SeinComponentIcon92")),  TEXT("SeinComponentIcon92.png"));
 	LoadAndCacheIcon(FName(TEXT("SeinEffectIcon92")),     TEXT("SeinEffectIcon92.png"));
-	LoadAndCacheIcon(FName(TEXT("SeinFormationIcon92")),  TEXT("SeinFormationIcon92.png"));
-	LoadAndCacheIcon(FName(TEXT("SeinMovementIcon92")),   TEXT("SeinMovementIcon92.png"));
 	LoadAndCacheIcon(FName(TEXT("SeinWidgetIcon92")),     TEXT("SeinWidgetIcon92.png"));
 }
 

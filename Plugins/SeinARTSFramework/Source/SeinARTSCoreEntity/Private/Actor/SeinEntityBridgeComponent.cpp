@@ -590,7 +590,7 @@ void USeinEntityBridgeComponent::EnsureComponentDataOverrideMetadataInitialized(
 				UE_LOG(LogSeinEntityComp, Warning,
 					TEXT("%s: ComponentData differs in SHAPE from class default %s and no recorded transition explains it (%s). ")
 					TEXT("This instance will not receive Blueprint ComponentData updates until re-synced — ")
-					TEXT("revert the Component Data property on the placed actor to re-join inheritance."),
+					TEXT("add or edit the actor's Sein components (or re-save the level) so the bake re-syncs it."),
 					*GetPathName(), *ClassDefault->GetPathName(), *Error);
 				MarkAuthoringPackageDirty(*this);
 			}
@@ -833,7 +833,7 @@ void USeinEntityBridgeComponent::CatchUpComponentDataClassDefaultHistory()
 					UE_LOG(LogSeinEntityComp, Warning,
 						TEXT("%s: ComponentData matches neither side of a recorded structural default change of %s. ")
 						TEXT("This instance will not receive Blueprint ComponentData updates until re-synced — ")
-						TEXT("revert the Component Data property on the placed actor to re-join inheritance."),
+						TEXT("add or edit the actor's Sein components (or re-save the level) so the bake re-syncs it."),
 						*GetPathName(), *Ancestor->GetPathName());
 				}
 				break;
@@ -1706,7 +1706,7 @@ void USeinEntityBridgeComponent::HandleStructuralClassDefaultEdit()
 					InstBridge->bComponentDataStructuralOverride = true;
 					++InstancesFlagged;
 					UE_LOG(LogSeinEntityComp, Warning,
-						TEXT("%s: ComponentData did not match the pre-edit class default and was left as a structural override — revert the Component Data property on the placed actor to re-join inheritance."),
+						TEXT("%s: ComponentData did not match the pre-edit class default and was left as a structural override — add or edit the actor's Sein components (or re-save the level) so the bake re-syncs it."),
 						*InstBridge->GetPathName());
 					MarkAuthoringPackageDirty(*InstBridge);
 				}
@@ -1736,7 +1736,7 @@ void USeinEntityBridgeComponent::HandleStructuralClassDefaultEdit()
 // =============================================================================
 
 void USeinEntityBridgeComponent::NotifyAuthoringComponentEdited(
-	const USeinDataComponent& Component)
+	USeinDataComponent& Component)
 {
 	const UScriptStruct* PayloadType = Component.GetPayloadStruct();
 	if (!PayloadType)
@@ -1751,12 +1751,19 @@ void USeinEntityBridgeComponent::NotifyAuthoringComponentEdited(
 	Modify();
 	BeginComponentDataEdit();
 
-	if (!BakedComponentDataTypes.Contains(TypePath)
-		&& FindComponentDataEntryByPath(ComponentData, TypePath))
+	if (!BakedComponentDataTypes.Contains(TypePath))
 	{
-		UE_LOG(LogSeinEntityComp, Warning,
-			TEXT("%s: authoring component %s now manages ComponentData type %s; the existing hand-authored entry was replaced by the component's values."),
-			*GetPathName(), *Component.GetPathName(), *TypePath);
+		if (const FInstancedStruct* Existing =
+			FindComponentDataEntryByPath(ComponentData, TypePath))
+		{
+			// First capture of a pre-existing (legacy hand-authored or
+			// previously baked) entry: seed its values INTO the component so
+			// migration preserves tuned data instead of stomping defaults.
+			Component.SeedFromPayload(*Existing);
+			UE_LOG(LogSeinEntityComp, Log,
+				TEXT("%s: authoring component %s now manages ComponentData type %s; the existing entry's values were seeded into the component."),
+				*GetPathName(), *Component.GetPathName(), *TypePath);
+		}
 	}
 
 	if (!Component.bInjectionEnabled)
@@ -1842,17 +1849,22 @@ void USeinEntityBridgeComponent::BakeAuthoredDataComponents(bool bInteractive)
 		return;
 	}
 
-	TArray<const USeinDataComponent*> AuthoringComponents;
+	TArray<USeinDataComponent*> AuthoringComponents;
 	if (IsTemplate())
 	{
+		TArray<const USeinDataComponent*> ClassDefaults;
 		AActor::GetActorClassDefaultComponents<USeinDataComponent>(
-			Owner->GetClass(), AuthoringComponents);
+			Owner->GetClass(), ClassDefaults);
+		for (const USeinDataComponent* Component : ClassDefaults)
+		{
+			// Templates are mutated here only by first-capture seeding, an
+			// editor-authoring write the engine sanctions on templates.
+			AuthoringComponents.Add(const_cast<USeinDataComponent*>(Component));
+		}
 	}
 	else
 	{
-		TArray<USeinDataComponent*> OwnedComponents;
-		Owner->GetComponents<USeinDataComponent>(OwnedComponents);
-		AuthoringComponents.Append(OwnedComponents);
+		Owner->GetComponents<USeinDataComponent>(AuthoringComponents);
 	}
 
 	// Fully inert when nothing is authored and nothing was ever baked — the
@@ -1891,7 +1903,7 @@ void USeinEntityBridgeComponent::BakeAuthoredDataComponents(bool bInteractive)
 
 	bool bAllPayloadsResolved = true;
 	TArray<FString> NewLedger;
-	for (const USeinDataComponent* Component : AuthoringComponents)
+	for (USeinDataComponent* Component : AuthoringComponents)
 	{
 		const UScriptStruct* PayloadType =
 			Component ? Component->GetPayloadStruct() : nullptr;
@@ -1914,12 +1926,25 @@ void USeinEntityBridgeComponent::BakeAuthoredDataComponents(bool bInteractive)
 		}
 		NewLedger.AddUnique(TypePath);
 
-		if (!BakedComponentDataTypes.Contains(TypePath)
-			&& FindComponentDataEntryByPath(ComponentData, TypePath))
+		if (!BakedComponentDataTypes.Contains(TypePath))
 		{
-			UE_LOG(LogSeinEntityComp, Warning,
-				TEXT("%s: authoring component %s now manages ComponentData type %s; the existing hand-authored entry was replaced by the component's values."),
-				*GetPathName(), *Component->GetPathName(), *TypePath);
+			if (const FInstancedStruct* Existing =
+				FindComponentDataEntryByPath(ComponentData, TypePath))
+			{
+				// First capture: seed the pre-existing entry's values into the
+				// component so migration preserves tuned data. NEVER seed a
+				// template this class does not own — for a child Blueprint
+				// without its own override, GetActorClassDefaultComponents
+				// hands back the PARENT class's template, and writing it here
+				// would mutate another package mid-bake (red-team F1c).
+				if (Component->GetOutermost() == GetOutermost())
+				{
+					Component->SeedFromPayload(*Existing);
+					UE_LOG(LogSeinEntityComp, Log,
+						TEXT("%s: authoring component %s now manages ComponentData type %s; the existing entry's values were seeded into the component."),
+						*GetPathName(), *Component->GetPathName(), *TypePath);
+				}
+			}
 		}
 
 		if (!Component->bInjectionEnabled)

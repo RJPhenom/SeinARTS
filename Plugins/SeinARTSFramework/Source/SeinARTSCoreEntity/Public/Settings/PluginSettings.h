@@ -1438,15 +1438,16 @@ public:
 		meta = (DisplayName = "Show SeinARTS Ability in Basic Category"))
 	bool bShowAbilityInBasicCategory;
 
-	/** Whether the SeinARTS Component factory appears in the Content Browser's default (Basic) create menu. */
-	UPROPERTY(Config, EditAnywhere, Category = "Editor Preferences|Factory Visibility",
-		meta = (DisplayName = "Show SeinARTS Component in Basic Category"))
-	bool bShowComponentInBasicCategory;
-
 	/** Whether the SeinARTS Effect factory appears in the Content Browser's default (Basic) create menu. */
 	UPROPERTY(Config, EditAnywhere, Category = "Editor Preferences|Factory Visibility",
 		meta = (DisplayName = "Show SeinARTS Effect in Basic Category"))
 	bool bShowEffectInBasicCategory;
+
+	/** Whether the SeinARTS Entity Component factory appears in the Content Browser's default (Basic)
+	 *  create menu. Config name retains the legacy "Component" spelling so existing ini values carry over. */
+	UPROPERTY(Config, EditAnywhere, Category = "Editor Preferences|Factory Visibility",
+		meta = (DisplayName = "Show SeinARTS Entity Component in Basic Category"))
+	bool bShowComponentInBasicCategory;
 
 	/** Whether the SeinARTS Entity Blueprint factory appears in the Content Browser's default (Basic)
 	 *  create menu. */

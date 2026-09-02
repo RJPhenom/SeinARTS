@@ -130,7 +130,7 @@ void ASeinActor::CheckForErrors()
 		FMessageLog("MapCheck").Warning()
 			->AddToken(FUObjectToken::Create(this))
 			->AddToken(FTextToken::Create(FText::FromString(TEXT(
-				"ComponentData differs in shape from the class default (stale or deliberate structural override) and no longer tracks Blueprint ComponentData updates. If unintended, revert the Component Data property on this actor to re-sync."))));
+				"ComponentData differs in shape from the class default (stale or deliberate structural override) and no longer tracks Blueprint ComponentData updates. If unintended, add or edit this actor's Sein components (or re-save the level) so the bake re-syncs it."))));
 	}
 }
 #endif
