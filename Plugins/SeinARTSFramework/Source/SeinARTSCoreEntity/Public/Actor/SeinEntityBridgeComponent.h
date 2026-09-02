@@ -278,28 +278,19 @@ public:
 		meta = (Bitmask, BitmaskEnum = "/Script/SeinARTSFogOfWar.ESeinFogOfWarLayerBit"))
 	uint8 FogVisibilityLayerMask = 0xFE;
 
-	/** Composed sim data for this entity. Each entry is a deterministic struct
-	 *  injected into component storage at spawn — one entry per unique struct
-	 *  type. Order doesn't matter (storage is keyed by `UScriptStruct*`).
+	/** BAKED runtime carrier of this entity's composed sim data — one entry
+	 *  per unique struct type, injected into component storage at spawn
+	 *  (order irrelevant; storage is keyed by `UScriptStruct*`).
 	 *
-	 *  Filter: each array element's struct picker is narrowed via
-	 *  `SeinEntityComponentsOnly`, which `FSeinInstancedStructFilter` routes
-	 *  through `USeinSimComponentFactory::IsSeinEntityComponentStruct`.
-	 *  Acceptance rules:
-	 *    - Native USTRUCT must inherit `FSeinPayload`, carry
-	 *      `SeinDeterministic`, and NOT carry `SeinSubData`.
-	 *    - UDS must carry both `SeinDeterministic` and `SeinEntityComponent`
-	 *      (stamped by `USeinSimComponentFactory` on creation).
-	 *  This excludes engine structs, non-sim USTRUCTs, and per-class sub-data
-	 *  (FSeinWheeledMovementData etc.) which surface only on their owning
-	 *  component's polymorphic sub-data picker, never here.
-	 *
-	 *  NOTE: do NOT add `ShowOnlyInnerProperties` here — that meta is for
-	 *  single FInstancedStruct properties (it inlines the inner fields
-	 *  directly). On a TArray it silently breaks the details panel layout
-	 *  and renders the entire component blank. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
-		meta = (SeinEntityComponentsOnly))
+	 *  HIDDEN BY DESIGN (2026-09-01): the single authoring surface is the
+	 *  data-only Sein components (`USeinDataComponent` subclasses) on the
+	 *  actor; `BakeAuthoredDataComponents` writes this array from them on
+	 *  compile, edit, and save, and cooked builds (where the authoring
+	 *  components are stripped) inject from it. Designers never touch it —
+	 *  it is plumbing beneath the component UX. Legacy hand-authored entries
+	 *  of unmanaged types still inject and are captured (with seeding) when
+	 *  a matching authoring component is added. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	TArray<FInstancedStruct> ComponentData;
 
 	/** Find the first authored entry of the given struct type, or nullptr.
@@ -426,7 +417,7 @@ public:
 	 *  on class defaults). Single-component on purpose: a full re-bake here
 	 *  can pin OTHER components' mid-transition values as instance overrides
 	 *  the designer never authored. */
-	void NotifyAuthoringComponentEdited(const USeinDataComponent& Component);
+	void NotifyAuthoringComponentEdited(USeinDataComponent& Component);
 
 	/** True when this instance's entry-type shape differs from its class
 	 *  default only in ways its own authoring components explain (e.g. a

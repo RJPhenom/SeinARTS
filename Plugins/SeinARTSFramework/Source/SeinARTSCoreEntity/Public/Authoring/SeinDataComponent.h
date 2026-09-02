@@ -101,6 +101,19 @@ public:
 	virtual bool WritePayload(FInstancedStruct& Out) const;
 
 #if WITH_EDITOR
+	/** Inverse of WritePayload, used ONCE at first capture: when this
+	 *  component newly takes over a payload type that already has a baked
+	 *  (possibly hand-authored legacy) ComponentData entry, the entry's
+	 *  values are copied INTO this component so migration preserves tuned
+	 *  data instead of stomping it with class defaults. Only properties
+	 *  still identical to this component's archetype are seeded — a
+	 *  designer's explicit pre-bake edits win. Handles both shapes
+	 *  generically: a native subclass's single embedded payload-struct
+	 *  member, or a Blueprint subclass's mirrored top-level properties. */
+	void SeedFromPayload(const FInstancedStruct& Entry);
+#endif
+
+#if WITH_EDITOR
 	/** Route edits into the bridge: bake this component's payload into the
 	 *  owner's ComponentData through the ordinary edit pipeline, which
 	 *  already handles instance-override bookkeeping and PIE live-tuning

@@ -17,7 +17,7 @@ namespace UE::SeinARTSTests
 	TEST(EditorStyleTextureOwnership, "SeinARTS.Editor.Style")
 	{
 		FScopedStyleReinitializer Reinitialize;
-		UTexture2D* Original = FSeinARTSEditorStyle::GetIconTexture(TEXT("SeinEntityIcon92"));
+		UTexture2D* Original = FSeinARTSEditorStyle::GetIconTexture(TEXT("SeinBlueprintIcon92"));
 		ASSERT_THAT(IsNotNull(Original));
 		ASSERT_THAT(IsTrue(Original->IsRooted()));
 		const ISlateStyle* AppStyle = FSlateStyleRegistry::FindSlateStyle(FAppStyle::GetAppStyleSetName());
@@ -31,7 +31,7 @@ namespace UE::SeinARTSTests
 		FSeinARTSEditorStyle::Shutdown();
 
 		FSeinARTSEditorStyle::Initialize();
-		UTexture2D* Reloaded = FSeinARTSEditorStyle::GetIconTexture(TEXT("SeinEntityIcon92"));
+		UTexture2D* Reloaded = FSeinARTSEditorStyle::GetIconTexture(TEXT("SeinBlueprintIcon92"));
 		ASSERT_THAT(IsNotNull(Reloaded));
 		ASSERT_THAT(IsTrue(Reloaded->IsRooted()));
 		const FSlateBrush* ReloadedShowFlagBrush = AppStyle->GetOptionalBrush(

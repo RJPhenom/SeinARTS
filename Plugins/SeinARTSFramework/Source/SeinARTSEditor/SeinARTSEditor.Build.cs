@@ -36,6 +36,8 @@ public class SeinARTSEditor : ModuleRules
             "ClassViewer",
             "Kismet",
             "KismetCompiler",
+            "KismetWidgets",      // SPinTypeSelector for the data-only component editor
+            "ToolMenus",
             "GraphEditor",
             "EditorStyle",
             "Projects",

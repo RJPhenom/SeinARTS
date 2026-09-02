@@ -12,6 +12,7 @@
 #include "Actor/SeinActor.h"
 #include "Abilities/SeinAbility.h"
 #include "Effects/SeinEffectBlueprint.h"
+#include "Authoring/SeinEntityComponentBlueprint.h"
 #include "Formations/SeinFormationBlueprint.h"
 #include "Widgets/SeinWidgetBlueprint.h"
 #include "Util/SeinMovementTuningExport.h"  // IsMovementModeBlueprint (path-resolves USeinMovement; no Movement link dep)
@@ -94,12 +95,13 @@ const FTexture* USeinBlueprintThumbnailRenderer::GetIconResource(ESeinAssetType 
 	FName TextureName;
 	switch (Type)
 	{
-	case ESeinAssetType::Unit:      TextureName = FName(TEXT("SeinEntityIcon92"));    break;
+	case ESeinAssetType::Unit:      TextureName = FName(TEXT("SeinBlueprintIcon92")); break;
 	case ESeinAssetType::Ability:   TextureName = FName(TEXT("SeinAbilityIcon92"));   break;
 	case ESeinAssetType::Effect:    TextureName = FName(TEXT("SeinEffectIcon92"));    break;
 	case ESeinAssetType::Widget:    TextureName = FName(TEXT("SeinWidgetIcon92"));    break;
-	case ESeinAssetType::Formation: TextureName = FName(TEXT("SeinFormationIcon92")); break;
-	case ESeinAssetType::Movement:  TextureName = FName(TEXT("SeinMovementIcon92"));  break;
+	case ESeinAssetType::Formation: TextureName = FName(TEXT("SeinBlueprintIcon92")); break;
+	case ESeinAssetType::Movement:  TextureName = FName(TEXT("SeinBlueprintIcon92")); break;
+	case ESeinAssetType::Component: TextureName = FName(TEXT("SeinComponentIcon92")); break;
 	default: return nullptr;
 	}
 
@@ -138,6 +140,11 @@ USeinBlueprintThumbnailRenderer::ESeinAssetType USeinBlueprintThumbnailRenderer:
 		return ESeinAssetType::Formation;
 	}
 
+	if (Blueprint->IsA<USeinEntityComponentBlueprint>())
+	{
+		return ESeinAssetType::Component;
+	}
+
 	if (Blueprint->ParentClass->IsChildOf(ASeinActor::StaticClass()))
 	{
 		return ESeinAssetType::Unit;
@@ -148,8 +155,10 @@ USeinBlueprintThumbnailRenderer::ESeinAssetType USeinBlueprintThumbnailRenderer:
 		return ESeinAssetType::Ability;
 	}
 
-	// Movement modes are plain UBlueprints parented to USeinMovement — detected via the
-	// canonical predicate (resolves USeinMovement by path, so no Movement link dependency).
+	// Movement modes parent to USeinMovement — the factory creates them as
+	// USeinMovementBlueprint assets, while legacy modes are plain UBlueprints; the
+	// canonical parent-chain predicate catches both (resolves USeinMovement by path,
+	// so no Movement link dependency).
 	if (SeinMovementTuning::IsMovementModeBlueprint(Blueprint))
 	{
 		return ESeinAssetType::Movement;
@@ -164,10 +173,11 @@ FLinearColor USeinBlueprintThumbnailRenderer::GetBarColor(ESeinAssetType Type)
 	{
 	case ESeinAssetType::Unit:      return FLinearColor::FromSRGBColor(FColor::FromHex(TEXT("0095FF"))); // #0095FF
 	case ESeinAssetType::Ability:   return FLinearColor::FromSRGBColor(FColor::FromHex(TEXT("FF0000"))); // #FF0000
-	case ESeinAssetType::Effect:    return FLinearColor::FromSRGBColor(FColor::FromHex(TEXT("FFFF00"))); // #FFFF00
+	case ESeinAssetType::Effect:    return FLinearColor::FromSRGBColor(FColor::FromHex(TEXT("FF0000"))); // #FF0000 (matches Ability)
 	case ESeinAssetType::Widget:    return FLinearColor::FromSRGBColor(FColor::FromHex(TEXT("0095FF"))); // #0095FF
-	case ESeinAssetType::Formation: return FLinearColor::FromSRGBColor(FColor::FromHex(TEXT("3CB371"))); // #3CB371
-	case ESeinAssetType::Movement:  return FLinearColor::FromSRGBColor(FColor::FromHex(TEXT("FF8C00"))); // #FF8C00
+	case ESeinAssetType::Formation: return FLinearColor::FromSRGBColor(FColor::FromHex(TEXT("0095FF"))); // #0095FF (matches Entity Blueprint)
+	case ESeinAssetType::Movement:  return FLinearColor::FromSRGBColor(FColor::FromHex(TEXT("0095FF"))); // #0095FF (matches Entity Blueprint)
+	case ESeinAssetType::Component: return FLinearColor::FromSRGBColor(FColor::FromHex(TEXT("FF8000"))); // #FF8000 (Entity Component orange)
 	default:                        return FLinearColor::Transparent;
 	}
 }

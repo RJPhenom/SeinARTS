@@ -51,7 +51,7 @@ public:
 	/** EXTRA gap added to the footprint DIAMETER when spacing neighbours (UE world units, cm). 0 (the
 	 *  default) = footprints touch — the densest non-overlapping spacing; raise to open the ring up.
 	 *  Also added to the radial gap between concentric layers. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Formation",
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (DisplayName = "Inter Unit Spacing"))
 	FFixedPoint InterUnitSpacing = FFixedPoint::Zero;
 

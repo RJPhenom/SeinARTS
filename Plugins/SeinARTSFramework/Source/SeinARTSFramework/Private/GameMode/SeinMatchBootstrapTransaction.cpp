@@ -660,7 +660,7 @@ bool FSeinMatchBootstrapTransaction::ValidateEntityComponentData(
 					&& USeinEntityBridgeComponent::ValidateComponentData(
 						ClassComponents[0]->ComponentData, ClassIssues))
 				{
-					OutError += TEXT(" The class default is valid — this placed instance carries a stale ComponentData override; revert the Component Data property on the placed actor to re-sync.");
+					OutError += TEXT(" The class default is valid — this placed instance carries a stale ComponentData override; re-save the level or edit a Sein component on the placed actor so it re-bakes.");
 				}
 			}
 		}

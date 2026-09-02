@@ -52,7 +52,7 @@ public:
 	/** World-space spacing between files (across the front) and ranks (in depth).
 	 *  Scale in UE world units (cm). Front-rank column count = how many fit across
 	 *  the drag width at this spacing (capped at N). */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Formation",
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (DisplayName = "Inter Unit Spacing"))
 	FFixedPoint InterUnitSpacing = FFixedPoint::FromInt(150);
 

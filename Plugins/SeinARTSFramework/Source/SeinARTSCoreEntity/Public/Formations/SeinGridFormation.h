@@ -44,7 +44,7 @@ public:
 	/** World-space spacing between units in the grid. Scale in UE world units (cm).
 	 *  150 ≈ one infantryman's personal-space radius. (Moved here from the default
 	 *  broker resolver's InterUnitSpacing.) */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Formation",
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (DisplayName = "Inter Unit Spacing"))
 	FFixedPoint InterUnitSpacing = FFixedPoint::FromInt(150);
 

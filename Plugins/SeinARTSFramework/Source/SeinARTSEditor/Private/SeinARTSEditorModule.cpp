@@ -70,6 +70,7 @@
 #include "Visualizers/SeinEntityComponentVisualizer.h"
 #include "Actor/SeinEntityBridgeComponent.h"
 #include "Authoring/SeinDataComponent.h"
+#include "Authoring/SeinEntityComponentBlueprint.h"
 #include "Components/SeinComponentEligibility.h"
 #include "Containers/Ticker.h"
 #include "Engine/BlueprintGeneratedClass.h"
@@ -586,6 +587,21 @@ void FSeinARTSEditorModule::StartupModule()
 		USeinFormationBlueprint::StaticClass(),
 		USeinBlueprintThumbnailRenderer::StaticClass()
 	);
+	ThumbnailMgr.RegisterCustomRenderer(
+		USeinEntityComponentBlueprint::StaticClass(),
+		USeinBlueprintThumbnailRenderer::StaticClass()
+	);
+	// Movement modes carry the USeinMovementBlueprint asset class (path-resolved —
+	// no Movement link dependency; legacy modes authored as plain UBlueprints keep
+	// the engine's default Blueprint thumbnail).
+	if (UClass* MovementBlueprintClass =
+		FindObject<UClass>(nullptr, TEXT("/Script/SeinARTSMovement.SeinMovementBlueprint")))
+	{
+		ThumbnailMgr.RegisterCustomRenderer(
+			MovementBlueprintClass,
+			USeinBlueprintThumbnailRenderer::StaticClass()
+		);
+	}
 	// Sein UDSes (Right-click → Component) get the SeinComponentIcon92 tile.
 	// The renderer falls through to the engine default for non-Sein UDSes.
 	ThumbnailMgr.RegisterCustomRenderer(
@@ -873,6 +889,12 @@ void FSeinARTSEditorModule::ReleaseModuleOwnedState()
 			ThumbnailManager->UnregisterCustomRenderer(USeinAbilityBlueprint::StaticClass());
 			ThumbnailManager->UnregisterCustomRenderer(USeinEffectBlueprint::StaticClass());
 			ThumbnailManager->UnregisterCustomRenderer(USeinFormationBlueprint::StaticClass());
+			ThumbnailManager->UnregisterCustomRenderer(USeinEntityComponentBlueprint::StaticClass());
+			if (UClass* MovementBlueprintClass =
+				FindObject<UClass>(nullptr, TEXT("/Script/SeinARTSMovement.SeinMovementBlueprint")))
+			{
+				ThumbnailManager->UnregisterCustomRenderer(MovementBlueprintClass);
+			}
 			ThumbnailManager->UnregisterCustomRenderer(UUserDefinedStruct::StaticClass());
 		}
 	}
@@ -943,9 +965,16 @@ void FSeinARTSEditorModule::RegisterAssetTypeActions()
 	};
 
 	RegisterAction(MakeShared<FAssetTypeActions_SeinActorBlueprint>());
+	RegisterAction(MakeShared<FAssetTypeActions_SeinEntityComponentBlueprint>());
 	RegisterAction(MakeShared<FAssetTypeActions_SeinAbilityBlueprint>());
 	RegisterAction(MakeShared<FAssetTypeActions_SeinEffectBlueprint>());
 	RegisterAction(MakeShared<FAssetTypeActions_SeinFormationBlueprint>());
+	// Movement Mode actions register only when the Movement module's asset class is
+	// present (path-resolved — no Movement link dependency, matching the factory).
+	if (FindObject<UClass>(nullptr, TEXT("/Script/SeinARTSMovement.SeinMovementBlueprint")))
+	{
+		RegisterAction(MakeShared<FAssetTypeActions_SeinMovementBlueprint>());
+	}
 	RegisterAction(MakeShared<FAssetTypeActions_SeinBalanceProfile>());
 }
 

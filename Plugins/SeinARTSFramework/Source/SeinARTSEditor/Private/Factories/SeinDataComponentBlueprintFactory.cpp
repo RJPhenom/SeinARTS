@@ -7,6 +7,8 @@
 #include "SeinARTSEditorModule.h"
 
 #include "Authoring/SeinDataComponent.h"
+#include "Authoring/SeinEntityComponentBlueprint.h"
+#include "Settings/PluginSettings.h"
 #include "Engine/Blueprint.h"
 #include "Engine/BlueprintGeneratedClass.h"
 #include "Kismet2/KismetEditorUtilities.h"
@@ -15,7 +17,7 @@
 
 USeinDataComponentBlueprintFactory::USeinDataComponentBlueprintFactory()
 {
-	SupportedClass = UBlueprint::StaticClass();
+	SupportedClass = USeinEntityComponentBlueprint::StaticClass();
 	bCreateNew = true;
 	bEditAfterNew = true;
 }
@@ -26,19 +28,27 @@ UObject* USeinDataComponentBlueprintFactory::FactoryCreateNew(
 {
 	return FKismetEditorUtilities::CreateBlueprint(
 		USeinDataComponent::StaticClass(), InParent, Name,
-		BPTYPE_Normal, UBlueprint::StaticClass(),
+		BPTYPE_Normal, USeinEntityComponentBlueprint::StaticClass(),
 		UBlueprintGeneratedClass::StaticClass(),
 		TEXT("SeinDataComponentBlueprintFactory"));
 }
 
 FText USeinDataComponentBlueprintFactory::GetDisplayName() const
 {
-	return LOCTEXT("DisplayName", "SeinARTS Data Component");
+	return LOCTEXT("DisplayName", "SeinARTS Entity Component");
 }
 
 uint32 USeinDataComponentBlueprintFactory::GetMenuCategories() const
 {
-	return FSeinARTSEditorModule::GetAssetCategoryBit();
+	// Inherits the legacy component factory's Basic-category settings toggle
+	// (Editor Preferences → Factory Visibility → "Show SeinARTS Entity
+	// Component in Basic Category").
+	uint32 Categories = FSeinARTSEditorModule::GetAssetCategoryBit();
+	if (GetDefault<USeinARTSCoreSettings>()->bShowComponentInBasicCategory)
+	{
+		Categories |= EAssetTypeCategories::Basic;
+	}
+	return Categories;
 }
 
 #undef LOCTEXT_NAMESPACE
