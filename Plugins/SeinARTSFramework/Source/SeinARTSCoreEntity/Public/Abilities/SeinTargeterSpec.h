@@ -180,7 +180,7 @@ protected:
  *
  * The spec references the building's Blueprint actor class via BuildingClass
  * (soft pointer). At Activate time the targeter pulls the CDO's extents
- * (USeinExtentsComponent + FSeinExtentsComponent) for footprint visualization and
+ * (USeinExtentsComponent + FSeinExtentsPayload) for footprint visualization and
  * validation; the preview reads the CDO's static mesh component for the
  * hologram. Designers can override the preview mesh per-spec via
  * PreviewMeshOverride when the runtime mesh is unsuitable for ghosting

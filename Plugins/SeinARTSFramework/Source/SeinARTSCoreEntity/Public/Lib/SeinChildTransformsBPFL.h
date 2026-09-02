@@ -10,7 +10,7 @@
 #include "CoreMinimal.h"
 #include "Kismet/BlueprintFunctionLibrary.h"
 #include "Core/SeinEntityHandle.h"
-#include "Components/SeinChildTransformsComponent.h"
+#include "Components/SeinChildTransformsPayload.h"
 #include "GameplayTagContainer.h"
 #include "Types/Transform.h"
 #include "SeinChildTransformsBPFL.generated.h"
@@ -71,7 +71,7 @@ public:
 	 *  above to avoid the array copy. */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|ChildTransforms",
 		meta = (WorldContext = "WorldContextObject", DisplayName = "Get Child Transforms Data"))
-	static bool SeinGetChildTransformsData(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, FSeinChildTransformsComponent& OutData);
+	static bool SeinGetChildTransformsData(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, FSeinChildTransformsPayload& OutData);
 
 private:
 	static USeinWorldSubsystem* GetWorldSubsystem(const UObject* WorldContextObject);

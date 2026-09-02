@@ -585,17 +585,17 @@ public:
 	//
 	// One-arg surfaces for ability BP graphs. The ability is the trigger; the
 	// actual production data (build time, refund policy, research effect) lives
-	// on the producible's `FSeinProducibleComponent` and is read at enqueue
+	// on the producible's `FSeinProduciblePayload` and is read at enqueue
 	// time. The ability supplies cost (its own ResourceCost) and the producer
 	// (its own OwnerEntity).
 
 	/** Append a queue entry on the ability's owner for `ProducibleClass`. Reads
 	 *  build time, refund policy, and research effect from the class's
-	 *  `FSeinProducibleComponent`. The activation's deducted cost becomes the
+	 *  `FSeinProduciblePayload`. The activation's deducted cost becomes the
 	 *  queue's refundable AtEnqueue principal; a Production Queue ability also
 	 *  transfers its deferred bucket. No-op (with warning) if owner has no
-	 *  FSeinProductionComponent, queue
-	 *  is full, or the producible has no FSeinProducibleComponent.
+	 *  FSeinProductionPayload, queue
+	 *  is full, or the producible has no FSeinProduciblePayload.
 	 *
 	 *  BP usage: OnActivate → Self.EnqueueProduction(SU_Rifleman) → End Ability. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Ability|Production",
@@ -604,7 +604,7 @@ public:
 
 	/** Set the ability owner's rally point to a world transform. Produced units
 	 *  rally to `Transform.GetLocation()` facing `Transform.GetRotation()`.
-	 *  No-op if owner has no FSeinProductionComponent component.
+	 *  No-op if owner has no FSeinProductionPayload component.
 	 *
 	 *  BP usage: OnActivate → Self.SetRallyPoint(MakeFixedTransform(Self.TargetLocation)). */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Ability|Production",
@@ -613,7 +613,7 @@ public:
 
 	/** Set the ability owner's rally target to chase an entity. Produced units
 	 *  path to the entity's current transform at dispatch time. No-op if owner
-	 *  has no FSeinProductionComponent component. */
+	 *  has no FSeinProductionPayload component. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Ability|Production",
 		meta = (DisplayName = "Set Rally Entity"))
 	void SetRallyEntity(FSeinEntityHandle RallyEntity);

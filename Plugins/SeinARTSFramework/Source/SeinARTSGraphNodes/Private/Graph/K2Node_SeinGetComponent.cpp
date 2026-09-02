@@ -13,7 +13,7 @@
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Styling/SlateIconFinder.h"
 
-#include "Components/SeinComponent.h"
+#include "Components/SeinPayload.h"
 #include "Core/SeinEntityHandle.h"
 #include "Graph/SeinComponentNodeMenuCache.h"   // shared candidate-struct enumeration
 #include "Lib/SeinComponentBPFL.h"
@@ -147,7 +147,7 @@ FText UK2Node_SeinGetComponent::GetTooltipText() const
 }
 
 // =============================================================================
-// Action menu — one entry per discovered FSeinComponent substruct
+// Action menu — one entry per discovered FSeinPayload substruct
 // =============================================================================
 
 void UK2Node_SeinGetComponent::GetMenuActions(FBlueprintActionDatabaseRegistrar& ActionRegistrar) const

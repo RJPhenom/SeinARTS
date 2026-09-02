@@ -3,14 +3,14 @@
  * @file    SeinMovementDriverSystem.h
  * @brief   The always-on per-unit movement driver (CP2.1, Decisions D-R2).
  *
- *          Every entity carrying an FSeinMovementComponent is driven EVERY sim
+ *          Every entity carrying an FSeinMovementPayload is driven EVERY sim
  *          tick — there is no tick-orphaned state anymore. The split of one
  *          tick's responsibility:
  *            - An entity with an ACTIVE move order this tick was already
  *              steered by its USeinMoveToAction (the latent-action manager
  *              ticks FIRST in the AbilityExecution phase, hardcoded in
  *              USeinWorldSubsystem::TickSystems before the phase's registered
- *              systems run) — `FSeinMovementComponent::bHasTarget` is therefore
+ *              systems run) — `FSeinMovementPayload::bHasTarget` is therefore
  *              the authoritative "an order steered me this tick" discriminator
  *              by the time this system reads it, and the driver skips the unit.
  *            - Everything else gets `USeinMovement::TickIdle` on its PERSISTENT
@@ -55,8 +55,8 @@
 #include "Core/SeinParallel.h"
 #include "SeinMovementSubsystem.h"
 #include "Movement/SeinMovement.h"
-#include "Components/SeinMovementComponent.h"
-#include "Components/SeinNavigationComponent.h"
+#include "Components/SeinMovementPayload.h"
+#include "Components/SeinNavigationPayload.h"
 #include "Components/SeinContainmentMemberData.h"
 #include "SeinNavigation.h"
 #include "SeinNavigationSubsystem.h"
@@ -112,8 +112,8 @@ public:
 		{
 			FSeinEntity* Entity;
 			FSeinEntityHandle Handle;
-			FSeinMovementComponent* Move;
-			const FSeinNavigationComponent* NavComp;
+			FSeinMovementPayload* Move;
+			const FSeinNavigationPayload* NavComp;
 			USeinMovement* Movement;
 			FSeinEntity EntityBefore;
 			FFixedVector VelocityBefore;
@@ -134,17 +134,17 @@ public:
 		// instead of a hash-map probe per component per entity. Iteration
 		// order (ascending slot) and the visited set are identical to the old
 		// pool-order + GetComponent-null-check pattern.
-		TSeinComponentView<FSeinMovementComponent> MoveView(World);
+		TSeinComponentView<FSeinMovementPayload> MoveView(World);
 		// Read-only joins use the ungated read view — exact match for the old
 		// const GetComponent<T> semantics (no mutable-state-access gate).
 		TSeinComponentReadView<FSeinContainmentMemberData> ContainView(World);
-		TSeinComponentReadView<FSeinNavigationComponent> NavView(World);
+		TSeinComponentReadView<FSeinNavigationPayload> NavView(World);
 		if (!MoveView.IsBound()) return;
 		const FSeinEntityPool& ConstPool = World.GetEntityPool();
 		SeinQuery::ForEachAlive(ConstPool, MoveView,
 			[&](FSeinEntityHandle Handle, int32 Slot)
 		{
-			const FSeinMovementComponent* ReadMove = MoveView.GetConstAt(Slot);
+			const FSeinMovementPayload* ReadMove = MoveView.GetConstAt(Slot);
 			if (!ReadMove) return;
 
 			// An active move order steered this entity this tick — the order
@@ -179,7 +179,7 @@ public:
 			FSeinEntity* Entity = bDeferredStateTracking
 				? Pool->GetForDeferredMutation(Handle)
 				: World.GetEntityMutable(Handle);
-			FSeinMovementComponent* Move = bDeferredStateTracking
+			FSeinMovementPayload* Move = bDeferredStateTracking
 				? MoveView.GetDeferredAt(Slot)
 				: MoveView.GetMutableAt(Slot);
 			if (!Entity || !Move) return;

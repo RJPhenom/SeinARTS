@@ -8,7 +8,7 @@
 
 #include "CoreMinimal.h"
 #include "Kismet/BlueprintFunctionLibrary.h"
-#include "Components/SeinEntityControlComponent.h"
+#include "Components/SeinEntityControlPayload.h"
 #include "SeinEntityControlBPFL.generated.h"
 
 class USeinWorldSubsystem;

@@ -3,7 +3,7 @@
  * @file    SeinFogOfWarEntityDraw.h
  * @brief   Static draw helper bound to FSeinARTSEditorModule's per-component
  *          draw registry. Walks the entity bridge's ComponentData for
- *          `FSeinVisionComponent` entries and draws each stamp's Radial /
+ *          `FSeinVisionPayload` entries and draws each stamp's Radial /
  *          Rect / Conical shape in the BP / level editor viewport.
  *
  *          Lives in SeinARTSFogOfWarEditor so SeinARTSEditor itself stays

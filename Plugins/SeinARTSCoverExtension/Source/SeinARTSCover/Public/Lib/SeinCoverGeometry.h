@@ -15,7 +15,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Components/SeinExtentsComponent.h"
+#include "Components/SeinExtentsPayload.h"
 #include "Core/SeinEntityHandle.h"
 #include "Math/MathLib.h"
 #include "Simulation/SeinWorldSubsystem.h"
@@ -108,7 +108,7 @@ namespace SeinCoverGeometry
 	 *  slot whose footprint would clip a wall, even when the slot's nav cell
 	 *  rasterized as passable. Pure fixed-point; deterministic. */
 	inline bool CircleOverlapsExtents(
-		const FSeinExtentsComponent* Extents,
+		const FSeinExtentsPayload* Extents,
 		const FFixedVector& EntityLocation,
 		const FFixedQuaternion& EntityRotation,
 		const FFixedVector& Center,
@@ -194,7 +194,7 @@ namespace SeinCoverGeometry
 	 *  See `OutwardFromExtents` for the semantics + return contract; this
 	 *  helper is just the math without the data plumbing. */
 	inline FFixedVector OutwardFromExtentsCached(
-		const FSeinExtentsComponent* Extents,
+		const FSeinExtentsPayload* Extents,
 		const FFixedVector& EntityLocation,
 		const FFixedQuaternion& EntityRotation,
 		const FFixedVector& WorldPoint)
@@ -231,7 +231,7 @@ namespace SeinCoverGeometry
 	 *  query point.
 	 *
 	 *  Returns zero vector when:
-	 *    - Provider has no FSeinExtentsComponent component (no body to query)
+	 *    - Provider has no FSeinExtentsPayload component (no body to query)
 	 *    - Provider's Shapes array is empty
 	 *    - Query point coincides with the surface point (degenerate; nearly
 	 *      zero in practice, caller can treat as "fully covered" or whatever
@@ -247,7 +247,7 @@ namespace SeinCoverGeometry
 		const FFixedVector& WorldPoint)
 	{
 		if (!WorldSub) return FFixedVector::ZeroVector;
-		const FSeinExtentsComponent* Extents = WorldSub->GetComponent<FSeinExtentsComponent>(ProviderHandle);
+		const FSeinExtentsPayload* Extents = WorldSub->GetComponent<FSeinExtentsPayload>(ProviderHandle);
 		if (!Extents) return FFixedVector::ZeroVector;
 		const FSeinEntity* Entity = WorldSub->GetEntity(ProviderHandle);
 		if (!Entity) return FFixedVector::ZeroVector;

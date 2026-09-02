@@ -20,8 +20,8 @@
 #include "Data/SeinNavLayerDefinition.h"
 #include "Actor/SeinActor.h"
 #include "Actor/SeinEntityBridgeComponent.h"
-#include "Components/SeinMovementComponent.h"
-#include "Components/SeinExtentsComponent.h"
+#include "Components/SeinMovementPayload.h"
+#include "Components/SeinExtentsPayload.h"
 #include "Stamping/SeinStampUtils.h"
 #include "SeinARTSNavigationModule.h"
 #include "SeinLevelData.h"
@@ -261,7 +261,7 @@ void USeinNavigationAStar::BakeLayer(const USeinLevelData& Substrate, UWorld* Wo
 		bool bSkip = false;
 		if (const USeinEntityBridgeComponent* Bridge = A->FindComponentByClass<USeinEntityBridgeComponent>())
 		{
-			if (const FSeinExtentsComponent* Ext = Bridge->FindAuthoredData<FSeinExtentsComponent>())
+			if (const FSeinExtentsPayload* Ext = Bridge->FindAuthoredData<FSeinExtentsPayload>())
 			{
 				if (!Ext->bBakesIntoNav) bSkip = true;
 			}
@@ -269,7 +269,7 @@ void USeinNavigationAStar::BakeLayer(const USeinLevelData& Substrate, UWorld* Wo
 			{
 				for (const FInstancedStruct& E : Bridge->ComponentData)
 				{
-					if (E.GetScriptStruct() == FSeinMovementComponent::StaticStruct()) { bSkip = true; break; }
+					if (E.GetScriptStruct() == FSeinMovementPayload::StaticStruct()) { bSkip = true; break; }
 				}
 			}
 		}

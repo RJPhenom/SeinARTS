@@ -84,7 +84,7 @@ protected:
 	/**
 	 * Smarter replacement for AHUD::GetActorsInSelectionRectangle. For every
 	 * selectable ASeinActor, build a screen-space CONVEX POLYGON from its
-	 * authored sim geometry (FSeinExtentsComponent shapes; falls back to the
+	 * authored sim geometry (FSeinExtentsPayload shapes; falls back to the
 	 * actor's component bounds) and test that polygon against the marquee
 	 * rectangle with SAT. The engine routine instead unions an actor's full 3D
 	 * bounds into a loose screen-space AABB — coarse, and it drifts from the

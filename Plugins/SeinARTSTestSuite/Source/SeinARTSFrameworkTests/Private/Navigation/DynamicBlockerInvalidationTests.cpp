@@ -1,6 +1,6 @@
 #include "CQTest.h"
-#include "Components/SeinMovementComponent.h"
-#include "Components/SeinNavigationComponent.h"
+#include "Components/SeinMovementPayload.h"
+#include "Components/SeinNavigationPayload.h"
 #include "Movement/SeinBasicUnitMovement.h"
 #include "Movement/SeinMovement.h"
 #include "SeinNavigationAStar.h"
@@ -780,8 +780,8 @@ namespace UE::SeinARTSTests
 
 		FSeinEntity Entity;
 		Entity.Transform.SetLocation(NearDestination);
-		FSeinMovementComponent MovementData;
-		FSeinNavigationComponent NavigationData;
+		FSeinMovementPayload MovementData;
+		FSeinNavigationPayload NavigationData;
 		NavigationData.NavLayerMask = 0x01;
 		NavigationData.FallbackFootprintRadius = FootprintRadius;
 		int32 CurrentWaypointIndex = Path.Waypoints.Num() - 1;

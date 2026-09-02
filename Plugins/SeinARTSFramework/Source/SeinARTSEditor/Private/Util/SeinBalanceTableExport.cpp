@@ -9,7 +9,7 @@
 #include "Balance/SeinBalanceProfile.h"
 #include "Actor/SeinActor.h"
 #include "Actor/SeinEntityBridgeComponent.h"
-#include "Components/SeinIdentityComponent.h"
+#include "Components/SeinIdentityPayload.h"
 #include "Components/SeinComponentEligibility.h"
 #include "Types/FixedPoint.h"
 #include "Abilities/SeinAbility.h"
@@ -43,7 +43,7 @@ namespace
 	/** UDS-field metadata key holding the column's stable source identity (rename-safe sync). */
 	const FName SeinBalanceSourceKey(TEXT("SeinBalanceSource"));
 
-	/** Short, collision-resistant label for a component struct: "FSeinMovementComponent" → "Movement". */
+	/** Short, collision-resistant label for a component struct: "FSeinMovementPayload" → "Movement". */
 	FString DeriveComponentLabel(const UScriptStruct* Struct)
 	{
 		FString Name = Struct->GetName();          // reflected name has no leading 'F'
@@ -197,7 +197,7 @@ namespace
 			TArray<FSeinBalanceColumn>& OutColumns) const override
 		{
 			const UEdGraphSchema_K2* Schema = GetDefault<UEdGraphSchema_K2>();
-			const UScriptStruct* IdentityStruct = FSeinIdentityComponent::StaticStruct();
+			const UScriptStruct* IdentityStruct = FSeinIdentityPayload::StaticStruct();
 
 			// Which component structs to expand into columns.
 			TArray<UScriptStruct*> Structs;
@@ -232,7 +232,7 @@ namespace
 				for (TFieldIterator<FProperty> It(SS); It; ++It)
 				{
 					FProperty* Prop = *It;
-					if (Prop->GetOwnerStruct() != SS) continue;  // own fields only (skip FSeinComponent base)
+					if (Prop->GetOwnerStruct() != SS) continue;  // own fields only (skip FSeinPayload base)
 
 					// Designer-authored fields only (EditAnywhere/EditDefaultsOnly). Excludes the
 					// component's runtime state — BlueprintReadWrite-only fields like Velocity,
@@ -311,15 +311,15 @@ namespace
 		}
 	};
 
-	/** DisplayName + IdentityTag from FSeinIdentityComponent — read-only row labels. Emitted only
-	 *  in track-all mode or when the profile explicitly lists FSeinIdentityComponent. */
+	/** DisplayName + IdentityTag from FSeinIdentityPayload — read-only row labels. Emitted only
+	 *  in track-all mode or when the profile explicitly lists FSeinIdentityPayload. */
 	class FIdentityColumnProvider : public ISeinBalanceColumnProvider
 	{
 	public:
 		virtual void DescribeColumns(const TArray<UClass*>& /*Targets*/, const USeinBalanceProfile& Profile,
 			TArray<FSeinBalanceColumn>& OutColumns) const override
 		{
-			UScriptStruct* IdStruct = FSeinIdentityComponent::StaticStruct();
+			UScriptStruct* IdStruct = FSeinIdentityPayload::StaticStruct();
 			const bool bWanted = Profile.TrackedComponents.Num() == 0
 				|| Profile.TrackedComponents.Contains(IdStruct);
 			if (!bWanted) return;
@@ -359,7 +359,7 @@ namespace
 	};
 
 	/** Per-class sub-data fields nested inside a tracked component's FInstancedStruct field (e.g.
-	 *  FSeinMovementComponent::MovementClassData → FSeinWheeledMovementData's Wheelbase). Discovers the
+	 *  FSeinMovementPayload::MovementClassData → FSeinWheeledMovementData's Wheelbase). Discovers the
 	 *  inner sub-data types actually authored across the matched entities purely by reflection (no
 	 *  dependency on the Movement+ extension where those structs live), and emits a column per inner
 	 *  deterministic field. A unit whose sub-data is a different inner type (or empty) gets a sparse
@@ -371,7 +371,7 @@ namespace
 			TArray<FSeinBalanceColumn>& OutColumns) const override
 		{
 			const UEdGraphSchema_K2* Schema = GetDefault<UEdGraphSchema_K2>();
-			const UScriptStruct* IdentityStruct = FSeinIdentityComponent::StaticStruct();
+			const UScriptStruct* IdentityStruct = FSeinIdentityPayload::StaticStruct();
 
 			TArray<UScriptStruct*> Structs;
 			if (Profile.TrackedComponents.Num() > 0)

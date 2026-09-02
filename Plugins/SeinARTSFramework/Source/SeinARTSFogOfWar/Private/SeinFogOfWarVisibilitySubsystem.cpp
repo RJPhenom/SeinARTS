@@ -144,7 +144,7 @@ void USeinFogOfWarVisibilitySubsystem::Tick(float DeltaTime)
 		{
 			// Centralized policy + owner + bits check — same helper the
 			// cover system uses to gate per-player query results. Single
-			// source of truth: FSeinFogVisibilityComponent::FogVisibilityPolicy
+			// source of truth: FSeinFogVisibilityPayload::FogVisibilityPolicy
 			// + owner-sees-own + Explored-bit reveal + active-vision check
 			// all live inside `USeinFogOfWar::IsEntityVisibleToObserver`.
 			const bool bVisible = Fog->IsEntityVisibleToObserver(Observer, *Sim, Handle);

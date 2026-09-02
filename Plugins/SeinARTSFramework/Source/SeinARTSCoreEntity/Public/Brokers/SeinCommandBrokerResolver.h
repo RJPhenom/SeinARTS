@@ -66,7 +66,7 @@ public:
 	/**
 	 * Per-member tag resolution hook — "which ability does THIS member want to
 	 * run for THIS click context?" The default implementation delegates to the
-	 * member's own `FSeinAbilityComponent::ResolveCommandContext` (walks the unit's
+	 * member's own `FSeinAbilityPayload::ResolveCommandContext` (walks the unit's
 	 * DefaultCommands table, picks highest-priority match, falls back to
 	 * FallbackAbilityTag). Override this when you want faction / state /
 	 * relationship-based overrides without reimplementing the full dispatch
@@ -150,7 +150,7 @@ public:
 	 * `ReassignSlots`): lateral = left/right rank, depth = front/back rank, both =
 	 * 2-D nearest-slot, neither = raw index order. The caller passes the formation-
 	 * level opt-OUT flags (non-squad selections) or the squad's per-squad opt-IN
-	 * flags (FSeinSquadComponent).
+	 * flags (FSeinSquadPayload).
 	 */
 	UFUNCTION(BlueprintNativeEvent, Category = "SeinARTS|Broker", meta = (DisplayName = "Resolve Formation Layout"))
 	FSeinFormationLayout ResolveFormationLayout(
@@ -216,7 +216,7 @@ public:
 	 *     via the broker's capability map (or freshly looked up). Null →
 	 *     defaults to `All` (matches "no entry" semantics).
 	 *   - `BrokerHandle`: the broker carrier entity. Used to look up
-	 *     `FSeinSquadComponent` for squad-specific Leader semantics; non-squad
+	 *     `FSeinSquadPayload` for squad-specific Leader semantics; non-squad
 	 *     brokers degrade gracefully (Leader → first candidate in order).
 	 *   - `Candidates`: the entities that hold an instance of the ability,
 	 *     pre-intersected with the order's `EffectiveMembers` by the caller.

@@ -2,8 +2,8 @@
 #include "Components/ActorTestSpawner.h"
 
 #include "Actor/SeinActor.h"
-#include "Components/SeinAbilityComponent.h"
-#include "Components/SeinMovementComponent.h"
+#include "Components/SeinAbilityPayload.h"
+#include "Components/SeinMovementPayload.h"
 #include "TestTypes/SeinLiveTuningTestTypes.h"
 #include "Algo/Reverse.h"
 #include "Containers/Ticker.h"
@@ -27,18 +27,18 @@ namespace UE::SeinARTSTests
 	namespace
 	{
 		FSeinComponentPropertyPatch MakeTopSpeedPatch(
-			const FSeinMovementComponent& Before,
+			const FSeinMovementPayload& Before,
 			FFixedPoint NewTopSpeed,
 			ESeinComponentInstanceOverrideOperation OverrideOperation)
 		{
-			FSeinMovementComponent After = Before;
+			FSeinMovementPayload After = Before;
 			After.TopSpeed = NewTopSpeed;
 			TArray<FInstancedStruct> BeforeEntries;
 			BeforeEntries.AddDefaulted_GetRef()
-				.InitializeAs<FSeinMovementComponent>(Before);
+				.InitializeAs<FSeinMovementPayload>(Before);
 			TArray<FInstancedStruct> AfterEntries;
 			AfterEntries.AddDefaulted_GetRef()
-				.InitializeAs<FSeinMovementComponent>(After);
+				.InitializeAs<FSeinMovementPayload>(After);
 			TArray<FSeinComponentPropertyPatch> Patches;
 			FString Error;
 			const bool bBuilt = SeinBuildComponentPropertyPatches(
@@ -69,16 +69,16 @@ namespace UE::SeinARTSTests
 
 		/** Every authored difference between two movement payloads, as patches. */
 		TArray<FSeinComponentPropertyPatch> MakeMovementPatches(
-			const FSeinMovementComponent& Before,
-			const FSeinMovementComponent& After,
+			const FSeinMovementPayload& Before,
+			const FSeinMovementPayload& After,
 			ESeinComponentInstanceOverrideOperation OverrideOperation)
 		{
 			TArray<FInstancedStruct> BeforeEntries;
 			BeforeEntries.AddDefaulted_GetRef()
-				.InitializeAs<FSeinMovementComponent>(Before);
+				.InitializeAs<FSeinMovementPayload>(Before);
 			TArray<FInstancedStruct> AfterEntries;
 			AfterEntries.AddDefaulted_GetRef()
-				.InitializeAs<FSeinMovementComponent>(After);
+				.InitializeAs<FSeinMovementPayload>(After);
 			TArray<FSeinComponentPropertyPatch> Patches;
 			FString Error;
 			checkf(SeinBuildComponentPropertyPatches(
@@ -119,18 +119,18 @@ namespace UE::SeinARTSTests
 		}
 
 		FSeinComponentPropertyPatch MakeGrantedAbilitiesPatch(
-			const FSeinAbilityComponent& Before,
+			const FSeinAbilityPayload& Before,
 			TArray<TSubclassOf<USeinAbility>> NewAbilities,
 			ESeinComponentInstanceOverrideOperation OverrideOperation)
 		{
-			FSeinAbilityComponent After = Before;
+			FSeinAbilityPayload After = Before;
 			After.GrantedAbilities = MoveTemp(NewAbilities);
 			TArray<FInstancedStruct> BeforeEntries;
 			BeforeEntries.AddDefaulted_GetRef()
-				.InitializeAs<FSeinAbilityComponent>(Before);
+				.InitializeAs<FSeinAbilityPayload>(Before);
 			TArray<FInstancedStruct> AfterEntries;
 			AfterEntries.AddDefaulted_GetRef()
-				.InitializeAs<FSeinAbilityComponent>(After);
+				.InitializeAs<FSeinAbilityPayload>(After);
 			TArray<FSeinComponentPropertyPatch> Patches;
 			FString Error;
 			checkf(SeinBuildComponentPropertyPatches(
@@ -144,7 +144,7 @@ namespace UE::SeinARTSTests
 	TEST(ComponentLiveTuningTraversesConcreteInstancedStructFields,
 		"SeinARTS.Unit.Entity.LiveTuning")
 	{
-		FSeinMovementComponent Before;
+		FSeinMovementPayload Before;
 		FSeinAvoidanceOutput AuthoredTuning;
 		AuthoredTuning.SteerDir = FFixedVector(
 			FFixedPoint::One, FFixedPoint::Zero, FFixedPoint::Zero);
@@ -152,15 +152,15 @@ namespace UE::SeinARTSTests
 		Before.MovementClassData.InitializeAs<FSeinAvoidanceOutput>(
 			AuthoredTuning);
 
-		FSeinMovementComponent After = Before;
+		FSeinMovementPayload After = Before;
 		After.MovementClassData.GetMutable<FSeinAvoidanceOutput>()
 			.SpeedScale = FFixedPoint::Two;
 		TArray<FInstancedStruct> BeforeEntries;
 		BeforeEntries.AddDefaulted_GetRef()
-			.InitializeAs<FSeinMovementComponent>(Before);
+			.InitializeAs<FSeinMovementPayload>(Before);
 		TArray<FInstancedStruct> AfterEntries;
 		AfterEntries.AddDefaulted_GetRef()
-			.InitializeAs<FSeinMovementComponent>(After);
+			.InitializeAs<FSeinMovementPayload>(After);
 
 		TArray<FSeinComponentPropertyPatch> Patches;
 		FString Error;
@@ -170,10 +170,10 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(Patches[0].PropertyPath.Num() >= 2));
 		ASSERT_THAT(AreEqual(
 			GET_MEMBER_NAME_STRING_CHECKED(
-				FSeinMovementComponent, MovementClassData),
+				FSeinMovementPayload, MovementClassData),
 			Patches[0].PropertyPath[0].PropertyName));
 
-		FSeinMovementComponent RuntimeValue = Before;
+		FSeinMovementPayload RuntimeValue = Before;
 		const FFixedVector RuntimeSteer(
 			FFixedPoint::FromInt(9), FFixedPoint::FromInt(4),
 			FFixedPoint::Zero);
@@ -187,7 +187,7 @@ namespace UE::SeinARTSTests
 		FProperty* Property = nullptr;
 		void* Value = nullptr;
 		ASSERT_THAT(IsTrue(SeinResolveComponentPropertyPath(
-			FSeinMovementComponent::StaticStruct(), &RuntimeValue,
+			FSeinMovementPayload::StaticStruct(), &RuntimeValue,
 			Patches[0].PropertyPath, Property, Value, Error)));
 		const TCHAR* End = Property->ImportText_Direct(
 			*Patches[0].ExportedValue, Value, nullptr, PPF_None);
@@ -274,30 +274,30 @@ namespace UE::SeinARTSTests
 			OverriddenEntity = World->SpawnEntity(
 				ASeinActor::StaticClass(), FFixedTransform(), Player);
 
-			FSeinMovementComponent InheritedMovement;
+			FSeinMovementPayload InheritedMovement;
 			InheritedMovement.TopSpeed = FFixedPoint::FromInt(500);
 			InheritedMovement.Velocity = FFixedVector(
 				FFixedPoint::FromInt(17), FFixedPoint::FromInt(3),
 				FFixedPoint::Zero);
 			World->AddComponent(InheritedEntity, InheritedMovement);
 
-			FSeinMovementComponent OverriddenMovement = InheritedMovement;
+			FSeinMovementPayload OverriddenMovement = InheritedMovement;
 			OverriddenMovement.Velocity = FFixedVector(
 				FFixedPoint::FromInt(29), FFixedPoint::FromInt(5),
 				FFixedPoint::Zero);
 			World->AddComponent(OverriddenEntity, OverriddenMovement);
 			World->AddComponent(
-				OverriddenEntity, FSeinAbilityComponent());
+				OverriddenEntity, FSeinAbilityPayload());
 		};
 		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Materialize(
 			*World, AuthorState, FSeinMatchSettings(), 0,
 			TEXT("SeinARTS.ComponentLiveTuning.PropertyOverlay"))));
 		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World)));
 
-		const FSeinMovementComponent InheritedBefore =
-			*World->GetComponent<FSeinMovementComponent>(InheritedEntity);
-		const FSeinMovementComponent OverriddenBefore =
-			*World->GetComponent<FSeinMovementComponent>(OverriddenEntity);
+		const FSeinMovementPayload InheritedBefore =
+			*World->GetComponent<FSeinMovementPayload>(InheritedEntity);
+		const FSeinMovementPayload OverriddenBefore =
+			*World->GetComponent<FSeinMovementPayload>(OverriddenEntity);
 
 		FSeinComponentLiveTuningRequest EntityPayload;
 		EntityPayload.Scope = ESeinComponentLiveTuningScope::Entity;
@@ -309,20 +309,20 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(World->SubmitLocalCommandDraft(
 			MakeLiveTuningCommand(EntityPayload, Player), true)));
 		ASSERT_THAT(IsTrue(
-			World->GetComponent<FSeinMovementComponent>(OverriddenEntity)
+			World->GetComponent<FSeinMovementPayload>(OverriddenEntity)
 				->TopSpeed == FFixedPoint::FromInt(500)));
 		FTSTicker::GetCoreTicker().Tick(World->GetFixedDeltaTimeSeconds());
 
-		const FSeinMovementComponent* OverriddenAfterEntity =
-			World->GetComponent<FSeinMovementComponent>(OverriddenEntity);
+		const FSeinMovementPayload* OverriddenAfterEntity =
+			World->GetComponent<FSeinMovementPayload>(OverriddenEntity);
 		ASSERT_THAT(IsNotNull(OverriddenAfterEntity));
 		ASSERT_THAT(IsTrue(
 			OverriddenAfterEntity->TopSpeed == FFixedPoint::FromInt(700)));
 		ASSERT_THAT(IsTrue(
 			OverriddenAfterEntity->Velocity == OverriddenBefore.Velocity));
 
-		const FSeinAbilityComponent EmptyAbilityComponent =
-			*World->GetComponent<FSeinAbilityComponent>(OverriddenEntity);
+		const FSeinAbilityPayload EmptyAbilityComponent =
+			*World->GetComponent<FSeinAbilityPayload>(OverriddenEntity);
 		bool bRuntimeAbilityGranted = false;
 		const FDelegateHandle RuntimeGrantHandle =
 			World->OnComponentPropertyLiveTuned.AddLambda(
@@ -330,11 +330,11 @@ namespace UE::SeinARTSTests
 					const FSeinComponentPropertyPatch& Patch)
 				{
 					if (!bRuntimeAbilityGranted && Entity == OverriddenEntity
-						&& &Type == FSeinAbilityComponent::StaticStruct()
+						&& &Type == FSeinAbilityPayload::StaticStruct()
 						&& !Patch.PropertyPath.IsEmpty()
 						&& Patch.PropertyPath[0].PropertyName
 							== GET_MEMBER_NAME_STRING_CHECKED(
-								FSeinAbilityComponent, GrantedAbilities))
+								FSeinAbilityPayload, GrantedAbilities))
 					{
 						bRuntimeAbilityGranted = true;
 						USeinAbilityBPFL::SeinGrantAbility(
@@ -354,8 +354,8 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(World->SubmitLocalCommandDraft(
 			MakeLiveTuningCommand(GrantAbilityPayload, Player), true)));
 		FTSTicker::GetCoreTicker().Tick(World->GetFixedDeltaTimeSeconds());
-		const FSeinAbilityComponent* GrantedAbilityComponent =
-			World->GetComponent<FSeinAbilityComponent>(OverriddenEntity);
+		const FSeinAbilityPayload* GrantedAbilityComponent =
+			World->GetComponent<FSeinAbilityPayload>(OverriddenEntity);
 		ASSERT_THAT(IsTrue(bRuntimeAbilityGranted));
 		ASSERT_THAT(AreEqual(2, GrantedAbilityComponent->GrantedAbilities.Num()));
 		ASSERT_THAT(AreEqual(2, GrantedAbilityComponent->AbilityInstanceIDs.Num()));
@@ -376,7 +376,7 @@ namespace UE::SeinARTSTests
 			MakeLiveTuningCommand(RevokeAbilityPayload, Player), true)));
 		FTSTicker::GetCoreTicker().Tick(World->GetFixedDeltaTimeSeconds());
 		GrantedAbilityComponent =
-			World->GetComponent<FSeinAbilityComponent>(OverriddenEntity);
+			World->GetComponent<FSeinAbilityPayload>(OverriddenEntity);
 		ASSERT_THAT(AreEqual(1, GrantedAbilityComponent->GrantedAbilities.Num()));
 		ASSERT_THAT(AreEqual(1, GrantedAbilityComponent->AbilityInstanceIDs.Num()));
 		ASSERT_THAT(IsFalse(GrantedAbilityComponent->HasAbilityOfClass(
@@ -394,14 +394,14 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(World->SubmitLocalCommandDraft(
 			MakeLiveTuningCommand(ClassPayload, Player), true)));
 		ASSERT_THAT(IsTrue(
-			World->GetComponent<FSeinMovementComponent>(InheritedEntity)
+			World->GetComponent<FSeinMovementPayload>(InheritedEntity)
 				->TopSpeed == FFixedPoint::FromInt(500)));
 		FTSTicker::GetCoreTicker().Tick(World->GetFixedDeltaTimeSeconds());
 
-		const FSeinMovementComponent* InheritedAfterClass =
-			World->GetComponent<FSeinMovementComponent>(InheritedEntity);
+		const FSeinMovementPayload* InheritedAfterClass =
+			World->GetComponent<FSeinMovementPayload>(InheritedEntity);
 		OverriddenAfterEntity =
-			World->GetComponent<FSeinMovementComponent>(OverriddenEntity);
+			World->GetComponent<FSeinMovementPayload>(OverriddenEntity);
 		ASSERT_THAT(IsTrue(
 			InheritedAfterClass->TopSpeed == FFixedPoint::FromInt(900)));
 		ASSERT_THAT(IsTrue(
@@ -422,7 +422,7 @@ namespace UE::SeinARTSTests
 			MakeLiveTuningCommand(ClearPayload, Player), true)));
 		FTSTicker::GetCoreTicker().Tick(World->GetFixedDeltaTimeSeconds());
 		ASSERT_THAT(IsTrue(
-			World->GetComponent<FSeinMovementComponent>(OverriddenEntity)
+			World->GetComponent<FSeinMovementPayload>(OverriddenEntity)
 				->TopSpeed == FFixedPoint::FromInt(900)));
 
 		FSeinWorldSnapshot Snapshot;
@@ -444,7 +444,7 @@ namespace UE::SeinARTSTests
 		PostSnapshotPayload.ActorClassPath =
 			ASeinActor::StaticClass()->GetPathName();
 		PostSnapshotPayload.Patches.Add(MakeTopSpeedPatch(
-			*World->GetComponent<FSeinMovementComponent>(OverriddenEntity),
+			*World->GetComponent<FSeinMovementPayload>(OverriddenEntity),
 			FFixedPoint::FromInt(1100),
 			ESeinComponentInstanceOverrideOperation::Set));
 		ASSERT_THAT(IsTrue(World->SubmitLocalCommandDraft(
@@ -455,7 +455,7 @@ namespace UE::SeinARTSTests
 			*World, Snapshot)));
 		ASSERT_THAT(AreEqual(SnapshotStateHash, World->ComputeStateHash()));
 		ASSERT_THAT(IsTrue(
-			World->GetComponent<FSeinMovementComponent>(OverriddenEntity)
+			World->GetComponent<FSeinMovementPayload>(OverriddenEntity)
 				->TopSpeed == FFixedPoint::FromInt(900)));
 		ASSERT_THAT(AreEqual(
 			0, World->GetComponentLiveTuningEntityOverrides().Num()));
@@ -483,7 +483,7 @@ namespace UE::SeinARTSTests
 			{
 				const FSeinEntityHandle Entity = World->SpawnEntity(
 					ASeinActor::StaticClass(), FFixedTransform(), Player);
-				World->AddComponent(Entity, FSeinMovementComponent());
+				World->AddComponent(Entity, FSeinMovementPayload());
 				Entities.Add(Entity);
 			}
 		};
@@ -497,10 +497,10 @@ namespace UE::SeinARTSTests
 		for (int32 Index = Entities.Num() - 1; Index >= 0; --Index)
 		{
 			const FSeinEntityHandle Entity = Entities[Index];
-			const FSeinMovementComponent* Before =
-				World->GetComponent<FSeinMovementComponent>(Entity);
+			const FSeinMovementPayload* Before =
+				World->GetComponent<FSeinMovementPayload>(Entity);
 			ASSERT_THAT(IsNotNull(Before));
-			FSeinMovementComponent After = *Before;
+			FSeinMovementPayload After = *Before;
 			After.TopSpeed = FFixedPoint::FromInt(700 + Index);
 			After.TurnRate = FFixedPoint::FromInt(9 + Index);
 			After.AvoidanceStrength = FFixedPoint::FromInt(2 + Index);
@@ -525,11 +525,11 @@ namespace UE::SeinARTSTests
 		// A reset-to-default in the middle of the set must drop exactly one
 		// record and leave the remainder canonical.
 		const FSeinEntityHandle ClearedEntity = Entities[1];
-		const FSeinMovementComponent* ClearedBefore =
-			World->GetComponent<FSeinMovementComponent>(ClearedEntity);
+		const FSeinMovementPayload* ClearedBefore =
+			World->GetComponent<FSeinMovementPayload>(ClearedEntity);
 		ASSERT_THAT(IsNotNull(ClearedBefore));
-		FSeinMovementComponent ClearedAfter = *ClearedBefore;
-		ClearedAfter.TurnRate = FSeinMovementComponent().TurnRate;
+		FSeinMovementPayload ClearedAfter = *ClearedBefore;
+		ClearedAfter.TurnRate = FSeinMovementPayload().TurnRate;
 		FSeinComponentLiveTuningRequest ClearPayload;
 		ClearPayload.Scope = ESeinComponentLiveTuningScope::Entity;
 		ClearPayload.TargetEntity = ClearedEntity;
@@ -565,7 +565,7 @@ namespace UE::SeinARTSTests
 	TEST(ComponentLiveTuningDerivedClassEntriesRoundTripAndAreBounded,
 		"SeinARTS.Unit.Entity.LiveTuning")
 	{
-		FSeinMovementComponent Before;
+		FSeinMovementPayload Before;
 		FSeinComponentLiveTuningRequest Request;
 		Request.Scope = ESeinComponentLiveTuningScope::ActorClass;
 		Request.ActorClassPath = ASeinActor::StaticClass()->GetPathName();
@@ -652,7 +652,7 @@ namespace UE::SeinARTSTests
 		FSeinEntityHandle InheritingEntity;
 		FSeinEntityHandle PinnedEntity;
 		FSeinEntityHandle UnseenEntity;
-		FSeinMovementComponent AuthoredMovement;
+		FSeinMovementPayload AuthoredMovement;
 		AuthoredMovement.TopSpeed = FFixedPoint::FromInt(500);
 		const auto AuthorState = [&]()
 		{
@@ -678,8 +678,8 @@ namespace UE::SeinARTSTests
 
 		const auto TopSpeedOf = [World](FSeinEntityHandle Entity)
 		{
-			const FSeinMovementComponent* Movement =
-				World->GetComponent<FSeinMovementComponent>(Entity);
+			const FSeinMovementPayload* Movement =
+				World->GetComponent<FSeinMovementPayload>(Entity);
 			return Movement ? Movement->TopSpeed : FFixedPoint::Zero;
 		};
 
@@ -697,7 +697,7 @@ namespace UE::SeinARTSTests
 			FSeinComponentLiveTuningClassEntry Pinned;
 			Pinned.ActorClassPath =
 				ASeinPlacementYawTestBuilding::StaticClass()->GetPathName();
-			FSeinMovementComponent PinBaseline = AuthoredMovement;
+			FSeinMovementPayload PinBaseline = AuthoredMovement;
 			PinBaseline.TopSpeed = FFixedPoint::FromInt(1);
 			Pinned.Patches.Add(MakeTopSpeedPatch(
 				PinBaseline, FFixedPoint::FromInt(500),

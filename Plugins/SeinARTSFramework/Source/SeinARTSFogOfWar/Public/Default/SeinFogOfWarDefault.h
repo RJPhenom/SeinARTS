@@ -46,7 +46,7 @@
 // FSeinFogStampWork embeds TArray<FSeinVisionStamp> by value (the per-source
 // stamp set the parallel footprint compute rasterizes), so the full definition
 // must be visible here — a forward declaration no longer suffices.
-#include "Components/SeinVisionComponent.h"
+#include "Components/SeinVisionPayload.h"
 #include "SeinFogOfWarDefault.generated.h"
 
 class UWorld;
@@ -96,7 +96,7 @@ struct FSeinFogVisionGroup
 
 /**
  * Per-source memo of the last stamped state for delta-refcount updates.
- * One per live FSeinEntityHandle that carries FSeinVisionComponent.
+ * One per live FSeinEntityHandle that carries FSeinVisionPayload.
  *
  * Each tick: a source whose pose AND exact effective stamp set equal the last-tick value
  * skips entirely (the big perf win — most units don't move per tick). On
@@ -346,7 +346,7 @@ private:
 
 	/** Dynamic blocker overlay — maximum absolute world Z of any runtime-authored
 	 *  blocker (smoke grenades, destructibles in progress) at this cell.
-	 *  Rebuilt each `TickStamps` from entities carrying `FSeinExtentsComponent` with bBlocksFogOfWar set
+	 *  Rebuilt each `TickStamps` from entities carrying `FSeinExtentsPayload` with bBlocksFogOfWar set
 	 *  in sim component storage. Zero = no dynamic blocker this tick.
 	 *  LOS tests static + dynamic independently (per-blocker layer mask
 	 *  is honored separately — see IsCellOpaqueToEye). */
@@ -568,7 +568,7 @@ private:
 		uint8 StampBitMask) const;
 
 	/** Clear the dynamic blocker overlay, then walk every entity carrying
-	 *  `FSeinExtentsComponent` (with bBlocksFogOfWar) and stamp its shape contribution into the
+	 *  `FSeinExtentsPayload` (with bBlocksFogOfWar) and stamp its shape contribution into the
 	 *  overlay. Runs at the top of TickStamps so the vision passes below
 	 *  see the freshest occlusion state. Returns true if the overlay's
 	 *  contents differ from last tick — TickStamps uses that to invalidate

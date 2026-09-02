@@ -2,7 +2,7 @@
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinSlotFormation.h
  * @brief   Formation that places members at their squad's authored per-slot
- *          OffsetTransforms (FSeinSquadComponent::Slots), rotated by the formation
+ *          OffsetTransforms (FSeinSquadPayload::Slots), rotated by the formation
  *          facing and nav-projected.
  *
  *          The squad layout model, expressed as a USeinFormation so squads are

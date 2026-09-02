@@ -35,7 +35,7 @@
 #include "Input/SeinCommandSchemaRegistry.h"
 #include "Events/SeinVisualEvent.h"
 #include "Components/SeinContainmentTypes.h"
-#include "Components/SeinExtentsComponent.h"
+#include "Components/SeinExtentsPayload.h"
 #include "Data/SeinMatchSettings.h"
 #include "Data/SeinRelationshipTypes.h"
 #include "Data/SeinVoteState.h"
@@ -368,7 +368,7 @@ DECLARE_MULTICAST_DELEGATE_TwoParams(FOnCommandsProcessing, int32 /*Tick*/, cons
  *  components injected, BaseTags seeded, EntitySpawned visual event enqueued).
  *  Subscribers can read the entity's component storage to decide on per-system
  *  registration (e.g. SeinARTSCover's USeinCoverSubsystem registers any entity
- *  with FSeinCoverComponent storage as a cover provider).
+ *  with FSeinCoverPayload storage as a cover provider).
  *
  *  Listeners must NOT mutate sim state from this delegate — it fires during
  *  the spawn pipeline. Treat it as a notification, not a hook for sim writes. */
@@ -789,7 +789,7 @@ public:
 	 * GC reference walker. Component payloads live as raw bytes inside
 	 * FSeinGenericComponentStorage, so the collector cannot see TObjectPtr /
 	 * reflected UObject refs nested in those structs by default. Without this,
-	 * ability instances (FSeinAbilityComponent), broker resolvers (FSeinCommandBrokerData),
+	 * ability instances (FSeinAbilityPayload), broker resolvers (FSeinCommandBrokerData),
 	 * and any other designer-authored component holding a UObject ref get
 	 * garbage-collected mid-play, leaving dangling pointers that crash on tick.
 	 */
@@ -1362,7 +1362,7 @@ public:
 	 * Walks the Blueprint CDO's entity bridge (USeinEntityBridgeComponent) ComponentData
 	 * array and copies each FInstancedStruct payload into deterministic storage,
 	 * then initializes abilities and seeds tags (identity/cost come from the
-	 * injected FSeinIdentityComponent / FSeinProducibleComponent payloads).
+	 * injected FSeinIdentityPayload / FSeinProduciblePayload payloads).
 	 * @param ActorClass - Blueprint class (must be ASeinActor or subclass)
 	 * @param SpawnTransform - Initial transform in simulation space
 	 * @param OwnerPlayerID - Owning player
@@ -1849,7 +1849,7 @@ public:
 	/**
 	 * Resolve an entity attribute with all active Instance + Class-scope
 	 * modifiers applied. Instance modifiers come from the entity's
-	 * `FSeinActiveEffectsComponent`; Class-scope modifiers come from the owner's
+	 * `FSeinActiveEffectsPayload`; Class-scope modifiers come from the owner's
 	 * `FSeinPlayerState::ClassEffects` (filtered by `TargetClassTag`).
 	 * Tech-granted modifiers flow through the same effect pipeline since
 	 * Session 2.4 unified tech with effects (DESIGN §10).
@@ -1901,7 +1901,7 @@ public:
 	 * the next PreTick. Authorized bootstrap/restore calls commit immediately.
 	 *
 	 * Scope from the effect CDO determines where the instance lands:
-	 *   Instance → target's FSeinActiveEffectsComponent
+	 *   Instance → target's FSeinActiveEffectsPayload
 	 *   Class    → target owner's FSeinPlayerState::ClassEffects
 	 *   Player → target owner's FSeinPlayerState::PlayerEffects
 	 *

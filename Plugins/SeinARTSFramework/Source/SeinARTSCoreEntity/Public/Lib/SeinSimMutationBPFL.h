@@ -24,9 +24,9 @@
 #include "StructUtils/InstancedStruct.h"
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
-#include "Components/SeinAbilityComponent.h"
-#include "Components/SeinProductionComponent.h"
-#include "Components/SeinChildTransformsComponent.h"
+#include "Components/SeinAbilityPayload.h"
+#include "Components/SeinProductionPayload.h"
+#include "Components/SeinChildTransformsPayload.h"
 #include "Types/Quat.h"
 #include "Types/Transform.h"
 #include "GameplayTagContainer.h"
@@ -49,16 +49,16 @@ public:
 	//  Delta` calls against the designer's own component struct — see below.)
 
 	// Movement whole-struct setter intentionally removed — designers use the
-	// generic `K2Node_SeinSetComponent` against `FSeinMovementComponent` /
-	// `FSeinNavigationComponent`. The Phase-5 decomposition split movement
+	// generic `K2Node_SeinSetComponent` against `FSeinMovementPayload` /
+	// `FSeinNavigationPayload`. The Phase-5 decomposition split movement
 	// authoring across two structs, and a single whole-struct setter no
 	// longer makes sense.
 
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Ability", meta = (WorldContext = "WorldContextObject", DisplayName = "Set Ability Data"))
-	static bool SeinSetAbilityData(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, const FSeinAbilityComponent& NewData);
+	static bool SeinSetAbilityData(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, const FSeinAbilityPayload& NewData);
 
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Production", meta = (WorldContext = "WorldContextObject", DisplayName = "Set Production Data"))
-	static bool SeinSetProductionData(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, const FSeinProductionComponent& NewData);
+	static bool SeinSetProductionData(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, const FSeinProductionPayload& NewData);
 
 	// Passive resource income removed in the Phase-5 refactor — resources
 	// flow exclusively through abilities + effects now. If you need passive
@@ -114,7 +114,7 @@ public:
 	//
 	// SetMoveSpeed / SetMovementTarget / SetAcceleration / SetTurnRate were
 	// removed as part of the Phase-5 movement decomposition. Designers
-	// mutate FSeinMovementComponent fields directly via the generic
+	// mutate FSeinMovementPayload fields directly via the generic
 	// `K2Node_SeinSetComponent` node — same code path that drives every
 	// other sim-component mutation. If a hot-path field-level setter becomes
 	// worth the BP API surface area later, add it back here against the new

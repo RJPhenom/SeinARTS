@@ -23,12 +23,12 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Components/SeinComponent.h"
+#include "Components/SeinPayload.h"
 #include "Components/SeinFogVisibilityPolicy.h"
-#include "SeinFogVisibilityComponent.generated.h"
+#include "SeinFogVisibilityPayload.generated.h"
 
 USTRUCT(BlueprintType, meta = (SeinDeterministic, SeinSubData))
-struct SEINARTSCOREENTITY_API FSeinFogVisibilityComponent : public FSeinComponent
+struct SEINARTSCOREENTITY_API FSeinFogVisibilityPayload : public FSeinPayload
 {
 	GENERATED_BODY()
 
@@ -66,7 +66,7 @@ struct SEINARTSCOREENTITY_API FSeinFogVisibilityComponent : public FSeinComponen
 	uint8 FogVisibilityLayerMask = 0xFE;
 };
 
-FORCEINLINE uint32 GetTypeHash(const FSeinFogVisibilityComponent& Component)
+FORCEINLINE uint32 GetTypeHash(const FSeinFogVisibilityPayload& Component)
 {
 	uint32 Hash = GetTypeHash(static_cast<uint8>(Component.FogVisibilityPolicy));
 	Hash = HashCombine(Hash, GetTypeHash(Component.FogVisibilityLayerMask));

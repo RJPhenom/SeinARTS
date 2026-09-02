@@ -8,7 +8,7 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Simulation/SeinWorldSubsystem.h"
-#include "Components/SeinMovementComponent.h"
+#include "Components/SeinMovementPayload.h"
 #include "Abilities/SeinLatentActionManager.h"
 #include "Actions/SeinMoveToAction.h"
 #include "Types/Entity.h"
@@ -69,7 +69,7 @@ namespace
 	 *  types so future altitude-bearing movement classes Just Work without
 	 *  this BPFL knowing about them. Returns 0 when no Altitude field is
 	 *  present. */
-	float QueryAltitudeFromSubData(const FSeinMovementComponent& MoveComp)
+	float QueryAltitudeFromSubData(const FSeinMovementPayload& MoveComp)
 	{
 		const UScriptStruct* SubStruct = MoveComp.MovementClassData.GetScriptStruct();
 		const uint8* SubMemory = MoveComp.MovementClassData.GetMemory();
@@ -124,7 +124,7 @@ bool USeinMovementBPFL::SeinGetMovementState(const UObject* WorldContextObject, 
 	const FSeinEntity* Entity = Subsystem->GetEntity(EntityHandle);
 	if (!Entity) return false;
 
-	const FSeinMovementComponent* MoveData = Subsystem->GetComponent<FSeinMovementComponent>(EntityHandle);
+	const FSeinMovementPayload* MoveData = Subsystem->GetComponent<FSeinMovementPayload>(EntityHandle);
 	if (!MoveData) return false;
 
 	// Compose derived state from sim transform + movement payload. Both reads
@@ -279,8 +279,8 @@ bool USeinMovementBPFL::GetMovementRenderValueFixed(
 	{
 		return false;
 	}
-	const FSeinMovementComponent* MoveData =
-		Subsystem->GetComponent<FSeinMovementComponent>(EntityHandle);
+	const FSeinMovementPayload* MoveData =
+		Subsystem->GetComponent<FSeinMovementPayload>(EntityHandle);
 	if (!MoveData || !MoveData->RenderState.IsValidIndex(Slot))
 	{
 		return false;

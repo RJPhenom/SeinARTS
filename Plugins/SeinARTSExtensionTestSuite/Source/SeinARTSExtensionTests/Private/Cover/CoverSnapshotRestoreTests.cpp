@@ -2,7 +2,7 @@
 #include "Components/ActorTestSpawner.h"
 
 #include "CoverSnapshotRestoreTestTypes.h"
-#include "Components/SeinCoverComponent.h"
+#include "Components/SeinCoverPayload.h"
 #include "Data/SeinMatchSettings.h"
 #include "Data/SeinWorldSnapshot.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
@@ -61,7 +61,7 @@ namespace
 
 			const auto AuthorState = [this]()
 			{
-				FSeinCoverComponent FirstCover;
+				FSeinCoverPayload FirstCover;
 				FirstCover.Slots.Add(FFixedVector::ZeroVector);
 				FirstCover.Slots.Add(FFixedVector(
 					FFixedPoint::FromInt(-80),
@@ -69,7 +69,7 @@ namespace
 					FFixedPoint::Zero));
 				FirstCover.SlotRadius = FFixedPoint::FromInt(5);
 
-				FSeinCoverComponent SecondCover;
+				FSeinCoverPayload SecondCover;
 				SecondCover.Slots.Add(FFixedVector::ZeroVector);
 				SecondCover.Slots.Add(FFixedVector(
 					FFixedPoint::FromInt(80),

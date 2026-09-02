@@ -15,16 +15,16 @@
 #include "Actor/SeinActor.h"
 #include "Core/SeinEntityHandle.h"
 #include "Core/SeinPlayerID.h"
-#include "Components/SeinComponent.h"
+#include "Components/SeinPayload.h"
 #include "Data/SeinResourceTypes.h"
-#include "SeinProductionComponent.generated.h"
+#include "SeinProductionPayload.generated.h"
 
 class USeinEffect;
 
 /**
  * Refund policy for a cancelled production queue entry. DESIGN §9 Q2.
  * Default: refund = (1 - progress_fraction) * cost. Opt-in: flat custom percentage.
- * Authored on the producible's `FSeinProducibleComponent`; snapshotted on each queue entry at enqueue.
+ * Authored on the producible's `FSeinProduciblePayload`; snapshotted on each queue entry at enqueue.
  */
 USTRUCT(BlueprintType, meta = (SeinDeterministic))
 struct SEINARTSCOREENTITY_API FSeinProductionRefundPolicy
@@ -42,7 +42,7 @@ struct SEINARTSCOREENTITY_API FSeinProductionRefundPolicy
 	FFixedPoint CustomRefundPercentage = FFixedPoint::One;
 };
 
-// Rally-target sub-struct removed — fields are now flat on FSeinProductionComponent
+// Rally-target sub-struct removed — fields are now flat on FSeinProductionPayload
 // (bRallyToEntity / RallyTransform / RallyEntity). Designer doesn't see a
 // nested struct in the production component's details panel; rally is one
 // authoring section alongside the queue / spawn fields. DESIGN §9 Q9.
@@ -115,7 +115,7 @@ FORCEINLINE uint32 GetTypeHash(const FSeinProductionQueueEntry& Entry)
  * the single source of truth for "what can this entity do" (DESIGN §2 + §9).
  */
 USTRUCT(BlueprintType, meta = (SeinDeterministic))
-struct SEINARTSCOREENTITY_API FSeinProductionComponent : public FSeinComponent
+struct SEINARTSCOREENTITY_API FSeinProductionPayload : public FSeinPayload
 {
 	GENERATED_BODY()
 
@@ -178,7 +178,7 @@ struct SEINARTSCOREENTITY_API FSeinProductionComponent : public FSeinComponent
 	bool CanQueueMore() const;
 };
 
-FORCEINLINE uint32 GetTypeHash(const FSeinProductionComponent& Component)
+FORCEINLINE uint32 GetTypeHash(const FSeinProductionPayload& Component)
 {
 	uint32 Hash = GetTypeHash(Component.MaxQueueSize);
 	Hash = HashCombine(Hash, GetTypeHash(Component.CurrentBuildProgress));

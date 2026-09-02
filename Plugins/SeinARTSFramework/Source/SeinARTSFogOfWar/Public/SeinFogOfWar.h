@@ -231,7 +231,7 @@ public:
 	 *       a viewer; no filtering.
 	 *    2. Target's owner == Observer → visible. Owner always sees their
 	 *       own units / buildings / deployments regardless of fog.
-	 *    3. `FSeinFogVisibilityComponent::FogVisibilityPolicy`:
+	 *    3. `FSeinFogVisibilityPayload::FogVisibilityPolicy`:
 	 *       - `AlwaysVisible` → true.
 	 *       - currently spotted (a matching emission-layer bit is live in the
 	 *         footprint) → true for every remaining policy.
@@ -247,7 +247,7 @@ public:
 	 *
 	 *  Implementation lives in the cpp so subclasses can override if they
 	 *  want different per-player policy. Base impl reads
-	 *  `FSeinFogVisibilityComponent` from sim storage for both the emission
+	 *  `FSeinFogVisibilityPayload` from sim storage for both the emission
 	 *  mask AND the persistence policy (single component, two fields —
 	 *  authored on `USeinEntityBridgeComponent`'s top-level visibility fields and
 	 *  auto-injected at spawn by `InjectAuthoredComponents`). */
@@ -260,7 +260,7 @@ public:
 	 *  one cell off from a watching infantry would otherwise read as
 	 *  invisible despite being right there.
 	 *
-	 *  Subclasses iterate the entity's `FSeinExtentsComponent::Stamps` (if
+	 *  Subclasses iterate the entity's `FSeinExtentsPayload::Stamps` (if
 	 *  present) and OR the bitfields of every covered cell. This base impl
 	 *  falls back to a single-point query at the entity transform —
 	 *  preserves correctness for entities without an extents component

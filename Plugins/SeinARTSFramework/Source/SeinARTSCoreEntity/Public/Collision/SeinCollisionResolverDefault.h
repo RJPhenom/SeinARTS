@@ -8,7 +8,7 @@
  *          collider (a wall especially).
  *
  *          Separation is pure extent-vs-extent: the OVERLAP test consults ONLY
- *          the collision model (FSeinExtentsComponent's collision section + the
+ *          the collision model (FSeinExtentsPayload's collision section + the
  *          channel registry) and the deterministic MTV narrowphase. The one nav
  *          touch-point is the HARD-BARRIER gate: a separation move that would land
  *          a unit on a non-walkable cell (a baked nav wall, or off the grid edge)

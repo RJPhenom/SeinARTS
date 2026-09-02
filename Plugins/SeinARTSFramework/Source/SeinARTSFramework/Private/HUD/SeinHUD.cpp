@@ -10,7 +10,7 @@
 #include "Debug/SeinCommandLogSubsystem.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Actor/SeinActor.h"
-#include "Components/SeinExtentsComponent.h"
+#include "Components/SeinExtentsPayload.h"
 #include "Settings/PluginSettings.h"
 #include "Types/Entity.h"
 #include "Engine/Canvas.h"
@@ -166,7 +166,7 @@ void ASeinHUD::DrawMarqueeBox()
 // (2) the screen-space AABB is far looser than the projected silhouette, so a
 // marquee that only clips the AABB's empty corner still selects the unit.
 //
-// Instead we project the entity's AUTHORED sim extents (FSeinExtentsComponent —
+// Instead we project the entity's AUTHORED sim extents (FSeinExtentsPayload —
 // stable, doesn't breathe with animation) into a screen-space CONVEX POLYGON
 // and SAT-test that polygon against the marquee. Tight, and it tracks the body.
 // ====================================================================================================
@@ -216,7 +216,7 @@ static void SeinAppendCapsulePoints(const FVector& Center,
 // max(Height/2, Radius) with hemispherical caps, box = 8 oriented corners. So the
 // projected hull equals the red extents viz the player sees.
 static void SeinAppendExtentsHullSourcesAccurate(AActor* Actor,
-	const FSeinExtentsComponent* Extents, TArray<FVector>& OutWorld)
+	const FSeinExtentsPayload* Extents, TArray<FVector>& OutWorld)
 {
 	const FQuat ActorQuat = Actor->GetActorQuat();
 	const FVector ActorPos = Actor->GetActorLocation();
@@ -264,7 +264,7 @@ static void SeinAppendExtentsHullSourcesAccurate(AActor* Actor,
 // via the FULL actor transform (incl. scale). Over-covers tall/large capsules
 // under an angled camera; kept for parity / opt-out.
 static void SeinAppendExtentsHullSourcesLegacy(AActor* Actor,
-	const FSeinExtentsComponent* Extents, TArray<FVector>& OutWorld)
+	const FSeinExtentsPayload* Extents, TArray<FVector>& OutWorld)
 {
 	const FTransform Xf = Actor->GetActorTransform();
 
@@ -310,7 +310,7 @@ static void SeinAppendExtentsHullSourcesLegacy(AActor* Actor,
 static void SeinAppendMarqueeHullSources(AActor* Actor, USeinWorldSubsystem* Sim,
 	FSeinEntityHandle Handle, TArray<FVector>& OutWorld)
 {
-	const FSeinExtentsComponent* Extents = Sim ? Sim->GetComponent<FSeinExtentsComponent>(Handle) : nullptr;
+	const FSeinExtentsPayload* Extents = Sim ? Sim->GetComponent<FSeinExtentsPayload>(Handle) : nullptr;
 	if (Extents && Extents->Shapes.Num() > 0)
 	{
 		if (SeinUseExtentsForMarquee())

@@ -8,7 +8,7 @@
 #include "Abilities/SeinAbility.h"
 #include "Abilities/SeinMoveToProxy.h"
 #include "Actions/SeinMoveToAction.h"
-#include "Components/SeinMovementComponent.h"
+#include "Components/SeinMovementPayload.h"
 #include "Data/SeinWorldSnapshot.h"
 #include "Movement/SeinBasicMovement.h"
 #include "Movement/SeinMovement.h"
@@ -26,7 +26,7 @@
 #include "UObject/UnrealType.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
-#include "Components/SeinNavigationComponent.h"
+#include "Components/SeinNavigationPayload.h"
 #include "SeinNavigationSubsystem.h"
 #endif
 
@@ -849,7 +849,7 @@ namespace
 	}
 
 	FString AuthoredMovementClassPath(
-		const FSeinMovementComponent& Component)
+		const FSeinMovementPayload& Component)
 	{
 		return Component.MovementClass.IsNull()
 			? USeinBasicMovement::StaticClass()->GetPathName()
@@ -1127,9 +1127,9 @@ struct FSeinMoveToActionCodec
 						*MovementState,
 						Record->OwnerEntity)
 					: nullptr;
-			const FSeinMovementComponent* Component =
+			const FSeinMovementPayload* Component =
 				Context.Candidate->FindComponent<
-					FSeinMovementComponent>(
+					FSeinMovementPayload>(
 						Record->OwnerEntity);
 			if (!MovementRecord || !Component)
 			{
@@ -1568,11 +1568,11 @@ bool UE::SeinARTSTests::
 		USeinWorldSubsystem& World)
 {
 	FSeinEntity* Entity = World.GetEntityMutable(Action.OwnerEntity);
-	FSeinMovementComponent* MovementData =
-		World.GetComponentMutable<FSeinMovementComponent>(
+	FSeinMovementPayload* MovementData =
+		World.GetComponentMutable<FSeinMovementPayload>(
 			Action.OwnerEntity);
-	const FSeinNavigationComponent* NavigationData =
-		World.GetComponent<FSeinNavigationComponent>(
+	const FSeinNavigationPayload* NavigationData =
+		World.GetComponent<FSeinNavigationPayload>(
 			Action.OwnerEntity);
 	USeinNavigation* Navigation =
 		USeinNavigationSubsystem::GetNavigationForWorld(&World);

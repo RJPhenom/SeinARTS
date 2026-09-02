@@ -172,10 +172,10 @@ public:
 	 * still recomputes a default artifact and does not consume this node's output.
 	 *
 	 * Resolver dispatch:
-	 *   - Single-squad selection (every member shares the same FSeinSquadMemberComponent::SquadEntity):
+	 *   - Single-squad selection (every member shares the same FSeinSquadMemberPayload::SquadEntity):
 	 *     uses the squad's pooled resolver instance; reads centroid + facing from the squad's
 	 *     FSeinCommandBrokerData and the per-squad re-match flags (bReassignSlotsLateral /
-	 *     bReassignSlotsDepth) from FSeinSquadComponent. Layout reflects authored slot offsets exactly.
+	 *     bReassignSlotsDepth) from FSeinSquadPayload. Layout reflects authored slot offsets exactly.
 	 *   - Mixed / multi-entity selection: uses the framework's default resolver class
 	 *     (settings.DefaultBrokerResolverClass, or USeinDefaultCommandBrokerResolver if
 	 *     unset) via its CDO. Centroid = average of member transforms; facing = identity; the

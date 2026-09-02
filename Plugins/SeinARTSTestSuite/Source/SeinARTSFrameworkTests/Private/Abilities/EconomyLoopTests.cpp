@@ -16,8 +16,8 @@
 #include "Components/ActorTestSpawner.h"
 
 #include "Actor/SeinEntityBridgeComponent.h"
-#include "Components/SeinAbilityComponent.h"
-#include "Components/SeinConstructionComponent.h"
+#include "Components/SeinAbilityPayload.h"
+#include "Components/SeinConstructionPayload.h"
 #include "Core/SeinPlayerState.h"
 #include "Data/SeinWorldSnapshot.h"
 #include "Input/SeinCommand.h"
@@ -84,7 +84,7 @@ namespace UE::SeinARTSTests
 				PreviousBaseTags = Bridge->BaseTags;
 
 				Bridge->ComponentData.Reset();
-				FSeinConstructionComponent Construction;
+				FSeinConstructionPayload Construction;
 				Construction.TimeToCompletion = FFixedPoint::FromInt(3);
 				Bridge->ComponentData.Add(
 					FInstancedStruct::Make(Construction));
@@ -181,7 +181,7 @@ namespace UE::SeinARTSTests
 					FFixedTransform(), FSeinPlayerID::Neutral());
 				Dropoff = World->SpawnAbstractEntity(FFixedTransform(), Player);
 
-				World->AddComponent(Worker, FSeinAbilityComponent());
+				World->AddComponent(Worker, FSeinAbilityPayload());
 				World->AddComponent(Worker, FSeinEconomyCargoTestComponent());
 				FSeinEconomyResourceNodeTestComponent ResourceNode;
 				ResourceNode.Available = FFixedPoint::FromInt(25);
@@ -273,7 +273,7 @@ namespace UE::SeinARTSTests
 			{
 				World->RegisterPlayer(Player, FSeinFactionID(1));
 				Worker = World->SpawnAbstractEntity(FFixedTransform(), Player);
-				World->AddComponent(Worker, FSeinAbilityComponent());
+				World->AddComponent(Worker, FSeinAbilityPayload());
 				GrantAbility(
 					*World,
 					Worker,
@@ -293,15 +293,15 @@ namespace UE::SeinARTSTests
 
 		SubmitAbility(*World, Player, Worker, ConstructTag, Building);
 		Tick(*World);
-		const FSeinConstructionComponent* Construction =
-			World->GetComponent<FSeinConstructionComponent>(Building);
+		const FSeinConstructionPayload* Construction =
+			World->GetComponent<FSeinConstructionPayload>(Building);
 		ASSERT_THAT(IsNotNull(Construction));
 		ASSERT_THAT(IsTrue(Construction->Progress > FFixedPoint::Zero));
 
 		FSeinWorldSnapshot PartialSnapshot;
 		World->CaptureSnapshot(PartialSnapshot);
 		int32 ContinuationTicks = 0;
-		while (World->GetComponent<FSeinConstructionComponent>(Building)
+		while (World->GetComponent<FSeinConstructionPayload>(Building)
 			&& ContinuationTicks < 10)
 		{
 			Tick(*World);
@@ -364,7 +364,7 @@ namespace UE::SeinARTSTests
 			USeinConstructionBPFL::SeinFinishConstruction(World, Building);
 		}
 		ASSERT_THAT(IsNull(
-			World->GetComponent<FSeinConstructionComponent>(Building)));
+			World->GetComponent<FSeinConstructionPayload>(Building)));
 		ASSERT_THAT(IsTrue(World->HasTag(
 			Building, SeinARTSTags::State_UnderConstruction)));
 		ASSERT_THAT(IsTrue(World->GetEntityBaseTags(Building).HasTagExact(
@@ -398,7 +398,7 @@ namespace UE::SeinARTSTests
 			PlacedActor.FindComponentByClass<USeinEntityBridgeComponent>();
 		ASSERT_THAT(IsNotNull(LiveBridge));
 		LiveBridge->ComponentData.Reset();
-		FSeinConstructionComponent PlacedConstruction;
+		FSeinConstructionPayload PlacedConstruction;
 		PlacedConstruction.TimeToCompletion = FFixedPoint::FromInt(3);
 		LiveBridge->ComponentData.Add(
 			FInstancedStruct::Make(PlacedConstruction));
@@ -463,8 +463,8 @@ namespace UE::SeinARTSTests
 					ASeinEconomyConstructionTestActor::StaticClass(),
 					FFixedTransform(),
 					Player);
-				FSeinConstructionComponent* ZeroTime =
-					World->GetComponentMutable<FSeinConstructionComponent>(
+				FSeinConstructionPayload* ZeroTime =
+					World->GetComponentMutable<FSeinConstructionPayload>(
 						ZeroTimeBuilding);
 				check(ZeroTime);
 				ZeroTime->TimeToCompletion = FFixedPoint::Zero;
@@ -491,8 +491,8 @@ namespace UE::SeinARTSTests
 
 		{
 			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
-			FSeinConstructionComponent* Construction =
-				World->GetComponentMutable<FSeinConstructionComponent>(
+			FSeinConstructionPayload* Construction =
+				World->GetComponentMutable<FSeinConstructionPayload>(
 					BoundedBuilding);
 			ASSERT_THAT(IsNotNull(Construction));
 			Construction->Progress = FFixedPoint(MAX_int64 - 1);
@@ -518,7 +518,7 @@ namespace UE::SeinARTSTests
 					World, ZeroTimeBuilding, FFixedPoint::SmallNumber)));
 		}
 		ASSERT_THAT(IsNull(
-			World->GetComponent<FSeinConstructionComponent>(ZeroTimeBuilding)));
+			World->GetComponent<FSeinConstructionPayload>(ZeroTimeBuilding)));
 		ASSERT_THAT(IsFalse(World->HasTag(
 			ZeroTimeBuilding, SeinARTSTags::State_UnderConstruction)));
 		World->StopSimulation();

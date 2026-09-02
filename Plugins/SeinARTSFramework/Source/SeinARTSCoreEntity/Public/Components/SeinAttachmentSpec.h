@@ -11,7 +11,7 @@
 #include "CoreMinimal.h"
 #include "GameplayTagContainer.h"
 #include "Core/SeinEntityHandle.h"
-#include "Components/SeinComponent.h"
+#include "Components/SeinPayload.h"
 #include "Components/SeinContainmentTypes.h"
 #include "SeinAttachmentSpec.generated.h"
 
@@ -21,7 +21,7 @@
  * currently filling it (invalid handle if unfilled).
  */
 USTRUCT(BlueprintType, meta = (SeinDeterministic, SeinSubData))
-struct SEINARTSCOREENTITY_API FSeinAttachmentSpec : public FSeinComponent
+struct SEINARTSCOREENTITY_API FSeinAttachmentSpec : public FSeinPayload
 {
 	GENERATED_BODY()
 

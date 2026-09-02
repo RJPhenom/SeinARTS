@@ -1,7 +1,7 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinAbilityComponent.cpp
- * @brief   FSeinAbilityComponent sim-payload implementation — tag-based lookup
+ * @brief   FSeinAbilityPayload sim-payload implementation — tag-based lookup
  *          across an entity's granted ability instances, plus command-context
  *          resolver that picks an ability tag from DefaultCommands.
  *
@@ -10,15 +10,15 @@
  *          through `World.GetAbilityInstance(ID)` for the lookup.
  */
 
-#include "Components/SeinAbilityComponent.h"
+#include "Components/SeinAbilityPayload.h"
 #include "Simulation/SeinWorldSubsystem.h"
 
-USeinAbility* FSeinAbilityComponent::GetActiveAbility(const USeinWorldSubsystem& World) const
+USeinAbility* FSeinAbilityPayload::GetActiveAbility(const USeinWorldSubsystem& World) const
 {
 	return World.GetAbilityInstance(ActiveAbilityID);
 }
 
-TArray<USeinAbility*> FSeinAbilityComponent::GetAbilityInstances(const USeinWorldSubsystem& World) const
+TArray<USeinAbility*> FSeinAbilityPayload::GetAbilityInstances(const USeinWorldSubsystem& World) const
 {
 	TArray<USeinAbility*> Out;
 	Out.Reserve(AbilityInstanceIDs.Num());
@@ -32,7 +32,7 @@ TArray<USeinAbility*> FSeinAbilityComponent::GetAbilityInstances(const USeinWorl
 	return Out;
 }
 
-TArray<USeinAbility*> FSeinAbilityComponent::GetActivePassives(const USeinWorldSubsystem& World) const
+TArray<USeinAbility*> FSeinAbilityPayload::GetActivePassives(const USeinWorldSubsystem& World) const
 {
 	TArray<USeinAbility*> Out;
 	Out.Reserve(ActivePassiveIDs.Num());
@@ -46,7 +46,7 @@ TArray<USeinAbility*> FSeinAbilityComponent::GetActivePassives(const USeinWorldS
 	return Out;
 }
 
-USeinAbility* FSeinAbilityComponent::FindAbilityByTag(const USeinWorldSubsystem& World, const FGameplayTag& Tag) const
+USeinAbility* FSeinAbilityPayload::FindAbilityByTag(const USeinWorldSubsystem& World, const FGameplayTag& Tag) const
 {
 	for (int32 ID : AbilityInstanceIDs)
 	{
@@ -59,12 +59,12 @@ USeinAbility* FSeinAbilityComponent::FindAbilityByTag(const USeinWorldSubsystem&
 	return nullptr;
 }
 
-bool FSeinAbilityComponent::HasAbilityWithTag(const USeinWorldSubsystem& World, const FGameplayTag& Tag) const
+bool FSeinAbilityPayload::HasAbilityWithTag(const USeinWorldSubsystem& World, const FGameplayTag& Tag) const
 {
 	return FindAbilityByTag(World, Tag) != nullptr;
 }
 
-USeinAbility* FSeinAbilityComponent::FindMoveAbility(const USeinWorldSubsystem& World) const
+USeinAbility* FSeinAbilityPayload::FindMoveAbility(const USeinWorldSubsystem& World) const
 {
 	for (int32 ID : AbilityInstanceIDs)
 	{
@@ -74,12 +74,12 @@ USeinAbility* FSeinAbilityComponent::FindMoveAbility(const USeinWorldSubsystem& 
 	return nullptr;
 }
 
-bool FSeinAbilityComponent::HasMoveAbility(const USeinWorldSubsystem& World) const
+bool FSeinAbilityPayload::HasMoveAbility(const USeinWorldSubsystem& World) const
 {
 	return FindMoveAbility(World) != nullptr;
 }
 
-bool FSeinAbilityComponent::HasAbilityOfClass(const USeinWorldSubsystem& World, const UClass* AbilityClass) const
+bool FSeinAbilityPayload::HasAbilityOfClass(const USeinWorldSubsystem& World, const UClass* AbilityClass) const
 {
 	if (!AbilityClass) return false;
 	for (int32 ID : AbilityInstanceIDs)
@@ -90,7 +90,7 @@ bool FSeinAbilityComponent::HasAbilityOfClass(const USeinWorldSubsystem& World, 
 	return false;
 }
 
-int32 FSeinAbilityComponent::GetAbilityGrantCount(const USeinWorldSubsystem& World, const UClass* AbilityClass) const
+int32 FSeinAbilityPayload::GetAbilityGrantCount(const USeinWorldSubsystem& World, const UClass* AbilityClass) const
 {
 	if (!AbilityClass) return 0;
 	// Walk parallel to AbilityGrantCounts. Entries are kept in lockstep with
@@ -106,7 +106,7 @@ int32 FSeinAbilityComponent::GetAbilityGrantCount(const USeinWorldSubsystem& Wor
 	return 0;
 }
 
-FGameplayTag FSeinAbilityComponent::ResolveCommandContext(const FGameplayTagContainer& Context) const
+FGameplayTag FSeinAbilityPayload::ResolveCommandContext(const FGameplayTagContainer& Context) const
 {
 	// Find the highest-priority mapping whose RequiredContext tags are all present in Context.
 	const FSeinCommandMapping* BestMatch = nullptr;

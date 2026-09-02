@@ -12,7 +12,7 @@
 #include "Types/FixedPoint.h"
 #include "Types/Quat.h"
 #include "Types/Vector.h"
-#include "Components/SeinMovementComponent.h"
+#include "Components/SeinMovementPayload.h"
 #include "Movement/SeinMoverHandle.h"
 
 UScriptStruct* USeinInfantryMovement::GetMovementDataStruct() const
@@ -20,7 +20,7 @@ UScriptStruct* USeinInfantryMovement::GetMovementDataStruct() const
 	return FSeinInfantryMovementData::StaticStruct();
 }
 
-FFixedPoint USeinInfantryMovement::GetDeceleration(const FSeinMovementComponent* MovementData) const
+FFixedPoint USeinInfantryMovement::GetDeceleration(const FSeinMovementPayload* MovementData) const
 {
 	const FSeinInfantryMovementData* Data = MovementData ? MovementData->MovementClassData.GetPtr<FSeinInfantryMovementData>() : nullptr;
 	return Data ? Data->Deceleration : FSeinInfantryMovementData().Deceleration;
@@ -51,7 +51,7 @@ FSeinMotion USeinInfantryMovement::ComputeMotion_Implementation(USeinMoverHandle
 	const int32 N = Path.Waypoints.Num();
 	if (N == 0 || Ctx.CurrentWaypointIndex >= N) return Motion;
 
-	const FSeinMovementComponent& MovementData = *Ctx.MovementData;
+	const FSeinMovementPayload& MovementData = *Ctx.MovementData;
 	// Per-class tuning (accel/decel live here now, off the bare component). Defaults when unauthored.
 	const FSeinInfantryMovementData Defaults;
 	const FSeinInfantryMovementData* DataPtr = MovementData.MovementClassData.GetPtr<FSeinInfantryMovementData>();

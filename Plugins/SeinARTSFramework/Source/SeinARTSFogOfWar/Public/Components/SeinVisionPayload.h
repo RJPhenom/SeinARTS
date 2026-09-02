@@ -13,16 +13,16 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Components/SeinComponent.h"
+#include "Components/SeinPayload.h"
 #include "Stamping/SeinStampShape.h"
 #include "Types/FixedPoint.h"
 #include "SeinFogOfWarTypes.h"
-#include "SeinVisionComponent.generated.h"
+#include "SeinVisionPayload.generated.h"
 
 /**
  * One vision stamp on a source. Pairs an FSeinStampShape (geometry + pose +
  * bEnabled) with the EVNNNNNN bits this stamp emits on. Multiple stamps live
- * on FSeinVisionComponent::Stamps; each one runs its own shadowcast pass against
+ * on FSeinVisionPayload::Stamps; each one runs its own shadowcast pass against
  * the cells it covers.
  *
  * LayerMask examples:
@@ -77,7 +77,7 @@ struct SEINARTSFOGOFWAR_API FSeinVisionStamp
  * the building center.
  */
 USTRUCT(BlueprintType, meta = (SeinDeterministic))
-struct SEINARTSFOGOFWAR_API FSeinVisionComponent : public FSeinComponent
+struct SEINARTSFOGOFWAR_API FSeinVisionPayload : public FSeinPayload
 {
 	GENERATED_BODY()
 
@@ -88,7 +88,7 @@ struct SEINARTSFOGOFWAR_API FSeinVisionComponent : public FSeinComponent
 	FFixedPoint EyeHeight = FFixedPoint::FromInt(180);
 
 	// EMISSION-AS-TARGET (what bits make this entity visible to observers)
-	// lives on FSeinFogVisibilityComponent::FogVisibilityLayerMask (a
+	// lives on FSeinFogVisibilityPayload::FogVisibilityLayerMask (a
 	// dedicated top-level component since the Phase-5+ split — moved off
 	// extents so bodyless entities can still author emission). The vision
 	// component carries only the PERCEPTION-AS-OBSERVER side — the Stamps

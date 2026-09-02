@@ -15,7 +15,7 @@
 #include "Types/Vector.h"
 #include "Player/SeinPlayerController.h"
 #include "Actor/SeinActor.h"
-#include "Components/SeinIdentityComponent.h"
+#include "Components/SeinIdentityPayload.h"
 #include "Tags/SeinARTSGameplayTags.h"
 
 #include "SeinLevelData.h"
@@ -196,7 +196,7 @@ void USeinMinimapViewModel::RebuildBlips()
 		Blip.bSelected = SelectedSet.Contains(Handle);
 
 		// Per-type minimap sprite from identity (null → widget draws its default dot).
-		if (const FSeinIdentityComponent* Identity = Sub->GetComponent<FSeinIdentityComponent>(Handle))
+		if (const FSeinIdentityPayload* Identity = Sub->GetComponent<FSeinIdentityPayload>(Handle))
 		{
 			Blip.Icon = Identity->MinimapIcon;
 		}

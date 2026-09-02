@@ -5,8 +5,8 @@
 
 #include "Details/SeinCoverComponentDetails.h"
 
-#include "Components/SeinCoverComponent.h"
-#include "Components/SeinExtentsComponent.h"   // FSeinExtentsShape resolution for Edge mode
+#include "Components/SeinCoverPayload.h"
+#include "Components/SeinExtentsPayload.h"   // FSeinExtentsShape resolution for Edge mode
 #include "Actor/SeinEntityBridgeComponent.h"         // walk owning bridge's ComponentData
 
 #include "DetailLayoutBuilder.h"           // IDetailLayoutBuilder::GetDetailFont
@@ -114,7 +114,7 @@ void FSeinCoverComponentDetails::CustomizeChildren(
 
 namespace
 {
-	/** Resolve the first Box-shaped FSeinExtentsComponent entry on the
+	/** Resolve the first Box-shaped FSeinExtentsPayload entry on the
 	 *  passed-in bridge's ComponentData array. Returns nullptr if no
 	 *  Extents entry exists, or it has no Shapes, or the first Box is
 	 *  missing. Used by Edge-mode generation to find the wall body geometry
@@ -129,8 +129,8 @@ namespace
 		for (const FInstancedStruct& Entry : Bridge->ComponentData)
 		{
 			if (!Entry.IsValid()) continue;
-			if (Entry.GetScriptStruct() != FSeinExtentsComponent::StaticStruct()) continue;
-			const FSeinExtentsComponent& Extents = Entry.Get<FSeinExtentsComponent>();
+			if (Entry.GetScriptStruct() != FSeinExtentsPayload::StaticStruct()) continue;
+			const FSeinExtentsPayload& Extents = Entry.Get<FSeinExtentsPayload>();
 			for (const FSeinExtentsShape& Shape : Extents.Shapes)
 			{
 				if (Shape.Shape == ESeinExtentsShape::Box)
@@ -191,7 +191,7 @@ FReply FSeinCoverComponentDetails::OnGenerateButtonClicked()
 	// the change driven through UE's pipeline; everything else on the
 	// struct (QualityTag, bIsDirectional, Area) stays at its current value.
 	const TSharedPtr<IPropertyHandle> SlotsHandle = StructHandle->GetChildHandle(
-		GET_MEMBER_NAME_CHECKED(FSeinCoverComponent, Slots));
+		GET_MEMBER_NAME_CHECKED(FSeinCoverPayload, Slots));
 	if (!SlotsHandle.IsValid() || !SlotsHandle->IsValidHandle())
 	{
 		UE_LOG(LogSeinCoverDetails, Warning,
@@ -250,12 +250,12 @@ FReply FSeinCoverComponentDetails::OnGenerateButtonClicked()
 		[&PerOuterValues, &BodyShapesByOuter, SlotsProp, &GeneratedFor]
 		(void* RawData, const int32 DataIndex, const int32 /*NumDatas*/)
 		{
-			const FSeinCoverComponent* Source = static_cast<const FSeinCoverComponent*>(RawData);
+			const FSeinCoverPayload* Source = static_cast<const FSeinCoverPayload*>(RawData);
 			if (!Source) return true;
 
 			// Clone — explicit copy of the source CDO struct so its existing
 			// fields drive GenerateSlots's behavior (Area, mode, count, etc).
-			FSeinCoverComponent Clone = *Source;
+			FSeinCoverPayload Clone = *Source;
 			const FSeinExtentsShape* Body = BodyShapesByOuter.IsValidIndex(DataIndex)
 				? BodyShapesByOuter[DataIndex] : nullptr;
 			Clone.GenerateSlots(Body);

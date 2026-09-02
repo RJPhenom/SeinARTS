@@ -2,7 +2,7 @@
 
 #include "Abilities/SeinAbility.h"
 #include "Actor/SeinActor.h"
-#include "Components/SeinComponent.h"
+#include "Components/SeinPayload.h"
 #include "StructUtils/InstancedStruct.h"
 #include "Types/FixedPoint.h"
 #include "SeinBalanceDataEditorTestTypes.generated.h"
@@ -20,7 +20,7 @@ struct FSeinBalanceEditorTestNestedData
 };
 
 USTRUCT(meta = (SeinDeterministic))
-struct FSeinBalanceEditorTestComponent : public FSeinComponent
+struct FSeinBalanceEditorTestComponent : public FSeinPayload
 {
 	GENERATED_BODY()
 

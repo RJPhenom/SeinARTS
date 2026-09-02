@@ -7,7 +7,7 @@
 
 #include "SeinFogOfWarTypes.h"
 #include "SeinLevelData.h"
-#include "Components/SeinFogVisibilityComponent.h"
+#include "Components/SeinFogVisibilityPayload.h"
 #include "Engine/World.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "SeinARTSFogOfWarLog.h"
@@ -144,8 +144,8 @@ bool USeinFogOfWar::IsEntityVisibleToObserver(
 	ESeinFogVisibilityPolicy Policy =
 		ESeinFogVisibilityPolicy::VisionLayersOnly;
 	uint8 EmissionMask = SEIN_FOW_BIT_NORMAL;
-	if (const FSeinFogVisibilityComponent* FogVisibility =
-			Sim.GetComponent<FSeinFogVisibilityComponent>(Target))
+	if (const FSeinFogVisibilityPayload* FogVisibility =
+			Sim.GetComponent<FSeinFogVisibilityPayload>(Target))
 	{
 		Policy = FogVisibility->FogVisibilityPolicy;
 		EmissionMask = FogVisibility->FogVisibilityLayerMask;

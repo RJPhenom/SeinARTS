@@ -2,7 +2,7 @@
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinSquadDispatchResolver.h
  * @brief   Specialized broker resolver for the squad-as-sub-broker pattern.
- *          Reads per-slot OffsetTransforms from FSeinSquadComponent for formation
+ *          Reads per-slot OffsetTransforms from FSeinSquadPayload for formation
  *          positions and dispatches predetermined-ability orders to the
  *          leader first (fallback first capable).
  */
@@ -30,7 +30,7 @@
  *     members / unauthored squads fall back to a blob at the anchor.
  *
  * Designers can subclass further or replace entirely via
- * `FSeinSquadComponent::DispatchResolverClass`.
+ * `FSeinSquadPayload::DispatchResolverClass`.
  */
 UCLASS(ClassGroup = (SeinARTS), meta = (DisplayName = "Squad Dispatch Resolver"))
 class SEINARTSSQUAD_API USeinSquadDispatchResolver : public USeinDefaultCommandBrokerResolver
@@ -39,7 +39,7 @@ class SEINARTSSQUAD_API USeinSquadDispatchResolver : public USeinDefaultCommandB
 
 public:
 	/** NOTE: the per-squad slot RE-MATCH toggles (Reassign Slots Lateral / Depth)
-	 *  live on FSeinSquadComponent, not on the resolver — they're per-squad
+	 *  live on FSeinSquadPayload, not on the resolver — they're per-squad
 	 *  behavioral features. ResolveDispatch reads them from the squad's component
 	 *  data and passes them into the (inherited) ResolveFormationLayout. */
 

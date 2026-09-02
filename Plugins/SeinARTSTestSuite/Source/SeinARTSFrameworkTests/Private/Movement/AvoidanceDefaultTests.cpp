@@ -3,8 +3,8 @@
 
 #include "Components/SeinBrokerMembershipData.h"
 #include "Components/SeinCommandBrokerData.h"
-#include "Components/SeinMovementComponent.h"
-#include "Components/SeinNavigationComponent.h"
+#include "Components/SeinMovementPayload.h"
+#include "Components/SeinNavigationPayload.h"
 #include "HAL/IConsoleManager.h"
 #include "Math/MathLib.h"
 #include "Movement/SeinAvoidanceDefault.h"
@@ -120,14 +120,14 @@ namespace
 		{
 			const FSeinEntityHandle Handle = World->SpawnAbstractEntity(
 				FFixedTransform(Position), FSeinPlayerID(1));
-			FSeinMovementComponent Movement;
+			FSeinMovementPayload Movement;
 			Movement.bHasTarget = bHasTarget;
 			Movement.TargetLocation = Target;
 			Movement.Velocity = Velocity;
 			Movement.AvoidanceStrength = Strength;
 			World->AddComponent(Handle, Movement);
 
-			FSeinNavigationComponent Navigation;
+			FSeinNavigationPayload Navigation;
 			Navigation.FallbackFootprintRadius = TestRadius;
 			World->AddComponent(Handle, Navigation);
 			Movers.Add(Handle);
@@ -246,14 +246,14 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(ParallelMode.Set(true)));
 		ASSERT_THAT(IsTrue(Parallel.Compute()));
 
-		const FSeinMovementComponent* SerialFirstMove =
-			Serial.World->GetComponent<FSeinMovementComponent>(SerialFirst);
-		const FSeinMovementComponent* SerialSecondMove =
-			Serial.World->GetComponent<FSeinMovementComponent>(SerialSecond);
-		const FSeinMovementComponent* ParallelFirstMove =
-			Parallel.World->GetComponent<FSeinMovementComponent>(ParallelFirst);
-		const FSeinMovementComponent* ParallelSecondMove =
-			Parallel.World->GetComponent<FSeinMovementComponent>(ParallelSecond);
+		const FSeinMovementPayload* SerialFirstMove =
+			Serial.World->GetComponent<FSeinMovementPayload>(SerialFirst);
+		const FSeinMovementPayload* SerialSecondMove =
+			Serial.World->GetComponent<FSeinMovementPayload>(SerialSecond);
+		const FSeinMovementPayload* ParallelFirstMove =
+			Parallel.World->GetComponent<FSeinMovementPayload>(ParallelFirst);
+		const FSeinMovementPayload* ParallelSecondMove =
+			Parallel.World->GetComponent<FSeinMovementPayload>(ParallelSecond);
 		ASSERT_THAT(IsNotNull(SerialFirstMove));
 		ASSERT_THAT(IsNotNull(SerialSecondMove));
 		ASSERT_THAT(IsNotNull(ParallelFirstMove));
@@ -314,8 +314,8 @@ namespace UE::SeinARTSTests
 				Membership.CurrentBrokerHandle = Broker;
 				Inner.World->AddComponent(Member, Membership);
 			}
-			FSeinMovementComponent* SecondMove =
-				Inner.World->GetComponentMutable<FSeinMovementComponent>(Second);
+			FSeinMovementPayload* SecondMove =
+				Inner.World->GetComponentMutable<FSeinMovementPayload>(Second);
 			check(SecondMove);
 			SecondMove->TargetLocation = FFixedVector(
 				FFixedPoint::FromInt(1000), FFixedPoint::Zero,
@@ -323,10 +323,10 @@ namespace UE::SeinARTSTests
 		})));
 
 		ASSERT_THAT(IsTrue(Fixture.Compute()));
-		const FSeinMovementComponent* FirstMove =
-			Fixture.World->GetComponent<FSeinMovementComponent>(First);
-		const FSeinMovementComponent* SecondMove =
-			Fixture.World->GetComponent<FSeinMovementComponent>(Second);
+		const FSeinMovementPayload* FirstMove =
+			Fixture.World->GetComponent<FSeinMovementPayload>(First);
+		const FSeinMovementPayload* SecondMove =
+			Fixture.World->GetComponent<FSeinMovementPayload>(Second);
 		ASSERT_THAT(IsNotNull(FirstMove));
 		ASSERT_THAT(IsNotNull(SecondMove));
 		ASSERT_THAT(IsTrue(
@@ -398,11 +398,11 @@ namespace UE::SeinARTSTests
 
 		ASSERT_THAT(IsTrue(SingleMemberFixture.Compute()));
 		ASSERT_THAT(IsTrue(DuplicateMemberFixture.Compute()));
-		const FSeinMovementComponent* SingleMovement =
-			SingleMemberFixture.World->GetComponent<FSeinMovementComponent>(
+		const FSeinMovementPayload* SingleMovement =
+			SingleMemberFixture.World->GetComponent<FSeinMovementPayload>(
 				SingleMover);
-		const FSeinMovementComponent* DuplicateMovement =
-			DuplicateMemberFixture.World->GetComponent<FSeinMovementComponent>(
+		const FSeinMovementPayload* DuplicateMovement =
+			DuplicateMemberFixture.World->GetComponent<FSeinMovementPayload>(
 				DuplicateMover);
 		ASSERT_THAT(IsNotNull(SingleMovement));
 		ASSERT_THAT(IsNotNull(DuplicateMovement));
@@ -450,10 +450,10 @@ namespace UE::SeinARTSTests
 		})));
 
 		ASSERT_THAT(IsTrue(Fixture.Compute()));
-		const FSeinMovementComponent* FirstMove =
-			Fixture.World->GetComponent<FSeinMovementComponent>(First);
-		const FSeinMovementComponent* SecondMove =
-			Fixture.World->GetComponent<FSeinMovementComponent>(Second);
+		const FSeinMovementPayload* FirstMove =
+			Fixture.World->GetComponent<FSeinMovementPayload>(First);
+		const FSeinMovementPayload* SecondMove =
+			Fixture.World->GetComponent<FSeinMovementPayload>(Second);
 		ASSERT_THAT(IsNotNull(FirstMove));
 		ASSERT_THAT(IsNotNull(SecondMove));
 		ASSERT_THAT(IsTrue(
@@ -498,10 +498,10 @@ namespace UE::SeinARTSTests
 		})));
 
 		ASSERT_THAT(IsTrue(Fixture.Compute()));
-		const FSeinMovementComponent* FirstMove =
-			Fixture.World->GetComponent<FSeinMovementComponent>(First);
-		const FSeinMovementComponent* SecondMove =
-			Fixture.World->GetComponent<FSeinMovementComponent>(Second);
+		const FSeinMovementPayload* FirstMove =
+			Fixture.World->GetComponent<FSeinMovementPayload>(First);
+		const FSeinMovementPayload* SecondMove =
+			Fixture.World->GetComponent<FSeinMovementPayload>(Second);
 		ASSERT_THAT(IsNotNull(FirstMove));
 		ASSERT_THAT(IsNotNull(SecondMove));
 		ASSERT_THAT(IsTrue(
@@ -552,8 +552,8 @@ namespace UE::SeinARTSTests
 		})));
 
 		ASSERT_THAT(IsTrue(Fixture.Compute()));
-		const FSeinMovementComponent* Movement =
-			Fixture.World->GetComponent<FSeinMovementComponent>(Mover);
+		const FSeinMovementPayload* Movement =
+			Fixture.World->GetComponent<FSeinMovementPayload>(Mover);
 		ASSERT_THAT(IsNotNull(Movement));
 		ASSERT_THAT(IsTrue(
 			Movement->AvoidanceOutput.SteerDir.Y < FFixedPoint::Zero));
@@ -595,8 +595,8 @@ namespace UE::SeinARTSTests
 				false);
 		})));
 		ASSERT_THAT(IsTrue(DetourFixture.Compute()));
-		const FSeinMovementComponent* DetourMovement =
-			DetourFixture.World->GetComponent<FSeinMovementComponent>(
+		const FSeinMovementPayload* DetourMovement =
+			DetourFixture.World->GetComponent<FSeinMovementPayload>(
 				DetourMover);
 		ASSERT_THAT(IsNotNull(DetourMovement));
 		ASSERT_THAT(IsTrue(
@@ -629,8 +629,8 @@ namespace UE::SeinARTSTests
 			}
 		})));
 		ASSERT_THAT(IsTrue(GapFixture.Compute()));
-		const FSeinMovementComponent* GapMovement =
-			GapFixture.World->GetComponent<FSeinMovementComponent>(GapMover);
+		const FSeinMovementPayload* GapMovement =
+			GapFixture.World->GetComponent<FSeinMovementPayload>(GapMover);
 		ASSERT_THAT(IsNotNull(GapMovement));
 		ASSERT_THAT(IsTrue(
 			GapMovement->AvoidanceOutput.SteerDir
@@ -679,10 +679,10 @@ namespace UE::SeinARTSTests
 		})));
 
 		ASSERT_THAT(IsTrue(Fixture.Compute()));
-		const FSeinMovementComponent* LaggardMovement =
-			Fixture.World->GetComponent<FSeinMovementComponent>(Laggard);
-		const FSeinMovementComponent* LeaderMovement =
-			Fixture.World->GetComponent<FSeinMovementComponent>(Leader);
+		const FSeinMovementPayload* LaggardMovement =
+			Fixture.World->GetComponent<FSeinMovementPayload>(Laggard);
+		const FSeinMovementPayload* LeaderMovement =
+			Fixture.World->GetComponent<FSeinMovementPayload>(Leader);
 		ASSERT_THAT(IsNotNull(LaggardMovement));
 		ASSERT_THAT(IsNotNull(LeaderMovement));
 		ASSERT_THAT(IsTrue(
@@ -729,8 +729,8 @@ namespace UE::SeinARTSTests
 		})));
 
 		ASSERT_THAT(IsTrue(Fixture.Compute()));
-		const FSeinMovementComponent* IdleMove =
-			Fixture.World->GetComponent<FSeinMovementComponent>(Idle);
+		const FSeinMovementPayload* IdleMove =
+			Fixture.World->GetComponent<FSeinMovementPayload>(Idle);
 		ASSERT_THAT(IsNotNull(IdleMove));
 		ASSERT_THAT(IsTrue(
 			IdleMove->AvoidanceOutput.SteerDir.Y > FFixedPoint::Zero));
@@ -740,15 +740,15 @@ namespace UE::SeinARTSTests
 		{
 			auto SimScope =
 				FSeinSimContextTestAccess::Enter(*Fixture.World);
-			FSeinMovementComponent* MoverMove =
-				Fixture.World->GetComponentMutable<FSeinMovementComponent>(
+			FSeinMovementPayload* MoverMove =
+				Fixture.World->GetComponentMutable<FSeinMovementPayload>(
 					Mover);
 			ASSERT_THAT(IsNotNull(MoverMove));
 			MoverMove->bHasTarget = false;
 		}
 		ASSERT_THAT(IsTrue(Fixture.Compute()));
 		IdleMove =
-			Fixture.World->GetComponent<FSeinMovementComponent>(Idle);
+			Fixture.World->GetComponent<FSeinMovementPayload>(Idle);
 		ASSERT_THAT(IsNotNull(IdleMove));
 		ASSERT_THAT(IsTrue(
 			IdleMove->AvoidanceOutput.SteerDir
@@ -783,16 +783,16 @@ namespace UE::SeinARTSTests
 					FFixedPoint::Zero),
 				true,
 				FFixedPoint::Zero);
-			FSeinMovementComponent* Movement =
-				Inner.World->GetComponentMutable<FSeinMovementComponent>(
+			FSeinMovementPayload* Movement =
+				Inner.World->GetComponentMutable<FSeinMovementPayload>(
 					Mover);
 			check(Movement);
 			Movement->AvoidanceOutput = SeededOutput;
 		})));
 
 		ASSERT_THAT(IsTrue(Fixture.Compute()));
-		const FSeinMovementComponent* Movement =
-			Fixture.World->GetComponent<FSeinMovementComponent>(Mover);
+		const FSeinMovementPayload* Movement =
+			Fixture.World->GetComponent<FSeinMovementPayload>(Mover);
 		ASSERT_THAT(IsNotNull(Movement));
 		ASSERT_THAT(IsTrue(Movement->AvoidanceOutput.SteerDir
 			== SeededOutput.SteerDir));
@@ -876,16 +876,16 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(InnerBoundary.Compute()));
 		ASSERT_THAT(IsTrue(LegacyCut.Compute()));
 
-		const FSeinMovementComponent* FullMove =
-			Full.World->GetComponent<FSeinMovementComponent>(FullMover);
-		const FSeinMovementComponent* OuterMove =
-			OuterBoundary.World->GetComponent<FSeinMovementComponent>(OuterMover);
-		const FSeinMovementComponent* MidMove =
-			MidBand.World->GetComponent<FSeinMovementComponent>(MidMover);
-		const FSeinMovementComponent* InnerMove =
-			InnerBoundary.World->GetComponent<FSeinMovementComponent>(InnerMover);
-		const FSeinMovementComponent* LegacyMove =
-			LegacyCut.World->GetComponent<FSeinMovementComponent>(LegacyMover);
+		const FSeinMovementPayload* FullMove =
+			Full.World->GetComponent<FSeinMovementPayload>(FullMover);
+		const FSeinMovementPayload* OuterMove =
+			OuterBoundary.World->GetComponent<FSeinMovementPayload>(OuterMover);
+		const FSeinMovementPayload* MidMove =
+			MidBand.World->GetComponent<FSeinMovementPayload>(MidMover);
+		const FSeinMovementPayload* InnerMove =
+			InnerBoundary.World->GetComponent<FSeinMovementPayload>(InnerMover);
+		const FSeinMovementPayload* LegacyMove =
+			LegacyCut.World->GetComponent<FSeinMovementPayload>(LegacyMover);
 		ASSERT_THAT(IsNotNull(FullMove));
 		ASSERT_THAT(IsNotNull(OuterMove));
 		ASSERT_THAT(IsNotNull(MidMove));

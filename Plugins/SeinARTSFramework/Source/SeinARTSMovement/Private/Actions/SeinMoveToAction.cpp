@@ -14,8 +14,8 @@
 #include "Abilities/SeinAbility.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Settings/PluginSettings.h"     // terrain-type → speed multiplier lookup
-#include "Components/SeinMovementComponent.h"
-#include "Components/SeinNavigationComponent.h"
+#include "Components/SeinMovementPayload.h"
+#include "Components/SeinNavigationPayload.h"
 #include "Math/MathLib.h"
 #include "Types/Entity.h"
 #include "Types/FixedPoint.h"
@@ -323,8 +323,8 @@ USeinMoveToAction::ResolveInitialPath(
 	FFixedPoint DeltaTime,
 	USeinWorldSubsystem& World,
 	FSeinEntity& Entity,
-	FSeinMovementComponent& MovementData,
-	const FSeinNavigationComponent* NavigationData,
+	FSeinMovementPayload& MovementData,
+	const FSeinNavigationPayload* NavigationData,
 	USeinNavigation* Navigation,
 	USeinNavigationSubsystem* NavigationSubsystem)
 {
@@ -496,7 +496,7 @@ USeinMoveToAction::ResolveInitialPath(
 	// instead of pinning at "almost arrived" forever.
 	AcceptanceRadius = NavigationData
 		? NavigationData->AcceptanceRadius
-		: FSeinNavigationComponent::DefaultArrivalAcceptance();
+		: FSeinNavigationPayload::DefaultArrivalAcceptance();
 
 	// Body radius (once per order) + the shared near-goal settle band: the
 	// stall failsafe SETTLES inside it, the hold-escape ladder is EXCLUDED
@@ -555,8 +555,8 @@ USeinMoveToAction::ERepathTickResult USeinMoveToAction::TickRepath(
 	FFixedPoint DeltaTime,
 	USeinWorldSubsystem& World,
 	FSeinEntity& Entity,
-	FSeinMovementComponent& MovementData,
-	const FSeinNavigationComponent* NavigationData,
+	FSeinMovementPayload& MovementData,
+	const FSeinNavigationPayload* NavigationData,
 	USeinNavigation* Navigation,
 	USeinNavigationSubsystem* NavigationSubsystem)
 {
@@ -754,7 +754,7 @@ bool USeinMoveToAction::TickEscapeLeg(
 	FFixedPoint DeltaTime,
 	USeinWorldSubsystem& World,
 	FSeinEntity& Entity,
-	FSeinMovementComponent& MovementData,
+	FSeinMovementPayload& MovementData,
 	bool bReachedEnd)
 {
 	const FFixedVector EscPos = Entity.Transform.GetLocation();
@@ -851,8 +851,8 @@ bool USeinMoveToAction::TickHoldEscapeLadder(
 	FFixedPoint DeltaTime,
 	USeinWorldSubsystem& World,
 	FSeinEntity& Entity,
-	FSeinMovementComponent& MovementData,
-	const FSeinNavigationComponent* NavigationData,
+	FSeinMovementPayload& MovementData,
+	const FSeinNavigationPayload* NavigationData,
 	USeinNavigation* Navigation,
 	bool bReachedEnd)
 {
@@ -1067,7 +1067,7 @@ bool USeinMoveToAction::TickHoldEscapeLadder(
 
 void USeinMoveToAction::UpdateArrivalImminent(
 	const FSeinEntity& Entity,
-	FSeinMovementComponent& MovementData,
+	FSeinMovementPayload& MovementData,
 	bool bReachedEnd) const
 {
 	// True while in the kinematic brake zone of the final waypoint
@@ -1192,27 +1192,27 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 	}
 
 	// Post-decomposition: the legacy FSeinMovementData was split into
-	// FSeinMovementComponent (kinematics + runtime velocity/arrival state) and
-	// FSeinNavigationComponent (footprint + nav-layer + acceptance + repath).
+	// FSeinMovementPayload (kinematics + runtime velocity/arrival state) and
+	// FSeinNavigationPayload (footprint + nav-layer + acceptance + repath).
 	// MoveComp is required for the action to function at all; NavComp is
 	// soft-required — its absence forces fallback defaults for acceptance,
 	// repath cadence, and footprint radius. (Most entity classes will author both,
 	// but a "no nav" entity authored only with a movement component should
 	// still be drivable by abilities that pass an explicit destination.)
-	FSeinMovementComponent* MoveComp =
-		World.GetComponentMutable<FSeinMovementComponent>(
+	FSeinMovementPayload* MoveComp =
+		World.GetComponentMutable<FSeinMovementPayload>(
 			OwnerEntity);
 	if (!MoveComp)
 	{
 		Fail(static_cast<uint8>(ESeinMoveFailureReason::NoMovementComponent));
 		return true;
 	}
-	const FSeinNavigationComponent* NavComp = World.GetComponent<FSeinNavigationComponent>(OwnerEntity);
+	const FSeinNavigationPayload* NavComp = World.GetComponent<FSeinNavigationPayload>(OwnerEntity);
 
 	// Mark "actively driven" each tick. Idempotent set rather than first-tick-
 	// only because cheap and survives reorders to TickAction's early structure.
 	// Cleared by ResetTransientMoveState on cancel/fail/arrival, so AnimBPs
-	// (and anything reading FSeinMovementComponent::bHasTarget) see "input
+	// (and anything reading FSeinMovementPayload::bHasTarget) see "input
 	// released" the moment the action ends — even while Velocity coasts toward
 	// zero.
 	MoveComp->bHasTarget = true;
@@ -1448,8 +1448,8 @@ void USeinMoveToAction::FinalizeMovementOnce()
 		}
 	}
 
-	FSeinMovementComponent* MoveComp =
-		Sim->GetComponentMutable<FSeinMovementComponent>(
+	FSeinMovementPayload* MoveComp =
+		Sim->GetComponentMutable<FSeinMovementPayload>(
 			OwnerEntity);
 	if (!MoveComp) return;
 	MoveComp->bArrivalImminent = false;
@@ -1467,10 +1467,10 @@ void USeinMoveToAction::RefreshAuthoredComponentTuning(
 {
 	if (!bPathResolved || bMovementFinalized) return;
 	FSeinEntity* Entity = World.GetEntityMutable(OwnerEntity);
-	FSeinMovementComponent* MoveComp =
-		World.GetComponentMutable<FSeinMovementComponent>(OwnerEntity);
-	const FSeinNavigationComponent* NavComp =
-		World.GetComponent<FSeinNavigationComponent>(OwnerEntity);
+	FSeinMovementPayload* MoveComp =
+		World.GetComponentMutable<FSeinMovementPayload>(OwnerEntity);
+	const FSeinNavigationPayload* NavComp =
+		World.GetComponent<FSeinNavigationPayload>(OwnerEntity);
 	UWorld* UnrealWorld = World.GetWorld();
 	USeinMovementSubsystem* MovementSub = UnrealWorld
 		? UnrealWorld->GetSubsystem<USeinMovementSubsystem>()
@@ -1492,7 +1492,7 @@ void USeinMoveToAction::RefreshAuthoredComponentTuning(
 
 	AcceptanceRadius = NavComp
 		? NavComp->AcceptanceRadius
-		: FSeinNavigationComponent::DefaultArrivalAcceptance();
+		: FSeinNavigationPayload::DefaultArrivalAcceptance();
 	FootprintRadius = USeinMovement::ResolveCollisionRadius(
 		&World, OwnerEntity, NavComp);
 	StallBand = SaturatingPositiveScale(AcceptanceRadius, 3);
@@ -1505,9 +1505,9 @@ void USeinMoveToAction::RefreshAuthoredComponentTuning(
 		PreviousMovement->OnMoveEnd(*Entity);
 		// Blueprint-capable teardown may have changed the action/component.
 		if (bCompleted || bCancelled || bMovementFinalized) return;
-		MoveComp = World.GetComponentMutable<FSeinMovementComponent>(OwnerEntity);
+		MoveComp = World.GetComponentMutable<FSeinMovementPayload>(OwnerEntity);
 		Entity = World.GetEntityMutable(OwnerEntity);
-		NavComp = World.GetComponent<FSeinNavigationComponent>(OwnerEntity);
+		NavComp = World.GetComponent<FSeinNavigationPayload>(OwnerEntity);
 		if (!MoveComp || !Entity) return;
 	}
 	USeinNavigation* Nav = USeinNavigationSubsystem::GetNavigationForWorld(&World);

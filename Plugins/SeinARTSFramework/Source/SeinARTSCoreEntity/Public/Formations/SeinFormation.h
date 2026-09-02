@@ -166,7 +166,7 @@ public:
 
 	/**
 	 * Whether this formation places members at their squad's AUTHORED per-slot OffsetTransforms
-	 * (FSeinSquadComponent::Slots) rather than computing positions from footprints — only the slot
+	 * (FSeinSquadPayload::Slots) rather than computing positions from footprints — only the slot
 	 * formation does. Editor hint: a squad shows its per-slot OffsetTransform authoring ONLY when its
 	 * chosen Formation Class returns true here (a footprint-laid formation ignores the offsets, so
 	 * authoring them would mislead). Pure config query — no sim state. */
@@ -243,7 +243,7 @@ public:
 
 	/**
 	 * Footprint radius (world units) of an entity — the basis for footprint-aware
-	 * formation spacing and preview dot sizing. Reads FSeinExtentsComponent: a
+	 * formation spacing and preview dot sizing. Reads FSeinExtentsPayload: a
 	 * Capsule shape contributes its Radius, a Box shape its circumscribed radius
 	 * (√(hx²+hy²), orientation-independent so a rotating formation never overlaps),
 	 * taking the MAX over all shapes (each pushed out by its LocalOffset XY). No

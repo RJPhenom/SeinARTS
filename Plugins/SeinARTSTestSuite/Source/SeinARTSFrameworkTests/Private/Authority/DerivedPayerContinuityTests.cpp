@@ -1,7 +1,7 @@
 #include "CQTest.h"
 #include "Components/ActorTestSpawner.h"
 
-#include "Components/SeinAbilityComponent.h"
+#include "Components/SeinAbilityPayload.h"
 #include "Brokers/SeinDefaultCommandBrokerResolver.h"
 #include "Containers/Ticker.h"
 #include "Simulation/SeinTestSimContext.h"
@@ -163,7 +163,7 @@ namespace UE::SeinARTSTests
 			World->RegisterPlayer(PayerA, FSeinFactionID(1));
 			World->RegisterPlayer(PayerB, FSeinFactionID(1));
 			Entity = World->SpawnAbstractEntity(FFixedTransform(), PayerA);
-			World->AddComponent(Entity, FSeinAbilityComponent());
+			World->AddComponent(Entity, FSeinAbilityPayload());
 
 			MoveAbility = GrantAbility(*World, Entity,
 				USeinPayerContinuityMoveAbility::StaticClass(),
@@ -264,7 +264,7 @@ namespace UE::SeinARTSTests
 			World->RegisterPlayer(PayerA, FSeinFactionID(1));
 			World->RegisterPlayer(ForgedPayer, FSeinFactionID(1));
 			Entity = World->SpawnAbstractEntity(FFixedTransform(), PayerA);
-			World->AddComponent(Entity, FSeinAbilityComponent());
+			World->AddComponent(Entity, FSeinAbilityPayload());
 			Ability = GrantAbility(*World, Entity,
 				USeinPayerContinuityAbility::StaticClass(),
 				SeinARTSTags::Command_Context_AbilityTriggered);
@@ -317,7 +317,7 @@ namespace UE::SeinARTSTests
 		{
 			World->RegisterPlayer(Player, FSeinFactionID(1));
 			Entity = World->SpawnAbstractEntity(FFixedTransform(), Player);
-			World->AddComponent(Entity, FSeinAbilityComponent());
+			World->AddComponent(Entity, FSeinAbilityPayload());
 			Ability = GrantAbility(*World, Entity,
 				USeinPayerContinuityAbility::StaticClass(),
 				SeinARTSTags::Command_Context_AbilityTriggered);

@@ -25,9 +25,9 @@
 #include "Types/FixedPoint.h"
 #include "Types/Quat.h"
 #include "Types/Vector.h"
-#include "Components/SeinMovementComponent.h"
+#include "Components/SeinMovementPayload.h"
 #include "Data/SeinTrackedMovementData.h"
-#include "Components/SeinNavigationComponent.h"
+#include "Components/SeinNavigationPayload.h"
 #include "Simulation/SeinWorldSubsystem.h"
 
 #if UE_ENABLE_DEBUG_DRAWING
@@ -167,13 +167,13 @@ UScriptStruct* USeinTrackedVehicleMovement::GetMovementDataStruct() const
 	return FSeinTrackedMovementData::StaticStruct();
 }
 
-FFixedPoint USeinTrackedVehicleMovement::GetDeceleration(const FSeinMovementComponent* MovementData) const
+FFixedPoint USeinTrackedVehicleMovement::GetDeceleration(const FSeinMovementPayload* MovementData) const
 {
 	const FSeinTrackedMovementData* Data = MovementData ? MovementData->MovementClassData.GetPtr<FSeinTrackedMovementData>() : nullptr;
 	return Data ? Data->Deceleration : FSeinTrackedMovementData().Deceleration;
 }
 
-FFixedPoint USeinTrackedVehicleMovement::GetMinTurnRadius(const FSeinMovementComponent* MovementData) const
+FFixedPoint USeinTrackedVehicleMovement::GetMinTurnRadius(const FSeinMovementPayload* MovementData) const
 {
 	// Read MinTurnRadius from the tracked-specific sub-data slot on the
 	// movement component, falling back to 0 (the "always pivot at sharp
@@ -252,7 +252,7 @@ void USeinTrackedVehicleMovement::OnMoveEnd(FSeinEntity& Entity)
 
 void USeinTrackedVehicleMovement::UpdateSettledRenderState(
 	const FSeinSettledMovementRenderContext& Context,
-	const FSeinMovementComponent& MovementData,
+	const FSeinMovementPayload& MovementData,
 	FSeinMovementRenderStateWriter& Writer) const
 {
 	using namespace UE::SeinARTSMovementPlus::Telemetry;
@@ -323,7 +323,7 @@ void USeinTrackedVehicleMovement::OnMoveBegin(const FSeinMovementContext& Ctx)
 
 	if (!Ctx.MovementData) return;
 	FSeinEntity& Entity = Ctx.Entity;
-	const FSeinMovementComponent& MovementData = *Ctx.MovementData;
+	const FSeinMovementPayload& MovementData = *Ctx.MovementData;
 	const FSeinPath& Path = Ctx.Path;
 
 	// Preserve MovementData.Velocity so reorders carry momentum.
@@ -410,7 +410,7 @@ ESeinPathResult USeinTrackedVehicleMovement::PlanPath(const FSeinPlanPathContext
 	const FSeinTrackedMovementData& Tracked = TrackedPtr ? *TrackedPtr : DefaultsTracked;
 	if (!Tracked.bManeuverPlanning) return Result;
 
-	const FSeinMovementComponent& MovementData = *Ctx.MovementData;
+	const FSeinMovementPayload& MovementData = *Ctx.MovementData;
 	const FFixedPoint RevTop = (MovementData.ReverseTopSpeed > FFixedPoint::Zero)
 		? MovementData.ReverseTopSpeed : MovementData.TopSpeed * FFixedPoint::Half;
 
@@ -673,7 +673,7 @@ bool USeinTrackedVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 	if (!Ctx.MovementData) return true;
 
 	FSeinEntity& Entity = Ctx.Entity;
-	FSeinMovementComponent& MovementData = *Ctx.MovementData;
+	FSeinMovementPayload& MovementData = *Ctx.MovementData;
 	const FSeinPath& Path = Ctx.Path;
 
 	const FSeinTrackedMovementData DefaultsTracked;

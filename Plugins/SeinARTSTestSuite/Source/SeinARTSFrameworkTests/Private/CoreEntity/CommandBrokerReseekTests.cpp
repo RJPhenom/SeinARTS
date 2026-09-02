@@ -4,9 +4,9 @@
 #include "Brokers/SeinDefaultCommandBrokerResolver.h"
 #include "Components/SeinBrokerMembershipData.h"
 #include "Components/SeinCommandBrokerData.h"
-#include "Components/SeinExtentsComponent.h"
-#include "Components/SeinMovementComponent.h"
-#include "Components/SeinNavigationComponent.h"
+#include "Components/SeinExtentsPayload.h"
+#include "Components/SeinMovementPayload.h"
+#include "Components/SeinNavigationPayload.h"
 #include "Containers/Ticker.h"
 #include "Settings/PluginSettings.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
@@ -131,12 +131,12 @@ namespace
 						!= RequiredJitter);
 				Broker = World->SpawnAbstractEntity(FFixedTransform(), Player);
 
-				FSeinMovementComponent Movement;
+				FSeinMovementPayload Movement;
 				Movement.bHomeSeeded = true;
 				Movement.HomePos = DisplacedPosition;
 				World->AddComponent(Member, Movement);
 
-				FSeinNavigationComponent Navigation;
+				FSeinNavigationPayload Navigation;
 				Navigation.AcceptanceRadius = FFixedPoint::FromInt(10);
 				World->AddComponent(Member, Navigation);
 
@@ -332,11 +332,11 @@ namespace UE::SeinARTSTests
 				TPair<FSeinEntityHandle, FFixedVector>(UpperMember, UpperPosition),
 				TPair<FSeinEntityHandle, FFixedVector>(LowerMember, LowerPosition)})
 			{
-				FSeinMovementComponent Movement;
+				FSeinMovementPayload Movement;
 				Movement.bHomeSeeded = true;
 				Movement.HomePos = Entry.Value;
 				World->AddComponent(Entry.Key, Movement);
-				FSeinNavigationComponent Navigation;
+				FSeinNavigationPayload Navigation;
 				Navigation.AcceptanceRadius = FFixedPoint::FromInt(10);
 				World->AddComponent(Entry.Key, Navigation);
 				FSeinBrokerMembershipData Membership;
@@ -415,18 +415,18 @@ namespace UE::SeinARTSTests
 			BrokerHandle = World->SpawnAbstractEntity(
 				FFixedTransform(), Player);
 
-			FSeinMovementComponent MemberMovement;
+			FSeinMovementPayload MemberMovement;
 			MemberMovement.bHomeSeeded = true;
 			MemberMovement.HomePos = MemberPosition;
 			World->AddComponent(Member, MemberMovement);
-			FSeinNavigationComponent MemberNavigation;
+			FSeinNavigationPayload MemberNavigation;
 			MemberNavigation.AcceptanceRadius = FFixedPoint::FromInt(10);
 			World->AddComponent(Member, MemberNavigation);
 			FSeinBrokerMembershipData Membership;
 			Membership.CurrentBrokerHandle = BrokerHandle;
 			World->AddComponent(Member, Membership);
 
-			FSeinMovementComponent TrafficMovement;
+			FSeinMovementPayload TrafficMovement;
 			TrafficMovement.bHasTarget = true;
 			TrafficMovement.TargetLocation = FFixedVector(
 				FFixedPoint::FromInt(1000), FFixedPoint::Zero,
@@ -435,7 +435,7 @@ namespace UE::SeinARTSTests
 				FFixedPoint::FromInt(100), FFixedPoint::Zero,
 				FFixedPoint::Zero);
 			World->AddComponent(Traffic, TrafficMovement);
-			FSeinExtentsComponent TrafficExtents;
+			FSeinExtentsPayload TrafficExtents;
 			TrafficExtents.Shapes.AddDefaulted();
 			TrafficExtents.bCollisionEnabled = true;
 			TrafficExtents.Mobility = ESeinCollisionMobility::Movable;
@@ -465,8 +465,8 @@ namespace UE::SeinARTSTests
 
 		{
 			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
-			FSeinMovementComponent* TrafficMovement =
-				World->GetComponentMutable<FSeinMovementComponent>(Traffic);
+			FSeinMovementPayload* TrafficMovement =
+				World->GetComponentMutable<FSeinMovementPayload>(Traffic);
 			ASSERT_THAT(IsNotNull(TrafficMovement));
 			TrafficMovement->bHasTarget = false;
 			TrafficMovement->Velocity = FFixedVector::ZeroVector;
@@ -549,7 +549,7 @@ namespace UE::SeinARTSTests
 					FFixedPoint::Zero);
 				const FSeinEntityHandle Member = World->SpawnAbstractEntity(
 					FFixedTransform(Displaced), Player);
-				FSeinMovementComponent Movement;
+				FSeinMovementPayload Movement;
 				Movement.bHomeSeeded = true;
 				Movement.HomePos = Home;
 				World->AddComponent(Member, Movement);
@@ -607,11 +607,11 @@ namespace UE::SeinARTSTests
 						FFixedPoint::Zero,
 						FFixedPoint::Zero)),
 					Player);
-				FSeinMovementComponent Movement;
+				FSeinMovementPayload Movement;
 				Movement.bHomeSeeded = true;
 				Movement.HomePos = FFixedVector::ZeroVector;
 				World->AddComponent(Member, Movement);
-				World->AddComponent(Member, FSeinNavigationComponent());
+				World->AddComponent(Member, FSeinNavigationPayload());
 				return Member;
 			};
 			InsideFloor = AddLooseMember(51);

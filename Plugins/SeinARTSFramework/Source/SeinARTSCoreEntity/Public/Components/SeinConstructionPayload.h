@@ -8,12 +8,12 @@
  *          transitions to operational via the optional CompletionEffect.
  *
  *          Lifecycle:
- *            1. BA_PlaceX spawns building with FSeinConstructionComponent (Progress=0)
+ *            1. BA_PlaceX spawns building with FSeinConstructionPayload (Progress=0)
  *               and SeinARTS.State.UnderConstruction tag granted.
  *            2. Builder runs BA_Construct, calls SeinAddConstructionProgress
  *               each sim tick. When threshold crosses, BPFL auto-finishes:
  *                 a. Applies CompletionEffect (if set) to the building.
- *                 b. Removes the FSeinConstructionComponent component.
+ *                 b. Removes the FSeinConstructionPayload component.
  *                 c. Ungrants SeinARTS.State.UnderConstruction tag.
  *            3. Building's normal abilities — gated via BlockedTags
  *               on SeinARTS.State.UnderConstruction — become invokable.
@@ -32,15 +32,15 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Components/SeinComponent.h"
+#include "Components/SeinPayload.h"
 #include "Templates/SubclassOf.h"
 #include "Types/FixedPoint.h"
-#include "SeinConstructionComponent.generated.h"
+#include "SeinConstructionPayload.generated.h"
 
 class USeinEffect;
 
 USTRUCT(BlueprintType, meta = (SeinDeterministic))
-struct SEINARTSCOREENTITY_API FSeinConstructionComponent : public FSeinComponent
+struct SEINARTSCOREENTITY_API FSeinConstructionPayload : public FSeinPayload
 {
 	GENERATED_BODY()
 

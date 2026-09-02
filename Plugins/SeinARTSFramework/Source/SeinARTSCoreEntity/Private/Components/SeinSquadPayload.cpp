@@ -1,13 +1,13 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinSquadComponent.cpp
- * @brief   Pure-read helpers for FSeinSquadComponent. Mutations route through
+ * @brief   Pure-read helpers for FSeinSquadPayload. Mutations route through
  *          USeinSimMutationBPFL so member back-refs stay consistent.
  */
 
-#include "Components/SeinSquadComponent.h"
+#include "Components/SeinSquadPayload.h"
 
-TArray<FSeinEntityHandle> FSeinSquadComponent::GetLiveMembers() const
+TArray<FSeinEntityHandle> FSeinSquadPayload::GetLiveMembers() const
 {
 	TArray<FSeinEntityHandle> Out;
 	Out.Reserve(Slots.Num());
@@ -21,7 +21,7 @@ TArray<FSeinEntityHandle> FSeinSquadComponent::GetLiveMembers() const
 	return Out;
 }
 
-int32 FSeinSquadComponent::GetLiveMemberCount() const
+int32 FSeinSquadPayload::GetLiveMemberCount() const
 {
 	int32 Count = 0;
 	for (const FSeinSquadSlot& Slot : Slots)
@@ -31,7 +31,7 @@ int32 FSeinSquadComponent::GetLiveMemberCount() const
 	return Count;
 }
 
-int32 FSeinSquadComponent::IndexOfSlotByTag(FGameplayTag SlotTag) const
+int32 FSeinSquadPayload::IndexOfSlotByTag(FGameplayTag SlotTag) const
 {
 	if (!SlotTag.IsValid()) return INDEX_NONE;
 	for (int32 i = 0; i < Slots.Num(); ++i)
@@ -41,7 +41,7 @@ int32 FSeinSquadComponent::IndexOfSlotByTag(FGameplayTag SlotTag) const
 	return INDEX_NONE;
 }
 
-int32 FSeinSquadComponent::IndexOfSlotByMember(FSeinEntityHandle Member) const
+int32 FSeinSquadPayload::IndexOfSlotByMember(FSeinEntityHandle Member) const
 {
 	if (!Member.IsValid()) return INDEX_NONE;
 	for (int32 i = 0; i < Slots.Num(); ++i)
@@ -51,7 +51,7 @@ int32 FSeinSquadComponent::IndexOfSlotByMember(FSeinEntityHandle Member) const
 	return INDEX_NONE;
 }
 
-int32 FSeinSquadComponent::FindFirstEmptySlotIndex() const
+int32 FSeinSquadPayload::FindFirstEmptySlotIndex() const
 {
 	for (int32 i = 0; i < Slots.Num(); ++i)
 	{
@@ -60,7 +60,7 @@ int32 FSeinSquadComponent::FindFirstEmptySlotIndex() const
 	return INDEX_NONE;
 }
 
-FFixedVector FSeinSquadComponent::ComputeCentroid(const FFixedVector& Fallback) const
+FFixedVector FSeinSquadPayload::ComputeCentroid(const FFixedVector& Fallback) const
 {
 	int32 Count = 0;
 	FFixedVector Sum = FFixedVector::ZeroVector;

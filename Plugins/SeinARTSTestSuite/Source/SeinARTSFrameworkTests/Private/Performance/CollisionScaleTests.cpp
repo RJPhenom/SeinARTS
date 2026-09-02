@@ -2,7 +2,7 @@
 #include "Components/ActorTestSpawner.h"
 
 #include "Collision/SeinCollisionResolverDefault.h"
-#include "Components/SeinExtentsComponent.h"
+#include "Components/SeinExtentsPayload.h"
 #include "HAL/PlatformTime.h"
 #include "Settings/PluginSettings.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
@@ -92,7 +92,7 @@ namespace UE::SeinARTSTests
 					Shape.Shape = ESeinExtentsShape::Capsule;
 					Shape.Radius = FFixedPoint::FromInt(Radius);
 					Shape.Height = FFixedPoint::FromInt(100);
-					FSeinExtentsComponent Extents;
+					FSeinExtentsPayload Extents;
 					Extents.Shapes.Add(Shape);
 					Extents.bCollisionEnabled = true;
 					Extents.Mobility = ESeinCollisionMobility::Movable;

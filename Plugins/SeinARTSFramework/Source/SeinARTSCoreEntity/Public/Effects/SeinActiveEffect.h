@@ -48,7 +48,7 @@ struct TStructOpsTypeTraits<FSeinEffectAbilityGrant>
 /**
  * Per-instance runtime state for an active effect. Lives in one of three
  * storages depending on `USeinEffect::Scope`:
- *   - Instance → entity's FSeinActiveEffectsComponent::ActiveEffects
+ *   - Instance → entity's FSeinActiveEffectsPayload::ActiveEffects
  *   - Class    → owner's FSeinPlayerState::ClassEffects
  *   - Player → owner's FSeinPlayerState::PlayerEffects
  *

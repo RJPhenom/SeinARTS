@@ -10,7 +10,7 @@
  *          Each tick: rebuild the dynamic tier from every enabled Movable or
  *          Stationary collider; rebuild the static tier too, but only on ticks
  *          where the static set changed (Hash.IsStaticDirty()). A collider is any entity
- *          whose FSeinExtentsComponent has bCollisionEnabled, at least one
+ *          whose FSeinExtentsPayload has bCollisionEnabled, at least one
  *          Shape, and a non-None ObjectType.
  */
 
@@ -22,9 +22,9 @@
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Simulation/ComponentStorage.h"
 #include "Collision/SeinCollisionSpatialHash.h"
-#include "Components/SeinExtentsComponent.h"
+#include "Components/SeinExtentsPayload.h"
 #include "Components/SeinExtentsHelpers.h"  // GetColliderBoundingRadius — shared with the resolver
-#include "Components/SeinIdentityComponent.h"  // (dev diagnostic only) DisplayName for the collider-gate log
+#include "Components/SeinIdentityPayload.h"  // (dev diagnostic only) DisplayName for the collider-gate log
 #include "Settings/PluginSettings.h"           // (dev diagnostic only) channel registry for the stale-channel check
 
 /**
@@ -74,7 +74,7 @@ public:
 		// per-cell TMap hashing) with a sort-grid rebuild.
 		TArray<FSeinCollisionSpatialHash::FDynamicColliderInput> DynamicColliders;
 		const ISeinComponentStorage* ExtentsStorage =
-			World.GetComponentStorageRaw(FSeinExtentsComponent::StaticStruct());
+			World.GetComponentStorageRaw(FSeinExtentsPayload::StaticStruct());
 		DynamicColliders.Reserve(ExtentsStorage ? ExtentsStorage->GetComponentCount() : 0);
 
 		if (ExtentsStorage)
@@ -85,8 +85,8 @@ public:
 		{
 			if (!World.GetEntityPool().IsValid(Handle)) return;
 			const FSeinEntity* Entity = World.GetEntity(Handle);
-			const FSeinExtentsComponent* Extents =
-				static_cast<const FSeinExtentsComponent*>(RawComponent);
+			const FSeinExtentsPayload* Extents =
+				static_cast<const FSeinExtentsPayload*>(RawComponent);
 			if (!Entity || !Extents) return;
 
 #if !UE_BUILD_SHIPPING
@@ -131,7 +131,7 @@ public:
 					if (!Why.IsEmpty())
 					{
 						FString Name(TEXT("(no identity)"));
-						if (const FSeinIdentityComponent* Ident = World.GetComponent<FSeinIdentityComponent>(Handle))
+						if (const FSeinIdentityPayload* Ident = World.GetComponent<FSeinIdentityPayload>(Handle))
 						{
 							Name = Ident->DisplayName.IsEmptyOrWhitespace()
 								? Ident->IdentityTag.ToString() : Ident->DisplayName.ToString();

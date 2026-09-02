@@ -97,7 +97,7 @@ enum class ESeinOutOfRangeBehavior : uint8
  * A single mapping from a command context (set of gameplay tags describing the
  * click/input context) to the ability that should be activated.
  *
-	 * Lives on FSeinAbilityComponent::DefaultCommands. When the player right-clicks,
+	 * Lives on FSeinAbilityPayload::DefaultCommands. When the player right-clicks,
  * the controller builds a context tag set and finds the highest-priority mapping
  * whose RequiredContext is a subset of the actual context.
  *

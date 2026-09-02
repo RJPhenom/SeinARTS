@@ -9,7 +9,7 @@
  *          authored slot offsets get cover-snap on top of their per-slot
  *          formation positions + the backward-walk slot mirror. Designer
  *          enables per-squad by pointing
- *          `FSeinSquadComponent::DispatchResolverClass` at this class.
+ *          `FSeinSquadPayload::DispatchResolverClass` at this class.
  */
 
 #pragma once

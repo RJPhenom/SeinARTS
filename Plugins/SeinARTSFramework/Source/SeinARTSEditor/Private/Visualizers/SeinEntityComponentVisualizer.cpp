@@ -7,7 +7,7 @@
  *
  *          Decoupling rule: this file references ONLY components that live in
  *          SeinARTSCoreEntity (a hard dep of SeinARTSEditor) — currently
- *          `FSeinExtentsComponent` + `FSeinProductionComponent`. Every other
+ *          `FSeinExtentsPayload` + `FSeinProductionPayload`. Every other
  *          per-component viz layer (FoW vision stamps, cover area + slots,
  *          future systems) lives in its OWNING editor module and registers a
  *          delegate at StartupModule. Optional systems can be fully disabled
@@ -17,9 +17,9 @@
 #include "Visualizers/SeinEntityComponentVisualizer.h"
 
 #include "Actor/SeinEntityBridgeComponent.h"
-#include "Components/SeinExtentsComponent.h"
-#include "Components/SeinNavigationComponent.h"
-#include "Components/SeinProductionComponent.h"
+#include "Components/SeinExtentsPayload.h"
+#include "Components/SeinNavigationPayload.h"
+#include "Components/SeinProductionPayload.h"
 #include "SeinARTSEditorModule.h"  // FSeinARTSEditorModule + per-component draw registry
 
 #include "Engine/World.h"
@@ -71,9 +71,9 @@ namespace SeinEntityVisualizerLocal
 		for (const FInstancedStruct& Entry : ComponentData)
 		{
 			if (!Entry.IsValid()) continue;
-			if (Entry.GetScriptStruct() != FSeinExtentsComponent::StaticStruct()) continue;
+			if (Entry.GetScriptStruct() != FSeinExtentsPayload::StaticStruct()) continue;
 
-			const FSeinExtentsComponent& Data = Entry.Get<FSeinExtentsComponent>();
+			const FSeinExtentsPayload& Data = Entry.Get<FSeinExtentsPayload>();
 			if (Data.Shapes.Num() == 0) continue;
 
 			for (const FSeinExtentsShape& Shape : Data.Shapes)
@@ -138,12 +138,12 @@ namespace SeinEntityVisualizerLocal
 	}
 
 	// ----------------------------------------------------------------------
-	// Production spawn-point drawing — built-in. FSeinProductionComponent
+	// Production spawn-point drawing — built-in. FSeinProductionPayload
 	// lives in SeinARTSCoreEntity (already a dep), so this stays alongside
 	// the extents layer. Mirrors the legacy SeinProductionComponentVisualizer
 	// that was lost in the Phase-5 AC excise.
 	//
-	// For each FSeinProductionComponent entry in ComponentData:
+	// For each FSeinProductionPayload entry in ComponentData:
 	//   - Green wire sphere at the resolved world spawn point
 	//   - Forward arrow indicating produced-unit facing
 	//   - Faint tether from owner pivot → spawn point (helps spot uninit
@@ -167,9 +167,9 @@ namespace SeinEntityVisualizerLocal
 		for (const FInstancedStruct& Entry : ComponentData)
 		{
 			if (!Entry.IsValid()) continue;
-			if (Entry.GetScriptStruct() != FSeinProductionComponent::StaticStruct()) continue;
+			if (Entry.GetScriptStruct() != FSeinProductionPayload::StaticStruct()) continue;
 
-			const FSeinProductionComponent& Data = Entry.Get<FSeinProductionComponent>();
+			const FSeinProductionPayload& Data = Entry.Get<FSeinProductionPayload>();
 
 			// Compose: WorldSpawn = SpawnPointOffset * ActorXform. Matches the
 			// runtime formula in USeinWorldSubsystem::SpawnEntity so designers
@@ -196,7 +196,7 @@ namespace SeinEntityVisualizerLocal
 	}
 
 	// ----------------------------------------------------------------------
-	// Navigation footprint drawing — built-in. FSeinNavigationComponent
+	// Navigation footprint drawing — built-in. FSeinNavigationPayload
 	// lives in SeinARTSCoreEntity (already a dep). Draws an orange wire
 	// circle at the entity's actor position with radius =
 	// FallbackFootprintRadius (which is only used at runtime when no
@@ -225,9 +225,9 @@ namespace SeinEntityVisualizerLocal
 		for (const FInstancedStruct& Entry : ComponentData)
 		{
 			if (!Entry.IsValid()) continue;
-			if (Entry.GetScriptStruct() != FSeinNavigationComponent::StaticStruct()) continue;
+			if (Entry.GetScriptStruct() != FSeinNavigationPayload::StaticStruct()) continue;
 
-			const FSeinNavigationComponent& Data = Entry.Get<FSeinNavigationComponent>();
+			const FSeinNavigationPayload& Data = Entry.Get<FSeinNavigationPayload>();
 			const float Radius = Data.FallbackFootprintRadius.ToFloat();
 
 			if (!bLoggedOnce)
@@ -270,7 +270,7 @@ void FSeinEntityComponentVisualizer::DrawVisualization(
 	SeinEntityVisualizerLocal::DrawExtentsEntries(ComponentData, ActorQuat, ActorPos, PDI);
 
 	// Built-in production spawn-point layer — same module dep story as
-	// extents. Drawn for every FSeinProductionComponent in ComponentData.
+	// extents. Drawn for every FSeinProductionPayload in ComponentData.
 	SeinEntityVisualizerLocal::DrawProductionSpawnPoints(ComponentData, ActorXform, PDI);
 
 	// Built-in nav footprint layer — orange circle at FallbackFootprintRadius.

@@ -4,7 +4,7 @@
  * @file:    SeinFogVisibilityPolicy.h
  * @brief:   Standalone enum for fog-of-war post-reveal visibility behavior.
  *           Extracted from the pre-refactor archetype-definition class so it can be authored
- *           in independent component structs (FSeinExtentsComponent primarily)
+ *           in independent component structs (FSeinExtentsPayload primarily)
  *           without pulling that header along.
  *
  *           This enum controls what happens to an entity's visibility AFTER

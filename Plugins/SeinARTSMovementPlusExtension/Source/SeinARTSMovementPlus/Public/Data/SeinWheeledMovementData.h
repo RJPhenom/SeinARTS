@@ -4,7 +4,7 @@
  * @file:    SeinWheeledMovementData.h
  * @brief:   Per-class movement data for `USeinWheeledVehicleMovement`.
  *           Surfaces in the entity bridge via
- *           `FSeinMovementComponent::MovementClassData` when the designer
+ *           `FSeinMovementPayload::MovementClassData` when the designer
  *           picks USeinWheeledVehicleMovement as the movement class.
  *
  *           Single source of truth for wheeled tuning. The wheeled
@@ -16,7 +16,7 @@
  *           same name (e.g. tracked has its own SharpTurnBrakeAngle).
  *
  *           Marked with `SeinSubData` so it appears in the polymorphic
- *           sub-data picker on FSeinMovementComponent::MovementClassData
+ *           sub-data picker on FSeinMovementPayload::MovementClassData
  *           but is filtered out of the entity bridge's top-level
  *           ComponentData picker.
  */
@@ -24,17 +24,17 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Components/SeinComponent.h"
+#include "Components/SeinPayload.h"
 #include "Types/FixedPoint.h"
 #include "SeinWheeledMovementData.generated.h"
 
 USTRUCT(BlueprintType, meta = (SeinDeterministic, SeinSubData))
-struct SEINARTSMOVEMENTPLUS_API FSeinWheeledMovementData : public FSeinComponent
+struct SEINARTSMOVEMENTPLUS_API FSeinWheeledMovementData : public FSeinPayload
 {
 	GENERATED_BODY()
 
 	// ---------------------------------------------------------------------
-	// Speed ramp (moved off the bare FSeinMovementComponent 2026-07-02)
+	// Speed ramp (moved off the bare FSeinMovementPayload 2026-07-02)
 	// ---------------------------------------------------------------------
 
 	/** Acceleration rate (world units per second²) — how quickly current speed ramps UP toward the
@@ -52,7 +52,7 @@ struct SEINARTSMOVEMENTPLUS_API FSeinWheeledMovementData : public FSeinComponent
 	// ---------------------------------------------------------------------
 	// Bicycle kinematics
 	//
-	// COUPLING WARNING — the unit-level `FSeinMovementComponent::TurnRate`
+	// COUPLING WARNING — the unit-level `FSeinMovementPayload::TurnRate`
 	// is a THIRD turning governor alongside the two fields below, and its
 	// base default (5 rad/s) is sized for pivot-capable units, not vehicles:
 	//   - Minimum turn radius   R_min    = Wheelbase / tan(MaxSteerAngle)

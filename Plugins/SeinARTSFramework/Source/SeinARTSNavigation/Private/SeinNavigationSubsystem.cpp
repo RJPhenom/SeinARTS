@@ -10,7 +10,7 @@
 #include "Core/SeinParallel.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Simulation/Systems/SeinNavBlockerStampSystem.h"
-#include "Components/SeinAbilityComponent.h"
+#include "Components/SeinAbilityPayload.h"
 #include "SeinLevelData.h"
 #include "SeinLevelDataSubsystem.h"
 #include "SeinLevelLayerProvider.h"
@@ -48,8 +48,8 @@ namespace
 		const USeinWorldSubsystem& Sim,
 		FSeinEntityHandle Handle)
 	{
-		const FSeinAbilityComponent* Abilities =
-			Sim.GetComponent<FSeinAbilityComponent>(Handle);
+		const FSeinAbilityPayload* Abilities =
+			Sim.GetComponent<FSeinAbilityPayload>(Handle);
 		if (!Abilities) return false;
 		for (const int32 AbilityID
 			: Abilities->AbilityInstanceIDs)

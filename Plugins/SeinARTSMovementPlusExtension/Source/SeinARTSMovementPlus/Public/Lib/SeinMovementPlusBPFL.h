@@ -20,7 +20,7 @@
 #include "Types/FixedPoint.h"
 #include "SeinMovementPlusBPFL.generated.h"
 
-struct FSeinMovementComponent;
+struct FSeinMovementPayload;
 
 /** Selects one field from the typed Movement+ presentation state. */
 UENUM(BlueprintType)
@@ -126,8 +126,8 @@ namespace UE::SeinARTSMovementPlus::Telemetry
 	inline constexpr int32 SettledForwardSpeedSlot = 5;
 
 	SEINARTSMOVEMENTPLUS_API int32 ChannelToSlot(ESeinMovementPlusTelemetryChannel Channel);
-	SEINARTSMOVEMENTPLUS_API void SetRenderValue(FSeinMovementComponent& MovementData, int32 Slot, FFixedPoint Value);
-	SEINARTSMOVEMENTPLUS_API void ResetMovementPlusRenderValues(FSeinMovementComponent& MovementData);
+	SEINARTSMOVEMENTPLUS_API void SetRenderValue(FSeinMovementPayload& MovementData, int32 Slot, FFixedPoint Value);
+	SEINARTSMOVEMENTPLUS_API void ResetMovementPlusRenderValues(FSeinMovementPayload& MovementData);
 	SEINARTSMOVEMENTPLUS_API FFixedPoint Clamp01(FFixedPoint Value);
 	SEINARTSMOVEMENTPLUS_API FFixedPoint AccumulateWheelTravel(
 		FFixedPoint PreviousTravel,

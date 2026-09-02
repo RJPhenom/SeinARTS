@@ -10,7 +10,7 @@
 
 #include "CoreMinimal.h"
 #include "GameplayTagContainer.h"
-#include "Components/SeinComponent.h"
+#include "Components/SeinPayload.h"
 #include "SeinGarrisonSpec.generated.h"
 
 /**
@@ -20,7 +20,7 @@
  * tags without assigning game-specific firing behavior to them.
  */
 USTRUCT(BlueprintType, meta = (SeinDeterministic, SeinSubData))
-struct SEINARTSCOREENTITY_API FSeinGarrisonSpec : public FSeinComponent
+struct SEINARTSCOREENTITY_API FSeinGarrisonSpec : public FSeinPayload
 {
 	GENERATED_BODY()
 

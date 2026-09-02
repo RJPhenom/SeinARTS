@@ -27,7 +27,7 @@
  *          slotted in Project Settings → AvoidanceClass). The three model-AGNOSTIC harness knobs
  *          (Moving Speed Floor / Bend Cap / Idle Dodge Step Speed) stay in plugin settings — the
  *          movement harness consumes them, not this model. Per-unit dials (AvoidanceStrength /
- *          AvoidanceWeight / bAvoidSameWeights) on FSeinMovementComponent. Swap the whole model by
+ *          AvoidanceWeight / bAvoidSameWeights) on FSeinMovementPayload. Swap the whole model by
  *          subclassing USeinAvoidance and picking your class in settings — this class is the shipped
  *          OPINION, not the seam. Determinism: these CDO/asset-authored values are captured by
  *          AvoidanceClass's fingerprinted path plus identical compiled/asset content (not per-machine

@@ -54,7 +54,7 @@ struct SEINARTSCOREENTITY_API FSeinVisionLayerDefinition
 	 *  `SeinIsCellVisible(..., LayerName)`) and the debug viewer. Runtime
 	 *  matching is by BIT, not name: a stamp emits into this layer via its
 	 *  `FSeinVisionStamp.LayerMask` bit; a target is seen on it when its
-	 *  `FSeinFogVisibilityComponent.FogVisibilityLayerMask` shares that bit.
+	 *  `FSeinFogVisibilityPayload.FogVisibilityLayerMask` shares that bit.
 	 *  Case-sensitive exact match. "Normal" is reserved
 	 *  (it's the V-bit / default layer, handled by the framework) — a designer
 	 *  naming a slot "Normal" here will be rejected with a log warning at

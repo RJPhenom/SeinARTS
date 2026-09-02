@@ -147,29 +147,29 @@ class SEINARTSUITOOLKIT_API USeinEntityViewModel : public UObject
 	GENERATED_BODY()
 
 public:
-	// ========== Identity (cached from FSeinIdentityComponent, always readable) ==========
+	// ========== Identity (cached from FSeinIdentityPayload, always readable) ==========
 
 	/** The entity handle this ViewModel tracks. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|UI|Entity")
 	FSeinEntityHandle Entity;
 
-	/** Display name from FSeinIdentityComponent. */
+	/** Display name from FSeinIdentityPayload. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|UI|Entity")
 	FText DisplayName;
 
-	/** Description from FSeinIdentityComponent. */
+	/** Description from FSeinIdentityPayload. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|UI|Entity")
 	FText Description;
 
-	/** Icon texture from FSeinIdentityComponent. */
+	/** Icon texture from FSeinIdentityPayload. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|UI|Entity")
 	TObjectPtr<UTexture2D> Icon = nullptr;
 
-	/** Portrait texture from FSeinIdentityComponent. */
+	/** Portrait texture from FSeinIdentityPayload. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|UI|Entity")
 	TObjectPtr<UTexture2D> Portrait = nullptr;
 
-	/** Identity gameplay tag (from FSeinIdentityComponent). */
+	/** Identity gameplay tag (from FSeinIdentityPayload). */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|UI|Entity")
 	FGameplayTag IdentityTag;
 
@@ -185,7 +185,7 @@ public:
 
 	/**
 	 * Get a resolved attribute value (base + all modifiers applied).
-	 * @param ComponentType - The USTRUCT type of the sim component (e.g., FSeinMovementComponent::StaticStruct())
+	 * @param ComponentType - The USTRUCT type of the sim component (e.g., FSeinMovementPayload::StaticStruct())
 	 * @param FieldName - The FName of the FFixedPoint field on that struct
 	 * @return The resolved value as float, or 0 if not found
 	 */
@@ -244,7 +244,7 @@ public:
 	// ========== Production Queue (only meaningful for entities with a Production Component) ==========
 
 	/** Snapshot the entity's production queue as a UI-friendly array. Empty if
-	 *  the entity has no FSeinProductionComponent component or its queue is empty.
+	 *  the entity has no FSeinProductionPayload component or its queue is empty.
 	 *  Index 0 = currently-building (front), 1+ = waiting. Each entry has
 	 *  pre-resolved icon + display name from the producible's CDO. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|UI|Entity")
@@ -263,7 +263,7 @@ public:
 	/**
 	 * Initialize this ViewModel with an entity handle.
 	 * Called by USeinUISubsystem when creating the ViewModel.
-	 * Caches identity data from FSeinIdentityComponent.
+	 * Caches identity data from FSeinIdentityPayload.
 	 */
 	void Initialize(FSeinEntityHandle InHandle, USeinWorldSubsystem* InWorldSubsystem);
 

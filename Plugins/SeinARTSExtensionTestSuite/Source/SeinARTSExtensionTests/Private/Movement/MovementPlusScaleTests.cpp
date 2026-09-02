@@ -13,10 +13,10 @@
 
 #include "Abilities/SeinLatentActionManager.h"
 #include "Abilities/SeinMoveToProxy.h"
-#include "Components/SeinAbilityComponent.h"
-#include "Components/SeinExtentsComponent.h"
-#include "Components/SeinMovementComponent.h"
-#include "Components/SeinNavigationComponent.h"
+#include "Components/SeinAbilityPayload.h"
+#include "Components/SeinExtentsPayload.h"
+#include "Components/SeinMovementPayload.h"
+#include "Components/SeinNavigationPayload.h"
 #include "Data/SeinTrackedMovementData.h"
 #include "Data/SeinWheeledMovementData.h"
 #include "HAL/PlatformTime.h"
@@ -89,10 +89,10 @@ namespace UE::SeinARTSTests
 				FFixedPoint::Zero);
 		}
 
-		FSeinMovementComponent MakeVehicleMovement(
-			bool bTracked, FSeinNavigationComponent& OutNavigation)
+		FSeinMovementPayload MakeVehicleMovement(
+			bool bTracked, FSeinNavigationPayload& OutNavigation)
 		{
-			FSeinMovementComponent Movement;
+			FSeinMovementPayload Movement;
 			Movement.TopSpeed = FFixedPoint::FromInt(bTracked ? 450 : 650);
 			Movement.TurnRate = FFixedPoint::FromInt(bTracked ? 1 : 2);
 			Movement.ReverseTopSpeed = Movement.TopSpeed * FFixedPoint::Half;
@@ -175,7 +175,7 @@ namespace UE::SeinARTSTests
 					Shape.Shape = ESeinExtentsShape::Capsule;
 					Shape.Radius = FFixedPoint::FromInt(VehicleRadius);
 					Shape.Height = FFixedPoint::FromInt(250);
-					FSeinExtentsComponent Extents;
+					FSeinExtentsPayload Extents;
 					Extents.Shapes.Add(Shape);
 					Extents.bCollisionEnabled = true;
 					Extents.Mobility = ESeinCollisionMobility::Movable;
@@ -185,13 +185,13 @@ namespace UE::SeinARTSTests
 
 					// Alternate wheeled and tracked so the measured tick
 					// carries both maneuver planners at once.
-					FSeinNavigationComponent NavigationComponent;
-					const FSeinMovementComponent Movement =
+					FSeinNavigationPayload NavigationComponent;
+					const FSeinMovementPayload Movement =
 						MakeVehicleMovement(
 							(Index & 1) != 0, NavigationComponent);
 					World->AddComponent(Handle, Movement);
 					World->AddComponent(Handle, NavigationComponent);
-					World->AddComponent(Handle, FSeinAbilityComponent());
+					World->AddComponent(Handle, FSeinAbilityPayload());
 					AbilityIDs.Add(USeinAbilityBPFL::SeinGrantAbility(
 						World, Handle,
 						USeinVehicleGymAbility::StaticClass()));

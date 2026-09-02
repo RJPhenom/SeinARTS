@@ -15,8 +15,8 @@
 #include "Engine/Engine.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Components/SeinBrokerMembershipData.h"
-#include "Components/SeinSquadComponent.h"
-#include "Components/SeinSquadMemberComponent.h"
+#include "Components/SeinSquadPayload.h"
+#include "Components/SeinSquadMemberPayload.h"
 #include "Brokers/SeinBrokerTypes.h"
 #include "Brokers/SeinCommandBrokerResolver.h"
 #include "Brokers/SeinDefaultCommandBrokerResolver.h"
@@ -935,8 +935,8 @@ FSeinFormationLayout USeinCommandBrokerBPFL::ComputeFormationDestinationArtifact
 	TArray<int32> LooseIndices;
 	for (int32 i = 0; i < Members.Num(); ++i)
 	{
-		const FSeinSquadMemberComponent* MemberData =
-			World->GetComponent<FSeinSquadMemberComponent>(Members[i]);
+		const FSeinSquadMemberPayload* MemberData =
+			World->GetComponent<FSeinSquadMemberPayload>(Members[i]);
 		if (MemberData && MemberData->SquadEntity.IsValid())
 		{
 			int32 SquadIdx = SquadOrder.IndexOfByKey(MemberData->SquadEntity);
@@ -983,7 +983,7 @@ FSeinFormationLayout USeinCommandBrokerBPFL::ComputeFormationDestinationArtifact
 		// Identical reads to USeinSquadDispatchResolver::ResolveDispatch: the squad's
 		// own pooled resolver, broker centroid + facing, and per-squad re-match flags.
 		const FSeinCommandBrokerData* Broker = World->GetComponent<FSeinCommandBrokerData>(Squad);
-		const FSeinSquadComponent* SquadData = World->GetComponent<FSeinSquadComponent>(Squad);
+		const FSeinSquadPayload* SquadData = World->GetComponent<FSeinSquadPayload>(Squad);
 
 		USeinCommandBrokerResolver* Resolver = Broker
 			? World->GetCommandBrokerResolver(Broker->ResolverID) : nullptr;

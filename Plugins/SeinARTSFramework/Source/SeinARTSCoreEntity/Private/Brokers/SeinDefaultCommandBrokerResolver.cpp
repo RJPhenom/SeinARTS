@@ -21,7 +21,7 @@
  */
 
 #include "Brokers/SeinDefaultCommandBrokerResolver.h"
-#include "Components/SeinAbilityComponent.h"
+#include "Components/SeinAbilityPayload.h"
 #include "Components/SeinCommandBrokerData.h"
 #include "Formations/SeinFormation.h"
 #include "Formations/SeinBoxFormation.h"
@@ -410,7 +410,7 @@ FSeinBrokerDispatchPlan USeinDefaultCommandBrokerResolver::ResolveDispatch_Imple
 		{
 			for (const FSeinEntityHandle& Member : Effective)
 			{
-				const FSeinAbilityComponent* AC = World->GetComponent<FSeinAbilityComponent>(Member);
+				const FSeinAbilityPayload* AC = World->GetComponent<FSeinAbilityPayload>(Member);
 				if (AC && AC->HasAbilityWithTag(*World, Order.PredeterminedAbilityTag))
 				{
 					Candidates.Add(Member);
@@ -423,7 +423,7 @@ FSeinBrokerDispatchPlan USeinDefaultCommandBrokerResolver::ResolveDispatch_Imple
 		const USeinAbility* Ability = nullptr;
 		for (const FSeinEntityHandle& C : Candidates)
 		{
-			if (const FSeinAbilityComponent* AC = World->GetComponent<FSeinAbilityComponent>(C))
+			if (const FSeinAbilityPayload* AC = World->GetComponent<FSeinAbilityPayload>(C))
 			{
 				if (USeinAbility* Found = AC->FindAbilityByTag(*World, Order.PredeterminedAbilityTag))
 				{
@@ -560,15 +560,15 @@ FSeinBrokerDispatchPlan USeinDefaultCommandBrokerResolver::ResolveDispatch_Imple
 	{
 		const FSeinEntityHandle Member = Effective[i];
 		const FFixedVector MemberGoal = Positions.IsValidIndex(i) ? Positions[i] : Order.TargetLocation;
-		if (!World->GetComponent<FSeinAbilityComponent>(Member)) continue;
+		if (!World->GetComponent<FSeinAbilityPayload>(Member)) continue;
 
 		// Layer 1: per-member tag resolution. Virtual, so subclass overrides
-		// apply here. Default impl reads FSeinAbilityComponent::ResolveCommandContext.
+		// apply here. Default impl reads FSeinAbilityPayload::ResolveCommandContext.
 		const FGameplayTag ResolvedTag = ResolveMemberAbility(World, Member, Order.Context);
 
 		// ResolveMemberAbility is Blueprint-pluggable and may grow or replace
 		// component storage. Acquire the member component only after it returns.
-		const FSeinAbilityComponent* AC = World->GetComponent<FSeinAbilityComponent>(Member);
+		const FSeinAbilityPayload* AC = World->GetComponent<FSeinAbilityPayload>(Member);
 		if (!AC) continue;
 
 		// Primary: dispatch the resolved tag if the member owns that ability.

@@ -2,7 +2,7 @@
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinMovementClassValidator.h
  * @brief   Editor validator for unit Blueprints (ASeinActor subclasses): checks that each
- *          FSeinMovementComponent's MovementClass actually holds up at edit time.
+ *          FSeinMovementPayload's MovementClass actually holds up at edit time.
  *
  *          The class picker is already filtered to USeinMovement subclasses, but a stored soft class
  *          path can still go stale (renamed/deleted mode, stripped Movement+ plugin) or point at an

@@ -28,7 +28,7 @@ class SEINARTSCOREENTITY_API USeinConstructionBPFL : public UBlueprintFunctionLi
 	GENERATED_BODY()
 
 public:
-	/** True if the entity has an active FSeinConstructionComponent (Progress < BuildTime).
+	/** True if the entity has an active FSeinConstructionPayload (Progress < BuildTime).
 	 *  Use to gate ability activation server-side, drive UI ("show progress bar"),
 	 *  or filter selection. Returns false if the entity has no construction
 	 *  component or has already been finished. */
@@ -52,7 +52,7 @@ public:
 	 *  A non-positive authored completion time finishes on the first valid call.
 	 *
 	 *  On auto-finish: applies CompletionEffect (if set on the data) to the
-	 *  entity, removes the FSeinConstructionComponent component, and releases
+	 *  entity, removes the FSeinConstructionPayload component, and releases
 	 *  the framework-owned SeinARTS.State.UnderConstruction tag grant. An
 	 *  independent designer-authored BaseTags grant is preserved.
 	 *
@@ -66,7 +66,7 @@ public:
 		FFixedPoint Amount);
 
 	/** Force-complete the construction immediately. Applies CompletionEffect
-	 *  (if set), removes the FSeinConstructionComponent component, and releases
+	 *  (if set), removes the FSeinConstructionPayload component, and releases
 	 *  the framework-owned SeinARTS.State.UnderConstruction tag grant. Use for
 	 *  cheats / debug, or for ability designs that want a "snap-finish" path independent of the
 	 *  per-tick progression (e.g. instant-build cheat ability). No-op if the

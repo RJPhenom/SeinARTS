@@ -56,7 +56,7 @@ public:
 #endif
 
 	/** Surfaces this entity's IdentityTag — which lives nested in an
-	 *  `FSeinIdentityComponent` inside the bridge's `ComponentData` array, so
+	 *  `FSeinIdentityPayload` inside the bridge's `ComponentData` array, so
 	 *  `AssetRegistrySearchable` can't reach it — onto this asset's FAssetData
 	 *  (key `SeinAssetTagKeys::IdentityTag`, bare `ToString()` form). Lets the
 	 *  editor auto-tag collision check read it WITHOUT loading the Blueprint +

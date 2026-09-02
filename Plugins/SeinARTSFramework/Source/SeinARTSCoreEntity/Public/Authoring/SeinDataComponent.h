@@ -38,7 +38,7 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
-#include "Components/SeinExtentsComponent.h"
+#include "Components/SeinExtentsPayload.h"
 #include "StructUtils/InstancedStruct.h"
 #include "SeinDataComponent.generated.h"
 
@@ -118,7 +118,7 @@ public:
 	/** Authored extents payload, baked verbatim into ComponentData. */
 	UPROPERTY(EditAnywhere, Category = "SeinARTS",
 		meta = (DisplayName = "Extents", ShowOnlyInnerProperties))
-	FSeinExtentsComponent Extents;
+	FSeinExtentsPayload Extents;
 
 	virtual const UScriptStruct* GetPayloadStruct() const override;
 	virtual bool WritePayload(FInstancedStruct& Out) const override;

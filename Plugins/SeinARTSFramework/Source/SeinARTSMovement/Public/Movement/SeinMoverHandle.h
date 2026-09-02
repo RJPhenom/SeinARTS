@@ -91,7 +91,7 @@ public:
 	FFixedPoint GetTopSpeed() const;
 
 	// Get Acceleration / Get Deceleration were removed 2026-07-02: accel/decel moved off the bare
-	// FSeinMovementComponent into each Movement+ mode's per-class UDS. A custom BP mode reads them
+	// FSeinMovementPayload into each Movement+ mode's per-class UDS. A custom BP mode reads them
 	// from its own tuning data (MovementClassData) — they are not top-line component knobs.
 
 	/** How fast the unit can turn (radians per second). */

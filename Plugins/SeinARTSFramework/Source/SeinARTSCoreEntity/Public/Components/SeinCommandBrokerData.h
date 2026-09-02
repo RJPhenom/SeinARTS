@@ -14,7 +14,7 @@
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
 #include "Types/Quat.h"
-#include "Components/SeinComponent.h"
+#include "Components/SeinPayload.h"
 #include "Brokers/SeinBrokerTypes.h"
 #include "SeinCommandBrokerData.generated.h"
 
@@ -48,7 +48,7 @@ struct SEINARTSCOREENTITY_API FSeinBrokerCapabilityBucket
  * both empty.
  */
 USTRUCT(BlueprintType, meta = (SeinDeterministic, SeinSubData))
-struct SEINARTSCOREENTITY_API FSeinCommandBrokerData : public FSeinComponent
+struct SEINARTSCOREENTITY_API FSeinCommandBrokerData : public FSeinPayload
 {
 	GENERATED_BODY()
 
@@ -83,7 +83,7 @@ struct SEINARTSCOREENTITY_API FSeinCommandBrokerData : public FSeinComponent
 	FFixedQuaternion AnchorFacing;
 
 	/** Cached "which members can service each ability tag." Rebuilt from
-	 *  members' FSeinAbilityComponent when `bCapabilityMapDirty` is true. */
+	 *  members' FSeinAbilityPayload when `bCapabilityMapDirty` is true. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker")
 	TMap<FGameplayTag, FSeinBrokerCapabilityBucket> CapabilityMap;
 
@@ -193,7 +193,7 @@ struct SEINARTSCOREENTITY_API FSeinCommandBrokerData : public FSeinComponent
 	 *  transiting unit routes around this formation's whole extent (Centroid + FormationRadius) as
 	 *  ONE cohesive body instead of steering through the gaps between its members (which makes the
 	 *  transiting unit chase the moving gap and orbit). Set each tick by the owning system — the
-	 *  squad system copies it from FSeinSquadComponent::bAvoidAsBlob; left false for loose /
+	 *  squad system copies it from FSeinSquadPayload::bAvoidAsBlob; left false for loose /
 	 *  ephemeral brokers (they carry no maintained FormationRadius, so the kernel treats them
 	 *  per-member regardless). Default false. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker")

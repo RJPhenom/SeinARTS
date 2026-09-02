@@ -1,8 +1,8 @@
 #include "CQTest.h"
 #include "Components/ActorTestSpawner.h"
-#include "Components/SeinExtentsComponent.h"
-#include "Components/SeinFogVisibilityComponent.h"
-#include "Components/SeinVisionComponent.h"
+#include "Components/SeinExtentsPayload.h"
+#include "Components/SeinFogVisibilityPayload.h"
+#include "Components/SeinVisionPayload.h"
 #include "Data/SeinWorldSnapshot.h"
 #include "Default/SeinFogOfWarDefault.h"
 #include "Lib/SeinFogOfWarBPFL.h"
@@ -671,7 +671,7 @@ namespace UE::SeinARTSTests
 						const FSeinEntityHandle Entity =
 							World->SpawnAbstractEntity(
 								TargetTransform, Owner);
-						FSeinFogVisibilityComponent Visibility;
+						FSeinFogVisibilityPayload Visibility;
 						Visibility.FogVisibilityPolicy = Policy;
 						World->AddComponent(Entity, Visibility);
 						return Entity;
@@ -920,7 +920,7 @@ namespace UE::SeinARTSTests
 							FFixedPoint::FromInt(50),
 							FFixedPoint::FromInt(100))),
 						FSeinPlayerID::Neutral());
-					FSeinExtentsComponent Extents;
+					FSeinExtentsPayload Extents;
 					Extents.bBlocksFogOfWar = true;
 					Extents.BlockedFogOfWarLayerMask =
 						SEIN_FOW_BIT_NORMAL;

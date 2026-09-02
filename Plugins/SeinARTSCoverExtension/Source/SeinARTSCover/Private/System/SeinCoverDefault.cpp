@@ -4,7 +4,7 @@
  */
 
 #include "System/SeinCoverDefault.h"
-#include "Components/SeinCoverComponent.h"
+#include "Components/SeinCoverPayload.h"
 #include "Lib/SeinCoverGeometry.h"
 #include "Tags/SeinCoverGameplayTags.h"
 #include "Settings/SeinARTSCoverSettings.h"
@@ -90,7 +90,7 @@ namespace SeinCoverDefaultLocal
 	 *  to cover edge-mode slots that sit just outside the area body —
 	 *  prefilter must NEVER reject a provider that could legitimately
 	 *  contribute, so we lean toward over-inclusion. */
-	static FFixedPoint ComputeProviderReach(const FSeinCoverComponent* Data)
+	static FFixedPoint ComputeProviderReach(const FSeinCoverPayload* Data)
 	{
 		if (!Data) return FFixedPoint::Zero;
 		FFixedPoint AreaReach = FFixedPoint::Zero;
@@ -134,7 +134,7 @@ void USeinCoverDefault::RegisterProvider(FSeinEntityHandle ProviderHandle)
 	FFixedPoint Reach = FFixedPoint::Zero;
 	if (USeinWorldSubsystem* WorldSub = World.Get())
 	{
-		if (const FSeinCoverComponent* Data = WorldSub->GetComponent<FSeinCoverComponent>(ProviderHandle))
+		if (const FSeinCoverPayload* Data = WorldSub->GetComponent<FSeinCoverPayload>(ProviderHandle))
 		{
 			Reach = SeinCoverDefaultLocal::ComputeProviderReach(Data);
 		}
@@ -225,7 +225,7 @@ TArray<FSeinCoverContext> USeinCoverDefault::QueryCoverAt(FFixedVector WorldPoin
 			continue;
 		}
 
-		const FSeinCoverComponent* Data = WorldSub->GetComponent<FSeinCoverComponent>(ProviderHandle);
+		const FSeinCoverPayload* Data = WorldSub->GetComponent<FSeinCoverPayload>(ProviderHandle);
 		if (!Data) continue;
 		if (Data->Area.Shape == ESeinCoverAreaShape::None) continue;
 
@@ -364,7 +364,7 @@ TArray<FSeinCoverSlotCandidate> USeinCoverDefault::FindNearbySlots(FFixedVector 
 		UE_LOG(LogSeinCoverDefault, Verbose,
 			TEXT("[FindNearbySlots] RegisteredProviders is EMPTY — cover providers never registered with the cover system. "
 			     "Check that the provider actor was spawned through the sim pipeline (USeinWorldSubsystem::SpawnEntity) "
-			     "and that an FSeinCoverComponent entry is authored in the bridge's ComponentData array."));
+			     "and that an FSeinCoverPayload entry is authored in the bridge's ComponentData array."));
 		return Result;
 	}
 	if (Radius <= FFixedPoint::Zero) return Result;
@@ -388,8 +388,8 @@ TArray<FSeinCoverSlotCandidate> USeinCoverDefault::FindNearbySlots(FFixedVector 
 		int32                        Index;
 		FFixedVector                 Location;
 		FFixedQuaternion             Rotation;
-		const FSeinExtentsComponent* Extents;
-		const FSeinCoverComponent*   Cover;
+		const FSeinExtentsPayload* Extents;
+		const FSeinCoverPayload*   Cover;
 	};
 	TArray<FGatheredProvider> Providers;
 	Providers.Reserve(RegisteredProviders.Num());
@@ -412,7 +412,7 @@ TArray<FSeinCoverSlotCandidate> USeinCoverDefault::FindNearbySlots(FFixedVector 
 			// invalid Observer to disable filtering.
 			if (!SeinCoverDefaultLocal::IsProviderVisibleToObserver(WorldSub, ProviderHandle, Observer)) continue;
 
-			const FSeinCoverComponent* Cover = WorldSub->GetComponent<FSeinCoverComponent>(ProviderHandle);
+			const FSeinCoverPayload* Cover = WorldSub->GetComponent<FSeinCoverPayload>(ProviderHandle);
 			if (!Cover) continue;
 
 			FGatheredProvider GP;
@@ -420,7 +420,7 @@ TArray<FSeinCoverSlotCandidate> USeinCoverDefault::FindNearbySlots(FFixedVector 
 			GP.Index    = ProviderIdx;
 			GP.Location = ProviderLocation;
 			GP.Rotation = Entity->Transform.GetQuaternionRotation();
-			GP.Extents  = WorldSub->GetComponent<FSeinExtentsComponent>(ProviderHandle);
+			GP.Extents  = WorldSub->GetComponent<FSeinExtentsPayload>(ProviderHandle);
 			GP.Cover    = Cover;
 			Providers.Add(GP);
 		}

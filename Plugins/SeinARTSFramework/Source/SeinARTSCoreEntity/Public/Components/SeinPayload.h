@@ -4,7 +4,7 @@
  * @brief   Base USTRUCT for all SeinARTS simulation components.
  *
  *          All Sein sim components (movement, combat, production, squad, tag,
- *          etc.) should inherit from FSeinComponent. It inherits FTableRowBase
+ *          etc.) should inherit from FSeinPayload. It inherits FTableRowBase
  *          so these structs can also serve as DataTable rows (used by the
  *          BP authoring + DataTable mode).
  *
@@ -17,10 +17,10 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DataTable.h"
-#include "SeinComponent.generated.h"
+#include "SeinPayload.generated.h"
 
 USTRUCT(BlueprintType)
-struct SEINARTSCOREENTITY_API FSeinComponent : public FTableRowBase
+struct SEINARTSCOREENTITY_API FSeinPayload : public FTableRowBase
 {
 	GENERATED_BODY()
 };

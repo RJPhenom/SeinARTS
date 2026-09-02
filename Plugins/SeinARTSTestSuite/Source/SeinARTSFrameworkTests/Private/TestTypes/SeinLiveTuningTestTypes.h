@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Components/SeinComponent.h"
+#include "Components/SeinPayload.h"
 #include "Types/FixedPoint.h"
 #include "SeinLiveTuningTestTypes.generated.h"
 
@@ -31,7 +31,7 @@ struct FSeinLiveTuningTestSlot
 /** Designer-style component: an authored array of slots plus a runtime seed
  *  latch at the top level. */
 USTRUCT(meta = (SeinDeterministic))
-struct FSeinLiveTuningTestComponent : public FSeinComponent
+struct FSeinLiveTuningTestComponent : public FSeinPayload
 {
 	GENERATED_BODY()
 

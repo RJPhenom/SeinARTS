@@ -23,15 +23,15 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Components/SeinComponent.h"
-#include "Components/SeinProductionComponent.h"
+#include "Components/SeinPayload.h"
+#include "Components/SeinProductionPayload.h"
 #include "Effects/SeinEffect.h"  // full type required for TSubclassOf<USeinEffect>.Get() in GetTypeHash
 #include "GameplayTagContainer.h"
 #include "Types/FixedPoint.h"
-#include "SeinProducibleComponent.generated.h"
+#include "SeinProduciblePayload.generated.h"
 
 USTRUCT(BlueprintType, meta = (SeinDeterministic))
-struct SEINARTSCOREENTITY_API FSeinProducibleComponent : public FSeinComponent
+struct SEINARTSCOREENTITY_API FSeinProduciblePayload : public FSeinPayload
 {
 	GENERATED_BODY()
 
@@ -67,7 +67,7 @@ struct SEINARTSCOREENTITY_API FSeinProducibleComponent : public FSeinComponent
 	TSubclassOf<USeinEffect> GrantedTechEffect;
 };
 
-FORCEINLINE uint32 GetTypeHash(const FSeinProducibleComponent& Component)
+FORCEINLINE uint32 GetTypeHash(const FSeinProduciblePayload& Component)
 {
 	uint32 Hash = GetTypeHash(Component.BuildTime);
 	// FGameplayTagContainer has no GetTypeHash overload — iterate tags

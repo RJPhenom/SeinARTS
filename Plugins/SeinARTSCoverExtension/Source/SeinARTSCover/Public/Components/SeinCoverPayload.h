@@ -13,9 +13,9 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Components/SeinComponent.h"
+#include "Components/SeinPayload.h"
 #include "Types/SeinCoverTypes.h"
-#include "SeinCoverComponent.generated.h"
+#include "SeinCoverPayload.generated.h"
 
 struct FSeinExtentsShape;
 
@@ -41,7 +41,7 @@ struct FSeinExtentsShape;
  * tag" footgun the per-slot model created.
  */
 USTRUCT(BlueprintType, meta = (SeinDeterministic))
-struct SEINARTSCOVER_API FSeinCoverComponent : public FSeinComponent
+struct SEINARTSCOVER_API FSeinCoverPayload : public FSeinPayload
 {
 	GENERATED_BODY()
 
@@ -109,7 +109,7 @@ struct SEINARTSCOVER_API FSeinCoverComponent : public FSeinComponent
 	// edit individual slots afterward — this is a starting-point convenience.
 	//
 	// Two geometric sources, picked by GenerateMode:
-	//   - Edge: wraps the sibling FSeinExtentsComponent's first Box shape
+	//   - Edge: wraps the sibling FSeinExtentsPayload's first Box shape
 	//     (the wall body). Slots sit OUTSIDE that body by `GenerateSlotInsetUU`
 	//     — on the protected side, inside the cover Area but outside the wall.
 	//     Designer needs an Extents entry with a Box shape authored.
@@ -181,7 +181,7 @@ struct SEINARTSCOVER_API FSeinCoverComponent : public FSeinComponent
 	 *
 	 *  Behavior:
 	 *    - Edge mode (`bIsDirectional = true`): walks the perimeter of
-	 *      `OptionalEdgeShape` (a sibling FSeinExtentsComponent's Box shape)
+	 *      `OptionalEdgeShape` (a sibling FSeinExtentsPayload's Box shape)
 	 *      at body-half-extents + GenerateSlotInsetUU outward. Slots end up
 	 *      inside the cover Area but outside the wall body. Bails with a
 	 *      warning when no shape is passed or the shape isn't a Box.
@@ -197,7 +197,7 @@ struct SEINARTSCOVER_API FSeinCoverComponent : public FSeinComponent
 #endif
 };
 
-FORCEINLINE uint32 GetTypeHash(const FSeinCoverComponent& Data)
+FORCEINLINE uint32 GetTypeHash(const FSeinCoverPayload& Data)
 {
 	uint32 Hash = GetTypeHash(static_cast<uint8>(Data.Area.Shape));
 	Hash = HashCombine(Hash, GetTypeHash(Data.Slots.Num()));

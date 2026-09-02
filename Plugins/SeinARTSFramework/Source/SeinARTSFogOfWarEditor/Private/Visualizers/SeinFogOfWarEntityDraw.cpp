@@ -15,7 +15,7 @@
 
 #include "Visualizers/SeinFogOfWarEntityDraw.h"
 
-#include "Components/SeinVisionComponent.h"
+#include "Components/SeinVisionPayload.h"
 #include "Stamping/SeinStampShape.h"
 
 #include "SceneManagement.h"          // FPrimitiveDrawInterface, DrawCircle, DrawOrientedWireBox
@@ -127,9 +127,9 @@ void SeinFogOfWarEntityDraw::DrawVisionStamps(
 	for (const FInstancedStruct& Entry : ComponentData)
 	{
 		if (!Entry.IsValid()) continue;
-		if (Entry.GetScriptStruct() != FSeinVisionComponent::StaticStruct()) continue;
+		if (Entry.GetScriptStruct() != FSeinVisionPayload::StaticStruct()) continue;
 
-		const FSeinVisionComponent& Data = Entry.Get<FSeinVisionComponent>();
+		const FSeinVisionPayload& Data = Entry.Get<FSeinVisionPayload>();
 		if (Data.VisionStamps.Num() == 0) continue;
 
 		for (const FSeinVisionStamp& VStamp : Data.VisionStamps)

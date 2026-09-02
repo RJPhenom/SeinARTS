@@ -5,7 +5,7 @@
  *          mutation stays on USeinWorldSubsystem so teardown cannot bypass hooks.
  */
 
-#include "Components/SeinActiveEffectsComponent.h"
+#include "Components/SeinActiveEffectsPayload.h"
 #include "Templates/SubclassOf.h"
 #include "Effects/SeinEffect.h"
 
@@ -17,7 +17,7 @@ namespace SeinActiveEffectsInternal
 	}
 }
 
-bool FSeinActiveEffectsComponent::HasEffectWithTag(const FGameplayTag& Tag) const
+bool FSeinActiveEffectsPayload::HasEffectWithTag(const FGameplayTag& Tag) const
 {
 	if (!Tag.IsValid())
 	{
@@ -35,7 +35,7 @@ bool FSeinActiveEffectsComponent::HasEffectWithTag(const FGameplayTag& Tag) cons
 	return false;
 }
 
-int32 FSeinActiveEffectsComponent::GetStackCountForTag(const FGameplayTag& Tag) const
+int32 FSeinActiveEffectsPayload::GetStackCountForTag(const FGameplayTag& Tag) const
 {
 	int64 Total = 0;
 	for (const FSeinActiveEffect& Effect : ActiveEffects)
@@ -50,7 +50,7 @@ int32 FSeinActiveEffectsComponent::GetStackCountForTag(const FGameplayTag& Tag) 
 	return static_cast<int32>(Total);
 }
 
-int32 FSeinActiveEffectsComponent::GetStackCountForClass(TSubclassOf<USeinEffect> EffectClass) const
+int32 FSeinActiveEffectsPayload::GetStackCountForClass(TSubclassOf<USeinEffect> EffectClass) const
 {
 	int64 Total = 0;
 	if (!EffectClass) return 0;
@@ -65,7 +65,7 @@ int32 FSeinActiveEffectsComponent::GetStackCountForClass(TSubclassOf<USeinEffect
 	return static_cast<int32>(Total);
 }
 
-void FSeinActiveEffectsComponent::CollectModifiers(TArray<FSeinModifier>& OutModifiers) const
+void FSeinActiveEffectsPayload::CollectModifiers(TArray<FSeinModifier>& OutModifiers) const
 {
 	for (const FSeinActiveEffect& Effect : ActiveEffects)
 	{

@@ -8,7 +8,7 @@
  *
  *           Designer adds this AC to a building BP, configures visual config
  *           (mesh swap kind, decal, decal size). The sim payload
- *           `FSeinConstructionComponent` (BuildTime / Progress / CompletionEffect)
+ *           `FSeinConstructionPayload` (BuildTime / Progress / CompletionEffect)
  *           is authored separately in the entity bridge's `ComponentData`
  *           array — sim and render are two co-equal authoring surfaces.
  *
@@ -20,7 +20,7 @@
  *           on construction-complete.
  *
  *           Presentation counterpart to the deterministic
- *           FSeinConstructionComponent payload.
+ *           FSeinConstructionPayload payload.
  */
 
 #pragma once

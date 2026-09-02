@@ -10,7 +10,7 @@
  *          per tick.
  *
  *          Separation is pure extent-vs-extent: a resolver consults the collision
- *          model (FSeinExtentsComponent + the channel registry) and the
+ *          model (FSeinExtentsPayload + the channel registry) and the
  *          deterministic MTV narrowphase only. The one nav touch-point is the
 	 *          hard-barrier gate (the world subsystem's pluggable dynamic-passability /
 	 *          authoritative-destination delegates), which a resolver queries
@@ -56,7 +56,7 @@
 #include "UObject/Object.h"
 #include "Math/CollisionQueries.h"
 #include "Collision/SeinCollisionTypes.h"
-#include "Components/SeinExtentsComponent.h"
+#include "Components/SeinExtentsPayload.h"
 #include "Core/SeinEntityHandle.h"
 #include "Serialization/SeinCanonicalStateRegistry.h"
 #include "Types/FixedPoint.h"
@@ -238,7 +238,7 @@ protected:
 	/** Build every Extents shape of one collider into world-space planar
 	 *  primitives. Done ONCE per "self" per pass and reused across the whole
 	 *  neighbour loop, so a self's shapes are not rebuilt per pair. */
-	static void BuildShapes2D(const FSeinExtentsComponent& Ext, const FFixedTransform& Xf, TArray<FCollisionShape2D>& Out);
+	static void BuildShapes2D(const FSeinExtentsPayload& Ext, const FFixedTransform& Xf, TArray<FCollisionShape2D>& Out);
 
 	/** Deepest contact between a collider's PRE-BUILT self shapes and another
 	 *  collider's Extents. The deepest (max-penetration) contact drives the
@@ -247,7 +247,7 @@ protected:
 	 *  strict > tie-break are identical to the pre-optimization version. */
 	static bool ComputeDeepestContact(
 		const TArray<FCollisionShape2D>& SelfShapes,
-		const FSeinExtentsComponent& OtherExt, const FFixedTransform& OtherXf,
+		const FSeinExtentsPayload& OtherExt, const FFixedTransform& OtherXf,
 		FFixedVector& OutNormal, FFixedPoint& OutDepth);
 
 	/** Snapshot the enabled channels' default responses by name. */
@@ -262,7 +262,7 @@ protected:
 	 *  byte-identical across the Gauss-Seidel, parallel Jacobi, and overlap-diff
 	 *  call sites. */
 	static FORCEINLINE ESeinCollisionResponse ResolvePairFor(
-		const FSeinExtentsComponent& SelfExt, const FSeinExtentsComponent& OtherExt,
+		const FSeinExtentsPayload& SelfExt, const FSeinExtentsPayload& OtherExt,
 		const TMap<FName, ESeinCollisionResponse>& ChannelDefaults)
 	{
 		const ESeinCollisionResponse DefSelfToOther = ChannelDefaults.FindRef(OtherExt.ObjectType.Channel);
@@ -274,12 +274,12 @@ protected:
 
 	/** True iff the entity is a live collider eligible for resolution (enabled,
 	 *  has a body, has an object type). */
-	static bool IsCollider(const FSeinExtentsComponent* Ext);
+	static bool IsCollider(const FSeinExtentsPayload* Ext);
 
 	/** A collider's authored push mass, floored to a small positive so the ratio
 	 *  test and the mass-weighted split never divide by zero. Pure collision data —
 	 *  never derived from footprint, nav, or movement. */
-	static FFixedPoint ResolveColliderMass(const FSeinExtentsComponent& Ext);
+	static FFixedPoint ResolveColliderMass(const FSeinExtentsPayload& Ext);
 
 	/** Hard-barrier gate: true iff a collider of bounding radius `Radius` may
 	 *  occupy world position `P` — i.e. the move would NOT put its FOOTPRINT onto

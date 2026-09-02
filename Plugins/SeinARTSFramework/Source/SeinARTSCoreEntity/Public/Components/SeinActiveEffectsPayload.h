@@ -12,8 +12,8 @@
 #include "Effects/SeinActiveEffect.h"
 #include "Attributes/SeinModifier.h"
 #include "GameplayTagContainer.h"
-#include "Components/SeinComponent.h"
-#include "SeinActiveEffectsComponent.generated.h"
+#include "Components/SeinPayload.h"
+#include "SeinActiveEffectsPayload.generated.h"
 
 /**
  * ECS-style component storing the Instance-scope active effects on an entity.
@@ -21,7 +21,7 @@
  * live on the owner's `FSeinPlayerState::ClassEffects` / `::PlayerEffects`.
  */
 USTRUCT(BlueprintType, meta = (SeinDeterministic))
-struct SEINARTSCOREENTITY_API FSeinActiveEffectsComponent : public FSeinComponent
+struct SEINARTSCOREENTITY_API FSeinActiveEffectsPayload : public FSeinPayload
 {
 	GENERATED_BODY()
 
@@ -44,7 +44,7 @@ struct SEINARTSCOREENTITY_API FSeinActiveEffectsComponent : public FSeinComponen
 
 };
 
-FORCEINLINE uint32 GetTypeHash(const FSeinActiveEffectsComponent& Comp)
+FORCEINLINE uint32 GetTypeHash(const FSeinActiveEffectsPayload& Comp)
 {
 	uint32 Hash = 0;
 	for (const FSeinActiveEffect& Effect : Comp.ActiveEffects)

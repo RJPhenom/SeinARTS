@@ -1,7 +1,7 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinExtentsHelpers.h
- * @brief   Static helpers for reading FSeinExtentsComponent off an actor class
+ * @brief   Static helpers for reading FSeinExtentsPayload off an actor class
  *          without instantiating the actor.
  *
  *          The targeter (Phase 3+) needs the extents of a building before
@@ -21,19 +21,19 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "Actor/SeinEntityBridgeComponent.h"
-#include "Components/SeinExtentsComponent.h"
+#include "Components/SeinExtentsPayload.h"
 #include "Types/Transform.h"
 #include "Types/Vector.h"
 
 namespace SeinExtentsHelpers
 {
 	/**
-	 * Returns the FSeinExtentsComponent payload authored on `ActorClass`'s entity
+	 * Returns the FSeinExtentsPayload payload authored on `ActorClass`'s entity
 	 * bridge ComponentData, or null if none. The pointer's lifetime is bound
 	 * to the CDO — safe to read while the class is loaded; copy into a local
-	 * FSeinExtentsComponent if the caller needs to outlive the load lifetime.
+	 * FSeinExtentsPayload if the caller needs to outlive the load lifetime.
 	 */
-	inline const FSeinExtentsComponent* GetExtentsFromActorClass(TSubclassOf<AActor> ActorClass)
+	inline const FSeinExtentsPayload* GetExtentsFromActorClass(TSubclassOf<AActor> ActorClass)
 	{
 		if (!ActorClass) return nullptr;
 		// GetActorClassDefaultComponents walks BOTH native + SCS templates in
@@ -45,7 +45,7 @@ namespace SeinExtentsHelpers
 		for (const USeinEntityBridgeComponent* Bridge : Bridges)
 		{
 			if (!Bridge) continue;
-			if (const FSeinExtentsComponent* Found = Bridge->FindAuthoredData<FSeinExtentsComponent>())
+			if (const FSeinExtentsPayload* Found = Bridge->FindAuthoredData<FSeinExtentsPayload>())
 			{
 				return Found;
 			}
@@ -61,7 +61,7 @@ namespace SeinExtentsHelpers
 	 */
 	inline const FSeinExtentsShape* GetPrimaryExtentsShape(TSubclassOf<AActor> ActorClass)
 	{
-		const FSeinExtentsComponent* Data = GetExtentsFromActorClass(ActorClass);
+		const FSeinExtentsPayload* Data = GetExtentsFromActorClass(ActorClass);
 		if (!Data || Data->Shapes.Num() == 0) return nullptr;
 		return &Data->Shapes[0];
 	}
@@ -100,7 +100,7 @@ namespace SeinExtentsHelpers
 	 * covered. Used by the collision broadphase (footprint cell-stamping +
 	 * query radius) and the collision resolver (neighbour query + mass), which
 	 * must agree on collider size. Returns 0 for an empty shape set. */
-	inline FFixedPoint GetColliderBoundingRadius(const FSeinExtentsComponent& Extents)
+	inline FFixedPoint GetColliderBoundingRadius(const FSeinExtentsPayload& Extents)
 	{
 		FFixedPoint MaxRadius = FFixedPoint::Zero;
 		for (const FSeinExtentsShape& Shape : Extents.Shapes)

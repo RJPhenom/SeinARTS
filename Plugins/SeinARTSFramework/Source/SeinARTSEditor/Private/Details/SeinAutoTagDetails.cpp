@@ -8,7 +8,7 @@
 #include "Util/SeinAutoTagGenerator.h"
 #include "Abilities/SeinAbility.h"
 #include "Effects/SeinEffect.h"
-#include "Components/SeinIdentityComponent.h"
+#include "Components/SeinIdentityPayload.h"
 
 #include "DetailCategoryBuilder.h"
 #include "DetailLayoutBuilder.h"
@@ -152,7 +152,7 @@ void FSeinEffectAutoTagDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBui
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// FSeinIdentityComponent — property-type customization. Adds the Reset
+// FSeinIdentityPayload — property-type customization. Adds the Reset
 // button as the last child row after the struct's authored fields.
 // ─────────────────────────────────────────────────────────────────────
 

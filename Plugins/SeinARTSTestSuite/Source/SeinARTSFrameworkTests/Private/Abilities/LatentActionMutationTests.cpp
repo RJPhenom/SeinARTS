@@ -3,7 +3,7 @@
 
 #include "Abilities/SeinAbility.h"
 #include "Abilities/SeinLatentActionManager.h"
-#include "Components/SeinAbilityComponent.h"
+#include "Components/SeinAbilityPayload.h"
 #include "Data/SeinWorldSnapshot.h"
 #include "Lib/SeinAbilityBPFL.h"
 #include "Simulation/SeinTestMatchBootstrap.h"
@@ -76,7 +76,7 @@ namespace
 							FSeinPlayerID::Neutral());
 						World->AddComponent(
 							Entity,
-							FSeinAbilityComponent());
+							FSeinAbilityPayload());
 						AbilityID =
 							USeinAbilityBPFL::SeinGrantAbility(
 								World,

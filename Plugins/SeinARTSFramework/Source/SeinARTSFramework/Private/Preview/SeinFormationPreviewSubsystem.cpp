@@ -13,9 +13,9 @@
 #include "Player/SeinPlayerController.h"
 #include "Player/SeinTargeterSubsystem.h"
 #include "Actor/SeinActor.h"
-#include "Components/SeinNavigationComponent.h"
-#include "Components/SeinSquadComponent.h"
-#include "Components/SeinSquadMemberComponent.h"
+#include "Components/SeinNavigationPayload.h"
+#include "Components/SeinSquadPayload.h"
+#include "Components/SeinSquadMemberPayload.h"
 #include "Lib/SeinCommandBrokerBPFL.h"
 #include "Brokers/SeinBrokerTypes.h"
 #include "Core/SeinEntityHandle.h"
@@ -521,13 +521,13 @@ TArray<FSeinEntityHandle> USeinFormationPreviewSubsystem::ResolveSelectionToMemb
 		if (!Handle.IsValid()) continue;
 
 		// Path A: squad-level dispatch.
-		if (const FSeinSquadComponent* SquadData = WorldSub->GetComponent<FSeinSquadComponent>(Handle))
+		if (const FSeinSquadPayload* SquadData = WorldSub->GetComponent<FSeinSquadPayload>(Handle))
 		{
 			if (!SquadData->bShowFormationPreview) return {};
 			for (const FSeinEntityHandle& Member : SquadData->GetLiveMembers())
 			{
-				const FSeinNavigationComponent* MemberNav =
-					WorldSub->GetComponent<FSeinNavigationComponent>(Member);
+				const FSeinNavigationPayload* MemberNav =
+					WorldSub->GetComponent<FSeinNavigationPayload>(Member);
 				if (!MemberNav || !MemberNav->bShowNavigationPreview) return {};
 				Out.Add(Member);
 			}
@@ -535,8 +535,8 @@ TArray<FSeinEntityHandle> USeinFormationPreviewSubsystem::ResolveSelectionToMemb
 		}
 
 		// Path B: lone-unit dispatch.
-		const FSeinNavigationComponent* NavComp =
-			WorldSub->GetComponent<FSeinNavigationComponent>(Handle);
+		const FSeinNavigationPayload* NavComp =
+			WorldSub->GetComponent<FSeinNavigationPayload>(Handle);
 		if (!NavComp || !NavComp->bShowNavigationPreview) return {};
 		Out.Add(Handle);
 	}

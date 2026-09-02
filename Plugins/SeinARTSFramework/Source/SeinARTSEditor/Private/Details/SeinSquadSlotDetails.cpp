@@ -8,7 +8,7 @@
 
 #include "Details/SeinSquadSlotDetails.h"
 
-#include "Components/SeinSquadComponent.h"
+#include "Components/SeinSquadPayload.h"
 #include "Formations/SeinFormation.h"
 
 #include "DetailWidgetRow.h"
@@ -43,14 +43,14 @@ void FSeinSquadSlotDetails::CustomizeChildren(
 	const bool bShowOffset = OwningFormationUsesSlotOffsets(PropertyHandle);
 
 	// Rebuild the panel when the squad's Formation Class changes so the offset shows/hides live. Bind on
-	// the parent's FormationClass handle (slot -> Slots array -> FSeinSquadComponent). Setter is single-
+	// the parent's FormationClass handle (slot -> Slots array -> FSeinSquadPayload). Setter is single-
 	// delegate, so when several slots bind, the last wins — one ForceRefresh rebuilds them all.
 	if (const TSharedPtr<IPropertyHandle> SlotsArray = PropertyHandle->GetParentHandle())
 	{
 		if (const TSharedPtr<IPropertyHandle> Component = SlotsArray->GetParentHandle())
 		{
 			if (const TSharedPtr<IPropertyHandle> FormationClassHandle =
-				Component->GetChildHandle(GET_MEMBER_NAME_CHECKED(FSeinSquadComponent, FormationClass)))
+				Component->GetChildHandle(GET_MEMBER_NAME_CHECKED(FSeinSquadPayload, FormationClass)))
 			{
 				const TSharedPtr<IPropertyUtilities> Utils = CustomizationUtils.GetPropertyUtilities();
 				FormationClassHandle->SetOnPropertyValueChanged(FSimpleDelegate::CreateLambda([Utils]()
@@ -79,13 +79,13 @@ void FSeinSquadSlotDetails::CustomizeChildren(
 
 bool FSeinSquadSlotDetails::OwningFormationUsesSlotOffsets(TSharedRef<IPropertyHandle> SlotHandle)
 {
-	// slot -> Slots array -> FSeinSquadComponent
+	// slot -> Slots array -> FSeinSquadPayload
 	const TSharedPtr<IPropertyHandle> SlotsArray = SlotHandle->GetParentHandle();
 	const TSharedPtr<IPropertyHandle> Component  = SlotsArray.IsValid() ? SlotsArray->GetParentHandle() : nullptr;
 	if (!Component.IsValid()) { return true; }
 
 	const TSharedPtr<IPropertyHandle> FormationClassHandle =
-		Component->GetChildHandle(GET_MEMBER_NAME_CHECKED(FSeinSquadComponent, FormationClass));
+		Component->GetChildHandle(GET_MEMBER_NAME_CHECKED(FSeinSquadPayload, FormationClass));
 	if (!FormationClassHandle.IsValid()) { return true; }
 
 	TArray<void*> RawData;

@@ -5,7 +5,7 @@
  *
  *          USeinMoveToAction resolves a path via USeinNavigation, then
  *          delegates per-tick advancement to a subclass of this. Designers
- *          pick the movement per unit via FSeinMovementComponent::MovementClass;
+ *          pick the movement per unit via FSeinMovementPayload::MovementClass;
  *          null defaults to USeinBasicMovement.
  *
  *          Shipped by this module:
@@ -14,7 +14,7 @@
  *                                      ramp + face-velocity turning
  *          The concrete modes (Infantry / Wheeled / Tracked / Hover / Flight) live
  *          in the SeinARTSMovementPlus extension and resolve through the soft
- *          FSeinMovementComponent::MovementClass path — the framework has no
+ *          FSeinMovementPayload::MovementClass path — the framework has no
  *          compile-time dependency on them.
  *
  *          Movement instances are PERSISTENT PER UNIT (CP2.1, Decisions D-R2):
@@ -50,9 +50,9 @@ class USeinMoverHandle;
 class USeinPlannerHandle;
 struct FSeinMovementCanonicalStateProvider;
 struct FSeinEntity;
-struct FSeinMovementComponent;
-struct FSeinNavigationComponent;
-struct FSeinExtentsComponent;
+struct FSeinMovementPayload;
+struct FSeinNavigationPayload;
+struct FSeinExtentsPayload;
 
 #if WITH_DEV_AUTOMATION_TESTS
 namespace UE::SeinARTSTests
@@ -67,8 +67,8 @@ namespace UE::SeinARTSTests
  * movement subclasses just read what they care about and ignore the rest.
  * All references are valid for the duration of a single Tick call.
  *
- * Post-decomposition: carries pointers to both `FSeinMovementComponent` (the
- * movement-class authoring + runtime state) AND `FSeinNavigationComponent` (the
+ * Post-decomposition: carries pointers to both `FSeinMovementPayload` (the
+ * movement-class authoring + runtime state) AND `FSeinNavigationPayload` (the
  * pathfinding / nav-layer / repath authoring). MovementData is null only for
  * entities with no move component — most subclasses should bail early if
  * MovementData is null; NavData null is more permissive (some subclasses with
@@ -77,8 +77,8 @@ namespace UE::SeinARTSTests
 struct FSeinMovementContext
 {
 	FSeinEntity& Entity;
-	FSeinMovementComponent* MovementData;    // movement authoring + runtime state
-	const FSeinNavigationComponent* NavData; // pathfinding / nav-layer / repath
+	FSeinMovementPayload* MovementData;    // movement authoring + runtime state
+	const FSeinNavigationPayload* NavData; // pathfinding / nav-layer / repath
 	const FSeinPath& Path;
 	int32& CurrentWaypointIndex;
 	/** Legacy squared acceptance slot retained in-place so positional and named
@@ -143,7 +143,7 @@ struct FSeinMovementContext
 };
 
 /** Restricted write surface for presentation-only movement output. It cannot
- * expose or mutate any canonical FSeinMovementComponent field. */
+ * expose or mutate any canonical FSeinMovementPayload field. */
 class FSeinMovementRenderStateWriter
 {
 public:
@@ -211,8 +211,8 @@ struct FSeinSettledMovementRenderContext
 struct FSeinPlanPathContext
 {
 	const FSeinEntity& Entity;
-	const FSeinMovementComponent* MovementData;
-	const FSeinNavigationComponent* NavData;
+	const FSeinMovementPayload* MovementData;
+	const FSeinNavigationPayload* NavData;
 	FFixedVector Destination;
 	USeinNavigation* Nav;
 	USeinNavigationSubsystem* NavSub;
@@ -323,10 +323,10 @@ public:
 	/** Presentation-only FinalObservation hook. Called after collision and nav
 	 * containment with the body's final transform delta plus the movement
 	 * driver's velocity output. Implementations may update only
-	 * FSeinMovementComponent::RenderState. */
+	 * FSeinMovementPayload::RenderState. */
 	virtual void UpdateSettledRenderState(
 		const FSeinSettledMovementRenderContext& Context,
-		const FSeinMovementComponent& MovementData,
+		const FSeinMovementPayload& MovementData,
 		FSeinMovementRenderStateWriter& Writer) const
 	{
 	}
@@ -450,7 +450,7 @@ public:
 	virtual bool BypassPathfinding() const { return bBypassPathfinding; }
 
 	/** Returns the per-class sub-data UScriptStruct this movement consumes
-	 *  out of `FSeinMovementComponent::MovementClassData`. Used by runtime
+	 *  out of `FSeinMovementPayload::MovementClassData`. Used by runtime
 	 *  helpers that unwrap the per-class authoring (Altitude resolution,
 	 *  per-class kinematic params, etc.).
 	 *
@@ -479,11 +479,11 @@ public:
 	 *  (Infantry + the Movement+ vehicles) override this to return their per-class UDS Deceleration.
 	 *  Read by the impl-agnostic consumers that need a mode's braking rate WITHOUT knowing its UDS
 	 *  type: the base idle coast-down (TickIdle) and USeinMoveToAction's arrival-imminent estimate. */
-	virtual FFixedPoint GetDeceleration(const FSeinMovementComponent* MovementData) const { return FFixedPoint::Zero; }
+	virtual FFixedPoint GetDeceleration(const FSeinMovementPayload* MovementData) const { return FFixedPoint::Zero; }
 
 	/** Returns the unit's cruise altitude above ground (reads the Get Altitude hook by default).
 	 *  C++ modes may override this directly. */
-	virtual FFixedPoint GetAltitude(const FSeinMovementComponent* MovementData) const { return BP_GetAltitude(); }
+	virtual FFixedPoint GetAltitude(const FSeinMovementPayload* MovementData) const { return BP_GetAltitude(); }
 
 	/** How high above the ground the unit flies. Return 0 to sit on the ground.
 	 *
@@ -502,7 +502,7 @@ public:
 	 *  (out of bounds / no bake). Const and routes through the virtual
 	 *  QueryReferenceZ / GetAltitude. Const because ground projection must not
 	 *  mutate persistent movement-policy state. */
-	void SnapToGroundImmediate(FSeinEntity& Entity, FSeinMovementComponent& MovementData, USeinNavigation* Nav) const;
+	void SnapToGroundImmediate(FSeinEntity& Entity, FSeinMovementPayload& MovementData, USeinNavigation* Nav) const;
 
 	/** Plan a path from the entity's current position to `Ctx.Destination`.
 	 *  Called once at move start, and again on each repath (Interval or
@@ -577,7 +577,7 @@ public:
 	 *  `MovementData::MovementClassData` as `FSeinWheeledMovementData`; Tracked may
 	 *  opt into a preferred radius via its own per-class data. Takes `MovementData`
 	 *  so overrides can read their per-class sub-data directly. */
-	virtual FFixedPoint GetMinTurnRadius(const FSeinMovementComponent* /*MovementData*/) const { return BP_GetMinTurnRadius(); }
+	virtual FFixedPoint GetMinTurnRadius(const FSeinMovementPayload* /*MovementData*/) const { return BP_GetMinTurnRadius(); }
 
 	/** The tightest turn the unit can make, in world units. Return 0 for no limit (it can pivot).
 	 *
@@ -631,7 +631,7 @@ public:
 	 *  `USeinMoveToAction` once at first-tick setup, before `OnMoveBegin`.
 	 *
 	 *  Cascade for the effective collision radius:
-	 *    Tier 1: `FSeinExtentsComponent` on the entity if present. For Capsule
+	 *    Tier 1: `FSeinExtentsPayload` on the entity if present. For Capsule
 	 *      shapes uses `Radius`; for Box uses the diagonal
 	 *      `sqrt(HalfExtentX² + HalfExtentY²)` (smallest enclosing circle).
 	 *      Compound entities take the max bounding radius across all shapes.
@@ -671,7 +671,7 @@ public:
 	static FFixedPoint ResolveCollisionRadius(
 		USeinWorldSubsystem* World,
 		FSeinEntityHandle SelfHandle,
-		const FSeinNavigationComponent* NavData);
+		const FSeinNavigationPayload* NavData);
 
 	/** Footprint-radius cascade from already-resolved component pointers (no
 	 *  world lookup): Extents (max per-shape bounding radius) -> NavComp
@@ -679,8 +679,8 @@ public:
 	 *  Extents then delegates here; hot loops that have hoisted their component
 	 *  storage (e.g. avoidance) call this directly to skip the per-call lookup. */
 	static FFixedPoint ResolveCollisionRadius(
-		const FSeinExtentsComponent* Extents,
-		const FSeinNavigationComponent* NavData);
+		const FSeinExtentsPayload* Extents,
+		const FSeinNavigationPayload* NavData);
 
 	/** Footprint-aware passability check at a candidate position. True iff
 	 *  the candidate's center AND every cached ring sample land on passable
@@ -732,7 +732,7 @@ protected:
 	UPROPERTY()
 	FFixedPoint CachedMaxStepHeight = FFixedPoint::FromInt(75);
 
-	/** Agent's nav layer mask (`FSeinNavigationComponent::NavLayerMask`, default
+	/** Agent's nav layer mask (`FSeinNavigationPayload::NavLayerMask`, default
 	 *  0x01 = ground), cached alongside the footprint. Passed to the nav floor's
 	 *  `IsWorldPositionClear` so a dynamic blocker only stops agents its authored
 	 *  `BlockedNavLayerMask` intersects. */
@@ -760,7 +760,7 @@ protected:
 	// ----------------------------------------------------------------------
 	// Settle-facing cache (per movement instance). The idle settle resolves
 	// "which formation slot is mine" ONCE per order — by exact-matching the
-	// unit's last ordered goal (FSeinMovementComponent::TargetLocation, which
+	// unit's last ordered goal (FSeinMovementPayload::TargetLocation, which
 	// for ground moves IS the broker's persisted slot position, byte-identical
 	// fixed-point) against the broker's SettledSlotPositions — and caches the
 	// matched slot facing here, keyed by that goal. Derived deterministically
@@ -840,7 +840,7 @@ protected:
 	FFixedQuaternion ApplySlopeTilt(
 		const FFixedVector& Pos,
 		FFixedPoint Yaw,
-		FSeinMovementComponent* MovementData,
+		FSeinMovementPayload* MovementData,
 		USeinNavigation* Nav,
 		FFixedPoint DeltaTime) const;
 
@@ -998,7 +998,7 @@ protected:
 		const FFixedVector* AuthoritativeDest = nullptr) const;
 
 	/** Bend a NORMALIZED desired direction by this unit's precomputed local-
-	 *  avoidance steer (`FSeinMovementComponent::AvoidanceOutput.SteerDir`, written
+	 *  avoidance steer (`FSeinMovementPayload::AvoidanceOutput.SteerDir`, written
 	 *  one-sided at PreTick by the active `USeinAvoidance`). This is the single
 	 *  integration point every movement mode calls, so the general avoidance system
 	 *  applies across all of them. Soft layer — the hard penetration floor remains the
@@ -1013,7 +1013,7 @@ protected:
 	FFixedVector ApplyAvoidanceSteer(const FSeinMovementContext& Ctx, const FFixedVector& DesiredDir) const;
 
 	/** This unit's precomputed avoidance SPEED-YIELD this tick
-	 *  (`FSeinMovementComponent::AvoidanceOutput.SpeedScale`, written one-sided at
+	 *  (`FSeinMovementPayload::AvoidanceOutput.SpeedScale`, written one-sided at
 	 *  PreTick by the active `USeinAvoidance`): a [0,1] multiplier on cruise speed so a
 	 *  model can make a unit give way by SLOWING, not only turning. 1 = no change. The
 	 *  base RTS loop multiplies its cruise target by this; a custom BP_Tick reads it via
@@ -1045,7 +1045,7 @@ protected:
 	 *  pass through fully — their per-tick Z change is ≤ the horizontal step. */
 	void ApplyGroundSnapAndAltitude(
 		FFixedVector& NewPos,
-		const FSeinMovementComponent* MovementData,
+		const FSeinMovementPayload* MovementData,
 		USeinNavigation* Nav,
 		FFixedPoint DeltaTime) const;
 
@@ -1097,9 +1097,9 @@ protected:
 		const FFixedVector& AgentPos,
 		const FFixedQuaternion& Rotation,
 		const FFixedVector& FinalGoal,
-		const FSeinMovementComponent& MovementData);
+		const FSeinMovementPayload& MovementData);
 
-	/** Copy each field of the per-unit tuning UDS (FSeinMovementComponent::
+	/** Copy each field of the per-unit tuning UDS (FSeinMovementPayload::
 	 *  MovementClassData) into the same-named instance UPROPERTY by reflection, so a
 	 *  BP mode's graph reads its own variables and they reflect per-unit authoring.
 	 *  Deterministic field copy; the instance vars are a cache of the hashed component

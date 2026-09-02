@@ -189,7 +189,7 @@ private:
 	void BindSimDelegates(UWorld& World);
 	void UnbindSimDelegates();
 
-	/** Sim-tick system that gathers FSeinExtentsComponent entities (those with
+	/** Sim-tick system that gathers FSeinExtentsPayload entities (those with
 	 *  bBlocksNav set) each PreTick
 	 *  and pushes them into Navigation->SetDynamicBlockers. Owned here so
 	 *  Navigation stays a pure data/query object — the world subsystem just

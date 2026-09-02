@@ -3,10 +3,10 @@
 
 #include "Actor/SeinEntityBridgeComponent.h"
 #include "Brokers/SeinDefaultCommandBrokerResolver.h"
-#include "Components/SeinAbilityComponent.h"
-#include "Components/SeinActiveEffectsComponent.h"
-#include "Components/SeinProducibleComponent.h"
-#include "Components/SeinProductionComponent.h"
+#include "Components/SeinAbilityPayload.h"
+#include "Components/SeinActiveEffectsPayload.h"
+#include "Components/SeinProduciblePayload.h"
+#include "Components/SeinProductionPayload.h"
 #include "Containers/Ticker.h"
 #include "Simulation/SeinTestSimContext.h"
 #include "Events/SeinVisualEvent.h"
@@ -86,14 +86,14 @@ namespace
 			PreviousComponentData = Bridge->ComponentData;
 
 			Bridge->ComponentData.Reset();
-			FSeinProducibleComponent Producible;
+			FSeinProduciblePayload Producible;
 			Producible.BuildTime = BuildTime;
 			Producible.bIsResearch = bIsResearch;
 			Bridge->ComponentData.Add(FInstancedStruct::Make(Producible));
 			if (bIncludeProductionComponent)
 			{
 				Bridge->ComponentData.Add(
-					FInstancedStruct::Make(FSeinProductionComponent()));
+					FInstancedStruct::Make(FSeinProductionPayload()));
 			}
 		}
 
@@ -267,7 +267,7 @@ namespace UE::SeinARTSTests
 			World->RegisterPlayer(Player, FSeinFactionID(1));
 
 			Entity = World->SpawnAbstractEntity(FFixedTransform(), Player);
-			World->AddComponent(Entity, FSeinAbilityComponent());
+			World->AddComponent(Entity, FSeinAbilityPayload());
 			MoveAbility = GrantAbility(*World, Entity,
 				USeinProductionCostTestMoveAbility::StaticClass(),
 				SeinARTSTags::Command_Context_Target_Ground);
@@ -391,8 +391,8 @@ namespace UE::SeinARTSTests
 			World->RegisterPlayer(Player, FSeinFactionID(1));
 			World->RegisterPlayer(NewOwner, FSeinFactionID(1));
 			Producer = World->SpawnAbstractEntity(FFixedTransform(), Player);
-			World->AddComponent(Producer, FSeinProductionComponent());
-			World->AddComponent(Producer, FSeinAbilityComponent());
+			World->AddComponent(Producer, FSeinProductionPayload());
+			World->AddComponent(Producer, FSeinAbilityPayload());
 			Ability = GrantAbility(*World, Producer,
 				USeinProductionCostTestAbility::StaticClass(),
 				SeinARTSTags::Command_Context_AbilityTriggered);
@@ -419,8 +419,8 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(Ability->ResourcePayer == Player));
 
 		Ability->EnqueueProduction(ASeinProductionCostTestActor::StaticClass());
-		const FSeinProductionComponent* Production =
-			World->GetComponent<FSeinProductionComponent>(Producer);
+		const FSeinProductionPayload* Production =
+			World->GetComponent<FSeinProductionPayload>(Producer);
 		ASSERT_THAT(IsNotNull(Production));
 		ASSERT_THAT(AreEqual(0, Production->Queue.Num()));
 		ASSERT_THAT(AreEqual(
@@ -437,7 +437,7 @@ namespace UE::SeinARTSTests
 			Ability->CancelAbility();
 		}
 
-		Production = World->GetComponent<FSeinProductionComponent>(Producer);
+		Production = World->GetComponent<FSeinProductionPayload>(Producer);
 		ASSERT_THAT(IsNotNull(Production));
 		ASSERT_THAT(AreEqual(1, Production->Queue.Num()));
 		ASSERT_THAT(AreEqual(
@@ -460,7 +460,7 @@ namespace UE::SeinARTSTests
 			NewOwner, Producer, 0);
 		SubmitAuthorizedDraft(*World, Cancel);
 		TickOnce(*World);
-		Production = World->GetComponent<FSeinProductionComponent>(Producer);
+		Production = World->GetComponent<FSeinProductionPayload>(Producer);
 		ASSERT_THAT(IsNotNull(Production));
 		ASSERT_THAT(AreEqual(0, Production->Queue.Num()));
 		ASSERT_THAT(AreEqual(
@@ -489,8 +489,8 @@ namespace UE::SeinARTSTests
 		{
 			World->RegisterPlayer(Player, FSeinFactionID(1));
 			Producer = World->SpawnAbstractEntity(FFixedTransform(), Player);
-			World->AddComponent(Producer, FSeinProductionComponent());
-			World->AddComponent(Producer, FSeinAbilityComponent());
+			World->AddComponent(Producer, FSeinProductionPayload());
+			World->AddComponent(Producer, FSeinAbilityPayload());
 			Ability = GrantAbility(*World, Producer,
 				USeinProductionCostTestAbility::StaticClass(),
 				SeinARTSTags::Command_Context_AbilityTriggered);
@@ -521,8 +521,8 @@ namespace UE::SeinARTSTests
 			Ability->EnqueueProduction(
 				ASeinProductionCostTestActor::StaticClass());
 		}
-		const FSeinProductionComponent* Production =
-			World->GetComponent<FSeinProductionComponent>(Producer);
+		const FSeinProductionPayload* Production =
+			World->GetComponent<FSeinProductionPayload>(Producer);
 		ASSERT_THAT(IsNotNull(Production));
 		ASSERT_THAT(AreEqual(1, Production->Queue.Num()));
 		ASSERT_THAT(AreEqual(
@@ -550,13 +550,13 @@ namespace UE::SeinARTSTests
 		{
 			World->RegisterPlayer(Player, FSeinFactionID(1));
 			Producer = World->SpawnAbstractEntity(FFixedTransform(), Player);
-			FSeinProductionComponent InitialProduction;
+			FSeinProductionPayload InitialProduction;
 			InitialProduction.MaxQueueSize = 1;
 			FSeinProductionQueueEntry ExistingEntry;
 			ExistingEntry.TotalBuildTime = FFixedPoint::FromInt(1000);
 			InitialProduction.Queue.Add(ExistingEntry);
 			World->AddComponent(Producer, InitialProduction);
-			World->AddComponent(Producer, FSeinAbilityComponent());
+			World->AddComponent(Producer, FSeinAbilityPayload());
 			Ability = GrantAbility(*World, Producer,
 				USeinProductionCostTestAbility::StaticClass(),
 				SeinARTSTags::Command_Context_AbilityTriggered);
@@ -584,8 +584,8 @@ namespace UE::SeinARTSTests
 			Ability->CancelAbility();
 		}
 
-		const FSeinProductionComponent* Production =
-			World->GetComponent<FSeinProductionComponent>(Producer);
+		const FSeinProductionPayload* Production =
+			World->GetComponent<FSeinProductionPayload>(Producer);
 		ASSERT_THAT(IsNotNull(Production));
 		ASSERT_THAT(AreEqual(1, Production->Queue.Num()));
 		ASSERT_THAT(IsTrue(Ability->DeductedCost.IsEmpty()));
@@ -616,8 +616,8 @@ namespace UE::SeinARTSTests
 			World->RegisterPlayer(Player, FSeinFactionID(1));
 			World->RegisterPlayer(NewOwner, FSeinFactionID(1));
 			Producer = World->SpawnAbstractEntity(FFixedTransform(), Player);
-			World->AddComponent(Producer, FSeinProductionComponent());
-			World->AddComponent(Producer, FSeinAbilityComponent());
+			World->AddComponent(Producer, FSeinProductionPayload());
+			World->AddComponent(Producer, FSeinAbilityPayload());
 			Ability = GrantAbility(*World, Producer,
 				USeinProductionCostTestAbility::StaticClass(),
 				SeinARTSTags::Command_Context_AbilityTriggered);
@@ -657,8 +657,8 @@ namespace UE::SeinARTSTests
 		const int32 EntityCountBeforeCompletion =
 			World->GetEntityPool().GetActiveCount();
 		TickOnce(*World);
-		const FSeinProductionComponent* Production =
-			World->GetComponent<FSeinProductionComponent>(Producer);
+		const FSeinProductionPayload* Production =
+			World->GetComponent<FSeinProductionPayload>(Producer);
 		ASSERT_THAT(IsNotNull(Production));
 		ASSERT_THAT(AreEqual(1, Production->Queue.Num()));
 		ASSERT_THAT(IsTrue(Production->bStalledAtCompletion));
@@ -679,7 +679,7 @@ namespace UE::SeinARTSTests
 				SeinARTSTags::Resource, FFixedPoint::FromInt(AbilityCost));
 		}
 		TickOnce(*World);
-		Production = World->GetComponent<FSeinProductionComponent>(Producer);
+		Production = World->GetComponent<FSeinProductionPayload>(Producer);
 		ASSERT_THAT(IsNotNull(Production));
 		ASSERT_THAT(AreEqual(0, Production->Queue.Num()));
 		ASSERT_THAT(IsFalse(Production->bStalledAtCompletion));
@@ -725,7 +725,7 @@ namespace UE::SeinARTSTests
 		{
 			World->RegisterPlayer(Player, FSeinFactionID(1));
 			Producer = World->SpawnAbstractEntity(FFixedTransform(), Player);
-			FSeinProductionComponent InitialProduction;
+			FSeinProductionPayload InitialProduction;
 			InitialProduction.Queue.Add(MakeReadyUnitEntry(Player));
 			World->AddComponent(Producer, InitialProduction);
 
@@ -741,8 +741,8 @@ namespace UE::SeinARTSTests
 			*World, AuthorState)));
 
 		TickOnce(*World);
-		const FSeinProductionComponent* Production =
-			World->GetComponent<FSeinProductionComponent>(Producer);
+		const FSeinProductionPayload* Production =
+			World->GetComponent<FSeinProductionPayload>(Producer);
 		ASSERT_THAT(IsNotNull(Production));
 		ASSERT_THAT(AreEqual(0, Production->Queue.Num()));
 		ASSERT_THAT(AreEqual(
@@ -781,7 +781,7 @@ namespace UE::SeinARTSTests
 			World->RegisterPlayer(Player, FSeinFactionID(1));
 			First = World->SpawnAbstractEntity(FFixedTransform(), Player);
 			Second = World->SpawnAbstractEntity(FFixedTransform(), Player);
-			FSeinProductionComponent Production;
+			FSeinProductionPayload Production;
 			Production.Queue.Add(MakeReadyUnitEntry(Player, 75));
 			World->AddComponent(First, Production);
 			World->AddComponent(Second, Production);
@@ -791,10 +791,10 @@ namespace UE::SeinARTSTests
 			*World, AuthorState)));
 
 		TickOnce(*World);
-		const FSeinProductionComponent* FirstProduction =
-			World->GetComponent<FSeinProductionComponent>(First);
-		const FSeinProductionComponent* SecondProduction =
-			World->GetComponent<FSeinProductionComponent>(Second);
+		const FSeinProductionPayload* FirstProduction =
+			World->GetComponent<FSeinProductionPayload>(First);
+		const FSeinProductionPayload* SecondProduction =
+			World->GetComponent<FSeinProductionPayload>(Second);
 		ASSERT_THAT(IsNotNull(FirstProduction));
 		ASSERT_THAT(IsNotNull(SecondProduction));
 		ASSERT_THAT(AreEqual(0, FirstProduction->Queue.Num()));
@@ -826,7 +826,7 @@ namespace UE::SeinARTSTests
 		{
 			World->RegisterPlayer(Player, FSeinFactionID(1));
 			Producer = World->SpawnAbstractEntity(FFixedTransform(), Player);
-			FSeinProductionComponent Production;
+			FSeinProductionPayload Production;
 			FSeinProductionQueueEntry InvalidEntry =
 				MakeReadyUnitEntry(Player, AbilityCost);
 			InvalidEntry.ActorClass = nullptr;
@@ -838,8 +838,8 @@ namespace UE::SeinARTSTests
 			*World, AuthorState)));
 
 		TickOnce(*World);
-		const FSeinProductionComponent* Current =
-			World->GetComponent<FSeinProductionComponent>(Producer);
+		const FSeinProductionPayload* Current =
+			World->GetComponent<FSeinProductionPayload>(Producer);
 		ASSERT_THAT(IsNotNull(Current));
 		ASSERT_THAT(AreEqual(1, Current->Queue.Num()));
 		ASSERT_THAT(IsTrue(Current->bStalledAtCompletion));
@@ -877,8 +877,8 @@ namespace UE::SeinARTSTests
 		{
 			World->RegisterPlayer(Player, FSeinFactionID(1));
 			Producer = World->SpawnAbstractEntity(FFixedTransform(), Player);
-			World->AddComponent(Producer, FSeinProductionComponent());
-			World->AddComponent(Producer, FSeinAbilityComponent());
+			World->AddComponent(Producer, FSeinProductionPayload());
+			World->AddComponent(Producer, FSeinAbilityPayload());
 			Ability = GrantAbility(*World, Producer,
 				USeinProductionCostTestAbility::StaticClass(),
 				SeinARTSTags::Command_Context_AbilityTriggered);
@@ -903,8 +903,8 @@ namespace UE::SeinARTSTests
 			Ability->EnqueueProduction(
 				ASeinProductionCostTestActor::StaticClass());
 		}
-		const FSeinProductionComponent* Current =
-			World->GetComponent<FSeinProductionComponent>(Producer);
+		const FSeinProductionPayload* Current =
+			World->GetComponent<FSeinProductionPayload>(Producer);
 		ASSERT_THAT(IsNotNull(Current));
 		ASSERT_THAT(AreEqual(0, Current->Queue.Num()));
 		ASSERT_THAT(IsTrue(Ability->DeductedCost.IsEmpty()));
@@ -932,7 +932,7 @@ namespace UE::SeinARTSTests
 		{
 			World->RegisterPlayer(Player, FSeinFactionID(1));
 			Producer = World->SpawnAbstractEntity(FFixedTransform(), Player);
-			FSeinProductionComponent Production;
+			FSeinProductionPayload Production;
 			FSeinProductionQueueEntry Entry =
 				MakeReadyUnitEntry(Player, AbilityCost);
 			Entry.bIsResearch = true;
@@ -944,8 +944,8 @@ namespace UE::SeinARTSTests
 			*World, AuthorState)));
 
 		TickOnce(*World);
-		const FSeinProductionComponent* Current =
-			World->GetComponent<FSeinProductionComponent>(Producer);
+		const FSeinProductionPayload* Current =
+			World->GetComponent<FSeinProductionPayload>(Producer);
 		ASSERT_THAT(IsNotNull(Current));
 		ASSERT_THAT(AreEqual(1, Current->Queue.Num()));
 		ASSERT_THAT(IsTrue(Current->bStalledAtCompletion));
@@ -979,7 +979,7 @@ namespace UE::SeinARTSTests
 			World->RegisterPlayer(Payer, FSeinFactionID(1));
 			Producer = World->SpawnAbstractEntity(
 				FFixedTransform(), FSeinPlayerID::Neutral());
-			FSeinProductionComponent Production;
+			FSeinProductionPayload Production;
 			FSeinProductionQueueEntry Entry =
 				MakeReadyUnitEntry(Payer, AbilityCost);
 			Entry.bIsResearch = true;
@@ -992,8 +992,8 @@ namespace UE::SeinARTSTests
 			*World, AuthorState)));
 
 		TickOnce(*World);
-		const FSeinProductionComponent* Current =
-			World->GetComponent<FSeinProductionComponent>(Producer);
+		const FSeinProductionPayload* Current =
+			World->GetComponent<FSeinProductionPayload>(Producer);
 		ASSERT_THAT(IsNotNull(Current));
 		ASSERT_THAT(AreEqual(1, Current->Queue.Num()));
 		ASSERT_THAT(IsTrue(Current->bStalledAtCompletion));
@@ -1025,7 +1025,7 @@ namespace UE::SeinARTSTests
 		{
 			World->RegisterPlayer(Player, FSeinFactionID(1));
 			Producer = World->SpawnAbstractEntity(FFixedTransform(), Player);
-			FSeinProductionComponent Production;
+			FSeinProductionPayload Production;
 			FSeinProductionQueueEntry Entry =
 				MakeReadyUnitEntry(Player, AbilityCost);
 			Entry.bIsResearch = true;
@@ -1033,7 +1033,7 @@ namespace UE::SeinARTSTests
 				USeinEffectPeriodicBTestEffect::StaticClass();
 			Production.Queue.Add(Entry);
 			World->AddComponent(Producer, Production);
-			World->AddComponent(Producer, FSeinActiveEffectsComponent());
+			World->AddComponent(Producer, FSeinActiveEffectsPayload());
 			ASSERT_THAT(IsTrue(World->ApplyEffect(
 				Producer,
 				USeinEffectPeriodicATestEffect::StaticClass(),
@@ -1101,7 +1101,7 @@ namespace UE::SeinARTSTests
 		{
 			World->RegisterPlayer(Player, FSeinFactionID(1));
 			Producer = World->SpawnAbstractEntity(FFixedTransform(), Player);
-			FSeinProductionComponent Production;
+			FSeinProductionPayload Production;
 			FSeinProductionQueueEntry Entry =
 				MakeReadyUnitEntry(Player, AbilityCost);
 			Entry.bIsResearch = true;

@@ -6,7 +6,7 @@
 #include "Serialization/SeinMovementCanonicalStateProvider.h"
 #include "Engine/World.h"
 
-#include "Components/SeinMovementComponent.h"
+#include "Components/SeinMovementPayload.h"
 #include "Core/SeinParallel.h"
 #include "Movement/SeinAvoidance.h"
 #include "Movement/SeinBasicMovement.h"
@@ -504,7 +504,7 @@ namespace
 	}
 
 	bool ValidateAuthoredMovementClass(
-		const FSeinMovementComponent& Component,
+		const FSeinMovementPayload& Component,
 		const UClass* PayloadClass,
 		FString& OutError)
 	{
@@ -718,8 +718,8 @@ struct FSeinMovementCanonicalStateProvider
 			const FSeinEntityHandle Handle = Handles[Index];
 			const USeinMovement* Movement =
 				InstanceMap.FindRef(Handle);
-			const FSeinMovementComponent* Component =
-				Context.World.GetComponent<FSeinMovementComponent>(
+			const FSeinMovementPayload* Component =
+				Context.World.GetComponent<FSeinMovementPayload>(
 					Handle);
 			if (!Handle.IsValid()
 				|| !Context.World.GetEntityPool().IsValid(Handle)
@@ -938,8 +938,8 @@ struct FSeinMovementCanonicalStateProvider
 		for (const FSeinEntityHandle Handle : Handles)
 		{
 			USeinMovement* Movement = InstanceMap.FindRef(Handle);
-			const FSeinMovementComponent* Component =
-				Context.World.GetComponent<FSeinMovementComponent>(Handle);
+			const FSeinMovementPayload* Component =
+				Context.World.GetComponent<FSeinMovementPayload>(Handle);
 			if (!Handle.IsValid()
 				|| !Context.World.GetEntityPool().IsValid(Handle)
 				|| !Movement
@@ -1141,9 +1141,9 @@ struct FSeinMovementCanonicalStateProvider
 			}
 			Previous = Record.Entity;
 
-			const FSeinMovementComponent* Component =
+			const FSeinMovementPayload* Component =
 				Context.Candidate->
-					FindComponent<FSeinMovementComponent>(
+					FindComponent<FSeinMovementPayload>(
 						Record.Entity);
 			UClass* ExactClass = nullptr;
 			if (!Component

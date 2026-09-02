@@ -5,9 +5,9 @@
  *          produced path. Implementation-agnostic: the action never touches
  *          grids, pathfinders, or A* internals — it only consumes FSeinPath.
  *
- *          Kinematics are read from FSeinMovementComponent (TopSpeed /
+ *          Kinematics are read from FSeinMovementPayload (TopSpeed /
  *          Acceleration / TurnRate); pathfinding + acceptance + repath knobs
- *          are read from FSeinNavigationComponent. Steering is minimal:
+ *          are read from FSeinNavigationPayload. Steering is minimal:
  *          seek toward next waypoint with an arrive radius at the final
  *          waypoint.
  *
@@ -33,9 +33,9 @@ class USeinNavigation;
 class USeinNavigationSubsystem;
 class USeinWorldSubsystem;
 struct FSeinEntity;
-struct FSeinMovementComponent;
+struct FSeinMovementPayload;
 struct FSeinMovementContext;
-struct FSeinNavigationComponent;
+struct FSeinNavigationPayload;
 struct FSeinMoveToActionCodec;
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -83,7 +83,7 @@ class SEINARTSMOVEMENT_API USeinMoveToAction : public USeinLatentAction
 public:
 
 	/** Set up a move toward `InDestination`. Acceptance radius is read from
-	 *  `FSeinNavigationComponent::AcceptanceRadius` on first TickAction. */
+	 *  `FSeinNavigationPayload::AcceptanceRadius` on first TickAction. */
 	void Initialize(const FFixedVector& InDestination);
 
 	virtual bool TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& World) override;
@@ -120,7 +120,7 @@ private:
 
 	FFixedVector Destination;
 
-	/** Resolved at first TickAction from FSeinNavigationComponent::AcceptanceRadius. */
+	/** Resolved at first TickAction from FSeinNavigationPayload::AcceptanceRadius. */
 	FFixedPoint AcceptanceRadius = FFixedPoint::Zero;
 
 	int32 CurrentWaypointIndex = 0;
@@ -151,12 +151,12 @@ private:
 
 	/** Time since the last repath fired (Interval mode). Reset to zero
 	 *  whenever a fresh path is committed. Compared against
-	 *  `FSeinNavigationComponent::RepathInterval`. */
+	 *  `FSeinNavigationPayload::RepathInterval`. */
 	FFixedPoint TimeSinceLastRepath = FFixedPoint::Zero;
 
 	/** Consecutive interval-repath failures since the last successful repath
 	 *  (or move-start). When this hits
-	 *  `FSeinNavigationComponent::RepathFailureLimit` the action fails with
+	 *  `FSeinNavigationPayload::RepathFailureLimit` the action fails with
 	 *  `PathNotFound` instead of marching toward an increasingly stale
 	 *  path. Reset on every successful repath. */
 	int32 ConsecutiveRepathFailures = 0;
@@ -260,8 +260,8 @@ private:
 		FFixedPoint DeltaTime,
 		USeinWorldSubsystem& World,
 		FSeinEntity& Entity,
-		FSeinMovementComponent& MovementData,
-		const FSeinNavigationComponent* NavigationData,
+		FSeinMovementPayload& MovementData,
+		const FSeinNavigationPayload* NavigationData,
 		USeinNavigation* Navigation,
 		USeinNavigationSubsystem* NavigationSubsystem);
 
@@ -271,8 +271,8 @@ private:
 		FFixedPoint DeltaTime,
 		USeinWorldSubsystem& World,
 		FSeinEntity& Entity,
-		FSeinMovementComponent& MovementData,
-		const FSeinNavigationComponent* NavigationData,
+		FSeinMovementPayload& MovementData,
+		const FSeinNavigationPayload* NavigationData,
 		USeinNavigation* Navigation,
 		USeinNavigationSubsystem* NavigationSubsystem);
 
@@ -282,7 +282,7 @@ private:
 		FFixedPoint DeltaTime,
 		USeinWorldSubsystem& World,
 		FSeinEntity& Entity,
-		FSeinMovementComponent& MovementData,
+		FSeinMovementPayload& MovementData,
 		bool bReachedEnd);
 
 	/** Advance the held-unit escalation ladder after ordinary movement.
@@ -291,15 +291,15 @@ private:
 		FFixedPoint DeltaTime,
 		USeinWorldSubsystem& World,
 		FSeinEntity& Entity,
-		FSeinMovementComponent& MovementData,
-		const FSeinNavigationComponent* NavigationData,
+		FSeinMovementPayload& MovementData,
+		const FSeinNavigationPayload* NavigationData,
 		USeinNavigation* Navigation,
 		bool bReachedEnd);
 
 	/** Publish the final-waypoint brake-zone state consumed by presentation. */
 	void UpdateArrivalImminent(
 		const FSeinEntity& Entity,
-		FSeinMovementComponent& MovementData,
+		FSeinMovementPayload& MovementData,
 		bool bReachedEnd) const;
 
 	/** Settle a final-leg unit that has stopped closing inside its body-aware

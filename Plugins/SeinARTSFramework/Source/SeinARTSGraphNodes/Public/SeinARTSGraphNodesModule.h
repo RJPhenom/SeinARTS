@@ -21,7 +21,7 @@
  *          - `UK2Node_SeinGetComponent` / `UK2Node_SeinSetComponent` —
  *            typed-pin Get/Set nodes that wrap `USeinComponentBPFL`'s
  *            wildcard component accessors. Auto-discovers every native
- *            FSeinComponent substruct + every UDS the designer authored via
+ *            FSeinPayload substruct + every UDS the designer authored via
  *            Right-click → Sein Component, exposing them as separate action-
  *            menu entries with pre-typed Break-Struct-compatible pins.
  *

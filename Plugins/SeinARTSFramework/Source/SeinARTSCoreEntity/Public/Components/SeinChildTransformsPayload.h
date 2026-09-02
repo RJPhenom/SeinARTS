@@ -31,11 +31,11 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Components/SeinComponent.h"
+#include "Components/SeinPayload.h"
 #include "GameplayTagContainer.h"
 #include "Types/FixedPoint.h"
 #include "Types/Transform.h"
-#include "SeinChildTransformsComponent.generated.h"
+#include "SeinChildTransformsPayload.generated.h"
 
 /**
  * One node in the entity's child-transform tree. Hierarchy is encoded via
@@ -62,7 +62,7 @@ struct SEINARTSCOREENTITY_API FSeinChildTransform
 
 	/** Parent reference. Invalid tag = root-level (parent is the entity's
 	 *  own transform). Any other value must match the Tag of another entry
-	 *  in the same `FSeinChildTransformsComponent::Children` array. World-space
+	 *  in the same `FSeinChildTransformsPayload::Children` array. World-space
 	 *  composition walks the ParentTag chain up to the entity, multiplying
 	 *  LocalTransforms.
 	 *
@@ -85,7 +85,7 @@ struct SEINARTSCOREENTITY_API FSeinChildTransform
  * Tree structure is encoded via FSeinChildTransform::ParentTag references.
  */
 USTRUCT(BlueprintType, meta = (SeinDeterministic))
-struct SEINARTSCOREENTITY_API FSeinChildTransformsComponent : public FSeinComponent
+struct SEINARTSCOREENTITY_API FSeinChildTransformsPayload : public FSeinPayload
 {
 	GENERATED_BODY()
 
@@ -107,7 +107,7 @@ FORCEINLINE uint32 GetTypeHash(const FSeinChildTransform& Node)
 	return Hash;
 }
 
-FORCEINLINE uint32 GetTypeHash(const FSeinChildTransformsComponent& Data)
+FORCEINLINE uint32 GetTypeHash(const FSeinChildTransformsPayload& Data)
 {
 	uint32 Hash = 0;
 	for (const FSeinChildTransform& Child : Data.Children)

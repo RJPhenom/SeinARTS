@@ -10,9 +10,9 @@
 #include "Simulation/SeinActorBridgeSubsystem.h"
 #include "Actor/SeinActor.h"
 #include "Abilities/SeinAbility.h"
-#include "Components/SeinAbilityComponent.h"
-#include "Components/SeinIdentityComponent.h"
-#include "Components/SeinProductionComponent.h"
+#include "Components/SeinAbilityPayload.h"
+#include "Components/SeinIdentityPayload.h"
+#include "Components/SeinProductionPayload.h"
 #include "Core/SeinPlayerState.h"
 #include "SeinLevelData.h"
 #include "SeinLevelDataSubsystem.h"
@@ -41,13 +41,13 @@ namespace
 		return World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
 	}
 
-	/** Identity lookup against sim storage. FSeinIdentityComponent is
+	/** Identity lookup against sim storage. FSeinIdentityPayload is
 	 *  injected at spawn from the entity bridge's authored ComponentData. */
-	const FSeinIdentityComponent* GetIdentityForEntity(const UObject* WorldContextObject, FSeinEntityHandle Handle)
+	const FSeinIdentityPayload* GetIdentityForEntity(const UObject* WorldContextObject, FSeinEntityHandle Handle)
 	{
 		USeinWorldSubsystem* SimSub = GetSimSubsystem(WorldContextObject);
 		if (!SimSub || !Handle.IsValid()) return nullptr;
-		return SimSub->GetComponent<FSeinIdentityComponent>(Handle);
+		return SimSub->GetComponent<FSeinIdentityPayload>(Handle);
 	}
 }
 
@@ -55,25 +55,25 @@ namespace
 
 FText USeinUIBPFL::SeinGetEntityDisplayName(const UObject* WorldContextObject, FSeinEntityHandle Handle)
 {
-	const FSeinIdentityComponent* Identity = GetIdentityForEntity(WorldContextObject, Handle);
+	const FSeinIdentityPayload* Identity = GetIdentityForEntity(WorldContextObject, Handle);
 	return Identity ? Identity->DisplayName : FText::GetEmpty();
 }
 
 UTexture2D* USeinUIBPFL::SeinGetEntityIcon(const UObject* WorldContextObject, FSeinEntityHandle Handle)
 {
-	const FSeinIdentityComponent* Identity = GetIdentityForEntity(WorldContextObject, Handle);
+	const FSeinIdentityPayload* Identity = GetIdentityForEntity(WorldContextObject, Handle);
 	return Identity ? Identity->Icon.Get() : nullptr;
 }
 
 UTexture2D* USeinUIBPFL::SeinGetEntityPortrait(const UObject* WorldContextObject, FSeinEntityHandle Handle)
 {
-	const FSeinIdentityComponent* Identity = GetIdentityForEntity(WorldContextObject, Handle);
+	const FSeinIdentityPayload* Identity = GetIdentityForEntity(WorldContextObject, Handle);
 	return Identity ? Identity->Portrait.Get() : nullptr;
 }
 
 FGameplayTag USeinUIBPFL::SeinGetEntityIdentityTag(const UObject* WorldContextObject, FSeinEntityHandle Handle)
 {
-	const FSeinIdentityComponent* Identity = GetIdentityForEntity(WorldContextObject, Handle);
+	const FSeinIdentityPayload* Identity = GetIdentityForEntity(WorldContextObject, Handle);
 	return Identity ? Identity->IdentityTag : FGameplayTag();
 }
 
@@ -403,7 +403,7 @@ FSeinActionSlotData USeinUIBPFL::SeinBuildAbilitySlotData(const UObject* WorldCo
 		return Data;
 	}
 
-	const FSeinAbilityComponent* AbilityComp = SimSub->GetComponent<FSeinAbilityComponent>(Entity);
+	const FSeinAbilityPayload* AbilityComp = SimSub->GetComponent<FSeinAbilityPayload>(Entity);
 	if (!AbilityComp)
 	{
 		return Data;
@@ -454,7 +454,7 @@ TArray<FSeinActionSlotData> USeinUIBPFL::SeinBuildAllAbilitySlotData(const UObje
 		return Result;
 	}
 
-	const FSeinAbilityComponent* AbilityComp = SimSub->GetComponent<FSeinAbilityComponent>(Entity);
+	const FSeinAbilityPayload* AbilityComp = SimSub->GetComponent<FSeinAbilityPayload>(Entity);
 	if (!AbilityComp)
 	{
 		return Result;

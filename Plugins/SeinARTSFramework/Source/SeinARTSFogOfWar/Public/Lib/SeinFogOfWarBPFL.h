@@ -80,11 +80,11 @@ public:
 	static FSeinPlayerID SeinGetLocalObserver(const UObject* WorldContextObject);
 
 	// ====================================================================
-	// Runtime mutation — fog visibility mask (FSeinFogVisibilityComponent::FogVisibilityLayerMask)
+	// Runtime mutation — fog visibility mask (FSeinFogVisibilityPayload::FogVisibilityLayerMask)
 	// ====================================================================
 	//
 	// "What bits need to be stamped in an observer's view for this entity
-	// to be visible." Lives on `FSeinFogVisibilityComponent` (a top-level
+	// to be visible." Lives on `FSeinFogVisibilityPayload` (a top-level
 	// component since the Phase-5+ split from extents) so entities WITHOUT
 	// a physical body (sim-side VFX anchors, audio emitters, scenario
 	// triggers) can still author emission. Default behaviour for entities
@@ -92,7 +92,7 @@ public:
 	// Normal-bit emission.
 
 	/** Read `Entity`'s current FogVisibilityLayerMask. Returns 0 if the
-	 *  entity has no FSeinFogVisibilityComponent authored. */
+	 *  entity has no FSeinFogVisibilityPayload authored. */
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "SeinARTS|Fog Of War",
 		meta = (WorldContext = "WorldContextObject",
 				DisplayName = "Get Entity Emission Mask"))
@@ -102,7 +102,7 @@ public:
 	/** Overwrite `Entity`'s FogVisibilityLayerMask. Use for clean state
 	 *  swaps (e.g. ability activates cloak → set to `N0`; ability ends →
 	 *  set back to `Normal`). No-op if the entity has no
-	 *  FSeinFogVisibilityComponent authored. */
+	 *  FSeinFogVisibilityPayload authored. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Fog Of War",
 		meta = (WorldContext = "WorldContextObject",
 				DisplayName = "Set Entity Emission Mask"))

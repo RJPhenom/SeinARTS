@@ -5,8 +5,8 @@
 #include "GameplayTagContainer.h"
 #include "Abilities/SeinAbility.h"
 #include "Abilities/SeinAbilityTypes.h"
-#include "Components/SeinComponent.h"
-#include "SeinAbilityComponent.generated.h"
+#include "Components/SeinPayload.h"
+#include "SeinAbilityPayload.generated.h"
 
 class USeinWorldSubsystem;
 
@@ -73,7 +73,7 @@ struct TStructOpsTypeTraits<FSeinAbilityGrantOwnership>
  * holder. `SeinForceRevokeAbility*` remains the explicit all-owner escape hatch.
  */
 USTRUCT(BlueprintType, meta = (SeinDeterministic))
-struct SEINARTSCOREENTITY_API FSeinAbilityComponent : public FSeinComponent
+struct SEINARTSCOREENTITY_API FSeinAbilityPayload : public FSeinPayload
 {
 	GENERATED_BODY()
 

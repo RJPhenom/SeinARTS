@@ -6,7 +6,7 @@
 #include "Abilities/SeinLatentActionManager.h"
 #include "Brokers/SeinCommandBrokerResolver.h"
 #include "Brokers/SeinDefaultCommandBrokerResolver.h"
-#include "Components/SeinAbilityComponent.h"
+#include "Components/SeinAbilityPayload.h"
 #include "Data/SeinWorldSnapshot.h"
 #include "Lib/SeinAbilityBPFL.h"
 #include "Serialization/MemoryReader.h"
@@ -91,7 +91,7 @@ namespace
 			{
 				Entity = World->SpawnAbstractEntity(
 					FFixedTransform(), FSeinPlayerID::Neutral());
-				World->AddComponent(Entity, FSeinAbilityComponent());
+				World->AddComponent(Entity, FSeinAbilityPayload());
 				OrdinaryAbilityID = USeinAbilityBPFL::SeinGrantAbility(
 					World, Entity, USeinSnapshotTestAbility::StaticClass());
 				PassiveAbilityID = USeinAbilityBPFL::SeinGrantAbility(
@@ -151,16 +151,16 @@ namespace
 	{
 		int32 Slot = 0;
 		int32 Generation = 0;
-		FSeinAbilityComponent Component;
+		FSeinAbilityPayload Component;
 	};
 
 	bool RewriteAbilityComponent(FSeinWorldSnapshot& Snapshot, int32 TargetSlot,
-		TFunctionRef<void(FSeinAbilityComponent&)> Mutator,
+		TFunctionRef<void(FSeinAbilityPayload&)> Mutator,
 		int32 GenerationDelta = 0)
 	{
 		FSeinSnapshotComponentStorageBlob* Blob =
 			Snapshot.ComponentStorageBlobs.Find(
-				FSeinAbilityComponent::StaticStruct()->GetPathName());
+				FSeinAbilityPayload::StaticStruct()->GetPathName());
 		if (!Blob) return false;
 
 		TArray<uint8> SourceBytes = Blob->Bytes;
@@ -182,7 +182,7 @@ namespace
 			FAbilityBlobEntry& Entry = Entries.AddDefaulted_GetRef();
 			Reader << Entry.Slot;
 			Reader << Entry.Generation;
-			FSeinAbilityComponent::StaticStruct()->SerializeBin(
+			FSeinAbilityPayload::StaticStruct()->SerializeBin(
 				Reader, &Entry.Component);
 			if (Reader.IsError()) return false;
 			if (Entry.Slot == TargetSlot)
@@ -203,7 +203,7 @@ namespace
 		{
 			Writer << Entry.Slot;
 			Writer << Entry.Generation;
-			FSeinAbilityComponent::StaticStruct()->SerializeBin(
+			FSeinAbilityPayload::StaticStruct()->SerializeBin(
 				Writer, &Entry.Component);
 		}
 		if (Writer.IsError()) return false;
@@ -340,7 +340,7 @@ namespace UE::SeinARTSTests
 		FSeinWorldSnapshot PassiveAsPrimary = Valid;
 		ASSERT_THAT(IsTrue(RewriteAbilityComponent(
 			PassiveAsPrimary, Fixture.Entity.Index,
-			[&](FSeinAbilityComponent& Component)
+			[&](FSeinAbilityPayload& Component)
 			{
 				Component.ActiveAbilityID = Fixture.PassiveAbilityID;
 			})));
@@ -349,7 +349,7 @@ namespace UE::SeinARTSTests
 		FSeinWorldSnapshot NonPassiveInPassiveList = Valid;
 		ASSERT_THAT(IsTrue(RewriteAbilityComponent(
 			NonPassiveInPassiveList, Fixture.Entity.Index,
-			[&](FSeinAbilityComponent& Component)
+			[&](FSeinAbilityPayload& Component)
 			{
 				Component.ActivePassiveIDs.Add(Fixture.OrdinaryAbilityID);
 			})));
@@ -388,7 +388,7 @@ namespace UE::SeinARTSTests
 		const int32 HashBefore = Fixture.World->ComputeStateHash();
 		ASSERT_THAT(IsTrue(RewriteAbilityComponent(
 			Bad, Fixture.Entity.Index,
-			[](FSeinAbilityComponent& Component)
+			[](FSeinAbilityPayload& Component)
 			{
 				Component.ActiveAbilityID = INDEX_NONE;
 			})));
@@ -400,7 +400,7 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(AreEqual(HashBefore, Fixture.World->ComputeStateHash()));
 		ASSERT_THAT(IsTrue(Ordinary->bIsActive));
 		ASSERT_THAT(AreEqual(Fixture.OrdinaryAbilityID,
-			Fixture.World->GetComponent<FSeinAbilityComponent>(Fixture.Entity)
+			Fixture.World->GetComponent<FSeinAbilityPayload>(Fixture.Entity)
 				->ActiveAbilityID));
 	}
 
@@ -416,7 +416,7 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(RewriteAbilityComponent(
 			Bad,
 			Fixture.Entity.Index,
-			[](FSeinAbilityComponent&) {},
+			[](FSeinAbilityPayload&) {},
 			1)));
 
 		Assert.ExpectError(TEXT(
@@ -574,8 +574,8 @@ namespace UE::SeinARTSTests
 
 		const USeinAbility* RestoredPassive =
 			Fixture.World->GetAbilityInstance(Fixture.PassiveAbilityID);
-		const FSeinAbilityComponent* RestoredComponent =
-			Fixture.World->GetComponent<FSeinAbilityComponent>(Fixture.Entity);
+		const FSeinAbilityPayload* RestoredComponent =
+			Fixture.World->GetComponent<FSeinAbilityPayload>(Fixture.Entity);
 		ASSERT_THAT(IsNotNull(RestoredPassive));
 		ASSERT_THAT(IsNotNull(RestoredComponent));
 		ASSERT_THAT(IsTrue(RestoredPassive->bIsPassive));

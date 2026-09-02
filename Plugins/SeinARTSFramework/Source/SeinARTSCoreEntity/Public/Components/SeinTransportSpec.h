@@ -11,7 +11,7 @@
 #include "CoreMinimal.h"
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
-#include "Components/SeinComponent.h"
+#include "Components/SeinPayload.h"
 #include "SeinTransportSpec.generated.h"
 
 /**
@@ -22,7 +22,7 @@
  * to place exiters when a dedicated exit target isn't provided.
  */
 USTRUCT(BlueprintType, meta = (SeinDeterministic))
-struct SEINARTSCOREENTITY_API FSeinTransportSpec : public FSeinComponent
+struct SEINARTSCOREENTITY_API FSeinTransportSpec : public FSeinPayload
 {
 	GENERATED_BODY()
 

@@ -9,7 +9,7 @@
 
 #include "Lib/SeinProductionBPFL.h"
 #include "Simulation/SeinWorldSubsystem.h"
-#include "Components/SeinProductionComponent.h"
+#include "Components/SeinProductionPayload.h"
 #include "Core/SeinPlayerState.h"
 #include "Engine/World.h"
 
@@ -23,7 +23,7 @@ USeinWorldSubsystem* USeinProductionBPFL::GetWorldSubsystem(const UObject* World
 }
 
 bool USeinProductionBPFL::SeinGetProductionData(const UObject* WorldContextObject,
-	FSeinEntityHandle EntityHandle, FSeinProductionComponent& OutData)
+	FSeinEntityHandle EntityHandle, FSeinProductionPayload& OutData)
 {
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
 	if (!Subsystem)
@@ -31,11 +31,11 @@ bool USeinProductionBPFL::SeinGetProductionData(const UObject* WorldContextObjec
 		UE_LOG(LogSeinProductionBPFL, Warning, TEXT("GetProductionData: no SeinWorldSubsystem"));
 		return false;
 	}
-	const FSeinProductionComponent* Data = Subsystem->GetComponent<FSeinProductionComponent>(EntityHandle);
+	const FSeinProductionPayload* Data = Subsystem->GetComponent<FSeinProductionPayload>(EntityHandle);
 	if (!Data)
 	{
 		UE_LOG(LogSeinProductionBPFL, Warning,
-			TEXT("GetProductionData: entity %s invalid or has no FSeinProductionComponent"),
+			TEXT("GetProductionData: entity %s invalid or has no FSeinProductionPayload"),
 			*EntityHandle.ToString());
 		return false;
 	}
@@ -43,17 +43,17 @@ bool USeinProductionBPFL::SeinGetProductionData(const UObject* WorldContextObjec
 	return true;
 }
 
-TArray<FSeinProductionComponent> USeinProductionBPFL::SeinGetProductionDataMany(const UObject* WorldContextObject,
+TArray<FSeinProductionPayload> USeinProductionBPFL::SeinGetProductionDataMany(const UObject* WorldContextObject,
 	const TArray<FSeinEntityHandle>& EntityHandles)
 {
-	TArray<FSeinProductionComponent> Result;
+	TArray<FSeinProductionPayload> Result;
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
 	if (!Subsystem) return Result;
 
 	Result.Reserve(EntityHandles.Num());
 	for (const FSeinEntityHandle& Handle : EntityHandles)
 	{
-		if (const FSeinProductionComponent* Data = Subsystem->GetComponent<FSeinProductionComponent>(Handle))
+		if (const FSeinProductionPayload* Data = Subsystem->GetComponent<FSeinProductionPayload>(Handle))
 		{
 			Result.Add(*Data);
 		}

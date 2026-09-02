@@ -2,7 +2,7 @@
 #include "Components/ActorTestSpawner.h"
 
 #include "Components/SeinBrokerMembershipData.h"
-#include "Components/SeinAbilityComponent.h"
+#include "Components/SeinAbilityPayload.h"
 #include "Components/SeinCommandBrokerData.h"
 #include "Containers/Ticker.h"
 #include "Lib/SeinAbilityBPFL.h"
@@ -161,7 +161,7 @@ namespace
 
 				auto GrantTestAbility = [this](FSeinEntityHandle Entity)
 				{
-					World->AddComponent(Entity, FSeinAbilityComponent());
+					World->AddComponent(Entity, FSeinAbilityPayload());
 					const int32 AbilityID = USeinAbilityBPFL::SeinGrantAbility(
 						World, Entity,
 						USeinBrokerCallbackSafetyAbility::StaticClass());

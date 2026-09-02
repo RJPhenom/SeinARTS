@@ -9,7 +9,7 @@
  *            SeinARTS.Cover.Light     — fences, low fences, craters
  *            SeinARTS.Cover.Negative  — roads, exposed lanes (takes MORE damage)
  *
- *          Quality lives ONCE per provider (`FSeinCoverComponent::QualityTag`)
+ *          Quality lives ONCE per provider (`FSeinCoverPayload::QualityTag`)
  *          and applies uniformly to all of that provider's slots + area volume.
  *          Designers wanting mixed qualities on one actor compose multiple cover
  *          provider components, one per tier.
@@ -45,7 +45,7 @@ enum class ESeinCoverAreaShape : uint8
 
 /** How the slot generator distributes slots when the designer clicks
  *  "Generate Slots" in the cover details panel. Both modes read the
- *  `FSeinCoverComponent::Area` field to derive their geometry — the
+ *  `FSeinCoverPayload::Area` field to derive their geometry — the
  *  generator has no other geometric source. */
 UENUM(BlueprintType)
 enum class ESeinCoverGenerateMode : uint8
@@ -63,13 +63,13 @@ enum class ESeinCoverGenerateMode : uint8
 	Area UMETA(DisplayName = "Area — slots filling interior"),
 };
 
-// Slots are pure positions — `FSeinCoverComponent::Slots` is a
+// Slots are pure positions — `FSeinCoverPayload::Slots` is a
 // `TArray<FFixedVector>` (each entry is a local-space slot position relative
 // to the provider's actor transform). No per-slot direction, facing, or
 // quality data — directionality is a provider-level property (see
-// `FSeinCoverComponent::bIsDirectional`) computed at runtime via
+// `FSeinCoverPayload::bIsDirectional`) computed at runtime via
 // `USeinCoverBPFL::SeinGetCoverDirection`; quality is a single provider-
-// level tag (`FSeinCoverComponent::QualityTag`). The flat-vector array
+// level tag (`FSeinCoverPayload::QualityTag`). The flat-vector array
 // keeps the details panel clean (each slot is one editable FFixedVector,
 // not a nested struct with redundant scalar fields).
 
@@ -133,7 +133,7 @@ struct SEINARTSCOVER_API FSeinCoverContext
 	 *
 	 *  False for area cover (foxhole, crater, negative-cover road) —
 	 *  protection is omnidirectional and the direction helper isn't needed.
-	 *  Set from `FSeinCoverComponent::bIsDirectional`. */
+	 *  Set from `FSeinCoverPayload::bIsDirectional`. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Cover")
 	bool bIsDirectional = false;
 };

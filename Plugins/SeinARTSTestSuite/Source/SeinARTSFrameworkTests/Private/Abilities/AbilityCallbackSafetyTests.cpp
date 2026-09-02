@@ -3,7 +3,7 @@
 
 #include "Brokers/SeinBrokerTypes.h"
 #include "Brokers/SeinDefaultCommandBrokerResolver.h"
-#include "Components/SeinAbilityComponent.h"
+#include "Components/SeinAbilityPayload.h"
 #include "Components/SeinBrokerMembershipData.h"
 #include "Components/SeinCommandBrokerData.h"
 #include "Containers/Ticker.h"
@@ -26,7 +26,7 @@ void USeinCallbackReplaceComponentAbility::OnActivate_Implementation()
 {
 	if (WorldSubsystem)
 	{
-		WorldSubsystem->AddComponent(OwnerEntity, FSeinAbilityComponent());
+		WorldSubsystem->AddComponent(OwnerEntity, FSeinAbilityPayload());
 	}
 }
 
@@ -44,7 +44,7 @@ void USeinCallbackGrowComponentStorageAbility::OnActivate_Implementation()
 		GrowthEntity = WorldSubsystem->SpawnAbstractEntity(
 			FFixedTransform(), FSeinPlayerID::Neutral());
 	}
-	WorldSubsystem->AddComponent(GrowthEntity, FSeinAbilityComponent());
+	WorldSubsystem->AddComponent(GrowthEntity, FSeinAbilityPayload());
 }
 
 void USeinCallbackRevokeOnCancelAbility::OnEnd_Implementation(bool bWasCancelled)
@@ -188,8 +188,8 @@ namespace UE::SeinARTSTests
 		USeinCallbackPassiveIdentityAbility::ActivationCallback =
 			[&](USeinCallbackPassiveIdentityAbility& Ability)
 			{
-				const FSeinAbilityComponent* Component =
-					World->GetComponent<FSeinAbilityComponent>(Entity);
+				const FSeinAbilityPayload* Component =
+					World->GetComponent<FSeinAbilityPayload>(Entity);
 				bObservedExactIdentity = Component
 					&& Component->ActivePassiveIDs.Contains(
 						Ability.GetRuntimePoolID())
@@ -199,7 +199,7 @@ namespace UE::SeinARTSTests
 		{
 			Entity = World->SpawnAbstractEntity(
 				FFixedTransform(), FSeinPlayerID::Neutral());
-			World->AddComponent(Entity, FSeinAbilityComponent());
+			World->AddComponent(Entity, FSeinAbilityPayload());
 			PassiveID = USeinAbilityBPFL::SeinGrantAbility(
 				World, Entity,
 				USeinCallbackPassiveIdentityAbility::StaticClass());
@@ -215,8 +215,8 @@ namespace UE::SeinARTSTests
 			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
 			Passive->EndAbility();
 		}
-		const FSeinAbilityComponent* Component =
-			World->GetComponent<FSeinAbilityComponent>(Entity);
+		const FSeinAbilityPayload* Component =
+			World->GetComponent<FSeinAbilityPayload>(Entity);
 		ASSERT_THAT(IsNotNull(Component));
 		ASSERT_THAT(IsFalse(Passive->bIsActive));
 		ASSERT_THAT(IsFalse(Component->ActivePassiveIDs.Contains(PassiveID)));
@@ -238,7 +238,7 @@ namespace UE::SeinARTSTests
 		{
 			Entity = World->SpawnAbstractEntity(
 				FFixedTransform(), FSeinPlayerID::Neutral());
-			World->AddComponent(Entity, FSeinAbilityComponent());
+			World->AddComponent(Entity, FSeinAbilityPayload());
 			First = GrantAbility(*World, Entity,
 				USeinCallbackCancelReplacementAbility::StaticClass(),
 				SeinARTSTags::Command_Context_AbilityTriggered);
@@ -257,8 +257,8 @@ namespace UE::SeinARTSTests
 			FSeinEntityHandle::Invalid(), FFixedVector::ZeroVector)));
 		const int32 FirstID = First->GetRuntimePoolID();
 		const int32 SecondID = Second->GetRuntimePoolID();
-		const FSeinAbilityComponent* Component =
-			World->GetComponent<FSeinAbilityComponent>(Entity);
+		const FSeinAbilityPayload* Component =
+			World->GetComponent<FSeinAbilityPayload>(Entity);
 		ASSERT_THAT(IsNotNull(Component));
 		ASSERT_THAT(AreEqual(FirstID, Component->ActiveAbilityID));
 
@@ -267,14 +267,14 @@ namespace UE::SeinARTSTests
 			EAutomationExpectedErrorFlags::Contains, 1, false);
 		ASSERT_THAT(IsFalse(Second->ActivateAbility(
 			FSeinEntityHandle::Invalid(), FFixedVector::ZeroVector)));
-		Component = World->GetComponent<FSeinAbilityComponent>(Entity);
+		Component = World->GetComponent<FSeinAbilityPayload>(Entity);
 		ASSERT_THAT(IsNotNull(Component));
 		ASSERT_THAT(AreEqual(FirstID, Component->ActiveAbilityID));
 		ASSERT_THAT(IsTrue(First->bIsActive));
 		ASSERT_THAT(IsFalse(Second->bIsActive));
 
 		First->EndAbility();
-		Component = World->GetComponent<FSeinAbilityComponent>(Entity);
+		Component = World->GetComponent<FSeinAbilityPayload>(Entity);
 		ASSERT_THAT(IsNotNull(Component));
 		ASSERT_THAT(AreEqual(INDEX_NONE, Component->ActiveAbilityID));
 
@@ -283,7 +283,7 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(Second->ActivateAbility(
 			FSeinEntityHandle::Invalid(), FFixedVector::ZeroVector)));
 		ASSERT_THAT(AreEqual(SecondID,
-			World->GetComponent<FSeinAbilityComponent>(Entity)->ActiveAbilityID));
+			World->GetComponent<FSeinAbilityPayload>(Entity)->ActiveAbilityID));
 		Second->EndAbility();
 		ASSERT_THAT(AreEqual(FFixedPoint::FromInt(5),
 			Second->CooldownRemaining));
@@ -294,7 +294,7 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(AreEqual(FFixedPoint::FromInt(5),
 			Second->CooldownRemaining));
 		ASSERT_THAT(AreEqual(INDEX_NONE,
-			World->GetComponent<FSeinAbilityComponent>(Entity)->ActiveAbilityID));
+			World->GetComponent<FSeinAbilityPayload>(Entity)->ActiveAbilityID));
 	}
 
 	TEST(AbilityTickUsesFrozenPhaseAndPassiveTraversalMembership,
@@ -327,8 +327,8 @@ namespace UE::SeinARTSTests
 			Result.Ability = NewObject<USeinCallbackTickProbeAbility>(World);
 			Result.Ability->InitializeAbility(Entity, World);
 			Result.ID = World->RegisterAbilityInstance(Result.Ability);
-			FSeinAbilityComponent* Component =
-				World->GetComponentMutable<FSeinAbilityComponent>(Entity);
+			FSeinAbilityPayload* Component =
+				World->GetComponentMutable<FSeinAbilityPayload>(Entity);
 			Component->AbilityInstanceIDs.Add(Result.ID);
 			Component->AbilityGrantOwnership.AddDefaulted();
 			Result.Ability->bIsActive = true;
@@ -339,10 +339,10 @@ namespace UE::SeinARTSTests
 			World->RegisterPlayer(Player, FSeinFactionID(1));
 			ParentEntity = World->SpawnAbstractEntity(
 				FFixedTransform(), Player);
-			World->AddComponent(ParentEntity, FSeinAbilityComponent());
+			World->AddComponent(ParentEntity, FSeinAbilityPayload());
 			const FProbeInstance ParentProbe = CreateProbe(ParentEntity);
 			Parent = ParentProbe.Ability;
-			World->GetComponentMutable<FSeinAbilityComponent>(
+			World->GetComponentMutable<FSeinAbilityPayload>(
 				ParentEntity)->ActiveAbilityID = ParentProbe.ID;
 		};
 		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Materialize(
@@ -359,22 +359,22 @@ namespace UE::SeinARTSTests
 				{
 					const FSeinEntityHandle Spawned =
 						World->SpawnAbstractEntity(FFixedTransform(), Player);
-					World->AddComponent(Spawned, FSeinAbilityComponent());
+					World->AddComponent(Spawned, FSeinAbilityPayload());
 					const FProbeInstance SpawnedProbe = CreateProbe(Spawned);
 					SpawnedEntityAbility = SpawnedProbe.Ability;
-					World->GetComponentMutable<FSeinAbilityComponent>(Spawned)
+					World->GetComponentMutable<FSeinAbilityPayload>(Spawned)
 						->ActiveAbilityID = SpawnedProbe.ID;
 
 					const FProbeInstance PassiveProbe = CreateProbe(ParentEntity);
 					FirstPassive = PassiveProbe.Ability;
-					World->GetComponentMutable<FSeinAbilityComponent>(
+					World->GetComponentMutable<FSeinAbilityPayload>(
 						ParentEntity)->ActivePassiveIDs.Add(PassiveProbe.ID);
 				}
 				else if (&Ability == FirstPassive && !AddedDuringPassive)
 				{
 					const FProbeInstance PassiveProbe = CreateProbe(ParentEntity);
 					AddedDuringPassive = PassiveProbe.Ability;
-					World->GetComponentMutable<FSeinAbilityComponent>(
+					World->GetComponentMutable<FSeinAbilityPayload>(
 						ParentEntity)->ActivePassiveIDs.Add(PassiveProbe.ID);
 				}
 			};
@@ -411,7 +411,7 @@ namespace UE::SeinARTSTests
 			World->RegisterPlayer(Player, FSeinFactionID(1));
 			EndingEntity =
 				World->SpawnAbstractEntity(FFixedTransform(), Player);
-			World->AddComponent(EndingEntity, FSeinAbilityComponent());
+			World->AddComponent(EndingEntity, FSeinAbilityPayload());
 			EndingAbility = GrantAbility(*World, EndingEntity,
 				USeinCallbackImmediateEndAbility::StaticClass(),
 				SeinARTSTags::Command_Context_AbilityTriggered);
@@ -423,8 +423,8 @@ namespace UE::SeinARTSTests
 			Player, EndingEntity, EndingAbility->AbilityTag);
 		SubmitAuthorizedDraft(*World, Command);
 		TickOnce(*World);
-		const FSeinAbilityComponent* AbilityComponent =
-			World->GetComponent<FSeinAbilityComponent>(EndingEntity);
+		const FSeinAbilityPayload* AbilityComponent =
+			World->GetComponent<FSeinAbilityPayload>(EndingEntity);
 		ASSERT_THAT(IsNotNull(AbilityComponent));
 		ASSERT_THAT(IsFalse(EndingAbility->bIsActive));
 		ASSERT_THAT(AreEqual(INDEX_NONE, AbilityComponent->ActiveAbilityID));
@@ -434,7 +434,7 @@ namespace UE::SeinARTSTests
 		{
 			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
 			GrowthEntity = World->SpawnAbstractEntity(FFixedTransform(), Player);
-			World->AddComponent(GrowthEntity, FSeinAbilityComponent());
+			World->AddComponent(GrowthEntity, FSeinAbilityPayload());
 			GrowthAbility = GrantAbility(*World, GrowthEntity,
 				USeinCallbackGrowComponentStorageAbility::StaticClass(),
 				SeinARTSTags::Command_Context_Target_Neutral);
@@ -444,7 +444,7 @@ namespace UE::SeinARTSTests
 			Player, GrowthEntity, GrowthAbility->AbilityTag);
 		SubmitAuthorizedDraft(*World, Command);
 		TickOnce(*World);
-		AbilityComponent = World->GetComponent<FSeinAbilityComponent>(GrowthEntity);
+		AbilityComponent = World->GetComponent<FSeinAbilityPayload>(GrowthEntity);
 		ASSERT_THAT(IsNotNull(AbilityComponent));
 		ASSERT_THAT(IsTrue(GrowthAbility->bIsActive));
 		ASSERT_THAT(IsTrue(AbilityComponent->AbilityInstanceIDs.Contains(
@@ -457,7 +457,7 @@ namespace UE::SeinARTSTests
 		{
 			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
 			ReplacedEntity = World->SpawnAbstractEntity(FFixedTransform(), Player);
-			World->AddComponent(ReplacedEntity, FSeinAbilityComponent());
+			World->AddComponent(ReplacedEntity, FSeinAbilityPayload());
 			ReplacingAbility = GrantAbility(*World, ReplacedEntity,
 				USeinCallbackReplaceComponentAbility::StaticClass(),
 				SeinARTSTags::Command_Context_Target_Ground);
@@ -467,7 +467,7 @@ namespace UE::SeinARTSTests
 			Player, ReplacedEntity, ReplacingAbility->AbilityTag);
 		SubmitAuthorizedDraft(*World, Command);
 		TickOnce(*World);
-		AbilityComponent = World->GetComponent<FSeinAbilityComponent>(ReplacedEntity);
+		AbilityComponent = World->GetComponent<FSeinAbilityPayload>(ReplacedEntity);
 		ASSERT_THAT(IsNotNull(AbilityComponent));
 		ASSERT_THAT(AreEqual(0, AbilityComponent->AbilityInstanceIDs.Num()));
 		ASSERT_THAT(AreEqual(INDEX_NONE, AbilityComponent->ActiveAbilityID));
@@ -491,7 +491,7 @@ namespace UE::SeinARTSTests
 			World->RegisterPlayer(Player, FSeinFactionID(1));
 			CancelEntity = World->SpawnAbstractEntity(
 				FFixedTransform(), Player);
-			World->AddComponent(CancelEntity, FSeinAbilityComponent());
+			World->AddComponent(CancelEntity, FSeinAbilityPayload());
 			CancelledAbility = GrantAbility(*World, CancelEntity,
 				USeinCallbackRevokeOnCancelAbility::StaticClass(),
 				SeinARTSTags::Command_Context_AbilityTriggered);
@@ -503,15 +503,15 @@ namespace UE::SeinARTSTests
 			Player, CancelEntity, CancelledAbility->AbilityTag);
 		SubmitAuthorizedDraft(*World, Activate);
 		TickOnce(*World);
-		const FSeinAbilityComponent* AbilityComponent =
-			World->GetComponent<FSeinAbilityComponent>(CancelEntity);
+		const FSeinAbilityPayload* AbilityComponent =
+			World->GetComponent<FSeinAbilityPayload>(CancelEntity);
 		ASSERT_THAT(IsNotNull(AbilityComponent));
 		const int32 RecycledCancelID = AbilityComponent->ActiveAbilityID;
 
 		FSeinCommand Cancel = FSeinCommand::MakeCancelCommand(Player, CancelEntity);
 		SubmitAuthorizedDraft(*World, Cancel);
 		TickOnce(*World);
-		AbilityComponent = World->GetComponent<FSeinAbilityComponent>(CancelEntity);
+		AbilityComponent = World->GetComponent<FSeinAbilityPayload>(CancelEntity);
 		ASSERT_THAT(IsNotNull(AbilityComponent));
 		ASSERT_THAT(AreEqual(RecycledCancelID, AbilityComponent->ActiveAbilityID));
 		USeinAbility* Replacement =
@@ -526,7 +526,7 @@ namespace UE::SeinARTSTests
 		{
 			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
 			BrokerMember = World->SpawnAbstractEntity(FFixedTransform(), Player);
-			World->AddComponent(BrokerMember, FSeinAbilityComponent());
+			World->AddComponent(BrokerMember, FSeinAbilityPayload());
 			BrokerAbility = GrantAbility(*World, BrokerMember,
 				USeinCallbackRevokeOnCancelAbility::StaticClass(),
 				SeinARTSTags::Command_Context_AbilityTriggered);
@@ -561,7 +561,7 @@ namespace UE::SeinARTSTests
 				{BrokerMember}, Player, ReplacementOrder);
 		}
 
-		AbilityComponent = World->GetComponent<FSeinAbilityComponent>(BrokerMember);
+		AbilityComponent = World->GetComponent<FSeinAbilityPayload>(BrokerMember);
 		ASSERT_THAT(IsNotNull(AbilityComponent));
 		Replacement = World->GetAbilityInstance(AbilityComponent->ActiveAbilityID);
 		ASSERT_THAT(IsNotNull(Replacement));

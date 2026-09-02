@@ -7,7 +7,7 @@
  */
 
 #include "SeinAbility_SquadReinforce.h"
-#include "Components/SeinSquadComponent.h"
+#include "Components/SeinSquadPayload.h"
 #include "Lib/SeinResourceBPFL.h"
 #include "Reinforcement/SeinSquadReinforcementService.h"
 #include "Simulation/SeinWorldSubsystem.h"
@@ -30,10 +30,10 @@ USeinAbility_SquadReinforce::USeinAbility_SquadReinforce()
 bool USeinAbility_SquadReinforce::CanActivate_Implementation()
 {
 	if (!WorldSubsystem) return false;
-	const FSeinSquadComponent* Squad = WorldSubsystem->GetComponent<FSeinSquadComponent>(OwnerEntity);
+	const FSeinSquadPayload* Squad = WorldSubsystem->GetComponent<FSeinSquadPayload>(OwnerEntity);
 	if (!Squad)
 	{
-		UE_LOG(LogSeinSquadReinforce, Verbose, TEXT("CanActivate: owner %s is not a squad (no FSeinSquadComponent)"),
+		UE_LOG(LogSeinSquadReinforce, Verbose, TEXT("CanActivate: owner %s is not a squad (no FSeinSquadPayload)"),
 			*OwnerEntity.ToString());
 		return false;
 	}
@@ -66,8 +66,8 @@ bool USeinAbility_SquadReinforce::CanActivate_Implementation()
 void USeinAbility_SquadReinforce::OnActivate_Implementation()
 {
 	if (!WorldSubsystem) { EndAbility(); return; }
-	const FSeinSquadComponent* Squad =
-		WorldSubsystem->GetComponent<FSeinSquadComponent>(OwnerEntity);
+	const FSeinSquadPayload* Squad =
+		WorldSubsystem->GetComponent<FSeinSquadPayload>(OwnerEntity);
 	if (!Squad) { EndAbility(); return; }
 
 	const int32 SlotIdx =

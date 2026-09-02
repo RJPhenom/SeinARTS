@@ -9,9 +9,9 @@
  */
 
 #include "Default/SeinFogOfWarDefault.h"
-#include "Components/SeinVisionComponent.h"
-#include "Components/SeinExtentsComponent.h"
-#include "Components/SeinFogVisibilityComponent.h"
+#include "Components/SeinVisionPayload.h"
+#include "Components/SeinExtentsPayload.h"
+#include "Components/SeinFogVisibilityPayload.h"
 #include "Stamping/SeinStampShape.h"
 #include "Stamping/SeinStampUtils.h"
 #include "SeinFogOfWarTypes.h"
@@ -27,7 +27,7 @@
 
 #include "Actor/SeinActor.h"
 #include "Actor/SeinEntityBridgeComponent.h"
-#include "Components/SeinMovementComponent.h"
+#include "Components/SeinMovementPayload.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Simulation/ComponentStorage.h"
 #include "Core/SeinEntityPool.h"
@@ -129,7 +129,7 @@ void USeinFogOfWarDefault::BakeLayer(const USeinLevelData& Substrate, UWorld* Wo
 		bool bSkip = false;
 		if (const USeinEntityBridgeComponent* Bridge = SeinActor->FindComponentByClass<USeinEntityBridgeComponent>())
 		{
-			if (const FSeinExtentsComponent* Extents = Bridge->FindAuthoredData<FSeinExtentsComponent>())
+			if (const FSeinExtentsPayload* Extents = Bridge->FindAuthoredData<FSeinExtentsPayload>())
 			{
 				if (!Extents->bBakesIntoFogOfWar) bSkip = true;
 			}
@@ -137,7 +137,7 @@ void USeinFogOfWarDefault::BakeLayer(const USeinLevelData& Substrate, UWorld* Wo
 			{
 				for (const FInstancedStruct& Entry : Bridge->ComponentData)
 				{
-					if (Entry.GetScriptStruct() == FSeinMovementComponent::StaticStruct())
+					if (Entry.GetScriptStruct() == FSeinMovementPayload::StaticStruct())
 					{
 						bSkip = true;
 						break;
@@ -567,7 +567,7 @@ void USeinFogOfWarDefault::TickStamps(UWorld* World)
 	USeinWorldSubsystem* Sim = World->GetSubsystem<USeinWorldSubsystem>();
 	if (!Sim) return;
 
-	const ISeinComponentStorage* Storage = Sim->GetComponentStorageRaw(FSeinVisionComponent::StaticStruct());
+	const ISeinComponentStorage* Storage = Sim->GetComponentStorageRaw(FSeinVisionPayload::StaticStruct());
 	if (!Storage) return;
 
 	// Vision tick skip: when the world has no vision sources, no blocker
@@ -585,7 +585,7 @@ void USeinFogOfWarDefault::TickStamps(UWorld* World)
 	// observer setup; once ~one observer exists, SourceStates is non-empty
 	// for the rest of the match.
 	const ISeinComponentStorage* ExtentsStorage =
-		Sim->GetComponentStorageRaw(FSeinExtentsComponent::StaticStruct());
+		Sim->GetComponentStorageRaw(FSeinExtentsPayload::StaticStruct());
 	const int32 VisionCount = Storage->GetComponentCount();
 	const int32 ExtentsCount = ExtentsStorage ? ExtentsStorage->GetComponentCount() : 0;
 	if (VisionCount == 0 && ExtentsCount == 0
@@ -677,7 +677,7 @@ void USeinFogOfWarDefault::TickStamps(UWorld* World)
 			if (!Sim->GetEntityPool().IsValid(Handle)) return;
 			const FSeinEntity* Entity = Sim->GetEntity(Handle);
 			if (!Entity || !Raw) return;
-			const FSeinVisionComponent* VData = static_cast<const FSeinVisionComponent*>(Raw);
+			const FSeinVisionPayload* VData = static_cast<const FSeinVisionPayload*>(Raw);
 			if (!VData) return;
 
 			AliveSources.Add(Handle);
@@ -1254,7 +1254,7 @@ bool USeinFogOfWarDefault::RebuildDynamicBlockers(UWorld* World)
 		if (USeinWorldSubsystem* Sim = World->GetSubsystem<USeinWorldSubsystem>())
 		{
 			const ISeinComponentStorage* Storage =
-				Sim->GetComponentStorageRaw(FSeinExtentsComponent::StaticStruct());
+				Sim->GetComponentStorageRaw(FSeinExtentsPayload::StaticStruct());
 			if (Storage)
 			{
 				Sim->GetEntityPool().ForEachEntity(
@@ -1262,8 +1262,8 @@ bool USeinFogOfWarDefault::RebuildDynamicBlockers(UWorld* World)
 					{
 						const void* Raw = Storage->GetComponentRaw(Handle);
 						if (!Raw) return;
-						const FSeinExtentsComponent* Extents =
-							static_cast<const FSeinExtentsComponent*>(Raw);
+						const FSeinExtentsPayload* Extents =
+							static_cast<const FSeinExtentsPayload*>(Raw);
 						const uint8 LayerMask = static_cast<uint8>(
 							Extents->BlockedFogOfWarLayerMask
 							& SEIN_FOW_MASK_VISIBLE);
@@ -1293,7 +1293,7 @@ bool USeinFogOfWarDefault::RebuildDynamicBlockers(UWorld* World)
 			else
 			{
 				UE_LOG(LogSeinFogOfWar, Verbose,
-					TEXT("RebuildDynamicBlockers: no FSeinExtentsComponent storage registered "
+					TEXT("RebuildDynamicBlockers: no FSeinExtentsPayload storage registered "
 						 "— no entity with USeinExtentsComponent has been spawned via SpawnEntity"));
 			}
 		}
@@ -1563,7 +1563,7 @@ uint8 USeinFogOfWarDefault::GetEntityVisibleBits(FSeinPlayerID Observer,
 	// exactly — degenerate cases like zero-sized stamps).
 	uint8 Bits = GetCellBitfield(Observer, EntityPos);
 
-	const FSeinExtentsComponent* Extents = Sim.GetComponent<FSeinExtentsComponent>(Target);
+	const FSeinExtentsPayload* Extents = Sim.GetComponent<FSeinExtentsPayload>(Target);
 	if (!Extents || Extents->Shapes.Num() == 0)
 	{
 		return Bits;
@@ -1613,7 +1613,7 @@ void USeinFogOfWarDefault::UpdateSeenLatches(USeinWorldSubsystem& Sim)
 	// storage directly so the common case (a world of VisionLayersOnly units /
 	// VisibleOnceExplored buildings) pays a single count check and bails.
 	const ISeinComponentStorage* Storage =
-		Sim.GetComponentStorageRaw(FSeinFogVisibilityComponent::StaticStruct());
+		Sim.GetComponentStorageRaw(FSeinFogVisibilityPayload::StaticStruct());
 	if (!Storage || Storage->GetComponentCount() == 0) return;
 
 	Sim.GetEntityPool().ForEachEntity(
@@ -1621,8 +1621,8 @@ void USeinFogOfWarDefault::UpdateSeenLatches(USeinWorldSubsystem& Sim)
 		{
 			const void* Raw = Storage->GetComponentRaw(Handle);
 			if (!Raw) return;
-			const FSeinFogVisibilityComponent* FogVis =
-				static_cast<const FSeinFogVisibilityComponent*>(Raw);
+			const FSeinFogVisibilityPayload* FogVis =
+				static_cast<const FSeinFogVisibilityPayload*>(Raw);
 			if (FogVis->FogVisibilityPolicy != ESeinFogVisibilityPolicy::VisibleOnceSeen) return;
 
 			// "Live spotting" mask = the entity's emission bits restricted to

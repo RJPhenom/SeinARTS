@@ -33,7 +33,7 @@ namespace SeinARTSTags
 
 	// --- Command.Context ---
 	// Consumed by ASeinPlayerController::BuildCommandContext to describe the
-	// player's click intent. Matched against FSeinAbilityComponent::DefaultCommands
+	// player's click intent. Matched against FSeinAbilityPayload::DefaultCommands
 	// (DESIGN §7 Q9) to resolve which ability tag to activate.
 	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Command_Context);
 	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Command_Context_RightClick);
@@ -65,7 +65,7 @@ namespace SeinARTSTags
 	// abilities until construction completes).
 	SEINARTSCOREENTITY_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(State);
 
-	// Granted on entities with FSeinConstructionComponent while their construction
+	// Granted on entities with FSeinConstructionPayload while their construction
 	// is active (Progress < BuildTime). Ungranted by USeinConstructionBPFL::
 	// SeinFinishConstruction when the building completes. Buildings that
 	// should refuse to act mid-construction add this tag to every relevant

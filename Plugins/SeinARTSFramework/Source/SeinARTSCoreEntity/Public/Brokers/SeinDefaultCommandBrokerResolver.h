@@ -76,7 +76,7 @@ public:
 	/** Formation-level slot RE-MATCH on the LATERAL (left/right) axis. OPT-OUT, default true.
 	 *  When a non-squad selection moves, members are re-matched to the grid slots by left/right rank
 	 *  so a rotating formation doesn't make everyone cross to their old index slot. Clear to fall back
-	 *  to raw index order. (Squads carry their OWN per-squad opt-IN flags on FSeinSquadComponent.) */
+	 *  to raw index order. (Squads carry their OWN per-squad opt-IN flags on FSeinSquadPayload.) */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Broker|Formation",
 		meta = (DisplayName = "Reassign Slots Lateral"))
 	bool bReassignSlotsLateral = true;

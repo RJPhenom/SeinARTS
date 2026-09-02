@@ -2,7 +2,7 @@
 
 #include "Abilities/SeinAbility.h"
 #include "Brokers/SeinCommandBrokerResolver.h"
-#include "Components/SeinComponent.h"
+#include "Components/SeinPayload.h"
 #include "Data/SeinFaction.h"
 #include "StructUtils/InstancedStruct.h"
 #include "SeinInitialStateDigestTestTypes.generated.h"
@@ -54,7 +54,7 @@ public:
 };
 
 USTRUCT(meta = (SeinDeterministic))
-struct FSeinInitialStateDigestProbeComponent : public FSeinComponent
+struct FSeinInitialStateDigestProbeComponent : public FSeinPayload
 {
 	GENERATED_BODY()
 

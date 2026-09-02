@@ -2,8 +2,8 @@
 #include "Components/ActorTestSpawner.h"
 
 #include "Components/SeinCommandBrokerData.h"
-#include "Components/SeinSquadComponent.h"
-#include "Components/SeinSquadMemberComponent.h"
+#include "Components/SeinSquadPayload.h"
+#include "Components/SeinSquadMemberPayload.h"
 #include "Simulation/SeinTestSimContext.h"
 #include "Simulation/ComponentStorage.h"
 #include "Simulation/SeinWorldSubsystem.h"
@@ -63,12 +63,12 @@ namespace
 
 				FSeinSquadSlot Slot;
 				Slot.CurrentOccupant = Member;
-				FSeinSquadComponent SquadData;
+				FSeinSquadPayload SquadData;
 				SquadData.Leader = Member;
 				SquadData.Slots.Add(Slot);
 				World->AddComponent(Broker, SquadData);
 
-				FSeinSquadMemberComponent MemberData;
+				FSeinSquadMemberPayload MemberData;
 				MemberData.SquadEntity = Broker;
 				MemberData.SlotIndex = 0;
 				World->AddComponent(Member, MemberData);

@@ -12,7 +12,7 @@
 #include "Templates/SubclassOf.h"
 #include "GameplayTagContainer.h"
 #include "Core/SeinEntityHandle.h"
-#include "Components/SeinComponent.h"
+#include "Components/SeinPayload.h"
 #include "Components/SeinContainmentTypes.h"
 #include "SeinContainmentData.generated.h"
 
@@ -28,7 +28,7 @@ class USeinEffect;
  * entity's true owner.
  */
 USTRUCT(BlueprintType, meta = (SeinDeterministic, SeinSubData))
-struct SEINARTSCOREENTITY_API FSeinContainmentData : public FSeinComponent
+struct SEINARTSCOREENTITY_API FSeinContainmentData : public FSeinPayload
 {
 	GENERATED_BODY()
 

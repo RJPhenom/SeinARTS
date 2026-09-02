@@ -4,7 +4,7 @@
 #include "Abilities/Actions/SeinWaitAction.h"
 #include "Abilities/SeinAbility.h"
 #include "Abilities/SeinLatentActionManager.h"
-#include "Components/SeinAbilityComponent.h"
+#include "Components/SeinAbilityPayload.h"
 #include "Containers/Ticker.h"
 #include "Data/SeinWorldSnapshot.h"
 #include "Lib/SeinAbilityBPFL.h"
@@ -82,7 +82,7 @@ namespace UE::SeinARTSTests
 					}
 					World->AddComponent(
 						Entity,
-						FSeinAbilityComponent());
+						FSeinAbilityPayload());
 					AbilityID = USeinAbilityBPFL::SeinGrantAbility(
 						World,
 						Entity,

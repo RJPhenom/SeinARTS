@@ -1,7 +1,7 @@
 #include "CQTest.h"
 #include "Components/ActorTestSpawner.h"
 
-#include "Components/SeinExtentsComponent.h"
+#include "Components/SeinExtentsPayload.h"
 #include "Containers/Ticker.h"
 #include "Core/SeinTickPhase.h"
 #include "Data/SeinFaction.h"
@@ -94,7 +94,7 @@ namespace UE::SeinARTSTests
 					bAuthoringSucceeded = false;
 					return;
 				}
-				World.AddComponent(OutEntity, FSeinExtentsComponent());
+				World.AddComponent(OutEntity, FSeinExtentsPayload());
 				World.AddComponent(
 					OutEntity,
 					FSeinDeferredDestroyTestComponent());
@@ -274,7 +274,7 @@ namespace UE::SeinARTSTests
 		FSeinWorldSnapshot InvalidPayload = Snapshot;
 		FSeinSnapshotComponentStorageBlob* ExtentsBlob =
 			InvalidPayload.ComponentStorageBlobs.Find(
-				FSeinExtentsComponent::StaticStruct()->GetPathName());
+				FSeinExtentsPayload::StaticStruct()->GetPathName());
 		ASSERT_THAT(IsNotNull(ExtentsBlob));
 		ASSERT_THAT(IsTrue(!ExtentsBlob->Bytes.IsEmpty()));
 		ExtentsBlob->Bytes.RemoveAt(
@@ -367,7 +367,7 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(
 			!Destination->GetExecutionTopologyManifest().IsEmpty()));
 		ASSERT_THAT(IsNotNull(
-			Destination->GetComponent<FSeinExtentsComponent>(SourceEntity)));
+			Destination->GetComponent<FSeinExtentsPayload>(SourceEntity)));
 		ASSERT_THAT(AreEqual(SourceHash, Destination->ComputeStateHash()));
 		FGuid DestinationRoot;
 		FString DestinationRootError;

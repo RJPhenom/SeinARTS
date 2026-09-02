@@ -197,7 +197,7 @@ public:
 	// entity until the effect applies.
 	//
 	// Grant lifecycle is reference-counted (see
-	// FSeinAbilityComponent::AbilityGrantCounts). Two effects granting the
+	// FSeinAbilityPayload::AbilityGrantCounts). Two effects granting the
 	// same ability class coexist cleanly — each Apply bumps the refcount,
 	// each Remove decrements, and the instance is only destroyed when no
 	// holder remains. A natively-authored ability and an effect-granted

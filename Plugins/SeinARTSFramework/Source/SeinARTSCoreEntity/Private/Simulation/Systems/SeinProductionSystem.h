@@ -16,9 +16,9 @@
 #include "SeinARTSCoreEntityLog.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Simulation/ComponentStorage.h"
-#include "Components/SeinProductionComponent.h"
-#include "Components/SeinIdentityComponent.h"
-#include "Components/SeinAbilityComponent.h"
+#include "Components/SeinProductionPayload.h"
+#include "Components/SeinIdentityPayload.h"
+#include "Components/SeinAbilityPayload.h"
 #include "Actor/SeinEntityBridgeComponent.h"
 #include "Brokers/SeinBrokerTypes.h"
 #include "Effects/SeinEffect.h"
@@ -40,7 +40,7 @@ namespace SeinProductionLocal
 		bool bOriginalStalled = false;
 	};
 
-	/** Read FSeinIdentityComponent::IdentityTag off the producible class's
+	/** Read FSeinIdentityPayload::IdentityTag off the producible class's
 	 *  CDO entity bridge ComponentData. Returns an invalid tag when no
 	 *  identity component is authored on the producible. */
 	static FGameplayTag GetIdentityTagFromClass(TSubclassOf<class ASeinActor> ActorClass)
@@ -51,7 +51,7 @@ namespace SeinProductionLocal
 		for (const USeinEntityBridgeComponent* Bridge : Bridges)
 		{
 			if (!Bridge) continue;
-			if (const FSeinIdentityComponent* Identity = Bridge->FindAuthoredData<FSeinIdentityComponent>())
+			if (const FSeinIdentityPayload* Identity = Bridge->FindAuthoredData<FSeinIdentityPayload>())
 			{
 				return Identity->IdentityTag;
 			}
@@ -94,8 +94,8 @@ namespace SeinProductionLocal
 		FReadyCompletion& Out)
 	{
 		const FSeinEntity* Entity = World.GetEntity(Producer);
-		const FSeinProductionComponent* Production =
-			World.GetComponent<FSeinProductionComponent>(Producer);
+		const FSeinProductionPayload* Production =
+			World.GetComponent<FSeinProductionPayload>(Producer);
 		if (!Entity || !Entity->IsAlive()
 			|| !Production || Production->Queue.IsEmpty()
 			|| Production->CurrentBuildProgress < Production->Queue[0].TotalBuildTime)
@@ -128,8 +128,8 @@ namespace SeinProductionLocal
 			return false;
 		}
 
-		FSeinProductionComponent* Production =
-			World.GetComponentMutable<FSeinProductionComponent>(Producer);
+		FSeinProductionPayload* Production =
+			World.GetComponentMutable<FSeinProductionPayload>(Producer);
 		if (!Production || Production->Queue.IsEmpty()
 			|| !EntriesEqual(Production->Queue[0], Completion.Entry))
 		{
@@ -153,8 +153,8 @@ namespace SeinProductionLocal
 		USeinResourceBPFL::SeinRefund(
 			&World, Completion.Entry.ResourcePayer,
 			Completion.Entry.AtCompletionCost);
-		if (FSeinProductionComponent* Production =
-			World.GetComponentMutable<FSeinProductionComponent>(Producer))
+		if (FSeinProductionPayload* Production =
+			World.GetComponentMutable<FSeinProductionPayload>(Producer))
 		{
 			Production->Queue.Insert(Completion.Entry, 0);
 			Production->CurrentBuildProgress = Completion.OriginalProgress;
@@ -170,8 +170,8 @@ namespace SeinProductionLocal
 		const FSeinProductionQueueEntry& ExpectedFront)
 	{
 		bool bNewlyStalled = false;
-		if (FSeinProductionComponent* Production =
-			World.GetComponentMutable<FSeinProductionComponent>(Producer))
+		if (FSeinProductionPayload* Production =
+			World.GetComponentMutable<FSeinProductionPayload>(Producer))
 		{
 			if (!Production->Queue.IsEmpty()
 				&& EntriesEqual(Production->Queue[0], ExpectedFront)
@@ -215,8 +215,8 @@ namespace SeinProductionLocal
 		}
 
 		FGameplayTag MoveAbilityTag;
-		if (const FSeinAbilityComponent* AbilityComponent =
-			World.GetComponent<FSeinAbilityComponent>(Produced))
+		if (const FSeinAbilityPayload* AbilityComponent =
+			World.GetComponent<FSeinAbilityPayload>(Produced))
 		{
 			if (const USeinAbility* MoveAbility =
 				AbilityComponent->FindMoveAbility(World))
@@ -242,8 +242,8 @@ namespace SeinProductionLocal
 		const FSeinEntity* ProducerEntity = World.GetEntity(Producer);
 		if (ProducerEntity && ProducerEntity->IsAlive())
 		{
-			if (const FSeinProductionComponent* Production =
-				World.GetComponent<FSeinProductionComponent>(Producer);
+			if (const FSeinProductionPayload* Production =
+				World.GetComponent<FSeinProductionPayload>(Producer);
 				Production && !Production->Queue.IsEmpty())
 			{
 				NextClass = Production->Queue[0].ActorClass;
@@ -273,7 +273,7 @@ namespace SeinProductionLocal
  * System: Production
  * Phase: AbilityExecution | Priority: 50
  *
- * Per tick for every entity with FSeinProductionComponent + non-empty Queue:
+ * Per tick for every entity with FSeinProductionPayload + non-empty Queue:
  *   1. Advance CurrentBuildProgress (unless already stalled — stall halts the timer).
  *   2. When progress >= TotalBuildTime, atomically deduct AtCompletionCost and
  *      detach the front entry before spawning/applying it. Failed unit spawns
@@ -294,7 +294,7 @@ public:
 		TArray<FSeinEntityHandle> ReadyProducers;
 		TArray<FSeinEntityHandle> ActiveProducers;
 		const ISeinComponentStorage* ProductionStorage =
-			World.GetComponentStorageRaw(FSeinProductionComponent::StaticStruct());
+			World.GetComponentStorageRaw(FSeinProductionPayload::StaticStruct());
 		if (ProductionStorage)
 		{
 			ReadyProducers.Reserve(ProductionStorage->GetComponentCount());
@@ -303,8 +303,8 @@ public:
 				FSeinEntityHandle Handle, const void* RawComponent)
 			{
 				if (!World.GetEntityPool().IsValid(Handle)) return;
-				const FSeinProductionComponent* ProdComp =
-					static_cast<const FSeinProductionComponent*>(RawComponent);
+				const FSeinProductionPayload* ProdComp =
+					static_cast<const FSeinProductionPayload*>(RawComponent);
 				if (ProdComp && ProdComp->Queue.Num() != 0)
 				{
 					ActiveProducers.Add(Handle);
@@ -312,8 +312,8 @@ public:
 			});
 			for (const FSeinEntityHandle Handle : ActiveProducers)
 			{
-				FSeinProductionComponent* ProdComp =
-					World.GetComponentMutable<FSeinProductionComponent>(Handle);
+				FSeinProductionPayload* ProdComp =
+					World.GetComponentMutable<FSeinProductionPayload>(Handle);
 				if (!ProdComp || ProdComp->Queue.Num() == 0) continue;
 
 				// Advance progress unless we're already parked at 100% waiting on cap.

@@ -4,9 +4,9 @@
 #include "Abilities/SeinAbility.h"
 #include "Abilities/SeinLatentActionManager.h"
 #include "Abilities/SeinMoveToProxy.h"
-#include "Components/SeinAbilityComponent.h"
-#include "Components/SeinMovementComponent.h"
-#include "Components/SeinNavigationComponent.h"
+#include "Components/SeinAbilityPayload.h"
+#include "Components/SeinMovementPayload.h"
+#include "Components/SeinNavigationPayload.h"
 #include "Containers/Ticker.h"
 #include "Data/SeinReplayHeader.h"
 #include "Data/SeinWheeledMovementData.h"
@@ -151,7 +151,7 @@ namespace
 				OutVehicle = World.SpawnAbstractEntity(
 					FFixedTransform(), FSeinPlayerID::Neutral());
 
-				FSeinMovementComponent Movement;
+				FSeinMovementPayload Movement;
 				Movement.MovementClass = FSoftClassPath(
 					USeinWheeledVehicleMovement::StaticClass());
 				Movement.TopSpeed = FFixedPoint::FromInt(900);
@@ -166,7 +166,7 @@ namespace
 				Movement.MovementClassData =
 					FInstancedStruct::Make(Wheeled);
 
-				FSeinNavigationComponent Navigation;
+				FSeinNavigationPayload Navigation;
 				Navigation.FallbackFootprintRadius =
 					FFixedPoint::FromInt(85);
 				Navigation.AcceptanceRadius = FFixedPoint::FromInt(80);
@@ -175,7 +175,7 @@ namespace
 
 				World.AddComponent(OutVehicle, Movement);
 				World.AddComponent(OutVehicle, Navigation);
-				World.AddComponent(OutVehicle, FSeinAbilityComponent());
+				World.AddComponent(OutVehicle, FSeinAbilityPayload());
 				AbilityId = USeinAbilityBPFL::SeinGrantAbility(
 					&World,
 					OutVehicle,
@@ -240,7 +240,7 @@ TEST(MovementPlusReplayFileCheckpointRestoresExactCompletionState,
 			Vehicle = Source->SpawnAbstractEntity(
 				FFixedTransform(), FSeinPlayerID::Neutral());
 
-			FSeinMovementComponent Movement;
+			FSeinMovementPayload Movement;
 			Movement.MovementClass = FSoftClassPath(
 				USeinWheeledVehicleMovement::StaticClass());
 			Movement.TopSpeed = FFixedPoint::FromInt(900);
@@ -255,7 +255,7 @@ TEST(MovementPlusReplayFileCheckpointRestoresExactCompletionState,
 			Movement.MovementClassData =
 				FInstancedStruct::Make(Wheeled);
 
-			FSeinNavigationComponent Navigation;
+			FSeinNavigationPayload Navigation;
 			Navigation.FallbackFootprintRadius =
 				FFixedPoint::FromInt(85);
 			Navigation.AcceptanceRadius = FFixedPoint::FromInt(80);
@@ -264,7 +264,7 @@ TEST(MovementPlusReplayFileCheckpointRestoresExactCompletionState,
 
 			Source->AddComponent(Vehicle, Movement);
 			Source->AddComponent(Vehicle, Navigation);
-			Source->AddComponent(Vehicle, FSeinAbilityComponent());
+			Source->AddComponent(Vehicle, FSeinAbilityPayload());
 			AbilityId = USeinAbilityBPFL::SeinGrantAbility(
 				Source, Vehicle, USeinVehicleGymAbility::StaticClass());
 		},
@@ -320,8 +320,8 @@ TEST(MovementPlusReplayFileCheckpointRestoresExactCompletionState,
 		Source->ComputeCanonicalStateRoot(SourceRoot, Error)));
 	const int32 SourceStateHash = Source->ComputeStateHash();
 	const FSeinEntity* SourceVehicle = Source->GetEntity(Vehicle);
-	const FSeinMovementComponent* SourceMovement =
-		Source->GetComponent<FSeinMovementComponent>(Vehicle);
+	const FSeinMovementPayload* SourceMovement =
+		Source->GetComponent<FSeinMovementPayload>(Vehicle);
 	USeinMovementSubsystem* SourceMovementSubsystem =
 		SourceSpawner.GetWorld().GetSubsystem<USeinMovementSubsystem>();
 	ASSERT_THAT(IsNotNull(SourceVehicle));
@@ -372,8 +372,8 @@ TEST(MovementPlusReplayFileCheckpointRestoresExactCompletionState,
 	ASSERT_THAT(AreEqual(SourceStateHash, Target->ComputeStateHash()));
 
 	const FSeinEntity* TargetVehicle = Target->GetEntity(Vehicle);
-	const FSeinMovementComponent* TargetMovement =
-		Target->GetComponent<FSeinMovementComponent>(Vehicle);
+	const FSeinMovementPayload* TargetMovement =
+		Target->GetComponent<FSeinMovementPayload>(Vehicle);
 	USeinMovementSubsystem* TargetMovementSubsystem =
 		TargetSpawner.GetWorld().GetSubsystem<USeinMovementSubsystem>();
 	ASSERT_THAT(IsNotNull(TargetVehicle));
@@ -455,8 +455,8 @@ TEST(MovementPlusReconnectTransferContinuesToIdenticalCanonicalState,
 		Source->ComputeCanonicalStateRoot(SourceRoot, Error)));
 	const int32 SourceStateHash = Source->ComputeStateHash();
 	const FSeinEntity* SourceVehicle = Source->GetEntity(Vehicle);
-	const FSeinMovementComponent* SourceMovement =
-		Source->GetComponent<FSeinMovementComponent>(Vehicle);
+	const FSeinMovementPayload* SourceMovement =
+		Source->GetComponent<FSeinMovementPayload>(Vehicle);
 	USeinMovementSubsystem* SourceMovementSubsystem =
 		SourceSpawner.GetWorld().GetSubsystem<USeinMovementSubsystem>();
 	ASSERT_THAT(IsNotNull(SourceVehicle));
@@ -504,8 +504,8 @@ TEST(MovementPlusReconnectTransferContinuesToIdenticalCanonicalState,
 	ASSERT_THAT(AreEqual(SourceStateHash, Target->ComputeStateHash()));
 
 	const FSeinEntity* TargetVehicle = Target->GetEntity(Vehicle);
-	const FSeinMovementComponent* TargetMovement =
-		Target->GetComponent<FSeinMovementComponent>(Vehicle);
+	const FSeinMovementPayload* TargetMovement =
+		Target->GetComponent<FSeinMovementPayload>(Vehicle);
 	USeinMovementSubsystem* TargetMovementSubsystem =
 		TargetSpawner.GetWorld().GetSubsystem<USeinMovementSubsystem>();
 	ASSERT_THAT(IsNotNull(TargetVehicle));

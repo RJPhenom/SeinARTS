@@ -7,9 +7,9 @@
  *
  *          Per squad, per tick:
  *            0. (Lazy init, first time only) If the squad entity has an
- *               FSeinSquadComponent but no FSeinCommandBrokerData yet, run
+ *               FSeinSquadPayload but no FSeinCommandBrokerData yet, run
  *               the initial cascade: spawn each slot's Entity, wire the
- *               member back-refs (FSeinSquadMemberComponent +
+ *               member back-refs (FSeinSquadMemberPayload +
  *               FSeinBrokerMembershipData), build the persistent broker
  *               with the per-squad DispatchResolverClass, promote the first
  *               occupant as leader. Detected by absence of broker — no
@@ -43,8 +43,8 @@
 #include "Core/SeinTickPhase.h"
 #include "Core/SeinSystemPriority.h"
 #include "Simulation/SeinWorldSubsystem.h"
-#include "Components/SeinSquadComponent.h"
-#include "Components/SeinSquadMemberComponent.h"
+#include "Components/SeinSquadPayload.h"
+#include "Components/SeinSquadMemberPayload.h"
 #include "Components/SeinCommandBrokerData.h"
 #include "Components/SeinBrokerMembershipData.h"
 #include "Brokers/SeinCommandBrokerResolver.h"
@@ -90,7 +90,7 @@ public:
 		{
 			++EntitiesSeen;
 
-			FSeinSquadComponent* Squad = World.GetComponentMutable<FSeinSquadComponent>(Handle);
+			FSeinSquadPayload* Squad = World.GetComponentMutable<FSeinSquadPayload>(Handle);
 			if (!Squad) return;
 
 			++SquadsFound;
@@ -130,7 +130,7 @@ public:
 				// Resolver class resolution — priority order:
 				//   1. Per-squad explicit class (designer authored their own
 				//      resolver subclass and pointed the squad at it via
-				//      FSeinSquadComponent::DispatchResolverClass). Wins
+				//      FSeinSquadPayload::DispatchResolverClass). Wins
 				//      outright when set and non-abstract.
 				//   2. Project-wide default (USeinARTSSquadSettings::
 				//      DefaultSquadDispatchResolverClass, soft path). Empty by
@@ -221,7 +221,7 @@ public:
 						SlotSnapshot.Entity, MemberXform, OwnerPlayer);
 					if (!Member.IsValid()) { ++SkippedSpawnFail; continue; }
 
-					Squad = World.GetComponentMutable<FSeinSquadComponent>(Handle);
+					Squad = World.GetComponentMutable<FSeinSquadPayload>(Handle);
 					if (!Squad || !Squad->Slots.IsValidIndex(SlotIdx)
 						|| Squad->Slots[SlotIdx].CurrentOccupant.IsValid())
 					{
@@ -236,8 +236,8 @@ public:
 						FSeinSquadReinforcementService::
 							ResolveCanonicalSlotTag(LiveSlot);
 
-					// Wire FSeinSquadMemberComponent (overwrite any AC-injected default).
-					if (FSeinSquadMemberComponent* ExistingMember = World.GetComponentMutable<FSeinSquadMemberComponent>(Member))
+					// Wire FSeinSquadMemberPayload (overwrite any AC-injected default).
+					if (FSeinSquadMemberPayload* ExistingMember = World.GetComponentMutable<FSeinSquadMemberPayload>(Member))
 					{
 						ExistingMember->SquadEntity = Handle;
 						ExistingMember->SlotIndex = SlotIdx;
@@ -245,7 +245,7 @@ public:
 					}
 					else
 					{
-						FSeinSquadMemberComponent NewMember;
+						FSeinSquadMemberPayload NewMember;
 						NewMember.SquadEntity = Handle;
 						NewMember.SlotIndex = SlotIdx;
 						NewMember.SlotTag = SlotTag;
@@ -488,7 +488,7 @@ public:
 						for (const FSeinEntityHandle& Member : Squad->GetLiveMembers())
 						{
 							FFixedVector Offset = FFixedVector::ZeroVector;
-							if (const FSeinSquadMemberComponent* MemberData = World.GetComponent<FSeinSquadMemberComponent>(Member))
+							if (const FSeinSquadMemberPayload* MemberData = World.GetComponent<FSeinSquadMemberPayload>(Member))
 							{
 								if (Squad->Slots.IsValidIndex(MemberData->SlotIndex))
 								{
@@ -634,7 +634,7 @@ public:
 								// Spawn may grow component storage; never retain Slot,
 								// Squad, or Front references across it.
 								Squad = World.GetComponentMutable<
-									FSeinSquadComponent>(Handle);
+									FSeinSquadPayload>(Handle);
 								if (!Squad
 									|| Squad->ReinforceQueue.IsEmpty()
 									|| Squad->ReinforceQueue[0].RequestID
@@ -674,9 +674,9 @@ public:
 								const FGameplayTag SlotTag =
 									FSeinSquadReinforcementService::
 										ResolveCanonicalSlotTag(LiveSlot);
-								if (FSeinSquadMemberComponent* MemberData =
+								if (FSeinSquadMemberPayload* MemberData =
 									World.GetComponentMutable<
-										FSeinSquadMemberComponent>(NewMember))
+										FSeinSquadMemberPayload>(NewMember))
 								{
 									MemberData->SquadEntity = Handle;
 									MemberData->SlotIndex = SlotIdx;
@@ -684,7 +684,7 @@ public:
 								}
 								else
 								{
-									FSeinSquadMemberComponent NewData;
+									FSeinSquadMemberPayload NewData;
 									NewData.SquadEntity = Handle;
 									NewData.SlotIndex = SlotIdx;
 									NewData.SlotTag = SlotTag;

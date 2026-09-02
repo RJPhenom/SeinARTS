@@ -2,7 +2,7 @@
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinCollisionObjectTypeDetails.h
  * @brief   Property-type customization for FSeinCollisionObjectType (the Object
- *          Type field on FSeinExtentsComponent's collision section). Renders it
+ *          Type field on FSeinExtentsPayload's collision section). Renders it
  *          as a dropdown of the channel names declared in
  *          USeinARTSCoreSettings::CollisionChannels (plus None), instead of a
  *          free-text FName box.

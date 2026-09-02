@@ -23,7 +23,7 @@ namespace SeinCoverTags
 	SEINARTSCOVER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Cover);
 
 	// --- Cover qualities ---
-	// Designers stamp one of these on FSeinCoverComponent::QualityTag (one
+	// Designers stamp one of these on FSeinCoverPayload::QualityTag (one
 	// tag per provider, applied to all of that provider's slots + area volume)
 	// to drive the preview decal color and combat damage modifiers. Extend in
 	// project tags with project-specific sub-tags as needed (e.g.

@@ -61,7 +61,7 @@ public:
 	/** When true, the picker is the entity bridge's ComponentData picker. The
 	 *  filter then requires entity-component eligibility per
 	 *  `USeinSimComponentFactory::IsSeinEntityComponentStruct` — native structs
-	 *  must subclass FSeinComponent, UDSes must carry the SeinEntityComponent
+	 *  must subclass FSeinPayload, UDSes must carry the SeinEntityComponent
 	 *  meta, and SeinSubData-marked structs are excluded outright.
 	 *  Set via `meta = (SeinEntityComponentsOnly)` on the FInstancedStruct
 	 *  (or TArray<FInstancedStruct>) property. */
@@ -89,7 +89,7 @@ public:
 		}
 
 		// Entity-bridge ComponentData path: strictest filter. Requires
-		// FSeinComponent inheritance (natives) or SeinEntityComponent meta
+		// FSeinPayload inheritance (natives) or SeinEntityComponent meta
 		// (UDSes), AND SeinDeterministic in both cases. Excludes
 		// SeinSubData-marked structs (per-class movement sub-data etc.).
 		if (bRestrictToEntityComponents)
@@ -100,7 +100,7 @@ public:
 		// Sein-restricted path: gate by the SeinDeterministic UField meta.
 		// Covers both native USTRUCTs marked via `USTRUCT(meta = (SeinDeterministic))`
 		// and UDSes tagged by USeinSimComponentFactory on creation. Sub-data
-		// pickers (e.g. FSeinMovementComponent::MovementClassData) use this
+		// pickers (e.g. FSeinMovementPayload::MovementClassData) use this
 		// — they want any deterministic struct, including SeinSubData ones.
 		if (bRestrictToSeinDeterministic)
 		{
@@ -178,7 +178,7 @@ void FSeinInstancedStructDetails::CustomizeHeader(
 	PropertyHandle->SetOnPropertyValueChanged(
 		FSimpleDelegate::CreateSP(this, &FSeinInstancedStructDetails::RefreshCachedScriptStruct));
 
-	// Sibling-class data-struct mode (e.g. FSeinMovementComponent::MovementClassData
+	// Sibling-class data-struct mode (e.g. FSeinMovementPayload::MovementClassData
 	// keyed to MovementClass): bind the sibling soft-class property so this struct
 	// auto-swaps when the class changes, and reconcile to the current class now.
 	static const FName NAME_DataStructFromClass("SeinDataStructFromClass");

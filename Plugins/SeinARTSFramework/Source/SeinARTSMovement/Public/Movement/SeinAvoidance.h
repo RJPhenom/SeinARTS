@@ -5,7 +5,7 @@
  *
  *          USeinAvoidance owns one tick's full SOFT local steering pass for one
  *          world: per moving unit it reads a start-of-tick neighbour snapshot and
- *          writes that unit's avoidance OUTPUT (FSeinMovementComponent::AvoidanceOutput
+ *          writes that unit's avoidance OUTPUT (FSeinMovementPayload::AvoidanceOutput
  *          — a lateral steer + a speed-yield scale). It is the ONLY thing the PreTick
  *          avoidance system (FSeinAvoidanceSystem) talks to: that system is a thin
  *          delegator that calls ComputeAvoidance() once per tick, at PreTick priority
@@ -73,7 +73,7 @@ public:
 
 	/** Run one simulation tick's FULL local-avoidance pass: for each moving unit,
 	 *  read the start-of-tick neighbour snapshot and write that unit's
-	 *  FSeinMovementComponent::AvoidanceOutput (lateral steer + speed-yield scale).
+	 *  FSeinMovementPayload::AvoidanceOutput (lateral steer + speed-yield scale).
 	 *  Called once per PreTick by FSeinAvoidanceSystem. Default: no-op (leaves every
 	 *  unit's output at its zero-steer / unity-scale default → a world with no
 	 *  avoidance). Subclasses override. */
