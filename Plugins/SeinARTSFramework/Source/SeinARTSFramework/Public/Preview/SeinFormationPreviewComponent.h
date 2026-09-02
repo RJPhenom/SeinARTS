@@ -1,18 +1,25 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
- * @file    SeinFormationPreviewComponent.h
- * @brief   Render-side opt-in for the on-ground destination preview. ADDING this
- *          component to a unit (or squad) Blueprint is what makes that unit draw
- *          destination markers — there is no project-level enable switch.
  *
- *          PURE PRESENTATION DATA. This is a plain UActorComponent on the visual
- *          actor, NOT a sim component: it never enters ComponentData, canonical
- *          state, snapshots, or the config fingerprint, and the sim never reads
- *          it. Destination computation (the formation layout dry-run and the
- *          frozen destination artifact the commit reuses) runs identically
- *          whether or not any selected unit carries this component — the
- *          component only decides which of the already-computed markers are
- *          drawn, and with which renderer.
+ * @file         SeinFormationPreviewComponent.h
+ * @author       RJ Macklem
+ * @created      02 Sep 2026
+ * @latest       02 Sep 2026
+ * @brief        Render-side opt-in for the on-ground destination preview: adding
+ *               this component to a unit (or squad) Blueprint is what makes it
+ *               draw destination markers — there is no project-level enable
+ *               switch. Its Preview Actor Class picks the renderer.
+ *
+ *               Pure presentation data on the visual actor, never a sim
+ *               component: it does not enter ComponentData, canonical state,
+ *               snapshots, or the config fingerprint. Destination computation
+ *               (the formation layout dry-run and the frozen destination
+ *               artifact the commit reuses) runs identically whether or not any
+ *               selected unit carries this component — it only decides which of
+ *               the already-computed markers are drawn, and with which renderer.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
  */
 
 #pragma once
