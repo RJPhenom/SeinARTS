@@ -1,6 +1,10 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
+ *
  * @file    SeinFormationPreviewSubsystem.h
+ * @author  RJ Macklem
+ * @created 21 Aug 2026
+ * @latest  02 Sep 2026
  * @brief   Per-local-player coordinator for the destination preview.
  *
  *          BASE feature (ported from the Cover extension). Listens to
@@ -24,6 +28,9 @@
  *          dev kill switch for the drawing). The framework owns this; Cover/Squad
  *          are consumers. Quality tinting is entirely optional and supplied by
  *          whoever binds the provider delegate.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
  */
 
 #pragma once

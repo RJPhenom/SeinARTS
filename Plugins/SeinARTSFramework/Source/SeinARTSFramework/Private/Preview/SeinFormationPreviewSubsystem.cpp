@@ -1,9 +1,16 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
+ *
  * @file    SeinFormationPreviewSubsystem.cpp
+ * @author  RJ Macklem
+ * @created 21 Aug 2026
+ * @latest  02 Sep 2026
  * @brief   Base destination-preview coordinator (ported from the Cover extension;
  *          cover-quality query replaced by the generic PreviewQualityProvider hook
  *          on USeinWorldSubsystem, which the Cover extension binds).
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
  */
 
 #include "Preview/SeinFormationPreviewSubsystem.h"
