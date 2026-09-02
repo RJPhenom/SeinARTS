@@ -38,7 +38,7 @@ Editor companion modules load after `SeinARTSEditor` so registry hooks are avail
   and cache keys must include the generation, not only the slot index.
 - Runtime component storage is reflection-backed `FSeinGenericComponentStorage`, keyed by
   `UScriptStruct*`. Typed accessors are facades over the raw storage.
-- `ASeinActor` owns the `USeinEntityComponent` actor bridge. Its `ComponentData` is an authoring
+- `ASeinActor` owns the `USeinEntityBridgeComponent` actor bridge. Its `ComponentData` is an authoring
   template copied into sim storage at spawn; it is not a live mirror of runtime components.
 - Blueprint CDO component discovery must use `AActor::GetActorClassDefaultComponents`, which
   includes native and Blueprint SCS components. `GetComponents` on a CDO is insufficient.
@@ -88,7 +88,7 @@ Economy behavior is composed through abilities rather than a hardcoded worker ty
 worker cargo live in deterministic components accessed through typed component nodes; dropoff calls
 **Grant Income** from an authorized simulation callback. Income validates the whole resource map
 atomically and saturates valid uncapped overflow. Worker construction calls **Add Construction
-Progress** against `FSeinConstructionComponent`; only positive, non-overflowing increments mutate,
+Progress** against `FSeinConstructionPayload`; only positive, non-overflowing increments mutate,
 completion removes the component and releases only the framework-owned
 `State.UnderConstruction` grant. Designer-authored ownership of that tag remains intact.
 

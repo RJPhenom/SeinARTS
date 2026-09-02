@@ -199,7 +199,7 @@ are physically independent plugins. Their only cross-extension integration lives
 
 1. **Sim/render separation is sacred.** Sim modules never reference the visual layer. The render
    layer reads from the sim and reacts to visual events. The single sanctioned bridge is
-   `USeinEntityComponent` (the **entity bridge**) on `ASeinActor`. Data flows sim → render only;
+   `USeinEntityBridgeComponent` (the **entity bridge**) on `ASeinActor`. Data flows sim → render only;
    the render/input layer feeds the sim *exclusively* through the command buffer.
 
 2. **Determinism is non-negotiable.** Sim code uses `FFixedPoint` / `FFixedVector` /
@@ -220,7 +220,7 @@ are physically independent plugins. Their only cross-extension integration lives
    beyond the activation/cancel plumbing.
 
 5. **The Blueprint IS the unit.** A unit type is a Blueprint subclass of `ASeinActor`. Sim
-   components are authored on the actor's `USeinEntityComponent` (the entity bridge, auto-attached
+   components are authored on the actor's `USeinEntityBridgeComponent` (the entity bridge, auto-attached
    by `ASeinActor`'s constructor) via its `ComponentData` array — a `TArray<FInstancedStruct>`
    where each entry is an `FSein…Component` payload struct. At spawn, `USeinWorldSubsystem` walks
    the bridge's `ComponentData` and copies each entry into reflection-backed component storage.
@@ -254,8 +254,14 @@ are physically independent plugins. Their only cross-extension integration lives
 ## Code conventions (all plugins)
 
 - **Prefixes:** sim USTRUCTs `FSein…`, sim UObjects `USein…`, actors `ASein…`, fixed-point types
-  `FFixed…`. Component **payload** structs carry the `Component` suffix
-  (`FSeinAbilityComponent`, `FSeinExtentsComponent`, …). Blueprint function libraries carry the
+  `FFixed…`. Component **payload** structs carry the `Payload` suffix
+  (`FSeinAbilityPayload`, `FSeinExtentsPayload`, …; base `FSeinPayload`) — they are the baked
+  wire format injected into sim storage. The designer-facing authoring surface is the
+  data-only ActorComponents (`USeinExtentsComponent`, …, base `USeinDataComponent` until it
+  takes the `USeinEntityComponent` name post-resave), which carry the `Component` suffix and
+  deliberately NO `DisplayName` meta: the engine derives the Add-menu label ("Sein Extents")
+  and hierarchy variable name ("SeinExtents") from the class name, exactly like
+  `USkeletalMeshComponent` → "Skeletal Mesh". Blueprint function libraries carry the
   `BPFL` suffix.
 - **Components are pure data.** No event graphs, no state-mutating methods. Logic lives in
   abilities, effects, AI controllers, command brokers, and sim systems.
@@ -295,6 +301,6 @@ Known stale-comment traps (re-grounded against live code):
 - **Squads are not abstract.** A squad is a real lightweight (non-abstract) `ASeinActor` so banners
   can track its centroid — older "abstract entity" wording is obsolete.
 - **`SpawnEntity`'s archetype comment is stale** — identity/cost come from injected
-  `FSeinIdentityComponent` / `FSeinProducibleComponent`, not the excised `USeinArchetypeDefinition`.
+  `FSeinIdentityPayload` / `FSeinProduciblePayload`, not the excised `USeinArchetypeDefinition`.
 
 When you find a docstring that contradicts the code, fix the docstring as part of your change.

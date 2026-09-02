@@ -38,7 +38,19 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "Components/SeinAbilityPayload.h"
+#include "Components/SeinActiveEffectsPayload.h"
+#include "Components/SeinChildTransformsPayload.h"
+#include "Components/SeinConstructionPayload.h"
+#include "Components/SeinEntityControlPayload.h"
 #include "Components/SeinExtentsPayload.h"
+#include "Components/SeinIdentityPayload.h"
+#include "Components/SeinMovementPayload.h"
+#include "Components/SeinNavigationPayload.h"
+#include "Components/SeinProduciblePayload.h"
+#include "Components/SeinProductionPayload.h"
+#include "Components/SeinSquadMemberPayload.h"
+#include "Components/SeinSquadPayload.h"
 #include "StructUtils/InstancedStruct.h"
 #include "SeinDataComponent.generated.h"
 
@@ -51,8 +63,7 @@ class UUserDefinedStruct;
  * Unreal component semantics. The bridge bakes enabled components into its
  * ComponentData array, which remains the injected runtime carrier.
  */
-UCLASS(Abstract, Blueprintable, ClassGroup = (SeinARTS),
-	meta = (DisplayName = "Sein Data Component"))
+UCLASS(Abstract, Blueprintable, ClassGroup = (SeinARTS))
 class SEINARTSCOREENTITY_API USeinDataComponent : public UActorComponent
 {
 	GENERATED_BODY()
@@ -97,29 +108,146 @@ public:
 #endif
 };
 
-/**
- * Native authoring component for the entity's physical extents. The payload
- * struct is embedded directly — per-field instance overrides and Blueprint
- * inheritance work property-by-property with zero mirror drift.
- *
- * NAMING: UHT forbids a U class and an F struct sharing one engine name, so
- * native authoring components carry the DataComponent suffix in C++ while the
- * payload structs keep their names. Designers only ever see the DisplayName.
- * (Productization may instead rename payload structs to *Payload and reclaim
- * the short class names — RJ's call, cosmetic either way.)
- */
-UCLASS(NotBlueprintable, ClassGroup = (SeinARTS),
-	meta = (BlueprintSpawnableComponent, DisplayName = "Extents Component"))
-class SEINARTSCOREENTITY_API USeinExtentsDataComponent : public USeinDataComponent
+// =============================================================================
+// Native authoring components
+// =============================================================================
+//
+// NAMING CONTRACT (blessed 2026-09-01): classes carry the exact designer-
+// facing names and NO DisplayName metas — the engine derives both surfaces
+// from the class name itself (Add menu: prefix-stripped, "Component"-chopped,
+// camel-split → "Sein Extents"; hierarchy variable: prefix/suffix-stripped →
+// "SeinExtents"), identical to how USkeletalMeshComponent becomes
+// "Skeletal Mesh" / "SkeletalMesh". The payload structs vacated these names
+// (FSein*Component → FSein*Payload) because UHT forbids a U class and an F
+// struct sharing one engine name.
+//
+// Each concrete embeds its payload struct directly: per-field Blueprint
+// inheritance and per-field instance overrides are native engine behavior,
+// with zero mirror drift. FSeinFogVisibilityPayload has no authoring
+// component — it is auto-injected from the bridge's top-level fields.
+
+#define SEIN_DECLARE_AUTHORED_PAYLOAD(MemberName, PayloadType) \
+public: \
+	UPROPERTY(EditAnywhere, Category = "SeinARTS", meta = (ShowOnlyInnerProperties)) \
+	PayloadType MemberName; \
+	virtual const UScriptStruct* GetPayloadStruct() const override \
+	{ \
+		return PayloadType::StaticStruct(); \
+	} \
+	virtual bool WritePayload(FInstancedStruct& Out) const override \
+	{ \
+		Out.InitializeAs<PayloadType>(MemberName); \
+		return true; \
+	}
+
+/** Physical extents (footprint / bounds) of the entity. */
+UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComponent))
+class SEINARTSCOREENTITY_API USeinExtentsComponent : public USeinDataComponent
 {
 	GENERATED_BODY()
 
 public:
 	/** Authored extents payload, baked verbatim into ComponentData. */
 	UPROPERTY(EditAnywhere, Category = "SeinARTS",
-		meta = (DisplayName = "Extents", ShowOnlyInnerProperties))
+		meta = (ShowOnlyInnerProperties))
 	FSeinExtentsPayload Extents;
 
 	virtual const UScriptStruct* GetPayloadStruct() const override;
 	virtual bool WritePayload(FInstancedStruct& Out) const override;
+};
+
+/** Abilities this entity can activate. */
+UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComponent))
+class SEINARTSCOREENTITY_API USeinAbilitiesComponent : public USeinDataComponent
+{
+	GENERATED_BODY()
+	SEIN_DECLARE_AUTHORED_PAYLOAD(Abilities, FSeinAbilityPayload)
+};
+
+/** Identity: display name, description, icons, identity tag. */
+UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComponent))
+class SEINARTSCOREENTITY_API USeinIdentityComponent : public USeinDataComponent
+{
+	GENERATED_BODY()
+	SEIN_DECLARE_AUTHORED_PAYLOAD(Identity, FSeinIdentityPayload)
+};
+
+/** Movement configuration (mode class + tuning sub-data). */
+UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComponent))
+class SEINARTSCOREENTITY_API USeinMovementComponent : public USeinDataComponent
+{
+	GENERATED_BODY()
+	SEIN_DECLARE_AUTHORED_PAYLOAD(Movement, FSeinMovementPayload)
+};
+
+/** Navigation configuration (layer mask, footprint routing). */
+UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComponent))
+class SEINARTSCOREENTITY_API USeinNavigationComponent : public USeinDataComponent
+{
+	GENERATED_BODY()
+	SEIN_DECLARE_AUTHORED_PAYLOAD(Navigation, FSeinNavigationPayload)
+};
+
+/** Production queue capability (this entity can produce). */
+UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComponent))
+class SEINARTSCOREENTITY_API USeinProductionComponent : public USeinDataComponent
+{
+	GENERATED_BODY()
+	SEIN_DECLARE_AUTHORED_PAYLOAD(Production, FSeinProductionPayload)
+};
+
+/** Producible capability (this entity can be produced; costs/time). */
+UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComponent))
+class SEINARTSCOREENTITY_API USeinProducibleComponent : public USeinDataComponent
+{
+	GENERATED_BODY()
+	SEIN_DECLARE_AUTHORED_PAYLOAD(Producible, FSeinProduciblePayload)
+};
+
+/** Construction-site state (built by workers over time). */
+UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComponent))
+class SEINARTSCOREENTITY_API USeinConstructionComponent : public USeinDataComponent
+{
+	GENERATED_BODY()
+	SEIN_DECLARE_AUTHORED_PAYLOAD(Construction, FSeinConstructionPayload)
+};
+
+/** Entity control routing (selectability, command brokering). */
+UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComponent))
+class SEINARTSCOREENTITY_API USeinEntityControlComponent : public USeinDataComponent
+{
+	GENERATED_BODY()
+	SEIN_DECLARE_AUTHORED_PAYLOAD(EntityControl, FSeinEntityControlPayload)
+};
+
+/** Active-effects storage seed. */
+UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComponent))
+class SEINARTSCOREENTITY_API USeinActiveEffectsComponent : public USeinDataComponent
+{
+	GENERATED_BODY()
+	SEIN_DECLARE_AUTHORED_PAYLOAD(ActiveEffects, FSeinActiveEffectsPayload)
+};
+
+/** Child transform sockets (turrets, hardpoints, attachments). */
+UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComponent))
+class SEINARTSCOREENTITY_API USeinChildTransformsComponent : public USeinDataComponent
+{
+	GENERATED_BODY()
+	SEIN_DECLARE_AUTHORED_PAYLOAD(ChildTransforms, FSeinChildTransformsPayload)
+};
+
+/** Squad definition (slots, formation, reinforcement). */
+UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComponent))
+class SEINARTSCOREENTITY_API USeinSquadComponent : public USeinDataComponent
+{
+	GENERATED_BODY()
+	SEIN_DECLARE_AUTHORED_PAYLOAD(Squad, FSeinSquadPayload)
+};
+
+/** Squad-member linkage for entities that join squads. */
+UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComponent))
+class SEINARTSCOREENTITY_API USeinSquadMemberComponent : public USeinDataComponent
+{
+	GENERATED_BODY()
+	SEIN_DECLARE_AUTHORED_PAYLOAD(SquadMember, FSeinSquadMemberPayload)
 };

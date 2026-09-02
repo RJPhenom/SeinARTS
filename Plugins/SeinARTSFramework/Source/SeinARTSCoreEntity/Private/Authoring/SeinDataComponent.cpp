@@ -106,12 +106,12 @@ void USeinDataComponent::PostEditChangeProperty(FPropertyChangedEvent& PropertyC
 }
 #endif
 
-const UScriptStruct* USeinExtentsDataComponent::GetPayloadStruct() const
+const UScriptStruct* USeinExtentsComponent::GetPayloadStruct() const
 {
 	return FSeinExtentsPayload::StaticStruct();
 }
 
-bool USeinExtentsDataComponent::WritePayload(FInstancedStruct& Out) const
+bool USeinExtentsComponent::WritePayload(FInstancedStruct& Out) const
 {
 	Out.InitializeAs<FSeinExtentsPayload>(Extents);
 	return true;
