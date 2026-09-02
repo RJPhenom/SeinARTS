@@ -16,7 +16,6 @@
 #include "Components/SeinCommandBrokerData.h"
 #include "Components/SeinMovementComponent.h"
 #include "Components/SeinNavigationComponent.h"
-#include "Components/SeinSquadComponent.h"
 #include "Components/SeinSquadMemberComponent.h"
 #include "Preview/SeinFormationPreviewSubsystem.h"
 #include "Abilities/SeinTargeterTypes.h"
@@ -1472,19 +1471,15 @@ void ASeinPlayerController::IssueSmartCommandEx(
 		if (const FSeinCommandBrokerData* Broker =
 			Subsystem->GetComponent<FSeinCommandBrokerData>(Handle))
 		{
-			if (const FSeinSquadComponent* Squad =
-				Subsystem->GetComponent<FSeinSquadComponent>(Handle);
-				Squad && !Squad->bShowFormationPreview)
-			{
-				bArtifactEligible = false;
-				break;
-			}
+			// Eligibility is about destination opinions (navigation components),
+			// never about render opt-in: whether a unit draws preview markers (its
+			// Formation Preview Component) must not change the command payload.
 			for (const FSeinEntityHandle& Member : Broker->Members)
 			{
 				if (!Subsystem->IsEntityAlive(Member)) continue;
 				const FSeinNavigationComponent* Navigation =
 					Subsystem->GetComponent<FSeinNavigationComponent>(Member);
-				if (!Navigation || !Navigation->bShowNavigationPreview)
+				if (!Navigation)
 				{
 					bArtifactEligible = false;
 					break;
@@ -1503,7 +1498,7 @@ void ASeinPlayerController::IssueSmartCommandEx(
 		{
 			const FSeinNavigationComponent* Navigation =
 				Subsystem->GetComponent<FSeinNavigationComponent>(Handle);
-			if (!Navigation || !Navigation->bShowNavigationPreview)
+			if (!Navigation)
 			{
 				bArtifactEligible = false;
 				break;
