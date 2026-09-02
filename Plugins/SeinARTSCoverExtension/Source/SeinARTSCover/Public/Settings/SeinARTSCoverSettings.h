@@ -50,9 +50,10 @@ public:
 				MetaClass = "/Script/SeinARTSCover.SeinCoverSystem"))
 	FSoftClassPath CoverSystemClass;
 
-	// NOTE: FormationPreviewActorClass + bEnableFormationPreview moved to
-	// USeinARTSCoreSettings ("Formation Preview" category) — the destination preview
-	// is now a base-framework feature. Cover augments it via the cover-quality hook
+	// NOTE: the destination preview is a base-framework feature. Units opt in
+	// render-side via USeinFormationPreviewComponent on their Blueprints;
+	// USeinARTSCoreSettings::FormationPreviewActorClass supplies the default
+	// renderer. Cover augments it via the cover-quality hook
 	// (USeinWorldSubsystem::PreviewQualityProvider, bound in USeinCoverSubsystem).
 
 	/**
