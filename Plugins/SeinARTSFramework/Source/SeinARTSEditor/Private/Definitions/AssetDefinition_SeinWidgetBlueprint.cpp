@@ -33,8 +33,12 @@ TSoftClassPtr<UObject> UAssetDefinition_SeinWidgetBlueprint::GetAssetClass() con
 
 TConstArrayView<FAssetCategoryPath> UAssetDefinition_SeinWidgetBlueprint::GetAssetCategories() const
 {
+	// Section (not sub-menu) — renders under a grey "User Interface" header
+	// inside the SeinARTS flyout, alongside the sections in SeinAssetDefinitions.cpp.
 	static const TArray<FAssetCategoryPath, TFixedAllocator<1>> Categories = {
-		FAssetCategoryPath(LOCTEXT("SeinARTSCategory", "SeinARTS"))
+		FAssetCategoryPath(
+			FAssetCategoryPath(LOCTEXT("SeinARTSCategory", "SeinARTS")),
+			FCategoryPath(LOCTEXT("SeinUserInterfaceSection", "User Interface"), ECategoryMenuType::Section))
 	};
 	return Categories;
 }

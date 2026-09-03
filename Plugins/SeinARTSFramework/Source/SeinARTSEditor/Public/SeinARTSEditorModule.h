@@ -13,7 +13,6 @@
 #include "AssetTypeCategories.h"
 #include "Delegates/Delegate.h"
 
-class IAssetTypeActions;
 class FAutoConsoleCommand;
 class FSeinDeterministicStructValidator;
 class FSeinSimulationContentCookIntegration;
@@ -96,11 +95,8 @@ public:
 	}
 
 private:
-	void RegisterAssetTypeActions();
-	void UnregisterAssetTypeActions();
 	void ReleaseModuleOwnedState();
 
-	TArray<TSharedPtr<IAssetTypeActions>> RegisteredActions;
 	TSharedPtr<FGraphPanelPinFactory> SeinPinFactory;
 	TUniquePtr<FSeinDeterministicStructValidator> UDSValidator;
 	TUniquePtr<FSeinSimulationContentPIEAuthorizer>
