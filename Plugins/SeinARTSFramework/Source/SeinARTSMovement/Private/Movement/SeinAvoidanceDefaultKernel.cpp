@@ -136,6 +136,110 @@ namespace
 		FFixedPoint Radius;
 	};
 
+	enum class ENeighborSkipReason : uint8
+	{
+		None,
+		Idle,
+		Weight,
+		ZeroDist,
+		Behind,
+		NotClosing,
+		PastGoal,
+		ZeroRadius,
+		Far,
+	};
+
+	struct FNeighborGateOutput
+	{
+		FFixedVector ToOther;
+		FFixedPoint DistanceSquared;
+		FFixedPoint Distance;
+		FFixedPoint OtherRadius;
+		FFixedPoint FalloffRange;
+		FFixedPoint Falloff;
+		bool bOtherIdle = false;
+	};
+
+	static ENeighborSkipReason ClassifyIndividualNeighbor(
+		const FFixedVector& SelfPosition,
+		const FFixedVector& SelfHeading,
+		const FFixedVector& SelfVelocity,
+		FFixedPoint SelfGoalDistanceSquared,
+		FFixedPoint SelfRadius,
+		int32 SelfAvoidanceWeight,
+		bool bSelfAvoidSameWeights,
+		bool bResolveThroughIdlers,
+		FFixedPoint FalloffRadii,
+		const ISeinComponentStorage* NavStorage,
+		const ISeinComponentStorage* ExtentsStorage,
+		FSeinEntityHandle OtherHandle,
+		const FSeinEntity& OtherEntity,
+		const FSeinMovementPayload& OtherMovement,
+		FNeighborGateOutput& Out)
+	{
+		Out.bOtherIdle = !OtherMovement.bHasTarget;
+		if (Out.bOtherIdle && !bResolveThroughIdlers)
+		{
+			return ENeighborSkipReason::Idle;
+		}
+		const bool bQualifies = bSelfAvoidSameWeights
+			? OtherMovement.AvoidanceWeight >= SelfAvoidanceWeight
+			: OtherMovement.AvoidanceWeight > SelfAvoidanceWeight;
+		if (!bQualifies)
+		{
+			return ENeighborSkipReason::Weight;
+		}
+		Out.ToOther = OtherEntity.Transform.GetLocation() - SelfPosition;
+		Out.ToOther.Z = FFixedPoint::Zero;
+		Out.DistanceSquared = Out.ToOther.SizeSquared();
+		if (Out.DistanceSquared <= FFixedPoint::Epsilon)
+		{
+			return ENeighborSkipReason::ZeroDist;
+		}
+		if (Out.ToOther.X * SelfHeading.X + Out.ToOther.Y * SelfHeading.Y
+			<= FFixedPoint::Zero)
+		{
+			return ENeighborSkipReason::Behind;
+		}
+		const FFixedVector RelativeVelocity(
+			SelfVelocity.X - OtherMovement.Velocity.X,
+			SelfVelocity.Y - OtherMovement.Velocity.Y,
+			FFixedPoint::Zero);
+		if (Out.ToOther.X * RelativeVelocity.X
+				+ Out.ToOther.Y * RelativeVelocity.Y
+			<= FFixedPoint::Zero)
+		{
+			return ENeighborSkipReason::NotClosing;
+		}
+		if (SelfGoalDistanceSquared > FFixedPoint::Zero
+			&& Out.DistanceSquared >= SelfGoalDistanceSquared)
+		{
+			return ENeighborSkipReason::PastGoal;
+		}
+		const FSeinNavigationPayload* OtherNavigation = NavStorage
+			? static_cast<const FSeinNavigationPayload*>(
+				NavStorage->GetComponentRaw(OtherHandle))
+			: nullptr;
+		const FSeinExtentsPayload* OtherExtents = ExtentsStorage
+			? static_cast<const FSeinExtentsPayload*>(
+				ExtentsStorage->GetComponentRaw(OtherHandle))
+			: nullptr;
+		Out.OtherRadius = USeinMovement::ResolveCollisionRadius(
+			OtherExtents, OtherNavigation);
+		if (Out.OtherRadius <= FFixedPoint::Zero)
+		{
+			return ENeighborSkipReason::ZeroRadius;
+		}
+		Out.Distance = SeinMath::Sqrt(Out.DistanceSquared);
+		Out.FalloffRange = (SelfRadius + Out.OtherRadius) * FalloffRadii;
+		if (Out.Distance >= Out.FalloffRange)
+		{
+			return ENeighborSkipReason::Far;
+		}
+		Out.Falloff = FFixedPoint::One - (Out.Distance / Out.FalloffRange);
+		return ENeighborSkipReason::None;
+	}
+
 	struct FAvoidanceWorkerParameters
 	{
 		USeinWorldSubsystem& World;
@@ -367,7 +471,8 @@ namespace
 		const FSeinMovementPayload& Move,
 		const FFixedVector& Velocity,
 		FFixedPoint MovingSpeedFloor,
-		FFixedPoint FalloffRadii)
+		FFixedPoint FalloffRadii,
+		bool bResolveThroughIdlers)
 	{
 		if (!Move.bHasTarget
 			|| !UE_LOG_ACTIVE(LogSeinAvoidance, Verbose)
@@ -418,14 +523,14 @@ namespace
 		int32 Kept = 0;
 		int32 Static = 0;
 		int32 Group = 0;
-		int32 IdleTrue = 0;
-		int32 IdlePinned = 0;
+		int32 Idle = 0;
 		int32 Weight = 0;
 		int32 Behind = 0;
 		int32 NotClosing = 0;
 		int32 PastGoal = 0;
 		int32 Far = 0;
 		FFixedPoint MinDistanceSquared = FFixedPoint::FromInt(999999);
+		const FFixedPoint GoalDistanceSquared = GoalDistance * GoalDistance;
 		for (const FSeinEntityHandle& OtherHandle : Neighbors)
 		{
 			const FSeinEntity* OtherEntity =
@@ -463,72 +568,38 @@ namespace
 				++Group;
 				continue;
 			}
-			if (OtherMove->Velocity.SizeSquared()
-				<= MovingSpeedFloor * MovingSpeedFloor)
+
+			FNeighborGateOutput Gate;
+			const ENeighborSkipReason Reason = ClassifyIndividualNeighbor(
+				Position, Heading, Velocity,
+				GoalDistanceSquared, Radius,
+				Move.AvoidanceWeight, Move.bAvoidSameWeights,
+				bResolveThroughIdlers, FalloffRadii,
+				NavStorage, ExtentsStorage,
+				OtherHandle, *OtherEntity, *OtherMove, Gate);
+			switch (Reason)
 			{
-				OtherMove->bHasTarget ? ++IdlePinned : ++IdleTrue;
-				continue;
-			}
-			const bool bQualifies = Move.bAvoidSameWeights
-				? OtherMove->AvoidanceWeight >= Move.AvoidanceWeight
-				: OtherMove->AvoidanceWeight > Move.AvoidanceWeight;
-			if (!bQualifies)
-			{
-				++Weight;
-				continue;
-			}
-			if (ToOther.X * Heading.X + ToOther.Y * Heading.Y
-				<= FFixedPoint::Zero)
-			{
-				++Behind;
-				continue;
-			}
-			const FFixedVector RelativeVelocity(
-				Velocity.X - OtherMove->Velocity.X,
-				Velocity.Y - OtherMove->Velocity.Y,
-				FFixedPoint::Zero);
-			if (ToOther.X * RelativeVelocity.X
-					+ ToOther.Y * RelativeVelocity.Y
-				<= FFixedPoint::Zero)
-			{
-				++NotClosing;
-				continue;
-			}
-			if (GoalDistance > FFixedPoint::Zero
-				&& DistanceSquared >= GoalDistance * GoalDistance)
-			{
-				++PastGoal;
-				continue;
-			}
-			const FSeinNavigationPayload* OtherNavigation = NavStorage
-				? static_cast<const FSeinNavigationPayload*>(
-					NavStorage->GetComponentRaw(OtherHandle))
-				: nullptr;
-			const FSeinExtentsPayload* OtherExtents = ExtentsStorage
-				? static_cast<const FSeinExtentsPayload*>(
-					ExtentsStorage->GetComponentRaw(OtherHandle))
-				: nullptr;
-			const FFixedPoint OtherRadius =
-				USeinMovement::ResolveCollisionRadius(
-					OtherExtents, OtherNavigation);
-			const FFixedPoint Range =
-				(Radius + OtherRadius) * FalloffRadii;
-			if (DistanceSquared >= Range * Range)
-			{
-				++Far;
-				continue;
+			case ENeighborSkipReason::Idle:       ++Idle;       continue;
+			case ENeighborSkipReason::Weight:     ++Weight;     continue;
+			case ENeighborSkipReason::ZeroDist:   ++Far;        continue;
+			case ENeighborSkipReason::Behind:     ++Behind;     continue;
+			case ENeighborSkipReason::NotClosing:  ++NotClosing; continue;
+			case ENeighborSkipReason::PastGoal:   ++PastGoal;   continue;
+			case ENeighborSkipReason::ZeroRadius:
+			case ENeighborSkipReason::Far:        ++Far;        continue;
+			case ENeighborSkipReason::None:       break;
 			}
 			++Kept;
 		}
 
 		UE_LOG(LogSeinAvoidance, Verbose,
-			TEXT("[GRIND] t=%d h=%d:%d grp=%d:%d coh=%lld goalDist=%.0f tgt=(%.0f,%.0f) nbrs=%d kept=%d skip{static=%d grp=%d idleTrue=%d idlePinned=%d wt=%d behind=%d notClosing=%d pastGoal=%d far=%d} minD=%.0f steer=%.3f scale=%.3f"),
+			TEXT("[GRIND] t=%d h=%d:%d grp=%d:%d coh=%lld goalDist=%.0f tgt=(%.0f,%.0f) nbrs=%d kept=%d skip{static=%d grp=%d idle=%d wt=%d behind=%d notClosing=%d pastGoal=%d far=%d} minD=%.0f steer=%.3f scale=%.3f"),
 			World.GetCurrentTick(), SelfHandle.Index, SelfHandle.Generation,
 			BrokerHandle.Index, BrokerHandle.Generation, CohesionId,
 			GoalDistance.ToFloat(),
 			Move.TargetLocation.X.ToFloat(), Move.TargetLocation.Y.ToFloat(),
 			Neighbors.Num(), Kept,
-			Static, Group, IdleTrue, IdlePinned, Weight, Behind,
+			Static, Group, Idle, Weight, Behind,
 			NotClosing, PastGoal, Far,
 			SeinMath::Sqrt(MinDistanceSquared).ToFloat(),
 			Move.AvoidanceOutput.SteerDir.Size().ToFloat(),
@@ -1030,59 +1101,20 @@ namespace
 		FIdleBlockerSet& OutIdleBlockers,
 		FFixedVector& OutAccum)
 	{
-		const bool bOtherIdle = !OtherMovement.bHasTarget;
-		if (bOtherIdle && !Parameters.bResolveThroughIdlers) return;
-		const bool bQualifies = Self.Movement.bAvoidSameWeights
-			? OtherMovement.AvoidanceWeight
-				>= Self.Movement.AvoidanceWeight
-			: OtherMovement.AvoidanceWeight
-				> Self.Movement.AvoidanceWeight;
-		if (!bQualifies) return;
-
-		FFixedVector ToOther =
-			OtherEntity.Transform.GetLocation() - Self.Position;
-		ToOther.Z = FFixedPoint::Zero;
-		const FFixedPoint DistanceSquared = ToOther.SizeSquared();
-		if (DistanceSquared <= FFixedPoint::Epsilon) return;
-		if (ToOther.X * Self.Heading.X + ToOther.Y * Self.Heading.Y
-			<= FFixedPoint::Zero)
+		FNeighborGateOutput Gate;
+		if (ClassifyIndividualNeighbor(
+				Self.Position, Self.Heading, Self.Velocity,
+				Self.GoalDistanceSquared, Self.Radius,
+				Self.Movement.AvoidanceWeight,
+				Self.Movement.bAvoidSameWeights,
+				Parameters.bResolveThroughIdlers,
+				Parameters.FalloffRadii,
+				Parameters.NavStorage, Parameters.ExtentsStorage,
+				OtherHandle, OtherEntity, OtherMovement, Gate)
+			!= ENeighborSkipReason::None)
 		{
 			return;
 		}
-		const FFixedVector RelativeVelocity(
-			Self.Velocity.X - OtherMovement.Velocity.X,
-			Self.Velocity.Y - OtherMovement.Velocity.Y,
-			FFixedPoint::Zero);
-		if (ToOther.X * RelativeVelocity.X
-				+ ToOther.Y * RelativeVelocity.Y
-			<= FFixedPoint::Zero)
-		{
-			return;
-		}
-		if (Self.GoalDistanceSquared > FFixedPoint::Zero
-			&& DistanceSquared >= Self.GoalDistanceSquared)
-		{
-			return;
-		}
-
-		const FSeinNavigationPayload* OtherNavigation = Parameters.NavStorage
-			? static_cast<const FSeinNavigationPayload*>(
-				Parameters.NavStorage->GetComponentRaw(OtherHandle))
-			: nullptr;
-		const FSeinExtentsPayload* OtherExtents = Parameters.ExtentsStorage
-			? static_cast<const FSeinExtentsPayload*>(
-				Parameters.ExtentsStorage->GetComponentRaw(OtherHandle))
-			: nullptr;
-		const FFixedPoint OtherRadius =
-			USeinMovement::ResolveCollisionRadius(
-				OtherExtents, OtherNavigation);
-		if (OtherRadius <= FFixedPoint::Zero) return;
-		const FFixedPoint Distance = SeinMath::Sqrt(DistanceSquared);
-		const FFixedPoint FalloffRange =
-			(Self.Radius + OtherRadius) * Parameters.FalloffRadii;
-		if (Distance >= FalloffRange) return;
-		const FFixedPoint Falloff =
-			FFixedPoint::One - (Distance / FalloffRange);
 
 		FFixedPoint HeadOn = FFixedPoint::One + Parameters.HeadOnBase;
 		const FFixedVector OtherVelocity = OtherMovement.Velocity;
@@ -1102,14 +1134,14 @@ namespace
 				Self.Handle, OtherHandle, Self.Position,
 				OtherEntity.Transform.GetLocation());
 			const FFixedPoint Weight =
-				HeadOn * Falloff * Parameters.DoSiDoStrength;
+				HeadOn * Gate.Falloff * Parameters.DoSiDoStrength;
 			OutAccum.X += Steer.X * Weight;
 			OutAccum.Y += Steer.Y * Weight;
 			return;
 		}
 
 		const FFixedPoint SideDot =
-			ToOther.X * Self.Right.X + ToOther.Y * Self.Right.Y;
+			Gate.ToOther.X * Self.Right.X + Gate.ToOther.Y * Self.Right.Y;
 		const FFixedPoint LateralBand =
 			Self.Radius / FFixedPoint::FromInt(4);
 		FFixedPoint TurnSign;
@@ -1128,19 +1160,19 @@ namespace
 				: -FFixedPoint::One;
 		}
 
-		if (bOtherIdle)
+		if (Gate.bOtherIdle)
 		{
 			if (OutIdleBlockers.Count < MaxIdleBlockers)
 			{
 				const FFixedPoint InverseDistance =
-					FFixedPoint::One / Distance;
+					FFixedPoint::One / Gate.Distance;
 				OutIdleBlockers.Directions[OutIdleBlockers.Count] =
 					FFixedVector(
-						ToOther.X * InverseDistance,
-						ToOther.Y * InverseDistance,
+						Gate.ToOther.X * InverseDistance,
+						Gate.ToOther.Y * InverseDistance,
 						FFixedPoint::Zero);
 				FFixedPoint SinHalfAngle =
-					(Self.Radius + OtherRadius) * InverseDistance;
+					(Self.Radius + Gate.OtherRadius) * InverseDistance;
 				if (SinHalfAngle > FFixedPoint::One)
 				{
 					SinHalfAngle = FFixedPoint::One;
@@ -1154,13 +1186,13 @@ namespace
 				OutIdleBlockers.CosHalfAngles[OutIdleBlockers.Count] =
 					SeinMath::Sqrt(CosHalfAngleSquared);
 				OutIdleBlockers.Detours[OutIdleBlockers.Count] =
-					HeadOn * Falloff * TurnSign;
+					HeadOn * Gate.Falloff * TurnSign;
 				++OutIdleBlockers.Count;
 			}
 			return;
 		}
 
-		const FFixedPoint Weight = HeadOn * Falloff * TurnSign;
+		const FFixedPoint Weight = HeadOn * Gate.Falloff * TurnSign;
 		OutAccum.X += Self.Right.X * Weight;
 		OutAccum.Y += Self.Right.Y * Weight;
 	}
@@ -1474,7 +1506,7 @@ namespace
 				World, Hash, ReadOnlyMoveStorage, NavStorage,
 				ExtentsStorage, BrokerStorage, SelfHandle,
 				SelfEntity, *Move, Vel, MovingSpeedFloor,
-				FalloffRadii);
+				FalloffRadii, NeighborParameters.bResolveThroughIdlers);
 #endif
 			ClearAvoidanceOutput(*Move);
 			return;
