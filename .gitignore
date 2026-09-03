@@ -63,6 +63,11 @@ __pycache__/
 # Local working notes that re-ground future sessions; never committed to git.
 planning/
 
+# ── Personal local editor utilities (NOT part of the SeinARTS plugin ecosystem) ──
+# Self-enabling editor-only plugins for this machine; fresh clones simply lack them.
+/Plugins/ThumbnailExporter/
+/Scripts/ExportThumbnails.ps1
+
 # NOTE (tracked on purpose): *.uproject, *.uplugin, Config/, Source/, Content/
 # (minus baked data above), Build.ps1, .vsconfig, and the per-plugin CLAUDE.md
 # files are all version-controlled.

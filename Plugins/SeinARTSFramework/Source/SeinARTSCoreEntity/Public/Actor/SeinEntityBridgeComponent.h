@@ -290,7 +290,11 @@ public:
 	 *  it is plumbing beneath the component UX. Legacy hand-authored entries
 	 *  of unmanaged types still inject and are captured (with seeding) when
 	 *  a matching authoring component is added. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
+	// TEMP (2026-09-02, RJ): VisibleAnywhere during the content reconfigure so
+	// old baked configs can be inspected while components are authored — the
+	// values are read-only, so the bake stays the single writer. Revert to
+	// plain UPROPERTY(BlueprintReadOnly) once reconfiguration is done.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	TArray<FInstancedStruct> ComponentData;
 
 	/** Find the first authored entry of the given struct type, or nullptr.
