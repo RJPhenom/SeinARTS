@@ -14,6 +14,7 @@ Use `WORKFLOW.md` for operational rules. Use the repository and plugin-level gui
 - `CONSUMER_VERIFICATION.md` — clean downstream project/build/cook/package verification contract.
 - `READINESS_ROADMAP.md` — ordered path from the stabilized framework to a game-ready, online-capable SDK.
 - `OPEN_RISKS.md` — unresolved correctness, state, extensibility, gameplay, and release risks.
+- `PUBLIC_DOCS_BACKLOG.md` — pending public documentation updates awaiting a website task.
 
 ## Artifact policy
 

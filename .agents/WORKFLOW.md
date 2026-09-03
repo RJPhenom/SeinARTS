@@ -1,6 +1,6 @@
 # SeinARTS Agent Workflow
 
-This is the local operational mirror of the human [Workflow Policy](https://docs.google.com/document/d/1pb3Z0DdQKAIJ610cMOy1yOP9_RQj1jtzMupfhkyrlfw), source policy version 2.5. The human policy owns contributor workflow. Update both in the same task when workflow changes.
+This is the local operational mirror of the human [Workflow Policy](https://docs.google.com/document/d/1pb3Z0DdQKAIJ610cMOy1yOP9_RQj1jtzMupfhkyrlfw), source policy version 2.7. The human policy owns contributor workflow. Update both in the same task when workflow changes.
 
 ## 1. About
 
@@ -134,6 +134,8 @@ Cloud agent sessions (Claude Code on the web, Codex cloud) always create their o
 
 The goal is for testers to have up-to-date local repositories with the latest cloud session work, safe to merge. Guiding principles:
 
+- Sync-on-start: fetch and prune, fast-forward `main`, verify your branch still exists on the remote, and do not trust inherited claims after a resume or context compaction.
+- Cross-agent rule: no agent builds on another agent's live session branch.
 - Make every effort to regularly merge into `main` at safe completion points — not necessarily at the end of the session.
 - Merge conflicts can occur when multiple agents are working, committing, and merging. Do not attempt to resolve them automatically. Report back to the user and await instructions.
 - Keep a clear, current understanding of which branches exist on the remote versus locally. If a branch does not yet exist on the remote (other than in the moment right after creation), keep the user aware. Branches are ideally published on creation; `https://github.com/RJPhenom/SeinARTS/branches` gives a complete view of active branches across every desktop and cloud environment together.

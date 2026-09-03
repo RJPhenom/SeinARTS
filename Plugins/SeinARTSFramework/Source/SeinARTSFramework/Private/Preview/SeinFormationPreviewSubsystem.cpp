@@ -1,13 +1,21 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
+ *
  * @file    SeinFormationPreviewSubsystem.cpp
+ * @author  RJ Macklem
+ * @created 21 Aug 2026
+ * @latest  02 Sep 2026
  * @brief   Base destination-preview coordinator (ported from the Cover extension;
  *          cover-quality query replaced by the generic PreviewQualityProvider hook
  *          on USeinWorldSubsystem, which the Cover extension binds).
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
  */
 
 #include "Preview/SeinFormationPreviewSubsystem.h"
 #include "Preview/SeinFormationPreviewActor.h"
+#include "Preview/SeinFormationPreviewComponent.h"
 #include "Preview/SeinFormationPreviewStyleComponent.h"
 
 #include "Player/SeinPlayerController.h"
@@ -27,10 +35,20 @@
 #include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
+#include "HAL/IConsoleManager.h"
 #include "Stats/Stats.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinFormationPreviewSubsystem, Log, All);
+
+/** Dev kill switch for the marker drawing only — computation and the frozen
+ *  destination artifact are unaffected. Opt-in itself is authored per unit by
+ *  adding a Formation Preview Component to its Blueprint. */
+static TAutoConsoleVariable<int32> CVarSeinPreviewDisable(
+	TEXT("Sein.Preview.Disable"),
+	0,
+	TEXT("1 = draw no on-ground destination preview markers (render-only dev toggle)."),
+	ECVF_Default);
 
 namespace SeinFormationPreviewLocal
 {
@@ -79,11 +97,14 @@ void USeinFormationPreviewSubsystem::ReleaseModuleOwnedStateForModuleUnload()
 	UnhookPlayerControllerDelegates();
 	FCoreUObjectDelegates::PostLoadMapWithWorld.RemoveAll(this);
 
-	if (PreviewActor)
+	for (TPair<TObjectPtr<UClass>, TObjectPtr<ASeinFormationPreviewActor>>& Pair : PreviewActors)
 	{
-		PreviewActor->Destroy();
-		PreviewActor = nullptr;
+		if (IsValid(Pair.Value))
+		{
+			Pair.Value->Destroy();
+		}
 	}
+	PreviewActors.Empty();
 
 	bIsVisible = false;
 	BoundPC = nullptr;
@@ -212,8 +233,7 @@ void USeinFormationPreviewSubsystem::HandleCursorUpdated(FVector CursorWorld, bo
 void USeinFormationPreviewSubsystem::RefreshPreview()
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(Sein_FormationPreview_Refresh);
-	const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>();
-	if (Settings && !Settings->bEnableFormationPreview)
+	if (CVarSeinPreviewDisable.GetValueOnGameThread() != 0)
 	{
 		HidePreview();
 		return;
@@ -249,11 +269,24 @@ void USeinFormationPreviewSubsystem::RefreshPreview()
 	}
 
 	TArray<FSeinEntityHandle> Members;
+	TArray<UClass*> RenderClasses;
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_FormationPreview_ResolveSelection);
-		Members = ResolveSelectionToMembers(PC);
+		Members = ResolveSelectionToMembers(PC, RenderClasses);
 	}
 	if (Members.Num() == 0)
+	{
+		HidePreview();
+		return;
+	}
+
+	// Render opt-in is authored per unit (Formation Preview Component). When no
+	// selected member opts in there is nothing to draw, so skip the layout solve
+	// entirely — the commit computes its own artifact for such selections, exactly
+	// as it does for any click made while no preview is displayed.
+	const bool bAnyMemberRenders = RenderClasses.ContainsByPredicate(
+		[](const UClass* RenderClass) { return RenderClass != nullptr; });
+	if (!bAnyMemberRenders)
 	{
 		HidePreview();
 		return;
@@ -293,15 +326,6 @@ void USeinFormationPreviewSubsystem::RefreshPreview()
 
 	if (Layout.Positions.Num() == 0)
 	{
-		HidePreview();
-		return;
-	}
-
-	EnsurePreviewActorSpawned();
-	if (!PreviewActor)
-	{
-		UE_LOG(LogSeinFormationPreviewSubsystem, Warning,
-			TEXT("Refresh: bail — preview actor failed to spawn (check Settings->FormationPreviewActorClass)"));
 		HidePreview();
 		return;
 	}
@@ -349,11 +373,70 @@ void USeinFormationPreviewSubsystem::RefreshPreview()
 		Styles.Reset();
 	}
 
+	// Fan the full parallel arrays out per resolved renderer class: each pooled
+	// actor draws its own member subset with its own change guards, so instanced
+	// backends still batch per unit type. Pooled actors whose class drew nobody
+	// this refresh are hidden in place. Only the DRAWING is filtered — the
+	// artifact bookkeeping below stays full-membership.
+	bool bAnyDrawn = false;
 	{
-		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_FormationPreview_PushActor);
-		PreviewActor->SetPositions(WorldPositions, CachedQualities, RadiiUU, Styles);
+		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_FormationPreview_PushActors);
+		const int32 MemberCount = FMath::Min(RenderClasses.Num(), WorldPositions.Num());
+		const bool bHaveQualities = CachedQualities.Num() == WorldPositions.Num();
+		const bool bHaveRadii = RadiiUU.Num() == WorldPositions.Num();
+		const bool bHaveStyles = Styles.Num() == WorldPositions.Num();
+
+		TSet<UClass*> ActiveClasses;
+		for (int32 Index = 0; Index < MemberCount; ++Index)
+		{
+			if (RenderClasses[Index])
+			{
+				ActiveClasses.Add(RenderClasses[Index]);
+			}
+		}
+
+		TArray<FVector> GroupPositions;
+		TArray<FGameplayTag> GroupQualities;
+		TArray<float> GroupRadii;
+		TArray<FSeinFormationPreviewElementStyle> GroupStyles;
+		for (UClass* RenderClass : ActiveClasses)
+		{
+			GroupPositions.Reset();
+			GroupQualities.Reset();
+			GroupRadii.Reset();
+			GroupStyles.Reset();
+			for (int32 Index = 0; Index < MemberCount; ++Index)
+			{
+				if (RenderClasses[Index] != RenderClass) continue;
+				GroupPositions.Add(WorldPositions[Index]);
+				if (bHaveQualities) GroupQualities.Add(CachedQualities[Index]);
+				if (bHaveRadii) GroupRadii.Add(RadiiUU[Index]);
+				if (bHaveStyles) GroupStyles.Add(Styles[Index]);
+			}
+
+			ASeinFormationPreviewActor* GroupActor = EnsurePreviewActorForClass(RenderClass);
+			if (!GroupActor) continue;
+			GroupActor->SetPositions(GroupPositions, GroupQualities, GroupRadii, GroupStyles);
+			GroupActor->SetActorHiddenInGame(false);
+			bAnyDrawn = true;
+		}
+
+		for (TPair<TObjectPtr<UClass>, TObjectPtr<ASeinFormationPreviewActor>>& Pair : PreviewActors)
+		{
+			if (IsValid(Pair.Value) && !ActiveClasses.Contains(Pair.Key))
+			{
+				Pair.Value->HideAll();
+				Pair.Value->SetActorHiddenInGame(true);
+			}
+		}
 	}
-	PreviewActor->SetActorHiddenInGame(false);
+	if (!bAnyDrawn)
+	{
+		UE_LOG(LogSeinFormationPreviewSubsystem, Warning,
+			TEXT("Refresh: bail — no preview actor could be spawned for the opted-in members."));
+		HidePreview();
+		return;
+	}
 	bIsVisible = true;
 	DisplayedDestinationArtifact = MoveTemp(DestinationArtifact);
 	DisplayedArtifactMembers = Members;
@@ -394,10 +477,13 @@ void USeinFormationPreviewSubsystem::RefreshPreview()
 
 void USeinFormationPreviewSubsystem::HidePreview()
 {
-	if (PreviewActor)
+	for (TPair<TObjectPtr<UClass>, TObjectPtr<ASeinFormationPreviewActor>>& Pair : PreviewActors)
 	{
-		PreviewActor->HideAll();
-		PreviewActor->SetActorHiddenInGame(true);
+		if (IsValid(Pair.Value))
+		{
+			Pair.Value->HideAll();
+			Pair.Value->SetActorHiddenInGame(true);
+		}
 	}
 	bIsVisible = false;
 	DisplayedDestinationArtifact.Reset();
@@ -433,73 +519,105 @@ bool USeinFormationPreviewSubsystem::TryGetDisplayedDestinationArtifact(
 	return true;
 }
 
-void USeinFormationPreviewSubsystem::EnsurePreviewActorSpawned()
+ASeinFormationPreviewActor* USeinFormationPreviewSubsystem::EnsurePreviewActorForClass(UClass* ActorClass)
 {
-	if (PreviewActor) return;
+	if (!ActorClass) return nullptr;
+	if (TObjectPtr<ASeinFormationPreviewActor>* Existing = PreviewActors.Find(ActorClass))
+	{
+		// IsValid also rejects a pooled actor whose world was torn down (map
+		// travel) before GC nulls the reference; the Add below replaces it.
+		if (IsValid(*Existing)) return *Existing;
+	}
 
 	UWorld* World = GetWorld();
-	if (!World) return;
-
-	// Class from the base settings, falling back to the framework default.
-	TSubclassOf<ASeinFormationPreviewActor> ActorClass;
-	if (const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>())
-	{
-		// WYSIWYG. None/empty => the preview actor is OFF: spawn nothing, so no on-ground destination
-		// markers render (PreviewActor stays null; callers already treat that as "not spawned"). A
-		// set-but-unloadable/abstract class is a mistake, not an off-switch: fall back to the default.
-		if (Settings->FormationPreviewActorClass.IsNull())
-		{
-			USeinARTSCoreSettings::ReportDisabledSystem(TEXT("Formation Preview"),
-				TEXT("No on-ground destination markers are drawn for move orders."), /*bHighSeverity*/ false);
-			return;
-		}
-		ActorClass = Settings->FormationPreviewActorClass.TryLoadClass<ASeinFormationPreviewActor>();
-		if (!ActorClass || ActorClass->HasAnyClassFlags(CLASS_Abstract))
-		{
-			UE_LOG(LogSeinFormationPreviewSubsystem, Error,
-				TEXT("FormationPreviewActorClass '%s' could not be loaded or is abstract — falling back to the default."),
-				*Settings->FormationPreviewActorClass.ToString());
-		}
-	}
-	if (!ActorClass || ActorClass->HasAnyClassFlags(CLASS_Abstract))
-	{
-		ActorClass = ASeinFormationPreviewActor::StaticClass();
-	}
+	if (!World) return nullptr;
 
 	FActorSpawnParameters Params;
 	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 	Params.ObjectFlags = RF_Transient;
-	PreviewActor = World->SpawnActor<ASeinFormationPreviewActor>(
+	ASeinFormationPreviewActor* Spawned = World->SpawnActor<ASeinFormationPreviewActor>(
 		ActorClass, FVector::ZeroVector, FRotator::ZeroRotator, Params);
 
-	if (!PreviewActor)
+	if (!Spawned)
 	{
 		UE_LOG(LogSeinFormationPreviewSubsystem, Warning,
-			TEXT("EnsurePreviewActorSpawned: failed to spawn preview actor of class %s"),
+			TEXT("EnsurePreviewActorForClass: failed to spawn preview actor of class %s"),
 			*GetNameSafe(ActorClass));
-		return;
+		return nullptr;
 	}
 
-	PreviewActor->SetActorHiddenInGame(true);     // start hidden until first SetPositions
+	Spawned->SetActorHiddenInGame(true);     // start hidden until first SetPositions
 
+	PreviewActors.Add(ActorClass, Spawned);
 	UE_LOG(LogSeinFormationPreviewSubsystem, Log,
-		TEXT("Spawned formation preview actor (%s)"), *GetNameSafe(PreviewActor));
+		TEXT("Spawned formation preview actor %s (%s)"),
+		*GetNameSafe(Spawned), *GetNameSafe(ActorClass));
+	return Spawned;
 }
 
-TArray<FSeinEntityHandle> USeinFormationPreviewSubsystem::ResolveSelectionToMembers(ASeinPlayerController* PC) const
+UClass* USeinFormationPreviewSubsystem::ResolveRenderClassForActor(const AActor* Actor)
+{
+	if (!Actor) return nullptr;
+	const USeinFormationPreviewComponent* Component =
+		Actor->FindComponentByClass<USeinFormationPreviewComponent>();
+	// No component = the unit is not opted into the preview: nothing is drawn for
+	// it. Component presence is THE enable — there is no settings-level switch.
+	if (!Component) return nullptr;
+
+	// Component class → project default → framework base. A set-but-unloadable or
+	// abstract entry is a mistake, not an off switch: log and fall through.
+	if (!Component->PreviewActorClass.IsNull())
+	{
+		UClass* Class = Component->PreviewActorClass.LoadSynchronous();
+		if (Class
+			&& !Class->HasAnyClassFlags(CLASS_Abstract)
+			&& Class->IsChildOf(ASeinFormationPreviewActor::StaticClass()))
+		{
+			return Class;
+		}
+		UE_LOG(LogSeinFormationPreviewSubsystem, Error,
+			TEXT("Formation Preview Component on %s names class '%s' that could not be loaded or is abstract — using the project default."),
+			*GetNameSafe(Actor), *Component->PreviewActorClass.ToString());
+	}
+	if (const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>())
+	{
+		if (!Settings->FormationPreviewActorClass.IsNull())
+		{
+			UClass* Class = Settings->FormationPreviewActorClass.TryLoadClass<ASeinFormationPreviewActor>();
+			if (Class && !Class->HasAnyClassFlags(CLASS_Abstract))
+			{
+				return Class;
+			}
+			UE_LOG(LogSeinFormationPreviewSubsystem, Error,
+				TEXT("FormationPreviewActorClass '%s' could not be loaded or is abstract — falling back to the framework default."),
+				*Settings->FormationPreviewActorClass.ToString());
+		}
+	}
+	return ASeinFormationPreviewActor::StaticClass();
+}
+
+TArray<FSeinEntityHandle> USeinFormationPreviewSubsystem::ResolveSelectionToMembers(
+	ASeinPlayerController* PC, TArray<UClass*>& OutRenderClasses) const
 {
 	TArray<FSeinEntityHandle> Out;
+	OutRenderClasses.Reset();
 	if (!PC) return Out;
 
 	UWorld* World = PC->GetWorld();
 	USeinWorldSubsystem* WorldSub = World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
 	if (!WorldSub) return Out;
+	USeinActorBridgeSubsystem* Bridge = World->GetSubsystem<USeinActorBridgeSubsystem>();
 
-	// ALL-OR-NOTHING preview opt-in: any opted-out member suppresses the WHOLE
-	// preview. Squads expand to live members (squad must opt in + every member must
-	// have a nav component and opt in); lone units return their own handle if they
-	// have a nav component and opt in. No nav component = no destination opinion =
-	// opted out.
+	// Squads expand to live members; lone units return their own handle. A member
+	// with NO navigation component has no destination opinion, and the commit
+	// resolves such a selection through the artifact-less path — there is nothing
+	// exact to display, so it suppresses the whole preview.
+	//
+	// Render opt-in is separate, per member, and NEVER affects membership: the
+	// parallel OutRenderClasses entry carries the renderer class from the member's
+	// Formation Preview Component (the one on a squad's actor covers all its
+	// members), or null for members that draw no marker. The layout and frozen
+	// destination artifact always cover every returned member.
 	const bool bFocusedSelection =
 		PC->ActiveFocusIndex >= 0
 		&& PC->SelectedActors.IsValidIndex(PC->ActiveFocusIndex);
@@ -520,16 +638,30 @@ TArray<FSeinEntityHandle> USeinFormationPreviewSubsystem::ResolveSelectionToMemb
 		const FSeinEntityHandle Handle = Actor->GetEntityHandle();
 		if (!Handle.IsValid()) continue;
 
-		// Path A: squad-level dispatch.
+		// Path A: squad-level dispatch. The component on the squad's own actor opts
+		// the whole squad in with one renderer; without it, each member's actor
+		// decides for itself (a member whose bridge actor hasn't spawned yet simply
+		// draws nothing this refresh).
 		if (const FSeinSquadPayload* SquadData = WorldSub->GetComponent<FSeinSquadPayload>(Handle))
 		{
-			if (!SquadData->bShowFormationPreview) return {};
+			UClass* SquadRenderClass = ResolveRenderClassForActor(Actor);
 			for (const FSeinEntityHandle& Member : SquadData->GetLiveMembers())
 			{
 				const FSeinNavigationPayload* MemberNav =
 					WorldSub->GetComponent<FSeinNavigationPayload>(Member);
-				if (!MemberNav || !MemberNav->bShowNavigationPreview) return {};
+				if (!MemberNav)
+				{
+					OutRenderClasses.Reset();
+					return {};
+				}
+				UClass* MemberRenderClass = SquadRenderClass;
+				if (!MemberRenderClass && Bridge)
+				{
+					MemberRenderClass =
+						ResolveRenderClassForActor(Bridge->GetActorForEntity(Member));
+				}
 				Out.Add(Member);
+				OutRenderClasses.Add(MemberRenderClass);
 			}
 			continue;
 		}
@@ -537,8 +669,13 @@ TArray<FSeinEntityHandle> USeinFormationPreviewSubsystem::ResolveSelectionToMemb
 		// Path B: lone-unit dispatch.
 		const FSeinNavigationPayload* NavComp =
 			WorldSub->GetComponent<FSeinNavigationPayload>(Handle);
-		if (!NavComp || !NavComp->bShowNavigationPreview) return {};
+		if (!NavComp)
+		{
+			OutRenderClasses.Reset();
+			return {};
+		}
 		Out.Add(Handle);
+		OutRenderClasses.Add(ResolveRenderClassForActor(Actor));
 	}
 
 	return Out;

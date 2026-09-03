@@ -175,11 +175,9 @@ struct SEINARTSCOREENTITY_API FSeinNavigationPayload : public FSeinPayload
 		meta = (ClampMin = "0", DisplayName = "Max Search Nodes"))
 	int32 MaxSearchNodes = 0;
 
-	/** Show the destination preview when this unit is selected — the "where will
-	 *  I stop" indicator drawn on cursor hover during move orders. Turn off for unit types
-	 *  where it adds no value (always-mobile scouts, off-screen support). Default true. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Navigation")
-	bool bShowNavigationPreview = true;
+	// NOTE: preview opt-in is no longer sim data. Whether a unit draws destination
+	// markers is a render-side choice: add a Formation Preview Component
+	// (USeinFormationPreviewComponent, SeinARTSFramework) to the unit's Blueprint.
 };
 
 FORCEINLINE uint32 GetTypeHash(const FSeinNavigationPayload& C)
@@ -206,6 +204,5 @@ FORCEINLINE uint32 GetTypeHash(const FSeinNavigationPayload& C)
 	H = HashCombine(H, GetTypeHash(C.RepathFailureLimit));
 	H = HashCombine(H, GetTypeHash(C.OffPathThreshold));
 	H = HashCombine(H, GetTypeHash(C.MaxSearchNodes));
-	H = HashCombine(H, GetTypeHash(C.bShowNavigationPreview));
 	return H;
 }
