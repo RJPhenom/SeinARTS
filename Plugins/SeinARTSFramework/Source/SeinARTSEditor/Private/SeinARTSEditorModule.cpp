@@ -9,13 +9,13 @@
 
 #include "SeinARTSEditorModule.h"
 #include "SeinARTSEditorStyle.h"
-#include "SeinAssetTypeActions.h"
 #include "AssetToolsModule.h"
 #include "IAssetTools.h"
 #include "AssetDefinitionRegistry.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "Definitions/AssetDefinition_SeinWidgetBlueprint.h"
+#include "Definitions/SeinAssetDefinitions.h"
 #include "ThumbnailRendering/ThumbnailManager.h"
 #include "Thumbnails/SeinBlueprintThumbnailRenderer.h"
 #include "Thumbnails/SeinStructThumbnailRenderer.h"
@@ -454,6 +454,25 @@ EAssetTypeCategories::Type FSeinARTSEditorModule::SeinARTSCategoryBit = EAssetTy
 FSeinARTSEditorModule::FSeinARTSEditorModule() = default;
 FSeinARTSEditorModule::~FSeinARTSEditorModule() = default;
 
+namespace
+{
+	// Every SeinARTS asset definition this module leases into the registry.
+	// Startup registers each; PreUnload unregisters the same set symmetrically.
+	TArray<UAssetDefinition*, TInlineAllocator<8>> GetSeinAssetDefinitions()
+	{
+		return {
+			GetMutableDefault<UAssetDefinition_SeinActorBlueprint>(),
+			GetMutableDefault<UAssetDefinition_SeinEntityComponentBlueprint>(),
+			GetMutableDefault<UAssetDefinition_SeinAbilityBlueprint>(),
+			GetMutableDefault<UAssetDefinition_SeinEffectBlueprint>(),
+			GetMutableDefault<UAssetDefinition_SeinFormationBlueprint>(),
+			GetMutableDefault<UAssetDefinition_SeinMovementBlueprint>(),
+			GetMutableDefault<UAssetDefinition_SeinBalanceProfile>(),
+			GetMutableDefault<UAssetDefinition_SeinWidgetBlueprint>()
+		};
+	}
+}
+
 void FSeinARTSEditorModule::StartupModule()
 {
 	bModuleOwnedStateReleased = false;
@@ -465,8 +484,10 @@ void FSeinARTSEditorModule::StartupModule()
 	if (UAssetDefinitionRegistry* AssetDefinitionRegistry =
 			UAssetDefinitionRegistry::Get())
 	{
-		AssetDefinitionRegistry->RegisterAssetDefinition(
-			GetMutableDefault<UAssetDefinition_SeinWidgetBlueprint>());
+		for (UAssetDefinition* Definition : GetSeinAssetDefinitions())
+		{
+			AssetDefinitionRegistry->RegisterAssetDefinition(Definition);
+		}
 	}
 
 	// One shared, read-only preflight backs both gates. The module owns every
@@ -521,8 +542,6 @@ void FSeinARTSEditorModule::StartupModule()
 			LOCTEXT("SeinARTSAssetCategory", "SeinARTS")
 		);
 	}
-
-	RegisterAssetTypeActions();
 
 	if (GEditor != nullptr)
 	{
@@ -796,21 +815,25 @@ void FSeinARTSEditorModule::ReleaseModuleOwnedState()
 		UObjectInitialized() && !IsEngineExitRequested();
 	if (bCanTouchUObjectRegistries)
 	{
-		// The registry holds the definition CDO strongly. Only remove our exact
+		// The registry holds the definition CDOs strongly. Only remove our exact
 		// generation so a replacement module loaded during a reload cannot be
-		// accidentally unregistered by the outgoing generation.
+		// accidentally unregistered by the outgoing generation. (Unregistration
+		// is keyed by asset class, hence the identity check; a definition whose
+		// asset class is unloaded — the path-resolved Movement one with that
+		// module absent — cannot be identity-checked and is removed directly.)
 		if (FModuleManager::Get().IsModuleLoaded("AssetDefinition"))
 		{
 			if (UAssetDefinitionRegistry* AssetDefinitionRegistry =
 					UAssetDefinitionRegistry::Get())
 			{
-				UAssetDefinition_SeinWidgetBlueprint* AssetDefinition =
-					GetMutableDefault<UAssetDefinition_SeinWidgetBlueprint>();
-				if (AssetDefinitionRegistry->GetAssetDefinitionForClass(
-						USeinWidgetBlueprint::StaticClass()) == AssetDefinition)
+				for (UAssetDefinition* Definition : GetSeinAssetDefinitions())
 				{
-					AssetDefinitionRegistry->UnregisterAssetDefinition(
-						AssetDefinition);
+					const UClass* AssetClass = Definition->GetAssetClass().Get();
+					if (!AssetClass ||
+						AssetDefinitionRegistry->GetAssetDefinitionForClass(AssetClass) == Definition)
+					{
+						AssetDefinitionRegistry->UnregisterAssetDefinition(Definition);
+					}
 				}
 			}
 		}
@@ -931,7 +954,6 @@ void FSeinARTSEditorModule::ReleaseModuleOwnedState()
 	// skipped (hot-reload race, runtime module-disable, etc.).
 	ComponentDataDraws.Empty();
 
-	UnregisterAssetTypeActions();
 	FSeinARTSEditorStyle::Shutdown();
 }
 
@@ -952,43 +974,6 @@ void FSeinARTSEditorModule::RegisterComponentDataDraw(FName Key, FSeinComponentD
 void FSeinARTSEditorModule::UnregisterComponentDataDraw(FName Key)
 {
 	ComponentDataDraws.Remove(Key);
-}
-
-void FSeinARTSEditorModule::RegisterAssetTypeActions()
-{
-	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
-
-	auto RegisterAction = [&](const TSharedRef<IAssetTypeActions>& Action)
-	{
-		AssetTools.RegisterAssetTypeActions(Action);
-		RegisteredActions.Add(Action);
-	};
-
-	RegisterAction(MakeShared<FAssetTypeActions_SeinActorBlueprint>());
-	RegisterAction(MakeShared<FAssetTypeActions_SeinEntityComponentBlueprint>());
-	RegisterAction(MakeShared<FAssetTypeActions_SeinAbilityBlueprint>());
-	RegisterAction(MakeShared<FAssetTypeActions_SeinEffectBlueprint>());
-	RegisterAction(MakeShared<FAssetTypeActions_SeinFormationBlueprint>());
-	// Movement Mode actions register only when the Movement module's asset class is
-	// present (path-resolved — no Movement link dependency, matching the factory).
-	if (FindObject<UClass>(nullptr, TEXT("/Script/SeinARTSMovement.SeinMovementBlueprint")))
-	{
-		RegisterAction(MakeShared<FAssetTypeActions_SeinMovementBlueprint>());
-	}
-	RegisterAction(MakeShared<FAssetTypeActions_SeinBalanceProfile>());
-}
-
-void FSeinARTSEditorModule::UnregisterAssetTypeActions()
-{
-	if (FModuleManager::Get().IsModuleLoaded("AssetTools"))
-	{
-		IAssetTools& AssetTools = FModuleManager::GetModuleChecked<FAssetToolsModule>("AssetTools").Get();
-		for (const TSharedPtr<IAssetTypeActions>& Action : RegisteredActions)
-		{
-			AssetTools.UnregisterAssetTypeActions(Action.ToSharedRef());
-		}
-	}
-	RegisteredActions.Empty();
 }
 
 #undef LOCTEXT_NAMESPACE
