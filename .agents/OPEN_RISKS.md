@@ -152,6 +152,69 @@ This is the actionable remainder after consolidating the historical audits. It i
    feels it: an async preview solve (click path already recomputes exactly), or eligible-edge
    reduction. Per-solve reduction is a product/feel decision — do not silently change the
    preview's exactness.
+7. Always-on movement scan costs flagged by the 2026-09-03 avoidance/re-seek audit (none yet
+   measured hot; recorded as the scaling terms to profile first at larger armies).
+   `FSeinCommandBrokerReseek::CollectLooseReturnCandidates` walks every live movement component
+   every PostTick, uncadenced (unlike `ProcessBroker`'s watch interval), and its first per-entity
+   check is the `FSeinCommandBrokerData` component-map lookup — before the cheap
+   `bHomeSeeded`/`bHasTarget`/velocity field early-outs, so every actively moving unit pays a
+   hashmap probe per tick for a ~seconds-latency feature. Reordering the pure-read early-outs is
+   behavior-identical; adding a scan cadence changes sim timing and takes the deterministic
+   ceremony. The avoidance kernel's idle-dodge branch (`ComputeIdleDodge`) runs one spatial-hash
+   query per idle avoidance-enabled unit per tick even in an all-idle world; a global "no movers"
+   skip is NOT bit-exact as written (`ClearAvoidanceOutput` hard-zeros residual smoothed steer, so
+   any skip must preserve that write). The parallel kernel body heap-allocates a neighbour
+   `TArray` and a usually-empty blob-broker `TSet` per mover per tick (inline allocators are the
+   standard fix), and `IsGenuineCrossing` is evaluated eagerly per neighbour before the gates
+   that reject most of them.
+
+## Movement deflation and suspected-defect remainder (2026-09-03 avoidance/re-seek audit)
+
+The concrete target list for the active movement-depth deflation initiative (root guide's
+"TickAction re-seek tangle / avoidance kernel" note), from a full read of
+`SeinAvoidanceDefaultKernel.cpp`, `SeinMoveToAction.{h,cpp}`, `SeinCommandBrokerReseek.h`, and the
+harness consumption path. The seams themselves (`USeinAvoidance`, the PreTick delegator, the
+pure-read `ApplyAvoidanceSteer`/`GetAvoidanceSpeedScale` discipline) and the re-seek kernel are
+clean — do not redesign them under this list.
+
+1. **Suspected defect — the avoidance arrival fade and past-goal gates key on planar crow-flies
+   distance to the order's final `TargetLocation`, never path distance.** A unit ordered to a
+   destination a few footprints away through a wall (the path loops around) walks the entire
+   detour with avoidance fully released, and the past-goal neighbour gate in
+   `AccumulateIndividualResponse` (also the blob branch) discards nearly every neighbour for the
+   same reason. Reproduce: destination just across a wall from a standing crowd. Candidate fixes
+   are RJ's fork (gate the fade on final-leg `CurrentWaypointIndex` AND planar distance, or key
+   on remaining-path length); either is a sim-behavior change — full ceremony plus PIE A/B.
+2. `USeinMoveToAction`'s stuck recovery is 15+ interacting canonical fields (hold ladder, escape
+   legs, near-goal stall, oscillation caps) whose codec is 1,659 lines — larger than the action.
+   An explicit episode state machine (Free/Holding/Escaping plus two counters) would encode the
+   same ladder more legibly, shrink the codec, and retire the "escape leg temporarily
+   impersonates the order's `Path`" dual-meaning pattern the tick epilogue must special-case.
+   Snapshot-continuation-affecting: full ceremony, present the shape before implementing.
+3. `ReportPinnedMover` (the kernel's grind dump) re-implements the whole neighbour gate chain by
+   hand (~180 non-shipping lines) and will silently drift from the real gates on the next model
+   change — the same disease as the retired A* diagnostics bloat. Factor the gates into one
+   classify-one-neighbour helper returning a reason enum consumed by both the kernel and the
+   dump. Intended behavior-identical but touches the hot parallel path: build green plus
+   serial-vs-parallel state hash.
+4. Kernel legibility deflation, behavior-identical: `FinalizeMovingOutput`'s inner and outer
+   cohesion terms are twin ~50-line deadband/span blocks differing only in mean source (one
+   helper halves them), and the inner/outer combination rule (boost multiplies, hold-back
+   min-clamps) deserves a stated invariant; `FAvoidanceWorkerParameters` re-carries four knobs
+   already inside its nested NeighborParameters/OutputParameters members (drift risk).
+5. The off-path drift predicate's exact `TBigInt<512>` + `__int128` fallback
+   (`IsPointWithinSegmentDistanceXYExact`) protects a repath heuristic from saturation-boundary
+   imprecision whose worst outcome is one spurious repath. A saturating conservative "off-path"
+   answer is equally deterministic across peers and deletes ~120 lines of the file's
+   hardest-to-review code. Behavior change at extreme-coordinate boundaries only.
+6. PIE A/B feel checklist (no code until observed): movers at or below the Moving Speed Floor get
+   their avoidance output cleared, so units accelerating from rest into traffic steer late
+   (masked by the collision floor — watch chokepoint restarts); idle-dodge perception is two
+   footprints and speed-blind while the mover side is speed-scaled, so fast approaches out-run
+   the shuffle; confirm Movement+ modes clamp the 2x cohesion catch-up for vehicles; cohesive
+   (blob) squads hide strung-out members from individual avoidance (collision floor only);
+   pairwise do-si-do resolves mass head-on collisions as local slide-pasts, not lanes — inherent
+   to the steering approach and consistent with the ORCA-out-of-scope ruling.
 
 ## Explicit product decisions still required
 
@@ -164,5 +227,7 @@ This is the actionable remainder after consolidating the historical audits. It i
 - Listen-host migration versus dedicated-only supported topology for each game mode.
 - Co-op campaign persistence/migration/ownership policy.
 - Adaptive input-delay policy after observability data.
+- Arrival-fade re-keying for the wall-detour case (final-leg gate versus remaining-path length),
+  and any avoidance-model deflation that changes observable behavior — after PIE evidence.
 
 These decisions should be presented with live-code options and a recommendation. Do not silently choose them during cleanup or unrelated fixes.
