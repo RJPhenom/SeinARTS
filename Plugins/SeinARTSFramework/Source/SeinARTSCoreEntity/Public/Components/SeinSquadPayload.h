@@ -284,27 +284,11 @@ struct SEINARTSCOREENTITY_API FSeinSquadPayload : public FSeinPayload
 			"ReinforceRefundPolicy == ESeinSquadReinforceRefundPolicy::PartialRefund"))
 	FFixedPoint PartialRefundPercent = FFixedPoint::Half;
 
-	/** Generic squad-level opt-in for ANY preview/visualization system that
-	 *  wants to render "where would members land if I clicked here" decals
-	 *  while the squad is selected (the SeinARTSCover module's destination
-	 *  preview is the framework's reference consumer; other plugins are free
-	 *  to read this flag too).
-	 *
-	 *  Lives here on the squad component â€” not on each member's
-	 *  FSeinNavigationPayload â€” because squad selection is at the SQUAD
-	 *  level (per the framework rule: clicking a squad member selects the
-	 *  squad, not the member). A squad opting out via this flag suppresses
-	 *  previews for ALL of its members in one place; designers don't have to
-	 *  flip every member's per-unit nav-preview opt-out. Members selected
-	 *  outside a squad context (lone units / mixed selections that include
-	 *  non-squad units) still respect their own
-	 *  FSeinNavigationPayload::bShowNavigationPreview.
-	 *
-	 *  Default true â€” most squads benefit from the hover preview. Set false
-	 *  for ambient/scripted squads where the visualization noise hurts more
-	 *  than it helps (spawning waves, scenario-driven garrisons, etc.). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Squad")
-	bool bShowFormationPreview = true;
+	// NOTE: preview opt-in is no longer sim data. A squad opts into destination
+	// markers render-side: add a Formation Preview Component
+	// (USeinFormationPreviewComponent, SeinARTSFramework) to the squad's actor
+	// Blueprint to cover every member in one place, or to individual member
+	// Blueprints for per-member control.
 
 	/** How this squad enters containers. AsOne = squad actor enters as a single
 	 *  occupant contributing Size = SlotCount. AsN = each member enters
@@ -419,7 +403,6 @@ FORCEINLINE uint32 GetTypeHash(const FSeinSquadPayload& Component)
 	Hash = HashCombine(Hash,
 		GetTypeHash(static_cast<uint8>(Component.ReinforceRefundPolicy)));
 	Hash = HashCombine(Hash, GetTypeHash(Component.PartialRefundPercent));
-	Hash = HashCombine(Hash, GetTypeHash(Component.bShowFormationPreview));
 	Hash = HashCombine(Hash, GetTypeHash(static_cast<uint8>(Component.ContainmentMode)));
 	Hash = HashCombine(Hash, GetTypeHash(Component.CoherencyRadius));
 	Hash = HashCombine(Hash, GetTypeHash(Component.bReassignSlotsLateral));

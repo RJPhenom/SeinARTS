@@ -14,7 +14,9 @@ namespace
 {
 	// Manual compatibility epoch for deterministic framework behaviour that is
 	// not already represented by the command/config/settings digests.
-	constexpr TCHAR GSeinReplayFrameworkVersion[] = TEXT("SeinARTS.Replay.7");
+	// 8: removed bShowNavigationPreview / bShowFormationPreview from the
+	//    navigation/squad component schemas (preview opt-in moved render-side).
+	constexpr TCHAR GSeinReplayFrameworkVersion[] = TEXT("SeinARTS.Replay.8");
 }
 
 FString SeinReplayCompatibility::GetFrameworkVersion()
