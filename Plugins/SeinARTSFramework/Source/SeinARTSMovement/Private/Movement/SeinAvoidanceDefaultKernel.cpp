@@ -976,10 +976,9 @@ namespace
 		FSeinEntityHandle OtherHandle,
 		const FSeinEntity& OtherEntity,
 		const FSeinMovementPayload& OtherMovement,
-		bool bGenuineCrossing,
 		FFixedVector& OutAccum)
 	{
-		if (!bGenuineCrossing
+		if (!IsGenuineCrossing(Parameters, Self, OtherEntity, OtherMovement)
 			|| OtherMovement.Velocity.SizeSquared()
 				<= Parameters.MovingSpeedFloor
 					* Parameters.MovingSpeedFloor)
@@ -1081,7 +1080,6 @@ namespace
 		FSeinEntityHandle OtherHandle,
 		const FSeinEntity& OtherEntity,
 		const FSeinMovementPayload& OtherMovement,
-		bool bGenuineCrossing,
 		FIdleBlockerSet& OutIdleBlockers,
 		FFixedVector& OutAccum)
 	{
@@ -1112,7 +1110,7 @@ namespace
 			HeadOn = (FFixedPoint::One - Cosine) + Parameters.HeadOnBase;
 		}
 
-		if (bGenuineCrossing)
+		if (IsGenuineCrossing(Parameters, Self, OtherEntity, OtherMovement))
 		{
 			const FFixedVector Steer = ComputeDoSiDoSteer(
 				Self.Handle, OtherHandle, Self.Position,
@@ -1226,8 +1224,6 @@ namespace
 			const bool bOtherIsBlob = OtherBrokerData
 				&& OtherBrokerData->bAvoidAsCohesiveBody
 				&& OtherBrokerData->FormationRadius > FFixedPoint::Zero;
-			const bool bGenuineCrossing = IsGenuineCrossing(
-				Parameters, Self, *OtherEntity, *OtherMovement);
 
 			const bool bSameBroker = Self.BrokerHandle.IsValid()
 				&& OtherBrokerHandle == Self.BrokerHandle;
@@ -1240,7 +1236,7 @@ namespace
 			{
 				AccumulateSameGroupCrossing(
 					Parameters, Self, OtherHandle, *OtherEntity,
-					*OtherMovement, bGenuineCrossing, OutAccum);
+					*OtherMovement, OutAccum);
 				continue;
 			}
 
@@ -1255,7 +1251,7 @@ namespace
 
 			AccumulateIndividualResponse(
 				Parameters, Self, OtherHandle, *OtherEntity,
-				*OtherMovement, bGenuineCrossing,
+				*OtherMovement,
 				OutIdleBlockers, OutAccum);
 		}
 	}
