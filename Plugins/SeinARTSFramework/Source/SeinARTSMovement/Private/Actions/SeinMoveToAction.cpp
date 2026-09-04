@@ -1192,8 +1192,14 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 	// the repath stage below are seen through it.
 	FSeinPath EscapeLegScratch;
 	const FSeinPath& DrivenPath = GetDrivenPath(EscapeLegScratch);
+	// "Final leg" means the final leg of the ORDER. An escape leg is a detour
+	// away from a pin, never an approach to the destination, so it must not
+	// engage the avoidance arrival fade or the past-goal neighbour gate (both
+	// key on this flag together with TargetLocation, which still names the
+	// order destination while the leg is driven).
 	MoveComp->bOnFinalLeg =
-		CurrentWaypointIndex >= DrivenPath.Waypoints.Num() - 1;
+		StuckPhase != ESeinMoveStuckPhase::Escaping
+		&& CurrentWaypointIndex >= DrivenPath.Waypoints.Num() - 1;
 
 	USeinNavigation* Nav = USeinNavigationSubsystem::GetNavigationForWorld(&World);
 	USeinNavigationSubsystem* NavSub = World.GetWorld()
