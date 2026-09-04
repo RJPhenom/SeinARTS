@@ -1630,15 +1630,12 @@ namespace UE::SeinARTSTests
 		Source.Tick();
 		Source.Tick();
 		Source.Tick();
-		ASSERT_THAT(IsTrue(
-			FMoveToActionContinuationTestAccess::
-				HasStageOneFired(*Source.Action)));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(ESeinMoveStuckPhase::HoldingRepathed),
+			static_cast<int32>(Source.Action->GetStuckPhase())));
 		ASSERT_THAT(IsTrue(
 			FMoveToActionContinuationTestAccess::
 				IsForceRepathPending(*Source.Action)));
-		ASSERT_THAT(IsFalse(
-			FMoveToActionContinuationTestAccess::
-				IsEscapeMode(*Source.Action)));
 
 		FSeinWorldSnapshot StageOneSnapshot;
 		Source.World->CaptureSnapshot(StageOneSnapshot);
@@ -1659,12 +1656,16 @@ namespace UE::SeinARTSTests
 			ASSERT_THAT(IsTrue(CanonicalRootsMatch(
 				*Source.World, *StageOneRestore.World, Error), Error));
 		}
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(ESeinMoveStuckPhase::Escaping),
+			static_cast<int32>(Source.Action->GetStuckPhase())));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(ESeinMoveStuckPhase::Escaping),
+			static_cast<int32>(StageOneRestore.Action->GetStuckPhase())));
+		// The leg never rides in Path; both worlds drive it from the endpoints.
+		ASSERT_THAT(IsTrue(Source.Action->Path.Waypoints.IsEmpty()));
 		ASSERT_THAT(IsTrue(
-			FMoveToActionContinuationTestAccess::
-				IsEscapeMode(*Source.Action)));
-		ASSERT_THAT(IsTrue(
-			FMoveToActionContinuationTestAccess::
-				IsEscapeMode(*StageOneRestore.Action)));
+			StageOneRestore.Action->Path.Waypoints.IsEmpty()));
 		ASSERT_THAT(IsTrue(
 			FMoveToActionContinuationTestAccess::MappedFieldsEqual(
 				*Source.Action, *StageOneRestore.Action, Error),
@@ -1689,9 +1690,9 @@ namespace UE::SeinARTSTests
 			ASSERT_THAT(IsTrue(CanonicalRootsMatch(
 				*Source.World, *EscapeRestore.World, Error), Error));
 		}
-		ASSERT_THAT(IsFalse(
-			FMoveToActionContinuationTestAccess::
-				IsEscapeMode(*Source.Action)));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(ESeinMoveStuckPhase::HoldingRepathed),
+			static_cast<int32>(Source.Action->GetStuckPhase())));
 		ASSERT_THAT(AreEqual(
 			1,
 			FMoveToActionContinuationTestAccess::
@@ -2153,6 +2154,10 @@ namespace UE::SeinARTSTests
 				NonstandardCompletedRoute,
 			EMoveToContinuationMutation::
 				EscapeCounterOutsideBound,
+			EMoveToContinuationMutation::
+				EscapingWithOrderPath,
+			EMoveToContinuationMutation::
+				FreeWithHoldClock,
 		};
 		for (const EMoveToContinuationMutation Mutation :
 			Mutations)

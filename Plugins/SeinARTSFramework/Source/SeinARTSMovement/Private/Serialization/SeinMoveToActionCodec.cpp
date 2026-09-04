@@ -746,11 +746,25 @@ namespace
 				TEXT("Move To continuation path exceeds its element bound.");
 			return false;
 		}
+		if (static_cast<uint8>(State.StuckPhase)
+			> static_cast<uint8>(ESeinMoveStuckPhase::Escaping))
+		{
+			OutError =
+				TEXT("Move To continuation stuck phase is outside its enum.");
+			return false;
+		}
+		// While Escaping the harness drives the two-point escape leg, so the
+		// cursor is bounded by that leg rather than by the (empty) order path.
+		const bool bEscaping =
+			State.StuckPhase == ESeinMoveStuckPhase::Escaping;
 		if (State.CurrentWaypointIndex < 0
-			|| (!State.Path.Waypoints.IsEmpty()
+			|| (bEscaping && State.CurrentWaypointIndex > 1)
+			|| (!bEscaping
+				&& !State.Path.Waypoints.IsEmpty()
 				&& !State.Path.Waypoints.IsValidIndex(
 					State.CurrentWaypointIndex))
-			|| (State.Path.Waypoints.IsEmpty()
+			|| (!bEscaping
+				&& State.Path.Waypoints.IsEmpty()
 				&& State.CurrentWaypointIndex != 0))
 		{
 			OutError =
@@ -758,20 +772,36 @@ namespace
 			return false;
 		}
 		if (State.bPathResolved
-			&& (!State.Path.bIsValid
-				|| State.Path.Waypoints.IsEmpty()
-				|| !State.bHasMovementBinding))
+			&& (!State.bHasMovementBinding
+				|| (!bEscaping
+					&& (!State.Path.bIsValid
+						|| State.Path.Waypoints.IsEmpty()))))
 		{
 			OutError =
 				TEXT("Resolved Move To continuation requires a valid path and persistent movement binding.");
 			return false;
 		}
-		if (State.bEscapeMode
+		// The order path is discarded at escape entry and re-planned on exit,
+		// so an Escaping record is resolved but carries no path of its own.
+		if (bEscaping
 			&& (!State.bPathResolved
-				|| State.Path.Waypoints.IsEmpty()))
+				|| State.Path.bIsValid
+				|| !State.Path.Waypoints.IsEmpty()
+				|| !State.Path.Segments.IsEmpty()))
 		{
 			OutError =
-				TEXT("Move To escape state requires a resolved drivable path.");
+				TEXT("Move To escape state requires a resolved order whose path was discarded at escape entry.");
+			return false;
+		}
+		// Free is only ever entered together with a zeroed episode, and the
+		// episode fields only mutate while non-Free.
+		if (State.StuckPhase == ESeinMoveStuckPhase::Free
+			&& (State.HoldTime != FFixedPoint::Zero
+				|| State.HoldBoundariesFired != 0
+				|| State.EscapeAttempts != 0))
+		{
+			OutError =
+				TEXT("Move To continuation is Free but carries a live hold episode.");
 			return false;
 		}
 		if (State.bMovementFinalized)
@@ -785,7 +815,6 @@ namespace
 			|| !IsNonNegative(State.BestDistToFinal)
 			|| !IsNonNegative(State.TimeStalledNearGoal)
 			|| !IsNonNegative(State.HoldTime)
-			|| !IsNonNegative(State.NextEscalationAt)
 			|| !IsNonNegative(State.EscapeAcceptanceRadius)
 			|| !IsNonNegative(State.EscapeHoldTime)
 			|| !IsNonNegative(State.FootprintRadius)
@@ -796,12 +825,19 @@ namespace
 				TEXT("Move To continuation contains a negative radius, cost, or clock.");
 			return false;
 		}
+		// HoldBoundariesFired keeps growing through a policy-zero hold (pivot /
+		// yield), so it needs a generous bound rather than none: the shared
+		// defensive cap is ~3.5 days of continuously held time in one order, far
+		// beyond any legitimate episode, and it keeps a tampered payload from
+		// driving the boundary arithmetic anywhere near int32 range.
 		if (State.ConsecutiveRepathFailures < 0
 			|| State.ConsecutiveRepathFailures > MaxActionCounter
 			|| State.EscapeAttempts < 0
 			|| State.EscapeAttempts > MaxActionCounter
 			|| State.TotalEscapeEntries < 0
-			|| State.TotalEscapeEntries > MaxActionCounter)
+			|| State.TotalEscapeEntries > MaxActionCounter
+			|| State.HoldBoundariesFired < 0
+			|| State.HoldBoundariesFired > MaxActionCounter)
 		{
 			OutError =
 				TEXT("Move To continuation counter is outside its defensive bound.");
@@ -891,13 +927,13 @@ struct FSeinMoveToActionCodec
 		State.BestDistToFinal = Action.BestDistToFinal;
 		State.TimeStalledNearGoal =
 			Action.TimeStalledNearGoal;
+		State.StuckPhase = Action.StuckPhase;
 		State.HoldTime = Action.HoldTime;
-		State.NextEscalationAt =
-			Action.NextEscalationAt;
-		State.bStage1Fired = Action.bStage1Fired;
+		State.HoldBoundariesFired =
+			Action.HoldBoundariesFired;
 		State.bForceRepathNow =
 			Action.bForceRepathNow;
-		State.bEscapeMode = Action.bEscapeMode;
+		State.EscapeOrigin = Action.EscapeOrigin;
 		State.EscapeTarget = Action.EscapeTarget;
 		State.EscapeAcceptanceRadius =
 			Action.EscapeAcceptanceRadius;
@@ -941,13 +977,13 @@ struct FSeinMoveToActionCodec
 		Action.BestDistToFinal = State.BestDistToFinal;
 		Action.TimeStalledNearGoal =
 			State.TimeStalledNearGoal;
+		Action.StuckPhase = State.StuckPhase;
 		Action.HoldTime = State.HoldTime;
-		Action.NextEscalationAt =
-			State.NextEscalationAt;
-		Action.bStage1Fired = State.bStage1Fired;
+		Action.HoldBoundariesFired =
+			State.HoldBoundariesFired;
 		Action.bForceRepathNow =
 			State.bForceRepathNow;
-		Action.bEscapeMode = State.bEscapeMode;
+		Action.EscapeOrigin = State.EscapeOrigin;
 		Action.EscapeTarget = State.EscapeTarget;
 		Action.EscapeAcceptanceRadius =
 			State.EscapeAcceptanceRadius;
@@ -1236,9 +1272,13 @@ SeinRegisterMoveToActionCodec(FString& OutError)
 		USeinMoveToAction::StaticClass();
 	Descriptor.StableCodecId =
 		TEXT("seinarts.movement.move-to");
-	Descriptor.StateSchemaVersion = 4;
+	// Schema 5 / codec 6 (2026-09-04): explicit ESeinMoveStuckPhase, integer
+	// hold-boundary counter, and EscapeOrigin replace the stage-1 / escape-mode
+	// booleans and the running NextEscalationAt clock; the escape leg no longer
+	// rides in Path. Behavior revision unchanged: the ladder is bit-identical.
+	Descriptor.StateSchemaVersion = 5;
 	Descriptor.BehaviorRevision = 5;
-	Descriptor.CodecRevision = 5;
+	Descriptor.CodecRevision = 6;
 	Descriptor.PayloadStruct =
 		FSeinMoveToActionContinuation::StaticStruct();
 	if (!FSeinCanonicalStateCodec::ComputeSchemaDigest(
@@ -1353,12 +1393,17 @@ void UE::SeinARTSTests::
 		FFixedPoint::FromInt(16);
 	Action.TimeStalledNearGoal =
 		FFixedPoint::FromInt(17);
+	// Deliberately NOT a shape the validator would accept (Escaping with a live
+	// order path, movement-finalized): this seed exists only to give every
+	// mapped field a distinct non-default value for the Read/Apply round-trip.
+	Action.StuckPhase = ESeinMoveStuckPhase::Escaping;
 	Action.HoldTime = FFixedPoint::FromInt(18);
-	Action.NextEscalationAt =
-		FFixedPoint::FromInt(19);
-	Action.bStage1Fired = true;
+	Action.HoldBoundariesFired = 19;
 	Action.bForceRepathNow = true;
-	Action.bEscapeMode = true;
+	Action.EscapeOrigin = FFixedVector(
+		FFixedPoint::FromInt(51),
+		FFixedPoint::FromInt(52),
+		FFixedPoint::FromInt(53));
 	Action.EscapeTarget = FFixedVector(
 		FFixedPoint::FromInt(21),
 		FFixedPoint::FromInt(22),
@@ -1523,25 +1568,11 @@ FFixedPoint UE::SeinARTSTests::
 	return Action.HoldTime;
 }
 
-FFixedPoint UE::SeinARTSTests::
+int32 UE::SeinARTSTests::
 	FMoveToActionContinuationTestAccess::
-	GetNextEscalationAt(const USeinMoveToAction& Action)
+	GetHoldBoundariesFired(const USeinMoveToAction& Action)
 {
-	return Action.NextEscalationAt;
-}
-
-bool UE::SeinARTSTests::
-	FMoveToActionContinuationTestAccess::
-	HasStageOneFired(const USeinMoveToAction& Action)
-{
-	return Action.bStage1Fired;
-}
-
-bool UE::SeinARTSTests::
-	FMoveToActionContinuationTestAccess::
-	IsEscapeMode(const USeinMoveToAction& Action)
-{
-	return Action.bEscapeMode;
+	return Action.HoldBoundariesFired;
 }
 
 int32 UE::SeinARTSTests::
@@ -1623,6 +1654,17 @@ bool UE::SeinARTSTests::
 	case EMoveToContinuationMutation::
 		EscapeCounterOutsideBound:
 		State.EscapeAttempts = MAX_int32;
+		break;
+	case EMoveToContinuationMutation::
+		EscapingWithOrderPath:
+		// The captured record is a resolved, moving order: flipping only
+		// the phase leaves its path in place, which Escaping forbids.
+		State.StuckPhase = ESeinMoveStuckPhase::Escaping;
+		break;
+	case EMoveToContinuationMutation::
+		FreeWithHoldClock:
+		State.StuckPhase = ESeinMoveStuckPhase::Free;
+		State.HoldTime = FFixedPoint::One;
 		break;
 	default:
 		OutError =

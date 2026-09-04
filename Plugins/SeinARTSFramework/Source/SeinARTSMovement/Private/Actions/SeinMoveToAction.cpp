@@ -36,6 +36,31 @@ namespace
 	 *  arc path — a curve-aware mode reads the exact segments instead. */
 	const FFixedPoint GArcFlattenChordError = FFixedPoint::FromInt(5);
 
+	/** Hold-escape ladder cadence: the ladder probes / escalates at every multiple of
+	 *  this hold time. Compile-time constant for the same reason as the chord error
+	 *  above (a peer-varying cadence would be a silent desync). */
+	const FFixedPoint GHoldEscalationStep =
+		FFixedPoint::FromInt(3) / FFixedPoint::FromInt(10);
+	/** Per-attempt abandon threshold while an escape leg itself is held. Deliberately
+	 *  computed as 3/5, NOT as 2 × GHoldEscalationStep: the two differ by one raw
+	 *  fixed-point unit (3/10 truncates), and the escape limit has always been the
+	 *  direct quotient. Unifying them would shift a boundary tick. */
+	const FFixedPoint GEscapeHoldLimit =
+		FFixedPoint::FromInt(3) / FFixedPoint::FromInt(5);
+
+	/** Hold time at which boundary number `BoundariesFired + 1` fires. Exact: a
+	 *  fixed-point value times an integer-valued fixed-point is bit-identical to that
+	 *  value summed the same number of times (the product's low 32 bits are zero
+	 *  before the shift), so the integer counter reproduces the old running
+	 *  NextEscalationAt clock boundary for boundary. Written as Step × n + Step so
+	 *  the count itself is never incremented in int32 (no signed overflow for any
+	 *  value the validator admits). */
+	FFixedPoint HoldEscalationBoundary(int32 BoundariesFired)
+	{
+		return GHoldEscalationStep * FFixedPoint::FromInt(BoundariesFired)
+			+ GHoldEscalationStep;
+	}
+
 	FFixedPoint SaturatingPositiveAdd(FFixedPoint A, FFixedPoint B)
 	{
 		if (A > FFixedPoint::Zero && B > FFixedPoint::Zero
@@ -212,11 +237,11 @@ void USeinMoveToAction::Initialize(const FFixedVector& InDestination)
 	ConsecutiveRepathFailures = 0;
 	BestDistToFinal = FFixedPoint::FromInt(1000);
 	TimeStalledNearGoal = FFixedPoint::Zero;
+	StuckPhase = ESeinMoveStuckPhase::Free;
 	HoldTime = FFixedPoint::Zero;
-	NextEscalationAt = FFixedPoint::FromInt(3) / FFixedPoint::FromInt(10); // first ladder boundary: 0.3s
-	bStage1Fired = false;
+	HoldBoundariesFired = 0;
 	bForceRepathNow = false;
-	bEscapeMode = false;
+	EscapeOrigin = FFixedVector::ZeroVector;
 	EscapeTarget = FFixedVector::ZeroVector;
 	EscapeAcceptanceRadius = FFixedPoint::Zero;
 	EscapeHoldTime = FFixedPoint::Zero;
@@ -227,6 +252,24 @@ void USeinMoveToAction::Initialize(const FFixedVector& InDestination)
 	Path.Clear();
 	Movement = nullptr;
 	bMovementFinalized = false;
+}
+
+const FSeinPath& USeinMoveToAction::GetDrivenPath(FSeinPath& Scratch) const
+{
+	if (StuckPhase != ESeinMoveStuckPhase::Escaping)
+	{
+		return Path;
+	}
+	// The straight-line-path template: never a single waypoint (zero segments;
+	// the harness indexes Waypoints[CurrentWaypointIndex] unguarded). Rebuilt
+	// from the two canonical endpoints every tick, so it is derived state.
+	Scratch.Clear();
+	Scratch.Waypoints.Add(EscapeOrigin);
+	Scratch.Waypoints.Add(EscapeTarget);
+	Scratch.bIsValid = true;
+	Scratch.bIsPartial = false;
+	Scratch.DeriveSegmentsFromWaypoints();
+	return Scratch;
 }
 
 USeinMoveToAction::EInitialPathTickResult
@@ -471,9 +514,9 @@ USeinMoveToAction::ERepathTickResult USeinMoveToAction::TickRepath(
 	USeinNavigation* Navigation,
 	USeinNavigationSubsystem* NavigationSubsystem)
 {
-	// Escape mode owns its temporary path and freezes the repath clock. Flying
+	// An escape leg owns the driven path and freezes the repath clock. Flying
 	// movements continually seek the destination directly, so they clear it.
-	if (bEscapeMode)
+	if (StuckPhase == ESeinMoveStuckPhase::Escaping)
 	{
 		return ERepathTickResult::Skipped;
 	}
@@ -701,8 +744,7 @@ bool USeinMoveToAction::TickEscapeLeg(
 		{
 			EscapeHoldTime = FFixedPoint::Zero;
 		}
-		if (EscapeHoldTime
-			>= FFixedPoint::FromInt(3) / FFixedPoint::FromInt(5)) // 0.6s
+		if (EscapeHoldTime >= GEscapeHoldLimit)
 		{
 			bExitEscape = true;
 			bAttemptFailed = true;
@@ -712,17 +754,28 @@ bool USeinMoveToAction::TickEscapeLeg(
 
 	if (bExitEscape)
 	{
-		if (bAttemptFailed) { ++EscapeAttempts; }
-		else { EscapeAttempts = 0; HoldTime = FFixedPoint::Zero; bStage1Fired = false; }
-		// Restore identically on success and failure: drop the escape path
-		// and resume through the EXISTING first-resolve machinery (correct
-		// Throttled wait-and-retry for free; OnMoveBegin re-fires — accepted
-		// as the per-order reset running after a detour).
-		bEscapeMode = false;
+		if (bAttemptFailed)
+		{
+			// The episode continues: HoldTime and the spent stage 1 are
+			// preserved, so the first held tick after the re-resolve escalates
+			// straight back to stage 2. That cadence bounds the three attempts.
+			++EscapeAttempts;
+			StuckPhase = ESeinMoveStuckPhase::HoldingRepathed;
+		}
+		else
+		{
+			// The episode ends: the next pin starts a fresh ladder.
+			EscapeAttempts = 0;
+			HoldTime = FFixedPoint::Zero;
+			StuckPhase = ESeinMoveStuckPhase::Free;
+		}
+		// Restore identically on success and failure: the order path was
+		// discarded at escape entry (Path is empty for the whole leg), so resume
+		// through the EXISTING first-resolve machinery (correct Throttled
+		// wait-and-retry for free; OnMoveBegin re-fires — accepted as the
+		// per-order reset running after a detour).
+		HoldBoundariesFired = 0;
 		EscapeHoldTime = FFixedPoint::Zero;
-		NextEscalationAt =
-			FFixedPoint::FromInt(3) / FFixedPoint::FromInt(10);
-		Path.Clear();
 		CurrentWaypointIndex = 0;
 		bPathResolved = false;
 		// The resume's first-resolve commits a fresh path — reset the repath
@@ -793,28 +846,32 @@ bool USeinMoveToAction::TickHoldEscapeLadder(
 
 	if (!bHeld)
 	{
-		HoldTime = FFixedPoint::Zero;
-		NextEscalationAt =
-			FFixedPoint::FromInt(3) / FFixedPoint::FromInt(10);
-		bStage1Fired = false;
 		// Genuine applied motion ends the stuck EPISODE — the consecutive
 		// exhaustion counter starts fresh at the next one. (TotalEscapeEntries
 		// deliberately does NOT reset — it is the per-order oscillation cap.)
+		StuckPhase = ESeinMoveStuckPhase::Free;
+		HoldTime = FFixedPoint::Zero;
+		HoldBoundariesFired = 0;
 		EscapeAttempts = 0;
 		return false;
+	}
+
+	// A held tick opens an episode. HoldingRepathed survives here on purpose:
+	// after a FAILED escape the preserved HoldTime re-escalates immediately.
+	if (StuckPhase == ESeinMoveStuckPhase::Free)
+	{
+		StuckPhase = ESeinMoveStuckPhase::Holding;
 	}
 
 	// NOTE: a successful repath / Path swap deliberately does NOT reset
 	// this clock — repaths SUCCEED every interval in the pinned state
 	// (that is the pathology); only genuine applied motion clears it.
 	HoldTime = HoldTime + DeltaTime;
-	if (HoldTime < NextEscalationAt)
+	if (HoldTime < HoldEscalationBoundary(HoldBoundariesFired))
 	{
 		return false;
 	}
-
-	NextEscalationAt = NextEscalationAt
-		+ FFixedPoint::FromInt(3) / FFixedPoint::FromInt(10);
+	++HoldBoundariesFired;
 
 	// MECHANICAL-BLOCK PROBE (boundaries only, never per-tick): is
 	// the direction the unit is trying to go footprint-refused? A
@@ -842,14 +899,14 @@ bool USeinMoveToAction::TickHoldEscapeLadder(
 		bBlocked = !Movement->IsFootprintPassable(Probe, Navigation);
 	}
 
-	if (bBlocked && !bStage1Fired)
+	if (bBlocked && StuckPhase == ESeinMoveStuckPhase::Holding)
 	{
 		// STAGE 1: force a repath through the existing machinery
 		// (fires next tick's repath block, before the movement tick).
 		// Cheap; cures stale-carrot variants. Its real value is
 		// OffPathOnly mode, whose drift gate never rescues an
 		// on-polyline pinned unit.
-		bStage1Fired = true;
+		StuckPhase = ESeinMoveStuckPhase::HoldingRepathed;
 		bForceRepathNow = true;
 #if !UE_BUILD_SHIPPING
 		UE_LOG(LogSeinMoveTrace, Verbose,
@@ -863,6 +920,7 @@ bool USeinMoveToAction::TickHoldEscapeLadder(
 	{
 		return false;
 	}
+	// HoldingRepathed from here: stage 1 is spent for this episode.
 
 	// PER-ORDER OSCILLATION CAP: a reproducible pin whose escapes
 	// SUCCEED never accumulates the consecutive counter — the
@@ -924,19 +982,15 @@ bool USeinMoveToAction::TickHoldEscapeLadder(
 		}
 		else
 		{
-			// Install the escape leg: [AgentPos → Target] — the
-			// straight-line-path template. Never a single waypoint
-			// (zero segments; the harness indexes
-			// Waypoints[CurrentWaypointIndex] unguarded).
+			// Install the escape leg [AgentPos → Target]. The order path is
+			// discarded (the resume re-plans it from scratch); the harness
+			// drives the leg through GetDrivenPath, which rebuilds it from
+			// these two endpoints every tick.
 			Path.Clear();
-			Path.Waypoints.Add(AgentPos);
-			Path.Waypoints.Add(Target);
-			Path.bIsValid = true;
-			Path.bIsPartial = false;
-			Path.DeriveSegmentsFromWaypoints();
 			CurrentWaypointIndex = 0;
-			bEscapeMode = true;
+			StuckPhase = ESeinMoveStuckPhase::Escaping;
 			++TotalEscapeEntries;
+			EscapeOrigin = AgentPos;
 			EscapeTarget = Target;
 			EscapeAcceptanceRadius = AccEsc;
 			EscapeHoldTime = FFixedPoint::Zero;
@@ -953,7 +1007,7 @@ bool USeinMoveToAction::TickHoldEscapeLadder(
 #endif
 		}
 	}
-	if (!bGotTarget && !bEscapeMode)
+	if (!bGotTarget)
 	{
 		++EscapeAttempts;
 #if !UE_BUILD_SHIPPING
@@ -1132,7 +1186,14 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 	// without this action's context. Idempotent, same rationale as bHasTarget; NOT
 	// cleared at end (a "last ordered goal" — readers gate on bHasTarget).
 	MoveComp->TargetLocation = Destination;
-	MoveComp->bOnFinalLeg = CurrentWaypointIndex >= Path.Waypoints.Num() - 1;
+	// The polyline actually driven this tick: the order path, or — while the
+	// hold-escape ladder's leg is in flight — the two-point escape leg. A
+	// reference into `Path` in the ordinary case, so the initial resolve and
+	// the repath stage below are seen through it.
+	FSeinPath EscapeLegScratch;
+	const FSeinPath& DrivenPath = GetDrivenPath(EscapeLegScratch);
+	MoveComp->bOnFinalLeg =
+		CurrentWaypointIndex >= DrivenPath.Waypoints.Num() - 1;
 
 	USeinNavigation* Nav = USeinNavigationSubsystem::GetNavigationForWorld(&World);
 	USeinNavigationSubsystem* NavSub = World.GetWorld()
@@ -1189,11 +1250,16 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 	}
 
 	const int32 PrevWaypoint = CurrentWaypointIndex;
+	// Snapshotted once: no writer of StuckPhase is reachable from inside the
+	// harness tick (it is private, non-reflected, and only the ladder, the escape
+	// leg, Initialize, and the codec assign it), so this equals the live value at
+	// the epilogue. Keep it that way.
+	const bool bEscaping = StuckPhase == ESeinMoveStuckPhase::Escaping;
 	FSeinMovementContext TickCtx{
 		*Entity,
 		MoveComp,
 		NavComp,
-		Path,
+		DrivenPath,
 		CurrentWaypointIndex,
 		FFixedVector::SquareSaturated(AcceptanceRadius),
 		DeltaTime,
@@ -1202,12 +1268,12 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 		OwnerEntity
 	};
 	TickCtx.ExactAcceptanceRadius = AcceptanceRadius;
-	// Escape-mode context overrides (ctx-local; the action members are preserved
+	// Escape-leg context overrides (ctx-local; the action members are preserved
 	// for resume): the escape leg is never an authoritative destination (the
 	// cover-slot exemption would re-target the nav floor at the escape cell),
 	// and its acceptance is the entry-gated escape ring, not the order's.
-	TickCtx.bAuthoritativeDestination = bEscapeMode ? false : bAuthoritativeDestination;
-	if (bEscapeMode)
+	TickCtx.bAuthoritativeDestination = bEscaping ? false : bAuthoritativeDestination;
+	if (bEscaping)
 	{
 		TickCtx.AcceptanceRadiusSq =
 			FFixedVector::SquareSaturated(EscapeAcceptanceRadius);
@@ -1246,7 +1312,7 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 	// (0.75s held would falsely Complete the order at the wall), and a true
 	// return from the harness here means "reached the ESCAPE target", never
 	// "reached the order destination".
-	if (bEscapeMode)
+	if (bEscaping)
 	{
 		return TickEscapeLeg(
 			DeltaTime, World, *Entity, *MoveComp, bReachedEnd);
@@ -1424,11 +1490,13 @@ void USeinMoveToAction::RefreshAuthoredComponentTuning(
 		if (!MoveComp || !Entity) return;
 	}
 	USeinNavigation* Nav = USeinNavigationSubsystem::GetNavigationForWorld(&World);
+	FSeinPath EscapeLegScratch;
+	const FSeinPath& DrivenPath = GetDrivenPath(EscapeLegScratch);
 	FSeinMovementContext Context{
 		*Entity,
 		MoveComp,
 		NavComp,
-		Path,
+		DrivenPath,
 		CurrentWaypointIndex,
 		FFixedVector::SquareSaturated(AcceptanceRadius),
 		FFixedPoint::Zero,
