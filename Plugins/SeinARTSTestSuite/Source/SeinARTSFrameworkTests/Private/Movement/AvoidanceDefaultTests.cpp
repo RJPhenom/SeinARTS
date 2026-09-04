@@ -111,18 +111,23 @@ namespace
 			});
 		}
 
+		/** A synthetic mover with a target is on its order's final leg unless the
+		 *  test says otherwise: the arrival fade and the past-goal neighbour gate
+		 *  both key on that flag together with TargetLocation. */
 		FSeinEntityHandle AddMover(
 			const FFixedVector& Position,
 			const FFixedVector& Velocity,
 			const FFixedVector& Target,
 			bool bHasTarget = true,
-			FFixedPoint Strength = FFixedPoint::One)
+			FFixedPoint Strength = FFixedPoint::One,
+			bool bOnFinalLeg = true)
 		{
 			const FSeinEntityHandle Handle = World->SpawnAbstractEntity(
 				FFixedTransform(Position), FSeinPlayerID(1));
 			FSeinMovementPayload Movement;
 			Movement.bHasTarget = bHasTarget;
 			Movement.TargetLocation = Target;
+			Movement.bOnFinalLeg = bHasTarget && bOnFinalLeg;
 			Movement.Velocity = Velocity;
 			Movement.AvoidanceStrength = Strength;
 			World->AddComponent(Handle, Movement);
@@ -812,7 +817,8 @@ namespace UE::SeinARTSTests
 			FAvoidanceFixture& Fixture,
 			FSeinEntityHandle& OutMover,
 			int32 GoalDistance,
-			bool bLegacyCut = false)
+			bool bLegacyCut = false,
+			bool bIntermediateLeg = false)
 		{
 			Fixture.Avoidance->AvoidanceSmoothKeep = FFixedPoint::Zero;
 			Fixture.Avoidance->AvoidanceMaxSteerMagnitude =
@@ -830,7 +836,10 @@ namespace UE::SeinARTSTests
 					FFixedPoint::Zero),
 				FFixedVector(
 					FFixedPoint::FromInt(GoalDistance), FFixedPoint::Zero,
-					FFixedPoint::Zero));
+					FFixedPoint::Zero),
+				true,
+				FFixedPoint::One,
+				!bIntermediateLeg);
 			Fixture.AddMover(
 				FFixedVector(
 					FFixedPoint::FromInt(40), FFixedPoint::Zero,
@@ -845,14 +854,23 @@ namespace UE::SeinARTSTests
 		FAvoidanceFixture MidBand;
 		FAvoidanceFixture InnerBoundary;
 		FAvoidanceFixture LegacyCut;
+		FAvoidanceFixture IntermediateLeg;
 		FSeinEntityHandle FullMover;
 		FSeinEntityHandle OuterMover;
 		FSeinEntityHandle MidMover;
 		FSeinEntityHandle InnerMover;
 		FSeinEntityHandle LegacyMover;
+		FSeinEntityHandle IntermediateMover;
 		ASSERT_THAT(IsTrue(Full.Initialize([&](FAvoidanceFixture& Fixture)
 		{
 			AuthorArrival(Fixture, FullMover, 200);
+		})));
+		// Same mid-band goal distance, but the route still has legs to go: the
+		// crow-flies distance to the destination shortcuts through whatever the
+		// path detours around, so the fade must stay released.
+		ASSERT_THAT(IsTrue(IntermediateLeg.Initialize([&](FAvoidanceFixture& Fixture)
+		{
+			AuthorArrival(Fixture, IntermediateMover, 100, false, true);
 		})));
 		ASSERT_THAT(IsTrue(OuterBoundary.Initialize([&](FAvoidanceFixture& Fixture)
 		{
@@ -875,9 +893,13 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(MidBand.Compute()));
 		ASSERT_THAT(IsTrue(InnerBoundary.Compute()));
 		ASSERT_THAT(IsTrue(LegacyCut.Compute()));
+		ASSERT_THAT(IsTrue(IntermediateLeg.Compute()));
 
 		const FSeinMovementPayload* FullMove =
 			Full.World->GetComponent<FSeinMovementPayload>(FullMover);
+		const FSeinMovementPayload* IntermediateMove =
+			IntermediateLeg.World->GetComponent<FSeinMovementPayload>(
+				IntermediateMover);
 		const FSeinMovementPayload* OuterMove =
 			OuterBoundary.World->GetComponent<FSeinMovementPayload>(OuterMover);
 		const FSeinMovementPayload* MidMove =
@@ -891,12 +913,19 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsNotNull(MidMove));
 		ASSERT_THAT(IsNotNull(InnerMove));
 		ASSERT_THAT(IsNotNull(LegacyMove));
+		ASSERT_THAT(IsNotNull(IntermediateMove));
 		ASSERT_THAT(IsTrue(
 			FullMove->AvoidanceOutput.SteerDir.SizeSquared()
 				> FFixedPoint::Epsilon));
 		ASSERT_THAT(IsTrue(
 			OuterMove->AvoidanceOutput.SteerDir
 				== FullMove->AvoidanceOutput.SteerDir));
+		ASSERT_THAT(IsTrue(
+			IntermediateMove->AvoidanceOutput.SteerDir
+				== FullMove->AvoidanceOutput.SteerDir));
+		ASSERT_THAT(IsTrue(
+			IntermediateMove->AvoidanceOutput.SpeedScale
+				== FullMove->AvoidanceOutput.SpeedScale));
 		const FFixedPoint MidGoal = FFixedPoint::FromInt(100);
 		const FFixedPoint MidFade =
 			(SeinMath::Sqrt(MidGoal * MidGoal) - FFixedPoint::FromInt(50))

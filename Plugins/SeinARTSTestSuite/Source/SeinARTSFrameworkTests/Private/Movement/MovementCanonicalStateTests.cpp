@@ -318,9 +318,63 @@ TEST(MovementLongRangeWaypointAdvanceUsesExactDistance,
 	ASSERT_THAT(AreEqual(0, WaypointIndex));
 }
 
-TEST(MovementLongRangeOffPathSegmentProjectionIsExact,
+TEST(MovementLongRangeOffPathSegmentProjectionIsExactBelowSaturation,
 	"SeinARTS.Unit.Movement.LongRange")
 {
+	// A 20 km segment is far beyond any map yet well inside the representable
+	// span, so the normalized fixed-point path answers exactly: on the line,
+	// inside the radius, and outside it.
+	const FFixedVector Start(
+		FFixedPoint::FromInt(-1000000),
+		FFixedPoint::Zero,
+		FFixedPoint::Zero);
+	const FFixedVector End(
+		FFixedPoint::FromInt(1000000),
+		FFixedPoint::Zero,
+		FFixedPoint::Zero);
+	ASSERT_THAT(IsTrue(
+		UE::SeinARTSTests::IsPointWithinMoveToSegmentForTest(
+			FFixedVector::ZeroVector,
+			Start,
+			End,
+			FFixedPoint::One)));
+	ASSERT_THAT(IsTrue(
+		UE::SeinARTSTests::IsPointWithinMoveToSegmentForTest(
+			FFixedVector(
+				FFixedPoint::Zero,
+				FFixedPoint::One / FFixedPoint::FromInt(2),
+				FFixedPoint::Zero),
+			Start,
+			End,
+			FFixedPoint::One)));
+	ASSERT_THAT(IsFalse(
+		UE::SeinARTSTests::IsPointWithinMoveToSegmentForTest(
+			FFixedVector(
+				FFixedPoint::Zero,
+				FFixedPoint::FromInt(2),
+				FFixedPoint::Zero),
+			Start,
+			End,
+			FFixedPoint::One)));
+	ASSERT_THAT(IsFalse(
+		UE::SeinARTSTests::IsPointWithinMoveToSegmentForTest(
+			FFixedVector(
+				FFixedPoint::Zero,
+				FFixedPoint::FromInt(10),
+				FFixedPoint::Zero),
+			Start,
+			End,
+			FFixedPoint::One)));
+}
+
+TEST(MovementOffPathSegmentSaturationAnswersOffPathConservatively,
+	"SeinARTS.Unit.Movement.LongRange")
+{
+	// Endpoints at opposite representable extremes saturate the segment
+	// length. The predicate deliberately answers "off-path" there instead of
+	// paying for exact wide arithmetic: the only consequence is one spurious
+	// repath, identical on every peer. This pins that contract, including for
+	// a point that is exactly on the line.
 	const FFixedVector Start(
 		FFixedPoint::MinValue,
 		FFixedPoint::Zero,
@@ -329,7 +383,7 @@ TEST(MovementLongRangeOffPathSegmentProjectionIsExact,
 		FFixedPoint::MaxValue,
 		FFixedPoint::Zero,
 		FFixedPoint::Zero);
-	ASSERT_THAT(IsTrue(
+	ASSERT_THAT(IsFalse(
 		UE::SeinARTSTests::IsPointWithinMoveToSegmentForTest(
 			FFixedVector::ZeroVector,
 			Start,
