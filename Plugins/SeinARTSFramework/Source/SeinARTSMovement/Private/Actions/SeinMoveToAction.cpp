@@ -426,6 +426,12 @@ USeinMoveToAction::ResolveInitialPath(
 			TEXT("Initial path is PARTIAL — destination unreachable, routing to closest cell (entity %s)"),
 			*OwnerEntity.ToString());
 		NotifyPartialPath();
+		// The callback may synchronously end the ability, which cancels this
+		// action and releases the borrowed movement instance used below.
+		if (bMovementFinalized)
+		{
+			return EInitialPathTickResult::Terminal;
+		}
 	}
 
 	// Expand any typed (Arc / Jump / Field / AbstractEdge) segments into the drivable waypoint
@@ -651,6 +657,13 @@ USeinMoveToAction::ERepathTickResult USeinMoveToAction::TickRepath(
 		if (Path.bIsPartial)
 		{
 			NotifyPartialPath();
+		}
+		// Either callback may synchronously end the ability, cancelling this
+		// action and releasing the movement instance the movement stage
+		// dereferences next. Terminal here means "already ended", not failure.
+		if (bMovementFinalized)
+		{
+			return ERepathTickResult::Terminal;
 		}
 	}
 	else
@@ -1330,6 +1343,12 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 	if (CurrentWaypointIndex > PrevWaypoint)
 	{
 		NotifyWaypointReached(CurrentWaypointIndex - 1, Path.Waypoints.Num());
+		// The callback may synchronously end the ability (Cancel runs OnCancel
+		// inline), releasing the movement instance the tail below dereferences.
+		if (bMovementFinalized)
+		{
+			return true;
+		}
 	}
 
 	UpdateArrivalImminent(*Entity, *MoveComp, bReachedEnd);

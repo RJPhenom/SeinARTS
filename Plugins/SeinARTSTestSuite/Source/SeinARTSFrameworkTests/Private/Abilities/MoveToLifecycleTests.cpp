@@ -282,6 +282,10 @@ void USeinMoveToLifecycleTestObserver::HandlePathRecomputed(
 		? UE::SeinARTSTests::FMoveToActionContinuationTestAccess::
 			GetRepathElapsed(*Action)
 		: FFixedPoint::MinValue;
+	if (bEndAbilityOnPathRecomputed && Ability)
+	{
+		Ability->EndAbility();
+	}
 }
 
 void USeinMoveToLifecycleTestObserver::HandlePartialPath(
@@ -291,6 +295,16 @@ void USeinMoveToLifecycleTestObserver::HandlePartialPath(
 	PartialPathObservedBeginCount =
 		USeinMoveToLifecycleTestMovement::BeginCount;
 	RepathEventOrder.Add(2);
+}
+
+void USeinMoveToLifecycleTestObserver::HandleWaypointReached(
+	FSeinMoveToResult)
+{
+	++WaypointReachedCount;
+	if (bEndAbilityOnWaypointReached && Ability)
+	{
+		Ability->EndAbility();
+	}
 }
 
 namespace
@@ -450,6 +464,8 @@ namespace
 				Observer, &USeinMoveToLifecycleTestObserver::HandlePathRecomputed);
 			Proxy->OnPartialPath.AddDynamic(
 				Observer, &USeinMoveToLifecycleTestObserver::HandlePartialPath);
+			Proxy->OnWaypointReached.AddDynamic(
+				Observer, &USeinMoveToLifecycleTestObserver::HandleWaypointReached);
 
 			USeinMoveToLifecycleTestMovement::bFinishOnTick =
 				bFinishOnFirstTick;
@@ -1179,6 +1195,75 @@ namespace UE::SeinARTSTests
 			static_cast<int32>(Fixture.Observer->LastFailure)));
 		ASSERT_THAT(IsTrue(Fixture.Action->bCompleted));
 		ASSERT_THAT(IsTrue(Fixture.Action->bFailed));
+	}
+
+	TEST(MoveToPathRecomputedCallbackCanEndAbilityMidTick,
+		"SeinARTS.Sim.Movement.Lifecycle")
+	{
+		// A Blueprint that ends the ability from the path-recomputed callback
+		// cancels this action INSIDE its own tick, releasing the movement
+		// instance before the movement stage would dereference it.
+		FScopedMoveToTestState Reset;
+		FSeinNavigationPayload Navigation;
+		Navigation.RepathMode = ESeinRepathMode::Interval;
+		Navigation.RepathInterval =
+			FFixedPoint::One / FFixedPoint::FromInt(20);
+		USeinMoveToLifecycleTestMovement::ScriptedPathResults = {
+			ESeinPathResult::Found,
+			ESeinPathResult::Found
+		};
+
+		FMoveToLifecycleFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Navigation)));
+		Fixture.Observer->bEndAbilityOnPathRecomputed = true;
+		Fixture.Tick(FFixedPoint::One / FFixedPoint::FromInt(20));
+
+		ASSERT_THAT(AreEqual(
+			2, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
+		ASSERT_THAT(AreEqual(1, Fixture.Observer->PathRecomputedCount));
+		ASSERT_THAT(AreEqual(1, Fixture.Observer->CancelledCount));
+		ASSERT_THAT(AreEqual(0, Fixture.Observer->CompletedCount));
+		ASSERT_THAT(IsTrue(Fixture.Action->bCancelled));
+		ASSERT_THAT(IsFalse(Fixture.Action->bCompleted));
+		// The tick ended at the repath stage: no movement tick ran on the
+		// released instance, and the move ended exactly once.
+		ASSERT_THAT(AreEqual(
+			0, USeinMoveToLifecycleTestMovement::TickCount));
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::EndCount));
+		ASSERT_THAT(IsFalse(Fixture.Ability->bIsActive));
+		ASSERT_THAT(AreEqual(0, Fixture.Manager->GetActiveActionCount()));
+	}
+
+	TEST(MoveToWaypointReachedCallbackCanEndAbilityMidTick,
+		"SeinARTS.Sim.Movement.Lifecycle")
+	{
+		// Same re-entrancy through the waypoint-reached callback, which fires
+		// after the movement tick and before the order-progress tail.
+		FScopedMoveToTestState Reset;
+		USeinMoveToLifecycleTestMovement::bAdvanceInitialWaypointOnTick = true;
+		const FSeinNavigationPayload Navigation =
+			MakeEscapeNavigationComponent();
+		FMoveToLifecycleFixture Fixture;
+		Fixture.Destination = FFixedVector(
+			FFixedPoint::FromInt(2000),
+			FFixedPoint::Zero,
+			FFixedPoint::Zero);
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Navigation)));
+		Fixture.Observer->bEndAbilityOnWaypointReached = true;
+		Fixture.Tick();
+
+		ASSERT_THAT(AreEqual(1, Fixture.Observer->WaypointReachedCount));
+		ASSERT_THAT(AreEqual(1, Fixture.Observer->CancelledCount));
+		ASSERT_THAT(AreEqual(0, Fixture.Observer->CompletedCount));
+		ASSERT_THAT(IsTrue(Fixture.Action->bCancelled));
+		ASSERT_THAT(IsFalse(Fixture.Action->bCompleted));
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::TickCount));
+		ASSERT_THAT(AreEqual(
+			1, USeinMoveToLifecycleTestMovement::EndCount));
+		ASSERT_THAT(IsFalse(Fixture.Ability->bIsActive));
+		ASSERT_THAT(AreEqual(0, Fixture.Manager->GetActiveActionCount()));
 	}
 
 	TEST(MoveToCompletedCallbackCanEndAbilityWithoutCancellation,

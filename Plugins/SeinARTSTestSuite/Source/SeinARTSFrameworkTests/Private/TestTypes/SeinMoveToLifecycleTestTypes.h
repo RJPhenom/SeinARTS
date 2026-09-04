@@ -161,12 +161,17 @@ public:
 	int32 CancelledCount = 0;
 	int32 PathRecomputedCount = 0;
 	int32 PartialPathCount = 0;
+	int32 WaypointReachedCount = 0;
 	int32 PartialPathObservedBeginCount = INDEX_NONE;
 	TArray<int32> RepathEventOrder;
 	FFixedPoint RecomputedObservedRepathElapsed = FFixedPoint::MinValue;
 	bool bCompletedSawTerminalAction = false;
 	bool bFailedSawTerminalAction = false;
 	bool bReenterCancellationOnCancelled = false;
+	/** Reproduce a Blueprint graph that ends the ability from a NON-terminal
+	 *  callback while the Move To action is still inside its tick. */
+	bool bEndAbilityOnPathRecomputed = false;
+	bool bEndAbilityOnWaypointReached = false;
 	ESeinMoveFailureReason LastFailure = ESeinMoveFailureReason::None;
 
 	UFUNCTION()
@@ -183,4 +188,7 @@ public:
 
 	UFUNCTION()
 	void HandlePartialPath(FSeinMoveToResult Result);
+
+	UFUNCTION()
+	void HandleWaypointReached(FSeinMoveToResult Result);
 };
