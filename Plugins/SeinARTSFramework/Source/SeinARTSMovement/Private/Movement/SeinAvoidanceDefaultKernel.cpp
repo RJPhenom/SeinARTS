@@ -165,6 +165,7 @@ namespace
 		const FFixedVector& SelfHeading,
 		const FFixedVector& SelfVelocity,
 		FFixedPoint SelfGoalDistanceSquared,
+		bool bSelfOnFinalLeg,
 		FFixedPoint SelfRadius,
 		int32 SelfAvoidanceWeight,
 		bool bSelfAvoidSameWeights,
@@ -211,7 +212,8 @@ namespace
 		{
 			return ENeighborSkipReason::NotClosing;
 		}
-		if (SelfGoalDistanceSquared > FFixedPoint::Zero
+		if (bSelfOnFinalLeg
+			&& SelfGoalDistanceSquared > FFixedPoint::Zero
 			&& Out.DistanceSquared >= SelfGoalDistanceSquared)
 		{
 			return ENeighborSkipReason::PastGoal;
@@ -568,7 +570,7 @@ namespace
 			FNeighborGateOutput Gate;
 			const ENeighborSkipReason Reason = ClassifyIndividualNeighbor(
 				Position, Heading, Velocity,
-				GoalDistanceSquared, Radius,
+				GoalDistanceSquared, Move.bOnFinalLeg, Radius,
 				Move.AvoidanceWeight, Move.bAvoidSameWeights,
 				bResolveThroughIdlers, FalloffRadii,
 				NavStorage, ExtentsStorage,
@@ -1086,7 +1088,8 @@ namespace
 		FNeighborGateOutput Gate;
 		if (ClassifyIndividualNeighbor(
 				Self.Position, Self.Heading, Self.Velocity,
-				Self.GoalDistanceSquared, Self.Radius,
+				Self.GoalDistanceSquared, Self.Movement.bOnFinalLeg,
+				Self.Radius,
 				Self.Movement.AvoidanceWeight,
 				Self.Movement.bAvoidSameWeights,
 				Parameters.bResolveThroughIdlers,
@@ -1535,14 +1538,15 @@ namespace
 		// ARRIVAL-RELEASE FADE: ramp avoidance down as the unit closes on its goal so
 		// path-attraction + the collision floor own the endgame. Without this, a destination
 		// inside/behind a standing cluster makes the unit orbit the perimeter forever.
-		// Outer radius = full release begins (avoidance starts fading).
-		// Inner radius = avoidance fully off (hard cut, collision floor takes over).
-		// Between them the output scales linearly. If inner >= outer, legacy hard cut.
+		// Gated on bOnFinalLeg: on intermediate legs the crow-flies distance to
+		// TargetLocation shortcuts through walls and would release avoidance for the
+		// entire wall detour. The fade is meaningful only when the unit is on a
+		// straight approach to the destination.
 		const FFixedPoint OuterRadius = SelfRadius * ArrivalReleaseRadii;
 		const FFixedPoint InnerRadius = SelfRadius * ArrivalFadeInnerRadii;
 		const FFixedPoint OuterRadiusSq = OuterRadius * OuterRadius;
 		FFixedPoint ArrivalFade = FFixedPoint::One;
-		if (GoalDistSq <= OuterRadiusSq)
+		if (Move->bOnFinalLeg && GoalDistSq <= OuterRadiusSq)
 		{
 			if (InnerRadius >= OuterRadius || GoalDistSq <= InnerRadius * InnerRadius)
 			{

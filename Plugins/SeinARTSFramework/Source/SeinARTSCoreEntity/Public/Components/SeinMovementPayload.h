@@ -60,14 +60,14 @@ struct SEINARTSCOREENTITY_API FSeinAvoidanceOutput
 	 *  shipped model and the base ApplyAvoidanceSteer consumer use the XY channel; the Z channel is
 	 *  reserved for an air model + air movement mode (vertical dodge), read raw via the Mover
 	 *  Handle's Get Avoidance Steer. Zero = no steering. */
-	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Movement|Avoidance")
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Avoidance")
 	FFixedVector SteerDir = FFixedVector::ZeroVector;
 
 	/** Cruise-speed multiplier, >= 0. 1 = full speed (bit-exact no-op); < 1 = yield
 	 *  by braking; > 1 = catch-up boost. Unbounded above BY CONTRACT — magnitude
 	 *  policy belongs to the producing avoidance class and the consuming movement
 	 *  mode, never to this seam. */
-	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Movement|Avoidance",
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Avoidance",
 		meta = (ClampMin = "0.0"))
 	FFixedPoint SpeedScale = FFixedPoint::One;
 };
@@ -90,7 +90,7 @@ struct SEINARTSCOREENTITY_API FSeinMovementPayload : public FSeinPayload
 
 	/** Maximum forward speed in world units per second. Default tuned for a
 	 *  baseline foot-soldier; vehicles/designers override per entity class. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (ClampMin = "0.0"))
 	FFixedPoint TopSpeed = FFixedPoint::FromInt(500);
 
@@ -98,7 +98,7 @@ struct SEINARTSCOREENTITY_API FSeinMovementPayload : public FSeinPayload
 	 *  movement class). Per-class sub-data may override behaviour around
 	 *  this; e.g. tracked vehicles' pivot-vs-arc decision branches off
 	 *  TurnRate AND the tracked sub-data's PivotEntrySpeed. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (ClampMin = "0.0"))
 	FFixedPoint TurnRate = FFixedPoint::FromInt(5);
 
@@ -114,7 +114,7 @@ struct SEINARTSCOREENTITY_API FSeinMovementPayload : public FSeinPayload
 	 *  flip the dep. Resolved to a UClass* at action-init time via TryLoadClass.
 	 *
 	 *  Null / invalid defaults to USeinBasicMovement (simple seek + arrive). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (DisplayName = "Movement Class",
 				MetaClass = "/Script/SeinARTSMovement.SeinMovement"))
 	FSoftClassPath MovementClass;
@@ -135,7 +135,7 @@ struct SEINARTSCOREENTITY_API FSeinMovementPayload : public FSeinPayload
 	 *  Determinism: the per-class structs are `SeinDeterministic` and live
 	 *  in sim storage like any other authored data — runtime queries route
 	 *  through the same FInstancedStruct unwrap path. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (BaseStruct = "/Script/SeinARTSCoreEntity.SeinComponent",
 				ExcludeBaseStruct,
 				SeinDeterministicOnly,
@@ -154,12 +154,12 @@ struct SEINARTSCOREENTITY_API FSeinMovementPayload : public FSeinPayload
 	 *  that way, so wheeled units reverse without touching this flag (and the
 	 *  reverse tuning fields below stay LIVE for them even while this
 	 *  EditCondition greys them out). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	bool bCanReverse = false;
 
 	/** Maximum speed when reversing. Vehicles typically reverse slower than
 	 *  forward. Set 0 to use TopSpeed / 2 as a fallback. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (ClampMin = "0.0", EditCondition = "bCanReverse"))
 	FFixedPoint ReverseTopSpeed = FFixedPoint::Zero;
 
@@ -167,14 +167,14 @@ struct SEINARTSCOREENTITY_API FSeinMovementPayload : public FSeinPayload
 	 *  this dot threshold AND distance to goal is within
 	 *  `ReverseEngageDistanceThreshold`. Default -0.5 ≈ 120° behind; lower
 	 *  (more negative) is stricter. Range [-1, +1]. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (ClampMin = "-1.0", ClampMax = "1.0", EditCondition = "bCanReverse"))
 	FFixedPoint ReverseEngageDotThreshold = -FFixedPoint::Half;
 
 	/** Auto-reverse only engages within this distance of the destination. A
 	 *  far-away rear target would U-turn forward instead — reversing all the
 	 *  way looks silly. Default 5m. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (ClampMin = "0.0", EditCondition = "bCanReverse"))
 	FFixedPoint ReverseEngageDistanceThreshold = FFixedPoint::FromInt(500);
 
@@ -189,11 +189,11 @@ struct SEINARTSCOREENTITY_API FSeinMovementPayload : public FSeinPayload
 	 *  re-decided on a re-form. Gate reads on bHasTarget (the value is stale after
 	 *  arrival by design — "last ordered goal"). PreTick systems (avoidance
 	 *  arrival-release, cohesion laggard detection) read it via component storage. */
-	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Movement")
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS")
 	FFixedVector TargetLocation = FFixedVector::ZeroVector;
 
 	/** True when an active move-to action is in flight. */
-	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Movement")
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS")
 	bool bHasTarget = false;
 
 	/** Persistent world-space velocity vector (planar XY, world units / second).
@@ -210,7 +210,7 @@ struct SEINARTSCOREENTITY_API FSeinMovementPayload : public FSeinPayload
 	 *  Final-arrival logic zeros it (units come to rest at the destination);
 	 *  cancellation/preemption intentionally leaves it set so the next order
 	 *  picks up where the previous left off. */
-	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Movement")
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS")
 	FFixedVector Velocity = FFixedVector::ZeroVector;
 
 	/** True when an active move action has entered the kinematic brake zone —
@@ -218,8 +218,18 @@ struct SEINARTSCOREENTITY_API FSeinMovementPayload : public FSeinPayload
 	 *  so animation graphs can blend into "approaching destination" anims
 	 *  (slowing-down idle, vehicle brake-light, etc.) without re-deriving
 	 *  from speed deltas. */
-	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Movement")
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS")
 	bool bArrivalImminent = false;
+
+	/** True when the unit is heading toward the FINAL waypoint of its current
+	 *  path (CurrentWaypointIndex >= Path.Waypoints.Num() - 1). Gates the
+	 *  avoidance arrival fade and past-goal neighbour cull so they only key on
+	 *  crow-flies distance to TargetLocation when that distance is geometrically
+	 *  meaningful — on intermediate legs the crow-flies shortcut through walls
+	 *  would release avoidance prematurely. Set each tick by MoveToAction,
+	 *  cleared on action end. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS")
+	bool bOnFinalLeg = false;
 
 	/** Smoothed pitch (radians, positive = nose up). Ground movements
 	 *  rate-limit their per-tick pitch update toward the slope-sampled
@@ -230,13 +240,13 @@ struct SEINARTSCOREENTITY_API FSeinMovementPayload : public FSeinPayload
 	 *  the slope sampler returned each tick, which produced visible
 	 *  twitches when terrain samples briefly crossed wall edges (the
 	 *  "split-second sideways tilt" at narrow walls). */
-	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Movement")
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS")
 	FFixedPoint SmoothedPitch = FFixedPoint::Zero;
 
 	/** Smoothed roll (radians, positive = right side down, per
 	 *  MakeFromEulers convention). Same rate-limit smoothing as
 	 *  SmoothedPitch — see that field's comment. */
-	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Movement")
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS")
 	FFixedPoint SmoothedRoll = FFixedPoint::Zero;
 
 	/** Local-avoidance steering strength. The soft steering layer
@@ -245,7 +255,7 @@ struct SEINARTSCOREENTITY_API FSeinMovementPayload : public FSeinPayload
 	 *  avoidance entirely and its motion is bit-identical to a world with no
 	 *  avoidance (the hard penetration floor still applies). Per-class override:
 	 *  tune low for ponderous units, higher for nimble ones. Default 1. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement|Avoidance",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Avoidance",
 		meta = (ClampMin = "0.0", DisplayName = "Avoidance Strength"))
 	FFixedPoint AvoidanceStrength = FFixedPoint::FromInt(1);
 
@@ -256,7 +266,7 @@ struct SEINARTSCOREENTITY_API FSeinMovementPayload : public FSeinPayload
 	 *  "infantry scatter, the tank doesn't flinch" feel. Higher = harder to push around. A
 	 *  neighbour with no movement component carries no weight (a static obstacle) and is always
 	 *  avoided. Default 0 (all units equal). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement|Avoidance",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Avoidance",
 		meta = (DisplayName = "Avoidance Weight"))
 	int32 AvoidanceWeight = 0;
 
@@ -266,7 +276,7 @@ struct SEINARTSCOREENTITY_API FSeinMovementPayload : public FSeinPayload
 	 *  STOP dodging one another and resolve through the penetration floor instead, which kills
 	 *  the same-class mutual-avoidance orbits that show up as spinning blobs. Pair with equal
 	 *  AvoidanceWeight across a unit class to use it as a per-class "don't circle each other" switch. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Movement|Avoidance",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Avoidance",
 		meta = (DisplayName = "Avoid Same Weights"))
 	bool bAvoidSameWeights = true;
 
@@ -275,7 +285,7 @@ struct SEINARTSCOREENTITY_API FSeinMovementPayload : public FSeinPayload
 	 *  movement Tick (USeinMovement::ApplyAvoidanceSteer + GetAvoidanceSpeedScale).
 	 *  Runtime sim state; hashed as a desync canary. Stays at its zero-steer / unity-scale
 	 *  default for AvoidanceStrength = 0 units, which is what makes them a true no-op. */
-	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Movement")
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS")
 	FSeinAvoidanceOutput AvoidanceOutput;
 
 	/** World location at the previous avoidance PreTick sample — the active avoidance
@@ -300,7 +310,7 @@ struct SEINARTSCOREENTITY_API FSeinMovementPayload : public FSeinPayload
 	 *  correct pitch/roll BEFORE its first move order. Move ticks and idle ticks
 	 *  both re-snap every tick and ignore this flag — it exists purely to make
 	 *  the INSTANT (unsmoothed) spawn-time snap run exactly once per entity. */
-	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Movement")
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS")
 	bool bInitialGroundSnapDone = false;
 
 	/** Idle re-seek HOME (muster pose) for an UN-BROKERED unit: the pose it came to rest at under its
@@ -338,6 +348,7 @@ FORCEINLINE uint32 GetTypeHash(const FSeinMovementPayload& C)
 	Hash = HashCombine(Hash, GetTypeHash(C.bHasTarget));
 	Hash = HashCombine(Hash, GetTypeHash(C.Velocity));
 	Hash = HashCombine(Hash, GetTypeHash(C.bArrivalImminent));
+	Hash = HashCombine(Hash, GetTypeHash(C.bOnFinalLeg));
 	Hash = HashCombine(Hash, GetTypeHash(C.SmoothedPitch));
 	Hash = HashCombine(Hash, GetTypeHash(C.SmoothedRoll));
 	Hash = HashCombine(Hash, GetTypeHash(C.AvoidanceStrength));
