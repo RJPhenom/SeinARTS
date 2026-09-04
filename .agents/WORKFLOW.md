@@ -1,6 +1,6 @@
 # SeinARTS Agent Workflow
 
-This is the local operational mirror of the human [Workflow Policy](https://docs.google.com/document/d/1pb3Z0DdQKAIJ610cMOy1yOP9_RQj1jtzMupfhkyrlfw), source policy version 2.7. The human policy owns contributor workflow. Update both in the same task when workflow changes.
+This is the local operational mirror of the human [Workflow Policy](https://docs.google.com/document/d/1pb3Z0DdQKAIJ610cMOy1yOP9_RQj1jtzMupfhkyrlfw), source policy version 3.0. The human policy owns contributor workflow. Update both in the same task when workflow changes.
 
 ## 1. About
 
@@ -29,7 +29,7 @@ Persistent scripts belong in `Scripts/` under the repository root.
 
 Before changing code, understand the requested result, inspect the live implementation, and check the current Git state. Notes and comments provide context; live code and current evidence take priority when they disagree.
 
-Before continuing inherited work, complete the handoff review in 5.2.
+When continuing existing work, complete the handoff review in 5.2 before adding new work.
 
 ### 3.2 Decisions
 
@@ -89,33 +89,13 @@ Commits are not limited to completed features or functions. They mark clear poin
 
 Files must be committed or deliberately ignored. Do not leave unexplained pending changes at a commit boundary.
 
-### 5.2 Handoffs
+### 5.2 Branches
 
-WIP does not need to be cleaned up before another author takes over. It may be committed or uncommitted; what matters is that the work is preserved and its current state can be understood.
-
-Picking up another author's work does not mean assuming it is correct. Before continuing:
-
-- Adversarially review the current state for bugs and confirm that the direction still makes sense.
-- Confirm the plan and implementation are sound.
-- Confirm it is safe to continue.
-
-Correct unsafe work or request authoritative input when a real product or architectural decision is required.
-
-### 5.3 Branches
-
-Branches belong to tasks, not authors. Authors may continue an existing branch after completing the handoff review.
+Local agents may not create or switch branches without an explicit request from the user. Cloud sessions create branches by platform necessity.
 
 `main` is the shared integration branch. Merge work once it has been reviewed and validated appropriately for its risk.
 
-Use branches for:
-
-- New features.
-- Major refactors involving one or more modules.
-- Extended bug-fixing or performance work.
-- Release preparation.
-- Work that must remain isolated from `main` or another active task.
-
-### 5.4 Worktrees
+### 5.3 Worktrees
 
 Git worktrees are banned across all environments for this project.
 
@@ -124,21 +104,17 @@ Git worktrees are banned across all environments for this project.
 - If a session starts elsewhere, stop and return to the primary checkout before changing files.
 - Only one author writes to the checkout at a time.
 
-Worktrees were tried more than once in the past and consistently produced bad merge experiences. The ban is a considered, re-instated decision as of v2.0, not an untested default.
+### 5.4 Cloud agent sessions
 
-### 5.5 Cloud agent sessions
-
-The policy on keeping cloud agent work from being orphaned or merged into `main` without enough thought is still being refined. If you are an agent reading this mirror, act with care and keep the user informed of git status in your cloud environment.
-
-Cloud agent sessions (Claude Code on the web, Codex cloud) always create their own auto-generated working branch. This is a platform behavior, not a choice; session branches follow the same rules as 5.3 and belong to the task.
+Cloud agent sessions (Claude Code on the web, Codex cloud) always create their own auto-generated working branch. This is a platform behavior, not a choice; session branches follow the same rules as 5.2 and belong to the task.
 
 The goal is for testers to have up-to-date local repositories with the latest cloud session work, safe to merge. Guiding principles:
 
 - Sync-on-start: fetch and prune, fast-forward `main`, verify your branch still exists on the remote, and do not trust inherited claims after a resume or context compaction.
 - Cross-agent rule: no agent builds on another agent's live session branch.
 - Make every effort to regularly merge into `main` at safe completion points — not necessarily at the end of the session.
-- Merge conflicts can occur when multiple agents are working, committing, and merging. Do not attempt to resolve them automatically. Report back to the user and await instructions.
 - Keep a clear, current understanding of which branches exist on the remote versus locally. If a branch does not yet exist on the remote (other than in the moment right after creation), keep the user aware. Branches are ideally published on creation; `https://github.com/RJPhenom/SeinARTS/branches` gives a complete view of active branches across every desktop and cloud environment together.
+- If you see something, say something: if you suspect a branch is stale or abandoned, alert the user.
 
 ## 6. Versioning and releases
 
