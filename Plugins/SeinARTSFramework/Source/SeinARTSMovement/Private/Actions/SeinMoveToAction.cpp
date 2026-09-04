@@ -20,7 +20,6 @@
 #include "Types/Entity.h"
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
-#include "Math/BigInt.h"
 #include "Engine/World.h"
 #include "Simulation/SeinMovementTraceLog.h"  // [ARRIVE]/[THROTTLE] movement-trace events
 #include "ProfilingDebugging/CpuProfilerTrace.h"
@@ -58,92 +57,9 @@ namespace
 		return Value * FixedScale;
 	}
 
-	int512 MakeSignedInt512(int64 Value)
-	{
-		int512 Result(Value);
-		if (Value < 0)
-		{
-			// TBigInt's int64 constructor initializes only its low two words.
-			uint32* Words = Result.GetBits();
-			for (int32 WordIndex = 2; WordIndex < 512 / 32; ++WordIndex)
-			{
-				Words[WordIndex] = MAX_uint32;
-			}
-		}
-		return Result;
-	}
-
-	bool IsPlanarCrossExactlyZero(
-		const FFixedVector& Q,
-		const FFixedVector& S,
-		const FFixedVector& E)
-	{
-		const int64 QX = (Q.X - S.X).Value;
-		const int64 QY = (Q.Y - S.Y).Value;
-		const int64 DX = (E.X - S.X).Value;
-		const int64 DY = (E.Y - S.Y).Value;
-#if defined(__GNUC__) || defined(__clang__)
-		return static_cast<__int128>(QX) * DY
-			== static_cast<__int128>(QY) * DX;
-#elif defined(_MSC_VER)
-		int64 LeftHigh = 0;
-		int64 RightHigh = 0;
-		const int64 LeftLow = _mul128(QX, DY, &LeftHigh);
-		const int64 RightLow = _mul128(QY, DX, &RightHigh);
-		return LeftHigh == RightHigh && LeftLow == RightLow;
-#else
-#error "Platform does not support 128-bit multiplication"
-#endif
-	}
-
-	/** Exact raw-value fallback for spans whose fixed-point normalization
-	 *  saturates or quantizes away a small perpendicular offset. */
-	bool IsPointWithinSegmentDistanceXYExact(
-		const FFixedVector& Q,
-		const FFixedVector& S,
-		const FFixedVector& E,
-		FFixedPoint Radius)
-	{
-		const int512 DX = MakeSignedInt512(E.X.Value)
-			- MakeSignedInt512(S.X.Value);
-		const int512 DY = MakeSignedInt512(E.Y.Value)
-			- MakeSignedInt512(S.Y.Value);
-		const int512 QX = MakeSignedInt512(Q.X.Value)
-			- MakeSignedInt512(S.X.Value);
-		const int512 QY = MakeSignedInt512(Q.Y.Value)
-			- MakeSignedInt512(S.Y.Value);
-		const int512 RadiusRaw = MakeSignedInt512(Radius.Value);
-		const int512 RadiusSquared = RadiusRaw * RadiusRaw;
-		const int512 SegmentLengthSquared = DX * DX + DY * DY;
-		const int512 QueryDistanceSquared = QX * QX + QY * QY;
-		const int512 Zero(int64(0));
-		if (SegmentLengthSquared == Zero)
-		{
-			return QueryDistanceSquared <= RadiusSquared;
-		}
-
-		const int512 Projection = QX * DX + QY * DY;
-		if (Projection <= Zero)
-		{
-			return QueryDistanceSquared <= RadiusSquared;
-		}
-		if (Projection >= SegmentLengthSquared)
-		{
-			const int512 EX = MakeSignedInt512(Q.X.Value)
-				- MakeSignedInt512(E.X.Value);
-			const int512 EY = MakeSignedInt512(Q.Y.Value)
-				- MakeSignedInt512(E.Y.Value);
-			return EX * EX + EY * EY <= RadiusSquared;
-		}
-
-		const int512 Cross = QX * DY - QY * DX;
-		return Cross * Cross
-			<= RadiusSquared * SegmentLengthSquared;
-	}
-
 	/** Overflow-safe planar segment-distance predicate. Ordinary world spans
-	 *  use normalized fixed-point math; saturation and quantization boundaries
-	 *  fall back to an exact raw-value integer comparison. */
+	 *  use normalized fixed-point math; saturation boundaries conservatively
+	 *  answer "off-path" (false), whose only consequence is one spurious repath. */
 	bool IsPointWithinSegmentDistanceXY(
 		const FFixedVector& Q,
 		const FFixedVector& S,
@@ -161,7 +77,7 @@ namespace
 			FFixedVector::DistanceSaturated(PlanarS, PlanarE);
 		if (SegmentDistance == FFixedPoint::MaxValue)
 		{
-			return IsPointWithinSegmentDistanceXYExact(Q, S, E, Radius);
+			return false;
 		}
 		if (SegmentDistance <= FFixedPoint::Epsilon)
 		{
@@ -175,7 +91,7 @@ namespace
 		if (QueryDistance == FFixedPoint::MaxValue
 			|| EndQueryDistance == FFixedPoint::MaxValue)
 		{
-			return IsPointWithinSegmentDistanceXYExact(Q, S, E, Radius);
+			return false;
 		}
 		const FFixedVector SegmentDirection =
 			FFixedVector::GetSafeNormalDifference(PlanarS, PlanarE);
@@ -206,16 +122,11 @@ namespace
 		}
 		if (Cross <= FFixedPoint::Epsilon)
 		{
-			if (Cross == FFixedPoint::Zero
-				&& IsPlanarCrossExactlyZero(PlanarQ, PlanarS, PlanarE))
-			{
-				return true;
-			}
-			return IsPointWithinSegmentDistanceXYExact(Q, S, E, Radius);
+			return Cross == FFixedPoint::Zero;
 		}
 		if (QueryDistance > FFixedPoint::MaxValue / Cross)
 		{
-			return IsPointWithinSegmentDistanceXYExact(Q, S, E, Radius);
+			return false;
 		}
 		return QueryDistance * Cross <= Radius;
 	}
