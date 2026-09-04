@@ -38,6 +38,11 @@
     {
       "Name": "SeinARTSOnlineServicesExtension",
       "Enabled": true
+    },
+    {
+      "Name": "ThumbnailExporter",
+      "Enabled": true,
+      "Optional": true
     }
   ],
   "TargetPlatforms": [],
