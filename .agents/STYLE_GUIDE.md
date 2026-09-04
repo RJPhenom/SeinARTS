@@ -1,6 +1,6 @@
 # SeinARTS Style Guide
 
-This is the local operational mirror of the human [Style Guide](https://docs.google.com/document/d/1-IT4RRpU2jR3yT5RI_bOM4Iq3s54Y9Fgy9gtBAJjshs), source guide version 1.4. The human guide owns writing and presentation style. Architecture, module ownership, and system invariants remain in the repository and plugin guides.
+This is the local operational mirror of the human [Style Guide](https://docs.google.com/document/d/1-IT4RRpU2jR3yT5RI_bOM4Iq3s54Y9Fgy9gtBAJjshs), source guide version 1.5. The human guide owns writing and presentation style. Architecture, module ownership, and system invariants remain in the repository and plugin guides.
 
 ## About
 
@@ -71,6 +71,14 @@ Comments explain current behavior and useful intent. They do not compete with co
 - Technical names such as A*, boids, Gauss-Seidel, Jacobi, Reeds-Shepp, Dubins, Bresenham, and Xorshift are allowed and encouraged.
 - Do not reference retired documents. Cite live code or current documentation.
 - Do not leave dead Blueprint outputs or always-on log spam. Make outputs real or remove them, and gate diagnostics behind verbosity or show flags.
+
+### UPROPERTY categories
+
+Unreal collapses subcategories by default. Since almost all categories use the top-level `SeinARTS|<subcategory>` structure, this results in fields that are expected to be visible defaulting to hidden under a collapsed group.
+
+To mitigate this, class and component names serve as informal categories and therefore do not need redundant subcategories. For example, `SeinNavigationComponent` properties belong under the `SeinARTS` category, not `SeinARTS|Navigation`, which would hide them under a collapsed subcategory in the details panel.
+
+Use subcategories to genuinely differentiate categories of non-standard properties.
 
 ## Design
 
