@@ -69,6 +69,48 @@ enum class ESeinMoveFailureReason : uint8
 	InvalidExecutionContext UMETA(DisplayName = "Invalid Execution Context")
 };
 
+/** Stuck-recovery phase of one active Move To order: the hold-escape ladder's
+ *  explicit state machine. The clocks and counters that ride alongside it are
+ *  documented on USeinMoveToAction's ladder field block.
+ *
+ *    Free            → Holding          held tick outside the near-goal settle band
+ *    Holding         → Free             any unheld tick (clears HoldTime, the boundary
+ *                                       counter, and EscapeAttempts)
+ *    Holding         → Holding          0.3s boundary, commanded direction PASSABLE
+ *                                       (a pivot / yield policy zero: never escalate)
+ *    Holding         → HoldingRepathed  0.3s boundary, commanded direction blocked
+ *                                       (stage 1: one forced repath)
+ *    HoldingRepathed → HoldingRepathed  boundary + blocked, but the nav offers no escape
+ *                                       target or it sits inside the entry gate
+ *                                       (EscapeAttempts++)
+ *    HoldingRepathed → Escaping         boundary + blocked + target beyond the gate
+ *                                       (stage 2: the order path is discarded and the
+ *                                       internal escape leg installed; TotalEscapeEntries++)
+ *    Escaping        → Free             leg arrived inside its ring; HoldTime and
+ *                                       EscapeAttempts reset; the order re-resolves
+ *    Escaping        → HoldingRepathed  leg arrived outside its ring, or the leg itself
+ *                                       held 0.6s (EscapeAttempts++). HoldTime and the
+ *                                       spent stage 1 are PRESERVED, so the first held
+ *                                       tick after the re-resolve escalates straight
+ *                                       back to stage 2 — that cadence is what bounds
+ *                                       the three attempts.
+ *    any             → Stranded (Fail)  EscapeAttempts reaches 3, or a fifth escape leg
+ *                                       would be installed in one order
+ *
+ *  Escaping is reachable only through HoldingRepathed. While Escaping, `Path` is
+ *  EMPTY: the harness drives the two-point leg [EscapeOrigin → EscapeTarget]
+ *  (USeinMoveToAction::GetDrivenPath) and the tick epilogue skips the whole
+ *  order-progress tail. HoldingRepathed with `bPathResolved == false` is the
+ *  post-escape re-resolve in flight (the order path is re-planned from scratch). */
+UENUM()
+enum class ESeinMoveStuckPhase : uint8
+{
+	Free,
+	Holding,
+	HoldingRepathed,
+	Escaping
+};
+
 UCLASS()
 class SEINARTSMOVEMENT_API USeinMoveToAction : public USeinLatentAction
 {
@@ -94,14 +136,30 @@ public:
 	/** Optional observer — receives Completed/Failed/Waypoint/Cancelled events. */
 	TWeakObjectPtr<USeinMoveToProxy> Observer;
 
+	/** The ORDER's committed route. Empty for the whole of an escape leg (the
+	 *  ladder discards it at escape entry and the resume re-plans it); the
+	 *  polyline actually being driven is GetDrivenPath. */
 	UPROPERTY()
 	FSeinPath Path;
 
+	/** Whether the ORDER path is committed and valid. False during an escape leg
+	 *  even though the unit is driving a valid polyline — query GetDrivenPath
+	 *  for "is the unit driving something". */
 	bool IsPathValid() const { return Path.bIsValid; }
 
 	/** Index of the waypoint the entity is currently heading toward. Public so
 	 *  debug rendering can draw "entity → current waypoint → remaining path". */
 	int32 GetCurrentWaypointIndex() const { return CurrentWaypointIndex; }
+
+	/** Stuck-recovery phase (see ESeinMoveStuckPhase). Public for debug rendering
+	 *  and tests; no sim logic reads it from outside the action. */
+	ESeinMoveStuckPhase GetStuckPhase() const { return StuckPhase; }
+
+	/** The polyline the harness drives THIS tick. Normally `Path`. While an escape
+	 *  leg is in flight `Path` is empty and the two-point leg is rebuilt into
+	 *  `Scratch` from EscapeOrigin / EscapeTarget — identical content every tick,
+	 *  so the leg is never canonical state and never needs restoring. */
+	const FSeinPath& GetDrivenPath(FSeinPath& Scratch) const;
 
 private:
 	enum class EInitialPathTickResult : uint8
@@ -190,23 +248,31 @@ private:
 	 *  leg (stage 2); three exhausted attempts fail the move with Stranded.
 	 *  All action-local state (TimeStalledNearGoal precedent) is canonical
 	 *  continuation state while the order is active and dies when that order
-	 *  ends.
+	 *  ends. The phase itself is explicit (ESeinMoveStuckPhase carries the
+	 *  transition table); the fields below are its clocks and counters.
 	 *  DETECTION SCOPE: Tier-1 harness modes only, by construction — Tier-2
 	 *  vehicle Ticks persist COMMANDED velocity (Forward × CurrentSpeed), so a
 	 *  wall-pinned vehicle never reads held here (Wheeled/Tracked carry their
 	 *  own reverse-unstick machinery). */
+	ESeinMoveStuckPhase StuckPhase = ESeinMoveStuckPhase::Free;
+	/** Held-tick clock. Accrues while the applied planar step sits at or below
+	 *  the moving-speed floor. Only genuine applied motion or a SUCCESSFUL escape
+	 *  clears it: repaths never do, and a FAILED escape preserves it. */
 	FFixedPoint HoldTime = FFixedPoint::Zero;
-	/** Next HoldTime boundary at which the ladder probes/escalates (0.3s steps). */
-	FFixedPoint NextEscalationAt = FFixedPoint::Zero;
-	/** Stage 1 (forced repath) already fired for the current hold episode. */
-	bool bStage1Fired = false;
+	/** Number of 0.3s hold boundaries the ladder has already consumed this
+	 *  episode; the next fires at 0.3s × (HoldBoundariesFired + 1). Reset
+	 *  whenever HoldTime is, and on every escape exit. */
+	int32 HoldBoundariesFired = 0;
 	/** One-shot: fold a forced repath into the next repath-block evaluation,
 	 *  bypassing the Interval timer / OffPathOnly drift+min-interval gates.
 	 *  Cleared after ANY attempt including Throttled (never sticky — stage 2
-	 *  backstops a budget-swallowed stage 1). */
+	 *  backstops a budget-swallowed stage 1). Not ladder-only: authored-tuning
+	 *  refreshes raise it too. */
 	bool bForceRepathNow = false;
-	/** Escape leg in flight: `Path` temporarily holds [AgentPos → EscapeTarget]. */
-	bool bEscapeMode = false;
+	/** Escape leg endpoints while Escaping: the agent position at install and
+	 *  the nav-supplied target. The harness drives [EscapeOrigin → EscapeTarget]
+	 *  through GetDrivenPath; `Path` itself is empty for the whole leg. */
+	FFixedVector EscapeOrigin = FFixedVector::ZeroVector;
 	FFixedVector EscapeTarget = FFixedVector::ZeroVector;
 	/** Escape-leg acceptance radius (entry-gated so the leg can never instant-arrive). */
 	FFixedPoint EscapeAcceptanceRadius = FFixedPoint::Zero;

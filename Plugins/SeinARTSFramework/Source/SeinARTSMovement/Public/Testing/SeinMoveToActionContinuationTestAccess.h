@@ -67,13 +67,7 @@ namespace UE::SeinARTSTests
 		static FFixedPoint GetHoldTime(
 			const USeinMoveToAction& Action);
 
-		static FFixedPoint GetNextEscalationAt(
-			const USeinMoveToAction& Action);
-
-		static bool HasStageOneFired(
-			const USeinMoveToAction& Action);
-
-		static bool IsEscapeMode(
+		static int32 GetHoldBoundariesFired(
 			const USeinMoveToAction& Action);
 
 		static int32 GetEscapeAttempts(
@@ -95,6 +89,10 @@ namespace UE::SeinARTSTests
 		ResolvedWithoutMovement,
 		NonstandardCompletedRoute,
 		EscapeCounterOutsideBound,
+		/** Escaping while the order path is still present (the leg must own it). */
+		EscapingWithOrderPath,
+		/** Free while a hold clock is still running. */
+		FreeWithHoldClock,
 	};
 
 	/**

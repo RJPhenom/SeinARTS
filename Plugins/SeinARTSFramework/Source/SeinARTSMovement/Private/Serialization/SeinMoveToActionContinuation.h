@@ -7,6 +7,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Actions/SeinMoveToAction.h"
 #include "SeinPathTypes.h"
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
@@ -55,19 +56,19 @@ struct FSeinMoveToActionContinuation
 	FFixedPoint TimeStalledNearGoal = FFixedPoint::Zero;
 
 	UPROPERTY()
+	ESeinMoveStuckPhase StuckPhase = ESeinMoveStuckPhase::Free;
+
+	UPROPERTY()
 	FFixedPoint HoldTime = FFixedPoint::Zero;
 
 	UPROPERTY()
-	FFixedPoint NextEscalationAt = FFixedPoint::Zero;
-
-	UPROPERTY()
-	bool bStage1Fired = false;
+	int32 HoldBoundariesFired = 0;
 
 	UPROPERTY()
 	bool bForceRepathNow = false;
 
 	UPROPERTY()
-	bool bEscapeMode = false;
+	FFixedVector EscapeOrigin = FFixedVector::ZeroVector;
 
 	UPROPERTY()
 	FFixedVector EscapeTarget = FFixedVector::ZeroVector;

@@ -346,13 +346,17 @@ namespace
 			// transient package, so the action's world chain is null. Use the
 			// entity-lookup below as the implicit world filter (Sim->GetEntity
 			// only returns valid for entities registered in THIS sim).
-			if (!IsValid(Action) || !Action->IsPathValid()) continue;
+			if (!IsValid(Action)) continue;
 			// Skip actions that have finished — they linger as unreferenced
 			// UObjects with a still-valid Path until the next GC cycle, and
 			// without this filter every move order leaves a trail behind.
 			if (Action->bCompleted || Action->bCancelled || Action->bFailed) continue;
 
-			const FSeinPath& Path = Action->Path;
+			// Draw the polyline the unit is actually driving: the order path, or
+			// the hold-escape ladder's two-point leg while one is in flight.
+			FSeinPath EscapeLegScratch;
+			const FSeinPath& Path = Action->GetDrivenPath(EscapeLegScratch);
+			if (!Path.bIsValid) continue;
 			const int32 CurIdx = Action->GetCurrentWaypointIndex();
 			if (!Path.Waypoints.IsValidIndex(CurIdx)) continue;
 
@@ -397,8 +401,10 @@ namespace
 				break;
 			}
 
-			const FSeinPath& Path = C.Action->Path;
+			FSeinPath EscapeLegScratch;
+			const FSeinPath& Path = C.Action->GetDrivenPath(EscapeLegScratch);
 			const int32 CurIdx = C.Action->GetCurrentWaypointIndex();
+			if (!Path.Waypoints.IsValidIndex(CurIdx)) continue;
 			const FFixedVector AgentPosFixed = C.AgentPosFixed;
 
 			// Path cell highlights: the EXACT A* cell chain, drawn 1:1 with the cells pathfinding

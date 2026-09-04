@@ -869,16 +869,16 @@ namespace UE::SeinARTSTests
 			EscapeRecoveryStep().Value,
 			FMoveToActionContinuationTestAccess::GetHoldTime(
 				*Fixture.Action).Value));
-		ASSERT_THAT(IsTrue(
-			FMoveToActionContinuationTestAccess::HasStageOneFired(
-				*Fixture.Action)));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(ESeinMoveStuckPhase::HoldingRepathed),
+			static_cast<int32>(Fixture.Action->GetStuckPhase())));
 		ASSERT_THAT(IsTrue(
 			FMoveToActionContinuationTestAccess::IsForceRepathPending(
 				*Fixture.Action)));
 		ASSERT_THAT(AreEqual(
-			EscapeRecoveryStep().Value * 2,
-			FMoveToActionContinuationTestAccess::GetNextEscalationAt(
-				*Fixture.Action).Value));
+			1,
+			FMoveToActionContinuationTestAccess::GetHoldBoundariesFired(
+				*Fixture.Action)));
 		Fixture.Tick(EscapeRecoveryStep());
 		ASSERT_THAT(IsFalse(
 			FMoveToActionContinuationTestAccess::IsForceRepathPending(
@@ -934,10 +934,19 @@ namespace UE::SeinARTSTests
 			2, USeinMoveToLifecycleTestMovement::PlanPathCallCount));
 		ASSERT_THAT(AreEqual(
 			1, USeinMoveToEscapeTestNavigation::EscapeQueryCount));
-		ASSERT_THAT(AreEqual(2, Fixture.Action->Path.Waypoints.Num()));
+		// The order path is discarded at escape entry; the harness drives the
+		// two-point leg from the install position to the nav's target.
+		ASSERT_THAT(IsTrue(Fixture.Action->Path.Waypoints.IsEmpty()));
+		FSeinPath DrivenScratch;
+		const FSeinPath& Driven =
+			Fixture.Action->GetDrivenPath(DrivenScratch);
+		ASSERT_THAT(IsTrue(Driven.bIsValid));
+		ASSERT_THAT(AreEqual(2, Driven.Waypoints.Num()));
+		ASSERT_THAT(AreEqual(1, Driven.Segments.Num()));
 		ASSERT_THAT(IsTrue(
-			Fixture.Action->Path.Waypoints.Last()
-				== EscapeRecoveryTarget()));
+			Driven.Waypoints[0] == FFixedVector::ZeroVector));
+		ASSERT_THAT(IsTrue(
+			Driven.Waypoints.Last() == EscapeRecoveryTarget()));
 		ASSERT_THAT(IsTrue(
 			USeinMoveToEscapeTestNavigation::LastEscapeQuery.From
 				== FFixedVector::ZeroVector));
@@ -955,9 +964,9 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(
 			USeinMoveToEscapeTestNavigation::LastEscapeQuery.
 				BlockedTerrainTags.HasTagExact(BlockedTerrainTag)));
-		ASSERT_THAT(IsTrue(
-			FMoveToActionContinuationTestAccess::IsEscapeMode(
-				*Fixture.Action)));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(ESeinMoveStuckPhase::Escaping),
+			static_cast<int32>(Fixture.Action->GetStuckPhase())));
 		ASSERT_THAT(AreEqual(
 			0,
 			FMoveToActionContinuationTestAccess::GetEscapeAttempts(
@@ -991,9 +1000,10 @@ namespace UE::SeinARTSTests
 
 		ASSERT_THAT(AreEqual(
 			1, USeinMoveToEscapeTestNavigation::EscapeQueryCount));
-		ASSERT_THAT(IsFalse(
-			FMoveToActionContinuationTestAccess::IsEscapeMode(
-				*Fixture.Action)));
+		// A no-answer keeps the episode open at stage 2 (no leg installed).
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(ESeinMoveStuckPhase::HoldingRepathed),
+			static_cast<int32>(Fixture.Action->GetStuckPhase())));
 		ASSERT_THAT(AreEqual(
 			1,
 			FMoveToActionContinuationTestAccess::GetEscapeAttempts(
@@ -1072,8 +1082,16 @@ namespace UE::SeinARTSTests
 		Fixture.Tick(EscapeRecoveryStep());
 
 		ASSERT_THAT(IsTrue(Fixture.Action->Path.Waypoints.IsEmpty()));
-		ASSERT_THAT(IsFalse(
-			FMoveToActionContinuationTestAccess::IsEscapeMode(
+		// A failed leg returns to stage 2 with the hold clock preserved.
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(ESeinMoveStuckPhase::HoldingRepathed),
+			static_cast<int32>(Fixture.Action->GetStuckPhase())));
+		ASSERT_THAT(IsTrue(
+			FMoveToActionContinuationTestAccess::GetHoldTime(
+				*Fixture.Action) > FFixedPoint::Zero));
+		ASSERT_THAT(AreEqual(
+			0,
+			FMoveToActionContinuationTestAccess::GetHoldBoundariesFired(
 				*Fixture.Action)));
 		ASSERT_THAT(AreEqual(
 			1,
@@ -1146,9 +1164,9 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Navigation)));
 
 		Fixture.Tick(EscapeRecoveryStep());
-		ASSERT_THAT(IsTrue(
-			FMoveToActionContinuationTestAccess::HasStageOneFired(
-				*Fixture.Action)));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(ESeinMoveStuckPhase::HoldingRepathed),
+			static_cast<int32>(Fixture.Action->GetStuckPhase())));
 		FMoveToActionContinuationTestAccess::SetTotalEscapeEntries(
 			*Fixture.Action, 5);
 		Fixture.Tick(EscapeRecoveryStep());

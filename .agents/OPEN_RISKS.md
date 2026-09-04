@@ -185,12 +185,24 @@ clean — do not redesign them under this list.
    same reason. Reproduce: destination just across a wall from a standing crowd. Candidate fixes
    are RJ's fork (gate the fade on final-leg `CurrentWaypointIndex` AND planar distance, or key
    on remaining-path length); either is a sim-behavior change — full ceremony plus PIE A/B.
-2. `USeinMoveToAction`'s stuck recovery is 15+ interacting canonical fields (hold ladder, escape
-   legs, near-goal stall, oscillation caps) whose codec is 1,659 lines — larger than the action.
-   An explicit episode state machine (Free/Holding/Escaping plus two counters) would encode the
-   same ladder more legibly, shrink the codec, and retire the "escape leg temporarily
-   impersonates the order's `Path`" dual-meaning pattern the tick epilogue must special-case.
-   Snapshot-continuation-affecting: full ceremony, present the shape before implementing.
+2. **Done 2026-09-04** (`claude/avoidance-deflation-pass`). `USeinMoveToAction`'s stuck recovery
+   is now the explicit `ESeinMoveStuckPhase` machine — Free / Holding / HoldingRepathed / Escaping,
+   transition table on the enum — plus its clocks and two counters; the 0.3s boundary clock is an
+   integer boundary counter (exact re-encoding), and the escape leg no longer impersonates the
+   order's `Path` (`Path` is empty while Escaping; the harness and debug viz drive
+   `GetDrivenPath`). Behavior-identical by construction: `HoldTime` and the spent stage 1 survive
+   a FAILED escape (the immediate stage-2 re-escalation the three-attempt cadence depends on), and
+   Escaping is reachable only through HoldingRepathed. Continuation schema 4→5, codec revision
+   5→6, behavior revision unchanged; no migration by design (older checkpoints/replays with a Move
+   To in flight are rejected at restore, mismatched peers at join). The audit's codec-size premise
+   was wrong: the codec is ~700 lines of Blueprint-frame residue certification and ~390 of test
+   access; the ladder's share was ~150 lines, so the codec did not shrink. **Open fork for RJ's
+   PIE A/B:** while Escaping, the top-of-tick `bOnFinalLeg` is published from the two-point leg
+   (true after its first advance) while `TargetLocation` still names the order destination, so the
+   avoidance arrival fade / past-goal gates can engage mid-escape for Tier-1 units with footprints
+   over ~50cm pinned between the stall band and three footprints of the destination. This is not
+   new — the leg lived in `Path` before, so the flag was computed off it there too. The guard
+   (`bOnFinalLeg` false while Escaping) lands as the next commit on the branch, revertable alone.
 3. `ReportPinnedMover` (the kernel's grind dump) re-implements the whole neighbour gate chain by
    hand (~180 non-shipping lines) and will silently drift from the real gates on the next model
    change — the same disease as the retired A* diagnostics bloat. Factor the gates into one
