@@ -66,7 +66,7 @@ class UMaterialInstanceDynamic;
  * decals that conform to terrain (but ghost under TAA — pair with TSR); the ISM backend uses one
  * Instanced Static Mesh with per-instance custom-data tint, a single draw call that scales to huge
  * formations. A project can author a fully custom backend in C++ or Blueprint (the element hooks are
- * BlueprintNativeEvents) — e.g. a Niagara-driven look. A unit's Formation Preview Component picks
+ * BlueprintNativeEvents) — e.g. a Niagara-driven look. A unit's Navigation Renderer picks
  * the class per unit (its presence is also the render opt-in), with the Formation Preview Actor
  * Class setting as the project default. This is pure presentation and never mutates sim state. The
  * quality-tint map is a generic gameplay-tag-to-color table; the framework ships it empty (a neutral
@@ -74,9 +74,9 @@ class UMaterialInstanceDynamic;
  * property names retain the historic "Cover" spelling so existing authored preview values survive.
  *
  * Per-unit marker looks: each element carries an optional style (mesh, material, tint, size, tag)
- * the preview subsystem resolves from the unit's Formation Preview Style Component. The properties
- * on this actor are the project-wide defaults; a member's style overrides them for its own marker
- * only. Units without a style component always render the defaults.
+ * the preview subsystem resolves from the unit or squad's Navigation Renderer. The properties on
+ * this actor are the project-wide defaults; squad fields override them and member fields override
+ * the squad for that marker only. Renderers with no style fields use the backend defaults.
  */
 UCLASS(Blueprintable, NotPlaceable, meta = (DisplayName = "Formation Preview Actor (Mesh)"))
 class SEINARTSFRAMEWORK_API ASeinFormationPreviewActor : public AActor
@@ -91,45 +91,45 @@ public:
 	 *  material (Unlit + Masked or Translucent is typical); for the Decal backend it
 	 *  must be a Deferred Decal material. Null = a backend-appropriate engine fallback
 	 *  so something renders out of the box. (Formerly "DecalMaterial".) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Preview")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	TObjectPtr<UMaterialInterface> PreviewMaterial = nullptr;
 
 	/** Mesh used by the mesh-style backends (base mesh + ISM). Null = the engine unit
 	 *  Plane (/Engine/BasicShapes/Plane), a 100uu quad scaled to the footprint. Swap for
 	 *  a custom ring/disc mesh to change the silhouette. Ignored by the Decal backend. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Preview")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	TObjectPtr<UStaticMesh> PreviewMesh = nullptr;
 
 	/** Full size of each element's ground footprint in world units (square). Set to the
 	 *  diameter you want — e.g. 128 cm for a roughly unit-sized marker. Used when the
 	 *  formation does NOT supply a per-member radius; otherwise the per-member footprint
 	 *  diameter wins. The material draws whatever shape it wants inside this square. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Preview",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (ClampMin = "1.0", UIMin = "32.0", UIMax = "512.0"))
 	float GroundSizeUU = 128.f;
 
 	/** Vertical offset added to each position — lifts the marker slightly above the
 	 *  ground point to avoid z-fighting with terrain. Tune per-project. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Preview")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	float ZOffsetUU = 4.f;
 
 	/** Material vector parameter that receives the per-element quality tint. The look
 	 *  material should expose a Vector Parameter named this and use it as a color
 	 *  multiplier. Safe no-op if absent. (The ISM backend cannot use a per-instance MID,
 	 *  so it writes the tint to per-instance custom data floats 0–3 instead.) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Preview|Quality")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Quality")
 	FName TintParameterName = TEXT("Tint");
 
 	/** Tint applied where there is no quality tag for the cell (or the tag isn't in
 	 *  CoverQualityTints). White (1,1,1,1) is a no-op multiplier. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Preview|Quality")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Quality")
 	FLinearColor NoCoverTint = FLinearColor(1.f, 1.f, 1.f, 1.f);
 
 	/** Quality tag → tint color. The preview subsystem fills a per-position quality tag
 	 *  (via USeinWorldSubsystem::PreviewQualityProvider — e.g. the Cover extension supplies
 	 *  cover quality) and this maps it to a tint. Missing tags fall back to NoCoverTint.
 	 *  SHIPS EMPTY in the framework (neutral preview). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Preview|Quality",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Quality",
 		meta = (ForceInlineRow))
 	TMap<FGameplayTag, FLinearColor> CoverQualityTints;
 
@@ -146,11 +146,10 @@ public:
 	 *  each element's quad/decal scales to that footprint (so the material's ring, drawn in
 	 *  UV space, sizes with it). Empty / mismatched entries fall back to GroundSizeUU.
 	 *
-	 *  `Styles` is an optional parallel array of per-member marker styles (resolved by the
-	 *  preview subsystem from each unit's Formation Preview Style Component). Empty /
-	 *  mismatched entries render the backend's default look. A style's tint multiplies the
-	 *  quality tint, and its size override (when > 0) replaces the member's footprint radius
-	 *  before the element hooks run. */
+	 *  `Styles` is an optional parallel array of per-member marker styles resolved from the
+	 *  unit and squad Navigation Renderers. Empty / mismatched entries render the backend's
+	 *  default look. A style's tint multiplies the quality tint, and its size override (when
+	 *  greater than zero) replaces the member's footprint radius before the element hooks run. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Preview")
 	void SetPositions(const TArray<FVector>& WorldPositions, const TArray<FGameplayTag>& CoverQualities, const TArray<float>& Radii, const TArray<FSeinFormationPreviewElementStyle>& Styles);
 

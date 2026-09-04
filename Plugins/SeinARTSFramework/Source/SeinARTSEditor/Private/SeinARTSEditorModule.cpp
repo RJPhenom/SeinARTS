@@ -16,6 +16,7 @@
 #include "AssetRegistry/IAssetRegistry.h"
 #include "Definitions/AssetDefinition_SeinWidgetBlueprint.h"
 #include "Definitions/SeinAssetDefinitions.h"
+#include "Editors/SeinEntityComponentTreeCustomization.h"
 #include "ThumbnailRendering/ThumbnailManager.h"
 #include "Thumbnails/SeinBlueprintThumbnailRenderer.h"
 #include "Thumbnails/SeinStructThumbnailRenderer.h"
@@ -47,6 +48,9 @@
 #include "Formations/SeinFormationBlueprint.h"
 #include "Widgets/SeinWidgetBlueprint.h"
 #include "K2Node_AsyncAction.h"
+#include "BlueprintEditor.h"
+#include "BlueprintEditorModule.h"
+#include "SSubobjectEditor.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "EdGraphUtilities.h"
 #include "Graph/SeinPinFactory.h"
@@ -477,6 +481,26 @@ void FSeinARTSEditorModule::StartupModule()
 {
 	bModuleOwnedStateReleased = false;
 	FSeinARTSEditorStyle::Initialize();
+	if (!IsRunningCommandlet())
+	{
+		EntityComponentTreeCustomization =
+			MakeShared<FSeinEntityComponentTreeCustomization>();
+		FBlueprintEditorModule& BlueprintEditorModule =
+			FModuleManager::LoadModuleChecked<FBlueprintEditorModule>(
+				TEXT("Kismet"));
+		BlueprintEditorModule.AddCustomization(
+			EntityComponentTreeCustomization);
+		for (const TSharedRef<IBlueprintEditor>& BlueprintEditor :
+			BlueprintEditorModule.GetBlueprintEditors())
+		{
+			if (const TSharedPtr<SSubobjectEditor> SubobjectEditor =
+				StaticCastSharedRef<FBlueprintEditor>(BlueprintEditor)
+					->GetSubobjectEditor())
+			{
+				SubobjectEditor->UpdateTree(true);
+			}
+		}
+	}
 
 	// Asset definitions normally self-register when their CDO is constructed,
 	// but a late-loaded editor module can create the CDO before the registry
@@ -770,6 +794,19 @@ void FSeinARTSEditorModule::ReleaseModuleOwnedState()
 		return;
 	}
 	bModuleOwnedStateReleased = true;
+
+	if (EntityComponentTreeCustomization)
+	{
+		EntityComponentTreeCustomization->Deactivate();
+		if (FBlueprintEditorModule* BlueprintEditorModule =
+			FModuleManager::GetModulePtr<FBlueprintEditorModule>(TEXT("Kismet")))
+		{
+			BlueprintEditorModule->RemoveCustomization(
+				EntityComponentTreeCustomization);
+			EntityComponentTreeCustomization->RefreshTrackedEditors();
+		}
+		EntityComponentTreeCustomization.Reset();
+	}
 
 	if (AbilityContinuationPreCompileHandle.IsValid())
 	{

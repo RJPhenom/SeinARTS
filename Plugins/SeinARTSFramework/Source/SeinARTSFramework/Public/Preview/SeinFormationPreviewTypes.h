@@ -4,16 +4,15 @@
  * @file         SeinFormationPreviewTypes.h
  * @author       RJ Macklem
  * @created      29 Aug 2026
- * @latest       29 Aug 2026
+ * @latest       03 Sep 2026
  * @brief        Value types shared by the destination-preview seam: the per-element
  *               style descriptor the preview subsystem resolves from each unit and
  *               hands to the render backend.
  *
  *               Render-side only — nothing here is simulation state. The style is
- *               resolved from an optional Formation Preview Style Component on the
- *               unit's actor (see SeinFormationPreviewStyleComponent.h) and flows
- *               through ASeinFormationPreviewActor's element hooks so backends can
- *               render per-unit marker looks.
+ *               resolved from the Navigation Renderer on the unit or its squad and
+ *               flows through ASeinFormationPreviewActor's element hooks so backends
+ *               can render per-unit marker looks.
  *
  * @disclaimer   This code was generated in whole or in part with the assistance
  *               of an AI language model.
@@ -35,10 +34,10 @@ class UMaterialInterface;
  * override: unset fields fall back to the preview backend's own defaults, so a default-constructed
  * style renders exactly the project-wide look.
  *
- * The preview subsystem resolves one of these per selected member (from the unit actor's Formation
- * Preview Style Component, when present) and passes it through the preview actor's element hooks.
- * Custom backends can also branch on Style Tag or query the member handle for fully adaptive
- * per-unit rendering.
+ * The preview subsystem resolves one of these per selected member from its Navigation Renderer,
+ * inheriting squad fields before member fields, and passes it through the preview actor's element
+ * hooks. Custom backends can also branch on Style Tag or query the member handle for fully
+ * adaptive per-unit rendering.
  */
 USTRUCT(BlueprintType)
 struct SEINARTSFRAMEWORK_API FSeinFormationPreviewElementStyle

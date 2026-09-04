@@ -43,6 +43,8 @@ public class SeinARTSEditor : ModuleRules
             "Projects",
             "StructUtilsEditor",
             "StructViewer",
+			"SubobjectDataInterface",
+			"SubobjectEditor",
             "RenderCore",
             "ImageCore",
             "UMG",

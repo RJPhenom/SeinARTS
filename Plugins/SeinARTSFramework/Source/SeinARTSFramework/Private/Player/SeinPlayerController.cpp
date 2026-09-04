@@ -1485,7 +1485,7 @@ void ASeinPlayerController::IssueSmartCommandEx(
 		{
 			// Eligibility is about destination opinions (navigation components),
 			// never about render opt-in: whether a unit draws preview markers (its
-			// Formation Preview Component) must not change the command payload.
+			// Navigation Renderer) must not change the command payload.
 			for (const FSeinEntityHandle& Member : Broker->Members)
 			{
 				if (!Subsystem->IsEntityAlive(Member)) continue;
