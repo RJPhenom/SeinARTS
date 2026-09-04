@@ -256,12 +256,8 @@ namespace
 		const FFixedPoint* GapCos = nullptr;
 		const FFixedPoint* GapSin = nullptr;
 		bool bIdleDodgeEnabled = false;
-		FFixedPoint MovingSpeedFloor;
-		FFixedPoint FalloffRadii;
-		FFixedPoint SmoothKeep;
 		FFixedPoint ArrivalReleaseRadii;
 		FFixedPoint ArrivalFadeInnerRadii;
-		FFixedPoint MaxSteerMagnitude;
 		FFixedPoint IdleResolveStrength;
 		FFixedPoint IdleDodgeStrength;
 		FFixedPoint BendCapCos;
@@ -607,6 +603,40 @@ namespace
 	}
 #endif
 
+	static FFixedPoint ComputeCohesionTerm(
+		FFixedPoint SelfValue,
+		FFixedPoint GroupMean,
+		FFixedPoint Normalization,
+		FFixedPoint CohesionBoost,
+		FFixedPoint CohesionHoldBack,
+		bool bAllowBoost)
+	{
+		FFixedPoint Deviation = (SelfValue - GroupMean) / Normalization;
+		if (Deviation > FFixedPoint::One)
+		{
+			Deviation = FFixedPoint::One;
+		}
+		if (Deviation < -FFixedPoint::One)
+		{
+			Deviation = -FFixedPoint::One;
+		}
+		const FFixedPoint Deadband =
+			FFixedPoint::FromInt(3) / FFixedPoint::FromInt(20);
+		const FFixedPoint Span = FFixedPoint::One - Deadband;
+		if (Deviation > Deadband && bAllowBoost)
+		{
+			const FFixedPoint T = (Deviation - Deadband) / Span;
+			return FFixedPoint::One
+				+ (CohesionBoost - FFixedPoint::One) * T;
+		}
+		if (Deviation < -Deadband)
+		{
+			const FFixedPoint T = (-Deviation - Deadband) / Span;
+			return FFixedPoint::One - CohesionHoldBack * T;
+		}
+		return FFixedPoint::One;
+	}
+
 	static void FinalizeMovingOutput(
 		const FAvoidanceOutputParameters& Parameters,
 		int32 Index,
@@ -690,42 +720,16 @@ namespace
 						SeinMath::Sqrt(GoalDistanceSquared);
 					const FFixedPoint Normalization =
 						SelfRadius * Parameters.CohesionRangeRadii;
-					FFixedPoint Deviation =
-						(SelfDistance - Mean) / Normalization;
-					if (Deviation > FFixedPoint::One)
-					{
-						Deviation = FFixedPoint::One;
-					}
-					if (Deviation < -FFixedPoint::One)
-					{
-						Deviation = -FFixedPoint::One;
-					}
-					const FFixedPoint Deadband =
-						FFixedPoint::FromInt(3) / FFixedPoint::FromInt(20);
-					const FFixedPoint Span = FFixedPoint::One - Deadband;
-					if (Deviation > Deadband)
-					{
-						const FFixedPoint SelfProgress =
-							Parameters.ActualProgress[Index];
-						const bool bMakingHeadway =
-							SelfProgress == Parameters.ProgressUnknown
-							|| SelfProgress > Parameters.FloorPerTick;
-						if (bMakingHeadway)
-						{
-							const FFixedPoint T =
-								(Deviation - Deadband) / Span;
-							InnerTerm = FFixedPoint::One
-								+ (Parameters.CohesionBoost
-									- FFixedPoint::One) * T;
-						}
-					}
-					else if (Deviation < -Deadband)
-					{
-						const FFixedPoint T =
-							(-Deviation - Deadband) / Span;
-						InnerTerm = FFixedPoint::One
-							- Parameters.CohesionHoldBack * T;
-					}
+					const FFixedPoint SelfProgress =
+						Parameters.ActualProgress[Index];
+					const bool bMakingHeadway =
+						SelfProgress == Parameters.ProgressUnknown
+						|| SelfProgress > Parameters.FloorPerTick;
+					InnerTerm = ComputeCohesionTerm(
+						SelfDistance, Mean, Normalization,
+						Parameters.CohesionBoost,
+						Parameters.CohesionHoldBack,
+						bMakingHeadway);
 				}
 			}
 		}
@@ -749,48 +753,28 @@ namespace
 						{
 							const FFixedPoint SelfBrokerMean =
 								SelfAggregate->SumDist
-								/ FFixedPoint::FromInt(SelfAggregate->Count);
+								/ FFixedPoint::FromInt(
+									SelfAggregate->Count);
 							const FFixedPoint GroupMean =
 								OuterAggregate->SumOfBrokerMeans
 								/ FFixedPoint::FromInt(
 									OuterAggregate->DistinctBrokerCount);
 							const FFixedPoint Normalization =
-								SelfRadius * Parameters.CohesionRangeRadii;
-							FFixedPoint Deviation =
-								(SelfBrokerMean - GroupMean) / Normalization;
-							if (Deviation > FFixedPoint::One)
-							{
-								Deviation = FFixedPoint::One;
-							}
-							if (Deviation < -FFixedPoint::One)
-							{
-								Deviation = -FFixedPoint::One;
-							}
-							const FFixedPoint Deadband =
-								FFixedPoint::FromInt(3)
-								/ FFixedPoint::FromInt(20);
-							const FFixedPoint Span = FFixedPoint::One - Deadband;
-							if (Deviation > Deadband)
-							{
-								const FFixedPoint T =
-									(Deviation - Deadband) / Span;
-								OuterTerm = FFixedPoint::One
-									+ (Parameters.CohesionBoost
-										- FFixedPoint::One) * T;
-							}
-							else if (Deviation < -Deadband)
-							{
-								const FFixedPoint T =
-									(-Deviation - Deadband) / Span;
-								OuterTerm = FFixedPoint::One
-									- Parameters.CohesionHoldBack * T;
-							}
+								SelfRadius
+								* Parameters.CohesionRangeRadii;
+							OuterTerm = ComputeCohesionTerm(
+								SelfBrokerMean, GroupMean,
+								Normalization,
+								Parameters.CohesionBoost,
+								Parameters.CohesionHoldBack,
+								true);
 						}
 					}
 				}
 			}
 		}
 
+		// Boosts multiply; hold-backs min-clamp at One.
 		FFixedPoint CohesionTerm;
 		if (InnerTerm > FFixedPoint::One)
 		{
@@ -1451,14 +1435,16 @@ namespace
 		const FFixedPoint* GapCos = Parameters.GapCos;
 		const FFixedPoint* GapSin = Parameters.GapSin;
 		const bool bIdleDodgeEnabled = Parameters.bIdleDodgeEnabled;
-		const FFixedPoint MovingSpeedFloor = Parameters.MovingSpeedFloor;
-		const FFixedPoint FalloffRadii = Parameters.FalloffRadii;
-		const FFixedPoint SmoothKeep = Parameters.SmoothKeep;
+		const FFixedPoint MovingSpeedFloor =
+			NeighborParameters.MovingSpeedFloor;
+		const FFixedPoint FalloffRadii = NeighborParameters.FalloffRadii;
+		const FFixedPoint SmoothKeep = OutputParameters.SmoothKeep;
 		const FFixedPoint ArrivalReleaseRadii =
 			Parameters.ArrivalReleaseRadii;
 		const FFixedPoint ArrivalFadeInnerRadii =
 			Parameters.ArrivalFadeInnerRadii;
-		const FFixedPoint MaxSteerMagnitude = Parameters.MaxSteerMagnitude;
+		const FFixedPoint MaxSteerMagnitude =
+			OutputParameters.MaxSteerMagnitude;
 		const FFixedPoint IdleResolveStrength = Parameters.IdleResolveStrength;
 		const FFixedPoint IdleDodgeStrength = Parameters.IdleDodgeStrength;
 		const FFixedPoint BendCapCos = Parameters.BendCapCos;
@@ -1761,12 +1747,8 @@ void FSeinAvoidanceDefaultKernel::Execute(
 		GapCos,
 		GapSin,
 		bIdleDodgeEnabled,
-		MovingSpeedFloor,
-		FalloffRadii,
-		SmoothKeep,
 		ArrivalReleaseRadii,
 		ArrivalFadeInnerRadii,
-		MaxSteerMagnitude,
 		IdleResolveStrength,
 		IdleDodgeStrength,
 		BendCapCos,
