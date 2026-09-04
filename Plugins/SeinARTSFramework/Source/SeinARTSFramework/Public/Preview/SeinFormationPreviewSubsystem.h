@@ -4,7 +4,7 @@
  * @file    SeinFormationPreviewSubsystem.h
  * @author  RJ Macklem
  * @created 21 Aug 2026
- * @latest  02 Sep 2026
+ * @latest  03 Sep 2026
  * @brief   Per-local-player coordinator for the destination preview.
  *
  *          BASE feature (ported from the Cover extension). Listens to
@@ -12,8 +12,8 @@
  *          (driven by the cursor delegate) it:
  *            1. Bails if the targeter is active (its preview takes precedence)
  *            2. Resolves the local selection to a member-handle list plus each
- *               member's render opt-in (USeinFormationPreviewComponent on the
- *               unit/squad actor — presence opts in, its class picks the renderer)
+ *               member's render opt-in and marker style
+ *               (USeinFormationPreviewComponent on the unit/squad actor)
  *            3. Calls USeinCommandBrokerBPFL::SeinComputeFormationPreview for the
  *               per-member projected positions (the SAME dry-run the commit uses)
  *            4. Optionally fetches per-cell quality tags from
@@ -120,22 +120,16 @@ private:
 	void UnhookPlayerControllerDelegates();
 
 	/** Resolve the local PC's selection to a member-handle list (squads expand to
-	 *  live members; lone units return their own handle), plus a parallel array of
-	 *  per-member renderer classes (null = that member draws no marker). A member
-	 *  without a navigation component has no destination opinion and still
-	 *  suppresses the whole preview (the commit would resolve that selection
-	 *  through the artifact-less path). Render opt-in is per member: the
-	 *  USeinFormationPreviewComponent on a squad's actor covers all its members;
-	 *  otherwise each member's own actor decides. */
+	 *  live members; lone units return their own handle), plus parallel renderer
+	 *  class and marker-style arrays. A null renderer means that member draws no
+	 *  marker. A member without a navigation component has no destination opinion
+	 *  and suppresses the whole preview (the commit would use the artifact-less
+	 *  path). A renderer on a squad covers all its members and supplies their base
+	 *  style; a renderer on a member supplies field-level style overrides. */
 	TArray<FSeinEntityHandle> ResolveSelectionToMembers(
-		ASeinPlayerController* PC, TArray<UClass*>& OutRenderClasses) const;
-
-	/** Resolve each member's per-unit marker style (from its actor's Formation Preview
-	 *  Style Component; default style when absent or actor-less), index-aligned with
-	 *  `Members`. Lazily fills CachedMemberStyles so the bridge/component lookup runs
-	 *  once per member per selection, not per cursor tick. */
-	void BuildMemberStyles(const TArray<FSeinEntityHandle>& Members,
-		TArray<FSeinFormationPreviewElementStyle>& OutStyles);
+		ASeinPlayerController* PC,
+		TArray<UClass*>& OutRenderClasses,
+		TArray<FSeinFormationPreviewElementStyle>& OutStyles) const;
 
 	/** Tear down the preview — hides every pooled actor, clears visibility. */
 	void HidePreview();
@@ -171,11 +165,6 @@ private:
 	/** Cached per-position quality tags from the last provider query. */
 	UPROPERTY(Transient)
 	TArray<FGameplayTag> CachedQualities;
-
-	/** Per-member style cache (see BuildMemberStyles). Cleared on selection change and
-	 *  travel; members added mid-selection (e.g. squad reinforcement) fill in lazily. */
-	UPROPERTY(Transient)
-	TMap<FSeinEntityHandle, FSeinFormationPreviewElementStyle> CachedMemberStyles;
 
 	/** Cursor position when CachedQualities was computed. */
 	FVector LastQualityQueryCursor = FVector::ZeroVector;

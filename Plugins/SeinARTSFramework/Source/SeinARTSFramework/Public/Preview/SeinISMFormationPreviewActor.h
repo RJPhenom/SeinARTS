@@ -59,9 +59,9 @@ struct FSeinISMFormationPreviewGroup
  * smear or ghost under temporal anti-aliasing (TAA).
  *
  * Uses INSTANCED-STATIC-MESH rendering grouped by look: with no per-unit style overrides the whole
- * formation is one draw call; units whose Formation Preview Style Component overrides the marker
- * mesh or material add one draw call per distinct look, not per marker. The marker's ring shape
- * comes from the material; each member's radius is applied as per-instance scale.
+ * formation is one draw call; units whose Navigation Renderer overrides the marker mesh or
+ * material add one draw call per distinct look, not per marker. The marker's ring shape comes from
+ * the material; each member's radius is applied as per-instance scale.
  *
  * Tinting note: an instanced-static-mesh component cannot carry a per-instance material, so the
  * tint (quality tint times style tint) is written to per-instance custom-data floats 0-3 (as R, G,

@@ -13,7 +13,12 @@
 #include "Effects/SeinEffectBlueprint.h"
 #include "Formations/SeinFormationBlueprint.h"
 #include "Balance/SeinBalanceProfile.h"
+#include "BlueprintEditorModule.h"
 #include "Engine/Blueprint.h"
+#include "Kismet2/BlueprintEditorUtils.h"
+#include "Misc/MessageDialog.h"
+#include "Modules/ModuleManager.h"
+#include "SBlueprintDiff.h"
 #include "Toolkits/IToolkitHost.h"
 
 #define LOCTEXT_NAMESPACE "SeinARTSEditor"
@@ -54,6 +59,70 @@ namespace
 		};
 		return Categories;
 	}
+}
+
+// ==================== Shared Blueprint base ====================
+
+EAssetCommandResult UAssetDefinition_SeinBlueprintBase::OpenAssets(const FAssetOpenArgs& OpenArgs) const
+{
+	// Mirrors FAssetTypeActions_Blueprint::OpenAssetEditor — the behavior the
+	// legacy asset actions inherited. UAssetDefinitionDefault must not be left
+	// to handle this: its Unhandled fallback opens the generic property grid.
+	const EToolkitMode::Type Mode = OpenArgs.GetToolkitMode();
+	EAssetCommandResult Result = EAssetCommandResult::Unhandled;
+
+	for (UBlueprint* Blueprint : OpenArgs.LoadObjects<UBlueprint>())
+	{
+		if (!Blueprint)
+		{
+			continue;
+		}
+
+		bool bLetOpen = true;
+		if (!Blueprint->SkeletonGeneratedClass || !Blueprint->GeneratedClass)
+		{
+			bLetOpen = EAppReturnType::Yes == FMessageDialog::Open(EAppMsgType::YesNo, LOCTEXT(
+				"FailedToLoadSeinBlueprintWithContinue",
+				"Blueprint could not be loaded because it derives from an invalid class.\n"
+				"Check to make sure the parent class for this blueprint hasn't been removed!\n"
+				"Do you want to continue (it can crash the editor)?"));
+		}
+
+		if (bLetOpen)
+		{
+			FBlueprintEditorModule& BlueprintEditorModule =
+				FModuleManager::LoadModuleChecked<FBlueprintEditorModule>("Kismet");
+			BlueprintEditorModule.CreateBlueprintEditor(
+				Mode, OpenArgs.ToolkitHost, Blueprint, ShouldUseDataOnlyEditor(Blueprint));
+		}
+
+		Result = EAssetCommandResult::Handled;
+	}
+
+	return Result;
+}
+
+EAssetCommandResult UAssetDefinition_SeinBlueprintBase::PerformAssetDiff(const FAssetDiffArgs& DiffArgs) const
+{
+	// Blueprint-aware revision diff (graphs + defaults), as the legacy actions
+	// provided. The Movement definition's soft class can be unresolved when its
+	// module is absent — no such assets exist then, but stay safe regardless.
+	const UBlueprint* OldBlueprint = Cast<UBlueprint>(DiffArgs.OldAsset);
+	const UBlueprint* NewBlueprint = Cast<UBlueprint>(DiffArgs.NewAsset);
+	UClass* AssetClass = GetAssetClass().Get();
+	SBlueprintDiff::CreateDiffWindow(
+		OldBlueprint, NewBlueprint, DiffArgs.OldRevision, DiffArgs.NewRevision,
+		AssetClass ? AssetClass : UBlueprint::StaticClass());
+	return EAssetCommandResult::Handled;
+}
+
+bool UAssetDefinition_SeinBlueprintBase::ShouldUseDataOnlyEditor(const UBlueprint* Blueprint)
+{
+	return FBlueprintEditorUtils::IsDataOnlyBlueprint(Blueprint)
+		&& !FBlueprintEditorUtils::IsLevelScriptBlueprint(Blueprint)
+		&& !FBlueprintEditorUtils::IsInterfaceBlueprint(Blueprint)
+		&& !Blueprint->bForceFullEditor
+		&& !Blueprint->bIsNewlyCreated;
 }
 
 // ==================== Unit (SeinActorBlueprint) ====================

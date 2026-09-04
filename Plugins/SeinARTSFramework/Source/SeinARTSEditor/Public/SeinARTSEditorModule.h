@@ -15,6 +15,7 @@
 
 class FAutoConsoleCommand;
 class FSeinDeterministicStructValidator;
+class FSeinEntityComponentTreeCustomization;
 class FSeinSimulationContentCookIntegration;
 class FSeinSimulationContentPIEAuthorizer;
 class FPrimitiveDrawInterface;
@@ -103,6 +104,8 @@ private:
 		SimulationContentPIEAuthorizer;
 	TUniquePtr<FSeinSimulationContentCookIntegration>
 		SimulationContentCookIntegration;
+	TSharedPtr<FSeinEntityComponentTreeCustomization>
+		EntityComponentTreeCustomization;
 	TUniquePtr<FAutoConsoleCommand>
 		SimulationContentGenerateCommand;
 	TMap<FName, FSeinComponentDataDrawDelegate> ComponentDataDraws;

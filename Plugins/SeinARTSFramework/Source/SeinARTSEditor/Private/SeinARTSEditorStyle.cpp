@@ -121,11 +121,9 @@ void FSeinARTSEditorStyle::Initialize()
 
 	// ==================== Component ====================
 
-	// Per §2, "components" split into two tracks: (a) the UDS factory's
-	// authoring thumbnail (`SeinSimComponent` — used by USeinSimComponentFactory's
-	// GetNewAssetThumbnailOverride), and (b) the base AC class icon
-	// (`SeinActorComponent` — UE walks the parent chain for the corner badge,
-	// so this catches typed wrappers AND USeinStructComponent instances).
+	// Sim entity components use the orange component brand. Presentation and
+	// bridge ActorComponents use their own icon so the Add Component menu does
+	// not imply that they are deterministic sim payloads.
 	auto RegisterComponentIcon = [&](const FName& Key)
 	{
 		StyleSet->Set(
@@ -140,29 +138,48 @@ void FSeinARTSEditorStyle::Initialize()
 			new FSlateImageBrush(StyleSet->RootToContentDir(TEXT("SeinComponentIcon92"), TEXT(".png")), FVector2D(92.0f, 92.0f))
 		);
 	};
+	auto RegisterActorComponentIcon = [&](const FName& Key)
+	{
+		StyleSet->Set(
+			Key,
+			new FSlateImageBrush(
+				StyleSet->RootToContentDir(TEXT("SeinActorComponentIcon16"), TEXT(".png")),
+				FVector2D(16.0f, 16.0f))
+		);
+	};
+	auto RegisterActorComponentThumb = [&](const FName& Key)
+	{
+		StyleSet->Set(
+			Key,
+			new FSlateImageBrush(
+				StyleSet->RootToContentDir(TEXT("SeinActorComponentIcon92"), TEXT(".png")),
+				FVector2D(92.0f, 92.0f))
+		);
+	};
 
 	RegisterComponentIcon(TEXT("ClassIcon.SeinSimComponent"));
-	// Direct UActorComponent subclasses in the SeinARTS ClassGroup. UE looks
-	// up component icons by exact class name; each entry needs its own
-	// registration, and the components-panel corner badge also resolves via
-	// the parent class chain — registering the authoring BASE
-	// (SeinDataComponent now, SeinEntityComponent after the post-resave name
-	// flip; both keys kept) covers every native and Blueprint data component.
-	// SeinEntityBridgeComponent is the actor-bridge default subobject on
-	// every ASeinActor; SeinEntityComponentBlueprint is the data-component
-	// Blueprint ASSET class (Content Browser icon + thumbnail).
+	// The authoring base (SeinDataComponent now, SeinEntityComponent after the
+	// post-resave name flip; both keys kept) covers every native and Blueprint
+	// entity-data component. SeinEntityComponentBlueprint is the data-component
+	// Blueprint asset class.
 	RegisterComponentIcon(TEXT("ClassIcon.SeinEntityComponent"));
-	RegisterComponentIcon(TEXT("ClassIcon.SeinEntityBridgeComponent"));
 	RegisterComponentIcon(TEXT("ClassIcon.SeinDataComponent"));
 	RegisterComponentIcon(TEXT("ClassIcon.SeinEntityComponentBlueprint"));
-	RegisterComponentIcon(TEXT("ClassIcon.SeinConstructionRenderComponent"));
 
 	RegisterComponentThumb(TEXT("ClassThumbnail.SeinSimComponent"));
 	RegisterComponentThumb(TEXT("ClassThumbnail.SeinEntityComponent"));
-	RegisterComponentThumb(TEXT("ClassThumbnail.SeinEntityBridgeComponent"));
 	RegisterComponentThumb(TEXT("ClassThumbnail.SeinDataComponent"));
 	RegisterComponentThumb(TEXT("ClassThumbnail.SeinEntityComponentBlueprint"));
-	RegisterComponentThumb(TEXT("ClassThumbnail.SeinConstructionRenderComponent"));
+
+	// These non-sim SeinARTS ActorComponents currently share only UActorComponent,
+	// so register the actor-component style for each reflected class.
+	RegisterActorComponentIcon(TEXT("ClassIcon.SeinConstructionRenderComponent"));
+	RegisterActorComponentIcon(TEXT("ClassIcon.SeinEntityBridgeComponent"));
+	RegisterActorComponentIcon(TEXT("ClassIcon.SeinFormationPreviewComponent"));
+
+	RegisterActorComponentThumb(TEXT("ClassThumbnail.SeinConstructionRenderComponent"));
+	RegisterActorComponentThumb(TEXT("ClassThumbnail.SeinEntityBridgeComponent"));
+	RegisterActorComponentThumb(TEXT("ClassThumbnail.SeinFormationPreviewComponent"));
 
 	// ==================== Widget ====================
 

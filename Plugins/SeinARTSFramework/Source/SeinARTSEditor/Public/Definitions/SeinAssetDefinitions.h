@@ -21,12 +21,36 @@
 #include "AssetDefinitionDefault.h"
 #include "SeinAssetDefinitions.generated.h"
 
+class UBlueprint;
+
+/**
+ * Shared base for every Sein Blueprint-class asset definition. Restores the
+ * two behaviors the legacy FAssetTypeActions_Blueprint base classes provided
+ * and UAssetDefinitionDefault does NOT: opening the asset in the real
+ * Blueprint editor (the Default fallback is the generic property grid — no
+ * viewport, no graphs), and revision diffs through the Blueprint differ.
+ * Mirrors FAssetTypeActions_Blueprint::OpenAssetEditor, including the
+ * data-only defaults-view fast path for graphless Blueprints.
+ */
+UCLASS(Abstract)
+class UAssetDefinition_SeinBlueprintBase : public UAssetDefinitionDefault
+{
+	GENERATED_BODY()
+
+public:
+	virtual EAssetCommandResult OpenAssets(const FAssetOpenArgs& OpenArgs) const override;
+	virtual EAssetCommandResult PerformAssetDiff(const FAssetDiffArgs& DiffArgs) const override;
+
+protected:
+	static bool ShouldUseDataOnlyEditor(const UBlueprint* Blueprint);
+};
+
 /**
  * Asset definition for Unit (SeinActor) Blueprints.
  * Color: #0095FF (Blue). Section: Core.
  */
 UCLASS()
-class UAssetDefinition_SeinActorBlueprint : public UAssetDefinitionDefault
+class UAssetDefinition_SeinActorBlueprint : public UAssetDefinition_SeinBlueprintBase
 {
 	GENERATED_BODY()
 
@@ -43,7 +67,7 @@ public:
  * Color: #FF8000 (Orange). Section: Core.
  */
 UCLASS()
-class UAssetDefinition_SeinEntityComponentBlueprint : public UAssetDefinitionDefault
+class UAssetDefinition_SeinEntityComponentBlueprint : public UAssetDefinition_SeinBlueprintBase
 {
 	GENERATED_BODY()
 
@@ -64,7 +88,7 @@ public:
  * Color: #FF0000 (Red). Section: Core.
  */
 UCLASS()
-class UAssetDefinition_SeinAbilityBlueprint : public UAssetDefinitionDefault
+class UAssetDefinition_SeinAbilityBlueprint : public UAssetDefinition_SeinBlueprintBase
 {
 	GENERATED_BODY()
 
@@ -80,7 +104,7 @@ public:
  * Color: #FF0000 (Red — matches Ability). Section: Core.
  */
 UCLASS()
-class UAssetDefinition_SeinEffectBlueprint : public UAssetDefinitionDefault
+class UAssetDefinition_SeinEffectBlueprint : public UAssetDefinition_SeinBlueprintBase
 {
 	GENERATED_BODY()
 
@@ -96,7 +120,7 @@ public:
  * Color: #0095FF (Blue — matches Entity Blueprint). Section: Behaviour Policies.
  */
 UCLASS()
-class UAssetDefinition_SeinFormationBlueprint : public UAssetDefinitionDefault
+class UAssetDefinition_SeinFormationBlueprint : public UAssetDefinition_SeinBlueprintBase
 {
 	GENERATED_BODY()
 
@@ -115,7 +139,7 @@ public:
  * the definition simply never matches an asset.
  */
 UCLASS()
-class UAssetDefinition_SeinMovementBlueprint : public UAssetDefinitionDefault
+class UAssetDefinition_SeinMovementBlueprint : public UAssetDefinition_SeinBlueprintBase
 {
 	GENERATED_BODY()
 

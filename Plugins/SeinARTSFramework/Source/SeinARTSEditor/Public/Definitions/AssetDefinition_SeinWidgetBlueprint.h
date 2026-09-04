@@ -13,18 +13,18 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "AssetDefinitionDefault.h"
+#include "Definitions/SeinAssetDefinitions.h"
 #include "AssetDefinition_SeinWidgetBlueprint.generated.h"
 
 /**
  * Asset definition for USeinWidgetBlueprint.
  *
  * UE 5.7 removed the public UAssetDefinition_WidgetBlueprint header, so we
- * subclass UAssetDefinitionDefault directly and replicate UMG's OpenAssets
- * flow (creating FWidgetBlueprintEditor) ourselves.
+ * replicate UMG's OpenAssets flow (creating FWidgetBlueprintEditor)
+ * ourselves; the Sein Blueprint base supplies the revision-diff behavior.
  */
 UCLASS()
-class UAssetDefinition_SeinWidgetBlueprint : public UAssetDefinitionDefault
+class UAssetDefinition_SeinWidgetBlueprint : public UAssetDefinition_SeinBlueprintBase
 {
 	GENERATED_BODY()
 

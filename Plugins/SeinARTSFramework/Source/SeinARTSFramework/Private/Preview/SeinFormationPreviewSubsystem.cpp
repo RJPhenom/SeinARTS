@@ -4,7 +4,7 @@
  * @file    SeinFormationPreviewSubsystem.cpp
  * @author  RJ Macklem
  * @created 21 Aug 2026
- * @latest  02 Sep 2026
+ * @latest  03 Sep 2026
  * @brief   Base destination-preview coordinator (ported from the Cover extension;
  *          cover-quality query replaced by the generic PreviewQualityProvider hook
  *          on USeinWorldSubsystem, which the Cover extension binds).
@@ -16,7 +16,6 @@
 #include "Preview/SeinFormationPreviewSubsystem.h"
 #include "Preview/SeinFormationPreviewActor.h"
 #include "Preview/SeinFormationPreviewComponent.h"
-#include "Preview/SeinFormationPreviewStyleComponent.h"
 
 #include "Player/SeinPlayerController.h"
 #include "Player/SeinTargeterSubsystem.h"
@@ -43,7 +42,7 @@ DEFINE_LOG_CATEGORY_STATIC(LogSeinFormationPreviewSubsystem, Log, All);
 
 /** Dev kill switch for the marker drawing only — computation and the frozen
  *  destination artifact are unaffected. Opt-in itself is authored per unit by
- *  adding a Formation Preview Component to its Blueprint. */
+ *  adding a Navigation Renderer to its Blueprint. */
 static TAutoConsoleVariable<int32> CVarSeinPreviewDisable(
 	TEXT("Sein.Preview.Disable"),
 	0,
@@ -77,7 +76,6 @@ void USeinFormationPreviewSubsystem::Initialize(FSubsystemCollectionBase& Collec
 			bQualityDirty = true;
 			bLayoutDirty = true;
 			CachedQualities.Reset();
-			CachedMemberStyles.Reset();
 		});
 
 	UE_LOG(LogSeinFormationPreviewSubsystem, Log,
@@ -109,7 +107,6 @@ void USeinFormationPreviewSubsystem::ReleaseModuleOwnedStateForModuleUnload()
 	bIsVisible = false;
 	BoundPC = nullptr;
 	CachedQualities.Reset();
-	CachedMemberStyles.Reset();
 	bLastCursorValid = false;
 	bQualityDirty = true;
 	bLayoutDirty = true;
@@ -153,10 +150,9 @@ void USeinFormationPreviewSubsystem::UnhookPlayerControllerDelegates()
 
 void USeinFormationPreviewSubsystem::HandleSelectionChanged()
 {
-	// New selection → different member count / footprint → cached qualities + styles stale.
+	// New selection → different member count / footprint → cached qualities stale.
 	bQualityDirty = true;
 	bLayoutDirty = true;
-	CachedMemberStyles.Reset();
 
 	if (BoundPC.IsValid() && BoundPC->GetSelectionCount() == 0)
 	{
@@ -270,9 +266,10 @@ void USeinFormationPreviewSubsystem::RefreshPreview()
 
 	TArray<FSeinEntityHandle> Members;
 	TArray<UClass*> RenderClasses;
+	TArray<FSeinFormationPreviewElementStyle> Styles;
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_FormationPreview_ResolveSelection);
-		Members = ResolveSelectionToMembers(PC, RenderClasses);
+		Members = ResolveSelectionToMembers(PC, RenderClasses, Styles);
 	}
 	if (Members.Num() == 0)
 	{
@@ -280,7 +277,7 @@ void USeinFormationPreviewSubsystem::RefreshPreview()
 		return;
 	}
 
-	// Render opt-in is authored per unit (Formation Preview Component). When no
+	// Render opt-in is authored per unit (Navigation Renderer). When no
 	// selected member opts in there is nothing to draw, so skip the layout solve
 	// entirely — the commit computes its own artifact for such selections, exactly
 	// as it does for any click made while no preview is displayed.
@@ -362,11 +359,8 @@ void USeinFormationPreviewSubsystem::RefreshPreview()
 		bQualityDirty = false;
 	}
 
-	// Per-member marker styles (from each unit's Formation Preview Style Component),
-	// index-aligned with Members and therefore with Layout.Positions. Cache-backed:
-	// the bridge/component lookup runs once per member per selection.
-	TArray<FSeinFormationPreviewElementStyle> Styles;
-	BuildMemberStyles(Members, Styles);
+	// Styles were resolved with the render opt-in so renderer and style inheritance
+	// use the same squad/member component lookup and stay index-aligned with Members.
 	if (Styles.Num() != WorldPositions.Num())
 	{
 		// Defensive: a layout that isn't member-aligned must not style the wrong markers.
@@ -576,7 +570,7 @@ UClass* USeinFormationPreviewSubsystem::ResolveRenderClassForActor(const AActor*
 			return Class;
 		}
 		UE_LOG(LogSeinFormationPreviewSubsystem, Error,
-			TEXT("Formation Preview Component on %s names class '%s' that could not be loaded or is abstract — using the project default."),
+			TEXT("Navigation Renderer on %s names class '%s' that could not be loaded or is abstract — using the project default."),
 			*GetNameSafe(Actor), *Component->PreviewActorClass.ToString());
 	}
 	if (const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>())
@@ -597,10 +591,13 @@ UClass* USeinFormationPreviewSubsystem::ResolveRenderClassForActor(const AActor*
 }
 
 TArray<FSeinEntityHandle> USeinFormationPreviewSubsystem::ResolveSelectionToMembers(
-	ASeinPlayerController* PC, TArray<UClass*>& OutRenderClasses) const
+	ASeinPlayerController* PC,
+	TArray<UClass*>& OutRenderClasses,
+	TArray<FSeinFormationPreviewElementStyle>& OutStyles) const
 {
 	TArray<FSeinEntityHandle> Out;
 	OutRenderClasses.Reset();
+	OutStyles.Reset();
 	if (!PC) return Out;
 
 	UWorld* World = PC->GetWorld();
@@ -615,9 +612,10 @@ TArray<FSeinEntityHandle> USeinFormationPreviewSubsystem::ResolveSelectionToMemb
 	//
 	// Render opt-in is separate, per member, and NEVER affects membership: the
 	// parallel OutRenderClasses entry carries the renderer class from the member's
-	// Formation Preview Component (the one on a squad's actor covers all its
-	// members), or null for members that draw no marker. The layout and frozen
-	// destination artifact always cover every returned member.
+	// Navigation Renderer (the one on a squad's actor covers all its members), or
+	// null for members that draw no marker. OutStyles follows the same member order:
+	// squad fields are inherited and member fields override them. The layout and
+	// frozen destination artifact always cover every returned member.
 	const bool bFocusedSelection =
 		PC->ActiveFocusIndex >= 0
 		&& PC->SelectedActors.IsValidIndex(PC->ActiveFocusIndex);
@@ -644,6 +642,8 @@ TArray<FSeinEntityHandle> USeinFormationPreviewSubsystem::ResolveSelectionToMemb
 		// draws nothing this refresh).
 		if (const FSeinSquadPayload* SquadData = WorldSub->GetComponent<FSeinSquadPayload>(Handle))
 		{
+			const USeinFormationPreviewComponent* SquadRenderer =
+				Actor->FindComponentByClass<USeinFormationPreviewComponent>();
 			UClass* SquadRenderClass = ResolveRenderClassForActor(Actor);
 			for (const FSeinEntityHandle& Member : SquadData->GetLiveMembers())
 			{
@@ -652,16 +652,36 @@ TArray<FSeinEntityHandle> USeinFormationPreviewSubsystem::ResolveSelectionToMemb
 				if (!MemberNav)
 				{
 					OutRenderClasses.Reset();
+					OutStyles.Reset();
 					return {};
 				}
+
+				ASeinActor* MemberActor = Bridge
+					? Bridge->GetActorForEntity(Member)
+					: nullptr;
+				const USeinFormationPreviewComponent* MemberRenderer = MemberActor
+					? MemberActor->FindComponentByClass<USeinFormationPreviewComponent>()
+					: nullptr;
 				UClass* MemberRenderClass = SquadRenderClass;
-				if (!MemberRenderClass && Bridge)
+				if (!MemberRenderClass)
 				{
-					MemberRenderClass =
-						ResolveRenderClassForActor(Bridge->GetActorForEntity(Member));
+					MemberRenderClass = ResolveRenderClassForActor(MemberActor);
 				}
+
+				FSeinFormationPreviewElementStyle Style;
+				Style.MemberHandle = Member;
+				if (SquadRenderer)
+				{
+					Style = SquadRenderer->BuildElementStyle(Member);
+				}
+				if (MemberRenderer)
+				{
+					Style = MemberRenderer->BuildElementStyle(Member, &Style);
+				}
+
 				Out.Add(Member);
 				OutRenderClasses.Add(MemberRenderClass);
+				OutStyles.Add(MoveTemp(Style));
 			}
 			continue;
 		}
@@ -672,50 +692,23 @@ TArray<FSeinEntityHandle> USeinFormationPreviewSubsystem::ResolveSelectionToMemb
 		if (!NavComp)
 		{
 			OutRenderClasses.Reset();
+			OutStyles.Reset();
 			return {};
+		}
+		const USeinFormationPreviewComponent* Renderer =
+			Actor->FindComponentByClass<USeinFormationPreviewComponent>();
+		FSeinFormationPreviewElementStyle Style;
+		Style.MemberHandle = Handle;
+		if (Renderer)
+		{
+			Style = Renderer->BuildElementStyle(Handle);
 		}
 		Out.Add(Handle);
 		OutRenderClasses.Add(ResolveRenderClassForActor(Actor));
+		OutStyles.Add(MoveTemp(Style));
 	}
 
 	return Out;
-}
-
-void USeinFormationPreviewSubsystem::BuildMemberStyles(const TArray<FSeinEntityHandle>& Members,
-	TArray<FSeinFormationPreviewElementStyle>& OutStyles)
-{
-	OutStyles.Reset();
-	OutStyles.Reserve(Members.Num());
-
-	UWorld* World = GetWorld();
-	USeinActorBridgeSubsystem* Bridge = World ? World->GetSubsystem<USeinActorBridgeSubsystem>() : nullptr;
-
-	for (const FSeinEntityHandle& Member : Members)
-	{
-		if (const FSeinFormationPreviewElementStyle* Cached = CachedMemberStyles.Find(Member))
-		{
-			OutStyles.Add(*Cached);
-			continue;
-		}
-
-		// Default style (member handle only) unless the member's actor carries a style
-		// component. Actor-less members (abstract entities) keep the default look.
-		FSeinFormationPreviewElementStyle Style;
-		Style.MemberHandle = Member;
-		if (Bridge)
-		{
-			if (ASeinActor* Actor = Bridge->GetActorForEntity(Member))
-			{
-				if (const USeinFormationPreviewStyleComponent* StyleComp =
-					Actor->FindComponentByClass<USeinFormationPreviewStyleComponent>())
-				{
-					Style = StyleComp->BuildElementStyle(Member);
-				}
-			}
-		}
-		CachedMemberStyles.Add(Member, Style);
-		OutStyles.Add(Style);
-	}
 }
 
 TArray<FVector> USeinFormationPreviewSubsystem::ConvertPositions(const TArray<FFixedVector>& In)

@@ -122,7 +122,7 @@ public:
 	 *  as unexplored. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Fog Of War",
 		meta = (ClampMin = "0.0", ClampMax = "1.0", DisplayName = "Explored Opacity"))
-	float ExploredOpacity = 0.5f;
+	float ExploredOpacity = 0.75f;
 
 	/** Edge smoothing, in fog cells of blur radius. **0 = NO smoothing** — hard,
 	 *  blocky per-cell edges (nearest-filtered, no blur). Above 0 switches on
@@ -132,7 +132,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Fog Of War",
 		meta = (ClampMin = "0.0", ClampMax = "5.0", UIMax = "5.0",
 			DisplayName = "Smoothing Strength"))
-	float SmoothingStrength = 1.0f;
+	float SmoothingStrength = 0.1f;
 
 	// ----------------------------------------------------------------------
 	// Tunables — switchable vision layers

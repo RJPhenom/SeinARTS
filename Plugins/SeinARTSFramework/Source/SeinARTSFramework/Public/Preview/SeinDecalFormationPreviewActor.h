@@ -50,7 +50,7 @@ public:
 	/** Total projection depth in world units — how far each decal box extends vertically
 	 *  (centered on the placement position). Keep small (~64) so the decal hits ground
 	 *  geometry only and doesn't bleed onto overhead structures. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Preview",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (ClampMin = "1.0", UIMin = "16.0", UIMax = "256.0"))
 	float ProjectionDepthUU = 64.f;
 
