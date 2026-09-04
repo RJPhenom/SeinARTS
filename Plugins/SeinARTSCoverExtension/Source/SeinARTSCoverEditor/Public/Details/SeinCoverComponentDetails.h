@@ -11,7 +11,7 @@
  *          `FInstancedStruct` element of the entity bridge's `ComponentData`
  *          array (the new authoring surface post-Phase-5). The customization
  *          renders all child properties normally + appends one extra row at
- *          the bottom of the `SeinARTS|Cover|Generate` category with the button.
+ *          the bottom of the `SeinARTS|Generate` category with the button.
  *
  *          Replaces the pre-Phase-5 IDetailCustomization that hung off the
  *          deleted `USeinCoverProviderComponent` AC. The button's effect now

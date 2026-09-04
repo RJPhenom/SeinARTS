@@ -36,33 +36,33 @@ struct SEINARTSCOREENTITY_API FSeinProduciblePayload : public FSeinPayload
 	GENERATED_BODY()
 
 	/** Time in sim-seconds to produce this entity. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Producible")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	FFixedPoint BuildTime = FFixedPoint::FromInt(10);
 
 	/** Tech tags the owning player must have unlocked to produce/research this.
 	 *  Used by UI for greying production buttons; the actual gate at activation
 	 *  is on the triggering ability's `RequiredPlayerTags` (designers typically
 	 *  mirror the same set in both places). */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Producible")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	FGameplayTagContainer PrerequisiteTags;
 
 	/** Refund policy applied when this entry is cancelled mid-build. Default
 	 *  progress-proportional refund of its deducted activation principal. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Producible")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	FSeinProductionRefundPolicy RefundPolicy;
 
 	/** If true, completing production applies `GrantedTechEffect` to the owning
 	 *  player instead of spawning a unit. The ability's
 	 *  `EnqueueProduction(<this>)` detects the flag and creates a research
 	 *  queue entry. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Producible")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	bool bIsResearch = false;
 
 	/** USeinEffect class applied on research completion. The effect's scope
 	 *  (Instance / Class / Player) determines where modifiers land; its
 	 *  `EffectTag` + `GrantedTags` become player tags (refcounted) per the
 	 *  unified tech-is-an-effect rule. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Producible",
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS",
 		meta = (EditCondition = "bIsResearch"))
 	TSubclassOf<USeinEffect> GrantedTechEffect;
 };

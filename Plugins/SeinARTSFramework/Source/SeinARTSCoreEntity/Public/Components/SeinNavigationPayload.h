@@ -64,7 +64,7 @@ struct SEINARTSCOREENTITY_API FSeinNavigationPayload : public FSeinPayload
 	 *  shapes — max bounding radius — preferred; (2) this field — fallback when Extents is
 	 *  absent; (3) 0 — intangible (no collision, clearance, or avoidance). Rough guides:
 	 *  infantry / small bipeds 50, wheeled vehicles 100, tracked vehicles 150. Default 50. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Navigation",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (ClampMin = "0.0", DisplayName = "Fallback Footprint Radius"))
 	FFixedPoint FallbackFootprintRadius = FFixedPoint::FromInt(50);
 
@@ -80,7 +80,7 @@ struct SEINARTSCOREENTITY_API FSeinNavigationPayload : public FSeinPayload
 	 *  corridor UNREACHABLE if its width is below minimum + padding — correct (the unit
 	 *  genuinely doesn't fit), but watch for paths suddenly routing the long way around.
 	 *  Capped at 64 (the planner's clearance-BFS radius); useful range 0–8. Default 0. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Navigation",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (ClampMin = "0", ClampMax = "64", UIMin = "0", UIMax = "16",
 				DisplayName = "Wall Padding (cells)"))
 	int32 WallPadding = 0;
@@ -98,7 +98,7 @@ struct SEINARTSCOREENTITY_API FSeinNavigationPayload : public FSeinPayload
 	 *  turn radius prevents tight arrivals); lower for infantry expected to land exactly on
 	 *  a spot. Default 50 = half a 100cm cell. Per-unit and authoritative — there is no
 	 *  per-call override. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Navigation",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (ClampMin = "0.0"))
 	FFixedPoint AcceptanceRadius = DefaultArrivalAcceptance();
 
@@ -112,7 +112,7 @@ struct SEINARTSCOREENTITY_API FSeinNavigationPayload : public FSeinPayload
 	 *  infantry keeps Default and routes around it, while a hover unit using a
 	 *  distinct bit ignores it. Use Blocked Terrain Tags—not this mask—for baked
 	 *  water, mud, road, or other ground classifications. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Navigation",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (Bitmask, BitmaskEnum = "/Script/SeinARTSCoreEntity.ESeinNavLayerBit"))
 	uint8 NavLayerMask = 0x01;
 
@@ -125,21 +125,21 @@ struct SEINARTSCOREENTITY_API FSeinNavigationPayload : public FSeinPayload
 	 *
 	 *  This is a hard topology rule, not a cost preference. Global terrain
 	 *  `Nav Cost` and `Speed Multiplier` remain independent soft policies. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Navigation",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (Categories = "SeinARTS.Terrain", DisplayName = "Blocked Terrain Tags"))
 	FGameplayTagContainer BlockedTerrainTags;
 
 	/** When a moving unit re-runs the pathfinder to react to world changes — turn drift,
 	 *  blocker changes, new buildings appearing. Repathing keeps the unit honest. See
 	 *  Repath Mode for the option descriptions. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Navigation")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	ESeinRepathMode RepathMode = ESeinRepathMode::Interval;
 
 	/** Seconds between automatic repaths (Interval mode only). Smaller = more reactive to
 	 *  world changes (new walls, destroyed gates) but more pathfinder work per second;
 	 *  larger = cheaper but stale paths persist longer. Default 0.25s. Ignored unless
 	 *  Repath Mode is Interval. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Navigation",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (ClampMin = "0.05"))
 	FFixedPoint RepathInterval = FFixedPoint::FromInt(1) / FFixedPoint::FromInt(4);
 
@@ -147,7 +147,7 @@ struct SEINARTSCOREENTITY_API FSeinNavigationPayload : public FSeinPayload
 	 *  thrashing forever — e.g. when new blockers or a sealed destination keep returning
 	 *  no-path. Each successful repath resets the count. Default 3 ≈ 0.75s at the default
 	 *  0.25s interval. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Navigation",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (ClampMin = "1"))
 	int32 RepathFailureLimit = 3;
 
@@ -158,7 +158,7 @@ struct SEINARTSCOREENTITY_API FSeinNavigationPayload : public FSeinPayload
 	 *  obstacles don't trigger a recompute until the unit is well off course. Default 75cm
 	 *  — a bit bigger than the default footprint so passive avoidance bumps don't thrash
 	 *  the planner. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Navigation",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (ClampMin = "0.0"))
 	FFixedPoint OffPathThreshold = FFixedPoint::FromInt(75);
 
@@ -171,12 +171,12 @@ struct SEINARTSCOREENTITY_API FSeinNavigationPayload : public FSeinPayload
 	 *  important unit search harder for a long-range route. Hitting the cap is not a
 	 *  failure — the unit still moves along the partial path toward the goal and (if
 	 *  repathing) tries again from closer up. Default 0. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Navigation",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (ClampMin = "0", DisplayName = "Max Search Nodes"))
 	int32 MaxSearchNodes = 0;
 
 	// NOTE: preview opt-in is no longer sim data. Whether a unit draws destination
-	// markers is a render-side choice: add a Formation Preview Component
+	// markers is a render-side choice: add a Navigation Renderer
 	// (USeinFormationPreviewComponent, SeinARTSFramework) to the unit's Blueprint.
 };
 

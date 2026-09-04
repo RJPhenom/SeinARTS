@@ -827,16 +827,16 @@ public:
 	bool bEnableSingleClickFormations = false;
 
 	/** Default renderer for the on-ground destination preview — pure render plumbing, NOT an enable.
-	 *  A unit opts into the preview by carrying a Formation Preview Component on its Blueprint (on a
+	 *  A unit opts into the preview by carrying a Navigation Renderer on its Blueprint (on a
 	 *  squad's actor it covers every member); units without one draw no markers, and this class is what
 	 *  an opted-in unit uses when its component doesn't name a renderer itself. The framework default
 	 *  uses flat mesh quads that stay crisp under temporal anti-aliasing. Two alternatives ship: a decal
 	 *  version that conforms to terrain but smears under TAA while you drag, and an instanced-mesh
 	 *  version that draws a whole formation in one call and scales to huge selections. Subclass any of
 	 *  them in Blueprint to restyle the look (preview mesh, material, quality tints), or override the
-	 *  element hooks for a fully custom backend. For a per-unit look, add a Formation Preview Style
-	 *  Component to that unit's Blueprint instead — its overrides win over the renderer's defaults for
-	 *  that unit's marker only. None = opted-in units fall back to the framework base renderer
+	 *  element hooks for a fully custom backend. For a per-unit look, configure the marker fields on
+	 *  that unit's Navigation Renderer; member fields override squad renderer fields, which override
+	 *  the backend defaults. None = opted-in units fall back to the framework base renderer
 	 *  (`Sein.Preview.Disable 1` is the dev toggle for suppressing the drawing entirely). */
 	UPROPERTY(Config, EditAnywhere, Category = "Navigation|Formation",
 		meta = (DisplayName = "Formation Preview Actor Class",

@@ -57,7 +57,7 @@ struct SEINARTSCOREENTITY_API FSeinChildTransform
 	/** Identifier for this child within its owning entity. Looked up via
 	 *  SeinChildTransformsBPFL by tag, never by array index — so reordering
 	 *  the array in the editor never invalidates references. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|ChildTransforms")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	FGameplayTag Tag;
 
 	/** Parent reference. Invalid tag = root-level (parent is the entity's
@@ -69,14 +69,14 @@ struct SEINARTSCOREENTITY_API FSeinChildTransform
 	 *  Cycles (A's parent is B and B's parent is A) are designer error;
 	 *  framework walks bound the chain depth at 32 to prevent infinite
 	 *  loops, silently bottoming out if a cycle is detected. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|ChildTransforms")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	FGameplayTag ParentTag;
 
 	/** Transform relative to the parent (entity for root nodes, or the
 	 *  named ParentTag node for nested ones). World-space transform is
 	 *  composed on demand by walking the parent chain — see
 	 *  `SeinChildTransformsBPFL::SeinGetChildWorldTransform`. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|ChildTransforms")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	FFixedTransform LocalTransform;
 };
 
@@ -92,7 +92,7 @@ struct SEINARTSCOREENTITY_API FSeinChildTransformsPayload : public FSeinPayload
 	/** Flat array of all children. Hierarchy encoded via ParentTag on each
 	 *  node. Order is the editor authoring order — composition walks via
 	 *  tag references, not array order, so designers can rearrange freely. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|ChildTransforms")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	TArray<FSeinChildTransform> Children;
 };
 

@@ -48,14 +48,14 @@ struct SEINARTSCOREENTITY_API FSeinConstructionPayload : public FSeinPayload
 	 *  CDO. Snapshotted on attach — modifiers that affect mid-construction
 	 *  build speed should adjust the per-tick Progress increment in
 	 *  BA_Construct, not mutate this value. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Construction",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (ClampMin = "0.0"))
 	FFixedPoint TimeToCompletion = FFixedPoint::FromInt(10);
 
 	/** Current progress (sim-seconds). Advances from 0 toward TimeToCompletion via
 	 *  USeinConstructionBPFL::SeinAddConstructionProgress. When Progress >=
 	 *  TimeToCompletion, BPFL auto-applies CompletionEffect + removes this component. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Construction")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	FFixedPoint Progress = FFixedPoint::Zero;
 
 	/** USeinEffect class applied to the building entity when construction
@@ -67,6 +67,6 @@ struct SEINARTSCOREENTITY_API FSeinConstructionPayload : public FSeinPayload
 	 *  building's render mesh from "foundation" to "complete," fires a
 	 *  visual event for the construction-finish VFX, optionally grants the
 	 *  building's operational ability set if it wasn't pre-granted. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Construction")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	TSubclassOf<USeinEffect> CompletionEffect;
 };
