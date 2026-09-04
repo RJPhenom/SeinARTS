@@ -1132,6 +1132,7 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 	// without this action's context. Idempotent, same rationale as bHasTarget; NOT
 	// cleared at end (a "last ordered goal" — readers gate on bHasTarget).
 	MoveComp->TargetLocation = Destination;
+	MoveComp->bOnFinalLeg = CurrentWaypointIndex >= Path.Waypoints.Num() - 1;
 
 	USeinNavigation* Nav = USeinNavigationSubsystem::GetNavigationForWorld(&World);
 	USeinNavigationSubsystem* NavSub = World.GetWorld()
@@ -1369,6 +1370,7 @@ void USeinMoveToAction::FinalizeMovementOnce()
 	// blend out of locomotion immediately, instead of waiting for Velocity
 	// to coast through the deceleration curve.
 	MoveComp->bHasTarget = false;
+	MoveComp->bOnFinalLeg = false;
 }
 
 void USeinMoveToAction::RefreshAuthoredComponentTuning(
