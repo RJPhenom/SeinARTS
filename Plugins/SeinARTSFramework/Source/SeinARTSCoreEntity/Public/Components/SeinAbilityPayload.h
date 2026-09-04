@@ -80,7 +80,7 @@ struct SEINARTSCOREENTITY_API FSeinAbilityPayload : public FSeinPayload
 	/** Ability classes granted to this entity (designer-authored on the
 	 *  entity bridge's ComponentData array; instantiated at spawn into the
 	 *  ability pool). */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Ability")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	TArray<TSubclassOf<USeinAbility>> GrantedAbilities;
 
 	/** Pool IDs for runtime ability instances. Indices into
@@ -126,7 +126,7 @@ struct SEINARTSCOREENTITY_API FSeinAbilityPayload : public FSeinPayload
 	 *
 	 * See FSeinCommandMapping for detailed usage examples.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Ability")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	TArray<FSeinCommandMapping> DefaultCommands;
 
 	/**
@@ -134,7 +134,7 @@ struct SEINARTSCOREENTITY_API FSeinAbilityPayload : public FSeinPayload
 	 * `SeinARTS.Ability.Move` so unmapped contexts default to move.
 	 * If empty, no command is issued for unmatched contexts.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Ability")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	FGameplayTag FallbackAbilityTag;
 
 	// ========== Accessors (pool lookup helpers) ==========

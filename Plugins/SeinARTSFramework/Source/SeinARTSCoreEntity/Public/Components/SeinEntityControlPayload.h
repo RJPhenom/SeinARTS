@@ -28,11 +28,11 @@ struct SEINARTSCOREENTITY_API FSeinEntityControlGrantID
 {
 	GENERATED_BODY()
 
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Command|Authority")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	FSeinEntityHandle TargetEntity;
 
 	/** Positive, never-reused serial within TargetEntity's lifetime. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Command|Authority")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	int64 Serial = 0;
 
 	bool IsValid() const { return TargetEntity.IsValid() && Serial > 0; }
@@ -78,23 +78,23 @@ struct SEINARTSCOREENTITY_API FSeinEntityControlGrant
 {
 	GENERATED_BODY()
 
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Command|Authority")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	FSeinEntityControlGrantID GrantID;
 
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Command|Authority")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	FSeinPlayerID Grantee;
 
 	/** Empty means all entity command types. Otherwise entries are unique and
 	 *  stored in canonical lexical tag-name order. Matching is exact. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Command|Authority")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	TArray<FGameplayTag> AllowedCommandTypes;
 
 	/** First sim tick on which this grant is active. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Command|Authority")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	int32 StartTick = 0;
 
 	/** First sim tick on which this grant is inactive. INDEX_NONE = permanent. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Command|Authority")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	int32 EndTick = INDEX_NONE;
 };
 
@@ -133,10 +133,10 @@ struct SEINARTSCOREENTITY_API FSeinEntityControlPayload : public FSeinPayload
 	GENERATED_BODY()
 
 	/** Next positive serial. Zero means the int64 namespace is exhausted. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Command|Authority")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	int64 NextGrantSerial = 1;
 
 	/** Canonical ascending GrantID order. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Command|Authority")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	TArray<FSeinEntityControlGrant> Grants;
 };

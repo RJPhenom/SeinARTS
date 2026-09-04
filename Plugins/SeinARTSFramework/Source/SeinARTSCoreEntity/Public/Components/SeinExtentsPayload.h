@@ -87,14 +87,14 @@ struct SEINARTSCOREENTITY_API FSeinExtentsShape
 	GENERATED_BODY()
 
 	/** Primitive kind. Per-shape parameters below show/hide on this. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Extents")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	ESeinExtentsShape Shape = ESeinExtentsShape::Capsule;
 
 	/** Local-space position offset from the entity transform, rotated by
 	 *  entity yaw at query time. Z is honored — elevated colliders (tank
 	 *  turret on chassis, upper floor of a multi-story building) get their
 	 *  Z bounds shifted by this. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Extents")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	FFixedVector LocalOffset = FFixedVector::ZeroVector;
 
 	/** Yaw rotation (degrees) added to the entity's yaw for this shape's
@@ -102,7 +102,7 @@ struct SEINARTSCOREENTITY_API FSeinExtentsShape
 	 *  symmetric in XY). Use non-zero for off-axis hull sections (e.g.
 	 *  tank turret rotated independently of chassis when authored at
 	 *  rest-pose). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Extents")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	FFixedPoint YawOffsetDegrees = FFixedPoint::Zero;
 
 	// =========================================================================
@@ -110,7 +110,7 @@ struct SEINARTSCOREENTITY_API FSeinExtentsShape
 	// =========================================================================
 
 	/** Top-down disc radius (world units). Capsule only. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Extents",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (EditCondition = "Shape == ESeinExtentsShape::Capsule", EditConditionHides, ClampMin = "0.0",
 		        DisplayName = "Radius"))
 	FFixedPoint Radius = FFixedPoint::FromInt(40);
@@ -121,14 +121,14 @@ struct SEINARTSCOREENTITY_API FSeinExtentsShape
 
 	/** Half extent along the entity's forward axis (after YawOffset). Box
 	 *  only. Total length = 2 × HalfExtentX. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Extents",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (EditCondition = "Shape == ESeinExtentsShape::Box", EditConditionHides, ClampMin = "0.0",
 		        DisplayName = "Half Extent (Forward)"))
 	FFixedPoint HalfExtentX = FFixedPoint::FromInt(150);
 
 	/** Half extent along the entity's right axis. Box only. Total width =
 	 *  2 × HalfExtentY. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Extents",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (EditCondition = "Shape == ESeinExtentsShape::Box", EditConditionHides, ClampMin = "0.0",
 		        DisplayName = "Half Extent (Right)"))
 	FFixedPoint HalfExtentY = FFixedPoint::FromInt(100);
@@ -150,7 +150,7 @@ struct SEINARTSCOREENTITY_API FSeinExtentsShape
 	 *  from any observer above ground. If you want a Capsule that reads
 	 *  geometrically as a sphere (Radius == half-height), set Height to
 	 *  ~Radius to keep FoW blocking working. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Extents",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (ClampMin = "0.0",
 		        ToolTip = "Vertical extent above LocalOffset Z. Height = 0 disables FoW blocking for this shape (nav blocking still works). Set ~Radius for sphere-like capsule semantics with FoW blocking intact."))
 	FFixedPoint Height = FFixedPoint::FromInt(180);
@@ -216,7 +216,7 @@ struct SEINARTSCOREENTITY_API FSeinExtentsPayload : public FSeinPayload
 	 *  One entry covers most cases (capsule for infantry, box for tanks);
 	 *  multiple for asymmetric or compound bodies. Empty array → consumers
 	 *  fall back to single-point center-only checks. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Extents")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	TArray<FSeinExtentsShape> Shapes;
 
 	// =========================================================================
@@ -243,7 +243,7 @@ struct SEINARTSCOREENTITY_API FSeinExtentsPayload : public FSeinPayload
 	 *  props). The baker auto-skips any entity class whose CDO carries a movement
 	 *  component, so mobile units (vehicles, infantry) don't carve themselves
 	 *  into the static nav even when this flag is left on. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Extents")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	bool bBakesIntoNav = false;
 
 	/** Whether this entity's footprint blocks pathfinding for OTHER agents.
@@ -251,7 +251,7 @@ struct SEINARTSCOREENTITY_API FSeinExtentsPayload : public FSeinPayload
 	 *  set true for tanks, vehicles, buildings, deployable cover. Infantry
 	 *  typically leaves this off (steering / penetration handles unit-on-unit
 	 *  spacing without hard pathing blocks). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Extents")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	bool bBlocksNav = false;
 
 	/** Layer mask of agents this blocker affects. Pathing is gated by
@@ -261,7 +261,7 @@ struct SEINARTSCOREENTITY_API FSeinExtentsPayload : public FSeinPayload
 	 *  additional bit (e.g. 0x02) so their `(0x03 & 0x01) = 0x01` still
 	 *  blocks them — set water to 0x01 only and amphibious agents to 0x02
 	 *  ALONE for the "amphibious skips water" pattern. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Extents",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (EditCondition = "bBlocksNav", Bitmask, BitmaskEnum = "/Script/SeinARTSCoreEntity.ESeinNavLayerBit"))
 	uint8 BlockedNavLayerMask = 0x01; // Default bit
 
@@ -288,14 +288,14 @@ struct SEINARTSCOREENTITY_API FSeinExtentsPayload : public FSeinPayload
 	 *      to sight (`bBakesIntoFogOfWar=false`).
 	 *  Like the nav baker, the FoW baker auto-skips entity classes with a movement
 	 *  component regardless of this flag. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Extents")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	bool bBakesIntoFogOfWar = false;
 
 	/** Whether this entity's footprint occludes vision in the fog-of-war
 	 *  shadowcast. Default OFF — set true for buildings, walls, smoke,
 	 *  destructibles. Per-shape `Height` drives the occluder height
 	 *  (multiple shapes stamp their own heights; per-cell max wins). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Extents")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	bool bBlocksFogOfWar = false;
 
 	/** Which EVNNNNNN bits this blocker occludes. Bit 1 = V (Normal), bits
@@ -303,7 +303,7 @@ struct SEINARTSCOREENTITY_API FSeinExtentsPayload : public FSeinPayload
 	 *  Default 0xFE = blocks every layer. Per-layer policy: smoke might
 	 *  block Normal but not Thermal — clear the Thermal bit and Thermal
 	 *  vision passes through. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Extents",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (EditCondition = "bBlocksFogOfWar", Bitmask, BitmaskEnum = "/Script/SeinARTSFogOfWar.ESeinFogOfWarLayerBit"))
 	uint8 BlockedFogOfWarLayerMask = 0xFE;
 

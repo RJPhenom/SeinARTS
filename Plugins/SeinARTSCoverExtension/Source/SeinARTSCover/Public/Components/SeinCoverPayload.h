@@ -49,7 +49,7 @@ struct SEINARTSCOVER_API FSeinCoverPayload : public FSeinPayload
 	 *  contributes — typically SeinARTS.Cover.Heavy / Light / Negative or a
 	 *  designer-defined extension. One tag per provider; compose multiple
 	 *  providers if you need mixed qualities on one actor. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Cover",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (Categories = "SeinARTS.Cover"))
 	FGameplayTag QualityTag;
 
@@ -65,7 +65,7 @@ struct SEINARTSCOVER_API FSeinCoverPayload : public FSeinPayload
 	 *
 	 *  Set automatically by the slot generator: Edge mode → true, Area mode
 	 *  → false. Designer can flip the bool for hand-authored slot layouts. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Cover")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	bool bIsDirectional = false;
 
 	/** Discrete cover slots — formation snap targets. Each entry is a
@@ -81,7 +81,7 @@ struct SEINARTSCOVER_API FSeinCoverPayload : public FSeinPayload
 	 *  vector via `USeinCoverBPFL::SeinGetCoverDirection` against the
 	 *  actor's `SeinExtents` body — no stale per-slot direction to
 	 *  maintain. Empty = no snap targets (area-only provider). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Cover")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	TArray<FFixedVector> Slots;
 
 	/** Cover-zone volume — units inside this volume receive a cover context
@@ -95,7 +95,7 @@ struct SEINARTSCOVER_API FSeinCoverPayload : public FSeinPayload
 	 *  Shape = None disables this provider entirely (no cover contribution).
 	 *  Quality + directionality come from the provider's `QualityTag` and
 	 *  `bIsDirectional`. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Cover")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	FSeinCoverArea Area;
 
 	// ========================================================================
@@ -118,12 +118,12 @@ struct SEINARTSCOVER_API FSeinCoverPayload : public FSeinPayload
 
 #if WITH_EDITORONLY_DATA
 	/** Distribution mode — Edge (around `Area`'s perimeter) or Area (interior). */
-	UPROPERTY(EditAnywhere, Category = "SeinARTS|Cover|Generate")
+	UPROPERTY(EditAnywhere, Category = "SeinARTS|Generate")
 	ESeinCoverGenerateMode GenerateMode = ESeinCoverGenerateMode::Edge;
 
 	/** Number of slots to generate. Total count distributed around the
 	 *  perimeter (Edge mode) or across the interior rings (Area mode). */
-	UPROPERTY(EditAnywhere, Category = "SeinARTS|Cover|Generate",
+	UPROPERTY(EditAnywhere, Category = "SeinARTS|Generate",
 		meta = (ClampMin = "1", UIMin = "1", UIMax = "64"))
 	int32 GenerateSlotCount = 8;
 #endif
@@ -134,7 +134,7 @@ struct SEINARTSCOVER_API FSeinCoverPayload : public FSeinPayload
 	 *  best cover quality whose Area its circle overlaps, and (c) dedup slots whose
 	 *  circles overlap each other (best quality wins). Default ~infantry footprint.
 	 *  (Lives here, above the inset, so authors tune slot size + spacing together.) */
-	UPROPERTY(EditAnywhere, Category = "SeinARTS|Cover|Generate",
+	UPROPERTY(EditAnywhere, Category = "SeinARTS|Generate",
 		meta = (ClampMin = "0.0"))
 	FFixedPoint SlotRadius = FFixedPoint::FromInt(50);
 
@@ -152,7 +152,7 @@ struct SEINARTSCOVER_API FSeinCoverPayload : public FSeinPayload
 	 *  reused so designers have one knob to tune density. In scatter mode,
 	 *  doubles as the minimum slot-to-slot center distance — controls how
 	 *  loosely the random points are packed. */
-	UPROPERTY(EditAnywhere, Category = "SeinARTS|Cover|Generate",
+	UPROPERTY(EditAnywhere, Category = "SeinARTS|Generate",
 		meta = (ClampMin = "0.0"))
 	float GenerateSlotInsetUU = 60.f;
 
@@ -171,7 +171,7 @@ struct SEINARTSCOVER_API FSeinCoverPayload : public FSeinPayload
 	 *  Off by default — the regular ring/perimeter layout is the
 	 *  predictable baseline. Each click produces a fresh random layout
 	 *  (non-seeded), so designers can re-roll until they're happy. */
-	UPROPERTY(EditAnywhere, Category = "SeinARTS|Cover|Generate")
+	UPROPERTY(EditAnywhere, Category = "SeinARTS|Generate")
 	bool bScatterSlots = false;
 
 	/** Procedurally regenerate `Slots` (and stamp `bIsDirectional`) from the

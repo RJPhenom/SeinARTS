@@ -89,7 +89,7 @@ struct SEINARTSCOREENTITY_API FSeinSquadSlot
 	 *  `RequestedSlotIndex` are the exact runtime identities. Tag-based helper
 	 *  APIs retain first-match compatibility and should be used only when that
 	 *  behavior is intended. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Squad")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	FGameplayTagContainer SlotTags;
 
 	/** Entity Blueprint class spawned to fill this slot at squad-create time
@@ -100,39 +100,39 @@ struct SEINARTSCOREENTITY_API FSeinSquadSlot
 	 *  legacy nomenclature from the pre-Phase-5 USeinArchetypeDefinition
 	 *  pattern. The new naming reflects the post-refactor reality: each slot
 	 *  spawns a SeinARTS entity (the BP-class instance is "the unit"). */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Squad")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	TSubclassOf<ASeinActor> Entity;
 
 	/** Formation offset relative to the squad centroid + facing. Position +
 	 *  rotation. Squad dispatch resolver rotates by anchor facing and adds to
 	 *  the squad's anchor when computing per-member move targets. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Squad")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	FFixedTransform OffsetTransform;
 
 	/** Resource cost to reinforce this slot. Tag-keyed (matches the framework
 	 *  cost convention used on `USeinAbility::ResourceCost` etc.). Heterogeneous
 	 *  â€” a sergeant slot may cost more manpower than a rifleman slot. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Squad")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	FSeinResourceCost ReinforceCost;
 
 	/** Time (sim-seconds) to build a reinforcement for this slot once queued.
 	 *  Indexed per-slot â€” special members can take longer. Default 0 = instant. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Squad")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	FFixedPoint ReinforceBuildTime = FFixedPoint::Zero;
 
 	/** Cooldown (sim-seconds) gating subsequent reinforces of THIS slot after a
 	 *  member arrives. Default 0 = no cooldown (the common default). */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Squad")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	FFixedPoint ReinforceCooldown = FFixedPoint::Zero;
 
 	/** Runtime: handle of the entity currently occupying this slot. Invalid =
 	 *  empty (eligible for reinforce if `bCanReinforce` is true on the squad). */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	FSeinEntityHandle CurrentOccupant;
 
 	/** Runtime: cooldown remaining before this slot can be queued for reinforce.
 	 *  Decremented by FSeinSquadSystem each tick. Zero = ready. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	FFixedPoint CurrentCooldown = FFixedPoint::Zero;
 
 	/** Lowest valid tag by exact tag-name string. Shared by runtime mutation,
@@ -180,34 +180,34 @@ struct SEINARTSCOREENTITY_API FSeinSquadReinforceEntry
 	GENERATED_BODY()
 
 	/** Monotonic identity unique within the owning squad. Never reused. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	int64 RequestID = 0;
 
 	/** Exact slot declaration index captured at enqueue. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	int32 RequestedSlotIndex = INDEX_NONE;
 
 	/** Canonically selected tag-name metadata for UI/events. Not identity. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	FGameplayTag SlotTag;
 
 	/** Build progress in sim-seconds (0 â†’ TotalBuildTime). */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	FFixedPoint BuildProgress = FFixedPoint::Zero;
 
 	/** Snapshot of the slot's ReinforceBuildTime at enqueue. Mid-build
 	 *  modifier changes don't affect already-queued entries (matches the
 	 *  production system's snapshot-at-enqueue convention). */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	FFixedPoint TotalBuildTime = FFixedPoint::Zero;
 
 	/** Snapshot of the cost actually deducted from the player at enqueue.
 	 *  Drives refund-on-cancel without re-resolving cost at cancel time. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	FSeinResourceCost DeductedCost;
 
 	/** Funding principal captured at enqueue so ownership changes cannot redirect refunds. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	FSeinPlayerID ResourcePayer;
 };
 
@@ -246,46 +246,46 @@ struct SEINARTSCOREENTITY_API FSeinSquadPayload : public FSeinPayload
 	 *  members out by footprint instead (the per-slot OffsetTransform is then ignored). The slot list is
 	 *  STILL the squad's roster (entity classes, reinforce cost, identity tags) for EVERY formation —
 	 *  only the per-slot OffsetTransform is specific to the slot formation. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Squad",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (DisplayName = "Formation Class"))
 	TSoftClassPtr<USeinFormation> FormationClass;
 
 	/** Canonical slot list. Each slot is heterogeneous (own entity class, cost,
 	 *  formation offset). Mutating this array at runtime requires routing
 	 *  through the mutation BPFL so member slot-index back-refs stay consistent. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Squad")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	TArray<FSeinSquadSlot> Slots;
 
 	/** Handle of the current squad leader. Single source of truth â€” members
 	 *  query their leadership status via `World->GetSquadLeader(SquadEntity) == MyHandle`.
 	 *  Auto-promoted by `FSeinSquadSystem` on leader death (next live occupant
 	 *  in slot order, or the first slot tagged `Squad.Slot.Leader` if any). */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	FSeinEntityHandle Leader;
 
 	/** Designer toggle: can this squad currently be reinforced? Game-side logic
 	 *  flips this (in/out of friendly territory, locked by mission script, etc.).
 	 *  Reinforce ability checks this in its CanActivate gate. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Squad")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	bool bCanReinforce = true;
 
 	/** Destruction/disband settlement for still-queued reinforcement charges
 	 *  (see ESeinSquadReinforceRefundPolicy). Applied by the deterministic
 	 *  entity-teardown sweep; cancellation refunds exactly regardless. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Squad",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (DisplayName = "Reinforce Refund On Destruction"))
 	ESeinSquadReinforceRefundPolicy ReinforceRefundPolicy =
 		ESeinSquadReinforceRefundPolicy::Refund;
 
 	/** PartialRefund only: fraction (0..1) of each queued entry's snapshotted
 	 *  cost returned on destruction. Clamped at settlement time. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Squad",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (EditCondition =
 			"ReinforceRefundPolicy == ESeinSquadReinforceRefundPolicy::PartialRefund"))
 	FFixedPoint PartialRefundPercent = FFixedPoint::Half;
 
 	// NOTE: preview opt-in is no longer sim data. A squad opts into destination
-	// markers render-side: add a Formation Preview Component
+	// markers render-side: add a Navigation Renderer
 	// (USeinFormationPreviewComponent, SeinARTSFramework) to the squad's actor
 	// Blueprint to cover every member in one place, or to individual member
 	// Blueprints for per-member control.
@@ -293,14 +293,14 @@ struct SEINARTSCOREENTITY_API FSeinSquadPayload : public FSeinPayload
 	/** How this squad enters containers. AsOne = squad actor enters as a single
 	 *  occupant contributing Size = SlotCount. AsN = each member enters
 	 *  individually. DESIGN Â§14. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Squad")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	ESeinSquadContainmentMode ContainmentMode = ESeinSquadContainmentMode::AsOne;
 
 	/** Pathing-only coherency hint. Members further than this from the squad
 	 *  centroid are nudged back during pathing. Gameplay effects of being out
 	 *  of coherency are designer-side (effects keyed off a tag the squad system
 	 *  applies). Zero = no coherency enforcement. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Squad")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	FFixedPoint CoherencyRadius = FFixedPoint::Zero;
 
 	/** Per-squad slot RE-MATCH on the LATERAL (left/right) axis. OPT-IN, default false.
@@ -312,7 +312,7 @@ struct SEINARTSCOREENTITY_API FSeinSquadPayload : public FSeinPayload
 	 *
 	 *  Leave OFF to pin authored slot roles to their members (each member always walks to its own
 	 *  authored slot, even if that means crossing a squadmate on a hard turn). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Squad",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (DisplayName = "Reassign Slots Lateral"))
 	bool bReassignSlotsLateral = false;
 
@@ -324,7 +324,7 @@ struct SEINARTSCOREENTITY_API FSeinSquadPayload : public FSeinPayload
 	 *  re-ranks front/back only (left/right pinned) â€” a niche mirror of the lateral case.
 	 *
 	 *  Slot assignment only; the movement system decides backward-walk animation independently. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Squad",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (DisplayName = "Reassign Slots Depth"))
 	bool bReassignSlotsDepth = false;
 
@@ -336,7 +336,7 @@ struct SEINARTSCOREENTITY_API FSeinSquadPayload : public FSeinPayload
 	 *  squads that both enable it sidestep each other as whole bodies. Off (default) = per-member
 	 *  avoidance (a unit may pass through the formation's interior). Propagated to the squad's
 	 *  command broker each tick by the squad system. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Squad",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (DisplayName = "Avoid As Blob"))
 	bool bAvoidAsBlob = false;
 
@@ -344,7 +344,7 @@ struct SEINARTSCOREENTITY_API FSeinSquadPayload : public FSeinPayload
 	 *  CommandBroker. Defaults to the framework's `USeinSquadDispatchResolver`
 	 *  (leader-first dispatch + per-slot transform formations). Designers
 	 *  override per-squad for project-specific dispatch policy. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Squad")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	TSubclassOf<USeinCommandBrokerResolver> DispatchResolverClass;
 
 	// Per-ability dispatch policy moved to USeinAbility (DispatchMode /
@@ -355,11 +355,11 @@ struct SEINARTSCOREENTITY_API FSeinSquadPayload : public FSeinPayload
 	/** Pending reinforcements. Ticked by `FSeinSquadSystem`; on entry build
 	 *  completion, the exact declaration-index slot's entity class spawns at the
 	 *  squad's transform and the member walks to its slot offset. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	TArray<FSeinSquadReinforceEntry> ReinforceQueue;
 
 	/** Next monotonic request identity. Canonical state; starts at one and never wraps. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	int64 NextReinforceRequestID = 1;
 
 	// â”€â”€â”€ Helpers (pure read; routed-mutations live in the mutation BPFL) â”€â”€â”€

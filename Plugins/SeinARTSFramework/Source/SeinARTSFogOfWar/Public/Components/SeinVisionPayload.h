@@ -41,7 +41,7 @@ struct SEINARTSFOGOFWAR_API FSeinVisionStamp
 
 	/** Stamp geometry — shape, local offset, yaw offset, per-shape params,
 	 *  bEnabled flag. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Vision",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (ShowOnlyInnerProperties))
 	FSeinStampShape Shape;
 
@@ -49,7 +49,7 @@ struct SEINARTSFOGOFWAR_API FSeinVisionStamp
 	 *  (Normal), bits 2..7 = N0..N5 custom layers (named in plugin
 	 *  settings). Default 0x02 = standard sight. Bit 0 (Explored) is
 	 *  always set by every stamp; don't include it here. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Vision",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (Bitmask, BitmaskEnum = "/Script/SeinARTSFogOfWar.ESeinFogOfWarLayerBit"))
 	uint8 LayerMask = 0x02; // V bit (Normal)
 
@@ -84,7 +84,7 @@ struct SEINARTSFOGOFWAR_API FSeinVisionPayload : public FSeinPayload
 	/** Eye height (world units) above the entity's sim Z, used by the
 	 *  shadowcast lampshade test. Typical values: infantry ~180,
 	 *  vehicles ~250, aircraft high enough that nothing blocks them. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Vision")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	FFixedPoint EyeHeight = FFixedPoint::FromInt(180);
 
 	// EMISSION-AS-TARGET (what bits make this entity visible to observers)
@@ -101,6 +101,6 @@ struct SEINARTSFOGOFWAR_API FSeinVisionPayload : public FSeinPayload
 	 *  windows author one cone per window with `bEnabled = false`; the
 	 *  garrison system flips them on per-occupied-slot. Thermal / stealth-
 	 *  detector units add additional stamps on custom layer bits. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Vision")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	TArray<FSeinVisionStamp> VisionStamps;
 };

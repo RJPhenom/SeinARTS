@@ -32,12 +32,12 @@ struct SEINARTSCOREENTITY_API FSeinProductionRefundPolicy
 	GENERATED_BODY()
 
 	/** If true, use `CustomRefundPercentage` instead of progress-proportional refund. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Production")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	bool bUseCustomRefund = false;
 
 	/** Flat fraction of cost refunded when bUseCustomRefund == true.
 	 *  1.0 = full refund, 0.0 = none. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Production",
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS",
 		meta = (EditCondition = "bUseCustomRefund", ClampMin = "0.0", ClampMax = "1.0"))
 	FFixedPoint CustomRefundPercentage = FFixedPoint::One;
 };
@@ -58,38 +58,38 @@ struct SEINARTSCOREENTITY_API FSeinProductionQueueEntry
 	GENERATED_BODY()
 
 	/** Blueprint class being produced. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Production")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	TSubclassOf<ASeinActor> ActorClass;
 
 	/** Total time required to complete. Snapshot — not affected by mid-build
 	 *  modifiers per DESIGN §9 Q4b. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Production")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	FFixedPoint TotalBuildTime;
 
 	/** Principal deducted when the ability activated. This is the full cost for
 	 *  Immediate abilities or the catalog's AtEnqueue bucket for Production Queue.
 	 *  Drives cancellation refunds. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Production")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	FSeinResourceCost AtEnqueueCost;
 
 	/** Production Queue cost deferred by catalog policy. Attempted on completion
 	 *  and may stall if unaffordable. Empty for Immediate abilities. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Production")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	FSeinResourceCost AtCompletionCost;
 
 	/** Principal that funded this queue entry, frozen at activation time. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Production")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	FSeinPlayerID ResourcePayer;
 
 	/** Research entries: USeinEffect class applied to the owner on completion. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Production")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	bool bIsResearch = false;
 
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Production")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	TSubclassOf<USeinEffect> ResearchEffectClass;
 
 	/** Copy of the owning producible's refund policy, frozen at enqueue. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Production")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	FSeinProductionRefundPolicy RefundPolicy;
 };
 
@@ -120,20 +120,20 @@ struct SEINARTSCOREENTITY_API FSeinProductionPayload : public FSeinPayload
 	GENERATED_BODY()
 
 	/** Maximum queue depth. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS|Production")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	int32 MaxQueueSize = 5;
 
 	/** Current production queue. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Production")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	TArray<FSeinProductionQueueEntry> Queue;
 
 	/** Build progress of the current (front) queue entry. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Production")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	FFixedPoint CurrentBuildProgress;
 
 	/** True iff the front item reached 100% but the AtCompletion cost wouldn't
 	 *  fit (e.g., pop cap hit). Cleared once AttemptSpawn succeeds. DESIGN §9 stall-at-completion. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Production")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	bool bStalledAtCompletion = false;
 
 	// ─── Rally (flat fields — was wrapped in FSeinRallyTarget) ───
@@ -141,17 +141,17 @@ struct SEINARTSCOREENTITY_API FSeinProductionPayload : public FSeinPayload
 	/** When true, produced units chase `RallyEntity` (destination resolves
 	 *  at dispatch time to the entity's current transform). When false, units
 	 *  rally to `RallyTransform.GetLocation()` facing the transform's rotation. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Production")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	bool bRallyToEntity = false;
 
 	/** Used when bRallyToEntity is false. Produced units rally to this
 	 *  transform's location facing the transform's rotation. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Production",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (EditCondition = "!bRallyToEntity"))
 	FFixedTransform RallyTransform;
 
 	/** Used when bRallyToEntity is true. Produced units chase this entity. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Production",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (EditCondition = "bRallyToEntity"))
 	FSeinEntityHandle RallyEntity;
 
@@ -169,7 +169,7 @@ struct SEINARTSCOREENTITY_API FSeinProductionPayload : public FSeinPayload
 	 *  BP's Production Component. The editor's component visualizer draws a
 	 *  green marker + forward arrow at the resolved world position when the
 	 *  producer is selected. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Production",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (DisplayName = "Spawn Point Offset"))
 	FFixedTransform SpawnPointOffset;
 

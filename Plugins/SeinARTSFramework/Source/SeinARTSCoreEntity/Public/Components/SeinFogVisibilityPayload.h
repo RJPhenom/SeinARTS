@@ -45,7 +45,7 @@ struct SEINARTSCOREENTITY_API FSeinFogVisibilityPayload : public FSeinPayload
 	 *    AlwaysVisible              — bypasses the fog hide check entirely.
 	 *      Cover providers, persistent destructibles, self-occluding effects
 	 *      (their stamp blocks vision but the actor still renders). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|FogOfWar")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	ESeinFogVisibilityPolicy FogVisibilityPolicy = ESeinFogVisibilityPolicy::VisionLayersOnly;
 
 	/** Which observer fog-of-war layer bits actually see this entity. An
@@ -61,7 +61,7 @@ struct SEINARTSCOREENTITY_API FSeinFogVisibilityPayload : public FSeinPayload
 	 *  (`SeinSetEntityEmissionMask` / `SeinAddEntityEmissionLayers` /
 	 *  `SeinRemoveEntityEmissionLayers`) flip these bits at ability time
 	 *  for cloak / detect mechanics. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|FogOfWar",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (Bitmask, BitmaskEnum = "/Script/SeinARTSFogOfWar.ESeinFogOfWarLayerBit"))
 	uint8 FogVisibilityLayerMask = 0xFE;
 };

@@ -41,14 +41,14 @@ struct SEINARTSCOREENTITY_API FSeinSquadMemberPayload : public FSeinPayload
 	GENERATED_BODY()
 
 	/** Handle to the squad entity this member belongs to. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	FSeinEntityHandle SquadEntity;
 
 	/** Canonical slot identity — array index in `FSeinSquadPayload::Slots`.
 	 *  Always unique (by construction). Used by resolvers for formation
 	 *  position lookup. INDEX_NONE = "not assigned to a slot" (legacy
 	 *  data / pre-spawn / mid-tear-down state). */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	int32 SlotIndex = INDEX_NONE;
 
 	/** Role metadata selected canonically by tag name from the slot's `SlotTags`
@@ -56,7 +56,7 @@ struct SEINARTSCOREENTITY_API FSeinSquadMemberPayload : public FSeinPayload
 	 *  rifleman slots all tagged `Squad.Slot.Rifleman`); use for role-
 	 *  based queries ("find the leader slot," "find any medic slot"),
 	 *  NOT for formation position lookup — that requires SlotIndex. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Squad")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	FGameplayTag SlotTag;
 };
 

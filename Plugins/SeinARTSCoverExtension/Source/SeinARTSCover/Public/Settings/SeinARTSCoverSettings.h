@@ -51,7 +51,7 @@ public:
 	FSoftClassPath CoverSystemClass;
 
 	// NOTE: the destination preview is a base-framework feature. Units opt in
-	// render-side via USeinFormationPreviewComponent on their Blueprints;
+	// render-side via a Navigation Renderer (USeinFormationPreviewComponent) on their Blueprints;
 	// USeinARTSCoreSettings::FormationPreviewActorClass supplies the default
 	// renderer. Cover augments it via the cover-quality hook
 	// (USeinWorldSubsystem::PreviewQualityProvider, bound in USeinCoverSubsystem).
