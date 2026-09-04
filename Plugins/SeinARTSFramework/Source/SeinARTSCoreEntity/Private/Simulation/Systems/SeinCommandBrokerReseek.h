@@ -62,19 +62,20 @@ public:
 		MovementStorage->ForEachLiveComponent([&](
 			FSeinEntityHandle Handle, const void* RawComponent)
 		{
-			if (!World.GetEntityPool().IsValid(Handle)) return;
-			// Preserve broker-first semantics: a broker carrier is never loose.
-			if (World.GetComponent<FSeinCommandBrokerData>(Handle)) return;
-
 			const FSeinMovementPayload* Movement =
 				static_cast<const FSeinMovementPayload*>(RawComponent);
-			const FSeinEntity* Entity = World.GetEntity(Handle);
-			if (!Movement || !Entity || !Movement->bHomeSeeded
+			if (!Movement || !Movement->bHomeSeeded
 				|| Movement->bHasTarget
 				|| Movement->Velocity.SizeSquared() > FFixedPoint::Epsilon)
 			{
 				return;
 			}
+
+			if (!World.GetEntityPool().IsValid(Handle)) return;
+			const FSeinEntity* Entity = World.GetEntity(Handle);
+			if (!Entity) return;
+			// Preserve broker-first semantics: a broker carrier is never loose.
+			if (World.GetComponent<FSeinCommandBrokerData>(Handle)) return;
 
 			const FSeinBrokerMembershipData* Membership =
 				World.GetComponent<FSeinBrokerMembershipData>(Handle);
