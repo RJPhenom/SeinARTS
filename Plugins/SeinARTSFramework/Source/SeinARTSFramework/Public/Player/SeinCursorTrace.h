@@ -14,6 +14,7 @@
 
 #include "CoreMinimal.h"
 #include "Engine/EngineTypes.h"
+#include "Engine/HitResult.h"
 
 class UWorld;
 struct FSeinExtentsPayload;

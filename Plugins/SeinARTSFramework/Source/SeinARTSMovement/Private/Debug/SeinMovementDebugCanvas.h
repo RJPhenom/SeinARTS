@@ -12,6 +12,7 @@
 #include "CanvasItem.h"
 #include "Engine/Texture.h"
 #include "SceneView.h"
+#include "TextureResource.h"
 namespace UE::SeinARTSMovement::DebugCanvas
 {
 	inline bool Project(UCanvas& Canvas, const FVector& Point, FVector2D& Out)

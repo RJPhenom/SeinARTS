@@ -185,7 +185,12 @@ namespace UE::SeinARTSMovement::SteeringDebug
 						const FString Settled = bSettled ? FString::Printf(TEXT("%.0f"), Sample->SettledVelocity.Size().ToFloat()) : TEXT("n/a");
 						FCanvasTextItem Label(Screen + FVector2D(8, 8), FText::FromString(FString::Printf(
 							TEXT("%s\nDriver %.0f / settled %s cm/s | avoidance x%.2f%s"),
-							C.Driver ? *C.Driver->GetClass()->GetDisplayNameText().ToString() : TEXT("No driver"), C.Move->Velocity.Size().ToFloat(), *Settled, Scale,
+#if WITH_EDITOR
+							C.Driver ? *C.Driver->GetClass()->GetDisplayNameText().ToString() : TEXT("No driver"),
+#else
+							C.Driver ? *C.Driver->GetClass()->GetName() : TEXT("No driver"),
+#endif
+							C.Move->Velocity.Size().ToFloat(), *Settled, Scale,
 							bDecision && Sample->bHasHeadings ? TEXT("") : TEXT(" | headings n/a"))), GEngine->GetSmallFont(), FLinearColor::White);
 						Label.EnableShadow(FLinearColor::Black);
 						Canvas->DrawItem(Label);
