@@ -33,14 +33,14 @@ public:
 	 *  type authored in `USeinARTSCoreSettings::TerrainTypes` BY TAG (an unset/unknown tag
 	 *  resolves to Default = no effect). Cells get that type's nav cost — and, with the
 	 *  Cover extension present, its cover interpretation. */
-	UPROPERTY(EditAnywhere, Category = "SeinARTS|Terrain")
+	UPROPERTY(EditAnywhere, Category = "SeinARTS")
 	FGameplayTag TerrainType;
 
 	/** Overlap resolution: when a cell sits inside more than one terrain volume, the one
 	 *  with the HIGHEST Priority wins (NOT array/iteration order — a small high-priority
 	 *  mud patch nested inside a larger low-priority region must win). Ties keep the
 	 *  first found; give overlapping regions distinct priorities to be unambiguous. */
-	UPROPERTY(EditAnywhere, Category = "SeinARTS|Terrain")
+	UPROPERTY(EditAnywhere, Category = "SeinARTS")
 	int32 Priority = 0;
 
 	/** World-space AABB of this volume's brush (a bake-time quick reject before the

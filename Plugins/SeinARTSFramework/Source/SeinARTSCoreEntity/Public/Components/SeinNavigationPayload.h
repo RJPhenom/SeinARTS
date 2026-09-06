@@ -177,7 +177,7 @@ struct SEINARTSCOREENTITY_API FSeinNavigationPayload : public FSeinPayload
 
 	// NOTE: preview opt-in is no longer sim data. Whether a unit draws destination
 	// markers is a render-side choice: add a Navigation Renderer
-	// (USeinFormationPreviewComponent, SeinARTSFramework) to the unit's Blueprint.
+	// (USeinNavigationRendererComponent, SeinARTSFramework) to the unit's Blueprint.
 };
 
 FORCEINLINE uint32 GetTypeHash(const FSeinNavigationPayload& C)

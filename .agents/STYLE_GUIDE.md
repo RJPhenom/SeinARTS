@@ -1,6 +1,6 @@
 # SeinARTS Style Guide
 
-This is the local operational mirror of the human [Style Guide](https://docs.google.com/document/d/1-IT4RRpU2jR3yT5RI_bOM4Iq3s54Y9Fgy9gtBAJjshs), source guide version 1.5. The human guide owns writing and presentation style. Architecture, module ownership, and system invariants remain in the repository and plugin guides.
+This is the local operational mirror of the human [Style Guide](https://docs.google.com/document/d/1-IT4RRpU2jR3yT5RI_bOM4Iq3s54Y9Fgy9gtBAJjshs), source guide version 1.5. Local revision 1.6 records the project-approved shared-settings composition rule; synchronization back to the human source is pending. The human guide owns writing and presentation style. Architecture, module ownership, and system invariants remain in the repository and plugin guides.
 
 ## About
 
@@ -166,7 +166,10 @@ Expose APIs to Blueprint when they simplify a real workflow or provide an intuit
 
 Keep the settings tree lean and easy to scan. Avoid redundant nesting and repeated qualifiers. Put a qualifier in the category path or `DisplayName`, not both.
 
-Base-module settings belong on the shared SeinARTS settings page. Opt-in extensions use their own settings pages.
+Base-module settings belong on the shared SeinARTS settings page. Compact simulation-extension settings may be
+visually composed onto that page through the generic editor contribution registry, but their settings objects,
+INI sections, and runtime ownership stay inside the extension. Operationally distinct extensions may retain a
+separate page; SeinARTS Online Services currently does.
 
 ## Git
 

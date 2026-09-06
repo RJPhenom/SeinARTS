@@ -47,7 +47,7 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|UI|Minimap")
 	FVector2D WorldBoundsMax = FVector2D(1.0, 1.0);
 
-	/** Ground-plane Z used for screen<->world deprojection (the grid origin Z). */
+	/** Representative baked surface Z used for screen<->world deprojection. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|UI|Minimap")
 	float GroundZ = 0.0f;
 

@@ -107,7 +107,19 @@ void USeinMinimapViewModel::ResolveBounds()
 	// blips all share one coordinate basis.
 	WorldBoundsMin = FVector2D(OriginV.X, OriginV.Y);
 	WorldBoundsMax = FVector2D(OriginV.X + Dims.X * CellSizeF, OriginV.Y + Dims.Y * CellSizeF);
+
+	// The grid origin Z is the bake volume's lower trace bound, not the playable
+	// surface. Use the baked surface at the map center as the general projection
+	// plane; camera-footprint drawing refines this to the live camera pivot height.
 	GroundZ = OriginV.Z;
+	const FVector2D BoundsCenter = (WorldBoundsMin + WorldBoundsMax) * 0.5f;
+	FFixedPoint SurfaceZ;
+	if (LD->GetSharedHeightAt(
+		FFixedVector::FromVector(FVector(BoundsCenter.X, BoundsCenter.Y, OriginV.Z)),
+		SurfaceZ))
+	{
+		GroundZ = SurfaceZ.ToFloat();
+	}
 	bHasBounds = true;
 }
 

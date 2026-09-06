@@ -43,100 +43,100 @@ public:
 	// ========== Components ==========
 
 	/** Root pivot scene component — moves on the ground plane. */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "SeinARTS|Camera")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	TObjectPtr<USceneComponent> CameraPivot;
 
 	/** Spring arm controlling zoom distance and pitch angle. */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "SeinARTS|Camera")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	TObjectPtr<USpringArmComponent> SpringArm;
 
 	/** Camera component attached to the spring arm. */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "SeinARTS|Camera")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	TObjectPtr<UCameraComponent> CameraComponent;
 
 	// ========== Pan Settings ==========
 
 	/** Pan speed in units per second (WASD / edge scroll). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Camera|Pan")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	float PanSpeed = 2000.0f;
 
 	/** Enable screen-edge scrolling. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Camera|Pan")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	bool bEnableEdgeScroll = true;
 
 	/** Screen edge margin in pixels that triggers edge scroll. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Camera|Pan", meta = (EditCondition = "bEnableEdgeScroll", ClampMin = "1"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS", meta = (EditCondition = "bEnableEdgeScroll", ClampMin = "1"))
 	float EdgeScrollMargin = 20.0f;
 
 	/** Edge scroll speed multiplier relative to PanSpeed. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Camera|Pan", meta = (EditCondition = "bEnableEdgeScroll", ClampMin = "0.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS", meta = (EditCondition = "bEnableEdgeScroll", ClampMin = "0.0"))
 	float EdgeScrollSpeedMultiplier = 1.0f;
 
 	// ========== Rotation Settings ==========
 
 	/** Keyboard rotation speed in degrees per second at full axis deflection (Q/E). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Camera|Rotation")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	float RotationSpeed = 90.0f;
 
 	// ========== Zoom Settings ==========
 
 	/** Minimum zoom distance (closest to ground). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Camera|Zoom", meta = (ClampMin = "100.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS", meta = (ClampMin = "100.0"))
 	float ZoomMin = 500.0f;
 
 	/** Maximum zoom distance (farthest from ground). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Camera|Zoom", meta = (ClampMin = "100.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS", meta = (ClampMin = "100.0"))
 	float ZoomMax = 5000.0f;
 
 	/** Zoom step per scroll wheel tick. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Camera|Zoom")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	float ZoomStep = 200.0f;
 
 	/** Keyboard zoom speed in world units per second at full axis deflection (Z/X).
 	 *  Frame-rate independent, unlike the per-tick wheel ZoomStep. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Camera|Zoom")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	float ZoomRate = 2500.0f;
 
 	/** Zoom interpolation speed (higher = snappier). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Camera|Zoom", meta = (ClampMin = "1.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS", meta = (ClampMin = "1.0"))
 	float ZoomInterpSpeed = 10.0f;
 
 	/** Default zoom distance at game start. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Camera|Zoom")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	float DefaultZoomDistance = 2000.0f;
 
 	// ========== Pitch Settings ==========
 
 	/** Default spring arm pitch angle in degrees (negative = looking down). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Camera|Pitch")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	float CameraPitch = -50.0f;
 
 	/** Minimum pitch angle (most top-down, e.g., -85). Must be negative. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Camera|Pitch", meta = (ClampMin = "-89.0", ClampMax = "-5.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS", meta = (ClampMin = "-89.0", ClampMax = "-5.0"))
 	float PitchMin = -85.0f;
 
 	/** Maximum pitch angle (most flat/horizontal, e.g., -5). Must be negative. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Camera|Pitch", meta = (ClampMin = "-89.0", ClampMax = "-5.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS", meta = (ClampMin = "-89.0", ClampMax = "-5.0"))
 	float PitchMax = -5.0f;
 
 	/** Mouse rotate sensitivity in degrees per pixel of mouse movement, applied to both
 	 *  axes (X yaw orbit and Y pitch tilt). Scaled by the player controller's Mouse
 	 *  Rotate Speed. (Formerly "OrbitPitchSensitivity", which covered pitch only.) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Camera|Pitch")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	float OrbitSensitivity = 0.3f;
 
 	/** Keyboard tilt speed in degrees per second at full axis deflection. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Camera|Pitch")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	float TiltSpeed = 45.0f;
 
 	// ========== Bounds ==========
 
 	/** Enable camera movement bounds. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Camera|Bounds")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	bool bEnableBounds = false;
 
 	/** World-space bounding box for camera pivot. Only XY is enforced. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Camera|Bounds", meta = (EditCondition = "bEnableBounds"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS", meta = (EditCondition = "bEnableBounds"))
 	FBox WorldBounds = FBox(FVector(-10000, -10000, -10000), FVector(10000, 10000, 10000));
 
 	// ========== Ground Follow ==========
@@ -144,22 +144,22 @@ public:
 	/** Keep the camera's ground-focus pivot on the terrain (traced down each tick) so the camera
 	 *  maintains a constant height ABOVE the ground instead of a fixed world Z. The spring arm
 	 *  provides the height; the pivot rides the terrain. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Camera|Ground Follow")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	bool bGroundFollow = true;
 
 	/** How quickly the pivot's Z eases toward the traced ground height. Higher = snappier
 	 *  vertical tracking, lower = floatier. Smooths both terrain panning and recenter snaps. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Camera|Ground Follow", meta = (EditCondition = "bGroundFollow", ClampMin = "0.5"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS", meta = (EditCondition = "bGroundFollow", ClampMin = "0.5"))
 	float GroundFollowInterpSpeed = 8.0f;
 
 	/** Object type the downward ground trace queries. WorldStatic = terrain + static meshes,
 	 *  ignoring dynamic units/pawns so the camera doesn't bob over unit tops. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Camera|Ground Follow", meta = (EditCondition = "bGroundFollow"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS", meta = (EditCondition = "bGroundFollow"))
 	TEnumAsByte<ECollisionChannel> GroundTraceObjectType = ECC_WorldStatic;
 
 	/** Half-length (world units) of the up/down ground trace from the pivot. Must clear the
 	 *  tallest terrain feature on the map. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Camera|Ground Follow", meta = (EditCondition = "bGroundFollow", ClampMin = "100.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS", meta = (EditCondition = "bGroundFollow", ClampMin = "100.0"))
 	float GroundTraceExtent = 100000.0f;
 
 	// ========== Follow Target ==========

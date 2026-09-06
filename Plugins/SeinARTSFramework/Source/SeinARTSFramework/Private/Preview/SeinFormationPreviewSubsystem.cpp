@@ -15,7 +15,7 @@
 
 #include "Preview/SeinFormationPreviewSubsystem.h"
 #include "Preview/SeinFormationPreviewActor.h"
-#include "Preview/SeinFormationPreviewComponent.h"
+#include "Preview/SeinNavigationRendererComponent.h"
 
 #include "Player/SeinPlayerController.h"
 #include "Player/SeinTargeterSubsystem.h"
@@ -552,8 +552,8 @@ ASeinFormationPreviewActor* USeinFormationPreviewSubsystem::EnsurePreviewActorFo
 UClass* USeinFormationPreviewSubsystem::ResolveRenderClassForActor(const AActor* Actor)
 {
 	if (!Actor) return nullptr;
-	const USeinFormationPreviewComponent* Component =
-		Actor->FindComponentByClass<USeinFormationPreviewComponent>();
+	const USeinNavigationRendererComponent* Component =
+		Actor->FindComponentByClass<USeinNavigationRendererComponent>();
 	// No component = the unit is not opted into the preview: nothing is drawn for
 	// it. Component presence is THE enable — there is no settings-level switch.
 	if (!Component) return nullptr;
@@ -642,8 +642,8 @@ TArray<FSeinEntityHandle> USeinFormationPreviewSubsystem::ResolveSelectionToMemb
 		// draws nothing this refresh).
 		if (const FSeinSquadPayload* SquadData = WorldSub->GetComponent<FSeinSquadPayload>(Handle))
 		{
-			const USeinFormationPreviewComponent* SquadRenderer =
-				Actor->FindComponentByClass<USeinFormationPreviewComponent>();
+			const USeinNavigationRendererComponent* SquadRenderer =
+				Actor->FindComponentByClass<USeinNavigationRendererComponent>();
 			UClass* SquadRenderClass = ResolveRenderClassForActor(Actor);
 			for (const FSeinEntityHandle& Member : SquadData->GetLiveMembers())
 			{
@@ -659,8 +659,8 @@ TArray<FSeinEntityHandle> USeinFormationPreviewSubsystem::ResolveSelectionToMemb
 				ASeinActor* MemberActor = Bridge
 					? Bridge->GetActorForEntity(Member)
 					: nullptr;
-				const USeinFormationPreviewComponent* MemberRenderer = MemberActor
-					? MemberActor->FindComponentByClass<USeinFormationPreviewComponent>()
+				const USeinNavigationRendererComponent* MemberRenderer = MemberActor
+					? MemberActor->FindComponentByClass<USeinNavigationRendererComponent>()
 					: nullptr;
 				UClass* MemberRenderClass = SquadRenderClass;
 				if (!MemberRenderClass)
@@ -695,8 +695,8 @@ TArray<FSeinEntityHandle> USeinFormationPreviewSubsystem::ResolveSelectionToMemb
 			OutStyles.Reset();
 			return {};
 		}
-		const USeinFormationPreviewComponent* Renderer =
-			Actor->FindComponentByClass<USeinFormationPreviewComponent>();
+		const USeinNavigationRendererComponent* Renderer =
+			Actor->FindComponentByClass<USeinNavigationRendererComponent>();
 		FSeinFormationPreviewElementStyle Style;
 		Style.MemberHandle = Handle;
 		if (Renderer)

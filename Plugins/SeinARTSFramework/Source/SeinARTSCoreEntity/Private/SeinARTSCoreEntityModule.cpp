@@ -39,6 +39,7 @@
 #include "Serialization/SeinCollisionCanonicalStateProvider.h"
 #include "Subsystems/SeinFactionService.h"
 #include "Tags/SeinARTSGameplayTags.h"
+#include "UObject/CoreRedirects.h"
 
 // Module-shared log categories. Declared extern in SeinARTSCoreEntityLog.h and
 // defined ONCE here — previously each was DEFINE_LOG_CATEGORY_STATIC in several
@@ -181,7 +182,17 @@ namespace
 {
 	const TCHAR* GCoreEntitySimulationContentContributorId =
 		TEXT("seinarts.coreentity");
-	constexpr uint32 GSimulationContentContributorRevision = 2;
+	constexpr uint32 GSimulationContentContributorRevision = 4;
+
+	TArray<FCoreRedirect> CooldownScopeRedirects()
+	{
+		FCoreRedirect Redirect(ECoreRedirectFlags::Type_Enum,
+			TEXT("/Script/SeinARTSCoreEntity.ESeinCooldownScope"),
+			TEXT("/Script/SeinARTSCoreEntity.ESeinCooldownScope"));
+		Redirect.ValueChanges.Add(TEXT("ESeinCooldownScope::Member"), TEXT("ESeinCooldownScope::OwnerOnly"));
+		Redirect.ValueChanges.Add(TEXT("ESeinCooldownScope::Squad"), TEXT("ESeinCooldownScope::SharedGroup"));
+		return {Redirect};
+	}
 	const FName GProjectSettingsCanonicalStateRecipeOwner(
 		TEXT("seinarts.projectsettings"));
 	const FName GWaitActionCodecOwner(TEXT("seinartscoreentity"));
@@ -205,8 +216,8 @@ namespace
 				USeinAbility::StaticClass(),
 				ESeinPoolObjectKind::Ability,
 				TEXT("seinarts.core.pool.ability.reflection"),
+				4,
 				3,
-				2,
 			},
 			{
 				USeinCommandBrokerResolver::StaticClass(),
@@ -563,6 +574,7 @@ bool FSeinARTSCoreEntity::ValidateConfiguredCanonicalStateRecipes(
 
 void FSeinARTSCoreEntity::StartupModule()
 {
+	FCoreRedirects::AddRedirectList(CooldownScopeRedirects(), TEXT("SeinARTSCoreEntity.CooldownScope"));
 	PoolObjectCodecHandles.Reset();
 	FString PoolCodecError;
 	if (!RegisterBuiltInPoolObjectCodecs(
@@ -748,6 +760,7 @@ void FSeinARTSCoreEntity::StartupModule()
 
 void FSeinARTSCoreEntity::ShutdownModule()
 {
+	// Enum value redirects are process-lifetime: Unreal refuses their removal.
 	PoolObjectCodecHandles.Reset();
 	WaitActionCodecHandle.Reset();
 	CollisionCanonicalStateHandle.Reset();

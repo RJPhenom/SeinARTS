@@ -14,7 +14,10 @@
 #include "Interfaces/IPluginManager.h"
 #include "ImageUtils.h"
 #include "CoreGlobals.h"
+#include "Misc/Paths.h"
 #include "UObject/UObjectBase.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogSeinARTSEditorStyle, Log, All);
 
 TSharedPtr<FSlateStyleSet> FSeinARTSEditorStyle::StyleSet = nullptr;
 FString FSeinARTSEditorStyle::IconsDir;
@@ -175,11 +178,11 @@ void FSeinARTSEditorStyle::Initialize()
 	// so register the actor-component style for each reflected class.
 	RegisterActorComponentIcon(TEXT("ClassIcon.SeinConstructionRenderComponent"));
 	RegisterActorComponentIcon(TEXT("ClassIcon.SeinEntityBridgeComponent"));
-	RegisterActorComponentIcon(TEXT("ClassIcon.SeinFormationPreviewComponent"));
+	RegisterActorComponentIcon(TEXT("ClassIcon.SeinNavigationRendererComponent"));
 
 	RegisterActorComponentThumb(TEXT("ClassThumbnail.SeinConstructionRenderComponent"));
 	RegisterActorComponentThumb(TEXT("ClassThumbnail.SeinEntityBridgeComponent"));
-	RegisterActorComponentThumb(TEXT("ClassThumbnail.SeinFormationPreviewComponent"));
+	RegisterActorComponentThumb(TEXT("ClassThumbnail.SeinNavigationRendererComponent"));
 
 	// ==================== Widget ====================
 
@@ -237,13 +240,29 @@ void FSeinARTSEditorStyle::Initialize()
 			// AppStyle owns raw brush pointers for the process lifetime and offers no
 			// removal API. Reuse an earlier hot-reload registration instead of
 			// overwriting it and leaking one brush per module reload.
-			if (!AppStyle->GetOptionalBrush(Key, nullptr, nullptr))
+			if (AppStyle->GetOptionalBrush(Key, nullptr, nullptr))
 			{
-				AppStyle->Set(Key, new FSlateVectorImageBrush(
-					BrandKitDir / Filename, FVector2D(16.0f, 16.0f)));
+				return;
 			}
+
+			// Leave the key unregistered while the SVG is missing so the Show
+			// menu entry falls back to its engine icon (SeinShowFlagsMenu.cpp)
+			// instead of a brush that fails to rasterize. Dropping the SVG into
+			// BrandKit and restarting the editor is the whole authoring step.
+			const FString IconPath = BrandKitDir / Filename;
+			if (!FPaths::FileExists(IconPath))
+			{
+				UE_LOG(LogSeinARTSEditorStyle, Log,
+					TEXT("Show-flag icon '%s' not found; '%s' uses its fallback icon until it exists."),
+					*IconPath, *Key.ToString());
+				return;
+			}
+
+			AppStyle->Set(Key, new FSlateVectorImageBrush(
+				IconPath, FVector2D(16.0f, 16.0f)));
 		};
 		RegisterShowFlagIcon(TEXT("ShowFlagsMenu.FogOfWar"), TEXT("SeinFogOfWarViewFlag.svg"));
+		RegisterShowFlagIcon(TEXT("ShowFlagsMenu.SeinNavigation"), TEXT("SeinNavigationViewFlag.svg"));
 		RegisterShowFlagIcon(TEXT("ShowFlagsMenu.SeinSteering"), TEXT("SeinSteeringViewFlag.svg"));
 		RegisterShowFlagIcon(TEXT("ShowFlagsMenu.SeinExtents"), TEXT("SeinExtentsViewFlag.svg"));
 	}

@@ -34,6 +34,7 @@
 #include "Util/SeinAutoTagGenerator.h"
 #include "Util/SeinSimulationContentEditorGuards.h"
 #include "Util/SeinSimulationContentManifestBuilder.h"
+#include "Viewport/SeinShowFlagsMenu.h"
 #include "Settings/PluginSettings.h"
 #include "Abilities/SeinAbility.h"
 #include "Effects/SeinEffect.h"
@@ -64,6 +65,7 @@
 #include "Details/SeinBalanceProfileDetails.h"
 #include "Balance/SeinBalanceProfile.h"
 #include "Details/SeinSquadSlotDetails.h"
+#include "Details/SeinEntityComponentDetails.h"
 // Volume details panels live in their owning system modules (SeinARTSNavigation
 // + SeinARTSFogOfWar), not here — preserves the "each subsystem self-contained"
 // pattern. Each module registers its own customization at StartupModule under
@@ -483,6 +485,7 @@ void FSeinARTSEditorModule::StartupModule()
 	FSeinARTSEditorStyle::Initialize();
 	if (!IsRunningCommandlet())
 	{
+		SeinShowFlagsMenu::Register();
 		EntityComponentTreeCustomization =
 			MakeShared<FSeinEntityComponentTreeCustomization>();
 		FBlueprintEditorModule& BlueprintEditorModule =
@@ -704,6 +707,15 @@ void FSeinARTSEditorModule::StartupModule()
 			TEXT("SeinSquadSlot"),
 			FOnGetPropertyTypeCustomizationInstance::CreateStatic(&FSeinSquadSlotDetails::MakeInstance));
 
+		// All native data-only entity components embed one flattened payload.
+		// This shared layout gives dynamically constructed array elements and
+		// selected FInstancedStruct data their actual type defaults when the
+		// designer uses a reset arrow.
+		PropertyModule.RegisterCustomClassLayout(
+			USeinEntityComponent::StaticClass()->GetFName(),
+			FOnGetDetailCustomizationInstance::CreateStatic(
+				&FSeinEntityComponentDetails::MakeInstance));
+
 		// Auto-tag-generation customizers — per-BP "Reset to Auto" buttons +
 		// settings-page Regenerate buttons. See SeinAutoTagDetails.h.
 		PropertyModule.RegisterCustomClassLayout(
@@ -920,6 +932,8 @@ void FSeinARTSEditorModule::ReleaseModuleOwnedState()
 		PropertyModule.UnregisterCustomPropertyTypeLayout(TEXT("SeinCollisionObjectType"));
 		PropertyModule.UnregisterCustomPropertyTypeLayout(TEXT("SeinIdentityPayload"));
 		PropertyModule.UnregisterCustomPropertyTypeLayout(TEXT("SeinSquadSlot"));
+		PropertyModule.UnregisterCustomClassLayout(
+			USeinEntityComponent::StaticClass()->GetFName());
 		PropertyModule.UnregisterCustomClassLayout(USeinAbility::StaticClass()->GetFName());
 		PropertyModule.UnregisterCustomClassLayout(USeinEffect::StaticClass()->GetFName());
 		PropertyModule.UnregisterCustomClassLayout(USeinARTSCoreSettings::StaticClass()->GetFName());
@@ -986,11 +1000,13 @@ void FSeinARTSEditorModule::ReleaseModuleOwnedState()
 	UDSValidator.Reset();
 
 	// Safety net — optional system editor modules SHOULD unregister their
-	// own draw callbacks in their ShutdownModule, but a clean slate here
-	// guards against stale bindings if an optional module's shutdown was
-	// skipped (hot-reload race, runtime module-disable, etc.).
+	// own callbacks in their ShutdownModule, but a clean slate here guards
+	// against stale bindings if an optional module's shutdown was skipped
+	// (hot-reload race, runtime module-disable, etc.).
 	ComponentDataDraws.Empty();
+	SettingsCategoryContributions.Empty();
 
+	SeinShowFlagsMenu::Unregister();
 	FSeinARTSEditorStyle::Shutdown();
 }
 
@@ -1011,6 +1027,73 @@ void FSeinARTSEditorModule::RegisterComponentDataDraw(FName Key, FSeinComponentD
 void FSeinARTSEditorModule::UnregisterComponentDataDraw(FName Key)
 {
 	ComponentDataDraws.Remove(Key);
+}
+
+void FSeinARTSEditorModule::RegisterSettingsCategoryContribution(
+	FName Key,
+	FName CategoryName,
+	UObject* SettingsObject,
+	TArray<FSeinSettingsPropertyContribution> Properties)
+{
+	if (Key.IsNone()
+		|| CategoryName.IsNone()
+		|| !IsValid(SettingsObject)
+		|| !SettingsObject->HasAnyFlags(RF_ClassDefaultObject)
+		|| Properties.IsEmpty())
+	{
+		UE_LOG(
+			LogSeinARTSEditor,
+			Warning,
+			TEXT("Rejected invalid shared-settings contribution '%s'."),
+			*Key.ToString());
+		return;
+	}
+
+	TSet<FName> SeenProperties;
+	for (const FSeinSettingsPropertyContribution& Property : Properties)
+	{
+		const FProperty* ReflectedProperty =
+			SettingsObject->GetClass()->FindPropertyByName(
+				Property.PropertyName);
+		if (Property.PropertyName.IsNone()
+			|| !ReflectedProperty
+			|| !ReflectedProperty->HasAnyPropertyFlags(CPF_Config)
+			|| SeenProperties.Contains(Property.PropertyName))
+		{
+			UE_LOG(
+				LogSeinARTSEditor,
+				Warning,
+				TEXT("Rejected shared-settings contribution '%s': property '%s' is missing, duplicated, or not Config on %s."),
+				*Key.ToString(),
+				*Property.PropertyName.ToString(),
+				*SettingsObject->GetClass()->GetPathName());
+			return;
+		}
+		SeenProperties.Add(Property.PropertyName);
+	}
+
+	FSeinSettingsCategoryContribution& Contribution =
+		SettingsCategoryContributions.FindOrAdd(Key);
+	Contribution.CategoryName = CategoryName;
+	Contribution.SettingsObject = SettingsObject;
+	Contribution.Properties = MoveTemp(Properties);
+
+	if (FModuleManager::Get().IsModuleLoaded("PropertyEditor"))
+	{
+		FModuleManager::GetModuleChecked<FPropertyEditorModule>(
+			"PropertyEditor").NotifyCustomizationModuleChanged();
+	}
+}
+
+void FSeinARTSEditorModule::UnregisterSettingsCategoryContribution(
+	FName Key)
+{
+	if (SettingsCategoryContributions.Remove(Key) > 0
+		&& FModuleManager::Get().IsModuleLoaded("PropertyEditor"))
+	{
+		FModuleManager::GetModuleChecked<FPropertyEditorModule>(
+			"PropertyEditor").NotifyCustomizationModuleChanged();
+	}
 }
 
 #undef LOCTEXT_NAMESPACE

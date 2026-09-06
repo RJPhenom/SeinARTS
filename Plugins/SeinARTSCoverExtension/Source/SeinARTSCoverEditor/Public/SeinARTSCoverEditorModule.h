@@ -2,8 +2,8 @@
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinARTSCoverEditorModule.h
  * @brief   Editor companion to SeinARTSCover. Registers the cover provider
- *          component visualizer so designers can see slots + area volumes
- *          in the BP editor + level editor viewports.
+ *          customization and visualizer, and contributes Cover-owned
+ *          settings to the shared SeinARTS Project Settings page.
  *
  *          Separate from SeinARTSEditor because SeinARTSCover is opt-in —
  *          forcing SeinARTSEditor to hard-depend on the cover module would

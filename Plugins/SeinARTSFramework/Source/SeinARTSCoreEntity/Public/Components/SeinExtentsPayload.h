@@ -1,24 +1,20 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  *
- * @file:    SeinExtentsComponent.h
- * @brief:   Volumetric "where is this entity in space" payload — the unified
- *           sim-side bounds AND blocker config for nav + fog of war.
+ * @file         SeinExtentsPayload.h
+ * @author       RJ Macklem
+ * @created      2026
+ * @latest       5 Sep 2026
+ * @brief        Entity volumes, blocker configuration, and local selection policy.
  *
- *           Distinct from FSeinStampShape (which models effect footprints —
- *           sight cones, firing arcs, smoke clouds) because the shape vocab
- *           differs: an entity's body is a Box or a Capsule, never a cone.
- *           Cell-iteration consumers convert via SeinExtentsShape::AsStampShape
- *           and reuse SeinStampUtils for the actual rasterization math.
+ *               Box/capsule extents provide simulation bounds and presentation
+ *               selection geometry. Navigation and fog use independent blocker
+ *               flags and layer masks. Selection policy is authored here and
+ *               consumed by the local controller after squad resolution.
  *
- *           Phase 2 (current): consolidates FSeinNavBlockerData and
- *           FSeinVisionBlockerData. Designers author one shape set per entity
- *           plus the bBlocksNav / bBlocksFogOfWar flags + per-system layer
- *           masks. Layered nav blocking lets you author terrain that only
- *           certain agent classes pass (water → amphibious only, infantry-
- *           only doorways, vehicle-only highways).
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
  */
-
 #pragma once
 
 #include "CoreMinimal.h"
@@ -30,7 +26,22 @@
 #include "Types/FixedPoint.h"
 #include "Types/Vector.h"
 #include "Collision/SeinCollisionTypes.h"
+#include "GameplayTagContainer.h"
 #include "SeinExtentsPayload.generated.h"
+
+/** Controls which other entities may share this entity's local player selection. */
+UENUM(BlueprintType)
+enum class ESeinSelectionPolicy : uint8
+{
+	/** May share a selection with any entity whose own policy permits it. */
+	Unrestricted,
+	/** May share a selection only with matching Selection Groups, or exact actor classes when no group is set. */
+	LikeUnitsOnly UMETA(DisplayName = "Like Units Only"),
+	/** May be selected alone, including in a control group containing only this entity. */
+	SingleOnly UMETA(DisplayName = "Single Only"),
+	/** Cannot enter the local player selection. Hover and ability targeting remain available. */
+	Disabled
+};
 
 UENUM(BlueprintType, meta = (ScriptName = "SeinExtentsShapeEnum"))
 enum class ESeinExtentsShape : uint8
@@ -219,6 +230,31 @@ struct SEINARTSCOREENTITY_API FSeinExtentsPayload : public FSeinPayload
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	TArray<FSeinExtentsShape> Shapes;
 
+	/** Determines which other entities may share this entity's selection. The
+	 *  entity must also have shapes and its runtime Is Selectable flag enabled.
+	 *  Squad members resolve to their squad before its extents policy is applied. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Selection")
+	ESeinSelectionPolicy SelectionPolicy = ESeinSelectionPolicy::Unrestricted;
+
+	/** Allows a drag rectangle to acquire this entity. Disabling this leaves
+	 *  clicks, select-by-type, and control-group recall available under Selection Policy.
+	 *  A drag containing several Single Only entities selects only the highest-priority one. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Selection",
+		meta = (DisplayName = "Include in Drag Selection"))
+	bool bIncludeInDragSelection = true;
+
+	/** Optional exact tag used to identify like units for selection. Matching tags
+	 *  allow different actor classes to group together; parent tags do not match children.
+	 *  None uses the exact actor class. Set the same group on every compatible variant. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Selection")
+	FGameplayTag SelectionGroup;
+
+	/** Higher values take precedence when a replacement selection contains
+	 *  incompatible entities. Equal priorities use entity handles for stable results.
+	 *  Additive selection always preserves the existing compatible group first. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Selection")
+	int32 SelectionPriority = 0;
+
 	// =========================================================================
 	// Navigation
 	// =========================================================================
@@ -404,5 +440,9 @@ FORCEINLINE uint32 GetTypeHash(const FSeinExtentsPayload& Component)
 	Hash = HashCombine(Hash, GetTypeHash(Component.Mass));
 	Hash = HashCombine(Hash, GetTypeHash(Component.ObjectType));
 	Hash = HashCombine(Hash, GetTypeHash(Component.CollisionResponses));
+	Hash = HashCombine(Hash, GetTypeHash(static_cast<uint8>(Component.SelectionPolicy)));
+	Hash = HashCombine(Hash, GetTypeHash(Component.bIncludeInDragSelection));
+	Hash = HashCombine(Hash, GetTypeHash(Component.SelectionGroup.ToString()));
+	Hash = HashCombine(Hash, GetTypeHash(Component.SelectionPriority));
 	return Hash;
 }

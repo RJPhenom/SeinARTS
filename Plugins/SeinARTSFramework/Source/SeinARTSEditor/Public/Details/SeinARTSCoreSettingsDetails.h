@@ -3,7 +3,8 @@
  *
  * @file:    SeinARTSCoreSettingsDetails.h
  * @brief:   IDetailCustomization for USeinARTSCoreSettings. Owns generated
- *           simulation-content and tag-semantics actions.
+ *           simulation-content and tag-semantics actions, and composes
+ *           editor-only settings contributed by optional plugins.
  */
 
 #pragma once

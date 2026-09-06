@@ -144,7 +144,7 @@ public:
 
 	/** Replicated per-slot state. Server is the single writer; clients mirror
 	 *  via OnRep_Slots. */
-	UPROPERTY(ReplicatedUsing = OnRep_Slots, BlueprintReadOnly, Category = "SeinARTS|Lobby")
+	UPROPERTY(ReplicatedUsing = OnRep_Slots, BlueprintReadOnly, Category = "SeinARTS")
 	TArray<FSeinLobbySlotState> Slots;
 
 	UFUNCTION()
@@ -155,7 +155,7 @@ public:
 	 *   - Slot count (lobby resizes to the entry's `SlotCount` on selection)
 	 *   - StartMatch ServerTravel destination
 	 *  Replicated so every client's UI shows the same selection. */
-	UPROPERTY(ReplicatedUsing = OnRep_SelectedMap, BlueprintReadOnly, Category = "SeinARTS|Lobby")
+	UPROPERTY(ReplicatedUsing = OnRep_SelectedMap, BlueprintReadOnly, Category = "SeinARTS")
 	TSoftObjectPtr<UWorld> SelectedMap;
 
 	UFUNCTION()

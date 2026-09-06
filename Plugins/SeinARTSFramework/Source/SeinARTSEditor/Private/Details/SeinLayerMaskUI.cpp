@@ -11,6 +11,7 @@
 
 #include "DetailWidgetRow.h"
 #include "IDetailChildrenBuilder.h"
+#include "IDetailPropertyRow.h"
 #include "PropertyHandle.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Text/STextBlock.h"
@@ -130,7 +131,8 @@ namespace SeinLayerMaskUI
 		TFunction<FText(int32)> GetBitLabel,
 		const FText& RowFilterText)
 	{
-		ChildBuilder.AddCustomRow(RowFilterText)
+		ChildBuilder.AddProperty(MaskHandle).CustomWidget()
+		.FilterString(RowFilterText)
 		.NameContent()
 		[
 			MaskHandle->CreatePropertyNameWidget()

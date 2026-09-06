@@ -71,6 +71,15 @@ UObject* USeinAbilityFactory::FactoryCreateNew(UClass* Class, UObject* InParent,
 		}
 	}
 
+	// Preserve the native compatibility default for old assets, while new generic
+	// abilities opt in to sharing deliberately. Children retain their parent policy.
+	if (NewBP && NewBP->GeneratedClass && ParentClass == USeinAbility::StaticClass())
+	{
+		USeinAbility* CDO = CastChecked<USeinAbility>(NewBP->GeneratedClass->GetDefaultObject());
+		CDO->CooldownScope = ESeinCooldownScope::OwnerOnly;
+		FBlueprintEditorUtils::MarkBlueprintAsModified(NewBP);
+	}
+
 	// Stamp derived tag on the CDO. AbilityTag lives directly on USeinAbility,
 	// so we set it + flip the auto-flag in one shot.
 	if (NewBP && NewBP->GeneratedClass && DerivedTag.IsValid())

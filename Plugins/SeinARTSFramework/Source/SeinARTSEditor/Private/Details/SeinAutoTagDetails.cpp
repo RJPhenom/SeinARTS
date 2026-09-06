@@ -122,7 +122,10 @@ namespace SeinAutoTagDetailsLocal
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// USeinAbility — adds "Reset to Auto" row in the SeinARTS|Ability category
+// USeinAbility — adds "Reset to Auto" to the existing SeinARTS root category.
+// Passing the reflected subcategory path ("SeinARTS|Ability") to EditCategory
+// creates a second literal top-level category instead of targeting the nested
+// property group, so the reflected ability fields appear twice.
 // ─────────────────────────────────────────────────────────────────────
 
 TSharedRef<IDetailCustomization> FSeinAbilityAutoTagDetails::MakeInstance()
@@ -132,12 +135,12 @@ TSharedRef<IDetailCustomization> FSeinAbilityAutoTagDetails::MakeInstance()
 
 void FSeinAbilityAutoTagDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilder)
 {
-	IDetailCategoryBuilder& AbilityCategory = DetailBuilder.EditCategory(TEXT("SeinARTS|Ability"));
+	IDetailCategoryBuilder& AbilityCategory = DetailBuilder.EditCategory(TEXT("SeinARTS"));
 	SeinAutoTagDetailsLocal::AddResetRowToCategory(AbilityCategory, DetailBuilder);
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// USeinEffect — adds "Reset to Auto" row in the SeinARTS|Effect category
+// USeinEffect — adds "Reset to Auto" to the existing SeinARTS root category.
 // ─────────────────────────────────────────────────────────────────────
 
 TSharedRef<IDetailCustomization> FSeinEffectAutoTagDetails::MakeInstance()
@@ -147,7 +150,7 @@ TSharedRef<IDetailCustomization> FSeinEffectAutoTagDetails::MakeInstance()
 
 void FSeinEffectAutoTagDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilder)
 {
-	IDetailCategoryBuilder& EffectCategory = DetailBuilder.EditCategory(TEXT("SeinARTS|Effect"));
+	IDetailCategoryBuilder& EffectCategory = DetailBuilder.EditCategory(TEXT("SeinARTS"));
 	SeinAutoTagDetailsLocal::AddResetRowToCategory(EffectCategory, DetailBuilder);
 }
 

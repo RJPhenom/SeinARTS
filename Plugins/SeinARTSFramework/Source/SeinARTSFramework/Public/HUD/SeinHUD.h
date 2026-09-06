@@ -14,7 +14,6 @@
 class ASeinActor;
 class ASeinPlayerController;
 class USeinCommandLogSubsystem;
-class UUserWidget;
 
 /**
  * RTS HUD that draws the marquee selection box and resolves actors
@@ -29,50 +28,35 @@ class SEINARTSFRAMEWORK_API ASeinHUD : public AHUD
 	GENERATED_BODY()
 
 public:
-	virtual void BeginPlay() override;
 	virtual void DrawHUD() override;
 
 	// ========== Marquee Visual Settings ==========
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|HUD|Marquee")
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Marquee")
 	FLinearColor MarqueeFillColor = FLinearColor(0.0f, 0.5f, 1.0f, 0.15f);
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|HUD|Marquee")
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Marquee")
 	FLinearColor MarqueeBorderColor = FLinearColor(0.0f, 0.7f, 1.0f, 0.8f);
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|HUD|Marquee")
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Marquee")
 	float MarqueeBorderThickness = 1.5f;
 
 	// ========== Command Drag Visual Settings ==========
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|HUD|Command")
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Command")
 	FLinearColor CommandDragLineColor = FLinearColor(0.0f, 1.0f, 0.3f, 0.8f);
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|HUD|Command")
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Command")
 	float CommandDragLineThickness = 2.0f;
-
-	// ========== HUD Layout Widget ==========
-
-	/**
-	 * Optional Widget Blueprint class to create as the HUD root layout.
-	 * Designers set this to their custom HUD Widget Blueprint. Created and added
-	 * to the viewport in BeginPlay. Any UUserWidget subclass works.
-	 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|HUD|Layout")
-	TSubclassOf<UUserWidget> HUDLayoutWidgetClass;
-
-	/** The instantiated HUD layout widget (nullptr if HUDLayoutWidgetClass is not set). */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|HUD|Layout")
-	TObjectPtr<UUserWidget> HUDLayoutWidget;
 
 	// ========== Debug Command Log Settings ==========
 
 	/** Background color for the command log panel. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|HUD|Debug")
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Debug")
 	FLinearColor LogPanelBgColor = FLinearColor(0.0f, 0.0f, 0.0f, 0.75f);
 
 	/** Font scale for log entries. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|HUD|Debug")
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Debug")
 	float LogFontScale = 1.0f;
 
 protected:

@@ -16,9 +16,12 @@ public class SeinARTSMovement : ModuleRules
             "SeinARTSNavigation" // FSeinPath and navigation request/result types are public API
         });
 
-        // Editor-only deps: the active-move debug ticker reaches into the
-        // editor viewport iterator to gate per-world drawing on the editor's
-        // Navigation showflag (mirrors USeinARTSNavigationModule's pattern).
+        // Filled navigation cells use the engine's shared white Canvas texture.
+        PrivateDependencyModuleNames.Add("RenderCore");
+
+        // Editor-only deps: the Extents ticker and redraw requests reach into the
+        // editor viewport iterator. Navigation and Steering geometry draw through
+        // their per-view Canvas callbacks.
         if (Target.bBuildEditor)
         {
             PrivateDependencyModuleNames.AddRange(new string[] {

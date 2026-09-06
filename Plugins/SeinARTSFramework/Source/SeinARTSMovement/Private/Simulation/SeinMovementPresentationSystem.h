@@ -117,6 +117,13 @@ public:
 			// writer can touch only the Transient RenderState field.
 			Movement->UpdateSettledRenderState(
 				Context, *ReadMovement, Writer);
+#if UE_ENABLE_DEBUG_DRAWING
+			Movement->CaptureSteeringDebugMotion(World.GetCurrentTick(),
+				Context.bHasPreviousSample
+					? (Context.CurrentTransform.GetLocation() - Context.PreviousTransform.GetLocation()) / DeltaTime
+					: FFixedVector::ZeroVector,
+				Context.bHasPreviousSample);
+#endif
 
 			FPresentationSample& Current = Samples.FindOrAdd(Handle);
 			Current.Transform = Entity.Transform;

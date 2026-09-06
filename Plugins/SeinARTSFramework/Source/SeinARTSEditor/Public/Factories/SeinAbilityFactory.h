@@ -19,7 +19,7 @@
  * default "Common" section for quick access.
  */
 UCLASS()
-class USeinAbilityFactory : public UBlueprintFactory
+class SEINARTSEDITOR_API USeinAbilityFactory : public UBlueprintFactory
 {
 	GENERATED_BODY()
 

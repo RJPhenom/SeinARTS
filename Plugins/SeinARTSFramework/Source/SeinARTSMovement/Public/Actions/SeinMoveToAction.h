@@ -151,6 +151,15 @@ public:
 	 *  debug rendering can draw "entity → current waypoint → remaining path". */
 	int32 GetCurrentWaypointIndex() const { return CurrentWaypointIndex; }
 
+	/** Read-only presentation access to the committed route's implicit first point. */
+	FFixedVector GetDrivenPathOrigin() const
+	{
+		return StuckPhase == ESeinMoveStuckPhase::Escaping ? EscapeOrigin : PathOriginAgentPos;
+	}
+
+	/** Original order goal; an escape or partial route may end elsewhere. */
+	FFixedVector GetOrderDestination() const { return Destination; }
+
 	/** Stuck-recovery phase (see ESeinMoveStuckPhase). Public for debug rendering
 	 *  and tests; no sim logic reads it from outside the action. */
 	ESeinMoveStuckPhase GetStuckPhase() const { return StuckPhase; }

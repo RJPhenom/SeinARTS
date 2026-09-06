@@ -15,6 +15,8 @@ public class SeinARTSFrameworkTests : ModuleRules
 			"Core",
 			"CoreUObject",
 			"Engine",
+			"RenderCore",
+			"RHI",
 			"GameplayTags",
 			"Slate",
 			"CQTest",

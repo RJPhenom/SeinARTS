@@ -507,6 +507,9 @@ USeinMoveToAction::ResolveInitialPath(
 	// The first path is committed and the unit is genuinely departing.
 	// Failures before this point leave any still-occupied frozen claim live.
 	World.NotifyFrozenDestinationDeparture(OwnerEntity);
+#if UE_ENABLE_DEBUG_DRAWING
+	Movement->ClearSteeringDebugDecision();
+#endif
 	Movement->OnMoveBegin(BeginCtx);
 	return EInitialPathTickResult::Ready;
 }
@@ -1312,6 +1315,9 @@ bool USeinMoveToAction::TickAction(FFixedPoint DeltaTime, USeinWorldSubsystem& W
 	bool bReachedEnd;
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE(Sein_MoveTo_MovementTick);
+#if UE_ENABLE_DEBUG_DRAWING
+		Movement->BeginSteeringDebugTick(World.GetCurrentTick());
+#endif
 		bReachedEnd = Movement->Tick(TickCtx);
 	}
 	// Tier-2 and third-party Tick overrides own their arrival trigger, but
@@ -1399,6 +1405,9 @@ void USeinMoveToAction::OnTimelineAbandoned()
 	// Blueprint and would manufacture gameplay on the discarded timeline.
 	USeinMoveToProxy* Proxy = Observer.Get();
 	Observer.Reset();
+#if UE_ENABLE_DEBUG_DRAWING
+	if (Movement) Movement->ClearSteeringDebugDecision();
+#endif
 	Movement = nullptr;
 	bMovementFinalized = true;
 	// Assignment from a fresh value releases array capacity too. Path::Clear()
@@ -1447,6 +1456,9 @@ void USeinMoveToAction::FinalizeMovementOnce()
 		if (FSeinEntity* Entity =
 			Sim->GetEntityMutable(OwnerEntity))
 		{
+#if UE_ENABLE_DEBUG_DRAWING
+			EndingMovement->ClearSteeringDebugDecision();
+#endif
 			EndingMovement->OnMoveEnd(*Entity);
 		}
 	}
@@ -1506,6 +1518,9 @@ void USeinMoveToAction::RefreshAuthoredComponentTuning(
 
 	if (PreviousMovement && PreviousMovement != Movement)
 	{
+#if UE_ENABLE_DEBUG_DRAWING
+		PreviousMovement->ClearSteeringDebugDecision();
+#endif
 		PreviousMovement->OnMoveEnd(*Entity);
 		// Blueprint-capable teardown may have changed the action/component.
 		if (bCompleted || bCancelled || bMovementFinalized) return;
@@ -1534,6 +1549,9 @@ void USeinMoveToAction::RefreshAuthoredComponentTuning(
 	Movement->CacheFootprintFromContext(Context);
 	if (PreviousMovement != Movement)
 	{
+#if UE_ENABLE_DEBUG_DRAWING
+		Movement->ClearSteeringDebugDecision();
+#endif
 		Movement->OnMoveBegin(Context);
 	}
 	if (bForcePathRefresh)

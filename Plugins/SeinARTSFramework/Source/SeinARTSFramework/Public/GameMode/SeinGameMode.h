@@ -83,10 +83,10 @@ public:
 
 	/** Canonical controller-routing manifest. Direct starts replace the authored
 	 *  availability defaults with the final published roster before launch. */
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|GameMode")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	FSeinMatchSettings ResolvedMatchSettings;
 
-	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|GameMode")
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	bool bMatchSettingsResolved = false;
 
 protected:

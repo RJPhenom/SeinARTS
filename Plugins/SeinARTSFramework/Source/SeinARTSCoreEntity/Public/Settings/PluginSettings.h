@@ -143,7 +143,7 @@ public:
 	 * Generate / Regenerate Manifest writes a new manifest there and updates the reference below only
 	 * after the save succeeds. Existing manifest assets are not deleted automatically.
 	 */
-	UPROPERTY(Config, EditAnywhere, Category = "Simulation|Content",
+	UPROPERTY(Config, EditAnywhere, Category = "Simulation",
 		meta = (DisplayName = "Manifest Save Folder", ContentDir))
 	FDirectoryPath ManifestSaveFolder;
 
@@ -163,7 +163,7 @@ public:
 	 * may contain several exact contributor-set profiles so one project can
 	 * support Framework-only and opt-in extension combinations.
 	 */
-	UPROPERTY(Config, EditAnywhere, Category = "Simulation|Content",
+	UPROPERTY(Config, EditAnywhere, Category = "Simulation",
 		meta = (DisplayName = "Simulation Content Manifest"))
 	TSoftObjectPtr<USeinSimulationContentManifest> SimulationContentManifest;
 
@@ -173,7 +173,7 @@ public:
 	 * set. The generator follows their supported package dependencies; this is
 	 * an authoring input, never a runtime fallback or hand-maintained hash list.
 	 */
-	UPROPERTY(Config, EditAnywhere, Category = "Simulation|Content",
+	UPROPERTY(Config, EditAnywhere, Category = "Simulation",
 		meta = (DisplayName = "Additional Simulation Content Roots"))
 	TArray<FSoftObjectPath> AdditionalSimulationContentRoots;
 
@@ -188,7 +188,7 @@ public:
 	 * enforce. Local admission policy only — deliberately outside the config
 	 * fingerprint.
 	 */
-	UPROPERTY(Config, EditAnywhere, Category = "Simulation|Content",
+	UPROPERTY(Config, EditAnywhere, Category = "Simulation",
 		meta = (DisplayName = "Require Simulation Content Coverage"))
 	bool bRequireSimulationContentCoverage = false;
 
@@ -201,7 +201,7 @@ public:
 	 * Extensions may add recipes independently through the native registry.
 	 * Project recipes compose additively by globally unique state keys.
 	 */
-	UPROPERTY(Config, EditAnywhere, Category = "Simulation|State",
+	UPROPERTY(Config, EditAnywhere, Category = "Simulation",
 		meta = (DisplayName = "Canonical State Recipes"))
 	TArray<TSoftClassPtr<USeinCanonicalStateRecipe>> CanonicalStateRecipes;
 
@@ -223,7 +223,7 @@ public:
 	 * Turn it off to force the whole sim single-threaded — the reference path, and the first thing
 	 * to try when hunting a desync.
 	 */
-	UPROPERTY(Config, EditAnywhere, Category = "Simulation|Performance",
+	UPROPERTY(Config, EditAnywhere, Category = "Simulation",
 		meta = (DisplayName = "Parallel Simulation"))
 	bool bParallelSimulation = true;
 
@@ -233,7 +233,7 @@ public:
 	 * more than it saves. Only matters when Parallel Simulation is on. Drives the
 	 * Sein.Sim.ParallelMinBatch console variable. Default 64.
 	 */
-	UPROPERTY(Config, EditAnywhere, Category = "Simulation|Performance",
+	UPROPERTY(Config, EditAnywhere, Category = "Simulation",
 		meta = (DisplayName = "Parallel Min Batch", ClampMin = "1", UIMin = "8", UIMax = "512",
 				EditCondition = "bParallelSimulation"))
 	int32 ParallelMinBatch = 64;
@@ -1254,9 +1254,9 @@ public:
 				ClampMin = "0.0", UIMin = "0.0", UIMax = "300.0"))
 	float LobbyReconnectGraceSeconds;
 
-	// Cover + Squad extension settings live on their own UDeveloperSettings pages owned by the extension
-	// plugins (USeinARTSCoverSettings / USeinARTSSquadSettings). The base framework settings carry no
-	// cover/squad fields so the extensions stay fully strippable with no orphaned settings here.
+	// Optional simulation settings remain owned by extension-local UDeveloperSettings objects. Their
+	// editor modules contribute those external properties to this page without placing extension
+	// fields or dependencies in the base framework.
 
 	// UI
 	// ====================================================================================================
@@ -1309,6 +1309,11 @@ public:
 
 	// Debug Visualization
 	// ====================================================================================================
+
+	/** Show the Navigation, Steering, Extents, and Fog of War legend panels when their
+	 *  debug views are enabled. Turning this off leaves debug geometry and unit labels visible. */
+	UPROPERTY(Config, EditAnywhere, Category = "Debug Visualization", meta = (DisplayName = "Show Debug Legends"))
+	bool bShowDebugLegends = true;
 
 	/**
 	 * How far from the camera, in world units, debug visualization still draws. Beyond this, both the

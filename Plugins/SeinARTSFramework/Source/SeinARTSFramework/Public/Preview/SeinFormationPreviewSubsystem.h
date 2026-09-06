@@ -13,7 +13,7 @@
  *            1. Bails if the targeter is active (its preview takes precedence)
  *            2. Resolves the local selection to a member-handle list plus each
  *               member's render opt-in and marker style
- *               (USeinFormationPreviewComponent on the unit/squad actor)
+ *               (USeinNavigationRendererComponent on the unit/squad actor)
  *            3. Calls USeinCommandBrokerBPFL::SeinComputeFormationPreview for the
  *               per-member projected positions (the SAME dry-run the commit uses)
  *            4. Optionally fetches per-cell quality tags from
@@ -107,7 +107,7 @@ private:
 	ASeinFormationPreviewActor* EnsurePreviewActorForClass(UClass* ActorClass);
 
 	/** Resolve one selected/member actor's render opt-in: its
-	 *  USeinFormationPreviewComponent's class if the component is present (None on
+	 *  USeinNavigationRendererComponent's class if the component is present (None on
 	 *  the component → USeinARTSCoreSettings::FormationPreviewActorClass →
 	 *  ASeinFormationPreviewActor::StaticClass()), null when the actor is absent
 	 *  or carries no component (= not drawn). */

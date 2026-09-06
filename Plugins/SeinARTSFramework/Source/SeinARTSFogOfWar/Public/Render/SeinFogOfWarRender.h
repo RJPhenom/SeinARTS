@@ -104,23 +104,23 @@ public:
 	 *  in the material editor — see the plugin docs for the node recipe. Without
 	 *  it, the overlay is inert (logged). SOFT ref so placing the actor doesn't
 	 *  force-load the material into every map that references it. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Fog Of War")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	TSoftObjectPtr<UMaterialInterface> FogPostProcessMaterial;
 
 	/** Tint applied to fogged (unexplored + explored-not-visible) cells. Black
 	 *  is the classic RTS look; raise toward a blue/grey for stylized fog. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Fog Of War")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	FLinearColor UnexploredColor = FLinearColor::Black;
 
 	/** Opacity over NEVER-explored cells. 1.0 = opaque (can't see the map at all). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Fog Of War",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (ClampMin = "0.0", ClampMax = "1.0", DisplayName = "Unexplored Opacity"))
 	float UnexploredOpacity = 1.0f;
 
 	/** Opacity over EXPLORED-but-not-currently-visible cells — the dimmed
 	 *  "terrain memory" tier. The headline tunable: 0 = no dimming, 1 = as dark
 	 *  as unexplored. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Fog Of War",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (ClampMin = "0.0", ClampMax = "1.0", DisplayName = "Explored Opacity"))
 	float ExploredOpacity = 0.75f;
 
@@ -129,7 +129,7 @@ public:
 	 *  bilinear filtering plus a box blur of this radius, spreading the fog edge
 	 *  softer and rounding off the per-cell stair-stepping. Cheap (the fog texture
 	 *  is tiny). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Fog Of War",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (ClampMin = "0.0", ClampMax = "5.0", UIMax = "5.0",
 			DisplayName = "Smoothing Strength"))
 	float SmoothingStrength = 0.1f;
@@ -148,7 +148,7 @@ public:
 	 *  material only defines the STYLE, not the fog tint. Leave the material empty
 	 *  for a layer that changes the revealed area without restyling; disable a slot
 	 *  to make it un-switchable. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Fog Of War",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (EditFixedSize, DisplayName = "Vision Layer Post Process Materials"))
 	TArray<FSeinVisionLayerView> VisionLayerPostProcessMaterials;
 
@@ -158,7 +158,7 @@ public:
 
 	/** The vision layer the local view is currently using: -1 = Normal (the V
 	 *  bit), 0..5 = the custom layer in slot N. Client-only view state. */
-	UPROPERTY(VisibleInstanceOnly, Transient, Category = "SeinARTS|Fog Of War",
+	UPROPERTY(VisibleInstanceOnly, Transient, Category = "SeinARTS",
 		meta = (DisplayName = "Active Vision Layer"))
 	int32 ActiveVisionLayer = -1;
 
@@ -195,7 +195,7 @@ protected:
 
 private:
 	/** Unbound post-process source that carries the style + fog blendables. */
-	UPROPERTY(VisibleAnywhere, Category = "SeinARTS|Fog Of War")
+	UPROPERTY(VisibleAnywhere, Category = "SeinARTS")
 	TObjectPtr<UPostProcessComponent> PostProcess;
 
 	UPROPERTY(Transient)

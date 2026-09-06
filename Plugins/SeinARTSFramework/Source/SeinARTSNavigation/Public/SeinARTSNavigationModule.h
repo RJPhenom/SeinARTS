@@ -35,8 +35,8 @@ namespace UE::SeinARTSNavigation
 	 *  cells to those that affect the chosen agent layer. */
 	SEINARTSNAVIGATION_API bool TryGetDebugNavLayerOverride(int32& OutBitIndex);
 
-	/** True iff `World`'s viewport currently has the Navigation showflag on
-	 *  (the same bit toggled by UE's 'P' hotkey, `showflag.navigation`, and
+	/** True iff `World`'s viewport currently has the custom SeinARTS Navigation
+	 *  show flag on (the bit toggled by the SeinARTS Show submenu and
 	 *  `Sein.Nav.Show`). Module-public so SeinARTSMovement's active-move
 	 *  ticker can gate per-world drawing on the same toggle that drives the
 	 *  cell-quad scene proxy — designers see one unified "show nav debug" UX

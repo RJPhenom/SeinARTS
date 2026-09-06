@@ -7,7 +7,7 @@
  *   - View relevance sets bSeparateTranslucency + bNormalTranslucency (the
  *     DebugMeshMaterial is translucent; setting only bOpaque results in zero
  *     visible output).
- *   - EngineShowFlags.Navigation gating happens in both GetViewRelevance
+ *   - ShowFlags.SeinNavigation gating happens in both GetViewRelevance
  *     (early frustum cull) AND GetDynamicMeshElements (belt-and-braces).
  *   - One FDynamicMeshBuilder per color bucket per view — submitted via
  *     FColoredMaterialRenderProxy wrapping GEngine->DebugMeshMaterial.
@@ -37,9 +37,33 @@
 #include "PrimitiveSceneProxy.h"
 #include "PrimitiveViewRelevance.h"
 #include "SceneManagement.h"
+#include "ShowFlags.h"
 #include "DynamicMeshBuilder.h"
 #include "MeshElementCollector.h"
 #include "SeinARTSNavigationLog.h"
+
+namespace
+{
+	/** Query the custom ShowFlags.SeinNavigation state for one view. */
+	bool IsNavigationShowFlagOn(const FEngineShowFlags& ShowFlags)
+	{
+		static const int32 FlagBitIndex =
+			FEngineShowFlags::FindIndexByName(TEXT("SeinNavigation"));
+		return FlagBitIndex != INDEX_NONE
+			&& ShowFlags.GetSingleFlag(FlagBitIndex);
+	}
+
+	uint32 AppearanceHash(const USeinNavigation* Nav)
+	{
+		uint32 Hash = Nav ? Nav->GetDebugAppearanceHash() : 0;
+		if (const USeinARTSCoreSettings* Settings = GetDefault<USeinARTSCoreSettings>())
+		{
+			for (const auto& Terrain : Settings->TerrainTypes) Hash = HashCombine(Hash, GetTypeHash(Terrain.DebugColor));
+			for (const auto& Layer : Settings->NavLayers) Hash = HashCombine(Hash, GetTypeHash(Layer.DebugColor));
+		}
+		return Hash;
+	}
+}
 
 // ============================================================================
 // Scene proxy (debug-only — class doesn't exist in shipping)
@@ -97,7 +121,8 @@ public:
 
 	virtual FPrimitiveViewRelevance GetViewRelevance(const FSceneView* View) const override
 	{
-		const bool bVisible = !!View->Family->EngineShowFlags.Navigation;
+		const bool bVisible = IsNavigationShowFlagOn(
+			View->Family->EngineShowFlags);
 		FPrimitiveViewRelevance Result;
 		Result.bDrawRelevance = bVisible && IsShown(View);
 		Result.bDynamicRelevance = true;
@@ -125,7 +150,11 @@ public:
 			if (!(VisibilityMap & (1 << ViewIdx))) continue;
 
 			const FSceneView* View = Views[ViewIdx];
-			if (!View->Family->EngineShowFlags.Navigation) continue;
+			if (!IsNavigationShowFlagOn(
+				View->Family->EngineShowFlags))
+			{
+				continue;
+			}
 
 			// Pass the full FSceneView through to EmitQuads — gives it the
 			// frustum (per-cell cull), camera location (per-cell distance
@@ -270,7 +299,10 @@ private:
 
 USeinNavDebugComponent::USeinNavDebugComponent()
 {
-	PrimaryComponentTick.bCanEverTick = false;
+	PrimaryComponentTick.bCanEverTick = UE_ENABLE_DEBUG_DRAWING;
+	PrimaryComponentTick.bTickEvenWhenPaused = true;
+	PrimaryComponentTick.TickGroup = TG_PostUpdateWork;
+	bTickInEditor = true;
 	SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	SetGenerateOverlapEvents(false);
 	bSelectable = false;
@@ -320,9 +352,11 @@ FPrimitiveSceneProxy* USeinNavDebugComponent::CreateSceneProxy()
 	if (Nav && Nav->HasRuntimeData())
 	{
 		const uint64 StaticGeneration = Nav->GetStaticEnvironmentGeneration();
+		const uint32 Appearance = AppearanceHash(Nav);
 		if (!CachedStaticSnapshot.IsValid()
 			|| CachedStaticNav.Get() != Nav
-			|| CachedStaticGeneration != StaticGeneration)
+			|| CachedStaticGeneration != StaticGeneration
+			|| CachedAppearanceHash != Appearance)
 		{
 			TArray<FVector> Centers;
 			TArray<FColor> Colors;
@@ -336,6 +370,7 @@ FPrimitiveSceneProxy* USeinNavDebugComponent::CreateSceneProxy()
 			CachedStaticSnapshot = NewSnapshot;
 			CachedStaticNav = Nav;
 			CachedStaticGeneration = StaticGeneration;
+			CachedAppearanceHash = Appearance;
 		}
 		StaticSnapshot = CachedStaticSnapshot;
 
@@ -440,17 +475,44 @@ void USeinNavDebugComponent::OnUnregister()
 	CachedStaticSnapshot.Reset();
 	CachedStaticNav.Reset();
 	CachedStaticGeneration = MAX_uint64;
+	bWasVisible = false;
 #endif
 	Super::OnUnregister();
+}
+
+void USeinNavDebugComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
+{
+	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+#if UE_ENABLE_DEBUG_DRAWING
+	USeinNavigationSubsystem* Sub = GetWorld() ? GetWorld()->GetSubsystem<USeinNavigationSubsystem>() : nullptr;
+	USeinNavigation* Nav = Sub ? Sub->GetNavigation() : nullptr;
+	if (SubscribedNav.Get() != Nav)
+	{
+		if (USeinNavigation* Previous = SubscribedNav.Get()) Previous->OnNavigationMutated.Remove(NavMutatedHandle);
+		SubscribedNav = Nav;
+		NavMutatedHandle.Reset();
+		if (Nav) NavMutatedHandle = Nav->OnNavigationMutated.AddUObject(this, &USeinNavDebugComponent::HandleNavMutated);
+		bWasVisible = false;
+	}
+	const bool bViewerVisible = UE::SeinARTSNavigation::IsNavigationShowFlagOnForWorld(GetWorld());
+	// All flag entry points (menu, console, PIE inheritance) share this edge.
+	// Hidden mutation remains cheap; the first visible tick recollects blockers.
+	if (bViewerVisible && (!bWasVisible || CachedAppearanceHash != AppearanceHash(Nav)))
+	{
+		CachedAppearanceHash = AppearanceHash(Nav);
+		CachedStaticSnapshot.Reset();
+		MarkRenderStateDirty();
+	}
+	bWasVisible = bViewerVisible;
+#endif
 }
 
 void USeinNavDebugComponent::HandleNavMutated()
 {
 #if UE_ENABLE_DEBUG_DRAWING
 	// Navigation can mutate every fixed tick while units carrying blocker
-	// stamps move. A hidden debug viewer must have zero rebuild cost. Enabling
-	// the showflag explicitly dirties all proxies, so the first visible frame
-	// still receives the latest blocker state.
+	// stamps move. A hidden debug viewer has no rebuild cost. The component's
+	// visibility-edge poll refreshes all activation paths, including the menu.
 	if (!UE::SeinARTSNavigation::IsNavigationShowFlagOnForWorld(GetWorld()))
 	{
 		return;

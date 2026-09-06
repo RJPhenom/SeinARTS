@@ -11,7 +11,7 @@
  *          rejects stale history by colour) if you need it. For a perfectly clean preview on
  *          flat-ish ground, prefer the default mesh backend (ASeinFormationPreviewActor).
  *
- *          Select via a unit's USeinFormationPreviewComponent, or project-wide via
+ *          Select via a unit's USeinNavigationRendererComponent, or project-wide via
  *          USeinARTSCoreSettings::FormationPreviewActorClass. PreviewMaterial
  *          must be a Deferred Decal material (null → engine DefaultDeferredDecalMaterial).
  */

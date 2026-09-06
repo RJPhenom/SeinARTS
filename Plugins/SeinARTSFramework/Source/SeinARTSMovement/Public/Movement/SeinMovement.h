@@ -48,6 +48,23 @@ class USeinWorldSubsystem;
 class UScriptStruct;
 class USeinMoverHandle;
 class USeinPlannerHandle;
+
+#if UE_ENABLE_DEBUG_DRAWING
+/** Non-canonical presentation sample. Written only by this unit's driver;
+ *  never read by simulation policy, serialized, or included in state hashes. */
+struct FSeinSteeringDebugSample
+{
+	int32 DecisionTick = INDEX_NONE;
+	int32 MotionTick = INDEX_NONE;
+	bool bHasHeadings = false;
+	bool bHasTarget = false;
+	bool bHasSettledVelocity = false;
+	FFixedVector DesiredHeading = FFixedVector::ZeroVector;
+	FFixedVector AppliedHeading = FFixedVector::ZeroVector;
+	FFixedVector Target = FFixedVector::ZeroVector;
+	FFixedVector SettledVelocity = FFixedVector::ZeroVector;
+};
+#endif
 struct FSeinMovementCanonicalStateProvider;
 struct FSeinEntity;
 struct FSeinMovementPayload;
@@ -310,6 +327,46 @@ public:
 	 *  BP-authored modes). A mode that needs full control of the tick (the Movement+ vehicles)
 	 *  overrides Tick(Ctx) directly and bypasses the harness + ComputeMotion entirely. */
 	virtual bool Tick(const FSeinMovementContext& Ctx);
+
+	/** Presentation-only readback. Return the actual typed segment cursor while
+	 *  driving segments directly, or INDEX_NONE while following waypoints.
+	 *  Must only observe existing state; never advance the driver from this hook. */
+	virtual int32 GetDebugDrivenSegmentIndex() const { return INDEX_NONE; }
+
+#if UE_ENABLE_DEBUG_DRAWING
+	/** Dispatch-local diagnostics; no UObject/renderer work on worker threads. */
+	void BeginSteeringDebugTick(int32 Tick) const
+	{
+		SteeringDebug.DecisionTick = Tick;
+		SteeringDebug.bHasHeadings = false;
+		SteeringDebug.bHasTarget = false;
+	}
+	void ClearSteeringDebugDecision() const { BeginSteeringDebugTick(INDEX_NONE); }
+	void CaptureSteeringDebugTarget(int32 Tick, const FFixedVector& Target) const
+	{
+		if (SteeringDebug.DecisionTick != Tick) BeginSteeringDebugTick(Tick);
+		SteeringDebug.Target = Target;
+		SteeringDebug.bHasTarget = true;
+	}
+	void CaptureSteeringDebugHeadings(int32 Tick, const FFixedVector& Desired, const FFixedVector& Applied) const
+	{
+		if (SteeringDebug.DecisionTick != Tick) BeginSteeringDebugTick(Tick);
+		SteeringDebug.DesiredHeading = Desired;
+		SteeringDebug.AppliedHeading = Applied;
+		SteeringDebug.bHasHeadings = true;
+	}
+	void CaptureSteeringDebugMotion(int32 Tick, const FFixedVector& Velocity, bool bValid) const
+	{
+		SteeringDebug.MotionTick = Tick;
+		SteeringDebug.SettledVelocity = Velocity;
+		SteeringDebug.bHasSettledVelocity = bValid;
+	}
+	const FSeinSteeringDebugSample& GetSteeringDebugSample() const { return SteeringDebug; }
+
+private:
+	mutable FSeinSteeringDebugSample SteeringDebug;
+public:
+#endif
 
 	/** Enforce exact, nav-safe completion for an authoritative final
 	 *  destination after a movement mode reports arrival. Non-authoritative
@@ -590,34 +647,12 @@ public:
 	virtual FFixedPoint BP_GetMinTurnRadius_Implementation() const { return FFixedPoint::Zero; }
 
 #if UE_ENABLE_DEBUG_DRAWING
-	/** Always-on steering-vector viz for a single entity. Draws:
-	 *    - Yellow horizontal footprint ring (radius `FootprintRadius`) at the
-	 *      entity's XY plane + a small ZLift so it sits above terrain.
-	 *    - Cyan arrow along `Velocity` (world units / sec) — origin offset
-	 *      along the velocity direction by `FootprintRadius` so it isn't
-	 *      occluded by the chassis mesh; length scaled by `VelocityScale`
-	 *      (seconds-of-projected-travel) for readable magnitude at typical
-	 *      sim speeds.
-	 *
-	 *  Decoupled from the per-Tick carrot viz in subclass Tick blocks —
-	 *  that one fires only for entities inside an active move action, this
-	 *  one fires for every entity with a movement component (idle units
-	 *  included). Called from the module's per-world ticker; gating on
-	 *  the SeinSteering show flag and the camera-cull / budget cap happens
-	 *  at the call site. No-op when FootprintRadius <= 0 (intangible units
-	 *  opt out of viz by design).
-	 *
-	 *  Draws the footprint ring + two WORLD-SPACE arrows straight from the entity (NOT rotated
-	 *  by the chassis transform — both inputs are already world vectors): the VELOCITY vector
-	 *  (entity → velocity, at true magnitude) and RED = the local-avoidance steer expressed
-	 *  as the sideways velocity it adds (AvoidanceSteer × speed), comparable to the velocity
-	 *  arrow. Both skip when ~zero. The velocity arrow is TINTED by SpeedScale — orange at 1
-	 *  (neutral), toward red below 1 (avoidance braking / cohesion hold-back), toward green
-	 *  above 1 (cohesion catch-up boost) — so the speed-yield channel is visible per unit.
-	 *  Callers pass zero vectors / One while a unit has no active move order, so a unit at
-	 *  rest shows the ring only (its stored Velocity / AvoidanceOutput may be stale).
-	 *
-	 *  Pure draw — no sim mutation, safe to call off the sim tick. */
+	/** Legacy immediate-draw utility retained for native callers. The Steering
+	 *  view uses its per-view Canvas renderer instead. This utility draws a
+	 *  radius ring, driver velocity, and a speed-scaled raw avoidance request;
+	 *  the red vector is not the correction actually applied by movement.
+	 *  SpeedScale tints the driver arrow. The caller owns gating and freshness.
+	 *  It emits nothing for zero footprint radius. */
 	static void DrawSteeringDebugViz(
 		UWorld* World,
 		const FFixedVector& EntityPos,

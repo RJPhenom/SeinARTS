@@ -29,7 +29,7 @@ See [Plugin Ecosystem](/ecosystem/) for the dependency map.
 
 ## 3. Author units as Blueprints
 
-A unit type is a Blueprint subclass of `ASeinActor`. Its `USeinEntityComponent` bridge exposes a `ComponentData` array containing deterministic component payloads. At spawn, the framework copies those payloads into simulation storage.
+A unit type is a Blueprint subclass of `ASeinActor`. Its `USeinEntityBridgeComponent` carries the deterministic component payloads. Add native or Blueprint-authored SeinARTS data components through the Components panel; the bridge bakes their authored values into `ComponentData` for injection into simulation storage at spawn.
 
 Components remain pure data. Behavior belongs in abilities, effects, AI controllers, command brokers, and simulation systems.
 
@@ -45,3 +45,6 @@ Authoritative simulation code uses fixed-point types, entity handles, and the de
 
 Read [Deterministic Simulation](/core-concepts/deterministic-simulation/) before extending the simulation layer.
 
+## Build the demo from a blank project
+
+Start with [Create the Demo Project](/guides/creating-the-demo-project/). The walkthrough begins with plugin installation and project settings. You create the gameplay assets yourself.

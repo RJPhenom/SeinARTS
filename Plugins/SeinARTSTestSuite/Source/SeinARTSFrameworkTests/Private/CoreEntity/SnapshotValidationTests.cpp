@@ -427,6 +427,32 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(AreEqual(HashBefore, Fixture.World->ComputeStateHash()));
 	}
 
+	TEST(SnapshotRejectsMalformedCooldownProvenanceWithoutMutation,
+		"SeinARTS.Unit.CooldownSharing")
+	{
+		FActorTestSpawner Spawner;
+		FSnapshotAbilityFixture Fixture(Spawner);
+		ASSERT_THAT(IsTrue(Fixture.bBootstrapConsumed));
+		FSeinWorldSnapshot Valid;
+		Fixture.World->CaptureSnapshot(Valid);
+		const int32 HashBefore = Fixture.World->ComputeStateHash();
+		for (int32 Case = 0; Case < 3; ++Case)
+		{
+			FSeinWorldSnapshot Bad = Valid;
+			ASSERT_THAT(IsTrue(FSeinSnapshotPoolTestAccess::RewriteAbilityState(
+				*Fixture.World, Bad.AbilityPoolRecords[Fixture.OrdinaryAbilityID],
+				[&](USeinAbility& Ability)
+				{
+					if (Case == 0) Ability.CooldownSourceActivationID = -1;
+					if (Case == 1) Ability.CooldownSourceActivationID = Valid.NextAbilityActivationID;
+					if (Case == 2) Ability.CooldownRecipientIDs.Add(INDEX_NONE);
+				})));
+			Assert.ExpectError(TEXT("RestoreSnapshot: authoritative sim state failed structural preflight."));
+			ASSERT_THAT(IsFalse(SeinTestSnapshotRestore::RestoreTrusted(*Fixture.World, Bad)));
+			ASSERT_THAT(AreEqual(HashBefore, Fixture.World->ComputeStateHash()));
+		}
+	}
+
 	TEST(SnapshotRejectsInvalidAbilityActivationIdentityWithoutMutation,
 		"SeinARTS.Unit.Snapshot.Latent")
 	{

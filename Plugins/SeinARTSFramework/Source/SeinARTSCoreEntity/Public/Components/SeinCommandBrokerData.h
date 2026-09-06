@@ -121,6 +121,12 @@ struct SEINARTSCOREENTITY_API FSeinCommandBrokerData : public FSeinPayload
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker")
 	bool bSelfCullOnEmpty = true;
 
+	/** Enables Shared Group abilities to copy cooldowns between current members.
+	 *  Set by the owning group system. Temporary selections leave this disabled;
+	 *  broker lifetime alone does not imply cooldown sharing. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Broker")
+	bool bSharesAbilityCooldowns = false;
+
 	/** Lateral extent of the broker's formation, in world units. Maintained by
 	 *  whatever system owns this broker (e.g. a squad system computes this from
 	 *  its slot offsets). Zero = point-sized (no lateral offset in multi-broker
@@ -242,6 +248,7 @@ FORCEINLINE uint32 GetTypeHash(const FSeinCommandBrokerData& Data)
 	Hash = HashCombine(Hash, GetTypeHash(Data.ReseekEpisodeStartTick));
 	Hash = HashCombine(Hash, GetTypeHash(Data.bSettledSlotsMemberAligned));
 	Hash = HashCombine(Hash, GetTypeHash(Data.bAvoidAsCohesiveBody));
+	Hash = HashCombine(Hash, GetTypeHash(Data.bSharesAbilityCooldowns));
 	Hash = HashCombine(Hash, GetTypeHash(Data.bPaceSquadsTogether));
 	Hash = HashCombine(Hash, GetTypeHash(Data.SettledSlotPositions.Num()));
 	for (const FFixedVector& Slot : Data.SettledSlotPositions)

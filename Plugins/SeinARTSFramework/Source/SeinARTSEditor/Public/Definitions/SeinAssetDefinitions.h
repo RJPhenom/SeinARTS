@@ -42,7 +42,9 @@ public:
 	virtual EAssetCommandResult PerformAssetDiff(const FAssetDiffArgs& DiffArgs) const override;
 
 protected:
-	static bool ShouldUseDataOnlyEditor(const UBlueprint* Blueprint);
+	/** Whether a graphless Blueprint may open in the slim data-only defaults
+	 *  view instead of the full editor. Base mirrors the engine's check. */
+	virtual bool ShouldUseDataOnlyEditor(const UBlueprint* Blueprint) const;
 };
 
 /**
@@ -59,6 +61,17 @@ public:
 	virtual FLinearColor GetAssetColor() const override;
 	virtual TSoftClassPtr<UObject> GetAssetClass() const override;
 	virtual TConstArrayView<FAssetCategoryPath> GetAssetCategories() const override;
+
+protected:
+	/** Entity Blueprints NEVER open in the data-only defaults view: their
+	 *  authoring surface is the Sein components panel, which that view can
+	 *  neither show nor add to — a graphless entity (e.g. a research catalog
+	 *  entry) would land in a read-only dead end with its baked ComponentData
+	 *  visible but no way to author it. Always open the full editor. */
+	virtual bool ShouldUseDataOnlyEditor(const UBlueprint* Blueprint) const override
+	{
+		return false;
+	}
 };
 
 /**

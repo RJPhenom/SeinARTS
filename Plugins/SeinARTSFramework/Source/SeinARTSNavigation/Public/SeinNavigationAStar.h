@@ -207,9 +207,11 @@ public:
 	bool bBlockElevatedObstacleTops = true;
 
 	/** Emit cell quads (green = walkable, red = blocked) for the nav debug
-	 *  scene proxy. Gated by `ShowFlags.Navigation` / `Sein.Nav.Show`. */
+	 *  scene proxy. Gated by `ShowFlags.SeinNavigation` / `Sein.Nav.Show`. */
 	UPROPERTY(EditAnywhere, Category = "Debug")
 	bool bDrawCellsInDebug = true;
+
+	virtual uint32 GetDebugAppearanceHash() const override { return GetTypeHash(bDrawCellsInDebug); }
 
 	/** Speed-versus-optimality dial for the A* search, as a percent: 100 means "find the shortest
 	 *  path no matter what," higher means "find a good path faster, accepting up to that-much longer."

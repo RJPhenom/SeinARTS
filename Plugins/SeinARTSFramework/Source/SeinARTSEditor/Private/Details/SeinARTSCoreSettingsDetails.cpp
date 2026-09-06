@@ -5,6 +5,8 @@
 
 #include "Details/SeinARTSCoreSettingsDetails.h"
 
+#include "SeinARTSEditorModule.h"
+
 #include "Util/SeinAutoTagGenerator.h"
 #include "Util/SeinSimulationContentManifestBuilder.h"
 
@@ -59,6 +61,8 @@ void FSeinARTSCoreSettingsDetails::CustomizeDetails(IDetailLayoutBuilder& Detail
 			TEXT("Collision"),
 			TEXT("Navigation"),
 			TEXT("Fog Of War"),
+			TEXT("Cover"),
+			TEXT("Squad"),
 			TEXT("Commands"),
 			TEXT("Network"),
 			TEXT("UI"),
@@ -69,6 +73,53 @@ void FSeinARTSCoreSettingsDetails::CustomizeDetails(IDetailLayoutBuilder& Detail
 		for (const TCHAR* CategoryName : CategoryOrder)
 		{
 			DetailBuilder.EditCategory(CategoryName).SetSortOrder(SortOrder++);
+		}
+	}
+
+	// Optional plugins retain their own UDeveloperSettings objects and INI
+	// sections, but contribute selected properties to this shared page through
+	// an editor-only registry. The framework never includes or names extension
+	// types; disabling an extension simply removes its registration/category.
+	if (const FSeinARTSEditorModule* EditorModule =
+			FModuleManager::GetModulePtr<FSeinARTSEditorModule>(
+				TEXT("SeinARTSEditor")))
+	{
+		TArray<FName> ContributionKeys;
+		EditorModule->GetSettingsCategoryContributions().GenerateKeyArray(
+			ContributionKeys);
+		ContributionKeys.Sort(
+			[](const FName& A, const FName& B)
+			{
+				return A.LexicalLess(B);
+			});
+
+		for (const FName& Key : ContributionKeys)
+		{
+			const FSeinSettingsCategoryContribution* Contribution =
+				EditorModule->GetSettingsCategoryContributions().Find(Key);
+			UObject* SettingsObject = Contribution
+				? Contribution->SettingsObject.Get()
+				: nullptr;
+			if (!Contribution || !IsValid(SettingsObject))
+			{
+				continue;
+			}
+
+			IDetailCategoryBuilder& Category = DetailBuilder.EditCategory(
+				Contribution->CategoryName,
+				FText::GetEmpty(),
+				ECategoryPriority::Default);
+			const TArray<UObject*> ExternalObjects = { SettingsObject };
+			for (const FSeinSettingsPropertyContribution& Property :
+				Contribution->Properties)
+			{
+				Category.AddExternalObjectProperty(
+					ExternalObjects,
+					Property.PropertyName,
+					Property.bAdvanced
+						? EPropertyLocation::Advanced
+						: EPropertyLocation::Default);
+			}
 		}
 	}
 

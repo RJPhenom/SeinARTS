@@ -61,7 +61,7 @@ public:
 	 *
 	 *  Applied to every slot of every visible mesh, so multi-material buildings
 	 *  ghost cleanly across all submaterials. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS|Targeter")
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS")
 	TObjectPtr<UMaterialInterface> GhostMaterial;
 
 	virtual void InitializePreview(USeinTargeterSpec* InSpec, float InAreaRadiusWorld) override;
@@ -71,7 +71,7 @@ protected:
 	 *  AND a single-mesh holder (override / fallback cases). When multi-mesh
 	 *  is built from BuildingClass CDO, this component's own static mesh is
 	 *  cleared and DynamicMeshes attach as children. */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "SeinARTS|Targeter")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	TObjectPtr<UStaticMeshComponent> HologramMesh;
 
 	/** Runtime-cloned mesh components that mirror the BuildingClass CDO's
@@ -79,7 +79,7 @@ protected:
 	 *  for buildings get the right preview type per-source). Each preserves
 	 *  the source's relative transform + ghost material. Empty in the
 	 *  single-mesh-override path. */
-	UPROPERTY(Transient, VisibleAnywhere, BlueprintReadOnly, Category = "SeinARTS|Targeter")
+	UPROPERTY(Transient, VisibleAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	TArray<TObjectPtr<UMeshComponent>> DynamicMeshes;
 
 	virtual void OnPreviewUpdated_Implementation() override;

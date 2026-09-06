@@ -1,10 +1,19 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
- * @file    SeinPlayerController.cpp
- * @brief   RTS player controller implementation.
+ *
+ * @file         SeinPlayerController.cpp
+ * @author       RJ Macklem
+ * @created      28 Feb 2026
+ * @latest       5 Sep 2026
+ * @brief        RTS input, extents-based cursor picking, selection, and commands.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
  */
 
 #include "Player/SeinPlayerController.h"
+#include "Player/SeinCursorTrace.h"
+#include "Player/SeinSelectionPolicy.h"
 #include "Engine/GameInstance.h"
 #include "Player/SeinCameraPawn.h"
 #include "Player/SeinTargeterSubsystem.h"
@@ -38,6 +47,12 @@
 #include "GameFramework/HUD.h"
 #include "DrawDebugHelpers.h"
 #include "HAL/IConsoleManager.h"
+
+namespace
+{
+	/** Calibrates normalized mouse-drag input so pan/rotate modifiers of 1.0 are useful baselines. */
+	constexpr float SeinMouseDragInputCalibration = 10.0f;
+}
 
 #if !UE_BUILD_SHIPPING
 namespace
@@ -306,8 +321,8 @@ void ASeinPlayerController::Tick(float DeltaSeconds)
 	PurgeStaleSelection();
 	LogCameraUpdate();
 
-	// Under-cursor physics trace — drives the targeter preview (which may legitimately
-	// target unit meshes, so it wants the physics hit, not the ground point).
+	// Extents-first cursor query drives entity targeting; world geometry is
+	// only a fallback when no live entity's extents intersect the cursor ray.
 	FHitResult CursorHit;
 	const bool bValidCursorHit = TraceUnderCursor(CursorHit);
 
@@ -428,22 +443,7 @@ void ASeinPlayerController::HandleSelectReleased()
 		return;
 	}
 
-	// Ownership check — only select own entities
-	USeinWorldSubsystem* Subsystem = GetWorldSubsystem();
-	if (Subsystem && HitActor->HasValidEntity())
-	{
-		FSeinPlayerID OwnerID = Subsystem->GetEntityOwner(HitActor->GetEntityHandle());
-		if (OwnerID != SeinPlayerID)
-		{
-			// Clicked an enemy — clear selection (unless modifier held)
-			if (!bShiftHeld && !bCtrlHeld)
-			{
-				ClearSelection();
-			}
-			return;
-		}
-	}
-
+	// The shared selection resolver checks ownership after squad normalization.
 	if (bCtrlHeld)
 	{
 		ToggleSelection(HitActor);
@@ -484,8 +484,7 @@ void ASeinPlayerController::HandleCommandPressed()
 		CommandDragScreenStart = FVector2D(MouseX, MouseY);
 	}
 
-	// Record the target actor (physics trace — must hit unit meshes) and the drag
-	// anchor (GROUND point — must NOT snap to a hovered mesh) at press time.
+	// Record the extents-picked target actor and the independent ground drag anchor.
 	FHitResult Hit;
 	CommandTargetActor = TraceUnderCursor(Hit) ? GetSeinActorFromHit(Hit) : nullptr;
 
@@ -537,7 +536,7 @@ void ASeinPlayerController::HandleCommandReleased()
 	}
 
 	// If not dragging, refresh the target actor from whatever unit is under the cursor
-	// at release time — this needs the physics trace (the ground point ignores meshes).
+	// at release time using its current displayed extents.
 	if (!bIsCommandDragging)
 	{
 		FHitResult Hit;
@@ -633,7 +632,7 @@ void ASeinPlayerController::HandleKeyRotate(FVector2D RotateValue)
 {
 	if (ASeinCameraPawn* CamPawn = Cast<ASeinCameraPawn>(GetPawn()))
 	{
-		// X = yaw around the pivot; Y = pitch tilt. Rates: Key Rotate Speed here, the
+		// X = yaw around the pivot; Y = pitch tilt. Rates: Key Rotate Modifier here, the
 		// pawn's RotationSpeed / TiltSpeed (degrees per second) inside the pawn.
 		CamPawn->HandleRotateInput(RotateValue.X * KeyRotateSpeed);
 		CamPawn->HandleTiltInput(RotateValue.Y * KeyRotateSpeed);
@@ -703,7 +702,8 @@ void ASeinPlayerController::HandleMousePan(FVector2D MouseDelta)
 
 	if (ASeinCameraPawn* CamPawn = Cast<ASeinCameraPawn>(GetPawn()))
 	{
-		CamPawn->HandleMMBPanInput(MouseDelta * MousePanSpeed);
+		CamPawn->HandleMMBPanInput(
+			MouseDelta * MousePanSpeed * SeinMouseDragInputCalibration);
 	}
 }
 
@@ -718,7 +718,8 @@ void ASeinPlayerController::HandleMouseRotate(FVector2D MouseDelta)
 	if (ASeinCameraPawn* CamPawn = Cast<ASeinCameraPawn>(GetPawn()))
 	{
 		// Axis2D: X = yaw orbit, Y = pitch tilt — both per pixel in the pawn.
-		CamPawn->HandleOrbitInput(MouseDelta * MouseRotateSpeed);
+		CamPawn->HandleOrbitInput(
+			MouseDelta * MouseRotateSpeed * SeinMouseDragInputCalibration);
 	}
 }
 
@@ -907,8 +908,7 @@ TArray<ASeinActor*> ASeinPlayerController::GatherOwnedSelectableActors(UClass* M
 		return Out;
 	}
 
-	// Same eligibility rules as marquee/click selection (live own entity), plus the
-	// entity's selectable flag — a sweep must not grab what a click could not.
+	// Resolve eligibility after squad normalization, just as for click and marquee.
 	Bridge->ForEachRegisteredActor(
 		[&](FSeinEntityHandle Handle, ASeinActor& Actor)
 		{
@@ -916,12 +916,7 @@ TArray<ASeinActor*> ASeinPlayerController::GatherOwnedSelectableActors(UClass* M
 			{
 				return;
 			}
-			if (Subsystem->GetEntityOwner(Handle) != SeinPlayerID)
-			{
-				return;
-			}
-			const FSeinEntity* Entity = Subsystem->GetEntity(Handle);
-			if (!Entity || !Entity->IsSelectable())
+			if (!SeinSelectionPolicy::ResolveEligibleActor(*World, SeinPlayerID, &Actor))
 			{
 				return;
 			}
@@ -965,123 +960,42 @@ void ASeinPlayerController::HandleMenu()
 TArray<ASeinActor*> ASeinPlayerController::ResolveSelectionToSquads(const TArray<ASeinActor*>& Input)
 {
 	TArray<ASeinActor*> Out;
-	Out.Reserve(Input.Num());
-
 	for (ASeinActor* Actor : Input)
 	{
-		if (!Actor) continue;
-
-		// Default: pass the actor through unchanged.
-		ASeinActor* Effective = Actor;
-
-		// Squad-resolution: if this actor's entity is a squad member, swap to
-		// the squad's actor. Members are never selectable directly.
-		UWorld* World = Actor->GetWorld();
-		USeinWorldSubsystem* Sim = World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
-		if (Sim)
+		if (!IsValid(Actor) || !Actor->GetWorld()) continue;
+		if (ASeinActor* Resolved = SeinSelectionPolicy::ResolveActor(*Actor->GetWorld(), Actor))
 		{
-			const FSeinEntityHandle Handle = Actor->GetEntityHandle();
-			if (const FSeinSquadMemberPayload* MemberData = Sim->GetComponent<FSeinSquadMemberPayload>(Handle))
-			{
-				if (MemberData->SquadEntity.IsValid())
-				{
-					if (USeinActorBridgeSubsystem* Bridge = World->GetSubsystem<USeinActorBridgeSubsystem>())
-					{
-						if (ASeinActor* SquadActor = Bridge->GetActorForEntity(MemberData->SquadEntity))
-						{
-							Effective = SquadActor;
-						}
-						else
-						{
-							// Squad entity exists but its actor isn't bridged yet (race
-							// during spawn). Skip — the member-click is dropped, not the
-							// edge case where we'd accidentally select the member.
-							continue;
-						}
-					}
-				}
-			}
+			Out.AddUnique(Resolved);
 		}
-
-		Out.AddUnique(Effective);
 	}
-
 	return Out;
 }
 
 void ASeinPlayerController::SetSelection(const TArray<ASeinActor*>& NewSelection)
 {
-	// Squad-resolve the input — clicking on a member swaps to its squad.
-	const TArray<ASeinActor*> Resolved = ResolveSelectionToSquads(NewSelection);
-
-	// Deselect old
-	for (const TWeakObjectPtr<ASeinActor>& Weak : SelectedActors)
-	{
-		if (ASeinActor* Actor = Weak.Get())
-		{
-			// Selection-visual hooks: subscribe to USeinEntityBridgeComponent::OnVisualEvent
-			// from a designer-authored render AC if you need per-actor selection
-			// state on the unit BP. Framework no longer ships a per-actor
-			// selection component.
-		}
-	}
-
-	// Build new selection
-	SelectedActors.Reset();
-	for (ASeinActor* Actor : Resolved)
-	{
-		if (Actor && Actor->HasValidEntity())
-		{
-			SelectedActors.AddUnique(Actor);
-		}
-	}
-
-	// Select new
-	for (const TWeakObjectPtr<ASeinActor>& Weak : SelectedActors)
-	{
-		if (ASeinActor* Actor = Weak.Get())
-		{
-			// Per-actor selection visuals: drop a designer render AC subscribed
-			// to USeinEntityBridgeComponent::OnVisualEvent if needed.
-		}
-	}
-
-	// Reset focus to "All"
-	ActiveFocusIndex = -1;
-
-	NotifySelectionUpdated();
+	ApplySelectionCandidates(NewSelection, false, false);
 }
 
 void ASeinPlayerController::AddToSelection(const TArray<ASeinActor*>& ActorsToAdd)
 {
-	// Squad-resolve before dedup logic.
-	const TArray<ASeinActor*> Resolved = ResolveSelectionToSquads(ActorsToAdd);
-	for (ASeinActor* Actor : Resolved)
-	{
-		if (!Actor || !Actor->HasValidEntity())
-		{
-			continue;
-		}
+	ApplySelectionCandidates(ActorsToAdd, true, false);
+}
 
-		// Skip duplicates
-		bool bAlreadySelected = false;
-		for (const TWeakObjectPtr<ASeinActor>& Weak : SelectedActors)
-		{
-			if (Weak.Get() == Actor)
-			{
-				bAlreadySelected = true;
-				break;
-			}
-		}
-
-		if (!bAlreadySelected)
-		{
-			SelectedActors.Add(Actor);
-			// Per-actor selection visuals: drop a designer render AC subscribed
-			// to USeinEntityBridgeComponent::OnVisualEvent if needed.
-		}
-	}
-
+void ASeinPlayerController::ApplySelectionCandidates(
+	const TArray<ASeinActor*>& Candidates, bool bAdditive, bool bDrag)
+{
+	UWorld* World = GetWorld();
+	if (!World) return;
+	TArray<ASeinActor*> Previous;
+	for (const TWeakObjectPtr<ASeinActor>& Weak : SelectedActors) Previous.Add(Weak.Get());
+	ASeinActor* PreviousFocus = GetFocusedActor();
+	const TArray<ASeinActor*> Resolved = SeinSelectionPolicy::Resolve(
+		*World, SeinPlayerID, bAdditive ? Previous : TArray<ASeinActor*>(), Candidates, bDrag);
+	const int32 NewFocus = bAdditive && PreviousFocus ? Resolved.IndexOfByKey(PreviousFocus) : INDEX_NONE;
+	if (Previous == Resolved && ActiveFocusIndex == NewFocus) return;
+	SelectedActors.Reset(Resolved.Num());
+	for (ASeinActor* Actor : Resolved) SelectedActors.Add(Actor);
+	ActiveFocusIndex = NewFocus;
 	NotifySelectionUpdated();
 }
 
@@ -1110,10 +1024,14 @@ void ASeinPlayerController::ToggleSelection(ASeinActor* InActor)
 			// Deselect — selection-visual hooks live on designer render ACs now.
 			SelectedActors.RemoveAt(i);
 
-			// Reset focus if it pointed at or past the removed index
-			if (ActiveFocusIndex >= SelectedActors.Num())
+			// Keep focus attached to the same actor when an earlier entry is removed.
+			if (ActiveFocusIndex == i)
 			{
 				ActiveFocusIndex = -1;
+			}
+			else if (ActiveFocusIndex > i)
+			{
+				--ActiveFocusIndex;
 			}
 
 			NotifySelectionUpdated();
@@ -1122,7 +1040,7 @@ void ASeinPlayerController::ToggleSelection(ASeinActor* InActor)
 	}
 
 	// Not in selection — add it
-	AddToSelection({Actor});
+	AddToSelection({InActor});
 }
 
 void ASeinPlayerController::ClearSelection()
@@ -1176,19 +1094,10 @@ ASeinActor* ASeinPlayerController::GetFocusedActor() const
 
 TArray<ASeinActor*> ASeinPlayerController::GetValidSelectedActors()
 {
-	TArray<ASeinActor*> Valid;
-	Valid.Reserve(SelectedActors.Num());
-
-	for (const TWeakObjectPtr<ASeinActor>& Weak : SelectedActors)
-	{
-		ASeinActor* Actor = Weak.Get();
-		if (Actor && Actor->HasValidEntity())
-		{
-			Valid.Add(Actor);
-		}
-	}
-
-	return Valid;
+	TArray<ASeinActor*> Current;
+	for (const TWeakObjectPtr<ASeinActor>& Weak : SelectedActors) Current.Add(Weak.Get());
+	UWorld* World = GetWorld();
+	return World ? SeinSelectionPolicy::Resolve(*World, SeinPlayerID, Current, {}) : TArray<ASeinActor*>();
 }
 
 // ==================== Control Groups ====================
@@ -1200,6 +1109,7 @@ void ASeinPlayerController::AssignControlGroup(int32 GroupIndex)
 		return;
 	}
 
+	PurgeStaleSelection();
 	ControlGroups[GroupIndex].Reset();
 	for (const TWeakObjectPtr<ASeinActor>& Weak : SelectedActors)
 	{
@@ -1275,37 +1185,7 @@ int32 ASeinPlayerController::GetControlGroupCount(int32 GroupIndex) const
 
 void ASeinPlayerController::ReceiveMarqueeSelection(const TArray<ASeinActor*>& ActorsInBox)
 {
-	// Filter to owned entities
-	USeinWorldSubsystem* Subsystem = GetWorldSubsystem();
-	TArray<ASeinActor*> OwnedActors;
-
-	for (ASeinActor* Actor : ActorsInBox)
-	{
-		if (!Actor || !Actor->HasValidEntity())
-		{
-			continue;
-		}
-
-		if (Subsystem)
-		{
-			FSeinPlayerID OwnerID = Subsystem->GetEntityOwner(Actor->GetEntityHandle());
-			if (OwnerID != SeinPlayerID)
-			{
-				continue;
-			}
-		}
-
-		OwnedActors.Add(Actor);
-	}
-
-	if (bShiftHeld)
-	{
-		AddToSelection(OwnedActors);
-	}
-	else
-	{
-		SetSelection(OwnedActors);
-	}
+	ApplySelectionCandidates(ActorsInBox, bShiftHeld, true);
 }
 
 // ==================== Command Resolution ====================
@@ -1399,6 +1279,7 @@ void ASeinPlayerController::IssueSmartCommandEx(
 	const FVector& WorldLocation, ASeinActor* TargetActor, bool bQueue,
 	const TArray<FVector>& GuidePoints, FGameplayTag FormationTag)
 {
+	PurgeStaleSelection();
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem();
 	if (!Subsystem)
 	{
@@ -1664,12 +1545,9 @@ bool ASeinPlayerController::TraceUnderCursor(FHitResult& OutHit) const
 		return false;
 	}
 
-	const FVector TraceEnd = WorldOrigin + WorldDirection * TraceDistance;
-
-	FCollisionQueryParams Params;
-	Params.bTraceComplex = false;
-
-	return GetWorld()->LineTraceSingleByChannel(OutHit, WorldOrigin, TraceEnd, SelectionTraceChannel, Params);
+	UWorld* World = GetWorld();
+	return World && (SeinCursorTrace::TraceEntities(*World, WorldOrigin, WorldDirection, TraceDistance, OutHit)
+		|| SeinCursorTrace::TraceEnvironment(*World, WorldOrigin, WorldDirection, TraceDistance, SelectionTraceChannel, OutHit));
 }
 
 namespace
@@ -1702,11 +1580,12 @@ bool ASeinPlayerController::GetGroundPointUnderCursor(FVector& OutWorld) const
 	FVector Origin, Dir;
 	if (!DeprojectScreenPositionToWorld(MouseX, MouseY, Origin, Dir)) return false;
 
-	// Seed the ground altitude from the physics selection trace. Only its Z is used
-	// (a hovered unit/prop still stands near ground level); its XY is discarded. This
-	// call also doubles as the graceful fallback when there is no baked level data.
+	// Ground resolution ignores every Sein actor, regardless of its mesh collision
+	// settings. Only world geometry seeds the baked height-field solve.
 	FHitResult SeedHit;
-	if (!TraceUnderCursor(SeedHit)) return false;   // cursor off the world entirely
+	UWorld* World = GetWorld();
+	if (!World || !SeinCursorTrace::TraceEnvironment(*World, Origin, Dir,
+		TraceDistance, SelectionTraceChannel, SeedHit)) return false;
 
 	// Analytic resolve against the baked level-data height field — the same static
 	// ground the nav grid is derived from. Because it intersects a height field rather
@@ -1853,45 +1732,15 @@ void ASeinPlayerController::UpdateCommandDrag()
 
 void ASeinPlayerController::PurgeStaleSelection()
 {
-	bool bChanged = false;
-
-	for (int32 i = SelectedActors.Num() - 1; i >= 0; --i)
-	{
-		ASeinActor* Actor = SelectedActors[i].Get();
-		if (!Actor || !Actor->HasValidEntity())
-		{
-			SelectedActors.RemoveAt(i);
-			bChanged = true;
-		}
-	}
-
-	// Control-group cleanup (DESIGN §15). Dead entity handles linger as stale
-	// entries in group arrays; drop them deterministically each tick so recall-
-	// group and group-count BPFLs return accurate live counts. Check handle
-	// validity against the sim pool — generation counters let us detect
-	// recycled slots safely.
+	// Revalidate current selection without reordering it or changing a retained
+	// focused actor. This also handles runtime selectability/policy/ownership edits.
+	ApplySelectionCandidates({}, true, false);
 	if (USeinWorldSubsystem* Sub = GetWorldSubsystem())
 	{
-		for (int32 Group = 0; Group < 10; ++Group)
+		for (TArray<FSeinEntityHandle>& Group : ControlGroups)
 		{
-			TArray<FSeinEntityHandle>& Handles = ControlGroups[Group];
-			const int32 Before = Handles.Num();
-			Handles.RemoveAll([Sub](const FSeinEntityHandle& H)
-			{
-				return !Sub->IsEntityAlive(H);
-			});
-			(void)Before; // reserved for telemetry if control-group-changed events land later
+			Group.RemoveAll([Sub](const FSeinEntityHandle& Handle) { return !Sub->IsEntityAlive(Handle); });
 		}
-	}
-
-	if (bChanged)
-	{
-		// Clamp focus index
-		if (ActiveFocusIndex >= SelectedActors.Num())
-		{
-			ActiveFocusIndex = -1;
-		}
-		NotifySelectionUpdated();
 	}
 }
 
@@ -2062,6 +1911,7 @@ float ASeinPlayerController::GetResourceCap(FGameplayTag ResourceTag) const
 void ASeinPlayerController::IssueTargetedAbility(FGameplayTag AbilityTag,
 	FSeinEntityHandle OwnerLeader, const TArray<FSeinTargeterPoint>& Points)
 {
+	PurgeStaleSelection();
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem();
 	if (!Subsystem || !AbilityTag.IsValid())
 	{

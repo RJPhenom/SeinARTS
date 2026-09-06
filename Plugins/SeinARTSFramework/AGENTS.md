@@ -162,6 +162,10 @@ Movement+ Vehicle Gym and product-feel decision.
 - Input and UI may mutate sim only through commands.
 - `SeinARTSEditor` exposes a keyed component-data draw registry. Extensions own both registration
   and unregistration and must use stable unique keys.
+- `SeinARTSEditor` also exposes an editor-only Project Settings contribution registry. Optional
+  plugins keep their own `UDeveloperSettings` objects and INI sections, then their editor modules
+  register external properties for display on the shared SeinARTS page. Framework compiled code
+  must never include or resolve the contributing extension types.
 - Editor-only random authoring is permitted only when its fixed-point result is serialized and
   runtime behavior never repeats the random operation.
 

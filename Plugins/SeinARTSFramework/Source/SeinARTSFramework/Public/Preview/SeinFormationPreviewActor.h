@@ -23,7 +23,7 @@
  *              custom-data tint; one draw call, scales to huge formations.
  *          A project can author a fully custom backend in C++ (or Blueprint, by
  *          overriding the BlueprintNativeEvent hooks) — e.g. a Niagara-driven look.
- *          The class is picked per unit by its USeinFormationPreviewComponent
+ *          The class is picked per unit by its USeinNavigationRendererComponent
  *          (whose presence is also the render opt-in), falling back to
  *          USeinARTSCoreSettings::FormationPreviewActorClass as the project
  *          default.

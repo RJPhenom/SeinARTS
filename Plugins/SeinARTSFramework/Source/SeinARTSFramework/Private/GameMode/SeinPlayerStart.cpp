@@ -1,11 +1,20 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
- * @file    SeinPlayerStart.cpp
- * @brief   RTS player start implementation.
+ *
+ * @file         SeinPlayerStart.cpp
+ * @author       RJ Macklem
+ * @created      2 Jun 2026
+ * @latest       4 Sep 2026
+ * @brief        Keeps authored player-start transforms synchronized for deterministic spawning.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
  */
 
 #include "GameMode/SeinPlayerStart.h"
 #include "EngineUtils.h"
+#include "Components/SceneComponent.h"
+#include "Misc/CoreMisc.h"
 #include "Engine/World.h"
 #include "Settings/PluginSettings.h"
 #include "UObject/ObjectSaveContext.h"
@@ -55,72 +64,98 @@ FSeinMatchSettings ASeinPlayerStart::SynthesizeMatchSettingsFromLevel(UWorld* Wo
 	return Out;
 }
 
-void ASeinPlayerStart::PostLoad()
-{
-	Super::PostLoad();
-
 #if WITH_EDITOR
-	// Self-heal a legacy placement the moment it loads in the editor:
-	// levels saved before PlacedSimTransform existed deserialize with
-	// bSimTransformBaked=false and would fail the bootstrap's fail-closed
-	// baked-transform check forever (PostEditMove only fires on an actual
-	// move, and a clean package never reaches PreSave). Baking here makes
-	// the in-memory actor — and every PIE duplicate of it — valid
-	// immediately; the upgrade persists whenever the level is next saved.
-	// Editor-only on purpose: cooked clients must NOT convert at load
-	// (float→fixed is not bit-identical across architectures), so an
-	// unbaked level in a shipped build still fails closed.
-	// Components are not registered yet at PostLoad, so the composed
-	// GetActorTransform() is not trustworthy here — read the serialized
-	// relative transform off the root, which IS world space for a placed
-	// (unattached) actor. If somehow rootless, leave unbaked: the check
-	// stays fail-closed rather than baking an identity transform.
-	if (!bSimTransformBaked && !IsTemplate())
+void ASeinPlayerStart::RefreshPlacedSimTransform()
+{
+	UWorld* World = GetWorld();
+	if (IsTemplate() || !World || World->WorldType != EWorldType::Editor
+		|| IsRunningCookCommandlet() || !GetRootComponent()
+		|| !GetRootComponent()->IsRegistered())
 	{
-		if (const USceneComponent* Root = GetRootComponent())
-		{
-			PlacedSimTransform = FFixedTransform::FromTransform(FTransform(
-				Root->GetRelativeRotation(),
-				Root->GetRelativeLocation(),
-				Root->GetRelativeScale3D()));
-			bSimTransformBaked = true;
-		}
+		return;
 	}
-#endif
-}
 
-#if WITH_EDITOR
-void ASeinPlayerStart::PostEditMove(bool bFinished)
-{
-	Super::PostEditMove(bFinished);
-
-	// Editor-process snapshot — same pattern as ASeinActor. Conversion
-	// runs once in the editor, the FFixedTransform serializes to the .umap,
-	// and every client (PC, ARM Mac, Surface ARM, mobile, console) reads
-	// identical int64 bits at level load. Cross-arch lockstep safe.
-	PlacedSimTransform = FFixedTransform::FromTransform(GetActorTransform());
-	bSimTransformBaked = true;
-
-	if (bFinished)
+	const FFixedTransform Current = FFixedTransform::FromTransform(GetActorTransform());
+	if (!bSimTransformBaked || PlacedSimTransform != Current)
 	{
+		Modify();
+		PlacedSimTransform = Current;
+		bSimTransformBaked = true;
 		MarkPackageDirty();
 	}
 }
 
+void ASeinPlayerStart::UnbindAuthoringTransform()
+{
+	if (USceneComponent* Root = AuthoringTransformRoot.Get())
+	{
+		Root->TransformUpdated.Remove(AuthoringTransformHandle);
+	}
+	AuthoringTransformRoot.Reset();
+	AuthoringTransformHandle.Reset();
+}
+
+void ASeinPlayerStart::PostRegisterAllComponents()
+{
+	Super::PostRegisterAllComponents();
+	UnbindAuthoringTransform();
+	UWorld* World = GetWorld();
+	if (IsTemplate() || !World || World->WorldType != EWorldType::Editor
+		|| IsRunningCookCommandlet())
+	{
+		return;
+	}
+
+	if (USceneComponent* Root = GetRootComponent())
+	{
+		AuthoringTransformRoot = Root;
+		AuthoringTransformHandle = Root->TransformUpdated.AddWeakLambda(this,
+			[this](USceneComponent* UpdatedComponent, EUpdateTransformFlags, ETeleportType)
+			{
+				if (UpdatedComponent == GetRootComponent())
+				{
+					RefreshPlacedSimTransform();
+				}
+			});
+	}
+	// Registration provides the composed world transform, including attachments.
+	// This also repairs legacy or stale snapshots when their map opens in editor.
+	RefreshPlacedSimTransform();
+}
+
+void ASeinPlayerStart::PostUnregisterAllComponents()
+{
+	UnbindAuthoringTransform();
+	Super::PostUnregisterAllComponents();
+}
+
+void ASeinPlayerStart::PostEditMove(bool bFinished)
+{
+	Super::PostEditMove(bFinished);
+	RefreshPlacedSimTransform();
+}
+
+void ASeinPlayerStart::PostEditUndo()
+{
+	Super::PostEditUndo();
+	RefreshPlacedSimTransform();
+}
+
 void ASeinPlayerStart::PreSave(FObjectPreSaveContext SaveContext)
 {
-	Super::PreSave(SaveContext);
-
-	// Upgrade-on-save for placements that predate the baked snapshot: the
-	// bootstrap fails closed on an unbaked start with "re-save the level",
-	// so a plain save must actually perform the bake. Already-baked starts
-	// are left untouched — only PostEditMove re-bakes, when the designer
-	// actually moved the actor.
-	if (!bSimTransformBaked && !IsTemplate())
+	// Saving must repair an already-baked stale snapshot too. Never convert in
+	// cook or game worlds: peers must retain the author's serialized int64 bits.
+	if (!SaveContext.IsCooking())
 	{
-		PlacedSimTransform =
-			FFixedTransform::FromTransform(GetActorTransform());
-		bSimTransformBaked = true;
+		RefreshPlacedSimTransform();
 	}
+	Super::PreSave(SaveContext);
+}
+
+void ASeinPlayerStart::PostEditUndo(TSharedPtr<ITransactionObjectAnnotation> TransactionAnnotation)
+{
+	// ANavigationObjectBase's no-argument override hides the actor overload.
+	AActor::PostEditUndo(TransactionAnnotation);
+	RefreshPlacedSimTransform();
 }
 #endif

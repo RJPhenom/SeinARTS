@@ -3,6 +3,9 @@
 #include "SeinARTSFramework.h"
 
 #include "Debug/SeinCommandLogSubsystem.h"
+#include "Debug/SeinSteeringDebugSelection.h"
+#include "Player/SeinPlayerController.h"
+#include "Actor/SeinActor.h"
 #include "GameMode/SeinGameMode.h"
 #include "GameMode/SeinMatchBootstrapSubsystem.h"
 #include "GameMode/SeinPlayerStart.h"
@@ -20,6 +23,9 @@ DEFINE_LOG_CATEGORY_STATIC(LogSeinARTSFrameworkModule, Log, All);
 
 namespace
 {
+#if UE_ENABLE_DEBUG_DRAWING
+	FDelegateHandle SteeringSelectionHandle;
+#endif
 	const FName PIESeamlessTravelOverrideTag(
 		TEXT("SeinARTSFramework"));
 
@@ -40,6 +46,15 @@ namespace
 
 void FSeinARTSFrameworkModule::StartupModule()
 {
+#if UE_ENABLE_DEBUG_DRAWING
+	SteeringSelectionHandle = UE::SeinARTSMovement::SteeringDebugSelectionQuery().AddLambda(
+		[](APlayerController* Player, TArray<FSeinEntityHandle>& Out)
+		{
+			if (const auto* Controller = Cast<ASeinPlayerController>(Player))
+				for (const auto& WeakActor : Controller->SelectedActors)
+					if (const ASeinActor* Actor = WeakActor.Get()) Out.AddUnique(Actor->GetEntityHandle());
+		});
+#endif
 	SimulationContentRegistrationHandle.Reset();
 
 #if WITH_EDITOR
@@ -101,6 +116,10 @@ void FSeinARTSFrameworkModule::ShutdownModule()
 void FSeinARTSFrameworkModule::ReleaseModuleOwnedState()
 {
 	check(IsInGameThread());
+#if UE_ENABLE_DEBUG_DRAWING
+	UE::SeinARTSMovement::SteeringDebugSelectionQuery().Remove(SteeringSelectionHandle);
+	SteeringSelectionHandle.Reset();
+#endif
 
 	// Core owns the deterministic callbacks and payloads that can point into
 	// this module. Fail the live topology and drop those roots first.

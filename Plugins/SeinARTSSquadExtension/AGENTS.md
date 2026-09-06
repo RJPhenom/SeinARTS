@@ -8,9 +8,15 @@ behavior and this concise guide win when they conflict.
 ## Boundary and dependency
 
 - Runtime module: `SeinARTSSquad`.
+- Editor companion: `SeinARTSSquadEditor`, which contributes Squad-owned settings to the shared
+  SeinARTS Project Settings page through the generic framework-editor registry.
 - Required dependency: `SeinARTSFramework` and its core modules.
 - The framework owns neutral squad data; this extension owns all squad behavior.
 - The framework must continue to build and run when this extension is absent.
+
+The editor dependency follows the same direction: `SeinARTSSquadEditor` may depend on
+`SeinARTSEditor`, but no framework module may include or name a Squad type. The settings object,
+INI section, and fingerprint contributor remain runtime-owned by `SeinARTSSquad`.
 
 Core-defined data includes `FSeinSquadPayload`, `FSeinSquadMemberPayload`, slots,
 reinforcement entries, containment mode, and squad visual-event factories. This plugin adds the

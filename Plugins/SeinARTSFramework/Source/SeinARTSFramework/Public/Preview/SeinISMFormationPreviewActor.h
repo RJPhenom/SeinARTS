@@ -17,7 +17,7 @@
  *          quality provider is bound). The ring's shape is owned by the material;
  *          per-member radius is handled by instance scale.
  *
- *          Select via a unit's USeinFormationPreviewComponent, or project-wide via
+ *          Select via a unit's USeinNavigationRendererComponent, or project-wide via
  *          USeinARTSCoreSettings::FormationPreviewActorClass.
  */
 

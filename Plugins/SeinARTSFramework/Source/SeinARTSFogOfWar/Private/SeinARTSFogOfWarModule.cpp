@@ -6,8 +6,8 @@
  *          Registers `ShowFlags.FogOfWar` (custom show flag — UE doesn't
  *          ship one out of the box) and the `Sein.FogOfWar.Show`
  *          console command that toggles it across all viewports — same UX
- *          as nav's `Sein.Nav.Show` against the built-in
- *          `ShowFlags.Navigation`. Menu-item icon resolves via
+ *          as nav's `Sein.Nav.Show` against the custom
+ *          `ShowFlags.SeinNavigation`. Menu-item icon resolves via
  *          `ShowFlagsMenu.FogOfWar` in the SeinARTSEditor style set
  *          (SeinGrayIcon16.svg).
  *
@@ -50,6 +50,9 @@
 #include "Engine/GameViewportClient.h"
 #include "UObject/UObjectIterator.h"
 #include "Debug/SeinFogOfWarDebugComponent.h"
+#include "Debug/SeinDebugLegend.h"
+#include "Debug/DebugDrawService.h"
+#include "SceneInterface.h"
 #include "Volumes/SeinLevelVolume.h"
 #include "Settings/PluginSettings.h"
 #include "Data/SeinVisionLayerDefinition.h"
@@ -99,22 +102,23 @@ namespace
 // Custom show flag registration. TCustomShowFlag ctor auto-calls
 // FEngineShowFlags::RegisterCustomShowFlag on static init (module-load time,
 // which is game-thread for Runtime modules). The show-flag menu queries
-// registered custom flags when opened; this is all that's needed for "Fog Of
-// War" to appear under the Custom group with the registered icon.
+// registered custom flags when opened. The SeinARTSEditor module surfaces this
+// flag through its first-class SeinARTS submenu instead of Unreal's generic
+// Custom group.
 //
 // Named namespace so the debug viz component (added in the next pass) can
 // query the same flag via FEngineShowFlags::FindIndexByName(TEXT("FogOfWar"))
 // without needing a link-time reference to this translation unit.
 namespace UE::SeinARTSFogOfWar
 {
-	// SFG_Custom keeps the runtime flag in the level/PIE viewport's Show menu
-	// while respecting the SCS Blueprint viewport's built-in custom-group
-	// filter. Blueprint authoring visualization is separately always-on while
-	// the entity bridge is selected and must not expose runtime toggles.
+	// SFG_Hidden keeps the runtime registration out of Unreal's fixed built-in
+	// groups. SeinARTSEditor supplies the level/PIE menu; Blueprint authoring
+	// visualization remains separately always-on while the entity bridge is
+	// selected and must not expose runtime toggles.
 	static TCustomShowFlag<> ShowFogOfWar(
 		TEXT("FogOfWar"),
 		/*DefaultEnabled*/ false,
-		SFG_Custom,
+		SFG_Hidden,
 		NSLOCTEXT("SeinARTSFogOfWar", "ShowFogOfWar", "Fog Of War"));
 }
 
@@ -123,6 +127,46 @@ namespace
 	IConsoleCommand* GShowFogOfWarCmd = nullptr;
 	IConsoleCommand* GPlayerPerspectiveCmd = nullptr;
 	IConsoleCommand* GLayerPerspectiveCmd = nullptr;
+	FDelegateHandle GFogLegendHandle;
+
+	static void DrawFogLegend(UCanvas* Canvas, APlayerController*)
+	{
+		using namespace UE::SeinARTS::DebugLegend;
+		using namespace UE::SeinARTSFogOfWar;
+		if (!Canvas || !Canvas->SceneView || !Canvas->SceneView->Family || !Canvas->SceneView->Family->Scene) return;
+		UWorld* World = Canvas->SceneView->Family->Scene->GetWorld();
+		if (!World) return;
+		const FPanel Panel(Canvas, EPanel::FogOfWar);
+		if (!Panel.IsVisible()) return;
+		FSeinPlayerID Observer;
+		const bool bOverride = TryGetDebugObserverOverride(Observer);
+		if (!bOverride) Observer = ResolveLocalObserverPlayerID(World);
+		int32 Bit = 1;
+		TryGetDebugLayerOverride(Bit);
+		const auto* Settings = GetDefault<USeinARTSCoreSettings>();
+		FString Layer = Bit == 0 ? TEXT("Explored") : TEXT("Normal");
+		if (Bit >= 2) Layer = Settings->VisionLayers.IsValidIndex(Bit - 2)
+			? Settings->VisionLayers[Bit - 2].LayerName.ToString() : TEXT("Unconfigured");
+		Panel.Text(8, FString::Printf(TEXT("Fog of War: player %u (%s) | layer %d: %s"), Observer.Value,
+			bOverride ? TEXT("override") : TEXT("world local observer"), Bit, *Layer), FLinearColor::White);
+		const auto* Sub = World->GetSubsystem<USeinFogOfWarSubsystem>();
+		const USeinFogOfWar* Fog = Sub ? Sub->GetFogOfWar() : nullptr;
+		const bool bRuntime = Fog && Fog->HasRuntimeData();
+		Panel.Text(24, bRuntime ? TEXT("Runtime cell overlay | distance / frustum / per-color budget limited")
+			: TEXT("No runtime grid: red volume preview where a level volume is present"), FLinearColor::White);
+		Panel.Text(40, Bit == 0 ? TEXT("Layer color: explored cells (default implementation)")
+			: TEXT("Layer color: cells visible on the chosen layer (default implementation)"), FLinearColor(GetDebugLayerColor(Bit)));
+		Panel.Text(56, TEXT("Red: dynamic blockers, or static blockers without visibility"), FLinearColor(1, 0.15f, 0.15f));
+		Panel.Text(72, TEXT("Black: remaining cells without the chosen layer bit; red wins for dynamic blockers"), FLinearColor(0.75f, 0.75f, 0.75f));
+		Panel.Text(88, TEXT("No grid / empty collector: red fallback is coverage, not a visibility result"), FLinearColor(1, 0.65f, 0));
+		Panel.Text(104, TEXT("Perspective: Sein.FogOfWar.Show.Player <id> / Sein.FogOfWar.Show.Layer <0..7>"), FLinearColor::White);
+	}
+
+	static void ReleaseFogLegend()
+	{
+		if (GFogLegendHandle.IsValid()) UDebugDrawService::Unregister(GFogLegendHandle);
+		GFogLegendHandle.Reset();
+	}
 
 	// Debug observer override. -1 = no override (use local PC). 0..255 = pinned
 	// FSeinPlayerID::Value. Lockstep sim is symmetric so every client's
@@ -332,6 +376,8 @@ void FSeinARTSFogOfWarModule::StartupModule()
 	// other way — so layer modules push their debug component classes into its
 	// registry; see ASeinLevelVolume::PostRegisterAllComponents).
 	ASeinLevelVolume::RegisterDebugComponentClass(USeinFogOfWarDebugComponent::StaticClass());
+	if (!GFogLegendHandle.IsValid())
+		GFogLegendHandle = UDebugDrawService::Register(TEXT("FogOfWar"), FDebugDrawDelegate::CreateStatic(&DrawFogLegend));
 
 	if (!GShowFogOfWarCmd)
 	{
@@ -367,6 +413,7 @@ void FSeinARTSFogOfWarModule::PreUnloadCallback()
 #if UE_ENABLE_DEBUG_DRAWING
 	// Destroys live components and drains their scene proxies before this
 	// module's component vtable can disappear.
+	ReleaseFogLegend();
 	ASeinLevelVolume::UnregisterDebugComponentClass(
 		USeinFogOfWarDebugComponent::StaticClass());
 #endif
@@ -410,6 +457,7 @@ void FSeinARTSFogOfWarModule::ShutdownModule()
 	// SeinARTSFogOfWarEditor — see file header.
 
 #if UE_ENABLE_DEBUG_DRAWING
+	ReleaseFogLegend();
 	ASeinLevelVolume::UnregisterDebugComponentClass(USeinFogOfWarDebugComponent::StaticClass());
 
 	if (GShowFogOfWarCmd)

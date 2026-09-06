@@ -48,20 +48,20 @@ public:
 	 *  per-instance without mutating the source asset. Designers using a
 	 *  Substrate material should expose tinting via a parameter named
 	 *  `TintColor` to receive the framework's validity tint feedback. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS|Targeter")
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS")
 	float DefaultPointRadius = 60.0f;
 
 	/** Decal vertical extent — projection depth above + below the ground.
 	 *  Set generously to handle slope variation; performance impact negligible
 	 *  for one decal. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS|Targeter")
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS")
 	float DecalHeight = 200.0f;
 
 protected:
 	/** Decal component drawing the ring. Sized from AreaRadiusWorld (or
 	 *  DefaultPointRadius when zero). Created in the constructor, configured
 	 *  on InitializePreview. */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "SeinARTS|Targeter")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	TObjectPtr<UDecalComponent> RingDecal;
 
 	virtual void OnPreviewUpdated_Implementation() override;

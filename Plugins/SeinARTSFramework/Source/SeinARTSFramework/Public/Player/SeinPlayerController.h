@@ -76,31 +76,34 @@ public:
 
 	// ========== Configuration ==========
 
-	/** Keyboard pan speed multiplier (applied by Handle Camera Pan). */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Camera", meta = (ClampMin = "0.0"))
+	/** Scales keyboard camera panning. 1.0 uses the camera pawn's configured pan speed unchanged. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Camera", meta = (ClampMin = "0.0", DisplayName = "Key Pan Modifier"))
 	float KeyPanSpeed = 1.0f;
 
-	/** Keyboard rotate speed multiplier (applied by Handle Camera Rotate). */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Camera", meta = (ClampMin = "0.0"))
+	/** Scales keyboard camera rotation and tilt. 1.0 uses the camera pawn's configured rates unchanged. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Camera", meta = (ClampMin = "0.0", DisplayName = "Key Rotate Modifier"))
 	float KeyRotateSpeed = 1.0f;
 
-	/** Keyboard zoom speed multiplier (applied by Handle Camera Zoom Keyboard). */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Camera", meta = (ClampMin = "0.0"))
+	/** Scales keyboard camera zooming. 1.0 uses the camera pawn's configured zoom rate unchanged. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Camera", meta = (ClampMin = "0.0", DisplayName = "Key Zoom Modifier"))
 	float KeyZoomSpeed = 1.0f;
 
-	/** Mouse (middle-button drag) pan speed multiplier (applied by Handle Camera Mouse Pan). */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Camera", meta = (ClampMin = "0.0"))
+	/** Scales middle-mouse camera panning. 1.0 is the intended baseline and includes
+	 *  the internal mouse-delta calibration. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Camera", meta = (ClampMin = "0.0", DisplayName = "Mouse Pan Modifier"))
 	float MousePanSpeed = 1.0f;
 
-	/** Mouse orbit speed multiplier (applied by Handle Camera Orbit). */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Camera", meta = (ClampMin = "0.0"))
+	/** Scales mouse camera rotation and tilt. 1.0 is the intended baseline and includes
+	 *  the internal mouse-delta calibration. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Camera", meta = (ClampMin = "0.0", DisplayName = "Mouse Rotate Modifier"))
 	float MouseRotateSpeed = 1.0f;
 
-	/** Mouse wheel zoom speed multiplier (applied by Handle Camera Zoom). */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Camera", meta = (ClampMin = "0.0"))
+	/** Scales mouse-wheel camera zooming. 1.0 uses the camera pawn's configured zoom step unchanged. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Camera", meta = (ClampMin = "0.0", DisplayName = "Mouse Zoom Modifier"))
 	float MouseZoomSpeed = 1.0f;
 
-	/** Trace channel for selection and command line traces. */
+	/** World-geometry channel for ground-position fallback. Entity selection,
+	 *  hover, and targeting use Sein Extents independently of collision channels. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "SeinARTS|Selection")
 	TEnumAsByte<ECollisionChannel> SelectionTraceChannel = ECC_Visibility;
 
@@ -119,7 +122,7 @@ public:
 	 *  (selection, command stamping, "is this my unit?") work correctly.
 	 *  Without replication, the client's PC sees SeinPlayerID = 0 (neutral)
 	 *  and can't select / command its own units. */
-	UPROPERTY(Replicated, BlueprintReadOnly, Category = "SeinARTS|Player")
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "SeinARTS")
 	FSeinPlayerID SeinPlayerID;
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
@@ -394,23 +397,23 @@ protected:
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
 	void HandleCommandCanceled();
 
-	/** Keyboard camera pan (WASD / arrows). AxisValue scaled by Key Pan Speed. */
+	/** Keyboard camera pan (WASD / arrows). AxisValue scaled by Key Pan Modifier. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
 	void HandleKeyPan(FVector2D AxisValue);
 
 	/** Keyboard camera rotate and tilt. X rotates around the pivot (Q/E) and Y tilts the
-	 *  camera pitch between top-down and flat; both are scaled by Key Rotate Speed and
+	 *  camera pitch between top-down and flat; both are scaled by Key Rotate Modifier and
 	 *  applied at the camera pawn's per-second rates (Rotation Speed / Tilt Speed). Bind
 	 *  an Axis2D action; a yaw-only control scheme simply maps no keys onto the Y axis. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
 	void HandleKeyRotate(FVector2D RotateValue);
 
-	/** Mouse-wheel camera zoom. ZoomDelta scaled by Mouse Zoom Speed; the camera pawn
+	/** Mouse-wheel camera zoom. ZoomDelta scaled by Mouse Zoom Modifier; the camera pawn
 	 *  steps its Zoom Step per wheel tick. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
 	void HandleMouseZoom(float ZoomDelta);
 
-	/** Keyboard camera zoom (Z/X). ZoomDelta scaled by Key Zoom Speed; frame-rate
+	/** Keyboard camera zoom (Z/X). ZoomDelta scaled by Key Zoom Modifier; frame-rate
 	 *  independent — the camera pawn zooms at its Zoom Rate in units per second. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
 	void HandleKeyZoom(float ZoomDelta);
@@ -423,13 +426,13 @@ protected:
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
 	void HandleCameraReset();
 
-	/** Middle-mouse camera pan. MouseDelta scaled by Mouse Pan Speed; ignored while
+	/** Middle-mouse camera pan. MouseDelta is calibrated and scaled by Mouse Pan Modifier; ignored while
 	 *  LMB/RMB are held (those own the mouse delta for marquee / formation drags). */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
 	void HandleMousePan(FVector2D MouseDelta);
 
 	/** Mouse camera rotate (X = yaw orbit, Y = pitch tilt), per pixel of mouse movement:
-	 *  MouseDelta scaled by Mouse Rotate Speed and the camera pawn's Orbit Sensitivity.
+	 *  MouseDelta is calibrated and scaled by Mouse Rotate Modifier and the camera pawn's Orbit Sensitivity.
 	 *  Ignored while LMB/RMB are held. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Input")
 	void HandleMouseRotate(FVector2D MouseDelta);
@@ -496,6 +499,9 @@ protected:
 
 	// ========== Internal Helpers ==========
 
+	/** Apply shared extents selection policy for replacement, additive, or drag input. */
+	void ApplySelectionCandidates(const TArray<ASeinActor*>& Candidates, bool bAdditive, bool bDrag);
+
 	/** Reference unit anchoring HandleSelectAllOfType: the hovered actor when it is an
 	 *  own entity, else the focused actor, else the first live selected actor. Null when
 	 *  none of those exist. */
@@ -509,7 +515,8 @@ protected:
 	/** True when the world location projects inside the local viewport bounds. */
 	bool IsWorldLocationOnScreen(const FVector& WorldLocation);
 
-	/** Perform a line trace under the mouse cursor. */
+	/** Pick the nearest live Sein Extents under the cursor, falling back to
+	 *  world geometry only when no entity is hit. Mesh collision cannot pick units. */
 	bool TraceUnderCursor(FHitResult& OutHit) const;
 
 	/** Get the SeinActor from a hit result (if any). */
@@ -543,13 +550,13 @@ public:
 	/**
 	 * Resolve the world-space GROUND point under the mouse cursor by intersecting the
 	 * cursor ray with the baked level-data height field — the same static-ground surface
-	 * the navigation grid is derived from. Unlike a physics trace (TraceUnderCursor), this
+	 * the navigation grid is derived from. Unlike the entity cursor query, this
 	 * is immune to unit and prop meshes: hovering a unit or a tree still returns the ground
 	 * XY under the cursor, not the mesh surface. Use this (NOT the selection trace) for
 	 * MOVE / order destinations so the point feeds the formation resolver as a clean
 	 * nav-ground input (root CLAUDE invariant #6: the destination is the raw ground under
 	 * the cursor, resolved to a nav cell ONCE downstream). Falls back to the physics
-	 * selection trace only when there is no baked level data under the cursor. Returns
+	 * world-geometry trace (ignoring Sein actors) when there is no baked level data under the cursor. Returns
 	 * false solely when the cursor is off the world entirely.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Command",

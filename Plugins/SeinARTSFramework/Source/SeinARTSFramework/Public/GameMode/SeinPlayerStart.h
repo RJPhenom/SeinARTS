@@ -1,7 +1,14 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
- * @file    SeinPlayerStart.h
- * @brief   RTS player start with player slot assignment and per-faction spawn entity.
+ *
+ * @file         SeinPlayerStart.h
+ * @author       RJ Macklem
+ * @created      2 Jun 2026
+ * @latest       4 Sep 2026
+ * @brief        Declares RTS player starts and their editor-authored deterministic spawn snapshots.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
  */
 
 #pragma once
@@ -55,21 +62,21 @@ public:
 	 * The GameMode assigns players to starts by matching this value.
 	 * 0 = not part of the default match manifest.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|PlayerStart", meta = (ClampMin = "0", ClampMax = "16"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS", meta = (ClampMin = "0", ClampMax = "16"))
 	int32 PlayerSlot = 0;
 
 	/**
 	 * Faction ID authored for this start position's match slot.
 	 * Active Human and AI slots require a valid faction.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|PlayerStart")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	FSeinFactionID FactionID;
 
 	/**
 	 * Team index for this start position.
 	 * Used for team-based game modes (FFA = each player unique team).
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|PlayerStart", meta = (ClampMin = "0"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS", meta = (ClampMin = "0"))
 	uint8 TeamID = 0;
 
 	/**
@@ -77,38 +84,29 @@ public:
 	 * Typically a headquarters / base building Blueprint.
 	 * Leave null to skip the entity while still materializing the player state.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|PlayerStart")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	TSubclassOf<ASeinActor> SpawnEntity;
 
-	/** Editor-baked snapshot of this start's complete spawn transform.
-	 *  `PostEditMove` performs the float-to-fixed conversion once and the
-	 *  serialized fixed-point value is then identical on every peer.
-	 *  `bSimTransformBaked` distinguishes current placements from levels
-	 *  that must be re-saved after upgrading. */
+	/** Saved spawn transform, kept synchronized with this start in the editor.
+	 *  Runtime peers consume the serialized fixed-point bits without converting
+	 *  the visual actor transform. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, AdvancedDisplay, Category = "SeinARTS|Determinism")
 	FFixedTransform PlacedSimTransform;
 
 	UPROPERTY(VisibleAnywhere, AdvancedDisplay, Category = "SeinARTS|Determinism")
 	bool bSimTransformBaked = false;
 
-	/** Editor-side self-heal for legacy placements (body is editor-only):
-	 *  a level authored before the baked snapshot existed bakes in memory
-	 *  as soon as it loads in the editor, so PIE passes the fail-closed
-	 *  bootstrap check without any save ritual, and the next legitimate
-	 *  save persists the upgrade. Cooked builds compile the heal out —
-	 *  an unbaked level in a shipped game still fails closed, because a
-	 *  load-time float-to-fixed conversion is not cross-arch identical.
-	 *  Already-baked placements are never touched. */
-	virtual void PostLoad() override;
-
 #if WITH_EDITOR
+	/** Repair editor placements after their composed world transform is ready,
+	 *  and follow root transform changes, including movement of a parent actor. */
+	virtual void PostRegisterAllComponents() override;
+	virtual void PostUnregisterAllComponents() override;
 	virtual void PostEditMove(bool bFinished) override;
+	virtual void PostEditUndo() override;
+	virtual void PostEditUndo(TSharedPtr<ITransactionObjectAnnotation> TransactionAnnotation) override;
 
-	/** Second upgrade hook: an unbaked placement also bakes on save, so
-	 *  "re-save the level" works even for a start spawned unbaked at
-	 *  editor time (PostEditMove alone only fires when the actor is
-	 *  MOVED). Already-baked placements keep their exact serialized
-	 *  value — a save must never silently change sim data. */
+	/** Reconcile the authored transform before an editor save. Cooking and
+	 *  game/PIE worlds preserve the already serialized fixed-point value. */
 	virtual void PreSave(FObjectPreSaveContext SaveContext) override;
 #endif
 
@@ -124,4 +122,12 @@ public:
 	 *  fallback when no lobby snapshot is available. The transaction performs
 	 *  strict semantic, anchor, and baked-transform validation before mutation. */
 	static FSeinMatchSettings SynthesizeMatchSettingsFromLevel(UWorld* World);
+
+#if WITH_EDITOR
+private:
+	void RefreshPlacedSimTransform();
+	void UnbindAuthoringTransform();
+	TWeakObjectPtr<USceneComponent> AuthoringTransformRoot;
+	FDelegateHandle AuthoringTransformHandle;
+#endif
 };

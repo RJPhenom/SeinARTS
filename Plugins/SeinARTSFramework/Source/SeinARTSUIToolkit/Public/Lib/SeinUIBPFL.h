@@ -104,7 +104,8 @@ public:
 	 * @param PlayerController - The player controller whose camera to use
 	 * @param WorldBoundsMin - XY world bounds min
 	 * @param WorldBoundsMax - XY world bounds max
-	 * @param GroundZ - Z height of the ground plane
+	 * @param GroundZ - Fallback ground-plane Z for non-Sein camera pawns. A Sein
+	 *                  camera uses its live terrain-following pivot Z.
 	 * @return Array of 4 FVector2D in minimap UV space (top-left, top-right, bottom-right, bottom-left)
 	 */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|UI|Minimap", meta = (DisplayName = "Get Camera Frustum Corners"))

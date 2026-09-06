@@ -443,8 +443,11 @@ void USeinFogOfWarSubsystem::OnLevelDataChanged()
 	if (const USeinLevelDataSubsystem* LevelSubsystem =
 			LevelDataSubsystem.Get();
 		LevelSubsystem
+			&& GetWorld()->WorldType != EWorldType::Editor
 			&& !LevelSubsystem->IsInitialRuntimeDataPrepared())
 	{
+		// Runtime adoption waits for the startup barrier. Editor worlds never
+		// begin play, so their bake/load notifications must be applied immediately.
 		return;
 	}
 	if (bStateBindingFrozen)

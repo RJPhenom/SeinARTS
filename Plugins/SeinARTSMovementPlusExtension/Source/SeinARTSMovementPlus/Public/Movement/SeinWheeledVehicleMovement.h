@@ -54,6 +54,10 @@ public:
 
 	virtual void OnMoveBegin(const FSeinMovementContext& Ctx) override;
 	virtual bool Tick(const FSeinMovementContext& Ctx) override;
+	virtual int32 GetDebugDrivenSegmentIndex() const override
+	{
+		return SegCursor < TailStartSeg ? SegCursor : INDEX_NONE;
+	}
 	virtual void UpdateSettledRenderState(
 		const FSeinSettledMovementRenderContext& Context,
 		const FSeinMovementPayload& MovementData,

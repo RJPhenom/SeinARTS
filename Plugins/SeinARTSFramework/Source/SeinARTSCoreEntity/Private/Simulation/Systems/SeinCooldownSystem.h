@@ -56,7 +56,7 @@ public:
 	{
 		return FSeinSystemDescriptor::Stateless(
 			FName(TEXT("seinarts.core.cooldown_tick")),
-			1u,
+			2u,
 			ESeinTickPhase::PreTick,
 			SeinSystemPriority::CooldownTick);
 	}

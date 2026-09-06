@@ -1158,22 +1158,9 @@ bool USeinTrackedVehicleMovement::Tick(const FSeinMovementContext& Ctx)
 	}
 
 #if UE_ENABLE_DEBUG_DRAWING
-	if (bDebugSteerTargetValid)
+	if (bDebugSteerTargetValid && Ctx.World)
 	{
-		if (UWorld* DebugWorld = Ctx.World ? Ctx.World->GetWorld() : nullptr)
-		{
-			if (UE::SeinARTSMovement::IsSteeringShowFlagOnForWorld(DebugWorld))
-			{
-				const float DrawLifetime = 0.05f;
-				const FVector Origin(AgentPos.X.ToFloat(), AgentPos.Y.ToFloat(), AgentPos.Z.ToFloat() + 50.0f);
-				if (UE::SeinARTSMovement::DebugDraw::ShouldDrawAndReserve(DebugWorld, Origin))
-				{
-					const FVector TargetPos(DebugSteerTarget.X.ToFloat(), DebugSteerTarget.Y.ToFloat(), DebugSteerTarget.Z.ToFloat() + 50.0f);
-					DrawDebugPoint(DebugWorld, TargetPos, 8.0f, FColor::Green, false, DrawLifetime);
-					DrawDebugLine(DebugWorld, Origin, TargetPos, FColor::Green, false, DrawLifetime, 0, 2.0f);
-				}
-			}
-		}
+		CaptureSteeringDebugTarget(Ctx.World->GetCurrentTick(), DebugSteerTarget);
 	}
 #endif
 

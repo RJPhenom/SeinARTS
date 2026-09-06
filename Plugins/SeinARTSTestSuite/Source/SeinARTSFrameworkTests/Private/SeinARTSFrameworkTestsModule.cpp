@@ -66,7 +66,7 @@ public:
 				*KindId,
 				*Class->GetName().ToLower());
 			PoolDescriptor.StateSchemaVersion =
-				Kind == ESeinPoolObjectKind::Ability ? 3 : 2;
+				Kind == ESeinPoolObjectKind::Ability ? 4 : 2;
 			PoolDescriptor.BehaviorRevision = 1;
 			PoolDescriptor.CodecRevision = 3;
 			PoolDescriptor.MaxStateBytes =

@@ -549,19 +549,20 @@ public:
 	// Debug
 	// ----------------------------------------------------------------------
 
-	/** Per-frame debug draw hook. Called each tick while `ShowFlags.Navigation`
-	 *  is on in any viewport. Default: no-op — the framework's shipped cell
-	 *  viz goes through `USeinNavDebugComponent` (scene-proxy backed, one
-	 *  batched mesh, editor-visible without PIE). Override only if you need
-	 *  ephemeral per-frame drawing on top of that. */
+	/** Legacy optional debug hook. The framework does not dispatch this method.
+	 *  Shipped grid visualization uses CollectDebugCellQuads and its scene proxy;
+	 *  movement paths use the per-view Canvas overlay. */
 	virtual void DrawDebug(UWorld* World) const {}
+
+	/** Presentation cache key for implementation-specific cell appearance settings. */
+	virtual uint32 GetDebugAppearanceHash() const { return 0; }
 
 	/** Collect the nav's cell geometry for scene-proxy rendering. Subclasses
 	 *  emit one quad per cell (XY-plane, slightly above the cell height) with
 	 *  a per-cell color (green = walkable, red = blocked). Default: no cells.
 	 *
-	 *  Called by `USeinNavDebugComponent::CreateSceneProxy` when `ShowFlags.
-	 *  Navigation` is on. The proxy captures the returned arrays once, so
+	 *  Called by `USeinNavDebugComponent::CreateSceneProxy`. The custom
+	 *  SeinNavigation flag controls visibility. The proxy captures the arrays, so
 	 *  this is NOT a per-frame hot path — only runs on load / bake / mutation.
 	 *
 	 *  In `UE_BUILD_SHIPPING` subclass overrides become no-ops (method bodies
@@ -572,10 +573,9 @@ public:
 		TArray<FColor>& OutColors,
 		float& OutHalfExtent) const {}
 
-	/** Collect per-cell geometry for an active move-to path. Called each frame from the debug ticker
-	 *  while `ShowFlags.Navigation` is on. `CellPathWorld` is the EXACT logical cell chain pathfinding
-	 *  produced (cell centers, world-space — `FSeinPath::DebugCellPath`, captured before smoothing), so
-	 *  the ticker draws the yellow cells 1:1 with the path A* chose — one box per cell, no rasterization.
+	/** Legacy raw-cell geometry utility. CellPathWorld is historical search data
+	 *  captured before smoothing, not remaining driven geometry. The Canvas path
+	 *  overlay uses committed waypoints/segments and does not call this utility.
 	 *
 	 *  - OutRouteCells: every cell of the chain EXCEPT the last (excluded to avoid double-draw).
 	 *  - OutDestCell: the final (destination) cell, drawn with a distinct marker color. Empty if none.
@@ -588,9 +588,8 @@ public:
 		float& OutHalfExtent) const {}
 
 	/** Collect cells currently stamped by dynamic nav blockers (tanks,
-	 *  vehicles, buildings under construction, etc.). Called per-frame from
-	 *  the debug ticker while `ShowFlags.Navigation` is on so blocker stamps
-	 *  appear live in the debug grid view. Emits one (Center, Color) pair
+	 *  vehicles, buildings under construction, etc.). Called on scene-proxy
+	 *  rebuild after mutation or viewer activation. Emits one (Center, Color) pair
 	 *  per cell — Color resolves from the blocker's BlockedNavLayerMask
 	 *  against plugin-settings layer colors so the viz uniformly reflects
 	 *  what each blocker is gating, regardless of whether the layer-

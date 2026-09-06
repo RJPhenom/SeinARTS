@@ -3,11 +3,10 @@
  * @file    SeinARTSNavigationModule.cpp
  * @brief   Module startup + nav debug toggle.
  *
- *          `Sein.Nav.Show [0|1|on|off]` toggles UE's per-
- *          viewport `ShowFlags.Navigation` flag (same bit as the 'P' hotkey
- *          and `showflag.navigation`). That flag drives:
+ *          `Sein.Nav.Show [0|1|on|off]` toggles the custom per-viewport
+ *          `ShowFlags.SeinNavigation` flag. That flag drives:
  *            - Cell viz via `USeinNavDebugComponent`'s scene proxy
- *              (`GetViewRelevance` gates on `EngineShowFlags.Navigation`)
+ *              (`GetViewRelevance` gates on the custom flag)
  *            - Per-active-move path cell highlights + waypoint lines, drawn
  *              by the SeinARTSMovement module's ticker — that ticker gates on
  *              `UE::SeinARTSNavigation::IsNavigationShowFlagOnForWorld` so a
@@ -78,6 +77,14 @@ IMPLEMENT_MODULE(FSeinARTSNavigationModule, SeinARTSNavigation)
 #if UE_ENABLE_DEBUG_DRAWING
 namespace UE::SeinARTSNavigation
 {
+	// SFG_Hidden keeps the registration out of Unreal's fixed built-in groups.
+	// SeinARTSEditor supplies the first-class level/PIE SeinARTS submenu.
+	static TCustomShowFlag<> ShowNavigation(
+		TEXT("SeinNavigation"),
+		/*DefaultEnabled*/ false,
+		SFG_Hidden,
+		NSLOCTEXT("SeinARTSNavigation", "ShowNavigation", "Navigation"));
+
 	// Layer override for the nav debug viz. -1 = no override (every blocker
 	// renders). 0..7 = pinned layer bit; CollectDebugBlockerCells filters to
 	// blockers whose BlockedNavLayerMask has that bit set. Lets a designer
@@ -96,8 +103,8 @@ namespace UE::SeinARTSNavigation
 		return false;
 	}
 
-	/** True iff some viewport rendering `World` currently has
-	 *  `ShowFlags.Navigation` enabled.
+	/** True iff some viewport rendering `World` currently has the custom
+	 *  `ShowFlags.SeinNavigation` flag enabled.
 	 *
 	 *  Per-world AND multi-context: matches only viewports whose
 	 *  `GetWorld() == World`, but enumerates every `FWorldContext`'s
@@ -122,7 +129,11 @@ namespace UE::SeinARTSNavigation
 		{
 			for (const FLevelEditorViewportClient* Vp : GEditor->GetLevelViewportClients())
 			{
-				if (Vp && Vp->GetWorld() == World && Vp->EngineShowFlags.Navigation) return true;
+				if (Vp && Vp->GetWorld() == World
+					&& ShowNavigation.IsEnabled(Vp->EngineShowFlags))
+				{
+					return true;
+				}
 			}
 		}
 #endif
@@ -132,7 +143,8 @@ namespace UE::SeinARTSNavigation
 			{
 				if (Ctx.GameViewport
 				    && Ctx.GameViewport->GetWorld() == World
-				    && Ctx.GameViewport->EngineShowFlags.Navigation)
+				    && ShowNavigation.IsEnabled(
+					    Ctx.GameViewport->EngineShowFlags))
 				{
 					return true;
 				}
@@ -170,7 +182,8 @@ namespace
 			{
 				if (Vp)
 				{
-					Vp->EngineShowFlags.SetNavigation(bEnable);
+					UE::SeinARTSNavigation::ShowNavigation.SetEnabled(
+						Vp->EngineShowFlags, bEnable);
 					Vp->Invalidate();
 				}
 			}
@@ -187,7 +200,8 @@ namespace
 			{
 				if (Ctx.GameViewport)
 				{
-					Ctx.GameViewport->EngineShowFlags.SetNavigation(bEnable);
+					UE::SeinARTSNavigation::ShowNavigation.SetEnabled(
+						Ctx.GameViewport->EngineShowFlags, bEnable);
 				}
 			}
 		}
@@ -212,7 +226,11 @@ namespace
 		{
 			for (const FLevelEditorViewportClient* Vp : GEditor->GetLevelViewportClients())
 			{
-				if (Vp && Vp->EngineShowFlags.Navigation) return true;
+				if (Vp && UE::SeinARTSNavigation::ShowNavigation.IsEnabled(
+					Vp->EngineShowFlags))
+				{
+					return true;
+				}
 			}
 		}
 #endif
@@ -221,7 +239,12 @@ namespace
 		{
 			for (const FWorldContext& Ctx : GEngine->GetWorldContexts())
 			{
-				if (Ctx.GameViewport && Ctx.GameViewport->EngineShowFlags.Navigation) return true;
+				if (Ctx.GameViewport
+					&& UE::SeinARTSNavigation::ShowNavigation.IsEnabled(
+						Ctx.GameViewport->EngineShowFlags))
+				{
+					return true;
+				}
 			}
 		}
 		return false;
@@ -243,7 +266,7 @@ namespace
 			}
 		}
 		SetNavigationShowFlag(bEnable);
-		UE_LOG(LogTemp, Log, TEXT("Sein.Nav.Show = %s (ShowFlags.Navigation)"),
+		UE_LOG(LogTemp, Log, TEXT("Sein.Nav.Show = %s (ShowFlags.SeinNavigation)"),
 			bEnable ? TEXT("ON") : TEXT("OFF"));
 	}
 
@@ -342,7 +365,7 @@ void FSeinARTSNavigationModule::StartupModule()
 	{
 		GShowNavCmd = IConsoleManager::Get().RegisterConsoleCommand(
 			TEXT("Sein.Nav.Show"),
-			TEXT("Toggle ShowFlags.Navigation across all viewports (same bit as UE's 'P' hotkey and `showflag.navigation`). Drives USeinNavDebugComponent cell viz + per-action path highlights (path overlay lives in SeinARTSMovement). Usage: Sein.Nav.Show [0|1|on|off]."),
+			TEXT("Toggle ShowFlags.SeinNavigation across all viewports. Drives USeinNavDebugComponent cell viz + per-action path highlights (path overlay lives in SeinARTSMovement). Usage: Sein.Nav.Show [0|1|on|off]."),
 			FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&OnShowNavigationCommand),
 			ECVF_Default);
 	}
@@ -372,7 +395,8 @@ void FSeinARTSNavigationModule::StartupModule()
 			{
 				if (Ctx.GameViewport)
 				{
-					Ctx.GameViewport->EngineShowFlags.SetNavigation(true);
+					UE::SeinARTSNavigation::ShowNavigation.SetEnabled(
+						Ctx.GameViewport->EngineShowFlags, true);
 				}
 			}
 		});

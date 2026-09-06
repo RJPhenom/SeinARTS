@@ -15,7 +15,6 @@
 #include "Types/Entity.h"
 #include "Engine/Canvas.h"
 #include "Engine/Font.h"
-#include "Blueprint/UserWidget.h"
 #include "CanvasItem.h"
 #include "DrawDebugHelpers.h"
 #include "EngineUtils.h"
@@ -67,24 +66,6 @@ static FAutoConsoleCommandWithWorldArgsAndOutputDevice CCmdSeinMarqueeDebugShow(
 			SeinApplyToggleArg(Args, GSeinMarqueeDebugShow);
 			Ar.Logf(TEXT("Sein.Marquee.Debug.Show = %d"), GSeinMarqueeDebugShow ? 1 : 0);
 		}));
-
-void ASeinHUD::BeginPlay()
-{
-	Super::BeginPlay();
-
-	if (HUDLayoutWidgetClass)
-	{
-		APlayerController* PC = GetOwningPlayerController();
-		if (PC)
-		{
-			HUDLayoutWidget = CreateWidget<UUserWidget>(PC, HUDLayoutWidgetClass);
-			if (HUDLayoutWidget)
-			{
-				HUDLayoutWidget->AddToViewport();
-			}
-		}
-	}
-}
 
 void ASeinHUD::DrawHUD()
 {
@@ -304,9 +285,8 @@ static void SeinAppendExtentsHullSourcesLegacy(AActor* Actor,
 }
 
 // Append an entity's silhouette source points (world space) for the marquee
-// test. With a valid extents component, dispatches to the accurate or legacy
-// builder per the Selection setting; with none, falls back to the actor's visual
-// component-bounds box.
+// test. Dispatches to the accurate or legacy extents builder per the Selection
+// setting. Entities without extents have no selection geometry.
 static void SeinAppendMarqueeHullSources(AActor* Actor, USeinWorldSubsystem* Sim,
 	FSeinEntityHandle Handle, TArray<FVector>& OutWorld)
 {
@@ -324,16 +304,7 @@ static void SeinAppendMarqueeHullSources(AActor* Actor, USeinWorldSubsystem* Sim
 		return;
 	}
 
-	// Fallback: the actor's visual bounds box (8 corners). Still tested as a
-	// projected polygon, so it beats the engine's screen-AABB approach.
-	FVector Origin, BoxExtent;
-	Actor->GetActorBounds(/*bOnlyCollidingComponents=*/false, Origin, BoxExtent);
-	for (int32 Sx = -1; Sx <= 1; Sx += 2)
-	for (int32 Sy = -1; Sy <= 1; Sy += 2)
-	for (int32 Sz = -1; Sz <= 1; Sz += 2)
-	{
-		OutWorld.Add(Origin + FVector(Sx * BoxExtent.X, Sy * BoxExtent.Y, Sz * BoxExtent.Z));
-	}
+	// No extents means no selection geometry; render bounds never substitute.
 }
 
 // 2D convex hull (Andrew's monotone chain). Returns a CCW polygon; collinear
@@ -517,9 +488,9 @@ void ASeinHUD::CollectActorsInMarquee(const FVector2D& P0, const FVector2D& P1, 
 
 		const FSeinEntityHandle Handle = Actor->GetEntityHandle();
 
-		// Selectable filtering removed for baseline parity (the engine path didn't
-		// filter here; ownership gating happens downstream in ReceiveMarqueeSelection).
-		// Only COUNT non-selectable, and only when diagnostics are on.
+		// Geometry gathering only: the controller applies ownership, runtime
+		// selectability and Extents policy after resolving members to squads.
+		// Count the raw member flag only when diagnostics are on.
 		if (bDebugLog && Sim)
 		{
 			const FSeinEntity* Entity = Sim->GetEntity(Handle);

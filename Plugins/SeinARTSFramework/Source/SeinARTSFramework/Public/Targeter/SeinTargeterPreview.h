@@ -63,28 +63,28 @@ public:
 
 protected:
 	/** Spec that spawned this preview. Subclasses cast to their concrete type. */
-	UPROPERTY(BlueprintReadOnly, Transient, Category = "SeinARTS|Targeter")
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "SeinARTS")
 	TObjectPtr<USeinTargeterSpec> Spec;
 
 	/** Cached AoE radius in world units (read from USeinAbility::AreaRadius
 	 *  on subsystem activation; converted to float for render-side use).
 	 *  Zero when the originating ability is not AoE. */
-	UPROPERTY(BlueprintReadOnly, Transient, Category = "SeinARTS|Targeter")
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "SeinARTS")
 	float AreaRadiusWorld = 0.0f;
 
-	UPROPERTY(BlueprintReadOnly, Transient, Category = "SeinARTS|Targeter")
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "SeinARTS")
 	FVector CurrentCursorWorld = FVector::ZeroVector;
 
-	UPROPERTY(BlueprintReadOnly, Transient, Category = "SeinARTS|Targeter")
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "SeinARTS")
 	FVector CurrentDragAnchorWorld = FVector::ZeroVector;
 
-	UPROPERTY(BlueprintReadOnly, Transient, Category = "SeinARTS|Targeter")
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "SeinARTS")
 	ESeinTargeterValidity CurrentValidity = ESeinTargeterValidity::Valid;
 
 	/** Yaw (degrees) the subsystem will capture on confirm — already snapped if
 	 *  RotationStepDegrees > 0, raw cursor direction otherwise. Drag-aware
 	 *  previews use this directly for actor rotation so visual matches capture. */
-	UPROPERTY(BlueprintReadOnly, Transient, Category = "SeinARTS|Targeter")
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "SeinARTS")
 	float CurrentDragYawDegrees = 0.0f;
 
 	/** Subclass hook — called from UpdatePreview after state is stored.

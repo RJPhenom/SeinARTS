@@ -24,7 +24,7 @@ USeinAbility_SquadReinforce::USeinAbility_SquadReinforce()
 	Cooldown = FFixedPoint::Zero;
 	bIsPassive = false;
 	TargetType = ESeinAbilityTargetType::Self;
-	CooldownScope = ESeinCooldownScope::Squad;
+	CooldownScope = ESeinCooldownScope::SharedGroup;
 }
 
 bool USeinAbility_SquadReinforce::CanActivate_Implementation()

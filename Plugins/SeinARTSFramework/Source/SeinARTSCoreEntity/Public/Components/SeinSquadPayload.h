@@ -286,7 +286,7 @@ struct SEINARTSCOREENTITY_API FSeinSquadPayload : public FSeinPayload
 
 	// NOTE: preview opt-in is no longer sim data. A squad opts into destination
 	// markers render-side: add a Navigation Renderer
-	// (USeinFormationPreviewComponent, SeinARTSFramework) to the squad's actor
+	// (USeinNavigationRendererComponent, SeinARTSFramework) to the squad's actor
 	// Blueprint to cover every member in one place, or to individual member
 	// Blueprints for per-member control.
 

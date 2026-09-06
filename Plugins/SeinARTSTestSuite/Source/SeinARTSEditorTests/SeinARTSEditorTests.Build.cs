@@ -28,6 +28,7 @@ public class SeinARTSEditorTests : ModuleRules
 			"SeinARTSNavigation",
 			"SeinARTSMovement",
 			"SeinARTSLevelData",
+			"SeinARTSFogOfWar",
 			"SeinARTSFramework",
 			"SeinARTSEditor",
 			"SeinARTSGraphNodes",

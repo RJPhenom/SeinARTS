@@ -1,11 +1,10 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinARTSSquadSettings.h
- * @brief   Settings for the opt-in SeinARTS Squad Extension. Separate
- *          UDeveloperSettings page ("SeinARTS Squad Extension") so squad
- *          configuration lives entirely inside the extension plugin — the
- *          base framework's USeinARTSCoreSettings carries no squad fields,
- *          keeping the extension fully strippable.
+ * @brief   Settings owned by the opt-in SeinARTS Squad Extension. The
+ *          extension retains its own config object and fingerprint schema
+ *          while its editor module presents these fields on the shared
+ *          SeinARTS settings page.
  */
 
 #pragma once
@@ -19,11 +18,11 @@ class USeinCommandBrokerResolver;
 
 /**
  * Settings for the SeinARTS Squad Extension. Configure under
- * Project Settings > Plugins > SeinARTS Squad Extension.
+ * Project Settings > Plugins > SeinARTS > Squad.
  *
  * Lives in the SeinARTSSquad module (not the base framework) so the squad
- * system's configuration surface is owned by the extension. When the Squad
- * Extension is not installed, this page simply doesn't exist.
+ * system's configuration surface is owned by the extension. Its editor-only
+ * settings contribution appears only while Squad is enabled.
  */
 UCLASS(Config = Game, DefaultConfig, meta = (DisplayName = "SeinARTS Squad Extension"))
 class SEINARTSSQUAD_API USeinARTSSquadSettings : public UDeveloperSettings
@@ -73,6 +72,7 @@ public:
 	virtual FName GetCategoryName() const override;
 
 #if WITH_EDITOR
+	virtual bool SupportsAutoRegistration() const override { return false; }
 	virtual FText GetSectionText() const override;
 	virtual FText GetSectionDescription() const override;
 #endif

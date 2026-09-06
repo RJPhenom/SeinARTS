@@ -1,11 +1,10 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinARTSCoverSettings.h
- * @brief   Settings for the opt-in SeinARTS Cover Extension. Separate
- *          UDeveloperSettings page ("SeinARTS Cover Extension") so cover
- *          configuration lives entirely inside the extension plugin — the
- *          base framework's USeinARTSCoreSettings carries no cover fields,
- *          keeping the extension fully strippable.
+ * @brief   Settings owned by the opt-in SeinARTS Cover Extension. The
+ *          extension retains its own config object and fingerprint schema
+ *          while its editor module presents these fields on the shared
+ *          SeinARTS settings page.
  */
 
 #pragma once
@@ -19,12 +18,12 @@
 
 /**
  * Settings for the SeinARTS Cover Extension. Configure under
- * Project Settings > Plugins > SeinARTS Cover Extension.
+ * Project Settings > Plugins > SeinARTS > Cover.
  *
  * Lives in the SeinARTSCover module (not the base framework) so the cover
- * system's configuration surface is owned by the extension. When the Cover
- * Extension is not installed, this page simply doesn't exist — no orphaned
- * cover fields linger in the base SeinARTS settings.
+ * system's configuration surface is owned by the extension. Its editor-only
+ * settings contribution appears only while Cover is enabled, so no orphaned
+ * fields or base-framework dependency remain when the extension is absent.
  */
 UCLASS(Config = Game, DefaultConfig, meta = (DisplayName = "SeinARTS Cover Extension"))
 class SEINARTSCOVER_API USeinARTSCoverSettings : public UDeveloperSettings
@@ -51,7 +50,7 @@ public:
 	FSoftClassPath CoverSystemClass;
 
 	// NOTE: the destination preview is a base-framework feature. Units opt in
-	// render-side via a Navigation Renderer (USeinFormationPreviewComponent) on their Blueprints;
+	// render-side via a Navigation Renderer (USeinNavigationRendererComponent) on their Blueprints;
 	// USeinARTSCoreSettings::FormationPreviewActorClass supplies the default
 	// renderer. Cover augments it via the cover-quality hook
 	// (USeinWorldSubsystem::PreviewQualityProvider, bound in USeinCoverSubsystem).
@@ -97,6 +96,7 @@ public:
 	virtual FName GetCategoryName() const override;
 
 #if WITH_EDITOR
+	virtual bool SupportsAutoRegistration() const override { return false; }
 	virtual FText GetSectionText() const override;
 	virtual FText GetSectionDescription() const override;
 #endif

@@ -40,17 +40,17 @@ public:
 
 	/** Rendered half-width when the spec's Width is zero (pure line). World
 	 *  units — kept thin so a widthless line reads as a line, not a lane. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS|Targeter")
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS")
 	float DefaultLineHalfWidth = 15.0f;
 
 	/** Decal projection depth above + below the ground (slope tolerance). */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS|Targeter")
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "SeinARTS")
 	float DecalHeight = 200.0f;
 
 protected:
 	/** Decal drawing the segment currently being authored. Hidden until an
 	 *  anchor exists (drag in progress / polyline vertex planted). */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "SeinARTS|Targeter")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	TObjectPtr<UDecalComponent> SegmentDecal;
 
 	/** Decals for segments already captured this session (multi-segment

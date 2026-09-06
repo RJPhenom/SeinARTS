@@ -7,9 +7,9 @@ SeinARTS keeps designer-facing authoring in Blueprint while the runtime simulati
 
 ## The Blueprint is the unit
 
-A unit type is a Blueprint subclass of `ASeinActor`. The actor automatically owns a `USeinEntityComponent`, which is the sanctioned bridge between the Unreal object and its simulation entity.
+A unit type is a Blueprint subclass of `ASeinActor`. The actor automatically owns a `USeinEntityBridgeComponent`, which connects its Unreal presentation to its simulation entity.
 
-Designers author the unit's simulation data through the bridge's `ComponentData` array. Each entry is a deterministic component payload stored in an `FInstancedStruct`.
+Designers add native or Blueprint-authored SeinARTS data components through the unit Blueprint's Components panel. These derive from `USeinEntityComponent`. The bridge bakes their authored values into its `ComponentData` array as deterministic payloads stored in `FInstancedStruct` entries.
 
 At spawn, the world subsystem copies the authored payloads into reflection-backed simulation storage. After that boundary, simulation systems work with entity handles and component data rather than actors.
 

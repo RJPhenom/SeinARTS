@@ -116,7 +116,7 @@ EAssetCommandResult UAssetDefinition_SeinBlueprintBase::PerformAssetDiff(const F
 	return EAssetCommandResult::Handled;
 }
 
-bool UAssetDefinition_SeinBlueprintBase::ShouldUseDataOnlyEditor(const UBlueprint* Blueprint)
+bool UAssetDefinition_SeinBlueprintBase::ShouldUseDataOnlyEditor(const UBlueprint* Blueprint) const
 {
 	return FBlueprintEditorUtils::IsDataOnlyBlueprint(Blueprint)
 		&& !FBlueprintEditorUtils::IsLevelScriptBlueprint(Blueprint)

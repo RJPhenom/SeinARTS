@@ -19,7 +19,7 @@ public:
 		PoolDescriptor.Kind = ESeinPoolObjectKind::Ability;
 		PoolDescriptor.StableProviderId =
 			TEXT("seinarts.editor-tests.pool.move-continuation.reflection");
-		PoolDescriptor.StateSchemaVersion = 2;
+		PoolDescriptor.StateSchemaVersion = 3;
 		PoolDescriptor.BehaviorRevision = 1;
 		PoolDescriptor.CodecRevision = 3;
 		PoolDescriptor.MaxStateBytes =

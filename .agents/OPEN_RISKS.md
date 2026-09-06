@@ -228,6 +228,133 @@ clean — do not redesign them under this list.
    pairwise do-si-do resolves mass head-on collisions as local slide-pasts, not lanes — inherent
    to the steering approach and consistent with the ORCA-out-of-scope ruling.
 
+## Level authoring follow-up (2026-09-04)
+
+- FoW and Navigation now adopt editor-world level-data changes without waiting for the
+  runtime startup barrier. Player starts refresh their saved fixed-point transform on
+  editor root changes, registration, undo/redo, and save; PIE/Game/cook do not rebake it.
+  Seven `SeinARTS.Editor.LevelAuthoring` tests cover grid replacement, Details/parent edits,
+  stale snapshot repair, actual undo/redo, Blueprint recompilation, disk save/reload,
+  and runtime-world preservation. These and 16 existing startup/bootstrap tests passed.
+  Development and Shipping builds passed; independent adversarial review found no blocker.
+  Fresh-process serial/parallel collision traces matched all 120 canonical roots and raw
+  poses with the All profile. The Framework-only runner rejected the current manifest's
+  missing reduced-contributor profile at startup; no content manifest was changed here.
+- Remaining human gate: in the affected map, confirm the FoW/navigation overlay updates
+  immediately after Bake Level Data and a moved start spawns at its displayed location
+  in PIE. Headless grid collection and persistence tests do not prove viewport rendering.
+- Adjacent audit remains separate: `ASeinActor` placement location/rotation and
+  `ASeinLevelVolume` bounds still have their own `PostEditMove` snapshot paths. This fix
+  covers player-start snapshots, not every actor type's authoring lifecycle.
+- Documentation impact: private-agent and code contracts; no public API or intended
+  authoring workflow change.
+
+## Navigation debug fidelity (2026-09-04)
+
+- Runtime routes draw through the current view's `SeinNavigation` Canvas callback, using
+  that world's managed live Move To actions and camera/budget. Yellow lines show the
+  remaining committed route; orange segments are reverse and orange endpoints are partial paths.
+  Cyan joins the displayed actor to the next waypoint/segment end, not a steering carrot.
+  Green is the direction between the bridge's last two captured settled sim poses; gray
+  shows the current sim pose and interpolation offset. This is a through-terrain overlay.
+- Movement+ reads its real typed-segment cursor; escape paths use the action's escape
+  origin/path. As corrected on 2026-09-05, filled yellow cells show the exact full A* chain
+  before smoothing, with its final cell blue, by default (`Sein.Nav.Show.RawCells 0` hides
+  them). The cell layer must not be replaced with rasterized smoothing or point markers.
+  Lines/curves show the remaining driven route independently. A* cells can be absent after
+  restore or custom planning; the overlay reports that absence rather than inventing cells. Static grid
+  visibility/appearance changes invalidate the proxy cache; base passability still does
+  not establish per-agent traversal clearance.
+- Verification: Development and Shipping builds passed, 7 focused navigation-debug tests
+  and 39 existing movement tests passed. One rendered Canvas integration test verified
+  current-callback drawing, flag-off cleanup, and unchanged canonical sim root. Independent
+  adversarial review found a budget issue, fixed before final validation.
+- Cell restoration verification (2026-09-05): Development build, 7 focused unit tests, and the rendered test
+  passed, including filled area, yellow bent-chain cell away from the smoothed route,
+  blue terminal cell, cells-off/missing-history behavior, and unchanged canonical root.
+  Independent clipping/fidelity review found no blocker. Shipping revalidation was blocked
+  by separate in-progress squad/broker compilation errors (`SharedGroup` and
+  `bSharesAbilityCooldowns`); the previous Shipping result above predates this correction.
+- Remaining human gate: moving/interpolated actors in PIE, separate view cameras/flags,
+  hidden grid mutation then show, and vehicle cusp/recovery/restore visuals. The offscreen
+  render fixture proves callback behavior, not those interactive scenarios. No simulation
+  movement, pathfinding, snapshot schema, or command behavior changed in this pass.
+
+## Ability cooldown sharing (2026-09-05)
+
+- Core resolves Owner Only / Shared Group through `FSeinBrokerMembershipData` and an explicit
+  `FSeinCommandBrokerData::bSharesAbilityCooldowns` opt-in. Squad stamps new and normalized brokers;
+  temporary selection brokers default false. No Squad payload traversal remains in the ability.
+- Group application copies the source duration to matching ability tags, preserving the existing
+  last-write behavior. World-global source activation identity plus captured pool ID protect
+  refunds from membership changes, revoked/recycled abilities, and newer cooldown writes. A refund
+  clears the source's current write; it does not reconstruct an older overwritten cooldown.
+- Shared application never marks a recipient's own activation as having started its cooldown.
+  Every recipient mutation dirties canonical pooled state. Provenance and receipts are reflected,
+  captured/restored, and checked during structural preflight; stale recipients are permitted.
+- Native Shared Group default preserves omitted existing Blueprint overrides. The generic Ability
+  factory stamps Owner Only for new direct-base assets; children inherit parent policy. Reset to
+  Default and creation paths bypassing this factory still see the native Shared Group default.
+- Verified: Development and Shipping compile/link, independent adversarial source review, 13/13
+  focused All-profile tests, 12/12 Framework-only tests with extensions disabled, 27/27 snapshot
+  regressions, and 5/5 callback-lifecycle regressions. The callback suite's stale pre-Payload-rename
+  warning expectation was corrected without changing its behavioral assertions.
+- Fresh-world snapshot continuation/refund roots match; separate serial and parallel processes
+  match all ten fixed-tick roots. Evidence is under `Saved/Automation/`: `CooldownSharing-*`,
+  `SeinARTS.Determinism.CooldownSharing.Process.*`, `SeinARTS.Unit.Snapshot-*`, and
+  `SeinARTS.Unit.Abilities.CallbackSafety-*` (2026-09-05). Failed exploratory attempts remain alongside
+  final passing reports. Both All and Framework simulation-content manifest profiles were regenerated;
+  the pre-change container was backed up there before generation.
+- Interactive Blueprint details/default-reset UX and real multiplayer PIE/replay-session smoke checks
+  remain human gates; headless fresh-world/process comparisons are not evidence of a live peer session.
+
+## Steering debug fidelity (2026-09-05)
+
+- `Debug Visualization > Show Debug Legends` (`bShowDebugLegends`, default true)
+  controls the Navigation, Steering, Extents, and Fog of War panels together. It
+  does not hide geometry or selected-unit labels. Panels share per-view stacking;
+  Extents distinguishes runtime from authored shapes, and Fog of War reports the
+  collector's observer/layer, configured layer color, blocker priority, and fallback.
+  This is a presentation-only setting, outside the simulation config fingerprint.
+  Legend follow-up validation: Development and Shipping succeeded; the rendered
+  four-panel toggle/geometry check passed with a green runner and no startup error
+  (`Saved/DebugLegends-RenderFinal.log`). The 800x600 combined preview was inspected;
+  Canvas depth sorting keeps backgrounds and text above debug geometry regardless
+  of callback order. Fixed-size panels may clip in smaller viewports.
+- Steering now renders through the current view's `SeinSteering` Canvas callback.
+  Runtime budgets are per view, selected units first then nearest; Extents and other
+  worlds cannot consume that allowance. Editor footprint rings use the same compound-
+  offset-aware radius resolver as runtime. Point-footprint movers retain vector diagnostics.
+- White is the requested heading, cyan the result of the actual avoidance helper (before
+  mode-specific turning), red the raw avoidance request at 100 cm/unit, magenta the actual
+  vehicle target. Driver velocity and full XYZ settled velocity are separate one-second
+  vectors. Driver tint reports requested avoidance/cohesion speed scaling, not every brake
+  cause. Selected units show mode, driver/settled speeds and multiplier; unavailable
+  decisions/samples are explicit. Idle coasting and sidesteps are not target-gated away.
+- Diagnostic samples are native, non-reflected per-driver data, never simulation inputs
+  or canonical state. Dispatch/begin/end/abandon boundaries clear decision validity before
+  reentrant callbacks; restored drivers start empty. Tick stamps reject stale samples.
+  Vehicle ticks capture targets instead of calling Unreal drawing APIs. FinalObservation
+  captures full settled displacement without changing the existing planar animation data.
+- Both views share clipped Canvas primitives. Navigation retains filled original A* cells
+  and smoothed lines; when Steering is also visible it owns motion/sim-offset diagnostics
+  so the two views do not duplicate those arrows. Selection crosses a render-only query
+  from the gameplay shell; Movement has no dependency on the gameplay module.
+- Validation: Development and Shipping builds succeeded. Six focused tests report
+  `Success`: three Steering sample/lifecycle tests, one 12-tick serial/parallel canonical-
+  root and settled-sample comparison, and the Steering and Navigation rendered regressions.
+  The final runners still exit unsuccessfully because host startup reports no exact
+  simulation-content profile for the active contributor set, followed by a pool-object
+  codec freeze error. No startup-error waiver or manifest rewrite was applied. Evidence:
+  `Saved/SteeringDebug-UnitFinal.log`, `Saved/SteeringDebug-Sim.log`,
+  `Saved/SteeringDebug-RenderVerified.log`, `Saved/SteeringDebug-NavRebuilt.log`, and
+  `Saved/SteeringDebug-Shipping.log`. Both saved Canvas previews were visually inspected.
+- Remaining interactive gates: two-view selection/flag isolation, vehicle target changes
+  through maneuvers/recovery, vertical flight motion, and offset footprint authoring in the
+  editor. Offscreen render and native tests do not establish those PIE/editor observations.
+- Documentation impact: private-agent contract and code comments; no intended movement,
+  pathfinding, command, snapshot-schema, or animation behavior change.
+
 ## Explicit product decisions still required
 
 - Any cover allocator approximation or async preview tradeoff after PIE performance evidence.

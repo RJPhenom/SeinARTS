@@ -101,6 +101,7 @@ public:
 				// Squad lifetime belongs to this system. Normalize author-injected
 				// or restored brokers before the later broker-system cull phase.
 				Broker->bSelfCullOnEmpty = false;
+				Broker->bSharesAbilityCooldowns = true;
 			}
 
 			// 0. Lazy initialization: detected by absence of the broker. Runs
@@ -169,6 +170,7 @@ public:
 				// lifetime via step 7's cull check.
 				FSeinCommandBrokerData NewBroker;
 				NewBroker.bSelfCullOnEmpty = false;
+				NewBroker.bSharesAbilityCooldowns = true;
 				NewBroker.Centroid = SquadXform.GetLocation();
 				NewBroker.Anchor = SquadXform.GetLocation();
 				NewBroker.bCapabilityMapDirty = true;
@@ -782,7 +784,7 @@ public:
 	{
 		return FSeinSystemDescriptor::Stateless(
 			FName(TEXT("seinarts.squad.maintenance")),
-			3u,
+			4u,
 			ESeinTickPhase::PostTick,
 			SeinSystemPriority::Squad);
 	}

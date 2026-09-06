@@ -14,9 +14,16 @@
 #include "TestTypes/SeinMoveToLifecycleTestTypes.h"
 #include "Testing/SeinMovementCanonicalStateTestAccess.h"
 #include "Testing/SeinMoveToActionContinuationTestAccess.h"
+#include "Simulation/SeinTestSimContext.h"
+#include "HAL/IConsoleManager.h"
+#include "Misc/ScopeExit.h"
 
 struct FSeinWorldSubsystemTestAccess
 {
+	static bool TickSimulation(USeinWorldSubsystem& World, float DeltaTime)
+	{
+		return World.TickSimulation(DeltaTime);
+	}
 	static bool SealRoutineRoot(
 		USeinWorldSubsystem& World,
 		bool bForceFullRebuild,
@@ -295,6 +302,108 @@ TEST(MovementAuthoritativeArrivalConsumesExactFinalStep,
 	ASSERT_THAT(IsTrue(Movement->Tick(Context)));
 	ASSERT_THAT(IsTrue(
 		Entity.Transform.GetLocation() == Destination));
+}
+
+TEST(SteeringSampleCapturesAppliedHeading, "SeinARTS.Unit.Steering.Debug")
+{
+	USeinBasicUnitMovement* Movement = NewObject<USeinBasicUnitMovement>();
+	FSeinEntity Entity;
+	FSeinMovementPayload Data;
+	Data.AvoidanceOutput.SteerDir = FFixedVector(FFixedPoint::Zero, FFixedPoint::One, FFixedPoint::Zero);
+	FSeinPath Path;
+	Path.Waypoints.Add(FFixedVector(FFixedPoint::FromInt(1000), FFixedPoint::Zero, FFixedPoint::Zero));
+	Path.bIsValid = true;
+	int32 Waypoint = 0;
+	FSeinMovementContext Context{Entity, &Data, nullptr, Path, Waypoint, FFixedPoint::One,
+		FFixedPoint::One / FFixedPoint::FromInt(30), nullptr, nullptr, FSeinEntityHandle()};
+	ASSERT_THAT(IsFalse(Movement->Tick(Context)));
+	const FSeinSteeringDebugSample& Sample = Movement->GetSteeringDebugSample();
+	ASSERT_THAT(IsTrue(Sample.bHasHeadings));
+	ASSERT_THAT(IsTrue((Sample.DesiredHeading - FFixedVector(FFixedPoint::One, FFixedPoint::Zero, FFixedPoint::Zero)).Size().ToFloat() < 0.001f));
+	const FFixedVector Direction = FFixedVector::GetSafeNormal(Data.Velocity);
+	ASSERT_THAT(IsTrue((Direction - Sample.AppliedHeading).Size().ToFloat() < 0.001f));
+	ASSERT_THAT(IsTrue(Sample.AppliedHeading.Y > FFixedPoint::Zero));
+}
+
+TEST(SteeringSamplesAreNonCanonicalAndResetOnRestore, "SeinARTS.Unit.Steering.Debug")
+{
+	FMovementCanonicalFixture Source, Destination;
+	const TArray<int32> Order = {0};
+	ASSERT_THAT(IsTrue(Source.Initialize(Order, TEXT("steering-debug-canonical"))));
+	ASSERT_THAT(IsTrue(Destination.Initialize(Order, TEXT("steering-debug-canonical"))));
+	FGuid Before, After;
+	FString Error;
+	ASSERT_THAT(IsTrue(Source.World->ComputeCanonicalStateRoot(Before, Error)));
+	USeinMovement* Driver = Source.Instance(0);
+	Driver->BeginSteeringDebugTick(Source.World->GetCurrentTick());
+	Driver->CaptureSteeringDebugHeadings(Source.World->GetCurrentTick(), FFixedVector::ZeroVector,
+		FFixedVector(FFixedPoint::One, FFixedPoint::Zero, FFixedPoint::Zero));
+	Driver->CaptureSteeringDebugTarget(Source.World->GetCurrentTick(), FFixedVector::ZeroVector);
+	Driver->CaptureSteeringDebugMotion(Source.World->GetCurrentTick(), FFixedVector::ZeroVector, true);
+	ASSERT_THAT(IsTrue(Source.World->ComputeCanonicalStateRoot(After, Error)));
+	ASSERT_THAT(AreEqual(Before, After));
+	FSeinWorldSnapshot Snapshot;
+	Source.World->CaptureSnapshot(Snapshot);
+	ASSERT_THAT(IsTrue(SeinTestSnapshotRestore::RestoreTrusted(*Destination.World, Snapshot, &Error)));
+	USeinMovement* Restored = Destination.Movement->FindMovementInstance(Source.Entities[0]);
+	ASSERT_THAT(IsNotNull(Restored));
+	ASSERT_THAT(AreEqual(INDEX_NONE, Restored->GetSteeringDebugSample().DecisionTick));
+	ASSERT_THAT(AreEqual(INDEX_NONE, Restored->GetSteeringDebugSample().MotionTick));
+}
+
+TEST(SteeringIdleSamplesMatchSerialAndParallel, "SeinARTS.Sim.Steering.Debug")
+{
+	USeinMoveToLifecycleTestMovement::Reset();
+	USeinMoveToLifecycleTestMovement::Deceleration = FFixedPoint::FromInt(10);
+	ON_SCOPE_EXIT { USeinMoveToLifecycleTestMovement::Reset(); };
+	IConsoleVariable* Parallel = IConsoleManager::Get().FindConsoleVariable(TEXT("Sein.Sim.Parallel"));
+	IConsoleVariable* Batch = IConsoleManager::Get().FindConsoleVariable(TEXT("Sein.Sim.ParallelMinBatch"));
+	ASSERT_THAT(IsNotNull(Parallel));
+	ASSERT_THAT(IsNotNull(Batch));
+	const int32 SavedParallel = Parallel->GetInt(), SavedBatch = Batch->GetInt();
+	ON_SCOPE_EXIT { Parallel->Set(SavedParallel, ECVF_SetByCode); Batch->Set(SavedBatch, ECVF_SetByCode); };
+	Batch->Set(1, ECVF_SetByCode);
+	FMovementCanonicalFixture Serial, Concurrent;
+	const TArray<int32> Order = {0, 1, 2, 3};
+	ASSERT_THAT(IsTrue(Serial.Initialize(Order, TEXT("steering-idle-parallel"))));
+	ASSERT_THAT(IsTrue(Concurrent.Initialize(Order, TEXT("steering-idle-parallel"))));
+	for (FMovementCanonicalFixture* Fixture : {&Serial, &Concurrent})
+	{
+		auto Scope = FSeinSimContextTestAccess::Enter(*Fixture->World);
+		for (int32 I = 0; I < Order.Num(); ++I)
+		{
+			auto* Move = Fixture->World->GetComponentMutable<FSeinMovementPayload>(Fixture->Entities[I]);
+			Move->bInitialGroundSnapDone = true;
+			Move->Velocity = FFixedVector(FFixedPoint::FromInt(120), FFixedPoint::Zero, FFixedPoint::Zero);
+			Fixture->World->GetEntityMutable(Fixture->Entities[I])->Transform.SetLocation(
+				FFixedVector(FFixedPoint::Zero, FFixedPoint::FromInt(I * 500), FFixedPoint::Zero));
+		}
+	}
+	for (int32 Tick = 0; Tick < 12; ++Tick)
+	{
+		Parallel->Set(0, ECVF_SetByCode);
+		ASSERT_THAT(IsTrue(FSeinWorldSubsystemTestAccess::TickSimulation(*Serial.World, Serial.World->GetFixedDeltaTimeSeconds())));
+		Parallel->Set(1, ECVF_SetByCode);
+		ASSERT_THAT(IsTrue(FSeinWorldSubsystemTestAccess::TickSimulation(*Concurrent.World, Concurrent.World->GetFixedDeltaTimeSeconds())));
+		FGuid SerialRoot, ParallelRoot;
+		FString Error;
+		ASSERT_THAT(IsTrue(Serial.World->ComputeCanonicalStateRoot(SerialRoot, Error)));
+		ASSERT_THAT(IsTrue(Concurrent.World->ComputeCanonicalStateRoot(ParallelRoot, Error)));
+		ASSERT_THAT(AreEqual(SerialRoot, ParallelRoot));
+		for (int32 I = 0; I < Order.Num(); ++I)
+		{
+			const auto& A = Serial.Instance(I)->GetSteeringDebugSample();
+			const auto& B = Concurrent.Instance(I)->GetSteeringDebugSample();
+			ASSERT_THAT(AreEqual(Serial.World->GetCurrentTick(), A.DecisionTick));
+			ASSERT_THAT(AreEqual(Serial.World->GetCurrentTick(), A.MotionTick));
+			ASSERT_THAT(IsTrue(A.SettledVelocity == B.SettledVelocity));
+			if (Tick > 0)
+			{
+				ASSERT_THAT(IsTrue(A.bHasSettledVelocity && B.bHasSettledVelocity));
+				ASSERT_THAT(IsTrue(A.SettledVelocity.X > FFixedPoint::Zero));
+			}
+		}
+	}
 }
 
 TEST(MovementLongRangeWaypointAdvanceUsesExactDistance,

@@ -77,7 +77,7 @@ private:
 		Descriptor.Kind = ESeinPoolObjectKind::Ability;
 		Descriptor.StableProviderId =
 			TEXT("seinarts.extensiontests.pool.ability.vehicle-gym.reflection");
-		Descriptor.StateSchemaVersion = 2;
+		Descriptor.StateSchemaVersion = 3;
 		Descriptor.BehaviorRevision = 1;
 		Descriptor.CodecRevision = 3;
 		Descriptor.MaxStateBytes =
@@ -109,7 +109,7 @@ private:
 		Descriptor.Kind = ESeinPoolObjectKind::Ability;
 		Descriptor.StableProviderId =
 			TEXT("seinarts.extensiontests.pool.ability.squad-reinforcement.reflection");
-		Descriptor.StateSchemaVersion = 1;
+		Descriptor.StateSchemaVersion = 2;
 		Descriptor.BehaviorRevision = 1;
 		Descriptor.CodecRevision = 1;
 		Descriptor.MaxStateBytes =
@@ -141,7 +141,7 @@ private:
 		Descriptor.Kind = ESeinPoolObjectKind::Ability;
 		Descriptor.StableProviderId =
 			TEXT("seinarts.extensiontests.pool.ability.cover-replay.reflection");
-		Descriptor.StateSchemaVersion = 1;
+		Descriptor.StateSchemaVersion = 2;
 		Descriptor.BehaviorRevision = 1;
 		Descriptor.CodecRevision = 1;
 		Descriptor.MaxStateBytes =

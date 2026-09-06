@@ -4,7 +4,7 @@
  * @file         SeinAbilityTypes.h
  * @author       RJ Macklem
  * @created      02 Jun 2026
- * @latest       14 Aug 2026
+ * @latest       05 Sep 2026
  * @brief        Defines Blueprint-facing ability targeting, cooldown, and availability types.
  *
  * @disclaimer   This code was generated in whole or in part with the assistance
@@ -52,24 +52,18 @@ enum class ESeinCooldownStartTiming : uint8
 };
 
 /**
- * Where the ability's cooldown is applied when activated by a member of a squad.
- * Read by the cooldown system after a successful activation.
- *
- * Has no effect on lone (non-squad-member) entities — they always behave as Member.
+ * Chooses whether an activation starts only its owner's cooldown or also the
+ * matching ability on members of an explicitly opted-in command broker.
  */
 UENUM(BlueprintType)
 enum class ESeinCooldownScope : uint8
 {
-	/** Only the activating member's instance of the ability goes on cooldown.
-	 *  Stackable per-member abilities — e.g., each soldier has their own
-	 *  "throw frag" cooldown so all 4 grenadiers can throw in close succession. */
-	Member,
+	/** Only the activating owner's ability goes on cooldown. */
+	OwnerOnly = 0 UMETA(DisplayName = "Owner Only"),
 
-	/** All squad members' instances of the ability tag go on cooldown when ANY
-	 *  member activates. Default — matches the "the squad threw the grenade,
-	 *  the whole squad waits before throwing again" semantic. For non-squad entities this
-	 *  collapses to Member behavior automatically. */
-	Squad
+	/** Copies the cooldown to matching ability tags in the owner's sharing group.
+	 *  Without an opted-in group this behaves as Owner Only. */
+	SharedGroup = 1 UMETA(DisplayName = "Shared Group")
 };
 
 /**

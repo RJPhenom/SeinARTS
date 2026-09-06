@@ -219,6 +219,9 @@ public:
 				&World,
 				Unit.Handle
 			};
+#if UE_ENABLE_DEBUG_DRAWING
+			Unit.Movement->BeginSteeringDebugTick(World.GetCurrentTick());
+#endif
 			Unit.Movement->TickIdle(Ctx);
 		};
 

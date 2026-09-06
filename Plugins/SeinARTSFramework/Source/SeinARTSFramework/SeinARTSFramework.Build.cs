@@ -48,6 +48,7 @@ public class SeinARTSFramework : ModuleRules
 				"UMG",
 				"SeinARTSNet",
 				"SeinARTSLevelData",
+				"SeinARTSMovement", // Render-only selected-unit steering diagnostics.
 			}
 			);
 		

@@ -2,7 +2,7 @@
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinARTSCoverEditorModule.cpp
  *
- * Cover editor module — owns two editor-surface integrations for the cover
+ * Cover editor module — owns three editor-surface integrations for the cover
  * system:
  *
  *   1. Property-type customization (`FSeinCoverComponentDetails`) for
@@ -14,10 +14,14 @@
  *      registered with `FSeinARTSEditorModule::RegisterComponentDataDraw`
  *      so the bridge's single visualizer fans out to our cover-area + slot
  *      draw layer. SeinARTSEditor doesn't know about us — clean opt-in.
+ *
+ *   3. Shared-settings contribution that displays this extension's own
+ *      UDeveloperSettings fields under Project Settings > SeinARTS > Cover.
  */
 
 #include "SeinARTSCoverEditorModule.h"
 #include "Details/SeinCoverComponentDetails.h"
+#include "Settings/SeinARTSCoverSettings.h"
 #include "Visualizers/SeinCoverEntityDraw.h"
 
 #include "SeinARTSEditorModule.h"
@@ -32,6 +36,7 @@ namespace
 	// Registry key for the cover draw callback. Stored as a constant so the
 	// register + unregister sites can't drift on a typo'd name.
 	const FName GCoverDrawKey(TEXT("SeinCoverComponent"));
+	const FName GCoverSettingsKey(TEXT("SeinARTSCoverSettings"));
 }
 
 void FSeinARTSCoverEditorModule::StartupModule()
@@ -56,6 +61,31 @@ void FSeinARTSCoverEditorModule::StartupModule()
 		FModuleManager::LoadModulePtr<FSeinARTSEditorModule>("SeinARTSEditor");
 	if (EditorModule)
 	{
+		EditorModule->RegisterSettingsCategoryContribution(
+			GCoverSettingsKey,
+			TEXT("Cover"),
+			GetMutableDefault<USeinARTSCoverSettings>(),
+			{
+				{
+					GET_MEMBER_NAME_CHECKED(
+						USeinARTSCoverSettings,
+						CoverSnapRadius),
+					false
+				},
+				{
+					GET_MEMBER_NAME_CHECKED(
+						USeinARTSCoverSettings,
+						TerrainCoverQuality),
+					false
+				},
+				{
+					GET_MEMBER_NAME_CHECKED(
+						USeinARTSCoverSettings,
+						CoverSystemClass),
+					false
+				},
+			});
+
 		FSeinComponentDataDrawDelegate Draw;
 		Draw.BindStatic(&SeinCoverEntityDraw::DrawCoverEntries);
 		EditorModule->RegisterComponentDataDraw(GCoverDrawKey, Draw);
@@ -91,6 +121,8 @@ void FSeinARTSCoverEditorModule::ShutdownModule()
 	if (FSeinARTSEditorModule* EditorModule =
 			FModuleManager::GetModulePtr<FSeinARTSEditorModule>("SeinARTSEditor"))
 	{
+		EditorModule->UnregisterSettingsCategoryContribution(
+			GCoverSettingsKey);
 		EditorModule->UnregisterComponentDataDraw(GCoverDrawKey);
 	}
 }

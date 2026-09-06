@@ -96,7 +96,7 @@ public:
 	 *  — BP class defaults must not carry an owner. Slot value maps directly
 	 *  to `FSeinPlayerID(slot)`. Faction/team are derived from the owning
 	 *  player's state, not stored per-entity. */
-	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "SeinARTS|Ownership", meta = (ClampMin = "0", ClampMax = "16"))
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "SeinARTS", meta = (ClampMin = "0", ClampMax = "16"))
 	int32 PlayerSlot = 0;
 
 	/** Editor-baked snapshot of this actor's sim location, computed at edit
@@ -110,13 +110,13 @@ public:
 	 *  This is what makes lockstep cross-platform safe (PC ↔ ARM Mac ↔
 	 *  mobile ↔ console). `bSimLocationBaked` flips true on first
 	 *  PostEditMove; runtime spawning fails closed if the bake is missing. */
-	UPROPERTY(VisibleAnywhere, AdvancedDisplay, Category = "SeinARTS|Determinism")
+	UPROPERTY(VisibleAnywhere, AdvancedDisplay, Category = "SeinARTS")
 	FFixedVector PlacedSimLocation = FFixedVector::ZeroVector;
 
 	/** True once `PlacedSimLocation` has been baked from the actor's
 	 *  current world transform. Catches "actor placed before this property
 	 *  existed" so bootstrap can reject stale authored state. */
-	UPROPERTY(VisibleAnywhere, AdvancedDisplay, Category = "SeinARTS|Determinism")
+	UPROPERTY(VisibleAnywhere, AdvancedDisplay, Category = "SeinARTS")
 	bool bSimLocationBaked = false;
 
 	/** Editor-baked snapshot of this actor's sim rotation. Parallel to
@@ -130,13 +130,13 @@ public:
 	 *  transform was constructed with identity rotation and the actor
 	 *  bridge re-applied identity to the AActor every frame, snapping it
 	 *  to yaw=0 visually + breaking cover-slot world positions. */
-	UPROPERTY(VisibleAnywhere, AdvancedDisplay, Category = "SeinARTS|Determinism")
+	UPROPERTY(VisibleAnywhere, AdvancedDisplay, Category = "SeinARTS")
 	FFixedQuaternion PlacedSimRotation = FFixedQuaternion::Identity;
 
 	/** True once `PlacedSimRotation` has been baked. Runtime spawning fails
 	 *  closed when this is false; re-save or nudge legacy placed actors to
 	 *  bake their deterministic transform. */
-	UPROPERTY(VisibleAnywhere, AdvancedDisplay, Category = "SeinARTS|Determinism")
+	UPROPERTY(VisibleAnywhere, AdvancedDisplay, Category = "SeinARTS")
 	bool bSimRotationBaked = false;
 
 protected:

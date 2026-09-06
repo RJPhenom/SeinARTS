@@ -400,11 +400,14 @@ void USeinNavigationSubsystem::OnLevelDataChanged()
 	if (const USeinLevelDataSubsystem* LevelSubsystem =
 			LevelDataSubsystem.Get();
 		LevelSubsystem
+			&& GetWorld()->WorldType != EWorldType::Editor
 			&& !LevelSubsystem->IsInitialRuntimeDataPrepared())
 	{
 		// Initial asset adoption broadcasts before the shared readiness bit is
 		// published. The one-shot prepared callback performs the sole O(N)
 		// grid adoption after that transaction succeeds.
+		// Editor worlds never begin play; their bake/load notifications bypass
+		// this runtime barrier so the preview adopts every completed bake.
 		return;
 	}
 	if (bStateBindingFrozen)

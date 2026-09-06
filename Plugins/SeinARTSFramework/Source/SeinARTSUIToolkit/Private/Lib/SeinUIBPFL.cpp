@@ -227,6 +227,15 @@ TArray<FVector2D> USeinUIBPFL::SeinGetCameraFrustumCorners(APlayerController* Pl
 		return Corners;
 	}
 
+	// ASeinCameraPawn's pivot is its terrain-following ground focus. Projecting
+	// onto that live plane keeps the footprint correctly sized and positioned on
+	// uneven terrain. GroundZ remains the fallback for other camera pawn types.
+	float ProjectionGroundZ = GroundZ;
+	if (const ASeinCameraPawn* CameraPawn = Cast<ASeinCameraPawn>(PlayerController->GetPawn()))
+	{
+		ProjectionGroundZ = CameraPawn->GetPivotLocation().Z;
+	}
+
 	// Get viewport size
 	int32 ViewportX, ViewportY;
 	PlayerController->GetViewportSize(ViewportX, ViewportY);
@@ -248,7 +257,7 @@ TArray<FVector2D> USeinUIBPFL::SeinGetCameraFrustumCorners(APlayerController* Pl
 	for (int32 i = 0; i < 4; ++i)
 	{
 		FVector WorldPos;
-		if (SeinScreenToWorld(PlayerController, PlayerController, ScreenCorners[i], GroundZ, WorldPos))
+		if (SeinScreenToWorld(PlayerController, PlayerController, ScreenCorners[i], ProjectionGroundZ, WorldPos))
 		{
 			Corners.Add(SeinWorldToMinimap(WorldPos, WorldBoundsMin, WorldBoundsMax));
 		}

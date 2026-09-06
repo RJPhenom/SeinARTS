@@ -55,27 +55,19 @@ export default defineConfig({
 					],
 				},
 				{
-					label: 'Guides',
+					label: 'Build the Demo',
 					items: [
 						{
-							label: 'Creating an Entity Blueprint',
-							slug: 'guides/creating-an-entity-blueprint',
+							label: 'Create the Demo Project',
+							slug: 'guides/creating-the-demo-project',
 						},
 						{
-							label: 'Making an Infantry Unit',
-							slug: 'guides/making-an-infantry-unit',
+							label: 'Gameplay Classes and Input',
+							slug: 'guides/creating-gameplay-classes-and-input',
 						},
 						{
-							label: 'Making a Movement Ability',
-							slug: 'guides/making-a-movement-ability',
-						},
-						{
-							label: 'Making Combat Abilities',
-							slug: 'guides/making-combat-abilities',
-						},
-						{
-							label: 'Setting Up a Playable Level',
-							slug: 'guides/setting-up-a-playable-level',
+							label: 'Create the First Level',
+							slug: 'guides/creating-the-first-level',
 						},
 					],
 				},

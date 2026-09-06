@@ -1442,18 +1442,25 @@ FFixedVector USeinMovement::ResolveNavCollisionStep(
 
 FFixedVector USeinMovement::ApplyAvoidanceSteer(const FSeinMovementContext& Ctx, const FFixedVector& DesiredDir) const
 {
+	const auto Observe = [&](const FFixedVector& Applied)
+	{
+#if UE_ENABLE_DEBUG_DRAWING
+		CaptureSteeringDebugHeadings(Ctx.World ? Ctx.World->GetCurrentTick() : INDEX_NONE, DesiredDir, Applied);
+#endif
+		return Applied;
+	};
 	// PURE READ — never query the spatial hash or read neighbour state here.
 	// Movement runs through the insertion-ordered latent-action manager (live
 	// neighbour transforms), so any neighbour read at this point would be
 	// order-dependent → desync. The steer was computed ONE-SIDED at PreTick by
 	// FSeinAvoidanceSystem; here we only consume our own already-written field.
-	if (!Ctx.MovementData) return DesiredDir;
+	if (!Ctx.MovementData) return Observe(DesiredDir);
 	const FFixedVector& Steer = Ctx.MovementData->AvoidanceOutput.SteerDir;
 
 	// Bit-exact no-op when not avoiding: return the input direction UNCHANGED (no
 	// renormalize), so AvoidanceStrength = 0 / no-neighbour units move identically
 	// to a world with no avoidance.
-	if (Steer.SizeSquared() <= FFixedPoint::Epsilon) return DesiredDir;
+	if (Steer.SizeSquared() <= FFixedPoint::Epsilon) return Observe(DesiredDir);
 
 	// Bend the (unit) desired direction by the lateral steer, then renormalize.
 	const FFixedVector Bent = FFixedVector::GetSafeNormal(
@@ -1529,7 +1536,7 @@ FFixedVector USeinMovement::ApplyAvoidanceSteer(const FSeinMovementContext& Ctx,
 		}
 	}
 
-	return CapToGoal(Result);
+	return Observe(CapToGoal(Result));
 }
 
 FFixedPoint USeinMovement::GetAvoidanceSpeedScale(const FSeinMovementContext& Ctx) const
@@ -1628,9 +1635,8 @@ void USeinMovement::DrawSteeringDebugViz(
 			/*ArrowSize*/ 20.0f, VelocityColor,
 			/*PersistentLines*/ false, DrawLifetime, /*DepthPriority*/ 0, /*Thickness*/ 5.0f);
 
-		// AVOIDANCE arrow — RED, the world-space steer expressed as the sideways velocity it adds
-		// (AvoidanceSteer × current speed), directly comparable to the orange velocity arrow and
-		// likewise NOT chassis-rotated. Skips when not avoiding.
+		// Legacy RED arrow: speed-scaled raw avoidance request, not the final
+		// correction after wall guards, normalization, or driver turning limits.
 		const FVector AvoidFloat(
 			AvoidanceSteer.X.ToFloat() * VelocitySize,
 			AvoidanceSteer.Y.ToFloat() * VelocitySize,

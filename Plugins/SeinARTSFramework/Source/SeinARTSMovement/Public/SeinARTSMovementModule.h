@@ -4,7 +4,7 @@
  * @brief   Module class for SeinARTSMovement.
  *
  *          Owns the steering show flag (`Sein.Show.Steering`) and the
- *          active-move path debug ticker. The flag gates movement debug viz
+ *          active-move path Canvas overlay. The flag gates movement debug viz
  *          (today: footprint ring, velocity, avoidance steer) via
  *          `IsSteeringShowFlagOnForWorld`.
  */

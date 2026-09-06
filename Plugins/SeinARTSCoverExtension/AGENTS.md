@@ -91,6 +91,9 @@ destination that the changing world made unreachable.
 
 - Slot generation must use transaction/property APIs that propagate correctly to archetypes.
 - `SeinARTSCoverEditor` registers and unregisters its unique draw key with the framework editor.
+- `SeinARTSCoverEditor` registers the Cover-owned settings CDO with the generic framework-editor
+  settings registry. The properties appear under the shared SeinARTS page, while storage and the
+  config fingerprint remain owned entirely by `SeinARTSCover`.
 - Formation-preview rendering lives in the framework; Cover supplies quality and slot planning,
   not a second render pipeline.
 - Preview is read-only. It may create provisional claims but never mutate authoritative sim state.

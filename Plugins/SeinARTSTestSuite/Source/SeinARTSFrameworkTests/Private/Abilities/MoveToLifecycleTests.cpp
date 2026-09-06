@@ -2,6 +2,20 @@
 #include "Components/ActorTestSpawner.h"
 
 #include "Actions/SeinMoveToAction.h"
+#include "Debug/SeinNavPathDebug.h"
+#include "Debug/SeinDebugDrawCull.h"
+#include "SeinMovementSubsystem.h"
+#include "Debug/DebugDrawService.h"
+#include "Engine/Canvas.h"
+#include "Engine/TextureRenderTarget2D.h"
+#include "CanvasTypes.h"
+#include "SceneView.h"
+#include "RenderingThread.h"
+#include "ImageUtils.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
+#include "Misc/ScopeExit.h"
+#include "HAL/IConsoleManager.h"
 #include "Components/SeinAbilityPayload.h"
 #include "Components/SeinBrokerMembershipData.h"
 #include "Components/SeinCommandBrokerData.h"
@@ -552,6 +566,299 @@ namespace
 
 namespace UE::SeinARTSTests
 {
+	TEST(NavDebugCanvasDrawsCurrentViewWithoutRetainedLines, "SeinARTS.Integration.Navigation.Debug")
+	{
+		FScopedMoveToTestState Reset;
+		FMoveToLifecycleFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false)));
+		// The lifecycle fixture normally wires a deliberately synthetic observer.
+		// Use the production factory here so canonical capture sees the real graph.
+		{
+			auto Scope = FSeinSimContextTestAccess::Enter(*Fixture.World);
+			Fixture.Action->Observer.Reset();
+			Fixture.Manager->CancelAllActions();
+			Fixture.Proxy = USeinMoveToProxy::SeinMoveTo(Fixture.Ability, Fixture.Destination);
+			Fixture.Proxy->Activate();
+			Fixture.Action = FMoveToActionContinuationTestAccess::GetRunningAction(*Fixture.Proxy);
+		}
+		ASSERT_THAT(IsNotNull(Fixture.Action));
+		Fixture.Tick();
+		// The search chain deliberately bends away from the smoothed driven route.
+		// A cell renderer must preserve these exact samples rather than rasterize the line.
+		Fixture.Action->Path.DebugCellPath = {
+			FFixedVector::ZeroVector,
+			FFixedVector(FFixedPoint::Zero, FFixedPoint::FromInt(100), FFixedPoint::Zero),
+			FFixedVector(FFixedPoint::FromInt(100), FFixedPoint::FromInt(100), FFixedPoint::Zero),
+			Fixture.Destination};
+		IConsoleVariable* Cells = IConsoleManager::Get().FindConsoleVariable(TEXT("Sein.Nav.Show.RawCells"));
+		ASSERT_THAT(IsNotNull(Cells));
+		ASSERT_THAT(AreEqual(1, Cells->GetInt())); // Filled cells are part of the default view.
+		const int32 SavedCells = Cells->GetInt();
+		ON_SCOPE_EXIT { Cells->Set(SavedCells, ECVF_SetByCode); };
+		UWorld* RenderWorld = Fixture.World->GetWorld();
+		ASSERT_THAT(IsNotNull(RenderWorld->Scene));
+		const int32 Flag = FEngineShowFlags::FindIndexByName(TEXT("SeinNavigation"));
+		ASSERT_THAT(IsTrue(Flag != INDEX_NONE));
+		UTextureRenderTarget2D* Target = NewObject<UTextureRenderTarget2D>(RenderWorld);
+		Target->RenderTargetFormat = RTF_RGBA8;
+		Target->InitAutoFormat(800, 600);
+		Target->UpdateResourceImmediate(true);
+		FTextureRenderTargetResource* Resource = Target->GameThread_GetRenderTargetResource();
+		ASSERT_THAT(IsNotNull(Resource));
+		FIntPoint BentCellProbe, FinalCellProbe;
+		auto Render = [&](bool bEnabled, TArray<FColor>& Pixels)
+		{
+			FEngineShowFlags Flags(ESFIM_Game);
+			Flags.SetSingleFlag(Flag, bEnabled);
+			FSceneViewFamilyContext Family(FSceneViewFamily::ConstructionValues(Resource, RenderWorld->Scene, Flags)
+				.SetTime(FGameTime::GetTimeSinceAppStart()));
+			FSceneViewInitOptions Options;
+			Options.ViewFamily = &Family;
+			Options.SetViewRectangle(FIntRect(0, 0, 800, 600));
+			Options.ViewOrigin = FVector(0, 0, 1000);
+			Options.ViewRotationMatrix = FInverseRotationMatrix(FRotator(-90, 0, 0))
+				* FMatrix(FPlane(0, 0, 1, 0), FPlane(1, 0, 0, 0), FPlane(0, 1, 0, 0), FPlane(0, 0, 0, 1));
+			Options.ProjectionMatrix = FReversedZOrthoMatrix(400, 300, 1.0 / 10000.0, 0);
+			FSceneView View(Options);
+			FCanvas Buffer(Resource, nullptr, RenderWorld, RenderWorld->GetFeatureLevel());
+			Buffer.Clear(FLinearColor::Black);
+			UCanvas* Canvas = NewObject<UCanvas>(RenderWorld);
+			Canvas->Init(800, 600, &View, &Buffer);
+			Canvas->Update();
+			auto InteriorProbe = [&](const FVector& WorldPoint)
+			{
+				const FVector P = Canvas->Project(WorldPoint);
+				// Offset from center markers and route lines, within the filled cell.
+				return FIntPoint(FMath::RoundToInt(P.X) + 12, FMath::RoundToInt(P.Y) + 12);
+			};
+			BentCellProbe = InteriorProbe(FVector(0, 100, 15));
+			FinalCellProbe = InteriorProbe(FVector(100, 0, 15));
+			UDebugDrawService::Draw(Flags, Canvas);
+			Buffer.Flush_GameThread();
+			FlushRenderingCommands();
+			return Resource->ReadPixels(Pixels);
+		};
+		auto RoutePixels = [](const TArray<FColor>& Pixels)
+		{
+			int32 Count = 0;
+			// Excludes legend: count only the actual central world-path geometry.
+			for (int32 Y = 200; Y < 450; ++Y)
+				for (int32 X = 200; X < 650; ++X)
+				{
+					const FColor& C = Pixels[Y * 800 + X];
+					if (C.R > 20 || C.G > 20 || C.B > 20) ++Count;
+				}
+			return Count;
+		};
+		TArray<FColor> Off, On, OffAgain, LinesOnly, WithoutHistory;
+		FGuid RootBefore, RootAfter;
+		FString RootError;
+		const bool bRootCaptured = Fixture.World->ComputeCanonicalStateRoot(RootBefore, RootError);
+		if (!bRootCaptured) UE_LOG(LogTemp, Error, TEXT("Nav debug fixture canonical root: %s"), *RootError);
+		ASSERT_THAT(IsTrue(bRootCaptured));
+		ASSERT_THAT(IsTrue(Render(false, Off)));
+		ASSERT_THAT(IsTrue(Render(true, On)));
+		ASSERT_THAT(IsTrue(Render(false, OffAgain)));
+		Cells->Set(0, ECVF_SetByCode);
+		ASSERT_THAT(IsTrue(Render(true, LinesOnly)));
+		Cells->Set(1, ECVF_SetByCode);
+		const TArray<FFixedVector> SavedHistory = Fixture.Action->Path.DebugCellPath;
+		Fixture.Action->Path.DebugCellPath.Reset();
+		ASSERT_THAT(IsTrue(Render(true, WithoutHistory)));
+		Fixture.Action->Path.DebugCellPath = SavedHistory;
+		ASSERT_THAT(IsTrue(Fixture.World->ComputeCanonicalStateRoot(RootAfter, RootError)));
+		ASSERT_THAT(AreEqual(RootBefore, RootAfter));
+		ASSERT_THAT(AreEqual(0, RoutePixels(Off)));
+		ASSERT_THAT(IsTrue(RoutePixels(On) > 10));
+		// Filled interiors, not outlines or the old gray point markers.
+		ASSERT_THAT(IsTrue(RoutePixels(On) > RoutePixels(LinesOnly) + 4000));
+		ASSERT_THAT(AreEqual(RoutePixels(LinesOnly), RoutePixels(WithoutHistory)));
+		const int32 BentIndex = BentCellProbe.Y * 800 + BentCellProbe.X;
+		const int32 FinalIndex = FinalCellProbe.Y * 800 + FinalCellProbe.X;
+		ASSERT_THAT(IsTrue(On.IsValidIndex(BentIndex) && On.IsValidIndex(FinalIndex)));
+		ASSERT_THAT(IsTrue(On[BentIndex].R > 150 && On[BentIndex].G > 100 && On[BentIndex].B < 80));
+		ASSERT_THAT(IsTrue(LinesOnly[BentIndex].R < 20 && LinesOnly[BentIndex].G < 20 && LinesOnly[BentIndex].B < 20));
+		ASSERT_THAT(IsTrue(On[FinalIndex].B > 100 && On[FinalIndex].R < 100));
+		ASSERT_THAT(AreEqual(0, RoutePixels(OffAgain)));
+		TArray<uint8> PNG;
+		FImageUtils::CompressImageArray(800, 600, On, PNG);
+		const FString Preview = FPaths::ProjectSavedDir() / TEXT("Automation/NavDebugCanvas.png");
+		ASSERT_THAT(IsTrue(FFileHelper::SaveArrayToFile(PNG, *Preview)));
+	}
+
+	TEST(SteeringCanvasShowsIdleMotionAndOwnsItsViewBudget, "SeinARTS.Integration.Steering.Debug")
+	{
+		FScopedMoveToTestState Reset;
+		FMoveToLifecycleFixture Fixture;
+		FSeinNavigationPayload Nav;
+		Nav.FallbackFootprintRadius = FFixedPoint::FromInt(20);
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false, &Nav)));
+		Fixture.Tick();
+		UWorld* World = Fixture.World->GetWorld();
+		USeinMovement* Driver = World->GetSubsystem<USeinMovementSubsystem>()->FindMovementInstance(Fixture.Entity);
+		ASSERT_THAT(IsNotNull(Driver));
+		{
+			auto Scope = FSeinSimContextTestAccess::Enter(*Fixture.World);
+			auto* Move = Fixture.World->GetComponentMutable<FSeinMovementPayload>(Fixture.Entity);
+			Move->bHasTarget = false; // Idle coasting / sidestepping must remain visible.
+			Move->Velocity = FFixedVector(FFixedPoint::FromInt(120), FFixedPoint::Zero, FFixedPoint::Zero);
+			Move->AvoidanceOutput.SteerDir = FFixedVector(FFixedPoint::Zero, FFixedPoint::One, FFixedPoint::Zero);
+		}
+		Driver->CaptureSteeringDebugMotion(Fixture.World->GetCurrentTick(),
+			FFixedVector(FFixedPoint::FromInt(80), FFixedPoint::Zero, FFixedPoint::Zero), true);
+		auto* Settings = GetMutableDefault<USeinARTSCoreSettings>();
+		const int32 SavedCap = Settings->DebugDrawMaxEntities;
+		const bool SavedLegends = Settings->bShowDebugLegends;
+		Settings->DebugDrawMaxEntities = 1;
+		Settings->bShowDebugLegends = true;
+		ON_SCOPE_EXIT { Settings->DebugDrawMaxEntities = SavedCap; Settings->bShowDebugLegends = SavedLegends; };
+		const int32 Flag = FEngineShowFlags::FindIndexByName(TEXT("SeinSteering"));
+		ASSERT_THAT(IsTrue(Flag != INDEX_NONE));
+		UTextureRenderTarget2D* Target = NewObject<UTextureRenderTarget2D>(World);
+		Target->RenderTargetFormat = RTF_RGBA8;
+		Target->InitAutoFormat(800, 600);
+		Target->UpdateResourceImmediate(true);
+		auto* Resource = Target->GameThread_GetRenderTargetResource();
+		auto Render = [&](bool bEnabled, TArray<FColor>& Pixels, bool bAllPanels = false)
+		{
+			FEngineShowFlags Flags(ESFIM_Game);
+			Flags.SetSingleFlag(Flag, bEnabled);
+			for (const TCHAR* Name : { TEXT("SeinNavigation"), TEXT("SeinExtents"), TEXT("FogOfWar") })
+			{
+				const int32 PanelFlag = FEngineShowFlags::FindIndexByName(Name);
+				if (PanelFlag != INDEX_NONE) Flags.SetSingleFlag(PanelFlag, bAllPanels);
+			}
+			FSceneViewFamilyContext Family(FSceneViewFamily::ConstructionValues(Resource, World->Scene, Flags)
+				.SetTime(FGameTime::GetTimeSinceAppStart()));
+			FSceneViewInitOptions Options;
+			Options.ViewFamily = &Family;
+			Options.SetViewRectangle(FIntRect(0, 0, 800, 600));
+			Options.ViewOrigin = FVector(0, 0, 1000);
+			Options.ViewRotationMatrix = FInverseRotationMatrix(FRotator(-90, 0, 0))
+				* FMatrix(FPlane(0, 0, 1, 0), FPlane(1, 0, 0, 0), FPlane(0, 1, 0, 0), FPlane(0, 0, 0, 1));
+			Options.ProjectionMatrix = FReversedZOrthoMatrix(400, 300, 1.0 / 10000.0, 0);
+			FSceneView View(Options);
+			FCanvas Buffer(Resource, nullptr, World, World->GetFeatureLevel());
+			Buffer.Clear(FLinearColor::Black);
+			UCanvas* Canvas = NewObject<UCanvas>(World);
+			Canvas->Init(800, 600, &View, &Buffer);
+			Canvas->Update();
+			UDebugDrawService::Draw(Flags, Canvas);
+			Buffer.Flush_GameThread();
+			FlushRenderingCommands();
+			return Resource->ReadPixels(Pixels);
+		};
+		auto Colored = [](const TArray<FColor>& Pixels, bool bRed)
+		{
+			int32 Count = 0;
+			for (int32 Y = 150; Y < 450; ++Y)
+				for (int32 X = 200; X < 650; ++X)
+				{
+					const FColor& C = Pixels[Y * 800 + X];
+					if (bRed ? C.R > 150 && C.G < 100 && C.B < 100 : C.G > 150 && C.R < 100) ++Count;
+				}
+			return Count;
+		};
+		TArray<FColor> On, Off, Again;
+		ASSERT_THAT(IsTrue(Render(true, On)));
+		ASSERT_THAT(IsTrue(Colored(On, true) > 10));
+		ASSERT_THAT(IsTrue(Colored(On, false) > 10));
+		ASSERT_THAT(IsTrue(Render(false, Off)));
+		ASSERT_THAT(AreEqual(0, Colored(Off, true) + Colored(Off, false)));
+		// Exhaust the old Extents/ticker allowance. This view still gets its own budget.
+		while (UE::SeinARTSMovement::DebugDraw::TryReserveBudget()) {}
+		ASSERT_THAT(IsTrue(Render(true, Again)));
+		ASSERT_THAT(AreEqual(Colored(On, true), Colored(Again, true)));
+		ASSERT_THAT(AreEqual(Colored(On, false), Colored(Again, false)));
+		Settings->bShowDebugLegends = false;
+		TArray<FColor> WithoutLegend;
+		ASSERT_THAT(IsTrue(Render(true, WithoutLegend)));
+		ASSERT_THAT(AreEqual(Colored(On, true), Colored(WithoutLegend, true)));
+		ASSERT_THAT(AreEqual(Colored(On, false), Colored(WithoutLegend, false)));
+		TArray<FColor> AllHidden, AllVisible;
+		ASSERT_THAT(IsTrue(Render(true, AllHidden, true)));
+		Settings->bShowDebugLegends = true;
+		ASSERT_THAT(IsTrue(Render(true, AllVisible, true)));
+		// Each of the four actual view callbacks must contribute a panel, and
+		// the shared setting must remove it without suppressing the geometry.
+		const FIntPoint Bands[] = { {16, 128}, {136, 248}, {256, 336}, {344, 472} };
+		for (const FIntPoint& Band : Bands)
+		{
+			int32 ChangedPixels = 0;
+			for (int32 Y = Band.X; Y < Band.Y; ++Y)
+				for (int32 X = 112; X < 784; ++X)
+					if (AllVisible[Y * 800 + X] != AllHidden[Y * 800 + X]) ++ChangedPixels;
+			ASSERT_THAT(IsTrue(ChangedPixels > 100));
+		}
+		TArray<uint8> LegendPNG;
+		FImageUtils::CompressImageArray(800, 600, AllVisible, LegendPNG);
+		ASSERT_THAT(IsTrue(FFileHelper::SaveArrayToFile(LegendPNG, *(FPaths::ProjectSavedDir() / TEXT("Automation/DebugLegendPanels.png")))));
+		TArray<uint8> PNG;
+		FImageUtils::CompressImageArray(800, 600, On, PNG);
+		ASSERT_THAT(IsTrue(FFileHelper::SaveArrayToFile(PNG, *(FPaths::ProjectSavedDir() / TEXT("Automation/SteeringDebugCanvas.png")))));
+	}
+
+	TEST(SteeringDecisionClearsAtDispatchAndCancel, "SeinARTS.Unit.Steering.Debug")
+	{
+		FScopedMoveToTestState Reset;
+		FMoveToLifecycleFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false)));
+		Fixture.Tick();
+		USeinMovement* Driver = Fixture.World->GetWorld()->GetSubsystem<USeinMovementSubsystem>()->FindMovementInstance(Fixture.Entity);
+		ASSERT_THAT(IsNotNull(Driver));
+		Driver->CaptureSteeringDebugTarget(Fixture.World->GetCurrentTick(), Fixture.Destination);
+		Fixture.Tick(); // This test driver has no target diagnostics to replace it.
+		ASSERT_THAT(IsFalse(Driver->GetSteeringDebugSample().bHasTarget));
+		Driver->CaptureSteeringDebugTarget(Fixture.World->GetCurrentTick(), Fixture.Destination);
+		{
+			auto Scope = FSeinSimContextTestAccess::Enter(*Fixture.World);
+			Fixture.Action->OnCancel();
+		}
+		ASSERT_THAT(IsFalse(Driver->GetSteeringDebugSample().bHasTarget));
+	}
+
+	TEST(NavDebugUsesOwningWorldManager, "SeinARTS.Unit.Navigation.Debug")
+	{
+		FScopedMoveToTestState Reset;
+		FMoveToLifecycleFixture First;
+		FMoveToLifecycleFixture Second;
+		ASSERT_THAT(IsTrue(First.Initialize(false)));
+		ASSERT_THAT(IsTrue(Second.Initialize(false)));
+		ASSERT_THAT(AreEqual(First.Entity, Second.Entity));
+		TArray<const USeinMoveToAction*> Moves;
+		UE::SeinARTSMovement::NavDebug::CollectActions(*First.World, Moves);
+		ASSERT_THAT(AreEqual(1, Moves.Num()));
+		ASSERT_THAT(IsTrue(Moves[0] == First.Action));
+		UE::SeinARTSMovement::NavDebug::CollectActions(*Second.World, Moves);
+		ASSERT_THAT(AreEqual(1, Moves.Num()));
+		ASSERT_THAT(IsTrue(Moves[0] == Second.Action));
+		// A valid handle in the wrong world is not proof of ownership.
+		First.Action->OwningAbility = Second.Ability;
+		UE::SeinARTSMovement::NavDebug::CollectActions(*First.World, Moves);
+		First.Action->OwningAbility = First.Ability;
+		ASSERT_THAT(IsTrue(Moves.IsEmpty()));
+	}
+
+	TEST(NavDebugOmitsTerminalAndUnmanagedActions, "SeinARTS.Unit.Navigation.Debug")
+	{
+		FScopedMoveToTestState Reset;
+		FMoveToLifecycleFixture Fixture;
+		ASSERT_THAT(IsTrue(Fixture.Initialize(false)));
+		USeinMoveToAction* Stray = NewObject<USeinMoveToAction>(Fixture.World);
+		Stray->OwningAbility = Fixture.Ability;
+		Stray->OwnerEntity = Fixture.Entity;
+		TArray<const USeinMoveToAction*> Moves;
+		UE::SeinARTSMovement::NavDebug::CollectActions(*Fixture.World, Moves);
+		ASSERT_THAT(AreEqual(1, Moves.Num()));
+		Fixture.Action->bCancelled = true;
+		UE::SeinARTSMovement::NavDebug::CollectActions(*Fixture.World, Moves);
+		ASSERT_THAT(IsTrue(Moves.IsEmpty()));
+		Fixture.Action->bCancelled = false;
+		Fixture.Action->bCompleted = true;
+		UE::SeinARTSMovement::NavDebug::CollectActions(*Fixture.World, Moves);
+		ASSERT_THAT(IsTrue(Moves.IsEmpty()));
+	}
+
 	TEST(MoveToInitialThrottleRetriesBeforeMoveBegin,
 		"SeinARTS.Sim.Movement.InitialPath")
 	{

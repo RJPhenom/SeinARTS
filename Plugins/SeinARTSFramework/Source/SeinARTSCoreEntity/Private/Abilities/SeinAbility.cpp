@@ -1,16 +1,17 @@
 /**
- * SeinARTS Framework
- * Copyright (c) 2026 Phenom Studios, Inc.
+ * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  *
- * @file:		SeinAbility.cpp
- * @date:		4/3/2026
- * @author:		RJ Macklem
- * @brief:		Base ability class implementation. Tracks activation/cancel
- *				lifecycle including cost refund + cooldown timing per
- *				DESIGN §7 Q2a / Q3c / Q4c. Cost-deduct happens on the caller
- *				side (ProcessCommands::ActivateAbility); this class consumes
- *				the deduct snapshot via RecordDeductedCost.
- * @disclaimer: This code was generated in part by an AI language model.
+ * @file         SeinAbility.cpp
+ * @author       RJ Macklem
+ * @created      03 Apr 2026
+ * @latest       05 Sep 2026
+ * @brief        Implements ability activation, cost ownership, and refundable cooldown sharing.
+ *
+ *               Cooldown recipients are resolved through neutral broker data.
+ *               Captured activation provenance protects cancellation across membership changes.
+ *
+ * @disclaimer   This code was generated in whole or in part with the assistance
+ *               of an AI language model.
  */
 
 #include "Abilities/SeinAbility.h"
@@ -18,8 +19,8 @@
 #include "Abilities/SeinLatentActionManager.h"
 #include "Lib/SeinResourceBPFL.h"
 #include "Components/SeinProductionPayload.h"
-#include "Components/SeinSquadPayload.h"
-#include "Components/SeinSquadMemberPayload.h"
+#include "Components/SeinCommandBrokerData.h"
+#include "Components/SeinBrokerMembershipData.h"
 #include "Components/SeinAbilityPayload.h"
 #include "Components/SeinIdentityPayload.h"
 #include "Components/SeinProduciblePayload.h"
@@ -289,6 +290,8 @@ void USeinAbility::InitializeAbility(FSeinEntityHandle Owner, USeinWorldSubsyste
 	bIsActive = false;
 	AbilityActivationID = 0;
 	bCooldownStarted = false;
+	CooldownSourceActivationID = 0;
+	CooldownRecipientIDs.Reset();
 	DeductedCost.Amounts.Empty();
 	PendingCompletionCost.Amounts.Empty();
 	ResourcePayer = FSeinPlayerID::Neutral();
@@ -440,6 +443,7 @@ bool USeinAbility::ActivateAbilityInternal(FSeinEntityHandle Target,
 		return false;
 	}
 
+	CooldownRecipientIDs.Reset();
 	// Start cooldown if the ability's timing fires on activate. OnEnd-timed abilities
 	// defer cooldown until DeactivateAbility.
 	if (CooldownStartTiming == ESeinCooldownStartTiming::OnActivate)
@@ -482,7 +486,7 @@ void USeinAbility::DeactivateAbility(bool bCancelled)
 	// ownership ensures it can never clear the replacement afterwards.
 	WorldSubsystem->UnregisterAbilityActivity(this);
 
-	// Refund on cancel ─ drive DESIGN §7 Q2a / Q3c policy
+	// Refund only the costs and cooldown writes owned by this activation.
 	if (bCancelled && WorldSubsystem)
 	{
 		if (bRefundCostOnCancel && !DeductedCost.IsEmpty())
@@ -491,7 +495,7 @@ void USeinAbility::DeactivateAbility(bool bCancelled)
 		}
 		if (bRefundCooldownOnCancel && bCooldownStarted)
 		{
-			CooldownRemaining = FFixedPoint::Zero;
+			RefundCooldownInternal();
 		}
 	}
 	// Start cooldown on natural end when timing is OnEnd and not already running
@@ -500,6 +504,7 @@ void USeinAbility::DeactivateAbility(bool bCancelled)
 		StartCooldownInternal();
 	}
 
+	CooldownRecipientIDs.Reset();
 	// Tear down any latent actions belonging to this ability. Without this,
 	// actions like SeinMoveTo linger after EndAbility/CancelAbility and keep
 	// ticking against a logically-inactive ability.
@@ -545,9 +550,10 @@ void USeinAbility::TickCooldown(FFixedPoint DeltaTime)
 	{
 		MarkDeterministicStateDirty();
 		CooldownRemaining = CooldownRemaining - DeltaTime;
-		if (CooldownRemaining < FFixedPoint::Zero)
+		if (CooldownRemaining <= FFixedPoint::Zero)
 		{
 			CooldownRemaining = FFixedPoint::Zero;
+			CooldownSourceActivationID = 0;
 		}
 	}
 }
@@ -559,36 +565,67 @@ bool USeinAbility::IsOnCooldown() const
 
 void USeinAbility::StartCooldownInternal()
 {
-	// Always set local cooldown.
-	CooldownRemaining = Cooldown;
+	MarkDeterministicStateDirty();
+	CooldownRecipientIDs.Reset();
+	CooldownRemaining = Cooldown > FFixedPoint::Zero ? Cooldown : FFixedPoint::Zero;
+	CooldownSourceActivationID = CooldownRemaining > FFixedPoint::Zero
+		? AbilityActivationID : 0;
 	bCooldownStarted = true;
 
-	// Squad-scope propagation: if the activator is a squad member AND this
-	// ability is squad-scope-cooldown, mirror the cooldown to every squadmate's
-	// instance of this ability tag. Member-scope abilities, lone (non-squad)
-	// activators, and zero-cooldown abilities all skip this branch.
-	if (CooldownScope != ESeinCooldownScope::Squad) return;
+	if (CooldownScope != ESeinCooldownScope::SharedGroup) return;
 	if (Cooldown <= FFixedPoint::Zero) return;
-	if (!WorldSubsystem) return;
+	if (!WorldSubsystem || !AbilityTag.IsValid()) return;
 
-	const FSeinSquadMemberPayload* MemberData = WorldSubsystem->GetComponent<FSeinSquadMemberPayload>(OwnerEntity);
-	if (!MemberData || !MemberData->SquadEntity.IsValid()) return;
+	const FSeinBrokerMembershipData* Membership =
+		WorldSubsystem->GetComponent<FSeinBrokerMembershipData>(OwnerEntity);
+	if (!Membership) return;
+	const FSeinEntityHandle BrokerHandle = Membership->CurrentBrokerHandle;
+	const FSeinCommandBrokerData* Broker =
+		WorldSubsystem->GetComponent<FSeinCommandBrokerData>(BrokerHandle);
+	if (!Broker || !Broker->bSharesAbilityCooldowns
+		|| !Broker->Members.Contains(OwnerEntity)) return;
 
-	const FSeinSquadPayload* Squad = WorldSubsystem->GetComponent<FSeinSquadPayload>(MemberData->SquadEntity);
-	if (!Squad) return;
-
-	for (const FSeinSquadSlot& Slot : Squad->Slots)
+	TArray<FSeinEntityHandle> Members = Broker->Members;
+	Members.Sort();
+	FSeinEntityHandle Previous;
+	for (const FSeinEntityHandle Member : Members)
 	{
-		const FSeinEntityHandle Mate = Slot.CurrentOccupant;
-		if (!Mate.IsValid() || Mate == OwnerEntity) continue;
-
-		const FSeinAbilityPayload* MateAC = WorldSubsystem->GetComponent<FSeinAbilityPayload>(Mate);
-		if (!MateAC) continue;
-
-		if (USeinAbility* MateInstance = MateAC->FindAbilityByTag(*WorldSubsystem, AbilityTag))
+		if (Member == Previous) continue;
+		Previous = Member;
+		if (Member == OwnerEntity || !WorldSubsystem->IsEntityAlive(Member)) continue;
+		const FSeinBrokerMembershipData* MemberMembership =
+			WorldSubsystem->GetComponent<FSeinBrokerMembershipData>(Member);
+		if (!MemberMembership || MemberMembership->CurrentBrokerHandle != BrokerHandle) continue;
+		const FSeinAbilityPayload* Abilities =
+			WorldSubsystem->GetComponent<FSeinAbilityPayload>(Member);
+		if (!Abilities) continue;
+		if (USeinAbility* Recipient = Abilities->FindAbilityByTag(*WorldSubsystem, AbilityTag))
 		{
-			MateInstance->CooldownRemaining = Cooldown;
-			MateInstance->bCooldownStarted = true;
+			if (Recipient->OwnerEntity != Member) continue;
+			Recipient->MarkDeterministicStateDirty();
+			Recipient->CooldownRemaining = Cooldown;
+			Recipient->CooldownSourceActivationID = AbilityActivationID;
+			CooldownRecipientIDs.Add(Recipient->GetRuntimePoolID());
+		}
+	}
+}
+
+void USeinAbility::RefundCooldownInternal()
+{
+	// A later activation may have overwritten even our local cooldown.
+	if (CooldownSourceActivationID == AbilityActivationID)
+	{
+		CooldownRemaining = FFixedPoint::Zero;
+		CooldownSourceActivationID = 0;
+	}
+	for (const int32 RecipientID : CooldownRecipientIDs)
+	{
+		USeinAbility* Recipient = WorldSubsystem->GetAbilityInstance(RecipientID);
+		if (Recipient && Recipient->CooldownSourceActivationID == AbilityActivationID)
+		{
+			Recipient->MarkDeterministicStateDirty();
+			Recipient->CooldownRemaining = FFixedPoint::Zero;
+			Recipient->CooldownSourceActivationID = 0;
 		}
 	}
 }

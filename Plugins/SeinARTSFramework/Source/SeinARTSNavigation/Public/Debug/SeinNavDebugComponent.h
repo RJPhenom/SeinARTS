@@ -9,9 +9,9 @@
  *          creation time it calls `USeinNavigation::CollectDebugCellQuads` to
  *          snapshot cell geometry, then emits a single batched mesh per view
  *          via `FDynamicMeshBuilder`. The proxy's `GetViewRelevance` consults
- *          `FSceneView::EngineShowFlags.Navigation` so UE's 'P' key + the
- *          `Sein.Nav.Show` console command drive visibility
- *          without any per-frame cost when off.
+ *          the custom per-view `ShowFlags.SeinNavigation` flag so the
+ *          SeinARTS Show submenu + `Sein.Nav.Show` drive visibility
+ *          with lightweight visibility polling and no hidden mesh rebuilds.
  *
  *          Subscribes to `USeinNavigation::OnNavigationMutated` — bake
  *          completion / asset swap / dynamic obstacle change triggers
@@ -40,6 +40,7 @@ public:
 
 	virtual FPrimitiveSceneProxy* CreateSceneProxy() override;
 	virtual FBoxSphereBounds CalcBounds(const FTransform& LocalToWorld) const override;
+	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
 protected:
 	virtual void OnRegister() override;
@@ -71,5 +72,7 @@ private:
 	TSharedPtr<const FSeinNavDebugStaticSnapshot, ESPMode::ThreadSafe> CachedStaticSnapshot;
 	TWeakObjectPtr<USeinNavigation> CachedStaticNav;
 	uint64 CachedStaticGeneration = MAX_uint64;
+	uint32 CachedAppearanceHash = 0;
+	bool bWasVisible = false;
 #endif
 };

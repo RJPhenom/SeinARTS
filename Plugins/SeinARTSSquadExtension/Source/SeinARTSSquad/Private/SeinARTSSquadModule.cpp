@@ -41,7 +41,7 @@ namespace
 				USeinAbility_SquadReinforce::StaticClass(),
 				ESeinPoolObjectKind::Ability,
 				TEXT("seinarts.squad.pool.reinforce.reflection"),
-				3,
+				4,
 			},
 			{
 				USeinSquadDispatchResolver::StaticClass(),
@@ -56,7 +56,7 @@ namespace
 			Descriptor.NativeAnchor = Spec.Anchor;
 			Descriptor.Kind = Spec.Kind;
 			Descriptor.StableProviderId = Spec.StableProviderId;
-			Descriptor.StateSchemaVersion = 1;
+			Descriptor.StateSchemaVersion = Spec.Kind == ESeinPoolObjectKind::Ability ? 2 : 1;
 			Descriptor.BehaviorRevision = Spec.BehaviorRevision;
 			Descriptor.CodecRevision = 2;
 			Descriptor.MaxStateBytes =
@@ -114,7 +114,7 @@ void FSeinARTSSquadModule::StartupModule()
 
 	FSeinSimulationContentContributorDescriptor ContentDescriptor;
 	ContentDescriptor.StableContributorId = TEXT("seinarts.squad");
-	ContentDescriptor.ContributorRevision = 3;
+	ContentDescriptor.ContributorRevision = 4;
 
 	FString ContentRegistrationError;
 	SimulationContentRegistrationHandle =

@@ -259,7 +259,7 @@ public:
 	 *    AlwaysVisible              — bypasses fog entirely. Cover providers,
 	 *      persistent destructibles, self-occluding effects whose stamp
 	 *      blocks vision past them but whose actor must stay rendered. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|FogOfWar")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	ESeinFogVisibilityPolicy FogVisibilityPolicy = ESeinFogVisibilityPolicy::VisionLayersOnly;
 
 	/** Which observer FoW layer bits actually see this entity. An observer's
@@ -274,7 +274,7 @@ public:
 	 *  `USeinFogOfWarBPFL::SeinSetEntityEmissionMask` and friends, which
 	 *  flip the sim-side `FSeinFogVisibilityPayload::FogVisibilityLayerMask`
 	 *  for cloak / detect mechanics at ability time. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|FogOfWar",
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
 		meta = (Bitmask, BitmaskEnum = "/Script/SeinARTSFogOfWar.ESeinFogOfWarLayerBit"))
 	uint8 FogVisibilityLayerMask = 0xFE;
 
@@ -466,6 +466,15 @@ public:
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Sync")
 	bool IsTransformSyncEnabled() const { return bSyncTransform; }
 
+	/** Presentation-only settled displacement between the captured sim poses.
+	 *  Zero after initialization, restore, or a catch-up frame that snaps poses. */
+	FVector GetCapturedSimDisplacement() const
+	{
+		return bHasSimSnapshot
+			? CurrentSimTransform.Location.ToVector() - PreviousSimTransform.Location.ToVector()
+			: FVector::ZeroVector;
+	}
+
 	/** Apply RayTracingGeometryPolicy to the owner's current primitive
 	 *  components. ASeinActor applies it after component registration in editor
 	 *  and runtime worlds, then BeginPlay reapplies it for runtime safety. Call
@@ -511,11 +520,11 @@ protected:
 	FSeinEntityHandle EntityHandle;
 
 	/** Whether to automatically sync actor transform to simulation */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Sync")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	bool bSyncTransform = true;
 
 	/** Whether to interpolate between sim tick snapshots for smooth visuals */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS|Sync")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
 	bool bInterpolateTransform = true;
 
 	/** Controls whether this entity contributes primitive geometry to hardware

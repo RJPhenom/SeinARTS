@@ -6,6 +6,7 @@
  */
 
 #include "Details/SeinInstancedStructDetails.h"
+#include "Details/SeinSemanticDefault.h"
 
 #include "DetailWidgetRow.h"
 #include "DetailLayoutBuilder.h"
@@ -34,6 +35,36 @@
 #define LOCTEXT_NAMESPACE "SeinInstancedStructDetails"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSeinEditorPicker, Log, All);
+
+namespace
+{
+	/**
+	 * FInstancedStructDataDetails lives behind a custom-node-builder boundary,
+	 * so a reset override propagated by the owning payload row cannot reach its
+	 * synthetic child rows. Re-attach it as each selected-type field is added.
+	 */
+	class FSeinInstancedStructDataDetails final
+		: public FInstancedStructDataDetails
+	{
+	public:
+		explicit FSeinInstancedStructDataDetails(
+			TSharedPtr<IPropertyHandle> InStructProperty)
+			: FInstancedStructDataDetails(InStructProperty)
+			, StructProperty(MoveTemp(InStructProperty))
+		{
+		}
+
+	protected:
+		virtual void OnChildRowAdded(IDetailPropertyRow& ChildRow) override
+		{
+			SeinSemanticDefault::ApplyResetOverride(
+				ChildRow, StructProperty);
+		}
+
+	private:
+		TSharedPtr<IPropertyHandle> StructProperty;
+	};
+}
 
 // =============================================================================
 // Custom filter
@@ -266,7 +297,7 @@ void FSeinInstancedStructDetails::CustomizeChildren(
 	// proper handling of nested FInstancedStruct fields, category grouping,
 	// and struct-value change notifications.
 	TSharedRef<FInstancedStructDataDetails> DataDetails =
-		MakeShared<FInstancedStructDataDetails>(PropertyHandle);
+		MakeShared<FSeinInstancedStructDataDetails>(PropertyHandle);
 	ChildBuilder.AddCustomBuilder(DataDetails);
 }
 

@@ -94,22 +94,22 @@ public:
 	 *  owner. Stamped server-side at spawn and replicated to the owning client.
 	 *  Phase 1 — sequential by PostLogin order; Phase 2 lobby flow will let
 	 *  designers pick / shuffle slots before StartMatch. */
-	UPROPERTY(ReplicatedUsing = OnRep_AssignedPlayerID, BlueprintReadOnly, Category = "SeinARTS|Network")
+	UPROPERTY(ReplicatedUsing = OnRep_AssignedPlayerID, BlueprintReadOnly, Category = "SeinARTS")
 	FSeinPlayerID AssignedPlayerID;
 
 	/** Stable process identity, intentionally distinct from gameplay slots. */
-	UPROPERTY(ReplicatedUsing = OnRep_ProtocolAssignment, BlueprintReadOnly, Category = "SeinARTS|Network")
+	UPROPERTY(ReplicatedUsing = OnRep_ProtocolAssignment, BlueprintReadOnly, Category = "SeinARTS")
 	FSeinNetworkParticipantID AssignedParticipantID;
 
 	/** Exact match/epoch/term/membership namespace for every lockstep RPC. */
-	UPROPERTY(ReplicatedUsing = OnRep_ProtocolAssignment, BlueprintReadOnly, Category = "SeinARTS|Network")
+	UPROPERTY(ReplicatedUsing = OnRep_ProtocolAssignment, BlueprintReadOnly, Category = "SeinARTS")
 	FSeinProtocolContext ProtocolContext;
 
 	/** Session-wide deterministic seed. Same value on every relay (one per PC,
 	 *  same value across all). Lockstep-critical: every client's PRNG MUST
 	 *  initialize from this exact value before tick 0, or rolls diverge from
 	 *  the first frame. */
-	UPROPERTY(ReplicatedUsing = OnRep_SessionSeed, BlueprintReadOnly, Category = "SeinARTS|Network")
+	UPROPERTY(ReplicatedUsing = OnRep_SessionSeed, BlueprintReadOnly, Category = "SeinARTS")
 	int64 SessionSeed = 0;
 
 	/** Client -> server. Owning client packs its commands for `TurnId` into a

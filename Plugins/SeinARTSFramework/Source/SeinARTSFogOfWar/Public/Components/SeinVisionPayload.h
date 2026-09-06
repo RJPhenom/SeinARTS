@@ -53,6 +53,16 @@ struct SEINARTSFOGOFWAR_API FSeinVisionStamp
 		meta = (Bitmask, BitmaskEnum = "/Script/SeinARTSFogOfWar.ESeinFogOfWarLayerBit"))
 	uint8 LayerMask = 0x02; // V bit (Normal)
 
+	FSeinVisionStamp()
+	{
+		// Shared stamp geometry uses conservative generic defaults. Vision stamps
+		// start at a practical battlefield scale without changing other consumers.
+		Shape.Radius = FFixedPoint::FromInt(1000);
+		Shape.HalfExtentX = FFixedPoint::FromInt(1500);
+		Shape.HalfExtentY = FFixedPoint::FromInt(1000);
+		Shape.ConeLength = FFixedPoint::FromInt(5000);
+	}
+
 	FORCEINLINE bool operator==(const FSeinVisionStamp& Other) const
 	{
 		return Shape == Other.Shape && LayerMask == Other.LayerMask;

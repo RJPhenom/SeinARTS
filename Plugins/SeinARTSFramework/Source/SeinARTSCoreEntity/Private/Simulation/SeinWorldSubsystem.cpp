@@ -6639,6 +6639,10 @@ FSeinEntityHandle USeinWorldSubsystem::SpawnEntity(
 		return FSeinEntityHandle::Invalid();
 	}
 
+	// Render-backed entities are selectable by default. Extents policy and the
+	// runtime flag may restrict selection later; abstract internal entities opt in.
+	GetEntityMutable(Handle)->SetSelectable(true);
+
 	// Store actor class for bridge spawning
 	EntityActorClassMap.Add(Handle, ActorClass);
 
@@ -6807,6 +6811,7 @@ FSeinEntityHandle USeinWorldSubsystem::SpawnEntityFromPlacedActor(
 		return FSeinEntityHandle::Invalid();
 	}
 
+	GetEntityMutable(Handle)->SetSelectable(true);
 	EntityActorClassMap.Add(Handle, PlacedActor->GetClass());
 
 	// Inject the LIVE actor's entity component ComponentData — captures
@@ -9736,6 +9741,25 @@ namespace
 			State.bIsPassive = Ability->bIsPassive;
 			State.bIsActive = Ability->bIsActive;
 			State.AbilityActivationID = Ability->GetActivationID();
+			if (Ability->CooldownSourceActivationID < 0
+				|| Ability->CooldownSourceActivationID >= Snapshot.NextAbilityActivationID
+				|| (!Ability->bIsActive && !Ability->CooldownRecipientIDs.IsEmpty())
+				|| (!Ability->bCooldownStarted && !Ability->CooldownRecipientIDs.IsEmpty()))
+			{
+				return false;
+			}
+			TSet<int32> SeenCooldownRecipients;
+			for (const int32 RecipientID : Ability->CooldownRecipientIDs)
+			{
+				// A captured recipient may since have died or lost its ability.
+				// Validate the receipt shape, not current membership or liveness.
+				if (!Snapshot.AbilityPoolRecords.IsValidIndex(RecipientID)
+					|| RecipientID == Index || SeenCooldownRecipients.Contains(RecipientID))
+				{
+					return false;
+				}
+				SeenCooldownRecipients.Add(RecipientID);
+			}
 		}
 		for (int32 Index = 0; Index < StagedResolverPool.Num(); ++Index)
 		{
