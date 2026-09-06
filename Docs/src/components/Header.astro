@@ -6,6 +6,8 @@ import SiteTitle from '@astrojs/starlight/components/SiteTitle.astro';
 import SocialIcons from '@astrojs/starlight/components/SocialIcons.astro';
 import brandIconUrl from '../../../Plugins/SeinARTSFramework/Resources/BrandKit/SeinARTSLogo256.svg?url';
 
+Astro.locals.starlightRoute.siteTitleHref = 'https://seinarts.gg';
+
 const shouldRenderSearch =
 	config.pagefind || config.components.Search !== '@astrojs/starlight/components/Search.astro';
 ---
