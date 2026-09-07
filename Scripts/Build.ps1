@@ -16,7 +16,7 @@
 
 .EXAMPLE
   .\Scripts\Build.ps1 -ExtraArgs '-Clean'
-  # force a clean rebuild
+  # clean outputs; run again without -Clean to rebuild
 
 .NOTES
   Close the editor (or hot-patch in-editor with Live Coding: Ctrl+Alt+F11) before
@@ -29,12 +29,19 @@ param(
     [ValidateSet('Debug', 'DebugGame', 'Development', 'Shipping', 'Test')]
     [string]   $Config   = 'Development',
     [string[]] $ExtraArgs,
-    [string]   $EngineRoot
+    [string]   $EngineRoot,
+    [switch]   $Quiet,
+    [string]   $ResultFile
 )
 
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $Uproject    = Join-Path $ProjectRoot 'SeinARTS.uproject'
+if ($ResultFile) {
+    $ResultFile = [System.IO.Path]::GetFullPath($ResultFile)
+    if (Test-Path -LiteralPath $ResultFile) { throw "Result file already exists: '$ResultFile'." }
+    New-Item -ItemType Directory -Path (Split-Path -Parent $ResultFile) -Force | Out-Null
+}
 
 # --- Resolve the engine (explicit path, known path, registry fallback) --------
 $Engine = if ($EngineRoot) {
@@ -78,8 +85,36 @@ if ($ExtraArgs) { $ubtArgs += $ExtraArgs }
 
 Write-Host "[Build.ps1] $Target | $Platform | $Config" -ForegroundColor Cyan
 Write-Host "[Build.ps1] engine: $Engine" -ForegroundColor DarkGray
-& $BuildBat @ubtArgs
-$code = $LASTEXITCODE
+$Started = [DateTime]::UtcNow
+$LogRoot = Join-Path $ProjectRoot ('Saved/Build/' + [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $LogRoot -Force | Out-Null
+$LogPath = Join-Path $LogRoot 'Build.log'
+# Native stderr is build output, not a PowerShell terminating error in Windows PS 5.1.
+$PreviousErrorPreference = $ErrorActionPreference
+try {
+    $ErrorActionPreference = 'Continue'
+    if ($Quiet) { & $BuildBat @ubtArgs *> $LogPath }
+    else { & $BuildBat @ubtArgs 2>&1 | Tee-Object -FilePath $LogPath }
+    $code = $LASTEXITCODE
+}
+finally { $ErrorActionPreference = $PreviousErrorPreference }
+$Receipt = [ordered]@{
+    schemaVersion = 1
+    status = if ($code -eq 0) { 'Passed' } else { 'Failed' }
+    target = $Target; platform = $Platform; configuration = $Config
+    extraArgs = @($ExtraArgs); engineRoot = $Engine
+    engineBuildFingerprint = (Get-FileHash -LiteralPath $EngineVersionPath -Algorithm SHA256).Hash
+    startedAtUtc = $Started.ToString('o'); completedAtUtc = [DateTime]::UtcNow.ToString('o')
+    exitCode = $code; logPath = $LogPath
+    # Keep the changed compilation/link evidence available without streaming the whole log.
+    buildActions = @(Select-String -LiteralPath $LogPath -Pattern '(Compile|Link) \[x64\]' |
+        ForEach-Object { $_.Line })
+}
+$ReceiptPath = Join-Path $LogRoot 'build-result.json'
+$Receipt | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $ReceiptPath -Encoding UTF8
+if ($ResultFile) { Copy-Item -LiteralPath $ReceiptPath -Destination $ResultFile -Force }
+Write-Host "[Build.ps1] receipt: $ReceiptPath"
+if ($Quiet -and $code -ne 0) { Get-Content -LiteralPath $LogPath -Tail 40 | Write-Host }
 if ($code -eq 0) { Write-Host '[Build.ps1] Succeeded.' -ForegroundColor Green }
 else            { Write-Host "[Build.ps1] FAILED (exit $code)." -ForegroundColor Red }
 exit $code

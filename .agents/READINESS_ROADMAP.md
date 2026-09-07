@@ -291,9 +291,9 @@ Exit: game UI and progression can target stable provider-neutral interfaces whil
 
 - Semantic release tags and one-version production-plugin cohorts are defined in
   `.agents/WORKFLOW.md`; deterministic compatibility, installation, upgrade, and release-evidence
-  contracts are consolidated in `.agents/CONSUMER_VERIFICATION.md`. Root `Docs/` is intentionally
-  empty until RJ authors the GitHub Pages website. Publication warns and omits documentation while
-  empty; once present, every website file is bound into immutable release evidence.
+  contracts are consolidated in `.agents/CONSUMER_VERIFICATION.md`. Root `Docs/` contains the public
+  website; its authorized editing scope follows `.agents/WORKFLOW.md`. Release evidence binds the
+  website files present in the release source.
 - Release packaging now validates SemVer and refuses to publish dirty or mid-build-drifted source
   under a clean commit/tag identity. It emits SHA-256 artifact/dependency provenance and release
   publication is gated on fresh consumers built from the exact six ZIPs. Package-only diagnostics

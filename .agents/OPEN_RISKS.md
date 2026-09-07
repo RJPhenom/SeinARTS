@@ -1,6 +1,9 @@
 # SeinARTS Open Risk Register
 
-This is the actionable remainder after consolidating the historical audits. It intentionally omits fixed historical narrative.
+Use the relevant section for unresolved decisions and acceptance gaps. Dated measurements and
+completed implementation details establish historical boundaries; they do not require redoing work
+or establish a pass for the current checkout. Maintain open items here and link to evidence rather
+than accumulating new completion narratives.
 
 ## Release-blocking foundation risks
 
@@ -19,10 +22,11 @@ This is the actionable remainder after consolidating the historical audits. It i
    session contract before traveling to the menu; ambient world auto-start never consumes a stale
    lobby contract. `Sein.Config.DumpFingerprint` prints the exact hashed text for future parity
    triage.
-2. **The public documentation website is owner-authored and not yet present.** Root `Docs/` is
-   intentionally empty until RJ builds the GitHub Pages site. Release publication warns and omits
-   documentation while it is empty. Agents must preserve internal contracts in `.agents/` and must
-   not independently populate the website tree.
+2. **Public documentation coverage is still being developed.** The website exists in `Docs/`.
+   Track missing public coverage in [the backlog](PUBLIC_DOCS_BACKLOG.md); the tutorial's active
+   scope is in [demo progress](DEMO_GUIDE_PROGRESS.md). Website edits follow the authorized scope
+   in `WORKFLOW.md`. The older “website not yet present” condition is superseded, not an instruction
+   to remove or recreate existing pages.
 
 ## Gameplay-backbone gaps
 

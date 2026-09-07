@@ -1,6 +1,6 @@
 # SeinARTS Agent Workflow
 
-This is the local operational mirror of the human [Workflow Policy](https://docs.google.com/document/d/1pb3Z0DdQKAIJ610cMOy1yOP9_RQj1jtzMupfhkyrlfw), source policy version 3.0. The human policy owns contributor workflow. Update both in the same task when workflow changes.
+Local operational policy, revision 3.2. The linked human [Workflow Policy](https://docs.google.com/document/d/1pb3Z0DdQKAIJ610cMOy1yOP9_RQj1jtzMupfhkyrlfw) was last mirrored at version 3.0. Revisions 3.1 and 3.2 implement RJ's 2026-09-07 workflow and context-efficiency direction; human-source synchronization is pending. Do not imply the human document was updated. Synchronize it when that document is in the authorized scope.
 
 ## 1. About
 
@@ -23,13 +23,34 @@ Persistent scripts belong in `Scripts/` under the repository root.
 - Delete one-time scripts after use.
 - Reuse persistent utilities such as `Build.ps1` instead of creating duplicates.
 
+### 2.3 Internal context maintenance
+
+Agents own routine repository-context maintenance; do it within the authorized work without asking
+RJ to review summaries, choose document locations, or manage history. Escalate real product decisions,
+not bookkeeping. These rules apply to repository records, not external memory stores or human documents.
+Leave Claude-specific files and settings to Claude.
+
+Use `README.md` to select the owning reference. Read only the relevant section; the read-only
+`Scripts/Read-AgentContext.ps1` helper lists headings and returns bounded excerpts. It is optional,
+not an additional per-task gate. Do not reread unchanged guidance already available in the task.
+
+Update a fact in its owning record only when it changes. Keep task-specific restrictions in the
+scoped task handoff; cross-project preferences and architecture contracts belong in their existing
+owners. Link instead of copying explanations or execution logs across records. Keep active summaries
+short; preserve replaced history under `history/` and mark it as historical, without carrying old
+instructions forward as current policy. Do not archive active work or remove unresolved decisions
+merely to meet a size target. Do not schedule maintenance, create another agent workflow, or re-audit
+the repository just to keep these records tidy.
+
 ## 3. Development
 
 ### 3.1 Starting work
 
 Before changing code, understand the requested result, inspect the live implementation, and check the current Git state. Notes and comments provide context; live code and current evidence take priority when they disagree.
 
-When continuing existing work, complete the handoff review in 5.2 before adding new work.
+When continuing existing work, confirm the requested scope, current diff, last relevant evidence,
+and remaining failures or decisions. Preserve unrelated work. Recheck changed inputs after a handoff;
+do not restart an entire audit merely because the conversation resumed.
 
 ### 3.2 Decisions
 
@@ -44,22 +65,46 @@ Routine implementation choices should not create unnecessary pauses.
 
 ### 3.3 Validation
 
-Validation must match the risk of the change. A successful build proves only that the project compiles.
+Select checks by changed behavior, not file or module count. A successful build proves compilation,
+not runtime correctness. Review the final diff and declare documentation impact once per completed change.
 
-Routine code changes require a final diff review, the relevant build and tests, and a documentation-impact decision.
+| Change | Development validation |
+|---|---|
+| Prose only | `Validate.ps1 -Preset Documentation` plus relevant links/content review. Website source also needs its site build. |
+| Local behavior, editor, or mechanical code change | `-Preset Focused -Suite <relevant prefixes> -Profile Framework` (or `All` for extension coverage). Add editor/visual checks when applicable. |
+| Simulation behavior, state, or timing | `-Preset Simulation -Profile <profile>`; add affected extension, snapshot/next-tick, replay/peer/resync tests and PIE evidence as required by the change. |
+| Broad integration checkpoint | `-Preset Full`: both profiles, six suites, fresh-process collision A/B, and Shipping build. |
+| Release | `Scripts/Release/Invoke-ReleaseGate.ps1`; retain all qualification and human acceptance gates in §6.2. |
 
-Changes affecting determinism, simulation timing, networking, replay, persistence, public APIs, module boundaries, or critical performance require stronger evidence as appropriate:
+Presets are explicit scopes, not automatic proof that all relevant behavior is covered. Unknown impact
+requires inspection or the broader applicable tier. Script/tooling changes use meaningful pass/fail
+fixtures and the script self-test (`Scripts/Validation/Invoke-ValidationSelfTest.ps1`); Unreal tests are
+needed when their engine integration or runtime behavior changes. Do not create implementation-mirroring
+tests for prose or trivial mechanical edits.
 
-- Independent adversarial review.
-- Development and Shipping builds.
-- Serial-versus-parallel state-hash comparison.
-- Peer, replay, resynchronization, or persistence testing.
-- Profiling against the accepted baseline.
-- PIE validation.
+Independent adversarial review is required for changes to deterministic behavior, simulation timing,
+network/replay/persistence contracts, compatibility, module dependency boundaries, critical performance,
+or validation/release admission. Default to one focused independent reviewer. Supply the relevant diff,
+contracts, and evidence; ask for defects and missing coverage. Additional reviewers or repeat reviews
+need a distinct unresolved risk, substantive new change, or finding. Changing several modules alone
+does not trigger extra review. Verify load-bearing findings against source without repeating the whole audit.
+
+Scripts own discovery/count checks, build provenance, trace comparisons, and release receipt validation.
+Read compact receipts first; inspect full logs or implementations for failures, unexpected results,
+changed tooling, or missing evidence. Keep logs on disk. `Build.ps1 -Quiet` records build actions;
+`Validate.ps1` stores step results under `Saved/Validation`. Use guarded `-SkipBuild` only when appropriate;
+never bypass a stale-build rejection. After checks pass, rerun only for changed inputs, unresolved
+failures, newly identified coverage gaps, or a distinct qualification boundary. No repeated polling of
+unchanged output or repeated re-analysis of passing evidence.
+
+Fresh-process `RunDeterminismAB.ps1` proves its 120-tick collision workload, not every simulation system.
+Changes to state require fresh-world restore/continuation; tick/network changes require peer/replay
+evidence. Preserve performance baselines and human PIE/editor/feel gates separately. Never promote
+development validation or a partial gate to full release qualification.
 
 ## 4. Documentation
 
-The public documentation website is live and under construction at `docs.seinarts.gg`. It is served from `Docs/` through GitHub Pages. Changes must keep public-facing documentation current.
+The public documentation website is served from `Docs/` at `docs.seinarts.gg` through GitHub Pages.
 
 ### 4.1 Document types
 
@@ -73,9 +118,12 @@ Agent reports and temporary working notes do not belong in the public documentat
 
 ### 4.2 Keeping documentation current
 
-Every completed code task and commit declares its documentation impact: `none`, `private-human`, `private-agent`, `public`, or any applicable combination.
-
-After every commit or code change, check the impact on public documentation. Alert the authoritative decision-maker when public documentation is affected, and make updates commensurate with the change so the website does not fall behind.
+At each completed change, declare documentation impact: `none`, `private-human`, `private-agent`,
+`public`, or a combination. Carry this decision into its commit/handoff; reassess only when scope changes.
+Update documents within the authorized scope. For affected public pages outside that scope, record a
+concise entry in `PUBLIC_DOCS_BACKLOG.md` and report it. Preserve existing `Docs/` content.
+Human-authored Google documents require scope authorization; a local mirror edit is not a remote edit.
+Keep one current evidence summary with receipt paths instead of repeating test histories across records.
 
 Project documents such as the design document, Workflow Policy, and Style Guide use a `major.minor` version on their cover. Increment the minor version whenever the document changes. Only the authoritative decision-maker increments the major version.
 

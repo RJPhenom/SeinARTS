@@ -1,5 +1,10 @@
 # Demo guide progress
 
+Scope: the demo-tutorial authoring task only. Its desktop restrictions, stop points, and specific
+approvals apply when resuming that task; they do not govern unrelated framework work. Preserve this
+active handoff. Dated implementation details are evidence for that task, not a replacement for the
+current root/plugin contracts or current user instructions.
+
 ## Authoritative working agreement
 
 Build the example from ZERO in a new Blank Unreal Engine project. Existing plugin Demo assets are reference evidence of RJ's intended result, never prerequisites or assets to copy. Teach plugin installation/enabling, required project settings, every custom gameplay class, input action/mapping/handler graph, faction, level, unit, ability, material, and UI before referencing it. Native framework classes and nodes are legitimate building blocks. A provided SU_Soldier or prewired demo controller is not.

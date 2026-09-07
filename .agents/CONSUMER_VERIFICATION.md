@@ -74,9 +74,14 @@ but it is not package evidence. `-SkipRuntimeQualification` and `-SkipClientServ
 escapes, not complete release evidence.
 
 `Scripts/Release/Invoke-ReleaseGate.ps1` is the one release entrypoint. It runs Development Editor
-and Shipping builds, both test profiles across Unit/Integration/Determinism/Editor/Sim/Perf, all
-six standalone packages, and the exact-artifact consumer matrix. It writes a JSON receipt under
-`Saved/ReleaseGate`. Publication mode permits no skipped gate; `-PackageOnly` is the diagnostic mode.
+and Shipping builds, both test profiles across Unit/Integration/Determinism/Editor/Sim/Perf,
+fresh-process collision serial/parallel A/B, all six standalone packages, and the exact-artifact
+consumer matrix. The version-4 release receipt retains 14 test attempts (12 suite runs plus two
+fresh-process traces); the evidence archive includes the bound A/B receipt, reports, provenance,
+and logs under `determinism-ab/`. It writes a JSON receipt under
+`Saved/ReleaseGate`. Console output is limited to stage progress and failure excerpts; each receipt
+step names its retained full log. Test receipts are handed off by exact path, not rediscovered from
+old runs. Publication mode permits no skipped gate; `-PackageOnly` is the diagnostic mode.
 The receipt binds exact test attempt IDs/index hashes/build provenance, consumer qualification run
 IDs, engine fingerprint, installation receipt, public-header manifest, runtime-result hash,
 artifact hashes, and evidence archive. Publication uses a draft GitHub release, verifies downloaded remote assets byte-for-byte,

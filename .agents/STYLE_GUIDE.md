@@ -1,6 +1,6 @@
 # SeinARTS Style Guide
 
-This is the local operational mirror of the human [Style Guide](https://docs.google.com/document/d/1-IT4RRpU2jR3yT5RI_bOM4Iq3s54Y9Fgy9gtBAJjshs), source guide version 1.5. Local revision 1.6 records the project-approved shared-settings composition rule; synchronization back to the human source is pending. The human guide owns writing and presentation style. Architecture, module ownership, and system invariants remain in the repository and plugin guides.
+Local operational mirror of the human [Style Guide](https://docs.google.com/document/d/1-IT4RRpU2jR3yT5RI_bOM4Iq3s54Y9Fgy9gtBAJjshs), last mirrored at version 1.5. Local revision 1.7 retains the approved settings composition and component/payload authoring rules; human-source synchronization is pending. Architecture and determinism invariants live in the repository/plugin guides and are not repeated here.
 
 ## About
 
@@ -42,22 +42,6 @@ Each production C++ source file begins with a header containing:
 Keep `@brief` concise: one to three small or medium paragraphs. Do not turn the header into a running design document.
 
 Update `@brief` whenever the file's purpose changes. When substantially editing a production file that lacks its header, add the header as part of that change. Do not mass-retrofit headers across otherwise untouched files.
-
-### Components and data
-
-- Components are pure data.
-- Every simulation USTRUCT uses `USTRUCT(meta = (SeinDeterministic))`. This is the marker used by the editor and determinism validators.
-- `FInstancedStruct` ships in `CoreUObject`. Do not add `StructUtils` as a module dependency.
-
-### Deterministic simulation
-
-Simulation code remains bit-deterministic across peers and platforms.
-
-- Use fixed-point types for all simulation math.
-- Use `FSeinEntityHandle` instead of raw `AActor` or `UObject` pointers.
-- Use `FFixedRandom` for simulation randomness.
-- Do not use `float`, `FVector`, `FMath`, or `rand()` in simulation code.
-- Float-to-fixed and fixed-to-float conversions are editor or debug boundaries only. Their results never feed hashed simulation state.
 
 ### Comments and documentation
 
@@ -139,7 +123,8 @@ Prefixes:
 
 Suffixes:
 
-- Component payload structs use the `Component` suffix.
+- Backend component payload structs use `Payload`; designer-authored `USeinEntityComponent`
+  subclasses use `Component`. Preserve the authoring components that generate the bridge's payload array.
 - Blueprint function libraries use the `BPFL` suffix.
 
 Metadata:
@@ -147,7 +132,8 @@ Metadata:
 - Use `SeinARTS|<Subsystem>[|<Subgroup>]` for Blueprint categories. Category nouns are singular; `Tags` is the only plural exception.
 - Drop a subsystem qualifier when the asset type already supplies that context.
 - Drop the `Sein` prefix from Blueprint `DisplayName`. Add an explicit `DisplayName` when a C++ symbol begins with `Sein` so Unreal does not auto-derive it.
-- Blueprint function-library classes use `SeinARTS X Library`. Actor components use `X Component` and `ClassGroup = (SeinARTS)`.
+- Blueprint function-library classes use `SeinARTS X Library`. Native data-authoring components use
+  `ClassGroup = (SeinARTS)` and their engine-derived class labels without a redundant `DisplayName`.
 - UPROPERTY field names never carry the `Sein` prefix.
 - Set `Category` and `DisplayName` when creating the API. Do not leave naming consistency for a later cleanup pass.
 

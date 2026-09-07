@@ -86,6 +86,8 @@ if ([int]$EngineBuildVersion.MajorVersion -ne 5 -or
 }
 $BuildScript = Join-Path $RepoRoot 'Scripts\Build.ps1'
 $TestScript = Join-Path $RepoRoot 'Plugins\SeinARTSTestSuite\RunTests.ps1'
+$DeterminismScript = Join-Path $RepoRoot 'Plugins\SeinARTSTestSuite\RunDeterminismAB.ps1'
+. (Join-Path $RepoRoot 'Scripts\Validation\SeinDeterminismEvidence.ps1')
 $PackageScript = Join-Path $RepoRoot 'Scripts\PackagePlugins.ps1'
 $ConsumerScript = Join-Path $RepoRoot 'Scripts\ConsumerMatrix\Verify-ConsumerMatrix.ps1'
 $DiagnosticScript = Join-Path $RepoRoot `
@@ -118,6 +120,8 @@ $ExpectedMatrixProfiles = @(
 	'Framework', 'Cover', 'Squad', 'MovementPlus', 'OnlineServices', 'Full')
 $ReceiptPath = Join-Path $ReceiptRoot (
 	'release-gate-{0}.json' -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+$DeterminismRoot = Join-Path $ReceiptRoot ('determinism-ab-' + [Guid]::NewGuid().ToString('N'))
+$DeterminismResultFile = Join-Path $DeterminismRoot 'ab-result.json'
 $UdpFaultProxySelfTestRoot = Join-Path $ReceiptRoot (
 	'udp-fault-proxy-self-test-{0}' -f
 		[System.IO.Path]::GetFileNameWithoutExtension($ReceiptPath))
@@ -182,7 +186,7 @@ if (-not $PackageOnly) {
 
 $Steps = [System.Collections.Generic.List[object]]::new()
 $Receipt = [ordered]@{
-	schemaVersion = 3
+	schemaVersion = 4
 	version = $Version
 	commit = $Commit
 	dirtyWorkingTree = $InitialStatus.Count -ne 0
@@ -197,6 +201,7 @@ $Receipt = [ordered]@{
 	releaseManifest = $null
 	testAttempts = @()
 	matrixReceipts = @()
+	determinismAB = $null
 	matrixRunId = $null
 	udpFaultProxySelfTestSha256 = $null
 	udpFaultProxySelfTestProxySha256 = $null
@@ -289,7 +294,7 @@ function Get-VerifiedReleaseAssets([switch] $RequireQualification)
 		}
 		$StableReceiptJson = Get-Content -Raw -LiteralPath $StableReceipt |
 			ConvertFrom-Json
-		if ($StableReceiptJson.schemaVersion -ne 3 -or
+		if ($StableReceiptJson.schemaVersion -ne 4 -or
 			[string]$StableReceiptJson.status -cne 'Qualified' -or
 			[string]$StableReceiptJson.version -cne $Version -or
 			[string]$StableReceiptJson.commit -cne $Commit -or
@@ -308,39 +313,23 @@ function Get-VerifiedReleaseAssets([switch] $RequireQualification)
 }
 
 function Get-QualifiedTestAttemptPath(
-	[string] $Suite,
-	[string] $Profile,
-	[DateTime] $InvocationStarted)
+    [string] $Suite,
+    [string] $Profile,
+    [DateTime] $InvocationStarted,
+    [string] $ExactAttemptPath)
 {
-	$Candidates = @(
-		Get-ChildItem -LiteralPath (Join-Path $RepoRoot 'Saved\Automation') `
-			-Recurse -File -Filter 'attempt.json' -ErrorAction SilentlyContinue |
-			ForEach-Object {
-				try {
-					$Attempt = Get-Content -Raw -LiteralPath $_.FullName |
-						ConvertFrom-Json
-					$Started = [DateTime]::Parse(
-						[string]$Attempt.startedAtUtc,
-						[System.Globalization.CultureInfo]::InvariantCulture,
-						[System.Globalization.DateTimeStyles]::RoundtripKind)
-					# The 120s slack absorbs backward clock corrections landing
-					# between the invocation-start capture and the attempt's own
-					# timestamp (observed on this host, whose clock is not
-					# NTP-managed); suite runs take minutes, so it cannot
-					# resurrect a previous invocation's attempt.
-					if ([string]$Attempt.suite -ceq $Suite -and
-						[string]$Attempt.profile -ceq $Profile -and
-						$Started -ge $InvocationStarted.AddSeconds(-120)) {
-						[pscustomobject]@{ Path = $_.FullName; Attempt = $Attempt }
-					}
-				}
-				catch {}
-			})
-	if ($Candidates.Count -ne 1) {
-		throw "Expected exactly one '$Profile' / '$Suite' attempt from this invocation, found $($Candidates.Count)."
-	}
-	$Candidate = $Candidates[0]
-	$Attempt = $Candidate.Attempt
+    if ([string]::IsNullOrWhiteSpace($ExactAttemptPath)) {
+        throw 'Release qualification requires an exact test attempt path.'
+    }
+    $Candidate = [pscustomobject]@{
+        Path = $ExactAttemptPath
+        Attempt = (Get-Content -Raw -LiteralPath $ExactAttemptPath | ConvertFrom-Json)
+    }
+    $Attempt = $Candidate.Attempt
+    if ($Attempt.suite -cne $Suite -or $Attempt.profile -cne $Profile -or
+        [DateTime]$Attempt.startedAtUtc -lt $InvocationStarted.AddSeconds(-120)) {
+        throw 'Test attempt does not belong to the requested suite/profile invocation.'
+    }
 	$ProvenancePath = Join-Path (Split-Path -Parent $Candidate.Path) `
 		([string]$Attempt.testBuildProvenanceFile)
 	$Provenance = if (Test-Path -LiteralPath $ProvenancePath -PathType Leaf) {
@@ -703,6 +692,19 @@ function Get-VerifiedRemoteRelease(
 	return $Remote
 }
 
+function Assert-ReleaseDeterminismEvidence
+{
+	$AB = Assert-SeinDeterminismEvidence -ResultFile $DeterminismResultFile
+	if ($AB.commit -cne $Commit -or $AB.engineRoot -cne $EngineRoot -or
+		$AB.engineBuildFingerprint -cne $EngineBuildFingerprint -or
+		$AB.dirtyWorkingTree -ne $Receipt.dirtyWorkingTree -or
+		$AB.allowKnownStartupErrors -ne $false -or
+		$Receipt.determinismAB.sha256 -cne
+			(Get-FileHash -LiteralPath $DeterminismResultFile -Algorithm SHA256).Hash) {
+		throw 'Fresh-process A/B evidence does not match this release.'
+	}
+}
+
 function New-ReleaseEvidenceArchive
 {
 	$EvidenceRoot = Join-Path $ReceiptRoot (
@@ -712,6 +714,13 @@ function New-ReleaseEvidenceArchive
 	}
 	New-Item -ItemType Directory -Path $EvidenceRoot -Force | Out-Null
 	$EvidenceSourcePaths = [System.Collections.Generic.List[string]]::new()
+	Assert-ReleaseDeterminismEvidence
+	$EvidenceSourcePaths.Add($DeterminismResultFile)
+	foreach ($Role in @('serial', 'parallel')) {
+		foreach ($Name in @('attempt.json', 'index.json', 'build-provenance.json', 'Automation.log')) {
+			$EvidenceSourcePaths.Add((Join-Path $DeterminismRoot "$Role/$Name"))
+		}
+	}
 	foreach ($AttemptPath in $QualifiedTestAttemptPaths) {
 		$AttemptRoot = Split-Path -Parent $AttemptPath
 		$EvidenceSourcePaths.Add($AttemptPath)
@@ -777,12 +786,15 @@ function New-ReleaseEvidenceArchive
 			[string]$Receipt.startedAtUtc,
 			[System.Globalization.CultureInfo]::InvariantCulture,
 			[System.Globalization.DateTimeStyles]::RoundtripKind)
+	Assert-ReleaseDeterminismEvidence
+	Copy-Item -LiteralPath $DeterminismRoot -Destination (Join-Path $EvidenceRoot 'determinism-ab') -Recurse
+	$null = Assert-SeinDeterminismEvidence -ResultFile (Join-Path $EvidenceRoot 'determinism-ab/ab-result.json')
 	$Receipt.testAttempts = @($QualifiedTestAttemptPaths | ForEach-Object {
 		$Attempt = Get-Content -Raw -LiteralPath $_ | ConvertFrom-Json
 		$ValidatedPath = Get-QualifiedTestAttemptPath `
 			-Suite ([string]$Attempt.suite) `
 			-Profile ([string]$Attempt.profile) `
-			-InvocationStarted $GateStarted
+			-InvocationStarted $GateStarted -ExactAttemptPath $_
 		if ([string]$ValidatedPath -cne [string]$_) {
 			throw "Test attempt path changed before evidence capture: '$($_)'."
 		}
@@ -815,8 +827,8 @@ function New-ReleaseEvidenceArchive
 				-Algorithm SHA256).Hash
 		}
 	})
-	if ($Receipt.testAttempts.Count -ne 12) {
-		throw "Release evidence expected 12 exact test attempts, found $($Receipt.testAttempts.Count)."
+	if ($Receipt.testAttempts.Count -ne 14) {
+		throw "Release evidence expected 14 exact test attempts, found $($Receipt.testAttempts.Count)."
 	}
 
 	$Receipt.matrixReceipts = @($QualifiedMatrixReceiptPaths | ForEach-Object {
@@ -925,16 +937,18 @@ function Invoke-ReleaseGateStep(
 	[scriptblock] $Action)
 {
 	$Started = [DateTime]::UtcNow
+	$StepLog = Join-Path $ReceiptRoot ('step-' + [Guid]::NewGuid().ToString('N') + '.log')
 	Write-Host "[ReleaseGate] $Name" -ForegroundColor Cyan
 	try {
 		$global:LASTEXITCODE = 0
-		& $Action
+		& $Action *> $StepLog
 		$StepExitCode = $global:LASTEXITCODE
 		if ($StepExitCode -ne 0) {
 			throw "$Name returned exit code $StepExitCode."
 		}
 		$Steps.Add([ordered]@{
 			name = $Name
+			logPath = $StepLog
 			status = 'Passed'
 			startedAtUtc = $Started.ToString('o')
 			completedAtUtc = [DateTime]::UtcNow.ToString('o')
@@ -944,6 +958,7 @@ function Invoke-ReleaseGateStep(
 	catch {
 		$Steps.Add([ordered]@{
 			name = $Name
+			logPath = $StepLog
 			status = 'Failed'
 			startedAtUtc = $Started.ToString('o')
 			completedAtUtc = [DateTime]::UtcNow.ToString('o')
@@ -953,6 +968,7 @@ function Invoke-ReleaseGateStep(
 		$Receipt.failure = $_.Exception.Message
 		$Receipt.completedAtUtc = [DateTime]::UtcNow.ToString('o')
 		Write-ReleaseGateReceipt
+		Get-Content -LiteralPath $StepLog -Tail 40 -ErrorAction SilentlyContinue | Write-Host
 		throw
 	}
 }
@@ -990,10 +1006,10 @@ Invoke-ReleaseGateStep 'Host installation diagnostic' {
 		-EngineRoot $EngineRoot
 }
 Invoke-ReleaseGateStep 'Development Editor build' {
-	& $BuildScript -Target SeinARTSEditor -Platform Win64 -Config Development -EngineRoot $EngineRoot
+	& $BuildScript -Target SeinARTSEditor -Platform Win64 -Config Development -EngineRoot $EngineRoot -Quiet
 }
 Invoke-ReleaseGateStep 'Shipping Game build' {
-	& $BuildScript -Target SeinARTS -Platform Win64 -Config Shipping -EngineRoot $EngineRoot
+	& $BuildScript -Target SeinARTS -Platform Win64 -Config Shipping -EngineRoot $EngineRoot -Quiet
 }
 
 foreach ($TestProfile in $ExpectedTestProfiles) {
@@ -1003,25 +1019,55 @@ foreach ($TestProfile in $ExpectedTestProfiles) {
 		$CurrentProfile = $TestProfile
 		$SkipBuildForSuite = -not $FirstSuite
 		$TestInvocationStarted = [DateTime]::UtcNow
+        $ExactTestResult = Join-Path $ReceiptRoot ('test-' + [Guid]::NewGuid().ToString('N') + '.json')
 		Invoke-ReleaseGateStep "$CurrentProfile $CurrentSuite" {
 			$Arguments = @{
 				Profile = $CurrentProfile
 				Suite = $CurrentSuite
 				TimeoutSeconds = 7200
 				EngineRoot = $EngineRoot
+				QuietBuild = $true
+                ResultFile = $ExactTestResult
 			}
 			if ($SkipBuildForSuite) {
 				$Arguments.SkipBuild = $true
 			}
 			& $TestScript @Arguments
 			if ($LASTEXITCODE -eq 0) {
+                $ExactAttempt = Get-Content -Raw -LiteralPath $ExactTestResult | ConvertFrom-Json
+                $ExactPath = Join-Path $ExactAttempt.reportPath 'attempt.json'
+                if ((Get-FileHash -LiteralPath $ExactPath).Hash -cne (Get-FileHash -LiteralPath $ExactTestResult).Hash) {
+                    throw 'Test result handoff differs from its original attempt.'
+                }
 				$QualifiedTestAttemptPaths.Add((Get-QualifiedTestAttemptPath `
 					-Suite $CurrentSuite -Profile $CurrentProfile `
-					-InvocationStarted $TestInvocationStarted))
+					-InvocationStarted $TestInvocationStarted -ExactAttemptPath $ExactPath))
 			}
 		}
 		$FirstSuite = $false
 	}
+}
+
+Invoke-ReleaseGateStep 'Fresh-process collision determinism A/B' {
+	$ABStarted = [DateTime]::UtcNow
+	& $DeterminismScript -EngineRoot $EngineRoot -SkipBuild -QuietBuild `
+		-TimeoutSeconds 7200 -ResultDirectory $DeterminismRoot
+	if ($LASTEXITCODE -ne 0) { throw "Fresh-process A/B returned $LASTEXITCODE." }
+	$Receipt.determinismAB = [ordered]@{
+		file = 'determinism-ab/ab-result.json'
+		sha256 = (Get-FileHash -LiteralPath $DeterminismResultFile -Algorithm SHA256).Hash
+	}
+	Assert-ReleaseDeterminismEvidence
+    foreach ($Role in @('serial', 'parallel')) {
+        $TraceAttempt = Get-Content -Raw -LiteralPath (Join-Path $DeterminismRoot "$Role/attempt.json") | ConvertFrom-Json
+        $ExactPath = Join-Path $TraceAttempt.reportPath 'attempt.json'
+        if ((Get-FileHash -LiteralPath $ExactPath).Hash -cne
+            (Get-FileHash -LiteralPath (Join-Path $DeterminismRoot "$Role/attempt.json")).Hash) {
+            throw 'A/B handoff differs from its original attempt.'
+        }
+        $QualifiedTestAttemptPaths.Add((Get-QualifiedTestAttemptPath `
+            -Suite $TraceAttempt.suite -Profile Framework -InvocationStarted $ABStarted -ExactAttemptPath $ExactPath))
+    }
 }
 
 Invoke-ReleaseGateStep 'Standalone plugin packaging' {

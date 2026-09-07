@@ -1,306 +1,133 @@
 # SeinARTS — Project Root Guide
 
-This is the **project-level** guide, loaded by every session rooted at `D:/Projects/Unreal Engine/SeinARTS`.
-It owns the cross-cutting rules that apply to **all six production plugins** and the two test suites. Each plugin has its own
-`AGENTS.md` with the deep, plugin-specific detail — read the relevant one when you scope into it
-(pointers below).
+SeinARTS is a UE 5.8 deterministic lockstep RTS framework: one core plugin, five opt-in
+extensions, and two disabled test plugins. Unreal renders the simulation; designers compose
+abilities and gameplay in Blueprint. Framework primitives remain genre-neutral.
 
-> Sessions used to be scoped to the `SeinARTSFramework` plugin directory only. They now run from
-> this project root so a single session has native visibility across the six production plugins
-> and both disabled test plugins. When you start work, read this file first, then the plugin-specific
-> `AGENTS.md` for whatever you're touching.
+## Start here
 
-> Read `.agents/WORKFLOW.md` and `.agents/STYLE_GUIDE.md` before changing code or documentation.
-> `.agents/` is dot-prefixed but mandatory agent context; this guide owns technical boundaries and
-> implementation rules.
+- Work only in `D:/Projects/Unreal Engine/SeinARTS`. **Git worktrees are banned, without exception.**
+  Never create, enter, or delegate through one. Only one author writes to this checkout at a time.
+- Inspect current Git state and the relevant live implementation; preserve unrelated WIP.
+  Do not create or switch branches without an explicit user request.
+- Read `.agents/WORKFLOW.md` before implementation and the affected plugin's `AGENTS.md` below.
+  Read `.agents/STYLE_GUIDE.md` when writing code, comments, or designer-facing text.
+  Do not reload guidance already present in the task unless it changed.
+- Use `.agents/README.md` to locate relevant context. `PROJECT_STATE.md` is a short orientation;
+  historical evidence is under `.agents/history/` and is read only for a specific question.
+  Agents maintain internal records autonomously; bookkeeping must not create chores for RJ.
+- User decisions own product behavior, feel, compatibility policy, sequencing, and release posture.
+  Proceed with routine mechanisms inside the authorized scope; present real forks before implementing them.
+- Verification policy has one owner: `.agents/WORKFLOW.md` §3.3. Use scripts to execute and summarize
+  checks. A successful build alone never proves runtime correctness or determinism.
 
-> **Active initiative — production-readiness remediation.** The movement/avoidance/nav seams are
-> clean and pluggable
-> (`USeinAvoidance` / `USeinCollisionResolver` / `USeinNavigation` abstract-base + settings picker;
-> the `FSeinPath` typed-segment seam). A* diagnostics, Move To path setup/recovery/arrival, and the
-> default avoidance response kernel have been decomposed and regression-qualified without changing
-> those seams. Movement+'s shipped planner remains a steering-first, curated Reeds-Shepp-style
-> start-maneuver planner, not a general Reeds-Shepp/Dubins route solver. Design-neutral correctness,
-> lifecycle evidence, public-API coherence, and editor/error UX remain active work. Human/runtime
-> gates and RJ-owned product forks are recorded in `.agents/READINESS_ROADMAP.md` and
-> `.agents/OPEN_RISKS.md`; do not silently choose those forks during remediation. Re-ground against
-> live code before asserting that boundary has not changed.
+## Repository and plugin boundaries
 
----
+The project-wide Git repository tracks `Source/`, `Config/`, `Content/`, and all plugins.
+`Source/SeinARTS` is the thin host module. Origin is `https://github.com/RJPhenom/SeinARTS.git`.
+Binary assets use Git LFS. Baked `Content/SeinARTS/LevelData/` is ignored and must be regenerated
+with the level volume's **Bake Level Data** button after a fresh clone. Merging does not delete refs.
 
-## HARD RULE: never use worktrees
+Read the guide under `Plugins/<plugin>/AGENTS.md` for the affected scope:
 
-**No exceptions.** Git worktrees are banned across all branches.
-
-- **Never** create, enter, or delegate work through a Git worktree.
-- If a session starts outside `D:/Projects/Unreal Engine/SeinARTS`, stop and return to the primary
-  checkout before changing files.
-- One author writes to the checkout at a time. Preserve work and complete the handoff review before
-  taking over.
-
-> Note: as of 2026-06-02 the project root **is** a git repository — a single project-wide monorepo
-> (`main`, initial commit `ecf6068`) tracking the host, six production plugins, and two disabled
-> test plugins, with **Git LFS**
-> for binary assets (`*.uasset`/`*.umap` + common media). Baked level data (`**/Content/SeinARTS/LevelData/` + legacy patterns)
-> is gitignored as a regenerable build artifact — **re-bake after a fresh clone** via the one
-> "Bake Level Data" button on `ASeinLevelVolume` (unified pipeline, CP1.1). History
-> starts fresh from the plugin split; the framework's pre-split history is archived at
-> `https://github.com/RJPhenom/SeinARTSFramework`. The monorepo's `origin` remote is
-> `https://github.com/RJPhenom/SeinARTS.git`, and `gh` (v2.94.0) is installed — but may be
-> unauthenticated; run `gh auth login` if PR/remote tooling reports expired auth. The no-worktree
-> HARD RULE above still applies.
-
----
-
-## Building & compiling
-
-**Do not disc-search for the engine.** It's UE **5.8** at `C:/Program Files/Epic Games/UE_5.8`
-(the `.uproject` `EngineAssociation` is `"5.8"`). Host project: `SeinARTS.uproject`. Editor target:
-`SeinARTSEditor`. Use the repo build script:
-
-```powershell
-& "D:/Projects/Unreal Engine/SeinARTS/Scripts/Build.ps1"                       # SeinARTSEditor Win64 Development (incremental ≈ 20s)
-& "D:/Projects/Unreal Engine/SeinARTS/Scripts/Build.ps1" -ExtraArgs '-Clean'   # clean rebuild
-& "D:/Projects/Unreal Engine/SeinARTS/Scripts/Build.ps1" -Target SeinARTS -Config Shipping
-```
-
-`Scripts/Build.ps1` resolves the engine (known path → registry fallback via `EngineAssociation`), warns if
-the editor is open, and returns UBT's exit code. Equivalent raw one-liner if the script is ever gone:
-
-```powershell
-& "C:/Program Files/Epic Games/UE_5.8/Engine/Build/BatchFiles/Build.bat" SeinARTSEditor Win64 Development -Project="D:/Projects/Unreal Engine/SeinARTS/SeinARTS.uproject" -WaitMutex
-```
-
-- **Run builds in the background** (`run_in_background`) — even incremental is tens of seconds; a
-  clean build is minutes.
-- **Close the editor first**, or hot-patch in-editor with **Live Coding (Ctrl+Alt+F11)**. A running
-  editor locks the module DLLs, so a command-line **link** fails on `*.dll in use` — the *compile*
-  still runs, so you can build-to-check-errors with the editor open, just not relink.
-- Success = exit `0` / `Result: Succeeded`. UBT prints `Compile [x64] <file>.cpp` and
-  `Link [x64] UnrealEditor-<Module>.dll` lines — confirm the module you changed actually rebuilt.
-
-### Automated tests
-
-Automated tests live in the disabled, non-shipping `Plugins/SeinARTSTestSuite` plugin; read its
-`AGENTS.md` before adding or running tests. Production modules never depend on that plugin or
-`CQTest`. Enable it explicitly through its `RunTests.ps1`; ordinary and Shipping builds leave it out.
-
----
-
-## Working style: making changes that stick
-
-This is a **lockstep-deterministic** sim, so a subtle mistake is a *silent desync discovered late* — the
-failure mode that ends in rollback (this project's owner has lived many). The discipline that avoids it,
-learned from the sessions that *worked*:
-
-- **Match verification to blast radius.** A change touching the sim spine, determinism, or multiple
-  modules earns the full loop: investigate against **live code** → design and present the real fork(s)
-  for RJ to decide → implement → **adversarially red-team the change** (independent agents whose job is
-  to *refute* it) → build green (read the log, not just the exit code) → hand RJ the A/B. Trivial
-  mechanical edits skip the ceremony. Turn **ultracode ON** for the former (it defaults you to workflow
-  orchestration + adversarial verification); leave it off for the latter — the verification is
-  token-expensive and only earns its cost when a missed bug means a rollback.
-- **Determinism is invisible to code-reading — verify, don't trust confidence.** "This is bit-identical
-  / deterministic" is a **hypothesis** until an independent adversarial pass has tried and failed to
-  refute it AND the `Sein.Sim.Parallel 0`-vs-`1` StateHash agrees (plus peer/replay for anything that
-  shifts *which tick* something happens). An assistant's certainty about determinism is **not evidence**
-  here — confidently-wrong determinism claims have been caught by the red-team, never by re-reading. The
-  A/B StateHash is the definition of "done" for a sim change, not a nice-to-have; RJ's PIE is the final
-  oracle and everything before it is reasoning.
-- **RJ owns the forks; the assistant owns the mechanism.** Feel, product, sequencing, and ship-posture
-  are RJ's calls — investigate, present options **with a recommendation**, then gate implementation on
-  his pick. Don't guess at taste, and don't reorder his "this then that."
-- **Ground every load-bearing claim in the live code before acting** — including re-verifying a
-  subagent's or workflow's own synthesis (they err too, and the workflows themselves sometimes fail or
-  return stubs; read their output critically). See "Source of truth" below on stale docstrings.
-- **Defer explicitly, don't gold-plate.** Record deferred items where a future dev will find them.
-
-### Engineering-document artifacts
-
-- Root `Docs/` is reserved for RJ's GitHub Pages documentation website. Agents must leave it
-  empty and must not author or restore content there unless RJ explicitly opens a website task.
-  Consolidate durable engineering contracts into the existing `.agents/` records instead of
-  creating a mirrored documentation tree.
-- Durable agent engineering context belongs in `.agents/`; short-lived exploration stays untracked.
-- Do not create a repository `Output/` tree. Put requested PDF exports in the user's Downloads directory.
-
----
-
-## What this is
-
-A deterministic **lockstep RTS framework** for Unreal Engine 5, delivered as one core plugin plus
-five opt-in extension plugins. The simulation layer runs entirely on fixed-point math
-(`FFixedPoint`, 32.32) for cross-platform bit-determinism. Unreal is the renderer — the sim never
-touches `float`, `AActor*`, or any non-deterministic UE system. Data flows one way: **sim → render**.
-
-The genre target is the squad-tactical RTS subgenre (squad + individual units, cover, terrain
-types, veterancy, tech upgrades, capture points, retreat). The framework itself stays
-genre-neutral; specifics are designer-authored in Blueprint.
-
----
-
-## Repository layout
-
-```
-D:/Projects/Unreal Engine/SeinARTS/
-├── SeinARTS.uproject        Host UE project (used to compile/PIE the plugins during dev)
-├── Source/SeinARTS/         Thin host game module — nothing of substance lives here
-├── Config/ Content/         Host project config + content
-└── Plugins/
-    ├── SeinARTSFramework/             The core. 13 modules. → Plugins/SeinARTSFramework/AGENTS.md
-    ├── SeinARTSSquadExtension/        Opt-in squads.  1 module. → .../SeinARTSSquadExtension/AGENTS.md
-    ├── SeinARTSCoverExtension/        Opt-in cover.   2 modules. → .../SeinARTSCoverExtension/AGENTS.md
-    ├── SeinARTSCoverSquadExtension/   Opt-in Cover+Squad bridge. 1 module. → .../SeinARTSCoverSquadExtension/AGENTS.md
-    ├── SeinARTSMovementPlusExtension/ Opt-in movement modes. 1 module ("SeinARTS Movement+"). → .../SeinARTSMovementPlusExtension/AGENTS.md
-    ├── SeinARTSOnlineServicesExtension/ Backend-neutral online product services. 1 module. → .../SeinARTSOnlineServicesExtension/AGENTS.md
-    ├── SeinARTSTestSuite/              Disabled framework/editor tests. 3 modules. → .../SeinARTSTestSuite/AGENTS.md
-    └── SeinARTSExtensionTestSuite/     Disabled all-extension tests. 2 modules. → .../SeinARTSExtensionTestSuite/AGENTS.md
-```
-
-## Plugin topology & dependency chain
-
-```
-SeinARTSFramework ................... base; depends on no other Sein plugin
-   ├── SeinARTSSquadExtension ............. REQUIRES SeinARTSFramework
-   ├── SeinARTSCoverExtension ............. REQUIRES SeinARTSFramework
-   ├── SeinARTSMovementPlusExtension ...... REQUIRES SeinARTSFramework
-   │                                        (concrete movement modes; framework keeps Basic / Basic Unit)
-   ├── SeinARTSOnlineServicesExtension .... REQUIRES SeinARTSFramework
-   │                                        (provider-neutral contracts + local loopback provider)
-   └── SeinARTSCoverSquadExtension ........ REQUIRES Framework + Cover + Squad
-                                            (optional integration bridge only)
-
-SeinARTSTestSuite ................... disabled development-only Framework consumer
-SeinARTSExtensionTestSuite ......... disabled consumer of the base test suite + all extensions;
-                                     no production plugin may depend on either test plugin
-```
-
-Dependencies point **up** toward the framework, never down. The framework knows nothing about the
-extensions; an extension may be stripped and the framework still builds and runs. Cover and Squad
-are physically independent plugins. Their only cross-extension integration lives in the separate
-`SeinARTSCoverSquadExtension`, so games enable that bridge only when they use both parent features.
-
-## Which AGENTS.md to read
-
-| If you're working on… | Read |
+| Plugin | Ownership / dependencies |
 |---|---|
-| Sim core, entities, abilities, effects, nav, movement base/steering, FoW, net, editor tooling, UI, gameplay shell | `Plugins/SeinARTSFramework/AGENTS.md` |
-| Persistent squads, formation dispatch, reinforcement | `Plugins/SeinARTSSquadExtension/AGENTS.md` |
-| Cover providers/geometry, cover-aware dispatch, formation preview | `Plugins/SeinARTSCoverExtension/AGENTS.md` |
-| Cover-aware Squad dispatch integration | `Plugins/SeinARTSCoverSquadExtension/AGENTS.md` |
-| Infantry/Wheeled/Tracked/Hover/Flight movement modes + per-class tuning | `Plugins/SeinARTSMovementPlusExtension/AGENTS.md` |
-| Account, party, matchmaking, results, saves, replay evidence, telemetry, and provider adapters | `Plugins/SeinARTSOnlineServicesExtension/AGENTS.md` |
-| Automated tests, fixtures, scripted maps, and test runners | `Plugins/SeinARTSTestSuite/AGENTS.md` |
-| Tests intentionally linking every opt-in extension | `Plugins/SeinARTSExtensionTestSuite/AGENTS.md` |
+| `SeinARTSFramework` | Core simulation, entities, abilities/effects, navigation, base movement, FoW, networking, editor, UI, gameplay shell. Depends on no extension. |
+| `SeinARTSSquadExtension` | Persistent squads, formations, reinforcement. Requires Framework. |
+| `SeinARTSCoverExtension` | Cover geometry/providers, dispatch, preview. Requires Framework. |
+| `SeinARTSCoverSquadExtension` | Optional bridge requiring Framework, Cover, and Squad. |
+| `SeinARTSMovementPlusExtension` | Infantry/Wheeled/Tracked/Hover/Flight modes. Requires Framework. |
+| `SeinARTSOnlineServicesExtension` | Provider-neutral accounts, parties, matchmaking, results, saves, replay evidence, telemetry. Requires Framework. |
+| `SeinARTSTestSuite` | Disabled framework/editor tests and runners. Requires Framework; never a production dependency. |
+| `SeinARTSExtensionTestSuite` | Disabled all-extension tests. Requires the base test suite and extensions. |
 
----
+Dependencies point toward the framework. Cover and Squad remain independent; their integration
+belongs only in the bridge plugin. Removing an extension must leave the framework usable.
+Production modules never depend on either test plugin or `CQTest`.
 
-## Cross-cutting invariants (all plugins)
+## Build and validation entrypoints
 
-1. **Sim/render separation is sacred.** Sim modules never reference the visual layer. The render
-   layer reads from the sim and reacts to visual events. The single sanctioned bridge is
-   `USeinEntityBridgeComponent` (the **entity bridge**) on `ASeinActor`. Data flows sim → render only;
-   the render/input layer feeds the sim *exclusively* through the command buffer.
+UE **5.8** is at `C:/Program Files/Epic Games/UE_5.8`; do not search the disk for it.
+Host: `SeinARTS.uproject`; editor target: `SeinARTSEditor`.
 
-2. **Determinism is non-negotiable.** Sim code uses `FFixedPoint` / `FFixedVector` /
-   `FFixedTransform` / `FFixedQuaternion`, `FSeinEntityHandle` (never raw `AActor*` / `UObject*`),
-   and the deterministic PRNG (`FFixedRandom`). **No** `float`, `FVector`, `FMath::`, or `rand()`
-   in sim code. The boundary is asserted at runtime via `SEIN_SIM_ONLY` / `SEIN_SIM_SCOPE`
-   (defined in `SeinARTSCoreEntity/Public/Core/SeinSimContext.h`). Float↔fixed conversions exist
-   but are flagged non-deterministic (editor/debug only). One sanctioned exception:
-   `FMath::FRand`-style calls at **editor authoring time** whose results are serialized to
-   fixed-point (e.g. cover slot scatter) — deterministic at runtime because the values are baked.
+```powershell
+& ./Scripts/Build.ps1 -Quiet
+& ./Scripts/Build.ps1 -Target SeinARTS -Config Shipping -Quiet
+& ./Scripts/Validate.ps1 -Preset Focused -Profile Framework -Suite SeinARTS.Unit.Core
+```
 
-3. **Designer-first.** Abilities, damage formulas, attribute sets, steering profiles, and AI are
-   Blueprint-scriptable. C++ provides deterministic primitives and infrastructure; designers
-   compose them in BP graphs.
+`Build.ps1` resolves the engine and returns UBT's exit code. `-Quiet` retains the full log and
+writes a receipt with compilation/link actions under `Saved/Build`; inspect this summary first.
+`-ExtraArgs '-Clean'` cleans outputs only; a subsequent ordinary build performs the rebuild.
+Run long commands asynchronously and wait for completion; do not repeatedly poll unchanged logs.
+Close Unreal before external linking, or use Live Coding (Ctrl+Alt+F11) when appropriate.
+Success requires exit 0 and the intended target/module build evidence; incremental up-to-date
+results are valid only for the same source/build inputs.
 
-4. **Everything is an ability.** Move, attack, harvest, build, patrol, garrison, reinforce are all
-   `USeinAbility` Blueprints with latent-node execution graphs. There is no hardcoded command enum
-   beyond the activation/cancel plumbing.
+Read the test-suite guide before adding/running tests. `RunTests.ps1` explicitly enables test
+plugins, restores the ordinary editor receipt, and rejects stale `-SkipBuild` provenance.
+`Scripts/Validate.ps1` sequences development checks; it does not publish or certify a release.
+`Scripts/Release/Invoke-ReleaseGate.ps1` owns full release qualification and publication.
 
-5. **The Blueprint IS the unit.** A unit type is a Blueprint subclass of `ASeinActor`. Sim
-   components are authored on the actor's `USeinEntityBridgeComponent` (the entity bridge, auto-attached
-   by `ASeinActor`'s constructor) via its `ComponentData` array — a `TArray<FInstancedStruct>`
-   where each entry is an `FSein…Component` payload struct. At spawn, `USeinWorldSubsystem` walks
-   the bridge's `ComponentData` and copies each entry into reflection-backed component storage.
-   Designers can author custom components: Right-click → Component creates a `SeinDeterministic`-
-   marked `UUserDefinedStruct` that the picker accepts as a valid `ComponentData` entry.
+## Cross-cutting invariants
 
-6. **Destination preview === the command's first path request. Sacred — treated as absolute.** The
-   destination/formation preview (formation decals, cover-snapped slots, nearest-reachable fallbacks)
-   MUST be identical to the destination(s) a movement command would submit on its **first path
-   request** for the same cursor/click inputs. It is a pure dry-run of the command's destination
-   computation through the **same shared resolver** the commit runs (`SeinComputeFormationPreview` →
-   `ResolveFormationLayout` → `PostProcessPositions`). **A destination is an INPUT, not an opinion nav
-   may relocate.** No stage silently moves a destination between the preview and that first request;
-   reachability resolution (nearest-reachable projection of a genuinely-unreachable raw click;
-   cover-slot authority) happens ONCE, in that shared path — never downstream in per-member pathing
-   (A* partial best-H, `PushWaypointsAwayFromWalls`) where the preview can't see it. *Scope:* binds
-   the **initial** submission only — once a unit is moving, interval repaths may legitimately
-   re-resolve a destination the changing world made unreachable; that is not a violation. **Cover
-   slots are authoritative**: a designer-authored slot overrules the coarse nav bake (a blocked/"red"
-   cell under a slot is a low-resolution false-negative, not a reason to move the slot); the unit is
-   delivered to the exact slot and the preview shows the exact slot.
+1. **Sim/render separation.** Sim modules never reference visual-layer systems. The sanctioned
+   bridge is `USeinEntityBridgeComponent` on `ASeinActor`; data flows sim → render. Input feeds
+   simulation exclusively through the command buffer. Never put renderer state in canonical state.
 
-7. **Lockstep configuration is state.** Every plugin that owns sim-affecting project settings must
-   register them with `FSeinConfigFingerprintRegistry` under a frozen stable contributor ID. Reflected
-   property names must match exactly, ordering must be canonical, and contributors unregister on
-   module shutdown. A missing extension or mismatched setting must fail compatibility at join instead
-   of becoming a silent desync.
+2. **Determinism.** Sim code uses `FFixedPoint` (32.32), `FFixedVector`, `FFixedTransform`,
+   `FFixedQuaternion`, `FSeinEntityHandle`, and `FFixedRandom`. No `float`, `FVector`, `FMath::`,
+   `rand()`, raw actor pointers, or non-deterministic UE calls in sim work. Respect
+   `SEIN_SIM_ONLY` / `SEIN_SIM_SCOPE`. Float conversions are editor/debug boundaries only.
+   Editor-time randomness may author values serialized to fixed-point before simulation.
+   Relevant canonical serial/parallel traces and lifecycle tests are evidence; confidence is not.
 
----
+3. **Designer-first abilities.** Move, attack, harvest, build, patrol, garrison, and reinforce are
+   `USeinAbility` Blueprints with latent execution graphs. C++ supplies deterministic primitives;
+   there is no hardcoded gameplay command enum beyond activation/cancellation plumbing.
 
-## Code conventions (all plugins)
+4. **Blueprint authoring and payloads.** A unit type is an `ASeinActor` Blueprint. Data-only
+   `USeinEntityComponent` authoring components generate `FSein...Payload` values into the entity
+   bridge's backend `TArray<FInstancedStruct> ComponentData`; spawn injects those payloads into
+   reflection-backed sim storage. Preserve this authoring/backend split and serialized compatibility.
+   Payloads are pure deterministic data; runtime gameplay logic belongs in systems, abilities,
+   effects, AI controllers, and brokers. Do not regress the component/payload refactor.
 
-- **Prefixes:** sim USTRUCTs `FSein…`, sim UObjects `USein…`, actors `ASein…`, fixed-point types
-  `FFixed…`. Component **payload** structs carry the `Payload` suffix
-  (`FSeinAbilityPayload`, `FSeinExtentsPayload`, …; base `FSeinPayload`) — they are the baked
-  wire format injected into sim storage. The designer-facing authoring surface is the
-  data-only ActorComponents (`USeinExtentsComponent`, …, base `USeinDataComponent` until it
-  takes the `USeinEntityComponent` name post-resave), which carry the `Component` suffix and
-  deliberately NO `DisplayName` meta: the engine derives the Add-menu label ("Sein Extents")
-  and hierarchy variable name ("SeinExtents") from the class name, exactly like
-  `USkeletalMeshComponent` → "Skeletal Mesh". Blueprint function libraries carry the
-  `BPFL` suffix.
-- **Components are pure data.** No event graphs, no state-mutating methods. Logic lives in
-  abilities, effects, AI controllers, command brokers, and sim systems.
-- **`SeinDeterministic` meta.** Every framework sim USTRUCT carries
-  `USTRUCT(meta = (SeinDeterministic))`; this is the marker the editor uses to accept a struct as a
-  valid `ComponentData` entry. (The `ComponentData` entry picker is filtered to valid Sein component
-  structs via `FSeinInstancedStructFilter`; inside a UDS the field-type picker itself isn't filtered,
-  but `FSeinDeterministicStructValidator` strips non-deterministic fields on save.)
-- **`FInstancedStruct` ships in `CoreUObject`** (`CoreUObject/Public/StructUtils/InstancedStruct.h`).
-  Do **not** add `StructUtils` as a module dependency — the standalone plugin is deprecated in UE 5.5+.
-- **BP-visible naming.** Category = `SeinARTS|<Subsystem>[|<Subgroup>]` (singular nouns; `Tags` is
-  the only plural exception). On UFUNCTION/UPROPERTY meta, drop the `Sein` prefix from `DisplayName`
-  (`DisplayName = "Has Tag"`, not `"Sein Has Tag"`) — add an explicit `DisplayName` whenever the C++
-  symbol starts with `Sein` to suppress UE auto-derivation. BPFL UCLASS `DisplayName` =
-  `"SeinARTS X Library"`; ActorComponents use plain `"X Component"` + `ClassGroup = (SeinARTS)`.
-  UPROPERTY field names never carry the `Sein` prefix. Write the Category + DisplayName **before**
-  the body — retroactive cleanup is a whole separate session of work.
+5. **Initial destination preview equals command submission.** Preview and commit use the same
+   shared resolver (`SeinComputeFormationPreview` → `ResolveFormationLayout` → `PostProcessPositions`).
+   Resolve nearest-reachable destinations and cover authority once there. No downstream A* partial
+   result or wall adjustment silently relocates the initial destination. Cover slots are authoritative
+   even over coarse blocked cells: preview and initial submission use the exact slot. This binds the
+   first path request; later interval repaths may re-resolve a destination the world made unreachable.
 
----
+6. **Configuration is state.** Every owner of sim-affecting settings registers them with
+   `FSeinConfigFingerprintRegistry` under a frozen stable contributor ID. Use exact reflected names,
+   canonical ordering, and shutdown unregistration. Missing extensions or mismatched settings must
+   fail compatibility admission rather than silently desynchronize.
 
-## Source of truth: code, not comments
+## Shared code conventions
 
-The architecture has stabilized. The per-USTRUCT/UCLASS **docstrings are the primary spec** for
-sim-system specifics — but **trust the code's behavior over comments**, because a number of
-docstrings lag the implementation. The retired `DESIGN.md` / `PLAN.md` (gone post-Phase-5) are
-still cited in some headers (e.g. "DESIGN §11") — those references are dangling.
+- Types: `FSein...`, `USein...`, `ASein...`, fixed types `FFixed...`. Backend structs use `Payload`;
+  authoring ActorComponents use `Component`; Blueprint libraries use `BPFL`. Native data components
+  derive their menu labels from class names without redundant `DisplayName` overrides.
+- Every sim USTRUCT uses `USTRUCT(meta = (SeinDeterministic))`; retain deterministic authoring validation.
+- `FInstancedStruct` is in `CoreUObject` (`StructUtils/InstancedStruct.h`). Do not add the deprecated
+  standalone `StructUtils` module dependency.
+- `.agents/STYLE_GUIDE.md` owns Blueprint categories, tooltips, property metadata, and presentation style.
+  Preserve reflected names when metadata can implement a requested label change.
 
-Known stale-comment traps (re-grounded against live code):
-- **Vehicle curves are bounded start maneuvers, not a full route solver.** The shipped A*/default
-  planner emits straight segments. Movement+ Wheeled and Tracked may post-process the route head with
-  a deterministic curated Reeds-Shepp-style candidate set (departure arc, straight reverse, K-turn,
-  reverse-out), emit typed `Arc`/`Straight` segments, then follow the coarse tail with runtime steering.
-  Older claims that no shipped vehicle emits arcs are false; claims that this is a general
-  Reeds-Shepp/Dubins family search are also false.
-- **Net is not "Phase 0."** Despite file docstrings saying "just logs"/"passthrough," real lockstep
-  aggregation, replay, lobby, and desync handling are implemented.
-- **Squads are not abstract.** A squad is a real lightweight (non-abstract) `ASeinActor` so banners
-  can track its centroid — older "abstract entity" wording is obsolete.
-- **`SpawnEntity`'s archetype comment is stale** — identity/cost come from injected
-  `FSeinIdentityPayload` / `FSeinProduciblePayload`, not the excised `USeinArchetypeDefinition`.
+## Records and source of truth
 
-When you find a docstring that contradicts the code, fix the docstring as part of your change.
+- `Docs/` is the public website. Edit it when public documentation is in the authorized task scope;
+  otherwise record affected pages in `.agents/PUBLIC_DOCS_BACKLOG.md` and report the impact.
+  Preserve existing website content. Agent reports and engineering notes do not belong there.
+- Durable engineering contracts belong in existing `.agents/` records; keep exploration untracked.
+  Do not create a mirrored documentation tree or repository `Output/` directory. Requested PDFs go
+  to the user's Downloads directory. Generated tests, builds, and logs remain ignored under `Saved/`.
+- Live code wins over stale comments or historical evidence. Fix contradictory comments in touched
+  code. Do not cite retired `DESIGN.md` / `PLAN.md` as authority.
+- Known stale claims: networking is implemented, not “Phase 0”; squads are real non-abstract actors;
+  spawn identity/cost come from payloads, not the removed archetype definition. Movement+ vehicles
+  emit bounded curated start-maneuver arcs/straights, not a general Reeds-Shepp/Dubins route solver.
+- `.agents/READINESS_ROADMAP.md` and `.agents/OPEN_RISKS.md` retain unresolved product forks and
+  human/runtime gates. Re-ground the relevant boundary in live code; do not silently choose a fork.

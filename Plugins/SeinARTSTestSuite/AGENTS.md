@@ -79,3 +79,10 @@ the sibling extension-test plugin. It builds with the selected plugins explicitl
 Known pre-test errors may be accepted only through the exact checked-in signature baseline; an
 unlisted error or count change still fails. Remove baseline entries as their tracked defects land.
 Keep generated reports under the project `Saved/Automation` tree; never commit them.
+
+Prefer `Scripts/Validate.ps1` for a sequence of development checks; the risk-to-preset table and
+review policy are in `.agents/WORKFLOW.md` §3.3. `RunTests.ps1 -ResultFile <new-path>` gives callers
+the exact attempt receipt; `-QuietBuild` retains build logs without streaming them. Existing invocation
+defaults remain supported. `RunDeterminismAB.ps1` forwards `-EngineRoot`, runs two fresh processes,
+and emits a self-contained hash-bound receipt and traces. The release gate includes this comparison.
+For runner/evidence changes, use `Scripts/Validation/Invoke-ValidationSelfTest.ps1` before engine smoke tests.

@@ -50,6 +50,9 @@ jobs:
           if-no-files-found: warn
           path: |
             Saved/ReleaseGate/*.json
+            Saved/ReleaseGate/step-*.log
+            Saved/ReleaseGate/determinism-ab-*/**
+            Saved/Build/*/build-result.json
             Saved/Automation/*/attempt.json
             Saved/Automation/*/index.json
             Saved/ConsumerMatrix/*/matrix-result.json

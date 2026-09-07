@@ -25,6 +25,11 @@ param(
 
 	[switch] $SkipBuild,
 
+	# Optional exact result handoff; never discover a different invocation by timestamp.
+	[string] $ResultFile,
+
+	[switch] $QuietBuild,
+
 	[switch] $KeepRendering,
 
 	[switch] $AllowKnownStartupErrors,
@@ -43,6 +48,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if ($ResultFile) {
+	$ResultFile = [System.IO.Path]::GetFullPath($ResultFile)
+	if (Test-Path -LiteralPath $ResultFile) { throw "Result file already exists: '$ResultFile'." }
+	New-Item -ItemType Directory -Path (Split-Path -Parent $ResultFile) -Force | Out-Null
+}
 $PluginRoot = $PSScriptRoot
 $ProjectRoot = (Resolve-Path (Join-Path $PluginRoot '..\..')).Path
 $Uproject = Join-Path $ProjectRoot 'SeinARTS.uproject'
@@ -231,6 +241,7 @@ function Write-SeinAttemptManifest
 {
 	$Attempt | ConvertTo-Json -Depth 6 |
 		Set-Content -LiteralPath $AttemptPath -Encoding UTF8
+	if ($ResultFile) { Copy-Item -LiteralPath $AttemptPath -Destination $ResultFile -Force }
 }
 
 Write-SeinAttemptManifest
@@ -265,13 +276,13 @@ if (-not $SkipBuild) {
 	$TestBuildExitCode = $null
 	$ReceiptRestoreExitCode = $null
 	try {
-		& $BuildScript -EngineRoot $ResolvedEngineRoot -ExtraArgs $BuildArgs
+		& $BuildScript -EngineRoot $ResolvedEngineRoot -ExtraArgs $BuildArgs -Quiet:$QuietBuild
 		$TestBuildExitCode = $LASTEXITCODE
 	}
 	finally {
 		# UBT writes profile plugin states into the shared editor receipt. Restore the ordinary
 		# project receipt before launching Automation so normal Editor startup is never contaminated.
-		& $BuildScript -EngineRoot $ResolvedEngineRoot
+		& $BuildScript -EngineRoot $ResolvedEngineRoot -Quiet:$QuietBuild
 		$ReceiptRestoreExitCode = $LASTEXITCODE
 	}
 
