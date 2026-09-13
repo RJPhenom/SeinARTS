@@ -44,6 +44,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'Release/SeinReleaseDocumentation.ps1')
 $PipelineMutex = [System.Threading.Mutex]::new(
     $false, 'Local\SeinARTS.ArtifactPipeline')
 $PipelineMutexAcquired = $false
@@ -209,7 +210,6 @@ try {
         $manifest | ConvertTo-Json -Depth 16 | Set-Content $manifestPath -Encoding utf8
 
         if ($p -ceq 'SeinARTSFramework') {
-            $PublicDocs = Join-Path $ProjectRoot 'Docs'
             $PublicDiagnostics = Join-Path $ProjectRoot 'Scripts\Diagnostics'
             if (-not (Test-Path -LiteralPath $PublicDiagnostics -PathType Container)) {
                 throw 'Framework public diagnostics are missing.'
@@ -217,17 +217,7 @@ try {
             $PackagedDiagnostics = Join-Path $out 'Tools\Diagnostics'
             New-Item -ItemType Directory -Force `
                 -Path $PackagedDiagnostics | Out-Null
-            if (Test-Path -LiteralPath $PublicDocs -PathType Container) {
-                $PublicDocItems = @(Get-ChildItem -LiteralPath $PublicDocs -Force)
-                if ($PublicDocItems.Count -gt 0) {
-                    $PackagedDocs = Join-Path $out 'Documentation'
-                    New-Item -ItemType Directory -Force -Path $PackagedDocs | Out-Null
-                    foreach ($PublicDocItem in $PublicDocItems) {
-                        Copy-Item -LiteralPath $PublicDocItem.FullName `
-                            -Destination $PackagedDocs -Recurse -Force
-                    }
-                }
-            }
+            Copy-SeinReleaseDocumentation $ProjectRoot (Join-Path $out 'Documentation')
             Copy-Item -LiteralPath (Join-Path $PublicDiagnostics `
                 'Test-SeinARTSInstallation.ps1') `
                 -Destination $PackagedDiagnostics -Force

@@ -249,6 +249,36 @@ exit 0
     $script:AuditInvoked=$false;$Rejected=$false
     try { Assert-NoHostGameDependency $ConsumerFixture -AuditAssets } catch { $Rejected=$true }
     Check ($Rejected -and -not $script:AuditInvoked) 'Host paths in text fail before package classification'
+    . (Join-Path $RepoRoot 'Scripts/Release/SeinReleaseDocumentation.ps1')
+    $DocFixture=Join-Path $Root 'Documentation Fixture'
+    foreach($Folder in @('Docs/public','Docs/node_modules','Docs/dist','Docs/.astro')) {
+        New-Item -ItemType Directory -Path (Join-Path $DocFixture $Folder) -Force | Out-Null
+    }
+    'tracked guide' | Set-Content -LiteralPath (Join-Path $DocFixture 'Docs/guide.md')
+    '<svg />' | Set-Content -LiteralPath (Join-Path $DocFixture 'Docs/public/logo.svg')
+    foreach($Folder in @('node_modules','dist','.astro')) {
+        'generated' | Set-Content -LiteralPath (Join-Path $DocFixture "Docs/$Folder/generated.txt")
+    }
+    function git { $global:LASTEXITCODE=0; 'Docs/guide.md'; 'Docs/public/logo.svg' }
+    try {
+        $DocDestination=Join-Path $Root 'Packaged Documentation'
+        Copy-SeinReleaseDocumentation $DocFixture $DocDestination
+        Check ((Get-ChildItem $DocDestination -Recurse -File).Count -eq 2) 'Only tracked documentation is packaged'
+        Check ((Get-Content -Raw (Join-Path $DocDestination 'guide.md')).Trim() -eq 'tracked guide') 'Tracked documentation content is preserved'
+        Check (Test-Path -LiteralPath (Join-Path $DocDestination 'public/logo.svg')) 'Tracked documentation preserves nested paths'
+        Check (-not (Test-Path (Join-Path $DocDestination 'node_modules'))) 'Documentation excludes dependency directories'
+        Check (-not (Test-Path (Join-Path $DocDestination 'dist'))) 'Documentation excludes generated site output'
+        Check (-not (Test-Path (Join-Path $DocDestination '.astro'))) 'Documentation excludes generated Astro state'
+        function git { $global:LASTEXITCODE=0; 'Docs/missing.md' }
+        $Rejected=$false
+        try { Get-SeinReleaseDocumentationFiles $DocFixture | Out-Null } catch { $Rejected=$true }
+        Check $Rejected 'Missing tracked documentation fails closed'
+        function git { $global:LASTEXITCODE=0; 'Docs/../outside.txt' }
+        $Rejected=$false
+        try { Get-SeinReleaseDocumentationFiles $DocFixture | Out-Null } catch { $Rejected=$true }
+        Check $Rejected 'Documentation cannot escape its source root'
+    }
+    finally { Remove-Item Function:\git }
     [ordered]@{status='Passed';shell=$Shell;checks=@($Checks);fixtureRoot=$Fixture} |
         ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $Root 'self-test-result.json')
     Write-Host "[ValidationSelfTest] Passed $($Checks.Count) checks. Receipt: $Root/self-test-result.json"

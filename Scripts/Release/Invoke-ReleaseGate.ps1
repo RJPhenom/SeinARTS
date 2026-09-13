@@ -88,6 +88,7 @@ $BuildScript = Join-Path $RepoRoot 'Scripts\Build.ps1'
 $TestScript = Join-Path $RepoRoot 'Plugins\SeinARTSTestSuite\RunTests.ps1'
 $DeterminismScript = Join-Path $RepoRoot 'Plugins\SeinARTSTestSuite\RunDeterminismAB.ps1'
 . (Join-Path $RepoRoot 'Scripts\Validation\SeinDeterminismEvidence.ps1')
+. (Join-Path $PSScriptRoot 'SeinReleaseDocumentation.ps1')
 $PackageScript = Join-Path $RepoRoot 'Scripts\PackagePlugins.ps1'
 $ConsumerScript = Join-Path $RepoRoot 'Scripts\ConsumerMatrix\Verify-ConsumerMatrix.ps1'
 $DiagnosticScript = Join-Path $RepoRoot `
@@ -135,10 +136,7 @@ if (-not $PackageOnly -and $RuntimeNetworkProfile -cne 'Adverse') {
 }
 $PublicDocumentationFiles = @()
 if (-not $PackageOnly) {
-	if (Test-Path -LiteralPath $DocumentationRoot -PathType Container) {
-		$PublicDocumentationFiles = @(
-			Get-ChildItem -LiteralPath $DocumentationRoot -File -Recurse)
-	}
+	$PublicDocumentationFiles = @(Get-SeinReleaseDocumentationFiles $RepoRoot)
 	if ($PublicDocumentationFiles.Count -eq 0) {
 		# Owner ruling 2026-08-08: a missing/empty customer Docs/ tree warns
 		# instead of blocking publication until the docs land on main. The

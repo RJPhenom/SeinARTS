@@ -198,6 +198,12 @@ Standalone BuildPlugin subsequently exposed missing direct `UObject/Package.h` i
 input construction and `Templates/SubclassOf.h` in the movement payload. Adding those dependencies
 fixed the isolated UnrealGame Development target (`Saved/Validation/Checkpoint-IsolatedRuntimeBuild.log`,
 exit 0); these are compile-boundary fixes, with no gameplay logic change.
+The complete standalone Framework Editor, Development, and Shipping builds then passed
+(`Saved/Validation/Checkpoint-StandaloneFrameworkPassed.log`). Before publication, documentation
+copying was corrected to select tracked Docs files for both packages and release evidence; npm
+dependencies and generated Astro/site output are excluded. All 41 tracked documentation files
+copied byte-for-byte, and the expanded orchestration self-test passed 68 checks
+(`Saved/ValidationSelfTest/d9bb38ee99fe4517abb4e5dff429956d/self-test-result.json`).
 
 The generated projects, packages, logs, and temporary Python scripts are regenerable and should be
 deleted after evidence is recorded. Do not commit `Saved/ConsumerMatrix`.
